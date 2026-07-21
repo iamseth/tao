@@ -1,0 +1,278 @@
+package runtimeconfig
+
+import (
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestRuntimeEnvDefaultsAppliesAllSupportedValues(t *testing.T) {
+	t.Setenv(EnvCommitPolicy, "slice")
+	t.Setenv(EnvExecutionMode, "current")
+	t.Setenv(EnvAgent, "codex")
+	t.Setenv(EnvPullRequest, "true")
+	t.Setenv(EnvReview, "off")
+	t.Setenv(EnvAutoRework, "false")
+	t.Setenv(EnvMaxReworkAttempts, "7")
+	t.Setenv(EnvSessionTimeout, "30m")
+	t.Setenv(EnvNotifyCommand, "echo done")
+	t.Setenv(EnvSkipPermissions, "true")
+
+	got, err := RuntimeEnvDefaults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CommitPolicy != CommitPolicySlice || got.ExecutionMode != ExecutionModeCurrent || got.Agent != AgentCodex || got.PullRequest == nil || !*got.PullRequest || got.ReviewEnabled == nil || *got.ReviewEnabled || got.AutoRework == nil || *got.AutoRework || got.MaxReworkAttempts == nil || *got.MaxReworkAttempts != 7 || got.SessionTimeout == nil || *got.SessionTimeout != 30*time.Minute || got.NotifyCommand != "echo done" || !got.SkipPermissions {
+		t.Fatalf("unexpected env defaults: %#v", got)
+	}
+}
+
+func TestRuntimeEnvDefaultsApplyInDefaultsRole(t *testing.T) {
+	for _, name := range runtimeEnvKeys() {
+		t.Setenv(name, "")
+	}
+	t.Setenv(EnvAgent, "codex")
+
+	defaults, err := RuntimeEnvDefaults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	options, err := ResolveRunOptions(defaults.RunOptionsPatch, RunOptionsPatch{Agent: AgentClaude})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Agent != AgentClaude {
+		t.Fatalf("expected request override to win over env-derived default, got %q", options.Agent)
+	}
+}
+
+func TestRuntimeEnvDefaultsSessionTimeoutZeroDisables(t *testing.T) {
+	t.Setenv(EnvSessionTimeout, "0")
+
+	got, err := RuntimeEnvDefaults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SessionTimeout == nil || *got.SessionTimeout != 0 {
+		t.Fatalf("expected session timeout disabled by env, got %#v", got)
+	}
+}
+
+func TestRuntimeEnvDefaultsReportsInvalidValueWithName(t *testing.T) {
+	t.Setenv(EnvPullRequest, "maybe")
+	_, err := RuntimeEnvDefaults()
+	if err == nil || !strings.HasPrefix(err.Error(), EnvPullRequest) {
+		t.Fatalf("expected env var name in error, got %v", err)
+	}
+}
+
+func TestRuntimeEnvDefaultsReportsInvalidReviewWithName(t *testing.T) {
+	t.Setenv(EnvReview, "maybe")
+	_, err := RuntimeEnvDefaults()
+	if err == nil || !strings.HasPrefix(err.Error(), EnvReview) {
+		t.Fatalf("expected review env error, got %v", err)
+	}
+}
+
+func TestRuntimeEnvDefaultsReportsInvalidSessionTimeoutWithName(t *testing.T) {
+	t.Setenv(EnvSessionTimeout, "soon")
+	_, err := RuntimeEnvDefaults()
+	if err == nil || !strings.HasPrefix(err.Error(), EnvSessionTimeout) {
+		t.Fatalf("expected session timeout env error, got %v", err)
+	}
+}
+
+func TestRuntimeEnvDefaultsIgnoresEmptyEnvOverrides(t *testing.T) {
+	for _, name := range runtimeEnvKeys() {
+		t.Setenv(name, "")
+	}
+
+	got, err := RuntimeEnvDefaults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CommitPolicy != CommitPolicySlice || got.ExecutionMode != ExecutionModeIsolated || got.Agent != AgentPi || got.PullRequest != nil || got.ReviewEnabled != nil || got.SessionTimeout == nil || *got.SessionTimeout != DefaultSessionTimeout || got.NotifyCommand != "" || got.SkipPermissions {
+		t.Fatalf("expected built-in defaults with unset optional values, got %#v", got)
+	}
+}
+
+func TestRuntimeEnvDefaultsRecordsExplicitFalsePullRequestAndPiAgent(t *testing.T) {
+	for _, name := range runtimeEnvKeys() {
+		t.Setenv(name, "")
+	}
+	t.Setenv(EnvAgent, "pi")
+	t.Setenv(EnvPullRequest, "false")
+	t.Setenv(EnvSkipPermissions, "false")
+
+	got, err := RuntimeEnvDefaults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Agent != AgentPi || got.PullRequest == nil || *got.PullRequest || got.SkipPermissions {
+		t.Fatalf("expected pi agent with explicit false env defaults, got %#v", got)
+	}
+}
+
+func TestRuntimeEnvStatusReportsDefaultsAndOverrides(t *testing.T) {
+	t.Setenv(EnvExecutionMode, "")
+	t.Setenv(EnvAgent, "")
+	t.Setenv(EnvSkipPermissions, "")
+	t.Setenv(EnvCommitPolicy, "none")
+	t.Setenv(EnvPullRequest, "1")
+	t.Setenv(EnvReview, "off")
+	t.Setenv(EnvSessionTimeout, "45m")
+	t.Setenv(EnvNotifyCommand, "notify-send tao")
+
+	rows, err := RuntimeEnvStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]EnvVarStatus{}
+	for _, row := range rows {
+		byName[row.Name] = row
+	}
+	if byName[EnvCommitPolicy].Value != "none" || byName[EnvCommitPolicy].Source != "env" {
+		t.Fatalf("unexpected commit policy row: %#v", byName[EnvCommitPolicy])
+	}
+	if byName[EnvPullRequest].Value != "true" || byName[EnvPullRequest].Source != "env" {
+		t.Fatalf("unexpected pull request row: %#v", byName[EnvPullRequest])
+	}
+	if byName[EnvSessionTimeout].Value != (45*time.Minute).String() || byName[EnvSessionTimeout].Source != "env" {
+		t.Fatalf("unexpected session timeout row: %#v", byName[EnvSessionTimeout])
+	}
+	if byName[EnvReview].Value != "false" || byName[EnvReview].Source != "env" {
+		t.Fatalf("unexpected review row: %#v", byName[EnvReview])
+	}
+	if byName[EnvNotifyCommand].Value != "notify-send tao" || byName[EnvNotifyCommand].Source != "env" {
+		t.Fatalf("unexpected notify command row: %#v", byName[EnvNotifyCommand])
+	}
+	if byName[EnvAgent].Value != AgentPi.String() || byName[EnvAgent].Source != "default" {
+		t.Fatalf("unexpected agent row: %#v", byName[EnvAgent])
+	}
+}
+
+func TestRuntimeEnvStatusDefaultRowsDeriveFromRunOptionsPatch(t *testing.T) {
+	for _, name := range runtimeEnvKeys() {
+		t.Setenv(name, "")
+	}
+
+	rows, err := RuntimeEnvStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defaults := DefaultRunOptionsPatch()
+	want := []EnvVarStatus{
+		{Name: EnvCommitPolicy, Value: defaults.CommitPolicy.String(), Source: "default"},
+		{Name: EnvExecutionMode, Value: defaults.ExecutionModeValue().String(), Source: "default"},
+		{Name: EnvAgent, Value: defaults.Agent.String(), Source: "default"},
+		{Name: EnvSessionTimeout, Value: defaults.SessionTimeoutValue().String(), Source: "default"},
+		{Name: EnvPullRequest, Value: "false", Source: "default"},
+		{Name: EnvNotifyCommand, Value: "", Source: "default"},
+		{Name: EnvReview, Value: "true", Source: "default"},
+		{Name: EnvAutoRework, Value: "true", Source: "default"},
+		{Name: EnvMaxReworkAttempts, Value: "5", Source: "default"},
+		{Name: EnvSkipPermissions, Value: "false", Source: "default"},
+	}
+	if len(rows) != len(want) {
+		t.Fatalf("expected %d status rows, got %d: %#v", len(want), len(rows), rows)
+	}
+	for i, expected := range want {
+		if rows[i] != expected {
+			t.Fatalf("row %d = %#v, want %#v", i, rows[i], expected)
+		}
+	}
+}
+
+func TestRuntimeEnvDefaultsAppliesExecutionMode(t *testing.T) {
+	for _, name := range runtimeEnvKeys() {
+		t.Setenv(name, "")
+	}
+	t.Setenv(EnvExecutionMode, "current")
+
+	got, err := RuntimeEnvDefaults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ExecutionMode != ExecutionModeCurrent {
+		t.Fatalf("expected execution mode current, got %#v", got)
+	}
+}
+
+func TestRuntimeEnvStatusReportsExecutionModeOverride(t *testing.T) {
+	for _, name := range runtimeEnvKeys() {
+		t.Setenv(name, "")
+	}
+	t.Setenv(EnvExecutionMode, "current")
+
+	rows, err := RuntimeEnvStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]EnvVarStatus{}
+	for _, row := range rows {
+		byName[row.Name] = row
+	}
+	if byName[EnvExecutionMode].Value != "current" || byName[EnvExecutionMode].Source != "env" {
+		t.Fatalf("unexpected execution mode row: %#v", byName[EnvExecutionMode])
+	}
+}
+
+func TestRuntimeEnvStatusReportsExecutionModeInvalidOverride(t *testing.T) {
+	t.Setenv(EnvExecutionMode, "sandbox")
+	_, err := RuntimeEnvStatus()
+	if err == nil || !strings.HasPrefix(err.Error(), EnvExecutionMode) {
+		t.Fatalf("expected execution mode env error, got %v", err)
+	}
+}
+
+func TestRuntimeEnvStatusReportsSessionTimeoutInvalidOverride(t *testing.T) {
+	t.Setenv(EnvSessionTimeout, "soon")
+	_, err := RuntimeEnvStatus()
+	if err == nil || !strings.HasPrefix(err.Error(), EnvSessionTimeout) {
+		t.Fatalf("expected session timeout env error, got %v", err)
+	}
+}
+
+func TestRuntimeEnvStatusReportsReviewInvalidOverride(t *testing.T) {
+	t.Setenv(EnvReview, "maybe")
+	_, err := RuntimeEnvStatus()
+	if err == nil || !strings.HasPrefix(err.Error(), EnvReview) {
+		t.Fatalf("expected review env error, got %v", err)
+	}
+}
+
+func TestRuntimeEnvStatusReportsInvalidOverride(t *testing.T) {
+	t.Setenv(EnvAgent, "robot")
+	_, err := RuntimeEnvStatus()
+	if err == nil || !strings.HasPrefix(err.Error(), EnvAgent) {
+		t.Fatalf("expected agent env error, got %v", err)
+	}
+}
+
+func TestRuntimeEnvStatusReportsAgentAndExplicitFalsePullRequest(t *testing.T) {
+	for _, agent := range []AgentKind{AgentPi, AgentClaude, AgentOpenCode, AgentCodex} {
+		t.Run(agent.String(), func(t *testing.T) {
+			for _, name := range runtimeEnvKeys() {
+				t.Setenv(name, "")
+			}
+			t.Setenv(EnvAgent, agent.String())
+			t.Setenv(EnvPullRequest, "false")
+
+			rows, err := RuntimeEnvStatus()
+			if err != nil {
+				t.Fatal(err)
+			}
+			byName := map[string]EnvVarStatus{}
+			for _, row := range rows {
+				byName[row.Name] = row
+			}
+			if byName[EnvAgent].Value != agent.String() || byName[EnvAgent].Source != "env" {
+				t.Fatalf("unexpected agent row: %#v", byName[EnvAgent])
+			}
+			if byName[EnvPullRequest].Value != "false" || byName[EnvPullRequest].Source != "env" {
+				t.Fatalf("unexpected pull request row: %#v", byName[EnvPullRequest])
+			}
+		})
+	}
+}

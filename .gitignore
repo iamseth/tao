@@ -1,0 +1,10 @@
+bin
+dist
+coverage.out
+plans
+.tao/
+.tao-slice-*
+.obsidian/
+.codex
+.envrc
+.claude/

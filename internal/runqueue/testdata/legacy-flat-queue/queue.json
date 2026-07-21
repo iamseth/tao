@@ -1,0 +1,27 @@
+{
+  "entries": [
+    {
+      "plan_id": "legacy-all-options",
+      "status": "pending",
+      "queued_at": "2026-07-20T01:00:00Z",
+      "mode": "run",
+      "max_slices": 3,
+      "continue": true,
+      "commit_policy": "slice",
+      "execution_mode": "current",
+      "agent": "codex",
+      "pull_request": true,
+      "review_enabled": false,
+      "session_timeout": 2700000000000
+    },
+    {
+      "plan_id": "legacy-pointer-options-unset",
+      "status": "pending",
+      "queued_at": "2026-07-20T01:01:00Z",
+      "mode": "step",
+      "commit_policy": "none",
+      "execution_mode": "isolated",
+      "agent": "pi"
+    }
+  ]
+}

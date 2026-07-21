@@ -1,0 +1,70 @@
+# GoReleaser configuration for Tao releases.
+# Builds macOS and Linux artifacts, publishes a GitHub Release, and updates the
+# iamseth/homebrew-tap formula. Windows is intentionally out of scope.
+version: 2
+
+project_name: tao
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: tao
+    main: ./cmd/tao
+    binary: tao
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    # Inject the semantic version (slice 001) from the Git tag. The leading "v"
+    # is preserved so it matches the tag and the version reporting tests.
+    ldflags:
+      - -s -w -X github.com/iamseth/tao/internal/build.version={{ .Tag }}
+
+archives:
+  - id: tao
+    formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  github:
+    owner: iamseth
+    name: tao
+
+brews:
+  - name: tao
+    repository:
+      owner: iamseth
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/iamseth/tao
+    description: Tao command-line tool
+    license: MIT
+    # Keep the formula test self-contained: it must not require Pi, Claude, or
+    # Homebrew-managed external services. Exercising the version output is
+    # sufficient and hermetic.
+    test: |
+      assert_match version.to_s, shell_output("#{bin}/tao version")
+    install: |
+      bin.install "tao"

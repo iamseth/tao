@@ -1,0 +1,554 @@
+package run
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"regexp"
+	"strings"
+
+	"github.com/iamseth/tao/internal/gitops"
+	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/workspace"
+	"github.com/iamseth/tao/prompts"
+)
+
+type ReviewRun struct {
+	PlanDir  string
+	PlanID   string
+	LogPath  string
+	Detail   *plan.PlanDetail
+	RepoRoot string
+	Base     string
+	HeadSHA  string
+}
+
+type ReviewCreator interface {
+	CreateReview(ctx context.Context, run ReviewRun) (plan.PlanReview, error)
+}
+
+// Review runs a fresh persisted plan review without executing pending slices.
+func (s Service) Review(ctx context.Context, request Request) (review plan.PlanReview, err error) {
+	config, err := prepareRequestConfig(s.config, request)
+	if err != nil {
+		return plan.PlanReview{}, err
+	}
+	detail, err := s.repo.ResolvePlan(ctx, request.Input)
+	if err != nil {
+		return plan.PlanReview{}, err
+	}
+	if detail == nil {
+		return plan.PlanReview{}, fmt.Errorf("plan %q not found", request.Input)
+	}
+	lock, err := acquirePlanRunLock(detail.Dir, detail.State.Plan.ID, now(s.dependencies).UTC())
+	if err != nil {
+		return plan.PlanReview{}, err
+	}
+	defer func() {
+		if releaseErr := lock.Release(); err == nil && releaseErr != nil {
+			err = releaseErr
+		}
+	}()
+	execution, err := s.prepareReviewExecution(detail, config)
+	if err != nil {
+		return plan.PlanReview{}, err
+	}
+	if execution.Config.CommitPolicy != CommitPolicyNone {
+		if err := requireCleanReviewWorktree(ctx, gitClient(execution, execution.ExecutionRoot), detail, nil); err != nil {
+			return plan.PlanReview{}, fmt.Errorf("prepare review: %w", err)
+		}
+	}
+	if err := newFinalizer(s.out, execution).verifyCompletedBranch(ctx, detail, execution.ExecutionRoot); err != nil {
+		return plan.PlanReview{}, fmt.Errorf("prepare review: %w", err)
+	}
+	return execution.Dependencies.ReviewCreator.CreateReview(ctx, ReviewRun{PlanDir: absolutePlanDir(detail.Dir), PlanID: detail.State.Plan.ID, LogPath: plan.LogPath(detail.Dir), Detail: detail, RepoRoot: execution.ExecutionRoot, Base: reviewDetailBase(detail)})
+}
+
+// ResumeReview completes the remaining finalization phases of an interrupted
+// slice-complete run. Agent review failures retain the ordinary run path's
+// best-effort warning and error-recording behavior instead of failing the
+// recovered queue entry.
+func (s Service) ResumeReview(ctx context.Context, request Request) error {
+	config, err := prepareRequestConfig(s.config, request)
+	if err != nil {
+		return err
+	}
+	detail, err := s.repo.ResolvePlan(ctx, request.Input)
+	if err != nil {
+		return err
+	}
+	if detail == nil {
+		return fmt.Errorf("plan %q not found", request.Input)
+	}
+	return withPlanRunLock(ctx, detail, now(s.dependencies).UTC(), func(ownedCtx context.Context) error {
+		execution, err := s.prepareReviewExecution(detail, config)
+		if err != nil {
+			return err
+		}
+		return newFinalizer(s.out, execution).resumeCompletedRun(ownedCtx, detail)
+	})
+}
+
+// resumeCompletedRun re-enters normal finalization at the earliest phase not
+// proven complete by durable metadata. A persisted review proves the review
+// phase completed; a persisted pull request proves all phases through PR
+// creation completed.
+func (f Finalizer) resumeCompletedRun(ctx context.Context, detail *plan.PlanDetail) error {
+	reviewAttempted := completedRunReviewAttempted(detail)
+	pullRequestCreated := completedRunPullRequestCreated(detail)
+
+	// finalizeCompletedRun owns the ordinary cleanliness gate, summary, PR, and workspace
+	// completion sequence. Disable only phases already durably completed so a
+	// restart neither reruns an LLM review nor recreates a recorded PR.
+	f.execution.Config.ReviewEnabled = f.execution.Config.ReviewEnabled && !reviewAttempted
+	f.execution.Config.PullRequest = f.execution.Config.PullRequest && !pullRequestCreated
+	return f.finalizeCompletedRun(ctx, 1, detail)
+}
+
+func completedRunReviewAttempted(detail *plan.PlanDetail) bool {
+	attempted := plan.CurrentReview(detail) != nil
+	if detail == nil {
+		return attempted
+	}
+	for _, event := range detail.Events {
+		switch event.Type {
+		case plan.EventTypePlanReopened:
+			attempted = false
+		case plan.EventTypePlanReviewed:
+			attempted = true
+		}
+	}
+	return attempted
+}
+
+func completedRunPullRequestCreated(detail *plan.PlanDetail) bool {
+	if detail == nil {
+		return false
+	}
+	created := detail.State.Plan.PullRequest != nil
+	for _, event := range detail.Events {
+		switch event.Type {
+		case plan.EventTypePlanReopened:
+			created = false
+		case plan.EventTypePullRequestCreated:
+			created = true
+		}
+	}
+	return created
+}
+
+func (s Service) prepareReviewExecution(detail *plan.PlanDetail, config ExecutionConfig) (runExecution, error) {
+	execution := newRunExecution(config, s.dependencies)
+	root, err := reviewExecutionRoot(detail)
+	if err != nil {
+		return execution, err
+	}
+	execution.ExecutionRoot = root
+	dependencies := &execution.Dependencies
+	if dependencies.CommandRunner == nil {
+		dependencies.CommandRunner = defaultCommandRunner
+	}
+	if dependencies.ProcessStarter == nil {
+		dependencies.ProcessStarter = defaultProcessStarter
+	}
+	if dependencies.EventAppender == nil {
+		dependencies.EventAppender = s.repo
+	}
+	if dependencies.PlanRecordFactory == nil {
+		dependencies.PlanRecordFactory = func(detail *plan.PlanDetail) (PlanMutationRecord, error) {
+			return s.repo.PlanRecord(detail)
+		}
+	}
+	if dependencies.LogAppender == nil {
+		dependencies.LogAppender = s.repo
+	}
+	if dependencies.OutputWriter == nil {
+		dependencies.OutputWriter = s.out
+	}
+	// Automatic slice runs and their standalone reviews require a clean tree.
+	// Historical starting-dirty tolerances are retained as readable metadata but
+	// are no longer applied to an automatic execution.
+
+	// The review gate uses the latest persisted run policy: state.json first,
+	// legacy run_context events second. If neither records a valid policy, the
+	// legacy fallback is none so old none-policy plans are not locked out of
+	// review; merge still enforces a clean tree before shipping.
+	policy := reviewCommitPolicy(detail)
+	execution.Config.CommitPolicy = policy
+	if execution.Config.ExecutionMode == ExecutionModeCurrent {
+		execution.StartingBranch = strings.TrimSpace(detail.State.Repo.Branch)
+	}
+	resolveExecutorDefaults(&execution)
+	if execution.Dependencies.ReviewCreator == nil {
+		return execution, fmt.Errorf("run dependencies incompletely resolved after setup: ReviewCreator still nil")
+	}
+	return execution, nil
+}
+
+func reviewCommitPolicy(detail *plan.PlanDetail) CommitPolicy {
+	if policy := parseRecordedCommitPolicy(detail.State.Plan.LastRunCommitPolicy); policy != "" {
+		return policy
+	}
+	if policy := lastRunCommitPolicy(detail.Events); policy != "" {
+		return policy
+	}
+	return CommitPolicyNone
+}
+
+func parseRecordedCommitPolicy(value string) CommitPolicy {
+	switch CommitPolicy(strings.TrimSpace(value)) {
+	case CommitPolicyPlan, CommitPolicySlice, CommitPolicyNone:
+		return CommitPolicy(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+// lastRunCommitPolicy returns the commit policy recorded by the most recent
+// legacy run_context event, or "" when no event recorded a valid policy.
+func lastRunCommitPolicy(events []plan.Event) CommitPolicy {
+	var policy CommitPolicy
+	for _, event := range events {
+		if event.Type != plan.EventTypeRunContext {
+			continue
+		}
+		parsed := parseRecordedCommitPolicy(event.CommitPolicy)
+		if parsed == "" {
+			continue
+		}
+		policy = parsed
+	}
+	return policy
+}
+
+func reviewExecutionRoot(detail *plan.PlanDetail) (string, error) {
+	if detail == nil {
+		return "", fmt.Errorf("plan detail is nil")
+	}
+	identity, err := workspace.ResolveExecutionRoot(detail, reviewWorkspaceConfig(detail))
+	if err == nil {
+		return absoluteReviewPath(identity.Root)
+	}
+	repoRoot := strings.TrimSpace(detail.State.Repo.Root)
+	if repoRoot == "" {
+		return "", fmt.Errorf("plan %s does not record a repo root", detail.State.Plan.ID)
+	}
+	return absoluteReviewPath(repoRoot)
+}
+
+func reviewWorkspaceConfig(detail *plan.PlanDetail) workspace.Config {
+	config := workspaceConfigForExecutionMode(ExecutionModeCurrent)
+	if detail != nil && detail.State.Workspace != nil && strings.TrimSpace(detail.State.Workspace.Strategy) == "" && strings.TrimSpace(detail.State.Workspace.Path) != "" {
+		config.Strategy = plan.WorkspaceStrategyWorktree
+	}
+	return config
+}
+
+func absoluteReviewPath(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", fmt.Errorf("review workspace root is empty")
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	return abs, nil
+}
+
+type reviewPromptData struct {
+	PlanDir string
+	PlanID  string
+	Base    string
+	Head    string
+}
+
+// ParsedReview is the normalized, size-bounded structured result shared by
+// ordinary plan reviews and internal aggregate merge reviews.
+type ParsedReview struct {
+	Verdict       string
+	Summary       string
+	FindingsCount int
+	Findings      []plan.ReviewFinding
+}
+
+type extractedReview = ParsedReview
+
+const (
+	maxReviewJSONBlockBytes       = 512 * 1024
+	maxReviewSummaryRunes         = 8 * 1024
+	maxReviewFindings             = 50
+	maxReviewFindingSeverityRunes = 64
+	maxReviewFindingFileRunes     = 512
+	maxReviewFindingTextRunes     = 4 * 1024
+)
+
+var reviewJSONBlockRE = regexp.MustCompile("(?s)```\\s*tao-review-json\\s*(.*?)\\s*```")
+
+func renderReviewPrompt(data reviewPromptData) (string, error) {
+	return prompts.Render(prompts.PromptReview, prompts.Data{PlanDir: data.PlanDir, PlanID: data.PlanID, Base: data.Base, Head: data.Head})
+}
+
+func createReviewWithAgentSession(ctx context.Context, executor AgentSessionExecutor, options agentOperationOptions, run ReviewRun, recordFactory PlanRecordFactory) (plan.PlanReview, error) {
+	planDir := reviewPlanDir(run)
+	state, err := reviewState(planDir, run.Detail)
+	if err != nil {
+		return plan.PlanReview{}, err
+	}
+	planID := reviewPlanID(run, state)
+	repoRoot := run.RepoRoot
+	if repoRoot == "" {
+		repoRoot = state.Repo.Root
+	}
+	git := gitClient(options, repoRoot)
+	detail := run.Detail
+	if detail == nil {
+		detail = &plan.PlanDetail{Dir: planDir, State: state}
+	} else {
+		detail.State = state
+	}
+	// A clean committed tree is required only when the commit policy actually
+	// commits slice work; under CommitPolicyNone the changes are intentionally
+	// left uncommitted, so demanding a clean worktree would stall every review.
+	if options.CommitPolicy != CommitPolicyNone {
+		if err := requireCleanReviewWorktree(ctx, git, detail, options.StartingDirtyPaths); err != nil {
+			return plan.PlanReview{}, err
+		}
+	}
+	base := reviewRunBase(ctx, git, run, state)
+	head := run.HeadSHA
+	if head == "" {
+		head, err = git.RevParse(ctx, "HEAD")
+		if err != nil {
+			return plan.PlanReview{}, fmt.Errorf("detect review head: %w", err)
+		}
+	}
+	prompt, err := renderReviewPrompt(reviewPromptData{PlanDir: planDir, PlanID: planID, Base: base, Head: head})
+	if err != nil {
+		return plan.PlanReview{}, err
+	}
+	result, err := executor.RunAgentSession(ctx, AgentSessionRequest{PlanDir: planDir, RepoRoot: repoRoot, LogAction: "reviewing plan " + planID, Prompt: prompt, CaptureOutput: true})
+	if err != nil {
+		return plan.PlanReview{}, err
+	}
+	extracted := extractReview(result.Output)
+	reviewedAt := now(options).UTC()
+	review := plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: extracted.Verdict, Summary: extracted.Summary, FindingsCount: extracted.FindingsCount, Findings: extracted.Findings, Base: base, Head: head, Agent: options.Agent, ReviewedAt: reviewedAt}
+	if err := plan.WriteReviewArtifact(planDir, result.Output); err != nil {
+		return plan.PlanReview{}, err
+	}
+	record, err := reviewPlanRecord(recordFactory, planDir, detail)
+	if err != nil {
+		return plan.PlanReview{}, err
+	}
+	if err := record.RecordReviewCompleted(review, options.Agent); err != nil {
+		return plan.PlanReview{}, err
+	}
+	return review, nil
+}
+
+// requireCleanReviewWorktree blocks any run-produced uncommitted work before
+// review. commitLeftovers shares git-status classification with slice completion:
+// .tao metadata is skipped, starting-dirty paths are tolerated, and any ambiguous
+// rename or copy outside .tao stays a hard stop.
+func requireCleanReviewWorktree(ctx context.Context, git gitops.Client, detail *plan.PlanDetail, startingDirty []string) error {
+	status, err := git.StatusPorcelain(ctx)
+	if err != nil {
+		return fmt.Errorf("check worktree status before review: %w", err)
+	}
+	leftovers, err := commitLeftovers(detail, status, startingDirtyPredicate(startingDirty))
+	if err != nil {
+		if ambiguous, ok := errors.AsType[*commitLeftoverAmbiguousStatusError](err); ok {
+			return fmt.Errorf("review requires a clean committed tree; uncommitted changes remain:\n%s", strings.Join(ambiguous.Lines, "\n"))
+		}
+		return fmt.Errorf("check worktree status before review: %w", err)
+	}
+	if len(leftovers) > 0 {
+		return fmt.Errorf("review requires a clean committed tree; uncommitted changes remain:\n%s", strings.Join(leftovers, "\n"))
+	}
+	return nil
+}
+
+func extractReview(output string) extractedReview {
+	return ParseReviewOutput(output)
+}
+
+// ParseReviewOutput extracts the last structured review block. Malformed,
+// oversized, or invalid output safely degrades to a bounded comment verdict.
+func ParseReviewOutput(output string) ParsedReview {
+	fallback := reviewFallback(output)
+	matches := reviewJSONBlockRE.FindAllStringSubmatch(output, -1)
+	if len(matches) == 0 || len(matches[len(matches)-1]) != 2 {
+		return fallback
+	}
+	block := strings.TrimSpace(matches[len(matches)-1][1])
+	if len(block) > maxReviewJSONBlockBytes {
+		return fallback
+	}
+	var payload struct {
+		Verdict  string          `json:"verdict"`
+		Summary  string          `json:"summary"`
+		Findings json.RawMessage `json:"findings"`
+	}
+	if err := json.Unmarshal([]byte(block), &payload); err != nil {
+		return fallback
+	}
+	if !validReviewVerdict(payload.Verdict) {
+		return fallback
+	}
+	findings := []plan.ReviewFinding{}
+	if len(payload.Findings) > 0 && string(payload.Findings) != "null" {
+		if err := json.Unmarshal(payload.Findings, &findings); err != nil {
+			return fallback
+		}
+	}
+	findings = normalizeReviewFindings(findings)
+	summary := capReviewString(strings.TrimSpace(payload.Summary), maxReviewSummaryRunes)
+	if summary == "" {
+		summary = fallback.Summary
+	}
+	return extractedReview{Verdict: payload.Verdict, Summary: summary, FindingsCount: len(findings), Findings: findings}
+}
+
+func reviewFallback(output string) ParsedReview {
+	return ParsedReview{Verdict: plan.ReviewVerdictComment, Summary: capReviewString(strings.TrimSpace(output), maxReviewSummaryRunes), Findings: []plan.ReviewFinding{}}
+}
+
+func normalizeReviewFindings(findings []plan.ReviewFinding) []plan.ReviewFinding {
+	if len(findings) > maxReviewFindings {
+		findings = findings[:maxReviewFindings]
+	}
+	normalized := make([]plan.ReviewFinding, 0, len(findings))
+	for _, finding := range findings {
+		if finding.Line < 0 {
+			finding.Line = 0
+		}
+		finding.Severity = capReviewString(strings.TrimSpace(finding.Severity), maxReviewFindingSeverityRunes)
+		finding.File = capReviewString(strings.TrimSpace(finding.File), maxReviewFindingFileRunes)
+		finding.Message = capReviewString(strings.TrimSpace(finding.Message), maxReviewFindingTextRunes)
+		finding.Suggestion = capReviewString(strings.TrimSpace(finding.Suggestion), maxReviewFindingTextRunes)
+		normalized = append(normalized, finding)
+	}
+	return normalized
+}
+
+func capReviewString(value string, maxRunes int) string {
+	runes := []rune(value)
+	if len(runes) <= maxRunes {
+		return value
+	}
+	return string(runes[:maxRunes])
+}
+
+func validReviewVerdict(verdict string) bool {
+	switch verdict {
+	case plan.ReviewVerdictApprove, plan.ReviewVerdictChangesRequested, plan.ReviewVerdictComment:
+		return true
+	default:
+		return false
+	}
+}
+
+func reviewPlanRecord(factory PlanRecordFactory, planDir string, detail *plan.PlanDetail) (PlanMutationRecord, error) {
+	if factory != nil {
+		record, err := factory(detail)
+		if err != nil {
+			return nil, err
+		}
+		if record == nil {
+			return nil, fmt.Errorf("plan record is nil")
+		}
+		return record, nil
+	}
+	return plan.NewPlanRecord(planDir, detail)
+}
+
+func reviewPlanDir(run ReviewRun) string {
+	if run.PlanDir != "" {
+		return run.PlanDir
+	}
+	if run.Detail != nil {
+		return run.Detail.Dir
+	}
+	return ""
+}
+
+func reviewState(planDir string, detail *plan.PlanDetail) (plan.State, error) {
+	if detail != nil {
+		return detail.State, nil
+	}
+	state, err := plan.ReadState(planDir)
+	if err != nil {
+		return plan.State{}, fmt.Errorf("read review state: %w", err)
+	}
+	return state, nil
+}
+
+func reviewPlanID(run ReviewRun, state plan.State) string {
+	if run.PlanID != "" {
+		return run.PlanID
+	}
+	return state.Plan.ID
+}
+
+func reviewDetailBase(detail *plan.PlanDetail) string {
+	if detail == nil {
+		return ""
+	}
+	if base := reviewWorkspaceBase(detail.State); base != "" {
+		return base
+	}
+	return strings.TrimSpace(detail.State.Repo.BaseCommit)
+}
+
+// reviewRunBase prefers the live merge-base so the persisted review matches
+// what the merge gate will compute, then falls back to bases recorded at plan
+// creation for plans without branch metadata or when git is unavailable.
+func reviewRunBase(ctx context.Context, git gitops.Client, run ReviewRun, state plan.State) string {
+	if base := reviewLiveMergeBase(ctx, git, state); base != "" {
+		return base
+	}
+	if base := reviewWorkspaceBase(state); base != "" {
+		return base
+	}
+	if base := strings.TrimSpace(run.Base); base != "" {
+		return base
+	}
+	return strings.TrimSpace(state.Repo.BaseCommit)
+}
+
+// reviewLiveMergeBase computes merge-base(default, plan branch) with the same
+// inputs `tao merge` uses for its review-base gate, so a review rerun after a
+// manual rebase records a base the merge gate accepts. An empty result means
+// the live base is not computable and callers must fall back to recorded bases.
+func reviewLiveMergeBase(ctx context.Context, git gitops.Client, state plan.State) string {
+	if state.Workspace == nil {
+		return ""
+	}
+	branch := strings.TrimSpace(state.Workspace.Branch)
+	if branch == "" {
+		return ""
+	}
+	defaultBranch, err := git.DefaultBranch(ctx)
+	defaultBranch = strings.TrimSpace(defaultBranch)
+	if err != nil || defaultBranch == "" {
+		defaultBranch = strings.TrimSpace(state.Workspace.BaseBranch)
+	}
+	if defaultBranch == "" || defaultBranch == branch {
+		return ""
+	}
+	base, err := git.MergeBase(ctx, defaultBranch, branch)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(base)
+}
+
+func reviewWorkspaceBase(state plan.State) string {
+	if state.Workspace == nil {
+		return ""
+	}
+	return strings.TrimSpace(state.Workspace.BaseSHA)
+}

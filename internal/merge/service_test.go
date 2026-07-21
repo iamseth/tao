@@ -1,0 +1,1208 @@
+package merge
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/iamseth/tao/internal/gitops"
+	"github.com/iamseth/tao/internal/plan"
+)
+
+type fakeGitClient struct {
+	root             string
+	defaultBranch    string
+	defaultErr       error
+	revParse         map[string]string
+	revParseSequence map[string][]string
+	revParseErrors   map[string][]error
+	revParseErr      error
+	commitMessages   map[string]string
+	commitMessageErr error
+	mergeBase        string
+	mergeErr         error
+	ancestors        map[string]bool
+	ancestorErr      error
+	status           string
+	statusErr        error
+	changedFiles     []string
+	changedErr       error
+	checkoutErr      error
+	mergeFFErr       error
+	mergeSquashErr   error
+	stagedChanges    bool
+	stagedChangesErr error
+	cleanErr         error
+	commitErr        error
+	rebaseErr        error
+	rebaseAbortErr   error
+	resetHardErr     error
+	calls            []string
+}
+
+func (f *fakeGitClient) Root() string {
+	return f.root
+}
+
+func (f *fakeGitClient) DefaultBranch(ctx context.Context) (string, error) {
+	_ = ctx
+	f.calls = append(f.calls, "default-branch")
+	return f.defaultBranch, f.defaultErr
+}
+
+func (f *fakeGitClient) RevParse(ctx context.Context, rev string) (string, error) {
+	_ = ctx
+	f.calls = append(f.calls, "rev-parse "+rev)
+	if f.revParseErr != nil {
+		return "", f.revParseErr
+	}
+	if len(f.revParseErrors[rev]) > 0 {
+		err := f.revParseErrors[rev][0]
+		f.revParseErrors[rev] = f.revParseErrors[rev][1:]
+		if err != nil {
+			return "", err
+		}
+	}
+	if len(f.revParseSequence[rev]) > 0 {
+		value := f.revParseSequence[rev][0]
+		f.revParseSequence[rev] = f.revParseSequence[rev][1:]
+		return value, nil
+	}
+	return f.revParse[rev], nil
+}
+
+func (f *fakeGitClient) CommitMessage(ctx context.Context, rev string) (string, error) {
+	_ = ctx
+	f.calls = append(f.calls, "commit-message "+rev)
+	if f.commitMessageErr != nil {
+		return "", f.commitMessageErr
+	}
+	return f.commitMessages[rev], nil
+}
+
+func (f *fakeGitClient) MergeBase(ctx context.Context, a string, b string) (string, error) {
+	_ = ctx
+	f.calls = append(f.calls, "merge-base "+a+" "+b)
+	return f.mergeBase, f.mergeErr
+}
+
+func (f *fakeGitClient) IsAncestor(ctx context.Context, ancestor string, descendant string) (bool, error) {
+	_ = ctx
+	f.calls = append(f.calls, "is-ancestor "+ancestor+" "+descendant)
+	if f.ancestorErr != nil {
+		return false, f.ancestorErr
+	}
+	return f.ancestors[ancestor+".."+descendant], nil
+}
+
+func (f *fakeGitClient) StatusPorcelain(ctx context.Context) (string, error) {
+	_ = ctx
+	f.calls = append(f.calls, "status")
+	return f.status, f.statusErr
+}
+
+func (f *fakeGitClient) ChangedFiles(ctx context.Context, revspec string) ([]string, error) {
+	_ = ctx
+	f.calls = append(f.calls, "changed-files "+revspec)
+	return append([]string(nil), f.changedFiles...), f.changedErr
+}
+
+func (f *fakeGitClient) Checkout(ctx context.Context, branch string) error {
+	_ = ctx
+	f.calls = append(f.calls, "checkout "+branch)
+	return f.checkoutErr
+}
+
+func (f *fakeGitClient) MergeFFOnly(ctx context.Context, ref string) error {
+	_ = ctx
+	f.calls = append(f.calls, "merge-ff-only "+ref)
+	return f.mergeFFErr
+}
+
+func (f *fakeGitClient) MergeSquash(ctx context.Context, ref string) error {
+	_ = ctx
+	f.calls = append(f.calls, "merge-squash "+ref)
+	return f.mergeSquashErr
+}
+
+func (f *fakeGitClient) HasStagedChanges(ctx context.Context) (bool, error) {
+	_ = ctx
+	f.calls = append(f.calls, "has-staged-changes")
+	return f.stagedChanges, f.stagedChangesErr
+}
+
+func (f *fakeGitClient) CleanUntracked(ctx context.Context) error {
+	_ = ctx
+	f.calls = append(f.calls, "clean-untracked")
+	return f.cleanErr
+}
+
+func (f *fakeGitClient) Commit(ctx context.Context, message string) error {
+	_ = ctx
+	f.calls = append(f.calls, "commit "+message)
+	return f.commitErr
+}
+
+func (f *fakeGitClient) Rebase(ctx context.Context, onto string) error {
+	_ = ctx
+	f.calls = append(f.calls, "rebase "+onto)
+	return f.rebaseErr
+}
+
+func (f *fakeGitClient) RebaseAbort(ctx context.Context) error {
+	_ = ctx
+	f.calls = append(f.calls, "rebase-abort")
+	return f.rebaseAbortErr
+}
+
+func (f *fakeGitClient) ResetHard(ctx context.Context, ref string) error {
+	_ = ctx
+	f.calls = append(f.calls, "reset-hard "+ref)
+	return f.resetHardErr
+}
+
+// fakeGitRegistry manages per-root fake git clients for tests that exercise
+// multi-working-copy scenarios. Constructing a client via newGit binds it to
+// the root's state bucket, making per-root call logs independently observable.
+type fakeGitRegistry struct {
+	copies map[string]*fakeGitClient
+}
+
+func newFakeGitRegistry() *fakeGitRegistry {
+	return &fakeGitRegistry{copies: make(map[string]*fakeGitClient)}
+}
+
+// seed registers a pre-configured fake client for root and returns the registry
+// for chaining.
+func (r *fakeGitRegistry) seed(root string, c *fakeGitClient) *fakeGitRegistry {
+	r.copies[root] = c
+	return r
+}
+
+// client returns the registered client for root, creating an empty zero-state
+// one if absent.
+func (r *fakeGitRegistry) client(root string) *fakeGitClient {
+	if c, ok := r.copies[root]; ok {
+		return c
+	}
+	c := &fakeGitClient{}
+	r.copies[root] = c
+	return c
+}
+
+// newGit is the GitClient factory for Service.NewGit: it binds the returned
+// client to dir's state bucket so callers can inspect per-root call logs.
+// It also sets the client's root field so worktreeGit's Root() assertion passes.
+func (r *fakeGitRegistry) newGit(dir string) GitClient {
+	c := r.client(dir)
+	c.root = dir
+	return c
+}
+
+func TestCheckPreMergeGateSkipsWorktreeCheckWhenWorktreePathEqualsRepoRoot(t *testing.T) {
+	// When the workspace path is the same filesystem path as the repo root the
+	// plan is not running in a separate worktree. CheckPreMergeGate must not
+	// call NewGit for the plan worktree in that case.
+	const root = "/repo/root"
+	git := &fakeGitClient{defaultBranch: "main", mergeBase: "base123"}
+	calledNewGit := false
+	detail := mergeReadyDetail("base123")
+	detail.State.Repo.Root = root
+	detail.State.Workspace.Strategy = plan.WorkspaceStrategyWorktree
+	detail.State.Workspace.Path = root // same as repo root: not a separate worktree
+
+	service := Service{
+		Git: git,
+		NewGit: func(dir string) GitClient {
+			calledNewGit = true
+			return &fakeGitClient{}
+		},
+	}
+	if err := service.CheckPreMergeGate(context.Background(), detail, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if calledNewGit {
+		t.Fatal("NewGit must not be called when worktree path equals repo root")
+	}
+}
+
+func TestCheckPreMergeGateAllowsApprovedMatchingReviewBase(t *testing.T) {
+	git := &fakeGitClient{defaultBranch: "main", mergeBase: "base123"}
+	detail := mergeReadyDetail("base123")
+
+	if err := (Service{Git: git}).CheckPreMergeGate(context.Background(), detail, Options{}); err != nil {
+		t.Fatal(err)
+	}
+
+	wantCalls := []string{"status", "default-branch", "merge-base main tao/plan-a"}
+	if !reflect.DeepEqual(git.calls, wantCalls) {
+		t.Fatalf("calls mismatch\nwant: %#v\n got: %#v", wantCalls, git.calls)
+	}
+}
+
+func TestCheckPreMergeGateRefusesNotApproved(t *testing.T) {
+	git := &fakeGitClient{defaultBranch: "main", mergeBase: "base123"}
+	detail := mergeReadyDetail("base123")
+	detail.State.Plan.Review.Verdict = plan.ReviewVerdictChangesRequested
+
+	err := (Service{Git: git}).CheckPreMergeGate(context.Background(), detail, Options{})
+	if err == nil {
+		t.Fatal("expected not-approved error")
+	}
+	if !errors.Is(err, ErrNotApproved) {
+		t.Fatalf("expected ErrNotApproved, got %v", err)
+	}
+	var notApproved *NotApprovedError
+	if !errors.As(err, &notApproved) || notApproved.PlanID != "plan-a" {
+		t.Fatalf("expected NotApprovedError with plan id, got %#v", err)
+	}
+	if len(git.calls) != 0 {
+		t.Fatalf("not-approved gate should not call git, got %#v", git.calls)
+	}
+}
+
+func TestCheckPreMergeGateRefusesReviewBaseMismatch(t *testing.T) {
+	git := &fakeGitClient{defaultBranch: "main", mergeBase: "merge-base-sha"}
+	detail := mergeReadyDetail("review-base-sha")
+
+	err := (Service{Git: git}).CheckPreMergeGate(context.Background(), detail, Options{})
+	if err == nil {
+		t.Fatal("expected review-base mismatch")
+	}
+	if !errors.Is(err, ErrReviewBaseMismatch) {
+		t.Fatalf("expected ErrReviewBaseMismatch, got %v", err)
+	}
+	var mismatch *ReviewBaseMismatchError
+	if !errors.As(err, &mismatch) {
+		t.Fatalf("expected ReviewBaseMismatchError, got %#v", err)
+	}
+	if mismatch.ReviewBase != "review-base-sha" || mismatch.MergeBase != "merge-base-sha" || mismatch.DefaultBranch != "main" || mismatch.PlanBranch != "tao/plan-a" {
+		t.Fatalf("unexpected mismatch details: %#v", mismatch)
+	}
+}
+
+func TestCheckPreMergeGateRefusesDirtyWorktree(t *testing.T) {
+	git := &fakeGitClient{defaultBranch: "main", mergeBase: "base123", status: " M internal/merge/service.go\n"}
+	detail := mergeReadyDetail("base123")
+
+	err := (Service{Git: git}).CheckPreMergeGate(context.Background(), detail, Options{})
+	if err == nil {
+		t.Fatal("expected dirty-worktree error")
+	}
+	if !errors.Is(err, ErrDirtyWorktree) {
+		t.Fatalf("expected ErrDirtyWorktree, got %v", err)
+	}
+	var dirty *DirtyWorktreeError
+	if !errors.As(err, &dirty) || dirty.Status != " M internal/merge/service.go\n" {
+		t.Fatalf("expected DirtyWorktreeError with status, got %#v", err)
+	}
+	wantCalls := []string{"status"}
+	if !reflect.DeepEqual(git.calls, wantCalls) {
+		t.Fatalf("calls mismatch\nwant: %#v\n got: %#v", wantCalls, git.calls)
+	}
+}
+
+func TestCheckPreMergeGateRefusesDirtyPlanWorktree(t *testing.T) {
+	// Real directories: hasSeparatePlanWorktree only trusts a worktree that
+	// exists on disk.
+	repoRoot := t.TempDir()
+	worktreePath := t.TempDir()
+	reg := newFakeGitRegistry()
+	reg.seed(repoRoot, &fakeGitClient{defaultBranch: "main", mergeBase: "base123"})
+	reg.seed(worktreePath, &fakeGitClient{status: " M feature.go\n"})
+	detail := mergeReadyDetail("base123")
+	detail.State.Repo.Root = repoRoot
+	detail.State.Workspace.Strategy = plan.WorkspaceStrategyWorktree
+	detail.State.Workspace.Path = worktreePath
+
+	service := Service{
+		Git:    reg.client(repoRoot),
+		NewGit: reg.newGit,
+	}
+	err := service.CheckPreMergeGate(context.Background(), detail, Options{})
+	if err == nil {
+		t.Fatal("expected dirty-worktree error")
+	}
+	if !errors.Is(err, ErrDirtyWorktree) {
+		t.Fatalf("expected ErrDirtyWorktree, got %v", err)
+	}
+	var dirty *DirtyWorktreeError
+	if !errors.As(err, &dirty) || dirty.Status != " M feature.go\n" {
+		t.Fatalf("expected plan worktree DirtyWorktreeError with status, got %#v", err)
+	}
+	if wantCalls := []string{"status"}; !reflect.DeepEqual(reg.client(repoRoot).calls, wantCalls) {
+		t.Fatalf("repo-root calls mismatch\nwant: %#v\n got: %#v", wantCalls, reg.client(repoRoot).calls)
+	}
+	if wantCalls := []string{"status"}; !reflect.DeepEqual(reg.client(worktreePath).calls, wantCalls) {
+		t.Fatalf("plan worktree calls mismatch\nwant: %#v\n got: %#v", wantCalls, reg.client(worktreePath).calls)
+	}
+}
+
+func TestWorktreeGitRejectsRootMismatch(t *testing.T) {
+	worktreePath := t.TempDir()
+	// NewGit returns a client whose Root() does not match the requested dir.
+	badClient := &fakeGitClient{root: "/some/other/path"}
+	service := Service{
+		Git: &fakeGitClient{},
+		NewGit: func(dir string) GitClient {
+			return badClient
+		},
+	}
+	detail := mergeReadyDetail("base123")
+	detail.State.Workspace.Strategy = plan.WorkspaceStrategyWorktree
+	detail.State.Workspace.Path = worktreePath
+
+	_, err := service.worktreeGit(detail)
+	if err == nil {
+		t.Fatal("expected root mismatch error")
+	}
+	if !strings.Contains(err.Error(), worktreePath) {
+		t.Fatalf("error should mention the requested path %q, got %q", worktreePath, err.Error())
+	}
+	if !strings.Contains(err.Error(), "/some/other/path") {
+		t.Fatalf("error should mention the actual bound root, got %q", err.Error())
+	}
+}
+
+func TestWorktreeGitUsesConfigDerivedPathWhenWorkspacePathIsEmpty(t *testing.T) {
+	// When Workspace.Strategy=worktree but Workspace.Path is empty, worktreeGit
+	// must derive the path from workspace.ResolvePlanWorktree (which falls back to
+	// the config-derived path) rather than passing "" to NewGit.
+	//
+	// Default config root is ".tao/workspaces" (relative); with planID=plan-a
+	// the resolved path is <repoRoot>/.tao/workspaces/plan-a. The directory is
+	// created because hasSeparatePlanWorktree only trusts a worktree that
+	// exists on disk.
+	repoRoot := t.TempDir()
+	const planID = "plan-a"
+	wantPath := filepath.Join(repoRoot, ".tao", "workspaces", planID)
+	if err := os.MkdirAll(wantPath, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	var gotPath string
+	reg := newFakeGitRegistry()
+	reg.seed(wantPath, &fakeGitClient{})
+	service := Service{
+		Git: &fakeGitClient{},
+		NewGit: func(dir string) GitClient {
+			gotPath = dir
+			return reg.newGit(dir)
+		},
+	}
+	detail := mergeReadyDetail("base123")
+	detail.State.Repo.Root = repoRoot
+	detail.State.Plan.ID = planID
+	detail.State.Workspace.Strategy = plan.WorkspaceStrategyWorktree
+	detail.State.Workspace.Path = "" // empty: must be resolved from config
+
+	_, err := service.worktreeGit(detail)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath == "" {
+		t.Fatal("NewGit was not called")
+	}
+	if gotPath != wantPath {
+		t.Fatalf("NewGit called with wrong path: got %q, want %q", gotPath, wantPath)
+	}
+}
+
+func TestMergeRefusesDirtyPlanWorktreeBeforeDefaultMutation(t *testing.T) {
+	fixture := newRealGitWorktree(t)
+	ctx := context.Background()
+	repoGit := gitops.NewClient(fixture.repoRoot, nil)
+	baseSHA, err := repoGit.RevParse(ctx, fixture.defaultBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "feature.txt"), []byte("feature\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runRealGit(t, fixture.worktreePath, "add", "feature.txt")
+	runRealGit(t, fixture.worktreePath, "commit", "-m", "feature")
+	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "dirty.txt"), []byte("dirty\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	detail := mergeReadyDetail(baseSHA)
+	detail.Dir = t.TempDir()
+	detail.State.Repo.Root = fixture.repoRoot
+	detail.State.Workspace.Strategy = plan.WorkspaceStrategyWorktree
+	detail.State.Workspace.Path = fixture.worktreePath
+	detail.State.Workspace.Branch = fixture.planBranch
+	detail.State.Workspace.BaseBranch = fixture.defaultBranch
+	service := Service{
+		Git: repoGit,
+		NewGit: func(dir string) GitClient {
+			return gitops.NewClient(dir, nil)
+		},
+		Cleaner: successfulCleanup(),
+		Events:  &fakeEventAppender{},
+	}
+
+	err = service.Merge(ctx, detail, Options{NoVerify: true})
+	if err == nil {
+		t.Fatal("expected dirty plan worktree to refuse merge")
+	}
+	if !errors.Is(err, ErrDirtyWorktree) {
+		t.Fatalf("expected ErrDirtyWorktree, got %v", err)
+	}
+	afterSHA, err := repoGit.RevParse(ctx, fixture.defaultBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterSHA != baseSHA {
+		t.Fatalf("default branch mutated despite dirty plan worktree: before %s after %s", baseSHA, afterSHA)
+	}
+	if err := service.CheckPreMergeGate(ctx, detail, Options{Force: true}); err != nil {
+		t.Fatalf("force should bypass the dirty-worktree gate: %v", err)
+	}
+}
+
+func TestCheckPreMergeGateForceBypassesReviewAndScopeGate(t *testing.T) {
+	tests := []struct {
+		name   string
+		detail *plan.PlanDetail
+	}{
+		{
+			name:   "not approved",
+			detail: notApprovedDetail(),
+		},
+		{
+			name:   "review base mismatch",
+			detail: mergeReadyDetail("review-base-sha"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			git := &fakeGitClient{defaultErr: errors.New("default unavailable"), mergeBase: "merge-base-sha", status: " M dirty.go\n"}
+			if err := (Service{Git: git}).CheckPreMergeGate(context.Background(), tt.detail, Options{Force: true}); err != nil {
+				t.Fatal(err)
+			}
+			if len(git.calls) != 0 {
+				t.Fatalf("force should bypass gate without git calls, got %#v", git.calls)
+			}
+		})
+	}
+}
+
+func TestCheckPreMergeGateFallsBackToWorkspaceBaseBranch(t *testing.T) {
+	git := &fakeGitClient{defaultErr: errors.New("origin HEAD missing"), mergeBase: "base123"}
+	detail := mergeReadyDetail("base123")
+	detail.State.Workspace.BaseBranch = "master"
+
+	if err := (Service{Git: git}).CheckPreMergeGate(context.Background(), detail, Options{}); err != nil {
+		t.Fatal(err)
+	}
+
+	wantCalls := []string{"status", "default-branch", "merge-base master tao/plan-a"}
+	if !reflect.DeepEqual(git.calls, wantCalls) {
+		t.Fatalf("calls mismatch\nwant: %#v\n got: %#v", wantCalls, git.calls)
+	}
+}
+
+func TestIntegrateFastForwardsDescendantPlanBranch(t *testing.T) {
+	git := &fakeGitClient{
+		defaultBranch: "main",
+		revParse:      map[string]string{"main": "pre123"},
+		ancestors:     map[string]bool{"main..tao/plan-a": true},
+	}
+
+	if err := (Service{Git: git}).Integrate(context.Background(), mergeReadyDetail("base123")); err != nil {
+		t.Fatal(err)
+	}
+
+	wantCalls := []string{"default-branch", "rev-parse main", "is-ancestor main tao/plan-a", "checkout main", "merge-ff-only tao/plan-a"}
+	if !reflect.DeepEqual(git.calls, wantCalls) {
+		t.Fatalf("calls mismatch\nwant: %#v\n got: %#v", wantCalls, git.calls)
+	}
+}
+
+func TestIntegrateRebasesThenFastForwardsWhenDefaultAdvanced(t *testing.T) {
+	git := &fakeGitClient{
+		defaultBranch: "main",
+		revParse:      map[string]string{"main": "pre123"},
+	}
+
+	if err := (Service{Git: git}).Integrate(context.Background(), mergeReadyDetail("base123")); err != nil {
+		t.Fatal(err)
+	}
+
+	// No NewGit on the service, so worktreeGit falls back to the repo-root client
+	// and the plan branch must be checked out before rebasing.
+	wantCalls := []string{"default-branch", "rev-parse main", "is-ancestor main tao/plan-a", "checkout tao/plan-a", "rebase main", "checkout main", "merge-ff-only tao/plan-a"}
+	if !reflect.DeepEqual(git.calls, wantCalls) {
+		t.Fatalf("calls mismatch\nwant: %#v\n got: %#v", wantCalls, git.calls)
+	}
+}
+
+func TestIntegrateRebaseConflictAbortsAndRestoresDefault(t *testing.T) {
+	git := &fakeGitClient{
+		defaultBranch: "main",
+		revParse:      map[string]string{"main": "pre123"},
+		status:        "UU internal/merge/integrate.go\n",
+		changedFiles:  []string{"internal/merge/service.go", "internal/merge/integrate.go"},
+		rebaseErr:     errors.New("conflict"),
+	}
+
+	err := (Service{Git: git}).Integrate(context.Background(), mergeReadyDetail("base123"))
+	if err == nil {
+		t.Fatal("expected merge conflict")
+	}
+	if !errors.Is(err, ErrMergeConflict) {
+		t.Fatalf("expected ErrMergeConflict, got %v", err)
+	}
+	var conflict *MergeConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("expected MergeConflictError, got %#v", err)
+	}
+	wantFiles := []string{"internal/merge/integrate.go"}
+	if !reflect.DeepEqual(conflict.Files, wantFiles) {
+		t.Fatalf("conflict files mismatch\nwant: only the unmerged path %#v\n got: %#v", wantFiles, conflict.Files)
+	}
+	wantCalls := []string{
+		"default-branch",
+		"rev-parse main",
+		"is-ancestor main tao/plan-a",
+		"checkout tao/plan-a",
+		"rebase main",
+		"status",
+		"rebase-abort",
+		"checkout main",
+		"reset-hard pre123",
+		"checkout main",
+	}
+	if !reflect.DeepEqual(git.calls, wantCalls) {
+		t.Fatalf("calls mismatch\nwant: %#v\n got: %#v", wantCalls, git.calls)
+	}
+}
+
+// TestExternalMergeRefsDropsStaleSnapshotsAfterReopen guards the data-loss bug
+// where a plan reopened for rework still exposed its previously-merged head
+// snapshots (review/PR/workspace) as external-merge candidates. Detecting the
+// stale merge would delete the branch holding the unmerged rework commits.
+func TestExternalMergeRefsDropsStaleSnapshotsAfterReopen(t *testing.T) {
+	newDetail := func() *plan.PlanDetail {
+		detail := mergeReadyDetail("base123")
+		detail.State.Plan.Review.Head = "stale-review-head"
+		detail.State.Plan.PullRequest = &plan.PullRequest{HeadSHA: "stale-pr-head"}
+		detail.State.Workspace.HeadSHA = "stale-workspace-head"
+		return detail
+	}
+
+	// Before any reopen the snapshots are current and must be included.
+	merged := newDetail()
+	merged.Events = []plan.Event{{Type: plan.EventTypePlanReviewed}}
+	got := externalMergeRefs(merged)
+	want := []string{"tao/plan-a", "stale-review-head", "stale-pr-head", "stale-workspace-head"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("pre-reopen refs mismatch\nwant: %#v\n got: %#v", want, got)
+	}
+
+	// After a reopen supersedes the review, only the live plan branch survives.
+	reopened := newDetail()
+	reopened.Events = []plan.Event{
+		{Type: plan.EventTypePlanReviewed},
+		{Type: plan.EventTypePlanMerged},
+		{Type: plan.EventTypePlanReopened},
+	}
+	got = externalMergeRefs(reopened)
+	if want := []string{"tao/plan-a"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("post-reopen refs mismatch\nwant: %#v\n got: %#v", want, got)
+	}
+
+	// A fresh review after the reopen restores trust in the snapshots.
+	reReviewed := newDetail()
+	reReviewed.Events = []plan.Event{
+		{Type: plan.EventTypePlanMerged},
+		{Type: plan.EventTypePlanReopened},
+		{Type: plan.EventTypePlanReviewed},
+	}
+	got = externalMergeRefs(reReviewed)
+	want = []string{"tao/plan-a", "stale-review-head", "stale-pr-head", "stale-workspace-head"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("re-reviewed refs mismatch\nwant: %#v\n got: %#v", want, got)
+	}
+}
+
+// TestMergeRefusesReopenedPlanWithoutReworkCommits guards the data-loss bug
+// where `tao merge --force` on a merged-then-reopened plan re-recorded the
+// superseded merge: with no rework commits yet, the live branch tip is still
+// the previously merged commit, so it satisfies both ancestry against default
+// and refCarriesPlanWork — external-merge detection (and, under --force, the
+// gate-free full merge) would mark the reopened plan completed and cleanup
+// would delete the worktree and branch carrying the pending rework slices.
+func TestMergeRefusesReopenedPlanWithoutReworkCommits(t *testing.T) {
+	newGit := func() *fakeGitClient {
+		return &fakeGitClient{
+			defaultBranch: "main",
+			ancestors: map[string]bool{
+				"tao/plan-a..main":    true, // old tip is merged: exactly the superseded merge
+				"base123..tao/plan-a": true, // and ahead of the plan base, so it "carries work"
+				"old-tip..merged456":  true, // ...but nothing beyond the recorded merge
+			},
+			revParse: map[string]string{"main": "merged999", "tao/plan-a": "old-tip"},
+		}
+	}
+	newDetail := func() *plan.PlanDetail {
+		detail := mergeReadyDetail("base123")
+		detail.Dir = t.TempDir()
+		detail.State.Status = plan.StatusInProgress
+		detail.State.Plan.PendingSlices = []string{"002-rework"}
+		detail.Slices.Slices = append(detail.Slices.Slices, plan.Slice{ID: "002-rework", Status: plan.StatusPending})
+		detail.Events = []plan.Event{
+			{Type: plan.EventTypePlanReviewed},
+			{Type: plan.EventTypePlanMerged, MergedDefaultSHA: "merged456"},
+			{Type: plan.EventTypePlanReopened},
+		}
+		return detail
+	}
+
+	t.Run("force refuses", func(t *testing.T) {
+		cleaner := successfulCleanup()
+		events := &fakeEventAppender{}
+		err := (Service{Git: newGit(), Cleaner: cleaner, Events: events}).Merge(context.Background(), newDetail(), Options{Force: true})
+		if err == nil || !strings.Contains(err.Error(), "no commits beyond the previously recorded merge") {
+			t.Fatalf("expected rework refusal, got %v", err)
+		}
+		if events.count(plan.EventTypePlanMerged) != 0 {
+			t.Fatalf("no merge may be recorded, got %#v", events.events)
+		}
+		if len(cleaner.cleaned) != 0 {
+			t.Fatalf("cleanup must not run, got %#v", cleaner.cleaned)
+		}
+	})
+
+	t.Run("plain merge refuses with the rework reason", func(t *testing.T) {
+		err := (Service{Git: newGit()}).Merge(context.Background(), newDetail(), Options{})
+		if err == nil || !strings.Contains(err.Error(), "no commits beyond the previously recorded merge") {
+			t.Fatalf("expected rework refusal, got %v", err)
+		}
+	})
+
+	t.Run("rework commits pass the guard", func(t *testing.T) {
+		git := newGit()
+		git.revParse["tao/plan-a"] = "rework-tip"
+		git.ancestors = map[string]bool{"rework-tip..merged456": false, "tao/plan-a..main": false}
+		err := (Service{Git: git}).Merge(context.Background(), newDetail(), Options{})
+		if !errors.Is(err, ErrNotApproved) {
+			t.Fatalf("expected the guard to pass through to the approval gate, got %v", err)
+		}
+	})
+
+	t.Run("record-only force stays the escape hatch", func(t *testing.T) {
+		cleaner := successfulCleanup()
+		events := &fakeEventAppender{}
+		err := (Service{Git: newGit(), Cleaner: cleaner, Events: events}).Merge(context.Background(), newDetail(), Options{RecordOnly: true, Force: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		events.first(t, plan.EventTypePlanMerged)
+	})
+}
+
+// TestCheckPreMergeGateRefusesReviewHeadMismatch guards the unreviewed-commits
+// hole: an approved review covers base..head, so commits added to the plan
+// branch after the review (e.g. leftover worktree changes committed later, or
+// fresh work) must invalidate the approval rather than merging unreviewed on
+// the strength of the old verdict.
+func TestCheckPreMergeGateRefusesReviewHeadMismatch(t *testing.T) {
+	newGit := func(tip string) *fakeGitClient {
+		return &fakeGitClient{
+			defaultBranch: "main",
+			mergeBase:     "base123",
+			revParse:      map[string]string{"tao/plan-a": tip},
+		}
+	}
+	newDetail := func() *plan.PlanDetail {
+		detail := mergeReadyDetail("base123")
+		detail.State.Plan.Review.Head = "reviewed-head"
+		return detail
+	}
+
+	err := (Service{Git: newGit("follow-up-sha")}).CheckPreMergeGate(context.Background(), newDetail(), Options{})
+	if err == nil {
+		t.Fatal("expected review-head mismatch refusal")
+	}
+	if !errors.Is(err, ErrReviewHeadMismatch) {
+		t.Fatalf("expected ErrReviewHeadMismatch, got %v", err)
+	}
+	mismatch, ok := errors.AsType[*ReviewHeadMismatchError](err)
+	if !ok || mismatch.ReviewHead != "reviewed-head" || mismatch.BranchTip != "follow-up-sha" || mismatch.PlanBranch != "tao/plan-a" {
+		t.Fatalf("unexpected mismatch payload %#v", mismatch)
+	}
+
+	if err := (Service{Git: newGit("reviewed-head")}).CheckPreMergeGate(context.Background(), newDetail(), Options{}); err != nil {
+		t.Fatalf("matching head should pass the gate: %v", err)
+	}
+}
+
+// TestMergeRetriesCleanupWhenMergeAlreadyRecorded guards the leak where a
+// recorded merge whose cleanup failed (e.g. tao merge run from inside the plan
+// worktree) could never be cleaned via tao merge again: the already-recorded
+// short-circuit reported success without retrying cleanup.
+func TestMergeRetriesCleanupWhenMergeAlreadyRecorded(t *testing.T) {
+	newDetail := func() *plan.PlanDetail {
+		detail := mergeVerifyDetail()
+		detail.Events = []plan.Event{{Type: plan.EventTypePlanMerged}}
+		return detail
+	}
+
+	t.Run("leftover worktree cleaned", func(t *testing.T) {
+		cleaner := successfulCleanup()
+		if err := (Service{Git: &fakeGitClient{}, Cleaner: cleaner}).Merge(context.Background(), newDetail(), Options{}); err != nil {
+			t.Fatal(err)
+		}
+		if len(cleaner.cleaned) != 1 || cleaner.cleaned[0].Branch != "tao/plan-a" {
+			t.Fatalf("expected retried cleanup to remove the leftover branch, got %#v", cleaner.cleaned)
+		}
+	})
+
+	t.Run("already cleaned is success", func(t *testing.T) {
+		cleaner := successfulCleanup()
+		cleaner.managed = nil // branch no longer managed: nothing left to clean
+		if err := (Service{Git: &fakeGitClient{}, Cleaner: cleaner}).Merge(context.Background(), newDetail(), Options{}); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("cleanup failure surfaces", func(t *testing.T) {
+		cleaner := successfulCleanup()
+		cleaner.cleanErr = errors.New("worktree busy")
+		err := (Service{Git: &fakeGitClient{}, Cleaner: cleaner}).Merge(context.Background(), newDetail(), Options{})
+		if err == nil || !strings.Contains(err.Error(), "already recorded, but cleanup failed") {
+			t.Fatalf("expected surfaced cleanup failure, got %v", err)
+		}
+	})
+}
+
+// TestMergeSurfacesCleanupFailureAfterRecordingExternalMerge guards the silent
+// leak on the external-record path: a cleanup failure after recording was only
+// logged, so the command reported success while the branch and worktree
+// remained. The failure must surface (the recorded merge stays recorded).
+func TestMergeSurfacesCleanupFailureAfterRecordingExternalMerge(t *testing.T) {
+	git := &fakeGitClient{
+		defaultBranch: "main",
+		revParse:      map[string]string{"main": "merged789"},
+		ancestors:     map[string]bool{"tao/plan-a..main": true, "base123..tao/plan-a": true},
+	}
+	cleaner := successfulCleanup()
+	cleaner.cleanErr = errors.New("worktree busy")
+	events := &fakeEventAppender{}
+
+	err := (Service{Git: git, Cleaner: cleaner, Events: events}).Merge(context.Background(), mergeVerifyDetail(), Options{})
+	if err == nil || !strings.Contains(err.Error(), "external merge recorded, but cleanup failed") {
+		t.Fatalf("expected surfaced cleanup failure, got %v", err)
+	}
+	events.first(t, plan.EventTypePlanMerged)
+}
+
+// TestDetectExternalMergeSkipsSnapshotBehindAdvancedBranchTip guards the
+// data-loss bug where a recorded head snapshot (review/PR/workspace) merged
+// externally was still trusted after follow-up commits advanced the plan branch
+// past it: detection would mark the plan completed while the follow-up commits
+// never reached the default branch, and cleanup could delete the branch
+// carrying them.
+func TestDetectExternalMergeSkipsSnapshotBehindAdvancedBranchTip(t *testing.T) {
+	newGit := func() *fakeGitClient {
+		return &fakeGitClient{
+			defaultBranch: "main",
+			ancestors: map[string]bool{
+				"tao/plan-a..main":      false, // live branch tip is not merged
+				"merged-head..main":     true,  // the old reviewed head was merged externally
+				"base-sha..merged-head": true,  // and it carries plan work
+			},
+			revParse: map[string]string{
+				"main":        "merged-default-sha",
+				"merged-head": "merged-head",
+			},
+		}
+	}
+	newDetail := func() *plan.PlanDetail {
+		detail := mergeReadyDetail("base123")
+		detail.State.Plan.Review.Head = "merged-head"
+		detail.State.Workspace.BaseSHA = "base-sha"
+		return detail
+	}
+
+	t.Run("branch tip advanced past snapshot", func(t *testing.T) {
+		git := newGit()
+		git.revParse["tao/plan-a"] = "follow-up-sha"
+		_, ok, err := (Service{Git: git}).detectExternalMerge(context.Background(), git, newDetail(), Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ok {
+			t.Fatal("snapshot behind the advanced branch tip must not be detected as an external merge")
+		}
+	})
+
+	t.Run("snapshot equals branch tip", func(t *testing.T) {
+		git := newGit()
+		git.revParse["tao/plan-a"] = "merged-head"
+		merged, ok, err := (Service{Git: git}).detectExternalMerge(context.Background(), git, newDetail(), Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok || merged.Ref != "merged-head" {
+			t.Fatalf("snapshot matching the live tip should be detected, got ok=%v merged=%#v", ok, merged)
+		}
+	})
+
+	t.Run("branch deleted keeps snapshots trusted", func(t *testing.T) {
+		git := newGit()
+		merged, ok, err := (Service{Git: git}).detectExternalMerge(context.Background(), git, newDetail(), Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok || merged.Ref != "merged-head" {
+			t.Fatalf("snapshots are the only evidence once the branch is gone, got ok=%v merged=%#v", ok, merged)
+		}
+	})
+}
+
+func TestMergeRollsBackWhenMergedSHACaptureFails(t *testing.T) {
+	captureErr := errors.New("rev-parse unavailable")
+	git := &fakeGitClient{
+		defaultBranch:    "main",
+		mergeBase:        "base123",
+		ancestors:        map[string]bool{"main..tao/plan-a": true},
+		revParse:         map[string]string{"tao/plan-a": "tip-sha"},
+		revParseSequence: map[string][]string{"main": {"pre123", "pre123"}},
+		revParseErrors:   map[string][]error{"main": {nil, nil, captureErr}},
+	}
+	events := &fakeEventAppender{}
+	cleaner := successfulCleanup()
+
+	err := (Service{Git: git, Cleaner: cleaner, Events: events}).Merge(context.Background(), mergeReadyDetail("base123"), Options{NoVerify: true})
+	if err == nil || !errors.Is(err, captureErr) {
+		t.Fatalf("expected merged-SHA capture failure, got %v", err)
+	}
+	verificationEvent := events.requireSingle(t, plan.EventTypeMergeVerification)
+	if verificationEvent.Result != "skipped" || events.count(plan.EventTypePlanMerged) != 0 || len(cleaner.calls) != 0 {
+		t.Fatalf("failed capture should retain only the skipped verification event and not clean up: events=%#v cleanup=%#v", events.events, cleaner.calls)
+	}
+	wantSuffix := []string{"reset-hard pre123", "checkout main"}
+	if got := git.calls[len(git.calls)-len(wantSuffix):]; !reflect.DeepEqual(got, wantSuffix) {
+		t.Fatalf("rollback calls mismatch\nwant: %#v\n got: %#v", wantSuffix, git.calls)
+	}
+}
+
+func TestMergeRecordRetryConsumesSettledJournalEvidence(t *testing.T) {
+	plansDir := t.TempDir()
+	planDir := filepath.Join(plansDir, "plan-a")
+	if err := os.Mkdir(planDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	base := mergeReadyDetail("base123")
+	base.Dir = planDir
+	base.State.Schema = "tao.plan.state.v1"
+	base.State.Status = plan.StatusReviewed
+	base.Slices.Schema = "tao.plan.slices.v1"
+	base.Slices.PlanID = "plan-a"
+	writeMergeRestartJSON(t, filepath.Join(planDir, "state.json"), base.State)
+	writeMergeRestartJSON(t, filepath.Join(planDir, "slices.json"), base.Slices)
+
+	mergedAt := time.Date(2026, 7, 20, 18, 30, 0, 0, time.UTC)
+	settledState := base.State
+	settledState.Status = plan.StatusCompleted
+	settledState.UpdatedAt = mergedAt
+	settledState.Plan.Timing.LastActivityAt = &mergedAt
+	event := plan.Event{Type: plan.EventTypePlanMerged, Timestamp: mergedAt, PlanID: "plan-a", MutationID: "restart-merge", Branch: "tao/plan-a", MergedDefaultSHA: "merged456", Message: "Plan merged into default branch"}
+	writeMergeRestartJournal(t, planDir, settledState, event)
+
+	service := Service{Now: func() time.Time { return mergedAt.Add(time.Minute) }}
+	if err := service.AppendPlanMergedEvent(base, "tao/plan-a", "merged456"); err != nil {
+		t.Fatalf("retry merge recording after journal settlement: %v", err)
+	}
+	reloaded, err := plan.NewFileRepository(plansDir).ResolvePlan(context.Background(), planDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mergedEvents := 0
+	for _, got := range reloaded.Events {
+		if got.Type == plan.EventTypePlanMerged {
+			mergedEvents++
+		}
+	}
+	if mergedEvents != 1 || reloaded.State.Status != plan.StatusCompleted {
+		t.Fatalf("settled merge evidence = status %q events %#v", reloaded.State.Status, reloaded.Events)
+	}
+	if len(base.Events) != 1 || base.Events[0].MergedDefaultSHA != "merged456" {
+		t.Fatalf("merge consumer retained stale events: %#v", base.Events)
+	}
+	if _, statErr := os.Stat(filepath.Join(planDir, ".mutation.json")); !os.IsNotExist(statErr) {
+		t.Fatalf("settled merge journal remains: %v", statErr)
+	}
+}
+
+type mergeRestartPayload struct {
+	Payload []byte `json:"payload"`
+	SHA256  string `json:"sha256"`
+}
+
+func writeMergeRestartJournal(t *testing.T, planDir string, state plan.State, event plan.Event) {
+	t.Helper()
+	statePayload := mergeRestartJSONPayload(t, state, true)
+	eventPayload := mergeRestartJSONPayload(t, event, false)
+	journal := struct {
+		Schema     string                `json:"schema"`
+		MutationID string                `json:"mutation_id"`
+		PlanID     string                `json:"plan_id"`
+		CreatedAt  time.Time             `json:"created_at"`
+		State      *mergeRestartPayload  `json:"state"`
+		Events     []mergeRestartPayload `json:"events"`
+	}{
+		Schema: "tao.plan.mutation.v1", MutationID: "restart-merge", PlanID: "plan-a", CreatedAt: event.Timestamp,
+		State: statePayload, Events: []mergeRestartPayload{*eventPayload},
+	}
+	writeMergeRestartJSON(t, filepath.Join(planDir, ".mutation.json"), journal)
+}
+
+func mergeRestartJSONPayload(t *testing.T, value any, indent bool) *mergeRestartPayload {
+	t.Helper()
+	var payload []byte
+	var err error
+	if indent {
+		payload, err = json.MarshalIndent(value, "", "  ")
+		payload = append(payload, '\n')
+	} else {
+		payload, err = json.Marshal(value)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(payload)
+	return &mergeRestartPayload{Payload: payload, SHA256: hex.EncodeToString(sum[:])}
+}
+
+func writeMergeRestartJSON(t *testing.T, path string, value any) {
+	t.Helper()
+	payload, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload = append(payload, '\n')
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMergeRetainsDurableIntentWhenPlanMergedEventFails(t *testing.T) {
+	recordErr := errors.New("event store unavailable")
+	git := &fakeGitClient{
+		defaultBranch:    "main",
+		mergeBase:        "base123",
+		ancestors:        map[string]bool{"main..tao/plan-a": true},
+		revParse:         map[string]string{"tao/plan-a": "tip-sha"},
+		revParseSequence: map[string][]string{"main": {"pre123", "pre123", "merged456"}},
+	}
+	events := &fakeEventAppender{err: recordErr}
+	cleaner := successfulCleanup()
+	detail := mergeReadyDetail("base123")
+	detail.Dir = t.TempDir()
+	detail.State.Status = plan.StatusReviewed
+	previousState := detail.State
+
+	err := (Service{Git: git, Cleaner: cleaner, Events: events}).Merge(context.Background(), detail, Options{NoVerify: true})
+	if err == nil || !errors.Is(err, recordErr) {
+		t.Fatalf("expected event persistence failure, got %v", err)
+	}
+	if events.count(plan.EventTypeMergeVerification) != 0 || events.count(plan.EventTypePlanMerged) != 0 || len(cleaner.calls) != 0 {
+		t.Fatalf("failed recording must not retain a merge event or clean up: events=%#v cleanup=%#v", events.events, cleaner.calls)
+	}
+	if len(events.stateWrites) != 1 || events.stateWrites[0].Status != plan.StatusCompleted {
+		t.Fatalf("merge evidence state should remain installed for journal replay, got %#v", events.stateWrites)
+	}
+	if !reflect.DeepEqual(detail.State, previousState) {
+		t.Fatalf("loaded detail was not restored after event failure\nwant: %#v\n got: %#v", previousState, detail.State)
+	}
+	wantSuffix := []string{"reset-hard pre123", "checkout main"}
+	if got := git.calls[len(git.calls)-len(wantSuffix):]; !reflect.DeepEqual(got, wantSuffix) {
+		t.Fatalf("rollback calls mismatch\nwant: %#v\n got: %#v", wantSuffix, git.calls)
+	}
+}
+
+func TestMergeDirtyInCleanupGapPreservesRecordedStateAndRetries(t *testing.T) {
+	fixture := newRealGitWorktree(t)
+	commitRealPlanChange(t, fixture)
+	cleaner := newRealManagedCleaner(t, fixture)
+	dirtyPath := filepath.Join(fixture.worktreePath, "dirty-in-cleanup-gap.txt")
+	dirtied := false
+	cleaner.beforeClean = func() {
+		if dirtied {
+			return
+		}
+		dirtied = true
+		if err := os.WriteFile(dirtyPath, []byte("late change\n"), 0o600); err != nil {
+			t.Fatalf("dirty worktree after merge gate: %v", err)
+		}
+	}
+
+	git := &fakeGitClient{
+		defaultBranch:    "main",
+		mergeBase:        "base123",
+		ancestors:        map[string]bool{"main..tao/plan-a": true},
+		revParse:         map[string]string{"tao/plan-a": "tip-sha"},
+		revParseSequence: map[string][]string{"main": {"pre123", "pre123", "merged456"}},
+	}
+	detail := mergeReadyDetail("base123")
+	detail.Dir = t.TempDir()
+	detail.State.Status = plan.StatusReviewed
+	detail.State.Repo.Root = fixture.repoRoot
+	events := &fakeEventAppender{}
+	service := Service{Git: git, Cleaner: cleaner, Events: events}
+
+	err := service.Merge(context.Background(), detail, Options{NoVerify: true})
+	if err == nil || !strings.Contains(err.Error(), "has uncommitted changes") {
+		t.Fatalf("expected fresh-cleanliness cleanup refusal, got %v", err)
+	}
+	events.requireSingle(t, plan.EventTypeMergeVerification)
+	events.requireSingle(t, plan.EventTypePlanMerged)
+	if events.state == nil || events.state.Status != plan.StatusCompleted || detail.State.Status != plan.StatusCompleted {
+		t.Fatalf("recorded completed state must survive refusal: stored=%#v detail=%q", events.state, detail.State.Status)
+	}
+	if _, statErr := os.Stat(fixture.worktreePath); statErr != nil {
+		t.Fatalf("refused cleanup must leave worktree intact: %v", statErr)
+	}
+
+	if err := os.Remove(dirtyPath); err != nil {
+		t.Fatal(err)
+	}
+	cleaner.beforeClean = nil
+	result, err := service.Cleanup(context.Background(), detail, Options{allowNonAncestralCleanup: true})
+	if err != nil {
+		t.Fatalf("cleanup retry after cleaning worktree failed: %v", err)
+	}
+	if !result.Removed {
+		t.Fatal("cleanup retry should report removal")
+	}
+	assertRealCleanupRemoved(t, fixture)
+	if events.count(plan.EventTypePlanMerged) != 1 {
+		t.Fatalf("cleanup retry must not duplicate merge recording, got %#v", events.events)
+	}
+}
+
+// TestMergeRecordsMergeBeforeCleanup guards the recovery bug where the normal
+// merge path ran cleanup (deleting the plan branch and worktree) before
+// recording the merge: a failed record left a merged plan with no plan_merged
+// event and no surviving refs to retry from. The merge must be recorded first,
+// and a cleanup failure after recording must surface without unrecording.
+func TestMergeRecordsMergeBeforeCleanup(t *testing.T) {
+	git := &fakeGitClient{
+		defaultBranch:    "main",
+		mergeBase:        "base123",
+		ancestors:        map[string]bool{"main..tao/plan-a": true},
+		revParse:         map[string]string{"tao/plan-a": "tip-sha"},
+		revParseSequence: map[string][]string{"main": {"pre123", "pre123", "merged456"}},
+	}
+	detail := mergeReadyDetail("base123")
+	detail.Dir = t.TempDir()
+	cleaner := successfulCleanup()
+	cleaner.cleanErr = errors.New("worktree busy")
+	events := &fakeEventAppender{}
+	var order []string
+	cleaner.onCall = func(call string) { order = append(order, call) }
+	events.onCall = func(call string) { order = append(order, call) }
+
+	err := (Service{Git: git, Cleaner: cleaner, Events: events}).Merge(context.Background(), detail, Options{NoVerify: true})
+	if err == nil {
+		t.Fatal("expected cleanup failure to surface")
+	}
+	if !strings.Contains(err.Error(), "cleanup failed") {
+		t.Fatalf("error %q should attribute the failure to cleanup", err.Error())
+	}
+	events.first(t, plan.EventTypeMergeVerification)
+	events.first(t, plan.EventTypePlanMerged)
+	recordIndex := indexOf(order, "append-event")
+	cleanupIndex := indexOf(order, "plan-clean plan-a")
+	if recordIndex < 0 || cleanupIndex < 0 || recordIndex > cleanupIndex {
+		t.Fatalf("merge must be recorded before cleanup runs, order=%#v", order)
+	}
+}
+
+// TestTryRecordExternalMergeRefusesDirtyPlanWorktree guards the data-loss bug
+// where the external-merge record path checked only the repo-root worktree, so a
+// plan whose separate worktree still held uncommitted work could be recorded as
+// merged/completed and have its branch deleted.
+func TestTryRecordExternalMergeRefusesDirtyPlanWorktree(t *testing.T) {
+	// Real directories: hasSeparatePlanWorktree only trusts a worktree that
+	// exists on disk.
+	repoRoot := t.TempDir()
+	worktreePath := t.TempDir()
+	reg := newFakeGitRegistry()
+	root := &fakeGitClient{
+		defaultBranch: "main",
+		ancestors: map[string]bool{
+			"tao/plan-a..main":     true, // branch is already an ancestor: external merge
+			"base-sha..tao/plan-a": true, // plan base precedes the branch (carries work)
+			"tao/plan-a..base-sha": false,
+		},
+		revParse: map[string]string{"main": "merged-default-sha"},
+	}
+	reg.seed(repoRoot, root)
+	reg.seed(worktreePath, &fakeGitClient{status: " M feature.go\n"})
+
+	detail := mergeReadyDetail("base123")
+	detail.State.Repo.Root = repoRoot
+	detail.State.Workspace.BaseSHA = "base-sha"
+	detail.State.Workspace.Strategy = plan.WorkspaceStrategyWorktree
+	detail.State.Workspace.Path = worktreePath
+
+	cleaner := successfulCleanup()
+	service := Service{
+		Git:     reg.client(repoRoot),
+		NewGit:  reg.newGit,
+		Cleaner: cleaner,
+	}
+
+	recorded, err := service.tryRecordExternalMerge(context.Background(), reg.client(repoRoot), detail, Options{})
+	if err == nil {
+		t.Fatal("expected dirty plan-worktree error")
+	}
+	if !errors.Is(err, ErrDirtyWorktree) {
+		t.Fatalf("expected ErrDirtyWorktree, got %v", err)
+	}
+	if recorded {
+		t.Fatal("merge must not be recorded when the plan worktree is dirty")
+	}
+	if len(cleaner.calls) != 0 {
+		t.Fatalf("cleanup must not run when the merge is refused, got calls %#v", cleaner.calls)
+	}
+}
+
+func mergeReadyDetail(reviewBase string) *plan.PlanDetail {
+	return &plan.PlanDetail{
+		State: plan.State{
+			Status: plan.StatusCompleted,
+			Plan: plan.PlanState{
+				ID: "plan-a",
+				Review: &plan.PlanReview{
+					Status:  plan.ReviewStatusCompleted,
+					Verdict: plan.ReviewVerdictApprove,
+					Base:    reviewBase,
+				},
+			},
+			Workspace: &plan.Workspace{Branch: "tao/plan-a", BaseBranch: "main"},
+		},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "001-a", Status: plan.StatusCompleted}}},
+	}
+}
+
+func notApprovedDetail() *plan.PlanDetail {
+	detail := mergeReadyDetail("base123")
+	detail.State.Status = plan.StatusInProgress
+	detail.State.Plan.Review = nil
+	return detail
+}

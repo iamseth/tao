@@ -1,0 +1,72 @@
+# AGENTS.md
+
+## Commands
+- `make verify` is the canonical repository-wide gate; it runs build, test, lint, modernize-check, and verify-no-deps.
+- `make build` builds `bin/tao` from `./cmd/tao`.
+- `make test` runs `go test -coverprofile=coverage.out ./...` and prints coverage with `go tool cover -func`.
+- Run focused tests with `go test ./internal/<package> -run TestName` for ordinary implementation slices; examples: `go test ./internal/plan -run TestFormatDuration`, `go test ./internal/cli -run TestRunHandlesNoArgsAndGlobalFlagErrors`.
+- `make lint` runs the pinned `modernize-check` gate first, then `golangci-lint` with `.golangci.yml` (tests enabled plus `gofmt`/`goimports` formatters).
+- `make modernize` auto-applies the pinned gopls modernize fixes; run it after code changes so `make lint` and `make verify` never fail on modernize findings.
+- `make install` copies `./bin/tao` to `~/.bin/tao`; do not assume this path exists.
+
+## Shape
+- This is a Go module (`github.com/iamseth/tao`) targeting Go `1.26.2` in `go.mod`.
+- CLI entrypoint is `cmd/tao/main.go`; command parsing lives in `internal/cli`.
+- Plan file loading, validation, summaries, and time formatting live in `internal/plan`.
+- Reusable run, lifecycle, queue, workspace, and repository behavior belongs in domain packages; CLI handlers should remain thin orchestration layers.
+- Repository-scoped note models, persistence, lifecycle, and promotion locking live in `internal/note`; note command orchestration lives in `internal/cli`.
+- Checked-in CI uses `.github/workflows/ci.yml` to execute the gates in `make verify` and `.github/workflows/release.yml` to build tagged releases.
+
+## Tao Plan Data
+- Runtime commands accept `--plans-dir DIR`; otherwise current-repo plans under Tao data home (`TAO_DATA_HOME`, `$XDG_DATA_HOME/tao`, or `~/.local/share/tao`) are used.
+- Plan directories contain `state.json`, `slices.json`, and optional `events.jsonl`; new `/slice` plans also include `planning-brief.md` and should record `state.repo.base_commit` for `tao staleness` checks, while old plans without it stay readable with warning-only validation findings. Completed reviews are stored as `review.md` plus state/event metadata in the data-home plan dir only, never the worktree or branch. Invalid plan directories are surfaced as warning summaries instead of aborting list output.
+- `/slice` writes core plan artifacts only; planning-session capture is no longer supported and new plans should not create planning-session sidecars.
+- Notes belong to one registered repository and live only under that repository's data-home `notes/` directory. The current checkout is the default; `--repo` accepts a unique ID prefix or exact name. Legacy global note files are deliberately ignored.
+- Notes are a CLI-only backlog: do not add note API routes, dashboard views, or web assets. Promoted notes are immutable, and promotion must be serialized and linked to a durable planning session or validated normal plan without losing recovery information.
+- `tao init` registers the current checkout; `tao repo list/show/doctor` inspect the centralized repo catalog and health without destructive repo changes.
+- IDs can be addressed by unique prefix in `tao show`; ambiguous prefixes are errors.
+- Tao data-home contents and workspace-local `.tao/` metadata are local-only and must not be committed.
+- Workspace cleanup is explicit and preview-first: `tao workspace clean <plan>` removes worktrees only after force flags, while `tao cleanup` handles completed-plan branch cleanup and must keep protected/unmerged branch safeguards.
+
+## Documentation Boundaries
+- `README.md` is user-facing: keep it concise and focused on install, workflow, commands, and links.
+- `AGENTS.md` is agent-facing: keep it focused on commands, repo shape, and rules that prevent bad edits.
+- `docs/plan-format.md` is the concise contract for plan artifacts; avoid duplicating schema details elsewhere.
+- `docs/usage-guide.md` is user-facing workflow judgment (when/how to use each command); keep command and schema reference in `README.md` and `docs/plan-format.md`, not there.
+- Prefer package comments for ownership/invariants and avoid comments that restate obvious Go code.
+- Tao is CLI-only while its workflows stabilize. A future web UI is deferred; keep new domain and lifecycle behavior reusable behind thin CLI handlers, and do not introduce a browser control plane or duplicate workflow implementation without explicit owner direction.
+
+## Current Behavior To Preserve
+- `tao validate` checks plan artifact consistency and verification commands; `tao run` preflights only the selected runnable slice.
+- User-facing `completed` means the plan has been merged; final slice completion moves plans to `in_review`, successful reviews move them to `reviewed` or `changes_requested`, and best-effort review failures/timeouts are recorded without failing the run.
+- `slice` is the only automatic commit policy and the default. Every automatic slice starts from a clean prepared execution branch, records commit intent before Git mutation, and settles as `committed` or `no_changes` before lifecycle completion. Tao-owned commits carry plan/slice trailers and are recoverable only against the recorded parent and exact message. Historical `plan` metadata stays readable, but new execution is rejected; explicit `none` remains manual and records `manual_uncommitted`. `expected_files` is advisory scope only.
+- Verification-command failures before tests load are classified separately from test failures, and safe corrected-command results may be recorded.
+- `tao run` prompts should use the compact run packet first and read fallback plan artifacts only for a concrete reason such as missing, stale, blocked, or failure-diagnosis context.
+- Agent telemetry is best-effort; missing metrics must not block plan loading or runs. Generic `agent_metrics` events are the only durable plan telemetry format.
+- Pi is the default built-in agent runtime; Claude Code (`TAO_AGENT=claude`), OpenCode (`TAO_AGENT=opencode`), and Codex (`TAO_AGENT=codex`) are also supported across prompt install, doctor, and run. Only `pi`, `claude`, `opencode`, and `codex` are valid selectors. Pi uses a fresh `pi --mode rpc` session per Tao operation; Claude uses fresh non-interactive sessions, stdin prompts, and stream JSON logs. OpenCode mirrors the Claude integration model: headless `opencode run --format json` sessions, managed Style B command files under `~/.config/opencode/commands` (each carrying a `<!-- tao-managed: <name> v1 -->` marker plus per-prompt `agent:` mode and `description` derived from the prompt template frontmatter), `--dangerously-skip-permissions` mapped to bypass-permissions mode, and best-effort session metrics parsed from the JSON output (parse failures warn, never fail a run). Codex uses headless `codex exec --json` sessions, managed Markdown commands under `~/.codex/prompts`, permission-mode mapping to sandbox/approval flags, a bypass-permissions equivalent via `--dangerously-bypass-approvals-and-sandbox`, and best-effort metrics with cost not reported. `--dangerously-skip-permissions` is a compatibility no-op for Pi. Agent transcript sidecars are not currently written.
+- Run-path agent sessions use the provider-neutral `Session.Timeout` wall-clock limit from `TAO_SESSION_TIMEOUT` (default 20m); interactive planning sessions do not use it, and `0` disables it. Direct `tao note run` promotion generates and validates a normal plan before invoking this same run path and timeout; it must not bypass approval, workspace, permission, review, commit, PR, or merge safeguards.
+- `tao review` is the LLM review viewer/runner for persisted `review.md`; `tao staleness` is the renamed base-commit drift check that used to live under `tao review`. Review runs record the live `merge-base(default, plan branch)` as the review base when workspace branch metadata makes it computable (falling back to recorded plan-creation bases otherwise), so the merge-conflict remediation loop — rebase manually, `tao review --run`, `tao merge` — converges without `--force`.
+- `tao rework` reopens a completed, changes-requested plan from persisted review findings on the same plan and existing branch. It appends deterministic pending rework slices with package-scoped verification and must refuse without mutation when the plan is not completed, has no actionable findings, or is approved unless `--force`; `--run` hands off to `tao run`. Direct `tao run` and `tao run --all` auto-rework by default when review is enabled, bounded by `--max-rework-attempts`/`TAO_MAX_REWORK_ATTEMPTS` (default 5) and disabled by `--auto-rework=false` or `TAO_AUTO_REWORK=false`; `tao queue start` remains opt-in. A plan whose latest rework event is `rework_stopped` must refuse a fresh budget without prompting and render the persisted stop reason/findings; only an explicit `tao run --rework-restart` (including unattended `--all` callers) may grant a new budget. Automatic rework must reuse the ordinary non-forced gates, fail on repeated equivalent findings or cap exhaustion while preserving the latest changes-requested review, and never automate approval or merge; durable queue runs persist bounded progress across restarts.
+- `tao merge` is the no-PR integration command: single-plan mode requires completed, reviewed, approved exact-base/head evidence, creates one deterministic squash by default, verifies, records merge evidence, and uses managed cleanup; its existing `--force`, `--record-only`, `--no-squash`, and `--no-verify` semantics must remain unchanged. `tao merge --all` strictly snapshots every reviewed/approved candidate, deterministically orders a low-overlap prefix, and stages exactly one trailer-bearing squash per source away from default. Batch textual/verification conflicts and aggregate `changes_requested` rework use bounded provider-neutral agents confined to the integration worktree; Tao alone stages, commits, verifies, lands, records, and cleans. Recurring different aggregate findings in the same files are detected as non-convergence and attributed to one plan when possible; when no plan was previously ejected and removing the attributed candidate leaves a non-empty set, the default is an actionable stop that names the plan and files, with a rerun ejecting that plan and re-landing the fully verified/reviewed reduced set, while `--auto-eject` opts into eject-and-reland in the detecting run; successful ejection output must retain the ejected plan and attributed reason. One-candidate batches and non-convergence after a completed ejection remain manual-only. Preserve durable intent before every Git mutation, exact resume/drift checks, full verification plus aggregate approval for the exact staged head, one guarded default fast-forward, merge evidence before source cleanup, and idempotent post-landing settlement. Batch mode must reject force, record-only, no-squash, and no-verify semantics; `--restart` may remove only pre-landing batch-owned recovery state and never source evidence.
+- Run and queue gating must use the plan-recorded `state.repo.root`; unhealthy repositories remain visible in CLI repository views but are not runnable.
+- Status aggregates in `tao status` and `tao queue status` read existing queue snapshots and plan summaries only; they must not recompute lifecycle. The `TAO_NOTIFY_COMMAND` batch completion hook is best-effort and must never fail a queue drain.
+- Durable CLI queue state is per-repo and local-only (`queue.json`/`queue.jsonl` under Tao data home). Cross-process per-plan locks guard concurrent drivers.
+
+## Dependencies
+- This module has zero third-party dependencies and must stay that way. Adding any third-party dependency (a `require` for a module other than `github.com/iamseth/tao`) requires explicit owner approval before it lands.
+- CI enforces this: `make verify-no-deps` fails when `go list -m all` reports more than the main module, and the check runs in `.github/workflows/ci.yml`. Run `make verify-no-deps` locally before opening a pull request.
+
+## Editing Guidance
+- In event tests, assert on the event(s) the test owns by finding or requiring the specific type and checking its fields; do not assert total event-slice length or positional indices unless the test explicitly verifies the ordered sequence.
+- Prefer focused package tests for changed code; use `make test` when changes cross packages or core behavior.
+- Do not leave lint failing: run `make modernize` then `make lint` after code changes (or explicitly report why they could not be run) and fix new findings before handoff; `make lint` includes the modernize-check gate, so unmodernized idioms fail lint, not final verification.
+- Do not update local plan artifacts unless the task is specifically about Tao plan state or prompt behavior.
+- When generating reusable planning prompts for `/plan` or fresh agent planning sessions, save drafts with `tao draft-prompt <name>` (or another local-only path) so they remain local-only and are easy to pass to Pi, Claude, OpenCode, or Codex.
+- Keep prompt changes narrow because they directly shape future agent behavior.
+
+## Repo-Local Agent Commands
+- `prompts/run.md` implements exactly one pending slice and delegates automatic commit intent, staging, recovery, and completion to `tao slice-complete`; it must not ask the agent to commit automatic slice work.
+- `prompts/slice.md` allocates plan artifacts with `tao init --slug <short-slug> --json` and must not edit application files.
+- `prompts/commit.md` is standalone/manual only, expects concise conventional commits, and never pushes; automatic run completion must not fall back to it.
+- For the Pi agent, the `commit` command is hosted by the `extensions/pi` TypeScript extension (symlinked to `~/.pi/agent/extensions/tao` by `install-prompts`); see [`extensions/pi/README.md`](extensions/pi/README.md) for its build, test, and deploy details.
+- If committing manually, still exclude Tao data-home contents, workspace-local `.tao/`, and other local-only artifacts.

@@ -1,0 +1,21 @@
+{
+  "name": "@iamseth/tao-pi-extension",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Repo-local Pi extension for Tao workflows.",
+  "type": "module",
+  "keywords": [
+    "pi-package"
+  ],
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}

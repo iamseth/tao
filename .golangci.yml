@@ -1,0 +1,32 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  exclusions:
+    paths:
+      - (^|/)\.tao/
+  enable:
+    - bodyclose
+    - copyloopvar
+    - dupl
+    - errcheck
+    - errorlint
+    - gocritic
+    - gosec
+    - govet
+    - ineffassign
+    - misspell
+    - nilerr
+    - nolintlint
+    - staticcheck
+    - unconvert
+    - unparam
+    - unused
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
