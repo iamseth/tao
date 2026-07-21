@@ -219,29 +219,34 @@ func planCommitGlobRegexp(pattern string) string {
 // slice commits. The pattern lists preserve the established detection behavior;
 // do not add or broaden patterns without a corresponding behavior decision.
 type commitSafetyPolicy struct {
-	secretBaseNamePrefixes []string
-	secretPathSubstrings   []string
-	generatedExactPaths    []string
-	generatedPathPrefixes  []string
+	secretBaseNamePrefixes     []string
+	nonSecretTemplateBaseNames []string
+	secretPathSubstrings       []string
+	generatedExactPaths        []string
+	generatedPathPrefixes      []string
 }
 
 var defaultCommitSafetyPolicy = commitSafetyPolicy{
-	secretBaseNamePrefixes: []string{".env"},
-	secretPathSubstrings:   []string{"credential", "secret", "private_key", "id_rsa"},
-	generatedExactPaths:    []string{"coverage.out"},
-	generatedPathPrefixes:  []string{"bin/"},
+	secretBaseNamePrefixes:     []string{".env"},
+	nonSecretTemplateBaseNames: []string{".env.example"},
+	secretPathSubstrings:       []string{"credential", "secret", "private_key", "id_rsa"},
+	generatedExactPaths:        []string{"coverage.out"},
+	generatedPathPrefixes:      []string{"bin/"},
 }
 
 func (p commitSafetyPolicy) suspectedSecret(path string) bool {
 	base := strings.ToLower(filepath.Base(path))
 	lowerPath := strings.ToLower(path)
-	for _, prefix := range p.secretBaseNamePrefixes {
-		if strings.HasPrefix(base, prefix) {
+	for _, token := range p.secretPathSubstrings {
+		if strings.Contains(lowerPath, token) {
 			return true
 		}
 	}
-	for _, token := range p.secretPathSubstrings {
-		if strings.Contains(lowerPath, token) {
+	if slices.Contains(p.nonSecretTemplateBaseNames, base) {
+		return false
+	}
+	for _, prefix := range p.secretBaseNamePrefixes {
+		if strings.HasPrefix(base, prefix) {
 			return true
 		}
 	}

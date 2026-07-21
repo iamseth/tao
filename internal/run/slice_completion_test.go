@@ -397,6 +397,25 @@ func TestSliceCompletionCommitsUndeclaredSafePathsWithWarning(t *testing.T) {
 	}
 }
 
+func TestSliceCompletionCommitsEnvExampleTemplate(t *testing.T) {
+	root := initSliceCompletionRepo(t)
+	detail, record := sliceCompletionRecord(t, root, CommitPolicySlice, &sliceCompletionStore{})
+	detail.Slices.Slices[0].ExpectedFiles = []string{".env.example"}
+	if err := os.WriteFile(filepath.Join(root, ".env.example"), []byte("TOKEN=replace-me\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := (SliceCompletionService{}).Complete(context.Background(), SliceCompletionRequest{
+		Record: record, SliceID: "001-a", Notes: "done", Now: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	committed := strings.TrimSpace(runCommitTestGitOutput(t, root, "show", "--name-only", "--format=", "HEAD"))
+	if committed != ".env.example" {
+		t.Fatalf("committed paths = %q, want .env.example", committed)
+	}
+}
+
 func TestSliceCompletionRefusesUnsafePathsBeforeStagingOrCommit(t *testing.T) {
 	for _, tc := range []struct {
 		name          string

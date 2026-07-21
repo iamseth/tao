@@ -12,11 +12,15 @@ func TestSuspectedSecretPathClassification(t *testing.T) {
 		path string
 		want bool
 	}{
-		// .env base-name prefix (case-insensitive).
+		// .env base-name prefix (case-insensitive), except the explicit example template.
 		{".env", true},
 		{".env.local", true},
 		{"config/.ENV.production", true},
-		// Substring tokens anywhere in the (lowercased) path.
+		{".env.example", false},
+		{"config/.ENV.EXAMPLE", false},
+		{".env.example.local", true},
+		// Substring tokens anywhere in the (lowercased) path still protect templates.
+		{"credentials/.env.example", true},
 		{"config/credentials.json", true},
 		{"deploy/aws-credential", true},
 		{"internal/CREDENTIAL/notes.txt", true},
@@ -59,7 +63,7 @@ func TestGeneratedPathClassification(t *testing.T) {
 // TestDefaultCommitSafetyPolicyMatchesFreeFunctions guards that the named
 // policy type and the package-level helper functions stay in lockstep.
 func TestDefaultCommitSafetyPolicyMatchesFreeFunctions(t *testing.T) {
-	paths := []string{".env.local", "config/credentials.json", "coverage.out", "bin/tao", "internal/run/run.go"}
+	paths := []string{".env.local", ".env.example", "config/credentials.json", "coverage.out", "bin/tao", "internal/run/run.go"}
 	for _, path := range paths {
 		if defaultCommitSafetyPolicy.suspectedSecret(path) != suspectedSecretPath(path) {
 			t.Errorf("policy.suspectedSecret(%q) disagrees with suspectedSecretPath", path)
