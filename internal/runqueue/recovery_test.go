@@ -71,8 +71,12 @@ func TestRecoveryInspectorRestoresSupersededReworkFingerprint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if inspection.ReworkRound != 1 || inspection.PreviousFindingFingerprint != reworkpkg.FindingsFingerprint([]plan.ReviewFinding{finding}) {
-		t.Fatalf("recovery progress = %+v", inspection)
+	wantFingerprint := reworkpkg.ReworkFindingsFingerprint([]plan.ReviewFinding{finding})
+	if inspection.ReworkRound != 1 || inspection.PreviousFindingFingerprint != wantFingerprint {
+		t.Fatalf("recovery progress = %+v, want round 1 fingerprint %q", inspection, wantFingerprint)
+	}
+	if inspection.PreviousFindingFingerprint == reworkpkg.BatchLocationFindingsFingerprint([]plan.ReviewFinding{finding}) {
+		t.Fatal("recovery restored the historical location-oriented fingerprint")
 	}
 }
 

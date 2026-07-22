@@ -204,7 +204,7 @@ func (d Driver) Decide(ctx context.Context, planID string, baseline, attempts in
 		return Decision{}, nil
 	}
 	budget.Attempts = budget.AttemptsAtRound(round)
-	fingerprint := FindingsFingerprint(findings)
+	fingerprint := ReworkFindingsFingerprint(findings)
 	if budget.Attempts >= maxAttempts {
 		decision := Decision{Round: round, Fingerprint: fingerprint, StopKind: StopKindCapExhausted, StopReason: fmt.Sprintf("automatic rework cap exhausted after %d cycles", maxAttempts), Findings: cloneFindings(findings)}
 		d.appendEvent(detail.Dir, plan.Event{Type: plan.EventTypeReworkStopped, Timestamp: d.now(), PlanID: planID, Round: round, Attempts: budget.Attempts, Fingerprint: fingerprint, Reason: decision.StopReason, Message: decision.StopReason})

@@ -288,5 +288,5 @@ func autoReworkTestDetail(planID string, now time.Time) (*plan.PlanDetail, strin
 		},
 		Slices: plan.SlicesFile{PlanID: planID, Slices: []plan.Slice{{ID: "001-work", Status: plan.StatusCompleted}}},
 	}
-	return detail, rework.FindingsFingerprint([]plan.ReviewFinding{finding})
+	return detail, rework.ReworkFindingsFingerprint([]plan.ReviewFinding{finding})
 }

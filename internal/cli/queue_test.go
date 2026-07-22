@@ -445,7 +445,7 @@ func TestQueueStartAutoReworkRecoversProgressFromCreatedRound(t *testing.T) {
 	}
 
 	snapshot := loadQueueSnapshotForTest(t)
-	wantFingerprint := rework.FindingsFingerprint([]plan.ReviewFinding{finding})
+	wantFingerprint := rework.ReworkFindingsFingerprint([]plan.ReviewFinding{finding})
 	if len(snapshot.Entries) != 1 || snapshot.Entries[0].Status != runqueue.QueueStatusSucceeded || snapshot.Entries[0].ReworkAttempts != 1 || snapshot.Entries[0].PreviousFindingFingerprint != wantFingerprint || snapshot.Entries[0].RecoveryPending {
 		t.Fatalf("recovered created-round snapshot = %+v, want round 1 and fingerprint %q", snapshot, wantFingerprint)
 	}

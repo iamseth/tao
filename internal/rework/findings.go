@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/iamseth/tao/internal/plan"
@@ -53,22 +54,48 @@ func NormalizeFindings(findings []plan.ReviewFinding) []plan.ReviewFinding {
 		})
 	}
 	slices.SortFunc(normalized, func(a, b plan.ReviewFinding) int {
-		return strings.Compare(findingKey(a), findingKey(b))
+		return strings.Compare(batchLocationFindingKey(a), batchLocationFindingKey(b))
 	})
 	return normalized
 }
 
-// FindingsFingerprint returns a deterministic digest keyed by finding severity and
-// normalized file path. Free-text messages and suggestions are excluded so reviewer
-// re-wording stalls automatic rework. Fingerprints persisted by older versions compare
-// unequal across the upgrade, allowing one additional round bounded by the attempt cap;
-// no fingerprint migration is required.
-func FindingsFingerprint(findings []plan.ReviewFinding) string {
+const reworkFingerprintV2Prefix = "rework:v2:"
+
+// ReworkFindingsFingerprint returns a versioned, deterministic digest of the complete
+// normalized finding set. The version prefix keeps persisted v2 identities distinct
+// from historical location-oriented fingerprints without requiring migration.
+func ReworkFindingsFingerprint(findings []plan.ReviewFinding) string {
+	keys := make([]string, 0, len(findings))
+	for _, finding := range findings {
+		keys = append(keys, reworkFindingKey(finding))
+	}
+	slices.Sort(keys)
+
+	hash := sha256.New()
+	_, _ = hash.Write([]byte(reworkFingerprintV2Prefix))
+	previousKey := ""
+	hasPrevious := false
+	for _, key := range keys {
+		if hasPrevious && key == previousKey {
+			continue
+		}
+		_, _ = hash.Write([]byte(key))
+		_, _ = hash.Write([]byte{0})
+		previousKey = key
+		hasPrevious = true
+	}
+	return reworkFingerprintV2Prefix + hex.EncodeToString(hash.Sum(nil))
+}
+
+// BatchLocationFindingsFingerprint returns the historical location-oriented digest
+// used by batch convergence. The name distinguishes its coarse recurring-location
+// semantics from high-confidence rework finding identity.
+func BatchLocationFindingsFingerprint(findings []plan.ReviewFinding) string {
 	hash := sha256.New()
 	previousKey := ""
 	hasPrevious := false
 	for _, finding := range NormalizeFindings(findings) {
-		key := findingKey(finding)
+		key := batchLocationFindingKey(finding)
 		if hasPrevious && key == previousKey {
 			continue
 		}
@@ -80,11 +107,24 @@ func FindingsFingerprint(findings []plan.ReviewFinding) string {
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
-// findingKey identifies a finding by trimmed severity and normalized file path.
-// Message and Suggestion are deliberately excluded so equivalent re-worded findings
-// produce the same stall-detection fingerprint.
-func findingKey(finding plan.ReviewFinding) string {
+// batchLocationFindingKey identifies a finding by trimmed severity and normalized file path.
+// Message and Suggestion are deliberately excluded for historical batch compatibility.
+func batchLocationFindingKey(finding plan.ReviewFinding) string {
 	return strings.TrimSpace(finding.Severity) + "\x00" + normalizePlanPath(finding.File)
+}
+
+func reworkFindingKey(finding plan.ReviewFinding) string {
+	return strings.Join([]string{
+		normalizeFindingText(finding.Severity),
+		normalizePlanPath(finding.File),
+		strconv.Itoa(finding.Line),
+		normalizeFindingText(finding.Message),
+		normalizeFindingText(finding.Suggestion),
+	}, "\x00")
+}
+
+func normalizeFindingText(value string) string {
+	return strings.ToLower(strings.Join(strings.Fields(value), " "))
 }
 
 func cloneFindings(findings []plan.ReviewFinding) []plan.ReviewFinding {

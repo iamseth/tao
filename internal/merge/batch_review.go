@@ -167,7 +167,7 @@ func (r BatchAggregateReviewer) Review(ctx context.Context, state BatchState, in
 			parsed := runpkg.ParseReviewOutput(reviewOutput)
 			fingerprint := ""
 			if parsed.Verdict == plan.ReviewVerdictChangesRequested {
-				fingerprint = rework.FindingsFingerprint(parsed.Findings)
+				fingerprint = rework.BatchLocationFindingsFingerprint(parsed.Findings)
 			}
 			previousFingerprint := state.Attempts.ReviewFingerprint
 			previousRoundHead := ""
@@ -462,7 +462,7 @@ func updateAggregateReviewHistory(history []BatchReviewRound, head string, findi
 		}
 	}
 	slices.Sort(files)
-	round := BatchReviewRound{HeadSHA: head, Fingerprint: rework.FindingsFingerprint(findings), FindingFiles: files, FindingCount: len(findings), AllFindingsHaveFiles: allFindingsHaveFiles}
+	round := BatchReviewRound{HeadSHA: head, Fingerprint: rework.BatchLocationFindingsFingerprint(findings), FindingFiles: files, FindingCount: len(findings), AllFindingsHaveFiles: allFindingsHaveFiles}
 	history = append([]BatchReviewRound(nil), history...)
 	if head != "" && len(history) > 0 && history[len(history)-1].HeadSHA == head {
 		// A completed review may be durable before its rework or ejection intent.

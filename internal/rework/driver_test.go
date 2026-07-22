@@ -58,7 +58,14 @@ func TestDriverDecideStopsAtCapUsingRoundBaseline(t *testing.T) {
 
 func TestDriverDecideStopsOnEquivalentConsecutiveFindings(t *testing.T) {
 	detail := actionableDriverDetail(1)
-	fingerprint := FindingsFingerprint(ReviewFindings(detail))
+	finding := ReviewFindings(detail)[0]
+	fingerprint := ReworkFindingsFingerprint([]plan.ReviewFinding{{
+		Severity:   " MAJOR ",
+		File:       "./" + finding.File,
+		Line:       finding.Line,
+		Message:    strings.ToUpper(finding.Message),
+		Suggestion: "  ",
+	}})
 	driver := Driver{Resolve: fixedDriverResolver(detail)}
 
 	got, err := driver.Decide(context.Background(), "plan", 1, 0, fingerprint, 5)
@@ -73,6 +80,59 @@ func TestDriverDecideStopsOnEquivalentConsecutiveFindings(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.Findings, ReviewFindings(detail)) {
 		t.Fatalf("blocking findings = %+v, want %+v", got.Findings, ReviewFindings(detail))
+	}
+}
+
+func TestDriverDecideContinuesForDistinctSameFileFindings(t *testing.T) {
+	detail := actionableDriverDetail(1)
+	detail.State.Plan.Review.Findings[0] = plan.ReviewFinding{
+		Severity: "major", File: "store/file.go", Line: 42,
+		Message: "Warp leaves the write transaction open", Suggestion: "close the transaction after writing",
+	}
+	previous := ReworkFindingsFingerprint([]plan.ReviewFinding{{
+		Severity: "major", File: "store/file.go", Line: 42,
+		Message: "Warp drops the recovered record", Suggestion: "retain the recovered record",
+	}})
+	driver := Driver{
+		Resolve: fixedDriverResolver(detail),
+		Record:  func(detail *plan.PlanDetail) (Record, error) { return &driverRecord{detail: detail}, nil },
+	}
+
+	got, err := driver.Decide(context.Background(), "plan", 1, 0, previous, 5)
+	if err != nil {
+		t.Fatalf("Decide returned error: %v", err)
+	}
+	if !got.Reworked || got.StopReason != "" || got.Fingerprint == previous {
+		t.Fatalf("distinct same-file decision = %+v, want another rework round", got)
+	}
+}
+
+func TestDriverDecideLegacyFingerprintPermitsOneAdditionalRound(t *testing.T) {
+	first := actionableDriverDetail(1)
+	findings := ReviewFindings(first)
+	legacy := BatchLocationFindingsFingerprint(findings)
+	driver := Driver{
+		Resolve: fixedDriverResolver(first),
+		Record:  func(detail *plan.PlanDetail) (Record, error) { return &driverRecord{detail: detail}, nil },
+	}
+
+	upgraded, err := driver.Decide(context.Background(), "plan", 1, 0, legacy, 5)
+	if err != nil {
+		t.Fatalf("Decide with legacy fingerprint returned error: %v", err)
+	}
+	if !upgraded.Reworked || upgraded.StopReason != "" || upgraded.Fingerprint == legacy {
+		t.Fatalf("legacy fingerprint decision = %+v, want one upgraded round", upgraded)
+	}
+
+	repeated := actionableDriverDetail(2)
+	repeated.State.Plan.Review.Findings = findings
+	driver = Driver{Resolve: fixedDriverResolver(repeated)}
+	stopped, err := driver.Decide(context.Background(), "plan", 1, 1, upgraded.Fingerprint, 5)
+	if err != nil {
+		t.Fatalf("Decide with upgraded fingerprint returned error: %v", err)
+	}
+	if stopped.StopKind != StopKindFindingsStalled || stopped.Fingerprint != upgraded.Fingerprint {
+		t.Fatalf("upgraded repeat decision = %+v, want equivalent-finding stop", stopped)
 	}
 }
 

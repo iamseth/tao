@@ -318,12 +318,13 @@ the loop. `TAO_AUTO_REWORK=true` opts in through the environment and
 `TAO_MAX_REWORK_ATTEMPTS` changes the cap; explicit flags take precedence.
 Automatic review must remain enabled.
 
-The queue persists the policy, round count, and normalized finding fingerprint,
-so restart reconciliation resumes the same bounded loop. It stops and classifies
-the queue entry as failed at the cap or when two consecutive reviews produce a
-repeated equivalent finding set. In either case the plan remains
-`changes_requested` and the latest review is preserved for manual diagnosis.
-Approval and merge always remain manual.
+The queue persists the policy, round count, and high-confidence fingerprint of
+the complete normalized finding set, so restart reconciliation resumes the same
+bounded loop. It stops and classifies the queue entry as failed at the cap or
+when two consecutive reviews match that full finding identity. Distinct findings
+in the same file continue within the bounded budget. In either case the plan
+remains `changes_requested` and the latest review is preserved for manual
+diagnosis. Approval and merge always remain manual.
 
 ### Unattended queue — batch plan runs
 
@@ -493,9 +494,11 @@ evidence intact.
 the full merge verification command and reviews the combined diff. An aggregate
 `changes_requested` verdict can invoke bounded agent rework, producing a
 Tao-owned integration-resolution commit, followed by full verification and a
-fresh aggregate review. If different findings keep recurring in the same files,
-Tao detects non-convergence early and, when one candidate uniquely owns those
-files, prints an attributed block naming the files and plan. The default is
+fresh aggregate review. Separately from automatic rework's high-confidence
+finding equality, batch merge uses a location-oriented safeguard: if different
+findings keep recurring in the same files, Tao detects non-convergence early
+and, when one candidate uniquely owns those files, prints an attributed block
+naming the files and plan. The default is
 stop-and-offer when no plan was previously ejected and removal leaves at least
 one candidate: default does not move, and rerunning `tao merge --all` accepts
 the offer by ejecting that candidate, rebuilding the remaining integration, and

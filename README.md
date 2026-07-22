@@ -247,9 +247,10 @@ when you intentionally want to bypass the default completed, changes-requested,
 and finding gates. Direct `tao run` and `tao run --all` automate this loop by
 default; an opted-in durable CLI queue does the same while preserving progress
 across restarts. Reaching the configured cap or receiving two consecutive
-normalized-equivalent finding sets stops with the plan still
-`changes_requested` and its latest review preserved. Automatic approval and
-merge remain manual.
+high-confidence matches of the complete normalized finding set stops with the
+plan still `changes_requested` and its latest review preserved. Distinct
+findings in the same file continue within the bounded attempt budget. Automatic
+approval and merge remain manual.
 
 ### Merging approved plans
 
@@ -286,9 +287,11 @@ squash per source plan in an isolated integration worktree. Textual or
 verification interactions are deferred to bounded configured-agent sessions;
 the complete staged diff must pass full verification and an aggregate review.
 A `changes_requested` verdict may produce Tao-owned aggregate rework commits and
-another verification/review attempt. Default does not move until the exact
-aggregate is approved, then moves once by guarded fast-forward. Tao records all
-plan merge evidence before safely cleaning source and integration workspaces.
+another verification/review attempt. Batch convergence separately retains its
+location-oriented safeguard for different findings recurring in the same files.
+Default does not move until the exact aggregate is approved, then moves once by
+guarded fast-forward. Tao records all plan merge evidence before safely cleaning
+source and integration workspaces.
 
 Use `--dry-run` to preview candidates, blockers, and order without retaining
 batch state or integration changes. Rerunning `--all` resumes matching durable

@@ -39,7 +39,7 @@ func NewRecoveryInspector(repo RecoveryRepository) RecoveryInspector {
 			persistedReview := plan.PersistedReview(detail)
 			findings := reworkpkg.ReviewFindings(detail)
 			if persistedReview != nil && persistedReview.Status == plan.ReviewStatusCompleted && persistedReview.Verdict == plan.ReviewVerdictChangesRequested && len(findings) > 0 {
-				inspection.PreviousFindingFingerprint = reworkpkg.FindingsFingerprint(findings)
+				inspection.PreviousFindingFingerprint = reworkpkg.ReworkFindingsFingerprint(findings)
 			}
 		}
 		return inspection, nil
