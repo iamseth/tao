@@ -84,13 +84,14 @@ type runExecution struct {
 }
 
 type SliceRun struct {
-	PlanDir       string
-	SliceID       string
-	LogPath       string
-	RunPacket     string
-	RepoRoot      string
-	Resuming      bool
-	ResumeAttempt int
+	PlanDir              string
+	SliceID              string
+	LogPath              string
+	RunPacket            string
+	RepoRoot             string
+	VerificationCommands []string
+	Resuming             bool
+	ResumeAttempt        int
 }
 
 type SliceExecutor interface {
@@ -128,13 +129,14 @@ type PullRequestBodyGenerator interface {
 }
 
 type AgentSessionRequest struct {
-	PlanDir             string
-	RepoRoot            string
-	LogAction           string
-	Prompt              string
-	CaptureOutput       bool
-	Metrics             *AgentSessionMetricsRequest
-	NoProgressToolLimit int
+	PlanDir              string
+	RepoRoot             string
+	LogAction            string
+	Prompt               string
+	CaptureOutput        bool
+	Metrics              *AgentSessionMetricsRequest
+	NoProgressToolLimit  int
+	VerificationCommands []string
 }
 
 type AgentSessionMetricsRequest struct {

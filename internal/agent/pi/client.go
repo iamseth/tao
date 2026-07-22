@@ -14,10 +14,11 @@ type Client struct {
 }
 
 type Request struct {
-	RepoRoot            string
-	Prompt              string
-	NoProgressToolLimit int
-	SessionInfoMode     SessionInfoMode
+	RepoRoot             string
+	Prompt               string
+	NoProgressToolLimit  int
+	VerificationCommands []string
+	SessionInfoMode      SessionInfoMode
 }
 
 type Result struct {
@@ -48,7 +49,7 @@ func (c Client) RunAgentSession(ctx context.Context, request Request) (Result, e
 	if err != nil {
 		return Result{}, err
 	}
-	session := newSession(proc, c.Log, request.NoProgressToolLimit)
+	session := newSession(proc, c.Log, request.NoProgressToolLimit, request.VerificationCommands)
 	defer session.close()
 
 	if err := session.send(ctx, command{ID: "1", Type: "prompt", Message: request.Prompt}); err != nil {

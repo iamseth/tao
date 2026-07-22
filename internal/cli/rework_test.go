@@ -46,8 +46,9 @@ func TestReworkCommandReopensChangesRequestedPlanWithGeneratedSlices(t *testing.
 	if !created.Timing.CreatedAt.Equal(fixed) || !created.Timing.UpdatedAt.Equal(fixed) {
 		t.Fatalf("generated slice timing = %#v, want %s", created.Timing, fixed)
 	}
-	if len(created.Verification.Commands) == 0 || created.Verification.Commands[0] != "go test ./internal/cli" {
-		t.Fatalf("verification commands = %#v, want package-scoped command first", created.Verification.Commands)
+	wantVerification := []string{"go test ./internal/cli -run TestOld"}
+	if !slices.Equal(created.Verification.Commands, wantVerification) {
+		t.Fatalf("verification commands = %#v, want %#v", created.Verification.Commands, wantVerification)
 	}
 	if events := readText(t, filepath.Join(planDir, "events.jsonl")); !strings.Contains(events, `"type":"plan_reopened"`) {
 		t.Fatalf("expected plan_reopened event, got %q", events)

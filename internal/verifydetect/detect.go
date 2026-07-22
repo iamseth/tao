@@ -4,6 +4,7 @@ package verifydetect
 import (
 	"io/fs"
 	"os"
+	"path"
 	"strings"
 )
 
@@ -14,10 +15,24 @@ type Detector struct {
 	FS fs.FS
 }
 
+// OpenRoot returns a detector when root names an accessible directory.
+func OpenRoot(root string) (Detector, bool) {
+	root = strings.TrimSpace(root)
+	info, err := os.Stat(root)
+	if root == "" || err != nil || !info.IsDir() {
+		return Detector{}, false
+	}
+	return Detector{FS: os.DirFS(root)}, true
+}
+
 // DetectCommands probes root and returns ordered verification commands for the
 // first recognized build system.
 func DetectCommands(root string) []string {
-	return Detector{FS: os.DirFS(root)}.DetectCommands()
+	detector, ok := OpenRoot(root)
+	if !ok {
+		return []string{}
+	}
+	return detector.DetectCommands()
 }
 
 // DetectCommand returns the detected repository verification as one shell
@@ -25,6 +40,39 @@ func DetectCommands(root string) []string {
 // resolution rather than duplicating build-system precedence.
 func DetectCommand(root string) string {
 	return strings.Join(DetectCommands(root), " && ")
+}
+
+// GoModuleForPath returns the repository-relative Go module containing file.
+// It reports no module when no go.mod exists in the file's directory ancestry.
+func GoModuleForPath(root, file string) (string, bool) {
+	detector, ok := OpenRoot(root)
+	if !ok {
+		return "", false
+	}
+	return detector.GoModuleForPath(file)
+}
+
+// GoModuleForPath returns the repository-relative Go module containing file.
+func (d Detector) GoModuleForPath(file string) (string, bool) {
+	file = path.Clean(strings.TrimSpace(strings.ReplaceAll(file, "\\", "/")))
+	if !fs.ValidPath(file) || file == "." {
+		return "", false
+	}
+
+	fileSystem := d.FS
+	if fileSystem == nil {
+		fileSystem = os.DirFS(".")
+	}
+	for dir := path.Dir(file); ; dir = path.Dir(dir) {
+		manifest := path.Join(dir, "go.mod")
+		info, err := fs.Stat(fileSystem, manifest)
+		if err == nil && !info.IsDir() {
+			return dir, true
+		}
+		if dir == "." {
+			return "", false
+		}
+	}
 }
 
 // DetectCommands returns ordered verification commands for the first recognized

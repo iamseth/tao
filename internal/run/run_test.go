@@ -436,6 +436,7 @@ func TestRunPreflightPrintsBudgetWarningsBeforeRunning(t *testing.T) {
 func TestRunPassesSelectedSlicePacketToExecutor(t *testing.T) {
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 	detail.Slices.Slices[0].Goal = "Use packet context"
+	detail.Slices.Slices[0].Verification.Commands = []string{"pnpm test"}
 	completedDetail := runPlanDetail(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
 	var out bytes.Buffer
 	executor := &packetCapturingExecutor{}
@@ -448,6 +449,9 @@ func TestRunPassesSelectedSlicePacketToExecutor(t *testing.T) {
 	}
 	if !strings.Contains(executor.packet, "# Tao Run Packet") || !strings.Contains(executor.packet, "- Goal: Use packet context") || !strings.Contains(executor.packet, "- Commit Policy: none") || !strings.Contains(executor.packet, "- Execution Mode: current") {
 		t.Fatalf("expected selected-slice packet, got:\n%s", executor.packet)
+	}
+	if got := strings.Join(executor.verificationCommands, "\n"); got != "pnpm test" {
+		t.Fatalf("executor verification commands = %q", got)
 	}
 }
 

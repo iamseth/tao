@@ -234,13 +234,14 @@ func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSe
 
 	runSession := func() (agent.SessionResult, error) {
 		return r.runtime.RunSession(ctx, agent.Session{
-			RepoRoot:            request.RepoRoot,
-			Prompt:              request.Prompt,
-			PermissionMode:      r.permissionMode,
-			CollectMetrics:      r.alwaysCollectMetrics || metricsRequested,
-			NoProgressToolLimit: request.NoProgressToolLimit,
-			Timeout:             r.sessionTimeout,
-			Log:                 log,
+			RepoRoot:             request.RepoRoot,
+			Prompt:               request.Prompt,
+			PermissionMode:       r.permissionMode,
+			CollectMetrics:       r.alwaysCollectMetrics || metricsRequested,
+			NoProgressToolLimit:  request.NoProgressToolLimit,
+			VerificationCommands: request.VerificationCommands,
+			Timeout:              r.sessionTimeout,
+			Log:                  log,
 		})
 	}
 	var result agent.SessionResult
@@ -291,7 +292,7 @@ func runSliceWithAgentSession(ctx context.Context, executor AgentSessionExecutor
 	if err != nil {
 		return err
 	}
-	_, err = executor.RunAgentSession(ctx, AgentSessionRequest{PlanDir: run.PlanDir, RepoRoot: run.RepoRoot, LogAction: "running " + run.SliceID, Prompt: prompt, Metrics: &AgentSessionMetricsRequest{SliceID: run.SliceID}, NoProgressToolLimit: options.NoProgressToolLimit})
+	_, err = executor.RunAgentSession(ctx, AgentSessionRequest{PlanDir: run.PlanDir, RepoRoot: run.RepoRoot, LogAction: "running " + run.SliceID, Prompt: prompt, Metrics: &AgentSessionMetricsRequest{SliceID: run.SliceID}, NoProgressToolLimit: options.NoProgressToolLimit, VerificationCommands: run.VerificationCommands})
 	return err
 }
 

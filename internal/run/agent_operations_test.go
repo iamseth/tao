@@ -57,6 +57,26 @@ func TestRunSliceWithAgentSessionCarriesInterruptedResumePrompt(t *testing.T) {
 	}
 }
 
+func TestRunAgentSessionCarriesVerificationCommandsToNeutralRuntime(t *testing.T) {
+	want := []string{"cd packages/commonStudent && pnpm test"}
+	var got agent.Session
+	runtime := agentRuntimeFunc(func(_ context.Context, session agent.Session) (agent.SessionResult, error) {
+		got = session
+		return agent.SessionResult{Output: "done"}, nil
+	})
+	runner, planDir, repoRoot := sessionEventTestRunner(t, runtime, nil, io.Discard, time.Now())
+
+	_, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{
+		PlanDir: planDir, RepoRoot: repoRoot, LogAction: "running 001-a", VerificationCommands: want,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got.VerificationCommands, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("neutral session verification commands = %#v, want %#v", got.VerificationCommands, want)
+	}
+}
+
 func TestRunPathAgentSessionTimeoutIsClassified(t *testing.T) {
 	const sessionTimeout = time.Millisecond
 	repoRoot := t.TempDir()

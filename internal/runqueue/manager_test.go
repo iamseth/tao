@@ -1945,6 +1945,7 @@ func TestQueueEntryRunRequestRoundTripsNestedOptionsThroughStore(t *testing.T) {
 		},
 	}
 
+	root := t.TempDir()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			config, err := runtimeconfig.NewConfigFromStages(runtimeconfig.DefaultRunOptionsPatch(), tc.overrides)
@@ -1952,16 +1953,15 @@ func TestQueueEntryRunRequestRoundTripsNestedOptionsThroughStore(t *testing.T) {
 				t.Fatal(err)
 			}
 			original := run.Request{Input: tc.planID, ResolvedRunOptions: config.ResolvedOptions()}
-			dir := t.TempDir()
+			dir := filepath.Join(root, tc.planID)
 			store := NewFileStore(dir)
-			manager, err := NewWithStore(context.Background(), func(context.Context, run.Request) error { return nil }, nil, store)
-			if err != nil {
-				t.Fatal(err)
+			entry := QueueEntry{
+				PlanID:   tc.planID,
+				Status:   QueueStatusPending,
+				QueuedAt: time.Date(2026, 7, 20, 1, 3, 0, 0, time.UTC),
+				request:  original,
 			}
-			if _, err := manager.Enqueue(original); err != nil {
-				t.Fatal(err)
-			}
-			if err := store.SaveSnapshot(manager.Queue()); err != nil {
+			if err := store.SaveSnapshot(QueueSnapshot{Entries: []QueueEntry{entry}}); err != nil {
 				t.Fatal(err)
 			}
 

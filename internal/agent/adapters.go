@@ -15,8 +15,8 @@ import (
 
 // piRuntime adapts the leaf pi.Client onto the neutral Runtime contract. It maps
 // CollectMetrics onto Pi's best-effort session-info mode, passes the
-// no-progress tool limit through, and ignores PermissionMode (Pi has no
-// permission policy).
+// no-progress tool limit and declared verification commands through, and
+// ignores PermissionMode (Pi has no permission policy).
 // SessionAdapter is a narrow provider-neutral entry point for non-run
 // operations such as merge-batch repair. It uses the same registry adapters and
 // timeout wrapper as ordinary run sessions without importing run orchestration.
@@ -53,10 +53,11 @@ func (r piRuntime) RunSession(ctx context.Context, session Session) (SessionResu
 	}
 	client := piagent.Client{ProcessStarter: r.starter, Log: session.Log}
 	result, err := client.RunAgentSession(ctx, piagent.Request{
-		RepoRoot:            session.RepoRoot,
-		Prompt:              session.Prompt,
-		NoProgressToolLimit: session.NoProgressToolLimit,
-		SessionInfoMode:     mode,
+		RepoRoot:             session.RepoRoot,
+		Prompt:               session.Prompt,
+		NoProgressToolLimit:  session.NoProgressToolLimit,
+		VerificationCommands: session.VerificationCommands,
+		SessionInfoMode:      mode,
 	})
 	out := SessionResult{Output: result.Output, FinalText: result.FinalText}
 	if session.CollectMetrics {

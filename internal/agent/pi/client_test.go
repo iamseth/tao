@@ -262,6 +262,59 @@ func TestClientAgentErrorIsReturnedAndLogged(t *testing.T) {
 	}
 }
 
+func TestClientNoProgressWatchdogRecognizesChainedDeclaredPnpmVerification(t *testing.T) {
+	proc := newFakeProcess(t)
+	go func() {
+		defer proc.finish()
+		_, _ = proc.readCommand()
+		proc.writeEvent(`{"type":"message_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"call-1","name":"read","arguments":{"path":"package.json"}}]}}`)
+		proc.writeEvent(`{"type":"message_end","message":{"role":"toolResult","toolCallId":"call-1","toolName":"read","content":[{"type":"text","text":"{}"}],"isError":false}}`)
+		proc.writeEvent(`{"type":"message_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"call-2","name":"bash","arguments":{"command":"git status --short &&  cd  packages/commonStudent  &&  pnpm test"}}]}}`)
+		proc.writeEvent(`{"type":"message_end","message":{"role":"toolResult","toolCallId":"call-2","toolName":"bash","content":[{"type":"text","text":"passed"}],"isError":false}}`)
+		proc.writeEvent(`{"type":"message_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"call-3","name":"bash","arguments":{"command":"rg something packages"}}]}}`)
+		proc.writeEvent(`{"type":"message_end","message":{"role":"toolResult","toolCallId":"call-3","toolName":"bash","content":[{"type":"text","text":"result"}],"isError":false}}`)
+		proc.writeEvent(`{"type":"agent_end","session_id":"session-1"}`)
+	}()
+	client := Client{ProcessStarter: func(context.Context, string, string, []string) (Process, error) {
+		return proc, nil
+	}}
+
+	result, err := client.RunAgentSession(context.Background(), Request{
+		Prompt: "work", NoProgressToolLimit: 2, VerificationCommands: []string{"cd packages/commonStudent && pnpm test"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SessionID != "session-1" {
+		t.Fatalf("session ID = %q, want session-1", result.SessionID)
+	}
+}
+
+func TestNoProgressWatchdogRecognizesTaoSliceLifecycleActions(t *testing.T) {
+	for _, action := range []string{"slice-complete", "slice-blocked"} {
+		t.Run(action, func(t *testing.T) {
+			watchdog := newNoProgressWatchdog(2, nil)
+			if err := watchdog.observe(toolCall{name: "read"}); err != nil {
+				t.Fatal(err)
+			}
+			if err := watchdog.observe(toolCall{name: "bash", arguments: `{"command":"git diff --check && tao ` + action + ` --plan-dir /plans/a"}`}); err != nil {
+				t.Fatalf("chained lifecycle action was not productive: %v", err)
+			}
+			if err := watchdog.observe(toolCall{name: "bash", arguments: `{"command":"rg 'tao slice-complete' prompts"}`}); err != nil {
+				t.Fatalf("lifecycle action did not reset watchdog before an ordinary search: %v", err)
+			}
+		})
+	}
+}
+
+func TestNoProgressWatchdogDoesNotRecognizeQuotedLifecycleSearch(t *testing.T) {
+	watchdog := newNoProgressWatchdog(1, nil)
+	err := watchdog.observe(toolCall{name: "bash", arguments: `{"command":"rg 'tao slice-complete' prompts"}`})
+	if err == nil || !strings.Contains(err.Error(), "no-progress watchdog") {
+		t.Fatalf("quoted lifecycle search should be non-productive, got %v", err)
+	}
+}
+
 func TestClientNoProgressWatchdogAbortsRunSessions(t *testing.T) {
 	proc := newFakeProcess(t)
 	serverErr := make(chan error, 1)

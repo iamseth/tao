@@ -46,7 +46,7 @@ func TestClaudeRuntimeMapsPermissionMode(t *testing.T) {
 				return proc, nil
 			}}
 
-			result, err := runtime.RunSession(context.Background(), Session{Prompt: "work", PermissionMode: tc.mode})
+			result, err := runtime.RunSession(context.Background(), Session{Prompt: "work", PermissionMode: tc.mode, VerificationCommands: []string{"pnpm test"}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -118,7 +118,7 @@ func TestClaudeRuntimeOmitsMetricsWhenNotCollected(t *testing.T) {
 	}
 }
 
-func TestPiRuntimeNormalizesMetricsAndPassesNoProgressLimit(t *testing.T) {
+func TestPiRuntimeNormalizesMetricsAndPassesNoProgressConfiguration(t *testing.T) {
 	proc := newFakeProcess(t)
 	var gotCwd, gotName string
 	var gotArgs []string
@@ -129,6 +129,12 @@ func TestPiRuntimeNormalizesMetricsAndPassesNoProgressLimit(t *testing.T) {
 			serverErr <- err
 			return
 		}
+		proc.writeEvent(`{"type":"message_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"call-1","name":"read","arguments":{"path":"package.json"}}]}}`)
+		proc.writeEvent(`{"type":"message_end","message":{"role":"toolResult","toolCallId":"call-1","toolName":"read","content":[{"type":"text","text":"{}"}],"isError":false}}`)
+		proc.writeEvent(`{"type":"message_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"call-2","name":"bash","arguments":{"command":"cd packages/commonStudent && pnpm test"}}]}}`)
+		proc.writeEvent(`{"type":"message_end","message":{"role":"toolResult","toolCallId":"call-2","toolName":"bash","content":[{"type":"text","text":"passed"}],"isError":false}}`)
+		proc.writeEvent(`{"type":"message_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"call-3","name":"read","arguments":{"path":"package.json"}}]}}`)
+		proc.writeEvent(`{"type":"message_end","message":{"role":"toolResult","toolCallId":"call-3","toolName":"read","content":[{"type":"text","text":"{}"}],"isError":false}}`)
 		proc.writeEvent(`{"type":"message","role":"assistant","text":"done"}`)
 		proc.writeEvent(`{"type":"agent_end","session_id":"session-1"}`)
 		if err := proc.readCommand(); err != nil { // get_state
@@ -149,7 +155,7 @@ func TestPiRuntimeNormalizesMetricsAndPassesNoProgressLimit(t *testing.T) {
 		return proc, nil
 	}}
 
-	result, err := runtime.RunSession(context.Background(), Session{RepoRoot: "/repo", Prompt: "work", CollectMetrics: true, NoProgressToolLimit: 7})
+	result, err := runtime.RunSession(context.Background(), Session{RepoRoot: "/repo", Prompt: "work", CollectMetrics: true, NoProgressToolLimit: 2, VerificationCommands: []string{"cd packages/commonStudent && pnpm test"}})
 	if err != nil {
 		t.Fatal(err)
 	}

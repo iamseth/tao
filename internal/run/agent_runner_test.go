@@ -85,7 +85,8 @@ func TestSharedAgentOperationsSetTransportRequests(t *testing.T) {
 	}}
 	ctx := context.Background()
 
-	if err := runSliceWithAgentSession(ctx, executor, options, SliceRun{PlanDir: "/plans/a", SliceID: "001-a", RepoRoot: "/repo", RunPacket: "packet"}); err != nil {
+	verificationCommands := []string{"cd packages/commonStudent && pnpm test"}
+	if err := runSliceWithAgentSession(ctx, executor, options, SliceRun{PlanDir: "/plans/a", SliceID: "001-a", RepoRoot: "/repo", RunPacket: "packet", VerificationCommands: verificationCommands}); err != nil {
 		t.Fatal(err)
 	}
 	pr, err := createPullRequestWithAgentSession(ctx, executor, options, PullRequestRun{PlanDir: "/plans/a", PlanID: "plan-a", RepoRoot: "/repo"})
@@ -97,7 +98,13 @@ func TestSharedAgentOperationsSetTransportRequests(t *testing.T) {
 		t.Fatalf("expected 2 requests, got %#v", executor.requests)
 	}
 	assertAgentRequest(t, executor.requests[0], "running 001-a", false, "001-a")
+	if got := strings.Join(executor.requests[0].VerificationCommands, "\n"); got != strings.Join(verificationCommands, "\n") {
+		t.Fatalf("verification commands = %q, want %q", got, strings.Join(verificationCommands, "\n"))
+	}
 	assertAgentRequest(t, executor.requests[1], "creating pull request for plan plan-a", true, "")
+	if executor.requests[1].VerificationCommands != nil {
+		t.Fatalf("pull request verification commands = %#v, want nil", executor.requests[1].VerificationCommands)
+	}
 	if pr.Number != 123 || pr.URL != "https://github.com/iamseth/tao/pull/123" || !pr.CreatedAt.Equal(options.Now().UTC()) {
 		t.Fatalf("unexpected pull request: %#v", pr)
 	}
@@ -172,14 +179,16 @@ func (e *countingSliceExecutor) RunSlice(ctx context.Context, run SliceRun) erro
 }
 
 type packetCapturingExecutor struct {
-	packet   string
-	planDir  string
-	repoRoot string
+	packet               string
+	planDir              string
+	repoRoot             string
+	verificationCommands []string
 }
 
 func (e *packetCapturingExecutor) RunSlice(ctx context.Context, run SliceRun) error {
 	e.packet = run.RunPacket
 	e.planDir = run.PlanDir
 	e.repoRoot = run.RepoRoot
+	e.verificationCommands = run.VerificationCommands
 	return ctx.Err()
 }

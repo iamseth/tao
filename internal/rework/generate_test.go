@@ -39,6 +39,7 @@ func TestGenerateSlicesMapsFindingsToReworkSlices(t *testing.T) {
 	detail := &plan.PlanDetail{
 		State: plan.State{UpdatedAt: updatedAt, Repo: plan.Repo{Root: repoFixture(t, map[string]string{
 			"Makefile": ".PHONY: build test\nbuild:\n\tgo build ./...\ntest:\n\tgo test ./...\n",
+			"go.mod":   "module example.com/project\n",
 		})}},
 		Slices: plan.SlicesFile{Slices: []plan.Slice{
 			{
@@ -89,7 +90,7 @@ func TestGenerateSlicesMapsFindingsToReworkSlices(t *testing.T) {
 	if !slices.Equal(first.ExpectedFiles, []string{"internal/rework/generate.go"}) {
 		t.Fatalf("first expected files = %#v", first.ExpectedFiles)
 	}
-	wantCommands := []string{"go test ./internal/rework", "go test ./internal/rework -count=1", "make test"}
+	wantCommands := []string{"go test ./internal/rework -count=1", "make test", "go test ./internal/rework"}
 	if !slices.Equal(first.Verification.Commands, wantCommands) {
 		t.Fatalf("first verification commands = %#v, want %#v", first.Verification.Commands, wantCommands)
 	}
@@ -169,18 +170,170 @@ func TestGenerateSlicesUsesDetectedGoRepoLevelVerification(t *testing.T) {
 	}
 }
 
-func TestGenerateSlicesFallsBackToGoTestWhenRepoLevelDetectionEmpty(t *testing.T) {
+func TestGenerateSlicesPrefersInheritedTypeScriptVerification(t *testing.T) {
+	detail := &plan.PlanDetail{
+		State: plan.State{Repo: plan.Repo{Root: repoFixture(t, map[string]string{
+			"package.json": `{"scripts":{"test":"vitest","lint":"eslint ."}}`,
+		})}},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{
+			{
+				ID:            "001-rollcall-feature",
+				ExpectedFiles: []string{"apps/web/src/rollcall.ts"},
+				Verification:  plan.Verification{Commands: []string{"pnpm test", "pnpm lint", "pnpm test"}},
+			},
+			{
+				ID:            "002-rollcall-package",
+				ExpectedFiles: []string{"apps/web/"},
+				Verification:  plan.Verification{Commands: []string{"pnpm lint", "pnpm typecheck"}},
+			},
+			{
+				ID:            "r101-apps-web-src-rollcall-ts",
+				ExpectedFiles: []string{"apps/web/src/rollcall.ts"},
+				Verification:  plan.Verification{Commands: []string{"go test ./..."}},
+			},
+		}},
+	}
+
+	got := GenerateSlices(detail, []plan.ReviewFinding{{File: "apps/web/src/rollcall.ts", Message: "Fix rollcall"}}, 1)
+	if len(got) != 1 {
+		t.Fatalf("GenerateSlices returned %d slices, want 1", len(got))
+	}
+	wantCommands := []string{"pnpm test", "pnpm lint", "pnpm typecheck"}
+	if !slices.Equal(got[0].Verification.Commands, wantCommands) {
+		t.Fatalf("verification commands = %#v, want %#v", got[0].Verification.Commands, wantCommands)
+	}
+	if slices.Contains(got[0].Verification.Commands, "go test ./...") {
+		t.Fatalf("TypeScript rework received fabricated Go verification: %#v", got[0].Verification.Commands)
+	}
+}
+
+func TestGenerateSlicesUsesNestedGoModulePackageVerification(t *testing.T) {
+	detail := &plan.PlanDetail{State: plan.State{Repo: plan.Repo{Root: repoFixture(t, map[string]string{
+		"services/api/go.mod": "module example.com/api\n",
+	})}}}
+
+	got := GenerateSlices(detail, []plan.ReviewFinding{{File: "services/api/internal/server/server.go", Message: "Fix server"}}, 1)
+	if len(got) != 1 {
+		t.Fatalf("GenerateSlices returned %d slices, want 1", len(got))
+	}
+	wantCommands := []string{"cd services/api && go test ./internal/server"}
+	if !slices.Equal(got[0].Verification.Commands, wantCommands) {
+		t.Fatalf("verification commands = %#v, want %#v", got[0].Verification.Commands, wantCommands)
+	}
+}
+
+func TestGenerateSlicesUsesRecordedWorkspaceModuleLayout(t *testing.T) {
+	controlRoot := repoFixture(t, map[string]string{
+		"go.mod": "module example.com/control\n",
+	})
+	workspaceRoot := repoFixture(t, map[string]string{
+		"services/api/go.mod": "module example.com/api\n",
+	})
+	detail := &plan.PlanDetail{State: plan.State{
+		Repo:      plan.Repo{Root: controlRoot},
+		Workspace: &plan.Workspace{Strategy: plan.WorkspaceStrategyWorktree, Path: workspaceRoot},
+	}}
+
+	got := GenerateSlices(detail, []plan.ReviewFinding{
+		{File: "services/api/internal/server/server.go", Message: "Fix server"},
+		{File: "README.md", Message: "Document server"},
+	}, 1)
+	if len(got) != 2 {
+		t.Fatalf("GenerateSlices returned %d slices, want 2", len(got))
+	}
+	if want := []string{"cd services/api && go test ./internal/server"}; !slices.Equal(got[0].Verification.Commands, want) {
+		t.Fatalf("workspace package verification = %#v, want %#v", got[0].Verification.Commands, want)
+	}
+	if want := []string{"git diff --check -- 'README.md'"}; !slices.Equal(got[1].Verification.Commands, want) {
+		t.Fatalf("workspace repository verification = %#v, want %#v", got[1].Verification.Commands, want)
+	}
+}
+
+func TestGenerateSlicesMissingRecordedWorkspaceDoesNotUseControlModuleLayout(t *testing.T) {
+	controlRoot := repoFixture(t, map[string]string{
+		"go.mod": "module example.com/control\n",
+	})
+	detail := &plan.PlanDetail{
+		State: plan.State{
+			Repo: plan.Repo{Root: controlRoot},
+			Workspace: &plan.Workspace{
+				Strategy: plan.WorkspaceStrategyWorktree,
+				Path:     filepath.Join(t.TempDir(), "missing-worktree"),
+			},
+		},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{{
+			ID:            "001-docs",
+			ExpectedFiles: []string{"docs/guide.md"},
+			Verification:  plan.Verification{Commands: []string{"pnpm test"}},
+		}}},
+	}
+
+	got := GenerateSlices(detail, []plan.ReviewFinding{
+		{File: "internal/server/server.go", Message: "Fix server"},
+		{File: "docs/guide.md", Message: "Clarify guide"},
+	}, 1)
+	if len(got) != 2 {
+		t.Fatalf("GenerateSlices returned %d slices, want 2", len(got))
+	}
+	if want := []string{"git diff --check -- 'internal/server/server.go'"}; !slices.Equal(got[0].Verification.Commands, want) {
+		t.Fatalf("missing-worktree package verification = %#v, want %#v", got[0].Verification.Commands, want)
+	}
+	if want := []string{"pnpm test"}; !slices.Equal(got[1].Verification.Commands, want) {
+		t.Fatalf("missing-worktree inherited verification = %#v, want %#v", got[1].Verification.Commands, want)
+	}
+}
+
+func TestGenerateSlicesCurrentWorkspaceUsesControlRoot(t *testing.T) {
+	controlRoot := repoFixture(t, map[string]string{
+		"services/api/go.mod": "module example.com/api\n",
+	})
+	otherRoot := repoFixture(t, map[string]string{
+		"go.mod": "module example.com/other\n",
+	})
+	detail := &plan.PlanDetail{State: plan.State{
+		Repo:      plan.Repo{Root: controlRoot},
+		Workspace: &plan.Workspace{Strategy: plan.WorkspaceStrategyCurrent, Path: otherRoot},
+	}}
+
+	got := GenerateSlices(detail, []plan.ReviewFinding{{File: "services/api/internal/server/server.go", Message: "Fix server"}}, 1)
+	if len(got) != 1 {
+		t.Fatalf("GenerateSlices returned %d slices, want 1", len(got))
+	}
+	want := []string{"cd services/api && go test ./internal/server"}
+	if !slices.Equal(got[0].Verification.Commands, want) {
+		t.Fatalf("verification commands = %#v, want %#v", got[0].Verification.Commands, want)
+	}
+}
+
+func TestGenerateSlicesUsesFileScopedGitFallbackForUnknownRepository(t *testing.T) {
 	detail := &plan.PlanDetail{State: plan.State{Repo: plan.Repo{Root: repoFixture(t, map[string]string{
 		"README.md": "# project\n",
 	})}}}
 
-	got := GenerateSlices(detail, []plan.ReviewFinding{{File: "README.md", Message: "Document it"}}, 1)
+	got := GenerateSlices(detail, []plan.ReviewFinding{{File: "internal/project.go", Message: "Fix unknown project"}}, 1)
 	if len(got) != 1 {
 		t.Fatalf("GenerateSlices returned %d slices, want 1", len(got))
 	}
-	wantCommands := []string{"go test ./..."}
+	wantCommands := []string{"git diff --check -- 'internal/project.go'"}
 	if !slices.Equal(got[0].Verification.Commands, wantCommands) {
 		t.Fatalf("verification commands = %#v, want %#v", got[0].Verification.Commands, wantCommands)
+	}
+	if got[0].Verification.Source != "file-scoped Git diff check only; does not provide semantic test coverage" {
+		t.Fatalf("verification source = %q", got[0].Verification.Source)
+	}
+}
+
+func TestGenerateSlicesShellQuotesGitFallbackFindingPath(t *testing.T) {
+	detail := &plan.PlanDetail{}
+	file := "docs/reviewer's $(note).md"
+
+	got := GenerateSlices(detail, []plan.ReviewFinding{{File: file, Message: "Clarify note"}}, 1)
+	if len(got) != 1 {
+		t.Fatalf("GenerateSlices returned %d slices, want 1", len(got))
+	}
+	want := `git diff --check -- 'docs/reviewer'"'"'s $(note).md'`
+	if got[0].Verification.Commands[0] != want {
+		t.Fatalf("verification command = %q, want %q", got[0].Verification.Commands[0], want)
 	}
 }
 

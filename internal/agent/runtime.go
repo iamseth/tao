@@ -31,11 +31,12 @@ const (
 // maps onto the corresponding underlying client request; fields a given client
 // ignores are dropped by the adapter to preserve current behavior.
 type Session struct {
-	RepoRoot            string
-	Prompt              string
-	PermissionMode      PermissionMode
-	CollectMetrics      bool
-	NoProgressToolLimit int
+	RepoRoot             string
+	Prompt               string
+	PermissionMode       PermissionMode
+	CollectMetrics       bool
+	NoProgressToolLimit  int
+	VerificationCommands []string
 	// Timeout caps a single Runtime session's wall-clock duration. A zero value
 	// means no timeout.
 	Timeout time.Duration

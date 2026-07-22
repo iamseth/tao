@@ -211,7 +211,7 @@ func (r SelectedSliceRunner) Run(ctx context.Context, detail *plan.PlanDetail, d
 			return nil, err
 		}
 	}
-	run := SliceRun{PlanDir: absolutePlanDir(detail.Dir), SliceID: slice.ID, LogPath: logPath, RunPacket: runPacket, RepoRoot: executionRoot, Resuming: resuming, ResumeAttempt: resumeAttempt}
+	run := SliceRun{PlanDir: absolutePlanDir(detail.Dir), SliceID: slice.ID, LogPath: logPath, RunPacket: runPacket, RepoRoot: executionRoot, VerificationCommands: slice.Verification.Commands, Resuming: resuming, ResumeAttempt: resumeAttempt}
 	if err := r.runExecutor(ctx, run); err != nil {
 		if resuming {
 			r.recordSliceResumeFailure(detail, slice.ID, resumeAttempt, err)

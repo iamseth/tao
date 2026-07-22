@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 
@@ -24,7 +25,7 @@ type session struct {
 	abortOnce              sync.Once
 }
 
-func newSession(proc Process, log io.Writer, noProgressToolLimit int) *session {
+func newSession(proc Process, log io.Writer, noProgressToolLimit int, verificationCommands []string) *session {
 	s := &session{
 		proc:                   proc,
 		stdin:                  proc.Stdin(),
@@ -33,7 +34,7 @@ func newSession(proc Process, log io.Writer, noProgressToolLimit int) *session {
 		pendingToolCalls:       map[string]toolCall{},
 		pendingToolCallsByName: map[string]toolCall{},
 		loggedToolResults:      map[string]bool{},
-		watchdog:               noProgressWatchdog{limit: noProgressToolLimit},
+		watchdog:               newNoProgressWatchdog(noProgressToolLimit, verificationCommands),
 	}
 	go s.readStdout(proc.Stdout())
 	if stderr := proc.Stderr(); stderr != nil {
@@ -185,15 +186,26 @@ type toolCall struct {
 }
 
 type noProgressWatchdog struct {
-	limit int
-	count int
+	limit                int
+	count                int
+	verificationCommands map[string]struct{}
+}
+
+func newNoProgressWatchdog(limit int, verificationCommands []string) noProgressWatchdog {
+	commands := make(map[string]struct{}, len(verificationCommands))
+	for _, command := range verificationCommands {
+		if normalized := normalizeBashCommand(command); normalized != "" {
+			commands[normalized] = struct{}{}
+		}
+	}
+	return noProgressWatchdog{limit: limit, verificationCommands: commands}
 }
 
 func (w *noProgressWatchdog) observe(call toolCall) error {
 	if w.limit <= 0 {
 		return nil
 	}
-	if productiveToolCall(call) {
+	if w.productiveToolCall(call) {
 		w.count = 0
 		return nil
 	}
@@ -201,19 +213,121 @@ func (w *noProgressWatchdog) observe(call toolCall) error {
 	if w.count < w.limit {
 		return nil
 	}
-	return fmt.Errorf("pi no-progress watchdog: %d tool calls without edits, verification, or slice completion", w.limit)
+	return fmt.Errorf("pi no-progress watchdog: %d tool calls without edits, verification, or slice lifecycle activity", w.limit)
 }
 
-func productiveToolCall(call toolCall) bool {
+func (w *noProgressWatchdog) productiveToolCall(call toolCall) bool {
 	switch call.name {
 	case "edit", "write":
 		return true
 	case "bash":
-		command := bashToolCommand(call.arguments)
-		return strings.Contains(command, "go test") || strings.Contains(command, "make test") || strings.Contains(command, "make build") || strings.Contains(command, "tao slice-complete")
+		command := splitBashCommand(bashToolCommand(call.arguments))
+		for start := range command.segments {
+			candidate := command.segments[start]
+			if _, ok := w.verificationCommands[candidate]; ok {
+				return true
+			}
+			for end := start + 1; end < len(command.segments); end++ {
+				candidate += " " + command.separators[end-1] + " " + command.segments[end]
+				if _, ok := w.verificationCommands[candidate]; ok {
+					return true
+				}
+			}
+		}
+		return slices.ContainsFunc(command.segments, taoSliceLifecycleCommand)
 	default:
 		return false
 	}
+}
+
+type bashCommand struct {
+	segments   []string
+	separators []string
+}
+
+func normalizeBashCommand(command string) string {
+	parsed := splitBashCommand(command)
+	if len(parsed.segments) == 0 {
+		return ""
+	}
+	var normalized strings.Builder
+	normalized.WriteString(parsed.segments[0])
+	for i, separator := range parsed.separators {
+		normalized.WriteString(" " + separator + " " + parsed.segments[i+1])
+	}
+	return normalized.String()
+}
+
+func splitBashCommand(command string) bashCommand {
+	var parsed bashCommand
+	var segment strings.Builder
+	var quote rune
+	escaped := false
+	pendingSeparator := ""
+	flush := func() {
+		normalized := strings.Join(strings.Fields(segment.String()), " ")
+		segment.Reset()
+		if normalized == "" {
+			return
+		}
+		if len(parsed.segments) > 0 {
+			parsed.separators = append(parsed.separators, pendingSeparator)
+		}
+		parsed.segments = append(parsed.segments, normalized)
+		pendingSeparator = ""
+	}
+
+	runes := []rune(command)
+	for i := 0; i < len(runes); i++ {
+		current := runes[i]
+		if escaped {
+			segment.WriteRune(current)
+			escaped = false
+			continue
+		}
+		if quote != 0 {
+			segment.WriteRune(current)
+			if current == '\\' && quote != '\'' {
+				escaped = true
+			} else if current == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch current {
+		case '\\':
+			segment.WriteRune(current)
+			escaped = true
+		case '\'', '"', '`':
+			segment.WriteRune(current)
+			quote = current
+		case '&', '|':
+			flush()
+			pendingSeparator = string(current)
+			if i+1 < len(runes) && runes[i+1] == current {
+				pendingSeparator += string(current)
+				i++
+			}
+		case ';':
+			flush()
+			pendingSeparator = ";"
+		case '\n':
+			flush()
+			pendingSeparator = ";"
+		default:
+			segment.WriteRune(current)
+		}
+	}
+	flush()
+	return parsed
+}
+
+func taoSliceLifecycleCommand(command string) bool {
+	fields := strings.Fields(command)
+	if len(fields) < 2 || fields[0] != "tao" {
+		return false
+	}
+	return fields[1] == "slice-complete" || fields[1] == "slice-blocked"
 }
 
 func bashToolCommand(arguments string) string {

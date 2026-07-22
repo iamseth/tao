@@ -11,6 +11,7 @@ import (
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/verifydetect"
+	"github.com/iamseth/tao/internal/workspace"
 )
 
 const addressReviewFindingTask = "address the review finding"
@@ -141,6 +142,7 @@ func GenerateSlices(detail *plan.PlanDetail, findings []plan.ReviewFinding, roun
 		if !ok {
 			continue
 		}
+		verification := reworkVerification(detail, file)
 		slice := plan.Slice{
 			ID:            sliceID(round, len(slices)+1, file),
 			Title:         sliceTitle(file),
@@ -152,8 +154,8 @@ func GenerateSlices(detail *plan.PlanDetail, findings []plan.ReviewFinding, roun
 			Tasks:         findingTasks(finding),
 			ExpectedFiles: reworkExpectedFiles(detail, file),
 			Verification: plan.Verification{
-				Commands:     verificationCommands(detail, file),
-				Source:       "review finding package verification plus overlapping original slice verification",
+				Commands:     verification.commands,
+				Source:       verification.source,
 				ManualChecks: []string{},
 			},
 		}
@@ -280,42 +282,102 @@ func reworkExpectedFiles(detail *plan.PlanDetail, file string) []string {
 	return files
 }
 
-func verificationCommands(detail *plan.PlanDetail, file string) []string {
-	commands := make([]string, 0, 3)
-	commands = appendUnique(commands, packageVerificationCommands(detail, file)...)
-	commands = appendUnique(commands, overlappingVerificationCommands(detail, file)...)
-	return commands
+type verificationResolution struct {
+	commands []string
+	source   string
+}
+
+func reworkVerification(detail *plan.PlanDetail, file string) verificationResolution {
+	inheritedCommands := overlappingVerificationCommands(detail, file)
+	commands := appendUnique(nil, inheritedCommands...)
+	packageCommands := packageVerificationCommands(detail, file)
+	commands = appendUnique(commands, packageCommands...)
+	if len(commands) > 0 {
+		source := "overlapping original slice verification"
+		if len(packageCommands) > 0 {
+			if len(inheritedCommands) == 0 {
+				source = "applicable Go package verification"
+			} else {
+				source += " plus applicable Go package verification"
+			}
+		}
+		return verificationResolution{commands: commands, source: source}
+	}
+
+	if detector, ok := verificationDetector(detail); ok {
+		if detected := detector.DetectCommands(); len(detected) > 0 {
+			return verificationResolution{
+				commands: appendUnique(nil, detected...),
+				source:   "detected repository build/test verification",
+			}
+		}
+	}
+	return verificationResolution{
+		commands: []string{"git diff --check -- " + shellQuote(file)},
+		source:   "file-scoped Git diff check only; does not provide semantic test coverage",
+	}
 }
 
 func packageVerificationCommands(detail *plan.PlanDetail, file string) []string {
 	cleanFile := normalizePlanPath(file)
 	if cleanFile == "" || path.Ext(cleanFile) != ".go" {
-		return repoLevelVerificationCommands(planRepoRoot(detail))
+		return nil
 	}
-	dir := path.Dir(cleanFile)
-	if dir == "." || dir == "" {
-		return []string{"go test ."}
+	detector, ok := verificationDetector(detail)
+	if !ok {
+		return nil
 	}
-	return []string{"go test ./" + dir}
+	moduleDir, ok := detector.GoModuleForPath(cleanFile)
+	if !ok {
+		return nil
+	}
+
+	packageDir := path.Dir(cleanFile)
+	if moduleDir != "." {
+		packageDir = strings.TrimPrefix(packageDir, moduleDir)
+		packageDir = strings.TrimPrefix(packageDir, "/")
+	}
+	target := "."
+	if packageDir != "." && packageDir != "" {
+		target = "./" + packageDir
+	}
+	command := "go test " + shellWord(target)
+	if moduleDir != "." {
+		command = "cd " + shellWord(moduleDir) + " && " + command
+	}
+	return []string{command}
 }
 
-func repoLevelVerificationCommands(repoRoot string) []string {
-	if repoRoot != "" {
-		if commands := verifydetect.DetectCommands(repoRoot); len(commands) > 0 {
-			return commands
-		}
+func shellWord(value string) string {
+	if value != "" && strings.IndexFunc(value, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && !strings.ContainsRune("_@%+=:,./-", r)
+	}) == -1 {
+		return value
 	}
-	// Rework slices should always carry at least one deterministic repo-level
-	// verification command; when detection finds nothing (or legacy plan data has
-	// no repo root), use the Go repo test default rather than emitting none.
-	return []string{"go test ./..."}
+	return shellQuote(value)
 }
 
-func planRepoRoot(detail *plan.PlanDetail) string {
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
+}
+
+func verificationDetector(detail *plan.PlanDetail) (verifydetect.Detector, bool) {
 	if detail == nil {
-		return ""
+		return verifydetect.Detector{}, false
 	}
-	return strings.TrimSpace(detail.State.Repo.Root)
+	workspaceState := detail.State.Workspace
+	if workspaceState == nil || strings.TrimSpace(workspaceState.Strategy) == plan.WorkspaceStrategyCurrent {
+		return verifydetect.OpenRoot(detail.State.Repo.Root)
+	}
+
+	recorded := workspace.ResolveRecordedWorktree(detail)
+	if detector, ok := verifydetect.OpenRoot(recorded.Path); ok {
+		return detector, true
+	}
+	if strings.TrimSpace(workspaceState.Strategy) == "" && recorded.Path == "" {
+		return verifydetect.OpenRoot(detail.State.Repo.Root)
+	}
+	return verifydetect.Detector{}, false
 }
 
 func overlappingVerificationCommands(detail *plan.PlanDetail, file string) []string {
@@ -324,7 +386,7 @@ func overlappingVerificationCommands(detail *plan.PlanDetail, file string) []str
 	}
 	commands := make([]string, 0)
 	for _, slice := range detail.Slices.Slices {
-		if !sliceExpectedFilesOverlap(slice.ExpectedFiles, file) {
+		if RoundFromSliceID(slice.ID) > 0 || !sliceExpectedFilesOverlap(slice.ExpectedFiles, file) {
 			continue
 		}
 		commands = append(commands, slice.Verification.Commands...)
