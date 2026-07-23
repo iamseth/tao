@@ -40,6 +40,7 @@ type Slice struct {
 	Context             string                  `json:"context"`
 	Tasks               []string                `json:"tasks"`
 	ExpectedFiles       []string                `json:"expected_files"`
+	RequiredInputs      []RequiredInput         `json:"required_inputs,omitempty"`
 	Verification        Verification            `json:"verification"`
 	Approval            *Approval               `json:"approval,omitempty"`
 	Notes               string                  `json:"notes,omitempty"`
@@ -88,6 +89,18 @@ type SliceTiming struct {
 	UpdatedAt       time.Time  `json:"updated_at"`
 	LastActivityAt  *time.Time `json:"last_activity_at"`
 	DurationSeconds *int64     `json:"duration_seconds"`
+}
+
+const (
+	RequiredInputFile      = "file"
+	RequiredInputDirectory = "directory"
+)
+
+// RequiredInput declares a concrete repository input needed by a slice.
+type RequiredInput struct {
+	Path   string `json:"path"`
+	Kind   string `json:"kind"`
+	Reason string `json:"reason"`
 }
 
 // Verification lists the commands and manual checks required for a slice.

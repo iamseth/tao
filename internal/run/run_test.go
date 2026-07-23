@@ -257,18 +257,29 @@ func TestAutomaticSliceCompletionBoundaryGuardsTransaction(t *testing.T) {
 func TestRunPreflightBlocksInvalidSelectedSliceBeforeExecutor(t *testing.T) {
 	repo := t.TempDir()
 	detail := &plan.PlanDetail{
-		Dir:    "/plans/plan-a",
-		State:  plan.State{Status: plan.StatusPlanned, Repo: plan.Repo{Root: repo}, Plan: plan.PlanState{ID: "plan-a", PendingSlices: []string{"001-a"}}},
-		Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "001-a", Status: plan.StatusPending, ExpectedFiles: []string{"declared.test.ts"}, Verification: plan.Verification{Commands: []string{"pnpm exec vitest missing.test.ts"}}}}},
+		Dir:   "/plans/plan-a",
+		State: plan.State{Status: plan.StatusPlanned, Repo: plan.Repo{Root: repo}, Plan: plan.PlanState{ID: "plan-a", PendingSlices: []string{"001-a"}}},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{{
+			ID:             "001-a",
+			Status:         plan.StatusPending,
+			RequiredInputs: []plan.RequiredInput{{Path: "missing.test.ts", Kind: plan.RequiredInputFile, Reason: "test fixture"}},
+			Verification:   plan.Verification{Commands: []string{"go test ."}},
+		}}},
 	}
 	var out bytes.Buffer
 	started := false
 	executor := &countingSliceExecutor{}
 
-	err := executeDetail(context.Background(), detail, nil, &out, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone}}, RunDependencies: RunDependencies{SliceExecutor: executor, PlanRecordFactory: callbackPlanRecordFactory(func(detail *plan.PlanDetail, sliceID string, now time.Time) error {
-		started = true
-		return nil
-	}, nil)}})
+	err := executeDetail(context.Background(), detail, nil, &out, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone}}, RunDependencies: RunDependencies{
+		SliceExecutor: executor,
+		WorkspacePreparer: func(context.Context, *plan.PlanDetail, WorkspaceResolverInput) (string, error) {
+			return repo, nil
+		},
+		PlanRecordFactory: callbackPlanRecordFactory(func(detail *plan.PlanDetail, sliceID string, now time.Time) error {
+			started = true
+			return nil
+		}, nil),
+	}})
 	if err == nil || !strings.Contains(err.Error(), "slice 001-a failed verification preflight") {
 		t.Fatalf("expected preflight error, got %v", err)
 	}
@@ -311,6 +322,80 @@ func TestRunPreflightUsesExecutionRootForPathChecks(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "Verification Findings:") {
 		t.Fatalf("expected path check to use execution root without findings, got:\n%s", out.String())
+	}
+}
+
+func TestRunPreflightChecksRequiredInputsAfterPreparingAuthoritativeRoot(t *testing.T) {
+	for _, tt := range []struct {
+		name             string
+		prepareWorkspace func(*testing.T, string)
+		wantFinding      string
+	}{
+		{name: "producer output absent", wantFinding: "does not exist"},
+		{name: "producer output has wrong kind", prepareWorkspace: func(t *testing.T, root string) {
+			t.Helper()
+			if err := os.MkdirAll(filepath.Join(root, "generated", "input.txt"), 0o750); err != nil {
+				t.Fatal(err)
+			}
+		}, wantFinding: "is not a file"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			controlRoot := t.TempDir()
+			workspaceRoot := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(controlRoot, "generated"), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(controlRoot, "generated", "input.txt"), []byte("control checkout only"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if tt.prepareWorkspace != nil {
+				tt.prepareWorkspace(t, workspaceRoot)
+			}
+
+			detail := runPlanDetail(plan.StatusPlanned, []string{"002-consumer"}, []string{"001-producer"}, "002-consumer", plan.StatusPending, nil, nil)
+			detail.State.Repo.Root = controlRoot
+			detail.Slices.Slices = append([]plan.Slice{{
+				ID: "001-producer", Status: plan.StatusCompleted, ExpectedFiles: []string{"generated/input.txt"},
+			}}, detail.Slices.Slices...)
+			detail.Slices.Slices[1].DependsOn = []string{"001-producer"}
+			detail.Slices.Slices[1].RequiredInputs = []plan.RequiredInput{{Path: "generated/input.txt", Kind: plan.RequiredInputFile, Reason: "producer output"}}
+
+			prepared := 0
+			started := 0
+			events := 0
+			executor := &countingSliceExecutor{}
+			var out bytes.Buffer
+			err := executeDetailWithExecution(context.Background(), detail, nil, &out, testRunExecution(
+				ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeIsolated}},
+				RunDependencies{
+					SliceExecutor: executor,
+					WorkspacePreparer: func(context.Context, *plan.PlanDetail, WorkspaceResolverInput) (string, error) {
+						prepared++
+						return workspaceRoot, nil
+					},
+					PlanRecordFactory: callbackPlanRecordFactory(func(*plan.PlanDetail, string, time.Time) error {
+						started++
+						return nil
+					}, nil),
+					EventAppender: eventAppenderFunc(func(string, plan.Event) error {
+						events++
+						return nil
+					}),
+				},
+			))
+			if err == nil || !strings.Contains(err.Error(), "failed verification preflight") {
+				t.Fatalf("execute error = %v, want required-input refusal", err)
+			}
+			if prepared != 1 {
+				t.Fatalf("workspace preparations = %d, want authoritative root prepared once", prepared)
+			}
+			if started != 0 || events != 0 || executor.calls != 0 {
+				t.Fatalf("effects after required-input failure: starts=%d events=%d executor=%d, want none", started, events, executor.calls)
+			}
+			if !strings.Contains(out.String(), tt.wantFinding) {
+				t.Fatalf("findings output = %q, want %q", out.String(), tt.wantFinding)
+			}
+		})
 	}
 }
 
@@ -436,6 +521,7 @@ func TestRunPreflightPrintsBudgetWarningsBeforeRunning(t *testing.T) {
 func TestRunPassesSelectedSlicePacketToExecutor(t *testing.T) {
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 	detail.Slices.Slices[0].Goal = "Use packet context"
+	detail.Slices.Slices[0].RequiredInputs = []plan.RequiredInput{{Path: "run.go", Kind: plan.RequiredInputFile, Reason: "runtime contract"}}
 	detail.Slices.Slices[0].Verification.Commands = []string{"pnpm test"}
 	completedDetail := runPlanDetail(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
 	var out bytes.Buffer
@@ -447,7 +533,7 @@ func TestRunPassesSelectedSlicePacketToExecutor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(executor.packet, "# Tao Run Packet") || !strings.Contains(executor.packet, "- Goal: Use packet context") || !strings.Contains(executor.packet, "- Commit Policy: none") || !strings.Contains(executor.packet, "- Execution Mode: current") {
+	if !strings.Contains(executor.packet, "# Tao Run Packet") || !strings.Contains(executor.packet, "- Goal: Use packet context") || !strings.Contains(executor.packet, "## Required Inputs\n- run.go (file): runtime contract") || !strings.Contains(executor.packet, "- Commit Policy: none") || !strings.Contains(executor.packet, "- Execution Mode: current") {
 		t.Fatalf("expected selected-slice packet, got:\n%s", executor.packet)
 	}
 	if got := strings.Join(executor.verificationCommands, "\n"); got != "pnpm test" {
@@ -1857,19 +1943,64 @@ func TestRunContinueRestartsBlockedPlanBeforeCapabilityGate(t *testing.T) {
 func TestRunContinueDoesNotSkipVerificationPreflight(t *testing.T) {
 	repo := t.TempDir()
 	detail := &plan.PlanDetail{
-		Dir:    "/plans/plan-a",
-		State:  plan.State{Status: plan.StatusBlocked, Repo: plan.Repo{Root: repo}, Plan: plan.PlanState{ID: "plan-a", PendingSlices: []string{"001-a"}}},
-		Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "001-a", Status: plan.StatusPending, Verification: plan.Verification{Commands: []string{"pnpm exec vitest missing.test.ts"}}}}},
+		Dir:   "/plans/plan-a",
+		State: plan.State{Status: plan.StatusBlocked, Repo: plan.Repo{Root: repo}, Plan: plan.PlanState{ID: "plan-a", PendingSlices: []string{"001-a"}}},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{{
+			ID:             "001-a",
+			Status:         plan.StatusPending,
+			RequiredInputs: []plan.RequiredInput{{Path: "missing.test.ts", Kind: plan.RequiredInputFile, Reason: "test fixture"}},
+			Verification:   plan.Verification{Commands: []string{"go test ."}},
+		}}},
 	}
 	var out bytes.Buffer
 	executor := &countingSliceExecutor{}
 
-	err := executeDetail(context.Background(), detail, nil, &out, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Continue: true, CommitPolicy: CommitPolicyNone}}, RunDependencies: RunDependencies{SliceExecutor: executor, PlanRecordFactory: memoryPlanRecordFactory}})
+	err := executeDetail(context.Background(), detail, nil, &out, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Continue: true, CommitPolicy: CommitPolicyNone}}, RunDependencies: RunDependencies{
+		SliceExecutor: executor,
+		WorkspacePreparer: func(context.Context, *plan.PlanDetail, WorkspaceResolverInput) (string, error) {
+			return repo, nil
+		},
+		PlanRecordFactory: memoryPlanRecordFactory,
+	}})
 	if err == nil || !strings.Contains(err.Error(), "slice 001-a failed verification preflight") {
 		t.Fatalf("expected preflight error, got %v", err)
 	}
 	if executor.calls != 0 {
 		t.Fatalf("expected executor not to run, got %d calls", executor.calls)
+	}
+}
+
+func TestRunResumeChecksRequiredInputsBeforeRepairOrHandoff(t *testing.T) {
+	root := t.TempDir()
+	detail := interruptedServiceRunDetail(t, root)
+	detail.Events = nil
+	detail.Slices.Slices[0].RequiredInputs = []plan.RequiredInput{{Path: "missing.txt", Kind: plan.RequiredInputFile, Reason: "resume contract"}}
+	prepared := 0
+	events := 0
+	executor := &countingSliceExecutor{}
+
+	err := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
+		CommandRunner: interruptedServiceGitRunner(t, root, &[]string{}, func() string { return "" }, "tao/plan-a", "base"),
+		WorkspacePreparer: func(context.Context, *plan.PlanDetail, WorkspaceResolverInput) (string, error) {
+			prepared++
+			return root, nil
+		},
+		EventAppender: eventAppenderFunc(func(string, plan.Event) error {
+			events++
+			return nil
+		}),
+		SliceExecutor: executor,
+	}}).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{
+		ExecutionMode: ExecutionModeIsolated, CommitPolicy: CommitPolicySlice,
+	}})
+	if err == nil || !strings.Contains(err.Error(), "failed verification preflight") {
+		t.Fatalf("execute error = %v, want resume required-input refusal", err)
+	}
+	if prepared != 0 {
+		t.Fatalf("resume prepared %d workspaces, want immutable root reuse", prepared)
+	}
+	if events != 0 || executor.calls != 0 {
+		t.Fatalf("resume effects: events=%d executor=%d, want no start-event repair or handoff", events, executor.calls)
 	}
 }
 
@@ -2296,18 +2427,29 @@ func TestExecutionRootResolverPreparesWorktreeStrategyMetadata(t *testing.T) {
 func TestRunDoesNotStartSliceBeforePreflightPasses(t *testing.T) {
 	repo := t.TempDir()
 	detail := &plan.PlanDetail{
-		Dir:    "/plans/plan-a",
-		State:  plan.State{Status: plan.StatusPlanned, Repo: plan.Repo{Root: repo}, Plan: plan.PlanState{ID: "plan-a", PendingSlices: []string{"001-a"}}},
-		Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "001-a", Status: plan.StatusPending, Verification: plan.Verification{Commands: []string{"pnpm exec vitest missing.test.ts"}}}}},
+		Dir:   "/plans/plan-a",
+		State: plan.State{Status: plan.StatusPlanned, Repo: plan.Repo{Root: repo}, Plan: plan.PlanState{ID: "plan-a", PendingSlices: []string{"001-a"}}},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{{
+			ID:             "001-a",
+			Status:         plan.StatusPending,
+			RequiredInputs: []plan.RequiredInput{{Path: "missing.test.ts", Kind: plan.RequiredInputFile, Reason: "test fixture"}},
+			Verification:   plan.Verification{Commands: []string{"go test ."}},
+		}}},
 	}
 	var out bytes.Buffer
 	started := false
 	executor := &countingSliceExecutor{}
 
-	err := executeDetail(context.Background(), detail, nil, &out, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone}}, RunDependencies: RunDependencies{SliceExecutor: executor, PlanRecordFactory: callbackPlanRecordFactory(func(detail *plan.PlanDetail, sliceID string, now time.Time) error {
-		started = true
-		return nil
-	}, nil)}})
+	err := executeDetail(context.Background(), detail, nil, &out, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone}}, RunDependencies: RunDependencies{
+		SliceExecutor: executor,
+		WorkspacePreparer: func(context.Context, *plan.PlanDetail, WorkspaceResolverInput) (string, error) {
+			return repo, nil
+		},
+		PlanRecordFactory: callbackPlanRecordFactory(func(detail *plan.PlanDetail, sliceID string, now time.Time) error {
+			started = true
+			return nil
+		}, nil),
+	}})
 	if err == nil || !strings.Contains(err.Error(), "slice 001-a failed verification preflight") {
 		t.Fatalf("expected preflight error, got %v", err)
 	}

@@ -19,10 +19,10 @@ func TestValidatePlanVerificationFindsEverySliceCommand(t *testing.T) {
 	}
 
 	result := ValidatePlanVerification(detail)
-	if !result.HasErrors() {
-		t.Fatalf("expected missing cwd error, got %+v", result.Findings)
+	if result.HasErrors() {
+		t.Fatalf("expected command semantics to remain advisory, got %+v", result.Findings)
 	}
-	if len(result.Findings) != 1 || result.Findings[0].SliceID != "002-b" || result.Findings[0].Code != "verification_cwd_missing" {
+	if len(result.Findings) != 1 || result.Findings[0].Severity != VerificationFindingWarning || result.Findings[0].SliceID != "002-b" || result.Findings[0].Code != "verification_cwd_missing" {
 		t.Fatalf("unexpected findings: %+v", result.Findings)
 	}
 }
@@ -132,12 +132,12 @@ func TestValidateSelectedSliceVerificationRequiresExactFutureFile(t *testing.T) 
 	}
 
 	result := ValidateSelectedSliceVerification(detail)
-	if !result.HasErrors() {
-		t.Fatalf("expected glob and vague expected files not to allow missing path, got %+v", result.Findings)
+	if result.HasErrors() {
+		t.Fatalf("expected command-derived missing path to remain advisory, got %+v", result.Findings)
 	}
 	finding := findFindingByCode(result.Findings, "verification_path_missing")
-	if finding == nil || finding.Severity != VerificationFindingError {
-		t.Fatalf("expected missing path error, got %+v", result.Findings)
+	if finding == nil || finding.Severity != VerificationFindingWarning {
+		t.Fatalf("expected missing path warning, got %+v", result.Findings)
 	}
 	if containsFindingCode(result.Findings, "verification_future_file_missing") {
 		t.Fatalf("did not expect future-file allowance for glob or vague expected files, got %+v", result.Findings)
@@ -160,7 +160,7 @@ func TestValidatePlanVerificationKeepsShellHazardsAsWarnings(t *testing.T) {
 	}
 }
 
-func TestValidateSelectedSliceVerificationBlocksMissingPath(t *testing.T) {
+func TestValidateSelectedSliceVerificationKeepsMissingCommandPathAdvisory(t *testing.T) {
 	repo := t.TempDir()
 	detail := &PlanDetail{
 		State:  State{Status: StatusPlanned, Repo: Repo{Root: repo}, Plan: PlanState{ID: "plan", PendingSlices: []string{"001-a"}}},
@@ -168,10 +168,10 @@ func TestValidateSelectedSliceVerificationBlocksMissingPath(t *testing.T) {
 	}
 
 	result := ValidateSelectedSliceVerification(detail)
-	if !result.HasErrors() {
-		t.Fatalf("expected selected missing path to block, got %+v", result.Findings)
+	if result.HasErrors() {
+		t.Fatalf("expected selected missing command path to remain advisory, got %+v", result.Findings)
 	}
-	if len(result.Findings) != 1 || result.Findings[0].Severity != VerificationFindingError || result.Findings[0].SliceID != "001-a" || result.Findings[0].Code != "verification_path_missing" {
+	if len(result.Findings) != 1 || result.Findings[0].Severity != VerificationFindingWarning || result.Findings[0].SliceID != "001-a" || result.Findings[0].Code != "verification_path_missing" {
 		t.Fatalf("unexpected findings: %+v", result.Findings)
 	}
 }
@@ -191,7 +191,7 @@ func TestValidateSelectedSliceVerificationAtRootUsesOverride(t *testing.T) {
 	}
 }
 
-func TestValidateSelectedSliceVerificationBlocksShellHazards(t *testing.T) {
+func TestValidateSelectedSliceVerificationKeepsShellHazardsAdvisory(t *testing.T) {
 	repo := t.TempDir()
 	detail := &PlanDetail{
 		State:  State{Status: StatusPlanned, Repo: Repo{Root: repo}, Plan: PlanState{ID: "plan", PendingSlices: []string{"001-a"}}},
@@ -199,10 +199,10 @@ func TestValidateSelectedSliceVerificationBlocksShellHazards(t *testing.T) {
 	}
 
 	result := ValidateSelectedSliceVerification(detail)
-	if !result.HasErrors() {
-		t.Fatalf("expected selected shell hazard to block, got %+v", result.Findings)
+	if result.HasErrors() {
+		t.Fatalf("expected selected shell hazard to remain advisory, got %+v", result.Findings)
 	}
-	if len(result.Findings) != 1 || result.Findings[0].Severity != VerificationFindingError || result.Findings[0].Code != "verification_shell_hazard" {
+	if len(result.Findings) != 1 || result.Findings[0].Severity != VerificationFindingWarning || result.Findings[0].Code != "verification_shell_hazard" {
 		t.Fatalf("unexpected findings: %+v", result.Findings)
 	}
 }
@@ -218,10 +218,10 @@ func TestValidateSelectedSliceVerificationSuggestsPackageRelativePath(t *testing
 	}
 
 	result := ValidateSelectedSliceVerification(detail)
-	if !result.HasErrors() {
-		t.Fatalf("expected selected package-cwd path mismatch to block, got %+v", result.Findings)
+	if result.HasErrors() {
+		t.Fatalf("expected selected package-cwd path mismatch to remain advisory, got %+v", result.Findings)
 	}
-	if len(result.Findings) != 1 || result.Findings[0].Suggestion != "index.test.ts" {
+	if len(result.Findings) != 1 || result.Findings[0].Severity != VerificationFindingWarning || result.Findings[0].Suggestion != "index.test.ts" {
 		t.Fatalf("expected package-relative suggestion, got %+v", result.Findings)
 	}
 }
@@ -328,6 +328,184 @@ func TestValidateSelectedSliceVerificationBlocksMissingVerificationCommands(t *t
 	}
 	if len(result.Findings) != 1 || result.Findings[0].Severity != VerificationFindingError || result.Findings[0].Code != "slice_verification_missing" {
 		t.Fatalf("unexpected findings: %+v", result.Findings)
+	}
+}
+
+func TestValidateRequiredInputDeclarationsAndKinds(t *testing.T) {
+	repo := t.TempDir()
+	writeFile(t, filepath.Join(repo, "input.txt"), "input")
+	mkdir(t, filepath.Join(repo, "input-dir"))
+
+	tests := []struct {
+		name  string
+		input RequiredInput
+		code  string
+	}{
+		{name: "empty path", input: RequiredInput{Kind: RequiredInputFile, Reason: "needed"}, code: "required_input_path_invalid"},
+		{name: "absolute path", input: RequiredInput{Path: "/tmp/input", Kind: RequiredInputFile, Reason: "needed"}, code: "required_input_path_invalid"},
+		{name: "windows absolute path", input: RequiredInput{Path: `C:\\input.txt`, Kind: RequiredInputFile, Reason: "needed"}, code: "required_input_path_invalid"},
+		{name: "parent traversal", input: RequiredInput{Path: "../input.txt", Kind: RequiredInputFile, Reason: "needed"}, code: "required_input_path_invalid"},
+		{name: "wildcard", input: RequiredInput{Path: "*.txt", Kind: RequiredInputFile, Reason: "needed"}, code: "required_input_path_invalid"},
+		{name: "vague", input: RequiredInput{Path: "input-dir/", Kind: RequiredInputDirectory, Reason: "needed"}, code: "required_input_path_invalid"},
+		{name: "unsafe control character", input: RequiredInput{Path: "input\n.txt", Kind: RequiredInputFile, Reason: "needed"}, code: "required_input_path_invalid"},
+		{name: "malformed kind", input: RequiredInput{Path: "input.txt", Kind: "dir", Reason: "needed"}, code: "required_input_kind_invalid"},
+		{name: "missing reason", input: RequiredInput{Path: "input.txt", Kind: RequiredInputFile}, code: "required_input_reason_missing"},
+		{name: "file declared as directory", input: RequiredInput{Path: "input.txt", Kind: RequiredInputDirectory, Reason: "needed"}, code: "required_input_wrong_kind"},
+		{name: "directory declared as file", input: RequiredInput{Path: "input-dir", Kind: RequiredInputFile, Reason: "needed"}, code: "required_input_wrong_kind"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			detail := &PlanDetail{
+				State: State{Repo: Repo{Root: repo}},
+				Slices: SlicesFile{Slices: []Slice{{
+					ID:             "001-a",
+					RequiredInputs: []RequiredInput{tt.input},
+					Verification:   Verification{Commands: []string{"go test ./internal/plan"}},
+				}}},
+			}
+			result := ValidatePlanVerification(detail)
+			if !result.HasErrors() || !containsFindingCode(result.Findings, tt.code) {
+				t.Fatalf("expected %s error, got %+v", tt.code, result.Findings)
+			}
+		})
+	}
+
+	detail := &PlanDetail{
+		State: State{Repo: Repo{Root: repo}},
+		Slices: SlicesFile{Slices: []Slice{{
+			ID: "001-a",
+			RequiredInputs: []RequiredInput{
+				{Path: "input.txt", Kind: RequiredInputFile, Reason: "needed"},
+				{Path: "input-dir", Kind: RequiredInputDirectory, Reason: "needed"},
+			},
+			Verification: Verification{Commands: []string{"go test ./internal/plan"}},
+		}}},
+	}
+	if result := ValidatePlanVerification(detail); result.HasErrors() || len(result.Findings) != 0 {
+		t.Fatalf("expected valid existing inputs, got %+v", result.Findings)
+	}
+}
+
+func TestValidatePlanRequiredInputAllowsOnlyExactDirectProducer(t *testing.T) {
+	repo := t.TempDir()
+	verification := Verification{Commands: []string{"go test ./internal/plan"}}
+	tests := []struct {
+		name        string
+		execution   Execution
+		consumerDep []string
+		slices      []Slice
+		wantFuture  bool
+	}{
+		{
+			name:        "exact normalized direct dependency",
+			consumerDep: []string{"001-source"},
+			slices:      []Slice{{ID: "001-source", ExpectedFiles: []string{"./generated/file.txt"}, Verification: verification}},
+			wantFuture:  true,
+		},
+		{
+			name:      "serial only",
+			execution: Execution{Mode: "serial"},
+			slices:    []Slice{{ID: "001-source", ExpectedFiles: []string{"generated/file.txt"}, Verification: verification}},
+		},
+		{
+			name:   "unrelated producer",
+			slices: []Slice{{ID: "001-source", ExpectedFiles: []string{"generated/file.txt"}, Verification: verification}},
+		},
+		{
+			name:        "wildcard producer",
+			consumerDep: []string{"001-source"},
+			slices:      []Slice{{ID: "001-source", ExpectedFiles: []string{"generated/*.txt"}, Verification: verification}},
+		},
+		{
+			name:        "prefix producer",
+			consumerDep: []string{"001-source"},
+			slices:      []Slice{{ID: "001-source", ExpectedFiles: []string{"generated"}, Verification: verification}},
+		},
+		{
+			name:        "near match producer",
+			consumerDep: []string{"001-source"},
+			slices:      []Slice{{ID: "001-source", ExpectedFiles: []string{"generated/file.txt.bak"}, Verification: verification}},
+		},
+		{
+			name:        "transitive producer",
+			consumerDep: []string{"002-middle"},
+			slices: []Slice{
+				{ID: "001-source", ExpectedFiles: []string{"generated/file.txt"}, Verification: verification},
+				{ID: "002-middle", DependsOn: []string{"001-source"}, Verification: verification},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			slices := append([]Slice(nil), tt.slices...)
+			slices = append(slices, Slice{
+				ID:             "003-consumer",
+				DependsOn:      tt.consumerDep,
+				RequiredInputs: []RequiredInput{{Path: "generated//file.txt", Kind: RequiredInputFile, Reason: "generated contract"}},
+				Verification:   verification,
+			})
+			detail := &PlanDetail{State: State{Repo: Repo{Root: repo}}, Slices: SlicesFile{Execution: tt.execution, Slices: slices}}
+			result := ValidatePlanVerification(detail)
+			future := findFindingByCode(result.Findings, "required_input_future")
+			missing := findFindingByCode(result.Findings, "required_input_missing")
+			if tt.wantFuture {
+				if result.HasErrors() || future == nil || future.Severity != VerificationFindingWarning || missing != nil {
+					t.Fatalf("expected exact direct producer warning, got %+v", result.Findings)
+				}
+				return
+			}
+			if !result.HasErrors() || missing == nil || missing.Severity != VerificationFindingError || future != nil {
+				t.Fatalf("expected missing input error, got %+v", result.Findings)
+			}
+		})
+	}
+}
+
+func TestValidateSelectedRequiredInputUsesOverrideAndRequiresExistence(t *testing.T) {
+	repo := t.TempDir()
+	workspace := t.TempDir()
+	writeFile(t, filepath.Join(repo, "generated", "input.txt"), "control checkout only")
+	detail := &PlanDetail{
+		State: State{Status: StatusPlanned, Repo: Repo{Root: repo}, Plan: PlanState{
+			ID:              "plan",
+			CompletedSlices: []string{"001-source"},
+			PendingSlices:   []string{"002-consumer"},
+		}},
+		Slices: SlicesFile{Slices: []Slice{
+			{ID: "001-source", Status: StatusCompleted, ExpectedFiles: []string{"generated/input.txt"}},
+			{
+				ID:             "002-consumer",
+				Status:         StatusPending,
+				DependsOn:      []string{"001-source"},
+				RequiredInputs: []RequiredInput{{Path: "generated/input.txt", Kind: RequiredInputFile, Reason: "generated contract"}},
+				Verification:   Verification{Commands: []string{"go test ./internal/plan"}},
+			},
+		}},
+	}
+
+	result := ValidateSelectedSliceVerificationAtRoot(detail, workspace)
+	if !result.HasErrors() || findFindingByCode(result.Findings, "required_input_missing") == nil || containsFindingCode(result.Findings, "required_input_future") {
+		t.Fatalf("expected missing prepared-worktree input to block despite producer promise, got %+v", result.Findings)
+	}
+	writeFile(t, filepath.Join(workspace, "generated", "input.txt"), "prepared input")
+	result = ValidateSelectedSliceVerificationAtRoot(detail, workspace)
+	if result.HasErrors() || containsFindingCode(result.Findings, "required_input_missing") {
+		t.Fatalf("expected prepared-worktree input to satisfy contract, got %+v", result.Findings)
+	}
+}
+
+func TestValidateSelectedSliceVerificationBlocksBlankCommandLists(t *testing.T) {
+	for _, commands := range [][]string{nil, {}, {"", "  ", "\t"}} {
+		detail := &PlanDetail{
+			State:  State{Status: StatusPlanned, Repo: Repo{Root: t.TempDir()}, Plan: PlanState{ID: "plan", PendingSlices: []string{"001-a"}}},
+			Slices: SlicesFile{Slices: []Slice{{ID: "001-a", Status: StatusPending, Verification: Verification{Commands: commands}}}},
+		}
+		result := ValidateSelectedSliceVerification(detail)
+		if !result.HasErrors() || findFindingByCode(result.Findings, "slice_verification_missing") == nil {
+			t.Fatalf("expected blank verification structure to block, commands=%q findings=%+v", commands, result.Findings)
+		}
 	}
 }
 

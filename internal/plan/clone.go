@@ -126,10 +126,20 @@ func cloneSlice(slice Slice) Slice {
 	}
 	clone.Tasks = cloneStringSlice(slice.Tasks)
 	clone.ExpectedFiles = cloneStringSlice(slice.ExpectedFiles)
+	clone.RequiredInputs = cloneRequiredInputs(slice.RequiredInputs)
 	clone.Verification = cloneVerification(slice.Verification)
 	clone.Approval = cloneApproval(slice.Approval)
 	clone.VerificationResults = cloneVerificationRuns(slice.VerificationResults)
 	clone.Extra = cloneMap(slice.Extra)
+	return clone
+}
+
+func cloneRequiredInputs(inputs []RequiredInput) []RequiredInput {
+	if inputs == nil {
+		return nil
+	}
+	clone := make([]RequiredInput, len(inputs))
+	copy(clone, inputs)
 	return clone
 }
 

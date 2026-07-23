@@ -75,6 +75,7 @@ func RenderRunPacket(detail *PlanDetail, options RunPacketOptions) (string, erro
 	writeRunPacketLine(&b, "Context", slice.Context)
 
 	writeRunPacketList(&b, "Tasks", slice.Tasks)
+	writeRequiredInputs(&b, slice.RequiredInputs)
 	writeRunPacketList(&b, "Expected Files", slice.ExpectedFiles)
 	writeDependencyStatus(&b, detail, slice)
 	writeRunPacketList(&b, "Global Invariants", detail.State.GlobalInvariants)
@@ -148,6 +149,17 @@ func writeRunPacketList(b *strings.Builder, title string, values []string) {
 		b.WriteString("- ")
 		b.WriteString(value)
 		b.WriteString("\n")
+	}
+}
+
+func writeRequiredInputs(b *strings.Builder, inputs []RequiredInput) {
+	writeRunPacketSection(b, "Required Inputs")
+	if len(inputs) == 0 {
+		b.WriteString("- none\n")
+		return
+	}
+	for _, input := range inputs {
+		fmt.Fprintf(b, "- %s (%s): %s\n", input.Path, input.Kind, input.Reason)
 	}
 }
 

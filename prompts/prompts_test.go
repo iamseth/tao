@@ -103,6 +103,47 @@ func TestPromptsRequireDeterministicVerification(t *testing.T) {
 	}
 }
 
+func TestSlicePromptDeclaresConcreteRequiredInputs(t *testing.T) {
+	for _, want := range []string{
+		"concrete repository files or directories",
+		"`required_inputs` with:",
+		"a concrete repository-relative path",
+		"exactly `file` or `directory`",
+		"why the slice cannot begin without it",
+	} {
+		if !strings.Contains(SlicePromptTemplate, want) {
+			t.Fatalf("slice prompt missing required-input guidance %q", want)
+		}
+	}
+}
+
+func TestSlicePromptRequiresExactDirectInputProducersAndLegacyOmission(t *testing.T) {
+	for _, want := range []string{
+		"consumer's `depends_on` must name that direct producer slice",
+		"producer's `expected_files` must contain the exact same concrete path",
+		"Omit `required_inputs` entirely",
+		"preserves the legacy plan shape",
+	} {
+		if !strings.Contains(SlicePromptTemplate, want) {
+			t.Fatalf("slice prompt missing producer or omission contract %q", want)
+		}
+	}
+}
+
+func TestSlicePromptKeepsVerificationProvenanceAndSemanticsAdvisory(t *testing.T) {
+	for _, want := range []string{
+		"verification commands from repository-owned sources",
+		"During planning, run a chosen verification command once",
+		"does not depend on outputs that a future slice will create",
+		"semantic analysis is conservative and advisory only",
+		"Do not claim Tao understands unsupported",
+	} {
+		if !strings.Contains(SlicePromptTemplate, want) {
+			t.Fatalf("slice prompt missing verification contract %q", want)
+		}
+	}
+}
+
 func TestRenderNoteSlicePromptUsesPlanDirectoryAndTranscript(t *testing.T) {
 	got, err := Render(PromptNoteSlice, Data{
 		PlanDir:    "/tmp/tao/plans/20260614-note",

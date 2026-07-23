@@ -57,11 +57,24 @@ events.jsonl
 - For large or multi-theme requests, prefer multiple independent plans over one long serial plan. Create a separate `tao init --slug ... --json` plan for each theme that can be reviewed and merged independently, and summarize the plan set in your final response.
 - If you intentionally keep multiple themes in one plan, explain why they share one review/merge boundary in `planning-brief.md`.
 - Include verification commands for every slice; every slice must include at least one deterministic verification command.
+- Declare only concrete repository files or directories that must exist before a slice can begin as `required_inputs`.
 - Include rollback notes where useful.
 - Do not invent requirements.
 - Mark uncertain assumptions clearly.
 - Do not use YAML.
 - Use Markdown for explanation and JSON for executable structure.
+
+## Input readiness
+
+For each slice, identify any repository artifacts that must already exist before implementation can begin. Declare each concrete prerequisite in `required_inputs` with:
+
+- `path`: a concrete repository-relative path with no wildcard, parent traversal, trailing slash, or vague placeholder;
+- `kind`: exactly `file` or `directory`; and
+- `reason`: a concise explanation of why the slice cannot begin without it.
+
+Do not infer prerequisites from verification commands. `required_inputs` is only for filesystem facts that must block work when absent or the wrong kind. Omit `required_inputs` entirely when a slice needs no repository artifact before work begins; this preserves the legacy plan shape rather than emitting an empty field.
+
+When an input will be created by an earlier slice, make the producer contract explicit in both directions: the consumer's `depends_on` must name that direct producer slice, and the producer's `expected_files` must contain the exact same concrete path. Serial order, transitive dependencies, directory prefixes, wildcards, and near matches are not producer contracts. Do not declare a future artifact as an input unless that exact direct dependency contract exists.
 
 ## Verification command selection
 
@@ -76,6 +89,10 @@ Read these files when present and relevant:
 5. Build files, package manifests, task runner files, and existing CI workflow files
 
 Choose verification commands from repository-owned sources before inventing commands. Prefer commands documented in guidance files, build files, package manifests, task runners, or CI configuration. Use the command exactly as documented unless narrowing it is clearly supported by that repository's conventions.
+
+During planning, run a chosen verification command once when it can execute against the current checkout and does not depend on outputs that a future slice will create. Use that run to catch execution-context and command-setup mistakes before persisting the plan. If the command depends on future outputs, keep the producer contract explicit and defer execution rather than substituting another command.
+
+Tao's verification-command semantic analysis is conservative and advisory only. Do not claim Tao understands unsupported shell, build-tool, package-manager, or test-runner semantics, and do not turn analyzer findings into blocking input contracts. Only malformed plan structure and explicit `required_inputs` filesystem facts determine input readiness.
 
 For each slice, use the narrowest documented verification command that validates the touched area. Avoid defaulting to broad commands such as `go test ./...`, `make test`, or package-manager full test scripts unless the change crosses package, module, or application boundaries.
 
@@ -246,7 +263,9 @@ Write executable slices:
 
 Omit `approval` when no approval is required. When approval is required, set `approval.required` to `true`, `approval.approved` to `false`, and describe the exact required approval in `approval.reason`. Do not mark the slice complete or approved during slicing unless the current planning conversation explicitly contains that approval.
 
-`verification.commands` is the executable command list for future agents. `verification.source` documents why those commands were selected.
+`required_inputs` is optional. Omit it, as in the example above, when the slice has no repository prerequisite. When present, each entry has `path`, `kind`, and `reason`; a future input also requires an exact direct producer contract through `depends_on` and that producer's `expected_files`.
+
+`verification.commands` is the executable command list for future agents. `verification.source` documents why those commands were selected. Command semantic findings are advisory and must not be presented as proof that Tao understands the command or as a substitute for explicit input declarations.
 
 ## handoff.md
 

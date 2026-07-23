@@ -1,7 +1,10 @@
 package plan
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	verificationimpl "github.com/iamseth/tao/internal/plan/verification"
@@ -36,7 +39,8 @@ func ValidatePlanVerification(detail *PlanDetail) VerificationValidationResult {
 	analyzer := verificationimpl.NewAnalyzer(detail.State.Repo.Root)
 	allowances := futureFileAllowances(detail, true)
 	for _, slice := range detail.Slices.Slices {
-		result.Findings = append(result.Findings, validateSliceVerificationWithAnalyzer(detail.State.Repo.Root, analyzer, slice, false, allowances[slice.ID])...)
+		result.Findings = append(result.Findings, validateRequiredInputs(detail, slice, detail.State.Repo.Root, false)...)
+		result.Findings = append(result.Findings, validateSliceVerificationWithAnalyzer(detail.State.Repo.Root, analyzer, slice, allowances[slice.ID])...)
 	}
 	result.Findings = append(result.Findings, validatePlanGuardrails(detail)...)
 	return result
@@ -65,7 +69,8 @@ func ValidateSelectedSliceVerificationAtRoot(detail *PlanDetail, repoRoot string
 	}
 	validationRoot := verificationRoot(detail, repoRoot)
 	allowances := futureFileAllowancesAtRoot(detail, false, validationRoot)
-	findings := validateSliceVerification(validationRoot, *lifecycle.NextSlice, true, allowances[lifecycle.NextSlice.ID])
+	findings := validateRequiredInputs(detail, *lifecycle.NextSlice, validationRoot, true)
+	findings = append(findings, validateSliceVerification(validationRoot, *lifecycle.NextSlice, allowances[lifecycle.NextSlice.ID])...)
 	findings = append(findings, validateSelectedSliceGuardrails(detail)...)
 	return VerificationValidationResult{Findings: findings}
 }
@@ -80,28 +85,122 @@ func verificationRoot(detail *PlanDetail, repoRoot string) string {
 	return detail.State.Repo.Root
 }
 
-func validateSliceVerification(repoRoot string, slice Slice, selected bool, allowedFutureFiles futureFileSet) []VerificationFinding {
-	return validateSliceVerificationWithAnalyzer(repoRoot, verificationimpl.NewAnalyzer(repoRoot), slice, selected, allowedFutureFiles)
+func validateSliceVerification(repoRoot string, slice Slice, allowedFutureFiles futureFileSet) []VerificationFinding {
+	return validateSliceVerificationWithAnalyzer(repoRoot, verificationimpl.NewAnalyzer(repoRoot), slice, allowedFutureFiles)
 }
 
-func validateSliceVerificationWithAnalyzer(repoRoot string, analyzer *verificationimpl.Analyzer, slice Slice, selected bool, allowedFutureFiles futureFileSet) []VerificationFinding {
+func validateSliceVerificationWithAnalyzer(repoRoot string, analyzer *verificationimpl.Analyzer, slice Slice, allowedFutureFiles futureFileSet) []VerificationFinding {
 	findings := make([]VerificationFinding, 0)
 	for _, command := range slice.Verification.Commands {
 		analysis := analyzer.Analyze(command)
 		for _, finding := range analysis.Findings {
+			finding.Severity = VerificationFindingWarning
 			finding.SliceID = slice.ID
 			if finding.Code == "verification_path_missing" && allowedFutureFiles.contains(repoRoot, finding.Path) {
-				finding.Severity = VerificationFindingWarning
 				finding.Code = "verification_future_file_missing"
 				finding.Message = "verification command references a future file declared in this plan; keep this warning until the file is created"
-			}
-			if selected && (finding.Code == "verification_path_missing" || finding.Code == "verification_shell_hazard") {
-				finding.Severity = VerificationFindingError
 			}
 			findings = append(findings, finding)
 		}
 	}
 	return findings
+}
+
+func validateRequiredInputs(detail *PlanDetail, slice Slice, repoRoot string, selected bool) []VerificationFinding {
+	findings := make([]VerificationFinding, 0)
+	for _, input := range slice.RequiredInputs {
+		normalized, pathReason := normalizeRequiredInputPath(input.Path)
+		if pathReason != "" {
+			findings = append(findings, requiredInputFinding(slice.ID, "required_input_path_invalid", input.Path, fmt.Sprintf("required input path %q is invalid (%s); use a concrete repository-relative path", input.Path, pathReason)))
+		}
+		if input.Kind != RequiredInputFile && input.Kind != RequiredInputDirectory {
+			findings = append(findings, requiredInputFinding(slice.ID, "required_input_kind_invalid", input.Path, fmt.Sprintf("required input %q has invalid kind %q; use %q or %q", input.Path, input.Kind, RequiredInputFile, RequiredInputDirectory)))
+		}
+		if strings.TrimSpace(input.Reason) == "" {
+			findings = append(findings, requiredInputFinding(slice.ID, "required_input_reason_missing", input.Path, fmt.Sprintf("required input %q is missing a reason", input.Path)))
+		}
+		if pathReason != "" || (input.Kind != RequiredInputFile && input.Kind != RequiredInputDirectory) {
+			continue
+		}
+
+		fullPath := filepath.Join(repoRoot, filepath.FromSlash(normalized))
+		info, err := os.Stat(fullPath)
+		switch {
+		case err == nil && requiredInputKindMatches(info, input.Kind):
+			continue
+		case err == nil:
+			findings = append(findings, requiredInputFinding(slice.ID, "required_input_wrong_kind", input.Path, fmt.Sprintf("required input %q exists but is not a %s", input.Path, input.Kind)))
+		case os.IsNotExist(err):
+			finding := requiredInputFinding(slice.ID, "required_input_missing", input.Path, fmt.Sprintf("required %s input %q does not exist", input.Kind, input.Path))
+			if !selected && directDependencyProduces(detail, slice, normalized) {
+				finding.Severity = VerificationFindingWarning
+				finding.Code = "required_input_future"
+				finding.Message = fmt.Sprintf("required input %q is missing but is declared as an exact expected file by a direct dependency", input.Path)
+			}
+			findings = append(findings, finding)
+		default:
+			findings = append(findings, requiredInputFinding(slice.ID, "required_input_unavailable", input.Path, fmt.Sprintf("required input %q could not be inspected: %v", input.Path, err)))
+		}
+	}
+	return findings
+}
+
+func normalizeRequiredInputPath(value string) (string, string) {
+	trimmed := strings.TrimSpace(strings.ReplaceAll(value, "\\", "/"))
+	switch {
+	case trimmed == "":
+		return "", "empty path"
+	case strings.ContainsFunc(trimmed, func(r rune) bool { return r < ' ' || r == '\x7f' }):
+		return "", "unsafe control character"
+	case strings.HasPrefix(trimmed, "/") || expectedFileHasWindowsDrivePrefix(trimmed):
+		return "", "absolute path"
+	case slices.Contains(strings.Split(trimmed, "/"), ".."):
+		return "", "parent traversal"
+	case strings.ContainsAny(trimmed, "*?[]{}"):
+		return "", "wildcard path"
+	case vagueExpectedFile(trimmed):
+		return "", "vague path"
+	}
+	return filepath.ToSlash(filepath.Clean(filepath.FromSlash(trimmed))), ""
+}
+
+func requiredInputKindMatches(info os.FileInfo, kind string) bool {
+	if kind == RequiredInputDirectory {
+		return info.IsDir()
+	}
+	return info.Mode().IsRegular()
+}
+
+func directDependencyProduces(detail *PlanDetail, consumer Slice, normalizedInput string) bool {
+	if detail == nil {
+		return false
+	}
+	dependencies := make(map[string]struct{}, len(consumer.DependsOn))
+	for _, dependency := range consumer.DependsOn {
+		dependencies[dependency] = struct{}{}
+	}
+	for _, candidate := range detail.Slices.Slices {
+		if _, ok := dependencies[candidate.ID]; !ok {
+			continue
+		}
+		for _, expectedFile := range candidate.ExpectedFiles {
+			normalized, reason := normalizeRequiredInputPath(expectedFile)
+			if reason == "" && normalized == normalizedInput {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func requiredInputFinding(sliceID string, code string, path string, message string) VerificationFinding {
+	return VerificationFinding{
+		Severity: VerificationFindingError,
+		SliceID:  sliceID,
+		Code:     code,
+		Message:  message,
+		Path:     path,
+	}
 }
 
 type futureFileSet map[string]struct{}

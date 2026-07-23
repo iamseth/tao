@@ -157,11 +157,28 @@ Each slice should include:
 - `depends_on` for serial dependencies.
 - Optional `tags`.
 - `expected_files` to describe the intended scope for planning and commit warnings.
+- Optional `required_inputs` for concrete repository artifacts that must exist before implementation begins; legacy slices and slices with no prerequisites omit it.
 - Optional `execution_root`, recorded by `tao run` at slice start as the absolute checkout or worktree root used for that run; legacy slices may omit it.
 - Optional `execution_start`, recording the immutable prepared boundary for an automatic slice. `branch` and `head` identify the original Git boundary; `commit_policy` and `workspace_strategy` preserve the effective execution choices (`slice` plus `worktree` for a resumable isolated run). Legacy records may omit the latter fields, which Tao infers only from durable plan/workspace metadata.
 - Optional `commit_intent` written before Git mutation. It contains the completion-input `hash`, `policy`, optional `starting_branch`, `starting_head`, deterministic `message`, and `created_at`.
 - Optional `completion` with `outcome` and optional `commit_sha`. Outcomes are `committed`, `no_changes`, and `manual_uncommitted`.
 - `verification.commands`: every slice must include at least one deterministic verification command; select commands from repository-owned guidance where possible. For docs/config/asset-only slices where no build/test command applies, use a deterministic fallback such as `grep -q`, `test -f`, or `git diff --stat`.
+
+### Required inputs
+
+`required_inputs` is an optional array of filesystem prerequisites. Each entry has:
+
+```json
+{
+  "path": "generated/schema.json",
+  "kind": "file",
+  "reason": "The generator output defines the schema consumed by this slice."
+}
+```
+
+`path` must be a concrete repository-relative path: absolute paths, parent traversal, wildcards, trailing-slash placeholders, and vague paths are invalid. `kind` is exactly `file` or `directory`, and `reason` must be non-blank. Omit the field when the slice needs no repository artifact before work begins; plans that predate this field remain readable and runnable without migration.
+
+During whole-plan validation, a missing input is allowed as a warning only when a slice named directly in the consumer's `depends_on` declares the exact normalized path in its `expected_files`. Serial order, transitive dependencies, prefixes, wildcards, and near matches do not establish a producer contract. At selected-slice preflight, the artifact must actually exist with the declared kind in the prepared execution worktree. A producer declaration does not waive that runtime check.
 
 These commit fields are optional for backward compatibility: plans completed
 before transactional slice commits load without them. Under policy `slice`, a
@@ -226,7 +243,9 @@ Plan loading should validate consistency without making list views brittle:
 - `plan.pending_slices` should contain each pending ID at most once and should not reference skipped, completed, blocked, or in-progress slices.
 - `plan.completed_slices` should reference completed slices only; skipped slices stay out of both pending and completed queues.
 
-Verification command validation is additive to artifact validation. Whole-plan validation reports findings for every slice; run preflight validates only the selected runnable slice. Clearly invalid selected-slice commands, such as nonexistent command cwd or explicit nonexistent test files, may block `tao run`; warning-only findings remain non-fatal.
+Input-readiness errors are limited to malformed plan structure and explicit `required_inputs` facts. Whole-plan validation checks every declaration and permits only the exact direct-producer warning described above. Run preflight checks only the selected runnable slice against its prepared execution worktree; missing, unavailable, or wrong-kind declared inputs block before lifecycle mutation or agent handoff.
+
+Verification-command semantic analysis is additive and advisory. A missing or entirely blank `verification.commands` list is malformed slice structure and blocks, but findings about command working directories, arguments, package context, or referenced files remain warnings. Tao does not execute verification commands during readiness and does not treat supported analyzer patterns as proof that it understands arbitrary command semantics.
 
 Queued runs must pass repository health checks against the plan's recorded `state.repo.root`. Missing roots, non-Git roots, and metadata errors block execution while remaining visible in CLI repository views.
 

@@ -56,6 +56,43 @@ func TestEventFailureModeFieldsJSONLRoundTripAndOmitZero(t *testing.T) {
 	}
 }
 
+func TestSliceRequiredInputsJSONAndLegacyCompatibility(t *testing.T) {
+	slice := Slice{
+		ID: "001-a",
+		RequiredInputs: []RequiredInput{{
+			Path:   "internal/plan",
+			Kind:   RequiredInputDirectory,
+			Reason: "validation package",
+		}},
+	}
+	data, err := json.Marshal(slice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got Slice
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.RequiredInputs) != 1 || got.RequiredInputs[0] != slice.RequiredInputs[0] {
+		t.Fatalf("required inputs after round trip = %+v", got.RequiredInputs)
+	}
+
+	var legacy Slice
+	if err := json.Unmarshal([]byte(`{"id":"legacy","expected_files":[],"verification":{"commands":["go test ./internal/plan"],"manual_checks":[]}}`), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if legacy.RequiredInputs != nil {
+		t.Fatalf("legacy required inputs = %+v, want nil", legacy.RequiredInputs)
+	}
+	legacyData, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(legacyData), "required_inputs") {
+		t.Fatalf("legacy JSON unexpectedly added required_inputs: %s", legacyData)
+	}
+}
+
 func TestPlanReviewFindingsJSON(t *testing.T) {
 	review := PlanReview{
 		Verdict:       ReviewVerdictChangesRequested,

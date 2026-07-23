@@ -26,6 +26,7 @@ func TestClonePlanDetailDeepCopiesMutableFields(t *testing.T) {
 			DependsOn:           []string{"000-z"},
 			Tasks:               []string{"task"},
 			ExpectedFiles:       []string{"file.go"},
+			RequiredInputs:      []RequiredInput{{Path: "go.mod", Kind: RequiredInputFile, Reason: "module metadata"}},
 			Timing:              SliceTiming{CreatedAt: now, StartedAt: &now, CompletedAt: &now, UpdatedAt: now, LastActivityAt: &now, DurationSeconds: &duration},
 			Verification:        Verification{Commands: []string{"go test ./..."}, Steps: []VerificationStep{{Command: "go test ./...", Reason: "step"}}, ManualChecks: []string{"manual"}},
 			Approval:            &Approval{Required: true, ApprovedBy: &approvedBy, ApprovedAt: &approvedAt},
@@ -42,6 +43,7 @@ func TestClonePlanDetailDeepCopiesMutableFields(t *testing.T) {
 	clone.State.Workspace.Path = "changed"
 	*clone.State.Workspace.Timing.CreatedAt = now.Add(time.Hour)
 	clone.Slices.Slices[0].Tags[0] = "changed"
+	clone.Slices.Slices[0].RequiredInputs[0].Path = "changed"
 	clone.Slices.Slices[0].Verification.Commands[0] = "changed"
 	clone.Slices.Slices[0].Verification.Steps[0].Reason = "changed"
 	clone.Slices.Slices[0].VerificationResults[0].Result = "failed"
@@ -58,7 +60,7 @@ func TestClonePlanDetailDeepCopiesMutableFields(t *testing.T) {
 		t.Fatalf("state was not deeply cloned: %#v", detail.State)
 	}
 	slice := detail.Slices.Slices[0]
-	if slice.Tags[0] != "tag" || slice.Verification.Commands[0] != "go test ./..." || slice.Verification.Steps[0].Reason != "step" || slice.VerificationResults[0].Result != "passed" || slice.Extra["key"] != "value" || *slice.Approval.ApprovedBy != "alice" {
+	if slice.Tags[0] != "tag" || slice.RequiredInputs[0].Path != "go.mod" || slice.Verification.Commands[0] != "go test ./..." || slice.Verification.Steps[0].Reason != "step" || slice.VerificationResults[0].Result != "passed" || slice.Extra["key"] != "value" || *slice.Approval.ApprovedBy != "alice" {
 		t.Fatalf("slice was not deeply cloned: %#v", slice)
 	}
 	if detail.State.Plan.Review.Summary != "ready" {
@@ -67,7 +69,7 @@ func TestClonePlanDetailDeepCopiesMutableFields(t *testing.T) {
 	if detail.Events[0].Metrics.SessionID != "session" || detail.Events[0].PullRequest.URL != "https://example.com/pr/1" || detail.Events[0].Review.Summary != "ready" || *detail.Events[0].DurationSeconds != 42 || detail.Warnings[0] != "warning" {
 		t.Fatalf("events/warnings were not deeply cloned: events=%#v warnings=%#v", detail.Events, detail.Warnings)
 	}
-	if clonePlanDetail(nil) != nil || cloneWorkspace(nil) != nil || clonePullRequest(nil) != nil || clonePlanReview(nil) != nil || cloneVerificationSteps(nil) != nil || cloneVerificationRuns(nil) != nil || cloneMap(nil) != nil {
+	if clonePlanDetail(nil) != nil || cloneWorkspace(nil) != nil || clonePullRequest(nil) != nil || clonePlanReview(nil) != nil || cloneRequiredInputs(nil) != nil || cloneVerificationSteps(nil) != nil || cloneVerificationRuns(nil) != nil || cloneMap(nil) != nil {
 		t.Fatal("nil clone helpers should preserve nil")
 	}
 }

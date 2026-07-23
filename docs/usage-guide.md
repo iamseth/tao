@@ -176,16 +176,22 @@ context — it slices from the conversation, not from a file you pass it.
 - Every slice carries **verification commands** chosen from *repository-owned*
   sources (`AGENTS.md`, `CLAUDE.md`, `README.md`, build files, task runners, CI),
   not invented. It prefers the **narrowest** documented command that covers the
-  touched area over broad `go test ./...` / `make test` sweeps.
+  touched area over broad `go test ./...` / `make test` sweeps. During planning,
+  run a chosen command when it does not depend on future slice outputs so setup
+  mistakes are caught before the plan is persisted.
+- Concrete repository files or directories that must exist before work begins
+  are declared as **required inputs**. Do not derive them from command text; most
+  slices need no input declaration. See [Required inputs](plan-format.md#required-inputs)
+  for the artifact contract.
 - Work needing sign-off is marked with an explicit **`approval` gate**, not
   smuggled in as an ordinary slice.
 
 **After slicing:** it recommends `tao validate <plan-id>`. Do that next.
 
-> **Tip:** if `tao validate` flags a verification command, the usual cause is an
-> execution-context mismatch — e.g. a `pnpm --filter <pkg>` command paired with a
-> repo-root-relative test path. Prefer package-relative paths. See
-> [Validation warnings](#validation-warnings) below.
+> **Tip:** if `tao validate` warns about a verification command, the usual cause
+> is an execution-context mismatch — e.g. a `pnpm --filter <pkg>` command paired
+> with a repo-root-relative test path. Prefer package-relative paths. These
+> semantic findings are advisory; see [Validation warnings](#validation-warnings).
 
 ### `/run` and `tao run` — execute slices
 
@@ -651,11 +657,17 @@ manage worktree-backed workspaces manually.
 
 Before a worktree-backed run starts, Tao may rebase a stale clean worktree onto
 the current local default branch before invoking the agent, then prepares
-dependencies in the workspace root when a supported lockfile is present. It does
-not fetch or pull remotes for this pre-run rebase. Dirty worktrees and rebase
-conflicts fail early, before the agent runs, so you can clean, stash, or resolve
-manually and retry. `--execution-mode current` runs in place and never performs
-this automatic rebase.
+dependencies in the workspace root when a supported lockfile is present. After
+preparation, Tao checks the selected slice's explicitly declared required inputs
+in that worktree—not in the control checkout—before changing lifecycle state or
+invoking the agent. A missing input or one with the wrong filesystem kind blocks
+the run, including when an earlier slice promised to produce it. Slices without
+declared inputs keep the legacy behavior.
+
+Tao does not fetch or pull remotes for this pre-run rebase. Dirty worktrees and
+rebase conflicts fail early, before the agent runs, so you can clean, stash, or
+resolve manually and retry. `--execution-mode current` runs in place and never
+performs this automatic rebase.
 
 Dependency preparation detects `package-lock.json`/`npm-shrinkwrap.json`,
 `pnpm-lock.yaml`, `yarn.lock`, and `bun.lock`/`bun.lockb`; installed dependency
@@ -686,11 +698,20 @@ status confirms each automatic slice transaction settled without leftovers.
 
 ### Validation warnings
 
-Verification analysis is conservative. It understands common command shapes such
-as `cd DIR && ...`, `pnpm --dir DIR ...`, `pnpm --filter PACKAGE ...`, direct
-`go test`, and direct Vitest or Jest file arguments.
+Keep two readiness signals separate:
 
-For package-cwd runners, prefer package-relative paths:
+- **Explicit input facts can block.** Tao checks only required files and
+  directories declared by the plan. Whole-plan validation can recognize an
+  exact direct producer promise; the selected run still requires the artifact
+  to exist in the prepared execution worktree. Malformed slice structure, such
+  as a missing or entirely blank verification-command list, also blocks.
+- **Command semantics are advisory.** Tao does not execute commands during
+  readiness and cannot prove arbitrary shell, build-tool, package-manager, or
+  test-runner commands valid or invalid. Its conservative analyzer recognizes a
+  few common shapes to give planning feedback, but every semantic finding is a
+  warning rather than an execution gate.
+
+For example, package-cwd runners should use package-relative paths:
 
 ```sh
 pnpm --filter web exec vitest src/app.test.ts
@@ -703,9 +724,9 @@ pnpm --filter web exec vitest apps/web/src/app.test.ts
 ```
 
 Whole-plan validation reports findings for every slice; `tao run` preflights only
-the selected runnable slice. Tao also surfaces informational agent budget
-warnings in CLI views. These are review signals only; they do not change plan
-status or block runs.
+the selected runnable slice. Agent budget and command-analysis warnings are
+review signals only: they do not change plan status or block runs. See the
+[plan-format contract](plan-format.md#validation) for schema-level details.
 
 ### Data and privacy
 

@@ -23,6 +23,7 @@ func TestRunPacketIncludesSelectedSliceContext(t *testing.T) {
 		"- ID: 002-build",
 		"- Approval: required, approved: approval gate",
 		"- Goal: Build the formatter",
+		"## Required Inputs\n- go.mod (file): module definition",
 		"- internal/plan/run_packet.go",
 		"- Source: focused package tests",
 		"- go test ./internal/plan -run TestRunPacket",
@@ -56,6 +57,19 @@ func TestRunPacketRendersWorkingRootWhenProvided(t *testing.T) {
 	}
 	if strings.Contains(packet, "- Repo Root: /repo/root") {
 		t.Fatalf("expected working-root packet to replace the generic repo root label:\n%s", packet)
+	}
+}
+
+func TestRunPacketShowsNoRequiredInputsForLegacySlices(t *testing.T) {
+	detail := runPacketDetail()
+	detail.Slices.Slices[1].RequiredInputs = nil
+
+	packet, err := RenderRunPacket(detail, RunPacketOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(packet, "## Required Inputs\n- none") {
+		t.Fatalf("expected legacy slice packet to show no required inputs:\n%s", packet)
 	}
 }
 
@@ -181,13 +195,16 @@ func runPacketDetail() *PlanDetail {
 		Slices: SlicesFile{Slices: []Slice{
 			{ID: "001-base", Title: "Base Packet", Status: StatusCompleted, Notes: "Base rendering done.\nExtra details."},
 			{
-				ID:            "002-build",
-				Title:         "Build Packet",
-				Status:        StatusInProgress,
-				DependsOn:     []string{"001-base"},
-				Goal:          "Build the formatter",
-				Context:       "Avoid full artifact reads.",
-				Tasks:         []string{"Define packet", "Render Markdown"},
+				ID:        "002-build",
+				Title:     "Build Packet",
+				Status:    StatusInProgress,
+				DependsOn: []string{"001-base"},
+				Goal:      "Build the formatter",
+				Context:   "Avoid full artifact reads.",
+				Tasks:     []string{"Define packet", "Render Markdown"},
+				RequiredInputs: []RequiredInput{{
+					Path: "go.mod", Kind: RequiredInputFile, Reason: "module definition",
+				}},
 				ExpectedFiles: []string{"internal/plan/run_packet.go"},
 				Verification: Verification{
 					Commands:     []string{"go test ./internal/plan -run TestRunPacket"},

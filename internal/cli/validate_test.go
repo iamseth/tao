@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -89,15 +88,16 @@ func TestValidatePrintsGuardrailWarningsWithoutFailing(t *testing.T) {
 	}
 }
 
-func TestValidateReturnsErrorForVerificationErrors(t *testing.T) {
+func TestValidateReturnsErrorForMissingRequiredInput(t *testing.T) {
 	var out bytes.Buffer
-	detail := validatePlanDetail(filepath.Join(t.TempDir(), "missing"), []string{"go test ./..."}, nil)
+	detail := validatePlanDetail(t.TempDir(), []string{"go test ."}, nil)
+	detail.Slices.Slices[0].RequiredInputs = []plan.RequiredInput{{Path: "missing.txt", Kind: plan.RequiredInputFile, Reason: "test fixture"}}
 	err := App{Out: &out, Err: &out}.validate(context.Background(), fakeRepository{details: map[string]*plan.PlanDetail{"example": detail}}, []string{"example"})
 	if !errors.Is(err, errPlanValidationFailed) {
 		t.Fatalf("expected validation failure, got %v", err)
 	}
 	text := out.String()
-	if !strings.Contains(text, "error 001-a") || !strings.Contains(text, "working directory does not exist") {
+	if !strings.Contains(text, "error 001-a") || !strings.Contains(text, "does not exist") {
 		t.Fatalf("expected error finding in output:\n%s", text)
 	}
 }

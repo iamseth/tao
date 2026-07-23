@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -128,15 +127,14 @@ func (r SelectedSliceRunner) Run(ctx context.Context, detail *plan.PlanDetail, d
 	}
 	before := plan.SnapshotProgress(detail)
 	logPath := plan.LogPath(detail.Dir)
-	validation, err := r.validateSelectedSlice(detail, slice.ID, validationExecutionRoot(r.execution.ExecutionRoot))
-	if err != nil {
-		return nil, err
-	}
 	executionRoot, err := r.executionRoot(ctx, detail)
 	if err != nil {
 		return nil, err
 	}
-	executionRoot = absoluteExecutionRoot(executionRoot)
+	validation, err := r.validateSelectedSlice(detail, slice.ID, executionRoot)
+	if err != nil {
+		return nil, err
+	}
 
 	resuming := false
 	switch action.EffectiveDisposition {
@@ -308,7 +306,7 @@ func (r SelectedSliceRunner) preflightTransportResume(ctx context.Context, detai
 	if action.FixedRoot != executionRoot {
 		return plan.VerificationValidationResult{}, *action, fmt.Errorf("slice %s recovery root changed from %q to %q before transport retry", sliceID, executionRoot, action.FixedRoot)
 	}
-	validation, err := r.validateSelectedSlice(detail, sliceID, validationExecutionRoot(executionRoot))
+	validation, err := r.validateSelectedSlice(detail, sliceID, executionRoot)
 	if err != nil {
 		return validation, *action, err
 	}
@@ -427,7 +425,14 @@ func (r SelectedSliceRunner) executionRoot(ctx context.Context, detail *plan.Pla
 	if resolver == nil {
 		resolver = executionRootResolver(r.execution)
 	}
-	return resolver.ResolveExecutionRoot(ctx, detail)
+	root, err := resolver.ResolveExecutionRoot(ctx, detail)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(root) == "" {
+		return "", fmt.Errorf("resolve selected slice execution root: empty path")
+	}
+	return absoluteExecutionRoot(root), nil
 }
 
 func (r SelectedSliceRunner) runExecutor(ctx context.Context, run SliceRun) error {
@@ -458,17 +463,6 @@ func (r SelectedSliceRunner) validateSelectedSlice(detail *plan.PlanDetail, slic
 		return validation, fmt.Errorf("slice %s failed verification preflight", sliceID)
 	}
 	return validation, nil
-}
-
-func validationExecutionRoot(root string) string {
-	if root == "" {
-		return ""
-	}
-	info, err := os.Stat(root)
-	if err != nil || !info.IsDir() {
-		return ""
-	}
-	return root
 }
 
 func (r SelectedSliceRunner) recordRunContext(detail *plan.PlanDetail, sliceID string, runPacket string, validation plan.VerificationValidationResult) error {

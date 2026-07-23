@@ -201,8 +201,8 @@ func validateSliceGuardrails(slice Slice, selected bool) []VerificationFinding {
 			findings = append(findings, guardrailFinding(slice.ID, "slice_expected_file_vague", fmt.Sprintf("slice expected file %q is broad or vague; prefer concrete files before implementation", path)))
 		}
 	}
-	if len(slice.Verification.Commands) == 0 {
-		finding := guardrailFinding(slice.ID, "slice_verification_missing", "slice has no verification commands; add the narrowest documented command before implementation")
+	if !hasConcreteVerificationCommand(slice.Verification.Commands) {
+		finding := guardrailFinding(slice.ID, "slice_verification_missing", "slice has no non-blank verification commands; add the narrowest documented command before implementation")
 		if selected {
 			finding.Severity = VerificationFindingError
 		}
@@ -220,6 +220,15 @@ func validateSliceGuardrails(slice Slice, selected bool) []VerificationFinding {
 		}
 	}
 	return findings
+}
+
+func hasConcreteVerificationCommand(commands []string) bool {
+	for _, command := range commands {
+		if strings.TrimSpace(command) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func guardrailFinding(sliceID string, code string, message string) VerificationFinding {
