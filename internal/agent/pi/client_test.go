@@ -248,6 +248,10 @@ func TestClientAgentErrorIsReturnedAndLogged(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "WebSocket closed 1006") || !strings.Contains(err.Error(), "provider_transport_failure") {
 		t.Fatalf("expected provider transport error, got %v", err)
 	}
+	var marker interface{ RetryableTransportFailure() }
+	if !errors.As(err, &marker) {
+		t.Fatal("expected structured provider transport error to be marked retryable")
+	}
 	if err := <-serverErr; err != nil {
 		t.Fatal(err)
 	}
@@ -259,6 +263,102 @@ func TestClientAgentErrorIsReturnedAndLogged(t *testing.T) {
 	}
 	if !strings.Contains(log.String(), "agent session ended with an error; stopping the RPC process") {
 		t.Fatalf("expected cleanup progress in log, got %q", log.String())
+	}
+}
+
+func TestAgentMapErrorClassifiesOnlyStructuredProviderTransportFailures(t *testing.T) {
+	tests := []struct {
+		name        string
+		values      map[string]any
+		retryable   bool
+		wantMessage string
+	}{
+		{
+			name: "structured transport failure",
+			values: map[string]any{
+				"stopReason":   "error",
+				"errorMessage": "WebSocket closed 1006 Connection ended",
+				"diagnostics": []any{map[string]any{
+					"type":  "provider_transport_failure",
+					"error": map[string]any{"message": "WebSocket closed 1006 Connection ended"},
+				}},
+			},
+			retryable:   true,
+			wantMessage: "pi agent error: WebSocket closed 1006 Connection ended (provider_transport_failure: WebSocket closed 1006 Connection ended)",
+		},
+		{
+			name: "same websocket text without diagnostic",
+			values: map[string]any{
+				"stopReason":   "error",
+				"errorMessage": "WebSocket closed 1006 Connection ended",
+			},
+			wantMessage: "pi agent error: WebSocket closed 1006 Connection ended",
+		},
+		{
+			name: "general diagnostic",
+			values: map[string]any{
+				"stopReason": "error",
+				"diagnostics": []any{map[string]any{
+					"type":    "provider_error",
+					"message": "provider unavailable",
+				}},
+			},
+			wantMessage: "pi agent error: provider_error: provider unavailable",
+		},
+		{
+			name: "authentication diagnostic",
+			values: map[string]any{
+				"stopReason": "error",
+				"diagnostics": []any{map[string]any{
+					"type":    "authentication_failure",
+					"message": "invalid API key",
+				}},
+			},
+			wantMessage: "pi agent error: authentication_failure: invalid API key",
+		},
+		{
+			name: "transport label only in diagnostic name",
+			values: map[string]any{
+				"stopReason": "error",
+				"diagnostics": []any{map[string]any{
+					"name":    "provider_transport_failure",
+					"message": "WebSocket closed 1006 Connection ended",
+				}},
+			},
+			wantMessage: "pi agent error: provider_transport_failure: WebSocket closed 1006 Connection ended",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := agentMapError(test.values, "message")
+			if err == nil {
+				t.Fatal("expected agent error")
+			}
+			var marker interface{ RetryableTransportFailure() }
+			if got := errors.As(err, &marker); got != test.retryable {
+				t.Fatalf("retryable = %t, want %t", got, test.retryable)
+			}
+			if err.Error() != test.wantMessage {
+				t.Fatalf("error = %q, want %q", err.Error(), test.wantMessage)
+			}
+		})
+	}
+}
+
+func TestRetryableTransportErrorPreservesErrorChain(t *testing.T) {
+	original := errors.New("connection ended")
+	err := fmt.Errorf("outer: %w", retryableTransportError{err: original})
+
+	if !errors.Is(err, original) {
+		t.Fatal("expected errors.Is to reach original error")
+	}
+	var marker interface{ RetryableTransportFailure() }
+	if !errors.As(err, &marker) {
+		t.Fatal("expected errors.As to find transport marker")
+	}
+	if err.Error() != "outer: connection ended" {
+		t.Fatalf("error text = %q", err.Error())
 	}
 }
 

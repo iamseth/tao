@@ -97,6 +97,9 @@ func (s Service) resolveServiceDependencies(execution *runExecution) {
 	if dependencies.WorkspacePreparer == nil {
 		dependencies.WorkspacePreparer = prepareExecutionWorkspace
 	}
+	if dependencies.TransportRetryDelay == nil {
+		dependencies.TransportRetryDelay = waitForTransportRetry
+	}
 	// Service-backed collaborators.
 	if dependencies.EventAppender == nil {
 		dependencies.EventAppender = s.repo
@@ -162,6 +165,9 @@ func interruptedSliceDiagnosticFacts(facts InterruptedSliceFacts) string {
 
 func resolveExecutorDefaults(execution *runExecution) {
 	dependencies := &execution.Dependencies
+	if dependencies.TransportRetryDelay == nil {
+		dependencies.TransportRetryDelay = waitForTransportRetry
+	}
 	if dependencies.AgentFactory == nil {
 		dependencies.AgentFactory = defaultAgentCapabilitiesFactory
 	}
@@ -226,6 +232,17 @@ func sortedPathSet(paths map[string]bool) []string {
 	}
 	sort.Strings(result)
 	return result
+}
+
+func waitForTransportRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func now(options clockConfig) time.Time {

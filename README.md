@@ -200,6 +200,22 @@ when the worktree is dirty or the rebase conflicts.
 `tao run --continue` resumes a blocked plan after you've cleared the blocker; it
 does not bypass approval gates, dependencies, or verification preflight.
 
+Implementation-slice handoffs get at most two automatic transport retries per
+`tao run` invocation, after fixed context-cancellable waits of 1 second and 2
+seconds. Currently only Pi's structured `provider_transport_failure` diagnostic
+qualifies. Before each retry Tao reloads durable plan state, reruns selected-slice
+preflight, and requires its existing execution-boundary classifier to authorize
+an isolated pre-commit-intent resume; every handoff starts a fresh `pi --mode
+rpc` process with the ordinary resume prompt. Durable completion discovered
+after an error is accepted only through normal progress and completion-boundary
+validation, without another handoff. The budget resets on an explicit later run;
+there is no retry flag or environment setting.
+
+Planning, review, pull-request, and merge agent sessions are not retried. Neither
+are session timeouts, authentication failures, generic or text-only errors, or
+manual, unsafe, and post-commit-intent slice states. Metrics, provider errors,
+and events are audit evidence only and never authorize recovery.
+
 After a full plan run completes, Tao requires a clean automatic-policy worktree
 and runs detected repository-wide verification before starting a fresh review
 (`TAO_REVIEW=true`). It writes both verification metadata and the review result
@@ -367,7 +383,11 @@ if that optional session fails. Use the host's squash action to merge the PR,
 then `tao merge --record-only --force <plan>` to record and clean up; Tao does not
 merge the PR itself. Run-path agent sessions have a 20-minute
 wall-clock timeout by default; set `TAO_SESSION_TIMEOUT` to another Go duration
-such as `45m`, or `0` to disable the timeout. `TAO_REVIEW` defaults
+such as `45m`, or `0` to disable the timeout. The timeout applies independently
+to each fresh retry session, so the fixed three-session maximum can raise one
+implementation-slice handoff's worst case to roughly three times the configured
+timeout plus 3 seconds of retry delay (about 60 minutes 3 seconds at the
+default), before other orchestration work. `TAO_REVIEW` defaults
 to true; set it to false to skip automatic post-completion reviews, or use
 `tao run --no-review` for a single run. Direct runs default automatic rework on;
 `TAO_AUTO_REWORK=false` or `--auto-rework=false` disables it. `tao queue start`

@@ -131,6 +131,235 @@ func TestPiExecutorAppendsAgentMetricsEvent(t *testing.T) {
 	}
 }
 
+func TestServiceExecuteRecoversStructuredPiTransportFailureThroughFreshRPCProcess(t *testing.T) {
+	root := t.TempDir()
+	detail := interruptedServiceRunDetail(t, root)
+	persistRunArtifacts(t, detail.Dir, detail)
+	completed := cloneRunRestartDetail(t, detail)
+	completed.State.Status = plan.StatusCompleted
+	completed.State.Plan.CurrentSlice = nil
+	completed.State.Plan.PendingSlices = nil
+	completed.State.Plan.CompletedSlices = []string{"001-a"}
+	completed.Slices.Slices[0].Status = plan.StatusCompleted
+	completed.Slices.Slices[0].Completion = &plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionCommitted, CommitSHA: "base"}
+
+	var processes []*fakePiProcess
+	starter := func(ctx context.Context, cwd string, name string, args []string) (Process, error) {
+		if name != "pi" || strings.Join(args, " ") != "--mode rpc" || cwd != root {
+			t.Fatalf("unexpected pi process start: cwd=%q command=%s %#v", cwd, name, args)
+		}
+		proc := newFakePiProcess(t)
+		processes = append(processes, proc)
+		attempt := len(processes)
+		go func() {
+			defer proc.finish()
+			if _, err := proc.readCommand(); err != nil {
+				return
+			}
+			if attempt == 1 {
+				proc.writeEvent(`{"type":"message","message":{"role":"assistant","stopReason":"error","errorMessage":"WebSocket closed 1006 Connection ended","diagnostics":[{"type":"provider_transport_failure","error":{"message":"WebSocket closed 1006 Connection ended"}}]}}`)
+				return
+			}
+			serveSuccessfulPiSession(proc, "session-2")
+		}()
+		return proc, nil
+	}
+
+	var events []plan.Event
+	fileRepo := plan.NewFileRepository(filepath.Dir(detail.Dir))
+	appender := eventAppenderFunc(func(planDir string, event plan.Event) error {
+		events = append(events, event)
+		return fileRepo.AppendEvent(planDir, event)
+	})
+	var delays []time.Duration
+	service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail, detail, completed}}, io.Discard, Options{RunDependencies: RunDependencies{
+		CommandRunner: piTransportGitRunner(t, detail, root, func() string {
+			if len(processes) < 2 {
+				return " M partial.go\n"
+			}
+			return ""
+		}),
+		ProcessStarter: starter,
+		TransportRetryDelay: func(_ context.Context, delay time.Duration) error {
+			delays = append(delays, delay)
+			return nil
+		},
+		EventAppender: appender,
+		LogAppender:   fileRepo,
+	}})
+
+	if err := service.Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{Agent: AgentPi, ExecutionMode: ExecutionModeIsolated, CommitPolicy: CommitPolicySlice, MaxSlices: 1}}); err != nil {
+		t.Fatalf("recover structured Pi transport failure: %v", err)
+	}
+	if len(processes) != 2 || processes[0] == processes[1] {
+		t.Fatalf("Pi process starts = %d, want two fresh RPC processes", len(processes))
+	}
+	if !processes[0].killed || !processes[0].waited {
+		t.Fatalf("failed Pi process cleanup: killed=%t waited=%t", processes[0].killed, processes[0].waited)
+	}
+	if len(delays) != 1 || delays[0] != time.Second {
+		t.Fatalf("retry delays = %v, want [1s]", delays)
+	}
+
+	failedMetrics := 0
+	completedMetrics := 0
+	started := 0
+	for _, event := range append(detail.Events, events...) {
+		switch {
+		case event.Type == plan.EventTypeSliceStarted:
+			started++
+		case event.Type == plan.EventTypeAgentMetrics && event.Metrics != nil && event.Metrics.Status == "failed":
+			failedMetrics++
+		case event.Type == plan.EventTypeAgentMetrics && event.Metrics != nil && event.Metrics.Status == plan.StatusCompleted:
+			completedMetrics++
+		}
+	}
+	if failedMetrics != 1 || completedMetrics != 1 {
+		t.Fatalf("Pi metrics failed/completed = %d/%d, want 1/1; events=%#v", failedMetrics, completedMetrics, events)
+	}
+	if started != 1 {
+		t.Fatalf("slice_started events = %d, want exactly one", started)
+	}
+	assertTransportResumeEvents(t, events, []int{1, 2}, 1)
+}
+
+func TestServiceExecuteStructuredPiTransportFailuresStopAfterThirdSession(t *testing.T) {
+	root := t.TempDir()
+	detail := interruptedServiceRunDetail(t, root)
+	persistRunArtifacts(t, detail.Dir, detail)
+	var processes []*fakePiProcess
+	starter := func(ctx context.Context, cwd string, name string, args []string) (Process, error) {
+		proc := newFakePiProcess(t)
+		processes = append(processes, proc)
+		go func() {
+			defer proc.finish()
+			if _, err := proc.readCommand(); err != nil {
+				return
+			}
+			proc.writeEvent(`{"type":"message","message":{"role":"assistant","stopReason":"error","errorMessage":"WebSocket closed 1006 Connection ended","diagnostics":[{"type":"provider_transport_failure"}]}}`)
+		}()
+		return proc, nil
+	}
+	fileRepo := plan.NewFileRepository(filepath.Dir(detail.Dir))
+	var events []plan.Event
+	appender := eventAppenderFunc(func(planDir string, event plan.Event) error {
+		events = append(events, event)
+		return fileRepo.AppendEvent(planDir, event)
+	})
+	var delays []time.Duration
+	service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
+		CommandRunner:  piTransportGitRunner(t, detail, root, func() string { return " M partial.go\n" }),
+		ProcessStarter: starter,
+		TransportRetryDelay: func(_ context.Context, delay time.Duration) error {
+			delays = append(delays, delay)
+			return nil
+		},
+		EventAppender: appender,
+		LogAppender:   fileRepo,
+	}})
+
+	err := service.Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{Agent: AgentPi, ExecutionMode: ExecutionModeIsolated, CommitPolicy: CommitPolicySlice}})
+	if err == nil || !strings.Contains(err.Error(), "provider_transport_failure") {
+		t.Fatalf("execute error = %v, want structured Pi transport failure", err)
+	}
+	if len(processes) != 3 || len(delays) != 2 || delays[0] != time.Second || delays[1] != 2*time.Second {
+		t.Fatalf("sessions=%d delays=%v, want three sessions and [1s 2s]", len(processes), delays)
+	}
+	failedMetrics := 0
+	for _, event := range events {
+		if event.Type == plan.EventTypeAgentMetrics && event.Metrics != nil && event.Metrics.Status == "failed" {
+			failedMetrics++
+		}
+	}
+	if failedMetrics != 3 {
+		t.Fatalf("failed Pi metrics = %d, want 3", failedMetrics)
+	}
+	assertTransportResumeEvents(t, events, []int{1, 2, 3}, 3)
+	for i, proc := range processes {
+		if !proc.killed || !proc.waited {
+			t.Fatalf("Pi process %d cleanup: killed=%t waited=%t", i+1, proc.killed, proc.waited)
+		}
+	}
+}
+
+func TestServiceExecuteDoesNotRetryUnstructuredPiWebSocketErrorOrTimeout(t *testing.T) {
+	tests := []struct {
+		name           string
+		timeout        time.Duration
+		serve          func(context.Context, *fakePiProcess)
+		wantError      string
+		wantTimeoutEvt bool
+	}{
+		{
+			name: "unstructured WebSocket text",
+			serve: func(_ context.Context, proc *fakePiProcess) {
+				proc.writeEvent(`{"type":"message","message":{"role":"assistant","stopReason":"error","errorMessage":"WebSocket closed 1006 Connection ended"}}`)
+			},
+			wantError: "WebSocket closed 1006",
+		},
+		{
+			name:    "session timeout",
+			timeout: time.Millisecond,
+			serve: func(ctx context.Context, _ *fakePiProcess) {
+				<-ctx.Done()
+			},
+			wantError:      "agent session timed out",
+			wantTimeoutEvt: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			detail := interruptedServiceRunDetail(t, root)
+			persistRunArtifacts(t, detail.Dir, detail)
+			processStarts := 0
+			starter := func(ctx context.Context, cwd string, name string, args []string) (Process, error) {
+				processStarts++
+				proc := newFakePiProcess(t)
+				go func() {
+					defer proc.finish()
+					if _, err := proc.readCommand(); err != nil {
+						return
+					}
+					tt.serve(ctx, proc)
+				}()
+				return proc, nil
+			}
+			fileRepo := plan.NewFileRepository(filepath.Dir(detail.Dir))
+			var events []plan.Event
+			appender := eventAppenderFunc(func(planDir string, event plan.Event) error {
+				events = append(events, event)
+				return fileRepo.AppendEvent(planDir, event)
+			})
+			delayCalls := 0
+			service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
+				CommandRunner:       piTransportGitRunner(t, detail, root, func() string { return " M partial.go\n" }),
+				ProcessStarter:      starter,
+				TransportRetryDelay: func(context.Context, time.Duration) error { delayCalls++; return nil },
+				EventAppender:       appender,
+				LogAppender:         fileRepo,
+			}})
+
+			err := service.Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{Agent: AgentPi, ExecutionMode: ExecutionModeIsolated, CommitPolicy: CommitPolicySlice, SessionTimeout: tt.timeout}})
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("execute error = %v, want %q", err, tt.wantError)
+			}
+			if processStarts != 1 || delayCalls != 0 {
+				t.Fatalf("sessions=%d delays=%d, want one session and no retry delay", processStarts, delayCalls)
+			}
+			timeoutEvents := 0
+			for _, event := range events {
+				if event.Type == plan.EventTypeSessionTimeout {
+					timeoutEvents++
+				}
+			}
+			if (timeoutEvents == 1) != tt.wantTimeoutEvt {
+				t.Fatalf("timeout events = %d, want event=%t", timeoutEvents, tt.wantTimeoutEvt)
+			}
+		})
+	}
+}
+
 func TestPiExecutorMarksAgentMetricsFailedOnPiError(t *testing.T) {
 	planDir := writeMetricsPlan(t, "/repo", "plan-a")
 	repo := plan.NewFileRepository(filepath.Dir(planDir))
@@ -157,6 +386,37 @@ func TestPiExecutorMarksAgentMetricsFailedOnPiError(t *testing.T) {
 	if event.Type != plan.EventTypeAgentMetrics || event.Metrics == nil || event.Metrics.Status != "failed" || event.Metrics.Result != "failed" {
 		t.Fatalf("expected failed Pi metrics, got %#v", event)
 	}
+}
+
+func piTransportGitRunner(t *testing.T, detail *plan.PlanDetail, root string, status func() string) CommandRunner {
+	t.Helper()
+	base := interruptedServiceGitRunner(t, root, &[]string{}, status, "tao/plan-a", "base")
+	return func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+		actualCWD := cwd
+		if len(args) >= 2 && args[0] == "-C" {
+			actualCWD = args[1]
+		}
+		if actualCWD == detail.State.Repo.Root && name == "git" {
+			switch runGitKey(args) {
+			case "status --porcelain", "diff HEAD", "diff --name-only HEAD":
+				return nil
+			}
+		}
+		return base(ctx, cwd, name, args, stdout, stderr)
+	}
+}
+
+func serveSuccessfulPiSession(proc *fakePiProcess, sessionID string) {
+	proc.writeEvent(`{"type":"message","role":"assistant","text":"done"}`)
+	proc.writeEvent(`{"type":"agent_end","session_id":"` + sessionID + `"}`)
+	if _, err := proc.readCommand(); err != nil {
+		return
+	}
+	proc.writeEvent(`{"type":"state","session_id":"` + sessionID + `"}`)
+	if _, err := proc.readCommand(); err != nil {
+		return
+	}
+	proc.writeEvent(`{"type":"session_stats","session_id":"` + sessionID + `"}`)
 }
 
 func fakePiSessionStarter(t *testing.T, finalText string, promptSeen *bool) ProcessStarter {
@@ -232,6 +492,7 @@ type fakePiProcess struct {
 	done         chan struct{}
 	once         sync.Once
 	killed       bool
+	waited       bool
 }
 
 func newFakePiProcess(t *testing.T) *fakePiProcess {
@@ -246,6 +507,7 @@ func (p *fakePiProcess) Stdout() io.Reader     { return p.stdoutReader }
 func (p *fakePiProcess) Stderr() io.Reader     { return strings.NewReader("") }
 func (p *fakePiProcess) Wait() error {
 	<-p.done
+	p.waited = true
 	return nil
 }
 func (p *fakePiProcess) Kill() error {

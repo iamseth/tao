@@ -1,6 +1,7 @@
 package run
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -14,21 +15,22 @@ import (
 // missing dependencies are resolved lives in run_setup.go so the dependency
 // graph stays legible at a single place.
 type RunDependencies struct {
-	CommandRunner      CommandRunner
-	ProcessStarter     ProcessStarter
-	SliceExecutor      SliceExecutor
-	PlanRecordFactory  PlanRecordFactory
-	PullRequestCreator PullRequestCreator
-	ReviewCreator      ReviewCreator
-	EventAppender      plan.EventAppender
-	LogAppender        plan.LogAppender
-	RootResolver       ExecutionRootResolver
-	WorkspacePreparer  WorkspacePreparer
-	AgentFactory       AgentCapabilitiesFactory
-	StatusReporter     StatusReporter
-	OutputWriter       io.Writer
-	SessionLogWriter   io.Writer
-	Now                func() time.Time
+	CommandRunner       CommandRunner
+	ProcessStarter      ProcessStarter
+	SliceExecutor       SliceExecutor
+	PlanRecordFactory   PlanRecordFactory
+	PullRequestCreator  PullRequestCreator
+	ReviewCreator       ReviewCreator
+	EventAppender       plan.EventAppender
+	LogAppender         plan.LogAppender
+	RootResolver        ExecutionRootResolver
+	WorkspacePreparer   WorkspacePreparer
+	AgentFactory        AgentCapabilitiesFactory
+	StatusReporter      StatusReporter
+	OutputWriter        io.Writer
+	SessionLogWriter    io.Writer
+	TransportRetryDelay func(context.Context, time.Duration) error
+	Now                 func() time.Time
 }
 
 // newRunDependencies returns the collaborators composed into Options. It does
@@ -64,6 +66,7 @@ func requireResolvedDependencies(dependencies RunDependencies) error {
 		{"SliceExecutor", dependencies.SliceExecutor == nil},
 		{"PullRequestCreator", dependencies.PullRequestCreator == nil},
 		{"ReviewCreator", dependencies.ReviewCreator == nil},
+		{"TransportRetryDelay", dependencies.TransportRetryDelay == nil},
 	}
 	var missing []string
 	for _, dependency := range required {

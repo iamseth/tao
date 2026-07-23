@@ -386,7 +386,8 @@ func agentMapError(values map[string]any, typ string) error {
 		return nil
 	}
 	message := jsonmap.FirstString(values, "errorMessage", "error_message", "error", "message")
-	diagnostics := diagnosticSummary(values["diagnostics"])
+	diagnosticValue := values["diagnostics"]
+	diagnostics := diagnosticSummary(diagnosticValue)
 	if message == "" {
 		message = diagnostics
 	}
@@ -399,7 +400,33 @@ func agentMapError(values map[string]any, typ string) error {
 	if diagnostics != "" && !strings.Contains(message, diagnostics) {
 		message += " (" + diagnostics + ")"
 	}
-	return fmt.Errorf("pi agent error: %s", message)
+	err := fmt.Errorf("pi agent error: %s", message)
+	if hasProviderTransportFailure(diagnosticValue) {
+		return retryableTransportError{err: err}
+	}
+	return err
+}
+
+type retryableTransportError struct {
+	err error
+}
+
+func (e retryableTransportError) Error() string            { return e.err.Error() }
+func (e retryableTransportError) Unwrap() error            { return e.err }
+func (retryableTransportError) RetryableTransportFailure() {}
+
+func hasProviderTransportFailure(value any) bool {
+	items, ok := value.([]any)
+	if !ok {
+		return false
+	}
+	for _, item := range items {
+		values, ok := item.(map[string]any)
+		if ok && jsonmap.String(values, "type") == "provider_transport_failure" {
+			return true
+		}
+	}
+	return false
 }
 
 func diagnosticSummary(value any) string {

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/view"
@@ -212,27 +213,120 @@ func (r SelectedSliceRunner) Run(ctx context.Context, detail *plan.PlanDetail, d
 		}
 	}
 	run := SliceRun{PlanDir: absolutePlanDir(detail.Dir), SliceID: slice.ID, LogPath: logPath, RunPacket: runPacket, RepoRoot: executionRoot, VerificationCommands: slice.Verification.Commands, Resuming: resuming, ResumeAttempt: resumeAttempt}
-	if err := r.runExecutor(ctx, run); err != nil {
-		if resuming {
-			r.recordSliceResumeFailure(detail, slice.ID, resumeAttempt, err)
+	transportRetries := 0
+	for {
+		handoffErr := r.runExecutor(ctx, run)
+		if handoffErr == nil {
+			reloaded, reloadErr := r.reload(ctx, detail)
+			if reloadErr != nil {
+				return nil, reloadErr
+			}
+			return r.finishCompletedHandoff(ctx, reloaded, before, slice.ID, logPath, executionRoot)
 		}
-		return nil, fmt.Errorf("%s failed while running slice %s; see %s: %w", agentLabel(r.execution.Config.Agent), slice.ID, logPath, err)
+		if run.Resuming {
+			r.recordSliceResumeFailure(detail, slice.ID, run.ResumeAttempt, handoffErr)
+		}
+		providerErr := fmt.Errorf("%s failed while running slice %s; see %s: %w", agentLabel(r.execution.Config.Agent), slice.ID, logPath, handoffErr)
+		if !agent.IsRetryableTransportFailure(handoffErr) {
+			return nil, providerErr
+		}
+
+		hasRetry := transportRetries < len(implementationSliceRetryDelays)
+		if hasRetry {
+			if delayErr := r.execution.Dependencies.TransportRetryDelay(ctx, implementationSliceRetryDelays[transportRetries]); delayErr != nil {
+				return nil, transportRecoveryError(providerErr, fmt.Errorf("wait to resume slice %s: %w", slice.ID, delayErr))
+			}
+		}
+		reloaded, reloadErr := r.reload(ctx, detail)
+		if reloadErr != nil {
+			return nil, transportRecoveryError(providerErr, fmt.Errorf("reload slice %s after transport failure: %w", slice.ID, reloadErr))
+		}
+		if plan.SliceCompleted(reloaded, slice.ID) {
+			completed, completionErr := r.finishCompletedHandoff(ctx, reloaded, before, slice.ID, logPath, executionRoot)
+			if completionErr != nil {
+				return nil, transportRecoveryError(providerErr, completionErr)
+			}
+			return completed, nil
+		}
+		if !hasRetry {
+			return nil, providerErr
+		}
+
+		validation, recoveryAction, recoveryErr := r.preflightTransportResume(ctx, reloaded, slice.ID, executionRoot)
+		if recoveryErr != nil {
+			return nil, transportRecoveryError(providerErr, recoveryErr)
+		}
+		resumeAttempt = nextSliceResumeAttempt(reloaded.Events, slice.ID)
+		preserved := "no current changes"
+		if len(recoveryAction.Diagnostics.Facts.ChangedPaths) > 0 {
+			preserved = "preserving " + strings.Join(recoveryAction.Diagnostics.Facts.ChangedPaths, ", ")
+		}
+		if err := writef(r.out, "Resuming slice %s at recorded %s@%s (%s)...\n", slice.ID, recoveryAction.Diagnostics.Facts.Branch, recoveryAction.Diagnostics.Facts.Head, preserved); err != nil {
+			return nil, transportRecoveryError(providerErr, err)
+		}
+		runPacket, packetErr := r.renderRunPacket(reloaded, executionRoot, true, resumeAttempt)
+		if packetErr != nil {
+			return nil, transportRecoveryError(providerErr, packetErr)
+		}
+		if err := r.recordRunContext(reloaded, slice.ID, runPacket, validation); err != nil {
+			return nil, transportRecoveryError(providerErr, err)
+		}
+		if err := r.recordSliceResumeAttempt(reloaded, slice.ID, resumeAttempt); err != nil {
+			return nil, transportRecoveryError(providerErr, err)
+		}
+		detail = reloaded
+		transportRetries++
+		run = SliceRun{PlanDir: absolutePlanDir(detail.Dir), SliceID: slice.ID, LogPath: logPath, RunPacket: runPacket, RepoRoot: executionRoot, VerificationCommands: slice.Verification.Commands, Resuming: true, ResumeAttempt: resumeAttempt}
 	}
-	reloaded, err := r.reload(ctx, detail)
+}
+
+var implementationSliceRetryDelays = [...]time.Duration{time.Second, 2 * time.Second}
+
+func transportRecoveryError(providerErr, recoveryErr error) error {
+	return fmt.Errorf("%w; automatic transport recovery stopped: %w", providerErr, recoveryErr)
+}
+
+func (r SelectedSliceRunner) preflightTransportResume(ctx context.Context, detail *plan.PlanDetail, sliceID, executionRoot string) (plan.VerificationValidationResult, ExecutionBoundaryAction, error) {
+	if detail.State.Plan.CurrentSlice == nil || *detail.State.Plan.CurrentSlice != sliceID {
+		return plan.VerificationValidationResult{}, ExecutionBoundaryAction{}, fmt.Errorf("slice %s is no longer the selected in-progress slice after transport failure", sliceID)
+	}
+	action, err := (ExecutionBoundaryController{}).InspectSelected(ctx, ExecutionBoundaryDurableFacts{
+		Detail: detail, SliceID: sliceID, ContinueBlocked: r.execution.Config.Continue,
+	}, r.execution)
 	if err != nil {
+		return plan.VerificationValidationResult{}, ExecutionBoundaryAction{}, err
+	}
+	if action == nil {
+		return plan.VerificationValidationResult{}, ExecutionBoundaryAction{}, fmt.Errorf("slice %s recovery context disappeared before transport retry", sliceID)
+	}
+	if action.Diagnostics.Facts.SliceID != sliceID {
+		return plan.VerificationValidationResult{}, *action, fmt.Errorf("transport retry retained slice %s but recovery selected slice %s", sliceID, action.Diagnostics.Facts.SliceID)
+	}
+	if action.Disposition != InterruptedSliceResume || action.EffectiveDisposition != InterruptedSliceResume || action.RepairRequirement != ExecutionBoundaryRepairNone || !action.AllowAgentHandoff || action.AllowWorkspacePreparation {
+		return plan.VerificationValidationResult{}, *action, interruptedSliceRunError(sliceID, *action)
+	}
+	if action.FixedRoot != executionRoot {
+		return plan.VerificationValidationResult{}, *action, fmt.Errorf("slice %s recovery root changed from %q to %q before transport retry", sliceID, executionRoot, action.FixedRoot)
+	}
+	validation, err := r.validateSelectedSlice(detail, sliceID, validationExecutionRoot(executionRoot))
+	if err != nil {
+		return validation, *action, err
+	}
+	return validation, *action, nil
+}
+
+func (r SelectedSliceRunner) finishCompletedHandoff(ctx context.Context, detail *plan.PlanDetail, before plan.ProgressSnapshot, sliceID, logPath, executionRoot string) (*plan.PlanDetail, error) {
+	if err := r.validateSliceProgress(detail, before, sliceID, logPath); err != nil {
 		return nil, err
 	}
-	if err := r.validateSliceProgress(reloaded, before, slice.ID, logPath); err != nil {
-		return nil, err
-	}
-	if err := r.validateAutomaticSliceBoundary(ctx, reloaded, slice.ID, executionRoot); err != nil {
+	if err := r.validateAutomaticSliceBoundary(ctx, detail, sliceID, executionRoot); err != nil {
 		return nil, err
 	}
 	r.recordRunCompleted()
-	if err := writef(r.out, "Slice completed: %s\n", slice.ID); err != nil {
+	if err := writef(r.out, "Slice completed: %s\n", sliceID); err != nil {
 		return nil, err
 	}
-	return reloaded, nil
+	return detail, nil
 }
 
 func (r SelectedSliceRunner) selectedBoundaryAction(sliceID string) (ExecutionBoundaryAction, error) {

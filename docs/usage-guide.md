@@ -254,6 +254,33 @@ subject to this timeout.
 
 #### Recover an interrupted slice
 
+During one implementation-slice invocation, Tao automatically handles at most
+two explicitly structured transport failures. For Pi, only the
+`provider_transport_failure` diagnostic qualifies. Tao waits 1 second before
+the first retry and 2 seconds before the second, with both waits cancellable,
+then reloads artifacts, reruns selected-slice preflight, and asks the existing
+safe execution-boundary classifier whether another handoff is allowed. Each
+allowed retry uses a fresh `pi --mode rpc` process and the ordinary numbered
+resume prompt; it does not continue a provider session. The budget is local to
+the invocation, so an explicit later run starts with two retries even though
+resume-attempt event numbering continues as durable audit history.
+
+This is fixed policy, not configuration. Tao adds no retry flag or environment
+setting. It does not retry planning, review, pull-request, or merge agents;
+session timeouts; authentication failures; generic provider errors; or errors
+that merely contain WebSocket text. Manual/current-checkout, policy-`none`,
+post-commit-intent, and otherwise unsafe states are also never automatic retry
+boundaries. Provider output, metrics, and events do not authorize recovery.
+Because each fresh session has its own `TAO_SESSION_TIMEOUT`, a handoff that
+reaches the three-session maximum can take roughly three times that timeout plus
+3 seconds of retry waits (about 60 minutes 3 seconds with the default), excluding
+other orchestration work.
+
+If the original agent durably completes the slice before its transport error
+reaches Tao, Tao reloads and accepts that result only after ordinary progress
+and completion-boundary validation; it does not launch or charge another retry
+handoff.
+
 Rerun the same direct command, or restart the durable queue, and let Tao inspect
 the recorded execution boundary before touching the workspace. Direct and
 queued runs use the same execution service and cross-process plan lock, so the
@@ -719,7 +746,8 @@ If a Pi-backed provider or proxy drops a quiet long-lived response, increasing
 Pi's SSE idle timeout or HTTP idle timeout can be an optional operational
 mitigation; use the setting names and supported values documented by the
 installed Pi/provider version. These settings do not establish recovery safety.
-Tao does not override Pi transport configuration, add provider-specific retries,
-or infer success from a longer connection: `TAO_SESSION_TIMEOUT` remains Tao's
-provider-neutral wall-clock limit, and every rerun still passes the durable Git
-boundary checks above.
+Tao does not override Pi transport configuration or infer success from a longer
+connection. Its only automatic transport recovery is the fixed, structured-only
+implementation-slice policy above; no provider-specific retry configuration is
+added. `TAO_SESSION_TIMEOUT` remains Tao's provider-neutral wall-clock limit,
+and every retry or later rerun still passes the durable Git boundary checks.
