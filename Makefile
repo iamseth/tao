@@ -49,7 +49,7 @@ modernize-check:
 	@go run golang.org/x/tools/gopls/internal/analysis/modernize/cmd/modernize@v0.22.0 ./...
 
 install: build
-	@cp -f ./bin/tao ~/.bin/tao
+	@rm -f ~/.bin/tao; cp ./bin/tao ~/.bin/tao
 
 release-check:
 	@goreleaser check
