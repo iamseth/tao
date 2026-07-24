@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -37,6 +38,55 @@ func TestPlanRecordReviewStatusesBeforeMerge(t *testing.T) {
 	state = readStateFile(t, dir)
 	if state.Status != StatusReviewed {
 		t.Fatalf("approved review should set status %q before merge, got %q", StatusReviewed, state.Status)
+	}
+}
+
+func TestPlanRecordClearsCommitMessageFromNonApprovedReplacement(t *testing.T) {
+	dir := t.TempDir()
+	detail := startSliceDetail(dir)
+	now := time.Date(2026, 7, 23, 19, 30, 0, 0, time.UTC)
+	record := testRecord(dir, detail)
+	if err := record.StartSlice("001-a", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := record.CompleteSlice("001-a", "done", nil, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	proposal := &ReviewCommitMessage{Subject: "feat(review): persist approved commit proposals", Body: "What:\nPersist the proposal.\n\nWhy:\nReuse reviewed context."}
+	if err := record.RecordReviewCompleted(PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Summary: "ready", Findings: []ReviewFinding{}, CommitMessage: proposal, Base: "base123", Head: "head123", ReviewedAt: now.Add(2 * time.Minute)}, "pi"); err != nil {
+		t.Fatal(err)
+	}
+	if err := record.RecordReviewCompleted(PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictComment, Summary: "note", Findings: []ReviewFinding{}, CommitMessage: proposal, Base: "base123", Head: "head456", ReviewedAt: now.Add(3 * time.Minute)}, "pi"); err != nil {
+		t.Fatal(err)
+	}
+	state := readStateFile(t, dir)
+	if state.Plan.Review == nil || state.Plan.Review.CommitMessage != nil {
+		t.Fatalf("non-approved replacement retained commit message: %+v", state.Plan.Review)
+	}
+	events, warnings, err := readEvents(filepath.Join(dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected event warnings: %v", warnings)
+	}
+	var approved, replacement *Event
+	for i := range events {
+		if events[i].Type != EventTypePlanReviewed || events[i].Review == nil {
+			continue
+		}
+		switch events[i].Review.Summary {
+		case "ready":
+			approved = &events[i]
+		case "note":
+			replacement = &events[i]
+		}
+	}
+	if approved == nil || approved.Review.CommitMessage == nil || approved.Review.Base != "base123" || approved.Review.Head != "head123" {
+		t.Fatalf("approved review event lost bound commit message: %+v", approved)
+	}
+	if replacement == nil || replacement.Review.CommitMessage != nil {
+		t.Fatalf("replacement review event retained commit message: %+v", replacement)
 	}
 }
 

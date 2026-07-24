@@ -9,37 +9,25 @@ export default function taoPiExtension(pi: ExtensionAPI): void {
 }
 
 export {
-  collectGitContext,
   COMMIT_COMMAND_NAME,
   LEGACY_COMMIT_COMMAND_NAME,
-  createCommit,
   createCommitCommand,
   createDefaultRunner,
-  filterAllowedFiles,
   parseCommitArgs,
-  proposeAndValidateCommitMessage,
-  readRepoExclusions,
   registerCommitCommand,
   runCommitWorkflow,
-  stageAllowedFiles,
-  validateCommitMessage,
 } from "./commit.ts";
 export type {
-  AllowedFilesResult,
+  CommandOptions,
   CommandResult,
   CommandRunner,
   CommitCommandArgs,
   CommitCommandContract,
   CommitCommandDependencies,
   CommitMessageCompleter,
-  CommitMessageRequest,
-  CommitMessageValidation,
-  CommitMessageProposer,
+  CommitProposalProposer,
+  CommitProposalRequest,
   CreateCommitResult,
-  FileChange,
-  FileRejection,
-  GitContext,
-  RepoExclusions,
-  StageAllowedFilesResult,
+  StandaloneCommitContext,
 } from "./commit.ts";
 export type { ExtensionAPI, ExtensionCommandContext } from "./pi-api.ts";

@@ -35,6 +35,7 @@ func TestMergeSquashesPlanBranchByDefault(t *testing.T) {
 	detail.State.Repo.Root = fixture.repoRoot
 	detail.State.Workspace.Branch = fixture.planBranch
 	detail.State.Workspace.BaseBranch = fixture.defaultBranch
+	setSingleMergeIntent(t, detail, sourceHead, preMergeDefaultSHA)
 
 	if err := (Service{Git: gitops.NewClient(fixture.repoRoot, nil)}).IntegrateSquash(ctx, detail); err != nil {
 		t.Fatal(err)
@@ -51,13 +52,60 @@ func TestMergeSquashesPlanBranchByDefault(t *testing.T) {
 		t.Fatalf("source branch moved: got %s want %s", got, sourceHead)
 	}
 	message := realGitOutput(t, fixture.repoRoot, "show", "-s", "--format=%B", mergedSHA)
-	for _, want := range []string{"Transactional Slice Commits", "Tao-Plan: plan-a", "Tao-Source-Head: " + sourceHead} {
+	for _, want := range []string{"feat(merge): use approved review message", "What:\nCreate the exact reviewed squash commit.", "Why:\nAvoid a merge-time message session.", "Tao-Plan: plan-a", "Tao-Source-Head: " + sourceHead} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("squash message missing %q: %q", want, message)
 		}
 	}
 	if got := realGitOutput(t, fixture.repoRoot, "show", mergedSHA+":feature.txt"); got != "two" {
 		t.Fatalf("squash tree has feature.txt %q, want %q", got, "two")
+	}
+}
+
+func TestIntegrateSquashRecoversExactOwnedCommitAtIntentParent(t *testing.T) {
+	fixture := newRealGitWorktree(t)
+	ctx := context.Background()
+	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "recovered.txt"), []byte("done\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runRealGit(t, fixture.worktreePath, "add", "recovered.txt")
+	runRealGit(t, fixture.worktreePath, "commit", "-m", "source change")
+	sourceHead := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch)
+	defaultParent := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
+	detail := mergeReadyDetail(defaultParent)
+	detail.State.Workspace.Branch = fixture.planBranch
+	detail.State.Workspace.BaseBranch = fixture.defaultBranch
+	setSingleMergeIntent(t, detail, sourceHead, defaultParent)
+
+	runRealGit(t, fixture.repoRoot, "merge", "--squash", fixture.planBranch)
+	runRealGit(t, fixture.repoRoot, "commit", "-m", detail.State.Plan.MergeCommitIntent.Message)
+	committed := realGitOutput(t, fixture.repoRoot, "rev-parse", "HEAD")
+
+	if err := (Service{Git: gitops.NewClient(fixture.repoRoot, nil)}).IntegrateSquash(ctx, detail); err != nil {
+		t.Fatal(err)
+	}
+	if got := realGitOutput(t, fixture.repoRoot, "rev-parse", "HEAD"); got != committed {
+		t.Fatalf("recovery created or moved a second commit: got %s want %s", got, committed)
+	}
+}
+
+func TestIntegrateSquashRefusesMismatchedPartialCommitWithoutMutation(t *testing.T) {
+	detail := mergeReadyDetail("base123")
+	setSingleMergeIntent(t, detail, "source456", "pre123")
+	git := &fakeGitClient{
+		defaultBranch: "main",
+		revParse: map[string]string{
+			"tao/plan-a": "source456", "main": "partial789", "partial789^": "pre123",
+		},
+		commitMessages: map[string]string{"partial789": "not the intended message"},
+	}
+	if err := (Service{Git: git}).IntegrateSquash(context.Background(), detail); err == nil || !strings.Contains(err.Error(), "does not contain the exact intended squash") {
+		t.Fatalf("expected mismatched partial-commit refusal, got %v", err)
+	}
+	for _, call := range git.calls {
+		if strings.HasPrefix(call, "checkout ") || strings.HasPrefix(call, "merge-squash ") || strings.HasPrefix(call, "commit ") {
+			t.Fatalf("drift refusal mutated Git: %#v", git.calls)
+		}
 	}
 }
 
@@ -69,7 +117,9 @@ func TestIntegrateSquashCommitFailureRestoresDefault(t *testing.T) {
 		commitErr:     errors.New("identity missing"),
 	}
 
-	err := (Service{Git: git}).IntegrateSquash(context.Background(), mergeReadyDetail("base123"))
+	detail := mergeReadyDetail("base123")
+	setSingleMergeIntent(t, detail, "source456", "pre123")
+	err := (Service{Git: git}).IntegrateSquash(context.Background(), detail)
 	if !errors.Is(err, ErrMergeConflict) {
 		t.Fatalf("expected typed integration failure, got %v", err)
 	}
@@ -97,6 +147,7 @@ func TestIntegrateSquashConflictRestoresCleanDefault(t *testing.T) {
 	detail.State.Repo.Root = fixture.repoRoot
 	detail.State.Workspace.Branch = fixture.planBranch
 	detail.State.Workspace.BaseBranch = fixture.defaultBranch
+	setSingleMergeIntent(t, detail, realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch), preMergeDefaultSHA)
 
 	err := (Service{Git: gitops.NewClient(fixture.repoRoot, nil)}).IntegrateSquash(ctx, detail)
 	if !errors.Is(err, ErrMergeConflict) {
@@ -149,6 +200,8 @@ func TestMergeRebasesPlanWorktreeWhenDefaultAdvanced(t *testing.T) {
 	detail.State.Workspace.Path = fixture.worktreePath
 	detail.State.Workspace.Branch = fixture.planBranch
 	detail.State.Workspace.BaseBranch = fixture.defaultBranch
+	detail.State.Plan.Review.Head = originalPlanSHA
+	detail.State.Plan.Review.CommitMessage = nil
 
 	service := Service{
 		Git: gitops.NewClient(fixture.repoRoot, nil),
@@ -231,6 +284,18 @@ func TestIntegrateWorktreePlanMutatesOnlyWorktreeRoot(t *testing.T) {
 	if !hasGitCall(worktreeCalls, "rebase main") {
 		t.Fatalf("expected 'rebase main' in worktree calls\nrepo calls:      %#v\nworktree calls:  %#v",
 			repoCalls, worktreeCalls)
+	}
+}
+
+func setSingleMergeIntent(t *testing.T, detail *plan.PlanDetail, sourceHead, defaultParent string) {
+	t.Helper()
+	message, err := singleMergeCommitMessage(*detail.State.Plan.Review.CommitMessage, detail.State.Plan.ID, sourceHead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail.State.Plan.MergeCommitIntent = &plan.SingleMergeCommitIntent{
+		Message: message, PlanID: detail.State.Plan.ID, SourceHead: sourceHead,
+		DefaultBranch: "main", DefaultParent: defaultParent,
 	}
 }
 

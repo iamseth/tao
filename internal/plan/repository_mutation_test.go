@@ -82,6 +82,46 @@ func TestAppendEventAppendsJSONL(t *testing.T) {
 	}
 }
 
+func TestPlanRecordSingleMergeCommitIntentRoundTripsAndClears(t *testing.T) {
+	root := t.TempDir()
+	writeMinimalPlan(t, root, "merge-intent", "Merge Intent")
+	planDir := filepath.Join(root, "merge-intent")
+	repo := NewFileRepository(root)
+	detail, err := repo.GetPlan(context.Background(), "merge-intent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := SingleMergeCommitIntent{
+		Message: "feat(merge): use review proposal\n\nWhat:\nUse it.\n\nWhy:\nKeep recovery exact.\n\nTao-Plan: merge-intent\nTao-Source-Head: source123",
+		PlanID:  "merge-intent", SourceHead: "source123", DefaultBranch: "main", DefaultParent: "base123",
+		CreatedAt: time.Date(2026, 7, 23, 20, 15, 0, 0, time.UTC),
+	}
+	record, err := NewPlanRecord(planDir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := record.RecordSingleMergeCommitIntent(intent); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := repo.GetPlan(context.Background(), "merge-intent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.State.Plan.MergeCommitIntent == nil || *reloaded.State.Plan.MergeCommitIntent != intent {
+		t.Fatalf("single-merge intent did not round-trip: %#v", reloaded.State.Plan.MergeCommitIntent)
+	}
+	if err := record.ClearSingleMergeCommitIntent(intent); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err = repo.GetPlan(context.Background(), "merge-intent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.State.Plan.MergeCommitIntent != nil {
+		t.Fatalf("single-merge intent was not cleared: %#v", reloaded.State.Plan.MergeCommitIntent)
+	}
+}
+
 func TestAppendEventCreatesEventsJSONL(t *testing.T) {
 	planDir := t.TempDir()
 	timestamp := time.Date(2026, 4, 27, 18, 12, 0, 0, time.UTC)

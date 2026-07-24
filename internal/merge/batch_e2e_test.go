@@ -56,7 +56,7 @@ func (a *batchE2EAgent) Resolve(_ context.Context, root, prompt string) (string,
 		if err := os.WriteFile(filepath.Join(root, "aggregate-fixed.txt"), []byte("fixed\n"), 0o600); err != nil {
 			a.t.Fatal(err)
 		}
-		return "fixed aggregate interaction", nil
+		return batchResolutionJSON("fixed aggregate interaction"), nil
 	case strings.Contains(prompt, "tao-review-json") || strings.Contains(prompt, "Aggregate") || strings.Contains(prompt, "aggregate review"):
 		a.reviewCalls++
 		if a.reviewCalls == 1 {
@@ -73,7 +73,7 @@ func (a *batchE2EAgent) Resolve(_ context.Context, root, prompt string) (string,
 				a.t.Fatal(err)
 			}
 		}
-		return fmt.Sprintf("conflict resolution attempt %d", a.conflictCalls), nil
+		return batchResolutionJSON(fmt.Sprintf("conflict resolution attempt %d", a.conflictCalls)), nil
 	}
 }
 
@@ -180,7 +180,7 @@ func TestMergeBatchEndToEnd(t *testing.T) {
 		dir := filepath.Join(planRoot, id)
 		detail := batchE2EDetail(id, dir, root, branches[id], worktrees[id], base, sourceHeads[id])
 		repository.details[id], repository.details[dir] = detail, detail
-		candidates = append(candidates, BatchCandidate{PlanID: id, PlanTitle: "Integrate " + id, PlanDir: dir, RepoRoot: root, Branch: branches[id], ReviewBase: base, ReviewHead: sourceHeads[id], ReviewSummary: "approved source", SourceTip: sourceHeads[id], DefaultBranch: "main", DefaultStartSHA: base})
+		candidates = append(candidates, BatchCandidate{PlanID: id, PlanTitle: "Integrate " + id, PlanDir: dir, RepoRoot: root, Branch: branches[id], ReviewBase: base, ReviewHead: sourceHeads[id], ReviewSummary: "approved source", SourceTip: sourceHeads[id], DefaultBranch: "main", DefaultStartSHA: base, CommitMessage: testBatchCommitMessage(id, sourceHeads[id])})
 	}
 
 	service := NewService(root, nil)
@@ -238,8 +238,15 @@ func TestMergeBatchEndToEnd(t *testing.T) {
 		t.Fatalf("aggregate changes-requested/approve cycle missing: agent=%+v review=%+v", agent, state.Review)
 	}
 	resolutionMessage := batchE2EGitOutput(t, integrationRoot, "show", "-s", "--format=%B", state.Review.ResolutionSHAs[0])
-	if !strings.Contains(resolutionMessage, "Tao-Merge-Batch: "+batchID) {
-		t.Fatalf("aggregate resolution is not Tao-owned: %s", resolutionMessage)
+	expectedResolution, messageErr := aggregateProposedResolutionCommitMessage(plan.ReviewCommitMessage{
+		Subject: "fix(batch): resolve candidate integration",
+		Body:    "What:\nResolve the candidate changes in the integration worktree.\n\nWhy:\nPreserve the candidate intent in the combined batch.",
+	}, batchID, 1)
+	if messageErr != nil {
+		t.Fatal(messageErr)
+	}
+	if resolutionMessage != expectedResolution {
+		t.Fatalf("aggregate resolution lost exact agent proposal: got %q want %q", resolutionMessage, expectedResolution)
 	}
 	if calls := strings.Count(readBatchE2EFile(t, verifyLog), "verify\n"); calls != 8 {
 		t.Fatalf("full verification calls = %d, want 8", calls)
@@ -307,11 +314,11 @@ func TestMergeBatchAutoEjectResolvesAndLandsAttributedReducedSet(t *testing.T) {
 	resolutionCalls := 0
 	agent := batchReviewAgentFunc(func(_ context.Context, root, prompt string) (string, error) {
 		if strings.Contains(prompt, "Candidate: aggregate-review") {
-			return "attempted fix", os.WriteFile(filepath.Join(root, "review-fix.txt"), []byte("fix\n"), 0o600)
+			return batchResolutionJSON("attempted fix"), os.WriteFile(filepath.Join(root, "review-fix.txt"), []byte("fix\n"), 0o600)
 		}
 		if strings.Contains(prompt, "Candidate: plan-b") {
 			resolutionCalls++
-			return "fixed reduced-set verification", os.WriteFile(filepath.Join(root, "reduced-fixed.txt"), []byte("fixed\n"), 0o600)
+			return batchResolutionJSON("fixed reduced-set verification"), os.WriteFile(filepath.Join(root, "reduced-fixed.txt"), []byte("fixed\n"), 0o600)
 		}
 		reviewCalls++
 		if reviewCalls == 3 {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/commandrunner"
+	commitpkg "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/workspace"
@@ -55,6 +56,8 @@ type GitClient interface {
 	IsAncestor(ctx context.Context, ancestor string, descendant string) (bool, error)
 	StatusPorcelain(ctx context.Context) (string, error)
 	ChangedFiles(ctx context.Context, revspec string) ([]string, error)
+	Diff(ctx context.Context, revspec string) (string, error)
+	DirtyFingerprint(ctx context.Context) (gitops.DirtyFingerprint, error)
 	Checkout(ctx context.Context, branch string) error
 	MergeFFOnly(ctx context.Context, ref string) error
 	MergeSquash(ctx context.Context, ref string) error
@@ -69,13 +72,14 @@ type GitClient interface {
 var _ GitClient = gitops.Client{}
 
 type Service struct {
-	Git     GitClient
-	NewGit  func(dir string) GitClient
-	Runner  commandrunner.Runner
-	Cleaner WorkspaceCleaner
-	Events  plan.ArtifactStore
-	Logf    func(format string, args ...any)
-	Now     func() time.Time
+	Git               GitClient
+	NewGit            func(dir string) GitClient
+	Runner            commandrunner.Runner
+	Cleaner           WorkspaceCleaner
+	Events            plan.ArtifactStore
+	Logf              func(format string, args ...any)
+	Now               func() time.Time
+	ProposalGenerator commitpkg.MergeProposalGenerator
 }
 
 func mergeVerifyMayNeedSnapshot(options Options) bool {
@@ -119,9 +123,18 @@ func (s Service) Merge(ctx context.Context, detail *plan.PlanDetail, options Opt
 		}
 	}
 	// The pre-merge snapshot protects the complete integration transaction, not
-	// only verification. Capturing the merged SHA and durably recording the
-	// merge happen after Git integration and must be able to restore default too.
-	mergeSnapshot, err := captureMergeVerifySnapshot(ctx, git, detail)
+	// only verification. Squash mode derives it from the durable exact intent so
+	// an interrupted post-commit rerun still rolls back to the original parent.
+	var mergeSnapshot mergeVerifySnapshot
+	if options.NoSquash {
+		mergeSnapshot, err = captureMergeVerifySnapshot(ctx, git, detail)
+	} else {
+		var intent *plan.SingleMergeCommitIntent
+		intent, err = s.prepareSingleMergeIntentForMerge(ctx, git, detail, options.Force)
+		if err == nil {
+			mergeSnapshot = mergeVerifySnapshot{defaultBranch: intent.DefaultBranch, preMergeSHA: intent.DefaultParent}
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -173,6 +186,194 @@ func (s Service) Merge(ctx context.Context, detail *plan.PlanDetail, options Opt
 		return fmt.Errorf("plan %s merged and recorded, but cleanup failed: %w", detail.State.Plan.ID, err)
 	}
 	return nil
+}
+
+func (s Service) prepareSingleMergeIntent(ctx context.Context, git GitClient, detail *plan.PlanDetail) (*plan.SingleMergeCommitIntent, error) {
+	return s.prepareSingleMergeIntentForMerge(ctx, git, detail, false)
+}
+
+func (s Service) prepareSingleMergeIntentForMerge(ctx context.Context, git GitClient, detail *plan.PlanDetail, force bool) (*plan.SingleMergeCommitIntent, error) {
+	planID := strings.TrimSpace(detail.State.Plan.ID)
+	planBranch, err := resolvePlanBranch(detail)
+	if err != nil {
+		return nil, err
+	}
+	sourceHead, err := git.RevParse(ctx, planBranch)
+	if err != nil {
+		return nil, fmt.Errorf("capture source head for %s: %w", planBranch, err)
+	}
+	sourceHead = strings.TrimSpace(sourceHead)
+	defaultBranch, err := resolveDefaultBranch(ctx, git, detail)
+	if err != nil {
+		return nil, err
+	}
+	defaultParent, err := git.RevParse(ctx, defaultBranch)
+	if err != nil {
+		return nil, fmt.Errorf("capture single-merge default parent for %s: %w", defaultBranch, err)
+	}
+	defaultParent = strings.TrimSpace(defaultParent)
+	if sourceHead == "" || defaultParent == "" {
+		return nil, fmt.Errorf("single-merge intent requires non-empty source and default revisions")
+	}
+
+	var superseded *plan.SingleMergeCommitIntent
+	if existing := detail.State.Plan.MergeCommitIntent; existing != nil {
+		if existing.SourceHead == sourceHead {
+			if existing.PlanID != planID || existing.DefaultBranch != defaultBranch {
+				return nil, fmt.Errorf("plan %s has a conflicting single-merge commit intent", planID)
+			}
+			if _, inspectErr := inspectSingleMergeIntent(ctx, git, detail, *existing); inspectErr != nil {
+				return nil, inspectErr
+			}
+			return existing, nil
+		}
+		// A fresh source may supersede an unmutated old intent. Preserve the old
+		// recovery record until the replacement proposal is valid and ready to
+		// persist, and refuse any movement of default across that boundary.
+		if existing.DefaultBranch != defaultBranch || defaultParent != existing.DefaultParent {
+			return nil, fmt.Errorf("plan %s source changed while default drifted from the prior single-merge intent", planID)
+		}
+		superseded = existing
+	}
+
+	message, reviewMergeBase, exactReview, err := exactReviewMergeMessage(ctx, git, detail, planID, defaultParent, sourceHead, force)
+	if err != nil {
+		return nil, err
+	}
+	if !exactReview {
+		message, err = s.generateSingleMergeMessage(ctx, git, commitpkg.MergeProposalContext{
+			RepoRoot: git.Root(), PlanID: planID, DefaultBranch: defaultBranch,
+			DefaultParent: defaultParent, MergeBase: reviewMergeBase, SourceBranch: planBranch, SourceHead: sourceHead,
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if superseded != nil {
+		record, recordErr := s.planMergeRecord(detail.Dir, detail)
+		if recordErr != nil {
+			return nil, fmt.Errorf("clear superseded single-merge intent: %w", recordErr)
+		}
+		if recordErr = record.ClearSingleMergeCommitIntent(*superseded); recordErr != nil {
+			return nil, fmt.Errorf("clear superseded single-merge intent: %w", recordErr)
+		}
+	}
+	intent := plan.SingleMergeCommitIntent{
+		Message: message, PlanID: planID, SourceHead: sourceHead,
+		DefaultBranch: defaultBranch, DefaultParent: defaultParent, CreatedAt: s.now().UTC(),
+	}
+	record, err := s.planMergeRecord(detail.Dir, detail)
+	if err != nil {
+		return nil, fmt.Errorf("prepare single-merge commit intent: %w", err)
+	}
+	if err := record.RecordSingleMergeCommitIntent(intent); err != nil {
+		return nil, fmt.Errorf("persist single-merge commit intent: %w", err)
+	}
+	return detail.State.Plan.MergeCommitIntent, nil
+}
+
+func exactReviewMergeMessage(ctx context.Context, git GitClient, detail *plan.PlanDetail, planID, defaultParent, sourceHead string, force bool) (string, string, bool, error) {
+	review := plan.PersistedReview(detail)
+	if review == nil || !review.IsApproved() || strings.TrimSpace(review.Head) != sourceHead || review.CommitMessage == nil {
+		return "", "", false, nil
+	}
+	mergeBase, err := git.MergeBase(ctx, defaultParent, sourceHead)
+	if err != nil {
+		return "", "", false, fmt.Errorf("compute exact review proposal base for %s: %w", planID, err)
+	}
+	mergeBase = strings.TrimSpace(mergeBase)
+	if mergeBase == "" {
+		return "", "", false, fmt.Errorf("compute exact review proposal base for %s: empty revision", planID)
+	}
+	if strings.TrimSpace(review.Base) != mergeBase {
+		return "", mergeBase, false, nil
+	}
+	message, err := singleMergeCommitMessage(*review.CommitMessage, planID, sourceHead)
+	if err != nil {
+		if force {
+			return "", mergeBase, false, nil
+		}
+		return "", "", false, fmt.Errorf("plan %s review commit proposal is invalid: %w", planID, err)
+	}
+	return message, mergeBase, true, nil
+}
+
+func (s Service) generateSingleMergeMessage(ctx context.Context, git GitClient, exact commitpkg.MergeProposalContext) (string, error) {
+	if s.ProposalGenerator == nil {
+		return "", fmt.Errorf("plan %s requires exceptional merge commit proposal generation, but no provider-neutral generator is configured", exact.PlanID)
+	}
+	var err error
+	if exact.MergeBase == "" {
+		exact.MergeBase, err = git.MergeBase(ctx, exact.DefaultParent, exact.SourceHead)
+		if err != nil {
+			return "", fmt.Errorf("compute exact merge proposal base for %s: %w", exact.PlanID, err)
+		}
+		exact.MergeBase = strings.TrimSpace(exact.MergeBase)
+		if exact.MergeBase == "" {
+			return "", fmt.Errorf("compute exact merge proposal base for %s: empty revision", exact.PlanID)
+		}
+	}
+	exact.Diff, err = git.Diff(ctx, exact.MergeBase+".."+exact.SourceHead)
+	if err != nil {
+		return "", fmt.Errorf("read exact merge diff for %s: %w", exact.PlanID, err)
+	}
+	before, err := git.DirtyFingerprint(ctx)
+	if err != nil {
+		return "", fmt.Errorf("capture Git state before merge proposal generation: %w", err)
+	}
+	proposal, generateErr := s.ProposalGenerator.GenerateMergeProposal(ctx, exact)
+	if generateErr != nil && ctx.Err() != nil {
+		return "", generateErr
+	}
+	after, stateErr := git.DirtyFingerprint(ctx)
+	if stateErr != nil {
+		return "", fmt.Errorf("verify Git state after merge proposal generation: %w", stateErr)
+	}
+	sourceAfter, sourceErr := git.RevParse(ctx, exact.SourceBranch)
+	defaultAfter, defaultErr := git.RevParse(ctx, exact.DefaultBranch)
+	if sourceErr != nil || defaultErr != nil {
+		return "", fmt.Errorf("verify refs after merge proposal generation: %w", errors.Join(sourceErr, defaultErr))
+	}
+	if before.Hash != after.Hash || strings.TrimSpace(sourceAfter) != exact.SourceHead || strings.TrimSpace(defaultAfter) != exact.DefaultParent {
+		return "", fmt.Errorf("merge proposal agent mutated Git state; restore the worktree, index, and refs before retrying plan %s", exact.PlanID)
+	}
+	if generateErr != nil {
+		return "", generateErr
+	}
+	message, err := singleMergeProposalMessage(proposal, exact.PlanID, exact.SourceHead)
+	if err != nil {
+		return "", fmt.Errorf("plan %s generated merge commit proposal is invalid: %w", exact.PlanID, err)
+	}
+	return message, nil
+}
+
+func singleMergeCommitMessage(proposal plan.ReviewCommitMessage, planID, sourceHead string) (string, error) {
+	trailers, err := singleMergeTrailers(planID, sourceHead)
+	if err != nil {
+		return "", err
+	}
+	return commitpkg.FormatProposalMessage(proposal.Subject, proposal.Body, trailers...)
+}
+
+func singleMergeProposalMessage(proposal commitpkg.Proposal, planID, sourceHead string) (string, error) {
+	trailers, err := singleMergeTrailers(planID, sourceHead)
+	if err != nil {
+		return "", err
+	}
+	return commitpkg.Format(proposal, trailers...)
+}
+
+func singleMergeTrailers(planID, sourceHead string) ([]commitpkg.TrustedTrailer, error) {
+	planTrailer, err := commitpkg.NewTrustedTrailer("Tao-Plan", strings.TrimSpace(planID))
+	if err != nil {
+		return nil, err
+	}
+	sourceTrailer, err := commitpkg.NewTrustedTrailer("Tao-Source-Head", strings.TrimSpace(sourceHead))
+	if err != nil {
+		return nil, err
+	}
+	return []commitpkg.TrustedTrailer{planTrailer, sourceTrailer}, nil
 }
 
 func rollbackIntegratedMerge(ctx context.Context, git GitClient, snapshot mergeVerifySnapshot, cause error) error {

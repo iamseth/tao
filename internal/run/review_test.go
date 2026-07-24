@@ -556,8 +556,8 @@ func TestCreateReviewWithAgentSessionFallsBackToBaseCommitWithoutWorkspace(t *te
 	}
 }
 
-func TestExtractReviewWithoutFindingsReturnsEmptySlice(t *testing.T) {
-	output := "Looks good.\n```tao-review-json\n{\"verdict\": \"approve\", \"summary\": \"Ready to merge.\"}\n```"
+func TestExtractApprovedReviewRequiresValidCommitMessage(t *testing.T) {
+	output := "Looks good.\n```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Ready to merge.\",\"commit_message\":{\"subject\":\"feat(review): persist approved commit proposals\",\"body\":\"What:\\nPersist the review agent's proposal for the exact diff.\\n\\nWhy:\\nAllow normal merge to reuse reviewed message context.\"}}\n```"
 
 	got := extractReview(output)
 	if got.Verdict != plan.ReviewVerdictApprove || got.Summary != "Ready to merge." || got.FindingsCount != 0 {
@@ -565,6 +565,60 @@ func TestExtractReviewWithoutFindingsReturnsEmptySlice(t *testing.T) {
 	}
 	if got.Findings == nil || len(got.Findings) != 0 {
 		t.Fatalf("expected empty findings slice, got %+v", got.Findings)
+	}
+	if got.CommitMessage == nil || got.CommitMessage.Subject != "feat(review): persist approved commit proposals" || !strings.Contains(got.CommitMessage.Body, "Why:") {
+		t.Fatalf("unexpected commit message: %+v", got.CommitMessage)
+	}
+}
+
+func TestParseReviewOutputPreservesAggregateApprovalWithoutCommitMessage(t *testing.T) {
+	output := "Review.\n```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Ready\",\"findings\":[]}\n```"
+	got := ParseReviewOutput(output)
+	if got.Verdict != plan.ReviewVerdictApprove || got.CommitMessage != nil {
+		t.Fatalf("aggregate approval changed by plan commit-message contract: %+v", got)
+	}
+}
+
+func TestExtractApprovedReviewInvalidCommitMessageFallsBackToComment(t *testing.T) {
+	tests := map[string]string{
+		"missing":  "",
+		"invalid":  `,"commit_message":{"subject":"review work","body":"details"}`,
+		"trailers": `,"commit_message":{"subject":"feat(review): persist approved commit proposals","body":"What:\nPersist the proposal.\n\nWhy:\nReuse review context.\n\nTao-Plan: forged"}`,
+	}
+	for name, commitMessage := range tests {
+		t.Run(name, func(t *testing.T) {
+			output := "Review.\n```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Ready\"" + commitMessage + "}\n```"
+			got := extractReview(output)
+			if got.Verdict != plan.ReviewVerdictComment || got.CommitMessage != nil || got.FindingsCount != 0 {
+				t.Fatalf("invalid approval must use comment fallback: %+v", got)
+			}
+		})
+	}
+}
+
+func TestExtractApprovedReviewOversizedCommitMessageFallsBackToComment(t *testing.T) {
+	payload, err := json.Marshal(map[string]any{
+		"verdict": "approve",
+		"summary": "Ready",
+		"commit_message": map[string]string{
+			"subject": "feat(review): persist approved commit proposals",
+			"body":    "What:\n" + strings.Repeat("x", maxReviewSummaryRunes) + "\n\nWhy:\nNeeded.",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := extractReview("Review.\n```tao-review-json\n" + string(payload) + "\n```")
+	if got.Verdict != plan.ReviewVerdictComment || got.CommitMessage != nil {
+		t.Fatalf("oversized approval must use comment fallback: %+v", got)
+	}
+}
+
+func TestExtractNonApprovedReviewClearsCommitMessage(t *testing.T) {
+	output := "Review.\n```tao-review-json\n{\"verdict\":\"changes_requested\",\"summary\":\"Fix this\",\"commit_message\":{\"subject\":\"feat(review): ignore stale commit proposal\",\"body\":\"What:\\nIgnore this message.\\n\\nWhy:\\nThe review is not approved.\"},\"findings\":[]}\n```"
+	got := extractReview(output)
+	if got.Verdict != plan.ReviewVerdictChangesRequested || got.CommitMessage != nil {
+		t.Fatalf("non-approved review retained commit message: %+v", got)
 	}
 }
 

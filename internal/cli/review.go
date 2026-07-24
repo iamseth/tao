@@ -175,6 +175,11 @@ func renderPlanReviewMetadata(out io.Writer, review plan.PlanReview) error {
 			return err
 		}
 	}
+	if review.CommitMessage != nil {
+		if err := writef(out, "Commit Subject: %s\nCommit Body:\n%s\n", review.CommitMessage.Subject, review.CommitMessage.Body); err != nil {
+			return err
+		}
+	}
 	if err := writef(out, "Findings: %d\n", review.FindingsCount); err != nil {
 		return err
 	}

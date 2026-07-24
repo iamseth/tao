@@ -106,6 +106,12 @@ func (c Client) StatusPorcelain(ctx context.Context) (string, error) {
 	return c.rawOutput(ctx, "status", "--porcelain")
 }
 
+// StatusPorcelainAllUntracked returns porcelain status with each untracked file
+// listed separately instead of collapsing an untracked directory.
+func (c Client) StatusPorcelainAllUntracked(ctx context.Context) (string, error) {
+	return c.rawOutput(ctx, "status", "--porcelain", "--untracked-files=all")
+}
+
 // ActiveOperation reports an in-progress Git operation in root. Git owns the
 // operation-marker layout, so callers do not inspect .git internals themselves.
 func ActiveOperation(root string) (string, error) {
@@ -179,6 +185,22 @@ func (c Client) Diff(ctx context.Context, revspec string) (string, error) {
 	return c.rawOutput(ctx, "diff", revspec)
 }
 
+// WorkingDiff returns the combined staged and unstaged worktree diff from HEAD
+// for only paths. Untracked files are not included by Git and must be supplied
+// by callers that intentionally expose their contents.
+func (c Client) WorkingDiff(ctx context.Context, paths ...string) (string, error) {
+	args := append([]string{"diff", "HEAD", "--"}, paths...)
+	return c.rawOutput(ctx, args...)
+}
+
+// RecentLog returns at most limit one-line commit summaries.
+func (c Client) RecentLog(ctx context.Context, limit int) (string, error) {
+	if limit <= 0 {
+		return "", errors.New("recent log limit must be positive")
+	}
+	return c.rawOutput(ctx, "log", "--oneline", fmt.Sprintf("-%d", limit))
+}
+
 // ChangedFiles returns changed file paths from diff --name-only for revspec.
 func (c Client) ChangedFiles(ctx context.Context, revspec string) ([]string, error) {
 	out, err := c.rawOutput(ctx, "diff", "--name-only", revspec)
@@ -225,7 +247,8 @@ func (c Client) MergeSquash(ctx context.Context, ref string) error {
 func (c Client) HasStagedChanges(ctx context.Context) (bool, error) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	err := c.git(ctx, []string{"diff", "--cached", "--quiet"}, &stdout, &stderr)
+	args := []string{"diff", "--cached", "--quiet"}
+	err := c.git(ctx, args, &stdout, &stderr)
 	if err == nil {
 		return false, nil
 	}
@@ -233,7 +256,7 @@ func (c Client) HasStagedChanges(ctx context.Context) (bool, error) {
 	if errors.As(err, &exitCoder) && exitCoder.ExitCode() == 1 {
 		return true, nil
 	}
-	return false, fmt.Errorf("inspect staged changes: %w", commandError([]string{"diff", "--cached", "--quiet"}, err, stderr.String()))
+	return false, fmt.Errorf("inspect staged changes: %w", commandError(args, err, stderr.String()))
 }
 
 // CleanUntracked removes disposable untracked files and directories.

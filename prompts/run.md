@@ -133,18 +133,23 @@ If a verification command fails:
 
 ## After successful implementation
 
-After verification passes, write two local files for Tao-owned completion bookkeeping:
+After verification passes, write local files for Tao-owned completion bookkeeping to one private temporary directory outside the repository working tree:
 
 - A notes file containing the slice implementation summary.
 - A verification results JSON file containing an array of objects with `command`, `cwd` (the absolute path of the directory the command was executed from), `result`, and `details` fields.
-
-Write both files to a temporary location outside the repository working tree (for example, the system temp directory). They are throwaway inputs consumed by Tao, not project files: never write them into the repository, and never stage or commit them. Tao deletes them after a successful completion.
+{{ if eq .CommitPolicy "slice" -}}
+- A commit proposal JSON file containing exactly one object with `type`, `scope`, `summary`, `what`, and `why` string fields. Use the supported Conventional Commit type and narrow lowercase scope that best describe this slice, a lowercase imperative summary of at most 72 characters, and useful non-empty what/why text. Do not add `Tao-*` fields or trailers; Tao alone appends trusted evidence and creates the commit.
+{{ end }}
+These are throwaway inputs consumed by Tao, not project files: never write them into the repository, and never stage or commit them. Tao deletes them after successful completion.
 
 Then call Tao to complete the slice:
 
 ```sh
-tao slice-complete --plan-dir "{{ .PlanDir }}" --slice-id "<selected slice id>" --notes-file "<notes file>" --verification-results-file "<verification results file>"
+tao slice-complete --plan-dir "{{ .PlanDir }}" --slice-id "<selected slice id>" --notes-file "<notes file>" --verification-results-file "<verification results file>"{{ if eq .CommitPolicy "slice" }} --commit-proposal-file "<commit proposal file>"{{ end }}
 ```
+{{ if eq .CommitPolicy "slice" -}}
+If Tao rejects proposal content, repair the same temporary proposal file in this active implementation session and retry `tao slice-complete`. Do not start another agent or model session and do not use a deterministic fallback. A rejected attempt leaves all temporary inputs available for repair and must not authorize staging or a commit.
+{{ end }}
 
 Tao updates `state.json`, `slices.json`, duration, queue movement, plan completion state, and the `slice_completed` event. Do not patch completion metadata directly unless the command is unavailable or fails for a reason unrelated to your implementation; if that happens, stop and report the blocker.
 

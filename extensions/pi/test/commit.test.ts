@@ -1,285 +1,237 @@
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
 import extension, {
-  collectGitContext,
   COMMIT_COMMAND_NAME,
-  createCommit,
   createCommitCommand,
-  createDefaultRunner,
-  filterAllowedFiles,
   parseCommitArgs,
-  proposeAndValidateCommitMessage,
-  readRepoExclusions,
   runCommitWorkflow,
-  stageAllowedFiles,
-  validateCommitMessage,
 } from "../src/index.ts";
-import type { CommandRunner, CommitMessageRequest } from "../src/index.ts";
+import type { CommandRunner, CommitProposalRequest } from "../src/index.ts";
 
-test("commit command skeleton is importable", () => {
-  const command = createCommitCommand();
-
-  assert.equal(COMMIT_COMMAND_NAME, "commit");
-  assert.equal(command.name, "commit");
-  assert.match(command.description, /safe local Tao commit/);
+const fingerprint = "a".repeat(64);
+const safeContext = {
+  head: "0123456789abcdef",
+  context_fingerprint: fingerprint,
+  allowed_paths: ["src/example.ts"],
+  rejected_paths: [{ path: ".tao/state.json", reason: "local-only path excluded by .tao/" }],
+  allowed_diff: "diff --git a/src/example.ts b/src/example.ts\n+safe change\n",
+  allowed_diff_truncated: false,
+  recent_history: "abc123 feat(example): add prior behavior",
+};
+const validProposal = JSON.stringify({
+  context_fingerprint: fingerprint,
+  type: "feat",
+  scope: "example",
+  summary: "add safe source",
+  what: "Add the safe source change selected by Tao.",
+  why: "Keep commit ownership inside Tao's validated boundary.",
 });
 
-test("commit args parser recognizes optional message and context", () => {
-  assert.deepEqual(parseCommitArgs("--message feat: -- Inspect staged files"), {
-    message: "feat:",
-    context: "Inspect staged files",
-  });
-});
+function createdCommit(stdout = "Created local commit abcdef123456 feat(example): add safe source.\n") {
+  return { stdout, exitCode: 0 };
+}
 
-test("commit command registers with Pi", () => {
-  const registrations: Array<{ name: string; description?: string; handler: (args: string, ctx: never) => Promise<void> | void }> = [];
-
+test("commit command skeleton and legacy alias register with Pi", () => {
+  const registrations: Array<{ name: string; description?: string }> = [];
   extension({
     registerCommand(name, options) {
-      registrations.push({ name, description: options.description, handler: options.handler });
+      registrations.push({ name, description: options.description });
     },
   });
 
-  const commit = registrations.find((registration) => registration.name === "commit");
-  const legacyCommit = registrations.find((registration) => registration.name === "tao-commit");
-  assert.ok(commit);
-  assert.ok(legacyCommit);
-  assert.equal(commit.description, "Prepare a safe local Tao commit");
-  assert.match(legacyCommit.description ?? "", /legacy alias/);
+  assert.equal(COMMIT_COMMAND_NAME, "commit");
+  assert.deepEqual(registrations.map(({ name }) => name), ["commit", "tao-commit"]);
+  assert.equal(registrations[0].description, "Prepare a safe local Tao commit");
+  assert.match(registrations[1].description ?? "", /legacy alias/);
 });
 
-test("collectGitContext reads status, staged diff, unstaged diff, and recent log", async () => {
-  const calls: Array<[string, string[]]> = [];
-  const outputs = new Map([
-    ["status --porcelain", " M extensions/pi/src/commit.ts\n"],
-    ["diff --cached", "staged diff"],
-    ["diff", "unstaged diff"],
-    ["log --oneline -12", "abc123 feat(pi): add skeleton"],
-  ]);
-  const runner: CommandRunner = async (command, args) => {
-    calls.push([command, args]);
-    return { stdout: outputs.get(args.join(" ")) ?? "" };
+test("commit args parser preserves explicit message, repository, and optional context", () => {
+  assert.deepEqual(parseCommitArgs('--message "feat(cli): use tao" --repo-root /work/repo -- Inspect this change'), {
+    message: "feat(cli): use tao",
+    repoRoot: "/work/repo",
+    context: "Inspect this change",
+  });
+});
+
+test("proposal workflow delegates preflight and finalization to Tao without invoking Git", async () => {
+  const repoRoot = path.join(os.tmpdir(), `tao-pi-repo-${process.pid}-delegate`);
+  const calls: Array<{ command: string; args: string[] }> = [];
+  let proposalPath = "";
+  const run: CommandRunner = async (command, args) => {
+    calls.push({ command, args });
+    assert.equal(command, "tao");
+    if (args.includes("--context")) {
+      return { stdout: JSON.stringify(safeContext), exitCode: 0 };
+    }
+    proposalPath = args[args.indexOf("--proposal-file") + 1];
+    assert.equal(await readFile(proposalPath, "utf8"), validProposal);
+    return createdCommit();
   };
 
-  assert.deepEqual(await collectGitContext(runner), {
-    statusPorcelain: " M extensions/pi/src/commit.ts\n",
-    stagedDiff: "staged diff",
-    unstagedDiff: "unstaged diff",
-    recentLog: "abc123 feat(pi): add skeleton",
-  });
-  assert.deepEqual(calls, [
-    ["git", ["status", "--porcelain"]],
-    ["git", ["diff", "--cached"]],
-    ["git", ["diff"]],
-    ["git", ["log", "--oneline", "-12"]],
-  ]);
-});
-
-test("collectGitContext handles no changes deterministically", async () => {
-  const runner: CommandRunner = async () => ({ stdout: "" });
-
-  assert.deepEqual(await collectGitContext(runner), {
-    statusPorcelain: "",
-    stagedDiff: "",
-    unstagedDiff: "",
-    recentLog: "",
-  });
-});
-
-test("readRepoExclusions always excludes .tao/ and derives local-only guidance", async () => {
-  const exclusions = await readRepoExclusions("/repo", async (filePath) => {
-    assert.equal(filePath, "/repo/AGENTS.md");
-    return "Treat `.tao/` as local-only and never commit it.";
-  });
-
-  assert.deepEqual(exclusions.sources, ["AGENTS.md"]);
-  assert.ok(exclusions.patterns.includes(".tao/"));
-});
-
-test("filterAllowedFiles rejects .tao/ paths and keeps ordinary source", () => {
-  const result = filterAllowedFiles([
-    { path: ".tao/plans/state.json" },
-    { path: "extensions/pi/src/commit.ts" },
-  ]);
-
-  assert.deepEqual(result.allowed, ["extensions/pi/src/commit.ts"]);
-  assert.deepEqual(result.rejected, [{ path: ".tao/plans/state.json", reason: "local-only path excluded by .tao/" }]);
-});
-
-test("filterAllowedFiles rejects generated artifacts and local-only exclusions", () => {
-  const result = filterAllowedFiles(
-    [
-      { path: "bin/tao" },
-      { path: "coverage.out" },
-      { path: ".tao/cache/state.json" },
-      { path: "internal/cli/run.go" },
-    ],
-    { patterns: [".tao/"], sources: ["AGENTS.md"] },
+  const result = await runCommitWorkflow(
+    { repoRoot, context: "prefer the example scope" },
+    {
+      run,
+      async proposeProposal(request) {
+        assert.equal(request.commitContext.context_fingerprint, fingerprint);
+        assert.equal(request.context, "prefer the example scope");
+        return validProposal;
+      },
+    },
   );
 
-  assert.deepEqual(result.allowed, ["internal/cli/run.go"]);
-  assert.deepEqual(
-    result.rejected.map((rejection) => rejection.reason),
-    ["generated artifact", "generated artifact", "local-only path excluded by .tao/"],
-  );
+  assert.equal(result.hash, "abcdef123456");
+  assert.deepEqual(calls.map(({ args }) => args[1]), ["--context", "--proposal-file"]);
+  assert.equal(path.relative(repoRoot, proposalPath).startsWith(".."), true);
+  await assert.rejects(stat(proposalPath), /ENOENT/);
 });
 
-test("filterAllowedFiles rejects obvious secret paths and credential-looking diff content", () => {
-  const result = filterAllowedFiles([
-    { path: ".env" },
-    { path: "config/secrets.yml" },
-    { path: "src/config.ts", diff: "+const apiKey = '1234567890abcdef1234567890';\n" },
-  ]);
+test("proposal workflow gives the selected session one repair after Tao rejects content", async () => {
+  const requests: CommitProposalRequest[] = [];
+  let finalizations = 0;
+  const run: CommandRunner = async (command, args) => {
+    assert.equal(command, "tao");
+    if (args.includes("--context")) {
+      return { stdout: JSON.stringify(safeContext), exitCode: 0 };
+    }
+    finalizations++;
+    if (finalizations === 1) {
+      return { stdout: "", stderr: "validate standalone commit proposal: unsupported commit type \"wip\"", exitCode: 1 };
+    }
+    return createdCommit();
+  };
 
-  assert.deepEqual(result.allowed, []);
-  assert.deepEqual(
-    result.rejected.map((rejection) => rejection.reason),
-    ["forbidden credential path", "secret-looking path", "credential-looking diff content"],
-  );
-});
-
-test("validateCommitMessage accepts preferred conventional messages", () => {
-  assert.deepEqual(validateCommitMessage("feat(pi): add git safety units"), {
-    valid: true,
-    type: "feat",
-    scope: "pi",
-    summary: "add git safety units",
-  });
-});
-
-test("validateCommitMessage rejects invalid conventional commit messages", () => {
-  assert.equal(validateCommitMessage("feat: add git safety units").valid, false);
-  assert.equal(validateCommitMessage("wip(pi): add git safety units").reason, "unsupported commit type: wip");
-  assert.equal(validateCommitMessage("feat(telemetry): add git safety units").valid, true);
-  assert.equal(validateCommitMessage("feat(pi): add git safety units.").reason, "summary must not end with punctuation");
-});
-
-test("stageAllowedFiles unstages existing forbidden paths and stages allowed files", async () => {
-  const repo = await createGitRepo();
-  const run = createDefaultRunner(repo);
-  await writeFile(path.join(repo, "src.ts"), "allowed\n");
-  await mkdir(path.join(repo, ".tao"), { recursive: true });
-  await writeFile(path.join(repo, ".tao", "state.json"), "{}\n");
-  await run("git", ["add", "src.ts"]);
-  await run("git", ["add", "-f", ".tao/state.json"]);
-
-  const result = await stageAllowedFiles(run);
-
-  assert.deepEqual(result.allowed, ["src.ts"]);
-  assert.deepEqual(result.rejected, [{ path: ".tao/state.json", reason: "local-only path excluded by .tao/" }]);
-  assert.match((await run("git", ["diff", "--cached", "--name-only"])).stdout, /^src\.ts\n$/);
-});
-
-test("runCommitWorkflow leaves excluded files unstaged and commits only allowed files", async () => {
-  const repo = await createGitRepo();
-  await writeFile(path.join(repo, "AGENTS.md"), "Treat `.tao/` as local-only.\n");
-  await writeFile(path.join(repo, "src.ts"), "allowed\n");
-  await mkdir(path.join(repo, ".tao"), { recursive: true });
-  await writeFile(path.join(repo, ".tao", "state.json"), "{}\n");
-
-  const run = createDefaultRunner(repo);
-  await run("git", ["add", "-f", ".tao/state.json"]);
-  const result = await runCommitWorkflow({ message: "feat(pi): add commit command", repoRoot: repo }, { run, repoRoot: repo });
-
-  assert.match(result.hash, /^[a-f0-9]{40}$/);
-  assert.equal(result.summary, "feat(pi): add commit command");
-  assert.equal((await run("git", ["show", "--name-only", "--format=", "HEAD"])).stdout.trim(), "AGENTS.md\nsrc.ts");
-});
-
-test("createCommit refuses empty commits", async () => {
-  const repo = await createGitRepo();
-  await assert.rejects(
-    createCommit(createDefaultRunner(repo), "feat(pi): add commit command"),
-    /refusing to create empty commit/,
-  );
-});
-
-test("proposeAndValidateCommitMessage allows one repair for invalid messages", async () => {
-  const requests: CommitMessageRequest[] = [];
-  const message = await proposeAndValidateCommitMessage(undefined, { allowedDiff: "diff", recentLog: "log" }, async (request) => {
-    requests.push(request);
-    return requests.length === 1 ? "wip(pi): bad" : "feat(pi): add commit command";
-  });
-
-  assert.equal(message, "feat(pi): add commit command");
-  assert.equal(requests.length, 2);
-  assert.equal(requests[1].validationReason, "unsupported commit type: wip");
-});
-
-test("proposeAndValidateCommitMessage fails clearly after one invalid repair", async () => {
-  await assert.rejects(
-    proposeAndValidateCommitMessage(undefined, { allowedDiff: "diff", recentLog: "log" }, async () => "wip(pi): bad"),
-    /invalid commit message after repair: unsupported commit type: wip/,
-  );
-});
-
-test("command handler proposes a message with the selected Pi model", async () => {
-  const repo = await createGitRepo();
-  await writeFile(path.join(repo, "src.ts"), "allowed\n");
-  const prompts: string[] = [];
-  const command = createCommitCommand({
-    run: createDefaultRunner(repo),
-    repoRoot: repo,
-    async completeMessage(model, prompt, auth) {
-      assert.deepEqual(model, { provider: "test", id: "commit-model" });
-      assert.equal(auth.apiKey, "test-key");
-      prompts.push(prompt);
-      return "feat(example): add allowed source";
+  await runCommitWorkflow({ repoRoot: "/work/repo" }, {
+    run,
+    async proposeProposal(request) {
+      requests.push(request);
+      return requests.length === 1 ? JSON.stringify({ context_fingerprint: fingerprint, type: "wip" }) : validProposal;
     },
   });
 
-  await command.handler("", {
-    model: { provider: "test", id: "commit-model" },
+  assert.equal(finalizations, 2);
+  assert.equal(requests.length, 2);
+  assert.match(requests[1].validationReason ?? "", /unsupported commit type/);
+  assert.match(requests[1].invalidProposal ?? "", /"wip"/);
+});
+
+test("proposal workflow does not repair stale or non-proposal finalization failures", async () => {
+  let proposals = 0;
+  const run: CommandRunner = async (_command, args) => args.includes("--context")
+    ? { stdout: JSON.stringify(safeContext), exitCode: 0 }
+    : { stdout: "", stderr: "standalone commit context is stale", exitCode: 1 };
+
+  await assert.rejects(
+    runCommitWorkflow({ repoRoot: "/work/repo" }, {
+      run,
+      async proposeProposal() {
+        proposals++;
+        return validProposal;
+      },
+    }),
+    /context is stale/,
+  );
+  assert.equal(proposals, 1);
+});
+
+test("explicit message delegates directly to Tao and preserves canonical body", async () => {
+  const message = "feat(cli): delegate commits\n\nWhat:\nSend the complete message to Tao.\n\nWhy:\nKeep validation and Git mutation centralized.";
+  const calls: string[][] = [];
+  const result = await runCommitWorkflow({ repoRoot: "/work/repo", message }, {
+    async run(command, args) {
+      assert.equal(command, "tao");
+      calls.push(args);
+      return createdCommit("Created local commit fedcba654321 feat(cli): delegate commits.\n");
+    },
+  });
+
+  assert.equal(result.hash, "fedcba654321");
+  assert.deepEqual(calls, [["commit", "--message", message, "--repo-root", "/work/repo"]]);
+});
+
+test("command handler uses Pi's selected model, safe Tao context, cancellation, and notifications", async () => {
+  const prompts: string[] = [];
+  const notifications: string[] = [];
+  const controller = new AbortController();
+  const run: CommandRunner = async (command, args, options) => {
+    assert.equal(command, "tao");
+    assert.equal(options?.signal, controller.signal);
+    return args.includes("--context") ? { stdout: JSON.stringify(safeContext), exitCode: 0 } : createdCommit();
+  };
+  const command = createCommitCommand({
+    run,
+    repoRoot: "/work/repo",
+    async completeMessage(model, prompt, auth, signal) {
+      assert.deepEqual(model, { provider: "test", id: "selected-model" });
+      assert.equal(auth.apiKey, "test-key");
+      assert.equal(signal, controller.signal);
+      prompts.push(prompt);
+      return validProposal;
+    },
+  });
+
+  await command.handler("-- user supplied context", {
+    model: { provider: "test", id: "selected-model" },
     modelRegistry: {
       async getApiKeyAndHeaders() {
         return { ok: true, apiKey: "test-key" };
       },
     },
-    ui: { notify() {} },
-  });
-
-  assert.equal(prompts.length, 1);
-  assert.match(prompts[0], /Allowed staged diff:/);
-  assert.equal((await createDefaultRunner(repo)("git", ["show", "--no-patch", "--format=%s", "HEAD"])).stdout.trim(), "feat(example): add allowed source");
-});
-
-test("command handler reports a missing selected model clearly", async () => {
-  const repo = await createGitRepo();
-  await writeFile(path.join(repo, "src.ts"), "allowed\n");
-  const command = createCommitCommand({ run: createDefaultRunner(repo), repoRoot: repo });
-
-  await assert.rejects(command.handler("", { ui: { notify() {} } }), /no Pi model selected/);
-});
-
-test("command handler creates a local commit and reports hash", async () => {
-  const repo = await createGitRepo();
-  await writeFile(path.join(repo, "src.ts"), "allowed\n");
-  const notifications: string[] = [];
-  const command = createCommitCommand({ run: createDefaultRunner(repo), repoRoot: repo });
-
-  await command.handler('--message "feat(pi): add commit command"', {
+    signal: controller.signal,
     ui: {
-      notify(message: string) {
+      notify(message) {
         notifications.push(message);
       },
     },
   });
 
-  assert.match(notifications[0], /^Created local commit [a-f0-9]{12} feat\(pi\): add commit command\.$/);
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0], /Safe context from Tao/);
+  assert.match(prompts[0], new RegExp(fingerprint));
+  assert.match(prompts[0], /user supplied context/);
+  assert.doesNotMatch(prompts[0], /git status|git commit/i);
+  assert.deepEqual(notifications, ["Created local commit abcdef123456 feat(example): add safe source."]);
 });
 
-async function createGitRepo(): Promise<string> {
-  const repo = await mkdir(path.join(os.tmpdir(), `tao-pi-commit-${process.pid}-${Math.random().toString(16).slice(2)}`), { recursive: true });
-  const run = createDefaultRunner(repo);
-  await run("git", ["init"]);
-  await run("git", ["config", "user.email", "tao@example.test"]);
-  await run("git", ["config", "user.name", "Tao Test"]);
-  await writeFile(path.join(repo, "README.md"), "initial\n");
-  await run("git", ["add", "README.md"]);
-  await run("git", ["commit", "-m", "chore(test): initial commit"]);
-  return repo;
-}
+test("command handler returns without a model when Tao preflight finds no allowed changes", async () => {
+  const notifications: string[] = [];
+  let calls = 0;
+  const command = createCommitCommand({
+    repoRoot: "/work/repo",
+    async run(commandName, args) {
+      calls++;
+      assert.equal(commandName, "tao");
+      assert.equal(args.includes("--context"), true);
+      return {
+        stdout: JSON.stringify({ ...safeContext, allowed_paths: [], allowed_diff: "" }),
+        exitCode: 0,
+      };
+    },
+  });
+
+  await command.handler("", {
+    ui: {
+      notify(message) {
+        notifications.push(message);
+      },
+    },
+  });
+
+  assert.equal(calls, 1);
+  assert.deepEqual(notifications, ["Nothing to commit: no allowed changes."]);
+});
+
+test("command handler reports a missing selected model after Tao preflight", async () => {
+  const command = createCommitCommand({
+    repoRoot: "/work/repo",
+    async run() {
+      return { stdout: JSON.stringify(safeContext), exitCode: 0 };
+    },
+  });
+
+  await assert.rejects(command.handler("", { ui: { notify() {} } }), /no Pi model selected/);
+});

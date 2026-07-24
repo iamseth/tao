@@ -103,7 +103,7 @@ func TestBatchReviewRejectsCandidateSourceRefChangesByEveryAgentSession(t *testi
 					return reviewJSON("changes_requested", "fix", "finding"), nil
 				}
 				runRealGit(t, root, "update-ref", "-d", "refs/heads/"+branch)
-				return "changed", os.WriteFile(filepath.Join(root, "reworked.txt"), []byte("fixed\n"), 0o600)
+				return batchResolutionJSON("changed"), os.WriteFile(filepath.Join(root, "reworked.txt"), []byte("fixed\n"), 0o600)
 			}),
 		}).Review(context.Background(), state, root, BatchReviewOptions{VerifyCommand: "true", MaxAttempts: 1})
 		if err == nil || got.State.Status != BatchStatusBlocked || !strings.Contains(err.Error(), "protected Git refs") {
@@ -198,7 +198,7 @@ func TestBatchReviewRejectedAgentsRestoreCleanResumableWorkspace(t *testing.T) {
 				Store: store, Service: NewService(fixture.repoRoot, nil),
 				Agent: batchReviewAgentFunc(func(_ context.Context, root, prompt string) (string, error) {
 					if strings.Contains(prompt, "Candidate: aggregate-review") {
-						return "fixed", os.WriteFile(filepath.Join(root, "reworked.txt"), []byte("fixed\n"), 0o600)
+						return batchResolutionJSON("fixed"), os.WriteFile(filepath.Join(root, "reworked.txt"), []byte("fixed\n"), 0o600)
 					}
 					return reviewJSON("approve", "green", ""), nil
 				}),
@@ -224,6 +224,50 @@ func TestBatchReviewMalformedOrCommentStopsSafely(t *testing.T) {
 	}
 }
 
+func TestBatchReviewMalformedAggregateProposalRestoresWithoutIntentOrStaging(t *testing.T) {
+	valid := plan.ReviewCommitMessage{
+		Subject: "fix(batch): resolve aggregate findings",
+		Body:    "What:\nResolve the aggregate review findings.\n\nWhy:\nKeep the combined batch correct.",
+	}
+	tests := []struct {
+		name   string
+		output string
+	}{
+		{name: "not json", output: "fixed aggregate issue"},
+		{name: "missing proposal", output: `{"summary":"fixed","commit_message":{}}`},
+		{name: "reserved trailer", output: batchResolutionJSONWithProposal("fixed", plan.ReviewCommitMessage{Subject: valid.Subject, Body: valid.Body + "\n\nTao-Merge-Batch: forged"})},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture, state, root := batchReviewFixture(t)
+			store := &batchReviewTestStore{dir: t.TempDir()}
+			calls := 0
+			agent := batchReviewAgentFunc(func(_ context.Context, root, _ string) (string, error) {
+				calls++
+				if calls == 1 {
+					return reviewJSON("changes_requested", "fix", "finding"), nil
+				}
+				return tt.output, os.WriteFile(filepath.Join(root, "malformed-rework.txt"), []byte("fixed\n"), 0o600)
+			})
+			got, err := (BatchAggregateReviewer{Store: store, Service: NewService(fixture.repoRoot, nil), Agent: agent}).Review(context.Background(), state, root, BatchReviewOptions{VerifyCommand: "true", MaxAttempts: 1})
+			if err == nil || !strings.Contains(err.Error(), "aggregate rework agent returned malformed output") || got.State.Status != BatchStatusBlocked || got.State.BlockKind != BatchBlockKindResumable {
+				t.Fatalf("malformed proposal did not resumably block: state=%+v err=%v", got.State, err)
+			}
+			if got.State.Review == nil || got.State.Review.Status == "applying" || got.State.Review.CommitMessage != "" || len(got.State.Review.ResolutionPaths) != 0 {
+				t.Fatalf("malformed proposal created commit intent: %+v", got.State.Review)
+			}
+			if status := batchReviewGitOutput(t, root, "status", "--porcelain"); status != "" {
+				t.Fatalf("malformed proposal left workspace dirty or staged: %q", status)
+			}
+			for _, persisted := range store.states {
+				if persisted.Review != nil && persisted.Review.Status == "applying" {
+					t.Fatalf("malformed proposal persisted applying intent: %+v", persisted.Review)
+				}
+			}
+		})
+	}
+}
+
 func TestBatchReviewReworkPersistsInterruptionStateAndCreatesResolutionCommit(t *testing.T) {
 	fixture, state, root := batchReviewFixture(t)
 	store := &batchReviewTestStore{dir: t.TempDir()}
@@ -240,7 +284,7 @@ func TestBatchReviewReworkPersistsInterruptionStateAndCreatesResolutionCommit(t 
 			if err := os.WriteFile(filepath.Join(root, "reworked.txt"), []byte("fixed\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			return "fixed aggregate issue", nil
+			return batchResolutionJSON("fixed aggregate issue"), nil
 		default:
 			return reviewJSON("approve", "now green", ""), nil
 		}
@@ -267,10 +311,165 @@ func TestBatchReviewReworkPersistsInterruptionStateAndCreatesResolutionCommit(t 
 		t.Fatalf("interrupted post-rework state cannot resume: %+v", drifts)
 	}
 	message := strings.TrimSpace(batchReviewGitOutput(t, root, "log", "-1", "--format=%B"))
-	if !strings.Contains(message, "Tao-Merge-Batch: "+state.ID) || !strings.Contains(message, "Tao-Review-Attempt: 1") {
-		t.Fatalf("resolution commit lacks Tao ownership: %s", message)
+	expected, messageErr := aggregateProposedResolutionCommitMessage(plan.ReviewCommitMessage{
+		Subject: "fix(batch): resolve candidate integration",
+		Body:    "What:\nResolve the candidate changes in the integration worktree.\n\nWhy:\nPreserve the candidate intent in the combined batch.",
+	}, state.ID, 1)
+	if messageErr != nil {
+		t.Fatal(messageErr)
+	}
+	if message != expected {
+		t.Fatalf("resolution commit message = %q, want exact proposal intent %q", message, expected)
+	}
+	var applying *BatchReview
+	for i := range store.states {
+		if review := store.states[i].Review; review != nil && review.Status == "applying" {
+			applying = review
+			break
+		}
+	}
+	if applying == nil || applying.CommitMessage != expected || !slices.Equal(applying.ResolutionPaths, []string{"reworked.txt"}) || applying.ResolutionFingerprint == "" {
+		t.Fatalf("exact aggregate intent was not durable before commit: %+v", applying)
 	}
 	assertRef(t, fixture.repoRoot, fixture.defaultBranch, state.DefaultStartSHA)
+}
+
+func TestAggregateReworkContentFingerprintFramesRegularFileDigest(t *testing.T) {
+	paths := []string{"first.txt", "next.txt"}
+	var nextFileEncoding strings.Builder
+	nextFileEncoding.WriteByte(0)
+	writeAggregateFingerprintField(&nextFileEncoding, paths[1])
+	writeAggregateFingerprintField(&nextFileEncoding, "regular")
+	writeAggregateFingerprintField(&nextFileEncoding, "false")
+	separator := nextFileEncoding.String()
+
+	leftRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(leftRoot, paths[0]), []byte("prefix"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(leftRoot, paths[1]), []byte(separator+"suffix"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rightRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(rightRoot, paths[0]), []byte("prefix"+separator), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rightRoot, paths[1]), []byte("suffix"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	leftFingerprint, err := aggregateReworkContentFingerprint(leftRoot, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightFingerprint, err := aggregateReworkContentFingerprint(rightRoot, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leftFingerprint == rightFingerprint {
+		t.Fatal("different multi-file contents collided after shifting the next file's encoded metadata")
+	}
+}
+
+func TestBatchReviewBlocksWhenAggregateReworkContentDriftsAfterIntent(t *testing.T) {
+	fixture, state, root := batchReviewFixture(t)
+	store := &batchReviewTestStore{dir: t.TempDir()}
+	persistedFingerprint := ""
+	store.afterTransition = func(persisted BatchState) error {
+		if persisted.Review == nil || persisted.Review.Status != "applying" {
+			return nil
+		}
+		persistedFingerprint = persisted.Review.ResolutionFingerprint
+		store.afterTransition = nil
+		return os.WriteFile(filepath.Join(root, "reworked.txt"), []byte("changed after intent\n"), 0o600)
+	}
+	calls := 0
+	agent := batchReviewAgentFunc(func(_ context.Context, root, _ string) (string, error) {
+		calls++
+		if calls == 1 {
+			return reviewJSON("changes_requested", "fix", "first"), nil
+		}
+		return batchResolutionJSON("fixed"), os.WriteFile(filepath.Join(root, "reworked.txt"), []byte("proposed\n"), 0o600)
+	})
+
+	got, err := (BatchAggregateReviewer{Store: store, Service: NewService(fixture.repoRoot, nil), Agent: agent}).Review(context.Background(), state, root, BatchReviewOptions{VerifyCommand: "true"})
+	if err == nil || !strings.Contains(err.Error(), "content drifted from durable intent") || got.State.Status != BatchStatusBlocked {
+		t.Fatalf("same-path content drift did not block completion: state=%+v err=%v", got.State, err)
+	}
+	if persistedFingerprint == "" {
+		t.Fatal("applying intent omitted the complete content fingerprint")
+	}
+	if calls != 2 || got.State.Review == nil || got.State.Review.Status != "reworking" || got.State.Review.CommitMessage != "" || len(got.State.Review.ResolutionPaths) != 0 || got.State.Review.ResolutionFingerprint != "" {
+		t.Fatalf("drifted intent was not reset for a fresh proposal: calls=%d review=%+v", calls, got.State.Review)
+	}
+	if status := batchReviewGitOutput(t, root, "status", "--porcelain"); status != "" {
+		t.Fatalf("drifted aggregate edits were not restored: %q", status)
+	}
+	if head := strings.TrimSpace(batchReviewGitOutput(t, root, "rev-parse", "HEAD")); head != state.IntegrationHead {
+		t.Fatalf("drifted content was committed under stale intent: head=%s want=%s", head, state.IntegrationHead)
+	}
+}
+
+func TestBatchReviewRecoveryReproposesSamePathAfterAggregateContentDrift(t *testing.T) {
+	fixture, state, root := batchReviewFixture(t)
+	state.Attempts.AggregateRework = 1
+	oldProposal := plan.ReviewCommitMessage{
+		Subject: "fix(batch): apply stale aggregate fix",
+		Body:    "What:\nApply the original aggregate fix.\n\nWhy:\nResolve the reviewed finding.",
+	}
+	oldMessage, err := aggregateProposedResolutionCommitMessage(oldProposal, state.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "reworked.txt"
+	if err := os.WriteFile(filepath.Join(root, path), []byte("original proposal\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fingerprint, err := aggregateReworkContentFingerprint(root, []string{path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Review = &BatchReview{
+		Status: "applying", Verdict: plan.ReviewVerdictChangesRequested, Summary: "fix",
+		Findings: runpkg.ParseReviewOutput(reviewJSON("changes_requested", "fix", "first")).Findings,
+		BaseSHA:  state.DefaultStartSHA, HeadSHA: state.IntegrationHead, Attempts: 1,
+		CommitMessage: oldMessage, ResolutionPaths: []string{path}, ResolutionFingerprint: fingerprint,
+	}
+	if err := os.WriteFile(filepath.Join(root, path), []byte("modified after interruption\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	freshProposal := plan.ReviewCommitMessage{
+		Subject: "fix(batch): apply fresh aggregate fix",
+		Body:    "What:\nApply the replacement aggregate fix.\n\nWhy:\nPrevent stale commit intent reuse.",
+	}
+	calls := 0
+	agent := batchReviewAgentFunc(func(_ context.Context, agentRoot, prompt string) (string, error) {
+		calls++
+		if calls == 1 {
+			if !strings.Contains(prompt, "Candidate: aggregate-review") {
+				t.Fatalf("recovery did not request a fresh aggregate proposal:\n%s", prompt)
+			}
+			if status := batchReviewGitOutput(t, agentRoot, "status", "--porcelain"); status != "" {
+				t.Fatalf("recovery did not restore drifted edits before reproposal: %q", status)
+			}
+			return batchResolutionJSONWithProposal("fresh fix", freshProposal), os.WriteFile(filepath.Join(agentRoot, path), []byte("fresh proposal\n"), 0o600)
+		}
+		return reviewJSON("approve", "green", ""), nil
+	})
+	got, err := (BatchAggregateReviewer{Store: &batchReviewTestStore{dir: t.TempDir()}, Service: NewService(fixture.repoRoot, nil), Agent: agent}).Review(context.Background(), state, root, BatchReviewOptions{VerifyCommand: "true"})
+	if err != nil || got.State.Status != BatchStatusReadyToLand || calls != 2 {
+		t.Fatalf("drift recovery did not finish with a fresh proposal: calls=%d state=%+v err=%v", calls, got.State, err)
+	}
+	message := strings.TrimSpace(batchReviewGitOutput(t, root, "log", "-1", "--format=%B"))
+	if !strings.HasPrefix(message, freshProposal.Subject+"\n\n") || strings.Contains(message, oldProposal.Subject) {
+		t.Fatalf("recovery reused stale proposal instead of fresh proposal: %q", message)
+	}
+	content, readErr := os.ReadFile(filepath.Join(root, path)) //nolint:gosec // test path is rooted in t.TempDir.
+	if readErr != nil || string(content) != "fresh proposal\n" {
+		t.Fatalf("fresh aggregate content was not committed: content=%q err=%v", content, readErr)
+	}
 }
 
 func TestBatchReviewAggregateReworkConflictMarkerConfinement(t *testing.T) {
@@ -286,7 +485,7 @@ func TestBatchReviewAggregateReworkConflictMarkerConfinement(t *testing.T) {
 			case 1:
 				return reviewJSON("changes_requested", "fix conflict", "remove marker"), nil
 			case 2:
-				return "attempted conflict fix", os.WriteFile(filepath.Join(root, "marker-rework.txt"), markerContent, 0o600)
+				return batchResolutionJSON("attempted conflict fix"), os.WriteFile(filepath.Join(root, "marker-rework.txt"), markerContent, 0o600)
 			default:
 				t.Fatalf("unexpected agent call %d", calls)
 				return "", nil
@@ -326,7 +525,7 @@ func TestBatchReviewAggregateReworkConflictMarkerConfinement(t *testing.T) {
 				if err := os.MkdirAll(filepath.Join(root, filepath.Dir(markerPath)), 0o700); err != nil {
 					return "", err
 				}
-				return "attempted nested conflict fix", os.WriteFile(filepath.Join(root, markerPath), markerContent, 0o600)
+				return batchResolutionJSON("attempted nested conflict fix"), os.WriteFile(filepath.Join(root, markerPath), markerContent, 0o600)
 			default:
 				return reviewJSON("approve", "marker was missed", ""), nil
 			}
@@ -373,7 +572,7 @@ func TestBatchReviewAggregateReworkConflictMarkerConfinement(t *testing.T) {
 			case 1:
 				return reviewJSON("changes_requested", "fix aggregate issue", "finding"), nil
 			case 2:
-				return "fixed aggregate issue", os.WriteFile(filepath.Join(root, "safe-rework.txt"), []byte("fixed\n"), 0o600)
+				return batchResolutionJSON("fixed aggregate issue"), os.WriteFile(filepath.Join(root, "safe-rework.txt"), []byte("fixed\n"), 0o600)
 			default:
 				return reviewJSON("approve", "green", ""), nil
 			}
@@ -401,7 +600,7 @@ func TestBatchReviewResumeDoesNotCountInterruptedMetadataAsAnotherConvergenceRou
 	agent := batchReviewAgentFunc(func(_ context.Context, root, prompt string) (string, error) {
 		if strings.Contains(prompt, "Candidate: aggregate-review") {
 			reworkCalls++
-			return "fixed interrupted finding", os.WriteFile(filepath.Join(root, "interrupted-review-fix.txt"), []byte("fixed\n"), 0o600)
+			return batchResolutionJSON("fixed interrupted finding"), os.WriteFile(filepath.Join(root, "interrupted-review-fix.txt"), []byte("fixed\n"), 0o600)
 		}
 		reviewCalls++
 		if reviewCalls == 3 {
@@ -456,7 +655,7 @@ func TestBatchReviewResumeAfterEquivalentFingerprintMetadataRemainsStalled(t *te
 	agent := batchReviewAgentFunc(func(_ context.Context, root, prompt string) (string, error) {
 		if strings.Contains(prompt, "Candidate: aggregate-review") {
 			reworkCalls++
-			return "attempted fix", os.WriteFile(filepath.Join(root, "equivalent-fingerprint-fix.txt"), []byte("fixed\n"), 0o600)
+			return batchResolutionJSON("attempted fix"), os.WriteFile(filepath.Join(root, "equivalent-fingerprint-fix.txt"), []byte("fixed\n"), 0o600)
 		}
 		reviewCalls++
 		output := reviewJSON("changes_requested", "same finding remains", "equivalent finding")
@@ -499,7 +698,7 @@ func TestBatchReviewResumesAggregateReworkAfterCommitTransitionFailure(t *testin
 			return reviewJSON("changes_requested", "fix", "first"), nil
 		}
 		if calls == 2 {
-			return "fixed", os.WriteFile(filepath.Join(root, "reworked.txt"), []byte("fixed\n"), 0o600)
+			return batchResolutionJSON("fixed"), os.WriteFile(filepath.Join(root, "reworked.txt"), []byte("fixed\n"), 0o600)
 		}
 		return reviewJSON("approve", "green", ""), nil
 	})
@@ -586,7 +785,7 @@ func TestBatchReviewRecoversInterruptedAggregateReworkBeforeRetry(t *testing.T) 
 					if !strings.Contains(prompt, "Candidate: aggregate-review") {
 						t.Fatalf("resume reran review instead of interrupted rework:\n%s", prompt)
 					}
-					return "fixed", os.WriteFile(filepath.Join(agentRoot, "fixed.txt"), []byte("fixed\n"), 0o600)
+					return batchResolutionJSON("fixed"), os.WriteFile(filepath.Join(agentRoot, "fixed.txt"), []byte("fixed\n"), 0o600)
 				}
 				return reviewJSON("approve", "green", ""), nil
 			})
@@ -616,15 +815,16 @@ func TestBatchReviewRecoversAggregateReworkCommitFailure(t *testing.T) {
 			return reviewJSON("changes_requested", "fix", "first"), nil
 		}
 		if calls == 2 {
-			return "first fix", os.WriteFile(filepath.Join(agentRoot, "failed.txt"), []byte("failed\n"), 0o600)
+			return batchResolutionJSON("first fix"), os.WriteFile(filepath.Join(agentRoot, "failed.txt"), []byte("failed\n"), 0o600)
 		}
 		if calls == 3 {
 			if got := batchReviewGitOutput(t, agentRoot, "status", "--porcelain"); got != "" {
-				t.Fatalf("failed commit edits were not removed before retry: %q", got)
+				t.Fatalf("recovered commit left workspace dirty before review: %q", got)
 			}
-			return "retry fix", os.WriteFile(filepath.Join(agentRoot, "fixed.txt"), []byte("fixed\n"), 0o600)
+			return reviewJSON("approve", "green", ""), nil
 		}
-		return reviewJSON("approve", "green", ""), nil
+		t.Fatalf("unexpected follow-up agent call %d", calls)
+		return "", nil
 	})
 	store := &batchReviewTestStore{dir: t.TempDir()}
 	reviewer := BatchAggregateReviewer{Store: store, Service: NewService(state.RepoRoot, nil), Agent: agent}
@@ -638,8 +838,8 @@ func TestBatchReviewRecoversAggregateReworkCommitFailure(t *testing.T) {
 		t.Fatal("commit failure was not resumable")
 	}
 	got, err := reviewer.Review(context.Background(), resumed, root, BatchReviewOptions{VerifyCommand: "true", MaxAttempts: 2})
-	if err != nil || got.State.Status != BatchStatusReadyToLand || calls != 4 || len(got.State.Review.ResolutionSHAs) != 1 {
-		t.Fatalf("failed commit did not recover: calls=%d state=%+v err=%v", calls, got.State, err)
+	if err != nil || got.State.Status != BatchStatusReadyToLand || calls != 3 || len(got.State.Review.ResolutionSHAs) != 1 {
+		t.Fatalf("failed commit did not recover without another rework call: calls=%d state=%+v err=%v", calls, got.State, err)
 	}
 }
 
@@ -753,11 +953,11 @@ func TestBatchReviewAutoEjectResolvesReducedSetDeferralAndApproves(t *testing.T)
 	var reviewOutputs []string
 	agent := batchReviewAgentFunc(func(_ context.Context, root, prompt string) (string, error) {
 		if strings.Contains(prompt, "Candidate: aggregate-review") {
-			return "attempted fix", os.WriteFile(filepath.Join(root, "review-fix.txt"), []byte("fix\n"), 0o600)
+			return batchResolutionJSON("attempted fix"), os.WriteFile(filepath.Join(root, "review-fix.txt"), []byte("fix\n"), 0o600)
 		}
 		if strings.Contains(prompt, "Candidate: plan-b") {
 			resolutionCalls++
-			return "fixed reduced-set verification", os.WriteFile(filepath.Join(root, "reduced-fixed.txt"), []byte("fixed\n"), 0o600)
+			return batchResolutionJSON("fixed reduced-set verification"), os.WriteFile(filepath.Join(root, "reduced-fixed.txt"), []byte("fixed\n"), 0o600)
 		}
 		reviewCalls++
 		if reviewCalls == 3 {
@@ -829,7 +1029,7 @@ func TestBatchReviewAutoEjectBlocksAttributedNonConvergenceForOnlyCandidate(t *t
 	reviewCalls := 0
 	agent := batchReviewAgentFunc(func(_ context.Context, root, prompt string) (string, error) {
 		if strings.Contains(prompt, "Candidate: aggregate-review") {
-			return "attempted fix", os.WriteFile(filepath.Join(root, "review-fix.txt"), []byte("fix\n"), 0o600)
+			return batchResolutionJSON("attempted fix"), os.WriteFile(filepath.Join(root, "review-fix.txt"), []byte("fix\n"), 0o600)
 		}
 		reviewCalls++
 		output := reviewJSON("changes_requested", "only candidate keeps failing", "round "+strconv.Itoa(reviewCalls))
@@ -869,6 +1069,7 @@ func TestBatchReviewAutoEjectBlocksAttributedNonConvergenceAfterCompletedEjectio
 	state.Candidates = append(state.Candidates, BatchCandidate{
 		PlanID: "plan-c", PlanTitle: "Plan C", RepoRoot: fixture.repoRoot, Branch: planCBranch, SourceTip: planCHead,
 		ReviewBase: state.DefaultStartSHA, ReviewHead: planCHead, DefaultBranch: fixture.defaultBranch, DefaultStartSHA: state.DefaultStartSHA,
+		CommitMessage: testBatchCommitMessage("plan-c", planCHead),
 	})
 	state.ChosenOrder = append(state.ChosenOrder, "plan-c")
 	integrated, err := (BatchIntegrator{Store: store, Service: NewService(fixture.repoRoot, nil)}).Integrate(context.Background(), state, root, BatchIntegrateOptions{VerifyCommand: "true"})
@@ -886,7 +1087,7 @@ func TestBatchReviewAutoEjectBlocksAttributedNonConvergenceAfterCompletedEjectio
 	reviewCalls := 0
 	agent := batchReviewAgentFunc(func(_ context.Context, root, prompt string) (string, error) {
 		if strings.Contains(prompt, "Candidate: aggregate-review") {
-			return "attempted fix", os.WriteFile(filepath.Join(root, "review-fix.txt"), []byte("fix\n"), 0o600)
+			return batchResolutionJSON("attempted fix"), os.WriteFile(filepath.Join(root, "review-fix.txt"), []byte("fix\n"), 0o600)
 		}
 		reviewCalls++
 		output := reviewJSON("changes_requested", "plan b keeps failing", "round "+strconv.Itoa(reviewCalls))
@@ -942,7 +1143,7 @@ func TestBatchReviewAutoEjectDoesNotEjectNonAttributableNonConvergence(t *testin
 	reviewCalls := 0
 	agent := batchReviewAgentFunc(func(_ context.Context, root, prompt string) (string, error) {
 		if strings.Contains(prompt, "Candidate: aggregate-review") {
-			return "attempted fix", os.WriteFile(filepath.Join(root, "review-fix.txt"), []byte("fix\n"), 0o600)
+			return batchResolutionJSON("attempted fix"), os.WriteFile(filepath.Join(root, "review-fix.txt"), []byte("fix\n"), 0o600)
 		}
 		reviewCalls++
 		output := reviewJSON("changes_requested", "unattributed", "round "+strconv.Itoa(reviewCalls))
@@ -968,7 +1169,7 @@ func TestBatchReviewAutoEjectDoesNotAttributeCountStallAcrossCandidates(t *testi
 	reviewCalls := 0
 	agent := batchReviewAgentFunc(func(_ context.Context, root, prompt string) (string, error) {
 		if strings.Contains(prompt, "Candidate: aggregate-review") {
-			return "attempted fix", os.WriteFile(filepath.Join(root, "review-fix.txt"), []byte("fix\n"), 0o600)
+			return batchResolutionJSON("attempted fix"), os.WriteFile(filepath.Join(root, "review-fix.txt"), []byte("fix\n"), 0o600)
 		}
 		reviewCalls++
 		file := "plan-a.txt"
@@ -997,7 +1198,7 @@ func TestBatchReviewAutoEjectDoesNotAttributeCountStallWithMissingFile(t *testin
 	reviewCalls := 0
 	agent := batchReviewAgentFunc(func(_ context.Context, root, prompt string) (string, error) {
 		if strings.Contains(prompt, "Candidate: aggregate-review") {
-			return "attempted fix", os.WriteFile(filepath.Join(root, "review-fix.txt"), []byte("fix\n"), 0o600)
+			return batchResolutionJSON("attempted fix"), os.WriteFile(filepath.Join(root, "review-fix.txt"), []byte("fix\n"), 0o600)
 		}
 		reviewCalls++
 		file := ""
@@ -1056,7 +1257,7 @@ func TestBatchReviewEquivalentFindingsAndCapExhaustionStop(t *testing.T) {
 					if err := os.WriteFile(filepath.Join(root, "attempt.txt"), []byte("edit"), 0o600); err != nil {
 						t.Fatal(err)
 					}
-					return "edited", nil
+					return batchResolutionJSON("edited"), nil
 				}
 				message := "first"
 				if calls > 2 {
@@ -1082,7 +1283,7 @@ func TestBatchReviewNonConvergencePrecedesAttemptCapAndAutoEjects(t *testing.T) 
 	reviewCalls := 0
 	agent := batchReviewAgentFunc(func(_ context.Context, root, prompt string) (string, error) {
 		if strings.Contains(prompt, "Candidate: aggregate-review") {
-			return "attempted fix", os.WriteFile(filepath.Join(root, "review-fix.txt"), []byte("fix\n"), 0o600)
+			return batchResolutionJSON("attempted fix"), os.WriteFile(filepath.Join(root, "review-fix.txt"), []byte("fix\n"), 0o600)
 		}
 		reviewCalls++
 		if reviewCalls == 3 {
@@ -1121,7 +1322,7 @@ func TestBatchReviewVerificationFailureAfterReworkAndReviewTimeout(t *testing.T)
 			if err := os.WriteFile(filepath.Join(root, "fail"), []byte("x"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			return "changed", nil
+			return batchResolutionJSON("changed"), nil
 		})
 		reviewer := BatchAggregateReviewer{Store: store, Service: NewService(fixture.repoRoot, nil), Agent: agent}
 		got, err := reviewer.Review(context.Background(), state, root, BatchReviewOptions{VerifyCommand: "test ! -f fail"})

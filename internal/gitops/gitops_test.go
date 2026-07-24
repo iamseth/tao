@@ -174,6 +174,40 @@ func TestIntegrationPrimitivesConstructCommands(t *testing.T) {
 	}
 }
 
+func TestStandaloneCommitPrimitivesConstructScopedCommands(t *testing.T) {
+	runner := &fakeRunner{
+		outputs: map[string]string{
+			key("-C", "/repo", "status", "--porcelain", "--untracked-files=all"): "?? nested/a.go\n",
+			key("-C", "/repo", "diff", "HEAD", "--", "a.go"):                     "diff-a\n",
+			key("-C", "/repo", "log", "--oneline", "-12"):                        "abc feat(a): change\n",
+		},
+		stderr:   map[string]string{},
+		failures: map[string]error{},
+	}
+	client := NewClient("/repo", runner.run)
+	ctx := context.Background()
+	if status, err := client.StatusPorcelainAllUntracked(ctx); err != nil || status != "?? nested/a.go\n" {
+		t.Fatalf("StatusPorcelainAllUntracked() = %q, %v", status, err)
+	}
+	if diff, err := client.WorkingDiff(ctx, "a.go"); err != nil || diff != "diff-a\n" {
+		t.Fatalf("WorkingDiff() = %q, %v", diff, err)
+	}
+	if log, err := client.RecentLog(ctx, 12); err != nil || log != "abc feat(a): change\n" {
+		t.Fatalf("RecentLog() = %q, %v", log, err)
+	}
+	want := []call{
+		{cwd: "", name: "git", args: []string{"-C", "/repo", "status", "--porcelain", "--untracked-files=all"}},
+		{cwd: "", name: "git", args: []string{"-C", "/repo", "diff", "HEAD", "--", "a.go"}},
+		{cwd: "", name: "git", args: []string{"-C", "/repo", "log", "--oneline", "-12"}},
+	}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls mismatch\nwant: %#v\n got: %#v", want, runner.calls)
+	}
+	if _, err := client.RecentLog(ctx, 0); err == nil {
+		t.Fatal("RecentLog accepted a non-positive limit")
+	}
+}
+
 func TestMergeFFOnlyWrapsFailureWithClearContext(t *testing.T) {
 	runner := &fakeRunner{
 		outputs: map[string]string{},

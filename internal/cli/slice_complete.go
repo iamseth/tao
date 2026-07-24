@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,18 +12,20 @@ import (
 	"path/filepath"
 	"strings"
 
+	commitcontract "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/run"
 )
 
 var sliceCompleteCommand = commandMetadata{
 	name:                  "slice-complete",
-	usageLines:            []string{"slice-complete --plan-dir DIR --slice-id ID --notes-file FILE --verification-results-file FILE"},
-	completionDescription: "Complete a slice from notes and verification files",
-	long:                  "Complete a Tao plan slice from agent-written notes and verification results. This command is agent-facing bookkeeping: it updates Tao metadata and removes the temporary input files after they are consumed.",
-	examples:              "  tao slice-complete --plan-dir /path/to/plan --slice-id 001-example --notes-file /tmp/notes.txt --verification-results-file /tmp/results.json",
+	usageLines:            []string{"slice-complete --plan-dir DIR --slice-id ID --notes-file FILE --verification-results-file FILE [--commit-proposal-file FILE]"},
+	completionDescription: "Complete a slice from notes, verification, and a commit proposal",
+	long:                  "Complete a Tao plan slice from agent-written notes, verification results, and a bounded structured commit proposal for slice-policy commits. Tao validates the proposal, adds trusted evidence trailers, owns the Git transaction, and removes temporary inputs only after successful completion.",
+	examples:              "  tao slice-complete --plan-dir /path/to/plan --slice-id 001-example --notes-file /tmp/notes.txt --verification-results-file /tmp/results.json --commit-proposal-file /tmp/proposal.json",
 	registerFlags:         registerSliceCompleteFlags,
 	completion: completionContext{flagValues: map[string]completionFlagValue{
+		"commit-proposal-file":      {kind: completionValuePath, label: "path"},
 		"notes-file":                {kind: completionValuePath, label: "path"},
 		"plan-dir":                  {kind: completionValuePath, label: "path"},
 		"slice-id":                  {kind: completionValueText, label: "slice id"},
@@ -36,6 +39,7 @@ var sliceCompleteCommand = commandMetadata{
 func registerSliceCompleteFlags(fs *flag.FlagSet) {
 	fs.String("plan-dir", "", "plan directory")
 	fs.String("slice-id", "", "slice id to complete")
+	fs.String("commit-proposal-file", "", "JSON file containing a structured commit proposal (required for a new slice-policy intent)")
 	fs.String("notes-file", "", "file containing completion notes")
 	fs.String("verification-results-file", "", "JSON file containing verification results")
 }
@@ -44,6 +48,7 @@ const (
 	sliceAgentInputMaxFileBytes              int64 = 64 * 1024
 	sliceAgentInputMaxTextRunes                    = 16 * 1024
 	sliceCompleteMaxNotesBytes                     = sliceAgentInputMaxFileBytes
+	sliceCompleteMaxCommitProposalBytes      int64 = 32 * 1024
 	sliceCompleteMaxVerificationResultsBytes int64 = 256 * 1024
 	sliceCompleteMaxVerificationResults            = 50
 	sliceCompleteMaxVerificationDetailsRunes       = sliceAgentInputMaxTextRunes
@@ -90,6 +95,26 @@ func readBoundedAgentInput(path string, label string, maxBytes int64) ([]byte, e
 	return data, nil
 }
 
+func decodeSliceCommitProposal(data []byte) (*commitcontract.Proposal, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var proposal commitcontract.Proposal
+	if err := decoder.Decode(&proposal); err != nil {
+		return nil, fmt.Errorf("decode slice commit proposal: %w", err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return nil, errors.New("decode slice commit proposal: multiple JSON values")
+		}
+		return nil, fmt.Errorf("decode slice commit proposal: %w", err)
+	}
+	if err := commitcontract.ValidateProposal(proposal); err != nil {
+		return nil, fmt.Errorf("validate slice commit proposal: %w", err)
+	}
+	return &proposal, nil
+}
+
 func validateVerificationRuns(results []plan.VerificationRun) error {
 	if len(results) > sliceCompleteMaxVerificationResults {
 		return fmt.Errorf("verification results contain %d entries; limit is %d", len(results), sliceCompleteMaxVerificationResults)
@@ -127,15 +152,16 @@ func (a App) sliceComplete(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := requireNoArgs(positional, "usage: tao slice-complete --plan-dir DIR --slice-id ID --notes-file FILE --verification-results-file FILE"); err != nil {
+	if err := requireNoArgs(positional, "usage: tao slice-complete --plan-dir DIR --slice-id ID --notes-file FILE --verification-results-file FILE [--commit-proposal-file FILE]"); err != nil {
 		return err
 	}
 	planDir := flagStringValue(fs, "plan-dir")
 	sliceID := flagStringValue(fs, "slice-id")
 	notesFile := flagStringValue(fs, "notes-file")
 	verificationResultsFile := flagStringValue(fs, "verification-results-file")
+	commitProposalFile := flagStringValue(fs, "commit-proposal-file")
 	if strings.TrimSpace(planDir) == "" || strings.TrimSpace(sliceID) == "" || strings.TrimSpace(notesFile) == "" || strings.TrimSpace(verificationResultsFile) == "" {
-		return errors.New("usage: tao slice-complete --plan-dir DIR --slice-id ID --notes-file FILE --verification-results-file FILE")
+		return errors.New("usage: tao slice-complete --plan-dir DIR --slice-id ID --notes-file FILE --verification-results-file FILE [--commit-proposal-file FILE]")
 	}
 	notesBytes, err := readBoundedAgentInput(notesFile, "notes file", sliceCompleteMaxNotesBytes)
 	if err != nil {
@@ -155,6 +181,17 @@ func (a App) sliceComplete(ctx context.Context, args []string) error {
 	if err := normalizeVerificationRunCWDs(results); err != nil {
 		return err
 	}
+	var proposal *commitcontract.Proposal
+	if strings.TrimSpace(commitProposalFile) != "" {
+		proposalBytes, err := readBoundedAgentInput(commitProposalFile, "commit proposal file", sliceCompleteMaxCommitProposalBytes)
+		if err != nil {
+			return fmt.Errorf("read commit proposal file: %w", err)
+		}
+		proposal, err = decodeSliceCommitProposal(proposalBytes)
+		if err != nil {
+			return err
+		}
+	}
 
 	record, err := plan.NewFileRepository("").ResolvePlanRecord(ctx, planDir)
 	if err != nil {
@@ -163,15 +200,18 @@ func (a App) sliceComplete(ctx context.Context, args []string) error {
 	service := run.SliceCompletionService{CommandRunner: a.CommandRunner, Output: a.Out}
 	if err := service.Complete(ctx, run.SliceCompletionRequest{
 		Record: record, SliceID: sliceID, Notes: strings.TrimSpace(string(notesBytes)),
-		VerificationResults: results, Now: a.now().UTC(),
+		VerificationResults: results, CommitProposal: proposal, Now: a.now().UTC(),
 	}); err != nil {
 		return err
 	}
-	// The notes and verification-results files are throwaway Tao-owned
-	// bookkeeping inputs. Remove them once consumed so they cannot be left in a
+	// The report and proposal files are throwaway Tao-owned inputs. Remove them
+	// once consumed so they cannot be left in a
 	// repository working tree and accidentally staged or committed. Best-effort:
 	// a failed cleanup must not fail an otherwise successful completion.
 	_ = os.Remove(notesFile)
 	_ = os.Remove(verificationResultsFile)
+	if commitProposalFile != "" {
+		_ = os.Remove(commitProposalFile)
+	}
 	return writef(a.Out, "Slice completed: %s\n", sliceID)
 }

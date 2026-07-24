@@ -27,18 +27,23 @@ func TestSliceCompleteCommandCompletesPlan(t *testing.T) {
 	if err := record.StartSlice("001-a", started); err != nil {
 		t.Fatal(err)
 	}
-	notesFile := filepath.Join(t.TempDir(), "notes.md")
-	resultsFile := filepath.Join(t.TempDir(), "results.json")
+	inputDir := t.TempDir()
+	notesFile := filepath.Join(inputDir, "notes.md")
+	resultsFile := filepath.Join(inputDir, "results.json")
+	proposalFile := filepath.Join(inputDir, "proposal.json")
 	if err := os.WriteFile(notesFile, []byte("implemented slice completion"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(resultsFile, []byte(`[{"command":"go test ./internal/cli","cwd":"/repo","result":"passed","details":"ok"}]`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(proposalFile, []byte(`{"type":"feat","scope":"cli","summary":"accept slice proposals","what":"Read a structured proposal at completion.","why":"Reuse the active implementation agent."}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	var out bytes.Buffer
 	app := App{Out: &out, Err: &out}
-	if err := app.Run(context.Background(), []string{"slice-complete", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--notes-file", notesFile, "--verification-results-file", resultsFile}); err != nil {
+	if err := app.Run(context.Background(), []string{"slice-complete", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--notes-file", notesFile, "--verification-results-file", resultsFile, "--commit-proposal-file", proposalFile}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "Slice completed: 001-a") {
@@ -66,6 +71,9 @@ func TestSliceCompleteCommandCompletesPlan(t *testing.T) {
 	}
 	if _, err := os.Stat(resultsFile); !os.IsNotExist(err) {
 		t.Fatalf("expected verification results file removed, stat err = %v", err)
+	}
+	if _, err := os.Stat(proposalFile); !os.IsNotExist(err) {
+		t.Fatalf("expected commit proposal file removed, stat err = %v", err)
 	}
 }
 
@@ -240,6 +248,29 @@ func TestSliceCompleteRejectsOversizedInputsAndInvalidResults(t *testing.T) {
 	}
 }
 
+func TestDecodeSliceCommitProposalIsStrictAndRepairable(t *testing.T) {
+	invalid := []byte(`{"type":"feat","scope":"cli","summary":"Added proposal","what":"Accept the handoff.","why":"Avoid a nested session."}`)
+	if _, err := decodeSliceCommitProposal(invalid); err == nil || !strings.Contains(err.Error(), "summary must be lowercase") {
+		t.Fatalf("invalid proposal error = %v", err)
+	}
+	reserved := []byte(`{"type":"feat","scope":"cli","summary":"accept proposal","what":"Accept the handoff.","why":"Avoid nesting.\nTao-Slice: forged"}`)
+	if _, err := decodeSliceCommitProposal(reserved); err == nil || !strings.Contains(err.Error(), "reserved Tao-*") {
+		t.Fatalf("reserved proposal error = %v", err)
+	}
+	unknown := []byte(`{"type":"feat","scope":"cli","summary":"accept proposal","what":"Accept the handoff.","why":"Avoid nesting.","extra":true}`)
+	if _, err := decodeSliceCommitProposal(unknown); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("unknown-field proposal error = %v", err)
+	}
+	repaired := []byte(`{"type":"feat","scope":"cli","summary":"accept proposal","what":"Accept the structured handoff.","why":"Avoid a nested message session."}`)
+	proposal, err := decodeSliceCommitProposal(repaired)
+	if err != nil {
+		t.Fatalf("repaired proposal: %v", err)
+	}
+	if proposal.Scope != "cli" || proposal.Summary != "accept proposal" {
+		t.Fatalf("decoded proposal = %#v", proposal)
+	}
+}
+
 func TestValidateVerificationRunsRejectsExcessiveResultCount(t *testing.T) {
 	results := make([]plan.VerificationRun, sliceCompleteMaxVerificationResults+1)
 	for i := range results {
@@ -266,7 +297,7 @@ func TestSliceCompleteHelpAndCompletion(t *testing.T) {
 	if err := app.completion([]string{"zsh"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"slice-complete:Complete a slice from notes and verification files", "--verification-results-file[JSON file containing verification results]"} {
+	for _, want := range []string{"slice-complete:Complete a slice from notes, verification, and a commit proposal", "--commit-proposal-file[JSON file containing a structured commit proposal", "--verification-results-file[JSON file containing verification results]"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("expected completion to contain %q, got %q", want, out.String())
 		}

@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	commitpkg "github.com/iamseth/tao/internal/commit"
 )
 
 const (
@@ -181,6 +183,13 @@ func (b BatchIntegrator) Integrate(ctx context.Context, state BatchState, integr
 			return result, fmt.Errorf("persist integration start: %w", err)
 		}
 	}
+	if !options.DryRun {
+		state, err = b.prepareCandidateMessages(ctx, git, state)
+		result.State = state
+		if err != nil {
+			return result, err
+		}
+	}
 
 	candidates := orderedBatchCandidates(state)
 	for _, candidate := range candidates {
@@ -203,7 +212,11 @@ func (b BatchIntegrator) Integrate(ctx context.Context, state BatchState, integr
 				}
 			}
 		} else {
-			record := BatchIntegration{PlanID: candidate.PlanID, SourceHead: candidate.SourceTip, IntegrationBaseSHA: priorHead, Status: batchIntegrationApplying, Attempts: 1}
+			message := candidate.CommitMessage
+			if options.DryRun && message == "" {
+				message = batchSquashCommitMessage(candidate)
+			}
+			record := BatchIntegration{PlanID: candidate.PlanID, SourceHead: candidate.SourceTip, IntegrationBaseSHA: priorHead, CommitMessage: message, Status: batchIntegrationApplying, Attempts: 1}
 			state.Integrations = append(state.Integrations, record)
 			recordIndex = len(state.Integrations) - 1
 			if !options.DryRun {
@@ -218,7 +231,11 @@ func (b BatchIntegrator) Integrate(ctx context.Context, state BatchState, integr
 		if commitAlreadyApplied {
 			deferral = b.verifyAppliedCandidate(ctx, git, candidate, priorHead, options)
 		} else {
-			deferral = b.applyCandidate(ctx, git, candidate, priorHead, options)
+			message := state.Integrations[recordIndex].CommitMessage
+			if message == "" {
+				message = batchSquashCommitMessage(candidate)
+			}
+			deferral = b.applyCandidate(ctx, git, candidate, message, priorHead, options)
 		}
 		if deferral != nil {
 			state.Integrations[recordIndex].Status = batchIntegrationDeferred
@@ -281,6 +298,120 @@ func (b BatchIntegrator) Integrate(ctx context.Context, state BatchState, integr
 	return result, nil
 }
 
+func (b BatchIntegrator) prepareCandidateMessages(ctx context.Context, git GitClient, state BatchState) (BatchState, error) {
+	for i := range state.Candidates {
+		candidate := &state.Candidates[i]
+		if candidate.Deferred != nil && state.Ejection != nil && state.Ejection.PlanID == candidate.PlanID {
+			continue
+		}
+		integrationIndex := batchIntegrationIndex(state, candidate.PlanID)
+		if integrationIndex >= 0 {
+			integration := state.Integrations[integrationIndex]
+			if integration.Status == batchIntegrationApplied {
+				continue
+			}
+			if integration.Status == batchIntegrationApplying {
+				// Old applying records predate exact message intent. Their historical
+				// deterministic trailer recovery remains authoritative.
+				if integration.CommitMessage == "" {
+					continue
+				}
+				if err := validateBatchCommitMessage(integration.CommitMessage, *candidate); err != nil {
+					return b.blockMessagePreparation(state, candidate.PlanID, err)
+				}
+				continue
+			}
+		}
+
+		if err := validateBatchCandidateBinding(ctx, git, state, *candidate); err != nil {
+			return b.blockMessagePreparation(state, candidate.PlanID, err)
+		}
+		message := candidate.CommitMessage
+		if candidate.ReviewCommitMessage != nil && !candidate.CommitMessageResolved {
+			expected, err := singleMergeCommitMessage(*candidate.ReviewCommitMessage, candidate.PlanID, candidate.SourceTip)
+			if err != nil {
+				return b.blockMessagePreparation(state, candidate.PlanID, fmt.Errorf("approved review commit proposal is invalid: %w", err))
+			}
+			if message != "" && message != expected {
+				return b.blockMessagePreparation(state, candidate.PlanID, errors.New("prepared commit message drifted from the immutable approved review proposal"))
+			}
+			message = expected
+		} else if message == "" {
+			var err error
+			message, err = b.Service.generateSingleMergeMessage(ctx, git, commitpkg.MergeProposalContext{
+				RepoRoot: git.Root(), PlanID: candidate.PlanID, DefaultBranch: state.DefaultBranch,
+				DefaultParent: state.DefaultStartSHA, SourceBranch: candidate.Branch, SourceHead: candidate.SourceTip,
+			})
+			if err != nil {
+				return b.blockMessagePreparation(state, candidate.PlanID, err)
+			}
+		}
+		if err := validateBatchCommitMessage(message, *candidate); err != nil {
+			return b.blockMessagePreparation(state, candidate.PlanID, err)
+		}
+		if candidate.CommitMessage == message {
+			continue
+		}
+		candidate.CommitMessage = message
+		var err error
+		state, err = b.persist(state)
+		if err != nil {
+			return state, fmt.Errorf("persist commit message for batch candidate %s: %w", candidate.PlanID, err)
+		}
+	}
+	return state, nil
+}
+
+func validateBatchCandidateBinding(ctx context.Context, git GitClient, state BatchState, candidate BatchCandidate) error {
+	defaultHead, err := git.RevParse(ctx, state.DefaultBranch)
+	if err != nil {
+		return fmt.Errorf("inspect default branch: %w", err)
+	}
+	if strings.TrimSpace(defaultHead) != state.DefaultStartSHA {
+		return fmt.Errorf("default branch drifted from batch snapshot %s", state.DefaultStartSHA)
+	}
+	sourceHead, err := git.RevParse(ctx, candidate.Branch)
+	if err != nil {
+		return fmt.Errorf("inspect source branch: %w", err)
+	}
+	if strings.TrimSpace(sourceHead) != candidate.SourceTip {
+		return fmt.Errorf("source branch drifted from candidate snapshot %s", candidate.SourceTip)
+	}
+	if candidate.ReviewHead != "" && candidate.ReviewHead != candidate.SourceTip {
+		return fmt.Errorf("approved review head %s does not match candidate source %s", candidate.ReviewHead, candidate.SourceTip)
+	}
+	if candidate.ReviewBase != "" {
+		base, err := git.MergeBase(ctx, state.DefaultBranch, candidate.Branch)
+		if err != nil {
+			return fmt.Errorf("inspect approved review base: %w", err)
+		}
+		if strings.TrimSpace(base) != candidate.ReviewBase {
+			return fmt.Errorf("approved review base %s does not match live merge base %s", candidate.ReviewBase, strings.TrimSpace(base))
+		}
+	}
+	return nil
+}
+
+func validateBatchCommitMessage(message string, candidate BatchCandidate) error {
+	if err := commitpkg.ValidateMessage(message); err != nil {
+		return fmt.Errorf("batch candidate commit message is invalid: %w", err)
+	}
+	if !taoSquashMessageMatches(message, candidate.PlanID, candidate.SourceTip) {
+		return errors.New("batch candidate commit message does not carry exact Tao plan/source trailers")
+	}
+	return nil
+}
+
+func (b BatchIntegrator) blockMessagePreparation(state BatchState, planID string, cause error) (BatchState, error) {
+	reason := fmt.Sprintf("prepare commit message for batch candidate %s: %v", planID, cause)
+	BlockBatch(&state, BatchBlockKindResumable, reason)
+	persisted, err := b.persist(state)
+	if err != nil {
+		return state, errors.Join(errors.New(reason), fmt.Errorf("persist resumable message block: %w", err))
+	}
+	return persisted, errors.New(reason)
+}
+
 type batchCandidateDeferral struct {
 	BatchDeferral
 	files  []string
@@ -319,7 +450,11 @@ func recoverApplyingBatchIntegrationAtRevision(ctx context.Context, git GitClien
 	if err != nil {
 		return "", false, fmt.Errorf("recover integration intent for %s: inspect commit message: %w", candidate.PlanID, err)
 	}
-	if strings.TrimSpace(parent) != base || !taoSquashMessageMatches(message, candidate.PlanID, candidate.SourceTip) {
+	messageMatches := taoSquashMessageMatches(message, candidate.PlanID, candidate.SourceTip)
+	if integration.CommitMessage != "" {
+		messageMatches = strings.TrimSpace(message) == integration.CommitMessage
+	}
+	if strings.TrimSpace(parent) != base || !messageMatches {
 		return "", false, fmt.Errorf("recover integration intent for %s: integration HEAD does not match the intended Tao-owned squash", candidate.PlanID)
 	}
 	return base, true, nil
@@ -332,7 +467,7 @@ func (b BatchIntegrator) deferCandidate(ctx context.Context, git GitClient, cand
 	return &batchCandidateDeferral{BatchDeferral: BatchDeferral{PlanID: candidate.PlanID, Reason: reason}, files: files, output: boundMergeVerifyOutput(output)}
 }
 
-func (b BatchIntegrator) applyCandidate(ctx context.Context, git GitClient, candidate BatchCandidate, priorHead string, options BatchIntegrateOptions) *batchCandidateDeferral {
+func (b BatchIntegrator) applyCandidate(ctx context.Context, git GitClient, candidate BatchCandidate, message, priorHead string, options BatchIntegrateOptions) *batchCandidateDeferral {
 	deferCandidate := func(reason string, files []string) *batchCandidateDeferral {
 		return b.deferCandidate(ctx, git, candidate, priorHead, reason, files, "")
 	}
@@ -347,7 +482,7 @@ func (b BatchIntegrator) applyCandidate(ctx context.Context, git GitClient, cand
 	if !changed {
 		return deferCandidate("candidate produces no changes", nil)
 	}
-	if err := git.Commit(ctx, batchSquashCommitMessage(candidate)); err != nil {
+	if err := git.Commit(ctx, message); err != nil {
 		return deferCandidate("create squash commit: "+err.Error(), nil)
 	}
 	return b.verifyAppliedCandidate(ctx, git, candidate, priorHead, options)
@@ -418,6 +553,7 @@ func appendPlannedBatchDeferrals(state *BatchState) []BatchDeferral {
 			PlanID:             candidate.PlanID,
 			SourceHead:         candidate.SourceTip,
 			IntegrationBaseSHA: state.IntegrationHead,
+			CommitMessage:      candidate.CommitMessage,
 			Status:             batchIntegrationDeferred,
 			DeferredReason:     candidate.Deferred.Reason,
 		}

@@ -47,17 +47,17 @@ func (e *MergeConflictError) Unwrap() error {
 	return e.Cause
 }
 
-// IntegrateSquash applies the reviewed plan branch to default and creates one
-// deterministic integration commit without rewriting the plan branch.
+// IntegrateSquash consumes the durable single-merge intent and either creates
+// its exact squash commit or recognizes that exact commit after interruption.
 func (s Service) IntegrateSquash(ctx context.Context, detail *plan.PlanDetail) error {
 	if detail == nil {
 		return fmt.Errorf("merge plan detail is nil")
 	}
-	git, err := s.gitClient()
-	if err != nil {
-		return err
+	intent := detail.State.Plan.MergeCommitIntent
+	if intent == nil {
+		return fmt.Errorf("single-plan squash commit intent is missing")
 	}
-	defaultBranch, err := resolveDefaultBranch(ctx, git, detail)
+	git, err := s.gitClient()
 	if err != nil {
 		return err
 	}
@@ -65,37 +65,28 @@ func (s Service) IntegrateSquash(ctx context.Context, detail *plan.PlanDetail) e
 	if err != nil {
 		return err
 	}
-	preMergeSHA, err := git.RevParse(ctx, defaultBranch)
+	integrated, err := inspectSingleMergeIntent(ctx, git, detail, *intent)
 	if err != nil {
-		return fmt.Errorf("capture pre-merge SHA for %s: %w", defaultBranch, err)
+		return err
 	}
-	preMergeSHA = strings.TrimSpace(preMergeSHA)
-	if preMergeSHA == "" {
-		return fmt.Errorf("capture pre-merge SHA for %s: empty revision", defaultBranch)
-	}
-	sourceHead, err := git.RevParse(ctx, planBranch)
-	if err != nil {
-		return fmt.Errorf("capture source head for %s: %w", planBranch, err)
-	}
-	sourceHead = strings.TrimSpace(sourceHead)
-	if sourceHead == "" {
-		return fmt.Errorf("capture source head for %s: empty revision", planBranch)
+	if integrated {
+		return nil
 	}
 	failure := integrationFailure{
-		defaultBranch:       defaultBranch,
+		defaultBranch:       intent.DefaultBranch,
 		planBranch:          planBranch,
-		preMergeSHA:         preMergeSHA,
+		preMergeSHA:         intent.DefaultParent,
 		resetBeforeCheckout: true,
 	}
-	if err := git.Checkout(ctx, defaultBranch); err != nil {
-		return fmt.Errorf("checkout default branch %s: %w", defaultBranch, err)
+	if err := git.Checkout(ctx, intent.DefaultBranch); err != nil {
+		return fmt.Errorf("checkout default branch %s: %w", intent.DefaultBranch, err)
 	}
 	if err := git.MergeSquash(ctx, planBranch); err != nil {
 		failure.phase = "squash merge"
 		failure.cause = err
 		return recoverIntegrationFailure(ctx, git, git, failure)
 	}
-	if err := git.Commit(ctx, squashCommitMessage(detail, sourceHead)); err != nil {
+	if err := git.Commit(ctx, intent.Message); err != nil {
 		failure.phase = "squash commit"
 		failure.cause = err
 		return recoverIntegrationFailure(ctx, git, git, failure)
@@ -103,12 +94,43 @@ func (s Service) IntegrateSquash(ctx context.Context, detail *plan.PlanDetail) e
 	return nil
 }
 
-func squashCommitMessage(detail *plan.PlanDetail, sourceHead string) string {
-	title := strings.TrimSpace(detail.State.Plan.Title)
-	if title == "" {
-		title = "Tao plan " + strings.TrimSpace(detail.State.Plan.ID)
+func inspectSingleMergeIntent(ctx context.Context, git GitClient, detail *plan.PlanDetail, intent plan.SingleMergeCommitIntent) (bool, error) {
+	planID := strings.TrimSpace(detail.State.Plan.ID)
+	if intent.PlanID != planID {
+		return false, fmt.Errorf("single-merge intent plan %q does not match plan %q", intent.PlanID, planID)
 	}
-	return fmt.Sprintf("%s\n\nTao-Plan: %s\nTao-Source-Head: %s", title, strings.TrimSpace(detail.State.Plan.ID), strings.TrimSpace(sourceHead))
+	defaultBranch, err := resolveDefaultBranch(ctx, git, detail)
+	if err != nil {
+		return false, err
+	}
+	if defaultBranch != intent.DefaultBranch {
+		return false, fmt.Errorf("single-merge intent default branch %q does not match live default branch %q", intent.DefaultBranch, defaultBranch)
+	}
+	planBranch, err := resolvePlanBranch(detail)
+	if err != nil {
+		return false, err
+	}
+	sourceHead, err := git.RevParse(ctx, planBranch)
+	if err != nil {
+		return false, fmt.Errorf("capture source head for %s: %w", planBranch, err)
+	}
+	if sourceHead = strings.TrimSpace(sourceHead); sourceHead != intent.SourceHead {
+		return false, fmt.Errorf("single-merge intent source head %s does not match live source head %s", intent.SourceHead, sourceHead)
+	}
+	defaultHead, err := git.RevParse(ctx, defaultBranch)
+	if err != nil {
+		return false, fmt.Errorf("capture default head for %s: %w", defaultBranch, err)
+	}
+	defaultHead = strings.TrimSpace(defaultHead)
+	if defaultHead == intent.DefaultParent {
+		return false, nil
+	}
+	parent, parentErr := git.RevParse(ctx, defaultHead+"^")
+	message, messageErr := git.CommitMessage(ctx, defaultHead)
+	if parentErr == nil && messageErr == nil && strings.TrimSpace(parent) == intent.DefaultParent && strings.TrimSpace(message) == intent.Message {
+		return true, nil
+	}
+	return false, fmt.Errorf("default branch %s drifted from single-merge intent parent %s and does not contain the exact intended squash", defaultBranch, intent.DefaultParent)
 }
 
 // Integrate preserves plan-branch commits by rebasing and fast-forwarding.

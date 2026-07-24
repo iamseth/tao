@@ -45,6 +45,10 @@ Then end with exactly one fenced `tao-review-json` block containing valid JSON w
 {
   "verdict": "approve",
   "summary": "One or two sentences summarizing the review result.",
+  "commit_message": {
+    "subject": "feat(scope): summarize the exact reviewed change",
+    "body": "What:\nDescribe what the exact scoped diff changes.\n\nWhy:\nExplain why the change is needed."
+  },
   "findings": [
     {
       "severity": "major",
@@ -63,5 +67,8 @@ Rules for the JSON block:
 - Use `changes_requested` for correctness, regression, scope, or missing-test issues that should be fixed before considering the plan done.
 - Use `comment` for non-blocking risks or observations.
 - Use `approve` only when there are no requested changes; use an empty `findings` array when there are no findings.
+- An `approve` verdict must include `commit_message`; omit `commit_message` for `changes_requested` and `comment`.
+- Derive `commit_message` from the complete exact `Base..Head` diff already reviewed. The subject must be a scoped Conventional Commit in the form `<type>(<lowercase-scope>): <lowercase-imperative-summary>`, and the summary must be at most 72 characters with no ending punctuation.
+- The commit body must be non-empty canonical `What:` and `Why:` sections that explain the change and its motivation. Do not include verification output or any `Tao-*` trailers; Tao adds trusted evidence later.
 - Every finding must be tied to the scoped diff and include the best available `file` and `line`; use `null` for `line` only when no specific line applies.
 - Do not include Markdown comments inside the JSON block.

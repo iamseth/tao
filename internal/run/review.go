@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	commitcontract "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/workspace"
@@ -272,6 +273,7 @@ type ParsedReview struct {
 	Summary       string
 	FindingsCount int
 	Findings      []plan.ReviewFinding
+	CommitMessage *plan.ReviewCommitMessage
 }
 
 type extractedReview = ParsedReview
@@ -335,7 +337,7 @@ func createReviewWithAgentSession(ctx context.Context, executor AgentSessionExec
 	}
 	extracted := extractReview(result.Output)
 	reviewedAt := now(options).UTC()
-	review := plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: extracted.Verdict, Summary: extracted.Summary, FindingsCount: extracted.FindingsCount, Findings: extracted.Findings, Base: base, Head: head, Agent: options.Agent, ReviewedAt: reviewedAt}
+	review := plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: extracted.Verdict, Summary: extracted.Summary, FindingsCount: extracted.FindingsCount, Findings: extracted.Findings, CommitMessage: extracted.CommitMessage, Base: base, Head: head, Agent: options.Agent, ReviewedAt: reviewedAt}
 	if err := plan.WriteReviewArtifact(planDir, result.Output); err != nil {
 		return plan.PlanReview{}, err
 	}
@@ -372,12 +374,19 @@ func requireCleanReviewWorktree(ctx context.Context, git gitops.Client, detail *
 }
 
 func extractReview(output string) extractedReview {
-	return ParseReviewOutput(output)
+	return parseReviewOutput(output, true)
 }
 
-// ParseReviewOutput extracts the last structured review block. Malformed,
-// oversized, or invalid output safely degrades to a bounded comment verdict.
+// ParseReviewOutput extracts the shared verdict and findings used by internal
+// aggregate reviews, where commit proposals are not part of the contract.
 func ParseReviewOutput(output string) ParsedReview {
+	return parseReviewOutput(output, false)
+}
+
+// parseReviewOutput safely degrades malformed, oversized, or invalid output to
+// a bounded comment verdict. Plan approvals additionally require a valid commit
+// proposal; aggregate reviews preserve their verdict-only contract.
+func parseReviewOutput(output string, requireCommitMessage bool) ParsedReview {
 	fallback := reviewFallback(output)
 	matches := reviewJSONBlockRE.FindAllStringSubmatch(output, -1)
 	if len(matches) == 0 || len(matches[len(matches)-1]) != 2 {
@@ -388,14 +397,19 @@ func ParseReviewOutput(output string) ParsedReview {
 		return fallback
 	}
 	var payload struct {
-		Verdict  string          `json:"verdict"`
-		Summary  string          `json:"summary"`
-		Findings json.RawMessage `json:"findings"`
+		Verdict       string                    `json:"verdict"`
+		Summary       string                    `json:"summary"`
+		Findings      json.RawMessage           `json:"findings"`
+		CommitMessage *plan.ReviewCommitMessage `json:"commit_message"`
 	}
 	if err := json.Unmarshal([]byte(block), &payload); err != nil {
 		return fallback
 	}
 	if !validReviewVerdict(payload.Verdict) {
+		return fallback
+	}
+	validCommitMessage := payload.Verdict == plan.ReviewVerdictApprove && validReviewCommitMessage(payload.CommitMessage)
+	if payload.Verdict == plan.ReviewVerdictApprove && requireCommitMessage && !validCommitMessage {
 		return fallback
 	}
 	findings := []plan.ReviewFinding{}
@@ -409,7 +423,18 @@ func ParseReviewOutput(output string) ParsedReview {
 	if summary == "" {
 		summary = fallback.Summary
 	}
-	return extractedReview{Verdict: payload.Verdict, Summary: summary, FindingsCount: len(findings), Findings: findings}
+	var commitMessage *plan.ReviewCommitMessage
+	if validCommitMessage {
+		commitMessage = payload.CommitMessage
+	}
+	return extractedReview{Verdict: payload.Verdict, Summary: summary, FindingsCount: len(findings), Findings: findings, CommitMessage: commitMessage}
+}
+
+func validReviewCommitMessage(message *plan.ReviewCommitMessage) bool {
+	if message == nil || len([]rune(message.Subject)) > maxReviewSummaryRunes || len([]rune(message.Body)) > maxReviewSummaryRunes {
+		return false
+	}
+	return commitcontract.ValidateProposalMessage(message.Subject, message.Body) == nil
 }
 
 func reviewFallback(output string) ParsedReview {

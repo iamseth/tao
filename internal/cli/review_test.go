@@ -104,7 +104,7 @@ func TestReviewPrintsPersistedReviewArtifact(t *testing.T) {
 
 func TestReviewPrintsStateReviewWhenArtifactMissing(t *testing.T) {
 	reviewedAt := time.Date(2026, 6, 28, 15, 0, 0, 0, time.UTC)
-	detail := &plan.PlanDetail{State: plan.State{Plan: plan.PlanState{ID: "plan-a", Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: "approve", Summary: "ready to merge", FindingsCount: 2, Base: "base123", Head: "head456", Agent: "pi", ReviewedAt: reviewedAt}}}}
+	detail := &plan.PlanDetail{State: plan.State{Plan: plan.PlanState{ID: "plan-a", Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: "approve", Summary: "ready to merge", FindingsCount: 2, CommitMessage: &plan.ReviewCommitMessage{Subject: "feat(review): persist approved commit proposals", Body: "What:\nPersist the proposal.\n\nWhy:\nReuse reviewed context."}, Base: "base123", Head: "head456", Agent: "pi", ReviewedAt: reviewedAt}}}}
 	repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
 	var out bytes.Buffer
 
@@ -112,7 +112,7 @@ func TestReviewPrintsStateReviewWhenArtifactMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := out.String()
-	for _, want := range []string{"Review: plan-a", "Status: completed", "Verdict: approve", "Summary: ready to merge", "Findings: 2", "Base: base123", "Head: head456", "Agent: pi", "Reviewed At: 2026-06-28T15:00:00Z"} {
+	for _, want := range []string{"Review: plan-a", "Status: completed", "Verdict: approve", "Summary: ready to merge", "Commit Subject: feat(review): persist approved commit proposals", "Commit Body:\nWhat:\nPersist the proposal.\n\nWhy:\nReuse reviewed context.", "Findings: 2", "Base: base123", "Head: head456", "Agent: pi", "Reviewed At: 2026-06-28T15:00:00Z"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected review summary to contain %q, got %q", want, text)
 		}
@@ -216,7 +216,7 @@ func TestReviewPrintsClearMessageWhenNoReviewExists(t *testing.T) {
 func TestReviewRunTriggersFreshReview(t *testing.T) {
 	clearTaoEnv(t)
 	fixture := newRunPlanFixture(t, plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
-	reviewOutput := "Fresh review\n```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"ready\",\"findings\":[]}\n```"
+	reviewOutput := "Fresh review\n```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"ready\",\"commit_message\":{\"subject\":\"feat(review): persist approved commit proposals\",\"body\":\"What:\\nPersist the proposal for the exact reviewed diff.\\n\\nWhy:\\nReuse review context during merge.\"},\"findings\":[]}\n```"
 	var out bytes.Buffer
 	var prompt string
 	app := App{Out: &out, Err: &out, CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
@@ -244,7 +244,7 @@ func TestReviewRunTriggersFreshReview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Plan.Review == nil || state.Plan.Review.Verdict != "approve" || state.Plan.Review.Summary != "ready" || state.Plan.Review.Head != "head123" {
+	if state.Plan.Review == nil || state.Plan.Review.Verdict != "approve" || state.Plan.Review.Summary != "ready" || state.Plan.Review.Head != "head123" || state.Plan.Review.CommitMessage == nil || state.Plan.Review.CommitMessage.Subject != "feat(review): persist approved commit proposals" {
 		t.Fatalf("unexpected persisted review: %#v", state.Plan.Review)
 	}
 	if artifact := readText(t, filepath.Join(fixture.dir, plan.ReviewFile)); !strings.Contains(artifact, "Fresh review") {

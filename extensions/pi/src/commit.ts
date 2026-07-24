@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -27,8 +28,12 @@ export interface CommandResult {
   exitCode?: number;
 }
 
-export type CommandRunner = (command: string, args: string[]) => Promise<CommandResult>;
-export type CommitMessageProposer = (request: CommitMessageRequest) => Promise<string>;
+export interface CommandOptions {
+  signal?: AbortSignal;
+}
+
+export type CommandRunner = (command: string, args: string[], options?: CommandOptions) => Promise<CommandResult>;
+export type CommitProposalProposer = (request: CommitProposalRequest) => Promise<string>;
 export type CommitMessageCompleter = (
   model: NonNullable<ExtensionCommandContext["model"]>,
   prompt: string,
@@ -36,278 +41,96 @@ export type CommitMessageCompleter = (
   signal?: AbortSignal,
 ) => Promise<string>;
 
-export interface CommitMessageRequest {
-  allowedDiff: string;
-  recentLog: string;
+export interface StandaloneCommitContext {
+  head: string;
+  context_fingerprint: string;
+  allowed_paths: string[];
+  rejected_paths: Array<{ path: string; reason: string; staged?: boolean }>;
+  allowed_diff: string;
+  allowed_diff_truncated: boolean;
+  recent_history: string;
+  exclusion_sources?: string[];
+}
+
+export interface CommitProposalRequest {
+  commitContext: StandaloneCommitContext;
   context?: string;
-  invalidMessage?: string;
+  invalidProposal?: string;
   validationReason?: string;
 }
 
 export interface CommitCommandDependencies {
   run?: CommandRunner;
-  proposeMessage?: CommitMessageProposer;
+  proposeProposal?: CommitProposalProposer;
   completeMessage?: CommitMessageCompleter;
   repoRoot?: string;
-}
-
-export interface GitContext {
-  statusPorcelain: string;
-  stagedDiff: string;
-  unstagedDiff: string;
-  recentLog: string;
-}
-
-export interface RepoExclusions {
-  patterns: string[];
-  sources: string[];
-}
-
-export interface FileChange {
-  path: string;
-  diff?: string;
-}
-
-export interface FileRejection {
-  path: string;
-  reason: string;
-}
-
-export interface AllowedFilesResult {
-  allowed: string[];
-  rejected: FileRejection[];
-}
-
-export interface StageAllowedFilesResult extends AllowedFilesResult {
-  unstagedRejected: string[];
-}
-
-export interface CommitMessageValidation {
-  valid: boolean;
-  reason?: string;
-  type?: string;
-  scope?: string;
-  summary?: string;
+  signal?: AbortSignal;
+  tempRoot?: string;
 }
 
 export interface CreateCommitResult {
   hash: string;
   summary: string;
+  output: string;
 }
 
 const execFileAsync = promisify(execFile);
-const PREFERRED_COMMIT_TYPES = new Set(["feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert"]);
-const ALWAYS_EXCLUDED_PATTERNS = [".tao/"];
-const GENERATED_PATH_PATTERNS = [
-  /^bin\//,
-  /^coverage\.out$/,
-  /^dist\//,
-  /^build\//,
-  /^node_modules\//,
-  /(^|\/)coverage\//,
-  /(^|\/)\.turbo\//,
-  /(^|\/)\.next\//,
-  /(^|\/)package-lock\.json$/,
-  /(^|\/)yarn\.lock$/,
-  /(^|\/)pnpm-lock\.yaml$/,
-  /\.min\.(js|css)$/,
-  /\.generated\./,
-];
-const FORBIDDEN_PATH_PATTERNS = [
-  /(^|\/)\.env(\.|$)/,
-  /(^|\/)\.npmrc$/,
-  /(^|\/)\.pypirc$/,
-  /(^|\/)id_rsa$/,
-  /(^|\/)id_ed25519$/,
-  /(^|\/)known_hosts$/,
-];
-const SECRET_PATH_PATTERN = /(^|\/)(secret|secrets|credential|credentials|token|tokens|apikey|api-key|private-key)(\.|-|_|\/|$)/i;
-const CREDENTIAL_DIFF_PATTERNS = [
-  /aws_access_key_id\s*=/i,
-  /aws_secret_access_key\s*=/i,
-  /api[_-]?key\s*[:=]\s*['"]?[A-Za-z0-9_\-]{16,}/i,
-  /secret[_-]?key\s*[:=]\s*['"]?[A-Za-z0-9_\-]{16,}/i,
-  /password\s*[:=]\s*['"][^'"]{8,}['"]/i,
-  /-----BEGIN (RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----/i,
-  /ghp_[A-Za-z0-9]{20,}/,
-];
-
-export async function collectGitContext(run: CommandRunner): Promise<GitContext> {
-  const [status, stagedDiff, unstagedDiff, recentLog] = await Promise.all([
-    runGit(run, ["status", "--porcelain"]),
-    runGit(run, ["diff", "--cached"]),
-    runGit(run, ["diff"]),
-    runGit(run, ["log", "--oneline", "-12"]),
-  ]);
-
-  return {
-    statusPorcelain: status.stdout,
-    stagedDiff: stagedDiff.stdout,
-    unstagedDiff: unstagedDiff.stdout,
-    recentLog: recentLog.stdout,
-  };
-}
-
-export async function readRepoExclusions(repoRoot: string, reader: (filePath: string) => Promise<string> = readFileUtf8): Promise<RepoExclusions> {
-  const patterns = new Set(ALWAYS_EXCLUDED_PATTERNS);
-  const sources: string[] = [];
-  const guidancePath = path.join(repoRoot, "AGENTS.md");
-
-  try {
-    const guidance = await reader(guidancePath);
-    sources.push("AGENTS.md");
-    for (const match of guidance.matchAll(/`([^`]+)`/g)) {
-      const token = match[1].trim();
-      if (isLocalOnlyToken(token)) {
-        patterns.add(token.endsWith("/") ? token : `${token}/`);
-      }
-    }
-    if (/local-only/i.test(guidance)) {
-      for (const line of guidance.split(/\r?\n/)) {
-        for (const token of line.match(/[A-Za-z0-9._/-]+\/?/g) ?? []) {
-          if (isLocalOnlyToken(token)) {
-            patterns.add(token.endsWith("/") ? token : `${token}/`);
-          }
-        }
-      }
-    }
-  } catch (error) {
-    if (!isNotFoundError(error)) {
-      throw error;
-    }
-  }
-
-  return { patterns: [...patterns].sort(), sources };
-}
-
-export function filterAllowedFiles(changes: FileChange[], exclusions: RepoExclusions = { patterns: ALWAYS_EXCLUDED_PATTERNS, sources: [] }): AllowedFilesResult {
-  const allowed: string[] = [];
-  const rejected: FileRejection[] = [];
-  const exclusionPatterns = new Set([...ALWAYS_EXCLUDED_PATTERNS, ...exclusions.patterns]);
-
-  for (const change of changes) {
-    const normalized = normalizeRepoPath(change.path);
-    const reason = rejectionReason(normalized, change.diff ?? "", exclusionPatterns);
-    if (reason) {
-      rejected.push({ path: change.path, reason });
-    } else {
-      allowed.push(change.path);
-    }
-  }
-
-  return { allowed, rejected };
-}
-
-export async function stageAllowedFiles(run: CommandRunner, exclusions: RepoExclusions = { patterns: ALWAYS_EXCLUDED_PATTERNS, sources: [] }): Promise<StageAllowedFilesResult> {
-  const status = await runGit(run, ["status", "--porcelain"]);
-  const paths = parsePorcelainPaths(status.stdout);
-  const changes = await Promise.all(
-    paths.map(async (filePath): Promise<FileChange> => {
-      const [staged, unstaged] = await Promise.all([
-        runGit(run, ["diff", "--cached", "--", filePath]),
-        runGit(run, ["diff", "--", filePath]),
-      ]);
-      return { path: filePath, diff: `${staged.stdout}\n${unstaged.stdout}` };
-    }),
-  );
-  const filtered = filterAllowedFiles(changes, exclusions);
-
-  for (const rejection of filtered.rejected) {
-    await runGit(run, ["restore", "--staged", "--", rejection.path], { allowExitCodes: [0, 1] });
-  }
-  if (filtered.allowed.length > 0) {
-    await runGit(run, ["add", "--", ...filtered.allowed]);
-  }
-
-  return { ...filtered, unstagedRejected: filtered.rejected.map((rejection) => rejection.path) };
-}
-
-export function validateCommitMessage(message: string): CommitMessageValidation {
-  const trimmed = message.trim();
-  const match = /^(?<type>[a-z]+)\((?<scope>[a-z0-9-]+)\): (?<summary>[^\s].*)$/.exec(trimmed);
-  if (!match?.groups) {
-    return { valid: false, reason: "message must match <type>(<scope>): <summary>" };
-  }
-
-  const { type, scope, summary } = match.groups;
-  if (!PREFERRED_COMMIT_TYPES.has(type)) {
-    return { valid: false, reason: `unsupported commit type: ${type}`, type, scope, summary };
-  }
-  if (summary.length > 72) {
-    return { valid: false, reason: "summary must be 72 characters or fewer", type, scope, summary };
-  }
-  if (/[.!?]$/.test(summary)) {
-    return { valid: false, reason: "summary must not end with punctuation", type, scope, summary };
-  }
-
-  return { valid: true, type, scope, summary };
-}
-
-export async function proposeAndValidateCommitMessage(
-  initialMessage: string | undefined,
-  request: CommitMessageRequest,
-  proposeMessage?: CommitMessageProposer,
-): Promise<string> {
-  let message = initialMessage?.trim() || (await proposeMessage?.(request))?.trim();
-  if (!message) {
-    throw new Error("commit message proposal unavailable");
-  }
-
-  let validation = validateCommitMessage(message);
-  if (validation.valid) {
-    return message;
-  }
-
-  if (!proposeMessage) {
-    throw new Error(`invalid commit message: ${validation.reason}`);
-  }
-
-  const repaired = (await proposeMessage({
-    ...request,
-    invalidMessage: message,
-    validationReason: validation.reason,
-  })).trim();
-  validation = validateCommitMessage(repaired);
-  if (!validation.valid) {
-    throw new Error(`invalid commit message after repair: ${validation.reason}`);
-  }
-  return repaired;
-}
-
-export async function createCommit(run: CommandRunner, message: string): Promise<CreateCommitResult> {
-  const hasStagedChanges = await runGit(run, ["diff", "--cached", "--quiet"], { allowExitCodes: [0, 1] });
-  if ((hasStagedChanges.exitCode ?? 0) === 0) {
-    throw new Error("refusing to create empty commit: no staged changes");
-  }
-
-  await runGit(run, ["commit", "-m", message]);
-  const hash = (await runGit(run, ["rev-parse", "HEAD"])).stdout.trim();
-  const summary = (await runGit(run, ["show", "--no-patch", "--format=%s", "HEAD"])).stdout.trim();
-  return { hash, summary };
-}
 
 export async function runCommitWorkflow(args: CommitCommandArgs, dependencies: CommitCommandDependencies = {}): Promise<CreateCommitResult> {
-  const run = dependencies.run ?? createDefaultRunner(args.repoRoot ?? dependencies.repoRoot ?? process.cwd());
-  const repoRoot = args.repoRoot ?? dependencies.repoRoot ?? process.cwd();
-  const exclusions = await readRepoExclusions(repoRoot);
-  const staged = await stageAllowedFiles(run, exclusions);
-  if (staged.rejected.length > 0) {
-    // Re-read context after rejected paths were explicitly removed from the index.
-    await runGit(run, ["status", "--porcelain"]);
+  const repoRoot = path.resolve(args.repoRoot ?? dependencies.repoRoot ?? process.cwd());
+  const run = dependencies.run ?? createDefaultRunner(repoRoot);
+  const signal = dependencies.signal;
+
+  if (args.message) {
+    return finalizeCommit(run, ["commit", "--message", args.message, "--repo-root", repoRoot], signal);
   }
 
-  const context = await collectGitContext(run);
-  const hasStagedChanges = await runGit(run, ["diff", "--cached", "--quiet"], { allowExitCodes: [0, 1] });
-  if ((hasStagedChanges.exitCode ?? 0) === 0) {
-    throw new Error("nothing to commit: no allowed changes");
+  const contextResult = await runTao(run, ["commit", "--context", "--repo-root", repoRoot], signal);
+  const commitContext = parseCommitContext(contextResult.stdout);
+  if (commitContext.allowed_paths.length === 0) {
+    return { hash: "", summary: "", output: "Nothing to commit: no allowed changes." };
   }
-  const message = await proposeAndValidateCommitMessage(args.message, {
-    allowedDiff: context.stagedDiff,
-    recentLog: context.recentLog,
-    context: args.context,
-  }, dependencies.proposeMessage);
+  const propose = dependencies.proposeProposal;
+  if (!propose) {
+    throw new Error("commit proposal unavailable");
+  }
 
-  return createCommit(run, message);
+  const tempRoot = path.resolve(dependencies.tempRoot ?? os.tmpdir());
+  if (isWithin(repoRoot, tempRoot)) {
+    throw new Error("refusing to create temporary commit proposal inside the repository");
+  }
+  const tempDir = await mkdtemp(path.join(tempRoot, "tao-pi-commit-"));
+  const proposalPath = path.join(tempDir, "proposal.json");
+
+  try {
+    let proposal = (await propose({ commitContext, context: args.context })).trim();
+    if (!proposal) {
+      throw new Error("commit proposal unavailable");
+    }
+    await writeFile(proposalPath, proposal, { encoding: "utf8", mode: 0o600 });
+
+    let result = await run("tao", ["commit", "--proposal-file", proposalPath, "--repo-root", repoRoot], { signal });
+    if (!commandSucceeded(result) && isInvalidProposalFailure(result)) {
+      const reason = commandFailureText(result);
+      proposal = (await propose({
+        commitContext,
+        context: args.context,
+        invalidProposal: proposal,
+        validationReason: reason,
+      })).trim();
+      if (!proposal) {
+        throw new Error("repaired commit proposal unavailable");
+      }
+      await writeFile(proposalPath, proposal, { encoding: "utf8", mode: 0o600 });
+      result = await run("tao", ["commit", "--proposal-file", proposalPath, "--repo-root", repoRoot], { signal });
+    }
+    if (!commandSucceeded(result)) {
+      throw new Error(`tao commit finalization failed: ${commandFailureText(result)}`);
+    }
+    return parseCommitResult(result.stdout);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 export function parseCommitArgs(args: string): CommitCommandArgs {
@@ -340,9 +163,9 @@ export function createCommitCommand(dependencies: CommitCommandDependencies = {}
     parseArgs: parseCommitArgs,
     async handler(args, ctx) {
       const parsed = parseCommitArgs(args);
-      const proposeMessage = dependencies.proposeMessage ?? commitMessageProposerFromContext(ctx, dependencies.completeMessage);
-      const result = await runCommitWorkflow(parsed, { ...dependencies, proposeMessage });
-      ctx.ui.notify(`Created local commit ${result.hash.slice(0, 12)} ${result.summary}.`, "info");
+      const proposeProposal = dependencies.proposeProposal ?? commitProposalProposerFromContext(ctx, dependencies.completeMessage);
+      const result = await runCommitWorkflow(parsed, { ...dependencies, proposeProposal, signal: ctx.signal });
+      ctx.ui.notify(result.output, "info");
     },
   };
 }
@@ -362,9 +185,13 @@ export function registerCommitCommand(pi: ExtensionAPI): CommitCommandContract {
 }
 
 export function createDefaultRunner(cwd: string): CommandRunner {
-  return async (command, args) => {
+  return async (command, args, options = {}) => {
     try {
-      const { stdout, stderr } = await execFileAsync(command, args, { cwd, maxBuffer: 20 * 1024 * 1024 });
+      const { stdout, stderr } = await execFileAsync(command, args, {
+        cwd,
+        maxBuffer: 20 * 1024 * 1024,
+        signal: options.signal,
+      });
       return { stdout: String(stdout), stderr: String(stderr), exitCode: 0 };
     } catch (error) {
       if (typeof error === "object" && error !== null && "stdout" in error && "stderr" in error) {
@@ -376,14 +203,10 @@ export function createDefaultRunner(cwd: string): CommandRunner {
   };
 }
 
-async function readFileUtf8(filePath: string): Promise<string> {
-  return readFile(filePath, "utf8");
-}
-
-function commitMessageProposerFromContext(
+function commitProposalProposerFromContext(
   ctx: ExtensionCommandContext,
   completeMessage: CommitMessageCompleter = completeCommitMessageWithPi,
-): CommitMessageProposer {
+): CommitProposalProposer {
   return async (request) => {
     if (!ctx.model) {
       throw new Error("cannot propose a commit message: no Pi model selected");
@@ -400,7 +223,7 @@ function commitMessageProposerFromContext(
       throw new Error(`cannot propose a commit message: no API key for ${ctx.model.provider}/${ctx.model.id}`);
     }
 
-    return completeMessage(ctx.model, buildCommitMessagePrompt(request), { ...auth, apiKey: auth.apiKey }, ctx.signal);
+    return completeMessage(ctx.model, buildCommitProposalPrompt(request), { ...auth, apiKey: auth.apiKey }, ctx.signal);
   };
 }
 
@@ -438,44 +261,67 @@ async function completeCommitMessageWithPi(
     .trim();
 }
 
-function buildCommitMessagePrompt(request: CommitMessageRequest): string {
-  const repair = request.invalidMessage
-    ? `\nPrevious invalid message: ${request.invalidMessage}\nValidation failure: ${request.validationReason}\nReturn exactly one repaired message.`
-    : "\nReturn exactly one commit message.";
-  return `Propose one conventional commit message matching <type>(<scope>): <summary>.\nInfer the narrowest useful scope from the changed code and recent history. Keep the summary imperative, lowercase, and at most 72 characters with no trailing punctuation. Return plain text without Markdown or explanation.\nUse only this allowed staged diff and recent history.\n\nAllowed staged diff:\n${request.allowedDiff}\n\nRecent history:\n${request.recentLog}\n\nUser context:\n${request.context ?? ""}${repair}`;
+function buildCommitProposalPrompt(request: CommitProposalRequest): string {
+  const repair = request.invalidProposal
+    ? `\nTao rejected the previous proposal below. Repair it once using Tao's exact error.\n\nPrevious proposal:\n${request.invalidProposal}\n\nTao error:\n${request.validationReason}`
+    : "";
+  return `Propose structured content for one local commit. Use only the Tao-provided safe context and optional user context below. Do not inspect the repository, stage files, run Git, or add Tao-* trailers.\n\nReturn exactly one JSON object and no Markdown with these fields:\n{"context_fingerprint":"<copy exactly from safe context>","type":"<supported conventional type>","scope":"<lowercase narrow scope>","summary":"<lowercase imperative summary, at most 72 characters>","what":"<non-empty description of what changed>","why":"<non-empty reason for the change>"}\n\nSafe context from Tao:\n${JSON.stringify(request.commitContext)}\n\nOptional user context:\n${request.context ?? ""}${repair}`;
 }
 
-async function runGit(run: CommandRunner, args: string[], options: { allowExitCodes?: number[] } = {}): Promise<CommandResult> {
-  const result = await run("git", args);
-  const exitCode = result.exitCode ?? 0;
-  if (exitCode !== 0 && !options.allowExitCodes?.includes(exitCode)) {
-    throw new Error(`git ${args.join(" ")} failed: ${result.stderr || result.stdout || `exit ${exitCode}`}`);
+async function runTao(run: CommandRunner, args: string[], signal?: AbortSignal): Promise<CommandResult> {
+  const result = await run("tao", args, { signal });
+  if (!commandSucceeded(result)) {
+    throw new Error(`tao ${args.slice(0, 2).join(" ")} failed: ${commandFailureText(result)}`);
   }
   return result;
 }
 
-function parsePorcelainPaths(status: string): string[] {
-  const paths = new Set<string>();
-  for (const line of status.split(/\r?\n/)) {
-    if (!line.trim()) {
-      continue;
-    }
-    const rawPath = line.slice(3);
-    const renameParts = rawPath.split(" -> ");
-    paths.add(unquotePorcelainPath(renameParts[renameParts.length - 1]));
-  }
-  return [...paths];
+async function finalizeCommit(run: CommandRunner, args: string[], signal?: AbortSignal): Promise<CreateCommitResult> {
+  const result = await runTao(run, args, signal);
+  return parseCommitResult(result.stdout);
 }
 
-function unquotePorcelainPath(filePath: string): string {
-  if (!filePath.startsWith('"')) {
-    return filePath;
-  }
+function parseCommitContext(stdout: string): StandaloneCommitContext {
+  let parsed: unknown;
   try {
-    return JSON.parse(filePath);
-  } catch {
-    return filePath.slice(1, -1);
+    parsed = JSON.parse(stdout);
+  } catch (error) {
+    throw new Error(`tao commit returned invalid context JSON: ${String(error)}`);
   }
+  if (typeof parsed !== "object" || parsed === null || !("context_fingerprint" in parsed) || typeof parsed.context_fingerprint !== "string") {
+    throw new Error("tao commit returned context without a fingerprint");
+  }
+  return parsed as StandaloneCommitContext;
+}
+
+function parseCommitResult(stdout: string): CreateCommitResult {
+  const output = stdout.trim();
+  const match = /^Created local commit ([0-9a-f]+) (.+)\.$/.exec(output);
+  if (!match) {
+    if (output === "Nothing to commit: no allowed changes.") {
+      return { hash: "", summary: "", output };
+    }
+    throw new Error(`unexpected tao commit output: ${output || "<empty>"}`);
+  }
+  return { hash: match[1], summary: match[2], output };
+}
+
+function commandSucceeded(result: CommandResult): boolean {
+  return (result.exitCode ?? 0) === 0;
+}
+
+function commandFailureText(result: CommandResult): string {
+  return (result.stderr || result.stdout || `exit ${result.exitCode ?? 1}`).trim();
+}
+
+function isInvalidProposalFailure(result: CommandResult): boolean {
+  const failure = commandFailureText(result).toLowerCase();
+  return failure.includes("standalone commit proposal") || failure.includes("decode standalone commit proposal");
+}
+
+function isWithin(repoRoot: string, candidate: string): boolean {
+  const relative = path.relative(repoRoot, candidate);
+  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== "..");
 }
 
 function tokenizeArgs(args: string): string[] {
@@ -485,52 +331,4 @@ function tokenizeArgs(args: string): string[] {
     tokens.push((match[1] ?? match[2] ?? match[3]).replace(/\\(["\\])/g, "$1"));
   }
   return tokens;
-}
-
-function isNotFoundError(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
-}
-
-function isLocalOnlyToken(token: string): boolean {
-  return token === ".tao" || token === ".tao/" || token.startsWith(".tao/") || token === "planning-session.json";
-}
-
-function normalizeRepoPath(filePath: string): string {
-  return filePath.replace(/\\/g, "/").replace(/^\.\//, "");
-}
-
-function rejectionReason(filePath: string, diff: string, exclusions: Set<string>): string | undefined {
-  for (const pattern of exclusions) {
-    if (matchesExclusion(filePath, pattern)) {
-      return `local-only path excluded by ${pattern}`;
-    }
-  }
-  if (GENERATED_PATH_PATTERNS.some((pattern) => pattern.test(filePath))) {
-    return "generated artifact";
-  }
-  if (FORBIDDEN_PATH_PATTERNS.some((pattern) => pattern.test(filePath))) {
-    return "forbidden credential path";
-  }
-  if (SECRET_PATH_PATTERN.test(filePath)) {
-    return "secret-looking path";
-  }
-  if (CREDENTIAL_DIFF_PATTERNS.some((pattern) => pattern.test(addedDiffLines(diff)))) {
-    return "credential-looking diff content";
-  }
-  return undefined;
-}
-
-function matchesExclusion(filePath: string, pattern: string): boolean {
-  const normalized = normalizeRepoPath(pattern);
-  if (normalized.endsWith("/")) {
-    return filePath === normalized.slice(0, -1) || filePath.startsWith(normalized);
-  }
-  return filePath === normalized || filePath.startsWith(`${normalized}/`);
-}
-
-function addedDiffLines(diff: string): string {
-  return diff
-    .split(/\r?\n/)
-    .filter((line) => line.startsWith("+") && !line.startsWith("+++"))
-    .join("\n");
 }

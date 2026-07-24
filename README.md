@@ -20,9 +20,9 @@ The prompt will likely ask questions about the plan, helping shape the direction
 > [!TIP]
 > If there are open questions at the end of a planning session, use `/grill-me` ensuring all questions are answered before slicing. This will help avoid incomplete slices that may require rework later.
 
-After a plan is created, Tao runs each slice of the plan serially in a clean Git worktree. Each slice is committed to ensure a clean workspace for the next slice. After all slices are run, Tao runs a review of the plan to ensure that the work is correct and meets the requirements.
+After a plan is created, Tao runs each slice serially in a clean Git worktree. The implementing agent proposes a scoped Conventional Commit with `What:` and `Why:` sections; Tao validates it, appends trusted evidence trailers, and alone stages and creates each checkpoint commit. After all slices run, Tao reviews the exact plan diff.
 
-When merging a plan, Tao squashes the reviewed checkpoint history into one commit on the default branch. 
+An approved review includes a commit proposal bound to that exact diff. When merging, Tao reuses it to squash the reviewed checkpoint history into one commit on the default branch without starting another normal message session.
 
 > [!IMPORTANT]
 > Tao does not replace your agent. It's a tool to augment your existing agent workflow.
@@ -93,15 +93,20 @@ Next: tao run 20260623-1200-example
 ```
 
 Automatic runs start each slice from a clean execution worktree. At successful
-completion, `tao slice-complete` records intent, creates or recovers one
-trailer-bearing Tao-owned commit, and only then records the slice complete. A
-slice with no changes records `no_changes` without an empty commit. If an
-isolated automatic run is interrupted before commit intent, rerun it normally:
-Tao resumes only the exact recorded worktree/branch/HEAD and preserves its edits;
-a post-intent interruption is recovered by `tao slice-complete`, not by another
-implementation session. When a run stops on a blocker, fix it and resume with
-`tao run --continue`; use explicit `--commit-policy none` only when you want
-manual commit ownership and potentially uncommitted completion. Before review,
+completion, the active implementation agent supplies a bounded structured
+proposal. `tao slice-complete` centrally enforces
+`<type>(<scope>): <lowercase imperative summary>` plus non-empty `What:` and
+`Why:` sections, rejects agent-supplied `Tao-*` trailers, records the exact final
+message as intent, and alone stages and creates or recovers the commit. Invalid
+content stops before intent or Git mutation; repair happens in the same session
+with no title or deterministic fallback. A slice with no changes records
+`no_changes` without an empty commit. If an isolated automatic run is interrupted
+before commit intent, rerun it normally: Tao resumes only the exact recorded
+worktree/branch/HEAD and preserves its edits; a post-intent interruption is
+recovered by `tao slice-complete`, not by another implementation session. When a
+run stops on a blocker, fix it and resume with `tao run --continue`; use explicit
+`--commit-policy none` only when you want manual commit ownership and potentially
+uncommitted completion. Before review,
 Tao requires automatic-policy worktrees to
 be clean and runs the repository-wide verification command it detects. It then
 runs a fresh best-effort review by default and persists it in the local plan
@@ -116,7 +121,8 @@ fresh review. The loop defaults to five rework cycles; disable it with
 foreground queue, opt in with `tao queue start --auto-rework`.
 
 If you are using the solo no-PR workflow, read the persisted review and merge an
-approved plan with `tao merge <plan-id>`. Tao squashes the reviewed checkpoint
+approved plan with `tao merge <plan-id>`. Tao reuses the approved review's exact
+message proposal, appends trusted plan/source evidence, squashes the checkpoint
 history into one default-branch commit, verifies the result, records the merge,
 and then uses managed cleanup. Pass `--no-squash` to preserve checkpoint commits
 through rebase and fast-forward integration.
@@ -279,7 +285,10 @@ tao merge --all [--dry-run] [--restart] [--verify-command CMD]
 plan has completed all slices, is reviewed and approved, the review base matches
 `merge-base(<default>, <plan branch>)`, the review head matches the branch tip,
 and the plan worktree is clean. By default Tao applies the plan branch as one
-squash commit carrying `Tao-Plan` and `Tao-Source-Head` trailers. Pass
+squash, reuses the approved review's proposal, and appends `Tao-Plan` and
+`Tao-Source-Head` trailers. Legacy reviews without proposals and explicit forced
+merges may exceptionally generate one proposal from the exact diff before any
+mutation; invalid generation fails without a title fallback. Pass
 `--no-squash` to preserve checkpoint commits through rebase and fast-forward.
 Tao then runs merge verification. Automatic detection prefers a declared
 repository `make verify` target; otherwise it uses declared Make `build` and/or
@@ -338,15 +347,26 @@ repository-wide plan rollup, including plans by status, slice-complete count,
 reviewed count, and review verdict counts. `--json` emits the same information
 as structured output.
 
-### Internals and shell integration
+### Standalone commits, internals, and shell integration
 
 ```sh
+tao commit --context [--repo-root DIR]
+tao commit --proposal-file FILE [--repo-root DIR]
+tao commit --message MESSAGE [--repo-root DIR]
 tao init [--slug SLUG --json]
-tao slice-complete --plan-dir DIR --slice-id ID --notes-file FILE --verification-results-file FILE
+tao slice-complete --plan-dir DIR --slice-id ID --notes-file FILE --verification-results-file FILE [--commit-proposal-file FILE]
 tao cleanup [--dry-run] [--force]
 tao completion zsh
 tao version
 ```
+
+The agent `/commit` command is the fast standalone wrapper: it asks Tao for
+filtered context, uses the already selected agent/model to propose the message,
+and returns it to Tao for validation, safe staging, and local commit creation.
+Use `--message` only as an explicit standalone override; the complete message
+must satisfy the same subject plus `What:`/`Why:` contract. Automatic slice,
+review-backed merge, and active merge-resolution flows never fall back to
+`/commit` or start a second normal message session.
 
 ## Configuration
 

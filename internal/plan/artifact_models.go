@@ -59,7 +59,9 @@ type SliceExecutionStart struct {
 }
 
 // SliceCommitIntent is the durable boundary written before Tao mutates Git.
-// Its hash makes retries idempotent and rejects conflicting completion reports.
+// Message is the exact final message reused during recovery; Hash binds new
+// intents to both that message and the completion report. Legacy hashes remain
+// readable by the completion service.
 type SliceCommitIntent struct {
 	Hash           string    `json:"hash"`
 	Policy         string    `json:"policy"`

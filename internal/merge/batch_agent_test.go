@@ -13,12 +13,28 @@ import (
 	"testing"
 
 	"github.com/iamseth/tao/internal/gitops"
+	"github.com/iamseth/tao/internal/plan"
 )
 
 type batchResolutionAgentFunc func(context.Context, string, string) (string, error)
 
 func (f batchResolutionAgentFunc) Resolve(ctx context.Context, root, prompt string) (string, error) {
 	return f(ctx, root, prompt)
+}
+
+func batchResolutionJSON(summary string) string {
+	return batchResolutionJSONWithProposal(summary, plan.ReviewCommitMessage{
+		Subject: "fix(batch): resolve candidate integration",
+		Body:    "What:\nResolve the candidate changes in the integration worktree.\n\nWhy:\nPreserve the candidate intent in the combined batch.",
+	})
+}
+
+func batchResolutionJSONWithProposal(summary string, proposal plan.ReviewCommitMessage) string {
+	encoded, err := json.Marshal(batchResolutionOutput{Summary: summary, CommitMessage: proposal})
+	if err != nil {
+		panic(err)
+	}
+	return string(encoded)
 }
 
 type durableFailingBatchTransitionStore struct {
@@ -51,12 +67,25 @@ func (s *durableFailingBatchTransitionStore) Transition(state BatchState, _ stri
 func TestBatchAgentResolvesTextConflictAndTaoOwnsCommit(t *testing.T) {
 	fixture, sourceHead, defaultHead, integrationRoot := batchAgentConflictFixture(t)
 	state := batchAgentDeferredState(fixture, sourceHead, defaultHead)
+	reviewProposal := plan.ReviewCommitMessage{
+		Subject: "feat(batch): integrate approved candidate",
+		Body:    "What:\nIntegrate the approved candidate.\n\nWhy:\nReuse the exact review description.",
+	}
+	reviewMessage, err := singleMergeCommitMessage(reviewProposal, "plan-a", sourceHead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Candidates[0].ReviewCommitMessage = &reviewProposal
+	state.Candidates[0].CommitMessage = reviewMessage
+	state.Integrations[0].CommitMessage = reviewMessage
 	store := &recordingBatchTransitionStore{}
+	calls := 0
 	agent := batchResolutionAgentFunc(func(_ context.Context, root, prompt string) (string, error) {
+		calls++
 		if root != integrationRoot || !strings.Contains(prompt, "Do not run git commit") || !strings.Contains(prompt, "BEGIN TAO UNTRUSTED CONFLICT FILES") {
 			t.Fatalf("unexpected agent request root=%q prompt=%q", root, prompt)
 		}
-		return "resolved README", os.WriteFile(filepath.Join(root, "README.md"), []byte("combined\n"), 0o600)
+		return batchResolutionJSON("resolved README"), os.WriteFile(filepath.Join(root, "README.md"), []byte("combined\n"), 0o600)
 	})
 	service := NewService(fixture.repoRoot, nil)
 	got, err := (BatchAgentResolver{Store: store, Service: service, Agent: agent}).Resolve(context.Background(), state, integrationRoot, BatchResolveOptions{VerifyCommand: "grep -q combined README.md"})
@@ -67,6 +96,15 @@ func TestBatchAgentResolvesTextConflictAndTaoOwnsCommit(t *testing.T) {
 		t.Fatalf("unexpected resolution result: %#v", got)
 	}
 	message := strings.TrimSpace(realGitOutput(t, integrationRoot, "show", "-s", "--format=%B", "HEAD"))
+	if calls != 1 {
+		t.Fatalf("resolver calls = %d, want one editing/message session", calls)
+	}
+	if !strings.HasPrefix(message, "fix(batch): resolve candidate integration") || message == reviewMessage {
+		t.Fatalf("resolution did not replace the changed review description: %q", message)
+	}
+	if !got.State.Candidates[0].CommitMessageResolved || got.State.Candidates[0].CommitMessage != message || got.State.Integrations[0].CommitMessage != message || got.State.Integrations[0].Resolutions[0].CommitMessage != message {
+		t.Fatalf("exact resolved message was not durable across candidate, intent, and outcome: %+v", got.State)
+	}
 	for _, want := range []string{"Tao-Plan: plan-a", "Tao-Source-Head: " + sourceHead} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("Tao-owned commit missing %q: %q", want, message)
@@ -83,6 +121,37 @@ func TestBatchAgentResolvesTextConflictAndTaoOwnsCommit(t *testing.T) {
 	}
 }
 
+func TestBatchAgentKeepsDirectReviewMessageWhenResolutionDescriptionIsUnchanged(t *testing.T) {
+	fixture, sourceHead, defaultHead, integrationRoot := batchAgentConflictFixture(t)
+	state := batchAgentDeferredState(fixture, sourceHead, defaultHead)
+	proposal := plan.ReviewCommitMessage{
+		Subject: "fix(batch): resolve candidate integration",
+		Body:    "What:\nResolve the candidate changes in the integration worktree.\n\nWhy:\nPreserve the candidate intent in the combined batch.",
+	}
+	message, err := singleMergeCommitMessage(proposal, "plan-a", sourceHead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Candidates[0].ReviewCommitMessage = &proposal
+	state.Candidates[0].CommitMessage = message
+	state.Integrations[0].CommitMessage = message
+	got, err := (BatchAgentResolver{
+		Store: &recordingBatchTransitionStore{}, Service: NewService(fixture.repoRoot, nil),
+		Agent: batchResolutionAgentFunc(func(_ context.Context, root, _ string) (string, error) {
+			return batchResolutionJSONWithProposal("resolved without description changes", proposal), os.WriteFile(filepath.Join(root, "README.md"), []byte("combined\n"), 0o600)
+		}),
+	}).Resolve(context.Background(), state, integrationRoot, BatchResolveOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State.Candidates[0].CommitMessageResolved || got.State.Candidates[0].CommitMessage != message || got.State.Integrations[0].CommitMessage != message {
+		t.Fatalf("unchanged resolution replaced the direct review message: %+v", got.State)
+	}
+	if committed := strings.TrimSpace(realGitOutput(t, integrationRoot, "show", "-s", "--format=%B", "HEAD")); committed != message {
+		t.Fatalf("committed message = %q, want direct review message %q", committed, message)
+	}
+}
+
 func TestBatchAgentResumesResolvedCandidateAfterCommitBeforeTransition(t *testing.T) {
 	fixture, sourceHead, defaultHead, integrationRoot := batchAgentConflictFixture(t)
 	state := batchAgentDeferredState(fixture, sourceHead, defaultHead)
@@ -90,7 +159,7 @@ func TestBatchAgentResumesResolvedCandidateAfterCommitBeforeTransition(t *testin
 	calls := 0
 	agent := batchResolutionAgentFunc(func(_ context.Context, root, _ string) (string, error) {
 		calls++
-		return "resolved README", os.WriteFile(filepath.Join(root, "README.md"), []byte("combined\n"), 0o600)
+		return batchResolutionJSON("resolved README"), os.WriteFile(filepath.Join(root, "README.md"), []byte("combined\n"), 0o600)
 	})
 	resolver := BatchAgentResolver{Store: store, Service: NewService(fixture.repoRoot, nil), Agent: agent}
 	_, err := resolver.Resolve(context.Background(), state, integrationRoot, BatchResolveOptions{})
@@ -117,6 +186,164 @@ func TestBatchAgentResumesResolvedCandidateAfterCommitBeforeTransition(t *testin
 	}
 	if head := strings.TrimSpace(realGitOutput(t, integrationRoot, "rev-parse", "HEAD")); head != committedHead {
 		t.Fatalf("resume changed committed head: got %s want %s", head, committedHead)
+	}
+}
+
+func TestBatchAgentResumesResolvedIntentBeforeCommitWithoutAnotherSession(t *testing.T) {
+	fixture, sourceHead, defaultHead, integrationRoot := batchAgentConflictFixture(t)
+	state := batchAgentDeferredState(fixture, sourceHead, defaultHead)
+	store := &recordingBatchTransitionStore{}
+	const interrupted = "interrupted after resolved message intent"
+	store.afterTransition = func(state BatchState) error {
+		if state.Integrations[0].Status == batchIntegrationApplying {
+			panic(interrupted)
+		}
+		return nil
+	}
+	calls := 0
+	resolver := BatchAgentResolver{
+		Store: store, Service: NewService(fixture.repoRoot, nil),
+		Agent: batchResolutionAgentFunc(func(_ context.Context, root, _ string) (string, error) {
+			calls++
+			return batchResolutionJSON("resolved before interruption"), os.WriteFile(filepath.Join(root, "README.md"), []byte("combined\n"), 0o600)
+		}),
+	}
+	func() {
+		defer func() {
+			if got := recover(); got != interrupted {
+				t.Fatalf("unexpected interruption: %v", got)
+			}
+		}()
+		_, _ = resolver.Resolve(context.Background(), state, integrationRoot, BatchResolveOptions{})
+		t.Fatal("expected simulated process interruption")
+	}()
+	intent := store.states[len(store.states)-1]
+	resolution := latestBatchResolution(&intent.Integrations[0])
+	if intent.Integrations[0].Status != batchIntegrationApplying || resolution == nil || resolution.CommitMessage == "" || resolution.CommitMessage != intent.Integrations[0].CommitMessage || resolution.CommitMessage != intent.Candidates[0].CommitMessage {
+		t.Fatalf("resolved message intent was not exact and durable: %+v", intent)
+	}
+	store.afterTransition = nil
+	got, err := resolver.Resolve(context.Background(), intent, integrationRoot, BatchResolveOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("resume started another agent session: %d calls", calls)
+	}
+	if got.State.Integrations[0].Status != batchIntegrationApplied {
+		t.Fatalf("resolved intent was not committed: %+v", got.State.Integrations[0])
+	}
+	message := strings.TrimSpace(realGitOutput(t, integrationRoot, "show", "-s", "--format=%B", "HEAD"))
+	if message != resolution.CommitMessage {
+		t.Fatalf("resumed commit message = %q, want exact intent %q", message, resolution.CommitMessage)
+	}
+	if parent := strings.TrimSpace(realGitOutput(t, integrationRoot, "rev-parse", "HEAD^")); parent != defaultHead {
+		t.Fatalf("resumed commit parent = %s, want %s", parent, defaultHead)
+	}
+}
+
+func TestBatchAgentRecoveryRequiresFreshProposalWhenResolvedContentDrifts(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		drift func(*testing.T, string)
+	}{
+		{
+			name: "same path",
+			drift: func(t *testing.T, root string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("same-path drift\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "additional path",
+			drift: func(t *testing.T, root string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(root, "injected.txt"), []byte("additional drift\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture, sourceHead, defaultHead, integrationRoot := batchAgentConflictFixture(t)
+			state := batchAgentDeferredState(fixture, sourceHead, defaultHead)
+			store := &recordingBatchTransitionStore{}
+			const interrupted = "interrupted after exact resolved intent"
+			store.afterTransition = func(state BatchState) error {
+				if state.Integrations[0].Status == batchIntegrationApplying {
+					panic(interrupted)
+				}
+				return nil
+			}
+			oldProposal := plan.ReviewCommitMessage{
+				Subject: "fix(batch): resolve original candidate",
+				Body:    "What:\nResolve the original candidate content.\n\nWhy:\nIntegrate the approved source safely.",
+			}
+			freshProposal := plan.ReviewCommitMessage{
+				Subject: "fix(batch): resolve refreshed candidate",
+				Body:    "What:\nResolve the refreshed candidate content.\n\nWhy:\nReplace content that drifted after interruption.",
+			}
+			calls := 0
+			resolver := BatchAgentResolver{
+				Store: store, Service: NewService(fixture.repoRoot, nil),
+				Agent: batchResolutionAgentFunc(func(_ context.Context, root, _ string) (string, error) {
+					calls++
+					if calls == 1 {
+						return batchResolutionJSONWithProposal("original resolution", oldProposal), os.WriteFile(filepath.Join(root, "README.md"), []byte("original resolved content\n"), 0o600)
+					}
+					if _, err := os.Stat(filepath.Join(root, "injected.txt")); !errors.Is(err, os.ErrNotExist) {
+						t.Fatalf("additional drift was not restored before reproposal: %v", err)
+					}
+					readme, err := os.ReadFile(filepath.Join(root, "README.md")) //nolint:gosec // Test root is an isolated fixture.
+					if err != nil {
+						t.Fatal(err)
+					}
+					if strings.Contains(string(readme), "same-path drift") {
+						t.Fatal("same-path drift was not restored before reproposal")
+					}
+					return batchResolutionJSONWithProposal("fresh resolution", freshProposal), os.WriteFile(filepath.Join(root, "README.md"), []byte("fresh resolved content\n"), 0o600)
+				}),
+			}
+			func() {
+				defer func() {
+					if got := recover(); got != interrupted {
+						t.Fatalf("unexpected interruption: %v", got)
+					}
+				}()
+				_, _ = resolver.Resolve(context.Background(), state, integrationRoot, BatchResolveOptions{})
+				t.Fatal("expected simulated process interruption")
+			}()
+			intent := store.states[len(store.states)-1]
+			resolution := latestBatchResolution(&intent.Integrations[0])
+			if resolution == nil || !slices.Equal(resolution.ChangedPaths, []string{"README.md"}) || resolution.ContentFingerprint == "" {
+				t.Fatalf("applying intent omitted exact resolved content: %+v", resolution)
+			}
+			tc.drift(t, integrationRoot)
+			store.afterTransition = nil
+
+			got, err := resolver.Resolve(context.Background(), intent, integrationRoot, BatchResolveOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if calls != 2 || got.State.Integrations[0].Status != batchIntegrationApplied {
+				t.Fatalf("drift recovery did not obtain one fresh proposal: calls=%d state=%+v", calls, got.State.Integrations[0])
+			}
+			if got.State.Integrations[0].Resolutions[0].Outcome != "content_drift" {
+				t.Fatalf("drifted proposal outcome = %q", got.State.Integrations[0].Resolutions[0].Outcome)
+			}
+			message := strings.TrimSpace(realGitOutput(t, integrationRoot, "show", "-s", "--format=%B", "HEAD"))
+			if !strings.HasPrefix(message, freshProposal.Subject+"\n\n") || strings.Contains(message, oldProposal.Subject) {
+				t.Fatalf("recovery committed stale proposal: %q", message)
+			}
+			if _, err := os.Stat(filepath.Join(integrationRoot, "injected.txt")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("additional drift survived recovery: %v", err)
+			}
+			if content, err := os.ReadFile(filepath.Join(integrationRoot, "README.md")); err != nil || string(content) != "fresh resolved content\n" { //nolint:gosec // Test root is an isolated fixture.
+				t.Fatalf("committed content = %q, err=%v", content, err)
+			}
+		})
 	}
 }
 
@@ -162,7 +389,7 @@ func TestBatchAgentResumesInterruptedResolutionWork(t *testing.T) {
 				Store: &recordingBatchTransitionStore{}, Service: NewService(fixture.repoRoot, nil),
 				Agent: batchResolutionAgentFunc(func(_ context.Context, root, _ string) (string, error) {
 					calls++
-					return "resolved after interruption", os.WriteFile(filepath.Join(root, "README.md"), []byte("combined\n"), 0o600)
+					return batchResolutionJSON("resolved after interruption"), os.WriteFile(filepath.Join(root, "README.md"), []byte("combined\n"), 0o600)
 				}),
 			}).Resolve(context.Background(), state, integrationRoot, BatchResolveOptions{})
 			if err != nil {
@@ -214,7 +441,7 @@ func TestBatchAgentResumesCrashImmediatelyAfterPreparation(t *testing.T) {
 	resolver.Store = &durableFailingBatchTransitionStore{}
 	resolver.Agent = batchResolutionAgentFunc(func(_ context.Context, root, _ string) (string, error) {
 		calls++
-		return "resolved after preparation interruption", os.WriteFile(filepath.Join(root, "README.md"), []byte("combined\n"), 0o600)
+		return batchResolutionJSON("resolved after preparation interruption"), os.WriteFile(filepath.Join(root, "README.md"), []byte("combined\n"), 0o600)
 	})
 	got, err := resolver.Resolve(context.Background(), intent, integrationRoot, BatchResolveOptions{})
 	if err != nil {
@@ -225,7 +452,7 @@ func TestBatchAgentResumesCrashImmediatelyAfterPreparation(t *testing.T) {
 	}
 }
 
-func TestBatchAgentResumesApplyingIntentBeforeCommit(t *testing.T) {
+func TestBatchAgentResumesLegacyApplyingIntentBeforeCommit(t *testing.T) {
 	fixture, sourceHead, defaultHead, integrationRoot := batchAgentConflictFixture(t)
 	state := batchAgentDeferredState(fixture, sourceHead, defaultHead)
 	git, err := NewService(fixture.repoRoot, nil).gitClientForRoot(integrationRoot)
@@ -261,7 +488,7 @@ func TestBatchAgentResumesApplyingIntentBeforeCommit(t *testing.T) {
 		Store: &recordingBatchTransitionStore{}, Service: NewService(fixture.repoRoot, nil),
 		Agent: batchResolutionAgentFunc(func(_ context.Context, root, _ string) (string, error) {
 			calls++
-			return "resolved after applying interruption", os.WriteFile(filepath.Join(root, "README.md"), []byte("combined\n"), 0o600)
+			return batchResolutionJSON("resolved after applying interruption"), os.WriteFile(filepath.Join(root, "README.md"), []byte("combined\n"), 0o600)
 		}),
 	}).Resolve(context.Background(), state, integrationRoot, BatchResolveOptions{})
 	if err != nil {
@@ -283,7 +510,7 @@ func TestBatchAgentRejectsChangesToAnotherCandidateSourceRef(t *testing.T) {
 		Store: &recordingBatchTransitionStore{}, Service: NewService(fixture.repoRoot, nil),
 		Agent: batchResolutionAgentFunc(func(_ context.Context, root, _ string) (string, error) {
 			runRealGit(t, root, "update-ref", "refs/heads/"+protectedBranch, defaultHead)
-			return "resolved README", os.WriteFile(filepath.Join(root, "README.md"), []byte("combined\n"), 0o600)
+			return batchResolutionJSON("resolved README"), os.WriteFile(filepath.Join(root, "README.md"), []byte("combined\n"), 0o600)
 		}),
 	}).Resolve(context.Background(), state, integrationRoot, BatchResolveOptions{})
 	if err == nil || got.State.Status != BatchStatusBlocked || !strings.Contains(err.Error(), "protected Git refs") {
@@ -310,8 +537,8 @@ func TestBatchAgentRecordsEarlyDeferralAfterLaterAppliedCandidate(t *testing.T) 
 		RepoRoot: fixture.repoRoot, DefaultBranch: fixture.defaultBranch, DefaultStartSHA: defaultHead,
 		ChosenOrder: []string{"plan-a", "plan-b"},
 		Candidates: []BatchCandidate{
-			{PlanID: "plan-a", PlanTitle: "agent candidate", RepoRoot: fixture.repoRoot, Branch: fixture.planBranch, SourceTip: sourceA, DefaultBranch: fixture.defaultBranch, DefaultStartSHA: defaultHead},
-			{PlanID: "plan-b", PlanTitle: "clean candidate", RepoRoot: fixture.repoRoot, Branch: "tao/plan-b", SourceTip: sourceB, DefaultBranch: fixture.defaultBranch, DefaultStartSHA: defaultHead},
+			{PlanID: "plan-a", PlanTitle: "agent candidate", RepoRoot: fixture.repoRoot, Branch: fixture.planBranch, SourceTip: sourceA, DefaultBranch: fixture.defaultBranch, DefaultStartSHA: defaultHead, CommitMessage: testBatchCommitMessage("plan-a", sourceA)},
+			{PlanID: "plan-b", PlanTitle: "clean candidate", RepoRoot: fixture.repoRoot, Branch: "tao/plan-b", SourceTip: sourceB, DefaultBranch: fixture.defaultBranch, DefaultStartSHA: defaultHead, CommitMessage: testBatchCommitMessage("plan-b", sourceB)},
 		},
 	}
 	store := &recordingBatchTransitionStore{}
@@ -325,7 +552,7 @@ func TestBatchAgentRecordsEarlyDeferralAfterLaterAppliedCandidate(t *testing.T) 
 	}
 
 	resolved, err := (BatchAgentResolver{Store: store, Service: service, Agent: batchResolutionAgentFunc(func(_ context.Context, root, _ string) (string, error) {
-		return "resolved early candidate", os.WriteFile(filepath.Join(root, "README.md"), []byte("combined\n"), 0o600)
+		return batchResolutionJSON("resolved early candidate"), os.WriteFile(filepath.Join(root, "README.md"), []byte("combined\n"), 0o600)
 	})}).Resolve(context.Background(), integrated.State, integrationRoot, BatchResolveOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -365,7 +592,7 @@ func TestBatchAgentRepairsVerificationFailureBeforeTaoCommit(t *testing.T) {
 	state.Integrations[0].DeferredReason = "verification failed"
 	state.Integrations[0].VerificationOutput = "wanted good"
 	got, err := (BatchAgentResolver{Store: &recordingBatchTransitionStore{}, Service: NewService(fixture.repoRoot, nil), Agent: batchResolutionAgentFunc(func(_ context.Context, root, _ string) (string, error) {
-		return "fixed verification", os.WriteFile(filepath.Join(root, "value.txt"), []byte("good\n"), 0o600)
+		return batchResolutionJSON("fixed verification"), os.WriteFile(filepath.Join(root, "value.txt"), []byte("good\n"), 0o600)
 	})}).Resolve(context.Background(), state, integrationRoot, BatchResolveOptions{VerifyCommand: "grep -q good value.txt"})
 	if err != nil || got.State.Status != BatchStatusReviewing {
 		t.Fatalf("verification repair failed: state=%#v err=%v", got.State, err)
@@ -375,11 +602,60 @@ func TestBatchAgentRepairsVerificationFailureBeforeTaoCommit(t *testing.T) {
 	}
 }
 
+func TestBatchAgentRejectsMalformedOrUnsafeCommitProposalBeforeIntent(t *testing.T) {
+	valid := plan.ReviewCommitMessage{
+		Subject: "fix(batch): resolve candidate integration",
+		Body:    "What:\nResolve the candidate.\n\nWhy:\nPreserve the batch.",
+	}
+	missingProposal, err := json.Marshal(map[string]string{"summary": "missing proposal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		output string
+		reason string
+	}{
+		{name: "missing output", output: "", reason: "output is empty"},
+		{name: "malformed json", output: "not json", reason: "malformed output"},
+		{name: "oversized output", output: strings.Repeat("x", 32*1024+1), reason: "output exceeds"},
+		{name: "missing proposal", output: string(missingProposal), reason: "commit message"},
+		{name: "reserved trailer", output: batchResolutionJSONWithProposal("forged trailer", plan.ReviewCommitMessage{Subject: valid.Subject, Body: valid.Body + "\n\nTao-Plan: forged"}), reason: "reserved Tao-*"},
+		{name: "unsafe subject", output: batchResolutionJSONWithProposal("unsafe subject", plan.ReviewCommitMessage{Subject: "fix(batch): fixed candidate", Body: valid.Body}), reason: "imperative"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture, sourceHead, defaultHead, integrationRoot := batchAgentConflictFixture(t)
+			state := batchAgentDeferredState(fixture, sourceHead, defaultHead)
+			got, resolveErr := (BatchAgentResolver{
+				Store: &recordingBatchTransitionStore{}, Service: NewService(fixture.repoRoot, nil),
+				Agent: batchResolutionAgentFunc(func(_ context.Context, root, _ string) (string, error) {
+					return tc.output, os.WriteFile(filepath.Join(root, "README.md"), []byte("combined\n"), 0o600)
+				}),
+			}).Resolve(context.Background(), state, integrationRoot, BatchResolveOptions{})
+			if resolveErr == nil || got.State.Status != BatchStatusBlocked || got.State.BlockKind != BatchBlockKindResumable || !strings.Contains(resolveErr.Error(), tc.reason) {
+				t.Fatalf("invalid output did not resumably block: state=%+v err=%v", got.State, resolveErr)
+			}
+			if got.State.Candidates[0].CommitMessage != "" || got.State.Integrations[0].CommitMessage != "" {
+				t.Fatalf("invalid output created a commit intent: %+v", got.State)
+			}
+			if outcome := latestBatchResolution(&got.State.Integrations[0]); outcome == nil || outcome.Outcome != "malformed_output" || outcome.CommitMessage != "" {
+				t.Fatalf("invalid output outcome = %+v", outcome)
+			}
+			if head := strings.TrimSpace(realGitOutput(t, integrationRoot, "rev-parse", "HEAD")); head != defaultHead {
+				t.Fatalf("invalid output changed integration head: %s", head)
+			}
+			if status := strings.TrimSpace(realGitOutput(t, integrationRoot, "status", "--porcelain")); status != "" {
+				t.Fatalf("invalid output left staged or working-tree changes: %q", status)
+			}
+		})
+	}
+}
+
 func TestBatchAgentNoProgressBlocksAndRestoresIntegration(t *testing.T) {
 	fixture, sourceHead, defaultHead, integrationRoot := batchAgentConflictFixture(t)
 	state := batchAgentDeferredState(fixture, sourceHead, defaultHead)
 	got, err := (BatchAgentResolver{Store: &recordingBatchTransitionStore{}, Service: NewService(fixture.repoRoot, nil), Agent: batchResolutionAgentFunc(func(context.Context, string, string) (string, error) {
-		return "nothing changed", nil
+		return batchResolutionJSON("nothing changed"), nil
 	})}).Resolve(context.Background(), state, integrationRoot, BatchResolveOptions{MaxAttempts: 2})
 	if err == nil || got.State.Status != BatchStatusBlocked || !strings.Contains(got.State.BlockedReason, "unresolved conflicts") {
 		t.Fatalf("expected blocked no-op agent, got state=%#v err=%v", got.State, err)

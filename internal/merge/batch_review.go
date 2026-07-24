@@ -2,15 +2,20 @@ package merge
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	commitpkg "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/rework"
 	runpkg "github.com/iamseth/tao/internal/run"
@@ -93,7 +98,7 @@ func (r BatchAggregateReviewer) Review(ctx context.Context, state BatchState, in
 	if strings.TrimSpace(verify.command) == "" {
 		return r.block(result, state, BatchBlockKindResumable, "aggregate review requires a full verification command")
 	}
-	state, err = r.recoverAggregateRework(ctx, git, state)
+	state, err = r.recoverAggregateRework(ctx, git, state, integrationRoot)
 	if err != nil {
 		return result, err
 	}
@@ -175,10 +180,12 @@ func (r BatchAggregateReviewer) Review(ctx context.Context, state BatchState, in
 				previousRoundHead = history[len(history)-1].HeadSHA
 			}
 			resolutionSHAs := []string(nil)
+			commitMessage := ""
 			if state.Review != nil {
 				resolutionSHAs = append(resolutionSHAs, state.Review.ResolutionSHAs...)
+				commitMessage = state.Review.CommitMessage
 			}
-			state.Review = &BatchReview{Status: "completed", Verdict: parsed.Verdict, Summary: parsed.Summary, Findings: parsed.Findings, BaseSHA: state.DefaultStartSHA, HeadSHA: head, Fingerprint: fingerprint, Attempts: reviewAttempt, Artifact: artifact, ResolutionSHAs: resolutionSHAs, CompletedAt: r.timestamp()}
+			state.Review = &BatchReview{Status: "completed", Verdict: parsed.Verdict, Summary: parsed.Summary, Findings: parsed.Findings, BaseSHA: state.DefaultStartSHA, HeadSHA: head, Fingerprint: fingerprint, Attempts: reviewAttempt, Artifact: artifact, ResolutionSHAs: resolutionSHAs, CommitMessage: commitMessage, CompletedAt: r.timestamp()}
 			state.AggregateReviewSequence = artifactSequence
 			state.Attempts.ReviewFingerprint = fingerprint
 			convergence := aggregateReviewConvergence{}
@@ -265,7 +272,7 @@ func (r BatchAggregateReviewer) Review(ctx context.Context, state BatchState, in
 		if renderErr != nil {
 			return r.block(result, state, BatchBlockKindResumable, renderErr.Error())
 		}
-		summary, agentErr := r.Agent.Resolve(ctx, integrationRoot, reworkPrompt)
+		output, agentErr := r.Agent.Resolve(ctx, integrationRoot, reworkPrompt)
 		changes, statusErr := concretePorcelainChanges(ctx, git)
 		afterHead, headErr := git.RevParse(ctx, "HEAD")
 		refsErr = compareBatchProtectedRefs(ctx, git, beforeReworkRefs)
@@ -278,6 +285,14 @@ func (r BatchAggregateReviewer) Review(ctx context.Context, state BatchState, in
 		if agentErr != nil {
 			return r.blockResumableAfterRestore(ctx, result, state, git, beforeHead, "aggregate rework agent failed: "+agentErr.Error())
 		}
+		resolutionFingerprint, fingerprintErr := aggregateReworkContentFingerprint(integrationRoot, changes.changedPaths)
+		if fingerprintErr != nil {
+			return r.blockResumableAfterRestore(ctx, result, state, git, beforeHead, "fingerprint aggregate rework edits: "+fingerprintErr.Error())
+		}
+		resolvedOutput, outputErr := decodeBatchResolutionOutput(output)
+		if outputErr != nil {
+			return r.blockResumableAfterRestore(ctx, result, state, git, beforeHead, "aggregate rework agent returned malformed output: "+outputErr.Error())
+		}
 		validation := validateAgentEdits(integrationRoot, changes.changedPaths, changes.markerScanPaths)
 		switch validation.issue {
 		case agentEditIssueConflictMarkers:
@@ -287,40 +302,41 @@ func (r BatchAggregateReviewer) Review(ctx context.Context, state BatchState, in
 			reason := "aggregate rework agent edits could not be safely scanned: " + validation.scanErr.Error()
 			return r.blockResumableAfterRestore(ctx, result, state, git, beforeHead, reason)
 		}
-		if strings.TrimSpace(summary) == "" || validation.issue == agentEditIssueNoChanges || validation.issue == agentEditIssueUnsafePaths {
+		if validation.issue == agentEditIssueNoChanges || validation.issue == agentEditIssueUnsafePaths {
 			return r.blockResumableAfterRestore(ctx, result, state, git, beforeHead, "aggregate rework agent returned no safe edits")
 		}
-		stage, ok := git.(interface {
-			Add(context.Context, ...string) error
-		})
-		if !ok {
-			return r.blockResumableAfterRestore(ctx, result, state, git, beforeHead, "Git client cannot stage aggregate rework")
+		message, messageErr := aggregateProposedResolutionCommitMessage(resolvedOutput.CommitMessage, state.ID, state.Attempts.AggregateRework)
+		if messageErr != nil {
+			return r.blockResumableAfterRestore(ctx, result, state, git, beforeHead, "aggregate rework agent returned invalid commit proposal: "+messageErr.Error())
 		}
-		if err := stage.Add(ctx, "."); err != nil {
-			return r.blockResumableAfterRestore(ctx, result, state, git, beforeHead, "stage aggregate rework: "+err.Error())
-		}
-		// The applying review is write-ahead intent for the deterministic commit.
-		// IntegrationHead deliberately remains its parent until settlement.
+		// The applying review is write-ahead intent for the exact validated
+		// message and content. IntegrationHead remains its parent until settlement.
 		state.Review.Status = "applying"
+		state.Review.Summary = boundResolutionSummary(resolvedOutput.Summary)
+		state.Review.CommitMessage = message
+		state.Review.ResolutionPaths = append([]string(nil), changes.changedPaths...)
+		slices.Sort(state.Review.ResolutionPaths)
+		state.Review.ResolutionFingerprint = resolutionFingerprint
 		state, err = r.persist(state)
 		if err != nil {
+			_ = restoreBatchIntegration(ctx, git, beforeHead)
 			return result, fmt.Errorf("persist aggregate rework commit intent: %w", err)
 		}
-		if err := git.Commit(ctx, aggregateResolutionCommitMessage(state.ID, state.Attempts.AggregateRework)); err != nil {
-			return r.block(result, state, BatchBlockKindResumable, "commit aggregate rework: "+err.Error())
-		}
-		newHead, revErr := git.RevParse(ctx, "HEAD")
-		if revErr != nil {
-			return r.block(result, state, BatchBlockKindResumable, "capture aggregate rework commit: "+revErr.Error())
-		}
-		state, err = r.settleAggregateRework(state, strings.TrimSpace(newHead))
+		state, err = r.finishAggregateRework(ctx, git, state, integrationRoot)
 		if err != nil {
-			return result, err
+			if errors.Is(err, errAggregateReworkContentDrift) {
+				state, err = r.prepareFreshAggregateRework(ctx, git, state)
+				if err != nil {
+					return r.block(result, state, BatchBlockKindResumable, err.Error())
+				}
+				return r.block(result, state, BatchBlockKindResumable, "aggregate rework content drifted from durable intent; a fresh proposal is required")
+			}
+			return r.block(result, state, BatchBlockKindResumable, err.Error())
 		}
 	}
 }
 
-func (r BatchAggregateReviewer) recoverAggregateRework(ctx context.Context, git GitClient, state BatchState) (BatchState, error) {
+func (r BatchAggregateReviewer) recoverAggregateRework(ctx context.Context, git GitClient, state BatchState, integrationRoot string) (BatchState, error) {
 	if state.Review == nil || (state.Review.Status != "reworking" && state.Review.Status != "applying") {
 		return state, nil
 	}
@@ -338,6 +354,24 @@ func (r BatchAggregateReviewer) recoverAggregateRework(ctx context.Context, git 
 			return r.settleAggregateRework(state, currentHead)
 		}
 	}
+	if state.Review.Status == "applying" && state.Review.CommitMessage != "" && currentHead == state.IntegrationHead {
+		persisted, finishErr := r.finishAggregateRework(ctx, git, state, integrationRoot)
+		if !errors.Is(finishErr, errAggregateReworkContentDrift) {
+			return persisted, finishErr
+		}
+		state, err = r.prepareFreshAggregateRework(ctx, git, state)
+		if err != nil {
+			return state, err
+		}
+		persisted, err = r.persist(state)
+		if err != nil {
+			return state, fmt.Errorf("persist drifted aggregate rework recovery: %w", err)
+		}
+		return persisted, nil
+	}
+	// An applying intent without an exact message was written by an older Tao.
+	// Its historical deterministic commit can be recognized above, but an
+	// uncommitted attempt must be restored and delegated again.
 	if err := restoreBatchIntegration(ctx, git, state.IntegrationHead); err != nil {
 		return state, fmt.Errorf("restore interrupted aggregate rework: %w", err)
 	}
@@ -347,6 +381,129 @@ func (r BatchAggregateReviewer) recoverAggregateRework(ctx context.Context, git 
 		return state, fmt.Errorf("persist recovered aggregate rework: %w", err)
 	}
 	return persisted, nil
+}
+
+var errAggregateReworkContentDrift = errors.New("aggregate rework content drifted from durable intent")
+
+func (r BatchAggregateReviewer) prepareFreshAggregateRework(ctx context.Context, git GitClient, state BatchState) (BatchState, error) {
+	if err := restoreBatchIntegration(ctx, git, state.IntegrationHead); err != nil {
+		return state, fmt.Errorf("restore drifted aggregate rework: %w", err)
+	}
+	state.Review.Status = "reworking"
+	state.Review.CommitMessage = ""
+	state.Review.ResolutionPaths = nil
+	state.Review.ResolutionFingerprint = ""
+	return state, nil
+}
+
+func aggregateReworkContentFingerprint(root string, paths []string) (string, error) {
+	if unsafeResolutionPaths(paths) {
+		return "", errors.New("aggregate rework contains unsafe paths")
+	}
+	canonicalPaths := append([]string(nil), paths...)
+	slices.Sort(canonicalPaths)
+	canonicalPaths = slices.Compact(canonicalPaths)
+
+	hash := sha256.New()
+	_, _ = io.WriteString(hash, "tao.aggregate-rework-content.v2\x00")
+	for _, relativePath := range canonicalPaths {
+		writeAggregateFingerprintField(hash, relativePath)
+		fullPath := filepath.Join(root, filepath.Clean(filepath.FromSlash(relativePath)))
+		info, err := os.Lstat(fullPath)
+		if errors.Is(err, os.ErrNotExist) {
+			writeAggregateFingerprintField(hash, "missing")
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("inspect %q: %w", relativePath, err)
+		}
+		switch {
+		case info.Mode().IsRegular():
+			writeAggregateFingerprintField(hash, "regular")
+			writeAggregateFingerprintField(hash, strconv.FormatBool(info.Mode()&0o111 != 0))
+			file, openErr := os.Open(fullPath) //nolint:gosec // validated Git path is confined to the integration root.
+			if openErr != nil {
+				return "", fmt.Errorf("open %q: %w", relativePath, openErr)
+			}
+			contentHash := sha256.New()
+			_, copyErr := io.Copy(contentHash, file)
+			closeErr := file.Close()
+			if copyErr != nil || closeErr != nil {
+				return "", fmt.Errorf("read %q: %w", relativePath, errors.Join(copyErr, closeErr))
+			}
+			writeAggregateFingerprintField(hash, hex.EncodeToString(contentHash.Sum(nil)))
+		case info.Mode()&os.ModeSymlink != 0:
+			writeAggregateFingerprintField(hash, "symlink")
+			target, readErr := os.Readlink(fullPath)
+			if readErr != nil {
+				return "", fmt.Errorf("read symlink %q: %w", relativePath, readErr)
+			}
+			writeAggregateFingerprintField(hash, target)
+		default:
+			return "", fmt.Errorf("inspect %q: unsupported file type %s", relativePath, info.Mode().Type())
+		}
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func writeAggregateFingerprintField(writer io.Writer, value string) {
+	_, _ = io.WriteString(writer, strconv.Itoa(len(value)))
+	_, _ = io.WriteString(writer, ":")
+	_, _ = io.WriteString(writer, value)
+	_, _ = io.WriteString(writer, "\x00")
+}
+
+func (r BatchAggregateReviewer) finishAggregateRework(ctx context.Context, git GitClient, state BatchState, integrationRoot string) (BatchState, error) {
+	if state.Review == nil || state.Review.Status != "applying" || state.Review.CommitMessage == "" {
+		return state, errors.New("aggregate rework has no exact durable commit proposal")
+	}
+	if err := validateAggregateResolutionCommitMessage(state.Review.CommitMessage, state.ID, state.Attempts.AggregateRework); err != nil {
+		return state, fmt.Errorf("aggregate rework commit proposal is invalid: %w", err)
+	}
+	changes, statusErr := concretePorcelainChanges(ctx, git)
+	if statusErr != nil {
+		return state, fmt.Errorf("inspect aggregate rework: %w", statusErr)
+	}
+	paths := append([]string(nil), changes.changedPaths...)
+	slices.Sort(paths)
+	if !slices.Equal(paths, state.Review.ResolutionPaths) {
+		return state, fmt.Errorf("%w: edit set changed", errAggregateReworkContentDrift)
+	}
+	if state.Review.ResolutionFingerprint != "" {
+		fingerprint, fingerprintErr := aggregateReworkContentFingerprint(integrationRoot, paths)
+		if fingerprintErr != nil {
+			return state, fmt.Errorf("%w: cannot fingerprint file content before staging: %w", errAggregateReworkContentDrift, fingerprintErr)
+		}
+		if fingerprint != state.Review.ResolutionFingerprint {
+			return state, fmt.Errorf("%w: file content changed", errAggregateReworkContentDrift)
+		}
+	}
+	validation := validateAgentEdits(integrationRoot, changes.changedPaths, changes.markerScanPaths)
+	switch validation.issue {
+	case agentEditIssueConflictMarkers:
+		return state, fmt.Errorf("aggregate rework left conflict markers in %s", strings.Join(validation.markerPaths, ", "))
+	case agentEditIssueUnscannablePaths:
+		return state, fmt.Errorf("aggregate rework edits could not be safely scanned: %w", validation.scanErr)
+	case agentEditIssueNoChanges, agentEditIssueUnsafePaths:
+		return state, errors.New("aggregate rework has no safe edits matching durable intent")
+	}
+	stage, ok := git.(interface {
+		Add(context.Context, ...string) error
+	})
+	if !ok {
+		return state, errors.New("git client cannot stage aggregate rework")
+	}
+	if err := stage.Add(ctx, "."); err != nil {
+		return state, fmt.Errorf("stage aggregate rework: %w", err)
+	}
+	if err := git.Commit(ctx, state.Review.CommitMessage); err != nil {
+		return state, fmt.Errorf("commit aggregate rework: %w", err)
+	}
+	newHead, revErr := git.RevParse(ctx, "HEAD")
+	if revErr != nil {
+		return state, fmt.Errorf("capture aggregate rework commit: %w", revErr)
+	}
+	return r.settleAggregateRework(state, strings.TrimSpace(newHead))
 }
 
 func (r BatchAggregateReviewer) settleAggregateRework(state BatchState, head string) (BatchState, error) {
@@ -362,6 +519,7 @@ func (r BatchAggregateReviewer) settleAggregateRework(state BatchState, head str
 		HeadSHA:        head,
 		Attempts:       state.Review.Attempts,
 		ResolutionSHAs: resolutionSHAs,
+		CommitMessage:  state.Review.CommitMessage,
 	}
 	persisted, err := r.persist(state)
 	if err != nil {
@@ -382,7 +540,11 @@ func aggregateReworkCommitMatches(ctx context.Context, git GitClient, state Batc
 	if err != nil {
 		return false, fmt.Errorf("recover aggregate rework commit: inspect commit message: %w", err)
 	}
-	return strings.TrimSpace(parent) == state.IntegrationHead && strings.TrimSpace(message) == strings.TrimSpace(aggregateResolutionCommitMessage(state.ID, state.Attempts.AggregateRework)), nil
+	expected := state.Review.CommitMessage
+	if expected == "" {
+		expected = aggregateResolutionCommitMessage(state.ID, state.Attempts.AggregateRework)
+	}
+	return strings.TrimSpace(parent) == state.IntegrationHead && strings.TrimSpace(message) == strings.TrimSpace(expected), nil
 }
 
 func (r BatchAggregateReviewer) renderPrompt(ctx context.Context, git GitClient, state BatchState, command, verification string) (string, error) {
@@ -624,6 +786,36 @@ func formatFindings(findings []plan.ReviewFinding) string {
 	return strings.Join(lines, "\n")
 }
 
+func aggregateProposedResolutionCommitMessage(proposal plan.ReviewCommitMessage, batchID string, attempt int) (string, error) {
+	batchTrailer, err := commitpkg.NewTrustedTrailer("Tao-Merge-Batch", strings.TrimSpace(batchID))
+	if err != nil {
+		return "", err
+	}
+	attemptTrailer, err := commitpkg.NewTrustedTrailer("Tao-Review-Attempt", strconv.Itoa(attempt))
+	if err != nil {
+		return "", err
+	}
+	return commitpkg.FormatProposalMessage(proposal.Subject, proposal.Body, batchTrailer, attemptTrailer)
+}
+
+func validateAggregateResolutionCommitMessage(message, batchID string, attempt int) error {
+	if err := commitpkg.ValidateMessage(message); err != nil {
+		return err
+	}
+	suffix := fmt.Sprintf("\n\nTao-Merge-Batch: %s\nTao-Review-Attempt: %d", strings.TrimSpace(batchID), attempt)
+	proposal, found := strings.CutSuffix(message, suffix)
+	if !found {
+		return errors.New("commit message lacks exact aggregate evidence trailers")
+	}
+	subject, body, found := strings.Cut(proposal, "\n\n")
+	if !found {
+		return errors.New("commit proposal lacks a body")
+	}
+	return commitpkg.ValidateProposalMessage(subject, body)
+}
+
+// aggregateResolutionCommitMessage is the frozen pre-proposal message used
+// only to recover applying aggregate attempts written by older Tao versions.
 func aggregateResolutionCommitMessage(batchID string, attempt int) string {
 	return fmt.Sprintf("fix: resolve aggregate merge review\n\nTao-Merge-Batch: %s\nTao-Review-Attempt: %d", batchID, attempt)
 }

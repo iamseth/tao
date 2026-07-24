@@ -3,8 +3,10 @@ package merge
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,6 +16,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	commitpkg "github.com/iamseth/tao/internal/commit"
+	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/prompts"
 )
 
@@ -98,14 +102,35 @@ func (r BatchAgentResolver) Resolve(ctx context.Context, state BatchState, integ
 				result.Resolved = append(result.Resolved, candidate.PlanID)
 				continue
 			}
-			if err := restoreBatchIntegration(ctx, git, base); err != nil {
-				return result, fmt.Errorf("restore interrupted resolution for %s: %w", candidate.PlanID, err)
-			}
-			integration.Status = batchIntegrationDeferred
-			integration.IntegrationSHA = ""
-			state, err = r.persist(state)
-			if err != nil {
-				return result, fmt.Errorf("persist recovered resolution for %s: %w", candidate.PlanID, err)
+			if resolution := latestBatchResolution(integration); resolution != nil && resolution.CommitMessage != "" {
+				var resolved, committed bool
+				state, resolved, committed, err = r.finishResolvedCandidate(ctx, state, git, planID, options.VerifyCommand)
+				if errors.Is(err, errResolvedCandidateContentDrift) {
+					state, err = r.prepareFreshResolvedCandidate(ctx, git, state, planID)
+					if err == nil {
+						state, err = r.persist(state)
+					}
+				}
+				if err != nil {
+					if committed {
+						return result, err
+					}
+					return r.block(ctx, result, state, git, BatchBlockKindResumable, err.Error())
+				}
+				if resolved {
+					result.Resolved = append(result.Resolved, planID)
+					continue
+				}
+			} else {
+				if err := restoreBatchIntegration(ctx, git, base); err != nil {
+					return result, fmt.Errorf("restore interrupted resolution for %s: %w", candidate.PlanID, err)
+				}
+				integration.Status = batchIntegrationDeferred
+				integration.IntegrationSHA = ""
+				state, err = r.persist(state)
+				if err != nil {
+					return result, fmt.Errorf("persist recovered resolution for %s: %w", candidate.PlanID, err)
+				}
 			}
 			integrationIndex = batchIntegrationIndex(state, planID)
 			candidateIndex = batchCandidateIndex(state, planID)
@@ -162,36 +187,29 @@ func (r BatchAgentResolver) Resolve(ctx context.Context, state BatchState, integ
 				return r.block(ctx, result, state, git, BatchBlockKindResumable, renderErr.Error())
 			}
 
-			summary, agentErr := r.Agent.Resolve(ctx, integrationRoot, prompt)
-			status, statusErr := git.StatusPorcelain(ctx)
+			output, agentErr := r.Agent.Resolve(ctx, integrationRoot, prompt)
+			changes, statusErr := concretePorcelainChanges(ctx, git)
 			afterHead, afterHeadErr := git.RevParse(ctx, "HEAD")
 			refsErr = compareBatchProtectedRefs(ctx, git, beforeRefs)
-			changed := porcelainPaths(status)
-			outcome := "agent_returned"
-			if agentErr != nil {
-				outcome = "agent_error"
-			}
+			changed := changes.changedPaths
 			last := &integration.Resolutions[len(integration.Resolutions)-1]
-			last.CompletedAt, last.Outcome, last.Summary, last.ChangedPaths = r.timestamp(), outcome, boundResolutionSummary(summary), changed
-			state, err = r.persist(state)
-			if err != nil {
-				_ = restoreBatchIntegration(ctx, git, beforeHead)
-				return result, fmt.Errorf("persist resolution outcome: %w", err)
+			last.CompletedAt, last.Outcome, last.Summary, last.ChangedPaths = r.timestamp(), "agent_returned", boundResolutionSummary(output), changed
+			if agentErr != nil {
+				last.Outcome = "agent_error"
 			}
-			integrationIndex = batchIntegrationIndex(state, planID)
-			integration = &state.Integrations[integrationIndex]
-			candidate = &state.Candidates[candidateIndex]
 			if afterHeadErr != nil || strings.TrimSpace(afterHead) != strings.TrimSpace(beforeHead) || refsErr != nil {
 				return r.block(ctx, result, state, git, BatchBlockKindResumable, fmt.Sprintf("agent changed protected Git refs while resolving %s", candidate.PlanID))
 			}
 			if agentErr != nil {
 				return r.block(ctx, result, state, git, BatchBlockKindResumable, fmt.Sprintf("agent resolution for %s failed: %v", candidate.PlanID, agentErr))
 			}
-			if strings.TrimSpace(summary) == "" {
-				return r.block(ctx, result, state, git, BatchBlockKindResumable, fmt.Sprintf("agent returned malformed empty output for %s", candidate.PlanID))
-			}
 			if statusErr != nil {
 				return r.block(ctx, result, state, git, BatchBlockKindResumable, fmt.Sprintf("inspect agent edits for %s: %v", candidate.PlanID, statusErr))
+			}
+			resolvedOutput, outputErr := decodeBatchResolutionOutput(output)
+			if outputErr != nil {
+				last.Outcome = "malformed_output"
+				return r.block(ctx, result, state, git, BatchBlockKindResumable, fmt.Sprintf("agent returned malformed output for %s: %v", candidate.PlanID, outputErr))
 			}
 			markerScanPaths := presentMarkerScanPaths(integrationRoot, integration.ConflictFiles)
 			validation := validateAgentEdits(integrationRoot, changed, markerScanPaths)
@@ -201,61 +219,71 @@ func (r BatchAgentResolver) Resolve(ctx context.Context, state BatchState, integ
 			case agentEditIssueNoChanges, agentEditIssueConflictMarkers, agentEditIssueUnscannablePaths:
 				return r.block(ctx, result, state, git, BatchBlockKindResumable, fmt.Sprintf("agent left unresolved conflicts for %s", candidate.PlanID))
 			}
-			stage, ok := git.(interface {
-				Add(context.Context, ...string) error
-			})
-			if !ok {
-				return r.block(ctx, result, state, git, BatchBlockKindResumable, "Git client cannot stage agent resolution")
+			message, messageErr := singleMergeCommitMessage(resolvedOutput.CommitMessage, candidate.PlanID, candidate.SourceTip)
+			if messageErr != nil {
+				last.Outcome = "malformed_output"
+				return r.block(ctx, result, state, git, BatchBlockKindResumable, fmt.Sprintf("agent returned invalid commit proposal for %s: %v", candidate.PlanID, messageErr))
 			}
-			if err := stage.Add(ctx, "."); err != nil {
-				return r.block(ctx, result, state, git, BatchBlockKindResumable, "stage agent resolution: "+err.Error())
-			}
-			status, statusErr = git.StatusPorcelain(ctx)
-			if statusErr != nil || hasUnmergedStatus(status) {
-				return r.block(ctx, result, state, git, BatchBlockKindResumable, fmt.Sprintf("agent made no progress resolving %s", candidate.PlanID))
-			}
-			resolution := resolveMergeVerifyCommandAtRoot(git.Root(), Options{VerifyCommand: options.VerifyCommand})
-			if resolution.command != "" {
-				output, verifyErr := r.Service.runMergeVerifyAtRoot(ctx, git.Root(), resolution.command)
-				if verifyErr != nil {
-					integration.VerificationOutput = output
-					integration.Fingerprint = resolutionFingerprint(status, output)
-					state.Attempts.ConflictFingerprint = integration.Fingerprint
-					last := &integration.Resolutions[len(integration.Resolutions)-1]
-					last.Outcome = "verification_failed"
-					state, err = r.persist(state)
-					if err != nil {
-						return result, err
-					}
-					integrationIndex = batchIntegrationIndex(state, planID)
-					integration = &state.Integrations[integrationIndex]
-					_ = restoreBatchIntegration(ctx, git, beforeHead)
-					continue
+			messageResolved := true
+			if candidate.ReviewCommitMessage != nil {
+				directMessage, directErr := singleMergeCommitMessage(*candidate.ReviewCommitMessage, candidate.PlanID, candidate.SourceTip)
+				if directErr != nil {
+					return r.block(ctx, result, state, git, BatchBlockKindResumable, fmt.Sprintf("approved review commit proposal for %s is invalid: %v", candidate.PlanID, directErr))
 				}
+				messageResolved = message != directMessage
 			}
-			integration.Status = batchIntegrationApplying
-			integration.IntegrationBaseSHA = strings.TrimSpace(beforeHead)
-			integration.IntegrationSHA = ""
+			contentFingerprint, fingerprintErr := resolvedCandidateContentFingerprint(integrationRoot, changed)
+			if fingerprintErr != nil {
+				return r.block(ctx, result, state, git, BatchBlockKindResumable, fmt.Sprintf("fingerprint agent edits for %s: %v", candidate.PlanID, fingerprintErr))
+			}
+			last.Summary = boundResolutionSummary(resolvedOutput.Summary)
 			state, err = r.persist(state)
 			if err != nil {
-				return result, fmt.Errorf("persist resolved candidate commit intent for %s: %w", candidate.PlanID, err)
+				_ = restoreBatchIntegration(ctx, git, beforeHead)
+				return result, fmt.Errorf("persist resolution outcome for %s: %w", candidate.PlanID, err)
 			}
 			integrationIndex = batchIntegrationIndex(state, planID)
 			candidateIndex = batchCandidateIndex(state, planID)
+			integration = &state.Integrations[integrationIndex]
 			candidate = &state.Candidates[candidateIndex]
-			if err := git.Commit(ctx, batchSquashCommitMessage(*candidate)); err != nil {
-				return r.block(ctx, result, state, git, BatchBlockKindResumable, "commit resolved candidate: "+err.Error())
+			last = latestBatchResolution(integration)
+			last.CommitMessage = message
+			last.ChangedPaths = append([]string(nil), changed...)
+			last.ContentFingerprint = contentFingerprint
+			integration.CommitMessage = message
+			integration.Status = batchIntegrationApplying
+			integration.IntegrationBaseSHA = strings.TrimSpace(beforeHead)
+			integration.IntegrationSHA = ""
+			if messageResolved || candidate.CommitMessage == "" {
+				candidate.CommitMessage = message
 			}
-			head, err := git.RevParse(ctx, "HEAD")
+			candidate.CommitMessageResolved = messageResolved
+			state, err = r.persist(state)
 			if err != nil {
+				_ = restoreBatchIntegration(ctx, git, beforeHead)
+				return result, fmt.Errorf("persist resolved candidate commit intent for %s: %w", candidate.PlanID, err)
+			}
+			result.State = state
+			var resolved, committed bool
+			state, resolved, committed, err = r.finishResolvedCandidate(ctx, state, git, planID, options.VerifyCommand)
+			if errors.Is(err, errResolvedCandidateContentDrift) {
+				state, err = r.prepareFreshResolvedCandidate(ctx, git, state, planID)
+				if err == nil {
+					state, err = r.persist(state)
+				}
+			}
+			if err != nil {
+				if committed {
+					return result, err
+				}
 				return r.block(ctx, result, state, git, BatchBlockKindResumable, err.Error())
 			}
-			state, err = r.settleResolvedCandidate(state, integrationIndex, candidateIndex, strings.TrimSpace(head))
-			if err != nil {
-				return result, err
+			if resolved {
+				result.Resolved = append(result.Resolved, planID)
+				break
 			}
-			result.Resolved = append(result.Resolved, candidate.PlanID)
-			break
+			integrationIndex = batchIntegrationIndex(state, planID)
+			integration = &state.Integrations[integrationIndex]
 		}
 		integrationIndex = batchIntegrationIndex(state, planID)
 		if integrationIndex < 0 || state.Integrations[integrationIndex].Status != batchIntegrationApplied {
@@ -373,6 +401,171 @@ func (r BatchAgentResolver) renderPrompt(ctx context.Context, state BatchState, 
 	return prompts.RenderMergeResolve(prompts.MergeResolveData{BatchID: state.ID, PlanID: candidate.PlanID, SourceHead: candidate.SourceTip, IntegrationBase: integration.IntegrationBaseSHA, VerifyCommand: verifyCommand, PlanBrief: candidate.PlanTitle, SourceReview: candidate.ReviewBase + ".." + candidate.ReviewHead, Diff: diff, ConflictFiles: strings.Join(integration.ConflictFiles, "\n") + "\n" + status, PriorPlans: strings.Join(prior, "\n"), VerificationOutput: integration.VerificationOutput})
 }
 
+type batchResolutionOutput struct {
+	Summary       string                   `json:"summary"`
+	CommitMessage plan.ReviewCommitMessage `json:"commit_message"`
+}
+
+func decodeBatchResolutionOutput(output string) (batchResolutionOutput, error) {
+	const outputLimit = 32 * 1024
+	if strings.TrimSpace(output) == "" {
+		return batchResolutionOutput{}, errors.New("output is empty")
+	}
+	if len(output) > outputLimit {
+		return batchResolutionOutput{}, fmt.Errorf("output exceeds %d bytes", outputLimit)
+	}
+	decoder := json.NewDecoder(strings.NewReader(output))
+	decoder.DisallowUnknownFields()
+	var resolved batchResolutionOutput
+	if err := decoder.Decode(&resolved); err != nil {
+		return batchResolutionOutput{}, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return batchResolutionOutput{}, errors.New("multiple JSON values")
+		}
+		return batchResolutionOutput{}, err
+	}
+	if strings.TrimSpace(resolved.Summary) == "" {
+		return batchResolutionOutput{}, errors.New("summary is empty")
+	}
+	if len(resolved.Summary) > 4096 {
+		return batchResolutionOutput{}, errors.New("summary exceeds 4096 bytes")
+	}
+	if err := commitpkg.ValidateProposalMessage(resolved.CommitMessage.Subject, resolved.CommitMessage.Body); err != nil {
+		return batchResolutionOutput{}, err
+	}
+	return resolved, nil
+}
+
+var errResolvedCandidateContentDrift = errors.New("resolved candidate content drifted from durable intent")
+
+func (r BatchAgentResolver) finishResolvedCandidate(ctx context.Context, state BatchState, git GitClient, planID, verifyCommand string) (BatchState, bool, bool, error) {
+	integrationIndex := batchIntegrationIndex(state, planID)
+	candidateIndex := batchCandidateIndex(state, planID)
+	if integrationIndex < 0 || candidateIndex < 0 {
+		return state, false, false, fmt.Errorf("resolved plan %s is absent from durable batch state", planID)
+	}
+	integration := &state.Integrations[integrationIndex]
+	candidate := &state.Candidates[candidateIndex]
+	resolution := latestBatchResolution(integration)
+	if resolution == nil || resolution.CommitMessage == "" || integration.CommitMessage != resolution.CommitMessage || candidate.CommitMessage != resolution.CommitMessage {
+		return state, false, false, fmt.Errorf("resolved candidate %s has no exact durable commit proposal", planID)
+	}
+	if err := validateBatchCommitMessage(integration.CommitMessage, *candidate); err != nil {
+		return state, false, false, fmt.Errorf("resolved candidate %s commit proposal is invalid: %w", planID, err)
+	}
+
+	var changed []string
+	if resolution.ContentFingerprint != "" {
+		changes, err := concretePorcelainChanges(ctx, git)
+		if err != nil {
+			return state, false, false, fmt.Errorf("%w for %s: inspect edit set: %w", errResolvedCandidateContentDrift, planID, err)
+		}
+		changed = changes.changedPaths
+		if !slices.Equal(changed, resolution.ChangedPaths) {
+			return state, false, false, fmt.Errorf("%w for %s: edit set changed", errResolvedCandidateContentDrift, planID)
+		}
+		fingerprint, err := resolvedCandidateContentFingerprint(git.Root(), changed)
+		if err != nil {
+			return state, false, false, fmt.Errorf("%w for %s: cannot fingerprint file content before staging: %w", errResolvedCandidateContentDrift, planID, err)
+		}
+		if fingerprint != resolution.ContentFingerprint {
+			return state, false, false, fmt.Errorf("%w for %s: file content changed", errResolvedCandidateContentDrift, planID)
+		}
+	} else {
+		// Fingerprint-less applying intents were written by older Tao versions.
+		// Preserve their historical safe recovery behavior.
+		status, err := git.StatusPorcelain(ctx)
+		if err != nil {
+			return state, false, false, fmt.Errorf("inspect agent edits for %s: %w", planID, err)
+		}
+		changed = porcelainPaths(status)
+	}
+	markerScanPaths := presentMarkerScanPaths(git.Root(), integration.ConflictFiles)
+	validation := validateAgentEdits(git.Root(), changed, markerScanPaths)
+	switch validation.issue {
+	case agentEditIssueUnsafePaths:
+		return state, false, false, fmt.Errorf("agent made unsafe metadata edits while resolving %s", planID)
+	case agentEditIssueNoChanges, agentEditIssueConflictMarkers, agentEditIssueUnscannablePaths:
+		return state, false, false, fmt.Errorf("agent left unresolved conflicts for %s", planID)
+	}
+	stage, ok := git.(interface {
+		Add(context.Context, ...string) error
+	})
+	if !ok {
+		return state, false, false, errors.New("git client cannot stage agent resolution")
+	}
+	stagePaths := changed
+	if resolution.ContentFingerprint == "" {
+		stagePaths = []string{"."}
+	}
+	if err := stage.Add(ctx, stagePaths...); err != nil {
+		return state, false, false, fmt.Errorf("stage agent resolution: %w", err)
+	}
+	status, err := git.StatusPorcelain(ctx)
+	if err != nil || hasUnmergedStatus(status) {
+		return state, false, false, fmt.Errorf("agent made no progress resolving %s", planID)
+	}
+	verification := resolveMergeVerifyCommandAtRoot(git.Root(), Options{VerifyCommand: verifyCommand})
+	if verification.command != "" {
+		output, verifyErr := r.Service.runMergeVerifyAtRoot(ctx, git.Root(), verification.command)
+		if verifyErr != nil {
+			integration.VerificationOutput = output
+			integration.Fingerprint = resolutionFingerprint(status, output)
+			integration.Status = batchIntegrationDeferred
+			state.Attempts.ConflictFingerprint = integration.Fingerprint
+			resolution.Outcome = "verification_failed"
+			state, err = r.persist(state)
+			if err != nil {
+				return state, false, false, err
+			}
+			if err := restoreBatchIntegration(ctx, git, integration.IntegrationBaseSHA); err != nil {
+				return state, false, false, fmt.Errorf("restore failed candidate verification for %s: %w", planID, err)
+			}
+			return state, false, false, nil
+		}
+	}
+	if err := git.Commit(ctx, integration.CommitMessage); err != nil {
+		return state, false, false, fmt.Errorf("commit resolved candidate: %w", err)
+	}
+	head, err := git.RevParse(ctx, "HEAD")
+	if err != nil {
+		return state, false, true, err
+	}
+	state, err = r.settleResolvedCandidate(state, integrationIndex, candidateIndex, strings.TrimSpace(head))
+	return state, err == nil, true, err
+}
+
+func (r BatchAgentResolver) prepareFreshResolvedCandidate(ctx context.Context, git GitClient, state BatchState, planID string) (BatchState, error) {
+	integrationIndex := batchIntegrationIndex(state, planID)
+	candidateIndex := batchCandidateIndex(state, planID)
+	if integrationIndex < 0 || candidateIndex < 0 {
+		return state, fmt.Errorf("restore drifted resolved candidate %s: durable batch state is incomplete", planID)
+	}
+	integration := &state.Integrations[integrationIndex]
+	if err := restoreBatchIntegration(ctx, git, integration.IntegrationBaseSHA); err != nil {
+		return state, fmt.Errorf("restore drifted resolved candidate %s: %w", planID, err)
+	}
+	staleMessage := integration.CommitMessage
+	integration.Status = batchIntegrationDeferred
+	integration.IntegrationSHA = ""
+	integration.CommitMessage = ""
+	if resolution := latestBatchResolution(integration); resolution != nil {
+		resolution.Outcome = "content_drift"
+	}
+	candidate := &state.Candidates[candidateIndex]
+	if candidate.CommitMessage == staleMessage {
+		candidate.CommitMessage = ""
+		candidate.CommitMessageResolved = false
+	}
+	return state, nil
+}
+
+func resolvedCandidateContentFingerprint(root string, paths []string) (string, error) {
+	return aggregateReworkContentFingerprint(root, paths)
+}
+
 func (r BatchAgentResolver) settleResolvedCandidate(state BatchState, integrationIndex, candidateIndex int, head string) (BatchState, error) {
 	integration := &state.Integrations[integrationIndex]
 	integration.Status = batchIntegrationApplied
@@ -431,11 +624,18 @@ func batchCandidateIndex(state BatchState, id string) int {
 	}
 	return -1
 }
+func latestBatchResolution(integration *BatchIntegration) *BatchResolution {
+	if integration == nil || len(integration.Resolutions) == 0 {
+		return nil
+	}
+	return &integration.Resolutions[len(integration.Resolutions)-1]
+}
+
 func activeBatchResolution(integration *BatchIntegration) *BatchResolution {
 	if integration == nil || len(integration.Resolutions) == 0 {
 		return nil
 	}
-	resolution := &integration.Resolutions[len(integration.Resolutions)-1]
+	resolution := latestBatchResolution(integration)
 	if resolution.CompletedAt != "" || strings.TrimSpace(resolution.BaseSHA) == "" || strings.TrimSpace(resolution.BaseSHA) != strings.TrimSpace(integration.IntegrationBaseSHA) {
 		return nil
 	}

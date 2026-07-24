@@ -9,43 +9,49 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	commitcontract "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
 )
 
 type fakeGitClient struct {
-	root             string
-	defaultBranch    string
-	defaultErr       error
-	revParse         map[string]string
-	revParseSequence map[string][]string
-	revParseErrors   map[string][]error
-	revParseErr      error
-	commitMessages   map[string]string
-	commitMessageErr error
-	mergeBase        string
-	mergeErr         error
-	ancestors        map[string]bool
-	ancestorErr      error
-	status           string
-	statusErr        error
-	changedFiles     []string
-	changedErr       error
-	checkoutErr      error
-	mergeFFErr       error
-	mergeSquashErr   error
-	stagedChanges    bool
-	stagedChangesErr error
-	cleanErr         error
-	commitErr        error
-	rebaseErr        error
-	rebaseAbortErr   error
-	resetHardErr     error
-	calls            []string
+	root                string
+	defaultBranch       string
+	defaultErr          error
+	revParse            map[string]string
+	revParseSequence    map[string][]string
+	revParseErrors      map[string][]error
+	revParseErr         error
+	commitMessages      map[string]string
+	commitMessageErr    error
+	mergeBase           string
+	mergeErr            error
+	ancestors           map[string]bool
+	ancestorErr         error
+	status              string
+	statusErr           error
+	changedFiles        []string
+	changedErr          error
+	diff                string
+	diffErr             error
+	dirtyFingerprints   []gitops.DirtyFingerprint
+	dirtyFingerprintErr error
+	checkoutErr         error
+	mergeFFErr          error
+	mergeSquashErr      error
+	stagedChanges       bool
+	stagedChangesErr    error
+	cleanErr            error
+	commitErr           error
+	rebaseErr           error
+	rebaseAbortErr      error
+	resetHardErr        error
+	calls               []string
 }
 
 func (f *fakeGitClient) Root() string {
@@ -113,6 +119,26 @@ func (f *fakeGitClient) ChangedFiles(ctx context.Context, revspec string) ([]str
 	_ = ctx
 	f.calls = append(f.calls, "changed-files "+revspec)
 	return append([]string(nil), f.changedFiles...), f.changedErr
+}
+
+func (f *fakeGitClient) Diff(ctx context.Context, revspec string) (string, error) {
+	_ = ctx
+	f.calls = append(f.calls, "diff "+revspec)
+	return f.diff, f.diffErr
+}
+
+func (f *fakeGitClient) DirtyFingerprint(ctx context.Context) (gitops.DirtyFingerprint, error) {
+	_ = ctx
+	f.calls = append(f.calls, "dirty-fingerprint")
+	if f.dirtyFingerprintErr != nil {
+		return gitops.DirtyFingerprint{}, f.dirtyFingerprintErr
+	}
+	if len(f.dirtyFingerprints) == 0 {
+		return gitops.DirtyFingerprint{}, nil
+	}
+	fingerprint := f.dirtyFingerprints[0]
+	f.dirtyFingerprints = f.dirtyFingerprints[1:]
+	return fingerprint, nil
 }
 
 func (f *fakeGitClient) Checkout(ctx context.Context, branch string) error {
@@ -872,6 +898,369 @@ func TestDetectExternalMergeSkipsSnapshotBehindAdvancedBranchTip(t *testing.T) {
 	})
 }
 
+func TestPrepareSingleMergeIntentSupersedesUnmutatedPriorSource(t *testing.T) {
+	detail := mergeReadyDetail("base123")
+	detail.Dir = t.TempDir()
+	detail.State.Plan.Review.Head = "source-new"
+	old := plan.SingleMergeCommitIntent{
+		Message: "feat(merge): use old proposal\n\nWhat:\nUse old work.\n\nWhy:\nKeep old recovery exact.\n\nTao-Plan: plan-a\nTao-Source-Head: source-old",
+		PlanID:  "plan-a", SourceHead: "source-old", DefaultBranch: "main", DefaultParent: "base123",
+		CreatedAt: time.Date(2026, 7, 23, 19, 0, 0, 0, time.UTC),
+	}
+	detail.State.Plan.MergeCommitIntent = &old
+	git := &fakeGitClient{defaultBranch: "main", mergeBase: "base123", revParse: map[string]string{"tao/plan-a": "source-new", "main": "base123"}}
+	events := &fakeEventAppender{}
+	service := Service{Git: git, Events: events, Now: func() time.Time { return time.Date(2026, 7, 23, 20, 0, 0, 0, time.UTC) }}
+
+	intent, err := service.prepareSingleMergeIntent(context.Background(), git, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intent.SourceHead != "source-new" || intent.DefaultParent != "base123" || intent.Message == old.Message {
+		t.Fatalf("prior source intent was not safely superseded: %#v", intent)
+	}
+	if len(events.stateWrites) != 2 || events.stateWrites[0].Plan.MergeCommitIntent != nil || events.stateWrites[1].Plan.MergeCommitIntent == nil {
+		t.Fatalf("expected clear then new intent persistence, got %#v", events.stateWrites)
+	}
+}
+
+func TestMergeRejectsInvalidReviewProposalBeforeIntentOrGitMutation(t *testing.T) {
+	git := &fakeGitClient{
+		defaultBranch: "main", mergeBase: "base123",
+		ancestors: map[string]bool{"main..tao/plan-a": true},
+		revParse:  map[string]string{"main": "pre123", "tao/plan-a": "tip-sha"},
+	}
+	detail := mergeReadyDetail("base123")
+	detail.Dir = t.TempDir()
+	detail.State.Plan.Review.Head = "tip-sha"
+	detail.State.Plan.Review.CommitMessage.Body += "\n\nTao-Plan: forged"
+	events := &fakeEventAppender{}
+
+	err := (Service{Git: git, Cleaner: successfulCleanup(), Events: events}).Merge(context.Background(), detail, Options{NoVerify: true})
+	if err == nil || !strings.Contains(err.Error(), "review commit proposal is invalid") {
+		t.Fatalf("expected invalid proposal refusal, got %v", err)
+	}
+	if detail.State.Plan.MergeCommitIntent != nil || len(events.stateWrites) != 0 {
+		t.Fatalf("invalid proposal persisted intent: detail=%#v writes=%#v", detail.State.Plan.MergeCommitIntent, events.stateWrites)
+	}
+	for _, call := range git.calls {
+		if strings.HasPrefix(call, "checkout ") || strings.HasPrefix(call, "merge-squash ") || strings.HasPrefix(call, "commit ") {
+			t.Fatalf("invalid proposal mutated Git: %#v", git.calls)
+		}
+	}
+}
+
+type fakeMergeProposalGenerator struct {
+	proposal commitcontract.Proposal
+	err      error
+	mutate   func() error
+	calls    int
+	exact    commitcontract.MergeProposalContext
+}
+
+func (f *fakeMergeProposalGenerator) GenerateMergeProposal(_ context.Context, exact commitcontract.MergeProposalContext) (commitcontract.Proposal, error) {
+	f.calls++
+	f.exact = exact
+	if f.mutate != nil {
+		if err := f.mutate(); err != nil {
+			return commitcontract.Proposal{}, err
+		}
+	}
+	return f.proposal, f.err
+}
+
+func generatedMergeProposal() commitcontract.Proposal {
+	return commitcontract.Proposal{
+		Type: "feat", Scope: "merge", Summary: "generate legacy merge messages",
+		What: "Generate a proposal from the exact source diff.", Why: "Keep exceptional squash merges recoverable without a fallback.",
+	}
+}
+
+func TestPrepareSingleMergeIntentGeneratesLegacyProposalOnceBeforeMutation(t *testing.T) {
+	detail := mergeReadyDetail("base123")
+	detail.Dir = t.TempDir()
+	detail.State.Repo.Root = "/repo"
+	detail.State.Plan.Review.Head = ""
+	detail.State.Plan.Review.CommitMessage = nil
+	git := &fakeGitClient{
+		root: "/repo", defaultBranch: "main", mergeBase: "base123", diff: "diff --git a/a.go b/a.go\n+change\n",
+		revParse:          map[string]string{"main": "pre123", "tao/plan-a": "tip-sha"},
+		dirtyFingerprints: []gitops.DirtyFingerprint{{Hash: "clean"}, {Hash: "clean"}},
+	}
+	generator := &fakeMergeProposalGenerator{proposal: generatedMergeProposal()}
+	events := &fakeEventAppender{}
+	service := Service{Git: git, Events: events, ProposalGenerator: generator, Now: func() time.Time { return time.Date(2026, 7, 23, 21, 0, 0, 0, time.UTC) }}
+
+	intent, err := service.prepareSingleMergeIntent(context.Background(), git, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if generator.calls != 1 || generator.exact.MergeBase != "base123" || generator.exact.SourceHead != "tip-sha" || generator.exact.Diff != git.diff {
+		t.Fatalf("generator call/context = %d, %#v", generator.calls, generator.exact)
+	}
+	if !slices.Contains(git.calls, "merge-base pre123 tip-sha") {
+		t.Fatalf("merge base was not bound to exact revisions: %#v", git.calls)
+	}
+	if !strings.Contains(intent.Message, "feat(merge): generate legacy merge messages") || !strings.Contains(intent.Message, "Tao-Source-Head: tip-sha") {
+		t.Fatalf("unexpected generated intent message: %q", intent.Message)
+	}
+	if len(events.stateWrites) != 1 || events.stateWrites[0].Plan.MergeCommitIntent == nil {
+		t.Fatalf("intent was not persisted exactly once: %#v", events.stateWrites)
+	}
+	for _, call := range git.calls {
+		if strings.HasPrefix(call, "checkout ") || strings.HasPrefix(call, "merge-squash ") || strings.HasPrefix(call, "commit ") {
+			t.Fatalf("proposal preparation mutated merge state: %#v", git.calls)
+		}
+	}
+}
+
+func TestMergeForceGeneratesExceptionalIntentBeforeSquash(t *testing.T) {
+	detail := mergeReadyDetail("base123")
+	detail.Dir = t.TempDir()
+	detail.State.Repo.Root = "/repo"
+	detail.State.Plan.Review = nil
+	git := &fakeGitClient{
+		root: "/repo", defaultBranch: "main", mergeBase: "base123", diff: "diff --git a/a.go b/a.go\n+change\n",
+		revParse:  map[string]string{"main": "pre123", "tao/plan-a": "tip-sha"},
+		ancestors: map[string]bool{"tao/plan-a..main": false}, dirtyFingerprints: []gitops.DirtyFingerprint{{Hash: "clean"}, {Hash: "clean"}},
+	}
+	generator := &fakeMergeProposalGenerator{proposal: generatedMergeProposal()}
+	events := &fakeEventAppender{}
+	service := Service{Git: git, Cleaner: successfulCleanup(), Events: events, ProposalGenerator: generator}
+
+	if err := service.Merge(context.Background(), detail, Options{Force: true, NoVerify: true}); err != nil {
+		t.Fatal(err)
+	}
+	if generator.calls != 1 {
+		t.Fatalf("force generation calls = %d, want 1", generator.calls)
+	}
+	intentWrite := -1
+	checkoutCall := -1
+	for i, state := range events.stateWrites {
+		if state.Plan.MergeCommitIntent != nil && intentWrite < 0 {
+			intentWrite = i
+		}
+	}
+	for i, call := range git.calls {
+		if strings.HasPrefix(call, "checkout ") {
+			checkoutCall = i
+			break
+		}
+	}
+	if intentWrite < 0 || checkoutCall < 0 {
+		t.Fatalf("missing durable intent or squash mutation: writes=%#v calls=%#v", events.stateWrites, git.calls)
+	}
+}
+
+func TestMergeForceGeneratesFromLiveDiffWhenApprovedReviewBaseIsStale(t *testing.T) {
+	detail := mergeReadyDetail("reviewed-base")
+	detail.Dir = t.TempDir()
+	detail.State.Repo.Root = "/repo"
+	detail.State.Plan.Review.Head = "tip-sha"
+	git := &fakeGitClient{
+		root: "/repo", defaultBranch: "main", mergeBase: "live-base", diff: "diff --git a/a.go b/a.go\n+live change\n",
+		revParse:  map[string]string{"main": "pre123", "tao/plan-a": "tip-sha"},
+		ancestors: map[string]bool{"tao/plan-a..main": false}, dirtyFingerprints: []gitops.DirtyFingerprint{{Hash: "clean"}, {Hash: "clean"}},
+	}
+	generator := &fakeMergeProposalGenerator{proposal: generatedMergeProposal()}
+	service := Service{Git: git, Cleaner: successfulCleanup(), Events: &fakeEventAppender{}, ProposalGenerator: generator}
+
+	if err := service.Merge(context.Background(), detail, Options{Force: true, NoVerify: true}); err != nil {
+		t.Fatal(err)
+	}
+	if generator.calls != 1 {
+		t.Fatalf("force generation calls = %d, want 1", generator.calls)
+	}
+	if generator.exact.MergeBase != "live-base" || generator.exact.SourceHead != "tip-sha" || generator.exact.Diff != git.diff {
+		t.Fatalf("generator did not receive the exact live diff: %#v", generator.exact)
+	}
+	if slices.Contains(git.calls, "diff reviewed-base..tip-sha") || !slices.Contains(git.calls, "diff live-base..tip-sha") {
+		t.Fatalf("stale review base influenced generated diff: %#v", git.calls)
+	}
+	for _, call := range git.calls {
+		if strings.HasPrefix(call, "commit ") && strings.Contains(call, "use approved review message") {
+			t.Fatalf("forced merge reused stale review proposal: %q", call)
+		}
+	}
+}
+
+func TestMergeNonSquashAndPreGateFailuresNeverGenerateProposal(t *testing.T) {
+	t.Run("no squash", func(t *testing.T) {
+		detail := mergeVerifyDetail()
+		git := mergeVerifyGit()
+		generator := &fakeMergeProposalGenerator{proposal: generatedMergeProposal()}
+		err := (Service{Git: git, Cleaner: successfulCleanup(), Events: &fakeEventAppender{}, ProposalGenerator: generator}).Merge(context.Background(), detail, Options{NoSquash: true, NoVerify: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if generator.calls != 0 {
+			t.Fatalf("no-squash merge generated %d proposals", generator.calls)
+		}
+	})
+
+	t.Run("pre gate", func(t *testing.T) {
+		detail := notApprovedDetail()
+		generator := &fakeMergeProposalGenerator{proposal: generatedMergeProposal()}
+		err := (Service{Git: &fakeGitClient{}, ProposalGenerator: generator}).Merge(context.Background(), detail, Options{})
+		if !errors.Is(err, ErrNotApproved) {
+			t.Fatalf("error = %v, want approval gate", err)
+		}
+		if generator.calls != 0 {
+			t.Fatalf("pre-gate failure generated %d proposals", generator.calls)
+		}
+	})
+
+	t.Run("record only", func(t *testing.T) {
+		detail := mergeReadyDetail("base123")
+		git := &fakeGitClient{defaultBranch: "main", revParse: map[string]string{"main": "pre123", "tao/plan-a": "tip-sha"}, ancestors: map[string]bool{"tao/plan-a..main": false}}
+		generator := &fakeMergeProposalGenerator{proposal: generatedMergeProposal()}
+		err := (Service{Git: git, ProposalGenerator: generator}).Merge(context.Background(), detail, Options{RecordOnly: true})
+		if err == nil || !strings.Contains(err.Error(), "plan is not already merged") {
+			t.Fatalf("error = %v, want record-only refusal", err)
+		}
+		if generator.calls != 0 {
+			t.Fatalf("record-only path generated %d proposals", generator.calls)
+		}
+	})
+
+	t.Run("external detection", func(t *testing.T) {
+		detail := mergeReadyDetail("base123")
+		detail.Dir = t.TempDir()
+		git := &fakeGitClient{defaultBranch: "main", revParse: map[string]string{"main": "merged123", "tao/plan-a": "tip-sha"}, ancestors: map[string]bool{"tao/plan-a..main": true, "base123..tao/plan-a": true}}
+		generator := &fakeMergeProposalGenerator{proposal: generatedMergeProposal()}
+		err := (Service{Git: git, Cleaner: successfulCleanup(), Events: &fakeEventAppender{}, ProposalGenerator: generator}).Merge(context.Background(), detail, Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if generator.calls != 0 {
+			t.Fatalf("external detection generated %d proposals", generator.calls)
+		}
+	})
+
+	t.Run("already recorded cleanup", func(t *testing.T) {
+		detail := mergeReadyDetail("base123")
+		detail.Events = []plan.Event{{Type: plan.EventTypePlanMerged}}
+		generator := &fakeMergeProposalGenerator{proposal: generatedMergeProposal()}
+		err := (Service{Git: &fakeGitClient{}, Cleaner: successfulCleanup(), ProposalGenerator: generator}).Merge(context.Background(), detail, Options{NoSquash: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if generator.calls != 0 {
+			t.Fatalf("already-recorded cleanup generated %d proposals", generator.calls)
+		}
+	})
+}
+
+func TestPrepareSingleMergeIntentReusesExceptionalIntentWithoutGeneratorAndRefusesDrift(t *testing.T) {
+	newDetail := func() *plan.PlanDetail {
+		detail := mergeReadyDetail("base123")
+		detail.State.Plan.Review = nil
+		detail.State.Plan.MergeCommitIntent = &plan.SingleMergeCommitIntent{
+			Message: "feat(merge): generate legacy merge messages\n\nWhat:\nGenerate the message.\n\nWhy:\nKeep recovery exact.\n\nTao-Plan: plan-a\nTao-Source-Head: tip-sha",
+			PlanID:  "plan-a", SourceHead: "tip-sha", DefaultBranch: "main", DefaultParent: "pre123", CreatedAt: time.Now(),
+		}
+		return detail
+	}
+	generator := &fakeMergeProposalGenerator{proposal: generatedMergeProposal()}
+	git := &fakeGitClient{defaultBranch: "main", revParse: map[string]string{"main": "pre123", "tao/plan-a": "tip-sha"}}
+	intent, err := (Service{Git: git, ProposalGenerator: generator}).prepareSingleMergeIntent(context.Background(), git, newDetail())
+	if err != nil || intent.SourceHead != "tip-sha" {
+		t.Fatalf("reuse = %#v, %v", intent, err)
+	}
+	if generator.calls != 0 {
+		t.Fatalf("persisted exceptional intent started %d sessions", generator.calls)
+	}
+
+	drifted := &fakeGitClient{defaultBranch: "main", revParse: map[string]string{"main": "drifted", "tao/plan-a": "tip-sha"}}
+	_, err = (Service{Git: drifted, ProposalGenerator: generator}).prepareSingleMergeIntent(context.Background(), drifted, newDetail())
+	if err == nil || !strings.Contains(err.Error(), "drifted from single-merge intent") {
+		t.Fatalf("expected exact ref-drift refusal, got %v", err)
+	}
+	if generator.calls != 0 {
+		t.Fatalf("drifted persisted intent started %d sessions", generator.calls)
+	}
+}
+
+func TestPrepareSingleMergeIntentRejectsProviderAndGitMutationBeforeIntent(t *testing.T) {
+	tests := []struct {
+		name         string
+		generatorErr error
+		fingerprints []gitops.DirtyFingerprint
+		want         string
+	}{
+		{name: "provider", generatorErr: errors.New("provider unavailable"), fingerprints: []gitops.DirtyFingerprint{{Hash: "same"}, {Hash: "same"}}, want: "provider unavailable"},
+		{name: "git mutation", fingerprints: []gitops.DirtyFingerprint{{Hash: "before"}, {Hash: "after"}}, want: "mutated Git state"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			detail := mergeReadyDetail("base123")
+			detail.Dir = t.TempDir()
+			detail.State.Plan.Review.CommitMessage = nil
+			git := &fakeGitClient{root: "/repo", defaultBranch: "main", mergeBase: "base123", diff: "diff", revParse: map[string]string{"main": "pre123", "tao/plan-a": "tip-sha"}, dirtyFingerprints: tt.fingerprints}
+			generator := &fakeMergeProposalGenerator{proposal: generatedMergeProposal(), err: tt.generatorErr}
+			events := &fakeEventAppender{}
+			_, err := (Service{Git: git, Events: events, ProposalGenerator: generator}).prepareSingleMergeIntent(context.Background(), git, detail)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want %q", err, tt.want)
+			}
+			if detail.State.Plan.MergeCommitIntent != nil || len(events.stateWrites) != 0 {
+				t.Fatalf("failed generation persisted intent: %#v %#v", detail.State.Plan.MergeCommitIntent, events.stateWrites)
+			}
+			if generator.calls != 1 {
+				t.Fatalf("generator calls = %d, want 1", generator.calls)
+			}
+		})
+	}
+}
+
+func TestGenerateSingleMergeMessageDetectsInPlaceUntrackedMutation(t *testing.T) {
+	fixture := newRealGitWorktree(t)
+	ctx := context.Background()
+	untrackedPath := filepath.Join(fixture.repoRoot, "scratch.txt")
+	if err := os.WriteFile(untrackedPath, []byte("alpha\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	defaultHead := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
+	sourceHead := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch)
+	generator := &fakeMergeProposalGenerator{
+		proposal: generatedMergeProposal(),
+		mutate: func() error {
+			return os.WriteFile(untrackedPath, []byte("omega\n"), 0o600)
+		},
+	}
+	service := Service{Git: gitops.NewClient(fixture.repoRoot, nil), ProposalGenerator: generator}
+
+	_, err := service.generateSingleMergeMessage(ctx, service.Git, commitcontract.MergeProposalContext{
+		RepoRoot: fixture.repoRoot, PlanID: "plan-a", DefaultBranch: fixture.defaultBranch,
+		DefaultParent: defaultHead, MergeBase: defaultHead, SourceBranch: fixture.planBranch, SourceHead: sourceHead,
+	})
+	if err == nil || !strings.Contains(err.Error(), "mutated Git state") {
+		t.Fatalf("expected in-place untracked mutation refusal, got %v", err)
+	}
+	if generator.calls != 1 {
+		t.Fatalf("generator calls = %d, want 1", generator.calls)
+	}
+}
+
+func TestPrepareSingleMergeIntentCurrentReviewIsZeroCall(t *testing.T) {
+	detail := mergeReadyDetail("base123")
+	detail.Dir = t.TempDir()
+	detail.State.Plan.Review.Head = "tip-sha"
+	git := &fakeGitClient{defaultBranch: "main", mergeBase: "base123", revParse: map[string]string{"main": "pre123", "tao/plan-a": "tip-sha"}}
+	generator := &fakeMergeProposalGenerator{proposal: generatedMergeProposal()}
+	if _, err := (Service{Git: git, Events: &fakeEventAppender{}, ProposalGenerator: generator}).prepareSingleMergeIntent(context.Background(), git, detail); err != nil {
+		t.Fatal(err)
+	}
+	if generator.calls != 0 {
+		t.Fatalf("current approved review started %d proposal sessions", generator.calls)
+	}
+	for _, call := range git.calls {
+		if strings.HasPrefix(call, "diff ") || call == "dirty-fingerprint" {
+			t.Fatalf("current approved review entered exceptional context path: %#v", git.calls)
+		}
+	}
+}
+
 func TestMergeRollsBackWhenMergedSHACaptureFails(t *testing.T) {
 	captureErr := errors.New("rev-parse unavailable")
 	git := &fakeGitClient{
@@ -884,8 +1273,11 @@ func TestMergeRollsBackWhenMergedSHACaptureFails(t *testing.T) {
 	}
 	events := &fakeEventAppender{}
 	cleaner := successfulCleanup()
+	detail := mergeReadyDetail("base123")
+	detail.Dir = t.TempDir()
+	detail.State.Plan.Review.Head = "tip-sha"
 
-	err := (Service{Git: git, Cleaner: cleaner, Events: events}).Merge(context.Background(), mergeReadyDetail("base123"), Options{NoVerify: true})
+	err := (Service{Git: git, Cleaner: cleaner, Events: events}).Merge(context.Background(), detail, Options{NoVerify: true})
 	if err == nil || !errors.Is(err, captureErr) {
 		t.Fatalf("expected merged-SHA capture failure, got %v", err)
 	}
@@ -1013,7 +1405,7 @@ func TestMergeRetainsDurableIntentWhenPlanMergedEventFails(t *testing.T) {
 	detail := mergeReadyDetail("base123")
 	detail.Dir = t.TempDir()
 	detail.State.Status = plan.StatusReviewed
-	previousState := detail.State
+	detail.State.Plan.Review.Head = "tip-sha"
 
 	err := (Service{Git: git, Cleaner: cleaner, Events: events}).Merge(context.Background(), detail, Options{NoVerify: true})
 	if err == nil || !errors.Is(err, recordErr) {
@@ -1022,11 +1414,11 @@ func TestMergeRetainsDurableIntentWhenPlanMergedEventFails(t *testing.T) {
 	if events.count(plan.EventTypeMergeVerification) != 0 || events.count(plan.EventTypePlanMerged) != 0 || len(cleaner.calls) != 0 {
 		t.Fatalf("failed recording must not retain a merge event or clean up: events=%#v cleanup=%#v", events.events, cleaner.calls)
 	}
-	if len(events.stateWrites) != 1 || events.stateWrites[0].Status != plan.StatusCompleted {
-		t.Fatalf("merge evidence state should remain installed for journal replay, got %#v", events.stateWrites)
+	if len(events.stateWrites) != 2 || events.stateWrites[0].Plan.MergeCommitIntent == nil || events.stateWrites[1].Status != plan.StatusCompleted || events.stateWrites[1].Plan.MergeCommitIntent != nil {
+		t.Fatalf("intent and merge evidence should remain installed for journal replay, got %#v", events.stateWrites)
 	}
-	if !reflect.DeepEqual(detail.State, previousState) {
-		t.Fatalf("loaded detail was not restored after event failure\nwant: %#v\n got: %#v", previousState, detail.State)
+	if detail.State.Plan.MergeCommitIntent == nil || detail.State.Status != plan.StatusReviewed {
+		t.Fatalf("loaded detail did not retain recoverable intent after event failure: %#v", detail.State)
 	}
 	wantSuffix := []string{"reset-hard pre123", "checkout main"}
 	if got := git.calls[len(git.calls)-len(wantSuffix):]; !reflect.DeepEqual(got, wantSuffix) {
@@ -1060,6 +1452,7 @@ func TestMergeDirtyInCleanupGapPreservesRecordedStateAndRetries(t *testing.T) {
 	detail := mergeReadyDetail("base123")
 	detail.Dir = t.TempDir()
 	detail.State.Status = plan.StatusReviewed
+	detail.State.Plan.Review.Head = "tip-sha"
 	detail.State.Repo.Root = fixture.repoRoot
 	events := &fakeEventAppender{}
 	service := Service{Git: git, Cleaner: cleaner, Events: events}
@@ -1109,6 +1502,7 @@ func TestMergeRecordsMergeBeforeCleanup(t *testing.T) {
 	}
 	detail := mergeReadyDetail("base123")
 	detail.Dir = t.TempDir()
+	detail.State.Plan.Review.Head = "tip-sha"
 	cleaner := successfulCleanup()
 	cleaner.cleanErr = errors.New("worktree busy")
 	events := &fakeEventAppender{}
@@ -1191,7 +1585,11 @@ func mergeReadyDetail(reviewBase string) *plan.PlanDetail {
 				Review: &plan.PlanReview{
 					Status:  plan.ReviewStatusCompleted,
 					Verdict: plan.ReviewVerdictApprove,
-					Base:    reviewBase,
+					CommitMessage: &plan.ReviewCommitMessage{
+						Subject: "feat(merge): use approved review message",
+						Body:    "What:\nCreate the exact reviewed squash commit.\n\nWhy:\nAvoid a merge-time message session.",
+					},
+					Base: reviewBase,
 				},
 			},
 			Workspace: &plan.Workspace{Branch: "tao/plan-a", BaseBranch: "main"},

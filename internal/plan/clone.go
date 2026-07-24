@@ -43,6 +43,7 @@ func clonePlanState(plan PlanState) PlanState {
 	clone.Timing = clonePlanTiming(plan.Timing)
 	clone.PullRequest = clonePullRequest(plan.PullRequest)
 	clone.Review = clonePlanReview(plan.Review)
+	clone.MergeCommitIntent = cloneSingleMergeCommitIntent(plan.MergeCommitIntent)
 	clone.FinalVerification = cloneFinalVerification(plan.FinalVerification)
 	return clone
 }
@@ -79,6 +80,14 @@ func clonePullRequest(pr *PullRequest) *PullRequest {
 	return &clone
 }
 
+func cloneSingleMergeCommitIntent(intent *SingleMergeCommitIntent) *SingleMergeCommitIntent {
+	if intent == nil {
+		return nil
+	}
+	clone := *intent
+	return &clone
+}
+
 func cloneFinalVerification(verification *FinalVerification) *FinalVerification {
 	if verification == nil {
 		return nil
@@ -92,6 +101,10 @@ func clonePlanReview(review *PlanReview) *PlanReview {
 		return nil
 	}
 	clone := *review
+	if review.CommitMessage != nil {
+		message := *review.CommitMessage
+		clone.CommitMessage = &message
+	}
 	return &clone
 }
 

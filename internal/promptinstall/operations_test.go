@@ -64,6 +64,15 @@ func TestInstallAllPiWritesPromptTemplatesAndTaoExtension(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(target, "package.json")); err != nil {
 		t.Fatalf("expected Pi Tao extension package target, got %q: %v", target, err)
 	}
+	commitSource := readPromptInstallText(t, filepath.Join(target, "src", "commit.ts"))
+	for _, want := range []string{`run("tao"`, `os.tmpdir()`, `await rm(tempDir, { recursive: true, force: true })`} {
+		if !strings.Contains(commitSource, want) {
+			t.Fatalf("expected Pi commit extension to delegate with %q, got %q", want, commitSource)
+		}
+	}
+	if strings.Contains(commitSource, `run("git"`) {
+		t.Fatalf("Pi commit extension retained an independent Git command: %q", commitSource)
+	}
 
 	checked, err := CheckAll(runtimeconfig.AgentPi)
 	if err != nil {
@@ -89,7 +98,7 @@ func TestInstallAllClaudeWritesManagedCommandWrappers(t *testing.T) {
 		t.Fatalf("InstallAll results = %d, want %d", len(results), len(prompts.Definitions()))
 	}
 
-	for _, name := range []string{"plan", "note-slice", "run", "commit"} {
+	for _, name := range []string{"plan", "note-slice", "run"} {
 		path := filepath.Join(commandsDir, name+".md")
 		text := readPromptInstallText(t, path)
 		for _, want := range []string{"description: Tao /" + name + " command wrapper", "tao-managed: " + name + " v1", "tao prompt " + name + " --arguments-stdin <<'TAO_PROMPT_ARGUMENTS'"} {
@@ -101,6 +110,7 @@ func TestInstallAllClaudeWritesManagedCommandWrappers(t *testing.T) {
 			t.Fatalf("expected thin Claude wrapper, got embedded prompt content %q", text)
 		}
 	}
+	assertManagedCommitDelegates(t, filepath.Join(commandsDir, "commit.md"), "allowed-tools: Bash(tao commit:*)")
 	assertPromptRenameInstalled(t, commandsDir)
 
 	checked, err := CheckAll(runtimeconfig.AgentClaude)
@@ -129,7 +139,7 @@ func TestInstallAllOpenCodeWritesStyleBCommands(t *testing.T) {
 
 	// Read-only planning prompts carry agent: plan; mutating prompts carry agent: build.
 	agentModes := map[string]string{"plan": "plan", "grill-me": "plan", "note-slice": "build", "run": "build", "commit": "build", "slice": "build"}
-	for _, name := range []string{"plan", "note-slice", "run", "commit", "grill-me", "slice"} {
+	for _, name := range []string{"plan", "note-slice", "run", "grill-me", "slice"} {
 		path := filepath.Join(commandsDir, name+".md")
 		text := readPromptInstallText(t, path)
 		styleB := "!`tao prompt " + name + " --arguments \"$ARGUMENTS\"`"
@@ -145,6 +155,7 @@ func TestInstallAllOpenCodeWritesStyleBCommands(t *testing.T) {
 			t.Fatalf("expected thin Style B OpenCode wrapper for %s, got %q", name, text)
 		}
 	}
+	assertManagedCommitDelegates(t, filepath.Join(commandsDir, "commit.md"), "agent: build")
 	assertPromptRenameInstalled(t, commandsDir)
 
 	checked, err := CheckAll(runtimeconfig.AgentOpenCode)
@@ -194,6 +205,7 @@ func TestInstallAllCodexWritesManagedPrompts(t *testing.T) {
 		t.Fatalf("expected Codex prompt to omit agent frontmatter and render the note-slice body, got %q", text)
 	}
 	assertPromptRenameInstalled(t, promptsDir)
+	assertManagedCommitDelegates(t, filepath.Join(promptsDir, "commit.md"), "description: Commit the current changes locally through Tao")
 
 	checked, err := CheckAll(runtimeconfig.AgentCodex)
 	if err != nil {
@@ -236,6 +248,27 @@ func writeRetiredManagedPrompt(t *testing.T, dir string) {
 	}
 	if err := os.WriteFile(filepath.Join(dir, "web-slice.md"), []byte("<!-- tao-managed: web-slice v1 -->\nretired\n"), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func assertManagedCommitDelegates(t *testing.T, path, providerMarker string) {
+	t.Helper()
+	text := readPromptInstallText(t, path)
+	for _, want := range []string{
+		"<!-- tao-managed: commit v1 -->",
+		providerMarker,
+		"tao commit --context",
+		"tao commit --proposal-file",
+		"${TMPDIR:-/tmp}/tao-commit.XXXXXX",
+		"Best-effort remove both temporary files",
+		"do not start another agent or model session",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("managed commit command missing %q: %q", want, text)
+		}
+	}
+	if strings.Contains(text, "tao prompt commit") || strings.Contains(text, "git commit -m") {
+		t.Fatalf("managed commit command bypasses Tao's active-session boundary: %q", text)
 	}
 }
 

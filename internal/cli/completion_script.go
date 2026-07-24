@@ -34,6 +34,9 @@ _tao() {
 ` + zshCommandArguments("run") + `
 ` + zshPositionalCompletion("run") + `
       ;;
+    commit)
+` + zshCommandArguments("commit") + `
+      ;;
     ` + commandAliasPattern("queue") + `)
       if (( CURRENT == 3 )); then
 ` + zshSubcommandEntries("queue") + `

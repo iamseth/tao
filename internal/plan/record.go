@@ -326,9 +326,72 @@ func (r *PlanRecord) RecordPullRequest(pr PullRequest, branch, headSHA string) e
 	})
 }
 
+// RecordSingleMergeCommitIntent persists the exact squash transaction boundary
+// before Tao checks out or mutates the default branch. Matching retries are
+// idempotent; callers must explicitly clear a stale source intent first.
+func (r *PlanRecord) RecordSingleMergeCommitIntent(intent SingleMergeCommitIntent) error {
+	if err := validateSingleMergeCommitIntent(intent); err != nil {
+		return err
+	}
+	store, err := r.storeOrDefault()
+	if err != nil {
+		return err
+	}
+	return r.applyStateEvent(store, func(detail *PlanDetail) ([]Event, error) {
+		existing := detail.State.Plan.MergeCommitIntent
+		if existing != nil {
+			if *existing == intent {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("plan %s has a conflicting single-merge commit intent", detail.State.Plan.ID)
+		}
+		detail.State.Plan.MergeCommitIntent = cloneSingleMergeCommitIntent(&intent)
+		return nil, nil
+	})
+}
+
+// ClearSingleMergeCommitIntent clears only the exact intent the caller
+// inspected, preventing a stale recovery path from deleting newer intent.
+func (r *PlanRecord) ClearSingleMergeCommitIntent(expected SingleMergeCommitIntent) error {
+	store, err := r.storeOrDefault()
+	if err != nil {
+		return err
+	}
+	return r.applyStateEvent(store, func(detail *PlanDetail) ([]Event, error) {
+		existing := detail.State.Plan.MergeCommitIntent
+		if existing == nil {
+			return nil, nil
+		}
+		if *existing != expected {
+			return nil, fmt.Errorf("plan %s single-merge commit intent changed; reload and retry", detail.State.Plan.ID)
+		}
+		detail.State.Plan.MergeCommitIntent = nil
+		return nil, nil
+	})
+}
+
+func validateSingleMergeCommitIntent(intent SingleMergeCommitIntent) error {
+	if strings.TrimSpace(intent.Message) == "" || intent.Message != strings.TrimSpace(intent.Message) {
+		return fmt.Errorf("single-merge commit intent requires an exact trimmed message")
+	}
+	for label, value := range map[string]string{
+		"plan id": intent.PlanID, "source head": intent.SourceHead,
+		"default branch": intent.DefaultBranch, "default parent": intent.DefaultParent,
+	} {
+		if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) || strings.ContainsAny(value, "\r\n") {
+			return fmt.Errorf("single-merge commit intent requires a valid %s", label)
+		}
+	}
+	if intent.CreatedAt.IsZero() {
+		return fmt.Errorf("single-merge commit intent requires creation time")
+	}
+	return nil
+}
+
 // RecordReviewError stamps a failed-review result onto state and appends a
 // plan_reviewed event. The caller sets review.ReviewedAt before calling.
 func (r *PlanRecord) RecordReviewError(review PlanReview, agent string) error {
+	review.CommitMessage = nil
 	store, err := r.storeOrDefault()
 	if err != nil {
 		return err
@@ -338,6 +401,9 @@ func (r *PlanRecord) RecordReviewError(review PlanReview, agent string) error {
 			return nil, fmt.Errorf("record plan review: %w", err)
 		}
 		reviewedAt := review.ReviewedAt
+		if intent := detail.State.Plan.MergeCommitIntent; intent != nil && (strings.TrimSpace(review.Head) != intent.SourceHead || !review.IsApproved()) {
+			detail.State.Plan.MergeCommitIntent = nil
+		}
 		detail.State.Plan.Review = &review
 		if sliceWorkSettled(detail) && !PlanIsMerged(detail.Events) {
 			detail.State.Status = StatusInReview
@@ -352,6 +418,9 @@ func (r *PlanRecord) RecordReviewError(review PlanReview, agent string) error {
 // RecordReviewCompleted stamps a completed review onto state and appends a
 // plan_reviewed event. The caller sets review.ReviewedAt before calling.
 func (r *PlanRecord) RecordReviewCompleted(review PlanReview, agent string) error {
+	if review.Status != ReviewStatusCompleted || review.Verdict != ReviewVerdictApprove {
+		review.CommitMessage = nil
+	}
 	store, err := r.storeOrDefault()
 	if err != nil {
 		return err
@@ -361,6 +430,9 @@ func (r *PlanRecord) RecordReviewCompleted(review PlanReview, agent string) erro
 			return nil, fmt.Errorf("record plan review: %w", err)
 		}
 		reviewedAt := review.ReviewedAt
+		if intent := detail.State.Plan.MergeCommitIntent; intent != nil && (strings.TrimSpace(review.Head) != intent.SourceHead || !review.IsApproved()) {
+			detail.State.Plan.MergeCommitIntent = nil
+		}
 		detail.State.Plan.Review = &review
 		if sliceWorkSettled(detail) && !PlanIsMerged(detail.Events) {
 			detail.State.Status = reviewProjectedStatus(&review)
@@ -397,6 +469,7 @@ func (r *PlanRecord) RecordMerged(branch string, mergedDefaultSHA string, merged
 			return nil, fmt.Errorf("plan merge is already recorded with different evidence")
 		}
 		detail.State.Status = StatusCompleted
+		detail.State.Plan.MergeCommitIntent = nil
 		detail.State.UpdatedAt = mergedAt
 		detail.State.Plan.Timing.LastActivityAt = &mergedAt
 		// CompletedAt is stamped when the final slice completes; the merge may

@@ -20,6 +20,10 @@
 //     to [] by writing an empty slice — lets clean run starts replace stale path tolerances.
 //   - PlanReview.Findings ([]ReviewFinding, "findings"): cleared to [] by
 //     writing an empty slice — prevents stale findings surviving review rewrites.
+//   - PlanReview.CommitMessage (*ReviewCommitMessage, "commit_message"): cleared
+//     to null so non-approved replacement reviews cannot retain an approved proposal.
+//   - PlanState.MergeCommitIntent (*SingleMergeCommitIntent, "merge_commit_intent"):
+//     cleared to null after durable merge evidence or safe source supersession.
 //   - PlanReview.Verdict, Summary, FindingsCount, ReviewedAt: also non-omitempty;
 //     writing explicit zero values clears them (tested indirectly via Findings).
 //   - Workspace.DependencyFailure (string, "dependency_preparation_failure"): cleared
@@ -248,6 +252,83 @@ func TestClearableFieldsRoundTrip(t *testing.T) {
 				findings, ok := reviewObj["findings"].([]any)
 				if !ok || len(findings) != 0 {
 					t.Errorf("expected findings: [] in state.json, got %#v", reviewObj["findings"])
+				}
+			},
+		},
+		{
+			name: "PlanReview.CommitMessage clears to nil",
+			setup: func(t *testing.T, dir string) {
+				t.Helper()
+				state := clearableContractBaseState()
+				state.Plan.Review = &PlanReview{
+					Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Summary: "Ready.", Findings: []ReviewFinding{},
+					CommitMessage: &ReviewCommitMessage{Subject: "feat(review): persist approved commit proposals", Body: "What:\nPersist the proposal.\n\nWhy:\nReuse reviewed context."},
+				}
+				if err := writeState(dir, state); err != nil {
+					t.Fatal(err)
+				}
+			},
+			clear: func(t *testing.T, dir string) {
+				t.Helper()
+				state := clearableContractBaseState()
+				state.Plan.Review = &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictChangesRequested, Summary: "Needs work.", Findings: []ReviewFinding{}}
+				if err := writeState(dir, state); err != nil {
+					t.Fatal(err)
+				}
+			},
+			check: func(t *testing.T, dir string) {
+				t.Helper()
+				got, err := ReadState(dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got.Plan.Review == nil || got.Plan.Review.CommitMessage != nil {
+					t.Errorf("expected CommitMessage nil after clear, got %+v", got.Plan.Review)
+				}
+				var raw map[string]any
+				readJSONFile(t, filepath.Join(dir, "state.json"), &raw)
+				planObj, _ := raw["plan"].(map[string]any)
+				reviewObj, _ := planObj["review"].(map[string]any)
+				if value, exists := reviewObj["commit_message"]; !exists || value != nil {
+					t.Errorf("expected commit_message: null in state.json, got %#v", reviewObj["commit_message"])
+				}
+			},
+		},
+		{
+			name: "PlanState.MergeCommitIntent clears to nil",
+			setup: func(t *testing.T, dir string) {
+				t.Helper()
+				state := clearableContractBaseState()
+				state.Plan.MergeCommitIntent = &SingleMergeCommitIntent{
+					Message: "feat(merge): use review proposal\n\nWhat:\nUse it.\n\nWhy:\nKeep recovery exact.\n\nTao-Plan: plan-a\nTao-Source-Head: source123",
+					PlanID:  "plan-a", SourceHead: "source123", DefaultBranch: "main", DefaultParent: "base123", CreatedAt: time.Date(2026, 7, 23, 20, 0, 0, 0, time.UTC),
+				}
+				if err := writeState(dir, state); err != nil {
+					t.Fatal(err)
+				}
+			},
+			clear: func(t *testing.T, dir string) {
+				t.Helper()
+				state := clearableContractBaseState()
+				state.Plan.MergeCommitIntent = nil
+				if err := writeState(dir, state); err != nil {
+					t.Fatal(err)
+				}
+			},
+			check: func(t *testing.T, dir string) {
+				t.Helper()
+				got, err := ReadState(dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got.Plan.MergeCommitIntent != nil {
+					t.Fatalf("expected MergeCommitIntent nil after clear, got %+v", got.Plan.MergeCommitIntent)
+				}
+				var raw map[string]any
+				readJSONFile(t, filepath.Join(dir, "state.json"), &raw)
+				planObj, _ := raw["plan"].(map[string]any)
+				if value, exists := planObj["merge_commit_intent"]; !exists || value != nil {
+					t.Errorf("expected merge_commit_intent: null in state.json, got %#v", planObj["merge_commit_intent"])
 				}
 			},
 		},

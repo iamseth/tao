@@ -19,6 +19,7 @@ func TestCommandRegistryOrder(t *testing.T) {
 		{name: "init"},
 		{name: "log", minPrefix: "lo"},
 		{name: "run", minPrefix: "r"},
+		{name: "commit"},
 		{name: "queue", minPrefix: "q"},
 		{name: "repo", minPrefix: "repo"},
 		{name: "note", minPrefix: "n"},

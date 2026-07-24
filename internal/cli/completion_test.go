@@ -24,6 +24,7 @@ func TestCommandAliases(t *testing.T) {
 		{name: "repo", want: []string{"repo"}},
 		{name: "note", want: []string{"n", "no", "not", "note"}},
 		{name: "slice-complete", want: []string{"slice-complete"}},
+		{name: "commit", want: []string{"commit"}},
 		{name: "version", want: []string{"version"}},
 		{name: "completion", want: []string{"co", "com", "comp", "compl", "comple", "complet", "completi", "completio", "completion"}}, //nolint:misspell // intentional completion-prefix fixture
 	}
@@ -79,6 +80,7 @@ func TestCommandAliasPatternCompletionSpecialCases(t *testing.T) {
 		{command: "repo", want: "repo"},
 		{command: "note", want: "n|no|not|note"},
 		{command: "slice-complete", want: "slice-complete"},
+		{command: "commit", want: "commit"},
 		{command: "missing", want: "missing"},
 	}
 
@@ -113,6 +115,15 @@ func TestZshCommandArgumentsUseRegisteredFlagsAndSemanticHints(t *testing.T) {
 			want: []string{
 				"'--auto-eject[automatically eject an attributed non-converging plan and reland the rest]'",
 				"'--verify-command[override the post-merge build/test verification command]:command:'",
+			},
+		},
+		{
+			command: "commit",
+			want: []string{
+				"'--context[print bounded safety-filtered commit context as JSON]'",
+				"'--message[explicit full canonical commit message]:message:'",
+				"'--proposal-file[JSON file containing a structured commit proposal]:path:_files'",
+				"'--repo-root[repository path]:path:_files'",
 			},
 		},
 	}

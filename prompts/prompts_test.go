@@ -54,7 +54,7 @@ func TestRenderRunPromptDerivesSliceCommitPolicyFromLegacyFlag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"tao slice-complete", "owns the recoverable commit transaction", "/tmp/plan"} {
+	for _, want := range []string{"tao slice-complete", "--commit-proposal-file", "Tao alone appends trusted evidence and creates the commit", "repair the same temporary proposal file", "Do not start another agent or model session", "owns the recoverable commit transaction", "/tmp/plan"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("rendered run prompt did not apply slice commit default %q: %q", want, got)
 		}
@@ -64,12 +64,39 @@ func TestRenderRunPromptDerivesSliceCommitPolicyFromLegacyFlag(t *testing.T) {
 	}
 }
 
+func TestRenderCommitPromptDelegatesProposalAndGitAuthorityToTao(t *testing.T) {
+	got, err := Render(PromptCommit, Data{Arguments: "prefer the cli scope"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Use this active agent session; do not start another agent or model session",
+		"tao commit --context",
+		"context_fingerprint",
+		"tao commit --proposal-file",
+		"repair it once in this same session",
+		"${TMPDIR:-/tmp}/tao-commit.XXXXXX",
+		"Best-effort remove both temporary files",
+		"tao commit --message",
+		"prefer the cli scope",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("rendered commit prompt missing %q:\n%s", want, got)
+		}
+	}
+	for _, forbidden := range []string{"git status", "git diff", "git log", "git commit -m"} {
+		if strings.Contains(got, "Run `"+forbidden) {
+			t.Fatalf("rendered commit prompt retains provider-owned Git operation %q:\n%s", forbidden, got)
+		}
+	}
+}
+
 func TestRenderReviewPromptUsesInjectedPlanAndDiff(t *testing.T) {
 	got, err := Render(PromptReview, Data{PlanDir: "/tmp/tao/plans/plan-a", PlanID: "plan-a", Base: "base123", Head: "head456"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Plan ID: `plan-a`", "Plan directory: `/tmp/tao/plans/plan-a`", "Base: `base123`", "Head: `head456`", "git diff --stat base123..head456", "\"verdict\"", "\"findings\""} {
+	for _, want := range []string{"Plan ID: `plan-a`", "Plan directory: `/tmp/tao/plans/plan-a`", "Base: `base123`", "Head: `head456`", "git diff --stat base123..head456", "\"verdict\"", "\"findings\"", "\"commit_message\"", "complete exact `Base..Head` diff", "Do not include verification output or any `Tao-*` trailers"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("rendered review prompt missing %q:\n%s", want, got)
 		}
@@ -222,8 +249,10 @@ func TestMergeResolvePromptBoundsAndEncodesUntrustedPackets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(got, "Do not run git commit") || !strings.Contains(got, "[TRUNCATED BY TAO]") {
-		t.Fatalf("merge resolve prompt lacks trusted rules or bound marker: %q", got)
+	for _, want := range []string{"Do not run git commit", "[TRUNCATED BY TAO]", `{"summary":"short resolution summary","commit_message":`, "Base the commit proposal on the final candidate changes", "Do not include verification output or any `Tao-*` trailers"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("merge resolve prompt lacks %q: %q", want, got)
+		}
 	}
 	var beginLines, endLines int
 	for line := range strings.SplitSeq(got, "\n") {

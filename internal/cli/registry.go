@@ -100,6 +100,7 @@ var commandRegistry = []commandMetadata{
 	initCommand,
 	logCommand,
 	runCommand,
+	commitCommand,
 	queueCommand,
 	repoCommand,
 	noteCommand,

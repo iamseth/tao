@@ -7,11 +7,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/iamseth/tao/internal/commandrunner"
+	commitcontract "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
 )
@@ -23,6 +23,7 @@ type SliceCompletionRequest struct {
 	SliceID             string
 	Notes               string
 	VerificationResults []plan.VerificationRun
+	CommitProposal      *commitcontract.Proposal
 	Now                 time.Time
 }
 
@@ -52,15 +53,50 @@ func (s SliceCompletionService) Complete(ctx context.Context, request SliceCompl
 		return fmt.Errorf("slice %s has unsupported commit policy %q", request.SliceID, policy)
 	}
 
-	hash, err := sliceCompletionHash(detail.State.Plan.ID, request.SliceID, policy, request.Notes, request.VerificationResults)
+	intent := slice.CommitIntent
+	message := ""
+	var err error
+	legacyIntent := false
+	if policy == CommitPolicySlice.String() {
+		if intent == nil {
+			if request.CommitProposal == nil {
+				return fmt.Errorf("slice %s requires a commit proposal before recording intent", request.SliceID)
+			}
+			message, err = formatSliceCommitMessage(detail.State.Plan.ID, request.SliceID, *request.CommitProposal)
+			if err != nil {
+				return err
+			}
+		} else {
+			// Persisted intent is the recovery authority. Do not reinterpret or
+			// centrally validate historical messages.
+			message = intent.Message
+		}
+	}
+	hash, err := sliceCompletionHash(detail.State.Plan.ID, request.SliceID, policy, request.Notes, request.VerificationResults, message)
 	if err != nil {
 		return err
 	}
-	if slice.CommitIntent != nil && slice.CommitIntent.Hash != hash {
-		return fmt.Errorf("slice %s has a conflicting commit intent", request.SliceID)
+	legacyHash, err := legacySliceCompletionHash(detail.State.Plan.ID, request.SliceID, policy, request.Notes, request.VerificationResults)
+	if err != nil {
+		return err
+	}
+	if intent != nil {
+		legacyIntent = intent.Hash == legacyHash
+		if intent.Hash != hash && !legacyIntent {
+			return fmt.Errorf("slice %s has a conflicting commit intent", request.SliceID)
+		}
+		if policy == CommitPolicySlice.String() && request.CommitProposal != nil && !legacyIntent {
+			proposedMessage, err := formatSliceCommitMessage(detail.State.Plan.ID, request.SliceID, *request.CommitProposal)
+			if err != nil {
+				return err
+			}
+			if proposedMessage != intent.Message {
+				return fmt.Errorf("slice %s has a conflicting commit proposal", request.SliceID)
+			}
+		}
 	}
 	if slice.Completion != nil {
-		if slice.CommitIntent == nil || slice.CommitIntent.Hash != hash {
+		if intent == nil || (intent.Hash != hash && !legacyIntent) {
 			return fmt.Errorf("slice %s has conflicting completion metadata", request.SliceID)
 		}
 		completedAt := request.Now
@@ -81,7 +117,6 @@ func (s SliceCompletionService) Complete(ctx context.Context, request SliceCompl
 		root = detail.State.Repo.Root
 	}
 	git := gitops.NewClient(root, s.CommandRunner)
-	intent := slice.CommitIntent
 	if intent == nil {
 		branch, err := git.CurrentBranch(ctx)
 		if err != nil {
@@ -91,9 +126,7 @@ func (s SliceCompletionService) Complete(ctx context.Context, request SliceCompl
 		if err != nil {
 			return fmt.Errorf("capture slice completion head: %w", err)
 		}
-		message := ""
 		if policy == CommitPolicySlice.String() {
-			message = sliceCommitMessage(detail, slice, request.VerificationResults)
 			if slice.ExecutionStart != nil {
 				if slice.ExecutionStart.Branch != "" {
 					branch = slice.ExecutionStart.Branch
@@ -134,32 +167,43 @@ func (s SliceCompletionService) Complete(ctx context.Context, request SliceCompl
 	if err != nil {
 		return fmt.Errorf("inspect slice completion paths: %w", err)
 	}
-	classification := classifyGitStatus(status, nil)
+	classification := commitcontract.ClassifyStatus(status, nil)
 	if len(classification.AmbiguousLines) > 0 {
 		return fmt.Errorf("slice commit refused: ambiguous git status entry %q", classification.AmbiguousLines[0])
 	}
-	paths := sortedUniquePlanCommitPaths(classification.CommitCandidates)
+	paths := commitcontract.UniquePaths(classification.CommitCandidates)
 	unexpected := unexpectedPlanCommitPaths(paths, expectedPlanCommitPaths(detail, request.SliceID))
-	if err := commitSafetyScreenError(paths, nil); err != nil {
+	if err := commitcontract.SafetyError(paths, nil); err != nil {
 		return fmt.Errorf("slice commit refused: %w", err)
 	}
 	if len(paths) == 0 {
 		return request.Record.CompleteSliceWithOutcome(request.SliceID, request.Notes, request.VerificationResults, plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionNoChanges, CommitSHA: head}, request.Now)
 	}
 	if len(classification.TaoStagedPaths) > 0 {
-		if err := git.RestoreStaged(ctx, sortedUniquePlanCommitPaths(classification.TaoStagedPaths)...); err != nil {
+		if err := git.RestoreStaged(ctx, commitcontract.UniquePaths(classification.TaoStagedPaths)...); err != nil {
 			return fmt.Errorf("unstage Tao metadata: %w", err)
 		}
 	}
 	if err := git.Add(ctx, paths...); err != nil {
 		return fmt.Errorf("stage slice completion paths: %w", err)
 	}
-	if err := git.Commit(ctx, intent.Message); err != nil {
-		return fmt.Errorf("create slice completion commit: %w", err)
-	}
-	commitSHA, err := git.RevParse(ctx, "HEAD")
-	if err != nil {
-		return fmt.Errorf("resolve slice completion commit: %w", err)
+	commitSHA := ""
+	if legacyIntent {
+		// Historical intents predate the central message contract. Their exact
+		// recorded message remains authoritative and must not be revalidated.
+		if err := git.Commit(ctx, intent.Message); err != nil {
+			return fmt.Errorf("create legacy slice completion commit: %w", err)
+		}
+		commitSHA, err = git.RevParse(ctx, "HEAD")
+		if err != nil {
+			return fmt.Errorf("resolve legacy slice completion commit: %w", err)
+		}
+	} else {
+		result, err := commitcontract.CommitPrepared(ctx, git, intent.Message)
+		if err != nil {
+			return fmt.Errorf("create slice completion commit: %w", err)
+		}
+		commitSHA = result.SHA
 	}
 	if commitSHA == intent.StartingHead {
 		return fmt.Errorf("slice completion commit did not advance HEAD")
@@ -179,14 +223,14 @@ func (s SliceCompletionService) recoverCommit(ctx context.Context, git gitops.Cl
 	if err != nil {
 		return fmt.Errorf("inspect slice completion commit: %w", err)
 	}
-	if strings.TrimSpace(message) != strings.TrimSpace(intent.Message) {
+	if strings.TrimRight(message, "\n") != intent.Message {
 		return fmt.Errorf("slice commit recovery refused: HEAD commit does not match recorded intent")
 	}
 	status, err := git.StatusPorcelain(ctx)
 	if err != nil {
 		return fmt.Errorf("inspect recovered slice completion worktree: %w", err)
 	}
-	classification := classifyGitStatus(status, nil)
+	classification := commitcontract.ClassifyStatus(status, nil)
 	if len(classification.CommitCandidates) > 0 || len(classification.AmbiguousLines) > 0 {
 		return fmt.Errorf("slice commit recovery refused: worktree is not clean")
 	}
@@ -212,7 +256,23 @@ func completionSlice(detail *plan.PlanDetail, id string) *plan.Slice {
 	return nil
 }
 
-func sliceCompletionHash(planID, sliceID, policy, notes string, results []plan.VerificationRun) (string, error) {
+func sliceCompletionHash(planID, sliceID, policy, notes string, results []plan.VerificationRun, message string) (string, error) {
+	payload, err := json.Marshal(struct {
+		PlanID  string                 `json:"plan_id"`
+		SliceID string                 `json:"slice_id"`
+		Policy  string                 `json:"policy"`
+		Notes   string                 `json:"notes"`
+		Results []plan.VerificationRun `json:"results"`
+		Message string                 `json:"message"`
+	}{planID, sliceID, policy, notes, results, message})
+	if err != nil {
+		return "", fmt.Errorf("encode slice completion intent: %w", err)
+	}
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func legacySliceCompletionHash(planID, sliceID, policy, notes string, results []plan.VerificationRun) (string, error) {
 	payload, err := json.Marshal(struct {
 		PlanID  string                 `json:"plan_id"`
 		SliceID string                 `json:"slice_id"`
@@ -221,22 +281,24 @@ func sliceCompletionHash(planID, sliceID, policy, notes string, results []plan.V
 		Results []plan.VerificationRun `json:"results"`
 	}{planID, sliceID, policy, notes, results})
 	if err != nil {
-		return "", fmt.Errorf("encode slice completion intent: %w", err)
+		return "", fmt.Errorf("encode legacy slice completion intent: %w", err)
 	}
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func sliceCommitMessage(detail *plan.PlanDetail, slice *plan.Slice, results []plan.VerificationRun) string {
-	title := strings.Join(strings.Fields(slice.Title), " ")
-	var lines []string
-	for _, result := range results {
-		lines = append(lines, fmt.Sprintf("- %s (%s)", strings.Join(strings.Fields(result.Command), " "), strings.Join(strings.Fields(result.Result), " ")))
+func formatSliceCommitMessage(planID, sliceID string, proposal commitcontract.Proposal) (string, error) {
+	planTrailer, err := commitcontract.NewTrustedTrailer("Tao-Plan", planID)
+	if err != nil {
+		return "", fmt.Errorf("format slice commit proposal: %w", err)
 	}
-	sort.Strings(lines)
-	verification := "- not reported"
-	if len(lines) > 0 {
-		verification = strings.Join(lines, "\n")
+	sliceTrailer, err := commitcontract.NewTrustedTrailer("Tao-Slice", sliceID)
+	if err != nil {
+		return "", fmt.Errorf("format slice commit proposal: %w", err)
 	}
-	return fmt.Sprintf("chore(tao): complete %s — %s\n\nVerification:\n%s\n\nTao-Plan: %s\nTao-Slice: %s", slice.ID, title, verification, detail.State.Plan.ID, slice.ID)
+	message, err := commitcontract.Format(proposal, planTrailer, sliceTrailer)
+	if err != nil {
+		return "", fmt.Errorf("validate slice commit proposal: %w", err)
+	}
+	return message, nil
 }

@@ -67,6 +67,31 @@ func TestBatchAttemptsReviewHistoryPersistsAndClearsExplicitly(t *testing.T) {
 	}
 }
 
+func TestBatchCandidateProposalAndExactIntegrationMessageRoundTrip(t *testing.T) {
+	store := newTestBatchStore(t)
+	state := testBatchState()
+	proposal := &plan.ReviewCommitMessage{Subject: "feat(batch): integrate reviewed candidate", Body: "What:\nIntegrate approved work.\n\nWhy:\nReuse review context."}
+	state.Candidates[0].ReviewCommitMessage = proposal
+	state.Candidates[0].CommitMessage = testBatchCommitMessage(state.Candidates[0].PlanID, state.Candidates[0].SourceTip)
+	state.Candidates[0].CommitMessageResolved = true
+	state.Integrations[0].CommitMessage = state.Candidates[0].CommitMessage
+	state.Integrations[0].Resolutions = []BatchResolution{{Attempt: 1, Kind: "conflict", CommitMessage: state.Candidates[0].CommitMessage}}
+	state.Review = &BatchReview{Status: "applying", CommitMessage: "fix(batch): resolve aggregate findings\n\nWhat:\nResolve the combined findings.\n\nWhy:\nKeep the batch correct.\n\nTao-Merge-Batch: batch-a\nTao-Review-Attempt: 1", ResolutionPaths: []string{"a.go", "b.go"}, ResolutionFingerprint: "content-v1"}
+	if _, err := store.Transition(state, "2026-07-23T22:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Load(state.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Candidates[0].ReviewCommitMessage == nil || *loaded.Candidates[0].ReviewCommitMessage != *proposal || loaded.Candidates[0].CommitMessage != state.Candidates[0].CommitMessage || !loaded.Candidates[0].CommitMessageResolved || loaded.Integrations[0].CommitMessage != state.Integrations[0].CommitMessage || loaded.Integrations[0].Resolutions[0].CommitMessage != state.Integrations[0].CommitMessage {
+		t.Fatalf("batch commit intent did not round-trip: %+v", loaded)
+	}
+	if loaded.Review == nil || loaded.Review.CommitMessage != state.Review.CommitMessage || len(loaded.Review.ResolutionPaths) != 2 || loaded.Review.ResolutionPaths[1] != "b.go" || loaded.Review.ResolutionFingerprint != "content-v1" {
+		t.Fatalf("aggregate commit intent did not round-trip: %+v", loaded.Review)
+	}
+}
+
 func TestBatchEjectionStatePersistsAndResettablePointersAreExplicit(t *testing.T) {
 	store := newTestBatchStore(t)
 	state := testBatchState()

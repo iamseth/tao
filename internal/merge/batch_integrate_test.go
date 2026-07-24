@@ -45,21 +45,27 @@ func TestBatchIntegratorCreatesOneSquashWithTrailersWithoutMovingSourcesOrDefaul
 	runRealGit(t, fixture.repoRoot, "worktree", "add", "-b", "tao/integration/test", integrationRoot, defaultHead)
 
 	store := &recordingBatchTransitionStore{}
+	generator := &fakeMergeProposalGenerator{proposal: generatedMergeProposal()}
 	service := NewService(fixture.repoRoot, nil)
+	service.ProposalGenerator = generator
 	state := batchIntegrateTestState(fixture, sourceHead, defaultHead)
+	state.Candidates[0].ReviewCommitMessage = &plan.ReviewCommitMessage{
+		Subject: "feat(batch): integrate reviewed candidate",
+		Body:    "What:\nIntegrate the exact approved candidate changes.\n\nWhy:\nPreserve reviewed intent without another proposal session.",
+	}
 	result, err := (BatchIntegrator{Store: store, Service: service}).Integrate(context.Background(), state, integrationRoot, BatchIntegrateOptions{VerifyCommand: "test -f feature.txt"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Applied) != 1 || result.Applied[0] != "plan-a" || len(result.Deferred) != 0 {
-		t.Fatalf("unexpected result: %#v", result)
+	if len(result.Applied) != 1 || result.Applied[0] != "plan-a" || len(result.Deferred) != 0 || generator.calls != 0 {
+		t.Fatalf("unexpected result or proposal sessions: result=%#v calls=%d", result, generator.calls)
 	}
 	integrationHead := realGitOutput(t, integrationRoot, "rev-parse", "HEAD")
 	if parent := realGitOutput(t, integrationRoot, "rev-parse", "HEAD^"); parent != defaultHead {
 		t.Fatalf("integration parent = %s, want %s", parent, defaultHead)
 	}
 	message := realGitOutput(t, integrationRoot, "show", "-s", "--format=%B", "HEAD")
-	for _, want := range []string{"Batch candidate", "Tao-Plan: plan-a", "Tao-Source-Head: " + sourceHead} {
+	for _, want := range []string{"feat(batch): integrate reviewed candidate", "Tao-Plan: plan-a", "Tao-Source-Head: " + sourceHead} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("commit %s missing %q: %q", integrationHead, want, message)
 		}
@@ -119,13 +125,17 @@ func TestBatchIntegratorDryRunUsesDisposableHistoryWithoutDurableWrites(t *testi
 	defaultHead := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
 	integrationRoot := filepath.Join(t.TempDir(), "simulation")
 	runRealGit(t, fixture.repoRoot, "worktree", "add", "-b", "tao/integration/dry", integrationRoot, defaultHead)
+	state := batchIntegrateTestState(fixture, sourceHead, defaultHead)
+	state.Candidates[0].CommitMessage = ""
+	generator := &fakeMergeProposalGenerator{proposal: generatedMergeProposal()}
 	service := NewService(fixture.repoRoot, nil)
-	result, err := (BatchIntegrator{Service: service}).Integrate(context.Background(), batchIntegrateTestState(fixture, sourceHead, defaultHead), integrationRoot, BatchIntegrateOptions{DryRun: true, VerifyCommand: "true"})
+	service.ProposalGenerator = generator
+	result, err := (BatchIntegrator{Service: service}).Integrate(context.Background(), state, integrationRoot, BatchIntegrateOptions{DryRun: true, VerifyCommand: "true"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Applied) != 1 {
-		t.Fatalf("dry-run prediction = %#v", result)
+	if len(result.Applied) != 1 || generator.calls != 0 || result.State.Candidates[0].CommitMessage != "" {
+		t.Fatalf("dry-run prediction retained or generated message state: result=%#v calls=%d", result, generator.calls)
 	}
 	if got := realGitOutput(t, integrationRoot, "rev-parse", "HEAD"); got != defaultHead {
 		t.Fatalf("dry run retained simulated history: got %s want %s", got, defaultHead)
@@ -153,6 +163,7 @@ func TestBatchIntegratorTurnsPlannedConflictIntoActionableDeferral(t *testing.T)
 	candidate := BatchCandidate{
 		PlanID: "plan-a", PlanTitle: "Planner-deferred candidate", RepoRoot: fixture.repoRoot,
 		Branch: fixture.planBranch, SourceTip: sourceHead, DefaultBranch: fixture.defaultBranch, DefaultStartSHA: defaultHead,
+		CommitMessage: testBatchCommitMessage("plan-a", sourceHead),
 	}
 	planning := PlanBatchCandidates(context.Background(), []BatchCandidate{candidate}, BatchPlanningSeams{
 		IsAncestor: func(context.Context, string, string) (bool, error) { return false, nil },
@@ -187,7 +198,7 @@ func TestBatchIntegratorTurnsPlannedConflictIntoActionableDeferral(t *testing.T)
 	}
 
 	agent := batchResolutionAgentFunc(func(_ context.Context, root, _ string) (string, error) {
-		return "resolved predicted conflict", os.WriteFile(filepath.Join(root, "README.md"), []byte("combined\n"), 0o600)
+		return batchResolutionJSON("resolved predicted conflict"), os.WriteFile(filepath.Join(root, "README.md"), []byte("combined\n"), 0o600)
 	})
 	resolved, err := (BatchAgentResolver{Store: store, Service: service, Agent: agent}).Resolve(context.Background(), integrated.State, integrationRoot, BatchResolveOptions{VerifyCommand: "grep -q combined README.md"})
 	if err != nil {
@@ -223,8 +234,8 @@ func TestBatchAgentSecondPlannedDeferralRequestRemainsResumable(t *testing.T) {
 		Schema: BatchStateSchema, ID: "planned-deferral-interruption", Status: BatchStatusPlanned,
 		RepoRoot: fixture.repoRoot, DefaultBranch: fixture.defaultBranch, DefaultStartSHA: defaultHead,
 		Candidates: []BatchCandidate{
-			{PlanID: "plan-a", PlanTitle: "plan a", RepoRoot: fixture.repoRoot, Branch: fixture.planBranch, SourceTip: sourceA, ReviewBase: defaultHead, ReviewHead: sourceA, DefaultBranch: fixture.defaultBranch, DefaultStartSHA: defaultHead, Deferred: &deferredA},
-			{PlanID: "plan-b", PlanTitle: "plan b", RepoRoot: fixture.repoRoot, Branch: "tao/plan-b", SourceTip: sourceB, ReviewBase: defaultHead, ReviewHead: sourceB, DefaultBranch: fixture.defaultBranch, DefaultStartSHA: defaultHead, Deferred: &deferredB},
+			{PlanID: "plan-a", PlanTitle: "plan a", RepoRoot: fixture.repoRoot, Branch: fixture.planBranch, SourceTip: sourceA, ReviewBase: defaultHead, ReviewHead: sourceA, DefaultBranch: fixture.defaultBranch, DefaultStartSHA: defaultHead, CommitMessage: testBatchCommitMessage("plan-a", sourceA), Deferred: &deferredA},
+			{PlanID: "plan-b", PlanTitle: "plan b", RepoRoot: fixture.repoRoot, Branch: "tao/plan-b", SourceTip: sourceB, ReviewBase: defaultHead, ReviewHead: sourceB, DefaultBranch: fixture.defaultBranch, DefaultStartSHA: defaultHead, CommitMessage: testBatchCommitMessage("plan-b", sourceB), Deferred: &deferredB},
 		},
 	}
 	owner, err := NewBatchWorkspace(fixture.repoRoot, filepath.Join(t.TempDir(), "merge-batches"), nil)
@@ -257,7 +268,7 @@ func TestBatchAgentSecondPlannedDeferralRequestRemainsResumable(t *testing.T) {
 	agentCalls := 0
 	_, err = (BatchAgentResolver{Store: store, Service: service, Agent: batchResolutionAgentFunc(func(_ context.Context, root, _ string) (string, error) {
 		agentCalls++
-		return "resolved planned deferral", os.WriteFile(filepath.Join(root, "resolution.txt"), []byte("resolved\n"), 0o600)
+		return batchResolutionJSON("resolved planned deferral"), os.WriteFile(filepath.Join(root, "resolution.txt"), []byte("resolved\n"), 0o600)
 	})}).Resolve(context.Background(), integrated.State, workspace.Path, BatchResolveOptions{})
 	if !errors.Is(err, errInterrupted) {
 		t.Fatalf("resolution interruption = %v, want %v", err, errInterrupted)
@@ -314,10 +325,11 @@ func TestBatchIntegratorResumesApplyingIntentAfterTaoCommit(t *testing.T) {
 	runRealGit(t, fixture.repoRoot, "worktree", "add", "-b", "tao/integration/resume-commit", integrationRoot, defaultHead)
 	candidate := batchIntegrateTestState(fixture, sourceHead, defaultHead).Candidates[0]
 	runRealGit(t, integrationRoot, "merge", "--squash", sourceHead)
-	runRealGit(t, integrationRoot, "commit", "-m", batchSquashCommitMessage(candidate))
+	runRealGit(t, integrationRoot, "commit", "-m", candidate.CommitMessage)
 	interruptedHead := realGitOutput(t, integrationRoot, "rev-parse", "HEAD")
 
 	state := interruptedBatchIntegrateTestState(fixture, sourceHead, defaultHead)
+	state.Integrations[0].CommitMessage = candidate.CommitMessage
 	result, err := (BatchIntegrator{Store: &recordingBatchTransitionStore{}, Service: NewService(fixture.repoRoot, nil)}).Integrate(context.Background(), state, integrationRoot, BatchIntegrateOptions{VerifyCommand: "true"})
 	if err != nil {
 		t.Fatal(err)
@@ -327,6 +339,96 @@ func TestBatchIntegratorResumesApplyingIntentAfterTaoCommit(t *testing.T) {
 	}
 	if len(result.State.Integrations) != 1 || result.State.Integrations[0].IntegrationSHA != interruptedHead || result.State.Integrations[0].Status != batchIntegrationApplied {
 		t.Fatalf("resumed integrations = %#v", result.State.Integrations)
+	}
+}
+
+func TestBatchIntegratorGeneratesLegacyMessageOnceBeforeMutationAndRecoversIntent(t *testing.T) {
+	fixture := newRealGitWorktree(t)
+	writeBatchTestFile(t, fixture.worktreePath)
+	runRealGit(t, fixture.worktreePath, "add", "feature.txt")
+	runRealGit(t, fixture.worktreePath, "commit", "-m", "source checkpoint")
+	sourceHead := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch)
+	defaultHead := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
+	integrationRoot := filepath.Join(t.TempDir(), "integration")
+	runRealGit(t, fixture.repoRoot, "worktree", "add", "-b", "tao/integration/legacy-message", integrationRoot, defaultHead)
+
+	state := batchIntegrateTestState(fixture, sourceHead, defaultHead)
+	state.Candidates[0].CommitMessage = ""
+	state.Candidates[0].ReviewBase = defaultHead
+	state.Candidates[0].ReviewHead = sourceHead
+	generator := &fakeMergeProposalGenerator{proposal: generatedMergeProposal()}
+	service := NewService(fixture.repoRoot, nil)
+	service.ProposalGenerator = generator
+	interrupted := errors.New("interrupted after durable candidate message")
+	store := &recordingBatchTransitionStore{afterTransition: func(state BatchState) error {
+		if state.Candidates[0].CommitMessage != "" && len(state.Integrations) == 0 {
+			return interrupted
+		}
+		return nil
+	}}
+
+	_, err := (BatchIntegrator{Store: store, Service: service}).Integrate(context.Background(), state, integrationRoot, BatchIntegrateOptions{VerifyCommand: "true"})
+	if !errors.Is(err, interrupted) || generator.calls != 1 {
+		t.Fatalf("legacy message interruption = %v, calls=%d", err, generator.calls)
+	}
+	persisted := store.states[len(store.states)-1]
+	if persisted.Candidates[0].CommitMessage == "" || len(persisted.Integrations) != 0 {
+		t.Fatalf("legacy message was not persisted before intent: %+v", persisted)
+	}
+	if got := realGitOutput(t, integrationRoot, "rev-parse", "HEAD"); got != defaultHead {
+		t.Fatalf("message interruption moved integration: got %s want %s", got, defaultHead)
+	}
+
+	store.afterTransition = nil
+	result, err := (BatchIntegrator{Store: store, Service: service}).Integrate(context.Background(), persisted, integrationRoot, BatchIntegrateOptions{VerifyCommand: "true"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if generator.calls != 1 || len(result.State.Integrations) != 1 || result.State.Integrations[0].CommitMessage != persisted.Candidates[0].CommitMessage {
+		t.Fatalf("legacy message was regenerated or lost: calls=%d state=%+v", generator.calls, result.State)
+	}
+}
+
+func TestBatchIntegratorBlocksInvalidPreparedMessageWithoutMutation(t *testing.T) {
+	fixture := newRealGitWorktree(t)
+	writeBatchTestFile(t, fixture.worktreePath)
+	runRealGit(t, fixture.worktreePath, "add", "feature.txt")
+	runRealGit(t, fixture.worktreePath, "commit", "-m", "source checkpoint")
+	sourceHead := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch)
+	defaultHead := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
+	integrationRoot := filepath.Join(t.TempDir(), "integration")
+	runRealGit(t, fixture.repoRoot, "worktree", "add", "-b", "tao/integration/invalid-message", integrationRoot, defaultHead)
+	state := batchIntegrateTestState(fixture, sourceHead, defaultHead)
+	state.Candidates[0].CommitMessage = "invalid fallback"
+
+	result, err := (BatchIntegrator{Store: &recordingBatchTransitionStore{}, Service: NewService(fixture.repoRoot, nil)}).Integrate(context.Background(), state, integrationRoot, BatchIntegrateOptions{})
+	if err == nil || result.State.Status != BatchStatusBlocked || result.State.BlockKind != BatchBlockKindResumable {
+		t.Fatalf("invalid message result = %+v, err=%v", result.State, err)
+	}
+	if got := realGitOutput(t, integrationRoot, "rev-parse", "HEAD"); got != defaultHead {
+		t.Fatalf("invalid message moved integration: got %s want %s", got, defaultHead)
+	}
+}
+
+func TestBatchIntegratorExactRecoveryRejectsDifferentFullMessage(t *testing.T) {
+	fixture := newRealGitWorktree(t)
+	writeBatchTestFile(t, fixture.worktreePath)
+	runRealGit(t, fixture.worktreePath, "add", "feature.txt")
+	runRealGit(t, fixture.worktreePath, "commit", "-m", "source checkpoint")
+	sourceHead := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch)
+	defaultHead := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
+	integrationRoot := filepath.Join(t.TempDir(), "integration")
+	runRealGit(t, fixture.repoRoot, "worktree", "add", "-b", "tao/integration/exact-mismatch", integrationRoot, defaultHead)
+	candidate := batchIntegrateTestState(fixture, sourceHead, defaultHead).Candidates[0]
+	runRealGit(t, integrationRoot, "merge", "--squash", sourceHead)
+	other := strings.Replace(candidate.CommitMessage, "exact approved candidate", "different approved candidate", 1)
+	runRealGit(t, integrationRoot, "commit", "-m", other)
+	state := interruptedBatchIntegrateTestState(fixture, sourceHead, defaultHead)
+	state.Integrations[0].CommitMessage = candidate.CommitMessage
+
+	_, err := (BatchIntegrator{Store: &recordingBatchTransitionStore{}, Service: NewService(fixture.repoRoot, nil)}).Integrate(context.Background(), state, integrationRoot, BatchIntegrateOptions{})
+	if err == nil || !strings.Contains(err.Error(), "does not match the intended") {
+		t.Fatalf("exact recovery mismatch = %v", err)
 	}
 }
 
@@ -379,9 +481,15 @@ func TestBatchIntegratorEjectRebuildsReducedOrderedSet(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := (BatchIntegrator{Store: store, Service: NewService(fixture.repoRoot, nil)}).Eject(context.Background(), state, integrationRoot, BatchEjectOptions{VerifyCommand: "true"})
+	generator := &fakeMergeProposalGenerator{proposal: generatedMergeProposal()}
+	service := NewService(fixture.repoRoot, nil)
+	service.ProposalGenerator = generator
+	result, err := (BatchIntegrator{Store: store, Service: service}).Eject(context.Background(), state, integrationRoot, BatchEjectOptions{VerifyCommand: "true"})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if generator.calls != 0 {
+		t.Fatalf("ejection regenerated persisted candidate messages: calls=%d", generator.calls)
 	}
 	if result.State.Status != BatchStatusReviewing || result.State.Ejection == nil || result.State.Ejection.Status != batchEjectionCompleted {
 		t.Fatalf("eject state = %+v", result.State)
@@ -420,7 +528,8 @@ func TestBatchIntegratorEjectRebuildIncludesResolvedPlannerDeferral(t *testing.T
 	deferral := BatchDeferral{PlanID: "plan-c", Reason: "planner predicted a conflict"}
 	state.Candidates = append(state.Candidates, BatchCandidate{
 		PlanID: "plan-c", PlanTitle: "Plan C", RepoRoot: fixture.repoRoot, Branch: planCBranch,
-		SourceTip: planCHead, DefaultBranch: fixture.defaultBranch, DefaultStartSHA: state.DefaultStartSHA, Deferred: &deferral,
+		SourceTip: planCHead, DefaultBranch: fixture.defaultBranch, DefaultStartSHA: state.DefaultStartSHA,
+		CommitMessage: testBatchCommitMessage("plan-c", planCHead), Deferred: &deferral,
 	})
 	state.Status = BatchStatusResolving
 	if appended := appendPlannedBatchDeferrals(&state); len(appended) != 1 || appended[0].PlanID != "plan-c" {
@@ -433,13 +542,17 @@ func TestBatchIntegratorEjectRebuildIncludesResolvedPlannerDeferral(t *testing.T
 	store := &recordingBatchTransitionStore{}
 	service := NewService(fixture.repoRoot, nil)
 	resolved, err := (BatchAgentResolver{Store: store, Service: service, Agent: batchResolutionAgentFunc(func(_ context.Context, root, _ string) (string, error) {
-		return "resolved planner deferral", os.WriteFile(filepath.Join(root, "plan-c.txt"), []byte("resolved c\n"), 0o600)
+		return batchResolutionJSON("resolved planner deferral"), os.WriteFile(filepath.Join(root, "plan-c.txt"), []byte("resolved c\n"), 0o600)
 	})}).Resolve(context.Background(), state, integrationRoot, BatchResolveOptions{VerifyCommand: "true"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := strings.Join(resolved.State.ChosenOrder, ","); got != "plan-a,plan-b,plan-c" {
 		t.Fatalf("resolved durable order = %q", got)
+	}
+	resolvedMessage := resolved.State.Candidates[2].CommitMessage
+	if resolvedMessage == "" || !resolved.State.Candidates[2].CommitMessageResolved {
+		t.Fatalf("planner deferral did not retain its resolved message: %+v", resolved.State.Candidates[2])
 	}
 
 	rebuilt, err := (BatchIntegrator{Store: store, Service: service}).Eject(context.Background(), resolved.State, integrationRoot, BatchEjectOptions{
@@ -456,6 +569,9 @@ func TestBatchIntegratorEjectRebuildIncludesResolvedPlannerDeferral(t *testing.T
 	}
 	if len(rebuilt.State.Integrations) != 2 || rebuilt.State.Integrations[0].PlanID != "plan-b" || rebuilt.State.Integrations[1].PlanID != "plan-c" {
 		t.Fatalf("rebuilt integrations = %+v", rebuilt.State.Integrations)
+	}
+	if rebuilt.State.Candidates[2].CommitMessage != resolvedMessage || rebuilt.State.Integrations[1].CommitMessage != resolvedMessage {
+		t.Fatalf("ejection rebuild lost resolved candidate message: candidate=%q integration=%q want=%q", rebuilt.State.Candidates[2].CommitMessage, rebuilt.State.Integrations[1].CommitMessage, resolvedMessage)
 	}
 }
 
@@ -535,7 +651,7 @@ func TestBatchIntegratorEjectResumesApplyingResolverIntentThroughResolver(t *tes
 		Store: store, Service: service,
 		Agent: batchResolutionAgentFunc(func(_ context.Context, root, _ string) (string, error) {
 			agentCalls++
-			return "fixed reduced candidate", os.WriteFile(filepath.Join(root, "reduced-fixed.txt"), []byte("fixed\n"), 0o600)
+			return batchResolutionJSON("fixed reduced candidate"), os.WriteFile(filepath.Join(root, "reduced-fixed.txt"), []byte("fixed\n"), 0o600)
 		}),
 	}
 	_, err = resolver.Resolve(context.Background(), deferred.State, integrationRoot, BatchResolveOptions{VerifyCommand: "true"})
@@ -628,8 +744,8 @@ func batchEjectTestFixture(t *testing.T) (realGitWorktree, BatchState, string) {
 		Schema: BatchStateSchema, ID: "eject-test", Status: BatchStatusPlanned, RepoRoot: fixture.repoRoot,
 		DefaultBranch: fixture.defaultBranch, DefaultStartSHA: base, ChosenOrder: []string{"plan-a", "plan-b"},
 		Candidates: []BatchCandidate{
-			{PlanID: "plan-a", PlanTitle: "Plan A", RepoRoot: fixture.repoRoot, Branch: fixture.planBranch, SourceTip: planAHead, ReviewBase: base, ReviewHead: planAHead, DefaultBranch: fixture.defaultBranch, DefaultStartSHA: base},
-			{PlanID: "plan-b", PlanTitle: "Plan B", RepoRoot: fixture.repoRoot, Branch: planBBranch, SourceTip: planBHead, ReviewBase: base, ReviewHead: planBHead, DefaultBranch: fixture.defaultBranch, DefaultStartSHA: base},
+			{PlanID: "plan-a", PlanTitle: "Plan A", RepoRoot: fixture.repoRoot, Branch: fixture.planBranch, SourceTip: planAHead, ReviewBase: base, ReviewHead: planAHead, DefaultBranch: fixture.defaultBranch, DefaultStartSHA: base, CommitMessage: testBatchCommitMessage("plan-a", planAHead)},
+			{PlanID: "plan-b", PlanTitle: "Plan B", RepoRoot: fixture.repoRoot, Branch: planBBranch, SourceTip: planBHead, ReviewBase: base, ReviewHead: planBHead, DefaultBranch: fixture.defaultBranch, DefaultStartSHA: base, CommitMessage: testBatchCommitMessage("plan-b", planBHead)},
 		},
 	}
 	integrated, err := (BatchIntegrator{Store: &recordingBatchTransitionStore{}, Service: NewService(fixture.repoRoot, nil)}).Integrate(context.Background(), state, integrationRoot, BatchIntegrateOptions{VerifyCommand: "true"})
@@ -640,7 +756,7 @@ func batchEjectTestFixture(t *testing.T) (realGitWorktree, BatchState, string) {
 }
 
 func batchIntegrateTestState(fixture realGitWorktree, sourceHead, defaultHead string) BatchState {
-	candidate := BatchCandidate{PlanID: "plan-a", PlanTitle: "Batch candidate", Branch: fixture.planBranch, SourceTip: sourceHead, DefaultBranch: fixture.defaultBranch, DefaultStartSHA: defaultHead}
+	candidate := BatchCandidate{PlanID: "plan-a", PlanTitle: "Batch candidate", Branch: fixture.planBranch, SourceTip: sourceHead, DefaultBranch: fixture.defaultBranch, DefaultStartSHA: defaultHead, CommitMessage: testBatchCommitMessage("plan-a", sourceHead)}
 	return BatchState{Schema: BatchStateSchema, ID: "batch-test", Status: BatchStatusPlanned, RepoRoot: fixture.repoRoot, DefaultBranch: fixture.defaultBranch, DefaultStartSHA: defaultHead, Candidates: []BatchCandidate{candidate}, ChosenOrder: []string{"plan-a"}}
 }
 
@@ -650,6 +766,10 @@ func interruptedBatchIntegrateTestState(fixture realGitWorktree, sourceHead, def
 	state.IntegrationHead = defaultHead
 	state.Integrations = []BatchIntegration{{PlanID: "plan-a", SourceHead: sourceHead, IntegrationBaseSHA: defaultHead, Status: batchIntegrationApplying, Attempts: 1}}
 	return state
+}
+
+func testBatchCommitMessage(planID, sourceHead string) string {
+	return "feat(batch): integrate reviewed candidate\n\nWhat:\nIntegrate the exact approved candidate changes.\n\nWhy:\nPreserve reviewed intent without another proposal session.\n\nTao-Plan: " + planID + "\nTao-Source-Head: " + sourceHead
 }
 
 func writeBatchTestFile(t *testing.T, root string) {

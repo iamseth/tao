@@ -106,6 +106,17 @@ func TestBatchSettleRecordsBeforeCleanupAndRemovesBatchRefsLast(t *testing.T) {
 	}
 }
 
+func TestBatchSettleRequiresExactPersistedCandidateMessageEvidence(t *testing.T) {
+	state, detail, service, _, _ := batchSettleFixture()
+	message := testBatchCommitMessage("plan-a", state.Candidates[0].SourceTip)
+	service.Git.(*fakeGitClient).commitMessages["squash"] = message
+	state.Integrations = []BatchIntegration{{PlanID: "plan-a", SourceHead: state.Candidates[0].SourceTip, CommitMessage: strings.Replace(message, "exact approved candidate", "different approved candidate", 1)}}
+	_, err := (BatchSettler{Store: &recordingBatchTransitionStore{}, Service: service, Repository: &batchLandResolver{details: map[string]*plan.PlanDetail{detail.Dir: detail}}, Workspace: &fakeBatchSettlementWorkspace{}}).Settle(context.Background(), state)
+	if err == nil || !strings.Contains(err.Error(), "does not carry matching Tao") {
+		t.Fatalf("expected exact message evidence refusal, got %v", err)
+	}
+}
+
 func TestBatchSettleRejectsStaleSquashEvidenceWithoutMutation(t *testing.T) {
 	state, detail, service, cleaner, events := batchSettleFixture()
 	service.Git.(*fakeGitClient).commitMessages["squash"] = "not a Tao squash"

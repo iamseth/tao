@@ -40,14 +40,16 @@ const (
 // BatchIntegration records the immutable source and the resulting Tao-owned
 // integration commit for one candidate.
 type BatchResolution struct {
-	Attempt      int      `json:"attempt"`
-	Kind         string   `json:"kind"`
-	BaseSHA      string   `json:"base_sha,omitempty"`
-	RequestedAt  string   `json:"requested_at"`
-	CompletedAt  string   `json:"completed_at,omitempty"`
-	Outcome      string   `json:"outcome,omitempty"`
-	Summary      string   `json:"summary,omitempty"`
-	ChangedPaths []string `json:"changed_paths,omitempty"`
+	Attempt            int      `json:"attempt"`
+	Kind               string   `json:"kind"`
+	BaseSHA            string   `json:"base_sha,omitempty"`
+	RequestedAt        string   `json:"requested_at"`
+	CompletedAt        string   `json:"completed_at,omitempty"`
+	Outcome            string   `json:"outcome,omitempty"`
+	Summary            string   `json:"summary,omitempty"`
+	CommitMessage      string   `json:"commit_message,omitempty"`
+	ChangedPaths       []string `json:"changed_paths,omitempty"`
+	ContentFingerprint string   `json:"content_fingerprint,omitempty"`
 }
 
 type BatchIntegration struct {
@@ -55,6 +57,7 @@ type BatchIntegration struct {
 	SourceHead         string            `json:"source_head"`
 	IntegrationBaseSHA string            `json:"integration_base_sha,omitempty"`
 	IntegrationSHA     string            `json:"integration_sha,omitempty"`
+	CommitMessage      string            `json:"commit_message,omitempty"`
 	Status             string            `json:"status,omitempty"`
 	DeferredReason     string            `json:"deferred_reason,omitempty"`
 	ConflictFiles      []string          `json:"conflict_files,omitempty"`
@@ -115,17 +118,20 @@ type BatchVerification struct {
 
 // BatchReview is aggregate review evidence for the exact staged head.
 type BatchReview struct {
-	Status         string               `json:"status,omitempty"`
-	Verdict        string               `json:"verdict,omitempty"`
-	Summary        string               `json:"summary,omitempty"`
-	Findings       []plan.ReviewFinding `json:"findings,omitempty"`
-	BaseSHA        string               `json:"base_sha,omitempty"`
-	HeadSHA        string               `json:"head_sha,omitempty"`
-	Fingerprint    string               `json:"fingerprint,omitempty"`
-	Attempts       int                  `json:"attempts,omitempty"`
-	Artifact       string               `json:"artifact,omitempty"`
-	ResolutionSHAs []string             `json:"resolution_shas,omitempty"`
-	CompletedAt    string               `json:"completed_at,omitempty"`
+	Status                string               `json:"status,omitempty"`
+	Verdict               string               `json:"verdict,omitempty"`
+	Summary               string               `json:"summary,omitempty"`
+	Findings              []plan.ReviewFinding `json:"findings,omitempty"`
+	BaseSHA               string               `json:"base_sha,omitempty"`
+	HeadSHA               string               `json:"head_sha,omitempty"`
+	Fingerprint           string               `json:"fingerprint,omitempty"`
+	Attempts              int                  `json:"attempts,omitempty"`
+	Artifact              string               `json:"artifact,omitempty"`
+	ResolutionSHAs        []string             `json:"resolution_shas,omitempty"`
+	CommitMessage         string               `json:"commit_message,omitempty"`
+	ResolutionPaths       []string             `json:"resolution_paths,omitempty"`
+	ResolutionFingerprint string               `json:"resolution_fingerprint,omitempty"`
+	CompletedAt           string               `json:"completed_at,omitempty"`
 }
 
 // BatchLandingPlan binds one source plan to its Tao-owned squash commit.

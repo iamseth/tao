@@ -142,7 +142,7 @@ func TestPromptRendersCanonicalPrompts(t *testing.T) {
 		t.Fatal(err)
 	}
 	text = out.String()
-	if !strings.Contains(text, "Create a local Git commit") || !strings.Contains(text, "include staged docs") {
+	if !strings.Contains(text, "Create one local Git commit") || !strings.Contains(text, "include staged docs") {
 		t.Fatalf("expected rendered commit prompt with arguments, got %q", text)
 	}
 }
@@ -304,13 +304,23 @@ func TestInstallPromptsAndDoctorUseSelectedClaudeAgent(t *testing.T) {
 	for _, name := range []string{"plan", "slice", "note-slice", "run", "commit", "repo-health", "pr"} {
 		path := filepath.Join(commandsRoot, name+".md")
 		text := readText(t, path)
-		for _, want := range []string{"tao-managed: " + name + " v1", "tao prompt " + name + " --arguments-stdin <<'TAO_PROMPT_ARGUMENTS'"} {
-			if !strings.Contains(text, want) {
-				t.Fatalf("expected Claude wrapper %s to contain %q, got %q", path, want, text)
-			}
+		if !strings.Contains(text, "tao-managed: "+name+" v1") {
+			t.Fatalf("expected Claude wrapper %s to contain its managed marker, got %q", path, text)
 		}
-		if strings.Contains(text, "You are in ") {
-			t.Fatalf("expected thin Claude wrapper in %s, got %q", path, text)
+		if name == "commit" {
+			for _, want := range []string{"Use this active agent session", "tao commit --proposal-file"} {
+				if !strings.Contains(text, want) {
+					t.Fatalf("expected inline Claude commit wrapper %s to contain %q, got %q", path, want, text)
+				}
+			}
+			if strings.Contains(text, "tao prompt commit") {
+				t.Fatalf("Claude commit wrapper started a nested prompt handoff: %q", text)
+			}
+		} else {
+			want := "tao prompt " + name + " --arguments-stdin <<'TAO_PROMPT_ARGUMENTS'"
+			if !strings.Contains(text, want) || strings.Contains(text, "You are in ") {
+				t.Fatalf("expected thin Claude wrapper %s to contain %q, got %q", path, want, text)
+			}
 		}
 	}
 	if _, err := os.Stat(filepath.Join(home, ".pi", "agent", "extensions", "tao")); !os.IsNotExist(err) {
@@ -361,17 +371,25 @@ func TestInstallPromptsAndDoctorUseSelectedOpenCodeAgent(t *testing.T) {
 	for _, name := range []string{"plan", "note-slice", "run", "commit", "repo-health", "pr"} {
 		path := filepath.Join(commandsRoot, name+".md")
 		text := readText(t, path)
-		for _, want := range []string{
-			"tao-managed: " + name + " v1",
-			"!`tao prompt " + name + " --arguments \"$ARGUMENTS\"`",
-			"agent: " + agentModes[name],
-		} {
+		for _, want := range []string{"tao-managed: " + name + " v1", "agent: " + agentModes[name]} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("expected OpenCode command %s to contain %q, got %q", path, want, text)
 			}
 		}
-		if strings.Contains(text, "Run tao prompt") || strings.Contains(text, "--arguments-stdin") || strings.Contains(text, "You are in ") {
-			t.Fatalf("expected thin Style B OpenCode wrapper in %s, got %q", path, text)
+		if name == "commit" {
+			for _, want := range []string{"Use this active agent session", "tao commit --proposal-file"} {
+				if !strings.Contains(text, want) {
+					t.Fatalf("expected inline OpenCode commit command %s to contain %q, got %q", path, want, text)
+				}
+			}
+			if strings.Contains(text, "tao prompt commit") {
+				t.Fatalf("OpenCode commit command started a nested prompt handoff: %q", text)
+			}
+		} else {
+			want := "!`tao prompt " + name + " --arguments \"$ARGUMENTS\"`"
+			if !strings.Contains(text, want) || strings.Contains(text, "Run tao prompt") || strings.Contains(text, "--arguments-stdin") || strings.Contains(text, "You are in ") {
+				t.Fatalf("expected thin Style B OpenCode wrapper in %s with %q, got %q", path, want, text)
+			}
 		}
 	}
 	if _, err := os.Stat(filepath.Join(home, ".pi", "agent", "extensions", "tao")); !os.IsNotExist(err) {

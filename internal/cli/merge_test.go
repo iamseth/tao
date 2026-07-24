@@ -11,11 +11,13 @@ import (
 
 	mergepkg "github.com/iamseth/tao/internal/merge"
 	"github.com/iamseth/tao/internal/plan"
+	runpkg "github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/workspace"
 )
 
 func TestMergeCommandApprovedPlanSuccess(t *testing.T) {
 	unsetEnvForTest(t, "TAO_MERGE_VERIFY_COMMAND")
+	t.Setenv("TAO_AGENT", "invalid-unused-provider")
 	detail := cliMergeDetail(t)
 	manager := &fakeWorkspaceManager{
 		cleanPlan: workspace.CleanPlan{Branch: "tao/plan-a", Status: workspace.ManagedStatusClean, CanRemove: true, Reason: "workspace is clean"},
@@ -25,11 +27,16 @@ func TestMergeCommandApprovedPlanSuccess(t *testing.T) {
 	}
 	runner := newCLIMergeGitRunner(t, detail.State.Repo.Root)
 	var gotManagerRoot string
+	providerCalls := 0
 	var out bytes.Buffer
 	app := App{
 		Out:           &out,
 		Err:           &out,
 		CommandRunner: runner,
+		ProcessStarter: func(context.Context, string, string, []string) (runpkg.Process, error) {
+			providerCalls++
+			return nil, errors.New("current approved merge must not start a provider")
+		},
 		Repository: func(plansDir string) Repository {
 			return fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
 		},
@@ -44,6 +51,9 @@ func TestMergeCommandApprovedPlanSuccess(t *testing.T) {
 	}
 	if gotManagerRoot != detail.State.Repo.Root {
 		t.Fatalf("workspace manager root = %q, want %q", gotManagerRoot, detail.State.Repo.Root)
+	}
+	if providerCalls != 0 {
+		t.Fatalf("current approved merge started %d provider sessions", providerCalls)
 	}
 	if len(manager.cleanedManaged) != 1 || manager.cleanedManaged[0].Branch != "tao/plan-a" {
 		t.Fatalf("expected managed cleanup for tao/plan-a, got %#v", manager.cleanedManaged)
@@ -499,7 +509,10 @@ func cliMergeDetail(t *testing.T) *plan.PlanDetail {
 				ID:              "plan-a",
 				Title:           "Plan A",
 				CompletedSlices: []string{"001-a"},
-				Review:          &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Base: "base123", Head: "head123"},
+				Review: &plan.PlanReview{
+					Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Base: "base123", Head: "head123",
+					CommitMessage: &plan.ReviewCommitMessage{Subject: "feat(merge): use approved review message", Body: "What:\nCreate the reviewed squash.\n\nWhy:\nAvoid another model session."},
+				},
 			},
 			Workspace: &plan.Workspace{Strategy: plan.WorkspaceStrategyWorktree, Root: repoRoot, Path: repoRoot + "/.tao/workspaces/plan-a", Branch: "tao/plan-a", BaseBranch: "main"},
 		},
@@ -542,7 +555,7 @@ func newCLIMergeGitRunner(t *testing.T, repoRoot string) CommandRunner {
 		case "symbolic-ref --quiet --short refs/remotes/origin/HEAD":
 			_, _ = io.WriteString(stdout, "origin/main\n")
 			return nil
-		case "merge-base main tao/plan-a":
+		case "merge-base main tao/plan-a", "merge-base pre123 head123":
 			_, _ = io.WriteString(stdout, "base123\n")
 			return nil
 		case "merge-base --is-ancestor tao/plan-a main", "merge-base --is-ancestor head123 main":
@@ -563,7 +576,7 @@ func newCLIMergeGitRunner(t *testing.T, repoRoot string) CommandRunner {
 		case "merge-base --is-ancestor main tao/plan-a", "checkout main", "merge --squash tao/plan-a":
 			return nil
 		default:
-			if strings.HasPrefix(command, "commit -m Plan A\n\nTao-Plan: plan-a\nTao-Source-Head: head123") {
+			if strings.HasPrefix(command, "commit -m feat(merge): use approved review message\n\nWhat:\nCreate the reviewed squash.\n\nWhy:\nAvoid another model session.\n\nTao-Plan: plan-a\nTao-Source-Head: head123") {
 				return nil
 			}
 			t.Fatalf("unexpected git command %q", command)

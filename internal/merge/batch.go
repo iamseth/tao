@@ -31,19 +31,22 @@ type BatchDeferral struct {
 // No later phase needs to reinterpret mutable review or branch metadata to know
 // what was approved during preflight.
 type BatchCandidate struct {
-	PlanID          string         `json:"plan_id"`
-	PlanTitle       string         `json:"plan_title,omitempty"`
-	PlanDir         string         `json:"plan_dir"`
-	RepoRoot        string         `json:"repo_root"`
-	Branch          string         `json:"branch"`
-	ReviewBase      string         `json:"review_base"`
-	ReviewHead      string         `json:"review_head"`
-	ReviewSummary   string         `json:"review_summary,omitempty"`
-	SourceTip       string         `json:"source_tip"`
-	DefaultBranch   string         `json:"default_branch"`
-	DefaultStartSHA string         `json:"default_start_sha"`
-	Blockers        []BatchBlocker `json:"blockers,omitempty"`
-	Deferred        *BatchDeferral `json:"deferred,omitempty"`
+	PlanID                string                    `json:"plan_id"`
+	PlanTitle             string                    `json:"plan_title,omitempty"`
+	PlanDir               string                    `json:"plan_dir"`
+	RepoRoot              string                    `json:"repo_root"`
+	Branch                string                    `json:"branch"`
+	ReviewBase            string                    `json:"review_base"`
+	ReviewHead            string                    `json:"review_head"`
+	ReviewSummary         string                    `json:"review_summary,omitempty"`
+	ReviewCommitMessage   *plan.ReviewCommitMessage `json:"review_commit_message,omitempty"`
+	CommitMessage         string                    `json:"commit_message,omitempty"`
+	CommitMessageResolved bool                      `json:"commit_message_resolved,omitempty"`
+	SourceTip             string                    `json:"source_tip"`
+	DefaultBranch         string                    `json:"default_branch"`
+	DefaultStartSHA       string                    `json:"default_start_sha"`
+	Blockers              []BatchBlocker            `json:"blockers,omitempty"`
+	Deferred              *BatchDeferral            `json:"deferred,omitempty"`
 }
 
 // BatchPreflightResult contains every invocation-time reviewed and approved
@@ -114,6 +117,10 @@ func (d BatchCandidateDiscovery) Discover(ctx context.Context) (BatchPreflightRe
 			candidate.ReviewBase = strings.TrimSpace(review.Base)
 			candidate.ReviewHead = strings.TrimSpace(review.Head)
 			candidate.ReviewSummary = strings.TrimSpace(review.Summary)
+			if review.CommitMessage != nil {
+				proposal := *review.CommitMessage
+				candidate.ReviewCommitMessage = &proposal
+			}
 		}
 		candidate.Branch, err = resolvePlanBranch(detail)
 		if err != nil {
@@ -165,6 +172,14 @@ func (d BatchCandidateDiscovery) Discover(ctx context.Context) (BatchPreflightRe
 		}
 		if err := d.Merge.CheckPreMergeGate(ctx, detail, Options{}); err != nil {
 			d.addBlocker(&result, &candidate, "preflight", err)
+		}
+		if candidate.ReviewCommitMessage != nil {
+			message, messageErr := singleMergeCommitMessage(*candidate.ReviewCommitMessage, candidate.PlanID, candidate.SourceTip)
+			if messageErr != nil {
+				d.addBlocker(&result, &candidate, "message", fmt.Errorf("approved review commit proposal is invalid: %w", messageErr))
+			} else {
+				candidate.CommitMessage = message
+			}
 		}
 		result.Candidates = append(result.Candidates, candidate)
 	}

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/iamseth/tao/internal/plan"
 )
 
 func TestBatchWorkspaceCreatesAndReusesIsolatedIntegrationWorktree(t *testing.T) {
@@ -141,8 +143,13 @@ func TestBatchWorkspaceResumeAcceptsExactApplyingTaoCommit(t *testing.T) {
 	}
 }
 
-func TestBatchWorkspaceResumeAcceptsExactApplyingAggregateReworkCommit(t *testing.T) {
+func TestBatchWorkspaceResumeRequiresExactPersistedApplyingMessage(t *testing.T) {
 	fixture := newRealGitWorktree(t)
+	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "feature.txt"), []byte("feature\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runRealGit(t, fixture.worktreePath, "add", "feature.txt")
+	runRealGit(t, fixture.worktreePath, "commit", "-m", "source")
 	state := batchWorkspaceState(t, fixture)
 	owner, err := NewBatchWorkspace(fixture.repoRoot, filepath.Join(t.TempDir(), "merge-batches"), nil)
 	if err != nil {
@@ -152,25 +159,71 @@ func TestBatchWorkspaceResumeAcceptsExactApplyingAggregateReworkCommit(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(integration.Path, "combined.txt"), []byte("combined\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	runRealGit(t, integration.Path, "add", ".")
-	runRealGit(t, integration.Path, "commit", "-m", "feat: combined")
-	parent := strings.TrimSpace(realGitOutput(t, integration.Path, "rev-parse", "HEAD"))
-	if err := os.WriteFile(filepath.Join(integration.Path, "reworked.txt"), []byte("fixed\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	runRealGit(t, integration.Path, "add", ".")
-	runRealGit(t, integration.Path, "commit", "-m", aggregateResolutionCommitMessage(state.ID, 1))
-	state.Status = BatchStatusReviewing
-	state.Integrations = []BatchIntegration{{PlanID: "plan-a", SourceHead: state.Candidates[0].SourceTip, IntegrationBaseSHA: state.DefaultStartSHA, IntegrationSHA: parent, Status: batchIntegrationApplied}}
-	state.IntegrationHead = parent
-	state.Attempts.AggregateRework = 1
-	state.Review = &BatchReview{Status: "applying", BaseSHA: state.DefaultStartSHA, HeadSHA: parent, Attempts: 1}
+	candidate := &state.Candidates[0]
+	candidate.CommitMessage = testBatchCommitMessage(candidate.PlanID, candidate.SourceTip)
+	runRealGit(t, integration.Path, "merge", "--squash", candidate.SourceTip)
+	runRealGit(t, integration.Path, "commit", "-m", candidate.CommitMessage)
+	state.Status = BatchStatusResolving
+	state.IntegrationHead = state.DefaultStartSHA
+	state.Integrations = []BatchIntegration{{PlanID: candidate.PlanID, SourceHead: candidate.SourceTip, IntegrationBaseSHA: state.DefaultStartSHA, CommitMessage: candidate.CommitMessage, Status: batchIntegrationApplying}}
 
 	if err := owner.ValidateResume(context.Background(), state); err != nil {
-		t.Fatalf("exact interrupted aggregate rework commit was not resumable: %v", err)
+		t.Fatalf("exact interrupted message was not resumable: %v", err)
+	}
+	state.Integrations[0].CommitMessage = strings.Replace(state.Integrations[0].CommitMessage, "exact approved candidate", "different approved candidate", 1)
+	if err := owner.ValidateResume(context.Background(), state); err == nil || !strings.Contains(err.Error(), "commit message") {
+		t.Fatalf("workspace accepted drifted exact message intent: %v", err)
+	}
+}
+
+func TestBatchWorkspaceResumeAcceptsExactApplyingAggregateReworkCommit(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		name := "proposed"
+		if legacy {
+			name = "legacy"
+		}
+		t.Run(name, func(t *testing.T) {
+			fixture := newRealGitWorktree(t)
+			state := batchWorkspaceState(t, fixture)
+			owner, err := NewBatchWorkspace(fixture.repoRoot, filepath.Join(t.TempDir(), "merge-batches"), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			integration, err := owner.Start(context.Background(), state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(integration.Path, "combined.txt"), []byte("combined\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runRealGit(t, integration.Path, "add", ".")
+			runRealGit(t, integration.Path, "commit", "-m", "feat: combined")
+			parent := strings.TrimSpace(realGitOutput(t, integration.Path, "rev-parse", "HEAD"))
+			if err := os.WriteFile(filepath.Join(integration.Path, "reworked.txt"), []byte("fixed\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runRealGit(t, integration.Path, "add", ".")
+			message := aggregateResolutionCommitMessage(state.ID, 1)
+			if !legacy {
+				message, err = aggregateProposedResolutionCommitMessage(plan.ReviewCommitMessage{Subject: "fix(batch): resolve aggregate findings", Body: "What:\nResolve aggregate findings.\n\nWhy:\nKeep the batch correct."}, state.ID, 1)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			runRealGit(t, integration.Path, "commit", "-m", message)
+			state.Status = BatchStatusReviewing
+			state.Integrations = []BatchIntegration{{PlanID: "plan-a", SourceHead: state.Candidates[0].SourceTip, IntegrationBaseSHA: state.DefaultStartSHA, IntegrationSHA: parent, Status: batchIntegrationApplied}}
+			state.IntegrationHead = parent
+			state.Attempts.AggregateRework = 1
+			state.Review = &BatchReview{Status: "applying", BaseSHA: state.DefaultStartSHA, HeadSHA: parent, Attempts: 1}
+			if !legacy {
+				state.Review.CommitMessage = message
+			}
+
+			if err := owner.ValidateResume(context.Background(), state); err != nil {
+				t.Fatalf("exact interrupted aggregate rework commit was not resumable: %v", err)
+			}
+		})
 	}
 }
 

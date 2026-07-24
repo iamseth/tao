@@ -107,7 +107,7 @@ func installContent(descriptor agentpkg.Descriptor, prompt prompts.Definition) (
 	if strings.TrimSpace(prompt.Template) == "" {
 		return "", fmt.Errorf("prompt %q has empty %s content", prompt.Name, descriptor.TargetDescription)
 	}
-	content, err := descriptor.RenderPrompt(prompt.Name, prompt.Template)
+	content, err := renderInstallContent(descriptor, prompt)
 	if err != nil {
 		return "", err
 	}
@@ -115,6 +115,27 @@ func installContent(descriptor agentpkg.Descriptor, prompt prompts.Definition) (
 		return "", fmt.Errorf("prompt %q has empty %s content", prompt.Name, descriptor.TargetDescription)
 	}
 	return content, nil
+}
+
+func renderInstallContent(descriptor agentpkg.Descriptor, prompt prompts.Definition) (string, error) {
+	if prompt.Name != prompts.PromptCommit || descriptor.UsesExtensionPrompts {
+		return descriptor.RenderPrompt(prompt.Name, prompt.Template)
+	}
+	// Commit commands must run the Tao boundary from the provider's current
+	// session. Inline this one prompt instead of dynamically invoking `tao
+	// prompt`, which would hide the binary permissions and handoff contract.
+	content, err := promptfmt.ManagedCodexCommand(prompt.Name, prompt.Template)
+	if err != nil {
+		return "", err
+	}
+	switch descriptor.Kind {
+	case runtimeconfig.AgentClaude:
+		return strings.Replace(content, "---\n", "---\nallowed-tools: Bash(tao commit:*), Bash(mktemp:*), Bash(rm:*), Bash(rmdir:*), Read, Write\nargument-hint: [arguments]\n", 1), nil
+	case runtimeconfig.AgentOpenCode:
+		return strings.Replace(content, "---\n", "---\nagent: build\n", 1), nil
+	default:
+		return content, nil
+	}
 }
 
 func isPiExtensionPrompt(name string) bool {

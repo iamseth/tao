@@ -216,8 +216,13 @@ through.
 
 When a full plan run completes, treat "done" as slices complete, a persisted
 repository-wide verification result, and a post-completion review result. With
-the default slice policy, every modifying slice already has a Tao-owned
-checkpoint commit, so the review can inspect the exact `base..HEAD` diff. Broad
+the default slice policy, the implementing agent proposes each checkpoint
+message before completion. Tao validates the scoped Conventional Commit subject
+and `What:`/`Why:` body, appends trusted plan/slice trailers, persists the exact
+final message, and alone stages and commits. A malformed proposal stops before
+intent or Git mutation and may be repaired only in that same active session;
+there is no title fallback or separate normal message session. The resulting
+checkpoint commits let review inspect the exact `base..HEAD` diff. Broad
 verification is blocking and uses the repository's declared `make verify` when
 available before narrower Make/Go fallbacks. The review is best-effort: a failed
 or timed-out review session is recorded for you to see, but it does not turn
@@ -246,11 +251,16 @@ continue the stopped plan explicitly before starting another drain.
 
 When you return to a slice-complete or reviewed plan, start with
 `tao review <plan-id>`. It reads the persisted review from the data-home plan
-directory, so you can triage the verdict, summary, and findings before opening a
-PR or merging. If you make follow-up commits, amend the branch, or otherwise
-change the diff after the recorded review, run `tao review --run <plan-id>` to
-refresh it against current `HEAD`. Use `tao staleness <plan-id>` for the separate
-base-commit drift check on pending work.
+directory, so you can triage the verdict, summary, findings, and approved commit
+proposal before opening a PR or merging. The reviewer already inspecting the
+exact base/head diff supplies that proposal; Tao validates and binds it to the
+review instead of opening a merge-time message session. An approval with a
+missing, malformed, oversized, or reserved-trailer proposal is safely downgraded
+to a non-approving `comment`, so it cannot authorize merge. If you make follow-up
+commits, amend the branch, or otherwise change the diff after the recorded
+review, run `tao review --run <plan-id>` to refresh both review and proposal
+against current `HEAD`. Use `tao staleness <plan-id>` for the separate base-commit
+drift check on pending work.
 
 Run-path agent sessions have a wall-clock hang ceiling so unattended batches do
 not stall forever on one stuck agent process. The default is 20 minutes; set
@@ -406,14 +416,24 @@ unset, failing, or timed-out notifier does not fail the batch.
 
 ### `/commit` — local conventional commit
 
-Creates a single local Git commit for the current changes, matching the repo's
-recent commit style. Reviews `git status`, `git diff`, and `git log` first; uses
-`<type>(<scope>): <summary>` conventional format; refuses to commit `.tao/`
-local-only artifacts, secrets, or build output; and never pushes.
+Creates one local commit through Tao's standalone boundary. Tao first returns
+only filtered allowed context and a fingerprint. The active agent/model proposes
+`<type>(<lowercase-scope>): <lowercase-imperative-summary>` with non-empty
+`What:` and `Why:` sections; Tao then rechecks the live repository, validates the
+proposal, excludes `.tao/`, suspected secrets, and generated output, stages safe
+paths, appends any trusted evidence, and creates the commit. It never pushes.
 
-**When to use:** when you're committing outside a run, or when you chose
-`tao run --commit-policy none`. Automatic runs do not delegate slice commits to
-this prompt: `tao slice-complete` owns that deterministic transaction.
+**When to use:** for an explicit standalone commit outside a run, or after
+choosing `tao run --commit-policy none`. This command is intentionally fast and
+does not start a nested agent process; invalid proposal content gets at most one
+repair from the same selected session. Safety or stale-context errors stop, and
+invalid content has no deterministic or title fallback.
+
+When you deliberately own the complete canonical message, `/commit --message`
+passes it through the same central validation and safety boundary. This is an
+explicit standalone override, not an automatic-workflow escape hatch. Automatic
+runs never delegate slice commits to this command: `tao slice-complete` owns the
+recoverable transaction and Tao owns Git.
 
 ### `/pr` — open a pull request
 
@@ -444,11 +464,17 @@ Use it for the solo workflow where the review is the human gate instead of a PR.
 - the plan worktree is clean.
 
 **What it does:** by default Tao checks out the default branch, squash-applies
-the reviewed plan branch, and creates one deterministic commit with `Tao-Plan`
-and `Tao-Source-Head` trailers. The plan branch keeps its per-slice checkpoint
-history for review and recovery until managed cleanup succeeds. Use
-`--no-squash` to preserve those commits by rebasing the plan branch and
-fast-forwarding default.
+the reviewed plan branch, and reuses the approved review's proposal for the one
+commit, adding trusted `Tao-Plan` and `Tao-Source-Head` trailers itself. The
+reviewer already saw the exact base/head diff, so the normal path opens no second
+message session. Historical approved reviews without a proposal remain readable;
+a squash merge generates one proposal on demand from the exact diff before any
+mutation. `--force` also permits this exceptional path when current approved
+proposal evidence is unavailable or invalid. Generation or validation failure
+stops without intent, staging, commit, or title fallback. The plan branch keeps
+its per-slice checkpoint history for review and recovery until managed cleanup
+succeeds. Use `--no-squash` to preserve those commits by rebasing the plan branch
+and fast-forwarding default.
 
 **Single-plan failure behavior:** squash, squash-commit, rebase, or fast-forward
 failures abort the attempt, restore the default tip and worktree when possible,
@@ -515,13 +541,15 @@ respects source ancestry, and prefers lower path overlap; it is a conflict
 reduction heuristic, not a dependency declaration.
 
 **Staging and agent resolution:** a real run keeps default at its starting SHA
-while it creates exactly one squash commit per source plan, with `Tao-Plan` and
-`Tao-Source-Head` trailers, in a batch-owned integration worktree. A textual
-conflict or candidate verification failure is deferred and sent to bounded
-sessions of the configured agent. Agents may edit only that integration
-worktree; Tao stages and commits. Failed, empty, unsafe, ref-changing, repeated,
-or attempt-capped resolution stops with source branches and durable recovery
-evidence intact.
+while it creates exactly one squash commit per source plan, normally from each
+exact approved-review proposal, with Tao-owned `Tao-Plan` and
+`Tao-Source-Head` trailers in a batch-owned integration worktree. A textual
+conflict or candidate verification failure is deferred to a bounded configured
+agent; that same resolver returns the structured message proposal for its edits.
+Agents may edit only that integration worktree; Tao validates before intent and
+alone stages and commits. Failed, malformed, empty, unsafe, ref-changing,
+repeated, or attempt-capped resolution stops with source branches and durable
+recovery evidence intact and no fallback message.
 
 **Aggregate gate and atomic landing:** after every candidate is staged, Tao runs
 the full merge verification command and reviews the combined diff. An aggregate
@@ -603,12 +631,17 @@ data.
 ### Commits, branches, and pull requests
 
 `tao run` defaults to `--commit-policy slice`, which requires a clean execution
-worktree before each agent starts. On completion, `tao slice-complete` first
-persists a deterministic intent, screens and stages safe changes, creates a
-commit carrying `Tao-Plan` and `Tao-Slice` trailers, and only then marks the slice
-complete. If Tao is interrupted after Git advances, retrying recovers the commit
-only when its parent and full message match the recorded intent. A slice that
-made no changes records `no_changes` without creating an empty commit.
+worktree before each agent starts. On completion, the active implementing agent
+returns a bounded structured proposal; `tao slice-complete` centrally validates
+it, formats the canonical subject and `What:`/`Why:` body, adds trusted
+`Tao-Plan` and `Tao-Slice` trailers, and persists that exact final message in
+`commit_intent` before screening or staging safe changes. Tao alone creates the
+commit and only then marks the slice complete. If interrupted after Git advances,
+retrying recovers only when the parent and full message match the recorded
+intent; it never asks another model or substitutes a generated title. Historical
+pre-contract intents retain their exact old hash/message recovery semantics
+rather than being rewritten. A slice that made no changes records `no_changes`
+without creating an empty commit.
 
 Slice `expected_files` remain advisory: Tao warns when a safe committed path was
 not declared, but does not treat the list as an allowlist. Suspected secrets,

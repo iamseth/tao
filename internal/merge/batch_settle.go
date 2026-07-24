@@ -77,7 +77,11 @@ func (s BatchSettler) Settle(ctx context.Context, state BatchState) (BatchSettle
 		if messageErr != nil {
 			return result, fmt.Errorf("read plan %s squash evidence: %w", item.PlanID, messageErr)
 		}
-		if !taoSquashMessageMatches(message, item.PlanID, candidate.SourceTip) {
+		messageMatches := taoSquashMessageMatches(message, item.PlanID, candidate.SourceTip)
+		if integrationIndex := batchIntegrationIndex(state, item.PlanID); integrationIndex >= 0 && state.Integrations[integrationIndex].CommitMessage != "" {
+			messageMatches = strings.TrimSpace(message) == state.Integrations[integrationIndex].CommitMessage
+		}
+		if !messageMatches {
 			return result, fmt.Errorf("plan %s squash %s does not carry matching Tao plan/source evidence", item.PlanID, item.SquashSHA)
 		}
 	}

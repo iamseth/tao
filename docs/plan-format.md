@@ -112,6 +112,8 @@ A merge is proven by a `plan_merged` event in `events.jsonl`. Plans written by r
 - `plan.last_run_commit_policy` records the effective commit policy (`slice` or `none`) from the latest run start. The historical value `plan` remains readable, but new run, prompt, environment, and queue inputs reject it with migration guidance. Missing values and legacy `run_context` fallback remain supported.
 - `plan.last_run_starting_dirty` records the Git paths dirty at the latest run start; automatic `slice` starts store an empty list because they require a clean execution tree, while legacy and manual-policy records remain readable.
 - Optional `plan.final_verification` records the repository-wide pre-review gate with `command`, absolute `cwd`, `result`, optional `details`, and `verified_at`. When no repository-owned command is detected, Tao records a skipped result rather than inventing a command.
+- Optional `plan.review.commit_message` is the untrusted proposal produced by the reviewer of the exact recorded `base..head` diff. It has `subject` and `body` strings; the subject is `<type>(<lowercase-scope>): <lowercase-imperative-summary>`, and the body has non-empty canonical `What:` and `Why:` sections. It must not contain `Tao-*` trailers. New `approve` reviews require a valid proposal; a missing, malformed, oversized, or reserved-trailer proposal downgrades the parsed result to bounded `comment` rather than persisting approval. `changes_requested` and `comment` reviews store `commit_message: null`, explicitly clearing a stale approved proposal. Historical reviews without this field remain readable.
+- Optional `plan.merge_commit_intent` binds `message`, `plan_id`, `source_head`, `default_branch`, `default_parent`, and `created_at` before a single squash mutates Git. `message` is the exact final validated review (or exceptional generated) proposal plus Tao-owned evidence. Matching retries reuse it without another agent call. Historical intents remain exact recovery authority and are not reformatted.
 
 ```mermaid
 stateDiagram-v2
@@ -160,7 +162,7 @@ Each slice should include:
 - Optional `required_inputs` for concrete repository artifacts that must exist before implementation begins; legacy slices and slices with no prerequisites omit it.
 - Optional `execution_root`, recorded by `tao run` at slice start as the absolute checkout or worktree root used for that run; legacy slices may omit it.
 - Optional `execution_start`, recording the immutable prepared boundary for an automatic slice. `branch` and `head` identify the original Git boundary; `commit_policy` and `workspace_strategy` preserve the effective execution choices (`slice` plus `worktree` for a resumable isolated run). Legacy records may omit the latter fields, which Tao infers only from durable plan/workspace metadata.
-- Optional `commit_intent` written before Git mutation. It contains the completion-input `hash`, `policy`, optional `starting_branch`, `starting_head`, deterministic `message`, and `created_at`.
+- Optional `commit_intent` written before Git mutation. It contains the completion-input `hash`, `policy`, optional `starting_branch`, `starting_head`, exact final `message`, and `created_at`. For new automatic intents, the hash binds the completion report and message together.
 - Optional `completion` with `outcome` and optional `commit_sha`. Outcomes are `committed`, `no_changes`, and `manual_uncommitted`.
 - `verification.commands`: every slice must include at least one deterministic verification command; select commands from repository-owned guidance where possible. For docs/config/asset-only slices where no build/test command applies, use a deterministic fallback such as `grep -q`, `test -f`, or `git diff --stat`.
 
@@ -182,13 +184,32 @@ During whole-plan validation, a missing input is allowed as a warning only when 
 
 These commit fields are optional for backward compatibility: plans completed
 before transactional slice commits load without them. Under policy `slice`, a
-modifying completion records `committed` and its SHA; no diff records
-`no_changes` without creating an empty commit (the boundary HEAD may be retained
-as `commit_sha`). Policy `none` records `manual_uncommitted` and does not mutate
-Git. Tao-owned commits include exact `Tao-Plan: <plan-id>` and
-`Tao-Slice: <slice-id>` trailers. On retry, Tao may recover an already-created
-commit only when HEAD's parent is the intent's `starting_head` and the full
-commit message, including trailers, matches the intent.
+new intent requires a bounded proposal from the active implementation agent.
+Tao centrally validates the supported type, lowercase scope and imperative
+summary (at most 72 characters), and non-empty `what`/`why`; it then formats
+canonical `What:`/`Why:` sections and appends exact `Tao-Plan: <plan-id>` and
+`Tao-Slice: <slice-id>` trailers. Proposal-supplied `Tao-*` lines are invalid.
+Invalid content stops before intent, staging, or commit and may be repaired in
+the same session; there is no deterministic or title fallback.
+
+The exact final formatted message is stored in `commit_intent.message` and is
+part of the new intent hash. A modifying completion records `committed` and its
+SHA; no diff records `no_changes` without creating an empty commit (the boundary
+HEAD may be retained as `commit_sha`). Policy `none` records
+`manual_uncommitted` and does not mutate Git. On retry, Tao may recover an
+already-created commit only when HEAD's parent is the intent's `starting_head`
+and the full commit message, including trailers, matches the intent.
+
+Legacy intents whose hash predates message binding retain their recorded message
+verbatim and settle through the historical commit path; they are never
+revalidated, rewritten, or upgraded in place. This compatibility is recovery,
+not a fallback for a new proposal.
+
+> **Upgrade warning:** if Tao is upgraded while an automatic commit transaction
+> already has `commit_intent`, that active transaction keeps its historical
+> message contract until it settles. The stronger proposal contract begins at
+> the next pre-intent transaction; do not delete intent or restart an agent to
+> force an in-flight transaction onto the new format.
 
 ```mermaid
 sequenceDiagram
@@ -219,7 +240,7 @@ The current structured source is Pi's `provider_transport_failure` diagnostic. M
 
 Normal `tao run` rejects blocked plans and blocked selected slices. `tao run --continue` is only for cases where the blocker has already been cleared manually; it clears Tao's blocked lifecycle state and restarts `plan.current_slice`, or falls back to the first pending slice only when the plan or that slice is blocked. Continue mode must not bypass approval gates, dependencies, completed-plan checks, missing-slice checks, branch or commit safeguards, or selected-slice verification preflight.
 
-`tao slice-complete --plan-dir DIR --slice-id ID --notes-file FILE --verification-results-file FILE` owns deterministic completion bookkeeping after verification passes. For automatic slice policy it persists `commit_intent`, creates or recovers the Tao-owned commit, persists `completion`, then marks the slice completed and moves the queue. Policy `none` skips Git and records `manual_uncommitted`. State, timing, notes, verification results, and at most one `slice_completed` event are written only after the transaction outcome is known.
+`tao slice-complete --plan-dir DIR --slice-id ID --notes-file FILE --verification-results-file FILE [--commit-proposal-file FILE]` owns deterministic completion bookkeeping after verification passes. A new automatic slice intent requires the structured proposal file; Tao validates it and persists the exact trusted final message before staging. Existing intents settle from durable state and do not require or authorize a fresh proposal session. Tao creates or recovers the commit, persists `completion`, then marks the slice completed and moves the queue. Policy `none` skips Git and records `manual_uncommitted`. State, timing, notes, verification results, and at most one `slice_completed` event are written only after the transaction outcome is known.
 
 Recovery is split at `commit_intent`. Before intent, only an exact isolated automatic boundary can return to the implementation agent. Once `commit_intent` or `completion` exists, Tao does not start an agent: the original `tao slice-complete` inputs must settle or recover that transaction. Changed branch/HEAD boundaries, active Git operations, conflicts, ambiguous status, and unrelated dirt without a boundary are refusal states, not alternate baselines. Direct and queued execution apply this same classification through `run.Service.Execute` while retaining one cross-process plan lock.
 
@@ -289,7 +310,9 @@ When a listed verification command is invalid but a mechanically equivalent corr
 | `PlanState.LastRunCommitPolicy` | `string` | `last_run_commit_policy` | Write `""` → stored as `""`; clears the persisted run policy so review uses legacy event fallback or `none`. |
 | `PlanState.LastRunStartingDirty` | `[]string` | `last_run_starting_dirty` | Write `[]string{}` → stored as `[]`; clears stale run-start dirty-path tolerance after a clean run start. |
 | `PlanReview.Findings` | `[]ReviewFinding` | `findings` | Write `[]ReviewFinding{}` → stored as `[]`; prevents stale findings surviving a re-review. |
+| `PlanReview.CommitMessage` | `*ReviewCommitMessage` | `commit_message` | Write `nil` → stored as `null`; prevents a non-approved replacement review from retaining an approved proposal. |
 | `PlanReview.Verdict`, `Summary`, `FindingsCount`, `ReviewedAt` | mixed | see struct tags | Write explicit zero value to clear. |
+| `PlanState.MergeCommitIntent` | `*SingleMergeCommitIntent` | `merge_commit_intent` | Write `nil` → stored as `null`; clears only through guarded single-merge intent settlement or supersession. |
 | `Workspace.DependencyFailure` | `string` | `dependency_preparation_failure` | Write `""` → stored as `""`; clears stale dependency-preparation failures after retry success. |
 | `Workspace.DependencyFingerprint` | `string` | `dependency_fingerprint` | Write an explicit `""` → stored as `""`; clears the workspace dependency-preparation skip evidence when unknown. |
 

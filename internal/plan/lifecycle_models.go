@@ -120,11 +120,12 @@ type PlanState struct {
 	// LastRunCommitPolicy records the commit policy used by the latest run start.
 	LastRunCommitPolicy string `json:"last_run_commit_policy"`
 	// LastRunStartingDirty records run-start dirty paths tolerated by standalone review gates.
-	LastRunStartingDirty []string           `json:"last_run_starting_dirty"`
-	Timing               PlanTiming         `json:"timing"`
-	PullRequest          *PullRequest       `json:"pull_request,omitempty"`
-	Review               *PlanReview        `json:"review,omitempty"`
-	FinalVerification    *FinalVerification `json:"final_verification,omitempty"`
+	LastRunStartingDirty []string                 `json:"last_run_starting_dirty"`
+	Timing               PlanTiming               `json:"timing"`
+	PullRequest          *PullRequest             `json:"pull_request,omitempty"`
+	Review               *PlanReview              `json:"review,omitempty"`
+	MergeCommitIntent    *SingleMergeCommitIntent `json:"merge_commit_intent"`
+	FinalVerification    *FinalVerification       `json:"final_verification,omitempty"`
 }
 
 // PullRequest records a successfully created GitHub pull request for a plan.
@@ -155,17 +156,36 @@ type ReviewFinding struct {
 	Suggestion string `json:"suggestion,omitempty"`
 }
 
+// ReviewCommitMessage records the untrusted commit proposal produced while
+// reviewing an exact base/head diff. Tao adds evidence trailers at commit time.
+type ReviewCommitMessage struct {
+	Subject string `json:"subject"`
+	Body    string `json:"body"`
+}
+
+// SingleMergeCommitIntent binds the exact trusted squash message to the Git
+// refs Tao validated before mutating the default worktree.
+type SingleMergeCommitIntent struct {
+	Message       string    `json:"message"`
+	PlanID        string    `json:"plan_id"`
+	SourceHead    string    `json:"source_head"`
+	DefaultBranch string    `json:"default_branch"`
+	DefaultParent string    `json:"default_parent"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
 // PlanReview records the persisted fresh-session review for a completed plan.
 type PlanReview struct {
-	Status        string          `json:"status,omitempty"`
-	Verdict       string          `json:"verdict"`
-	Summary       string          `json:"summary"`
-	FindingsCount int             `json:"findings_count"`
-	Findings      []ReviewFinding `json:"findings"`
-	Base          string          `json:"base,omitempty"`
-	Head          string          `json:"head,omitempty"`
-	Agent         string          `json:"agent,omitempty"`
-	ReviewedAt    time.Time       `json:"reviewed_at"`
+	Status        string               `json:"status,omitempty"`
+	Verdict       string               `json:"verdict"`
+	Summary       string               `json:"summary"`
+	FindingsCount int                  `json:"findings_count"`
+	Findings      []ReviewFinding      `json:"findings"`
+	CommitMessage *ReviewCommitMessage `json:"commit_message"`
+	Base          string               `json:"base,omitempty"`
+	Head          string               `json:"head,omitempty"`
+	Agent         string               `json:"agent,omitempty"`
+	ReviewedAt    time.Time            `json:"reviewed_at"`
 }
 
 func (r *PlanReview) IsApproved() bool {

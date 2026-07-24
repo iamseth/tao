@@ -317,6 +317,22 @@ func validatePersistedProgress(state BatchState) []BatchDrift {
 		if integration.SourceHead != candidate.SourceTip {
 			drifts = append(drifts, BatchDrift{Scope: "plan " + integration.PlanID + " progress source", Expected: candidate.SourceTip, Actual: integration.SourceHead, Reason: "integration source differs from immutable input"})
 		}
+		if integration.CommitMessage != "" {
+			expectedMessage := candidate.CommitMessage
+			if !candidate.CommitMessageResolved && candidate.ReviewCommitMessage != nil {
+				reviewMessage, err := singleMergeCommitMessage(*candidate.ReviewCommitMessage, candidate.PlanID, candidate.SourceTip)
+				if err != nil {
+					drifts = append(drifts, BatchDrift{Scope: "plan " + integration.PlanID + " commit message", Reason: "approved review proposal is invalid: " + err.Error()})
+				} else {
+					expectedMessage = reviewMessage
+				}
+			}
+			if err := validateBatchCommitMessage(integration.CommitMessage, candidate); err != nil {
+				drifts = append(drifts, BatchDrift{Scope: "plan " + integration.PlanID + " commit message", Expected: "valid exact intent", Actual: "invalid", Reason: err.Error()})
+			} else if expectedMessage == "" || integration.CommitMessage != expectedMessage {
+				drifts = append(drifts, BatchDrift{Scope: "plan " + integration.PlanID + " commit message", Expected: expectedMessage, Actual: integration.CommitMessage, Reason: "integration message differs from immutable candidate intent"})
+			}
+		}
 		if integration.IntegrationBaseSHA != previousHead {
 			drifts = append(drifts, BatchDrift{Scope: "plan " + integration.PlanID + " integration base", Expected: previousHead, Actual: integration.IntegrationBaseSHA, Reason: "integration chain is not contiguous"})
 		}

@@ -17,7 +17,7 @@ func TestClonePlanDetailDeepCopiesMutableFields(t *testing.T) {
 			Workspace:        &Workspace{Path: "/repo/.tao/workspaces/plan", Timing: WorkspaceTiming{CreatedAt: &now, PreparedAt: &now, LastActivityAt: &now, CleanedAt: &now}, DependencyStartedAt: &now, DependencyCompletedAt: &now},
 			GlobalInvariants: []string{"keep scope"},
 			OpenQuestions:    []string{"question"},
-			Plan:             PlanState{ID: "plan-a", CurrentSlice: &current, CompletedSlices: []string{"000-z"}, PendingSlices: []string{"001-a"}, LastRunStartingDirty: []string{"README.md"}, Timing: PlanTiming{StartedAt: &now, CompletedAt: &now, LastActivityAt: &now}, PullRequest: &PullRequest{URL: "https://example.com/pr/1"}, Review: &PlanReview{Verdict: "pass", Summary: "ready", ReviewedAt: now}},
+			Plan:             PlanState{ID: "plan-a", CurrentSlice: &current, CompletedSlices: []string{"000-z"}, PendingSlices: []string{"001-a"}, LastRunStartingDirty: []string{"README.md"}, Timing: PlanTiming{StartedAt: &now, CompletedAt: &now, LastActivityAt: &now}, PullRequest: &PullRequest{URL: "https://example.com/pr/1"}, Review: &PlanReview{Verdict: "pass", Summary: "ready", CommitMessage: &ReviewCommitMessage{Subject: "feat(review): persist proposal", Body: "What:\nPersist it.\n\nWhy:\nReuse it."}, ReviewedAt: now}},
 		},
 		Slices: SlicesFile{PlanID: "plan-a", Slices: []Slice{{
 			ID:                  "001-a",
@@ -51,6 +51,7 @@ func TestClonePlanDetailDeepCopiesMutableFields(t *testing.T) {
 	*clone.Slices.Slices[0].Approval.ApprovedBy = "bob"
 	*clone.Events[0].Metrics = AgentMetrics{SessionID: "changed"}
 	clone.State.Plan.Review.Summary = "changed"
+	clone.State.Plan.Review.CommitMessage.Subject = "changed"
 	*clone.Events[0].PullRequest = PullRequest{URL: "changed"}
 	clone.Events[0].Review.Summary = "changed"
 	*clone.Events[0].DurationSeconds = 99
@@ -63,7 +64,7 @@ func TestClonePlanDetailDeepCopiesMutableFields(t *testing.T) {
 	if slice.Tags[0] != "tag" || slice.RequiredInputs[0].Path != "go.mod" || slice.Verification.Commands[0] != "go test ./..." || slice.Verification.Steps[0].Reason != "step" || slice.VerificationResults[0].Result != "passed" || slice.Extra["key"] != "value" || *slice.Approval.ApprovedBy != "alice" {
 		t.Fatalf("slice was not deeply cloned: %#v", slice)
 	}
-	if detail.State.Plan.Review.Summary != "ready" {
+	if detail.State.Plan.Review.Summary != "ready" || detail.State.Plan.Review.CommitMessage.Subject != "feat(review): persist proposal" {
 		t.Fatalf("review metadata was not deeply cloned: %#v", detail.State.Plan.Review)
 	}
 	if detail.Events[0].Metrics.SessionID != "session" || detail.Events[0].PullRequest.URL != "https://example.com/pr/1" || detail.Events[0].Review.Summary != "ready" || *detail.Events[0].DurationSeconds != 42 || detail.Warnings[0] != "warning" {

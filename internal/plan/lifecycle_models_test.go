@@ -98,6 +98,7 @@ func TestPlanReviewFindingsJSON(t *testing.T) {
 		Verdict:       ReviewVerdictChangesRequested,
 		Summary:       "Needs work.",
 		FindingsCount: 1,
+		CommitMessage: &ReviewCommitMessage{Subject: "feat(review): persist approved commit proposals", Body: "What:\nPersist the proposal.\n\nWhy:\nReuse reviewed context."},
 		Findings: []ReviewFinding{
 			{Severity: "major", File: "internal/run/review.go", Line: 42, Message: "Fix this.", Suggestion: "Adjust the code."},
 		},
@@ -118,6 +119,9 @@ func TestPlanReviewFindingsJSON(t *testing.T) {
 	if len(got.Findings) != 1 || got.Findings[0] != want {
 		t.Fatalf("unexpected findings after JSON round trip: %+v", got.Findings)
 	}
+	if got.CommitMessage == nil || *got.CommitMessage != *review.CommitMessage {
+		t.Fatalf("unexpected commit message after JSON round trip: %+v", got.CommitMessage)
+	}
 
 	var older PlanReview
 	if err := json.Unmarshal([]byte(`{"verdict":"approve","summary":"ready","findings_count":0}`), &older); err != nil {
@@ -125,6 +129,9 @@ func TestPlanReviewFindingsJSON(t *testing.T) {
 	}
 	if len(older.Findings) != 0 {
 		t.Fatalf("older review should have no findings, got %+v", older.Findings)
+	}
+	if older.CommitMessage != nil {
+		t.Fatalf("older review should have no commit message, got %+v", older.CommitMessage)
 	}
 }
 

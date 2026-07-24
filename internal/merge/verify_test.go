@@ -28,7 +28,7 @@ func TestMergeRunsPassingVerifyAfterSquash(t *testing.T) {
 	runner := func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
 		_ = ctx
 		_ = stderr
-		if len(git.calls) == 0 || !strings.HasPrefix(git.calls[len(git.calls)-1], "commit Tao plan plan-a") {
+		if len(git.calls) == 0 || !strings.HasPrefix(git.calls[len(git.calls)-1], "commit feat(merge): use approved review message") {
 			t.Fatalf("verify should run after squash commit, git calls: %#v", git.calls)
 		}
 		calls = append(calls, verifyRunnerCall{cwd: cwd, name: name, args: append([]string(nil), args...)})
@@ -185,7 +185,7 @@ func TestMergeVerifyFailureRollsBackDefault(t *testing.T) {
 		_ = cwd
 		_ = name
 		_ = args
-		if len(git.calls) == 0 || !strings.HasPrefix(git.calls[len(git.calls)-1], "commit Tao plan plan-a") {
+		if len(git.calls) == 0 || !strings.HasPrefix(git.calls[len(git.calls)-1], "commit feat(merge): use approved review message") {
 			t.Fatalf("verify should run after squash commit, git calls: %#v", git.calls)
 		}
 		_, _ = stdout.Write([]byte("build failed\n"))
@@ -373,6 +373,7 @@ func mergeVerifyDetail() *plan.PlanDetail {
 	detail := mergeReadyDetail("base123")
 	detail.Dir = "/plans/plan-a"
 	detail.State.Repo.Root = "/repo/root"
+	detail.State.Plan.Review.Head = "head123"
 	return detail
 }
 

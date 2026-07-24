@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/agent"
+	commitcontract "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/plan"
 )
 
@@ -35,6 +36,62 @@ func TestBatchAgentSessionHonorsConfiguredProviderPermissionsAndRoot(t *testing.
 	}
 	if !metricsCalled {
 		t.Fatal("best-effort metrics callback was not invoked")
+	}
+}
+
+func TestMergeProposalGeneratorDefersRuntimeConfigurationUntilGeneration(t *testing.T) {
+	t.Setenv("TAO_AGENT", "invalid")
+	starts := 0
+	generator, err := NewMergeProposalGenerator(MergeProposalGeneratorConfig{
+		ProcessStarter: func(context.Context, string, string, []string) (Process, error) {
+			starts++
+			return nil, errors.New("unexpected process start")
+		},
+	})
+	if err != nil {
+		t.Fatalf("constructor configured unused runtime: %v", err)
+	}
+	_, err = generator.GenerateMergeProposal(context.Background(), commitMergeProposalContext())
+	if err == nil || !strings.Contains(err.Error(), "TAO_AGENT") {
+		t.Fatalf("generation error = %v, want deferred runtime configuration error", err)
+	}
+	if starts != 0 {
+		t.Fatalf("invalid runtime started %d processes", starts)
+	}
+}
+
+func TestMergeProposalGeneratorUsesOneConfiguredNeutralSession(t *testing.T) {
+	t.Setenv("TAO_AGENT", "claude")
+	t.Setenv("TAO_DANGEROUSLY_SKIP_PERMISSIONS", "true")
+	t.Setenv("TAO_SESSION_TIMEOUT", "30s")
+	var got fakeClaudeStart
+	metricsCalls := 0
+	generator, err := NewMergeProposalGenerator(MergeProposalGeneratorConfig{
+		ProcessStarter: fakeProcessStarter(t, &got, `{"type":"result","result":"{\"type\":\"feat\",\"scope\":\"merge\",\"summary\":\"generate legacy merge messages\",\"what\":\"Generate one exact proposal.\",\"why\":\"Keep legacy reviews mergeable.\"}"}`),
+		Metrics:        func(_ agent.Metrics, _ string) { metricsCalls++ },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal, err := generator.GenerateMergeProposal(context.Background(), commitMergeProposalContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proposal.Scope != "merge" || got.cwd != "/repo" || metricsCalls != 1 {
+		t.Fatalf("proposal/session/metrics = %#v, %#v, %d", proposal, got, metricsCalls)
+	}
+	if !strings.Contains(got.prompt, "head456") || !strings.Contains(got.prompt, "diff --git") {
+		t.Fatalf("proposal prompt lacks exact context: %s", got.prompt)
+	}
+	if !strings.Contains(strings.Join(got.args, " "), "--permission-mode bypassPermissions") {
+		t.Fatalf("proposal permission was not propagated: %v", got.args)
+	}
+}
+
+func commitMergeProposalContext() commitcontract.MergeProposalContext {
+	return commitcontract.MergeProposalContext{
+		RepoRoot: "/repo", PlanID: "plan-a", DefaultBranch: "main", DefaultParent: "parent123",
+		MergeBase: "base123", SourceBranch: "tao/plan-a", SourceHead: "head456", Diff: "diff --git a/a.go b/a.go\n+change\n",
 	}
 }
 

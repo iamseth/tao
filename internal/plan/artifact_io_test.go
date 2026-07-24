@@ -238,7 +238,7 @@ func TestPlanReviewStatePersistence(t *testing.T) {
 	dir := t.TempDir()
 	reviewedAt := time.Date(2026, 6, 28, 7, 1, 2, 0, time.UTC)
 	state := startSliceDetail(dir).State
-	state.Plan.Review = &PlanReview{Verdict: "pass", Summary: "ready to merge", FindingsCount: 2, Base: "base123", Head: "head456", Agent: "pi", ReviewedAt: reviewedAt}
+	state.Plan.Review = &PlanReview{Verdict: "pass", Summary: "ready to merge", FindingsCount: 2, CommitMessage: &ReviewCommitMessage{Subject: "feat(review): persist approved commit proposals", Body: "What:\nPersist the proposal.\n\nWhy:\nReuse reviewed context."}, Base: "base123", Head: "head456", Agent: "pi", ReviewedAt: reviewedAt}
 
 	if err := writeState(dir, state); err != nil {
 		t.Fatal(err)
@@ -259,7 +259,8 @@ func TestPlanReviewStatePersistence(t *testing.T) {
 	readJSONFile(t, filepath.Join(dir, "state.json"), &raw)
 	planObject := raw["plan"].(map[string]any)
 	reviewObject, ok := planObject["review"].(map[string]any)
-	if !ok || reviewObject["verdict"] != "pass" || reviewObject["findings_count"] != float64(2) || reviewObject["reviewed_at"] != reviewedAt.Format(time.RFC3339) {
+	commitMessage, messageOK := reviewObject["commit_message"].(map[string]any)
+	if !ok || !messageOK || commitMessage["subject"] != "feat(review): persist approved commit proposals" || reviewObject["verdict"] != "pass" || reviewObject["findings_count"] != float64(2) || reviewObject["reviewed_at"] != reviewedAt.Format(time.RFC3339) {
 		t.Fatalf("state.json did not persist review metadata: %#v", planObject["review"])
 	}
 }
@@ -311,6 +312,42 @@ func TestWriteStateClearsReviewFindingsWhenNextReviewIsEmpty(t *testing.T) {
 	findings, ok := reviewObject["findings"].([]any)
 	if !ok || len(findings) != 0 {
 		t.Fatalf("state.json should persist an empty findings array, got %#v", reviewObject["findings"])
+	}
+}
+
+func TestWriteStateClearsReviewCommitMessageOnReplacement(t *testing.T) {
+	dir := t.TempDir()
+	reviewedAt := time.Date(2026, 7, 23, 19, 30, 0, 0, time.UTC)
+	state := startSliceDetail(dir).State
+	state.Plan.Review = &PlanReview{
+		Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Summary: "Ready.", Findings: []ReviewFinding{},
+		CommitMessage: &ReviewCommitMessage{Subject: "feat(review): persist approved commit proposals", Body: "What:\nPersist the proposal.\n\nWhy:\nReuse reviewed context."},
+		Base:          "base123", Head: "head123", ReviewedAt: reviewedAt,
+	}
+	if err := writeState(dir, state); err != nil {
+		t.Fatal(err)
+	}
+
+	state.Plan.Review = &PlanReview{
+		Status: ReviewStatusCompleted, Verdict: ReviewVerdictChangesRequested, Summary: "Needs work.", FindingsCount: 1,
+		Findings: []ReviewFinding{{Message: "Fix this."}}, Base: "base123", Head: "head456", ReviewedAt: reviewedAt.Add(time.Minute),
+	}
+	if err := writeState(dir, state); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ReadState(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Plan.Review == nil || got.Plan.Review.CommitMessage != nil {
+		t.Fatalf("replacement review retained commit message: %+v", got.Plan.Review)
+	}
+	var raw map[string]any
+	readJSONFile(t, filepath.Join(dir, "state.json"), &raw)
+	reviewObject := raw["plan"].(map[string]any)["review"].(map[string]any)
+	if value, exists := reviewObject["commit_message"]; !exists || value != nil {
+		t.Fatalf("state.json should persist commit_message: null, got %#v", reviewObject)
 	}
 }
 

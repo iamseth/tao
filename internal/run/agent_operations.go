@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/agent"
+	commitcontract "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 )
@@ -39,6 +40,30 @@ type BatchAgentSession struct {
 	controlRoot     string
 	commandRunnerFn CommandRunner
 	metrics         func(agent.Metrics, string)
+}
+
+// MergeProposalGeneratorConfig configures the exceptional single-merge
+// proposal session through the same provider-neutral runtime settings as other
+// agent operations.
+type MergeProposalGeneratorConfig = BatchAgentSessionConfig
+
+// NewMergeProposalGenerator constructs a strict central proposal generator.
+// Construction does not start a provider session; current review-backed merges
+// therefore remain a zero-call path.
+func NewMergeProposalGenerator(config MergeProposalGeneratorConfig) (commitcontract.Generator, error) {
+	return commitcontract.Generator{Text: mergeProposalTextSession{config: config}}, nil
+}
+
+type mergeProposalTextSession struct {
+	config MergeProposalGeneratorConfig
+}
+
+func (s mergeProposalTextSession) GenerateText(ctx context.Context, repoRoot, prompt string) (string, error) {
+	session, err := NewBatchAgentSession(s.config)
+	if err != nil {
+		return "", fmt.Errorf("configure exceptional merge proposal session: %w", err)
+	}
+	return session.Resolve(ctx, repoRoot, prompt)
 }
 
 func NewBatchAgentSession(config BatchAgentSessionConfig) (BatchAgentSession, error) {
@@ -94,6 +119,8 @@ func (s BatchAgentSession) Resolve(ctx context.Context, integrationRoot, prompt 
 			metrics = *result.Metrics
 		}
 		s.metrics(metrics, result.MetricsWarning)
+	} else if result.MetricsWarning != "" && s.log != nil {
+		_, _ = fmt.Fprintf(s.log, "tao telemetry warning: %s\n", result.MetricsWarning)
 	}
 	text := strings.TrimSpace(result.FinalText)
 	if text == "" {

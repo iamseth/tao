@@ -1908,7 +1908,7 @@ func TestRunWorkPromptInstructsSliceComplete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"write two local files", "verification results JSON file", "Tao updates `state.json`, `slices.json`, duration", "tao slice-complete --plan-dir \"/plans/plan-a\""} {
+	for _, want := range []string{"write local files", "verification results JSON file", "Tao updates `state.json`, `slices.json`, duration", "tao slice-complete --plan-dir \"/plans/plan-a\""} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("expected %q in prompt:\n%s", want, prompt)
 		}
@@ -2858,6 +2858,7 @@ func interruptedServiceGitRunner(t *testing.T, root string, calls *[]string, sta
 				t.Fatalf("status cwd = %q, want immutable root %q", actualCWD, root)
 			}
 			_, _ = io.WriteString(stdout, status())
+		case "ls-files --stage -z", "ls-files --others --exclude-standard -z":
 		default:
 			t.Fatalf("unexpected git command %q", key)
 		}

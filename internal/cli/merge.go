@@ -175,10 +175,16 @@ func (a App) newMergeBatchRunner(ctx context.Context, repository mergepkg.BatchP
 	service := mergepkg.NewService(current.Root, runner)
 	service.Runner = runner
 	store := mergepkg.NewBatchStore(batchesDir, registry.ActiveMergeBatchPath(current))
-	session, err := runpkg.NewBatchAgentSession(runpkg.BatchAgentSessionConfig{ProcessStarter: a.ProcessStarter, Log: a.Out, ControlRoot: current.Root, CommandRunner: runner})
+	agentConfig := runpkg.BatchAgentSessionConfig{ProcessStarter: a.ProcessStarter, Log: a.Out, ControlRoot: current.Root, CommandRunner: runner}
+	session, err := runpkg.NewBatchAgentSession(agentConfig)
 	if err != nil {
 		return nil, fmt.Errorf("configure merge-batch agent: %w", err)
 	}
+	generator, err := runpkg.NewMergeProposalGenerator(agentConfig)
+	if err != nil {
+		return nil, fmt.Errorf("configure exceptional merge-batch proposal generator: %w", err)
+	}
+	service.ProposalGenerator = generator
 	return mergepkg.NewBatchCoordinator(mergepkg.BatchCoordinatorSeams{
 		Store:      store,
 		Workspace:  workspaceOwner,
@@ -342,11 +348,18 @@ func (a App) newMergeServiceRunner(detail *plan.PlanDetail) (mergeServiceRunner,
 			_ = writef(a.Out, format+"\n", args...)
 		}
 	}
+	generator, err := runpkg.NewMergeProposalGenerator(runpkg.MergeProposalGeneratorConfig{
+		ProcessStarter: a.ProcessStarter, Log: a.Out, ControlRoot: repoRoot, CommandRunner: runner,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("configure exceptional merge proposal generator: %w", err)
+	}
 	svc := mergepkg.NewService(repoRoot, runner)
 	svc.Runner = runner
 	svc.Cleaner = manager
 	svc.Logf = logf
 	svc.Now = a.Now
+	svc.ProposalGenerator = generator
 	return svc, nil
 }
 

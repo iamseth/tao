@@ -12,7 +12,7 @@ var topLevelCommandGroups = []commandGroup{
 	},
 	{
 		heading:  "Execution Commands",
-		commands: []string{"run", "queue", "approve", "review", "rework"},
+		commands: []string{"run", "commit", "queue", "approve", "review", "rework"},
 	},
 	{
 		heading:  "Workspace & Cleanup Commands",
