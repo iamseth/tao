@@ -13,6 +13,8 @@ type Runner func(ctx context.Context, cwd string, name string, args []string, st
 // DefaultLocal executes commands on the local machine.
 func DefaultLocal(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
 	cmd := exec.CommandContext(ctx, name, args...) // #nosec G204 -- callers provide explicit command names and arguments.
+	cleanup := configureCommandCancellation(cmd)
+	defer cleanup()
 	if cwd != "" {
 		cmd.Dir = cwd
 	}

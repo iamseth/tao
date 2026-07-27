@@ -537,7 +537,7 @@ func TestPrepareUsesDefaultBranchForWorkspaceBaseFallbackWhenRemoteDefaultMissin
 
 func TestPrepareUsesDefaultBranchForWorkspaceBaseFallbackWhenRemoteDefaultIsOnlyTag(t *testing.T) {
 	repo := newTestRepo(t)
-	runGit(t, repo.path, "tag", "main")
+	runGit(t, repo.path, "tag", "--no-sign", "main")
 	runGit(t, repo.path, "update-ref", "refs/remotes/origin/main", "HEAD")
 	runGit(t, repo.path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
 	commitTestFile(t, repo.path, "master-only.txt", "default branch content\n", "advance master")
