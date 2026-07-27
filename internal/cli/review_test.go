@@ -211,6 +211,11 @@ func TestReviewPrintsClearMessageWhenNoReviewExists(t *testing.T) {
 			t.Fatalf("expected no-review message to contain %q, got %q", want, text)
 		}
 	}
+	for _, notWant := range []string{"Preparing review:", "Verifying completed branch:", "Running agent review:"} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("persisted review display emitted fresh-review phase %q: %q", notWant, text)
+		}
+	}
 }
 
 func TestReviewRunTriggersFreshReview(t *testing.T) {
@@ -253,8 +258,20 @@ func TestReviewRunTriggersFreshReview(t *testing.T) {
 	if !strings.Contains(prompt, "Plan directory: `"+fixture.dir+"`") || !strings.Contains(prompt, "Head: `head123`") {
 		t.Fatalf("expected review prompt with plan dir and head, got %q", prompt)
 	}
-	if !strings.Contains(out.String(), "Review completed: "+fixture.id) || !strings.Contains(out.String(), "Verdict: approve") {
-		t.Fatalf("expected review completion output, got %q", out.String())
+	text := out.String()
+	if !strings.Contains(text, "Review completed: "+fixture.id) || !strings.Contains(text, "Verdict: approve") {
+		t.Fatalf("expected review completion output, got %q", text)
+	}
+	previous := -1
+	for _, phase := range []string{"Preparing review: " + fixture.id, "Verifying completed branch: ", "Running agent review: pi", "Review completed: " + fixture.id} {
+		index := strings.Index(text, phase)
+		if index < 0 || index <= previous {
+			t.Fatalf("review phase %q missing or out of order in %q", phase, text)
+		}
+		previous = index
+	}
+	if strings.Contains(text, "\x1b[") {
+		t.Fatalf("review progress contains terminal control sequence: %q", text)
 	}
 }
 

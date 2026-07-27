@@ -214,6 +214,136 @@ func persistReviewState(t *testing.T, planDir string, detail *plan.PlanDetail) {
 	}
 }
 
+func TestReviewReportsStandalonePhasesInOrderAndStopsOnFailure(t *testing.T) {
+	newService := func(t *testing.T, runner CommandRunner, creator ReviewCreator, out *bytes.Buffer) (Service, Request) {
+		t.Helper()
+		plansRoot := t.TempDir()
+		planDir := filepath.Join(plansRoot, "plan-a")
+		if err := os.MkdirAll(planDir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		repoRoot := t.TempDir()
+		if err := os.WriteFile(filepath.Join(repoRoot, "go.mod"), []byte("module example.com/review\n\ngo 1.26\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		detail := runPlanDetail(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
+		detail.Dir = planDir
+		detail.State.Repo.Root = repoRoot
+		detail.State.Plan.LastRunCommitPolicy = CommitPolicySlice.String()
+		detail.State.Workspace = &plan.Workspace{Strategy: plan.WorkspaceStrategyCurrent}
+		persistReviewState(t, planDir, detail)
+		encodedSlices, err := json.Marshal(detail.Slices)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(planDir, "slices.json"), encodedSlices, 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		options := ResolvedRunOptions{Mode: ModeRun, CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi}
+		service := NewService(plan.NewFileRepository(plansRoot), out, Options{
+			ExecutionConfig: ExecutionConfig{ResolvedRunOptions: options},
+			RunDependencies: RunDependencies{CommandRunner: runner, ReviewCreator: creator},
+		})
+		return service, Request{Input: "plan-a", ResolvedRunOptions: options}
+	}
+
+	t.Run("success", func(t *testing.T) {
+		var out bytes.Buffer
+		creatorCalled := false
+		runner := func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+			if name == "git" && runGitKey(args) == "status --porcelain" {
+				return nil
+			}
+			if name == "sh" && strings.Join(args, " ") == "-c go build ./... && go test ./..." {
+				if !strings.Contains(out.String(), "Verifying completed branch: ") {
+					t.Fatal("verification phase was not emitted before repository verification")
+				}
+				return nil
+			}
+			t.Fatalf("unexpected command %s %v", name, args)
+			return nil
+		}
+		creator := reviewCreatorFunc(func(context.Context, ReviewRun) (plan.PlanReview, error) {
+			creatorCalled = true
+			if !strings.Contains(out.String(), "Running agent review: pi\n") {
+				t.Fatal("agent phase was not emitted before review creation")
+			}
+			return plan.PlanReview{Verdict: plan.ReviewVerdictApprove}, nil
+		})
+		service, request := newService(t, runner, creator, &out)
+
+		if _, err := service.Review(context.Background(), request); err != nil {
+			t.Fatal(err)
+		}
+		if !creatorCalled {
+			t.Fatal("review creator was not called")
+		}
+		assertTextOrder(t, out.String(), "Preparing review: plan-a", "Verifying completed branch: ", "Running agent review: pi")
+	})
+
+	t.Run("preparation failure", func(t *testing.T) {
+		var out bytes.Buffer
+		creatorCalled := false
+		runner := reviewGateGitRunner(" M uncommitted.go\n")
+		creator := reviewCreatorFunc(func(context.Context, ReviewRun) (plan.PlanReview, error) {
+			creatorCalled = true
+			return plan.PlanReview{}, nil
+		})
+		service, request := newService(t, runner, creator, &out)
+
+		if _, err := service.Review(context.Background(), request); err == nil {
+			t.Fatal("expected preparation failure")
+		}
+		if creatorCalled || strings.Contains(out.String(), "Verifying completed branch:") || strings.Contains(out.String(), "Running agent review:") || strings.Contains(out.String(), "Review completed:") {
+			t.Fatalf("preparation failure printed a later phase or completion: %q", out.String())
+		}
+	})
+
+	t.Run("verification failure", func(t *testing.T) {
+		var out bytes.Buffer
+		creatorCalled := false
+		runner := func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+			if name == "git" && runGitKey(args) == "status --porcelain" {
+				return nil
+			}
+			if name == "sh" {
+				return fmt.Errorf("tests failed")
+			}
+			t.Fatalf("unexpected command %s %v", name, args)
+			return nil
+		}
+		creator := reviewCreatorFunc(func(context.Context, ReviewRun) (plan.PlanReview, error) {
+			creatorCalled = true
+			return plan.PlanReview{}, nil
+		})
+		service, request := newService(t, runner, creator, &out)
+
+		if _, err := service.Review(context.Background(), request); err == nil {
+			t.Fatal("expected verification failure")
+		}
+		if creatorCalled || strings.Contains(out.String(), "Running agent review:") || strings.Contains(out.String(), "Review completed:") {
+			t.Fatalf("verification failure printed a later phase or completion: %q", out.String())
+		}
+		assertTextOrder(t, out.String(), "Preparing review: plan-a", "Verifying completed branch: ")
+	})
+}
+
+func assertTextOrder(t *testing.T, text string, values ...string) {
+	t.Helper()
+	previous := -1
+	for _, value := range values {
+		index := strings.Index(text, value)
+		if index < 0 {
+			t.Fatalf("output missing %q: %q", value, text)
+		}
+		if index <= previous {
+			t.Fatalf("output is not ordered at %q: %q", value, text)
+		}
+		previous = index
+	}
+}
+
 // reviewGateDetail builds a plan detail whose single completed slice declares
 // the given expected files. The review gate uses them only for plan shape; its
 // cleanliness oracle does not filter leftovers by expected_files.

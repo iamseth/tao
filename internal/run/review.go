@@ -52,6 +52,9 @@ func (s Service) Review(ctx context.Context, request Request) (review plan.PlanR
 			err = releaseErr
 		}
 	}()
+	if err := writef(s.out, "Preparing review: %s\n", detail.State.Plan.ID); err != nil {
+		return plan.PlanReview{}, err
+	}
 	execution, err := s.prepareReviewExecution(detail, config)
 	if err != nil {
 		return plan.PlanReview{}, err
@@ -61,8 +64,14 @@ func (s Service) Review(ctx context.Context, request Request) (review plan.PlanR
 			return plan.PlanReview{}, fmt.Errorf("prepare review: %w", err)
 		}
 	}
+	if err := writef(s.out, "Verifying completed branch: %s\n", execution.ExecutionRoot); err != nil {
+		return plan.PlanReview{}, err
+	}
 	if err := newFinalizer(s.out, execution).verifyCompletedBranch(ctx, detail, execution.ExecutionRoot); err != nil {
 		return plan.PlanReview{}, fmt.Errorf("prepare review: %w", err)
+	}
+	if err := writef(s.out, "Running agent review: %s\n", execution.Config.Agent); err != nil {
+		return plan.PlanReview{}, err
 	}
 	return execution.Dependencies.ReviewCreator.CreateReview(ctx, ReviewRun{PlanDir: absolutePlanDir(detail.Dir), PlanID: detail.State.Plan.ID, LogPath: plan.LogPath(detail.Dir), Detail: detail, RepoRoot: execution.ExecutionRoot, Base: reviewDetailBase(detail)})
 }
