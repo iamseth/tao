@@ -56,10 +56,13 @@ var installPromptsCommand = commandMetadata{
 var doctorCommand = commandMetadata{
 	name:                  "doctor",
 	minPrefix:             "d",
-	usageLines:            []string{"doctor (d)"},
+	usageLines:            []string{"doctor (d) [--verbose|-v]"},
 	completionDescription: "Check Tao prompt wrappers and local tools",
-	long:                  "Check Tao prompt wrapper status for every supported agent found in PATH and report required, development, and recommended executables.",
-	examples:              "  tao doctor",
+	long:                  "Check supported agents and report actionable prompt and tool problems. Use --verbose or -v for the full environment report.",
+	examples: "  tao doctor\n" +
+		"  tao doctor --verbose\n" +
+		"  tao doctor -v",
+	registerFlags: registerDoctorFlags,
 	execute: func(c commandContext) error {
 		return c.app.doctor(c.args)
 	},
@@ -85,6 +88,11 @@ func registerPromptFlagsWithDefaults(fs *flag.FlagSet, defaults runtimeconfig.Ru
 func registerInstallPromptsFlags(fs *flag.FlagSet) {
 	fs.Bool("force", false, "overwrite existing non-tao-managed command files")
 	fs.Bool("check", false, "check installed wrappers without writing")
+}
+
+func registerDoctorFlags(fs *flag.FlagSet) {
+	fs.Bool("verbose", false, "show the full environment report")
+	fs.Bool("v", false, "show the full environment report")
 }
 
 func (a App) prompt(ctx context.Context, repo plan.Resolver, args []string) error {
@@ -170,64 +178,160 @@ func (a App) installPrompts(args []string) error {
 }
 
 func (a App) doctor(args []string) error {
+	fs, positional, err := a.parseArgs("doctor", args, registerDoctorFlags)
+	if err != nil {
+		return err
+	}
+	if err := requirePositionals(positional, 0, "usage: tao doctor [--verbose|-v]"); err != nil {
+		return err
+	}
+	report, err := collectDoctorReport()
+	if err != nil {
+		return err
+	}
+	if flagBoolValue(fs, "verbose") || flagBoolValue(fs, "v") {
+		return renderVerboseDoctor(a.Out, report)
+	}
+	return renderCompactDoctor(a.Out, report)
+}
+
+type doctorReport struct {
+	selectedAgent runtimeconfig.AgentKind
+	agents        []agentpkg.Descriptor
+	prompts       []promptinstall.Result
+	tools         []doctorToolResultCategory
+}
+
+type doctorToolResultCategory struct {
+	name    string
+	results []doctorToolResult
+}
+
+type doctorToolResult struct {
+	tool   doctorTool
+	status string
+	found  string
+}
+
+func collectDoctorReport() (doctorReport, error) {
 	defaults, err := cliEnvDefaults()
 	if err != nil {
-		return err
+		return doctorReport{}, err
 	}
-	_, positional, err := a.parseArgs("doctor", args, nil)
+	report := doctorReport{selectedAgent: defaults.Agent, agents: agentpkg.Installed()}
+	report.prompts, err = promptinstall.CheckDiscovered(report.agents)
 	if err != nil {
+		return doctorReport{}, err
+	}
+
+	required := doctorToolResultCategory{name: "required"}
+	for _, descriptor := range report.agents {
+		required.results = append(required.results, collectDoctorTool(doctorAgentTool(descriptor.Kind)))
+	}
+	report.tools = append(report.tools, required)
+	for _, category := range doctorSharedToolCategories() {
+		collected := doctorToolResultCategory{name: category.name}
+		for _, tool := range category.tools {
+			collected.results = append(collected.results, collectDoctorTool(tool))
+		}
+		report.tools = append(report.tools, collected)
+	}
+	return report, nil
+}
+
+func collectDoctorTool(tool doctorTool) doctorToolResult {
+	status, found := doctorToolStatus(tool)
+	return doctorToolResult{tool: tool, status: status, found: found}
+}
+
+func renderCompactDoctor(out io.Writer, report doctorReport) error {
+	agents := make([]string, 0, len(report.agents))
+	for _, descriptor := range report.agents {
+		agents = append(agents, descriptor.Label)
+	}
+	if len(agents) == 0 {
+		agents = append(agents, "none")
+	}
+	if err := writef(out, "agents: %s\n", strings.Join(agents, ", ")); err != nil {
 		return err
 	}
-	if err := requirePositionals(positional, 0, "usage: tao doctor"); err != nil {
-		return err
-	}
-	installed := agentpkg.Installed()
-	results, err := promptinstall.CheckDiscovered(installed)
-	if err != nil {
-		return err
-	}
-	if err := writef(a.Out, "selected runtime agent: %s\n", defaults.Agent); err != nil {
-		return err
-	}
-	if len(installed) == 0 {
-		if err := writeln(a.Out, "supported agents: none found in PATH"); err != nil {
+	for _, descriptor := range report.agents {
+		var problems []promptinstall.Result
+		for _, result := range promptResultsForAgent(report.prompts, descriptor.Kind) {
+			if result.Status != "current" {
+				problems = append(problems, result)
+			}
+		}
+		if len(problems) == 0 {
+			continue
+		}
+		if err := writef(out, "\nprompts (%s):\n", descriptor.Label); err != nil {
 			return err
 		}
-	}
-	for _, descriptor := range installed {
-		if err := writef(a.Out, "\nprompts (%s):\n", descriptor.Label); err != nil {
-			return err
-		}
-		if err := writef(a.Out, "  %s\n", descriptor.DoctorDescription); err != nil {
-			return err
-		}
-		agentResults := promptResultsForAgent(results, descriptor.Kind)
-		nameWidth := doctorPromptNameWidth(agentResults)
-		for _, result := range agentResults {
-			if err := writef(a.Out, "  %-*s %s %s\n", nameWidth, result.Name, doctorStatusLabel(result.Status, 11), result.Path); err != nil {
+		nameWidth := doctorPromptNameWidth(problems)
+		for _, result := range problems {
+			if err := writef(out, "  %-*s %s %s\n", nameWidth, result.Name, doctorStatusLabel(result.Status, 11), result.Path); err != nil {
 				return err
 			}
 		}
 	}
-	if err := writeln(a.Out, "\ntools required:"); err != nil {
+	for _, category := range report.tools {
+		var missing []doctorToolResult
+		for _, result := range category.results {
+			if result.status != "ok" {
+				missing = append(missing, result)
+			}
+		}
+		if len(missing) == 0 {
+			continue
+		}
+		if err := writef(out, "\ntools %s:\n", category.name); err != nil {
+			return err
+		}
+		for _, result := range missing {
+			if err := writeDoctorToolResult(out, result); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func renderVerboseDoctor(out io.Writer, report doctorReport) error {
+	if err := writef(out, "selected runtime agent: %s\n", report.selectedAgent); err != nil {
 		return err
 	}
-	if len(installed) == 0 {
-		if err := writeln(a.Out, "  no supported agent executables found"); err != nil {
+	if len(report.agents) == 0 {
+		if err := writeln(out, "supported agents: none found in PATH"); err != nil {
 			return err
 		}
 	}
-	for _, descriptor := range installed {
-		if err := writeDoctorTool(a.Out, doctorAgentTool(descriptor.Kind)); err != nil {
+	for _, descriptor := range report.agents {
+		if err := writef(out, "\nprompts (%s):\n", descriptor.Label); err != nil {
 			return err
+		}
+		if err := writef(out, "  %s\n", descriptor.DoctorDescription); err != nil {
+			return err
+		}
+		agentResults := promptResultsForAgent(report.prompts, descriptor.Kind)
+		nameWidth := doctorPromptNameWidth(agentResults)
+		for _, result := range agentResults {
+			if err := writef(out, "  %-*s %s %s\n", nameWidth, result.Name, doctorStatusLabel(result.Status, 11), result.Path); err != nil {
+				return err
+			}
 		}
 	}
-	for _, category := range doctorSharedToolCategories() {
-		if err := writef(a.Out, "\ntools %s:\n", category.name); err != nil {
+	for _, category := range report.tools {
+		if err := writef(out, "\ntools %s:\n", category.name); err != nil {
 			return err
 		}
-		for _, tool := range category.tools {
-			if err := writeDoctorTool(a.Out, tool); err != nil {
+		if category.name == "required" && len(report.agents) == 0 {
+			if err := writeln(out, "  no supported agent executables found"); err != nil {
+				return err
+			}
+		}
+		for _, result := range category.results {
+			if err := writeDoctorToolResult(out, result); err != nil {
 				return err
 			}
 		}
@@ -306,12 +410,12 @@ func promptResultsForAgent(results []promptinstall.Result, agent runtimeconfig.A
 	return matched
 }
 
-func writeDoctorTool(out io.Writer, tool doctorTool) error {
-	status, found := doctorToolStatus(tool)
+func writeDoctorToolResult(out io.Writer, result doctorToolResult) error {
+	found := result.found
 	if found != "" {
 		found = " (" + found + ")"
 	}
-	return writef(out, "  %s %s%s\n", doctorStatusLabel(status, 9), tool.name, found)
+	return writef(out, "  %s %s%s\n", doctorStatusLabel(result.status, 9), result.tool.name, found)
 }
 
 func doctorAgentTool(agent runtimeconfig.AgentKind) doctorTool {

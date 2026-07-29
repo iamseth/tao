@@ -44,7 +44,7 @@ git clone https://github.com/iamseth/tao.git
 cd tao
 make build
 ./bin/tao install-prompts   # install agent prompts
-./bin/tao doctor            # check required tools
+./bin/tao doctor            # summarize agents and actionable setup problems
 ```
 
 Plan and slice inside your agent (e.g. Pi, Claude, OpenCode, or Codex) with a prompt like:
@@ -141,16 +141,19 @@ unambiguous prefixes shown by help, such as `tao l`, `tao li`, and `tao list`.
 
 ```sh
 tao install-prompts [--force] [--check]
-tao doctor
+tao doctor [--verbose|-v]
 tao prompt <prompt> [--plan-dir DIR] [--commit-policy slice|none] [--execution-mode isolated|current] [--commit=false] [--arguments TEXT]
 tao draft-prompt <name> [--from FILE] [--force]
 ```
 
 `tao install-prompts` installs Tao-managed prompts for every supported agent
-executable found in `PATH`; `tao doctor` reports each installed agent's prompt
-status. Normal commands emit one non-blocking stderr warning naming agents with
-stale managed prompts and recommend rerunning `tao install-prompts`. Missing or
-unmanaged prompts are not included in this automatic warning.
+executable found in `PATH`. By default, `tao doctor` lists discovered agents and
+only actionable setup problems: non-current prompts and missing tools. Use
+`tao doctor --verbose` or `tao doctor -v` for the full report, including the
+selected runtime, every prompt, and present tools. Normal commands emit one
+non-blocking stderr warning naming agents with stale managed prompts and
+recommend rerunning `tao install-prompts`. Missing or unmanaged prompts are not
+included in this automatic warning.
 
 ### Repository note backlog
 

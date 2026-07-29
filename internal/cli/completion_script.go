@@ -182,6 +182,7 @@ _tao() {
 ` + zshCommandArguments("install-prompts") + `
       ;;
     ` + commandAliasPattern("doctor") + `)
+` + zshCommandArguments("doctor") + `
       ;;
     ` + commandAliasPattern("completion") + `)
       compadd zsh

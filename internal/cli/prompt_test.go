@@ -307,7 +307,7 @@ func TestInstallPromptsRefusesUnmanagedFiles(t *testing.T) {
 	}
 }
 
-func TestDoctorReportsWrapperStatus(t *testing.T) {
+func TestDoctorVerboseReportsWrapperStatus(t *testing.T) {
 	clearTaoEnv(t)
 	setPathExecutables(t, "pi")
 	home := t.TempDir()
@@ -319,7 +319,7 @@ func TestDoctorReportsWrapperStatus(t *testing.T) {
 	}
 
 	out.Reset()
-	if err := app.Run(context.Background(), []string{"doctor"}); err != nil {
+	if err := app.Run(context.Background(), []string{"doctor", "--verbose"}); err != nil {
 		t.Fatal(err)
 	}
 	text := stripANSIGreen(out.String())
@@ -341,6 +341,28 @@ func TestDoctorReportsWrapperStatus(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), colorGreen("✓ current  ")) {
 		t.Fatalf("expected current wrappers, got %q", text)
+	}
+	verboseOutput := out.String()
+	out.Reset()
+	if err := app.Run(context.Background(), []string{"doctor", "-v"}); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != verboseOutput {
+		t.Fatalf("expected -v to match --verbose; short output %q, verbose output %q", out.String(), verboseOutput)
+	}
+
+	out.Reset()
+	if err := app.Run(context.Background(), []string{"doctor"}); err != nil {
+		t.Fatal(err)
+	}
+	compact := stripANSIGreen(out.String())
+	if !strings.HasPrefix(compact, "agents: pi\n") {
+		t.Fatalf("expected compact agent summary, got %q", compact)
+	}
+	for _, unwanted := range []string{"selected runtime agent:", "prompts (pi):", "✓ current", "✓ ok", "tools required:"} {
+		if strings.Contains(compact, unwanted) {
+			t.Fatalf("expected compact healthy output to omit %q, got %q", unwanted, compact)
+		}
 	}
 }
 
@@ -369,7 +391,43 @@ func TestDoctorReportsMissingAndValidatesUsage(t *testing.T) {
 
 	err := app.Run(context.Background(), []string{"doctor", "extra"})
 	if err == nil || !strings.Contains(err.Error(), "usage: tao doctor") {
-		t.Fatalf("expected doctor agent argument error, got %v", err)
+		t.Fatalf("expected doctor argument error, got %v", err)
+	}
+	if err := app.Run(context.Background(), []string{"doctor", "--unknown"}); err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {
+		t.Fatalf("expected unknown doctor flag error, got %v", err)
+	}
+}
+
+func TestDoctorCompactReportsStaleAndUnmanagedPrompts(t *testing.T) {
+	clearTaoEnv(t)
+	setPathExecutables(t, "claude")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	var out bytes.Buffer
+	app := App{Out: &out, Err: &out}
+	if err := app.Run(context.Background(), []string{"install-prompts"}); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(home, ".claude", "commands")
+	if err := os.WriteFile(filepath.Join(root, "run.md"), []byte("<!-- tao-managed: run v1 -->\nstale\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "pr.md"), []byte("custom\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out.Reset()
+	if err := app.Run(context.Background(), []string{"doctor"}); err != nil {
+		t.Fatal(err)
+	}
+	text := stripANSIGreen(out.String())
+	for _, want := range []string{"agents: claude", "prompts (claude):", "run", "• stale", "pr", "• unmanaged"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected compact prompt problem %q, got %q", want, text)
+		}
+	}
+	if strings.Contains(text, "✓ current") {
+		t.Fatalf("expected compact output to omit current prompts, got %q", text)
 	}
 }
 
@@ -420,7 +478,7 @@ func TestInstallPromptsAndDoctorUseSelectedClaudeAgent(t *testing.T) {
 	}
 
 	out.Reset()
-	if err := app.Run(context.Background(), []string{"doctor"}); err != nil {
+	if err := app.Run(context.Background(), []string{"doctor", "--verbose"}); err != nil {
 		t.Fatal(err)
 	}
 	text := stripANSIGreen(out.String())
@@ -489,7 +547,7 @@ func TestInstallPromptsAndDoctorUseSelectedOpenCodeAgent(t *testing.T) {
 	}
 
 	out.Reset()
-	if err := app.Run(context.Background(), []string{"doctor"}); err != nil {
+	if err := app.Run(context.Background(), []string{"doctor", "--verbose"}); err != nil {
 		t.Fatal(err)
 	}
 	text := stripANSIGreen(out.String())
@@ -549,7 +607,7 @@ func TestInstallPromptsAndDoctorUseSelectedPiAgent(t *testing.T) {
 	}
 
 	out.Reset()
-	if err := app.Run(context.Background(), []string{"doctor"}); err != nil {
+	if err := app.Run(context.Background(), []string{"doctor", "--verbose"}); err != nil {
 		t.Fatal(err)
 	}
 	text := stripANSIGreen(out.String())
@@ -600,7 +658,7 @@ func TestInstallPromptsAndDoctorManageEveryInstalledAgent(t *testing.T) {
 	}
 
 	out.Reset()
-	if err := app.Run(context.Background(), []string{"doctor"}); err != nil {
+	if err := app.Run(context.Background(), []string{"doctor", "--verbose"}); err != nil {
 		t.Fatal(err)
 	}
 	text = stripANSIGreen(out.String())
@@ -616,6 +674,18 @@ func TestInstallPromptsAndDoctorManageEveryInstalledAgent(t *testing.T) {
 		if strings.Count(text, heading) != 1 {
 			t.Fatalf("expected shared heading %q once, got %q", heading, text)
 		}
+	}
+
+	out.Reset()
+	if err := app.Run(context.Background(), []string{"doctor"}); err != nil {
+		t.Fatal(err)
+	}
+	compact := stripANSIGreen(out.String())
+	if !strings.HasPrefix(compact, "agents: pi, codex\n") {
+		t.Fatalf("expected registry-ordered compact agents, got %q", compact)
+	}
+	if strings.Contains(compact, "prompts (") || strings.Contains(compact, "selected runtime agent:") {
+		t.Fatalf("expected compact output to omit healthy prompt groups and selected runtime, got %q", compact)
 	}
 }
 
@@ -648,9 +718,7 @@ func TestDoctorReportsToolCategoriesAndMissingWarnings(t *testing.T) {
 	}
 	text := stripANSIGreen(out.String())
 	for _, want := range []string{
-		"supported agents: none found in PATH",
-		"tools required:",
-		"no supported agent executables found",
+		"agents: none",
 		"tools dev:",
 		"⚠ warning git (missing)",
 		"tools recommended:",
@@ -678,7 +746,7 @@ func TestDoctorReportsPresentToolsAndFdfindAlias(t *testing.T) {
 	t.Setenv("PATH", bin)
 	var out bytes.Buffer
 	app := App{Out: &out, Err: &out}
-	if err := app.Run(context.Background(), []string{"doctor"}); err != nil {
+	if err := app.Run(context.Background(), []string{"doctor", "--verbose"}); err != nil {
 		t.Fatal(err)
 	}
 	text := stripANSIGreen(out.String())
@@ -695,6 +763,20 @@ func TestDoctorReportsPresentToolsAndFdfindAlias(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), colorGreen("✓ ok     ")+" pi (pi)") {
 		t.Fatalf("expected green ok tool status, got %q", out.String())
+	}
+
+	out.Reset()
+	if err := app.Run(context.Background(), []string{"doctor"}); err != nil {
+		t.Fatal(err)
+	}
+	compact := stripANSIGreen(out.String())
+	for _, unwanted := range []string{"✓ ok", "git (git)", "fd (fdfind)", "AWS CLI (aws) (aws)"} {
+		if strings.Contains(compact, unwanted) {
+			t.Fatalf("expected compact output to omit present tool %q, got %q", unwanted, compact)
+		}
+	}
+	if !strings.Contains(compact, "⚠ warning ast-grep (missing)") {
+		t.Fatalf("expected compact output to retain missing tools, got %q", compact)
 	}
 }
 
