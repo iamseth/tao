@@ -14,14 +14,52 @@ import (
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+	"github.com/iamseth/tao/internal/taodata"
 )
+
+var suiteTaoDataHome string
 
 func TestMain(m *testing.M) {
 	for _, key := range testTaoEnvKeys() {
 		_ = os.Unsetenv(key)
 	}
+
+	dataHome, err := os.MkdirTemp("", "tao-cli-data-home-")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cli test setup: create Tao data home: %v\n", err)
+		os.Exit(1)
+	}
+	if err := os.Setenv("TAO_DATA_HOME", dataHome); err != nil {
+		_ = os.RemoveAll(dataHome)
+		fmt.Fprintf(os.Stderr, "cli test setup: set TAO_DATA_HOME: %v\n", err)
+		os.Exit(1)
+	}
+	suiteTaoDataHome = dataHome
+
 	installTestPiRPC()
-	os.Exit(m.Run())
+	code := m.Run()
+	if err := os.RemoveAll(dataHome); err != nil {
+		fmt.Fprintf(os.Stderr, "cli test cleanup: remove Tao data home: %v\n", err)
+	}
+	os.Exit(code)
+}
+
+func TestCLIDataHomeIsSuiteOwned(t *testing.T) {
+	if got := taodata.DataHome(); got != suiteTaoDataHome {
+		t.Fatalf("default data home = %q, want suite data home %q", got, suiteTaoDataHome)
+	}
+
+	t.Run("temporary override", func(t *testing.T) {
+		override := t.TempDir()
+		t.Setenv("TAO_DATA_HOME", override)
+		if got := taodata.DataHome(); got != override {
+			t.Fatalf("overridden data home = %q, want %q", got, override)
+		}
+	})
+
+	if got := taodata.DataHome(); got != suiteTaoDataHome {
+		t.Fatalf("restored data home = %q, want suite data home %q", got, suiteTaoDataHome)
+	}
 }
 
 func installTestPiRPC() {
