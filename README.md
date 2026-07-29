@@ -452,19 +452,10 @@ agent-specific guidance.
 
 ### Releasing (maintainers)
 
-Releases are built and published by GitHub Actions (`.github/workflows/release.yml`
-with GoReleaser) when a semantic version tag is pushed. Each release publishes
-macOS and Linux artifacts (`darwin`/`linux`, `amd64`/`arm64`) and updates the
-`iamseth/homebrew-tap` formula.
+Stable releases are built and published by GitHub Actions with GoReleaser,
+including platform archives, checksums, and a Homebrew formula update. Before
+releasing, configure the `HOMEBREW_TAP_GITHUB_TOKEN` repository secret with
+write access to `iamseth/homebrew-tap`.
 
-Before the first release, configure a repository secret named
-`HOMEBREW_TAP_GITHUB_TOKEN` with write access to `iamseth/homebrew-tap`. The
-release job needs it to push the updated formula; tap updates fail without it.
-
-To cut a release:
-
-1. Choose a semantic version and tag it as `vMAJOR.MINOR.PATCH` (e.g. `v0.1.0`).
-2. Push the tag: `git push origin vMAJOR.MINOR.PATCH`.
-3. Confirm the GitHub Release was created with the expected artifacts and checksums.
-4. Confirm the formula update landed in `iamseth/homebrew-tap`.
-5. Test the install: `brew install iamseth/tap/tao && tao version`.
+Follow the complete preparation, tagging, verification, and failure procedure in
+the [maintainer releasing guide](docs/releasing.md).
