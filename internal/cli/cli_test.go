@@ -6,8 +6,13 @@ import (
 	"testing"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/promptinstall"
 	planview "github.com/iamseth/tao/internal/view"
 )
+
+func init() {
+	defaultPromptFreshnessCheck = func() ([]promptinstall.Result, error) { return nil, nil }
+}
 
 func TestColorHelpersCoverStatusAndDoneBranches(t *testing.T) {
 	for _, status := range []string{plan.StatusCompleted, plan.StatusInProgress, plan.StatusBlocked, plan.StatusPlanned, plan.StatusPending, "weird"} {

@@ -34,6 +34,7 @@ type App struct {
 	RepoHealthCheck          func(context.Context, taodata.Repo) taodata.RepoHealth
 	AcquireNotePromotionLock NotePromotionLockAcquirer
 	WorkspaceManager         WorkspaceManagerFactory
+	PromptFreshnessCheck     PromptFreshnessChecker
 	// Now supplies the wall clock for timestamps recorded by commands. Tests
 	// inject a fixed clock; when nil it defaults to time.Now.
 	Now func() time.Time
@@ -144,6 +145,9 @@ func (a App) Run(ctx context.Context, args []string) error {
 	}
 	if metadata.execute == nil {
 		return fmt.Errorf("command %q is not executable", metadata.name)
+	}
+	if metadata.name != "version" && metadata.name != doctorCommand.name && metadata.name != installPromptsCommand.name {
+		a.warnIfStalePrompts()
 	}
 	return metadata.execute(a.newCommandContext(metadata, ctx, plansDir, args[1:]))
 }

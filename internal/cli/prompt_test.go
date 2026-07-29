@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,7 +11,87 @@ import (
 	"testing"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/promptinstall"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 )
+
+func TestRunWarnsOnceForStaleManagedPromptsAndExecutesCommand(t *testing.T) {
+	var out, errOut bytes.Buffer
+	app := App{
+		Out: &out,
+		Err: &errOut,
+		PromptFreshnessCheck: func() ([]promptinstall.Result, error) {
+			return []promptinstall.Result{
+				{Agent: runtimeconfig.AgentPi, Status: "missing"},
+				{Agent: runtimeconfig.AgentPi, Status: "stale"},
+				{Agent: runtimeconfig.AgentPi, Status: "stale"},
+				{Agent: runtimeconfig.AgentClaude, Status: "unmanaged"},
+				{Agent: runtimeconfig.AgentCodex, Status: "stale"},
+			}, nil
+		},
+	}
+
+	if err := app.Run(context.Background(), []string{"prompt", "plan"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "You are in PLAN mode") {
+		t.Fatalf("expected requested command to execute, got %q", out.String())
+	}
+	want := "warning: stale Tao-managed prompts for pi, codex; run tao install-prompts\n"
+	if got := errOut.String(); got != want {
+		t.Fatalf("stale warning = %q, want %q", got, want)
+	}
+}
+
+func TestPromptFreshnessFailuresDoNotBlockCommand(t *testing.T) {
+	for _, failure := range []string{"executable lookup", "prompt directory", "Pi extension inspection"} {
+		t.Run(failure, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			app := App{
+				Out: &out,
+				Err: &errOut,
+				PromptFreshnessCheck: func() ([]promptinstall.Result, error) {
+					return nil, errors.New(failure)
+				},
+			}
+			if err := app.Run(context.Background(), []string{"prompt", "plan"}); err != nil {
+				t.Fatalf("requested command failed: %v", err)
+			}
+			if out.Len() == 0 {
+				t.Fatal("expected requested command output")
+			}
+			if errOut.Len() != 0 {
+				t.Fatalf("freshness failure should be silent, got %q", errOut.String())
+			}
+		})
+	}
+}
+
+func TestPromptFreshnessWarningSkipsDirectStatusAndNonCommandPaths(t *testing.T) {
+	clearTaoEnv(t)
+	setPathExecutables(t)
+	calls := 0
+	check := func() ([]promptinstall.Result, error) {
+		calls++
+		return []promptinstall.Result{{Agent: runtimeconfig.AgentPi, Status: "stale"}}, nil
+	}
+	for _, args := range [][]string{
+		{"doctor"},
+		{"install-prompts", "--check"},
+		{"prompt", "--help"},
+		{"--version"},
+		{"unknown"},
+	} {
+		var out, errOut bytes.Buffer
+		_ = (App{Out: &out, Err: &errOut, PromptFreshnessCheck: check}).Run(context.Background(), args)
+		if errOut.Len() != 0 {
+			t.Fatalf("%v emitted duplicate stale warning: %q", args, errOut.String())
+		}
+	}
+	if calls != 0 {
+		t.Fatalf("freshness check called %d times on excluded paths", calls)
+	}
+}
 
 func TestPromptArgumentsStdinHandlesShellMetacharacters(t *testing.T) {
 	clearTaoEnv(t)
@@ -171,6 +252,7 @@ func TestPromptRunExecutionMode(t *testing.T) {
 
 func TestInstallPromptsWritesAndChecksPiPrompts(t *testing.T) {
 	clearTaoEnv(t)
+	setPathExecutables(t, "pi")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	root := filepath.Join(home, ".pi", "agent", "prompts")
@@ -208,6 +290,7 @@ func TestInstallPromptsWritesAndChecksPiPrompts(t *testing.T) {
 
 func TestInstallPromptsRefusesUnmanagedFiles(t *testing.T) {
 	clearTaoEnv(t)
+	setPathExecutables(t, "pi")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	root := filepath.Join(home, ".pi", "agent", "prompts")
@@ -226,6 +309,7 @@ func TestInstallPromptsRefusesUnmanagedFiles(t *testing.T) {
 
 func TestDoctorReportsWrapperStatus(t *testing.T) {
 	clearTaoEnv(t)
+	setPathExecutables(t, "pi")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	var out bytes.Buffer
@@ -241,9 +325,8 @@ func TestDoctorReportsWrapperStatus(t *testing.T) {
 	text := stripANSIGreen(out.String())
 	nameWidth := len("improve-codebase-architecture")
 	for _, want := range []string{
-		"selected agent: pi",
-		"selected prompt target: Pi global prompt templates and Tao commit extension command",
-		"prompts:",
+		"selected runtime agent: pi",
+		"prompts (pi):",
 		"Pi prompt templates plus Tao commit extension command",
 		fmt.Sprintf("%-*s ✓ current", nameWidth, "slice"),
 		fmt.Sprintf("%-*s ✓ current", nameWidth, "run"),
@@ -263,6 +346,7 @@ func TestDoctorReportsWrapperStatus(t *testing.T) {
 
 func TestDoctorReportsMissingAndValidatesUsage(t *testing.T) {
 	clearTaoEnv(t)
+	setPathExecutables(t, "pi")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	var out bytes.Buffer
@@ -293,7 +377,7 @@ func TestInstallPromptsAndDoctorUseSelectedClaudeAgent(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("TAO_AGENT", "claude")
-	t.Setenv("PATH", t.TempDir())
+	setPathExecutables(t, "claude")
 	var out bytes.Buffer
 	app := App{Out: &out, Err: &out}
 	if err := app.Run(context.Background(), []string{"install-prompts"}); err != nil {
@@ -341,11 +425,11 @@ func TestInstallPromptsAndDoctorUseSelectedClaudeAgent(t *testing.T) {
 	}
 	text := stripANSIGreen(out.String())
 	for _, want := range []string{
-		"selected agent: claude",
-		"selected prompt target: Claude Markdown slash commands",
+		"selected runtime agent: claude",
+		"prompts (claude):",
 		"Claude Markdown slash commands that render tao prompts dynamically",
 		"commit                        ✓ current",
-		"⚠ warning claude (missing)",
+		"✓ ok      claude (claude)",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected %q in doctor output, got %q", want, text)
@@ -359,7 +443,7 @@ func TestInstallPromptsAndDoctorUseSelectedOpenCodeAgent(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("TAO_OPENCODE_COMMANDS_DIR", "")
 	t.Setenv("TAO_AGENT", "opencode")
-	t.Setenv("PATH", t.TempDir())
+	setPathExecutables(t, "opencode")
 	var out bytes.Buffer
 	app := App{Out: &out, Err: &out}
 	if err := app.Run(context.Background(), []string{"install-prompts"}); err != nil {
@@ -410,11 +494,11 @@ func TestInstallPromptsAndDoctorUseSelectedOpenCodeAgent(t *testing.T) {
 	}
 	text := stripANSIGreen(out.String())
 	for _, want := range []string{
-		"selected agent: opencode",
-		"selected prompt target: OpenCode Markdown commands",
+		"selected runtime agent: opencode",
+		"prompts (opencode):",
 		"OpenCode Markdown commands that render tao prompts dynamically",
 		"commit                        ✓ current",
-		"⚠ warning opencode (missing)",
+		"✓ ok      opencode (opencode)",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected %q in doctor output, got %q", want, text)
@@ -426,7 +510,7 @@ func TestInstallPromptsAndDoctorUseSelectedPiAgent(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("TAO_AGENT", "pi")
-	t.Setenv("PATH", t.TempDir())
+	setPathExecutables(t, "pi")
 	var out bytes.Buffer
 	app := App{Out: &out, Err: &out}
 	if err := app.Run(context.Background(), []string{"install-prompts"}); err != nil {
@@ -470,17 +554,85 @@ func TestInstallPromptsAndDoctorUseSelectedPiAgent(t *testing.T) {
 	}
 	text := stripANSIGreen(out.String())
 	for _, want := range []string{
-		"selected agent: pi",
-		"selected prompt target: Pi global prompt templates and Tao commit extension command",
+		"selected runtime agent: pi",
+		"prompts (pi):",
 		"Pi prompt templates plus Tao commit extension command",
 		"plan                          ✓ current",
 		"commit                        ✓ current",
 		"extensions/tao",
-		"⚠ warning pi (missing)",
+		"✓ ok      pi (pi)",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected %q in doctor output, got %q", want, text)
 		}
+	}
+}
+
+func TestInstallPromptsAndDoctorManageEveryInstalledAgent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("TAO_AGENT", "claude")
+	setPathExecutables(t, "codex", "pi")
+	var out bytes.Buffer
+	app := App{Out: &out, Err: &out}
+
+	if err := app.Run(context.Background(), []string{"install-prompts"}); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	piOutput := "[pi] installed " + filepath.Join(home, ".pi", "agent", "prompts", "plan.md")
+	codexOutput := "[codex] installed " + filepath.Join(home, ".codex", "prompts", "plan.md")
+	if piIndex, codexIndex := strings.Index(text, piOutput), strings.Index(text, codexOutput); piIndex < 0 || codexIndex < 0 || piIndex >= codexIndex {
+		t.Fatalf("expected Pi then Codex install output independent of TAO_AGENT, got %q", text)
+	}
+	if strings.Contains(text, "[claude]") || strings.Contains(text, "[opencode]") {
+		t.Fatalf("expected only installed agents in output, got %q", text)
+	}
+
+	out.Reset()
+	if err := app.Run(context.Background(), []string{"install-prompts", "--check"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"[pi] current ", "[codex] current "} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("expected %q in check output, got %q", want, out.String())
+		}
+	}
+
+	out.Reset()
+	if err := app.Run(context.Background(), []string{"doctor"}); err != nil {
+		t.Fatal(err)
+	}
+	text = stripANSIGreen(out.String())
+	for _, want := range []string{"selected runtime agent: claude", "prompts (pi):", "prompts (codex):", "✓ ok      pi (pi)", "✓ ok      codex (codex)"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected %q in doctor output, got %q", want, text)
+		}
+	}
+	if strings.Index(text, "prompts (pi):") >= strings.Index(text, "prompts (codex):") {
+		t.Fatalf("expected registry-ordered prompt groups, got %q", text)
+	}
+	for _, heading := range []string{"tools dev:", "tools recommended:"} {
+		if strings.Count(text, heading) != 1 {
+			t.Fatalf("expected shared heading %q once, got %q", heading, text)
+		}
+	}
+}
+
+func TestInstallPromptsReportsNoSupportedAgents(t *testing.T) {
+	clearTaoEnv(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	setPathExecutables(t)
+	var out bytes.Buffer
+	if err := (App{Out: &out, Err: &out}).Run(context.Background(), []string{"install-prompts"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "no supported agents found in PATH") {
+		t.Fatalf("expected explicit no-agent output, got %q", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, ".pi")); !os.IsNotExist(err) {
+		t.Fatalf("expected no Pi fallback installation, got %v", err)
 	}
 }
 
@@ -496,8 +648,9 @@ func TestDoctorReportsToolCategoriesAndMissingWarnings(t *testing.T) {
 	}
 	text := stripANSIGreen(out.String())
 	for _, want := range []string{
+		"supported agents: none found in PATH",
 		"tools required:",
-		"⚠ warning pi (missing)",
+		"no supported agent executables found",
 		"tools dev:",
 		"⚠ warning git (missing)",
 		"tools recommended:",
@@ -543,6 +696,17 @@ func TestDoctorReportsPresentToolsAndFdfindAlias(t *testing.T) {
 	if !strings.Contains(out.String(), colorGreen("✓ ok     ")+" pi (pi)") {
 		t.Fatalf("expected green ok tool status, got %q", out.String())
 	}
+}
+
+func setPathExecutables(t *testing.T, names ...string) {
+	t.Helper()
+	bin := t.TempDir()
+	for _, name := range names {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"), 0o755); err != nil { //nolint:gosec // executable test stub needs exec bit
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin)
 }
 
 func stripANSIGreen(value string) string {

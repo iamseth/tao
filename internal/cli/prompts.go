@@ -43,7 +43,7 @@ var installPromptsCommand = commandMetadata{
 	minPrefix:             "i",
 	usageLines:            []string{"install-prompts (i) [--force] [--check]"},
 	completionDescription: "Install agent slash-command wrappers",
-	long:                  "Install Tao-managed slash-command wrappers for the selected agent runtime. Use --check to report whether wrappers are current and --force to replace unmanaged files when installing.",
+	long:                  "Install Tao-managed slash-command wrappers for every supported agent found in PATH. Use --check to report whether wrappers are current and --force to replace unmanaged files when installing.",
 	examples: "  tao install-prompts\n" +
 		"  tao install-prompts --check\n" +
 		"  tao install-prompts --force",
@@ -58,7 +58,7 @@ var doctorCommand = commandMetadata{
 	minPrefix:             "d",
 	usageLines:            []string{"doctor (d)"},
 	completionDescription: "Check Tao prompt wrappers and local tools",
-	long:                  "Check Tao prompt wrapper status and the local tools used by the selected agent workflow. Doctor reports the selected prompt target, installed wrapper status, and required or recommended executables.",
+	long:                  "Check Tao prompt wrapper status for every supported agent found in PATH and report required, development, and recommended executables.",
 	examples:              "  tao doctor",
 	execute: func(c commandContext) error {
 		return c.app.doctor(c.args)
@@ -147,17 +147,22 @@ func (a App) installPrompts(args []string) error {
 	if err := requirePositionals(positional, 0, "usage: tao install-prompts [--force] [--check]"); err != nil {
 		return err
 	}
+	_ = defaults // Prompt management intentionally does not use the selected runtime.
+	installed := agentpkg.Installed()
+	if len(installed) == 0 {
+		return writeln(a.Out, "no supported agents found in PATH; no prompts installed or checked")
+	}
 	check := flagBoolValue(fs, "check")
-	results, err := promptInstallResults(defaults.Agent, check, flagBoolValue(fs, "force"))
+	results, err := promptInstallResults(installed, check, flagBoolValue(fs, "force"))
 	if err != nil {
 		return err
 	}
 	for _, result := range results {
 		if check {
-			if err := writef(a.Out, "%s %s\n", result.Status, result.Path); err != nil {
+			if err := writef(a.Out, "[%s] %s %s\n", result.Agent, result.Status, result.Path); err != nil {
 				return err
 			}
-		} else if err := writef(a.Out, "installed %s\n", result.Path); err != nil {
+		} else if err := writef(a.Out, "[%s] installed %s\n", result.Agent, result.Path); err != nil {
 			return err
 		}
 	}
@@ -176,38 +181,53 @@ func (a App) doctor(args []string) error {
 	if err := requirePositionals(positional, 0, "usage: tao doctor"); err != nil {
 		return err
 	}
-	results, err := promptinstall.CheckAll(defaults.Agent)
+	installed := agentpkg.Installed()
+	results, err := promptinstall.CheckDiscovered(installed)
 	if err != nil {
 		return err
 	}
-	if err := writef(a.Out, "selected agent: %s\n", defaults.Agent); err != nil {
+	if err := writef(a.Out, "selected runtime agent: %s\n", defaults.Agent); err != nil {
 		return err
 	}
-	if err := writef(a.Out, "selected prompt target: %s\n\n", promptinstall.TargetDescription(defaults.Agent)); err != nil {
-		return err
-	}
-	if err := writeln(a.Out, "prompts:"); err != nil {
-		return err
-	}
-	if err := writef(a.Out, "  %s\n", doctorPromptDescription(defaults.Agent)); err != nil {
-		return err
-	}
-	nameWidth := doctorPromptNameWidth(results)
-	for _, result := range results {
-		if err := writef(a.Out, "  %-*s %s %s\n", nameWidth, result.Name, doctorStatusLabel(result.Status, 11), result.Path); err != nil {
+	if len(installed) == 0 {
+		if err := writeln(a.Out, "supported agents: none found in PATH"); err != nil {
 			return err
 		}
 	}
-	for _, category := range doctorToolCategories(defaults.Agent) {
+	for _, descriptor := range installed {
+		if err := writef(a.Out, "\nprompts (%s):\n", descriptor.Label); err != nil {
+			return err
+		}
+		if err := writef(a.Out, "  %s\n", descriptor.DoctorDescription); err != nil {
+			return err
+		}
+		agentResults := promptResultsForAgent(results, descriptor.Kind)
+		nameWidth := doctorPromptNameWidth(agentResults)
+		for _, result := range agentResults {
+			if err := writef(a.Out, "  %-*s %s %s\n", nameWidth, result.Name, doctorStatusLabel(result.Status, 11), result.Path); err != nil {
+				return err
+			}
+		}
+	}
+	if err := writeln(a.Out, "\ntools required:"); err != nil {
+		return err
+	}
+	if len(installed) == 0 {
+		if err := writeln(a.Out, "  no supported agent executables found"); err != nil {
+			return err
+		}
+	}
+	for _, descriptor := range installed {
+		if err := writeDoctorTool(a.Out, doctorAgentTool(descriptor.Kind)); err != nil {
+			return err
+		}
+	}
+	for _, category := range doctorSharedToolCategories() {
 		if err := writef(a.Out, "\ntools %s:\n", category.name); err != nil {
 			return err
 		}
 		for _, tool := range category.tools {
-			status, found := doctorToolStatus(tool)
-			if found != "" {
-				found = " (" + found + ")"
-			}
-			if err := writef(a.Out, "  %s %s%s\n", doctorStatusLabel(status, 9), tool.name, found); err != nil {
+			if err := writeDoctorTool(a.Out, tool); err != nil {
 				return err
 			}
 		}
@@ -254,11 +274,8 @@ type doctorTool struct {
 	executables []string
 }
 
-func doctorToolCategories(agent runtimeconfig.AgentKind) []doctorToolCategory {
+func doctorSharedToolCategories() []doctorToolCategory {
 	return []doctorToolCategory{
-		{name: "required", tools: []doctorTool{
-			doctorAgentTool(agent),
-		}},
 		{name: "dev", tools: []doctorTool{
 			{name: "git", executables: []string{"git"}},
 			{name: "go", executables: []string{"go"}},
@@ -279,12 +296,22 @@ func doctorToolCategories(agent runtimeconfig.AgentKind) []doctorToolCategory {
 	}
 }
 
-func doctorPromptDescription(agent runtimeconfig.AgentKind) string {
-	descriptor, ok := agentpkg.Lookup(agent)
-	if !ok {
-		return fmt.Sprintf("unsupported agent %q (want %s)", agent, runtimeconfig.SupportedAgentKindsText())
+func promptResultsForAgent(results []promptinstall.Result, agent runtimeconfig.AgentKind) []promptinstall.Result {
+	var matched []promptinstall.Result
+	for _, result := range results {
+		if result.Agent == agent {
+			matched = append(matched, result)
+		}
 	}
-	return descriptor.DoctorDescription
+	return matched
+}
+
+func writeDoctorTool(out io.Writer, tool doctorTool) error {
+	status, found := doctorToolStatus(tool)
+	if found != "" {
+		found = " (" + found + ")"
+	}
+	return writef(out, "  %s %s%s\n", doctorStatusLabel(status, 9), tool.name, found)
 }
 
 func doctorAgentTool(agent runtimeconfig.AgentKind) doctorTool {
@@ -304,9 +331,49 @@ func doctorToolStatus(tool doctorTool) (string, string) {
 	return "warning", "missing"
 }
 
-func promptInstallResults(agent runtimeconfig.AgentKind, check bool, force bool) ([]promptinstall.Result, error) {
-	if check {
-		return promptinstall.CheckAll(agent)
+type PromptFreshnessChecker func() ([]promptinstall.Result, error)
+
+var defaultPromptFreshnessCheck PromptFreshnessChecker = installedPromptFreshness
+
+func (a App) warnIfStalePrompts() {
+	check := a.PromptFreshnessCheck
+	if check == nil {
+		check = defaultPromptFreshnessCheck
 	}
-	return promptinstall.InstallAll(agent, force)
+	results, err := check()
+	if err != nil {
+		return
+	}
+	var stale []string
+	seen := make(map[runtimeconfig.AgentKind]bool)
+	for _, result := range results {
+		if result.Status != "stale" || seen[result.Agent] {
+			continue
+		}
+		seen[result.Agent] = true
+		stale = append(stale, string(result.Agent))
+	}
+	if len(stale) == 0 || a.Err == nil {
+		return
+	}
+	_, _ = fmt.Fprintf(a.Err, "warning: stale Tao-managed prompts for %s; run tao install-prompts\n", strings.Join(stale, ", "))
+}
+
+func installedPromptFreshness() ([]promptinstall.Result, error) {
+	var results []promptinstall.Result
+	for _, descriptor := range agentpkg.Installed() {
+		checked, err := promptinstall.CheckDiscovered([]agentpkg.Descriptor{descriptor})
+		if err != nil {
+			continue
+		}
+		results = append(results, checked...)
+	}
+	return results, nil
+}
+
+func promptInstallResults(installed []agentpkg.Descriptor, check bool, force bool) ([]promptinstall.Result, error) {
+	if check {
+		return promptinstall.CheckDiscovered(installed)
+	}
+	return promptinstall.InstallDiscovered(installed, force)
 }

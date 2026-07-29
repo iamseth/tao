@@ -146,6 +146,12 @@ tao prompt <prompt> [--plan-dir DIR] [--commit-policy slice|none] [--execution-m
 tao draft-prompt <name> [--from FILE] [--force]
 ```
 
+`tao install-prompts` installs Tao-managed prompts for every supported agent
+executable found in `PATH`; `tao doctor` reports each installed agent's prompt
+status. Normal commands emit one non-blocking stderr warning naming agents with
+stale managed prompts and recommend rerunning `tao install-prompts`. Missing or
+unmanaged prompts are not included in this automatic warning.
+
 ### Repository note backlog
 
 ```sh

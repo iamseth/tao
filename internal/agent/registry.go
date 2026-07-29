@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"os/exec"
+
 	piagent "github.com/iamseth/tao/internal/agent/pi"
 	processagent "github.com/iamseth/tao/internal/agent/process"
 	"github.com/iamseth/tao/internal/agent/promptfmt"
@@ -167,4 +169,27 @@ func All() []Descriptor {
 	out := make([]Descriptor, len(descriptors))
 	copy(out, descriptors)
 	return out
+}
+
+// LookPath resolves an executable by name. It is accepted by
+// DiscoverInstalled so callers and tests can control executable discovery.
+type LookPath func(string) (string, error)
+
+// Installed returns the registered agents whose executables are available in
+// PATH, preserving registry order.
+func Installed() []Descriptor {
+	return DiscoverInstalled(exec.LookPath)
+}
+
+// DiscoverInstalled applies lookPath to every registered descriptor. Lookup
+// failures mean that agent is unavailable and do not prevent discovery of the
+// remaining agents.
+func DiscoverInstalled(lookPath LookPath) []Descriptor {
+	installed := make([]Descriptor, 0, len(descriptors))
+	for _, descriptor := range descriptors {
+		if _, err := lookPath(descriptor.ToolName); err == nil {
+			installed = append(installed, descriptor)
+		}
+	}
+	return installed
 }

@@ -14,6 +14,7 @@ import (
 )
 
 type Result struct {
+	Agent  runtimeconfig.AgentKind
 	Name   string
 	Path   string
 	Status string
@@ -24,6 +25,18 @@ func InstallAll(agent runtimeconfig.AgentKind, force bool) ([]Result, error) {
 	if !ok {
 		return nil, unsupportedAgentError(agent)
 	}
+	return installDescriptor(descriptor, force)
+}
+
+// InstallDiscovered installs prompts for each discovered agent in the supplied
+// order. The descriptor list is normally produced by agent.DiscoverInstalled.
+func InstallDiscovered(descriptors []agentpkg.Descriptor, force bool) ([]Result, error) {
+	return operateDiscovered(descriptors, func(descriptor agentpkg.Descriptor) ([]Result, error) {
+		return installDescriptor(descriptor, force)
+	})
+}
+
+func installDescriptor(descriptor agentpkg.Descriptor, force bool) ([]Result, error) {
 	target, err := descriptor.PromptDir()
 	if err != nil {
 		return nil, err
@@ -38,7 +51,7 @@ func InstallAll(agent runtimeconfig.AgentKind, force bool) ([]Result, error) {
 			if err := installPiExtension(path, force); err != nil {
 				return nil, err
 			}
-			results = append(results, Result{Name: prompt.Name, Path: path, Status: "installed"})
+			results = append(results, Result{Agent: descriptor.Kind, Name: prompt.Name, Path: path, Status: "installed"})
 			continue
 		}
 		content, err := installContent(descriptor, prompt)
@@ -49,7 +62,7 @@ func InstallAll(agent runtimeconfig.AgentKind, force bool) ([]Result, error) {
 		if err := Install(path, content, force); err != nil {
 			return nil, err
 		}
-		results = append(results, Result{Name: prompt.Name, Path: path, Status: "installed"})
+		results = append(results, Result{Agent: descriptor.Kind, Name: prompt.Name, Path: path, Status: "installed"})
 	}
 	if err := removeRetiredManagedPrompts(target); err != nil {
 		return nil, err
@@ -71,6 +84,28 @@ func CheckAll(agent runtimeconfig.AgentKind) ([]Result, error) {
 	if !ok {
 		return nil, unsupportedAgentError(agent)
 	}
+	return checkDescriptor(descriptor)
+}
+
+// CheckDiscovered checks prompts for each discovered agent in the supplied
+// order. It preserves each agent's ordinary single-agent check semantics.
+func CheckDiscovered(descriptors []agentpkg.Descriptor) ([]Result, error) {
+	return operateDiscovered(descriptors, checkDescriptor)
+}
+
+func operateDiscovered(descriptors []agentpkg.Descriptor, operation func(agentpkg.Descriptor) ([]Result, error)) ([]Result, error) {
+	var combined []Result
+	for _, descriptor := range descriptors {
+		results, err := operation(descriptor)
+		if err != nil {
+			return nil, fmt.Errorf("%s prompts: %w", descriptor.Label, err)
+		}
+		combined = append(combined, results...)
+	}
+	return combined, nil
+}
+
+func checkDescriptor(descriptor agentpkg.Descriptor) ([]Result, error) {
 	target, err := descriptor.PromptDir()
 	if err != nil {
 		return nil, err
@@ -86,7 +121,7 @@ func CheckAll(agent runtimeconfig.AgentKind) ([]Result, error) {
 			if err != nil {
 				return nil, err
 			}
-			results = append(results, Result{Name: prompt.Name, Path: path, Status: status})
+			results = append(results, Result{Agent: descriptor.Kind, Name: prompt.Name, Path: path, Status: status})
 			continue
 		}
 		content, err := installContent(descriptor, prompt)
@@ -98,7 +133,7 @@ func CheckAll(agent runtimeconfig.AgentKind) ([]Result, error) {
 		if err != nil {
 			return nil, err
 		}
-		results = append(results, Result{Name: prompt.Name, Path: path, Status: status})
+		results = append(results, Result{Agent: descriptor.Kind, Name: prompt.Name, Path: path, Status: status})
 	}
 	return results, nil
 }

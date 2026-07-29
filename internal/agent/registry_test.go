@@ -2,6 +2,9 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/iamseth/tao/internal/runtimeconfig"
@@ -165,6 +168,42 @@ func TestAllKindsMatchRuntimeConfigRoster(t *testing.T) {
 			t.Fatalf("All()[%d].Kind = %q, want runtimeconfig.AgentKinds[%d] %q", i, descriptor.Kind, i, runtimeconfig.AgentKinds[i])
 		}
 	}
+}
+
+func TestDiscoverInstalledUsesRegistryOrderAndIgnoresLookupFailures(t *testing.T) {
+	available := map[string]bool{"claude": true, "codex": true}
+	var lookedUp []string
+	installed := DiscoverInstalled(func(name string) (string, error) {
+		lookedUp = append(lookedUp, name)
+		if available[name] {
+			return "/bin/" + name, nil
+		}
+		return "", fmt.Errorf("lookup %s: %w", name, errors.ErrUnsupported)
+	})
+
+	if got := descriptorKinds(installed); got != "claude,codex" {
+		t.Fatalf("installed kinds = %q, want claude,codex", got)
+	}
+	if got := fmt.Sprint(lookedUp); got != "[pi claude opencode codex]" {
+		t.Fatalf("lookup order = %s, want registry order", got)
+	}
+}
+
+func TestDiscoverInstalledReturnsEmptyWhenNoExecutablesResolve(t *testing.T) {
+	installed := DiscoverInstalled(func(string) (string, error) {
+		return "", errors.ErrUnsupported
+	})
+	if len(installed) != 0 {
+		t.Fatalf("installed = %v, want none", descriptorKinds(installed))
+	}
+}
+
+func descriptorKinds(descriptors []Descriptor) string {
+	kinds := make([]string, 0, len(descriptors))
+	for _, descriptor := range descriptors {
+		kinds = append(kinds, string(descriptor.Kind))
+	}
+	return strings.Join(kinds, ",")
 }
 
 func TestAllReturnsDeterministicOrder(t *testing.T) {

@@ -1,6 +1,7 @@
 package promptinstall
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +20,82 @@ func TestInstallAllRejectsUnsupportedAgent(t *testing.T) {
 	}
 	if _, err := CheckAll(unsupported); err == nil || !strings.Contains(err.Error(), "want pi, claude, opencode, or codex") {
 		t.Fatalf("expected unsupported agent check error, got %v", err)
+	}
+}
+
+func TestDiscoveredOperationsPreserveAgentAndPromptOrder(t *testing.T) {
+	claudeDir := t.TempDir()
+	codexDir := t.TempDir()
+	t.Setenv("TAO_CLAUDE_COMMANDS_DIR", claudeDir)
+	t.Setenv("TAO_CODEX_COMMANDS_DIR", codexDir)
+	claude, _ := agentpkg.Lookup(runtimeconfig.AgentClaude)
+	codex, _ := agentpkg.Lookup(runtimeconfig.AgentCodex)
+	descriptors := []agentpkg.Descriptor{claude, codex}
+
+	results, err := InstallDiscovered(descriptors, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	promptCount := len(prompts.Definitions())
+	if len(results) != 2*promptCount {
+		t.Fatalf("InstallDiscovered results = %d, want %d", len(results), 2*promptCount)
+	}
+	for i, result := range results {
+		wantAgent := runtimeconfig.AgentClaude
+		if i >= promptCount {
+			wantAgent = runtimeconfig.AgentCodex
+		}
+		if result.Agent != wantAgent {
+			t.Fatalf("result %d agent = %q, want %q", i, result.Agent, wantAgent)
+		}
+	}
+
+	checked, err := CheckDiscovered(descriptors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, result := range checked {
+		if result.Status != "current" {
+			t.Fatalf("%s %s status = %q, want current", result.Agent, result.Name, result.Status)
+		}
+	}
+}
+
+func TestDiscoveredOperationsHandleNoAgents(t *testing.T) {
+	installed, err := InstallDiscovered(nil, false)
+	if err != nil || len(installed) != 0 {
+		t.Fatalf("InstallDiscovered(nil) = %v, %v, want empty success", installed, err)
+	}
+	checked, err := CheckDiscovered(nil)
+	if err != nil || len(checked) != 0 {
+		t.Fatalf("CheckDiscovered(nil) = %v, %v, want empty success", checked, err)
+	}
+}
+
+func TestDiscoveredOperationsIdentifyFailingAgent(t *testing.T) {
+	descriptor := agentpkg.Descriptor{
+		Kind:  runtimeconfig.AgentKind("broken"),
+		Label: "broken",
+		PromptDir: func() (string, error) {
+			return "", errors.New("cannot resolve target")
+		},
+	}
+	for name, operation := range map[string]func() error{
+		"install": func() error {
+			_, err := InstallDiscovered([]agentpkg.Descriptor{descriptor}, false)
+			return err
+		},
+		"check": func() error {
+			_, err := CheckDiscovered([]agentpkg.Descriptor{descriptor})
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := operation()
+			if err == nil || !strings.Contains(err.Error(), "broken prompts: cannot resolve target") {
+				t.Fatalf("error = %v, want agent-qualified target error", err)
+			}
+		})
 	}
 }
 
