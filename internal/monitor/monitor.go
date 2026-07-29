@@ -93,6 +93,7 @@ type Collector struct {
 	NewPlanLister   PlanListerFactory
 	NewStatusReader RuntimeStatusReaderFactory
 	Now             func() time.Time
+	ShowInvalid     bool
 }
 
 // NewCollector returns a filesystem-backed collector without repository health probes.
@@ -109,8 +110,8 @@ func NewCollector(inventory RepositoryInventory) Collector {
 	}
 }
 
-// Collect builds one snapshot. Repository and plan damage is represented as
-// warning rows so one bad catalog entry cannot hide healthy repositories.
+// Collect builds one snapshot. Repository damage is represented as warning
+// rows, while invalid plan summaries are included only when ShowInvalid is set.
 func (c Collector) Collect(ctx context.Context) (Snapshot, error) {
 	if c.Inventory == nil {
 		return Snapshot{}, errors.New("monitor repository inventory is required")
@@ -146,7 +147,7 @@ func (c Collector) Collect(ctx context.Context) (Snapshot, error) {
 			if err := ctx.Err(); err != nil {
 				return Snapshot{}, err
 			}
-			if summary.Status == plan.StatusCompleted {
+			if summary.Status == plan.StatusCompleted || (summary.Status == plan.StatusInvalid && !c.ShowInvalid) {
 				continue
 			}
 			row := planRow(entry, summary)

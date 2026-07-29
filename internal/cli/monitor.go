@@ -25,12 +25,13 @@ const (
 var monitorCommand = commandMetadata{
 	name:                  "monitor",
 	minPrefix:             "mon",
-	usageLines:            []string{"monitor (mon) [--once] [--interval DURATION]"},
+	usageLines:            []string{"monitor (mon) [--once] [--interval DURATION] [--show-invalid]"},
 	completionDescription: "Monitor non-completed plans across repositories",
-	long:                  "Continuously monitor non-completed plans across registered repositories. Interactive terminal output refreshes in place; --once and redirected output render one plain snapshot. Heartbeats report process liveness, not semantic progress or success.",
+	long:                  "Continuously monitor valid, non-completed plans across registered repositories. Use --show-invalid to include damaged plans for diagnostics. Interactive terminal output refreshes in place; --once and redirected output render one plain snapshot. Heartbeats report process liveness, not semantic progress or success.",
 	examples: "  tao monitor\n" +
 		"  tao monitor --once\n" +
-		"  tao monitor --interval 5s",
+		"  tao monitor --interval 5s\n" +
+		"  tao monitor --show-invalid",
 	registerFlags: registerMonitorFlags,
 	completion: completionContext{flagValues: map[string]completionFlagValue{
 		"interval": {kind: completionValueText, label: "duration"},
@@ -58,6 +59,7 @@ func (t wallMonitorTicker) C() <-chan time.Time { return t.Ticker.C }
 func registerMonitorFlags(fs *flag.FlagSet) {
 	fs.Bool("once", false, "render one snapshot and exit")
 	fs.Duration("interval", defaultMonitorInterval, "interactive refresh interval")
+	fs.Bool("show-invalid", false, "include invalid plans for diagnostics")
 }
 
 func (a App) monitor(ctx context.Context, args []string) error {
@@ -65,7 +67,7 @@ func (a App) monitor(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := requireNoArgs(positional, "usage: tao monitor [--once] [--interval DURATION]"); err != nil {
+	if err := requireNoArgs(positional, "usage: tao monitor [--once] [--interval DURATION] [--show-invalid]"); err != nil {
 		return err
 	}
 	interval := flagDurationValue(fs, "interval")
@@ -75,7 +77,7 @@ func (a App) monitor(ctx context.Context, args []string) error {
 
 	terminal := a.monitorOutputIsTerminal(a.Out)
 	interactive := !flagBoolValue(fs, "once") && terminal
-	collector, err := a.monitorCollector()
+	collector, err := a.monitorCollector(flagBoolValue(fs, "show-invalid"))
 	if err != nil {
 		return err
 	}
@@ -109,7 +111,7 @@ func (a App) monitor(ctx context.Context, args []string) error {
 	}
 }
 
-func (a App) monitorCollector() (MonitorSnapshotCollector, error) {
+func (a App) monitorCollector(showInvalid bool) (MonitorSnapshotCollector, error) {
 	if a.MonitorCollector != nil {
 		return a.MonitorCollector, nil
 	}
@@ -119,6 +121,7 @@ func (a App) monitorCollector() (MonitorSnapshotCollector, error) {
 	}
 	collector := monitor.NewCollector(inventory)
 	collector.Now = a.now
+	collector.ShowInvalid = showInvalid
 	collector.NewPlanLister = func(entry taodata.RepoInventoryEntry) monitor.PlanLister {
 		return a.repository(entry.PlansDir)
 	}

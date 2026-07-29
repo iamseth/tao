@@ -108,7 +108,7 @@ func TestCollectorBuildsAndOrdersCrossRepositorySnapshot(t *testing.T) {
 			byPlan[row.PlanID] = row
 		}
 	}
-	wantOrder := []string{"live", "stale", "changes", "blocked", "other", "old", "invalid", "repo:repo-broken"}
+	wantOrder := []string{"live", "stale", "changes", "blocked", "other", "old", "repo:repo-broken"}
 	if !slices.Equal(gotOrder, wantOrder) {
 		t.Fatalf("row order = %v, want %v", gotOrder, wantOrder)
 	}
@@ -138,12 +138,51 @@ func TestCollectorBuildsAndOrdersCrossRepositorySnapshot(t *testing.T) {
 	if stale := byPlan["stale"]; stale.Liveness != LivenessStale || stale.InvocationDuration != 7*time.Minute {
 		t.Fatalf("exact-boundary stale row = %+v", stale)
 	}
-	if invalid := byPlan["invalid"]; invalid.Kind != RowKindPlan || !slices.Equal(invalid.Warnings, []string{"invalid state.json"}) {
-		t.Fatalf("invalid plan row = %+v", invalid)
+	if _, ok := byPlan["invalid"]; ok {
+		t.Fatalf("default snapshot included invalid plan: %+v", byPlan["invalid"])
 	}
 	warning := snapshot.Rows[len(snapshot.Rows)-1]
 	if warning.Kind != RowKindRepositoryWarning || warning.Status != plan.StatusInvalid || len(warning.Warnings) != 1 {
 		t.Fatalf("repository warning row = %+v", warning)
+	}
+}
+
+func TestCollectorShowInvalidIncludesPlansWithoutRuntimeReads(t *testing.T) {
+	entry := taodata.RepoInventoryEntry{Repo: taodata.Repo{ID: "repo", Name: "repo"}}
+	broken := taodata.RepoInventoryEntry{Repo: taodata.Repo{ID: "broken", Name: "broken"}, MetadataError: errors.New("repository metadata is invalid")}
+	lister := &fakePlanLister{summaries: []plan.PlanSummary{{ID: "invalid", Status: plan.StatusInvalid, Warnings: []string{"invalid state.json"}}}}
+	reader := &fakeStatusReader{records: map[string]runstatus.Record{}, errors: map[string]error{}}
+	collector := Collector{
+		Inventory:       fakeInventory{entries: []taodata.RepoInventoryEntry{entry, broken}},
+		NewPlanLister:   func(taodata.RepoInventoryEntry) PlanLister { return lister },
+		NewStatusReader: func(taodata.RepoInventoryEntry) RuntimeStatusReader { return reader },
+		ShowInvalid:     true,
+	}
+
+	snapshot, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Rows) != 2 {
+		t.Fatalf("rows = %+v, want invalid plan and repository warning", snapshot.Rows)
+	}
+	var invalid, warning Row
+	for _, row := range snapshot.Rows {
+		switch row.Kind {
+		case RowKindPlan:
+			invalid = row
+		case RowKindRepositoryWarning:
+			warning = row
+		}
+	}
+	if invalid.PlanID != "invalid" || !slices.Equal(invalid.Warnings, []string{"invalid state.json"}) {
+		t.Fatalf("invalid plan row = %+v", invalid)
+	}
+	if warning.RepositoryID != "broken" {
+		t.Fatalf("repository warning row = %+v", warning)
+	}
+	if len(reader.reads) != 0 {
+		t.Fatalf("invalid plan triggered runtime reads: %v", reader.reads)
 	}
 }
 

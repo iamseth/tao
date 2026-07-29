@@ -93,6 +93,37 @@ func TestMonitorUsesRegistryRepositoryOutputAndClockSeams(t *testing.T) {
 	}
 }
 
+func TestMonitorShowInvalidControlsInvalidPlanRows(t *testing.T) {
+	entry := taodata.RepoInventoryEntry{Repo: taodata.Repo{ID: "repo", Name: "repo"}, PlansDir: t.TempDir(), RuntimeStatusDir: t.TempDir()}
+	for _, test := range []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: "hidden by default", args: []string{"monitor"}},
+		{name: "shown for diagnostics", args: []string{"monitor", "--show-invalid"}, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var out bytes.Buffer
+			app := App{
+				Out:      &out,
+				Err:      &out,
+				Registry: func() NoteRegistry { return monitorRegistryStub{entries: []taodata.RepoInventoryEntry{entry}} },
+				Repository: func(string) Repository {
+					return fakeRepository{summaries: []plan.PlanSummary{{ID: "damaged-plan", Status: plan.StatusInvalid, Warnings: []string{"invalid state.json"}}}}
+				},
+				MonitorIsTerminal: func(io.Writer) bool { return false },
+			}
+			if err := app.Run(context.Background(), test.args); err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Contains(out.String(), "damaged-plan"); got != test.want {
+				t.Fatalf("invalid plan shown = %t, want %t: %q", got, test.want, out.String())
+			}
+		})
+	}
+}
+
 func TestMonitorOnceRendersPlainColumnsLivenessAndWarnings(t *testing.T) {
 	now := time.Date(2026, 7, 29, 6, 0, 0, 0, time.UTC)
 	updated := now.Add(-3 * time.Minute)

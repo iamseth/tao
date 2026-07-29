@@ -60,11 +60,14 @@ repository. Its urgency-ordered view keeps live and stale runs ahead of blocked
 and quieter plans, while showing lifecycle status, active phase, run duration,
 remaining slices, original/rework progress, and durable activity separately.
 The interactive view refreshes in place; use `tao monitor --once` for a stable
-snapshot to paste or redirect.
+snapshot to paste or redirect. Invalid plan rows are hidden by default so this
+operational view stays focused. Use `tao monitor --show-invalid` when diagnosing
+damaged plans; repository warning rows remain visible with either setting.
 
 Keep using `tao list` for current-repository history, its `--active` filter, and
 its recency limit. Monitor intentionally shows all registered repositories and
-only non-completed plans; it does not change list scope, aliases, or defaults.
+only valid, non-completed plans by default; its invalid-plan filter does not
+change list scope, aliases, or defaults.
 
 Treat LIVE and STALE as process-liveness hints, not workflow verdicts. LIVE means
 the publisher has refreshed its heartbeat recently, but does not prove that the

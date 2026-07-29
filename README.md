@@ -174,7 +174,7 @@ tao note run [--repo REPO] [--max-slices N] [--commit-policy slice|none] [--exec
 
 ```sh
 tao list [--active] [--limit N]
-tao monitor [--once] [--interval DURATION]
+tao monitor [--once] [--interval DURATION] [--show-invalid]
 tao show <plan-id-or-slug>
 tao log [--follow] <plan-id-or-slug>
 tao validate <plan-id-or-slug-or-path>
@@ -350,7 +350,7 @@ tao delete <plan-id-or-slug-or-path> --force
 
 ```sh
 tao status [--json]
-tao monitor [--once] [--interval DURATION]
+tao monitor [--once] [--interval DURATION] [--show-invalid]
 ```
 
 `tao status` (alias `st`) prints the resolved `TAO_*` runtime defaults and a
@@ -358,12 +358,15 @@ repository-wide plan rollup, including plans by status, slice-complete count,
 reviewed count, and review verdict counts. `--json` emits the same information
 as structured output.
 
-`tao monitor` (alias `mon`) shows every non-completed plan across registered
-repositories. On a terminal it refreshes every two seconds by default; use a
-positive Go duration such as `--interval 5s` to change the cadence. `--once` and
-redirected output render one plain snapshot without terminal control sequences
-or color. LIVE and STALE are heartbeat-liveness observations: a fresh heartbeat
-means a run process is reporting, while a stale heartbeat does not mean failure
+`tao monitor` (alias `mon`) shows valid, non-completed plans across registered
+repositories. Invalid plan rows are hidden by default; use `--show-invalid` to
+include them for diagnostics. Repository warning rows remain visible. This does
+not change `tao list` behavior. On a terminal monitor refreshes every two seconds
+by default; use a positive Go duration such as `--interval 5s` to change the
+cadence. `--once` and redirected output render one plain snapshot without
+terminal control sequences or color. LIVE and STALE are heartbeat-liveness
+observations: a fresh heartbeat means a run process is reporting, while a stale
+heartbeat does not mean failure
 and neither state guarantees semantic progress.
 
 ### Updating Tao
