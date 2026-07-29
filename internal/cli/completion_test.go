@@ -27,6 +27,7 @@ func TestCommandAliases(t *testing.T) {
 		{name: "slice-complete", want: []string{"slice-complete"}},
 		{name: "commit", want: []string{"commit"}},
 		{name: "version", want: []string{"version"}},
+		{name: "update", want: []string{"update"}},
 		{name: "completion", want: []string{"co", "com", "comp", "compl", "comple", "complet", "completi", "completio", "completion"}}, //nolint:misspell // intentional completion-prefix fixture
 	}
 
@@ -43,12 +44,23 @@ func TestCommandAliases(t *testing.T) {
 	}
 }
 
+func TestZshCompletionIncludesExactUpdateCommand(t *testing.T) {
+	script := buildZshCompletionScript()
+	if !strings.Contains(script, "'update:Update Tao to the latest stable release'") {
+		t.Fatalf("completion script is missing update command: %q", script)
+	}
+	if strings.Contains(script, "'up:Update Tao") {
+		t.Fatalf("completion script contains an unrequested update alias: %q", script)
+	}
+}
+
 func TestZshCommandEntriesUseShortestAliasAndFullCommandInRegistryOrder(t *testing.T) {
 	entries := strings.Split(zshCommandEntries(), "\n")
 	wantPrefix := []string{
 		"    'l:List plans'",
 		"    'list:List plans'",
 		"    'version:Show build commit'",
+		"    'update:Update Tao to the latest stable release'",
 		"    'init:Register this repository in Tao data home'",
 		"    'lo:Show or follow agent run log'",
 		"    'log:Show or follow agent run log'",
@@ -83,6 +95,7 @@ func TestCommandAliasPatternCompletionSpecialCases(t *testing.T) {
 		{command: "monitor", want: "mon|moni|monit|monito|monitor"},
 		{command: "slice-complete", want: "slice-complete"},
 		{command: "commit", want: "commit"},
+		{command: "update", want: "update"},
 		{command: "missing", want: "missing"},
 	}
 

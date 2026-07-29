@@ -366,6 +366,41 @@ or color. LIVE and STALE are heartbeat-liveness observations: a fresh heartbeat
 means a run process is reporting, while a stale heartbeat does not mean failure
 and neither state guarantees semantic progress.
 
+### Updating Tao
+
+```sh
+tao update
+```
+
+`tao update` checks GitHub for the latest stable release and updates a standalone
+release binary in place. It always performs a live check, regardless of
+`TAO_UPDATE` or any cached startup result. Successful output reports whether Tao
+was already current, ahead of the latest release, or updated; discovery,
+download, checksum, permission, and replacement failures are command errors.
+Downloaded archives are verified against the release `checksums.txt` before the
+executable is replaced. An installed update takes effect on the next invocation;
+Tao does not re-exec the command already running.
+
+Self-update supports release binaries for macOS (`darwin`) and Linux on `amd64`
+and `arm64`. Development builds (`tao dev`) skip startup checks, and an explicit
+`tao update` reports that development builds cannot self-update. Tao refuses to
+replace Homebrew-managed installations; update those with `brew upgrade tao`
+instead.
+
+On recognized commands, `TAO_UPDATE` controls a best-effort startup check:
+
+- `warn` (the default) reports an available update and suggests `tao update`.
+- `auto` verifies and installs an available update automatically.
+- `off` disables startup update checks; it does not disable explicit `tao update`.
+
+Successful startup checks are cached for 24 hours. Failed release checks are
+retried after one hour, and failed automatic installs are also throttled for one
+hour. Notices are emitted at most once per successful check. Startup notices and
+automatic-install warnings go only to stderr, and operational update failures
+never fail the requested command. Invalid `TAO_UPDATE` values remain
+configuration errors. In contrast, failures from explicit `tao update` return a
+non-zero result.
+
 ### Standalone commits, internals, and shell integration
 
 ```sh
@@ -398,6 +433,7 @@ the offending variable.
 TAO_COMMIT_POLICY=slice|none
 TAO_EXECUTION_MODE=isolated|current
 TAO_AGENT=pi|claude|opencode|codex
+TAO_UPDATE=warn|auto|off
 TAO_PULL_REQUEST=true|false
 TAO_REVIEW=true|false
 TAO_AUTO_REWORK=true|false

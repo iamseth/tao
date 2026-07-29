@@ -1,9 +1,12 @@
 package runtimeconfig
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/iamseth/tao/internal/selfupdate"
 )
 
 func TestRuntimeEnvDefaultsAppliesAllSupportedValues(t *testing.T) {
@@ -16,13 +19,14 @@ func TestRuntimeEnvDefaultsAppliesAllSupportedValues(t *testing.T) {
 	t.Setenv(EnvMaxReworkAttempts, "7")
 	t.Setenv(EnvSessionTimeout, "30m")
 	t.Setenv(EnvNotifyCommand, "echo done")
+	t.Setenv(EnvUpdate, "auto")
 	t.Setenv(EnvSkipPermissions, "true")
 
 	got, err := RuntimeEnvDefaults()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.CommitPolicy != CommitPolicySlice || got.ExecutionMode != ExecutionModeCurrent || got.Agent != AgentCodex || got.PullRequest == nil || !*got.PullRequest || got.ReviewEnabled == nil || *got.ReviewEnabled || got.AutoRework == nil || *got.AutoRework || got.MaxReworkAttempts == nil || *got.MaxReworkAttempts != 7 || got.SessionTimeout == nil || *got.SessionTimeout != 30*time.Minute || got.NotifyCommand != "echo done" || !got.SkipPermissions {
+	if got.CommitPolicy != CommitPolicySlice || got.ExecutionMode != ExecutionModeCurrent || got.Agent != AgentCodex || got.PullRequest == nil || !*got.PullRequest || got.ReviewEnabled == nil || *got.ReviewEnabled || got.AutoRework == nil || *got.AutoRework || got.MaxReworkAttempts == nil || *got.MaxReworkAttempts != 7 || got.SessionTimeout == nil || *got.SessionTimeout != 30*time.Minute || got.NotifyCommand != "echo done" || got.UpdateMode != selfupdate.ModeAuto || !got.SkipPermissions {
 		t.Fatalf("unexpected env defaults: %#v", got)
 	}
 }
@@ -91,7 +95,7 @@ func TestRuntimeEnvDefaultsIgnoresEmptyEnvOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.CommitPolicy != CommitPolicySlice || got.ExecutionMode != ExecutionModeIsolated || got.Agent != AgentPi || got.PullRequest != nil || got.ReviewEnabled != nil || got.SessionTimeout == nil || *got.SessionTimeout != DefaultSessionTimeout || got.NotifyCommand != "" || got.SkipPermissions {
+	if got.CommitPolicy != CommitPolicySlice || got.ExecutionMode != ExecutionModeIsolated || got.Agent != AgentPi || got.PullRequest != nil || got.ReviewEnabled != nil || got.SessionTimeout == nil || *got.SessionTimeout != DefaultSessionTimeout || got.NotifyCommand != "" || got.UpdateMode != selfupdate.ModeWarn || got.SkipPermissions {
 		t.Fatalf("expected built-in defaults with unset optional values, got %#v", got)
 	}
 }
@@ -167,6 +171,7 @@ func TestRuntimeEnvStatusDefaultRowsDeriveFromRunOptionsPatch(t *testing.T) {
 		{Name: EnvExecutionMode, Value: defaults.ExecutionModeValue().String(), Source: "default"},
 		{Name: EnvAgent, Value: defaults.Agent.String(), Source: "default"},
 		{Name: EnvSessionTimeout, Value: defaults.SessionTimeoutValue().String(), Source: "default"},
+		{Name: EnvUpdate, Value: "warn", Source: "default"},
 		{Name: EnvPullRequest, Value: "false", Source: "default"},
 		{Name: EnvNotifyCommand, Value: "", Source: "default"},
 		{Name: EnvReview, Value: "true", Source: "default"},
@@ -288,6 +293,55 @@ func TestRuntimeSliceBudgetCapsAreOptInAndInvalidValuesDisable(t *testing.T) {
 				t.Fatalf("invalid cap status = %#v", row)
 			}
 		}
+	}
+}
+
+func TestRuntimeUpdateModeParsingStatusAndKeyCoverage(t *testing.T) {
+	for _, mode := range []selfupdate.Mode{selfupdate.ModeWarn, selfupdate.ModeAuto, selfupdate.ModeOff} {
+		t.Run(string(mode), func(t *testing.T) {
+			for _, name := range runtimeEnvKeys() {
+				t.Setenv(name, "")
+			}
+			t.Setenv(EnvUpdate, string(mode))
+
+			defaults, err := RuntimeEnvDefaults()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if defaults.UpdateMode != mode {
+				t.Fatalf("UpdateMode = %q, want %q", defaults.UpdateMode, mode)
+			}
+			rows, err := RuntimeEnvStatus()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var updateRow EnvVarStatus
+			for _, row := range rows {
+				if row.Name == EnvUpdate {
+					updateRow = row
+					break
+				}
+			}
+			if updateRow.Value != string(mode) || updateRow.Source != "env" {
+				t.Fatalf("update status = %#v", updateRow)
+			}
+		})
+	}
+
+	if !slices.Contains(RuntimeEnvKeys(), EnvUpdate) {
+		t.Fatalf("RuntimeEnvKeys() does not contain %s", EnvUpdate)
+	}
+}
+
+func TestRuntimeUpdateModeRejectsInvalidValue(t *testing.T) {
+	t.Setenv(EnvUpdate, "sometimes")
+	_, err := RuntimeEnvDefaults()
+	if err == nil || !strings.Contains(err.Error(), "TAO_UPDATE: invalid update mode") || !strings.Contains(err.Error(), "warn, auto, or off") {
+		t.Fatalf("RuntimeEnvDefaults() error = %v", err)
+	}
+	_, err = RuntimeEnvStatus()
+	if err == nil || !strings.Contains(err.Error(), "TAO_UPDATE: invalid update mode") {
+		t.Fatalf("RuntimeEnvStatus() error = %v", err)
 	}
 }
 

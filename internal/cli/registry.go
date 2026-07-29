@@ -97,6 +97,7 @@ var versionCommand = commandMetadata{
 var commandRegistry = []commandMetadata{
 	listCommand,
 	versionCommand,
+	updateCommand,
 	initCommand,
 	logCommand,
 	runCommand,

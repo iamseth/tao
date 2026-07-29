@@ -86,6 +86,8 @@ func TestRepositoryWorkspaceAndMonitoringHelpIncludesSubcommandsAndOptions(t *te
 }
 
 func TestPromptSettingsAndOtherHelpIncludesOptions(t *testing.T) {
+	assertCommandOutputContains(t, "update help", []string{"update", "--help"},
+		"latest stable Tao release", "TAO_UPDATE=off", "Usage:\n  tao update")
 	assertCommandOutputContains(t, "prompt help", []string{"prompt", "--help"}, "Render one of Tao's built-in prompt templates", "Options:", "--execution-mode", "Usage:\n  tao prompt (p)")
 	assertCommandOutputContains(t, "doctor help", []string{"doctor", "--help"}, "actionable prompt and tool problems", "Options:", "--verbose", "-v", "tao doctor --verbose")
 	assertCommandOutputContains(t, "capture help", []string{"capture-planning-session", "--help"}, "no longer supported", "Options:", "--plan-dir")
@@ -126,7 +128,7 @@ func TestRunHandlesHelpCompletionAndUnknownCommand(t *testing.T) {
 			t.Fatalf("expected usage to contain %q, got %q", want, out.String())
 		}
 	}
-	for _, commandName := range []string{"cleanup", "run", "repo", "validate", "delete", "monitor", "prompt", "workspace", "completion"} {
+	for _, commandName := range []string{"cleanup", "run", "repo", "validate", "delete", "monitor", "prompt", "workspace", "completion", "update"} {
 		want := topLevelHelpRow(t, commandName)
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("expected usage to contain %q, got %q", want, out.String())

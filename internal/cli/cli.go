@@ -38,6 +38,7 @@ type App struct {
 	MonitorCollector         MonitorSnapshotCollector
 	MonitorTicker            func(time.Duration) MonitorTicker
 	MonitorIsTerminal        func(io.Writer) bool
+	SelfUpdater              SelfUpdater
 	// Now supplies the wall clock for timestamps recorded by commands. Tests
 	// inject a fixed clock; when nil it defaults to time.Now.
 	Now func() time.Time
@@ -127,21 +128,32 @@ func (a App) Run(ctx context.Context, args []string) error {
 	}
 
 	command := normalizeCommand(args[0])
-	if command == "--version" {
-		return a.version()
-	}
-	if command == "help" || command == "-h" || command == "--help" {
-		return a.usage()
-	}
 	if command == "complete" {
 		if len(args) == 2 && args[1] == "note-ids" {
 			return a.completeNoteIDs(ctx)
 		}
 		return a.complete(ctx, a.repository(plansDir), args[1:])
 	}
+	if command == "--version" {
+		if err := a.runStartupUpdate(ctx); err != nil {
+			return err
+		}
+		return a.version()
+	}
+	if command == "help" || command == "-h" || command == "--help" {
+		if err := a.runStartupUpdate(ctx); err != nil {
+			return err
+		}
+		return a.usage()
+	}
 	metadata := commandByName(command)
 	if metadata == nil {
 		return fmt.Errorf("unknown command %q", args[0])
+	}
+	if metadata.name != updateCommand.name {
+		if err := a.runStartupUpdate(ctx); err != nil {
+			return err
+		}
 	}
 	if containsHelpFlag(args[1:]) {
 		return renderCommandHelp(a.Out, metadata)

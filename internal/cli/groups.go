@@ -32,7 +32,7 @@ var topLevelCommandGroups = []commandGroup{
 	},
 	{
 		heading:  "Settings Commands",
-		commands: []string{"completion", "doctor"},
+		commands: []string{"completion", "doctor", "update"},
 	},
 	{
 		heading:  "Other Commands",

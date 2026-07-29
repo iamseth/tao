@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/selfupdate"
 )
 
 const (
@@ -19,6 +20,7 @@ const (
 	EnvAutoRework           = "TAO_AUTO_REWORK"
 	EnvMaxReworkAttempts    = "TAO_MAX_REWORK_ATTEMPTS"
 	EnvSessionTimeout       = "TAO_SESSION_TIMEOUT"
+	EnvUpdate               = "TAO_UPDATE"
 	EnvNotifyCommand        = "TAO_NOTIFY_COMMAND"
 	EnvSkipPermissions      = "TAO_DANGEROUSLY_SKIP_PERMISSIONS"
 	EnvMaxSliceOutputTokens = "TAO_MAX_SLICE_OUTPUT_TOKENS" // #nosec G101 -- environment key, not a credential.
@@ -44,6 +46,7 @@ type EnvDefaults struct {
 	AutoRework            *bool
 	MaxReworkAttempts     *int
 	NotifyCommand         string
+	UpdateMode            selfupdate.Mode
 	SkipPermissions       bool
 	SliceBudgetCaps       SliceBudgetCaps
 	AgentBudgetThresholds plan.AgentBudgetThresholds
@@ -124,6 +127,18 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 			}
 			defaults.SessionTimeout = &parsed
 			return parsed.String(), nil
+		},
+	},
+	{
+		name:         EnvUpdate,
+		defaultValue: func(RunOptionsPatch) string { return string(selfupdate.ModeWarn) },
+		apply: func(defaults *EnvDefaults, value string) (string, error) {
+			parsed, err := selfupdate.ParseMode(value)
+			if err != nil {
+				return "", err
+			}
+			defaults.UpdateMode = parsed
+			return string(parsed), nil
 		},
 	},
 	{
@@ -292,7 +307,11 @@ func parseReviewEnabled(value string) (bool, error) {
 }
 
 func RuntimeEnvDefaults() (EnvDefaults, error) {
-	defaults := EnvDefaults{RunOptionsPatch: DefaultRunOptionsPatch(), AgentBudgetThresholds: defaultAgentBudgetThresholds()}
+	defaults := EnvDefaults{
+		RunOptionsPatch:       DefaultRunOptionsPatch(),
+		UpdateMode:            selfupdate.ModeWarn,
+		AgentBudgetThresholds: defaultAgentBudgetThresholds(),
+	}
 	for _, v := range runtimeEnvVars {
 		value, ok := os.LookupEnv(v.name)
 		if !ok || value == "" {
