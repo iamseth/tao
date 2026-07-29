@@ -55,9 +55,9 @@ func TestValidatePrintsAgentBudgetWarningsWithoutFailing(t *testing.T) {
 		PlanID:    "20260427-1810-example",
 		SliceID:   "001-a",
 		Metrics: &plan.AgentMetrics{
-			SessionID:   "session-1",
-			Status:      plan.StatusCompleted,
-			TotalTokens: 200001,
+			SessionID:    "session-1",
+			Status:       plan.StatusCompleted,
+			OutputTokens: 150001,
 		},
 	}}
 	err := App{Out: &out, Err: &out}.validate(context.Background(), fakeRepository{details: map[string]*plan.PlanDetail{"example": detail}}, []string{"example"})
@@ -65,7 +65,7 @@ func TestValidatePrintsAgentBudgetWarningsWithoutFailing(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := out.String()
-	for _, want := range []string{"Agent Metrics Budget Warnings:", "total_tokens", "observed 200001 > threshold 200000"} {
+	for _, want := range []string{"Agent Metrics Budget Warnings:", "output_tokens", "observed 150001 > threshold 150000"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected %q in output:\n%s", want, text)
 		}

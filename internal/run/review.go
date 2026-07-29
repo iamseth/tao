@@ -12,6 +12,7 @@ import (
 	commitcontract "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/workspace"
 	"github.com/iamseth/tao/prompts"
 )
@@ -294,12 +295,69 @@ const (
 	maxReviewFindingSeverityRunes = 64
 	maxReviewFindingFileRunes     = 512
 	maxReviewFindingTextRunes     = 4 * 1024
+	maxReviewBudgetWarnings       = 20
+	maxReviewContextBytes         = 8 * 1024
+	maxReviewStopReasonBytes      = 512
+	maxReviewWarningScopeBytes    = 256
 )
 
 var reviewJSONBlockRE = regexp.MustCompile("(?s)```\\s*tao-review-json\\s*(.*?)\\s*```")
 
 func renderReviewPrompt(data reviewPromptData) (string, error) {
 	return prompts.Render(prompts.PromptReview, prompts.Data{PlanDir: data.PlanDir, PlanID: data.PlanID, Base: data.Base, Head: data.Head})
+}
+
+func appendPriorReworkAndBudgetContext(prompt string, detail *plan.PlanDetail, thresholds plan.AgentBudgetThresholds) string {
+	if detail == nil {
+		return prompt
+	}
+	summary := plan.SummarizeRework(detail.Events)
+	warnings := plan.AgentBudgetWarnings(detail, thresholds)
+	if summary == (plan.ReworkSummary{}) && len(warnings) == 0 {
+		return prompt
+	}
+
+	var context strings.Builder
+	context.WriteString("\n\n## Prior Rework and Budget Context\n\n")
+	context.WriteString("The following is advisory history for evaluating the current changes.\n")
+	if summary.Rounds > 0 {
+		fmt.Fprintf(&context, "- Rework rounds: %d\n", summary.Rounds)
+	}
+	if summary.LatestStoppedReason != "" {
+		context.WriteString("- Latest rework stop: " + boundedReviewContextText(summary.LatestStoppedReason, maxReviewStopReasonBytes) + "\n")
+	}
+	if summary.DistinctFindingFingerprints > 0 {
+		fmt.Fprintf(&context, "- Distinct finding fingerprints: %d\n", summary.DistinctFindingFingerprints)
+	}
+	warningCount := min(len(warnings), maxReviewBudgetWarnings)
+	for _, warning := range warnings[:warningCount] {
+		scope := warning.Scope
+		if warning.SliceID != "" {
+			scope += " " + warning.SliceID
+		}
+		fmt.Fprintf(&context, "- Budget warning (%s): %s observed %g > threshold %g\n",
+			boundedReviewContextText(scope, maxReviewWarningScopeBytes),
+			warning.Metric,
+			warning.Observed,
+			warning.Threshold,
+		)
+	}
+	if omitted := len(warnings) - warningCount; omitted > 0 {
+		fmt.Fprintf(&context, "- Additional budget warnings omitted: %d\n", omitted)
+	}
+	return strings.TrimRight(prompt, "\n") + boundedReviewContextText(context.String(), maxReviewContextBytes)
+}
+
+func boundedReviewContextText(value string, maxBytes int) string {
+	if len(value) <= maxBytes {
+		return value
+	}
+	const suffix = "…"
+	limit := maxBytes - len(suffix)
+	for limit > 0 && value[limit]&0xc0 == 0x80 {
+		limit--
+	}
+	return value[:limit] + suffix
 }
 
 func createReviewWithAgentSession(ctx context.Context, executor AgentSessionExecutor, options agentOperationOptions, run ReviewRun, recordFactory PlanRecordFactory) (plan.PlanReview, error) {
@@ -340,6 +398,7 @@ func createReviewWithAgentSession(ctx context.Context, executor AgentSessionExec
 	if err != nil {
 		return plan.PlanReview{}, err
 	}
+	prompt = appendPriorReworkAndBudgetContext(prompt, detail, runtimeconfig.RuntimeAgentBudgetThresholds())
 	result, err := executor.RunAgentSession(ctx, AgentSessionRequest{PlanDir: planDir, RepoRoot: repoRoot, LogAction: "reviewing plan " + planID, Prompt: prompt, CaptureOutput: true})
 	if err != nil {
 		return plan.PlanReview{}, err

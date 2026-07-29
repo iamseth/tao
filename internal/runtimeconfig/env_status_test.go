@@ -173,6 +173,18 @@ func TestRuntimeEnvStatusDefaultRowsDeriveFromRunOptionsPatch(t *testing.T) {
 		{Name: EnvAutoRework, Value: "true", Source: "default"},
 		{Name: EnvMaxReworkAttempts, Value: "5", Source: "default"},
 		{Name: EnvSkipPermissions, Value: "false", Source: "default"},
+		{Name: EnvMaxSliceOutputTokens, Value: "disabled", Source: "default"},
+		{Name: EnvMaxSliceCost, Value: "disabled", Source: "default"},
+		{Name: EnvBudgetSliceOutputTokens, Value: "40000", Source: "default"},
+		{Name: EnvBudgetSliceCost, Value: "5", Source: "default"},
+		{Name: EnvBudgetSliceToolCalls, Value: "120", Source: "default"},
+		{Name: EnvBudgetSliceAssistantMessages, Value: "80", Source: "default"},
+		{Name: EnvBudgetSliceErroredMessages, Value: "0", Source: "default"},
+		{Name: EnvBudgetPlanOutputTokens, Value: "150000", Source: "default"},
+		{Name: EnvBudgetPlanCost, Value: "20", Source: "default"},
+		{Name: EnvBudgetPlanToolCalls, Value: "400", Source: "default"},
+		{Name: EnvBudgetPlanAssistantMessages, Value: "300", Source: "default"},
+		{Name: EnvBudgetPlanErroredMessages, Value: "0", Source: "default"},
 	}
 	if len(rows) != len(want) {
 		t.Fatalf("expected %d status rows, got %d: %#v", len(want), len(rows), rows)
@@ -180,6 +192,52 @@ func TestRuntimeEnvStatusDefaultRowsDeriveFromRunOptionsPatch(t *testing.T) {
 	for i, expected := range want {
 		if rows[i] != expected {
 			t.Fatalf("row %d = %#v, want %#v", i, rows[i], expected)
+		}
+	}
+}
+
+func TestRuntimeAgentBudgetThresholdsAppliesOverrides(t *testing.T) {
+	for _, name := range runtimeEnvKeys() {
+		t.Setenv(name, "")
+	}
+	t.Setenv(EnvBudgetSliceOutputTokens, "42000")
+	t.Setenv(EnvBudgetSliceCost, "6.25")
+	t.Setenv(EnvBudgetPlanErroredMessages, "3")
+
+	got := RuntimeAgentBudgetThresholds()
+	if got.Slice.OutputTokens != 42000 || got.Slice.Cost != 6.25 || got.Plan.ErroredMessages != 3 {
+		t.Fatalf("unexpected budget overrides: %+v", got)
+	}
+	if got.Plan.OutputTokens != 150000 || got.Slice.ToolCalls != 120 {
+		t.Fatalf("unset thresholds should retain defaults: %+v", got)
+	}
+}
+
+func TestInvalidBudgetOverridesFallBackAndWarnInStatus(t *testing.T) {
+	for _, name := range runtimeEnvKeys() {
+		t.Setenv(name, "")
+	}
+	t.Setenv(EnvBudgetSliceCost, "expensive")
+	t.Setenv(EnvBudgetPlanToolCalls, "-1")
+
+	defaults, err := RuntimeEnvDefaults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaults.AgentBudgetThresholds.Slice.Cost != 5 || defaults.AgentBudgetThresholds.Plan.ToolCalls != 400 {
+		t.Fatalf("invalid overrides should retain defaults: %+v", defaults.AgentBudgetThresholds)
+	}
+	rows, err := RuntimeEnvStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := make(map[string]EnvVarStatus)
+	for _, row := range rows {
+		byName[row.Name] = row
+	}
+	for _, name := range []string{EnvBudgetSliceCost, EnvBudgetPlanToolCalls} {
+		if byName[name].Source != "default" || byName[name].Warning == "" {
+			t.Fatalf("expected fallback warning for %s: %#v", name, byName[name])
 		}
 	}
 }
@@ -196,6 +254,40 @@ func TestRuntimeEnvDefaultsAppliesExecutionMode(t *testing.T) {
 	}
 	if got.ExecutionMode != ExecutionModeCurrent {
 		t.Fatalf("expected execution mode current, got %#v", got)
+	}
+}
+
+func TestRuntimeSliceBudgetCapsAreOptInAndInvalidValuesDisable(t *testing.T) {
+	t.Setenv(EnvMaxSliceOutputTokens, "")
+	t.Setenv(EnvMaxSliceCost, "")
+	caps, warnings := RuntimeSliceBudgetCaps()
+	if caps.OutputTokens != nil || caps.Cost != nil || len(warnings) != 0 {
+		t.Fatalf("unset caps = %#v, warnings=%v", caps, warnings)
+	}
+
+	t.Setenv(EnvMaxSliceOutputTokens, "1200")
+	t.Setenv(EnvMaxSliceCost, "2.5")
+	caps, warnings = RuntimeSliceBudgetCaps()
+	if caps.OutputTokens == nil || *caps.OutputTokens != 1200 || caps.Cost == nil || *caps.Cost != 2.5 || len(warnings) != 0 {
+		t.Fatalf("valid caps = %#v, warnings=%v", caps, warnings)
+	}
+
+	t.Setenv(EnvMaxSliceOutputTokens, "many")
+	t.Setenv(EnvMaxSliceCost, "NaN")
+	caps, warnings = RuntimeSliceBudgetCaps()
+	if caps.OutputTokens != nil || caps.Cost != nil || len(warnings) != 2 {
+		t.Fatalf("invalid caps = %#v, warnings=%v", caps, warnings)
+	}
+	rows, err := RuntimeEnvStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		if row.Name == EnvMaxSliceOutputTokens || row.Name == EnvMaxSliceCost {
+			if row.Value != "disabled" || row.Source != "default" || !strings.Contains(row.Warning, "cap disabled") {
+				t.Fatalf("invalid cap status = %#v", row)
+			}
+		}
 	}
 }
 

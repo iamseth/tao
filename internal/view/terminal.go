@@ -56,7 +56,7 @@ func RenderAgentBudgetWarnings(out io.Writer, warnings []plan.AgentBudgetWarning
 		return err
 	}
 	for _, warning := range warnings {
-		if _, err := fmt.Fprintf(out, "- %s: observed %d > threshold %d", warning.Message, warning.Observed, warning.Threshold); err != nil {
+		if _, err := fmt.Fprintf(out, "- %s: observed %g > threshold %g", warning.Message, warning.Observed, warning.Threshold); err != nil {
 			return err
 		}
 		if warning.SliceID != "" {

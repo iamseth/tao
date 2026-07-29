@@ -14,8 +14,9 @@ func TestPlanSummaryRunnable(t *testing.T) {
 }
 
 func TestAgentBudgetWarningsFromDetail(t *testing.T) {
-	detail := &PlanDetail{Events: []Event{{Type: EventTypeAgentMetrics, SliceID: "001-a", Metrics: &AgentMetrics{Agent: "pi", SessionID: "s", TotalTokens: DefaultAgentTotalTokensBudget + 1, ToolCalls: DefaultAgentToolCallsBudget + 2, AssistantMessages: DefaultAgentAssistantMessagesBudget + 3, ErroredMessages: DefaultAgentErroredMessagesBudget + 4}}}}
-	warnings := AgentBudgetWarnings(detail)
+	thresholds := DefaultAgentBudgetThresholds()
+	detail := &PlanDetail{Events: []Event{{Type: EventTypeAgentMetrics, SliceID: "001-a", Metrics: &AgentMetrics{Agent: "pi", SessionID: "s", OutputTokens: thresholds.Plan.OutputTokens + 1, ToolCalls: thresholds.Plan.ToolCalls + 2, AssistantMessages: thresholds.Plan.AssistantMessages + 3, ErroredMessages: thresholds.Plan.ErroredMessages + 4}}}}
+	warnings := AgentBudgetWarnings(detail, thresholds)
 	if len(warnings) == 0 {
 		t.Fatal("expected budget warnings")
 	}

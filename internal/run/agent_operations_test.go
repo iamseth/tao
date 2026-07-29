@@ -5,6 +5,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +15,7 @@ import (
 	"github.com/iamseth/tao/internal/agent"
 	commitcontract "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
 func TestBatchAgentSessionHonorsConfiguredProviderPermissionsAndRoot(t *testing.T) {
@@ -243,6 +247,189 @@ func TestRunAgentSessionAppendsSessionTimeoutEvent(t *testing.T) {
 	}
 }
 
+func TestRunAgentSessionSliceBudgetCaps(t *testing.T) {
+	tests := []struct {
+		name       string
+		outputCap  string
+		costCap    string
+		metrics    agent.Metrics
+		wantMetric string
+		wantValue  float64
+	}{
+		{name: "caps unset", metrics: agent.Metrics{OutputTokens: 200, Cost: 3}},
+		{name: "output token cap", outputCap: "100", metrics: agent.Metrics{OutputTokens: 101}, wantMetric: "output_tokens", wantValue: 101},
+		{name: "cost cap", costCap: "2.5", metrics: agent.Metrics{Cost: 2.75}, wantMetric: "cost", wantValue: 2.75},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(runtimeconfig.EnvMaxSliceOutputTokens, tt.outputCap)
+			t.Setenv(runtimeconfig.EnvMaxSliceCost, tt.costCap)
+			runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
+				metrics := tt.metrics
+				return agent.SessionResult{Output: "partial", Metrics: &metrics}, nil
+			})
+			repository := plan.NewFileRepository("")
+			runner, planDir, repoRoot := sessionEventTestRunner(t, runtime, repository, io.Discard, time.Now())
+
+			got, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{
+				PlanDir: planDir, RepoRoot: repoRoot, LogAction: "running 001-a", Metrics: &AgentSessionMetricsRequest{SliceID: "001-a"},
+			})
+			if got.Output != "partial" {
+				t.Fatalf("output = %q, want partial", got.Output)
+			}
+			var budgetErr *budgetExceededError
+			if (errors.As(err, &budgetErr)) != (tt.wantMetric != "") {
+				t.Fatalf("error = %v, want budget exceeded=%t", err, tt.wantMetric != "")
+			}
+			detail, loadErr := plan.NewFileRepository(filepath.Dir(planDir)).GetPlan(context.Background(), filepath.Base(planDir))
+			if loadErr != nil {
+				t.Fatal(loadErr)
+			}
+			var budgetEvent *plan.Event
+			for i := range detail.Events {
+				if detail.Events[i].Type == plan.EventTypeBudgetExceeded {
+					budgetEvent = &detail.Events[i]
+				}
+			}
+			if tt.wantMetric == "" {
+				if budgetEvent != nil {
+					t.Fatalf("unexpected budget event: %+v", *budgetEvent)
+				}
+				return
+			}
+			if budgetEvent == nil || budgetEvent.Metric != tt.wantMetric || budgetEvent.Observed == nil || *budgetEvent.Observed != tt.wantValue {
+				t.Fatalf("budget event = %+v, want metric=%s observed=%g", budgetEvent, tt.wantMetric, tt.wantValue)
+			}
+		})
+	}
+}
+
+func TestRunAgentSessionSliceBudgetAccumulatesPriorMetrics(t *testing.T) {
+	t.Setenv(runtimeconfig.EnvMaxSliceOutputTokens, "100")
+	t.Setenv(runtimeconfig.EnvMaxSliceCost, "")
+	repository := plan.NewFileRepository("")
+	current := agent.Metrics{SessionID: "current", OutputTokens: 41}
+	runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
+		return agent.SessionResult{Metrics: &current}, nil
+	})
+	runner, planDir, repoRoot := sessionEventTestRunner(t, runtime, repository, io.Discard, time.Now())
+	prior := plan.AgentMetrics{SessionID: "prior", OutputTokens: 60}
+	if err := repository.AppendEvent(planDir, plan.Event{Type: plan.EventTypeAgentMetrics, Timestamp: time.Now().UTC(), PlanID: "plan-a", SliceID: "001-a", Metrics: &prior, Message: "prior"}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{
+		PlanDir: planDir, RepoRoot: repoRoot, LogAction: "running 001-a", Metrics: &AgentSessionMetricsRequest{SliceID: "001-a"},
+	})
+	var budgetErr *budgetExceededError
+	if !errors.As(err, &budgetErr) || budgetErr.observed != 101 {
+		t.Fatalf("error = %#v, want cumulative output token observation 101", err)
+	}
+}
+
+func TestSliceBudgetExceededBlocksCompletedSliceAndGuardsContinuation(t *testing.T) {
+	plansRoot := t.TempDir()
+	planDir := filepath.Join(plansRoot, "plan-a")
+	if err := os.MkdirAll(planDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	repoRoot := t.TempDir()
+	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
+	detail.Dir = planDir
+	detail.State.Repo.Root = repoRoot
+	detail.State.Workspace = &plan.Workspace{Strategy: plan.WorkspaceStrategyCurrent}
+	persistRunArtifacts(t, planDir, detail)
+
+	repository := plan.NewFileRepository(plansRoot)
+	agentCalls := 0
+	executor := sliceExecutorFunc(func(ctx context.Context, run SliceRun) error {
+		agentCalls++
+		active, err := repository.GetPlan(ctx, "plan-a")
+		if err != nil {
+			return err
+		}
+		record, err := repository.PlanRecord(active)
+		if err != nil {
+			return err
+		}
+		completedAt := time.Now().UTC()
+		if err := record.RecordSliceCommitIntent(run.SliceID, plan.SliceCommitIntent{Hash: "intent", Policy: "slice", Message: "test completion", CreatedAt: completedAt}); err != nil {
+			return err
+		}
+		if err := record.CompleteSliceWithOutcome(run.SliceID, "completed before metrics arrived", nil, plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionCommitted, CommitSHA: "commit-a"}, completedAt); err != nil {
+			return err
+		}
+		return &budgetExceededError{metric: "output_tokens", threshold: 100, observed: 101}
+	})
+	options := Options{
+		ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent}},
+		RunDependencies: RunDependencies{SliceExecutor: executor, CommandRunner: runGitFake(&[]string{}, nil)},
+	}
+	service := NewService(repository, io.Discard, options)
+	err := service.Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: options.ResolvedRunOptions})
+	if err == nil || !strings.Contains(err.Error(), "slice is blocked") || !strings.Contains(err.Error(), "--continue") {
+		t.Fatalf("run error = %v, want blocked telemetry-cap recovery guidance", err)
+	}
+
+	blocked, err := repository.GetPlan(context.Background(), "plan-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockedSlice := blocked.Slices.Slices[0]
+	if blocked.State.Status != plan.StatusBlocked || blockedSlice.Status != plan.StatusBlocked || blocked.State.Plan.CurrentSlice == nil || *blocked.State.Plan.CurrentSlice != "001-a" {
+		t.Fatalf("persisted blocked lifecycle = state=%+v slice=%+v", blocked.State, blockedSlice)
+	}
+	if slices.Contains(blocked.State.Plan.CompletedSlices, "001-a") || !slices.Contains(blocked.State.Plan.PendingSlices, "001-a") {
+		t.Fatalf("persisted queues = completed %v pending %v", blocked.State.Plan.CompletedSlices, blocked.State.Plan.PendingSlices)
+	}
+	if blockedSlice.CommitIntent == nil || blockedSlice.Completion == nil {
+		t.Fatalf("completion recovery evidence was discarded: %+v", blockedSlice)
+	}
+
+	continueOptions := options
+	continueOptions.Continue = true
+	continueService := NewService(repository, io.Discard, continueOptions)
+	err = continueService.Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: continueOptions.ResolvedRunOptions})
+	if err == nil || !strings.Contains(err.Error(), "interrupted post-intent completion transaction") {
+		t.Fatalf("continue error = %v, want guarded completion recovery", err)
+	}
+	if agentCalls != 1 {
+		t.Fatalf("agent calls = %d, want continuation not to rerun completed agent", agentCalls)
+	}
+}
+
+func TestSliceBudgetExceededUsesInterruptedResumeBoundary(t *testing.T) {
+	input := interruptedInput()
+	before := input.Detail.Slices.Slices[0]
+	input.Detail.State.Plan.ID = "plan-a"
+	input.Detail.Slices.PlanID = "plan-a"
+	input.Detail.Dir = t.TempDir()
+	persistRunArtifacts(t, input.Detail.Dir, input.Detail)
+	record, err := plan.NewPlanRecord(input.Detail.Dir, input.Detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	budgetErr := &budgetExceededError{metric: "output_tokens", threshold: 100, observed: 101}
+	if err := record.BlockSliceForBudget(input.SliceID, budgetErr.Error(), time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := plan.NewFileRepository(filepath.Dir(input.Detail.Dir)).GetPlan(context.Background(), filepath.Base(input.Detail.Dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.Detail = reloaded
+	input.ContinueBlocked = true
+
+	got := ClassifyInterruptedSlice(input)
+	if got.Disposition != InterruptedSliceBlockedContinue || got.ContinuationDisposition != InterruptedSliceResume {
+		t.Fatalf("budget stop recovery = %#v, want blocked continuation through ordinary interrupted resume", got)
+	}
+	after := input.Detail.Slices.Slices[0]
+	if before.ExecutionRoot != after.ExecutionRoot || before.ExecutionStart == nil || after.ExecutionStart == nil || *before.ExecutionStart != *after.ExecutionStart {
+		t.Fatalf("recovery boundary changed: before=%+v after=%+v", before, after)
+	}
+}
+
 func TestRunAgentSessionTimeoutAppendFailurePreservesResult(t *testing.T) {
 	timeoutErr := &agent.SessionTimeoutError{Timeout: 2 * time.Minute}
 	want := AgentSessionResult{Output: "partial output", FinalText: "partial final text"}
@@ -332,7 +519,7 @@ func runPathSessionDetail(t *testing.T, repoRoot string, status string, pending 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := record.PersistState(); err != nil {
+	if err := record.PersistArtifacts(); err != nil {
 		t.Fatal(err)
 	}
 	return detail

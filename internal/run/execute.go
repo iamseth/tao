@@ -2,6 +2,7 @@ package run
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/view"
 )
 
@@ -221,6 +223,9 @@ func (r SelectedSliceRunner) Run(ctx context.Context, detail *plan.PlanDetail, d
 			}
 			return r.finishCompletedHandoff(ctx, reloaded, before, slice.ID, logPath, executionRoot)
 		}
+		if budgetErr, ok := errors.AsType[*budgetExceededError](handoffErr); ok {
+			return nil, r.blockSliceForBudget(ctx, detail, slice.ID, logPath, handoffErr, budgetErr)
+		}
 		if run.Resuming {
 			r.recordSliceResumeFailure(detail, slice.ID, run.ResumeAttempt, handoffErr)
 		}
@@ -276,6 +281,21 @@ func (r SelectedSliceRunner) Run(ctx context.Context, detail *plan.PlanDetail, d
 		transportRetries++
 		run = SliceRun{PlanDir: absolutePlanDir(detail.Dir), SliceID: slice.ID, LogPath: logPath, RunPacket: runPacket, RepoRoot: executionRoot, VerificationCommands: slice.Verification.Commands, Resuming: true, ResumeAttempt: resumeAttempt}
 	}
+}
+
+func (r SelectedSliceRunner) blockSliceForBudget(ctx context.Context, detail *plan.PlanDetail, sliceID, logPath string, handoffErr error, budgetErr *budgetExceededError) error {
+	reloaded, err := r.reload(ctx, detail)
+	if err != nil {
+		return fmt.Errorf("reload slice %s before recording telemetry cap stop: %w", sliceID, err)
+	}
+	record, err := r.execution.Dependencies.PlanRecordFactory(reloaded)
+	if err != nil {
+		return fmt.Errorf("prepare telemetry cap stop for slice %s: %w", sliceID, err)
+	}
+	if err := record.BlockSliceForBudget(sliceID, budgetErr.Error(), now(r.execution).UTC()); err != nil {
+		return fmt.Errorf("record telemetry cap stop for slice %s: %w", sliceID, err)
+	}
+	return fmt.Errorf("%s stopped while running slice %s; slice is blocked and may be resumed with --continue; see %s: %w", agentLabel(r.execution.Config.Agent), sliceID, logPath, handoffErr)
 }
 
 var implementationSliceRetryDelays = [...]time.Duration{time.Second, 2 * time.Second}
@@ -366,12 +386,14 @@ func (r SelectedSliceRunner) reinspectRecoveryAction(ctx context.Context, detail
 }
 
 func (r SelectedSliceRunner) renderRunPacket(detail *plan.PlanDetail, workingRoot string, resuming bool, resumeAttempt int) (string, error) {
+	budgetThresholds := runtimeconfig.RuntimeAgentBudgetThresholds()
 	return plan.RenderRunPacket(detail, plan.RunPacketOptions{
-		CommitPolicy:  r.execution.Config.CommitPolicy.String(),
-		ExecutionMode: r.execution.Config.ExecutionMode.String(),
-		WorkingRoot:   workingRoot,
-		Resuming:      resuming,
-		ResumeAttempt: resumeAttempt,
+		CommitPolicy:     r.execution.Config.CommitPolicy.String(),
+		ExecutionMode:    r.execution.Config.ExecutionMode.String(),
+		WorkingRoot:      workingRoot,
+		Resuming:         resuming,
+		ResumeAttempt:    resumeAttempt,
+		BudgetThresholds: &budgetThresholds,
 	})
 }
 
@@ -456,7 +478,7 @@ func (r SelectedSliceRunner) validateSelectedSlice(detail *plan.PlanDetail, slic
 			return validation, err
 		}
 	}
-	if err := view.RenderAgentBudgetWarnings(r.out, plan.AgentBudgetWarnings(detail)); err != nil {
+	if err := view.RenderAgentBudgetWarnings(r.out, plan.AgentBudgetWarnings(detail, runtimeconfig.RuntimeAgentBudgetThresholds())); err != nil {
 		return validation, err
 	}
 	if validation.HasErrors() {

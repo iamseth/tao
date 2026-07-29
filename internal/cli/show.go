@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 	planview "github.com/iamseth/tao/internal/view"
 )
 
@@ -32,10 +33,14 @@ func (a App) show(ctx context.Context, repo plan.Repository, args []string) erro
 	if err != nil {
 		return err
 	}
-	return renderPlanDetail(a.Out, loaded)
+	return renderPlanDetailWithThresholds(a.Out, loaded, runtimeconfig.RuntimeAgentBudgetThresholds())
 }
 
 func renderPlanDetail(out io.Writer, loaded planview.Plan) error {
+	return renderPlanDetailWithThresholds(out, loaded, plan.DefaultAgentBudgetThresholds())
+}
+
+func renderPlanDetailWithThresholds(out io.Writer, loaded planview.Plan, thresholds plan.AgentBudgetThresholds) error {
 	detail := loaded.Detail
 	derived := loaded.Derived
 	now := loaded.Now
@@ -74,7 +79,7 @@ func renderPlanDetail(out io.Writer, loaded planview.Plan) error {
 			}
 		}
 	}
-	if err := planview.RenderAgentBudgetWarnings(out, plan.AgentBudgetWarnings(detail)); err != nil {
+	if err := planview.RenderAgentBudgetWarnings(out, plan.AgentBudgetWarnings(detail, thresholds)); err != nil {
 		return err
 	}
 	if stats := detail.PlanningSession.Stats; stats != nil {

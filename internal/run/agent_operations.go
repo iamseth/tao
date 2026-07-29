@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -194,6 +195,16 @@ type agentSessionRunnerConfig struct {
 	now              func() time.Time
 }
 
+type budgetExceededError struct {
+	metric    string
+	threshold float64
+	observed  float64
+}
+
+func (e *budgetExceededError) Error() string {
+	return fmt.Sprintf("slice agent metrics %s cap exceeded: observed %g, threshold %g", e.metric, e.observed, e.threshold)
+}
+
 type agentSessionRunner struct {
 	runtime        agent.Runtime
 	permissionMode agent.PermissionMode
@@ -304,14 +315,76 @@ func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSe
 		_, _ = fmt.Fprintf(log, "tao telemetry warning: %s%s\n", r.metricsWarningPrefix, result.MetricsWarning)
 	}
 
+	var capErr error
 	if metricsRequested && stateErr == nil && r.eventAppender != nil && (r.metricsWarningInformational || result.MetricsWarning == "") {
 		metrics := collectAgentMetrics(state, request.Metrics.SliceID, r.agentLabel, r.metricsMessage, result.Metrics, runErr)
 		if appendErr := r.eventAppender.AppendEvent(request.PlanDir, metrics.event(now(r).UTC())); appendErr != nil {
 			_, _ = fmt.Fprintf(log, "tao telemetry warning: append metrics event: %v\n", appendErr)
+		} else if result.Metrics != nil {
+			capErr = r.enforceSliceBudgetCaps(context.WithoutCancel(ctx), request.PlanDir, state.Plan.ID, request.Metrics.SliceID, log)
 		}
+	}
+	if capErr != nil {
+		runErr = errors.Join(runErr, capErr)
 	}
 
 	return AgentSessionResult{Output: result.Output, FinalText: result.FinalText}, runErr
+}
+
+func (r agentSessionRunner) enforceSliceBudgetCaps(ctx context.Context, planDir, planID, sliceID string, log io.Writer) error {
+	caps, warnings := runtimeconfig.RuntimeSliceBudgetCaps()
+	for _, warning := range warnings {
+		_, _ = fmt.Fprintf(log, "tao telemetry warning: %s\n", warning)
+	}
+	if caps.OutputTokens == nil && caps.Cost == nil {
+		return nil
+	}
+
+	detail, err := plan.NewFileRepository(filepath.Dir(planDir)).GetPlan(ctx, filepath.Base(planDir))
+	if err != nil {
+		_, _ = fmt.Fprintf(log, "tao telemetry warning: read metrics for slice cap: %v\n", err)
+		return nil
+	}
+	summary := plan.SummarizeAgentTelemetry(detail)
+	var totals *plan.AgentMetricsTotals
+	for i := range summary.BySlice {
+		if summary.BySlice[i].Key == sliceID {
+			totals = &summary.BySlice[i].Totals
+			break
+		}
+	}
+	if totals == nil {
+		return nil
+	}
+
+	metric := ""
+	threshold := 0.0
+	observed := 0.0
+	if caps.OutputTokens != nil && totals.OutputTokens > *caps.OutputTokens {
+		metric, threshold, observed = "output_tokens", float64(*caps.OutputTokens), float64(totals.OutputTokens)
+	} else if caps.Cost != nil && totals.Cost > *caps.Cost {
+		metric, threshold, observed = "cost", *caps.Cost, totals.Cost
+	}
+	if metric == "" {
+		return nil
+	}
+
+	event := plan.Event{
+		Type:      plan.EventTypeBudgetExceeded,
+		Timestamp: now(r).UTC(),
+		PlanID:    planID,
+		SliceID:   sliceID,
+		Agent:     r.agentLabel,
+		Metric:    metric,
+		Threshold: &threshold,
+		Observed:  &observed,
+		Message:   fmt.Sprintf("%s cap exceeded for slice %s: observed %g, threshold %g", metric, sliceID, observed, threshold),
+	}
+	if err := r.eventAppender.AppendEvent(planDir, event); err != nil {
+		_, _ = fmt.Fprintf(log, "tao telemetry warning: append budget exceeded event: %v\n", err)
+		return nil
+	}
+	return &budgetExceededError{metric: metric, threshold: threshold, observed: observed}
 }
 
 func runSliceWithAgentSession(ctx context.Context, executor AgentSessionExecutor, options agentOperationOptions, run SliceRun) error {

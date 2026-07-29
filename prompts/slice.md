@@ -49,6 +49,7 @@ events.jsonl
 ## Rules
 
 - Preserve intent, constraints, and decisions from this session.
+- Run `tao insights --digest` for the current repository and factor recurring failure patterns—such as environment-caused verification failures, rework-prone areas, and cost outliers—into slice boundaries and verification-command choices.
 - Slice work into small serial steps.
 - Each slice must be independently reviewable.
 - Each slice should leave the repo in a valid state.

@@ -249,6 +249,21 @@ func blockSliceMutation(sliceID string, reason string, now time.Time) artifactMu
 	}
 }
 
+func blockSliceForBudgetMutation(sliceID string, reason string, now time.Time) artifactMutationFunc {
+	return func(detail *PlanDetail) (lifecycleMutation, error) {
+		return applyLifecycleMutation(detail, func() ([]Event, error) {
+			event, appendEvent, err := MarkSliceBudgetBlocked(detail, sliceID, reason, now)
+			if err != nil {
+				return nil, err
+			}
+			if !appendEvent {
+				return nil, nil
+			}
+			return []Event{event}, nil
+		})
+	}
+}
+
 func continueBlockedMutation(now time.Time) artifactMutationFunc {
 	return func(detail *PlanDetail) (lifecycleMutation, error) {
 		return applyLifecycleMutation(detail, func() ([]Event, error) {

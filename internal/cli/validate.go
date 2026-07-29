@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/view"
 )
 
@@ -34,7 +35,7 @@ func (a App) validate(ctx context.Context, repo plan.Resolver, args []string) er
 		return err
 	}
 	result := plan.ValidatePlanVerification(detail)
-	if err := renderPlanValidation(a.Out, detail, result); err != nil {
+	if err := renderPlanValidationWithThresholds(a.Out, detail, result, runtimeconfig.RuntimeAgentBudgetThresholds()); err != nil {
 		return err
 	}
 	if result.HasErrors() {
@@ -43,7 +44,7 @@ func (a App) validate(ctx context.Context, repo plan.Resolver, args []string) er
 	return nil
 }
 
-func renderPlanValidation(out io.Writer, detail *plan.PlanDetail, result plan.VerificationValidationResult) error {
+func renderPlanValidationWithThresholds(out io.Writer, detail *plan.PlanDetail, result plan.VerificationValidationResult, thresholds plan.AgentBudgetThresholds) error {
 	if err := writef(out, "Validation: %s\n", detail.State.Plan.ID); err != nil {
 		return err
 	}
@@ -62,7 +63,7 @@ func renderPlanValidation(out io.Writer, detail *plan.PlanDetail, result plan.Ve
 			return err
 		}
 	}
-	budgetWarnings := plan.AgentBudgetWarnings(detail)
+	budgetWarnings := plan.AgentBudgetWarnings(detail, thresholds)
 	if err := view.RenderAgentBudgetWarnings(out, budgetWarnings); err != nil {
 		return err
 	}

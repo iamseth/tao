@@ -168,6 +168,9 @@ _tao() {
     ` + commandAliasPattern("status") + `)
 ` + zshCommandArguments("status") + `
       ;;
+    ` + commandAliasPattern("insights") + `)
+` + zshCommandArguments("insights") + `
+      ;;
 	    ` + commandAliasPattern("prompt") + `)
 ` + zshCommandArguments("prompt") + `
 	      compadd slice run commit grill-me improve-codebase-architecture improve-documentation repo-health pr

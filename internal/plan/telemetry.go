@@ -9,12 +9,28 @@ import (
 // affect plan lifecycle or artifact readability.
 const EventTypeAgentMetrics = "agent_metrics"
 
-const (
-	DefaultAgentTotalTokensBudget       int64 = 200000
-	DefaultAgentToolCallsBudget         int64 = 75
-	DefaultAgentAssistantMessagesBudget int64 = 50
-	DefaultAgentErroredMessagesBudget   int64 = 0
-)
+// AgentBudgetScopeThresholds defines advisory limits for one telemetry scope.
+type AgentBudgetScopeThresholds struct {
+	OutputTokens      int64
+	Cost              float64
+	ToolCalls         int64
+	AssistantMessages int64
+	ErroredMessages   int64
+}
+
+// AgentBudgetThresholds defines separate advisory limits for slices and plans.
+type AgentBudgetThresholds struct {
+	Slice AgentBudgetScopeThresholds
+	Plan  AgentBudgetScopeThresholds
+}
+
+// DefaultAgentBudgetThresholds returns the built-in telemetry warning limits.
+func DefaultAgentBudgetThresholds() AgentBudgetThresholds {
+	return AgentBudgetThresholds{
+		Slice: AgentBudgetScopeThresholds{OutputTokens: 40000, Cost: 5, ToolCalls: 120, AssistantMessages: 80},
+		Plan:  AgentBudgetScopeThresholds{OutputTokens: 150000, Cost: 20, ToolCalls: 400, AssistantMessages: 300},
+	}
+}
 
 // AgentMetrics is the durable metrics payload stored on agent_metrics events.
 type AgentMetrics struct {
@@ -91,18 +107,50 @@ type AgentMetricsGroup struct {
 }
 
 type AgentBudgetWarning struct {
-	Scope     string `json:"scope"`
-	SliceID   string `json:"slice_id,omitempty"`
-	Metric    string `json:"metric"`
-	Threshold int64  `json:"threshold"`
-	Observed  int64  `json:"observed"`
-	Message   string `json:"message"`
+	Scope     string  `json:"scope"`
+	SliceID   string  `json:"slice_id,omitempty"`
+	Metric    string  `json:"metric"`
+	Threshold float64 `json:"threshold"`
+	Observed  float64 `json:"observed"`
+	Message   string  `json:"message"`
+}
+
+// ReworkSummary is compact advisory context derived from durable rework events.
+type ReworkSummary struct {
+	Rounds                      int
+	LatestStoppedReason         string
+	DistinctFindingFingerprints int
+}
+
+// SummarizeRework derives rework history without affecting plan readability.
+func SummarizeRework(events []Event) ReworkSummary {
+	summary := ReworkSummary{}
+	fingerprints := make(map[string]struct{})
+	for _, event := range events {
+		switch event.Type {
+		case EventTypeReworkRound:
+			if event.Round > summary.Rounds {
+				summary.Rounds = event.Round
+			} else if event.Round == 0 {
+				summary.Rounds++
+			}
+		case EventTypeReworkStopped:
+			summary.LatestStoppedReason = firstNonemptyLine(event.Reason, event.Message)
+		default:
+			continue
+		}
+		if fingerprint := firstNonemptyLine(event.Fingerprint); fingerprint != "" {
+			fingerprints[fingerprint] = struct{}{}
+		}
+	}
+	summary.DistinctFindingFingerprints = len(fingerprints)
+	return summary
 }
 
 func AgentMetricsEvents(events []Event) []AgentMetricEvent {
 	metrics := make([]AgentMetricEvent, 0)
 	for _, event := range events {
-		if event.Type != EventTypeAgentMetrics || event.Metrics == nil {
+		if (event.Type != EventTypeAgentMetrics && event.Type != "opencode_metrics") || event.Metrics == nil {
 			continue
 		}
 		metricsPayload := *event.Metrics
@@ -179,29 +227,30 @@ func SummarizeAgentMetrics(events []AgentMetricEvent) AgentTelemetrySummary {
 	return summary
 }
 
-func AgentBudgetWarnings(detail *PlanDetail) []AgentBudgetWarning {
-	return AgentTelemetryBudgetWarnings(SummarizeAgentTelemetry(detail))
+func AgentBudgetWarnings(detail *PlanDetail, thresholds AgentBudgetThresholds) []AgentBudgetWarning {
+	return AgentTelemetryBudgetWarnings(SummarizeAgentTelemetry(detail), thresholds)
 }
 
-func AgentTelemetryBudgetWarnings(summary AgentTelemetrySummary) []AgentBudgetWarning {
+func AgentTelemetryBudgetWarnings(summary AgentTelemetrySummary, thresholds AgentBudgetThresholds) []AgentBudgetWarning {
 	warnings := make([]AgentBudgetWarning, 0)
-	warnings = appendBudgetWarnings(warnings, "plan", "", summary.Totals)
+	warnings = appendBudgetWarnings(warnings, "plan", "", summary.Totals, thresholds.Plan)
 	for _, group := range summary.BySlice {
-		warnings = appendBudgetWarnings(warnings, "slice", group.Key, group.Totals)
+		warnings = appendBudgetWarnings(warnings, "slice", group.Key, group.Totals, thresholds.Slice)
 	}
 	sortBudgetWarnings(warnings)
 	return warnings
 }
 
-func appendBudgetWarnings(warnings []AgentBudgetWarning, scope string, sliceID string, totals AgentMetricsTotals) []AgentBudgetWarning {
-	warnings = appendBudgetWarning(warnings, scope, sliceID, "total_tokens", DefaultAgentTotalTokensBudget, totals.TotalTokens)
-	warnings = appendBudgetWarning(warnings, scope, sliceID, "tool_calls", DefaultAgentToolCallsBudget, totals.ToolCalls)
-	warnings = appendBudgetWarning(warnings, scope, sliceID, "assistant_messages", DefaultAgentAssistantMessagesBudget, totals.AssistantMessages)
-	warnings = appendBudgetWarning(warnings, scope, sliceID, "errored_messages", DefaultAgentErroredMessagesBudget, totals.ErroredMessages)
+func appendBudgetWarnings(warnings []AgentBudgetWarning, scope string, sliceID string, totals AgentMetricsTotals, thresholds AgentBudgetScopeThresholds) []AgentBudgetWarning {
+	warnings = appendBudgetWarning(warnings, scope, sliceID, "output_tokens", float64(thresholds.OutputTokens), float64(totals.OutputTokens))
+	warnings = appendBudgetWarning(warnings, scope, sliceID, "cost", thresholds.Cost, totals.Cost)
+	warnings = appendBudgetWarning(warnings, scope, sliceID, "tool_calls", float64(thresholds.ToolCalls), float64(totals.ToolCalls))
+	warnings = appendBudgetWarning(warnings, scope, sliceID, "assistant_messages", float64(thresholds.AssistantMessages), float64(totals.AssistantMessages))
+	warnings = appendBudgetWarning(warnings, scope, sliceID, "errored_messages", float64(thresholds.ErroredMessages), float64(totals.ErroredMessages))
 	return warnings
 }
 
-func appendBudgetWarning(warnings []AgentBudgetWarning, scope string, sliceID string, metric string, threshold int64, observed int64) []AgentBudgetWarning {
+func appendBudgetWarning(warnings []AgentBudgetWarning, scope string, sliceID string, metric string, threshold float64, observed float64) []AgentBudgetWarning {
 	if observed <= threshold {
 		return warnings
 	}

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestRunPacketIncludesSelectedSliceContext(t *testing.T) {
@@ -174,6 +175,186 @@ func TestRunPacketDependencyStatusShowsMissingDependency(t *testing.T) {
 	if !strings.Contains(packet, "- 001-base: missing") {
 		t.Fatalf("expected missing dependency status:\n%s", packet)
 	}
+}
+
+func TestRunPacketTelemetryFeedbackNone(t *testing.T) {
+	packet, err := RenderRunPacket(runPacketDetail(), RunPacketOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := runPacketTelemetryFeedbackSection(packet), "- none\n"; got != want {
+		t.Fatalf("telemetry feedback:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestRunPacketTelemetryFeedbackBudgetWarnings(t *testing.T) {
+	detail := runPacketDetail()
+	detail.Events = append(detail.Events,
+		Event{Type: EventTypeAgentMetrics, Timestamp: runPacketTime(2), PlanID: "plan", SliceID: "001-base", Metrics: &AgentMetrics{SessionID: "old", OutputTokens: 100}},
+		Event{Type: EventTypeAgentMetrics, Timestamp: runPacketTime(3), PlanID: "plan", SliceID: "002-build", Metrics: &AgentMetrics{SessionID: "current", OutputTokens: 20}},
+	)
+	thresholds := AgentBudgetThresholds{
+		Plan:  AgentBudgetScopeThresholds{OutputTokens: 50},
+		Slice: AgentBudgetScopeThresholds{OutputTokens: 10},
+	}
+	packet, err := RenderRunPacket(detail, RunPacketOptions{BudgetThresholds: &thresholds})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "- Budget warning (plan): output_tokens observed 120 > threshold 50\n" +
+		"- Budget warning (slice 002-build): output_tokens observed 20 > threshold 10\n"
+	if got := runPacketTelemetryFeedbackSection(packet); got != want {
+		t.Fatalf("telemetry feedback:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestRunPacketTelemetryFeedbackAllZeroThresholds(t *testing.T) {
+	detail := runPacketDetail()
+	detail.Events = append(detail.Events, Event{
+		Type:      EventTypeAgentMetrics,
+		Timestamp: runPacketTime(2),
+		PlanID:    "plan",
+		SliceID:   "002-build",
+		Metrics: &AgentMetrics{
+			SessionID:         "all-metrics",
+			OutputTokens:      1,
+			Cost:              1,
+			ToolCalls:         1,
+			AssistantMessages: 1,
+			ErroredMessages:   1,
+		},
+	})
+	thresholds := AgentBudgetThresholds{}
+
+	packet, err := RenderRunPacket(detail, RunPacketOptions{BudgetThresholds: &thresholds})
+	if err != nil {
+		t.Fatal(err)
+	}
+	feedback := runPacketTelemetryFeedbackSection(packet)
+	if got, want := strings.Count(feedback, "threshold 0\n"), 10; got != want {
+		t.Fatalf("zero-threshold warnings = %d, want %d:\n%s", got, want, feedback)
+	}
+}
+
+func TestRunPacketTelemetryFeedbackReworkHistory(t *testing.T) {
+	detail := runPacketDetail()
+	detail.Events = append(detail.Events,
+		Event{Type: EventTypeReworkRound, Timestamp: runPacketTime(2), PlanID: "plan", Round: 1},
+		Event{Type: EventTypeReworkRound, Timestamp: runPacketTime(3), PlanID: "plan", Round: 2},
+		Event{Type: EventTypeReworkStopped, Timestamp: runPacketTime(4), PlanID: "plan", Reason: "same findings repeated\nfull details"},
+	)
+	packet, err := RenderRunPacket(detail, RunPacketOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "- Rework rounds: 2\n- Latest rework stop: same findings repeated\n"
+	if got := runPacketTelemetryFeedbackSection(packet); got != want {
+		t.Fatalf("telemetry feedback:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestRunPacketTelemetryFeedbackFailureSignals(t *testing.T) {
+	detail := runPacketDetail()
+	detail.Events = []Event{
+		{Type: EventTypeSliceBlocked, Timestamp: runPacketTime(1), PlanID: "plan", SliceID: "001-base", Reason: "dependency unavailable\nretry later"},
+		{Type: EventTypeVerificationCommandInvalid, Timestamp: runPacketTime(2), PlanID: "plan", Reason: "package path missing"},
+		{Type: EventTypeSliceResumeFailed, Timestamp: runPacketTime(3), PlanID: "another-plan", Reason: "not this plan"},
+		{Type: EventTypeSessionTimeout, Timestamp: runPacketTime(4), PlanID: "plan", Message: "pi timed out"},
+		{Type: EventTypeAgentMetrics, Timestamp: runPacketTime(5), PlanID: "plan", SliceID: "002-build", Metrics: &AgentMetrics{SessionID: "session-2", Status: "failed", OutputTokens: 12, Cost: 0.5, ToolCalls: 3, ErroredMessages: 1}},
+	}
+	thresholds := DefaultAgentBudgetThresholds()
+	thresholds.Plan.ErroredMessages = 10
+	thresholds.Slice.ErroredMessages = 10
+	packet, err := RenderRunPacket(detail, RunPacketOptions{BudgetThresholds: &thresholds})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "- Failure 2026-05-03T23:00:01Z slice_blocked: dependency unavailable\n" +
+		"- Failure 2026-05-03T23:00:02Z verification_command_invalid: package path missing\n" +
+		"- Failure 2026-05-03T23:00:04Z session_timeout: pi timed out\n" +
+		"- Failure 2026-05-03T23:00:05Z agent_metrics: agent session session-2 failed (output_tokens=12 cost=0.5 tool_calls=3 errored_messages=1)\n"
+	if got := runPacketTelemetryFeedbackSection(packet); got != want {
+		t.Fatalf("telemetry feedback:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestRunPacketLegacyOpenCodeMetricsTelemetryFeedback(t *testing.T) {
+	detail := runPacketDetail()
+	detail.Events = []Event{{
+		Type:      "opencode_metrics",
+		Timestamp: runPacketTime(1),
+		PlanID:    "plan",
+		SliceID:   "002-build",
+		Message:   "legacy metrics should not be a recent event",
+		Metrics:   &AgentMetrics{SessionID: "legacy", Result: "failed", OutputTokens: 12},
+	}}
+
+	packet, err := RenderRunPacket(detail, RunPacketOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "- Failure 2026-05-03T23:00:01Z opencode_metrics: agent session legacy failed (output_tokens=12 cost=0 tool_calls=0 errored_messages=0)\n"
+	if got := runPacketTelemetryFeedbackSection(packet); got != want {
+		t.Fatalf("telemetry feedback:\n%s\nwant:\n%s", got, want)
+	}
+	if strings.Contains(packet, "legacy metrics should not be a recent event") {
+		t.Fatalf("legacy metrics leaked into recent relevant events:\n%s", packet)
+	}
+}
+
+func TestRunPacketTelemetryFeedbackSizeCap(t *testing.T) {
+	detail := runPacketDetail()
+	metrics := &AgentMetrics{SessionID: "large", OutputTokens: 100, Cost: 100, ToolCalls: 100, AssistantMessages: 100, ErroredMessages: 100}
+	detail.Events = []Event{{Type: EventTypeAgentMetrics, Timestamp: runPacketTime(1), PlanID: "plan", SliceID: "002-build", Metrics: metrics}}
+	for i := 2; i < 9; i++ {
+		detail.Events = append(detail.Events, Event{Type: EventTypeSessionTimeout, Timestamp: runPacketTime(i), PlanID: "plan", Message: "timeout"})
+	}
+	thresholds := AgentBudgetThresholds{Plan: AgentBudgetScopeThresholds{OutputTokens: 1}}
+	packet, err := RenderRunPacket(detail, RunPacketOptions{BudgetThresholds: &thresholds})
+	if err != nil {
+		t.Fatal(err)
+	}
+	feedback := runPacketTelemetryFeedbackSection(packet)
+	if got := strings.Count(feedback, "\n"); got != maxRunPacketFeedbackLines {
+		t.Fatalf("feedback lines = %d, want %d:\n%s", got, maxRunPacketFeedbackLines, feedback)
+	}
+}
+
+func TestRunPacketTelemetryFeedbackByteCap(t *testing.T) {
+	detail := runPacketDetail()
+	detail.Events = []Event{{
+		Type:      EventTypeSessionTimeout,
+		Timestamp: runPacketTime(1),
+		PlanID:    "plan",
+		Message:   strings.Repeat("界", maxRunPacketFeedbackBytes),
+	}}
+
+	packet, err := RenderRunPacket(detail, RunPacketOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	feedback := runPacketTelemetryFeedbackSection(packet)
+	if len(feedback) > maxRunPacketFeedbackBytes {
+		t.Fatalf("feedback bytes = %d, want at most %d", len(feedback), maxRunPacketFeedbackBytes)
+	}
+	if !utf8.ValidString(feedback) {
+		t.Fatal("feedback byte cap split a UTF-8 encoding")
+	}
+	if !strings.HasSuffix(feedback, "…\n") {
+		t.Fatalf("oversized feedback was not visibly truncated: %q", feedback[len(feedback)-16:])
+	}
+}
+
+func runPacketTelemetryFeedbackSection(packet string) string {
+	prefix := "## Telemetry Feedback\n"
+	_, section, ok := strings.Cut(packet, prefix)
+	if !ok {
+		return ""
+	}
+	if before, _, found := strings.Cut(section, "\n## "); found {
+		return strings.TrimSuffix(before, "\n") + "\n"
+	}
+	return section
 }
 
 func runPacketDetail() *PlanDetail {

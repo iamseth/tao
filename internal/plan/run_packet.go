@@ -8,16 +8,22 @@ import (
 
 // Run packet rendering is intentionally a compact read-only projection for agents;
 // fallback artifacts remain available when this context is stale or insufficient.
-const defaultRunPacketRecentEvents = 5
+const (
+	defaultRunPacketRecentEvents     = 5
+	maxRunPacketFeedbackLines        = 12
+	maxRunPacketFeedbackBytes        = 4 * 1024
+	maxRunPacketRecentFailureSignals = 5
+)
 
 // RunPacketOptions controls optional context included in the selected-slice packet.
 type RunPacketOptions struct {
-	CommitPolicy  string
-	ExecutionMode string
-	WorkingRoot   string
-	RecentEvents  int
-	Resuming      bool
-	ResumeAttempt int
+	CommitPolicy     string
+	ExecutionMode    string
+	WorkingRoot      string
+	RecentEvents     int
+	Resuming         bool
+	ResumeAttempt    int
+	BudgetThresholds *AgentBudgetThresholds
 }
 
 // RenderRunPacket renders deterministic Markdown context for the selected runnable slice.
@@ -87,6 +93,7 @@ func RenderRunPacket(detail *PlanDetail, options RunPacketOptions) (string, erro
 	writeRunPacketList(&b, "Manual Checks", slice.Verification.ManualChecks)
 
 	writePriorCompletions(&b, detail)
+	writeTelemetryFeedback(&b, detail, slice.ID, options.BudgetThresholds)
 	writeRecentEvents(&b, detail.Events, slice.ID, eventLimit)
 	writePlanningBrief(&b, detail.PlanningBrief.Content)
 	writeRunPacketList(&b, "Fallback Read Guidance", []string{"Use this packet first; read full fallback artifacts only with a concrete reason such as stale packet data, blockers, verification failure diagnosis, or insufficient context."})
@@ -232,6 +239,146 @@ func firstLine(value string) string {
 	return value
 }
 
+func writeTelemetryFeedback(b *strings.Builder, detail *PlanDetail, sliceID string, thresholds *AgentBudgetThresholds) {
+	writeRunPacketSection(b, "Telemetry Feedback")
+	resolvedThresholds := DefaultAgentBudgetThresholds()
+	if thresholds != nil {
+		resolvedThresholds = *thresholds
+	}
+
+	lines := make([]string, 0, maxRunPacketFeedbackLines)
+	for _, warning := range AgentBudgetWarnings(detail, resolvedThresholds) {
+		if warning.Scope != "plan" && warning.SliceID != sliceID {
+			continue
+		}
+		scope := warning.Scope
+		if warning.SliceID != "" {
+			scope += " " + warning.SliceID
+		}
+		lines = append(lines, fmt.Sprintf("Budget warning (%s): %s observed %g > threshold %g", scope, warning.Metric, warning.Observed, warning.Threshold))
+	}
+
+	rounds := 0
+	var latestStop *Event
+	for i := range detail.Events {
+		event := &detail.Events[i]
+		if !runPacketPlanEvent(*event, detail.State.Plan.ID) || (event.SliceID != "" && event.SliceID != sliceID) {
+			continue
+		}
+		switch event.Type {
+		case EventTypeReworkRound:
+			if event.Round > rounds {
+				rounds = event.Round
+			} else if event.Round == 0 {
+				rounds++
+			}
+		case EventTypeReworkStopped:
+			latestStop = event
+		}
+	}
+	if rounds > 0 {
+		lines = append(lines, fmt.Sprintf("Rework rounds: %d", rounds))
+	}
+	if latestStop != nil {
+		reason := firstNonemptyLine(latestStop.Reason, latestStop.Message, "reason not recorded")
+		lines = append(lines, "Latest rework stop: "+reason)
+	}
+
+	failures := make([]string, 0, maxRunPacketRecentFailureSignals)
+	for _, event := range detail.Events {
+		if !runPacketPlanEvent(event, detail.State.Plan.ID) {
+			continue
+		}
+		if message, ok := runPacketFailureSignal(event); ok {
+			failures = append(failures, fmt.Sprintf("Failure %s %s: %s", event.Timestamp.Format(time.RFC3339Nano), event.Type, message))
+		}
+	}
+	if len(failures) > maxRunPacketRecentFailureSignals {
+		failures = failures[len(failures)-maxRunPacketRecentFailureSignals:]
+	}
+	lines = append(lines, failures...)
+
+	if len(lines) == 0 {
+		b.WriteString("- none\n")
+		return
+	}
+	if len(lines) > maxRunPacketFeedbackLines {
+		lines = lines[:maxRunPacketFeedbackLines]
+	}
+	remaining := maxRunPacketFeedbackBytes
+	for _, line := range lines {
+		const framingBytes = len("- ") + len("\n")
+		if remaining <= framingBytes {
+			break
+		}
+		line = firstLine(line)
+		truncated := len(line) > remaining-framingBytes
+		line = boundedRunPacketFeedbackText(line, remaining-framingBytes)
+		if line == "" {
+			break
+		}
+		b.WriteString("- ")
+		b.WriteString(line)
+		b.WriteString("\n")
+		remaining -= framingBytes + len(line)
+		if remaining == 0 || truncated {
+			break
+		}
+	}
+}
+
+func boundedRunPacketFeedbackText(value string, maxBytes int) string {
+	if len(value) <= maxBytes {
+		return value
+	}
+	const suffix = "…"
+	if maxBytes < len(suffix) {
+		return ""
+	}
+	limit := maxBytes - len(suffix)
+	for limit > 0 && value[limit]&0xc0 == 0x80 {
+		limit--
+	}
+	return value[:limit] + suffix
+}
+
+func runPacketPlanEvent(event Event, planID string) bool {
+	return event.PlanID == "" || event.PlanID == planID
+}
+
+func runPacketFailureSignal(event Event) (string, bool) {
+	switch event.Type {
+	case EventTypeSessionTimeout:
+		return firstNonemptyLine(event.Message, event.Reason, "agent session timed out"), true
+	case EventTypeSliceBlocked:
+		return firstNonemptyLine(event.Reason, event.Message, "slice blocked"), true
+	case EventTypeVerificationCommandInvalid:
+		return firstNonemptyLine(event.Reason, event.Message, event.Command, "verification command invalid"), true
+	case EventTypeSliceResumeFailed:
+		return firstNonemptyLine(event.Reason, event.Message, "slice resume failed"), true
+	case EventTypeAgentMetrics, "opencode_metrics":
+		if event.Metrics == nil || (event.Metrics.Status != "failed" && event.Metrics.Result != "failed") {
+			return "", false
+		}
+		session := event.Metrics.SessionID
+		if session == "" {
+			session = "unknown"
+		}
+		return fmt.Sprintf("agent session %s failed (output_tokens=%d cost=%g tool_calls=%d errored_messages=%d)", session, event.Metrics.OutputTokens, event.Metrics.Cost, event.Metrics.ToolCalls, event.Metrics.ErroredMessages), true
+	default:
+		return "", false
+	}
+}
+
+func firstNonemptyLine(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(firstLine(value)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func writeRecentEvents(b *strings.Builder, events []Event, sliceID string, limit int) {
 	writeRunPacketSection(b, "Recent Relevant Events")
 	relevant := make([]Event, 0, len(events))
@@ -271,7 +418,7 @@ func writeRecentEvents(b *strings.Builder, events []Event, sliceID string, limit
 
 func runPacketTelemetryEvent(eventType string) bool {
 	switch eventType {
-	case EventTypeAgentMetrics, EventTypeRunContext:
+	case EventTypeAgentMetrics, "opencode_metrics", EventTypeRunContext:
 		return true
 	default:
 		return false

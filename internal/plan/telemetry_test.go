@@ -52,6 +52,41 @@ func TestEventDecodesAgentMetrics(t *testing.T) {
 	}
 }
 
+func TestSummarizeRework(t *testing.T) {
+	tests := []struct {
+		name   string
+		events []Event
+		want   ReworkSummary
+	}{
+		{name: "no history"},
+		{
+			name: "rounds and distinct fingerprints",
+			events: []Event{
+				{Type: EventTypeReworkRound, Round: 1, Fingerprint: "findings-a"},
+				{Type: EventTypeReworkRound, Round: 2, Fingerprint: "findings-b"},
+				{Type: EventTypeReworkStopped, Fingerprint: "findings-b", Reason: "equivalent findings"},
+			},
+			want: ReworkSummary{Rounds: 2, LatestStoppedReason: "equivalent findings", DistinctFindingFingerprints: 2},
+		},
+		{
+			name: "latest stopped reason uses first line and message fallback",
+			events: []Event{
+				{Type: EventTypeReworkStopped, Reason: "old reason"},
+				{Type: EventTypeReworkStopped, Message: "latest reason\nextra detail"},
+			},
+			want: ReworkSummary{LatestStoppedReason: "latest reason"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := SummarizeRework(tt.events); got != tt.want {
+				t.Fatalf("SummarizeRework() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSummarizeAgentMetricsAggregatesTotalsAndFailures(t *testing.T) {
 	events := []AgentMetricEvent{
 		{PlanID: "plan", SliceID: "001-a", Metrics: AgentMetrics{SessionID: "session-1", ProviderID: "anthropic", ModelID: "claude", Status: StatusCompleted, Result: StatusCompleted, InputTokens: 100, OutputTokens: 50, ReasoningTokens: 10, CacheReadTokens: 20, CacheWriteTokens: 5, TotalTokens: 185, Cost: 0.25, TotalMessages: 3, UserMessages: 1, AssistantMessages: 2, ErroredMessages: 0, ToolCalls: 3}},
@@ -108,19 +143,24 @@ func TestAgentMetricsEventsFiltersMissingPayloads(t *testing.T) {
 		{Type: EventTypeAgentMetrics, PlanID: "plan", SliceID: "001-a", Agent: "pi", Metrics: &AgentMetrics{SessionID: "session-1"}},
 		{Type: EventTypeAgentMetrics, PlanID: "plan", SliceID: "001-b", Metrics: &AgentMetrics{Agent: "pi", SessionID: "session-2", TotalTokens: 12}},
 		{Type: EventTypeAgentMetrics, PlanID: "plan", SliceID: "001-b"},
+		{Type: "opencode_metrics", PlanID: "plan", SliceID: "legacy", Metrics: &AgentMetrics{Agent: "opencode", SessionID: "legacy", OutputTokens: 9}},
+		{Type: "", PlanID: "plan", Metrics: &AgentMetrics{SessionID: "empty"}},
 		{Type: "slice_completed", PlanID: "plan"},
-		{Type: "legacy_metrics", PlanID: "plan", SliceID: "legacy", Metrics: &AgentMetrics{Agent: "pi", SessionID: "legacy"}},
+		{Type: "legacy_metrics", PlanID: "plan", SliceID: "unknown", Metrics: &AgentMetrics{Agent: "pi", SessionID: "unknown"}},
 	}
 
 	metrics := AgentMetricsEvents(events)
-	if len(metrics) != 2 {
-		t.Fatalf("expected two metrics events, got %d", len(metrics))
+	if len(metrics) != 3 {
+		t.Fatalf("expected three metrics events, got %d", len(metrics))
 	}
 	if metrics[0].PlanID != "plan" || metrics[0].SliceID != "001-a" || metrics[0].Metrics.SessionID != "session-1" || metrics[0].Metrics.Agent != "pi" {
 		t.Fatalf("unexpected metrics event: %+v", metrics[0])
 	}
 	if metrics[1].Metrics.Agent != "pi" || metrics[1].Metrics.TotalTokens != 12 {
 		t.Fatalf("unexpected agent metrics event: %+v", metrics[1])
+	}
+	if metrics[2].SliceID != "legacy" || metrics[2].Metrics.Agent != "opencode" || metrics[2].Metrics.OutputTokens != 9 {
+		t.Fatalf("unexpected legacy opencode metrics event: %+v", metrics[2])
 	}
 }
 
@@ -160,64 +200,68 @@ func TestAgentAuditTrailIncludesPlanningAndExecutionAgents(t *testing.T) {
 	}
 }
 
-func TestAgentTelemetryBudgetWarningsNoneBelowThresholds(t *testing.T) {
-	summary := SummarizeAgentMetrics([]AgentMetricEvent{
-		{PlanID: "plan", SliceID: "001-a", Metrics: AgentMetrics{SessionID: "session-1", Status: StatusCompleted, Result: StatusCompleted, TotalTokens: 1000, ToolCalls: 3, AssistantMessages: 2}},
-	})
-
-	warnings := AgentTelemetryBudgetWarnings(summary)
-	if len(warnings) != 0 {
-		t.Fatalf("expected no warnings, got %+v", warnings)
+func TestDefaultAgentBudgetThresholds(t *testing.T) {
+	got := DefaultAgentBudgetThresholds()
+	if got.Slice.OutputTokens != 40000 || got.Slice.Cost != 5 || got.Slice.ToolCalls != 120 || got.Slice.AssistantMessages != 80 || got.Slice.ErroredMessages != 0 {
+		t.Fatalf("unexpected slice defaults: %+v", got.Slice)
+	}
+	if got.Plan.OutputTokens != 150000 || got.Plan.Cost != 20 || got.Plan.ToolCalls != 400 || got.Plan.AssistantMessages != 300 || got.Plan.ErroredMessages != 0 {
+		t.Fatalf("unexpected plan defaults: %+v", got.Plan)
 	}
 }
 
-func TestAgentTelemetryBudgetWarningsIncludePlanAndSliceThresholdDetails(t *testing.T) {
+func TestAgentTelemetryBudgetWarningsUseScopedMetrics(t *testing.T) {
+	thresholds := DefaultAgentBudgetThresholds()
 	summary := SummarizeAgentMetrics([]AgentMetricEvent{
-		{PlanID: "plan", SliceID: "001-a", Metrics: AgentMetrics{SessionID: "session-1", Status: StatusCompleted, Result: StatusCompleted, TotalTokens: DefaultAgentTotalTokensBudget + 1}},
+		{PlanID: "plan", SliceID: "001-a", Metrics: AgentMetrics{SessionID: "session-1", OutputTokens: thresholds.Slice.OutputTokens + 1, Cost: thresholds.Slice.Cost + 1, ToolCalls: thresholds.Slice.ToolCalls + 1, AssistantMessages: thresholds.Slice.AssistantMessages + 1, ErroredMessages: 1, TotalTokens: 9999999}},
 	})
 
-	warnings := AgentTelemetryBudgetWarnings(summary)
-	if len(warnings) != 2 {
-		t.Fatalf("expected plan and slice warnings, got %+v", warnings)
+	warnings := AgentTelemetryBudgetWarnings(summary, thresholds)
+	if len(warnings) != 6 {
+		t.Fatalf("expected five slice warnings and one plan error warning, got %+v", warnings)
 	}
-	if warnings[0].Metric != "total_tokens" || warnings[0].Threshold != DefaultAgentTotalTokensBudget || warnings[0].Observed != DefaultAgentTotalTokensBudget+1 {
-		t.Fatalf("unexpected first warning details: %+v", warnings[0])
-	}
-	if warnings[1].Metric != "total_tokens" || warnings[1].Scope != "slice" || warnings[1].SliceID != "001-a" {
-		t.Fatalf("unexpected slice warning details: %+v", warnings[1])
-	}
-}
-
-func TestAgentTelemetryBudgetWarningsErroredMessages(t *testing.T) {
-	summary := SummarizeAgentMetrics([]AgentMetricEvent{
-		{PlanID: "plan", SliceID: "001-a", Metrics: AgentMetrics{SessionID: "session-1", Status: StatusCompleted, Result: StatusCompleted, ErroredMessages: 1}},
-	})
-
-	warnings := AgentTelemetryBudgetWarnings(summary)
-	if len(warnings) != 2 {
-		t.Fatalf("expected plan and slice errored-message warnings, got %+v", warnings)
-	}
+	seen := make(map[string]bool)
 	for _, warning := range warnings {
-		if warning.Metric != "errored_messages" || warning.Threshold != DefaultAgentErroredMessagesBudget || warning.Observed != 1 {
-			t.Fatalf("unexpected errored-message warning: %+v", warning)
+		if warning.Scope == "plan" {
+			if warning.Metric != "errored_messages" {
+				t.Fatalf("unexpected plan warning: %+v", warning)
+			}
+			continue
+		}
+		if warning.Scope != "slice" || warning.SliceID != "001-a" {
+			t.Fatalf("unexpected warning scope: %+v", warning)
+		}
+		seen[warning.Metric] = true
+	}
+	for _, metric := range []string{"output_tokens", "cost", "tool_calls", "assistant_messages", "errored_messages"} {
+		if !seen[metric] {
+			t.Fatalf("missing %s warning: %+v", metric, warnings)
 		}
 	}
+	if seen["total_tokens"] {
+		t.Fatalf("total tokens must not produce a budget warning: %+v", warnings)
+	}
 }
 
-func TestAgentTelemetryBudgetWarningsSortedByLargestOutlier(t *testing.T) {
+func TestAgentTelemetryBudgetWarningsUsePlanThresholds(t *testing.T) {
+	thresholds := DefaultAgentBudgetThresholds()
 	summary := SummarizeAgentMetrics([]AgentMetricEvent{
-		{PlanID: "plan", SliceID: "001-a", Metrics: AgentMetrics{SessionID: "session-1", Status: StatusCompleted, Result: StatusCompleted, ToolCalls: DefaultAgentToolCallsBudget + 1}},
-		{PlanID: "plan", SliceID: "002-b", Metrics: AgentMetrics{SessionID: "session-2", Status: StatusCompleted, Result: StatusCompleted, TotalTokens: DefaultAgentTotalTokensBudget + 1000}},
+		{SliceID: "001-a", Metrics: AgentMetrics{SessionID: "one", OutputTokens: 80000}},
+		{SliceID: "002-b", Metrics: AgentMetrics{SessionID: "two", OutputTokens: 80000}},
 	})
 
-	warnings := AgentTelemetryBudgetWarnings(summary)
-	if len(warnings) < 2 {
-		t.Fatalf("expected multiple warnings, got %+v", warnings)
+	warnings := AgentTelemetryBudgetWarnings(summary, thresholds)
+	if len(warnings) != 3 {
+		t.Fatalf("expected one plan and two slice warnings, got %+v", warnings)
 	}
-	if warnings[0].Metric != "total_tokens" || warnings[0].Observed-warnings[0].Threshold != 1000 {
-		t.Fatalf("expected largest outlier first, got %+v", warnings)
+	var planWarning *AgentBudgetWarning
+	for i := range warnings {
+		if warnings[i].Scope == "plan" && warnings[i].Metric == "output_tokens" {
+			planWarning = &warnings[i]
+			break
+		}
 	}
-	if warnings[len(warnings)-1].Metric != "tool_calls" || warnings[len(warnings)-1].Observed-warnings[len(warnings)-1].Threshold != 1 {
-		t.Fatalf("expected smallest outlier last, got %+v", warnings)
+	if planWarning == nil || planWarning.Threshold != 150000 || planWarning.Observed != 160000 {
+		t.Fatalf("unexpected plan warning: %+v", planWarning)
 	}
 }

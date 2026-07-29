@@ -113,6 +113,7 @@ var commandRegistry = []commandMetadata{
 	stalenessCommand,
 	validateCommand,
 	statusCommand,
+	insightsCommand,
 	cleanupCommand,
 	mergeCommand,
 	deleteCommand,

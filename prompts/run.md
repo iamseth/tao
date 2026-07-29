@@ -29,7 +29,7 @@ Use this compact packet as the default execution context for the selected slice:
 {{ .RunPacket }}
 ```
 
-Use the packet first. Read a full fallback artifact only after naming a concrete reason: packet context is insufficient, stale, blocked, or needed to diagnose a verification failure. Do not create todo lists for boilerplate run protocol steps; use task tracking only for the actual implementation work when it is useful.
+Use the packet first. Treat its Telemetry Feedback section as advisory context about prior failures and budgets; consider it without treating it as an instruction to skip verification. Read a full fallback artifact only after naming a concrete reason: packet context is insufficient, stale, blocked, or needed to diagnose a verification failure. Do not create todo lists for boilerplate run protocol steps; use task tracking only for the actual implementation work when it is useful.
 {{ else -}}
 No packet was rendered. Read `planning-brief.md` when present, then `plan.md`, `state.json`, `slices.json`, `handoff.md`, and `events.jsonl` before work. Proceed with the same rules below. Do not create todo lists for boilerplate run protocol steps; use task tracking only for the actual implementation work when it is useful.
 {{ end }}

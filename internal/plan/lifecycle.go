@@ -556,6 +556,28 @@ func conflictingBlockedSliceID(detail *PlanDetail, sliceID string) string {
 	return ""
 }
 
+// MarkSliceBudgetBlocked records an enforced telemetry stop. Unlike an ordinary
+// exceptional stop, it may supersede completion recorded by the active agent:
+// the completion evidence stays intact so continuation enters the standard
+// guarded completion-recovery path instead of running the agent again.
+func MarkSliceBudgetBlocked(detail *PlanDetail, sliceID string, reason string, now time.Time) (Event, bool, error) {
+	if detail == nil {
+		return Event{}, false, fmt.Errorf("plan detail is nil")
+	}
+	slice := findSlice(detail, sliceID)
+	if slice == nil {
+		return Event{}, false, classify(ErrNotFound, "slice %s not found", sliceID)
+	}
+	if slice.Status == StatusCompleted || slices.Contains(detail.State.Plan.CompletedSlices, sliceID) {
+		detail.State.Plan.CompletedSlices = slices.DeleteFunc(detail.State.Plan.CompletedSlices, func(value string) bool { return value == sliceID })
+		detail.State.Plan.Timing.CompletedAt = nil
+		slice.Status = StatusInProgress
+		slice.Timing.CompletedAt = nil
+		slice.Timing.DurationSeconds = nil
+	}
+	return MarkSliceBlocked(detail, sliceID, reason, now)
+}
+
 // MarkBlockedContinued selects the blocked/current slice and marks plan-owned lifecycle back in progress.
 func MarkBlockedContinued(detail *PlanDetail, now time.Time) error {
 	if detail == nil {

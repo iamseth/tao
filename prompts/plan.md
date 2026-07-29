@@ -24,6 +24,7 @@ Do not create Tao plan artifacts.
 - Ask user-facing clarification questions only in the final assistant response; do not repeat or preview them in task, progress, or status updates.
 - Inspect the codebase when the answer is likely available there instead of asking the user.
 - Keep inspection targeted: search for the relevant files, commands, owners, and conventions; avoid broad reads unless required.
+- Run `tao insights --digest` for the current repository and factor recurring failure patterns—such as environment-caused verification failures, rework-prone areas, and cost outliers—into proposed slice boundaries and verification-command choices.
 - Follow each decision to its consequences before moving to a new branch.
 - Keep the plan practical and sliceable, not exhaustive.
 - Do not invent requirements. Mark assumptions and unresolved questions clearly.

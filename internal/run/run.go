@@ -19,6 +19,13 @@ type PlanMutationRecord interface {
 	FinalVerificationRecorder
 	RunMetadataRecorder
 	ReviewRecorder
+	SliceBudgetBlockRecorder
+}
+
+// SliceBudgetBlockRecorder owns the exceptional lifecycle transition caused by
+// an opt-in hard telemetry cap.
+type SliceBudgetBlockRecorder interface {
+	BlockSliceForBudget(sliceID string, reason string, now time.Time) error
 }
 
 // SliceStartRecorder owns complete durable operations for prepared run starts.

@@ -15,6 +15,91 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 )
 
+func TestAppendPriorReworkAndBudgetContext(t *testing.T) {
+	thresholds := plan.DefaultAgentBudgetThresholds()
+	tests := []struct {
+		name       string
+		detail     *plan.PlanDetail
+		want       []string
+		wantAbsent []string
+	}{
+		{
+			name:       "no history",
+			detail:     &plan.PlanDetail{},
+			wantAbsent: []string{"Prior Rework and Budget Context"},
+		},
+		{
+			name: "rework rounds",
+			detail: &plan.PlanDetail{Events: []plan.Event{
+				{Type: plan.EventTypeReworkRound, Round: 1, Fingerprint: "first"},
+				{Type: plan.EventTypeReworkRound, Round: 2, Fingerprint: "second"},
+			}},
+			want: []string{"## Prior Rework and Budget Context", "advisory history", "- Rework rounds: 2", "- Distinct finding fingerprints: 2"},
+		},
+		{
+			name: "stopped reason",
+			detail: &plan.PlanDetail{Events: []plan.Event{
+				{Type: plan.EventTypeReworkStopped, Reason: "automatic rework stalled", Fingerprint: "same"},
+			}},
+			want: []string{"- Latest rework stop: automatic rework stalled", "- Distinct finding fingerprints: 1"},
+		},
+		{
+			name: "budget warning",
+			detail: &plan.PlanDetail{Events: []plan.Event{
+				{Type: plan.EventTypeAgentMetrics, SliceID: "001-a", Metrics: &plan.AgentMetrics{OutputTokens: thresholds.Slice.OutputTokens + 1}},
+			}},
+			want: []string{"## Prior Rework and Budget Context", "- Budget warning (slice 001-a): output_tokens observed 40001 > threshold 40000"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := appendPriorReworkAndBudgetContext("review prompt\n", tt.detail, thresholds)
+			for _, want := range tt.want {
+				if !strings.Contains(got, want) {
+					t.Fatalf("context missing %q:\n%s", want, got)
+				}
+			}
+			for _, absent := range tt.wantAbsent {
+				if strings.Contains(got, absent) {
+					t.Fatalf("context unexpectedly contains %q:\n%s", absent, got)
+				}
+			}
+		})
+	}
+}
+
+func TestAppendPriorReworkAndBudgetContextCapsWarnings(t *testing.T) {
+	thresholds := plan.DefaultAgentBudgetThresholds()
+	events := make([]plan.Event, 100)
+	for i := range events {
+		events[i] = plan.Event{
+			Type:    plan.EventTypeAgentMetrics,
+			SliceID: fmt.Sprintf("%03d-slice", i),
+			Metrics: &plan.AgentMetrics{OutputTokens: thresholds.Slice.OutputTokens + int64(i) + 1},
+		}
+	}
+	detail := &plan.PlanDetail{Events: events}
+	warnings := plan.AgentBudgetWarnings(detail, thresholds)
+	if len(warnings) <= maxReviewBudgetWarnings {
+		t.Fatalf("test setup produced %d warnings, want more than %d", len(warnings), maxReviewBudgetWarnings)
+	}
+
+	prompt := "review prompt\n"
+	got := appendPriorReworkAndBudgetContext(prompt, detail, thresholds)
+	if count := strings.Count(got, "- Budget warning ("); count != maxReviewBudgetWarnings {
+		t.Fatalf("budget warning count = %d, want %d", count, maxReviewBudgetWarnings)
+	}
+	wantOmitted := fmt.Sprintf("- Additional budget warnings omitted: %d", len(warnings)-maxReviewBudgetWarnings)
+	if !strings.Contains(got, wantOmitted) {
+		t.Fatalf("context missing %q:\n%s", wantOmitted, got)
+	}
+	contextBytes := len(got) - len(strings.TrimRight(prompt, "\n"))
+	if contextBytes > maxReviewContextBytes {
+		t.Fatalf("review context bytes = %d, want at most %d", contextBytes, maxReviewContextBytes)
+	}
+}
+
 func TestCreateReviewWithAgentSessionPersistsParsedReview(t *testing.T) {
 	planDir := t.TempDir()
 	repoRoot := t.TempDir()

@@ -32,6 +32,7 @@ const (
 	EventTypeVerificationCommandInvalid = "verification_command_invalid"
 	EventTypeRunContext                 = "run_context"
 	EventTypeSessionTimeout             = "session_timeout"
+	EventTypeBudgetExceeded             = "budget_exceeded"
 	EventTypeReworkRound                = "rework_round"
 	EventTypeReworkStopped              = "rework_stopped"
 	EventTypeFinalVerification          = "final_verification"
@@ -282,5 +283,8 @@ type Event struct {
 	CommitPolicy      string        `json:"commit_policy,omitempty"`
 	RunPacketProvided bool          `json:"run_packet_provided,omitempty"`
 	GuardrailWarnings int           `json:"guardrail_warnings,omitempty"`
+	Metric            string        `json:"metric,omitempty"`
+	Threshold         *float64      `json:"threshold,omitempty"`
+	Observed          *float64      `json:"observed,omitempty"`
 	Message           string        `json:"message"`
 }

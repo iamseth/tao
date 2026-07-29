@@ -210,6 +210,12 @@ func (r *PlanRecord) BlockSlice(sliceID string, reason string, now time.Time) er
 	return r.apply(blockSliceMutation(sliceID, reason, now))
 }
 
+// BlockSliceForBudget records an enforced telemetry stop, including when the
+// active agent already persisted completion before its metrics were available.
+func (r *PlanRecord) BlockSliceForBudget(sliceID string, reason string, now time.Time) error {
+	return r.apply(blockSliceForBudgetMutation(sliceID, reason, now))
+}
+
 func (r *PlanRecord) ContinueBlocked(now time.Time) error {
 	return r.applyWithRecoveredMatch(continueBlockedMutation(now), blockedContinuationWasRecovered)
 }

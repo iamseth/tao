@@ -80,6 +80,11 @@ func (a App) writeStatus(payload statusPayload) error {
 		if err := writef(a.Out, "  %-*s  %-8s  %s\n", width, row.Name, row.Value, row.Source); err != nil {
 			return err
 		}
+		if row.Warning != "" {
+			if err := writef(a.Out, "    warning: %s\n", row.Warning); err != nil {
+				return err
+			}
+		}
 	}
 	if err := writeln(a.Out, ""); err != nil {
 		return err

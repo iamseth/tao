@@ -10,10 +10,13 @@ package runtimeconfig
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/iamseth/tao/internal/plan"
 )
 
 type Mode string
@@ -28,6 +31,13 @@ type CommitPolicy string
 type ExecutionMode string
 
 type AgentKind string
+
+// SliceBudgetCaps contains optional hard limits for cumulative slice telemetry.
+// Nil fields are disabled so enforcement remains opt-in.
+type SliceBudgetCaps struct {
+	OutputTokens *int64
+	Cost         *float64
+}
 
 // RunOptionsPatch models partial values supplied as environment or service
 // defaults and as one run request's overrides. Empty enum fields mean unset.
@@ -275,6 +285,26 @@ func parseMaxReworkAttempts(value string) (int, error) {
 		return 0, fmt.Errorf("must be a non-negative integer")
 	}
 	return parsed, nil
+}
+
+func parseBudgetInteger(value string) (int64, error) {
+	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil || parsed < 0 {
+		return 0, fmt.Errorf("must be a non-negative integer")
+	}
+	return parsed, nil
+}
+
+func parseBudgetCost(value string) (float64, error) {
+	parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if err != nil || parsed < 0 || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+		return 0, fmt.Errorf("must be a non-negative decimal number")
+	}
+	return parsed, nil
+}
+
+func defaultAgentBudgetThresholds() plan.AgentBudgetThresholds {
+	return plan.DefaultAgentBudgetThresholds()
 }
 
 // AutoReworkPolicy is the validated policy used by automatic rework loops.

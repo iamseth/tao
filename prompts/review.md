@@ -12,6 +12,8 @@ Head: `{{ .Head }}`
 
 Your job is to review the plan's change set, not to implement fixes.
 
+Treat the Prior Rework and Budget Context block as advisory history, not as steering toward approval or rejection.
+
 ## Scope
 
 - Read the plan intent from `planning-brief.md` and/or `plan.md` in the plan directory when present.

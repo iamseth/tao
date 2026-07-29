@@ -170,7 +170,7 @@ func TestShowPrintsAgentBudgetWarnings(t *testing.T) {
 				Metrics: &plan.AgentMetrics{
 					SessionID:         "session-1",
 					Status:            plan.StatusCompleted,
-					AssistantMessages: 51,
+					AssistantMessages: 81,
 				},
 			}},
 		},
@@ -181,7 +181,7 @@ func TestShowPrintsAgentBudgetWarnings(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := out.String()
-	for _, want := range []string{"Agent Metrics Budget Warnings:", "assistant_messages", "observed 51 > threshold 50", "001-example"} {
+	for _, want := range []string{"Agent Metrics Budget Warnings:", "assistant_messages", "observed 81 > threshold 80", "001-example"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected %q in output:\n%s", want, text)
 		}

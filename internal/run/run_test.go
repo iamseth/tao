@@ -499,7 +499,7 @@ func TestRunPreflightPrintsBudgetWarningsBeforeRunning(t *testing.T) {
 		Type:    plan.EventTypeAgentMetrics,
 		PlanID:  "plan-a",
 		SliceID: "001-a",
-		Metrics: &plan.AgentMetrics{SessionID: "session-a", Status: plan.StatusCompleted, TotalTokens: plan.DefaultAgentTotalTokensBudget + 1},
+		Metrics: &plan.AgentMetrics{SessionID: "session-a", Status: plan.StatusCompleted, OutputTokens: plan.DefaultAgentBudgetThresholds().Slice.OutputTokens + 1},
 	}}
 	completedDetail := runPlanDetail(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
 	var out bytes.Buffer
@@ -2617,6 +2617,11 @@ func (r memoryPlanMutationRecord) RepairSliceStartWithRunBoundary(sliceID string
 		return err
 	}
 	return r.recordExecutionRoot(sliceID, executionRoot)
+}
+
+func (r memoryPlanMutationRecord) BlockSliceForBudget(sliceID string, reason string, now time.Time) error {
+	_, _, err := plan.MarkSliceBudgetBlocked(r.detail, sliceID, reason, now)
+	return err
 }
 
 func (r memoryPlanMutationRecord) RepairMissingSliceStartedEvent(sliceID string, startedAt time.Time) error {

@@ -1,0 +1,13 @@
+{"type": "slice_blocked", "message": "service unavailable during integration checks"}
+{"type": "plan_commit_fallback"}
+{"type": "plan_commit_guard"}
+{"type": "opencode_metrics", "plan_id": "beta", "metrics": {"session_id": "b-1", "output_tokens": 110, "cost": 11.0}}
+{"type": "opencode_metrics", "plan_id": "beta", "metrics": {"session_id": "b-2", "output_tokens": 120, "cost": 12.0}}
+{"type": "opencode_metrics", "plan_id": "beta", "metrics": {"session_id": "b-3", "output_tokens": 130, "cost": 13.0}}
+{"type": "opencode_metrics", "plan_id": "beta", "metrics": {"session_id": "b-4", "output_tokens": 140, "cost": 14.0}}
+{"type": "opencode_metrics", "plan_id": "beta", "metrics": {"session_id": "b-5", "output_tokens": 150, "cost": 15.0}}
+{"type": "opencode_metrics", "plan_id": "beta", "metrics": {"session_id": "b-6", "output_tokens": 160, "cost": 16.0}}
+{"type": "opencode_metrics", "plan_id": "beta", "metrics": {"session_id": "b-7", "output_tokens": 170, "cost": 17.0}}
+{"type": "opencode_metrics", "plan_id": "beta", "metrics": {"session_id": "b-8", "output_tokens": 180, "cost": 18.0}}
+{"type": "opencode_metrics", "plan_id": "beta", "metrics": {"session_id": "b-9", "output_tokens": 190, "cost": 19.0}}
+{"type": "opencode_metrics", "plan_id": "beta", "metrics": {"session_id": "b-10", "output_tokens": 1000, "cost": 100}}

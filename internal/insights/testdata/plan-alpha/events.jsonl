@@ -1,0 +1,22 @@
+{"type": null, "message": "ignored"}
+{"type": "future_event", "message": "ignored"}
+{"type": "slice_blocked", "reason": "External service unreachable while verifying"}
+{"type": "slice_blocked", "message": "connection refused by test database"}
+{"type": "rework_round", "round": 1}
+{"type": "rework_round", "round": 2}
+{"type": "rework_round", "round": 3}
+{"type": "rework_stopped", "reason": "automatic rework cap exhausted after 3 cycles"}
+{"type": "session_timeout"}
+{"type": "slice_resume_failed"}
+{"type": "verification_command_invalid"}
+{"type": "agent_metrics", "plan_id": "alpha", "metrics": {"session_id": "a-1", "output_tokens": 10, "cost": 1}}
+{"type": "agent_metrics", "plan_id": "alpha", "metrics": {"session_id": "a-2", "output_tokens": 20, "cost": 2}}
+{"type": "agent_metrics", "plan_id": "alpha", "metrics": {"session_id": "a-3", "output_tokens": 30, "cost": 3}}
+{"type": "agent_metrics", "plan_id": "alpha", "metrics": {"session_id": "a-4", "output_tokens": 40, "cost": 4}}
+{"type": "agent_metrics", "plan_id": "alpha", "metrics": {"session_id": "a-5", "output_tokens": 50, "cost": 5}}
+{"type": "agent_metrics", "plan_id": "alpha", "metrics": {"session_id": "a-6", "output_tokens": 60, "cost": 6}}
+{"type": "agent_metrics", "plan_id": "alpha", "metrics": {"session_id": "a-7", "output_tokens": 70, "cost": 7}}
+{"type": "agent_metrics", "plan_id": "alpha", "metrics": {"session_id": "a-8", "output_tokens": 80, "cost": 8}}
+{"type": "agent_metrics", "plan_id": "alpha", "metrics": {"session_id": "a-9", "output_tokens": 90, "cost": 9}}
+{"type": "agent_metrics", "plan_id": "alpha", "metrics": {"session_id": "a-10", "output_tokens": 100, "cost": 10}}
+{malformed
