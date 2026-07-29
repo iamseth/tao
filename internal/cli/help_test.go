@@ -82,6 +82,7 @@ func TestPlanAndExecutionCommandHelpIncludesSubcommandsOptionsAndExamples(t *tes
 func TestRepositoryWorkspaceAndMonitoringHelpIncludesSubcommandsAndOptions(t *testing.T) {
 	assertCommandOutputContains(t, "repo help", []string{"repo", "--help"}, "Available Commands:", "list", "show", "doctor")
 	assertCommandOutputContains(t, "cleanup help", []string{"cleanup", "--help"}, "Options:", "--dry-run", "--force")
+	assertCommandOutputContains(t, "monitor help", []string{"monitor", "--help"}, "non-completed plans across registered repositories", "Heartbeats report process liveness", "--once", "--interval", "tao monitor --interval 5s")
 }
 
 func TestPromptSettingsAndOtherHelpIncludesOptions(t *testing.T) {
@@ -125,7 +126,7 @@ func TestRunHandlesHelpCompletionAndUnknownCommand(t *testing.T) {
 			t.Fatalf("expected usage to contain %q, got %q", want, out.String())
 		}
 	}
-	for _, commandName := range []string{"cleanup", "run", "repo", "validate", "delete", "prompt", "workspace", "completion"} {
+	for _, commandName := range []string{"cleanup", "run", "repo", "validate", "delete", "monitor", "prompt", "workspace", "completion"} {
 		want := topLevelHelpRow(t, commandName)
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("expected usage to contain %q, got %q", want, out.String())

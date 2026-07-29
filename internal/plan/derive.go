@@ -3,18 +3,24 @@ package plan
 import (
 	"errors"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 )
 
 // DerivedPlan collects read-only state computed from durable plan artifacts.
 type DerivedPlan struct {
 	Lifecycle
-	Capabilities   RunCapabilities
-	CompletedCount int
-	PendingCount   int
-	TotalCount     int
-	CompletedAt    *time.Time
-	Elapsed        time.Duration
+	Capabilities           RunCapabilities
+	CompletedCount         int
+	PendingCount           int
+	TotalCount             int
+	OriginalCompletedCount int
+	OriginalTotalCount     int
+	ReworkCompletedCount   int
+	ReworkTotalCount       int
+	CompletedAt            *time.Time
+	Elapsed                time.Duration
 }
 
 type Lifecycle struct {
@@ -52,12 +58,16 @@ func Derive(detail *PlanDetail, now time.Time) DerivedPlan {
 	lifecycle := lifecycleState(detail, index)
 	completedAt := completedAt(detail, index)
 	derived := DerivedPlan{
-		Lifecycle:      lifecycle,
-		Capabilities:   runCapabilitiesForDetail(detail, lifecycle),
-		CompletedCount: index.completedCount,
-		PendingCount:   index.pendingCount,
-		TotalCount:     len(detail.Slices.Slices),
-		CompletedAt:    completedAt,
+		Lifecycle:              lifecycle,
+		Capabilities:           runCapabilitiesForDetail(detail, lifecycle),
+		CompletedCount:         index.completedCount,
+		PendingCount:           index.pendingCount,
+		TotalCount:             len(detail.Slices.Slices),
+		OriginalCompletedCount: index.originalCompletedCount,
+		OriginalTotalCount:     index.originalTotalCount,
+		ReworkCompletedCount:   index.reworkCompletedCount,
+		ReworkTotalCount:       index.reworkTotalCount,
+		CompletedAt:            completedAt,
 	}
 	if !now.IsZero() {
 		derived.Elapsed = elapsed(detail, completedAt, now)
@@ -126,14 +136,44 @@ func SliceCompleted(detail *PlanDetail, sliceID string) bool {
 	return false
 }
 
+// ReworkRoundFromSliceID returns the positive round encoded before the final
+// two index characters in a persisted r<round><NN>- rework slice ID. It keeps
+// the historical classifier used by generated rework slices.
+func ReworkRoundFromSliceID(id string) int {
+	id = strings.TrimSpace(id)
+	dash := strings.IndexByte(id, '-')
+	if !strings.HasPrefix(id, "r") || dash < 0 {
+		return 0
+	}
+	digits := id[1:dash]
+	if len(digits) <= 2 {
+		return 0
+	}
+	round, err := strconv.Atoi(digits[:len(digits)-2])
+	if err != nil || round <= 0 {
+		return 0
+	}
+	return round
+}
+
+// IsReworkSliceID reports whether id uses the historical generated rework ID
+// form understood by ReworkRoundFromSliceID.
+func IsReworkSliceID(id string) bool {
+	return ReworkRoundFromSliceID(id) > 0
+}
+
 type detailIndex struct {
-	slicesByID      map[string]*Slice
-	stateCompleted  map[string]bool
-	inProgressCount int
-	inProgressSlice *Slice
-	completedCount  int
-	pendingCount    int
-	completedAt     *time.Time
+	slicesByID             map[string]*Slice
+	stateCompleted         map[string]bool
+	inProgressCount        int
+	inProgressSlice        *Slice
+	completedCount         int
+	pendingCount           int
+	originalCompletedCount int
+	originalTotalCount     int
+	reworkCompletedCount   int
+	reworkTotalCount       int
+	completedAt            *time.Time
 }
 
 // detailIndex centralizes slice lookup and counts so derive, lifecycle, and validation
@@ -149,6 +189,17 @@ func newDetailIndex(detail *PlanDetail) detailIndex {
 	for i := range detail.Slices.Slices {
 		slice := &detail.Slices.Slices[i]
 		index.slicesByID[slice.ID] = slice
+		if IsReworkSliceID(slice.ID) {
+			index.reworkTotalCount++
+			if slice.Status == StatusCompleted {
+				index.reworkCompletedCount++
+			}
+		} else {
+			index.originalTotalCount++
+			if slice.Status == StatusCompleted {
+				index.originalCompletedCount++
+			}
+		}
 		if slice.Status == StatusInProgress {
 			index.inProgressCount++
 			if index.inProgressSlice == nil {
@@ -203,6 +254,10 @@ func Summarize(detail *PlanDetail, now time.Time) PlanSummary {
 		CompletedCount:                   derived.CompletedCount,
 		PendingCount:                     derived.PendingCount,
 		TotalCount:                       derived.TotalCount,
+		OriginalCompletedCount:           derived.OriginalCompletedCount,
+		OriginalTotalCount:               derived.OriginalTotalCount,
+		ReworkCompletedCount:             derived.ReworkCompletedCount,
+		ReworkTotalCount:                 derived.ReworkTotalCount,
 		StartedAt:                        state.Plan.Timing.StartedAt,
 		CompletedAt:                      derived.CompletedAt,
 		LastActivityAt:                   state.Plan.Timing.LastActivityAt,

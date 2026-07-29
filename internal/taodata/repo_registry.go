@@ -133,6 +133,69 @@ func (r Registry) ListRepos() ([]Repo, error) {
 	return repos, nil
 }
 
+// RepoInventoryEntry exposes registered repository metadata without probing
+// the repository checkout. MetadataError retains unreadable catalog entries so
+// cross-repository consumers can render a warning instead of silently dropping
+// them.
+type RepoInventoryEntry struct {
+	Repo             Repo
+	PlansDir         string
+	RuntimeStatusDir string
+	PlanCount        int
+	MetadataError    error
+}
+
+// MetadataInventory reads only Tao data-home metadata. It deliberately does not
+// run repository health checks.
+func (r Registry) MetadataInventory() ([]RepoInventoryEntry, error) {
+	entries, err := r.repoEntries()
+	if err != nil {
+		return nil, err
+	}
+	inventory := make([]RepoInventoryEntry, 0, len(entries))
+	for _, entry := range entries {
+		catalogRepo := Repo{ID: entry.Name()}
+		plansDir := r.PlansDir(catalogRepo)
+		statusDir := r.RuntimeStatusDir(catalogRepo)
+		repo, err := r.ReadRepo(entry.Name())
+		if err == nil {
+			err = validateInventoryRepo(entry.Name(), repo)
+		}
+		if err != nil {
+			inventory = append(inventory, RepoInventoryEntry{
+				Repo:             catalogRepo,
+				PlansDir:         plansDir,
+				RuntimeStatusDir: statusDir,
+				MetadataError:    err,
+			})
+			continue
+		}
+		inventory = append(inventory, RepoInventoryEntry{
+			Repo:             repo,
+			PlansDir:         plansDir,
+			RuntimeStatusDir: statusDir,
+			PlanCount:        r.planCount(catalogRepo),
+		})
+	}
+	return inventory, nil
+}
+
+func validateInventoryRepo(directoryID string, repo Repo) error {
+	if repo.Schema != RepoSchema {
+		return fmt.Errorf("read repo metadata: unsupported schema %q", repo.Schema)
+	}
+	if strings.TrimSpace(repo.ID) == "" || repo.ID != directoryID {
+		return fmt.Errorf("read repo metadata: repository id %q does not match catalog entry %q", repo.ID, directoryID)
+	}
+	if strings.TrimSpace(repo.Name) == "" {
+		return fmt.Errorf("read repo metadata: repository name is required")
+	}
+	if strings.TrimSpace(repo.Root) == "" {
+		return fmt.Errorf("read repo metadata: repository root is required")
+	}
+	return nil
+}
+
 // RepoCatalogEntry exposes registered repo metadata with derived, non-destructive status.
 type RepoCatalogEntry struct {
 	Repo          Repo
@@ -142,25 +205,24 @@ type RepoCatalogEntry struct {
 }
 
 func (r Registry) Catalog(ctx context.Context, checker RepoHealthChecker) ([]RepoCatalogEntry, error) {
-	entries, err := r.repoEntries()
+	inventory, err := r.MetadataInventory()
 	if err != nil {
 		return nil, err
 	}
-	catalog := make([]RepoCatalogEntry, 0, len(entries))
-	for _, entry := range entries {
-		repo, err := r.ReadRepo(entry.Name())
-		if err != nil {
+	catalog := make([]RepoCatalogEntry, 0, len(inventory))
+	for _, entry := range inventory {
+		if entry.MetadataError != nil {
 			catalog = append(catalog, RepoCatalogEntry{
-				Repo:          Repo{ID: entry.Name()},
-				Health:        metadataErrorHealth(err),
-				MetadataError: err,
+				Repo:          entry.Repo,
+				Health:        metadataErrorHealth(entry.MetadataError),
+				MetadataError: entry.MetadataError,
 			})
 			continue
 		}
 		catalog = append(catalog, RepoCatalogEntry{
-			Repo:      repo,
-			PlanCount: r.planCount(repo),
-			Health:    checker.Check(ctx, repo),
+			Repo:      entry.Repo,
+			PlanCount: entry.PlanCount,
+			Health:    checker.Check(ctx, entry.Repo),
 		})
 	}
 	return catalog, nil
@@ -200,6 +262,20 @@ func (r Registry) planCount(repo Repo) int {
 
 func (r Registry) PlansDir(repo Repo) string {
 	return filepath.Join(r.DataHome, "repos", repo.ID, "plans")
+}
+
+// RuntimeStatusDir returns the repository-owned operational status store. It is
+// a sibling of plans so heartbeat writes never mutate plan artifacts.
+func (r Registry) RuntimeStatusDir(repo Repo) string {
+	return filepath.Join(r.DataHome, "repos", repo.ID, "run-status")
+}
+
+// RuntimePlanStatusPath returns the status file for a validated plan identity.
+func (r Registry) RuntimePlanStatusPath(repo Repo, planID string) (string, error) {
+	if planID != strings.TrimSpace(planID) || !runtimePlanIDRe.MatchString(planID) || planID == "." || planID == ".." {
+		return "", fmt.Errorf("invalid runtime status plan id %q", planID)
+	}
+	return filepath.Join(r.RuntimeStatusDir(repo), planID+".json"), nil
 }
 
 // NotesDir returns the repository-owned note store. It intentionally does not
@@ -287,7 +363,10 @@ func RepoID(canonicalRoot string) string {
 	return name + "-" + hex.EncodeToString(sum[:])[:12]
 }
 
-var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
+var (
+	slugRe          = regexp.MustCompile(`[^a-z0-9]+`)
+	runtimePlanIDRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+)
 
 // Slug lowercases value, collapses runs of non-alphanumeric characters into
 // single dashes, trims leading/trailing dashes, and caps the result at max

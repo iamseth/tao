@@ -38,6 +38,10 @@ type PlanSummary struct {
 	CompletedCount                   int
 	PendingCount                     int
 	TotalCount                       int
+	OriginalCompletedCount           int
+	OriginalTotalCount               int
+	ReworkCompletedCount             int
+	ReworkTotalCount                 int
 	StartedAt                        *time.Time
 	CompletedAt                      *time.Time
 	LastActivityAt                   *time.Time

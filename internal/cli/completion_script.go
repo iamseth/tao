@@ -168,6 +168,9 @@ _tao() {
     ` + commandAliasPattern("status") + `)
 ` + zshCommandArguments("status") + `
       ;;
+    ` + commandAliasPattern("monitor") + `)
+` + zshCommandArguments("monitor") + `
+      ;;
     ` + commandAliasPattern("insights") + `)
 ` + zshCommandArguments("insights") + `
       ;;

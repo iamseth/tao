@@ -24,7 +24,7 @@ var topLevelCommandGroups = []commandGroup{
 	},
 	{
 		heading:  "Monitoring Commands",
-		commands: []string{"status", "insights", "log"},
+		commands: []string{"monitor", "status", "insights", "log"},
 	},
 	{
 		heading:  "Prompt & Agent Commands",

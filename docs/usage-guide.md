@@ -53,6 +53,26 @@ If supervised-session creation or direct plan generation fails, the note remains
 
 Direct note execution is not a bypass. Generated slices still honor dependencies and approvals; execution still honors agent, permission, timeout, workspace, commit, and pull-request settings; and completed work still follows the normal review and merge safeguards. When in doubt, use `note plan`.
 
+## Monitoring plans
+
+Use `tao monitor` while runs are active or queued across more than one registered
+repository. Its urgency-ordered view keeps live and stale runs ahead of blocked
+and quieter plans, while showing lifecycle status, active phase, run duration,
+remaining slices, original/rework progress, and durable activity separately.
+The interactive view refreshes in place; use `tao monitor --once` for a stable
+snapshot to paste or redirect.
+
+Keep using `tao list` for current-repository history, its `--active` filter, and
+its recency limit. Monitor intentionally shows all registered repositories and
+only non-completed plans; it does not change list scope, aliases, or defaults.
+
+Treat LIVE and STALE as process-liveness hints, not workflow verdicts. LIVE means
+the publisher has refreshed its heartbeat recently, but does not prove that the
+agent made semantic progress. STALE preserves the last reported phase and
+heartbeat age; it can mean an interrupted, paused, overloaded, or merely delayed
+process and does not mean the plan failed. Lifecycle STATUS and UPDATED durable
+activity remain the sources for semantic state.
+
 ---
 
 ## Planning commands

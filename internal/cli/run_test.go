@@ -20,6 +20,7 @@ import (
 	reworkpkg "github.com/iamseth/tao/internal/rework"
 	"github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/runqueue"
+	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
@@ -742,6 +743,40 @@ func TestRunSinglePlanAutoReworkLoop(t *testing.T) {
 			}
 			assertNoSingleRunQueueFiles(t, dataHome)
 		})
+	}
+}
+
+func TestRunAutoReworkUsesOneStatusInvocationAndPublishesPhase(t *testing.T) {
+	clearTaoEnv(t)
+	now := time.Date(2026, 7, 29, 6, 0, 0, 0, time.UTC)
+	planID := "20260729-0600-status-rework"
+	finding := plan.ReviewFinding{File: "internal/cli/run.go", Message: "fix it"}
+	detail := singleRunReworkDetail(planID, plan.StatusChangesRequested, reworkReview(plan.ReviewVerdictChangesRequested, []plan.ReviewFinding{finding}), now)
+	detail.Dir = t.TempDir()
+	repo := fakeRepository{details: map[string]*plan.PlanDetail{planID: detail}}
+	reporter := &phaseRecordingCLIStatusReporter{}
+
+	calls := 0
+	oldExecutor := executeSinglePlan
+	executeSinglePlan = func(run.Service, context.Context, run.Request) error {
+		calls++
+		if calls == 2 {
+			detail.State.Status = plan.StatusReviewed
+			detail.State.Plan.Review = reworkReview(plan.ReviewVerdictApprove, nil)
+		}
+		return nil
+	}
+	t.Cleanup(func() { executeSinglePlan = oldExecutor })
+
+	app := App{Out: io.Discard, StatusReporter: reporter, Now: func() time.Time { return now }}
+	if err := app.run(context.Background(), repo, []string{planID}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 || reporter.invocations != 1 {
+		t.Fatalf("execute calls=%d status invocations=%d, want 2 and 1", calls, reporter.invocations)
+	}
+	if !slices.Contains(reporter.phases, run.PhaseAutomaticRework) {
+		t.Fatalf("status phases = %q, want automatic rework", reporter.phases)
 	}
 }
 
@@ -1574,6 +1609,25 @@ func (p *fakeCLIPiProcess) writeEvent(line string) {
 func stringValue(value any) string {
 	text, _ := value.(string)
 	return text
+}
+
+type phaseRecordingCLIStatusReporter struct {
+	invocations int
+	phases      []runstatus.Phase
+}
+
+func (r *phaseRecordingCLIStatusReporter) Track(_ string, fn func() error) error {
+	return fn()
+}
+
+func (r *phaseRecordingCLIStatusReporter) TrackInvocation(_ string, _ run.StatusInvocation, fn func(run.PhaseReporter) error) error {
+	r.invocations++
+	r.ReportPhase(run.PhaseWaitingForOwnership, nil)
+	return fn(r)
+}
+
+func (r *phaseRecordingCLIStatusReporter) ReportPhase(phase runstatus.Phase, _ *runstatus.SliceDetail) {
+	r.phases = append(r.phases, phase)
 }
 
 type cliStatusCall struct {

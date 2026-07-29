@@ -6,7 +6,11 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
+
+	"github.com/iamseth/tao/internal/runstatus"
+	"github.com/iamseth/tao/internal/taodata"
 
 	"github.com/iamseth/tao/internal/plan"
 )
@@ -62,6 +66,34 @@ func TestServiceExecuteReportsStatusOnPanic(t *testing.T) {
 	reporter.requireCall(t, "blocked")
 }
 
+func TestServiceExecutePublishesInvocationAndObservablePhases(t *testing.T) {
+	planID := "20260710-0051-live-status"
+	reporter := &recordingInvocationStatusReporter{}
+	if err := executeServiceWithStatusReporter(t, context.Background(), reporter, &countingSliceExecutor{}, planID); err != nil {
+		t.Fatal(err)
+	}
+
+	if reporter.trackCalls != 0 || reporter.invocationCalls != 1 {
+		t.Fatalf("reporter calls: Track=%d TrackInvocation=%d, want enhanced seam once", reporter.trackCalls, reporter.invocationCalls)
+	}
+	wantStartedAt := time.Date(2026, 7, 29, 5, 0, 0, 0, time.UTC)
+	if reporter.invocation.PlanID != planID || reporter.invocation.RepoID != taodata.RepoID(reporter.repoRoot) || !reporter.invocation.StartedAt.Equal(wantStartedAt) {
+		t.Fatalf("unexpected invocation: %+v (repo root %q)", reporter.invocation, reporter.repoRoot)
+	}
+	want := []runstatus.Phase{PhaseWaitingForOwnership, PhasePreparingExecution, PhaseRunningSlice, PhaseFinalVerification}
+	if len(reporter.phases) != len(want) {
+		t.Fatalf("phases = %+v, want %q", reporter.phases, want)
+	}
+	for i := range want {
+		if reporter.phases[i].phase != want[i] {
+			t.Fatalf("phase %d = %q, want %q", i, reporter.phases[i].phase, want[i])
+		}
+	}
+	if reporter.phases[2].slice == nil || reporter.phases[2].slice.ID != "001-a" {
+		t.Fatalf("running phase slice = %+v, want 001-a", reporter.phases[2].slice)
+	}
+}
+
 func TestRunStatusLabelCapsCustomStatus(t *testing.T) {
 	if got := runStatusLabel("20260710-0051-herdr-status"); got != "run herdr-status" {
 		t.Fatalf("expected slug label, got %q", got)
@@ -97,6 +129,9 @@ func executeServiceWithStatusReporter(t *testing.T, ctx context.Context, reporte
 	detail, completedDetail := statusReporterPlanDetails(t, planID)
 	repo := &memoryRunRepository{details: []*plan.PlanDetail{detail, completedDetail}}
 	var calls []string
+	if enhanced, ok := reporter.(*recordingInvocationStatusReporter); ok {
+		enhanced.repoRoot = detail.State.Repo.Root
+	}
 	service := NewService(repo, io.Discard, Options{
 		ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, ReviewEnabled: false}},
 		RunDependencies: RunDependencies{
@@ -104,6 +139,9 @@ func executeServiceWithStatusReporter(t *testing.T, ctx context.Context, reporte
 			PlanRecordFactory: memoryPlanRecordFactory,
 			SliceExecutor:     executor,
 			StatusReporter:    reporter,
+			Now: func() time.Time {
+				return time.Date(2026, 7, 29, 5, 0, 0, 0, time.UTC)
+			},
 		},
 	})
 	return service.Execute(ctx, Request{Input: planID})
@@ -122,6 +160,40 @@ func statusReporterPlanDetails(t *testing.T, planID string) (*plan.PlanDetail, *
 	completedDetail.State.Plan.ID = planID
 	completedDetail.State.Repo.Root = repoRoot
 	return detail, completedDetail
+}
+
+type recordedPhase struct {
+	phase runstatus.Phase
+	slice *runstatus.SliceDetail
+}
+
+type recordingInvocationStatusReporter struct {
+	trackCalls      int
+	invocationCalls int
+	invocation      StatusInvocation
+	repoRoot        string
+	phases          []recordedPhase
+}
+
+func (r *recordingInvocationStatusReporter) Track(_ string, fn func() error) error {
+	r.trackCalls++
+	return fn()
+}
+
+func (r *recordingInvocationStatusReporter) TrackInvocation(_ string, invocation StatusInvocation, fn func(PhaseReporter) error) error {
+	r.invocationCalls++
+	r.invocation = invocation
+	r.ReportPhase(PhaseWaitingForOwnership, nil)
+	return fn(r)
+}
+
+func (r *recordingInvocationStatusReporter) ReportPhase(phase runstatus.Phase, slice *runstatus.SliceDetail) {
+	var cloned *runstatus.SliceDetail
+	if slice != nil {
+		copy := *slice
+		cloned = &copy
+	}
+	r.phases = append(r.phases, recordedPhase{phase: phase, slice: cloned})
 }
 
 type recordingStatusReporter struct {

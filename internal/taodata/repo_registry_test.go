@@ -122,6 +122,31 @@ func TestRegistryQueuePaths(t *testing.T) {
 	}
 }
 
+func TestRegistryRuntimeStatusPathsStayOutsidePlans(t *testing.T) {
+	dataHome := t.TempDir()
+	registry := Registry{DataHome: dataHome}
+	repo := Repo{ID: "repo-123"}
+	statusDir := filepath.Join(dataHome, "repos", repo.ID, "run-status")
+	if got := registry.RuntimeStatusDir(repo); got != statusDir {
+		t.Fatalf("RuntimeStatusDir() = %q, want %q", got, statusDir)
+	}
+	got, err := registry.RuntimePlanStatusPath(repo, "plan-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(statusDir, "plan-a.json"); got != want {
+		t.Fatalf("RuntimePlanStatusPath() = %q, want %q", got, want)
+	}
+	if strings.HasPrefix(got, registry.PlansDir(repo)+string(filepath.Separator)) {
+		t.Fatalf("runtime status path is inside plans directory: %q", got)
+	}
+	for _, planID := range []string{"../escape", "nested/plan", " plan-a", ".."} {
+		if _, err := registry.RuntimePlanStatusPath(repo, planID); err == nil {
+			t.Errorf("RuntimePlanStatusPath(%q) succeeded", planID)
+		}
+	}
+}
+
 func TestRegistryMergeBatchPathsStayOutsidePlans(t *testing.T) {
 	dataHome := t.TempDir()
 	registry := Registry{DataHome: dataHome}

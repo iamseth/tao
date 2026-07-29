@@ -12,6 +12,7 @@ import (
 	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/view"
 )
@@ -215,6 +216,7 @@ func (r SelectedSliceRunner) Run(ctx context.Context, detail *plan.PlanDetail, d
 	run := SliceRun{PlanDir: absolutePlanDir(detail.Dir), SliceID: slice.ID, LogPath: logPath, RunPacket: runPacket, RepoRoot: executionRoot, VerificationCommands: slice.Verification.Commands, Resuming: resuming, ResumeAttempt: resumeAttempt}
 	transportRetries := 0
 	for {
+		ReportPhase(ctx, PhaseRunningSlice, &runstatus.SliceDetail{ID: slice.ID, Title: slice.Title})
 		handoffErr := r.runExecutor(ctx, run)
 		if handoffErr == nil {
 			reloaded, reloadErr := r.reload(ctx, detail)

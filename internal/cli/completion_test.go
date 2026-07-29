@@ -23,6 +23,7 @@ func TestCommandAliases(t *testing.T) {
 		{name: "list", want: []string{"l", "li", "lis", "list"}},
 		{name: "repo", want: []string{"repo"}},
 		{name: "note", want: []string{"n", "no", "not", "note"}},
+		{name: "monitor", want: []string{"mon", "moni", "monit", "monito", "monitor"}},
 		{name: "slice-complete", want: []string{"slice-complete"}},
 		{name: "commit", want: []string{"commit"}},
 		{name: "version", want: []string{"version"}},
@@ -79,6 +80,7 @@ func TestCommandAliasPatternCompletionSpecialCases(t *testing.T) {
 		{command: "completion", want: "co|com|comp|compl|comple|completi|completio|completion"}, //nolint:misspell // intentional completion-prefix fixture
 		{command: "repo", want: "repo"},
 		{command: "note", want: "n|no|not|note"},
+		{command: "monitor", want: "mon|moni|monit|monito|monitor"},
 		{command: "slice-complete", want: "slice-complete"},
 		{command: "commit", want: "commit"},
 		{command: "missing", want: "missing"},

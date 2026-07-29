@@ -321,7 +321,7 @@ func (a App) newQueueManager(ctx context.Context, repo queueRepository, drain qu
 	}
 	options := run.Options{
 		ExecutionConfig: run.ExecutionConfig{ResolvedRunOptions: drain.runtime.options, SkipPermissions: drain.runtime.skipPermissions},
-		RunDependencies: run.RunDependencies{CommandRunner: a.CommandRunner, ProcessStarter: a.ProcessStarter, StatusReporter: drain.runtime.statusReporter, SessionLogWriter: a.Out},
+		RunDependencies: run.RunDependencies{CommandRunner: a.CommandRunner, ProcessStarter: a.ProcessStarter, StatusReporter: drain.runtime.statusReporter, SessionLogWriter: a.Out, Now: a.now},
 	}
 	manager, err := runqueue.NewManager(runqueue.ManagerConfig{
 		Context:             ctx,

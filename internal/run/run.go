@@ -206,7 +206,10 @@ func (s Service) WithPlanRunLock(ctx context.Context, request Request, operation
 	if detail == nil {
 		return fmt.Errorf("plan %q not found", request.Input)
 	}
-	return withPlanRunLock(ctx, detail, now(s.dependencies).UTC(), operation)
+	startedAt := now(s.dependencies).UTC()
+	return trackRunStatus(ctx, s.dependencies.StatusReporter, detail, startedAt, func(statusCtx context.Context) error {
+		return withPlanRunLock(statusCtx, detail, startedAt, operation)
+	})
 }
 
 func CheckRequestCanStart(detail *plan.PlanDetail, request Request) error {
@@ -237,8 +240,10 @@ func (s Service) Execute(ctx context.Context, request Request) error {
 	if err != nil {
 		return err
 	}
-	return trackRunStatus(s.dependencies.StatusReporter, runStatusLabel(detail.State.Plan.ID), func() error {
-		return withPlanRunLock(ctx, detail, now(s.dependencies).UTC(), func(ownedCtx context.Context) error {
+	startedAt := now(s.dependencies).UTC()
+	return trackRunStatus(ctx, s.dependencies.StatusReporter, detail, startedAt, func(statusCtx context.Context) error {
+		return withPlanRunLock(statusCtx, detail, startedAt, func(ownedCtx context.Context) error {
+			ReportPhase(ownedCtx, PhasePreparingExecution, nil)
 			if err := CheckRequestCanStart(detail, request); err != nil {
 				return err
 			}

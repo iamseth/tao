@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"path"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -84,20 +83,7 @@ func nextRound(detail *plan.PlanDetail) int { return RoundCount(detail) + 1 }
 // RoundFromSliceID returns the positive round encoded before the final two
 // index characters in a persisted r<round><NN>- rework slice ID.
 func RoundFromSliceID(id string) int {
-	id = strings.TrimSpace(id)
-	dash := strings.IndexByte(id, '-')
-	if !strings.HasPrefix(id, "r") || dash < 0 {
-		return 0
-	}
-	digits := id[1:dash]
-	if len(digits) <= 2 {
-		return 0
-	}
-	round, err := strconv.Atoi(digits[:len(digits)-2])
-	if err != nil || round <= 0 {
-		return 0
-	}
-	return round
+	return plan.ReworkRoundFromSliceID(id)
 }
 
 // RoundCount returns the highest deterministic r<round> rework slice round.

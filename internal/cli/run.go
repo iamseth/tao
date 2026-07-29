@@ -168,7 +168,7 @@ var executeSinglePlan = func(service run.Service, ctx context.Context, request r
 func (a App) executeResolvedRun(ctx context.Context, repo queueRepository, input string, request run.Request, skipPermissions bool, policy runtimeconfig.AutoReworkPolicy, reworkRestart bool) error {
 	service := run.NewService(repo, a.Out, run.Options{
 		ExecutionConfig: run.ExecutionConfig{ResolvedRunOptions: runtimeconfig.ResolvedRunOptions{Agent: request.Agent}, SkipPermissions: skipPermissions},
-		RunDependencies: run.RunDependencies{CommandRunner: a.CommandRunner, ProcessStarter: a.ProcessStarter, StatusReporter: a.StatusReporter, SessionLogWriter: a.Out},
+		RunDependencies: run.RunDependencies{CommandRunner: a.CommandRunner, ProcessStarter: a.ProcessStarter, StatusReporter: a.StatusReporter, SessionLogWriter: a.Out, Now: a.now},
 	})
 	runCtx, stopSignals := newCommandSignalContext(ctx)
 	defer stopSignals()
@@ -197,6 +197,7 @@ func (a App) executeResolvedRun(ctx context.Context, repo queueRepository, input
 			Baseline:            baseline,
 			MaxAttempts:         maxAttempts,
 			DecideBeforeExecute: acknowledgedStop,
+			BeforeDecision:      automaticReworkPhaseHook(ownedCtx, maxAttempts, policy.Enabled),
 			Execute: func(executeCtx context.Context) error {
 				err := executeSinglePlan(service, executeCtx, request)
 				if firstExecution {

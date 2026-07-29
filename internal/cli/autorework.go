@@ -7,6 +7,7 @@ import (
 
 	"github.com/iamseth/tao/internal/plan"
 	reworkpkg "github.com/iamseth/tao/internal/rework"
+	"github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/runqueue"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 )
@@ -29,6 +30,7 @@ func planAutoReworker(repo queueRepository, now func() time.Time) runqueue.AutoR
 func planAutoReworkerWithRestart(repo queueRepository, now func() time.Time, allowRestart bool) runqueue.AutoReworker {
 	driver := newReworkDriver(repo, now)
 	return func(ctx context.Context, planID string, baseline int, attempts int, previous string, maxAttempts int) (reworkpkg.Decision, error) {
+		run.ReportPhase(ctx, run.PhaseAutomaticRework, nil)
 		detail, err := repo.ResolvePlan(ctx, planID)
 		if err != nil {
 			return reworkpkg.Decision{}, err
@@ -42,6 +44,16 @@ func planAutoReworkerWithRestart(repo queueRepository, now func() time.Time, all
 
 func autoReworkRestartGuard(detail *plan.PlanDetail, allowRestart bool) (reworkpkg.Decision, bool, error) {
 	return reworkpkg.GuardAutoReworkRestart(detail, allowRestart)
+}
+
+func automaticReworkPhaseHook(ctx context.Context, maxAttempts int, enabled bool) func() (int, bool) {
+	if !enabled || maxAttempts <= 0 {
+		return nil
+	}
+	return func() (int, bool) {
+		run.ReportPhase(ctx, run.PhaseAutomaticRework, nil)
+		return maxAttempts, true
+	}
 }
 
 const (

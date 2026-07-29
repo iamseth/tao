@@ -139,6 +139,10 @@ func outputSupportsColor(out io.Writer) bool {
 	if os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
 		return false
 	}
+	return outputIsTerminal(out)
+}
+
+func outputIsTerminal(out io.Writer) bool {
 	if terminal, ok := out.(terminalWriter); ok {
 		return terminal.IsTerminal()
 	}

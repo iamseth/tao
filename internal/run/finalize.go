@@ -64,11 +64,15 @@ func (f Finalizer) finalizeCompletedRun(ctx context.Context, runCount int, detai
 			return fmt.Errorf("finalize completed run: %w", err)
 		}
 	}
+	ReportPhase(ctx, PhaseFinalVerification, nil)
 	if err := f.verifyCompletedBranch(ctx, detail, executionRoot); err != nil {
 		return fmt.Errorf("finalize completed run: %w", err)
 	}
 	if err := writeSessionSummary(out, detail, now(execution).UTC()); err != nil {
 		return err
+	}
+	if execution.Config.ReviewEnabled {
+		ReportPhase(ctx, PhaseReview, nil)
 	}
 	if err := f.reviewCompletedRun(ctx, runCount, detail, executionRoot); err != nil {
 		return err

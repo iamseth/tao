@@ -35,6 +35,9 @@ type App struct {
 	AcquireNotePromotionLock NotePromotionLockAcquirer
 	WorkspaceManager         WorkspaceManagerFactory
 	PromptFreshnessCheck     PromptFreshnessChecker
+	MonitorCollector         MonitorSnapshotCollector
+	MonitorTicker            func(time.Duration) MonitorTicker
+	MonitorIsTerminal        func(io.Writer) bool
 	// Now supplies the wall clock for timestamps recorded by commands. Tests
 	// inject a fixed clock; when nil it defaults to time.Now.
 	Now func() time.Time

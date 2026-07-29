@@ -6,6 +6,34 @@ import (
 	"time"
 )
 
+func TestSummarizeCountsOriginalAndReworkSlicesAcrossRounds(t *testing.T) {
+	detail := &PlanDetail{
+		State: State{Status: StatusInProgress, Plan: PlanState{ID: "plan", PendingSlices: []string{"002-original", "r102-fix", "r202-more"}}},
+		Slices: SlicesFile{Slices: []Slice{
+			{ID: "001-original", Status: StatusCompleted},
+			{ID: "002-original", Status: StatusPending},
+			{ID: "r101-fix", Status: StatusCompleted},
+			{ID: "r102-fix", Status: StatusPending},
+			{ID: "r1ab-legacy", Status: StatusCompleted},
+			{ID: "r201-more", Status: StatusCompleted},
+			{ID: "r202-more", Status: StatusPending},
+		}},
+	}
+
+	derived := Derive(detail, time.Time{})
+	if derived.OriginalCompletedCount != 1 || derived.OriginalTotalCount != 2 {
+		t.Fatalf("original completed/total = %d/%d, want 1/2", derived.OriginalCompletedCount, derived.OriginalTotalCount)
+	}
+	if derived.ReworkCompletedCount != 3 || derived.ReworkTotalCount != 5 {
+		t.Fatalf("rework completed/total = %d/%d, want 3/5", derived.ReworkCompletedCount, derived.ReworkTotalCount)
+	}
+
+	summary := Summarize(detail, time.Time{})
+	if summary.OriginalCompletedCount != 1 || summary.OriginalTotalCount != 2 || summary.ReworkCompletedCount != 3 || summary.ReworkTotalCount != 5 {
+		t.Fatalf("summary composition = %+v, want original 1/2 and rework 3/5", summary)
+	}
+}
+
 func TestDeriveReviewedReflectsPlanReview(t *testing.T) {
 	detail := reviewedCapabilityDetail()
 
