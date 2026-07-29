@@ -51,18 +51,18 @@ func installDescriptor(descriptor agentpkg.Descriptor, force bool) ([]Result, er
 			if err := installPiExtension(path, force); err != nil {
 				return nil, err
 			}
-			results = append(results, Result{Agent: descriptor.Kind, Name: prompt.Name, Path: path, Status: "installed"})
+			results = append(results, Result{Agent: descriptor.Kind, Name: prompt.CommandName, Path: path, Status: "installed"})
 			continue
 		}
 		content, err := installContent(descriptor, prompt)
 		if err != nil {
 			return nil, err
 		}
-		path := Path(target, prompt.Name)
+		path := Path(target, prompt.CommandName)
 		if err := Install(path, content, force); err != nil {
 			return nil, err
 		}
-		results = append(results, Result{Agent: descriptor.Kind, Name: prompt.Name, Path: path, Status: "installed"})
+		results = append(results, Result{Agent: descriptor.Kind, Name: prompt.CommandName, Path: path, Status: "installed"})
 	}
 	if err := removeRetiredManagedPrompts(target); err != nil {
 		return nil, err
@@ -121,19 +121,19 @@ func checkDescriptor(descriptor agentpkg.Descriptor) ([]Result, error) {
 			if err != nil {
 				return nil, err
 			}
-			results = append(results, Result{Agent: descriptor.Kind, Name: prompt.Name, Path: path, Status: status})
+			results = append(results, Result{Agent: descriptor.Kind, Name: prompt.CommandName, Path: path, Status: status})
 			continue
 		}
 		content, err := installContent(descriptor, prompt)
 		if err != nil {
 			return nil, err
 		}
-		path := Path(target, prompt.Name)
+		path := Path(target, prompt.CommandName)
 		status, err := Status(path, content)
 		if err != nil {
 			return nil, err
 		}
-		results = append(results, Result{Agent: descriptor.Kind, Name: prompt.Name, Path: path, Status: status})
+		results = append(results, Result{Agent: descriptor.Kind, Name: prompt.CommandName, Path: path, Status: status})
 	}
 	return results, nil
 }
@@ -154,12 +154,12 @@ func installContent(descriptor agentpkg.Descriptor, prompt prompts.Definition) (
 
 func renderInstallContent(descriptor agentpkg.Descriptor, prompt prompts.Definition) (string, error) {
 	if prompt.Name != prompts.PromptCommit || descriptor.UsesExtensionPrompts {
-		return descriptor.RenderPrompt(prompt.Name, prompt.Template)
+		return descriptor.RenderPrompt(prompt.CommandName, prompt.Name, prompt.Template)
 	}
 	// Commit commands must run the Tao boundary from the provider's current
 	// session. Inline this one prompt instead of dynamically invoking `tao
 	// prompt`, which would hide the binary permissions and handoff contract.
-	content, err := promptfmt.ManagedCodexCommand(prompt.Name, prompt.Template)
+	content, err := promptfmt.ManagedCodexCommand(prompt.CommandName, prompt.Name, prompt.Template)
 	if err != nil {
 		return "", err
 	}

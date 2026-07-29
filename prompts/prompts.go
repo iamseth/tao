@@ -110,8 +110,26 @@ type promptDefinition struct {
 }
 
 type Definition struct {
-	Name     string
-	Template string
+	Name        string
+	CommandName string
+	Template    string
+}
+
+// agentCommandNames keeps the stable Tao prompt selectors separate from the
+// slash-command names installed into provider-owned namespaces.
+var agentCommandNames = map[string]string{
+	PromptPlan:                        "tao-plan",
+	PromptSlice:                       "tao-slice",
+	PromptNoteSlice:                   "tao-note-slice",
+	PromptRun:                         "tao-run",
+	PromptCommit:                      "tao-commit",
+	PromptGrillMe:                     "tao-grill-me",
+	PromptImproveCodebaseArchitecture: "tao-improve-codebase-architecture",
+	PromptImproveDocumentation:        "tao-improve-documentation",
+	PromptRepoHealth:                  "tao-repo-health",
+	PromptPerformanceReview:           "tao-performance-review",
+	PromptPR:                          "tao-pr",
+	PromptReview:                      "tao-review",
 }
 
 var promptRegistry = []promptDefinition{
@@ -288,7 +306,11 @@ func PromptNames() []string {
 func Definitions() []Definition {
 	definitions := make([]Definition, 0, len(promptRegistry))
 	for _, prompt := range promptRegistry {
-		definitions = append(definitions, Definition{Name: prompt.name, Template: prompt.template})
+		definitions = append(definitions, Definition{
+			Name:        prompt.name,
+			CommandName: agentCommandNames[prompt.name],
+			Template:    prompt.template,
+		})
 	}
 	return definitions
 }

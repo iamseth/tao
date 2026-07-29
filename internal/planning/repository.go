@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/iamseth/tao/internal/atomicfile"
 	"github.com/iamseth/tao/internal/taodata"
@@ -368,7 +369,7 @@ func normalizeSource(source *SourceEnvelope, repo taodata.Repo, now time.Time) *
 
 func titleFromPrompt(prompt string) string {
 	for line := range strings.SplitSeq(prompt, "\n") {
-		line = strings.TrimSpace(strings.TrimPrefix(line, "/plan"))
+		line = trimPlanningCommand(strings.TrimSpace(line))
 		if line == "" {
 			continue
 		}
@@ -378,6 +379,20 @@ func titleFromPrompt(prompt string) string {
 		return line
 	}
 	return ""
+}
+
+func trimPlanningCommand(line string) string {
+	for _, command := range []string{"/tao-plan", "/plan"} {
+		rest, found := strings.CutPrefix(line, command)
+		if !found {
+			continue
+		}
+		trimmed := strings.TrimLeftFunc(rest, unicode.IsSpace)
+		if rest == "" || trimmed != rest {
+			return trimmed
+		}
+	}
+	return line
 }
 
 func cleanSlug(value string) string {

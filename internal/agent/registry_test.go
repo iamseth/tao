@@ -44,10 +44,10 @@ func TestLookupDescriptorFields(t *testing.T) {
 	if pi.Label != "pi" || pi.ToolName != "pi" {
 		t.Fatalf("pi label/tool = %q/%q, want pi/pi", pi.Label, pi.ToolName)
 	}
-	if pi.TargetDescription != "Pi global prompt templates and Tao commit extension command" {
+	if pi.TargetDescription != "Pi global prompt templates and Tao /tao-commit extension command" {
 		t.Fatalf("pi target description = %q", pi.TargetDescription)
 	}
-	if pi.DoctorDescription != "Pi prompt templates plus Tao commit extension command" {
+	if pi.DoctorDescription != "Pi prompt templates plus Tao /tao-commit extension command" {
 		t.Fatalf("pi doctor description = %q", pi.DoctorDescription)
 	}
 	if !pi.UsesExtensionPrompts {

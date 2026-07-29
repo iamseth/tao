@@ -1,10 +1,10 @@
 # Agent-authored input trust audit
 
-This audit inventories places where Tao consumes data written by an agent or by an agent-driven tool. The focus is reliability hardening at interface boundaries: plan artifacts, agent stdout transports, captured agent output, and plan metadata that agents can edit during `/slice` or `/run`.
+This audit inventories places where Tao consumes data written by an agent or by an agent-driven tool. The focus is reliability hardening at interface boundaries: plan artifacts, agent stdout transports, captured agent output, and plan metadata that agents can edit during `/tao-slice` or `/tao-run`.
 
 ## Core `state.json` and `slices.json` plan artifacts
 
-- **Agent-authored input:** `/slice` agents write `state.json`, `slices.json`, `planning-brief.md`, and related plan files; `/run` agents can also edit `slices.json` on exceptional paths.
+- **Agent-authored input:** `/tao-slice` agents write `state.json`, `slices.json`, `planning-brief.md`, and related plan files; `/tao-run` agents can also edit `slices.json` on exceptional paths.
 - **Consumed by:** `internal/plan/artifact_io.go`, `internal/plan/repository.go`, `internal/plan/validate.go`, `internal/plan/lifecycle.go`, `internal/run/execute.go`, `internal/run/finalize.go`, and CLI commands that resolve or render plans.
 - **Current trust assumption:** Required JSON must parse. Tao-owned multi-artifact lifecycle writes use a private mutation journal, but most inconsistencies in legacy or directly edited plans remain warnings so they stay readable; selected-slice verification preflight blocks only a narrow set of runnable-slice hazards.
 - **Concrete failure mode:** A malformed required JSON file makes a plan invalid. A syntactically valid but wrong `pending_slices`, `current_slice`, `repo.root`, `workspace`, `expected_files`, or `verification.commands` field can select the wrong slice, point execution at the wrong checkout, obscure advisory commit-scope warnings, or send bad instructions back to the agent in the run packet. The journal provides crash consistency for conforming Tao writers, not authenticity for agent-writable targets.

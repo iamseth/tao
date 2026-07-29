@@ -3,6 +3,7 @@ package prompts
 import (
 	"encoding/json"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -304,9 +305,22 @@ func TestPromptMetadata(t *testing.T) {
 	if len(definitions) != len(names) {
 		t.Fatalf("Definitions() length = %d, want %d", len(definitions), len(names))
 	}
+	wantCommands := []string{"tao-plan", "tao-slice", "tao-note-slice", "tao-run", "tao-commit", "tao-grill-me", "tao-improve-codebase-architecture", "tao-improve-documentation", "tao-repo-health", "tao-performance-review", "tao-pr", "tao-review"}
 	for i, definition := range definitions {
-		if definition.Name != names[i] || definition.Template == "" {
+		if definition.Name != names[i] || definition.CommandName != wantCommands[i] || definition.Template == "" {
 			t.Fatalf("unexpected definition[%d]: %#v", i, definition)
+		}
+		if !strings.HasPrefix(definition.CommandName, "tao-") {
+			t.Fatalf("definition[%d] command name = %q, want tao- prefix", i, definition.CommandName)
+		}
+	}
+}
+
+func TestInstallablePromptGuidanceUsesPrefixedSlashCommands(t *testing.T) {
+	unprefixed := regexp.MustCompile(`(^|[^[:alnum:]_-])/(plan|slice|note-slice|run|commit|grill-me|improve-codebase-architecture|improve-documentation|repo-health|performance-review|pr|review)([^[:alnum:]_-]|$)`)
+	for _, definition := range Definitions() {
+		if match := unprefixed.FindString(definition.Template); match != "" {
+			t.Errorf("prompt %q contains unprefixed slash-command reference %q", definition.Name, match)
 		}
 	}
 }

@@ -6,7 +6,7 @@ This document is the artifact contract for Tao contributors and advanced users. 
 
 ```mermaid
 flowchart LR
-    Create["/slice<br/>tao init"] --> Dir["Tao data home<br/>repos/&lt;repo-id&gt;/plans/&lt;plan-id&gt;/"]
+    Create["/tao-slice<br/>tao init"] --> Dir["Tao data home<br/>repos/&lt;repo-id&gt;/plans/&lt;plan-id&gt;/"]
     Dir --> State["state.json<br/>required"]
     Dir --> Slices["slices.json<br/>required"]
     Dir --> Events["events.jsonl<br/>optional append log"]
@@ -22,7 +22,7 @@ flowchart LR
 
 ## Plan Directory
 
-A plan directory is usually allocated by `/slice` through:
+A plan directory is usually allocated by `/tao-slice` through:
 
 ```sh
 tao init --slug <short-slug> --json
@@ -41,7 +41,7 @@ Plan loaders validate plan-directory artifacts and must not depend on unrelated 
 
 ## File Contract
 
-| File | Loader requirement | New `/slice` expectation | Purpose |
+| File | Loader requirement | New `/tao-slice` expectation | Purpose |
 | --- | --- | --- | --- |
 | `state.json` | Required | Required | Mutable plan lifecycle and queue state. |
 | `slices.json` | Required | Required | Executable slice definitions and verification commands. |
@@ -341,7 +341,7 @@ Planning-session capture is no longer supported. If optional legacy planning-ses
 | `planning-session-stats.json` | Legacy Tao-owned planning-session summary, including planning agent when known, session ID, repository root, timestamps, provider/model, usage, cost, and stale-metadata status. |
 | `planning-prompt.md` | Legacy extracted planning prompt text used to create the plan. |
 
-`agent` records the planning runtime when known, such as `pi` or `claude`. It is audit metadata only; plans remain portable and may be run by any supported agent runtime later. `planning_started_at` records when the `/slice` prompt began. It intentionally lives in `planning-session-stats.json`, not core `state.json` timing. Renderers should round positive canonical planning duration to the nearest second and prefer positive `planning_started_at` duration.
+`agent` records the planning runtime when known, such as `pi` or `claude`. It is audit metadata only; plans remain portable and may be run by any supported agent runtime later. `planning_started_at` records when the `/tao-slice` prompt began. It intentionally lives in `planning-session-stats.json`, not core `state.json` timing. Renderers should round positive canonical planning duration to the nearest second and prefer positive `planning_started_at` duration.
 
 If sidecar metadata appears stale or mismatched, stats should set `capture_suspect` and `capture_suspect_reason`. Stale sidecars must hide all planning metrics, including duration, tokens, messages, cost, model, and tool-call data.
 
@@ -368,7 +368,7 @@ Known event types include:
 
 | Event type | Purpose |
 | --- | --- |
-| `plan_created` | Initial event written by `/slice`; may include `agent` for the planning runtime. |
+| `plan_created` | Initial event written by `/tao-slice`; may include `agent` for the planning runtime. |
 | `slice_started` | Selected slice attempt started. |
 | `slice_completed` | Slice completion transaction settled successfully; detailed intent, outcome, and SHA live in `slices.json`. |
 | `slice_resume_attempted` | Agent handoff for an interrupted automatic slice was attempted. |

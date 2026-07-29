@@ -13,12 +13,12 @@
 
 Tao helps plan and execute LLM driven software development. Instead of asking an agent to do everything at once, Tao encourages you to plan first and execute in small, iterative steps called slices.
 
-When planning work, start a new LLM session in your agent of choice and run *`/plan add dark mode support`* or whatever you want to add/change. It generally helps to write a longer, more detailed prompt but even a short one like that can do.
+When planning work, start a new LLM session in your agent of choice and run *`/tao-plan add dark mode support`* or whatever you want to add/change. It generally helps to write a longer, more detailed prompt but even a short one like that can do.
 
-The prompt will likely ask questions about the plan, helping shape the direction. When the plan is clear, run *`/slice`* to break the plan into slices.
+The prompt will likely ask questions about the plan, helping shape the direction. When the plan is clear, run *`/tao-slice`* to break the plan into slices.
 
 > [!TIP]
-> If there are open questions at the end of a planning session, use `/grill-me` ensuring all questions are answered before slicing. This will help avoid incomplete slices that may require rework later.
+> If there are open questions at the end of a planning session, use `/tao-grill-me` ensuring all questions are answered before slicing. This will help avoid incomplete slices that may require rework later.
 
 After a plan is created, Tao runs each slice serially in a clean Git worktree. The implementing agent proposes a scoped Conventional Commit with `What:` and `Why:` sections; Tao validates it, appends trusted evidence trailers, and alone stages and creates each checkpoint commit. After all slices run, Tao reviews the exact plan diff.
 
@@ -47,11 +47,11 @@ make build
 ./bin/tao doctor            # summarize agents and actionable setup problems
 ```
 
-Plan and slice inside your agent (e.g. Pi, Claude, OpenCode, or Codex) with a prompt like:
+Plan and slice inside your agent (e.g. Pi, Claude, OpenCode, or Codex) with commands like:
 
 ```text
-/plan add a --hello flag to the CLI
-/slice
+/tao-plan add a --hello flag to the CLI
+/tao-slice
 ```
 
 If the idea is not ready for a planning session, capture it from the repository instead (the short form is intentionally quick):
@@ -67,7 +67,7 @@ tao note reopen <note-id>
 
 Later, use `tao note plan <note-id>` to create a durable source-linked record, then continue clarification in a fresh agent planning session. Use `tao note run <note-id>` only when the note is already explicit: it still creates and validates an ordinary plan and then enters the same approval, permission, workspace, commit, pull-request, review, and merge lifecycle described below.
 
-`/slice` writes a plan to Tao's data home and prints its ID. Check it before you
+`/tao-slice` writes a plan to Tao's data home and prints its ID. Check it before you
 run anything:
 
 ```console
@@ -369,13 +369,13 @@ tao completion zsh
 tao version
 ```
 
-The agent `/commit` command is the fast standalone wrapper: it asks Tao for
+The agent `/tao-commit` command is the fast standalone wrapper: it asks Tao for
 filtered context, uses the already selected agent/model to propose the message,
 and returns it to Tao for validation, safe staging, and local commit creation.
 Use `--message` only as an explicit standalone override; the complete message
 must satisfy the same subject plus `What:`/`Why:` contract. Automatic slice,
 review-backed merge, and active merge-resolution flows never fall back to
-`/commit` or start a second normal message session.
+`/tao-commit` or start a second normal message session.
 
 ## Configuration
 
@@ -443,7 +443,7 @@ make lint
 
 CLI entrypoint is `cmd/tao/main.go`. Command parsing lives in `internal/cli`.
 Plan artifact loading, validation, summaries, and time formatting live in
-`internal/plan`. The repo-local Pi extension that hosts the `commit` command
+`internal/plan`. The repo-local Pi extension that hosts the `/tao-commit` command
 lives in `extensions/pi`
 (see [`extensions/pi/README.md`](extensions/pi/README.md)).
 

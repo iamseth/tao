@@ -231,7 +231,7 @@ func TestNotePlanCreatesSourceLinkedSessionAndIsIdempotent(t *testing.T) {
 		return nil, errors.New("agent must not start")
 	}
 
-	if err := app.Run(context.Background(), []string{"note", "create", "Add", "safe /slice handling"}); err != nil {
+	if err := app.Run(context.Background(), []string{"note", "create", "Add", "safe slicing behavior"}); err != nil {
 		t.Fatal(err)
 	}
 	id := strings.TrimSpace(strings.TrimPrefix(out.String(), "Created note "))
@@ -239,7 +239,7 @@ func TestNotePlanCreatesSourceLinkedSessionAndIsIdempotent(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"note", "plan", id}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Planning session created: tao-123:", "fresh agent session", "tao note show " + id} {
+	for _, want := range []string{"Planning session created: tao-123:", "fresh agent session", "/tao-plan context", "tao note show " + id} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("plan output missing %q: %q", want, out.String())
 		}
@@ -252,7 +252,7 @@ func TestNotePlanCreatesSourceLinkedSessionAndIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.Source == nil || created.Source.Note == nil || created.Source.Note.ID != id || created.Source.Note.Text != "Add safe /slice handling" || created.Messages[0].Content != "Add safe /slice handling" {
+	if created.Source == nil || created.Source.Note == nil || created.Source.Note.ID != id || created.Source.Note.Text != "Add safe slicing behavior" || created.Messages[0].Content != "Add safe slicing behavior" {
 		t.Fatalf("session source/prompt = %+v / %+v", created.Source, created.Messages)
 	}
 
@@ -260,7 +260,7 @@ func TestNotePlanCreatesSourceLinkedSessionAndIsIdempotent(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"n", "p", id}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "already promoted") || locks != 1 {
+	if !strings.Contains(out.String(), "already promoted") || !strings.Contains(out.String(), "/tao-plan context") || locks != 1 {
 		t.Fatalf("idempotent output=%q locks=%d", out.String(), locks)
 	}
 	result, _ = store.ListSessions(context.Background(), planning.ListFilter{RepoID: repoMeta.ID})

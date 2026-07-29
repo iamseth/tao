@@ -270,7 +270,7 @@ Omit `approval` when no approval is required. When approval is required, set `ap
 
 ## handoff.md
 
-Write a concise handoff for the future build agent. Do not duplicate the full run lifecycle protocol owned by Tao and `/run`:
+Write a concise handoff for the future build agent. Do not duplicate the full run lifecycle protocol owned by Tao and `/tao-run`:
 
 # Handoff
 

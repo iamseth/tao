@@ -158,7 +158,7 @@ Tao updates `state.json`, `slices.json`, duration, queue movement, plan completi
 {{ if eq .CommitPolicy "slice" -}}
 Do not create a commit before or after calling `tao slice-complete`.
 
-For slice policy, `tao slice-complete` owns the recoverable commit transaction: it records intent, safely stages the slice changes, creates or recovers the deterministic commit, and only then records completion. Standalone explicit `/commit` remains available outside this automatic completion flow.
+For slice policy, `tao slice-complete` owns the recoverable commit transaction: it records intent, safely stages the slice changes, creates or recovers the deterministic commit, and only then records completion. Standalone explicit `/tao-commit` remains available outside this automatic completion flow.
 {{ else -}}
 Do not commit changes after successful verification and metadata updates.
 

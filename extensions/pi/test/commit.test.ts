@@ -35,7 +35,7 @@ function createdCommit(stdout = "Created local commit abcdef123456 feat(example)
   return { stdout, exitCode: 0 };
 }
 
-test("commit command skeleton and legacy alias register with Pi", () => {
+test("tao-prefixed commit command registers with Pi", () => {
   const registrations: Array<{ name: string; description?: string }> = [];
   extension({
     registerCommand(name, options) {
@@ -43,10 +43,9 @@ test("commit command skeleton and legacy alias register with Pi", () => {
     },
   });
 
-  assert.equal(COMMIT_COMMAND_NAME, "commit");
-  assert.deepEqual(registrations.map(({ name }) => name), ["commit", "tao-commit"]);
+  assert.equal(COMMIT_COMMAND_NAME, "tao-commit");
+  assert.deepEqual(registrations.map(({ name }) => name), ["tao-commit"]);
   assert.equal(registrations[0].description, "Prepare a safe local Tao commit");
-  assert.match(registrations[1].description ?? "", /legacy alias/);
 });
 
 test("commit args parser preserves explicit message, repository, and optional context", () => {

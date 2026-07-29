@@ -64,8 +64,8 @@ func CodexDir() (string, error) {
 	return filepath.Join(home, ".codex", "prompts"), nil
 }
 
-func ManagedPiTemplate(name string, content string) (string, error) {
-	marker := "<!-- tao-managed: " + name + " v1 -->\n\n"
+func ManagedPiTemplate(commandName, _ string, content string) (string, error) {
+	marker := "<!-- tao-managed: " + commandName + " v1 -->\n\n"
 	content = piTemplateContent(content)
 	if !strings.HasPrefix(content, "---\n") {
 		return marker + content, nil
@@ -92,7 +92,7 @@ func piTemplateContent(content string) string {
 	return replacer.Replace(content)
 }
 
-func ManagedClaudeCommand(name string, _ string) (string, error) {
+func ManagedClaudeCommand(commandName, promptName, _ string) (string, error) {
 	// Claude Code substitutes $ARGUMENTS as literal text into the command source
 	// before the shell runs, so any quote, backtick, $, or backslash the user
 	// types would corrupt an inline `tao ... "$ARGUMENTS"` command. Pass the raw
@@ -100,7 +100,7 @@ func ManagedClaudeCommand(name string, _ string) (string, error) {
 	// expansion, no quote parsing) and tao consumes it from stdin via
 	// --arguments-stdin. A quoted-heredoc body requires the fenced ```! form;
 	// the inline !`...` form is single-line only.
-	return fmt.Sprintf("---\ndescription: Tao /%[1]s command wrapper\nallowed-tools: Bash(tao prompt %[1]s:*)\nargument-hint: [arguments]\n---\n\n<!-- tao-managed: %[1]s v1 -->\n\n```!\ntao prompt %[1]s --arguments-stdin <<'TAO_PROMPT_ARGUMENTS'\n$ARGUMENTS\nTAO_PROMPT_ARGUMENTS\n```\n", name), nil
+	return fmt.Sprintf("---\ndescription: Tao /%[1]s command wrapper\nallowed-tools: Bash(tao prompt %[2]s:*)\nargument-hint: [arguments]\n---\n\n<!-- tao-managed: %[1]s v1 -->\n\n```!\ntao prompt %[2]s --arguments-stdin <<'TAO_PROMPT_ARGUMENTS'\n$ARGUMENTS\nTAO_PROMPT_ARGUMENTS\n```\n", commandName, promptName), nil
 }
 
 // ManagedOpenCodeCommand renders a Tao-managed OpenCode command file. OpenCode
@@ -110,28 +110,28 @@ func ManagedClaudeCommand(name string, _ string) (string, error) {
 // `description:` are derived from each prompt template's own frontmatter, reusing
 // Pi's frontmatter-preservation approach; templates without frontmatter fall back
 // to the build mode and a generic wrapper description.
-func ManagedOpenCodeCommand(name string, template string) (string, error) {
+func ManagedOpenCodeCommand(commandName, promptName, template string) (string, error) {
 	agentMode, description := openCodeFrontmatter(template)
 	if agentMode == "" {
 		agentMode = "build"
 	}
 	if description == "" {
-		description = fmt.Sprintf("Tao /%s command wrapper", name)
+		description = fmt.Sprintf("Tao /%s command wrapper", commandName)
 	}
-	return fmt.Sprintf("---\nagent: %[2]s\ndescription: %[3]s\n---\n\n<!-- tao-managed: %[1]s v1 -->\n\n!`tao prompt %[1]s --arguments \"$ARGUMENTS\"`\n", name, agentMode, description), nil
+	return fmt.Sprintf("---\nagent: %[3]s\ndescription: %[4]s\n---\n\n<!-- tao-managed: %[1]s v1 -->\n\n!`tao prompt %[2]s --arguments \"$ARGUMENTS\"`\n", commandName, promptName, agentMode, description), nil
 }
 
 // ManagedCodexCommand renders a Tao-managed Codex prompt file. Codex reads
 // markdown prompts directly from ~/.codex/prompts and substitutes $ARGUMENTS
 // textually, so keep the prompt body inline while preserving the template's
 // description frontmatter.
-func ManagedCodexCommand(name string, template string) (string, error) {
+func ManagedCodexCommand(commandName, _ string, template string) (string, error) {
 	_, description := openCodeFrontmatter(template)
 	if description == "" {
-		description = fmt.Sprintf("Tao /%s command wrapper", name)
+		description = fmt.Sprintf("Tao /%s command wrapper", commandName)
 	}
 	body := piTemplateContent(templateBody(template))
-	return fmt.Sprintf("---\ndescription: %[2]s\n---\n\n<!-- tao-managed: %[1]s v1 -->\n\n%[3]s", name, description, body), nil
+	return fmt.Sprintf("---\ndescription: %[2]s\n---\n\n<!-- tao-managed: %[1]s v1 -->\n\n%[3]s", commandName, description, body), nil
 }
 
 func templateBody(template string) string {

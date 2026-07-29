@@ -113,9 +113,9 @@ func TestInstallAllPiWritesPromptTemplatesAndTaoExtension(t *testing.T) {
 		t.Fatalf("InstallAll results = %d, want %d", len(results), len(prompts.Definitions()))
 	}
 
-	path := filepath.Join(promptsDir, "plan.md")
+	path := filepath.Join(promptsDir, "tao-plan.md")
 	text := readPromptInstallText(t, path)
-	for _, want := range []string{"description: Guide a read-only planning session", "tao-managed: plan v1", "You are in PLAN mode.", "$ARGUMENTS"} {
+	for _, want := range []string{"description: Guide a read-only planning session", "tao-managed: tao-plan v1", "You are in PLAN mode.", "$ARGUMENTS"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected %q in Pi prompt template, got %q", want, text)
 		}
@@ -130,8 +130,8 @@ func TestInstallAllPiWritesPromptTemplatesAndTaoExtension(t *testing.T) {
 	if !strings.Contains(noteSlice, "# Tao Note Slice") || strings.Contains(noteSlice, "tao prompt note-slice") {
 		t.Fatalf("expected direct Pi note-slice template, got %q", noteSlice)
 	}
-	if _, err := os.Stat(filepath.Join(promptsDir, "commit.md")); !os.IsNotExist(err) {
-		t.Fatalf("expected Pi commit prompt template not to be installed, got %v", err)
+	if _, err := os.Stat(filepath.Join(promptsDir, "tao-commit.md")); !os.IsNotExist(err) {
+		t.Fatalf("expected Pi tao-commit prompt template not to be installed, got %v", err)
 	}
 	link := filepath.Join(agentDir, "extensions", "tao")
 	target, err := os.Readlink(link)
@@ -176,9 +176,10 @@ func TestInstallAllClaudeWritesManagedCommandWrappers(t *testing.T) {
 	}
 
 	for _, name := range []string{"plan", "note-slice", "run"} {
-		path := filepath.Join(commandsDir, name+".md")
+		commandName := "tao-" + name
+		path := filepath.Join(commandsDir, commandName+".md")
 		text := readPromptInstallText(t, path)
-		for _, want := range []string{"description: Tao /" + name + " command wrapper", "tao-managed: " + name + " v1", "tao prompt " + name + " --arguments-stdin <<'TAO_PROMPT_ARGUMENTS'"} {
+		for _, want := range []string{"description: Tao /" + commandName + " command wrapper", "tao-managed: " + commandName + " v1", "tao prompt " + name + " --arguments-stdin <<'TAO_PROMPT_ARGUMENTS'"} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("expected %q in Claude command wrapper, got %q", want, text)
 			}
@@ -187,7 +188,7 @@ func TestInstallAllClaudeWritesManagedCommandWrappers(t *testing.T) {
 			t.Fatalf("expected thin Claude wrapper, got embedded prompt content %q", text)
 		}
 	}
-	assertManagedCommitDelegates(t, filepath.Join(commandsDir, "commit.md"), "allowed-tools: Bash(tao commit:*)")
+	assertManagedCommitDelegates(t, filepath.Join(commandsDir, "tao-commit.md"), "allowed-tools: Bash(tao commit:*)")
 	assertPromptRenameInstalled(t, commandsDir)
 
 	checked, err := CheckAll(runtimeconfig.AgentClaude)
@@ -217,10 +218,11 @@ func TestInstallAllOpenCodeWritesStyleBCommands(t *testing.T) {
 	// Read-only planning prompts carry agent: plan; mutating prompts carry agent: build.
 	agentModes := map[string]string{"plan": "plan", "grill-me": "plan", "note-slice": "build", "run": "build", "commit": "build", "slice": "build"}
 	for _, name := range []string{"plan", "note-slice", "run", "grill-me", "slice"} {
-		path := filepath.Join(commandsDir, name+".md")
+		commandName := "tao-" + name
+		path := filepath.Join(commandsDir, commandName+".md")
 		text := readPromptInstallText(t, path)
 		styleB := "!`tao prompt " + name + " --arguments \"$ARGUMENTS\"`"
-		for _, want := range []string{"<!-- tao-managed: " + name + " v1 -->", styleB, "agent: " + agentModes[name], "description: "} {
+		for _, want := range []string{"<!-- tao-managed: " + commandName + " v1 -->", styleB, "agent: " + agentModes[name], "description: "} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("expected %q in OpenCode command %s, got %q", want, name, text)
 			}
@@ -232,7 +234,7 @@ func TestInstallAllOpenCodeWritesStyleBCommands(t *testing.T) {
 			t.Fatalf("expected thin Style B OpenCode wrapper for %s, got %q", name, text)
 		}
 	}
-	assertManagedCommitDelegates(t, filepath.Join(commandsDir, "commit.md"), "agent: build")
+	assertManagedCommitDelegates(t, filepath.Join(commandsDir, "tao-commit.md"), "agent: build")
 	assertPromptRenameInstalled(t, commandsDir)
 
 	checked, err := CheckAll(runtimeconfig.AgentOpenCode)
@@ -246,12 +248,55 @@ func TestInstallAllOpenCodeWritesStyleBCommands(t *testing.T) {
 	}
 }
 
+func TestInstalledCommandMetadataIsPrefixedAndDelegatesLogicalSelectors(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PI_CODING_AGENT_DIR", filepath.Join(home, "pi"))
+	t.Setenv("TAO_CLAUDE_COMMANDS_DIR", filepath.Join(home, "claude"))
+	t.Setenv("TAO_OPENCODE_COMMANDS_DIR", filepath.Join(home, "opencode"))
+	t.Setenv("TAO_CODEX_COMMANDS_DIR", filepath.Join(home, "codex"))
+
+	for _, kind := range []runtimeconfig.AgentKind{runtimeconfig.AgentPi, runtimeconfig.AgentClaude, runtimeconfig.AgentOpenCode, runtimeconfig.AgentCodex} {
+		results, err := InstallAll(kind, false)
+		if err != nil {
+			t.Fatalf("InstallAll(%s): %v", kind, err)
+		}
+		for _, result := range results {
+			if !strings.HasPrefix(result.Name, "tao-") {
+				t.Fatalf("InstallAll(%s) result name = %q, want tao- prefix", kind, result.Name)
+			}
+			if filepath.Ext(result.Path) == ".md" && filepath.Base(result.Path) != result.Name+".md" {
+				t.Fatalf("InstallAll(%s) result path = %q for name %q", kind, result.Path, result.Name)
+			}
+		}
+	}
+
+	for _, kind := range []runtimeconfig.AgentKind{runtimeconfig.AgentClaude, runtimeconfig.AgentOpenCode} {
+		descriptor, ok := agentpkg.Lookup(kind)
+		if !ok {
+			t.Fatalf("missing %s descriptor", kind)
+		}
+		for _, definition := range prompts.Definitions() {
+			if definition.Name == prompts.PromptCommit {
+				continue
+			}
+			content, err := renderInstallContent(descriptor, definition)
+			if err != nil {
+				t.Fatalf("render %s %s: %v", kind, definition.Name, err)
+			}
+			if strings.Contains(content, "tao prompt tao-") || !strings.Contains(content, "tao prompt "+definition.Name) {
+				t.Fatalf("%s command %s did not preserve logical selector: %q", kind, definition.CommandName, content)
+			}
+		}
+	}
+}
+
 func TestManagedOpenCodeCommandFallsBackWithoutFrontmatter(t *testing.T) {
-	content, err := promptfmt.ManagedOpenCodeCommand("widget", "No frontmatter here.\n")
+	content, err := promptfmt.ManagedOpenCodeCommand("tao-widget", "widget", "No frontmatter here.\n")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"agent: build", "description: Tao /widget command wrapper", "!`tao prompt widget --arguments \"$ARGUMENTS\"`"} {
+	for _, want := range []string{"agent: build", "description: Tao /tao-widget command wrapper", "!`tao prompt widget --arguments \"$ARGUMENTS\"`"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("expected %q in fallback OpenCode command, got %q", want, content)
 		}
@@ -271,9 +316,9 @@ func TestInstallAllCodexWritesManagedPrompts(t *testing.T) {
 		t.Fatalf("InstallAll results = %d, want %d", len(results), len(prompts.Definitions()))
 	}
 
-	path := filepath.Join(promptsDir, "note-slice.md")
+	path := filepath.Join(promptsDir, "tao-note-slice.md")
 	text := readPromptInstallText(t, path)
-	for _, want := range []string{"description: Tao /note-slice command wrapper", "<!-- tao-managed: note-slice v1 -->", "# Tao Note Slice", "You are in SLICE mode for a durable Tao planning session."} {
+	for _, want := range []string{"description: Tao /tao-note-slice command wrapper", "<!-- tao-managed: tao-note-slice v1 -->", "# Tao Note Slice", "You are in SLICE mode for a durable Tao planning session."} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected %q in Codex prompt, got %q", want, text)
 		}
@@ -282,7 +327,7 @@ func TestInstallAllCodexWritesManagedPrompts(t *testing.T) {
 		t.Fatalf("expected Codex prompt to omit agent frontmatter and render the note-slice body, got %q", text)
 	}
 	assertPromptRenameInstalled(t, promptsDir)
-	assertManagedCommitDelegates(t, filepath.Join(promptsDir, "commit.md"), "description: Commit the current changes locally through Tao")
+	assertManagedCommitDelegates(t, filepath.Join(promptsDir, "tao-commit.md"), "description: Commit the current changes locally through Tao")
 
 	checked, err := CheckAll(runtimeconfig.AgentCodex)
 	if err != nil {
@@ -296,11 +341,11 @@ func TestInstallAllCodexWritesManagedPrompts(t *testing.T) {
 }
 
 func TestManagedCodexCommandFallsBackWithoutFrontmatter(t *testing.T) {
-	content, err := promptfmt.ManagedCodexCommand("widget", "Body {{ .Arguments }}\n")
+	content, err := promptfmt.ManagedCodexCommand("tao-widget", "widget", "Body {{ .Arguments }}\n")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"description: Tao /widget command wrapper", "<!-- tao-managed: widget v1 -->", "Body $ARGUMENTS"} {
+	for _, want := range []string{"description: Tao /tao-widget command wrapper", "<!-- tao-managed: tao-widget v1 -->", "Body $ARGUMENTS"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("expected %q in fallback Codex command, got %q", want, content)
 		}
@@ -326,13 +371,16 @@ func writeRetiredManagedPrompt(t *testing.T, dir string) {
 	if err := os.WriteFile(filepath.Join(dir, "web-slice.md"), []byte("<!-- tao-managed: web-slice v1 -->\nretired\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(dir, "plan.md"), []byte("existing unprefixed command\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func assertManagedCommitDelegates(t *testing.T, path, providerMarker string) {
 	t.Helper()
 	text := readPromptInstallText(t, path)
 	for _, want := range []string{
-		"<!-- tao-managed: commit v1 -->",
+		"<!-- tao-managed: tao-commit v1 -->",
 		providerMarker,
 		"tao commit --context",
 		"tao commit --proposal-file",
@@ -351,12 +399,15 @@ func assertManagedCommitDelegates(t *testing.T, path, providerMarker string) {
 
 func assertPromptRenameInstalled(t *testing.T, dir string) string {
 	t.Helper()
-	noteSlice := readPromptInstallText(t, filepath.Join(dir, "note-slice.md"))
-	if !strings.Contains(noteSlice, "<!-- tao-managed: note-slice v1 -->") {
+	noteSlice := readPromptInstallText(t, filepath.Join(dir, "tao-note-slice.md"))
+	if !strings.Contains(noteSlice, "<!-- tao-managed: tao-note-slice v1 -->") {
 		t.Fatalf("expected managed note-slice prompt, got %q", noteSlice)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "web-slice.md")); !os.IsNotExist(err) {
 		t.Fatalf("expected retired managed web-slice prompt removed, stat error = %v", err)
+	}
+	if old := readPromptInstallText(t, filepath.Join(dir, "plan.md")); old != "existing unprefixed command\n" {
+		t.Fatalf("existing unprefixed command changed: %q", old)
 	}
 	return noteSlice
 }

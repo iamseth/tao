@@ -47,7 +47,9 @@ type Descriptor struct {
 	// PromptDir resolves the runtime's managed prompt-install directory.
 	PromptDir func() (string, error)
 	// RenderPrompt renders one managed prompt-install file for this runtime.
-	RenderPrompt func(name, template string) (string, error)
+	// commandName is the provider-facing name; promptName is Tao's stable
+	// logical selector.
+	RenderPrompt func(commandName, promptName, template string) (string, error)
 	// SupportsBypassPermissions reports whether this runtime honors Tao's
 	// --dangerously-skip-permissions request by switching to bypass mode.
 	// Runtimes that always run with Tao-managed auto permissions (Pi) leave this
@@ -78,8 +80,8 @@ var descriptors = []Descriptor{
 		Kind:                        runtimeconfig.AgentPi,
 		Label:                       "pi",
 		ToolName:                    "pi",
-		TargetDescription:           "Pi global prompt templates and Tao commit extension command",
-		DoctorDescription:           "Pi prompt templates plus Tao commit extension command",
+		TargetDescription:           "Pi global prompt templates and Tao /tao-commit extension command",
+		DoctorDescription:           "Pi prompt templates plus Tao /tao-commit extension command",
 		UsesExtensionPrompts:        true,
 		PromptDir:                   promptfmt.PiDir,
 		RenderPrompt:                promptfmt.ManagedPiTemplate,

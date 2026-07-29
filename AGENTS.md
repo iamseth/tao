@@ -19,8 +19,8 @@
 
 ## Tao Plan Data
 - Runtime commands accept `--plans-dir DIR`; otherwise current-repo plans under Tao data home (`TAO_DATA_HOME`, `$XDG_DATA_HOME/tao`, or `~/.local/share/tao`) are used.
-- Plan directories contain `state.json`, `slices.json`, and optional `events.jsonl`; new `/slice` plans also include `planning-brief.md` and should record `state.repo.base_commit` for `tao staleness` checks, while old plans without it stay readable with warning-only validation findings. Completed reviews are stored as `review.md` plus state/event metadata in the data-home plan dir only, never the worktree or branch. Invalid plan directories are surfaced as warning summaries instead of aborting list output.
-- `/slice` writes core plan artifacts only; planning-session capture is no longer supported and new plans should not create planning-session sidecars.
+- Plan directories contain `state.json`, `slices.json`, and optional `events.jsonl`; new `/tao-slice` plans also include `planning-brief.md` and should record `state.repo.base_commit` for `tao staleness` checks, while old plans without it stay readable with warning-only validation findings. Completed reviews are stored as `review.md` plus state/event metadata in the data-home plan dir only, never the worktree or branch. Invalid plan directories are surfaced as warning summaries instead of aborting list output.
+- `/tao-slice` writes core plan artifacts only; planning-session capture is no longer supported and new plans should not create planning-session sidecars.
 - Notes belong to one registered repository and live only under that repository's data-home `notes/` directory. The current checkout is the default; `--repo` accepts a unique ID prefix or exact name. Legacy global note files are deliberately ignored.
 - Notes are a CLI-only backlog: do not add note API routes, dashboard views, or web assets. Promoted notes are immutable, and promotion must be serialized and linked to a durable planning session or validated normal plan without losing recovery information.
 - `tao init` registers the current checkout; `tao repo list/show/doctor` inspect the centralized repo catalog and health without destructive repo changes.
@@ -62,12 +62,12 @@
 - Prefer focused package tests for changed code; use `make test` when changes cross packages or core behavior.
 - Do not leave lint failing: run `make modernize` then `make lint` after code changes (or explicitly report why they could not be run) and fix new findings before handoff; `make lint` includes the modernize-check gate, so unmodernized idioms fail lint, not final verification.
 - Do not update local plan artifacts unless the task is specifically about Tao plan state or prompt behavior.
-- When generating reusable planning prompts for `/plan` or fresh agent planning sessions, save drafts with `tao draft-prompt <name>` (or another local-only path) so they remain local-only and are easy to pass to Pi, Claude, OpenCode, or Codex.
+- When generating reusable planning prompts for `/tao-plan` or fresh agent planning sessions, save drafts with `tao draft-prompt <name>` (or another local-only path) so they remain local-only and are easy to pass to Pi, Claude, OpenCode, or Codex.
 - Keep prompt changes narrow because they directly shape future agent behavior.
 
 ## Repo-Local Agent Commands
 - `prompts/run.md` implements exactly one pending slice and asks that same active agent for the structured commit proposal, then delegates validation, trusted trailers, intent, staging, recovery, and completion to `tao slice-complete`; it must not ask the agent to commit automatic slice work or start a nested message session.
 - `prompts/slice.md` allocates plan artifacts with `tao init --slug <short-slug> --json` and must not edit application files.
 - `prompts/commit.md` is standalone/manual only and is a wrapper around `tao commit --context` plus `--proposal-file` (or explicit `--message`); Tao owns filtering, validation, staging, and Git. It never pushes, and automatic run or merge completion must not fall back to it.
-- For the Pi agent, the `commit` command is hosted by the `extensions/pi` TypeScript extension (symlinked to `~/.pi/agent/extensions/tao` by `install-prompts`); see [`extensions/pi/README.md`](extensions/pi/README.md) for its build, test, and deploy details.
+- For the Pi agent, the `/tao-commit` command is hosted by the `extensions/pi` TypeScript extension (symlinked to `~/.pi/agent/extensions/tao` by `install-prompts`); see [`extensions/pi/README.md`](extensions/pi/README.md) for its build, test, and deploy details.
 - If committing manually, still exclude Tao data-home contents, workspace-local `.tao/`, and other local-only artifacts.

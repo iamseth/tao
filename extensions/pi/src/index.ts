@@ -10,7 +10,6 @@ export default function taoPiExtension(pi: ExtensionAPI): void {
 
 export {
   COMMIT_COMMAND_NAME,
-  LEGACY_COMMIT_COMMAND_NAME,
   createCommitCommand,
   createDefaultRunner,
   parseCommitArgs,

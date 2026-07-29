@@ -66,6 +66,24 @@ func TestPlanningSessionRepositoryPersistsRepoScopedDraft(t *testing.T) {
 	}
 }
 
+func TestPlanningTitleRecognizesCanonicalAndLegacyPlanCommands(t *testing.T) {
+	tests := []struct {
+		name   string
+		prompt string
+		want   string
+	}{
+		{name: "canonical", prompt: "/tao-plan improve command discovery", want: "improve command discovery"},
+		{name: "legacy", prompt: "/plan preserve historical planning text", want: "preserve historical planning text"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := titleFromPrompt(tt.prompt); got != tt.want {
+				t.Fatalf("titleFromPrompt(%q) = %q, want %q", tt.prompt, got, tt.want)
+			}
+		})
+	}
+}
+
 // TestPlanningSessionRepositoryReadsLegacyNoteProvenance verifies historical
 // and unknown source fields remain readable while recognized note provenance
 // is retained.

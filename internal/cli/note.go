@@ -683,7 +683,7 @@ func (a App) printExistingNotePromotion(item note.Note) error {
 	}
 	if item.Promotion != nil && item.Promotion.PlanningSession != nil {
 		link := item.Promotion.PlanningSession
-		return writeLines(a.Out, "Note already promoted to planning session "+link.ID, "Continue planning in a fresh agent session using the note as /plan context.")
+		return writeLines(a.Out, "Note already promoted to planning session "+link.ID, "Continue planning in a fresh agent session using the note as /tao-plan context.")
 	}
 	return fmt.Errorf("note %s is promoted but has no destination", item.ID)
 }
@@ -717,7 +717,7 @@ func (a App) printPlanningDestination(item note.Note, existing bool) error {
 	return writeLines(
 		a.Out,
 		prefix+": "+item.Promotion.PlanningSession.ID,
-		"Continue planning in a fresh agent session using the note as /plan context.",
+		"Continue planning in a fresh agent session using the note as /tao-plan context.",
 		"Review the source with: tao note show "+item.ID,
 	)
 }

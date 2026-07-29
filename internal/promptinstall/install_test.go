@@ -32,7 +32,7 @@ func TestAllAgentsHavePromptInstallHooks(t *testing.T) {
 			if descriptor.RenderPrompt == nil {
 				t.Fatal("RenderPrompt is nil")
 			}
-			content, err := descriptor.RenderPrompt("guard", "---\nagent: build\ndescription: Guard prompt\n---\n\nBody {{ .Arguments }}\n")
+			content, err := descriptor.RenderPrompt("tao-guard", "guard", "---\nagent: build\ndescription: Guard prompt\n---\n\nBody {{ .Arguments }}\n")
 			if err != nil {
 				t.Fatalf("RenderPrompt returned error: %v", err)
 			}

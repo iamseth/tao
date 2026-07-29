@@ -1,8 +1,8 @@
 # Tao Pi Extension
 
 Repo-local [Pi](https://github.com/iamseth/pi) extension that hosts Tao's fast
-standalone `/commit` command (`/tao-commit` remains as a legacy alias). It is a
-thin proposal wrapper around the Go-owned `tao commit` boundary:
+standalone `/tao-commit` command. It does not register an unprefixed alias. The
+command is a thin proposal wrapper around the Go-owned `tao commit` boundary:
 
 1. `tao commit --context` performs read-only preflight and returns only filtered
    allowed paths/diff, recent history, exclusions, and a context fingerprint.
@@ -17,7 +17,7 @@ and non-empty `what`/`why`; Tao formats the canonical message and owns Git.
 Proposal content must not supply `Tao-*` trailers—only Tao may append trusted
 evidence. A content-validation rejection gets one repair through the same
 selected model; stale context, safety failures, or a second rejection stop with
-no deterministic/title fallback. An explicit `/commit --message` is the only
+no deterministic/title fallback. An explicit `/tao-commit --message` is the only
 standalone override and still passes central validation and safety. The command
 never pushes.
 
@@ -29,8 +29,8 @@ extension instead of installing a Markdown prompt.
 
 ## Layout
 
-- `src/index.ts` — extension entrypoint; default export registers the `commit`
-  command via Pi's `registerCommand` API.
+- `src/index.ts` — extension entrypoint; default export registers the
+  `tao-commit` command via Pi's `registerCommand` API.
 - `src/commit.ts` — wrapper workflow (Tao context/finalization calls, selected-
   model proposal and one repair, private temporary-file cleanup). It must not
   duplicate Tao's validation, staging, exclusions, trailers, or Git authority.

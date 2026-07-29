@@ -6,8 +6,7 @@ import { promisify } from "node:util";
 
 import type { ExtensionAPI, ExtensionCommandContext } from "./pi-api.ts";
 
-export const COMMIT_COMMAND_NAME = "commit";
-export const LEGACY_COMMIT_COMMAND_NAME = "tao-commit";
+export const COMMIT_COMMAND_NAME = "tao-commit";
 
 export interface CommitCommandArgs {
   message?: string;
@@ -172,14 +171,9 @@ export function createCommitCommand(dependencies: CommitCommandDependencies = {}
 
 export function registerCommitCommand(pi: ExtensionAPI): CommitCommandContract {
   const command = createCommitCommand();
-  const options = {
+  pi.registerCommand(command.name, {
     description: command.description,
     handler: command.handler,
-  };
-  pi.registerCommand(command.name, options);
-  pi.registerCommand(LEGACY_COMMIT_COMMAND_NAME, {
-    ...options,
-    description: `${command.description} (legacy alias)`,
   });
   return command;
 }

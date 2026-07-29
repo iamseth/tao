@@ -263,9 +263,10 @@ func TestInstallPromptsWritesAndChecksPiPrompts(t *testing.T) {
 	}
 	promptNames := []string{"plan", "slice", "note-slice", "run", "grill-me", "improve-codebase-architecture", "improve-documentation", "repo-health", "pr"}
 	for _, name := range promptNames {
-		path := filepath.Join(root, name+".md")
+		commandName := "tao-" + name
+		path := filepath.Join(root, commandName+".md")
 		text := readText(t, path)
-		if !strings.Contains(text, "tao-managed: "+name+" v1") {
+		if !strings.Contains(text, "tao-managed: "+commandName+" v1") {
 			t.Fatalf("expected tao-managed Pi prompt in %s, got %q", path, text)
 		}
 		if strings.Contains(text, "tao prompt "+name) {
@@ -281,7 +282,7 @@ func TestInstallPromptsWritesAndChecksPiPrompts(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range promptNames {
-		path := filepath.Join(root, name+".md")
+		path := filepath.Join(root, "tao-"+name+".md")
 		if !strings.Contains(out.String(), "current "+path) {
 			t.Fatalf("expected current prompt status for %s, got %q", path, out.String())
 		}
@@ -297,7 +298,10 @@ func TestInstallPromptsRefusesUnmanagedFiles(t *testing.T) {
 	if err := os.MkdirAll(root, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "slice.md"), []byte("custom"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "slice.md"), []byte("existing unprefixed command"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "tao-slice.md"), []byte("custom"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
@@ -323,17 +327,17 @@ func TestDoctorVerboseReportsWrapperStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := stripANSIGreen(out.String())
-	nameWidth := len("improve-codebase-architecture")
+	nameWidth := len("tao-improve-codebase-architecture")
 	for _, want := range []string{
 		"selected runtime agent: pi",
 		"prompts (pi):",
-		"Pi prompt templates plus Tao commit extension command",
-		fmt.Sprintf("%-*s ✓ current", nameWidth, "slice"),
-		fmt.Sprintf("%-*s ✓ current", nameWidth, "run"),
-		fmt.Sprintf("%-*s ✓ current", nameWidth, "improve-codebase-architecture"),
-		fmt.Sprintf("%-*s ✓ current", nameWidth, "improve-documentation"),
-		fmt.Sprintf("%-*s ✓ current", nameWidth, "repo-health"),
-		fmt.Sprintf("%-*s ✓ current", nameWidth, "pr"),
+		"Pi prompt templates plus Tao /tao-commit extension command",
+		fmt.Sprintf("%-*s ✓ current", nameWidth, "tao-slice"),
+		fmt.Sprintf("%-*s ✓ current", nameWidth, "tao-run"),
+		fmt.Sprintf("%-*s ✓ current", nameWidth, "tao-improve-codebase-architecture"),
+		fmt.Sprintf("%-*s ✓ current", nameWidth, "tao-improve-documentation"),
+		fmt.Sprintf("%-*s ✓ current", nameWidth, "tao-repo-health"),
+		fmt.Sprintf("%-*s ✓ current", nameWidth, "tao-pr"),
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected %q in doctor output, got %q", want, out.String())
@@ -377,12 +381,12 @@ func TestDoctorReportsMissingAndValidatesUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := stripANSIGreen(out.String())
-	nameWidth := len("improve-codebase-architecture")
+	nameWidth := len("tao-improve-codebase-architecture")
 	for _, want := range []string{
-		fmt.Sprintf("%-*s ⚠ missing", nameWidth, "slice"),
-		fmt.Sprintf("%-*s ⚠ missing", nameWidth, "run"),
-		fmt.Sprintf("%-*s ⚠ missing", nameWidth, "repo-health"),
-		fmt.Sprintf("%-*s ⚠ missing", nameWidth, "pr"),
+		fmt.Sprintf("%-*s ⚠ missing", nameWidth, "tao-slice"),
+		fmt.Sprintf("%-*s ⚠ missing", nameWidth, "tao-run"),
+		fmt.Sprintf("%-*s ⚠ missing", nameWidth, "tao-repo-health"),
+		fmt.Sprintf("%-*s ⚠ missing", nameWidth, "tao-pr"),
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected missing wrapper %q, got %q", want, text)
@@ -409,10 +413,10 @@ func TestDoctorCompactReportsStaleAndUnmanagedPrompts(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := filepath.Join(home, ".claude", "commands")
-	if err := os.WriteFile(filepath.Join(root, "run.md"), []byte("<!-- tao-managed: run v1 -->\nstale\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "tao-run.md"), []byte("<!-- tao-managed: tao-run v1 -->\nstale\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "pr.md"), []byte("custom\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "tao-pr.md"), []byte("custom\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -421,7 +425,7 @@ func TestDoctorCompactReportsStaleAndUnmanagedPrompts(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := stripANSIGreen(out.String())
-	for _, want := range []string{"agents: claude", "prompts (claude):", "run", "• stale", "pr", "• unmanaged"} {
+	for _, want := range []string{"agents: claude", "prompts (claude):", "tao-run", "• stale", "tao-pr", "• unmanaged"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected compact prompt problem %q, got %q", want, text)
 		}
@@ -444,9 +448,10 @@ func TestInstallPromptsAndDoctorUseSelectedClaudeAgent(t *testing.T) {
 
 	commandsRoot := filepath.Join(home, ".claude", "commands")
 	for _, name := range []string{"plan", "slice", "note-slice", "run", "commit", "repo-health", "pr"} {
-		path := filepath.Join(commandsRoot, name+".md")
+		commandName := "tao-" + name
+		path := filepath.Join(commandsRoot, commandName+".md")
 		text := readText(t, path)
-		if !strings.Contains(text, "tao-managed: "+name+" v1") {
+		if !strings.Contains(text, "tao-managed: "+commandName+" v1") {
 			t.Fatalf("expected Claude wrapper %s to contain its managed marker, got %q", path, text)
 		}
 		if name == "commit" {
@@ -473,7 +478,7 @@ func TestInstallPromptsAndDoctorUseSelectedClaudeAgent(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"install-prompts", "--check"}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "current "+filepath.Join(commandsRoot, "commit.md")) {
+	if !strings.Contains(out.String(), "current "+filepath.Join(commandsRoot, "tao-commit.md")) {
 		t.Fatalf("expected current Claude commit command status, got %q", out.String())
 	}
 
@@ -486,7 +491,7 @@ func TestInstallPromptsAndDoctorUseSelectedClaudeAgent(t *testing.T) {
 		"selected runtime agent: claude",
 		"prompts (claude):",
 		"Claude Markdown slash commands that render tao prompts dynamically",
-		"commit                        ✓ current",
+		"tao-commit                        ✓ current",
 		"✓ ok      claude (claude)",
 	} {
 		if !strings.Contains(text, want) {
@@ -511,9 +516,10 @@ func TestInstallPromptsAndDoctorUseSelectedOpenCodeAgent(t *testing.T) {
 	commandsRoot := filepath.Join(home, ".config", "opencode", "commands")
 	agentModes := map[string]string{"plan": "plan", "note-slice": "build", "run": "build", "commit": "build", "repo-health": "plan", "pr": "build"}
 	for _, name := range []string{"plan", "note-slice", "run", "commit", "repo-health", "pr"} {
-		path := filepath.Join(commandsRoot, name+".md")
+		commandName := "tao-" + name
+		path := filepath.Join(commandsRoot, commandName+".md")
 		text := readText(t, path)
-		for _, want := range []string{"tao-managed: " + name + " v1", "agent: " + agentModes[name]} {
+		for _, want := range []string{"tao-managed: " + commandName + " v1", "agent: " + agentModes[name]} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("expected OpenCode command %s to contain %q, got %q", path, want, text)
 			}
@@ -542,7 +548,7 @@ func TestInstallPromptsAndDoctorUseSelectedOpenCodeAgent(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"install-prompts", "--check"}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "current "+filepath.Join(commandsRoot, "commit.md")) {
+	if !strings.Contains(out.String(), "current "+filepath.Join(commandsRoot, "tao-commit.md")) {
 		t.Fatalf("expected current OpenCode commit command status, got %q", out.String())
 	}
 
@@ -555,7 +561,7 @@ func TestInstallPromptsAndDoctorUseSelectedOpenCodeAgent(t *testing.T) {
 		"selected runtime agent: opencode",
 		"prompts (opencode):",
 		"OpenCode Markdown commands that render tao prompts dynamically",
-		"commit                        ✓ current",
+		"tao-commit                        ✓ current",
 		"✓ ok      opencode (opencode)",
 	} {
 		if !strings.Contains(text, want) {
@@ -577,25 +583,26 @@ func TestInstallPromptsAndDoctorUseSelectedPiAgent(t *testing.T) {
 
 	piRoot := filepath.Join(home, ".pi", "agent", "prompts")
 	for _, name := range []string{"plan", "slice", "note-slice", "run", "grill-me", "improve-codebase-architecture", "improve-documentation", "repo-health", "pr"} {
-		path := filepath.Join(piRoot, name+".md")
+		commandName := "tao-" + name
+		path := filepath.Join(piRoot, commandName+".md")
 		text := readText(t, path)
-		if !strings.Contains(text, "tao-managed: "+name+" v1") {
+		if !strings.Contains(text, "tao-managed: "+commandName+" v1") {
 			t.Fatalf("expected tao-managed Pi template in %s, got %q", path, text)
 		}
 		if strings.Contains(text, "tao prompt "+name) {
 			t.Fatalf("expected direct Pi template in %s, got wrapper content %q", path, text)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(piRoot, "commit.md")); !os.IsNotExist(err) {
-		t.Fatalf("expected Pi commit prompt not to be installed, got %v", err)
+	if _, err := os.Stat(filepath.Join(piRoot, "tao-commit.md")); !os.IsNotExist(err) {
+		t.Fatalf("expected Pi tao-commit prompt not to be installed, got %v", err)
 	}
 	if _, err := os.Readlink(filepath.Join(home, ".pi", "agent", "extensions", "tao")); err != nil {
 		t.Fatalf("expected Pi Tao extension to be enabled: %v", err)
 	}
-	planTemplate := readText(t, filepath.Join(piRoot, "plan.md"))
+	planTemplate := readText(t, filepath.Join(piRoot, "tao-plan.md"))
 	for _, want := range []string{"You are in PLAN mode.", "# Planning Packet", "## Planning Topic", "$ARGUMENTS", "Ask user-facing clarification questions only in the final assistant response"} {
 		if !strings.Contains(planTemplate, want) {
-			t.Fatalf("expected installed Pi /plan template to contain %q, got %q", want, planTemplate)
+			t.Fatalf("expected installed Pi /tao-plan template to contain %q, got %q", want, planTemplate)
 		}
 	}
 	out.Reset()
@@ -603,7 +610,7 @@ func TestInstallPromptsAndDoctorUseSelectedPiAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if text := out.String(); !strings.Contains(text, "You are in PLAN mode.") || !strings.Contains(text, "add Pi workflow") {
-		t.Fatalf("expected prompt command to render Pi-installed /plan content, got %q", text)
+		t.Fatalf("expected prompt command to render Pi-installed /tao-plan content, got %q", text)
 	}
 
 	out.Reset()
@@ -614,9 +621,9 @@ func TestInstallPromptsAndDoctorUseSelectedPiAgent(t *testing.T) {
 	for _, want := range []string{
 		"selected runtime agent: pi",
 		"prompts (pi):",
-		"Pi prompt templates plus Tao commit extension command",
-		"plan                          ✓ current",
-		"commit                        ✓ current",
+		"Pi prompt templates plus Tao /tao-commit extension command",
+		"tao-plan                          ✓ current",
+		"tao-commit                        ✓ current",
 		"extensions/tao",
 		"✓ ok      pi (pi)",
 	} {
@@ -638,8 +645,8 @@ func TestInstallPromptsAndDoctorManageEveryInstalledAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := out.String()
-	piOutput := "[pi] installed " + filepath.Join(home, ".pi", "agent", "prompts", "plan.md")
-	codexOutput := "[codex] installed " + filepath.Join(home, ".codex", "prompts", "plan.md")
+	piOutput := "[pi] installed " + filepath.Join(home, ".pi", "agent", "prompts", "tao-plan.md")
+	codexOutput := "[codex] installed " + filepath.Join(home, ".codex", "prompts", "tao-plan.md")
 	if piIndex, codexIndex := strings.Index(text, piOutput), strings.Index(text, codexOutput); piIndex < 0 || codexIndex < 0 || piIndex >= codexIndex {
 		t.Fatalf("expected Pi then Codex install output independent of TAO_AGENT, got %q", text)
 	}

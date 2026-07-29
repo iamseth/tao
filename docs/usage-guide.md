@@ -10,22 +10,22 @@ the artifact contract in [plan-format.md](plan-format.md)). The README tells you
 ## The core loop
 
 ```
-/plan  →  /slice  →  tao validate  →  tao run  →  tao review  →  tao merge (or PR)
+/tao-plan  →  /tao-slice  →  tao validate  →  tao run  →  tao review  →  tao merge (or PR)
                                       ↳ tao run --continue when blocked
                                                              ↳ automatic rework/run/review when changes requested
 ```
 
-`/plan` and `/slice` are **prompts** you run inside Pi or Claude Code. `tao
+`/tao-plan` and `/tao-slice` are **prompts** you run inside Pi or Claude Code. `tao
 validate`, `tao run`, and the rest are **CLI commands** you run from the
 repository that owns the plan. The handoff between them is the plan directory in
 Tao's data home — everything stays local and inspectable on disk.
 
 A useful mental split:
 
-- **Planning prompts** (`/plan`, `/grill-me`, `/improve-codebase-architecture`,
-  `/improve-documentation`, `/repo-health`) are **read-only**. They never edit
+- **Planning prompts** (`/tao-plan`, `/tao-grill-me`, `/tao-improve-codebase-architecture`,
+  `/tao-improve-documentation`, `/tao-repo-health`) are **read-only**. They never edit
   code or write Tao artifacts.
-- **Build prompts** (`/slice`, `/run`, `/commit`, `/pr`) write artifacts, code,
+- **Build prompts** (`/tao-slice`, `/tao-run`, `/tao-commit`, `/tao-pr`) write artifacts, code,
   or git state.
 
 ## Capture first with repository notes
@@ -55,9 +55,9 @@ Direct note execution is not a bypass. Generated slices still honor dependencies
 
 ## Planning commands
 
-### `/plan <topic>` — lead with this
+### `/tao-plan <topic>` — lead with this
 
-Read-only planning session that ends in a **Planning Packet** ready for `/slice`.
+Read-only planning session that ends in a **Planning Packet** ready for `/tao-slice`.
 
 **When to use:** at the *start* of any non-trivial change, as soon as you can
 phrase a one-line topic. Don't do a separate manual "research the codebase"
@@ -72,45 +72,45 @@ asking the user"* and to keep that inspection targeted.
   it needs:
 
   ```text
-  /plan add bounded automatic retries to the durable run queue,
+  /tao-plan add bounded automatic retries to the durable run queue,
      must survive process restarts, don't change direct CLI runs
   ```
 
 - **Treat it as an interview.** It asks one question at a time, each with a
   recommended answer and a reason. Your job is mostly to confirm or redirect —
   your domain knowledge enters when you disagree with a recommendation.
-- **Answer only the final question shown.** Tao renders `/plan` once, but some
+- **Answer only the final question shown.** Tao renders `/tao-plan` once, but some
   agent hosts may show task, progress, or status text before the final assistant
   response. If a clarification looks duplicated, answer only the question in the
   final response. After updating Tao, rerun `tao install-prompts` to apply the
   latest managed prompt instructions.
 - **Let it converge.** It stops when the plan is *specific enough to slice*, not
-  when it's exhaustive. Don't push for more detail than `/slice` needs.
+  when it's exhaustive. Don't push for more detail than `/tao-slice` needs.
 
 **What it won't do:** implement code, edit files, or create Tao artifacts. It
-stops at the Packet and tells you to run `/slice`.
+stops at the Packet and tells you to run `/tao-slice`.
 
 **Decision guide:**
 
 | Situation | Move |
 |---|---|
-| You know the topic, even roughly | `/plan <topic with constraints/hunches>` immediately |
-| One decision is genuinely thorny | `/plan`, then `/grill-me` on that decision |
-| You can't even phrase the topic | Think until you can write one line, then `/plan` |
-| You want to "research the code first" | Skip it — name the suspect files in your topic and let `/plan` inspect them |
+| You know the topic, even roughly | `/tao-plan <topic with constraints/hunches>` immediately |
+| One decision is genuinely thorny | `/tao-plan`, then `/tao-grill-me` on that decision |
+| You can't even phrase the topic | Think until you can write one line, then `/tao-plan` |
+| You want to "research the code first" | Skip it — name the suspect files in your topic and let `/tao-plan` inspect them |
 
-### `/grill-me [focus]` — interrogate one decision
+### `/tao-grill-me [focus]` — interrogate one decision
 
 Interview-only prompt that drills into a specific design decision until the
 constraints, risks, and open questions are clear. Same one-question-at-a-time,
-recommended-answer style as `/plan`, but pointed at a single hard call rather
+recommended-answer style as `/tao-plan`, but pointed at a single hard call rather
 than the whole plan.
 
 **When to use:** mid-planning, when one decision is load-bearing and you want it
-pressure-tested before it propagates into slices. Run it *within* a `/plan`
+pressure-tested before it propagates into slices. Run it *within* a `/tao-plan`
 session, then return to planning.
 
-### `/improve-codebase-architecture [focus]` — find refactor opportunities
+### `/tao-improve-codebase-architecture [focus]` — find refactor opportunities
 
 Read-only architecture review. Looks for shallow modules, concepts smeared
 across many files, hard-to-change seams, and leaky coupling. Produces a numbered
@@ -121,10 +121,10 @@ risks, verification) and a **top-5 prioritization table**.
 hurting before committing to a refactor — not for a specific feature.
 
 **How to use it well:** it ends by asking which opportunity you want to explore
-next. The natural flow is to pick one, then take it into `/plan` → `/slice` to
+next. The natural flow is to pick one, then take it into `/tao-plan` → `/tao-slice` to
 turn it into executable work. It won't edit anything unless you explicitly ask.
 
-### `/improve-documentation [focus]` — find documentation gaps
+### `/tao-improve-documentation [focus]` — find documentation gaps
 
 Read-only documentation audit. Reviews both prose docs (READMEs, guides, design
 notes) and code-level docs (package/exported-symbol comments) for staleness,
@@ -138,10 +138,10 @@ important seams — before committing to a documentation pass.
 
 **How to use it well:** like its architecture sibling, it ends by asking which
 opportunity you want to explore next. The natural flow is to pick one, then take
-it into `/plan` → `/slice` to turn it into executable work. It only recommends —
+it into `/tao-plan` → `/tao-slice` to turn it into executable work. It only recommends —
 it never edits, creates, or deletes files on its own.
 
-### `/repo-health [focus]` — audit maintenance risk
+### `/tao-repo-health [focus]` — audit maintenance risk
 
 Read-only audit of repository health: bloat and stray generated artifacts,
 duplicate files, dependency/config sprawl, inconsistent structure, and anything
@@ -158,14 +158,14 @@ overstating certainty. It will not delete, clean, or commit anything on its own.
 
 ## Build commands
 
-### `/slice` — turn a plan into executable artifacts
+### `/tao-slice` — turn a plan into executable artifacts
 
 Converts the current planning conversation into a durable Tao plan: it runs
 `tao init --slug <short-slug> --json` to allocate a plan directory, then writes
 `state.json`, `slices.json`, `plan.md`, `planning-brief.md`, `handoff.md`, and
 `events.jsonl`.
 
-**When to use:** right after `/plan` (or `/grill-me`) lands a Planning Packet you
+**When to use:** right after `/tao-plan` (or `/tao-grill-me`) lands a Planning Packet you
 believe in. Run it in the **same session** so it inherits the full planning
 context — it slices from the conversation, not from a file you pass it.
 
@@ -193,10 +193,10 @@ context — it slices from the conversation, not from a file you pass it.
 > with a repo-root-relative test path. Prefer package-relative paths. These
 > semantic findings are advisory; see [Validation warnings](#validation-warnings).
 
-### `/run` and `tao run` — execute slices
+### `/tao-run` and `tao run` — execute slices
 
 Day to day you run **`tao run <plan-id>`** from the CLI. Under the hood the
-`/run` prompt puts the agent in **WORK mode** to implement exactly **one** pending
+`/tao-run` prompt puts the agent in **WORK mode** to implement exactly **one** pending
 slice at a time: select the next slice, honor `depends_on` and approval gates,
 implement only that slice, run its verification commands, and complete it via
 `tao slice-complete` (which Tao uses to update state, queue movement, and
@@ -249,6 +249,8 @@ also pass `--rework-restart`; `run --all` then opens the first round of a fresh
 durable queue budget before dispatch. For a manually managed durable queue,
 continue the stopped plan explicitly before starting another drain.
 
+The installed `/tao-review` slash command is an agent prompt, while `tao review`
+is the ordinary CLI command that runs or displays Tao's persisted plan review.
 When you return to a slice-complete or reviewed plan, start with
 `tao review <plan-id>`. It reads the persisted review from the data-home plan
 directory, so you can triage the verdict, summary, findings, and approved commit
@@ -265,7 +267,7 @@ drift check on pending work.
 Run-path agent sessions have a wall-clock hang ceiling so unattended batches do
 not stall forever on one stuck agent process. The default is 20 minutes; set
 `TAO_SESSION_TIMEOUT` to another Go duration such as `45m`, or to `0` to disable
-the ceiling. Interactive planning sessions (`/plan` and `/slice`) are not
+the ceiling. Interactive planning sessions (`/tao-plan` and `/tao-slice`) are not
 subject to this timeout.
 
 #### Recover an interrupted slice
@@ -414,7 +416,7 @@ Tao always prints the final batch summary. The notifier is best-effort, runs as 
 shell command with `TAO_BATCH_*` summary variables in its environment, and an
 unset, failing, or timed-out notifier does not fail the batch.
 
-### `/commit` — local conventional commit
+### `/tao-commit` — local conventional commit
 
 Creates one local commit through Tao's standalone boundary. Tao first returns
 only filtered allowed context and a fingerprint. The active agent/model proposes
@@ -429,13 +431,13 @@ does not start a nested agent process; invalid proposal content gets at most one
 repair from the same selected session. Safety or stale-context errors stop, and
 invalid content has no deterministic or title fallback.
 
-When you deliberately own the complete canonical message, `/commit --message`
+When you deliberately own the complete canonical message, `/tao-commit --message`
 passes it through the same central validation and safety boundary. This is an
 explicit standalone override, not an automatic-workflow escape hatch. Automatic
 runs never delegate slice commits to this command: `tao slice-complete` owns the
 recoverable transaction and Tao owns Git.
 
-### `/pr` — open a pull request
+### `/tao-pr` — open a pull request
 
 Inspects the branch, status, recent commits, and diff against the base branch
 (defaults to `main`), pushes if needed, and opens a PR with a structured
@@ -601,9 +603,9 @@ to the explicit single-plan workflow.
 A typical feature, end to end:
 
 ```text
-/plan add X, constraints Y and Z, don't touch W      # interview → Planning Packet
-/grill-me the storage-format decision                # only if one call is hard
-/slice                                               # writes the plan directory
+/tao-plan add X, constraints Y and Z, don't touch W      # interview → Planning Packet
+/tao-grill-me the storage-format decision                # only if one call is hard
+/tao-slice                                               # writes the plan directory
 ```
 ```sh
 tao validate <plan-id>     # check generated verification commands
@@ -613,11 +615,11 @@ tao review <plan-id>       # read the persisted post-completion review
 tao rework --run <plan-id> # if review requests changes, reopen and run fixes
 tao review --run <plan-id> # refresh the review after follow-up changes
 tao merge <plan-id>        # no-PR path after you accept an approved review
-tao run --pull-request <plan-id>   # or /pr by hand
+tao run --pull-request <plan-id>   # or /tao-pr by hand
 ```
 
 For exploration rather than a specific change, start with
-`/improve-codebase-architecture` or `/repo-health`, pick one finding, and feed it
+`/tao-improve-codebase-architecture` or `/tao-repo-health`, pick one finding, and feed it
 into the loop above.
 
 ---
@@ -651,7 +653,7 @@ commits make partial and `--max-slices` runs recoverable and provide the exact
 history reviewed before integration.
 
 Use `--commit-policy none` when you explicitly want manual ownership. Completion
-then records `manual_uncommitted` and does not mutate Git; commit with `/commit`
+then records `manual_uncommitted` and does not mutate Git; commit with `/tao-commit`
 or your own workflow. In current mode this means work may remain uncommitted and
 Tao does not enforce automatic-policy cleanliness. In isolated mode, prefer the
 default slice policy unless you have a concrete manual history requirement.

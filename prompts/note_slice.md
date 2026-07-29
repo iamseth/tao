@@ -23,7 +23,7 @@ Write these files in `{{.PlanDir}}`:
 - `plan-preview.md`
 - optional `events.jsonl`
 
-Follow the existing Tao plan artifact contract used by `/slice`: keep planning-session capture sidecars out of new plans, use concrete expected files, include focused verification commands, and keep each slice independently runnable.
+Follow the existing Tao plan artifact contract used by `/tao-slice`: keep planning-session capture sidecars out of new plans, use concrete expected files, include focused verification commands, and keep each slice independently runnable.
 
 Artifact contract details:
 

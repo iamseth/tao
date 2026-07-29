@@ -12,7 +12,7 @@ import (
 func TestDraftPromptCommandSavesStdinToLocalDraft(t *testing.T) {
 	t.Chdir(t.TempDir())
 	var out bytes.Buffer
-	app := App{In: strings.NewReader("/plan make the web feel great\n"), Out: &out, Err: &out}
+	app := App{In: strings.NewReader("/tao-plan make the web feel great\n"), Out: &out, Err: &out}
 
 	if err := app.Run(context.Background(), []string{"draft-prompt", "Web Foundation Plan"}); err != nil {
 		t.Fatalf("draft-prompt failed: %v", err)
@@ -23,7 +23,7 @@ func TestDraftPromptCommandSavesStdinToLocalDraft(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected prompt draft file: %v", err)
 	}
-	if got := string(content); got != "/plan make the web feel great\n" {
+	if got := string(content); got != "/tao-plan make the web feel great\n" {
 		t.Fatalf("unexpected prompt draft content %q", got)
 	}
 	body := out.String()
@@ -37,7 +37,7 @@ func TestDraftPromptCommandSavesStdinToLocalDraft(t *testing.T) {
 func TestDraftPromptCommandReadsFromFileAndRefusesOverwrite(t *testing.T) {
 	t.Chdir(t.TempDir())
 	source := filepath.Join(t.TempDir(), "prompt.md")
-	if err := os.WriteFile(source, []byte("/plan from file\n"), 0o600); err != nil {
+	if err := os.WriteFile(source, []byte("/tao-plan from file\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
