@@ -196,6 +196,38 @@ func validateInventoryRepo(directoryID string, repo Repo) error {
 	return nil
 }
 
+// RepoPlanSource identifies a registered repository's data-home plan store.
+// The store remains usable when its source checkout is missing or unhealthy.
+type RepoPlanSource struct {
+	ID       string
+	Name     string
+	PlansDir string
+}
+
+// ListRepoPlanSources returns every registered data-home plan store in stable
+// catalog order. Damaged metadata retains its directory identity so read-only
+// history collectors can still inspect any surviving plan artifacts.
+func (r Registry) ListRepoPlanSources() ([]RepoPlanSource, error) {
+	entries, err := r.repoEntries()
+	if err != nil {
+		return nil, err
+	}
+	sources := make([]RepoPlanSource, 0, len(entries))
+	for _, entry := range entries {
+		id := entry.Name()
+		repo, readErr := r.ReadRepo(id)
+		if readErr != nil {
+			repo = Repo{ID: id}
+		}
+		sources = append(sources, RepoPlanSource{
+			ID:       id,
+			Name:     repo.Name,
+			PlansDir: r.PlansDir(Repo{ID: id}),
+		})
+	}
+	return sources, nil
+}
+
 // RepoCatalogEntry exposes registered repo metadata with derived, non-destructive status.
 type RepoCatalogEntry struct {
 	Repo          Repo

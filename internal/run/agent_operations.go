@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/agent"
+	"github.com/iamseth/tao/internal/agent/logrecord"
 	commitcontract "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
@@ -105,7 +106,7 @@ func (s BatchAgentSession) commandRunner() CommandRunner { return s.commandRunne
 
 func (s BatchAgentSession) Resolve(ctx context.Context, integrationRoot, prompt string) (string, error) {
 	runSession := func() (agent.SessionResult, error) {
-		return s.adapter.Run(ctx, agent.Session{RepoRoot: integrationRoot, Prompt: prompt, PermissionMode: s.permissionMode, CollectMetrics: true, Timeout: s.timeout, Log: s.log})
+		return s.adapter.Run(ctx, agent.Session{RepoRoot: integrationRoot, Prompt: prompt, PermissionMode: s.permissionMode, CollectMetrics: true, Timeout: s.timeout, Progress: s.log})
 	}
 	var result agent.SessionResult
 	var err error
@@ -121,7 +122,7 @@ func (s BatchAgentSession) Resolve(ctx context.Context, integrationRoot, prompt 
 		}
 		s.metrics(metrics, result.MetricsWarning)
 	} else if result.MetricsWarning != "" && s.log != nil {
-		_, _ = fmt.Fprintf(s.log, "tao telemetry warning: %s\n", result.MetricsWarning)
+		_ = logrecord.Render(s.log, logrecord.Record{Type: logrecord.TypeDiagnostic, Content: "tao telemetry warning: " + result.MetricsWarning})
 	}
 	text := strings.TrimSpace(result.FinalText)
 	if text == "" {
@@ -152,7 +153,7 @@ func openAgentSessionLog(appender plan.LogAppender, planDir string, out io.Write
 		return agentSessionLog{}, err
 	}
 	log := sessionLogWriter(logFile, out)
-	if _, err := fmt.Fprintf(log, "\n--- %s %s ---\n", timestamp.Format(time.RFC3339), action); err != nil {
+	if err := logrecord.Write(log, logrecord.Record{Type: logrecord.TypeSession, Content: action, Timestamp: timestamp.Format(time.RFC3339)}); err != nil {
 		_ = logFile.Close()
 		return agentSessionLog{}, err
 	}
@@ -170,7 +171,36 @@ func sessionLogWriter(logFile io.Writer, out io.Writer) io.Writer {
 	if out == nil {
 		return logFile
 	}
-	return io.MultiWriter(logFile, out)
+	return framedSessionLogWriter{log: logFile, out: out}
+}
+
+type framedSessionLogWriter struct {
+	log io.Writer
+	out io.Writer
+}
+
+func (w framedSessionLogWriter) Write(p []byte) (int, error) {
+	n, err := w.log.Write(p)
+	if err != nil {
+		return n, err
+	}
+	if n != len(p) {
+		return n, io.ErrShortWrite
+	}
+	record, ok := logrecord.Parse(strings.TrimSuffix(string(p), "\n"))
+	if !ok {
+		return len(p), nil
+	}
+	if err := logrecord.Render(w.out, record); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+func writeAgentLogDiagnostic(log io.Writer, message string) {
+	if log != nil {
+		_ = logrecord.Write(log, logrecord.Record{Type: logrecord.TypeDiagnostic, Content: message})
+	}
 }
 
 func (o agentOperationOptions) clock() func() time.Time      { return o.Now }
@@ -265,9 +295,9 @@ func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSe
 	state, stateErr := plan.ReadState(request.PlanDir)
 	if stateErr != nil {
 		if metricsRequested {
-			_, _ = fmt.Fprintf(log, "tao telemetry warning: read plan state: %v\n", stateErr)
+			writeAgentLogDiagnostic(log, fmt.Sprintf("tao telemetry warning: read plan state: %v", stateErr))
 		}
-		_, _ = fmt.Fprintf(log, "tao leak-guard warning: read plan state: %v; control checkout unknown, proceeding without leak guard\n", stateErr)
+		writeAgentLogDiagnostic(log, fmt.Sprintf("tao leak-guard warning: read plan state: %v; control checkout unknown, proceeding without leak guard", stateErr))
 	}
 
 	runSession := func() (agent.SessionResult, error) {
@@ -307,19 +337,19 @@ func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSe
 			Message:         fmt.Sprintf("%s agent session timed out after %s", r.agentLabel, timeoutErr.Timeout),
 		}
 		if appendErr := r.eventAppender.AppendEvent(request.PlanDir, event); appendErr != nil {
-			_, _ = fmt.Fprintf(log, "tao telemetry warning: append session timeout event: %v\n", appendErr)
+			writeAgentLogDiagnostic(log, fmt.Sprintf("tao telemetry warning: append session timeout event: %v", appendErr))
 		}
 	}
 
 	if result.MetricsWarning != "" && (r.metricsWarningInformational || (metricsRequested && stateErr == nil)) {
-		_, _ = fmt.Fprintf(log, "tao telemetry warning: %s%s\n", r.metricsWarningPrefix, result.MetricsWarning)
+		writeAgentLogDiagnostic(log, "tao telemetry warning: "+r.metricsWarningPrefix+result.MetricsWarning)
 	}
 
 	var capErr error
 	if metricsRequested && stateErr == nil && r.eventAppender != nil && (r.metricsWarningInformational || result.MetricsWarning == "") {
 		metrics := collectAgentMetrics(state, request.Metrics.SliceID, r.agentLabel, r.metricsMessage, result.Metrics, runErr)
 		if appendErr := r.eventAppender.AppendEvent(request.PlanDir, metrics.event(now(r).UTC())); appendErr != nil {
-			_, _ = fmt.Fprintf(log, "tao telemetry warning: append metrics event: %v\n", appendErr)
+			writeAgentLogDiagnostic(log, fmt.Sprintf("tao telemetry warning: append metrics event: %v", appendErr))
 		} else if result.Metrics != nil {
 			capErr = r.enforceSliceBudgetCaps(context.WithoutCancel(ctx), request.PlanDir, state.Plan.ID, request.Metrics.SliceID, log)
 		}
@@ -334,7 +364,7 @@ func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSe
 func (r agentSessionRunner) enforceSliceBudgetCaps(ctx context.Context, planDir, planID, sliceID string, log io.Writer) error {
 	caps, warnings := runtimeconfig.RuntimeSliceBudgetCaps()
 	for _, warning := range warnings {
-		_, _ = fmt.Fprintf(log, "tao telemetry warning: %s\n", warning)
+		writeAgentLogDiagnostic(log, "tao telemetry warning: "+warning)
 	}
 	if caps.OutputTokens == nil && caps.Cost == nil {
 		return nil
@@ -342,7 +372,7 @@ func (r agentSessionRunner) enforceSliceBudgetCaps(ctx context.Context, planDir,
 
 	detail, err := plan.NewFileRepository(filepath.Dir(planDir)).GetPlan(ctx, filepath.Base(planDir))
 	if err != nil {
-		_, _ = fmt.Fprintf(log, "tao telemetry warning: read metrics for slice cap: %v\n", err)
+		writeAgentLogDiagnostic(log, fmt.Sprintf("tao telemetry warning: read metrics for slice cap: %v", err))
 		return nil
 	}
 	summary := plan.SummarizeAgentTelemetry(detail)
@@ -381,7 +411,7 @@ func (r agentSessionRunner) enforceSliceBudgetCaps(ctx context.Context, planDir,
 		Message:   fmt.Sprintf("%s cap exceeded for slice %s: observed %g, threshold %g", metric, sliceID, observed, threshold),
 	}
 	if err := r.eventAppender.AppendEvent(planDir, event); err != nil {
-		_, _ = fmt.Fprintf(log, "tao telemetry warning: append budget exceeded event: %v\n", err)
+		writeAgentLogDiagnostic(log, fmt.Sprintf("tao telemetry warning: append budget exceeded event: %v", err))
 		return nil
 	}
 	return &budgetExceededError{metric: metric, threshold: threshold, observed: observed}

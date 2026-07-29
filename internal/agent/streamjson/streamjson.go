@@ -18,6 +18,7 @@ import (
 	"io"
 	"sync"
 
+	"github.com/iamseth/tao/internal/agent/logrecord"
 	"github.com/iamseth/tao/internal/agent/process"
 )
 
@@ -129,11 +130,7 @@ func New[R any](name, streamKind string, proc process.Process, log io.Writer, ha
 	go r.readStdout(proc.Stdout())
 	go func() { r.done <- proc.Wait() }()
 	if stderr := proc.Stderr(); stderr != nil {
-		target := io.Discard
-		if log != nil {
-			target = log
-		}
-		go func() { _, _ = io.Copy(target, stderr) }()
+		go drainStderr(name, stderr, log)
 	}
 	return r
 }
@@ -270,6 +267,20 @@ func (r *Runner[R]) isDoneConsumed() bool {
 // diagnostic both transports emit on a failed event.
 func (r *Runner[R]) LogError(err error) {
 	if r.log != nil && err != nil {
-		_, _ = fmt.Fprintf(r.log, "tao %s error: %v\n", r.name, err)
+		_ = logrecord.Write(r.log, logrecord.Record{Type: logrecord.TypeDiagnostic, Content: fmt.Sprintf("tao %s error: %v", r.name, err)})
+	}
+}
+
+func drainStderr(name string, stderr io.Reader, log io.Writer) {
+	if log == nil {
+		_, _ = io.Copy(io.Discard, stderr)
+		return
+	}
+	scanner := bufio.NewScanner(stderr)
+	for scanner.Scan() {
+		_ = logrecord.Write(log, logrecord.Record{Type: logrecord.TypeDiagnostic, Content: fmt.Sprintf("tao %s stderr: %s", name, scanner.Text())})
+	}
+	if err := scanner.Err(); err != nil {
+		_ = logrecord.Write(log, logrecord.Record{Type: logrecord.TypeDiagnostic, Content: fmt.Sprintf("tao %s stderr: %v", name, err)})
 	}
 }

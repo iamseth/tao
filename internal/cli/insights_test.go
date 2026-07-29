@@ -3,13 +3,18 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/iamseth/tao/internal/agent/logrecord"
 	"github.com/iamseth/tao/internal/insights"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/taodata"
 )
 
 func TestInsightsCommandRegistrationAndPlansDir(t *testing.T) {
@@ -117,6 +122,145 @@ func TestInsightsDigestIsDeterministicAndCapped(t *testing.T) {
 	}
 	if first.Len() > digestMaxBytes {
 		t.Errorf("digest length = %d, want at most %d", first.Len(), digestMaxBytes)
+	}
+}
+
+func TestInsightsAllReposHelpAndFlagConflict(t *testing.T) {
+	var out bytes.Buffer
+	if err := (App{Out: &out, Err: &out}).Run(context.Background(), []string{"insights", "--help"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"--all-repos", "all registered repositories", "tao insights --all-repos --digest"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("help missing %q:\n%s", want, out.String())
+		}
+	}
+
+	err := (App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }}).Run(
+		context.Background(), []string{"--plans-dir", "/tmp/explicit", "insights", "--all-repos"},
+	)
+	if err == nil || !strings.Contains(err.Error(), "--all-repos cannot be combined with --plans-dir") {
+		t.Fatalf("flag conflict error = %v", err)
+	}
+}
+
+func TestInsightsAllReposCatalogCoverageSignalsAndOrdering(t *testing.T) {
+	dataHome := t.TempDir()
+	t.Setenv("TAO_DATA_HOME", dataHome)
+	registry := taodata.NewRegistry(dataHome)
+	for _, repo := range []taodata.Repo{
+		{Schema: taodata.RepoSchema, ID: "repo-z", Name: "zeta", Root: filepath.Join(t.TempDir(), "missing-z")},
+		{Schema: taodata.RepoSchema, ID: "repo-a", Name: "alpha", Root: filepath.Join(t.TempDir(), "missing-a")},
+		{Schema: taodata.RepoSchema, ID: "repo-m", Name: "middle", Root: filepath.Join(t.TempDir(), "missing-m")},
+	} {
+		if err := registry.WriteRepo(repo); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	planDir := t.TempDir()
+	now := time.Now()
+	events := `{"type":"slice_blocked","reason":"external service unreachable"}` + "\n" +
+		`{"type":"session_timeout"}` + "\n" +
+		`{"type":"agent_metrics","metrics":{"session_id":"one","output_tokens":42,"cost":1.5}}` + "\n"
+	if err := os.WriteFile(filepath.Join(planDir, "events.jsonl"), []byte(events), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	logFile, err := os.Create(filepath.Join(planDir, "agent-run.log")) // #nosec G304 -- test temporary directory.
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range []logrecord.Record{
+		{Type: logrecord.TypeSession, Content: "test", Timestamp: now.Format(time.RFC3339)},
+		{Type: logrecord.TypeToolCall, Name: "bash", Payload: `{"command":"gh issue list && missing-tool --version"}`},
+		{Type: logrecord.TypeToolResult, Name: "bash", Content: "sh: missing-tool: command not found", Failed: true},
+	} {
+		if err := logrecord.Write(logFile, record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := logFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	repositories := map[string]Repository{
+		"repo-a": fakeRepository{summaries: []plan.PlanSummary{{ID: "duplicate", Dir: planDir, LastActivityAt: &now}}},
+		"repo-m": fakeRepository{},
+		"repo-z": fakeRepository{err: errors.New("permission denied")},
+	}
+	var out bytes.Buffer
+	app := App{Out: &out, Err: &out, Repository: func(plansDir string) Repository {
+		return repositories[filepath.Base(filepath.Dir(plansDir))]
+	}}
+	if err := app.Run(context.Background(), []string{"insights", "--all-repos"}); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, want := range []string{
+		"All-repository insights (3 registered; 1 scanned, 1 empty, 1 unreadable, 0 skipped)",
+		"alpha [repo-a]: scanned", "middle [repo-m]: empty", "zeta [repo-z]: unreadable",
+		"Skipped-source warnings:", "unreachable_service: 1", "alpha [repo-a]: external service unreachable",
+		"Structured event counters:", "session_timeout: 1", "Global session telemetry:",
+		"output tokens (1 sessions): p50=42", "cutoff: plan activity within the last 30 days",
+		"missing-tool: 1 occurrences across 1 plans / 1 repositories",
+		"gh: 1 occurrences across 1 plans / 1 repositories", "github.com: 1 occurrences across 1 plans / 1 repositories",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("all-repository report missing %q:\n%s", want, text)
+		}
+	}
+	if alpha, middle, zeta := strings.Index(text, "alpha [repo-a]: scanned"), strings.Index(text, "middle [repo-m]: empty"), strings.Index(text, "zeta [repo-z]: unreadable"); alpha < 0 || alpha >= middle || middle >= zeta {
+		t.Errorf("repository ordering is not stable by catalog id:\n%s", text)
+	}
+}
+
+func TestInsightsAllReposEmptyHistoryAndDigestCap(t *testing.T) {
+	dataHome := t.TempDir()
+	t.Setenv("TAO_DATA_HOME", dataHome)
+	var out bytes.Buffer
+	app := App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }}
+	if err := app.Run(context.Background(), []string{"insights", "--all-repos", "--digest"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"# Tao All-Repository Insights Digest", "Repositories: 0 registered", "None registered", "Cutoff: plan activity within the last 30 days"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("empty digest missing %q:\n%s", want, out.String())
+		}
+	}
+
+	report := insights.Report{PlansScanned: 100}
+	for i := range allDigestMaxSources + 10 {
+		report.RepositoryCoverage.Repositories = append(report.RepositoryCoverage.Repositories, insights.RepositoryScanResult{RepositoryID: fmt.Sprintf("repo-%02d", i), Status: "scanned"})
+	}
+	for i := range allDigestMaxSignals + 10 {
+		report.RecentLogs.ToolUses = append(report.RecentLogs.ToolUses, insights.LogSignal{Name: fmt.Sprintf("tool-%02d", i), Count: 10, PlanCount: 4, RepositoryCount: 3})
+	}
+	report.BlockedReasons = []insights.ReasonBucket{{
+		Reason: "shared_failure", Count: 12,
+		QualifiedExemplars: []insights.EvidenceExemplar{{RepositoryID: "repo-00", Value: "first"}, {RepositoryID: "repo-00", Value: "second"}},
+		Repositories:       []insights.ReasonRepository{{RepositoryID: "repo-00", Count: 2}, {RepositoryID: "repo-01", Count: 1}},
+	}}
+	var first, second bytes.Buffer
+	if err := renderAllInsightsDigest(&first, report); err != nil {
+		t.Fatal(err)
+	}
+	if err := renderAllInsightsDigest(&second, report); err != nil {
+		t.Fatal(err)
+	}
+	if first.String() != second.String() {
+		t.Fatal("all-repository digest is not deterministic")
+	}
+	if first.Len() > digestMaxBytes {
+		t.Fatalf("digest length = %d, want <= %d", first.Len(), digestMaxBytes)
+	}
+	for _, want := range []string{"… 10 more repositories", "repository evidence: repo-00, repo-01", "tool-02: 10 occurrences across 4 plans / 3 repositories"} {
+		if !strings.Contains(first.String(), want) {
+			t.Errorf("bounded digest missing %q:\n%s", want, first.String())
+		}
+	}
+	for _, excluded := range []string{"repo-08`: scanned", "tool-03:"} {
+		if strings.Contains(first.String(), excluded) {
+			t.Errorf("bounded digest contains %q:\n%s", excluded, first.String())
+		}
 	}
 }
 

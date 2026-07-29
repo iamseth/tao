@@ -106,7 +106,7 @@ func (s *Service) GeneratePlan(ctx context.Context, request GeneratePlanRequest)
 	}
 	result, err := s.runtime().RunSession(ctx, agent.Session{
 		RepoRoot: request.Session.Repo.Root, Prompt: prompt, PermissionMode: mode,
-		Timeout: request.Timeout, Log: s.Log,
+		Timeout: request.Timeout, Progress: s.Log,
 	})
 	if err != nil {
 		return fail(GenerationStageRuntime, err)

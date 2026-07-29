@@ -1,6 +1,7 @@
 package pi
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/iamseth/tao/internal/agent/jsonmap"
+	"github.com/iamseth/tao/internal/agent/logrecord"
 )
 
 type session struct {
@@ -17,6 +19,7 @@ type session struct {
 	stdin                  io.WriteCloser
 	events                 chan readResult
 	log                    io.Writer
+	stderrDone             chan struct{}
 	mu                     sync.Mutex
 	pendingToolCalls       map[string]toolCall
 	pendingToolCallsByName map[string]toolCall
@@ -38,13 +41,27 @@ func newSession(proc Process, log io.Writer, noProgressToolLimit int, verificati
 	}
 	go s.readStdout(proc.Stdout())
 	if stderr := proc.Stderr(); stderr != nil {
-		target := io.Discard
-		if log != nil {
-			target = log
-		}
-		go func() { _, _ = io.Copy(target, stderr) }()
+		s.stderrDone = make(chan struct{})
+		go func() {
+			defer close(s.stderrDone)
+			drainStderr(stderr, log)
+		}()
 	}
 	return s
+}
+
+func drainStderr(stderr io.Reader, log io.Writer) {
+	if log == nil {
+		_, _ = io.Copy(io.Discard, stderr)
+		return
+	}
+	scanner := bufio.NewScanner(stderr)
+	for scanner.Scan() {
+		_ = logrecord.Write(log, logrecord.Record{Type: logrecord.TypeDiagnostic, Content: fmt.Sprintf("tao pi stderr: %s", scanner.Text())})
+	}
+	if err := scanner.Err(); err != nil {
+		_ = logrecord.Write(log, logrecord.Record{Type: logrecord.TypeDiagnostic, Content: fmt.Sprintf("tao pi stderr: %v", err)})
+	}
 }
 
 func (s *session) waitForAgentEnd(ctx context.Context) (Result, error) {
@@ -153,30 +170,22 @@ func (s *session) logToolCall(call toolCall) {
 	if s.log == nil {
 		return
 	}
-	_, _ = fmt.Fprintf(s.log, "→ %s %s\n", call.name, call.arguments)
+	_ = logrecord.Write(s.log, logrecord.Record{Type: logrecord.TypeToolCall, Name: call.name, Payload: call.arguments})
 }
 
 func (s *session) logToolResultText(name string, message map[string]any) {
 	if s.log == nil {
 		return
 	}
-	prefix := "✓"
-	if failed, _ := message["isError"].(bool); failed {
-		prefix = "✗"
-	}
-	text := contentText(message["content"])
-	if text == "" {
-		_, _ = fmt.Fprintf(s.log, "%s %s\n", prefix, name)
-		return
-	}
-	_, _ = fmt.Fprintf(s.log, "%s %s\n%s\n", prefix, name, text)
+	failed, _ := message["isError"].(bool)
+	_ = logrecord.Write(s.log, logrecord.Record{Type: logrecord.TypeToolResult, Name: name, Content: contentText(message["content"]), Failed: failed})
 }
 
 func (s *session) logPiError(err error) {
 	if s.log == nil || err == nil {
 		return
 	}
-	_, _ = fmt.Fprintf(s.log, "tao pi error: %v\n", err)
+	_ = logrecord.Write(s.log, logrecord.Record{Type: logrecord.TypeDiagnostic, Content: fmt.Sprintf("tao pi error: %v", err)})
 }
 
 type toolCall struct {

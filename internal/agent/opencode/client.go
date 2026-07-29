@@ -9,6 +9,7 @@ import (
 	"sort"
 
 	"github.com/iamseth/tao/internal/agent/jsonmap"
+	"github.com/iamseth/tao/internal/agent/logrecord"
 	agentmetrics "github.com/iamseth/tao/internal/agent/metrics"
 	"github.com/iamseth/tao/internal/agent/perm"
 	"github.com/iamseth/tao/internal/agent/process"
@@ -51,6 +52,8 @@ type Result struct {
 	// MetricsWarning explains why typed metrics could not be captured, or is
 	// empty when Metrics is usable.
 	MetricsWarning string
+
+	loggedToolResults map[string]struct{}
 }
 
 func (c Client) RunAgentSession(ctx context.Context, request Request) (Result, error) {
@@ -117,11 +120,11 @@ func (c Client) handleEvent(ev streamjson.Event, result *Result) error {
 			return err
 		}
 	}
-	c.logEvent(ev, part)
+	c.logEvent(ev, part, result)
 	return nil
 }
 
-func (c Client) logEvent(ev event, part map[string]any) {
+func (c Client) logEvent(ev event, part map[string]any, result *Result) {
 	if c.Log == nil {
 		return
 	}
@@ -129,18 +132,49 @@ func (c Client) logEvent(ev event, part map[string]any) {
 	case "text":
 		if part != nil {
 			if text := jsonmap.String(part, "text"); text != "" {
-				_, _ = fmt.Fprintf(c.Log, "assistant: %s\n", text)
+				_ = logrecord.Write(c.Log, logrecord.Record{Type: logrecord.TypeAssistant, Content: text})
 			}
 		}
 	case "tool_use":
-		if part != nil {
-			name := jsonmap.String(part, "tool")
-			if name == "" {
-				name = "tool"
-			}
-			_, _ = fmt.Fprintf(c.Log, "→ %s %s\n", name, toolInput(part))
-		}
+		c.logCompletedTool(part, result)
 	}
+}
+
+func (c Client) logCompletedTool(part map[string]any, result *Result) {
+	if part == nil {
+		return
+	}
+	state := mapValue(part, "state")
+	status := jsonmap.String(state, "status")
+	if status != "completed" && status != "error" && status != "failed" {
+		return
+	}
+	if id := jsonmap.FirstString(part, "callID", "callId", "id"); id != "" {
+		if result.loggedToolResults == nil {
+			result.loggedToolResults = make(map[string]struct{})
+		}
+		if _, logged := result.loggedToolResults[id]; logged {
+			return
+		}
+		result.loggedToolResults[id] = struct{}{}
+	}
+	name := jsonmap.String(part, "tool")
+	if name == "" {
+		name = "tool"
+	}
+	_ = logrecord.Write(c.Log, logrecord.Record{Type: logrecord.TypeToolCall, Name: name, Payload: toolInput(part)})
+	content := jsonmap.FirstString(state, "output", "error")
+	if content == "" {
+		value := state["output"]
+		if value == nil {
+			value = state["error"]
+		}
+		content = jsonmap.Stringify(value)
+	}
+	_ = logrecord.Write(c.Log, logrecord.Record{
+		Type: logrecord.TypeToolResult, Name: name, Content: content,
+		Failed: status == "error" || status == "failed",
+	})
 }
 
 func accumulateTokens(result *Result, part map[string]any) {

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/iamseth/tao/internal/agent/logrecord"
 	"github.com/iamseth/tao/internal/agent/perm"
 	"github.com/iamseth/tao/internal/agent/process"
 )
@@ -69,8 +70,38 @@ func TestClientStartsOpenCodeWithPromptAndParsesStream(t *testing.T) {
 	if result.Metrics.TotalTokens != 7128 || result.Metrics.ProviderID != "openai" || result.MetricsWarning != "" {
 		t.Fatalf("unexpected metrics: %#v warning=%q", result.Metrics, result.MetricsWarning)
 	}
-	if !strings.Contains(log.String(), "assistant: done") {
+	if !strings.Contains(log.String(), `"type":"assistant","content":"done"`) {
 		t.Fatalf("expected assistant log, got %q", log.String())
+	}
+}
+
+func TestClientLogsFailedToolResultOnce(t *testing.T) {
+	var log bytes.Buffer
+	client := Client{Log: &log}
+	result := Result{}
+	part := map[string]any{
+		"callID": "call-1",
+		"tool":   "bash",
+		"state": map[string]any{
+			"status": "error",
+			"input":  map[string]any{"command": "missing-tool --version"},
+			"error":  "bash: missing-tool: command not found",
+		},
+	}
+	client.logCompletedTool(part, &result)
+	client.logCompletedTool(part, &result)
+
+	lines := strings.Split(strings.TrimSpace(log.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("log records = %d, want call/result pair once:\n%s", len(lines), log.String())
+	}
+	call, ok := logrecord.Parse(lines[0])
+	if !ok || call.Type != logrecord.TypeToolCall || call.Name != "bash" || !strings.Contains(call.Payload, "missing-tool --version") {
+		t.Fatalf("tool call = %#v, parsed=%v", call, ok)
+	}
+	toolResult, ok := logrecord.Parse(lines[1])
+	if !ok || toolResult.Type != logrecord.TypeToolResult || toolResult.Name != "bash" || !toolResult.Failed || !strings.Contains(toolResult.Content, "command not found") {
+		t.Fatalf("tool result = %#v, parsed=%v", toolResult, ok)
 	}
 }
 

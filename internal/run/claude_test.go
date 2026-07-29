@@ -34,7 +34,7 @@ func TestClaudeExecutorRunSliceUsesAutoPermissionAndLogsMetrics(t *testing.T) {
 		t.Fatalf("expected rendered work prompt, got %q", got.prompt)
 	}
 	logText := readMetricsText(t, filepath.Join(planDir, "agent-run.log"))
-	if !strings.Contains(logText, "running 001-a") || !strings.Contains(logText, "assistant: done") {
+	if !strings.Contains(logText, `"type":"session","content":"running 001-a"`) || !strings.Contains(logText, `"type":"assistant","content":"done"`) {
 		t.Fatalf("expected claude session log output, got:\n%s", logText)
 	}
 

@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/iamseth/tao/internal/agent/logrecord"
 	"github.com/iamseth/tao/internal/plan"
 	reworkpkg "github.com/iamseth/tao/internal/rework"
 	"github.com/iamseth/tao/internal/run"
@@ -71,13 +72,16 @@ func TestRunInvokesPiUntilPlanCompletedAndLogsOutput(t *testing.T) {
 		t.Fatalf("expected rendered transactional work prompt with plan dir, got %q", prompts[0])
 	}
 	text := out.String()
-	for _, want := range []string{"Running slice 001-a", "running 001-a", "Slice completed: 001-a", "Plan slices complete: " + fixture.id} {
+	for _, want := range []string{"Running slice 001-a", "running 001-a ---\n", "Slice completed: 001-a", "Plan slices complete: " + fixture.id} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected %q in tao output:\n%s", want, text)
 		}
 	}
+	if strings.Contains(text, logrecord.Prefix) {
+		t.Fatalf("tao output exposed persisted agent-log framing:\n%s", text)
+	}
 	logText := readText(t, plan.LogPath(fixture.dir))
-	for _, want := range []string{"running 001-a"} {
+	for _, want := range []string{logrecord.Prefix, "running 001-a"} {
 		if !strings.Contains(logText, want) {
 			t.Fatalf("expected %q in agent log:\n%s", want, logText)
 		}

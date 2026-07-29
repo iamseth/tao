@@ -68,7 +68,7 @@ func TestClientStartsCodexWithPromptAndParsesStream(t *testing.T) {
 	if result.Metrics.TotalTokens != 17 || result.Metrics.CacheReadTokens != 2 || result.Metrics.ReasoningTokens != 3 || result.Metrics.ProviderID != "openai" || result.MetricsWarning != "" {
 		t.Fatalf("unexpected metrics: %#v warning=%q", result.Metrics, result.MetricsWarning)
 	}
-	if !strings.Contains(log.String(), "assistant: done") {
+	if !strings.Contains(log.String(), `"type":"assistant","content":"done"`) {
 		t.Fatalf("expected assistant log, got %q", log.String())
 	}
 }

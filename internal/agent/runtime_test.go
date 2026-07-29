@@ -71,12 +71,13 @@ func TestClaudeRuntimeNormalizesMetrics(t *testing.T) {
 		proc.writeEvent(`{"type":"result","subtype":"success","session_id":"session-1","total_cost_usd":0.02}`)
 	}()
 	var log bytes.Buffer
+	var progress bytes.Buffer
 	runtime := claudeRuntime{starter: func(ctx context.Context, cwd, name string, args []string) (Process, error) {
 		gotName = name
 		return proc, nil
 	}}
 
-	result, err := runtime.RunSession(context.Background(), Session{RepoRoot: "/repo", Prompt: "work", CollectMetrics: true, Log: &log})
+	result, err := runtime.RunSession(context.Background(), Session{RepoRoot: "/repo", Prompt: "work", CollectMetrics: true, Log: &log, Progress: &progress})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,8 +94,11 @@ func TestClaudeRuntimeNormalizesMetrics(t *testing.T) {
 	if result.Metrics == nil || *result.Metrics != want {
 		t.Fatalf("metrics = %#v, want %#v", result.Metrics, want)
 	}
-	if !strings.Contains(log.String(), "assistant: done") {
-		t.Fatalf("expected session log, got %q", log.String())
+	if !strings.Contains(log.String(), `"type":"assistant","content":"done"`) || !strings.Contains(log.String(), "@tao-agent-log-v1") {
+		t.Fatalf("expected framed session log, got %q", log.String())
+	}
+	if progress.String() != "assistant: done\n" || strings.Contains(progress.String(), "@tao-agent-log-v1") {
+		t.Fatalf("expected human-readable progress, got %q", progress.String())
 	}
 }
 

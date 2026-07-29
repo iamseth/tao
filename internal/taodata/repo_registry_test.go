@@ -89,6 +89,35 @@ func TestRegistryWriteRepoReplacesMetadataAtomically(t *testing.T) {
 	}
 }
 
+func TestListRepoPlanSourcesRetainsCatalogStoresWithoutRootsOrMetadata(t *testing.T) {
+	dataHome := t.TempDir()
+	registry := Registry{DataHome: dataHome, Now: fixedNow}
+	if err := registry.WriteRepo(Repo{Schema: RepoSchema, ID: "repo-z", Name: "zeta", Root: filepath.Join(dataHome, "missing")}); err != nil {
+		t.Fatal(err)
+	}
+	brokenDir := filepath.Join(dataHome, "repos", "repo-a")
+	if err := os.MkdirAll(brokenDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(brokenDir, "repo.json"), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	sources, err := registry.ListRepoPlanSources()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 2 || sources[0].ID != "repo-a" || sources[1].ID != "repo-z" {
+		t.Fatalf("sources = %#v", sources)
+	}
+	if sources[0].Name != "" || sources[0].PlansDir != filepath.Join(brokenDir, "plans") {
+		t.Fatalf("damaged metadata source = %#v", sources[0])
+	}
+	if sources[1].Name != "zeta" || sources[1].PlansDir != registry.PlansDir(Repo{ID: "repo-z"}) {
+		t.Fatalf("missing-root source = %#v", sources[1])
+	}
+}
+
 func TestRegisterCurrentDiscoversGitRepo(t *testing.T) {
 	root := newGitRepo(t)
 	dataHome := t.TempDir()

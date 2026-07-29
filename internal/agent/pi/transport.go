@@ -9,6 +9,7 @@ import (
 	"io"
 
 	"github.com/iamseth/tao/internal/agent/jsonmap"
+	"github.com/iamseth/tao/internal/agent/logrecord"
 )
 
 type command struct {
@@ -154,7 +155,7 @@ func (s *session) handleUIRequest(ctx context.Context, event event) error {
 		requestID = jsonmap.String(event, "id")
 	}
 	if s.log != nil {
-		_, _ = fmt.Fprintf(s.log, "tao pi warning: cancelled unsupported UI request %q\n", requestID)
+		_ = logrecord.Write(s.log, logrecord.Record{Type: logrecord.TypeDiagnostic, Content: fmt.Sprintf("tao pi warning: cancelled unsupported UI request %q", requestID)})
 	}
 	return s.send(ctx, command{Type: "extension_ui_response", RequestID: requestID, Cancelled: true})
 }
@@ -182,4 +183,7 @@ func (s *session) sendWithoutContext(command command) error {
 func (s *session) close() {
 	_ = s.stdin.Close()
 	_ = s.proc.Wait()
+	if s.stderrDone != nil {
+		<-s.stderrDone
+	}
 }

@@ -3,8 +3,10 @@ package insights
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/iamseth/tao/internal/plan"
@@ -17,6 +19,15 @@ type fixtureLister struct {
 
 func (l fixtureLister) ListPlans(context.Context, plan.PlanFilter) ([]plan.PlanSummary, error) {
 	return l.summaries, l.err
+}
+
+type fixtureSourceLister struct {
+	sources []RepositorySource
+	err     error
+}
+
+func (l fixtureSourceLister) ListInsightSources(context.Context) ([]RepositorySource, error) {
+	return l.sources, l.err
 }
 
 func TestAggregateStreamsPlanHistoriesLeniently(t *testing.T) {
@@ -99,6 +110,89 @@ func TestAggregateSumsAttemptsWithinSessionUsingPlanTelemetry(t *testing.T) {
 	}
 	if report.OutputTokens.Sessions != 1 || report.OutputTokens.P95 != 10 || report.Cost.P95 != 1 {
 		t.Fatalf("percentiles = output %#v cost %#v", report.OutputTokens, report.Cost)
+	}
+}
+
+func TestAggregateSourcesQualifiesDuplicatePlansAndReportsPartialCoverage(t *testing.T) {
+	writeEvents := func(name, events string) string {
+		dir := filepath.Join(t.TempDir(), name)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(events), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	var firstEvents strings.Builder
+	firstEvents.WriteString("" +
+		`{"type":"slice_blocked","reason":"network unavailable"}` + "\n" +
+		`{"type":"slice_blocked","reason":"service unavailable"}` + "\n" +
+		`{"type":"rework_round","round":1}` + "\n" +
+		`{"type":"rework_round","round":2}` + "\n" +
+		`{"type":"rework_round","round":3}` + "\n" +
+		`{"type":"agent_metrics","metrics":{"session_id":"same","output_tokens":1,"cost":0}}` + "\n")
+	for i := 2; i <= 19; i++ {
+		_, _ = fmt.Fprintf(&firstEvents, "{\"type\":\"agent_metrics\",\"metrics\":{\"session_id\":\"first-%d\",\"output_tokens\":%d,\"cost\":0}}\n", i, i)
+	}
+	first := writeEvents("first", firstEvents.String())
+	second := writeEvents("second", ""+
+		`{"type":"slice_blocked","reason":"external service unreachable"}`+"\n"+
+		`{"type":"rework_round","round":1}`+"\n"+
+		`{"type":"rework_round","round":2}`+"\n"+
+		`{"type":"rework_round","round":3}`+"\n"+
+		`{"type":"agent_metrics","metrics":{"session_id":"same","output_tokens":100,"cost":100}}`+"\n")
+
+	report, err := AggregateSources(context.Background(), fixtureSourceLister{sources: []RepositorySource{
+		{ID: "repo-b", Name: "Beta", Plans: fixtureLister{summaries: []plan.PlanSummary{{ID: "duplicate", Dir: second}}}},
+		{ID: "repo-unreadable", Plans: fixtureLister{err: errors.New("damaged plan store")}},
+		{ID: "repo-empty", Plans: fixtureLister{}},
+		{ID: "", Name: "invalid", Plans: fixtureLister{}},
+		{ID: "repo-a", Name: "Alpha", Plans: fixtureLister{summaries: []plan.PlanSummary{{ID: "duplicate", Dir: first}}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coverage := report.RepositoryCoverage
+	if coverage.Scanned != 2 || coverage.Skipped != 1 || coverage.Unreadable != 1 || coverage.Empty != 1 {
+		t.Fatalf("coverage = %#v", coverage)
+	}
+	wantStatuses := []string{"skipped", "scanned", "scanned", "empty", "unreadable"}
+	for i, want := range wantStatuses {
+		if coverage.Repositories[i].Status != want {
+			t.Fatalf("coverage repositories = %#v", coverage.Repositories)
+		}
+	}
+	if report.OutputTokens.Sessions != 20 || report.OutputTokens.P50 != 10 || report.OutputTokens.P95 != 19 {
+		t.Fatalf("global output percentiles = %#v", report.OutputTokens)
+	}
+	if len(report.ReworkPlans) != 2 || report.ReworkPlans[0].RepositoryID != "repo-a" || report.ReworkPlans[1].RepositoryID != "repo-b" {
+		t.Fatalf("qualified rework plans = %#v", report.ReworkPlans)
+	}
+	if len(report.BlockedReasons) != 1 || len(report.BlockedReasons[0].QualifiedExemplars) != 2 {
+		t.Fatalf("qualified blocked evidence = %#v", report.BlockedReasons)
+	}
+	bucket := report.BlockedReasons[0]
+	if bucket.QualifiedExemplars[0].RepositoryID != "repo-a" || bucket.QualifiedExemplars[1].RepositoryID != "repo-a" {
+		t.Fatalf("bounded blocked exemplars = %#v", bucket.QualifiedExemplars)
+	}
+	if len(bucket.Repositories) != 2 || bucket.Repositories[0].RepositoryID != "repo-a" || bucket.Repositories[0].Count != 2 || bucket.Repositories[1].RepositoryID != "repo-b" || bucket.Repositories[1].Count != 1 {
+		t.Fatalf("blocked repository counts = %#v", bucket.Repositories)
+	}
+	if len(report.OutlierPlans) != 1 || report.OutlierPlans[0].RepositoryID != "repo-b" || report.OutlierPlans[0].PlanID != "duplicate" {
+		t.Fatalf("qualified outliers = %#v", report.OutlierPlans)
+	}
+}
+
+func TestAggregateSourcesReturnsCatalogAndContextErrors(t *testing.T) {
+	want := errors.New("catalog failed")
+	if _, err := AggregateSources(context.Background(), fixtureSourceLister{err: want}); !errors.Is(err, want) {
+		t.Fatalf("error = %v, want %v", err, want)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := AggregateSources(ctx, fixtureSourceLister{sources: []RepositorySource{{ID: "repo", Plans: fixtureLister{}}}}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context canceled", err)
 	}
 }
 

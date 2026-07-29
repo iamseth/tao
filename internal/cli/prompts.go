@@ -2,13 +2,17 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	agentpkg "github.com/iamseth/tao/internal/agent"
+	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/promptinstall"
 	"github.com/iamseth/tao/internal/runtimeconfig"
@@ -117,6 +121,11 @@ func (a App) prompt(ctx context.Context, repo plan.Resolver, args []string) erro
 	if err := requirePositionals(positional, 1, "usage: tao prompt <prompt> [--plan-dir DIR] [--commit-policy slice|none] [--execution-mode isolated|current] [--commit=false] [--arguments TEXT]"); err != nil {
 		return err
 	}
+	if positional[0] == prompts.PromptTaoInsightsReview {
+		if err := a.requireTaoRepo(ctx); err != nil {
+			return err
+		}
+	}
 	config, err := runtimeconfig.NewConfigFromStages(runtimeconfig.DefaultRunOptionsPatch(), runtimeconfig.RunOptionsPatch{CommitPolicy: runtimeconfig.CommitPolicy(flagStringValue(fs, "commit-policy")), ExecutionMode: runtimeconfig.ExecutionMode(flagStringValue(fs, "execution-mode"))})
 	if err != nil {
 		return err
@@ -141,6 +150,28 @@ func (a App) prompt(ctx context.Context, repo plan.Resolver, args []string) erro
 	}
 	_, err = fmt.Fprint(a.Out, text)
 	return err
+}
+
+func (a App) requireTaoRepo(ctx context.Context) error {
+	root, err := gitops.NewClient("", a.CommandRunner).RevParse(ctx, "--show-toplevel")
+	if err != nil {
+		return errors.New("not in a tao repo")
+	}
+	content, err := os.ReadFile(filepath.Join(root, "go.mod")) //nolint:gosec // G304: root is the current Git root returned by Git.
+	if err != nil {
+		return errors.New("not in a tao repo")
+	}
+	for line := range strings.SplitSeq(string(content), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 || fields[0] != "module" {
+			continue
+		}
+		if len(fields) == 2 && fields[1] == "github.com/iamseth/tao" {
+			return nil
+		}
+		break
+	}
+	return errors.New("not in a tao repo")
 }
 
 func (a App) installPrompts(args []string) error {

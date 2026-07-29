@@ -10,13 +10,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/iamseth/tao/internal/agent/logrecord"
 	"github.com/iamseth/tao/internal/plan"
 )
 
-func TestLogPrintsAgentRunLog(t *testing.T) {
+func TestLogRendersFramedAgentRunLog(t *testing.T) {
 	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
-	want := "\x1b[32magent output\x1b[0m\n"
-	if err := os.WriteFile(plan.LogPath(fixture.dir), []byte(want), 0o600); err != nil {
+	var stored bytes.Buffer
+	if err := logrecord.Write(&stored, logrecord.Record{Type: logrecord.TypeAssistant, Content: "agent output"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(plan.LogPath(fixture.dir), stored.Bytes(), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -25,22 +29,50 @@ func TestLogPrintsAgentRunLog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := out.String(); got != want {
+	if got, want := out.String(), "assistant: agent output\n"; got != want {
 		t.Fatalf("unexpected log output %q", got)
+	}
+	if strings.Contains(out.String(), logrecord.Prefix) {
+		t.Fatalf("log exposed framing: %q", out.String())
+	}
+}
+
+func TestLogPreservesLegacyUnframedOutput(t *testing.T) {
+	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+	want := "\x1b[32mlegacy agent output\x1b[0m\ntrailing output"
+	if err := os.WriteFile(plan.LogPath(fixture.dir), []byte(want), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	if err := (App{Out: &out, Err: &out}).Run(context.Background(), []string{"--plans-dir", fixture.root, "log", fixture.id}); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); got != want {
+		t.Fatalf("unexpected legacy log output %q", got)
 	}
 }
 
 func TestLogFollowsAppendedOutput(t *testing.T) {
 	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
 	logPath := plan.LogPath(fixture.dir)
-	if err := os.WriteFile(logPath, []byte("initial\n"), 0o600); err != nil {
+	var initial bytes.Buffer
+	if err := logrecord.Write(&initial, logrecord.Record{Type: logrecord.TypeAssistant, Content: "initial"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(logPath, initial.Bytes(), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	appended := "\x1b[31mappended\x1b[0m\n"
-	out := newNotifyingBuffer(appended)
+	var framed bytes.Buffer
+	if err := logrecord.Write(&framed, logrecord.Record{Type: logrecord.TypeToolResult, Name: "test", Content: "appended"}); err != nil {
+		t.Fatal(err)
+	}
+	appended := framed.String()
+	wantAppended := "✓ test\nappended\n"
+	out := newNotifyingBuffer(wantAppended)
 	var errOut bytes.Buffer
 	app := App{Out: out, Err: &errOut}
 	errCh := make(chan error, 1)
@@ -71,8 +103,11 @@ func TestLogFollowsAppendedOutput(t *testing.T) {
 	if err := <-errCh; !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context cancellation, got %v", err)
 	}
-	if got, want := out.String(), "initial\n"+appended; !strings.Contains(got, want) {
+	if got, want := out.String(), "assistant: initial\n"+wantAppended; !strings.Contains(got, want) {
 		t.Fatalf("unexpected followed output %q", got)
+	}
+	if strings.Contains(out.String(), logrecord.Prefix) {
+		t.Fatalf("followed log exposed framing: %q", out.String())
 	}
 }
 

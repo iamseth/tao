@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/iamseth/tao/internal/agent/jsonmap"
+	"github.com/iamseth/tao/internal/agent/logrecord"
 	"github.com/iamseth/tao/internal/agent/streamjson"
 )
 
@@ -16,7 +17,7 @@ type event = map[string]any
 func (c Client) handleEvent(ev streamjson.Event, result *Result) error {
 	result.Events = ev
 	extractTelemetry(ev, result)
-	c.logEvent(ev)
+	c.logEvent(ev, result)
 	if text := assistantText(ev); text != "" {
 		if result.Output != "" {
 			result.Output += "\n"
@@ -34,27 +35,44 @@ func (c Client) handleEvent(ev streamjson.Event, result *Result) error {
 	return nil
 }
 
-func (c Client) logEvent(ev event) {
+func (c Client) logEvent(ev event, session *Result) {
 	if c.Log == nil {
 		return
 	}
 	if text := assistantText(ev); text != "" {
-		_, _ = fmt.Fprintf(c.Log, "assistant: %s\n", text)
+		_ = logrecord.Write(c.Log, logrecord.Record{Type: logrecord.TypeAssistant, Content: text})
 	}
-	for _, call := range toolCalls(ev) {
-		_, _ = fmt.Fprintf(c.Log, "→ %s %s\n", call.name, call.input)
-	}
-	for _, result := range toolResults(ev) {
-		_, _ = fmt.Fprintf(c.Log, "✓ tool\n%s\n", result)
+	session.pendingToolCalls = append(session.pendingToolCalls, toolCalls(ev)...)
+	for _, toolResult := range toolResults(ev) {
+		call, ok := takeToolCall(session, toolResult.toolUseID)
+		if ok {
+			_ = logrecord.Write(c.Log, logrecord.Record{Type: logrecord.TypeToolCall, Name: call.name, Payload: call.input})
+		}
+		name := call.name
+		if name == "" {
+			name = "tool"
+		}
+		_ = logrecord.Write(c.Log, logrecord.Record{Type: logrecord.TypeToolResult, Name: name, Content: toolResult.content, Failed: toolResult.failed})
 	}
 	if err := eventError(ev); err != nil {
 		c.logClaudeError(err)
 	}
 }
 
+func takeToolCall(session *Result, toolUseID string) (toolCall, bool) {
+	for i, call := range session.pendingToolCalls {
+		if toolUseID != "" && call.id != toolUseID {
+			continue
+		}
+		session.pendingToolCalls = append(session.pendingToolCalls[:i], session.pendingToolCalls[i+1:]...)
+		return call, true
+	}
+	return toolCall{}, false
+}
+
 func (c Client) logClaudeError(err error) {
 	if c.Log != nil && err != nil {
-		_, _ = fmt.Fprintf(c.Log, "tao claude error: %v\n", err)
+		_ = logrecord.Write(c.Log, logrecord.Record{Type: logrecord.TypeDiagnostic, Content: fmt.Sprintf("tao claude error: %v", err)})
 	}
 }
 
@@ -147,7 +165,7 @@ func contentText(value any) string {
 	return b.String()
 }
 
-type toolCall struct{ name, input string }
+type toolCall struct{ id, name, input string }
 
 func toolCalls(event event) []toolCall {
 	message, _ := event["message"].(map[string]any)
@@ -170,15 +188,21 @@ func toolCalls(event event) []toolCall {
 		if input == "" {
 			input = jsonmap.Stringify(blockMap["arguments"])
 		}
-		calls = append(calls, toolCall{name: name, input: input})
+		calls = append(calls, toolCall{id: jsonmap.String(blockMap, "id"), name: name, input: input})
 	}
 	return calls
 }
 
-func toolResults(event event) []string {
+type toolResult struct {
+	toolUseID string
+	content   string
+	failed    bool
+}
+
+func toolResults(event event) []toolResult {
 	message, _ := event["message"].(map[string]any)
 	blocks, _ := message["content"].([]any)
-	var results []string
+	var results []toolResult
 	for _, block := range blocks {
 		blockMap, ok := block.(map[string]any)
 		if !ok || jsonmap.String(blockMap, "type") != "tool_result" {
@@ -188,7 +212,11 @@ func toolResults(event event) []string {
 		if text == "" {
 			text = contentText(blockMap["content"])
 		}
-		results = append(results, text)
+		results = append(results, toolResult{
+			toolUseID: jsonmap.String(blockMap, "tool_use_id"),
+			content:   text,
+			failed:    boolValue(blockMap, "is_error"),
+		})
 	}
 	return results
 }

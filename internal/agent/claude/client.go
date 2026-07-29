@@ -37,6 +37,8 @@ type Result struct {
 	// MetricsWarning explains why typed metrics could not be captured from the
 	// stream output, or is empty when Metrics is usable.
 	MetricsWarning string
+
+	pendingToolCalls []toolCall
 }
 
 func (c Client) RunAgentSession(ctx context.Context, request Request) (Result, error) {

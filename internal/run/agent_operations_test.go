@@ -24,7 +24,13 @@ func TestBatchAgentSessionHonorsConfiguredProviderPermissionsAndRoot(t *testing.
 	t.Setenv("TAO_SESSION_TIMEOUT", "30s")
 	var got fakeClaudeStart
 	var metricsCalled bool
-	session, err := NewBatchAgentSession(BatchAgentSessionConfig{ProcessStarter: fakeProcessStarter(t, &got, `{"type":"result","result":"resolved"}`), Metrics: func(_ agent.Metrics, _ string) { metricsCalled = true }})
+	var progress bytes.Buffer
+	session, err := NewBatchAgentSession(BatchAgentSessionConfig{
+		ProcessStarter: fakeProcessStarter(t, &got,
+			`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"repairing"}]}}`,
+			`{"type":"result","result":"resolved"}`),
+		Log: &progress, Metrics: func(_ agent.Metrics, _ string) { metricsCalled = true },
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +38,7 @@ func TestBatchAgentSessionHonorsConfiguredProviderPermissionsAndRoot(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if text != "resolved" || got.name != "claude" || got.cwd != "/integration" || got.prompt != "repair" {
+	if text != "repairing" || got.name != "claude" || got.cwd != "/integration" || got.prompt != "repair" {
 		t.Fatalf("unexpected batch session: text=%q start=%#v", text, got)
 	}
 	if !strings.Contains(strings.Join(got.args, " "), "--permission-mode bypassPermissions") {
@@ -40,6 +46,31 @@ func TestBatchAgentSessionHonorsConfiguredProviderPermissionsAndRoot(t *testing.
 	}
 	if !metricsCalled {
 		t.Fatal("best-effort metrics callback was not invoked")
+	}
+	if strings.Contains(progress.String(), "@tao-agent-log-v1") || !strings.Contains(progress.String(), "assistant: repairing") {
+		t.Fatalf("merge-batch progress was not human-readable: %q", progress.String())
+	}
+}
+
+func TestBatchAgentSessionRendersMetricsWarningAsReadableProgress(t *testing.T) {
+	t.Setenv("TAO_AGENT", "claude")
+	var progress bytes.Buffer
+	var got fakeClaudeStart
+	session, err := NewBatchAgentSession(BatchAgentSessionConfig{
+		ProcessStarter: fakeProcessStarter(t, &got, `{"type":"result","result":"resolved"}`),
+		Log:            &progress,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.Resolve(context.Background(), "/integration", "repair"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(progress.String(), "@tao-agent-log-v1") {
+		t.Fatalf("merge-batch metrics warning contained a framed record: %q", progress.String())
+	}
+	if !strings.Contains(progress.String(), "tao telemetry warning: claude metrics absent from stream output") {
+		t.Fatalf("merge-batch metrics warning was not human-readable: %q", progress.String())
 	}
 }
 

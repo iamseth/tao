@@ -130,6 +130,12 @@ func TestInstallAllPiWritesPromptTemplatesAndTaoExtension(t *testing.T) {
 	if !strings.Contains(noteSlice, "# Tao Note Slice") || strings.Contains(noteSlice, "tao prompt note-slice") {
 		t.Fatalf("expected direct Pi note-slice template, got %q", noteSlice)
 	}
+	insightsReview := readPromptInstallText(t, filepath.Join(promptsDir, "tao-insights-review.md"))
+	for _, want := range []string{"agent: plan", "tao-managed: tao-insights-review v1", "tao insights --all-repos --digest", "not in a tao repo"} {
+		if !strings.Contains(insightsReview, want) {
+			t.Fatalf("expected %q in Pi Tao insights review prompt, got %q", want, insightsReview)
+		}
+	}
 	if _, err := os.Stat(filepath.Join(promptsDir, "tao-commit.md")); !os.IsNotExist(err) {
 		t.Fatalf("expected Pi tao-commit prompt template not to be installed, got %v", err)
 	}
@@ -175,7 +181,7 @@ func TestInstallAllClaudeWritesManagedCommandWrappers(t *testing.T) {
 		t.Fatalf("InstallAll results = %d, want %d", len(results), len(prompts.Definitions()))
 	}
 
-	for _, name := range []string{"plan", "note-slice", "note", "run"} {
+	for _, name := range []string{"plan", "note-slice", "note", "run", "insights-review"} {
 		commandName := "tao-" + name
 		path := filepath.Join(commandsDir, commandName+".md")
 		text := readPromptInstallText(t, path)
@@ -228,8 +234,8 @@ func TestInstallAllOpenCodeWritesStyleBCommands(t *testing.T) {
 	}
 
 	// Read-only planning prompts carry agent: plan; mutating prompts carry agent: build.
-	agentModes := map[string]string{"plan": "plan", "grill-me": "plan", "note-slice": "build", "note": "build", "run": "build", "commit": "build", "slice": "build"}
-	for _, name := range []string{"plan", "note-slice", "note", "run", "grill-me", "slice"} {
+	agentModes := map[string]string{"plan": "plan", "grill-me": "plan", "insights-review": "plan", "note-slice": "build", "note": "build", "run": "build", "commit": "build", "slice": "build"}
+	for _, name := range []string{"plan", "note-slice", "note", "run", "grill-me", "slice", "insights-review"} {
 		commandName := "tao-" + name
 		path := filepath.Join(commandsDir, commandName+".md")
 		text := readPromptInstallText(t, path)
@@ -339,6 +345,12 @@ func TestInstallAllCodexWritesManagedPrompts(t *testing.T) {
 		t.Fatalf("expected Codex prompt to omit agent frontmatter and render the note-slice body, got %q", text)
 	}
 	assertPromptRenameInstalled(t, promptsDir)
+	insightsReview := readPromptInstallText(t, filepath.Join(promptsDir, "tao-insights-review.md"))
+	for _, want := range []string{"description: Review global Tao evidence", "tao-managed: tao-insights-review v1", "tao insights --all-repos --digest", "not in a tao repo"} {
+		if !strings.Contains(insightsReview, want) {
+			t.Fatalf("expected %q in Codex Tao insights review prompt, got %q", want, insightsReview)
+		}
+	}
 	assertManagedCommitDelegates(t, filepath.Join(promptsDir, "tao-commit.md"), "description: Commit the current changes locally through Tao")
 
 	checked, err := CheckAll(runtimeconfig.AgentCodex)

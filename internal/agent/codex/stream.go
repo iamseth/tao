@@ -2,10 +2,10 @@ package codex
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/iamseth/tao/internal/agent/jsonmap"
+	"github.com/iamseth/tao/internal/agent/logrecord"
 	"github.com/iamseth/tao/internal/agent/streamjson"
 )
 
@@ -39,6 +39,7 @@ func (c Client) handleEvent(ev streamjson.Event, result *Result) error {
 		if text := agentMessageText(ev); text != "" {
 			c.recordAssistantText(result, text)
 		}
+		c.logCommandExecution(ev)
 	case "error", "stream_error", "turn.failed", "turn_failed", "turn_aborted", "task_failed":
 		return eventError(ev)
 	}
@@ -59,8 +60,29 @@ func (c Client) recordAssistantText(result *Result, text string) {
 
 func (c Client) logAssistant(text string) {
 	if c.Log != nil && text != "" {
-		_, _ = fmt.Fprintf(c.Log, "assistant: %s\n", text)
+		_ = logrecord.Write(c.Log, logrecord.Record{Type: logrecord.TypeAssistant, Content: text})
 	}
+}
+
+func (c Client) logCommandExecution(ev event) {
+	if c.Log == nil {
+		return
+	}
+	item := mapValue(ev, "item")
+	if item == nil || jsonmap.String(item, "type") != "command_execution" {
+		return
+	}
+	command := jsonmap.String(item, "command")
+	if command == "" {
+		return
+	}
+	const name = "command"
+	payload := jsonmap.Stringify(map[string]any{"command": command})
+	_ = logrecord.Write(c.Log, logrecord.Record{Type: logrecord.TypeToolCall, Name: name, Payload: payload})
+	status := jsonmap.String(item, "status")
+	failed := jsonmap.Int64(item, "exit_code") != 0 || status == "failed" || status == "error"
+	output := jsonmap.FirstString(item, "aggregated_output", "output", "text")
+	_ = logrecord.Write(c.Log, logrecord.Record{Type: logrecord.TypeToolResult, Name: name, Content: output, Failed: failed})
 }
 
 func eventUsage(ev event) map[string]any {

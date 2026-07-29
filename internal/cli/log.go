@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -8,6 +9,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/iamseth/tao/internal/agent/logrecord"
 	"github.com/iamseth/tao/internal/plan"
 )
 
@@ -66,10 +68,67 @@ func (a App) log(ctx context.Context, repo interface {
 		}
 		return fmt.Errorf("read agent log: %w", err)
 	}
-	_, err = fmt.Fprint(a.Out, text)
-	return err
+	return renderPlanLog(a.Out, text)
 }
 
 func followPlanLog(ctx context.Context, repo plan.LogFollower, dir string, out io.Writer) error {
-	return repo.FollowLog(ctx, dir, out)
+	decoder := &planLogDecoder{out: out}
+	if err := repo.FollowLog(ctx, dir, decoder); err != nil {
+		return err
+	}
+	return decoder.Flush()
+}
+
+func renderPlanLog(out io.Writer, text string) error {
+	decoder := &planLogDecoder{out: out}
+	if _, err := io.WriteString(decoder, text); err != nil {
+		return err
+	}
+	return decoder.Flush()
+}
+
+// planLogDecoder presents framed logs while passing historical unframed lines
+// through unchanged. Buffering until a newline keeps records intact when a
+// followed file is copied in arbitrary chunks.
+type planLogDecoder struct {
+	out     io.Writer
+	pending []byte
+}
+
+func (d *planLogDecoder) Write(p []byte) (int, error) {
+	d.pending = append(d.pending, p...)
+	for {
+		newline := bytes.IndexByte(d.pending, '\n')
+		if newline < 0 {
+			return len(p), nil
+		}
+		line := d.pending[:newline]
+		d.pending = d.pending[newline+1:]
+		if err := d.renderLine(line, true); err != nil {
+			return len(p), err
+		}
+	}
+}
+
+func (d *planLogDecoder) Flush() error {
+	if len(d.pending) == 0 {
+		return nil
+	}
+	line := d.pending
+	d.pending = nil
+	return d.renderLine(line, false)
+}
+
+func (d *planLogDecoder) renderLine(line []byte, newline bool) error {
+	if record, ok := logrecord.Parse(string(line)); ok {
+		return logrecord.Render(d.out, record)
+	}
+	if _, err := d.out.Write(line); err != nil {
+		return err
+	}
+	if newline {
+		_, err := io.WriteString(d.out, "\n")
+		return err
+	}
+	return nil
 }

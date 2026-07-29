@@ -3,11 +3,13 @@ package agent
 import (
 	"context"
 	"fmt"
+	"io"
 
 	"github.com/iamseth/tao/internal/runtimeconfig"
 
 	claudeagent "github.com/iamseth/tao/internal/agent/claude"
 	codexagent "github.com/iamseth/tao/internal/agent/codex"
+	"github.com/iamseth/tao/internal/agent/logrecord"
 	opencodeagent "github.com/iamseth/tao/internal/agent/opencode"
 	piagent "github.com/iamseth/tao/internal/agent/pi"
 	"github.com/iamseth/tao/internal/agent/process"
@@ -42,6 +44,17 @@ func (a SessionAdapter) Run(ctx context.Context, session Session) (SessionResult
 
 func (a SessionAdapter) Descriptor() Descriptor { return a.descriptor }
 
+func providerLog(session Session) io.Writer {
+	if session.Progress == nil {
+		return session.Log
+	}
+	presentation := logrecord.PresentationWriter(session.Progress)
+	if session.Log == nil {
+		return presentation
+	}
+	return io.MultiWriter(session.Log, presentation)
+}
+
 type piRuntime struct {
 	starter piagent.ProcessStarter
 }
@@ -51,7 +64,7 @@ func (r piRuntime) RunSession(ctx context.Context, session Session) (SessionResu
 	if session.CollectMetrics {
 		mode = piagent.SessionInfoBestEffort
 	}
-	client := piagent.Client{ProcessStarter: r.starter, Log: session.Log}
+	client := piagent.Client{ProcessStarter: r.starter, Log: providerLog(session)}
 	result, err := client.RunAgentSession(ctx, piagent.Request{
 		RepoRoot:             session.RepoRoot,
 		Prompt:               session.Prompt,
@@ -77,7 +90,7 @@ type claudeRuntime struct {
 }
 
 func (r claudeRuntime) RunSession(ctx context.Context, session Session) (SessionResult, error) {
-	client := claudeagent.Client{ProcessStarter: r.starter, Log: session.Log}
+	client := claudeagent.Client{ProcessStarter: r.starter, Log: providerLog(session)}
 	result, err := client.RunAgentSession(ctx, claudeagent.Request{
 		RepoRoot:       session.RepoRoot,
 		Prompt:         session.Prompt,
@@ -101,7 +114,7 @@ type openCodeRuntime struct {
 }
 
 func (r openCodeRuntime) RunSession(ctx context.Context, session Session) (SessionResult, error) {
-	client := opencodeagent.Client{ProcessStarter: r.starter, Log: session.Log}
+	client := opencodeagent.Client{ProcessStarter: r.starter, Log: providerLog(session)}
 	result, err := client.RunAgentSession(ctx, opencodeagent.Request{
 		RepoRoot:       session.RepoRoot,
 		Prompt:         session.Prompt,
@@ -124,7 +137,7 @@ type codexRuntime struct {
 }
 
 func (r codexRuntime) RunSession(ctx context.Context, session Session) (SessionResult, error) {
-	client := codexagent.Client{ProcessStarter: r.starter, Log: session.Log}
+	client := codexagent.Client{ProcessStarter: r.starter, Log: providerLog(session)}
 	result, err := client.RunAgentSession(ctx, codexagent.Request{
 		RepoRoot:       session.RepoRoot,
 		Prompt:         session.Prompt,

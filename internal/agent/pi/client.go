@@ -5,6 +5,7 @@ import (
 	"io"
 
 	"github.com/iamseth/tao/internal/agent/jsonmap"
+	"github.com/iamseth/tao/internal/agent/logrecord"
 	agentmetrics "github.com/iamseth/tao/internal/agent/metrics"
 )
 
@@ -58,7 +59,7 @@ func (c Client) RunAgentSession(ctx context.Context, request Request) (Result, e
 	result, err := session.waitForAgentEnd(ctx)
 	if err != nil {
 		if session.log != nil {
-			_, _ = io.WriteString(session.log, "tao pi: agent session ended with an error; stopping the RPC process...\n")
+			_ = logrecord.Write(session.log, logrecord.Record{Type: logrecord.TypeDiagnostic, Content: "tao pi: agent session ended with an error; stopping the RPC process..."})
 		}
 		return result, session.abort(err)
 	}

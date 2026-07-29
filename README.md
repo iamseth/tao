@@ -146,6 +146,12 @@ tao prompt <prompt> [--plan-dir DIR] [--commit-policy slice|none] [--execution-m
 tao draft-prompt <name> [--from FILE] [--force]
 ```
 
+After installing prompts, run `/tao-insights-review [focus]` from the Tao
+repository to ask your planning agent for evidence-backed Tao product, workflow,
+and environment follow-ups. For example: `/tao-insights-review focus on repeated
+verification friction`. The prompt is read-only; it does not create the suggested
+plans or notes.
+
 `tao install-prompts` installs Tao-managed prompts for every supported agent
 executable found in `PATH`. By default, `tao doctor` lists discovered agents and
 only actionable setup problems: non-current prompts and missing tools. Use
@@ -180,6 +186,7 @@ tao log [--follow] <plan-id-or-slug>
 tao validate <plan-id-or-slug-or-path>
 tao review [--run] <plan-id-or-slug-or-path>
 tao staleness <plan-id-or-slug-or-path>
+tao insights [--digest] [--all-repos]
 tao repo list
 tao repo show <repo-id>
 tao repo doctor
@@ -193,7 +200,15 @@ tao workspace clean [--force] [--force-active] [--force-dirty] <plan-id-or-slug-
 shows the persisted post-completion LLM review; add `--run` to refresh it against
 the current `base..HEAD` diff. `tao staleness` is the renamed base-commit check:
 it compares a plan's recorded base commit with current `HEAD` and warns when
-later commits touched files expected by pending slices.
+later commits touched files expected by pending slices. `tao insights --all-repos`
+provides deterministic evidence from every registered repository; add `--digest`
+for compact Markdown suitable for `/tao-insights-review`. The CLI report does not
+generate recommendations:
+
+```sh
+tao insights --all-repos
+tao insights --all-repos --digest
+```
 
 ### Running
 

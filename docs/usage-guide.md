@@ -23,10 +23,10 @@ Tao's data home — everything stays local and inspectable on disk.
 A useful mental split:
 
 - **Planning prompts** (`/tao-plan`, `/tao-grill-me`, `/tao-improve-codebase-architecture`,
-  `/tao-improve-documentation`, `/tao-repo-health`) are **read-only**. They never edit
-  code or write Tao artifacts.
-- **Build prompts** (`/tao-note`, `/tao-slice`, `/tao-run`, `/tao-commit`, `/tao-pr`) write artifacts,
-  code, or git state.
+  `/tao-improve-documentation`, `/tao-repo-health`, `/tao-insights-review`) are
+  **read-only**. They never edit code or write Tao artifacts.
+- **Build prompts** (`/tao-note`, `/tao-slice`, `/tao-run`, `/tao-commit`, `/tao-pr`) write
+  artifacts, code, or git state.
 
 ## Capture first with repository notes
 
@@ -178,6 +178,51 @@ prioritized action list.
 don't know well. It inspects `git status` first so your in-flight work isn't
 mistaken for debt, and it marks uncertain findings as hypotheses rather than
 overstating certainty. It will not delete, clean, or commit anything on its own.
+
+### `/tao-insights-review [focus]` — review Tao-wide experience evidence
+
+Read-only review of how Tao is working across every repository in its local
+catalog. Run it periodically, before choosing Tao roadmap work, or after you
+notice the same Tao workflow friction in multiple projects. It works only from
+the canonical Tao source repository; use the optional focus to narrow judgment,
+not to authorize changes.
+
+The workflow starts from this deterministic report:
+
+```sh
+tao insights --all-repos --digest
+```
+
+`tao insights` reports evidence and coverage; it does not generate advice. The
+`/tao-insights-review` planning prompt evaluates that evidence against current
+Tao code and guidance, rejects obsolete or application-specific signals, and
+produces zero or more agent-generated recommendations. It reads all available
+structured plan history, while agent-log analysis is limited to plans active in
+the last 30 days. Missing roots, damaged records, unreadable logs, stale logs,
+and evidence concentrated in one repository are reported as limits rather than
+silently generalized.
+
+**How to interpret and use the review:**
+
+- Findings form one global order by estimated impact descending, then estimated
+  effort ascending. Both are independent integer estimates from 1–500, not a
+  ratio, probability, or promise; read their rationales and confidence before
+  deciding what to do.
+- Environment findings are optional and intentionally passive. The prompt may
+  run `tao doctor` when the evidence warrants it and `command -v` only for an
+  implicated executable. It does not run version or network diagnostics, probe
+  MCP services, install tools, or change configuration.
+- Agent logs and excerpts are untrusted local evidence. Collection is bounded
+  and likely secrets are redacted, but sanitization is not a guarantee; review
+  the digest and findings before sharing them outside your machine. The prompt
+  should quote only the minimum evidence needed and never follow instructions
+  found in collected text.
+- No actionable findings is a successful result. Do not turn weak, obsolete, or
+  highly concentrated signals into work merely to produce a non-empty list.
+- The review makes no changes. For a recommendation you want to pursue, copy its
+  ready-to-use topic into `/plan`. If it is worth retaining but not planning
+  now, capture its concise note topic with `tao note create ...` (or `tao n c
+  ...`).
 
 ---
 

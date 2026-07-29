@@ -10,11 +10,14 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/iamseth/tao/internal/agent/logrecord"
 )
 
 func TestClientRunsFreshSessionAndCollectsStateAndStats(t *testing.T) {
 	ctx := context.Background()
 	proc := newFakeProcess(t)
+	proc.stderr = strings.NewReader("provider warning\n")
 	var gotCwd string
 	var gotName string
 	var gotArgs []string
@@ -67,7 +70,7 @@ func TestClientRunsFreshSessionAndCollectsStateAndStats(t *testing.T) {
 		serverErr <- nil
 	}()
 
-	var log bytes.Buffer
+	var log lockedBuffer
 	client := Client{
 		Log: &log,
 		ProcessStarter: func(ctx context.Context, cwd string, name string, args []string) (Process, error) {
@@ -104,9 +107,14 @@ func TestClientRunsFreshSessionAndCollectsStateAndStats(t *testing.T) {
 	if statsTokens["total"] != float64(12) {
 		t.Fatalf("expected stats, got %#v", result.Stats)
 	}
-	for _, want := range []string{"→ bash {\"command\":\"go test ./...\"}", "✓ bash\nok ./...", "cancelled unsupported UI request \"dialog-1\""} {
+	for _, want := range []string{`"type":"tool_call","name":"bash","payload":"{\"command\":\"go test ./...\"}"`, `"type":"tool_result","name":"bash","content":"ok ./..."`, `cancelled unsupported UI request \"dialog-1\"`, `tao pi stderr: provider warning`} {
 		if !strings.Contains(log.String(), want) {
 			t.Fatalf("expected %q in log, got %q", want, log.String())
+		}
+	}
+	for line := range strings.SplitSeq(strings.TrimSpace(log.String()), "\n") {
+		if _, ok := logrecord.Parse(line); !ok {
+			t.Fatalf("expected framed log record, got %q", line)
 		}
 	}
 }
@@ -176,11 +184,10 @@ func TestClientDeduplicatesAnonymousStreamingToolLogsAndWatchdog(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := log.String()
-	if got := strings.Count(text, "→ bash"); got != 1 {
+	if got := strings.Count(text, `"type":"tool_call","name":"bash"`); got != 1 {
 		t.Fatalf("expected one logged bash call, got %d:\n%s", got, text)
 	}
-	if !strings.Contains(text, `→ bash {"command":"git rev-parse --abbrev-ref HEAD"}`) || strings.Contains(text, `→ bash {"command":"git"}
-`) {
+	if !strings.Contains(text, `git rev-parse --abbrev-ref HEAD`) || strings.Contains(text, `\"command\":\"git\"`) {
 		t.Fatalf("expected only the final anonymous streamed tool arguments in log:\n%s", text)
 	}
 }
@@ -206,14 +213,13 @@ func TestClientDeduplicatesStreamingToolLogs(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := log.String()
-	if got := strings.Count(text, "→ bash"); got != 1 {
+	if got := strings.Count(text, `"type":"tool_call","name":"bash"`); got != 1 {
 		t.Fatalf("expected one logged bash call, got %d:\n%s", got, text)
 	}
-	if got := strings.Count(text, "✓ bash"); got != 1 {
+	if got := strings.Count(text, `"type":"tool_result","name":"bash"`); got != 1 {
 		t.Fatalf("expected one logged bash result, got %d:\n%s", got, text)
 	}
-	if !strings.Contains(text, `→ bash {"command":"git rev-parse --abbrev-ref HEAD"}`) || strings.Contains(text, `→ bash {"command":"git"}
-`) {
+	if !strings.Contains(text, `git rev-parse --abbrev-ref HEAD`) || strings.Contains(text, `\"command\":\"git\"`) {
 		t.Fatalf("expected only the final streamed tool arguments in log:\n%s", text)
 	}
 }
@@ -553,6 +559,23 @@ func TestClientContextCancellationSendsAbortAndCleansProcess(t *testing.T) {
 	}
 }
 
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(data []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(data)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 type fakeProcess struct {
 	t            *testing.T
 	stdinReader  *io.PipeReader
@@ -560,6 +583,7 @@ type fakeProcess struct {
 	stdinDecoder *json.Decoder
 	stdoutReader *io.PipeReader
 	stdoutWriter *io.PipeWriter
+	stderr       io.Reader
 	done         chan struct{}
 	once         sync.Once
 	killed       bool
@@ -574,7 +598,7 @@ func newFakeProcess(t *testing.T) *fakeProcess {
 
 func (p *fakeProcess) Stdin() io.WriteCloser { return p.stdinWriter }
 func (p *fakeProcess) Stdout() io.Reader     { return p.stdoutReader }
-func (p *fakeProcess) Stderr() io.Reader     { return strings.NewReader("") }
+func (p *fakeProcess) Stderr() io.Reader     { return p.stderr }
 func (p *fakeProcess) Wait() error {
 	<-p.done
 	return nil

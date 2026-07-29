@@ -61,7 +61,7 @@ func TestClientStartsClaudeWithPromptAndPermissionMode(t *testing.T) {
 	if result.Usage["input_tokens"] != float64(10) || result.CostUSD != 0.02 {
 		t.Fatalf("expected telemetry, got %#v", result)
 	}
-	if !strings.Contains(log.String(), "assistant: done") {
+	if !strings.Contains(log.String(), `"type":"assistant","content":"done"`) {
 		t.Fatalf("expected assistant log, got %q", log.String())
 	}
 }

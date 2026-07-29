@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/iamseth/tao/internal/plan"
@@ -24,27 +25,76 @@ type PlanLister interface {
 	ListPlans(context.Context, plan.PlanFilter) ([]plan.PlanSummary, error)
 }
 
-// Report contains advisory telemetry derived from one repository's plan history.
+// SourceLister supplies registered repository data stores. Sources deliberately
+// contain no checkout path, so callers can inspect history for unhealthy roots.
+type SourceLister interface {
+	ListInsightSources(context.Context) ([]RepositorySource, error)
+}
+
+// RepositorySource identifies one repository and its data-home plan store.
+type RepositorySource struct {
+	ID    string
+	Name  string
+	Plans PlanLister
+}
+
+// Report contains advisory telemetry derived from plan history.
 type Report struct {
-	PlansScanned   int            `json:"plans_scanned"`
-	PlansSkipped   int            `json:"plans_skipped"`
-	BlockedReasons []ReasonBucket `json:"blocked_reasons"`
-	ReworkPlans    []ReworkPlan   `json:"rework_plans"`
-	Signals        SignalCounts   `json:"signals"`
-	OutputTokens   Percentiles    `json:"output_tokens"`
-	Cost           Percentiles    `json:"cost"`
-	OutlierPlans   []PlanOutlier  `json:"outlier_plans"`
+	PlansScanned       int                `json:"plans_scanned"`
+	PlansSkipped       int                `json:"plans_skipped"`
+	RepositoryCoverage RepositoryCoverage `json:"repository_coverage"`
+	BlockedReasons     []ReasonBucket     `json:"blocked_reasons"`
+	ReworkPlans        []ReworkPlan       `json:"rework_plans"`
+	Signals            SignalCounts       `json:"signals"`
+	OutputTokens       Percentiles        `json:"output_tokens"`
+	Cost               Percentiles        `json:"cost"`
+	OutlierPlans       []PlanOutlier      `json:"outlier_plans"`
+	RecentLogs         RecentLogReport    `json:"recent_logs"`
+}
+
+// RepositoryCoverage records which registered stores contributed to a report.
+type RepositoryCoverage struct {
+	Scanned      int                    `json:"scanned"`
+	Skipped      int                    `json:"skipped"`
+	Unreadable   int                    `json:"unreadable"`
+	Empty        int                    `json:"empty"`
+	Repositories []RepositoryScanResult `json:"repositories,omitempty"`
+}
+
+// RepositoryScanResult reports the deterministic outcome for one source.
+type RepositoryScanResult struct {
+	RepositoryID   string `json:"repository_id"`
+	RepositoryName string `json:"repository_name,omitempty"`
+	Status         string `json:"status"`
+}
+
+// EvidenceExemplar qualifies an exemplar with its stable repository identity.
+type EvidenceExemplar struct {
+	RepositoryID   string `json:"repository_id"`
+	RepositoryName string `json:"repository_name,omitempty"`
+	Value          string `json:"value"`
+}
+
+// ReasonRepository records one repository's contribution to a blocked-reason bucket.
+type ReasonRepository struct {
+	RepositoryID   string `json:"repository_id"`
+	RepositoryName string `json:"repository_name,omitempty"`
+	Count          int    `json:"count"`
 }
 
 // ReasonBucket groups equivalent slice-blocked messages while retaining bounded examples.
 type ReasonBucket struct {
-	Reason    string   `json:"reason"`
-	Count     int      `json:"count"`
-	Exemplars []string `json:"exemplars"`
+	Reason             string             `json:"reason"`
+	Count              int                `json:"count"`
+	Exemplars          []string           `json:"exemplars"`
+	QualifiedExemplars []EvidenceExemplar `json:"qualified_exemplars,omitempty"`
+	Repositories       []ReasonRepository `json:"repositories,omitempty"`
 }
 
 // ReworkPlan identifies a plan with at least three rework rounds.
 type ReworkPlan struct {
+	RepositoryID   string   `json:"repository_id,omitempty"`
+	RepositoryName string   `json:"repository_name,omitempty"`
 	PlanID         string   `json:"plan_id"`
 	Rounds         int      `json:"rounds"`
 	StoppedReasons []string `json:"stopped_reasons,omitempty"`
@@ -67,8 +117,10 @@ type Percentiles struct {
 	P95      float64 `json:"p95"`
 }
 
-// PlanOutlier flags plans containing a session strictly above a repository p95.
+// PlanOutlier flags plans containing a session strictly above the report-wide p95.
 type PlanOutlier struct {
+	RepositoryID        string  `json:"repository_id,omitempty"`
+	RepositoryName      string  `json:"repository_name,omitempty"`
 	PlanID              string  `json:"plan_id"`
 	OutputTokens        int64   `json:"output_tokens"`
 	Cost                float64 `json:"cost"`
@@ -79,6 +131,7 @@ type PlanOutlier struct {
 type accumulator struct {
 	buckets  map[string]*ReasonBucket
 	sessions []session
+	logs     *logAccumulator
 }
 
 type planData struct {
@@ -90,42 +143,119 @@ type planData struct {
 }
 
 type session struct {
-	planID       string
-	outputTokens int64
-	cost         float64
+	repositoryID   string
+	repositoryName string
+	planID         string
+	outputTokens   int64
+	cost           float64
 }
 
-// Aggregate walks repository plans and streams each event log. Individual unreadable
-// plan logs are counted and skipped so historical damage cannot suppress the report.
-func Aggregate(ctx context.Context, repository PlanLister) (Report, error) {
-	summaries, err := repository.ListPlans(ctx, plan.PlanFilter{})
-	if err != nil {
-		return Report{}, err
-	}
+type sourceIdentity struct {
+	id   string
+	name string
+}
 
+// Aggregate walks one repository's plans and preserves the repository-scoped API.
+// Individual unreadable plan logs are counted and skipped so historical damage
+// cannot suppress the report.
+func Aggregate(ctx context.Context, repository PlanLister) (Report, error) {
 	report := Report{}
-	acc := accumulator{buckets: make(map[string]*ReasonBucket)}
-	for _, summary := range summaries {
-		if err := ctx.Err(); err != nil {
-			return Report{}, err
-		}
-		if summary.Status == plan.StatusInvalid {
-			report.PlansSkipped++
-			continue
-		}
-		data, err := readPlanEvents(summary.Dir)
-		if err != nil {
-			report.PlansSkipped++
-			continue
-		}
-		report.PlansScanned++
-		mergePlan(&report, &acc, summary.ID, data)
+	acc := accumulator{buckets: make(map[string]*ReasonBucket), logs: newLogAccumulator()}
+	if err := aggregateSource(ctx, &report, &acc, sourceIdentity{}, repository, time.Now()); err != nil {
+		return Report{}, err
 	}
 	finalize(&report, &acc)
 	return report, nil
 }
 
-func readPlanEvents(dir string) (planData, error) {
+// AggregateSources combines raw event and session evidence from every source.
+// A damaged source is reported and skipped without suppressing readable stores.
+func AggregateSources(ctx context.Context, lister SourceLister) (Report, error) {
+	sources, err := lister.ListInsightSources(ctx)
+	if err != nil {
+		return Report{}, err
+	}
+	sources = slices.Clone(sources)
+	sort.Slice(sources, func(i, j int) bool {
+		if sources[i].ID != sources[j].ID {
+			return sources[i].ID < sources[j].ID
+		}
+		return sources[i].Name < sources[j].Name
+	})
+
+	report := Report{}
+	acc := accumulator{buckets: make(map[string]*ReasonBucket), logs: newLogAccumulator()}
+	now := time.Now()
+	for _, source := range sources {
+		if err := ctx.Err(); err != nil {
+			return Report{}, err
+		}
+		result := RepositoryScanResult{RepositoryID: source.ID, RepositoryName: source.Name}
+		switch {
+		case strings.TrimSpace(source.ID) == "" || source.Plans == nil:
+			result.Status = "skipped"
+			report.RepositoryCoverage.Skipped++
+		default:
+			before := report.PlansScanned + report.PlansSkipped
+			err := aggregateSource(ctx, &report, &acc, sourceIdentity{id: source.ID, name: source.Name}, source.Plans, now)
+			switch {
+			case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
+				return Report{}, err
+			case err != nil:
+				result.Status = "unreadable"
+				report.RepositoryCoverage.Unreadable++
+			case report.PlansScanned+report.PlansSkipped == before:
+				result.Status = "empty"
+				report.RepositoryCoverage.Empty++
+			default:
+				result.Status = "scanned"
+				report.RepositoryCoverage.Scanned++
+			}
+		}
+		report.RepositoryCoverage.Repositories = append(report.RepositoryCoverage.Repositories, result)
+	}
+	finalize(&report, &acc)
+	return report, nil
+}
+
+func aggregateSource(ctx context.Context, report *Report, acc *accumulator, repository sourceIdentity, plans PlanLister, now time.Time) error {
+	summaries, err := plans.ListPlans(ctx, plan.PlanFilter{})
+	if err != nil {
+		return err
+	}
+	summaries = slices.Clone(summaries)
+	sort.Slice(summaries, func(i, j int) bool {
+		if summaries[i].ID != summaries[j].ID {
+			return summaries[i].ID < summaries[j].ID
+		}
+		return summaries[i].Dir < summaries[j].Dir
+	})
+	for _, summary := range summaries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if summary.Status == plan.StatusInvalid {
+			report.PlansSkipped++
+			continue
+		}
+		if err := scanRecentLog(ctx, report, acc.logs, now, planSummary{id: summary.ID, dir: summary.Dir, lastActivity: summary.LastActivityAt}, repository); err != nil {
+			return err
+		}
+		data, err := readPlanEvents(ctx, summary.Dir)
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return err
+			}
+			report.PlansSkipped++
+			continue
+		}
+		report.PlansScanned++
+		mergePlan(report, acc, repository, summary.ID, data)
+	}
+	return nil
+}
+
+func readPlanEvents(ctx context.Context, dir string) (planData, error) {
 	data := planData{sessions: make(map[string][]plan.AgentMetricEvent)}
 	file, err := os.Open(filepath.Join(dir, "events.jsonl")) // #nosec G304 -- plan directories come from the repository listing.
 	if errors.Is(err, os.ErrNotExist) {
@@ -140,6 +270,9 @@ func readPlanEvents(dir string) (planData, error) {
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	line := 0
 	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return planData{}, err
+		}
 		line++
 		var event plan.Event
 		if json.Unmarshal(scanner.Bytes(), &event) != nil || event.Type == "" {
@@ -184,7 +317,7 @@ func consumeEvent(data *planData, event plan.Event, line int) {
 	}
 }
 
-func mergePlan(report *Report, acc *accumulator, planID string, data planData) {
+func mergePlan(report *Report, acc *accumulator, repository sourceIdentity, planID string, data planData) {
 	report.Signals.SessionTimeout += data.signals.SessionTimeout
 	report.Signals.SliceResumeFailed += data.signals.SliceResumeFailed
 	report.Signals.VerificationCommandInvalid += data.signals.VerificationCommandInvalid
@@ -193,18 +326,18 @@ func mergePlan(report *Report, acc *accumulator, planID string, data planData) {
 
 	rework := plan.SummarizeRework(data.reworkEvents)
 	if rework.Rounds >= 3 {
-		report.ReworkPlans = append(report.ReworkPlans, ReworkPlan{PlanID: planID, Rounds: rework.Rounds, StoppedReasons: data.stopReasons})
+		report.ReworkPlans = append(report.ReworkPlans, ReworkPlan{RepositoryID: repository.id, RepositoryName: repository.name, PlanID: planID, Rounds: rework.Rounds, StoppedReasons: data.stopReasons})
 	}
 	for _, reason := range data.blockedReasons {
-		addBlocked(acc.buckets, reason)
+		addBlocked(acc.buckets, repository, reason)
 	}
 	for _, events := range data.sessions {
 		summary := plan.SummarizeAgentMetrics(events)
-		acc.sessions = append(acc.sessions, session{planID: planID, outputTokens: summary.Totals.OutputTokens, cost: summary.Totals.Cost})
+		acc.sessions = append(acc.sessions, session{repositoryID: repository.id, repositoryName: repository.name, planID: planID, outputTokens: summary.Totals.OutputTokens, cost: summary.Totals.Cost})
 	}
 }
 
-func addBlocked(buckets map[string]*ReasonBucket, exemplar string) {
+func addBlocked(buckets map[string]*ReasonBucket, repository sourceIdentity, exemplar string) {
 	reason := NormalizeBlockedReason(exemplar)
 	bucket := buckets[reason]
 	if bucket == nil {
@@ -214,6 +347,22 @@ func addBlocked(buckets map[string]*ReasonBucket, exemplar string) {
 	bucket.Count++
 	if len(bucket.Exemplars) < maxExemplars {
 		appendUnique(&bucket.Exemplars, exemplar)
+	}
+	qualified := EvidenceExemplar{RepositoryID: repository.id, RepositoryName: repository.name, Value: exemplar}
+	if repository.id != "" && len(bucket.QualifiedExemplars) < maxExemplars && !slices.Contains(bucket.QualifiedExemplars, qualified) {
+		bucket.QualifiedExemplars = append(bucket.QualifiedExemplars, qualified)
+	}
+	if repository.id != "" {
+		index := slices.IndexFunc(bucket.Repositories, func(item ReasonRepository) bool {
+			return item.RepositoryID == repository.id
+		})
+		if index >= 0 {
+			bucket.Repositories[index].Count++
+		} else {
+			bucket.Repositories = append(bucket.Repositories, ReasonRepository{
+				RepositoryID: repository.id, RepositoryName: repository.name, Count: 1,
+			})
+		}
 	}
 }
 
@@ -254,7 +403,14 @@ func NormalizeBlockedReason(message string) string {
 }
 
 func finalize(report *Report, acc *accumulator) {
+	finalizeLogSignals(report, acc.logs)
 	for _, bucket := range acc.buckets {
+		sort.Slice(bucket.Repositories, func(i, j int) bool {
+			if bucket.Repositories[i].RepositoryID != bucket.Repositories[j].RepositoryID {
+				return bucket.Repositories[i].RepositoryID < bucket.Repositories[j].RepositoryID
+			}
+			return bucket.Repositories[i].RepositoryName < bucket.Repositories[j].RepositoryName
+		})
 		report.BlockedReasons = append(report.BlockedReasons, *bucket)
 	}
 	sort.Slice(report.BlockedReasons, func(i, j int) bool {
@@ -263,7 +419,12 @@ func finalize(report *Report, acc *accumulator) {
 		}
 		return report.BlockedReasons[i].Reason < report.BlockedReasons[j].Reason
 	})
-	sort.Slice(report.ReworkPlans, func(i, j int) bool { return report.ReworkPlans[i].PlanID < report.ReworkPlans[j].PlanID })
+	sort.Slice(report.ReworkPlans, func(i, j int) bool {
+		if report.ReworkPlans[i].RepositoryID != report.ReworkPlans[j].RepositoryID {
+			return report.ReworkPlans[i].RepositoryID < report.ReworkPlans[j].RepositoryID
+		}
+		return report.ReworkPlans[i].PlanID < report.ReworkPlans[j].PlanID
+	})
 
 	outputs := make([]float64, 0, len(acc.sessions))
 	costs := make([]float64, 0, len(acc.sessions))
@@ -281,10 +442,11 @@ func finalize(report *Report, acc *accumulator) {
 		if !outputOutlier && !costOutlier {
 			continue
 		}
-		outlier := outliers[item.planID]
+		key := item.repositoryID + "\x00" + item.planID
+		outlier := outliers[key]
 		if outlier == nil {
-			outlier = &PlanOutlier{PlanID: item.planID}
-			outliers[item.planID] = outlier
+			outlier = &PlanOutlier{RepositoryID: item.repositoryID, RepositoryName: item.repositoryName, PlanID: item.planID}
+			outliers[key] = outlier
 		}
 		outlier.OutputTokens = max(outlier.OutputTokens, item.outputTokens)
 		outlier.Cost = max(outlier.Cost, item.cost)
@@ -294,7 +456,12 @@ func finalize(report *Report, acc *accumulator) {
 	for _, outlier := range outliers {
 		report.OutlierPlans = append(report.OutlierPlans, *outlier)
 	}
-	sort.Slice(report.OutlierPlans, func(i, j int) bool { return report.OutlierPlans[i].PlanID < report.OutlierPlans[j].PlanID })
+	sort.Slice(report.OutlierPlans, func(i, j int) bool {
+		if report.OutlierPlans[i].RepositoryID != report.OutlierPlans[j].RepositoryID {
+			return report.OutlierPlans[i].RepositoryID < report.OutlierPlans[j].RepositoryID
+		}
+		return report.OutlierPlans[i].PlanID < report.OutlierPlans[j].PlanID
+	})
 }
 
 func calculatePercentiles(values []float64) Percentiles {

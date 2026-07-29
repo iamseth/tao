@@ -228,6 +228,46 @@ func TestPromptRendersCanonicalPrompts(t *testing.T) {
 	}
 }
 
+func TestPromptTaoInsightsReviewRequiresCanonicalTaoModule(t *testing.T) {
+	clearTaoEnv(t)
+	for _, test := range []struct {
+		name    string
+		goMod   string
+		wantErr bool
+	}{
+		{name: "canonical Tao module", goMod: "module github.com/iamseth/tao\n\ngo 1.26.2\n"},
+		{name: "different module", goMod: "module example.com/project\n\n// module github.com/iamseth/tao\n", wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := initTestGitRepo(t)
+			if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte(test.goMod), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			withWorkingDir(t, root, func() {
+				var out bytes.Buffer
+				err := (App{Out: &out, Err: &out}).Run(context.Background(), []string{"prompt", "insights-review", "--arguments", "focus on docs"})
+				if test.wantErr {
+					if err == nil || err.Error() != "not in a tao repo" {
+						t.Fatalf("prompt error = %v, want exact identity error", err)
+					}
+					if out.Len() != 0 {
+						t.Fatalf("identity failure rendered prompt output %q", out.String())
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, want := range []string{"tao insights --all-repos --digest", "Do not edit files", "focus on docs", "No actionable findings"} {
+					if !strings.Contains(out.String(), want) {
+						t.Fatalf("rendered prompt missing %q: %q", want, out.String())
+					}
+				}
+			})
+		})
+	}
+}
+
 func TestPromptRunExecutionMode(t *testing.T) {
 	clearTaoEnv(t)
 	var out bytes.Buffer
@@ -261,7 +301,7 @@ func TestInstallPromptsWritesAndChecksPiPrompts(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"install-prompts"}); err != nil {
 		t.Fatal(err)
 	}
-	promptNames := []string{"plan", "slice", "note-slice", "note", "run", "grill-me", "improve-codebase-architecture", "improve-documentation", "repo-health", "pr"}
+	promptNames := []string{"plan", "slice", "note-slice", "note", "run", "grill-me", "improve-codebase-architecture", "improve-documentation", "repo-health", "insights-review", "pr"}
 	for _, name := range promptNames {
 		commandName := "tao-" + name
 		path := filepath.Join(root, commandName+".md")
@@ -447,7 +487,7 @@ func TestInstallPromptsAndDoctorUseSelectedClaudeAgent(t *testing.T) {
 	}
 
 	commandsRoot := filepath.Join(home, ".claude", "commands")
-	for _, name := range []string{"plan", "slice", "note-slice", "note", "run", "commit", "repo-health", "pr"} {
+	for _, name := range []string{"plan", "slice", "note-slice", "note", "run", "commit", "repo-health", "insights-review", "pr"} {
 		commandName := "tao-" + name
 		path := filepath.Join(commandsRoot, commandName+".md")
 		text := readText(t, path)
@@ -514,8 +554,8 @@ func TestInstallPromptsAndDoctorUseSelectedOpenCodeAgent(t *testing.T) {
 	}
 
 	commandsRoot := filepath.Join(home, ".config", "opencode", "commands")
-	agentModes := map[string]string{"plan": "plan", "note-slice": "build", "note": "build", "run": "build", "commit": "build", "repo-health": "plan", "pr": "build"}
-	for _, name := range []string{"plan", "note-slice", "note", "run", "commit", "repo-health", "pr"} {
+	agentModes := map[string]string{"plan": "plan", "note-slice": "build", "note": "build", "run": "build", "commit": "build", "repo-health": "plan", "insights-review": "plan", "pr": "build"}
+	for _, name := range []string{"plan", "note-slice", "note", "run", "commit", "repo-health", "insights-review", "pr"} {
 		commandName := "tao-" + name
 		path := filepath.Join(commandsRoot, commandName+".md")
 		text := readText(t, path)
@@ -582,7 +622,7 @@ func TestInstallPromptsAndDoctorUseSelectedPiAgent(t *testing.T) {
 	}
 
 	piRoot := filepath.Join(home, ".pi", "agent", "prompts")
-	for _, name := range []string{"plan", "slice", "note-slice", "note", "run", "grill-me", "improve-codebase-architecture", "improve-documentation", "repo-health", "pr"} {
+	for _, name := range []string{"plan", "slice", "note-slice", "note", "run", "grill-me", "improve-codebase-architecture", "improve-documentation", "repo-health", "insights-review", "pr"} {
 		commandName := "tao-" + name
 		path := filepath.Join(piRoot, commandName+".md")
 		text := readText(t, path)

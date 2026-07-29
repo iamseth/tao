@@ -40,7 +40,10 @@ type Session struct {
 	// Timeout caps a single Runtime session's wall-clock duration. A zero value
 	// means no timeout.
 	Timeout time.Duration
-	Log     io.Writer
+	// Log receives framed records suitable for durable agent-log storage.
+	Log io.Writer
+	// Progress receives a human-readable rendering of the same records.
+	Progress io.Writer
 }
 
 // SessionResult is the provider-neutral outcome of a Runtime session. Metrics is

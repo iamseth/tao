@@ -1,8 +1,11 @@
 package codex
 
 import (
+	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/iamseth/tao/internal/agent/logrecord"
 )
 
 func TestHandleEventCapturesThreadAndAgentMessages(t *testing.T) {
@@ -64,6 +67,51 @@ func TestHandleEventIgnoresNonAgentMessageItems(t *testing.T) {
 		}
 		if result.Output != "" || result.FinalText != "" {
 			t.Fatalf("expected no text, got %#v", result)
+		}
+	}
+}
+
+func TestHandleEventLogsCompletedCommandExecutions(t *testing.T) {
+	var log bytes.Buffer
+	client := Client{Log: &log}
+	for _, ev := range []event{
+		{"type": "item.completed", "item": map[string]any{
+			"id": "item_1", "type": "command_execution", "command": "gh issue list",
+			"aggregated_output": "42 open", "exit_code": float64(0), "status": "completed",
+		}},
+		{"type": "item.completed", "item": map[string]any{
+			"id": "item_2", "type": "command_execution", "command": "jq --version",
+			"aggregated_output": "bash: jq: command not found", "exit_code": float64(127), "status": "failed",
+		}},
+	} {
+		if err := client.handleEvent(ev, &Result{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var records []logrecord.Record
+	for line := range strings.Lines(log.String()) {
+		record, ok := logrecord.Parse(strings.TrimSuffix(line, "\n"))
+		if !ok {
+			t.Fatalf("invalid framed record %q", line)
+		}
+		records = append(records, record)
+	}
+	if len(records) != 4 {
+		t.Fatalf("got records %#v, want two correlated command pairs", records)
+	}
+	for i, want := range []struct {
+		typ, payload, content string
+		failed                bool
+	}{
+		{typ: logrecord.TypeToolCall, payload: `{"command":"gh issue list"}`},
+		{typ: logrecord.TypeToolResult, content: "42 open"},
+		{typ: logrecord.TypeToolCall, payload: `{"command":"jq --version"}`},
+		{typ: logrecord.TypeToolResult, content: "bash: jq: command not found", failed: true},
+	} {
+		got := records[i]
+		if got.Type != want.typ || got.Name != "command" || got.Payload != want.payload || got.Content != want.content || got.Failed != want.failed {
+			t.Fatalf("record %d = %#v, want type=%q name=command payload=%q content=%q failed=%t", i, got, want.typ, want.payload, want.content, want.failed)
 		}
 	}
 }
