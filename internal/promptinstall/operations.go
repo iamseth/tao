@@ -153,6 +153,16 @@ func installContent(descriptor agentpkg.Descriptor, prompt prompts.Definition) (
 }
 
 func renderInstallContent(descriptor agentpkg.Descriptor, prompt prompts.Definition) (string, error) {
+	if prompt.Name == prompts.PromptNote {
+		content, err := descriptor.RenderPrompt(prompt.CommandName, prompt.Name, prompt.Template)
+		if err != nil {
+			return "", err
+		}
+		if descriptor.Kind == runtimeconfig.AgentClaude {
+			content = strings.Replace(content, "allowed-tools: Bash(tao prompt note:*)", "allowed-tools: Bash(tao prompt note:*), Bash(tao note:*)", 1)
+		}
+		return content, nil
+	}
 	if prompt.Name != prompts.PromptCommit || descriptor.UsesExtensionPrompts {
 		return descriptor.RenderPrompt(prompt.CommandName, prompt.Name, prompt.Template)
 	}

@@ -9,6 +9,8 @@ import (
 	"testing"
 )
 
+var unprefixedSlashCommand = regexp.MustCompile(`(^|[^[:alnum:]_-])/(plan|slice|note-slice|note|run|commit|grill-me|improve-codebase-architecture|improve-documentation|repo-health|performance-review|pr|review)([^[:alnum:]_-]|$)`)
+
 func TestRenderRunPromptAppliesDefaultsAndData(t *testing.T) {
 	got, err := Render(PromptRun, Data{RunPacket: "packet-body"})
 	if err != nil {
@@ -112,6 +114,30 @@ func TestRenderTemplatedPromptSubstitutesData(t *testing.T) {
 	for _, want := range []string{"build a dashboard", "Ask user-facing clarification questions only in the final assistant response"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("rendered plan prompt missing %q: %q", want, got)
+		}
+	}
+}
+
+func TestRenderNotePrompt(t *testing.T) {
+	got, err := Render(PromptNote, Data{Arguments: "queue retry diagnostics"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"queue retry diagnostics",
+		"tao note create",
+		"<<'TAO_NOTE'",
+		"tao note plan",
+		"tao init",
+		"The first line must be a one-line title",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("rendered note prompt missing %q:\n%s", want, got)
+		}
+	}
+	for _, forbidden := range []string{"tao note run", "tao prompt"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("rendered note prompt contains forbidden string %q:\n%s", forbidden, got)
 		}
 	}
 }
@@ -297,7 +323,7 @@ func TestMergeReviewPromptBoundsAndEncodesUntrustedPackets(t *testing.T) {
 
 func TestPromptMetadata(t *testing.T) {
 	names := PromptNames()
-	wantNames := []string{PromptPlan, PromptSlice, PromptNoteSlice, PromptRun, PromptCommit, PromptGrillMe, PromptImproveCodebaseArchitecture, PromptImproveDocumentation, PromptRepoHealth, PromptPerformanceReview, PromptPR, PromptReview}
+	wantNames := []string{PromptPlan, PromptSlice, PromptNoteSlice, PromptNote, PromptRun, PromptCommit, PromptGrillMe, PromptImproveCodebaseArchitecture, PromptImproveDocumentation, PromptRepoHealth, PromptPerformanceReview, PromptPR, PromptReview}
 	if !reflect.DeepEqual(names, wantNames) {
 		t.Fatalf("PromptNames() = %#v, want %#v", names, wantNames)
 	}
@@ -305,7 +331,7 @@ func TestPromptMetadata(t *testing.T) {
 	if len(definitions) != len(names) {
 		t.Fatalf("Definitions() length = %d, want %d", len(definitions), len(names))
 	}
-	wantCommands := []string{"tao-plan", "tao-slice", "tao-note-slice", "tao-run", "tao-commit", "tao-grill-me", "tao-improve-codebase-architecture", "tao-improve-documentation", "tao-repo-health", "tao-performance-review", "tao-pr", "tao-review"}
+	wantCommands := []string{"tao-plan", "tao-slice", "tao-note-slice", "tao-note", "tao-run", "tao-commit", "tao-grill-me", "tao-improve-codebase-architecture", "tao-improve-documentation", "tao-repo-health", "tao-performance-review", "tao-pr", "tao-review"}
 	for i, definition := range definitions {
 		if definition.Name != names[i] || definition.CommandName != wantCommands[i] || definition.Template == "" {
 			t.Fatalf("unexpected definition[%d]: %#v", i, definition)
@@ -317,11 +343,19 @@ func TestPromptMetadata(t *testing.T) {
 }
 
 func TestInstallablePromptGuidanceUsesPrefixedSlashCommands(t *testing.T) {
-	unprefixed := regexp.MustCompile(`(^|[^[:alnum:]_-])/(plan|slice|note-slice|run|commit|grill-me|improve-codebase-architecture|improve-documentation|repo-health|performance-review|pr|review)([^[:alnum:]_-]|$)`)
 	for _, definition := range Definitions() {
-		if match := unprefixed.FindString(definition.Template); match != "" {
+		if match := unprefixedSlashCommand.FindString(definition.Template); match != "" {
 			t.Errorf("prompt %q contains unprefixed slash-command reference %q", definition.Name, match)
 		}
+	}
+}
+
+func TestUnprefixedSlashCommandRecognizesNoteSelector(t *testing.T) {
+	if !unprefixedSlashCommand.MatchString("capture this with /note later") {
+		t.Fatal("guidance regex did not match unprefixed /note command")
+	}
+	if unprefixedSlashCommand.MatchString("capture this with /tao-note") {
+		t.Fatal("guidance regex matched installed /tao-note command")
 	}
 }
 

@@ -175,7 +175,7 @@ func TestInstallAllClaudeWritesManagedCommandWrappers(t *testing.T) {
 		t.Fatalf("InstallAll results = %d, want %d", len(results), len(prompts.Definitions()))
 	}
 
-	for _, name := range []string{"plan", "note-slice", "run"} {
+	for _, name := range []string{"plan", "note-slice", "note", "run"} {
 		commandName := "tao-" + name
 		path := filepath.Join(commandsDir, commandName+".md")
 		text := readPromptInstallText(t, path)
@@ -187,6 +187,18 @@ func TestInstallAllClaudeWritesManagedCommandWrappers(t *testing.T) {
 		if strings.Contains(text, "You are in ") {
 			t.Fatalf("expected thin Claude wrapper, got embedded prompt content %q", text)
 		}
+	}
+	note := readPromptInstallText(t, filepath.Join(commandsDir, "tao-note.md"))
+	for _, want := range []string{
+		"allowed-tools: Bash(tao prompt note:*), Bash(tao note:*)",
+		"tao prompt note --arguments-stdin",
+	} {
+		if !strings.Contains(note, want) {
+			t.Fatalf("expected %q in Claude note wrapper, got %q", want, note)
+		}
+	}
+	if strings.Contains(note, "The first line must be a one-line title") {
+		t.Fatalf("expected thin Claude note wrapper, got embedded prompt body %q", note)
 	}
 	assertManagedCommitDelegates(t, filepath.Join(commandsDir, "tao-commit.md"), "allowed-tools: Bash(tao commit:*)")
 	assertPromptRenameInstalled(t, commandsDir)
@@ -216,8 +228,8 @@ func TestInstallAllOpenCodeWritesStyleBCommands(t *testing.T) {
 	}
 
 	// Read-only planning prompts carry agent: plan; mutating prompts carry agent: build.
-	agentModes := map[string]string{"plan": "plan", "grill-me": "plan", "note-slice": "build", "run": "build", "commit": "build", "slice": "build"}
-	for _, name := range []string{"plan", "note-slice", "run", "grill-me", "slice"} {
+	agentModes := map[string]string{"plan": "plan", "grill-me": "plan", "note-slice": "build", "note": "build", "run": "build", "commit": "build", "slice": "build"}
+	for _, name := range []string{"plan", "note-slice", "note", "run", "grill-me", "slice"} {
 		commandName := "tao-" + name
 		path := filepath.Join(commandsDir, commandName+".md")
 		text := readPromptInstallText(t, path)

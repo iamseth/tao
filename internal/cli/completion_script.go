@@ -173,7 +173,7 @@ _tao() {
       ;;
 	    ` + commandAliasPattern("prompt") + `)
 ` + zshCommandArguments("prompt") + `
-	      compadd slice run commit grill-me improve-codebase-architecture improve-documentation repo-health pr
+	      compadd note slice run commit grill-me improve-codebase-architecture improve-documentation repo-health pr
       ;;
     ` + commandAliasPattern("draft-prompt") + `)
 ` + zshCommandArguments("draft-prompt") + `

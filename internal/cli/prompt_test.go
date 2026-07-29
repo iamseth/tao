@@ -261,7 +261,7 @@ func TestInstallPromptsWritesAndChecksPiPrompts(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"install-prompts"}); err != nil {
 		t.Fatal(err)
 	}
-	promptNames := []string{"plan", "slice", "note-slice", "run", "grill-me", "improve-codebase-architecture", "improve-documentation", "repo-health", "pr"}
+	promptNames := []string{"plan", "slice", "note-slice", "note", "run", "grill-me", "improve-codebase-architecture", "improve-documentation", "repo-health", "pr"}
 	for _, name := range promptNames {
 		commandName := "tao-" + name
 		path := filepath.Join(root, commandName+".md")
@@ -447,7 +447,7 @@ func TestInstallPromptsAndDoctorUseSelectedClaudeAgent(t *testing.T) {
 	}
 
 	commandsRoot := filepath.Join(home, ".claude", "commands")
-	for _, name := range []string{"plan", "slice", "note-slice", "run", "commit", "repo-health", "pr"} {
+	for _, name := range []string{"plan", "slice", "note-slice", "note", "run", "commit", "repo-health", "pr"} {
 		commandName := "tao-" + name
 		path := filepath.Join(commandsRoot, commandName+".md")
 		text := readText(t, path)
@@ -514,8 +514,8 @@ func TestInstallPromptsAndDoctorUseSelectedOpenCodeAgent(t *testing.T) {
 	}
 
 	commandsRoot := filepath.Join(home, ".config", "opencode", "commands")
-	agentModes := map[string]string{"plan": "plan", "note-slice": "build", "run": "build", "commit": "build", "repo-health": "plan", "pr": "build"}
-	for _, name := range []string{"plan", "note-slice", "run", "commit", "repo-health", "pr"} {
+	agentModes := map[string]string{"plan": "plan", "note-slice": "build", "note": "build", "run": "build", "commit": "build", "repo-health": "plan", "pr": "build"}
+	for _, name := range []string{"plan", "note-slice", "note", "run", "commit", "repo-health", "pr"} {
 		commandName := "tao-" + name
 		path := filepath.Join(commandsRoot, commandName+".md")
 		text := readText(t, path)
@@ -582,7 +582,7 @@ func TestInstallPromptsAndDoctorUseSelectedPiAgent(t *testing.T) {
 	}
 
 	piRoot := filepath.Join(home, ".pi", "agent", "prompts")
-	for _, name := range []string{"plan", "slice", "note-slice", "run", "grill-me", "improve-codebase-architecture", "improve-documentation", "repo-health", "pr"} {
+	for _, name := range []string{"plan", "slice", "note-slice", "note", "run", "grill-me", "improve-codebase-architecture", "improve-documentation", "repo-health", "pr"} {
 		commandName := "tao-" + name
 		path := filepath.Join(piRoot, commandName+".md")
 		text := readText(t, path)

@@ -13,6 +13,7 @@ const (
 	PromptPlan                        = "plan"
 	PromptSlice                       = "slice"
 	PromptNoteSlice                   = "note-slice"
+	PromptNote                        = "note"
 	PromptCommit                      = "commit"
 	PromptGrillMe                     = "grill-me"
 	PromptImproveCodebaseArchitecture = "improve-codebase-architecture"
@@ -34,6 +35,9 @@ var SlicePromptTemplate string
 
 //go:embed note_slice.md
 var NoteSlicePromptTemplate string
+
+//go:embed note.md
+var NotePromptTemplate string
 
 //go:embed commit.md
 var CommitPromptTemplate string
@@ -121,6 +125,7 @@ var agentCommandNames = map[string]string{
 	PromptPlan:                        "tao-plan",
 	PromptSlice:                       "tao-slice",
 	PromptNoteSlice:                   "tao-note-slice",
+	PromptNote:                        "tao-note",
 	PromptRun:                         "tao-run",
 	PromptCommit:                      "tao-commit",
 	PromptGrillMe:                     "tao-grill-me",
@@ -136,6 +141,7 @@ var promptRegistry = []promptDefinition{
 	newTemplatedPrompt(PromptPlan, PlanPromptTemplate),
 	newTemplatedPrompt(PromptSlice, SlicePromptTemplate),
 	newPrompt(PromptNoteSlice, NoteSlicePromptTemplate, renderNoteSlicePrompt),
+	newTemplatedPrompt(PromptNote, NotePromptTemplate),
 	newPrompt(PromptRun, RunPromptTemplate, renderRunPrompt),
 	newTemplatedPrompt(PromptCommit, CommitPromptTemplate),
 	newTemplatedPrompt(PromptGrillMe, GrillMePromptTemplate),

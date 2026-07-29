@@ -25,10 +25,12 @@ A useful mental split:
 - **Planning prompts** (`/tao-plan`, `/tao-grill-me`, `/tao-improve-codebase-architecture`,
   `/tao-improve-documentation`, `/tao-repo-health`) are **read-only**. They never edit
   code or write Tao artifacts.
-- **Build prompts** (`/tao-slice`, `/tao-run`, `/tao-commit`, `/tao-pr`) write artifacts, code,
-  or git state.
+- **Build prompts** (`/tao-note`, `/tao-slice`, `/tao-run`, `/tao-commit`, `/tao-pr`) write artifacts,
+  code, or git state.
 
 ## Capture first with repository notes
+
+`/tao-note` is the capture end of the note-to-plan pipeline for agent sessions: run the slash command inside a session to distill the conversation into a self-contained repository note, then promote it later with `tao note plan <id>`. Use `tao note create` for manual capture instead; `/tao-note` names the installed slash command, while `tao note` names the CLI command group.
 
 Use `tao note` (or `tao n`) when an idea is worth retaining but not worth interrupting your current work. From a registered checkout, the shortest capture path is:
 
