@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -107,6 +108,101 @@ func TestDriverDecideContinuesForDistinctSameFileFindings(t *testing.T) {
 	}
 }
 
+func TestDriverDecideStopsOnRecurringFilesWithoutMutation(t *testing.T) {
+	detail, previous := recurringDriverDetail()
+	beforeStatus := detail.State.Status
+	beforeSlices := slices.Clone(detail.Slices.Slices)
+	recordCalled := false
+	var stoppedEvent *plan.Event
+	driver := Driver{
+		Resolve: fixedDriverResolver(detail),
+		Record: func(detail *plan.PlanDetail) (Record, error) {
+			recordCalled = true
+			return &driverRecord{detail: detail}, nil
+		},
+		Now: func() time.Time { return time.Date(2026, 7, 29, 22, 0, 0, 0, time.UTC) },
+		AppendEvent: func(_ string, event plan.Event) error {
+			if event.Type == plan.EventTypeReworkStopped {
+				stopped := event
+				stoppedEvent = &stopped
+			}
+			return nil
+		},
+	}
+
+	got, err := driver.Decide(context.Background(), "plan", 0, 0, previous, 5)
+	if err != nil {
+		t.Fatalf("Decide returned error: %v", err)
+	}
+	wantFiles := []string{"store/file.go"}
+	if got.Reworked || got.StopKind != StopKindRecurringFiles || !slices.Equal(got.RecurringFiles, wantFiles) {
+		t.Fatalf("recurring-file decision = %+v", got)
+	}
+	if got.StopReason != recurringFilesStopReason(wantFiles) {
+		t.Fatalf("stop reason = %q", got.StopReason)
+	}
+	if got.Fingerprint == previous || !reflect.DeepEqual(got.Findings, ReviewFindings(detail)) {
+		t.Fatalf("recurring-file evidence = %+v, previous fingerprint %q", got, previous)
+	}
+	if recordCalled {
+		t.Fatal("recurring-file stop crossed the plan mutation boundary")
+	}
+	if detail.State.Status != beforeStatus || !reflect.DeepEqual(detail.Slices.Slices, beforeSlices) {
+		t.Fatalf("recurring-file stop mutated plan detail: status=%q slices=%+v", detail.State.Status, detail.Slices.Slices)
+	}
+	if stoppedEvent == nil {
+		t.Fatal("recurring-file stop did not append rework_stopped")
+	}
+	if stoppedEvent.PlanID != "plan" || stoppedEvent.Round != 2 || stoppedEvent.Attempts != 2 || stoppedEvent.Fingerprint != got.Fingerprint || stoppedEvent.Reason != got.StopReason || stoppedEvent.Message != got.StopReason {
+		t.Fatalf("rework_stopped event = %+v", *stoppedEvent)
+	}
+}
+
+func TestDriverDecideStopPrecedenceOverRecurringFiles(t *testing.T) {
+	tests := []struct {
+		name        string
+		maxAttempts int
+		previous    func(*plan.PlanDetail, string) string
+		wantKind    StopKind
+	}{
+		{
+			name:        "custom cap",
+			maxAttempts: 2,
+			previous:    func(_ *plan.PlanDetail, previous string) string { return previous },
+			wantKind:    StopKindCapExhausted,
+		},
+		{
+			name:        "exact fingerprint",
+			maxAttempts: 5,
+			previous: func(detail *plan.PlanDetail, _ string) string {
+				return ReworkFindingsFingerprint(ReviewFindings(detail))
+			},
+			wantKind: StopKindFindingsStalled,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			detail, previous := recurringDriverDetail()
+			driver := Driver{
+				Resolve: fixedDriverResolver(detail),
+				Record: func(*plan.PlanDetail) (Record, error) {
+					t.Fatal("stop precedence crossed the plan mutation boundary")
+					return nil, nil
+				},
+			}
+
+			got, err := driver.Decide(context.Background(), "plan", 0, 0, test.previous(detail, previous), test.maxAttempts)
+			if err != nil {
+				t.Fatalf("Decide returned error: %v", err)
+			}
+			if got.StopKind != test.wantKind || len(got.RecurringFiles) != 0 {
+				t.Fatalf("decision = %+v, want earlier stop kind %q", got, test.wantKind)
+			}
+		})
+	}
+}
+
 func TestDriverDecideLegacyFingerprintPermitsOneAdditionalRound(t *testing.T) {
 	first := actionableDriverDetail(1)
 	findings := ReviewFindings(first)
@@ -145,6 +241,8 @@ func TestStopKindForPersistedReason(t *testing.T) {
 		{name: "empty", want: StopKindNone},
 		{name: "cap", reason: "automatic rework cap exhausted after 5 cycles", want: StopKindCapExhausted},
 		{name: "stalled findings", reason: equivalentFindingsStopReason, want: StopKindFindingsStalled},
+		{name: "recurring files", reason: recurringFilesStopReason([]string{"b.go", "a.go"}), want: StopKindRecurringFiles},
+		{name: "malformed recurring files", reason: recurringFilesStopReasonPrefix + "not-json", want: StopKindNone},
 		{name: "unknown", reason: "automatic rework stopped for another reason", want: StopKindNone},
 		{name: "cap prefix only", reason: "automatic rework cap exhausted", want: StopKindNone},
 	}
@@ -170,6 +268,7 @@ func TestGuardAutoReworkRestart(t *testing.T) {
 		wantStopped  bool
 		wantKind     StopKind
 		wantReason   string
+		wantFiles    []string
 		wantError    string
 	}{
 		{
@@ -224,6 +323,15 @@ func TestGuardAutoReworkRestart(t *testing.T) {
 			wantKind:     StopKindCapExhausted,
 			wantReason:   capReason,
 		},
+		{
+			name:         "recurring-file stop restores classification",
+			events:       []plan.Event{{Type: plan.EventTypeReworkStopped, Reason: recurringFilesStopReason([]string{"z.go", "a.go"})}},
+			allowRestart: true,
+			wantStopped:  true,
+			wantKind:     StopKindRecurringFiles,
+			wantReason:   recurringFilesStopReason([]string{"a.go", "z.go"}),
+			wantFiles:    []string{"a.go", "z.go"},
+		},
 	}
 
 	for _, test := range tests {
@@ -241,6 +349,9 @@ func TestGuardAutoReworkRestart(t *testing.T) {
 			if decision.StopKind != test.wantKind || decision.StopReason != test.wantReason {
 				t.Fatalf("stop = (%q, %q), want (%q, %q)", decision.StopKind, decision.StopReason, test.wantKind, test.wantReason)
 			}
+			if !slices.Equal(decision.RecurringFiles, test.wantFiles) {
+				t.Fatalf("recurring files = %#v, want %#v", decision.RecurringFiles, test.wantFiles)
+			}
 			if test.wantError == "" {
 				if err != nil {
 					t.Fatalf("GuardAutoReworkRestart returned error: %v", err)
@@ -249,6 +360,34 @@ func TestGuardAutoReworkRestart(t *testing.T) {
 				t.Fatalf("GuardAutoReworkRestart error = %q, want %q", err, test.wantError)
 			}
 		})
+	}
+}
+
+func TestGuardAutoReworkRestartFormatsPersistedRecurringFileFindings(t *testing.T) {
+	detail := actionableDriverDetail(0)
+	detail.State.Plan.Review.Findings = []plan.ReviewFinding{{
+		Severity:   "major",
+		File:       "z.go",
+		Line:       17,
+		Message:    "the latest structured finding",
+		Suggestion: "address the newest review",
+	}}
+	detail.Events = []plan.Event{{
+		Type:   plan.EventTypeReworkStopped,
+		Reason: recurringFilesStopReason([]string{"z.go", "a.go"}),
+	}}
+
+	decision, stopped, err := GuardAutoReworkRestart(detail, false)
+	if !stopped || err == nil {
+		t.Fatalf("persisted stop = (%+v, %t, %v), want guarded error", decision, stopped, err)
+	}
+	if decision.StopKind != StopKindRecurringFiles || !slices.Equal(decision.RecurringFiles, []string{"a.go", "z.go"}) || !reflect.DeepEqual(decision.Findings, ReviewFindings(detail)) {
+		t.Fatalf("persisted recurring-file decision = %+v", decision)
+	}
+	for _, want := range []string{"THE SAME FILES KEEP RECURRING", "- a.go", "- z.go", "z.go:17", "the latest structured finding", "address the newest review", "--rework-restart"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("restart refusal %q does not contain %q", err, want)
+		}
 	}
 }
 
@@ -270,6 +409,11 @@ func TestFormatStopMessageDistinguishesStallFromCap(t *testing.T) {
 			name:     "equivalent findings stall is loud and finding-bearing",
 			decision: Decision{StopKind: StopKindFindingsStalled, StopReason: equivalentFindingsStopReason, Findings: []plan.ReviewFinding{finding}},
 			want:     []string{"!!!!!!!!!!!!!!!!", "THE LOOP IS GOING IN CIRCLES", "internal/rework/driver.go:99", finding.Message, finding.Suggestion, "before re-running"},
+		},
+		{
+			name:     "recurring files are distinct and finding-bearing",
+			decision: Decision{StopKind: StopKindRecurringFiles, StopReason: recurringFilesStopReason([]string{"z.go", "a.go"}), RecurringFiles: []string{"z.go", "a.go"}, Findings: []plan.ReviewFinding{finding}},
+			want:     []string{"!!!!!!!!!!!!!!!!", "THE SAME FILES KEEP RECURRING", "three consecutive reviews", "- a.go", "- z.go", finding.Message, finding.Suggestion, "before re-running"},
 		},
 		{
 			name:      "cap exhaustion is milder",
@@ -417,6 +561,31 @@ func TestDriverLoopAttemptsNeverDecrease(t *testing.T) {
 
 func fixedDriverResolver(detail *plan.PlanDetail) PlanResolver {
 	return func(context.Context, string) (*plan.PlanDetail, error) { return detail, nil }
+}
+
+func recurringDriverDetail() (*plan.PlanDetail, string) {
+	detail := actionableDriverDetail(2)
+	firstMessage := "Warp drops the recovered record"
+	secondMessage := "Warp leaks the write transaction"
+	for index := range detail.Slices.Slices {
+		detail.Slices.Slices[index].ExpectedFiles = []string{"store/file.go", "store/file_test.go"}
+		detail.Slices.Slices[index].Goal = []string{firstMessage, secondMessage}[index]
+	}
+	detail.State.Plan.Review.Findings = []plan.ReviewFinding{{
+		Severity:   "major",
+		File:       "store/file.go",
+		Line:       42,
+		Message:    "Warp corrupts the committed record",
+		Suggestion: "preserve the committed value",
+	}}
+	previous := ReworkFindingsFingerprint([]plan.ReviewFinding{{
+		Severity:   "major",
+		File:       "store/file.go",
+		Line:       42,
+		Message:    secondMessage,
+		Suggestion: "close the transaction",
+	}})
+	return detail, previous
 }
 
 func actionableDriverDetail(round int) *plan.PlanDetail {

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/iamseth/tao/internal/plan"
 	reworkpkg "github.com/iamseth/tao/internal/rework"
 	"github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/runtimeconfig"
@@ -574,6 +575,153 @@ func TestEntryDriverRecoverTerminalReworkBranches(t *testing.T) {
 	}
 }
 
+func TestEntryDriverRecoverStopsRecurringFilesWithoutAnotherRun(t *testing.T) {
+	detail, findings := recurringFileRecoveryPlan()
+	repo := recoveryRepositoryFunc(func(context.Context, string) (*plan.PlanDetail, error) { return detail, nil })
+	entry := recoveryPendingEntry()
+	baseline := 0
+	entry.ReworkBaselineRound = &baseline
+	entry.ReworkAttempts = 1
+	entry.PreviousFindingFingerprint = reworkpkg.ReworkFindingsFingerprint([]plan.ReviewFinding{findings[1]})
+	host := &recoveryEntryDriverHost{entry: entry}
+	now := time.Date(2026, 7, 29, 20, 0, 0, 0, time.UTC)
+	var appended []plan.Event
+	domainDriver := reworkpkg.Driver{
+		Resolve: repo.ResolvePlan,
+		Now:     func() time.Time { return now },
+		AppendEvent: func(_ string, event plan.Event) error {
+			appended = append(appended, event)
+			detail.Events = append(detail.Events, event)
+			return nil
+		},
+	}
+	decisions := 0
+	finalizations := 0
+	executions := 0
+	driver := EntryDriver{
+		Host:            host,
+		InspectRecovery: NewRecoveryInspector(repo),
+		FinalizeRecovery: func(context.Context, run.Request) error {
+			finalizations++
+			return nil
+		},
+		Execute: func(context.Context, run.Request) error {
+			executions++
+			return nil
+		},
+		Rework: func(ctx context.Context, planID string, baseline, attempts int, previous string, maxAttempts int) (reworkpkg.Decision, error) {
+			decisions++
+			return domainDriver.Decide(ctx, planID, baseline, attempts, previous, maxAttempts)
+		},
+		PolicyForEntry: func(QueueEntry) runtimeconfig.AutoReworkPolicy {
+			return runtimeconfig.AutoReworkPolicy{Enabled: true, MaxAttempts: 5}
+		},
+		Now: func() time.Time { return now },
+	}
+
+	recovery, err := driver.Recover(context.Background(), entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovery.Result.Outcome != EntryOutcomeFailed || recovery.Result.Err == nil {
+		t.Fatalf("Recover() = %+v, want terminal recurring-file failure", recovery)
+	}
+	wantReason := "automatic rework stalled on files recurring across three consecutive reviews: [\"internal/runqueue/recovery.go\"]"
+	wantDecision := reworkpkg.Decision{
+		StopKind:       reworkpkg.StopKindRecurringFiles,
+		StopReason:     wantReason,
+		RecurringFiles: []string{"internal/runqueue/recovery.go"},
+		Findings:       []plan.ReviewFinding{findings[2]},
+	}
+	if got, want := recovery.Result.Err.Error(), reworkpkg.FormatStopMessage(wantDecision); got != want {
+		t.Fatalf("recovered stop output = %q, want %q", got, want)
+	}
+	if finalizations != 1 || decisions != 1 || executions != 0 {
+		t.Fatalf("recovered convergence calls = (%d finalizations, %d decisions, %d executions), want (1, 1, 0)", finalizations, decisions, executions)
+	}
+	if host.entry.Status != QueueStatusFailed || host.entry.RecoveryPending || host.entry.ReworkAttempts != 2 || host.entry.PreviousFindingFingerprint != entry.PreviousFindingFingerprint {
+		t.Fatalf("failed recovered queue entry = %+v", host.entry)
+	}
+	if detail.State.Status != plan.StatusChangesRequested || detail.State.Plan.Review == nil || len(detail.State.Plan.Review.Findings) != 1 || detail.State.Plan.Review.Findings[0] != findings[2] || reworkpkg.RoundCount(detail) != 2 {
+		t.Fatalf("recurring stop mutated latest review or reopened plan: %+v", detail)
+	}
+	stopEvents := 0
+	for _, event := range appended {
+		if event.Type != plan.EventTypeReworkStopped {
+			continue
+		}
+		stopEvents++
+		if event.Round != 2 || event.Attempts != 2 || event.Reason != wantReason || reworkpkg.StopKindForPersistedReason(event.Reason) != reworkpkg.StopKindRecurringFiles {
+			t.Fatalf("recovered rework_stopped event = %+v", event)
+		}
+	}
+	if stopEvents != 1 {
+		t.Fatalf("recovered recurring review produced %d stop observations, want one", stopEvents)
+	}
+}
+
+func TestEntryDriverRecoverDoesNotDuplicatePersistedRecurringFileStop(t *testing.T) {
+	detail, findings := recurringFileRecoveryPlan()
+	reason := "automatic rework stalled on files recurring across three consecutive reviews: [\"internal/runqueue/recovery.go\"]"
+	detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypeReworkStopped, Round: 2, Attempts: 2, Reason: reason, Message: reason})
+	repo := recoveryRepositoryFunc(func(context.Context, string) (*plan.PlanDetail, error) { return detail, nil })
+	entry := recoveryPendingEntry()
+	baseline := 0
+	entry.ReworkBaselineRound = &baseline
+	entry.ReworkAttempts = 2
+	entry.PreviousFindingFingerprint = reworkpkg.ReworkFindingsFingerprint([]plan.ReviewFinding{findings[1]})
+	host := &recoveryEntryDriverHost{entry: entry}
+	guardCalls := 0
+	finalizations := 0
+	executions := 0
+	driver := EntryDriver{
+		Host:            host,
+		InspectRecovery: NewRecoveryInspector(repo),
+		FinalizeRecovery: func(context.Context, run.Request) error {
+			finalizations++
+			return nil
+		},
+		Execute: func(context.Context, run.Request) error {
+			executions++
+			return nil
+		},
+		Rework: func(context.Context, string, int, int, string, int) (reworkpkg.Decision, error) {
+			guardCalls++
+			_, _, err := reworkpkg.GuardAutoReworkRestart(detail, false)
+			return reworkpkg.Decision{}, err
+		},
+		PolicyForEntry: func(QueueEntry) runtimeconfig.AutoReworkPolicy {
+			return runtimeconfig.AutoReworkPolicy{Enabled: true, MaxAttempts: 5}
+		},
+		Now: time.Now,
+	}
+
+	recovery, err := driver.Recover(context.Background(), entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovery.Result.Outcome != EntryOutcomeFailed || recovery.Result.Err == nil {
+		t.Fatalf("Recover() = %+v, want persisted-stop failure", recovery)
+	}
+	for _, want := range []string{"THE SAME FILES KEEP RECURRING", "- internal/runqueue/recovery.go", findings[2].Message, findings[2].Suggestion, "--rework-restart"} {
+		if !strings.Contains(recovery.Result.Err.Error(), want) {
+			t.Errorf("persisted stop output %q does not contain %q", recovery.Result.Err, want)
+		}
+	}
+	if finalizations != 1 || guardCalls != 1 || executions != 0 || host.entry.Status != QueueStatusFailed || host.entry.RecoveryPending {
+		t.Fatalf("persisted-stop recovery = (%d finalizations, %d guard calls, %d executions, entry %+v)", finalizations, guardCalls, executions, host.entry)
+	}
+	stopEvents := 0
+	for _, event := range detail.Events {
+		if event.Type == plan.EventTypeReworkStopped {
+			stopEvents++
+		}
+	}
+	if stopEvents != 1 || reworkpkg.RoundCount(detail) != 2 {
+		t.Fatalf("resume duplicated the recurring observation or reopened work: stop events=%d rounds=%d", stopEvents, reworkpkg.RoundCount(detail))
+	}
+}
+
 func TestEntryDriverReworkInitialExecutionFailure(t *testing.T) {
 	entry := recoveryPendingEntry()
 	entry.RecoveryPending = false
@@ -678,6 +826,7 @@ func TestEntryDriverReworkBoundedStopsAreTerminal(t *testing.T) {
 	}{
 		{name: "cap", decision: reworkpkg.Decision{Round: 3, StopKind: reworkpkg.StopKindCapExhausted, StopReason: "automatic rework cap exhausted after 3 cycles"}, want: "attempt cap reached"},
 		{name: "stall", decision: reworkpkg.Decision{Round: 2, StopKind: reworkpkg.StopKindFindingsStalled, StopReason: "automatic rework stalled on equivalent consecutive findings"}, want: "THE LOOP IS GOING IN CIRCLES"},
+		{name: "recurring files", decision: reworkpkg.Decision{Round: 2, StopKind: reworkpkg.StopKindRecurringFiles, StopReason: "automatic rework stalled on files recurring across three consecutive reviews: [\"internal/runqueue/entry_driver.go\"]", RecurringFiles: []string{"internal/runqueue/entry_driver.go"}}, want: "THE SAME FILES KEEP RECURRING"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

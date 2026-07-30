@@ -115,6 +115,49 @@ func TestPlanAutoReworkerAppendsReworkStopped(t *testing.T) {
 	}
 }
 
+func TestPlanAutoReworkerStopsOnThirdRecurringFileReview(t *testing.T) {
+	now := time.Date(2026, 7, 14, 2, 36, 0, 0, time.UTC)
+	planID := "20260714-0236-recurring-file"
+	detail, fingerprint := autoReworkTestDetail(planID, now)
+	detail.Slices.Slices = append(detail.Slices.Slices,
+		plan.Slice{ID: "r101-internal-cli-autorework-go", Status: plan.StatusCompleted, ExpectedFiles: []string{"internal/cli/autorework.go"}},
+		plan.Slice{ID: "r201-internal-cli-autorework-go", Status: plan.StatusCompleted, ExpectedFiles: []string{"./internal/cli/autorework.go"}},
+	)
+	detail.State.Plan.CompletedSlices = append(detail.State.Plan.CompletedSlices,
+		"r101-internal-cli-autorework-go",
+		"r201-internal-cli-autorework-go",
+	)
+	repo := newRecordingAutoReworkRepository(planID, detail)
+
+	result, err := planAutoReworker(repo, func() time.Time { return now })(context.Background(), planID, 0, 1, "different-fingerprint", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Reworked || result.Round != 2 || result.Fingerprint != fingerprint || result.StopKind != rework.StopKindRecurringFiles {
+		t.Fatalf("automatic rework result = %+v", result)
+	}
+	if want := []string{"internal/cli/autorework.go"}; !reflect.DeepEqual(result.RecurringFiles, want) {
+		t.Fatalf("recurring files = %#v, want %#v", result.RecurringFiles, want)
+	}
+	for _, want := range []string{"THE SAME FILES KEEP RECURRING", "- internal/cli/autorework.go", "internal/cli/autorework.go:45", "preserve automatic rework history", "append a typed plan event"} {
+		if output := rework.FormatStopMessage(result); !strings.Contains(output, want) {
+			t.Errorf("stop output %q does not contain %q", output, want)
+		}
+	}
+	if len(detail.Slices.Slices) != 3 || detail.State.Status != plan.StatusChangesRequested {
+		t.Fatalf("recurring-file stop crossed the reopen boundary: status=%q slices=%+v", detail.State.Status, detail.Slices.Slices)
+	}
+	var stopped *plan.Event
+	for i := range repo.events {
+		if repo.events[i].Type == plan.EventTypeReworkStopped {
+			stopped = &repo.events[i]
+		}
+	}
+	if stopped == nil || stopped.PlanID != planID || stopped.Round != 2 || stopped.Attempts != 2 || stopped.Fingerprint != fingerprint || rework.StopKindForPersistedReason(stopped.Reason) != rework.StopKindRecurringFiles {
+		t.Fatalf("rework_stopped event = %+v", stopped)
+	}
+}
+
 func TestAutoReworkRestartGuardUsesLatestReworkEvent(t *testing.T) {
 	now := time.Date(2026, 7, 14, 2, 37, 0, 0, time.UTC)
 	oldReason := "automatic rework stalled on equivalent consecutive findings"

@@ -41,6 +41,7 @@ const (
 	StopKindNone            StopKind = ""
 	StopKindCapExhausted    StopKind = "cap_exhausted"
 	StopKindFindingsStalled StopKind = "findings_stalled"
+	StopKindRecurringFiles  StopKind = "recurring_files"
 )
 
 // StopKindForPersistedReason upgrades the frozen reason field in historical
@@ -48,6 +49,9 @@ const (
 func StopKindForPersistedReason(reason string) StopKind {
 	if reason == equivalentFindingsStopReason {
 		return StopKindFindingsStalled
+	}
+	if _, ok := recurringFilesFromStopReason(reason); ok {
+		return StopKindRecurringFiles
 	}
 	var maxAttempts int
 	if _, err := fmt.Sscanf(reason, "automatic rework cap exhausted after %d cycles", &maxAttempts); err == nil && reason == fmt.Sprintf("automatic rework cap exhausted after %d cycles", maxAttempts) {
@@ -58,12 +62,13 @@ func StopKindForPersistedReason(reason string) StopKind {
 
 // Decision describes the outcome of inspecting and possibly reopening a plan.
 type Decision struct {
-	Reworked    bool
-	Round       int
-	Fingerprint string
-	StopKind    StopKind
-	StopReason  string
-	Findings    []plan.ReviewFinding
+	Reworked       bool
+	Round          int
+	Fingerprint    string
+	StopKind       StopKind
+	StopReason     string
+	RecurringFiles []string
+	Findings       []plan.ReviewFinding
 }
 
 // GuardAutoReworkRestart interprets persisted automatic-rework events and
@@ -93,7 +98,8 @@ func mostRecentAutoReworkStop(detail *plan.PlanDetail) (Decision, bool) {
 			if reason == "" {
 				reason = "automatic rework previously stopped"
 			}
-			return Decision{StopKind: StopKindForPersistedReason(reason), StopReason: reason, Findings: ReviewFindings(detail)}, true
+			recurringFiles, _ := recurringFilesFromStopReason(reason)
+			return Decision{StopKind: StopKindForPersistedReason(reason), StopReason: reason, RecurringFiles: recurringFiles, Findings: ReviewFindings(detail)}, true
 		}
 	}
 	return Decision{}, false
@@ -111,6 +117,8 @@ func FormatStopMessage(decision Decision) string {
 	switch decision.StopKind {
 	case StopKindCapExhausted:
 		return "Automatic rework stopped: attempt cap reached.\nReason: " + decision.StopReason + "\nRead the review and address the remaining findings before re-running."
+	case StopKindRecurringFiles:
+		return formatRecurringFilesStopMessage(decision)
 	case StopKindFindingsStalled:
 	default:
 		return decision.StopReason
@@ -122,6 +130,30 @@ func FormatStopMessage(decision Decision) string {
 	message.WriteString("Equivalent blocking findings survived consecutive rework rounds.\n")
 	message.WriteString("Reason: " + decision.StopReason + "\n")
 	message.WriteString("Read the review and address these findings before re-running:\n")
+	for _, finding := range decision.Findings {
+		message.WriteString(formatBlockingFinding(finding))
+	}
+	message.WriteString("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+	return message.String()
+}
+
+func formatRecurringFilesStopMessage(decision Decision) string {
+	files := slices.Clone(decision.RecurringFiles)
+	if len(files) == 0 {
+		files, _ = recurringFilesFromStopReason(decision.StopReason)
+	}
+	slices.Sort(files)
+	files = slices.Compact(files)
+
+	var message strings.Builder
+	message.WriteString("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
+	message.WriteString("AUTOMATIC REWORK STOPPED: THE SAME FILES KEEP RECURRING\n")
+	message.WriteString("Different blocking findings returned in these files across three consecutive reviews:\n")
+	for _, file := range files {
+		message.WriteString("- " + file + "\n")
+	}
+	message.WriteString("Reason: " + decision.StopReason + "\n")
+	message.WriteString("Read the latest review and address these findings before re-running:\n")
 	for _, finding := range decision.Findings {
 		message.WriteString(formatBlockingFinding(finding))
 	}
@@ -206,13 +238,16 @@ func (d Driver) Decide(ctx context.Context, planID string, baseline, attempts in
 	budget.Attempts = budget.AttemptsAtRound(round)
 	fingerprint := ReworkFindingsFingerprint(findings)
 	if budget.Attempts >= maxAttempts {
-		decision := Decision{Round: round, Fingerprint: fingerprint, StopKind: StopKindCapExhausted, StopReason: fmt.Sprintf("automatic rework cap exhausted after %d cycles", maxAttempts), Findings: cloneFindings(findings)}
-		d.appendEvent(detail.Dir, plan.Event{Type: plan.EventTypeReworkStopped, Timestamp: d.now(), PlanID: planID, Round: round, Attempts: budget.Attempts, Fingerprint: fingerprint, Reason: decision.StopReason, Message: decision.StopReason})
+		decision := d.stoppedDecision(detail, planID, budget.Attempts, round, fingerprint, StopKindCapExhausted, fmt.Sprintf("automatic rework cap exhausted after %d cycles", maxAttempts), findings, nil)
 		return decision, nil
 	}
 	if budget.PreviousFindingFingerprint != "" && budget.PreviousFindingFingerprint == fingerprint {
-		decision := Decision{Round: round, Fingerprint: fingerprint, StopKind: StopKindFindingsStalled, StopReason: equivalentFindingsStopReason, Findings: cloneFindings(findings)}
-		d.appendEvent(detail.Dir, plan.Event{Type: plan.EventTypeReworkStopped, Timestamp: d.now(), PlanID: planID, Round: round, Attempts: budget.Attempts, Fingerprint: fingerprint, Reason: decision.StopReason, Message: decision.StopReason})
+		decision := d.stoppedDecision(detail, planID, budget.Attempts, round, fingerprint, StopKindFindingsStalled, equivalentFindingsStopReason, findings, nil)
+		return decision, nil
+	}
+	if recurringFiles := recurringReworkFiles(detail, budget.BaselineRound, findings); len(recurringFiles) > 0 {
+		reason := recurringFilesStopReason(recurringFiles)
+		decision := d.stoppedDecision(detail, planID, budget.Attempts, round, fingerprint, StopKindRecurringFiles, reason, findings, recurringFiles)
 		return decision, nil
 	}
 	if d.Record == nil {
@@ -230,6 +265,19 @@ func (d Driver) Decide(ctx context.Context, planID string, baseline, attempts in
 	attempt := budget.Attempts + 1
 	d.appendEvent(detail.Dir, plan.Event{Type: plan.EventTypeReworkRound, Timestamp: reopenedAt, PlanID: planID, Round: decision.Round, Attempts: attempt, Fingerprint: fingerprint, Message: fmt.Sprintf("Automatic rework round %d (attempt %d of %d)", decision.Round, attempt, maxAttempts)})
 	return decision, nil
+}
+
+func (d Driver) stoppedDecision(detail *plan.PlanDetail, planID string, attempts, round int, fingerprint string, kind StopKind, reason string, findings []plan.ReviewFinding, recurringFiles []string) Decision {
+	decision := Decision{
+		Round:          round,
+		Fingerprint:    fingerprint,
+		StopKind:       kind,
+		StopReason:     reason,
+		RecurringFiles: slices.Clone(recurringFiles),
+		Findings:       cloneFindings(findings),
+	}
+	d.appendEvent(detail.Dir, plan.Event{Type: plan.EventTypeReworkStopped, Timestamp: d.now(), PlanID: planID, Round: round, Attempts: attempts, Fingerprint: fingerprint, Reason: reason, Message: reason})
+	return decision
 }
 
 func (d Driver) now() time.Time {

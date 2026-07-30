@@ -110,14 +110,14 @@ func TestGenerateSlicesMapsFindingsToReworkSlices(t *testing.T) {
 	}
 }
 
-func TestGenerateSlicesCarriesOverOverlappingExpectedFiles(t *testing.T) {
+func TestGenerateSlicesPlacesPrimaryBeforeAssociatedExpectedFiles(t *testing.T) {
 	detail := &plan.PlanDetail{
 		State: plan.State{Repo: plan.Repo{Root: repoFixture(t, map[string]string{
 			"go.mod": "module example.com/project\n",
 		})}},
 		Slices: plan.SlicesFile{Slices: []plan.Slice{{
 			ID:            "001-original",
-			ExpectedFiles: []string{"lww_map.go", "lww_map_test.go"},
+			ExpectedFiles: []string{"lww_map_test.go", "lww_map.go"},
 			Verification:  plan.Verification{Commands: []string{"gofmt -w lww_map.go lww_map_test.go"}},
 		}}},
 	}

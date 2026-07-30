@@ -213,8 +213,8 @@ tao insights --all-repos --digest
 ### Running
 
 ```sh
-tao run [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue] [--no-review] [--auto-rework=false] [--max-rework-attempts N] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>
-tao run [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue] [--no-review] [--auto-rework=false] [--max-rework-attempts N] [--dangerously-skip-permissions] --all [--active]
+tao run [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue] [--no-review] [--auto-rework=false] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>
+tao run [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue] [--no-review] [--auto-rework=false] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] --all [--active]
 tao queue add <plan-id-or-slug-or-path>...
 tao queue start [--max-parallel N] [--auto-rework] [--max-rework-attempts N]
 tao queue status [--all]
@@ -253,10 +253,11 @@ and runs detected repository-wide verification before starting a fresh review
 to the data-home plan directory. Review failures and timeouts are recorded but
 do not fail the run; verification failures do. If that review requests changes,
 `tao run` and `tao run --all` apply the ordinary rework gates and rerun by
-default, stopping after five cycles or on repeated equivalent findings. Use
-`--max-rework-attempts N` to change the cap or `--auto-rework=false` to disable
-the loop. Pass `--no-review` for one run or set `TAO_REVIEW=false` to skip review
-and automatic rework.
+default, stopping after five cycles, on repeated equivalent findings, or before
+another reopen when the same normalized primary finding file appears in three
+consecutive `changes_requested` reviews. Use `--max-rework-attempts N` to change
+the cap or `--auto-rework=false` to disable the loop. Pass `--no-review` for one
+run or set `TAO_REVIEW=false` to skip review and automatic rework.
 
 `tao run --all` reconciles runnable plans into the durable per-repo queue and
 drains it once; `--active` limits that batch to active runnable plans. Use
@@ -293,11 +294,18 @@ Use `--run` to hand the reopened plan directly to `tao run`. Use `--force` only
 when you intentionally want to bypass the default completed, changes-requested,
 and finding gates. Direct `tao run` and `tao run --all` automate this loop by
 default; an opted-in durable CLI queue does the same while preserving progress
-across restarts. Reaching the configured cap or receiving two consecutive
-high-confidence matches of the complete normalized finding set stops with the
-plan still `changes_requested` and its latest review preserved. Distinct
-findings in the same file continue within the bounded attempt budget. Automatic
-approval and merge remain manual.
+across restarts. Reaching the configured cap, receiving two consecutive
+high-confidence matches of the complete normalized finding set, or seeing the
+same normalized primary finding file in three consecutive `changes_requested`
+reviews stops with the plan still `changes_requested` and its latest review
+preserved. The fixed recurring-file boundary applies even when the findings are
+distinct and stops before Tao creates another rework round.
+
+A later run refuses to silently replace any persisted `rework_stopped` budget.
+After inspecting the latest review, pass `--rework-restart` to deliberately start
+a fresh bounded budget and three-review window. Restart preserves historical
+rework slices and still applies the ordinary non-forced gates; it does not
+automate approval or merge.
 
 ### Merging approved plans
 

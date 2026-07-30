@@ -301,23 +301,28 @@ verified work into a failed run.
 When a successful review requests changes, `tao run <plan-id>` automatically
 uses the ordinary rework gates, runs the generated fix slices, and reviews again.
 `tao run --all` uses the same default-on loop. Both stop with an error after five
-rework cycles or when consecutive reviews repeat an equivalent finding set,
-leaving the latest `changes_requested` review intact. Change the cap with
-`--max-rework-attempts N`; disable the loop with `--auto-rework=false` or
-`TAO_AUTO_REWORK=false`. Disabling review with `--no-review` or
-`TAO_REVIEW=false` also disables automatic rework.
+rework cycles, when consecutive reviews repeat an equivalent finding set, or
+before another reopen when the same normalized primary finding file appears in
+three consecutive `changes_requested` reviews. The fixed three-review boundary
+applies even when each review reports a different issue in that file. Tao leaves
+the latest review intact. Change the cap with `--max-rework-attempts N`; disable
+the loop with `--auto-rework=false` or `TAO_AUTO_REWORK=false`. Disabling review
+with `--no-review` or `TAO_REVIEW=false` also disables automatic rework.
 
-After either stop, a later `tao run` refuses to silently grant the plan a fresh
-automatic-rework budget. It reports the persisted stop reason and, for an
-equivalent-findings stall, repeats the loud finding-bearing warning. Inspect and
-address the review first. If you deliberately want another bounded budget, pass
-`--rework-restart`; this is an acknowledgment, not a bypass of ordinary rework
-gates. The refusal never prompts, so unattended `tao run --all` selects stopped
-plans to report the refusal safely even though they have no pending slices.
-Unattended `tao run`/`tao run --all` callers that intentionally continue must
-also pass `--rework-restart`; `run --all` then opens the first round of a fresh
-durable queue budget before dispatch. For a manually managed durable queue,
-continue the stopped plan explicitly before starting another drain.
+After any stop, a later `tao run` refuses to silently grant the plan a fresh
+automatic-rework budget. It reports the persisted stop reason and repeats the
+loud finding-bearing warning for equivalent-findings and recurring-file stalls.
+Inspect and address the review first. If you deliberately want another bounded
+budget, pass `--rework-restart`; this preserves historical slices but establishes
+the current round as a fresh baseline, so earlier reviews do not count toward
+the new three-review window. Restart is an acknowledgment, not a bypass of
+ordinary rework gates. The refusal never prompts, so unattended `tao run --all`
+selects stopped plans to report the refusal safely even though they have no
+pending slices. Unattended `tao run`/`tao run --all` callers that intentionally
+continue must also pass `--rework-restart`; `run --all` then opens the first
+round of a fresh durable queue budget before dispatch. For a manually managed
+durable queue, continue the stopped plan explicitly before starting another
+drain.
 
 The installed `/tao-review` slash command is an agent prompt, while `tao review`
 is the ordinary CLI command that runs or displays Tao's persisted plan review.
@@ -433,13 +438,16 @@ the loop. `TAO_AUTO_REWORK=true` opts in through the environment and
 `TAO_MAX_REWORK_ATTEMPTS` changes the cap; explicit flags take precedence.
 Automatic review must remain enabled.
 
-The queue persists the policy, round count, and high-confidence fingerprint of
-the complete normalized finding set, so restart reconciliation resumes the same
-bounded loop. It stops and classifies the queue entry as failed at the cap or
-when two consecutive reviews match that full finding identity. Distinct findings
-in the same file continue within the bounded budget. In either case the plan
-remains `changes_requested` and the latest review is preserved for manual
-diagnosis. Approval and merge always remain manual.
+The queue persists the policy, baseline round, attempt count, and
+high-confidence fingerprint of the complete normalized finding set, so restart
+reconciliation resumes the same bounded loop. It classifies the queue entry as
+failed at the cap, when two consecutive reviews match that full finding identity,
+or when one normalized primary finding file recurs across three consecutive
+reviews in the current baseline window. The third review is the terminal
+observation: recovery settles the failure without another plan execution,
+reopen, or duplicate observation. The plan remains `changes_requested` and the
+latest review is preserved for manual diagnosis. Direct and queued runs use the
+same decision policy; approval and merge always remain manual.
 
 ### Unattended queue — batch plan runs
 

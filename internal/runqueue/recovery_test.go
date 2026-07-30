@@ -80,6 +80,24 @@ func TestRecoveryInspectorRestoresSupersededReworkFingerprint(t *testing.T) {
 	}
 }
 
+func TestRecoveryInspectorKeepsTheThirdRecurringReviewAsTheTerminalObservation(t *testing.T) {
+	detail, _ := recurringFileRecoveryPlan()
+	inspect := NewRecoveryInspector(recoveryRepositoryFunc(func(context.Context, string) (*plan.PlanDetail, error) {
+		return detail, nil
+	}))
+
+	inspection, err := inspect(context.Background(), detail.State.Plan.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !inspection.SlicesComplete || !inspection.TerminalReview || inspection.ReworkRound != 2 {
+		t.Fatalf("recovery inspection = %+v, want terminal review after round 2", inspection)
+	}
+	if inspection.PreviousFindingFingerprint != "" {
+		t.Fatalf("terminal third review was duplicated as a recovered prior observation: %+v", inspection)
+	}
+}
+
 func TestRecoveryInspectorReportsRepositoryErrors(t *testing.T) {
 	wantErr := errors.New("plan store unavailable")
 	inspect := NewRecoveryInspector(recoveryRepositoryFunc(func(context.Context, string) (*plan.PlanDetail, error) { return nil, wantErr }))
@@ -90,6 +108,30 @@ func TestRecoveryInspectorReportsRepositoryErrors(t *testing.T) {
 	if _, err := NewRecoveryInspector(nil)(context.Background(), "plan-a"); err == nil {
 		t.Fatal("nil repository inspection unexpectedly succeeded")
 	}
+}
+
+func recurringFileRecoveryPlan() (*plan.PlanDetail, []plan.ReviewFinding) {
+	findings := []plan.ReviewFinding{
+		{Severity: "major", File: "internal/runqueue/recovery.go", Line: 41, Message: "preserve the first recovered fact", Suggestion: "record the first observation"},
+		{Severity: "major", File: "./internal/runqueue/recovery.go", Line: 74, Message: "preserve the second recovered fact", Suggestion: "record the second observation"},
+		{Severity: "major", File: "internal/runqueue/recovery.go", Line: 103, Message: "stop before reopening the recovered plan", Suggestion: "address the latest review manually"},
+	}
+	completed := []string{"001-work", "r101-internal-runqueue-recovery-go", "r201-internal-runqueue-recovery-go"}
+	return &plan.PlanDetail{
+		Dir: "/plans/plan-a",
+		State: plan.State{Status: plan.StatusChangesRequested, Plan: plan.PlanState{
+			ID: "plan-a", CompletedSlices: completed,
+			Review: &plan.PlanReview{
+				Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested,
+				FindingsCount: 1, Findings: []plan.ReviewFinding{findings[2]},
+			},
+		}},
+		Slices: plan.SlicesFile{PlanID: "plan-a", Slices: []plan.Slice{
+			{ID: "001-work", Status: plan.StatusCompleted, ExpectedFiles: []string{"internal/runqueue/recovery.go"}, Verification: plan.Verification{Commands: []string{"go test ./internal/runqueue"}}},
+			{ID: "r101-internal-runqueue-recovery-go", Status: plan.StatusCompleted, ExpectedFiles: []string{"internal/runqueue/recovery.go"}},
+			{ID: "r201-internal-runqueue-recovery-go", Status: plan.StatusCompleted, ExpectedFiles: []string{"./internal/runqueue/recovery.go"}},
+		}},
+	}, findings
 }
 
 func completedRecoveryPlan(review *plan.PlanReview, events []plan.Event) *plan.PlanDetail {

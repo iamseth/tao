@@ -394,6 +394,34 @@ Known event types include:
 
 Legacy planning-session audit events may also appear in older local plans.
 
+A recurring-file `rework_stopped` event is written after the third consecutive
+`changes_requested` review and before another reopen when at least one normalized
+primary finding file appears in all three reviews. The current review is the
+third observation; the preceding two are reconstructed from the first
+`expected_files` entry of slices in the two immediately preceding generated
+rework rounds. Associated expected files do not count. Evidence must be safe,
+complete, and contiguous for generated rounds after the current rework baseline.
+The event's `reason` begins
+`automatic rework stalled on files recurring across three consecutive reviews: `
+and ends with a sorted JSON string array of the recurring paths. `round` and
+`attempts` describe the already-created rounds; the stop does not reopen the plan
+or append slices. Existing attempt-cap and exact-fingerprint checks retain their
+precedence. The plan remains `changes_requested`, and its current review and
+actionable findings remain the operator-facing source of truth.
+
+Direct and queued automatic rework use the same decision policy. Queue snapshots
+persist the baseline and bounded progress, so interrupted recovery applies the
+third review as one terminal observation, settles the entry as failed, and does
+not execute or reopen the plan again. Once the stop event is persisted, recovery
+must not append a duplicate observation. A later run refuses a fresh budget
+unless `--rework-restart` is explicit; restart uses the current round as a new
+baseline/window while retaining all historical slices and ordinary gates.
+
+This adds no event or artifact field. Existing cap and equivalent-finding stop
+reasons remain readable. Legacy plans with missing, unsafe, associated-only, or
+incomplete generated-round evidence do not receive a retroactive recurring-file
+stop; they continue under the existing exact-fingerprint and attempt-cap bounds.
+
 A `slice_approved` event records the approved slice ID and timestamp. It is appended at most once per slice; repeated approvals are idempotent and preserve the original `approved_by` and `approved_at` metadata.
 
 For automatic commits, `slice_started` precedes the durable `commit_intent` in
