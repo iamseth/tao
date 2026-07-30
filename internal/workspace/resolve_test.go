@@ -143,7 +143,10 @@ func TestResolveExecutionRoot(t *testing.T) {
 }
 
 func TestPhysicalPathResolvesSymlinkedRoot(t *testing.T) {
-	physicalRoot := t.TempDir()
+	physicalRoot, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	alias := filepath.Join(t.TempDir(), "workspace-alias")
 	if err := os.Symlink(physicalRoot, alias); err != nil {
 		t.Fatal(err)

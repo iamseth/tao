@@ -37,3 +37,21 @@ jobs:
 
       - name: Lint
         run: make lint
+
+  macos-test:
+    name: Build and test on macOS
+    runs-on: macos-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.2"
+
+      - name: Build
+        run: make build
+
+      - name: Test
+        run: make test

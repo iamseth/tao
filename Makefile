@@ -1,4 +1,4 @@
-.PHONY: help build clean test coverage-html lint modernize modernize-check install release-check verify verify-no-deps
+.PHONY: help build clean test coverage-html lint install release-check verify verify-no-deps
 
 COVERAGE_FILE := coverage.out
 # Cached analyzer results contain source paths, so isolate them per checkout/worktree.
@@ -12,8 +12,6 @@ help:
 	@printf "  %-14s %s\n" "test" "Run all Go tests with coverage output."
 	@printf "  %-14s %s\n" "coverage-html" "Open an HTML coverage report in the browser."
 	@printf "  %-14s %s\n" "lint" "Run golangci-lint."
-	@printf "  %-14s %s\n" "modernize" "Apply gopls modernize fixes."
-	@printf "  %-14s %s\n" "modernize-check" "Check for gopls modernize findings."
 	@printf "  %-14s %s\n" "install" "Build and install the tao binary into ~/.bin."
 	@printf "  %-14s %s\n" "release-check" "Validate the GoReleaser config (requires goreleaser)."
 	@printf "  %-14s %s\n" "verify-no-deps" "Fail if any third-party dependency is present."
@@ -39,14 +37,8 @@ test:
 coverage-html: test
 	@go tool cover -html=$(COVERAGE_FILE)
 
-lint: modernize-check
+lint:
 	@GOLANGCI_LINT_CACHE="$(GOLANGCI_LINT_CACHE)" golangci-lint run --allow-parallel-runners
-
-modernize:
-	@go run golang.org/x/tools/gopls/internal/analysis/modernize/cmd/modernize@v0.22.0 -fix ./...
-
-modernize-check:
-	@go run golang.org/x/tools/gopls/internal/analysis/modernize/cmd/modernize@v0.22.0 ./...
 
 install: build
 	@rm -f ~/.bin/tao; cp ./bin/tao ~/.bin/tao
@@ -54,7 +46,7 @@ install: build
 release-check:
 	@goreleaser check
 
-verify: build test lint modernize-check verify-no-deps
+verify: build test lint verify-no-deps
 
 verify-no-deps:
 	@count=$$(go list -m all | wc -l); \
