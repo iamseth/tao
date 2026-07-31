@@ -44,7 +44,9 @@ func ValidateDetail(detail *PlanDetail) []string {
 			warnings = append(warnings, "state.json current_slice does not exist in slices.json")
 		case current.Status == StatusCompleted && len(detail.State.Plan.PendingSlices) > 0:
 			warnings = append(warnings, "state.json current_slice references a completed slice while pending_slices is not empty; recovering to first pending slice")
-		case current.Status != StatusPending && current.Status != StatusInProgress:
+		case current.Status == StatusBlocked && !slices.Contains(detail.State.Plan.PendingSlices, current.ID):
+			warnings = append(warnings, fmt.Sprintf("state.json current_slice references blocked slice %s missing from pending_slices", current.ID))
+		case current.Status != StatusPending && current.Status != StatusInProgress && current.Status != StatusBlocked:
 			warnings = append(warnings, fmt.Sprintf("state.json current_slice references %s slice %s", current.Status, current.ID))
 		}
 	}
@@ -154,7 +156,8 @@ func validatePendingOrder(detail *PlanDetail, index detailIndex) []string {
 		if slice == nil {
 			continue
 		}
-		if slice.Status != StatusPending {
+		isCurrentActive := detail.State.Plan.CurrentSlice != nil && id == *detail.State.Plan.CurrentSlice && (slice.Status == StatusInProgress || slice.Status == StatusBlocked)
+		if slice.Status != StatusPending && !isCurrentActive {
 			warnings = append(warnings, fmt.Sprintf("state.json pending_slices references %s slice %s", slice.Status, id))
 		}
 		for _, dependency := range slice.DependsOn {

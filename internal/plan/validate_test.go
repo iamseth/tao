@@ -509,6 +509,84 @@ func TestValidateSelectedSliceVerificationBlocksBlankCommandLists(t *testing.T) 
 	}
 }
 
+func TestValidateDetailAllowsCanonicalCurrentSliceStatuses(t *testing.T) {
+	for _, status := range []string{StatusPending, StatusInProgress, StatusBlocked} {
+		t.Run(status, func(t *testing.T) {
+			current := "001-a"
+			detail := &PlanDetail{
+				State:         State{Plan: PlanState{ID: "plan", CurrentSlice: &current, PendingSlices: []string{current}}},
+				Slices:        SlicesFile{PlanID: "plan", Slices: []Slice{{ID: current, Status: status}}},
+				PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
+			}
+
+			if warnings := ValidateDetail(detail); len(warnings) != 0 {
+				t.Fatalf("expected canonical current %s slice to have no warnings, got %v", status, warnings)
+			}
+		})
+	}
+}
+
+func TestValidateDetailWarnsForBlockedCurrentSliceMissingFromPendingQueue(t *testing.T) {
+	current := "001-a"
+	detail := &PlanDetail{
+		State: State{Plan: PlanState{ID: "plan", CurrentSlice: &current, PendingSlices: []string{"002-b"}}},
+		Slices: SlicesFile{PlanID: "plan", Slices: []Slice{
+			{ID: current, Status: StatusBlocked},
+			{ID: "002-b", Status: StatusPending},
+		}},
+		PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
+	}
+
+	warnings := ValidateDetail(detail)
+	if !containsWarning(warnings, "current_slice references blocked slice 001-a missing from pending_slices") {
+		t.Fatalf("expected missing blocked current slice warning, got %v", warnings)
+	}
+}
+
+func TestValidateDetailWarnsForNonCurrentActivePendingEntries(t *testing.T) {
+	for _, status := range []string{StatusInProgress, StatusBlocked} {
+		t.Run(status, func(t *testing.T) {
+			current := "001-a"
+			detail := &PlanDetail{
+				State: State{Plan: PlanState{ID: "plan", CurrentSlice: &current, PendingSlices: []string{current, "002-b"}}},
+				Slices: SlicesFile{PlanID: "plan", Slices: []Slice{
+					{ID: current, Status: StatusPending},
+					{ID: "002-b", Status: status},
+				}},
+				PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
+			}
+
+			warnings := ValidateDetail(detail)
+			want := "pending_slices references " + status + " slice 002-b"
+			if !containsWarning(warnings, want) {
+				t.Fatalf("expected warning %q, got %v", want, warnings)
+			}
+		})
+	}
+}
+
+func TestValidateDetailStillWarnsForMalformedQueueWithCurrentBlockedSlice(t *testing.T) {
+	current := "001-a"
+	detail := &PlanDetail{
+		State: State{Plan: PlanState{ID: "plan", CurrentSlice: &current, PendingSlices: []string{current, "002-b", "002-b"}}},
+		Slices: SlicesFile{PlanID: "plan", Slices: []Slice{
+			{ID: current, Status: StatusBlocked, DependsOn: []string{"002-b"}},
+			{ID: "002-b", Status: StatusPending},
+		}},
+		PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
+	}
+
+	warnings := ValidateDetail(detail)
+	for _, want := range []string{
+		"pending_slices contains duplicate slice 002-b",
+		"pending_slices orders slice 001-a before dependency 002-b",
+	} {
+		if !containsWarning(warnings, want) {
+			t.Fatalf("expected warning %q, got %v", want, warnings)
+		}
+	}
+}
+
 func TestValidateDetailWarnsForStaleCompletedCurrentSliceRecovery(t *testing.T) {
 	current := "001-a"
 	detail := &PlanDetail{

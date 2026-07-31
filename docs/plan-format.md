@@ -261,7 +261,7 @@ Plan loading should validate consistency without making list views brittle:
 - Invalid plan directories are surfaced as warning summaries in list output.
 - Malformed event lines are preserved as warnings while valid events still load.
 - Completed plans should have no current slice and no pending slices.
-- `plan.pending_slices` should contain each pending ID at most once and should not reference skipped, completed, blocked, or in-progress slices.
+- `plan.pending_slices` should contain each queued ID at most once and should otherwise reference pending slices only. The one narrow exception is the entry matching `plan.current_slice`, which remains queued while that slice is `in_progress` or `blocked`; a blocked current slice missing from a non-empty pending queue is inconsistent.
 - `plan.completed_slices` should reference completed slices only; skipped slices stay out of both pending and completed queues.
 
 Input-readiness errors are limited to malformed plan structure and explicit `required_inputs` facts. Whole-plan validation checks every declaration and permits only the exact direct-producer warning described above. Run preflight checks only the selected runnable slice against its prepared execution worktree; missing, unavailable, or wrong-kind declared inputs block before lifecycle mutation or agent handoff.
