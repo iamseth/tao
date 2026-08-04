@@ -43,20 +43,33 @@ func TestReportStdoutIsPureMarkdownInBothModesAndReadablePhases(t *testing.T) {
 				if err := app.Run(context.Background(), args); err != nil {
 					t.Fatalf("Run(%v) failed: %v", args, err)
 				}
-				if !strings.HasPrefix(out.String(), "# Plan Report\n") || !strings.Contains(out.String(), "- Schema: tao.plan-report.v1") {
-					t.Fatalf("stdout is not a report: %q", out.String())
+				mode := "full"
+				if planningOnly {
+					mode = "planning-only"
+				}
+				report := out.String()
+				if !strings.HasPrefix(report, "---\nschema: tao.plan-report.v1\nmode: "+mode+"\n") ||
+					!strings.Contains(report, "\nplan: Run Plan\nplan-id: ") ||
+					!strings.Contains(report, "\n---\n\n# Run Plan\n") {
+					t.Fatalf("stdout is not a %s report: %q", mode, report)
 				}
 				if errOut.Len() != 0 {
 					t.Fatalf("stdout mode diagnostics = %q", errOut.String())
 				}
 				if planningOnly {
-					for _, forbidden := range []string{"## Execution Summary", "## Review and Outcome", "- Status:"} {
-						if strings.Contains(out.String(), forbidden) {
+					if !strings.Contains(report, "\nstatus: planned\n") {
+						t.Fatal("planning-only report omitted its schema-owned planned status")
+					}
+					for _, forbidden := range []string{"## Implementation", "## Implementation Summary", "## Review and Outcome", "### Slice", "Status:", "Kind:", "Commit:", "Verification:"} {
+						if strings.Contains(report, forbidden) {
 							t.Fatalf("planning-only report contains %q", forbidden)
 						}
 					}
-				} else if !strings.Contains(out.String(), "## Execution Summary") {
-					t.Fatal("full report omitted execution summary")
+					if !strings.Contains(report, "## Planned Slices\n\n- Slice 1: A") {
+						t.Fatal("planning-only report omitted flat planned-slice fields")
+					}
+				} else if !strings.Contains(report, "## Implementation") || !strings.Contains(report, "## Implementation Summary") || !strings.Contains(report, "## Review and Outcome") {
+					t.Fatal("full report omitted implementation or outcome sections")
 				}
 			}
 		})
@@ -102,7 +115,7 @@ func TestReportFileIsExclusiveOwnerOnlyAndForceReplaces(t *testing.T) {
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("forced output mode = %o, want 600", info.Mode().Perm())
 	}
-	if got, _ := os.ReadFile(output); !strings.Contains(string(got), "- Mode: planning-only") { //nolint:gosec // test-owned temporary path
+	if got, _ := os.ReadFile(output); !strings.HasPrefix(string(got), "---\nschema: tao.plan-report.v1\nmode: planning-only\n") { //nolint:gosec // test-owned temporary path
 		t.Fatalf("forced output was not replaced: %q", got)
 	}
 	if !strings.Contains(errOut.String(), "Report written.") {

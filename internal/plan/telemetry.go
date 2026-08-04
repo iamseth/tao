@@ -1,6 +1,8 @@
 package plan
 
 import (
+	"bytes"
+	"encoding/json"
 	"sort"
 	"time"
 )
@@ -34,24 +36,43 @@ func DefaultAgentBudgetThresholds() AgentBudgetThresholds {
 
 // AgentMetrics is the durable metrics payload stored on agent_metrics events.
 type AgentMetrics struct {
-	Agent             string  `json:"agent,omitempty"`
-	SessionID         string  `json:"session_id"`
-	ProviderID        string  `json:"provider_id,omitempty"`
-	ModelID           string  `json:"model_id,omitempty"`
-	Status            string  `json:"status,omitempty"`
-	Result            string  `json:"result,omitempty"`
-	InputTokens       int64   `json:"input_tokens,omitempty"`
-	OutputTokens      int64   `json:"output_tokens,omitempty"`
-	ReasoningTokens   int64   `json:"reasoning_tokens,omitempty"`
-	CacheReadTokens   int64   `json:"cache_read_tokens,omitempty"`
-	CacheWriteTokens  int64   `json:"cache_write_tokens,omitempty"`
-	TotalTokens       int64   `json:"total_tokens,omitempty"`
-	Cost              float64 `json:"cost,omitempty"`
-	TotalMessages     int64   `json:"total_messages,omitempty"`
-	UserMessages      int64   `json:"user_messages,omitempty"`
-	AssistantMessages int64   `json:"assistant_messages,omitempty"`
-	ErroredMessages   int64   `json:"errored_messages,omitempty"`
-	ToolCalls         int64   `json:"tool_calls,omitempty"`
+	Agent              string  `json:"agent,omitempty"`
+	SessionID          string  `json:"session_id"`
+	ProviderID         string  `json:"provider_id,omitempty"`
+	ModelID            string  `json:"model_id,omitempty"`
+	Status             string  `json:"status,omitempty"`
+	Result             string  `json:"result,omitempty"`
+	InputTokens        int64   `json:"input_tokens,omitempty"`
+	OutputTokens       int64   `json:"output_tokens,omitempty"`
+	ReasoningTokens    int64   `json:"reasoning_tokens,omitempty"`
+	CacheReadTokens    int64   `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens   int64   `json:"cache_write_tokens,omitempty"`
+	TotalTokens        int64   `json:"total_tokens,omitempty"`
+	TotalTokensPresent bool    `json:"-"`
+	Cost               float64 `json:"cost,omitempty"`
+	TotalMessages      int64   `json:"total_messages,omitempty"`
+	UserMessages       int64   `json:"user_messages,omitempty"`
+	AssistantMessages  int64   `json:"assistant_messages,omitempty"`
+	ErroredMessages    int64   `json:"errored_messages,omitempty"`
+	ToolCalls          int64   `json:"tool_calls,omitempty"`
+}
+
+// UnmarshalJSON retains whether total_tokens was explicitly recorded, since a
+// measured zero and an omitted measurement have the same Go numeric value.
+func (m *AgentMetrics) UnmarshalJSON(data []byte) error {
+	type plain AgentMetrics
+	var decoded plain
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	*m = AgentMetrics(decoded)
+	value, exists := fields["total_tokens"]
+	m.TotalTokensPresent = exists && !bytes.Equal(bytes.TrimSpace(value), []byte("null"))
+	return nil
 }
 
 type AgentMetricEvent struct {

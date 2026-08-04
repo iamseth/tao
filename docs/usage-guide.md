@@ -682,7 +682,10 @@ Use `tao report` when coworkers with repository access need a readable snapshot
 without access to Tao's private plan directory. Reports are internal,
 access-controlled artifacts, not public exports. A full report summarizes
 planning, slice progress, execution effort, verification, and any review or
-merge outcome that is available in the plan's current phase:
+merge outcome that is available in the plan's current phase. Its top-level
+sections are Planning Context, Implementation, Implementation Summary, Review
+and Outcome, and Redactions and Omissions. Implementation Summary and Review
+and Outcome are separate top-level sections rather than nested sections:
 
 ```sh
 tao report --output plan-report.md <plan-id>
@@ -694,15 +697,22 @@ For a lighter planning record, explicitly choose a repository prompt path:
 tao report --planning-only --output prompts/my-plan.md <plan-id>
 ```
 
-Planning-only output is synthesized and non-verbatim: it is not retained prompt
-text, and it structurally excludes execution, review, rework, event, and
-telemetry history. Both modes render a sanitized allowlist rather than copying
-raw plan artifacts. Ordinary URLs and filesystem paths remain useful context for
-repository-authorized coworkers; credentials, credential-bearing URLs, and
-common personal identifiers are redacted. Even so, treat the file as a sharing
-draft and review it for the appropriate internal audience and context before
-sending it. Use `--output -` for a pure Markdown stdout stream; an existing file
-requires the explicit `--force` flag.
+Planning-only output is synthesized and non-verbatim. It contains planning
+context and original planned slices, but no slice execution information: no
+statuses, rework, durations, verification, commits, execution telemetry, reviews,
+or outcomes. Valid aggregate planning effort can appear only for legacy plans
+that already contain planning-session statistics. Tao does not restore or create
+planning-session capture, so do not expect newly created plans to have planning
+token metrics.
+
+Both modes render a sanitized allowlist rather than copying raw plan artifacts.
+Ordinary URLs and filesystem paths remain useful context for repository-authorized
+coworkers; credentials, credential-bearing URLs, and common personal identifiers
+are redacted. Even so, treat the file as a sharing draft and review it for the
+appropriate internal audience and context before sending it. Use `--output -`
+for a pure Markdown stdout stream; an existing file requires the explicit
+`--force` flag. See the [plan report format](plan-report.md) for the detailed v1
+layout, missing-value semantics, and safety contract.
 
 Writing under the repository, including `prompts/`, dirties that checkout. Tao
 creates only the requested report file and never stages or commits it. If a

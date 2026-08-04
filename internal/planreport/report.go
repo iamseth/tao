@@ -38,6 +38,15 @@ type PlanningContext struct {
 	Questions   []SafeText
 }
 
+// PlanningEffortSummary contains only valid aggregate legacy planning metrics.
+// It deliberately excludes prompt, agent, provider, model, and session data.
+type PlanningEffortSummary struct {
+	Available     bool
+	Duration      DurationSummary
+	TotalTokens   OptionalInt64
+	TotalMessages OptionalInt64
+}
+
 // PlannedSlice contains only immutable planning inputs. In particular, it has
 // no lifecycle, verification, timing, result, telemetry, or attribution field.
 type PlannedSlice struct {
@@ -50,15 +59,16 @@ type PlannedSlice struct {
 // PlanningOnlyReport is deliberately a separate production type, rather than a
 // filtered FullReport, so execution-derived data cannot enter this mode.
 type PlanningOnlyReport struct {
-	Schema      string
-	Mode        Mode
-	SnapshotAt  time.Time
-	PlanID      SafeText
-	Title       SafeText
-	Synthesized bool
-	Planning    PlanningContext
-	Slices      []PlannedSlice
-	Disclosures []Disclosure
+	Schema         string
+	Mode           Mode
+	SnapshotAt     time.Time
+	PlanID         SafeText
+	Title          SafeText
+	Synthesized    bool
+	Planning       PlanningContext
+	PlanningEffort PlanningEffortSummary
+	Slices         []PlannedSlice
+	Disclosures    []Disclosure
 }
 
 type CountSummary struct {
@@ -79,6 +89,15 @@ type SliceReport struct {
 	Rework       bool
 	Duration     DurationSummary
 	Verification CountSummary
+	TotalTokens  OptionalInt64
+	Commit       SliceCommitSummary
+}
+
+// SliceCommitSummary distinguishes created commits from other completion
+// outcomes. SHA is populated only for a valid committed outcome.
+type SliceCommitSummary struct {
+	Outcome string
+	SHA     OptionalText
 }
 
 type FinalVerificationSummary struct {
@@ -136,18 +155,19 @@ type ExecutionSummary struct {
 }
 
 type FullReport struct {
-	Schema      string
-	Mode        Mode
-	SnapshotAt  time.Time
-	PlanID      SafeText
-	Title       SafeText
-	Status      string
-	Planning    PlanningContext
-	Slices      []SliceReport
-	Execution   ExecutionSummary
-	Review      ReviewSummary
-	Outcome     OutcomeSummary
-	Disclosures []Disclosure
+	Schema         string
+	Mode           Mode
+	SnapshotAt     time.Time
+	PlanID         SafeText
+	Title          SafeText
+	Status         string
+	Planning       PlanningContext
+	PlanningEffort PlanningEffortSummary
+	Slices         []SliceReport
+	Execution      ExecutionSummary
+	Review         ReviewSummary
+	Outcome        OutcomeSummary
+	Disclosures    []Disclosure
 }
 
 func ProjectPlanningOnly(detail *plan.PlanDetail, snapshotAt time.Time) PlanningOnlyReport {
@@ -160,6 +180,7 @@ func ProjectPlanningOnly(detail *plan.PlanDetail, snapshotAt time.Time) Planning
 	report.PlanID = s.Sanitize(sectionIdentity, detail.State.Plan.ID)
 	report.Title = s.Sanitize(sectionIdentity, detail.State.Plan.Title)
 	report.Planning = projectPlanning(s, detail)
+	report.PlanningEffort = projectPlanningEffort(detail)
 	for _, source := range detail.Slices.Slices {
 		if plan.IsReworkSliceID(source.ID) {
 			continue
@@ -182,8 +203,9 @@ func ProjectFull(detail *plan.PlanDetail, snapshotAt time.Time) FullReport {
 	lifecycleStatus := plan.PlanLifecycleStatus(detail)
 	report.Status = knownStatus(lifecycleStatus)
 	report.Planning = projectPlanning(s, detail)
+	report.PlanningEffort = projectPlanningEffort(detail)
 	for _, source := range detail.Slices.Slices {
-		report.Slices = append(report.Slices, projectFullSlice(s, source, detail.Slices.Slices, snapshotAt))
+		report.Slices = append(report.Slices, projectFullSlice(s, source, detail.Slices.Slices, detail.Events, snapshotAt))
 	}
 	derived := plan.Derive(detail, snapshotAt)
 	report.Execution = ExecutionSummary{
@@ -244,9 +266,71 @@ func projectPlannedSlice(s *Sanitizer, source plan.Slice, all []plan.Slice) Plan
 	return out
 }
 
-func projectFullSlice(s *Sanitizer, source plan.Slice, all []plan.Slice, now time.Time) SliceReport {
+func projectFullSlice(s *Sanitizer, source plan.Slice, all []plan.Slice, events []plan.Event, now time.Time) SliceReport {
 	planned := projectPlannedSlice(s, source, all)
-	return SliceReport{Title: planned.Title, Goal: planned.Goal, Rationale: planned.Rationale, Dependencies: planned.Dependencies, Status: knownStatus(source.Status), Rework: plan.IsReworkSliceID(source.ID), Duration: sliceDuration(source, now), Verification: verificationCount(source.VerificationResults)}
+	return SliceReport{
+		Title: planned.Title, Goal: planned.Goal, Rationale: planned.Rationale, Dependencies: planned.Dependencies,
+		Status: knownStatus(source.Status), Rework: plan.IsReworkSliceID(source.ID), Duration: sliceDuration(source, now),
+		Verification: verificationCount(source.VerificationResults), TotalTokens: sliceTotalTokens(source.ID, events),
+		Commit: projectSliceCommit(s, source),
+	}
+}
+
+func projectPlanningEffort(detail *plan.PlanDetail) PlanningEffortSummary {
+	summary := plan.SummarizePlanningSessionMetrics(detail.PlanningSession.Stats, detail.State.CreatedAt)
+	if !summary.Valid {
+		return PlanningEffortSummary{}
+	}
+	out := PlanningEffortSummary{Available: true, Duration: durationFrom(summary.Duration, true)}
+	addMetric(&out.TotalTokens, summary.TotalTokens)
+	addMetric(&out.TotalMessages, summary.TotalMessages)
+	return out
+}
+
+func sliceTotalTokens(sliceID string, events []plan.Event) OptionalInt64 {
+	var out OptionalInt64
+	for _, event := range plan.AgentMetricsEvents(events) {
+		if event.SliceID == sliceID && event.Metrics.TotalTokens >= 0 && (event.Metrics.TotalTokensPresent || event.Metrics.TotalTokens > 0) {
+			out.Available = true
+			out.Value += event.Metrics.TotalTokens
+		}
+	}
+	return out
+}
+
+func projectSliceCommit(s *Sanitizer, source plan.Slice) SliceCommitSummary {
+	if source.Completion == nil {
+		if source.Status == plan.StatusCompleted {
+			return SliceCommitSummary{Outcome: "legacy"}
+		}
+		return SliceCommitSummary{Outcome: "not_recorded"}
+	}
+	out := SliceCommitSummary{Outcome: source.Completion.Outcome}
+	switch source.Completion.Outcome {
+	case plan.SliceCompletionCommitted:
+		if sha := abbreviatedCommitSHA(source.Completion.CommitSHA); sha != "" {
+			out.SHA = optional(s, sectionSlices, sha)
+		}
+	case plan.SliceCompletionNoChanges, plan.SliceCompletionManualUncommitted:
+		// These outcomes did not create a slice commit, even if malformed legacy
+		// metadata happens to contain a SHA.
+	default:
+		out.Outcome = "unknown"
+	}
+	return out
+}
+
+func abbreviatedCommitSHA(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) < 7 || len(value) > 64 {
+		return ""
+	}
+	for _, r := range value {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
+			return ""
+		}
+	}
+	return value[:7]
 }
 
 // Dependencies are IDs in the artifact. This helper exists to make the

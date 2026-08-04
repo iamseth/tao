@@ -1,6 +1,7 @@
 package planreport
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -101,6 +102,124 @@ func TestProjectFullSummarizesWithoutRawExecutionEvidence(t *testing.T) {
 	}
 }
 
+func TestProjectFullAttributesSliceTokensByExactID(t *testing.T) {
+	now := time.Date(2026, 8, 4, 15, 0, 0, 0, time.UTC)
+	detail := reportFixture(now)
+	detail.Events = []plan.Event{
+		{Type: plan.EventTypeAgentMetrics, SliceID: "001-build", Metrics: &plan.AgentMetrics{Status: plan.StatusCompleted, TotalTokens: 10}},
+		{Type: plan.EventTypeAgentMetrics, SliceID: "001-build", Metrics: &plan.AgentMetrics{Result: "failed", TotalTokens: 25}},
+		{Type: plan.EventTypeAgentMetrics, SliceID: "001-build", Metrics: &plan.AgentMetrics{Status: plan.StatusCompleted}},
+		{Type: plan.EventTypeAgentMetrics, SliceID: "001-build-extra", Metrics: &plan.AgentMetrics{TotalTokens: 1000}},
+		{Type: plan.EventTypeAgentMetrics, SliceID: "unknown", Metrics: &plan.AgentMetrics{TotalTokens: 2000}},
+	}
+
+	got := ProjectFull(detail, now)
+	if got.Slices[0].TotalTokens != (OptionalInt64{Available: true, Value: 35}) {
+		t.Fatalf("first slice tokens = %+v, want measured total 35", got.Slices[0].TotalTokens)
+	}
+	if got.Slices[1].TotalTokens.Available || got.Slices[1].TotalTokens.Value != 0 {
+		t.Fatalf("missing slice tokens presented as measured: %+v", got.Slices[1].TotalTokens)
+	}
+}
+
+func TestProjectFullDistinguishesRecordedZeroTokensFromOmitted(t *testing.T) {
+	now := time.Date(2026, 8, 4, 15, 0, 0, 0, time.UTC)
+	detail := reportFixture(now)
+	if err := json.Unmarshal([]byte(`[
+		{"type":"agent_metrics","slice_id":"001-build","metrics":{"total_tokens":0}},
+		{"type":"agent_metrics","slice_id":"002-ship","metrics":{}}
+	]`), &detail.Events); err != nil {
+		t.Fatal(err)
+	}
+
+	got := ProjectFull(detail, now)
+	if got.Slices[0].TotalTokens != (OptionalInt64{Available: true, Value: 0}) {
+		t.Fatalf("recorded zero tokens = %+v, want available zero", got.Slices[0].TotalTokens)
+	}
+	if got.Slices[1].TotalTokens.Available {
+		t.Fatalf("omitted tokens = %+v, want unavailable", got.Slices[1].TotalTokens)
+	}
+}
+
+func TestProjectFullProjectsOnlyCreatedSliceCommits(t *testing.T) {
+	now := time.Date(2026, 8, 4, 15, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name        string
+		status      string
+		completion  *plan.SliceCompletionOutcome
+		wantOutcome string
+		wantSHA     string
+	}{
+		{name: "committed", status: plan.StatusCompleted, completion: &plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionCommitted, CommitSHA: "abcdef1234567890abcdef1234567890abcdef12"}, wantOutcome: plan.SliceCompletionCommitted, wantSHA: "abcdef1"},
+		{name: "committed missing sha", status: plan.StatusCompleted, completion: &plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionCommitted}, wantOutcome: plan.SliceCompletionCommitted},
+		{name: "no changes", status: plan.StatusCompleted, completion: &plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionNoChanges, CommitSHA: "abcdef1234567890"}, wantOutcome: plan.SliceCompletionNoChanges},
+		{name: "manual", status: plan.StatusCompleted, completion: &plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionManualUncommitted, CommitSHA: "abcdef1234567890"}, wantOutcome: plan.SliceCompletionManualUncommitted},
+		{name: "legacy completed", status: plan.StatusCompleted, wantOutcome: "legacy"},
+		{name: "not completed", status: plan.StatusPending, wantOutcome: "not_recorded"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			detail := reportFixture(now)
+			detail.Slices.Slices[0].Status = tc.status
+			detail.Slices.Slices[0].Completion = tc.completion
+			got := ProjectFull(detail, now).Slices[0].Commit
+			if got.Outcome != tc.wantOutcome || got.SHA.Text.text != tc.wantSHA || got.SHA.Available != (tc.wantSHA != "") {
+				t.Fatalf("commit projection = %+v, want outcome %q sha %q", got, tc.wantOutcome, tc.wantSHA)
+			}
+		})
+	}
+}
+
+func TestPlanningEffortUsesOnlyValidLegacySummary(t *testing.T) {
+	now := time.Date(2026, 8, 4, 15, 0, 0, 0, time.UTC)
+	started := now.Add(-95 * time.Second)
+	detail := reportFixture(now)
+	detail.State.CreatedAt = now
+	detail.PlanningSession.Stats = &plan.PlanningSessionStats{
+		Agent: "private-agent", SessionID: "private-session", ProviderID: "private-provider", ModelID: "private-model",
+		PlanningStartedAt: &started, TotalTokens: 321, TotalMessages: 7,
+	}
+
+	planning := ProjectPlanningOnly(detail, now)
+	full := ProjectFull(detail, now)
+	want := PlanningEffortSummary{
+		Available: true, Duration: DurationSummary{Available: true, Seconds: 95},
+		TotalTokens: OptionalInt64{Available: true, Value: 321}, TotalMessages: OptionalInt64{Available: true, Value: 7},
+	}
+	if planning.PlanningEffort != want || full.PlanningEffort != want {
+		t.Fatalf("planning effort = planning %+v full %+v, want %+v", planning.PlanningEffort, full.PlanningEffort, want)
+	}
+	if got := collectSafeText(planning); strings.Contains(got, "private-") {
+		t.Fatalf("planning identity entered projection: %q", got)
+	}
+
+	detail.PlanningSession.Stats.CaptureSuspect = true
+	if got := ProjectPlanningOnly(detail, now).PlanningEffort; got.Available {
+		t.Fatalf("invalid planning stats projected: %+v", got)
+	}
+	detail.PlanningSession.Stats = nil
+	if got := ProjectPlanningOnly(detail, now).PlanningEffort; got.Available {
+		t.Fatalf("absent planning stats projected: %+v", got)
+	}
+}
+
+func TestPlanningOnlyProductionTypesExcludeExecutionFields(t *testing.T) {
+	for _, tc := range []struct {
+		typeOf    reflect.Type
+		forbidden []string
+	}{
+		{reflect.TypeOf(PlanningOnlyReport{}), []string{"Status", "Execution", "Review", "Outcome", "Telemetry", "Verification", "Commit"}},
+		{reflect.TypeOf(PlannedSlice{}), []string{"Status", "Rework", "Duration", "Verification", "Commit", "TotalTokens", "Completion", "Timing"}},
+		{reflect.TypeOf(PlanningEffortSummary{}), []string{"Agent", "Provider", "Model", "Session", "Prompt", "Cost", "ToolCalls"}},
+	} {
+		for _, name := range tc.forbidden {
+			if _, ok := tc.typeOf.FieldByName(name); ok {
+				t.Errorf("%s unexpectedly contains forbidden field %s", tc.typeOf.Name(), name)
+			}
+		}
+	}
+}
+
 func TestPlanIdentifierPreservedThroughProjectionAndRendering(t *testing.T) {
 	now := time.Date(2026, 8, 4, 15, 0, 0, 0, time.UTC)
 	detail := reportFixture(now)
@@ -114,7 +233,7 @@ func TestPlanIdentifierPreservedThroughProjectionAndRendering(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(markdown), "- Plan identifier: "+detail.State.Plan.ID+"\n") {
+	if !strings.Contains(string(markdown), "plan-id: "+detail.State.Plan.ID+"\n") {
 		t.Fatalf("rendered report did not preserve plan ID:\n%s", markdown)
 	}
 }
@@ -149,6 +268,11 @@ func TestPlanningOnlyProjectionIsPhaseIndependent(t *testing.T) {
 	now := time.Date(2026, 8, 4, 15, 0, 0, 0, time.UTC)
 	planned := reportFixture(now)
 	completed := reportFixture(now)
+	planningStarted := now.Add(-2 * time.Minute)
+	for _, detail := range []*plan.PlanDetail{planned, completed} {
+		detail.State.CreatedAt = now
+		detail.PlanningSession.Stats = &plan.PlanningSessionStats{PlanningStartedAt: &planningStarted, TotalTokens: 55, TotalMessages: 4}
+	}
 	completed.State.Status = plan.StatusCompleted
 	completed.State.UpdatedAt = now.Add(8 * time.Hour)
 	completed.State.Plan.PendingSlices = nil

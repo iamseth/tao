@@ -199,13 +199,16 @@ tao workspace clean [--force] [--force-active] [--force-dirty] <plan-id-or-slug-
 
 `tao init` registers the checkout in Tao's local repository catalog. `tao report`
 exports a sanitized Markdown snapshot for access-controlled sharing with coworkers
-who have repository access: the default is a full lifecycle report, while
-`--planning-only` writes a synthesized, non-verbatim planning record without
-execution or review history. Ordinary repository URLs and filesystem paths are
+who have repository access: the default is a full lifecycle report organized as
+Planning Context, Implementation, Implementation Summary, Review and Outcome,
+and Redactions and Omissions, while `--planning-only` writes a synthesized,
+non-verbatim planning record with no slice
+execution information. Ordinary repository URLs and filesystem paths are
 preserved; credentials, credential-bearing URLs, and common personal identifiers
 are redacted. Choose an explicit destination such as `--output prompts/my-plan.md`
 (or `--output -` for stdout), and review the result before sharing. Tao never
-stages or commits report output.
+stages or commits report output. See the [plan report format](docs/plan-report.md)
+for the detailed v1 layout and safety contract.
 
 `tao review` shows the persisted post-completion LLM review; add `--run` to refresh it against
 the current `base..HEAD` diff. `tao staleness` is the renamed base-commit check:
