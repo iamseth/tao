@@ -77,13 +77,7 @@ func registerNoteFlags(fs *flag.FlagSet) {
 	fs.Bool("all", false, "include all note statuses")
 	fs.Int("limit", defaultNoteListLimit, "maximum notes to list (0 means unlimited)")
 	fs.String("reason", "", "archive reason")
-	defaults := runtimeFlagDefaults()
-	fs.Int("max-slices", 0, "maximum slices to run; use 0 for all")
-	fs.String("commit-policy", defaults.CommitPolicy.String(), "automatic commit policy: slice or none")
-	fs.String("execution-mode", defaults.ExecutionModeValue().String(), "execution mode: isolated or current")
-	fs.Bool("pull-request", defaults.PullRequestValue(), "create a GitHub pull request after a completed full run")
-	fs.Bool("dangerously-skip-permissions", defaults.SkipPermissions, "legacy no-op for the Pi agent")
-	fs.Bool("no-review", !defaults.ReviewEnabledValue(), "disable automatic plan review for this run")
+	registerRunRequestFlags(fs)
 }
 
 func (a App) note(ctx context.Context, args []string) error {
@@ -256,55 +250,7 @@ func (a App) noteRepository(repo taodata.Repo) NoteRepository {
 }
 
 func (a App) resolveNoteRepo(ctx context.Context, selector string) (taodata.Repo, error) {
-	registry := a.registry()
-	if selector == "" {
-		current, err := registry.Current(ctx)
-		if err != nil {
-			return taodata.Repo{}, fmt.Errorf("resolve current repository (run tao init first): %w", err)
-		}
-		registered, err := registry.ReadRepo(current.ID)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return taodata.Repo{}, errors.New("current repository is not registered; run tao init first")
-			}
-			return taodata.Repo{}, fmt.Errorf("read registered repository: %w", err)
-		}
-		return registered, nil
-	}
-	repos, err := registry.ListRepos()
-	if err != nil {
-		return taodata.Repo{}, err
-	}
-	var idMatches, nameMatches []taodata.Repo
-	for _, repo := range repos {
-		if strings.HasPrefix(repo.ID, selector) {
-			idMatches = append(idMatches, repo)
-		}
-		if repo.Name == selector {
-			nameMatches = append(nameMatches, repo)
-		}
-	}
-	if len(idMatches) == 1 {
-		return idMatches[0], nil
-	}
-	if len(idMatches) > 1 {
-		return taodata.Repo{}, ambiguousRepoError(selector, idMatches)
-	}
-	if len(nameMatches) == 1 {
-		return nameMatches[0], nil
-	}
-	if len(nameMatches) > 1 {
-		return taodata.Repo{}, ambiguousRepoError(selector, nameMatches)
-	}
-	return taodata.Repo{}, fmt.Errorf("repository %q is not registered; run tao init in that checkout", selector)
-}
-
-func ambiguousRepoError(selector string, repos []taodata.Repo) error {
-	ids := make([]string, 0, len(repos))
-	for _, repo := range repos {
-		ids = append(ids, repo.ID)
-	}
-	return fmt.Errorf("repository %q is ambiguous; use one of these IDs: %s", selector, strings.Join(ids, ", "))
+	return taodata.ResolveRepo(ctx, a.registry(), selector)
 }
 
 func (a App) noteCreate(ctx context.Context, repo NoteRepository, fs *flag.FlagSet, args []string) error {
@@ -483,6 +429,67 @@ func (a App) noteReopen(ctx context.Context, repo NoteRepository, args []string)
 	return writef(a.Out, "Reopened note %s\n", updated.ID)
 }
 
+// notePromotion describes the destination-specific pieces of the shared
+// locked open-note promotion protocol.
+type notePromotion struct {
+	// owner labels the promotion lock owner, such as "note plan".
+	owner string
+	// purpose labels lock and re-read errors, such as "planning".
+	purpose string
+	// alreadyPromoted renders the terminal already-promoted outcome.
+	alreadyPromoted func(item note.Note) error
+	// notOpen rejects a note that is neither open nor promoted.
+	notOpen func(item note.Note) error
+	// promote creates the destination and links the still-locked note. The
+	// returned destination and recovery strings name the created destination
+	// and how to recover it if the lock release fails afterward.
+	promote func(ctx context.Context, item note.Note) (promoted note.Note, destination string, recovery string, err error)
+}
+
+// promoteOpenNote owns the serialized open-note promotion protocol shared by
+// tao note plan and tao note run: gate on status, lock, re-read under the
+// lock, re-gate, promote, release. It returns false without error when the
+// note was already promoted and that outcome has been rendered.
+func (a App) promoteOpenNote(ctx context.Context, registered taodata.Repo, repo NoteRepository, item note.Note, p notePromotion) (note.Note, bool, error) {
+	if item.Status == note.StatusPromoted {
+		return note.Note{}, false, p.alreadyPromoted(item)
+	}
+	if item.Status != note.StatusOpen {
+		return note.Note{}, false, p.notOpen(item)
+	}
+	release, err := a.acquireNotePromotionLock(ctx, a.registry().NotesDir(registered), item.ID, p.owner)
+	if err != nil {
+		return note.Note{}, false, fmt.Errorf("lock note %s for %s: %w", item.ID, p.purpose, err)
+	}
+	locked := true
+	defer func() {
+		if locked {
+			_ = release()
+		}
+	}()
+
+	item, err = repo.Get(ctx, item.ID)
+	if err != nil {
+		return note.Note{}, false, fmt.Errorf("re-read note for %s: %w", p.purpose, err)
+	}
+	if item.Status == note.StatusPromoted {
+		return note.Note{}, false, p.alreadyPromoted(item)
+	}
+	if item.Status != note.StatusOpen {
+		return note.Note{}, false, p.notOpen(item)
+	}
+
+	promoted, destination, recovery, err := p.promote(ctx, item)
+	if err != nil {
+		return note.Note{}, false, err
+	}
+	if err := release(); err != nil {
+		return note.Note{}, false, fmt.Errorf("note %s was linked to %s, but its promotion lock could not be released: %w; recover with %s", promoted.ID, destination, err, recovery)
+	}
+	locked = false
+	return promoted, true, nil
+}
+
 func (a App) notePlan(ctx context.Context, registered taodata.Repo, repo NoteRepository, args []string) error {
 	if len(args) != 1 {
 		return errors.New("usage: tao note plan <note-id> [--repo REPO]")
@@ -494,58 +501,40 @@ func (a App) notePlan(ctx context.Context, registered taodata.Repo, repo NoteRep
 	if err != nil {
 		return fmt.Errorf("plan note: %w", err)
 	}
-	if item.Status == note.StatusPromoted {
-		return a.printPlanningDestination(item, true)
-	}
-	if item.Status != note.StatusOpen {
-		return fmt.Errorf("note %s is %s; only open notes can be planned", item.ID, item.Status)
-	}
-	release, err := a.acquireNotePromotionLock(ctx, a.registry().NotesDir(registered), item.ID, "note plan")
-	if err != nil {
-		return fmt.Errorf("lock note %s for planning: %w", item.ID, err)
-	}
-	locked := true
-	defer func() {
-		if locked {
-			_ = release()
-		}
-	}()
-
-	item, err = repo.Get(ctx, item.ID)
-	if err != nil {
-		return fmt.Errorf("re-read note for planning: %w", err)
-	}
-	if item.Status == note.StatusPromoted {
-		return a.printPlanningDestination(item, true)
-	}
-	if item.Status != note.StatusOpen {
-		return fmt.Errorf("note %s is %s; only open notes can be planned", item.ID, item.Status)
-	}
-
-	capturedAt := a.now().UTC()
-	session, err := a.planningRepository().CreateSession(ctx, planning.CreateRequest{
-		RepoID:        registered.ID,
-		Title:         notePlanningTitle(item.Text),
-		InitialPrompt: item.Text,
-		Source: &planning.SourceEnvelope{Type: "note", Note: &planning.SourceNoteSnapshot{
-			ID: item.ID, Text: item.Text, Tags: item.Tags, RepoID: registered.ID, RepoName: registered.Name, CapturedAt: capturedAt,
-		}},
+	promoted, ok, err := a.promoteOpenNote(ctx, registered, repo, item, notePromotion{
+		owner:           "note plan",
+		purpose:         "planning",
+		alreadyPromoted: func(item note.Note) error { return a.printPlanningDestination(item, true) },
+		notOpen: func(item note.Note) error {
+			return fmt.Errorf("note %s is %s; only open notes can be planned", item.ID, item.Status)
+		},
+		promote: func(ctx context.Context, item note.Note) (note.Note, string, string, error) {
+			capturedAt := a.now().UTC()
+			session, err := a.planningRepository().CreateSession(ctx, planning.CreateRequest{
+				RepoID:        registered.ID,
+				Title:         notePlanningTitle(item.Text),
+				InitialPrompt: item.Text,
+				Source: &planning.SourceEnvelope{Type: "note", Note: &planning.SourceNoteSnapshot{
+					ID: item.ID, Text: item.Text, Tags: item.Tags, RepoID: registered.ID, RepoName: registered.Name, CapturedAt: capturedAt,
+				}},
+			})
+			if err != nil {
+				return note.Note{}, "", "", fmt.Errorf("create planning session for note %s: %w", item.ID, err)
+			}
+			if session == nil || strings.TrimSpace(session.ID) == "" || strings.TrimSpace(session.Repo.ID) == "" {
+				return note.Note{}, "", "", fmt.Errorf("create planning session for note %s: repository returned an invalid session", item.ID)
+			}
+			qualifiedID := planning.QualifyID(session.Repo.ID, session.ID)
+			promoted, err := repo.PromoteToPlanning(ctx, item.ID, note.PlanningSessionLink{ID: qualifiedID})
+			if err != nil {
+				return note.Note{}, "", "", fmt.Errorf("planning session %s was created, but note %s could not be linked: %w; recover with session %s", qualifiedID, item.ID, err, qualifiedID)
+			}
+			return promoted, "planning session " + qualifiedID, "session " + qualifiedID, nil
+		},
 	})
-	if err != nil {
-		return fmt.Errorf("create planning session for note %s: %w", item.ID, err)
+	if !ok || err != nil {
+		return err
 	}
-	if session == nil || strings.TrimSpace(session.ID) == "" || strings.TrimSpace(session.Repo.ID) == "" {
-		return fmt.Errorf("create planning session for note %s: repository returned an invalid session", item.ID)
-	}
-	qualifiedID := planning.QualifyID(session.Repo.ID, session.ID)
-	promoted, err := repo.PromoteToPlanning(ctx, item.ID, note.PlanningSessionLink{ID: qualifiedID})
-	if err != nil {
-		return fmt.Errorf("planning session %s was created, but note %s could not be linked: %w; recover with session %s", qualifiedID, item.ID, err, qualifiedID)
-	}
-	if err := release(); err != nil {
-		return fmt.Errorf("note %s was linked to planning session %s, but its promotion lock could not be released: %w; recover with session %s", promoted.ID, qualifiedID, err, qualifiedID)
-	}
-	locked = false
 	return a.printPlanningDestination(promoted, false)
 }
 
@@ -553,23 +542,16 @@ func (a App) noteRun(ctx context.Context, registered taodata.Repo, repo NoteRepo
 	if len(args) != 1 {
 		return errors.New("usage: tao note run <note-id> [--repo REPO] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--no-review] [--dangerously-skip-permissions]")
 	}
-	defaults, err := cliEnvDefaults()
+	inputs, err := resolveRunRequestFlags(fs)
 	if err != nil {
 		return err
 	}
-	overrides := runRequestOverridesFromFlags(fs, runFlagValues{
-		MaxSlices:     flagIntValue(fs, "max-slices"),
-		CommitPolicy:  runtimeconfig.CommitPolicy(flagStringValue(fs, "commit-policy")),
-		ExecutionMode: runtimeconfig.ExecutionMode(flagStringValue(fs, "execution-mode")),
-		PullRequest:   flagBoolValue(fs, "pull-request"),
-		NoReview:      flagBoolValue(fs, "no-review"),
-	})
 	// Resolve every run option before allocating a plan or invoking the planner.
-	request, err := defaults.newRunRequest("pending-note-plan", overrides)
+	request, err := inputs.defaults.newRunRequest("pending-note-plan", inputs.overrides)
 	if err != nil {
 		return err
 	}
-	skipPermissions := effectiveBoolFlagValue(fs, "dangerously-skip-permissions", defaults.SkipPermissions)
+	skipPermissions := inputs.skipPermissions
 	if err := a.requireHealthyNoteRepository(ctx, registered); err != nil {
 		return err
 	}
@@ -578,68 +560,52 @@ func (a App) noteRun(ctx context.Context, registered taodata.Repo, repo NoteRepo
 	if err != nil {
 		return fmt.Errorf("run note: %w", err)
 	}
-	if item.Status == note.StatusPromoted {
-		return a.printExistingNotePromotion(item)
-	}
-	if item.Status != note.StatusOpen {
-		return fmt.Errorf("note %s is %s; reopen it before running", item.ID, item.Status)
-	}
-	release, err := a.acquireNotePromotionLock(ctx, a.registry().NotesDir(registered), item.ID, "note run")
-	if err != nil {
-		return fmt.Errorf("lock note %s for direct planning: %w", item.ID, err)
-	}
-	locked := true
-	defer func() {
-		if locked {
-			_ = release()
-		}
-	}()
-	item, err = repo.Get(ctx, item.ID)
-	if err != nil {
-		return fmt.Errorf("re-read note for direct planning: %w", err)
-	}
-	if item.Status == note.StatusPromoted {
-		return a.printExistingNotePromotion(item)
-	}
-	if item.Status != note.StatusOpen {
-		return fmt.Errorf("note %s is %s; reopen it before running", item.ID, item.Status)
-	}
-
-	now := a.now().UTC()
-	source := &planning.SourceEnvelope{Type: "note", Note: &planning.SourceNoteSnapshot{
-		ID: item.ID, Text: item.Text, Tags: item.Tags, RepoID: registered.ID, RepoName: registered.Name, CapturedAt: now,
-	}}
-	session, err := planning.NewSession("note-"+item.ID, notePlanningTitle(item.Text), item.Text, registered, source, now)
-	if err != nil {
-		return fmt.Errorf("prepare planning session for note %s: %w", item.ID, err)
-	}
-	mode := agent.PermissionModeAuto
-	if skipPermissions {
-		mode = agent.PermissionModeBypassPermissions
-	}
-	generationCtx, stopSignals := newCommandSignalContext(ctx)
-	generated, err := a.planGenerator(defaults.Agent).GeneratePlan(generationCtx, planning.GeneratePlanRequest{
-		Session: session, PermissionMode: mode, Timeout: request.SessionTimeout, RejectOpenQuestions: true,
+	var generated *planning.GeneratePlanResult
+	promoted, ok, err := a.promoteOpenNote(ctx, registered, repo, item, notePromotion{
+		owner:           "note run",
+		purpose:         "direct planning",
+		alreadyPromoted: a.printExistingNotePromotion,
+		notOpen: func(item note.Note) error {
+			return fmt.Errorf("note %s is %s; reopen it before running", item.ID, item.Status)
+		},
+		promote: func(ctx context.Context, item note.Note) (note.Note, string, string, error) {
+			now := a.now().UTC()
+			source := &planning.SourceEnvelope{Type: "note", Note: &planning.SourceNoteSnapshot{
+				ID: item.ID, Text: item.Text, Tags: item.Tags, RepoID: registered.ID, RepoName: registered.Name, CapturedAt: now,
+			}}
+			session, err := planning.NewSession("note-"+item.ID, notePlanningTitle(item.Text), item.Text, registered, source, now)
+			if err != nil {
+				return note.Note{}, "", "", fmt.Errorf("prepare planning session for note %s: %w", item.ID, err)
+			}
+			mode := agent.PermissionModeAuto
+			if skipPermissions {
+				mode = agent.PermissionModeBypassPermissions
+			}
+			generationCtx, stopSignals := newCommandSignalContext(ctx)
+			generated, err = a.planGenerator(inputs.defaults.Agent).GeneratePlan(generationCtx, planning.GeneratePlanRequest{
+				Session: session, PermissionMode: mode, Timeout: request.SessionTimeout, RejectOpenQuestions: true,
+			})
+			stopSignals()
+			if err != nil {
+				a.printGenerationWarnings(err)
+				return note.Note{}, "", "", fmt.Errorf("could not generate a runnable plan for note %s: %w\nUse tao note plan %s for supervised clarification", item.ID, err, item.ID)
+			}
+			if generated == nil {
+				return note.Note{}, "", "", fmt.Errorf("could not generate a runnable plan for note %s: generator returned no plan\nUse tao note plan %s for supervised clarification", item.ID, item.ID)
+			}
+			promoted, err := repo.PromoteToPlan(ctx, item.ID, note.PlanLink{ID: generated.Allocation.ID, Dir: generated.Allocation.Dir, Mode: "run"})
+			if err != nil {
+				return note.Note{}, "", "", fmt.Errorf("plan %s was created at %s, but note %s could not be linked: %w; recover with tao run %s", generated.Allocation.ID, generated.Allocation.Dir, item.ID, err, generated.Allocation.ID)
+			}
+			if err := a.printValidationWarnings(generated.Validation); err != nil {
+				return note.Note{}, "", "", err
+			}
+			return promoted, "plan " + generated.Allocation.ID, "tao run " + generated.Allocation.ID, nil
+		},
 	})
-	stopSignals()
-	if err != nil {
-		a.printGenerationWarnings(err)
-		return fmt.Errorf("could not generate a runnable plan for note %s: %w\nUse tao note plan %s for supervised clarification", item.ID, err, item.ID)
-	}
-	if generated == nil {
-		return fmt.Errorf("could not generate a runnable plan for note %s: generator returned no plan\nUse tao note plan %s for supervised clarification", item.ID, item.ID)
-	}
-	promoted, err := repo.PromoteToPlan(ctx, item.ID, note.PlanLink{ID: generated.Allocation.ID, Dir: generated.Allocation.Dir, Mode: "run"})
-	if err != nil {
-		return fmt.Errorf("plan %s was created at %s, but note %s could not be linked: %w; recover with tao run %s", generated.Allocation.ID, generated.Allocation.Dir, item.ID, err, generated.Allocation.ID)
-	}
-	if err := a.printValidationWarnings(generated.Validation); err != nil {
+	if !ok || err != nil {
 		return err
 	}
-	if err := release(); err != nil {
-		return fmt.Errorf("note %s was linked to plan %s, but its promotion lock could not be released: %w; recover with tao run %s", promoted.ID, generated.Allocation.ID, err, generated.Allocation.ID)
-	}
-	locked = false
 	if err := writef(a.Out, "Promoted note %s to plan %s\n", promoted.ID, generated.Allocation.ID); err != nil {
 		return err
 	}

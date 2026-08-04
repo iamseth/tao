@@ -44,16 +44,22 @@ var runCommand = commandMetadata{
 	},
 }
 
-func registerRunFlags(fs *flag.FlagSet) {
+// registerRunRequestFlags registers the run-request flags shared by every
+// handler that executes plans, currently tao run and tao note run.
+func registerRunRequestFlags(fs *flag.FlagSet) {
 	defaults := runtimeFlagDefaults()
-	autoRework, maxReworkAttempts, _ := runReworkEnvDefaults()
 	fs.Int("max-slices", 0, "maximum slices to run; use 0 for all")
 	fs.String("commit-policy", defaults.CommitPolicy.String(), "automatic commit policy: slice or none")
 	fs.String("execution-mode", defaults.ExecutionModeValue().String(), "execution mode: isolated or current")
 	fs.Bool("pull-request", defaults.PullRequestValue(), "create a GitHub pull request after a completed full run")
-	fs.Bool("continue", false, "continue a blocked plan or slice")
 	fs.Bool("dangerously-skip-permissions", defaults.SkipPermissions, "legacy no-op for the Pi agent")
 	fs.Bool("no-review", !defaults.ReviewEnabledValue(), "disable automatic plan review for this run")
+}
+
+func registerRunFlags(fs *flag.FlagSet) {
+	registerRunRequestFlags(fs)
+	autoRework, maxReworkAttempts, _ := runReworkEnvDefaults()
+	fs.Bool("continue", false, "continue a blocked plan or slice")
 	fs.Bool("auto-rework", autoRework, "automatically rework plans with requested changes")
 	fs.Int("max-rework-attempts", maxReworkAttempts, "maximum automatic rework cycles (0 disables)")
 	fs.Bool("rework-restart", false, "start a new automatic-rework budget after a previous stop")
@@ -93,6 +99,38 @@ func runRequestOverridesFromFlags(fs *flag.FlagSet, values runFlagValues) runtim
 	return overrides
 }
 
+// runRequestInputs carries the resolved environment defaults, flag-derived
+// request overrides, and effective permission-skip value shared by handlers
+// that execute plans.
+type runRequestInputs struct {
+	defaults        envDefaults
+	overrides       runtimeconfig.RunOptionsPatch
+	skipPermissions bool
+}
+
+// resolveRunRequestFlags resolves the shared run-request preamble from parsed
+// flags. Flags the calling handler did not register resolve to zero values and
+// never count as provided overrides.
+func resolveRunRequestFlags(fs *flag.FlagSet) (runRequestInputs, error) {
+	defaults, err := cliEnvDefaults()
+	if err != nil {
+		return runRequestInputs{}, err
+	}
+	overrides := runRequestOverridesFromFlags(fs, runFlagValues{
+		MaxSlices:     flagIntValue(fs, "max-slices"),
+		CommitPolicy:  runtimeconfig.CommitPolicy(flagStringValue(fs, "commit-policy")),
+		ExecutionMode: runtimeconfig.ExecutionMode(flagStringValue(fs, "execution-mode")),
+		PullRequest:   flagBoolValue(fs, "pull-request"),
+		Continue:      flagBoolValue(fs, "continue"),
+		NoReview:      flagBoolValue(fs, "no-review"),
+	})
+	return runRequestInputs{
+		defaults:        defaults,
+		overrides:       overrides,
+		skipPermissions: effectiveBoolFlagValue(fs, "dangerously-skip-permissions", defaults.SkipPermissions),
+	}, nil
+}
+
 func resolveRunAutoReworkPolicy(fs *flag.FlagSet, reviewEnabled bool) (runtimeconfig.AutoReworkPolicy, error) {
 	if _, _, err := runReworkEnvDefaults(); err != nil {
 		return runtimeconfig.AutoReworkPolicy{}, err
@@ -107,26 +145,17 @@ func resolveRunAutoReworkPolicy(fs *flag.FlagSet, reviewEnabled bool) (runtimeco
 }
 
 func (a App) run(ctx context.Context, repo queueRepository, args []string) error {
-	defaults, err := cliEnvDefaults()
-	if err != nil {
-		return err
-	}
 	fs, positional, err := a.parseArgsFor(&commandMetadata{name: "run", registerFlags: registerRunFlags}, args)
 	if err != nil {
 		return err
 	}
-	skipPermissions := effectiveBoolFlagValue(fs, "dangerously-skip-permissions", defaults.SkipPermissions)
+	inputs, err := resolveRunRequestFlags(fs)
+	if err != nil {
+		return err
+	}
 	runAll := flagBoolValue(fs, "all")
 	activeOnly := flagBoolValue(fs, "active")
 	reworkRestart := flagBoolValue(fs, "rework-restart")
-	requestOptions := runRequestOverridesFromFlags(fs, runFlagValues{
-		MaxSlices:     flagIntValue(fs, "max-slices"),
-		CommitPolicy:  runtimeconfig.CommitPolicy(flagStringValue(fs, "commit-policy")),
-		ExecutionMode: runtimeconfig.ExecutionMode(flagStringValue(fs, "execution-mode")),
-		PullRequest:   flagBoolValue(fs, "pull-request"),
-		Continue:      flagBoolValue(fs, "continue"),
-		NoReview:      flagBoolValue(fs, "no-review"),
-	})
 	if activeOnly && !runAll {
 		return errors.New("--active requires --all")
 	}
@@ -134,7 +163,7 @@ func (a App) run(ctx context.Context, repo queueRepository, args []string) error
 		if len(positional) != 0 {
 			return errors.New("--all cannot be combined with a positional plan id")
 		}
-		runtime, err := newQueueRuntime(defaults, requestOptions, skipPermissions, a.StatusReporter)
+		runtime, err := newQueueRuntime(inputs.defaults, inputs.overrides, inputs.skipPermissions, a.StatusReporter)
 		if err != nil {
 			return err
 		}
@@ -148,7 +177,7 @@ func (a App) run(ctx context.Context, repo queueRepository, args []string) error
 		return err
 	}
 	input := positional[0]
-	request, err := defaults.newRunRequest(input, requestOptions)
+	request, err := inputs.defaults.newRunRequest(input, inputs.overrides)
 	if err != nil {
 		return err
 	}
@@ -156,7 +185,7 @@ func (a App) run(ctx context.Context, repo queueRepository, args []string) error
 	if err != nil {
 		return err
 	}
-	return a.executeResolvedRun(ctx, repo, input, request, skipPermissions, policy, reworkRestart)
+	return a.executeResolvedRun(ctx, repo, input, request, inputs.skipPermissions, policy, reworkRestart)
 }
 
 var executeSinglePlan = func(service run.Service, ctx context.Context, request run.Request) error {

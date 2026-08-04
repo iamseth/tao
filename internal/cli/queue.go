@@ -381,64 +381,12 @@ func newQueueRuntime(defaults envDefaults, overrides runtimeconfig.RunOptionsPat
 }
 
 func enqueueStoppedAutoReworkPlans(ctx context.Context, repo queueRepository, manager *runqueue.Manager, options queueDrainOptions) (runqueue.ReconcileResult, error) {
-	var result runqueue.ReconcileResult
-	if !options.autoReworkPolicy.Enabled || options.autoReworkPolicy.MaxAttempts == 0 {
-		return result, nil
-	}
-	summaries, err := repo.ListPlans(ctx, plan.PlanFilter{ActiveOnly: options.activeOnly})
-	if err != nil {
-		return result, err
-	}
-	for _, summary := range summaries {
-		if summary.Status != plan.StatusChangesRequested || summary.Runnable() {
-			continue
-		}
-		detail, err := repo.ResolvePlan(ctx, summary.ID)
-		if err != nil {
-			return result, err
-		}
-		_, stopped, err := autoReworkRestartGuard(detail, true)
-		if err != nil {
-			return result, err
-		}
-		if !stopped {
-			continue
-		}
-		result.Runnable++
-		if options.reworkRestart && queueHasRestartableRecoveryPlan(manager.Queue(), summary.ID) {
-			if _, err := manager.Dequeue(summary.ID); err != nil {
-				return result, fmt.Errorf("replace stopped automatic rework queue entry for %s: %w", summary.ID, err)
-			}
-		}
-		request := run.Request{Input: summary.ID, ResolvedRunOptions: options.runtime.options}
-		if _, err := manager.EnqueueAutoReworkDecision(request); err != nil {
-			if queueHasPendingOrRunningPlan(manager.Queue(), summary.ID) {
-				result.AlreadyQueued++
-				continue
-			}
-			return result, err
-		}
-		result.Enqueued++
-	}
-	return result, nil
-}
-
-func queueHasPendingOrRunningPlan(snapshot runqueue.QueueSnapshot, planID string) bool {
-	for _, entry := range snapshot.Entries {
-		if entry.PlanID == planID && (entry.Status == runqueue.QueueStatusPending || entry.Status == runqueue.QueueStatusRunning) {
-			return true
-		}
-	}
-	return false
-}
-
-func queueHasRestartableRecoveryPlan(snapshot runqueue.QueueSnapshot, planID string) bool {
-	for _, entry := range snapshot.Entries {
-		if entry.PlanID == planID && entry.Status == runqueue.QueueStatusPending && entry.RecoveryPending {
-			return true
-		}
-	}
-	return false
+	return runqueue.ReconcileStoppedAutoRework(ctx, repo, manager, runqueue.StoppedAutoReworkOptions{
+		Policy:        options.autoReworkPolicy,
+		ActiveOnly:    options.activeOnly,
+		ReworkRestart: options.reworkRestart,
+		RunOptions:    options.runtime.options,
+	})
 }
 
 func queueReconcileLister(repo queueRepository, activeOnly bool) runqueue.PlanLister {

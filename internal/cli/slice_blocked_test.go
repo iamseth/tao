@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/iamseth/tao/internal/agentinput"
 	"github.com/iamseth/tao/internal/plan"
 )
 
@@ -108,11 +109,11 @@ func TestSliceBlockedCommandRejectsOversizedInputs(t *testing.T) {
 		want       string
 		writeBytes int
 	}{
-		{name: "reason file bytes", reason: "x", writeBytes: int(sliceAgentInputMaxFileBytes) + 1, want: "reason file exceeds 65536 byte limit"},
-		{name: "reason runes", reason: strings.Repeat("x", sliceAgentInputMaxTextRunes+1), want: "blocker reason exceeds 16384 rune limit"},
-		{name: "invalid command", reason: "blocked", evidence: []string{"--invalid-command", strings.Repeat("x", sliceAgentInputMaxTextRunes+1), "--invalid-reason", "missing package"}, want: "invalid command exceeds 16384 rune limit"},
-		{name: "invalid reason", reason: "blocked", evidence: []string{"--invalid-command", "go test ./missing", "--invalid-reason", strings.Repeat("x", sliceAgentInputMaxTextRunes+1)}, want: "invalid reason exceeds 16384 rune limit"},
-		{name: "corrected command", reason: "blocked", evidence: []string{"--invalid-command", "go test ./missing", "--invalid-reason", "missing package", "--corrected-command", strings.Repeat("x", sliceAgentInputMaxTextRunes+1)}, want: "corrected command exceeds 16384 rune limit"},
+		{name: "reason file bytes", reason: "x", writeBytes: int(agentinput.MaxFileBytes) + 1, want: "reason file exceeds 65536 byte limit"},
+		{name: "reason runes", reason: strings.Repeat("x", agentinput.MaxTextRunes+1), want: "blocker reason exceeds 16384 rune limit"},
+		{name: "invalid command", reason: "blocked", evidence: []string{"--invalid-command", strings.Repeat("x", agentinput.MaxTextRunes+1), "--invalid-reason", "missing package"}, want: "invalid command exceeds 16384 rune limit"},
+		{name: "invalid reason", reason: "blocked", evidence: []string{"--invalid-command", "go test ./missing", "--invalid-reason", strings.Repeat("x", agentinput.MaxTextRunes+1)}, want: "invalid reason exceeds 16384 rune limit"},
+		{name: "corrected command", reason: "blocked", evidence: []string{"--invalid-command", "go test ./missing", "--invalid-reason", "missing package", "--corrected-command", strings.Repeat("x", agentinput.MaxTextRunes+1)}, want: "corrected command exceeds 16384 rune limit"},
 	}
 
 	for _, tt := range tests {

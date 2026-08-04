@@ -13,6 +13,7 @@
 - Plan file loading, validation, summaries, and time formatting live in `internal/plan`.
 - Share-safe report projection, sanitization, and Markdown rendering live in `internal/planreport`; render only its explicit safe projection, never raw plan artifacts, and keep planning-only reports free of prompt capture and execution-derived data.
 - Reusable run, lifecycle, queue, workspace, and repository behavior belongs in domain packages; CLI handlers should remain thin orchestration layers.
+- Shared bounds for agent-written input files and text live in `internal/agentinput`; strict commit-proposal decoding lives in `internal/commit`; slice-completion evidence loading lives in `internal/run`; plan base-commit drift detection lives in `internal/staleness`; repository-selector resolution lives in `internal/taodata`.
 - Repository-scoped note models, persistence, lifecycle, and promotion locking live in `internal/note`; note command orchestration lives in `internal/cli`.
 - Checked-in CI uses `.github/workflows/ci.yml` to execute the gates in `make verify` and `.github/workflows/release.yml` to build tagged releases.
 

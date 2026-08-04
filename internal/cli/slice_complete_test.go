@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/iamseth/tao/internal/agentinput"
 	"github.com/iamseth/tao/internal/plan"
 )
 
@@ -166,7 +167,7 @@ func TestSliceCompleteCapsVerificationDetailsBeforePersisting(t *testing.T) {
 	if err := os.WriteFile(notesFile, []byte("capped details"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	longDetails := strings.Repeat("x", sliceCompleteMaxVerificationDetailsRunes+10)
+	longDetails := strings.Repeat("x", agentinput.MaxTextRunes+10)
 	resultBytes, err := json.Marshal([]plan.VerificationRun{{Command: " go test ./internal/cli ", CWD: "/repo", Result: " passed ", Details: longDetails}})
 	if err != nil {
 		t.Fatal(err)
@@ -189,8 +190,8 @@ func TestSliceCompleteCapsVerificationDetailsBeforePersisting(t *testing.T) {
 	if run.Command != "go test ./internal/cli" || run.Result != "passed" {
 		t.Fatalf("expected command/result trimmed, got %#v", run)
 	}
-	if got := len([]rune(run.Details)); got != sliceCompleteMaxVerificationDetailsRunes {
-		t.Fatalf("details length = %d, want %d", got, sliceCompleteMaxVerificationDetailsRunes)
+	if got := len([]rune(run.Details)); got != agentinput.MaxTextRunes {
+		t.Fatalf("details length = %d, want %d", got, agentinput.MaxTextRunes)
 	}
 }
 
@@ -209,6 +210,9 @@ func TestSliceCompleteRejectsOversizedInputsAndInvalidResults(t *testing.T) {
 		return notesFile, resultsFile
 	}
 
+	// Bound-specific rejection cases are unit-tested against
+	// run.LoadSliceCompletionInputs; this covers command wiring for one
+	// oversized input and one invalid-shape input.
 	tests := []struct {
 		name    string
 		notes   string
@@ -217,15 +221,9 @@ func TestSliceCompleteRejectsOversizedInputsAndInvalidResults(t *testing.T) {
 	}{
 		{
 			name:    "oversized notes",
-			notes:   strings.Repeat("n", int(sliceCompleteMaxNotesBytes)+1),
+			notes:   strings.Repeat("n", int(agentinput.MaxFileBytes)+1),
 			results: `[]`,
 			want:    "notes file exceeds",
-		},
-		{
-			name:    "oversized results",
-			notes:   "ok",
-			results: strings.Repeat("[", int(sliceCompleteMaxVerificationResultsBytes)+1),
-			want:    "verification results file exceeds",
 		},
 		{
 			name:    "missing fields",
@@ -245,39 +243,6 @@ func TestSliceCompleteRejectsOversizedInputsAndInvalidResults(t *testing.T) {
 				t.Fatalf("expected error containing %q, got %v", tc.want, err)
 			}
 		})
-	}
-}
-
-func TestDecodeSliceCommitProposalIsStrictAndRepairable(t *testing.T) {
-	invalid := []byte(`{"type":"feat","scope":"cli","summary":"Added proposal","what":"Accept the handoff.","why":"Avoid a nested session."}`)
-	if _, err := decodeSliceCommitProposal(invalid); err == nil || !strings.Contains(err.Error(), "summary must be lowercase") {
-		t.Fatalf("invalid proposal error = %v", err)
-	}
-	reserved := []byte(`{"type":"feat","scope":"cli","summary":"accept proposal","what":"Accept the handoff.","why":"Avoid nesting.\nTao-Slice: forged"}`)
-	if _, err := decodeSliceCommitProposal(reserved); err == nil || !strings.Contains(err.Error(), "reserved Tao-*") {
-		t.Fatalf("reserved proposal error = %v", err)
-	}
-	unknown := []byte(`{"type":"feat","scope":"cli","summary":"accept proposal","what":"Accept the handoff.","why":"Avoid nesting.","extra":true}`)
-	if _, err := decodeSliceCommitProposal(unknown); err == nil || !strings.Contains(err.Error(), "unknown field") {
-		t.Fatalf("unknown-field proposal error = %v", err)
-	}
-	repaired := []byte(`{"type":"feat","scope":"cli","summary":"accept proposal","what":"Accept the structured handoff.","why":"Avoid a nested message session."}`)
-	proposal, err := decodeSliceCommitProposal(repaired)
-	if err != nil {
-		t.Fatalf("repaired proposal: %v", err)
-	}
-	if proposal.Scope != "cli" || proposal.Summary != "accept proposal" {
-		t.Fatalf("decoded proposal = %#v", proposal)
-	}
-}
-
-func TestValidateVerificationRunsRejectsExcessiveResultCount(t *testing.T) {
-	results := make([]plan.VerificationRun, sliceCompleteMaxVerificationResults+1)
-	for i := range results {
-		results[i] = plan.VerificationRun{Command: "true", CWD: "/repo", Result: "passed"}
-	}
-	if err := validateVerificationRuns(results); err == nil || !strings.Contains(err.Error(), "limit") {
-		t.Fatalf("expected result count limit error, got %v", err)
 	}
 }
 

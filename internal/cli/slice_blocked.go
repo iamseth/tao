@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/iamseth/tao/internal/agentinput"
 	"github.com/iamseth/tao/internal/plan"
 )
 
@@ -53,13 +54,13 @@ func parseSliceBlockedEvidence(fs *flag.FlagSet) (sliceBlockedEvidence, error) {
 		provided: flagWasProvided(fs, "invalid-command") || flagWasProvided(fs, "invalid-reason") || flagWasProvided(fs, "corrected-command"),
 	}
 	var err error
-	if evidence.invalidCommand, err = validateBoundedAgentText(flagStringValue(fs, "invalid-command"), "invalid command"); err != nil {
+	if evidence.invalidCommand, err = agentinput.BoundedText(flagStringValue(fs, "invalid-command"), "invalid command"); err != nil {
 		return sliceBlockedEvidence{}, err
 	}
-	if evidence.invalidReason, err = validateBoundedAgentText(flagStringValue(fs, "invalid-reason"), "invalid reason"); err != nil {
+	if evidence.invalidReason, err = agentinput.BoundedText(flagStringValue(fs, "invalid-reason"), "invalid reason"); err != nil {
 		return sliceBlockedEvidence{}, err
 	}
-	if evidence.correctedCommand, err = validateBoundedAgentText(flagStringValue(fs, "corrected-command"), "corrected command"); err != nil {
+	if evidence.correctedCommand, err = agentinput.BoundedText(flagStringValue(fs, "corrected-command"), "corrected command"); err != nil {
 		return sliceBlockedEvidence{}, err
 	}
 	if !evidence.provided {
@@ -90,11 +91,11 @@ func (a App) sliceBlocked(ctx context.Context, args []string) error {
 		return errors.New(usage)
 	}
 
-	reasonBytes, err := readBoundedAgentInput(reasonFile, "reason file", sliceAgentInputMaxFileBytes)
+	reasonBytes, err := agentinput.ReadBoundedFile(reasonFile, "reason file", agentinput.MaxFileBytes)
 	if err != nil {
 		return fmt.Errorf("read blocker reason file: %w", err)
 	}
-	reason, err := validateBoundedAgentText(string(reasonBytes), "blocker reason")
+	reason, err := agentinput.BoundedText(string(reasonBytes), "blocker reason")
 	if err != nil {
 		return err
 	}
