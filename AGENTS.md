@@ -1,12 +1,10 @@
 # AGENTS.md
 
 ## Commands
-- `make verify` is the canonical repository-wide gate; it runs build, test, lint, modernize-check, and verify-no-deps.
+- `make verify` is the canonical repository-wide gate; it runs build, test, lint, and verify-no-deps.
 - `make build` builds `bin/tao` from `./cmd/tao`.
 - `make test` runs `go test -coverprofile=coverage.out ./...` and prints coverage with `go tool cover -func`.
 - Run focused tests with `go test ./internal/<package> -run TestName` for ordinary implementation slices; examples: `go test ./internal/plan -run TestFormatDuration`, `go test ./internal/cli -run TestRunHandlesNoArgsAndGlobalFlagErrors`.
-- `make lint` runs the pinned `modernize-check` gate first, then `golangci-lint` with `.golangci.yml` (tests enabled plus `gofmt`/`goimports` formatters).
-- `make modernize` auto-applies the pinned gopls modernize fixes; run it after code changes so `make lint` and `make verify` never fail on modernize findings.
 - `make install` copies `./bin/tao` to `~/.bin/tao`; do not assume this path exists.
 
 ## Shape
@@ -61,7 +59,6 @@
 ## Editing Guidance
 - In event tests, assert on the event(s) the test owns by finding or requiring the specific type and checking its fields; do not assert total event-slice length or positional indices unless the test explicitly verifies the ordered sequence.
 - Prefer focused package tests for changed code; use `make test` when changes cross packages or core behavior.
-- Do not leave lint failing: run `make modernize` then `make lint` after code changes (or explicitly report why they could not be run) and fix new findings before handoff; `make lint` includes the modernize-check gate, so unmodernized idioms fail lint, not final verification.
 - Do not update local plan artifacts unless the task is specifically about Tao plan state or prompt behavior.
 - When generating reusable planning prompts for `/tao-plan` or fresh agent planning sessions, save drafts with `tao draft-prompt <name>` (or another local-only path) so they remain local-only and are easy to pass to Pi, Claude, OpenCode, or Codex.
 - Keep prompt changes narrow because they directly shape future agent behavior.
