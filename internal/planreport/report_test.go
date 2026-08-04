@@ -1,0 +1,269 @@
+package planreport
+
+import (
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/iamseth/tao/internal/plan"
+)
+
+func TestProjectFullAcrossLifecyclePhases(t *testing.T) {
+	now := time.Date(2026, 8, 4, 16, 0, 0, 0, time.FixedZone("offset", 3600))
+	cases := []struct {
+		name, status, want string
+		review             *plan.PlanReview
+		merged             bool
+	}{
+		{"planned", plan.StatusPlanned, plan.StatusPlanned, nil, false},
+		{"in progress", plan.StatusInProgress, plan.StatusInProgress, nil, false},
+		{"blocked", plan.StatusBlocked, plan.StatusBlocked, nil, false},
+		{"review phase", plan.StatusInReview, plan.StatusInReview, nil, false},
+		{"changes requested", plan.StatusChangesRequested, plan.StatusChangesRequested, &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested}, false},
+		{"reviewed", plan.StatusReviewed, plan.StatusReviewed, &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove}, false},
+		{"completed and merged", plan.StatusCompleted, plan.StatusCompleted, &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			detail := reportFixture(now)
+			detail.State.Status = tc.status
+			if plan.IsPostSliceStatus(tc.status) {
+				detail.State.Plan.PendingSlices = nil
+				detail.Slices.Slices[0].Status = plan.StatusCompleted
+			}
+			if tc.review != nil {
+				plan.SetPersistedReview(detail, *tc.review)
+			}
+			if tc.merged {
+				detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypePlanMerged, Timestamp: now})
+			}
+			got := ProjectFull(detail, now)
+			if got.Schema != SchemaV1 || got.Mode != ModeFull || got.Status != tc.want || got.Outcome.Merged != tc.merged {
+				t.Fatalf("projection = schema %q mode %q status %q merged %v", got.Schema, got.Mode, got.Status, got.Outcome.Merged)
+			}
+			if !got.SnapshotAt.Equal(now.UTC()) || got.SnapshotAt.Location() != time.UTC {
+				t.Fatalf("snapshot = %s, want UTC %s", got.SnapshotAt, now.UTC())
+			}
+		})
+	}
+}
+
+func TestProjectFullLegacyCompletedPlanReportsMerged(t *testing.T) {
+	now := time.Date(2026, 8, 4, 15, 0, 0, 0, time.UTC)
+	detail := reportFixture(now)
+	detail.State.Status = plan.StatusCompleted
+	detail.State.Plan.PendingSlices = nil
+	for i := range detail.Slices.Slices {
+		detail.Slices.Slices[i].Status = plan.StatusCompleted
+	}
+	if plan.PlanIsMerged(detail.Events) {
+		t.Fatal("legacy fixture must not have a plan_merged event")
+	}
+
+	got := ProjectFull(detail, now)
+	if got.Status != plan.StatusCompleted || !got.Outcome.Merged {
+		t.Fatalf("legacy projection = status %q merged %v, want completed and merged", got.Status, got.Outcome.Merged)
+	}
+}
+
+func TestProjectFullSummarizesWithoutRawExecutionEvidence(t *testing.T) {
+	now := time.Date(2026, 8, 4, 15, 0, 0, 0, time.UTC)
+	detail := reportFixture(now)
+	duration := int64(90)
+	detail.Slices.Slices[0].Timing.DurationSeconds = &duration
+	detail.Slices.Slices[0].VerificationResults = []plan.VerificationRun{
+		{Command: "deploy --token secret-value", CWD: "/home/person/project", Result: "passed", Details: "customer@example.com"},
+		{Command: "unsafe", Result: "failed", Details: "raw details"},
+	}
+	detail.State.Plan.FinalVerification = &plan.FinalVerification{Command: "make verify", CWD: "/private/repo", Result: "passed", Details: "secret output"}
+	detail.Events = []plan.Event{
+		{Type: plan.EventTypeAgentMetrics, Agent: "pi-secret", Metrics: &plan.AgentMetrics{Agent: "pi-secret", SessionID: "session-secret", ProviderID: "provider-secret", ModelID: "model-secret", Status: plan.StatusCompleted, InputTokens: 10, OutputTokens: 20, TotalTokens: 30, ToolCalls: 2}},
+		{Type: plan.EventTypeAgentMetrics, Metrics: &plan.AgentMetrics{Agent: "other-secret", SessionID: "session-two", Result: "failed", OutputTokens: 5, Cost: 1.25}},
+	}
+	plan.SetPersistedReview(detail, plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, Summary: "Needs a safer rollout.", FindingsCount: 3, Findings: []plan.ReviewFinding{{File: "/secret/file", Message: "raw finding"}}, Agent: "reviewer-secret", Base: "base-sha", Head: "head-sha"})
+
+	got := ProjectFull(detail, now)
+	if got.Slices[0].Verification != (CountSummary{Total: 2, Passed: 1, Failed: 1}) || got.Slices[0].Duration.Seconds != 90 {
+		t.Fatalf("slice summary = %+v", got.Slices[0])
+	}
+	if !got.Execution.FinalVerification.Available || !got.Execution.Telemetry.Available || got.Execution.Telemetry.Attempts != 2 || got.Execution.Telemetry.AgentCount.Value != 2 || got.Execution.Telemetry.OutputTokens.Value != 25 {
+		t.Fatalf("execution summary = %+v", got.Execution)
+	}
+	if !got.Review.Available || got.Review.FindingCount != 3 || got.Review.Verdict != plan.ReviewVerdictChangesRequested {
+		t.Fatalf("review = %+v", got.Review)
+	}
+	values := collectSafeText(got)
+	for _, forbidden := range []string{"deploy --token", "/home/person", "customer@example.com", "raw details", "session-secret", "provider-secret", "model-secret", "pi-secret", "reviewer-secret", "base-sha", "head-sha", "raw finding"} {
+		if strings.Contains(values, forbidden) {
+			t.Fatalf("projection retained forbidden value %q in %q", forbidden, values)
+		}
+	}
+}
+
+func TestPlanIdentifierPreservedThroughProjectionAndRendering(t *testing.T) {
+	now := time.Date(2026, 8, 4, 15, 0, 0, 0, time.UTC)
+	detail := reportFixture(now)
+	detail.State.Plan.ID = "20260804-151535-plan-reports"
+
+	report := ProjectPlanningOnly(detail, now)
+	if got := report.PlanID.text; got != detail.State.Plan.ID {
+		t.Fatalf("projected plan ID = %q, want %q", got, detail.State.Plan.ID)
+	}
+	markdown, err := RenderPlanningOnly(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(markdown), "- Plan identifier: "+detail.State.Plan.ID+"\n") {
+		t.Fatalf("rendered report did not preserve plan ID:\n%s", markdown)
+	}
+}
+
+func TestPlanningReportPreservesCoworkerAccessibleURLsAndPaths(t *testing.T) {
+	now := time.Date(2026, 8, 4, 15, 0, 0, 0, time.UTC)
+	detail := reportFixture(now)
+	values := []string{
+		"https://docs.example.com/project/guide",
+		"ssh://git.example.com/repository",
+		"file:///srv/company/plan.md",
+		"//internal.example.com/private",
+		"www.example.com/private",
+		"portal.example.org:8443/reports?id=project",
+		"/workspace/repo",
+		"~alice/private/plan.md",
+	}
+	detail.PlanningBrief.Content = "## User Goal\nRetrieve " + values[0] + ", " + values[2] + ", and " + values[3] + ".\n\n## Constraints\n- Build from " + values[1] + ", " + values[4] + ", and " + values[6] + "\n\n## Risks\n- Check " + values[5] + " and " + values[7] + "\n"
+
+	markdown, err := RenderPlanningOnly(ProjectPlanningOnly(detail, now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range values {
+		if !strings.Contains(string(markdown), value) {
+			t.Errorf("rendered report removed coworker-accessible value %q:\n%s", value, markdown)
+		}
+	}
+}
+
+func TestPlanningOnlyProjectionIsPhaseIndependent(t *testing.T) {
+	now := time.Date(2026, 8, 4, 15, 0, 0, 0, time.UTC)
+	planned := reportFixture(now)
+	completed := reportFixture(now)
+	completed.State.Status = plan.StatusCompleted
+	completed.State.UpdatedAt = now.Add(8 * time.Hour)
+	completed.State.Plan.PendingSlices = nil
+	completed.State.Plan.CompletedSlices = []string{"001-build", "002-ship"}
+	for i := range completed.Slices.Slices {
+		completed.Slices.Slices[i].Status = plan.StatusCompleted
+		completed.Slices.Slices[i].Notes = "execution-tainted-notes"
+		completed.Slices.Slices[i].VerificationResults = []plan.VerificationRun{{Command: "execution-tainted-command", CWD: "/execution/tainted", Result: "passed"}}
+	}
+	completed.Slices.Slices = append(completed.Slices.Slices, plan.Slice{ID: "r101-fix", Title: "execution-tainted-rework", Goal: "execution-tainted-finding"})
+	completed.Events = []plan.Event{{Type: plan.EventTypeAgentMetrics, Agent: "execution-tainted-agent", Metrics: &plan.AgentMetrics{SessionID: "execution-tainted-session", OutputTokens: 99}}, {Type: plan.EventTypePlanMerged, MergedDefaultSHA: "execution-tainted-sha"}}
+	plan.SetPersistedReview(completed, plan.PlanReview{Summary: "execution-tainted-review", FindingsCount: 1})
+
+	left := ProjectPlanningOnly(planned, now)
+	right := ProjectPlanningOnly(completed, now)
+	if !reflect.DeepEqual(left, right) {
+		t.Fatalf("planning projection changed across execution:\nplanned=%#v\ncompleted=%#v", left, right)
+	}
+	if got := collectSafeText(right); strings.Contains(got, "execution-tainted") {
+		t.Fatalf("execution value entered planning projection: %q", got)
+	}
+	if len(right.Slices) != 2 || !right.Synthesized || right.Mode != ModePlanningOnly {
+		t.Fatalf("planning-only shape = %+v", right)
+	}
+}
+
+func TestProjectionLegacyMissingAndMalformedOptionalData(t *testing.T) {
+	now := time.Date(2026, 8, 4, 15, 0, 0, 0, time.UTC)
+	detail := reportFixture(now)
+	detail.PlanningBrief = plan.PlanningBriefArtifact{Content: "##User Goal\nmalformed secret\n\n## Risks ###\nnot a supported heading"}
+	detail.PlanNarrative = plan.PlanNarrativeArtifact{}
+	detail.State.GlobalInvariants = nil
+	detail.State.OpenQuestions = nil
+	detail.Events = nil
+
+	planning := ProjectPlanningOnly(detail, now)
+	full := ProjectFull(detail, now)
+	if !planning.Planning.Goal.Available { // structured original-slice fallback
+		t.Fatal("missing sidecar should use structured goal fallback")
+	}
+	if len(planning.Planning.Risks) != 0 {
+		t.Fatalf("malformed risks heading was accepted: %+v", planning.Planning.Risks)
+	}
+	if full.Execution.Telemetry.Available || full.Execution.Telemetry.OutputTokens.Available || full.Execution.Telemetry.OutputTokens.Value != 0 {
+		t.Fatalf("missing telemetry presented as measured: %+v", full.Execution.Telemetry)
+	}
+}
+
+func TestPlanningContextSanitizesKnownSectionsAndUsesFallbacks(t *testing.T) {
+	now := time.Now()
+	detail := reportFixture(now)
+	detail.PlanningBrief.Content = "## User Goal\nShip for owner@example.com.\n\n## Constraints\n- Build from /home/owner/work\n\n## Non-goals\n- Dashboard\n\n## Open Questions\n"
+	detail.PlanNarrative.Content = "## Decisions\n- Use one stream\n\n## Risks\n- Check URL https://example.com/private\n"
+	detail.State.OpenQuestions = []string{"Who approves?"}
+	got := ProjectPlanningOnly(detail, now)
+	text := collectSafeText(got)
+	if strings.Contains(text, "owner@example.com") {
+		t.Fatalf("retained personal identifier in %q", text)
+	}
+	for _, retained := range []string{"/home/owner/work", "https://example.com/private"} {
+		if !strings.Contains(text, retained) {
+			t.Fatalf("removed coworker-accessible context %q from %q", retained, text)
+		}
+	}
+	if len(got.Planning.Constraints) != 1 || len(got.Planning.NonGoals) != 1 || len(got.Planning.Decisions) != 1 || len(got.Planning.Risks) != 1 || len(got.Planning.Questions) != 1 {
+		t.Fatalf("planning context = %+v", got.Planning)
+	}
+}
+
+func reportFixture(now time.Time) *plan.PlanDetail {
+	started := now.Add(-2 * time.Minute)
+	return &plan.PlanDetail{
+		State: plan.State{
+			Status:           plan.StatusPlanned,
+			Plan:             plan.PlanState{ID: "leadership-report", Title: "Leadership Report", PendingSlices: []string{"001-build", "002-ship"}, Timing: plan.PlanTiming{StartedAt: &started}},
+			GlobalInvariants: []string{"Keep reports share-safe"},
+			OpenQuestions:    []string{"Who receives the report?"},
+		},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{
+			{ID: "001-build", Title: "Build projection", Status: plan.StatusPending, Goal: "Create safe models", Context: "Renderers need an allowlist"},
+			{ID: "002-ship", Title: "Ship report", Status: plan.StatusPending, Goal: "Expose the report", Context: "Leaders need snapshots", DependsOn: []string{"001-build"}},
+		}},
+		PlanningBrief: plan.PlanningBriefArtifact{Content: "# Planning Brief\n\n## User Goal\nShare a leadership snapshot.\n\n## Constraints\n- Keep it safe\n\n## Non-goals\n- Raw export\n\n## Open Questions\n- Who receives it?\n"},
+		PlanNarrative: plan.PlanNarrativeArtifact{Content: "# Plan\n\n## Decisions\n- Use typed projections\n\n## Risks\n- Sensitive text\n"},
+	}
+}
+
+func collectSafeText(value any) string {
+	var out []string
+	var visit func(reflect.Value)
+	visit = func(v reflect.Value) {
+		if !v.IsValid() {
+			return
+		}
+		if v.Kind() == reflect.Interface || v.Kind() == reflect.Pointer {
+			if !v.IsNil() {
+				visit(v.Elem())
+			}
+			return
+		}
+		if v.Type() == reflect.TypeOf(SafeText{}) {
+			out = append(out, v.FieldByName("text").String())
+			return
+		}
+		switch v.Kind() {
+		case reflect.Struct:
+			for i := 0; i < v.NumField(); i++ {
+				visit(v.Field(i))
+			}
+		case reflect.Slice, reflect.Array:
+			for i := 0; i < v.Len(); i++ {
+				visit(v.Index(i))
+			}
+		}
+	}
+	visit(reflect.ValueOf(value))
+	return strings.Join(out, "\n")
+}

@@ -58,6 +58,10 @@ _tao() {
           ;;
       esac
       ;;
+    ` + commandAliasPattern("report") + `)
+` + zshCommandArguments("report") + `
+` + zshPositionalCompletion("report") + `
+      ;;
     ` + commandAliasPattern("repo") + `)
       if (( CURRENT == 3 )); then
         compadd list show doctor

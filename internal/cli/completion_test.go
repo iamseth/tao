@@ -22,6 +22,7 @@ func TestCommandAliases(t *testing.T) {
 	}{
 		{name: "list", want: []string{"l", "li", "lis", "list"}},
 		{name: "repo", want: []string{"repo"}},
+		{name: "report", want: []string{"report"}},
 		{name: "note", want: []string{"n", "no", "not", "note"}},
 		{name: "monitor", want: []string{"mon", "moni", "monit", "monito", "monitor"}},
 		{name: "slice-complete", want: []string{"slice-complete"}},
@@ -91,6 +92,7 @@ func TestCommandAliasPatternCompletionSpecialCases(t *testing.T) {
 		{command: "list", want: "l|li|lis|list"},
 		{command: "completion", want: "co|com|comp|compl|comple|completi|completio|completion"}, //nolint:misspell // intentional completion-prefix fixture
 		{command: "repo", want: "repo"},
+		{command: "report", want: "report"},
 		{command: "note", want: "n|no|not|note"},
 		{command: "monitor", want: "mon|moni|monit|monito|monitor"},
 		{command: "slice-complete", want: "slice-complete"},
@@ -139,6 +141,14 @@ func TestZshCommandArgumentsUseRegisteredFlagsAndSemanticHints(t *testing.T) {
 				"'--message[explicit full canonical commit message]:message:'",
 				"'--proposal-file[JSON file containing a structured commit proposal]:path:_files'",
 				"'--repo-root[repository path]:path:_files'",
+			},
+		},
+		{
+			command: "report",
+			want: []string{
+				"'--output[output Markdown path, or - for stdout (required)]:path:_files'",
+				"'--planning-only[export a synthesized planning record without execution history]'",
+				"'--force[safely replace an existing output file]'",
 			},
 		},
 	}
@@ -237,6 +247,36 @@ func assertRegisteredCompletionFlags(t *testing.T, contextName string, registerF
 
 func zshArgumentsContainFlag(arguments, flagName string) bool {
 	return strings.Contains(arguments, flagName+"[") || strings.Contains(arguments, flagName+"=-[")
+}
+
+func TestZshCompletionScriptCompletesReportsWithoutChangingRepo(t *testing.T) {
+	script := buildZshCompletionScript()
+	reportStart := strings.Index(script, commandAliasPattern("report")+")")
+	repoStart := strings.Index(script, commandAliasPattern("repo")+")")
+	noteStart := strings.Index(script, commandAliasPattern("note")+")")
+	if reportStart < 0 || repoStart <= reportStart || noteStart <= repoStart {
+		t.Fatalf("expected distinct report and repo completion cases, got report=%d repo=%d note=%d", reportStart, repoStart, noteStart)
+	}
+	reportCase := script[reportStart:repoStart]
+	for _, want := range []string{
+		"--output[output Markdown path, or - for stdout (required)]:path:_files",
+		"--planning-only[export a synthesized planning record without execution history]",
+		"--force[safely replace an existing output file]",
+		"complete plan-ids",
+	} {
+		if !strings.Contains(reportCase, want) {
+			t.Errorf("report completion case missing %q", want)
+		}
+	}
+	repoCase := script[repoStart:noteStart]
+	if !strings.Contains(repoCase, "compadd list show doctor") {
+		t.Fatalf("repo completion changed while adding report completion: %q", repoCase)
+	}
+	for _, notWant := range []string{"--output", "complete plan-ids"} {
+		if strings.Contains(repoCase, notWant) {
+			t.Fatalf("repo completion unexpectedly contains report completion %q: %q", notWant, repoCase)
+		}
+	}
 }
 
 func TestZshCompletionScriptCoversQueueSubcommands(t *testing.T) {

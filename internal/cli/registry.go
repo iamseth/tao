@@ -109,6 +109,7 @@ var commandRegistry = []commandMetadata{
 	sliceCompleteCommand,
 	sliceBlockedCommand,
 	showCommand,
+	reportCommand,
 	reviewCommand,
 	reworkCommand,
 	stalenessCommand,

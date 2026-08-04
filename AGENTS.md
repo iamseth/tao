@@ -11,6 +11,7 @@
 - This is a Go module (`github.com/iamseth/tao`) targeting Go `1.26.2` in `go.mod`.
 - CLI entrypoint is `cmd/tao/main.go`; command parsing lives in `internal/cli`.
 - Plan file loading, validation, summaries, and time formatting live in `internal/plan`.
+- Share-safe report projection, sanitization, and Markdown rendering live in `internal/planreport`; render only its explicit safe projection, never raw plan artifacts, and keep planning-only reports free of prompt capture and execution-derived data.
 - Reusable run, lifecycle, queue, workspace, and repository behavior belongs in domain packages; CLI handlers should remain thin orchestration layers.
 - Repository-scoped note models, persistence, lifecycle, and promotion locking live in `internal/note`; note command orchestration lives in `internal/cli`.
 - Checked-in CI uses `.github/workflows/ci.yml` to execute the gates in `make verify` and `.github/workflows/release.yml` to build tagged releases.

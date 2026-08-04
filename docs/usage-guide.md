@@ -676,6 +676,43 @@ to the explicit single-plan workflow.
 
 ---
 
+## Sharing plan reports
+
+Use `tao report` when coworkers with repository access need a readable snapshot
+without access to Tao's private plan directory. Reports are internal,
+access-controlled artifacts, not public exports. A full report summarizes
+planning, slice progress, execution effort, verification, and any review or
+merge outcome that is available in the plan's current phase:
+
+```sh
+tao report --output plan-report.md <plan-id>
+```
+
+For a lighter planning record, explicitly choose a repository prompt path:
+
+```sh
+tao report --planning-only --output prompts/my-plan.md <plan-id>
+```
+
+Planning-only output is synthesized and non-verbatim: it is not retained prompt
+text, and it structurally excludes execution, review, rework, event, and
+telemetry history. Both modes render a sanitized allowlist rather than copying
+raw plan artifacts. Ordinary URLs and filesystem paths remain useful context for
+repository-authorized coworkers; credentials, credential-bearing URLs, and
+common personal identifiers are redacted. Even so, treat the file as a sharing
+draft and review it for the appropriate internal audience and context before
+sending it. Use `--output -` for a pure Markdown stdout stream; an existing file
+requires the explicit `--force` flag.
+
+Writing under the repository, including `prompts/`, dirties that checkout. Tao
+creates only the requested report file and never stages or commits it. If a
+current-checkout run or merge requires a clean tree, either make a separate
+manual commit for the report first or generate it after integration; otherwise
+write outside the checkout or use stdout. Report generation does not alter plan
+lifecycle metadata or other Git state.
+
+---
+
 ## Putting it together
 
 A typical feature, end to end:

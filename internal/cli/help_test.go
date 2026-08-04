@@ -73,6 +73,8 @@ func TestCommandHelpRendersOptionsExamplesAndFlaglessCommands(t *testing.T) {
 }
 
 func TestPlanAndExecutionCommandHelpIncludesSubcommandsOptionsAndExamples(t *testing.T) {
+	assertCommandOutputContains(t, "report help", []string{"report", "--help"},
+		"Export one readable Tao plan", "Options:", "--output", "--planning-only", "--force", "tao report --output -")
 	assertCommandOutputContains(t, "queue help", []string{"queue", "--help"},
 		"Available Commands:", "add", "start", "status", "--auto-rework",
 		"--max-rework-attempts", "maximum automatic rework cycles (0 disables) (default 5)")

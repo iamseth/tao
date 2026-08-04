@@ -8,7 +8,7 @@ type commandGroup struct {
 var topLevelCommandGroups = []commandGroup{
 	{
 		heading:  "Plan Commands",
-		commands: []string{"list", "show", "note", "validate", "staleness", "edit", "delete"},
+		commands: []string{"list", "show", "report", "note", "validate", "staleness", "edit", "delete"},
 	},
 	{
 		heading:  "Execution Commands",

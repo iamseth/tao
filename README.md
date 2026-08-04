@@ -184,6 +184,7 @@ tao monitor [--once] [--interval DURATION] [--show-invalid]
 tao show <plan-id-or-slug>
 tao log [--follow] <plan-id-or-slug>
 tao validate <plan-id-or-slug-or-path>
+tao report --output PATH [--planning-only] [--force] <plan-id-or-slug-or-path>
 tao review [--run] <plan-id-or-slug-or-path>
 tao staleness <plan-id-or-slug-or-path>
 tao insights [--digest] [--all-repos]
@@ -196,8 +197,17 @@ tao workspace status <plan-id-or-slug-or-path>
 tao workspace clean [--force] [--force-active] [--force-dirty] <plan-id-or-slug-or-path>
 ```
 
-`tao init` registers the checkout in Tao's local repository catalog. `tao review`
-shows the persisted post-completion LLM review; add `--run` to refresh it against
+`tao init` registers the checkout in Tao's local repository catalog. `tao report`
+exports a sanitized Markdown snapshot for access-controlled sharing with coworkers
+who have repository access: the default is a full lifecycle report, while
+`--planning-only` writes a synthesized, non-verbatim planning record without
+execution or review history. Ordinary repository URLs and filesystem paths are
+preserved; credentials, credential-bearing URLs, and common personal identifiers
+are redacted. Choose an explicit destination such as `--output prompts/my-plan.md`
+(or `--output -` for stdout), and review the result before sharing. Tao never
+stages or commits report output.
+
+`tao review` shows the persisted post-completion LLM review; add `--run` to refresh it against
 the current `base..HEAD` diff. `tao staleness` is the renamed base-commit check:
 it compares a plan's recorded base commit with current `HEAD` and warns when
 later commits touched files expected by pending slices. `tao insights --all-repos`

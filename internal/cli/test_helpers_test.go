@@ -250,7 +250,7 @@ type runPlanFixture struct {
 	t    *testing.T
 }
 
-func newRunPlanFixture(t *testing.T, status string, pending []string, completed []string, sliceID string, sliceStatus string) runPlanFixture { //nolint:unparam // completed kept for fixture flexibility
+func newRunPlanFixture(t *testing.T, status string, pending []string, completed []string, sliceID string, sliceStatus string) runPlanFixture {
 	t.Helper()
 	fixture := runPlanFixture{root: t.TempDir(), id: "20260430-1200-run-plan", t: t}
 	fixture.write(status, pending, completed, sliceID, sliceStatus)
