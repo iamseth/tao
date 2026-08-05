@@ -248,7 +248,7 @@ func renderAllInsightsDigest(out io.Writer, report insights.Report) error {
 		}
 	}
 	for _, item := range report.ReworkPlans[:min(len(report.ReworkPlans), digestMaxReworkPlans)] {
-		if err := writef(&digest, "- `%s`: %d rounds\n", limitDigestText(qualifiedPlan(item.RepositoryName, item.RepositoryID, item.PlanID)), item.Rounds); err != nil {
+		if err := renderDigestReworkPlan(&digest, qualifiedPlan(item.RepositoryName, item.RepositoryID, item.PlanID), item); err != nil {
 			return err
 		}
 	}
@@ -512,7 +512,7 @@ func renderInsightsDigestContent(out io.Writer, report insights.Report) error {
 		}
 	}
 	for _, item := range report.ReworkPlans[:min(len(report.ReworkPlans), digestMaxReworkPlans)] {
-		if err := writef(out, "- `%s`: %d rounds\n", limitDigestText(item.PlanID), item.Rounds); err != nil {
+		if err := renderDigestReworkPlan(out, item.PlanID, item); err != nil {
 			return err
 		}
 	}
@@ -540,6 +540,18 @@ func renderInsightsDigestContent(out io.Writer, report insights.Report) error {
 		}
 	}
 	return nil
+}
+
+func renderDigestReworkPlan(out io.Writer, label string, item insights.ReworkPlan) error {
+	if err := writef(out, "- `%s`: %d rounds", limitDigestText(label), item.Rounds); err != nil {
+		return err
+	}
+	if len(item.StoppedReasons) > 0 {
+		if err := writef(out, " — stopped: %s", limitDigestText(strings.Join(item.StoppedReasons, "; "))); err != nil {
+			return err
+		}
+	}
+	return writeln(out, "")
 }
 
 func limitDigestText(value string) string {

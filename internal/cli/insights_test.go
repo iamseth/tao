@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/iamseth/tao/internal/agent/logrecord"
 	"github.com/iamseth/tao/internal/insights"
@@ -122,6 +123,87 @@ func TestInsightsDigestIsDeterministicAndCapped(t *testing.T) {
 	}
 	if first.Len() > digestMaxBytes {
 		t.Errorf("digest length = %d, want at most %d", first.Len(), digestMaxBytes)
+	}
+}
+
+func TestInsightsDigestRendersBoundedReworkStopContext(t *testing.T) {
+	stopReasons := []string{"  durable\nstop  ", strings.Repeat("界", 80) + " tail"}
+	reworkPlans := []insights.ReworkPlan{
+		{RepositoryName: "alpha", RepositoryID: "repo-a", PlanID: "plan-a", Rounds: 4, StoppedReasons: stopReasons},
+		{RepositoryName: "alpha", RepositoryID: "repo-a", PlanID: "plan-b", Rounds: 3},
+	}
+	for _, suffix := range []string{"c", "d", "e"} {
+		reworkPlans = append(reworkPlans, insights.ReworkPlan{RepositoryName: "alpha", RepositoryID: "repo-a", PlanID: "plan-" + suffix, Rounds: 2})
+	}
+	reworkPlans = append(reworkPlans, insights.ReworkPlan{RepositoryName: "alpha", RepositoryID: "repo-a", PlanID: "overflow", Rounds: 6, StoppedReasons: []string{"overflow-stop"}})
+	report := insights.Report{PlansScanned: 6, ReworkPlans: reworkPlans}
+	boundedReasons := limitDigestText(strings.Join(stopReasons, "; "))
+
+	tests := []struct {
+		name          string
+		render        func(*bytes.Buffer, insights.Report) error
+		stoppedLabel  string
+		unstoppedLine string
+	}{
+		{name: "repository", render: func(out *bytes.Buffer, report insights.Report) error { return renderInsightsDigest(out, report) }, stoppedLabel: "plan-a", unstoppedLine: "- `plan-b`: 3 rounds\n"},
+		{name: "all repositories", render: func(out *bytes.Buffer, report insights.Report) error { return renderAllInsightsDigest(out, report) }, stoppedLabel: "alpha [repo-a]/plan-a", unstoppedLine: "- `alpha [repo-a]/plan-b`: 3 rounds\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var first, second bytes.Buffer
+			if err := test.render(&first, report); err != nil {
+				t.Fatal(err)
+			}
+			if err := test.render(&second, report); err != nil {
+				t.Fatal(err)
+			}
+			if first.String() != second.String() {
+				t.Fatal("digest is not deterministic")
+			}
+			wantStopped := fmt.Sprintf("- `%s`: 4 rounds — stopped: %s\n", test.stoppedLabel, boundedReasons)
+			if !strings.Contains(first.String(), wantStopped) {
+				t.Errorf("digest missing bounded stopped context %q:\n%s", wantStopped, first.String())
+			}
+			if !strings.Contains(first.String(), test.unstoppedLine) {
+				t.Errorf("digest changed unstopped line %q:\n%s", test.unstoppedLine, first.String())
+			}
+			for _, excluded := range []string{" tail", "overflow", "overflow-stop"} {
+				if strings.Contains(first.String(), excluded) {
+					t.Errorf("digest contains excluded text %q:\n%s", excluded, first.String())
+				}
+			}
+			if !utf8.ValidString(first.String()) {
+				t.Fatal("digest is not valid UTF-8")
+			}
+		})
+	}
+}
+
+func TestInsightsDigestGlobalCapPreservesUTF8(t *testing.T) {
+	longText := strings.Repeat("界", 100)
+	report := insights.Report{PlansScanned: 20}
+	for i := range digestMaxBuckets {
+		report.BlockedReasons = append(report.BlockedReasons, insights.ReasonBucket{Reason: fmt.Sprintf("reason-%d-%s", i, longText), Count: 1, Exemplars: []string{longText}})
+	}
+	for i := range digestMaxReworkPlans {
+		report.ReworkPlans = append(report.ReworkPlans, insights.ReworkPlan{PlanID: fmt.Sprintf("rework-%d-%s", i, longText), Rounds: 5, StoppedReasons: []string{longText}})
+	}
+	for i := range digestMaxOutlierPlans {
+		report.OutlierPlans = append(report.OutlierPlans, insights.PlanOutlier{PlanID: fmt.Sprintf("outlier-%d-%s", i, longText)})
+	}
+
+	var out bytes.Buffer
+	if err := renderInsightsDigest(&out, report); err != nil {
+		t.Fatal(err)
+	}
+	if out.Len() > digestMaxBytes {
+		t.Fatalf("digest length = %d, want <= %d", out.Len(), digestMaxBytes)
+	}
+	if !strings.HasSuffix(out.String(), "\n… digest truncated\n") {
+		t.Fatalf("digest did not exercise global cap:\n%s", out.String())
+	}
+	if !utf8.ValidString(out.String()) {
+		t.Fatal("globally capped digest is not valid UTF-8")
 	}
 }
 
