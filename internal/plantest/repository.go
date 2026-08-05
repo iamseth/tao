@@ -63,11 +63,11 @@ func (r *Repository) AddDetail(detail *plan.PlanDetail) {
 
 // WriteState implements plan.ArtifactStore. Mutations are applied directly to
 // the detail pointer by applyArtifactMutation so this is a no-op.
-func (r *Repository) WriteState(_ string, _ plan.State) error { return nil }
+func (r *Repository) WriteState(_ string, _ []byte) error { return nil }
 
 // WriteSlices implements plan.ArtifactStore. Mutations are applied directly to
 // the detail pointer by applyArtifactMutation so this is a no-op.
-func (r *Repository) WriteSlices(_ string, _ plan.SlicesFile) error { return nil }
+func (r *Repository) WriteSlices(_ string, _ []byte) error { return nil }
 
 // AppendEvent implements plan.EventAppender.  Events are appended to
 // detail.Events by applyArtifactMutation so this is a no-op.

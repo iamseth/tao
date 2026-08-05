@@ -265,92 +265,6 @@ func TestPlanReviewStatePersistence(t *testing.T) {
 	}
 }
 
-func TestWriteStateClearsReviewFindingsWhenNextReviewIsEmpty(t *testing.T) {
-	dir := t.TempDir()
-	reviewedAt := time.Date(2026, 6, 28, 7, 1, 2, 0, time.UTC)
-	state := startSliceDetail(dir).State
-	state.Plan.Review = &PlanReview{
-		Status:        ReviewStatusCompleted,
-		Verdict:       ReviewVerdictChangesRequested,
-		Summary:       "Needs work.",
-		FindingsCount: 1,
-		Findings: []ReviewFinding{
-			{Severity: "major", File: "internal/plan/lifecycle_models.go", Line: 136, Message: "Stale findings can survive review rewrites.", Suggestion: "Persist an empty findings array."},
-		},
-		ReviewedAt: reviewedAt,
-	}
-	if err := writeState(dir, state); err != nil {
-		t.Fatal(err)
-	}
-
-	state.Plan.Review = &PlanReview{
-		Status:        ReviewStatusCompleted,
-		Verdict:       ReviewVerdictApprove,
-		Summary:       "Ready to merge.",
-		FindingsCount: 0,
-		Findings:      []ReviewFinding{},
-		ReviewedAt:    reviewedAt.Add(time.Minute),
-	}
-	if err := writeState(dir, state); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := ReadState(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Plan.Review == nil {
-		t.Fatal("expected persisted plan review metadata")
-	}
-	if got.Plan.Review.FindingsCount != 0 || len(got.Plan.Review.Findings) != 0 {
-		t.Fatalf("expected empty review findings, got count=%d findings=%+v", got.Plan.Review.FindingsCount, got.Plan.Review.Findings)
-	}
-
-	var raw map[string]any
-	readJSONFile(t, filepath.Join(dir, "state.json"), &raw)
-	reviewObject := raw["plan"].(map[string]any)["review"].(map[string]any)
-	findings, ok := reviewObject["findings"].([]any)
-	if !ok || len(findings) != 0 {
-		t.Fatalf("state.json should persist an empty findings array, got %#v", reviewObject["findings"])
-	}
-}
-
-func TestWriteStateClearsReviewCommitMessageOnReplacement(t *testing.T) {
-	dir := t.TempDir()
-	reviewedAt := time.Date(2026, 7, 23, 19, 30, 0, 0, time.UTC)
-	state := startSliceDetail(dir).State
-	state.Plan.Review = &PlanReview{
-		Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Summary: "Ready.", Findings: []ReviewFinding{},
-		CommitMessage: &ReviewCommitMessage{Subject: "feat(review): persist approved commit proposals", Body: "What:\nPersist the proposal.\n\nWhy:\nReuse reviewed context."},
-		Base:          "base123", Head: "head123", ReviewedAt: reviewedAt,
-	}
-	if err := writeState(dir, state); err != nil {
-		t.Fatal(err)
-	}
-
-	state.Plan.Review = &PlanReview{
-		Status: ReviewStatusCompleted, Verdict: ReviewVerdictChangesRequested, Summary: "Needs work.", FindingsCount: 1,
-		Findings: []ReviewFinding{{Message: "Fix this."}}, Base: "base123", Head: "head456", ReviewedAt: reviewedAt.Add(time.Minute),
-	}
-	if err := writeState(dir, state); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := ReadState(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Plan.Review == nil || got.Plan.Review.CommitMessage != nil {
-		t.Fatalf("replacement review retained commit message: %+v", got.Plan.Review)
-	}
-	var raw map[string]any
-	readJSONFile(t, filepath.Join(dir, "state.json"), &raw)
-	reviewObject := raw["plan"].(map[string]any)["review"].(map[string]any)
-	if value, exists := reviewObject["commit_message"]; !exists || value != nil {
-		t.Fatalf("state.json should persist commit_message: null, got %#v", reviewObject)
-	}
-}
-
 func TestWriteStateAndSlicesPreserveUnknownJSONFields(t *testing.T) {
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
@@ -363,11 +277,11 @@ func TestWriteStateAndSlicesPreserveUnknownJSONFields(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	preparedState, err := prepareJSON(filepath.Join(dir, "state.json"), detail.State)
+	preparedState, err := prepareJSON(filepath.Join(dir, "state.json"), detail.State, artifactJSONChanges{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	preparedSlices, err := prepareJSON(filepath.Join(dir, "slices.json"), detail.Slices)
+	preparedSlices, err := prepareJSON(filepath.Join(dir, "slices.json"), detail.Slices, artifactJSONChanges{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,6 +313,322 @@ func TestWriteStateAndSlicesPreserveUnknownJSONFields(t *testing.T) {
 	if slices["custom_slices_field"] != "keep" || slices["slices"].([]any)[0].(map[string]any)["custom_slice_field"] != "keep" {
 		t.Fatalf("expected custom slice fields to be preserved: %#v", slices)
 	}
+}
+
+func TestArtifactChangeSetLowersDeclaredIntentAndPreservesUnknownFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	existing := `{"schema":"tao.plan.state.v1","status":"in_review","created_at":"2026-05-03T23:00:00Z","updated_at":"2026-05-03T23:00:00Z","repo":{"name":"","root":"","branch":""},"plan":{"id":"plan-a","title":"Plan A","current_slice":null,"completed_slices":[],"pending_slices":[],"timing":{"started_at":null,"completed_at":null,"last_activity_at":null},"review":{"status":"completed","verdict":"approve","summary":"old","findings_count":1,"findings":[{"message":"old"}],"commit_message":{"subject":"fix(plan): old","body":"old"},"base":"base","head":"head","agent":"pi","reviewed_at":"2026-05-03T23:00:00Z","unknown_review":"keep"},"unknown_plan":"keep"},"global_invariants":[],"open_questions":[],"unknown_state":"keep"}`
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	detail := startSliceDetail(dir)
+	detail.State.Plan.Review = nil
+	preserved, err := prepareJSON(path, detail.State, stateJSONChanges(NewArtifactChangeSet(detail)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var preservedRoot map[string]any
+	if err := json.Unmarshal(preserved, &preservedRoot); err != nil {
+		t.Fatal(err)
+	}
+	preservedPlan := preservedRoot["plan"].(map[string]any)
+	if preservedPlan["review"].(map[string]any)["summary"] != "old" || preservedPlan["unknown_plan"] != "keep" || preservedRoot["unknown_state"] != "keep" {
+		t.Fatalf("undeclared review or unknown siblings were not preserved: %#v", preservedRoot)
+	}
+
+	clearChanges := NewArtifactChangeSet(detail)
+	clearChanges.ClearPlanReview()
+	cleared, err := prepareJSON(path, detail.State, stateJSONChanges(clearChanges))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var clearedRoot map[string]any
+	if err := json.Unmarshal(cleared, &clearedRoot); err != nil {
+		t.Fatal(err)
+	}
+	clearedPlan := clearedRoot["plan"].(map[string]any)
+	if value, ok := clearedPlan["review"]; !ok || value != nil {
+		t.Fatalf("declared review clear did not emit null: %#v", clearedPlan)
+	}
+	if clearedPlan["unknown_plan"] != "keep" || clearedRoot["unknown_state"] != "keep" {
+		t.Fatalf("declared clear erased unknown siblings: %#v", clearedRoot)
+	}
+
+	replacement := PlanReview{ReviewedAt: time.Date(2026, 5, 4, 0, 0, 0, 0, time.UTC)}
+	replaceChanges := NewArtifactChangeSet(detail)
+	if err := replaceChanges.ReplacePlanReview(replacement); err != nil {
+		t.Fatal(err)
+	}
+	replaced, err := prepareJSON(path, detail.State, stateJSONChanges(replaceChanges))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var replacedRoot map[string]any
+	if err := json.Unmarshal(replaced, &replacedRoot); err != nil {
+		t.Fatal(err)
+	}
+	review := replacedRoot["plan"].(map[string]any)["review"].(map[string]any)
+	if review["base"] != "" || review["commit_message"] != nil {
+		t.Fatalf("review replacement did not lower explicit empty string/null: %#v", review)
+	}
+	if findings, ok := review["findings"].([]any); !ok || len(findings) != 0 {
+		t.Fatalf("review replacement did not lower findings as []: %#v", review["findings"])
+	}
+	if review["unknown_review"] != "keep" || replacedRoot["plan"].(map[string]any)["unknown_plan"] != "keep" {
+		t.Fatalf("review replacement erased unknown fields: %#v", replacedRoot)
+	}
+}
+
+func TestPersistStateChangesRebasesReviewReplacementAndPreservesUnknownFields(t *testing.T) {
+	dir := t.TempDir()
+	state := startSliceDetail(dir).State
+	state.Plan.Review = &PlanReview{
+		Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Summary: "old summary", FindingsCount: 1,
+		Findings:      []ReviewFinding{{Message: "old finding"}},
+		CommitMessage: &ReviewCommitMessage{Subject: "fix(plan): old", Body: "old body"},
+		Base:          "old-base", Head: "old-head", Agent: "old-agent",
+		ReviewedAt: time.Date(2026, 8, 5, 1, 0, 0, 0, time.UTC),
+	}
+	if err := writeState(dir, state); err != nil {
+		t.Fatal(err)
+	}
+	slices := startSliceDetail(dir).Slices
+	if err := writeSlices(dir, slices); err != nil {
+		t.Fatal(err)
+	}
+	detail := &PlanDetail{Dir: dir, State: cloneState(state), Slices: slices}
+	record, err := NewPlanRecord(dir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var raw map[string]any
+	readJSONFile(t, filepath.Join(dir, "state.json"), &raw)
+	planObject := raw["plan"].(map[string]any)
+	planObject["title"] = "concurrent title"
+	planObject["unknown_plan"] = "keep"
+	planObject["review"].(map[string]any)["unknown_review"] = "keep"
+	payload, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	replacement := PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictComment}
+	changes := NewArtifactChangeSet(detail)
+	if err := changes.ReplacePlanReview(replacement); err != nil {
+		t.Fatal(err)
+	}
+	if err := record.PersistStateChanges(changes); err != nil {
+		t.Fatal(err)
+	}
+
+	readJSONFile(t, filepath.Join(dir, "state.json"), &raw)
+	planObject = raw["plan"].(map[string]any)
+	review := planObject["review"].(map[string]any)
+	if planObject["title"] != "concurrent title" || planObject["unknown_plan"] != "keep" || review["unknown_review"] != "keep" {
+		t.Fatalf("review replacement rebase erased concurrent or unknown fields: %#v", planObject)
+	}
+	if review["status"] != ReviewStatusCompleted || review["verdict"] != ReviewVerdictComment || review["summary"] != "" || review["findings_count"] != float64(0) || review["base"] != "" || review["head"] != "" || review["agent"] != "" {
+		t.Fatalf("review replacement did not replace every known scalar field: %#v", review)
+	}
+	if findings, ok := review["findings"].([]any); !ok || len(findings) != 0 {
+		t.Fatalf("review replacement did not persist findings: []: %#v", review)
+	}
+	if message, exists := review["commit_message"]; !exists || message != nil {
+		t.Fatalf("review replacement did not persist commit_message: null: %#v", review)
+	}
+	if _, exists := review["reviewed_at"]; !exists {
+		t.Fatalf("review replacement omitted reviewed_at: %#v", review)
+	}
+}
+
+func TestArtifactChangeSetThreadsThroughArtifactMutation(t *testing.T) {
+	dir := t.TempDir()
+	detail := startSliceDetail(dir)
+	detail.State.Plan.Review = &PlanReview{Summary: "old", Findings: []ReviewFinding{}, ReviewedAt: time.Date(2026, 5, 3, 23, 0, 0, 0, time.UTC)}
+	if err := writeState(dir, detail.State); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSlices(dir, detail.Slices); err != nil {
+		t.Fatal(err)
+	}
+
+	err := applyArtifactMutation(fileArtifactStore{}, dir, detail, func(working *PlanDetail) (lifecycleMutation, error) {
+		return applyLifecycleMutation(working, func(changes *ArtifactChangeSet) ([]Event, error) {
+			changes.ClearPlanReview()
+			return nil, changes.ClearSliceBlockerNote("001-a")
+		})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state map[string]any
+	readJSONFile(t, filepath.Join(dir, "state.json"), &state)
+	if value, ok := state["plan"].(map[string]any)["review"]; !ok || value != nil {
+		t.Fatalf("artifact mutation did not lower state clear: %#v", state)
+	}
+	var slicesRoot map[string]any
+	readJSONFile(t, filepath.Join(dir, "slices.json"), &slicesRoot)
+	slice := slicesRoot["slices"].([]any)[0].(map[string]any)
+	if value, ok := slice["blocker_note"]; !ok || value != "" {
+		t.Fatalf("artifact mutation did not lower slice clear: %#v", slice)
+	}
+}
+
+func TestArtifactChangeSetThreadsThroughSlicesUpdate(t *testing.T) {
+	dir := t.TempDir()
+	detail := startSliceDetail(dir)
+	detail.Slices.Slices[0].BlockerNote = "old blocker"
+	if err := writeSlices(dir, detail.Slices); err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	readJSONFile(t, filepath.Join(dir, "slices.json"), &raw)
+	raw["slices"].([]any)[0].(map[string]any)["unknown_slice"] = "keep"
+	payload, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "slices.json"), payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applySlicesArtifactUpdate(fileArtifactStore{}, dir, detail, func(_ *PlanDetail, changes *ArtifactChangeSet) error {
+		return changes.ClearSliceBlockerNote("001-a")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	readJSONFile(t, filepath.Join(dir, "slices.json"), &raw)
+	slice := raw["slices"].([]any)[0].(map[string]any)
+	if slice["blocker_note"] != "" || slice["unknown_slice"] != "keep" {
+		t.Fatalf("slices update did not clear blocker note and preserve unknown sibling: %#v", slice)
+	}
+}
+
+func TestSliceBlockerClearAppliesAfterArtifactSliceRebase(t *testing.T) {
+	dir := t.TempDir()
+	baseline := startSliceDetail(dir)
+	baseline.State.Status = StatusBlocked
+	baseline.Slices.Slices[0].Status = StatusBlocked
+	baseline.Slices.Slices[0].BlockerNote = "original blocker"
+	writeStartSliceArtifacts(t, dir, baseline)
+
+	stale := clonePlanDetail(baseline)
+	stale.Slices.Slices[0].Title = "caller title"
+	settled := clonePlanDetail(baseline)
+	settled.Slices.Slices[0].BlockerNote = "newer blocker"
+	settled.Slices.Slices[0].Notes = "concurrent note"
+	if err := writeSlices(dir, settled.Slices); err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	readJSONFile(t, filepath.Join(dir, "slices.json"), &raw)
+	raw["slices"].([]any)[0].(map[string]any)["unknown_slice"] = "keep"
+	payload, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "slices.json"), payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2026, 5, 3, 23, 45, 0, 0, time.UTC)
+	if err := applyArtifactMutationPreservingDetail(fileArtifactStore{}, dir, stale, baseline, func(working *PlanDetail) (lifecycleMutation, error) {
+		return applyLifecycleMutation(working, func(changes *ArtifactChangeSet) ([]Event, error) {
+			return nil, markBlockedContinued(working, changes, now)
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	readJSONFile(t, filepath.Join(dir, "slices.json"), &raw)
+	sliceObject := raw["slices"].([]any)[0].(map[string]any)
+	if sliceObject["title"] != "caller title" || sliceObject["notes"] != "concurrent note" {
+		t.Fatalf("slice rebase lost caller or settled fields: %#v", sliceObject)
+	}
+	if value, exists := sliceObject["blocker_note"]; !exists || value != "" || sliceObject["unknown_slice"] != "keep" {
+		t.Fatalf("rebased blocker clear or unknown sibling was lost: %#v", sliceObject)
+	}
+}
+
+func TestArtifactChangeSetPreparedBytesMatchAdapterStore(t *testing.T) {
+	seed := func(t *testing.T, dir string) *PlanDetail {
+		t.Helper()
+		detail := startSliceDetail(dir)
+		detail.State.Plan.Review = &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Summary: "old", Findings: []ReviewFinding{}, ReviewedAt: time.Date(2026, 5, 3, 23, 0, 0, 0, time.UTC)}
+		if err := writeState(dir, detail.State); err != nil {
+			t.Fatal(err)
+		}
+		var raw map[string]any
+		readJSONFile(t, filepath.Join(dir, "state.json"), &raw)
+		raw["plan"].(map[string]any)["unknown_plan"] = "keep"
+		payload, err := json.Marshal(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "state.json"), payload, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return detail
+	}
+
+	fileDir := t.TempDir()
+	fileDetail := seed(t, fileDir)
+	fileRecord, err := NewPlanRecord(fileDir, fileDetail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileChanges := NewArtifactChangeSet(fileDetail)
+	fileChanges.ClearPlanReview()
+	if err := fileRecord.PersistStateChanges(fileChanges); err != nil {
+		t.Fatal(err)
+	}
+	filePayload, err := os.ReadFile(filepath.Join(fileDir, "state.json")) //nolint:gosec // Test path is rooted in t.TempDir.
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	adapterDir := t.TempDir()
+	adapterDetail := seed(t, adapterDir)
+	adapter := &payloadArtifactStore{}
+	adapterRecord, err := NewPlanRecordWithStore(adapter, adapterDir, adapterDetail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapterChanges := NewArtifactChangeSet(adapterDetail)
+	adapterChanges.ClearPlanReview()
+	if err := adapterRecord.PersistStateChanges(adapterChanges); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(adapter.statePayload, filePayload) {
+		t.Fatalf("adapter payload differs from file payload:\nadapter: %s\nfile: %s", adapter.statePayload, filePayload)
+	}
+}
+
+type payloadArtifactStore struct {
+	statePayload  []byte
+	slicesPayload []byte
+	events        []Event
+}
+
+func (s *payloadArtifactStore) WriteState(_ string, payload []byte) error {
+	s.statePayload = append([]byte(nil), payload...)
+	return nil
+}
+
+func (s *payloadArtifactStore) WriteSlices(_ string, payload []byte) error {
+	s.slicesPayload = append([]byte(nil), payload...)
+	return nil
+}
+
+func (s *payloadArtifactStore) AppendEvent(_ string, event Event) error {
+	s.events = append(s.events, event)
+	return nil
 }
 
 func TestCompleteSliceWritesStateSlicesAndEvent(t *testing.T) {
@@ -435,6 +665,172 @@ func TestCompleteSliceWritesStateSlicesAndEvent(t *testing.T) {
 	}
 	if got := readEventsFile(t, dir); !strings.Contains(got, `"type":"slice_completed"`) || !strings.Contains(got, `"duration_seconds":120`) {
 		t.Fatalf("unexpected events.jsonl %q", got)
+	}
+}
+
+func TestCurrentSliceLifecycleClearWritersPersistNullAndPreserveUnknownPlanFields(t *testing.T) {
+	started := time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)
+	transitioned := started.Add(time.Minute)
+	tests := []struct {
+		name  string
+		setup func(string) *PlanDetail
+		apply func(*PlanRecord) error
+	}{
+		{
+			name: "slice completion with pending continuation",
+			setup: func(dir string) *PlanDetail {
+				detail := startSliceDetail(dir)
+				detail.State.Status = StatusInProgress
+				detail.State.Plan.CurrentSlice = new("001-a")
+				detail.State.Plan.PendingSlices = append(detail.State.Plan.PendingSlices, "002-b")
+				detail.State.Plan.Timing.StartedAt = &started
+				detail.Slices.Slices[0].Status = StatusInProgress
+				detail.Slices.Slices[0].Timing.StartedAt = &started
+				detail.Slices.Slices = append(detail.Slices.Slices, Slice{ID: "002-b", Status: StatusPending})
+				return detail
+			},
+			apply: func(record *PlanRecord) error {
+				return record.CompleteSlice("001-a", "done", nil, transitioned)
+			},
+		},
+		{
+			name: "slice completion with outcome",
+			setup: func(dir string) *PlanDetail {
+				detail := startSliceDetail(dir)
+				detail.State.Status = StatusInProgress
+				detail.State.Plan.CurrentSlice = new("001-a")
+				detail.State.Plan.Timing.StartedAt = &started
+				detail.Slices.Slices[0].Status = StatusInProgress
+				detail.Slices.Slices[0].Timing.StartedAt = &started
+				detail.Slices.Slices[0].CommitIntent = &SliceCommitIntent{Policy: "slice", CreatedAt: started}
+				return detail
+			},
+			apply: func(record *PlanRecord) error {
+				outcome := SliceCompletionOutcome{Outcome: SliceCompletionNoChanges}
+				return record.CompleteSliceWithOutcome("001-a", "done", nil, outcome, transitioned)
+			},
+		},
+		{
+			name: "plan reopen",
+			setup: func(dir string) *PlanDetail {
+				detail := startSliceDetail(dir)
+				detail.State.Status = StatusReviewed
+				detail.State.Plan.CurrentSlice = new("001-a")
+				detail.State.Plan.PendingSlices = nil
+				detail.State.Plan.CompletedSlices = []string{"001-a"}
+				detail.State.Plan.Timing.CompletedAt = &started
+				detail.Slices.Slices[0].Status = StatusCompleted
+				return detail
+			},
+			apply: func(record *PlanRecord) error {
+				return record.Reopen([]Slice{{ID: "002-fix", Title: "Fix", Status: StatusPending}}, transitioned)
+			},
+		},
+		{
+			name: "forced plan reopen",
+			setup: func(dir string) *PlanDetail {
+				detail := startSliceDetail(dir)
+				detail.State.Status = StatusInReview
+				detail.State.Plan.CurrentSlice = new("001-a")
+				detail.State.Plan.PendingSlices = nil
+				detail.State.Plan.CompletedSlices = []string{"001-a"}
+				detail.State.Plan.Timing.CompletedAt = &started
+				detail.Slices.Slices[0].Status = StatusCompleted
+				return detail
+			},
+			apply: func(record *PlanRecord) error {
+				return record.ReopenForced([]Slice{{ID: "002-fix", Title: "Fix", Status: StatusPending}}, transitioned)
+			},
+		},
+		{
+			name: "plan edit removes stale current slice",
+			setup: func(dir string) *PlanDetail {
+				detail := startSliceDetail(dir)
+				detail.State.Status = StatusInProgress
+				detail.State.Plan.CurrentSlice = new("001-a")
+				return detail
+			},
+			apply: func(record *PlanRecord) error {
+				return record.RemoveSlice("001-a", transitioned)
+			},
+		},
+		{
+			name: "plan edit skips stale current slice",
+			setup: func(dir string) *PlanDetail {
+				detail := startSliceDetail(dir)
+				detail.State.Status = StatusInProgress
+				detail.State.Plan.CurrentSlice = new("001-a")
+				return detail
+			},
+			apply: func(record *PlanRecord) error {
+				return record.SkipSlice("001-a", transitioned)
+			},
+		},
+		{
+			name: "plan edit reorders pending slices with stale current slice",
+			setup: func(dir string) *PlanDetail {
+				detail := startSliceDetail(dir)
+				detail.State.Status = StatusInProgress
+				detail.State.Plan.CurrentSlice = new("stale")
+				detail.State.Plan.PendingSlices = append(detail.State.Plan.PendingSlices, "002-b")
+				detail.Slices.Slices = append(detail.Slices.Slices, Slice{ID: "002-b", Status: StatusPending})
+				return detail
+			},
+			apply: func(record *PlanRecord) error {
+				return record.ReorderPendingSlices([]string{"002-b", "001-a"}, transitioned)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			detail := tt.setup(dir)
+			writeStartSliceArtifacts(t, dir, detail)
+			addUnknownPlanField(t, dir, "unknown_current_slice_sibling", "keep")
+
+			if err := tt.apply(testRecord(dir, detail)); err != nil {
+				t.Fatal(err)
+			}
+
+			var raw map[string]any
+			readJSONFile(t, filepath.Join(dir, "state.json"), &raw)
+			planObject := raw["plan"].(map[string]any)
+			if value, exists := planObject["current_slice"]; !exists || value != nil {
+				t.Fatalf("current_slice clear = %#v, exists=%t; want explicit null", value, exists)
+			}
+			if planObject["unknown_current_slice_sibling"] != "keep" {
+				t.Fatalf("current_slice clear erased unknown plan sibling: %#v", planObject)
+			}
+		})
+	}
+}
+
+func TestArtifactMutationWasRecoveredMatchesCurrentSliceClear(t *testing.T) {
+	started := time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)
+	completed := started.Add(time.Minute)
+	stale := startSliceDetail("")
+	stale.State.Status = StatusInProgress
+	stale.State.Plan.CurrentSlice = new("001-a")
+	stale.Slices.Slices[0].Status = StatusInProgress
+	stale.Slices.Slices[0].Timing.StartedAt = &started
+
+	requested, err := completeSliceMutation("001-a", "done", nil, completed)(clonePlanDetail(stale))
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed := clonePlanDetail(stale)
+	replayed.State = requested.State
+	replayed.Slices = requested.Slices
+	for _, event := range requested.Events {
+		event.MutationID = "replayed-mutation"
+		replayed.Events = append(replayed.Events, event)
+	}
+	if !artifactMutationWasRecovered(replayed, requested) {
+		t.Fatal("replayed completion with current_slice clear did not match requested artifact mutation")
+	}
+	if replayed.State.Plan.CurrentSlice != nil {
+		t.Fatalf("replayed completion retained current_slice %q", *replayed.State.Plan.CurrentSlice)
 	}
 }
 
@@ -710,8 +1106,19 @@ func TestContinueBlockedPlanWritesInProgressState(t *testing.T) {
 	now := time.Date(2026, 5, 3, 23, 45, 0, 0, time.UTC)
 	detail := startSliceDetail(dir)
 	detail.State.Status = StatusBlocked
+	detail.Slices.Slices[0].Status = StatusBlocked
 	detail.Slices.Slices[0].BlockerNote = "resolved blocker"
 	writeStartSliceArtifacts(t, dir, detail)
+	var raw map[string]any
+	readJSONFile(t, filepath.Join(dir, "slices.json"), &raw)
+	raw["slices"].([]any)[0].(map[string]any)["unknown_slice"] = "keep"
+	payload, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "slices.json"), payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := testRecord(dir, detail).ContinueBlocked(now); err != nil {
 		t.Fatal(err)
@@ -724,6 +1131,11 @@ func TestContinueBlockedPlanWritesInProgressState(t *testing.T) {
 	slices := readSlicesFile(t, dir)
 	if slices.Slices[0].Status != StatusInProgress || slices.Slices[0].BlockerNote != "" {
 		t.Fatalf("expected selected slice in progress with cleared blocker note, got %#v", slices.Slices[0])
+	}
+	readJSONFile(t, filepath.Join(dir, "slices.json"), &raw)
+	sliceObject := raw["slices"].([]any)[0].(map[string]any)
+	if value, exists := sliceObject["blocker_note"]; !exists || value != "" || sliceObject["unknown_slice"] != "keep" {
+		t.Fatalf("continued slice did not persist an explicit clear and unknown sibling: %#v", sliceObject)
 	}
 }
 
@@ -748,7 +1160,7 @@ func TestApplyLifecycleMutationReturnsExplicitArtifacts(t *testing.T) {
 	now := time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)
 	detail := startSliceDetail("")
 
-	mutation, err := applyLifecycleMutation(detail, func() ([]Event, error) {
+	mutation, err := applyLifecycleMutation(detail, func(_ *ArtifactChangeSet) ([]Event, error) {
 		event, appendEvent, err := MarkSliceStarted(detail, "001-a", now)
 		if err != nil {
 			return nil, err
@@ -2357,7 +2769,11 @@ func TestPlanRecordLoadsLegacyStateAdvancedTornWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writeState(dir, mutation.State); err != nil {
+	payload, err := prepareJSON(filepath.Join(dir, "state.json"), mutation.State, stateJSONChanges(mutation.Changes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicWriteFile(filepath.Join(dir, "state.json"), payload); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2408,7 +2824,11 @@ func TestLegacyAutomaticCompletionTornWriteRequiresOutcomeRecovery(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writeState(dir, mutation.State); err != nil {
+	payload, err := prepareJSON(filepath.Join(dir, "state.json"), mutation.State, stateJSONChanges(mutation.Changes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicWriteFile(filepath.Join(dir, "state.json"), payload); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2530,6 +2950,21 @@ func writeStartSliceArtifacts(t *testing.T, dir string, detail *PlanDetail) {
 		t.Fatal(err)
 	}
 	if err := writeSlices(dir, detail.Slices); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func addUnknownPlanField(t *testing.T, dir, key string, value any) {
+	t.Helper()
+	path := filepath.Join(dir, "state.json")
+	var raw map[string]any
+	readJSONFile(t, path, &raw)
+	raw["plan"].(map[string]any)[key] = value
+	payload, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }

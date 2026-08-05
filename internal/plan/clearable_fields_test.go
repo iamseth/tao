@@ -1,39 +1,23 @@
-// Package plan: clearable_fields_test.go pins the mergeJSON clearable-field
-// contract with table-driven round-trips through the real WriteState write path.
+// Package plan: clearable_fields_test.go pins the mergeJSON clear contract with
+// table-driven round-trips through the real persistence paths.
 //
 // # Clearable fields
 //
-// A clearable field is declared WITHOUT omitempty so that marshalling an
-// explicit zero/nil/empty value produces a JSON key in the encoded output.
-// When writeJSON deep-merges the update over the existing file, that explicit
-// zero overwrites the prior stored value.
+// Unmigrated clearable fields are declared WITHOUT omitempty so marshaling an
+// explicit zero/nil/empty value produces a JSON key that writeJSON merges over
+// the prior value. Migrated fields use omitempty to preserve by default and are
+// cleared only by a typed ArtifactChangeSet declaration.
 //
-// Intended-clearable fields (add entries here when a field is made clearable;
-// removing omitempty from an existing field is a schema-aware decision that
-// must also add a test case below):
+// Tag-driven clearable fields (removing omitempty from an existing field is a
+// schema-aware decision that must also add a test case below):
 //
-//   - State.Plan.CurrentSlice (*string, "current_slice"): cleared to nil by
-//     writing null — signals no slice is in progress.
 //   - PlanState.LastRunCommitPolicy (string, "last_run_commit_policy"): cleared
 //     to "" by writing explicit empty — lets later run-start writes replace stale policy.
 //   - PlanState.LastRunStartingDirty ([]string, "last_run_starting_dirty"): cleared
 //     to [] by writing an empty slice — lets clean run starts replace stale path tolerances.
-//   - PlanReview.Findings ([]ReviewFinding, "findings"): cleared to [] by
-//     writing an empty slice — prevents stale findings surviving review rewrites.
-//   - PlanReview.CommitMessage (*ReviewCommitMessage, "commit_message"): cleared
-//     to null so non-approved replacement reviews cannot retain an approved proposal.
 //   - PlanState.MergeCommitIntent (*SingleMergeCommitIntent, "merge_commit_intent"):
 //     cleared to null after durable merge evidence or safe source supersession.
-//   - PlanReview.Verdict, Summary, FindingsCount, ReviewedAt: also non-omitempty;
-//     writing explicit zero values clears them (tested indirectly via Findings).
-//   - Workspace.DependencyFailure (string, "dependency_preparation_failure"): cleared
-//     to "" by writing explicit empty — fixes the stale-display bug in view/view.go
-//     where a prior dependency failure remained visible after a retry success.
-//   - Workspace.DependencyFingerprint (string, "dependency_fingerprint"): cleared
-//     to "" by writing explicit empty when successful-install evidence is unknown.
-//   - Slice.BlockerNote (string, "blocker_note"): cleared to "" by ContinueBlocked
-//     so resolved blocker text does not survive the slices.json merge-write.
-//
+
 // # Merge-only fields (omitempty)
 //
 // A merge-only field has `omitempty` in its struct tag.  When the Go value is
@@ -45,22 +29,28 @@
 // deliberate schema extension):
 //
 //   - State.Workspace (*Workspace, "workspace,omitempty") — the whole block
-//   - Workspace sub-fields (except DependencyFailure and DependencyFingerprint):
-//     Branch, BaseSHA, HeadSHA, etc.
+//   - State.Plan.CurrentSlice preserves by default but is explicitly clearable
+//     through ArtifactChangeSet.
+//   - Workspace sub-fields: Branch, BaseSHA, HeadSHA, etc.
+//   - Workspace.DependencyFailure and DependencyFingerprint preserve by default
+//     but are explicitly clearable through ArtifactChangeSet.
 //   - Repo.BaseCommit ("base_commit,omitempty")
 //   - PlanState.PullRequest (*PullRequest, "pull_request,omitempty")
-//   - PlanState.Review (*PlanReview, "review,omitempty") — the whole struct pointer;
-//     individual non-omitempty sub-fields inside the block ARE clearable once the
-//     block is present on disk.
+//   - PlanState.Review and all PlanReview fields preserve by default but the
+//     block is explicitly replaceable or clearable through ArtifactChangeSet.
 //
 // Known merge-only fields in slices.json:
 //
 //   - Slice.ExecutionRoot, Tags, Approval, Notes, VerificationResults (all omitempty)
+//   - Slice.BlockerNote preserves by default but is explicitly clearable through
+//     ArtifactChangeSet.
 //   - ReviewFinding sub-fields: Severity, File, Message, Suggestion (all omitempty)
 package plan
 
 import (
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -76,45 +66,6 @@ func TestClearableFieldsRoundTrip(t *testing.T) {
 	}
 
 	tests := []roundTripCase{
-		{
-			name: "State.Plan.CurrentSlice clears to nil",
-			setup: func(t *testing.T, dir string) {
-				t.Helper()
-				sliceID := "001-a"
-				state := clearableContractBaseState()
-				state.Plan.CurrentSlice = &sliceID
-				if err := writeState(dir, state); err != nil {
-					t.Fatal(err)
-				}
-			},
-			clear: func(t *testing.T, dir string) {
-				t.Helper()
-				state := clearableContractBaseState()
-				// No omitempty on current_slice: nil marshals as null,
-				// which writeJSON deep-merges over the stored string.
-				state.Plan.CurrentSlice = nil
-				if err := writeState(dir, state); err != nil {
-					t.Fatal(err)
-				}
-			},
-			check: func(t *testing.T, dir string) {
-				t.Helper()
-				got, err := ReadState(dir)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if got.Plan.CurrentSlice != nil {
-					t.Errorf("expected CurrentSlice nil after clear, got %q", *got.Plan.CurrentSlice)
-				}
-				// Confirm the raw JSON contains an explicit null (key present, not absent).
-				var raw map[string]any
-				readJSONFile(t, filepath.Join(dir, "state.json"), &raw)
-				planObj, _ := raw["plan"].(map[string]any)
-				if _, exists := planObj["current_slice"]; !exists {
-					t.Error("expected current_slice key present in state.json (as null), key is absent")
-				}
-			},
-		},
 		{
 			name: "PlanState.LastRunCommitPolicy clears to empty string",
 			setup: func(t *testing.T, dir string) {
@@ -197,104 +148,6 @@ func TestClearableFieldsRoundTrip(t *testing.T) {
 			},
 		},
 		{
-			name: "PlanReview.Findings clears to empty slice",
-			setup: func(t *testing.T, dir string) {
-				t.Helper()
-				reviewedAt := time.Date(2026, 6, 28, 7, 0, 0, 0, time.UTC)
-				state := clearableContractBaseState()
-				state.Plan.Review = &PlanReview{
-					Status:        ReviewStatusCompleted,
-					Verdict:       ReviewVerdictChangesRequested,
-					Summary:       "Needs work.",
-					FindingsCount: 1,
-					Findings:      []ReviewFinding{{Severity: "major", Message: "fix this"}},
-					ReviewedAt:    reviewedAt,
-				}
-				if err := writeState(dir, state); err != nil {
-					t.Fatal(err)
-				}
-			},
-			clear: func(t *testing.T, dir string) {
-				t.Helper()
-				reviewedAt := time.Date(2026, 6, 28, 7, 1, 0, 0, time.UTC)
-				state := clearableContractBaseState()
-				// No omitempty on Findings: []ReviewFinding{} marshals as [],
-				// which writeJSON deep-merges via mergeJSONArray(existing, []) → [].
-				state.Plan.Review = &PlanReview{
-					Status:        ReviewStatusCompleted,
-					Verdict:       ReviewVerdictApprove,
-					Summary:       "Ready to merge.",
-					FindingsCount: 0,
-					Findings:      []ReviewFinding{},
-					ReviewedAt:    reviewedAt,
-				}
-				if err := writeState(dir, state); err != nil {
-					t.Fatal(err)
-				}
-			},
-			check: func(t *testing.T, dir string) {
-				t.Helper()
-				got, err := ReadState(dir)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if got.Plan.Review == nil {
-					t.Fatal("expected Plan.Review non-nil after clear")
-				}
-				if len(got.Plan.Review.Findings) != 0 {
-					t.Errorf("expected Findings cleared to empty, got %+v", got.Plan.Review.Findings)
-				}
-				// Confirm state.json persists an explicit empty array rather than a null or missing key.
-				var raw map[string]any
-				readJSONFile(t, filepath.Join(dir, "state.json"), &raw)
-				planObj, _ := raw["plan"].(map[string]any)
-				reviewObj, _ := planObj["review"].(map[string]any)
-				findings, ok := reviewObj["findings"].([]any)
-				if !ok || len(findings) != 0 {
-					t.Errorf("expected findings: [] in state.json, got %#v", reviewObj["findings"])
-				}
-			},
-		},
-		{
-			name: "PlanReview.CommitMessage clears to nil",
-			setup: func(t *testing.T, dir string) {
-				t.Helper()
-				state := clearableContractBaseState()
-				state.Plan.Review = &PlanReview{
-					Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Summary: "Ready.", Findings: []ReviewFinding{},
-					CommitMessage: &ReviewCommitMessage{Subject: "feat(review): persist approved commit proposals", Body: "What:\nPersist the proposal.\n\nWhy:\nReuse reviewed context."},
-				}
-				if err := writeState(dir, state); err != nil {
-					t.Fatal(err)
-				}
-			},
-			clear: func(t *testing.T, dir string) {
-				t.Helper()
-				state := clearableContractBaseState()
-				state.Plan.Review = &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictChangesRequested, Summary: "Needs work.", Findings: []ReviewFinding{}}
-				if err := writeState(dir, state); err != nil {
-					t.Fatal(err)
-				}
-			},
-			check: func(t *testing.T, dir string) {
-				t.Helper()
-				got, err := ReadState(dir)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if got.Plan.Review == nil || got.Plan.Review.CommitMessage != nil {
-					t.Errorf("expected CommitMessage nil after clear, got %+v", got.Plan.Review)
-				}
-				var raw map[string]any
-				readJSONFile(t, filepath.Join(dir, "state.json"), &raw)
-				planObj, _ := raw["plan"].(map[string]any)
-				reviewObj, _ := planObj["review"].(map[string]any)
-				if value, exists := reviewObj["commit_message"]; !exists || value != nil {
-					t.Errorf("expected commit_message: null in state.json, got %#v", reviewObj["commit_message"])
-				}
-			},
-		},
-		{
 			name: "PlanState.MergeCommitIntent clears to nil",
 			setup: func(t *testing.T, dir string) {
 				t.Helper()
@@ -332,107 +185,6 @@ func TestClearableFieldsRoundTrip(t *testing.T) {
 				}
 			},
 		},
-		{
-			name: "Workspace.DependencyFailure clears to empty on retry success",
-			setup: func(t *testing.T, dir string) {
-				t.Helper()
-				state := clearableContractBaseState()
-				state.Workspace = &Workspace{
-					Strategy:              WorkspaceStrategyWorktree,
-					DependencyPreparation: "failed",
-					DependencyFailure:     "npm install failed: network error",
-				}
-				if err := writeState(dir, state); err != nil {
-					t.Fatal(err)
-				}
-			},
-			clear: func(t *testing.T, dir string) {
-				t.Helper()
-				state := clearableContractBaseState()
-				// No omitempty on dependency_preparation_failure: "" marshals as "",
-				// which writeJSON deep-merges over the stored failure string.
-				state.Workspace = &Workspace{
-					Strategy:              WorkspaceStrategyWorktree,
-					DependencyPreparation: "ready",
-					DependencyFailure:     "",
-				}
-				if err := writeState(dir, state); err != nil {
-					t.Fatal(err)
-				}
-			},
-			check: func(t *testing.T, dir string) {
-				t.Helper()
-				got, err := ReadState(dir)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if got.Workspace == nil {
-					t.Fatal("expected State.Workspace non-nil after clear")
-				}
-				if got.Workspace.DependencyFailure != "" {
-					t.Errorf("expected DependencyFailure cleared to empty, got %q", got.Workspace.DependencyFailure)
-				}
-				// Confirm raw JSON has the field present with an explicit empty string (not absent).
-				var raw map[string]any
-				readJSONFile(t, filepath.Join(dir, "state.json"), &raw)
-				wsObj, _ := raw["workspace"].(map[string]any)
-				val, exists := wsObj["dependency_preparation_failure"]
-				if !exists {
-					t.Error("expected dependency_preparation_failure key present in state.json (as \"\"), key is absent")
-				}
-				if val != "" {
-					t.Errorf("expected dependency_preparation_failure: \"\" in state.json, got %#v", val)
-				}
-			},
-		},
-		{
-			name: "Workspace.DependencyFingerprint clears to empty when unknown",
-			setup: func(t *testing.T, dir string) {
-				t.Helper()
-				state := clearableContractBaseState()
-				state.Workspace = &Workspace{
-					Strategy:              WorkspaceStrategyWorktree,
-					DependencyFingerprint: "6f5902ac237024bdd0c176cb93063dc4e3592dc78f70c1a4406058c3b7d46655",
-				}
-				if err := writeState(dir, state); err != nil {
-					t.Fatal(err)
-				}
-			},
-			clear: func(t *testing.T, dir string) {
-				t.Helper()
-				state := clearableContractBaseState()
-				state.Workspace = &Workspace{
-					Strategy:              WorkspaceStrategyWorktree,
-					DependencyFingerprint: "",
-				}
-				if err := writeState(dir, state); err != nil {
-					t.Fatal(err)
-				}
-			},
-			check: func(t *testing.T, dir string) {
-				t.Helper()
-				got, err := ReadState(dir)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if got.Workspace == nil {
-					t.Fatal("expected State.Workspace non-nil after clear")
-				}
-				if got.Workspace.DependencyFingerprint != "" {
-					t.Errorf("expected DependencyFingerprint cleared to empty, got %q", got.Workspace.DependencyFingerprint)
-				}
-				var raw map[string]any
-				readJSONFile(t, filepath.Join(dir, "state.json"), &raw)
-				wsObj, _ := raw["workspace"].(map[string]any)
-				val, exists := wsObj["dependency_fingerprint"]
-				if !exists {
-					t.Error("expected dependency_fingerprint key present in state.json (as \"\"), key is absent")
-				}
-				if val != "" {
-					t.Errorf("expected dependency_fingerprint: \"\" in state.json, got %#v", val)
-				}
-			},
-		},
 	}
 
 	for _, tt := range tests {
@@ -444,42 +196,255 @@ func TestClearableFieldsRoundTrip(t *testing.T) {
 		})
 	}
 
-	t.Run("Slice.BlockerNote clears to empty string", func(t *testing.T) {
-		dir := t.TempDir()
-		created := time.Date(2026, 5, 3, 23, 0, 0, 0, time.UTC)
-		slices := SlicesFile{
-			Schema: "tao.plan.slices.v1",
-			PlanID: "plan-a",
-			Slices: []Slice{{
-				ID: "001-a", Status: StatusBlocked, BlockerNote: "waiting for approval",
-				Timing: SliceTiming{CreatedAt: created, UpdatedAt: created},
-			}},
-		}
-		if err := writeSlices(dir, slices); err != nil {
-			t.Fatal(err)
-		}
-		slices.Slices[0].BlockerNote = ""
-		if err := writeSlices(dir, slices); err != nil {
-			t.Fatal(err)
-		}
+}
 
-		var got SlicesFile
-		readJSONFile(t, filepath.Join(dir, "slices.json"), &got)
-		if got.Slices[0].BlockerNote != "" {
-			t.Fatalf("expected BlockerNote cleared to empty, got %q", got.Slices[0].BlockerNote)
+func TestMigratedSliceBlockerNoteRequiresDeclaredClear(t *testing.T) {
+	field, ok := reflect.TypeOf(Slice{}).FieldByName("BlockerNote")
+	if !ok || !strings.Contains(field.Tag.Get("json"), "omitempty") {
+		t.Fatalf("Slice.BlockerNote must preserve by default with omitempty, tag=%q", field.Tag.Get("json"))
+	}
+
+	dir := t.TempDir()
+	created := time.Date(2026, 5, 3, 23, 0, 0, 0, time.UTC)
+	seeded := SlicesFile{
+		Schema: "tao.plan.slices.v1",
+		PlanID: "plan-a",
+		Slices: []Slice{{
+			ID: "001-a", Status: StatusBlocked, BlockerNote: "waiting for approval",
+			Timing: SliceTiming{CreatedAt: created, UpdatedAt: created},
+		}},
+	}
+	state := clearableContractBaseState()
+	state.Status = StatusBlocked
+	if err := writeState(dir, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSlices(dir, seeded); err != nil {
+		t.Fatal(err)
+	}
+	intended := cloneSlicesFile(seeded)
+	intended.Slices[0].BlockerNote = ""
+	if err := writeSlices(dir, intended); err != nil {
+		t.Fatal(err)
+	}
+	if got := readSlicesFile(t, dir).Slices[0].BlockerNote; got != seeded.Slices[0].BlockerNote {
+		t.Fatalf("preserve-only write changed blocker note to %q", got)
+	}
+
+	detail := &PlanDetail{Dir: dir, State: state, Slices: cloneSlicesFile(seeded)}
+	record, err := NewPlanRecord(dir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail.Slices.Slices[0].BlockerNote = ""
+	if err := record.PersistArtifacts(); err == nil || !strings.Contains(err.Error(), "Slice.BlockerNote") {
+		t.Fatalf("undeclared clear error = %v, want field-specific rejection", err)
+	}
+	if err := applySlicesArtifactUpdate(fileArtifactStore{}, dir, detail, func(_ *PlanDetail, changes *ArtifactChangeSet) error {
+		return changes.ClearSliceBlockerNote("001-a")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	readJSONFile(t, filepath.Join(dir, "slices.json"), &raw)
+	sliceObject := raw["slices"].([]any)[0].(map[string]any)
+	if value, exists := sliceObject["blocker_note"]; !exists || value != "" {
+		t.Fatalf("declared clear did not persist blocker_note as an explicit empty string: %#v", value)
+	}
+}
+
+func TestMigratedCurrentSliceRequiresDeclaredClear(t *testing.T) {
+	field, ok := reflect.TypeOf(PlanState{}).FieldByName("CurrentSlice")
+	if !ok || !strings.Contains(field.Tag.Get("json"), "omitempty") {
+		t.Fatalf("PlanState.CurrentSlice must preserve by default with omitempty, tag=%q", field.Tag.Get("json"))
+	}
+
+	dir := t.TempDir()
+	state := clearableContractBaseState()
+	state.Status = StatusInProgress
+	state.Plan.PendingSlices = []string{"001-a"}
+	state.Plan.CurrentSlice = new("001-a")
+	if err := writeState(dir, state); err != nil {
+		t.Fatal(err)
+	}
+
+	intended := cloneState(state)
+	intended.Plan.CurrentSlice = nil
+	if err := writeState(dir, intended); err != nil {
+		t.Fatal(err)
+	}
+	if got := readStateFile(t, dir).Plan.CurrentSlice; got == nil || *got != "001-a" {
+		t.Fatalf("preserve-only write changed current_slice to %v", got)
+	}
+
+	detail := &PlanDetail{Dir: dir, State: intended}
+	loadedBaseline := cloneState(state)
+	detail.loadedStateBaseline = &loadedBaseline
+	record, err := NewPlanRecord(dir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := record.PersistState(); err == nil || !strings.Contains(err.Error(), "CurrentSlice") {
+		t.Fatalf("undeclared clear error = %v, want field-specific rejection", err)
+	}
+
+	changes := NewArtifactChangeSet(detail)
+	changes.ClearPlanCurrentSlice()
+	if err := record.PersistStateChanges(changes); err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	readJSONFile(t, filepath.Join(dir, "state.json"), &raw)
+	planObject := raw["plan"].(map[string]any)
+	if value, exists := planObject["current_slice"]; !exists || value != nil {
+		t.Fatalf("declared clear did not persist current_slice as explicit null: %#v", value)
+	}
+}
+
+func TestMigratedPlanReviewRequiresDeclaredReplacement(t *testing.T) {
+	reviewType := reflect.TypeOf(PlanReview{})
+	for _, fieldName := range []string{"Verdict", "Summary", "FindingsCount", "Findings", "CommitMessage", "ReviewedAt"} {
+		field, ok := reviewType.FieldByName(fieldName)
+		if !ok || !strings.Contains(field.Tag.Get("json"), "omitempty") {
+			t.Fatalf("PlanReview.%s must preserve by default with omitempty, tag=%q", fieldName, field.Tag.Get("json"))
 		}
-		var raw map[string]any
-		readJSONFile(t, filepath.Join(dir, "slices.json"), &raw)
-		rawSlices, ok := raw["slices"].([]any)
-		if !ok || len(rawSlices) != 1 {
-			t.Fatalf("unexpected raw slices: %#v", raw["slices"])
-		}
-		sliceObj, _ := rawSlices[0].(map[string]any)
-		value, exists := sliceObj["blocker_note"]
-		if !exists || value != "" {
-			t.Errorf("expected blocker_note: \"\" in slices.json, got %#v", value)
-		}
-	})
+	}
+
+	dir := t.TempDir()
+	state := clearableContractBaseState()
+	state.Plan.Review = &PlanReview{
+		Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Summary: "ready", FindingsCount: 1,
+		Findings:      []ReviewFinding{{Message: "old finding"}},
+		CommitMessage: &ReviewCommitMessage{Subject: "fix(plan): old", Body: "old body"},
+		ReviewedAt:    time.Date(2026, 8, 5, 1, 0, 0, 0, time.UTC),
+	}
+	if err := writeState(dir, state); err != nil {
+		t.Fatal(err)
+	}
+
+	intended := cloneState(state)
+	intended.Plan.Review = &PlanReview{Status: ReviewStatusError}
+	if err := writeState(dir, intended); err != nil {
+		t.Fatal(err)
+	}
+	preserved := readStateFile(t, dir).Plan.Review
+	if preserved == nil || preserved.Verdict == "" || preserved.Summary == "" || preserved.FindingsCount == 0 || len(preserved.Findings) == 0 || preserved.CommitMessage == nil || preserved.ReviewedAt.IsZero() {
+		t.Fatalf("preserve-only write erased review fields: %+v", preserved)
+	}
+
+	detail := &PlanDetail{Dir: dir, State: intended}
+	loadedBaseline := cloneState(state)
+	detail.loadedStateBaseline = &loadedBaseline
+	record, err := NewPlanRecord(dir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := record.PersistState(); err == nil || !strings.Contains(err.Error(), "PlanReview") {
+		t.Fatalf("undeclared review replacement error = %v, want field-specific rejection", err)
+	}
+
+	changes := NewArtifactChangeSet(detail)
+	if err := changes.ReplacePlanReview(*intended.Plan.Review); err != nil {
+		t.Fatal(err)
+	}
+	if err := record.PersistStateChanges(changes); err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	readJSONFile(t, filepath.Join(dir, "state.json"), &raw)
+	review := raw["plan"].(map[string]any)["review"].(map[string]any)
+	if review["verdict"] != "" || review["summary"] != "" || review["findings_count"] != float64(0) {
+		t.Fatalf("declared replacement did not lower scalar zeros: %#v", review)
+	}
+	if findings, ok := review["findings"].([]any); !ok || len(findings) != 0 {
+		t.Fatalf("declared replacement did not persist findings: []: %#v", review)
+	}
+	if value, exists := review["commit_message"]; !exists || value != nil {
+		t.Fatalf("declared replacement did not persist commit_message: null: %#v", review)
+	}
+	if reviewedAt, exists := review["reviewed_at"]; !exists || reviewedAt == nil {
+		t.Fatalf("declared replacement did not persist reviewed_at zero: %#v", review)
+	}
+}
+
+func TestMigratedWorkspaceFieldsRequireDeclaredClear(t *testing.T) {
+	tests := []struct {
+		fieldName string
+		jsonKey   string
+		seed      func(*Workspace)
+		zero      func(*Workspace)
+		declare   func(*ArtifactChangeSet)
+	}{
+		{
+			fieldName: "DependencyFailure",
+			jsonKey:   "dependency_preparation_failure",
+			seed:      func(workspace *Workspace) { workspace.DependencyFailure = "npm install failed" },
+			zero:      func(workspace *Workspace) { workspace.DependencyFailure = "" },
+			declare:   (*ArtifactChangeSet).ClearWorkspaceDependencyFailure,
+		},
+		{
+			fieldName: "DependencyFingerprint",
+			jsonKey:   "dependency_fingerprint",
+			seed:      func(workspace *Workspace) { workspace.DependencyFingerprint = "old-fingerprint" },
+			zero:      func(workspace *Workspace) { workspace.DependencyFingerprint = "" },
+			declare:   (*ArtifactChangeSet).ClearWorkspaceDependencyFingerprint,
+		},
+	}
+
+	workspaceType := reflect.TypeOf(Workspace{})
+	for _, tt := range tests {
+		t.Run(tt.fieldName, func(t *testing.T) {
+			field, ok := workspaceType.FieldByName(tt.fieldName)
+			if !ok || !strings.Contains(field.Tag.Get("json"), "omitempty") {
+				t.Fatalf("Workspace.%s must preserve by default with omitempty, tag=%q", tt.fieldName, field.Tag.Get("json"))
+			}
+
+			dir := t.TempDir()
+			state := clearableContractBaseState()
+			state.Workspace = &Workspace{Strategy: WorkspaceStrategyWorktree}
+			tt.seed(state.Workspace)
+			if err := writeState(dir, state); err != nil {
+				t.Fatal(err)
+			}
+
+			intended := state
+			workspace := *state.Workspace
+			intended.Workspace = &workspace
+			tt.zero(intended.Workspace)
+			if err := writeState(dir, intended); err != nil {
+				t.Fatal(err)
+			}
+			var raw map[string]any
+			readJSONFile(t, filepath.Join(dir, "state.json"), &raw)
+			workspaceObject := raw["workspace"].(map[string]any)
+			if workspaceObject[tt.jsonKey] == "" {
+				t.Fatalf("preserve-only write unexpectedly cleared %s", tt.jsonKey)
+			}
+
+			detail := &PlanDetail{Dir: dir, State: intended}
+			loadedBaseline := cloneState(state)
+			detail.loadedStateBaseline = &loadedBaseline
+			record, err := NewPlanRecord(dir, detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := record.PersistState(); err == nil || !strings.Contains(err.Error(), tt.fieldName) {
+				t.Fatalf("undeclared clear error = %v, want field-specific rejection", err)
+			}
+
+			changes := NewArtifactChangeSet(detail)
+			tt.declare(changes)
+			if err := record.PersistStateChanges(changes); err != nil {
+				t.Fatal(err)
+			}
+			readJSONFile(t, filepath.Join(dir, "state.json"), &raw)
+			workspaceObject = raw["workspace"].(map[string]any)
+			value, exists := workspaceObject[tt.jsonKey]
+			if !exists || value != "" {
+				t.Fatalf("declared clear did not persist %s as an explicit empty string: %#v", tt.jsonKey, value)
+			}
+		})
+	}
 }
 
 // clearableContractBaseState returns a minimal State used by clearable-field

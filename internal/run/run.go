@@ -52,6 +52,7 @@ type FinalVerificationRecorder interface {
 type RunMetadataRecorder interface {
 	ContinueBlocked(now time.Time) error
 	PersistState() error
+	PersistStateChanges(*plan.ArtifactChangeSet) error
 	RecordStartingBranch(branch string) error
 	RecordPullRequest(pr plan.PullRequest, branch, headSHA string) error
 }

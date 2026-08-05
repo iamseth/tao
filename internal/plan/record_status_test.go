@@ -1,6 +1,8 @@
 package plan
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -38,6 +40,81 @@ func TestPlanRecordReviewStatusesBeforeMerge(t *testing.T) {
 	state = readStateFile(t, dir)
 	if state.Status != StatusReviewed {
 		t.Fatalf("approved review should set status %q before merge, got %q", StatusReviewed, state.Status)
+	}
+}
+
+func TestPlanRecordReviewWritersReplaceKnownFieldsAndPreserveUnknownFields(t *testing.T) {
+	tests := []struct {
+		name        string
+		replacement PlanReview
+		apply       func(*PlanRecord, PlanReview) error
+	}{
+		{
+			name:        "completed",
+			replacement: PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictComment, ReviewedAt: time.Date(2026, 8, 5, 2, 0, 0, 0, time.UTC)},
+			apply:       func(record *PlanRecord, review PlanReview) error { return record.RecordReviewCompleted(review, "pi") },
+		},
+		{
+			name:        "error",
+			replacement: PlanReview{Status: ReviewStatusError, ReviewedAt: time.Date(2026, 8, 5, 2, 0, 0, 0, time.UTC)},
+			apply:       func(record *PlanRecord, review PlanReview) error { return record.RecordReviewError(review, "pi") },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			detail := startSliceDetail(dir)
+			started := time.Date(2026, 8, 5, 1, 0, 0, 0, time.UTC)
+			record := testRecord(dir, detail)
+			if err := record.StartSlice("001-a", started); err != nil {
+				t.Fatal(err)
+			}
+			if err := record.CompleteSlice("001-a", "done", nil, started.Add(time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+			approval := PlanReview{
+				Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Summary: "old summary", FindingsCount: 1,
+				Findings:      []ReviewFinding{{Message: "old finding"}},
+				CommitMessage: &ReviewCommitMessage{Subject: "fix(plan): old", Body: "old body"},
+				Base:          "old-base", Head: "old-head", Agent: "old-agent", ReviewedAt: started.Add(2 * time.Minute),
+			}
+			if err := record.RecordReviewCompleted(approval, "pi"); err != nil {
+				t.Fatal(err)
+			}
+
+			var raw map[string]any
+			readJSONFile(t, filepath.Join(dir, "state.json"), &raw)
+			planObject := raw["plan"].(map[string]any)
+			planObject["unknown_plan"] = "keep"
+			planObject["review"].(map[string]any)["unknown_review"] = "keep"
+			payload, err := json.Marshal(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "state.json"), payload, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := tt.apply(record, tt.replacement); err != nil {
+				t.Fatal(err)
+			}
+			readJSONFile(t, filepath.Join(dir, "state.json"), &raw)
+			planObject = raw["plan"].(map[string]any)
+			review := planObject["review"].(map[string]any)
+			if planObject["unknown_plan"] != "keep" || review["unknown_review"] != "keep" {
+				t.Fatalf("review writer erased unknown fields: %#v", planObject)
+			}
+			if review["summary"] != "" || review["findings_count"] != float64(0) || review["base"] != "" || review["head"] != "" || review["agent"] != "" {
+				t.Fatalf("review writer retained stale known fields: %#v", review)
+			}
+			if findings, ok := review["findings"].([]any); !ok || len(findings) != 0 {
+				t.Fatalf("review writer did not persist findings: []: %#v", review)
+			}
+			if message, exists := review["commit_message"]; !exists || message != nil {
+				t.Fatalf("review writer did not persist commit_message: null: %#v", review)
+			}
+		})
 	}
 }
 

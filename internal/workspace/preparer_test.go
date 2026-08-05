@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -681,22 +682,17 @@ func dependencyPreparerRunner(install func(io.Writer) error, installCalls *int) 
 }
 
 // TestExecutionPreparerClearsDependencyFailureOnRetrySuccess verifies that a
-// subsequent successful prepare clears a persisted dependency failure from
-// state.json. Before the fix (removing omitempty from DependencyFailure),
-// the empty string from the success path was absent from the serialised JSON,
-// so the prior failure survived the deep-merge write and remained visible.
+// successful retry declares both writer-owned dependency clears while the
+// merge-preserving state write retains unknown workspace metadata.
 func TestExecutionPreparerClearsDependencyFailureOnRetrySuccess(t *testing.T) {
 	planDir := t.TempDir()
 	repoRoot := t.TempDir()
 	workspaceRoot := t.TempDir()
 	workspacePath := filepath.Join(workspaceRoot, "plan-a")
 
-	// Pre-create the workspace directory with a package-lock.json so that
-	// PrepareDependencies actually attempts npm ci (rather than skipping).
+	// A custom command runs without a supported lockfile, making successful
+	// install fingerprint evidence explicitly unknown.
 	if err := os.MkdirAll(workspacePath, 0o755); err != nil { //nolint:gosec // G301: test workspace dir
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(workspacePath, "package-lock.json"), []byte(`{}`), 0o644); err != nil { //nolint:gosec // G306: test fixture file
 		t.Fatal(err)
 	}
 
@@ -732,7 +728,10 @@ func TestExecutionPreparerClearsDependencyFailureOnRetrySuccess(t *testing.T) {
 		return plan.NewPlanRecord(planDir, detail)
 	}
 
-	preparer := ExecutionPreparer{Runner: runner, PlanRecordFactory: realRecordFactory}
+	config := DefaultConfig()
+	config.DependencyInstallBehavior = DependencyInstallCommand
+	config.DependencyInstallCommand = "custom install"
+	preparer := ExecutionPreparer{Runner: runner, PlanRecordFactory: realRecordFactory, Config: config}
 
 	// First prepare: fails due to dependency error.
 	_, err = preparer.Prepare(context.Background(), detail, ExecutionPrepareOptions{})
@@ -749,7 +748,30 @@ func TestExecutionPreparerClearsDependencyFailureOnRetrySuccess(t *testing.T) {
 		t.Fatalf("expected DependencyFailure set in state.json after failed prepare, got workspace=%#v", state1.Workspace)
 	}
 
-	// Second prepare: retry succeeds (npm ci call count == 2 now).
+	// Seed prior fingerprint evidence and an unknown sibling in the persisted
+	// workspace object before retrying.
+	statePath := filepath.Join(planDir, "state.json")
+	payload, err := os.ReadFile(statePath) //nolint:gosec // Test path is rooted in t.TempDir.
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(payload, &raw); err != nil {
+		t.Fatal(err)
+	}
+	workspaceObject := raw["workspace"].(map[string]any)
+	workspaceObject["dependency_fingerprint"] = "stale-fingerprint"
+	workspaceObject["unknown_workspace"] = "keep"
+	payload, err = json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statePath, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	detail.State.Workspace.DependencyFingerprint = "stale-fingerprint"
+
+	// Second prepare: retry succeeds (custom command call count == 2 now).
 	_, err = preparer.Prepare(context.Background(), detail, ExecutionPrepareOptions{})
 	if err != nil {
 		t.Fatalf("expected second prepare to succeed: %v", err)
@@ -766,6 +788,23 @@ func TestExecutionPreparerClearsDependencyFailureOnRetrySuccess(t *testing.T) {
 	if state2.Workspace.DependencyFailure != "" {
 		t.Errorf("expected DependencyFailure cleared in state.json after retry success, got %q", state2.Workspace.DependencyFailure)
 	}
+	if state2.Workspace.DependencyFingerprint != "" {
+		t.Errorf("expected DependencyFingerprint cleared when evidence is unknown, got %q", state2.Workspace.DependencyFingerprint)
+	}
+	payload, err = os.ReadFile(statePath) //nolint:gosec // Test path is rooted in t.TempDir.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(payload, &raw); err != nil {
+		t.Fatal(err)
+	}
+	workspaceObject = raw["workspace"].(map[string]any)
+	if workspaceObject["dependency_preparation_failure"] != "" || workspaceObject["dependency_fingerprint"] != "" {
+		t.Fatalf("expected explicit dependency clears in state.json, got %#v", workspaceObject)
+	}
+	if workspaceObject["unknown_workspace"] != "keep" {
+		t.Fatalf("unknown workspace sibling was not preserved: %#v", workspaceObject)
+	}
 }
 
 func executionPreparerPlanDetail(repoRoot string) *plan.PlanDetail {
@@ -781,6 +820,10 @@ func executionPreparerPlanDetail(repoRoot string) *plan.PlanDetail {
 type persistStateFunc func() error
 
 func (f persistStateFunc) PersistState() error {
+	return f()
+}
+
+func (f persistStateFunc) PersistStateChanges(_ *plan.ArtifactChangeSet) error {
 	return f()
 }
 

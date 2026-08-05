@@ -141,11 +141,182 @@ func writeSlices(planDir string, slices SlicesFile) error {
 	return nil
 }
 
+// ArtifactChangeSet binds explicit clear-or-replace persistence intent to one
+// plan detail. Its typed methods mutate the detail and retain the matching
+// intent until payload preparation; callers cannot supply JSON paths.
+type ArtifactChangeSet struct {
+	detail *PlanDetail
+
+	clearWorkspaceDependencyFailure     bool
+	clearWorkspaceDependencyFingerprint bool
+	clearPlanCurrentSlice               bool
+	planReview                          planReviewChange
+	clearSliceBlockerNotes              map[string]struct{}
+}
+
+type planReviewChange struct {
+	kind   planReviewChangeKind
+	review PlanReview
+}
+
+type planReviewChangeKind uint8
+
+const (
+	planReviewUnchanged planReviewChangeKind = iota
+	planReviewReplaced
+	planReviewCleared
+)
+
+// NewArtifactChangeSet creates an empty, preserve-only change set for detail.
+func NewArtifactChangeSet(detail *PlanDetail) *ArtifactChangeSet {
+	return &ArtifactChangeSet{detail: detail}
+}
+
+// ClearWorkspaceDependencyFailure explicitly clears the persisted dependency
+// preparation failure while preserving unrelated workspace fields.
+func (c *ArtifactChangeSet) ClearWorkspaceDependencyFailure() {
+	if c == nil {
+		return
+	}
+	c.clearWorkspaceDependencyFailure = true
+	if c.detail == nil {
+		return
+	}
+	if c.detail.State.Workspace == nil {
+		c.detail.State.Workspace = &Workspace{}
+	}
+	c.detail.State.Workspace.DependencyFailure = ""
+}
+
+// ClearWorkspaceDependencyFingerprint explicitly clears the persisted
+// dependency fingerprint while preserving unrelated workspace fields.
+func (c *ArtifactChangeSet) ClearWorkspaceDependencyFingerprint() {
+	if c == nil {
+		return
+	}
+	c.clearWorkspaceDependencyFingerprint = true
+	if c.detail == nil {
+		return
+	}
+	if c.detail.State.Workspace == nil {
+		c.detail.State.Workspace = &Workspace{}
+	}
+	c.detail.State.Workspace.DependencyFingerprint = ""
+}
+
+// ClearSliceBlockerNote explicitly clears one slice's persisted blocker note.
+func (c *ArtifactChangeSet) ClearSliceBlockerNote(sliceID string) error {
+	if c == nil || c.detail == nil {
+		return fmt.Errorf("plan detail is nil")
+	}
+	slice := findSlice(c.detail, sliceID)
+	if slice == nil {
+		return classify(ErrNotFound, "slice %s not found", sliceID)
+	}
+	if c.clearSliceBlockerNotes == nil {
+		c.clearSliceBlockerNotes = make(map[string]struct{})
+	}
+	c.clearSliceBlockerNotes[sliceID] = struct{}{}
+	slice.BlockerNote = ""
+	return nil
+}
+
+// ClearPlanCurrentSlice explicitly clears the persisted current slice.
+func (c *ArtifactChangeSet) ClearPlanCurrentSlice() {
+	if c == nil {
+		return
+	}
+	c.clearPlanCurrentSlice = true
+	if c.detail != nil {
+		c.detail.State.Plan.CurrentSlice = nil
+	}
+}
+
+// ReplacePlanReview replaces every known persisted review field. Empty findings
+// are normalized to [] so replacement cannot retain an older findings array.
+func (c *ArtifactChangeSet) ReplacePlanReview(review PlanReview) error {
+	if c == nil || c.detail == nil {
+		return fmt.Errorf("plan detail is nil")
+	}
+	review = normalizePlanReviewReplacement(review)
+	c.planReview = planReviewChange{kind: planReviewReplaced, review: review}
+	c.detail.State.Plan.Review = clonePlanReview(&review)
+	return nil
+}
+
+func normalizePlanReviewReplacement(review PlanReview) PlanReview {
+	review.Findings = append([]ReviewFinding{}, review.Findings...)
+	if review.CommitMessage != nil {
+		message := *review.CommitMessage
+		review.CommitMessage = &message
+	}
+	return review
+}
+
+// ClearPlanReview explicitly replaces the whole persisted review block with
+// null.
+func (c *ArtifactChangeSet) ClearPlanReview() {
+	if c == nil {
+		return
+	}
+	c.planReview = planReviewChange{kind: planReviewCleared}
+	if c.detail != nil {
+		c.detail.State.Plan.Review = nil
+	}
+}
+
+type artifactJSONKind uint8
+
+const (
+	artifactJSONNone artifactJSONKind = iota
+	artifactJSONState
+	artifactJSONSlices
+)
+
+type artifactJSONChanges struct {
+	kind    artifactJSONKind
+	changes *ArtifactChangeSet
+}
+
+func stateJSONChanges(changes *ArtifactChangeSet) artifactJSONChanges {
+	return artifactJSONChanges{kind: artifactJSONState, changes: changes}
+}
+
+func slicesJSONChanges(changes *ArtifactChangeSet) artifactJSONChanges {
+	return artifactJSONChanges{kind: artifactJSONSlices, changes: changes}
+}
+
+func (c *ArtifactChangeSet) applyState(state *State) {
+	if c == nil || state == nil {
+		return
+	}
+	if c.clearWorkspaceDependencyFailure || c.clearWorkspaceDependencyFingerprint {
+		if state.Workspace == nil {
+			state.Workspace = &Workspace{}
+		}
+		if c.clearWorkspaceDependencyFailure {
+			state.Workspace.DependencyFailure = ""
+		}
+		if c.clearWorkspaceDependencyFingerprint {
+			state.Workspace.DependencyFingerprint = ""
+		}
+	}
+	if c.clearPlanCurrentSlice {
+		state.Plan.CurrentSlice = nil
+	}
+	switch c.planReview.kind {
+	case planReviewReplaced:
+		state.Plan.Review = clonePlanReview(&c.planReview.review)
+	case planReviewCleared:
+		state.Plan.Review = nil
+	}
+}
+
 type artifactMutationFunc func(*PlanDetail) (lifecycleMutation, error)
 
 func startSliceMutation(sliceID string, executionRoot string, now time.Time) artifactMutationFunc {
 	return func(detail *PlanDetail) (lifecycleMutation, error) {
-		return applyLifecycleMutation(detail, func() ([]Event, error) {
+		return applyLifecycleMutation(detail, func(_ *ArtifactChangeSet) ([]Event, error) {
 			if executionRoot != "" {
 				if err := markSliceExecutionRoot(detail, sliceID, executionRoot); err != nil {
 					return nil, err
@@ -206,8 +377,8 @@ func completeSliceMutation(sliceID string, notes string, verificationResults []V
 
 func completeSliceWithOutcomeMutation(sliceID string, notes string, verificationResults []VerificationRun, outcome *SliceCompletionOutcome, now time.Time) artifactMutationFunc {
 	return func(detail *PlanDetail) (lifecycleMutation, error) {
-		return applyLifecycleMutation(detail, func() ([]Event, error) {
-			event, appendEvent, err := MarkSliceCompletedWithOutcome(detail, sliceID, notes, verificationResults, outcome, now)
+		return applyLifecycleMutation(detail, func(changes *ArtifactChangeSet) ([]Event, error) {
+			event, appendEvent, err := markSliceCompletedWithOutcome(detail, changes, sliceID, notes, verificationResults, outcome, now)
 			if err != nil {
 				return nil, err
 			}
@@ -221,7 +392,7 @@ func completeSliceWithOutcomeMutation(sliceID string, notes string, verification
 
 func approveSliceMutation(sliceID string, approvedBy string, now time.Time) artifactMutationFunc {
 	return func(detail *PlanDetail) (lifecycleMutation, error) {
-		return applyLifecycleMutation(detail, func() ([]Event, error) {
+		return applyLifecycleMutation(detail, func(_ *ArtifactChangeSet) ([]Event, error) {
 			event, appendEvent, err := MarkSliceApproved(detail, sliceID, approvedBy, now)
 			if err != nil {
 				return nil, err
@@ -236,7 +407,7 @@ func approveSliceMutation(sliceID string, approvedBy string, now time.Time) arti
 
 func blockSliceMutation(sliceID string, reason string, now time.Time) artifactMutationFunc {
 	return func(detail *PlanDetail) (lifecycleMutation, error) {
-		return applyLifecycleMutation(detail, func() ([]Event, error) {
+		return applyLifecycleMutation(detail, func(_ *ArtifactChangeSet) ([]Event, error) {
 			event, appendEvent, err := MarkSliceBlocked(detail, sliceID, reason, now)
 			if err != nil {
 				return nil, err
@@ -251,7 +422,7 @@ func blockSliceMutation(sliceID string, reason string, now time.Time) artifactMu
 
 func blockSliceForBudgetMutation(sliceID string, reason string, now time.Time) artifactMutationFunc {
 	return func(detail *PlanDetail) (lifecycleMutation, error) {
-		return applyLifecycleMutation(detail, func() ([]Event, error) {
+		return applyLifecycleMutation(detail, func(_ *ArtifactChangeSet) ([]Event, error) {
 			event, appendEvent, err := MarkSliceBudgetBlocked(detail, sliceID, reason, now)
 			if err != nil {
 				return nil, err
@@ -266,8 +437,8 @@ func blockSliceForBudgetMutation(sliceID string, reason string, now time.Time) a
 
 func continueBlockedMutation(now time.Time) artifactMutationFunc {
 	return func(detail *PlanDetail) (lifecycleMutation, error) {
-		return applyLifecycleMutation(detail, func() ([]Event, error) {
-			return nil, MarkBlockedContinued(detail, now)
+		return applyLifecycleMutation(detail, func(changes *ArtifactChangeSet) ([]Event, error) {
+			return nil, markBlockedContinued(detail, changes, now)
 		})
 	}
 }
@@ -278,8 +449,8 @@ func removeSliceMutation(sliceID string, now time.Time) artifactMutationFunc {
 		if semanticEventsWereRecorded(detail.Events, []Event{expected}) && findSlice(detail, sliceID) == nil && !slices.Contains(detail.State.Plan.PendingSlices, sliceID) {
 			return unchangedLifecycleMutation(detail), nil
 		}
-		return applyLifecycleMutation(detail, func() ([]Event, error) {
-			event, err := MarkSliceRemoved(detail, sliceID, now)
+		return applyLifecycleMutation(detail, func(changes *ArtifactChangeSet) ([]Event, error) {
+			event, err := markSliceRemoved(detail, changes, sliceID, now)
 			if err != nil {
 				return nil, err
 			}
@@ -295,8 +466,8 @@ func skipSliceMutation(sliceID string, now time.Time) artifactMutationFunc {
 		if semanticEventsWereRecorded(detail.Events, []Event{expected}) && slice != nil && slice.Status == StatusSkipped && !slices.Contains(detail.State.Plan.PendingSlices, sliceID) {
 			return unchangedLifecycleMutation(detail), nil
 		}
-		return applyLifecycleMutation(detail, func() ([]Event, error) {
-			event, err := MarkSliceSkipped(detail, sliceID, now)
+		return applyLifecycleMutation(detail, func(changes *ArtifactChangeSet) ([]Event, error) {
+			event, err := markSliceSkipped(detail, changes, sliceID, now)
 			if err != nil {
 				return nil, err
 			}
@@ -311,8 +482,8 @@ func reorderPendingSlicesMutation(pendingOrder []string, now time.Time) artifact
 		if semanticEventsWereRecorded(detail.Events, []Event{expected}) && slices.Equal(detail.State.Plan.PendingSlices, pendingOrder) {
 			return unchangedLifecycleMutation(detail), nil
 		}
-		return applyLifecycleMutation(detail, func() ([]Event, error) {
-			event, err := MarkPendingSlicesReordered(detail, pendingOrder, now)
+		return applyLifecycleMutation(detail, func(changes *ArtifactChangeSet) ([]Event, error) {
+			event, err := markPendingSlicesReordered(detail, changes, pendingOrder, now)
 			if err != nil {
 				return nil, err
 			}
@@ -330,7 +501,7 @@ func blockedContinuationWasRecovered(stale, settled *PlanDetail) bool {
 		return false
 	}
 	expected := clonePlanDetail(stale)
-	if err := MarkBlockedContinued(expected, settled.State.UpdatedAt); err != nil {
+	if err := markBlockedContinued(expected, NewArtifactChangeSet(expected), settled.State.UpdatedAt); err != nil {
 		return false
 	}
 	return reflect.DeepEqual(settled.State, expected.State) && reflect.DeepEqual(settled.Slices, expected.Slices)
@@ -392,6 +563,12 @@ func applyArtifactMutationLocked(store artifactMutationStore, planDir string, de
 		return err
 	}
 	if baseline != nil && intended != nil {
+		if err := validateStateChangeDeclarations(baseline.State, intended.State, nil); err != nil {
+			return err
+		}
+		if err := validateSlicesChangeDeclarations(baseline.Slices, intended.Slices, nil); err != nil {
+			return err
+		}
 		if conflictingArtifactStructureChanges(baseline, intended, clone) {
 			return fmt.Errorf("persist artifacts: concurrent structural change; reload the plan and retry")
 		}
@@ -409,6 +586,12 @@ func applyArtifactMutationLocked(store artifactMutationStore, planDir string, de
 	if err != nil {
 		return err
 	}
+	if err := validateStateChangeDeclarations(beforeMutation.State, mutation.State, mutation.Changes); err != nil {
+		return err
+	}
+	if err := validateSlicesChangeDeclarations(beforeMutation.Slices, mutation.Slices, mutation.Changes); err != nil {
+		return err
+	}
 	if baseline == nil && intended == nil && len(mutation.Events) == 0 && reflect.DeepEqual(mutation.State, beforeMutation.State) && reflect.DeepEqual(mutation.Slices, beforeMutation.Slices) {
 		*detail = *clone
 		return nil
@@ -421,11 +604,11 @@ func applyArtifactMutationLocked(store artifactMutationStore, planDir string, de
 	if err != nil {
 		return err
 	}
-	statePayload, err := prepareJSON(filepath.Join(planDir, "state.json"), mutation.State)
+	statePayload, err := prepareJSON(filepath.Join(planDir, "state.json"), mutation.State, stateJSONChanges(mutation.Changes))
 	if err != nil {
 		return fmt.Errorf("prepare state.json: %w", err)
 	}
-	slicesPayload, err := prepareJSON(filepath.Join(planDir, "slices.json"), mutation.Slices)
+	slicesPayload, err := prepareJSON(filepath.Join(planDir, "slices.json"), mutation.Slices, slicesJSONChanges(mutation.Changes))
 	if err != nil {
 		return fmt.Errorf("prepare slices.json: %w", err)
 	}
@@ -462,21 +645,25 @@ func applyArtifactMutationLocked(store artifactMutationStore, planDir string, de
 // rewriting slices.json. Earlier intent is recovered and published before the
 // requested mutation is evaluated, and the caller's detail changes only after
 // settlement.
-func applyStateEventMutationWithRefresh(store artifactMutationStore, planDir string, detail *PlanDetail, forceRefresh bool, mutate func(*PlanDetail) ([]Event, error)) error {
+func applyStateEventMutationWithRefresh(store artifactMutationStore, planDir string, detail *PlanDetail, forceRefresh bool, mutate func(*PlanDetail, *ArtifactChangeSet) ([]Event, error)) error {
 	return store.withMutationLock(planDir, func() error {
 		return applyStateEventMutationLocked(store, planDir, detail, forceRefresh, mutate)
 	})
 }
 
 // applyStateEventMutationLocked requires the store's mutation lock for planDir.
-func applyStateEventMutationLocked(store artifactMutationStore, planDir string, detail *PlanDetail, forceRefresh bool, mutate func(*PlanDetail) ([]Event, error)) error {
+func applyStateEventMutationLocked(store artifactMutationStore, planDir string, detail *PlanDetail, forceRefresh bool, mutate func(*PlanDetail, *ArtifactChangeSet) ([]Event, error)) error {
 	clone, _, err := artifactMutationWorkingDetailLocked(store, planDir, detail, forceRefresh, true)
 	if err != nil {
 		return err
 	}
 	baseline := clonePlanDetail(clone)
-	eventsToAppend, err := mutate(clone)
+	changes := NewArtifactChangeSet(clone)
+	eventsToAppend, err := mutate(clone, changes)
 	if err != nil {
+		return err
+	}
+	if err := validateStateChangeDeclarations(baseline.State, clone.State, changes); err != nil {
 		return err
 	}
 	if len(eventsToAppend) > 0 && eventsWereRecorded(baseline.Events, eventsToAppend) {
@@ -492,7 +679,7 @@ func applyStateEventMutationLocked(store artifactMutationStore, planDir string, 
 	if err != nil {
 		return err
 	}
-	statePayload, err := prepareJSON(filepath.Join(planDir, "state.json"), clone.State)
+	statePayload, err := prepareJSON(filepath.Join(planDir, "state.json"), clone.State, stateJSONChanges(changes))
 	if err != nil {
 		return fmt.Errorf("prepare state.json: %w", err)
 	}
@@ -527,7 +714,10 @@ func applyStateEventMutationLocked(store artifactMutationStore, planDir string, 
 // by a journal that settled first. State updates rebase fields changed since
 // the record baseline; slices updates re-evaluate their semantic mutation on
 // the latest settled detail.
-func applyStateArtifactUpdate(store artifactMutationStore, planDir string, detail *PlanDetail, baseline, intended State) (*PlanDetail, error) {
+func applyStateArtifactUpdate(store artifactMutationStore, planDir string, detail *PlanDetail, baseline, intended State, changes *ArtifactChangeSet) (*PlanDetail, error) {
+	if err := validateStateChangeDeclarations(baseline, intended, changes); err != nil {
+		return nil, err
+	}
 	// Incomplete in-memory fixtures and legacy callers may not identify a plan.
 	// Such a payload cannot form a valid journal, but the low-level writer still
 	// takes the persistence lock and settles any valid pending intent first.
@@ -544,13 +734,14 @@ func applyStateArtifactUpdate(store artifactMutationStore, planDir string, detai
 			recoveredBaseline = clonePlanDetail(working)
 		}
 		state := rebaseArtifact(baseline, intended, working.State)
+		changes.applyState(&state)
 		publishPendingRecovery := func() {
 			if recovered {
 				working.State = state
 				*detail = *working
 			}
 		}
-		payload, err := prepareJSON(filepath.Join(planDir, "state.json"), state)
+		payload, err := prepareJSON(filepath.Join(planDir, "state.json"), state, stateJSONChanges(changes))
 		if err != nil {
 			publishPendingRecovery()
 			return fmt.Errorf("prepare state.json: %w", err)
@@ -575,16 +766,21 @@ func applyStateArtifactUpdate(store artifactMutationStore, planDir string, detai
 	return recoveredBaseline, err
 }
 
-func applySlicesArtifactUpdate(store artifactMutationStore, planDir string, detail *PlanDetail, mutate func(*PlanDetail) error) error {
+func applySlicesArtifactUpdate(store artifactMutationStore, planDir string, detail *PlanDetail, mutate func(*PlanDetail, *ArtifactChangeSet) error) error {
 	return store.withMutationLock(planDir, func() error {
 		working, _, err := artifactMutationWorkingDetailLocked(store, planDir, detail, true, true)
 		if err != nil {
 			return err
 		}
-		if err := mutate(working); err != nil {
+		baseline := cloneSlicesFile(working.Slices)
+		changes := NewArtifactChangeSet(working)
+		if err := mutate(working, changes); err != nil {
 			return err
 		}
-		payload, err := prepareJSON(filepath.Join(planDir, "slices.json"), working.Slices)
+		if err := validateSlicesChangeDeclarations(baseline, working.Slices, changes); err != nil {
+			return err
+		}
+		payload, err := prepareJSON(filepath.Join(planDir, "slices.json"), working.Slices, slicesJSONChanges(changes))
 		if err != nil {
 			return fmt.Errorf("prepare slices.json: %w", err)
 		}
@@ -910,22 +1106,16 @@ func AppendEvent(planDir string, event Event) error {
 }
 
 // writeJSON encodes value as JSON and deep-merges it over any existing file at
-// path before writing atomically.  The merge preserves unknown fields from
-// older plan artifacts.
-//
-// Merge-write contract for struct fields:
-//   - Fields with omitempty are MERGE-ONLY: when the Go value is zero/nil the
-//     key is absent from the encoded JSON, so the merge leaves any previously
-//     stored non-zero value untouched.  A later write cannot clear such a field.
-//   - Fields WITHOUT omitempty are CLEARABLE: zero/nil/empty values emit an
-//     explicit JSON key (null, "", or []), and the merge overwrites the prior
-//     stored value.  Known clearable fields include State.Plan.CurrentSlice,
-//     Workspace.DependencyFailure, PlanReview.Findings, and Slice.BlockerNote.
-//     See clearable_fields_test.go for the full registry.
-//
-// Adding omitempty to a currently-clearable field is a breaking schema change.
+// path before writing atomically. The merge preserves unknown fields from older
+// plan artifacts. PlanRecord writers carry explicit clear-or-replace intent in
+// ArtifactChangeSet; the four migrated omitempty groups — workspace dependency
+// failure/fingerprint, slice blocker notes, plan current slice, and the plan
+// review block — emit explicit replacement or empty values only when that intent
+// is declared. Remaining clearable fields retain the tag-driven contract. The
+// low-level creation/test writer remains preserve-free and emits exactly what
+// the current struct tags encode.
 func writeJSON(path string, value any) error {
-	encoded, err := prepareJSON(path, value)
+	encoded, err := prepareJSON(path, value, artifactJSONChanges{})
 	if err != nil {
 		return err
 	}
@@ -933,10 +1123,15 @@ func writeJSON(path string, value any) error {
 }
 
 // prepareJSON returns the exact final bytes for a merge-preserving artifact
-// write. Callers may durably journal these bytes before installing the same
-// byte slice with atomicWriteFile.
-func prepareJSON(path string, value any) ([]byte, error) {
+// write. Typed clear-or-replace intent is lowered before the unknown-field
+// preserving merge. Callers may durably journal these bytes before installing
+// the same byte slice with atomicWriteFile.
+func prepareJSON(path string, value any, changes artifactJSONChanges) ([]byte, error) {
 	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	encoded, err = lowerArtifactJSONChanges(encoded, changes)
 	if err != nil {
 		return nil, err
 	}
@@ -952,6 +1147,203 @@ func prepareJSON(path string, value any) ([]byte, error) {
 		return nil, err
 	}
 	return append(formatted.Bytes(), '\n'), nil
+}
+
+func lowerArtifactJSONChanges(encoded []byte, projection artifactJSONChanges) ([]byte, error) {
+	changes := projection.changes
+	if changes == nil {
+		return encoded, nil
+	}
+	hasStateChanges := changes.clearWorkspaceDependencyFailure || changes.clearWorkspaceDependencyFingerprint || changes.clearPlanCurrentSlice || changes.planReview.kind != planReviewUnchanged
+	hasSliceChanges := len(changes.clearSliceBlockerNotes) > 0
+	if projection.kind == artifactJSONState && !hasStateChanges || projection.kind == artifactJSONSlices && !hasSliceChanges || projection.kind == artifactJSONNone {
+		return encoded, nil
+	}
+
+	var root map[string]any
+	if err := json.Unmarshal(encoded, &root); err != nil {
+		return nil, fmt.Errorf("lower artifact changes: %w", err)
+	}
+	switch projection.kind {
+	case artifactJSONState:
+		if err := lowerStateJSONChanges(root, changes); err != nil {
+			return nil, err
+		}
+	case artifactJSONSlices:
+		if err := lowerSlicesJSONChanges(root, changes); err != nil {
+			return nil, err
+		}
+	}
+	lowered, err := json.Marshal(root)
+	if err != nil {
+		return nil, fmt.Errorf("lower artifact changes: %w", err)
+	}
+	return lowered, nil
+}
+
+func validateSlicesChangeDeclarations(baseline, intended SlicesFile, changes *ArtifactChangeSet) error {
+	baselineByID, _, ok := artifactSlicesByID(baseline.Slices)
+	if !ok {
+		return nil
+	}
+	for _, slice := range intended.Slices {
+		before, existed := baselineByID[slice.ID]
+		if !existed || before.BlockerNote == "" || slice.BlockerNote != "" {
+			continue
+		}
+		if changes == nil {
+			return fmt.Errorf("persist slices: Slice.BlockerNote changed from non-zero to zero without ClearSliceBlockerNote for slice %s", slice.ID)
+		}
+		if _, declared := changes.clearSliceBlockerNotes[slice.ID]; !declared {
+			return fmt.Errorf("persist slices: Slice.BlockerNote changed from non-zero to zero without ClearSliceBlockerNote for slice %s", slice.ID)
+		}
+	}
+	return nil
+}
+
+func validateStateChangeDeclarations(baseline, intended State, changes *ArtifactChangeSet) error {
+	var baselineFailure, baselineFingerprint string
+	if baseline.Workspace != nil {
+		baselineFailure = baseline.Workspace.DependencyFailure
+		baselineFingerprint = baseline.Workspace.DependencyFingerprint
+	}
+	var intendedFailure, intendedFingerprint string
+	if intended.Workspace != nil {
+		intendedFailure = intended.Workspace.DependencyFailure
+		intendedFingerprint = intended.Workspace.DependencyFingerprint
+	}
+	if baselineFailure != "" && intendedFailure == "" && (changes == nil || !changes.clearWorkspaceDependencyFailure) {
+		return fmt.Errorf("persist state: Workspace.DependencyFailure changed from non-zero to zero without ClearWorkspaceDependencyFailure")
+	}
+	if baselineFingerprint != "" && intendedFingerprint == "" && (changes == nil || !changes.clearWorkspaceDependencyFingerprint) {
+		return fmt.Errorf("persist state: Workspace.DependencyFingerprint changed from non-zero to zero without ClearWorkspaceDependencyFingerprint")
+	}
+	if baseline.Plan.CurrentSlice != nil && intended.Plan.CurrentSlice == nil && (changes == nil || !changes.clearPlanCurrentSlice) {
+		return fmt.Errorf("persist state: State.Plan.CurrentSlice changed from non-zero to zero without ClearPlanCurrentSlice")
+	}
+	if err := validatePlanReviewChangeDeclaration(baseline.Plan.Review, intended.Plan.Review, changes); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validatePlanReviewChangeDeclaration(baseline, intended *PlanReview, changes *ArtifactChangeSet) error {
+	declared := planReviewUnchanged
+	if changes != nil {
+		declared = changes.planReview.kind
+	}
+	if baseline == nil {
+		return nil
+	}
+	if intended == nil {
+		if declared != planReviewCleared {
+			return fmt.Errorf("persist state: PlanState.Review changed from non-zero to zero without ClearPlanReview")
+		}
+		return nil
+	}
+	if declared == planReviewReplaced {
+		return nil
+	}
+	if baseline.Verdict != "" && intended.Verdict == "" {
+		return fmt.Errorf("persist state: PlanReview.Verdict changed from non-zero to zero without ReplacePlanReview")
+	}
+	if baseline.Summary != "" && intended.Summary == "" {
+		return fmt.Errorf("persist state: PlanReview.Summary changed from non-zero to zero without ReplacePlanReview")
+	}
+	if baseline.FindingsCount != 0 && intended.FindingsCount == 0 {
+		return fmt.Errorf("persist state: PlanReview.FindingsCount changed from non-zero to zero without ReplacePlanReview")
+	}
+	if len(baseline.Findings) != 0 && len(intended.Findings) == 0 {
+		return fmt.Errorf("persist state: PlanReview.Findings changed from non-zero to zero without ReplacePlanReview")
+	}
+	if baseline.CommitMessage != nil && intended.CommitMessage == nil {
+		return fmt.Errorf("persist state: PlanReview.CommitMessage changed from non-zero to zero without ReplacePlanReview")
+	}
+	if !baseline.ReviewedAt.IsZero() && intended.ReviewedAt.IsZero() {
+		return fmt.Errorf("persist state: PlanReview.ReviewedAt changed from non-zero to zero without ReplacePlanReview")
+	}
+	return nil
+}
+
+func lowerStateJSONChanges(root map[string]any, changes *ArtifactChangeSet) error {
+	if changes.clearWorkspaceDependencyFailure || changes.clearWorkspaceDependencyFingerprint {
+		workspace := jsonObject(root, "workspace")
+		if changes.clearWorkspaceDependencyFailure {
+			workspace["dependency_preparation_failure"] = ""
+		}
+		if changes.clearWorkspaceDependencyFingerprint {
+			workspace["dependency_fingerprint"] = ""
+		}
+	}
+	plan := jsonObject(root, "plan")
+	if changes.clearPlanCurrentSlice {
+		plan["current_slice"] = nil
+	}
+	switch changes.planReview.kind {
+	case planReviewReplaced:
+		review, err := replacementReviewJSON(changes.planReview.review)
+		if err != nil {
+			return err
+		}
+		plan["review"] = review
+	case planReviewCleared:
+		plan["review"] = nil
+	}
+	return nil
+}
+
+func replacementReviewJSON(review PlanReview) (map[string]any, error) {
+	encoded, err := json.Marshal(review)
+	if err != nil {
+		return nil, fmt.Errorf("lower review replacement: %w", err)
+	}
+	var object map[string]any
+	if err := json.Unmarshal(encoded, &object); err != nil {
+		return nil, fmt.Errorf("lower review replacement: %w", err)
+	}
+	object["status"] = review.Status
+	object["verdict"] = review.Verdict
+	object["summary"] = review.Summary
+	object["findings_count"] = review.FindingsCount
+	if len(review.Findings) == 0 {
+		object["findings"] = []any{}
+	}
+	if review.CommitMessage == nil {
+		object["commit_message"] = nil
+	}
+	object["base"] = review.Base
+	object["head"] = review.Head
+	object["agent"] = review.Agent
+	object["reviewed_at"] = review.ReviewedAt
+	return object, nil
+}
+
+func lowerSlicesJSONChanges(root map[string]any, changes *ArtifactChangeSet) error {
+	values, _ := root["slices"].([]any)
+	found := make(map[string]bool, len(changes.clearSliceBlockerNotes))
+	for _, value := range values {
+		object, _ := value.(map[string]any)
+		id, _ := object["id"].(string)
+		if _, ok := changes.clearSliceBlockerNotes[id]; ok {
+			object["blocker_note"] = ""
+			found[id] = true
+		}
+	}
+	for id := range changes.clearSliceBlockerNotes {
+		if !found[id] {
+			return fmt.Errorf("lower artifact changes: slice %s not found", id)
+		}
+	}
+	return nil
+}
+
+func jsonObject(parent map[string]any, key string) map[string]any {
+	if object, ok := parent[key].(map[string]any); ok {
+		return object
+	}
+	object := make(map[string]any)
+	parent[key] = object
+	return object
 }
 
 func atomicWriteFile(path string, data []byte) error {

@@ -30,7 +30,7 @@ type Slice struct {
 	ID                  string                  `json:"id"`
 	Title               string                  `json:"title"`
 	Status              string                  `json:"status"`
-	BlockerNote         string                  `json:"blocker_note"`
+	BlockerNote         string                  `json:"blocker_note,omitempty"`
 	ExecutionRoot       string                  `json:"execution_root,omitempty"`
 	ExecutionStart      *SliceExecutionStart    `json:"execution_start,omitempty"`
 	Tags                []string                `json:"tags,omitempty"`

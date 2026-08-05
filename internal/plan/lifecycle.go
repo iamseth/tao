@@ -17,17 +17,19 @@ type lifecycleCheck struct {
 }
 
 type lifecycleMutation struct {
-	State  State
-	Slices SlicesFile
-	Events []Event
+	State   State
+	Slices  SlicesFile
+	Events  []Event
+	Changes *ArtifactChangeSet
 }
 
-func applyLifecycleMutation(detail *PlanDetail, mutate func() ([]Event, error)) (lifecycleMutation, error) {
-	events, err := mutate()
+func applyLifecycleMutation(detail *PlanDetail, mutate func(*ArtifactChangeSet) ([]Event, error)) (lifecycleMutation, error) {
+	changes := NewArtifactChangeSet(detail)
+	events, err := mutate(changes)
 	if err != nil {
 		return lifecycleMutation{}, err
 	}
-	return lifecycleMutation{State: detail.State, Slices: detail.Slices, Events: events}, nil
+	return lifecycleMutation{State: detail.State, Slices: detail.Slices, Events: events, Changes: changes}, nil
 }
 
 // lifecycleState is the read-only lifecycle decision tree; mutation helpers below
@@ -390,13 +392,20 @@ func MarkSliceCommitIntent(detail *PlanDetail, sliceID string, intent SliceCommi
 
 // MarkSliceCompleted applies deterministic completion metadata to an in-memory plan detail.
 func MarkSliceCompleted(detail *PlanDetail, sliceID string, notes string, verificationResults []VerificationRun, now time.Time) (Event, bool, error) {
-	return MarkSliceCompletedWithOutcome(detail, sliceID, notes, verificationResults, nil, now)
+	return markSliceCompletedWithOutcome(detail, NewArtifactChangeSet(detail), sliceID, notes, verificationResults, nil, now)
 }
 
 // MarkSliceCompletedWithOutcome applies completion metadata and its Git outcome.
 func MarkSliceCompletedWithOutcome(detail *PlanDetail, sliceID string, notes string, verificationResults []VerificationRun, outcome *SliceCompletionOutcome, now time.Time) (Event, bool, error) {
+	return markSliceCompletedWithOutcome(detail, NewArtifactChangeSet(detail), sliceID, notes, verificationResults, outcome, now)
+}
+
+func markSliceCompletedWithOutcome(detail *PlanDetail, changes *ArtifactChangeSet, sliceID string, notes string, verificationResults []VerificationRun, outcome *SliceCompletionOutcome, now time.Time) (Event, bool, error) {
 	if detail == nil {
 		return Event{}, false, fmt.Errorf("plan detail is nil")
+	}
+	if changes == nil || changes.detail != detail {
+		return Event{}, false, fmt.Errorf("artifact change set must be bound to plan detail")
 	}
 	slice := findSlice(detail, sliceID)
 	if slice == nil {
@@ -429,7 +438,7 @@ func MarkSliceCompletedWithOutcome(detail *PlanDetail, sliceID string, notes str
 	if !slices.Contains(detail.State.Plan.CompletedSlices, sliceID) {
 		detail.State.Plan.CompletedSlices = append(detail.State.Plan.CompletedSlices, sliceID)
 	}
-	detail.State.Plan.CurrentSlice = nil
+	changes.ClearPlanCurrentSlice()
 	detail.State.UpdatedAt = now
 	detail.State.Plan.Timing.LastActivityAt = new(now)
 	if len(detail.State.Plan.PendingSlices) == 0 {
@@ -580,8 +589,15 @@ func MarkSliceBudgetBlocked(detail *PlanDetail, sliceID string, reason string, n
 
 // MarkBlockedContinued selects the blocked/current slice and marks plan-owned lifecycle back in progress.
 func MarkBlockedContinued(detail *PlanDetail, now time.Time) error {
+	return markBlockedContinued(detail, NewArtifactChangeSet(detail), now)
+}
+
+func markBlockedContinued(detail *PlanDetail, changes *ArtifactChangeSet, now time.Time) error {
 	if detail == nil {
 		return fmt.Errorf("plan detail is nil")
+	}
+	if changes == nil || changes.detail != detail {
+		return fmt.Errorf("artifact change set must be bound to plan detail")
 	}
 	continuable := blockedContinueState(detail, newDetailIndex(detail))
 	if !continuable.OK {
@@ -597,7 +613,9 @@ func MarkBlockedContinued(detail *PlanDetail, now time.Time) error {
 	}
 	detail.State.Plan.Timing.LastActivityAt = new(now)
 	slice.Status = StatusInProgress
-	slice.BlockerNote = ""
+	if err := changes.ClearSliceBlockerNote(slice.ID); err != nil {
+		return err
+	}
 	slice.Timing.UpdatedAt = now
 	slice.Timing.LastActivityAt = new(now)
 	return nil
@@ -605,8 +623,15 @@ func MarkBlockedContinued(detail *PlanDetail, now time.Time) error {
 
 // Reopen transitions a reviewed plan back to runnable state by appending new pending slices.
 func Reopen(detail *PlanDetail, newSlices []Slice, now time.Time) (Event, error) {
+	return reopen(detail, NewArtifactChangeSet(detail), newSlices, now)
+}
+
+func reopen(detail *PlanDetail, changes *ArtifactChangeSet, newSlices []Slice, now time.Time) (Event, error) {
 	if detail == nil {
 		return Event{}, fmt.Errorf("plan detail is nil")
+	}
+	if changes == nil || changes.detail != detail {
+		return Event{}, fmt.Errorf("artifact change set must be bound to plan detail")
 	}
 	if !ReopenableStatus(detail.State.Status) {
 		return Event{}, classify(ErrInvalid, "plan %s is %s; only reviewed plans can be reopened", detail.State.Plan.ID, detail.State.Status)
@@ -625,7 +650,7 @@ func Reopen(detail *PlanDetail, newSlices []Slice, now time.Time) (Event, error)
 	}
 	detail.State.Status = StatusInProgress
 	detail.State.UpdatedAt = now
-	detail.State.Plan.CurrentSlice = nil
+	changes.ClearPlanCurrentSlice()
 	detail.State.Plan.Timing.CompletedAt = nil
 	if detail.State.Plan.Timing.StartedAt == nil {
 		detail.State.Plan.Timing.StartedAt = new(now)
@@ -653,11 +678,11 @@ func reopenMutation(newSlices []Slice, now time.Time, force bool) artifactMutati
 		if semanticEventsWereRecorded(detail.Events, []Event{expected}) && reopenPostconditionMatches(detail, newSlices) {
 			return unchangedLifecycleMutation(detail), nil
 		}
-		return applyLifecycleMutation(detail, func() ([]Event, error) {
+		return applyLifecycleMutation(detail, func(changes *ArtifactChangeSet) ([]Event, error) {
 			if force && !ReopenableStatus(detail.State.Status) {
 				detail.State.Status = StatusChangesRequested
 			}
-			event, err := Reopen(detail, newSlices, now)
+			event, err := reopen(detail, changes, newSlices, now)
 			if err != nil {
 				return nil, err
 			}
@@ -717,8 +742,15 @@ func validateReopenSlices(detail *PlanDetail, newSlices []Slice) error {
 
 // MarkSliceRemoved removes one pending slice from the executable plan queue.
 func MarkSliceRemoved(detail *PlanDetail, sliceID string, now time.Time) (Event, error) {
+	return markSliceRemoved(detail, NewArtifactChangeSet(detail), sliceID, now)
+}
+
+func markSliceRemoved(detail *PlanDetail, changes *ArtifactChangeSet, sliceID string, now time.Time) (Event, error) {
 	if detail == nil {
 		return Event{}, fmt.Errorf("plan detail is nil")
+	}
+	if changes == nil || changes.detail != detail {
+		return Event{}, fmt.Errorf("artifact change set must be bound to plan detail")
 	}
 	slice, err := editablePendingSlice(detail, sliceID)
 	if err != nil {
@@ -730,7 +762,7 @@ func MarkSliceRemoved(detail *PlanDetail, sliceID string, now time.Time) (Event,
 
 	detail.State.Plan.PendingSlices = slices.DeleteFunc(detail.State.Plan.PendingSlices, func(value string) bool { return value == sliceID })
 	detail.Slices.Slices = removeSlice(detail.Slices.Slices, sliceID)
-	markPlanEdited(detail, now)
+	markPlanEdited(detail, changes, now)
 	slice.Timing.UpdatedAt = now
 	event := Event{Type: EventTypeSliceRemoved, Timestamp: now, PlanID: detail.State.Plan.ID, SliceID: sliceID, Message: "Pending slice removed by plan edit"}
 	return event, nil
@@ -738,8 +770,15 @@ func MarkSliceRemoved(detail *PlanDetail, sliceID string, now time.Time) (Event,
 
 // MarkSliceSkipped marks one pending slice skipped while preserving its audit record.
 func MarkSliceSkipped(detail *PlanDetail, sliceID string, now time.Time) (Event, error) {
+	return markSliceSkipped(detail, NewArtifactChangeSet(detail), sliceID, now)
+}
+
+func markSliceSkipped(detail *PlanDetail, changes *ArtifactChangeSet, sliceID string, now time.Time) (Event, error) {
 	if detail == nil {
 		return Event{}, fmt.Errorf("plan detail is nil")
+	}
+	if changes == nil || changes.detail != detail {
+		return Event{}, fmt.Errorf("artifact change set must be bound to plan detail")
 	}
 	slice, err := editablePendingSlice(detail, sliceID)
 	if err != nil {
@@ -753,21 +792,28 @@ func MarkSliceSkipped(detail *PlanDetail, sliceID string, now time.Time) (Event,
 	slice.Status = StatusSkipped
 	slice.Timing.UpdatedAt = now
 	slice.Timing.LastActivityAt = new(now)
-	markPlanEdited(detail, now)
+	markPlanEdited(detail, changes, now)
 	event := Event{Type: EventTypeSliceSkipped, Timestamp: now, PlanID: detail.State.Plan.ID, SliceID: sliceID, Message: "Pending slice skipped by plan edit"}
 	return event, nil
 }
 
 // MarkPendingSlicesReordered replaces the pending queue after dependency validation.
 func MarkPendingSlicesReordered(detail *PlanDetail, pendingOrder []string, now time.Time) (Event, error) {
+	return markPendingSlicesReordered(detail, NewArtifactChangeSet(detail), pendingOrder, now)
+}
+
+func markPendingSlicesReordered(detail *PlanDetail, changes *ArtifactChangeSet, pendingOrder []string, now time.Time) (Event, error) {
 	if detail == nil {
 		return Event{}, fmt.Errorf("plan detail is nil")
+	}
+	if changes == nil || changes.detail != detail {
+		return Event{}, fmt.Errorf("artifact change set must be bound to plan detail")
 	}
 	if err := validatePendingReorder(detail, pendingOrder); err != nil {
 		return Event{}, err
 	}
 	detail.State.Plan.PendingSlices = append([]string(nil), pendingOrder...)
-	markPlanEdited(detail, now)
+	markPlanEdited(detail, changes, now)
 	event := Event{Type: EventTypeSlicesReordered, Timestamp: now, PlanID: detail.State.Plan.ID, Message: "Pending slices reordered by plan edit"}
 	return event, nil
 }
@@ -841,11 +887,11 @@ func validatePendingReorder(detail *PlanDetail, pendingOrder []string) error {
 	return nil
 }
 
-func markPlanEdited(detail *PlanDetail, now time.Time) {
+func markPlanEdited(detail *PlanDetail, changes *ArtifactChangeSet, now time.Time) {
 	detail.State.UpdatedAt = now
 	detail.State.Plan.Timing.LastActivityAt = new(now)
 	if detail.State.Plan.CurrentSlice != nil && !slices.Contains(detail.State.Plan.PendingSlices, *detail.State.Plan.CurrentSlice) {
-		detail.State.Plan.CurrentSlice = nil
+		changes.ClearPlanCurrentSlice()
 	}
 	if len(detail.State.Plan.PendingSlices) == 0 && detail.State.Plan.CurrentSlice == nil {
 		detail.State.Status = StatusInReview

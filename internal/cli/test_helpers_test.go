@@ -224,9 +224,9 @@ func (f fakeRepository) ReadLogTail(_ string, _ int) (string, error) { return ""
 func (f fakeRepository) FollowLog(ctx context.Context, _ string, _ io.Writer) error {
 	return ctx.Err()
 }
-func (f fakeRepository) WriteState(_ string, _ plan.State) error       { return nil }
-func (f fakeRepository) WriteSlices(_ string, _ plan.SlicesFile) error { return nil }
-func (f fakeRepository) AppendEvent(_ string, _ plan.Event) error      { return nil }
+func (f fakeRepository) WriteState(_ string, _ []byte) error      { return nil }
+func (f fakeRepository) WriteSlices(_ string, _ []byte) error     { return nil }
+func (f fakeRepository) AppendEvent(_ string, _ plan.Event) error { return nil }
 
 func clearTaoEnv(t *testing.T) {
 	t.Helper()

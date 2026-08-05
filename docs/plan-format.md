@@ -296,38 +296,40 @@ When a listed verification command is invalid but a mechanically equivalent corr
 
 ## Clearable fields and the merge-write contract
 
-`writeJSON` deep-merges every write over the on-disk JSON rather than replacing it wholesale. This preserves unknown fields from older agent runs but imposes a key rule for struct field design:
+`writeJSON` deep-merges every write over the on-disk JSON rather than replacing it wholesale. This preserves unknown fields from older agent runs. Clearable fields currently use one of two mechanisms:
 
-**Fields tagged with `omitempty` are merge-only and can never be cleared by a later write.** When the Go value is zero or nil, the field is absent from the encoded JSON. The merge treats an absent key as "no update", so a zero-value write cannot overwrite a previously stored non-zero value.
+**Tag-cleared fields omit `omitempty`.** Marshalling an explicit zero, nil, or empty value emits the key — `null` for pointers, `""` for strings, `[]` for slices — and the merge overwrites the prior stored value.
 
-**Fields without `omitempty` are clearable.** Marshalling an explicit zero, nil, or empty value emits the key in the encoded JSON — `null` for pointers, `""` for strings, `[]` for slices — and the merge overwrites the prior stored value.
+**Seam-cleared fields use `omitempty` to preserve by default.** A zero-value write omits the key and preserves the stored value unless the writer declares field-specific intent through `ArtifactChangeSet`. The persistence seam lowers that intent to the same explicit `null`, `""`, or `[]` representation before the unknown-field-preserving merge.
 
 ### Known clearable fields
 
-| Field | Type | JSON key | How to clear |
+| Field | Type | JSON key | Clear mechanism |
 | --- | --- | --- | --- |
-| `State.Plan.CurrentSlice` | `*string` | `current_slice` | Write `nil` → stored as `null`; signals no slice is running. |
+| `State.Plan.CurrentSlice` | `*string` | `current_slice` | Seam-cleared: lifecycle completion, reopen, and plan-edit transitions declare `ClearPlanCurrentSlice`, storing `null`; an undeclared `nil` preserves the stored current slice. |
 | `PlanState.LastRunCommitPolicy` | `string` | `last_run_commit_policy` | Write `""` → stored as `""`; clears the persisted run policy so review uses legacy event fallback or `none`. |
 | `PlanState.LastRunStartingDirty` | `[]string` | `last_run_starting_dirty` | Write `[]string{}` → stored as `[]`; clears stale run-start dirty-path tolerance after a clean run start. |
-| `PlanReview.Findings` | `[]ReviewFinding` | `findings` | Write `[]ReviewFinding{}` → stored as `[]`; prevents stale findings surviving a re-review. |
-| `PlanReview.CommitMessage` | `*ReviewCommitMessage` | `commit_message` | Write `nil` → stored as `null`; prevents a non-approved replacement review from retaining an approved proposal. |
-| `PlanReview.Verdict`, `Summary`, `FindingsCount`, `ReviewedAt` | mixed | see struct tags | Write explicit zero value to clear. |
+| `PlanState.Review` and known `PlanReview` fields | review block | `review` | Seam-cleared: `ReplacePlanReview` replaces every known field, storing explicit zero values including `findings: []` and `commit_message: null`; `ClearPlanReview` stores `review: null`. Undeclared zero values preserve stored review data. Unknown keys inside a replaced review object survive. |
 | `PlanState.MergeCommitIntent` | `*SingleMergeCommitIntent` | `merge_commit_intent` | Write `nil` → stored as `null`; clears only through guarded single-merge intent settlement or supersession. |
-| `Workspace.DependencyFailure` | `string` | `dependency_preparation_failure` | Write `""` → stored as `""`; clears stale dependency-preparation failures after retry success. |
-| `Workspace.DependencyFingerprint` | `string` | `dependency_fingerprint` | Write an explicit `""` → stored as `""`; clears the workspace dependency-preparation skip evidence when unknown. |
+| `Workspace.DependencyFailure` | `string` | `dependency_preparation_failure` | Seam-cleared: `ClearWorkspaceDependencyFailure` plus `PersistStateChanges` stores `""` after retry success; an undeclared empty value preserves the stored failure. |
+| `Workspace.DependencyFingerprint` | `string` | `dependency_fingerprint` | Seam-cleared: `ClearWorkspaceDependencyFingerprint` plus `PersistStateChanges` stores `""` when successful-install evidence is unknown; an undeclared empty value preserves prior evidence. |
+| `Slice.BlockerNote` | `string` | `blocker_note` | Seam-cleared: blocked continuation declares `ClearSliceBlockerNote`, storing `""`; an undeclared empty value preserves the stored blocker note. |
 
 ### Known merge-only fields (omitempty)
 
-These fields carry `omitempty` by design. A later write with a zero value does **not** clear a previously stored non-zero value:
+These fields carry `omitempty`. A later write with a zero value does **not** clear a previously stored non-zero value unless the field is listed above with typed seam intent:
 
 - `State.Workspace` — the whole struct pointer (`omitempty`)
-  - `Workspace.Branch`, `BaseSHA`, `HeadSHA`, and other Workspace sub-fields that carry `omitempty`; `Workspace.DependencyFailure` and `Workspace.DependencyFingerprint` are clearable and listed above.
+  - `Workspace.Branch`, `BaseSHA`, `HeadSHA`, and other Workspace sub-fields without a seam clear. `Workspace.DependencyFailure` and `Workspace.DependencyFingerprint` also carry `omitempty`, but are seam-clearable and listed above.
 - `Repo.BaseCommit`
+- `PlanState.CurrentSlice` carries `omitempty`, but is seam-clearable and listed above.
 - `PlanState.PullRequest` — the whole struct pointer (`omitempty`)
-- `PlanState.Review` — the whole struct pointer (`omitempty`); individual non-omitempty sub-fields inside it (such as `Findings`) are clearable once the block is present on disk
-- Slice fields: `ExecutionRoot`, `Tags`, `Approval`, `Notes`, `VerificationResults`
+- `PlanState.Review` and its known sub-fields carry `omitempty`, but the block is seam-replaceable or seam-clearable and listed above.
+- Slice fields: `ExecutionRoot`, `Tags`, `Approval`, `Notes`, `VerificationResults`. `BlockerNote` also carries `omitempty`, but is seam-clearable and listed above.
 
-Adding `omitempty` to a currently-clearable field is a breaking schema change because callers that relied on explicit-zero clearing will silently stop clearing. Removing `omitempty` from a currently merge-only field is a deliberate schema extension and must be accompanied by a round-trip regression test in `internal/plan/clearable_fields_test.go`.
+The four migrated groups are `Workspace.DependencyFailure`/`DependencyFingerprint`, `Slice.BlockerNote`, `State.Plan.CurrentSlice`, and the `PlanState.Review` block with its known sub-fields. All remaining fields in the table retain the tag-driven clear contract.
+
+Changing a tag-driven clearable field to `omitempty` requires migrating every writer to a typed seam clear in the same change; otherwise explicit-zero writes silently preserve stale data. Removing `omitempty` from a merge-only field is a deliberate schema extension. Both changes require contract coverage in `internal/plan/clearable_fields_test.go`.
 
 ## Legacy / backward-compatibility (read-only)
 

@@ -2502,23 +2502,15 @@ type stateOnlyStartStore struct {
 	appended       int
 }
 
-func (s *stateOnlyStartStore) WriteState(planDir string, state plan.State) error {
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(planDir, "state.json"), data, 0o600)
+func (s *stateOnlyStartStore) WriteState(planDir string, payload []byte) error {
+	return os.WriteFile(filepath.Join(planDir, "state.json"), payload, 0o600)
 }
 
-func (s *stateOnlyStartStore) WriteSlices(planDir string, slices plan.SlicesFile) error {
+func (s *stateOnlyStartStore) WriteSlices(planDir string, payload []byte) error {
 	if s.writeSlicesErr != nil {
 		return s.writeSlicesErr
 	}
-	data, err := json.MarshalIndent(slices, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(planDir, "slices.json"), data, 0o600)
+	return os.WriteFile(filepath.Join(planDir, "slices.json"), payload, 0o600)
 }
 
 func (s *stateOnlyStartStore) AppendEvent(string, plan.Event) error {
@@ -2536,6 +2528,10 @@ type persistOnlyRecord struct {
 }
 
 func (r persistOnlyRecord) PersistState() error {
+	return r.persist()
+}
+
+func (r persistOnlyRecord) PersistStateChanges(_ *plan.ArtifactChangeSet) error {
 	return r.persist()
 }
 
@@ -2655,6 +2651,8 @@ func (r memoryPlanMutationRecord) ContinueBlocked(now time.Time) error {
 }
 
 func (r memoryPlanMutationRecord) PersistState() error { return nil }
+
+func (r memoryPlanMutationRecord) PersistStateChanges(_ *plan.ArtifactChangeSet) error { return nil }
 
 func (r memoryPlanMutationRecord) RecordFinalVerification(verification plan.FinalVerification) error {
 	return plan.MarkFinalVerification(r.detail, verification)

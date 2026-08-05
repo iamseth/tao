@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -26,8 +27,8 @@ func NewPlanRecord(planDir string, detail *PlanDetail) (*PlanRecord, error) {
 // Implement it to redirect plan artifact mutations, for example to an in-memory
 // store in a test-support package.
 type ArtifactStore interface {
-	WriteState(planDir string, state State) error
-	WriteSlices(planDir string, slices SlicesFile) error
+	WriteState(planDir string, payload []byte) error
+	WriteSlices(planDir string, payload []byte) error
 	AppendEvent(planDir string, event Event) error
 }
 
@@ -39,9 +40,19 @@ func NewPlanRecordWithStore(store ArtifactStore, planDir string, detail *PlanDet
 
 type artStoreAdapter struct{ store ArtifactStore }
 
-func (a artStoreAdapter) writeState(d string, s State) error { return a.store.WriteState(d, s) }
+func (a artStoreAdapter) writeState(d string, s State) error {
+	payload, err := marshalPreparedArtifact(s)
+	if err != nil {
+		return err
+	}
+	return a.store.WriteState(d, payload)
+}
 func (a artStoreAdapter) writeSlices(d string, sf SlicesFile) error {
-	return a.store.WriteSlices(d, sf)
+	payload, err := marshalPreparedArtifact(sf)
+	if err != nil {
+		return err
+	}
+	return a.store.WriteSlices(d, payload)
 }
 func (a artStoreAdapter) appendEvent(d string, e Event) error { return a.store.AppendEvent(d, e) }
 func (a artStoreAdapter) withMutationLock(_ string, operation func() error) error {
@@ -52,20 +63,12 @@ func (a artStoreAdapter) refreshMutationDetailLocked(string, string, bool) (muta
 }
 func (a artStoreAdapter) settleMutationLocked(planDir string, journal mutationJournal) error {
 	if journal.State != nil {
-		var state State
-		if err := json.Unmarshal(journal.State.Payload, &state); err != nil {
-			return fmt.Errorf("decode prepared state.json: %w", err)
-		}
-		if err := a.store.WriteState(planDir, state); err != nil {
+		if err := a.store.WriteState(planDir, append([]byte(nil), journal.State.Payload...)); err != nil {
 			return err
 		}
 	}
 	if journal.Slices != nil {
-		var slicesFile SlicesFile
-		if err := json.Unmarshal(journal.Slices.Payload, &slicesFile); err != nil {
-			return fmt.Errorf("decode prepared slices.json: %w", err)
-		}
-		if err := a.store.WriteSlices(planDir, slicesFile); err != nil {
+		if err := a.store.WriteSlices(planDir, append([]byte(nil), journal.Slices.Payload...)); err != nil {
 			return err
 		}
 	}
@@ -79,6 +82,18 @@ func (a artStoreAdapter) settleMutationLocked(planDir string, journal mutationJo
 		}
 	}
 	return nil
+}
+
+func marshalPreparedArtifact(value any) ([]byte, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	var formatted bytes.Buffer
+	if err := json.Indent(&formatted, encoded, "", "  "); err != nil {
+		return nil, err
+	}
+	return append(formatted.Bytes(), '\n'), nil
 }
 
 func newPlanRecord(store artifactMutationStore, planDir string, detail *PlanDetail) (*PlanRecord, error) {
@@ -191,7 +206,7 @@ func (r *PlanRecord) RecordSliceCommitIntent(sliceID string, intent SliceCommitI
 	if err := MarkSliceCommitIntent(r.detail, sliceID, intent); err != nil {
 		return err
 	}
-	return r.applySlicesUpdate(store, func(detail *PlanDetail) error {
+	return r.applySlicesUpdate(store, func(detail *PlanDetail, _ *ArtifactChangeSet) error {
 		return MarkSliceCommitIntent(detail, sliceID, intent)
 	})
 }
@@ -260,7 +275,21 @@ func (r *PlanRecord) PersistState() error {
 	if err != nil {
 		return err
 	}
-	return r.applyStateUpdate(store, r.stateBaseline(), r.detail.State)
+	return r.applyStateUpdate(store, r.stateBaseline(), r.detail.State, nil)
+}
+
+// PersistStateChanges persists state edits made through changes. Reapplying the
+// typed intent after a stale-record rebase prevents a concurrent settled value
+// from overriding an explicit clear or replacement.
+func (r *PlanRecord) PersistStateChanges(changes *ArtifactChangeSet) error {
+	store, err := r.storeOrDefault()
+	if err != nil {
+		return err
+	}
+	if changes == nil || changes.detail != r.detail {
+		return fmt.Errorf("artifact change set is not bound to this plan record")
+	}
+	return r.applyStateUpdate(store, r.stateBaseline(), r.detail.State, changes)
 }
 
 // RecordFinalVerification stamps repository-wide verification state and its
@@ -271,11 +300,16 @@ func (r *PlanRecord) RecordFinalVerification(verification FinalVerification) err
 	if err != nil {
 		return err
 	}
-	baseline := r.stateBaseline()
-	if err := MarkFinalVerification(r.detail, verification); err != nil {
-		return err
+	err = r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
+		if err := MarkFinalVerification(detail, verification); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	})
+	if err != nil {
+		_ = MarkFinalVerification(r.detail, verification)
 	}
-	return r.applyStateUpdate(store, baseline, r.detail.State)
+	return err
 }
 
 // PersistArtifacts writes the record's current state and slices to the artifact
@@ -305,7 +339,7 @@ func (r *PlanRecord) RecordStartingBranch(branch string) error {
 	}
 	baseline := r.stateBaseline()
 	r.detail.State.Repo.Branch = branch
-	return r.applyStateUpdate(store, baseline, r.detail.State)
+	return r.applyStateUpdate(store, baseline, r.detail.State, nil)
 }
 
 // RecordPullRequest stamps pull request metadata onto state, updates workspace
@@ -315,7 +349,7 @@ func (r *PlanRecord) RecordPullRequest(pr PullRequest, branch, headSHA string) e
 	if err != nil {
 		return err
 	}
-	return r.applyStateEvent(store, func(detail *PlanDetail) ([]Event, error) {
+	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
 		pr.Branch = branch
 		pr.HeadSHA = headSHA
 		detail.State.Plan.PullRequest = &pr
@@ -343,7 +377,7 @@ func (r *PlanRecord) RecordSingleMergeCommitIntent(intent SingleMergeCommitInten
 	if err != nil {
 		return err
 	}
-	return r.applyStateEvent(store, func(detail *PlanDetail) ([]Event, error) {
+	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
 		existing := detail.State.Plan.MergeCommitIntent
 		if existing != nil {
 			if *existing == intent {
@@ -363,7 +397,7 @@ func (r *PlanRecord) ClearSingleMergeCommitIntent(expected SingleMergeCommitInte
 	if err != nil {
 		return err
 	}
-	return r.applyStateEvent(store, func(detail *PlanDetail) ([]Event, error) {
+	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
 		existing := detail.State.Plan.MergeCommitIntent
 		if existing == nil {
 			return nil, nil
@@ -402,7 +436,7 @@ func (r *PlanRecord) RecordReviewError(review PlanReview, agent string) error {
 	if err != nil {
 		return err
 	}
-	return r.applyStateEvent(store, func(detail *PlanDetail) ([]Event, error) {
+	return r.applyStateEvent(store, func(detail *PlanDetail, changes *ArtifactChangeSet) ([]Event, error) {
 		if err := automaticSliceCompletionError(detail); err != nil {
 			return nil, fmt.Errorf("record plan review: %w", err)
 		}
@@ -410,13 +444,17 @@ func (r *PlanRecord) RecordReviewError(review PlanReview, agent string) error {
 		if intent := detail.State.Plan.MergeCommitIntent; intent != nil && (strings.TrimSpace(review.Head) != intent.SourceHead || !review.IsApproved()) {
 			detail.State.Plan.MergeCommitIntent = nil
 		}
-		detail.State.Plan.Review = &review
+		if err := changes.ReplacePlanReview(review); err != nil {
+			return nil, err
+		}
+		persistedReview := clonePlanReview(detail.State.Plan.Review)
+		eventReview := reviewEventSnapshot(persistedReview)
 		if sliceWorkSettled(detail) && !PlanIsMerged(detail.Events) {
 			detail.State.Status = StatusInReview
 		}
 		detail.State.UpdatedAt = reviewedAt
 		detail.State.Plan.Timing.LastActivityAt = &reviewedAt
-		event := Event{Type: EventTypePlanReviewed, Timestamp: reviewedAt, PlanID: detail.State.Plan.ID, Agent: agent, Review: &review, Message: "Plan review failed"}
+		event := Event{Type: EventTypePlanReviewed, Timestamp: reviewedAt, PlanID: detail.State.Plan.ID, Agent: agent, Review: eventReview, Message: "Plan review failed"}
 		return []Event{event}, nil
 	})
 }
@@ -431,7 +469,7 @@ func (r *PlanRecord) RecordReviewCompleted(review PlanReview, agent string) erro
 	if err != nil {
 		return err
 	}
-	return r.applyStateEvent(store, func(detail *PlanDetail) ([]Event, error) {
+	return r.applyStateEvent(store, func(detail *PlanDetail, changes *ArtifactChangeSet) ([]Event, error) {
 		if err := automaticSliceCompletionError(detail); err != nil {
 			return nil, fmt.Errorf("record plan review: %w", err)
 		}
@@ -439,15 +477,27 @@ func (r *PlanRecord) RecordReviewCompleted(review PlanReview, agent string) erro
 		if intent := detail.State.Plan.MergeCommitIntent; intent != nil && (strings.TrimSpace(review.Head) != intent.SourceHead || !review.IsApproved()) {
 			detail.State.Plan.MergeCommitIntent = nil
 		}
-		detail.State.Plan.Review = &review
+		if err := changes.ReplacePlanReview(review); err != nil {
+			return nil, err
+		}
+		persistedReview := clonePlanReview(detail.State.Plan.Review)
+		eventReview := reviewEventSnapshot(persistedReview)
 		if sliceWorkSettled(detail) && !PlanIsMerged(detail.Events) {
-			detail.State.Status = reviewProjectedStatus(&review)
+			detail.State.Status = reviewProjectedStatus(persistedReview)
 		}
 		detail.State.UpdatedAt = reviewedAt
 		detail.State.Plan.Timing.LastActivityAt = &reviewedAt
-		event := Event{Type: EventTypePlanReviewed, Timestamp: reviewedAt, PlanID: detail.State.Plan.ID, Agent: agent, Review: &review, Message: "Plan reviewed"}
+		event := Event{Type: EventTypePlanReviewed, Timestamp: reviewedAt, PlanID: detail.State.Plan.ID, Agent: agent, Review: eventReview, Message: "Plan reviewed"}
 		return []Event{event}, nil
 	})
+}
+
+func reviewEventSnapshot(review *PlanReview) *PlanReview {
+	eventReview := clonePlanReview(review)
+	if eventReview != nil && len(eventReview.Findings) == 0 {
+		eventReview.Findings = nil
+	}
+	return eventReview
 }
 
 // RecordMerged marks the plan fully completed after a verified merge and appends
@@ -461,7 +511,7 @@ func (r *PlanRecord) RecordMerged(branch string, mergedDefaultSHA string, merged
 	branch = strings.TrimSpace(branch)
 	mergedDefaultSHA = strings.TrimSpace(mergedDefaultSHA)
 	mergedAt = mergedAt.UTC()
-	return r.applyStateEvent(store, func(detail *PlanDetail) ([]Event, error) {
+	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
 		for _, event := range slices.Backward(detail.Events) {
 			if event.Type == EventTypePlanReopened {
 				break
@@ -515,7 +565,7 @@ func (r *PlanRecord) applyWithRecoveredMatch(mutate artifactMutationFunc, recove
 	return err
 }
 
-func (r *PlanRecord) applyStateEvent(store artifactMutationStore, mutate func(*PlanDetail) ([]Event, error)) error {
+func (r *PlanRecord) applyStateEvent(store artifactMutationStore, mutate func(*PlanDetail, *ArtifactChangeSet) ([]Event, error)) error {
 	err := applyStateEventMutationWithRefresh(store, r.dir, r.detail, true, mutate)
 	if err == nil {
 		r.advanceBaseline()
@@ -523,8 +573,8 @@ func (r *PlanRecord) applyStateEvent(store artifactMutationStore, mutate func(*P
 	return err
 }
 
-func (r *PlanRecord) applyStateUpdate(store artifactMutationStore, baseline, intended State) error {
-	recoveredBaseline, err := applyStateArtifactUpdate(store, r.dir, r.detail, baseline, intended)
+func (r *PlanRecord) applyStateUpdate(store artifactMutationStore, baseline, intended State, changes *ArtifactChangeSet) error {
+	recoveredBaseline, err := applyStateArtifactUpdate(store, r.dir, r.detail, baseline, intended, changes)
 	if err == nil {
 		r.advanceBaseline()
 	} else if recoveredBaseline != nil {
@@ -537,7 +587,7 @@ func (r *PlanRecord) applyStateUpdate(store artifactMutationStore, baseline, int
 	return err
 }
 
-func (r *PlanRecord) applySlicesUpdate(store artifactMutationStore, mutate func(*PlanDetail) error) error {
+func (r *PlanRecord) applySlicesUpdate(store artifactMutationStore, mutate func(*PlanDetail, *ArtifactChangeSet) error) error {
 	err := applySlicesArtifactUpdate(store, r.dir, r.detail, mutate)
 	if err == nil {
 		r.advanceBaseline()

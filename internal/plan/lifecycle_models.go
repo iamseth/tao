@@ -115,7 +115,7 @@ type Repo struct {
 type PlanState struct {
 	ID              string   `json:"id"`
 	Title           string   `json:"title"`
-	CurrentSlice    *string  `json:"current_slice"`
+	CurrentSlice    *string  `json:"current_slice,omitempty"`
 	CompletedSlices []string `json:"completed_slices"`
 	PendingSlices   []string `json:"pending_slices"`
 	// LastRunCommitPolicy records the commit policy used by the latest run start.
@@ -178,15 +178,15 @@ type SingleMergeCommitIntent struct {
 // PlanReview records the persisted fresh-session review for a completed plan.
 type PlanReview struct {
 	Status        string               `json:"status,omitempty"`
-	Verdict       string               `json:"verdict"`
-	Summary       string               `json:"summary"`
-	FindingsCount int                  `json:"findings_count"`
-	Findings      []ReviewFinding      `json:"findings"`
-	CommitMessage *ReviewCommitMessage `json:"commit_message"`
+	Verdict       string               `json:"verdict,omitempty"`
+	Summary       string               `json:"summary,omitempty"`
+	FindingsCount int                  `json:"findings_count,omitempty"`
+	Findings      []ReviewFinding      `json:"findings,omitempty"`
+	CommitMessage *ReviewCommitMessage `json:"commit_message,omitempty"`
 	Base          string               `json:"base,omitempty"`
 	Head          string               `json:"head,omitempty"`
 	Agent         string               `json:"agent,omitempty"`
-	ReviewedAt    time.Time            `json:"reviewed_at"`
+	ReviewedAt    time.Time            `json:"reviewed_at,omitempty,omitzero"`
 }
 
 func (r *PlanReview) IsApproved() bool {
@@ -221,9 +221,9 @@ type Workspace struct {
 	DependencyCommand     string          `json:"dependency_preparation_command,omitempty"`
 	DependencyStartedAt   *time.Time      `json:"dependency_preparation_started_at,omitempty"`
 	DependencyCompletedAt *time.Time      `json:"dependency_preparation_completed_at,omitempty"`
-	DependencyFailure     string          `json:"dependency_preparation_failure"`
+	DependencyFailure     string          `json:"dependency_preparation_failure,omitempty"`
 	// DependencyFingerprint is the SHA-256 of the lockfile behind the last successful dependency install; empty when unknown.
-	DependencyFingerprint string `json:"dependency_fingerprint"`
+	DependencyFingerprint string `json:"dependency_fingerprint,omitempty"`
 	CleanupStatus         string `json:"cleanup_status,omitempty"`
 }
 

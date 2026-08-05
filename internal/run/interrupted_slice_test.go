@@ -745,9 +745,9 @@ func TestInterruptedSliceStrictlyInfersLegacyBoundary(t *testing.T) {
 
 type interruptedArtifactStore struct{}
 
-func (interruptedArtifactStore) WriteState(string, plan.State) error       { return nil }
-func (interruptedArtifactStore) WriteSlices(string, plan.SlicesFile) error { return nil }
-func (interruptedArtifactStore) AppendEvent(string, plan.Event) error      { return nil }
+func (interruptedArtifactStore) WriteState(string, []byte) error      { return nil }
+func (interruptedArtifactStore) WriteSlices(string, []byte) error     { return nil }
+func (interruptedArtifactStore) AppendEvent(string, plan.Event) error { return nil }
 
 func statusMutation(status string) func(*InterruptedSliceInput) {
 	return func(input *InterruptedSliceInput) { input.PorcelainStatus = status }

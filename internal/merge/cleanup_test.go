@@ -191,13 +191,17 @@ func (f *fakeEventAppender) requireSingle(t testing.TB, eventType string) plan.E
 // WriteState and WriteSlices make fakeEventAppender a full plan.ArtifactStore so
 // recorded merges persist state through it (in memory) instead of the
 // filesystem, keeping AppendPlanMergedEvent's state/event persistence unified.
-func (f *fakeEventAppender) WriteState(planDir string, state plan.State) error {
+func (f *fakeEventAppender) WriteState(_ string, payload []byte) error {
+	var state plan.State
+	if err := json.Unmarshal(payload, &state); err != nil {
+		return err
+	}
 	f.state = &state
 	f.stateWrites = append(f.stateWrites, state)
 	return nil
 }
 
-func (f *fakeEventAppender) WriteSlices(planDir string, slices plan.SlicesFile) error {
+func (f *fakeEventAppender) WriteSlices(_ string, _ []byte) error {
 	return nil
 }
 

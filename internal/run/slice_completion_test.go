@@ -3,6 +3,7 @@ package run
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -24,21 +25,19 @@ type sliceCompletionStore struct {
 	events       []plan.Event
 }
 
-func (s *sliceCompletionStore) WriteState(_ string, state plan.State) error {
+func (s *sliceCompletionStore) WriteState(_ string, payload []byte) error {
 	if s.failState {
 		s.failState = false
 		return errors.New("interrupted metadata write")
 	}
-	s.state = state
-	return nil
+	return json.Unmarshal(payload, &s.state)
 }
-func (s *sliceCompletionStore) WriteSlices(_ string, slices plan.SlicesFile) error {
+func (s *sliceCompletionStore) WriteSlices(_ string, payload []byte) error {
 	s.slicesWrites++
 	if s.slicesWrites == s.failSlicesAt {
 		return errors.New("interrupted slices write")
 	}
-	s.slices = slices
-	return nil
+	return json.Unmarshal(payload, &s.slices)
 }
 func (s *sliceCompletionStore) AppendEvent(_ string, event plan.Event) error {
 	if s.failEvent {

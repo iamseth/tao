@@ -236,12 +236,20 @@ func TestSummarizeClearsStaleReviewVerdictAfterReopen(t *testing.T) {
 }
 
 func TestReviewAccessorsSeparateCurrentFromPersisted(t *testing.T) {
-	review := PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Summary: "ready"}
+	proposal := &ReviewCommitMessage{Subject: "fix(plan): proposal", Body: "body"}
+	review := PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Summary: "ready", CommitMessage: proposal}
 	detail := reviewedCapabilityDetail()
 	SetPersistedReview(detail, review)
 	persisted := PersistedReview(detail)
 	if persisted == nil {
 		t.Fatal("expected persisted review after SetPersistedReview")
+	}
+	if persisted.Findings == nil {
+		t.Fatal("SetPersistedReview must publish canonical empty findings")
+	}
+	proposal.Subject = "mutated"
+	if persisted.CommitMessage == nil || persisted.CommitMessage.Subject != "fix(plan): proposal" {
+		t.Fatalf("SetPersistedReview did not clone replacement metadata: %+v", persisted.CommitMessage)
 	}
 
 	detail.Events = []Event{{Type: EventTypePlanReviewed, Review: persisted}}

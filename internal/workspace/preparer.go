@@ -14,6 +14,7 @@ import (
 // PlanRecord persists plan state after workspace preparation milestones.
 type PlanRecord interface {
 	PersistState() error
+	PersistStateChanges(*plan.ArtifactChangeSet) error
 }
 
 type PlanRecordFactory func(detail *plan.PlanDetail) (PlanRecord, error)
@@ -89,9 +90,10 @@ func (p ExecutionPreparer) Prepare(ctx context.Context, detail *plan.PlanDetail,
 		return "", err
 	}
 	recordWorkspaceMetadata(detail, config, metadata, plan.WorkspaceStatusPreparing, p.now())
-	if err := p.persistState(detail); err != nil {
+	if err := p.persistState(detail, nil); err != nil {
 		return "", fmt.Errorf("record workspace metadata: %w", err)
 	}
+	dependencyChanges := plan.NewArtifactChangeSet(detail)
 	priorFingerprint := detail.State.Workspace.DependencyFingerprint
 	fingerprint := ""
 	if autoDependencyInstall(config.DependencyInstallBehavior) {
@@ -108,25 +110,34 @@ func (p ExecutionPreparer) Prepare(ctx context.Context, detail *plan.PlanDetail,
 		if dependencyErr != nil {
 			if !metadata.Reused || priorFingerprint == "" {
 				detail.State.Workspace.LifecycleStatus = plan.WorkspaceStatusFailed
-				if writeErr := p.persistState(detail); writeErr != nil {
+				if writeErr := p.persistState(detail, nil); writeErr != nil {
 					return "", fmt.Errorf("record dependency failure: %w", writeErr)
 				}
 				return "", dependencyErr
 			}
 			detail.State.Workspace.DependencyFingerprint = priorFingerprint
-		} else if config.DependencyInstallBehavior != DependencyInstallNever {
-			fingerprint, err = dependencyLockfileFingerprint(metadata.Path)
-			if err != nil {
-				return "", err
+		} else {
+			if dependency.Status == plan.DependencyPreparationStatusReady {
+				dependencyChanges.ClearWorkspaceDependencyFailure()
 			}
-			detail.State.Workspace.DependencyFingerprint = fingerprint
+			if config.DependencyInstallBehavior != DependencyInstallNever {
+				fingerprint, err = dependencyLockfileFingerprint(metadata.Path)
+				if err != nil {
+					return "", err
+				}
+			}
+			if fingerprint == "" {
+				dependencyChanges.ClearWorkspaceDependencyFingerprint()
+			} else {
+				detail.State.Workspace.DependencyFingerprint = fingerprint
+			}
 		}
 	}
 	detail.State.Workspace.LifecycleStatus = plan.WorkspaceStatusReady
 	preparedAt := p.now().UTC()
 	detail.State.Workspace.Timing.PreparedAt = &preparedAt
 	detail.State.Workspace.Timing.LastActivityAt = &preparedAt
-	if err := p.persistState(detail); err != nil {
+	if err := p.persistState(detail, dependencyChanges); err != nil {
 		return "", fmt.Errorf("record workspace ready metadata: %w", err)
 	}
 	return metadata.Path, nil
@@ -150,7 +161,7 @@ func (p ExecutionPreparer) now() time.Time {
 	return time.Now()
 }
 
-func (p ExecutionPreparer) persistState(detail *plan.PlanDetail) error {
+func (p ExecutionPreparer) persistState(detail *plan.PlanDetail, changes *plan.ArtifactChangeSet) error {
 	if p.PlanRecordFactory == nil {
 		return nil
 	}
@@ -160,6 +171,9 @@ func (p ExecutionPreparer) persistState(detail *plan.PlanDetail) error {
 	}
 	if record == nil {
 		return fmt.Errorf("plan record is nil")
+	}
+	if changes != nil {
+		return record.PersistStateChanges(changes)
 	}
 	return record.PersistState()
 }
@@ -441,5 +455,7 @@ func recordDependencyMetadata(detail *plan.PlanDetail, metadata DependencyMetada
 	detail.State.Workspace.DependencyCommand = metadata.Command
 	detail.State.Workspace.DependencyStartedAt = metadata.StartedAt
 	detail.State.Workspace.DependencyCompletedAt = metadata.CompletedAt
-	detail.State.Workspace.DependencyFailure = metadata.FailureReason
+	if metadata.FailureReason != "" {
+		detail.State.Workspace.DependencyFailure = metadata.FailureReason
+	}
 }

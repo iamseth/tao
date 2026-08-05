@@ -384,14 +384,16 @@ func PersistedReview(detail *PlanDetail) *PlanReview {
 	return detail.State.Plan.Review
 }
 
-// SetPersistedReview assigns the in-memory persisted review metadata on detail.
-// It is a no-op for nil detail; callers must still persist state through the
-// record or artifact mutation path.
+// SetPersistedReview publishes already-persisted review metadata in memory.
+// It applies the same canonical replacement shape as ArtifactChangeSet without
+// creating persistence intent or writing an artifact. It is a no-op for nil
+// detail.
 func SetPersistedReview(detail *PlanDetail, review PlanReview) {
 	if detail == nil {
 		return
 	}
-	detail.State.Plan.Review = &review
+	review = normalizePlanReviewReplacement(review)
+	detail.State.Plan.Review = clonePlanReview(&review)
 }
 
 // ReviewSupersededByReopen reports whether a plan_reopened event was recorded
