@@ -9,6 +9,25 @@ import (
 	"testing"
 )
 
+func TestProveRebaseReplayDoesNotRequireGlobalGitIdentity(t *testing.T) {
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	root, oldBase, _, oldHead := commitSeriesRepository(t)
+	runGitCommand(t, root, "checkout", "main")
+	writeCommitSeriesFile(t, root, "base-advance.txt", "new base\n")
+	commitAll(t, root, "advance base")
+	newBase := gitOutput(t, root, "rev-parse", "HEAD")
+
+	client := NewClient(root, nil)
+	expected, err := client.CommitSeriesRebaseProof(context.Background(), oldBase, newBase, oldBase, oldHead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.ProveRebaseReplay(context.Background(), oldBase, oldHead, newBase, expected); err != nil {
+		t.Fatalf("prove replay with repository-local identity: %v", err)
+	}
+}
+
 func TestCommitSeriesProofSurvivesConflictFreeRebase(t *testing.T) {
 	root, base, first, second := commitSeriesRepository(t)
 	client := NewClient(root, nil)

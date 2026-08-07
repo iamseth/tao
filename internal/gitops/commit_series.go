@@ -69,6 +69,15 @@ func (c Client) ProveRebaseReplay(ctx context.Context, oldBase, oldHead, newBase
 		return fmt.Errorf("create isolated rebase proof clone: %w", err)
 	}
 	proofClient := NewClient(cloneRoot, c.runner)
+	// A clone does not inherit repository-local user identity. Give this
+	// disposable proof clone its own identity so replay depends only on the
+	// commit series, not on global Git configuration.
+	if err := proofClient.run(ctx, "config", "--local", "user.name", "Tao Rebase Proof"); err != nil {
+		return fmt.Errorf("configure isolated rebase proof committer name: %w", err)
+	}
+	if err := proofClient.run(ctx, "config", "--local", "user.email", "tao-rebase-proof@example.invalid"); err != nil {
+		return fmt.Errorf("configure isolated rebase proof committer email: %w", err)
+	}
 	if err := proofClient.run(ctx, "checkout", "--quiet", "--detach", oldHeadSHA); err != nil {
 		return fmt.Errorf("check out recorded head in isolated rebase proof: %w", err)
 	}
