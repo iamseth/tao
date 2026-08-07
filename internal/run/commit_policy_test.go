@@ -156,7 +156,7 @@ func TestServiceExecuteUsesRequestCommitPolicy(t *testing.T) {
 	settleRunTestSlice(completedDetail)
 	detail.Dir = t.TempDir()
 	completedDetail.Dir = detail.Dir
-	repo := &memoryRunRepository{details: []*plan.PlanDetail{detail, completedDetail}}
+	repo := &memoryRunRepository{details: []*plan.PlanDetail{detail, detail, completedDetail}}
 	executor := &packetCapturingExecutor{}
 
 	err := NewService(repo, io.Discard, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone}}, RunDependencies: RunDependencies{SliceExecutor: executor, PlanRecordFactory: memoryPlanRecordFactory, CommandRunner: runGitFake(&[]string{}, nil)}}).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice}})
@@ -179,7 +179,7 @@ func TestServiceExecuteExecutionModeCurrentCapturesStartingBranchBeforeSliceStar
 	completedDetail.Dir = planDir
 	completedDetail.State.Repo.Root = repoRoot
 	persistRunArtifacts(t, planDir, detail)
-	repo := &memoryRunRepository{details: []*plan.PlanDetail{detail, completedDetail}}
+	repo := &memoryRunRepository{details: []*plan.PlanDetail{detail, detail, completedDetail}}
 	started := false
 	runner := func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
 		if name == "git" && runGitKey(args) == "branch --show-current" {

@@ -282,6 +282,68 @@ func TestCreateReviewWithAgentSessionFallsBackToRecordedBaseWhenMergeBaseFails(t
 	}
 }
 
+func TestCreateReviewWithAgentSessionPreservesArtifactWhenRefreshedGateRefuses(t *testing.T) {
+	planDir := t.TempDir()
+	repoRoot := t.TempDir()
+	reviewedAt := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	detail := runPlanDetail(plan.StatusInReview, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, &reviewedAt)
+	detail.Dir = planDir
+	detail.State.Repo.Root = repoRoot
+	detail.State.Repo.BaseCommit = "base123"
+	detail.State.Plan.Review = &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, Summary: "existing review", ReviewedAt: reviewedAt.Add(-time.Hour)}
+	persistReviewState(t, planDir, detail)
+
+	const existingArtifact = "existing review artifact\n"
+	if err := os.WriteFile(filepath.Join(planDir, plan.ReviewFile), []byte(existingArtifact), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	executor := agentSessionExecutorFunc(func(context.Context, AgentSessionRequest) (AgentSessionResult, error) {
+		state := detail.State
+		pending := "002-race"
+		state.Status = plan.StatusInProgress
+		state.Plan.CurrentSlice = &pending
+		state.Plan.PendingSlices = []string{pending}
+		slicesFile := detail.Slices
+		slicesFile.Slices = append(append([]plan.Slice(nil), detail.Slices.Slices...), plan.Slice{ID: pending, Status: plan.StatusInProgress})
+		for name, value := range map[string]any{"state.json": state, "slices.json": slicesFile} {
+			payload, err := json.Marshal(value)
+			if err != nil {
+				return AgentSessionResult{}, err
+			}
+			if err := os.WriteFile(filepath.Join(planDir, name), payload, 0o600); err != nil {
+				return AgentSessionResult{}, err
+			}
+		}
+		return AgentSessionResult{Output: "replacement review artifact\n"}, nil
+	})
+	calls := []string{}
+
+	_, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", CommandRunner: runGitFake(&calls, nil), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(plan.NewFileRepository("")))
+	if err == nil || !strings.Contains(err.Error(), "002-race") {
+		t.Fatalf("review error = %v, want refreshed pending-work refusal", err)
+	}
+	artifact, readErr := os.ReadFile(filepath.Join(planDir, plan.ReviewFile)) //nolint:gosec // test reads a t.TempDir-derived artifact.
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(artifact) != existingArtifact {
+		t.Fatalf("refused review changed existing review artifact: %q", artifact)
+	}
+	state, readErr := plan.ReadState(planDir)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if state.Plan.Review == nil || state.Plan.Review.Summary != "existing review" {
+		t.Fatalf("refused review replaced metadata: %+v", state.Plan.Review)
+	}
+}
+
+type agentSessionExecutorFunc func(context.Context, AgentSessionRequest) (AgentSessionResult, error)
+
+func (f agentSessionExecutorFunc) RunAgentSession(ctx context.Context, request AgentSessionRequest) (AgentSessionResult, error) {
+	return f(ctx, request)
+}
+
 func fileReviewRecordFactory(repo *plan.FileRepository) PlanRecordFactory {
 	return func(detail *plan.PlanDetail) (PlanMutationRecord, error) {
 		return repo.PlanRecord(detail)
@@ -412,6 +474,139 @@ func TestReviewReportsStandalonePhasesInOrderAndStopsOnFailure(t *testing.T) {
 		}
 		assertTextOrder(t, out.String(), "Preparing review: plan-a", "Verifying completed branch: ")
 	})
+}
+
+func TestReviewLockReloadsAuthoritativePlanDetail(t *testing.T) {
+	planDir := t.TempDir()
+	repoRoot := t.TempDir()
+	stale := runPlanDetail(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
+	stale.Dir = planDir
+	stale.State.Repo.Root = repoRoot
+	stale.State.Plan.Title = "stale"
+	fresh := runPlanDetail(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
+	fresh.Dir = planDir
+	fresh.State.Repo.Root = repoRoot
+	fresh.State.Plan.Title = "fresh"
+	repo := &memoryRunRepository{details: []*plan.PlanDetail{stale, fresh}}
+	var reviewedDetail *plan.PlanDetail
+	creator := reviewCreatorFunc(func(_ context.Context, run ReviewRun) (plan.PlanReview, error) {
+		reviewedDetail = run.Detail
+		return plan.PlanReview{Verdict: plan.ReviewVerdictComment}, nil
+	})
+	service := NewService(repo, io.Discard, Options{
+		ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi}},
+		RunDependencies: RunDependencies{ReviewCreator: creator, CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error { return nil }},
+	})
+
+	if _, err := service.Review(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi}}); err != nil {
+		t.Fatal(err)
+	}
+	if reviewedDetail != fresh || reviewedDetail.State.Plan.Title != "fresh" {
+		t.Fatalf("review used stale pre-lock detail: %#v", reviewedDetail)
+	}
+	if repo.calls != 2 {
+		t.Fatalf("ResolvePlan calls = %d, want pre-lock selection plus post-lock reload", repo.calls)
+	}
+}
+
+func TestReviewRejectsPendingSliceWorkBeforeVerificationOrAgent(t *testing.T) {
+	current := "002-current"
+	tests := []struct {
+		name       string
+		detail     *plan.PlanDetail
+		wantSlice  string
+		wantAbsent string
+	}{
+		{
+			name: "current slice takes precedence",
+			detail: &plan.PlanDetail{
+				Dir: t.TempDir(),
+				State: plan.State{Status: plan.StatusInProgress, Repo: plan.Repo{Root: t.TempDir()}, Plan: plan.PlanState{
+					ID: "plan-a", CurrentSlice: &current, PendingSlices: []string{"001-pending", current},
+				}},
+				Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: current, Status: plan.StatusInProgress}, {ID: "001-pending", Status: plan.StatusPending}}},
+			},
+			wantSlice:  current,
+			wantAbsent: "001-pending",
+		},
+		{
+			name: "first pending slice",
+			detail: &plan.PlanDetail{
+				Dir: t.TempDir(),
+				State: plan.State{Status: plan.StatusPlanned, Repo: plan.Repo{Root: t.TempDir()}, Plan: plan.PlanState{
+					ID: "plan-a", PendingSlices: []string{"003-pending"},
+				}},
+				Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "003-pending", Status: plan.StatusPending}}},
+			},
+			wantSlice: "003-pending",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out bytes.Buffer
+			commandCalled := false
+			creatorCalled := false
+			repo := &memoryRunRepository{details: []*plan.PlanDetail{tt.detail, tt.detail}}
+			service := NewService(repo, &out, Options{
+				ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi}},
+				RunDependencies: RunDependencies{
+					CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error {
+						commandCalled = true
+						return nil
+					},
+					ReviewCreator: reviewCreatorFunc(func(context.Context, ReviewRun) (plan.PlanReview, error) {
+						creatorCalled = true
+						return plan.PlanReview{}, nil
+					}),
+				},
+			})
+
+			_, err := service.Review(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi}})
+			if err == nil || !strings.Contains(err.Error(), tt.wantSlice) || !strings.Contains(err.Error(), "tao run plan-a") {
+				t.Fatalf("Review error = %v, want actionable refusal for %s", err, tt.wantSlice)
+			}
+			if tt.wantAbsent != "" && strings.Contains(err.Error(), tt.wantAbsent) {
+				t.Fatalf("Review error chose pending slice instead of current slice: %v", err)
+			}
+			if commandCalled || creatorCalled {
+				t.Fatalf("refused review performed expensive work: command=%v creator=%v", commandCalled, creatorCalled)
+			}
+			if out.Len() != 0 {
+				t.Fatalf("refused review emitted preparation output: %q", out.String())
+			}
+		})
+	}
+}
+
+func TestReviewSettledWorkRunsVerificationAndAgent(t *testing.T) {
+	detail := runPlanDetail(plan.StatusInReview, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
+	detail.Dir = t.TempDir()
+	detail.State.Repo.Root = t.TempDir()
+	detail.State.Plan.LastRunCommitPolicy = CommitPolicySlice.String()
+	commandCalled := false
+	creatorCalled := false
+	repo := &memoryRunRepository{details: []*plan.PlanDetail{detail, detail}}
+	service := NewService(repo, io.Discard, Options{
+		ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi}},
+		RunDependencies: RunDependencies{
+			CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error {
+				commandCalled = true
+				return nil
+			},
+			ReviewCreator: reviewCreatorFunc(func(context.Context, ReviewRun) (plan.PlanReview, error) {
+				creatorCalled = true
+				return plan.PlanReview{Verdict: plan.ReviewVerdictApprove}, nil
+			}),
+		},
+	})
+
+	if _, err := service.Review(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi}}); err != nil {
+		t.Fatal(err)
+	}
+	if !commandCalled || !creatorCalled {
+		t.Fatalf("settled review did not run verification and agent: command=%v creator=%v", commandCalled, creatorCalled)
+	}
 }
 
 func assertTextOrder(t *testing.T, text string, values ...string) {
@@ -899,6 +1094,46 @@ func TestExtractReviewOversizedJSONBlockFallsBackToCappedComment(t *testing.T) {
 	}
 	if len([]rune(got.Summary)) != maxReviewSummaryRunes {
 		t.Fatalf("fallback summary length = %d, want %d", len([]rune(got.Summary)), maxReviewSummaryRunes)
+	}
+}
+
+func TestResumeReviewReloadsAuthoritativeStateAndRejectsReopenedWork(t *testing.T) {
+	planDir := t.TempDir()
+	repoRoot := t.TempDir()
+	stale := runPlanDetail(plan.StatusInReview, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
+	stale.Dir = planDir
+	stale.State.Repo.Root = repoRoot
+	fresh := runPlanDetail(plan.StatusInProgress, []string{"002-reopened"}, []string{"001-a"}, "002-reopened", plan.StatusPending, nil, nil)
+	fresh.Dir = planDir
+	fresh.State.Repo.Root = repoRoot
+	repo := &memoryRunRepository{details: []*plan.PlanDetail{stale, fresh}}
+	commandCalled := false
+	creatorCalled := false
+	service := NewService(repo, io.Discard, Options{
+		ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi, ReviewEnabled: true}},
+		RunDependencies: RunDependencies{
+			CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error {
+				commandCalled = true
+				return nil
+			},
+			ReviewCreator: reviewCreatorFunc(func(context.Context, ReviewRun) (plan.PlanReview, error) {
+				creatorCalled = true
+				return plan.PlanReview{}, nil
+			}),
+		},
+	})
+
+	err := service.ResumeReview(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{
+		CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi, ReviewEnabled: true,
+	}})
+	if err == nil || !strings.Contains(err.Error(), "002-reopened") {
+		t.Fatalf("ResumeReview error = %v, want refreshed pending-work refusal", err)
+	}
+	if repo.calls != 2 {
+		t.Fatalf("ResolvePlan calls = %d, want pre-lock selection plus post-lock reload", repo.calls)
+	}
+	if commandCalled || creatorCalled {
+		t.Fatalf("stale recovery performed work: command=%t creator=%t", commandCalled, creatorCalled)
 	}
 }
 

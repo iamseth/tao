@@ -69,6 +69,10 @@ func cloneWorkspace(workspace *Workspace) *Workspace {
 	}
 	clone.DependencyStartedAt = cloneTimePtr(workspace.DependencyStartedAt)
 	clone.DependencyCompletedAt = cloneTimePtr(workspace.DependencyCompletedAt)
+	if workspace.RebaseIntent != nil {
+		intent := *workspace.RebaseIntent
+		clone.RebaseIntent = &intent
+	}
 	return &clone
 }
 

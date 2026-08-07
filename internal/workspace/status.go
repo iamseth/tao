@@ -5,6 +5,8 @@ type Metadata struct {
 	PlanID            string
 	Path              string
 	Branch            string
+	RecordedBranch    string
+	RecordedHeadSHA   string
 	BaseBranch        string
 	BaseSHA           string
 	BaseCurrentSHA    string

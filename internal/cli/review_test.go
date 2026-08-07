@@ -97,8 +97,8 @@ func TestReviewPrintsPersistedReviewArtifact(t *testing.T) {
 	if err := (App{Out: &out, Err: &out}).review(context.Background(), repo, []string{"plan-a"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := out.String(); got != "# Review\nLooks good.\n" {
-		t.Fatalf("expected persisted review artifact, got %q", got)
+	if got := out.String(); got != "# Review\nLooks good.\nNext: tao review --run plan-a\n" {
+		t.Fatalf("expected persisted review artifact with current guidance, got %q", got)
 	}
 }
 
@@ -112,7 +112,7 @@ func TestReviewPrintsStateReviewWhenArtifactMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := out.String()
-	for _, want := range []string{"Review: plan-a", "Status: completed", "Verdict: approve", "Summary: ready to merge", "Commit Subject: feat(review): persist approved commit proposals", "Commit Body:\nWhat:\nPersist the proposal.\n\nWhy:\nReuse reviewed context.", "Findings: 2", "Base: base123", "Head: head456", "Agent: pi", "Reviewed At: 2026-06-28T15:00:00Z"} {
+	for _, want := range []string{"Review: plan-a", "Review Status: completed", "Verdict: approve", "Summary: ready to merge", "Commit Subject: feat(review): persist approved commit proposals", "Commit Body:\nWhat:\nPersist the proposal.\n\nWhy:\nReuse reviewed context.", "Findings: 2", "Base: base123", "Head: head456", "Agent: pi", "Reviewed At: 2026-06-28T15:00:00Z"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected review summary to contain %q, got %q", want, text)
 		}
@@ -184,6 +184,19 @@ func TestReviewSuppressesStaleNextStepHints(t *testing.T) {
 		}
 		if strings.Index(text, "Historical review content:") > strings.Index(text, "# Review") {
 			t.Fatalf("historical label should precede artifact body, got %q", text)
+		}
+	})
+
+	t.Run("reopened pending work advertises run before review", func(t *testing.T) {
+		text := renderFor(t, &plan.PlanDetail{
+			State: plan.State{Status: plan.StatusInProgress, Plan: plan.PlanState{ID: "plan-a", PendingSlices: []string{"r101-fix"}, Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested}}},
+			Events: []plan.Event{
+				{Type: plan.EventTypePlanReviewed},
+				{Type: plan.EventTypePlanReopened},
+			},
+		})
+		if !strings.Contains(text, "Next: tao run plan-a") || strings.Contains(text, "Next: tao review --run") || strings.Contains(text, "Next: tao rework") {
+			t.Fatalf("reopened executable work should advertise only tao run, got %q", text)
 		}
 	})
 
@@ -259,8 +272,8 @@ func TestReviewRunTriggersFreshReview(t *testing.T) {
 		t.Fatalf("expected review prompt with plan dir and head, got %q", prompt)
 	}
 	text := out.String()
-	if !strings.Contains(text, "Review completed: "+fixture.id) || !strings.Contains(text, "Verdict: approve") {
-		t.Fatalf("expected review completion output, got %q", text)
+	if !strings.Contains(text, "Review completed: "+fixture.id) || !strings.Contains(text, "Review Status: completed") || !strings.Contains(text, "Verdict: approve") || !strings.Contains(text, "Next: tao merge "+fixture.id) {
+		t.Fatalf("expected refreshed review completion and merge guidance, got %q", text)
 	}
 	previous := -1
 	for _, phase := range []string{"Preparing review: " + fixture.id, "Verifying completed branch: ", "Running agent review: pi", "Review completed: " + fixture.id} {

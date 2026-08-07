@@ -48,6 +48,56 @@ func TestAcquirePlanLocksContendsWithOrdinaryPlanLock(t *testing.T) {
 	}
 }
 
+func TestWithPlanRunLockIsReentrantAndReleasesAfterError(t *testing.T) {
+	withPlanRunLockSettings(t, time.Hour, func(pid int) bool { return true })
+	detail := &plan.PlanDetail{Dir: t.TempDir(), State: plan.State{Plan: plan.PlanState{ID: "plan-a"}}}
+	operationErr := errors.New("operation failed")
+	competitorDone := make(chan error, 1)
+	nestedRan := false
+
+	err := WithPlanRunLock(context.Background(), detail, time.Now(), func(ownedCtx context.Context) error {
+		if err := WithPlanRunLock(ownedCtx, detail, time.Now(), func(context.Context) error {
+			nestedRan = true
+			return nil
+		}); err != nil {
+			return err
+		}
+		// The competitor deliberately starts a separate lifecycle request rather
+		// than inheriting the lock-owning context under test.
+		go func() { //nolint:gosec // G118: independent context is the contention condition
+			competitorDone <- WithPlanRunLock(context.Background(), detail, time.Now(), func(context.Context) error {
+				return errors.New("competitor unexpectedly ran")
+			})
+		}()
+		select {
+		case competitorErr := <-competitorDone:
+			if !errors.Is(competitorErr, ErrCannotStart) {
+				t.Fatalf("competing lock error = %v, want ErrCannotStart", competitorErr)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for competing lifecycle driver")
+		}
+		return operationErr
+	})
+	if !errors.Is(err, operationErr) {
+		t.Fatalf("operation error = %v, want %v", err, operationErr)
+	}
+	if !nestedRan {
+		t.Fatal("nested lifecycle operation did not run re-entrantly")
+	}
+
+	releasedRan := false
+	if err := WithPlanRunLock(context.Background(), detail, time.Now(), func(context.Context) error {
+		releasedRan = true
+		return nil
+	}); err != nil {
+		t.Fatalf("lock was not released after callback error: %v", err)
+	}
+	if !releasedRan {
+		t.Fatal("operation after release did not run")
+	}
+}
+
 func TestAcquirePlanRunLockCreatesLockFile(t *testing.T) {
 	planDir := t.TempDir()
 	createdAt := time.Date(2026, 6, 28, 3, 0, 0, 123, time.FixedZone("test", -5*60*60))
@@ -179,6 +229,41 @@ func TestPlanRunLockReleaseRemovesLockFile(t *testing.T) {
 	}
 }
 
+func TestServiceExecuteReloadsPlanAfterAcquiringRunLock(t *testing.T) {
+	planDir := t.TempDir()
+	repoRoot := t.TempDir()
+	initial := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
+	initial.Dir = planDir
+	initial.State.Repo.Root = repoRoot
+	completed := runPlanDetail(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
+	completed.Dir = planDir
+	completed.State.Repo.Root = repoRoot
+	repo := &memoryRunRepository{details: []*plan.PlanDetail{initial}}
+	preparerCalls := 0
+	executor := &countingSliceExecutor{}
+	reporter := callbackStatusReporter(func() {
+		// Track begins after the request's initial resolution and before the plan
+		// lock is acquired, deterministically simulating a competing lifecycle
+		// driver settling authoritative state in that interval.
+		repo.details = []*plan.PlanDetail{completed}
+	})
+
+	err := NewService(repo, io.Discard, Options{RunDependencies: RunDependencies{
+		StatusReporter: reporter,
+		WorkspacePreparer: func(context.Context, *plan.PlanDetail, WorkspaceResolverInput) (string, error) {
+			preparerCalls++
+			return repoRoot, nil
+		},
+		SliceExecutor: executor,
+	}}).Execute(context.Background(), Request{Input: "plan-a"})
+	if err == nil || !errors.Is(err, ErrCannotStart) || !strings.Contains(err.Error(), "complete") {
+		t.Fatalf("execute error = %v, want refreshed completed-plan refusal", err)
+	}
+	if preparerCalls != 0 || executor.calls != 0 {
+		t.Fatalf("workspace preparer calls = %d, executor calls = %d; want no stale execution", preparerCalls, executor.calls)
+	}
+}
+
 func TestServiceExecuteFailsFastWhenPlanRunLockHeld(t *testing.T) {
 	withPlanRunLockSettings(t, time.Hour, func(pid int) bool { return true })
 	planDir := t.TempDir()
@@ -203,6 +288,13 @@ func TestServiceExecuteFailsFastWhenPlanRunLockHeld(t *testing.T) {
 	if executor.calls != 0 {
 		t.Fatalf("expected executor not to run, got %d calls", executor.calls)
 	}
+}
+
+type callbackStatusReporter func()
+
+func (r callbackStatusReporter) Track(_ string, operation func() error) error {
+	r()
+	return operation()
 }
 
 func withPlanRunLockSettings(t *testing.T, timeout time.Duration, live func(pid int) bool) {

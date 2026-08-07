@@ -9,6 +9,7 @@ import (
 
 	"github.com/iamseth/tao/internal/plan"
 	reworkpkg "github.com/iamseth/tao/internal/rework"
+	runpkg "github.com/iamseth/tao/internal/run"
 )
 
 var reworkCommand = commandMetadata{
@@ -56,38 +57,49 @@ func (a App) rework(ctx context.Context, repo queueRepository, args []string) er
 	}
 
 	now := a.now().UTC()
-	record, err := repo.PlanRecord(detail)
-	if err != nil {
-		return err
-	}
-	var newSlices []plan.Slice
-	if !force {
-		newSlices, err = reworkpkg.Reopen(record, now)
+	return runpkg.WithPlanRunLock(ctx, detail, now, func(ownedCtx context.Context) error {
+		// Resolve by the exact directory after acquisition so every gate and
+		// mutation uses authoritative state rather than pre-lock selection data.
+		refreshed, err := repo.ResolvePlan(ownedCtx, detail.Dir)
 		if err != nil {
 			return err
 		}
-	} else {
-		findings := reworkpkg.ReviewFindings(detail)
-		if len(findings) == 0 {
-			findings = forcedReworkFindings(detail)
+		if refreshed == nil {
+			return fmt.Errorf("plan %q not found", detail.Dir)
 		}
-		generationDetail := *detail
-		generationDetail.State.UpdatedAt = now
-		newSlices = reworkpkg.GenerateSlices(&generationDetail, findings, nextReworkRound(detail))
-		if len(newSlices) == 0 {
-			return fmt.Errorf("rework refused: plan %s has no review findings to convert", reworkPlanID(detail))
-		}
-		if err := reopenPlanRecord(record, newSlices, now, true); err != nil {
+		record, err := repo.PlanRecord(refreshed)
+		if err != nil {
 			return err
 		}
-	}
-	if err := a.writeReworkResult(record.Detail(), newSlices, runAfter); err != nil {
-		return err
-	}
-	if runAfter {
-		return a.run(ctx, repo, []string{record.Dir()})
-	}
-	return nil
+		var newSlices []plan.Slice
+		if !force {
+			newSlices, err = reworkpkg.Reopen(record, now)
+			if err != nil {
+				return err
+			}
+		} else {
+			findings := reworkpkg.ReviewFindings(refreshed)
+			if len(findings) == 0 {
+				findings = forcedReworkFindings(refreshed)
+			}
+			generationDetail := *refreshed
+			generationDetail.State.UpdatedAt = now
+			newSlices = reworkpkg.GenerateSlices(&generationDetail, findings, nextReworkRound(refreshed))
+			if len(newSlices) == 0 {
+				return fmt.Errorf("rework refused: plan %s has no review findings to convert", reworkPlanID(refreshed))
+			}
+			if err := reopenPlanRecord(record, newSlices, now, true); err != nil {
+				return err
+			}
+		}
+		if err := a.writeReworkResult(record.Detail(), newSlices, runAfter); err != nil {
+			return err
+		}
+		if runAfter {
+			return a.run(ownedCtx, repo, []string{record.Dir()})
+		}
+		return nil
+	})
 }
 
 func reopenPlanRecord(record *plan.PlanRecord, newSlices []plan.Slice, now time.Time, force bool) error {

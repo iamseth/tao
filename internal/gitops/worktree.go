@@ -40,9 +40,15 @@ func (c Client) RemoveWorktree(ctx context.Context, path string, force bool) err
 	return c.run(ctx, args...)
 }
 
-// RebaseWorktree rebases the branch checked out at path onto onto.
-func (c Client) RebaseWorktree(ctx context.Context, path string, onto string) error {
-	return c.runAt(ctx, path, "rebase", onto)
+// RebaseWorktree rebases exactly upstream..HEAD in the branch checked out at
+// path onto onto. Git must stop rather than silently omit an equivalent or
+// newly-empty commit.
+func (c Client) RebaseWorktree(ctx context.Context, path, onto, upstream string) error {
+	return c.runAt(ctx, path,
+		"-c", "commit.gpgSign=false",
+		"rebase", "--no-autostash", "--no-update-refs", "--reapply-cherry-picks", "--empty=stop",
+		"--onto", onto, upstream,
+	)
 }
 
 // RebaseAbortWorktree aborts an in-progress rebase in the worktree at path.

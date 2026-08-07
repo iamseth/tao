@@ -223,8 +223,35 @@ type Workspace struct {
 	DependencyCompletedAt *time.Time      `json:"dependency_preparation_completed_at,omitempty"`
 	DependencyFailure     string          `json:"dependency_preparation_failure,omitempty"`
 	// DependencyFingerprint is the SHA-256 of the lockfile behind the last successful dependency install; empty when unknown.
-	DependencyFingerprint string `json:"dependency_fingerprint,omitempty"`
-	CleanupStatus         string `json:"cleanup_status,omitempty"`
+	DependencyFingerprint string                 `json:"dependency_fingerprint,omitempty"`
+	RebaseIntent          *WorkspaceRebaseIntent `json:"rebase_intent,omitempty"`
+	CleanupStatus         string                 `json:"cleanup_status,omitempty"`
+}
+
+// WorkspaceRebaseIntent records the exact pre-mutation boundary and feature
+// commit series needed to prove and settle an interrupted workspace rebase.
+type WorkspaceRebaseIntent struct {
+	Branch                  string    `json:"branch"`
+	BaseBranch              string    `json:"base_branch"`
+	OldHeadSHA              string    `json:"old_head_sha"`
+	OldBaseSHA              string    `json:"old_base_sha"`
+	NewBaseSHA              string    `json:"new_base_sha"`
+	CommitCount             int       `json:"commit_count"`
+	CommitSeriesFingerprint string    `json:"commit_series_fingerprint"`
+	CreatedAt               time.Time `json:"created_at"`
+}
+
+// WorkspaceRebaseSettlement is the durable workspace boundary and status
+// written when an exact rebase intent has been proved complete.
+type WorkspaceRebaseSettlement struct {
+	Branch          string
+	BaseSHA         string
+	BaseCurrentSHA  string
+	HeadSHA         string
+	BaseStatus      string
+	RefreshStatus   string
+	RebaseStatus    string
+	LifecycleStatus string
 }
 
 // WorkspaceTiming records lifecycle timestamps for a plan workspace.

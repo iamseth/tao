@@ -108,6 +108,10 @@ func (a App) workspaceStatus(ctx context.Context, repo plan.Resolver, args []str
 	if err != nil {
 		return err
 	}
+	if detail.State.Workspace != nil {
+		metadata.RecordedBranch = detail.State.Workspace.Branch
+		metadata.RecordedHeadSHA = detail.State.Workspace.HeadSHA
+	}
 	return renderWorkspaceMetadata(a.Out, metadata)
 }
 
@@ -222,9 +226,18 @@ func renderWorkspaceMetadata(out io.Writer, metadata workspace.Metadata) error {
 	lines := []string{
 		"Plan ID: " + metadata.PlanID,
 		"Path: " + metadata.Path,
-		"Branch: " + metadata.Branch,
-		"State: " + workspaceState(metadata),
 	}
+	if metadata.RecordedBranch != metadata.Branch || metadata.RecordedHeadSHA != metadata.HeadSHA {
+		lines = append(lines,
+			"Durable Recorded Branch: "+durableWorkspaceValue(metadata.RecordedBranch),
+			"Durable Recorded HEAD: "+durableWorkspaceValue(metadata.RecordedHeadSHA),
+			"Live Actual Branch: "+metadata.Branch,
+			"Live Actual HEAD: "+metadata.HeadSHA,
+		)
+	} else {
+		lines = append(lines, "Branch: "+metadata.Branch)
+	}
+	lines = append(lines, "State: "+workspaceState(metadata))
 	if metadata.BaseBranch != "" {
 		lines = append(lines, "Base Branch: "+metadata.BaseBranch)
 	}
@@ -238,6 +251,13 @@ func renderWorkspaceMetadata(out io.Writer, metadata workspace.Metadata) error {
 		lines = append(lines, "Dependency Command: "+metadata.DependencyCommand)
 	}
 	return writeLines(out, lines...)
+}
+
+func durableWorkspaceValue(value string) string {
+	if value == "" {
+		return "(missing)"
+	}
+	return value
 }
 
 func renderWorkspaceCleanPlan(out io.Writer, plan workspace.CleanPlan, removed bool) error {

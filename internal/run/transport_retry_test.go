@@ -88,7 +88,7 @@ func TestServiceExecuteTransportRetryEventuallySucceedsOnThirdSession(t *testing
 		}
 		return ""
 	}, "tao/plan-a", "base")
-	service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail, detail, detail, completed}}, io.Discard, Options{RunDependencies: RunDependencies{
+	service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail, detail, detail, detail, completed}}, io.Discard, Options{RunDependencies: RunDependencies{
 		CommandRunner: runner,
 		TransportRetryDelay: func(_ context.Context, delay time.Duration) error {
 			delays = append(delays, delay)
@@ -137,7 +137,7 @@ func TestServiceExecuteTransportRetryAcceptsLateDurableCompletionWithoutRetryHan
 		}
 		return ""
 	}, "tao/plan-a", "base")
-	service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail, completed}}, io.Discard, Options{RunDependencies: RunDependencies{
+	service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail, detail, completed}}, io.Discard, Options{RunDependencies: RunDependencies{
 		CommandRunner: runner,
 		TransportRetryDelay: func(_ context.Context, delay time.Duration) error {
 			delays = append(delays, delay)
@@ -275,7 +275,7 @@ func TestServiceExecuteTransportRetryStopsAtEveryUnsafeReloadedBoundary(t *testi
 				}
 				return baseRunner(ctx, cwd, name, args, stdout, stderr)
 			}
-			service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{initial, reloaded}}, io.Discard, Options{RunDependencies: RunDependencies{
+			service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{initial, initial, reloaded}}, io.Discard, Options{RunDependencies: RunDependencies{
 				CommandRunner:       runner,
 				TransportRetryDelay: func(context.Context, time.Duration) error { return nil },
 				EventAppender:       eventAppenderFunc(func(string, plan.Event) error { return nil }),

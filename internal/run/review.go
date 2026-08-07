@@ -37,44 +37,51 @@ func (s Service) Review(ctx context.Context, request Request) (review plan.PlanR
 	if err != nil {
 		return plan.PlanReview{}, err
 	}
-	detail, err := s.repo.ResolvePlan(ctx, request.Input)
+	lockDetail, err := s.repo.ResolvePlan(ctx, request.Input)
 	if err != nil {
 		return plan.PlanReview{}, err
 	}
-	if detail == nil {
+	if lockDetail == nil {
 		return plan.PlanReview{}, fmt.Errorf("plan %q not found", request.Input)
 	}
-	lock, err := acquirePlanRunLock(detail.Dir, detail.State.Plan.ID, now(s.dependencies).UTC())
-	if err != nil {
-		return plan.PlanReview{}, err
-	}
-	defer func() {
-		if releaseErr := lock.Release(); err == nil && releaseErr != nil {
-			err = releaseErr
+	lockErr := WithPlanRunLock(ctx, lockDetail, now(s.dependencies).UTC(), func(ownedCtx context.Context) error {
+		// Resolve by the exact directory after acquisition. The pre-lock detail is
+		// identity only and may be stale after another lifecycle driver releases.
+		detail, err := s.repo.ResolvePlan(ownedCtx, lockDetail.Dir)
+		if err != nil {
+			return err
 		}
-	}()
-	if err := writef(s.out, "Preparing review: %s\n", detail.State.Plan.ID); err != nil {
-		return plan.PlanReview{}, err
-	}
-	execution, err := s.prepareReviewExecution(detail, config)
-	if err != nil {
-		return plan.PlanReview{}, err
-	}
-	if execution.Config.CommitPolicy != CommitPolicyNone {
-		if err := requireCleanReviewWorktree(ctx, gitClient(execution, execution.ExecutionRoot), detail, nil); err != nil {
-			return plan.PlanReview{}, fmt.Errorf("prepare review: %w", err)
+		if detail == nil {
+			return fmt.Errorf("plan %q not found", lockDetail.Dir)
 		}
-	}
-	if err := writef(s.out, "Verifying completed branch: %s\n", execution.ExecutionRoot); err != nil {
-		return plan.PlanReview{}, err
-	}
-	if err := newFinalizer(s.out, execution).verifyCompletedBranch(ctx, detail, execution.ExecutionRoot); err != nil {
-		return plan.PlanReview{}, fmt.Errorf("prepare review: %w", err)
-	}
-	if err := writef(s.out, "Running agent review: %s\n", execution.Config.Agent); err != nil {
-		return plan.PlanReview{}, err
-	}
-	return execution.Dependencies.ReviewCreator.CreateReview(ctx, ReviewRun{PlanDir: absolutePlanDir(detail.Dir), PlanID: detail.State.Plan.ID, LogPath: plan.LogPath(detail.Dir), Detail: detail, RepoRoot: execution.ExecutionRoot, Base: reviewDetailBase(detail)})
+		if err := plan.RequireSliceWorkSettled(detail); err != nil {
+			return err
+		}
+		if err := writef(s.out, "Preparing review: %s\n", detail.State.Plan.ID); err != nil {
+			return err
+		}
+		execution, err := s.prepareReviewExecution(detail, config)
+		if err != nil {
+			return err
+		}
+		if execution.Config.CommitPolicy != CommitPolicyNone {
+			if err := requireCleanReviewWorktree(ownedCtx, gitClient(execution, execution.ExecutionRoot), detail, nil); err != nil {
+				return fmt.Errorf("prepare review: %w", err)
+			}
+		}
+		if err := writef(s.out, "Verifying completed branch: %s\n", execution.ExecutionRoot); err != nil {
+			return err
+		}
+		if err := newFinalizer(s.out, execution).verifyCompletedBranch(ownedCtx, detail, execution.ExecutionRoot); err != nil {
+			return fmt.Errorf("prepare review: %w", err)
+		}
+		if err := writef(s.out, "Running agent review: %s\n", execution.Config.Agent); err != nil {
+			return err
+		}
+		review, err = execution.Dependencies.ReviewCreator.CreateReview(ownedCtx, ReviewRun{PlanDir: absolutePlanDir(detail.Dir), PlanID: detail.State.Plan.ID, LogPath: plan.LogPath(detail.Dir), Detail: detail, RepoRoot: execution.ExecutionRoot, Base: reviewDetailBase(detail)})
+		return err
+	})
+	return review, lockErr
 }
 
 // ResumeReview completes the remaining finalization phases of an interrupted
@@ -86,14 +93,25 @@ func (s Service) ResumeReview(ctx context.Context, request Request) error {
 	if err != nil {
 		return err
 	}
-	detail, err := s.repo.ResolvePlan(ctx, request.Input)
+	lockDetail, err := s.repo.ResolvePlan(ctx, request.Input)
 	if err != nil {
 		return err
 	}
-	if detail == nil {
+	if lockDetail == nil {
 		return fmt.Errorf("plan %q not found", request.Input)
 	}
-	return withPlanRunLock(ctx, detail, now(s.dependencies).UTC(), func(ownedCtx context.Context) error {
+	planDir := lockDetail.Dir
+	return withPlanRunLock(ctx, lockDetail, now(s.dependencies).UTC(), func(ownedCtx context.Context) error {
+		detail, err := s.repo.ResolvePlan(ownedCtx, planDir)
+		if err != nil {
+			return err
+		}
+		if detail == nil {
+			return fmt.Errorf("plan %q not found", planDir)
+		}
+		if err := plan.RequireSliceWorkSettled(detail); err != nil {
+			return err
+		}
 		execution, err := s.prepareReviewExecution(detail, config)
 		if err != nil {
 			return err
@@ -406,14 +424,11 @@ func createReviewWithAgentSession(ctx context.Context, executor AgentSessionExec
 	extracted := extractReview(result.Output)
 	reviewedAt := now(options).UTC()
 	review := plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: extracted.Verdict, Summary: extracted.Summary, FindingsCount: extracted.FindingsCount, Findings: extracted.Findings, CommitMessage: extracted.CommitMessage, Base: base, Head: head, Agent: options.Agent, ReviewedAt: reviewedAt}
-	if err := plan.WriteReviewArtifact(planDir, result.Output); err != nil {
-		return plan.PlanReview{}, err
-	}
 	record, err := reviewPlanRecord(recordFactory, planDir, detail)
 	if err != nil {
 		return plan.PlanReview{}, err
 	}
-	if err := record.RecordReviewCompleted(review, options.Agent); err != nil {
+	if err := record.RecordReviewCompletedWithArtifact(review, options.Agent, result.Output); err != nil {
 		return plan.PlanReview{}, err
 	}
 	return review, nil

@@ -172,7 +172,7 @@ func TestServiceExecuteRecoversStructuredPiTransportFailureThroughFreshRPCProces
 		return fileRepo.AppendEvent(planDir, event)
 	})
 	var delays []time.Duration
-	service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail, detail, completed}}, io.Discard, Options{RunDependencies: RunDependencies{
+	service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail, detail, detail, completed}}, io.Discard, Options{RunDependencies: RunDependencies{
 		CommandRunner: piTransportGitRunner(t, detail, root, func() string {
 			if len(processes) < 2 {
 				return " M partial.go\n"

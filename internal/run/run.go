@@ -61,6 +61,7 @@ type RunMetadataRecorder interface {
 type ReviewRecorder interface {
 	RecordReviewError(review plan.PlanReview, agent string) error
 	RecordReviewCompleted(review plan.PlanReview, agent string) error
+	RecordReviewCompletedWithArtifact(review plan.PlanReview, agent, content string) error
 }
 
 type PlanRecordFactory func(detail *plan.PlanDetail) (PlanMutationRecord, error)
@@ -237,13 +238,26 @@ func (s Service) Execute(ctx context.Context, request Request) error {
 	if err != nil {
 		return err
 	}
-	detail, err := s.repo.ResolvePlan(ctx, request.Input)
+	lockDetail, err := s.repo.ResolvePlan(ctx, request.Input)
 	if err != nil {
 		return err
 	}
+	if lockDetail == nil {
+		return fmt.Errorf("plan %q not found", request.Input)
+	}
+	planDir := lockDetail.Dir
 	startedAt := now(s.dependencies).UTC()
-	return trackRunStatus(ctx, s.dependencies.StatusReporter, detail, startedAt, func(statusCtx context.Context) error {
-		return withPlanRunLock(statusCtx, detail, startedAt, func(ownedCtx context.Context) error {
+	return trackRunStatus(ctx, s.dependencies.StatusReporter, lockDetail, startedAt, func(statusCtx context.Context) error {
+		return withPlanRunLock(statusCtx, lockDetail, startedAt, func(ownedCtx context.Context) error {
+			// The pre-lock detail identifies ownership only. Another lifecycle
+			// driver may have changed the plan before this lock was acquired.
+			detail, err := s.repo.ResolvePlan(ownedCtx, planDir)
+			if err != nil {
+				return err
+			}
+			if detail == nil {
+				return fmt.Errorf("plan %q not found", planDir)
+			}
 			ReportPhase(ownedCtx, PhasePreparingExecution, nil)
 			if err := CheckRequestCanStart(detail, request); err != nil {
 				return err

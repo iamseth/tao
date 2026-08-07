@@ -32,8 +32,8 @@
 //   - State.Plan.CurrentSlice preserves by default but is explicitly clearable
 //     through ArtifactChangeSet.
 //   - Workspace sub-fields: Branch, BaseSHA, HeadSHA, etc.
-//   - Workspace.DependencyFailure and DependencyFingerprint preserve by default
-//     but are explicitly clearable through ArtifactChangeSet.
+//   - Workspace.DependencyFailure, DependencyFingerprint, and RebaseIntent
+//     preserve by default but are explicitly clearable through ArtifactChangeSet.
 //   - Repo.BaseCommit ("base_commit,omitempty")
 //   - PlanState.PullRequest (*PullRequest, "pull_request,omitempty")
 //   - PlanState.Review and all PlanReview fields preserve by default but the

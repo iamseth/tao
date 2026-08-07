@@ -206,23 +206,30 @@ func physicalGitMetadataPath(ctx context.Context, git gitops.Client, root string
 }
 
 func inspectRecordedWorkspaceBeforeAutomaticStart(ctx context.Context, detail *plan.PlanDetail, execution runExecution) error {
-	if execution.Config.CommitPolicy != CommitPolicySlice || execution.Config.ExecutionMode != ExecutionModeIsolated || detail == nil {
+	if execution.Config.ExecutionMode != ExecutionModeIsolated || detail == nil {
 		return nil
 	}
 	if detail.State.Workspace == nil {
+		if execution.Config.CommitPolicy != CommitPolicySlice {
+			return nil
+		}
 		return inspectUnrecordedDefaultWorkspaceBeforeAutomaticStart(ctx, detail, execution)
 	}
 	workspaceState := detail.State.Workspace
 	if !recordedAutomaticWorktree(workspaceState) {
 		return nil
 	}
+	hasRebaseIntent := workspaceState.RebaseIntent != nil
+	if !hasRebaseIntent && execution.Config.CommitPolicy != CommitPolicySlice {
+		return nil
+	}
 	root := workspace.ResolveRecordedWorktree(detail).Path
-	if workspaceState.LifecycleStatus == plan.WorkspaceStatusCleaned {
+	if workspaceState.LifecycleStatus == plan.WorkspaceStatusCleaned && !hasRebaseIntent {
 		return nil
 	}
 	if workspaceState.LifecycleStatus != plan.WorkspaceStatusReady {
 		if _, err := os.Stat(root); err != nil {
-			if os.IsNotExist(err) {
+			if os.IsNotExist(err) && !hasRebaseIntent {
 				return nil
 			}
 			return fmt.Errorf("inspect recorded workspace before automatic slice: %w", err)
@@ -260,6 +267,9 @@ func inspectRecordedWorkspaceBeforeAutomaticStart(ctx context.Context, detail *p
 		return fmt.Errorf("inspect %s Git state before automatic slice: %w", label, err)
 	}
 	facts := interruptedSliceFacts(InterruptedSliceInput{PorcelainStatus: status, ActiveGitOperation: active})
+	if hasRebaseIntent {
+		return recoverWorkspaceRebaseIntent(ctx, detail, execution, git, label, branch, head, facts)
+	}
 	switch {
 	case facts.ActiveGitOperation != "":
 		return fmt.Errorf("automatic slice refused before workspace preparation: Git operation %q is active in the %s", facts.ActiveGitOperation, label)
@@ -286,8 +296,92 @@ func inspectRecordedWorkspaceBeforeAutomaticStart(ctx context.Context, detail *p
 		}
 		return nil
 	default:
-		return fmt.Errorf("automatic slice refused before workspace preparation: %s branch or HEAD differs from durable workspace metadata", label)
+		return fmt.Errorf("automatic slice refused before workspace preparation: %s differs from durable workspace metadata: durable branch %q HEAD %s; live branch %q HEAD %s. Run tao workspace status %s, reconcile the worktree manually, then retry", label, workspaceState.Branch, diagnosticSHA(workspaceState.HeadSHA), branch, diagnosticSHA(head), detail.State.Plan.ID)
 	}
+}
+
+func recoverWorkspaceRebaseIntent(ctx context.Context, detail *plan.PlanDetail, execution runExecution, git gitops.Client, label, branch, head string, facts InterruptedSliceFacts) error {
+	intent := *detail.State.Workspace.RebaseIntent
+	refuse := func(reason string) error {
+		return fmt.Errorf("automatic rebase recovery refused for %s: %s; durable branch %q old HEAD %s new base %s; live branch %q HEAD %s. Run tao workspace status %s, recover the worktree manually, then retry", label, reason, intent.Branch, diagnosticSHA(intent.OldHeadSHA), diagnosticSHA(intent.NewBaseSHA), branch, diagnosticSHA(head), detail.State.Plan.ID)
+	}
+	switch {
+	case facts.ActiveGitOperation != "":
+		return refuse(fmt.Sprintf("Git operation %q is active", facts.ActiveGitOperation))
+	case facts.AmbiguousStatus:
+		return refuse("git status contains an ambiguous entry")
+	case facts.Conflicted:
+		return refuse("worktree contains conflicted entries")
+	case facts.Dirty:
+		return refuse("worktree contains unattributed changes (" + strings.Join(facts.ChangedPaths, ", ") + ")")
+	case branch != intent.Branch:
+		return refuse(fmt.Sprintf("live branch %q does not match the recorded rebase branch %q", branch, intent.Branch))
+	}
+	if head == intent.OldHeadSHA {
+		proof, err := git.CommitSeriesRebaseProof(ctx, intent.OldBaseSHA, intent.NewBaseSHA, intent.OldBaseSHA, head)
+		if err != nil {
+			return refuse(fmt.Sprintf("the untouched pre-rebase commit series is inaccessible or unsupported: %v", err))
+		}
+		if proof.Count != intent.CommitCount || proof.Fingerprint != intent.CommitSeriesFingerprint {
+			return refuse(fmt.Sprintf("untouched pre-rebase commit-series proof differs from intent (got count %d fingerprint %s, want count %d fingerprint %s)", proof.Count, proof.Fingerprint, intent.CommitCount, intent.CommitSeriesFingerprint))
+		}
+		rebaseRecord, err := workspaceRebaseMutationRecord(execution, detail)
+		if err != nil {
+			return fmt.Errorf("clear untouched workspace rebase intent: %w", err)
+		}
+		if err := rebaseRecord.ClearWorkspaceRebaseIntent(intent); err != nil {
+			return fmt.Errorf("clear untouched workspace rebase intent; intent remains durable: %w", err)
+		}
+		return nil
+	}
+	proof, err := git.CommitSeriesRebaseProof(ctx, intent.OldBaseSHA, intent.NewBaseSHA, intent.NewBaseSHA, head)
+	if err != nil {
+		return refuse(fmt.Sprintf("the live commit series from the recorded new base is inaccessible or unsupported: %v", err))
+	}
+	if proof.Count != intent.CommitCount || proof.Fingerprint != intent.CommitSeriesFingerprint {
+		return refuse(fmt.Sprintf("live commit-series proof differs from intent (got count %d fingerprint %s, want count %d fingerprint %s)", proof.Count, proof.Fingerprint, intent.CommitCount, intent.CommitSeriesFingerprint))
+	}
+	rebaseRecord, err := workspaceRebaseMutationRecord(execution, detail)
+	if err != nil {
+		return fmt.Errorf("settle recovered workspace rebase: %w", err)
+	}
+	status := detail.State.Workspace.LifecycleStatus
+	if status == "" {
+		status = plan.WorkspaceStatusPreparing
+	}
+	settlement := plan.WorkspaceRebaseSettlement{
+		Branch: branch, BaseSHA: intent.NewBaseSHA, BaseCurrentSHA: intent.NewBaseSHA, HeadSHA: head,
+		BaseStatus: "current", RefreshStatus: "not_needed", RebaseStatus: "not_needed", LifecycleStatus: status,
+	}
+	if err := rebaseRecord.SettleWorkspaceRebase(intent, settlement); err != nil {
+		return fmt.Errorf("settle recovered workspace rebase; intent remains durable: %w", err)
+	}
+	return nil
+}
+
+type workspaceRebaseRecord interface {
+	ClearWorkspaceRebaseIntent(plan.WorkspaceRebaseIntent) error
+	SettleWorkspaceRebase(plan.WorkspaceRebaseIntent, plan.WorkspaceRebaseSettlement) error
+}
+
+func workspaceRebaseMutationRecord(execution runExecution, detail *plan.PlanDetail) (workspaceRebaseRecord, error) {
+	record, err := planMutationRecord(execution, detail)
+	if err != nil {
+		return nil, err
+	}
+	rebaseRecord, ok := record.(workspaceRebaseRecord)
+	if !ok {
+		return nil, fmt.Errorf("plan record does not support workspace rebase transactions")
+	}
+	return rebaseRecord, nil
+}
+
+func diagnosticSHA(sha string) string {
+	short := sha
+	if len(short) > 12 {
+		short = short[:12]
+	}
+	return fmt.Sprintf("%s (short %s)", sha, short)
 }
 
 func inspectUnrecordedDefaultWorkspaceBeforeAutomaticStart(ctx context.Context, detail *plan.PlanDetail, execution runExecution) error {

@@ -127,7 +127,7 @@ func servicePanicValue(t *testing.T, reporter *recordingStatusReporter) (recover
 func executeServiceWithStatusReporter(t *testing.T, ctx context.Context, reporter StatusReporter, executor SliceExecutor, planID string) error {
 	t.Helper()
 	detail, completedDetail := statusReporterPlanDetails(t, planID)
-	repo := &memoryRunRepository{details: []*plan.PlanDetail{detail, completedDetail}}
+	repo := &memoryRunRepository{details: []*plan.PlanDetail{detail, detail, completedDetail}}
 	var calls []string
 	if enhanced, ok := reporter.(*recordingInvocationStatusReporter); ok {
 		enhanced.repoRoot = detail.State.Repo.Root

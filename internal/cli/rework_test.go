@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
+	runpkg "github.com/iamseth/tao/internal/run"
 )
 
 func TestReworkCommandReopensChangesRequestedPlanWithGeneratedSlices(t *testing.T) {
@@ -57,6 +59,34 @@ func TestReworkCommandReopensChangesRequestedPlanWithGeneratedSlices(t *testing.
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("expected output to contain %q, got %q", want, out.String())
 		}
+	}
+}
+
+func TestReworkRunRetainsLockOwnershipForNestedRun(t *testing.T) {
+	root := t.TempDir()
+	planID := "20260628-1200-rework-run-lock"
+	finding := plan.ReviewFinding{Severity: "major", File: "internal/cli/rework.go", Message: "retain lock ownership"}
+	planDir := writeCLIReworkPlan(t, root, planID, plan.StatusCompleted, reworkReview(plan.ReviewVerdictChangesRequested, []plan.ReviewFinding{finding}))
+	nestedErr := errors.New("stop nested run")
+	nestedRan := false
+	oldExecutor := executeSinglePlan
+	executeSinglePlan = func(service runpkg.Service, ctx context.Context, request runpkg.Request) error {
+		return service.WithPlanRunLock(ctx, request, func(context.Context) error {
+			nestedRan = true
+			return nestedErr
+		})
+	}
+	t.Cleanup(func() { executeSinglePlan = oldExecutor })
+
+	err := (App{Out: &bytes.Buffer{}}).Run(context.Background(), []string{"--plans-dir", root, "rework", "--run", planID})
+	if !errors.Is(err, nestedErr) {
+		t.Fatalf("rework --run error = %v, want nested sentinel", err)
+	}
+	if !nestedRan {
+		t.Fatal("nested run did not recognize retained lock ownership")
+	}
+	if _, err := os.Stat(filepath.Join(planDir, ".run.lock")); !os.IsNotExist(err) {
+		t.Fatalf("rework lock was not released after nested error: %v", err)
 	}
 }
 

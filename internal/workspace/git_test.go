@@ -170,9 +170,9 @@ func gitHead(t *testing.T, cwd string) string {
 	return strings.TrimSpace(runGit(t, cwd, "rev-parse", "HEAD"))
 }
 
-func gitIsAncestor(t *testing.T, cwd string, ancestor string, descendant string) bool {
+func gitIsAncestor(t *testing.T, cwd string, ancestor string) bool {
 	t.Helper()
-	cmd := exec.Command("git", "merge-base", "--is-ancestor", ancestor, descendant) // #nosec G204 -- tests invoke fixed git command with test-controlled refs.
+	cmd := exec.Command("git", "merge-base", "--is-ancestor", ancestor, "HEAD") // #nosec G204 -- tests invoke fixed git command with test-controlled refs.
 	cmd.Dir = cwd
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

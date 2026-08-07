@@ -385,7 +385,7 @@ func TestPrepareRebasesStaleWorktreeBeforeRun(t *testing.T) {
 		t.Fatalf("prepare stale worktree: %v", err)
 	}
 
-	if !gitIsAncestor(t, root, defaultHead, "HEAD") {
+	if !gitIsAncestor(t, root, defaultHead) {
 		t.Fatalf("expected plan branch to contain default branch head %s", defaultHead)
 	}
 	if head := gitHead(t, root); head == oldPlanHead || detail.State.Workspace.HeadSHA != head {
@@ -399,6 +399,300 @@ func TestPrepareRebasesStaleWorktreeBeforeRun(t *testing.T) {
 	}
 	if detail.State.Repo.BaseCommit != initialBase {
 		t.Fatalf("state.repo.base_commit changed: want %s got %s", initialBase, detail.State.Repo.BaseCommit)
+	}
+}
+
+type rebaseRecorderFunc struct {
+	record func(plan.WorkspaceRebaseIntent) error
+	settle func(plan.WorkspaceRebaseIntent, Metadata) error
+}
+
+func (r rebaseRecorderFunc) RecordWorkspaceRebaseIntent(intent plan.WorkspaceRebaseIntent) error {
+	return r.record(intent)
+}
+
+func (r rebaseRecorderFunc) SettleWorkspaceRebase(intent plan.WorkspaceRebaseIntent, metadata Metadata) error {
+	return r.settle(intent, metadata)
+}
+
+func TestPrepareRebaseRecordsBeforeMutationAndSettlesImmediately(t *testing.T) {
+	repo := newTestRepo(t)
+	manager := newTestManager(t, repo.path)
+	metadata, err := manager.Prepare(context.Background(), PrepareOptions{PlanID: "plan-a", BaseBranch: "master"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitTestFile(t, metadata.Path, "plan.txt", "plan work\n", "plan work")
+	oldHead := gitHead(t, metadata.Path)
+	commitTestFile(t, repo.path, "default.txt", "default work\n", "advance default")
+	newBase := gitHead(t, repo.path)
+	var recorded *plan.WorkspaceRebaseIntent
+	recorder := rebaseRecorderFunc{
+		record: func(intent plan.WorkspaceRebaseIntent) error {
+			if got := gitHead(t, metadata.Path); got != oldHead {
+				t.Fatalf("intent was not recorded before mutation: HEAD=%s want %s", got, oldHead)
+			}
+			recorded = &intent
+			return nil
+		},
+		settle: func(intent plan.WorkspaceRebaseIntent, settled Metadata) error {
+			if recorded == nil || *recorded != intent {
+				t.Fatalf("settled intent %#v, recorded %#v", intent, recorded)
+			}
+			if settled.HeadSHA == oldHead || settled.BaseSHA != newBase || gitHead(t, metadata.Path) != settled.HeadSHA {
+				t.Fatalf("settlement did not describe live rewritten boundary: %#v", settled)
+			}
+			return nil
+		},
+	}
+	refreshed, err := manager.Prepare(context.Background(), PrepareOptions{PlanID: "plan-a", BaseBranch: "master", BaseSHA: metadata.BaseSHA, RebaseStale: true, RebaseRecorder: recorder, Now: func() time.Time { return time.Date(2026, 8, 5, 1, 2, 3, 0, time.UTC) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recorded == nil || recorded.OldHeadSHA != oldHead || recorded.OldBaseSHA != metadata.BaseSHA || recorded.NewBaseSHA != newBase || recorded.CommitCount != 1 {
+		t.Fatalf("unexpected intent: %#v", recorded)
+	}
+	if !refreshed.Rebased {
+		t.Fatal("expected rebase")
+	}
+}
+
+func TestPrepareRebaseProofSettlesFeatureEditAfterUpstreamRename(t *testing.T) {
+	repo := newTestRepo(t)
+	commitTestFile(t, repo.path, "original.txt", "top\ntarget\nbottom\n", "add target")
+	manager := newTestManager(t, repo.path)
+	metadata, err := manager.Prepare(context.Background(), PrepareOptions{PlanID: "plan-a", BaseBranch: "master"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitTestFile(t, metadata.Path, "original.txt", "top\nchanged\nbottom\n", "edit target")
+	runGit(t, repo.path, "mv", "original.txt", "renamed.txt")
+	runGit(t, repo.path, "commit", "-m", "rename target")
+	settled := false
+	recorder := rebaseRecorderFunc{
+		record: func(plan.WorkspaceRebaseIntent) error { return nil },
+		settle: func(plan.WorkspaceRebaseIntent, Metadata) error {
+			settled = true
+			return nil
+		},
+	}
+
+	refreshed, err := manager.Prepare(context.Background(), PrepareOptions{
+		PlanID: "plan-a", BaseBranch: "master", BaseSHA: metadata.BaseSHA,
+		RebaseStale: true, RebaseRecorder: recorder,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !settled || !refreshed.Rebased {
+		t.Fatalf("upstream rename rebase was not settled: settled=%t metadata=%#v", settled, refreshed)
+	}
+	content, err := os.ReadFile(filepath.Join(metadata.Path, "renamed.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(content), "top\nchanged\nbottom\n"; got != want {
+		t.Fatalf("rebased content = %q, want %q", got, want)
+	}
+}
+
+func TestPrepareRebaseUsesRecordedBaseSHAWhenBaseBranchAdvances(t *testing.T) {
+	repo := newTestRepo(t)
+	manager := newTestManager(t, repo.path)
+	metadata, err := manager.Prepare(context.Background(), PrepareOptions{PlanID: "plan-a", BaseBranch: "master"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitTestFile(t, metadata.Path, "plan.txt", "plan work\n", "plan work")
+	commitTestFile(t, repo.path, "authorized.txt", "authorized base\n", "advance authorized base")
+	authorizedBase := gitHead(t, repo.path)
+	var advancedBase string
+	settled := false
+	recorder := rebaseRecorderFunc{
+		record: func(intent plan.WorkspaceRebaseIntent) error {
+			if intent.NewBaseSHA != authorizedBase {
+				t.Fatalf("recorded new base = %s, want %s", intent.NewBaseSHA, authorizedBase)
+			}
+			commitTestFile(t, repo.path, "later.txt", "later base\n", "advance base after intent")
+			advancedBase = gitHead(t, repo.path)
+			return nil
+		},
+		settle: func(intent plan.WorkspaceRebaseIntent, metadata Metadata) error {
+			settled = true
+			if metadata.BaseSHA != intent.NewBaseSHA {
+				t.Fatalf("settled base = %s, want recorded base %s", metadata.BaseSHA, intent.NewBaseSHA)
+			}
+			return nil
+		},
+	}
+
+	refreshed, err := manager.Prepare(context.Background(), PrepareOptions{PlanID: "plan-a", BaseBranch: "master", BaseSHA: metadata.BaseSHA, RebaseStale: true, RebaseRecorder: recorder})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !settled {
+		t.Fatal("expected rebase settlement")
+	}
+	if !gitIsAncestor(t, refreshed.Path, authorizedBase) {
+		t.Fatalf("expected rebased head to contain recorded base %s", authorizedBase)
+	}
+	if gitIsAncestor(t, refreshed.Path, advancedBase) {
+		t.Fatalf("rebased head unexpectedly contains base ref advance %s recorded after intent", advancedBase)
+	}
+	if refreshed.BaseSHA != authorizedBase {
+		t.Fatalf("refreshed base = %s, want recorded base %s", refreshed.BaseSHA, authorizedBase)
+	}
+}
+
+func TestPrepareRebaseRecordFailurePreventsMutation(t *testing.T) {
+	repo := newTestRepo(t)
+	manager := newTestManager(t, repo.path)
+	metadata, err := manager.Prepare(context.Background(), PrepareOptions{PlanID: "plan-a", BaseBranch: "master"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitTestFile(t, metadata.Path, "plan.txt", "plan work\n", "plan work")
+	oldHead := gitHead(t, metadata.Path)
+	commitTestFile(t, repo.path, "default.txt", "default work\n", "advance default")
+	recorder := rebaseRecorderFunc{record: func(plan.WorkspaceRebaseIntent) error { return errors.New("disk full") }, settle: func(plan.WorkspaceRebaseIntent, Metadata) error { t.Fatal("unexpected settlement"); return nil }}
+	_, err = manager.Prepare(context.Background(), PrepareOptions{PlanID: "plan-a", BaseBranch: "master", BaseSHA: metadata.BaseSHA, RebaseStale: true, RebaseRecorder: recorder})
+	if err == nil || !strings.Contains(err.Error(), "before Git mutation") {
+		t.Fatalf("expected record refusal, got %v", err)
+	}
+	if got := gitHead(t, metadata.Path); got != oldHead {
+		t.Fatalf("record failure mutated HEAD: got %s want %s", got, oldHead)
+	}
+}
+
+func TestPrepareRebaseProofRefusesDivergentBaseBeforeMutation(t *testing.T) {
+	repo := newTestRepo(t)
+	manager := newTestManager(t, repo.path)
+	metadata, err := manager.Prepare(context.Background(), PrepareOptions{PlanID: "plan-a", BaseBranch: "master"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitTestFile(t, metadata.Path, "plan.txt", "plan work\n", "plan work")
+	oldHead := gitHead(t, metadata.Path)
+	runGit(t, repo.path, "checkout", "--orphan", "divergent")
+	runGit(t, repo.path, "rm", "-rf", ".")
+	commitTestFile(t, repo.path, "replacement.txt", "replacement history\n", "replace history")
+	recorded := false
+	recorder := rebaseRecorderFunc{
+		record: func(plan.WorkspaceRebaseIntent) error { recorded = true; return nil },
+		settle: func(plan.WorkspaceRebaseIntent, Metadata) error {
+			t.Fatal("unexpected settlement")
+			return nil
+		},
+	}
+
+	_, err = manager.Prepare(context.Background(), PrepareOptions{PlanID: "plan-a", BaseBranch: "divergent", BaseSHA: metadata.BaseSHA, RebaseStale: true, RebaseRecorder: recorder})
+	if err == nil || !strings.Contains(err.Error(), "not a descendant of the recorded old base") {
+		t.Fatalf("expected divergent-base refusal, got %v", err)
+	}
+	if recorded {
+		t.Fatal("divergent replay recorded intent despite failing the pre-mutation proof")
+	}
+	if got := gitHead(t, metadata.Path); got != oldHead {
+		t.Fatalf("divergent-base refusal changed HEAD: got %s want %s", got, oldHead)
+	}
+}
+
+func TestPrepareRebaseProofRefusesUpstreamEquivalentCommitBeforeMutation(t *testing.T) {
+	repo := newTestRepo(t)
+	manager := newTestManager(t, repo.path)
+	metadata, err := manager.Prepare(context.Background(), PrepareOptions{PlanID: "plan-a", BaseBranch: "master"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitTestFile(t, metadata.Path, "plan.txt", "plan work\n", "plan work")
+	oldHead := gitHead(t, metadata.Path)
+	commitTestFile(t, repo.path, "default.txt", "default work\n", "advance default")
+	runGit(t, repo.path, "cherry-pick", oldHead)
+	newBase := gitHead(t, repo.path)
+	if cherry := strings.TrimSpace(runGit(t, repo.path, "cherry", newBase, oldHead, metadata.BaseSHA)); !strings.HasPrefix(cherry, "- ") {
+		t.Fatalf("fixture commit is not patch-equivalent upstream: %q", cherry)
+	}
+	recorded := false
+	recorder := rebaseRecorderFunc{
+		record: func(plan.WorkspaceRebaseIntent) error { recorded = true; return nil },
+		settle: func(plan.WorkspaceRebaseIntent, Metadata) error {
+			t.Fatal("unexpected settlement")
+			return nil
+		},
+	}
+
+	_, err = manager.Prepare(context.Background(), PrepareOptions{PlanID: "plan-a", BaseBranch: "master", BaseSHA: metadata.BaseSHA, RebaseStale: true, RebaseRecorder: recorder})
+	if err == nil || !strings.Contains(err.Error(), "upstream-equivalent") {
+		t.Fatalf("expected upstream-equivalent refusal, got %v", err)
+	}
+	if recorded {
+		t.Fatal("upstream-equivalent replay recorded intent despite failing the pre-mutation proof")
+	}
+	if got := gitHead(t, metadata.Path); got != oldHead {
+		t.Fatalf("upstream-equivalent refusal changed HEAD: got %s want %s", got, oldHead)
+	}
+}
+
+func TestPrepareRebaseProofRefusesCommitThatWouldBecomeEmptyBeforeMutation(t *testing.T) {
+	repo := newTestRepo(t)
+	commitTestFile(t, repo.path, "shared.txt", "one\ntarget\nthree\n", "add shared file")
+	manager := newTestManager(t, repo.path)
+	metadata, err := manager.Prepare(context.Background(), PrepareOptions{PlanID: "plan-a", BaseBranch: "master"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitTestFile(t, metadata.Path, "shared.txt", "one\nchanged\nthree\n", "change target")
+	oldHead := gitHead(t, metadata.Path)
+	commitTestFile(t, repo.path, "shared.txt", "one\nchanged\nthree\nupstream\n", "change target and extend file")
+	newBase := gitHead(t, repo.path)
+	if cherry := strings.TrimSpace(runGit(t, repo.path, "cherry", newBase, oldHead, metadata.BaseSHA)); !strings.HasPrefix(cherry, "+ ") {
+		t.Fatalf("fixture commit is unexpectedly patch-equivalent upstream: %q", cherry)
+	}
+	recorded := false
+	recorder := rebaseRecorderFunc{
+		record: func(plan.WorkspaceRebaseIntent) error { recorded = true; return nil },
+		settle: func(plan.WorkspaceRebaseIntent, Metadata) error {
+			t.Fatal("unexpected settlement")
+			return nil
+		},
+	}
+
+	_, err = manager.Prepare(context.Background(), PrepareOptions{PlanID: "plan-a", BaseBranch: "master", BaseSHA: metadata.BaseSHA, RebaseStale: true, RebaseRecorder: recorder})
+	if err == nil || !strings.Contains(err.Error(), "become empty") {
+		t.Fatalf("expected newly-empty commit refusal, got %v", err)
+	}
+	if recorded {
+		t.Fatal("newly-empty replay recorded intent despite failing the pre-mutation proof")
+	}
+	if got := gitHead(t, metadata.Path); got != oldHead {
+		t.Fatalf("newly-empty refusal changed HEAD: got %s want %s", got, oldHead)
+	}
+}
+
+func TestPrepareRebaseSettlementFailureLeavesRewrittenHead(t *testing.T) {
+	repo := newTestRepo(t)
+	manager := newTestManager(t, repo.path)
+	metadata, err := manager.Prepare(context.Background(), PrepareOptions{PlanID: "plan-a", BaseBranch: "master"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitTestFile(t, metadata.Path, "plan.txt", "plan work\n", "plan work")
+	oldHead := gitHead(t, metadata.Path)
+	commitTestFile(t, repo.path, "default.txt", "default work\n", "advance default")
+	var durable *plan.WorkspaceRebaseIntent
+	recorder := rebaseRecorderFunc{
+		record: func(intent plan.WorkspaceRebaseIntent) error { durable = &intent; return nil },
+		settle: func(plan.WorkspaceRebaseIntent, Metadata) error { return errors.New("state write failed") },
+	}
+	_, err = manager.Prepare(context.Background(), PrepareOptions{PlanID: "plan-a", BaseBranch: "master", BaseSHA: metadata.BaseSHA, RebaseStale: true, RebaseRecorder: recorder})
+	if err == nil || !strings.Contains(err.Error(), "intent remains durable") {
+		t.Fatalf("expected settlement error, got %v", err)
+	}
+	if durable == nil {
+		t.Fatal("expected durable intent")
+	}
+	if got := gitHead(t, metadata.Path); got == oldHead {
+		t.Fatalf("expected Git mutation before settlement failure, HEAD=%s", got)
 	}
 }
 
@@ -458,7 +752,7 @@ func TestPrepareRefusesDirtyStaleWorktree(t *testing.T) {
 	if head := gitHead(t, metadata.Path); head != beforeHead {
 		t.Fatalf("dirty refusal changed head: want %s got %s", beforeHead, head)
 	}
-	if gitIsAncestor(t, metadata.Path, defaultHead, "HEAD") {
+	if gitIsAncestor(t, metadata.Path, defaultHead) {
 		t.Fatalf("dirty stale worktree should not have been rebased onto %s", defaultHead)
 	}
 }
@@ -478,7 +772,7 @@ func TestPrepareAbortsRebaseConflict(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected rebase conflict")
 	}
-	for _, want := range []string{"rebase/conflict phase", "aborted rebase", "before agent execution"} {
+	for _, want := range []string{"prove exact workspace commit replay before rebase", "before rebase", "conflict"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("expected %q in error %q", want, err.Error())
 		}

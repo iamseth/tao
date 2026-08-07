@@ -114,6 +114,16 @@ A merge is proven by a `plan_merged` event in `events.jsonl`. Plans written by r
 - Optional `plan.final_verification` records the repository-wide pre-review gate with `command`, absolute `cwd`, `result`, optional `details`, and `verified_at`. When no repository-owned command is detected, Tao records a skipped result rather than inventing a command.
 - Optional `plan.review.commit_message` is the untrusted proposal produced by the reviewer of the exact recorded `base..head` diff. It has `subject` and `body` strings; the subject is `<type>(<lowercase-scope>): <lowercase-imperative-summary>`, and the body has non-empty canonical `What:` and `Why:` sections. It must not contain `Tao-*` trailers. New `approve` reviews require a valid proposal; a missing, malformed, oversized, or reserved-trailer proposal downgrades the parsed result to bounded `comment` rather than persisting approval. `changes_requested` and `comment` reviews store `commit_message: null`, explicitly clearing a stale approved proposal. Historical reviews without this field remain readable.
 - Optional `plan.merge_commit_intent` binds `message`, `plan_id`, `source_head`, `default_branch`, `default_parent`, and `created_at` before a single squash mutates Git. `message` is the exact final validated review (or exceptional generated) proposal plus Tao-owned evidence. Matching retries reuse it without another agent call. Historical intents remain exact recovery authority and are not reformatted.
+- Optional `workspace.rebase_intent` is written before a workspace rebase mutates Git. It binds the workspace `branch`, `base_branch`, `old_head_sha`, `old_base_sha`, `new_base_sha`, ordered `commit_count`, versioned `commit_series_fingerprint`, and UTC `created_at`. The fingerprint proves the exact linear `old_base_sha..old_head_sha` feature series from rebase-stable commit metadata, messages, and content changes; ancestry alone is not proof. Current `v5` fingerprints bind each edit to its immediately adjacent unchanged context, reject ambiguous locations, and canonicalize paths through upstream rename detection while retaining destination-file identity. This distinguishes duplicate edit locations, survives conflict-free upstream renames, and prevents a distant newly unique line from displacing an anchor. Historical `v1`, ordinal-based `v2`, nearest-unique-anchor `v3`, and adjacent-context `v4` intents remain readable but cannot match a newly computed `v5` recovery proof. Plans without this field remain readable.
+
+`workspace.rebase_intent` uses `omitempty` and therefore preserves an existing
+value when an ordinary typed update has a nil intent. Tao clears settled intent
+only through the artifact change contract, which writes an explicit
+`"rebase_intent": null` while preserving unknown workspace fields. Successful
+rebase settlement verifies the exact intent and writes the new base, HEAD, and
+workspace status fields in the same refreshed artifact mutation as that clear.
+Exact re-recording is idempotent; conflicting replacement, mismatched clearing,
+or mismatched settlement is refused.
 
 ```mermaid
 stateDiagram-v2

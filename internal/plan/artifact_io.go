@@ -149,6 +149,7 @@ type ArtifactChangeSet struct {
 
 	clearWorkspaceDependencyFailure     bool
 	clearWorkspaceDependencyFingerprint bool
+	clearWorkspaceRebaseIntent          bool
 	clearPlanCurrentSlice               bool
 	planReview                          planReviewChange
 	clearSliceBlockerNotes              map[string]struct{}
@@ -202,6 +203,18 @@ func (c *ArtifactChangeSet) ClearWorkspaceDependencyFingerprint() {
 		c.detail.State.Workspace = &Workspace{}
 	}
 	c.detail.State.Workspace.DependencyFingerprint = ""
+}
+
+// ClearWorkspaceRebaseIntent explicitly clears durable rebase recovery evidence
+// while preserving unrelated workspace fields.
+func (c *ArtifactChangeSet) ClearWorkspaceRebaseIntent() {
+	if c == nil {
+		return
+	}
+	c.clearWorkspaceRebaseIntent = true
+	if c.detail != nil && c.detail.State.Workspace != nil {
+		c.detail.State.Workspace.RebaseIntent = nil
+	}
 }
 
 // ClearSliceBlockerNote explicitly clears one slice's persisted blocker note.
@@ -290,7 +303,7 @@ func (c *ArtifactChangeSet) applyState(state *State) {
 	if c == nil || state == nil {
 		return
 	}
-	if c.clearWorkspaceDependencyFailure || c.clearWorkspaceDependencyFingerprint {
+	if c.clearWorkspaceDependencyFailure || c.clearWorkspaceDependencyFingerprint || c.clearWorkspaceRebaseIntent {
 		if state.Workspace == nil {
 			state.Workspace = &Workspace{}
 		}
@@ -299,6 +312,9 @@ func (c *ArtifactChangeSet) applyState(state *State) {
 		}
 		if c.clearWorkspaceDependencyFingerprint {
 			state.Workspace.DependencyFingerprint = ""
+		}
+		if c.clearWorkspaceRebaseIntent {
+			state.Workspace.RebaseIntent = nil
 		}
 	}
 	if c.clearPlanCurrentSlice {
@@ -646,13 +662,19 @@ func applyArtifactMutationLocked(store artifactMutationStore, planDir string, de
 // requested mutation is evaluated, and the caller's detail changes only after
 // settlement.
 func applyStateEventMutationWithRefresh(store artifactMutationStore, planDir string, detail *PlanDetail, forceRefresh bool, mutate func(*PlanDetail, *ArtifactChangeSet) ([]Event, error)) error {
+	return applyStateEventMutationWithReview(store, planDir, detail, forceRefresh, nil, mutate)
+}
+
+// applyStateEventMutationWithReview includes review.md in the same refreshed,
+// journaled mutation as its state and event metadata.
+func applyStateEventMutationWithReview(store artifactMutationStore, planDir string, detail *PlanDetail, forceRefresh bool, reviewContent *string, mutate func(*PlanDetail, *ArtifactChangeSet) ([]Event, error)) error {
 	return store.withMutationLock(planDir, func() error {
-		return applyStateEventMutationLocked(store, planDir, detail, forceRefresh, mutate)
+		return applyStateEventMutationLocked(store, planDir, detail, forceRefresh, reviewContent, mutate)
 	})
 }
 
 // applyStateEventMutationLocked requires the store's mutation lock for planDir.
-func applyStateEventMutationLocked(store artifactMutationStore, planDir string, detail *PlanDetail, forceRefresh bool, mutate func(*PlanDetail, *ArtifactChangeSet) ([]Event, error)) error {
+func applyStateEventMutationLocked(store artifactMutationStore, planDir string, detail *PlanDetail, forceRefresh bool, reviewContent *string, mutate func(*PlanDetail, *ArtifactChangeSet) ([]Event, error)) error {
 	clone, _, err := artifactMutationWorkingDetailLocked(store, planDir, detail, forceRefresh, true)
 	if err != nil {
 		return err
@@ -699,6 +721,9 @@ func applyStateEventMutationLocked(store artifactMutationStore, planDir string, 
 		CreatedAt:  time.Now().UTC(),
 		State:      newMutationJournalPayload(statePayload),
 		Events:     events,
+	}
+	if reviewContent != nil {
+		journal.Review = newMutationJournalPayload([]byte(*reviewContent))
 	}
 	if err := store.settleMutationLocked(planDir, journal); err != nil {
 		return err
@@ -1154,7 +1179,7 @@ func lowerArtifactJSONChanges(encoded []byte, projection artifactJSONChanges) ([
 	if changes == nil {
 		return encoded, nil
 	}
-	hasStateChanges := changes.clearWorkspaceDependencyFailure || changes.clearWorkspaceDependencyFingerprint || changes.clearPlanCurrentSlice || changes.planReview.kind != planReviewUnchanged
+	hasStateChanges := changes.clearWorkspaceDependencyFailure || changes.clearWorkspaceDependencyFingerprint || changes.clearWorkspaceRebaseIntent || changes.clearPlanCurrentSlice || changes.planReview.kind != planReviewUnchanged
 	hasSliceChanges := len(changes.clearSliceBlockerNotes) > 0
 	if projection.kind == artifactJSONState && !hasStateChanges || projection.kind == artifactJSONSlices && !hasSliceChanges || projection.kind == artifactJSONNone {
 		return encoded, nil
@@ -1203,20 +1228,26 @@ func validateSlicesChangeDeclarations(baseline, intended SlicesFile, changes *Ar
 
 func validateStateChangeDeclarations(baseline, intended State, changes *ArtifactChangeSet) error {
 	var baselineFailure, baselineFingerprint string
+	var baselineRebaseIntent, intendedRebaseIntent *WorkspaceRebaseIntent
 	if baseline.Workspace != nil {
 		baselineFailure = baseline.Workspace.DependencyFailure
 		baselineFingerprint = baseline.Workspace.DependencyFingerprint
+		baselineRebaseIntent = baseline.Workspace.RebaseIntent
 	}
 	var intendedFailure, intendedFingerprint string
 	if intended.Workspace != nil {
 		intendedFailure = intended.Workspace.DependencyFailure
 		intendedFingerprint = intended.Workspace.DependencyFingerprint
+		intendedRebaseIntent = intended.Workspace.RebaseIntent
 	}
 	if baselineFailure != "" && intendedFailure == "" && (changes == nil || !changes.clearWorkspaceDependencyFailure) {
 		return fmt.Errorf("persist state: Workspace.DependencyFailure changed from non-zero to zero without ClearWorkspaceDependencyFailure")
 	}
 	if baselineFingerprint != "" && intendedFingerprint == "" && (changes == nil || !changes.clearWorkspaceDependencyFingerprint) {
 		return fmt.Errorf("persist state: Workspace.DependencyFingerprint changed from non-zero to zero without ClearWorkspaceDependencyFingerprint")
+	}
+	if baselineRebaseIntent != nil && intendedRebaseIntent == nil && (changes == nil || !changes.clearWorkspaceRebaseIntent) {
+		return fmt.Errorf("persist state: Workspace.RebaseIntent changed from non-zero to zero without ClearWorkspaceRebaseIntent")
 	}
 	if baseline.Plan.CurrentSlice != nil && intended.Plan.CurrentSlice == nil && (changes == nil || !changes.clearPlanCurrentSlice) {
 		return fmt.Errorf("persist state: State.Plan.CurrentSlice changed from non-zero to zero without ClearPlanCurrentSlice")
@@ -1266,13 +1297,16 @@ func validatePlanReviewChangeDeclaration(baseline, intended *PlanReview, changes
 }
 
 func lowerStateJSONChanges(root map[string]any, changes *ArtifactChangeSet) error {
-	if changes.clearWorkspaceDependencyFailure || changes.clearWorkspaceDependencyFingerprint {
+	if changes.clearWorkspaceDependencyFailure || changes.clearWorkspaceDependencyFingerprint || changes.clearWorkspaceRebaseIntent {
 		workspace := jsonObject(root, "workspace")
 		if changes.clearWorkspaceDependencyFailure {
 			workspace["dependency_preparation_failure"] = ""
 		}
 		if changes.clearWorkspaceDependencyFingerprint {
 			workspace["dependency_fingerprint"] = ""
+		}
+		if changes.clearWorkspaceRebaseIntent {
+			workspace["rebase_intent"] = nil
 		}
 	}
 	plan := jsonObject(root, "plan")

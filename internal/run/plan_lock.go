@@ -131,6 +131,20 @@ func (e *planRunLockContendedError) Is(target error) bool {
 	return target == ErrCannotStart || target == errPlanRunLocked
 }
 
+// WithPlanRunLock runs operation while holding the ordinary per-plan driver
+// lock. The callback context carries ownership, so nested lifecycle drivers for
+// the same plan are re-entrant and retain the original lock until operation
+// returns.
+func WithPlanRunLock(ctx context.Context, detail *plan.PlanDetail, timestamp time.Time, operation func(context.Context) error) error {
+	if detail == nil {
+		return fmt.Errorf("acquire plan run lock: plan detail is nil")
+	}
+	if operation == nil {
+		return fmt.Errorf("plan run lock operation is nil")
+	}
+	return withPlanRunLock(ctx, detail, timestamp, operation)
+}
+
 func withPlanRunLock(ctx context.Context, detail *plan.PlanDetail, timestamp time.Time, operation func(context.Context) error) (err error) {
 	path, err := planRunLockPath(detail.Dir)
 	if err != nil {

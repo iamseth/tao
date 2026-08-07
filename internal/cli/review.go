@@ -70,37 +70,55 @@ func (a App) runPlanReview(ctx context.Context, repo runpkg.Repository, input st
 	if err != nil {
 		return err
 	}
+	// Review persistence can change lifecycle state. Reload before offering an
+	// advisory next step rather than reasoning from the pre-review detail.
+	detail, err := repo.ResolvePlan(ctx, request.Input)
+	if err != nil {
+		return err
+	}
+	if detail == nil {
+		return fmt.Errorf("plan %q not found after review", request.Input)
+	}
 	if err := writef(a.Out, "Review completed: %s\n", request.Input); err != nil {
 		return err
 	}
 	if err := renderPlanReviewMetadata(a.Out, review); err != nil {
 		return err
 	}
-	return renderReviewNextStep(a.Out, request.Input, review)
+	return renderReviewGuidance(a.Out, detail)
 }
 
 func renderPersistedPlanReview(out io.Writer, detail *plan.PlanDetail) error {
 	if strings.TrimSpace(detail.Review.Content) != "" {
 		if plan.ReviewSupersededByReopen(detail.Events) {
-			return writeSupersededReviewArtifact(out, detail.State.Plan.ID, detail.Review.Content)
+			if err := writeSupersededReviewArtifact(out, detail.Review.Content); err != nil {
+				return err
+			}
+		} else if err := writeReviewArtifact(out, detail.Review.Content); err != nil {
+			return err
 		}
-		return writeReviewArtifact(out, detail.Review.Content)
+		return renderReviewGuidance(out, detail)
 	}
 	review := plan.PersistedReview(detail)
 	if review != nil {
+		if plan.ReviewSupersededByReopen(detail.Events) {
+			if err := writeln(out, "Review superseded by reopened work."); err != nil {
+				return err
+			}
+		}
 		if err := writef(out, "Review: %s\n", detail.State.Plan.ID); err != nil {
 			return err
 		}
 		if err := renderPlanReviewMetadata(out, *review); err != nil {
 			return err
 		}
-		return renderPersistedReviewNextStep(out, detail)
+		return renderReviewGuidance(out, detail)
 	}
-	id := detail.State.Plan.ID
-	if id == "" {
-		id = "plan"
+	id := reviewPlanID(detail)
+	if err := writef(out, "No review yet for %s.\n", id); err != nil {
+		return err
 	}
-	return writef(out, "No review yet for %s. Run `tao review --run %s` to create one.\n", id, id)
+	return renderReviewGuidance(out, detail)
 }
 
 func writeReviewArtifact(out io.Writer, content string) error {
@@ -113,8 +131,8 @@ func writeReviewArtifact(out io.Writer, content string) error {
 	return nil
 }
 
-func writeSupersededReviewArtifact(out io.Writer, planID string, content string) error {
-	if err := renderSupersededReviewNotice(out, planID); err != nil {
+func writeSupersededReviewArtifact(out io.Writer, content string) error {
+	if err := writeln(out, "Review superseded by reopened work."); err != nil {
 		return err
 	}
 	if err := writeln(out, "Historical review content:"); err != nil {
@@ -123,45 +141,38 @@ func writeSupersededReviewArtifact(out io.Writer, planID string, content string)
 	return writeReviewArtifact(out, content)
 }
 
-func renderSupersededReviewNotice(out io.Writer, planID string) error {
-	if planID == "" {
-		planID = "plan"
+// renderReviewGuidance derives advisory next-step output from the current plan
+// detail. Domain commands still enforce their own authoritative lifecycle and
+// exact-revision gates.
+func renderReviewGuidance(out io.Writer, detail *plan.PlanDetail) error {
+	planID := reviewPlanID(detail)
+	if plan.PlanIsMerged(detail.Events) {
+		return writeln(out, "Plan already merged; no further action needed.")
 	}
-	if err := writeln(out, "Review superseded by reopened work."); err != nil {
-		return err
+	if detail.State.Plan.CurrentSlice != nil || len(detail.State.Plan.PendingSlices) > 0 {
+		return writef(out, "Next: tao run %s\n", planID)
+	}
+	if review := plan.CurrentReview(detail); review != nil && review.Status == plan.ReviewStatusCompleted {
+		switch review.Verdict {
+		case plan.ReviewVerdictApprove:
+			return writef(out, "Next: tao merge %s\n", planID)
+		case plan.ReviewVerdictChangesRequested:
+			return writef(out, "Next: tao rework %s\n", planID)
+		}
 	}
 	return writef(out, "Next: tao review --run %s\n", planID)
 }
 
-// renderPersistedReviewNextStep prints the next-step hint only while the
-// persisted review is still actionable: a recorded merge means there is
-// nothing left to do, and a reopen supersedes the verdict — the rework needs a
-// fresh review, so `tao merge`/`tao rework` hints from the stale verdict would
-// mislead both users and unattended tooling parsing the output.
-func renderPersistedReviewNextStep(out io.Writer, detail *plan.PlanDetail) error {
-	if plan.PlanIsMerged(detail.Events) {
-		return writef(out, "Plan already merged; no further action needed.\n")
+func reviewPlanID(detail *plan.PlanDetail) string {
+	if detail != nil && detail.State.Plan.ID != "" {
+		return detail.State.Plan.ID
 	}
-	if plan.ReviewSupersededByReopen(detail.Events) {
-		return renderSupersededReviewNotice(out, detail.State.Plan.ID)
-	}
-	review := plan.PersistedReview(detail)
-	return renderReviewNextStep(out, detail.State.Plan.ID, *review)
-}
-
-func renderReviewNextStep(out io.Writer, planID string, review plan.PlanReview) error {
-	if review.Status == plan.ReviewStatusCompleted && review.Verdict == plan.ReviewVerdictApprove {
-		return writef(out, "Next: tao merge %s\n", planID)
-	}
-	if review.Status == plan.ReviewStatusCompleted && review.Verdict == plan.ReviewVerdictChangesRequested {
-		return writef(out, "Next: tao rework %s\n", planID)
-	}
-	return nil
+	return "plan"
 }
 
 func renderPlanReviewMetadata(out io.Writer, review plan.PlanReview) error {
 	if review.Status != "" {
-		if err := writef(out, "Status: %s\n", review.Status); err != nil {
+		if err := writef(out, "Review Status: %s\n", review.Status); err != nil {
 			return err
 		}
 	}

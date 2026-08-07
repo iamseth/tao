@@ -629,7 +629,7 @@ func TestServiceExecuteWorkspaceStrategyWorktreeOverridesPlanCurrent(t *testing.
 	completedDetail := runPlanDetail(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
 	completedDetail.Dir = detail.Dir
 	completedDetail.State.Repo.Root = repoRoot
-	repo := &memoryRunRepository{details: []*plan.PlanDetail{detail, completedDetail}}
+	repo := &memoryRunRepository{details: []*plan.PlanDetail{detail, detail, completedDetail}}
 	executor := &packetCapturingExecutor{}
 	var calls []string
 
@@ -1035,7 +1035,7 @@ func TestServiceExecuteResumesInterruptedAutomaticSliceBeforeWorkspaceMutation(t
 	completed.Slices.Slices[0].Status = plan.StatusCompleted
 	completed.Slices.Slices[0].CommitIntent = &plan.SliceCommitIntent{Policy: CommitPolicySlice.String()}
 	completed.Slices.Slices[0].Completion = &plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionCommitted, CommitSHA: "base"}
-	repo := &memoryRunRepository{details: []*plan.PlanDetail{detail, completed}}
+	repo := &memoryRunRepository{details: []*plan.PlanDetail{detail, detail, completed}}
 	prepared := 0
 	started := 0
 	agentCalled := false
@@ -1285,7 +1285,7 @@ func TestServiceExecuteResumesInterruptedAutomaticSliceThenRunsNextSlice(t *test
 		}
 	}(runner)
 
-	repo := &memoryRunRepository{details: []*plan.PlanDetail{initial, afterFirst, completed}}
+	repo := &memoryRunRepository{details: []*plan.PlanDetail{initial, initial, afterFirst, completed}}
 	err := NewService(repo, io.Discard, Options{RunDependencies: RunDependencies{
 		CommandRunner:     runner,
 		EventAppender:     eventAppenderFunc(func(string, plan.Event) error { return nil }),
@@ -1681,95 +1681,48 @@ func TestServiceExecuteRefusesInterruptedBoundaryDriftAndManualOwnership(t *test
 	}
 }
 
-func TestServiceExecuteRebasesStaleIsolatedWorktreeBeforeAgent(t *testing.T) {
+func TestServiceExecuteWaitsForIsolatedWorkspacePreparationBeforeAgent(t *testing.T) {
 	repoRoot := t.TempDir()
 	workspaceRoot := t.TempDir()
 	workspacePath := filepath.Join(workspaceRoot, "plan-a")
-	if err := os.MkdirAll(workspacePath, 0o750); err != nil {
-		t.Fatal(err)
-	}
 	planDir := t.TempDir()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a", "002-b"}, nil, "001-a", plan.StatusPending, nil, nil)
 	detail.Dir = planDir
 	detail.State.Repo.Root = repoRoot
-	detail.State.Repo.Branch = "feature"
-	detail.State.Workspace = &plan.Workspace{Strategy: plan.WorkspaceStrategyWorktree, Root: workspaceRoot, Path: workspacePath, Branch: "tao/plan-a", BaseBranch: "main", BaseSHA: "base-old"}
+	detail.State.Workspace = &plan.Workspace{Strategy: plan.WorkspaceStrategyWorktree, Root: workspaceRoot, Path: workspacePath, Branch: "tao/plan-a"}
 	reloaded := runPlanDetail(plan.StatusInProgress, []string{"002-b"}, []string{"001-a"}, "002-b", plan.StatusPending, nil, nil)
 	reloaded.Dir = planDir
 	reloaded.State.Repo.Root = repoRoot
-	repo := &memoryRunRepository{details: []*plan.PlanDetail{detail, reloaded}}
+	repo := &memoryRunRepository{details: []*plan.PlanDetail{detail, detail, reloaded}}
 	var order []string
-	rebased := false
-	runner := func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
-		if err := ctx.Err(); err != nil {
-			return err
+	preparer := func(ctx context.Context, got *plan.PlanDetail, input WorkspaceResolverInput) (string, error) {
+		order = append(order, "prepare")
+		if got != detail {
+			t.Fatalf("workspace preparer detail = %p, want %p", got, detail)
 		}
-		if name != "git" {
-			return nil
+		if input.Config.ExecutionMode != ExecutionModeIsolated {
+			t.Fatalf("workspace preparer execution mode = %q, want %q", input.Config.ExecutionMode, ExecutionModeIsolated)
 		}
-		actualCWD := cwd
-		gitArgs := args
-		if len(args) >= 2 && args[0] == "-C" {
-			actualCWD = args[1]
-			gitArgs = args[2:]
-		}
-		key := strings.Join(gitArgs, " ")
-		order = append(order, key)
-		switch key {
-		case "symbolic-ref --quiet --short refs/remotes/origin/HEAD":
-			_, _ = io.WriteString(stdout, "origin/main\n")
-		case "branch --format=%(refname:short) --list main":
-			_, _ = io.WriteString(stdout, "main\n")
-		case "rev-parse main":
-			_, _ = io.WriteString(stdout, "base-new\n")
-		case "branch --show-current":
-			if actualCWD != workspacePath {
-				t.Fatalf("expected branch check in workspace %q, got %q", workspacePath, actualCWD)
-			}
-			_, _ = io.WriteString(stdout, "tao/plan-a\n")
-		case "rev-parse HEAD":
-			if actualCWD != workspacePath {
-				t.Fatalf("expected HEAD check in workspace %q, got %q", workspacePath, actualCWD)
-			}
-			if rebased {
-				_, _ = io.WriteString(stdout, "head-new\n")
-			} else {
-				_, _ = io.WriteString(stdout, "head-old\n")
-			}
-		case "status --porcelain":
-			// The worktree is clean before and after the pre-run rebase.
-		case "merge-base --is-ancestor base-new head-old":
-			return errors.New("not an ancestor")
-		case "rebase main":
-			if actualCWD != workspacePath {
-				t.Fatalf("expected rebase in workspace %q, got %q", workspacePath, actualCWD)
-			}
-			rebased = true
-		default:
-			t.Fatalf("unexpected git command %q in %s", key, actualCWD)
-		}
-		return nil
+		return workspacePath, ctx.Err()
 	}
 	executor := sliceExecutorFunc(func(ctx context.Context, run SliceRun) error {
 		order = append(order, "agent")
-		if !rebased {
-			t.Fatal("expected isolated worktree to be rebased before invoking the agent")
-		}
 		if run.RepoRoot != workspacePath {
 			t.Fatalf("expected agent repo root %q, got %q", workspacePath, run.RepoRoot)
 		}
 		return ctx.Err()
 	})
+	var gitCalls []string
 
-	err := NewService(repo, io.Discard, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone}}, RunDependencies: RunDependencies{SliceExecutor: executor, PlanRecordFactory: memoryPlanRecordFactory, CommandRunner: runner}}).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated, MaxSlices: 1}})
+	err := NewService(repo, io.Discard, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone}}, RunDependencies: RunDependencies{
+		SliceExecutor: executor, PlanRecordFactory: memoryPlanRecordFactory,
+		WorkspacePreparer: preparer, CommandRunner: runGitFake(&gitCalls, nil),
+	}}).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated, MaxSlices: 1}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !runCallBefore(order, "rebase main", "agent") {
-		t.Fatalf("expected pre-run rebase before agent, got order %#v", order)
-	}
-	if detail.State.Workspace == nil || detail.State.Workspace.RebaseStatus != "not_needed" || detail.State.Workspace.BaseStatus != "current" {
-		t.Fatalf("expected refreshed workspace metadata after rebase, got %#v", detail.State.Workspace)
+	if !runCallBefore(order, "prepare", "agent") {
+		t.Fatalf("expected workspace preparation before agent, got order %#v", order)
 	}
 }
 
@@ -1784,7 +1737,7 @@ func TestServiceExecuteDoesNotRebaseCurrentMode(t *testing.T) {
 	reloaded := runPlanDetail(plan.StatusInProgress, []string{"002-b"}, []string{"001-a"}, "002-b", plan.StatusPending, nil, nil)
 	reloaded.Dir = planDir
 	reloaded.State.Repo.Root = repoRoot
-	repo := &memoryRunRepository{details: []*plan.PlanDetail{detail, reloaded}}
+	repo := &memoryRunRepository{details: []*plan.PlanDetail{detail, detail, reloaded}}
 	var calls []string
 	runner := func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
 		if err := ctx.Err(); err != nil {
@@ -1842,7 +1795,7 @@ func TestServiceExecuteWorkspaceStrategyCurrentOverridesPlanWorktree(t *testing.
 	completedDetail.Dir = detail.Dir
 	completedDetail.State.Repo.Root = repoRoot
 	completedDetail.State.Workspace = detail.State.Workspace
-	repo := &memoryRunRepository{details: []*plan.PlanDetail{detail, completedDetail}}
+	repo := &memoryRunRepository{details: []*plan.PlanDetail{detail, detail, completedDetail}}
 	executor := &packetCapturingExecutor{}
 	var calls []string
 
@@ -2688,6 +2641,10 @@ func (r memoryPlanMutationRecord) RecordReviewError(review plan.PlanReview, _ st
 
 func (r memoryPlanMutationRecord) RecordReviewCompleted(review plan.PlanReview, agent string) error {
 	return r.RecordReviewError(review, agent)
+}
+
+func (r memoryPlanMutationRecord) RecordReviewCompletedWithArtifact(review plan.PlanReview, agent, _ string) error {
+	return r.RecordReviewCompleted(review, agent)
 }
 
 func testRunExecution(config ExecutionConfig, dependencies RunDependencies) runExecution {

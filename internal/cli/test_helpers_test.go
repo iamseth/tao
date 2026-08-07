@@ -185,7 +185,16 @@ func (f fakeRepository) GetPlan(ctx context.Context, id string) (*plan.PlanDetai
 }
 
 func (f fakeRepository) ResolvePlan(ctx context.Context, input string) (*plan.PlanDetail, error) {
-	return f.GetPlan(ctx, input)
+	detail, err := f.GetPlan(ctx, input)
+	if err != nil || detail != nil {
+		return detail, err
+	}
+	for _, candidate := range f.details {
+		if candidate != nil && candidate.Dir == input {
+			return candidate, nil
+		}
+	}
+	return nil, nil
 }
 
 func (f fakeRepository) PlanRecord(detail *plan.PlanDetail) (*plan.PlanRecord, error) {

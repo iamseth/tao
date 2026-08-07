@@ -102,6 +102,49 @@ func TestWorkspaceStatusRendersOptionalMetadata(t *testing.T) {
 	}
 }
 
+func TestWorkspaceStatusLabelsDurableAndLiveBoundaryDrift(t *testing.T) {
+	var out bytes.Buffer
+	manager := &fakeWorkspaceManager{status: workspace.Metadata{Path: "/repo/.tao/workspaces/plan-a", Branch: "tao/live", HeadSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}
+	detail := workspacePlanDetail("plan-a", plan.StatusPlanned)
+	detail.State.Workspace = &plan.Workspace{Branch: "tao/recorded", HeadSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+	app := workspaceTestApp(&out, manager)
+	repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
+	if err := app.workspace(context.Background(), repo, []string{"status", "plan-a"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Durable Recorded Branch: tao/recorded", "Durable Recorded HEAD: aaaaa", "Live Actual Branch: tao/live", "Live Actual HEAD: bbbbb"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("expected %q in workspace status output %q", want, out.String())
+		}
+	}
+}
+
+func TestWorkspaceStatusLabelsMissingDurableHead(t *testing.T) {
+	var out bytes.Buffer
+	manager := &fakeWorkspaceManager{status: workspace.Metadata{
+		Path:    "/repo/.tao/workspaces/plan-a",
+		Branch:  "tao/plan-a",
+		HeadSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	}}
+	detail := workspacePlanDetail("plan-a", plan.StatusPlanned)
+	detail.State.Workspace = &plan.Workspace{Branch: "tao/plan-a"}
+	app := workspaceTestApp(&out, manager)
+	repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
+	if err := app.workspace(context.Background(), repo, []string{"status", "plan-a"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Durable Recorded Branch: tao/plan-a",
+		"Durable Recorded HEAD: (missing)",
+		"Live Actual Branch: tao/plan-a",
+		"Live Actual HEAD: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("expected %q in workspace status output %q", want, out.String())
+		}
+	}
+}
+
 func TestWorkspaceRejectsUsageErrors(t *testing.T) {
 	app := workspaceTestApp(&bytes.Buffer{}, &fakeWorkspaceManager{})
 	for _, args := range [][]string{nil, {"wat"}, {"list", "extra"}, {"status"}, {"prepare"}, {"clean", "--bad", "plan-a"}, {"clean", "a", "b"}} {

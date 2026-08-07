@@ -6,9 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/gitops"
+	"github.com/iamseth/tao/internal/plan"
 )
 
 // CommandRunner runs local commands for workspace operations.
@@ -38,6 +40,15 @@ type PrepareOptions struct {
 	Branch              string
 	PreferDefaultBranch bool
 	RebaseStale         bool
+	RebaseRecorder      RebaseRecorder
+	Now                 func() time.Time
+}
+
+// RebaseRecorder makes the automatic rebase transaction durable. A nil
+// recorder preserves compatibility for callers that do not own plan state.
+type RebaseRecorder interface {
+	RecordWorkspaceRebaseIntent(plan.WorkspaceRebaseIntent) error
+	SettleWorkspaceRebase(plan.WorkspaceRebaseIntent, Metadata) error
 }
 
 // IntegrationWorkspace describes a batch-owned integration worktree. Its
@@ -220,7 +231,7 @@ func (m *Manager) Prepare(ctx context.Context, options PrepareOptions) (Metadata
 		metadata.BaseSHA = baseSHA
 		metadata.BaseCurrentSHA = baseCurrentSHA
 		metadata.Reused = true
-		if err := m.rebaseStaleWorktree(ctx, &metadata, options.RebaseStale); err != nil {
+		if err := m.rebaseStaleWorktree(ctx, &metadata, options.RebaseStale, options.RebaseRecorder, options.Now); err != nil {
 			return Metadata{}, err
 		}
 		return metadata, nil
@@ -251,7 +262,7 @@ func (m *Manager) Prepare(ctx context.Context, options PrepareOptions) (Metadata
 		return Metadata{}, err
 	}
 	metadata := Metadata{PlanID: planID, Path: path, Branch: status.Branch, BaseBranch: baseBranch, BaseSHA: baseSHA, BaseCurrentSHA: baseCurrentSHA, HeadSHA: status.HEAD, Created: !branchExists, Reused: branchExists, Dirty: status.Dirty}
-	if err := m.rebaseStaleWorktree(ctx, &metadata, options.RebaseStale); err != nil {
+	if err := m.rebaseStaleWorktree(ctx, &metadata, options.RebaseStale, options.RebaseRecorder, options.Now); err != nil {
 		return Metadata{}, err
 	}
 	return metadata, nil
@@ -271,7 +282,7 @@ func (m *Manager) resolveBaseBranch(ctx context.Context, options PrepareOptions)
 	return m.git.CurrentBranch(ctx)
 }
 
-func (m *Manager) rebaseStaleWorktree(ctx context.Context, metadata *Metadata, enabled bool) error {
+func (m *Manager) rebaseStaleWorktree(ctx context.Context, metadata *Metadata, enabled bool, recorder RebaseRecorder, now func() time.Time) error {
 	if !enabled {
 		setBaseRefreshStatus(metadata)
 		return nil
@@ -288,12 +299,32 @@ func (m *Manager) rebaseStaleWorktree(ctx context.Context, metadata *Metadata, e
 		setBaseRefreshStatus(metadata)
 		return fmt.Errorf("workspace %s for plan %s is stale against local base branch %q and dirty; refusing pre-run rebase before agent execution. Commit, stash, or discard the worktree changes, then retry", metadata.Path, metadata.PlanID, metadata.BaseBranch)
 	}
-	if err := m.git.RebaseWorktree(ctx, metadata.Path, metadata.BaseBranch); err != nil {
+	rebaseTarget := metadata.BaseCurrentSHA
+	proof, proofErr := m.git.CommitSeriesRebaseProof(ctx, metadata.BaseSHA, rebaseTarget, metadata.BaseSHA, metadata.HeadSHA)
+	if proofErr != nil {
+		return fmt.Errorf("prove workspace commit series before rebase for plan %s (%s..%s): %w", metadata.PlanID, describeSHA(metadata.BaseSHA), describeSHA(metadata.HeadSHA), proofErr)
+	}
+	if proofErr := m.git.ProveRebaseReplay(ctx, metadata.BaseSHA, metadata.HeadSHA, rebaseTarget, proof); proofErr != nil {
+		return fmt.Errorf("prove exact workspace commit replay before rebase for plan %s (%s..%s onto %s): %w", metadata.PlanID, describeSHA(metadata.BaseSHA), describeSHA(metadata.HeadSHA), describeSHA(rebaseTarget), proofErr)
+	}
+	var intent plan.WorkspaceRebaseIntent
+	if recorder != nil {
+		createdAt := time.Now().UTC()
+		if now != nil {
+			createdAt = now().UTC()
+		}
+		intent = plan.WorkspaceRebaseIntent{Branch: metadata.Branch, BaseBranch: metadata.BaseBranch, OldHeadSHA: metadata.HeadSHA, OldBaseSHA: metadata.BaseSHA, NewBaseSHA: metadata.BaseCurrentSHA, CommitCount: proof.Count, CommitSeriesFingerprint: proof.Fingerprint, CreatedAt: createdAt}
+		if err := recorder.RecordWorkspaceRebaseIntent(intent); err != nil {
+			return fmt.Errorf("record workspace rebase intent for plan %s before Git mutation: %w", metadata.PlanID, err)
+		}
+		rebaseTarget = intent.NewBaseSHA
+	}
+	if err := m.git.RebaseWorktree(ctx, metadata.Path, rebaseTarget, metadata.BaseSHA); err != nil {
 		abortErr := m.git.RebaseAbortWorktree(ctx, metadata.Path)
 		if abortErr != nil {
-			return fmt.Errorf("pre-run rebase/conflict phase failed for plan %s in %s onto %q: %w; additionally failed to abort rebase: %w", metadata.PlanID, metadata.Path, metadata.BaseBranch, err, abortErr)
+			return fmt.Errorf("pre-run rebase/conflict phase failed for plan %s in %s onto recorded base %s (local base branch %q): %w; additionally failed to abort rebase: %w", metadata.PlanID, metadata.Path, describeSHA(rebaseTarget), metadata.BaseBranch, err, abortErr)
 		}
-		return fmt.Errorf("pre-run rebase/conflict phase failed for plan %s in %s onto %q; aborted rebase before agent execution: %w", metadata.PlanID, metadata.Path, metadata.BaseBranch, err)
+		return fmt.Errorf("pre-run rebase/conflict phase failed for plan %s in %s onto recorded base %s (local base branch %q); aborted rebase before agent execution: %w", metadata.PlanID, metadata.Path, describeSHA(rebaseTarget), metadata.BaseBranch, err)
 	}
 	status, err := m.git.WorktreeStatus(ctx, metadata.Path)
 	if err != nil {
@@ -304,7 +335,37 @@ func (m *Manager) rebaseStaleWorktree(ctx context.Context, metadata *Metadata, e
 	metadata.Dirty = status.Dirty
 	metadata.Rebased = true
 	markWorkspaceBaseCurrent(metadata)
+	if recorder != nil {
+		if metadata.Dirty {
+			return fmt.Errorf("refusing to settle workspace rebase for plan %s: post-rebase worktree is dirty; rebase intent remains durable; run tao workspace status %s and recover the worktree manually", metadata.PlanID, metadata.PlanID)
+		}
+		active, activeErr := gitops.ActiveOperation(metadata.Path)
+		if activeErr != nil {
+			return fmt.Errorf("inspect post-rebase Git operation for plan %s; rebase intent remains durable: %w", metadata.PlanID, activeErr)
+		}
+		if active != "" {
+			return fmt.Errorf("refusing to settle workspace rebase for plan %s: Git operation %q remains active; rebase intent remains durable; recover the worktree manually", metadata.PlanID, active)
+		}
+		proof, proofErr := m.git.CommitSeriesRebaseProof(ctx, intent.OldBaseSHA, intent.NewBaseSHA, metadata.BaseSHA, metadata.HeadSHA)
+		if proofErr != nil {
+			return fmt.Errorf("prove rebased workspace commit series for plan %s (%s..%s); rebase intent remains durable: %w", metadata.PlanID, describeSHA(metadata.BaseSHA), describeSHA(metadata.HeadSHA), proofErr)
+		}
+		if status.Branch != intent.Branch || proof.Count != intent.CommitCount || proof.Fingerprint != intent.CommitSeriesFingerprint {
+			return fmt.Errorf("refusing to settle workspace rebase for plan %s: rewritten series differs from durable intent (branch %q, head %s, commits %d); rebase intent remains durable; run tao workspace status %s and recover the branch manually", metadata.PlanID, status.Branch, describeSHA(status.HEAD), proof.Count, metadata.PlanID)
+		}
+		if err := recorder.SettleWorkspaceRebase(intent, *metadata); err != nil {
+			return fmt.Errorf("settle workspace rebase for plan %s; rebase intent remains durable: %w", metadata.PlanID, err)
+		}
+	}
 	return nil
+}
+
+func describeSHA(sha string) string {
+	short := sha
+	if len(short) > 12 {
+		short = short[:12]
+	}
+	return fmt.Sprintf("%s (short %s)", sha, short)
 }
 
 func markWorkspaceBaseCurrent(metadata *Metadata) {

@@ -23,7 +23,7 @@ const (
 	mutationJournalSchema   = "tao.plan.mutation.v1"
 )
 
-// mutationJournal is the durable intent for one state/slices/events mutation.
+// mutationJournal is the durable intent for one state/slices/review/events mutation.
 // Payload bytes are the exact bytes to install or append after the journal is
 // durable; their hashes detect malformed or accidentally altered journals.
 type mutationJournal struct {
@@ -33,6 +33,7 @@ type mutationJournal struct {
 	CreatedAt  time.Time                  `json:"created_at"`
 	State      *mutationJournalPayload    `json:"state,omitempty"`
 	Slices     *mutationJournalPayload    `json:"slices,omitempty"`
+	Review     *mutationJournalPayload    `json:"review,omitempty"`
 	Events     []mutationJournalEvent     `json:"events"`
 	Extra      map[string]json.RawMessage `json:"-"`
 }
@@ -100,7 +101,7 @@ func validateMutationJournal(journal mutationJournal, expectedPlanID string) err
 	if journal.CreatedAt.IsZero() {
 		return fmt.Errorf("mutation journal created_at is required")
 	}
-	if journal.State == nil && journal.Slices == nil && len(journal.Events) == 0 {
+	if journal.State == nil && journal.Slices == nil && journal.Review == nil && len(journal.Events) == 0 {
 		return fmt.Errorf("mutation journal requires at least one target")
 	}
 	if journal.State != nil {
@@ -125,6 +126,11 @@ func validateMutationJournal(journal mutationJournal, expectedPlanID string) err
 		}
 		if slices.PlanID != journal.PlanID {
 			return fmt.Errorf("mutation journal slices plan id %q does not match journal plan %q", slices.PlanID, journal.PlanID)
+		}
+	}
+	if journal.Review != nil {
+		if err := validateMutationBytes("review", journal.Review.Payload, journal.Review.SHA256, false); err != nil {
+			return err
 		}
 	}
 
@@ -153,7 +159,17 @@ func validateMutationJournal(journal mutationJournal, expectedPlanID string) err
 }
 
 func validateMutationPayload(name string, payload []byte, wantHash string) error {
-	if len(payload) == 0 {
+	if err := validateMutationBytes(name, payload, wantHash, true); err != nil {
+		return err
+	}
+	if !json.Valid(payload) {
+		return fmt.Errorf("mutation journal %s payload is not valid JSON", name)
+	}
+	return nil
+}
+
+func validateMutationBytes(name string, payload []byte, wantHash string, requireContent bool) error {
+	if requireContent && len(payload) == 0 {
 		return fmt.Errorf("mutation journal %s payload is required", name)
 	}
 	decodedHash, err := hex.DecodeString(wantHash)
@@ -162,9 +178,6 @@ func validateMutationPayload(name string, payload []byte, wantHash string) error
 	}
 	if got := mutationPayloadHash(payload); got != wantHash {
 		return fmt.Errorf("mutation journal %s sha256 mismatch: got %s, want %s", name, got, wantHash)
-	}
-	if !json.Valid(payload) {
-		return fmt.Errorf("mutation journal %s payload is not valid JSON", name)
 	}
 	return nil
 }
@@ -381,6 +394,11 @@ func settleMutationJournal(store mutationJournalIO, planDir string, journal muta
 			return fmt.Errorf("settle %s slices.json: %w", mutationJournalFile, err)
 		}
 	}
+	if journal.Review != nil {
+		if err := installMutationTarget(store, filepath.Join(planDir, ReviewFile), *journal.Review); err != nil {
+			return fmt.Errorf("settle %s %s: %w", mutationJournalFile, ReviewFile, err)
+		}
+	}
 
 	for _, event := range journal.Events {
 		if _, ok := present[event.SHA256]; ok {
@@ -471,7 +489,7 @@ func mutationEventHashes(store mutationJournalIO, path string, journal mutationJ
 func (journal *mutationJournal) UnmarshalJSON(data []byte) error {
 	type plain mutationJournal
 	var decoded plain
-	extra, err := decodeMutationExtras(data, &decoded, "schema", "mutation_id", "plan_id", "created_at", "state", "slices", "events")
+	extra, err := decodeMutationExtras(data, &decoded, "schema", "mutation_id", "plan_id", "created_at", "state", "slices", "review", "events")
 	if err != nil {
 		return err
 	}

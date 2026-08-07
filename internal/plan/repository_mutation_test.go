@@ -277,6 +277,12 @@ func TestPlanRecordStateEventMutationsRecoverInstalledPrefixes(t *testing.T) {
 					t.Fatal(err)
 				}
 				detail := startSliceDetail(dir)
+				if test.eventType == EventTypePlanReviewed {
+					detail.State.Status = StatusInReview
+					detail.State.Plan.PendingSlices = nil
+					detail.State.Plan.CompletedSlices = []string{"001-a"}
+					detail.Slices.Slices[0].Status = StatusCompleted
+				}
 				original := clonePlanDetail(detail)
 				writeStartSliceArtifacts(t, dir, detail)
 				slicesBefore, err := os.ReadFile(filepath.Join(dir, "slices.json")) //nolint:gosec // Test path is rooted in t.TempDir.
@@ -532,6 +538,10 @@ func TestPlanRecordStateEventRetryPreservesNewerStateAfterRecovery(t *testing.T)
 		t.Fatal(err)
 	}
 	detail := startSliceDetail(dir)
+	detail.State.Status = StatusInReview
+	detail.State.Plan.PendingSlices = nil
+	detail.State.Plan.CompletedSlices = []string{"001-a"}
+	detail.Slices.Slices[0].Status = StatusCompleted
 	writeStartSliceArtifacts(t, dir, detail)
 	ioStore := &failingMutationJournalIO{delegate: fileMutationJournalIO{}, failOperation: "event-1"}
 	store := journalArtifactMutationStore{fileArtifactStore: fileArtifactStore{}, journalIO: ioStore}

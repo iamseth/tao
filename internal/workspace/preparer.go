@@ -17,6 +17,11 @@ type PlanRecord interface {
 	PersistStateChanges(*plan.ArtifactChangeSet) error
 }
 
+type rebasePlanRecord interface {
+	RecordWorkspaceRebaseIntent(plan.WorkspaceRebaseIntent) error
+	SettleWorkspaceRebase(plan.WorkspaceRebaseIntent, plan.WorkspaceRebaseSettlement) error
+}
+
 type PlanRecordFactory func(detail *plan.PlanDetail) (PlanRecord, error)
 
 // ExecutionPrepareOptions contains run-time overrides for preparing an execution
@@ -85,7 +90,17 @@ func (p ExecutionPreparer) Prepare(ctx context.Context, detail *plan.PlanDetail,
 		}
 		recordedBaseSHA = detail.State.Workspace.BaseSHA
 	}
-	metadata, err := manager.Prepare(ctx, PrepareOptions{PlanID: detail.State.Plan.ID, BaseBranch: recordedBaseBranch, BaseSHA: recordedBaseSHA, PreferDefaultBranch: true, RebaseStale: true})
+	var rebaseRecorder RebaseRecorder
+	if p.PlanRecordFactory != nil {
+		record, recordErr := p.PlanRecordFactory(detail)
+		if recordErr != nil {
+			return "", recordErr
+		}
+		if rebaseRecord, ok := record.(rebasePlanRecord); ok {
+			rebaseRecorder = executionRebaseRecorder{detail: detail, record: rebaseRecord}
+		}
+	}
+	metadata, err := manager.Prepare(ctx, PrepareOptions{PlanID: detail.State.Plan.ID, BaseBranch: recordedBaseBranch, BaseSHA: recordedBaseSHA, PreferDefaultBranch: true, RebaseStale: true, RebaseRecorder: rebaseRecorder, Now: p.Now})
 	if err != nil {
 		return "", err
 	}
@@ -141,6 +156,42 @@ func (p ExecutionPreparer) Prepare(ctx context.Context, detail *plan.PlanDetail,
 		return "", fmt.Errorf("record workspace ready metadata: %w", err)
 	}
 	return metadata.Path, nil
+}
+
+type executionRebaseRecorder struct {
+	detail *plan.PlanDetail
+	record rebasePlanRecord
+}
+
+func (r executionRebaseRecorder) recordForRebase() (rebasePlanRecord, error) {
+	if r.record == nil {
+		return nil, fmt.Errorf("plan record does not support workspace rebase transactions")
+	}
+	return r.record, nil
+}
+
+func (r executionRebaseRecorder) RecordWorkspaceRebaseIntent(intent plan.WorkspaceRebaseIntent) error {
+	record, err := r.recordForRebase()
+	if err != nil || record == nil {
+		return err
+	}
+	return record.RecordWorkspaceRebaseIntent(intent)
+}
+
+func (r executionRebaseRecorder) SettleWorkspaceRebase(intent plan.WorkspaceRebaseIntent, metadata Metadata) error {
+	record, err := r.recordForRebase()
+	if err != nil || record == nil {
+		return err
+	}
+	status := plan.WorkspaceStatusPreparing
+	if r.detail.State.Workspace != nil && r.detail.State.Workspace.LifecycleStatus != "" {
+		status = r.detail.State.Workspace.LifecycleStatus
+	}
+	return record.SettleWorkspaceRebase(intent, plan.WorkspaceRebaseSettlement{
+		Branch: metadata.Branch, BaseSHA: metadata.BaseSHA, BaseCurrentSHA: metadata.BaseCurrentSHA,
+		HeadSHA: metadata.HeadSHA, BaseStatus: metadata.BaseStatus, RefreshStatus: metadata.RefreshStatus,
+		RebaseStatus: metadata.RebaseStatus, LifecycleStatus: status,
+	})
 }
 
 func autoDependencyInstall(behavior string) bool {

@@ -98,13 +98,39 @@ func lifecycleComplete(detail *PlanDetail, currentID string, currentSlice *Slice
 // cross-file failures readable, but an automatic commit intent must always have
 // a valid persisted outcome before finalization or review can proceed.
 func sliceWorkSettled(detail *PlanDetail) bool {
-	if automaticSliceCompletionError(detail) != nil {
+	if detail == nil || automaticSliceCompletionError(detail) != nil {
 		return false
 	}
 	if slicesComplete(detail) {
 		return true
 	}
 	return IsPostSliceStatus(detail.State.Status) && len(detail.State.Plan.PendingSlices) == 0 && detail.State.Plan.CurrentSlice == nil
+}
+
+// RequireSliceWorkSettled refuses review while authoritative plan state still
+// identifies executable slice work.
+func RequireSliceWorkSettled(detail *PlanDetail) error {
+	if sliceWorkSettled(detail) {
+		return nil
+	}
+	if detail == nil {
+		return fmt.Errorf("cannot review a nil plan; run `tao run <plan>` to settle slice work")
+	}
+	planID := strings.TrimSpace(detail.State.Plan.ID)
+	if planID == "" {
+		planID = "<plan>"
+	}
+	sliceID := ""
+	if detail.State.Plan.CurrentSlice != nil {
+		sliceID = strings.TrimSpace(*detail.State.Plan.CurrentSlice)
+	}
+	if sliceID == "" && len(detail.State.Plan.PendingSlices) > 0 {
+		sliceID = strings.TrimSpace(detail.State.Plan.PendingSlices[0])
+	}
+	if sliceID != "" {
+		return fmt.Errorf("plan %s still has executable slice work at %s; run `tao run %s` before review", planID, sliceID, planID)
+	}
+	return fmt.Errorf("plan %s still has unsettled slice work; run `tao run %s` before review", planID, planID)
 }
 
 func automaticSliceCompletionError(detail *PlanDetail) error {

@@ -2,6 +2,7 @@ package plan
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -62,6 +63,9 @@ func (a artStoreAdapter) refreshMutationDetailLocked(string, string, bool) (muta
 	return mutationDetailRefresh{}, nil
 }
 func (a artStoreAdapter) settleMutationLocked(planDir string, journal mutationJournal) error {
+	if journal.Review != nil {
+		return fmt.Errorf("review artifact mutations require the file-backed artifact store")
+	}
 	if journal.State != nil {
 		if err := a.store.WriteState(planDir, append([]byte(nil), journal.State.Payload...)); err != nil {
 			return err
@@ -342,6 +346,153 @@ func (r *PlanRecord) RecordStartingBranch(branch string) error {
 	return r.applyStateUpdate(store, baseline, r.detail.State, nil)
 }
 
+// RecordWorkspaceRebaseIntent durably records the exact boundary required to
+// recover a workspace rebase. An exact retry is idempotent; a different live
+// transaction must not overwrite unsettled intent.
+func (r *PlanRecord) RecordWorkspaceRebaseIntent(intent WorkspaceRebaseIntent) error {
+	if err := validateWorkspaceRebaseIntent(intent); err != nil {
+		return err
+	}
+	store, err := r.storeOrDefault()
+	if err != nil {
+		return err
+	}
+	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
+		if detail.State.Workspace == nil {
+			detail.State.Workspace = &Workspace{}
+		}
+		if existing := detail.State.Workspace.RebaseIntent; existing != nil {
+			if *existing == intent {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("plan %s has a conflicting workspace rebase intent", detail.State.Plan.ID)
+		}
+		stored := intent
+		detail.State.Workspace.RebaseIntent = &stored
+		return nil, nil
+	})
+}
+
+// SettleWorkspaceRebase atomically replaces the workspace boundary and status
+// associated with an exact durable intent, then explicitly clears that intent.
+func (r *PlanRecord) SettleWorkspaceRebase(expected WorkspaceRebaseIntent, settlement WorkspaceRebaseSettlement) error {
+	if err := validateWorkspaceRebaseIntent(expected); err != nil {
+		return err
+	}
+	if err := validateWorkspaceRebaseSettlement(expected, settlement); err != nil {
+		return err
+	}
+	store, err := r.storeOrDefault()
+	if err != nil {
+		return err
+	}
+	return r.applyStateEvent(store, func(detail *PlanDetail, changes *ArtifactChangeSet) ([]Event, error) {
+		if detail.State.Workspace == nil || detail.State.Workspace.RebaseIntent == nil {
+			return nil, fmt.Errorf("plan %s has no workspace rebase intent to settle", detail.State.Plan.ID)
+		}
+		if *detail.State.Workspace.RebaseIntent != expected {
+			return nil, fmt.Errorf("plan %s workspace rebase intent changed; reload and retry", detail.State.Plan.ID)
+		}
+		workspace := detail.State.Workspace
+		workspace.Branch = settlement.Branch
+		workspace.BaseSHA = settlement.BaseSHA
+		workspace.BaseCurrentSHA = settlement.BaseCurrentSHA
+		workspace.HeadSHA = settlement.HeadSHA
+		workspace.BaseStatus = settlement.BaseStatus
+		workspace.RefreshStatus = settlement.RefreshStatus
+		workspace.RebaseStatus = settlement.RebaseStatus
+		workspace.LifecycleStatus = settlement.LifecycleStatus
+		changes.ClearWorkspaceRebaseIntent()
+		return nil, nil
+	})
+}
+
+func validateWorkspaceRebaseSettlement(intent WorkspaceRebaseIntent, settlement WorkspaceRebaseSettlement) error {
+	if settlement.Branch != intent.Branch {
+		return fmt.Errorf("workspace rebase settlement branch %q does not match intent branch %q", settlement.Branch, intent.Branch)
+	}
+	if settlement.BaseSHA != intent.NewBaseSHA || settlement.BaseCurrentSHA != intent.NewBaseSHA {
+		return fmt.Errorf("workspace rebase settlement base does not match intent new base")
+	}
+	if !isSHALike(settlement.HeadSHA) {
+		return fmt.Errorf("workspace rebase settlement requires a valid head SHA")
+	}
+	for label, value := range map[string]string{"base status": settlement.BaseStatus, "refresh status": settlement.RefreshStatus, "rebase status": settlement.RebaseStatus, "lifecycle status": settlement.LifecycleStatus} {
+		if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) || strings.ContainsAny(value, "\r\n") {
+			return fmt.Errorf("workspace rebase settlement requires a valid %s", label)
+		}
+	}
+	return nil
+}
+
+// ClearWorkspaceRebaseIntent clears only the exact intent inspected by the
+// caller, so stale recovery cannot erase a newer transaction.
+func (r *PlanRecord) ClearWorkspaceRebaseIntent(expected WorkspaceRebaseIntent) error {
+	if err := validateWorkspaceRebaseIntent(expected); err != nil {
+		return err
+	}
+	store, err := r.storeOrDefault()
+	if err != nil {
+		return err
+	}
+	return r.applyStateEvent(store, func(detail *PlanDetail, changes *ArtifactChangeSet) ([]Event, error) {
+		if detail.State.Workspace == nil || detail.State.Workspace.RebaseIntent == nil {
+			return nil, nil
+		}
+		if *detail.State.Workspace.RebaseIntent != expected {
+			return nil, fmt.Errorf("plan %s workspace rebase intent changed; reload and retry", detail.State.Plan.ID)
+		}
+		changes.ClearWorkspaceRebaseIntent()
+		return nil, nil
+	})
+}
+
+func validateWorkspaceRebaseIntent(intent WorkspaceRebaseIntent) error {
+	for label, value := range map[string]string{"branch": intent.Branch, "base branch": intent.BaseBranch} {
+		if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) || strings.ContainsAny(value, "\r\n") {
+			return fmt.Errorf("workspace rebase intent requires a valid %s", label)
+		}
+	}
+	for label, value := range map[string]string{"old head SHA": intent.OldHeadSHA, "old base SHA": intent.OldBaseSHA, "new base SHA": intent.NewBaseSHA} {
+		if !isSHALike(value) {
+			return fmt.Errorf("workspace rebase intent requires a valid %s", label)
+		}
+	}
+	if intent.CommitCount < 0 {
+		return fmt.Errorf("workspace rebase intent commit count cannot be negative")
+	}
+	if !validCommitSeriesFingerprint(intent.CommitSeriesFingerprint) {
+		return fmt.Errorf("workspace rebase intent requires a valid versioned commit-series fingerprint")
+	}
+	if intent.CreatedAt.IsZero() || intent.CreatedAt.Location() != time.UTC {
+		return fmt.Errorf("workspace rebase intent requires a non-zero UTC creation time")
+	}
+	return nil
+}
+
+func isSHALike(value string) bool {
+	if value != strings.TrimSpace(value) || len(value) < 7 || len(value) > 64 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func validCommitSeriesFingerprint(value string) bool {
+	prefix := ""
+	for _, supported := range []string{"v1:sha256:", "v2:sha256:", "v3:sha256:", "v4:sha256:", "v5:sha256:"} {
+		if strings.HasPrefix(value, supported) {
+			prefix = supported
+			break
+		}
+	}
+	if prefix == "" || len(value) != len(prefix)+64 {
+		return false
+	}
+	_, err := hex.DecodeString(strings.TrimPrefix(value, prefix))
+	return err == nil && value == strings.ToLower(value)
+}
+
 // RecordPullRequest stamps pull request metadata onto state, updates workspace
 // tracking fields, and appends a pull_request_created event.
 func (r *PlanRecord) RecordPullRequest(pr PullRequest, branch, headSHA string) error {
@@ -440,6 +591,9 @@ func (r *PlanRecord) RecordReviewError(review PlanReview, agent string) error {
 		if err := automaticSliceCompletionError(detail); err != nil {
 			return nil, fmt.Errorf("record plan review: %w", err)
 		}
+		if err := RequireSliceWorkSettled(detail); err != nil {
+			return nil, fmt.Errorf("record plan review: %w", err)
+		}
 		reviewedAt := review.ReviewedAt
 		if intent := detail.State.Plan.MergeCommitIntent; intent != nil && (strings.TrimSpace(review.Head) != intent.SourceHead || !review.IsApproved()) {
 			detail.State.Plan.MergeCommitIntent = nil
@@ -462,6 +616,16 @@ func (r *PlanRecord) RecordReviewError(review PlanReview, agent string) error {
 // RecordReviewCompleted stamps a completed review onto state and appends a
 // plan_reviewed event. The caller sets review.ReviewedAt before calling.
 func (r *PlanRecord) RecordReviewCompleted(review PlanReview, agent string) error {
+	return r.recordReviewCompleted(review, agent, nil)
+}
+
+// RecordReviewCompletedWithArtifact persists review.md with the completed
+// review metadata after the refreshed settled-work gate accepts the mutation.
+func (r *PlanRecord) RecordReviewCompletedWithArtifact(review PlanReview, agent, content string) error {
+	return r.recordReviewCompleted(review, agent, &content)
+}
+
+func (r *PlanRecord) recordReviewCompleted(review PlanReview, agent string, content *string) error {
 	if review.Status != ReviewStatusCompleted || review.Verdict != ReviewVerdictApprove {
 		review.CommitMessage = nil
 	}
@@ -469,8 +633,11 @@ func (r *PlanRecord) RecordReviewCompleted(review PlanReview, agent string) erro
 	if err != nil {
 		return err
 	}
-	return r.applyStateEvent(store, func(detail *PlanDetail, changes *ArtifactChangeSet) ([]Event, error) {
+	mutate := func(detail *PlanDetail, changes *ArtifactChangeSet) ([]Event, error) {
 		if err := automaticSliceCompletionError(detail); err != nil {
+			return nil, fmt.Errorf("record plan review: %w", err)
+		}
+		if err := RequireSliceWorkSettled(detail); err != nil {
 			return nil, fmt.Errorf("record plan review: %w", err)
 		}
 		reviewedAt := review.ReviewedAt
@@ -489,7 +656,15 @@ func (r *PlanRecord) RecordReviewCompleted(review PlanReview, agent string) erro
 		detail.State.Plan.Timing.LastActivityAt = &reviewedAt
 		event := Event{Type: EventTypePlanReviewed, Timestamp: reviewedAt, PlanID: detail.State.Plan.ID, Agent: agent, Review: eventReview, Message: "Plan reviewed"}
 		return []Event{event}, nil
-	})
+	}
+	if content != nil {
+		err = applyStateEventMutationWithReview(store, r.dir, r.detail, true, content, mutate)
+		if err == nil {
+			r.advanceBaseline()
+		}
+		return err
+	}
+	return r.applyStateEvent(store, mutate)
 }
 
 func reviewEventSnapshot(review *PlanReview) *PlanReview {
