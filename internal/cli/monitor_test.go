@@ -132,12 +132,13 @@ func TestMonitorOnceRendersPlainColumnsLivenessAndWarnings(t *testing.T) {
 		Rows: []monitor.Row{
 			{
 				Kind: monitor.RowKindPlan, RepositoryName: "tao", PlanID: "20260729-044616-plan-monitor", PlanTitle: "Cross-Repository Plan Monitor",
-				Status: plan.StatusInProgress, Liveness: monitor.LivenessLive, Phase: runstatus.Phase("implement"), InvocationDuration: 5*time.Minute + 4*time.Second,
-				Left: 1, OriginalCompletedCount: 3, OriginalTotalCount: 4, ReworkCompletedCount: 1, ReworkTotalCount: 2, UpdatedAt: &updated,
+				Status: plan.StatusInProgress, Liveness: monitor.LivenessLive, Phase: runstatus.Phase("running_slice"), SliceID: "r102-compact-monitor", InvocationDuration: 5*time.Minute + 4*time.Second,
+				Left: 1, OriginalCompletedCount: 1, OriginalTotalCount: 3, UpdatedAt: &updated,
 			},
 			{
 				Kind: monitor.RowKindPlan, RepositoryName: "api", PlanID: "stale-plan", Status: plan.StatusBlocked, Liveness: monitor.LivenessStale,
-				Phase: runstatus.Phase("verify"), InvocationDuration: 8 * time.Minute, HeartbeatAge: 25 * time.Second, Left: 2, Warnings: []string{"heartbeat record is old"},
+				Phase: runstatus.Phase("verify"), InvocationDuration: 8 * time.Minute, HeartbeatAge: 25 * time.Second, Left: 2,
+				OriginalCompletedCount: 3, OriginalTotalCount: 3, ReworkCompletedCount: 1, ReworkTotalCount: 6, Warnings: []string{"heartbeat record is old"},
 			},
 			{Kind: monitor.RowKindPlan, RepositoryName: "web", PlanID: "quiet", Status: plan.StatusPlanned, Liveness: monitor.LivenessMissing},
 		},
@@ -152,17 +153,128 @@ func TestMonitorOnceRendersPlainColumnsLivenessAndWarnings(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := out.String()
-	for _, want := range []string{"LIVE", "STATUS", "REPO", "PLAN ID/name", "PHASE", "RUN FOR", "LEFT", "ORIGINAL", "REWORK", "UPDATED", "LIVE", "in_progress", "tao", "20260729-044616-plan-monitor", "implement", "5m04s", "3/4", "1/2", "3m", "STALE", "verify (25s old)", "warning: api/stale-plan: heartbeat record is old"} {
+	lines := strings.Split(text, "\n")
+	const wantHeader = "LIVE   STATUS       REPO  PLAN ID/name                  PHASE                 RUN  SLICES  UPDATED"
+	if got := lines[0]; got != wantHeader {
+		t.Fatalf("monitor header = %q, want %q", got, wantHeader)
+	}
+	for _, removed := range []string{"RUN FOR", "LEFT", "ORIGINAL", "REWORK"} {
+		if strings.Contains(lines[0], removed) {
+			t.Fatalf("monitor header retained %q: %q", removed, lines[0])
+		}
+	}
+	for _, want := range []string{
+		"LIVE", "in_progress", "tao", "20260729-044616-plan-monitor", "r102-compact-monitor", "5m", "1/3", "3m",
+		"STALE", "verify (25s old)", "4/3+6", "warning: api/stale-plan: heartbeat record is old",
+	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("monitor output missing %q:\n%s", want, text)
+		}
+	}
+	for _, removed := range []string{"5m04s", "3/4", "1/2"} {
+		if strings.Contains(text, removed) {
+			t.Fatalf("monitor output retained %q:\n%s", removed, text)
 		}
 	}
 	if strings.Contains(text, "\x1b[") {
 		t.Fatalf("--once output contained ANSI: %q", text)
 	}
 	quietLine := lineContaining(text, "quiet")
-	if !strings.Contains(quietLine, "-     ") {
+	if !strings.Contains(quietLine, "-      planned") {
 		t.Fatalf("missing live state was not neutral: %q", quietLine)
+	}
+}
+
+func TestMonitorSliceProgressNotation(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		row  monitor.Row
+		want string
+	}{
+		{name: "original", row: monitor.Row{OriginalCompletedCount: 1, OriginalTotalCount: 3}, want: "1/3"},
+		{name: "with added slices", row: monitor.Row{OriginalCompletedCount: 3, OriginalTotalCount: 3, ReworkCompletedCount: 1, ReworkTotalCount: 6}, want: "4/3+6"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := monitorSlicesLabel(test.row); got != test.want {
+				t.Fatalf("monitorSlicesLabel() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestMonitorPhaseUsesBoundedActiveSliceID(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		row  monitor.Row
+		want string
+	}{
+		{name: "short active id", row: monitor.Row{Phase: runstatus.Phase("running_slice"), SliceID: "r102-compact-monitor"}, want: "r102-compact-monitor"},
+		{name: "long active id", row: monitor.Row{Phase: runstatus.Phase("running_slice"), SliceID: "12345678901234567890tail"}, want: "12345678901234567890"},
+		{name: "unicode boundary", row: monitor.Row{Phase: runstatus.Phase("running_slice"), SliceID: strings.Repeat("界", 21)}, want: strings.Repeat("界", 20)},
+		{name: "missing active id", row: monitor.Row{Phase: runstatus.Phase("running_slice")}, want: "running_slice"},
+		{name: "other phase ignores slice", row: monitor.Row{Phase: runstatus.Phase("verify"), SliceID: "001-work"}, want: "verify"},
+		{name: "missing phase", row: monitor.Row{SliceID: "001-work"}, want: "-"},
+		{
+			name: "stale active slice",
+			row:  monitor.Row{Phase: runstatus.Phase("running_slice"), SliceID: "12345678901234567890tail", Liveness: monitor.LivenessStale, HeartbeatAge: 25 * time.Second},
+			want: "12345678901234567890 (25s old)",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := monitorPhaseLabel(test.row); got != test.want {
+				t.Fatalf("monitorPhaseLabel() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestMonitorRuntimeUsesMagnitudePrecision(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		liveness monitor.Liveness
+		duration time.Duration
+		want     string
+	}{
+		{name: "no runtime record", duration: 45 * time.Second, want: "-"},
+		{name: "just started", liveness: monitor.LivenessLive, want: "0s"},
+		{name: "subsecond", liveness: monitor.LivenessLive, duration: 999 * time.Millisecond, want: "0s"},
+		{name: "seconds floor", liveness: monitor.LivenessLive, duration: 59*time.Second + 999*time.Millisecond, want: "59s"},
+		{name: "minute boundary", liveness: monitor.LivenessLive, duration: time.Minute, want: "1m"},
+		{name: "minutes floor", liveness: monitor.LivenessStale, duration: 59*time.Minute + 59*time.Second, want: "59m"},
+		{name: "hour boundary", liveness: monitor.LivenessLive, duration: time.Hour, want: "1h"},
+		{name: "hours floor", liveness: monitor.LivenessLive, duration: 25*time.Hour + 59*time.Minute, want: "25h"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			row := monitor.Row{Liveness: test.liveness, InvocationDuration: test.duration}
+			if got := formatMonitorRuntime(row); got != test.want {
+				t.Fatalf("formatMonitorRuntime() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestMonitorCombinedSliceColorPreservesPlainAlignment(t *testing.T) {
+	snapshot := monitor.Snapshot{Rows: []monitor.Row{
+		{PlanID: "complete", OriginalCompletedCount: 3, OriginalTotalCount: 3, ReworkCompletedCount: 2, ReworkTotalCount: 2},
+		{PlanID: "partial", OriginalCompletedCount: 3, OriginalTotalCount: 3, ReworkCompletedCount: 1, ReworkTotalCount: 2},
+	}}
+	var plain, colored bytes.Buffer
+	if err := renderMonitorSnapshot(&plain, snapshot, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := renderMonitorSnapshot(&colored, snapshot, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := stripANSI(colored.String()); got != plain.String() {
+		t.Fatalf("ANSI changed monitor alignment\ncolored stripped:\n%s\nplain:\n%s", got, plain.String())
+	}
+	completeLine := lineContaining(colored.String(), "complete")
+	if !strings.Contains(completeLine, "\x1b[32m5/3+2") {
+		t.Fatalf("combined complete progress was not green: %q", completeLine)
+	}
+	partialLine := lineContaining(colored.String(), "partial")
+	if !strings.Contains(partialLine, "\x1b[36m4/3+2") {
+		t.Fatalf("combined partial progress was not cyan: %q", partialLine)
 	}
 }
 

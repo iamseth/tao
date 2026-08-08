@@ -400,10 +400,14 @@ include them for diagnostics. Repository warning rows remain visible. This does
 not change `tao list` behavior. On a terminal monitor refreshes every two seconds
 by default; use a positive Go duration such as `--interval 5s` to change the
 cadence. `--once` and redirected output render one plain snapshot without
-terminal control sequences or color. LIVE and STALE are heartbeat-liveness
-observations: a fresh heartbeat means a run process is reporting, while a stale
-heartbeat does not mean failure
-and neither state guarantees semantic progress.
+terminal control sequences or color. `SLICES` shows combined completions over
+the original total (`1/3`) and appends added rework when present (`4/3+6`).
+During `running_slice`, `PHASE` shows at most the first 20 characters of the
+active slice ID. `RUN` floors invocation age to seconds below a minute, minutes
+below an hour, and hours thereafter; `-` means no runtime record was observed.
+LIVE and STALE are heartbeat-liveness observations: a fresh heartbeat means a
+run process is reporting, while a stale heartbeat does not mean failure and
+neither state guarantees semantic progress.
 
 ### Updating Tao
 

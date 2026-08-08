@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/plan"
@@ -18,8 +19,9 @@ import (
 )
 
 const (
-	defaultMonitorInterval = 2 * time.Second
-	monitorClearScreen     = "\x1b[H\x1b[2J"
+	defaultMonitorInterval      = 2 * time.Second
+	monitorClearScreen          = "\x1b[H\x1b[2J"
+	monitorSliceIDMaxCharacters = 20
 )
 
 var monitorCommand = commandMetadata{
@@ -179,16 +181,14 @@ func writeMonitorSnapshot(ctx context.Context, out io.Writer, collector MonitorS
 }
 
 type monitorWidths struct {
-	live     int
-	status   int
-	repo     int
-	plan     int
-	phase    int
-	runFor   int
-	left     int
-	original int
-	rework   int
-	updated  int
+	live    int
+	status  int
+	repo    int
+	plan    int
+	phase   int
+	run     int
+	slices  int
+	updated int
 }
 
 func renderMonitorSnapshot(out io.Writer, snapshot monitor.Snapshot, useColor bool) error {
@@ -196,16 +196,14 @@ func renderMonitorSnapshot(out io.Writer, snapshot monitor.Snapshot, useColor bo
 		return writeln(out, "No non-completed plans.")
 	}
 	widths := monitorColumnWidths(snapshot)
-	if err := writef(out, "%s  %s  %s  %s  %s  %s  %s  %s  %s  %s\n",
+	if err := writef(out, "%s  %s  %s  %s  %s  %s  %s  %s\n",
 		pad("LIVE", widths.live),
 		pad("STATUS", widths.status),
 		pad("REPO", widths.repo),
 		pad("PLAN ID/name", widths.plan),
 		pad("PHASE", widths.phase),
-		pad("RUN FOR", widths.runFor),
-		pad("LEFT", widths.left),
-		pad("ORIGINAL", widths.original),
-		pad("REWORK", widths.rework),
+		pad("RUN", widths.run),
+		pad("SLICES", widths.slices),
 		pad("UPDATED", widths.updated),
 	); err != nil {
 		return err
@@ -215,24 +213,24 @@ func renderMonitorSnapshot(out io.Writer, snapshot monitor.Snapshot, useColor bo
 		values := monitorRowValues(row, snapshot.CollectedAt)
 		live := pad(values.live, widths.live)
 		status := pad(values.status, widths.status)
-		original := pad(values.original, widths.original)
-		rework := pad(values.rework, widths.rework)
+		slices := pad(values.slices, widths.slices)
 		if useColor {
 			live = colorMonitorLiveness(live, row.Liveness)
 			status = colorStatus(status, row.Status)
-			original = colorDone(original, row.OriginalCompletedCount, row.OriginalTotalCount)
-			rework = colorDone(rework, row.ReworkCompletedCount, row.ReworkTotalCount)
+			slices = colorDone(
+				slices,
+				row.OriginalCompletedCount+row.ReworkCompletedCount,
+				row.OriginalTotalCount+row.ReworkTotalCount,
+			)
 		}
-		if err := writef(out, "%s  %s  %s  %s  %s  %s  %s  %s  %s  %s\n",
+		if err := writef(out, "%s  %s  %s  %s  %s  %s  %s  %s\n",
 			live,
 			status,
 			pad(values.repo, widths.repo),
 			pad(values.plan, widths.plan),
 			pad(values.phase, widths.phase),
-			pad(values.runFor, widths.runFor),
-			pad(values.left, widths.left),
-			original,
-			rework,
+			pad(values.run, widths.run),
+			slices,
 			pad(values.updated, widths.updated),
 		); err != nil {
 			return err
@@ -249,42 +247,68 @@ func renderMonitorSnapshot(out io.Writer, snapshot monitor.Snapshot, useColor bo
 }
 
 type monitorValues struct {
-	live, status, repo, plan, phase, runFor, left, original, rework, updated string
+	live    string
+	status  string
+	repo    string
+	plan    string
+	phase   string
+	run     string
+	slices  string
+	updated string
 }
 
 func monitorRowValues(row monitor.Row, now time.Time) monitorValues {
 	return monitorValues{
-		live:     monitorLivenessLabel(row.Liveness),
-		status:   emptyMonitorValue(row.Status),
-		repo:     emptyMonitorValue(row.RepositoryName),
-		plan:     monitorPlanLabel(row),
-		phase:    monitorPhaseLabel(row),
-		runFor:   plan.FormatDuration(row.InvocationDuration),
-		left:     fmt.Sprintf("%d", row.Left),
-		original: fmt.Sprintf("%d/%d", row.OriginalCompletedCount, row.OriginalTotalCount),
-		rework:   fmt.Sprintf("%d/%d", row.ReworkCompletedCount, row.ReworkTotalCount),
-		updated:  plan.FormatHumanTime(row.UpdatedAt, now),
+		live:    monitorLivenessLabel(row.Liveness),
+		status:  emptyMonitorValue(row.Status),
+		repo:    emptyMonitorValue(row.RepositoryName),
+		plan:    monitorPlanLabel(row),
+		phase:   monitorPhaseLabel(row),
+		run:     formatMonitorRuntime(row),
+		slices:  monitorSlicesLabel(row),
+		updated: plan.FormatHumanTime(row.UpdatedAt, now),
+	}
+}
+
+func monitorSlicesLabel(row monitor.Row) string {
+	completed := row.OriginalCompletedCount + row.ReworkCompletedCount
+	value := fmt.Sprintf("%d/%d", completed, row.OriginalTotalCount)
+	if row.ReworkTotalCount > 0 {
+		value += fmt.Sprintf("+%d", row.ReworkTotalCount)
+	}
+	return value
+}
+
+func formatMonitorRuntime(row monitor.Row) string {
+	if row.Liveness != monitor.LivenessLive && row.Liveness != monitor.LivenessStale {
+		return "-"
+	}
+	duration := max(row.InvocationDuration, 0)
+	switch {
+	case duration < time.Minute:
+		return fmt.Sprintf("%ds", duration/time.Second)
+	case duration < time.Hour:
+		return fmt.Sprintf("%dm", duration/time.Minute)
+	default:
+		return fmt.Sprintf("%dh", duration/time.Hour)
 	}
 }
 
 func monitorColumnWidths(snapshot monitor.Snapshot) monitorWidths {
 	widths := monitorWidths{
 		live: len("LIVE"), status: len("STATUS"), repo: len("REPO"), plan: len("PLAN ID/name"),
-		phase: len("PHASE"), runFor: len("RUN FOR"), left: len("LEFT"), original: len("ORIGINAL"),
-		rework: len("REWORK"), updated: len("UPDATED"),
+		phase: len("PHASE"), run: len("RUN"), slices: len("SLICES"), updated: len("UPDATED"),
 	}
 	for _, row := range snapshot.Rows {
 		values := monitorRowValues(row, snapshot.CollectedAt)
-		widths.live = max(widths.live, len(values.live))
-		widths.status = max(widths.status, len(values.status))
-		widths.repo = max(widths.repo, len(values.repo))
-		widths.plan = max(widths.plan, len(values.plan))
-		widths.phase = max(widths.phase, len(values.phase))
-		widths.runFor = max(widths.runFor, len(values.runFor))
-		widths.left = max(widths.left, len(values.left))
-		widths.original = max(widths.original, len(values.original))
-		widths.rework = max(widths.rework, len(values.rework))
-		widths.updated = max(widths.updated, len(values.updated))
+		widths.live = max(widths.live, utf8.RuneCountInString(values.live))
+		widths.status = max(widths.status, utf8.RuneCountInString(values.status))
+		widths.repo = max(widths.repo, utf8.RuneCountInString(values.repo))
+		widths.plan = max(widths.plan, utf8.RuneCountInString(values.plan))
+		widths.phase = max(widths.phase, utf8.RuneCountInString(values.phase))
+		widths.run = max(widths.run, utf8.RuneCountInString(values.run))
+		widths.slices = max(widths.slices, utf8.RuneCountInString(values.slices))
+		widths.updated = max(widths.updated, utf8.RuneCountInString(values.updated))
 	}
 	return widths
 }
@@ -304,6 +328,16 @@ func monitorPhaseLabel(row monitor.Row) string {
 	phase := strings.TrimSpace(string(row.Phase))
 	if phase == "" {
 		phase = "-"
+	}
+	if phase == "running_slice" {
+		sliceID := strings.TrimSpace(row.SliceID)
+		if sliceID != "" {
+			runes := []rune(sliceID)
+			if len(runes) > monitorSliceIDMaxCharacters {
+				runes = runes[:monitorSliceIDMaxCharacters]
+			}
+			phase = string(runes)
+		}
 	}
 	if row.Liveness == monitor.LivenessStale {
 		return fmt.Sprintf("%s (%s old)", phase, plan.FormatDuration(row.HeartbeatAge))

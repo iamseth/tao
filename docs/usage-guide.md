@@ -57,8 +57,12 @@ Direct note execution is not a bypass. Generated slices still honor dependencies
 
 Use `tao monitor` while runs are active or queued across more than one registered
 repository. Its urgency-ordered view keeps live and stale runs ahead of blocked
-and quieter plans, while showing lifecycle status, active phase, run duration,
-remaining slices, original/rework progress, and durable activity separately.
+and quieter plans, while showing lifecycle status, active phase, coarse run
+age, compact slice progress, and durable activity separately. `SLICES` shows
+combined completions over the original total (`1/3`) and appends added rework
+when present (`4/3+6`). During `running_slice`, `PHASE` shows at most the first
+20 characters of the active slice ID. `RUN` floors invocation age to seconds,
+minutes, or hours by magnitude, and `-` means no runtime record was observed.
 The interactive view refreshes in place; use `tao monitor --once` for a stable
 snapshot to paste or redirect. Invalid plan rows are hidden by default so this
 operational view stays focused. Use `tao monitor --show-invalid` when diagnosing
