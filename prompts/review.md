@@ -28,6 +28,14 @@ git diff {{ .Base }}..{{ .Head }}
 - Do not report pre-existing issues unless the scoped diff introduced them, regressed them, or made them materially worse.
 - Do not modify files, create commits, push branches, or update Tao metadata.
 
+## Rework-round convergence
+
+When the Prior Rework and Budget Context block shows earlier rounds:
+
+- Re-raise a finding equivalent to a prior-round finding only with fresh evidence naming what the current head still fails to do.
+- Re-report a still-valid finding with identical severity, file, message, and suggestion text; do not rephrase it.
+- Keep the same line unless the anchored code moved; if it moved, update only the line.
+
 ## Review criteria
 
 Assess the scoped diff for:
@@ -66,11 +74,13 @@ Then end with exactly one fenced `tao-review-json` block containing valid JSON w
 Rules for the JSON block:
 
 - `verdict` must be exactly one of `approve`, `changes_requested`, or `comment`.
-- Use `changes_requested` for correctness, regression, scope, or missing-test issues that should be fixed before considering the plan done.
+- Every finding's `severity` must be exactly one of `blocker`, `major`, or `minor`.
+- Use `changes_requested` for correctness, regression, scope, or missing-test issues that should be fixed before considering the plan done. Under `changes_requested`, the `findings` array must contain only completion-blocking issues; put non-blocking risks in the prose review or under a `comment` verdict.
 - Use `comment` for non-blocking risks or observations.
 - Use `approve` only when there are no requested changes; use an empty `findings` array when there are no findings.
 - An `approve` verdict must include `commit_message`; omit `commit_message` for `changes_requested` and `comment`.
 - Derive `commit_message` from the complete exact `Base..Head` diff already reviewed. The subject must be a scoped Conventional Commit in the form `<type>(<lowercase-scope>): <lowercase-imperative-summary>`, and the summary must be at most 72 characters with no ending punctuation.
 - The commit body must be non-empty canonical `What:` and `Why:` sections that explain the change and its motivation. Do not include verification output or any `Tao-*` trailers; Tao adds trusted evidence later.
 - Every finding must be tied to the scoped diff and include the best available `file` and `line`; use `null` for `line` only when no specific line applies.
+- Each finding's `file` becomes its rework slice's expected file, and its `suggestion` becomes that slice's task list. Write suggestions as imperative fix steps.
 - Do not include Markdown comments inside the JSON block.

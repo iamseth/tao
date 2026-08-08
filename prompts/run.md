@@ -101,6 +101,14 @@ Tao marks the selected slice in progress and appends `slice_started` before invo
 - For validation-only or no-edit slices, run the listed verification commands and avoid broad code review unless a command fails or the slice explicitly asks for review.
 - If the slice is ambiguous or blocked, write a clear blocker reason to a temporary file outside the repository, run `tao slice-blocked --plan-dir "{{ .PlanDir }}" --slice-id "<selected slice id>" --reason-file "<reason file>"`, and stop.
 
+## Rework slices
+
+When the selected slice ID matches `r<round><NN>-`, the slice derives from a review finding raised against a prior head:
+
+- Confirm that the finding still applies at the current head before editing.
+- Fix the root cause named by the finding message, not only the suggestion bullets.
+- If the finding is obsolete or incorrect, make no cosmetic appeasement edit; record the conclusion and supporting evidence in the completion notes.
+
 ## Context discipline
 
 - Prefer targeted discovery with `rg`, `fd`, and `ast-grep` when available; use the repository's recommended tools or fall back to equivalent built-in tools.

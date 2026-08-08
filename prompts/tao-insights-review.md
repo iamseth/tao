@@ -31,6 +31,7 @@ Do not continue the review after a failed identity gate.
 ## Judgment rules
 
 - Recommendations may concern Tao product/code, Tao workflow or documentation, or the local environment. Keep application-specific code advice out of scope.
+- When supported by the evidence, optional focus areas include slices that are too large or cross too many packages, agent/model combinations that correlate with failures or high cost, and plan statuses or lifecycle events inconsistent with the actual lifecycle.
 - Require current-code or current-guidance validation for Tao product and workflow/documentation recommendations. Distinguish a Tao defect or opportunity from obsolete history and local environment failure.
 - Environment recommendations must remain optional and state uncertainty. Never claim network causation without direct evidence; distinguish DNS, connectivity, authentication, service, and unknown causes rather than guessing.
 - Treat missing optional tools as informational unless evidence shows that a relevant Tao workflow was impaired.

@@ -59,7 +59,7 @@ events.jsonl
 - If you intentionally keep multiple themes in one plan, explain why they share one review/merge boundary in `planning-brief.md`.
 - Include verification commands for every slice; every slice must include at least one deterministic verification command.
 - Declare only concrete repository files or directories that must exist before a slice can begin as `required_inputs`.
-- Include rollback notes where useful.
+- Record rollback notes where useful in `plan.md`'s Risks section.
 - Do not invent requirements.
 - Mark uncertain assumptions clearly.
 - Do not use YAML.
@@ -97,7 +97,9 @@ Tao's verification-command semantic analysis is conservative and advisory only. 
 
 For each slice, use the narrowest documented verification command that validates the touched area. Avoid defaulting to broad commands such as `go test ./...`, `make test`, or package-manager full test scripts unless the change crosses package, module, or application boundaries.
 
-Keep each slice's goal, tasks, expected files, verification source, and handoff concise enough for `tao run` to render a compact run packet without requiring agents to reread full plan artifacts during normal execution.
+If a slice modifies a shared interface, gate or guard, or call sequence whose consumers extend beyond the tests a focused filter would select, verification must run at least the whole affected package or packages with no `-run` filter. Reserve focused filters for slices whose blast radius the selected tests fully cover.
+
+Keep each slice's goal, tasks, expected files, and verification source concise enough for `tao run` to render a compact run packet without requiring agents to reread full plan artifacts during normal execution.
 
 Avoid standalone final-validation slices unless they add clear value beyond the verification commands already attached to implementation slices. When a final-validation slice is useful, make it no-edit by default, give it narrow commands and explicit success criteria, and broaden to project-wide checks only when prior changes crossed package, module, or application boundaries.
 
@@ -113,7 +115,7 @@ Only write a direct focused test-runner command when no suitable script exists, 
 
 Be careful with workspace, package-manager, task-runner, or build-tool commands that change the execution context. File paths passed to those commands must be valid from the command's execution directory, not necessarily from the repo root.
 
-Quote focused regex patterns that contain shell-sensitive characters, for example `go test ./internal/plan -run 'TestValidate|Test.*Verification'`, so the shell cannot expand or split the pattern before the test runner receives it.
+Quote focused regex patterns that contain shell-sensitive characters, for example `go test ./internal/plan -run 'TestValidate|Test.*Verification'`, so the shell cannot expand or split the pattern before the test runner receives it. Use this focused form only when it satisfies the verification breadth floor above.
 
 For every verification command, set `verification.source` to the file, script, or repository convention that justifies it. If no repository-owned build, test, lint, or documented validation command applies, still include the narrowest deterministic fallback command for the slice. These fallbacks apply only when no build/test command applies. Examples include `grep -q <expected-string> <file>` to assert documented content exists, `test -f <path>` to assert a file exists, or `git diff --stat -- <files>` to assert the intended files changed. Mark the fallback assumption explicitly in `plan.md`, in the slice `verification.source`, and in `verification.manual_checks`. Keep manual checks as additive depth; never use them as a replacement for `verification.commands`. If the fallback command is uncertain, include manual checks and validation assumptions without presenting the command as broader proof than it provides.
 
@@ -246,17 +248,6 @@ Write executable slices:
         ],
         "source": "<file or script that defines this command>",
         "manual_checks": []
-      },
-      "handoff": {
-        "next_agent_prompt": "Implement slice 001-short-name from this plan. Follow the tasks and verification steps exactly.",
-        "review_focus": [
-          "Correctness",
-          "Minimal diff",
-          "No scope creep"
-        ]
-      },
-      "rollback": {
-        "strategy": "Revert the files changed in this slice."
       }
     }
   ]

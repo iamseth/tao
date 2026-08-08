@@ -70,7 +70,7 @@ When planning is complete, respond only with this fixed Planning Packet format:
 
 ## Validation Strategy
 
-- <repository-owned commands or validation approach to use when slicing; every slice must include at least one deterministic verification command. When no build/test command applies, specify a fallback such as `grep -q`, `test -f`, or `git diff --stat`.>
+- <repository-owned commands or validation approach to use when slicing; record the intended verification breadth for each area, with a whole-package floor for shared-seam work; every slice must include at least one deterministic verification command. When no build/test command applies, specify a fallback such as `grep -q`, `test -f`, or `git diff --stat`.>
 
 ## Risks
 

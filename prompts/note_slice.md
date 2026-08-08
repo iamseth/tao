@@ -23,7 +23,7 @@ Write these files in `{{.PlanDir}}`:
 - `plan-preview.md`
 - optional `events.jsonl`
 
-Follow the existing Tao plan artifact contract used by `/tao-slice`: keep planning-session capture sidecars out of new plans, use concrete expected files, include focused verification commands, and keep each slice independently runnable.
+Keep planning-session capture sidecars out of new plans, use concrete expected files, include focused verification commands, and keep each slice independently runnable.
 
 Artifact contract details:
 
@@ -31,6 +31,19 @@ Artifact contract details:
 - `state.json` repo metadata must include `base_commit` set to the current repository `HEAD` when it can be read.
 - Keep `state.updated_at` consistent with the plan lifecycle timestamps you write.
 - If you write `events.jsonl`, every event entry must use the Tao event field `timestamp`; do not use `at`.
+- Each slice object in `slices.json` must contain `id`, `title`, `status`, `depends_on`, `timing`, `goal`, `context`, `tasks`, `expected_files`, and `verification`.
+- `verification` must contain `commands`, `source`, and `manual_checks`.
+- `required_inputs` and `approval` are optional; omit them when they do not apply. Do not add other per-slice fields from the fuller `tao-slice` contract.
+
+Verification command contract:
+
+- Prefer repository-documented commands.
+- Prove the command working directory and every relative path from it.
+- Set `verification.source` to the justifying file or repository convention.
+- When no build or test command applies, use the narrowest deterministic fallback, such as `grep -q`, `test -f`, or `git diff --stat`.
+- Keep `manual_checks` additive; every slice still needs a deterministic command.
+
+After writing the artifacts, run `tao validate {{.PlanDir}}` and fix every reported error before returning. Re-run validation after fixes; warnings are non-fatal.
 
 ## Repository
 
@@ -68,4 +81,4 @@ END TAO UNTRUSTED WORK DESCRIPTION
 
 ## Response
 
-After writing the artifacts, return a concise summary that includes the generated plan ID and any validation-relevant warnings you intentionally left for Tao to surface.
+After validation succeeds, return a concise summary that includes the generated plan ID and any non-fatal validation warnings you intentionally left unresolved.

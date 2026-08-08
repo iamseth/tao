@@ -51,7 +51,7 @@ type batchE2EAgent struct {
 func (a *batchE2EAgent) Resolve(_ context.Context, root, prompt string) (string, error) {
 	a.t.Helper()
 	switch {
-	case strings.Contains(prompt, "aggregate-review"):
+	case strings.Contains(prompt, "Candidate: aggregate-review"):
 		a.reworkCalls++
 		if err := os.WriteFile(filepath.Join(root, "aggregate-fixed.txt"), []byte("fixed\n"), 0o600); err != nil {
 			a.t.Fatal(err)
