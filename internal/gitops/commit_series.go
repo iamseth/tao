@@ -481,32 +481,68 @@ func canonicalEditLocator(oldLines []string, edit canonicalEdit) (string, error)
 		return "", fmt.Errorf("unsupported commit series: changed lines do not identify their parent-file location")
 	}
 
-	// Bind only the unchanged lines immediately adjacent to the edit. Unlike a
+	// Prefer only the unchanged lines immediately adjacent to the edit. Unlike a
 	// nearest-unique-line locator, this identity cannot be displaced by an
 	// unrelated insertion elsewhere between an edit and a distant unique line.
-	// The deleted payload and these two anchors must identify exactly one
-	// location; otherwise duplicate edits are not safe to prove.
 	beforeAnchor := edit.oldPosition - 1
 	afterAnchor := edit.oldPosition + deletedCount
-	matches := 0
-	for position := 0; position+deletedCount <= len(oldLines); position++ {
-		if deletedCount > 0 && !equalLines(oldLines[position:position+deletedCount], edit.deleted) {
+	if contextMatchCount(oldLines, edit, beforeAnchor, afterAnchor) == 1 {
+		digest := sha256.New()
+		writeSeriesPart(digest, []byte("tao.edit-location.v2"))
+		writeContextAnchor(digest, "before", "file-start", oldLines, beforeAnchor)
+		writeContextAnchor(digest, "after", "file-end", oldLines, afterAnchor)
+		return "context:sha256:" + hex.EncodeToString(digest.Sum(nil)), nil
+	}
+
+	// Pure insertions between repeated formatting lines (most commonly blank
+	// lines) have no deleted payload and cannot always be identified by one
+	// adjacent line on each side. Expand contiguous context symmetrically until
+	// it becomes unique, but never use a file boundary to distinguish otherwise
+	// identical occurrences. Any upstream edit inside this local window then
+	// changes the proof conservatively instead of silently relocating the edit.
+	for radius := 2; edit.oldPosition-radius >= 0 && edit.oldPosition+deletedCount+radius <= len(oldLines); radius++ {
+		before := oldLines[edit.oldPosition-radius : edit.oldPosition]
+		after := oldLines[edit.oldPosition+deletedCount : edit.oldPosition+deletedCount+radius]
+		if expandedContextMatchCount(oldLines, edit, before, after) != 1 {
 			continue
 		}
-		if sameContextAnchor(oldLines, position-1, beforeAnchor) &&
-			sameContextAnchor(oldLines, position+deletedCount, afterAnchor) {
+		digest := sha256.New()
+		writeSeriesPart(digest, []byte("tao.edit-location.v2-expanded"))
+		for _, line := range before {
+			writeSeriesPart(digest, []byte(line))
+		}
+		for _, line := range after {
+			writeSeriesPart(digest, []byte(line))
+		}
+		return "context:sha256:" + hex.EncodeToString(digest.Sum(nil)), nil
+	}
+	return "", fmt.Errorf("unsupported commit series: edit location has ambiguous surrounding context")
+}
+
+func contextMatchCount(oldLines []string, edit canonicalEdit, beforeAnchor, afterAnchor int) int {
+	matches := 0
+	for position := 0; position+len(edit.deleted) <= len(oldLines); position++ {
+		if len(edit.deleted) > 0 && !equalLines(oldLines[position:position+len(edit.deleted)], edit.deleted) {
+			continue
+		}
+		if sameContextAnchor(oldLines, position-1, beforeAnchor) && sameContextAnchor(oldLines, position+len(edit.deleted), afterAnchor) {
 			matches++
 		}
 	}
-	if matches != 1 {
-		return "", fmt.Errorf("unsupported commit series: edit location has ambiguous surrounding context")
-	}
+	return matches
+}
 
-	digest := sha256.New()
-	writeSeriesPart(digest, []byte("tao.edit-location.v2"))
-	writeContextAnchor(digest, "before", "file-start", oldLines, beforeAnchor)
-	writeContextAnchor(digest, "after", "file-end", oldLines, afterAnchor)
-	return "context:sha256:" + hex.EncodeToString(digest.Sum(nil)), nil
+func expandedContextMatchCount(oldLines []string, edit canonicalEdit, before, after []string) int {
+	matches := 0
+	for position := len(before); position+len(edit.deleted)+len(after) <= len(oldLines); position++ {
+		if !equalLines(oldLines[position-len(before):position], before) ||
+			!equalLines(oldLines[position:position+len(edit.deleted)], edit.deleted) ||
+			!equalLines(oldLines[position+len(edit.deleted):position+len(edit.deleted)+len(after)], after) {
+			continue
+		}
+		matches++
+	}
+	return matches
 }
 
 func sameContextAnchor(lines []string, candidate, expected int) bool {

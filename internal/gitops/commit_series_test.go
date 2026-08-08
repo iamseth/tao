@@ -241,6 +241,19 @@ func TestCommitSeriesProofDistinguishesDuplicateOccurrenceLocations(t *testing.T
 	}
 }
 
+func TestCommitSeriesProofExpandsRepeatedAdjacentContext(t *testing.T) {
+	locator, err := canonicalEditLocator(
+		[]string{"header", "props", "", "", "function", "tail"},
+		canonicalEdit{oldPosition: 3},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(locator, "context:sha256:") {
+		t.Fatalf("expanded locator = %q", locator)
+	}
+}
+
 func TestCommitSeriesProofRejectsAmbiguousEditContext(t *testing.T) {
 	_, err := canonicalEditLocator(
 		[]string{"same", "same", "same", "same"},
