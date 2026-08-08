@@ -93,9 +93,13 @@ func TestReviewPrintsPersistedReviewArtifact(t *testing.T) {
 	}
 	repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
 	var out bytes.Buffer
+	reporter := newRecordingCLIStatusReporter()
 
-	if err := (App{Out: &out, Err: &out}).review(context.Background(), repo, []string{"plan-a"}); err != nil {
+	if err := (App{Out: &out, Err: &out, StatusReporter: reporter}).review(context.Background(), repo, []string{"plan-a"}); err != nil {
 		t.Fatal(err)
+	}
+	if len(reporter.calls) != 0 {
+		t.Fatalf("persisted review display unexpectedly reported activity: %#v", reporter.calls)
 	}
 	if got := out.String(); got != "# Review\nLooks good.\nNext: tao review --run plan-a\n" {
 		t.Fatalf("expected persisted review artifact with current guidance, got %q", got)
@@ -237,7 +241,8 @@ func TestReviewRunTriggersFreshReview(t *testing.T) {
 	reviewOutput := "Fresh review\n```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"ready\",\"commit_message\":{\"subject\":\"feat(review): persist approved commit proposals\",\"body\":\"What:\\nPersist the proposal for the exact reviewed diff.\\n\\nWhy:\\nReuse review context during merge.\"},\"findings\":[]}\n```"
 	var out bytes.Buffer
 	var prompt string
-	app := App{Out: &out, Err: &out, CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
+	reporter := newRecordingCLIStatusReporter()
+	app := App{Out: &out, Err: &out, StatusReporter: reporter, CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
 		if name != "git" {
 			t.Fatalf("unexpected command %s %v", name, args)
 			return nil
@@ -258,6 +263,7 @@ func TestReviewRunTriggersFreshReview(t *testing.T) {
 	if err := app.review(context.Background(), plan.NewFileRepository(fixture.root), []string{"--run", fixture.id}); err != nil {
 		t.Fatal(err)
 	}
+	reporter.requireCall(t, "run run-plan", "idle")
 	state, err := plan.ReadState(fixture.dir)
 	if err != nil {
 		t.Fatal(err)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,8 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runstatus"
+	"github.com/iamseth/tao/internal/taodata"
 )
 
 func TestAppendPriorReworkAndBudgetContext(t *testing.T) {
@@ -361,7 +364,7 @@ func persistReviewState(t *testing.T, planDir string, detail *plan.PlanDetail) {
 	}
 }
 
-func TestReviewReportsStandalonePhasesInOrderAndStopsOnFailure(t *testing.T) {
+func TestServiceReviewReportsStandalonePhasesInOrderAndStopsOnFailure(t *testing.T) {
 	newService := func(t *testing.T, runner CommandRunner, creator ReviewCreator, out *bytes.Buffer) (Service, Request) {
 		t.Helper()
 		plansRoot := t.TempDir()
@@ -398,11 +401,20 @@ func TestReviewReportsStandalonePhasesInOrderAndStopsOnFailure(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		var out bytes.Buffer
 		creatorCalled := false
+		reporter := &recordingInvocationStatusReporter{}
+		requirePhase := func(want runstatus.Phase) {
+			t.Helper()
+			if len(reporter.phases) == 0 || reporter.phases[len(reporter.phases)-1].phase != want {
+				t.Fatalf("current phase = %+v, want %q", reporter.phases, want)
+			}
+		}
 		runner := func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
 			if name == "git" && runGitKey(args) == "status --porcelain" {
+				requirePhase(PhasePreparingExecution)
 				return nil
 			}
 			if name == "sh" && strings.Join(args, " ") == "-c go build ./... && go test ./..." {
+				requirePhase(PhaseFinalVerification)
 				if !strings.Contains(out.String(), "Verifying completed branch: ") {
 					t.Fatal("verification phase was not emitted before repository verification")
 				}
@@ -411,20 +423,41 @@ func TestReviewReportsStandalonePhasesInOrderAndStopsOnFailure(t *testing.T) {
 			t.Fatalf("unexpected command %s %v", name, args)
 			return nil
 		}
-		creator := reviewCreatorFunc(func(context.Context, ReviewRun) (plan.PlanReview, error) {
+		var reviewedDetail *plan.PlanDetail
+		creator := reviewCreatorFunc(func(_ context.Context, run ReviewRun) (plan.PlanReview, error) {
 			creatorCalled = true
+			reviewedDetail = run.Detail
+			requirePhase(PhaseReview)
 			if !strings.Contains(out.String(), "Running agent review: pi\n") {
 				t.Fatal("agent phase was not emitted before review creation")
 			}
 			return plan.PlanReview{Verdict: plan.ReviewVerdictApprove}, nil
 		})
 		service, request := newService(t, runner, creator, &out)
+		startedAt := time.Date(2026, 8, 8, 18, 55, 0, 0, time.UTC)
+		service.dependencies.StatusReporter = reporter
+		service.dependencies.Now = func() time.Time { return startedAt }
 
 		if _, err := service.Review(context.Background(), request); err != nil {
 			t.Fatal(err)
 		}
 		if !creatorCalled {
 			t.Fatal("review creator was not called")
+		}
+		if reporter.trackCalls != 0 || reporter.invocationCalls != 1 {
+			t.Fatalf("reporter calls: Track=%d TrackInvocation=%d, want enhanced seam once", reporter.trackCalls, reporter.invocationCalls)
+		}
+		if reporter.invocation.PlanID != "plan-a" || reporter.invocation.RepoID != taodata.RepoID(reviewedDetail.State.Repo.Root) || !reporter.invocation.StartedAt.Equal(startedAt) {
+			t.Fatalf("unexpected invocation: %+v", reporter.invocation)
+		}
+		wantPhases := []runstatus.Phase{PhaseWaitingForOwnership, PhasePreparingExecution, PhaseFinalVerification, PhaseReview}
+		if len(reporter.phases) != len(wantPhases) {
+			t.Fatalf("phases = %+v, want %q", reporter.phases, wantPhases)
+		}
+		for i, want := range wantPhases {
+			if reporter.phases[i].phase != want {
+				t.Fatalf("phase %d = %q, want %q", i, reporter.phases[i].phase, want)
+			}
 		}
 		assertTextOrder(t, out.String(), "Preparing review: plan-a", "Verifying completed branch: ", "Running agent review: pi")
 	})
@@ -438,9 +471,14 @@ func TestReviewReportsStandalonePhasesInOrderAndStopsOnFailure(t *testing.T) {
 			return plan.PlanReview{}, nil
 		})
 		service, request := newService(t, runner, creator, &out)
+		reporter := &recordingStatusReporter{}
+		service.dependencies.StatusReporter = reporter
 
 		if _, err := service.Review(context.Background(), request); err == nil {
 			t.Fatal("expected preparation failure")
+		}
+		if len(reporter.calls) != 1 || reporter.calls[0].status != "run plan-a" || reporter.calls[0].settlement != "blocked" {
+			t.Fatalf("unexpected status settlement: %#v", reporter.calls)
 		}
 		if creatorCalled || strings.Contains(out.String(), "Verifying completed branch:") || strings.Contains(out.String(), "Running agent review:") || strings.Contains(out.String(), "Review completed:") {
 			t.Fatalf("preparation failure printed a later phase or completion: %q", out.String())
@@ -474,6 +512,33 @@ func TestReviewReportsStandalonePhasesInOrderAndStopsOnFailure(t *testing.T) {
 		}
 		assertTextOrder(t, out.String(), "Preparing review: plan-a", "Verifying completed branch: ")
 	})
+}
+
+func TestServiceReviewPublishesWaitingPhaseBeforeContendedLock(t *testing.T) {
+	withPlanRunLockSettings(t, time.Hour, func(pid int) bool { return true })
+	planDir := t.TempDir()
+	held, err := acquirePlanRunLock(planDir, "plan-a", time.Date(2026, 8, 8, 18, 50, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = held.Release() })
+
+	detail := runPlanDetail(plan.StatusInReview, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
+	detail.Dir = planDir
+	detail.State.Repo.Root = t.TempDir()
+	reporter := &recordingInvocationStatusReporter{}
+	service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{
+		ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi}},
+		RunDependencies: RunDependencies{StatusReporter: reporter},
+	})
+
+	_, err = service.Review(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi}})
+	if err == nil || !errors.Is(err, errPlanRunLocked) {
+		t.Fatalf("Review error = %v, want contended plan lock", err)
+	}
+	if reporter.invocationCalls != 1 || len(reporter.phases) != 1 || reporter.phases[0].phase != PhaseWaitingForOwnership {
+		t.Fatalf("status before lock failure = invocation calls %d, phases %+v", reporter.invocationCalls, reporter.phases)
+	}
 }
 
 func TestReviewLockReloadsAuthoritativePlanDetail(t *testing.T) {

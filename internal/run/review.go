@@ -44,42 +44,48 @@ func (s Service) Review(ctx context.Context, request Request) (review plan.PlanR
 	if lockDetail == nil {
 		return plan.PlanReview{}, fmt.Errorf("plan %q not found", request.Input)
 	}
-	lockErr := WithPlanRunLock(ctx, lockDetail, now(s.dependencies).UTC(), func(ownedCtx context.Context) error {
-		// Resolve by the exact directory after acquisition. The pre-lock detail is
-		// identity only and may be stale after another lifecycle driver releases.
-		detail, err := s.repo.ResolvePlan(ownedCtx, lockDetail.Dir)
-		if err != nil {
-			return err
-		}
-		if detail == nil {
-			return fmt.Errorf("plan %q not found", lockDetail.Dir)
-		}
-		if err := plan.RequireSliceWorkSettled(detail); err != nil {
-			return err
-		}
-		if err := writef(s.out, "Preparing review: %s\n", detail.State.Plan.ID); err != nil {
-			return err
-		}
-		execution, err := s.prepareReviewExecution(detail, config)
-		if err != nil {
-			return err
-		}
-		if execution.Config.CommitPolicy != CommitPolicyNone {
-			if err := requireCleanReviewWorktree(ownedCtx, gitClient(execution, execution.ExecutionRoot), detail, nil); err != nil {
+	startedAt := now(s.dependencies).UTC()
+	lockErr := trackRunStatus(ctx, s.dependencies.StatusReporter, lockDetail, startedAt, func(statusCtx context.Context) error {
+		return WithPlanRunLock(statusCtx, lockDetail, startedAt, func(ownedCtx context.Context) error {
+			// Resolve by the exact directory after acquisition. The pre-lock detail is
+			// identity only and may be stale after another lifecycle driver releases.
+			detail, err := s.repo.ResolvePlan(ownedCtx, lockDetail.Dir)
+			if err != nil {
+				return err
+			}
+			if detail == nil {
+				return fmt.Errorf("plan %q not found", lockDetail.Dir)
+			}
+			if err := plan.RequireSliceWorkSettled(detail); err != nil {
+				return err
+			}
+			ReportPhase(ownedCtx, PhasePreparingExecution, nil)
+			if err := writef(s.out, "Preparing review: %s\n", detail.State.Plan.ID); err != nil {
+				return err
+			}
+			execution, err := s.prepareReviewExecution(detail, config)
+			if err != nil {
+				return err
+			}
+			if execution.Config.CommitPolicy != CommitPolicyNone {
+				if err := requireCleanReviewWorktree(ownedCtx, gitClient(execution, execution.ExecutionRoot), detail, nil); err != nil {
+					return fmt.Errorf("prepare review: %w", err)
+				}
+			}
+			ReportPhase(ownedCtx, PhaseFinalVerification, nil)
+			if err := writef(s.out, "Verifying completed branch: %s\n", execution.ExecutionRoot); err != nil {
+				return err
+			}
+			if err := newFinalizer(s.out, execution).verifyCompletedBranch(ownedCtx, detail, execution.ExecutionRoot); err != nil {
 				return fmt.Errorf("prepare review: %w", err)
 			}
-		}
-		if err := writef(s.out, "Verifying completed branch: %s\n", execution.ExecutionRoot); err != nil {
+			ReportPhase(ownedCtx, PhaseReview, nil)
+			if err := writef(s.out, "Running agent review: %s\n", execution.Config.Agent); err != nil {
+				return err
+			}
+			review, err = execution.Dependencies.ReviewCreator.CreateReview(ownedCtx, ReviewRun{PlanDir: absolutePlanDir(detail.Dir), PlanID: detail.State.Plan.ID, LogPath: plan.LogPath(detail.Dir), Detail: detail, RepoRoot: execution.ExecutionRoot, Base: reviewDetailBase(detail)})
 			return err
-		}
-		if err := newFinalizer(s.out, execution).verifyCompletedBranch(ownedCtx, detail, execution.ExecutionRoot); err != nil {
-			return fmt.Errorf("prepare review: %w", err)
-		}
-		if err := writef(s.out, "Running agent review: %s\n", execution.Config.Agent); err != nil {
-			return err
-		}
-		review, err = execution.Dependencies.ReviewCreator.CreateReview(ownedCtx, ReviewRun{PlanDir: absolutePlanDir(detail.Dir), PlanID: detail.State.Plan.ID, LogPath: plan.LogPath(detail.Dir), Detail: detail, RepoRoot: execution.ExecutionRoot, Base: reviewDetailBase(detail)})
-		return err
+		})
 	})
 	return review, lockErr
 }

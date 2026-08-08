@@ -64,7 +64,7 @@ func (a App) runPlanReview(ctx context.Context, repo runpkg.Repository, input st
 	}
 	runner := runpkg.NewService(repo, a.Out, runpkg.Options{
 		ExecutionConfig: runpkg.ExecutionConfig{ResolvedRunOptions: request.ResolvedRunOptions, SkipPermissions: defaults.SkipPermissions},
-		RunDependencies: runpkg.RunDependencies{CommandRunner: a.CommandRunner, ProcessStarter: a.ProcessStarter, SessionLogWriter: a.Out, Now: a.Now},
+		RunDependencies: runpkg.RunDependencies{CommandRunner: a.CommandRunner, ProcessStarter: a.ProcessStarter, StatusReporter: a.StatusReporter, SessionLogWriter: a.Out, Now: a.Now},
 	})
 	review, err := runner.Review(ctx, request)
 	if err != nil {
