@@ -73,6 +73,34 @@ func TestShowPrintsElapsedAndSliceRows(t *testing.T) {
 	}
 }
 
+func TestRenderPlanDetailUsesLifecycleStatusProjection(t *testing.T) {
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	detail := &plan.PlanDetail{
+		State: plan.State{
+			Status: plan.StatusReviewed,
+			Plan: plan.PlanState{
+				ID:          "plan-a",
+				Title:       "Plan A",
+				PullRequest: &plan.PullRequest{Number: 42, HeadSHA: "head123"},
+			},
+		},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "001-a", Status: plan.StatusCompleted}}},
+	}
+	plan.SetPersistedReview(detail, plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Head: "head123"})
+
+	var out bytes.Buffer
+	if err := renderPlanDetail(&out, planview.Plan{Detail: detail, Derived: plan.Derive(detail, now), Now: now}); err != nil {
+		t.Fatal(err)
+	}
+	text := stripANSI(out.String())
+	if !strings.Contains(text, "Status: completed\n") || strings.Contains(text, "Status: reviewed\n") {
+		t.Fatalf("detail did not use projected lifecycle status:\n%s", text)
+	}
+	if detail.State.Status != plan.StatusReviewed {
+		t.Fatalf("render mutated persisted status to %q", detail.State.Status)
+	}
+}
+
 func TestRenderPlanDetailUsesHumanTimestamps(t *testing.T) {
 	now := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
 	started := now.Add(-2 * time.Hour)

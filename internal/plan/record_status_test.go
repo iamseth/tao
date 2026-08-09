@@ -43,6 +43,204 @@ func TestPlanRecordReviewStatusesBeforeMerge(t *testing.T) {
 	}
 }
 
+func TestPlanRecordPullRequestCompletionEvidenceOrders(t *testing.T) {
+	tests := []struct {
+		name        string
+		reviewFirst bool
+	}{
+		{name: "review then pull request", reviewFirst: true},
+		{name: "pull request then review"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			seed := startSliceDetail(dir)
+			started := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+			completed := started.Add(time.Minute)
+			seedRecord := testRecord(dir, seed)
+			if err := seedRecord.StartSlice("001-a", started); err != nil {
+				t.Fatal(err)
+			}
+			if err := seedRecord.CompleteSlice("001-a", "done", nil, completed); err != nil {
+				t.Fatal(err)
+			}
+
+			// Bind both records before writing the first fact. The second writer
+			// must refresh under the mutation lock and complete from the latest
+			// evidence rather than its stale in-memory detail.
+			firstDetail := clonePlanDetail(seed)
+			secondDetail := clonePlanDetail(seed)
+			firstRecord := testRecord(dir, firstDetail)
+			secondRecord := testRecord(dir, secondDetail)
+			firstAt := completed.Add(time.Minute)
+			secondAt := firstAt.Add(time.Minute)
+			firstStatus := StatusInReview
+			secondEventType := EventTypePlanReviewed
+
+			if tt.reviewFirst {
+				if err := firstRecord.RecordReviewCompleted(PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Head: "head123", ReviewedAt: firstAt}, "pi"); err != nil {
+					t.Fatal(err)
+				}
+				firstStatus = StatusReviewed
+				if err := secondRecord.RecordPullRequest(PullRequest{Number: 42, URL: "https://example.test/pull/42", CreatedAt: secondAt}, "tao/plan-a", "head123"); err != nil {
+					t.Fatal(err)
+				}
+				if err := secondRecord.RecordPullRequest(PullRequest{Number: 42, URL: "https://example.test/pull/42", CreatedAt: secondAt}, "tao/plan-a", "head123"); err != nil {
+					t.Fatalf("idempotent pull request retry: %v", err)
+				}
+				secondEventType = EventTypePullRequestCreated
+			} else {
+				if err := firstRecord.RecordPullRequest(PullRequest{Number: 42, URL: "https://example.test/pull/42", CreatedAt: firstAt}, "tao/plan-a", "head123"); err != nil {
+					t.Fatal(err)
+				}
+				if err := secondRecord.RecordReviewCompleted(PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Head: "head123", ReviewedAt: secondAt}, "pi"); err != nil {
+					t.Fatal(err)
+				}
+				if err := secondRecord.RecordReviewCompleted(PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Head: "head123", ReviewedAt: secondAt}, "pi"); err != nil {
+					t.Fatalf("idempotent review retry: %v", err)
+				}
+			}
+
+			if firstDetail.State.Status != firstStatus {
+				t.Fatalf("first evidence status = %q, want %q", firstDetail.State.Status, firstStatus)
+			}
+			if secondDetail.State.Status != StatusCompleted || !PlanIsPullRequestComplete(secondDetail) {
+				t.Fatalf("second matching evidence did not complete plan: status=%q detail=%#v", secondDetail.State.Status, secondDetail.State.Plan)
+			}
+			if PlanIsMerged(secondDetail.Events) {
+				t.Fatal("PR completion must not append plan_merged evidence")
+			}
+			state := readStateFile(t, dir)
+			if state.Status != StatusCompleted {
+				t.Fatalf("persisted status = %q, want %q", state.Status, StatusCompleted)
+			}
+			ownedEvents := 0
+			for _, event := range secondDetail.Events {
+				if event.Type == secondEventType {
+					ownedEvents++
+				}
+			}
+			if ownedEvents != 1 {
+				t.Fatalf("idempotent second evidence wrote %d %s events, want 1", ownedEvents, secondEventType)
+			}
+		})
+	}
+}
+
+func TestPlanRecordPullRequestCompletionClearedByReplacementReview(t *testing.T) {
+	tests := []struct {
+		name  string
+		apply func(*PlanRecord, time.Time) error
+		want  string
+	}{
+		{
+			name: "review error",
+			apply: func(record *PlanRecord, at time.Time) error {
+				return record.RecordReviewError(PlanReview{Status: ReviewStatusError, Verdict: ReviewVerdictApprove, Head: "head123", ReviewedAt: at}, "pi")
+			},
+			want: StatusInReview,
+		},
+		{
+			name: "changes requested",
+			apply: func(record *PlanRecord, at time.Time) error {
+				return record.RecordReviewCompleted(PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictChangesRequested, Head: "head123", ReviewedAt: at}, "pi")
+			},
+			want: StatusChangesRequested,
+		},
+		{
+			name: "comment",
+			apply: func(record *PlanRecord, at time.Time) error {
+				return record.RecordReviewCompleted(PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictComment, Head: "head123", ReviewedAt: at}, "pi")
+			},
+			want: StatusReviewed,
+		},
+		{
+			name: "approved mismatched head",
+			apply: func(record *PlanRecord, at time.Time) error {
+				return record.RecordReviewCompleted(PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Head: "head456", ReviewedAt: at}, "pi")
+			},
+			want: StatusReviewed,
+		},
+		{
+			name: "approved missing head",
+			apply: func(record *PlanRecord, at time.Time) error {
+				return record.RecordReviewCompleted(PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, ReviewedAt: at}, "pi")
+			},
+			want: StatusReviewed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir, detail, record, nextAt := newPullRequestCompletedRecord(t)
+			if err := tt.apply(record, nextAt); err != nil {
+				t.Fatal(err)
+			}
+			if detail.State.Status != tt.want {
+				t.Fatalf("replacement review status = %q, want %q", detail.State.Status, tt.want)
+			}
+			if PlanIsPullRequestComplete(detail) {
+				t.Fatal("replacement review retained stale PR completion")
+			}
+			if got := PlanLifecycleStatus(detail); got != tt.want {
+				t.Fatalf("replacement review projection = %q, want %q", got, tt.want)
+			}
+			if state := readStateFile(t, dir); state.Status != tt.want {
+				t.Fatalf("persisted replacement status = %q, want %q", state.Status, tt.want)
+			}
+		})
+	}
+}
+
+func TestPlanRecordPullRequestRefreshRecomputesCompletion(t *testing.T) {
+	dir, detail, record, nextAt := newPullRequestCompletedRecord(t)
+	if err := record.RecordPullRequest(PullRequest{Number: 42, URL: "https://example.test/pull/42", CreatedAt: nextAt}, "tao/plan-a", "head456"); err != nil {
+		t.Fatal(err)
+	}
+	if detail.State.Status != StatusReviewed || PlanIsPullRequestComplete(detail) {
+		t.Fatalf("mismatched refreshed PR retained completion: status=%q PR=%#v", detail.State.Status, detail.State.Plan.PullRequest)
+	}
+
+	matchingAt := nextAt.Add(time.Minute)
+	if err := record.RecordPullRequest(PullRequest{Number: 42, URL: "https://example.test/pull/42", CreatedAt: matchingAt}, "tao/plan-a", "head123"); err != nil {
+		t.Fatal(err)
+	}
+	if detail.State.Status != StatusCompleted || !PlanIsPullRequestComplete(detail) {
+		t.Fatalf("matching refreshed PR did not restore completion: status=%q PR=%#v", detail.State.Status, detail.State.Plan.PullRequest)
+	}
+	if state := readStateFile(t, dir); state.Status != StatusCompleted || state.Plan.PullRequest == nil || state.Plan.PullRequest.HeadSHA != "head123" {
+		t.Fatalf("unexpected persisted refreshed PR completion: %#v", state)
+	}
+}
+
+func newPullRequestCompletedRecord(t *testing.T) (string, *PlanDetail, *PlanRecord, time.Time) {
+	t.Helper()
+	dir := t.TempDir()
+	detail := startSliceDetail(dir)
+	record := testRecord(dir, detail)
+	started := time.Date(2026, 8, 8, 13, 0, 0, 0, time.UTC)
+	completed := started.Add(time.Minute)
+	if err := record.StartSlice("001-a", started); err != nil {
+		t.Fatal(err)
+	}
+	if err := record.CompleteSlice("001-a", "done", nil, completed); err != nil {
+		t.Fatal(err)
+	}
+	reviewed := completed.Add(time.Minute)
+	if err := record.RecordReviewCompleted(PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Head: "head123", ReviewedAt: reviewed}, "pi"); err != nil {
+		t.Fatal(err)
+	}
+	pullRequestAt := reviewed.Add(time.Minute)
+	if err := record.RecordPullRequest(PullRequest{Number: 42, URL: "https://example.test/pull/42", CreatedAt: pullRequestAt}, "tao/plan-a", "head123"); err != nil {
+		t.Fatal(err)
+	}
+	if detail.State.Status != StatusCompleted || !PlanIsPullRequestComplete(detail) {
+		t.Fatalf("fixture did not reach PR completion: status=%q", detail.State.Status)
+	}
+	return dir, detail, record, pullRequestAt.Add(time.Minute)
+}
+
 func TestPlanRecordReviewWritersReplaceKnownFieldsAndPreserveUnknownFields(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -231,6 +429,9 @@ func TestPlanRecordMergedStatus(t *testing.T) {
 	}
 	if len(detail.Events) == 0 || detail.Events[len(detail.Events)-1].Type != EventTypePlanMerged {
 		t.Fatalf("expected plan_merged event, got %#v", detail.Events)
+	}
+	if !PlanIsMerged(detail.Events) {
+		t.Fatal("RecordMerged must retain exclusive actual-merge evidence")
 	}
 }
 

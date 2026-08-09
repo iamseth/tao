@@ -286,14 +286,15 @@ func Summarize(detail *PlanDetail, now time.Time) PlanSummary {
 	return summary
 }
 
-// PlanLifecycleStatus is the user-facing plan lifecycle projection. It keeps
-// `completed` reserved for plans with a recorded merge, while slice-complete
-// plans surface their review/merge readiness.
+// PlanLifecycleStatus is the user-facing plan lifecycle projection. A plan is
+// completed after an actual recorded merge, after matching current PR/review
+// evidence, or when legacy state already records completion. Other
+// slice-complete plans surface their review readiness.
 func PlanLifecycleStatus(detail *PlanDetail) string {
 	if detail == nil {
 		return ""
 	}
-	if PlanIsMerged(detail.Events) {
+	if PlanIsMerged(detail.Events) || PlanIsPullRequestComplete(detail) {
 		return StatusCompleted
 	}
 	// A persisted completed status with no plan_merged event anywhere in the
@@ -302,10 +303,10 @@ func PlanLifecycleStatus(detail *PlanDetail) string {
 	// manually or before merge events existed. It keeps its persisted status —
 	// demoting it would mass-revert months-old plans to in_review on upgrade,
 	// and `tao merge` cannot prove a historical merge once the branch and head
-	// snapshots are gone. The current write path only ever stores completed
-	// through RecordMerged (which appends the event), so this arm matches
-	// legacy artifacts alone; lifecycleComplete trusts the same persisted
-	// status, keeping projection and gating aligned.
+	// snapshots are gone. Current matching PR evidence is handled above, while
+	// RecordMerged appends its event, so this remaining arm preserves legacy
+	// artifacts; lifecycleComplete trusts the same persisted status, keeping
+	// projection and gating aligned.
 	if detail.State.Status == StatusCompleted && !anyPlanMergedEvent(detail.Events) {
 		return StatusCompleted
 	}
@@ -343,6 +344,19 @@ func PlanIsMerged(events []Event) bool {
 		}
 	}
 	return merged
+}
+
+// PlanIsPullRequestComplete reports whether Tao has current local evidence for
+// terminal PR-mode completion: a non-superseded approved review and durable PR
+// metadata bound to the same non-empty head. It does not imply that the PR was
+// merged or inspect any remote state.
+func PlanIsPullRequestComplete(detail *PlanDetail) bool {
+	if detail == nil || detail.State.Plan.PullRequest == nil {
+		return false
+	}
+	review := CurrentReview(detail)
+	prHead := detail.State.Plan.PullRequest.HeadSHA
+	return review.IsApproved() && strings.TrimSpace(prHead) != "" && prHead == review.Head
 }
 
 // anyPlanMergedEvent reports whether the plan ever recorded a merge, superseded

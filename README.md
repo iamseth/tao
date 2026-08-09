@@ -22,7 +22,7 @@ The prompt will likely ask questions about the plan, helping shape the direction
 
 After a plan is created, Tao runs each slice serially in a clean Git worktree. The implementing agent proposes a scoped Conventional Commit with `What:` and `Why:` sections; Tao validates it, appends trusted evidence trailers, and alone stages and creates each checkpoint commit. After all slices run, Tao reviews the exact plan diff.
 
-An approved review includes a commit proposal bound to that exact diff. When merging, Tao reuses it to squash the reviewed checkpoint history into one commit on the default branch without starting another normal message session.
+An approved review includes a commit proposal bound to that exact diff. From there Tao has two completion paths. In the solo no-PR path, `tao merge` reuses the proposal to squash the reviewed checkpoint history into one default-branch commit and records `plan_merged`. In the PR path, Tao marks the plan `completed` once it has both the current approved review and recorded PR metadata for the same non-empty head. That status means Tao's PR handoff is complete, not that the host merged the PR; only current `plan_merged` evidence proves default-branch integration.
 
 > [!IMPORTANT]
 > Tao does not replace your agent. It's a tool to augment your existing agent workflow.
@@ -343,9 +343,11 @@ Use `--verify-command CMD` or `TAO_MERGE_VERIFY_COMMAND` to override detection.
 Integration, commit, or verification failures restore the pre-merge default tip
 when possible; conflicts are reported for manual resolution.
 
-If the branch or recorded review/PR head is already contained in default (for
-example after a PR or manual `git merge`), `tao merge` skips integration,
-records `plan_merged`, marks the plan `completed`, and runs safe cleanup. Use
+A qualifying PR run is already `completed` in Tao and does not need a later
+`tao merge` call merely to finish the lifecycle. If you explicitly invoke
+`tao merge` after the branch or recorded review/PR head is already contained in
+default (for example after a PR or manual `git merge`), Tao skips integration,
+records `plan_merged`, retains `completed`, and runs safe cleanup. Use
 `--record-only --force` only for squash/cherry-pick/manual integrations where
 ancestry cannot prove the plan head reached default. Use `--no-verify` only to
 skip post-merge verification, including explicit overrides. Use `--force` only when you intentionally bypass approval, review-base, or
@@ -395,7 +397,9 @@ reviewed count, and review verdict counts. `--json` emits the same information
 as structured output.
 
 `tao monitor` (alias `mon`) shows valid, non-completed plans across registered
-repositories. Invalid plan rows are hidden by default; use `--show-invalid` to
+repositories. Completed rows and status rollups include both recorded merges and
+qualifying PR handoffs; they are not a count of proven default-branch merges.
+Invalid plan rows are hidden by default; use `--show-invalid` to
 include them for diagnostics. Repository warning rows remain visible. This does
 not change `tao list` behavior. On a terminal monitor refreshes every two seconds
 by default; use a positive Go duration such as `--interval 5s` to change the
@@ -497,10 +501,15 @@ branch. Pull-request creation defaults off and is valid only in `isolated` mode 
 requesting a PR in `current` mode is a hard error. When enabled, Tao pushes the
 plan branch and opens the PR through the GitHub CLI (`gh`); the selected agent may
 best-effort polish the Markdown body, but Tao falls back to a deterministic body
-if that optional session fails. Use the host's squash action to merge the PR,
-then `tao merge --record-only --force <plan>` to record and clean up; Tao does not
-merge the PR itself. Run-path agent sessions have a 20-minute
-wall-clock timeout by default; set `TAO_SESSION_TIMEOUT` to another Go duration
+if that optional session fails. A current approved review and recorded PR for the
+same non-empty head complete Tao's local lifecycle; Tao does not inspect remote
+merge, review, CI, open/closed, or draft state. Use the host's squash action to
+merge the PR. After the merged change is present on your local default branch,
+optionally run `tao cleanup --dry-run`, then `tao cleanup`, to remove only local
+branches and worktrees that the live Git safety checks classify as eligible. No
+additional Tao merge command is required merely for PR lifecycle completion,
+and Tao does not merge the PR itself. Run-path agent sessions have a
+20-minute wall-clock timeout by default; set `TAO_SESSION_TIMEOUT` to another Go duration
 such as `45m`, or `0` to disable the timeout. The timeout applies independently
 to each fresh retry session, so the fixed three-session maximum can raise one
 implementation-slice handoff's worst case to roughly three times the configured

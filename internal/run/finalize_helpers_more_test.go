@@ -84,6 +84,82 @@ func TestFinalizerSkipsReviewWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestFinalizerReportsPullRequestCompletionOnlyForMatchingApproval(t *testing.T) {
+	tests := []struct {
+		name          string
+		reviewEnabled bool
+		review        plan.PlanReview
+		reviewErr     error
+		wantComplete  bool
+	}{
+		{name: "approved exact head", reviewEnabled: true, review: plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Head: "head123"}, wantComplete: true},
+		{name: "comment", reviewEnabled: true, review: plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictComment, Head: "head123"}},
+		{name: "changes requested", reviewEnabled: true, review: plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, Head: "head123"}},
+		{name: "review error", reviewEnabled: true, reviewErr: errors.New("review failed")},
+		{name: "stale review head", reviewEnabled: true, review: plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Head: "head456"}},
+		{name: "review disabled", review: plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Head: "head123"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			detail := completedReviewPlanDetail(t.TempDir())
+			detail.State.Workspace.Strategy = plan.WorkspaceStrategyWorktree
+			var out bytes.Buffer
+			var gitCalls []string
+			reviewer := &recordingReviewCreator{review: tt.review, err: tt.reviewErr}
+			creator := pullRequestCreatorFunc(func(context.Context, PullRequestRun) (plan.PullRequest, error) {
+				return plan.PullRequest{Number: 42, URL: "https://github.com/iamseth/tao/pull/42"}, nil
+			})
+			finalizer := newFinalizer(&out, testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{
+				CommitPolicy:  CommitPolicySlice,
+				ExecutionMode: ExecutionModeIsolated,
+				ReviewEnabled: tt.reviewEnabled,
+				PullRequest:   true,
+			}}, RunDependencies{
+				CommandRunner:      runGitFake(&gitCalls, nil),
+				PlanRecordFactory:  memoryPlanRecordFactory,
+				PullRequestCreator: creator,
+				ReviewCreator:      reviewer,
+				RootResolver:       staticRootResolver(),
+			}))
+
+			complete, err := finalizer.FinalizeIfComplete(context.Background(), 1, detail, plan.RunCapabilities{Complete: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !complete {
+				t.Fatal("expected completed slice run")
+			}
+			wantReviewCalls := 0
+			if tt.reviewEnabled {
+				wantReviewCalls = 1
+			}
+			if got := reviewer.calls; got != wantReviewCalls {
+				t.Fatalf("review calls = %d, want %d", got, wantReviewCalls)
+			}
+			if detail.State.Plan.PullRequest == nil || detail.State.Plan.PullRequest.HeadSHA != "head123" {
+				t.Fatalf("pull request was not recorded against the live head: %+v", detail.State.Plan.PullRequest)
+			}
+			if got := plan.PlanIsPullRequestComplete(detail); got != tt.wantComplete {
+				t.Fatalf("PlanIsPullRequestComplete() = %t, want %t", got, tt.wantComplete)
+			}
+
+			text := out.String()
+			if !strings.Contains(text, "Pull request: #42 https://github.com/iamseth/tao/pull/42") {
+				t.Fatalf("missing recorded pull request output:\n%s", text)
+			}
+			for _, marker := range []string{"Plan complete in Tao: plan-a", "Next: use the host's Squash and merge action", "`tao cleanup --dry-run`"} {
+				if got := strings.Contains(text, marker); got != tt.wantComplete {
+					t.Fatalf("output contains %q = %t, want %t:\n%s", marker, got, tt.wantComplete, text)
+				}
+			}
+			if strings.Contains(text, "tao merge --record-only --force") {
+				t.Fatalf("output retained forced record-only workaround:\n%s", text)
+			}
+		})
+	}
+}
+
 type captureReviewRecord struct {
 	PlanMutationRecord
 	detail *plan.PlanDetail

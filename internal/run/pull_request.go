@@ -17,6 +17,10 @@ import (
 
 var githubPullRequestURLRE = regexp.MustCompile(`https://github\.com/[^\s)]+/pull/(\d+)`)
 
+const pullRequestMergeGuidance = "## Merge\n\n" +
+	"When this pull request is ready to integrate, use the host's **Squash and merge** action. Tao does not merge the PR. " +
+	"After the merged change is present on your local default branch, optionally run `tao cleanup --dry-run`, then `tao cleanup`, to remove eligible local plan branches and worktrees."
+
 type deterministicPullRequestCreator struct {
 	execution     runExecution
 	bodyGenerator PullRequestBodyGenerator
@@ -123,14 +127,19 @@ func (c deterministicPullRequestCreator) pullRequestBody(ctx context.Context, ru
 		c.warnBodyGeneration(fmt.Errorf("agent returned empty pull request body"))
 		return draft
 	}
-	return appendPullRequestMergeGuidance(body, run.PlanID)
+	if strings.Contains(body, "tao merge") && strings.Contains(body, "--record-only") {
+		c.warnBodyGeneration(fmt.Errorf("agent returned obsolete pull request merge guidance"))
+		return draft
+	}
+	return appendPullRequestMergeGuidance(body)
 }
 
-func appendPullRequestMergeGuidance(body string, planID string) string {
-	if strings.Contains(body, "tao merge --record-only --force") {
-		return strings.TrimSpace(body)
+func appendPullRequestMergeGuidance(body string) string {
+	body = strings.TrimSpace(body)
+	if strings.Contains(body, "**Squash and merge**") && strings.Contains(body, "`tao cleanup --dry-run`") && strings.Contains(body, "local default branch") {
+		return body
 	}
-	return strings.TrimSpace(body) + fmt.Sprintf("\n\n## Merge\n\nUse the host's **Squash and merge** action. Tao does not merge the PR. Afterward, run `tao merge --record-only --force %s` to record completion and clean up the local plan branch/worktree.", emptyPRField(planID))
+	return body + "\n\n" + pullRequestMergeGuidance
 }
 
 func (c deterministicPullRequestCreator) warnBodyGeneration(err error) {
@@ -246,7 +255,7 @@ func deterministicPullRequestBody(run PullRequestRun, baseBranch string, title s
 	if strings.TrimSpace(diffStat) != "" {
 		fmt.Fprintf(&b, "\n## Scope\n\n```text\n%s\n```\n", strings.TrimSpace(diffStat))
 	}
-	fmt.Fprintf(&b, "\n## Merge\n\nUse the host's **Squash and merge** action. Tao does not merge the PR. Afterward, run `tao merge --record-only --force %s` to record completion and clean up the local plan branch/worktree.\n", emptyPRField(run.PlanID))
+	fmt.Fprintf(&b, "\n%s\n", pullRequestMergeGuidance)
 	return strings.TrimSpace(b.String()) + "\n"
 }
 

@@ -219,7 +219,10 @@ func ProjectFull(detail *plan.PlanDetail, snapshotAt time.Time) FullReport {
 	if review := plan.CurrentReview(detail); review != nil {
 		report.Review = ReviewSummary{Available: true, Status: knownReviewStatus(review.Status), Verdict: knownVerdict(review.Verdict), Summary: optional(s, sectionReview, review.Summary), FindingCount: nonNegative(review.FindingsCount)}
 	}
-	report.Outcome.Merged = lifecycleStatus == plan.StatusCompleted
+	// Current merge evidence is authoritative. Infer a merged outcome from a
+	// completed lifecycle only for legacy records without qualifying PR evidence.
+	report.Outcome.Merged = plan.PlanIsMerged(detail.Events) ||
+		(lifecycleStatus == plan.StatusCompleted && !plan.PlanIsPullRequestComplete(detail))
 	report.Disclosures = s.Disclosures()
 	return report
 }

@@ -88,9 +88,16 @@ func (d BatchCandidateDiscovery) Discover(ctx context.Context) (BatchPreflightRe
 	}
 	selected := make([]plan.PlanSummary, 0, len(summaries))
 	for _, summary := range summaries {
-		if summary.Status == plan.StatusReviewed && summary.Reviewed && summary.ReviewVerdict == plan.ReviewVerdictApprove {
-			selected = append(selected, summary)
+		if !summary.Reviewed || summary.ReviewVerdict != plan.ReviewVerdictApprove {
+			continue
 		}
+		// Legacy completed summaries have no PR metadata and retain their
+		// historical exclusion. A PR-complete summary must be resolved below so
+		// completed is not mistaken for proof of integration.
+		if summary.Status == plan.StatusCompleted && summary.PullRequest == nil {
+			continue
+		}
+		selected = append(selected, summary)
 	}
 	sort.Slice(selected, func(i, j int) bool { return selected[i].ID < selected[j].ID })
 	if len(selected) == 0 {
@@ -107,6 +114,13 @@ func (d BatchCandidateDiscovery) Discover(ctx context.Context) (BatchPreflightRe
 		if resolveErr != nil {
 			d.addBlocker(&result, &candidate, "resolve", resolveErr)
 			result.Candidates = append(result.Candidates, candidate)
+			continue
+		}
+		// PR completion projects completed before integration, so lifecycle
+		// status is not merge evidence. Current plan_merged evidence excludes an
+		// integrated plan; the second condition preserves the compatibility
+		// exclusion for legacy completed artifacts without matching PR evidence.
+		if plan.PlanIsMerged(detail.Events) || (summary.Status == plan.StatusCompleted && !plan.PlanIsPullRequestComplete(detail)) {
 			continue
 		}
 		candidate.PlanID = detail.State.Plan.ID

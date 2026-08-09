@@ -50,6 +50,40 @@ func TestProjectFullAcrossLifecyclePhases(t *testing.T) {
 	}
 }
 
+func TestProjectFullPullRequestCompletionDistinguishesMergeEvidence(t *testing.T) {
+	now := time.Date(2026, 8, 4, 15, 0, 0, 0, time.UTC)
+	detail := reportFixture(now)
+	detail.State.Status = plan.StatusReviewed
+	detail.State.Plan.PendingSlices = nil
+	for i := range detail.Slices.Slices {
+		detail.Slices.Slices[i].Status = plan.StatusCompleted
+	}
+	review := plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Head: "head123"}
+	plan.SetPersistedReview(detail, review)
+	detail.State.Plan.PullRequest = &plan.PullRequest{Number: 42, URL: "https://example.test/pull/42", HeadSHA: review.Head}
+
+	if !plan.PlanIsPullRequestComplete(detail) || plan.PlanIsMerged(detail.Events) {
+		t.Fatalf("fixture PR complete = %t merged = %t, want true/false", plan.PlanIsPullRequestComplete(detail), plan.PlanIsMerged(detail.Events))
+	}
+	got := ProjectFull(detail, now)
+	if got.Status != plan.StatusCompleted || got.Outcome.Merged {
+		t.Fatalf("PR projection = status %q merged %v, want completed and not merged", got.Status, got.Outcome.Merged)
+	}
+	markdown, err := RenderFull(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := string(markdown); !strings.Contains(text, "status: completed\n") || !strings.Contains(text, "`not merged`") {
+		t.Fatalf("PR report did not render completed and not merged:\n%s", text)
+	}
+
+	detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypePlanMerged, Timestamp: now})
+	got = ProjectFull(detail, now)
+	if got.Status != plan.StatusCompleted || !got.Outcome.Merged {
+		t.Fatalf("merged PR projection = status %q merged %v, want completed and merged", got.Status, got.Outcome.Merged)
+	}
+}
+
 func TestProjectFullLegacyCompletedPlanReportsMerged(t *testing.T) {
 	now := time.Date(2026, 8, 4, 15, 0, 0, 0, time.UTC)
 	detail := reportFixture(now)
@@ -65,6 +99,16 @@ func TestProjectFullLegacyCompletedPlanReportsMerged(t *testing.T) {
 	got := ProjectFull(detail, now)
 	if got.Status != plan.StatusCompleted || !got.Outcome.Merged {
 		t.Fatalf("legacy projection = status %q merged %v, want completed and merged", got.Status, got.Outcome.Merged)
+	}
+
+	plan.SetPersistedReview(detail, plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Head: "current-head"})
+	detail.State.Plan.PullRequest = &plan.PullRequest{HeadSHA: "stale-head"}
+	if plan.PlanIsPullRequestComplete(detail) {
+		t.Fatal("mismatched PR metadata must not qualify for PR completion")
+	}
+	got = ProjectFull(detail, now)
+	if got.Status != plan.StatusCompleted || !got.Outcome.Merged {
+		t.Fatalf("legacy projection with nonqualifying PR = status %q merged %v, want completed and merged", got.Status, got.Outcome.Merged)
 	}
 }
 

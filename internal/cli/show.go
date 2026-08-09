@@ -45,13 +45,14 @@ func renderPlanDetailWithThresholds(out io.Writer, loaded planview.Plan, thresho
 	derived := loaded.Derived
 	now := loaded.Now
 	state := detail.State
+	lifecycleStatus := plan.PlanLifecycleStatus(detail)
 	if err := writef(out, "%s\n", state.Plan.Title); err != nil {
 		return err
 	}
 	if err := writef(out, "ID: %s\n", state.Plan.ID); err != nil {
 		return err
 	}
-	if err := writef(out, "Status: %s\n", colorStatus(state.Status, state.Status)); err != nil {
+	if err := writef(out, "Status: %s\n", colorStatus(lifecycleStatus, lifecycleStatus)); err != nil {
 		return err
 	}
 	if err := writef(out, "Repo: %s %s\n", state.Repo.Name, state.Repo.Branch); err != nil {

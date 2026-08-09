@@ -96,8 +96,13 @@ func (f Finalizer) finalizeCompletedRun(ctx context.Context, runCount int, detai
 		if err := writef(out, "Pull request: #%d %s\n", pr.Number, pr.URL); err != nil {
 			return err
 		}
-		if err := writef(out, "Next: use the host's Squash and merge action, then run `tao merge --record-only --force %s` to record completion and cleanup.\n", detail.State.Plan.ID); err != nil {
-			return err
+		if plan.PlanIsPullRequestComplete(detail) {
+			if err := writef(out, "Plan complete in Tao: %s (approved review and pull request recorded for the same head).\n", detail.State.Plan.ID); err != nil {
+				return err
+			}
+			if err := writef(out, "Next: use the host's Squash and merge action. Tao does not merge the PR. After the merged change is present on your local default branch, optionally run `tao cleanup --dry-run`, then `tao cleanup`.\n"); err != nil {
+				return err
+			}
 		}
 	}
 	if execution.Config.ExecutionMode == ExecutionModeCurrent {

@@ -155,6 +155,9 @@ func renderReviewGuidance(out io.Writer, detail *plan.PlanDetail) error {
 	if review := plan.CurrentReview(detail); review != nil && review.Status == plan.ReviewStatusCompleted {
 		switch review.Verdict {
 		case plan.ReviewVerdictApprove:
+			if plan.PlanIsPullRequestComplete(detail) {
+				return writeln(out, "Next: use the host's Squash and merge action. Tao does not merge the PR. After the merged change is present on your local default branch, optionally run `tao cleanup --dry-run`, then `tao cleanup`.")
+			}
 			return writef(out, "Next: tao merge %s\n", planID)
 		case plan.ReviewVerdictChangesRequested:
 			return writef(out, "Next: tao rework %s\n", planID)

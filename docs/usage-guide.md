@@ -28,6 +28,13 @@ A useful mental split:
 - **Build prompts** (`/tao-note`, `/tao-slice`, `/tao-run`, `/tao-commit`, `/tao-pr`) write
   artifacts, code, or git state.
 
+After an approved review, choose one of two completion paths. The solo no-PR
+path uses `tao merge` to integrate and record `plan_merged`. An opt-in PR run
+reaches `completed` when Tao has a current approved review and durable PR
+metadata for the same non-empty head. That is a completed local handoff, not
+proof that the hosting provider merged anything; only current `plan_merged`
+evidence proves default-branch integration.
+
 ## Capture first with repository notes
 
 `/tao-note` is the capture end of the note-to-plan pipeline for agent sessions: run the slash command inside a session to distill the conversation into a self-contained repository note, then promote it later with `tao note plan <id>`. Use `tao note create` for manual capture instead; `/tao-note` names the installed slash command, while `tao note` names the CLI command group.
@@ -71,7 +78,9 @@ damaged plans; repository warning rows remain visible with either setting.
 Keep using `tao list` for current-repository history, its `--active` filter, and
 its recency limit. Monitor intentionally shows all registered repositories and
 only valid, non-completed plans by default; its invalid-plan filter does not
-change list scope, aliases, or defaults.
+change list scope, aliases, or defaults. Because a qualifying PR handoff is
+`completed`, monitor hides it even before remote integration; use merge evidence,
+not monitor absence, when you need to know whether Tao recorded a merge.
 
 Treat LIVE and STALE as process-liveness hints, not workflow verdicts. LIVE means
 the publisher has refreshed its heartbeat recently, but does not prove that the
@@ -288,7 +297,7 @@ through.
 **Before running, prefer `tao validate <plan-id>`** for whole-plan findings —
 `tao run` only preflights the one slice it's about to execute.
 
-When a full plan run completes, treat "done" as slices complete, a persisted
+When all slices settle, treat execution "done" as slices complete, a persisted
 repository-wide verification result, and a post-completion review result. With
 the default slice policy, the implementing agent proposes each checkpoint
 message before completion. Tao validates the scoped Conventional Commit subject
@@ -300,7 +309,10 @@ checkpoint commits let review inspect the exact `base..HEAD` diff. Broad
 verification is blocking and uses the repository's declared `make verify` when
 available before narrower Make/Go fallbacks. The review is best-effort: a failed
 or timed-out review session is recorded for you to see, but it does not turn
-verified work into a failed run.
+verified work into a failed run. Without a qualifying PR, an approved result is
+`reviewed` and ready for `tao merge`; when the same non-empty head also has
+recorded PR metadata, the plan is `completed` as a PR workflow without claiming
+that the host integrated it.
 
 When a successful review requests changes, `tao run <plan-id>` automatically
 uses the ordinary rework gates, runs the generated fix slices, and reviews again.
@@ -529,7 +541,9 @@ PR URL.
 **When to use:** after a run's work is committed and you want a PR by hand.
 Equivalent automated path: `tao run --pull-request`, which is gated — it's
 rejected with `--commit-policy none`, or when the run is not in
-`--execution-mode isolated`.
+`--execution-mode isolated`. The automated path records the exact branch head;
+when it matches a current approved review head, Tao's lifecycle is complete even
+though the hosting provider still owns integration.
 
 ### `tao merge` — integrate an approved plan without a PR
 
@@ -585,11 +599,14 @@ ordinary implementation feedback. Repositories using another build system can
 keep their native workflow and set an explicit merge verification override;
 Tao does not infer package-manager or other build-system commands.
 
-If a PR or manual `git merge` already integrated the plan, run `tao merge <plan>`
-anyway. Tao checks the plan branch, review head, PR head SHA, and workspace head
-SHA against the default branch. When any is already an ancestor of default, Tao
-skips rebase/fast-forward, records `plan_merged`, marks the plan `completed`,
-and attempts safe cleanup. A plan whose branch is the default branch itself
+If a PR or manual `git merge` already integrated the plan and you explicitly
+want Tao to persist actual integration evidence, you may run `tao merge <plan>`.
+A qualifying PR plan is already lifecycle-complete, so this is optional evidence
+recording rather than a completion workaround. Tao checks the plan branch,
+review head, PR head SHA, and workspace head SHA against the default branch.
+When any is already an ancestor of default, Tao skips rebase/fast-forward,
+records `plan_merged`, retains or marks the plan `completed`, and attempts safe
+cleanup. A plan whose branch is the default branch itself
 (execution-mode current) is never auto-detected this way — ancestry against
 default cannot distinguish the plan's work from unrelated commits — so record
 such plans explicitly with `--record-only --force` after verifying the changes
@@ -804,10 +821,15 @@ Use `tao run --pull-request` to create a GitHub pull request after a full run
 completes and Tao has committed and reviewed the plan work. PR creation is
 disabled by default and is valid only in `--execution-mode isolated` — requesting
 a PR in `current` mode is a hard error, as is combining it with policy `none`.
-Tao pushes and opens the PR through authenticated `gh`, but the hosting provider
-owns integration. Choose the host's **Squash and merge** action, then run
-`tao merge --record-only --force <plan>` to record completion and clean local
-state. Tao does not click or emulate the host merge action.
+Tao pushes and opens the PR through authenticated `gh`, recording the source
+branch and exact head whether the PR is created or discovered. If that non-empty
+head matches the current review with status `completed` and verdict `approve`,
+the plan becomes `completed` in Tao. This does not query or imply remote merge, human-review, CI,
+open/closed, or draft state. Choose the host's **Squash and merge** action; no
+forced record-only merge command is needed merely to complete Tao's lifecycle.
+After the merged change reaches your local default branch, optionally preview
+`tao cleanup --dry-run` and then run `tao cleanup`. Tao does not click or emulate
+the host merge action.
 
 ### Workspaces
 
@@ -847,10 +869,12 @@ by default; use `--force-active` or `--force-dirty` only when intentionally
 overriding those checks. Plan artifacts in Tao's data home are never removed by
 workspace cleanup.
 
-`tao cleanup --dry-run` previews completed-plan cleanup for both Tao-managed
-workspaces and local branches. Normal `tao cleanup` removes eligible clean
-completed-plan workspaces before deleting their local branches, but does not
-remove plan artifacts in Tao's data home. It never deletes protected branches or
+After an externally merged PR is present on your local default branch,
+`tao cleanup --dry-run` optionally previews cleanup for Tao-managed workspaces
+and local branches. Normal `tao cleanup` removes only candidates that live Git
+state classifies as merged and clean before deleting their local branches, but
+does not remove plan artifacts in Tao's data home. PR lifecycle completion by
+itself is not cleanup authorization. Tao never deletes protected branches or
 dirty workspaces, and without `--force` it relies on `git branch --delete` so
 unmerged branches stay protected by Git. The exception is a Tao-recorded squash:
 verified squash evidence permits deleting its intentionally non-ancestral source

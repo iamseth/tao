@@ -97,12 +97,17 @@ Plan status values:
 | `planned` | Plan exists but no slice is currently running. |
 | `in_progress` | At least one slice has started or work remains after a completed slice. |
 | `in_review` | All slices are complete and the plan is awaiting a successful review. |
-| `reviewed` | Review completed without requested changes; an approved review may be merged. |
+| `reviewed` | Review completed without requested changes; an approved review may be merged or paired with matching PR metadata. |
 | `changes_requested` | Review completed with requested changes; use `tao rework` or address manually. |
-| `completed` | The reviewed plan has been merged into the default branch. |
+| `completed` | Tao's lifecycle is terminal through recorded merge evidence or a qualifying reviewed PR handoff. |
 | `blocked` | Work cannot continue without a fix, decision, approval, or dependency. |
 
-A merge is proven by a `plan_merged` event in `events.jsonl`. Plans written by releases predating merge-event tracking may carry `status: completed` without one; status projection trusts that persisted legacy status (the plan finished under the old semantics, typically merged manually or before merge events existed) rather than demoting historical plans to `in_review` on upgrade. The current write path only ever stores `completed` through the merge recording that also appends the event, so new plans always carry both.
+There are two current completion paths:
+
+- The no-PR path records integration into the default branch and appends a current `plan_merged` event.
+- The PR path requires a current review with status `completed` and verdict `approve`, plus recorded pull-request metadata whose head SHA exactly matches the review's same non-empty head. This is local workflow completion only: Tao does not query or assert the remote PR's merge, review, CI, open/closed, or draft state. Lifecycle readers apply this predicate too, so existing matching artifacts project `completed` without requiring a rewrite first.
+
+Only a current `plan_merged` event in `events.jsonl` proves integration into the default branch; `status: completed` alone does not. A later `plan_reopened` supersedes earlier review, PR-completion, and merge evidence until the reworked head is reviewed and recorded again. Plans written by releases predating merge-event tracking may carry `status: completed` without modern merge or qualifying PR evidence. Status projection trusts that persisted legacy status rather than demoting historical plans to `in_review` on upgrade, and report projection retains its legacy merged-outcome inference for those records.
 
 `state.json` owns repository context and the queue. New plans should record `repo.base_commit` as the Git commit that was current when the plan was sliced; `tao review PLAN` uses it to detect likely stale pending slices after later commits.
 
@@ -133,7 +138,8 @@ stateDiagram-v2
     in_progress --> in_review: final slice completed
     in_review --> reviewed: review approve/comment
     in_review --> changes_requested: review requested changes
-    reviewed --> completed: merge completed
+    in_review --> completed: approve review matches recorded PR
+    reviewed --> completed: matching PR recorded or merge completed
     changes_requested --> in_progress: rework opened
     planned --> blocked: blocker recorded
     in_progress --> blocked: blocker recorded
@@ -148,7 +154,7 @@ First-class plan edits mutate only pending work:
 
 Edit mutations must reject completed, in-progress, blocked, missing, or dependency-invalid slices and keep `state.json` and `slices.json` consistent.
 
-When an opt-in full run successfully creates a GitHub pull request, `state.json` may include `plan.pull_request` with the PR `number`, `url`, and `created_at` timestamp. This metadata is durable so renderers can show a stable PR link after restart.
+When an opt-in full run successfully creates or discovers a GitHub pull request, `state.json` may include `plan.pull_request` with the PR `number`, `url`, `created_at`, source `branch`, and exact `head_sha`. This metadata is durable so renderers can show a stable PR link after restart and compare the recorded head with the current approved review. Missing or mismatched heads remain readable but do not qualify for PR completion.
 
 ## Slice Lifecycle
 
@@ -389,7 +395,7 @@ Known event types include:
 | `slice_skipped` | Pending slice skipped by `tao edit skip`. |
 | `slices_reordered` | Pending queue reordered by `tao edit move`. |
 | `slice_approved` | Approval-gated slice was approved. |
-| `pull_request_created` | Pull request created after completed run. |
+| `pull_request_created` | Pull request created or discovered and its exact source head recorded after run finalization. |
 | `plan_reviewed` | Plan review result was persisted. |
 | `plan_reopened` | Plan reopened for rework. |
 | `plan_merged` | Plan merged into the default branch. |
@@ -444,7 +450,7 @@ completion boundary.
 
 Edit events record first-class `tao edit` mutations. Detailed historical slice content belongs in `slices.json`, not duplicated in event payloads.
 
-A `pull_request_created` event includes the usual event fields plus `pull_request` with the same `number`, `url`, and `created_at` fields recorded in `state.json`.
+A `pull_request_created` event includes the usual event fields plus `pull_request` with the same `number`, `url`, `created_at`, `branch`, and `head_sha` fields recorded in `state.json`.
 
 A `verification_command_invalid` event should include the original `command`, a concise `reason`, and, when a mechanically equivalent command is used successfully, `corrected_command`.
 

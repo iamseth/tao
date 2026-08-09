@@ -42,19 +42,58 @@ func TestBatchCandidateDiscoveryEmpty(t *testing.T) {
 	}
 }
 
-func TestBatchCandidateDiscoveryExcludesCompletedApprovedPlans(t *testing.T) {
-	repo := &batchRepository{summaries: []plan.PlanSummary{{
-		ID:            "already-merged",
-		Status:        plan.StatusCompleted,
-		Reviewed:      true,
-		ReviewVerdict: plan.ReviewVerdictApprove,
-	}}}
-	got, err := (BatchCandidateDiscovery{Repository: repo}).Discover(context.Background())
+func TestBatchCandidateDiscoveryExcludesLegacyCompletedApprovedPlans(t *testing.T) {
+	legacy := batchReadyDetail("legacy", "tao/legacy")
+	repo := &batchRepository{
+		summaries: []plan.PlanSummary{{
+			ID:            "legacy",
+			Status:        plan.StatusCompleted,
+			Reviewed:      true,
+			ReviewVerdict: plan.ReviewVerdictApprove,
+		}},
+		details: map[string]*plan.PlanDetail{"legacy": legacy},
+	}
+	got, err := (BatchCandidateDiscovery{Repository: repo, Merge: Service{Git: &fakeGitClient{}}}).Discover(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got.Candidates) != 0 || len(got.Blockers) != 0 {
-		t.Fatalf("completed approved plan was rediscovered: %#v", got)
+		t.Fatalf("legacy completed approved plan was rediscovered: %#v", got)
+	}
+}
+
+func TestBatchCandidateDiscoveryIncludesPRCompletePlanWithoutMergeEvidence(t *testing.T) {
+	unmerged := batchReadyDetail("plan-a", "tao/plan-a")
+	unmerged.State.Plan.PullRequest = &plan.PullRequest{HeadSHA: "tip-a"}
+	merged := batchReadyDetail("plan-b", "tao/plan-b")
+	merged.State.Plan.PullRequest = &plan.PullRequest{HeadSHA: "tip-b"}
+	merged.Events = []plan.Event{{Type: plan.EventTypePlanMerged}}
+	if got := plan.PlanLifecycleStatus(unmerged); got != plan.StatusCompleted || !plan.PlanIsPullRequestComplete(unmerged) || plan.PlanIsMerged(unmerged.Events) {
+		t.Fatalf("unmerged PR-complete fixture is invalid: status=%q detail=%+v", got, unmerged)
+	}
+
+	repo := &batchRepository{
+		summaries: []plan.PlanSummary{
+			plan.Summarize(merged, merged.State.CreatedAt),
+			plan.Summarize(unmerged, unmerged.State.CreatedAt),
+		},
+		details: map[string]*plan.PlanDetail{"plan-a": unmerged, "plan-b": merged},
+	}
+	git := &fakeGitClient{
+		root:          "/repo",
+		defaultBranch: "main",
+		mergeBase:     "base",
+		revParse:      map[string]string{"main": "default-start", "tao/plan-a": "tip-a", "tao/plan-b": "tip-b"},
+	}
+	got, err := (BatchCandidateDiscovery{Repository: repo, Merge: Service{Git: git}, Health: func(context.Context, plan.Repo) error { return nil }}).Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := candidateIDs(got.Candidates); !reflect.DeepEqual(ids, []string{"plan-a"}) {
+		t.Fatalf("candidate IDs = %v, want only unmerged PR-complete plan", ids)
+	}
+	if len(got.Blockers) != 0 {
+		t.Fatalf("unexpected blockers: %+v", got.Blockers)
 	}
 }
 

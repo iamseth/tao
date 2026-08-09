@@ -212,6 +212,24 @@ func TestReviewSuppressesStaleNextStepHints(t *testing.T) {
 			t.Fatalf("current approved review should advertise tao merge, got %q", text)
 		}
 	})
+
+	t.Run("pull request completion points to host merge and cleanup", func(t *testing.T) {
+		text := renderFor(t, &plan.PlanDetail{
+			State: plan.State{Status: plan.StatusCompleted, Plan: plan.PlanState{
+				ID:          "plan-a",
+				Review:      &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Head: "head123"},
+				PullRequest: &plan.PullRequest{HeadSHA: "head123"},
+			}},
+		})
+		for _, want := range []string{"host's Squash and merge action", "`tao cleanup --dry-run`", "`tao cleanup`"} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("PR-complete guidance should contain %q, got %q", want, text)
+			}
+		}
+		if strings.Contains(text, "Next: tao merge") {
+			t.Fatalf("PR-complete guidance must not advertise tao merge, got %q", text)
+		}
+	})
 }
 
 func TestReviewPrintsClearMessageWhenNoReviewExists(t *testing.T) {

@@ -494,7 +494,8 @@ func validCommitSeriesFingerprint(value string) bool {
 }
 
 // RecordPullRequest stamps pull request metadata onto state, updates workspace
-// tracking fields, and appends a pull_request_created event.
+// tracking fields, and appends a pull_request_created event. When it completes
+// the matching approved-review evidence, the same mutation completes the plan.
 func (r *PlanRecord) RecordPullRequest(pr PullRequest, branch, headSHA string) error {
 	store, err := r.storeOrDefault()
 	if err != nil {
@@ -510,6 +511,12 @@ func (r *PlanRecord) RecordPullRequest(pr PullRequest, branch, headSHA string) e
 		detail.State.Workspace.Branch = branch
 		detail.State.Workspace.HeadSHA = headSHA
 		detail.State.Workspace.PushedSHA = headSHA
+		if sliceWorkSettled(detail) && !PlanIsMerged(detail.Events) {
+			detail.State.Status = reviewProjectedStatus(CurrentReview(detail))
+			if PlanIsPullRequestComplete(detail) {
+				detail.State.Status = StatusCompleted
+			}
+		}
 		detail.State.UpdatedAt = pr.CreatedAt
 		detail.State.Plan.Timing.LastActivityAt = &pr.CreatedAt
 		event := Event{Type: EventTypePullRequestCreated, Timestamp: pr.CreatedAt, PlanID: detail.State.Plan.ID, PullRequest: &pr, Message: "Pull request created"}
@@ -649,12 +656,20 @@ func (r *PlanRecord) recordReviewCompleted(review PlanReview, agent string, cont
 		}
 		persistedReview := clonePlanReview(detail.State.Plan.Review)
 		eventReview := reviewEventSnapshot(persistedReview)
+		event := Event{Type: EventTypePlanReviewed, Timestamp: reviewedAt, PlanID: detail.State.Plan.ID, Agent: agent, Review: eventReview, Message: "Plan reviewed"}
 		if sliceWorkSettled(detail) && !PlanIsMerged(detail.Events) {
 			detail.State.Status = reviewProjectedStatus(persistedReview)
+			// The event returned below is part of this atomic mutation but has not
+			// yet been appended to detail.Events. Include it in the read-side
+			// projection so a fresh review after rework is current immediately.
+			completionProjection := *detail
+			completionProjection.Events = append(slices.Clone(detail.Events), event)
+			if PlanIsPullRequestComplete(&completionProjection) {
+				detail.State.Status = StatusCompleted
+			}
 		}
 		detail.State.UpdatedAt = reviewedAt
 		detail.State.Plan.Timing.LastActivityAt = &reviewedAt
-		event := Event{Type: EventTypePlanReviewed, Timestamp: reviewedAt, PlanID: detail.State.Plan.ID, Agent: agent, Review: eventReview, Message: "Plan reviewed"}
 		return []Event{event}, nil
 	}
 	if content != nil {
@@ -675,9 +690,8 @@ func reviewEventSnapshot(review *PlanReview) *PlanReview {
 	return eventReview
 }
 
-// RecordMerged marks the plan fully completed after a verified merge and appends
-// the plan_merged event. The plan status intentionally reaches completed only
-// here; slice completion and review use pre-merge statuses.
+// RecordMerged marks actual default-branch integration after a verified merge
+// and appends the plan_merged event. PR completion never emits this evidence.
 func (r *PlanRecord) RecordMerged(branch string, mergedDefaultSHA string, mergedAt time.Time) error {
 	store, err := r.storeOrDefault()
 	if err != nil {

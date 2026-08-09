@@ -99,6 +99,110 @@ func TestPlanLifecycleStatusReflectsReviewAndMergeStages(t *testing.T) {
 	if got := PlanLifecycleStatus(detail); got != StatusCompleted {
 		t.Fatalf("merged status = %q, want %q", got, StatusCompleted)
 	}
+	if !PlanIsMerged(detail.Events) {
+		t.Fatal("plan_merged evidence must remain the actual-merge signal")
+	}
+}
+
+func TestPlanIsPullRequestCompleteRequiresCurrentMatchingEvidence(t *testing.T) {
+	tests := []struct {
+		name     string
+		review   *PlanReview
+		pr       *PullRequest
+		reopened bool
+		want     bool
+	}{
+		{name: "exact matching head", review: &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Head: "head123"}, pr: &PullRequest{HeadSHA: "head123"}, want: true},
+		{name: "missing pull request", review: &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Head: "head123"}},
+		{name: "missing pull request head", review: &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Head: "head123"}, pr: &PullRequest{}},
+		{name: "missing review head", review: &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove}, pr: &PullRequest{HeadSHA: "head123"}},
+		{name: "mismatched head", review: &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Head: "head123"}, pr: &PullRequest{HeadSHA: "head456"}},
+		{name: "case mismatched head", review: &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Head: "head123"}, pr: &PullRequest{HeadSHA: "HEAD123"}},
+		{name: "whitespace head", review: &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Head: " "}, pr: &PullRequest{HeadSHA: " "}},
+		{name: "error review", review: &PlanReview{Status: ReviewStatusError, Verdict: ReviewVerdictApprove, Head: "head123"}, pr: &PullRequest{HeadSHA: "head123"}},
+		{name: "changes requested", review: &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictChangesRequested, Head: "head123"}, pr: &PullRequest{HeadSHA: "head123"}},
+		{name: "comment review", review: &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictComment, Head: "head123"}, pr: &PullRequest{HeadSHA: "head123"}},
+		{name: "reopened after approval", review: &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Head: "head123"}, pr: &PullRequest{HeadSHA: "head123"}, reopened: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			detail := reviewedCapabilityDetail()
+			detail.State.Plan.Review = clonePlanReview(tt.review)
+			detail.State.Plan.PullRequest = clonePullRequest(tt.pr)
+			if tt.review != nil {
+				detail.Events = []Event{{Type: EventTypePlanReviewed, Review: clonePlanReview(tt.review)}}
+			}
+			if tt.reopened {
+				detail.Events = append(detail.Events, Event{Type: EventTypePlanReopened})
+			}
+			if got := PlanIsPullRequestComplete(detail); got != tt.want {
+				t.Fatalf("PlanIsPullRequestComplete() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+
+	if PlanIsPullRequestComplete(nil) {
+		t.Fatal("nil plan cannot have pull request completion evidence")
+	}
+}
+
+func TestPlanLifecycleStatusProjectsExistingPullRequestCompletion(t *testing.T) {
+	detail := reviewedCapabilityDetail()
+	review := &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Head: "head123"}
+	detail.State.Status = StatusReviewed
+	detail.State.Plan.Review = review
+	detail.State.Plan.PullRequest = &PullRequest{Number: 42, URL: "https://example.test/pull/42", HeadSHA: "head123"}
+	detail.Events = []Event{{Type: EventTypePlanReviewed, Review: review}, {Type: EventTypePullRequestCreated, PullRequest: detail.State.Plan.PullRequest}}
+
+	if got := PlanLifecycleStatus(detail); got != StatusCompleted {
+		t.Fatalf("matching persisted PR/review status = %q, want %q", got, StatusCompleted)
+	}
+	if detail.State.Status != StatusReviewed {
+		t.Fatalf("read-side projection mutated persisted status to %q", detail.State.Status)
+	}
+	if PlanIsMerged(detail.Events) {
+		t.Fatal("PR completion must not imply plan_merged evidence")
+	}
+}
+
+func TestPlanLifecycleStatusReopenInvalidatesPullRequestCompletion(t *testing.T) {
+	detail := reviewedCapabilityDetail()
+	review := &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Head: "head123"}
+	detail.State.Status = StatusCompleted
+	detail.State.Plan.Review = review
+	detail.State.Plan.PullRequest = &PullRequest{Number: 42, HeadSHA: "head123"}
+	detail.Events = []Event{{Type: EventTypePlanReviewed, Review: review}, {Type: EventTypePullRequestCreated, PullRequest: detail.State.Plan.PullRequest}}
+	if got := PlanLifecycleStatus(detail); got != StatusCompleted {
+		t.Fatalf("pre-reopen status = %q, want %q", got, StatusCompleted)
+	}
+
+	detail.State.Status = StatusInProgress
+	detail.State.Plan.PendingSlices = []string{"002-fix"}
+	detail.Slices.Slices = append(detail.Slices.Slices, Slice{ID: "002-fix", Status: StatusPending})
+	detail.Events = append(detail.Events, Event{Type: EventTypePlanReopened})
+	if PlanIsPullRequestComplete(detail) {
+		t.Fatal("reopen must supersede prior PR completion evidence")
+	}
+	if got := PlanLifecycleStatus(detail); got != StatusInProgress {
+		t.Fatalf("reopened status = %q, want %q", got, StatusInProgress)
+	}
+
+	detail.State.Status = StatusInReview
+	detail.State.Plan.PendingSlices = nil
+	detail.Slices.Slices[1].Status = StatusCompleted
+	fresh := &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Head: "head456"}
+	detail.State.Plan.Review = fresh
+	detail.Events = append(detail.Events, Event{Type: EventTypePlanReviewed, Review: fresh})
+	if got := PlanLifecycleStatus(detail); got != StatusReviewed {
+		t.Fatalf("fresh review with stale PR head status = %q, want %q", got, StatusReviewed)
+	}
+
+	detail.State.Plan.PullRequest = &PullRequest{Number: 42, HeadSHA: "head456"}
+	detail.Events = append(detail.Events, Event{Type: EventTypePullRequestCreated, PullRequest: detail.State.Plan.PullRequest})
+	if got := PlanLifecycleStatus(detail); got != StatusCompleted {
+		t.Fatalf("fresh matching review/PR status = %q, want %q", got, StatusCompleted)
+	}
 }
 
 // TestPlanLifecycleStatusLegacyCompletedWithoutMergeEvent covers plans whose
@@ -108,8 +212,8 @@ func TestPlanLifecycleStatusReflectsReviewAndMergeStages(t *testing.T) {
 // before merge events existed). The persisted status is trusted — demoting
 // such plans would mass-revert historical completed plans to in_review on
 // upgrade, with no reliable recovery once branches and head snapshots are
-// gone. The current write path only stores completed through RecordMerged, so
-// new plans always carry the event and never take the legacy arm.
+// gone. Current writes reach completed through RecordMerged or matching PR
+// evidence; the latter is handled by its explicit predicate before this arm.
 func TestPlanLifecycleStatusLegacyCompletedWithoutMergeEvent(t *testing.T) {
 	detail := reviewedCapabilityDetail()
 	detail.State.Status = StatusCompleted

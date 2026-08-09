@@ -16,6 +16,8 @@ The `full` mode uses these fixed top-level sections, in order:
 
 Planning Context contains Goal, Constraints, Non-goals, Decisions, Risks, and Open Questions. Implementation contains one `Slice N: <title>` subsection per slice. Each slice starts with five inline-code values for status, planned/rework kind, total tokens, commit, and duration, followed by Goal, Rationale, and Dependencies subsections. Implementation Summary starts with an inline-code summary of duration, completed/total slices, passed/total slice verifications, and reported cost, then uses bold `Verification`, `Execution`, and `Tokens` labels with compact bullet groups. Review and Outcome starts with inline-code review status, verdict, finding count, and merged state, followed by the sanitized review summary; it never includes raw findings.
 
+Lifecycle status and merged outcome are intentionally distinct. A qualifying PR plan is `completed` once its current approved review and recorded PR have the same non-empty head, but reports render the outcome as `not merged` until a current `plan_merged` event exists. A PR plan with that event renders `merged`. For compatibility, a legacy persisted `completed` plan with neither current qualifying PR evidence nor any merge-event history retains the historical inferred `merged` outcome; this inference does not create merge evidence or authorize merge-specific behavior.
+
 The `planning-only` mode uses these fixed top-level sections, in order:
 
 1. Planning Context

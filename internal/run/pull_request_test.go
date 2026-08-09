@@ -153,9 +153,10 @@ func TestDeterministicPullRequestCreatorPushesAndCreatesWithAgentBody(t *testing
 	if pr.Number != 123 || pr.URL != "https://github.com/iamseth/tao/pull/123" || pr.Branch != "tao/plan-a" || pr.HeadSHA != "head123" || !pr.CreatedAt.Equal(createdAt) {
 		t.Fatalf("unexpected pull request: %#v", pr)
 	}
-	if !strings.HasPrefix(createdBody, "## Agent body\n\nReady for review.") || !strings.Contains(createdBody, "Squash and merge") || !strings.Contains(createdBody, "tao merge --record-only --force plan-a") {
-		t.Fatalf("expected agent body with host-owned squash guidance, got %q", createdBody)
+	if !strings.HasPrefix(createdBody, "## Agent body\n\nReady for review.") {
+		t.Fatalf("expected agent-authored body, got %q", createdBody)
 	}
+	requirePullRequestMergeGuidance(t, createdBody)
 	for _, want := range []string{"git push --set-upstream origin tao/plan-a", "gh pr view --head tao/plan-a --json number,url,createdAt", "gh pr create --base main --head tao/plan-a --title Plan A"} {
 		if !hasCallPrefix(calls, want) {
 			t.Fatalf("expected call prefix %q in %#v", want, calls)
@@ -193,11 +194,32 @@ func TestDeterministicPullRequestCreatorFallsBackToDeterministicBodyWhenAgentFai
 	if pr.Number != 124 {
 		t.Fatalf("unexpected pull request: %#v", pr)
 	}
-	if !strings.Contains(createdBody, "## Summary") || !strings.Contains(createdBody, "plan-a") || !strings.Contains(createdBody, "## Completed slices") || !strings.Contains(createdBody, "Squash and merge") || !strings.Contains(createdBody, "tao merge --record-only --force plan-a") {
+	if !strings.Contains(createdBody, "## Summary") || !strings.Contains(createdBody, "plan-a") || !strings.Contains(createdBody, "## Completed slices") {
 		t.Fatalf("expected deterministic body, got %q", createdBody)
 	}
+	requirePullRequestMergeGuidance(t, createdBody)
 	if !strings.Contains(out.String(), "using deterministic body: provider dropped") {
 		t.Fatalf("expected body fallback warning, got %q", out.String())
+	}
+}
+
+func TestDeterministicPullRequestCreatorRejectsObsoleteAgentMergeGuidance(t *testing.T) {
+	detail := runPlanDetail(plan.StatusReviewed, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
+	var out bytes.Buffer
+	creator := deterministicPullRequestCreator{
+		execution: testRunExecution(ExecutionConfig{}, RunDependencies{OutputWriter: &out}),
+		bodyGenerator: pullRequestBodyGeneratorFunc(func(context.Context, PullRequestBodyRun) (string, error) {
+			return "## Summary\n\nReady.\n\n## Merge\n\nRun tao merge --record-only --force plan-a after merging.", nil
+		}),
+	}
+
+	body := creator.pullRequestBody(context.Background(), PullRequestRun{PlanID: "plan-a", Detail: detail}, "main", "Plan A", "")
+	if !strings.Contains(body, "## Completed slices") {
+		t.Fatalf("expected deterministic fallback body, got %q", body)
+	}
+	requirePullRequestMergeGuidance(t, body)
+	if !strings.Contains(out.String(), "agent returned obsolete pull request merge guidance") {
+		t.Fatalf("expected obsolete-guidance warning, got %q", out.String())
 	}
 }
 
@@ -220,12 +242,15 @@ func TestDeterministicPullRequestCreatorReusesExistingPullRequestAfterPush(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pr.Number != 321 || pr.Branch != "tao/plan-a" || pr.HeadSHA != "head123" {
+	if pr.Number != 321 || pr.URL != "https://github.com/iamseth/tao/pull/321" || pr.Branch != "tao/plan-a" || pr.HeadSHA != "head123" || pr.CreatedAt.Format(time.RFC3339) != createdAt {
 		t.Fatalf("unexpected existing pull request: %#v", pr)
 	}
-	if !hasCallPrefix(calls, "git push --set-upstream origin tao/plan-a") || !hasCallPrefix(calls, "gh pr view --head tao/plan-a") {
-		t.Fatalf("expected push then view calls, got %#v", calls)
+	pushCall := "git push --set-upstream origin tao/plan-a"
+	viewCall := "gh pr view --head tao/plan-a --json number,url,createdAt"
+	if !hasCallPrefix(calls, pushCall) || !hasCallPrefix(calls, viewCall) {
+		t.Fatalf("expected push and minimal view calls, got %#v", calls)
 	}
+	requireStringOrder(t, calls, pushCall, viewCall)
 }
 
 func TestExtractPullRequestFromAgentOutput(t *testing.T) {
@@ -293,6 +318,18 @@ func pullRequestCommandRunner(t *testing.T, calls *[]string, gh func(args []stri
 			}
 		}
 		return nil
+	}
+}
+
+func requirePullRequestMergeGuidance(t *testing.T, body string) {
+	t.Helper()
+	for _, want := range []string{"**Squash and merge**", "After the merged change is present on your local default branch", "`tao cleanup --dry-run`", "`tao cleanup`"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("pull request body missing %q: %q", want, body)
+		}
+	}
+	if strings.Contains(body, "tao merge --record-only --force") {
+		t.Fatalf("pull request body retained forced record-only workaround: %q", body)
 	}
 }
 
