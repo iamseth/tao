@@ -50,6 +50,9 @@ type PlanSummary struct {
 	Reviewed                         bool
 	ReviewVerdict                    string
 	IsActive                         bool
+	Capabilities                     RunCapabilities
+	SliceCompletionPending           bool
+	UnresolvedReworkStop             bool
 	PlanningSessionPresent           bool
 	PlanningSessionValid             bool
 	PlanningSessionUnavailableReason string

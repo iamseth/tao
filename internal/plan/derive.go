@@ -21,6 +21,8 @@ type DerivedPlan struct {
 	ReworkTotalCount       int
 	CompletedAt            *time.Time
 	Elapsed                time.Duration
+	SliceCompletionPending bool
+	UnresolvedReworkStop   bool
 }
 
 type Lifecycle struct {
@@ -68,6 +70,8 @@ func Derive(detail *PlanDetail, now time.Time) DerivedPlan {
 		ReworkCompletedCount:   index.reworkCompletedCount,
 		ReworkTotalCount:       index.reworkTotalCount,
 		CompletedAt:            completedAt,
+		SliceCompletionPending: SliceCompletionPending(detail),
+		UnresolvedReworkStop:   HasUnresolvedReworkStop(detail.Events),
 	}
 	if !now.IsZero() {
 		derived.Elapsed = elapsed(detail, completedAt, now)
@@ -100,6 +104,7 @@ func RunCapabilitiesFromLifecycle(lifecycle Lifecycle) RunCapabilities {
 		if approvalErr, ok := errors.AsType[*ApprovalRequiredError](lifecycle.RunnableError); ok {
 			capabilities.NeedsApproval = true
 			capabilities.ApprovalSliceID = approvalErr.SliceID
+			capabilities.ApprovalReason = approvalErr.Reason
 		}
 	}
 	capabilities.CanContinue = lifecycle.Continuable
@@ -109,6 +114,7 @@ func RunCapabilitiesFromLifecycle(lifecycle Lifecycle) RunCapabilities {
 			if approvalErr, ok := errors.AsType[*ApprovalRequiredError](lifecycle.ContinueError); ok {
 				capabilities.NeedsApproval = true
 				capabilities.ApprovalSliceID = approvalErr.SliceID
+				capabilities.ApprovalReason = approvalErr.Reason
 			}
 		}
 	}
@@ -131,6 +137,26 @@ func SliceCompleted(detail *PlanDetail, sliceID string) bool {
 	for _, slice := range detail.Slices.Slices {
 		if slice.ID == sliceID {
 			return slice.Status == StatusCompleted
+		}
+	}
+	return false
+}
+
+// SliceCompletionPending reports whether an automatic slice commit intent has
+// not yet been settled by a valid completion outcome.
+func SliceCompletionPending(detail *PlanDetail) bool {
+	return automaticSliceCompletionError(detail) != nil
+}
+
+// HasUnresolvedReworkStop reports whether the latest automatic-rework signal
+// is a stop. A later reopen or rework-round event starts a new attempt window.
+func HasUnresolvedReworkStop(events []Event) bool {
+	for i := len(events) - 1; i >= 0; i-- {
+		switch events[i].Type {
+		case EventTypeReworkStopped:
+			return true
+		case EventTypePlanReopened, EventTypeReworkRound:
+			return false
 		}
 	}
 	return false
@@ -266,6 +292,9 @@ func Summarize(detail *PlanDetail, now time.Time) PlanSummary {
 		Reviewed:                         derived.Capabilities.Reviewed,
 		ReviewVerdict:                    reviewVerdict(CurrentReview(detail)),
 		IsActive:                         derived.Active,
+		Capabilities:                     derived.Capabilities,
+		SliceCompletionPending:           derived.SliceCompletionPending,
+		UnresolvedReworkStop:             derived.UnresolvedReworkStop,
 		PlanningSessionPresent:           planningSummary.Present,
 		PlanningSessionValid:             planningSummary.Valid,
 		PlanningSessionUnavailableReason: planningSummary.UnavailableReason,

@@ -432,6 +432,9 @@ func TestRunCapabilitiesNeedsApprovalFromRunnableError(t *testing.T) {
 	if capabilities.ApprovalSliceID != "001-a" {
 		t.Fatalf("expected ApprovalSliceID=001-a, got %+v", capabilities)
 	}
+	if capabilities.ApprovalReason != "human sign-off" {
+		t.Fatalf("expected ApprovalReason=human sign-off, got %+v", capabilities)
+	}
 	if capabilities.DisabledReason != "slice 001-a requires approval: human sign-off" {
 		t.Fatalf("expected DisabledReason to match legacy prose, got %q", capabilities.DisabledReason)
 	}
@@ -449,6 +452,9 @@ func TestRunCapabilitiesNeedsApprovalFromContinueError(t *testing.T) {
 	if capabilities.ApprovalSliceID != "001-a" {
 		t.Fatalf("expected ApprovalSliceID=001-a, got %+v", capabilities)
 	}
+	if capabilities.ApprovalReason != "team review" {
+		t.Fatalf("expected ApprovalReason=team review, got %+v", capabilities)
+	}
 }
 
 func TestRunCapabilitiesNoApprovalWhenRunnable(t *testing.T) {
@@ -457,7 +463,7 @@ func TestRunCapabilitiesNoApprovalWhenRunnable(t *testing.T) {
 		Slices: SlicesFile{Slices: []Slice{{ID: "001-a", Status: StatusPending}}},
 	}
 	capabilities := AnalyzeRunCapabilities(detail)
-	if capabilities.NeedsApproval || capabilities.ApprovalSliceID != "" {
+	if capabilities.NeedsApproval || capabilities.ApprovalSliceID != "" || capabilities.ApprovalReason != "" {
 		t.Fatalf("expected no approval gate for runnable plan, got %+v", capabilities)
 	}
 }
@@ -481,6 +487,60 @@ func TestApprovalRequiredErrorCarriesTypedFields(t *testing.T) {
 	want := "slice 001-a requires approval: security audit"
 	if got := approvalErr.Error(); got != want {
 		t.Fatalf("expected Error()=%q, got %q", want, got)
+	}
+}
+
+func TestSliceCompletionPending(t *testing.T) {
+	detail := &PlanDetail{Slices: SlicesFile{Slices: []Slice{{
+		ID:           "001-a",
+		CommitIntent: &SliceCommitIntent{Policy: "slice"},
+	}}}}
+	if !SliceCompletionPending(detail) {
+		t.Fatal("automatic slice intent without completion must remain pending")
+	}
+
+	detail.Slices.Slices[0].Completion = &SliceCompletionOutcome{Outcome: SliceCompletionCommitted, CommitSHA: "abc123"}
+	if SliceCompletionPending(detail) {
+		t.Fatal("valid committed completion must settle the pending signal")
+	}
+	if SliceCompletionPending(nil) {
+		t.Fatal("nil detail must not report pending completion")
+	}
+}
+
+func TestHasUnresolvedReworkStopUsesLatestAttemptSignal(t *testing.T) {
+	tests := []struct {
+		name   string
+		events []Event
+		want   bool
+	}{
+		{name: "none"},
+		{name: "stopped", events: []Event{{Type: EventTypeReworkStopped}}, want: true},
+		{name: "reopened", events: []Event{{Type: EventTypeReworkStopped}, {Type: EventTypePlanReopened}}},
+		{name: "restart round", events: []Event{{Type: EventTypeReworkStopped}, {Type: EventTypeReworkRound}}},
+		{name: "new stop", events: []Event{{Type: EventTypeReworkStopped}, {Type: EventTypePlanReopened}, {Type: EventTypeReworkStopped}}, want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := HasUnresolvedReworkStop(test.events); got != test.want {
+				t.Fatalf("HasUnresolvedReworkStop() = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+func TestSummarizeExposesAttentionSignals(t *testing.T) {
+	detail := &PlanDetail{
+		State: State{Status: StatusChangesRequested, Plan: PlanState{ID: "plan"}},
+		Slices: SlicesFile{Slices: []Slice{{
+			ID:           "001-a",
+			CommitIntent: &SliceCommitIntent{Policy: "slice"},
+		}}},
+		Events: []Event{{Type: EventTypeReworkStopped}},
+	}
+	summary := Summarize(detail, time.Time{})
+	if !summary.SliceCompletionPending || !summary.UnresolvedReworkStop {
+		t.Fatalf("summary attention signals = completion:%t rework:%t", summary.SliceCompletionPending, summary.UnresolvedReworkStop)
 	}
 }
 

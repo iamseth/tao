@@ -78,6 +78,7 @@ _tao() {
     'status:Show runtime defaults and plan rollups'
     'mon:Monitor non-completed plans across repositories'
     'monitor:Monitor non-completed plans across repositories'
+    'ui:Open the cross-repository interactive plan dashboard'
     'insi:Show repository failure and telemetry insights'
     'insights:Show repository failure and telemetry insights'
     'c:Remove merged Tao branches and worktrees'
@@ -286,6 +287,9 @@ _tao() {
       ;;
     mon|moni|monit|monito|monitor)
       _arguments '--interval[interactive refresh interval]:duration:' '--once[render one snapshot and exit]' '--show-invalid[include invalid plans for diagnostics]'
+      ;;
+    ui)
+      _arguments '--completed-window[completed-plan lookback window (0 omits completed plans)]:duration:' '--interval[dashboard refresh interval (must be greater than zero)]:duration:'
       ;;
     insi|insig|insigh|insight|insights)
       _arguments '--all-repos[include plan history from all registered repositories]' '--digest[write compact deterministic Markdown]'

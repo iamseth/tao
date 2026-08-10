@@ -279,6 +279,7 @@ type RunCapabilities struct {
 	DisabledReason         string `json:"disabled_reason,omitempty"`
 	NeedsApproval          bool   `json:"needs_approval,omitempty"`
 	ApprovalSliceID        string `json:"approval_slice_id,omitempty"`
+	ApprovalReason         string `json:"approval_reason,omitempty"`
 	CanContinue            bool   `json:"can_continue"`
 	ContinueDisabledReason string `json:"continue_disabled_reason,omitempty"`
 	Complete               bool   `json:"complete"`

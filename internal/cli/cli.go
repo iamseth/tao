@@ -16,6 +16,7 @@ import (
 	"github.com/iamseth/tao/internal/planning"
 	"github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/taodata"
+	"github.com/iamseth/tao/internal/tui"
 	"github.com/iamseth/tao/internal/workspace"
 )
 
@@ -38,6 +39,8 @@ type App struct {
 	MonitorCollector         MonitorSnapshotCollector
 	MonitorTicker            func(time.Duration) MonitorTicker
 	MonitorIsTerminal        func(io.Writer) bool
+	UITerminal               tui.Terminal
+	UICommandLauncher        tui.CommandLauncher
 	SelfUpdater              SelfUpdater
 	// Now supplies the wall clock for timestamps recorded by commands. Tests
 	// inject a fixed clock; when nil it defaults to time.Now.

@@ -38,6 +38,7 @@ func TestCommandRegistryOrder(t *testing.T) {
 		{name: "validate", minPrefix: "v"},
 		{name: "status", minPrefix: "st"},
 		{name: "monitor", minPrefix: "mon"},
+		{name: "ui"},
 		{name: "insights", minPrefix: "insi"},
 		{name: "cleanup", minPrefix: "c"},
 		{name: "merge", minPrefix: "m"},

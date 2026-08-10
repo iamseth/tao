@@ -114,6 +114,10 @@ func (a App) monitor(ctx context.Context, args []string) error {
 }
 
 func (a App) monitorCollector(showInvalid bool) (MonitorSnapshotCollector, error) {
+	return a.newMonitorCollector(showInvalid, 0)
+}
+
+func (a App) newMonitorCollector(showInvalid bool, completedWindow time.Duration) (MonitorSnapshotCollector, error) {
 	if a.MonitorCollector != nil {
 		return a.MonitorCollector, nil
 	}
@@ -124,6 +128,7 @@ func (a App) monitorCollector(showInvalid bool) (MonitorSnapshotCollector, error
 	collector := monitor.NewCollector(inventory)
 	collector.Now = a.now
 	collector.ShowInvalid = showInvalid
+	collector.IncludeCompletedWithin = completedWindow
 	collector.NewPlanLister = func(entry taodata.RepoInventoryEntry) monitor.PlanLister {
 		return a.repository(entry.PlansDir)
 	}

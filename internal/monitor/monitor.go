@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runqueue"
 	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/taodata"
 )
@@ -36,6 +38,17 @@ type PlanListerFactory func(taodata.RepoInventoryEntry) PlanLister
 // RuntimeStatusReaderFactory creates an operational status source for one inventory entry.
 type RuntimeStatusReaderFactory func(taodata.RepoInventoryEntry) RuntimeStatusReader
 
+// QueueReader loads one repository's durable queue snapshot without mutating it.
+type QueueReader interface {
+	Load() (runqueue.QueueSnapshot, error)
+}
+
+// QueueReaderFactory creates a queue snapshot source for one inventory entry.
+type QueueReaderFactory func(taodata.RepoInventoryEntry) QueueReader
+
+// RunLockReader reads the operational ownership lock for one plan directory.
+type RunLockReader func(string) (plan.RunLock, error)
+
 // Liveness describes the presence and freshness of an operational run record.
 type Liveness string
 
@@ -53,6 +66,18 @@ const (
 	RowKindRepositoryWarning RowKind = "repository_warning"
 )
 
+// AttentionReason identifies one independently actionable plan condition.
+type AttentionReason string
+
+const (
+	AttentionBlocked                AttentionReason = "blocked"
+	AttentionChangesRequested       AttentionReason = "changes_requested"
+	AttentionApprovalRequired       AttentionReason = "approval_required"
+	AttentionSliceCompletionPending AttentionReason = "slice_completion_pending"
+	AttentionReworkStopped          AttentionReason = "rework_stopped"
+	AttentionRunCrashed             AttentionReason = "run_crashed"
+)
+
 // Row is one render-neutral monitor line. UpdatedAt is durable plan activity;
 // invocation fields are operational observations and never lifecycle evidence.
 type Row struct {
@@ -60,16 +85,20 @@ type Row struct {
 
 	RepositoryID   string
 	RepositoryName string
+	RepositoryRoot string
 	PlanID         string
 	PlanTitle      string
+	PlanDir        string
 	Status         string
 
-	Liveness           Liveness
-	Phase              runstatus.Phase
-	SliceID            string
-	SliceTitle         string
-	InvocationDuration time.Duration
-	HeartbeatAge       time.Duration
+	Liveness            Liveness
+	Phase               runstatus.Phase
+	SliceID             string
+	SliceTitle          string
+	InvocationDuration  time.Duration
+	HeartbeatAge        time.Duration
+	RunLockPresent      bool
+	RunLockProcessAlive bool
 
 	Left                   int
 	UpdatedAt              *time.Time
@@ -77,6 +106,13 @@ type Row struct {
 	OriginalTotalCount     int
 	ReworkCompletedCount   int
 	ReworkTotalCount       int
+
+	AttentionReasons []AttentionReason
+	ApprovalSliceID  string
+	ApprovalReason   string
+	QueueStatus      runqueue.QueueStatus
+	// QueuePosition is one-based among the latest pending and running entries.
+	QueuePosition int
 
 	Warnings []string
 }
@@ -89,11 +125,14 @@ type Snapshot struct {
 
 // Collector combines metadata inventory, plan summaries, and runtime records.
 type Collector struct {
-	Inventory       RepositoryInventory
-	NewPlanLister   PlanListerFactory
-	NewStatusReader RuntimeStatusReaderFactory
-	Now             func() time.Time
-	ShowInvalid     bool
+	Inventory              RepositoryInventory
+	NewPlanLister          PlanListerFactory
+	NewStatusReader        RuntimeStatusReaderFactory
+	NewQueueReader         QueueReaderFactory
+	ReadRunLock            RunLockReader
+	Now                    func() time.Time
+	ShowInvalid            bool
+	IncludeCompletedWithin time.Duration
 }
 
 // NewCollector returns a filesystem-backed collector without repository health probes.
@@ -106,7 +145,11 @@ func NewCollector(inventory RepositoryInventory) Collector {
 		NewStatusReader: func(entry taodata.RepoInventoryEntry) RuntimeStatusReader {
 			return runstatus.NewStore(entry.RuntimeStatusDir, nil)
 		},
-		Now: time.Now,
+		NewQueueReader: func(entry taodata.RepoInventoryEntry) QueueReader {
+			return runqueue.NewFileStore(filepath.Dir(entry.PlansDir))
+		},
+		ReadRunLock: plan.ReadRunLock,
+		Now:         time.Now,
 	}
 }
 
@@ -143,17 +186,20 @@ func (c Collector) Collect(ctx context.Context) (Snapshot, error) {
 			continue
 		}
 		reader := c.statusReader(entry)
+		queue := loadQueueOverlay(c.queueReader(entry))
 		for _, summary := range summaries {
 			if err := ctx.Err(); err != nil {
 				return Snapshot{}, err
 			}
-			if summary.Status == plan.StatusCompleted || (summary.Status == plan.StatusInvalid && !c.ShowInvalid) {
+			if !c.includeSummary(summary, now) || (summary.Status == plan.StatusInvalid && !c.ShowInvalid) {
 				continue
 			}
 			row := planRow(entry, summary)
 			if summary.Status != plan.StatusInvalid {
 				applyRuntimeStatus(&row, reader, entry.Repo.ID, now)
+				applyCrashedRunAttention(&row, c.runLockReader(), planDir(entry, summary))
 			}
+			applyQueueOverlay(&row, queue)
 			snapshot.Rows = append(snapshot.Rows, row)
 		}
 	}
@@ -183,6 +229,34 @@ func (c Collector) statusReader(entry taodata.RepoInventoryEntry) RuntimeStatusR
 	return runstatus.NewStore(entry.RuntimeStatusDir, nil)
 }
 
+func (c Collector) queueReader(entry taodata.RepoInventoryEntry) QueueReader {
+	if c.NewQueueReader != nil {
+		return c.NewQueueReader(entry)
+	}
+	return runqueue.NewFileStore(filepath.Dir(entry.PlansDir))
+}
+
+func (c Collector) runLockReader() RunLockReader {
+	if c.ReadRunLock != nil {
+		return c.ReadRunLock
+	}
+	return plan.ReadRunLock
+}
+
+func (c Collector) includeSummary(summary plan.PlanSummary, now time.Time) bool {
+	if summary.Status != plan.StatusCompleted {
+		return true
+	}
+	if c.IncludeCompletedWithin <= 0 {
+		return false
+	}
+	completedAt := summary.CompletedAt
+	if completedAt == nil {
+		completedAt = summary.LastActivityAt
+	}
+	return completedAt != nil && !completedAt.Before(now.Add(-c.IncludeCompletedWithin))
+}
+
 func repositoryWarningRow(entry taodata.RepoInventoryEntry, err error) Row {
 	name := strings.TrimSpace(entry.Repo.Name)
 	if name == "" {
@@ -204,8 +278,10 @@ func planRow(entry taodata.RepoInventoryEntry, summary plan.PlanSummary) Row {
 		Kind:                   RowKindPlan,
 		RepositoryID:           entry.Repo.ID,
 		RepositoryName:         entry.Repo.Name,
+		RepositoryRoot:         entry.Repo.Root,
 		PlanID:                 summary.ID,
 		PlanTitle:              summary.Title,
+		PlanDir:                planDir(entry, summary),
 		Status:                 summary.Status,
 		Liveness:               LivenessMissing,
 		SliceID:                summary.CurrentSliceID,
@@ -215,12 +291,35 @@ func planRow(entry taodata.RepoInventoryEntry, summary plan.PlanSummary) Row {
 		OriginalTotalCount:     summary.OriginalTotalCount,
 		ReworkCompletedCount:   summary.ReworkCompletedCount,
 		ReworkTotalCount:       summary.ReworkTotalCount,
+		ApprovalSliceID:        summary.Capabilities.ApprovalSliceID,
+		ApprovalReason:         summary.Capabilities.ApprovalReason,
 		Warnings:               warnings,
 	}
 	if summary.CurrentSlice != nil {
 		row.SliceTitle = summary.CurrentSlice.Title
 	}
+	row.AttentionReasons = attentionReasons(summary)
 	return row
+}
+
+func attentionReasons(summary plan.PlanSummary) []AttentionReason {
+	var reasons []AttentionReason
+	switch summary.Status {
+	case plan.StatusBlocked:
+		reasons = append(reasons, AttentionBlocked)
+	case plan.StatusChangesRequested:
+		reasons = append(reasons, AttentionChangesRequested)
+	}
+	if summary.Capabilities.NeedsApproval {
+		reasons = append(reasons, AttentionApprovalRequired)
+	}
+	if summary.SliceCompletionPending {
+		reasons = append(reasons, AttentionSliceCompletionPending)
+	}
+	if summary.UnresolvedReworkStop {
+		reasons = append(reasons, AttentionReworkStopped)
+	}
+	return reasons
 }
 
 func applyRuntimeStatus(row *Row, reader RuntimeStatusReader, repoID string, now time.Time) {
@@ -256,6 +355,69 @@ func applyRuntimeStatus(row *Row, reader RuntimeStatusReader, repoID string, now
 	if now.After(record.HeartbeatAt) {
 		row.HeartbeatAge = now.Sub(record.HeartbeatAt)
 	}
+}
+
+func applyCrashedRunAttention(row *Row, reader RunLockReader, planDir string) {
+	if row.Liveness == LivenessLive || reader == nil {
+		return
+	}
+	lock, err := reader(planDir)
+	if err != nil {
+		return
+	}
+	row.RunLockPresent = true
+	row.RunLockProcessAlive = lock.ProcessAlive
+	if !lock.ProcessAlive {
+		row.AttentionReasons = append(row.AttentionReasons, AttentionRunCrashed)
+	}
+}
+
+type queueOverlay struct {
+	status   runqueue.QueueStatus
+	position int
+}
+
+func loadQueueOverlay(reader QueueReader) map[string]queueOverlay {
+	if reader == nil {
+		return nil
+	}
+	snapshot, err := reader.Load()
+	if err != nil {
+		return nil
+	}
+
+	latest := make(map[string]int, len(snapshot.Entries))
+	for i, entry := range snapshot.Entries {
+		latest[entry.PlanID] = i
+	}
+	overlays := make(map[string]queueOverlay, len(latest))
+	position := 0
+	for i, entry := range snapshot.Entries {
+		if latest[entry.PlanID] != i {
+			continue
+		}
+		overlay := queueOverlay{status: entry.Status}
+		if entry.Status == runqueue.QueueStatusPending || entry.Status == runqueue.QueueStatusRunning {
+			position++
+			overlay.position = position
+		}
+		overlays[entry.PlanID] = overlay
+	}
+	return overlays
+}
+
+func applyQueueOverlay(row *Row, overlays map[string]queueOverlay) {
+	if overlay, ok := overlays[row.PlanID]; ok {
+		row.QueueStatus = overlay.status
+		row.QueuePosition = overlay.position
+	}
+}
+
+func planDir(entry taodata.RepoInventoryEntry, summary plan.PlanSummary) string {
+	if strings.TrimSpace(summary.Dir) != "" {
+		return summary.Dir
+	}
+	return filepath.Join(entry.PlansDir, summary.ID)
 }
 
 func cloneTime(value *time.Time) *time.Time {

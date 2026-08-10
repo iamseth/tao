@@ -89,6 +89,67 @@ heartbeat age; it can mean an interrupted, paused, overloaded, or merely delayed
 process and does not mean the plan failed. Lifecycle STATUS and UPDATED durable
 activity remain the sources for semantic state.
 
+## Interactive dashboard: `tao ui`
+
+Use `tao ui` for a keyboard-driven version of the cross-repository monitor when
+you want to observe plans and launch routine follow-up without leaving the
+terminal. It requires a terminal; use `tao monitor --once` for redirected or
+pasteable output. The dashboard groups nonempty sections as follows:
+
+- **NEEDS ATTENTION** contains actionable conditions such as blocked or
+  changes-requested plans, approval gates, pending slice completion, stopped
+  rework, and runs whose lock evidence suggests the process exited.
+- **RUNNING** contains plans with live run records and stale records shown as
+  `stalled? (<age> old)` when there is no dead-process lock evidence.
+- **QUEUED** contains plans represented in the repository's durable queue that
+  do not belong in either section above.
+- **PLANNED / IN REVIEW** contains the remaining active plans, including plans
+  waiting for execution or review rather than a live process.
+- **COMPLETED** contains the remaining plans completed within the configured
+  lookback window. It is visible initially and can be hidden or shown with `c`.
+
+The question marks on `stalled?` and `crashed?` are deliberate. `stalled?` means
+the last run heartbeat became stale and Tao found no dead-process lock evidence.
+`crashed?` means Tao found run-lock evidence whose recorded process is no longer
+alive, whether the runtime record is stale or absent. Either observation may be
+incomplete or delayed; heartbeats and locks are operational liveness hints, not
+lifecycle evidence, review results, or verdicts about semantic progress.
+
+Keys on the table page are:
+
+- `j`/`k` or the arrow keys move the selection.
+- `r` starts the selected plan in a detached `tao run` process. A blocked plan
+  is resumed with `--continue`; a plan with a fresh live heartbeat is left alone.
+- `q` synchronously adds the selected plan to its repository queue, then starts
+  a detached queue drain when the current snapshot does not appear to have one.
+- `a` shows the selected approval-gated slice and reason, then requires `y` or
+  `n` before starting detached approval. `Esc` also declines the prompt.
+- `c` toggles the completed rows already included by `--completed-window`.
+- `Enter` opens the selected plan's slice list and live `agent-run.log` tail;
+  `Esc` returns to the table.
+- `Esc` on the table or `Ctrl-C` quits.
+
+Run, drain, and approval subprocesses are launched in new sessions with their
+streams detached, so they survive TUI exit. Run and queue paths still use Tao's
+ordinary per-plan `.run.lock` safeguards. The `q` drain check is only an ensure
+heuristic: it looks for a running queue entry in the same repository with either
+a fresh heartbeat or a live run lock. Queue state has no durable drain owner,
+and the displayed snapshot can race another dashboard or process, so two
+callers may both try to start a drain. Per-plan run locking, not this heuristic,
+is the authoritative double-start guard.
+
+`--interval DURATION` sets the refresh period (default `2s`) and must be greater
+than zero. `--completed-window DURATION` sets the completed-plan lookback
+(default `168h`); `0` omits completed plans entirely, so `c` cannot reveal them.
+For example:
+
+```sh
+tao ui
+tao ui --interval 5s
+tao ui --completed-window 24h
+tao ui --completed-window 0
+```
+
 ---
 
 ## Planning commands

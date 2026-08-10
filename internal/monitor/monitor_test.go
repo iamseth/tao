@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runqueue"
 	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/taodata"
 )
@@ -37,6 +38,17 @@ type fakeStatusReader struct {
 	records map[string]runstatus.Record
 	errors  map[string]error
 	reads   []string
+}
+
+type fakeQueueReader struct {
+	snapshot runqueue.QueueSnapshot
+	err      error
+	loads    int
+}
+
+func (f *fakeQueueReader) Load() (runqueue.QueueSnapshot, error) {
+	f.loads++
+	return f.snapshot, f.err
 }
 
 func (f *fakeStatusReader) Read(planID string) (runstatus.Record, error) {
@@ -227,6 +239,214 @@ func TestCollectorPreservesRuntimeWarningsAndDurableSliceForMissingRecord(t *tes
 	if future.Liveness != LivenessLive || future.InvocationDuration != 0 {
 		t.Fatalf("future-start runtime row = %+v", future)
 	}
+}
+
+func TestPlanRowDerivesAttentionReasons(t *testing.T) {
+	entry := taodata.RepoInventoryEntry{Repo: taodata.Repo{ID: "repo", Name: "repo"}}
+	tests := []struct {
+		name    string
+		summary plan.PlanSummary
+		want    AttentionReason
+	}{
+		{name: "blocked", summary: plan.PlanSummary{Status: plan.StatusBlocked}, want: AttentionBlocked},
+		{name: "changes requested", summary: plan.PlanSummary{Status: plan.StatusChangesRequested}, want: AttentionChangesRequested},
+		{name: "approval required", summary: plan.PlanSummary{Capabilities: plan.RunCapabilities{NeedsApproval: true}}, want: AttentionApprovalRequired},
+		{name: "slice completion pending", summary: plan.PlanSummary{SliceCompletionPending: true}, want: AttentionSliceCompletionPending},
+		{name: "rework stopped", summary: plan.PlanSummary{UnresolvedReworkStop: true}, want: AttentionReworkStopped},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			row := planRow(entry, test.summary)
+			if !slices.Equal(row.AttentionReasons, []AttentionReason{test.want}) {
+				t.Fatalf("attention reasons = %v, want %v", row.AttentionReasons, test.want)
+			}
+		})
+	}
+}
+
+func TestPlanRowCarriesActionMetadataFromInventoryAndCapabilities(t *testing.T) {
+	entry := taodata.RepoInventoryEntry{
+		Repo:     taodata.Repo{ID: "repo", Name: "repo", Root: "/repos/repo"},
+		PlansDir: "/data/repo/plans",
+	}
+	row := planRow(entry, plan.PlanSummary{
+		ID:     "plan-a",
+		Status: plan.StatusPlanned,
+		Capabilities: plan.RunCapabilities{
+			NeedsApproval:   true,
+			ApprovalSliceID: "003-gate",
+			ApprovalReason:  "owner sign-off",
+		},
+	})
+	if row.RepositoryRoot != "/repos/repo" || row.PlanDir != "/data/repo/plans/plan-a" {
+		t.Fatalf("action paths = repo %q plan %q", row.RepositoryRoot, row.PlanDir)
+	}
+	if row.ApprovalSliceID != "003-gate" || row.ApprovalReason != "owner sign-off" {
+		t.Fatalf("approval metadata = %q %q", row.ApprovalSliceID, row.ApprovalReason)
+	}
+}
+
+func TestCollectorCompletedWindowIsOptInWithActivityFallback(t *testing.T) {
+	now := time.Date(2026, 8, 10, 15, 0, 0, 0, time.UTC)
+	recent := now.Add(-30 * time.Minute)
+	old := now.Add(-2 * time.Hour)
+	fallback := now.Add(-45 * time.Minute)
+	entry := taodata.RepoInventoryEntry{Repo: taodata.Repo{ID: "repo", Name: "repo"}, PlansDir: "/data/repo/plans"}
+	lister := &fakePlanLister{summaries: []plan.PlanSummary{
+		{ID: "active", Status: plan.StatusPlanned},
+		{ID: "recent", Status: plan.StatusCompleted, CompletedAt: &recent, LastActivityAt: &old},
+		{ID: "fallback", Status: plan.StatusCompleted, LastActivityAt: &fallback},
+		{ID: "old", Status: plan.StatusCompleted, CompletedAt: &old},
+		{ID: "unknown", Status: plan.StatusCompleted},
+	}}
+	reader := &fakeStatusReader{}
+	queue := &fakeQueueReader{}
+	collector := Collector{
+		Inventory:       fakeInventory{entries: []taodata.RepoInventoryEntry{entry}},
+		NewPlanLister:   func(taodata.RepoInventoryEntry) PlanLister { return lister },
+		NewStatusReader: func(taodata.RepoInventoryEntry) RuntimeStatusReader { return reader },
+		NewQueueReader:  func(taodata.RepoInventoryEntry) QueueReader { return queue },
+		ReadRunLock:     func(string) (plan.RunLock, error) { return plan.RunLock{}, os.ErrNotExist },
+		Now:             func() time.Time { return now },
+	}
+
+	defaultSnapshot, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := planIDs(defaultSnapshot.Rows); !slices.Equal(got, []string{"active"}) {
+		t.Fatalf("default plan ids = %v, want only active", got)
+	}
+
+	collector.IncludeCompletedWithin = time.Hour
+	windowSnapshot, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := planIDs(windowSnapshot.Rows); !slices.Equal(got, []string{"fallback", "recent", "active"}) {
+		t.Fatalf("window plan ids = %v, want recent completed plans plus active", got)
+	}
+}
+
+func TestCollectorMarksDeadLockedStaleOrMissingRunsCrashed(t *testing.T) {
+	now := time.Date(2026, 8, 10, 16, 0, 0, 0, time.UTC)
+	entry := taodata.RepoInventoryEntry{Repo: taodata.Repo{ID: "repo", Name: "repo"}, PlansDir: "/data/repo/plans"}
+	lister := &fakePlanLister{summaries: []plan.PlanSummary{
+		{ID: "missing", Status: plan.StatusInProgress},
+		{ID: "stale", Status: plan.StatusInProgress},
+		{ID: "alive", Status: plan.StatusInProgress},
+		{ID: "no-lock", Status: plan.StatusInProgress},
+		{ID: "live", Status: plan.StatusInProgress},
+	}}
+	status := &fakeStatusReader{records: map[string]runstatus.Record{
+		"stale":   runtimeRecord("repo", "stale", now.Add(-time.Minute), now.Add(-runstatus.StaleThreshold), "run", nil),
+		"alive":   runtimeRecord("repo", "alive", now.Add(-time.Minute), now.Add(-runstatus.StaleThreshold), "run", nil),
+		"no-lock": runtimeRecord("repo", "no-lock", now.Add(-time.Minute), now.Add(-runstatus.StaleThreshold), "run", nil),
+		"live":    runtimeRecord("repo", "live", now.Add(-time.Minute), now, "run", nil),
+	}}
+	var lockReads []string
+	collector := Collector{
+		Inventory:       fakeInventory{entries: []taodata.RepoInventoryEntry{entry}},
+		NewPlanLister:   func(taodata.RepoInventoryEntry) PlanLister { return lister },
+		NewStatusReader: func(taodata.RepoInventoryEntry) RuntimeStatusReader { return status },
+		NewQueueReader:  func(taodata.RepoInventoryEntry) QueueReader { return &fakeQueueReader{} },
+		ReadRunLock: func(planDir string) (plan.RunLock, error) {
+			lockReads = append(lockReads, planDir)
+			if planDir == "/data/repo/plans/no-lock" {
+				return plan.RunLock{}, os.ErrNotExist
+			}
+			return plan.RunLock{PID: 999999, ProcessAlive: planDir == "/data/repo/plans/alive"}, nil
+		},
+		Now: func() time.Time { return now },
+	}
+
+	snapshot, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	byPlan := rowsByPlan(snapshot.Rows)
+	for _, id := range []string{"missing", "stale"} {
+		if !slices.Contains(byPlan[id].AttentionReasons, AttentionRunCrashed) {
+			t.Errorf("%s attention reasons = %v, want run_crashed", id, byPlan[id].AttentionReasons)
+		}
+		if !byPlan[id].RunLockPresent || byPlan[id].RunLockProcessAlive {
+			t.Errorf("%s run lock observation = present %t alive %t, want present dead", id, byPlan[id].RunLockPresent, byPlan[id].RunLockProcessAlive)
+		}
+	}
+	if alive := byPlan["alive"]; !alive.RunLockPresent || !alive.RunLockProcessAlive {
+		t.Errorf("alive run lock observation = present %t alive %t, want present live", alive.RunLockPresent, alive.RunLockProcessAlive)
+	}
+	for _, id := range []string{"alive", "no-lock", "live"} {
+		if slices.Contains(byPlan[id].AttentionReasons, AttentionRunCrashed) {
+			t.Fatalf("%s plan marked crashed: %+v", id, byPlan[id])
+		}
+	}
+	if noLock := byPlan["no-lock"]; noLock.RunLockPresent || noLock.RunLockProcessAlive {
+		t.Errorf("missing run lock observation = present %t alive %t, want both false", noLock.RunLockPresent, noLock.RunLockProcessAlive)
+	}
+	if want := []string{"/data/repo/plans/missing", "/data/repo/plans/stale", "/data/repo/plans/alive", "/data/repo/plans/no-lock"}; !slices.Equal(lockReads, want) {
+		t.Fatalf("run lock reads = %v, want %v", lockReads, want)
+	}
+}
+
+func TestCollectorOverlaysLatestQueueStatusAndActivePosition(t *testing.T) {
+	now := time.Date(2026, 8, 10, 17, 0, 0, 0, time.UTC)
+	entry := taodata.RepoInventoryEntry{Repo: taodata.Repo{ID: "repo", Name: "repo"}, PlansDir: "/data/repo/plans"}
+	lister := &fakePlanLister{summaries: []plan.PlanSummary{
+		{ID: "plan-a", Status: plan.StatusPlanned},
+		{ID: "plan-b", Status: plan.StatusInProgress},
+		{ID: "plan-c", Status: plan.StatusBlocked},
+	}}
+	queue := &fakeQueueReader{snapshot: runqueue.QueueSnapshot{Entries: []runqueue.QueueEntry{
+		{PlanID: "plan-a", Status: runqueue.QueueStatusSucceeded, QueuedAt: now.Add(-time.Hour)},
+		{PlanID: "plan-b", Status: runqueue.QueueStatusRunning, QueuedAt: now.Add(-2 * time.Minute)},
+		{PlanID: "plan-a", Status: runqueue.QueueStatusPending, QueuedAt: now.Add(-time.Minute)},
+		{PlanID: "plan-c", Status: runqueue.QueueStatusFailed, QueuedAt: now},
+	}}}
+	collector := Collector{
+		Inventory:       fakeInventory{entries: []taodata.RepoInventoryEntry{entry}},
+		NewPlanLister:   func(taodata.RepoInventoryEntry) PlanLister { return lister },
+		NewStatusReader: func(taodata.RepoInventoryEntry) RuntimeStatusReader { return &fakeStatusReader{} },
+		NewQueueReader:  func(taodata.RepoInventoryEntry) QueueReader { return queue },
+		ReadRunLock:     func(string) (plan.RunLock, error) { return plan.RunLock{}, os.ErrNotExist },
+		Now:             func() time.Time { return now },
+	}
+
+	snapshot, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	byPlan := rowsByPlan(snapshot.Rows)
+	if got := byPlan["plan-b"]; got.QueueStatus != runqueue.QueueStatusRunning || got.QueuePosition != 1 {
+		t.Fatalf("plan-b queue overlay = %+v", got)
+	}
+	if got := byPlan["plan-a"]; got.QueueStatus != runqueue.QueueStatusPending || got.QueuePosition != 2 {
+		t.Fatalf("plan-a queue overlay = %+v", got)
+	}
+	if got := byPlan["plan-c"]; got.QueueStatus != runqueue.QueueStatusFailed || got.QueuePosition != 0 {
+		t.Fatalf("plan-c queue overlay = %+v", got)
+	}
+	if queue.loads != 1 {
+		t.Fatalf("queue loads = %d, want one per repository", queue.loads)
+	}
+}
+
+func planIDs(rows []Row) []string {
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if row.PlanID != "" {
+			ids = append(ids, row.PlanID)
+		}
+	}
+	return ids
+}
+
+func rowsByPlan(rows []Row) map[string]Row {
+	result := make(map[string]Row, len(rows))
+	for _, row := range rows {
+		result[row.PlanID] = row
+	}
+	return result
 }
 
 func runtimeRecord(repoID, planID string, startedAt, heartbeatAt time.Time, phase runstatus.Phase, detail *runstatus.SliceDetail) runstatus.Record {
