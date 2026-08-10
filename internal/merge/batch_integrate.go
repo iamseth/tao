@@ -338,7 +338,8 @@ func (b BatchIntegrator) prepareCandidateMessages(ctx context.Context, git GitCl
 			message = expected
 		} else if message == "" {
 			var err error
-			message, err = b.Service.generateSingleMergeMessage(ctx, git, commitpkg.MergeProposalContext{
+			proposalCtx := withBatchProposalSessionIdentity(ctx, state.ID, 1, candidate.PlanID)
+			message, err = b.Service.generateSingleMergeMessage(proposalCtx, git, commitpkg.MergeProposalContext{
 				RepoRoot: git.Root(), PlanID: candidate.PlanID, DefaultBranch: state.DefaultBranch,
 				DefaultParent: state.DefaultStartSHA, SourceBranch: candidate.Branch, SourceHead: candidate.SourceTip,
 			})

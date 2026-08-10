@@ -13,122 +13,9 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/agent"
-	commitcontract "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 )
-
-func TestBatchAgentSessionHonorsConfiguredProviderPermissionsAndRoot(t *testing.T) {
-	t.Setenv("TAO_AGENT", "claude")
-	t.Setenv("TAO_DANGEROUSLY_SKIP_PERMISSIONS", "true")
-	t.Setenv("TAO_SESSION_TIMEOUT", "30s")
-	var got fakeClaudeStart
-	var metricsCalled bool
-	var progress bytes.Buffer
-	session, err := NewBatchAgentSession(BatchAgentSessionConfig{
-		ProcessStarter: fakeProcessStarter(t, &got,
-			`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"repairing"}]}}`,
-			`{"type":"result","result":"resolved"}`),
-		Log: &progress, Metrics: func(_ agent.Metrics, _ string) { metricsCalled = true },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	text, err := session.Resolve(context.Background(), "/integration", "repair")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if text != "repairing" || got.name != "claude" || got.cwd != "/integration" || got.prompt != "repair" {
-		t.Fatalf("unexpected batch session: text=%q start=%#v", text, got)
-	}
-	if !strings.Contains(strings.Join(got.args, " "), "--permission-mode bypassPermissions") {
-		t.Fatalf("batch permission was not propagated: %v", got.args)
-	}
-	if !metricsCalled {
-		t.Fatal("best-effort metrics callback was not invoked")
-	}
-	if strings.Contains(progress.String(), "@tao-agent-log-v1") || !strings.Contains(progress.String(), "assistant: repairing") {
-		t.Fatalf("merge-batch progress was not human-readable: %q", progress.String())
-	}
-}
-
-func TestBatchAgentSessionRendersMetricsWarningAsReadableProgress(t *testing.T) {
-	t.Setenv("TAO_AGENT", "claude")
-	var progress bytes.Buffer
-	var got fakeClaudeStart
-	session, err := NewBatchAgentSession(BatchAgentSessionConfig{
-		ProcessStarter: fakeProcessStarter(t, &got, `{"type":"result","result":"resolved"}`),
-		Log:            &progress,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := session.Resolve(context.Background(), "/integration", "repair"); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(progress.String(), "@tao-agent-log-v1") {
-		t.Fatalf("merge-batch metrics warning contained a framed record: %q", progress.String())
-	}
-	if !strings.Contains(progress.String(), "tao telemetry warning: claude metrics absent from stream output") {
-		t.Fatalf("merge-batch metrics warning was not human-readable: %q", progress.String())
-	}
-}
-
-func TestMergeProposalGeneratorDefersRuntimeConfigurationUntilGeneration(t *testing.T) {
-	t.Setenv("TAO_AGENT", "invalid")
-	starts := 0
-	generator, err := NewMergeProposalGenerator(MergeProposalGeneratorConfig{
-		ProcessStarter: func(context.Context, string, string, []string) (Process, error) {
-			starts++
-			return nil, errors.New("unexpected process start")
-		},
-	})
-	if err != nil {
-		t.Fatalf("constructor configured unused runtime: %v", err)
-	}
-	_, err = generator.GenerateMergeProposal(context.Background(), commitMergeProposalContext())
-	if err == nil || !strings.Contains(err.Error(), "TAO_AGENT") {
-		t.Fatalf("generation error = %v, want deferred runtime configuration error", err)
-	}
-	if starts != 0 {
-		t.Fatalf("invalid runtime started %d processes", starts)
-	}
-}
-
-func TestMergeProposalGeneratorUsesOneConfiguredNeutralSession(t *testing.T) {
-	t.Setenv("TAO_AGENT", "claude")
-	t.Setenv("TAO_DANGEROUSLY_SKIP_PERMISSIONS", "true")
-	t.Setenv("TAO_SESSION_TIMEOUT", "30s")
-	var got fakeClaudeStart
-	metricsCalls := 0
-	generator, err := NewMergeProposalGenerator(MergeProposalGeneratorConfig{
-		ProcessStarter: fakeProcessStarter(t, &got, `{"type":"result","result":"{\"type\":\"feat\",\"scope\":\"merge\",\"summary\":\"generate legacy merge messages\",\"what\":\"Generate one exact proposal.\",\"why\":\"Keep legacy reviews mergeable.\"}"}`),
-		Metrics:        func(_ agent.Metrics, _ string) { metricsCalls++ },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	proposal, err := generator.GenerateMergeProposal(context.Background(), commitMergeProposalContext())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if proposal.Scope != "merge" || got.cwd != "/repo" || metricsCalls != 1 {
-		t.Fatalf("proposal/session/metrics = %#v, %#v, %d", proposal, got, metricsCalls)
-	}
-	if !strings.Contains(got.prompt, "head456") || !strings.Contains(got.prompt, "diff --git") {
-		t.Fatalf("proposal prompt lacks exact context: %s", got.prompt)
-	}
-	if !strings.Contains(strings.Join(got.args, " "), "--permission-mode bypassPermissions") {
-		t.Fatalf("proposal permission was not propagated: %v", got.args)
-	}
-}
-
-func commitMergeProposalContext() commitcontract.MergeProposalContext {
-	return commitcontract.MergeProposalContext{
-		RepoRoot: "/repo", PlanID: "plan-a", DefaultBranch: "main", DefaultParent: "parent123",
-		MergeBase: "base123", SourceBranch: "tao/plan-a", SourceHead: "head456", Diff: "diff --git a/a.go b/a.go\n+change\n",
-	}
-}
 
 func TestRunSliceWithAgentSessionCarriesInterruptedResumePrompt(t *testing.T) {
 	executor := &recordingAgentSessionExecutor{}
@@ -146,6 +33,24 @@ func TestRunSliceWithAgentSessionCarriesInterruptedResumePrompt(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("resume session prompt missing %q:\n%s", want, prompt)
 		}
+	}
+}
+
+func TestRunAgentSessionInvokesProviderExactlyOnce(t *testing.T) {
+	calls := 0
+	runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
+		calls++
+		return agent.SessionResult{Output: "done"}, nil
+	})
+	runner, planDir, repoRoot := sessionEventTestRunner(t, runtime, nil, io.Discard, time.Now())
+
+	if _, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{
+		PlanDir: planDir, RepoRoot: repoRoot, LogAction: "running 001-a",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", calls)
 	}
 }
 
@@ -508,13 +413,14 @@ func TestRunAgentSessionStateReadErrorSkipsSessionTimeoutEvent(t *testing.T) {
 	})
 	appendCalls := 0
 	planDir := t.TempDir()
-	runner := agentSessionRunner{
-		runtime:       runtime,
-		agentLabel:    "test",
+	runner := newAgentSessionRunner(agentSessionRunnerConfig{
+		descriptor: agent.Descriptor{
+			Label: "test", NewRuntime: func(agent.RuntimeDeps) agent.Runtime { return runtime },
+		},
 		logAppender:   plan.NewFileRepository(""),
 		eventAppender: eventAppenderFunc(func(string, plan.Event) error { appendCalls++; return nil }),
-		nowFn:         time.Now,
-	}
+		now:           time.Now,
+	})
 
 	_, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{PlanDir: planDir, LogAction: "running"})
 	if !errors.Is(err, timeoutErr) {
@@ -529,15 +435,16 @@ func sessionEventTestRunner(t *testing.T, runtime agent.Runtime, appender plan.E
 	t.Helper()
 	repoRoot := t.TempDir()
 	detail := runPathSessionDetail(t, repoRoot, plan.StatusPlanned, []string{"001-a"}, nil, plan.StatusPending)
-	return agentSessionRunner{
-		runtime:          runtime,
-		agentLabel:       "test",
-		metricsMessage:   "captured test metrics",
+	return newAgentSessionRunner(agentSessionRunnerConfig{
+		descriptor: agent.Descriptor{
+			Label: "test", MetricsMessage: "captured test metrics",
+			NewRuntime: func(agent.RuntimeDeps) agent.Runtime { return runtime },
+		},
 		logAppender:      plan.NewFileRepository(""),
 		eventAppender:    appender,
 		sessionLogWriter: logWriter,
-		nowFn:            func() time.Time { return timestamp },
-	}, detail.Dir, repoRoot
+		now:              func() time.Time { return timestamp },
+	}), detail.Dir, repoRoot
 }
 
 func runPathSessionDetail(t *testing.T, repoRoot string, status string, pending []string, completed []string, sliceStatus string) *plan.PlanDetail {

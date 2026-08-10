@@ -19,8 +19,9 @@ import (
 
 type batchReviewAgentFunc func(context.Context, string, string) (string, error)
 
-func (f batchReviewAgentFunc) Resolve(ctx context.Context, root, prompt string) (string, error) {
-	return f(ctx, root, prompt)
+func (f batchReviewAgentFunc) Resolve(ctx context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+	output, err := f(ctx, request.IntegrationRoot, request.Prompt)
+	return BatchAgentSessionResult{Output: output}, err
 }
 
 type batchReviewTestStore struct {
@@ -45,11 +46,14 @@ func TestBatchReviewApprovePersistsExactEvidenceAndLeavesDefaultAndSourcesAlone(
 	}
 	state.Candidates[0].PlanDir = filepath.Dir(sourceReview)
 	store := &batchReviewTestStore{dir: t.TempDir()}
-	agent := batchReviewAgentFunc(func(_ context.Context, _, prompt string) (string, error) {
-		if !strings.Contains(prompt, state.DefaultStartSHA) || !strings.Contains(prompt, state.IntegrationHead) || !strings.Contains(prompt, state.Candidates[0].SourceTip) {
-			t.Fatalf("aggregate packet omitted exact evidence:\n%s", prompt)
+	agent := batchSessionAgentFunc(func(_ context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+		if request.BatchID != state.ID || request.Operation != BatchAgentOperationAggregateReview || request.Attempt != 1 || request.CandidatePlanID != "" || request.IntegrationRoot != root {
+			t.Fatalf("unexpected aggregate review attribution: %#v", request)
 		}
-		return reviewJSON("approve", "green", ""), nil
+		if !strings.Contains(request.Prompt, state.DefaultStartSHA) || !strings.Contains(request.Prompt, state.IntegrationHead) || !strings.Contains(request.Prompt, state.Candidates[0].SourceTip) {
+			t.Fatalf("aggregate packet omitted exact evidence:\n%s", request.Prompt)
+		}
+		return BatchAgentSessionResult{Output: reviewJSON("approve", "green", "")}, nil
 	})
 	got, err := (BatchAggregateReviewer{Store: store, Service: NewService(fixture.repoRoot, nil), Agent: agent}).Review(context.Background(), state, root, BatchReviewOptions{VerifyCommand: "true"})
 	if err != nil {
@@ -62,6 +66,36 @@ func TestBatchReviewApprovePersistsExactEvidenceAndLeavesDefaultAndSourcesAlone(
 		t.Fatalf("source review mutated: %q %v", data, err)
 	}
 	assertRef(t, fixture.repoRoot, fixture.defaultBranch, state.DefaultStartSHA)
+}
+
+func TestBatchReviewAttributesReviewAndReworkAttemptsFromDurableCounters(t *testing.T) {
+	fixture, state, root := batchReviewFixture(t)
+	var requests []BatchAgentSessionRequest
+	agent := batchSessionAgentFunc(func(_ context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+		requests = append(requests, request)
+		switch len(requests) {
+		case 1:
+			return BatchAgentSessionResult{Output: reviewJSON("changes_requested", "fix aggregate", "finding")}, nil
+		case 2:
+			return BatchAgentSessionResult{Output: batchResolutionJSON("fixed aggregate")}, os.WriteFile(filepath.Join(request.IntegrationRoot, "attributed-rework.txt"), []byte("fixed\n"), 0o600)
+		default:
+			return BatchAgentSessionResult{Output: reviewJSON("approve", "green", "")}, nil
+		}
+	})
+	got, err := (BatchAggregateReviewer{Store: &batchReviewTestStore{dir: t.TempDir()}, Service: NewService(fixture.repoRoot, nil), Agent: agent}).Review(context.Background(), state, root, BatchReviewOptions{VerifyCommand: "true", MaxAttempts: 1})
+	if err != nil || got.State.Status != BatchStatusReadyToLand {
+		t.Fatalf("attributed review failed: state=%s err=%v", got.State.Status, err)
+	}
+	wantOperations := []BatchAgentOperation{BatchAgentOperationAggregateReview, BatchAgentOperationAggregateRework, BatchAgentOperationAggregateReview}
+	wantAttempts := []int{1, 1, 2}
+	if len(requests) != len(wantOperations) {
+		t.Fatalf("requests = %#v", requests)
+	}
+	for i, request := range requests {
+		if request.BatchID != state.ID || request.Operation != wantOperations[i] || request.Attempt != wantAttempts[i] || request.IntegrationRoot != root || request.CandidatePlanID != "" {
+			t.Fatalf("request %d attribution = %#v", i, request)
+		}
+	}
 }
 
 func TestBatchReviewRejectsCandidateSourceRefChangesByEveryAgentSession(t *testing.T) {
@@ -1352,9 +1386,17 @@ func TestBatchReviewVerificationFailureAfterReworkAndReviewTimeout(t *testing.T)
 	t.Run("timeout", func(t *testing.T) {
 		fixture, state, root := batchReviewFixture(t)
 		store := &batchReviewTestStore{dir: t.TempDir()}
-		got, err := (BatchAggregateReviewer{Store: store, Service: NewService(fixture.repoRoot, nil), Agent: batchReviewAgentFunc(func(context.Context, string, string) (string, error) { return "", context.DeadlineExceeded })}).Review(context.Background(), state, root, BatchReviewOptions{VerifyCommand: "true"})
-		if err == nil || got.State.Status != BatchStatusBlocked || got.State.Review.Status != "error" {
-			t.Fatalf("expected timeout stop: %+v %v", got.State, err)
+		calls := 0
+		agent := batchSessionAgentFunc(func(_ context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+			calls++
+			if request.Operation != BatchAgentOperationAggregateReview || request.Attempt != 1 || request.BatchID != state.ID {
+				t.Fatalf("unexpected timeout attribution: %#v", request)
+			}
+			return BatchAgentSessionResult{}, context.DeadlineExceeded
+		})
+		got, err := (BatchAggregateReviewer{Store: store, Service: NewService(fixture.repoRoot, nil), Agent: agent}).Review(context.Background(), state, root, BatchReviewOptions{VerifyCommand: "true", MaxAttempts: 3})
+		if err == nil || got.State.Status != BatchStatusBlocked || got.State.Review.Status != "error" || calls != 1 {
+			t.Fatalf("expected one-call timeout stop: calls=%d state=%+v err=%v", calls, got.State, err)
 		}
 	})
 }

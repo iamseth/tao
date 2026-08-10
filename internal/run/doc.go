@@ -12,9 +12,9 @@
 // transitions.
 //
 // Agent dispatch is registry-driven: instead of switching on agent kind, run
-// resolves an agent.Descriptor via agent.Lookup and drives every runtime through
-// the neutral agent.Runtime contract on the shared session-running scaffold
-// (agentSessionRunner). Per-kind knowledge such as the telemetry label lives on
-// the Descriptor, and run maps the neutral agent.Metrics onto plan.AgentMetrics.
-// Low-level agent protocol and process mechanics live under internal/agent.
+// resolves an agent.Descriptor via agent.Lookup and delegates each bounded
+// provider call to internal/agentsession. Run retains plan log framing, event
+// shaping, and slice-only budget enforcement; per-kind policy lives on the
+// descriptor. Low-level agent protocol and process mechanics live under
+// internal/agent.
 package run

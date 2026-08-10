@@ -11,7 +11,6 @@ import (
 	"github.com/iamseth/tao/internal/commandrunner"
 	mergepkg "github.com/iamseth/tao/internal/merge"
 	"github.com/iamseth/tao/internal/plan"
-	runpkg "github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/taodata"
 	"github.com/iamseth/tao/internal/workspace"
 )
@@ -175,12 +174,12 @@ func (a App) newMergeBatchRunner(ctx context.Context, repository mergepkg.BatchP
 	service := mergepkg.NewService(current.Root, runner)
 	service.Runner = runner
 	store := mergepkg.NewBatchStore(batchesDir, registry.ActiveMergeBatchPath(current))
-	agentConfig := runpkg.BatchAgentSessionConfig{ProcessStarter: a.ProcessStarter, Log: a.Out, ControlRoot: current.Root, CommandRunner: runner}
-	session, err := runpkg.NewBatchAgentSession(agentConfig)
+	agentConfig := newMergeBatchAgentConfig(a, current.Root, runner, store)
+	session, err := mergepkg.NewBatchAgentSession(agentConfig)
 	if err != nil {
 		return nil, fmt.Errorf("configure merge-batch agent: %w", err)
 	}
-	generator, err := runpkg.NewMergeProposalGenerator(agentConfig)
+	generator, err := mergepkg.NewMergeProposalGenerator(agentConfig)
 	if err != nil {
 		return nil, fmt.Errorf("configure exceptional merge-batch proposal generator: %w", err)
 	}
@@ -197,6 +196,13 @@ func (a App) newMergeBatchRunner(ctx context.Context, repository mergepkg.BatchP
 		Settler:    mergepkg.BatchSettler{Store: store, Service: service, Repository: repository, Workspace: workspaceOwner, Now: a.Now},
 		Now:        a.Now,
 	}), nil
+}
+
+func newMergeBatchAgentConfig(a App, controlRoot string, runner commandrunner.Runner, store *mergepkg.BatchStore) mergepkg.BatchAgentSessionConfig {
+	return mergepkg.BatchAgentSessionConfig{
+		ProcessStarter: a.ProcessStarter, Log: a.Out, ControlRoot: controlRoot, CommandRunner: runner,
+		EventAppender: store, Now: a.Now,
+	}
 }
 
 func renderMergeBatchResult(out io.Writer, result mergeBatchResult) error {
@@ -348,7 +354,7 @@ func (a App) newMergeServiceRunner(detail *plan.PlanDetail) (mergeServiceRunner,
 			_ = writef(a.Out, format+"\n", args...)
 		}
 	}
-	generator, err := runpkg.NewMergeProposalGenerator(runpkg.MergeProposalGeneratorConfig{
+	generator, err := mergepkg.NewMergeProposalGenerator(mergepkg.MergeProposalGeneratorConfig{
 		ProcessStarter: a.ProcessStarter, Log: a.Out, ControlRoot: repoRoot, CommandRunner: runner,
 	})
 	if err != nil {

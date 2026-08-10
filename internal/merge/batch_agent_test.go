@@ -16,10 +16,17 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 )
 
+type batchSessionAgentFunc func(context.Context, BatchAgentSessionRequest) (BatchAgentSessionResult, error)
+
+func (f batchSessionAgentFunc) Resolve(ctx context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+	return f(ctx, request)
+}
+
 type batchResolutionAgentFunc func(context.Context, string, string) (string, error)
 
-func (f batchResolutionAgentFunc) Resolve(ctx context.Context, root, prompt string) (string, error) {
-	return f(ctx, root, prompt)
+func (f batchResolutionAgentFunc) Resolve(ctx context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+	output, err := f(ctx, request.IntegrationRoot, request.Prompt)
+	return BatchAgentSessionResult{Output: output}, err
 }
 
 func batchResolutionJSON(summary string) string {
@@ -80,12 +87,13 @@ func TestBatchAgentResolvesTextConflictAndTaoOwnsCommit(t *testing.T) {
 	state.Integrations[0].CommitMessage = reviewMessage
 	store := &recordingBatchTransitionStore{}
 	calls := 0
-	agent := batchResolutionAgentFunc(func(_ context.Context, root, prompt string) (string, error) {
+	wantAttempt := state.Integrations[0].Attempts + 1
+	agent := batchSessionAgentFunc(func(_ context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
 		calls++
-		if root != integrationRoot || !strings.Contains(prompt, "Do not run git commit") || !strings.Contains(prompt, "BEGIN TAO UNTRUSTED CONFLICT FILES") {
-			t.Fatalf("unexpected agent request root=%q prompt=%q", root, prompt)
+		if request.BatchID != state.ID || request.Operation != BatchAgentOperationCandidateResolution || request.Attempt != wantAttempt || request.CandidatePlanID != "plan-a" || request.IntegrationRoot != integrationRoot || !strings.Contains(request.Prompt, "Do not run git commit") || !strings.Contains(request.Prompt, "BEGIN TAO UNTRUSTED CONFLICT FILES") {
+			t.Fatalf("unexpected attributed agent request: %#v", request)
 		}
-		return batchResolutionJSON("resolved README"), os.WriteFile(filepath.Join(root, "README.md"), []byte("combined\n"), 0o600)
+		return BatchAgentSessionResult{Output: batchResolutionJSON("resolved README")}, os.WriteFile(filepath.Join(request.IntegrationRoot, "README.md"), []byte("combined\n"), 0o600)
 	})
 	service := NewService(fixture.repoRoot, nil)
 	got, err := (BatchAgentResolver{Store: store, Service: service, Agent: agent}).Resolve(context.Background(), state, integrationRoot, BatchResolveOptions{VerifyCommand: "grep -q combined README.md"})
@@ -118,6 +126,31 @@ func TestBatchAgentResolvesTextConflictAndTaoOwnsCommit(t *testing.T) {
 	}
 	if len(store.states) < 4 {
 		t.Fatalf("request, outcome, commit, and phase were not durably transitioned: %d states", len(store.states))
+	}
+}
+
+func TestBatchAgentSessionFailuresStopWithoutAnotherResolveCall(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{{"provider", errors.New("provider failed")}, {"timeout", context.DeadlineExceeded}} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture, sourceHead, defaultHead, integrationRoot := batchAgentConflictFixture(t)
+			state := batchAgentDeferredState(fixture, sourceHead, defaultHead)
+			calls := 0
+			wantAttempt := state.Integrations[0].Attempts + 1
+			agent := batchSessionAgentFunc(func(_ context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+				calls++
+				if request.Operation != BatchAgentOperationCandidateResolution || request.Attempt != wantAttempt || request.BatchID != state.ID || request.CandidatePlanID != "plan-a" {
+					t.Fatalf("unexpected failure attribution: %#v", request)
+				}
+				return BatchAgentSessionResult{Output: "partial provider output"}, tc.err
+			})
+			got, err := (BatchAgentResolver{Store: &recordingBatchTransitionStore{}, Service: NewService(fixture.repoRoot, nil), Agent: agent}).Resolve(context.Background(), state, integrationRoot, BatchResolveOptions{MaxAttempts: 3})
+			if err == nil || got.State.Status != BatchStatusBlocked || calls != 1 {
+				t.Fatalf("session failure retried: calls=%d state=%s err=%v", calls, got.State.Status, err)
+			}
+		})
 	}
 }
 

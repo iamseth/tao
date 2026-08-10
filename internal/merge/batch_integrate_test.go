@@ -371,6 +371,9 @@ func TestBatchIntegratorGeneratesLegacyMessageOnceBeforeMutationAndRecoversInten
 	if !errors.Is(err, interrupted) || generator.calls != 1 {
 		t.Fatalf("legacy message interruption = %v, calls=%d", err, generator.calls)
 	}
+	if generator.identity.BatchID != state.ID || generator.identity.Attempt != 1 || generator.identity.CandidatePlanID != state.Candidates[0].PlanID {
+		t.Fatalf("legacy proposal attribution = %#v", generator.identity)
+	}
 	persisted := store.states[len(store.states)-1]
 	if persisted.Candidates[0].CommitMessage == "" || len(persisted.Integrations) != 0 {
 		t.Fatalf("legacy message was not persisted before intent: %+v", persisted)

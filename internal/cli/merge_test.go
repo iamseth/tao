@@ -6,14 +6,26 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	mergepkg "github.com/iamseth/tao/internal/merge"
 	"github.com/iamseth/tao/internal/plan"
 	runpkg "github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/workspace"
 )
+
+func TestNewMergeBatchAgentConfigWiresRepositoryTelemetryStoreAndClock(t *testing.T) {
+	root := t.TempDir()
+	store := mergepkg.NewBatchStore(filepath.Join(root, "merge-batches"), filepath.Join(root, "merge-batches", "active.json"))
+	fixed := time.Date(2026, 8, 10, 21, 0, 0, 0, time.UTC)
+	config := newMergeBatchAgentConfig(App{Out: io.Discard, Now: func() time.Time { return fixed }}, "/control", nil, store)
+	if config.EventAppender != store || config.ControlRoot != "/control" || config.Now == nil || !config.Now().Equal(fixed) {
+		t.Fatalf("batch agent config = %#v", config)
+	}
+}
 
 func TestMergeCommandApprovedPlanSuccess(t *testing.T) {
 	unsetEnvForTest(t, "TAO_MERGE_VERIFY_COMMAND")

@@ -956,11 +956,13 @@ type fakeMergeProposalGenerator struct {
 	mutate   func() error
 	calls    int
 	exact    commitcontract.MergeProposalContext
+	identity batchProposalSessionIdentity
 }
 
-func (f *fakeMergeProposalGenerator) GenerateMergeProposal(_ context.Context, exact commitcontract.MergeProposalContext) (commitcontract.Proposal, error) {
+func (f *fakeMergeProposalGenerator) GenerateMergeProposal(ctx context.Context, exact commitcontract.MergeProposalContext) (commitcontract.Proposal, error) {
 	f.calls++
 	f.exact = exact
+	f.identity, _ = ctx.Value(batchProposalSessionIdentityKey{}).(batchProposalSessionIdentity)
 	if f.mutate != nil {
 		if err := f.mutate(); err != nil {
 			return commitcontract.Proposal{}, err

@@ -149,7 +149,11 @@ func (r BatchAggregateReviewer) Review(ctx context.Context, state BatchState, in
 			if refsErr != nil {
 				return r.block(result, state, BatchBlockKindResumable, "capture protected refs before aggregate review: "+refsErr.Error())
 			}
-			reviewOutput, reviewErr := r.Agent.Resolve(ctx, integrationRoot, prompt)
+			reviewSession, reviewErr := r.Agent.Resolve(ctx, BatchAgentSessionRequest{
+				BatchID: state.ID, Operation: BatchAgentOperationAggregateReview, Attempt: reviewAttempt,
+				IntegrationRoot: integrationRoot, Prompt: prompt,
+			})
+			reviewOutput := reviewSession.Output
 			afterReviewStatus, statusErr := git.StatusPorcelain(ctx)
 			afterReviewHead, headErr := git.RevParse(ctx, "HEAD")
 			refsErr = compareBatchProtectedRefs(ctx, git, beforeReviewRefs)
@@ -272,7 +276,11 @@ func (r BatchAggregateReviewer) Review(ctx context.Context, state BatchState, in
 		if renderErr != nil {
 			return r.block(result, state, BatchBlockKindResumable, renderErr.Error())
 		}
-		output, agentErr := r.Agent.Resolve(ctx, integrationRoot, reworkPrompt)
+		reworkSession, agentErr := r.Agent.Resolve(ctx, BatchAgentSessionRequest{
+			BatchID: state.ID, Operation: BatchAgentOperationAggregateRework, Attempt: state.Attempts.AggregateRework,
+			IntegrationRoot: integrationRoot, Prompt: reworkPrompt,
+		})
+		output = reworkSession.Output
 		changes, statusErr := concretePorcelainChanges(ctx, git)
 		afterHead, headErr := git.RevParse(ctx, "HEAD")
 		refsErr = compareBatchProtectedRefs(ctx, git, beforeReworkRefs)

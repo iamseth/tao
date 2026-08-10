@@ -11,9 +11,46 @@ import (
 	"testing"
 	"time"
 
+	"github.com/iamseth/tao/internal/agent"
+	"github.com/iamseth/tao/internal/agentsession"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/workspace"
 )
+
+func TestBatchAgentTelemetryEndToEndStaysInBatchTransaction(t *testing.T) {
+	root := t.TempDir()
+	store := NewBatchStore(filepath.Join(root, "merge-batches"), filepath.Join(root, "merge-batches", "active.json"))
+	calls := 0
+	session := BatchAgentSession{
+		run: func(context.Context, agentsession.Request) (agentsession.Result, error) {
+			calls++
+			return agentsession.Result{FinalText: "approved", AgentLabel: "pi", MetricsUsable: true, Metrics: &agent.Metrics{SessionID: "batch-session", OutputTokens: 9}}, nil
+		},
+		eventAppender: store, now: func() time.Time { return time.Date(2026, 8, 10, 21, 0, 0, 0, time.UTC) },
+	}
+	if _, err := session.Resolve(context.Background(), BatchAgentSessionRequest{
+		BatchID: "batch-e2e", Operation: BatchAgentOperationAggregateReview, Attempt: 1,
+		IntegrationRoot: filepath.Join(root, "integration"), Prompt: "review aggregate",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(store.agentEventsPath("batch-e2e"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || !strings.Contains(string(content), `"type":"agent_metrics"`) || !strings.Contains(string(content), `"session_id":"batch-session"`) {
+		t.Fatalf("calls/event stream = %d / %q", calls, content)
+	}
+	for _, planID := range []string{"plan-a", "plan-b"} {
+		if _, err := os.Stat(filepath.Join(root, "plans", planID, "events.jsonl")); !os.IsNotExist(err) {
+			t.Fatalf("aggregate telemetry copied to source plan %s: %v", planID, err)
+		}
+	}
+	state, err := store.Load("batch-e2e")
+	if err != nil || state.ID != "" {
+		t.Fatalf("telemetry changed transition state: %#v, %v", state, err)
+	}
+}
 
 type batchE2EStore struct {
 	dir              string
@@ -48,22 +85,23 @@ type batchE2EAgent struct {
 	reworkCalls   int
 }
 
-func (a *batchE2EAgent) Resolve(_ context.Context, root, prompt string) (string, error) {
+func (a *batchE2EAgent) Resolve(_ context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
 	a.t.Helper()
-	switch {
-	case strings.Contains(prompt, "Candidate: aggregate-review"):
+	root := request.IntegrationRoot
+	switch request.Operation {
+	case BatchAgentOperationAggregateRework:
 		a.reworkCalls++
 		if err := os.WriteFile(filepath.Join(root, "aggregate-fixed.txt"), []byte("fixed\n"), 0o600); err != nil {
 			a.t.Fatal(err)
 		}
-		return batchResolutionJSON("fixed aggregate interaction"), nil
-	case strings.Contains(prompt, "tao-review-json") || strings.Contains(prompt, "Aggregate") || strings.Contains(prompt, "aggregate review"):
+		return BatchAgentSessionResult{Output: batchResolutionJSON("fixed aggregate interaction")}, nil
+	case BatchAgentOperationAggregateReview:
 		a.reviewCalls++
 		if a.reviewCalls == 1 {
-			return reviewJSON("changes_requested", "combined cleanup event needs coverage", "cleanup event interaction"), nil
+			return BatchAgentSessionResult{Output: reviewJSON("changes_requested", "combined cleanup event needs coverage", "cleanup event interaction")}, nil
 		}
-		return reviewJSON("approve", "combined result approved", ""), nil
-	default:
+		return BatchAgentSessionResult{Output: reviewJSON("approve", "combined result approved", "")}, nil
+	case BatchAgentOperationCandidateResolution:
 		a.conflictCalls++
 		if err := os.WriteFile(filepath.Join(root, "shared.txt"), []byte("resolved autorework and overlap\n"), 0o600); err != nil {
 			a.t.Fatal(err)
@@ -73,7 +111,10 @@ func (a *batchE2EAgent) Resolve(_ context.Context, root, prompt string) (string,
 				a.t.Fatal(err)
 			}
 		}
-		return batchResolutionJSON(fmt.Sprintf("conflict resolution attempt %d", a.conflictCalls)), nil
+		return BatchAgentSessionResult{Output: batchResolutionJSON(fmt.Sprintf("conflict resolution attempt %d", a.conflictCalls))}, nil
+	default:
+		a.t.Fatalf("unexpected batch operation %q", request.Operation)
+		return BatchAgentSessionResult{}, nil
 	}
 }
 

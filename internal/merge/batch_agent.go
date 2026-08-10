@@ -33,7 +33,7 @@ type BatchResolver interface {
 
 // BatchResolutionAgent performs exactly one provider-neutral editing session.
 type BatchResolutionAgent interface {
-	Resolve(ctx context.Context, integrationRoot, prompt string) (string, error)
+	Resolve(context.Context, BatchAgentSessionRequest) (BatchAgentSessionResult, error)
 }
 
 type BatchResolveOptions struct {
@@ -187,7 +187,11 @@ func (r BatchAgentResolver) Resolve(ctx context.Context, state BatchState, integ
 				return r.block(ctx, result, state, git, BatchBlockKindResumable, renderErr.Error())
 			}
 
-			output, agentErr := r.Agent.Resolve(ctx, integrationRoot, prompt)
+			sessionResult, agentErr := r.Agent.Resolve(ctx, BatchAgentSessionRequest{
+				BatchID: state.ID, Operation: BatchAgentOperationCandidateResolution, Attempt: integration.Attempts,
+				IntegrationRoot: integrationRoot, Prompt: prompt, CandidatePlanID: candidate.PlanID,
+			})
+			output := sessionResult.Output
 			changes, statusErr := concretePorcelainChanges(ctx, git)
 			afterHead, afterHeadErr := git.RevParse(ctx, "HEAD")
 			refsErr = compareBatchProtectedRefs(ctx, git, beforeRefs)

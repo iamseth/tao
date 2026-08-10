@@ -8,7 +8,78 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
+
+func TestBatchStoreAppendsAgentEventsOutsideStateAndTransitions(t *testing.T) {
+	store := newTestBatchStore(t)
+	at := time.Date(2026, 8, 10, 20, 0, 0, 0, time.UTC)
+	for attempt := 1; attempt <= 2; attempt++ {
+		event := BatchAgentEvent{
+			Schema: BatchAgentEventSchema, Type: BatchAgentEventTypeMetrics, BatchID: "batch-a", Timestamp: at,
+			Operation: BatchAgentOperationAggregateReview, Attempt: attempt, Agent: "pi",
+			Outcome: BatchAgentOutcomeCompleted, Metrics: &BatchAgentMetrics{OutputTokens: int64(attempt)},
+		}
+		if err := store.AppendAgentEvent(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	content, err := os.ReadFile(store.agentEventsPath("batch-a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(content)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("event lines = %d, want 2: %q", len(lines), content)
+	}
+	for i, line := range lines {
+		var event BatchAgentEvent
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatal(err)
+		}
+		if event.Type != BatchAgentEventTypeMetrics || event.Attempt != i+1 {
+			t.Fatalf("event %d = %#v", i, event)
+		}
+	}
+	info, err := os.Stat(store.agentEventsPath("batch-a"))
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("event file mode = %v, err=%v", info.Mode().Perm(), err)
+	}
+	if _, err := os.Stat(store.snapshotPath("batch-a")); !os.IsNotExist(err) {
+		t.Fatalf("telemetry wrote snapshot: %v", err)
+	}
+	if _, err := os.Stat(store.logPath("batch-a")); !os.IsNotExist(err) {
+		t.Fatalf("telemetry wrote transition log: %v", err)
+	}
+}
+
+func TestBatchStoreSynchronizesConcurrentAgentEventAppends(t *testing.T) {
+	store := newTestBatchStore(t)
+	const count = 20
+	var wg sync.WaitGroup
+	for attempt := 1; attempt <= count; attempt++ {
+		wg.Add(1)
+		go func(attempt int) {
+			defer wg.Done()
+			err := store.AppendAgentEvent(BatchAgentEvent{
+				Schema: BatchAgentEventSchema, Type: BatchAgentEventTypeMetrics, BatchID: "batch-concurrent", Timestamp: time.Now(),
+				Operation: BatchAgentOperationAggregateRework, Attempt: attempt, Agent: "codex",
+				Outcome: BatchAgentOutcomeCompleted, Metrics: &BatchAgentMetrics{},
+			})
+			if err != nil {
+				t.Errorf("append %d: %v", attempt, err)
+			}
+		}(attempt)
+	}
+	wg.Wait()
+	content, err := os.ReadFile(store.agentEventsPath("batch-concurrent"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines := strings.Count(string(content), "\n"); lines != count {
+		t.Fatalf("complete event lines = %d, want %d", lines, count)
+	}
+}
 
 func TestBatchStoreRoundTripPreservesDurableState(t *testing.T) {
 	store := newTestBatchStore(t)

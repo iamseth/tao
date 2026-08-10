@@ -41,6 +41,28 @@ func (s *BatchStore) logPath(id string) string {
 	return filepath.Join(s.batchesDir, id, "transitions.jsonl")
 }
 
+func (s *BatchStore) agentEventsPath(id string) string {
+	return filepath.Join(s.batchesDir, id, "agent-events.jsonl")
+}
+
+// AppendAgentEvent durably appends one telemetry record without changing batch
+// state or the transition replay stream.
+func (s *BatchStore) AppendAgentEvent(event BatchAgentEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := event.validate(); err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	if len(encoded)+1 > maxBatchAgentEventBytes {
+		return fmt.Errorf("merge batch agent event exceeds %d-byte limit", maxBatchAgentEventBytes)
+	}
+	return appendBatchLogLine(s.agentEventsPath(event.BatchID), append(encoded, '\n'))
+}
+
 // WriteAggregateReview atomically stores full agent output in the batch
 // directory, separate from every source plan's review artifact.
 func (s *BatchStore) WriteAggregateReview(id string, attempt int, output string) (string, error) {

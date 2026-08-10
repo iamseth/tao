@@ -12,124 +12,10 @@ import (
 
 	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/agent/logrecord"
-	commitcontract "github.com/iamseth/tao/internal/commit"
+	"github.com/iamseth/tao/internal/agentsession"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 )
-
-// BatchAgentSessionConfig configures an internal merge-batch agent operation.
-// Zero-value provider, permission, and timeout settings are loaded from the
-// same TAO_* runtime environment used by ordinary runs.
-type BatchAgentSessionConfig struct {
-	Agent           AgentKind
-	ProcessStarter  ProcessStarter
-	SkipPermissions *bool
-	Timeout         *time.Duration
-	Log             io.Writer
-	ControlRoot     string
-	CommandRunner   CommandRunner
-	Metrics         func(agent.Metrics, string)
-}
-
-// BatchAgentSession is the provider-neutral session seam used by merge. It has
-// no plan-artifact dependency, so batch telemetry and logs can remain
-// best-effort transaction data.
-type BatchAgentSession struct {
-	adapter         agent.SessionAdapter
-	permissionMode  agent.PermissionMode
-	timeout         time.Duration
-	log             io.Writer
-	controlRoot     string
-	commandRunnerFn CommandRunner
-	metrics         func(agent.Metrics, string)
-}
-
-// MergeProposalGeneratorConfig configures the exceptional single-merge
-// proposal session through the same provider-neutral runtime settings as other
-// agent operations.
-type MergeProposalGeneratorConfig = BatchAgentSessionConfig
-
-// NewMergeProposalGenerator constructs a strict central proposal generator.
-// Construction does not start a provider session; current review-backed merges
-// therefore remain a zero-call path.
-func NewMergeProposalGenerator(config MergeProposalGeneratorConfig) (commitcontract.Generator, error) {
-	return commitcontract.Generator{Text: mergeProposalTextSession{config: config}}, nil
-}
-
-type mergeProposalTextSession struct {
-	config MergeProposalGeneratorConfig
-}
-
-func (s mergeProposalTextSession) GenerateText(ctx context.Context, repoRoot, prompt string) (string, error) {
-	session, err := NewBatchAgentSession(s.config)
-	if err != nil {
-		return "", fmt.Errorf("configure exceptional merge proposal session: %w", err)
-	}
-	return session.Resolve(ctx, repoRoot, prompt)
-}
-
-func NewBatchAgentSession(config BatchAgentSessionConfig) (BatchAgentSession, error) {
-	defaults, err := runtimeconfig.RuntimeEnvDefaults()
-	if err != nil {
-		return BatchAgentSession{}, err
-	}
-	kind := config.Agent
-	if kind == "" {
-		kind = defaults.Agent
-	}
-	skip := defaults.SkipPermissions
-	if config.SkipPermissions != nil {
-		skip = *config.SkipPermissions
-	}
-	timeout := defaults.SessionTimeoutValue()
-	if config.Timeout != nil {
-		timeout = *config.Timeout
-	}
-	starter := config.ProcessStarter
-	if starter == nil {
-		starter = defaultProcessStarter
-	}
-	adapter, err := agent.NewSessionAdapter(kind, agent.RuntimeDeps{ProcessStarter: starter})
-	if err != nil {
-		return BatchAgentSession{}, err
-	}
-	permission := agent.PermissionModeAuto
-	if skip && adapter.Descriptor().SupportsBypassPermissions {
-		permission = agent.PermissionModeBypassPermissions
-	}
-	return BatchAgentSession{adapter: adapter, permissionMode: permission, timeout: timeout, log: config.Log, controlRoot: config.ControlRoot, commandRunnerFn: config.CommandRunner, metrics: config.Metrics}, nil
-}
-
-// Resolve runs one repair session rooted at integrationRoot. Metrics parse
-// failures are returned only as warnings and never replace the session error.
-func (s BatchAgentSession) commandRunner() CommandRunner { return s.commandRunnerFn }
-
-func (s BatchAgentSession) Resolve(ctx context.Context, integrationRoot, prompt string) (string, error) {
-	runSession := func() (agent.SessionResult, error) {
-		return s.adapter.Run(ctx, agent.Session{RepoRoot: integrationRoot, Prompt: prompt, PermissionMode: s.permissionMode, CollectMetrics: true, Timeout: s.timeout, Progress: s.log})
-	}
-	var result agent.SessionResult
-	var err error
-	if s.controlRoot != "" {
-		result, err = guardControlCheckoutLeaks(ctx, s, s.controlRoot, integrationRoot, runSession)
-	} else {
-		result, err = runSession()
-	}
-	if s.metrics != nil {
-		metrics := agent.Metrics{}
-		if result.Metrics != nil {
-			metrics = *result.Metrics
-		}
-		s.metrics(metrics, result.MetricsWarning)
-	} else if result.MetricsWarning != "" && s.log != nil {
-		_ = logrecord.Render(s.log, logrecord.Record{Type: logrecord.TypeDiagnostic, Content: "tao telemetry warning: " + result.MetricsWarning})
-	}
-	text := strings.TrimSpace(result.FinalText)
-	if text == "" {
-		text = strings.TrimSpace(result.Output)
-	}
-	return text, err
-}
 
 type agentOperationOptions struct {
 	CommitPolicy        CommitPolicy
@@ -206,13 +92,10 @@ func writeAgentLogDiagnostic(log io.Writer, message string) {
 func (o agentOperationOptions) clock() func() time.Time      { return o.Now }
 func (o agentOperationOptions) commandRunner() CommandRunner { return o.CommandRunner }
 
-// agentSessionRunner is the single session-running scaffold shared by the Pi and
-// Claude executors. It owns the log envelope, plan-state read, telemetry-warning
-// emission, and agent_metrics event append, delegating the actual agent call to
-// an agent.Runtime resolved from the registry. The remaining per-runtime
-// differences (Pi's best-effort session-info warning vs Claude's
-// metrics-absent gating) are expressed as data on the runner rather than as
-// duplicated control flow.
+// agentSessionRunner adapts the plan-agnostic bounded runner to plan storage. It
+// owns the log envelope, plan-state lookup, plan event shaping, and slice-budget
+// enforcement; internal/agentsession owns the single provider call and
+// descriptor-driven warning classification.
 type agentSessionRunnerConfig struct {
 	descriptor       agent.Descriptor
 	deps             agent.RuntimeDeps
@@ -236,51 +119,32 @@ func (e *budgetExceededError) Error() string {
 }
 
 type agentSessionRunner struct {
-	runtime        agent.Runtime
-	permissionMode agent.PermissionMode
-	sessionTimeout time.Duration
-	agentLabel     string
-	metricsMessage string
-	// alwaysCollectMetrics forces metric collection even when no metrics event
-	// is requested, preserving Pi's unconditional best-effort session-info read.
-	alwaysCollectMetrics bool
-	// metricsWarningPrefix is prepended to a runtime's MetricsWarning before it is
-	// logged (Pi annotates the session-info failure; Claude logs the warning verbatim).
-	metricsWarningPrefix string
-	// metricsWarningInformational reports whether a MetricsWarning is advisory
-	// (Pi: metrics are still valid, log unconditionally and still emit the event)
-	// rather than fatal (Claude: metrics are absent, log only in the metrics
-	// context and suppress the event).
-	metricsWarningInformational bool
-	logAppender                 plan.LogAppender
-	eventAppender               plan.EventAppender
-	sessionLogWriter            io.Writer
-	commandRunnerFn             CommandRunner
-	nowFn                       func() time.Time
+	session          agentsession.Runner
+	agentLabel       string
+	logAppender      plan.LogAppender
+	eventAppender    plan.EventAppender
+	sessionLogWriter io.Writer
+	nowFn            func() time.Time
 }
 
 func newAgentSessionRunner(config agentSessionRunnerConfig) agentSessionRunner {
-	descriptor := config.descriptor
 	return agentSessionRunner{
-		runtime:                     agent.WithSessionTimeout(descriptor.NewRuntime(config.deps)),
-		permissionMode:              config.permissionMode,
-		sessionTimeout:              config.sessionTimeout,
-		agentLabel:                  descriptor.Label,
-		metricsMessage:              descriptor.MetricsMessage,
-		alwaysCollectMetrics:        descriptor.AlwaysCollectMetrics,
-		metricsWarningPrefix:        descriptor.MetricsWarningPrefix,
-		metricsWarningInformational: descriptor.MetricsWarningInformational,
-		logAppender:                 config.logAppender,
-		eventAppender:               config.eventAppender,
-		sessionLogWriter:            config.sessionLogWriter,
-		commandRunnerFn:             config.commandRunner,
-		nowFn:                       config.now,
+		session: agentsession.New(agentsession.Config{
+			Descriptor:      config.descriptor,
+			Deps:            config.deps,
+			SkipPermissions: config.permissionMode == agent.PermissionModeBypassPermissions,
+			Timeout:         config.sessionTimeout,
+			CommandRunner:   config.commandRunner,
+		}),
+		agentLabel:       config.descriptor.Label,
+		logAppender:      config.logAppender,
+		eventAppender:    config.eventAppender,
+		sessionLogWriter: config.sessionLogWriter,
+		nowFn:            config.now,
 	}
 }
 
 func (r agentSessionRunner) clock() func() time.Time { return r.nowFn }
-
-func (r agentSessionRunner) commandRunner() CommandRunner { return r.commandRunnerFn }
 
 func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSessionRequest) (AgentSessionResult, error) {
 	sessionLog, err := openAgentSessionLog(r.logAppender, request.PlanDir, r.sessionLogWriter, request.LogAction, now(r))
@@ -300,25 +164,15 @@ func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSe
 		writeAgentLogDiagnostic(log, fmt.Sprintf("tao leak-guard warning: read plan state: %v; control checkout unknown, proceeding without leak guard", stateErr))
 	}
 
-	runSession := func() (agent.SessionResult, error) {
-		return r.runtime.RunSession(ctx, agent.Session{
-			RepoRoot:             request.RepoRoot,
-			Prompt:               request.Prompt,
-			PermissionMode:       r.permissionMode,
-			CollectMetrics:       r.alwaysCollectMetrics || metricsRequested,
-			NoProgressToolLimit:  request.NoProgressToolLimit,
-			VerificationCommands: request.VerificationCommands,
-			Timeout:              r.sessionTimeout,
-			Log:                  log,
-		})
-	}
-	var result agent.SessionResult
-	var runErr error
+	controlRoot := ""
 	if stateErr == nil {
-		result, runErr = guardControlCheckoutLeaks(ctx, r, state.Repo.Root, request.RepoRoot, runSession)
-	} else {
-		result, runErr = runSession()
+		controlRoot = state.Repo.Root
 	}
+	result, runErr := r.session.Run(ctx, agentsession.Request{
+		RepoRoot: request.RepoRoot, ControlRoot: controlRoot, Prompt: request.Prompt,
+		CollectMetrics: metricsRequested, NoProgressToolLimit: request.NoProgressToolLimit,
+		VerificationCommands: request.VerificationCommands, Log: log,
+	})
 
 	var timeoutErr *agent.SessionTimeoutError
 	if errors.As(runErr, &timeoutErr) && stateErr == nil && r.eventAppender != nil {
@@ -332,22 +186,22 @@ func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSe
 			Timestamp:       now(r).UTC(),
 			PlanID:          state.Plan.ID,
 			SliceID:         sliceID,
-			Agent:           r.agentLabel,
+			Agent:           result.AgentLabel,
 			DurationSeconds: &durationSeconds,
-			Message:         fmt.Sprintf("%s agent session timed out after %s", r.agentLabel, timeoutErr.Timeout),
+			Message:         fmt.Sprintf("%s agent session timed out after %s", result.AgentLabel, timeoutErr.Timeout),
 		}
 		if appendErr := r.eventAppender.AppendEvent(request.PlanDir, event); appendErr != nil {
 			writeAgentLogDiagnostic(log, fmt.Sprintf("tao telemetry warning: append session timeout event: %v", appendErr))
 		}
 	}
 
-	if result.MetricsWarning != "" && (r.metricsWarningInformational || (metricsRequested && stateErr == nil)) {
-		writeAgentLogDiagnostic(log, "tao telemetry warning: "+r.metricsWarningPrefix+result.MetricsWarning)
+	if result.ReportMetricsWarning && (stateErr == nil || result.MetricsUsable) {
+		writeAgentLogDiagnostic(log, "tao telemetry warning: "+result.MetricsWarningMessage)
 	}
 
 	var capErr error
-	if metricsRequested && stateErr == nil && r.eventAppender != nil && (r.metricsWarningInformational || result.MetricsWarning == "") {
-		metrics := collectAgentMetrics(state, request.Metrics.SliceID, r.agentLabel, r.metricsMessage, result.Metrics, runErr)
+	if metricsRequested && stateErr == nil && r.eventAppender != nil && result.MetricsUsable {
+		metrics := collectAgentMetrics(state, request.Metrics.SliceID, result.AgentLabel, result.MetricsMessage, result.Metrics, runErr)
 		if appendErr := r.eventAppender.AppendEvent(request.PlanDir, metrics.event(now(r).UTC())); appendErr != nil {
 			writeAgentLogDiagnostic(log, fmt.Sprintf("tao telemetry warning: append metrics event: %v", appendErr))
 		} else if result.Metrics != nil {
