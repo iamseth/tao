@@ -199,6 +199,40 @@ func TestEntryDriverDriveIsSynchronous(t *testing.T) {
 	}
 }
 
+func TestEntryDriverRefreshesReworkPolicyAndWorkerAfterInitialExecution(t *testing.T) {
+	now := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
+	host := &recordingEntryDriverHost{}
+	policy := runtimeconfig.AutoReworkPolicy{}
+	var reworker AutoReworker
+	decisions := 0
+	driver := EntryDriver{
+		Host: host,
+		Execute: func(context.Context, run.Request) error {
+			policy = runtimeconfig.AutoReworkPolicy{Enabled: true, MaxAttempts: 4}
+			reworker = func(_ context.Context, planID string, baseline, attempts int, previous string, maxAttempts int) (reworkpkg.Decision, error) {
+				decisions++
+				if planID != "plan-a" || baseline != 0 || attempts != 0 || previous != "" || maxAttempts != 4 {
+					t.Fatalf("dynamic rework decision = (%q, %d, %d, %q, %d)", planID, baseline, attempts, previous, maxAttempts)
+				}
+				return reworkpkg.Decision{}, nil
+			}
+			return nil
+		},
+		PolicyForEntry: func(QueueEntry) runtimeconfig.AutoReworkPolicy { return policy },
+		ReworkForEntry: func(QueueEntry) AutoReworker { return reworker },
+		Now:            func() time.Time { return now },
+	}
+	entry := QueueEntry{PlanID: "plan-a", Status: QueueStatusRunning, QueuedAt: now.Add(-time.Minute)}
+
+	result, err := driver.Drive(context.Background(), entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Outcome != EntryOutcomeSucceeded || decisions != 1 || len(host.transitions) != 1 {
+		t.Fatalf("Drive() = (%+v, decisions %d, transitions %d), want dynamic decision and success", result, decisions, len(host.transitions))
+	}
+}
+
 func TestEntryDriverStopAfterClaimStillExecutesInitialRun(t *testing.T) {
 	now := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
 	host := &recordingEntryDriverHost{}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -907,6 +908,7 @@ func TestRunAutoReworkRestartGuardLeavesPendingPlanUnchanged(t *testing.T) {
 
 func TestDirectAndQueueAutoReworkStopEquivalently(t *testing.T) {
 	now := time.Date(2026, 7, 13, 20, 30, 0, 0, time.UTC)
+	const planID = "20260713-2030-equivalence"
 	finding := func(line int, message, suggestion string) plan.ReviewFinding {
 		return plan.ReviewFinding{Severity: "major", File: "store/file.go", Line: line, Message: message, Suggestion: suggestion}
 	}
@@ -921,142 +923,328 @@ func TestDirectAndQueueAutoReworkStopEquivalently(t *testing.T) {
 	normalizedRepeat.Message = "  WARP truncates the replacement\n before SYNC "
 	normalizedRepeat.Suggestion = "SYNC before   replacing the FILE"
 
+	type terminalReview struct {
+		status   string
+		verdict  string
+		findings []plan.ReviewFinding
+	}
+	changesRequested := func(findings ...plan.ReviewFinding) terminalReview {
+		return terminalReview{status: plan.StatusChangesRequested, verdict: plan.ReviewVerdictChangesRequested, findings: findings}
+	}
+	approved := terminalReview{status: plan.StatusReviewed, verdict: plan.ReviewVerdictApprove}
+	persistedFingerprint := reworkpkg.ReworkFindingsFingerprint([]plan.ReviewFinding{warpSequence[0]})
+	persistedStop := plan.Event{
+		Type:        plan.EventTypeReworkStopped,
+		Timestamp:   now.Add(-time.Minute),
+		PlanID:      planID,
+		Round:       0,
+		Attempts:    0,
+		Fingerprint: persistedFingerprint,
+		Reason:      "automatic rework stalled on equivalent consecutive findings",
+		Message:     "automatic rework stalled on equivalent consecutive findings",
+	}
+
 	tests := []struct {
 		name           string
 		maxAttempts    int
-		findings       []plan.ReviewFinding
+		initial        terminalReview
+		outcomes       []terminalReview
+		initialEvents  []plan.Event
+		recoverStopped bool
 		wantReason     string
 		wantKind       reworkpkg.StopKind
 		wantRounds     int
 		wantExecutions int
-		wantBanner     string
+		wantOutput     []string
+		doNotWant      []string
 	}{
+		{
+			name:           "actionable terminal review reopens before approval",
+			maxAttempts:    5,
+			outcomes:       []terminalReview{changesRequested(warpSequence[0]), approved},
+			wantRounds:     1,
+			wantExecutions: 2,
+		},
+		{
+			name:           "approved terminal review is a no-op",
+			maxAttempts:    5,
+			outcomes:       []terminalReview{approved},
+			wantExecutions: 1,
+		},
+		{
+			name:           "terminal review without actionable findings is a no-op",
+			maxAttempts:    5,
+			outcomes:       []terminalReview{changesRequested()},
+			wantExecutions: 1,
+		},
+		{
+			name:           "cap takes precedence over equivalent findings",
+			maxAttempts:    1,
+			outcomes:       []terminalReview{changesRequested(warpSequence[2]), changesRequested(normalizedRepeat)},
+			wantReason:     "automatic rework cap exhausted after 1 cycles",
+			wantKind:       reworkpkg.StopKindCapExhausted,
+			wantRounds:     1,
+			wantExecutions: 2,
+			wantOutput:     []string{"Automatic rework stopped: attempt cap reached", "Read the review"},
+			doNotWant:      []string{"GOING IN CIRCLES", "THE SAME FILES KEEP RECURRING"},
+		},
 		{
 			name:           "three distinct same-file reviews stop before another reopen",
 			maxAttempts:    5,
-			findings:       warpSequence,
+			outcomes:       []terminalReview{changesRequested(warpSequence[0]), changesRequested(warpSequence[1]), changesRequested(warpSequence[2])},
 			wantReason:     "automatic rework stalled on files recurring across three consecutive reviews: [\"store/file.go\"]",
 			wantKind:       reworkpkg.StopKindRecurringFiles,
 			wantRounds:     2,
 			wantExecutions: 3,
-			wantBanner:     "THE SAME FILES KEEP RECURRING",
+			wantOutput:     []string{"THE SAME FILES KEEP RECURRING", "- store/file.go", "store/file.go:103", "Read the latest review"},
 		},
 		{
 			name:           "normalized identical finding retains earlier stop",
 			maxAttempts:    5,
-			findings:       []plan.ReviewFinding{warpSequence[2], normalizedRepeat},
+			outcomes:       []terminalReview{changesRequested(warpSequence[2]), changesRequested(normalizedRepeat)},
 			wantReason:     "automatic rework stalled on equivalent consecutive findings",
 			wantKind:       reworkpkg.StopKindFindingsStalled,
 			wantRounds:     1,
 			wantExecutions: 2,
-			wantBanner:     "THE LOOP IS GOING IN CIRCLES",
+			wantOutput:     []string{"THE LOOP IS GOING IN CIRCLES", "store/./file.go:103", "before re-running"},
+		},
+		{
+			name:           "persisted stop refuses a fresh budget before execution",
+			maxAttempts:    5,
+			initial:        changesRequested(warpSequence[0]),
+			initialEvents:  []plan.Event{persistedStop},
+			recoverStopped: true,
+			wantReason:     persistedStop.Reason,
+			wantKind:       reworkpkg.StopKindFindingsStalled,
+			wantOutput:     []string{"THE LOOP IS GOING IN CIRCLES", warpSequence[0].Message, warpSequence[0].Suggestion, "A new automatic-rework budget was not started", "--rework-restart"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			clearTaoEnv(t)
-			planID := "20260713-2030-equivalence"
-			runSequence := func(detail *plan.PlanDetail, calls *int) func(run.Service, context.Context, run.Request) error {
+			initial := tt.initial
+			if initial.status == "" {
+				initial = tt.outcomes[0]
+			}
+			newDetail := func() *plan.PlanDetail {
+				detail := singleRunReworkDetail(planID, initial.status, reworkReview(initial.verdict, slices.Clone(initial.findings)), now)
+				detail.Dir = t.TempDir()
+				detail.Events = slices.Clone(tt.initialEvents)
+				return detail
+			}
+			applyReview := func(detail *plan.PlanDetail, outcome terminalReview) {
+				detail.State.Status = outcome.status
+				detail.State.Plan.Review = reworkReview(outcome.verdict, slices.Clone(outcome.findings))
+			}
+			runSequence := func(detail *plan.PlanDetail, calls *int, beforeExecute func(int)) func(run.Service, context.Context, run.Request) error {
 				return func(run.Service, context.Context, run.Request) error {
-					index := min(*calls, len(tt.findings)-1)
-					*calls++
-					detail.State.Status = plan.StatusChangesRequested
-					detail.State.Plan.Review = reworkReview(plan.ReviewVerdictChangesRequested, []plan.ReviewFinding{tt.findings[index]})
+					call := *calls
+					*calls = call + 1
+					if beforeExecute != nil {
+						beforeExecute(call)
+					}
+					if len(tt.outcomes) == 0 {
+						return errors.New("unexpected execution after persisted automatic-rework stop")
+					}
+					applyReview(detail, tt.outcomes[min(call, len(tt.outcomes)-1)])
 					return nil
 				}
 			}
-			findEvent := func(events []plan.Event, eventType string) plan.Event {
+			findEvent := func(events []plan.Event, eventType string) (plan.Event, bool) {
 				for _, event := range slices.Backward(events) {
 					if event.Type == eventType {
-						return event
+						return event, true
 					}
 				}
-				t.Fatalf("events %+v do not contain %q", events, eventType)
-				return plan.Event{}
+				return plan.Event{}, false
 			}
 
-			directDetail := singleRunReworkDetail(planID, plan.StatusChangesRequested, reworkReview(plan.ReviewVerdictChangesRequested, []plan.ReviewFinding{tt.findings[0]}), now)
-			directDetail.Dir = t.TempDir()
+			directDetail := newDetail()
 			directRepo := &recordingAutoReworkRepository{queueRepository: fakeRepository{details: map[string]*plan.PlanDetail{planID: directDetail}}}
 			directExecutions := 0
-			oldExecutor := executeSinglePlan
-			executeSinglePlan = runSequence(directDetail, &directExecutions)
-			directErr := (App{Out: io.Discard, Now: func() time.Time { return now }}).run(context.Background(), directRepo, []string{"--max-rework-attempts=" + strconv.Itoa(tt.maxAttempts), planID})
-			executeSinglePlan = oldExecutor
-			if directErr == nil {
-				t.Fatal("direct run unexpectedly succeeded")
-			}
+			directErr := func() error {
+				oldExecutor := executeSinglePlan
+				executeSinglePlan = runSequence(directDetail, &directExecutions, nil)
+				defer func() { executeSinglePlan = oldExecutor }()
+				return (App{Out: io.Discard, Now: func() time.Time { return now }}).run(context.Background(), directRepo, []string{"--max-rework-attempts=" + strconv.Itoa(tt.maxAttempts), planID})
+			}()
 
-			queueDetail := singleRunReworkDetail(planID, plan.StatusChangesRequested, reworkReview(plan.ReviewVerdictChangesRequested, []plan.ReviewFinding{tt.findings[0]}), now)
-			queueDetail.Dir = t.TempDir()
+			queueDetail := newDetail()
 			queueRepo := &recordingAutoReworkRepository{queueRepository: fakeRepository{details: map[string]*plan.PlanDetail{planID: queueDetail}}}
 			queueExecutions := 0
-			queueExecute := runSequence(queueDetail, &queueExecutions)
-			manager := runqueue.New(context.Background(), func(ctx context.Context, request run.Request) error {
+			queueProgressChecks := 0
+			var progressMu sync.Mutex
+			var manager *runqueue.Manager
+			queueExecute := runSequence(queueDetail, &queueExecutions, func(call int) {
+				if call == 0 {
+					return
+				}
+				previousReview := tt.outcomes[call-1]
+				wantFingerprint := reworkpkg.ReworkFindingsFingerprint(previousReview.findings)
+				snapshot := manager.Queue()
+				if len(snapshot.Entries) != 1 || snapshot.Entries[0].ReworkAttempts != call || snapshot.Entries[0].PreviousFindingFingerprint != wantFingerprint {
+					t.Errorf("queue progress before execution %d = %+v, want attempt %d fingerprint %q", call+1, snapshot.Entries, call, wantFingerprint)
+				}
+				progressMu.Lock()
+				queueProgressChecks++
+				progressMu.Unlock()
+			})
+			manager = runqueue.New(context.Background(), func(ctx context.Context, request run.Request) error {
 				return queueExecute(run.Service{}, ctx, request)
 			}, nil)
 			if err := manager.SetAutoReworkPolicy(runtimeconfig.AutoReworkPolicy{Enabled: true, MaxAttempts: tt.maxAttempts}); err != nil {
 				t.Fatal(err)
 			}
 			manager.SetAutoReworker(planAutoReworker(queueRepo, func() time.Time { return now }))
-			request := run.Request{Input: planID, ResolvedRunOptions: runtimeconfig.ResolvedRunOptions{Mode: run.ModeRun, CommitPolicy: run.CommitPolicySlice, ExecutionMode: run.ExecutionModeIsolated, Agent: run.AgentPi, ReviewEnabled: true}}
-			if _, err := manager.Enqueue(request); err != nil {
-				t.Fatal(err)
+			if tt.recoverStopped {
+				manager.SetRecoveryInspector(runqueue.NewRecoveryInspector(queueRepo))
+				manager.SetRecoveryReviewer(func(context.Context, run.Request) error { return nil })
 			}
-			deadline := time.Now().Add(time.Second)
-			for manager.Queue().Entries[0].Status != runqueue.QueueStatusFailed && time.Now().Before(deadline) {
+			request := run.Request{Input: planID, ResolvedRunOptions: runtimeconfig.ResolvedRunOptions{Mode: run.ModeRun, CommitPolicy: run.CommitPolicySlice, ExecutionMode: run.ExecutionModeIsolated, Agent: run.AgentPi, ReviewEnabled: true}}
+			var enqueueErr error
+			if tt.recoverStopped {
+				_, enqueueErr = manager.EnqueueAutoReworkDecision(request)
+			} else {
+				_, enqueueErr = manager.Enqueue(request)
+			}
+			if enqueueErr != nil {
+				t.Fatal(enqueueErr)
+			}
+			deadline := time.Now().Add(2 * time.Second)
+			var entry runqueue.QueueEntry
+			for time.Now().Before(deadline) {
+				snapshot := manager.Queue()
+				if len(snapshot.Entries) == 1 {
+					entry = snapshot.Entries[0]
+					if entry.Status == runqueue.QueueStatusFailed || entry.Status == runqueue.QueueStatusSucceeded {
+						break
+					}
+				}
 				time.Sleep(time.Millisecond)
 			}
-			entry := manager.Queue().Entries[0]
-			if entry.Status != runqueue.QueueStatusFailed {
-				t.Fatalf("queue status = %q, want failed: %+v", entry.Status, entry)
-			}
 
-			if directErr.Error() != entry.Error || !strings.Contains(directErr.Error(), tt.wantReason) {
-				t.Fatalf("stop outputs = (direct %q, queue %q), want matching output containing %q", directErr, entry.Error, tt.wantReason)
+			wantQueueStatus := runqueue.QueueStatusSucceeded
+			if tt.wantReason != "" {
+				wantQueueStatus = runqueue.QueueStatusFailed
 			}
-			latestFinding := tt.findings[len(tt.findings)-1]
-			for _, want := range []string{tt.wantBanner, strings.TrimSpace(latestFinding.Message), strings.TrimSpace(latestFinding.Suggestion)} {
-				if !strings.Contains(entry.Error, want) {
-					t.Errorf("stop output %q does not contain %q", entry.Error, want)
+			if entry.Status != wantQueueStatus {
+				t.Fatalf("queue status = %q, want %q: %+v", entry.Status, wantQueueStatus, entry)
+			}
+			if tt.wantReason == "" {
+				if directErr != nil || entry.Error != "" {
+					t.Fatalf("terminal decisions = (direct %v, queue %q), want success", directErr, entry.Error)
 				}
-			}
-			if tt.wantKind == reworkpkg.StopKindRecurringFiles {
-				for _, want := range []string{"- store/file.go", "store/file.go:103", "Read the latest review"} {
-					if !strings.Contains(entry.Error, want) {
-						t.Errorf("recurring-file output %q does not contain %q", entry.Error, want)
+			} else {
+				if directErr == nil {
+					t.Fatal("direct run unexpectedly succeeded")
+				}
+				finalReview := initial
+				if len(tt.outcomes) > 0 {
+					finalReview = tt.outcomes[len(tt.outcomes)-1]
+				}
+				decision := reworkpkg.Decision{StopKind: tt.wantKind, StopReason: tt.wantReason, Findings: slices.Clone(finalReview.findings)}
+				if tt.wantKind == reworkpkg.StopKindRecurringFiles {
+					decision.RecurringFiles = []string{"store/file.go"}
+				}
+				wantRendered := reworkpkg.FormatStopMessage(decision)
+				if tt.recoverStopped {
+					if !strings.Contains(directErr.Error(), wantRendered) || !strings.Contains(entry.Error, wantRendered) {
+						t.Fatalf("persisted-stop outputs = (direct %q, queue %q), want rendered decision %q", directErr, entry.Error, wantRendered)
+					}
+				} else if directErr.Error() != wantRendered || entry.Error != wantRendered {
+					t.Fatalf("stop outputs = (direct %q, queue %q), want matching rendered decision %q", directErr, entry.Error, wantRendered)
+				}
+				for _, output := range []string{directErr.Error(), entry.Error} {
+					for _, want := range tt.wantOutput {
+						if !strings.Contains(output, want) {
+							t.Errorf("stop output %q does not contain %q", output, want)
+						}
+					}
+					for _, unwanted := range tt.doNotWant {
+						if strings.Contains(output, unwanted) {
+							t.Errorf("stop output %q unexpectedly contains %q", output, unwanted)
+						}
 					}
 				}
 			}
+
 			if directExecutions != tt.wantExecutions || queueExecutions != tt.wantExecutions {
 				t.Fatalf("executions = (direct %d, queue %d), want both %d", directExecutions, queueExecutions, tt.wantExecutions)
 			}
+			progressMu.Lock()
+			gotProgressChecks := queueProgressChecks
+			progressMu.Unlock()
+			if want := max(tt.wantExecutions-1, 0); gotProgressChecks != want {
+				t.Fatalf("queue durable progress checks = %d, want %d", gotProgressChecks, want)
+			}
 			directRounds, queueRounds := reworkpkg.RoundCount(directDetail), reworkpkg.RoundCount(queueDetail)
-			if directRounds != tt.wantRounds || queueRounds != tt.wantRounds || entry.ReworkAttempts != tt.wantRounds {
-				t.Fatalf("final rounds = (direct %d, queue %d, durable attempts %d), want %d", directRounds, queueRounds, entry.ReworkAttempts, tt.wantRounds)
+			wantDurableFingerprint := ""
+			if tt.wantRounds > 0 {
+				wantDurableFingerprint = reworkpkg.ReworkFindingsFingerprint(tt.outcomes[tt.wantRounds-1].findings)
 			}
-			if directDetail.State.Status != plan.StatusChangesRequested || queueDetail.State.Status != plan.StatusChangesRequested {
-				t.Fatalf("final statuses = (direct %q, queue %q), want changes_requested", directDetail.State.Status, queueDetail.State.Status)
+			if directRounds != tt.wantRounds || queueRounds != tt.wantRounds || entry.ReworkAttempts != tt.wantRounds || entry.PreviousFindingFingerprint != wantDurableFingerprint {
+				t.Fatalf("final progress = (direct rounds %d, queue rounds %d, attempts %d, fingerprint %q), want (%d, %d, %q)", directRounds, queueRounds, entry.ReworkAttempts, entry.PreviousFindingFingerprint, tt.wantRounds, tt.wantRounds, wantDurableFingerprint)
 			}
-			if !reflect.DeepEqual(directDetail.State.Plan.Review.Findings, []plan.ReviewFinding{latestFinding}) ||
-				!reflect.DeepEqual(queueDetail.State.Plan.Review.Findings, directDetail.State.Plan.Review.Findings) {
-				t.Fatalf("latest findings differ: direct=%+v queue=%+v", directDetail.State.Plan.Review.Findings, queueDetail.State.Plan.Review.Findings)
+			if tt.recoverStopped && (entry.ReworkBaselineRound == nil || *entry.ReworkBaselineRound != 0) {
+				t.Fatalf("persisted-stop queue baseline = %v, want 0", entry.ReworkBaselineRound)
 			}
 
-			directStop := findEvent(directRepo.events, plan.EventTypeReworkStopped)
-			queueStop := findEvent(queueRepo.events, plan.EventTypeReworkStopped)
-			wantStopFingerprint := reworkpkg.ReworkFindingsFingerprint([]plan.ReviewFinding{latestFinding})
-			if directStop.Reason != tt.wantReason || directStop.Round != tt.wantRounds || directStop.Attempts != tt.wantRounds || directStop.Fingerprint != wantStopFingerprint || reworkpkg.StopKindForPersistedReason(directStop.Reason) != tt.wantKind {
-				t.Fatalf("direct stop event = %+v", directStop)
+			finalReview := initial
+			if len(tt.outcomes) > 0 {
+				finalReview = tt.outcomes[len(tt.outcomes)-1]
 			}
-			if queueStop.Reason != directStop.Reason || queueStop.Round != directStop.Round || queueStop.Attempts != directStop.Attempts || queueStop.Fingerprint != directStop.Fingerprint {
-				t.Fatalf("queue stop event = %+v, want parity with %+v", queueStop, directStop)
+			assertFinalReview := func(label string, detail *plan.PlanDetail) {
+				t.Helper()
+				review := detail.State.Plan.Review
+				if detail.State.Status != finalReview.status || review == nil || review.Status != plan.ReviewStatusCompleted || review.Verdict != finalReview.verdict || review.FindingsCount != len(finalReview.findings) || !reflect.DeepEqual(review.Findings, finalReview.findings) {
+					t.Errorf("%s final status/review = (%q, %+v), want status %q verdict %q findings %+v", label, detail.State.Status, review, finalReview.status, finalReview.verdict, finalReview.findings)
+				}
 			}
-			lastRound := findEvent(directRepo.events, plan.EventTypeReworkRound)
-			wantDurableFingerprint := reworkpkg.ReworkFindingsFingerprint([]plan.ReviewFinding{tt.findings[tt.wantRounds-1]})
-			if lastRound.Attempts != tt.wantRounds || lastRound.Fingerprint != wantDurableFingerprint || entry.PreviousFindingFingerprint != wantDurableFingerprint {
-				t.Fatalf("durable progress = (event %+v, queue %q), want attempt %d fingerprint %q", lastRound, entry.PreviousFindingFingerprint, tt.wantRounds, wantDurableFingerprint)
+			assertFinalReview("direct", directDetail)
+			assertFinalReview("queue", queueDetail)
+
+			assertRoundEvent := func(label string, events []plan.Event) {
+				t.Helper()
+				event, found := findEvent(events, plan.EventTypeReworkRound)
+				if tt.wantRounds == 0 {
+					if found {
+						t.Errorf("%s unexpected rework_round event = %+v", label, event)
+					}
+					return
+				}
+				wantMessage := fmt.Sprintf("Automatic rework round %d (attempt %d of %d)", tt.wantRounds, tt.wantRounds, tt.maxAttempts)
+				if !found || event.Type != plan.EventTypeReworkRound || event.PlanID != planID || event.Timestamp != now || event.Round != tt.wantRounds || event.Attempts != tt.wantRounds || event.Fingerprint != wantDurableFingerprint || event.Message != wantMessage {
+					t.Errorf("%s rework_round event = %+v, want round/attempt %d fingerprint %q message %q", label, event, tt.wantRounds, wantDurableFingerprint, wantMessage)
+				}
+			}
+			assertRoundEvent("direct", directRepo.events)
+			assertRoundEvent("queue", queueRepo.events)
+
+			assertStopEvent := func(label string, events []plan.Event) {
+				t.Helper()
+				event, found := findEvent(events, plan.EventTypeReworkStopped)
+				if tt.wantReason == "" || tt.recoverStopped {
+					if found {
+						t.Errorf("%s unexpected new rework_stopped event = %+v", label, event)
+					}
+					return
+				}
+				wantFingerprint := reworkpkg.ReworkFindingsFingerprint(finalReview.findings)
+				if !found || event.Type != plan.EventTypeReworkStopped || event.PlanID != planID || event.Timestamp != now || event.Round != tt.wantRounds || event.Attempts != tt.wantRounds || event.Fingerprint != wantFingerprint || event.Reason != tt.wantReason || event.Message != tt.wantReason || reworkpkg.StopKindForPersistedReason(event.Reason) != tt.wantKind {
+					t.Errorf("%s rework_stopped event = %+v, want round/attempt %d fingerprint %q reason %q", label, event, tt.wantRounds, wantFingerprint, tt.wantReason)
+				}
+			}
+			assertStopEvent("direct", directRepo.events)
+			assertStopEvent("queue", queueRepo.events)
+
+			if tt.recoverStopped {
+				for label, detail := range map[string]*plan.PlanDetail{"direct": directDetail, "queue": queueDetail} {
+					event, found := findEvent(detail.Events, plan.EventTypeReworkStopped)
+					if !found || event.Type != persistedStop.Type || event.Timestamp != persistedStop.Timestamp || event.PlanID != planID || event.Round != persistedStop.Round || event.Attempts != persistedStop.Attempts || event.Fingerprint != persistedStop.Fingerprint || event.Reason != persistedStop.Reason || event.Message != persistedStop.Message {
+						t.Errorf("%s persisted rework_stopped event = %+v, want preserved %+v", label, event, persistedStop)
+					}
+				}
 			}
 		})
 	}

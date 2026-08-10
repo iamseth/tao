@@ -32,6 +32,11 @@ type DecisionFunc func(context.Context, string, int, int, string, int) (Decision
 // ProgressLogger reports a successfully reopened rework round.
 type ProgressLogger func(int) error
 
+// DecisionCheck refreshes dynamic policy and stop state before a decision. The
+// returned maximum applies to that decision; false ends the run without
+// another decision.
+type DecisionCheck func(context.Context) (maxAttempts int, proceed bool, err error)
+
 const equivalentFindingsStopReason = "automatic rework stalled on equivalent consecutive findings"
 
 // StopKind identifies why bounded automatic rework stopped.
@@ -195,7 +200,29 @@ type Driver struct {
 	DecideOne DecisionFunc
 }
 
-// LoopOptions configures one bounded automatic-rework run.
+// ExecutionState is automatic-rework progress recovered by a caller. A nil
+// recovered state tells Run to initialize a fresh budget from persisted plan
+// detail. DecideBeforeExecute records that the caller already acknowledged a
+// persisted stop and needs the plan reopened before execution.
+type ExecutionState struct {
+	Budget              Budget
+	DecideBeforeExecute bool
+}
+
+// RunOptions configures the shared automatic-rework execution entry.
+type RunOptions struct {
+	Enabled      bool
+	MaxAttempts  int
+	AllowRestart bool
+	Recovered    *ExecutionState
+
+	Execute         ExecuteFunc
+	PersistProgress PersistProgressFunc
+	LogProgress     ProgressLogger
+	BeforeDecision  DecisionCheck
+}
+
+// LoopOptions configures one bounded automatic-rework loop.
 type LoopOptions struct {
 	Baseline            int
 	Attempts            int
@@ -209,8 +236,10 @@ type LoopOptions struct {
 	LogProgress         ProgressLogger
 	// BeforeDecision may refresh policy and stop state before each decision.
 	// Its returned maximum replaces MaxAttempts for that decision; false ends
-	// the loop without another decision.
-	BeforeDecision func() (int, bool)
+	// the loop without another decision. CheckBeforeDecision is the error-aware
+	// form used by Run and takes precedence when both are set.
+	BeforeDecision      func() (int, bool)
+	CheckBeforeDecision DecisionCheck
 }
 
 // Decide inspects the latest completed review and applies at most one rework mutation.
@@ -293,6 +322,56 @@ func (d Driver) appendEvent(dir string, event plan.Event) {
 	}
 }
 
+// Run executes a plan through one automatic-rework policy boundary. Disabled
+// policy executes once without loading rework state. Enabled fresh runs load a
+// baseline and enforce the persisted-stop restart guard; recovered runs use the
+// caller's durable budget verbatim.
+func (d Driver) Run(ctx context.Context, planID string, opts RunOptions) error {
+	if opts.Execute == nil {
+		return errors.New("automatic rework execute function is nil")
+	}
+
+	state := ExecutionState{}
+	enabled := opts.Enabled && opts.MaxAttempts > 0
+	if enabled {
+		if opts.Recovered != nil {
+			state = *opts.Recovered
+		} else {
+			if d.Resolve == nil {
+				return errors.New("automatic rework plan resolver is nil")
+			}
+			detail, err := d.Resolve(ctx, planID)
+			if err != nil {
+				return err
+			}
+			_, stopped, err := GuardAutoReworkRestart(detail, opts.AllowRestart)
+			if err != nil {
+				return err
+			}
+			state.Budget.BaselineRound = RoundCount(detail)
+			state.DecideBeforeExecute = stopped && opts.AllowRestart
+		}
+	}
+
+	loopOptions := LoopOptions{
+		Execute:             opts.Execute,
+		PersistProgress:     opts.PersistProgress,
+		LogProgress:         opts.LogProgress,
+		MaxAttempts:         opts.MaxAttempts,
+		CheckBeforeDecision: opts.BeforeDecision,
+	}
+	if enabled {
+		loopOptions.Baseline = state.Budget.BaselineRound
+		loopOptions.Attempts = state.Budget.Attempts
+		loopOptions.PreviousFingerprint = state.Budget.PreviousFindingFingerprint
+		loopOptions.DecideBeforeExecute = state.DecideBeforeExecute
+	} else {
+		loopOptions.MaxAttempts = 0
+		loopOptions.CheckBeforeDecision = nil
+	}
+	return d.Loop(ctx, planID, loopOptions)
+}
+
 // Loop executes a plan and continues through all actionable automatic-rework rounds.
 func (d Driver) Loop(ctx context.Context, planID string, opts LoopOptions) error {
 	if opts.Execute == nil {
@@ -302,7 +381,17 @@ func (d Driver) Loop(ctx context.Context, planID string, opts LoopOptions) error
 	budget := Budget{BaselineRound: opts.Baseline, Attempts: opts.Attempts, PreviousFindingFingerprint: opts.PreviousFingerprint}
 	decide := func() (Decision, bool, error) {
 		maxAttempts := opts.MaxAttempts
-		if opts.BeforeDecision != nil {
+		if opts.CheckBeforeDecision != nil {
+			var proceed bool
+			var err error
+			maxAttempts, proceed, err = opts.CheckBeforeDecision(ctx)
+			if err != nil {
+				return Decision{}, false, err
+			}
+			if !proceed {
+				return Decision{}, false, nil
+			}
+		} else if opts.BeforeDecision != nil {
 			var proceed bool
 			maxAttempts, proceed = opts.BeforeDecision()
 			if !proceed {
@@ -349,7 +438,7 @@ func (d Driver) Loop(ctx context.Context, planID string, opts LoopOptions) error
 	if err := opts.Execute(ctx); err != nil {
 		return err
 	}
-	if opts.MaxAttempts == 0 && opts.BeforeDecision == nil {
+	if opts.MaxAttempts == 0 && opts.BeforeDecision == nil && opts.CheckBeforeDecision == nil {
 		return nil
 	}
 

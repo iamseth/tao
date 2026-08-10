@@ -17,7 +17,10 @@ type EntryPolicy func(QueueEntry) runtimeconfig.AutoReworkPolicy
 // EntryReworker resolves the current automatic-rework mutation callback.
 type EntryReworker func(QueueEntry) AutoReworker
 
-var errEntryStoppedAfterRework = errors.New("queue stopped after automatic rework")
+var (
+	errEntryStoppedAfterRework      = errors.New("queue stopped after automatic rework")
+	errEntryRecoveryDecisionApplied = errors.New("recovered automatic rework decision applied")
+)
 
 // EntryOwnership retains one plan owner across recovered execution and rework.
 // The owner callback runs until Finish is called by the synchronous entry host.
@@ -295,35 +298,20 @@ func (d EntryDriver) Recover(ctx context.Context, entry QueueEntry) (EntryRecove
 		return EntryRecovery{Entry: entry, Result: EntryResult{Outcome: EntryOutcomeRetainedRunning}, Ownership: ownership}, nil
 	}
 
-	policy = d.policyForEntry(entry)
-	reworker := d.reworkerForEntry(entry)
-	if !policy.Enabled || policy.MaxAttempts == 0 || reworker == nil || d.stopRequested() {
+	runErr := d.runAutomaticRework(ownedCtx, &entry, reworkpkg.ExecutionState{
+		Budget:              budget,
+		DecideBeforeExecute: true,
+	}, func(context.Context) error {
+		return errEntryRecoveryDecisionApplied
+	})
+	if runErr != nil && !errors.Is(runErr, errEntryRecoveryDecisionApplied) {
+		return d.finishRecovery(ctx, entry, ownership, EntryResult{Outcome: EntryOutcomeFailed, Err: runErr})
+	}
+	if entry.RecoveryPending {
 		return d.finishRecovery(ctx, entry, ownership, EntryResult{Outcome: EntryOutcomeSucceeded})
 	}
-	decision, err := reworker(ownedCtx, entry.PlanID, budget.BaselineRound, budget.Attempts, budget.PreviousFindingFingerprint, policy.MaxAttempts)
-	if resultAttempts := budget.AttemptsAtRound(decision.Round); resultAttempts > entry.ReworkAttempts {
-		entry.ReworkAttempts = resultAttempts
-		budget.Attempts = resultAttempts
-	}
-	if err != nil {
-		result := EntryResult{Outcome: EntryOutcomeFailed, Err: fmt.Errorf("automatic rework mutation failed: %w", err)}
-		return d.finishRecovery(ctx, entry, ownership, result)
-	}
-	if decision.StopReason != "" {
-		result := EntryResult{Outcome: EntryOutcomeFailed, Err: errors.New(reworkpkg.FormatStopMessage(decision))}
-		return d.finishRecovery(ctx, entry, ownership, result)
-	}
-	if !decision.Reworked {
-		return d.finishRecovery(ctx, entry, ownership, EntryResult{Outcome: EntryOutcomeSucceeded})
-	}
-
-	updated := entry
-	updated.PreviousFindingFingerprint = decision.Fingerprint
-	updated.RecoveryPending = false
-	entry, err = d.persistRecoveryUpdate(ownedCtx, entry, updated)
-	if err != nil {
-		result := EntryResult{Outcome: EntryOutcomeFailed, Err: fmt.Errorf("persist automatic rework progress: %w", err)}
-		return d.finishRecovery(ctx, entry, ownership, result)
+	if d.stopRequested() {
+		return d.finishRecovery(ctx, entry, ownership, EntryResult{Outcome: EntryOutcomeRequeuedAfterStop})
 	}
 	return EntryRecovery{Entry: entry, Result: EntryResult{Outcome: EntryOutcomeRetainedRunning}, Ownership: ownership}, nil
 }
@@ -431,34 +419,56 @@ func (d EntryDriver) driveOwned(ctx context.Context, entry *QueueEntry, request 
 		budget.BaselineRound = *entry.ReworkBaselineRound
 	}
 	firstExecution := true
+	runErr := d.runAutomaticRework(ctx, entry, reworkpkg.ExecutionState{Budget: budget}, func(executeCtx context.Context) error {
+		if !firstExecution && d.stopRequested() {
+			return errEntryStoppedAfterRework
+		}
+		firstExecution = false
+		return d.Execute(executeCtx, request)
+	})
+	if errors.Is(runErr, errEntryStoppedAfterRework) {
+		return EntryResult{Outcome: EntryOutcomeRequeuedAfterStop}, nil
+	}
+	if runErr != nil {
+		return EntryResult{Outcome: EntryOutcomeFailed, Err: runErr}, runErr
+	}
+	return EntryResult{Outcome: EntryOutcomeSucceeded}, nil
+}
+
+// runAutomaticRework adapts queue-owned progress and dynamic configuration to
+// the shared rework execution boundary. The recovered state prevents the
+// domain driver from replacing durable queue budget fields with a fresh budget.
+func (d EntryDriver) runAutomaticRework(ctx context.Context, entry *QueueEntry, state reworkpkg.ExecutionState, execute reworkpkg.ExecuteFunc) error {
+	policy := d.policyForEntry(*entry)
+	// Queue configuration is intentionally dynamic. Prime Run's recovered-state
+	// path even when policy is currently disabled so BeforeDecision can observe
+	// policy or reworker changes made while the initial execution is active.
+	initialMaxAttempts := max(policy.MaxAttempts, 1)
 	var reworker AutoReworker
-	reworkDriver := reworkpkg.Driver{DecideOne: func(decideCtx context.Context, planID string, baseline, attempts int, previous string, maxAttempts int) (reworkpkg.Decision, error) {
+	driver := reworkpkg.Driver{DecideOne: func(decideCtx context.Context, planID string, baseline, attempts int, previous string, maxAttempts int) (reworkpkg.Decision, error) {
 		decision, err := reworker(decideCtx, planID, baseline, attempts, previous, maxAttempts)
-		if resultAttempts := budget.AttemptsAtRound(decision.Round); resultAttempts > entry.ReworkAttempts {
+		decisionBudget := reworkpkg.Budget{BaselineRound: baseline, Attempts: entry.ReworkAttempts}
+		if resultAttempts := decisionBudget.AttemptsAtRound(decision.Round); resultAttempts > entry.ReworkAttempts {
 			entry.ReworkAttempts = resultAttempts
 		}
 		return decision, err
 	}}
-	loopErr := reworkDriver.Loop(ctx, request.Input, reworkpkg.LoopOptions{
-		Baseline:            budget.BaselineRound,
-		Attempts:            budget.Attempts,
-		PreviousFingerprint: budget.PreviousFindingFingerprint,
-		Execute: func(executeCtx context.Context) error {
-			if !firstExecution && d.stopRequested() {
-				return errEntryStoppedAfterRework
-			}
-			firstExecution = false
-			return d.Execute(executeCtx, request)
-		},
-		BeforeDecision: func() (int, bool) {
-			policy := d.policyForEntry(*entry)
+	return driver.Run(ctx, entry.PlanID, reworkpkg.RunOptions{
+		Enabled:     true,
+		MaxAttempts: initialMaxAttempts,
+		Recovered:   &state,
+		Execute:     execute,
+		BeforeDecision: func(context.Context) (int, bool, error) {
+			policy = d.policyForEntry(*entry)
 			reworker = d.reworkerForEntry(*entry)
-			return policy.MaxAttempts, policy.Enabled && policy.MaxAttempts > 0 && reworker != nil && !d.stopRequested()
+			proceed := policy.Enabled && policy.MaxAttempts > 0 && reworker != nil && !d.stopRequested()
+			return policy.MaxAttempts, proceed, nil
 		},
 		PersistProgress: func(persistCtx context.Context, attempts, _ int, fingerprint string) error {
 			updated := *entry
 			updated.ReworkAttempts = attempts
 			updated.PreviousFindingFingerprint = fingerprint
+			updated.RecoveryPending = false
 			if _, err := d.persistRecoveryUpdate(persistCtx, *entry, updated); err != nil {
 				return fmt.Errorf("persist automatic rework progress: %w", err)
 			}
@@ -466,13 +476,6 @@ func (d EntryDriver) driveOwned(ctx context.Context, entry *QueueEntry, request 
 			return nil
 		},
 	})
-	if errors.Is(loopErr, errEntryStoppedAfterRework) {
-		return EntryResult{Outcome: EntryOutcomeRequeuedAfterStop}, nil
-	}
-	if loopErr != nil {
-		return EntryResult{Outcome: EntryOutcomeFailed, Err: loopErr}, loopErr
-	}
-	return EntryResult{Outcome: EntryOutcomeSucceeded}, nil
 }
 
 // ApplyResult validates and translates an explicit result before asking Host to

@@ -9,9 +9,15 @@
 // observe progress through snapshots rather than reaching into queue internals.
 //
 // EntryDriver is the synchronous one-entry boundary. It owns plan-level
-// recovery, validation, ownership, execution, and delegation of bounded rework
-// loops to internal/rework. It submits value-only transitions through
-// EntryDriverHost; the host serializes each transition, persists it first, and
-// only then publishes matching queue and active-status projections. External
-// callbacks remain outside that ordering-critical section.
+// recovery, validation, ownership, and execution while delegating ordinary and
+// recovered automatic-rework decisions to rework.Driver.Run. Queue snapshots
+// remain the durable source of each entry's baseline, attempts, fingerprint,
+// and recovery-pending state; progress is persisted before a reopened round is
+// executed, under the same retained plan owner. The domain driver owns bounded
+// cap and finding-stop decisions.
+//
+// EntryDriver submits value-only transitions through EntryDriverHost; the host
+// serializes each transition, persists it first, and only then publishes
+// matching queue and active-status projections. External callbacks remain
+// outside that ordering-critical section.
 package runqueue

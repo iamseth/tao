@@ -203,30 +203,13 @@ func (a App) executeResolvedRun(ctx context.Context, repo queueRepository, input
 	defer stopSignals()
 
 	return service.WithPlanRunLock(runCtx, request, func(ownedCtx context.Context) error {
-		baseline := 0
-		acknowledgedStop := false
-		if policy.Enabled && policy.MaxAttempts > 0 {
-			detail, err := repo.ResolvePlan(ownedCtx, input)
-			if err != nil {
-				return err
-			}
-			_, acknowledgedStop, err = autoReworkRestartGuard(detail, reworkRestart)
-			if err != nil {
-				return err
-			}
-			baseline = reworkpkg.RoundCount(detail)
-		}
-		maxAttempts := 0
-		if policy.Enabled {
-			maxAttempts = policy.MaxAttempts
-		}
 		firstExecution := true
 		driver := newReworkDriver(repo, a.now)
-		return driver.Loop(ownedCtx, request.Input, reworkpkg.LoopOptions{
-			Baseline:            baseline,
-			MaxAttempts:         maxAttempts,
-			DecideBeforeExecute: acknowledgedStop,
-			BeforeDecision:      automaticReworkPhaseHook(ownedCtx, maxAttempts, policy.Enabled),
+		return driver.Run(ownedCtx, request.Input, reworkpkg.RunOptions{
+			Enabled:        policy.Enabled,
+			MaxAttempts:    policy.MaxAttempts,
+			AllowRestart:   reworkRestart,
+			BeforeDecision: automaticReworkPhaseHook(policy.MaxAttempts, policy.Enabled),
 			Execute: func(executeCtx context.Context) error {
 				err := executeSinglePlan(service, executeCtx, request)
 				if firstExecution {
@@ -235,7 +218,6 @@ func (a App) executeResolvedRun(ctx context.Context, repo queueRepository, input
 				}
 				return err
 			},
-			PersistProgress: func(context.Context, int, int, string) error { return nil },
 			LogProgress: func(round int) error {
 				return writef(a.Out, "Plan reopened for rework round %d\n", round)
 			},

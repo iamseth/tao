@@ -446,6 +446,289 @@ func TestFormatStopMessageDistinguishesStallFromCap(t *testing.T) {
 	}
 }
 
+func TestDriverRunDisabledPolicyExecutesOnceWithoutLoadingState(t *testing.T) {
+	driver := Driver{
+		Resolve: func(context.Context, string) (*plan.PlanDetail, error) {
+			t.Fatal("disabled automatic rework resolved plan detail")
+			return nil, nil
+		},
+		DecideOne: func(context.Context, string, int, int, string, int) (Decision, error) {
+			t.Fatal("disabled automatic rework made a decision")
+			return Decision{}, nil
+		},
+	}
+	executions := 0
+	err := driver.Run(context.Background(), "plan", RunOptions{
+		Enabled:     false,
+		MaxAttempts: 5,
+		Execute: func(context.Context) error {
+			executions++
+			return nil
+		},
+		BeforeDecision: func(context.Context) (int, bool, error) {
+			t.Fatal("disabled automatic rework checked dynamic policy")
+			return 0, false, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if executions != 1 {
+		t.Fatalf("executions = %d, want 1", executions)
+	}
+}
+
+func TestDriverRunExecutesThenDecidesWithFreshBudget(t *testing.T) {
+	detail := actionableDriverDetail(2)
+	var calls []string
+	decisions := 0
+	driver := Driver{
+		Resolve: fixedDriverResolver(detail),
+		DecideOne: func(_ context.Context, _ string, baseline, attempts int, previous string, maxAttempts int) (Decision, error) {
+			calls = append(calls, fmt.Sprintf("decide:%d:%d:%s:%d", baseline, attempts, previous, maxAttempts))
+			decisions++
+			if decisions == 1 {
+				return Decision{Reworked: true, Round: 3, Fingerprint: "finding-1"}, nil
+			}
+			return Decision{}, nil
+		},
+	}
+	err := driver.Run(context.Background(), "plan", RunOptions{
+		Enabled:     true,
+		MaxAttempts: 5,
+		Execute: func(context.Context) error {
+			calls = append(calls, "execute")
+			return nil
+		},
+		PersistProgress: func(_ context.Context, attempts, round int, fingerprint string) error {
+			calls = append(calls, fmt.Sprintf("persist:%d:%d:%s", attempts, round, fingerprint))
+			return nil
+		},
+		LogProgress: func(round int) error {
+			calls = append(calls, fmt.Sprintf("log:%d", round))
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	want := []string{
+		"execute",
+		"decide:2:0::5",
+		"persist:1:3:finding-1",
+		"log:3",
+		"execute",
+		"decide:2:1:finding-1:5",
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %#v, want %#v", calls, want)
+	}
+}
+
+func TestDriverRunAcknowledgedRestartDecidesBeforeFirstExecution(t *testing.T) {
+	detail := actionableDriverDetail(0)
+	detail.Events = []plan.Event{{Type: plan.EventTypeReworkStopped, Reason: equivalentFindingsStopReason}}
+	var calls []string
+	decisions := 0
+	driver := Driver{
+		Resolve: fixedDriverResolver(detail),
+		DecideOne: func(context.Context, string, int, int, string, int) (Decision, error) {
+			calls = append(calls, "decide")
+			decisions++
+			if decisions == 1 {
+				return Decision{Reworked: true, Round: 1, Fingerprint: "fresh-finding"}, nil
+			}
+			return Decision{}, nil
+		},
+	}
+	err := driver.Run(context.Background(), "plan", RunOptions{
+		Enabled:      true,
+		MaxAttempts:  5,
+		AllowRestart: true,
+		Execute: func(context.Context) error {
+			calls = append(calls, "execute")
+			return nil
+		},
+		PersistProgress: func(context.Context, int, int, string) error {
+			calls = append(calls, "persist")
+			return nil
+		},
+		LogProgress: func(int) error {
+			calls = append(calls, "log")
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	want := []string{"decide", "persist", "log", "execute", "decide"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %#v, want %#v", calls, want)
+	}
+}
+
+func TestDriverRunRefusesPersistedStopBeforeExecution(t *testing.T) {
+	detail := actionableDriverDetail(0)
+	detail.Events = []plan.Event{{Type: plan.EventTypeReworkStopped, Reason: equivalentFindingsStopReason}}
+	driver := Driver{
+		Resolve: fixedDriverResolver(detail),
+		DecideOne: func(context.Context, string, int, int, string, int) (Decision, error) {
+			t.Fatal("guarded run made a decision")
+			return Decision{}, nil
+		},
+	}
+	executed := false
+	err := driver.Run(context.Background(), "plan", RunOptions{
+		Enabled:     true,
+		MaxAttempts: 5,
+		Execute: func(context.Context) error {
+			executed = true
+			return nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "A new automatic-rework budget was not started") {
+		t.Fatalf("Run error = %v, want persisted-stop restart refusal", err)
+	}
+	if executed {
+		t.Fatal("guarded run executed the plan")
+	}
+}
+
+func TestDriverRunAcceptsRecoveredBudgetState(t *testing.T) {
+	var gotBaseline, gotAttempts, gotMax int
+	var gotPrevious string
+	driver := Driver{
+		Resolve: func(context.Context, string) (*plan.PlanDetail, error) {
+			t.Fatal("recovered automatic rework resolved fresh plan detail")
+			return nil, nil
+		},
+		DecideOne: func(_ context.Context, _ string, baseline, attempts int, previous string, maxAttempts int) (Decision, error) {
+			gotBaseline, gotAttempts, gotPrevious, gotMax = baseline, attempts, previous, maxAttempts
+			return Decision{}, nil
+		},
+	}
+	err := driver.Run(context.Background(), "plan", RunOptions{
+		Enabled:     true,
+		MaxAttempts: 7,
+		Recovered: &ExecutionState{Budget: Budget{
+			BaselineRound:              3,
+			Attempts:                   2,
+			PreviousFindingFingerprint: "persisted-finding",
+		}},
+		Execute: func(context.Context) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if gotBaseline != 3 || gotAttempts != 2 || gotPrevious != "persisted-finding" || gotMax != 7 {
+		t.Fatalf("recovered decision state = (%d, %d, %q, %d)", gotBaseline, gotAttempts, gotPrevious, gotMax)
+	}
+}
+
+func TestDriverRunPropagatesHookErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(error) error
+	}{
+		{
+			name: "execute",
+			run: func(want error) error {
+				return (Driver{}).Run(context.Background(), "plan", RunOptions{
+					Execute: func(context.Context) error { return want },
+				})
+			},
+		},
+		{
+			name: "dynamic policy and stop check",
+			run: func(want error) error {
+				return (Driver{Resolve: fixedDriverResolver(actionableDriverDetail(0))}).Run(context.Background(), "plan", RunOptions{
+					Enabled:     true,
+					MaxAttempts: 5,
+					Execute:     func(context.Context) error { return nil },
+					BeforeDecision: func(context.Context) (int, bool, error) {
+						return 0, false, want
+					},
+				})
+			},
+		},
+		{
+			name: "durable progress",
+			run: func(want error) error {
+				driver := Driver{
+					Resolve: fixedDriverResolver(actionableDriverDetail(0)),
+					DecideOne: func(context.Context, string, int, int, string, int) (Decision, error) {
+						return Decision{Reworked: true, Round: 1, Fingerprint: "finding"}, nil
+					},
+				}
+				return driver.Run(context.Background(), "plan", RunOptions{
+					Enabled:         true,
+					MaxAttempts:     5,
+					Execute:         func(context.Context) error { return nil },
+					PersistProgress: func(context.Context, int, int, string) error { return want },
+				})
+			},
+		},
+		{
+			name: "progress logging",
+			run: func(want error) error {
+				driver := Driver{
+					Resolve: fixedDriverResolver(actionableDriverDetail(0)),
+					DecideOne: func(context.Context, string, int, int, string, int) (Decision, error) {
+						return Decision{Reworked: true, Round: 1, Fingerprint: "finding"}, nil
+					},
+				}
+				return driver.Run(context.Background(), "plan", RunOptions{
+					Enabled:         true,
+					MaxAttempts:     5,
+					Execute:         func(context.Context) error { return nil },
+					PersistProgress: func(context.Context, int, int, string) error { return nil },
+					LogProgress:     func(int) error { return want },
+				})
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			want := errors.New(test.name + " failed")
+			if err := test.run(want); !errors.Is(err, want) {
+				t.Fatalf("Run error = %v, want %v", err, want)
+			}
+		})
+	}
+}
+
+func TestDriverRunRecoveredAttemptsNeverDecrease(t *testing.T) {
+	decisions := 0
+	persistedAttempts := 0
+	driver := Driver{DecideOne: func(context.Context, string, int, int, string, int) (Decision, error) {
+		decisions++
+		if decisions == 1 {
+			return Decision{Reworked: true, Round: 11, Fingerprint: "new-finding"}, nil
+		}
+		return Decision{}, nil
+	}}
+	err := driver.Run(context.Background(), "plan", RunOptions{
+		Enabled:     true,
+		MaxAttempts: 9,
+		Recovered: &ExecutionState{Budget: Budget{
+			BaselineRound: 10,
+			Attempts:      4,
+		}},
+		Execute: func(context.Context) error { return nil },
+		PersistProgress: func(_ context.Context, attempts, _ int, _ string) error {
+			persistedAttempts = attempts
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if persistedAttempts != 4 {
+		t.Fatalf("persisted attempts = %d, want 4", persistedAttempts)
+	}
+}
+
 func TestDriverLoopPersistsBeforeEachRerun(t *testing.T) {
 	details := []*plan.PlanDetail{
 		actionableDriverDetail(0),

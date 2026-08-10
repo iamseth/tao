@@ -35,24 +35,20 @@ func planAutoReworkerWithRestart(repo queueRepository, now func() time.Time, all
 		if err != nil {
 			return reworkpkg.Decision{}, err
 		}
-		if _, _, err := autoReworkRestartGuard(detail, allowRestart); err != nil {
+		if _, _, err := reworkpkg.GuardAutoReworkRestart(detail, allowRestart); err != nil {
 			return reworkpkg.Decision{}, err
 		}
 		return driver.Decide(ctx, planID, baseline, attempts, previous, maxAttempts)
 	}
 }
 
-func autoReworkRestartGuard(detail *plan.PlanDetail, allowRestart bool) (reworkpkg.Decision, bool, error) {
-	return reworkpkg.GuardAutoReworkRestart(detail, allowRestart)
-}
-
-func automaticReworkPhaseHook(ctx context.Context, maxAttempts int, enabled bool) func() (int, bool) {
+func automaticReworkPhaseHook(maxAttempts int, enabled bool) reworkpkg.DecisionCheck {
 	if !enabled || maxAttempts <= 0 {
 		return nil
 	}
-	return func() (int, bool) {
+	return func(ctx context.Context) (int, bool, error) {
 		run.ReportPhase(ctx, run.PhaseAutomaticRework, nil)
-		return maxAttempts, true
+		return maxAttempts, true, nil
 	}
 }
 
