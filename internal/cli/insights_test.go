@@ -16,7 +16,46 @@ import (
 	"github.com/iamseth/tao/internal/insights"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/taodata"
+	"github.com/iamseth/tao/internal/view"
 )
+
+const (
+	digestMaxBuckets      = 5
+	digestMaxReworkPlans  = 5
+	digestMaxOutlierPlans = 5
+	digestMaxTextBytes    = 160
+	digestMaxBytes        = 4096
+	allDigestMaxSources   = 8
+	allDigestMaxSignals   = 3
+)
+
+func renderInsightsReport(out *bytes.Buffer, report insights.Report) error {
+	return view.RenderInsights(out, report, view.InsightsOptions{Scope: view.InsightsScopeRepository, Format: view.InsightsFormatReport})
+}
+
+func renderInsightsDigest(out *bytes.Buffer, report insights.Report) error {
+	return view.RenderInsights(out, report, view.InsightsOptions{Scope: view.InsightsScopeRepository, Format: view.InsightsFormatDigest})
+}
+
+func renderAllInsightsReport(out *bytes.Buffer, report insights.Report) error {
+	return view.RenderInsights(out, report, view.InsightsOptions{Scope: view.InsightsScopeAllRepositories, Format: view.InsightsFormatReport})
+}
+
+func renderAllInsightsDigest(out *bytes.Buffer, report insights.Report) error {
+	return view.RenderInsights(out, report, view.InsightsOptions{Scope: view.InsightsScopeAllRepositories, Format: view.InsightsFormatDigest})
+}
+
+func limitDigestText(value string) string {
+	value = strings.Join(strings.Fields(value), " ")
+	if len(value) <= digestMaxTextBytes {
+		return value
+	}
+	value = value[:digestMaxTextBytes-len("…")]
+	for !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+	return value + "…"
+}
 
 func TestInsightsCommandRegistrationAndPlansDir(t *testing.T) {
 	metadata := commandByName("insights")
@@ -42,6 +81,92 @@ func TestInsightsCommandRegistrationAndPlansDir(t *testing.T) {
 	if out.String() != "No plan history.\n" {
 		t.Fatalf("output = %q", out.String())
 	}
+}
+
+func TestInsightsRenderersGolden(t *testing.T) {
+	report := representativeInsightsReport()
+	tests := []struct {
+		name    string
+		fixture string
+		render  func(*bytes.Buffer, insights.Report) error
+	}{
+		{name: "repository report", fixture: "repository-report.golden", render: renderInsightsReport},
+		{name: "repository digest", fixture: "repository-digest.golden", render: renderInsightsDigest},
+		{name: "all-repositories report", fixture: "all-repositories-report.golden", render: renderAllInsightsReport},
+		{name: "all-repositories digest", fixture: "all-repositories-digest.golden", render: renderAllInsightsDigest},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var out bytes.Buffer
+			if err := test.render(&out, report); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join("testdata", "insights", test.fixture)
+			want, err := os.ReadFile(path) //nolint:gosec // G304: path is confined to checked-in test fixtures.
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(out.Bytes(), want) {
+				t.Errorf("output differs from %s:\n--- got ---\n%s\n--- want ---\n%s", path, out.Bytes(), want)
+			}
+		})
+	}
+}
+
+func representativeInsightsReport() insights.Report {
+	report := insights.Report{
+		PlansScanned: 9,
+		PlansSkipped: 2,
+		RepositoryCoverage: insights.RepositoryCoverage{
+			Scanned: 6, Empty: 1, Unreadable: 1, Skipped: 1,
+			Repositories: []insights.RepositoryScanResult{
+				{RepositoryID: "repo-a", RepositoryName: "alpha", Status: "scanned"},
+				{RepositoryID: "repo-b", RepositoryName: "beta", Status: "empty"},
+				{RepositoryID: "repo-c", RepositoryName: "gamma", Status: "unreadable"},
+				{RepositoryID: "repo-d", RepositoryName: "delta", Status: "skipped"},
+				{RepositoryID: "repo-e", Status: "scanned"},
+				{RepositoryID: "repo-f", Status: "scanned"},
+				{RepositoryID: "repo-g", Status: "scanned"},
+				{RepositoryID: "repo-h", Status: "scanned"},
+				{RepositoryID: "repo-i", Status: "scanned"},
+			},
+		},
+		Signals: insights.SignalCounts{
+			SessionTimeout: 3, SliceResumeFailed: 0, VerificationCommandInvalid: 2, PlanCommitFallback: 1, PlanCommitGuard: 4,
+		},
+		OutputTokens: insights.Percentiles{Sessions: 7, P50: 1200, P90: 3400, P95: 5600},
+		Cost:         insights.Percentiles{},
+		RecentLogs: insights.RecentLogReport{
+			Coverage:           insights.LogCoverage{Eligible: 8, Scanned: 5, MissingRecency: 1, OutsideWindow: 2, Missing: 1, Unreadable: 1, Unsupported: 0, Oversized: 1, WorkLimited: 0},
+			MissingExecutables: []insights.LogSignal{{Name: "jq", Count: 2, PlanCount: 2, RepositoryCount: 1, Exemplars: []insights.LogExemplar{{RepositoryID: "repo-a", RepositoryName: "alpha", PlanID: "plan-1", Excerpt: "jq: command not found"}}}},
+			ToolUses: []insights.LogSignal{
+				{Name: "git", Count: 8, PlanCount: 4, RepositoryCount: 3, Exemplars: []insights.LogExemplar{{RepositoryID: "repo-a", RepositoryName: "alpha", PlanID: "plan-1", Excerpt: "git status --short"}}},
+				{Name: "go", Count: 6, PlanCount: 3, RepositoryCount: 2},
+				{Name: "rg", Count: 4, PlanCount: 2, RepositoryCount: 2},
+				{Name: "make", Count: 1, PlanCount: 1, RepositoryCount: 1},
+			},
+		},
+	}
+	for i, reason := range []string{"network_timeout", "invalid_command", "merge_conflict", "missing_approval", "stale_base", "digest_overflow"} {
+		report.BlockedReasons = append(report.BlockedReasons, insights.ReasonBucket{
+			Reason: reason, Count: i + 1, Exemplars: []string{fmt.Sprintf("example %d", i+1), "second example"},
+			QualifiedExemplars: []insights.EvidenceExemplar{{RepositoryID: "repo-a", RepositoryName: "alpha", Value: fmt.Sprintf("example %d", i+1)}},
+			Repositories:       []insights.ReasonRepository{{RepositoryID: "repo-a", RepositoryName: "alpha", Count: i + 1}},
+		})
+	}
+	for i := range 6 {
+		rework := insights.ReworkPlan{RepositoryID: "repo-a", RepositoryName: "alpha", PlanID: fmt.Sprintf("rework-%d", i+1), Rounds: i + 3}
+		if i == 0 {
+			rework.StoppedReasons = []string{"same finding repeated", "attempt cap reached"}
+		}
+		report.ReworkPlans = append(report.ReworkPlans, rework)
+		report.OutlierPlans = append(report.OutlierPlans, insights.PlanOutlier{
+			RepositoryID: "repo-a", RepositoryName: "alpha", PlanID: fmt.Sprintf("outlier-%d", i+1),
+			OutputTokens: int64(6000 + i*100), Cost: float64(i) + 0.5, OutputTokensOutlier: true, CostOutlier: i%2 == 0,
+		})
+	}
+	return report
 }
 
 func TestInsightsReportRendering(t *testing.T) {
@@ -145,8 +270,8 @@ func TestInsightsDigestRendersBoundedReworkStopContext(t *testing.T) {
 		stoppedLabel  string
 		unstoppedLine string
 	}{
-		{name: "repository", render: func(out *bytes.Buffer, report insights.Report) error { return renderInsightsDigest(out, report) }, stoppedLabel: "plan-a", unstoppedLine: "- `plan-b`: 3 rounds\n"},
-		{name: "all repositories", render: func(out *bytes.Buffer, report insights.Report) error { return renderAllInsightsDigest(out, report) }, stoppedLabel: "alpha [repo-a]/plan-a", unstoppedLine: "- `alpha [repo-a]/plan-b`: 3 rounds\n"},
+		{name: "repository", render: renderInsightsDigest, stoppedLabel: "plan-a", unstoppedLine: "- `plan-b`: 3 rounds\n"},
+		{name: "all repositories", render: renderAllInsightsDigest, stoppedLabel: "alpha [repo-a]/plan-a", unstoppedLine: "- `alpha [repo-a]/plan-b`: 3 rounds\n"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

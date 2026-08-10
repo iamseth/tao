@@ -1,0 +1,48 @@
+Repository insights (9 plans scanned, 2 skipped)
+
+Failure patterns:
+  network_timeout: 1
+    - example 1
+    - second example
+  invalid_command: 2
+    - example 2
+    - second example
+  merge_conflict: 3
+    - example 3
+    - second example
+  missing_approval: 4
+    - example 4
+    - second example
+  stale_base: 5
+    - example 5
+    - second example
+  digest_overflow: 6
+    - example 6
+    - second example
+
+Rework-loop plans:
+  rework-1: 3 rounds (same finding repeated; attempt cap reached)
+  rework-2: 4 rounds
+  rework-3: 5 rounds
+  rework-4: 6 rounds
+  rework-5: 7 rounds
+  rework-6: 8 rounds
+
+Event counters:
+  session_timeout: 3
+  slice_resume_failed: 0
+  verification_command_invalid: 2
+  plan_commit_fallback: 1
+  plan_commit_guard: 4
+
+Session telemetry:
+  output tokens (7 sessions): p50=1200 p90=3400 p95=5600
+  cost (0 sessions): p50=$0.00 p90=$0.00 p95=$0.00
+
+Outlier plans:
+  outlier-1: output_tokens=6000 cost=$0.50 (output=true, cost=true)
+  outlier-2: output_tokens=6100 cost=$1.50 (output=true, cost=false)
+  outlier-3: output_tokens=6200 cost=$2.50 (output=true, cost=true)
+  outlier-4: output_tokens=6300 cost=$3.50 (output=true, cost=false)
+  outlier-5: output_tokens=6400 cost=$4.50 (output=true, cost=true)
+  outlier-6: output_tokens=6500 cost=$5.50 (output=true, cost=false)

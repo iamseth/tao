@@ -1,0 +1,72 @@
+All-repository insights (9 registered; 6 scanned, 1 empty, 1 unreadable, 1 skipped)
+Plans: 9 scanned, 2 skipped
+
+Repository coverage:
+  alpha [repo-a]: scanned
+  beta [repo-b]: empty
+  gamma [repo-c]: unreadable
+  delta [repo-d]: skipped
+  repo-e: scanned
+  repo-f: scanned
+  repo-g: scanned
+  repo-h: scanned
+  repo-i: scanned
+
+Skipped-source warnings:
+  - gamma [repo-c]: unreadable plan store
+  - delta [repo-d]: skipped plan store
+
+Repository-qualified failure patterns:
+  network_timeout: 1
+    - alpha [repo-a]: example 1
+  invalid_command: 2
+    - alpha [repo-a]: example 2
+  merge_conflict: 3
+    - alpha [repo-a]: example 3
+  missing_approval: 4
+    - alpha [repo-a]: example 4
+  stale_base: 5
+    - alpha [repo-a]: example 5
+  digest_overflow: 6
+    - alpha [repo-a]: example 6
+
+Repository-qualified rework loops:
+  alpha [repo-a]/rework-1: 3 rounds
+  alpha [repo-a]/rework-2: 4 rounds
+  alpha [repo-a]/rework-3: 5 rounds
+  alpha [repo-a]/rework-4: 6 rounds
+  alpha [repo-a]/rework-5: 7 rounds
+  alpha [repo-a]/rework-6: 8 rounds
+
+Structured event counters:
+  session_timeout: 3
+  slice_resume_failed: 0
+  verification_command_invalid: 2
+  plan_commit_fallback: 1
+  plan_commit_guard: 4
+
+Global session telemetry:
+  output tokens (7 sessions): p50=1200 p90=3400 p95=5600
+  cost (0 sessions): p50=$0.00 p90=$0.00 p95=$0.00
+
+Repository-qualified outlier plans:
+  alpha [repo-a]/outlier-1: output_tokens=6000 cost=$0.50
+  alpha [repo-a]/outlier-2: output_tokens=6100 cost=$1.50
+  alpha [repo-a]/outlier-3: output_tokens=6200 cost=$2.50
+  alpha [repo-a]/outlier-4: output_tokens=6300 cost=$3.50
+  alpha [repo-a]/outlier-5: output_tokens=6400 cost=$4.50
+  alpha [repo-a]/outlier-6: output_tokens=6500 cost=$5.50
+
+Recent agent-log signals (cutoff: plan activity within the last 30 days):
+  Coverage: eligible=8 scanned=5 missing_recency=1 outside_window=2 missing=1 unreadable=1 unsupported=0 oversized=1 work_limited=0
+  Missing executables:
+    jq: 2 occurrences across 2 plans / 1 repositories
+      - alpha [repo-a]/plan-1: jq: command not found
+  Tool usage:
+    git: 8 occurrences across 4 plans / 3 repositories
+      - alpha [repo-a]/plan-1: git status --short
+    go: 6 occurrences across 3 plans / 2 repositories
+    rg: 4 occurrences across 2 plans / 2 repositories
+    make: 1 occurrences across 1 plans / 1 repositories
+  External systems:
+    none
