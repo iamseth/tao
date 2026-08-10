@@ -823,6 +823,73 @@ func TestQueueStatusOutputGroupsDetailsAndHiddenHistory(t *testing.T) {
 	}
 }
 
+func TestQueueStatusGroupedASCIIOutput(t *testing.T) {
+	view := queueStatusView{
+		Groups: []queueStatusGroup{
+			{Name: queueStatusRunningGroup, Rows: []queueStatusRow{{
+				Entry: runqueue.QueueEntry{Status: runqueue.QueueStatusRunning}, Label: "api", Age: "5m", Elapsed: "5m00s", Details: "-",
+			}}},
+			{Name: queueStatusQueuedGroup, Rows: []queueStatusRow{{
+				Entry: runqueue.QueueEntry{Status: runqueue.QueueStatusPending, WaitReason: "workspace"}, Label: "worker", Age: "10m", Elapsed: "-", Details: "workspace",
+			}}},
+		},
+		Summary: runqueue.BatchSummary{Statuses: runqueue.QueueStatusCounts{Running: 1, Pending: 1}},
+		Visible: 2,
+	}
+
+	var out bytes.Buffer
+	if err := renderQueueStatus(&out, view, false); err != nil {
+		t.Fatal(err)
+	}
+	want := "Summary: 2 visible (1 running, 1 queued)\n" +
+		"\nRunning (1)\n" +
+		"  running  api     started 5m ago, 5m00s elapsed\n" +
+		"\nQueued (1)\n" +
+		"  pending  worker  queued 10m ago  waiting: workspace\n"
+	if got := out.String(); got != want {
+		t.Fatalf("grouped queue output:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestQueueStatusUnicodeLabelAlignmentAndColorEquivalence(t *testing.T) {
+	view := queueStatusView{
+		Groups: []queueStatusGroup{
+			{Name: queueStatusRunningGroup, Rows: []queueStatusRow{{
+				Entry: runqueue.QueueEntry{Status: runqueue.QueueStatusRunning}, Label: "界", Age: "now", Elapsed: "-", Details: "-",
+			}}},
+			{Name: queueStatusQueuedGroup, Rows: []queueStatusRow{{
+				Entry: runqueue.QueueEntry{Status: runqueue.QueueStatusPending}, Label: "alpha", Age: "now", Elapsed: "-", Details: "-",
+			}}},
+		},
+		Summary: runqueue.BatchSummary{Statuses: runqueue.QueueStatusCounts{Running: 1, Pending: 1}},
+		Visible: 2,
+	}
+
+	var plain bytes.Buffer
+	if err := renderQueueStatus(&plain, view, false); err != nil {
+		t.Fatal(err)
+	}
+	want := "Summary: 2 visible (1 running, 1 queued)\n" +
+		"\nRunning (1)\n" +
+		"  running  界      started now\n" +
+		"\nQueued (1)\n" +
+		"  pending  alpha  queued now\n"
+	if got := plain.String(); got != want {
+		t.Fatalf("Unicode queue output:\n%s\nwant:\n%s", got, want)
+	}
+
+	var colored bytes.Buffer
+	if err := renderQueueStatus(&colored, view, true); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(colored.String(), "\x1b[") {
+		t.Fatalf("colored queue output did not contain ANSI escapes: %q", colored.String())
+	}
+	if got := stripANSI(colored.String()); got != plain.String() {
+		t.Fatalf("ANSI changed Unicode queue alignment\ncolored stripped:\n%s\nplain:\n%s", got, plain.String())
+	}
+}
+
 func TestQueueStatusAllShowsCompleteHistoryWithoutMutatingSnapshot(t *testing.T) {
 	clearTaoEnv(t)
 	configureQueueDataHome(t)

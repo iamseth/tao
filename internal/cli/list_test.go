@@ -109,6 +109,41 @@ func TestRenderPlanListOmitsCurrentSliceColumn(t *testing.T) {
 	}
 }
 
+func TestRenderPlanListPreservesExactASCIIOutput(t *testing.T) {
+	now := time.Date(2026, 8, 10, 22, 0, 0, 0, time.UTC)
+	updated := now.Add(-42 * time.Minute)
+	var out bytes.Buffer
+
+	err := renderPlanList(&out, []plan.PlanSummary{{
+		ID: "20260810-2142-first-plan", Status: plan.StatusPlanned,
+		CompletedCount: 1, TotalCount: 2, LastActivityAt: &updated,
+	}}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "STATUS   PLAN ID        PLAN        DONE  UPDATED\n" +
+		"planned  20260810-2142  first-plan  1/2   42m    \n"
+	if got := stripANSI(out.String()); got != want {
+		t.Fatalf("renderPlanList() output:\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestRenderPlanListUsesRuneWidthsForUnicode(t *testing.T) {
+	var out bytes.Buffer
+
+	err := renderPlanList(&out, []plan.PlanSummary{{
+		ID: "20260810-2142-café", Status: plan.StatusPlanned,
+	}}, time.Date(2026, 8, 10, 22, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "STATUS   PLAN ID        PLAN  DONE  UPDATED\n" +
+		"planned  20260810-2142  café  0/0   -      \n"
+	if got := stripANSI(out.String()); got != want {
+		t.Fatalf("renderPlanList() Unicode output:\n%q\nwant:\n%q", got, want)
+	}
+}
+
 func TestRenderPlanListUsesHumanUpdatedTime(t *testing.T) {
 	now := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
 	recent := now.Add(-42 * time.Minute)

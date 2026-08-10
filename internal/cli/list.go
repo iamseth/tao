@@ -54,28 +54,42 @@ func (a App) list(ctx context.Context, repo planLister, args []string) error {
 }
 
 func renderPlanList(out io.Writer, summaries []plan.PlanSummary, now time.Time) error {
-	widths := listWidths(summaries, now)
+	headers := []string{"STATUS", "PLAN ID", "PLAN", "DONE", "UPDATED"}
+	rows := make([][]string, 0, len(summaries))
+	for _, summary := range summaries {
+		rows = append(rows, planListRow(summary, now))
+	}
+	widths := planview.ColumnWidths(headers, rows)
 	if err := writef(out, "%s  %s  %s  %s  %s\n",
-		pad("STATUS", widths.status),
-		pad("PLAN ID", widths.planID),
-		pad("PLAN", widths.plan),
-		pad("DONE", widths.done),
-		pad("UPDATED", widths.updated),
+		planview.Pad(headers[0], widths[0]),
+		planview.Pad(headers[1], widths[1]),
+		planview.Pad(headers[2], widths[2]),
+		planview.Pad(headers[3], widths[3]),
+		planview.Pad(headers[4], widths[4]),
 	); err != nil {
 		return err
 	}
 	for _, summary := range summaries {
-		done := planview.DoneLabel(summary)
-		updated := plan.FormatHumanTime(summary.LastActivityAt, now)
+		row := planListRow(summary, now)
 		if err := writef(out, "%s  %s  %s  %s  %s\n",
-			colorStatus(pad(summary.Status, widths.status), summary.Status),
-			pad(planview.ShortPlanID(summary.ID), widths.planID),
-			pad(listPlanLabel(summary), widths.plan),
-			colorDone(pad(done, widths.done), summary.CompletedCount, summary.TotalCount),
-			pad(updated, widths.updated),
+			colorStatus(planview.Pad(row[0], widths[0]), summary.Status),
+			planview.Pad(row[1], widths[1]),
+			planview.Pad(row[2], widths[2]),
+			colorDone(planview.Pad(row[3], widths[3]), summary.CompletedCount, summary.TotalCount),
+			planview.Pad(row[4], widths[4]),
 		); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func planListRow(summary plan.PlanSummary, now time.Time) []string {
+	return []string{
+		summary.Status,
+		planview.ShortPlanID(summary.ID),
+		listPlanLabel(summary),
+		planview.DoneLabel(summary),
+		plan.FormatHumanTime(summary.LastActivityAt, now),
+	}
 }

@@ -278,6 +278,37 @@ func TestMonitorCombinedSliceColorPreservesPlainAlignment(t *testing.T) {
 	}
 }
 
+func TestMonitorUnicodeColumnsMatchExactPlainAndColoredOutput(t *testing.T) {
+	snapshot := monitor.Snapshot{Rows: []monitor.Row{{
+		RepositoryName:         "倉庫名前長",
+		PlanID:                 "unicode",
+		PlanTitle:              "日本語の計画",
+		Status:                 plan.StatusInProgress,
+		Liveness:               monitor.LivenessLive,
+		Phase:                  runstatus.Phase("検証段階中"),
+		OriginalCompletedCount: 1,
+		OriginalTotalCount:     2,
+		Warnings:               []string{"this warning is intentionally wider than the table"},
+	}}}
+	const want = "LIVE  STATUS       REPO   PLAN ID/name    PHASE  RUN  SLICES  UPDATED\n" +
+		"LIVE  in_progress  倉庫名前長  unicode 日本語の計画  検証段階中  0s   1/2     -      \n" +
+		"warning: 倉庫名前長/unicode: this warning is intentionally wider than the table\n"
+
+	var plain, colored bytes.Buffer
+	if err := renderMonitorSnapshot(&plain, snapshot, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := renderMonitorSnapshot(&colored, snapshot, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := plain.String(); got != want {
+		t.Fatalf("plain Unicode monitor output = %q, want %q", got, want)
+	}
+	if got := stripANSI(colored.String()); got != want {
+		t.Fatalf("colored Unicode monitor output stripped = %q, want %q", got, want)
+	}
+}
+
 func TestMonitorRedirectedOutputIsAutomaticallyOnceAndPlain(t *testing.T) {
 	collector := &monitorCollectorStub{snapshots: []monitor.Snapshot{{}}}
 	var out bytes.Buffer

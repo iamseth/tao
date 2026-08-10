@@ -10,7 +10,6 @@ import (
 	"os"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/plan"
@@ -185,40 +184,34 @@ func writeMonitorSnapshot(ctx context.Context, out io.Writer, collector MonitorS
 	return err
 }
 
-type monitorWidths struct {
-	live    int
-	status  int
-	repo    int
-	plan    int
-	phase   int
-	run     int
-	slices  int
-	updated int
-}
-
 func renderMonitorSnapshot(out io.Writer, snapshot monitor.Snapshot, useColor bool) error {
 	if len(snapshot.Rows) == 0 {
 		return writeln(out, "No non-completed plans.")
 	}
-	widths := monitorColumnWidths(snapshot)
+	headers := []string{"LIVE", "STATUS", "REPO", "PLAN ID/name", "PHASE", "RUN", "SLICES", "UPDATED"}
+	rows := make([][]string, 0, len(snapshot.Rows))
+	for _, row := range snapshot.Rows {
+		rows = append(rows, monitorRowValues(row, snapshot.CollectedAt).columns())
+	}
+	widths := planview.ColumnWidths(headers, rows)
 	if err := writef(out, "%s  %s  %s  %s  %s  %s  %s  %s\n",
-		pad("LIVE", widths.live),
-		pad("STATUS", widths.status),
-		pad("REPO", widths.repo),
-		pad("PLAN ID/name", widths.plan),
-		pad("PHASE", widths.phase),
-		pad("RUN", widths.run),
-		pad("SLICES", widths.slices),
-		pad("UPDATED", widths.updated),
+		planview.Pad(headers[0], widths[0]),
+		planview.Pad(headers[1], widths[1]),
+		planview.Pad(headers[2], widths[2]),
+		planview.Pad(headers[3], widths[3]),
+		planview.Pad(headers[4], widths[4]),
+		planview.Pad(headers[5], widths[5]),
+		planview.Pad(headers[6], widths[6]),
+		planview.Pad(headers[7], widths[7]),
 	); err != nil {
 		return err
 	}
 
-	for _, row := range snapshot.Rows {
-		values := monitorRowValues(row, snapshot.CollectedAt)
-		live := pad(values.live, widths.live)
-		status := pad(values.status, widths.status)
-		slices := pad(values.slices, widths.slices)
+	for index, values := range rows {
+		row := snapshot.Rows[index]
+		live := planview.Pad(values[0], widths[0])
+		status := planview.Pad(values[1], widths[1])
+		slices := planview.Pad(values[6], widths[6])
 		if useColor {
 			live = colorMonitorLiveness(live, row.Liveness)
 			status = colorStatus(status, row.Status)
@@ -231,12 +224,12 @@ func renderMonitorSnapshot(out io.Writer, snapshot monitor.Snapshot, useColor bo
 		if err := writef(out, "%s  %s  %s  %s  %s  %s  %s  %s\n",
 			live,
 			status,
-			pad(values.repo, widths.repo),
-			pad(values.plan, widths.plan),
-			pad(values.phase, widths.phase),
-			pad(values.run, widths.run),
+			planview.Pad(values[2], widths[2]),
+			planview.Pad(values[3], widths[3]),
+			planview.Pad(values[4], widths[4]),
+			planview.Pad(values[5], widths[5]),
 			slices,
-			pad(values.updated, widths.updated),
+			planview.Pad(values[7], widths[7]),
 		); err != nil {
 			return err
 		}
@@ -260,6 +253,10 @@ type monitorValues struct {
 	run     string
 	slices  string
 	updated string
+}
+
+func (v monitorValues) columns() []string {
+	return []string{v.live, v.status, v.repo, v.plan, v.phase, v.run, v.slices, v.updated}
 }
 
 func monitorRowValues(row monitor.Row, now time.Time) monitorValues {
@@ -297,25 +294,6 @@ func formatMonitorRuntime(row monitor.Row) string {
 	default:
 		return fmt.Sprintf("%dh", duration/time.Hour)
 	}
-}
-
-func monitorColumnWidths(snapshot monitor.Snapshot) monitorWidths {
-	widths := monitorWidths{
-		live: len("LIVE"), status: len("STATUS"), repo: len("REPO"), plan: len("PLAN ID/name"),
-		phase: len("PHASE"), run: len("RUN"), slices: len("SLICES"), updated: len("UPDATED"),
-	}
-	for _, row := range snapshot.Rows {
-		values := monitorRowValues(row, snapshot.CollectedAt)
-		widths.live = max(widths.live, utf8.RuneCountInString(values.live))
-		widths.status = max(widths.status, utf8.RuneCountInString(values.status))
-		widths.repo = max(widths.repo, utf8.RuneCountInString(values.repo))
-		widths.plan = max(widths.plan, utf8.RuneCountInString(values.plan))
-		widths.phase = max(widths.phase, utf8.RuneCountInString(values.phase))
-		widths.run = max(widths.run, utf8.RuneCountInString(values.run))
-		widths.slices = max(widths.slices, utf8.RuneCountInString(values.slices))
-		widths.updated = max(widths.updated, utf8.RuneCountInString(values.updated))
-	}
-	return widths
 }
 
 func monitorLivenessLabel(liveness monitor.Liveness) string {

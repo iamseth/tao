@@ -15,6 +15,7 @@ import (
 	"github.com/iamseth/tao/internal/runqueue"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/taodata"
+	planview "github.com/iamseth/tao/internal/view"
 )
 
 var queueCommand = commandMetadata{
@@ -673,17 +674,23 @@ func renderQueueStatus(out io.Writer, view queueStatusView, useColor bool) error
 		return writeln(out, "No queued runs.")
 	}
 
-	statusWidth, labelWidth := queueStatusWidths(view.Groups)
+	rows := make([][]string, 0, view.Visible)
+	for _, group := range view.Groups {
+		for _, row := range group.Rows {
+			rows = append(rows, []string{string(row.Entry.Status), row.Label})
+		}
+	}
+	widths := planview.ColumnWidths(nil, rows)
 	for _, group := range view.Groups {
 		if err := writef(out, "\n%s (%d)\n", group.Name, len(group.Rows)); err != nil {
 			return err
 		}
 		for _, row := range group.Rows {
-			status := pad(string(row.Entry.Status), statusWidth)
+			status := planview.Pad(string(row.Entry.Status), widths[0])
 			if useColor {
 				status = colorQueueStatus(status, row.Entry.Status)
 			}
-			if err := writef(out, "  %s  %s  %s%s\n", status, pad(row.Label, labelWidth), queueStatusActivity(row), queueStatusDetail(row)); err != nil {
+			if err := writef(out, "  %s  %s  %s%s\n", status, planview.Pad(row.Label, widths[1]), queueStatusActivity(row), queueStatusDetail(row)); err != nil {
 				return err
 			}
 		}
@@ -730,18 +737,6 @@ func queueHiddenResultCount(count int) string {
 		return "1 older result"
 	}
 	return fmt.Sprintf("%d older results", count)
-}
-
-func queueStatusWidths(groups []queueStatusGroup) (int, int) {
-	statusWidth := 0
-	labelWidth := 0
-	for _, group := range groups {
-		for _, row := range group.Rows {
-			statusWidth = max(statusWidth, len(row.Entry.Status))
-			labelWidth = max(labelWidth, len(row.Label))
-		}
-	}
-	return statusWidth, labelWidth
 }
 
 func queueStatusActivity(row queueStatusRow) string {

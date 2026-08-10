@@ -5,12 +5,10 @@ import (
 	"io"
 	"os"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runqueue"
-	planview "github.com/iamseth/tao/internal/view"
 )
 
 func writef(w io.Writer, format string, args ...any) error {
@@ -30,32 +28,6 @@ func writeLines(w io.Writer, lines ...string) error {
 		}
 	}
 	return nil
-}
-
-type widths struct {
-	status  int
-	planID  int
-	plan    int
-	done    int
-	updated int
-}
-
-func listWidths(summaries []plan.PlanSummary, now time.Time) widths {
-	widths := widths{
-		status:  len("STATUS"),
-		planID:  len("PLAN ID"),
-		plan:    len("PLAN"),
-		done:    len("DONE"),
-		updated: len("UPDATED"),
-	}
-	for _, summary := range summaries {
-		widths.status = max(widths.status, len(summary.Status))
-		widths.planID = max(widths.planID, len(planview.ShortPlanID(summary.ID)))
-		widths.plan = max(widths.plan, len(listPlanLabel(summary)))
-		widths.done = max(widths.done, len(planview.DoneLabel(summary)))
-		widths.updated = max(widths.updated, len(plan.FormatHumanTime(summary.LastActivityAt, now)))
-	}
-	return widths
 }
 
 func listPlanLabel(summary plan.PlanSummary) string {
