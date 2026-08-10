@@ -23,7 +23,10 @@ var logCommand = commandMetadata{
 		"  tao log --follow my-plan\n" +
 		"  tao log -f 20260628-1618-kubectl-style-help",
 	registerFlags: registerLogFlags,
-	repository:    repositoryDefault,
+	completion: completionContext{
+		positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs},
+	},
+	repository: repositoryDefault,
 	execute: func(c commandContext) error {
 		return c.app.log(c.ctx, c.repo, c.args)
 	},

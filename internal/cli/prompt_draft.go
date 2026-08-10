@@ -22,8 +22,8 @@ var draftPromptCommand = commandMetadata{
 		"  tao draft-prompt web-foundation --from prompt.md --force",
 	registerFlags: registerDraftPromptFlags,
 	completion: completionContext{
-		flagValues:    map[string]completionFlagValue{"from": {kind: completionValuePath, label: "path"}},
-		argumentSpecs: []string{":draft name:"},
+		flagValues: map[string]completionFlagValue{"from": {kind: completionValuePath, label: "path"}},
+		positional: completionPositional{index: 1, label: "draft name"},
 	},
 	execute: func(c commandContext) error {
 		return c.app.draftPrompt(c.args)

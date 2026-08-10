@@ -5,12 +5,34 @@ import (
 	"strings"
 )
 
+type commandSubcommandAlias string
+
 type commandSubcommand struct {
-	name            string
-	description     string
-	completionNames []string
-	registerFlags   func(*flag.FlagSet)
-	completion      completionContext
+	name          string
+	aliases       []commandSubcommandAlias
+	description   string
+	registerFlags func(*flag.FlagSet)
+	completion    completionContext
+}
+
+func (s commandSubcommand) completionNames() []string {
+	names := make([]string, 0, len(s.aliases)+1)
+	names = append(names, s.name)
+	for _, alias := range s.aliases {
+		names = append(names, string(alias))
+	}
+	return names
+}
+
+func (s commandSubcommand) helpName() string {
+	if len(s.aliases) == 0 {
+		return s.name
+	}
+	aliases := make([]string, 0, len(s.aliases))
+	for _, alias := range s.aliases {
+		aliases = append(aliases, string(alias))
+	}
+	return s.name + " (" + strings.Join(aliases, "|") + ")"
 }
 
 type completionValueKind int
@@ -32,14 +54,20 @@ type completionFlagValue struct {
 type positionalCompleter string
 
 const (
-	completePlanIDs    positionalCompleter = "plan-ids"
-	completeRunPlanIDs positionalCompleter = "run-plan-ids"
+	completePlanIDs         positionalCompleter = "plan-ids"
+	completeRunnablePlanIDs positionalCompleter = "run-plan-ids"
+	completeNoteIDs         positionalCompleter = "note-ids"
 )
 
+// completionPositional describes a one-based logical positional argument.
+// Renderers translate index into the shell's absolute word position.
 type completionPositional struct {
-	position  int
-	completer positionalCompleter
-	repeat    bool
+	index              int
+	label              string
+	candidates         []string
+	completer          positionalCompleter
+	repeat             bool
+	disallowAfterFlags []string
 }
 
 // completionContext adds semantic hints to the flags and positionals declared
@@ -48,7 +76,6 @@ type completionPositional struct {
 type completionContext struct {
 	flagValues     map[string]completionFlagValue
 	positional     completionPositional
-	argumentSpecs  []string
 	flagExemptions map[string]string
 }
 

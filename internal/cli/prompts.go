@@ -29,13 +29,16 @@ var promptCommand = commandMetadata{
 		"  tao prompt run --plan-dir /path/to/plan --execution-mode current\n" +
 		"  tao prompt commit --arguments \"include staged docs\"",
 	registerFlags: registerPromptFlags,
-	completion: completionContext{flagValues: map[string]completionFlagValue{
-		"arguments":      {kind: completionValueText, label: "text"},
-		"commit":         {kind: completionValueBoolean, label: "boolean"},
-		"commit-policy":  {kind: completionValueEnum, label: "policy", values: []string{"slice", "none"}},
-		"execution-mode": {kind: completionValueEnum, label: "mode", values: []string{"isolated", "current"}},
-		"plan-dir":       {kind: completionValuePath, label: "path"},
-	}},
+	completion: completionContext{
+		flagValues: map[string]completionFlagValue{
+			"arguments":      {kind: completionValueText, label: "text"},
+			"commit":         {kind: completionValueBoolean, label: "boolean"},
+			"commit-policy":  {kind: completionValueEnum, label: "policy", values: []string{"slice", "none"}},
+			"execution-mode": {kind: completionValueEnum, label: "mode", values: []string{"isolated", "current"}},
+			"plan-dir":       {kind: completionValuePath, label: "path"},
+		},
+		positional: completionPositional{index: 1, label: "prompt", candidates: prompts.PromptNames()},
+	},
 	repository: repositoryDefault,
 	execute: func(c commandContext) error {
 		return c.app.prompt(c.ctx, c.repo, c.args)

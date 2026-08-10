@@ -36,7 +36,7 @@ var runCommand = commandMetadata{
 			"max-rework-attempts": {kind: completionValueCount, label: "count"},
 			"max-slices":          {kind: completionValueCount, label: "count"},
 		},
-		positional: completionPositional{position: 3, completer: completeRunPlanIDs},
+		positional: completionPositional{index: 1, label: "plan", completer: completeRunnablePlanIDs, disallowAfterFlags: []string{"--all"}},
 	},
 	repository: repositoryDefault,
 	execute: func(c commandContext) error {

@@ -37,7 +37,7 @@ var mergeCommand = commandMetadata{
 		flagValues: map[string]completionFlagValue{
 			"verify-command": {kind: completionValueText, label: "command"},
 		},
-		positional: completionPositional{position: 3, completer: completePlanIDs},
+		positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs, disallowAfterFlags: []string{"--all"}},
 	},
 	repository: repositoryDefault,
 	execute: func(c commandContext) error {

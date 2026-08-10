@@ -156,11 +156,11 @@ func TestRunHandlesHelpCompletionAndUnknownCommand(t *testing.T) {
 	if !strings.Contains(out.String(), "de|del|dele|delet|delete)") {
 		t.Fatalf("expected delete aliases in completion case handling, got %q", out.String())
 	}
-	if !strings.Contains(out.String(), "repo)") || !strings.Contains(out.String(), "compadd list show doctor") {
+	if !strings.Contains(out.String(), "repo)") || !strings.Contains(out.String(), "'show:Show details for one registered repository'") {
 		t.Fatalf("expected repo subcommands in completion output, got %q", out.String())
 	}
-	if strings.Contains(out.String(), "review)") || strings.Contains(out.String(), "[review mode]") {
-		t.Fatalf("expected completion output to omit review command, got %q", out.String())
+	if !strings.Contains(out.String(), "rev|revi|revie|review)") || strings.Contains(out.String(), "[review mode]") {
+		t.Fatalf("expected registry-generated review completion without the removed review mode flag, got %q", out.String())
 	}
 	if strings.Contains(out.String(), "--agent") {
 		t.Fatalf("expected completion output to omit --agent, got %q", out.String())

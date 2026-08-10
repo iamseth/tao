@@ -20,9 +20,9 @@ var editCommand = commandMetadata{
 		"  tao edit skip my-plan 004-optional\n" +
 		"  tao edit move my-plan 005-tests --before 004-docs",
 	subcommands: []commandSubcommand{
-		{name: "remove", description: "Remove a pending slice from the plan"},
-		{name: "skip", description: "Mark a pending slice skipped"},
-		{name: "move", description: "Move a pending slice before or after another pending slice", completionNames: []string{"move"}, registerFlags: registerEditMoveFlags},
+		{name: "remove", description: "Remove a pending slice from the plan", completion: completionContext{positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs}}},
+		{name: "skip", description: "Mark a pending slice skipped", completion: completionContext{positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs}}},
+		{name: "move", description: "Move a pending slice before or after another pending slice", registerFlags: registerEditMoveFlags, completion: completionContext{positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs}}},
 	},
 	registerFlags: registerEditMoveFlags,
 	repository:    repositoryDefault,

@@ -9,13 +9,56 @@ import (
 )
 
 func buildZshCompletionScript() string {
-	return `#compdef tao
+	var b strings.Builder
+	b.WriteString(`#compdef tao
+
+_tao_at_positional() {
+  local start=$1 target=$2 repeat=$3 disallowed_flags=$4
+  shift 4
+  local -a value_flags
+  value_flags=("$@")
+  local logical_position=0 skip_value=0 end_flags=0 index word
+
+  [[ ${words[CURRENT]} == -*=* ]] && return 1
+  for (( index = start; index < CURRENT; index++ )); do
+    word=${words[index]}
+    if (( skip_value )); then
+      skip_value=0
+      continue
+    fi
+    if (( end_flags )); then
+      (( logical_position++ ))
+      continue
+    fi
+    if [[ $word == -- ]]; then
+      end_flags=1
+      continue
+    fi
+    if [[ $word == -* ]]; then
+      [[ $disallowed_flags == *,$word,* ]] && return 1
+      if [[ $word != *=* ]] && (( ${value_flags[(Ie)$word]} )); then
+        skip_value=1
+      fi
+      continue
+    fi
+    (( logical_position++ ))
+  done
+
+  (( skip_value )) && return 1
+  if (( repeat )); then
+    (( logical_position >= target - 1 ))
+  else
+    (( logical_position == target - 1 ))
+  fi
+}
 
 _tao() {
   local -a commands plan_ids subcommands
 
   commands=(
-` + zshCommandEntries() + `
+`)
+	b.WriteString(zshCommandEntries())
+	b.WriteString(`
   )
 
   if (( CURRENT == 2 )); then
@@ -23,182 +66,90 @@ _tao() {
     return
   fi
 
-	case ${words[2]} in
-	    ` + commandAliasPattern("list") + `)
-` + zshCommandArguments("list") + `
-	      ;;
-    init)
-` + zshCommandArguments("init") + `
-      ;;
-	    ` + commandAliasPattern("run") + `)
-` + zshCommandArguments("run") + `
-` + zshPositionalCompletion("run") + `
-      ;;
-    commit)
-` + zshCommandArguments("commit") + `
-      ;;
-    ` + commandAliasPattern("queue") + `)
-      if (( CURRENT == 3 )); then
-` + zshSubcommandEntries("queue") + `
-        _describe -t commands 'queue command' subcommands
-        return
-      fi
-      case ${words[3]} in
-        add)
-` + zshPositionalCompletion("queue", "add") + `
-          ;;
-        start)
-` + zshCommandArguments("queue", "start") + `
-          ;;
-        status)
-` + zshCommandArguments("queue", "status") + `
-          ;;
-        stop|dequeue)
-` + zshPositionalCompletion("queue", "stop") + `
-          ;;
-      esac
-      ;;
-    ` + commandAliasPattern("report") + `)
-` + zshCommandArguments("report") + `
-` + zshPositionalCompletion("report") + `
-      ;;
-    ` + commandAliasPattern("repo") + `)
-      if (( CURRENT == 3 )); then
-        compadd list show doctor
-      fi
-      ;;
-    ` + commandAliasPattern("note") + `)
-` + zshCommandArguments("note") + `
-      if (( CURRENT == 3 )); then
-        compadd c create l list s show e edit a archive reopen p plan r run
-        return
-      fi
-      case ${words[3]} in
-        s|show|e|edit|a|archive|reopen|p|plan|r|run)
-          if (( CURRENT == 4 )); then
-            plan_ids=("${(@f)$(${words[1]} complete note-ids 2>/dev/null)}")
-            compadd -a plan_ids
-          fi
-          ;;
-      esac
-      ;;
-    ` + commandAliasPattern("approve") + `)
-` + zshCommandArguments("approve") + `
-      if (( CURRENT == 3 )); then
-        plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
-        compadd -a plan_ids
-      fi
-      ;;
-    slice-complete)
-` + zshCommandArguments("slice-complete") + `
-      ;;
-    slice-blocked)
-` + zshCommandArguments("slice-blocked") + `
-      ;;
-    ` + commandAliasPattern("cleanup") + `)
-` + zshCommandArguments("cleanup") + `
-      ;;
-    ` + commandAliasPattern("merge") + `)
-` + zshCommandArguments("merge") + `
-` + zshPositionalCompletion("merge") + `
-      ;;
-    ` + commandAliasPattern("workspace") + `)
-      if (( CURRENT == 3 )); then
-        compadd list prepare status clean
-        return
-      fi
-      case ${words[3]} in
-        prepare|status)
-          if (( CURRENT == 4 )); then
-            plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
-            compadd -a plan_ids
-          fi
-          ;;
-        clean)
-` + zshCommandArguments("workspace", "clean") + `
-          if (( CURRENT == 4 )); then
-            plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
-            compadd -a plan_ids
-          fi
-          ;;
-      esac
-      ;;
-    ` + commandAliasPattern("delete") + `)
-` + zshCommandArguments("delete") + `
-      if (( CURRENT == 3 )); then
-        plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
-        compadd -a plan_ids
-      fi
-      ;;
-    ` + commandAliasPattern("edit") + `)
-      if (( CURRENT == 3 )); then
-        compadd remove skip move
-        return
-      fi
-      case ${words[3]} in
-        remove|skip)
-          if (( CURRENT == 4 )); then
-            plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
-            compadd -a plan_ids
-          fi
-          ;;
-        move)
-` + zshCommandArguments("edit", "move") + `
-          if (( CURRENT == 4 )); then
-            plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
-            compadd -a plan_ids
-          fi
-          ;;
-      esac
-      ;;
-    ` + commandAliasPattern("capture-planning-session") + `)
-` + zshCommandArguments("capture-planning-session") + `
-      ;;
-    ` + commandAliasPattern("log") + `|` + commandAliasPattern("show") + `|` + commandAliasPattern("review") + `|` + commandAliasPattern("rework") + `|` + commandAliasPattern("staleness") + `|` + commandAliasPattern("validate") + `)
-      if [[ ${words[2]} == rev* ]]; then
-` + zshCommandArguments("review") + `
-      fi
-      if [[ ${words[2]} == rew* ]]; then
-` + zshCommandArguments("rework") + `
-      fi
-      if (( CURRENT == 3 )); then
-        plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
-        compadd -a plan_ids
-      fi
-      if [[ ${words[2]} == lo* ]]; then
-` + zshCommandArguments("log") + `
-      fi
-      ;;
-    ` + commandAliasPattern("status") + `)
-` + zshCommandArguments("status") + `
-      ;;
-    ` + commandAliasPattern("monitor") + `)
-` + zshCommandArguments("monitor") + `
-      ;;
-    ` + commandAliasPattern("insights") + `)
-` + zshCommandArguments("insights") + `
-      ;;
-	    ` + commandAliasPattern("prompt") + `)
-` + zshCommandArguments("prompt") + `
-	      compadd note slice run commit grill-me improve-codebase-architecture improve-documentation repo-health pr
-      ;;
-    ` + commandAliasPattern("draft-prompt") + `)
-` + zshCommandArguments("draft-prompt") + `
-      ;;
-    ` + commandAliasPattern("install-prompts") + `)
-` + zshCommandArguments("install-prompts") + `
-      ;;
-    ` + commandAliasPattern("doctor") + `)
-` + zshCommandArguments("doctor") + `
-      ;;
-    ` + commandAliasPattern("completion") + `)
-      compadd zsh
-      ;;
-  esac
+  case ${words[2]} in
+`)
+	for i := range commandRegistry {
+		if commandRegistry[i].completionDescription == "" {
+			continue
+		}
+		b.WriteString(zshCommandCase(&commandRegistry[i]))
+	}
+	b.WriteString(`  esac
 }
 
 compdef _tao tao ./bin/tao bin/tao
-`
+`)
+	return b.String()
+}
+
+func zshCommandCase(metadata *commandMetadata) string {
+	var b strings.Builder
+	b.WriteString("    ")
+	b.WriteString(commandAliasPattern(metadata.name))
+	b.WriteString(")\n")
+	b.WriteString(zshParentCompletionContext(metadata, "      "))
+	if len(metadata.subcommands) > 0 {
+		b.WriteString("      if (( CURRENT == 3 )); then\n")
+		b.WriteString(zshSubcommandEntriesAt(metadata, "        "))
+		b.WriteString("\n        _describe -t commands ")
+		b.WriteString(zshSingleQuote(metadata.name + " command"))
+		b.WriteString(" subcommands\n        return\n      fi\n")
+		b.WriteString("      case ${words[3]} in\n")
+		for i := range metadata.subcommands {
+			subcommand := &metadata.subcommands[i]
+			b.WriteString("        ")
+			b.WriteString(strings.Join(subcommand.completionNames(), "|"))
+			b.WriteString(")\n")
+			b.WriteString(zshCompletionContext(metadata, subcommand, "          "))
+			b.WriteString("          ;;\n")
+		}
+		b.WriteString("      esac\n")
+	}
+	b.WriteString("      ;;\n")
+	return b.String()
+}
+
+func zshParentCompletionContext(metadata *commandMetadata, indent string) string {
+	if hasSubcommandFlagRegistrations(metadata) {
+		positional := zshPositionalCompletion(metadata.name)
+		if positional == "" {
+			return ""
+		}
+		return indent + strings.ReplaceAll(strings.TrimSpace(positional), "\n", "\n"+indent) + "\n"
+	}
+	return zshCompletionContext(metadata, nil, indent)
+}
+
+func hasSubcommandFlagRegistrations(metadata *commandMetadata) bool {
+	for _, subcommand := range metadata.subcommands {
+		if subcommand.registerFlags != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func zshCompletionContext(metadata *commandMetadata, subcommand *commandSubcommand, indent string) string {
+	var b strings.Builder
+	var arguments, positional string
+	if subcommand == nil {
+		arguments = zshCommandArguments(metadata.name)
+		positional = zshPositionalCompletion(metadata.name)
+	} else {
+		arguments = zshCommandArguments(metadata.name, subcommand.name)
+		positional = zshPositionalCompletion(metadata.name, subcommand.name)
+	}
+	if arguments != "" {
+		b.WriteString(indent)
+		b.WriteString(strings.TrimSpace(arguments))
+		b.WriteString("\n")
+	}
+	if positional != "" {
+		b.WriteString(indent)
+		b.WriteString(strings.ReplaceAll(strings.TrimSpace(positional), "\n", "\n"+indent))
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 func zshCommandArguments(command string, subcommand ...string) string {
@@ -253,9 +204,6 @@ func zshCommandArguments(command string, subcommand ...string) string {
 		}
 		specs = append(specs, zshSingleQuote(spec))
 	})
-	for _, spec := range completion.argumentSpecs {
-		specs = append(specs, zshSingleQuote(spec))
-	}
 	if len(specs) == 0 {
 		return ""
 	}
@@ -264,7 +212,7 @@ func zshCommandArguments(command string, subcommand ...string) string {
 
 func completionSubcommand(metadata *commandMetadata, name string) *commandSubcommand {
 	for i := range metadata.subcommands {
-		if slices.Contains(metadata.subcommands[i].completionNames, name) {
+		if slices.Contains(metadata.subcommands[i].completionNames(), name) {
 			return &metadata.subcommands[i]
 		}
 	}
@@ -310,42 +258,89 @@ func zshPositionalCompletion(command string, subcommand ...string) string {
 		return ""
 	}
 	completion := metadata.completion
+	registerFlags := metadata.registerFlags
+	contextName := metadata.name
+	start := 3
 	if len(subcommand) > 0 {
 		matched := completionSubcommand(metadata, subcommand[0])
 		if matched == nil {
 			return ""
 		}
 		completion = matched.completion
-	}
-	if completion.positional.completer == "" {
-		return ""
+		registerFlags = matched.registerFlags
+		if registerFlags == nil && !hasSubcommandFlagRegistrations(metadata) {
+			registerFlags = metadata.registerFlags
+		}
+		contextName += " " + matched.name
+		start++
 	}
 	positional := completion.positional
-	operator := "=="
-	if positional.repeat {
-		operator = ">="
+	if positional.index == 0 {
+		return ""
 	}
-	return "      if (( CURRENT " + operator + " " + strconv.Itoa(positional.position) + " )); then\n" +
-		"        plan_ids=(\"${(@f)$(${words[1]} complete " + string(positional.completer) + " 2>/dev/null)}\")\n" +
-		"        compadd -a plan_ids\n" +
-		"      fi"
+
+	repeat := 0
+	if positional.repeat {
+		repeat = 1
+	}
+	disallowedFlags := "," + strings.Join(positional.disallowAfterFlags, ",") + ","
+	condition := "_tao_at_positional " + strconv.Itoa(start) + " " + strconv.Itoa(positional.index) + " " + strconv.Itoa(repeat) + " " + zshSingleQuote(disallowedFlags)
+	for _, name := range zshValueFlagNames(contextName, registerFlags) {
+		condition += " " + zshSingleQuote(name)
+	}
+
+	var action string
+	switch {
+	case positional.completer != "":
+		action = "  plan_ids=(\"${(@f)$(${words[1]} complete " + string(positional.completer) + " 2>/dev/null)}\")\n" +
+			"  compadd -a plan_ids"
+	case len(positional.candidates) > 0:
+		candidates := make([]string, 0, len(positional.candidates))
+		for _, candidate := range positional.candidates {
+			candidates = append(candidates, zshSingleQuote(candidate))
+		}
+		action = "  compadd -- " + strings.Join(candidates, " ")
+	default:
+		action = "  _message " + zshSingleQuote(positional.label)
+	}
+	return "if " + condition + "; then\n" + action + "\nfi"
 }
 
-func zshSubcommandEntries(command string) string {
-	metadata := commandByName(command)
+func zshValueFlagNames(contextName string, registerFlags func(*flag.FlagSet)) []string {
+	if registerFlags == nil {
+		return nil
+	}
+	fs := flag.NewFlagSet(contextName, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	registerFlags(fs)
+	var names []string
+	fs.VisitAll(func(fl *flag.Flag) {
+		if isBooleanFlag(fl) {
+			return
+		}
+		prefix := "--"
+		if len(fl.Name) == 1 {
+			prefix = "-"
+		}
+		names = append(names, prefix+fl.Name)
+	})
+	return names
+}
+
+func zshSubcommandEntriesAt(metadata *commandMetadata, indent string) string {
 	if metadata == nil {
 		return ""
 	}
 	var entries []string
 	for _, subcommand := range metadata.subcommands {
-		for _, name := range subcommand.completionNames {
+		for _, name := range subcommand.completionNames() {
 			entries = append(entries, zshSingleQuote(name+":"+subcommand.description))
 		}
 	}
 	if len(entries) == 0 {
 		return ""
 	}
-	return "        subcommands=(" + strings.Join(entries, " ") + ")"
+	return indent + "subcommands=(" + strings.Join(entries, " ") + ")"
 }
 
 func zshCommandEntries() string {
@@ -359,11 +354,9 @@ func zshCommandEntries() string {
 			aliases = []string{metadata.minPrefix, metadata.name}
 		}
 		for _, alias := range aliases {
-			b.WriteString("    '")
-			b.WriteString(alias)
-			b.WriteString(":")
-			b.WriteString(metadata.completionDescription)
-			b.WriteString("'\n")
+			b.WriteString("    ")
+			b.WriteString(zshSingleQuote(alias + ":" + metadata.completionDescription))
+			b.WriteString("\n")
 		}
 	}
 	return strings.TrimSuffix(b.String(), "\n")

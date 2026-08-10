@@ -111,13 +111,13 @@ func appendPreformatted(lines []string, text string) []string {
 func commandHelpSubcommandLines(subcommands []commandSubcommand) []string {
 	nameWidth := 0
 	for _, subcommand := range subcommands {
-		if len(subcommand.name) > nameWidth {
-			nameWidth = len(subcommand.name)
+		if len(subcommand.helpName()) > nameWidth {
+			nameWidth = len(subcommand.helpName())
 		}
 	}
 	lines := make([]string, 0, len(subcommands))
 	for _, subcommand := range subcommands {
-		lines = append(lines, "  "+pad(subcommand.name, nameWidth+2)+subcommand.description)
+		lines = append(lines, "  "+pad(subcommand.helpName(), nameWidth+2)+subcommand.description)
 	}
 	return lines
 }

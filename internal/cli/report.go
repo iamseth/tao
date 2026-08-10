@@ -24,9 +24,8 @@ var reportCommand = commandMetadata{
 		"  tao report --output - 20260628-1618-kubectl-style-help",
 	registerFlags: registerReportFlags,
 	completion: completionContext{
-		flagValues:    map[string]completionFlagValue{"output": {kind: completionValuePath, label: "path"}},
-		positional:    completionPositional{position: 1, completer: completePlanIDs},
-		argumentSpecs: []string{"plan"},
+		flagValues: map[string]completionFlagValue{"output": {kind: completionValuePath, label: "path"}},
+		positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs},
 	},
 	repository: repositoryDefault,
 	execute: func(c commandContext) error {

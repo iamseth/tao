@@ -22,7 +22,10 @@ var reworkCommand = commandMetadata{
 		"  tao rework --run 20260628-1618-kubectl-style-help\n" +
 		"  tao rework --force my-plan",
 	registerFlags: registerReworkFlags,
-	repository:    repositoryDefault,
+	completion: completionContext{
+		positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs},
+	},
+	repository: repositoryDefault,
 	execute: func(c commandContext) error {
 		return c.app.rework(c.ctx, c.repo, c.args)
 	},

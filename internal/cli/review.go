@@ -22,7 +22,10 @@ var reviewCommand = commandMetadata{
 	examples: "  tao review my-plan\n" +
 		"  tao review --run my-plan",
 	registerFlags: registerReviewFlags,
-	repository:    repositoryDefault,
+	completion: completionContext{
+		positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs},
+	},
+	repository: repositoryDefault,
 	execute: func(c commandContext) error {
 		return c.app.review(c.ctx, c.repo, c.args)
 	},

@@ -18,6 +18,9 @@ var validateCommand = commandMetadata{
 	long:                  "Validate a plan's artifacts before running or completing it. Tao checks artifact consistency, verification command declarations, and agent budget warnings.",
 	examples: "  tao validate my-plan\n" +
 		"  tao validate 20260628-1618-kubectl-style-help",
+	completion: completionContext{
+		positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs},
+	},
 	repository: repositoryDefault,
 	execute: func(c commandContext) error {
 		return c.app.validate(c.ctx, c.repo, c.args)

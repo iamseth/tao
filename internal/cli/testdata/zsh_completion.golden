@@ -1,0 +1,397 @@
+#compdef tao
+
+_tao_at_positional() {
+  local start=$1 target=$2 repeat=$3 disallowed_flags=$4
+  shift 4
+  local -a value_flags
+  value_flags=("$@")
+  local logical_position=0 skip_value=0 end_flags=0 index word
+
+  [[ ${words[CURRENT]} == -*=* ]] && return 1
+  for (( index = start; index < CURRENT; index++ )); do
+    word=${words[index]}
+    if (( skip_value )); then
+      skip_value=0
+      continue
+    fi
+    if (( end_flags )); then
+      (( logical_position++ ))
+      continue
+    fi
+    if [[ $word == -- ]]; then
+      end_flags=1
+      continue
+    fi
+    if [[ $word == -* ]]; then
+      [[ $disallowed_flags == *,$word,* ]] && return 1
+      if [[ $word != *=* ]] && (( ${value_flags[(Ie)$word]} )); then
+        skip_value=1
+      fi
+      continue
+    fi
+    (( logical_position++ ))
+  done
+
+  (( skip_value )) && return 1
+  if (( repeat )); then
+    (( logical_position >= target - 1 ))
+  else
+    (( logical_position == target - 1 ))
+  fi
+}
+
+_tao() {
+  local -a commands plan_ids subcommands
+
+  commands=(
+    'l:List plans'
+    'list:List plans'
+    'version:Show build commit'
+    'update:Update Tao to the latest stable release'
+    'init:Register this repository in Tao data home'
+    'lo:Show or follow agent run log'
+    'log:Show or follow agent run log'
+    'r:Run pending slices with the selected agent'
+    'run:Run pending slices with the selected agent'
+    'commit:Safely prepare or create a standalone commit'
+    'q:Manage the durable run queue'
+    'queue:Manage the durable run queue'
+    'repo:Inspect registered repositories'
+    'n:Capture and maintain repository notes'
+    'note:Capture and maintain repository notes'
+    'a:Approve a gated slice'
+    'approve:Approve a gated slice'
+    'slice-complete:Complete a slice from notes, verification, and a commit proposal'
+    'slice-blocked:Block a slice after an exceptional stop'
+    's:Show plan details'
+    'show:Show plan details'
+    'report:Export a share-safe Markdown plan report'
+    'rev:Show or refresh the persisted plan review'
+    'review:Show or refresh the persisted plan review'
+    'rew:Reopen a reviewed plan with deterministic rework slices'
+    'rework:Reopen a reviewed plan with deterministic rework slices'
+    'stale:Check whether a plan is stale against its recorded base commit'
+    'staleness:Check whether a plan is stale against its recorded base commit'
+    'v:Validate plan artifacts and verification commands'
+    'validate:Validate plan artifacts and verification commands'
+    'st:Show runtime defaults and plan rollups'
+    'status:Show runtime defaults and plan rollups'
+    'mon:Monitor non-completed plans across repositories'
+    'monitor:Monitor non-completed plans across repositories'
+    'insi:Show repository failure and telemetry insights'
+    'insights:Show repository failure and telemetry insights'
+    'c:Remove merged Tao branches and worktrees'
+    'cleanup:Remove merged Tao branches and worktrees'
+    'm:Merge approved plans into the default branch'
+    'merge:Merge approved plans into the default branch'
+    'de:Delete local plan artifacts'
+    'delete:Delete local plan artifacts'
+    'e:Edit pending slices in a plan'
+    'edit:Edit pending slices in a plan'
+    'cap:Report removed planning-session capture support'
+    'capture-planning-session:Report removed planning-session capture support'
+    'p:Render a Tao prompt'
+    'prompt:Render a Tao prompt'
+    'dr:Save a reusable planning prompt draft'
+    'draft-prompt:Save a reusable planning prompt draft'
+    'i:Install agent slash-command wrappers'
+    'install-prompts:Install agent slash-command wrappers'
+    'd:Check Tao prompt wrappers and local tools'
+    'doctor:Check Tao prompt wrappers and local tools'
+    'co:Generate shell completion'
+    'completion:Generate shell completion'
+    'w:Manage worktree workspaces'
+    'workspace:Manage worktree workspaces'
+  )
+
+  if (( CURRENT == 2 )); then
+    _describe -t commands 'tao command' commands
+    return
+  fi
+
+  case ${words[2]} in
+    l|li|lis|list)
+      _arguments '--active[show only active plans]' '--limit[maximum number of plans to show; use 0 for all]:value:'
+      ;;
+    version)
+      ;;
+    update)
+      ;;
+    init)
+      _arguments '--json[write JSON]' '--slug[allocate a plan directory with this slug]:value:'
+      ;;
+    lo|log)
+      _arguments '-f[follow appended agent log output]' '--follow[follow appended agent log output]'
+      if _tao_at_positional 3 1 0 ',,'; then
+        plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
+        compadd -a plan_ids
+      fi
+      ;;
+    r|ru|run)
+      _arguments '--active[with --all, enqueue only active runnable plans]' '--all[enqueue and drain all runnable plans]' '--auto-rework=-[automatically rework plans with requested changes]:boolean:(true false)' '--commit-policy[automatic commit policy: slice or none]:policy:(slice none)' '--continue[continue a blocked plan or slice]' '--dangerously-skip-permissions[legacy no-op for the Pi agent]' '--execution-mode[execution mode: isolated or current]:mode:(isolated current)' '--max-rework-attempts[maximum automatic rework cycles (0 disables)]:count:' '--max-slices[maximum slices to run; use 0 for all]:count:' '--no-review[disable automatic plan review for this run]' '--pull-request[create a GitHub pull request after a completed full run]' '--rework-restart[start a new automatic-rework budget after a previous stop]'
+      if _tao_at_positional 3 1 0 ',--all,' '--commit-policy' '--execution-mode' '--max-rework-attempts' '--max-slices'; then
+        plan_ids=("${(@f)$(${words[1]} complete run-plan-ids 2>/dev/null)}")
+        compadd -a plan_ids
+      fi
+      ;;
+    commit)
+      _arguments '--context[print bounded safety-filtered commit context as JSON]' '--message[explicit full canonical commit message]:message:' '--proposal-file[JSON file containing a structured commit proposal]:path:_files' '--repo-root[repository path]:path:_files'
+      ;;
+    q|qu|que|queu|queue)
+      if (( CURRENT == 3 )); then
+        subcommands=('add:Add one or more plans to the durable run queue' 'start:Drain the queue and run queued plans' 'status:Show the durable run queue snapshot' 'stop:Remove a plan from the queue' 'dequeue:Remove a plan from the queue')
+        _describe -t commands 'queue command' subcommands
+        return
+      fi
+      case ${words[3]} in
+        add)
+          if _tao_at_positional 4 1 1 ',,'; then
+            plan_ids=("${(@f)$(${words[1]} complete run-plan-ids 2>/dev/null)}")
+            compadd -a plan_ids
+          fi
+          ;;
+        start)
+          _arguments '--auto-rework=-[automatically rework plans with requested changes]:boolean:(true false)' '--max-parallel[maximum concurrent plan runs; values >1 are not cross-plan-conflict-safe from the CLI]:count:' '--max-rework-attempts[maximum automatic rework cycles (0 disables)]:count:'
+          ;;
+        status)
+          _arguments '--all[show complete persisted queue history]'
+          ;;
+        stop|dequeue)
+          if _tao_at_positional 4 1 0 ',,'; then
+            plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
+            compadd -a plan_ids
+          fi
+          ;;
+      esac
+      ;;
+    repo)
+      if (( CURRENT == 3 )); then
+        subcommands=('list:List registered repositories and health summaries' 'show:Show details for one registered repository' 'doctor:Check registered repositories for health problems')
+        _describe -t commands 'repo command' subcommands
+        return
+      fi
+      case ${words[3]} in
+        list)
+          ;;
+        show)
+          ;;
+        doctor)
+          ;;
+      esac
+      ;;
+    n|no|not|note)
+      _arguments '--all[include all note statuses]' '--commit-policy[automatic commit policy: slice or none]:policy:(slice none)' '--dangerously-skip-permissions[legacy no-op for the Pi agent]' '--execution-mode[execution mode: isolated or current]:mode:(isolated current)' '--limit[maximum notes to list (0 means unlimited)]:count:' '--max-slices[maximum slices to run; use 0 for all]:count:' '--no-review[disable automatic plan review for this run]' '--pull-request[create a GitHub pull request after a completed full run]' '--reason[archive reason]:text:' '--repo[registered repository ID prefix or exact name]:repository:' '*--status[status to list: open, promoted, or archived (repeatable)]:status:(open promoted archived)' '*--tag[tag to apply or require (repeatable)]:tag:'
+      if (( CURRENT == 3 )); then
+        subcommands=('create:Create a note from arguments or standard input' 'c:Create a note from arguments or standard input' 'list:List notes (the default subcommand)' 'l:List notes (the default subcommand)' 'show:Show raw note text and provenance' 's:Show raw note text and provenance' 'edit:Edit a note'\''s text and optional tags' 'e:Edit a note'\''s text and optional tags' 'archive:Archive an open note' 'a:Archive an open note' 'reopen:Reopen an archived note' 'plan:Promote a note into a durable CLI planning session' 'p:Promote a note into a durable CLI planning session' 'run:Generate and run a plan for a clear note' 'r:Generate and run a plan for a clear note')
+        _describe -t commands 'note command' subcommands
+        return
+      fi
+      case ${words[3]} in
+        create|c)
+          ;;
+        list|l)
+          ;;
+        show|s)
+          if _tao_at_positional 4 1 0 ',,' '--commit-policy' '--execution-mode' '--limit' '--max-slices' '--reason' '--repo' '--status' '--tag'; then
+            plan_ids=("${(@f)$(${words[1]} complete note-ids 2>/dev/null)}")
+            compadd -a plan_ids
+          fi
+          ;;
+        edit|e)
+          if _tao_at_positional 4 1 0 ',,' '--commit-policy' '--execution-mode' '--limit' '--max-slices' '--reason' '--repo' '--status' '--tag'; then
+            plan_ids=("${(@f)$(${words[1]} complete note-ids 2>/dev/null)}")
+            compadd -a plan_ids
+          fi
+          ;;
+        archive|a)
+          if _tao_at_positional 4 1 0 ',,' '--commit-policy' '--execution-mode' '--limit' '--max-slices' '--reason' '--repo' '--status' '--tag'; then
+            plan_ids=("${(@f)$(${words[1]} complete note-ids 2>/dev/null)}")
+            compadd -a plan_ids
+          fi
+          ;;
+        reopen)
+          if _tao_at_positional 4 1 0 ',,' '--commit-policy' '--execution-mode' '--limit' '--max-slices' '--reason' '--repo' '--status' '--tag'; then
+            plan_ids=("${(@f)$(${words[1]} complete note-ids 2>/dev/null)}")
+            compadd -a plan_ids
+          fi
+          ;;
+        plan|p)
+          if _tao_at_positional 4 1 0 ',,' '--commit-policy' '--execution-mode' '--limit' '--max-slices' '--reason' '--repo' '--status' '--tag'; then
+            plan_ids=("${(@f)$(${words[1]} complete note-ids 2>/dev/null)}")
+            compadd -a plan_ids
+          fi
+          ;;
+        run|r)
+          if _tao_at_positional 4 1 0 ',,' '--commit-policy' '--execution-mode' '--limit' '--max-slices' '--reason' '--repo' '--status' '--tag'; then
+            plan_ids=("${(@f)$(${words[1]} complete note-ids 2>/dev/null)}")
+            compadd -a plan_ids
+          fi
+          ;;
+      esac
+      ;;
+    a|ap|app|appr|appro|approv|approve)
+      _arguments '--by[approver name]:value:' '--slice[slice id to approve]:value:'
+      if _tao_at_positional 3 1 0 ',,' '--by' '--slice'; then
+        plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
+        compadd -a plan_ids
+      fi
+      ;;
+    slice-complete)
+      _arguments '--commit-proposal-file[JSON file containing a structured commit proposal (required for a new slice-policy intent)]:path:_files' '--notes-file[file containing completion notes]:path:_files' '--plan-dir[plan directory]:path:_files' '--slice-id[slice id to complete]:slice id:' '--verification-results-file[JSON file containing verification results]:path:_files'
+      ;;
+    slice-blocked)
+      _arguments '--corrected-command[mechanically equivalent corrected verification command]:command:' '--invalid-command[verification command that failed before tests loaded]:command:' '--invalid-reason[reason the verification command was invalid]:reason:' '--plan-dir[plan directory]:path:_files' '--reason-file[file containing the blocker reason]:path:_files' '--slice-id[slice id to block]:slice id:'
+      ;;
+    s|sh|sho|show)
+      if _tao_at_positional 3 1 0 ',,'; then
+        plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
+        compadd -a plan_ids
+      fi
+      ;;
+    report)
+      _arguments '--force[safely replace an existing output file]' '--output[output Markdown path, or - for stdout (required)]:path:_files' '--planning-only[export a synthesized planning record without execution history]'
+      if _tao_at_positional 3 1 0 ',,' '--output'; then
+        plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
+        compadd -a plan_ids
+      fi
+      ;;
+    rev|revi|revie|review)
+      _arguments '--run[run a fresh review before displaying the result]'
+      if _tao_at_positional 3 1 0 ',,'; then
+        plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
+        compadd -a plan_ids
+      fi
+      ;;
+    rew|rewo|rewor|rework)
+      _arguments '--force[reopen even when the review gate would refuse]' '--run[run the plan after reopening]'
+      if _tao_at_positional 3 1 0 ',,'; then
+        plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
+        compadd -a plan_ids
+      fi
+      ;;
+    stale|stalen|stalene|stalenes|staleness)
+      if _tao_at_positional 3 1 0 ',,'; then
+        plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
+        compadd -a plan_ids
+      fi
+      ;;
+    v|va|val|vali|valid|valida|validat|validate)
+      if _tao_at_positional 3 1 0 ',,'; then
+        plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
+        compadd -a plan_ids
+      fi
+      ;;
+    st|sta|stat|statu|status)
+      _arguments '--json[write JSON]'
+      ;;
+    mon|moni|monit|monito|monitor)
+      _arguments '--interval[interactive refresh interval]:duration:' '--once[render one snapshot and exit]' '--show-invalid[include invalid plans for diagnostics]'
+      ;;
+    insi|insig|insigh|insight|insights)
+      _arguments '--all-repos[include plan history from all registered repositories]' '--digest[write compact deterministic Markdown]'
+      ;;
+    c|cl|cle|clea|clean|cleanu|cleanup)
+      _arguments '--dry-run[show branches and worktrees that would be removed]' '--force[also remove unmerged branches and dirty worktrees]'
+      ;;
+    m|me|mer|merg|merge)
+      _arguments '--all[merge every reviewed and approved plan in one atomic batch]' '--auto-eject[automatically eject an attributed non-converging plan and reland the rest]' '--dry-run[preview batch candidates and order without durable changes]' '--force[bypass approval, review-base, and dirty-worktree gates (single-plan only)]' '--no-squash[preserve plan commits with rebase-plus-fast-forward (single-plan only)]' '--no-verify[skip post-merge build/test verification (single-plan only)]' '--record-only[record an external merge and run cleanup (single-plan only)]' '--restart[discard safe pre-landing batch recovery state and start again]' '--verify-command[override the post-merge build/test verification command]:command:'
+      if _tao_at_positional 3 1 0 ',--all,' '--verify-command'; then
+        plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
+        compadd -a plan_ids
+      fi
+      ;;
+    de|del|dele|delet|delete)
+      _arguments '--force[confirm deletion of local plan artifacts]'
+      if _tao_at_positional 3 1 0 ',,'; then
+        plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
+        compadd -a plan_ids
+      fi
+      ;;
+    e|ed|edi|edit)
+      if (( CURRENT == 3 )); then
+        subcommands=('remove:Remove a pending slice from the plan' 'skip:Mark a pending slice skipped' 'move:Move a pending slice before or after another pending slice')
+        _describe -t commands 'edit command' subcommands
+        return
+      fi
+      case ${words[3]} in
+        remove)
+          if _tao_at_positional 4 1 0 ',,'; then
+            plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
+            compadd -a plan_ids
+          fi
+          ;;
+        skip)
+          if _tao_at_positional 4 1 0 ',,'; then
+            plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
+            compadd -a plan_ids
+          fi
+          ;;
+        move)
+          _arguments '--after[move after slice id]:value:' '--before[move before slice id]:value:'
+          if _tao_at_positional 4 1 0 ',,' '--after' '--before'; then
+            plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
+            compadd -a plan_ids
+          fi
+          ;;
+      esac
+      ;;
+    cap|capt|captu|captur|capture|capture-|capture-p|capture-pl|capture-pla|capture-plan|capture-plann|capture-planni|capture-plannin|capture-planning|capture-planning-|capture-planning-s|capture-planning-se|capture-planning-ses|capture-planning-sess|capture-planning-sessi|capture-planning-sessio|capture-planning-session)
+      _arguments '--plan-dir[plan directory that would have received planning-session artifacts]:value:' '--planning-started-at[ignored; planning-session capture has been removed]:value:' '--raw[ignored; planning-session capture has been removed]' '--session-id[ignored; planning-session capture has been removed]:value:'
+      ;;
+    p|pr|pro|prom|promp|prompt)
+      _arguments '--arguments[slash-command arguments to include in the prompt]:text:' '--arguments-stdin[read slash-command arguments from stdin (safe for text containing quotes)]' '--commit=-[include commit instructions in run prompts]:boolean:' '--commit-policy[run prompt commit policy: slice or none]:policy:(slice none)' '--execution-mode[run prompt execution mode: isolated or current]:mode:(isolated current)' '--plan-dir[plan directory for run prompts]:path:_files'
+      if _tao_at_positional 3 1 0 ',,' '--arguments' '--commit-policy' '--execution-mode' '--plan-dir'; then
+        compadd -- 'plan' 'slice' 'note-slice' 'note' 'run' 'commit' 'grill-me' 'improve-codebase-architecture' 'improve-documentation' 'repo-health' 'insights-review' 'pr' 'review'
+      fi
+      ;;
+    dr|dra|draf|draft|draft-|draft-p|draft-pr|draft-pro|draft-prom|draft-promp|draft-prompt)
+      _arguments '--force[overwrite an existing draft]' '--from[read prompt text from file instead of stdin]:path:_files'
+      if _tao_at_positional 3 1 0 ',,' '--from'; then
+        _message 'draft name'
+      fi
+      ;;
+    i|in|ins|inst|insta|instal|install|install-|install-p|install-pr|install-pro|install-prom|install-promp|install-prompt|install-prompts)
+      _arguments '--check[check installed wrappers without writing]' '--force[overwrite existing non-tao-managed command files]'
+      ;;
+    d|do|doc|doct|docto|doctor)
+      _arguments '-v[show the full environment report]' '--verbose[show the full environment report]'
+      ;;
+    co|com|comp|compl|comple|completi|completio|completion)
+      if _tao_at_positional 3 1 0 ',,'; then
+        compadd -- 'zsh'
+      fi
+      ;;
+    w|wo|wor|work|works|worksp|workspa|workspac|workspace)
+      if (( CURRENT == 3 )); then
+        subcommands=('list:List workspaces for the current repository' 'prepare:Create or reuse a workspace for a plan' 'status:Show workspace metadata for a plan' 'clean:Preview or remove a plan workspace')
+        _describe -t commands 'workspace command' subcommands
+        return
+      fi
+      case ${words[3]} in
+        list)
+          ;;
+        prepare)
+          if _tao_at_positional 4 1 0 ',,'; then
+            plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
+            compadd -a plan_ids
+          fi
+          ;;
+        status)
+          if _tao_at_positional 4 1 0 ',,'; then
+            plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
+            compadd -a plan_ids
+          fi
+          ;;
+        clean)
+          _arguments '--force[remove the workspace after passing safety checks]' '--force-active[allow cleaning an active plan workspace]' '--force-dirty[allow cleaning a dirty or unmerged workspace]'
+          if _tao_at_positional 4 1 0 ',,'; then
+            plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
+            compadd -a plan_ids
+          fi
+          ;;
+      esac
+      ;;
+  esac
+}
+
+compdef _tao tao ./bin/tao bin/tao

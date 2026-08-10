@@ -19,7 +19,10 @@ var approveCommand = commandMetadata{
 	examples: "  tao approve my-plan\n" +
 		"  tao approve --slice 003-review --by Seth my-plan",
 	registerFlags: registerApproveFlags,
-	repository:    repositoryDefault,
+	completion: completionContext{
+		positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs},
+	},
+	repository: repositoryDefault,
 	execute: func(c commandContext) error {
 		return c.app.approve(c.ctx, c.repo, c.args)
 	},

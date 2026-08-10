@@ -18,6 +18,9 @@ var stalenessCommand = commandMetadata{
 	long:                  "Check whether a plan is stale compared with the repository base commit captured during planning. Tao reports changed history and pending-slice file overlaps as warnings.",
 	examples: "  tao staleness my-plan\n" +
 		"  tao stale 20260628-1618-kubectl-style-help",
+	completion: completionContext{
+		positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs},
+	},
 	repository: repositoryDefault,
 	execute: func(c commandContext) error {
 		return c.app.staleness(c.ctx, c.repo, c.args)

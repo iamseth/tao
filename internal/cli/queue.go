@@ -29,18 +29,16 @@ var queueCommand = commandMetadata{
 		"  tao queue dequeue my-plan",
 	subcommands: []commandSubcommand{
 		{
-			name:            "add",
-			description:     "Add one or more plans to the durable run queue",
-			completionNames: []string{"add"},
+			name:        "add",
+			description: "Add one or more plans to the durable run queue",
 			completion: completionContext{
-				positional: completionPositional{position: 4, completer: completeRunPlanIDs, repeat: true},
+				positional: completionPositional{index: 1, label: "plan", completer: completeRunnablePlanIDs, repeat: true},
 			},
 		},
 		{
-			name:            "start",
-			description:     "Drain the queue and run queued plans",
-			completionNames: []string{"start"},
-			registerFlags:   registerQueueStartFlags,
+			name:          "start",
+			description:   "Drain the queue and run queued plans",
+			registerFlags: registerQueueStartFlags,
 			completion: completionContext{flagValues: map[string]completionFlagValue{
 				"auto-rework":         {kind: completionValueBoolean, label: "boolean", values: []string{"true", "false"}},
 				"max-parallel":        {kind: completionValueCount, label: "count"},
@@ -48,18 +46,16 @@ var queueCommand = commandMetadata{
 			}},
 		},
 		{
-			name:            "status",
-			description:     "Show the durable run queue snapshot",
-			completionNames: []string{"status"},
-			registerFlags:   registerQueueStatusFlags,
-			completion:      completionContext{},
+			name:          "status",
+			description:   "Show the durable run queue snapshot",
+			registerFlags: registerQueueStatusFlags,
 		},
 		{
-			name:            "stop/dequeue",
-			description:     "Remove a plan from the queue",
-			completionNames: []string{"stop", "dequeue"},
+			name:        "stop",
+			aliases:     []commandSubcommandAlias{"dequeue"},
+			description: "Remove a plan from the queue",
 			completion: completionContext{
-				positional: completionPositional{position: 4, completer: completePlanIDs},
+				positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs},
 			},
 		},
 	},

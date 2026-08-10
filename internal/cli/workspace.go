@@ -26,9 +26,9 @@ var workspaceCommand = commandMetadata{
 		"  tao workspace clean --force --force-dirty my-plan",
 	subcommands: []commandSubcommand{
 		{name: "list", description: "List workspaces for the current repository"},
-		{name: "prepare", description: "Create or reuse a workspace for a plan"},
-		{name: "status", description: "Show workspace metadata for a plan"},
-		{name: "clean", description: "Preview or remove a plan workspace", completionNames: []string{"clean"}, registerFlags: registerWorkspaceCleanFlags},
+		{name: "prepare", description: "Create or reuse a workspace for a plan", completion: completionContext{positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs}}},
+		{name: "status", description: "Show workspace metadata for a plan", completion: completionContext{positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs}}},
+		{name: "clean", description: "Preview or remove a plan workspace", registerFlags: registerWorkspaceCleanFlags, completion: completionContext{positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs}}},
 	},
 	registerFlags: registerWorkspaceCleanFlags,
 	repository:    repositoryDefault,

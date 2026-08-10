@@ -19,6 +19,9 @@ var showCommand = commandMetadata{
 	long:                  "Show detailed status for a Tao plan, including repository metadata, timing, slice summaries, warnings, budget warnings, and recent events.",
 	examples: "  tao show my-plan\n" +
 		"  tao show 20260628-1618-kubectl-style-help",
+	completion: completionContext{
+		positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs},
+	},
 	repository: repositoryDefault,
 	execute: func(c commandContext) error {
 		return c.app.show(c.ctx, c.repo, c.args)

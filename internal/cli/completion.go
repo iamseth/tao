@@ -16,6 +16,9 @@ var completionCommand = commandMetadata{
 	long:                  "Generate a shell completion script for Tao. Zsh is currently supported and includes command aliases, plan-id completion, subcommand suggestions, and flag metadata.",
 	examples: "  tao completion zsh > ~/.zfunc/_tao\n" +
 		"  tao completion zsh",
+	completion: completionContext{
+		positional: completionPositional{index: 1, label: "shell", candidates: []string{"zsh"}},
+	},
 }
 
 func (a App) completion(args []string) error {
