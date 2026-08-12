@@ -70,4 +70,5 @@
 - `prompts/slice.md` allocates plan artifacts with `tao init --slug <short-slug> --json` and must not edit application files.
 - `prompts/commit.md` is standalone/manual only and is a wrapper around `tao commit --context` plus `--proposal-file` (or explicit `--message`); Tao owns filtering, validation, staging, and Git. It never pushes, and automatic run or merge completion must not fall back to it.
 - For the Pi agent, the `/tao-commit` command is hosted by the `extensions/pi` TypeScript extension (symlinked to `~/.pi/agent/extensions/tao` by `install-prompts`); see [`extensions/pi/README.md`](extensions/pi/README.md) for its build, test, and deploy details.
+- The same Pi extension hosts `/tao-compose-reply` and its Ctrl+G external-editor override; see [`extensions/pi/README.md`](extensions/pi/README.md) for behavior, fallback, opt-out, and compatibility details.
 - If committing manually, still exclude Tao data-home contents, workspace-local `.tao/`, and other local-only artifacts.

@@ -41,6 +41,7 @@ test("tao-prefixed commit command registers with Pi", () => {
     registerCommand(name, options) {
       registrations.push({ name, description: options.description });
     },
+    on() {},
   });
 
   assert.equal(COMMIT_COMMAND_NAME, "tao-commit");
