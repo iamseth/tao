@@ -48,7 +48,9 @@ func executeDetailWithExecution(ctx context.Context, detail *plan.PlanDetail, re
 		sliceExecutor: execution.Dependencies.SliceExecutor,
 		finalizer:     newFinalizer(out, execution),
 	}
-	return executor.execute(ctx, detail)
+	return trackRunHeader(ctx, execution.Dependencies.HeaderReporter, detail, execution.Config, now(execution).UTC(), func(headerCtx context.Context) error {
+		return executor.execute(headerCtx, detail)
+	})
 }
 
 func (e *detailExecutor) execute(ctx context.Context, detail *plan.PlanDetail) error {
@@ -174,6 +176,7 @@ func (r SelectedSliceRunner) Run(ctx context.Context, detail *plan.PlanDetail, d
 	default:
 		return nil, interruptedSliceRunError(slice.ID, action)
 	}
+	refreshHeader(ctx, detail, r.execution.Config)
 
 	if resuming {
 		action, err = r.reinspectRecoveryAction(ctx, detail, action, InterruptedSliceResume)
@@ -343,6 +346,7 @@ func (r SelectedSliceRunner) finishCompletedHandoff(ctx context.Context, detail 
 		return nil, err
 	}
 	r.recordRunCompleted()
+	refreshHeader(ctx, detail, r.execution.Config)
 	if err := writef(r.out, "Slice completed: %s\n", sliceID); err != nil {
 		return nil, err
 	}

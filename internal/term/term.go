@@ -54,6 +54,12 @@ func NewTerminal(file *os.File) *Terminal {
 	}
 }
 
+// NewOutputTerminal creates a terminal whose size is read from output's file
+// descriptor. It does not alter output or enter raw mode.
+func NewOutputTerminal(output *os.File) *Terminal {
+	return NewTerminal(output)
+}
+
 // EnterRaw saves the current terminal attributes and switches to raw input.
 // Repeated calls before Restore are no-ops.
 func (t *Terminal) EnterRaw() error {

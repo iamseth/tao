@@ -76,11 +76,12 @@ type Options struct {
 }
 
 // ExecutionConfig carries the run configuration the executor reads. It embeds
-// the resolved runtime options and adds SkipPermissions, the only process-only
-// knob that stays outside runtimeconfig.
+// the resolved runtime options and adds process-only knobs that stay outside
+// runtimeconfig.
 type ExecutionConfig struct {
 	ResolvedRunOptions
-	SkipPermissions bool
+	SkipPermissions   bool
+	MaxReworkAttempts int
 }
 
 type runExecution struct {
@@ -209,8 +210,14 @@ func (s Service) WithPlanRunLock(ctx context.Context, request Request, operation
 		return fmt.Errorf("plan %q not found", request.Input)
 	}
 	startedAt := now(s.dependencies).UTC()
-	return trackRunStatus(ctx, s.dependencies.StatusReporter, detail, startedAt, func(statusCtx context.Context) error {
-		return withPlanRunLock(statusCtx, detail, startedAt, operation)
+	headerConfig := s.config
+	if resolved, resolveErr := prepareRequestConfig(s.config, request); resolveErr == nil {
+		headerConfig = resolved
+	}
+	return trackRunHeader(ctx, s.dependencies.HeaderReporter, detail, headerConfig, startedAt, func(headerCtx context.Context) error {
+		return trackRunStatus(headerCtx, s.dependencies.StatusReporter, detail, startedAt, func(statusCtx context.Context) error {
+			return withPlanRunLock(statusCtx, detail, startedAt, operation)
+		})
 	})
 }
 
@@ -247,28 +254,31 @@ func (s Service) Execute(ctx context.Context, request Request) error {
 	}
 	planDir := lockDetail.Dir
 	startedAt := now(s.dependencies).UTC()
-	return trackRunStatus(ctx, s.dependencies.StatusReporter, lockDetail, startedAt, func(statusCtx context.Context) error {
-		return withPlanRunLock(statusCtx, lockDetail, startedAt, func(ownedCtx context.Context) error {
-			// The pre-lock detail identifies ownership only. Another lifecycle
-			// driver may have changed the plan before this lock was acquired.
-			detail, err := s.repo.ResolvePlan(ownedCtx, planDir)
-			if err != nil {
-				return err
-			}
-			if detail == nil {
-				return fmt.Errorf("plan %q not found", planDir)
-			}
-			ReportPhase(ownedCtx, PhasePreparingExecution, nil)
-			if err := CheckRequestCanStart(detail, request); err != nil {
-				return err
-			}
-			execution, err := s.prepareRunExecution(ownedCtx, detail, config)
-			if err != nil {
-				return err
-			}
-			return executeDetailWithExecution(ownedCtx, detail, func(ctx context.Context, detail *plan.PlanDetail) (*plan.PlanDetail, error) {
-				return s.repo.ResolvePlan(ctx, detail.Dir)
-			}, s.out, execution)
+	return trackRunHeader(ctx, s.dependencies.HeaderReporter, lockDetail, config, startedAt, func(headerCtx context.Context) error {
+		return trackRunStatus(headerCtx, s.dependencies.StatusReporter, lockDetail, startedAt, func(statusCtx context.Context) error {
+			return withPlanRunLock(statusCtx, lockDetail, startedAt, func(ownedCtx context.Context) error {
+				// The pre-lock detail identifies ownership only. Another lifecycle
+				// driver may have changed the plan before this lock was acquired.
+				detail, err := s.repo.ResolvePlan(ownedCtx, planDir)
+				if err != nil {
+					return err
+				}
+				if detail == nil {
+					return fmt.Errorf("plan %q not found", planDir)
+				}
+				ReportPhase(ownedCtx, PhasePreparingExecution, nil)
+				if err := CheckRequestCanStart(detail, request); err != nil {
+					return err
+				}
+				execution, err := s.prepareRunExecution(ownedCtx, detail, config)
+				if err != nil {
+					return err
+				}
+				refreshHeader(ownedCtx, detail, execution.Config)
+				return executeDetailWithExecution(ownedCtx, detail, func(ctx context.Context, detail *plan.PlanDetail) (*plan.PlanDetail, error) {
+					return s.repo.ResolvePlan(ctx, detail.Dir)
+				}, s.out, execution)
+			})
 		})
 	})
 }

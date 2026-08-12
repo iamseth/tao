@@ -35,6 +35,7 @@ func (f Finalizer) FinalizeIfComplete(ctx context.Context, runCount int, detail 
 	if !capabilities.Complete {
 		return false, nil
 	}
+	defer refreshHeader(ctx, detail, f.execution.Config)
 	if runCount <= 0 {
 		return true, f.writeAlreadyCompleteRun(detail)
 	}

@@ -169,9 +169,23 @@ type queueDrainOptions struct {
 	activeOnly       bool
 	autoReworkPolicy runtimeconfig.AutoReworkPolicy
 	reworkRestart    bool
+	runHeader        bool
+	noRunHeader      bool
+	headerReporter   run.HeaderReporter
 }
 
 func (a App) startQueueDrain(ctx context.Context, repo queueRepository, options queueDrainOptions) error {
+	var batchReporter *batchHeaderReporter
+	if options.runHeader {
+		runOut, reporter, closeHeader := installRunHeader(ctx, a.Out, options.noRunHeader)
+		defer closeHeader()
+		a.Out = runOut
+		if reporter != nil {
+			batchReporter = newBatchHeaderReporter(reporter)
+			options.headerReporter = batchReporter
+		}
+	}
+
 	manager, store, err := a.newQueueManager(ctx, repo, options)
 	if err != nil {
 		return err
@@ -194,6 +208,9 @@ func (a App) startQueueDrain(ctx context.Context, repo queueRepository, options 
 	result.Runnable += restartResult.Runnable
 	result.Enqueued += restartResult.Enqueued
 	result.AlreadyQueued += restartResult.AlreadyQueued
+	if batchReporter != nil {
+		batchReporter.setPlans(manager.Queue())
+	}
 	if err := writef(a.Out, "Reconciled queue: %d runnable, %d enqueued, %d already queued\n", result.Runnable, result.Enqueued, result.AlreadyQueued); err != nil {
 		return err
 	}
@@ -317,8 +334,12 @@ func (a App) newQueueManager(ctx context.Context, repo queueRepository, drain qu
 		return nil, nil, err
 	}
 	options := run.Options{
-		ExecutionConfig: run.ExecutionConfig{ResolvedRunOptions: drain.runtime.options, SkipPermissions: drain.runtime.skipPermissions},
-		RunDependencies: run.RunDependencies{CommandRunner: a.CommandRunner, ProcessStarter: a.ProcessStarter, StatusReporter: drain.runtime.statusReporter, SessionLogWriter: a.Out, Now: a.now},
+		ExecutionConfig: run.ExecutionConfig{
+			ResolvedRunOptions: drain.runtime.options,
+			SkipPermissions:    drain.runtime.skipPermissions,
+			MaxReworkAttempts:  drain.autoReworkPolicy.MaxAttempts,
+		},
+		RunDependencies: run.RunDependencies{CommandRunner: a.CommandRunner, ProcessStarter: a.ProcessStarter, StatusReporter: drain.runtime.statusReporter, HeaderReporter: drain.headerReporter, SessionLogWriter: a.Out, Now: a.now},
 	}
 	manager, err := runqueue.NewManager(runqueue.ManagerConfig{
 		Context:             ctx,
@@ -338,6 +359,16 @@ func (a App) newQueueManager(ctx context.Context, repo queueRepository, drain qu
 		return nil, nil, err
 	}
 	return manager, store, nil
+}
+
+func queueDrainPlanIDs(snapshot runqueue.QueueSnapshot) []string {
+	planIDs := make([]string, 0, len(snapshot.Entries))
+	for _, entry := range snapshot.Entries {
+		if entry.Status == runqueue.QueueStatusPending || entry.Status == runqueue.QueueStatusRunning {
+			planIDs = append(planIDs, entry.PlanID)
+		}
+	}
+	return planIDs
 }
 
 func (a App) newQueueSnapshotManager(ctx context.Context) (*runqueue.Manager, runqueue.Store, error) {

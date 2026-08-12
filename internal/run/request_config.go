@@ -9,8 +9,8 @@ func (o Options) executionConfig() ExecutionConfig {
 }
 
 // prepareRequestConfig re-applies a resolved request on top of the run-service
-// defaults so per-request overrides win. SkipPermissions is process-only and
-// stays on ExecutionConfig.
+// defaults so per-request overrides win. Process-only settings stay on
+// ExecutionConfig.
 func prepareRequestConfig(defaults ExecutionConfig, request Request) (ExecutionConfig, error) {
 	config, err := runtimeconfig.NewConfigFromStages(defaults.RunOptionsPatch(), request.RunOptionsPatch())
 	if err != nil {
@@ -18,5 +18,6 @@ func prepareRequestConfig(defaults ExecutionConfig, request Request) (ExecutionC
 	}
 	execution := ExecutionConfig{ResolvedRunOptions: config.ResolvedOptions()}
 	execution.SkipPermissions = defaults.SkipPermissions
+	execution.MaxReworkAttempts = defaults.MaxReworkAttempts
 	return execution, nil
 }

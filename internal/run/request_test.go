@@ -97,12 +97,13 @@ func TestPrepareRequestConfigMapsRunRequestToExecutionConfig(t *testing.T) {
 			Agent:         AgentPi,
 			PullRequest:   true,
 		},
-		SkipPermissions: true,
+		SkipPermissions:   true,
+		MaxReworkAttempts: 7,
 	}, request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.MaxSlices != 1 || got.Continue || !got.SkipPermissions || got.CommitPolicy != CommitPolicySlice || got.ExecutionMode != ExecutionModeCurrent || got.Agent != AgentPi || got.PullRequest {
+	if got.MaxSlices != 1 || got.Continue || !got.SkipPermissions || got.MaxReworkAttempts != 7 || got.CommitPolicy != CommitPolicySlice || got.ExecutionMode != ExecutionModeCurrent || got.Agent != AgentPi || got.PullRequest {
 		t.Fatalf("unexpected execution config: %#v", got)
 	}
 }

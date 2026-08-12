@@ -18,11 +18,11 @@ var runCommand = commandMetadata{
 	name:      "run",
 	minPrefix: "r",
 	usageLines: []string{
-		"run (r) [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue] [--no-review] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>",
-		"run (r) [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue] [--no-review] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] --all [--active]",
+		"run (r) [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>",
+		"run (r) [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] --all [--active]",
 	},
 	completionDescription: "Run pending slices with the selected agent",
-	long:                  "Run pending slices for a Tao plan with the selected agent. Tao prepares the requested workspace, executes pending work, automatically reworks review findings by default, records verification metadata, and follows the configured commit policy.",
+	long:                  "Run pending slices for a Tao plan with the selected agent. Tao prepares the requested workspace, executes pending work, automatically reworks review findings by default, records verification metadata, and follows the configured commit policy. In a sufficiently large terminal, Tao displays a pinned run header unless --no-run-header disables it.",
 	examples: "  tao run 20260628-1618-kubectl-style-help\n" +
 		"  tao run --max-slices 1 --commit-policy slice my-plan\n" +
 		"  tao run --all --active\n" +
@@ -60,6 +60,7 @@ func registerRunFlags(fs *flag.FlagSet) {
 	registerRunRequestFlags(fs)
 	autoRework, maxReworkAttempts, _ := runReworkEnvDefaults()
 	fs.Bool("continue", false, "continue a blocked plan or slice")
+	fs.Bool("no-run-header", !runHeaderEnvDefault(), "disable the pinned run header")
 	fs.Bool("auto-rework", autoRework, "automatically rework plans with requested changes")
 	fs.Int("max-rework-attempts", maxReworkAttempts, "maximum automatic rework cycles (0 disables)")
 	fs.Bool("rework-restart", false, "start a new automatic-rework budget after a previous stop")
@@ -175,9 +176,9 @@ func (a App) run(ctx context.Context, repo queueRepository, args []string) error
 		if err != nil {
 			return err
 		}
-		return a.runAll(ctx, repo, runtime, activeOnly, policy, reworkRestart)
+		return a.runAll(ctx, repo, runtime, activeOnly, policy, reworkRestart, flagBoolValue(fs, "no-run-header"))
 	}
-	if err := requirePositionals(positional, 1, "usage: tao run [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue] [--no-review] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>"); err != nil {
+	if err := requirePositionals(positional, 1, "usage: tao run [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>"); err != nil {
 		return err
 	}
 	input := positional[0]
@@ -189,7 +190,7 @@ func (a App) run(ctx context.Context, repo queueRepository, args []string) error
 	if err != nil {
 		return err
 	}
-	return a.executeResolvedRun(ctx, repo, input, request, inputs.skipPermissions, policy, reworkRestart)
+	return a.executeResolvedRun(ctx, repo, input, request, inputs.skipPermissions, policy, reworkRestart, flagBoolValue(fs, "no-run-header"))
 }
 
 var executeSinglePlan = func(service run.Service, ctx context.Context, request run.Request) error {
@@ -198,13 +199,20 @@ var executeSinglePlan = func(service run.Service, ctx context.Context, request r
 
 // executeResolvedRun is the single-plan execution boundary shared by run entry
 // points after their inputs and runtime options have been fully resolved.
-func (a App) executeResolvedRun(ctx context.Context, repo queueRepository, input string, request run.Request, skipPermissions bool, policy runtimeconfig.AutoReworkPolicy, reworkRestart bool) error {
-	service := run.NewService(repo, a.Out, run.Options{
-		ExecutionConfig: run.ExecutionConfig{ResolvedRunOptions: runtimeconfig.ResolvedRunOptions{Agent: request.Agent}, SkipPermissions: skipPermissions},
-		RunDependencies: run.RunDependencies{CommandRunner: a.CommandRunner, ProcessStarter: a.ProcessStarter, StatusReporter: a.StatusReporter, SessionLogWriter: a.Out, Now: a.now},
-	})
+func (a App) executeResolvedRun(ctx context.Context, repo queueRepository, input string, request run.Request, skipPermissions bool, policy runtimeconfig.AutoReworkPolicy, reworkRestart, noRunHeader bool) error {
 	runCtx, stopSignals := newCommandSignalContext(ctx)
 	defer stopSignals()
+
+	runOut, headerReporter, closeHeader := installRunHeader(runCtx, a.Out, noRunHeader)
+	defer closeHeader()
+	service := run.NewService(repo, runOut, run.Options{
+		ExecutionConfig: run.ExecutionConfig{
+			ResolvedRunOptions: runtimeconfig.ResolvedRunOptions{Agent: request.Agent},
+			SkipPermissions:    skipPermissions,
+			MaxReworkAttempts:  policy.MaxAttempts,
+		},
+		RunDependencies: run.RunDependencies{CommandRunner: a.CommandRunner, ProcessStarter: a.ProcessStarter, StatusReporter: a.StatusReporter, HeaderReporter: headerReporter, SessionLogWriter: runOut, Now: a.now},
+	})
 
 	return service.WithPlanRunLock(runCtx, request, func(ownedCtx context.Context) error {
 		firstExecution := true
@@ -223,7 +231,7 @@ func (a App) executeResolvedRun(ctx context.Context, repo queueRepository, input
 				return err
 			},
 			LogProgress: func(round int) error {
-				return writef(a.Out, "Plan reopened for rework round %d\n", round)
+				return writef(runOut, "Plan reopened for rework round %d\n", round)
 			},
 		})
 	})
@@ -315,9 +323,9 @@ func shellCommandArg(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
-func (a App) runAll(ctx context.Context, repo queueRepository, runtime queueRuntime, activeOnly bool, policy runtimeconfig.AutoReworkPolicy, reworkRestart bool) error {
+func (a App) runAll(ctx context.Context, repo queueRepository, runtime queueRuntime, activeOnly bool, policy runtimeconfig.AutoReworkPolicy, reworkRestart, noRunHeader bool) error {
 	if repo == nil {
 		return errors.New("run --all requires a plan repository")
 	}
-	return a.startQueueDrain(ctx, repo, queueDrainOptions{maxParallel: 1, runtime: runtime, activeOnly: activeOnly, autoReworkPolicy: policy, reworkRestart: reworkRestart})
+	return a.startQueueDrain(ctx, repo, queueDrainOptions{maxParallel: 1, runtime: runtime, activeOnly: activeOnly, autoReworkPolicy: policy, reworkRestart: reworkRestart, runHeader: true, noRunHeader: noRunHeader})
 }

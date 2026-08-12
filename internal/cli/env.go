@@ -2,14 +2,21 @@ package cli
 
 import (
 	"context"
+	"os"
 
 	"github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/taodata"
 )
 
+const envRunHeader = "TAO_RUN_HEADER"
+
 type envDefaults struct {
 	runtimeconfig.EnvDefaults
+}
+
+func runHeaderEnvDefault() bool {
+	return os.Getenv(envRunHeader) != "0"
 }
 
 func cliEnvDefaults() (envDefaults, error) {

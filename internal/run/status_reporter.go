@@ -84,6 +84,7 @@ func ReportPhase(ctx context.Context, phase runstatus.Phase, slice *runstatus.Sl
 	if ctx == nil {
 		return
 	}
+	reportHeaderPhase(ctx, phase, slice)
 	active, _ := ctx.Value(statusInvocationContextKey{}).(statusInvocationContext)
 	if active.publisher != nil {
 		active.publisher.ReportPhase(phase, slice)

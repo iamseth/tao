@@ -68,7 +68,16 @@ func (w presentationWriter) Write(p []byte) (int, error) {
 }
 
 // Render writes one record in the terminal-oriented presentation format.
+// Provider controls are made visible only for writers that opt into terminal
+// control sanitization, such as the active pinned run-header path. Other
+// writers retain the historical byte-for-byte presentation behavior.
 func Render(out io.Writer, record Record) error {
+	if sanitizer, ok := out.(interface{ SanitizeTerminalControls() bool }); ok && sanitizer.SanitizeTerminalControls() {
+		record.Name = terminalSafe(record.Name)
+		record.Payload = terminalSafe(record.Payload)
+		record.Content = terminalSafe(record.Content)
+		record.Timestamp = terminalSafe(record.Timestamp)
+	}
 	var err error
 	switch record.Type {
 	case TypeSession:
@@ -91,6 +100,18 @@ func Render(out io.Writer, record Record) error {
 		_, err = fmt.Fprintln(out, record.Content)
 	}
 	return err
+}
+
+func terminalSafe(value string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' {
+			return r
+		}
+		if r < ' ' || r == 0x7f || r >= 0x80 && r <= 0x9f {
+			return '\uFFFD'
+		}
+		return r
+	}, value)
 }
 
 // Parse accepts only a complete framed record with a known record type.

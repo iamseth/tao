@@ -231,8 +231,8 @@ tao insights --all-repos --digest
 ### Running
 
 ```sh
-tao run [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue] [--no-review] [--auto-rework=false] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>
-tao run [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue] [--no-review] [--auto-rework=false] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] --all [--active]
+tao run [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue] [--no-review] [--no-run-header] [--auto-rework=false] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>
+tao run [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue] [--no-review] [--no-run-header] [--auto-rework=false] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] --all [--active]
 tao queue add <plan-id-or-slug-or-path>...
 tao queue start [--max-parallel N] [--auto-rework] [--max-rework-attempts N]
 tao queue status [--all]
@@ -241,7 +241,9 @@ tao approve [--slice ID] [--by NAME] <plan-id-or-slug-or-path>
 ```
 
 `tao run` executes pending slices, logs the agent session, records best-effort
-metrics, and stops on blockers or failed verification. Isolated `tao run` may locally rebase a
+metrics, and stops on blockers or failed verification. Interactive terminals
+show a pinned run header by default; use `--no-run-header` or
+`TAO_RUN_HEADER=0` to opt out. Isolated `tao run` may locally rebase a
 stale Tao-owned plan worktree before agent execution. It does not fetch or pull
 remotes for this pre-run rebase, and it fails early instead of invoking the agent
 when the worktree is dirty or the rebase conflicts.

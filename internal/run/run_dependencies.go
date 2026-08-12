@@ -27,6 +27,7 @@ type RunDependencies struct {
 	WorkspacePreparer   WorkspacePreparer
 	AgentFactory        AgentCapabilitiesFactory
 	StatusReporter      StatusReporter
+	HeaderReporter      HeaderReporter
 	OutputWriter        io.Writer
 	SessionLogWriter    io.Writer
 	TransportRetryDelay func(context.Context, time.Duration) error
@@ -47,8 +48,9 @@ func newRunDependencies(options Options) RunDependencies {
 // required list lives beside the struct on purpose: a newly added field is
 // weighed here at the same moment it is given a defaulting home in run_setup.go.
 //
-// SessionLogWriter and Now are intentionally excluded: both are optional and
-// have documented nil fallbacks (no session log; now() falls back to time.Now).
+// StatusReporter, HeaderReporter, SessionLogWriter, and Now are intentionally
+// excluded: reporting and session logging are optional, and now() falls back to
+// time.Now.
 func requireResolvedDependencies(dependencies RunDependencies) error {
 	required := []struct {
 		name    string

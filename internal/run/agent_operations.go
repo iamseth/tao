@@ -202,6 +202,7 @@ func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSe
 	var capErr error
 	if metricsRequested && stateErr == nil && r.eventAppender != nil && result.MetricsUsable {
 		metrics := collectAgentMetrics(state, request.Metrics.SliceID, result.AgentLabel, result.MetricsMessage, result.Metrics, runErr)
+		publishAgentMetrics(ctx, metrics.metrics)
 		if appendErr := r.eventAppender.AppendEvent(request.PlanDir, metrics.event(now(r).UTC())); appendErr != nil {
 			writeAgentLogDiagnostic(log, fmt.Sprintf("tao telemetry warning: append metrics event: %v", appendErr))
 		} else if result.Metrics != nil {
