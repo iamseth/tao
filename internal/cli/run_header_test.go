@@ -12,6 +12,7 @@ import (
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/run"
+	"github.com/iamseth/tao/internal/runheader"
 	"github.com/iamseth/tao/internal/runqueue"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/term"
@@ -154,6 +155,38 @@ func TestRunHeaderResizeReappliesMinimumSizePolicy(t *testing.T) {
 				t.Fatal("header was not pinned after eligible resize")
 			}
 		})
+	}
+}
+
+func TestRunHeaderResizePositionsLogsBelowHeaderAfterRegrow(t *testing.T) {
+	terminal := newFakeRunHeaderTerminalWriter(term.Size{Width: 80, Height: 24})
+	header := &runHeaderOutput{out: terminal, terminal: terminal, size: term.Size{Width: 80, Height: 24}}
+	header.ReportHeader(run.HeaderState{RepoName: "tao", PlanTitle: "Pinned header"})
+	if err := header.install(); err != nil {
+		t.Fatal(err)
+	}
+
+	terminal.SetSize(term.Size{Width: 80, Height: runheader.LineCount - 1})
+	header.tryResize()
+	if header.pinned {
+		t.Fatal("header remained pinned after terminal shrank below the header height")
+	}
+
+	beforeGrow := len(terminal.String())
+	terminal.SetSize(term.Size{Width: 80, Height: 24})
+	header.tryResize()
+	growOutput := terminal.String()[beforeGrow:]
+	wantPosition := fmt.Sprintf("\x1b[%d;1H", runheader.LineCount+1)
+	if !strings.HasSuffix(growOutput, wantPosition) {
+		t.Fatalf("regrow did not position cursor below header: %q", growOutput)
+	}
+
+	beforeWrite := len(terminal.String())
+	if _, err := io.WriteString(header, "log after regrow\n"); err != nil {
+		t.Fatal(err)
+	}
+	if got := terminal.String()[beforeWrite:]; !strings.HasPrefix(got, "log after regrow\n") {
+		t.Fatalf("post-regrow log was not written from the safe cursor position: %q", got)
 	}
 }
 

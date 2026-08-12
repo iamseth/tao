@@ -201,6 +201,7 @@ func (w *runHeaderOutput) tryResize() {
 		return
 	}
 
+	wasPinned := w.pinned
 	_ = term.SaveCursor(w.out)
 	w.size = size
 	if !runHeaderSizeEligible(size.Height, size.Width) {
@@ -213,7 +214,11 @@ func (w *runHeaderOutput) tryResize() {
 		_ = term.ResetScrollRegion(w.out)
 		w.pinned = false
 	}
-	_ = term.RestoreCursor(w.out)
+	if !wasPinned && w.pinned {
+		_ = term.PositionCursor(w.out, runheader.LineCount+1, 1)
+	} else {
+		_ = term.RestoreCursor(w.out)
+	}
 }
 
 func (w *runHeaderOutput) paintLocked(preserveCursor bool) error {
