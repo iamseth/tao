@@ -547,7 +547,7 @@ func (a App) noteRun(ctx context.Context, registered taodata.Repo, repo NoteRepo
 		return err
 	}
 	// Resolve every run option before allocating a plan or invoking the planner.
-	request, err := inputs.defaults.newRunRequest("pending-note-plan", inputs.overrides)
+	request, err := inputs.defaults.newRunRequestWithRepository("pending-note-plan", repositoryRunOptions(registered), inputs.overrides)
 	if err != nil {
 		return err
 	}

@@ -26,6 +26,99 @@ func TestRepoIDStableFromCanonicalRoot(t *testing.T) {
 	}
 }
 
+func TestRepoPullRequestDefault(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    bool
+		wantSet bool
+	}{
+		{name: "absent", content: `{}`},
+		{name: "true", content: `{"run_defaults":{"pull_request":true}}`, want: true, wantSet: true},
+		{name: "false", content: `{"run_defaults":{"pull_request":false}}`, wantSet: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var repo Repo
+			if err := json.Unmarshal([]byte(tt.content), &repo); err != nil {
+				t.Fatal(err)
+			}
+			got, gotSet := repo.PullRequestDefault()
+			if got != tt.want || gotSet != tt.wantSet {
+				t.Fatalf("PullRequestDefault() = (%t, %t), want (%t, %t)", got, gotSet, tt.want, tt.wantSet)
+			}
+		})
+	}
+}
+
+func TestRegistryLegacyRepoRoundTripOmitsRunDefaults(t *testing.T) {
+	dataHome := t.TempDir()
+	registry := Registry{DataHome: dataHome, Now: fixedNow}
+	const legacy = "{\n" +
+		"  \"schema\": \"tao.repo.v1\",\n" +
+		"  \"id\": \"repo-123\",\n" +
+		"  \"name\": \"repo\",\n" +
+		"  \"root\": \"/repo\",\n" +
+		"  \"branch\": \"main\",\n" +
+		"  \"remote_url\": \"git@example.com/repo.git\",\n" +
+		"  \"updated_at\": \"2026-05-31T12:00:00Z\"\n" +
+		"}\n"
+
+	repoDir := filepath.Join(dataHome, "repos", "repo-123")
+	if err := os.MkdirAll(repoDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(repoDir, "repo.json")
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := registry.ReadRepo("repo-123")
+	if err != nil {
+		t.Fatalf("ReadRepo() failed: %v", err)
+	}
+	if repo.RunDefaults != nil {
+		t.Fatalf("legacy RunDefaults = %#v, want nil", repo.RunDefaults)
+	}
+	if err := registry.WriteRepo(repo); err != nil {
+		t.Fatalf("WriteRepo() failed: %v", err)
+	}
+	content, err := os.ReadFile(path) //nolint:gosec // G304: test reads from test-controlled data home
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(content); got != legacy {
+		t.Fatalf("legacy round trip changed metadata:\ngot:\n%swant:\n%s", got, legacy)
+	}
+	if strings.Contains(string(content), "run_defaults") {
+		t.Fatalf("legacy round trip unexpectedly added run_defaults: %s", content)
+	}
+}
+
+func TestRepoRunDefaultsSerialization(t *testing.T) {
+	trueValue := true
+	falseValue := false
+	tests := []struct {
+		name     string
+		defaults RepoRunDefaults
+		want     string
+	}{
+		{name: "absent", defaults: RepoRunDefaults{}, want: `{}`},
+		{name: "true", defaults: RepoRunDefaults{PullRequest: &trueValue}, want: `{"pull_request":true}`},
+		{name: "false", defaults: RepoRunDefaults{PullRequest: &falseValue}, want: `{"pull_request":false}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content, err := json.Marshal(tt.defaults)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := string(content); got != tt.want {
+				t.Fatalf("RepoRunDefaults JSON = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRegistryWritesRepoMetadata(t *testing.T) {
 	dataHome := t.TempDir()
 	registry := Registry{DataHome: dataHome, Now: fixedNow}
@@ -132,6 +225,38 @@ func TestRegisterCurrentDiscoversGitRepo(t *testing.T) {
 		}
 		if _, err := os.Stat(filepath.Join(dataHome, "repos", repo.ID, "repo.json")); err != nil {
 			t.Fatalf("repo metadata not written: %v", err)
+		}
+	})
+}
+
+func TestRegisterCurrentPreservesRunDefaults(t *testing.T) {
+	root := newGitRepo(t)
+	dataHome := t.TempDir()
+	registry := Registry{DataHome: dataHome, Now: fixedNow}
+	withDir(t, root, func() {
+		repo, err := registry.RegisterCurrent(context.Background())
+		if err != nil {
+			t.Fatalf("initial RegisterCurrent() failed: %v", err)
+		}
+		pullRequest := true
+		repo.RunDefaults = &RepoRunDefaults{PullRequest: &pullRequest}
+		if err := registry.WriteRepo(repo); err != nil {
+			t.Fatalf("configure pull_request default: %v", err)
+		}
+
+		reregistered, err := registry.RegisterCurrent(context.Background())
+		if err != nil {
+			t.Fatalf("second RegisterCurrent() failed: %v", err)
+		}
+		if got, set := reregistered.PullRequestDefault(); !set || !got {
+			t.Fatalf("reregistered PullRequestDefault() = (%t, %t), want (true, true)", got, set)
+		}
+		stored, err := registry.ReadRepo(repo.ID)
+		if err != nil {
+			t.Fatalf("ReadRepo() failed: %v", err)
+		}
+		if got, set := stored.PullRequestDefault(); !set || !got {
+			t.Fatalf("stored PullRequestDefault() = (%t, %t), want (true, true)", got, set)
 		}
 	})
 }

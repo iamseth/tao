@@ -21,13 +21,28 @@ const RepoSchema = "tao.repo.v1"
 
 // Repo describes one registered source repository under Tao's data home.
 type Repo struct {
-	Schema    string `json:"schema"`
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Root      string `json:"root"`
-	Branch    string `json:"branch,omitempty"`
-	RemoteURL string `json:"remote_url,omitempty"`
-	UpdatedAt string `json:"updated_at"`
+	Schema      string           `json:"schema"`
+	ID          string           `json:"id"`
+	Name        string           `json:"name"`
+	Root        string           `json:"root"`
+	Branch      string           `json:"branch,omitempty"`
+	RemoteURL   string           `json:"remote_url,omitempty"`
+	UpdatedAt   string           `json:"updated_at"`
+	RunDefaults *RepoRunDefaults `json:"run_defaults,omitempty"`
+}
+
+// RepoRunDefaults records optional defaults for runs in one repository.
+type RepoRunDefaults struct {
+	PullRequest *bool `json:"pull_request,omitempty"`
+}
+
+// PullRequestDefault returns the repository's pull-request preference and
+// whether that preference was explicitly recorded.
+func (r Repo) PullRequestDefault() (bool, bool) {
+	if r.RunDefaults == nil || r.RunDefaults.PullRequest == nil {
+		return false, false
+	}
+	return *r.RunDefaults.PullRequest, true
 }
 
 // PlanAllocation describes a centralized plan directory allocated for a repo.
@@ -70,6 +85,9 @@ func (r Registry) RegisterCurrent(ctx context.Context) (Repo, error) {
 		Branch:    strings.TrimSpace(branch),
 		RemoteURL: strings.TrimSpace(remote),
 		UpdatedAt: r.now().UTC().Format(time.RFC3339),
+	}
+	if stored, readErr := r.ReadRepo(repo.ID); readErr == nil {
+		repo.RunDefaults = stored.RunDefaults
 	}
 	if err := r.WriteRepo(repo); err != nil {
 		return Repo{}, err

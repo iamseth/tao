@@ -48,6 +48,11 @@ func (a App) status(ctx context.Context, repo planLister, args []string) error {
 	if err != nil {
 		return err
 	}
+	repositoryDefaults, err := a.currentRepositoryRunOptions(ctx)
+	if err != nil {
+		return err
+	}
+	env = applyRepositoryRunDefaultsToStatus(env, repositoryDefaults)
 	payload := statusPayload{RuntimeEnv: env, Plans: statusPlanRollup(ctx, repo)}
 	if flagBoolValue(fs, "json") {
 		encoder := json.NewEncoder(a.Out)
@@ -55,6 +60,20 @@ func (a App) status(ctx context.Context, repo planLister, args []string) error {
 		return encoder.Encode(payload)
 	}
 	return a.writeStatus(payload)
+}
+
+func applyRepositoryRunDefaultsToStatus(rows []runtimeconfig.EnvVarStatus, repository runtimeconfig.RunOptionsPatch) []runtimeconfig.EnvVarStatus {
+	if repository.PullRequest == nil {
+		return rows
+	}
+	for i := range rows {
+		if rows[i].Name == runtimeconfig.EnvPullRequest {
+			rows[i].Value = fmt.Sprintf("%t", *repository.PullRequest)
+			rows[i].Source = "repository"
+			break
+		}
+	}
+	return rows
 }
 
 func statusPlanRollup(ctx context.Context, repo planLister) plan.PlanRollup {

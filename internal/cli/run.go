@@ -159,11 +159,15 @@ func (a App) run(ctx context.Context, repo queueRepository, args []string) error
 	if activeOnly && !runAll {
 		return errors.New("--active requires --all")
 	}
+	repositoryDefaults, err := a.currentRepositoryRunOptions(ctx)
+	if err != nil {
+		return err
+	}
 	if runAll {
 		if len(positional) != 0 {
 			return errors.New("--all cannot be combined with a positional plan id")
 		}
-		runtime, err := newQueueRuntime(inputs.defaults, inputs.overrides, inputs.skipPermissions, a.StatusReporter)
+		runtime, err := newQueueRuntime(inputs.defaults, repositoryDefaults, inputs.overrides, inputs.skipPermissions, a.StatusReporter)
 		if err != nil {
 			return err
 		}
@@ -177,7 +181,7 @@ func (a App) run(ctx context.Context, repo queueRepository, args []string) error
 		return err
 	}
 	input := positional[0]
-	request, err := inputs.defaults.newRunRequest(input, inputs.overrides)
+	request, err := inputs.defaults.newRunRequestWithRepository(input, repositoryDefaults, inputs.overrides)
 	if err != nil {
 		return err
 	}

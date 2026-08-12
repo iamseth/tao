@@ -121,7 +121,7 @@ func (a App) queueAdd(ctx context.Context, repo queueRepository, args []string) 
 	if len(args) == 0 {
 		return errors.New("usage: tao queue add <plan-id-or-slug-or-path> [<plan-id-or-slug-or-path> ...]")
 	}
-	runtime, err := a.queueRuntimeFromEnv()
+	runtime, err := a.queueRuntimeFromEnv(ctx)
 	if err != nil {
 		return err
 	}
@@ -152,7 +152,7 @@ func (a App) queueAdd(ctx context.Context, repo queueRepository, args []string) 
 }
 
 func (a App) queueStart(ctx context.Context, repo queueRepository, args []string) error {
-	runtime, err := a.queueRuntimeFromEnv()
+	runtime, err := a.queueRuntimeFromEnv(ctx)
 	if err != nil {
 		return err
 	}
@@ -361,20 +361,24 @@ func queueStore(ctx context.Context) (runqueue.Store, error) {
 	return runqueue.NewFileStorePaths(registry.QueuePath(repo), registry.QueueLogPath(repo)), nil
 }
 
-func (a App) queueRuntimeFromEnv() (queueRuntime, error) {
+func (a App) queueRuntimeFromEnv(ctx context.Context) (queueRuntime, error) {
 	defaults, err := cliEnvDefaults()
 	if err != nil {
 		return queueRuntime{}, err
 	}
-	return newQueueRuntime(defaults, runtimeconfig.RunOptionsPatch{}, defaults.SkipPermissions, a.StatusReporter)
-}
-
-func newQueueRuntime(defaults envDefaults, overrides runtimeconfig.RunOptionsPatch, skipPermissions bool, reporter run.StatusReporter) (queueRuntime, error) {
-	config, err := defaults.runConfig(overrides)
+	repository, err := a.currentRepositoryRunOptions(ctx)
 	if err != nil {
 		return queueRuntime{}, err
 	}
-	return queueRuntime{options: config.ResolvedOptions(), notifyCommand: defaults.NotifyCommand, skipPermissions: skipPermissions, statusReporter: reporter}, nil
+	return newQueueRuntime(defaults, repository, runtimeconfig.RunOptionsPatch{}, defaults.SkipPermissions, a.StatusReporter)
+}
+
+func newQueueRuntime(defaults envDefaults, repository, overrides runtimeconfig.RunOptionsPatch, skipPermissions bool, reporter run.StatusReporter) (queueRuntime, error) {
+	resolved, err := defaults.resolveRunOptionsWithRepository(repository, overrides)
+	if err != nil {
+		return queueRuntime{}, err
+	}
+	return queueRuntime{options: resolved, notifyCommand: defaults.NotifyCommand, skipPermissions: skipPermissions, statusReporter: reporter}, nil
 }
 
 func enqueueStoppedAutoReworkPlans(ctx context.Context, repo queueRepository, manager *runqueue.Manager, options queueDrainOptions) (runqueue.ReconcileResult, error) {

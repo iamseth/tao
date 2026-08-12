@@ -1,11 +1,11 @@
 // Package runtimeconfig owns typed run defaults and request normalization shared
 // by the CLI and run service.
 //
-// The model is staged: RunOptionsPatch carries partial values in two roles,
-// environment or service defaults and one request's overrides, while
-// ResolvedRunOptions is the validated execution model after both are merged.
-// Optional fields are pointers so an unset value is distinct from an explicit
-// zero, false, or the default worktree strategy.
+// The model is staged: RunOptionsPatch carries partial values as environment or
+// service defaults, repository defaults, and one request's overrides, while
+// ResolvedRunOptions is the validated execution model after the applicable
+// stages are merged. Optional fields are pointers so an unset value is distinct
+// from an explicit zero, false, or the default worktree strategy.
 package runtimeconfig
 
 import (
@@ -40,9 +40,9 @@ type SliceBudgetCaps struct {
 }
 
 // RunOptionsPatch models partial values supplied as environment or service
-// defaults and as one run request's overrides. Empty enum fields mean unset.
-// Pointer fields mean the caller supplied the value, including explicit false
-// or zero.
+// defaults, repository defaults, or one run request's overrides. Empty enum
+// fields mean unset. Pointer fields mean the caller supplied the value,
+// including explicit false or zero.
 type RunOptionsPatch struct {
 	Mode           Mode           `json:"mode,omitempty"`
 	MaxSlices      *int           `json:"max_slices,omitempty"`
@@ -375,17 +375,28 @@ func (o ResolvedRunOptions) RunOptionsPatch() RunOptionsPatch {
 	}
 }
 
-// ResolveRunOptions is the staged model's normalization entry point. It applies
-// the same patch merge first for defaults and then for request overrides before
-// validating cross-field constraints.
+// ResolveRunOptions is the staged model's two-stage normalization entry point.
+// It applies defaults and then request overrides before validating cross-field
+// constraints.
 func ResolveRunOptions(defaults RunOptionsPatch, overrides RunOptionsPatch) (ResolvedRunOptions, error) {
-	options, err := mergeRunOptions(ResolvedRunOptions{}, defaults)
-	if err != nil {
-		return ResolvedRunOptions{}, err
-	}
-	options, err = mergeRunOptions(options, overrides)
-	if err != nil {
-		return ResolvedRunOptions{}, err
+	return resolveRunOptionsStages(defaults, overrides)
+}
+
+// ResolveRunOptionsWithRepositoryDefaults applies environment or service
+// defaults, repository defaults, and request overrides in increasing precedence
+// order before validating cross-field constraints.
+func ResolveRunOptionsWithRepositoryDefaults(defaults, repository, overrides RunOptionsPatch) (ResolvedRunOptions, error) {
+	return resolveRunOptionsStages(defaults, repository, overrides)
+}
+
+func resolveRunOptionsStages(stages ...RunOptionsPatch) (ResolvedRunOptions, error) {
+	var options ResolvedRunOptions
+	for _, stage := range stages {
+		var err error
+		options, err = mergeRunOptions(options, stage)
+		if err != nil {
+			return ResolvedRunOptions{}, err
+		}
 	}
 	if err := validateResolvedRunOptions(options); err != nil {
 		return ResolvedRunOptions{}, err

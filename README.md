@@ -190,6 +190,7 @@ tao staleness <plan-id-or-slug-or-path>
 tao insights [--digest] [--all-repos]
 tao repo list
 tao repo show <repo-id>
+tao repo config [--pull-request true|false] [<repo-id>]
 tao repo doctor
 tao workspace list
 tao workspace prepare <plan-id-or-slug-or-path>
@@ -197,7 +198,11 @@ tao workspace status <plan-id-or-slug-or-path>
 tao workspace clean [--force] [--force-active] [--force-dirty] <plan-id-or-slug-or-path>
 ```
 
-`tao init` registers the checkout in Tao's local repository catalog. `tao report`
+`tao init` registers the checkout in Tao's local repository catalog. `tao repo config`
+shows the current checkout's repository run defaults (`unset`, `true`, or `false`);
+pass `--pull-request true|false` to record whether runs should use the pull-request
+path, or pass a repository ID to inspect or update another registered repository.
+`tao report`
 exports a sanitized Markdown snapshot for access-controlled sharing with coworkers
 who have repository access: the default is a full lifecycle report organized as
 Planning Context, Implementation, Implementation Summary, Review and Outcome,
@@ -471,10 +476,12 @@ review-backed merge, and active merge-resolution flows never fall back to
 
 ## Configuration
 
-Tao reads these environment variables as process defaults. Explicit command-line
-flags override them, including explicit `false` values. Tao does not load `.env`
-files, and invalid values fail clearly and name
-the offending variable.
+Tao resolves run settings in three stages: environment and built-in defaults form
+the baseline, repository defaults override that baseline, and explicit per-run
+flags override both, including explicit `false` values. Tao reads these environment
+variables as process defaults, does not load `.env` files, and fails clearly on
+invalid values while naming the offending variable. `tao repo config` shows or sets
+the repository stage; currently its configurable run default is `pull_request`.
 
 ```sh
 TAO_COMMIT_POLICY=slice|none
@@ -497,7 +504,9 @@ historical metadata and is rejected for new execution with guidance to choose
 both workspace placement and branch behavior. `isolated` (the default) runs in a
 dedicated git worktree on a `tao/<plan-id>` feature branch and leaves the launch
 checkout untouched; `current` runs in place in the launch checkout on its current
-branch. Pull-request creation defaults off and is valid only in `isolated` mode —
+branch. The built-in `pull_request` default is off; set a repository default with
+`tao repo config --pull-request true` or override it for one run with
+`--pull-request=true|false`. Pull-request creation is valid only in `isolated` mode —
 requesting a PR in `current` mode is a hard error. When enabled, Tao pushes the
 plan branch and opens the PR through the GitHub CLI (`gh`); the selected agent may
 best-effort polish the Markdown body, but Tao falls back to a deterministic body
@@ -519,8 +528,8 @@ to true; set it to false to skip automatic post-completion reviews, or use
 `tao run --no-review` for a single run. Direct runs default automatic rework on;
 `TAO_AUTO_REWORK=false` or `--auto-rework=false` disables it. `tao queue start`
 remains opt-in through `TAO_AUTO_REWORK=true` or `--auto-rework`. Explicit flags
-override these environment defaults. `TAO_MAX_REWORK_ATTEMPTS` sets the default
-five-cycle cap for both paths; zero disables automatic rework.
+override repository, environment, and built-in defaults. `TAO_MAX_REWORK_ATTEMPTS`
+sets the default five-cycle cap for both paths; zero disables automatic rework.
 
 `TAO_NOTIFY_COMMAND` is an optional shell command run after a foreground queue
 drain (`tao queue start` or `tao run --all`) prints its final batch summary. Tao

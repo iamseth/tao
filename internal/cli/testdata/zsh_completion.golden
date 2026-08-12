@@ -167,7 +167,7 @@ _tao() {
       ;;
     repo)
       if (( CURRENT == 3 )); then
-        subcommands=('list:List registered repositories and health summaries' 'show:Show details for one registered repository' 'doctor:Check registered repositories for health problems')
+        subcommands=('list:List registered repositories and health summaries' 'show:Show details for one registered repository' 'config:Show or set repository run defaults' 'doctor:Check registered repositories for health problems')
         _describe -t commands 'repo command' subcommands
         return
       fi
@@ -175,6 +175,9 @@ _tao() {
         list)
           ;;
         show)
+          ;;
+        config)
+          _arguments '--pull-request[set the repository pull_request run default to true or false]:value:'
           ;;
         doctor)
           ;;

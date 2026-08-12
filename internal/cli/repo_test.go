@@ -3,12 +3,16 @@ package cli
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/run"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/taodata"
 )
 
@@ -44,6 +48,131 @@ func TestRepoListAndShow(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("repo show missing %q: %s", want, out.String())
 		}
+	}
+}
+
+func TestRepoConfigShowsUnsetAndSetsPullRequest(t *testing.T) {
+	dataHome := t.TempDir()
+	t.Setenv("TAO_DATA_HOME", dataHome)
+	root := initTestGitRepo(t)
+	repo := taodata.Repo{
+		Schema:    taodata.RepoSchema,
+		ID:        taodata.RepoID(root),
+		Name:      "repo",
+		Root:      root,
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	registry := taodata.Registry{DataHome: dataHome}
+	if err := registry.WriteRepo(repo); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+
+	var out bytes.Buffer
+	app := App{Out: &out, Err: &out}
+	if err := app.Run(context.Background(), []string{"repo", "config"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "pull_request: unset") {
+		t.Fatalf("unset config output = %q", out.String())
+	}
+
+	out.Reset()
+	if err := app.Run(context.Background(), []string{"repo", "config", "--pull-request", "true"}); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := registry.ReadRepo(repo.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, ok := stored.PullRequestDefault(); !ok || !value {
+		t.Fatalf("stored pull_request = (%t, %t), want (true, true)", value, ok)
+	}
+	if !strings.Contains(out.String(), "pull_request: true") {
+		t.Fatalf("set config output = %q", out.String())
+	}
+
+	out.Reset()
+	if err := app.Run(context.Background(), []string{"repo", "config", "--pull-request=false"}); err != nil {
+		t.Fatal(err)
+	}
+	stored, err = registry.ReadRepo(repo.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, ok := stored.PullRequestDefault(); !ok || value {
+		t.Fatalf("stored pull_request = (%t, %t), want (false, true)", value, ok)
+	}
+}
+
+func TestRepositoryPullRequestDefaultAppliesToQueueAndExplicitRunFlagWins(t *testing.T) {
+	clearTaoEnv(t)
+	t.Setenv(runtimeconfig.EnvPullRequest, "false")
+	value := true
+	registered := taodata.Repo{ID: "repo-a", RunDefaults: &taodata.RepoRunDefaults{PullRequest: &value}}
+	registry := &fakeNoteRegistry{current: registered, repos: []taodata.Repo{registered}}
+	app := App{Out: io.Discard, Err: io.Discard, Registry: func() NoteRegistry { return registry }}
+
+	queueRuntime, err := app.queueRuntimeFromEnv(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !queueRuntime.options.PullRequest {
+		t.Fatal("queue pull_request = false, want repository default true")
+	}
+
+	first := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+	active := &first
+	oldExecutor := executeSinglePlan
+	var requests []run.Request
+	executeSinglePlan = func(_ run.Service, _ context.Context, got run.Request) error {
+		requests = append(requests, got)
+		active.write(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
+		return nil
+	}
+	t.Cleanup(func() { executeSinglePlan = oldExecutor })
+
+	if err := app.run(context.Background(), plan.NewFileRepository(first.root), []string{"--no-review", first.id}); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 1 || !requests[0].PullRequest {
+		t.Fatalf("direct request = %#v, want repository pull_request true", requests)
+	}
+
+	second := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+	active = &second
+	if err := app.run(context.Background(), plan.NewFileRepository(second.root), []string{"--pull-request=false", "--no-review", second.id}); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 2 || requests[1].PullRequest {
+		t.Fatalf("explicit --pull-request=false did not override repository default: %#v", requests)
+	}
+}
+
+func TestStatusShowsEffectiveRepositoryPullRequestSource(t *testing.T) {
+	clearTaoEnv(t)
+	t.Setenv(runtimeconfig.EnvPullRequest, "false")
+	value := true
+	registered := taodata.Repo{ID: "repo-a", RunDefaults: &taodata.RepoRunDefaults{PullRequest: &value}}
+	registry := &fakeNoteRegistry{current: registered, repos: []taodata.Repo{registered}}
+	var out bytes.Buffer
+	app := App{
+		Out:        &out,
+		Repository: func(string) Repository { return fakeRepository{} },
+		Registry:   func() NoteRegistry { return registry },
+	}
+	if err := app.Run(context.Background(), []string{"status"}); err != nil {
+		t.Fatal(err)
+	}
+	line := ""
+	for _, candidate := range strings.Split(out.String(), "\n") {
+		if strings.Contains(candidate, runtimeconfig.EnvPullRequest) {
+			line = candidate
+			break
+		}
+	}
+	if !strings.Contains(line, "true") || !strings.Contains(line, "repository") {
+		t.Fatalf("effective pull_request status line = %q; output=%q", line, out.String())
 	}
 }
 
@@ -93,7 +222,7 @@ func TestRepoShowRejectsAmbiguousPrefix(t *testing.T) {
 func TestRepoUsageErrors(t *testing.T) {
 	var out bytes.Buffer
 	app := App{Out: &out, Err: &out}
-	for _, args := range [][]string{{"repo"}, {"repo", "list", "extra"}, {"repo", "show"}, {"repo", "doctor", "extra"}, {"repo", "bad"}} {
+	for _, args := range [][]string{{"repo"}, {"repo", "list", "extra"}, {"repo", "show"}, {"repo", "config", "one", "two"}, {"repo", "doctor", "extra"}, {"repo", "bad"}} {
 		if err := app.Run(context.Background(), args); err == nil {
 			t.Fatalf("Run(%v) succeeded unexpectedly", args)
 		}

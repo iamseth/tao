@@ -199,6 +199,62 @@ func TestResolveRunOptionsAppliesBuiltInDefaults(t *testing.T) {
 	}
 }
 
+func TestResolveRunOptionsWithRepositoryDefaultsPullRequestPrecedence(t *testing.T) {
+	states := []struct {
+		name  string
+		value *bool
+	}{
+		{name: "unset"},
+		{name: "true", value: new(true)},
+		{name: "false", value: new(false)},
+	}
+
+	for _, defaults := range states {
+		for _, repository := range states {
+			for _, overrides := range states {
+				name := "defaults=" + defaults.name + "/repository=" + repository.name + "/overrides=" + overrides.name
+				t.Run(name, func(t *testing.T) {
+					options, err := ResolveRunOptionsWithRepositoryDefaults(
+						RunOptionsPatch{PullRequest: defaults.value},
+						RunOptionsPatch{PullRequest: repository.value},
+						RunOptionsPatch{PullRequest: overrides.value},
+					)
+					if err != nil {
+						t.Fatal(err)
+					}
+
+					want := false
+					switch {
+					case overrides.value != nil:
+						want = *overrides.value
+					case repository.value != nil:
+						want = *repository.value
+					case defaults.value != nil:
+						want = *defaults.value
+					}
+					if options.PullRequest != want {
+						t.Fatalf("PullRequest = %t, want %t", options.PullRequest, want)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestResolveRunOptionsWithRepositoryDefaultsExplicitFalseOverrideWins(t *testing.T) {
+	options, err := ResolveRunOptionsWithRepositoryDefaults(
+		RunOptionsPatch{},
+		RunOptionsPatch{}.WithPullRequest(true),
+		RunOptionsPatch{}.WithPullRequest(false),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.PullRequest {
+		t.Fatalf("expected explicit false override to beat repository default, got %#v", options)
+	}
+}
+
 func TestResolveRunOptionsReviewEnabledDefaultAndOverrides(t *testing.T) {
 	enabled, err := ResolveRunOptions(RunOptionsPatch{}, RunOptionsPatch{})
 	if err != nil {

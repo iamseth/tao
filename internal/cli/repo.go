@@ -3,7 +3,9 @@ package cli
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/iamseth/tao/internal/taodata"
@@ -12,17 +14,20 @@ import (
 var repoCommand = commandMetadata{
 	name:                  "repo",
 	minPrefix:             "repo",
-	usageLines:            []string{"repo list", "repo show <repo-id>", "repo doctor"},
+	usageLines:            []string{"repo list", "repo show <repo-id>", "repo config [--pull-request true|false] [<repo-id>]", "repo doctor"},
 	completionDescription: "Inspect registered repositories",
-	long:                  "Inspect repositories registered in Tao's centralized catalog. Use repo commands to list known checkouts, show catalog details, and diagnose repository health before running plans.",
+	long:                  "Inspect and configure repositories registered in Tao's centralized catalog. Use repo commands to list known checkouts, show catalog details, set repository run defaults, and diagnose repository health before running plans.",
 	examples: "  tao repo list\n" +
 		"  tao repo show tao-146d10c48b68\n" +
+		"  tao repo config --pull-request true\n" +
 		"  tao repo doctor",
 	subcommands: []commandSubcommand{
 		{name: "list", description: "List registered repositories and health summaries"},
 		{name: "show", description: "Show details for one registered repository"},
+		{name: "config", description: "Show or set repository run defaults", registerFlags: registerRepoConfigFlags},
 		{name: "doctor", description: "Check registered repositories for health problems"},
 	},
+	registerFlags: registerRepoConfigFlags,
 	execute: func(c commandContext) error {
 		return c.app.repo(c.ctx, c.args)
 	},
@@ -30,7 +35,7 @@ var repoCommand = commandMetadata{
 
 func (a App) repo(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: tao repo list|show <repo-id>|doctor")
+		return errors.New("usage: tao repo list|show <repo-id>|config [--pull-request true|false] [<repo-id>]|doctor")
 	}
 	registry := taodata.NewRegistry("")
 	switch args[0] {
@@ -44,6 +49,8 @@ func (a App) repo(ctx context.Context, args []string) error {
 			return errors.New("usage: tao repo show <repo-id>")
 		}
 		return a.repoShow(ctx, registry, args[1])
+	case "config":
+		return a.repoConfig(ctx, registry, args[1:])
 	case "doctor":
 		if len(args) != 1 {
 			return errors.New("usage: tao repo doctor")
@@ -97,6 +104,51 @@ func (a App) repoShow(ctx context.Context, registry taodata.Registry, input stri
 		"Finding: " + entry.Health.Message,
 	}
 	return writeLines(a.Out, lines...)
+}
+
+func registerRepoConfigFlags(fs *flag.FlagSet) {
+	fs.String("pull-request", "", "set the repository pull_request run default to true or false")
+}
+
+func (a App) repoConfig(ctx context.Context, registry taodata.Registry, args []string) error {
+	fs, positional, err := a.parseArgs("repo config", args, registerRepoConfigFlags)
+	if err != nil {
+		return err
+	}
+	if len(positional) > 1 {
+		return errors.New("usage: tao repo config [--pull-request true|false] [<repo-id>]")
+	}
+	selector := ""
+	if len(positional) == 1 {
+		selector = positional[0]
+	}
+	repo, err := taodata.ResolveRepo(ctx, registry, selector)
+	if err != nil {
+		return err
+	}
+	if flagWasProvided(fs, "pull-request") {
+		value, err := strconv.ParseBool(flagStringValue(fs, "pull-request"))
+		if err != nil {
+			return errors.New("--pull-request must be true or false")
+		}
+		if repo.RunDefaults == nil {
+			repo.RunDefaults = &taodata.RepoRunDefaults{}
+		}
+		repo.RunDefaults.PullRequest = &value
+		repo.UpdatedAt = a.now().UTC().Format("2006-01-02T15:04:05Z07:00")
+		if err := registry.WriteRepo(repo); err != nil {
+			return err
+		}
+	}
+	pullRequest := "unset"
+	if value, ok := repo.PullRequestDefault(); ok {
+		pullRequest = strconv.FormatBool(value)
+	}
+	return writeLines(a.Out,
+		"Repo: "+emptyDash(repo.Name),
+		"ID: "+emptyDash(repo.ID),
+		"pull_request: "+pullRequest,
+	)
 }
 
 func (a App) repoDoctor(ctx context.Context, registry taodata.Registry) error {
