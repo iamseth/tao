@@ -40,9 +40,11 @@ func splitCommandFields(command string) []string {
 }
 
 type commandToken struct {
-	value     string
-	quoted    bool
-	separator bool
+	value         string
+	quoted        bool
+	separator     bool
+	joinedToLeft  bool
+	joinedToRight bool
 }
 
 func splitCommandTokens(command string) []commandToken {
@@ -59,9 +61,15 @@ func splitCommandTokens(command string) []commandToken {
 		current.Reset()
 		quoted = false
 	}
-	separator := func(value string) {
+	separator := func(value string, joinedToRight bool) {
+		joinedToLeft := current.Len() > 0
 		flush()
-		tokens = append(tokens, commandToken{value: value, separator: true})
+		tokens = append(tokens, commandToken{
+			value:         value,
+			separator:     true,
+			joinedToLeft:  joinedToLeft,
+			joinedToRight: joinedToRight,
+		})
 	}
 
 	runes := []rune(command)
@@ -101,14 +109,14 @@ func splitCommandTokens(command string) []commandToken {
 		case ' ', '\t', '\r':
 			flush()
 		case '\n', ';':
-			separator(string(r))
+			separator(string(r), i+1 < len(runes) && !isCommandSpace(runes[i+1]))
 		case '&', '|':
 			value := string(r)
 			if i+1 < len(runes) && runes[i+1] == r {
 				value += string(r)
 				i++
 			}
-			separator(value)
+			separator(value, i+1 < len(runes) && !isCommandSpace(runes[i+1]))
 		default:
 			current.WriteRune(r)
 		}
@@ -118,4 +126,8 @@ func splitCommandTokens(command string) []commandToken {
 	}
 	flush()
 	return tokens
+}
+
+func isCommandSpace(r rune) bool {
+	return r == ' ' || r == '\t' || r == '\r' || r == '\n'
 }

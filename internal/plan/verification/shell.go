@@ -8,13 +8,44 @@ func shellHazardFindings(command string, tokens []string) []Finding {
 	}
 	for i := 2; i < len(tokens); i++ {
 		if tokens[i] == "-run" && i+1 < len(tokens) {
-			return shellHazardFindingForRunPattern(command, tokens[i+1])
+			pattern := tokens[i+1]
+			return shellHazardFindingForRunPattern(command, runPatternWithAdjacentSeparators(command, pattern))
 		}
 		if after, ok := strings.CutPrefix(tokens[i], "-run="); ok {
-			return shellHazardFindingForRunPattern(command, after)
+			return shellHazardFindingForRunPattern(command, runPatternWithAdjacentSeparators(command, after))
 		}
 	}
 	return nil
+}
+
+func runPatternWithAdjacentSeparators(command string, pattern string) string {
+	tokens := splitCommandTokens(command)
+	for i, token := range tokens {
+		valueIndex := -1
+		switch {
+		case token.value == "-run" && i+1 < len(tokens) && !tokens[i+1].separator && tokens[i+1].value == pattern:
+			valueIndex = i + 1
+		case strings.HasPrefix(token.value, "-run=") && strings.TrimPrefix(token.value, "-run=") == pattern:
+			valueIndex = i
+		}
+		if valueIndex < 0 {
+			continue
+		}
+
+		combined := pattern
+		for j := valueIndex + 1; j < len(tokens) && tokens[j].separator && tokens[j].joinedToLeft; j++ {
+			combined += tokens[j].value
+			if !tokens[j].joinedToRight || j+1 >= len(tokens) || tokens[j+1].separator {
+				break
+			}
+			combined += tokens[j+1].value
+			j++
+		}
+		if combined != pattern {
+			return combined
+		}
+	}
+	return pattern
 }
 
 func shellHazardFindingForRunPattern(command string, pattern string) []Finding {

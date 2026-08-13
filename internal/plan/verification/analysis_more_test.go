@@ -25,6 +25,24 @@ func TestAnalyzeCommandFindsCWDPathChecksAndShellHazards(t *testing.T) {
 	}
 }
 
+func TestAnalyzeCommandFindsCompactRunPatternSeparatorHazards(t *testing.T) {
+	repo := t.TempDir()
+	for _, command := range []string{
+		"go test ./... -run TestFoo|TestBar",
+		"go test ./... -run=TestFoo|TestBar",
+	} {
+		t.Run(command, func(t *testing.T) {
+			analysis := AnalyzeCommand(repo, command)
+			if len(analysis.Findings) == 0 || analysis.Findings[0].Code != "verification_shell_hazard" {
+				t.Fatalf("expected shell hazard warning, got %#v", analysis.Findings)
+			}
+			if analysis.Findings[0].Suggestion != "'TestFoo|TestBar'" {
+				t.Fatalf("Suggestion = %q, want quoted complete pattern", analysis.Findings[0].Suggestion)
+			}
+		})
+	}
+}
+
 func TestAnalyzeCommandWarnsForMissingFilterMissingPathAndMissingCWD(t *testing.T) {
 	repo := t.TempDir()
 	analysis := AnalyzeCommand(repo, "cd missing && pnpm --filter @repo/missing test missing.test.ts")
