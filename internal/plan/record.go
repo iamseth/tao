@@ -166,10 +166,6 @@ func (r *PlanRecord) StartSlice(sliceID string, now time.Time) error {
 	return r.apply(startSliceMutation(sliceID, "", now))
 }
 
-func (r *PlanRecord) StartSliceWithExecutionRoot(sliceID string, executionRoot string, now time.Time) error {
-	return r.apply(startSliceMutation(sliceID, executionRoot, now))
-}
-
 func (r *PlanRecord) StartSliceWithRunCommitPolicy(sliceID string, executionRoot string, commitPolicy string, startingDirtyPaths []string, now time.Time) error {
 	return r.startSliceWithRunBoundary(sliceID, executionRoot, commitPolicy, startingDirtyPaths, nil, now)
 }
