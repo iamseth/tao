@@ -1,0 +1,194 @@
+name: Update changelog
+
+on:
+  schedule:
+    # Update the last completed Monday-Sunday week.
+    - cron: "17 8 * * 1"
+  workflow_dispatch:
+    inputs:
+      week_start:
+        description: "Monday to update (YYYY-MM-DD); defaults to the last completed week"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+  models: read
+
+concurrency:
+  group: changelog-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Update weekly changelog
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Test changelog updater
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+
+      - name: Choose completed week
+        id: week
+        env:
+          REQUESTED_WEEK: ${{ inputs.week_start }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import datetime as dt
+          import os
+
+          requested = os.environ.get("REQUESTED_WEEK", "").strip()
+          if requested:
+              try:
+                  start = dt.date.fromisoformat(requested)
+              except ValueError as exc:
+                  raise SystemExit("week_start must use YYYY-MM-DD") from exc
+              if start.weekday() != 0:
+                  raise SystemExit("week_start must be a Monday")
+          else:
+              today = dt.datetime.now(dt.timezone.utc).date()
+              current_monday = today - dt.timedelta(days=today.weekday())
+              start = current_monday - dt.timedelta(days=7)
+
+          print(f"start={start.isoformat()}")
+          print(f"end={(start + dt.timedelta(days=7)).isoformat()}")
+          PY
+
+      - name: Collect commit evidence
+        id: commits
+        env:
+          WEEK_START: ${{ steps.week.outputs.start }}
+          WEEK_END: ${{ steps.week.outputs.end }}
+        run: |
+          : > commits.txt
+          while IFS= read -r sha; do
+            changed_files="$(git diff-tree --root --no-commit-id --name-only -r "$sha" | grep -v '^CHANGELOG.md$' || true)"
+            if [ -z "$changed_files" ]; then
+              continue
+            fi
+
+            git show -s --date=short \
+              --format='Commit: %h%nDate: %ad%nSubject: %s%nDetails:%n%b' "$sha" \
+              > commit-evidence.tmp
+            head -c 6000 commit-evidence.tmp >> commits.txt
+            printf '\nChanged files:\n' >> commits.txt
+            printf '%s\n' "$changed_files" > changed-files.tmp
+            head -n 100 changed-files.tmp >> commits.txt
+            printf '\n---\n' >> commits.txt
+          done < <(git log --reverse \
+            --since="${WEEK_START}T00:00:00Z" \
+            --before="${WEEK_END}T00:00:00Z" \
+            --format='%H')
+          rm -f commit-evidence.tmp changed-files.tmp
+
+          if [ "$(wc -c < commits.txt)" -gt 120000 ]; then
+            head -c 120000 commits.txt > commits-bounded.txt
+            printf '\n[Commit evidence truncated at 120 KB.]\n' >> commits-bounded.txt
+            mv commits-bounded.txt commits.txt
+          fi
+
+          if [ -s commits.txt ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "No user-facing source commits found for ${WEEK_START}."
+          fi
+
+      - name: Read existing weekly section
+        if: steps.commits.outputs.found == 'true'
+        env:
+          WEEK_START: ${{ steps.week.outputs.start }}
+        run: |
+          python3 .github/scripts/changelog_week.py \
+            extract CHANGELOG.md "$WEEK_START" > current-section.md
+
+      - name: Generate user-focused release notes
+        if: steps.commits.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WEEK_START: ${{ steps.week.outputs.start }}
+        run: |
+          jq -n \
+            --arg model "openai/gpt-4.1-mini" \
+            --arg week "$WEEK_START" \
+            --rawfile system .github/changelog-prompt.md \
+            --rawfile commits commits.txt \
+            --rawfile current current-section.md \
+            '{
+              model: $model,
+              temperature: 0.2,
+              max_tokens: 2000,
+              messages: [
+                {role: "system", content: $system},
+                {role: "user", content: (
+                  "Requested week: " + $week +
+                  "\n\nExisting section (possibly empty):\n<existing>\n" + $current +
+                  "\n</existing>\n\nCommit evidence:\n<commits>\n" + $commits +
+                  "\n</commits>"
+                )}
+              ]
+            }' > request.json
+
+          curl --fail-with-body --silent --show-error \
+            --retry 3 \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Content-Type: application/json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --data @request.json \
+            https://models.github.ai/inference/chat/completions > response.json
+
+          jq -er '.choices[0].message.content' response.json > generated-section.md
+
+      - name: Update CHANGELOG.md
+        id: update
+        if: steps.commits.outputs.found == 'true'
+        env:
+          WEEK_START: ${{ steps.week.outputs.start }}
+        run: |
+          python3 .github/scripts/changelog_week.py \
+            apply CHANGELOG.md "$WEEK_START" generated-section.md
+          git diff --check
+
+          if git diff --quiet -- CHANGELOG.md; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "CHANGELOG.md is already current for ${WEEK_START}."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git diff -- CHANGELOG.md
+          fi
+
+      - name: Open or update changelog pull request
+        if: steps.update.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WEEK_START: ${{ steps.week.outputs.start }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          branch="automation/changelog-${WEEK_START}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add CHANGELOG.md
+          git commit -m "docs(changelog): update week of ${WEEK_START}"
+
+          git fetch origin \
+            "refs/heads/${branch}:refs/remotes/origin/${branch}" || true
+          git push --force-with-lease origin "HEAD:refs/heads/${branch}"
+
+          if gh pr view "$branch" --json url --jq .url >/dev/null 2>&1; then
+            gh pr edit "$branch" \
+              --title "docs(changelog): update week of ${WEEK_START}" \
+              --body "Automated user-focused changelog update for the week of ${WEEK_START}. Review and edit the generated wording before merging."
+          else
+            gh pr create \
+              --base "$DEFAULT_BRANCH" \
+              --head "$branch" \
+              --title "docs(changelog): update week of ${WEEK_START}" \
+              --body "Automated user-focused changelog update for the week of ${WEEK_START}. Review and edit the generated wording before merging."
+          fi

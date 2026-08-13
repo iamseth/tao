@@ -23,6 +23,9 @@ jobs:
       - name: Verify no third-party dependencies
         run: make verify-no-deps
 
+      - name: Test changelog automation
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+
       - name: Build
         run: make build
 
