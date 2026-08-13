@@ -86,7 +86,11 @@ func (a App) workspacePrepare(ctx context.Context, repo plan.Resolver, args []st
 	if err != nil {
 		return err
 	}
-	metadata, err := manager.Prepare(ctx, workspace.PrepareOptions{PlanID: detail.State.Plan.ID, BaseBranch: detail.State.Repo.Branch})
+	identity, err := workspace.ResolvePlanBranch(detail, workspace.DefaultConfig())
+	if err != nil {
+		return err
+	}
+	metadata, err := manager.Prepare(ctx, workspace.PrepareOptions{PlanID: detail.State.Plan.ID, BaseBranch: detail.State.Repo.Branch, Branch: identity.Name, RequireNewBranch: identity.RequireNew})
 	if err != nil {
 		return err
 	}
@@ -104,7 +108,11 @@ func (a App) workspaceStatus(ctx context.Context, repo plan.Resolver, args []str
 	if err != nil {
 		return err
 	}
-	metadata, err := manager.Status(ctx, detail.State.Plan.ID)
+	identity, err := workspace.ResolvePlanBranch(detail, workspace.DefaultConfig())
+	if err != nil {
+		return err
+	}
+	metadata, err := manager.Status(ctx, detail.State.Plan.ID, identity.Name)
 	if err != nil {
 		return err
 	}

@@ -49,6 +49,8 @@ events.jsonl
 ## Rules
 
 - Preserve intent, constraints, and decisions from this session.
+- Select exactly one plan-level `change_type` from the supported Conventional Commit types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, or `revert`.
+- Treat `change_type` as a required planning-time decision for every new plan. Derive it only from the resolved planning conversation; if the planning packet leaves it unresolved, stop and ask the user rather than inventing a type or writing incomplete plan artifacts.
 - Run `tao insights --digest` for the current repository and factor recurring failure patterns—such as environment-caused verification failures, rework-prone areas, and cost outliers—into slice boundaries and verification-command choices.
 - Slice work into small serial steps.
 - Each slice must be independently reviewable.
@@ -177,7 +179,7 @@ The user's goal and success criteria in a short paragraph.
 
 ## state.json
 
-Write current state:
+Write current state. The example uses `feat`; replace it with the supported type resolved during planning:
 
 {
   "schema": "tao.plan.state.v1",
@@ -193,6 +195,7 @@ Write current state:
   "plan": {
     "id": "<YYYYMMDD-HHMMSS-short-slug>",
     "title": "<title>",
+    "change_type": "feat",
     "current_slice": null,
     "completed_slices": [],
     "pending_slices": ["001-example"],

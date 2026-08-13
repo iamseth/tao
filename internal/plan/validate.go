@@ -28,6 +28,9 @@ func ValidateDetail(detail *PlanDetail) []string {
 	if detail.State.Plan.ID == "" {
 		warnings = append(warnings, "state.json missing plan.id")
 	}
+	if err := ValidateChangeType(detail.State.Plan.ChangeType); err != nil {
+		warnings = append(warnings, "state.json plan.change_type is invalid: "+err.Error())
+	}
 	if detail.Slices.PlanID != "" && detail.State.Plan.ID != "" && detail.Slices.PlanID != detail.State.Plan.ID {
 		warnings = append(warnings, "state.json plan.id does not match slices.json plan_id")
 	}

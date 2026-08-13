@@ -8,33 +8,51 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/workspace"
 )
 
 func TestCleanupRemovesMergedBranchesAndSkipsRest(t *testing.T) {
 	var out bytes.Buffer
-	manager := &fakeWorkspaceManager{managedPlans: []workspace.ManagedCleanup{
-		{Branch: "tao/done", WorktreePath: "/repo/.tao/workspaces/done", Status: workspace.ManagedStatusClean, CanRemove: true, Reason: "merged into master"},
-		{Branch: "tao/wip", Status: workspace.ManagedStatusUnmerged, Reason: "not merged into master"},
-		{Branch: "tao/dirty", WorktreePath: "/repo/.tao/workspaces/dirty", Status: workspace.ManagedStatusDirty, Reason: "worktree has uncommitted changes"},
-		{Branch: "tao/cur", Status: workspace.ManagedStatusCurrent, Reason: "branch is currently checked out"},
-	}}
-	app := App{Out: &out, Err: &out, CommandRunner: cleanupTopLevelRunner("/repo"), WorkspaceManager: func(root string) (WorkspaceManager, error) {
-		if root != "/repo" {
-			t.Fatalf("expected repo root /repo, got %q", root)
+	root := t.TempDir()
+	manager := &fakeWorkspaceManager{
+		list: []workspace.Metadata{{PlanID: "typed-live", Branch: "fix/typed-live"}},
+		managedPlans: []workspace.ManagedCleanup{
+			{Branch: "tao/done", WorktreePath: "/repo/.tao/workspaces/done", Status: workspace.ManagedStatusClean, CanRemove: true, Reason: "merged into master"},
+			{Branch: "tao/wip", Status: workspace.ManagedStatusUnmerged, Reason: "not merged into master"},
+			{Branch: "tao/dirty", WorktreePath: "/repo/.tao/workspaces/dirty", Status: workspace.ManagedStatusDirty, Reason: "worktree has uncommitted changes"},
+			{Branch: "tao/cur", Status: workspace.ManagedStatusCurrent, Reason: "branch is currently checked out"},
+		},
+	}
+	repo := fakeRepository{
+		summaries: []plan.PlanSummary{
+			{ID: "typed-plan", Workspace: &plan.Workspace{Branch: "feature/typed-plan"}},
+			{ID: "typed-pr", PullRequest: &plan.PullRequest{Branch: "docs/typed-pr"}},
+		},
+		details: map[string]*plan.PlanDetail{
+			"typed-plan": {State: plan.State{Repo: plan.Repo{Root: root}, Workspace: &plan.Workspace{Branch: "feature/typed-plan"}}},
+			"typed-pr":   {State: plan.State{Repo: plan.Repo{Root: root}, Plan: plan.PlanState{PullRequest: &plan.PullRequest{Branch: "docs/typed-pr"}}}},
+		},
+	}
+	app := App{Out: &out, Err: &out, CommandRunner: cleanupTopLevelRunner(root), WorkspaceManager: func(gotRoot string) (WorkspaceManager, error) {
+		if gotRoot != root {
+			t.Fatalf("expected repo root %q, got %q", root, gotRoot)
 		}
 		return manager, nil
 	}}
 
-	if err := app.cleanup(context.Background(), nil); err != nil {
+	if err := app.cleanup(context.Background(), repo, nil); err != nil {
 		t.Fatal(err)
+	}
+	if got, want := strings.Join(manager.managedOwnedBranches, ","), "feature/typed-plan,docs/typed-pr,fix/typed-live"; got != want {
+		t.Fatalf("cleanup ownership = %q, want %q", got, want)
 	}
 	text := out.String()
 	for _, want := range []string{
-		"removed /repo tao/done (worktree /repo/.tao/workspaces/done): merged into master",
-		"skipped /repo tao/wip: not merged into master",
-		"skipped /repo tao/dirty (worktree /repo/.tao/workspaces/dirty): worktree has uncommitted changes",
-		"skipped /repo tao/cur: branch is currently checked out",
+		"removed " + root + " tao/done (worktree /repo/.tao/workspaces/done): merged into master",
+		"skipped " + root + " tao/wip: not merged into master",
+		"skipped " + root + " tao/dirty (worktree /repo/.tao/workspaces/dirty): worktree has uncommitted changes",
+		"skipped " + root + " tao/cur: branch is currently checked out",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected %q in output:\n%s", want, text)
@@ -48,6 +66,43 @@ func TestCleanupRemovesMergedBranchesAndSkipsRest(t *testing.T) {
 	}
 }
 
+func TestCleanupPlansDirCannotClaimBranchFromAnotherRepository(t *testing.T) {
+	var out bytes.Buffer
+	currentRoot := t.TempDir()
+	foreignRoot := t.TempDir()
+	plansDir := t.TempDir()
+	const branch = "feature/shared-name"
+	manager := &fakeWorkspaceManager{}
+	repo := fakeRepository{
+		summaries: []plan.PlanSummary{{ID: "foreign-plan", Workspace: &plan.Workspace{Branch: branch}}},
+		details: map[string]*plan.PlanDetail{
+			"foreign-plan": {State: plan.State{Repo: plan.Repo{Root: foreignRoot}, Workspace: &plan.Workspace{Branch: branch}}},
+		},
+	}
+	app := App{
+		Out:           &out,
+		Err:           &out,
+		CommandRunner: cleanupTopLevelRunner(currentRoot),
+		Repository: func(gotPlansDir string) Repository {
+			if gotPlansDir != plansDir {
+				t.Fatalf("plans dir = %q, want %q", gotPlansDir, plansDir)
+			}
+			return repo
+		},
+		WorkspaceManager: func(string) (WorkspaceManager, error) { return manager, nil },
+	}
+
+	if err := app.Run(context.Background(), []string{"--plans-dir", plansDir, "cleanup"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(manager.managedOwnedBranches) != 0 {
+		t.Fatalf("foreign plan claimed current-repository branch ownership: %v", manager.managedOwnedBranches)
+	}
+	if len(manager.cleanedManaged) != 0 {
+		t.Fatalf("foreign plan caused current-repository cleanup: %#v", manager.cleanedManaged)
+	}
+}
+
 func TestCleanupForceRemovesUnmergedButNotCurrent(t *testing.T) {
 	var out bytes.Buffer
 	manager := &fakeWorkspaceManager{managedPlans: []workspace.ManagedCleanup{
@@ -56,7 +111,7 @@ func TestCleanupForceRemovesUnmergedButNotCurrent(t *testing.T) {
 	}}
 	app := App{Out: &out, Err: &out, CommandRunner: cleanupTopLevelRunner("/repo"), WorkspaceManager: func(string) (WorkspaceManager, error) { return manager, nil }}
 
-	if err := app.cleanup(context.Background(), []string{"--force"}); err != nil {
+	if err := app.cleanup(context.Background(), fakeRepository{}, []string{"--force"}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "removed /repo tao/wip") {
@@ -77,7 +132,7 @@ func TestCleanupDryRunDoesNotRemove(t *testing.T) {
 	}}
 	app := App{Out: &out, Err: &out, CommandRunner: cleanupTopLevelRunner("/repo"), WorkspaceManager: func(string) (WorkspaceManager, error) { return manager, nil }}
 
-	if err := app.cleanup(context.Background(), []string{"--dry-run"}); err != nil {
+	if err := app.cleanup(context.Background(), fakeRepository{}, []string{"--dry-run"}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "would remove /repo tao/done: merged into master") {
@@ -99,7 +154,7 @@ func TestCleanupContinuesAfterFailures(t *testing.T) {
 	}
 	app := App{Out: &out, Err: &out, CommandRunner: cleanupTopLevelRunner("/repo"), WorkspaceManager: func(string) (WorkspaceManager, error) { return manager, nil }}
 
-	err := app.cleanup(context.Background(), nil)
+	err := app.cleanup(context.Background(), fakeRepository{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "cleanup failed for 1 branch") {
 		t.Fatalf("expected aggregate failure, got %v", err)
 	}
@@ -124,7 +179,7 @@ func TestCleanupReportsRepositoryLocateFailure(t *testing.T) {
 		t.Fatal("workspace manager must not be built when repo root is unknown")
 		return nil, nil
 	}}
-	err := app.cleanup(context.Background(), nil)
+	err := app.cleanup(context.Background(), fakeRepository{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "locate repository") {
 		t.Fatalf("expected locate repository error, got %v", err)
 	}
@@ -132,7 +187,7 @@ func TestCleanupReportsRepositoryLocateFailure(t *testing.T) {
 
 // cleanupTopLevelRunner answers "git rev-parse --show-toplevel" with root and
 // ignores every other command, so cleanup tests can drive a fixed repository root.
-func cleanupTopLevelRunner(root string) CommandRunner { //nolint:unparam // root kept for test clarity
+func cleanupTopLevelRunner(root string) CommandRunner {
 	return func(ctx context.Context, _ string, _ string, args []string, stdout io.Writer, _ io.Writer) error {
 		if err := ctx.Err(); err != nil {
 			return err

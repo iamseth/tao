@@ -93,6 +93,69 @@ func TestSliceRequiredInputsJSONAndLegacyCompatibility(t *testing.T) {
 	}
 }
 
+func TestPlanChangeTypeJSONRoundTripAndLegacyCompatibility(t *testing.T) {
+	state := State{Plan: PlanState{ID: "typed", ChangeType: ChangeTypeFeat}}
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got State
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Plan.ChangeType != ChangeTypeFeat {
+		t.Fatalf("change type after round trip = %q, want %q", got.Plan.ChangeType, ChangeTypeFeat)
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := ReadState(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Plan.ChangeType != ChangeTypeFeat {
+		t.Fatalf("loaded change type = %q, want %q", loaded.Plan.ChangeType, ChangeTypeFeat)
+	}
+
+	var legacy State
+	if err := json.Unmarshal([]byte(`{"plan":{"id":"legacy"}}`), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if legacy.Plan.ChangeType != "" {
+		t.Fatalf("legacy change type = %q, want empty", legacy.Plan.ChangeType)
+	}
+	legacyData, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(legacyData), "change_type") {
+		t.Fatalf("legacy JSON unexpectedly added change_type: %s", legacyData)
+	}
+}
+
+func TestChangeTypeValidationAndCategoryMapping(t *testing.T) {
+	for _, changeType := range SupportedChangeTypes() {
+		if err := ValidateChangeType(changeType); err != nil {
+			t.Errorf("ValidateChangeType(%q) = %v", changeType, err)
+		}
+		want := string(changeType)
+		if changeType == ChangeTypeFeat {
+			want = "feature"
+		}
+		if got := changeType.Category(); got != want {
+			t.Errorf("%q category = %q, want %q", changeType, got, want)
+		}
+	}
+	if err := ValidateChangeType(""); err != nil {
+		t.Fatalf("legacy empty change type should be valid: %v", err)
+	}
+	if err := ValidateChangeType("feature"); err == nil || !strings.Contains(err.Error(), "unsupported plan change type") {
+		t.Fatalf("expected useful invalid change type error, got %v", err)
+	}
+}
+
 func TestPlanReviewFindingsJSON(t *testing.T) {
 	review := PlanReview{
 		Verdict:       ReviewVerdictChangesRequested,

@@ -322,6 +322,49 @@ func (c Client) LocalBranchExists(ctx context.Context, branch string) (bool, err
 	return false, nil
 }
 
+// RemoteTrackingBranchExists reports whether any known remote-tracking ref has
+// the exact branch name after its remote component.
+func (c Client) RemoteTrackingBranchExists(ctx context.Context, branch string) (bool, error) {
+	out, err := c.output(ctx, "for-each-ref", "--format=%(refname)", "refs/remotes")
+	if err != nil {
+		return false, err
+	}
+	for line := range strings.SplitSeq(out, "\n") {
+		remoteAndBranch := strings.TrimPrefix(strings.TrimSpace(line), "refs/remotes/")
+		if _, candidate, ok := strings.Cut(remoteAndBranch, "/"); ok && candidate == branch {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// RemoteBranchExists queries every configured remote for the exact branch ref.
+// Unlike RemoteTrackingBranchExists, it does not depend on the last fetch.
+func (c Client) RemoteBranchExists(ctx context.Context, branch string) (bool, error) {
+	remotes, err := c.output(ctx, "remote")
+	if err != nil {
+		return false, err
+	}
+	ref := "refs/heads/" + branch
+	for line := range strings.SplitSeq(remotes, "\n") {
+		remote := strings.TrimSpace(line)
+		if remote == "" {
+			continue
+		}
+		out, err := c.rawOutput(ctx, "ls-remote", "--heads", remote, ref)
+		if err != nil {
+			return false, fmt.Errorf("check remote %q for branch %q: %w", remote, branch, err)
+		}
+		for result := range strings.SplitSeq(out, "\n") {
+			fields := strings.Fields(result)
+			if len(fields) >= 2 && fields[1] == ref {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
 // DeleteBranch deletes a local branch. If force is true, Git's --force flag is added.
 func (c Client) DeleteBranch(ctx context.Context, branch string, force bool) error {
 	args := []string{"branch", "--delete"}

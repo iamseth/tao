@@ -42,6 +42,7 @@ func clonePlanState(plan PlanState) PlanState {
 	clone.LastRunStartingDirty = cloneStringSlice(plan.LastRunStartingDirty)
 	clone.Timing = clonePlanTiming(plan.Timing)
 	clone.PullRequest = clonePullRequest(plan.PullRequest)
+	clone.PullRequestIntent = clonePullRequest(plan.PullRequestIntent)
 	clone.Review = clonePlanReview(plan.Review)
 	clone.MergeCommitIntent = cloneSingleMergeCommitIntent(plan.MergeCommitIntent)
 	clone.FinalVerification = cloneFinalVerification(plan.FinalVerification)

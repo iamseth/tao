@@ -493,9 +493,49 @@ func validCommitSeriesFingerprint(value string) bool {
 	return err == nil && value == strings.ToLower(value)
 }
 
+// RecordPullRequestIntent persists an uncertain PR creation attempt. Number and
+// URL are the ownership evidence used by recovery; branch/head-only values are
+// retained for compatibility but must not authorize remote metadata mutation.
+func (r *PlanRecord) RecordPullRequestIntent(pr PullRequest, branch, headSHA string) error {
+	pr.Branch = strings.TrimSpace(branch)
+	pr.HeadSHA = strings.TrimSpace(headSHA)
+	hasNumber := pr.Number > 0
+	hasURL := strings.TrimSpace(pr.URL) != ""
+	if pr.Number < 0 || hasNumber != hasURL || (!hasNumber && !pr.CreatedAt.IsZero()) || pr.Branch == "" || pr.HeadSHA == "" {
+		return fmt.Errorf("pull request intent requires branch and head SHA, with number and URL set together and creation time only when identity is known")
+	}
+	store, err := r.storeOrDefault()
+	if err != nil {
+		return err
+	}
+	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
+		if existing := detail.State.Plan.PullRequestIntent; existing != nil {
+			if *existing == pr {
+				return nil, nil
+			}
+			if !pullRequestHasIdentity(*existing) && pullRequestIntentMatchesRun(*existing, pr.Branch, pr.HeadSHA) && pullRequestHasIdentity(pr) {
+				detail.State.Plan.PullRequestIntent = clonePullRequest(&pr)
+				return nil, nil
+			}
+			return nil, fmt.Errorf("plan %s has a conflicting pull request intent", detail.State.Plan.ID)
+		}
+		detail.State.Plan.PullRequestIntent = clonePullRequest(&pr)
+		return nil, nil
+	})
+}
+
+func pullRequestHasIdentity(pr PullRequest) bool {
+	return pr.Number > 0 && strings.TrimSpace(pr.URL) != ""
+}
+
+func pullRequestIntentMatchesRun(intent PullRequest, branch, headSHA string) bool {
+	return intent.Branch == strings.TrimSpace(branch) && intent.HeadSHA == strings.TrimSpace(headSHA)
+}
+
 // RecordPullRequest stamps pull request metadata onto state, updates workspace
-// tracking fields, and appends a pull_request_created event. When it completes
-// the matching approved-review evidence, the same mutation completes the plan.
+// tracking fields, clears matching partial-creation intent, and appends a
+// pull_request_created event. When it completes the matching approved-review
+// evidence, the same mutation completes the plan.
 func (r *PlanRecord) RecordPullRequest(pr PullRequest, branch, headSHA string) error {
 	store, err := r.storeOrDefault()
 	if err != nil {
@@ -504,7 +544,17 @@ func (r *PlanRecord) RecordPullRequest(pr PullRequest, branch, headSHA string) e
 	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
 		pr.Branch = branch
 		pr.HeadSHA = headSHA
+		if intent := detail.State.Plan.PullRequestIntent; intent != nil {
+			matches := pullRequestIntentMatchesRun(*intent, branch, headSHA)
+			if pullRequestHasIdentity(*intent) {
+				matches = *intent == pr
+			}
+			if !matches {
+				return nil, fmt.Errorf("plan %s pull request does not match recorded intent", detail.State.Plan.ID)
+			}
+		}
 		detail.State.Plan.PullRequest = &pr
+		detail.State.Plan.PullRequestIntent = nil
 		if detail.State.Workspace == nil {
 			detail.State.Workspace = &Workspace{}
 		}

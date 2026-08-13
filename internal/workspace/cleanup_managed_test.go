@@ -42,6 +42,53 @@ func TestPlanManagedCleanupExcludesIntegrationWorktrees(t *testing.T) {
 	}
 }
 
+func TestPlanManagedCleanupIncludesOnlyExactOwnedAndLegacyBranches(t *testing.T) {
+	repo := newTestRepo(t)
+	manager := newTestManager(t, repo.path)
+	for _, branch := range []string{
+		"feature/native-pr-format",
+		"feature/native-pr-format-copy",
+		"fix/native-pr-format",
+		"docs/native-pr-format",
+		"tao/legacy-plan",
+		integrationBranchPrefix + "batch-a",
+	} {
+		runGit(t, repo.path, "branch", branch, "master")
+	}
+
+	plans, err := manager.PlanManagedCleanup(
+		context.Background(),
+		"feature/native-pr-format",
+		"feature/native-pr-format",
+		integrationBranchPrefix+"batch-a",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byBranch := make(map[string]ManagedCleanup, len(plans))
+	for _, item := range plans {
+		byBranch[item.Branch] = item
+	}
+	for _, want := range []string{"feature/native-pr-format", "tao/legacy-plan"} {
+		if item, ok := byBranch[want]; !ok || item.Status != ManagedStatusClean || !item.CanRemove {
+			t.Errorf("owned branch %q should be eligible, got %#v", want, item)
+		}
+	}
+	for _, unrelated := range []string{
+		"feature/native-pr-format-copy",
+		"fix/native-pr-format",
+		"docs/native-pr-format",
+		integrationBranchPrefix + "batch-a",
+	} {
+		if _, ok := byBranch[unrelated]; ok {
+			t.Errorf("unowned branch %q must be invisible, plans=%#v", unrelated, plans)
+		}
+	}
+	if len(plans) != 2 {
+		t.Fatalf("cleanup candidates = %#v, want one exact typed branch and one legacy branch", plans)
+	}
+}
+
 func TestPlanManagedCleanupDecidesByGitState(t *testing.T) {
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)

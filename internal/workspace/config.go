@@ -2,7 +2,11 @@ package workspace
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
+	"strings"
+
+	"github.com/iamseth/tao/internal/plan"
 )
 
 const (
@@ -33,6 +37,48 @@ type Config struct {
 	BaseBranchDetection           string
 	BranchNameTemplate            string
 	CleanupBehavior               string
+}
+
+// PlanBranchIdentity is the branch Tao expects for a plan. RequireNew is set
+// only for a new typed plan that has not durably recorded branch ownership.
+type PlanBranchIdentity struct {
+	Name       string
+	RequireNew bool
+}
+
+var safePlanBranchSlug = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+
+// ResolvePlanBranch preserves any durably recorded branch, keeps the legacy
+// tao/<plan-id> convention for untyped plans, and derives repository-native
+// branches for new typed plans.
+func ResolvePlanBranch(detail *plan.PlanDetail, config Config) (PlanBranchIdentity, error) {
+	if detail == nil {
+		return PlanBranchIdentity{}, fmt.Errorf("plan detail is nil")
+	}
+	planID, err := requirePlanID(detail.State.Plan.ID)
+	if err != nil {
+		return PlanBranchIdentity{}, err
+	}
+	if detail.State.Workspace != nil {
+		if recorded := strings.TrimSpace(detail.State.Workspace.Branch); recorded != "" {
+			return PlanBranchIdentity{Name: recorded}, nil
+		}
+	}
+	if config == (Config{}) {
+		config = DefaultConfig()
+	}
+	changeType := detail.State.Plan.ChangeType
+	if changeType == "" {
+		return PlanBranchIdentity{Name: strings.ReplaceAll(config.BranchNameTemplate, "{plan_id}", planID)}, nil
+	}
+	if err := plan.ValidateChangeType(changeType); err != nil {
+		return PlanBranchIdentity{}, err
+	}
+	slug, ok := plan.PlanSlug(planID)
+	if !ok || !safePlanBranchSlug.MatchString(slug) {
+		return PlanBranchIdentity{}, fmt.Errorf("typed plan id %q must contain a safe non-empty timestamped slug", planID)
+	}
+	return PlanBranchIdentity{Name: changeType.Category() + "/" + slug, RequireNew: true}, nil
 }
 
 // DefaultConfig returns Tao's safe workspace defaults.

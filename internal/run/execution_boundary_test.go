@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/iamseth/tao/internal/plan"
@@ -316,6 +319,43 @@ func TestExecutionBoundarySetupSkipsPreparationEffectsForTerminalActions(t *test
 			}
 			if tt.name == "post-intent recovery" && gitCalls != 0 {
 				t.Fatalf("post-intent Git calls = %d, want none", gitCalls)
+			}
+		})
+	}
+}
+
+func TestInspectUnrecordedTypedWorkspaceUsesDerivedBranchBoundary(t *testing.T) {
+	tests := []struct {
+		name    string
+		branch  string
+		wantErr string
+	}{
+		{name: "derived branch matches", branch: "feature/native-pr-format"},
+		{name: "legacy branch drifts", branch: "tao/20260812-183359-native-pr-format", wantErr: `differs from expected branch "feature/native-pr-format"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repoRoot := t.TempDir()
+			workspaceRoot := filepath.Join(repoRoot, ".tao", "workspaces", "20260812-183359-native-pr-format")
+			if err := os.MkdirAll(workspaceRoot, 0o750); err != nil {
+				t.Fatal(err)
+			}
+			detail := &plan.PlanDetail{State: plan.State{
+				Repo: plan.Repo{Root: repoRoot, Branch: "master"},
+				Plan: plan.PlanState{ID: "20260812-183359-native-pr-format", ChangeType: plan.ChangeTypeFeat},
+			}}
+			runner := interruptedServiceGitRunner(t, workspaceRoot, &[]string{}, func() string { return "" }, tt.branch, "base")
+			execution := runExecution{Config: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{
+				ExecutionMode: ExecutionModeIsolated, CommitPolicy: CommitPolicySlice,
+			}}, Dependencies: RunDependencies{CommandRunner: runner}}
+
+			err := inspectUnrecordedDefaultWorkspaceBeforeAutomaticStart(context.Background(), detail, execution)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("boundary error = %v, want %q", err, tt.wantErr)
 			}
 		})
 	}

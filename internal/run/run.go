@@ -54,6 +54,7 @@ type RunMetadataRecorder interface {
 	PersistState() error
 	PersistStateChanges(*plan.ArtifactChangeSet) error
 	RecordStartingBranch(branch string) error
+	RecordPullRequestIntent(pr plan.PullRequest, branch, headSHA string) error
 	RecordPullRequest(pr plan.PullRequest, branch, headSHA string) error
 }
 

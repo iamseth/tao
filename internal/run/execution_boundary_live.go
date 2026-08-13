@@ -425,9 +425,12 @@ func inspectUnrecordedDefaultWorkspaceBeforeAutomaticStart(ctx context.Context, 
 	case facts.Dirty:
 		return fmt.Errorf("automatic slice refused before workspace preparation: unrecorded managed workspace contains unattributed changes (%s)", strings.Join(facts.ChangedPaths, ", "))
 	}
-	expectedBranch := strings.ReplaceAll(config.BranchNameTemplate, "{plan_id}", detail.State.Plan.ID)
-	if branch != expectedBranch {
-		return fmt.Errorf("automatic slice refused before workspace preparation: unrecorded managed workspace branch %q differs from expected branch %q", branch, expectedBranch)
+	identity, err := workspace.ResolvePlanBranch(detail, config)
+	if err != nil {
+		return fmt.Errorf("resolve unrecorded managed workspace branch before automatic slice: %w", err)
+	}
+	if branch != identity.Name {
+		return fmt.Errorf("automatic slice refused before workspace preparation: unrecorded managed workspace branch %q differs from expected branch %q", branch, identity.Name)
 	}
 	return nil
 }

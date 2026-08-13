@@ -95,6 +95,125 @@ func TestPrepareCreatesWorktreeWithDefaultBranchName(t *testing.T) {
 	}
 }
 
+func TestPrepareReusesUnrecordedMatchingTypedWorktree(t *testing.T) {
+	repo := newTestRepo(t)
+	manager := newTestManager(t, repo.path)
+	options := PrepareOptions{
+		PlanID: "20260812-183359-native-pr-format", Branch: "feature/native-pr-format", RequireNewBranch: true, BaseBranch: "master",
+	}
+
+	first, err := manager.Prepare(context.Background(), options)
+	if err != nil {
+		t.Fatalf("initial Prepare failed: %v", err)
+	}
+	second, err := manager.Prepare(context.Background(), options)
+	if err != nil {
+		t.Fatalf("Prepare recovery failed: %v", err)
+	}
+	if second.Path != first.Path || second.Branch != first.Branch || !second.Reused || second.Created {
+		t.Fatalf("recovered workspace metadata = %#v, initial = %#v", second, first)
+	}
+}
+
+func TestPrepareRejectsUnownedTypedBranchBeforeWorktreeCreation(t *testing.T) {
+	repo := newTestRepo(t)
+	manager := newTestManager(t, repo.path)
+	branch := "feature/native-pr-format"
+	runGit(t, repo.path, "branch", branch, "master")
+
+	_, err := manager.Prepare(context.Background(), PrepareOptions{
+		PlanID: "20260812-183359-native-pr-format", Branch: branch, RequireNewBranch: true, BaseBranch: "master",
+	})
+	if err == nil || !strings.Contains(err.Error(), "already exists without durable ownership") {
+		t.Fatalf("Prepare collision error = %v", err)
+	}
+	workspacePath := filepath.Join(repo.path, ".tao", "workspaces", "20260812-183359-native-pr-format")
+	if _, statErr := os.Stat(workspacePath); !os.IsNotExist(statErr) {
+		t.Fatalf("collision path created or has unexpected status: %v", statErr)
+	}
+}
+
+func TestPrepareRejectsUnownedTypedRemoteTrackingBranchBeforeWorktreeCreation(t *testing.T) {
+	repo := newTestRepo(t)
+	manager := newTestManager(t, repo.path)
+	branch := "feature/native-pr-format"
+	runGit(t, repo.path, "update-ref", "refs/remotes/origin/"+branch, "master")
+	if got := strings.TrimSpace(runGit(t, repo.path, "branch", "--list", branch)); got != "" {
+		t.Fatalf("local branch unexpectedly exists: %q", got)
+	}
+
+	_, err := manager.Prepare(context.Background(), PrepareOptions{
+		PlanID: "20260812-183359-native-pr-format", Branch: branch, RequireNewBranch: true, BaseBranch: "master",
+	})
+	if err == nil || !strings.Contains(err.Error(), "already exists without durable ownership") {
+		t.Fatalf("Prepare remote collision error = %v", err)
+	}
+	workspacePath := filepath.Join(repo.path, ".tao", "workspaces", "20260812-183359-native-pr-format")
+	if _, statErr := os.Stat(workspacePath); !os.IsNotExist(statErr) {
+		t.Fatalf("remote collision path created or has unexpected status: %v", statErr)
+	}
+}
+
+func TestPrepareRejectsRemoteBranchCreatedAfterLastFetch(t *testing.T) {
+	repo := newTestRepo(t)
+	remote := t.TempDir()
+	runGit(t, remote, "init", "--bare")
+	runGit(t, repo.path, "remote", "add", "origin", remote)
+	runGit(t, repo.path, "push", "--set-upstream", "origin", "master")
+	runGit(t, repo.path, "fetch", "origin")
+
+	branch := "feature/native-pr-format"
+	runGit(t, remote, "branch", branch, "master")
+	if got := strings.TrimSpace(runGit(t, repo.path, "for-each-ref", "--format=%(refname)", "refs/remotes/origin/"+branch)); got != "" {
+		t.Fatalf("remote-tracking branch unexpectedly exists before Prepare: %q", got)
+	}
+
+	manager := newTestManager(t, repo.path)
+	_, err := manager.Prepare(context.Background(), PrepareOptions{
+		PlanID: "20260812-183359-native-pr-format", Branch: branch, RequireNewBranch: true, BaseBranch: "master",
+	})
+	if err == nil || !strings.Contains(err.Error(), "already exists without durable ownership") {
+		t.Fatalf("Prepare live remote collision error = %v", err)
+	}
+	workspacePath := filepath.Join(repo.path, ".tao", "workspaces", "20260812-183359-native-pr-format")
+	if _, statErr := os.Stat(workspacePath); !os.IsNotExist(statErr) {
+		t.Fatalf("live remote collision path created or has unexpected status: %v", statErr)
+	}
+	if got := strings.TrimSpace(runGit(t, repo.path, "branch", "--list", branch)); got != "" {
+		t.Fatalf("live remote collision created local branch: %q", got)
+	}
+}
+
+func TestPrepareReusesBranchWithDurableOwnership(t *testing.T) {
+	repo := newTestRepo(t)
+	manager := newTestManager(t, repo.path)
+	branch := "tao/existing-recorded-branch"
+	runGit(t, repo.path, "branch", branch, "master")
+
+	metadata, err := manager.Prepare(context.Background(), PrepareOptions{
+		PlanID: "20260812-183359-native-pr-format", Branch: branch, BaseBranch: "master",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.Branch != branch || !metadata.Reused || metadata.Created {
+		t.Fatalf("owned branch metadata = %#v", metadata)
+	}
+}
+
+func TestStatusUsesExpectedTypedBranchForMissingWorkspace(t *testing.T) {
+	repo := newTestRepo(t)
+	manager := newTestManager(t, repo.path)
+
+	metadata, err := manager.Status(context.Background(), "20260812-183359-native-pr-format", "feature/native-pr-format")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !metadata.Missing || metadata.Branch != "feature/native-pr-format" {
+		t.Fatalf("typed missing status = %#v", metadata)
+	}
+}
+
 func TestPrepareReusesExistingMatchingWorktreeAndReportsDirty(t *testing.T) {
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)

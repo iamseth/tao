@@ -37,6 +37,9 @@ func (f Finalizer) FinalizeIfComplete(ctx context.Context, runCount int, detail 
 	}
 	defer refreshHeader(ctx, detail, f.execution.Config)
 	if runCount <= 0 {
+		if f.execution.Config.PullRequest && detail.State.Plan.PullRequestIntent != nil {
+			return true, f.recoverPullRequest(ctx, detail)
+		}
 		return true, f.writeAlreadyCompleteRun(detail)
 	}
 	return true, f.finalizeCompletedRun(ctx, runCount, detail)
@@ -79,31 +82,8 @@ func (f Finalizer) finalizeCompletedRun(ctx context.Context, runCount int, detai
 		return err
 	}
 	if execution.Config.PullRequest {
-		branch, headSHA, err := currentBranchHead(ctx, execution, executionRoot)
-		if err != nil {
+		if err := f.createAndRecordPullRequest(ctx, detail, executionRoot); err != nil {
 			return err
-		}
-		pr, err := f.pullRequestCreator().CreatePullRequest(ctx, PullRequestRun{PlanDir: absolutePlanDir(detail.Dir), PlanID: detail.State.Plan.ID, LogPath: plan.LogPath(detail.Dir), Detail: detail, RepoRoot: executionRoot, Branch: branch, HeadSHA: headSHA})
-		if err != nil {
-			return fmt.Errorf("create pull request: %w", err)
-		}
-		record, err := planMutationRecord(execution, detail)
-		if err != nil {
-			return err
-		}
-		if err := record.RecordPullRequest(pr, branch, headSHA); err != nil {
-			return err
-		}
-		if err := writef(out, "Pull request: #%d %s\n", pr.Number, pr.URL); err != nil {
-			return err
-		}
-		if plan.PlanIsPullRequestComplete(detail) {
-			if err := writef(out, "Plan complete in Tao: %s (approved review and pull request recorded for the same head).\n", detail.State.Plan.ID); err != nil {
-				return err
-			}
-			if err := writef(out, "Next: use the host's Squash and merge action. Tao does not merge the PR. After the merged change is present on your local default branch, optionally run `tao cleanup --dry-run`, then `tao cleanup`.\n"); err != nil {
-				return err
-			}
 		}
 	}
 	if execution.Config.ExecutionMode == ExecutionModeCurrent {
@@ -135,6 +115,61 @@ func (f Finalizer) finalizeCompletedRun(ctx context.Context, runCount int, detai
 		return fmt.Errorf("checkout default branch %s: %w", defaultBranch, err)
 	}
 	return writef(out, "\nMerge instructions:\n  git merge %s\n", featureBranch)
+}
+
+func (f Finalizer) recoverPullRequest(ctx context.Context, detail *plan.PlanDetail) error {
+	intent := detail.State.Plan.PullRequestIntent
+	if intent == nil {
+		return fmt.Errorf("recover pull request: durable intent is missing")
+	}
+	executionRoot := workspace.ResolveRecordedWorktree(detail).Path
+	if reason := interruptedWorktreeIdentityError(detail, executionRoot); reason != "" {
+		return fmt.Errorf("resolve pull request recovery worktree: %s", reason)
+	}
+	if err := inspectLinkedWorktreeIdentity(ctx, detail, executionRoot, f.execution.Dependencies.CommandRunner); err != nil {
+		return fmt.Errorf("inspect pull request recovery worktree: %w", err)
+	}
+	branch, headSHA, err := currentBranchHead(ctx, f.execution, executionRoot)
+	if err != nil {
+		return err
+	}
+	if branch != intent.Branch || headSHA != intent.HeadSHA {
+		return fmt.Errorf("recover pull request: recorded intent branch %q HEAD %s does not match recovery worktree branch %q HEAD %s", intent.Branch, diagnosticSHA(intent.HeadSHA), branch, diagnosticSHA(headSHA))
+	}
+	return f.createAndRecordPullRequestAtHead(ctx, detail, executionRoot, branch, headSHA)
+}
+
+func (f Finalizer) createAndRecordPullRequest(ctx context.Context, detail *plan.PlanDetail, executionRoot string) error {
+	branch, headSHA, err := currentBranchHead(ctx, f.execution, executionRoot)
+	if err != nil {
+		return err
+	}
+	return f.createAndRecordPullRequestAtHead(ctx, detail, executionRoot, branch, headSHA)
+}
+
+func (f Finalizer) createAndRecordPullRequestAtHead(ctx context.Context, detail *plan.PlanDetail, executionRoot, branch, headSHA string) error {
+	pr, err := f.pullRequestCreator().CreatePullRequest(ctx, PullRequestRun{PlanDir: absolutePlanDir(detail.Dir), PlanID: detail.State.Plan.ID, LogPath: plan.LogPath(detail.Dir), Detail: detail, RepoRoot: executionRoot, Branch: branch, HeadSHA: headSHA})
+	if err != nil {
+		return fmt.Errorf("create pull request: %w", err)
+	}
+	record, err := planMutationRecord(f.execution, detail)
+	if err != nil {
+		return err
+	}
+	if err := record.RecordPullRequest(pr, branch, headSHA); err != nil {
+		return err
+	}
+	out := f.outputWriter()
+	if err := writef(out, "Pull request: #%d %s\n", pr.Number, pr.URL); err != nil {
+		return err
+	}
+	if !plan.PlanIsPullRequestComplete(detail) {
+		return nil
+	}
+	if err := writef(out, "Plan complete in Tao: %s (approved review and pull request recorded for the same head).\n", detail.State.Plan.ID); err != nil {
+		return err
+	}
+	return writef(out, "Next: use the host's Squash and merge action. Tao does not merge the PR. After the merged change is present on your local default branch, optionally run `tao cleanup --dry-run`, then `tao cleanup`.\n")
 }
 
 func (f Finalizer) executionRoot(ctx context.Context, detail *plan.PlanDetail) (string, error) {

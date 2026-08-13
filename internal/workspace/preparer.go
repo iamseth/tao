@@ -82,6 +82,10 @@ func (p ExecutionPreparer) Prepare(ctx context.Context, detail *plan.PlanDetail,
 	if err != nil {
 		return "", err
 	}
+	branchIdentity, err := ResolvePlanBranch(detail, config)
+	if err != nil {
+		return "", fmt.Errorf("resolve plan workspace branch: %w", err)
+	}
 	recordedBaseBranch := detail.State.Repo.Branch
 	recordedBaseSHA := ""
 	if detail.State.Workspace != nil {
@@ -100,7 +104,7 @@ func (p ExecutionPreparer) Prepare(ctx context.Context, detail *plan.PlanDetail,
 			rebaseRecorder = executionRebaseRecorder{detail: detail, record: rebaseRecord}
 		}
 	}
-	metadata, err := manager.Prepare(ctx, PrepareOptions{PlanID: detail.State.Plan.ID, BaseBranch: recordedBaseBranch, BaseSHA: recordedBaseSHA, PreferDefaultBranch: true, RebaseStale: true, RebaseRecorder: rebaseRecorder, Now: p.Now})
+	metadata, err := manager.Prepare(ctx, PrepareOptions{PlanID: detail.State.Plan.ID, BaseBranch: recordedBaseBranch, BaseSHA: recordedBaseSHA, Branch: branchIdentity.Name, RequireNewBranch: branchIdentity.RequireNew, PreferDefaultBranch: true, RebaseStale: true, RebaseRecorder: rebaseRecorder, Now: p.Now})
 	if err != nil {
 		return "", err
 	}

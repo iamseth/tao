@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/iamseth/tao/internal/plan"
 )
@@ -217,6 +218,169 @@ func TestFinalizerReviewErrorIsBestEffort(t *testing.T) {
 	}
 	if wroteState.Plan.Review == nil || wroteState.Plan.Review.Status != plan.ReviewStatusError || !strings.Contains(wroteState.Plan.Review.Summary, "review timed out") {
 		t.Fatalf("review error not persisted: %+v", wroteState.Plan.Review)
+	}
+}
+
+func TestRunRecoversPersistedPullRequestIntentAfterDefaultBranchAdvancesWithoutRefinalizing(t *testing.T) {
+	plansDir := t.TempDir()
+	planDir := filepath.Join(plansDir, "plan-a")
+	repoRoot := filepath.Join(plansDir, "repo")
+	worktreeRoot := filepath.Join(plansDir, "worktrees", "plan-a")
+	commonDir := filepath.Join(repoRoot, ".git")
+	worktreeGitDir := filepath.Join(commonDir, "worktrees", "plan-a")
+	for _, dir := range []string{planDir, worktreeRoot, worktreeGitDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	detail := completedReviewPlanDetail(planDir)
+	detail.State.Schema = "tao.plan.state.v1"
+	detail.State.Repo.Root = repoRoot
+	detail.State.Workspace = &plan.Workspace{
+		Strategy:        plan.WorkspaceStrategyWorktree,
+		Root:            filepath.Dir(worktreeRoot),
+		Path:            worktreeRoot,
+		Branch:          "feature",
+		HeadSHA:         "head123",
+		LifecycleStatus: plan.WorkspaceStatusReady,
+		CleanupStatus:   plan.WorkspaceCleanupStatusPending,
+	}
+	detail.State.Plan.Review = &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Head: "head123"}
+	detail.Slices.Schema = "tao.plan.slices.v1"
+	detail.Slices.PlanID = "plan-a"
+	persistRunArtifacts(t, planDir, detail)
+
+	repo := plan.NewFileRepository(plansDir)
+	createdAt := time.Date(2026, 8, 13, 3, 15, 0, 0, time.UTC)
+	createdPR := plan.PullRequest{Number: 42, URL: "https://github.com/iamseth/tao/pull/42", CreatedAt: createdAt, Branch: "feature", HeadSHA: "head123"}
+	createCalls := 0
+	creator := pullRequestCreatorFunc(func(_ context.Context, run PullRequestRun) (plan.PullRequest, error) {
+		createCalls++
+		if createCalls == 1 {
+			record, err := repo.PlanRecord(run.Detail)
+			if err != nil {
+				return plan.PullRequest{}, err
+			}
+			if err := record.RecordPullRequestIntent(createdPR, run.Branch, run.HeadSHA); err != nil {
+				return plan.PullRequest{}, err
+			}
+			return plan.PullRequest{}, errors.New("assignment permission denied")
+		}
+		if run.RepoRoot != worktreeRoot || run.Branch != createdPR.Branch || run.HeadSHA != createdPR.HeadSHA {
+			return plan.PullRequest{}, errors.New("pull request recovery received a mutated worktree head")
+		}
+		return createdPR, nil
+	})
+	planRecords := func(detail *plan.PlanDetail) (PlanMutationRecord, error) { return repo.PlanRecord(detail) }
+	verificationCalls := 0
+	gitCalls := []string{}
+	liveHead := "head123"
+	defaultHead := "base123"
+	runner := func(ctx context.Context, cwd, name string, args []string, stdout, _ io.Writer) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if name == "sh" {
+			verificationCalls++
+			return nil
+		}
+		if name != "git" {
+			return nil
+		}
+		gitRoot := cwd
+		if len(args) >= 2 && args[0] == "-C" {
+			gitRoot = args[1]
+		}
+		key := runGitKey(args)
+		gitCalls = append(gitCalls, key)
+		switch key {
+		case "rev-parse --show-toplevel":
+			_, _ = io.WriteString(stdout, gitRoot+"\n")
+		case "rev-parse --git-common-dir":
+			_, _ = io.WriteString(stdout, commonDir+"\n")
+		case "rev-parse --git-dir":
+			gitDir := commonDir
+			if filepath.Clean(gitRoot) == filepath.Clean(worktreeRoot) {
+				gitDir = worktreeGitDir
+			}
+			_, _ = io.WriteString(stdout, gitDir+"\n")
+		case "branch --show-current":
+			_, _ = io.WriteString(stdout, "feature\n")
+		case "rev-parse HEAD":
+			_, _ = io.WriteString(stdout, liveHead+"\n")
+		case "rev-parse main":
+			_, _ = io.WriteString(stdout, defaultHead+"\n")
+		case "symbolic-ref --quiet --short refs/remotes/origin/HEAD":
+			_, _ = io.WriteString(stdout, "origin/main\n")
+		}
+		return nil
+	}
+
+	firstDetail, err := repo.ResolvePlan(context.Background(), planDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeIsolated, PullRequest: true}}, RunDependencies{
+		CommandRunner: runner, PlanRecordFactory: planRecords, PullRequestCreator: creator,
+		RootResolver: ExecutionRootResolverFunc(func(context.Context, *plan.PlanDetail) (string, error) { return worktreeRoot, nil }),
+	}))
+	if _, err := first.FinalizeIfComplete(context.Background(), 1, firstDetail, plan.RunCapabilities{Complete: true}); err == nil || !strings.Contains(err.Error(), "assignment permission denied") {
+		t.Fatalf("first invocation error = %v, want persisted PR failure", err)
+	}
+
+	reloaded, err := repo.ResolvePlan(context.Background(), planDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.State.Plan.PullRequestIntent == nil || *reloaded.State.Plan.PullRequestIntent != createdPR {
+		t.Fatalf("persisted pull request intent = %#v, want %#v", reloaded.State.Plan.PullRequestIntent, createdPR)
+	}
+
+	// The default branch moves after the failed attempt. The normal workspace
+	// preparer would rebase this stale clean worktree and rewrite its HEAD.
+	defaultHead = "base456"
+	prepareCalls := 0
+	workspacePreparer := func(context.Context, *plan.PlanDetail, WorkspaceResolverInput) (string, error) {
+		prepareCalls++
+		if defaultHead != "base123" {
+			liveHead = "rebased456"
+		}
+		return worktreeRoot, nil
+	}
+	verificationCalls = 0
+	reviewer := &recordingReviewCreator{}
+	var out bytes.Buffer
+	err = executeDetail(context.Background(), reloaded, nil, &out, Options{
+		ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeIsolated, PullRequest: true, ReviewEnabled: true}},
+		RunDependencies: RunDependencies{CommandRunner: runner, PlanRecordFactory: planRecords, PullRequestCreator: creator, ReviewCreator: reviewer, WorkspacePreparer: workspacePreparer},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepareCalls != 0 || liveHead != createdPR.HeadSHA {
+		t.Fatalf("recovery prepared or mutated worktree after default advanced: prepare calls=%d HEAD=%s", prepareCalls, liveHead)
+	}
+	if createCalls != 2 {
+		t.Fatalf("pull request create calls = %d, want 2", createCalls)
+	}
+	if verificationCalls != 0 || reviewer.calls != 0 {
+		t.Fatalf("recovery reran completed phases: verification=%d review=%d", verificationCalls, reviewer.calls)
+	}
+	for _, call := range gitCalls {
+		if strings.HasPrefix(call, "rebase") || strings.HasPrefix(call, "reset") || strings.HasPrefix(call, "checkout") {
+			t.Fatalf("pull request recovery mutated Git with %q", call)
+		}
+	}
+
+	finalDetail, err := repo.ResolvePlan(context.Background(), planDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finalDetail.State.Plan.PullRequest == nil || *finalDetail.State.Plan.PullRequest != createdPR || finalDetail.State.Plan.PullRequestIntent != nil {
+		t.Fatalf("recovered pull request state: pull_request=%#v intent=%#v", finalDetail.State.Plan.PullRequest, finalDetail.State.Plan.PullRequestIntent)
+	}
+	if !strings.Contains(out.String(), "Pull request: #42 https://github.com/iamseth/tao/pull/42") {
+		t.Fatalf("missing recovered pull request output: %q", out.String())
 	}
 }
 

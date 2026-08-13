@@ -1,6 +1,10 @@
 package plan
 
-import "time"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 const (
 	StatusPlanned          = "planned"
@@ -51,6 +55,69 @@ const (
 	ReviewVerdictChangesRequested = "changes_requested"
 	ReviewVerdictComment          = "comment"
 )
+
+// ChangeType is the plan-level Conventional Commit type selected during planning.
+type ChangeType string
+
+const (
+	ChangeTypeFeat     ChangeType = "feat"
+	ChangeTypeFix      ChangeType = "fix"
+	ChangeTypeDocs     ChangeType = "docs"
+	ChangeTypeStyle    ChangeType = "style"
+	ChangeTypeRefactor ChangeType = "refactor"
+	ChangeTypePerf     ChangeType = "perf"
+	ChangeTypeTest     ChangeType = "test"
+	ChangeTypeBuild    ChangeType = "build"
+	ChangeTypeCI       ChangeType = "ci"
+	ChangeTypeChore    ChangeType = "chore"
+	ChangeTypeRevert   ChangeType = "revert"
+)
+
+var supportedChangeTypes = []ChangeType{
+	ChangeTypeFeat,
+	ChangeTypeFix,
+	ChangeTypeDocs,
+	ChangeTypeStyle,
+	ChangeTypeRefactor,
+	ChangeTypePerf,
+	ChangeTypeTest,
+	ChangeTypeBuild,
+	ChangeTypeCI,
+	ChangeTypeChore,
+	ChangeTypeRevert,
+}
+
+// SupportedChangeTypes returns the accepted planning-time change types.
+func SupportedChangeTypes() []ChangeType {
+	return append([]ChangeType(nil), supportedChangeTypes...)
+}
+
+// ValidateChangeType rejects non-empty values outside Tao's supported
+// Conventional Commit types. Empty values remain valid for legacy plans.
+func ValidateChangeType(changeType ChangeType) error {
+	if changeType == "" {
+		return nil
+	}
+	for _, supported := range supportedChangeTypes {
+		if changeType == supported {
+			return nil
+		}
+	}
+	values := make([]string, len(supportedChangeTypes))
+	for i, supported := range supportedChangeTypes {
+		values[i] = string(supported)
+	}
+	return fmt.Errorf("unsupported plan change type %q (supported: %s)", changeType, strings.Join(values, ", "))
+}
+
+// Category returns the repository-facing branch and label category. Features
+// use the conventional repository name; every other type keeps its own name.
+func (changeType ChangeType) Category() string {
+	if changeType == ChangeTypeFeat {
+		return "feature"
+	}
+	return string(changeType)
+}
 
 const (
 	WorkspaceStrategyWorktree = "worktree"
@@ -113,23 +180,27 @@ type Repo struct {
 
 // PlanState is the mutable queue state for a plan.
 type PlanState struct {
-	ID              string   `json:"id"`
-	Title           string   `json:"title"`
-	CurrentSlice    *string  `json:"current_slice,omitempty"`
-	CompletedSlices []string `json:"completed_slices"`
-	PendingSlices   []string `json:"pending_slices"`
+	ID              string     `json:"id"`
+	Title           string     `json:"title"`
+	ChangeType      ChangeType `json:"change_type,omitempty"`
+	CurrentSlice    *string    `json:"current_slice,omitempty"`
+	CompletedSlices []string   `json:"completed_slices"`
+	PendingSlices   []string   `json:"pending_slices"`
 	// LastRunCommitPolicy records the commit policy used by the latest run start.
 	LastRunCommitPolicy string `json:"last_run_commit_policy"`
 	// LastRunStartingDirty records run-start dirty paths tolerated by standalone review gates.
 	LastRunStartingDirty []string                 `json:"last_run_starting_dirty"`
 	Timing               PlanTiming               `json:"timing"`
 	PullRequest          *PullRequest             `json:"pull_request,omitempty"`
+	PullRequestIntent    *PullRequest             `json:"pull_request_intent"`
 	Review               *PlanReview              `json:"review,omitempty"`
 	MergeCommitIntent    *SingleMergeCommitIntent `json:"merge_commit_intent"`
 	FinalVerification    *FinalVerification       `json:"final_verification,omitempty"`
 }
 
-// PullRequest records a successfully created GitHub pull request for a plan.
+// PullRequest records GitHub pull request identity. Legacy PullRequestIntent
+// values may contain only branch and head, but those fields do not prove
+// ownership of a remotely discovered pull request.
 type PullRequest struct {
 	Number    int       `json:"number"`
 	URL       string    `json:"url"`

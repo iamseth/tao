@@ -275,6 +275,7 @@ func Summarize(detail *PlanDetail, now time.Time) PlanSummary {
 	summary := PlanSummary{
 		ID:                               state.Plan.ID,
 		Title:                            state.Plan.Title,
+		ChangeType:                       state.Plan.ChangeType,
 		Status:                           PlanLifecycleStatus(detail),
 		Dir:                              detail.Dir,
 		CompletedCount:                   derived.CompletedCount,

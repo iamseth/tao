@@ -25,6 +25,7 @@ type fakeWorkspaceCleaner struct {
 	calls          []string
 	cleaned        []workspace.ManagedCleanup
 	cleanOptions   []workspace.CleanOptions
+	ownedBranches  []string
 	onCall         func(string)
 }
 
@@ -44,8 +45,9 @@ func (f *fakeWorkspaceCleaner) PlanClean(ctx context.Context, planID string) (wo
 	return f.cleanPlan, nil
 }
 
-func (f *fakeWorkspaceCleaner) PlanManagedCleanup(ctx context.Context) ([]workspace.ManagedCleanup, error) {
+func (f *fakeWorkspaceCleaner) PlanManagedCleanup(ctx context.Context, ownedBranches ...string) ([]workspace.ManagedCleanup, error) {
 	_ = ctx
+	f.ownedBranches = append([]string(nil), ownedBranches...)
 	f.record("plan-managed-cleanup")
 	if f.planManagedErr != nil {
 		return nil, f.planManagedErr
@@ -94,8 +96,8 @@ func (c *realManagedCleaner) PlanClean(context.Context, string) (workspace.Clean
 	return c.cleanPlan, nil
 }
 
-func (c *realManagedCleaner) PlanManagedCleanup(ctx context.Context) ([]workspace.ManagedCleanup, error) {
-	items, err := c.manager.PlanManagedCleanup(ctx)
+func (c *realManagedCleaner) PlanManagedCleanup(ctx context.Context, ownedBranches ...string) ([]workspace.ManagedCleanup, error) {
+	items, err := c.manager.PlanManagedCleanup(ctx, ownedBranches...)
 	if err != nil {
 		return nil, err
 	}
@@ -241,8 +243,51 @@ func TestMergeCleanupRunsOnlyAfterSuccessfulVerify(t *testing.T) {
 	if verifyIndex < 0 || cleanupIndex < 0 || cleanupIndex < verifyIndex {
 		t.Fatalf("cleanup should run after verify, order=%#v", order)
 	}
+	if !reflect.DeepEqual(cleaner.ownedBranches, []string{"tao/plan-a"}) {
+		t.Fatalf("merge cleanup ownership = %#v, want exact plan branch", cleaner.ownedBranches)
+	}
 	if len(cleaner.cleaned) != 1 || cleaner.cleaned[0].Branch != "tao/plan-a" || cleaner.cleanOptions[0].Force || cleaner.cleanOptions[0].AllowNonAncestralBranch {
 		t.Fatalf("expected one ordinary clean managed removal, cleaned=%#v options=%#v", cleaner.cleaned, cleaner.cleanOptions)
+	}
+}
+
+func TestCleanupProvidesExactRecordedTypedBranchOwnership(t *testing.T) {
+	cleaner := &fakeWorkspaceCleaner{
+		cleanPlan: workspace.CleanPlan{PlanID: "plan-a", Branch: "feature/native-pr-format", Status: "clean", CanRemove: true},
+		managed:   []workspace.ManagedCleanup{{Branch: "feature/native-pr-format", Status: workspace.ManagedStatusClean, CanRemove: true, Reason: "merged into main"}},
+	}
+	detail := mergeVerifyDetail()
+	detail.State.Workspace.Branch = "feature/native-pr-format"
+
+	result, err := (Service{Cleaner: cleaner}).Cleanup(context.Background(), detail, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Removed || !reflect.DeepEqual(cleaner.ownedBranches, []string{"feature/native-pr-format"}) {
+		t.Fatalf("typed cleanup result = %#v, ownership=%#v", result, cleaner.ownedBranches)
+	}
+}
+
+func TestCleanupRemovesTypedBranchAfterWorktreeWasRemoved(t *testing.T) {
+	fixture := newRealGitWorktree(t)
+	const typedBranch = "feature/native-pr-format"
+	runRealGit(t, fixture.worktreePath, "branch", "-m", typedBranch)
+	fixture.planBranch = typedBranch
+	runRealGit(t, fixture.repoRoot, "worktree", "remove", fixture.worktreePath)
+
+	detail := mergeVerifyDetail()
+	detail.State.Repo.Root = fixture.repoRoot
+	detail.State.Workspace.Branch = typedBranch
+
+	result, err := (Service{}).Cleanup(context.Background(), detail, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Removed || result.Managed.Branch != typedBranch {
+		t.Fatalf("typed cleanup result = %#v, want removed branch %q", result, typedBranch)
+	}
+	if branches := realGitOutput(t, fixture.repoRoot, "branch", "--list", typedBranch); branches != "" {
+		t.Fatalf("typed branch should be removed, got %q", branches)
 	}
 }
 

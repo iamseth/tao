@@ -667,6 +667,35 @@ func TestSliceTagsRemainOptionalForExistingPlans(t *testing.T) {
 	}
 }
 
+func TestValidateDetailAllowsSupportedAndLegacyPlanChangeTypes(t *testing.T) {
+	changeTypes := append(SupportedChangeTypes(), "")
+	for _, changeType := range changeTypes {
+		t.Run(string(changeType), func(t *testing.T) {
+			detail := &PlanDetail{
+				State:         State{Plan: PlanState{ID: "plan", ChangeType: changeType, PendingSlices: []string{"001-a"}}},
+				Slices:        SlicesFile{PlanID: "plan", Slices: []Slice{{ID: "001-a", Status: StatusPending}}},
+				PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
+			}
+			if warnings := ValidateDetail(detail); len(warnings) != 0 {
+				t.Fatalf("change type %q produced warnings: %v", changeType, warnings)
+			}
+		})
+	}
+}
+
+func TestValidateDetailWarnsForInvalidPlanChangeType(t *testing.T) {
+	detail := &PlanDetail{
+		State:         State{Plan: PlanState{ID: "plan", ChangeType: "feature", PendingSlices: []string{"001-a"}}},
+		Slices:        SlicesFile{PlanID: "plan", Slices: []Slice{{ID: "001-a", Status: StatusPending}}},
+		PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
+	}
+
+	warnings := ValidateDetail(detail)
+	if !containsWarning(warnings, `plan.change_type is invalid: unsupported plan change type "feature"`) || !containsWarning(warnings, "feat, fix, docs") {
+		t.Fatalf("expected useful invalid change type warning, got %v", warnings)
+	}
+}
+
 func TestValidateDetailAllowsMissingWorkspaceMetadata(t *testing.T) {
 	detail := &PlanDetail{
 		State:         State{Plan: PlanState{ID: "plan", PendingSlices: []string{"001-a"}}},

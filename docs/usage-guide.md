@@ -616,8 +616,11 @@ PR URL.
 **When to use:** after a run's work is committed and you want a PR by hand.
 Equivalent automated path: `tao run --pull-request`, which is gated — it's
 rejected with `--commit-policy none`, or when the run is not in
-`--execution-mode isolated`. The automated path records the exact branch head;
-when it matches a current approved review head, Tao's lifecycle is complete even
+`--execution-mode isolated`. The automated path requires the current approved
+exact-head review proposal, uses its Conventional Commit subject verbatim as the
+title, and records the exact branch head. Typed plans also receive their category
+label and every new PR is assigned to the authenticated GitHub user. When the
+recorded head matches the approved review head, Tao's lifecycle is complete even
 though the hosting provider still owns integration.
 
 ### `tao merge` — integrate an approved plan without a PR
@@ -887,24 +890,50 @@ uncommitted completion. Tao never guesses how to split or migrate that dirty
 work.
 
 `tao run` defaults to `--execution-mode isolated`, the single knob that drives
-both workspace placement and branch behavior. `isolated` creates or reuses a
-`tao/<plan-id>` feature branch and never commits directly to `main` or `master`.
-Use `--execution-mode current` to run in place on the branch where the run
-started. Set `TAO_EXECUTION_MODE=isolated|current` to change the CLI default.
+both workspace placement and branch behavior. For a new typed plan, `isolated`
+derives `<category>/<plan-slug>` after removing the plan ID timestamp; `feat`
+uses the repository-facing `feature` category and the other supported types keep
+their names. An untyped legacy plan retains `tao/<plan-id>`, and a branch already
+recorded in workspace metadata remains authoritative and is never renamed. Tao
+refuses to create the worktree when a newly derived branch already exists without
+durable ownership for that plan; it does not reuse the branch or choose another
+name. Isolated execution never commits directly to `main` or `master`. Use
+`--execution-mode current` to run in place on the branch where the run started.
+Set `TAO_EXECUTION_MODE=isolated|current` to change the CLI default.
 
 Use `tao run --pull-request` to create a GitHub pull request after a full run
 completes and Tao has committed and reviewed the plan work. PR creation is
 disabled by default and is valid only in `--execution-mode isolated` — requesting
 a PR in `current` mode is a hard error, as is combining it with policy `none`.
-Tao pushes and opens the PR through authenticated `gh`, recording the source
-branch and exact head whether the PR is created or discovered. If that non-empty
-head matches the current review with status `completed` and verdict `approve`,
-the plan becomes `completed` in Tao. This does not query or imply remote merge, human-review, CI,
-open/closed, or draft state. Choose the host's **Squash and merge** action; no
-forced record-only merge command is needed merely to complete Tao's lifecycle.
-After the merged change reaches your local default branch, optionally preview
-`tao cleanup --dry-run` and then run `tao cleanup`. Tao does not click or emulate
-the host merge action.
+Before pushing, Tao requires a current approved review for the exact branch head
+and uses that review proposal's Conventional Commit subject verbatim as the PR
+title. For typed plans, the subject type must match the persisted plan type. Tao
+then pushes and opens the PR through authenticated `gh`, recording the source
+branch and exact head whether the PR is created or discovered. Existing PR
+discovery remains idempotent. New typed PRs receive the mapped category label
+(`feat` maps to `feature`); Tao preserves an existing label's color and
+description, or creates the missing label with stable defaults. Every new PR is
+assigned to the authenticated user. If creation reports a failure, Tao repairs
+metadata only when that create attempt emitted an exact PR identity and Tao
+persisted it first. A matching PR discovered after the failure—or on a later
+retry with only legacy branch/head intent—is returned without Tao adding labels
+or assignment because a human may have created it concurrently.
+
+The body uses Problem, Fix, Tests, Deploy, and Scope sections. Tests report
+recorded repository command results while omitting lifecycle-only Tao commands,
+Deploy defaults to no special steps, and Scope keeps the exact diff stat in a
+collapsed Changed files block even when a path contains `tao`. Optional agent
+polishing must preserve that structure and is rejected if its reviewer-authored
+Problem, Fix, or Deploy prose introduces plan IDs, slice or lifecycle metadata,
+merge guidance, or other Tao-specific text; the fallback follows the same
+rules. If the non-empty PR head matches
+the current review with status `completed` and verdict `approve`, the plan
+becomes `completed` in Tao. This does not query or imply remote merge,
+human-review, CI, open/closed, or draft state. Choose the host's **Squash and
+merge** action; no forced record-only merge command is needed merely to complete
+Tao's lifecycle. After the merged change reaches your local default branch,
+optionally preview `tao cleanup --dry-run` and then run `tao cleanup`. Tao does
+not click or emulate the host merge action.
 
 ### Workspaces
 
@@ -946,14 +975,18 @@ workspace cleanup.
 
 After an externally merged PR is present on your local default branch,
 `tao cleanup --dry-run` optionally previews cleanup for Tao-managed workspaces
-and local branches. Normal `tao cleanup` removes only candidates that live Git
-state classifies as merged and clean before deleting their local branches, but
-does not remove plan artifacts in Tao's data home. PR lifecycle completion by
-itself is not cleanup authorization. Tao never deletes protected branches or
-dirty workspaces, and without `--force` it relies on `git branch --delete` so
-unmerged branches stay protected by Git. The exception is a Tao-recorded squash:
-verified squash evidence permits deleting its intentionally non-ancestral source
-branch, but never bypasses the final dirty-workspace check.
+and local branches. Cleanup discovers legacy `tao/*` branches and exact branch
+names durably recorded by plans or Tao workspaces in the current registered
+repository. It never scans generic `feature/*`, `fix/*`, `docs/*`, or other
+category prefixes, so a repository-native name alone does not prove Tao
+ownership. Normal `tao cleanup` removes only candidates that live Git state
+classifies as merged and clean before deleting their local branches, but does
+not remove plan artifacts in Tao's data home. PR lifecycle completion by itself
+is not cleanup authorization. Tao never deletes protected branches or dirty
+workspaces, and without `--force` it relies on `git branch --delete` so unmerged
+branches stay protected by Git. The exception is a Tao-recorded squash: verified
+squash evidence permits deleting its intentionally non-ancestral source branch,
+but never bypasses the final dirty-workspace check.
 
 Even after a plan branch has been merged, make clean-worktree verification your
 safe-deletion habit before removing the branch or workspace by hand. A clean

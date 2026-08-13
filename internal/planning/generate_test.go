@@ -60,11 +60,52 @@ func TestGeneratePlanPropagatesCallerPolicyAndReturnsValidatedDetail(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Detail == nil || !result.Validation.OK || result.Summary != "generated" || !strings.Contains(result.Allocation.ID, "explicit-slug") {
+	if result.Detail == nil || result.Detail.State.Plan.ChangeType != plan.ChangeTypeFeat || !result.Validation.OK || result.Summary != "generated" || !strings.Contains(result.Allocation.ID, "explicit-slug") {
 		t.Fatalf("unexpected generation result: %#v", result)
 	}
 	if strings.Contains(progress.String(), "@tao-agent-log-v1") || progress.String() != "assistant: planning\n" {
 		t.Fatalf("note-planning progress was not human-readable: %q", progress.String())
+	}
+}
+
+func TestGeneratePlanRejectsMissingChangeTypeAndCleansAllocation(t *testing.T) {
+	repoMeta, store := newPlanningServiceTestRepo(t)
+	store.Suffix = func() (string, error) { return "missing-type", nil }
+	session, err := store.CreateSession(context.Background(), CreateRequest{RepoID: repoMeta.ID, Title: "Missing Type", InitialPrompt: "Implement clear work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var allocated string
+	stub := &sliceAgentStub{run: func(got agent.Session) (agent.SessionResult, error) {
+		allocated = noteSlicePlanDirFromPrompt(t, got.Prompt)
+		writeGeneratedPlan(t, allocated, filepath.Base(allocated), repoMeta.Root, false)
+		state, err := plan.ReadState(allocated)
+		if err != nil {
+			t.Fatal(err)
+		}
+		state.Plan.ChangeType = ""
+		content, err := json.MarshalIndent(state, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(allocated, "state.json"), append(content, '\n'), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return agent.SessionResult{Output: "generated without type"}, nil
+	}}
+	_, err = NewService(store, stub, ServiceOptions{}).GeneratePlan(context.Background(), GeneratePlanRequest{Session: session})
+	var generationErr *GenerationError
+	if !errors.As(err, &generationErr) || generationErr.Stage != GenerationStageRequiredArtifact {
+		t.Fatalf("expected required-artifact generation error, got %v", err)
+	}
+	if generationErr.Validation == nil || generationErr.Validation.OK {
+		t.Fatalf("expected failed validation, got %#v", generationErr.Validation)
+	}
+	if !strings.Contains(generationErr.Err.Error(), "plan.change_type is required for a newly allocated plan") {
+		t.Fatalf("missing change type error = %v", generationErr.Err)
+	}
+	if _, statErr := os.Stat(allocated); !os.IsNotExist(statErr) {
+		t.Fatalf("expected exact allocation cleanup, stat error=%v", statErr)
 	}
 }
 
@@ -178,6 +219,7 @@ func writeGeneratedPlan(t *testing.T, planDir string, planID string, repoRoot st
 		Plan: plan.PlanState{
 			ID:              planID,
 			Title:           "Generated Note Plan",
+			ChangeType:      plan.ChangeTypeFeat,
 			CurrentSlice:    &current,
 			CompletedSlices: []string{},
 			PendingSlices:   []string{current},

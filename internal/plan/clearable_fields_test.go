@@ -15,6 +15,8 @@
 //     to "" by writing explicit empty — lets later run-start writes replace stale policy.
 //   - PlanState.LastRunStartingDirty ([]string, "last_run_starting_dirty"): cleared
 //     to [] by writing an empty slice — lets clean run starts replace stale path tolerances.
+//   - PlanState.PullRequestIntent (*PullRequest, "pull_request_intent"):
+//     cleared to null after the partial PR is successfully recorded.
 //   - PlanState.MergeCommitIntent (*SingleMergeCommitIntent, "merge_commit_intent"):
 //     cleared to null after durable merge evidence or safe source supersession.
 
@@ -35,6 +37,7 @@
 //   - Workspace.DependencyFailure, DependencyFingerprint, and RebaseIntent
 //     preserve by default but are explicitly clearable through ArtifactChangeSet.
 //   - Repo.BaseCommit ("base_commit,omitempty")
+//   - PlanState.ChangeType (ChangeType, "change_type,omitempty")
 //   - PlanState.PullRequest (*PullRequest, "pull_request,omitempty")
 //   - PlanState.Review and all PlanReview fields preserve by default but the
 //     block is explicitly replaceable or clearable through ArtifactChangeSet.

@@ -31,6 +31,7 @@ type PlanRollup struct {
 type PlanSummary struct {
 	ID                               string
 	Title                            string
+	ChangeType                       ChangeType
 	Status                           string
 	Dir                              string
 	CurrentSliceID                   string

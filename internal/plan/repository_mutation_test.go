@@ -122,6 +122,54 @@ func TestPlanRecordSingleMergeCommitIntentRoundTripsAndClears(t *testing.T) {
 	}
 }
 
+func TestPlanRecordPullRequestIntentRoundTripsAndClearsOnSuccess(t *testing.T) {
+	root := t.TempDir()
+	writeMinimalPlan(t, root, "pr-intent", "PR Intent")
+	planDir := filepath.Join(root, "pr-intent")
+	repo := NewFileRepository(root)
+	detail, err := repo.GetPlan(context.Background(), "pr-intent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := NewPlanRecord(planDir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr := PullRequest{Number: 42, URL: "https://example.test/pull/42", CreatedAt: time.Date(2026, 8, 12, 20, 0, 0, 0, time.UTC)}
+	if err := record.RecordPullRequestIntent(PullRequest{}, "feature/pr-intent", "head123"); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := repo.GetPlan(context.Background(), "pr-intent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := reloaded.State.Plan.PullRequestIntent
+	if intent == nil || intent.Number != 0 || intent.URL != "" || intent.Branch != "feature/pr-intent" || intent.HeadSHA != "head123" {
+		t.Fatalf("unidentified pull request intent did not round-trip: %#v", intent)
+	}
+	if err := record.RecordPullRequestIntent(pr, "feature/pr-intent", "head123"); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err = repo.GetPlan(context.Background(), "pr-intent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent = reloaded.State.Plan.PullRequestIntent
+	if intent == nil || intent.Number != 42 || intent.URL != pr.URL || intent.Branch != "feature/pr-intent" || intent.HeadSHA != "head123" {
+		t.Fatalf("identified pull request intent did not refine prior evidence: %#v", intent)
+	}
+	if err := record.RecordPullRequest(pr, "feature/pr-intent", "head123"); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err = repo.GetPlan(context.Background(), "pr-intent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.State.Plan.PullRequestIntent != nil || reloaded.State.Plan.PullRequest == nil {
+		t.Fatalf("successful pull request did not settle intent: intent=%#v pr=%#v", reloaded.State.Plan.PullRequestIntent, reloaded.State.Plan.PullRequest)
+	}
+}
+
 func TestAppendEventCreatesEventsJSONL(t *testing.T) {
 	planDir := t.TempDir()
 	timestamp := time.Date(2026, 4, 27, 18, 12, 0, 0, time.UTC)

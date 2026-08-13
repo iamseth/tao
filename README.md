@@ -504,22 +504,35 @@ TAO_DATA_HOME=/path/to/tao-data
 historical metadata and is rejected for new execution with guidance to choose
 `slice` or `none`. `TAO_EXECUTION_MODE` selects the single run knob that drives
 both workspace placement and branch behavior. `isolated` (the default) runs in a
-dedicated git worktree on a `tao/<plan-id>` feature branch and leaves the launch
-checkout untouched; `current` runs in place in the launch checkout on its current
-branch. The built-in `pull_request` default is off; set a repository default with
-`tao repo config --pull-request true` or override it for one run with
-`--pull-request=true|false`. Pull-request creation is valid only in `isolated` mode —
-requesting a PR in `current` mode is a hard error. When enabled, Tao pushes the
-plan branch and opens the PR through the GitHub CLI (`gh`); the selected agent may
-best-effort polish the Markdown body, but Tao falls back to a deterministic body
-if that optional session fails. A current approved review and recorded PR for the
-same non-empty head complete Tao's local lifecycle; Tao does not inspect remote
-merge, review, CI, open/closed, or draft state. Use the host's squash action to
-merge the PR. After the merged change is present on your local default branch,
-optionally run `tao cleanup --dry-run`, then `tao cleanup`, to remove only local
-branches and worktrees that the live Git safety checks classify as eligible. No
-additional Tao merge command is required merely for PR lifecycle completion,
-and Tao does not merge the PR itself. Run-path agent sessions have a
+dedicated git worktree. New typed plans use `<category>/<plan-slug>` branches
+(`feat` maps to `feature`); untyped legacy plans keep `tao/<plan-id>`, and any
+recorded branch remains authoritative. Tao refuses an unowned typed-branch
+collision instead of reusing or renaming it. `current` runs in place in the
+launch checkout on its current branch. The built-in `pull_request` default is
+off; set a repository default with `tao repo config --pull-request true` or
+override it for one run with `--pull-request=true|false`. Pull-request creation
+is valid only in `isolated` mode — requesting a PR in `current` mode is a hard
+error. When enabled, Tao preflights the current approved review before any push,
+uses its exact Conventional Commit subject as the title, and opens the PR through
+authenticated GitHub CLI (`gh`). Typed plans receive their category label (`feat`
+uses `feature`), with a stable default created only when the repository does not
+already define it, and new PRs are assigned to the authenticated user. If
+`gh pr create` fails after emitting the created PR's identity, Tao persists that
+exact identity before attempting metadata repair; post-failure branch discovery
+alone never authorizes Tao to label or assign a potentially human-created PR.
+The selected agent may best-effort polish the repository-native
+Problem/Fix/Tests/Deploy/Scope body. Tao omits lifecycle-only verification
+commands, preserves the exact changed-file diff stat, rejects lifecycle or
+Tao-specific reviewer prose, and falls back to the same deterministic structure.
+A current
+approved review and recorded PR for the same non-empty head complete Tao's local
+lifecycle; Tao does not inspect remote merge, review, CI, open/closed, or draft
+state. Use the host's squash action to merge the PR. After the merged change is
+present on your local default branch, optionally run `tao cleanup --dry-run`,
+then `tao cleanup`, to remove only local branches and worktrees that the live Git
+safety checks classify as eligible. No additional Tao merge command is required
+merely for PR lifecycle completion, and Tao does not merge the PR itself.
+Run-path agent sessions have a
 20-minute wall-clock timeout by default; set `TAO_SESSION_TIMEOUT` to another Go duration
 such as `45m`, or `0` to disable the timeout. The timeout applies independently
 to each fresh retry session, so the fixed three-session maximum can raise one

@@ -121,18 +121,16 @@ func (m *Manager) ManagedBranchPrefix() string {
 	return prefix
 }
 
-// PlanManagedCleanup enumerates Tao-managed branches (those matching the branch
-// name template prefix) and decides, for each, whether it is safe to remove. A
-// branch is removable when it is not protected, not the current branch, its
-// worktree (if any) is clean, and its changes are already merged into the default
-// branch. It never inspects branches outside the managed prefix.
-func (m *Manager) PlanManagedCleanup(ctx context.Context) ([]ManagedCleanup, error) {
-	prefix := m.ManagedBranchPrefix()
-	if strings.TrimSpace(prefix) == "" {
-		return nil, fmt.Errorf("branch name template %q has no static prefix; cannot scope cleanup safely", m.config.BranchNameTemplate)
-	}
-
-	branches, err := m.git.ListBranches(ctx, prefix+"*")
+// PlanManagedCleanup enumerates Tao-managed branches and decides, for each,
+// whether it is safe to remove. Legacy branches are discovered through Tao's
+// static branch prefix. Callers may additionally supply exact branch names
+// whose ownership is established by durable plan or workspace metadata; those
+// names are looked up exactly and never widened into category-prefix scans.
+// A branch is removable when it is not protected, not the current branch, its
+// worktree (if any) is clean, and its changes are already merged into the
+// default branch.
+func (m *Manager) PlanManagedCleanup(ctx context.Context, ownedBranches ...string) ([]ManagedCleanup, error) {
+	branches, err := m.managedCleanupCandidates(ctx, ownedBranches)
 	if err != nil {
 		return nil, err
 	}
@@ -173,6 +171,49 @@ func (m *Manager) PlanManagedCleanup(ctx context.Context) ([]ManagedCleanup, err
 		plans = append(plans, decision)
 	}
 	return plans, nil
+}
+
+func (m *Manager) managedCleanupCandidates(ctx context.Context, ownedBranches []string) ([]string, error) {
+	prefix := m.ManagedBranchPrefix()
+	if strings.TrimSpace(prefix) == "" {
+		return nil, fmt.Errorf("branch name template %q has no static prefix; cannot scope cleanup safely", m.config.BranchNameTemplate)
+	}
+
+	branches, err := m.git.ListBranches(ctx, prefix+"*")
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]struct{}, len(branches)+len(ownedBranches))
+	candidates := make([]string, 0, len(branches)+len(ownedBranches))
+	add := func(branch string) {
+		if branch == "" || strings.HasPrefix(branch, integrationBranchPrefix) {
+			return
+		}
+		if _, ok := seen[branch]; ok {
+			return
+		}
+		seen[branch] = struct{}{}
+		candidates = append(candidates, branch)
+	}
+	for _, branch := range branches {
+		add(branch)
+	}
+	for _, owned := range ownedBranches {
+		owned = strings.TrimSpace(owned)
+		if owned == "" || strings.HasPrefix(owned, integrationBranchPrefix) {
+			continue
+		}
+		matches, err := m.git.ListBranches(ctx, owned)
+		if err != nil {
+			return nil, err
+		}
+		for _, match := range matches {
+			if match == owned {
+				add(match)
+			}
+		}
+	}
+	return candidates, nil
 }
 
 func (m *Manager) decideManagedCleanup(ctx context.Context, branch string, current string, defaultBranch string, worktreePath string) (ManagedCleanup, error) {

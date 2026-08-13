@@ -38,6 +38,7 @@ type PrepareOptions struct {
 	BaseBranch          string
 	BaseSHA             string
 	Branch              string
+	RequireNewBranch    bool
 	PreferDefaultBranch bool
 	RebaseStale         bool
 	RebaseRecorder      RebaseRecorder
@@ -218,9 +219,8 @@ func (m *Manager) Prepare(ctx context.Context, options PrepareOptions) (Metadata
 		baseSHA = baseCurrentSHA
 	}
 	path := m.workspacePath(planID)
-
 	if exists(path) {
-		metadata, err := m.Status(ctx, planID)
+		metadata, err := m.Status(ctx, planID, branch)
 		if err != nil {
 			return Metadata{}, err
 		}
@@ -237,6 +237,27 @@ func (m *Manager) Prepare(ctx context.Context, options PrepareOptions) (Metadata
 		return metadata, nil
 	}
 
+	branchExists, err := m.git.LocalBranchExists(ctx, branch)
+	if err != nil {
+		return Metadata{}, err
+	}
+	if options.RequireNewBranch {
+		remoteTrackingBranchExists, remoteErr := m.git.RemoteTrackingBranchExists(ctx, branch)
+		if remoteErr != nil {
+			return Metadata{}, remoteErr
+		}
+		if branchExists || remoteTrackingBranchExists {
+			return Metadata{}, fmt.Errorf("branch %q already exists without durable ownership for plan %s", branch, planID)
+		}
+		remoteBranchExists, remoteErr := m.git.RemoteBranchExists(ctx, branch)
+		if remoteErr != nil {
+			return Metadata{}, remoteErr
+		}
+		if remoteBranchExists {
+			return Metadata{}, fmt.Errorf("branch %q already exists without durable ownership for plan %s", branch, planID)
+		}
+	}
+
 	worktrees, err := m.git.Worktrees(ctx)
 	if err != nil {
 		return Metadata{}, err
@@ -248,10 +269,6 @@ func (m *Manager) Prepare(ctx context.Context, options PrepareOptions) (Metadata
 	}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil { //nolint:gosec // G301: workspace metadata dir needs standard 0755 perms
-		return Metadata{}, err
-	}
-	branchExists, err := m.git.BranchExists(ctx, branch)
-	if err != nil {
 		return Metadata{}, err
 	}
 	if err := m.git.AddWorktree(ctx, path, branch, baseBranch, !branchExists); err != nil {
@@ -374,14 +391,20 @@ func markWorkspaceBaseCurrent(metadata *Metadata) {
 }
 
 // Status returns the current state for a plan workspace without creating it.
-func (m *Manager) Status(ctx context.Context, planID string) (Metadata, error) {
+// When expectedBranch is supplied it is reported for a missing workspace so
+// typed-plan status uses the same stable identity as preparation.
+func (m *Manager) Status(ctx context.Context, planID string, expectedBranch ...string) (Metadata, error) {
 	planID, err := requirePlanID(planID)
 	if err != nil {
 		return Metadata{}, err
 	}
+	branch := strings.ReplaceAll(m.config.BranchNameTemplate, "{plan_id}", planID)
+	if len(expectedBranch) > 0 && strings.TrimSpace(expectedBranch[0]) != "" {
+		branch = strings.TrimSpace(expectedBranch[0])
+	}
 	path := m.workspacePath(planID)
 	if !exists(path) {
-		return Metadata{PlanID: planID, Path: path, Branch: strings.ReplaceAll(m.config.BranchNameTemplate, "{plan_id}", planID), Missing: true}, nil
+		return Metadata{PlanID: planID, Path: path, Branch: branch, Missing: true}, nil
 	}
 	status, err := m.git.WorktreeStatus(ctx, path)
 	if err != nil {

@@ -111,6 +111,7 @@ Only a current `plan_merged` event in `events.jsonl` proves integration into the
 
 `state.json` owns repository context and the queue. New plans should record `repo.base_commit` as the Git commit that was current when the plan was sliced; `tao review PLAN` uses it to detect likely stale pending slices after later commits.
 
+- `plan.change_type` records the planning-time Conventional Commit type for the whole plan. New plans require exactly one of `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, or `revert`. Repository-facing category names map `feat` to `feature` and preserve every other supported type unchanged. Historical plans that omit the field remain readable and runnable; an invalid non-empty value produces a validation warning.
 - `plan.current_slice` is the selected slice while work is active.
 - `plan.pending_slices` is ordered and drives the next runnable slice.
 - `plan.completed_slices` records completed slice IDs.
@@ -154,7 +155,7 @@ First-class plan edits mutate only pending work:
 
 Edit mutations must reject completed, in-progress, blocked, missing, or dependency-invalid slices and keep `state.json` and `slices.json` consistent.
 
-When an opt-in full run successfully creates or discovers a GitHub pull request, `state.json` may include `plan.pull_request` with the PR `number`, `url`, `created_at`, source `branch`, and exact `head_sha`. This metadata is durable so renderers can show a stable PR link after restart and compare the recorded head with the current approved review. Missing or mismatched heads remain readable but do not qualify for PR completion.
+When an opt-in full run successfully creates or discovers a GitHub pull request, `state.json` may include `plan.pull_request` with the PR `number`, `url`, `created_at`, source `branch`, and exact `head_sha`. This metadata is durable so renderers can show a stable PR link after restart and compare the recorded head with the current approved review. Missing or mismatched heads remain readable but do not qualify for PR completion. If `gh pr create` emits an exact PR identity before required metadata application fails, `plan.pull_request_intent` stores that number, URL, branch, and exact head before Tao attempts repair, so later retries mutate only that identified PR; successful PR recording clears the intent. Legacy branch/head-only intents remain readable but are not ownership evidence and never authorize metadata repair on a discovered PR.
 
 ## Slice Lifecycle
 
@@ -326,6 +327,7 @@ When a listed verification command is invalid but a mechanically equivalent corr
 | `PlanState.LastRunCommitPolicy` | `string` | `last_run_commit_policy` | Write `""` → stored as `""`; clears the persisted run policy so review uses legacy event fallback or `none`. |
 | `PlanState.LastRunStartingDirty` | `[]string` | `last_run_starting_dirty` | Write `[]string{}` → stored as `[]`; clears stale run-start dirty-path tolerance after a clean run start. |
 | `PlanState.Review` and known `PlanReview` fields | review block | `review` | Seam-cleared: `ReplacePlanReview` replaces every known field, storing explicit zero values including `findings: []` and `commit_message: null`; `ClearPlanReview` stores `review: null`. Undeclared zero values preserve stored review data. Unknown keys inside a replaced review object survive. |
+| `PlanState.PullRequestIntent` | `*PullRequest` | `pull_request_intent` | Write `nil` → stored as `null`; successful recording clears partial PR-creation recovery evidence. |
 | `PlanState.MergeCommitIntent` | `*SingleMergeCommitIntent` | `merge_commit_intent` | Write `nil` → stored as `null`; clears only through guarded single-merge intent settlement or supersession. |
 | `Workspace.DependencyFailure` | `string` | `dependency_preparation_failure` | Seam-cleared: `ClearWorkspaceDependencyFailure` plus `PersistStateChanges` stores `""` after retry success; an undeclared empty value preserves the stored failure. |
 | `Workspace.DependencyFingerprint` | `string` | `dependency_fingerprint` | Seam-cleared: `ClearWorkspaceDependencyFingerprint` plus `PersistStateChanges` stores `""` when successful-install evidence is unknown; an undeclared empty value preserves prior evidence. |
@@ -338,6 +340,7 @@ These fields carry `omitempty`. A later write with a zero value does **not** cle
 - `State.Workspace` — the whole struct pointer (`omitempty`)
   - `Workspace.Branch`, `BaseSHA`, `HeadSHA`, and other Workspace sub-fields without a seam clear. `Workspace.DependencyFailure` and `Workspace.DependencyFingerprint` also carry `omitempty`, but are seam-clearable and listed above.
 - `Repo.BaseCommit`
+- `PlanState.ChangeType` — missing historical values remain absent, while ordinary typed mutations preserve a stored non-empty value.
 - `PlanState.CurrentSlice` carries `omitempty`, but is seam-clearable and listed above.
 - `PlanState.PullRequest` — the whole struct pointer (`omitempty`)
 - `PlanState.Review` and its known sub-fields carry `omitempty`, but the block is seam-replaceable or seam-clearable and listed above.

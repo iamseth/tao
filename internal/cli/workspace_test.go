@@ -11,18 +11,20 @@ import (
 )
 
 type fakeWorkspaceManager struct {
-	prepareOptions      workspace.PrepareOptions
-	prepared            workspace.Metadata
-	status              workspace.Metadata
-	list                []workspace.Metadata
-	cleanPlan           workspace.CleanPlan
-	cleanOptions        workspace.CleanOptions
-	cleanCalled         bool
-	managedPlans        []workspace.ManagedCleanup
-	managedErr          error
-	cleanedManaged      []workspace.ManagedCleanup
-	cleanManagedOptions []workspace.CleanOptions
-	cleanManagedErr     map[string]error
+	prepareOptions       workspace.PrepareOptions
+	prepared             workspace.Metadata
+	status               workspace.Metadata
+	statusExpectedBranch string
+	list                 []workspace.Metadata
+	cleanPlan            workspace.CleanPlan
+	cleanOptions         workspace.CleanOptions
+	cleanCalled          bool
+	managedPlans         []workspace.ManagedCleanup
+	managedOwnedBranches []string
+	managedErr           error
+	cleanedManaged       []workspace.ManagedCleanup
+	cleanManagedOptions  []workspace.CleanOptions
+	cleanManagedErr      map[string]error
 }
 
 func (f *fakeWorkspaceManager) Prepare(ctx context.Context, options workspace.PrepareOptions) (workspace.Metadata, error) {
@@ -30,7 +32,10 @@ func (f *fakeWorkspaceManager) Prepare(ctx context.Context, options workspace.Pr
 	return f.prepared, ctx.Err()
 }
 
-func (f *fakeWorkspaceManager) Status(ctx context.Context, planID string) (workspace.Metadata, error) {
+func (f *fakeWorkspaceManager) Status(ctx context.Context, planID string, expectedBranch ...string) (workspace.Metadata, error) {
+	if len(expectedBranch) > 0 {
+		f.statusExpectedBranch = expectedBranch[0]
+	}
 	metadata := f.status
 	metadata.PlanID = planID
 	return metadata, ctx.Err()
@@ -54,7 +59,8 @@ func (f *fakeWorkspaceManager) Clean(ctx context.Context, planID string, options
 	return plan, ctx.Err()
 }
 
-func (f *fakeWorkspaceManager) PlanManagedCleanup(ctx context.Context) ([]workspace.ManagedCleanup, error) {
+func (f *fakeWorkspaceManager) PlanManagedCleanup(ctx context.Context, ownedBranches ...string) ([]workspace.ManagedCleanup, error) {
+	f.managedOwnedBranches = append([]string(nil), ownedBranches...)
 	if f.managedErr != nil {
 		return nil, f.managedErr
 	}
@@ -178,6 +184,28 @@ func TestWorkspacePrepareUsesPlanRepoRootAndBaseBranch(t *testing.T) {
 	}
 }
 
+func TestWorkspacePrepareAndStatusUseTypedPlanBranch(t *testing.T) {
+	const planID = "20260812-183359-native-pr-format"
+	detail := workspacePlanDetail(planID, plan.StatusPlanned)
+	detail.State.Plan.ChangeType = plan.ChangeTypeFeat
+	repo := fakeRepository{details: map[string]*plan.PlanDetail{planID: detail}}
+	manager := &fakeWorkspaceManager{prepared: workspace.Metadata{PlanID: planID, Branch: "feature/native-pr-format", Created: true}}
+	app := workspaceTestApp(&bytes.Buffer{}, manager)
+
+	if err := app.workspace(context.Background(), repo, []string{"prepare", planID}); err != nil {
+		t.Fatal(err)
+	}
+	if manager.prepareOptions.Branch != "feature/native-pr-format" || !manager.prepareOptions.RequireNewBranch {
+		t.Fatalf("typed prepare options = %#v", manager.prepareOptions)
+	}
+	if err := app.workspace(context.Background(), repo, []string{"status", planID}); err != nil {
+		t.Fatal(err)
+	}
+	if manager.statusExpectedBranch != "feature/native-pr-format" {
+		t.Fatalf("typed status expected branch = %q", manager.statusExpectedBranch)
+	}
+}
+
 func TestWorkspaceCleanPreviewsByDefault(t *testing.T) {
 	var out bytes.Buffer
 	manager := &fakeWorkspaceManager{cleanPlan: workspace.CleanPlan{Path: "/repo/.tao/workspaces/plan-a", Branch: "tao/plan-a", Status: "clean", CanRemove: true, Reason: "workspace is clean", Actions: []string{"git worktree remove /repo/.tao/workspaces/plan-a"}}}
@@ -281,7 +309,7 @@ func workspaceTestApp(out *bytes.Buffer, manager *fakeWorkspaceManager) App {
 	return App{Out: out, Err: out, WorkspaceManager: func(repoRoot string) (WorkspaceManager, error) { return manager, nil }}
 }
 
-func workspacePlanDetail(id string, status string) *plan.PlanDetail { //nolint:unparam // id kept for fixture flexibility
+func workspacePlanDetail(id string, status string) *plan.PlanDetail {
 	return &plan.PlanDetail{
 		Dir: "/repo/.tao/plans/" + id,
 		State: plan.State{

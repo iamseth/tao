@@ -17,7 +17,7 @@ func TestClonePlanDetailDeepCopiesMutableFields(t *testing.T) {
 			Workspace:        &Workspace{Path: "/repo/.tao/workspaces/plan", Timing: WorkspaceTiming{CreatedAt: &now, PreparedAt: &now, LastActivityAt: &now, CleanedAt: &now}, DependencyStartedAt: &now, DependencyCompletedAt: &now},
 			GlobalInvariants: []string{"keep scope"},
 			OpenQuestions:    []string{"question"},
-			Plan:             PlanState{ID: "plan-a", CurrentSlice: &current, CompletedSlices: []string{"000-z"}, PendingSlices: []string{"001-a"}, LastRunStartingDirty: []string{"README.md"}, Timing: PlanTiming{StartedAt: &now, CompletedAt: &now, LastActivityAt: &now}, PullRequest: &PullRequest{URL: "https://example.com/pr/1"}, Review: &PlanReview{Verdict: "pass", Summary: "ready", CommitMessage: &ReviewCommitMessage{Subject: "feat(review): persist proposal", Body: "What:\nPersist it.\n\nWhy:\nReuse it."}, ReviewedAt: now}},
+			Plan:             PlanState{ID: "plan-a", ChangeType: ChangeTypeFeat, CurrentSlice: &current, CompletedSlices: []string{"000-z"}, PendingSlices: []string{"001-a"}, LastRunStartingDirty: []string{"README.md"}, Timing: PlanTiming{StartedAt: &now, CompletedAt: &now, LastActivityAt: &now}, PullRequest: &PullRequest{URL: "https://example.com/pr/1"}, Review: &PlanReview{Verdict: "pass", Summary: "ready", CommitMessage: &ReviewCommitMessage{Subject: "feat(review): persist proposal", Body: "What:\nPersist it.\n\nWhy:\nReuse it."}, ReviewedAt: now}},
 		},
 		Slices: SlicesFile{PlanID: "plan-a", Slices: []Slice{{
 			ID:                  "001-a",
@@ -37,6 +37,13 @@ func TestClonePlanDetailDeepCopiesMutableFields(t *testing.T) {
 		Warnings: []string{"warning"},
 	}
 	clone := clonePlanDetail(detail)
+	if clone.State.Plan.ChangeType != ChangeTypeFeat {
+		t.Fatalf("cloned change type = %q, want %q", clone.State.Plan.ChangeType, ChangeTypeFeat)
+	}
+	if summary := Summarize(clone, now); summary.ChangeType != ChangeTypeFeat {
+		t.Fatalf("summary change type = %q, want %q", summary.ChangeType, ChangeTypeFeat)
+	}
+	clone.State.Plan.ChangeType = ChangeTypeFix
 	clone.State.Plan.CompletedSlices[0] = "changed"
 	clone.State.Plan.LastRunStartingDirty[0] = "changed"
 	*clone.State.Plan.CurrentSlice = "changed"
@@ -57,7 +64,7 @@ func TestClonePlanDetailDeepCopiesMutableFields(t *testing.T) {
 	*clone.Events[0].DurationSeconds = 99
 	clone.Warnings[0] = "changed"
 
-	if detail.State.Plan.CompletedSlices[0] != "000-z" || detail.State.Plan.LastRunStartingDirty[0] != "README.md" || *detail.State.Plan.CurrentSlice != "001-a" || detail.State.Workspace.Path != "/repo/.tao/workspaces/plan" || !detail.State.Workspace.Timing.CreatedAt.Equal(now) {
+	if detail.State.Plan.ChangeType != ChangeTypeFeat || detail.State.Plan.CompletedSlices[0] != "000-z" || detail.State.Plan.LastRunStartingDirty[0] != "README.md" || *detail.State.Plan.CurrentSlice != "001-a" || detail.State.Workspace.Path != "/repo/.tao/workspaces/plan" || !detail.State.Workspace.Timing.CreatedAt.Equal(now) {
 		t.Fatalf("state was not deeply cloned: %#v", detail.State)
 	}
 	slice := detail.Slices.Slices[0]

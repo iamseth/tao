@@ -213,6 +213,35 @@ func TestPlanningPromptsRequireSharedSeamVerificationBreadth(t *testing.T) {
 	}
 }
 
+func TestSlicePromptRequiresResolvedPlanChangeType(t *testing.T) {
+	for _, want := range []string{
+		"plan-level `change_type`",
+		"`feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, or `revert`",
+		"required planning-time decision for every new plan",
+		"if the planning packet leaves it unresolved, stop and ask the user rather than inventing a type",
+		"The example uses `feat`; replace it with the supported type resolved during planning",
+		`"change_type": "feat"`,
+	} {
+		if !strings.Contains(SlicePromptTemplate, want) {
+			t.Fatalf("slice prompt missing change-type contract %q", want)
+		}
+	}
+}
+
+func TestNoteSlicePromptRequiresResolvedPlanChangeType(t *testing.T) {
+	for _, want := range []string{
+		"plan-level `change_type`",
+		"`feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, or `revert`",
+		"required planning-time decision for every new plan",
+		"persist it as `plan.change_type` in `state.json`",
+		"if the transcript leaves it unresolved, write no plan artifacts and explain the refusal rather than inventing a type",
+	} {
+		if !strings.Contains(NoteSlicePromptTemplate, want) {
+			t.Fatalf("note slice prompt missing change-type contract %q", want)
+		}
+	}
+}
+
 func TestSlicePromptDeclaresConcreteRequiredInputs(t *testing.T) {
 	for _, want := range []string{
 		"concrete repository files or directories",

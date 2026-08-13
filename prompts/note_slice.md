@@ -10,6 +10,8 @@ Convert the durable planning transcript below into executable Tao plan artifacts
 - Do not create another plan directory and do not run `tao init`.
 - Do not edit application source files or repository metadata outside the plan directory.
 - Use the full transcript as slicing context; do not ask follow-up questions unless the transcript is impossible to slice.
+- Select exactly one plan-level `change_type` from the supported Conventional Commit types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, or `revert`.
+- Treat `change_type` as a required planning-time decision for every new plan and persist it as `plan.change_type` in `state.json`. Derive it only from the resolved planning transcript; if the transcript leaves it unresolved, write no plan artifacts and explain the refusal rather than inventing a type or writing an incomplete plan.
 - Produce a normal Tao plan that existing `tao validate` and run queue flows can load.
 
 ## Required artifacts

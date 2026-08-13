@@ -38,6 +38,106 @@ func TestExecutionPreparerDefaultsToWorktree(t *testing.T) {
 	}
 }
 
+func TestExecutionPreparerCreatesTypedPlanBranch(t *testing.T) {
+	repo := newTestRepo(t)
+	detail := executionPreparerPlanDetail(repo.path)
+	detail.State.Repo.Branch = "master"
+	detail.State.Plan.ID = "20260812-183359-native-pr-format"
+	detail.State.Plan.ChangeType = plan.ChangeTypeFeat
+	config := DefaultConfig()
+	config.DependencyInstallBehavior = DependencyInstallNever
+
+	root, err := (ExecutionPreparer{Config: config}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root != filepath.Join(repo.path, ".tao", "workspaces", detail.State.Plan.ID) {
+		t.Fatalf("typed workspace root = %q", root)
+	}
+	if detail.State.Workspace == nil || detail.State.Workspace.Branch != "feature/native-pr-format" {
+		t.Fatalf("typed workspace metadata = %#v", detail.State.Workspace)
+	}
+}
+
+func TestExecutionPreparerRecoversTypedWorktreeAfterMetadataPersistenceFailure(t *testing.T) {
+	repo := newTestRepo(t)
+	newDetail := func() *plan.PlanDetail {
+		detail := executionPreparerPlanDetail(repo.path)
+		detail.State.Repo.Branch = "master"
+		detail.State.Plan.ID = "20260812-183359-native-pr-format"
+		detail.State.Plan.ChangeType = plan.ChangeTypeFeat
+		return detail
+	}
+	config := DefaultConfig()
+	config.DependencyInstallBehavior = DependencyInstallNever
+	persistErr := errors.New("injected workspace metadata persistence failure")
+	failing := ExecutionPreparer{
+		Config: config,
+		PlanRecordFactory: func(*plan.PlanDetail) (PlanRecord, error) {
+			return persistStateFunc(func() error { return persistErr }), nil
+		},
+	}
+
+	_, err := failing.Prepare(context.Background(), newDetail(), ExecutionPrepareOptions{})
+	if !errors.Is(err, persistErr) {
+		t.Fatalf("initial Prepare error = %v, want %v", err, persistErr)
+	}
+
+	recovered := newDetail()
+	root, err := (ExecutionPreparer{Config: config}).Prepare(context.Background(), recovered, ExecutionPrepareOptions{})
+	if err != nil {
+		t.Fatalf("recover unrecorded typed worktree: %v", err)
+	}
+	if root != filepath.Join(repo.path, ".tao", "workspaces", recovered.State.Plan.ID) {
+		t.Fatalf("recovered workspace root = %q", root)
+	}
+	if recovered.State.Workspace == nil || recovered.State.Workspace.Branch != "feature/native-pr-format" {
+		t.Fatalf("recovered workspace metadata = %#v", recovered.State.Workspace)
+	}
+}
+
+func TestExecutionPreparerPreservesRecordedPlanBranch(t *testing.T) {
+	repo := newTestRepo(t)
+	detail := executionPreparerPlanDetail(repo.path)
+	detail.State.Repo.Branch = "master"
+	detail.State.Plan.ID = "20260812-183359-native-pr-format"
+	detail.State.Plan.ChangeType = plan.ChangeTypeFeat
+	detail.State.Workspace = &plan.Workspace{Strategy: plan.WorkspaceStrategyWorktree, Branch: "tao/original-plan-branch"}
+	runGit(t, repo.path, "branch", "tao/original-plan-branch", "master")
+	config := DefaultConfig()
+	config.DependencyInstallBehavior = DependencyInstallNever
+
+	_, err := (ExecutionPreparer{Config: config}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.State.Workspace.Branch != "tao/original-plan-branch" {
+		t.Fatalf("recorded workspace branch was renamed: %#v", detail.State.Workspace)
+	}
+}
+
+func TestExecutionPreparerRejectsTypedBranchCollision(t *testing.T) {
+	repo := newTestRepo(t)
+	detail := executionPreparerPlanDetail(repo.path)
+	detail.State.Repo.Branch = "master"
+	detail.State.Plan.ID = "20260812-183359-native-pr-format"
+	detail.State.Plan.ChangeType = plan.ChangeTypeFeat
+	runGit(t, repo.path, "branch", "feature/native-pr-format", "master")
+	config := DefaultConfig()
+	config.DependencyInstallBehavior = DependencyInstallNever
+
+	_, err := (ExecutionPreparer{Config: config}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
+	if err == nil || !strings.Contains(err.Error(), "without durable ownership") {
+		t.Fatalf("typed collision error = %v", err)
+	}
+	if detail.State.Workspace != nil {
+		t.Fatalf("collision recorded workspace metadata: %#v", detail.State.Workspace)
+	}
+	if _, statErr := os.Stat(filepath.Join(repo.path, ".tao", "workspaces", detail.State.Plan.ID)); !os.IsNotExist(statErr) {
+		t.Fatalf("collision created workspace path: %v", statErr)
+	}
+}
+
 func TestExecutionPreparerWorktreeRunOptionOverridesPlanCurrent(t *testing.T) {
 	repoRoot := t.TempDir()
 	detail := executionPreparerPlanDetail(repoRoot)
@@ -1135,8 +1235,7 @@ func executionPreparerGitFake(calls *[]string) CommandRunner {
 		case key == "rev-parse feature":
 			_, _ = io.WriteString(stdout, "base123\n")
 		case key == "worktree list --porcelain":
-		case key == "rev-parse --verify tao/plan-a":
-			return errors.New("not found")
+		case key == "branch --format=%(refname:short) --list tao/plan-a":
 		case strings.HasPrefix(key, "worktree add "):
 		case key == "branch --show-current":
 			_, _ = io.WriteString(stdout, "tao/plan-a\n")

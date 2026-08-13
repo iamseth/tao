@@ -22,7 +22,7 @@ const cleanupStatusMissing = "missing"
 // WorkspaceCleaner is the subset of workspace.Manager used after a successful merge.
 type WorkspaceCleaner interface {
 	PlanClean(ctx context.Context, planID string) (workspace.CleanPlan, error)
-	PlanManagedCleanup(ctx context.Context) ([]workspace.ManagedCleanup, error)
+	PlanManagedCleanup(ctx context.Context, ownedBranches ...string) ([]workspace.ManagedCleanup, error)
 	CleanManaged(ctx context.Context, item workspace.ManagedCleanup, options workspace.CleanOptions) error
 }
 
@@ -78,11 +78,11 @@ func (s Service) Cleanup(ctx context.Context, detail *plan.PlanDetail, options O
 	if err != nil {
 		return CleanupResult{}, fmt.Errorf("plan cleanup decision for %s: %w", planID, err)
 	}
-	branch := strings.TrimSpace(cleanPlan.Branch)
-	if branch == "" {
-		branch, err = resolvePlanBranch(detail)
-		if err != nil {
-			return CleanupResult{Plan: cleanPlan}, err
+	branch, branchErr := resolvePlanBranch(detail)
+	if branchErr != nil {
+		branch = strings.TrimSpace(cleanPlan.Branch)
+		if branch == "" {
+			return CleanupResult{Plan: cleanPlan}, branchErr
 		}
 	}
 	managed, ok, err := managedCleanupForBranch(ctx, cleaner, branch)
@@ -114,7 +114,7 @@ func (s Service) Cleanup(ctx context.Context, detail *plan.PlanDetail, options O
 }
 
 func managedCleanupForBranch(ctx context.Context, cleaner WorkspaceCleaner, branch string) (workspace.ManagedCleanup, bool, error) {
-	items, err := cleaner.PlanManagedCleanup(ctx)
+	items, err := cleaner.PlanManagedCleanup(ctx, branch)
 	if err != nil {
 		return workspace.ManagedCleanup{}, false, fmt.Errorf("plan managed cleanup: %w", err)
 	}

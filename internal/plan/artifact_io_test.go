@@ -103,7 +103,7 @@ func TestStartSlicePreservesUnknownJSONFields(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)
 	detail := startSliceDetail(dir)
-	stateJSON := `{"schema":"tao.plan.state.v1","status":"planned","created_at":"2026-05-03T23:00:00Z","updated_at":"2026-05-03T23:00:00Z","repo":{"name":"","root":"","branch":""},"plan":{"id":"plan-a","title":"Plan A","current_slice":null,"completed_slices":[],"pending_slices":["001-a"],"timing":{"started_at":null,"completed_at":null,"last_activity_at":null},"custom_plan_field":"keep"},"global_invariants":[],"open_questions":[],"custom_state_field":"keep"}`
+	stateJSON := `{"schema":"tao.plan.state.v1","status":"planned","created_at":"2026-05-03T23:00:00Z","updated_at":"2026-05-03T23:00:00Z","repo":{"name":"","root":"","branch":""},"plan":{"id":"plan-a","title":"Plan A","change_type":"feat","current_slice":null,"completed_slices":[],"pending_slices":["001-a"],"timing":{"started_at":null,"completed_at":null,"last_activity_at":null},"custom_plan_field":"keep"},"global_invariants":[],"open_questions":[],"custom_state_field":"keep"}`
 	slicesJSON := `{"schema":"tao.plan.slices.v1","plan_id":"plan-a","execution":{"mode":"","parallel_safe":false},"slices":[{"id":"001-a","title":"A","status":"pending","depends_on":[],"timing":{"created_at":"2026-05-03T23:00:00Z","started_at":null,"completed_at":null,"updated_at":"2026-05-03T23:00:00Z","last_activity_at":null,"duration_seconds":null},"goal":"","context":"","tasks":[],"expected_files":[],"verification":{"commands":[],"manual_checks":[]},"custom_slice_field":"keep"}],"custom_slices_field":"keep"}`
 	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(stateJSON), 0o600); err != nil {
 		t.Fatal(err)
@@ -118,8 +118,9 @@ func TestStartSlicePreservesUnknownJSONFields(t *testing.T) {
 
 	var state map[string]any
 	readJSONFile(t, filepath.Join(dir, "state.json"), &state)
-	if state["custom_state_field"] != "keep" || state["plan"].(map[string]any)["custom_plan_field"] != "keep" {
-		t.Fatalf("expected custom state fields to be preserved: %#v", state)
+	planState := state["plan"].(map[string]any)
+	if state["custom_state_field"] != "keep" || planState["custom_plan_field"] != "keep" || planState["change_type"] != "feat" {
+		t.Fatalf("expected change type and custom state fields to be preserved: %#v", state)
 	}
 	var slices map[string]any
 	readJSONFile(t, filepath.Join(dir, "slices.json"), &slices)

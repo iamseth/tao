@@ -36,6 +36,25 @@ func TestRunSliceWithAgentSessionCarriesInterruptedResumePrompt(t *testing.T) {
 	}
 }
 
+func TestGeneratePullRequestBodySessionCarriesNativeAcceptanceContract(t *testing.T) {
+	executor := &recordingAgentSessionExecutor{result: AgentSessionResult{FinalText: "body"}}
+	body, err := generatePullRequestBodyWithAgentSession(context.Background(), executor, agentOperationOptions{}, PullRequestBodyRun{
+		PlanDir: "/plans/a", PlanID: "plan-a", RepoRoot: "/repo", Title: "feat(pr): native format", DraftBody: "## Problem\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body != "body" || len(executor.requests) != 1 {
+		t.Fatalf("body/session = %q/%d, want body/1", body, len(executor.requests))
+	}
+	prompt := executor.requests[0].Prompt
+	for _, want := range []string{"Problem, Fix, Tests, Deploy, Scope", "Use only ## ATX syntax for level-two headings; do not add Setext headings", "Keep Tests exactly as drafted", "legitimate repository paths that contain the word Tao", "complete collapsed Changed files details block containing the exact diff stat", "paths that happen to contain the word Tao", "omits Tao lifecycle verification commands", "Do not include plan IDs", "Tao-specific prose in Problem, Fix, Tests, or Deploy", "merge guidance", "Do not add claims"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("body session prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
 func TestRunAgentSessionInvokesProviderExactlyOnce(t *testing.T) {
 	calls := 0
 	runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {

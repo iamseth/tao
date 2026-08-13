@@ -2318,8 +2318,7 @@ func TestExecutionRootResolverPreparesWorktreeStrategyMetadata(t *testing.T) {
 			_, _ = io.WriteString(stdout, "base123\n")
 		case "worktree list --porcelain":
 			_, _ = io.WriteString(stdout, "worktree "+repoRoot+"\nHEAD base123\nbranch refs/heads/feature\n\n")
-		case "rev-parse --verify tao/plan-a":
-			return errors.New("missing branch")
+		case "branch --format=%(refname:short) --list tao/plan-a":
 		case "worktree add -b tao/plan-a " + workspacePath + " main":
 		case "branch --show-current":
 			if actualCWD != workspacePath {
@@ -2616,10 +2615,34 @@ func (r memoryPlanMutationRecord) RecordStartingBranch(branch string) error {
 	return nil
 }
 
+func (r memoryPlanMutationRecord) RecordPullRequestIntent(pr plan.PullRequest, branch, headSHA string) error {
+	pr.Branch = branch
+	pr.HeadSHA = headSHA
+	if existing := r.detail.State.Plan.PullRequestIntent; existing != nil && *existing != pr {
+		sameRun := existing.Branch == branch && existing.HeadSHA == headSHA
+		refinesIdentity := existing.Number == 0 && existing.URL == "" && pr.Number > 0 && pr.URL != ""
+		if !sameRun || !refinesIdentity {
+			return errors.New("conflicting pull request intent")
+		}
+	}
+	r.detail.State.Plan.PullRequestIntent = &pr
+	return nil
+}
+
 func (r memoryPlanMutationRecord) RecordPullRequest(pr plan.PullRequest, branch, headSHA string) error {
 	pr.Branch = branch
 	pr.HeadSHA = headSHA
+	if intent := r.detail.State.Plan.PullRequestIntent; intent != nil {
+		matches := intent.Branch == branch && intent.HeadSHA == headSHA
+		if intent.Number > 0 || intent.URL != "" {
+			matches = *intent == pr
+		}
+		if !matches {
+			return errors.New("pull request does not match recorded intent")
+		}
+	}
 	r.detail.State.Plan.PullRequest = &pr
+	r.detail.State.Plan.PullRequestIntent = nil
 	if r.detail.State.Workspace == nil {
 		r.detail.State.Workspace = &plan.Workspace{}
 	}

@@ -105,11 +105,11 @@ type planLister interface {
 
 type WorkspaceManager interface {
 	Prepare(ctx context.Context, options workspace.PrepareOptions) (workspace.Metadata, error)
-	Status(ctx context.Context, planID string) (workspace.Metadata, error)
+	Status(ctx context.Context, planID string, expectedBranch ...string) (workspace.Metadata, error)
 	List(ctx context.Context) ([]workspace.Metadata, error)
 	PlanClean(ctx context.Context, planID string) (workspace.CleanPlan, error)
 	Clean(ctx context.Context, planID string, options workspace.CleanOptions) (workspace.CleanPlan, error)
-	PlanManagedCleanup(ctx context.Context) ([]workspace.ManagedCleanup, error)
+	PlanManagedCleanup(ctx context.Context, ownedBranches ...string) ([]workspace.ManagedCleanup, error)
 	CleanManaged(ctx context.Context, item workspace.ManagedCleanup, options workspace.CleanOptions) error
 }
 

@@ -421,6 +421,71 @@ func TestLocalBranchExistsParsesListedBranches(t *testing.T) {
 	}
 }
 
+func TestRemoteTrackingBranchExistsMatchesExactBranchAcrossRemotes(t *testing.T) {
+	runner := &fakeRunner{
+		outputs: map[string]string{
+			key("-C", "/repo", "for-each-ref", "--format=%(refname)", "refs/remotes"): strings.Join([]string{
+				"refs/remotes/origin/feature/native-pr-format",
+				"refs/remotes/upstream/fix/other",
+			}, "\n"),
+		},
+		stderr:   map[string]string{},
+		failures: map[string]error{},
+	}
+	client := NewClient("/repo", runner.run)
+
+	exists, err := client.RemoteTrackingBranchExists(context.Background(), "feature/native-pr-format")
+	if err != nil || !exists {
+		t.Fatalf("expected exact origin branch to exist, exists=%v err=%v", exists, err)
+	}
+	exists, err = client.RemoteTrackingBranchExists(context.Background(), "native-pr-format")
+	if err != nil || exists {
+		t.Fatalf("unexpected suffix-only match, exists=%v err=%v", exists, err)
+	}
+}
+
+func TestRemoteBranchExistsQueriesConfiguredRemotesForExactRef(t *testing.T) {
+	branch := "feature/native-pr-format"
+	ref := "refs/heads/" + branch
+	runner := &fakeRunner{
+		outputs: map[string]string{
+			key("-C", "/repo", "remote"):                                                          "origin\nupstream\n",
+			key("-C", "/repo", "ls-remote", "--heads", "origin", ref):                             "",
+			key("-C", "/repo", "ls-remote", "--heads", "upstream", ref):                           "abc123\t" + ref + "\n",
+			key("-C", "/repo", "ls-remote", "--heads", "origin", "refs/heads/native-pr-format"):   "",
+			key("-C", "/repo", "ls-remote", "--heads", "upstream", "refs/heads/native-pr-format"): "",
+		},
+		stderr:   map[string]string{},
+		failures: map[string]error{},
+	}
+	client := NewClient("/repo", runner.run)
+
+	exists, err := client.RemoteBranchExists(context.Background(), branch)
+	if err != nil || !exists {
+		t.Fatalf("expected exact upstream branch to exist, exists=%v err=%v", exists, err)
+	}
+	exists, err = client.RemoteBranchExists(context.Background(), "native-pr-format")
+	if err != nil || exists {
+		t.Fatalf("unexpected suffix-only match, exists=%v err=%v", exists, err)
+	}
+}
+
+func TestRemoteBranchExistsPropagatesRemoteLookupFailure(t *testing.T) {
+	lookup := key("-C", "/repo", "ls-remote", "--heads", "origin", "refs/heads/feature/native-pr-format")
+	runner := &fakeRunner{
+		outputs: map[string]string{key("-C", "/repo", "remote"): "origin\n"},
+		stderr:  map[string]string{lookup: "authentication required"},
+		failures: map[string]error{
+			lookup: errors.New("exit status 128"),
+		},
+	}
+	client := NewClient("/repo", runner.run)
+
+	if _, err := client.RemoteBranchExists(context.Background(), "feature/native-pr-format"); err == nil || !strings.Contains(err.Error(), "authentication required") {
+		t.Fatalf("RemoteBranchExists error = %v", err)
+	}
+}
+
 func TestDeleteBranchForceHandling(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string]string{}, stderr: map[string]string{}, failures: map[string]error{}}
 	client := NewClient("/repo", runner.run)

@@ -141,7 +141,7 @@ func (c *batchE2ECleaner) PlanClean(_ context.Context, planID string) (workspace
 	return workspace.CleanPlan{PlanID: planID, Branch: c.branches[planID], Status: workspace.ManagedStatusClean, CanRemove: true}, nil
 }
 
-func (c *batchE2ECleaner) PlanManagedCleanup(context.Context) ([]workspace.ManagedCleanup, error) {
+func (c *batchE2ECleaner) PlanManagedCleanup(context.Context, ...string) ([]workspace.ManagedCleanup, error) {
 	items := make([]workspace.ManagedCleanup, 0, len(c.branches))
 	for id, branch := range c.branches {
 		items = append(items, workspace.ManagedCleanup{Branch: branch, WorktreePath: c.worktrees[id], Status: workspace.ManagedStatusUnmerged, CanRemove: false, Reason: "squash source"})

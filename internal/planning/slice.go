@@ -127,6 +127,13 @@ func (r *FileRepository) ValidateAllocatedPlan(ctx context.Context, allocation P
 	for _, warning := range detail.Warnings {
 		result.Findings = append(result.Findings, ValidationFinding{Severity: "warning", Message: warning})
 	}
+	statePath := filepath.Join(allocation.Dir, "state.json")
+	changeType := detail.State.Plan.ChangeType
+	if changeType == "" {
+		result.Findings = append(result.Findings, ValidationFinding{Severity: "error", Path: statePath, Message: "state.json plan.change_type is required for a newly allocated plan"})
+	} else if err := plan.ValidateChangeType(changeType); err != nil {
+		result.Findings = append(result.Findings, ValidationFinding{Severity: "error", Path: statePath, Message: "state.json plan.change_type is invalid: " + err.Error()})
+	}
 	if detail.State.Plan.ID != allocation.ID {
 		result.Findings = append(result.Findings, ValidationFinding{Severity: "error", Path: filepath.Join(allocation.Dir, "state.json"), Message: fmt.Sprintf("state.json plan.id %q does not match allocated plan id %q", detail.State.Plan.ID, allocation.ID)})
 	}
