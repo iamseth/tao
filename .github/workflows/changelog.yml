@@ -14,7 +14,6 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  models: read
 
 concurrency:
   group: changelog-update
@@ -110,40 +109,49 @@ jobs:
       - name: Generate user-focused release notes
         if: steps.commits.outputs.found == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.CHANGELOG_OPENAI_MODEL }}
           WEEK_START: ${{ steps.week.outputs.start }}
         run: |
+          if [ -z "$OPENAI_API_KEY" ] || [ -z "$OPENAI_MODEL" ]; then
+            echo "OPENAI_API_KEY and CHANGELOG_OPENAI_MODEL must be configured." >&2
+            exit 1
+          fi
+
           jq -n \
-            --arg model "openai/gpt-4.1-mini" \
+            --arg model "$OPENAI_MODEL" \
             --arg week "$WEEK_START" \
-            --rawfile system .github/changelog-prompt.md \
+            --rawfile instructions .github/changelog-prompt.md \
             --rawfile commits commits.txt \
             --rawfile current current-section.md \
             '{
               model: $model,
-              temperature: 0.2,
-              max_tokens: 2000,
-              messages: [
-                {role: "system", content: $system},
-                {role: "user", content: (
-                  "Requested week: " + $week +
-                  "\n\nExisting section (possibly empty):\n<existing>\n" + $current +
-                  "\n</existing>\n\nCommit evidence:\n<commits>\n" + $commits +
-                  "\n</commits>"
-                )}
-              ]
+              instructions: $instructions,
+              max_output_tokens: 2000,
+              input: (
+                "Requested week: " + $week +
+                "\n\nExisting section (possibly empty):\n<existing>\n" + $current +
+                "\n</existing>\n\nCommit evidence:\n<commits>\n" + $commits +
+                "\n</commits>"
+              )
             }' > request.json
 
           curl --fail-with-body --silent --show-error \
             --retry 3 \
-            --header "Accept: application/vnd.github+json" \
-            --header "Authorization: Bearer $GH_TOKEN" \
+            --max-time 180 \
+            --header "Authorization: Bearer $OPENAI_API_KEY" \
             --header "Content-Type: application/json" \
-            --header "X-GitHub-Api-Version: 2022-11-28" \
             --data @request.json \
-            https://models.github.ai/inference/chat/completions > response.json
+            https://api.openai.com/v1/responses > response.json
 
-          jq -er '.choices[0].message.content' response.json > generated-section.md
+          jq -er '[
+            .output[]?
+            | select(.type == "message")
+            | .content[]?
+            | select(.type == "output_text")
+            | .text
+          ] | join("\n") | select(length > 0)' \
+            response.json > generated-section.md
 
       - name: Update CHANGELOG.md
         id: update
