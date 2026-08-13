@@ -14,6 +14,7 @@ import (
 
 	commitcontract "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/plan"
+	verificationimpl "github.com/iamseth/tao/internal/plan/verification"
 )
 
 var (
@@ -858,81 +859,12 @@ func writePullRequestTests(b *strings.Builder, detail *plan.PlanDetail) {
 }
 
 func isTaoLifecycleVerificationCommand(command string) bool {
-	var fields []string
-	for _, token := range shellCommandTokens(command) {
-		if token.separator {
-			if shellCommandRunsTao(fields) {
-				return true
-			}
-			fields = fields[:0]
-			continue
-		}
-		fields = append(fields, token.value)
-	}
-	return shellCommandRunsTao(fields)
-}
-
-type shellCommandToken struct {
-	value     string
-	separator bool
-}
-
-func shellCommandTokens(command string) []shellCommandToken {
-	var tokens []shellCommandToken
-	var current strings.Builder
-	var quote byte
-	escaped := false
-	flush := func() {
-		if current.Len() == 0 {
-			return
-		}
-		tokens = append(tokens, shellCommandToken{value: current.String()})
-		current.Reset()
-	}
-	for i := 0; i < len(command); i++ {
-		char := command[i]
-		if escaped {
-			current.WriteByte(char)
-			escaped = false
-			continue
-		}
-		if quote != 0 {
-			if char == quote {
-				quote = 0
-				continue
-			}
-			if char == '\\' && quote == '"' {
-				escaped = true
-				continue
-			}
-			current.WriteByte(char)
-			continue
-		}
-		switch char {
-		case '\\':
-			escaped = true
-		case '\'', '"':
-			quote = char
-		case ' ', '\t', '\r':
-			flush()
-		case '\n', ';':
-			flush()
-			tokens = append(tokens, shellCommandToken{separator: true})
-		case '&', '|':
-			flush()
-			if i+1 < len(command) && command[i+1] == char {
-				i++
-			}
-			tokens = append(tokens, shellCommandToken{separator: true})
-		default:
-			current.WriteByte(char)
+	for _, fields := range verificationimpl.CommandPipelines(command) {
+		if shellCommandRunsTao(fields) {
+			return true
 		}
 	}
-	if escaped {
-		current.WriteByte('\\')
-	}
-	flush()
-	return tokens
+	return false
 }
 
 func shellCommandRunsTao(fields []string) bool {

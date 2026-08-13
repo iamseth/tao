@@ -407,6 +407,8 @@ func TestIsTaoLifecycleVerificationCommandFindsExecutablesOnly(t *testing.T) {
 		{command: "prepare || /usr/local/bin/tao validate", want: true},
 		{command: "prepare; env X=1 tao validate", want: true},
 		{command: "prepare | X=1 ./bin/tao validate", want: true},
+		{command: "prepare & tao validate", want: true},
+		{command: "prepare\ntao validate", want: true},
 		{command: "env X=1 tao validate", want: true},
 		{command: "/usr/bin/env -i X=1 ./bin/tao validate", want: true},
 		{command: "X=1 tao validate", want: true},
@@ -414,6 +416,9 @@ func TestIsTaoLifecycleVerificationCommandFindsExecutablesOnly(t *testing.T) {
 		{command: "go test ./internal/tao/...", want: false},
 		{command: "env X=tao go test ./cmd/tao", want: false},
 		{command: "echo tao validate", want: false},
+		{command: `echo 'ready; tao validate'`, want: false},
+		{command: `echo ready\; tao validate`, want: false},
+		{command: `go test "./cmd/tao|helper"`, want: false},
 		{command: "go test ./cmd/tao && echo done", want: false},
 	} {
 		t.Run(tt.command, func(t *testing.T) {

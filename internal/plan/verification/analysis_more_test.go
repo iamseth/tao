@@ -47,6 +47,23 @@ func TestAnalyzeNilAnalyzerAndEmptyCommand(t *testing.T) {
 	}
 }
 
+func TestAnalyzeCommandHandlesCompactSeparatorAndSingleQuotedBackslashes(t *testing.T) {
+	repo := t.TempDir()
+	commandDir := filepath.Join(repo, `pkg\name`)
+	mkdir(t, commandDir)
+
+	analysis := AnalyzeCommand(repo, `cd 'pkg\name'&&go test ./... -run 'Test\(Foo\)'`)
+	if analysis.WorkingDir != commandDir {
+		t.Fatalf("WorkingDir = %q, want %q", analysis.WorkingDir, commandDir)
+	}
+	if analysis.Executable != "go" {
+		t.Fatalf("Executable = %q, want go", analysis.Executable)
+	}
+	if len(analysis.Findings) != 0 {
+		t.Fatalf("expected quoted run pattern to remain safe, got %#v", analysis.Findings)
+	}
+}
+
 func TestCommandFieldsPreserveQuotedValues(t *testing.T) {
 	got := CommandFields(`go test "./pkg with space" -run 'TestExample'`)
 	want := []string{"go", "test", "./pkg with space", "-run", "TestExample"}
