@@ -69,6 +69,7 @@ func StopKindForPersistedReason(reason string) StopKind {
 type Decision struct {
 	Reworked       bool
 	Round          int
+	BaselineRound  int
 	Fingerprint    string
 	StopKind       StopKind
 	StopReason     string
@@ -264,19 +265,27 @@ func (d Driver) Decide(ctx context.Context, planID string, baseline, attempts in
 	if len(GenerateSlices(detail, findings, round+1)) == 0 {
 		return Decision{}, nil
 	}
-	budget.Attempts = budget.AttemptsAtRound(round)
+	if pullRequestBaseline, reset := pullRequestReworkBaseline(detail, budget.BaselineRound); reset {
+		budget.BaselineRound = pullRequestBaseline
+		budget.Attempts = max(round-pullRequestBaseline, 0)
+		if round == pullRequestBaseline {
+			budget.PreviousFindingFingerprint = ""
+		}
+	} else {
+		budget.Attempts = budget.AttemptsAtRound(round)
+	}
 	fingerprint := ReworkFindingsFingerprint(findings)
 	if budget.Attempts >= maxAttempts {
-		decision := d.stoppedDecision(detail, planID, budget.Attempts, round, fingerprint, StopKindCapExhausted, fmt.Sprintf("automatic rework cap exhausted after %d cycles", maxAttempts), findings, nil)
+		decision := d.stoppedDecision(detail, planID, budget.BaselineRound, budget.Attempts, round, fingerprint, StopKindCapExhausted, fmt.Sprintf("automatic rework cap exhausted after %d cycles", maxAttempts), findings, nil)
 		return decision, nil
 	}
 	if budget.PreviousFindingFingerprint != "" && budget.PreviousFindingFingerprint == fingerprint {
-		decision := d.stoppedDecision(detail, planID, budget.Attempts, round, fingerprint, StopKindFindingsStalled, equivalentFindingsStopReason, findings, nil)
+		decision := d.stoppedDecision(detail, planID, budget.BaselineRound, budget.Attempts, round, fingerprint, StopKindFindingsStalled, equivalentFindingsStopReason, findings, nil)
 		return decision, nil
 	}
 	if recurringFiles := recurringReworkFiles(detail, budget.BaselineRound, findings); len(recurringFiles) > 0 {
 		reason := recurringFilesStopReason(recurringFiles)
-		decision := d.stoppedDecision(detail, planID, budget.Attempts, round, fingerprint, StopKindRecurringFiles, reason, findings, recurringFiles)
+		decision := d.stoppedDecision(detail, planID, budget.BaselineRound, budget.Attempts, round, fingerprint, StopKindRecurringFiles, reason, findings, recurringFiles)
 		return decision, nil
 	}
 	if d.Record == nil {
@@ -290,15 +299,16 @@ func (d Driver) Decide(ctx context.Context, planID string, baseline, attempts in
 	if _, err := Reopen(record, reopenedAt); err != nil {
 		return Decision{}, err
 	}
-	decision := Decision{Reworked: true, Round: RoundCount(record.Detail()), Fingerprint: fingerprint}
+	decision := Decision{Reworked: true, Round: RoundCount(record.Detail()), BaselineRound: budget.BaselineRound, Fingerprint: fingerprint}
 	attempt := budget.Attempts + 1
 	d.appendEvent(detail.Dir, plan.Event{Type: plan.EventTypeReworkRound, Timestamp: reopenedAt, PlanID: planID, Round: decision.Round, Attempts: attempt, Fingerprint: fingerprint, Message: fmt.Sprintf("Automatic rework round %d (attempt %d of %d)", decision.Round, attempt, maxAttempts)})
 	return decision, nil
 }
 
-func (d Driver) stoppedDecision(detail *plan.PlanDetail, planID string, attempts, round int, fingerprint string, kind StopKind, reason string, findings []plan.ReviewFinding, recurringFiles []string) Decision {
+func (d Driver) stoppedDecision(detail *plan.PlanDetail, planID string, baseline, attempts, round int, fingerprint string, kind StopKind, reason string, findings []plan.ReviewFinding, recurringFiles []string) Decision {
 	decision := Decision{
 		Round:          round,
+		BaselineRound:  baseline,
 		Fingerprint:    fingerprint,
 		StopKind:       kind,
 		StopReason:     reason,
@@ -348,7 +358,7 @@ func (d Driver) Run(ctx context.Context, planID string, opts RunOptions) error {
 			if err != nil {
 				return err
 			}
-			state.Budget.BaselineRound = RoundCount(detail)
+			state.Budget = freshAutomaticReworkBudget(detail)
 			state.DecideBeforeExecute = stopped && opts.AllowRestart
 		}
 	}
@@ -370,6 +380,31 @@ func (d Driver) Run(ctx context.Context, planID string, opts RunOptions) error {
 		loopOptions.CheckBeforeDecision = nil
 	}
 	return d.Loop(ctx, planID, loopOptions)
+}
+
+// freshAutomaticReworkBudget anchors a new run at its current round. In
+// particular, a pull-request reopen becomes the baseline rather than an
+// automatic attempt, while review-driven reopens inside Loop continue to use
+// the invocation's existing budget.
+func freshAutomaticReworkBudget(detail *plan.PlanDetail) Budget {
+	return Budget{BaselineRound: RoundCount(detail)}
+}
+
+// pullRequestReworkBaseline recognizes only rounds generated through the
+// pull-request authority arm. An older caller-owned baseline may therefore be
+// reset without granting the same exemption to Tao-review-driven rounds.
+func pullRequestReworkBaseline(detail *plan.PlanDetail, baseline int) (int, bool) {
+	latest := baseline
+	if detail == nil {
+		return latest, false
+	}
+	for _, slice := range detail.Slices.Slices {
+		round := RoundFromSliceID(slice.ID)
+		if round > latest && strings.HasPrefix(slice.Context, pullRequestFindingContext) {
+			latest = round
+		}
+	}
+	return latest, latest > baseline
 }
 
 // Loop executes a plan and continues through all actionable automatic-rework rounds.
@@ -405,6 +440,11 @@ func (d Driver) Loop(ctx context.Context, planID string, opts LoopOptions) error
 		return decision, true, nil
 	}
 	applyDecision := func(decision Decision) (bool, error) {
+		if decision.BaselineRound > budget.BaselineRound {
+			budget.BaselineRound = decision.BaselineRound
+			budget.Attempts = 0
+			budget.PreviousFindingFingerprint = ""
+		}
 		budget.Attempts = budget.AttemptsAtRound(decision.Round)
 		if decision.StopReason != "" {
 			return false, errors.New(FormatStopMessage(decision))

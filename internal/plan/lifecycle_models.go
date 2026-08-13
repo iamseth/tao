@@ -30,6 +30,7 @@ const (
 	EventTypeSlicesReordered            = "slices_reordered"
 	EventTypeSliceApproved              = "slice_approved"
 	EventTypePullRequestCreated         = "pull_request_created"
+	EventTypePRFeedbackTriaged          = "pr_feedback_triaged"
 	EventTypePlanReviewed               = "plan_reviewed"
 	EventTypePlanReopened               = "plan_reopened"
 	EventTypePlanMerged                 = "plan_merged"
@@ -189,13 +190,18 @@ type PlanState struct {
 	// LastRunCommitPolicy records the commit policy used by the latest run start.
 	LastRunCommitPolicy string `json:"last_run_commit_policy"`
 	// LastRunStartingDirty records run-start dirty paths tolerated by standalone review gates.
-	LastRunStartingDirty []string                 `json:"last_run_starting_dirty"`
-	Timing               PlanTiming               `json:"timing"`
-	PullRequest          *PullRequest             `json:"pull_request,omitempty"`
-	PullRequestIntent    *PullRequest             `json:"pull_request_intent"`
-	Review               *PlanReview              `json:"review,omitempty"`
-	MergeCommitIntent    *SingleMergeCommitIntent `json:"merge_commit_intent"`
-	FinalVerification    *FinalVerification       `json:"final_verification,omitempty"`
+	LastRunStartingDirty []string               `json:"last_run_starting_dirty"`
+	Timing               PlanTiming             `json:"timing"`
+	PullRequest          *PullRequest           `json:"pull_request,omitempty"`
+	PullRequestIntent    *PullRequest           `json:"pull_request_intent"`
+	PRFeedbackTriage     PRFeedbackTriageResult `json:"pr_feedback_triage,omitempty"`
+	// PRFeedbackConsumedThreadIDs is append-only conversion evidence keyed by
+	// GitHub thread node ID. It is independent of the current triage snapshot so
+	// resolved and later-returning threads cannot be converted twice.
+	PRFeedbackConsumedThreadIDs []string                 `json:"pr_feedback_consumed_thread_ids,omitempty"`
+	Review                      *PlanReview              `json:"review,omitempty"`
+	MergeCommitIntent           *SingleMergeCommitIntent `json:"merge_commit_intent"`
+	FinalVerification           *FinalVerification       `json:"final_verification,omitempty"`
 }
 
 // PullRequest records GitHub pull request identity. Legacy PullRequestIntent
@@ -207,6 +213,16 @@ type PullRequest struct {
 	CreatedAt time.Time `json:"created_at"`
 	Branch    string    `json:"branch,omitempty"`
 	HeadSHA   string    `json:"head_sha,omitempty"`
+}
+
+// PRFeedbackTriageResult is a stable pull-request review-thread classification
+// keyed by GitHub thread node ID.
+type PRFeedbackTriageResult map[string]PRFeedbackTriageEntry
+
+// PRFeedbackTriageEntry records the validated disposition of one review thread.
+type PRFeedbackTriageEntry struct {
+	Kind      string `json:"kind"`
+	Rationale string `json:"rationale"`
 }
 
 // FinalVerification records broad repository verification performed after all
@@ -360,30 +376,31 @@ type RunCapabilities struct {
 
 // Event is one append-only lifecycle entry from events.jsonl.
 type Event struct {
-	Type              string        `json:"type"`
-	Timestamp         time.Time     `json:"timestamp"`
-	PlanID            string        `json:"plan_id"`
-	MutationID        string        `json:"mutation_id,omitempty"`
-	SliceID           string        `json:"slice_id,omitempty"`
-	Branch            string        `json:"branch,omitempty"`
-	MergedDefaultSHA  string        `json:"merged_default_sha,omitempty"`
-	Agent             string        `json:"agent,omitempty"`
-	DurationSeconds   *int64        `json:"duration_seconds,omitempty"`
-	Metrics           *AgentMetrics `json:"metrics,omitempty"`
-	PullRequest       *PullRequest  `json:"pull_request,omitempty"`
-	Review            *PlanReview   `json:"review,omitempty"`
-	Command           string        `json:"command,omitempty"`
-	CorrectedCommand  string        `json:"corrected_command,omitempty"`
-	Result            string        `json:"result,omitempty"`
-	Round             int           `json:"round,omitempty"`
-	Attempts          int           `json:"attempts,omitempty"`
-	Fingerprint       string        `json:"fingerprint,omitempty"`
-	Reason            string        `json:"reason,omitempty"`
-	CommitPolicy      string        `json:"commit_policy,omitempty"`
-	RunPacketProvided bool          `json:"run_packet_provided,omitempty"`
-	GuardrailWarnings int           `json:"guardrail_warnings,omitempty"`
-	Metric            string        `json:"metric,omitempty"`
-	Threshold         *float64      `json:"threshold,omitempty"`
-	Observed          *float64      `json:"observed,omitempty"`
-	Message           string        `json:"message"`
+	Type              string                 `json:"type"`
+	Timestamp         time.Time              `json:"timestamp"`
+	PlanID            string                 `json:"plan_id"`
+	MutationID        string                 `json:"mutation_id,omitempty"`
+	SliceID           string                 `json:"slice_id,omitempty"`
+	Branch            string                 `json:"branch,omitempty"`
+	MergedDefaultSHA  string                 `json:"merged_default_sha,omitempty"`
+	Agent             string                 `json:"agent,omitempty"`
+	DurationSeconds   *int64                 `json:"duration_seconds,omitempty"`
+	Metrics           *AgentMetrics          `json:"metrics,omitempty"`
+	PullRequest       *PullRequest           `json:"pull_request,omitempty"`
+	PRFeedbackTriage  PRFeedbackTriageResult `json:"pr_feedback_triage,omitempty"`
+	Review            *PlanReview            `json:"review,omitempty"`
+	Command           string                 `json:"command,omitempty"`
+	CorrectedCommand  string                 `json:"corrected_command,omitempty"`
+	Result            string                 `json:"result,omitempty"`
+	Round             int                    `json:"round,omitempty"`
+	Attempts          int                    `json:"attempts,omitempty"`
+	Fingerprint       string                 `json:"fingerprint,omitempty"`
+	Reason            string                 `json:"reason,omitempty"`
+	CommitPolicy      string                 `json:"commit_policy,omitempty"`
+	RunPacketProvided bool                   `json:"run_packet_provided,omitempty"`
+	GuardrailWarnings int                    `json:"guardrail_warnings,omitempty"`
+	Metric            string                 `json:"metric,omitempty"`
+	Threshold         *float64               `json:"threshold,omitempty"`
+	Observed          *float64               `json:"observed,omitempty"`
+	Message           string                 `json:"message"`
 }

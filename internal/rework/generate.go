@@ -1,6 +1,7 @@
 package rework
 
 import (
+	"encoding/json"
 	"fmt"
 	"path"
 	"slices"
@@ -11,9 +12,13 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/verifydetect"
 	"github.com/iamseth/tao/internal/workspace"
+	"github.com/iamseth/tao/prompts"
 )
 
-const addressReviewFindingTask = "address the review finding"
+const (
+	addressReviewFindingTask  = "address the review finding"
+	pullRequestFindingContext = "Generated from validated pull-request feedback."
+)
 
 // RefusalError reports an ordinary rework gate that was not satisfied.
 type RefusalError struct{ Message string }
@@ -48,10 +53,54 @@ func Gate(detail *plan.PlanDetail, findings []plan.ReviewFinding) error {
 	return nil
 }
 
+// PullRequestGate checks the ordinary non-forced gates using validated
+// pull-request change requests as the authority to reopen an approved PR plan.
+// The review-sourced Gate remains deliberately unchanged.
+func PullRequestGate(detail *plan.PlanDetail, findings []plan.ReviewFinding) error {
+	if err := pullRequestPlanGate(detail); err != nil {
+		return err
+	}
+	if len(findings) == 0 {
+		return refuse(fmt.Sprintf("rework refused: plan %s pull request has no change-request threads to convert", planID(detail)))
+	}
+	return nil
+}
+
+func pullRequestPlanGate(detail *plan.PlanDetail) error {
+	id := planID(detail)
+	if detail == nil {
+		return refuse("rework refused: plan detail is nil")
+	}
+	if detail.State.Status == plan.StatusInReview {
+		return refuse(fmt.Sprintf("rework refused: plan %s is awaiting review; run `tao review --run %s` first", id, id))
+	}
+	if !plan.ReopenableStatus(detail.State.Status) {
+		return refuse(fmt.Sprintf("rework refused: plan %s is %s; only reviewed plans can be reopened", id, displayField(detail.State.Status)))
+	}
+	review := plan.PersistedReview(detail)
+	if review == nil {
+		return refuse(fmt.Sprintf("rework refused: plan %s has no persisted review; run `tao review --run %s` first or pass --force", id, id))
+	}
+	if review.Status != "" && review.Status != plan.ReviewStatusCompleted {
+		return refuse(fmt.Sprintf("rework refused: plan %s review status is %s; expected %s", id, review.Status, plan.ReviewStatusCompleted))
+	}
+	if !plan.PlanIsPullRequestComplete(detail) {
+		return refuse(fmt.Sprintf("rework refused: plan %s has no current approved pull-request completion", id))
+	}
+	return nil
+}
+
 // Record is the lifecycle mutation surface required to reopen a plan.
 type Record interface {
 	Detail() *plan.PlanDetail
 	Reopen([]plan.Slice, time.Time) error
+}
+
+// PullRequestRecord atomically reopens a plan while recording the thread node
+// IDs converted into rework slices.
+type PullRequestRecord interface {
+	Detail() *plan.PlanDetail
+	ReopenFromPullRequest([]plan.Slice, []string, time.Time) error
 }
 
 // Reopen applies ordinary rework gates, generates slices, and persists the reopen event.
@@ -74,6 +123,135 @@ func Reopen(record Record, now time.Time) ([]plan.Slice, error) {
 		return nil, err
 	}
 	return newSlices, nil
+}
+
+// ReopenFromPullRequest maps the plan's persisted, validated thread triage to
+// findings, applies the pull-request authority arm, and reopens the plan. Human
+// thread prose is retained only in bounded untrusted packets on generated
+// slices. A fresh Driver.Run started for the reopened plan records its baseline
+// at the new current round, outside prior automatic-rework history.
+func ReopenFromPullRequest(record PullRequestRecord, threads []PRThread, now time.Time) ([]plan.Slice, error) {
+	if record == nil {
+		return nil, fmt.Errorf("plan record is nil")
+	}
+	detail := record.Detail()
+	if err := pullRequestPlanGate(detail); err != nil {
+		return nil, err
+	}
+	changes, err := pullRequestChanges(detail, threads)
+	if err != nil {
+		return nil, err
+	}
+	findings := make([]plan.ReviewFinding, len(changes))
+	for i := range changes {
+		findings[i] = changes[i].finding
+	}
+	if err := PullRequestGate(detail, findings); err != nil {
+		return nil, err
+	}
+
+	generationDetail := *detail
+	generationDetail.State.UpdatedAt = now
+	newSlices := GenerateSlices(&generationDetail, findings, nextRound(detail))
+	if len(newSlices) != len(changes) {
+		return nil, refuse(fmt.Sprintf("rework refused: plan %s pull-request findings could not all be converted", planID(detail)))
+	}
+	for i := range newSlices {
+		newSlices[i].Goal = pullRequestFindingGoal(changes[i].finding.File)
+		newSlices[i].Context = pullRequestFindingContext + "\n\n" + changes[i].packet
+	}
+	consumedThreadIDs := make([]string, len(changes))
+	for i := range changes {
+		consumedThreadIDs[i] = changes[i].threadID
+	}
+	if err := record.ReopenFromPullRequest(newSlices, consumedThreadIDs, now); err != nil {
+		return nil, err
+	}
+	return newSlices, nil
+}
+
+type pullRequestChange struct {
+	threadID string
+	finding  plan.ReviewFinding
+	packet   string
+}
+
+func pullRequestChanges(detail *plan.PlanDetail, threads []PRThread) ([]pullRequestChange, error) {
+	id := planID(detail)
+	if detail == nil {
+		return nil, refuse("rework refused: plan detail is nil")
+	}
+	triage := detail.State.Plan.PRFeedbackTriage
+	if len(triage) == 0 {
+		return nil, refuse(fmt.Sprintf("rework refused: plan %s has no persisted pull-request feedback triage", id))
+	}
+	if len(triage) != len(threads) {
+		return nil, refuse(fmt.Sprintf("rework refused: plan %s pull-request feedback triage does not match the current thread set", id))
+	}
+
+	changes := make([]pullRequestChange, 0, len(threads))
+	seen := make(map[string]struct{}, len(threads))
+	for _, thread := range threads {
+		threadID := strings.TrimSpace(thread.NodeID)
+		if threadID == "" {
+			return nil, refuse(fmt.Sprintf("rework refused: plan %s pull-request thread is missing its node ID", id))
+		}
+		if _, duplicate := seen[threadID]; duplicate {
+			return nil, refuse(fmt.Sprintf("rework refused: plan %s pull-request thread %q is duplicated", id, threadID))
+		}
+		seen[threadID] = struct{}{}
+		classification, ok := triage[threadID]
+		if !ok {
+			return nil, refuse(fmt.Sprintf("rework refused: plan %s pull-request thread %q has no persisted classification", id, threadID))
+		}
+		switch PRThreadKind(strings.TrimSpace(classification.Kind)) {
+		case PRThreadKindQuestion, PRThreadKindScope:
+			continue
+		case PRThreadKindUnmappable:
+			return nil, refuse(fmt.Sprintf("rework refused: pull-request thread %q is unmappable: %s", threadID, displayField(classification.Rationale)))
+		case PRThreadKindChange:
+			if slices.Contains(detail.State.Plan.PRFeedbackConsumedThreadIDs, threadID) {
+				continue
+			}
+		default:
+			return nil, refuse(fmt.Sprintf("rework refused: pull-request thread %q has unsupported classification %q", threadID, classification.Kind))
+		}
+
+		file, ok := normalizeReviewFindingFile(thread.Path)
+		if !ok {
+			return nil, refuse(fmt.Sprintf("rework refused: pull-request change thread %q has an unsafe or unmappable file %q", threadID, thread.Path))
+		}
+		encoded, err := json.Marshal(threadPacket(thread))
+		if err != nil {
+			return nil, fmt.Errorf("encode pull-request thread %q: %w", threadID, err)
+		}
+		packet, err := prompts.RenderPRThreadPackets([]string{string(encoded)})
+		if err != nil {
+			return nil, fmt.Errorf("render pull-request thread %q: %w", threadID, err)
+		}
+		line := 0
+		if thread.Line != nil && *thread.Line > 0 {
+			line = *thread.Line
+		}
+		changes = append(changes, pullRequestChange{
+			threadID: threadID,
+			finding: plan.ReviewFinding{
+				Severity: "pull-request",
+				File:     file,
+				Line:     line,
+				Message:  pullRequestFindingGoal(file),
+			},
+			packet: strings.TrimSpace(packet),
+		})
+	}
+	return changes, nil
+}
+
+func pullRequestFindingGoal(file string) string {
+	if file == "" {
+		return "Address pull-request change request"
+	}
+	return "Address pull-request change request in " + file
 }
 
 func refuse(message string) error { return &RefusalError{Message: message} }

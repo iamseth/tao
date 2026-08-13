@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"flag"
 	"os"
 	"path/filepath"
 	"slices"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
+	reworkpkg "github.com/iamseth/tao/internal/rework"
 	runpkg "github.com/iamseth/tao/internal/run"
 )
 
@@ -59,6 +61,186 @@ func TestReworkCommandReopensChangesRequestedPlanWithGeneratedSlices(t *testing.
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("expected output to contain %q, got %q", want, out.String())
 		}
+	}
+}
+
+func TestReworkCommandRegistersPullRequestFlagsAndRejectsUnsupportedCombinations(t *testing.T) {
+	fs := flag.NewFlagSet("rework", flag.ContinueOnError)
+	registerReworkFlags(fs)
+	for _, name := range []string{"from-pr", "from-authors", "dry-run"} {
+		if fs.Lookup(name) == nil {
+			t.Fatalf("rework flag --%s is not registered", name)
+		}
+	}
+	if got := fs.Lookup("from-authors").DefValue; got != "owner" {
+		t.Fatalf("--from-authors default = %q, want owner", got)
+	}
+
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{args: []string{"--from-authors", "all"}, want: "--from-authors requires --from-pr"},
+		{args: []string{"--dry-run"}, want: "--dry-run requires --from-pr"},
+		{args: []string{"--from-pr", "--force"}, want: "cannot be combined with --force"},
+		{args: []string{"--from-pr", "--dry-run", "--run"}, want: "cannot be combined with --run"},
+		{args: []string{"--from-pr", "--from-authors", "team"}, want: "want owner or all"},
+	}
+	for _, test := range tests {
+		parsed := flag.NewFlagSet("rework", flag.ContinueOnError)
+		registerReworkFlags(parsed)
+		if err := parsed.Parse(test.args); err != nil {
+			t.Fatal(err)
+		}
+		err := validateReworkFlagCombination(parsed, flagBoolValue(parsed, "from-pr"), flagBoolValue(parsed, "force"), flagBoolValue(parsed, "run"), flagBoolValue(parsed, "dry-run"), reworkpkg.PRThreadAuthorScope(flagStringValue(parsed, "from-authors")))
+		if err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Fatalf("flags %v error = %v, want %q", test.args, err, test.want)
+		}
+	}
+}
+
+func TestReworkFromPullRequestRefusesPlanWithoutRecordedPullRequest(t *testing.T) {
+	root := t.TempDir()
+	planID := "20260628-1200-no-pr"
+	writeCLIReworkPlan(t, root, planID, plan.StatusCompleted, reworkReview(plan.ReviewVerdictApprove, nil))
+
+	err := (App{Out: &bytes.Buffer{}}).Run(context.Background(), []string{"--plans-dir", root, "rework", "--from-pr", planID})
+	if err == nil || !strings.Contains(err.Error(), "requires plan "+planID+" to have a recorded pull request") {
+		t.Fatalf("rework --from-pr error = %v, want missing recorded pull request", err)
+	}
+}
+
+func TestReworkFromPullRequestDryRunPersistsAndPrintsTriageWithoutSlices(t *testing.T) {
+	root := t.TempDir()
+	planID := "20260628-1200-pr-dry-run"
+	planDir := writeCLIReworkPlan(t, root, planID, plan.StatusCompleted, reworkReview(plan.ReviewVerdictApprove, nil))
+	addCLIReworkPullRequest(t, planDir)
+	thread := reworkpkg.PRThread{NodeID: "PRRT_change", Path: "internal/cli/rework.go", Comments: []reworkpkg.PRThreadComment{{AuthorLogin: "owner", Body: "Please fix this."}}}
+	stubCLIReworkPRPipeline(t, []reworkpkg.PRThread{thread}, []reworkpkg.PRThreadClassification{{ThreadNodeID: thread.NodeID, Kind: reworkpkg.PRThreadKindChange, Rationale: "The behavior needs correction."}})
+	var out bytes.Buffer
+	fixed := time.Date(2026, 6, 28, 13, 0, 0, 0, time.UTC)
+
+	if err := (App{Out: &out, Now: func() time.Time { return fixed }}).Run(context.Background(), []string{"--plans-dir", root, "rework", "--from-pr", "--dry-run", planID}); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := plan.NewFileRepository(root).ResolvePlan(context.Background(), planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.State.Status != plan.StatusCompleted || len(detail.State.Plan.PendingSlices) != 0 || len(detail.Slices.Slices) != 1 {
+		t.Fatalf("dry run reopened or generated slices: status=%q pending=%#v slices=%d", detail.State.Status, detail.State.Plan.PendingSlices, len(detail.Slices.Slices))
+	}
+	if got := detail.State.Plan.PRFeedbackTriage[thread.NodeID]; got.Kind != "change" || got.Rationale == "" {
+		t.Fatalf("persisted triage = %#v", detail.State.Plan.PRFeedbackTriage)
+	}
+	for _, want := range []string{"PATH", "AUTHOR", "CLASSIFICATION", "ACTION", "internal/cli/rework.go", "owner", "change", "create rework slice", "Dry run: triage persisted"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("dry-run output missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestReworkFromPullRequestDoesNotReconvertConsumedThreadAfterCompletedCycle(t *testing.T) {
+	root := t.TempDir()
+	planID := "20260628-1200-pr-consumed"
+	planDir := writeCLIReworkPlan(t, root, planID, plan.StatusCompleted, reworkReview(plan.ReviewVerdictApprove, nil))
+	addCLIReworkPullRequest(t, planDir)
+	original := reworkpkg.PRThread{NodeID: "PRRT_change", Path: "internal/cli/rework.go", Comments: []reworkpkg.PRThreadComment{{AuthorLogin: "owner", Body: "Please fix this."}}}
+	originalClassification := reworkpkg.PRThreadClassification{ThreadNodeID: original.NodeID, Kind: reworkpkg.PRThreadKindChange, Rationale: "The behavior needs correction."}
+	stubCLIReworkPRPipeline(t, []reworkpkg.PRThread{original}, []reworkpkg.PRThreadClassification{originalClassification})
+	firstAt := time.Date(2026, 6, 28, 13, 0, 0, 0, time.UTC)
+
+	if err := (App{Out: &bytes.Buffer{}, Now: func() time.Time { return firstAt }}).Run(context.Background(), []string{"--plans-dir", root, "rework", "--from-pr", planID}); err != nil {
+		t.Fatal(err)
+	}
+	repo := plan.NewFileRepository(root)
+	detail, err := repo.ResolvePlan(context.Background(), planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(detail.State.Plan.PRFeedbackConsumedThreadIDs, []string{original.NodeID}) || len(detail.State.Plan.PendingSlices) != 1 {
+		t.Fatalf("first reopen = consumed %#v pending %#v", detail.State.Plan.PRFeedbackConsumedThreadIDs, detail.State.Plan.PendingSlices)
+	}
+
+	// Complete and re-approve the generated work, then refresh the recorded pull
+	// request to the new head before simulating another --from-pr invocation.
+	record, err := repo.PlanRecord(detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sliceID := detail.State.Plan.PendingSlices[0]
+	if err := record.StartSlice(sliceID, firstAt.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := record.CompleteSlice(sliceID, "fixed", nil, firstAt.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	newHead := "head789"
+	if err := record.RecordReviewCompleted(plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Head: newHead, ReviewedAt: firstAt.Add(3 * time.Minute)}, "pi"); err != nil {
+		t.Fatal(err)
+	}
+	if err := record.RecordPullRequest(plan.PullRequest{Number: 42, URL: "https://github.com/iamseth/tao/pull/42", CreatedAt: firstAt.Add(4 * time.Minute)}, "feature", newHead); err != nil {
+		t.Fatal(err)
+	}
+
+	stubCLIReworkPRPipeline(t, []reworkpkg.PRThread{original}, []reworkpkg.PRThreadClassification{originalClassification})
+	err = (App{Out: &bytes.Buffer{}, Now: func() time.Time { return firstAt.Add(5 * time.Minute) }}).Run(context.Background(), []string{"--plans-dir", root, "rework", "--from-pr", planID})
+	if err == nil || !strings.Contains(err.Error(), "no change-request threads to convert") {
+		t.Fatalf("second --from-pr error = %v, want consumed-thread refusal", err)
+	}
+	detail, err = repo.ResolvePlan(context.Background(), planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.State.Status != plan.StatusCompleted || len(detail.State.Plan.PendingSlices) != 0 || len(detail.Slices.Slices) != 2 {
+		t.Fatalf("consumed thread created duplicate work: status=%q pending=%#v slices=%d", detail.State.Status, detail.State.Plan.PendingSlices, len(detail.Slices.Slices))
+	}
+
+	newThread := reworkpkg.PRThread{NodeID: "PRRT_new", Path: "internal/cli/rework_test.go", Comments: []reworkpkg.PRThreadComment{{AuthorLogin: "owner", Body: "Please address this new issue."}}}
+	stubCLIReworkPRPipeline(t, []reworkpkg.PRThread{original, newThread}, []reworkpkg.PRThreadClassification{
+		originalClassification,
+		{ThreadNodeID: newThread.NodeID, Kind: reworkpkg.PRThreadKindChange, Rationale: "A newly arrived request."},
+	})
+	if err := (App{Out: &bytes.Buffer{}, Now: func() time.Time { return firstAt.Add(6 * time.Minute) }}).Run(context.Background(), []string{"--plans-dir", root, "rework", "--from-pr", planID}); err != nil {
+		t.Fatalf("new thread --from-pr: %v", err)
+	}
+	detail, err = repo.ResolvePlan(context.Background(), planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(detail.State.Plan.PRFeedbackConsumedThreadIDs, []string{original.NodeID, newThread.NodeID}) || len(detail.State.Plan.PendingSlices) != 1 {
+		t.Fatalf("new-thread reopen = consumed %#v pending %#v", detail.State.Plan.PRFeedbackConsumedThreadIDs, detail.State.Plan.PendingSlices)
+	}
+}
+
+func TestReworkFromPullRequestAllQuestionsProducesNoSlices(t *testing.T) {
+	root := t.TempDir()
+	planID := "20260628-1200-pr-questions"
+	planDir := writeCLIReworkPlan(t, root, planID, plan.StatusCompleted, reworkReview(plan.ReviewVerdictApprove, nil))
+	addCLIReworkPullRequest(t, planDir)
+	threads := []reworkpkg.PRThread{
+		{NodeID: "PRRT_q1", Path: "internal/cli/rework.go", Comments: []reworkpkg.PRThreadComment{{AuthorLogin: "owner"}}},
+		{NodeID: "PRRT_q2", Path: "internal/cli/rework_test.go", Comments: []reworkpkg.PRThreadComment{{AuthorLogin: "reviewer"}}},
+	}
+	stubCLIReworkPRPipeline(t, threads, []reworkpkg.PRThreadClassification{
+		{ThreadNodeID: "PRRT_q1", Kind: reworkpkg.PRThreadKindQuestion, Rationale: "This asks for an explanation."},
+		{ThreadNodeID: "PRRT_q2", Kind: reworkpkg.PRThreadKindQuestion, Rationale: "This asks about intent."},
+	})
+	var out bytes.Buffer
+
+	err := (App{Out: &out}).Run(context.Background(), []string{"--plans-dir", root, "rework", "--from-pr", "--from-authors", "all", planID})
+	if err == nil || !strings.Contains(err.Error(), "no change-request threads to convert") {
+		t.Fatalf("all-question rework error = %v", err)
+	}
+	detail, resolveErr := plan.NewFileRepository(root).ResolvePlan(context.Background(), planID)
+	if resolveErr != nil {
+		t.Fatal(resolveErr)
+	}
+	if detail.State.Status != plan.StatusCompleted || len(detail.State.Plan.PendingSlices) != 0 || len(detail.Slices.Slices) != 1 {
+		t.Fatalf("all-question triage generated work: status=%q pending=%#v slices=%d", detail.State.Status, detail.State.Plan.PendingSlices, len(detail.Slices.Slices))
+	}
+	if strings.Count(out.String(), "report question") != 2 {
+		t.Fatalf("question triage output = %q", out.String())
 	}
 }
 
@@ -256,6 +438,48 @@ func writeCLIReworkPlan(t *testing.T, root string, planID string, status string,
 		t.Fatal(err)
 	}
 	return planDir
+}
+
+func addCLIReworkPullRequest(t *testing.T, planDir string) {
+	t.Helper()
+	repo := plan.NewFileRepository(filepath.Dir(planDir))
+	detail, err := repo.ResolvePlan(context.Background(), planDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail.State.Plan.PullRequest = &plan.PullRequest{
+		Number: 42, URL: "https://github.com/iamseth/tao/pull/42", Branch: "feature", HeadSHA: "head456",
+		CreatedAt: time.Date(2026, 6, 28, 12, 5, 0, 0, time.UTC),
+	}
+	record, err := repo.PlanRecord(detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := record.PersistArtifacts(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func stubCLIReworkPRPipeline(t *testing.T, threads []reworkpkg.PRThread, classifications []reworkpkg.PRThreadClassification) {
+	t.Helper()
+	oldRead := readReworkPRThreads
+	oldClassify := classifyReworkPRThreads
+	readReworkPRThreads = func(_ context.Context, _ App, request reworkpkg.PRThreadReadRequest) (reworkpkg.PRThreadReadResult, error) {
+		if request.RepositoryOwner != "iamseth" || request.RepositoryName != "tao" || request.PullRequestNumber != 42 {
+			t.Fatalf("pull-request read request = %#v", request)
+		}
+		return reworkpkg.PRThreadReadResult{OwnerLogin: "owner", Threads: threads}, nil
+	}
+	classifyReworkPRThreads = func(_ context.Context, _ App, _ string, got []reworkpkg.PRThread) ([]reworkpkg.PRThreadClassification, error) {
+		if len(got) != len(threads) {
+			t.Fatalf("classified threads = %d, want %d", len(got), len(threads))
+		}
+		return classifications, nil
+	}
+	t.Cleanup(func() {
+		readReworkPRThreads = oldRead
+		classifyReworkPRThreads = oldClassify
+	})
 }
 
 func readReworkArtifacts(t *testing.T, planDir string) string {

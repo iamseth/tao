@@ -1,0 +1,176 @@
+{
+  "data": {
+    "viewer": {
+      "login": "tao-owner"
+    },
+    "repository": {
+      "pullRequest": {
+        "reviewThreads": {
+          "nodes": [
+            {
+              "id": "PRRT_owner",
+              "path": "internal/rework/pr_threads.go",
+              "line": 42,
+              "isResolved": false,
+              "isOutdated": false,
+              "comments": {
+                "nodes": [
+                  {
+                    "id": "PRRC_owner_root",
+                    "body": "Please validate the author scope.",
+                    "author": { "login": "tao-owner" },
+                    "replyTo": null,
+                    "pullRequestReview": { "state": "CHANGES_REQUESTED" }
+                  },
+                  {
+                    "id": "PRRC_owner_reply",
+                    "body": "The default should remain narrow.",
+                    "author": { "login": "reviewer" },
+                    "replyTo": { "id": "PRRC_owner_root" },
+                    "pullRequestReview": { "state": "COMMENTED" }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_owner",
+              "path": "internal/rework/pr_threads.go",
+              "line": 42,
+              "isResolved": false,
+              "isOutdated": false,
+              "comments": {
+                "nodes": [
+                  {
+                    "id": "PRRC_owner_root",
+                    "body": "Please validate the author scope.",
+                    "author": { "login": "tao-owner" },
+                    "replyTo": null,
+                    "pullRequestReview": { "state": "CHANGES_REQUESTED" }
+                  },
+                  {
+                    "id": "PRRC_owner_reply",
+                    "body": "The default should remain narrow.",
+                    "author": { "login": "reviewer" },
+                    "replyTo": { "id": "PRRC_owner_root" },
+                    "pullRequestReview": { "state": "COMMENTED" }
+                  },
+                  {
+                    "id": "PRRC_owner_reply_2",
+                    "body": "Agreed.",
+                    "author": { "login": "tao-owner" },
+                    "replyTo": { "id": "PRRC_owner_root" },
+                    "pullRequestReview": { "state": "APPROVED" }
+                  },
+                  {
+                    "id": "PRRC_owner_pending_reply",
+                    "body": "This draft reply has not been submitted.",
+                    "author": { "login": "tao-owner" },
+                    "replyTo": { "id": "PRRC_owner_root" },
+                    "pullRequestReview": { "state": "PENDING" }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_resolved",
+              "path": "internal/rework/pr_threads_test.go",
+              "line": 12,
+              "isResolved": true,
+              "isOutdated": false,
+              "comments": {
+                "nodes": [
+                  {
+                    "id": "PRRC_resolved",
+                    "body": "This has already been handled.",
+                    "author": { "login": "tao-owner" },
+                    "replyTo": null,
+                    "pullRequestReview": { "state": "COMMENTED" }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_outdated",
+              "path": "internal/rework/findings.go",
+              "line": null,
+              "isResolved": false,
+              "isOutdated": true,
+              "comments": {
+                "nodes": [
+                  {
+                    "id": "PRRC_outdated",
+                    "body": "The code moved, but this concern still applies.",
+                    "author": { "login": "tao-owner" },
+                    "replyTo": null,
+                    "pullRequestReview": { "state": "CHANGES_REQUESTED" }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_non_owner",
+              "path": "README.md",
+              "line": 8,
+              "isResolved": false,
+              "isOutdated": false,
+              "comments": {
+                "nodes": [
+                  {
+                    "id": "PRRC_non_owner",
+                    "body": "Could this wording be clearer?",
+                    "author": { "login": "external-reviewer" },
+                    "replyTo": null,
+                    "pullRequestReview": { "state": "COMMENTED" }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_fileless",
+              "path": null,
+              "line": null,
+              "isResolved": false,
+              "isOutdated": false,
+              "comments": {
+                "nodes": [
+                  {
+                    "id": "PRRC_fileless",
+                    "body": "This is a pull-request-level question.",
+                    "author": { "login": "tao-owner" },
+                    "replyTo": null,
+                    "pullRequestReview": { "state": "COMMENTED" }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_pending_review",
+              "path": "internal/rework/pr_threads.go",
+              "line": 123,
+              "isResolved": false,
+              "isOutdated": false,
+              "comments": {
+                "nodes": [
+                  {
+                    "id": "PRRC_pending_root",
+                    "body": "This change request is still a draft.",
+                    "author": { "login": "tao-owner" },
+                    "replyTo": null,
+                    "pullRequestReview": { "state": "PENDING" }
+                  },
+                  {
+                    "id": "PRRC_submitted_reply_to_pending_root",
+                    "body": "A submitted reply must not make the draft root actionable.",
+                    "author": { "login": "reviewer" },
+                    "replyTo": { "id": "PRRC_pending_root" },
+                    "pullRequestReview": { "state": "COMMENTED" }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

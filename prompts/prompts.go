@@ -63,6 +63,9 @@ var PRPromptTemplate string
 //go:embed review.md
 var ReviewPromptTemplate string
 
+//go:embed rework_triage.md
+var ReworkTriagePromptTemplate string
+
 //go:embed merge_resolve.md
 var MergeResolvePromptTemplate string
 
@@ -83,6 +86,13 @@ type MergeResolveData struct {
 type MergeReviewData struct {
 	BatchID, DefaultStart, IntegrationHead, VerifyCommand string
 	Candidates, ResolutionCommits, DiffStat, Verification string
+}
+
+// ReworkTriageData is the internal-only prompt input for pull-request thread
+// classification. ThreadPackets must come from RenderPRThreadPackets.
+type ReworkTriageData struct {
+	ThreadCount   int
+	ThreadPackets string
 }
 
 type Data struct {
@@ -231,6 +241,40 @@ func renderReviewPrompt(source string, data Data) (string, error) {
 
 func renderPromptTemplate(source string, data Data) (string, error) {
 	return renderTemplate(source, data)
+}
+
+// RenderPRThreadPackets renders pull-request thread prose as size-bounded,
+// JSON-encoded packets. Encoding keeps thread text from manufacturing packet
+// delimiters; callers are responsible for composing one prose value per thread.
+func RenderPRThreadPackets(threadProse []string) (string, error) {
+	const packetName = "PULL REQUEST THREAD"
+
+	var packets strings.Builder
+	for _, prose := range threadProse {
+		if len(prose) > mergeResolveFieldLimit {
+			prose = prose[:mergeResolveFieldLimit] + "\n[TRUNCATED BY TAO]"
+		}
+		encoded, err := json.Marshal(prose)
+		if err != nil {
+			return "", fmt.Errorf("encode untrusted pull request thread packet: %w", err)
+		}
+		fmt.Fprintf(&packets, "BEGIN TAO UNTRUSTED %s\n%s\nEND TAO UNTRUSTED %s\n\n", packetName, encoded, packetName)
+	}
+	return packets.String(), nil
+}
+
+// RenderReworkTriage renders the internal pull-request thread classification
+// prompt. It is deliberately not part of the installable prompt registry.
+func RenderReworkTriage(data ReworkTriageData) (string, error) {
+	tmpl, err := template.New("rework-triage").Parse(ReworkTriagePromptTemplate)
+	if err != nil {
+		return "", err
+	}
+	var out strings.Builder
+	if err := tmpl.Execute(&out, data); err != nil {
+		return "", err
+	}
+	return out.String(), nil
 }
 
 // RenderMergeResolve renders a size-bounded internal prompt. JSON string

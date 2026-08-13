@@ -43,6 +43,8 @@ func clonePlanState(plan PlanState) PlanState {
 	clone.Timing = clonePlanTiming(plan.Timing)
 	clone.PullRequest = clonePullRequest(plan.PullRequest)
 	clone.PullRequestIntent = clonePullRequest(plan.PullRequestIntent)
+	clone.PRFeedbackTriage = clonePRFeedbackTriageResult(plan.PRFeedbackTriage)
+	clone.PRFeedbackConsumedThreadIDs = cloneStringSlice(plan.PRFeedbackConsumedThreadIDs)
 	clone.Review = clonePlanReview(plan.Review)
 	clone.MergeCommitIntent = cloneSingleMergeCommitIntent(plan.MergeCommitIntent)
 	clone.FinalVerification = cloneFinalVerification(plan.FinalVerification)
@@ -83,6 +85,17 @@ func clonePullRequest(pr *PullRequest) *PullRequest {
 	}
 	clone := *pr
 	return &clone
+}
+
+func clonePRFeedbackTriageResult(result PRFeedbackTriageResult) PRFeedbackTriageResult {
+	if result == nil {
+		return nil
+	}
+	clone := make(PRFeedbackTriageResult, len(result))
+	for threadID, entry := range result {
+		clone[threadID] = entry
+	}
+	return clone
 }
 
 func cloneSingleMergeCommitIntent(intent *SingleMergeCommitIntent) *SingleMergeCommitIntent {
@@ -216,6 +229,7 @@ func cloneEvent(event Event) Event {
 		clone.Metrics = &metrics
 	}
 	clone.PullRequest = clonePullRequest(event.PullRequest)
+	clone.PRFeedbackTriage = clonePRFeedbackTriageResult(event.PRFeedbackTriage)
 	clone.Review = clonePlanReview(event.Review)
 	return clone
 }

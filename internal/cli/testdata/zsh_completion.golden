@@ -267,8 +267,8 @@ _tao() {
       fi
       ;;
     rew|rewo|rewor|rework)
-      _arguments '--force[reopen even when the review gate would refuse]' '--run[run the plan after reopening]'
-      if _tao_at_positional 3 1 0 ',,'; then
+      _arguments '--dry-run[classify, persist, and print pull-request triage without reopening]' '--force[reopen even when the review gate would refuse]' '--from-authors[pull-request thread authors: owner or all]:value:' '--from-pr[reopen from unresolved threads on the recorded pull request]' '--run[run the plan after reopening]'
+      if _tao_at_positional 3 1 0 ',,' '--from-authors'; then
         plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
         compadd -a plan_ids
       fi

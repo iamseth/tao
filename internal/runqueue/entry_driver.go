@@ -448,6 +448,13 @@ func (d EntryDriver) runAutomaticRework(ctx context.Context, entry *QueueEntry, 
 	driver := reworkpkg.Driver{DecideOne: func(decideCtx context.Context, planID string, baseline, attempts int, previous string, maxAttempts int) (reworkpkg.Decision, error) {
 		decision, err := reworker(decideCtx, planID, baseline, attempts, previous, maxAttempts)
 		decisionBudget := reworkpkg.Budget{BaselineRound: baseline, Attempts: entry.ReworkAttempts}
+		if decision.BaselineRound > baseline {
+			newBaseline := decision.BaselineRound
+			entry.ReworkBaselineRound = &newBaseline
+			entry.ReworkAttempts = 0
+			entry.PreviousFindingFingerprint = ""
+			decisionBudget = reworkpkg.Budget{BaselineRound: newBaseline}
+		}
 		if resultAttempts := decisionBudget.AttemptsAtRound(decision.Round); resultAttempts > entry.ReworkAttempts {
 			entry.ReworkAttempts = resultAttempts
 		}

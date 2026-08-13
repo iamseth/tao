@@ -24,6 +24,19 @@ func (r *driverRecord) Reopen(slices []plan.Slice, now time.Time) error {
 	return err
 }
 
+func (r *driverRecord) ReopenFromPullRequest(newSlices []plan.Slice, consumedThreadIDs []string, now time.Time) error {
+	for _, threadID := range consumedThreadIDs {
+		if slices.Contains(r.detail.State.Plan.PRFeedbackConsumedThreadIDs, threadID) {
+			return fmt.Errorf("pull request feedback thread %q was already consumed", threadID)
+		}
+	}
+	if _, err := plan.Reopen(r.detail, newSlices, now); err != nil {
+		return err
+	}
+	r.detail.State.Plan.PRFeedbackConsumedThreadIDs = append(r.detail.State.Plan.PRFeedbackConsumedThreadIDs, consumedThreadIDs...)
+	return nil
+}
+
 func TestDriverDecideReturnsZeroForNonActionablePlan(t *testing.T) {
 	driver := Driver{Resolve: func(context.Context, string) (*plan.PlanDetail, error) {
 		return &plan.PlanDetail{State: plan.State{Status: plan.StatusReviewed}}, nil
@@ -155,6 +168,88 @@ func TestDriverDecideStopsOnRecurringFilesWithoutMutation(t *testing.T) {
 	}
 	if stoppedEvent.PlanID != "plan" || stoppedEvent.Round != 2 || stoppedEvent.Attempts != 2 || stoppedEvent.Fingerprint != got.Fingerprint || stoppedEvent.Reason != got.StopReason || stoppedEvent.Message != got.StopReason {
 		t.Fatalf("rework_stopped event = %+v", *stoppedEvent)
+	}
+}
+
+func TestDriverRunUsesPullRequestReopenAsFreshRecurringFilesBaseline(t *testing.T) {
+	detail, _ := recurringDriverDetail()
+	detail.State.Status = plan.StatusCompleted
+	detail.State.Plan.PullRequest = &plan.PullRequest{Number: 17, HeadSHA: "head123"}
+	detail.State.Plan.Review = &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Head: "head123"}
+	detail.State.Plan.PRFeedbackTriage = plan.PRFeedbackTriageResult{
+		"PRRT_change": {Kind: string(PRThreadKindChange), Rationale: "Requests a distinct fix in the recurring file."},
+	}
+	if _, err := ReopenFromPullRequest(&driverRecord{detail: detail}, []PRThread{{NodeID: "PRRT_change", Path: "store/file.go", Comments: []PRThreadComment{{Body: "Address the latest transaction bug."}}}}, time.Now()); err != nil {
+		t.Fatalf("pull-request reopen failed: %v", err)
+	}
+	if got := RoundCount(detail); got != 3 {
+		t.Fatalf("pull-request round = %d, want 3", got)
+	}
+
+	detail.State.Status = plan.StatusChangesRequested
+	detail.State.Plan.Review = &plan.PlanReview{
+		Status:  plan.ReviewStatusCompleted,
+		Verdict: plan.ReviewVerdictChangesRequested,
+		Findings: []plan.ReviewFinding{{
+			Severity: "major", File: "store/file.go", Message: "A distinct post-PR review finding",
+		}},
+	}
+	var stopped bool
+	driver := Driver{
+		Resolve: fixedDriverResolver(detail),
+		Record:  func(detail *plan.PlanDetail) (Record, error) { return &driverRecord{detail: detail}, nil },
+		AppendEvent: func(_ string, event plan.Event) error {
+			stopped = stopped || event.Type == plan.EventTypeReworkStopped
+			return nil
+		},
+	}
+	decision, err := driver.Decide(context.Background(), "plan", 0, 2, "stale-pre-PR-fingerprint", 2)
+	if err != nil {
+		t.Fatalf("Decide returned error: %v", err)
+	}
+	if stopped || !decision.Reworked || decision.BaselineRound != 3 || decision.Round != 4 {
+		t.Fatalf("post-PR decision stopped=%v decision=%+v, want baseline 3 and round 4 reopen", stopped, decision)
+	}
+}
+
+func TestDriverLoopPersistsAttemptsFromPullRequestResetBaseline(t *testing.T) {
+	decisions := 0
+	persistedAttempts := -1
+	driver := Driver{DecideOne: func(context.Context, string, int, int, string, int) (Decision, error) {
+		decisions++
+		if decisions == 1 {
+			return Decision{Reworked: true, BaselineRound: 3, Round: 4, Fingerprint: "post-pr"}, nil
+		}
+		return Decision{}, nil
+	}}
+	err := driver.Loop(context.Background(), "plan", LoopOptions{
+		Baseline:    0,
+		Attempts:    2,
+		MaxAttempts: 5,
+		Execute:     func(context.Context) error { return nil },
+		PersistProgress: func(_ context.Context, attempts, _ int, _ string) error {
+			persistedAttempts = attempts
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Loop returned error: %v", err)
+	}
+	if persistedAttempts != 1 {
+		t.Fatalf("persisted attempts = %d, want 1 from reset baseline", persistedAttempts)
+	}
+}
+
+func TestDriverReviewDrivenReopenStillConsumesExistingBudget(t *testing.T) {
+	detail, _ := recurringDriverDetail()
+	driver := Driver{Resolve: fixedDriverResolver(detail)}
+
+	decision, err := driver.Decide(context.Background(), "plan", 0, 0, "", 2)
+	if err != nil {
+		t.Fatalf("Decide returned error: %v", err)
+	}
+	if decision.StopKind != StopKindCapExhausted || decision.Round != 2 {
+		t.Fatalf("review-driven decision = %+v, want consumed two-attempt budget", decision)
 	}
 }
 

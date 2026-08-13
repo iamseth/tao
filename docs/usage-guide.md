@@ -497,15 +497,16 @@ boundary check.
 ### `tao rework` — turn review findings into follow-up slices
 
 **When to use:** after `tao review <plan-id>` shows a reviewed plan with a
-`changes_requested` verdict and actionable findings. `tao rework <plan-id>` is
-the standard way to continue the review → rework → run → re-review → merge loop
-without creating a second plan.
+`changes_requested` verdict and actionable findings, or after a human leaves
+review threads on a completed Tao-created pull request. `tao rework <plan-id>`
+is the standard way to continue the review → rework → run → re-review → merge
+loop without creating a second plan.
 
-By default, `tao rework` is gated and non-mutating on refusal. It refuses unless
-the plan is reviewed, the persisted review requested changes, and Tao can find
-actionable findings; approved reviews, reviews with no findings, and unfinished
-plans are left untouched. Use `--force` only when you intentionally want to
-bypass those gates.
+Without `--from-pr`, `tao rework` is gated and non-mutating on refusal. It
+refuses unless the plan is reviewed, the persisted review requested changes,
+and Tao can find actionable findings; approved reviews, reviews with no
+findings, and unfinished plans are left untouched. Use `--force` only when you
+intentionally want to bypass those ordinary review gates.
 
 **What it does:** Tao deterministically maps each structured finding to one new
 pending rework slice, preserving the finding's goal, files, and tasks when
@@ -514,12 +515,54 @@ scoped to the touched package rather than a narrow test-name filter. Tao appends
 those slices, flips the same plan back to runnable, records the reopen event, and
 keeps completed slices and history intact.
 
-Rework reopens the same plan on its existing branch. It does not create a child
-plan, does not discard the completed work, and does not mutate git state. Direct
-`tao run` normally performs this rework/run/review loop automatically. Use the
-standalone command when automatic rework is disabled or when you want to inspect
-the generated slices before running them; add `--run` to hand the reopened plan
-back to `tao run`.
+#### Follow up on pull-request threads
+
+Use the recorded pull request as a separate, non-forced rework authority when
+its exact head has current approved Tao review evidence:
+
+```sh
+tao rework --from-pr --dry-run <plan-id>  # persist and preview triage only
+tao rework --from-pr <plan-id>            # reopen and create change slices
+tao run --pull-request <plan-id>           # implement, re-review, and update the PR
+```
+
+`--from-pr` reads unresolved review threads from the plan's recorded PR and
+prints path, author, classification, and action. It classifies selected threads
+as follows:
+
+- `change` creates an ordinary pending rework slice.
+- `question` is reported for a human answer and creates no slice.
+- `scope` is reported as scope feedback and creates no slice.
+- `unmappable` refuses the reopen until the requested change has a safe file
+  mapping.
+
+Resolved threads are ignored. Outdated but unresolved threads remain eligible
+because they can still request a valid change. Thread node IDs provide stable
+identity: when the selected thread set is unchanged, the real run consumes the
+triage already persisted by `--dry-run` instead of reclassifying it. The dry run
+never reopens the plan or creates slices.
+
+`--from-authors owner` is the default and selects threads started by the plan
+owner (the authenticated `gh` user). Pass `--from-authors all` with `--from-pr`
+to include threads started by any author. `--dry-run` also requires `--from-pr`
+and cannot be combined with `--run`; `--from-pr` cannot be combined with
+`--force`. If you do not need a preview, `tao rework --from-pr --run <plan-id>`
+can hand the reopened plan directly to the ordinary run path; use the explicit
+`tao run --pull-request` form when that run should push and refresh the recorded
+PR.
+
+A successful pull-request reopen starts automatic-rework accounting from its new
+round. Earlier Tao-review rework rounds do not consume the new cap, equivalent-
+finding check, or recurring-file window. Tao reads GitHub threads only: it never
+posts replies and never resolves threads. After Tao updates the PR, a human must
+answer questions and reply to or resolve host threads as appropriate.
+
+Rework always reopens the same plan on its existing branch. It does not create a
+child plan, does not discard the completed work, and does not mutate git state.
+Direct `tao run` normally performs the Tao-review rework/run/review loop
+automatically. Use the standalone command when automatic rework is disabled or
+when you want to inspect the generated slices before running them; add `--run`
+to hand the reopened plan back to `tao run`.
 
 Unlike direct runs and `tao run --all`, unattended durable drains remain opt-in:
 `tao queue start --auto-rework` applies the same ordinary, non-forced gates after

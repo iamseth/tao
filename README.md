@@ -298,23 +298,37 @@ A completed foreground drain always prints a final batch summary and can trigger
 ### Reworking review findings
 
 ```sh
-tao rework [--force] [--run] <plan-id-or-slug-or-path>
+tao rework [--force] [--run] [--from-pr [--from-authors owner|all] [--dry-run]] <plan-id-or-slug-or-path>
 ```
 
-`tao rework` is the review-to-fix half of the loop. By default it refuses without
-mutating unless the plan is completed, its persisted review requested changes,
-and that review contains actionable findings; approved reviews, plans with no
-findings, and unfinished plans are left untouched. For each finding, Tao
-regenerates the same deterministic pending rework slice with a verification
-command scoped to the touched package, reopens the same plan on its existing
-branch, and preserves completed slices and history. It does not create a child
-plan or change git state.
+`tao rework` is the review-to-fix half of the loop. Without `--from-pr`, it
+refuses without mutating unless the plan is completed, its persisted review
+requested changes, and that review contains actionable findings; approved
+reviews, plans with no findings, and unfinished plans are left untouched. For
+each finding, Tao regenerates the same deterministic pending rework slice with a
+verification command scoped to the touched package, reopens the same plan on its
+existing branch, and preserves completed slices and history. It does not create
+a child plan or change git state.
+
+For a completed Tao PR, `--from-pr` instead reads unresolved review threads from
+the recorded pull request and uses its current approved completion as the
+authority to reopen. Tao classifies each selected thread as `change`, `question`,
+`scope`, or `unmappable`: changes produce ordinary rework slices, questions and
+scope feedback are reported without slices, and an unmappable change refuses the
+reopen until it has a safe file mapping. Resolved threads are ignored; outdated
+unresolved threads remain eligible. The default `--from-authors owner` includes
+threads started by the plan owner (the authenticated `gh` user); use
+`--from-authors all` to include threads started by anyone. `--dry-run` prints and
+persists the triage for a later unchanged thread set but does not reopen the plan
+or create slices. Tao only reads host threads; it never replies to or resolves
+them.
 
 Use `--run` to hand the reopened plan directly to `tao run`. Use `--force` only
-when you intentionally want to bypass the default completed, changes-requested,
-and finding gates. Direct `tao run` and `tao run --all` automate this loop by
-default; an opted-in durable CLI queue does the same while preserving progress
-across restarts. Reaching the configured cap, receiving two consecutive
+when you intentionally want to bypass the ordinary completed,
+changes-requested, and finding gates; it cannot be combined with `--from-pr`.
+Direct `tao run` and `tao run --all` automate the Tao-review loop by default; an
+opted-in durable CLI queue does the same while preserving progress across
+restarts. Reaching the configured cap, receiving two consecutive
 high-confidence matches of the complete normalized finding set, or seeing the
 same normalized primary finding file in three consecutive `changes_requested`
 reviews stops with the plan still `changes_requested` and its latest review

@@ -493,6 +493,118 @@ func validCommitSeriesFingerprint(value string) bool {
 	return err == nil && value == strings.ToLower(value)
 }
 
+// RecordPRFeedbackTriage atomically persists one stable classification for the
+// current pull-request thread set and appends its lifecycle event. A retry for
+// the same thread IDs retains the first result without appending another event.
+func (r *PlanRecord) RecordPRFeedbackTriage(result PRFeedbackTriageResult, triagedAt time.Time) error {
+	if len(result) == 0 {
+		return fmt.Errorf("pull request feedback triage requires at least one thread")
+	}
+	for threadID, entry := range result {
+		if strings.TrimSpace(threadID) == "" {
+			return fmt.Errorf("pull request feedback triage contains an empty thread node ID")
+		}
+		if strings.TrimSpace(entry.Kind) == "" || strings.TrimSpace(entry.Rationale) == "" {
+			return fmt.Errorf("pull request feedback triage for thread %q requires kind and rationale", threadID)
+		}
+	}
+	if triagedAt.IsZero() {
+		return fmt.Errorf("pull request feedback triage requires a timestamp")
+	}
+	result = clonePRFeedbackTriageResult(result)
+	triagedAt = triagedAt.UTC()
+
+	store, err := r.storeOrDefault()
+	if err != nil {
+		return err
+	}
+	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
+		if samePRFeedbackThreadSet(detail.State.Plan.PRFeedbackTriage, result) {
+			return nil, nil
+		}
+		detail.State.Plan.PRFeedbackTriage = clonePRFeedbackTriageResult(result)
+		detail.State.UpdatedAt = triagedAt
+		detail.State.Plan.Timing.LastActivityAt = &triagedAt
+		event := Event{
+			Type:             EventTypePRFeedbackTriaged,
+			Timestamp:        triagedAt,
+			PlanID:           detail.State.Plan.ID,
+			PRFeedbackTriage: clonePRFeedbackTriageResult(result),
+			Message:          "Pull request feedback triaged",
+		}
+		return []Event{event}, nil
+	})
+}
+
+// ReopenFromPullRequest atomically appends pull-request rework slices and
+// records the corresponding triaged change thread IDs as consumed. Consumption
+// evidence is append-only and independent of later triage snapshots.
+func (r *PlanRecord) ReopenFromPullRequest(newSlices []Slice, consumedThreadIDs []string, now time.Time) error {
+	if len(consumedThreadIDs) == 0 {
+		return fmt.Errorf("pull request feedback reopen requires at least one consumed thread")
+	}
+	threadIDs := append([]string(nil), consumedThreadIDs...)
+	seen := make(map[string]struct{}, len(threadIDs))
+	for _, threadID := range threadIDs {
+		if strings.TrimSpace(threadID) == "" || threadID != strings.TrimSpace(threadID) {
+			return fmt.Errorf("pull request feedback reopen contains an invalid thread node ID")
+		}
+		if _, duplicate := seen[threadID]; duplicate {
+			return fmt.Errorf("pull request feedback reopen contains duplicate thread node ID %q", threadID)
+		}
+		seen[threadID] = struct{}{}
+	}
+	slices.Sort(threadIDs)
+
+	return r.apply(func(detail *PlanDetail) (lifecycleMutation, error) {
+		expected := Event{Type: EventTypePlanReopened, Timestamp: now, PlanID: detail.State.Plan.ID, Message: "Plan reopened for rework"}
+		if semanticEventsWereRecorded(detail.Events, []Event{expected}) && reopenPostconditionMatches(detail, newSlices) && prFeedbackThreadsConsumed(detail.State.Plan.PRFeedbackConsumedThreadIDs, threadIDs) {
+			return unchangedLifecycleMutation(detail), nil
+		}
+		return applyLifecycleMutation(detail, func(changes *ArtifactChangeSet) ([]Event, error) {
+			for _, threadID := range threadIDs {
+				entry, ok := detail.State.Plan.PRFeedbackTriage[threadID]
+				if !ok {
+					return nil, fmt.Errorf("pull request feedback thread %q has no persisted triage", threadID)
+				}
+				if strings.TrimSpace(entry.Kind) != "change" {
+					return nil, fmt.Errorf("pull request feedback thread %q is triaged as %q, not change", threadID, entry.Kind)
+				}
+				if slices.Contains(detail.State.Plan.PRFeedbackConsumedThreadIDs, threadID) {
+					return nil, fmt.Errorf("pull request feedback thread %q was already consumed", threadID)
+				}
+			}
+			event, err := reopen(detail, changes, newSlices, now)
+			if err != nil {
+				return nil, err
+			}
+			detail.State.Plan.PRFeedbackConsumedThreadIDs = append(detail.State.Plan.PRFeedbackConsumedThreadIDs, threadIDs...)
+			return []Event{event}, nil
+		})
+	})
+}
+
+func prFeedbackThreadsConsumed(consumed []string, threadIDs []string) bool {
+	for _, threadID := range threadIDs {
+		if !slices.Contains(consumed, threadID) {
+			return false
+		}
+	}
+	return true
+}
+
+func samePRFeedbackThreadSet(left, right PRFeedbackTriageResult) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for threadID := range left {
+		if _, ok := right[threadID]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // RecordPullRequestIntent persists an uncertain PR creation attempt. Number and
 // URL are the ownership evidence used by recovery; branch/head-only values are
 // retained for compatibility but must not authorize remote metadata mutation.
