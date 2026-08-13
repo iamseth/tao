@@ -588,10 +588,12 @@ agent-specific guidance.
 
 ### Releasing (maintainers)
 
-Stable releases are built and published by GitHub Actions with GoReleaser,
-including platform archives, checksums, and a Homebrew formula update. Before
-releasing, configure the `HOMEBREW_TAP_GITHUB_TOKEN` repository secret with
-write access to `iamseth/homebrew-tap`.
+Beta and stable releases are built by GitHub Actions with GoReleaser, including
+platform archives and checksums. Betas are GitHub prereleases installed directly
+from their release assets; they do not update Homebrew or the stable-only
+`tao update` channel. Stable releases also update the Homebrew cask and require
+the `HOMEBREW_TAP_GITHUB_TOKEN` repository secret with write access to
+`iamseth/homebrew-tap`.
 
-Follow the complete preparation, tagging, verification, and failure procedure in
-the [maintainer releasing guide](docs/releasing.md).
+Follow the complete snapshot, preparation, tagging, verification, and immutable
+failure procedure in the [maintainer releasing guide](docs/releasing.md).

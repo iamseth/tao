@@ -4,10 +4,16 @@ All notable changes to Tao are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project intends to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-Weeks begin on Monday. Tao has not published or tagged a release yet, so the
-complete project history is listed under **Unreleased**.
+Weeks begin on Monday. Beta releases may change before Tao reaches its first
+stable release.
 
 ## [Unreleased]
+
+## [0.1.0-beta.1] - 2026-08-13
+
+Tao's first public beta introduces the complete local-first planning, execution,
+review, rework, and integration workflow. Beta binaries are available for macOS
+and Linux on AMD64 and ARM64.
 
 ### Week of 2026-08-10
 

@@ -9,6 +9,8 @@ import re
 from pathlib import Path
 
 WEEK_HEADING = re.compile(r"(?m)^### Week of (\d{4}-\d{2}-\d{2})$")
+UNRELEASED_HEADING = re.compile(r"(?m)^## \[Unreleased\]$")
+LEVEL_TWO_HEADING = re.compile(r"(?m)^## ")
 ALLOWED_CATEGORIES = {"Added", "Changed", "Fixed", "Reliability", "Documentation"}
 
 
@@ -22,11 +24,25 @@ def parse_week(value: str) -> dt.date:
     return week
 
 
+def unreleased_span(changelog: str) -> tuple[int, int]:
+    heading = UNRELEASED_HEADING.search(changelog)
+    if heading is None:
+        raise SystemExit("CHANGELOG.md does not contain an [Unreleased] section")
+    following = LEVEL_TWO_HEADING.search(changelog, heading.end())
+    return heading.end(), following.start() if following else len(changelog)
+
+
+def unreleased_weeks(changelog: str) -> list[re.Match[str]]:
+    start, end = unreleased_span(changelog)
+    return list(WEEK_HEADING.finditer(changelog, start, end))
+
+
 def section_span(changelog: str, week: str) -> tuple[int, int] | None:
-    matches = list(WEEK_HEADING.finditer(changelog))
+    _, unreleased_end = unreleased_span(changelog)
+    matches = unreleased_weeks(changelog)
     for index, match in enumerate(matches):
         if match.group(1) == week:
-            end = matches[index + 1].start() if index + 1 < len(matches) else len(changelog)
+            end = matches[index + 1].start() if index + 1 < len(matches) else unreleased_end
             return match.start(), end
     return None
 
@@ -88,7 +104,7 @@ def apply(changelog: str, week: str, generated: str) -> str:
             result += "\n" + suffix
         return result.rstrip() + "\n"
 
-    matches = list(WEEK_HEADING.finditer(changelog))
+    matches = unreleased_weeks(changelog)
     target = parse_week(week)
     for match in matches:
         existing = parse_week(match.group(1))
@@ -97,13 +113,8 @@ def apply(changelog: str, week: str, generated: str) -> str:
             suffix = changelog[match.start() :].lstrip()
             return (prefix + "\n\n" + section.rstrip() + "\n\n" + suffix).rstrip() + "\n"
 
-    if matches:
-        return (changelog.rstrip() + "\n\n" + section.rstrip()).rstrip() + "\n"
-
-    unreleased = re.search(r"(?m)^## \[Unreleased\]$", changelog)
-    if unreleased is None:
-        raise SystemExit("CHANGELOG.md does not contain an [Unreleased] section")
-    insert_at = unreleased.end()
+    unreleased_start, unreleased_end = unreleased_span(changelog)
+    insert_at = unreleased_end if matches else unreleased_start
     prefix = changelog[:insert_at].rstrip()
     suffix = changelog[insert_at:].lstrip()
     result = prefix + "\n\n" + section.rstrip() + "\n"

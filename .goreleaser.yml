@@ -1,6 +1,6 @@
 # GoReleaser configuration for Tao releases.
 # Builds macOS and Linux artifacts, publishes a GitHub Release, and updates the
-# iamseth/homebrew-tap formula. Windows is intentionally out of scope.
+# iamseth/homebrew-tap cask for stable tags. Windows is intentionally out of scope.
 version: 2
 
 project_name: tao
@@ -51,8 +51,10 @@ release:
   github:
     owner: iamseth
     name: tao
+  prerelease: auto
+  make_latest: '{{ if .Prerelease }}false{{ else }}true{{ end }}'
 
-brews:
+homebrew_casks:
   - name: tao
     repository:
       owner: iamseth
@@ -61,10 +63,5 @@ brews:
     homepage: https://github.com/iamseth/tao
     description: Tao command-line tool
     license: MIT
-    # Keep the formula test self-contained: it must not require Pi, Claude, or
-    # Homebrew-managed external services. Exercising the version output is
-    # sufficient and hermetic.
-    test: |
-      assert_match version.to_s, shell_output("#{bin}/tao version")
-    install: |
-      bin.install "tao"
+    binaries:
+      - tao

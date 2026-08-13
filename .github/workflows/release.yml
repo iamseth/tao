@@ -3,16 +3,78 @@ name: Release
 on:
   push:
     tags:
-      # Semantic version tags only, e.g. v0.1.0, v1.2.3.
-      - "v[0-9]+.[0-9]+.[0-9]+"
+      # The validation step below accepts stable and numbered beta SemVer tags.
+      - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
   release:
+    if: github.event_name == 'push'
     name: Build and publish release
     runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate release tag and notes
+        id: release
+        env:
+          TAG: ${{ github.ref_name }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]]; then
+            echo "unsupported release tag: $TAG" >&2
+            echo "expected vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-beta.NUMBER" >&2
+            exit 1
+          fi
+
+          notes=".github/release-notes/${TAG}.md"
+          if [ ! -s "$notes" ]; then
+            echo "release notes are required at $notes" >&2
+            exit 1
+          fi
+
+          args="release --clean --release-notes=${notes}"
+          if [[ "$TAG" == *-beta.* ]]; then
+            # Beta releases are GitHub prereleases and do not update the stable tap.
+            args="$args --skip=homebrew"
+          elif [ -z "${HOMEBREW_TAP_GITHUB_TOKEN:-}" ]; then
+            echo "HOMEBREW_TAP_GITHUB_TOKEN is required for stable releases" >&2
+            exit 1
+          fi
+          echo "args=$args" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.2"
+
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+
+      - name: Verify release commit
+        run: make verify
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: ${{ steps.release.outputs.args }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+
+  snapshot:
+    if: github.event_name == 'workflow_dispatch'
+    name: Build release snapshot
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -24,18 +86,23 @@ jobs:
         with:
           go-version: "1.26.2"
 
-      # Gate publishing on the canonical repository validation commands.
-      - name: Test
-        run: make test
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
 
-      - name: Build
-        run: make build
+      - name: Verify release candidate
+        run: make verify
 
-      - name: Run GoReleaser
+      - name: Build snapshot
         uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          args: release --snapshot --clean
+
+      - name: Upload snapshot archives
+        uses: actions/upload-artifact@v4
+        with:
+          name: tao-release-snapshot
+          path: |
+            dist/*.tar.gz
+            dist/checksums.txt
+          if-no-files-found: error

@@ -73,6 +73,27 @@ class ChangelogWeekTest(unittest.TestCase):
         headings = [match.group(1) for match in changelog_week.WEEK_HEADING.finditer(result)]
         self.assertEqual(headings, ["2026-08-10", "2026-08-03", "2026-07-27"])
 
+    def test_does_not_extract_or_replace_a_released_week(self):
+        released = """# Changelog
+
+## [Unreleased]
+
+## [0.1.0-beta.1] - 2026-08-13
+
+""" + WEEK_10
+        self.assertEqual(changelog_week.extract(released, "2026-08-10"), "")
+
+        current = """### Week of 2026-08-10
+
+#### Added
+
+- Users get a post-release improvement.
+"""
+        result = changelog_week.apply(released, "2026-08-10", current)
+        self.assertIn("Users get a post-release improvement", result)
+        self.assertIn("Users can do ten", result)
+        self.assertLess(result.index("post-release"), result.index("## [0.1.0-beta.1]"))
+
     def test_rejects_non_monday(self):
         with self.assertRaises(SystemExit):
             changelog_week.parse_week("2026-08-11")
