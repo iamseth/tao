@@ -50,6 +50,7 @@ type Options struct {
 type GitClient interface {
 	Root() string
 	DefaultBranch(ctx context.Context) (string, error)
+	CurrentBranch(ctx context.Context) (string, error)
 	RevParse(ctx context.Context, rev string) (string, error)
 	CommitMessage(ctx context.Context, rev string) (string, error)
 	MergeBase(ctx context.Context, a string, b string) (string, error)
@@ -57,13 +58,16 @@ type GitClient interface {
 	StatusPorcelain(ctx context.Context) (string, error)
 	ChangedFiles(ctx context.Context, revspec string) ([]string, error)
 	Diff(ctx context.Context, revspec string) (string, error)
+	DiffStat(ctx context.Context, revspec string) (string, error)
 	DirtyFingerprint(ctx context.Context) (gitops.DirtyFingerprint, error)
 	Checkout(ctx context.Context, branch string) error
 	MergeFFOnly(ctx context.Context, ref string) error
 	MergeSquash(ctx context.Context, ref string) error
 	HasStagedChanges(ctx context.Context) (bool, error)
 	CleanUntracked(ctx context.Context) error
+	Add(ctx context.Context, paths ...string) error
 	Commit(ctx context.Context, message string) error
+	UpdateRefCAS(ctx context.Context, ref, newSHA, oldSHA string) error
 	Rebase(ctx context.Context, onto string) error
 	RebaseAbort(ctx context.Context) error
 	ResetHard(ctx context.Context, ref string) error

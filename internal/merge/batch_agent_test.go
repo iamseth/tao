@@ -498,13 +498,7 @@ func TestBatchAgentResumesLegacyApplyingIntentBeforeCommit(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(integrationRoot, "README.md"), []byte("interrupted resolved edit\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	stage, ok := git.(interface {
-		Add(context.Context, ...string) error
-	})
-	if !ok {
-		t.Fatal("Git client cannot stage applying intent fixture")
-	}
-	if err := stage.Add(context.Background(), "."); err != nil {
+	if err := git.Add(context.Background(), "."); err != nil {
 		t.Fatal(err)
 	}
 	state.Integrations[0].Status = batchIntegrationApplying

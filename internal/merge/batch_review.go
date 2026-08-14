@@ -495,13 +495,7 @@ func (r BatchAggregateReviewer) finishAggregateRework(ctx context.Context, git G
 	case agentEditIssueNoChanges, agentEditIssueUnsafePaths:
 		return state, errors.New("aggregate rework has no safe edits matching durable intent")
 	}
-	stage, ok := git.(interface {
-		Add(context.Context, ...string) error
-	})
-	if !ok {
-		return state, errors.New("git client cannot stage aggregate rework")
-	}
-	if err := stage.Add(ctx, "."); err != nil {
+	if err := git.Add(ctx, "."); err != nil {
 		return state, fmt.Errorf("stage aggregate rework: %w", err)
 	}
 	if err := git.Commit(ctx, state.Review.CommitMessage); err != nil {
@@ -556,13 +550,10 @@ func aggregateReworkCommitMatches(ctx context.Context, git GitClient, state Batc
 }
 
 func (r BatchAggregateReviewer) renderPrompt(ctx context.Context, git GitClient, state BatchState, command, verification string) (string, error) {
-	stat := state.DefaultStartSHA + ".." + state.IntegrationHead
-	if client, ok := git.(interface {
-		DiffStat(context.Context, string) (string, error)
-	}); ok {
-		if value, err := client.DiffStat(ctx, stat); err == nil {
-			stat = value
-		}
+	revspec := state.DefaultStartSHA + ".." + state.IntegrationHead
+	stat, err := git.DiffStat(ctx, revspec)
+	if err != nil {
+		return "", fmt.Errorf("render aggregate review diff stat for %s: %w", revspec, err)
 	}
 	var candidates []string
 	for _, candidate := range effectiveBatchCandidates(state) {

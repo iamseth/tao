@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,6 +37,86 @@ func (s *batchReviewTestStore) WriteAggregateReview(_ string, attempt int, outpu
 	}
 	name := filepath.Join(s.dir, fmt.Sprintf("aggregate-review-%03d.md", attempt))
 	return filepath.Base(name), os.WriteFile(name, []byte(output), 0o600)
+}
+
+func TestBatchReviewPromptUsesConfiguredDiffStat(t *testing.T) {
+	state := BatchState{ID: "batch-1", DefaultStartSHA: "base", IntegrationHead: "head"}
+	git := &fakeGitClient{diffStat: " feature.go | 4 +++-"}
+
+	prompt, err := (BatchAggregateReviewer{}).renderPrompt(context.Background(), git, state, "go test ./...", "ok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, git.diffStat) {
+		t.Fatalf("aggregate review prompt omitted configured diff stat:\n%s", prompt)
+	}
+	if !slices.Contains(git.calls, "diff-stat base..head") {
+		t.Fatalf("diff stat call missing: %#v", git.calls)
+	}
+}
+
+func TestBatchReviewDiffStatFailureBlocksResumably(t *testing.T) {
+	root := t.TempDir()
+	state := BatchState{ID: "batch-1", Status: BatchStatusReviewing, RepoRoot: root, DefaultStartSHA: "base", IntegrationHead: "head"}
+	git := &fakeGitClient{
+		root:        root,
+		revParse:    map[string]string{"HEAD": "head"},
+		diffStatErr: errors.New("diff stat unavailable"),
+	}
+	runner := func(_ context.Context, _ string, _ string, _ []string, _ io.Writer, _ io.Writer) error { return nil }
+	reviewer := BatchAggregateReviewer{
+		Store:   &batchReviewTestStore{dir: t.TempDir()},
+		Service: Service{Git: git, Runner: runner},
+		Agent: batchReviewAgentFunc(func(context.Context, string, string) (string, error) {
+			return reviewJSON("approve", "green", ""), nil
+		}),
+	}
+
+	got, err := reviewer.Review(context.Background(), state, root, BatchReviewOptions{VerifyCommand: "true"})
+	if err == nil || !strings.Contains(err.Error(), "render aggregate review diff stat for base..head: diff stat unavailable") {
+		t.Fatalf("expected contextual diff stat failure, got state=%+v err=%v", got.State, err)
+	}
+	if got.State.Status != BatchStatusBlocked || got.State.BlockKind != BatchBlockKindResumable {
+		t.Fatalf("diff stat failure did not block resumably: %+v", got.State)
+	}
+	if !slices.Contains(git.calls, "diff-stat base..head") {
+		t.Fatalf("diff stat call missing: %#v", git.calls)
+	}
+}
+
+func TestFinishAggregateReworkStagesDotImmediatelyBeforeExactCommit(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "reworked.txt"), []byte("fixed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	message, err := aggregateProposedResolutionCommitMessage(plan.ReviewCommitMessage{
+		Subject: "fix(batch): resolve aggregate findings",
+		Body:    "What:\nResolve the aggregate findings.\n\nWhy:\nKeep the combined batch correct.",
+	}, "batch-1", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := BatchState{
+		ID: "batch-1", IntegrationHead: "parent", Attempts: BatchAttempts{AggregateRework: 1},
+		Review: &BatchReview{Status: "applying", CommitMessage: message, ResolutionPaths: []string{"reworked.txt"}},
+	}
+	git := &fakeGitClient{
+		root:     root,
+		status:   "?? reworked.txt\n",
+		revParse: map[string]string{"HEAD": "committed-head"},
+	}
+
+	got, err := (BatchAggregateReviewer{Store: &batchReviewTestStore{dir: t.TempDir()}}).finishAggregateRework(context.Background(), git, state, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.IntegrationHead != "committed-head" {
+		t.Fatalf("integration head = %q, want committed-head", got.IntegrationHead)
+	}
+	addIndex := slices.Index(git.calls, "add .")
+	if addIndex < 0 || addIndex+1 >= len(git.calls) || git.calls[addIndex+1] != "commit "+message {
+		t.Fatalf("Add(.) was not immediately followed by the exact durable commit: %#v", git.calls)
+	}
 }
 
 func TestBatchReviewApprovePersistsExactEvidenceAndLeavesDefaultAndSourcesAlone(t *testing.T) {

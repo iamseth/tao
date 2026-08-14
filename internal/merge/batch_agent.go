@@ -337,9 +337,6 @@ func snapshotBatchProtectedRefs(ctx context.Context, git GitClient, state BatchS
 
 func compareBatchProtectedRefs(ctx context.Context, git GitClient, before batchProtectedRefs) error {
 	const missingRefSHA = "0000000000000000000000000000000000000000"
-	restorer, canRestore := git.(interface {
-		UpdateRefCAS(context.Context, string, string, string) error
-	})
 	refs := make([]string, 0, len(before))
 	for ref := range before {
 		refs = append(refs, ref)
@@ -359,11 +356,7 @@ func compareBatchProtectedRefs(ctx context.Context, git GitClient, before batchP
 		} else {
 			mutations = append(mutations, fmt.Errorf("%s moved from %s to %s", ref, want, got))
 		}
-		if !canRestore {
-			restoreErrors = append(restoreErrors, fmt.Errorf("restore %s: Git client does not support guarded ref updates", ref))
-			continue
-		}
-		if err := restorer.UpdateRefCAS(ctx, ref, want, got); err != nil {
+		if err := git.UpdateRefCAS(ctx, ref, want, got); err != nil {
 			restoreErrors = append(restoreErrors, fmt.Errorf("restore %s to %s: %w", ref, want, err))
 		}
 	}
@@ -494,17 +487,11 @@ func (r BatchAgentResolver) finishResolvedCandidate(ctx context.Context, state B
 	case agentEditIssueNoChanges, agentEditIssueConflictMarkers, agentEditIssueUnscannablePaths:
 		return state, false, false, fmt.Errorf("agent left unresolved conflicts for %s", planID)
 	}
-	stage, ok := git.(interface {
-		Add(context.Context, ...string) error
-	})
-	if !ok {
-		return state, false, false, errors.New("git client cannot stage agent resolution")
-	}
 	stagePaths := changed
 	if resolution.ContentFingerprint == "" {
 		stagePaths = []string{"."}
 	}
-	if err := stage.Add(ctx, stagePaths...); err != nil {
+	if err := git.Add(ctx, stagePaths...); err != nil {
 		return state, false, false, fmt.Errorf("stage agent resolution: %w", err)
 	}
 	status, err := git.StatusPorcelain(ctx)

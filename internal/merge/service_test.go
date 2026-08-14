@@ -23,6 +23,8 @@ type fakeGitClient struct {
 	root                string
 	defaultBranch       string
 	defaultErr          error
+	currentBranch       string
+	currentBranchErr    error
 	revParse            map[string]string
 	revParseSequence    map[string][]string
 	revParseErrors      map[string][]error
@@ -39,6 +41,8 @@ type fakeGitClient struct {
 	changedErr          error
 	diff                string
 	diffErr             error
+	diffStat            string
+	diffStatErr         error
 	dirtyFingerprints   []gitops.DirtyFingerprint
 	dirtyFingerprintErr error
 	checkoutErr         error
@@ -47,7 +51,9 @@ type fakeGitClient struct {
 	stagedChanges       bool
 	stagedChangesErr    error
 	cleanErr            error
+	addErr              error
 	commitErr           error
+	updateRefCASErr     error
 	rebaseErr           error
 	rebaseAbortErr      error
 	resetHardErr        error
@@ -62,6 +68,12 @@ func (f *fakeGitClient) DefaultBranch(ctx context.Context) (string, error) {
 	_ = ctx
 	f.calls = append(f.calls, "default-branch")
 	return f.defaultBranch, f.defaultErr
+}
+
+func (f *fakeGitClient) CurrentBranch(ctx context.Context) (string, error) {
+	_ = ctx
+	f.calls = append(f.calls, "current-branch")
+	return f.currentBranch, f.currentBranchErr
 }
 
 func (f *fakeGitClient) RevParse(ctx context.Context, rev string) (string, error) {
@@ -127,6 +139,12 @@ func (f *fakeGitClient) Diff(ctx context.Context, revspec string) (string, error
 	return f.diff, f.diffErr
 }
 
+func (f *fakeGitClient) DiffStat(ctx context.Context, revspec string) (string, error) {
+	_ = ctx
+	f.calls = append(f.calls, "diff-stat "+revspec)
+	return f.diffStat, f.diffStatErr
+}
+
 func (f *fakeGitClient) DirtyFingerprint(ctx context.Context) (gitops.DirtyFingerprint, error) {
 	_ = ctx
 	f.calls = append(f.calls, "dirty-fingerprint")
@@ -171,10 +189,22 @@ func (f *fakeGitClient) CleanUntracked(ctx context.Context) error {
 	return f.cleanErr
 }
 
+func (f *fakeGitClient) Add(ctx context.Context, paths ...string) error {
+	_ = ctx
+	f.calls = append(f.calls, "add "+strings.Join(paths, " "))
+	return f.addErr
+}
+
 func (f *fakeGitClient) Commit(ctx context.Context, message string) error {
 	_ = ctx
 	f.calls = append(f.calls, "commit "+message)
 	return f.commitErr
+}
+
+func (f *fakeGitClient) UpdateRefCAS(ctx context.Context, ref, newSHA, oldSHA string) error {
+	_ = ctx
+	f.calls = append(f.calls, "update-ref-cas "+ref+" "+newSHA+" "+oldSHA)
+	return f.updateRefCASErr
 }
 
 func (f *fakeGitClient) Rebase(ctx context.Context, onto string) error {

@@ -269,13 +269,7 @@ func cleanRev(ctx context.Context, git GitClient, rev string) (string, error) {
 }
 
 func requireCurrentBranch(ctx context.Context, git GitClient, expected, label string) error {
-	client, ok := git.(interface {
-		CurrentBranch(context.Context) (string, error)
-	})
-	if !ok {
-		return fmt.Errorf("%s Git client cannot report current branch", label)
-	}
-	actual, err := client.CurrentBranch(ctx)
+	actual, err := git.CurrentBranch(ctx)
 	if err != nil {
 		return fmt.Errorf("inspect %s current branch: %w", label, err)
 	}
