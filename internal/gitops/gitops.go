@@ -73,6 +73,45 @@ func (c Client) RemoteURL(ctx context.Context) (string, error) {
 	return c.output(ctx, "config", "--get", "remote.origin.url")
 }
 
+// OriginPushURL returns the configured push URL for the origin remote.
+func (c Client) OriginPushURL(ctx context.Context) (string, error) {
+	return c.output(ctx, "remote", "get-url", "--push", "origin")
+}
+
+// OriginRemoteHead returns the exact origin head for branch when it exists.
+func (c Client) OriginRemoteHead(ctx context.Context, branch string) (string, bool, error) {
+	ref := "refs/heads/" + branch
+	out, err := c.rawOutput(ctx, "ls-remote", "--heads", "origin", ref)
+	if err != nil {
+		return "", false, err
+	}
+	for line := range strings.SplitSeq(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) != 2 || fields[1] != ref {
+			return "", false, fmt.Errorf("origin remote head for branch %q: unexpected git ls-remote output %q", branch, line)
+		}
+		return fields[0], true, nil
+	}
+	return "", false, nil
+}
+
+// PushUpstream pushes branch to origin and configures its upstream.
+func (c Client) PushUpstream(ctx context.Context, branch string) error {
+	return c.run(ctx, "push", "--set-upstream", "origin", branch)
+}
+
+// PushUpstreamWithLease pushes branch to its exact origin ref under a lease.
+// An empty expectedHead requires the remote ref to be absent.
+func (c Client) PushUpstreamWithLease(ctx context.Context, branch, expectedHead string) error {
+	ref := "refs/heads/" + branch
+	lease := "--force-with-lease=" + ref + ":" + expectedHead
+	return c.run(ctx, "push", "--set-upstream", lease, "origin", branch+":"+ref)
+}
+
 // InsideWorkTree reports whether the bound repository root is inside a Git work tree.
 func (c Client) InsideWorkTree(ctx context.Context) (bool, error) {
 	out, err := c.output(ctx, "rev-parse", "--is-inside-work-tree")

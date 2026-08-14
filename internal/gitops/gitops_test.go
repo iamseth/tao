@@ -421,6 +421,92 @@ func TestLocalBranchExistsParsesListedBranches(t *testing.T) {
 	}
 }
 
+func TestPullRequestRemoteAndPushOperationsConstructExactCommands(t *testing.T) {
+	branch := "feature/native-pr-format"
+	ref := "refs/heads/" + branch
+	runner := &fakeRunner{
+		outputs: map[string]string{
+			key("-C", "/repo", "config", "--get", "remote.origin.url"):             "git@github.com:owner/fetch.git\n",
+			key("-C", "/repo", "remote", "get-url", "--push", "origin"):            "git@github.com:owner/push.git\n",
+			key("-C", "/repo", "ls-remote", "--heads", "origin", ref):              "abc123\t" + ref + "\n",
+			key("-C", "/repo", "ls-remote", "--heads", "origin", "refs/heads/new"): "",
+		},
+		stderr:   map[string]string{},
+		failures: map[string]error{},
+	}
+	client := NewClient("/repo", runner.run)
+	ctx := context.Background()
+
+	remoteURL, err := client.RemoteURL(ctx)
+	if err != nil || remoteURL != "git@github.com:owner/fetch.git" {
+		t.Fatalf("RemoteURL() = %q, %v", remoteURL, err)
+	}
+	pushURL, err := client.OriginPushURL(ctx)
+	if err != nil || pushURL != "git@github.com:owner/push.git" {
+		t.Fatalf("OriginPushURL() = %q, %v", pushURL, err)
+	}
+	head, found, err := client.OriginRemoteHead(ctx, branch)
+	if err != nil || !found || head != "abc123" {
+		t.Fatalf("OriginRemoteHead() = %q, %v, %v", head, found, err)
+	}
+	if head, found, err := client.OriginRemoteHead(ctx, "new"); err != nil || found || head != "" {
+		t.Fatalf("missing OriginRemoteHead() = %q, %v, %v", head, found, err)
+	}
+	if err := client.PushUpstream(ctx, branch); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.PushUpstreamWithLease(ctx, "new", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.PushUpstreamWithLease(ctx, branch, "abc123"); err != nil {
+		t.Fatal(err)
+	}
+
+	want := [][]string{
+		{"-C", "/repo", "config", "--get", "remote.origin.url"},
+		{"-C", "/repo", "remote", "get-url", "--push", "origin"},
+		{"-C", "/repo", "ls-remote", "--heads", "origin", ref},
+		{"-C", "/repo", "ls-remote", "--heads", "origin", "refs/heads/new"},
+		{"-C", "/repo", "push", "--set-upstream", "origin", branch},
+		{"-C", "/repo", "push", "--set-upstream", "--force-with-lease=refs/heads/new:", "origin", "new:refs/heads/new"},
+		{"-C", "/repo", "push", "--set-upstream", "--force-with-lease=" + ref + ":abc123", "origin", branch + ":" + ref},
+	}
+	if len(runner.calls) != len(want) {
+		t.Fatalf("calls = %#v, want %d calls", runner.calls, len(want))
+	}
+	for i, args := range want {
+		if !reflect.DeepEqual(runner.calls[i].args, args) {
+			t.Fatalf("call %d args mismatch: want %#v got %#v", i, args, runner.calls[i].args)
+		}
+	}
+}
+
+func TestPullRequestRemoteAndPushOperationsReportErrors(t *testing.T) {
+	branch := "feature/native-pr-format"
+	ref := "refs/heads/" + branch
+	lookup := key("-C", "/repo", "ls-remote", "--heads", "origin", ref)
+	push := key("-C", "/repo", "push", "--set-upstream", "--force-with-lease="+ref+":abc123", "origin", branch+":"+ref)
+	runner := &fakeRunner{
+		outputs: map[string]string{
+			lookup: "abc123\trefs/heads/other\n",
+		},
+		stderr: map[string]string{
+			push: "rejected: stale info\n",
+		},
+		failures: map[string]error{
+			push: errors.New("exit status 1"),
+		},
+	}
+	client := NewClient("/repo", runner.run)
+
+	if _, _, err := client.OriginRemoteHead(context.Background(), branch); err == nil || !strings.Contains(err.Error(), "unexpected git ls-remote output") {
+		t.Fatalf("OriginRemoteHead() error = %v", err)
+	}
+	if err := client.PushUpstreamWithLease(context.Background(), branch, "abc123"); err == nil || !strings.Contains(err.Error(), "git push --set-upstream") || !strings.Contains(err.Error(), "rejected: stale info") {
+		t.Fatalf("PushUpstreamWithLease() error = %v", err)
+	}
+}
+
 func TestRemoteTrackingBranchExistsMatchesExactBranchAcrossRemotes(t *testing.T) {
 	runner := &fakeRunner{
 		outputs: map[string]string{

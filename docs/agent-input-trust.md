@@ -114,7 +114,7 @@ This audit inventories places where Tao consumes data written by an agent or by 
 ## PR body drafting and PR command output
 
 - **Agent-authored input:** Optional Markdown body text from a best-effort PR-body agent session.
-- **Consumed by:** `internal/run/pull_request.go` writes the body to a temp file, then Tao-owned `git push` and `gh pr create/view` commands create or find the PR.
+- **Consumed by:** `internal/prbody` validates or deterministically rebuilds the body, `internal/run/pull_request.go` orchestrates the lifecycle and writes the body to a temp file, `internal/run/pull_request_push.go` applies Tao-owned push policy, and `internal/forge/github.go` runs `gh pr create/view` and parses forge responses.
 - **Current trust assumption:** The agent only drafts prose; branch push, PR creation, existing-PR detection, and URL/number parsing are Tao-owned.
 - **Concrete failure mode:** The body can be misleading or oversized, but a body-agent failure falls back to a deterministic Tao body and no longer blocks completed work.
 - **Severity:** Low to medium.
@@ -155,8 +155,8 @@ These are bounded validation, normalization, or ownership changes addressed from
 2. **Fixed in slice 007** — `internal/plan/artifact_io.go` replaced `readEvents` scanner usage with a bounded JSONL reader that reports malformed or oversized `events.jsonl` lines as warnings and skips them instead of failing plan load; covered by `internal/plan/artifact_io_test.go`.
 3. **Fixed in slice 007** — `internal/run/review.go` caps review JSON block size, structured review summary length, findings count, finding field lengths, and negative finding line numbers before persisting review metadata; covered by `internal/run/review_test.go`.
 4. **Fixed in slice 007** — `internal/rework/generate.go` normalizes review finding file paths and skips absolute, empty, parent-traversing, wildcard, and broad `...` paths when generating deterministic rework slices; covered by `internal/rework/generate_test.go`.
-5. **Fixed in slice 007** — `internal/run/pull_request.go` rejects PR extraction when captured output contains multiple distinct GitHub pull request URLs while allowing repeated identical URLs; covered by `internal/run/pull_request_test.go`.
-6. **Fixed after slice 007** — `internal/run/pull_request.go` moved automatic `tao run --pull-request` creation to Tao-owned `git push` plus `gh pr create/view`; agents can only best-effort draft the Markdown body, with deterministic fallback.
+5. **Fixed in slice 007** — `internal/forge/github.go` rejects PR extraction when captured output contains multiple distinct GitHub pull request URLs while allowing repeated identical URLs; covered by `internal/forge/github_test.go`.
+6. **Fixed after slice 007** — `internal/run/pull_request.go`, `internal/run/pull_request_push.go`, and `internal/forge/github.go` keep automatic `tao run --pull-request` creation behind Tao-owned push and forge commands; agents can only best-effort draft the Markdown body, with deterministic fallback.
 7. **Fixed in slice 007** — `internal/plan/validate.go` now warns for unsafe `expected_files` entries with absolute paths or `..` traversal, while the existing broad-glob guardrail continues to warn for broad commit-scope patterns; covered by `internal/plan/validate_test.go`.
 8. **Fixed in slice 007** — `internal/plan/telemetry.go` clamps negative token, cost, message, and tool-call metrics to zero when summarizing agent telemetry; covered by `internal/plan/telemetry_test.go`.
 9. **Fixed by `tao slice-blocked`** — prompted exceptional stops now use bounded inputs and Tao-owned canonical state, slice, and event mutations, including optional `verification_command_invalid` evidence.

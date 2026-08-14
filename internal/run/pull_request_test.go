@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -117,6 +116,7 @@ func TestServiceExecutePullRequestRejectsCurrentMode(t *testing.T) {
 func TestDeterministicPullRequestCreatorPushesLabelsAssignsAndCreatesNativePullRequest(t *testing.T) {
 	detail := approvedPullRequestDetail(plan.ChangeTypeFeat, "head123")
 	createdAt := time.Date(2026, 5, 21, 20, 0, 0, 0, time.UTC)
+	currentTime := createdAt.Add(-15 * time.Minute)
 	var calls []string
 	var createdBody string
 	runner := pullRequestCommandRunner(t, &calls, func(args []string, stdout io.Writer, stderr io.Writer) error {
@@ -140,9 +140,12 @@ func TestDeterministicPullRequestCreatorPushesLabelsAssignsAndCreatesNativePullR
 		if strings.Contains(run.DraftBody, "plan-a") || run.BaseBranch != "main" || run.Branch != "feature/plan-a" {
 			t.Fatalf("unexpected body generation input: %+v", run)
 		}
+		// Model a long body-agent session. URL-only gh output must use the
+		// post-generation clock value, not the earlier discovery time.
+		currentTime = createdAt
 		return run.DraftBody, nil
 	})
-	creator := deterministicPullRequestCreator{execution: testRunExecution(ExecutionConfig{}, RunDependencies{CommandRunner: runner, Now: func() time.Time { return createdAt }}), bodyGenerator: bodyGenerator}
+	creator := deterministicPullRequestCreator{execution: testRunExecution(ExecutionConfig{}, RunDependencies{CommandRunner: runner, Now: func() time.Time { return currentTime }}), bodyGenerator: bodyGenerator}
 
 	pr, err := creator.CreatePullRequest(context.Background(), PullRequestRun{PlanDir: detail.Dir, PlanID: "plan-a", Detail: detail, RepoRoot: "/repo", Branch: "feature/plan-a", HeadSHA: "head123"})
 	if err != nil {
@@ -158,7 +161,7 @@ func TestDeterministicPullRequestCreatorPushesLabelsAssignsAndCreatesNativePullR
 		"git remote get-url --push origin",
 		"gh pr list --base main --head feature/plan-a --state open --json number,url,createdAt,labels,assignees,headRefName,headRepository,headRepositoryOwner",
 		"gh label list --search feature --json name --limit 100",
-		"gh label create feature --color " + pullRequestLabelColor + " --description " + pullRequestLabelDescription,
+		"gh label create feature --color 1D76DB --description Repository change category",
 		"gh pr create --base main --head feature/plan-a --title feat(pr): create native pull requests",
 	} {
 		if !hasCallPrefix(calls, want) {
@@ -170,7 +173,7 @@ func TestDeterministicPullRequestCreatorPushesLabelsAssignsAndCreatesNativePullR
 	requireStringOrder(t, calls, "git push --set-upstream --force-with-lease=refs/heads/feature/plan-a: origin feature/plan-a:refs/heads/feature/plan-a", "git remote get-url --push origin")
 	requireStringOrder(t, calls, "git remote get-url --push origin", findCall)
 	requireStringOrder(t, calls, findCall, "gh label list --search feature --json name --limit 100")
-	requireStringOrder(t, calls, "gh label list --search feature --json name --limit 100", "gh label create feature --color "+pullRequestLabelColor+" --description "+pullRequestLabelDescription)
+	requireStringOrder(t, calls, "gh label list --search feature --json name --limit 100", "gh label create feature --color 1D76DB --description Repository change category")
 	createCall := calls[len(calls)-1]
 	if !strings.Contains(createCall, "--label feature") || !strings.Contains(createCall, "--assignee @me") {
 		t.Fatalf("PR create call missing label or assignment: %q", createCall)
@@ -320,203 +323,6 @@ func TestDeterministicPullRequestCreatorRejectsNoisyAgentBody(t *testing.T) {
 	requireNativePullRequestBody(t, body, "")
 	if !strings.Contains(out.String(), "contains forbidden Tao-specific language") && !strings.Contains(out.String(), "contains the plan ID") {
 		t.Fatalf("expected noisy-body warning, got %q", out.String())
-	}
-}
-
-func TestDeterministicPullRequestBodyEscapesCommitProposalHeadings(t *testing.T) {
-	detail := approvedPullRequestDetail(plan.ChangeTypeFeat, "head123")
-	detail.State.Plan.Review.CommitMessage.Body = "What:\nCreate native pull requests.\n\n## Notes\n\nPreserve reviewer context.\n\nRelease notes\n-------------\n\nWhy:\nMake repository changes familiar.\n\n  ## Rationale\n\nKeep the fallback structurally valid."
-	if _, _, err := pullRequestPreflight(PullRequestRun{Detail: detail, HeadSHA: "head123"}); err != nil {
-		t.Fatalf("multiline commit proposal is invalid: %v", err)
-	}
-
-	body, err := deterministicPullRequestBody(PullRequestRun{Detail: detail}, "main", "title", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(body, `\## Notes`) || !strings.Contains(body, `  \## Rationale`) || !strings.Contains(body, "Release notes\n\\-------------") {
-		t.Fatalf("deterministic body did not escape proposal headings: %q", body)
-	}
-	if err := validatePullRequestBody(body, detail.State.Plan.ID, "", body); err != nil {
-		t.Fatalf("deterministic fallback body rejected: %v", err)
-	}
-}
-
-func TestDeterministicPullRequestBodySanitizesForbiddenReviewerNarrative(t *testing.T) {
-	for _, phrase := range []string{"Tao", "slice", "lifecycle", "squash and merge", "merge guidance", "cleanup --dry-run"} {
-		t.Run(phrase, func(t *testing.T) {
-			detail := approvedPullRequestDetail(plan.ChangeTypeFeat, "head123")
-			detail.State.Plan.Review.CommitMessage.Body = fmt.Sprintf("What:\nDocument %s behavior.\n\nWhy:\nClarify %s behavior for reviewers.", phrase, phrase)
-			if _, _, err := pullRequestPreflight(PullRequestRun{Detail: detail, HeadSHA: "head123"}); err != nil {
-				t.Fatalf("commit proposal containing %q is invalid: %v", phrase, err)
-			}
-
-			body, err := deterministicPullRequestBody(PullRequestRun{PlanID: detail.State.Plan.ID, Detail: detail}, "main", "title", "")
-			if err != nil {
-				t.Fatalf("deterministic body containing %q: %v", phrase, err)
-			}
-			if err := validatePullRequestBody(body, detail.State.Plan.ID, "", body); err != nil {
-				t.Fatalf("sanitized deterministic body containing %q rejected: %v", phrase, err)
-			}
-		})
-	}
-}
-
-func TestDeterministicPullRequestBodyAllowsTaoPathsAndOmitsPrefixedTaoCommands(t *testing.T) {
-	detail := approvedPullRequestDetail(plan.ChangeTypeFeat, "head123")
-	detail.Slices.Slices[0].VerificationResults = append(
-		detail.Slices.Slices[0].VerificationResults,
-		plan.VerificationRun{Command: "tao validate plan-a", Result: "passed"},
-		plan.VerificationRun{Command: "cd subdir && tao validate", Result: "passed"},
-		plan.VerificationRun{Command: "env X=1 tao validate", Result: "passed"},
-		plan.VerificationRun{Command: "X=1 tao validate", Result: "passed"},
-		plan.VerificationRun{Command: "go test ./cmd/tao", Result: "passed"},
-	)
-	diffStat := " cmd/tao/main.go | 2 +-\n"
-
-	body, err := deterministicPullRequestBody(PullRequestRun{PlanID: "plan-a", Detail: detail}, "main", "title", diffStat)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(body, diffStat) {
-		t.Fatalf("pull request body missing exact diff stat %q: %q", diffStat, body)
-	}
-	for _, noise := range []string{"tao validate", "cd subdir", "env X=1", "X=1 tao"} {
-		if strings.Contains(body, noise) {
-			t.Fatalf("pull request body includes lifecycle-only verification command %q: %q", noise, body)
-		}
-	}
-	for _, command := range []string{"go test ./internal/run", "go test ./cmd/tao"} {
-		if !strings.Contains(body, command) {
-			t.Fatalf("pull request body omitted repository test command %q: %q", command, body)
-		}
-	}
-	if err := validatePullRequestBody(body, detail.State.Plan.ID, diffStat, body); err != nil {
-		t.Fatalf("deterministic fallback body rejected: %v", err)
-	}
-}
-
-func TestIsTaoLifecycleVerificationCommandFindsExecutablesOnly(t *testing.T) {
-	for _, tt := range []struct {
-		command string
-		want    bool
-	}{
-		{command: "tao validate", want: true},
-		{command: "/usr/local/bin/tao validate", want: true},
-		{command: "cd subdir && tao validate", want: true},
-		{command: "prepare || /usr/local/bin/tao validate", want: true},
-		{command: "prepare; env X=1 tao validate", want: true},
-		{command: "prepare | X=1 ./bin/tao validate", want: true},
-		{command: "prepare & tao validate", want: true},
-		{command: "prepare\ntao validate", want: true},
-		{command: "env X=1 tao validate", want: true},
-		{command: "/usr/bin/env -i X=1 ./bin/tao validate", want: true},
-		{command: "X=1 tao validate", want: true},
-		{command: "go test ./cmd/tao", want: false},
-		{command: "go test ./internal/tao/...", want: false},
-		{command: "env X=tao go test ./cmd/tao", want: false},
-		{command: "echo tao validate", want: false},
-		{command: `echo 'ready; tao validate'`, want: false},
-		{command: `echo ready\; tao validate`, want: false},
-		{command: `go test "./cmd/tao|helper"`, want: false},
-		{command: "go test ./cmd/tao && echo done", want: false},
-	} {
-		t.Run(tt.command, func(t *testing.T) {
-			if got := isTaoLifecycleVerificationCommand(tt.command); got != tt.want {
-				t.Fatalf("isTaoLifecycleVerificationCommand(%q) = %t, want %t", tt.command, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestValidatePullRequestBodyRejectsLifecycleNoiseReintroducedInTests(t *testing.T) {
-	detail := approvedPullRequestDetail(plan.ChangeTypeFeat, "head123")
-	detail.Slices.Slices[0].VerificationResults = []plan.VerificationRun{{Command: "go test ./cmd/tao", Result: "passed"}}
-	draft, err := deterministicPullRequestBody(PullRequestRun{PlanID: "plan-a", Detail: detail}, "main", "title", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := validatePullRequestBody(draft, "plan-a", "", draft); err != nil {
-		t.Fatalf("legitimate repository path containing tao was rejected: %v", err)
-	}
-
-	for _, tt := range []struct {
-		name     string
-		addition string
-		want     string
-	}{
-		{name: "plan ID", addition: "- Verified plan-a.\n", want: "plan ID"},
-		{name: "slice lifecycle", addition: "- Tao slice lifecycle completed.\n", want: "preserve Tests exactly as drafted"},
-		{name: "direct Tao command", addition: "- `tao validate`: passed\n", want: "direct Tao lifecycle command"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			body := strings.Replace(draft, "\n## Deploy", "\n"+tt.addition+"\n## Deploy", 1)
-			err := validatePullRequestBody(body, "plan-a", "", draft)
-			if err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("error = %v, want rejection containing %q", err, tt.want)
-			}
-		})
-	}
-}
-
-func TestValidatePullRequestBodyRequiresTestsToMatchDeterministicDraft(t *testing.T) {
-	draft, err := deterministicPullRequestBody(PullRequestRun{}, "main", "title", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := strings.Replace(draft, "No automated test results were recorded.", "- `go test ./...`: passed", 1)
-	if err := validatePullRequestBody(body, "", "", draft); err == nil || !strings.Contains(err.Error(), "preserve Tests exactly as drafted") {
-		t.Fatalf("error = %v, want deterministic Tests mismatch", err)
-	}
-}
-
-func TestValidatePullRequestBodyRequiresExactHeadingSequenceAndScope(t *testing.T) {
-	diffStat := " internal/run/pull_request.go | 1 +\n"
-	valid, err := deterministicPullRequestBody(PullRequestRun{}, "main", "title", diffStat)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := validatePullRequestBody(valid, "plan-a", diffStat, valid); err != nil {
-		t.Fatalf("valid deterministic body rejected: %v", err)
-	}
-	fencedSetext := strings.Replace(valid, "See the commit description for change context.", "```text\nNotes\n-----\n```", 1)
-	if err := validatePullRequestBody(fencedSetext, "plan-a", diffStat, valid); err != nil {
-		t.Fatalf("Setext-like text inside a code fence was treated as a heading: %v", err)
-	}
-
-	scope := deterministicPullRequestScope(diffStat)
-	tests := []struct {
-		name string
-		body string
-	}{
-		{
-			name: "extra ATX level-two heading",
-			body: strings.Replace(valid, "## Scope", "## Notes\n\nReviewer context.\n\n## Scope", 1),
-		},
-		{
-			name: "extra Setext level-two heading",
-			body: strings.Replace(valid, "## Scope", "Notes\n-----\n\nReviewer context.\n\n## Scope", 1),
-		},
-		{
-			name: "changed files block outside scope",
-			body: strings.Replace(valid, "## Scope\n\n"+scope, scope+"\n## Scope\n\nChanged files are listed above.\n", 1),
-		},
-		{
-			name: "diff stat outside scope block",
-			body: strings.Replace(
-				valid,
-				"## Scope\n\n"+scope,
-				"```text\n"+diffStat+"```\n\n## Scope\n\n<details>\n<summary>Changed files</summary>\n\nNo changed-file summary is available.\n\n</details>\n",
-				1,
-			),
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := validatePullRequestBody(tt.body, "plan-a", diffStat, valid); err == nil {
-				t.Fatal("expected invalid agent body to be rejected")
-			}
-		})
 	}
 }
 
@@ -817,6 +623,45 @@ func TestDeterministicPullRequestCreatorLeavesExistingPullRequestMetadataUnchang
 	}
 }
 
+func TestDeterministicPullRequestCreatorCapturesDiscoveryFallbackAfterLookup(t *testing.T) {
+	afterDiscovery := time.Date(2026, 8, 14, 3, 30, 0, 0, time.UTC)
+	for _, tt := range []struct {
+		name           string
+		createdAtField string
+	}{
+		{name: "missing createdAt"},
+		{name: "invalid createdAt", createdAtField: `,"createdAt":"not-a-time"`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			listReturned := false
+			runner := pullRequestCommandRunner(t, nil, func(args []string, stdout io.Writer, _ io.Writer) error {
+				if strings.HasPrefix(strings.Join(args, " "), "pr list ") {
+					_, _ = io.WriteString(stdout, `[{"number":321,"url":"https://github.com/iamseth/tao/pull/321"`+tt.createdAtField+`,"labels":[],"assignees":[],"headRefName":"feature/plan-a","headRepository":{"nameWithOwner":"iamseth/tao"},"headRepositoryOwner":{"login":"iamseth"}}]`)
+					listReturned = true
+				}
+				return nil
+			})
+			creator := deterministicPullRequestCreator{execution: testRunExecution(ExecutionConfig{}, RunDependencies{
+				CommandRunner: runner,
+				Now: func() time.Time {
+					if !listReturned {
+						t.Fatal("discovery fallback clock read before gh pr list returned")
+					}
+					return afterDiscovery
+				},
+			})}
+
+			pr, err := creator.CreatePullRequest(context.Background(), PullRequestRun{Detail: approvedPullRequestDetail(plan.ChangeTypeFeat, "head123"), RepoRoot: "/repo", Branch: "feature/plan-a", HeadSHA: "head123"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pr.Number != 321 || !pr.CreatedAt.Equal(afterDiscovery) {
+				t.Fatalf("discovered pull request = %#v, want post-lookup fallback %s", pr, afterDiscovery)
+			}
+		})
+	}
+}
+
 func TestDeterministicPullRequestCreatorStopsOnPreCreateLookupFailure(t *testing.T) {
 	lookupErr := errors.New("authentication failed")
 	var calls []string
@@ -1045,37 +890,6 @@ func TestDeterministicPullRequestCreatorDoesNotClaimDelayedHumanPullRequestWitho
 	}
 	if pr.Number != 325 || createCalls != 1 || editCalls != 0 || listCalls != 2 {
 		t.Fatalf("delayed human PR/create/edit/list calls = %#v/%d/%d/%d, want #325/1/0/2", pr, createCalls, editCalls, listCalls)
-	}
-}
-
-func TestExtractPullRequestFromAgentOutput(t *testing.T) {
-	createdAt := time.Date(2026, 5, 21, 20, 0, 0, 0, time.UTC)
-	pr, err := extractPullRequest("created https://github.com/iamseth/tao/pull/123", createdAt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if pr.Number != 123 || pr.URL != "https://github.com/iamseth/tao/pull/123" || !pr.CreatedAt.Equal(createdAt) {
-		t.Fatalf("unexpected pull request metadata: %#v", pr)
-	}
-}
-
-func TestExtractPullRequestRejectsMultipleDistinctURLs(t *testing.T) {
-	createdAt := time.Date(2026, 5, 21, 20, 0, 0, 0, time.UTC)
-	output := "created https://github.com/iamseth/tao/pull/123 and https://github.com/iamseth/tao/pull/124"
-	if _, err := extractPullRequest(output, createdAt); err == nil || !strings.Contains(err.Error(), "multiple distinct") {
-		t.Fatalf("expected ambiguous pull request URL error, got %v", err)
-	}
-}
-
-func TestExtractPullRequestAllowsRepeatedSameURL(t *testing.T) {
-	createdAt := time.Date(2026, 5, 21, 20, 0, 0, 0, time.UTC)
-	output := "created https://github.com/iamseth/tao/pull/123\nagain https://github.com/iamseth/tao/pull/123"
-	pr, err := extractPullRequest(output, createdAt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if pr.Number != 123 || pr.URL != "https://github.com/iamseth/tao/pull/123" {
-		t.Fatalf("unexpected repeated pull request metadata: %#v", pr)
 	}
 }
 

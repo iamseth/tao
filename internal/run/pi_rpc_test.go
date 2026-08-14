@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/agent"
+	"github.com/iamseth/tao/internal/forge"
 	"github.com/iamseth/tao/internal/plan"
 )
 
@@ -55,6 +56,9 @@ func TestPullRequestBodyGeneratorSelectsPiWhenRequested(t *testing.T) {
 	bodyGenerator, ok := creator.bodyGenerator.(agentExecutor)
 	if !ok || bodyGenerator.descriptor.Kind != AgentPi {
 		t.Fatalf("expected pi pull request body generator, got %T", creator.bodyGenerator)
+	}
+	if _, ok := creator.pullRequests.(forge.GitHub); !ok {
+		t.Fatalf("expected GitHub pull request forge, got %T", creator.pullRequests)
 	}
 }
 
