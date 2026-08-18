@@ -115,10 +115,10 @@ func TestCreateReviewWithAgentSessionPersistsParsedReview(t *testing.T) {
 
 	output := "Review looks focused.\n\n```tao-review-json\n{\n  \"verdict\": \"changes_requested\",\n  \"summary\": \"One finding should be fixed.\",\n  \"findings\": [\n    {\"severity\": \"major\", \"file\": \"internal/run/review.go\", \"line\": 42, \"message\": \"Fix this.\", \"suggestion\": \"Adjust the code.\"}\n  ]\n}\n```\n"
 	executor := &recordingAgentSessionExecutor{result: AgentSessionResult{Output: output}}
-	calls := []string{}
+	git := &fakeReviewGit{head: "head123"}
 	store := plan.NewFileRepository("")
 
-	review, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", CommandRunner: runGitFake(&calls, nil), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(store))
+	review, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", reviewGitFactory: fixedReviewGit(git), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(store))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,8 +130,8 @@ func TestCreateReviewWithAgentSessionPersistsParsedReview(t *testing.T) {
 	if len(review.Findings) != 1 || review.Findings[0] != wantFinding {
 		t.Fatalf("unexpected review findings: %+v", review.Findings)
 	}
-	if len(calls) != 2 || calls[0] != "status --porcelain" || calls[1] != "rev-parse HEAD" {
-		t.Fatalf("expected clean check and HEAD detection, got %#v", calls)
+	if want := []string{"status", "rev-parse HEAD"}; fmt.Sprint(git.calls) != fmt.Sprint(want) {
+		t.Fatalf("expected clean check and HEAD detection, got %#v", git.calls)
 	}
 	if len(executor.requests) != 1 {
 		t.Fatalf("expected one review request, got %#v", executor.requests)
@@ -194,10 +194,9 @@ func TestCreateReviewWithAgentSessionUsesWorkspaceBaseSHA(t *testing.T) {
 	persistReviewState(t, planDir, detail)
 
 	executor := &recordingAgentSessionExecutor{result: AgentSessionResult{Output: "Looks good."}}
-	calls := []string{}
 	store := plan.NewFileRepository("")
 
-	review, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", CommandRunner: runGitFake(&calls, nil), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot, Base: detail.State.Repo.BaseCommit}, fileReviewRecordFactory(store))
+	review, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123"}), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot, Base: detail.State.Repo.BaseCommit}, fileReviewRecordFactory(store))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,11 +232,10 @@ func TestCreateReviewWithAgentSessionPrefersLiveMergeBaseAfterRebase(t *testing.
 	persistReviewState(t, planDir, detail)
 
 	executor := &recordingAgentSessionExecutor{result: AgentSessionResult{Output: "Looks good."}}
-	calls := []string{}
-	runner := reviewGitFake(&calls, map[string]string{"merge-base main tao/plan-a": "live-merge-base"})
+	git := &fakeReviewGit{head: "head123", defaultBranch: "main", mergeBase: "live-merge-base"}
 	store := plan.NewFileRepository("")
 
-	review, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", CommandRunner: runner, Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot, Base: detail.State.Repo.BaseCommit}, fileReviewRecordFactory(store))
+	review, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", reviewGitFactory: fixedReviewGit(git), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot, Base: detail.State.Repo.BaseCommit}, fileReviewRecordFactory(store))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,10 +270,9 @@ func TestCreateReviewWithAgentSessionFallsBackToRecordedBaseWhenMergeBaseFails(t
 	persistReviewState(t, planDir, detail)
 
 	executor := &recordingAgentSessionExecutor{result: AgentSessionResult{Output: "Looks good."}}
-	calls := []string{}
 	store := plan.NewFileRepository("")
 
-	review, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", CommandRunner: reviewGitFake(&calls, nil), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(store))
+	review, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123", defaultBranch: "main", mergeBaseErr: errors.New("merge-base unavailable")}), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(store))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,9 +316,7 @@ func TestCreateReviewWithAgentSessionPreservesArtifactWhenRefreshedGateRefuses(t
 		}
 		return AgentSessionResult{Output: "replacement review artifact\n"}, nil
 	})
-	calls := []string{}
-
-	_, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", CommandRunner: runGitFake(&calls, nil), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(plan.NewFileRepository("")))
+	_, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123"}), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(plan.NewFileRepository("")))
 	if err == nil || !strings.Contains(err.Error(), "002-race") {
 		t.Fatalf("review error = %v, want refreshed pending-work refusal", err)
 	}
@@ -365,7 +360,7 @@ func persistReviewState(t *testing.T, planDir string, detail *plan.PlanDetail) {
 }
 
 func TestServiceReviewReportsStandalonePhasesInOrderAndStopsOnFailure(t *testing.T) {
-	newService := func(t *testing.T, runner CommandRunner, creator ReviewCreator, out *bytes.Buffer) (Service, Request) {
+	newService := func(t *testing.T, runner CommandRunner, git reviewGit, creator ReviewCreator, out *bytes.Buffer) (Service, Request) {
 		t.Helper()
 		plansRoot := t.TempDir()
 		planDir := filepath.Join(plansRoot, "plan-a")
@@ -393,7 +388,7 @@ func TestServiceReviewReportsStandalonePhasesInOrderAndStopsOnFailure(t *testing
 		options := ResolvedRunOptions{Mode: ModeRun, CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi}
 		service := NewService(plan.NewFileRepository(plansRoot), out, Options{
 			ExecutionConfig: ExecutionConfig{ResolvedRunOptions: options},
-			RunDependencies: RunDependencies{CommandRunner: runner, ReviewCreator: creator},
+			RunDependencies: RunDependencies{CommandRunner: runner, reviewGitFactory: fixedReviewGit(git), ReviewCreator: creator},
 		})
 		return service, Request{Input: "plan-a", ResolvedRunOptions: options}
 	}
@@ -408,11 +403,8 @@ func TestServiceReviewReportsStandalonePhasesInOrderAndStopsOnFailure(t *testing
 				t.Fatalf("current phase = %+v, want %q", reporter.phases, want)
 			}
 		}
+		git := &fakeReviewGit{statusHook: func() { requirePhase(PhasePreparingExecution) }}
 		runner := func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
-			if name == "git" && runGitKey(args) == "status --porcelain" {
-				requirePhase(PhasePreparingExecution)
-				return nil
-			}
 			if name == "sh" && strings.Join(args, " ") == "-c go build ./... && go test ./..." {
 				requirePhase(PhaseFinalVerification)
 				if !strings.Contains(out.String(), "Verifying completed branch: ") {
@@ -433,7 +425,7 @@ func TestServiceReviewReportsStandalonePhasesInOrderAndStopsOnFailure(t *testing
 			}
 			return plan.PlanReview{Verdict: plan.ReviewVerdictApprove}, nil
 		})
-		service, request := newService(t, runner, creator, &out)
+		service, request := newService(t, runner, git, creator, &out)
 		startedAt := time.Date(2026, 8, 8, 18, 55, 0, 0, time.UTC)
 		service.dependencies.StatusReporter = reporter
 		service.dependencies.Now = func() time.Time { return startedAt }
@@ -465,12 +457,12 @@ func TestServiceReviewReportsStandalonePhasesInOrderAndStopsOnFailure(t *testing
 	t.Run("preparation failure", func(t *testing.T) {
 		var out bytes.Buffer
 		creatorCalled := false
-		runner := reviewGateGitRunner(" M uncommitted.go\n")
+		git := &fakeReviewGit{status: " M uncommitted.go\n"}
 		creator := reviewCreatorFunc(func(context.Context, ReviewRun) (plan.PlanReview, error) {
 			creatorCalled = true
 			return plan.PlanReview{}, nil
 		})
-		service, request := newService(t, runner, creator, &out)
+		service, request := newService(t, nil, git, creator, &out)
 		reporter := &recordingStatusReporter{}
 		service.dependencies.StatusReporter = reporter
 
@@ -488,10 +480,8 @@ func TestServiceReviewReportsStandalonePhasesInOrderAndStopsOnFailure(t *testing
 	t.Run("verification failure", func(t *testing.T) {
 		var out bytes.Buffer
 		creatorCalled := false
+		git := &fakeReviewGit{}
 		runner := func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
-			if name == "git" && runGitKey(args) == "status --porcelain" {
-				return nil
-			}
 			if name == "sh" {
 				return fmt.Errorf("tests failed")
 			}
@@ -502,7 +492,7 @@ func TestServiceReviewReportsStandalonePhasesInOrderAndStopsOnFailure(t *testing
 			creatorCalled = true
 			return plan.PlanReview{}, nil
 		})
-		service, request := newService(t, runner, creator, &out)
+		service, request := newService(t, runner, git, creator, &out)
 
 		if _, err := service.Review(context.Background(), request); err == nil {
 			t.Fatal("expected verification failure")
@@ -699,13 +689,44 @@ func reviewGateDetail(expected ...string) *plan.PlanDetail {
 	}
 }
 
-func reviewGateGitRunner(status string) CommandRunner {
-	return func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
-		if name == "git" && runGitKey(args) == "status --porcelain" {
-			_, _ = io.WriteString(stdout, status)
-		}
-		return nil
+type fakeReviewGit struct {
+	status           string
+	head             string
+	defaultBranch    string
+	mergeBase        string
+	statusErr        error
+	headErr          error
+	defaultBranchErr error
+	mergeBaseErr     error
+	statusHook       func()
+	calls            []string
+}
+
+func fixedReviewGit(git reviewGit) reviewGitFactory {
+	return func(string) reviewGit { return git }
+}
+
+func (g *fakeReviewGit) StatusPorcelain(context.Context) (string, error) {
+	g.calls = append(g.calls, "status")
+	if g.statusHook != nil {
+		g.statusHook()
 	}
+	return g.status, g.statusErr
+}
+
+func (g *fakeReviewGit) RevParse(_ context.Context, revision string) (string, error) {
+	g.calls = append(g.calls, "rev-parse "+revision)
+	return g.head, g.headErr
+}
+
+func (g *fakeReviewGit) DefaultBranch(context.Context) (string, error) {
+	g.calls = append(g.calls, "default-branch")
+	return g.defaultBranch, g.defaultBranchErr
+}
+
+func (g *fakeReviewGit) MergeBase(_ context.Context, a, b string) (string, error) {
+	g.calls = append(g.calls, "merge-base "+a+" "+b)
+	return g.mergeBase, g.mergeBaseErr
 }
 
 // TestRequireCleanReviewWorktreeToleratesStartingDirtyPaths guards compatibility
@@ -714,7 +735,7 @@ func reviewGateGitRunner(status string) CommandRunner {
 // work.
 func TestRequireCleanReviewWorktreeToleratesStartingDirtyPaths(t *testing.T) {
 	t.Run("only starting-dirty remains", func(t *testing.T) {
-		git := gitClient(agentOperationOptions{CommandRunner: reviewGateGitRunner(" M README.md\n?? .env.local\n")}, t.TempDir())
+		git := &fakeReviewGit{status: " M README.md\n?? .env.local\n"}
 		detail := reviewGateDetail("README.md", ".env.local")
 		if err := requireCleanReviewWorktree(context.Background(), git, detail, []string{"README.md", ".env.local"}); err != nil {
 			t.Fatalf("expected starting-dirty paths tolerated, got: %v", err)
@@ -722,7 +743,7 @@ func TestRequireCleanReviewWorktreeToleratesStartingDirtyPaths(t *testing.T) {
 	})
 
 	t.Run("uncommitted plan work remains", func(t *testing.T) {
-		git := gitClient(agentOperationOptions{CommandRunner: reviewGateGitRunner(" M README.md\n M internal/run/run.go\n")}, t.TempDir())
+		git := &fakeReviewGit{status: " M README.md\n M internal/run/run.go\n"}
 		detail := reviewGateDetail("README.md", "internal/run/run.go")
 		err := requireCleanReviewWorktree(context.Background(), git, detail, []string{"README.md"})
 		if err == nil {
@@ -743,7 +764,7 @@ func TestRequireCleanReviewWorktreeToleratesStartingDirtyPaths(t *testing.T) {
 // .tao is tolerated, while any other rename stays a hard stop.
 func TestRequireCleanReviewWorktreeMatchesStatusClassificationTolerance(t *testing.T) {
 	t.Run("scratch file outside expected_files blocked", func(t *testing.T) {
-		git := gitClient(agentOperationOptions{CommandRunner: reviewGateGitRunner("?? debug.sh\n")}, t.TempDir())
+		git := &fakeReviewGit{status: "?? debug.sh\n"}
 		err := requireCleanReviewWorktree(context.Background(), git, reviewGateDetail("internal/run/run.go"), nil)
 		if err == nil || !strings.Contains(err.Error(), "debug.sh") {
 			t.Fatalf("expected undeclared scratch file to fail the gate, got: %v", err)
@@ -751,14 +772,14 @@ func TestRequireCleanReviewWorktreeMatchesStatusClassificationTolerance(t *testi
 	})
 
 	t.Run("tao metadata rename tolerated", func(t *testing.T) {
-		git := gitClient(agentOperationOptions{CommandRunner: reviewGateGitRunner("R  .tao/plans/old.json -> .tao/plans/new.json\n")}, t.TempDir())
+		git := &fakeReviewGit{status: "R  .tao/plans/old.json -> .tao/plans/new.json\n"}
 		if err := requireCleanReviewWorktree(context.Background(), git, reviewGateDetail("internal/run/run.go"), nil); err != nil {
 			t.Fatalf("expected .tao rename tolerated, got: %v", err)
 		}
 	})
 
 	t.Run("plan-work rename stays a hard stop", func(t *testing.T) {
-		git := gitClient(agentOperationOptions{CommandRunner: reviewGateGitRunner("R  old.go -> new.go\n")}, t.TempDir())
+		git := &fakeReviewGit{status: "R  old.go -> new.go\n"}
 		err := requireCleanReviewWorktree(context.Background(), git, reviewGateDetail("internal/run/run.go"), nil)
 		if err == nil || !strings.Contains(err.Error(), "old.go -> new.go") {
 			t.Fatalf("expected non-tao rename to fail the gate, got: %v", err)
@@ -772,14 +793,14 @@ func TestRequireCleanReviewWorktreeMatchesStatusClassificationTolerance(t *testi
 // dirt produced during the run must not read as unreviewed plan work.
 func TestRequireCleanReviewWorktreeToleratesTaoMetadataPaths(t *testing.T) {
 	t.Run("only tao metadata remains", func(t *testing.T) {
-		git := gitClient(agentOperationOptions{CommandRunner: reviewGateGitRunner("?? .tao/\n M .tao/state.json\nA  .tao/plans/plan-a/events.jsonl\n")}, t.TempDir())
+		git := &fakeReviewGit{status: "?? .tao/\n M .tao/state.json\nA  .tao/plans/plan-a/events.jsonl\n"}
 		if err := requireCleanReviewWorktree(context.Background(), git, reviewGateDetail("internal/run/run.go"), nil); err != nil {
 			t.Fatalf("expected .tao metadata tolerated, got: %v", err)
 		}
 	})
 
 	t.Run("tao metadata plus plan work", func(t *testing.T) {
-		git := gitClient(agentOperationOptions{CommandRunner: reviewGateGitRunner("?? .tao/logs/run.log\n M internal/run/run.go\n")}, t.TempDir())
+		git := &fakeReviewGit{status: "?? .tao/logs/run.log\n M internal/run/run.go\n"}
 		err := requireCleanReviewWorktree(context.Background(), git, reviewGateDetail("internal/run/run.go"), nil)
 		if err == nil {
 			t.Fatal("expected uncommitted plan work to fail the gate despite .tao dirt")
@@ -804,15 +825,10 @@ func TestRequireCleanReviewWorktreeToleratesTaoMetadataPaths(t *testing.T) {
 func TestPrepareReviewExecutionCapturesNoStartingDirtyPaths(t *testing.T) {
 	repoRoot := t.TempDir()
 	repo := plan.NewFileRepository(t.TempDir())
-	fakeGit := func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
-		if name == "git" && runGitKey(args) == "status --porcelain" {
-			_, _ = io.WriteString(stdout, " M README.md\nR  old.go -> new.go\n")
-		}
-		return nil
-	}
+	git := &fakeReviewGit{status: " M README.md\nR  old.go -> new.go\n"}
 	s := Service{
 		dependencies: RunDependencies{
-			CommandRunner:     fakeGit,
+			reviewGitFactory:  fixedReviewGit(git),
 			PlanRecordFactory: func(detail *plan.PlanDetail) (PlanMutationRecord, error) { return repo.PlanRecord(detail) },
 			EventAppender:     repo,
 			LogAppender:       repo,
@@ -833,6 +849,9 @@ func TestPrepareReviewExecutionCapturesNoStartingDirtyPaths(t *testing.T) {
 	if len(execution.StartingDirtyPaths) != 0 {
 		t.Fatalf("StartingDirtyPaths = %q, want empty: a review-start snapshot would tolerate uncommitted plan work", execution.StartingDirtyPaths)
 	}
+	if len(git.calls) != 0 {
+		t.Fatalf("prepareReviewExecution unexpectedly inspected review Git: %v", git.calls)
+	}
 }
 
 func TestStandaloneReviewDoesNotUsePersistedStartingDirtyTolerance(t *testing.T) {
@@ -845,14 +864,14 @@ func TestStandaloneReviewDoesNotUsePersistedStartingDirtyTolerance(t *testing.T)
 	detail.State.Plan.LastRunStartingDirty = []string{"README.md"}
 	detail.State.Workspace = &plan.Workspace{Strategy: plan.WorkspaceStrategyCurrent}
 	repo := plan.NewFileRepository("")
-	execution, err := (Service{dependencies: RunDependencies{CommandRunner: reviewGateGitRunner(""), PlanRecordFactory: func(detail *plan.PlanDetail) (PlanMutationRecord, error) { return repo.PlanRecord(detail) }, EventAppender: repo, LogAppender: repo}}).prepareReviewExecution(detail, ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Agent: AgentPi}})
+	execution, err := (Service{dependencies: RunDependencies{reviewGitFactory: fixedReviewGit(&fakeReviewGit{}), PlanRecordFactory: func(detail *plan.PlanDetail) (PlanMutationRecord, error) { return repo.PlanRecord(detail) }, EventAppender: repo, LogAppender: repo}}).prepareReviewExecution(detail, ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Agent: AgentPi}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(execution.StartingDirtyPaths) != 0 {
 		t.Fatalf("historical tolerance should remain metadata-only, got %#v", execution.StartingDirtyPaths)
 	}
-	_, err = createReviewWithAgentSession(context.Background(), &recordingAgentSessionExecutor{result: AgentSessionResult{Output: "Looks good."}}, agentOperationOptions{Agent: "pi", CommitPolicy: execution.Config.CommitPolicy, CommandRunner: reviewGateGitRunner(" M README.md\n")}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(repo))
+	_, err = createReviewWithAgentSession(context.Background(), &recordingAgentSessionExecutor{result: AgentSessionResult{Output: "Looks good."}}, agentOperationOptions{Agent: "pi", CommitPolicy: execution.Config.CommitPolicy, reviewGitFactory: fixedReviewGit(&fakeReviewGit{status: " M README.md\n"})}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(repo))
 	if err == nil || !strings.Contains(err.Error(), "clean committed tree") {
 		t.Fatalf("expected historical plan-policy review to require cleanliness, got %v", err)
 	}
@@ -892,7 +911,7 @@ func TestPrepareReviewExecutionUsesRecordedRunCommitPolicy(t *testing.T) {
 	repo := plan.NewFileRepository(t.TempDir())
 	s := Service{
 		dependencies: RunDependencies{
-			CommandRunner:     reviewGateGitRunner(""),
+			reviewGitFactory:  fixedReviewGit(&fakeReviewGit{}),
 			PlanRecordFactory: func(detail *plan.PlanDetail) (PlanMutationRecord, error) { return repo.PlanRecord(detail) },
 			EventAppender:     repo,
 			LogAppender:       repo,
@@ -965,34 +984,6 @@ func TestPrepareReviewExecutionUsesRecordedRunCommitPolicy(t *testing.T) {
 	}
 }
 
-func reviewGitFake(calls *[]string, responses map[string]string) CommandRunner {
-	return func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if name != "git" {
-			return nil
-		}
-		key := runGitKey(args)
-		*calls = append(*calls, key)
-		if out, ok := responses[key]; ok {
-			_, _ = io.WriteString(stdout, out+"\n")
-			return nil
-		}
-		switch key {
-		case "status --porcelain":
-			return nil
-		case "rev-parse HEAD":
-			_, _ = io.WriteString(stdout, "head123\n")
-		case "symbolic-ref --quiet --short refs/remotes/origin/HEAD":
-			_, _ = io.WriteString(stdout, "origin/main\n")
-		default:
-			return fmt.Errorf("unstubbed git command: %s", key)
-		}
-		return nil
-	}
-}
-
 func TestCreateReviewWithAgentSessionFallsBackToBaseCommitWithoutWorkspace(t *testing.T) {
 	planDir := t.TempDir()
 	repoRoot := t.TempDir()
@@ -1005,10 +996,9 @@ func TestCreateReviewWithAgentSessionFallsBackToBaseCommitWithoutWorkspace(t *te
 	persistReviewState(t, planDir, detail)
 
 	executor := &recordingAgentSessionExecutor{result: AgentSessionResult{Output: "Looks good."}}
-	calls := []string{}
 	store := plan.NewFileRepository("")
 
-	review, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", CommandRunner: runGitFake(&calls, nil), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(store))
+	review, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123"}), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(store))
 	if err != nil {
 		t.Fatal(err)
 	}

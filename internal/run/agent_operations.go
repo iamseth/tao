@@ -24,6 +24,7 @@ type agentOperationOptions struct {
 	StartingDirtyPaths  []string
 	Agent               string
 	CommandRunner       CommandRunner
+	reviewGitFactory    reviewGitFactory
 	Now                 func() time.Time
 	NoProgressToolLimit int
 }

@@ -161,7 +161,7 @@ func TestPlanManagedCleanupDecidesByGitState(t *testing.T) {
 		t.Fatalf("expected tao/merged worktree removed, stat err=%v", err)
 	}
 
-	remaining, err := manager.git.ListBranches(ctx, "")
+	remaining, err := manager.git.cleanup.ListBranches(ctx, "")
 	if err != nil {
 		t.Fatalf("ListBranches failed: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestCleanManagedRechecksWorktreeCleanliness(t *testing.T) {
 		if _, err := os.Stat(worktreePath); err != nil {
 			t.Fatalf("dirty worktree should remain: %v", err)
 		}
-		exists, err := manager.git.BranchExists(context.Background(), item.Branch)
+		exists, err := manager.git.cleanup.BranchExists(context.Background(), item.Branch)
 		if err != nil || !exists {
 			t.Fatalf("branch should remain, exists=%v err=%v", exists, err)
 		}
@@ -325,7 +325,7 @@ func TestPlanManagedCleanupForceRemovesUnmerged(t *testing.T) {
 	if err := manager.CleanManaged(ctx, plans[0], CleanOptions{Force: true}); err != nil {
 		t.Fatalf("forced CleanManaged failed: %v", err)
 	}
-	remaining, err := manager.git.ListBranches(ctx, "tao/*")
+	remaining, err := manager.git.cleanup.ListBranches(ctx, "tao/*")
 	if err != nil {
 		t.Fatalf("ListBranches failed: %v", err)
 	}

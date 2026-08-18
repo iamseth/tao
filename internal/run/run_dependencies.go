@@ -16,6 +16,7 @@ import (
 // graph stays legible at a single place.
 type RunDependencies struct {
 	CommandRunner       CommandRunner
+	reviewGitFactory    reviewGitFactory
 	ProcessStarter      ProcessStarter
 	SliceExecutor       SliceExecutor
 	PlanRecordFactory   PlanRecordFactory

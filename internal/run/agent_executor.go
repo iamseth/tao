@@ -37,6 +37,7 @@ type agentExecutorOptions struct {
 	SessionTimeout     time.Duration
 	SessionLogWriter   io.Writer
 	CommandRunner      CommandRunner
+	reviewGitFactory   reviewGitFactory
 	Now                func() time.Time
 	StartingBranch     string
 	StartingDirtyPaths []string
@@ -56,6 +57,7 @@ func newAgentExecutor(descriptor agent.Descriptor, config ExecutionConfig, depen
 			SessionTimeout:     config.SessionTimeout,
 			SessionLogWriter:   dependencies.SessionLogWriter,
 			CommandRunner:      dependencies.CommandRunner,
+			reviewGitFactory:   dependencies.reviewGitFactory,
 			Now:                dependencies.Now,
 			StartingBranch:     startingBranch,
 			StartingDirtyPaths: startingDirtyPaths,
@@ -74,6 +76,7 @@ func (e agentExecutor) operationOptions() agentOperationOptions {
 		StartingDirtyPaths:  e.options.StartingDirtyPaths,
 		Agent:               e.descriptor.Label,
 		CommandRunner:       e.options.CommandRunner,
+		reviewGitFactory:    e.options.reviewGitFactory,
 		Now:                 e.options.Now,
 		NoProgressToolLimit: e.descriptor.DefaultNoProgressToolLimit,
 	}

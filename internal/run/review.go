@@ -31,6 +31,26 @@ type ReviewCreator interface {
 	CreateReview(ctx context.Context, run ReviewRun) (plan.PlanReview, error)
 }
 
+type reviewGit interface {
+	StatusPorcelain(context.Context) (string, error)
+	RevParse(context.Context, string) (string, error)
+	DefaultBranch(context.Context) (string, error)
+	MergeBase(context.Context, string, string) (string, error)
+}
+
+type reviewGitFactory func(repoRoot string) reviewGit
+
+var _ reviewGit = gitops.Client{}
+
+func newReviewGitFactory(runner CommandRunner) reviewGitFactory {
+	if runner == nil {
+		runner = defaultCommandRunner
+	}
+	return func(repoRoot string) reviewGit {
+		return gitops.NewClient(repoRoot, runner)
+	}
+}
+
 // Review runs a fresh persisted plan review without executing pending slices.
 func (s Service) Review(ctx context.Context, request Request) (review plan.PlanReview, err error) {
 	config, err := prepareRequestConfig(s.config, request)
@@ -68,7 +88,7 @@ func (s Service) Review(ctx context.Context, request Request) (review plan.PlanR
 				return err
 			}
 			if execution.Config.CommitPolicy != CommitPolicyNone {
-				if err := requireCleanReviewWorktree(ownedCtx, gitClient(execution, execution.ExecutionRoot), detail, nil); err != nil {
+				if err := requireCleanReviewWorktree(ownedCtx, execution.Dependencies.reviewGitFactory(execution.ExecutionRoot), detail, nil); err != nil {
 					return fmt.Errorf("prepare review: %w", err)
 				}
 			}
@@ -184,6 +204,9 @@ func (s Service) prepareReviewExecution(detail *plan.PlanDetail, config Executio
 	dependencies := &execution.Dependencies
 	if dependencies.CommandRunner == nil {
 		dependencies.CommandRunner = defaultCommandRunner
+	}
+	if dependencies.reviewGitFactory == nil {
+		dependencies.reviewGitFactory = newReviewGitFactory(dependencies.CommandRunner)
 	}
 	if dependencies.ProcessStarter == nil {
 		dependencies.ProcessStarter = defaultProcessStarter
@@ -395,7 +418,11 @@ func createReviewWithAgentSession(ctx context.Context, executor AgentSessionExec
 	if repoRoot == "" {
 		repoRoot = state.Repo.Root
 	}
-	git := gitClient(options, repoRoot)
+	gitFactory := options.reviewGitFactory
+	if gitFactory == nil {
+		gitFactory = newReviewGitFactory(options.CommandRunner)
+	}
+	git := gitFactory(repoRoot)
 	detail := run.Detail
 	if detail == nil {
 		detail = &plan.PlanDetail{Dir: planDir, State: state}
@@ -444,7 +471,7 @@ func createReviewWithAgentSession(ctx context.Context, executor AgentSessionExec
 // review. commitLeftovers shares git-status classification with slice completion:
 // .tao metadata is skipped, starting-dirty paths are tolerated, and any ambiguous
 // rename or copy outside .tao stays a hard stop.
-func requireCleanReviewWorktree(ctx context.Context, git gitops.Client, detail *plan.PlanDetail, startingDirty []string) error {
+func requireCleanReviewWorktree(ctx context.Context, git reviewGit, detail *plan.PlanDetail, startingDirty []string) error {
 	status, err := git.StatusPorcelain(ctx)
 	if err != nil {
 		return fmt.Errorf("check worktree status before review: %w", err)
@@ -620,7 +647,7 @@ func reviewDetailBase(detail *plan.PlanDetail) string {
 // reviewRunBase prefers the live merge-base so the persisted review matches
 // what the merge gate will compute, then falls back to bases recorded at plan
 // creation for plans without branch metadata or when git is unavailable.
-func reviewRunBase(ctx context.Context, git gitops.Client, run ReviewRun, state plan.State) string {
+func reviewRunBase(ctx context.Context, git reviewGit, run ReviewRun, state plan.State) string {
 	if base := reviewLiveMergeBase(ctx, git, state); base != "" {
 		return base
 	}
@@ -637,7 +664,7 @@ func reviewRunBase(ctx context.Context, git gitops.Client, run ReviewRun, state 
 // inputs `tao merge` uses for its review-base gate, so a review rerun after a
 // manual rebase records a base the merge gate accepts. An empty result means
 // the live base is not computable and callers must fall back to recorded bases.
-func reviewLiveMergeBase(ctx context.Context, git gitops.Client, state plan.State) string {
+func reviewLiveMergeBase(ctx context.Context, git reviewGit, state plan.State) string {
 	if state.Workspace == nil {
 		return ""
 	}

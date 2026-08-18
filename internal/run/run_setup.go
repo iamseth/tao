@@ -91,6 +91,9 @@ func (s Service) resolveServiceDependencies(execution *runExecution) {
 	if dependencies.CommandRunner == nil {
 		dependencies.CommandRunner = defaultCommandRunner
 	}
+	if dependencies.reviewGitFactory == nil {
+		dependencies.reviewGitFactory = newReviewGitFactory(dependencies.CommandRunner)
+	}
 	if dependencies.ProcessStarter == nil {
 		dependencies.ProcessStarter = defaultProcessStarter
 	}
@@ -165,6 +168,9 @@ func interruptedSliceDiagnosticFacts(facts InterruptedSliceFacts) string {
 
 func resolveExecutorDefaults(execution *runExecution) {
 	dependencies := &execution.Dependencies
+	if dependencies.reviewGitFactory == nil {
+		dependencies.reviewGitFactory = newReviewGitFactory(dependencies.CommandRunner)
+	}
 	if dependencies.TransportRetryDelay == nil {
 		dependencies.TransportRetryDelay = waitForTransportRetry
 	}

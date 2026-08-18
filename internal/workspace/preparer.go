@@ -31,12 +31,19 @@ type ExecutionPrepareOptions struct {
 	ExecutionMode string
 }
 
+type executionWorkspaceManager interface {
+	Prepare(context.Context, PrepareOptions) (Metadata, error)
+}
+
+type executionWorkspaceManagerFactory func(Options) (executionWorkspaceManager, error)
+
 // ExecutionPreparer prepares the workspace root used for one plan execution.
 type ExecutionPreparer struct {
 	Runner            CommandRunner
 	PlanRecordFactory PlanRecordFactory
 	Now               func() time.Time
 	Config            Config
+	managerFactory    executionWorkspaceManagerFactory
 }
 
 // Prepare resolves the plan workspace strategy, prepares the workspace, records plan metadata, and prepares dependencies.
@@ -78,7 +85,7 @@ func (p ExecutionPreparer) Prepare(ctx context.Context, detail *plan.PlanDetail,
 	if strategy != plan.WorkspaceStrategyWorktree {
 		return filepath.Abs(detail.State.Repo.Root)
 	}
-	manager, err := NewManager(Options{RepoRoot: detail.State.Repo.Root, Config: config, Runner: p.runner()})
+	manager, err := p.newManager(Options{RepoRoot: detail.State.Repo.Root, Config: config, Runner: p.runner()})
 	if err != nil {
 		return "", err
 	}
@@ -200,6 +207,13 @@ func (r executionRebaseRecorder) SettleWorkspaceRebase(intent plan.WorkspaceReba
 
 func autoDependencyInstall(behavior string) bool {
 	return behavior == "" || behavior == DependencyInstallAuto || behavior == DependencyInstallAutoIfLockfilePresent
+}
+
+func (p ExecutionPreparer) newManager(options Options) (executionWorkspaceManager, error) {
+	if p.managerFactory != nil {
+		return p.managerFactory(options)
+	}
+	return NewManager(options)
 }
 
 func (p ExecutionPreparer) runner() CommandRunner {

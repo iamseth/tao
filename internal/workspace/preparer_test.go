@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -19,9 +18,13 @@ func TestExecutionPreparerDefaultsToWorktree(t *testing.T) {
 	repoRoot := t.TempDir()
 	detail := executionPreparerPlanDetail(repoRoot)
 	detail.State.Workspace = nil
-	var calls []string
+	prepareCalls := 0
+	managerFactory := executionPreparerManagerFactory(Metadata{
+		Path: filepath.Join(repoRoot, ".tao", "workspaces", "plan-a"), Branch: "tao/plan-a",
+		BaseBranch: "feature", BaseSHA: "base123", BaseCurrentSHA: "base123", HeadSHA: "head123", Created: true,
+	}, &prepareCalls)
 
-	root, err := (ExecutionPreparer{Runner: executionPreparerGitFake(&calls)}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
+	root, err := (ExecutionPreparer{managerFactory: managerFactory}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
 	if err != nil {
 		t.Fatalf("prepare execution workspace: %v", err)
 	}
@@ -33,8 +36,8 @@ func TestExecutionPreparerDefaultsToWorktree(t *testing.T) {
 	if detail.State.Workspace == nil || detail.State.Workspace.Strategy != plan.WorkspaceStrategyWorktree || detail.State.Workspace.Path != want {
 		t.Fatalf("expected worktree metadata, got %#v", detail.State.Workspace)
 	}
-	if !executionPreparerHasGitCall(calls, "worktree add -b tao/plan-a "+want+" feature") {
-		t.Fatalf("expected worktree add call, got %v", calls)
+	if prepareCalls != 1 {
+		t.Fatalf("workspace manager Prepare calls = %d, want 1", prepareCalls)
 	}
 }
 
@@ -142,9 +145,12 @@ func TestExecutionPreparerWorktreeRunOptionOverridesPlanCurrent(t *testing.T) {
 	repoRoot := t.TempDir()
 	detail := executionPreparerPlanDetail(repoRoot)
 	detail.State.Workspace = &plan.Workspace{Strategy: plan.WorkspaceStrategyCurrent}
-	var calls []string
+	managerFactory := executionPreparerManagerFactory(Metadata{
+		Path: filepath.Join(repoRoot, ".tao", "workspaces", "plan-a"), Branch: "tao/plan-a",
+		BaseBranch: "feature", BaseSHA: "base123", BaseCurrentSHA: "base123", HeadSHA: "head123", Created: true,
+	}, nil)
 
-	root, err := (ExecutionPreparer{Runner: executionPreparerGitFake(&calls)}).Prepare(context.Background(), detail, ExecutionPrepareOptions{ExecutionMode: "isolated"})
+	root, err := (ExecutionPreparer{managerFactory: managerFactory}).Prepare(context.Background(), detail, ExecutionPrepareOptions{ExecutionMode: "isolated"})
 	if err != nil {
 		t.Fatalf("prepare execution workspace: %v", err)
 	}
@@ -172,9 +178,9 @@ func TestExecutionPreparerBlocksWorktreeAfterCurrentCheckoutVerification(t *test
 			Result:  "pass",
 		}},
 	}}
-	var calls []string
+	prepareCalls := 0
 
-	_, err := (ExecutionPreparer{Runner: executionPreparerGitFake(&calls)}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
+	_, err := (ExecutionPreparer{managerFactory: executionPreparerManagerFactory(Metadata{}, &prepareCalls)}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
 	if err == nil {
 		t.Fatal("expected execution context drift error")
 	}
@@ -184,8 +190,8 @@ func TestExecutionPreparerBlocksWorktreeAfterCurrentCheckoutVerification(t *test
 			t.Fatalf("expected %q in error, got %q", want, message)
 		}
 	}
-	if len(calls) != 0 {
-		t.Fatalf("expected guardrail before git calls, got %v", calls)
+	if prepareCalls != 0 {
+		t.Fatalf("expected guardrail before workspace preparation, got %d calls", prepareCalls)
 	}
 }
 
@@ -204,9 +210,9 @@ func TestExecutionPreparerBlocksCurrentAfterWorktreeVerification(t *testing.T) {
 			Result:  "pass",
 		}},
 	}}
-	var calls []string
+	prepareCalls := 0
 
-	_, err := (ExecutionPreparer{Runner: executionPreparerGitFake(&calls)}).Prepare(context.Background(), detail, ExecutionPrepareOptions{ExecutionMode: "current"})
+	_, err := (ExecutionPreparer{managerFactory: executionPreparerManagerFactory(Metadata{}, &prepareCalls)}).Prepare(context.Background(), detail, ExecutionPrepareOptions{ExecutionMode: "current"})
 	if err == nil {
 		t.Fatal("expected execution context drift error")
 	}
@@ -216,8 +222,8 @@ func TestExecutionPreparerBlocksCurrentAfterWorktreeVerification(t *testing.T) {
 			t.Fatalf("expected %q in error, got %q", want, message)
 		}
 	}
-	if len(calls) != 0 {
-		t.Fatalf("expected guardrail before git calls, got %v", calls)
+	if prepareCalls != 0 {
+		t.Fatalf("expected guardrail before workspace preparation, got %d calls", prepareCalls)
 	}
 }
 
@@ -237,9 +243,12 @@ func TestExecutionPreparerAllowsWorktreeResumeWithRelativeVerificationCWD(t *tes
 			Result:  "pass",
 		}},
 	}}
-	var calls []string
+	managerFactory := executionPreparerManagerFactory(Metadata{
+		Path: workspacePath, Branch: "tao/plan-a", BaseBranch: "feature", BaseSHA: "base123",
+		BaseCurrentSHA: "base123", HeadSHA: "head123", Reused: true,
+	}, nil)
 
-	root, err := (ExecutionPreparer{Runner: executionPreparerGitFake(&calls)}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
+	root, err := (ExecutionPreparer{managerFactory: managerFactory}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
 	if err != nil {
 		t.Fatalf("prepare execution workspace: %v", err)
 	}
@@ -405,9 +414,9 @@ func TestExecutionPreparerBlocksMixedVerificationWorkspaces(t *testing.T) {
 			{Command: "go test ./internal/cli", CWD: currentCWD, Result: "pass"},
 		},
 	}}
-	var calls []string
+	prepareCalls := 0
 
-	_, err := (ExecutionPreparer{Runner: executionPreparerGitFake(&calls)}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
+	_, err := (ExecutionPreparer{managerFactory: executionPreparerManagerFactory(Metadata{}, &prepareCalls)}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
 	if err == nil {
 		t.Fatal("expected mixed execution context drift error")
 	}
@@ -417,8 +426,8 @@ func TestExecutionPreparerBlocksMixedVerificationWorkspaces(t *testing.T) {
 			t.Fatalf("expected %q in error, got %q", want, message)
 		}
 	}
-	if len(calls) != 0 {
-		t.Fatalf("expected guardrail before git calls, got %v", calls)
+	if prepareCalls != 0 {
+		t.Fatalf("expected guardrail before workspace preparation, got %d calls", prepareCalls)
 	}
 }
 
@@ -430,7 +439,11 @@ func TestExecutionPreparerWritesPreparingThenReadyMetadata(t *testing.T) {
 	workspacePath := filepath.Join(workspaceRoot, "plan-a")
 	detail := executionPreparerPlanDetail(repoRoot)
 	detail.State.Workspace = &plan.Workspace{Strategy: plan.WorkspaceStrategyWorktree, Root: workspaceRoot}
-	var calls []string
+	prepareCalls := 0
+	managerFactory := executionPreparerManagerFactory(Metadata{
+		Path: workspacePath, Branch: "tao/plan-a", BaseBranch: "feature", BaseSHA: "base123",
+		BaseCurrentSHA: "base123", HeadSHA: "head123", BaseStatus: "current", RebaseStatus: "not_needed", Created: true,
+	}, &prepareCalls)
 	var statuses []string
 	recordFactory := func(detail *plan.PlanDetail) (PlanRecord, error) {
 		return persistStateFunc(func() error {
@@ -439,7 +452,7 @@ func TestExecutionPreparerWritesPreparingThenReadyMetadata(t *testing.T) {
 		}), nil
 	}
 
-	root, err := (ExecutionPreparer{Runner: executionPreparerGitFake(&calls), PlanRecordFactory: recordFactory, Now: executionPreparerClock(createdAt, readyAt)}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
+	root, err := (ExecutionPreparer{managerFactory: managerFactory, PlanRecordFactory: recordFactory, Now: executionPreparerClock(createdAt, readyAt)}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
 	if err != nil {
 		t.Fatalf("prepare execution workspace: %v", err)
 	}
@@ -459,8 +472,8 @@ func TestExecutionPreparerWritesPreparingThenReadyMetadata(t *testing.T) {
 	if detail.State.Workspace.Timing.PreparedAt == nil || !detail.State.Workspace.Timing.PreparedAt.Equal(readyAt) {
 		t.Fatalf("expected ready timestamp %s, got %#v", readyAt, detail.State.Workspace.Timing.PreparedAt)
 	}
-	if !executionPreparerCallBefore(calls, "worktree add -b tao/plan-a "+workspacePath+" feature", "branch --show-current") {
-		t.Fatalf("expected status after worktree add, got calls %v", calls)
+	if prepareCalls != 1 {
+		t.Fatalf("workspace manager Prepare calls = %d, want 1", prepareCalls)
 	}
 }
 
@@ -1002,16 +1015,23 @@ func TestExecutionPreparerSoftFailsChangedDependenciesOnReuse(t *testing.T) {
 }
 
 func TestExecutionPreparerFreshDependencyFailureIsHard(t *testing.T) {
-	repo := newTestRepo(t)
-	commitTestFile(t, repo.path, "package-lock.json", "{}\n", "add lockfile")
-	detail := executionPreparerPlanDetail(repo.path)
+	repoRoot := t.TempDir()
+	workspacePath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspacePath, "package-lock.json"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	detail := executionPreparerPlanDetail(repoRoot)
 	config := DefaultConfig()
 	runner := dependencyPreparerRunner(func(stderr io.Writer) error {
 		_, _ = io.WriteString(stderr, "install failed")
 		return errors.New("exit status 1")
 	}, new(int))
+	managerFactory := executionPreparerManagerFactory(Metadata{
+		Path: workspacePath, Branch: "tao/plan-a", BaseBranch: "feature", BaseSHA: "base123",
+		BaseCurrentSHA: "base123", HeadSHA: "head123", Created: true,
+	}, nil)
 
-	_, err := (ExecutionPreparer{Runner: runner, Config: config}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
+	_, err := (ExecutionPreparer{Runner: runner, Config: config, managerFactory: managerFactory}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
 	if err == nil {
 		t.Fatal("expected fresh workspace dependency failure")
 	}
@@ -1050,11 +1070,24 @@ func TestExecutionPreparerAlwaysInstallsWithMatchingFingerprint(t *testing.T) {
 
 func dependencyPreparerFixture(t *testing.T, config Config, install func(io.Writer) error) (ExecutionPreparer, *plan.PlanDetail, string, *int) {
 	t.Helper()
-	repo := newTestRepo(t)
-	commitTestFile(t, repo.path, "package-lock.json", "{}\n", "add lockfile")
-	detail := executionPreparerPlanDetail(repo.path)
+	repoRoot := t.TempDir()
+	workspacePath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspacePath, "package-lock.json"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	detail := executionPreparerPlanDetail(repoRoot)
 	installCalls := new(int)
-	preparer := ExecutionPreparer{Runner: dependencyPreparerRunner(install, installCalls), Config: config}
+	prepareCalls := 0
+	managerFactory := func(Options) (executionWorkspaceManager, error) {
+		return executionWorkspaceManagerFunc(func(context.Context, PrepareOptions) (Metadata, error) {
+			prepareCalls++
+			return Metadata{
+				Path: workspacePath, Branch: "tao/plan-a", BaseBranch: "feature", BaseSHA: "base123",
+				BaseCurrentSHA: "base123", HeadSHA: "head123", Created: prepareCalls == 1, Reused: prepareCalls > 1,
+			}, nil
+		}), nil
+	}
+	preparer := ExecutionPreparer{Runner: dependencyPreparerRunner(install, installCalls), Config: config, managerFactory: managerFactory}
 	workspacePath, err := preparer.Prepare(context.Background(), detail, ExecutionPrepareOptions{})
 	if err != nil {
 		t.Fatalf("prepare initial workspace: %v", err)
@@ -1064,9 +1097,6 @@ func dependencyPreparerFixture(t *testing.T, config Config, install func(io.Writ
 
 func dependencyPreparerRunner(install func(io.Writer) error, installCalls *int) CommandRunner {
 	return func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
-		if name == "git" {
-			return defaultCommandRunner(ctx, cwd, name, args, stdout, stderr)
-		}
 		*installCalls++
 		if install != nil {
 			return install(stderr)
@@ -1102,13 +1132,9 @@ func TestExecutionPreparerClearsDependencyFailureOnRetrySuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Build a runner that fails npm ci the first call and succeeds the second.
+	// Build a dependency runner that fails the first call and succeeds the second.
 	npmCallCount := 0
-	var gitCalls []string
 	runner := func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
-		if name == "git" {
-			return executionPreparerGitFake(&gitCalls)(ctx, cwd, name, args, stdout, stderr)
-		}
 		npmCallCount++
 		if npmCallCount == 1 {
 			_, _ = io.WriteString(stderr, "npm install: network error")
@@ -1125,7 +1151,17 @@ func TestExecutionPreparerClearsDependencyFailureOnRetrySuccess(t *testing.T) {
 	config := DefaultConfig()
 	config.DependencyInstallBehavior = DependencyInstallCommand
 	config.DependencyInstallCommand = "custom install"
-	preparer := ExecutionPreparer{Runner: runner, PlanRecordFactory: realRecordFactory, Config: config}
+	prepareCalls := 0
+	managerFactory := func(Options) (executionWorkspaceManager, error) {
+		return executionWorkspaceManagerFunc(func(context.Context, PrepareOptions) (Metadata, error) {
+			prepareCalls++
+			return Metadata{
+				Path: workspacePath, Branch: "tao/plan-a", BaseBranch: "feature", BaseSHA: "base123",
+				BaseCurrentSHA: "base123", HeadSHA: "head123", Created: prepareCalls == 1, Reused: prepareCalls > 1,
+			}, nil
+		}), nil
+	}
+	preparer := ExecutionPreparer{Runner: runner, PlanRecordFactory: realRecordFactory, Config: config, managerFactory: managerFactory}
 
 	// First prepare: fails due to dependency error.
 	_, err = preparer.Prepare(context.Background(), detail, ExecutionPrepareOptions{})
@@ -1221,29 +1257,23 @@ func (f persistStateFunc) PersistStateChanges(_ *plan.ArtifactChangeSet) error {
 	return f()
 }
 
-func executionPreparerGitFake(calls *[]string) CommandRunner {
-	return func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if name != "git" {
-			return nil
-		}
-		key := executionPreparerGitKey(args)
-		*calls = append(*calls, key)
-		switch {
-		case key == "rev-parse feature":
-			_, _ = io.WriteString(stdout, "base123\n")
-		case key == "worktree list --porcelain":
-		case key == "branch --format=%(refname:short) --list tao/plan-a":
-		case strings.HasPrefix(key, "worktree add "):
-		case key == "branch --show-current":
-			_, _ = io.WriteString(stdout, "tao/plan-a\n")
-		case key == "rev-parse HEAD":
-			_, _ = io.WriteString(stdout, "head123\n")
-		case key == "status --porcelain":
-		}
-		return nil
+type executionWorkspaceManagerFunc func(context.Context, PrepareOptions) (Metadata, error)
+
+func (f executionWorkspaceManagerFunc) Prepare(ctx context.Context, options PrepareOptions) (Metadata, error) {
+	return f(ctx, options)
+}
+
+func executionPreparerManagerFactory(metadata Metadata, calls *int) executionWorkspaceManagerFactory {
+	return func(Options) (executionWorkspaceManager, error) {
+		return executionWorkspaceManagerFunc(func(ctx context.Context, _ PrepareOptions) (Metadata, error) {
+			if err := ctx.Err(); err != nil {
+				return Metadata{}, err
+			}
+			if calls != nil {
+				*calls++
+			}
+			return metadata, nil
+		}), nil
 	}
 }
 
@@ -1257,29 +1287,4 @@ func executionPreparerClock(times ...time.Time) func() time.Time {
 		index++
 		return now
 	}
-}
-
-func executionPreparerGitKey(args []string) string {
-	if len(args) >= 2 && args[0] == "-C" {
-		args = args[2:]
-	}
-	return strings.Join(args, " ")
-}
-
-func executionPreparerHasGitCall(calls []string, want string) bool {
-	return slices.Contains(calls, want)
-}
-
-func executionPreparerCallBefore(calls []string, before string, after string) bool {
-	beforeIndex := -1
-	afterIndex := -1
-	for i, call := range calls {
-		if call == before {
-			beforeIndex = i
-		}
-		if call == after {
-			afterIndex = i
-		}
-	}
-	return beforeIndex >= 0 && afterIndex >= 0 && beforeIndex < afterIndex
 }

@@ -18,11 +18,62 @@ type CommandRunner = commandrunner.Runner
 
 var defaultCommandRunner CommandRunner = commandrunner.DefaultLocal
 
+type workspaceStatusGit interface {
+	WorktreeStatus(context.Context, string) (gitops.WorktreeStatus, error)
+	Worktrees(context.Context) ([]gitops.Worktree, error)
+}
+
+type workspaceBranchGit interface {
+	CurrentBranch(context.Context) (string, error)
+	DefaultBranch(context.Context) (string, error)
+	RevParse(context.Context, string) (string, error)
+	LocalBranchExists(context.Context, string) (bool, error)
+	RemoteTrackingBranchExists(context.Context, string) (bool, error)
+	RemoteBranchExists(context.Context, string) (bool, error)
+}
+
+type workspaceMutationGit interface {
+	AddWorktree(context.Context, string, string, string, bool) error
+	RemoveWorktree(context.Context, string, bool) error
+	DeleteBranch(context.Context, string, bool) error
+}
+
+type workspaceRebaseGit interface {
+	IsAncestor(context.Context, string, string) (bool, error)
+	CommitSeriesRebaseProof(context.Context, string, string, string, string) (gitops.CommitSeriesProof, error)
+	ProveRebaseReplay(context.Context, string, string, string, gitops.CommitSeriesProof) error
+	RebaseWorktree(context.Context, string, string, string) error
+	RebaseAbortWorktree(context.Context, string) error
+}
+
+type workspaceCleanupGit interface {
+	BranchExists(context.Context, string) (bool, error)
+	BranchMerged(context.Context, string) (bool, error)
+	ListBranches(context.Context, string) ([]string, error)
+	MergedIntoMechanism(context.Context, string, string) (gitops.MergeMechanism, error)
+}
+
+var (
+	_ workspaceStatusGit   = gitops.Client{}
+	_ workspaceBranchGit   = gitops.Client{}
+	_ workspaceMutationGit = gitops.Client{}
+	_ workspaceRebaseGit   = gitops.Client{}
+	_ workspaceCleanupGit  = gitops.Client{}
+)
+
+type managerGitCapabilities struct {
+	status   workspaceStatusGit
+	branches workspaceBranchGit
+	mutation workspaceMutationGit
+	rebase   workspaceRebaseGit
+	cleanup  workspaceCleanupGit
+}
+
 // Manager prepares and inspects git worktree-backed plan workspaces.
 type Manager struct {
 	repoRoot string
 	config   Config
-	git      gitops.Client
+	git      managerGitCapabilities
 }
 
 // Options configures a Manager.
@@ -77,7 +128,7 @@ func (m *Manager) IntegrationStatus(ctx context.Context, batchID string) (Integr
 		identity.Missing = true
 		return identity, nil
 	}
-	status, err := m.git.WorktreeStatus(ctx, identity.Path)
+	status, err := m.git.status.WorktreeStatus(ctx, identity.Path)
 	if err != nil {
 		return IntegrationWorkspace{}, err
 	}
@@ -106,7 +157,7 @@ func (m *Manager) CreateIntegration(ctx context.Context, batchID, startSHA strin
 		}
 		return identity, nil
 	}
-	worktrees, err := m.git.Worktrees(ctx)
+	worktrees, err := m.git.status.Worktrees(ctx)
 	if err != nil {
 		return IntegrationWorkspace{}, err
 	}
@@ -118,16 +169,16 @@ func (m *Manager) CreateIntegration(ctx context.Context, batchID, startSHA strin
 	if err := os.MkdirAll(filepath.Dir(identity.Path), 0o755); err != nil { //nolint:gosec // local worktree namespace
 		return IntegrationWorkspace{}, err
 	}
-	branchExists, err := m.git.LocalBranchExists(ctx, identity.Branch)
+	branchExists, err := m.git.branches.LocalBranchExists(ctx, identity.Branch)
 	if err != nil {
 		return IntegrationWorkspace{}, err
 	}
 	if branchExists {
-		if head, parseErr := m.git.RevParse(ctx, identity.Branch); parseErr != nil || head != startSHA {
+		if head, parseErr := m.git.branches.RevParse(ctx, identity.Branch); parseErr != nil || head != startSHA {
 			return IntegrationWorkspace{}, fmt.Errorf("stale integration branch %q must be restarted before reuse", identity.Branch)
 		}
 	}
-	if err := m.git.AddWorktree(ctx, identity.Path, identity.Branch, startSHA, !branchExists); err != nil {
+	if err := m.git.mutation.AddWorktree(ctx, identity.Path, identity.Branch, startSHA, !branchExists); err != nil {
 		return IntegrationWorkspace{}, err
 	}
 	created, err := m.IntegrationStatus(ctx, batchID)
@@ -150,16 +201,16 @@ func (m *Manager) RemoveIntegration(ctx context.Context, batchID string) error {
 		return fmt.Errorf("refusing to remove unexpected integration branch %q", identity.Branch)
 	}
 	if !identity.Missing {
-		if err := m.git.RemoveWorktree(ctx, identity.Path, true); err != nil {
+		if err := m.git.mutation.RemoveWorktree(ctx, identity.Path, true); err != nil {
 			return fmt.Errorf("remove integration worktree: %w", err)
 		}
 	}
-	exists, err := m.git.LocalBranchExists(ctx, identity.Branch)
+	exists, err := m.git.branches.LocalBranchExists(ctx, identity.Branch)
 	if err != nil {
 		return err
 	}
 	if exists {
-		if err := m.git.DeleteBranch(ctx, identity.Branch, true); err != nil {
+		if err := m.git.mutation.DeleteBranch(ctx, identity.Branch, true); err != nil {
 			return fmt.Errorf("remove integration branch: %w", err)
 		}
 	}
@@ -190,7 +241,15 @@ func NewManager(options Options) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Manager{repoRoot: repoRoot, config: config, git: gitops.NewClient(repoRoot, runner)}, nil
+	client := gitops.NewClient(repoRoot, runner)
+	return newManager(repoRoot, config, managerGitCapabilities{
+		status: client, branches: client, mutation: client, rebase: client, cleanup: client,
+	}), nil
+}
+
+// newManager is the package-local typed injection path used by behavioral tests.
+func newManager(repoRoot string, config Config, git managerGitCapabilities) *Manager {
+	return &Manager{repoRoot: repoRoot, config: config, git: git}
 }
 
 // Prepare creates or reuses the selected plan worktree.
@@ -210,7 +269,7 @@ func (m *Manager) Prepare(ctx context.Context, options PrepareOptions) (Metadata
 	if err != nil {
 		return Metadata{}, err
 	}
-	baseCurrentSHA, err := m.git.RevParse(ctx, baseBranch)
+	baseCurrentSHA, err := m.git.branches.RevParse(ctx, baseBranch)
 	if err != nil {
 		return Metadata{}, err
 	}
@@ -237,19 +296,19 @@ func (m *Manager) Prepare(ctx context.Context, options PrepareOptions) (Metadata
 		return metadata, nil
 	}
 
-	branchExists, err := m.git.LocalBranchExists(ctx, branch)
+	branchExists, err := m.git.branches.LocalBranchExists(ctx, branch)
 	if err != nil {
 		return Metadata{}, err
 	}
 	if options.RequireNewBranch {
-		remoteTrackingBranchExists, remoteErr := m.git.RemoteTrackingBranchExists(ctx, branch)
+		remoteTrackingBranchExists, remoteErr := m.git.branches.RemoteTrackingBranchExists(ctx, branch)
 		if remoteErr != nil {
 			return Metadata{}, remoteErr
 		}
 		if branchExists || remoteTrackingBranchExists {
 			return Metadata{}, fmt.Errorf("branch %q already exists without durable ownership for plan %s", branch, planID)
 		}
-		remoteBranchExists, remoteErr := m.git.RemoteBranchExists(ctx, branch)
+		remoteBranchExists, remoteErr := m.git.branches.RemoteBranchExists(ctx, branch)
 		if remoteErr != nil {
 			return Metadata{}, remoteErr
 		}
@@ -258,7 +317,7 @@ func (m *Manager) Prepare(ctx context.Context, options PrepareOptions) (Metadata
 		}
 	}
 
-	worktrees, err := m.git.Worktrees(ctx)
+	worktrees, err := m.git.status.Worktrees(ctx)
 	if err != nil {
 		return Metadata{}, err
 	}
@@ -271,10 +330,10 @@ func (m *Manager) Prepare(ctx context.Context, options PrepareOptions) (Metadata
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil { //nolint:gosec // G301: workspace metadata dir needs standard 0755 perms
 		return Metadata{}, err
 	}
-	if err := m.git.AddWorktree(ctx, path, branch, baseBranch, !branchExists); err != nil {
+	if err := m.git.mutation.AddWorktree(ctx, path, branch, baseBranch, !branchExists); err != nil {
 		return Metadata{}, err
 	}
-	status, err := m.git.WorktreeStatus(ctx, path)
+	status, err := m.git.status.WorktreeStatus(ctx, path)
 	if err != nil {
 		return Metadata{}, err
 	}
@@ -287,8 +346,8 @@ func (m *Manager) Prepare(ctx context.Context, options PrepareOptions) (Metadata
 
 func (m *Manager) resolveBaseBranch(ctx context.Context, options PrepareOptions) (string, error) {
 	if options.PreferDefaultBranch && m.config.BaseBranchDetection != BaseBranchDetectManual {
-		if branch, err := m.git.DefaultBranch(ctx); err == nil && branch != "" {
-			if exists, err := m.git.LocalBranchExists(ctx, branch); err == nil && exists {
+		if branch, err := m.git.branches.DefaultBranch(ctx); err == nil && branch != "" {
+			if exists, err := m.git.branches.LocalBranchExists(ctx, branch); err == nil && exists {
 				return branch, nil
 			}
 		}
@@ -296,7 +355,7 @@ func (m *Manager) resolveBaseBranch(ctx context.Context, options PrepareOptions)
 	if options.BaseBranch != "" {
 		return options.BaseBranch, nil
 	}
-	return m.git.CurrentBranch(ctx)
+	return m.git.branches.CurrentBranch(ctx)
 }
 
 func (m *Manager) rebaseStaleWorktree(ctx context.Context, metadata *Metadata, enabled bool, recorder RebaseRecorder, now func() time.Time) error {
@@ -304,7 +363,7 @@ func (m *Manager) rebaseStaleWorktree(ctx context.Context, metadata *Metadata, e
 		setBaseRefreshStatus(metadata)
 		return nil
 	}
-	containsBase, err := m.git.IsAncestor(ctx, metadata.BaseCurrentSHA, metadata.HeadSHA)
+	containsBase, err := m.git.rebase.IsAncestor(ctx, metadata.BaseCurrentSHA, metadata.HeadSHA)
 	if err != nil {
 		return fmt.Errorf("check workspace rebase status for plan %s: %w", metadata.PlanID, err)
 	}
@@ -317,11 +376,11 @@ func (m *Manager) rebaseStaleWorktree(ctx context.Context, metadata *Metadata, e
 		return fmt.Errorf("workspace %s for plan %s is stale against local base branch %q and dirty; refusing pre-run rebase before agent execution. Commit, stash, or discard the worktree changes, then retry", metadata.Path, metadata.PlanID, metadata.BaseBranch)
 	}
 	rebaseTarget := metadata.BaseCurrentSHA
-	proof, proofErr := m.git.CommitSeriesRebaseProof(ctx, metadata.BaseSHA, rebaseTarget, metadata.BaseSHA, metadata.HeadSHA)
+	proof, proofErr := m.git.rebase.CommitSeriesRebaseProof(ctx, metadata.BaseSHA, rebaseTarget, metadata.BaseSHA, metadata.HeadSHA)
 	if proofErr != nil {
 		return fmt.Errorf("prove workspace commit series before rebase for plan %s (%s..%s): %w", metadata.PlanID, describeSHA(metadata.BaseSHA), describeSHA(metadata.HeadSHA), proofErr)
 	}
-	if proofErr := m.git.ProveRebaseReplay(ctx, metadata.BaseSHA, metadata.HeadSHA, rebaseTarget, proof); proofErr != nil {
+	if proofErr := m.git.rebase.ProveRebaseReplay(ctx, metadata.BaseSHA, metadata.HeadSHA, rebaseTarget, proof); proofErr != nil {
 		return fmt.Errorf("prove exact workspace commit replay before rebase for plan %s (%s..%s onto %s): %w", metadata.PlanID, describeSHA(metadata.BaseSHA), describeSHA(metadata.HeadSHA), describeSHA(rebaseTarget), proofErr)
 	}
 	var intent plan.WorkspaceRebaseIntent
@@ -336,14 +395,14 @@ func (m *Manager) rebaseStaleWorktree(ctx context.Context, metadata *Metadata, e
 		}
 		rebaseTarget = intent.NewBaseSHA
 	}
-	if err := m.git.RebaseWorktree(ctx, metadata.Path, rebaseTarget, metadata.BaseSHA); err != nil {
-		abortErr := m.git.RebaseAbortWorktree(ctx, metadata.Path)
+	if err := m.git.rebase.RebaseWorktree(ctx, metadata.Path, rebaseTarget, metadata.BaseSHA); err != nil {
+		abortErr := m.git.rebase.RebaseAbortWorktree(ctx, metadata.Path)
 		if abortErr != nil {
 			return fmt.Errorf("pre-run rebase/conflict phase failed for plan %s in %s onto recorded base %s (local base branch %q): %w; additionally failed to abort rebase: %w", metadata.PlanID, metadata.Path, describeSHA(rebaseTarget), metadata.BaseBranch, err, abortErr)
 		}
 		return fmt.Errorf("pre-run rebase/conflict phase failed for plan %s in %s onto recorded base %s (local base branch %q); aborted rebase before agent execution: %w", metadata.PlanID, metadata.Path, describeSHA(rebaseTarget), metadata.BaseBranch, err)
 	}
-	status, err := m.git.WorktreeStatus(ctx, metadata.Path)
+	status, err := m.git.status.WorktreeStatus(ctx, metadata.Path)
 	if err != nil {
 		return fmt.Errorf("refresh workspace status after pre-run rebase for plan %s: %w", metadata.PlanID, err)
 	}
@@ -363,7 +422,7 @@ func (m *Manager) rebaseStaleWorktree(ctx context.Context, metadata *Metadata, e
 		if active != "" {
 			return fmt.Errorf("refusing to settle workspace rebase for plan %s: Git operation %q remains active; rebase intent remains durable; recover the worktree manually", metadata.PlanID, active)
 		}
-		proof, proofErr := m.git.CommitSeriesRebaseProof(ctx, intent.OldBaseSHA, intent.NewBaseSHA, metadata.BaseSHA, metadata.HeadSHA)
+		proof, proofErr := m.git.rebase.CommitSeriesRebaseProof(ctx, intent.OldBaseSHA, intent.NewBaseSHA, metadata.BaseSHA, metadata.HeadSHA)
 		if proofErr != nil {
 			return fmt.Errorf("prove rebased workspace commit series for plan %s (%s..%s); rebase intent remains durable: %w", metadata.PlanID, describeSHA(metadata.BaseSHA), describeSHA(metadata.HeadSHA), proofErr)
 		}
@@ -406,7 +465,7 @@ func (m *Manager) Status(ctx context.Context, planID string, expectedBranch ...s
 	if !exists(path) {
 		return Metadata{PlanID: planID, Path: path, Branch: branch, Missing: true}, nil
 	}
-	status, err := m.git.WorktreeStatus(ctx, path)
+	status, err := m.git.status.WorktreeStatus(ctx, path)
 	if err != nil {
 		return Metadata{}, err
 	}
@@ -415,7 +474,7 @@ func (m *Manager) Status(ctx context.Context, planID string, expectedBranch ...s
 
 // List returns known Tao workspaces under the configured workspace root.
 func (m *Manager) List(ctx context.Context) ([]Metadata, error) {
-	worktrees, err := m.git.Worktrees(ctx)
+	worktrees, err := m.git.status.Worktrees(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -427,7 +486,7 @@ func (m *Manager) List(ctx context.Context) ([]Metadata, error) {
 		if !ok {
 			continue
 		}
-		status, err := m.git.WorktreeStatus(ctx, path)
+		status, err := m.git.status.WorktreeStatus(ctx, path)
 		if err != nil {
 			return nil, err
 		}
@@ -437,7 +496,7 @@ func (m *Manager) List(ctx context.Context) ([]Metadata, error) {
 }
 
 func (m *Manager) currentWorkspace(ctx context.Context, options PrepareOptions) (Metadata, error) {
-	status, err := m.git.WorktreeStatus(ctx, m.repoRoot)
+	status, err := m.git.status.WorktreeStatus(ctx, m.repoRoot)
 	if err != nil {
 		return Metadata{}, err
 	}
@@ -445,7 +504,7 @@ func (m *Manager) currentWorkspace(ctx context.Context, options PrepareOptions) 
 	if baseBranch == "" {
 		baseBranch = status.Branch
 	}
-	baseCurrentSHA, _ := m.git.RevParse(ctx, baseBranch)
+	baseCurrentSHA, _ := m.git.branches.RevParse(ctx, baseBranch)
 	baseSHA := options.BaseSHA
 	if baseSHA == "" {
 		baseSHA = baseCurrentSHA

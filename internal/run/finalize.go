@@ -64,7 +64,7 @@ func (f Finalizer) finalizeCompletedRun(ctx context.Context, runCount int, detai
 		return err
 	}
 	if execution.Config.CommitPolicy != CommitPolicyNone {
-		if err := requireCleanReviewWorktree(ctx, gitClient(execution, executionRoot), detail, nil); err != nil {
+		if err := requireCleanReviewWorktree(ctx, execution.Dependencies.reviewGitFactory(executionRoot), detail, nil); err != nil {
 			return fmt.Errorf("finalize completed run: %w", err)
 		}
 	}

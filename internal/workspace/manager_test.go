@@ -3,15 +3,46 @@ package workspace
 import (
 	"context"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
+	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
 )
+
+type removeFailingGit struct {
+	workspaceMutationGit
+	err error
+}
+
+func (g removeFailingGit) RemoveWorktree(context.Context, string, bool) error {
+	return g.err
+}
+
+type fixedStatusGit struct {
+	workspaceStatusGit
+	status gitops.WorktreeStatus
+}
+
+func (g fixedStatusGit) WorktreeStatus(context.Context, string) (gitops.WorktreeStatus, error) {
+	return g.status, nil
+}
+
+type fixedCleanupGit struct {
+	workspaceCleanupGit
+	branchExists bool
+	branchMerged bool
+}
+
+func (g fixedCleanupGit) BranchExists(context.Context, string) (bool, error) {
+	return g.branchExists, nil
+}
+
+func (g fixedCleanupGit) BranchMerged(context.Context, string) (bool, error) {
+	return g.branchMerged, nil
+}
 
 func TestRemoveIntegrationWorktreeCleanupFailurePreservesResources(t *testing.T) {
 	repo := newTestRepo(t)
@@ -21,15 +52,12 @@ func TestRemoveIntegrationWorktreeCleanupFailurePreservesResources(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	failing, err := NewManager(Options{RepoRoot: repo.path, Runner: func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
-		if name == "git" && slices.Contains(args, "remove") && slices.Contains(args, "worktree") {
-			return errors.New("injected worktree cleanup failure")
-		}
-		return defaultCommandRunner(ctx, cwd, name, args, stdout, stderr)
-	}})
-	if err != nil {
-		t.Fatal(err)
+	capabilities := manager.git
+	capabilities.mutation = removeFailingGit{
+		workspaceMutationGit: capabilities.mutation,
+		err:                  errors.New("injected worktree cleanup failure"),
 	}
+	failing := newManager(manager.repoRoot, manager.config, capabilities)
 	if err := failing.RemoveIntegration(context.Background(), "batch-a"); err == nil {
 		t.Fatal("expected cleanup failure")
 	}
@@ -303,19 +331,13 @@ func TestPlanCleanRefusesProtectedAndUnmergedByDefault(t *testing.T) {
 	if err := os.MkdirAll(workspacePath, 0o755); err != nil { //nolint:gosec // G301: test workspace dir
 		t.Fatal(err)
 	}
-	manager, err := NewManager(Options{RepoRoot: repo.path, Runner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
-		switch workspaceGitKey(args) {
-		case "branch --show-current":
-			_, _ = io.WriteString(stdout, "master\n")
-		case "rev-parse HEAD", "rev-parse --verify master":
-			_, _ = io.WriteString(stdout, "head\n")
-		case "status --porcelain", "merge-base --is-ancestor master HEAD":
-		}
-		return nil
-	}})
-	if err != nil {
-		t.Fatalf("NewManager failed: %v", err)
-	}
+	manager := newManager(repo.path, DefaultConfig(), managerGitCapabilities{
+		status: fixedStatusGit{status: gitops.WorktreeStatus{Branch: "master", HEAD: "head"}},
+		cleanup: fixedCleanupGit{
+			branchExists: true,
+			branchMerged: true,
+		},
+	})
 	protected, err := manager.PlanClean(context.Background(), "current-plan")
 	if err != nil {
 		t.Fatalf("PlanClean protected failed: %v", err)

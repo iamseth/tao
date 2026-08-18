@@ -23,7 +23,7 @@ func (m *Manager) PlanClean(ctx context.Context, planID string) (CleanPlan, erro
 		return CleanPlan{}, err
 	}
 	plan := CleanPlan{PlanID: status.PlanID, Path: status.Path, Branch: status.Branch, Dirty: status.Dirty, Missing: status.Missing}
-	branchExists, err := m.git.BranchExists(ctx, status.Branch)
+	branchExists, err := m.git.cleanup.BranchExists(ctx, status.Branch)
 	if err != nil {
 		return CleanPlan{}, err
 	}
@@ -31,7 +31,7 @@ func (m *Manager) PlanClean(ctx context.Context, planID string) (CleanPlan, erro
 	plan.ProtectedBranch = gitops.ProtectedBranch(status.Branch)
 	merged := false
 	if branchExists {
-		merged, err = m.git.BranchMerged(ctx, status.Branch)
+		merged, err = m.git.cleanup.BranchMerged(ctx, status.Branch)
 		if err != nil {
 			return CleanPlan{}, err
 		}
@@ -84,7 +84,7 @@ func (m *Manager) Clean(ctx context.Context, planID string, options CleanOptions
 	if !plan.CanRemove && !plan.Dirty && !options.Force {
 		return plan, fmt.Errorf("cannot clean workspace %s: %s", planID, plan.Reason)
 	}
-	if err := m.git.RemoveWorktree(ctx, plan.Path, plan.Dirty && options.ForceDirty); err != nil {
+	if err := m.git.mutation.RemoveWorktree(ctx, plan.Path, plan.Dirty && options.ForceDirty); err != nil {
 		return plan, err
 	}
 	return plan, nil
@@ -138,15 +138,15 @@ func (m *Manager) PlanManagedCleanup(ctx context.Context, ownedBranches ...strin
 		return nil, nil
 	}
 
-	current, err := m.git.CurrentBranch(ctx)
+	current, err := m.git.branches.CurrentBranch(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defaultBranch, err := m.git.DefaultBranch(ctx)
+	defaultBranch, err := m.git.branches.DefaultBranch(ctx)
 	if err != nil {
 		return nil, err
 	}
-	worktrees, err := m.git.Worktrees(ctx)
+	worktrees, err := m.git.status.Worktrees(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -179,7 +179,7 @@ func (m *Manager) managedCleanupCandidates(ctx context.Context, ownedBranches []
 		return nil, fmt.Errorf("branch name template %q has no static prefix; cannot scope cleanup safely", m.config.BranchNameTemplate)
 	}
 
-	branches, err := m.git.ListBranches(ctx, prefix+"*")
+	branches, err := m.git.cleanup.ListBranches(ctx, prefix+"*")
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +203,7 @@ func (m *Manager) managedCleanupCandidates(ctx context.Context, ownedBranches []
 		if owned == "" || strings.HasPrefix(owned, integrationBranchPrefix) {
 			continue
 		}
-		matches, err := m.git.ListBranches(ctx, owned)
+		matches, err := m.git.cleanup.ListBranches(ctx, owned)
 		if err != nil {
 			return nil, err
 		}
@@ -230,7 +230,7 @@ func (m *Manager) decideManagedCleanup(ctx context.Context, branch string, curre
 	}
 
 	if worktreePath != "" {
-		status, err := m.git.WorktreeStatus(ctx, worktreePath)
+		status, err := m.git.status.WorktreeStatus(ctx, worktreePath)
 		if err != nil {
 			return ManagedCleanup{}, err
 		}
@@ -241,7 +241,7 @@ func (m *Manager) decideManagedCleanup(ctx context.Context, branch string, curre
 		}
 	}
 
-	mergeMechanism, err := m.git.MergedIntoMechanism(ctx, branch, defaultBranch)
+	mergeMechanism, err := m.git.cleanup.MergedIntoMechanism(ctx, branch, defaultBranch)
 	if err != nil {
 		return ManagedCleanup{}, err
 	}
@@ -273,19 +273,19 @@ func (m *Manager) CleanManaged(ctx context.Context, item ManagedCleanup, options
 		return fmt.Errorf("refusing to remove %s: %s", item.Branch, item.Reason)
 	}
 	if item.WorktreePath != "" {
-		status, err := m.git.WorktreeStatus(ctx, item.WorktreePath)
+		status, err := m.git.status.WorktreeStatus(ctx, item.WorktreePath)
 		if err != nil {
 			return fmt.Errorf("re-check worktree %s before cleanup: %w", item.WorktreePath, err)
 		}
 		if status.Dirty && !options.Force {
 			return fmt.Errorf("refusing to remove %s: worktree %s has uncommitted changes", item.Branch, item.WorktreePath)
 		}
-		if err := m.git.RemoveWorktree(ctx, item.WorktreePath, true); err != nil {
+		if err := m.git.mutation.RemoveWorktree(ctx, item.WorktreePath, true); err != nil {
 			return err
 		}
 	}
 	forceBranch := options.Force || options.AllowNonAncestralBranch || item.MergedNonAncestral
-	return m.git.DeleteBranch(ctx, item.Branch, forceBranch)
+	return m.git.mutation.DeleteBranch(ctx, item.Branch, forceBranch)
 }
 
 func worktreeRemoveActions(path string, force bool) []string {
