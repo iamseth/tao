@@ -268,14 +268,22 @@ The workflow starts from this deterministic report:
 tao insights --all-repos --digest
 ```
 
-`tao insights` reports evidence and coverage; it does not generate advice. The
-`/tao-insights-review` planning prompt evaluates that evidence against current
-Tao code and guidance, rejects obsolete or application-specific signals, and
-produces zero or more agent-generated recommendations. It reads all available
-structured plan history, while agent-log analysis is limited to plans active in
-the last 30 days. Missing roots, damaged records, unreadable logs, stale logs,
-and evidence concentrated in one repository are reported as limits rather than
-silently generalized.
+`tao insights` reports evidence and coverage; it does not generate advice. Its
+bounded digest selects output-token and cost outliers independently so one
+metric cannot crowd out the other, and states how many detected outlier plans
+were omitted; the full report remains uncapped. Structured event rows add
+observed plan breadth and absolute UTC recency (plus repository breadth only in
+all-repository scope). These counts are audit observations, not rates, causal
+classifications, or authority to retry or recover; when counted historical
+events lack timestamps, Tao says that recency is unavailable.
+
+The `/tao-insights-review` planning prompt evaluates that evidence against
+current Tao code and guidance, rejects obsolete or application-specific
+signals, and produces zero or more agent-generated recommendations. It reads
+all available structured plan history, while agent-log analysis is limited to
+plans active in the last 30 days. Missing roots, damaged records, unreadable
+logs, stale logs, and evidence concentrated in one repository are reported as
+limits rather than silently generalized.
 
 **How to interpret and use the review:**
 

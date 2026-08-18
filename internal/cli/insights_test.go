@@ -115,6 +115,10 @@ func TestInsightsRenderersGolden(t *testing.T) {
 }
 
 func representativeInsightsReport() insights.Report {
+	latestTimeout := time.Date(2026, 8, 17, 14, 30, 0, 0, time.FixedZone("fixture", -7*60*60))
+	latestResume := time.Date(2026, 8, 18, 9, 15, 0, 0, time.UTC)
+	latestFallback := time.Date(2026, 8, 16, 20, 0, 0, 0, time.UTC)
+	latestGuard := time.Date(2026, 8, 18, 22, 5, 0, 0, time.UTC)
 	report := insights.Report{
 		PlansScanned: 9,
 		PlansSkipped: 2,
@@ -134,6 +138,13 @@ func representativeInsightsReport() insights.Report {
 		},
 		Signals: insights.SignalCounts{
 			SessionTimeout: 3, SliceResumeFailed: 0, VerificationCommandInvalid: 2, PlanCommitFallback: 1, PlanCommitGuard: 4,
+		},
+		SignalEvidence: insights.SignalEvidence{
+			SessionTimeout:             insights.SignalObservation{Count: 3, Plans: 2, Repositories: 2, LatestTimestamp: &latestTimeout},
+			SliceResumeAttempted:       insights.SignalObservation{Count: 2, Plans: 1, Repositories: 1, LatestTimestamp: &latestResume},
+			VerificationCommandInvalid: insights.SignalObservation{Count: 2, Plans: 2, Repositories: 1},
+			PlanCommitFallback:         insights.SignalObservation{Count: 1, Plans: 1, Repositories: 1, LatestTimestamp: &latestFallback},
+			PlanCommitGuard:            insights.SignalObservation{Count: 4, Plans: 3, Repositories: 2, LatestTimestamp: &latestGuard},
 		},
 		OutputTokens: insights.Percentiles{Sessions: 7, P50: 1200, P90: 3400, P95: 5600},
 		Cost:         insights.Percentiles{},
@@ -213,7 +224,7 @@ func TestInsightsDigestIsDeterministicAndCapped(t *testing.T) {
 	outlierPlans := make([]insights.PlanOutlier, 0, digestMaxOutlierPlans+1)
 	for _, suffix := range []string{"a", "b", "c", "d", "e", "f"} {
 		reworkPlans = append(reworkPlans, insights.ReworkPlan{PlanID: "rework-" + suffix, Rounds: 3})
-		outlierPlans = append(outlierPlans, insights.PlanOutlier{PlanID: "outlier-" + suffix, OutputTokens: 100, Cost: 1})
+		outlierPlans = append(outlierPlans, insights.PlanOutlier{PlanID: "outlier-" + suffix, OutputTokens: 100, Cost: 1, OutputTokensOutlier: true, CostOutlier: true})
 	}
 	report := insights.Report{
 		PlansScanned:   7,
@@ -314,7 +325,7 @@ func TestInsightsDigestGlobalCapPreservesUTF8(t *testing.T) {
 		report.ReworkPlans = append(report.ReworkPlans, insights.ReworkPlan{PlanID: fmt.Sprintf("rework-%d-%s", i, longText), Rounds: 5, StoppedReasons: []string{longText}})
 	}
 	for i := range digestMaxOutlierPlans {
-		report.OutlierPlans = append(report.OutlierPlans, insights.PlanOutlier{PlanID: fmt.Sprintf("outlier-%d-%s", i, longText)})
+		report.OutlierPlans = append(report.OutlierPlans, insights.PlanOutlier{PlanID: fmt.Sprintf("outlier-%d-%s", i, longText), OutputTokensOutlier: true})
 	}
 
 	var out bytes.Buffer
@@ -434,7 +445,14 @@ func TestInsightsAllReposEmptyHistoryAndDigestCap(t *testing.T) {
 		}
 	}
 
-	report := insights.Report{PlansScanned: 100}
+	latestSignal := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
+	report := insights.Report{
+		PlansScanned: 100,
+		Signals:      insights.SignalCounts{SessionTimeout: 2},
+		SignalEvidence: insights.SignalEvidence{
+			SessionTimeout: insights.SignalObservation{Count: 2, Plans: 2, Repositories: 2, LatestTimestamp: &latestSignal},
+		},
+	}
 	for i := range allDigestMaxSources + 10 {
 		report.RepositoryCoverage.Repositories = append(report.RepositoryCoverage.Repositories, insights.RepositoryScanResult{RepositoryID: fmt.Sprintf("repo-%02d", i), Status: "scanned"})
 	}
@@ -459,7 +477,10 @@ func TestInsightsAllReposEmptyHistoryAndDigestCap(t *testing.T) {
 	if first.Len() > digestMaxBytes {
 		t.Fatalf("digest length = %d, want <= %d", first.Len(), digestMaxBytes)
 	}
-	for _, want := range []string{"… 10 more repositories", "repository evidence: repo-00, repo-01", "tool-02: 10 occurrences across 4 plans / 3 repositories"} {
+	if !utf8.Valid(first.Bytes()) {
+		t.Fatal("all-repository digest is not valid UTF-8")
+	}
+	for _, want := range []string{"… 10 more repositories", "repository evidence: repo-00, repo-01", "session_timeout: 2 — observed across 2 plans / 2 repositories; latest 2026-08-18", "tool-02: 10 occurrences across 4 plans / 3 repositories"} {
 		if !strings.Contains(first.String(), want) {
 			t.Errorf("bounded digest missing %q:\n%s", want, first.String())
 		}

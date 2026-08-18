@@ -17,19 +17,21 @@
 - `rework-5`: 7 rounds
 
 ## Event counters
-- session_timeout: 3
+- session_timeout: 3 — observed across 2 plans; latest 2026-08-17
+- slice_resume_attempted: 2 — observed across 1 plan; latest 2026-08-18
 - slice_resume_failed: 0
-- verification_command_invalid: 2
-- plan_commit_fallback: 1
-- plan_commit_guard: 4
+- verification_command_invalid: 2 — observed across 2 plans; latest occurrence unavailable (historical events lack timestamps)
+- plan_commit_fallback: 1 — observed across 1 plan; latest 2026-08-16
+- plan_commit_guard: 4 — observed across 3 plans; latest 2026-08-18
 
 ## Session telemetry
 - Output tokens (7 sessions): p50=1200 p90=3400 p95=5600
 - Cost (0 sessions): p50=$0.00 p90=$0.00 p95=$0.00
 
 ## Outlier plans
-- `outlier-1`: output_tokens=6000, cost=$0.50
-- `outlier-2`: output_tokens=6100, cost=$1.50
-- `outlier-3`: output_tokens=6200, cost=$2.50
-- `outlier-4`: output_tokens=6300, cost=$3.50
+Showing 5 of 6 outlier plans; 1 outlier plan omitted.
+- `outlier-6`: output_tokens=6500, cost=$5.50
 - `outlier-5`: output_tokens=6400, cost=$4.50
+- `outlier-4`: output_tokens=6300, cost=$3.50
+- `outlier-3`: output_tokens=6200, cost=$2.50
+- `outlier-2`: output_tokens=6100, cost=$1.50

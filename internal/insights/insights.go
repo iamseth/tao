@@ -46,6 +46,7 @@ type Report struct {
 	BlockedReasons     []ReasonBucket     `json:"blocked_reasons"`
 	ReworkPlans        []ReworkPlan       `json:"rework_plans"`
 	Signals            SignalCounts       `json:"signals"`
+	SignalEvidence     SignalEvidence     `json:"signal_evidence"`
 	OutputTokens       Percentiles        `json:"output_tokens"`
 	Cost               Percentiles        `json:"cost"`
 	OutlierPlans       []PlanOutlier      `json:"outlier_plans"`
@@ -109,6 +110,28 @@ type SignalCounts struct {
 	PlanCommitGuard            int `json:"plan_commit_guard"`
 }
 
+// SignalEvidence describes the observed breadth and recency of structured
+// operational events. Resume attempts remain separate from resume failures.
+type SignalEvidence struct {
+	SessionTimeout             SignalObservation `json:"session_timeout"`
+	SliceResumeAttempted       SignalObservation `json:"slice_resume_attempted"`
+	SliceResumeFailed          SignalObservation `json:"slice_resume_failed"`
+	VerificationCommandInvalid SignalObservation `json:"verification_command_invalid"`
+	PlanCommitFallback         SignalObservation `json:"plan_commit_fallback"`
+	PlanCommitGuard            SignalObservation `json:"plan_commit_guard"`
+}
+
+// SignalObservation summarizes one structured event type. MissingTimestamps
+// records events whose occurrence cannot be ordered; a positive Count with no
+// LatestTimestamp means every observed event lacked a timestamp.
+type SignalObservation struct {
+	Count             int        `json:"count"`
+	Plans             int        `json:"plans"`
+	Repositories      int        `json:"repositories"`
+	MissingTimestamps int        `json:"missing_timestamps"`
+	LatestTimestamp   *time.Time `json:"latest_timestamp,omitempty"`
+}
+
 // Percentiles contains nearest-rank percentiles over individual agent sessions.
 type Percentiles struct {
 	Sessions int     `json:"sessions"`
@@ -131,6 +154,7 @@ type PlanOutlier struct {
 type accumulator struct {
 	buckets  map[string]*ReasonBucket
 	sessions []session
+	signals  map[string]*signalAccumulator
 	logs     *logAccumulator
 }
 
@@ -139,7 +163,25 @@ type planData struct {
 	stopReasons    []string
 	blockedReasons []string
 	sessions       map[string][]plan.AgentMetricEvent
-	signals        SignalCounts
+	signals        []signalEvent
+}
+
+type signalEvent struct {
+	typeName  string
+	timestamp time.Time
+}
+
+type signalAccumulator struct {
+	count             int
+	plans             map[sourcePlanIdentity]struct{}
+	repositories      map[string]struct{}
+	missingTimestamps int
+	latest            time.Time
+}
+
+type sourcePlanIdentity struct {
+	repository string
+	plan       string
 }
 
 type session struct {
@@ -160,7 +202,7 @@ type sourceIdentity struct {
 // cannot suppress the report.
 func Aggregate(ctx context.Context, repository PlanLister) (Report, error) {
 	report := Report{}
-	acc := accumulator{buckets: make(map[string]*ReasonBucket), logs: newLogAccumulator()}
+	acc := newAccumulator()
 	if err := aggregateSource(ctx, &report, &acc, sourceIdentity{}, repository, time.Now()); err != nil {
 		return Report{}, err
 	}
@@ -184,7 +226,7 @@ func AggregateSources(ctx context.Context, lister SourceLister) (Report, error) 
 	})
 
 	report := Report{}
-	acc := accumulator{buckets: make(map[string]*ReasonBucket), logs: newLogAccumulator()}
+	acc := newAccumulator()
 	now := time.Now()
 	for _, source := range sources {
 		if err := ctx.Err(); err != nil {
@@ -295,16 +337,13 @@ func consumeEvent(data *planData, event plan.Event, line int) {
 	case plan.EventTypeReworkStopped:
 		data.reworkEvents = append(data.reworkEvents, event)
 		appendUnique(&data.stopReasons, eventReason(event))
-	case plan.EventTypeSessionTimeout:
-		data.signals.SessionTimeout++
-	case plan.EventTypeSliceResumeFailed:
-		data.signals.SliceResumeFailed++
-	case plan.EventTypeVerificationCommandInvalid:
-		data.signals.VerificationCommandInvalid++
-	case plan.EventTypePlanCommitFallback:
-		data.signals.PlanCommitFallback++
-	case plan.EventTypePlanCommitGuard:
-		data.signals.PlanCommitGuard++
+	case plan.EventTypeSessionTimeout,
+		plan.EventTypeSliceResumeAttempted,
+		plan.EventTypeSliceResumeFailed,
+		plan.EventTypeVerificationCommandInvalid,
+		plan.EventTypePlanCommitFallback,
+		plan.EventTypePlanCommitGuard:
+		data.signals = append(data.signals, signalEvent{typeName: event.Type, timestamp: event.Timestamp})
 	case plan.EventTypeAgentMetrics, "opencode_metrics":
 		if event.Metrics == nil {
 			return
@@ -318,11 +357,9 @@ func consumeEvent(data *planData, event plan.Event, line int) {
 }
 
 func mergePlan(report *Report, acc *accumulator, repository sourceIdentity, planID string, data planData) {
-	report.Signals.SessionTimeout += data.signals.SessionTimeout
-	report.Signals.SliceResumeFailed += data.signals.SliceResumeFailed
-	report.Signals.VerificationCommandInvalid += data.signals.VerificationCommandInvalid
-	report.Signals.PlanCommitFallback += data.signals.PlanCommitFallback
-	report.Signals.PlanCommitGuard += data.signals.PlanCommitGuard
+	for _, event := range data.signals {
+		addSignal(acc.signals, repository, planID, event)
+	}
 
 	rework := plan.SummarizeRework(data.reworkEvents)
 	if rework.Rounds >= 3 {
@@ -334,6 +371,37 @@ func mergePlan(report *Report, acc *accumulator, repository sourceIdentity, plan
 	for _, events := range data.sessions {
 		summary := plan.SummarizeAgentMetrics(events)
 		acc.sessions = append(acc.sessions, session{repositoryID: repository.id, repositoryName: repository.name, planID: planID, outputTokens: summary.Totals.OutputTokens, cost: summary.Totals.Cost})
+	}
+}
+
+func newAccumulator() accumulator {
+	return accumulator{
+		buckets: make(map[string]*ReasonBucket),
+		signals: make(map[string]*signalAccumulator),
+		logs:    newLogAccumulator(),
+	}
+}
+
+func addSignal(signals map[string]*signalAccumulator, repository sourceIdentity, planID string, event signalEvent) {
+	signal := signals[event.typeName]
+	if signal == nil {
+		signal = &signalAccumulator{
+			plans:        make(map[sourcePlanIdentity]struct{}),
+			repositories: make(map[string]struct{}),
+		}
+		signals[event.typeName] = signal
+	}
+	repositoryKey := repository.id
+	if repositoryKey == "" {
+		repositoryKey = "single-repository"
+	}
+	signal.count++
+	signal.plans[sourcePlanIdentity{repository: repositoryKey, plan: planID}] = struct{}{}
+	signal.repositories[repositoryKey] = struct{}{}
+	if event.timestamp.IsZero() {
+		signal.missingTimestamps++
+	} else if event.timestamp.After(signal.latest) {
+		signal.latest = event.timestamp.UTC()
 	}
 }
 
@@ -402,7 +470,43 @@ func NormalizeBlockedReason(message string) string {
 	return key
 }
 
+func finalizeSignals(report *Report, signals map[string]*signalAccumulator) {
+	observation := func(typeName string) SignalObservation {
+		signal := signals[typeName]
+		if signal == nil {
+			return SignalObservation{}
+		}
+		result := SignalObservation{
+			Count:             signal.count,
+			Plans:             len(signal.plans),
+			Repositories:      len(signal.repositories),
+			MissingTimestamps: signal.missingTimestamps,
+		}
+		if !signal.latest.IsZero() {
+			latest := signal.latest
+			result.LatestTimestamp = &latest
+		}
+		return result
+	}
+	report.SignalEvidence = SignalEvidence{
+		SessionTimeout:             observation(plan.EventTypeSessionTimeout),
+		SliceResumeAttempted:       observation(plan.EventTypeSliceResumeAttempted),
+		SliceResumeFailed:          observation(plan.EventTypeSliceResumeFailed),
+		VerificationCommandInvalid: observation(plan.EventTypeVerificationCommandInvalid),
+		PlanCommitFallback:         observation(plan.EventTypePlanCommitFallback),
+		PlanCommitGuard:            observation(plan.EventTypePlanCommitGuard),
+	}
+	report.Signals = SignalCounts{
+		SessionTimeout:             report.SignalEvidence.SessionTimeout.Count,
+		SliceResumeFailed:          report.SignalEvidence.SliceResumeFailed.Count,
+		VerificationCommandInvalid: report.SignalEvidence.VerificationCommandInvalid.Count,
+		PlanCommitFallback:         report.SignalEvidence.PlanCommitFallback.Count,
+		PlanCommitGuard:            report.SignalEvidence.PlanCommitGuard.Count,
+	}
+}
+
 func finalize(report *Report, acc *accumulator) {
+	finalizeSignals(report, acc.signals)
 	finalizeLogSignals(report, acc.logs)
 	for _, bucket := range acc.buckets {
 		sort.Slice(bucket.Repositories, func(i, j int) bool {

@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/iamseth/tao/internal/insights"
@@ -343,7 +344,7 @@ func (p insightsProjection) renderSignals(out io.Writer) error {
 			heading = "\n## Structured event counters"
 		}
 	}
-	return writeSignalCounts(out, heading, p.report.Signals, prefix)
+	return writeSignalCounts(out, heading, p.report.Signals, p.report.SignalEvidence, prefix, p.options)
 }
 
 func (p insightsProjection) renderTelemetry(out io.Writer) error {
@@ -387,7 +388,17 @@ func (p insightsProjection) renderOutliers(out io.Writer) error {
 	}
 	items := p.report.OutlierPlans
 	if digest {
-		items = items[:min(len(items), digestMaxOutlierPlans)]
+		var total int
+		items, total = selectDigestOutliers(items, digestMaxOutlierPlans)
+		if omitted := total - len(items); omitted > 0 {
+			planWord := "plans"
+			if omitted == 1 {
+				planWord = "plan"
+			}
+			if err := writef(out, "Showing %d of %d outlier plans; %d outlier %s omitted.\n", len(items), total, omitted, planWord); err != nil {
+				return err
+			}
+		}
 	}
 	for _, item := range items {
 		label := item.PlanID
@@ -407,6 +418,92 @@ func (p insightsProjection) renderOutliers(out io.Writer) error {
 		}
 	}
 	return nil
+}
+
+func selectDigestOutliers(items []insights.PlanOutlier, limit int) ([]insights.PlanOutlier, int) {
+	outputRanked := make([]insights.PlanOutlier, 0, len(items))
+	costRanked := make([]insights.PlanOutlier, 0, len(items))
+	candidates := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		if !item.OutputTokensOutlier && !item.CostOutlier {
+			continue
+		}
+		candidates[outlierIdentity(item)] = struct{}{}
+		if item.OutputTokensOutlier {
+			outputRanked = append(outputRanked, item)
+		}
+		if item.CostOutlier {
+			costRanked = append(costRanked, item)
+		}
+	}
+	slices.SortFunc(outputRanked, func(a, b insights.PlanOutlier) int {
+		if a.OutputTokens != b.OutputTokens {
+			return cmpInt64Descending(a.OutputTokens, b.OutputTokens)
+		}
+		return compareOutlierIdentity(a, b)
+	})
+	slices.SortFunc(costRanked, func(a, b insights.PlanOutlier) int {
+		if a.Cost > b.Cost {
+			return -1
+		}
+		if a.Cost < b.Cost {
+			return 1
+		}
+		return compareOutlierIdentity(a, b)
+	})
+
+	selected := make([]insights.PlanOutlier, 0, min(limit, len(candidates)))
+	seen := make(map[string]struct{}, len(selected))
+	rankings := [][]insights.PlanOutlier{outputRanked, costRanked}
+	positions := [2]int{}
+	for len(selected) < limit {
+		added := false
+		for rankingIndex, ranking := range rankings {
+			for positions[rankingIndex] < len(ranking) {
+				item := ranking[positions[rankingIndex]]
+				positions[rankingIndex]++
+				key := outlierIdentity(item)
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+				selected = append(selected, item)
+				added = true
+				break
+			}
+			if len(selected) == limit {
+				break
+			}
+		}
+		if !added {
+			break
+		}
+	}
+	return selected, len(candidates)
+}
+
+func cmpInt64Descending(a, b int64) int {
+	if a > b {
+		return -1
+	}
+	if a < b {
+		return 1
+	}
+	return 0
+}
+
+func compareOutlierIdentity(a, b insights.PlanOutlier) int {
+	if result := strings.Compare(a.RepositoryID, b.RepositoryID); result != 0 {
+		return result
+	}
+	if result := strings.Compare(a.PlanID, b.PlanID); result != 0 {
+		return result
+	}
+	return strings.Compare(a.RepositoryName, b.RepositoryName)
+}
+
+func outlierIdentity(item insights.PlanOutlier) string {
+	return item.RepositoryID + "\x00" + item.PlanID
 }
 
 func writeCoverageWarnings(out io.Writer, coverage insights.RepositoryCoverage) error {
@@ -554,26 +651,73 @@ func truncateUTF8(value string, maxBytes int) string {
 	return value
 }
 
-func writeSignalCounts(out io.Writer, heading string, signals insights.SignalCounts, prefix string) error {
+func writeSignalCounts(out io.Writer, heading string, signals insights.SignalCounts, evidence insights.SignalEvidence, prefix string, options InsightsOptions) error {
 	if err := writeln(out, heading); err != nil {
 		return err
 	}
 	rows := []struct {
-		name  string
-		count int
+		name        string
+		count       int
+		observation insights.SignalObservation
 	}{
-		{"session_timeout", signals.SessionTimeout},
-		{"slice_resume_failed", signals.SliceResumeFailed},
-		{"verification_command_invalid", signals.VerificationCommandInvalid},
-		{"plan_commit_fallback", signals.PlanCommitFallback},
-		{"plan_commit_guard", signals.PlanCommitGuard},
+		{"session_timeout", signalCount(evidence.SessionTimeout, signals.SessionTimeout), evidence.SessionTimeout},
+		{"slice_resume_attempted", evidence.SliceResumeAttempted.Count, evidence.SliceResumeAttempted},
+		{"slice_resume_failed", signalCount(evidence.SliceResumeFailed, signals.SliceResumeFailed), evidence.SliceResumeFailed},
+		{"verification_command_invalid", signalCount(evidence.VerificationCommandInvalid, signals.VerificationCommandInvalid), evidence.VerificationCommandInvalid},
+		{"plan_commit_fallback", signalCount(evidence.PlanCommitFallback, signals.PlanCommitFallback), evidence.PlanCommitFallback},
+		{"plan_commit_guard", signalCount(evidence.PlanCommitGuard, signals.PlanCommitGuard), evidence.PlanCommitGuard},
 	}
 	for _, row := range rows {
-		if err := writef(out, "%s%s: %d\n", prefix, row.name, row.count); err != nil {
+		if err := writef(out, "%s%s: %d", prefix, row.name, row.count); err != nil {
+			return err
+		}
+		if row.count > 0 && row.observation.Count > 0 {
+			if err := writeSignalContext(out, row.observation, options); err != nil {
+				return err
+			}
+		}
+		if err := writeln(out, ""); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func signalCount(observation insights.SignalObservation, legacy int) int {
+	if observation.Count > 0 {
+		return observation.Count
+	}
+	return legacy
+}
+
+func writeSignalContext(out io.Writer, observation insights.SignalObservation, options InsightsOptions) error {
+	if err := writef(out, " — observed across %d %s", observation.Plans, pluralize(observation.Plans, "plan", "plans")); err != nil {
+		return err
+	}
+	if options.Scope == InsightsScopeAllRepositories {
+		if err := writef(out, " / %d %s", observation.Repositories, pluralize(observation.Repositories, "repository", "repositories")); err != nil {
+			return err
+		}
+	}
+	if observation.LatestTimestamp == nil {
+		return writef(out, "; latest occurrence unavailable (historical events lack timestamps)")
+	}
+	format := time.RFC3339
+	if options.Format == InsightsFormatDigest {
+		format = "2006-01-02"
+	}
+	latest := observation.LatestTimestamp.UTC().Format(format)
+	if observation.MissingTimestamps > 0 {
+		return writef(out, "; latest timestamped occurrence %s; timestamps unavailable for %d of %d events", latest, observation.MissingTimestamps, observation.Count)
+	}
+	return writef(out, "; latest %s", latest)
+}
+
+func pluralize(count int, singular, plural string) string {
+	if count == 1 {
+		return singular
+	}
+	return plural
 }
 
 func writePercentiles(out io.Writer, label string, values insights.Percentiles, cost bool) error {

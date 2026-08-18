@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/iamseth/tao/internal/plan"
 )
@@ -71,6 +72,69 @@ func TestAggregateStreamsPlanHistoriesLeniently(t *testing.T) {
 	}
 	if len(report.OutlierPlans) != 1 || report.OutlierPlans[0].PlanID != "beta" || !report.OutlierPlans[0].OutputTokensOutlier || !report.OutlierPlans[0].CostOutlier {
 		t.Fatalf("outliers = %#v", report.OutlierPlans)
+	}
+}
+
+func TestAggregateBuildsSignalEvidenceFromEnclosingPlan(t *testing.T) {
+	dir := t.TempDir()
+	events := "" +
+		`{"type":"session_timeout","timestamp":"2026-08-18T20:00:00-04:00","plan_id":"untrusted-a"}` + "\n" +
+		`{"type":"session_timeout","plan_id":"untrusted-b"}` + "\n" +
+		`{"type":"session_timeout","timestamp":"2026-08-18T22:00:00Z"}` + "\n" +
+		`{"type":"slice_resume_attempted","timestamp":"2026-08-18T23:00:00Z"}` + "\n" +
+		`{"type":"slice_resume_attempted"}` + "\n" +
+		`{"type":"slice_resume_failed"}` + "\n" +
+		`{"type":"verification_command_invalid","timestamp":"2026-08-18T21:00:00Z"}` + "\n" +
+		`{"type":"plan_commit_fallback"}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(events), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Aggregate(context.Background(), fixtureLister{summaries: []plan.PlanSummary{{ID: "actual-plan", Dir: dir}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest := time.Date(2026, 8, 19, 0, 0, 0, 0, time.UTC)
+	wantTimeout := SignalObservation{Count: 3, Plans: 1, Repositories: 1, MissingTimestamps: 1, LatestTimestamp: &latest}
+	if got := report.SignalEvidence.SessionTimeout; got.Count != wantTimeout.Count || got.Plans != wantTimeout.Plans || got.Repositories != wantTimeout.Repositories || got.MissingTimestamps != wantTimeout.MissingTimestamps || got.LatestTimestamp == nil || !got.LatestTimestamp.Equal(*wantTimeout.LatestTimestamp) {
+		t.Fatalf("session timeout evidence = %#v, want %#v", got, wantTimeout)
+	}
+	if got := report.SignalEvidence.SliceResumeAttempted; got.Count != 2 || got.Plans != 1 || got.Repositories != 1 || got.MissingTimestamps != 1 || got.LatestTimestamp == nil {
+		t.Fatalf("resume attempt evidence = %#v", got)
+	}
+	if got := report.SignalEvidence.SliceResumeFailed; got.Count != 1 || got.Plans != 1 || got.Repositories != 1 || got.MissingTimestamps != 1 || got.LatestTimestamp != nil {
+		t.Fatalf("resume failure evidence = %#v", got)
+	}
+	if got := report.SignalEvidence.PlanCommitGuard; got != (SignalObservation{}) {
+		t.Fatalf("zero-count commit guard evidence = %#v", got)
+	}
+	wantCounts := SignalCounts{SessionTimeout: 3, SliceResumeFailed: 1, VerificationCommandInvalid: 1, PlanCommitFallback: 1}
+	if report.Signals != wantCounts {
+		t.Fatalf("derived signal counts = %#v, want %#v", report.Signals, wantCounts)
+	}
+}
+
+func TestAggregateSourcesQualifiesSignalPlanAndRepositoryBreadth(t *testing.T) {
+	writeEvents := func(event string) string {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(event+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	first := writeEvents(`{"type":"session_timeout","timestamp":"2026-08-18T21:00:00Z","plan_id":"wrong"}`)
+	second := writeEvents(`{"type":"session_timeout","timestamp":"2026-08-18T22:00:00Z","plan_id":"wrong"}`)
+
+	report, err := AggregateSources(context.Background(), fixtureSourceLister{sources: []RepositorySource{
+		{ID: "repo-a", Plans: fixtureLister{summaries: []plan.PlanSummary{{ID: "duplicate", Dir: first}}}},
+		{ID: "repo-b", Plans: fixtureLister{summaries: []plan.PlanSummary{{ID: "duplicate", Dir: second}}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := report.SignalEvidence.SessionTimeout
+	if got.Count != 2 || got.Plans != 2 || got.Repositories != 2 || got.LatestTimestamp == nil || !got.LatestTimestamp.Equal(time.Date(2026, 8, 18, 22, 0, 0, 0, time.UTC)) {
+		t.Fatalf("qualified signal evidence = %#v", got)
 	}
 }
 
