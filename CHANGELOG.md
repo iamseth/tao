@@ -9,6 +9,35 @@ stable release.
 
 ## [Unreleased]
 
+### Week of 2026-08-10
+
+#### Added
+- You can now use an interactive terminal dashboard with `tao ui` to monitor plans across repositories, inspect plan details and logs, and take actions (including queue, approval, and detached run flows) without leaving the terminal.
+- You can now rely on richer, registry-driven Zsh completion that stays aligned with Tao commands, subcommands, aliases, flags, and positional argument sources.
+- You can now set repository-specific pull-request defaults once and have runs pick them up automatically, while still overriding behavior per run when needed.
+- You can now keep active run context visible with a pinned live run header during `tao run`, with environment controls for when it appears.
+- You can now have Tao create repository-native GitHub pull requests with structured titles/bodies plus labels and assignees, while using collision-safe typed branches and safer ownership-scoped cleanup.
+- You can now turn GitHub pull-request review feedback into Tao-managed rework slices, with CLI controls to triage actionable threads and report non-actionable feedback.
+- Pi users can now compose context-aware replies with a safer editor workflow, including private two-buffer Vim composition and external-editor fallback behavior.
+
+#### Changed
+- You now get more predictable automatic rework behavior because direct and queue-backed rework runs follow the same shared orchestration rules for restart guards, bounded decisions, and reruns.
+- You now get consistent table alignment (including Unicode-heavy output) across plan, monitor, and queue-style listings, making CLI status views easier to scan.
+- You now get more consistent merge-batch behavior across providers, with unified bounded session handling and persisted repository-scoped merge telemetry.
+- You can now access first beta release packaging/channel behavior designed for prerelease use (including beta-tag handling and prerelease artifact channels).
+
+#### Fixed
+- You are now protected from pinned run-header redraw issues where log output could overwrite the header after terminal resize/regrow events.
+- You are now warned more reliably about compact shell separator hazards in verification checks (including tightly packed run-flag forms), reducing risk of shell misinterpretation.
+- You are now protected from merge-batch failures caused by mismatched Git client capabilities, with stricter contract enforcement in batch workflows.
+
+#### Reliability
+- You now get more dependable insights output ordering and formatting across repository and all-repository views, reducing report-to-report drift.
+- You are better protected against crash-recovery regressions in durable-intent paths through expanded real-Git crash-point coverage for merge and run recovery predicates.
+
+#### Documentation
+- You can now find updated usage guidance for new workflows, including the interactive `tao ui`, run-header behavior, repository PR defaults, native PR creation, and PR-feedback-driven rework.
+
 ## [0.1.0-beta.1] - 2026-08-13
 
 Tao's first public beta introduces the complete local-first planning, execution,
