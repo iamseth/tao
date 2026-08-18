@@ -12,6 +12,7 @@ import (
 	reworkpkg "github.com/iamseth/tao/internal/rework"
 	"github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+	planview "github.com/iamseth/tao/internal/view"
 )
 
 var runCommand = commandMetadata{
@@ -59,7 +60,7 @@ func registerRunRequestFlags(fs *flag.FlagSet) {
 func registerRunFlags(fs *flag.FlagSet) {
 	registerRunRequestFlags(fs)
 	autoRework, maxReworkAttempts, _ := runReworkEnvDefaults()
-	fs.Bool("continue", false, "continue a blocked plan or slice")
+	fs.Bool("continue", false, "continue after clearing a plan or slice blocker")
 	fs.Bool("no-run-header", !runHeaderEnvDefault(), "disable the pinned run header")
 	fs.Bool("auto-rework", autoRework, "automatically rework plans with requested changes")
 	fs.Int("max-rework-attempts", maxReworkAttempts, "maximum automatic rework cycles (0 disables)")
@@ -249,6 +250,12 @@ func decorateRunCannotStartError(ctx context.Context, repo queueRepository, inpu
 	if len(commands) == 0 {
 		return err
 	}
+	derived := plan.Derive(detail, time.Time{})
+	if !derived.Capabilities.NeedsApproval && derived.Capabilities.CanContinue && !derived.Capabilities.CanRun {
+		if slice := runBlockedSlice(detail, derived); slice != nil {
+			return fmt.Errorf("%w\n\n%s", err, planview.FormatBlockedRunGuidance(slice.ID, slice.BlockerNote, commands[0]))
+		}
+	}
 	return fmt.Errorf("%w\n\n%s", err, formatRunUnblockCommands(commands))
 }
 
@@ -286,7 +293,18 @@ func runUnblockCommands(detail *plan.PlanDetail, input string) []string {
 // runApprovalSlice returns the slice requiring approval, identified by the typed
 // ApprovalSliceID field that plan.RunCapabilitiesFromLifecycle populates via errors.As.
 func runApprovalSlice(detail *plan.PlanDetail, derived plan.DerivedPlan) *plan.Slice {
-	id := derived.Capabilities.ApprovalSliceID
+	return runSliceByID(detail, derived.Capabilities.ApprovalSliceID)
+}
+
+func runBlockedSlice(detail *plan.PlanDetail, derived plan.DerivedPlan) *plan.Slice {
+	id := derived.NextSliceID
+	if detail.State.Plan.CurrentSlice != nil {
+		id = *detail.State.Plan.CurrentSlice
+	}
+	return runSliceByID(detail, id)
+}
+
+func runSliceByID(detail *plan.PlanDetail, id string) *plan.Slice {
 	if id == "" {
 		return nil
 	}
@@ -304,7 +322,7 @@ func runNeedsContinueAfterUnblock(detail *plan.PlanDetail, slice *plan.Slice) bo
 
 func formatRunUnblockCommands(commands []string) string {
 	var b strings.Builder
-	b.WriteString("To unblock this plan, run:")
+	b.WriteString("Resolve the required action before continuing. Run:")
 	for _, command := range commands {
 		b.WriteString("\n  ")
 		b.WriteString(command)

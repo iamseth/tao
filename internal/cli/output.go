@@ -70,9 +70,7 @@ func colorStatus(value, status string) string {
 		return color(value, "36")
 	case plan.StatusInReview:
 		return color(value, "34")
-	case plan.StatusBlocked:
-		return color(value, "31")
-	case plan.StatusPlanned, plan.StatusPending, plan.StatusChangesRequested:
+	case plan.StatusBlocked, plan.StatusPlanned, plan.StatusPending, plan.StatusChangesRequested:
 		return color(value, "33")
 	default:
 		return color(value, "35")

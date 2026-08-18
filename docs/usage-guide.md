@@ -11,7 +11,7 @@ the artifact contract in [plan-format.md](plan-format.md)). The README tells you
 
 ```
 /tao-plan  →  /tao-slice  →  tao validate  →  tao run  →  tao review  →  tao merge (or PR)
-                                      ↳ tao run --continue when blocked
+                                      ↳ clear blocker, then tao run --continue
                                                              ↳ automatic rework/run/review when changes requested
 ```
 
@@ -118,8 +118,9 @@ lifecycle evidence, review results, or verdicts about semantic progress.
 Keys on the table page are:
 
 - `j`/`k` or the arrow keys move the selection.
-- `r` starts the selected plan in a detached `tao run` process. A blocked plan
-  is resumed with `--continue`; a plan with a fresh live heartbeat is left alone.
+- `r` starts the selected plan in a detached `tao run` process. After its
+  blocker is cleared, a blocked plan is resumed with `--continue`; a plan with a
+  fresh live heartbeat is left alone.
 - `q` synchronously adds the selected plan to its repository queue, then starts
   a detached queue drain when the current snapshot does not appear to have one.
 - `a` shows the selected approval-gated slice and reason, then requires `y` or
@@ -351,9 +352,9 @@ through.
 
 - `tao run <plan-id>` — normal execution of all pending slices.
 - `tao run --max-slices 1 <plan-id>` — run a single slice to inspect results.
-- `tao run --continue <plan-id>` — resume after you've cleared a blocker. It
-  clears the blocked lifecycle state but does **not** bypass approval gates,
-  dependencies, or verification preflight.
+- `tao run --continue <plan-id>` — resume only after you've cleared a blocker.
+  It explicitly clears the blocked lifecycle state but does **not** infer
+  resolution or bypass approval gates, dependencies, or verification preflight.
 
 In an interactive terminal, `tao run` pins a live header above the agent log. It
 shows the repository and plan identity, agent and run configuration, slice
@@ -490,9 +491,10 @@ safe choice does not depend on how the run was launched:
   proven otherwise. Tao will not turn it into a new clean-start baseline or
   attribute it to the interrupted slice.
 
-`tao run --continue` has a different purpose: it clears lifecycle blocker state
-after you resolve a recorded blocker. It does not override any interrupted-slice
-boundary check.
+`tao run --continue` has a different purpose: it explicitly clears lifecycle
+blocker state after you resolve a recorded blocker. Tao does not infer that
+resolution from Git state, blocker prose, or external conditions, and continue
+does not override any interrupted-slice boundary check.
 
 ### `tao rework` — turn review findings into follow-up slices
 
@@ -877,7 +879,7 @@ A typical feature, end to end:
 ```sh
 tao validate <plan-id>     # check generated verification commands
 tao run <plan-id>          # execute pending slices
-tao run --continue <plan-id>   # after clearing any blocker
+tao run --continue <plan-id>   # only after clearing the recorded blocker
 tao review <plan-id>       # read the persisted post-completion review
 tao rework --run <plan-id> # if review requests changes, reopen and run fixes
 tao review --run <plan-id> # refresh the review after follow-up changes

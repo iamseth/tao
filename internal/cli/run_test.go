@@ -360,7 +360,7 @@ func TestRunApprovalGateShowsUnblockCommands(t *testing.T) {
 	text := err.Error()
 	for _, want := range []string{
 		"slice 001-a requires approval: human approval",
-		"To unblock this plan, run:",
+		"Resolve the required action before continuing. Run:",
 		"tao approve --slice 001-a " + fixture.id,
 		"tao run " + fixture.id,
 	} {
@@ -370,6 +370,53 @@ func TestRunApprovalGateShowsUnblockCommands(t *testing.T) {
 	}
 	if out.Len() != 0 {
 		t.Fatalf("expected no stdout before run starts, got %q", out.String())
+	}
+}
+
+func TestRunBlockedPreflightShowsReasonWithoutStartingAgent(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		reason string
+		want   string
+	}{
+		{name: "persisted reason", reason: "waiting on dependency\nwith terminal \x1b[31mtext", want: "waiting on dependency with terminal [31mtext"},
+		{name: "legacy missing reason", want: "No blocker reason was recorded."},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			clearTaoEnv(t)
+			fixture := newRunPlanFixture(t, plan.StatusBlocked, []string{"001-a"}, nil, "001-a", plan.StatusBlocked)
+			if tt.reason != "" {
+				detail, err := plan.NewFileRepository(fixture.root).ResolvePlan(context.Background(), fixture.id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				record, err := plan.NewPlanRecord("", detail)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := record.BlockSlice("001-a", tt.reason, time.Now().UTC()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			agentCalls := 0
+			app := App{Out: io.Discard, Err: io.Discard, ProcessStarter: func(context.Context, string, string, []string) (run.Process, error) {
+				agentCalls++
+				return nil, errors.New("agent must not start")
+			}}
+
+			err := app.run(context.Background(), plan.NewFileRepository(fixture.root), []string{"--execution-mode", "current", "--commit-policy", "none", "--no-review", fixture.id})
+			if err == nil {
+				t.Fatal("expected blocked preflight error")
+			}
+			for _, want := range []string{"Blocked slice 001-a: " + tt.want, "Resolve this blocker before continuing, then run:", "tao run --continue " + fixture.id} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("expected %q in error:\n%s", want, err)
+				}
+			}
+			if agentCalls != 0 {
+				t.Fatalf("expected no agent handoff, got %d calls", agentCalls)
+			}
+		})
 	}
 }
 

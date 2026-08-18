@@ -49,13 +49,21 @@ func renderPlanDetailWithThresholds(out io.Writer, loaded planview.Plan, thresho
 	now := loaded.Now
 	state := detail.State
 	lifecycleStatus := plan.PlanLifecycleStatus(detail)
+	useColor := outputSupportsColor(out)
 	if err := writef(out, "%s\n", state.Plan.Title); err != nil {
 		return err
 	}
 	if err := writef(out, "ID: %s\n", state.Plan.ID); err != nil {
 		return err
 	}
-	if err := writef(out, "Status: %s\n", colorStatus(lifecycleStatus, lifecycleStatus)); err != nil {
+	statusText := lifecycleStatus
+	if lifecycleStatus == plan.StatusBlocked {
+		statusText += " (waiting for outside action)"
+	}
+	if useColor {
+		statusText = colorStatus(statusText, lifecycleStatus)
+	}
+	if err := writef(out, "Status: %s\n", statusText); err != nil {
 		return err
 	}
 	if err := writef(out, "Repo: %s %s\n", state.Repo.Name, state.Repo.Branch); err != nil {
@@ -130,7 +138,7 @@ func renderPlanDetailWithThresholds(out io.Writer, loaded planview.Plan, thresho
 				return err
 			}
 		}
-		if err := renderShowSlice(out, slice, now); err != nil {
+		if err := renderShowSlice(out, slice, now, useColor); err != nil {
 			return err
 		}
 	}
@@ -141,7 +149,11 @@ func renderPlanDetailWithThresholds(out io.Writer, loaded planview.Plan, thresho
 		}
 		start := max(len(detail.Events)-5, 0)
 		for _, event := range detail.Events[start:] {
-			if err := writef(out, "- %s %s %s\n", event.Timestamp.Format(time.RFC3339), event.Type, event.Message); err != nil {
+			message := event.Message
+			if event.Type == plan.EventTypeSliceBlocked {
+				message = planview.FormatBlockerText(event.Reason).Concise
+			}
+			if err := writef(out, "- %s %s %s\n", event.Timestamp.Format(time.RFC3339), event.Type, message); err != nil {
 				return err
 			}
 		}
@@ -150,11 +162,15 @@ func renderPlanDetailWithThresholds(out io.Writer, loaded planview.Plan, thresho
 	return nil
 }
 
-func renderShowSlice(out io.Writer, slice plan.Slice, now time.Time) error {
+func renderShowSlice(out io.Writer, slice plan.Slice, now time.Time, useColor bool) error {
 	const labelWidth = len("Completed:")
 	const summaryWidth = 72
 
-	if err := writef(out, "%s  %s  %s\n", colorStatus(slice.Status, slice.Status), slice.ID, planview.Empty(slice.Title)); err != nil {
+	statusText := slice.Status
+	if useColor {
+		statusText = colorStatus(statusText, slice.Status)
+	}
+	if err := writef(out, "%s  %s  %s\n", statusText, slice.ID, planview.Empty(slice.Title)); err != nil {
 		return err
 	}
 	fields := []struct {
@@ -179,6 +195,18 @@ func renderShowSlice(out io.Writer, slice plan.Slice, now time.Time) error {
 	for _, line := range lines[1:] {
 		if err := writef(out, "%s%s\n", indent, line); err != nil {
 			return err
+		}
+	}
+	if slice.Status == plan.StatusBlocked {
+		blockerLines := wrapText(planview.FormatBlockerText(slice.BlockerNote).Detailed, summaryWidth)
+		if err := writef(out, "  Blocker Reason: %s\n", blockerLines[0]); err != nil {
+			return err
+		}
+		blockerIndent := strings.Repeat(" ", len("  Blocker Reason: "))
+		for _, line := range blockerLines[1:] {
+			if err := writef(out, "%s%s\n", blockerIndent, line); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

@@ -300,7 +300,9 @@ func (r SelectedSliceRunner) blockSliceForBudget(ctx context.Context, detail *pl
 	if err := record.BlockSliceForBudget(sliceID, budgetErr.Error(), now(r.execution).UTC()); err != nil {
 		return fmt.Errorf("record telemetry cap stop for slice %s: %w", sliceID, err)
 	}
-	return fmt.Errorf("%s stopped while running slice %s; slice is blocked and may be resumed with --continue; see %s: %w", agentLabel(r.execution.Config.Agent), sliceID, logPath, handoffErr)
+	command := "tao run --continue " + reloaded.State.Plan.ID
+	guidance := view.FormatBlockedRunGuidance(sliceID, budgetErr.Error(), command)
+	return fmt.Errorf("%s\nAgent log: %s\n%w", guidance, logPath, handoffErr)
 }
 
 var implementationSliceRetryDelays = [...]time.Duration{time.Second, 2 * time.Second}
@@ -528,7 +530,13 @@ func (r SelectedSliceRunner) validateSliceProgress(detail *plan.PlanDetail, befo
 	derived := plan.Derive(detail, time.Time{})
 	capabilities := derived.Capabilities
 	if !capabilities.Complete && !capabilities.CanRun {
-		return fmt.Errorf("agent stopped on slice %s; see %s: %w", sliceID, logPath, runDisabledError(capabilities))
+		cause := runDisabledError(capabilities)
+		if slice := completionSlice(detail, sliceID); slice != nil && slice.Status == plan.StatusBlocked && before.Status != plan.StatusBlocked {
+			command := "tao run --continue " + detail.State.Plan.ID
+			guidance := view.FormatBlockedRunGuidance(sliceID, slice.BlockerNote, command)
+			return fmt.Errorf("%s\nAgent log: %s\n%w", guidance, logPath, cause)
+		}
+		return fmt.Errorf("agent stopped on slice %s; see %s: %w", sliceID, logPath, cause)
 	}
 	if !plan.ProgressedSince(detail, before) && !capabilities.Complete {
 		return fmt.Errorf("agent exited successfully but plan did not progress; see %s", logPath)

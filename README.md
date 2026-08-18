@@ -104,7 +104,8 @@ with no title or deterministic fallback. A slice with no changes records
 before commit intent, rerun it normally: Tao resumes only the exact recorded
 worktree/branch/HEAD and preserves its edits; a post-intent interruption is
 recovered by `tao slice-complete`, not by another implementation session. When a
-run stops on a blocker, fix it and resume with `tao run --continue`; use explicit
+run stops on a blocker, resolve the recorded blocker first, then resume with
+`tao run --continue`; use explicit
 `--commit-policy none` only when you want manual commit ownership and potentially
 uncommitted completion. Before review,
 Tao requires automatic-policy worktrees to
@@ -248,8 +249,10 @@ stale Tao-owned plan worktree before agent execution. It does not fetch or pull
 remotes for this pre-run rebase, and it fails early instead of invoking the agent
 when the worktree is dirty or the rebase conflicts.
 `--execution-mode current` never performs this automatic rebase.
-`tao run --continue` resumes a blocked plan after you've cleared the blocker; it
-does not bypass approval gates, dependencies, or verification preflight.
+`tao run --continue` is an explicit override to use only after you've cleared the
+recorded blocker; it does not infer resolution from unchanged Git state or
+external conditions, and it does not bypass approval gates, dependencies, or
+verification preflight.
 
 Implementation-slice handoffs get at most two automatic transport retries per
 `tao run` invocation, after fixed context-cancellable waits of 1 second and 2

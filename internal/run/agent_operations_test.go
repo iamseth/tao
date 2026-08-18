@@ -297,6 +297,7 @@ func TestSliceBudgetExceededBlocksCompletedSliceAndGuardsContinuation(t *testing
 
 	repository := plan.NewFileRepository(plansRoot)
 	agentCalls := 0
+	budgetErr := &budgetExceededError{metric: "output_tokens", threshold: 100, observed: 101}
 	executor := sliceExecutorFunc(func(ctx context.Context, run SliceRun) error {
 		agentCalls++
 		active, err := repository.GetPlan(ctx, "plan-a")
@@ -314,7 +315,7 @@ func TestSliceBudgetExceededBlocksCompletedSliceAndGuardsContinuation(t *testing
 		if err := record.CompleteSliceWithOutcome(run.SliceID, "completed before metrics arrived", nil, plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionCommitted, CommitSHA: "commit-a"}, completedAt); err != nil {
 			return err
 		}
-		return &budgetExceededError{metric: "output_tokens", threshold: 100, observed: 101}
+		return budgetErr
 	})
 	options := Options{
 		ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent}},
@@ -322,8 +323,23 @@ func TestSliceBudgetExceededBlocksCompletedSliceAndGuardsContinuation(t *testing
 	}
 	service := NewService(repository, io.Discard, options)
 	err := service.Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: options.ResolvedRunOptions})
-	if err == nil || !strings.Contains(err.Error(), "slice is blocked") || !strings.Contains(err.Error(), "--continue") {
-		t.Fatalf("run error = %v, want blocked telemetry-cap recovery guidance", err)
+	if err == nil {
+		t.Fatal("run error = nil, want blocked telemetry-cap recovery guidance")
+	}
+	for _, want := range []string{
+		"Blocked slice 001-a: slice agent metrics output_tokens cap exceeded: observed 101, threshold 100",
+		"Resolve this blocker before continuing, then run:\n  tao run --continue plan-a",
+		"Agent log:",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("run error = %v, want %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "may be resumed with --continue") {
+		t.Fatalf("run error retains retry-first guidance: %v", err)
+	}
+	if !errors.Is(err, budgetErr) {
+		t.Fatalf("run error = %v, want original agent budget error", err)
 	}
 
 	blocked, err := repository.GetPlan(context.Background(), "plan-a")

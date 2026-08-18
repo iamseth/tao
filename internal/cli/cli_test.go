@@ -15,6 +15,9 @@ func init() {
 }
 
 func TestColorHelpersCoverStatusAndDoneBranches(t *testing.T) {
+	if got := colorStatus(plan.StatusBlocked, plan.StatusBlocked); got != "\x1b[33mblocked\x1b[0m" {
+		t.Fatalf("blocked status color = %q, want amber", got)
+	}
 	for _, status := range []string{plan.StatusCompleted, plan.StatusInProgress, plan.StatusBlocked, plan.StatusPlanned, plan.StatusPending, "weird"} {
 		if got := colorStatus(status, status); !strings.Contains(got, status) {
 			t.Fatalf("expected colored status to include %q, got %q", status, got)

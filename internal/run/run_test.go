@@ -1868,6 +1868,44 @@ func TestRunWorkPromptInstructsSliceComplete(t *testing.T) {
 	}
 }
 
+func TestRunPostAgentBlockShowsBoundedPersistedReason(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		reason string
+		want   string
+	}{
+		{name: "bounded sanitized reason", reason: "dependency unavailable\n" + strings.Repeat("界", 400) + "\x1b[31mtail", want: "dependency unavailable "},
+		{name: "legacy missing reason", want: "No blocker reason was recorded."},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
+			blocked := runPlanDetail(plan.StatusBlocked, []string{"001-a"}, nil, "001-a", plan.StatusBlocked, nil, nil)
+			blocked.Slices.Slices[0].BlockerNote = tt.reason
+			executor := &countingSliceExecutor{}
+
+			err := executeDetail(context.Background(), detail, func(context.Context, *plan.PlanDetail) (*plan.PlanDetail, error) {
+				return blocked, nil
+			}, io.Discard, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone}}, RunDependencies: RunDependencies{
+				SliceExecutor: executor, PlanRecordFactory: memoryPlanRecordFactory, CommandRunner: runGitFake(&[]string{}, nil),
+			}})
+			if err == nil || !errors.Is(err, ErrCannotStart) {
+				t.Fatalf("expected chained cannot-start error, got %v", err)
+			}
+			for _, want := range []string{"Blocked slice 001-a: " + tt.want, "Resolve this blocker before continuing, then run:", "tao run --continue plan-a"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("expected %q in error:\n%s", want, err)
+				}
+			}
+			if strings.Contains(err.Error(), "tail") || strings.Contains(err.Error(), "\x1b") {
+				t.Fatalf("expected bounded terminal-safe blocker context, got:\n%s", err)
+			}
+			if executor.calls != 1 {
+				t.Fatalf("expected one agent handoff before blocker, got %d", executor.calls)
+			}
+		})
+	}
+}
+
 func TestRunContinueRestartsBlockedPlanBeforeCapabilityGate(t *testing.T) {
 	detail := runPlanDetail(plan.StatusBlocked, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 	completedDetail := runPlanDetail(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
