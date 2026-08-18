@@ -97,7 +97,7 @@ func TestRunHeaderWriterPinsHeaderAroundLogOutput(t *testing.T) {
 	closeHeader()
 
 	text := terminal.String()
-	for _, want := range []string{"\x1b[8;24r", "repo tao", "Pinned header", "ordinary log output\n", "\x1b[r"} {
+	for _, want := range []string{"\x1b[8;24r", "tao / run-header", "LIVE OUTPUT", "ordinary log output\n", "\x1b[r"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("terminal output missing %q: %q", want, text)
 		}
@@ -148,8 +148,8 @@ func TestRunHeaderResizeReappliesMinimumSizePolicy(t *testing.T) {
 			if !strings.Contains(growOutput, "\x1b[8;24r") {
 				t.Fatalf("eligible resize did not reinstall scroll region: %q", growOutput)
 			}
-			if !strings.Contains(growOutput, "repo tao") {
-				t.Fatalf("eligible resize did not repaint header: %q", growOutput)
+			if !strings.Contains(growOutput, "tao / -") || !strings.Contains(growOutput, "LIVE OUTPUT") {
+				t.Fatalf("eligible resize did not repaint compact header: %q", growOutput)
 			}
 			if !header.pinned {
 				t.Fatal("header was not pinned after eligible resize")
@@ -230,7 +230,7 @@ func TestRunAllHeaderTracksBatchAndRestoresRegionOnce(t *testing.T) {
 	}
 
 	text := terminal.String()
-	for _, want := range []string{planA, planB, "plan 1/2", "plan 2/2", "rework 2/5"} {
+	for _, want := range []string{planA, planB, "batch 1/2", "batch 2/2", "rework 2/5"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("run --all header output missing %q: %q", want, text)
 		}
@@ -292,7 +292,7 @@ func TestExecuteResolvedRunRestoresRegionWhenRunErrors(t *testing.T) {
 		t.Fatalf("error teardown omitted scroll-region reset: %q", text)
 	}
 	reset := strings.LastIndex(text, "\x1b[r")
-	if !strings.Contains(text[reset:], "repo tao") {
-		t.Fatalf("teardown did not leave a static header after reset: %q", text[reset:])
+	if !strings.Contains(text[reset:], "tao / run-header") || !strings.Contains(text[reset:], "LIVE OUTPUT") {
+		t.Fatalf("teardown did not leave a static compact header after reset: %q", text[reset:])
 	}
 }

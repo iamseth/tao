@@ -12,122 +12,125 @@ import (
 
 func TestRenderWideHeaderExact(t *testing.T) {
 	state := testHeaderState()
-	want := expectedHeader(
-		"repo tao · plan run-header · id 20260812-185523-run-header · title Pinned run header",
-		"agent pi · mode isolated · branch tao/20260812 · review on",
-		"slices 1/4 · current Render header · elapsed -",
-		"sessions 2 · tokens 12345 · cost $1.25",
-		"slices ✓001-seam ▶002-render ○003-wire ○004-docs",
+	want := expectedRows(100,
+		"tao / run-header · Pinned run header · pi · isolated · tao/20260812 · review on",
+		"▶ 002 Render header · elapsed -",
+		"[█████░░░░░░░░░░░░░░░] 1/4 · 25%",
+		"SLICES  ✓ 001 Terminal seam   ▶ 002 Render header   ○ 003 Wire output   ○ 004 Document",
+		"AGENT  2 sessions · 12.3k tokens · $1.25",
+		strings.Repeat("─", 100),
+		"LIVE OUTPUT",
 	)
-	assertLines(t, Render(state, 140, false), want)
-}
-
-func TestRenderBatchPositionExact(t *testing.T) {
-	state := testHeaderState()
-	state.BatchPosition = 2
-	state.BatchTotal = 7
-	want := expectedHeader(
-		"repo tao · plan run-header · id 20260812-185523-run-header · title Pinned run header",
-		"agent pi · mode isolated · branch tao/20260812 · review on",
-		"plan 2/7 · slices 1/4 · current Render header · elapsed -",
-		"sessions 2 · tokens 12345 · cost $1.25",
-		"slices ✓001-seam ▶002-render ○003-wire ○004-docs",
-	)
-	assertLines(t, Render(state, 140, false), want)
+	assertLines(t, Render(state, 100, false), want, 100)
 }
 
 func TestRenderNarrowHeaderExact(t *testing.T) {
 	state := testHeaderState()
-	want := []string{
-		"┌──────────────────────────────┐",
-		"│repo tao · plan run-header · …│",
-		"│agent pi · mode isolated · br…│",
-		"│slices 1/4 · current Render h…│",
-		"│sessions 2 · tokens … · cost …│",
-		"│slices ✓001-seam ▶002-render …│",
-		"└──────────────────────────────┘",
-	}
-	assertLines(t, Render(state, 32, false), want)
+	want := expectedRows(60,
+		"tao / run-header · pi · isolated · tao/20260812 · review on",
+		"▶ 002 Render header · elapsed -",
+		"[█████░░░░░░░░░░░░░░░] 1/4 · 25%",
+		"SLICES  ✓ 001 Terminal seam   ▶ 002 Render header   …",
+		"AGENT  2 sessions · 12.3k tokens · $1.25",
+		strings.Repeat("─", 60),
+		"LIVE OUTPUT",
+	)
+	assertLines(t, Render(state, 60, false), want, 60)
 }
 
-func TestRenderLongPlanTitleExact(t *testing.T) {
+func TestRenderProgressCompletedAndZeroTotals(t *testing.T) {
 	state := testHeaderState()
-	state.PlanTitle = "Render an exceptionally long Ελληνικό plan title without splitting multibyte runes"
-	want := []string{
-		"┌──────────────────────────────────────────────────────────────────────────┐",
-		"│repo tao · plan run-header · id 20260812-185523… · title Render an except…│",
-		"│agent pi · mode isolated · branch tao/20260812 · review on                │",
-		"│slices 1/4 · current Render header · elapsed -                            │",
-		"│sessions 2 · tokens 12345 · cost $1.25                                    │",
-		"│slices ✓001-seam ▶002-render ○003-wire ○004-docs                          │",
-		"└──────────────────────────────────────────────────────────────────────────┘",
+	state.CompletedCount = 4
+	state.TotalCount = 4
+	lines := Render(state, 60, false)
+	if !strings.Contains(lines[2], "[████████████████████] 4/4 · 100%") {
+		t.Fatalf("completed progress = %q", lines[2])
 	}
-	assertLines(t, Render(state, 76, false), want)
+
+	state.CompletedCount = 0
+	state.TotalCount = 0
+	state.Slices = nil
+	state.CurrentSliceID = ""
+	state.CurrentSliceTitle = ""
+	state.Phase = "reviewing"
+	lines = Render(state, 60, false)
+	for line, want := range map[int]string{
+		1: "PHASE  reviewing · elapsed -",
+		2: "[░░░░░░░░░░░░░░░░░░░░] 0/0 · 0%",
+		3: "SLICES  -",
+	} {
+		if !strings.Contains(lines[line], want) {
+			t.Errorf("line %d = %q, want content %q", line, lines[line], want)
+		}
+	}
 }
 
-func TestRenderChecklistWindowsAroundCurrentExact(t *testing.T) {
-	state := testHeaderState()
-	state.Slices = []run.HeaderSlice{
-		{ID: "000", Status: plan.StatusCompleted},
-		{ID: "001", Status: plan.StatusCompleted},
-		{ID: "002", Status: plan.StatusCompleted},
-		{ID: "003", Status: plan.StatusInProgress},
-		{ID: "004", Status: plan.StatusPending},
-		{ID: "005", Status: plan.StatusPending},
-		{ID: "006", Status: plan.StatusPending},
-	}
-	state.CurrentSliceID = "003"
-	state.CurrentSliceTitle = "Current"
-	state.CompletedCount = 3
-	state.TotalCount = 7
-	want := []string{
-		"┌─────────────────────────┐",
-		"│repo tao · plan run-head…│",
-		"│agent pi · mode isolated…│",
-		"│slices 3/7 · current Cur…│",
-		"│sessions 2 · tokens 1234…│",
-		"│slices … ✓002 ▶003 ○004 …│",
-		"└─────────────────────────┘",
-	}
-	assertLines(t, Render(state, 27, false), want)
-}
-
-func TestRenderCodexCostNotReportedExact(t *testing.T) {
+func TestRenderOptionalBatchReworkAndUnavailableCost(t *testing.T) {
 	state := testHeaderState()
 	state.Agent = "codex"
-	state.Cost = 12.34
-	state.CostReported = false
-	want := expectedHeader(
-		"repo tao · plan run-header · id 20260812-185523-run-header · title Pinned run header",
-		"agent codex · mode isolated · branch tao/20260812 · review on",
-		"slices 1/4 · current Render header · elapsed -",
-		"sessions 2 · tokens 12345 · cost not reported",
-		"slices ✓001-seam ▶002-render ○003-wire ○004-docs",
-	)
-	assertLines(t, Render(state, 140, false), want)
-}
-
-func TestRenderReworkRoundPresentAndAbsentExact(t *testing.T) {
-	state := testHeaderState()
-	without := expectedHeader(
-		"repo tao · plan run-header · id 20260812-185523-run-header · title Pinned run header",
-		"agent pi · mode isolated · branch tao/20260812 · review on",
-		"slices 1/4 · current Render header · elapsed -",
-		"sessions 2 · tokens 12345 · cost $1.25",
-		"slices ✓001-seam ▶002-render ○003-wire ○004-docs",
-	)
-	assertLines(t, Render(state, 140, false), without)
-
+	state.BatchPosition = 2
+	state.BatchTotal = 7
 	state.ReworkRound = 2
 	state.MaxReworkAttempts = 5
-	with := expectedHeader(
-		"repo tao · plan run-header · id 20260812-185523-run-header · title Pinned run header",
-		"agent pi · mode isolated · branch tao/20260812 · review on · rework 2/5",
-		"slices 1/4 · current Render header · elapsed -",
-		"sessions 2 · tokens 12345 · cost $1.25",
-		"slices ✓001-seam ▶002-render ○003-wire ○004-docs",
-	)
-	assertLines(t, Render(state, 140, false), with)
+	state.CostReported = false
+	text := strings.Join(Render(state, 140, false), "\n")
+	for _, want := range []string{"batch 2/7", "rework 2/5", "codex", "cost —"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("Render() missing %q in %q", want, text)
+		}
+	}
+}
+
+func TestRenderLongTitlePreservesRunContextAtSixtyColumns(t *testing.T) {
+	state := testHeaderState()
+	state.RepoName = "t"
+	state.PlanID = "20260812-185523-p"
+	state.PlanTitle = strings.Repeat("long title ", 20)
+	state.Agent = "p"
+	state.ExecutionMode = "i"
+	state.Branch = "b"
+	state.BatchPosition = 2
+	state.BatchTotal = 7
+	state.ReworkRound = 2
+	state.MaxReworkAttempts = 5
+
+	line := strings.TrimSpace(Render(state, 60, false)[0])
+	want := "t / p · batch 2/7 · rework 2/5 · p · i · b · review on"
+	if line != want {
+		t.Fatalf("identity line = %q, want %q", line, want)
+	}
+}
+
+func TestRenderCompactsTokenCounts(t *testing.T) {
+	state := testHeaderState()
+	for _, test := range []struct {
+		tokens int64
+		want   string
+	}{{999, "999 tokens"}, {1_000, "1k tokens"}, {12_345, "12.3k tokens"}, {1_250_000, "1.2m tokens"}} {
+		state.TotalTokens = test.tokens
+		if got := Render(state, 100, false)[4]; !strings.Contains(got, test.want) {
+			t.Errorf("tokens %d: metrics = %q, want %q", test.tokens, got, test.want)
+		}
+	}
+}
+
+func TestRenderChecklistCentersCurrentAndUsesNumericPrefixes(t *testing.T) {
+	state := testHeaderState()
+	state.Slices = []run.HeaderSlice{
+		{ID: "000-before", Title: "Before", Status: plan.StatusCompleted},
+		{ID: "001-seam", Title: "Seam", Status: plan.StatusCompleted},
+		{ID: "002-render", Title: "A deliberately long current title", Status: plan.StatusInProgress},
+		{ID: "003-wire", Title: "Wire", Status: plan.StatusPending},
+		{ID: "004-after", Title: "After", Status: plan.StatusPending},
+	}
+	state.CurrentSliceID = "002-render"
+	line := Render(state, 60, false)[3]
+	if !strings.Contains(line, "▶ 002") || strings.Contains(line, "002-render") {
+		t.Fatalf("checklist did not use the numeric slice prefix: %q", line)
+	}
+	if !strings.Contains(line, "…") {
+		t.Fatalf("checklist did not indicate its current-centered window: %q", line)
+	}
 }
 
 func TestRenderSanitizesMetadataControls(t *testing.T) {
@@ -139,21 +142,15 @@ func TestRenderSanitizesMetadataControls(t *testing.T) {
 	state.ExecutionMode = "iso\u009blated"
 	state.Branch = "tao/20260812\x7f"
 	state.CurrentSliceTitle = "Render\nheader"
-	state.CurrentSliceID = "002\x1b[Hrender"
+	state.CurrentSliceID = "002\x1b[H-render"
 	state.Slices[1].ID = state.CurrentSliceID
+	state.Slices[1].Title = "Render\nheader"
 
 	lines := Render(state, 180, false)
 	text := strings.Join(lines, "\n")
 	for _, want := range []string{
-		"repo tao�repo",
-		"plan run�[2Jheader",
-		"id 20260812-185523-run�[2Jheader",
-		"title Pinned��header",
-		"agent p�i",
-		"mode iso�lated",
-		"branch tao/20260812�",
-		"current Render�header",
-		"▶002�[Hrender",
+		"tao�repo / run�[2Jheader", "Pinned��header", "p�i", "iso�lated",
+		"tao/20260812�", "▶ 002�[H Render�header",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("Render() missing sanitized metadata %q in %q", want, text)
@@ -168,14 +165,15 @@ func TestRenderSanitizesMetadataControls(t *testing.T) {
 	}
 }
 
-func TestRenderSanitizesPhaseControls(t *testing.T) {
+func TestRenderUsesTerminalCellWidthForUnicode(t *testing.T) {
 	state := testHeaderState()
-	state.CurrentSliceTitle = ""
-	state.Phase = "running\n\x1b[Hslice"
-
-	text := strings.Join(Render(state, 140, false), "\n")
-	if !strings.Contains(text, "current running��[Hslice") {
-		t.Fatalf("Render() did not sanitize phase: %q", text)
+	state.PlanTitle = "界界 cafe\u0301"
+	state.Slices[1].Title = "界面"
+	const width = 60
+	for i, line := range Render(state, width, false) {
+		if got := cellWidth(line); got != width {
+			t.Fatalf("line %d occupies %d cells, want %d: %q", i, got, width, line)
+		}
 	}
 }
 
@@ -198,10 +196,15 @@ func TestRenderColorPreservesPlainVisibleText(t *testing.T) {
 }
 
 func TestRenderAlwaysReturnsFixedLineCount(t *testing.T) {
-	for _, width := range []int{-1, 0, 1, 2, 3, 20} {
+	for _, width := range []int{-1, 0, 1, 2, 3, 20, 60} {
 		got := Render(run.HeaderState{}, width, false)
 		if len(got) != LineCount {
 			t.Fatalf("Render(width %d) returned %d lines, want %d", width, len(got), LineCount)
+		}
+		for i, line := range got {
+			if gotWidth := cellWidth(line); gotWidth != max(width, 0) {
+				t.Fatalf("Render(width %d) line %d occupies %d cells", width, i, gotWidth)
+			}
 		}
 	}
 }
@@ -216,10 +219,10 @@ func testHeaderState() run.HeaderState {
 		Branch:        "tao/20260812",
 		ReviewEnabled: true,
 		Slices: []run.HeaderSlice{
-			{ID: "001-seam", Status: plan.StatusCompleted},
-			{ID: "002-render", Status: plan.StatusInProgress},
-			{ID: "003-wire", Status: plan.StatusPending},
-			{ID: "004-docs", Status: plan.StatusPending},
+			{ID: "001-seam", Title: "Terminal seam", Status: plan.StatusCompleted},
+			{ID: "002-render", Title: "Render header", Status: plan.StatusInProgress},
+			{ID: "003-wire", Title: "Wire output", Status: plan.StatusPending},
+			{ID: "004-docs", Title: "Document", Status: plan.StatusPending},
 		},
 		CompletedCount:    1,
 		TotalCount:        4,
@@ -233,28 +236,22 @@ func testHeaderState() run.HeaderState {
 	}
 }
 
-func expectedHeader(contents ...string) []string {
-	const width = 140
-	top := "┌" + strings.Repeat("─", width-2) + "┐"
-	bottom := "└" + strings.Repeat("─", width-2) + "┘"
-	result := []string{top}
-	for _, content := range contents {
-		result = append(result, "│"+content+strings.Repeat(" ", width-2-len([]rune(content)))+"│")
+func expectedRows(width int, contents ...string) []string {
+	result := make([]string, len(contents))
+	for i, content := range contents {
+		result[i] = content + strings.Repeat(" ", width-cellWidth(content))
 	}
-	return append(result, bottom)
+	return result
 }
 
-func assertLines(t *testing.T, got, want []string) {
+func assertLines(t *testing.T, got, want []string, width int) {
 	t.Helper()
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Render() mismatch\n got: %#v\nwant: %#v", got, want)
 	}
 	for i, line := range got {
-		if len([]rune(line)) == 0 {
-			continue
-		}
-		if len([]rune(line)) != len([]rune(got[0])) {
-			t.Fatalf("line %d has %d runes, first line has %d", i, len([]rune(line)), len([]rune(got[0])))
+		if gotWidth := cellWidth(line); gotWidth != width {
+			t.Fatalf("line %d occupies %d cells, want %d", i, gotWidth, width)
 		}
 	}
 }

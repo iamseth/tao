@@ -356,19 +356,20 @@ through.
   It explicitly clears the blocked lifecycle state but does **not** infer
   resolution or bypass approval gates, dependencies, or verification preflight.
 
-In an interactive terminal, `tao run` pins a live header above the agent log. It
-shows the repository and plan identity, agent and run configuration, slice
-progress and current phase, elapsed time, reported session/token/cost totals,
-and a compact slice checklist. During `tao run --all`, it re-identifies each
-plan and also shows that plan's position in the current drain. The header is
-TTY-only and requires enough terminal rows; redirected and other non-interactive
-output remains plain. Disable it for one invocation with `--no-run-header`, or
-set `TAO_RUN_HEADER=0` to opt out by default.
+In an interactive terminal, `tao run` pins a compact live header above the
+agent log. It combines repository, plan, and run configuration with the active
+slice or phase and elapsed time, a capped progress bar, a titled window of
+nearby slices centered on the current one, and compact session/token/cost
+metrics. A divider and `LIVE OUTPUT` label separate the header from provider
+output. During `tao run --all`, the header also shows the plan's position in the
+current drain. It is TTY-only and requires enough terminal rows; redirected and
+other non-interactive output remains plain. Disable it for one invocation with
+`--no-run-header`, or set `TAO_RUN_HEADER=0` to opt out by default.
 
-The pinned region uses terminal scroll margins rather than an alternate screen.
-Lines that scroll out of that region are therefore dropped from terminal
-scrollback. The complete agent log is still retained as `agent-run.log` in the
-plan directory.
+The pinned region still uses terminal scroll margins rather than an alternate
+screen. Lines that scroll out of that region are therefore dropped from
+terminal scrollback. The complete agent log is still retained as
+`agent-run.log` in the plan directory.
 
 **Before running, prefer `tao validate <plan-id>`** for whole-plan findings —
 `tao run` only preflights the one slice it's about to execute.

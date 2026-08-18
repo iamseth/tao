@@ -2,155 +2,161 @@ package runheader
 
 import (
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/run"
-	"github.com/iamseth/tao/internal/view"
 )
 
 // LineCount is the fixed number of terminal rows occupied by the header.
 const LineCount = 7
 
-const fieldSeparator = " · "
+const (
+	fieldSeparator = " · "
+	maxProgressBar = 20
+)
 
-type labeledField struct {
-	label string
-	value string
-}
-
-// Render turns state into a fixed-height terminal header. Width is measured in
-// runes; ANSI color sequences, when requested, do not consume visible width.
+// Render turns state into a fixed-height, borderless terminal header. Width is
+// measured in terminal cells; ANSI color sequences do not consume visible width.
 func Render(state run.HeaderState, width int, useColor bool) []string {
 	width = max(width, 0)
-	lines := make([]string, 0, LineCount)
-	lines = append(lines, border(width, '┌', '─', '┐', useColor))
 
-	innerWidth := max(width-2, 0)
+	identity := renderIdentity(state, width)
+	active := renderActive(state)
+	progress := renderProgress(state, width)
+	checklist := "SLICES  " + renderChecklist(state, max(width-cellWidth("SLICES  "), 0))
+	metrics := renderMetrics(state)
+
+	lines := []string{
+		line(identity, width),
+		line(active, width),
+		line(progress, width),
+		line(checklist, width),
+		line(metrics, width),
+		strings.Repeat("─", width),
+		line("LIVE OUTPUT", width),
+	}
+	if useColor {
+		lines[1] = colorFirst(lines[1], "▶", "36")
+		lines[3] = colorChecklist(lines[3])
+		lines[5] = color(lines[5], "90")
+		lines[6] = colorFirst(lines[6], "LIVE OUTPUT", "36")
+	}
+	return lines
+}
+
+func renderIdentity(state run.HeaderState, width int) string {
 	slug, ok := plan.PlanSlug(state.PlanID)
 	if !ok {
 		slug = state.PlanID
 	}
-	slug = display(slug)
-	identity := []labeledField{
-		{label: "repo", value: display(state.RepoName)},
-		{label: "plan", value: slug},
-		{label: "id", value: display(state.PlanID)},
-	}
-	if strings.TrimSpace(state.PlanTitle) != "" {
-		identity = append(identity, labeledField{label: "title", value: state.PlanTitle})
-	}
-	lines = append(lines, contentLine(renderFields(identity, innerWidth), width))
-
-	review := "off"
-	if state.ReviewEnabled {
-		review = "on"
-	}
-	config := []labeledField{
-		{label: "agent", value: display(state.Agent)},
-		{label: "mode", value: display(state.ExecutionMode)},
-		{label: "branch", value: display(state.Branch)},
-		{label: "review", value: review},
+	identity := display(state.RepoName) + " / " + display(slug)
+	context := make([]string, 0, 6)
+	if state.BatchPosition > 0 && state.BatchTotal > 0 {
+		context = append(context, fmt.Sprintf("batch %d/%d", state.BatchPosition, state.BatchTotal))
 	}
 	if state.ReworkRound > 0 {
-		rework := fmt.Sprintf("%d", state.ReworkRound)
+		rework := strconv.Itoa(state.ReworkRound)
 		if state.MaxReworkAttempts > 0 {
 			rework = fmt.Sprintf("%d/%d", state.ReworkRound, state.MaxReworkAttempts)
 		}
-		config = append(config, labeledField{label: "rework", value: rework})
+		context = append(context, "rework "+rework)
 	}
-	lines = append(lines, contentLine(renderFields(config, innerWidth), width))
-
-	current := phaseLabel(state)
-	progress := make([]labeledField, 0, 4)
-	if state.BatchPosition > 0 && state.BatchTotal > 0 {
-		progress = append(progress, labeledField{label: "plan", value: fmt.Sprintf("%d/%d", state.BatchPosition, state.BatchTotal)})
-	}
-	progress = append(progress,
-		labeledField{label: "slices", value: fmt.Sprintf("%d/%d", state.CompletedCount, state.TotalCount)},
-		labeledField{label: "current", value: current},
-		labeledField{label: "elapsed", value: elapsed(state.StartedAt)},
-	)
-	lines = append(lines, contentLine(renderFields(progress, innerWidth), width))
-
-	cost := "not reported"
-	if state.CostReported {
-		cost = fmt.Sprintf("$%.2f", state.Cost)
-	}
-	metrics := []labeledField{
-		{label: "sessions", value: fmt.Sprintf("%d", state.AgentSessionCount)},
-		{label: "tokens", value: fmt.Sprintf("%d", state.TotalTokens)},
-		{label: "cost", value: cost},
-	}
-	lines = append(lines, contentLine(renderFields(metrics, innerWidth), width))
-
-	const checklistPrefix = "slices "
-	checklistWidth := max(innerWidth-view.RuneWidth(checklistPrefix), 0)
-	checklist := checklistPrefix + renderChecklist(state, checklistWidth)
-	checklist = contentLine(truncate(checklist, innerWidth), width)
-	if useColor {
-		checklist = colorChecklist(checklist)
-	}
-	lines = append(lines, checklist)
-	lines = append(lines, border(width, '└', '─', '┘', useColor))
-	return lines
-}
-
-func renderFields(fields []labeledField, width int) string {
-	if width <= 0 || len(fields) == 0 {
-		return ""
-	}
-	values := make([][]rune, len(fields))
-	limits := make([]int, len(fields))
-	fixedWidth := view.RuneWidth(fieldSeparator) * (len(fields) - 1)
-	for i, field := range fields {
-		values[i] = []rune(display(field.value))
-		limits[i] = len(values[i])
-		fixedWidth += view.RuneWidth(field.label) + 1
+	context = append(context, display(state.Agent), display(state.ExecutionMode), display(state.Branch))
+	if state.ReviewEnabled {
+		context = append(context, "review on")
+	} else {
+		context = append(context, "review off")
 	}
 
-	availableValues := width - fixedWidth
-	if availableValues < len(fields) {
-		return truncate(joinFields(fields, values, limits), width)
-	}
-	for total(limits) > availableValues {
-		longest := 0
-		for i := 1; i < len(limits); i++ {
-			if limits[i] > limits[longest] {
-				longest = i
-			}
+	parts := append([]string{identity}, context...)
+	if strings.TrimSpace(state.PlanTitle) != "" {
+		withoutTitle := strings.Join(parts, fieldSeparator)
+		titleWidth := width - cellWidth(withoutTitle) - 2*cellWidth(fieldSeparator)
+		if titleWidth > 0 {
+			parts = append([]string{identity, truncateCells(display(state.PlanTitle), titleWidth)}, context...)
 		}
-		limits[longest]--
-	}
-	return joinFields(fields, values, limits)
-}
-
-func joinFields(fields []labeledField, values [][]rune, limits []int) string {
-	parts := make([]string, len(fields))
-	for i, field := range fields {
-		parts[i] = field.label + " " + truncateRunes(values[i], limits[i])
 	}
 	return strings.Join(parts, fieldSeparator)
 }
 
-func total(values []int) int {
-	result := 0
-	for _, value := range values {
-		result += value
+func renderActive(state run.HeaderState) string {
+	current := phaseLabel(state)
+	if state.CurrentSliceTitle != "" || state.CurrentSliceID != "" {
+		current = strings.TrimSpace(strings.Join([]string{slicePrefix(state.CurrentSliceID), display(state.CurrentSliceTitle)}, " "))
+		current = "▶ " + current
+	} else {
+		current = "PHASE  " + current
 	}
-	return result
+	return current + fieldSeparator + "elapsed " + elapsed(state.StartedAt)
+}
+
+func renderProgress(state run.HeaderState, width int) string {
+	total := max(state.TotalCount, 0)
+	completed := max(state.CompletedCount, 0)
+	percent := 0
+	if total > 0 {
+		percent = min(completed*100/total, 100)
+	}
+	stats := fmt.Sprintf("%d/%d · %d%%", completed, total, percent)
+	barWidth := min(maxProgressBar, max(width-cellWidth(stats)-3, 0))
+	if barWidth == 0 {
+		return stats
+	}
+	filled := 0
+	if total > 0 {
+		filled = min(completed*barWidth/total, barWidth)
+	}
+	return "[" + strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled) + "] " + stats
+}
+
+func renderMetrics(state run.HeaderState) string {
+	cost := "cost —"
+	if state.CostReported {
+		cost = fmt.Sprintf("$%.2f", state.Cost)
+	}
+	return fmt.Sprintf("AGENT  %d %s%s%s tokens%s%s",
+		state.AgentSessionCount,
+		plural(state.AgentSessionCount, "session", "sessions"),
+		fieldSeparator,
+		compactCount(state.TotalTokens),
+		fieldSeparator,
+		cost,
+	)
+}
+
+func plural(value int, one, many string) string {
+	if value == 1 {
+		return one
+	}
+	return many
+}
+
+func compactCount(value int64) string {
+	absolute := math.Abs(float64(value))
+	for _, unit := range []struct {
+		threshold float64
+		suffix    string
+	}{{1_000_000_000, "b"}, {1_000_000, "m"}, {1_000, "k"}} {
+		if absolute >= unit.threshold {
+			result := strconv.FormatFloat(float64(value)/unit.threshold, 'f', 1, 64)
+			result = strings.TrimSuffix(result, ".0")
+			return result + unit.suffix
+		}
+	}
+	return strconv.FormatInt(value, 10)
 }
 
 func phaseLabel(state run.HeaderState) string {
-	if state.CurrentSliceTitle != "" {
-		return state.CurrentSliceTitle
-	}
 	phase := strings.TrimSpace(string(state.Phase))
 	if phase == "" {
 		return "-"
 	}
-	return strings.ReplaceAll(phase, "_", " ")
+	return display(strings.ReplaceAll(phase, "_", " "))
 }
 
 func elapsed(startedAt time.Time) string {
@@ -167,6 +173,7 @@ func renderChecklist(state run.HeaderState, width int) string {
 	if len(state.Slices) == 0 {
 		return "-"
 	}
+
 	items := make([]string, len(state.Slices))
 	current := -1
 	for i, slice := range state.Slices {
@@ -178,13 +185,14 @@ func renderChecklist(state run.HeaderState, width int) string {
 			marker = "▶"
 			current = i
 		}
-		items[i] = marker + display(slice.ID)
+		title := display(slice.Title)
+		items[i] = strings.TrimSpace(marker + " " + slicePrefix(slice.ID) + " " + title)
 	}
 	if current < 0 {
 		for i, slice := range state.Slices {
 			if slice.Status != plan.StatusCompleted {
 				current = i
-				items[i] = "▶" + display(slice.ID)
+				items[i] = strings.Replace(items[i], "○ ", "▶ ", 1)
 				break
 			}
 		}
@@ -193,8 +201,8 @@ func renderChecklist(state run.HeaderState, width int) string {
 		current = len(items) - 1
 	}
 
-	all := strings.Join(items, " ")
-	if view.RuneWidth(all) <= width {
+	all := strings.Join(items, "   ")
+	if cellWidth(all) <= width {
 		return all
 	}
 
@@ -203,7 +211,7 @@ func renderChecklist(state run.HeaderState, width int) string {
 	for start := 0; start <= current; start++ {
 		for end := current; end < len(items); end++ {
 			candidate := checklistWindow(items, start, end)
-			if view.RuneWidth(candidate) > width {
+			if cellWidth(candidate) > width {
 				continue
 			}
 			count := end - start + 1
@@ -220,15 +228,12 @@ func renderChecklist(state run.HeaderState, width int) string {
 	leading, trailing := current > 0, current < len(items)-1
 	reserved := 0
 	if leading {
-		reserved += 2
+		reserved += cellWidth("…   ")
 	}
 	if trailing {
-		reserved += 2
+		reserved += cellWidth("   …")
 	}
-	if reserved >= width {
-		return truncate(strings.TrimSpace(strings.Repeat("… ", boolInt(leading))+strings.Repeat("… ", boolInt(trailing))), width)
-	}
-	item := truncate(items[current], width-reserved)
+	item := truncateCells(items[current], max(width-reserved, 0))
 	parts := make([]string, 0, 3)
 	if leading {
 		parts = append(parts, "…")
@@ -237,7 +242,7 @@ func renderChecklist(state run.HeaderState, width int) string {
 	if trailing {
 		parts = append(parts, "…")
 	}
-	return strings.Join(parts, " ")
+	return truncateCells(strings.Join(parts, "   "), width)
 }
 
 func checklistWindow(items []string, start, end int) string {
@@ -249,45 +254,30 @@ func checklistWindow(items []string, start, end int) string {
 	if end < len(items)-1 {
 		parts = append(parts, "…")
 	}
-	return strings.Join(parts, " ")
+	return strings.Join(parts, "   ")
 }
 
-func contentLine(content string, width int) string {
-	switch width {
-	case 0:
-		return ""
-	case 1:
-		return "│"
-	case 2:
-		return "││"
-	default:
-		inner := truncate(content, width-2)
-		return "│" + view.Pad(inner, width-2) + "│"
+func slicePrefix(id string) string {
+	id = display(id)
+	if before, _, ok := strings.Cut(id, "-"); ok && before != "" {
+		return before
 	}
+	return id
 }
 
-func border(width int, left, fill, right rune, useColor bool) string {
-	var result string
-	switch width {
-	case 0:
-		return ""
-	case 1:
-		result = string(fill)
-	case 2:
-		result = strings.Repeat(string(fill), 2)
-	default:
-		result = string(left) + strings.Repeat(string(fill), width-2) + string(right)
-	}
-	if useColor {
-		return color(result, "36")
-	}
-	return result
+func line(content string, width int) string {
+	content = truncateCells(content, width)
+	return content + strings.Repeat(" ", max(width-cellWidth(content), 0))
 }
 
 func colorChecklist(value string) string {
 	value = strings.ReplaceAll(value, "✓", color("✓", "32"))
 	value = strings.ReplaceAll(value, "▶", color("▶", "36"))
 	return strings.ReplaceAll(value, "○", color("○", "90"))
+}
+
+func colorFirst(value, target, code string) string {
+	return strings.Replace(value, target, color(target, code), 1)
 }
 
 func color(value, code string) string {
@@ -311,21 +301,51 @@ func terminalSafe(value string) string {
 	}, value)
 }
 
-func truncate(value string, width int) string {
-	return truncateRunes([]rune(value), width)
-}
-
-func truncateRunes(value []rune, width int) string {
+func truncateCells(value string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	if len(value) <= width {
-		return string(value)
+	if cellWidth(value) <= width {
+		return value
 	}
 	if width == 1 {
 		return "…"
 	}
-	return string(value[:width-1]) + "…"
+	target := width - 1
+	used := 0
+	var result strings.Builder
+	for _, r := range value {
+		runeWidth := terminalRuneWidth(r)
+		if used+runeWidth > target {
+			break
+		}
+		result.WriteRune(r)
+		used += runeWidth
+	}
+	return result.String() + "…"
+}
+
+func cellWidth(value string) int {
+	width := 0
+	for _, r := range value {
+		width += terminalRuneWidth(r)
+	}
+	return width
+}
+
+func terminalRuneWidth(r rune) int {
+	if unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r) || unicode.Is(unicode.Cf, r) {
+		return 0
+	}
+	if r >= 0x1100 && (r <= 0x115f || r == 0x2329 || r == 0x232a ||
+		r >= 0x2e80 && r <= 0xa4cf && r != 0x303f ||
+		r >= 0xac00 && r <= 0xd7a3 || r >= 0xf900 && r <= 0xfaff ||
+		r >= 0xfe10 && r <= 0xfe19 || r >= 0xfe30 && r <= 0xfe6f ||
+		r >= 0xff00 && r <= 0xff60 || r >= 0xffe0 && r <= 0xffe6 ||
+		r >= 0x1f300 && r <= 0x1faff || r >= 0x20000 && r <= 0x3fffd) {
+		return 2
+	}
+	return 1
 }
 
 func abs(value int) int {
@@ -333,11 +353,4 @@ func abs(value int) int {
 		return -value
 	}
 	return value
-}
-
-func boolInt(value bool) int {
-	if value {
-		return 1
-	}
-	return 0
 }
