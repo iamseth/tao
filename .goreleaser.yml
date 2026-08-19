@@ -61,7 +61,7 @@ homebrew_casks:
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: https://github.com/iamseth/tao
-    description: Tao command-line tool
+    description: Local-first AI coding workflow orchestration
     license: MIT
     binaries:
       - tao

@@ -1,5 +1,7 @@
 # Tao
 
+**Local-first AI coding workflow orchestration for planning, verified slices, isolated Git worktrees, exact-diff review, recovery, and safe merges.**
+
 [![CI](https://github.com/iamseth/tao/actions/workflows/ci.yml/badge.svg)](https://github.com/iamseth/tao/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.26.2-00ADD8.svg)](go.mod)
@@ -11,23 +13,30 @@
 </div>
 
 
-Tao helps plan and execute LLM driven software development. Instead of asking an agent to do everything at once, Tao encourages you to plan first and execute in small, iterative steps called slices.
+Tao augments supported coding agents with a durable local workflow for turning a request into small, reviewable changes:
 
-When planning work, start a new LLM session in your agent of choice and run *`/tao-plan add dark mode support`* or whatever you want to add/change. It generally helps to write a longer, more detailed prompt but even a short one like that can do.
+1. **Plan** the outcome with `/tao-plan`.
+2. **Slice** the plan into bounded steps with `/tao-slice`.
+3. **Validate** its artifacts and checks with `tao validate`.
+4. **Run** each slice in an isolated Git worktree with `tao run`.
+5. **Review** the exact plan diff; inspect or refresh the result with `tao review`.
+6. **Merge or hand off a PR** with `tao merge` or the pull-request run path.
 
-The prompt will likely ask questions about the plan, helping shape the direction. When the plan is clear, run *`/tao-slice`* to break the plan into slices.
+Tao keeps plans, execution evidence, and recovery state locally. It validates agent-proposed commits, verifies completed work, and binds review to an exact base and head before integration. A PR-path plan becomes `completed` when its approved review and PR metadata describe the same non-empty head; that means the PR handoff is complete, not that the host merged it. **A completed PR handoff does not prove integration; only current `plan_merged` evidence proves default-branch integration.**
 
-> [!TIP]
-> If there are open questions at the end of a planning session, use `/tao-grill-me` ensuring all questions are answered before slicing. This will help avoid incomplete slices that may require rework later.
+For workflow guidance, see the [usage guide](docs/usage-guide.md). For the artifact and lifecycle contract, see the [plan format](docs/plan-format.md).
 
-After a plan is created, Tao runs each slice serially in a clean Git worktree. The implementing agent proposes a scoped Conventional Commit with `What:` and `Why:` sections; Tao validates it, appends trusted evidence trailers, and alone stages and creates each checkpoint commit. After all slices run, Tao reviews the exact plan diff.
+### Where Tao fits
 
-An approved review includes a commit proposal bound to that exact diff. From there Tao has two completion paths. In the solo no-PR path, `tao merge` reuses the proposal to squash the reviewed checkpoint history into one default-branch commit and records `plan_merged`. In the PR path, Tao marks the plan `completed` once it has both the current approved review and recorded PR metadata for the same non-empty head. That status means Tao's PR handoff is complete, not that the host merged the PR; only current `plan_merged` evidence proves default-branch integration.
+| Category | Primary role | Tao's relationship |
+| --- | --- | --- |
+| Coding agents | Generate and change code | Tao augments supported agents with planning, execution, evidence, and integration controls. |
+| Spec-only frameworks | Structure requirements or plans | Tao carries a sliced plan through verified implementation, review, and integration. |
+| Worktree session managers | Isolate or organize coding sessions | Tao creates managed execution worktrees as part of a durable plan lifecycle. |
+| Autonomous PR agents | Independently produce pull requests | Tao orchestrates user-invoked local runs and can hand off a reviewed head to a PR workflow. |
 
 > [!IMPORTANT]
-> Tao does not replace your agent. It's a tool to augment your existing agent workflow.
->
-> Today, Tao supports Pi, Claude, OpenCode, and Codex. 
+> Tao is not a replacement for your coding agent, a generic parallel-agent dashboard, or a cloud platform. Today it supports Pi, Claude, OpenCode, and Codex.
 
 ---
 
