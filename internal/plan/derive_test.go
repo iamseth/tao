@@ -673,6 +673,25 @@ func TestDeriveNextActionLifecyclePrecedence(t *testing.T) {
 	}
 }
 
+func TestDeriveNextActionDescribesSliceRecoveryWithoutPartialCommand(t *testing.T) {
+	detail := &PlanDetail{
+		State: State{Status: StatusInProgress, Plan: PlanState{ID: "plan-a", CurrentSlice: ptrString("001-a")}},
+		Slices: SlicesFile{Slices: []Slice{{
+			ID:           "001-a",
+			Status:       StatusInProgress,
+			CommitIntent: &SliceCommitIntent{Policy: "slice"},
+		}}},
+	}
+
+	action := DeriveNextAction(detail).Primary
+	if action.Command != "" {
+		t.Fatalf("recovery command = %q, want no incomplete executable command", action.Command)
+	}
+	if !strings.Contains(action.Instruction, "original complete tao slice-complete invocation") {
+		t.Fatalf("recovery instruction = %q, want explicit original-invocation guidance", action.Instruction)
+	}
+}
+
 func TestDeriveNextActionClassifiesForcedAlternativesAsAdministrative(t *testing.T) {
 	for _, review := range []*PlanReview{
 		{Status: ReviewStatusCompleted, Verdict: ReviewVerdictChangesRequested},

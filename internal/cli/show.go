@@ -197,11 +197,14 @@ func renderNextAction(out io.Writer, next plan.PlanNextAction) error {
 // shared read-only lifecycle projection without promoting administrative
 // alternatives alongside the safest recommendation.
 func renderPrimaryNextAction(out io.Writer, next plan.PlanNextAction) error {
-	command := next.Primary.Command
-	if command == "" {
-		command = "No action"
+	guidance := next.Primary.Command
+	if guidance == "" {
+		guidance = next.Primary.Instruction
 	}
-	if err := writef(out, "Next: %s\n", command); err != nil {
+	if guidance == "" {
+		guidance = "No action"
+	}
+	if err := writef(out, "Next: %s\n", guidance); err != nil {
 		return err
 	}
 	return writef(out, "Reason: %s\n", next.Primary.Reason)

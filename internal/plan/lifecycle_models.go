@@ -469,10 +469,11 @@ const (
 )
 
 type PlanAction struct {
-	Kind    PlanActionKind  `json:"kind"`
-	Class   PlanActionClass `json:"class"`
-	Command string          `json:"command,omitempty"`
-	Reason  string          `json:"reason"`
+	Kind        PlanActionKind  `json:"kind"`
+	Class       PlanActionClass `json:"class"`
+	Command     string          `json:"command,omitempty"`
+	Instruction string          `json:"instruction,omitempty"`
+	Reason      string          `json:"reason"`
 }
 
 // PlanNextAction contains exactly one primary recommendation and any valid but

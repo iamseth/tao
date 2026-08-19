@@ -114,7 +114,15 @@ func deriveNextAction(detail *PlanDetail, derived DerivedPlan) PlanNextAction {
 	// progression. Starting another operation could destroy the exact recovery
 	// boundary that Tao needs to settle first.
 	if derived.SliceCompletionPending {
-		return primary(PlanActionRecoverSliceCompletion, PlanActionClassRecovery, "tao slice-complete", "an automatic slice commit intent is not settled; rerun the original completion invocation")
+		return PlanNextAction{
+			Primary: PlanAction{
+				Kind:        PlanActionRecoverSliceCompletion,
+				Class:       PlanActionClassRecovery,
+				Instruction: "Rerun the original complete tao slice-complete invocation with all previously supplied file arguments",
+				Reason:      "an automatic slice commit intent is not settled",
+			},
+			Alternatives: []PlanAction{},
+		}
 	}
 	if detail.State.Workspace != nil && detail.State.Workspace.RebaseIntent != nil {
 		return primary(PlanActionRecoverRebase, PlanActionClassRecovery, command("tao run"), "an interrupted workspace rebase must be settled before other work")

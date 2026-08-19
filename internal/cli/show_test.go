@@ -268,6 +268,23 @@ func TestRenderPlanDetailProminentlyShowsReasonAndSubordinateAlternatives(t *tes
 	}
 }
 
+func TestRenderPrimaryNextActionShowsRecoveryInstruction(t *testing.T) {
+	var out bytes.Buffer
+	next := plan.PlanNextAction{Primary: plan.PlanAction{
+		Kind:        plan.PlanActionRecoverSliceCompletion,
+		Class:       plan.PlanActionClassRecovery,
+		Instruction: "Rerun the original complete tao slice-complete invocation with all previously supplied file arguments",
+		Reason:      "an automatic slice commit intent is not settled",
+	}}
+	if err := renderPrimaryNextAction(&out, next); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	if !strings.Contains(text, "Next: Rerun the original complete tao slice-complete invocation") || strings.Contains(text, "Next: tao slice-complete\n") {
+		t.Fatalf("expected non-executable recovery guidance, got:\n%s", text)
+	}
+}
+
 func TestRenderPlanDetailShowsTerminalNoActionGuidance(t *testing.T) {
 	detail := &plan.PlanDetail{State: plan.State{Status: plan.StatusCompleted, Plan: plan.PlanState{ID: "done", Title: "Done"}}}
 	loaded := planview.Plan{Detail: detail, Derived: plan.Derive(detail, time.Time{}), Now: time.Now()}
