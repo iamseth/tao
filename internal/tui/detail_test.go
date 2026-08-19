@@ -14,10 +14,58 @@ import (
 
 	"github.com/iamseth/tao/internal/agent/logrecord"
 	"github.com/iamseth/tao/internal/monitor"
+	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/term"
 )
+
+func TestRenderNoteDetailShowsFullSanitizedMultilineText(t *testing.T) {
+	created := time.Date(2026, 8, 18, 10, 30, 0, 0, time.UTC)
+	updated := created.Add(2 * time.Hour)
+	frame := RenderNoteDetail(note.CatalogNote{
+		RepositoryName: "répo\x1b]0;owned\a",
+		ID:             "note-完整\x1b[31m",
+		Tags:           []string{"one", "tw\x1b[2Jo"},
+		CreatedAt:      created,
+		UpdatedAt:      updated,
+		Text:           "first line\n第二行\x1b]52;c;payload\a\nthird\tline",
+	}, 80, 30)
+	body := strings.TrimPrefix(frame, clearScreenSequence)
+	for _, want := range []string{"NOTE DETAIL", "Repository: répo", "Note: note-完整", "Status: open", "Tags: one, two", created.Format(time.RFC3339), updated.Format(time.RFC3339), "  first line", "  第二行", "  third line", "Esc back"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("note detail missing %q:\n%s", want, frame)
+		}
+	}
+	for _, absent := range []string{"]0;", "[31m", "[2J", "]52;", "payload"} {
+		if strings.Contains(body, absent) {
+			t.Fatalf("note detail retained terminal sequence %q: %q", absent, body)
+		}
+	}
+	for _, r := range body {
+		if unicode.IsControl(r) && r != '\n' {
+			t.Fatalf("note detail contains control %U: %q", r, body)
+		}
+	}
+}
+
+func TestRenderNoteDetailScrollReachesWrappedTailWithFixedChrome(t *testing.T) {
+	item := note.CatalogNote{
+		RepositoryName: "repo",
+		ID:             "long-note",
+		Text:           strings.Repeat("a", 100) + "\nfinal wrapped line",
+	}
+	frame := renderNoteDetail(item, 40, 11, 100)
+	body := strings.TrimPrefix(frame, clearScreenSequence)
+	for _, want := range []string{"Tao UI | NOTE DETAIL", "Text:", "  final wrapped line", noteDetailFooter} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("scrolled note detail missing %q:\n%s", want, frame)
+		}
+	}
+	if lines := strings.Count(body, "\n") + 1; lines != 11 {
+		t.Fatalf("scrolled detail lines = %d, want 11:\n%s", lines, frame)
+	}
+}
 
 func TestRenderSlicesPaneUsesStateQueueOrderAndShowsCurrentMetadata(t *testing.T) {
 	current := "002-build"

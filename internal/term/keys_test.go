@@ -12,13 +12,14 @@ import (
 func TestDecoderReadsKeyEvents(t *testing.T) {
 	t.Parallel()
 
-	input := "a界\r\n\x08\x7f\x1b[A\x1b[B\x1b[C\x1b[D\x03\x1b"
+	input := "a界\r\n\t\x08\x7f\x1b[A\x1b[B\x1b[C\x1b[D\x03\x1b"
 	decoder := NewDecoder(strings.NewReader(input))
 	want := []KeyEvent{
 		{Key: KeyRune, Rune: 'a'},
 		{Key: KeyRune, Rune: '界'},
 		{Key: KeyEnter},
 		{Key: KeyEnter},
+		{Key: KeyTab},
 		{Key: KeyBackspace},
 		{Key: KeyBackspace},
 		{Key: KeyArrowUp},
@@ -137,7 +138,7 @@ func TestDecoderPreservesUnknownEscapeSequenceInput(t *testing.T) {
 func TestDecoderReturnsUnknownForUnsupportedControl(t *testing.T) {
 	t.Parallel()
 
-	got, err := NewDecoder(strings.NewReader("\t")).ReadKey()
+	got, err := NewDecoder(strings.NewReader("\x01")).ReadKey()
 	if err != nil {
 		t.Fatalf("ReadKey() error = %v", err)
 	}

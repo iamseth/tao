@@ -7,22 +7,28 @@ import (
 	"unicode/utf8"
 
 	"github.com/iamseth/tao/internal/monitor"
+	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/plan"
 	planview "github.com/iamseth/tao/internal/view"
 )
 
 const (
 	clearScreenSequence = "\x1b[H\x1b[2J"
-	footerHints         = "r run  a approve  m merge  M merge all  f repository  c completed  Enter plan  q quit  Esc Esc quit"
+	plansFooterHints    = "r run  a approve  m merge  M merge all  f repository  c completed  Enter plan  Tab/←/→ tabs  q quit  Esc Esc quit"
+	notesFooterHints    = "f repository  Tab/←/→ tabs  q quit  Esc Esc quit"
+	footerHints         = plansFooterHints
 	maxSliceIDRunes     = 20
 )
 
 // Model contains the render-neutral state for one UI frame.
 type Model struct {
 	Snapshot            monitor.Snapshot
+	NoteSnapshot        note.Snapshot
+	Page                PageID
 	Selected            int
 	Width               int
 	Height              int
+	Now                 time.Time
 	HideCompleted       bool
 	FocusRepositoryID   string
 	FocusRepositoryName string
@@ -56,6 +62,7 @@ type tableWidths struct {
 
 // Render builds one complete terminal frame without writing it.
 func Render(model Model) string {
+	page := normalizePage(model.Page)
 	sections := BuildRepositorySections(model.Snapshot.Rows, !model.HideCompleted, model.FocusRepositoryID)
 	visibleCount := 0
 	for _, section := range sections {
@@ -63,17 +70,36 @@ func Render(model Model) string {
 	}
 	focusLabel := "Repositories: all"
 	if model.FocusRepositoryID != "" {
-		name := strings.TrimSpace(model.FocusRepositoryName)
+		name := singleLineDetail(model.FocusRepositoryName)
 		if name == "" {
-			name = model.FocusRepositoryID
+			name = singleLineDetail(model.FocusRepositoryID)
 		}
 		focusLabel = "Repository: " + name
 	}
-	lines := []string{fmt.Sprintf("Tao UI | %s | %s", focusLabel, planCountLabel(visibleCount))}
-	selectedLine := -1
-	if visibleCount == 0 {
-		lines = append(lines, "", "  No plans.")
+
+	header := fmt.Sprintf("Tao UI | %s", focusLabel)
+	if page == PagePlans {
+		header += " | " + planCountLabel(visibleCount)
 	} else {
+		header += " | " + noteCountLabel(len(visibleNotes(model.NoteSnapshot, model.FocusRepositoryID)))
+	}
+	lines := []string{header, renderTabBar(page)}
+	selectedLine := -1
+	switch {
+	case page == PageNotes:
+		now := model.Now
+		if now.IsZero() {
+			now = time.Now()
+		}
+		noteLines, noteSelectedLine := renderNotesPage(model.NoteSnapshot, model.Selected, model.FocusRepositoryID, now, model.UseColor)
+		selectedLine = len(lines) + noteSelectedLine
+		if noteSelectedLine < 0 {
+			selectedLine = -1
+		}
+		lines = append(lines, noteLines...)
+	case visibleCount == 0:
+		lines = append(lines, "", "  No plans.")
+	default:
 		widths := measureTable(sections, model.Snapshot.CollectedAt, model.ActionLabels)
 		selected := 0
 		for _, section := range sections {
@@ -91,14 +117,18 @@ func Render(model Model) string {
 		}
 	}
 	footerStart := len(lines)
-	if strings.TrimSpace(model.ActionMessage) != "" {
+	if page == PagePlans && strings.TrimSpace(model.ActionMessage) != "" {
 		lines = append(lines, "", model.ActionMessage)
 	}
 	if strings.TrimSpace(model.ConfirmMessage) != "" {
 		lines = append(lines, "", model.ConfirmMessage+" [y/n]")
 	}
-	lines = append(lines, "", footerHints)
-	lines = tableViewport(lines, selectedLine, footerStart, model.Height)
+	footer := plansFooterHints
+	if page == PageNotes {
+		footer = notesFooterHints
+	}
+	lines = append(lines, "", footer)
+	lines = tableViewport(lines, selectedLine, footerStart, 2, model.Height)
 	if model.Width > 0 {
 		for index := range lines {
 			lines[index] = truncateANSI(lines[index], model.Width)
@@ -111,35 +141,37 @@ func Render(model Model) string {
 	return frame
 }
 
-func tableViewport(lines []string, selectedLine, footerStart, height int) []string {
+func tableViewport(lines []string, selectedLine, footerStart, headerCount, height int) []string {
 	if height <= 0 || len(lines) <= height {
 		return lines
 	}
-	if height == 1 {
-		return lines[:1]
+	headerCount = min(headerCount, footerStart)
+	if height <= headerCount {
+		return lines[:height]
 	}
-	if height == 2 {
-		return []string{lines[0], lines[len(lines)-1]}
+	if height == headerCount+1 {
+		return append(append([]string(nil), lines[:headerCount]...), lines[len(lines)-1])
 	}
 
-	body := lines[1:footerStart]
+	body := lines[headerCount:footerStart]
 	footer := make([]string, 0, len(lines)-footerStart)
 	for _, line := range lines[footerStart:] {
 		if strings.TrimSpace(line) != "" {
 			footer = append(footer, line)
 		}
 	}
-	footerLimit := height - 1
+	available := height - headerCount
+	footerLimit := available
 	if len(body) > 0 {
-		footerLimit-- // Reserve one line for the selected row.
+		footerLimit-- // Reserve one line for page content.
 	}
 	if len(footer) > footerLimit {
 		footer = footer[len(footer)-footerLimit:]
 	}
 
-	bodyHeight := min(len(body), height-1-len(footer))
+	bodyHeight := min(len(body), available-len(footer))
 	start := 0
-	selectedBodyLine := selectedLine - 1
+	selectedBodyLine := selectedLine - headerCount
 	if selectedBodyLine >= 0 && selectedBodyLine < len(body) {
 		start = selectedBodyLine - bodyHeight/2
 	} else {
@@ -150,7 +182,7 @@ func tableViewport(lines []string, selectedLine, footerStart, height int) []stri
 	start = max(0, min(start, len(body)-bodyHeight))
 
 	viewport := make([]string, 0, height)
-	viewport = append(viewport, lines[0])
+	viewport = append(viewport, lines[:headerCount]...)
 	viewport = append(viewport, body[start:start+bodyHeight]...)
 	return append(viewport, footer...)
 }

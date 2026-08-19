@@ -159,6 +159,7 @@ type RepoInventoryEntry struct {
 	Repo             Repo
 	PlansDir         string
 	RuntimeStatusDir string
+	NotesDir         string
 	PlanCount        int
 	MetadataError    error
 }
@@ -175,6 +176,7 @@ func (r Registry) MetadataInventory() ([]RepoInventoryEntry, error) {
 		catalogRepo := Repo{ID: entry.Name()}
 		plansDir := r.PlansDir(catalogRepo)
 		statusDir := r.RuntimeStatusDir(catalogRepo)
+		notesDir := r.NotesDir(catalogRepo)
 		repo, err := r.ReadRepo(entry.Name())
 		if err == nil {
 			err = validateInventoryRepo(entry.Name(), repo)
@@ -184,6 +186,7 @@ func (r Registry) MetadataInventory() ([]RepoInventoryEntry, error) {
 				Repo:             catalogRepo,
 				PlansDir:         plansDir,
 				RuntimeStatusDir: statusDir,
+				NotesDir:         notesDir,
 				MetadataError:    err,
 			})
 			continue
@@ -192,6 +195,7 @@ func (r Registry) MetadataInventory() ([]RepoInventoryEntry, error) {
 			Repo:             repo,
 			PlansDir:         plansDir,
 			RuntimeStatusDir: statusDir,
+			NotesDir:         notesDir,
 			PlanCount:        r.planCount(catalogRepo),
 		})
 	}

@@ -18,12 +18,13 @@ func TestRenderGoldenColorModes(t *testing.T) {
 		Status:         plan.StatusPlanned,
 	}}}
 	plain := clearScreenSequence + `Tao UI | Repositories: all | 1 plan
+Tabs: [Plans]  Notes
 
 PLANNED / IN REVIEW
   REPO  PLAN  STATUS   PHASE/SLICE  RUN  SLICES  UPDATED
 > repo  plan  planned  -            -    0/0     -
 
-r run  a approve  m merge  M merge all  f repository  c completed  Enter plan  q quit  Esc Esc quit
+r run  a approve  m merge  M merge all  f repository  c completed  Enter plan  Tab/←/→ tabs  q quit  Esc Esc quit
 `
 	colored := strings.Replace(plain, "planned  -", "\x1b[33mplanned\x1b[0m  -", 1)
 	tests := []struct {
@@ -109,10 +110,11 @@ func TestRenderOmitsEmptyAndHiddenCompletedSections(t *testing.T) {
 			name:  "empty snapshot",
 			model: Model{},
 			want: clearScreenSequence + `Tao UI | Repositories: all | 0 plans
+Tabs: [Plans]  Notes
 
   No plans.
 
-r run  a approve  m merge  M merge all  f repository  c completed  Enter plan  q quit  Esc Esc quit
+r run  a approve  m merge  M merge all  f repository  c completed  Enter plan  Tab/←/→ tabs  q quit  Esc Esc quit
 `,
 		},
 		{
@@ -122,10 +124,11 @@ r run  a approve  m merge  M merge all  f repository  c completed  Enter plan  q
 				HideCompleted: true,
 			},
 			want: clearScreenSequence + `Tao UI | Repositories: all | 0 plans
+Tabs: [Plans]  Notes
 
   No plans.
 
-r run  a approve  m merge  M merge all  f repository  c completed  Enter plan  q quit  Esc Esc quit
+r run  a approve  m merge  M merge all  f repository  c completed  Enter plan  Tab/←/→ tabs  q quit  Esc Esc quit
 `,
 		},
 	}
@@ -161,6 +164,42 @@ func TestRenderShowsRepositoryFocusAndFiltersRows(t *testing.T) {
 	empty := Render(Model{FocusRepositoryID: "repo-b", FocusRepositoryName: "beta"})
 	if !strings.Contains(empty, "Tao UI | Repository: beta | 0 plans") || !strings.Contains(empty, "No plans.") {
 		t.Fatalf("empty focused render is ambiguous:\n%s", empty)
+	}
+}
+
+func TestRenderTabsAndPageAwareFooter(t *testing.T) {
+	snapshot := monitor.Snapshot{Rows: []monitor.Row{{RepositoryName: "repo", PlanID: "plan", Status: plan.StatusPlanned}}}
+
+	plans := Render(Model{Snapshot: snapshot})
+	for _, want := range []string{"Tabs: [Plans]  Notes", "> repo  plan", "r run", "c completed", "Enter plan"} {
+		if !strings.Contains(plans, want) {
+			t.Fatalf("plans page missing %q:\n%s", want, plans)
+		}
+	}
+
+	notes := Render(Model{Snapshot: snapshot, Page: PageNotes, ActionMessage: "plan action"})
+	for _, want := range []string{"Tabs: Plans  [Notes]", "Notes page.", notesFooterHints} {
+		if !strings.Contains(notes, want) {
+			t.Fatalf("notes page missing %q:\n%s", want, notes)
+		}
+	}
+	for _, unavailable := range []string{"> repo  plan", "r run", "c completed", "Enter plan", "plan action"} {
+		if strings.Contains(notes, unavailable) {
+			t.Fatalf("notes page exposed plan-only content %q:\n%s", unavailable, notes)
+		}
+	}
+}
+
+func TestRenderConstrainedDimensionsKeepTabIdentity(t *testing.T) {
+	got := Render(Model{Page: PageNotes, Width: 18, Height: 2})
+	lines := renderedLines(got)
+	if len(lines) != 2 || !strings.Contains(lines[1], "Plans  [Note") {
+		t.Fatalf("constrained tab frame = %#v, want two safely truncated header lines with active tab", lines)
+	}
+	for _, line := range lines {
+		if utf8.RuneCountInString(stripANSI(line)) > 18 {
+			t.Fatalf("constrained line exceeds width: %q", line)
+		}
 	}
 }
 
@@ -208,8 +247,8 @@ func TestRenderVerticalResizeReflowsAroundSelection(t *testing.T) {
 		rows[index] = monitor.Row{RepositoryName: "repo", PlanID: fmt.Sprintf("plan-%02d", index), Status: plan.StatusPlanned}
 	}
 	model := Model{Snapshot: monitor.Snapshot{Rows: rows}, Selected: 7, Height: 20}
-	if lines := renderedLines(Render(model)); len(lines) != 16 {
-		t.Fatalf("tall rendered lines = %d, want complete 16-line dashboard", len(lines))
+	if lines := renderedLines(Render(model)); len(lines) != 17 {
+		t.Fatalf("tall rendered lines = %d, want complete 17-line dashboard", len(lines))
 	}
 
 	model.Height = 6

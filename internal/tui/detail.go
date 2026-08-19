@@ -13,12 +13,15 @@ import (
 
 	"github.com/iamseth/tao/internal/agent/logrecord"
 	"github.com/iamseth/tao/internal/monitor"
+	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/plan"
 )
 
 const (
-	detailLogTailLines = 200
-	detailLogKeepLines = 1000
+	detailLogTailLines    = 200
+	detailLogKeepLines    = 1000
+	noteDetailHeaderLines = 8
+	noteDetailFooter      = "↑/↓/j/k scroll  Esc back  q quit"
 )
 
 // DetailRepository is the read-only plan and log boundary used by the detail
@@ -59,6 +62,112 @@ type detailState struct {
 type detailFollowUpdate struct {
 	text string
 	err  error
+}
+
+// RenderNoteDetail builds a bounded, read-only frame for one open note.
+func RenderNoteDetail(item note.CatalogNote, width, height int) string {
+	return renderNoteDetail(item, width, height, 0)
+}
+
+func renderNoteDetail(item note.CatalogNote, width, height, offset int) string {
+	header, body := noteDetailSections(item, width)
+	bodyHeight := noteDetailBodyHeight(len(body), height)
+	offset = max(0, min(offset, len(body)-bodyHeight))
+	lines := append([]string(nil), header...)
+	lines = append(lines, body[offset:offset+bodyHeight]...)
+	lines = append(lines, noteDetailFooter)
+	return fitDetailFrame(lines, width, height)
+}
+
+func noteDetailSections(item note.CatalogNote, width int) (header, body []string) {
+	created := "-"
+	if !item.CreatedAt.IsZero() {
+		created = item.CreatedAt.Format(time.RFC3339)
+	}
+	updated := "-"
+	if !item.UpdatedAt.IsZero() {
+		updated = item.UpdatedAt.Format(time.RFC3339)
+	}
+	header = []string{
+		"Tao UI | NOTE DETAIL",
+		"Repository: " + displayValue(singleLineNoteValue(item.RepositoryName)),
+		"Note: " + displayValue(singleLineNoteValue(item.ID)),
+		"Status: open",
+		"Tags: " + displayValue(singleLineNoteValue(strings.Join(item.Tags, ", "))),
+		"Created: " + created,
+		"Updated: " + updated,
+		"Text:",
+	}
+	return header, renderNoteText(item.Text, width)
+}
+
+func noteDetailBodyHeight(bodyLines, height int) int {
+	if height <= 0 {
+		return bodyLines
+	}
+	return max(0, min(bodyLines, height-noteDetailHeaderLines-1))
+}
+
+func renderNoteText(text string, width int) []string {
+	text = sanitizeNoteText(text)
+	if text == "" {
+		return []string{"  -"}
+	}
+	available := width - 2
+	if width <= 0 {
+		available = 0
+	} else {
+		available = max(available, 1)
+	}
+	var lines []string
+	for _, source := range strings.Split(text, "\n") {
+		runes := []rune(source)
+		if available <= 0 || len(runes) <= available {
+			lines = append(lines, "  "+source)
+			continue
+		}
+		for len(runes) > available {
+			lines = append(lines, "  "+string(runes[:available]))
+			runes = runes[available:]
+		}
+		lines = append(lines, "  "+string(runes))
+	}
+	return lines
+}
+
+func sanitizeNoteText(value string) string {
+	var printable strings.Builder
+	for index := 0; index < len(value); {
+		if value[index] == '\x1b' && index+1 < len(value) {
+			switch value[index+1] {
+			case '[':
+				index = skipDetailCSI(value, index+2)
+				continue
+			case ']':
+				index = skipDetailOSC(value, index+2)
+				continue
+			}
+		}
+		r, size := utf8.DecodeRuneInString(value[index:])
+		switch r {
+		case '\u009b':
+			index = skipDetailCSI(value, index+size)
+			continue
+		case '\u009d':
+			index = skipDetailOSC(value, index+size)
+			continue
+		case '\n':
+			printable.WriteRune(r)
+		default:
+			if unicode.IsPrint(r) {
+				printable.WriteRune(r)
+			} else {
+				printable.WriteByte(' ')
+			}
+		}
+		index += size
+	}
+	return strings.TrimSpace(printable.String())
 }
 
 // RenderDetail builds one complete detail-page frame without writing it.

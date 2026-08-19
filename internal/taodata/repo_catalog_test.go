@@ -44,14 +44,17 @@ func TestRegistryMetadataInventoryRetainsWarningsWithoutGitChecks(t *testing.T) 
 	if len(inventory) != 2 {
 		t.Fatalf("MetadataInventory() len = %d, want 2: %#v", len(inventory), inventory)
 	}
+	if inventory[0].Repo.ID != "bad-json" || inventory[1].Repo.ID != repo.ID {
+		t.Fatalf("MetadataInventory() order = %q, %q, want stable catalog order", inventory[0].Repo.ID, inventory[1].Repo.ID)
+	}
 	byID := map[string]RepoInventoryEntry{}
 	for _, entry := range inventory {
 		byID[entry.Repo.ID] = entry
 	}
-	if got := byID[repo.ID]; got.PlanCount != 1 || got.MetadataError != nil || got.Repo != repo {
+	if got := byID[repo.ID]; got.PlanCount != 1 || got.MetadataError != nil || got.Repo != repo || got.NotesDir != filepath.Join(dataHome, "repos", repo.ID, "notes") {
 		t.Fatalf("unexpected good inventory entry: %#v", got)
 	}
-	if got := byID["bad-json"]; got.MetadataError == nil || got.Repo.ID != "bad-json" {
+	if got := byID["bad-json"]; got.MetadataError == nil || got.Repo.ID != "bad-json" || got.NotesDir != filepath.Join(dataHome, "repos", "bad-json", "notes") {
 		t.Fatalf("unexpected warning inventory entry: %#v", got)
 	}
 }
@@ -80,7 +83,7 @@ func TestRegistryMetadataInventoryClassifiesInvalidMetadataWithoutFollowingItsID
 	if entry.MetadataError == nil || entry.Repo.ID != catalogID {
 		t.Fatalf("invalid metadata entry = %#v, want warning under catalog id", entry)
 	}
-	if entry.PlansDir != filepath.Join(dir, "plans") || entry.RuntimeStatusDir != filepath.Join(dir, "run-status") {
+	if entry.PlansDir != filepath.Join(dir, "plans") || entry.RuntimeStatusDir != filepath.Join(dir, "run-status") || entry.NotesDir != filepath.Join(dir, "notes") {
 		t.Fatalf("invalid metadata paths escaped catalog entry: %#v", entry)
 	}
 }

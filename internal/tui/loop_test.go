@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/monitor"
+	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/term"
 )
 
@@ -94,6 +96,29 @@ func (c *fakeCollector) Collect(context.Context) (monitor.Snapshot, error) {
 	return c.snapshots[index], nil
 }
 
+type fakeNoteCollector struct {
+	mu        sync.Mutex
+	snapshots []note.Snapshot
+	calls     int
+}
+
+func (c *fakeNoteCollector) Collect(context.Context) (note.Snapshot, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	index := c.calls
+	if index >= len(c.snapshots) {
+		index = len(c.snapshots) - 1
+	}
+	c.calls++
+	return c.snapshots[index], nil
+}
+
+func (c *fakeNoteCollector) callCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls
+}
+
 type recordingWriter struct {
 	writes chan string
 }
@@ -143,6 +168,45 @@ func TestRunMovesSelectionAndRestoresTerminal(t *testing.T) {
 	}
 	if !ticker.wasStopped() {
 		t.Fatal("refresh ticker was not stopped")
+	}
+}
+
+func TestRunCollectsNotesInitiallyAndOnRefresh(t *testing.T) {
+	terminal := &fakeTerminal{size: term.Size{Width: 100, Height: 20}, resizes: make(chan struct{})}
+	ticker := &fakeTicker{channel: make(chan time.Time, 1)}
+	notes := &fakeNoteCollector{snapshots: []note.Snapshot{
+		{Notes: []note.CatalogNote{{RepositoryID: "repo", RepositoryName: "repo", ID: "note-first", Text: "first"}}},
+		{Notes: []note.CatalogNote{{RepositoryID: "repo", RepositoryName: "repo", ID: "note-refreshed", Text: "refreshed"}}},
+	}}
+	output := &recordingWriter{writes: make(chan string, 16)}
+	reader, writer := io.Pipe()
+	defer func() { _ = reader.Close() }()
+	done := make(chan error, 1)
+	go func() {
+		done <- (App{
+			Input: reader, Output: output, Terminal: terminal, Ticker: ticker,
+			Collector: &fakeCollector{snapshots: []monitor.Snapshot{{}}}, Notes: notes,
+		}).Run(context.Background())
+	}()
+
+	_ = waitForFrame(t, output.writes)
+	if _, err := io.WriteString(writer, "\t"); err != nil {
+		t.Fatal(err)
+	}
+	initialNotes := waitForFrame(t, output.writes)
+	if !strings.Contains(initialNotes, "note-first") || notes.callCount() != 1 {
+		t.Fatalf("initial notes frame=%q calls=%d", initialNotes, notes.callCount())
+	}
+	ticker.channel <- time.Now()
+	refreshed := waitForFrame(t, output.writes)
+	if !strings.Contains(refreshed, "note-refreshed") || notes.callCount() != 2 {
+		t.Fatalf("refreshed notes frame=%q calls=%d", refreshed, notes.callCount())
+	}
+	if _, err := io.WriteString(writer, "q"); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -415,6 +479,224 @@ func TestRepositoryFocusIgnoresWarningRows(t *testing.T) {
 	state.handleKey(term.KeyEvent{Key: term.KeyRune, Rune: 'f'})
 	if state.focusRepositoryID != "" {
 		t.Fatalf("warning row established repository focus %q", state.focusRepositoryID)
+	}
+}
+
+func TestTopLevelTabNavigationPreservesPlanSelectionAcrossRefresh(t *testing.T) {
+	state := loopState{
+		snapshot: monitor.Snapshot{Rows: []monitor.Row{
+			{RepositoryID: "repo-a", PlanID: "first", Status: "planned"},
+			{RepositoryID: "repo-b", PlanID: "target", Status: "planned"},
+		}},
+		selected: 1,
+	}
+	if state.activePage() != PagePlans {
+		t.Fatalf("initial page = %q, want plans", state.activePage())
+	}
+
+	state.handleKey(term.KeyEvent{Key: term.KeyTab})
+	if state.activePage() != PageNotes || state.selected != 0 {
+		t.Fatalf("Tab page=%q selection=%d, want notes selection 0", state.activePage(), state.selected)
+	}
+	state.replaceSnapshot(monitor.Snapshot{Rows: []monitor.Row{
+		{RepositoryID: "repo-b", PlanID: "target", Status: "planned"},
+		{RepositoryID: "repo-a", PlanID: "first", Status: "planned"},
+	}})
+	state.handleKey(term.KeyEvent{Key: term.KeyArrowRight})
+	row, ok := state.selectedRow()
+	if state.activePage() != PagePlans || !ok || state.selected != 0 || row.PlanID != "target" {
+		t.Fatalf("right navigation page=%q selection=%d row=%+v ok=%t, want preserved target", state.activePage(), state.selected, row, ok)
+	}
+	state.handleKey(term.KeyEvent{Key: term.KeyArrowLeft})
+	if state.activePage() != PageNotes {
+		t.Fatalf("left navigation page = %q, want notes", state.activePage())
+	}
+}
+
+func TestNoteSelectionRefreshFocusDetailAndPlanActionIsolation(t *testing.T) {
+	state := loopState{
+		page: PageNotes,
+		noteSnapshot: note.Snapshot{Notes: []note.CatalogNote{
+			{RepositoryID: "repo-a", RepositoryName: "alpha", RepositoryRoot: "/alpha", ID: "first", Text: "first"},
+			{RepositoryID: "repo-b", RepositoryName: "beta", RepositoryRoot: "/beta", ID: "target", Text: "old"},
+		}},
+		selected:      1,
+		showCompleted: true,
+	}
+	state.replaceNoteSnapshot(note.Snapshot{Notes: []note.CatalogNote{
+		{RepositoryID: "repo-b", RepositoryName: "beta", RepositoryRoot: "/beta", ID: "target", Text: "updated"},
+		{RepositoryID: "repo-a", RepositoryName: "alpha", RepositoryRoot: "/alpha", ID: "first", Text: "first"},
+	}})
+	if item, ok := state.selectedNote(); !ok || state.selected != 0 || item.ID != "target" {
+		t.Fatalf("refresh selection index=%d item=%+v ok=%t", state.selected, item, ok)
+	}
+
+	var requests []CommandRequest
+	actions, err := NewActions(ActionOptions{Executable: "tao", Launcher: func(_ context.Context, request CommandRequest) error {
+		requests = append(requests, request)
+		return nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := App{Actions: actions}
+	for _, r := range []rune{'r', 'R', 'a', 'A', 'm', 'M', 'c', 'C'} {
+		if app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: r}) {
+			t.Fatalf("plan action key %q quit Notes", r)
+		}
+	}
+	if len(requests) != 0 || !state.showCompleted || state.confirm != nil {
+		t.Fatalf("plan keys requests=%+v completed=%t confirm=%#v", requests, state.showCompleted, state.confirm)
+	}
+
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'f'})
+	if state.focusRepositoryID != "repo-b" || len(state.visibleNotes()) != 1 {
+		t.Fatalf("note focus=%q visible=%+v", state.focusRepositoryID, state.visibleNotes())
+	}
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyEnter})
+	if state.noteDetail == nil || state.noteDetail.ID != "target" || state.noteDetail.Text != "updated" {
+		t.Fatalf("opened note detail = %+v", state.noteDetail)
+	}
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyEsc})
+	if state.noteDetail != nil || state.activePage() != PageNotes {
+		t.Fatalf("Esc did not return to Notes: detail=%+v page=%q", state.noteDetail, state.activePage())
+	}
+}
+
+func TestNoteDetailNavigationAndViewportClamping(t *testing.T) {
+	item := note.CatalogNote{RepositoryID: "repo", ID: "note", Text: "one\ntwo\nthree\nfour\nfive"}
+	state := loopState{
+		noteDetail: &item,
+		size:       term.Size{Width: 80, Height: 10},
+	}
+	app := App{}
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'G'})
+	if state.noteDetailOffset != 4 {
+		t.Fatalf("end offset = %d, want 4", state.noteDetailOffset)
+	}
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyArrowUp})
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'j'})
+	if state.noteDetailOffset != 4 {
+		t.Fatalf("up/down offset = %d, want 4", state.noteDetailOffset)
+	}
+
+	state.size.Height = 12
+	state.clampNoteDetailOffset()
+	if state.noteDetailOffset != 2 {
+		t.Fatalf("resized offset = %d, want 2", state.noteDetailOffset)
+	}
+
+	state.noteSnapshot = note.Snapshot{Notes: []note.CatalogNote{{RepositoryID: "repo", ID: "note", Text: "short"}}}
+	state.refreshNoteDetail()
+	if state.noteDetailOffset != 0 || state.noteDetail.Text != "short" {
+		t.Fatalf("refreshed detail offset=%d note=%+v, want short note at top", state.noteDetailOffset, state.noteDetail)
+	}
+}
+
+func TestNoteDetailClosesWhenRefreshedNoteDisappears(t *testing.T) {
+	tests := []struct {
+		name     string
+		snapshot note.Snapshot
+	}{
+		{
+			name: "archived",
+			snapshot: note.Snapshot{Notes: []note.CatalogNote{
+				{RepositoryID: "repo", ID: "other", Text: "still open"},
+			}},
+		},
+		{name: "removed", snapshot: note.Snapshot{}},
+		{
+			name: "malformed record",
+			snapshot: note.Snapshot{Warnings: []note.CatalogWarning{{
+				Kind:         note.CatalogWarningRecord,
+				RepositoryID: "repo",
+				Path:         "note.json",
+				Err:          errors.New("invalid note"),
+			}}},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			item := note.CatalogNote{RepositoryID: "repo", ID: "note", Text: "stale"}
+			state := loopState{
+				noteSnapshot:     test.snapshot,
+				noteDetail:       &item,
+				noteDetailOffset: 3,
+			}
+
+			state.refreshNoteDetail()
+
+			if state.noteDetail != nil || state.noteDetailOffset != 0 {
+				t.Fatalf("refreshed missing detail=%+v offset=%d, want closed detail at top", state.noteDetail, state.noteDetailOffset)
+			}
+		})
+	}
+}
+
+func TestNotesTabKeepsSharedFocusAndRejectsPlanOnlyKeys(t *testing.T) {
+	var requests []CommandRequest
+	actions, err := NewActions(ActionOptions{
+		Executable: "tao",
+		Launcher: func(_ context.Context, request CommandRequest) error {
+			requests = append(requests, request)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := loopState{
+		snapshot: monitor.Snapshot{Rows: []monitor.Row{{
+			Kind: monitor.RowKindPlan, RepositoryID: "repo-a", RepositoryName: "alpha", RepositoryRoot: "/alpha", PlanID: "plan", PlanDir: "/plans/plan", Status: "planned",
+		}}},
+		showCompleted: true,
+	}
+	app := App{Actions: actions}
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'f'})
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyTab})
+	if state.activePage() != PageNotes || state.focusRepositoryID != "repo-a" {
+		t.Fatalf("notes page=%q focus=%q, want shared repo-a focus", state.activePage(), state.focusRepositoryID)
+	}
+
+	for _, key := range []term.KeyEvent{
+		{Key: term.KeyRune, Rune: 'r'},
+		{Key: term.KeyRune, Rune: 'a'},
+		{Key: term.KeyRune, Rune: 'm'},
+		{Key: term.KeyRune, Rune: 'M'},
+		{Key: term.KeyRune, Rune: 'c'},
+		{Key: term.KeyEnter},
+	} {
+		if quit := app.handleKey(context.Background(), &state, key); quit {
+			t.Fatalf("notes key %+v unexpectedly quit", key)
+		}
+	}
+	if len(requests) != 0 || !state.showCompleted || state.detail != nil {
+		t.Fatalf("notes plan isolation requests=%+v completed=%t detail=%#v", requests, state.showCompleted, state.detail)
+	}
+
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'f'})
+	if state.focusRepositoryID != "" {
+		t.Fatalf("shared repository focus was not cleared from Notes: %q", state.focusRepositoryID)
+	}
+	if quit := app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'q'}); !quit {
+		t.Fatal("q did not quit from Notes")
+	}
+}
+
+func TestTabNavigationDoesNotEscapeConfirmationsOrDetails(t *testing.T) {
+	state := loopState{}
+	state.beginConfirm("Continue?", nil)
+	(App{}).handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyTab})
+	if state.activePage() != PagePlans || state.confirm == nil {
+		t.Fatalf("Tab changed page or confirmation: page=%q confirm=%#v", state.activePage(), state.confirm)
+	}
+
+	state.confirm = nil
+	state.detail = &detailState{}
+	(App{}).handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyArrowRight})
+	if state.activePage() != PagePlans || state.detail == nil {
+		t.Fatalf("right changed page or detail: page=%q detail=%#v", state.activePage(), state.detail)
 	}
 }
 

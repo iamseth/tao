@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/monitor"
+	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/term"
 )
@@ -34,6 +35,11 @@ type SnapshotCollector interface {
 	Collect(context.Context) (monitor.Snapshot, error)
 }
 
+// NoteSnapshotCollector supplies read-only open-note refreshes.
+type NoteSnapshotCollector interface {
+	Collect(context.Context) (note.Snapshot, error)
+}
+
 // App owns one interactive dashboard event loop. Its boundaries are injectable
 // so terminal behavior can be tested without taking over a real terminal.
 type App struct {
@@ -42,6 +48,7 @@ type App struct {
 	Terminal  Terminal
 	Ticker    Ticker
 	Collector SnapshotCollector
+	Notes     NoteSnapshotCollector
 	Actions   *Actions
 	Details   DetailRepository
 	Now       func() time.Time
@@ -59,7 +66,10 @@ type confirmPrompt struct {
 
 type loopState struct {
 	snapshot            monitor.Snapshot
+	noteSnapshot        note.Snapshot
+	page                PageID
 	selected            int
+	pageSelections      map[PageID]int
 	size                term.Size
 	showCompleted       bool
 	focusRepositoryID   string
@@ -68,6 +78,8 @@ type loopState struct {
 	useColor            bool
 	confirm             *confirmPrompt
 	detail              *detailState
+	noteDetail          *note.CatalogNote
+	noteDetailOffset    int
 	now                 func() time.Time
 	lastRootEscape      time.Time
 }
@@ -121,11 +133,19 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 		}
 		return fmt.Errorf("refresh dashboard: %w", err)
 	}
+	noteSnapshot, err := a.collectNotes(ctx)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+			return nil
+		}
+		return fmt.Errorf("refresh notes: %w", err)
+	}
 	state := loopState{
-		snapshot: snapshot,
-		size:     size,
-		useColor: outputSupportsColor(a.Output),
-		now:      a.Now,
+		snapshot:     snapshot,
+		noteSnapshot: noteSnapshot,
+		size:         size,
+		useColor:     outputSupportsColor(a.Output),
+		now:          a.Now,
 	}
 	state.clampSelection()
 	if err := a.writeFrame(state); err != nil {
@@ -173,7 +193,15 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 				}
 				return fmt.Errorf("refresh dashboard: %w", err)
 			}
+			noteSnapshot, err := a.collectNotes(ctx)
+			if err != nil {
+				if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+					return nil
+				}
+				return fmt.Errorf("refresh notes: %w", err)
+			}
 			state.replaceSnapshot(snapshot)
+			state.replaceNoteSnapshot(noteSnapshot)
 			if a.Actions != nil {
 				a.Actions.Reconcile(snapshot)
 			}
@@ -181,6 +209,7 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 				state.refreshDetailRow()
 				a.reloadDetail(ctx, &state)
 			}
+			state.refreshNoteDetail()
 			if err := a.writeFrame(state); err != nil {
 				return err
 			}
@@ -194,6 +223,7 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 				return fmt.Errorf("read terminal size: %w", err)
 			}
 			state.size = size
+			state.clampNoteDetailOffset()
 			if err := a.writeFrame(state); err != nil {
 				return err
 			}
@@ -218,9 +248,19 @@ func (a App) validate() error {
 	}
 }
 
+func (a App) collectNotes(ctx context.Context) (note.Snapshot, error) {
+	if a.Notes == nil {
+		return note.Snapshot{}, nil
+	}
+	return a.Notes.Collect(ctx)
+}
+
 func (a App) writeFrame(state loopState) error {
 	var frame bytes.Buffer
-	if state.detail != nil {
+	switch {
+	case state.noteDetail != nil:
+		frame.WriteString(renderNoteDetail(*state.noteDetail, state.size.Width, state.size.Height, state.noteDetailOffset))
+	case state.detail != nil:
 		frame.WriteString(RenderDetail(DetailModel{
 			Plan:            state.detail.plan,
 			Row:             state.detail.row,
@@ -233,12 +273,15 @@ func (a App) writeFrame(state loopState) error {
 			LoadError:       state.detail.loadError,
 			FollowError:     state.detail.followError,
 		}))
-	} else {
+	default:
 		frame.WriteString(Render(Model{
 			Snapshot:            state.snapshot,
+			NoteSnapshot:        state.noteSnapshot,
+			Page:                state.activePage(),
 			Selected:            state.selected,
 			Width:               state.size.Width,
 			Height:              state.size.Height,
+			Now:                 state.currentTime(),
 			HideCompleted:       !state.showCompleted,
 			FocusRepositoryID:   state.focusRepositoryID,
 			FocusRepositoryName: state.focusRepositoryName,
@@ -284,6 +327,23 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 	if quitKey(key) {
 		return true
 	}
+	if state.noteDetail != nil {
+		state.interruptEscape()
+		switch {
+		case key.Key == term.KeyEsc:
+			state.noteDetail = nil
+			state.noteDetailOffset = 0
+		case key.Key == term.KeyArrowUp || (key.Key == term.KeyRune && key.Rune == 'k'):
+			state.moveNoteDetail(-1)
+		case key.Key == term.KeyArrowDown || (key.Key == term.KeyRune && key.Rune == 'j'):
+			state.moveNoteDetail(1)
+		case key.Key == term.KeyRune && key.Rune == 'g':
+			state.noteDetailOffset = 0
+		case key.Key == term.KeyRune && key.Rune == 'G':
+			state.noteDetailOffset = state.noteDetailMaxOffset()
+		}
+		return false
+	}
 	if state.detail != nil {
 		state.interruptEscape()
 		switch {
@@ -306,11 +366,18 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 		state.interruptEscape()
 	}
 	row, selected := state.selectedRow()
-	if key.Key == term.KeyEnter && selected && row.PlanDir != "" {
+	if state.activePage() == PageNotes && key.Key == term.KeyEnter {
+		if item, ok := state.selectedNote(); ok {
+			state.noteDetail = &item
+			state.noteDetailOffset = 0
+		}
+		return false
+	}
+	if state.activePage() == PagePlans && key.Key == term.KeyEnter && selected && row.PlanDir != "" {
 		a.openDetail(ctx, state, row)
 		return false
 	}
-	if a.Actions != nil && key.Key == term.KeyRune {
+	if state.activePage() == PagePlans && a.Actions != nil && key.Key == term.KeyRune {
 		if key.Rune == 'M' {
 			if repository, ok := state.mergeRepositoryRow(); ok {
 				if message, prompt := a.Actions.MergeAllPrompt(repository); prompt {
@@ -488,15 +555,19 @@ func (s *loopState) handleKey(key term.KeyEvent) bool {
 			}
 		}
 		s.lastRootEscape = now
+	case key.Key == term.KeyTab || key.Key == term.KeyArrowRight:
+		s.switchPage(1)
+	case key.Key == term.KeyArrowLeft:
+		s.switchPage(-1)
 	case key.Key == term.KeyArrowUp || (key.Key == term.KeyRune && key.Rune == 'k'):
 		if s.selected > 0 {
 			s.selected--
 		}
 	case key.Key == term.KeyArrowDown || (key.Key == term.KeyRune && key.Rune == 'j'):
-		if s.selected+1 < len(s.visibleRows()) {
+		if s.selected+1 < s.pageRowCount() {
 			s.selected++
 		}
-	case key.Key == term.KeyRune && (key.Rune == 'c' || key.Rune == 'C'):
+	case s.activePage() == PagePlans && key.Key == term.KeyRune && (key.Rune == 'c' || key.Rune == 'C'):
 		s.preserveSelection(func() { s.showCompleted = !s.showCompleted })
 	case key.Key == term.KeyRune && (key.Rune == 'f' || key.Rune == 'F'):
 		s.toggleRepositoryFocus()
@@ -519,16 +590,78 @@ func (s loopState) currentTime() time.Time {
 	return time.Now()
 }
 
+func (s loopState) activePage() PageID {
+	return normalizePage(s.page)
+}
+
+func (s *loopState) switchPage(delta int) {
+	current := s.activePage()
+	if s.pageSelections == nil {
+		s.pageSelections = make(map[PageID]int)
+	}
+	s.pageSelections[current] = s.selected
+	s.page = adjacentPage(current, delta)
+	s.selected = s.pageSelections[s.page]
+	s.clampSelection()
+}
+
+func (s loopState) pageRowCount() int {
+	if s.activePage() == PagePlans {
+		return len(s.visibleRows())
+	}
+	return len(s.visibleNotes())
+}
+
 func (s loopState) visibleRows() []monitor.Row {
 	return visibleRows(s.snapshot.Rows, s.showCompleted, s.focusRepositoryID)
 }
 
-func (s loopState) selectedRow() (monitor.Row, bool) {
+func (s loopState) planSelection() int {
+	if s.activePage() == PagePlans {
+		return s.selected
+	}
+	return s.pageSelections[PagePlans]
+}
+
+func (s loopState) noteSelection() int {
+	if s.activePage() == PageNotes {
+		return s.selected
+	}
+	return s.pageSelections[PageNotes]
+}
+
+func (s loopState) visibleNotes() []note.CatalogNote {
+	return visibleNotes(s.noteSnapshot, s.focusRepositoryID)
+}
+
+func (s loopState) noteAt(index int) (note.CatalogNote, bool) {
+	items := s.visibleNotes()
+	if index < 0 || index >= len(items) {
+		return note.CatalogNote{}, false
+	}
+	return items[index], true
+}
+
+func (s loopState) selectedNote() (note.CatalogNote, bool) {
+	if s.activePage() != PageNotes {
+		return note.CatalogNote{}, false
+	}
+	return s.noteAt(s.selected)
+}
+
+func (s loopState) planRowAt(index int) (monitor.Row, bool) {
 	rows := s.visibleRows()
-	if s.selected < 0 || s.selected >= len(rows) {
+	if index < 0 || index >= len(rows) {
 		return monitor.Row{}, false
 	}
-	return rows[s.selected], true
+	return rows[index], true
+}
+
+func (s loopState) selectedRow() (monitor.Row, bool) {
+	if s.activePage() != PagePlans {
+		return monitor.Row{}, false
+	}
+	return s.planRowAt(s.selected)
 }
 
 func (s *loopState) beginConfirm(message string, respond func(bool)) {
@@ -551,40 +684,70 @@ func (s loopState) confirmMessage() string {
 }
 
 func (s *loopState) replaceSnapshot(snapshot monitor.Snapshot) {
-	selected, preserve := s.selectedRow()
+	selected, preserve := s.planRowAt(s.planSelection())
 	s.snapshot = snapshot
 	if s.focusRepositoryID != "" {
 		for _, row := range snapshot.Rows {
 			if row.RepositoryID == s.focusRepositoryID {
-				if row.RepositoryName != "" {
-					s.focusRepositoryName = row.RepositoryName
-				}
-				if row.RepositoryRoot != "" {
-					s.focusRepositoryRoot = row.RepositoryRoot
-				}
+				s.updateFocusMetadata(row.RepositoryName, row.RepositoryRoot)
 				break
 			}
 		}
 	}
-	s.restoreSelection(selected, preserve)
+	s.restorePlanSelection(selected, preserve)
+}
+
+func (s *loopState) replaceNoteSnapshot(snapshot note.Snapshot) {
+	selected, preserve := s.noteAt(s.noteSelection())
+	s.noteSnapshot = snapshot
+	if s.focusRepositoryID != "" {
+		for _, item := range snapshot.Notes {
+			if item.RepositoryID == s.focusRepositoryID {
+				s.updateFocusMetadata(item.RepositoryName, item.RepositoryRoot)
+				break
+			}
+		}
+	}
+	s.restoreNoteSelection(selected, preserve)
+}
+
+func (s *loopState) updateFocusMetadata(name, root string) {
+	if name != "" {
+		s.focusRepositoryName = name
+	}
+	if root != "" {
+		s.focusRepositoryRoot = root
+	}
 }
 
 func (s *loopState) toggleRepositoryFocus() {
-	selected, ok := s.selectedRow()
+	planSelected, preservePlan := s.planRowAt(s.planSelection())
+	noteSelected, preserveNote := s.noteAt(s.noteSelection())
 	if s.focusRepositoryID != "" {
 		s.focusRepositoryID = ""
 		s.focusRepositoryName = ""
 		s.focusRepositoryRoot = ""
-		s.restoreSelection(selected, ok)
+		s.restorePlanSelection(planSelected, preservePlan)
+		s.restoreNoteSelection(noteSelected, preserveNote)
 		return
 	}
-	if !ok || selected.Kind == monitor.RowKindRepositoryWarning || selected.RepositoryID == "" || selected.PlanID == "" {
-		return
+	if s.activePage() == PageNotes {
+		if !preserveNote || noteSelected.RepositoryID == "" || noteSelected.ID == "" {
+			return
+		}
+		s.focusRepositoryID = noteSelected.RepositoryID
+		s.focusRepositoryName = noteSelected.RepositoryName
+		s.focusRepositoryRoot = noteSelected.RepositoryRoot
+	} else {
+		if !preservePlan || planSelected.Kind == monitor.RowKindRepositoryWarning || planSelected.RepositoryID == "" || planSelected.PlanID == "" {
+			return
+		}
+		s.focusRepositoryID = planSelected.RepositoryID
+		s.focusRepositoryName = planSelected.RepositoryName
+		s.focusRepositoryRoot = planSelected.RepositoryRoot
 	}
-	s.focusRepositoryID = selected.RepositoryID
-	s.focusRepositoryName = selected.RepositoryName
-	s.focusRepositoryRoot = selected.RepositoryRoot
-	s.restoreSelection(selected, true)
+	s.restorePlanSelection(planSelected, preservePlan)
+	s.restoreNoteSelection(noteSelected, preserveNote)
 }
 
 func (s loopState) mergeRepositoryRow() (monitor.Row, bool) {
@@ -614,29 +777,119 @@ func (s *loopState) preserveSelection(change func()) {
 }
 
 func (s *loopState) restoreSelection(selected monitor.Row, preserve bool) {
-	if preserve && selected.RepositoryID != "" && selected.PlanID != "" {
-		for index, row := range s.visibleRows() {
-			if row.RepositoryID == selected.RepositoryID && row.PlanID == selected.PlanID {
-				s.selected = index
+	s.restorePlanSelection(selected, preserve)
+}
+
+func (s *loopState) restoreNoteSelection(selected note.CatalogNote, preserve bool) {
+	index := s.noteSelection()
+	if preserve && selected.RepositoryID != "" && selected.ID != "" {
+		identity := noteIdentity(selected)
+		for candidate, item := range s.visibleNotes() {
+			if noteIdentity(item) == identity {
+				index = candidate
+				if s.activePage() == PageNotes {
+					s.selected = index
+				} else {
+					if s.pageSelections == nil {
+						s.pageSelections = make(map[PageID]int)
+					}
+					s.pageSelections[PageNotes] = index
+				}
 				return
 			}
 		}
 	}
-	s.clampSelection()
+	count := len(s.visibleNotes())
+	if count == 0 {
+		index = 0
+	} else {
+		index = max(0, min(index, count-1))
+	}
+	if s.activePage() == PageNotes {
+		s.selected = index
+	} else {
+		if s.pageSelections == nil {
+			s.pageSelections = make(map[PageID]int)
+		}
+		s.pageSelections[PageNotes] = index
+	}
+}
+
+func (s *loopState) refreshNoteDetail() {
+	if s.noteDetail == nil {
+		return
+	}
+	identity := noteIdentity(*s.noteDetail)
+	for _, item := range s.noteSnapshot.Notes {
+		if noteIdentity(item) == identity {
+			refreshed := item
+			s.noteDetail = &refreshed
+			s.clampNoteDetailOffset()
+			return
+		}
+	}
+	s.noteDetail = nil
+	s.noteDetailOffset = 0
+}
+
+func (s *loopState) moveNoteDetail(delta int) {
+	s.noteDetailOffset = max(0, min(s.noteDetailOffset+delta, s.noteDetailMaxOffset()))
+}
+
+func (s *loopState) clampNoteDetailOffset() {
+	s.noteDetailOffset = max(0, min(s.noteDetailOffset, s.noteDetailMaxOffset()))
+}
+
+func (s *loopState) noteDetailMaxOffset() int {
+	if s.noteDetail == nil {
+		return 0
+	}
+	bodyLines := len(renderNoteText(s.noteDetail.Text, s.size.Width))
+	bodyHeight := noteDetailBodyHeight(bodyLines, s.size.Height)
+	return max(0, bodyLines-bodyHeight)
+}
+
+func (s *loopState) restorePlanSelection(selected monitor.Row, preserve bool) {
+	index := s.planSelection()
+	if preserve && selected.RepositoryID != "" && selected.PlanID != "" {
+		for candidate, row := range s.visibleRows() {
+			if row.RepositoryID == selected.RepositoryID && row.PlanID == selected.PlanID {
+				index = candidate
+				if s.activePage() == PagePlans {
+					s.selected = index
+				} else {
+					if s.pageSelections == nil {
+						s.pageSelections = make(map[PageID]int)
+					}
+					s.pageSelections[PagePlans] = index
+				}
+				return
+			}
+		}
+	}
+	count := len(s.visibleRows())
+	if count == 0 {
+		index = 0
+	} else {
+		index = max(0, min(index, count-1))
+	}
+	if s.activePage() == PagePlans {
+		s.selected = index
+	} else {
+		if s.pageSelections == nil {
+			s.pageSelections = make(map[PageID]int)
+		}
+		s.pageSelections[PagePlans] = index
+	}
 }
 
 func (s *loopState) clampSelection() {
-	count := len(s.visibleRows())
+	count := s.pageRowCount()
 	if count == 0 {
 		s.selected = 0
 		return
 	}
-	if s.selected < 0 {
-		s.selected = 0
-	}
-	if s.selected >= count {
-		s.selected = count - 1
-	}
+	s.selected = max(0, min(s.selected, count-1))
 }
 
 type colorTerminalWriter interface {

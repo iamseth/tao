@@ -98,10 +98,13 @@ activity remain the sources for semantic state.
 
 ## Interactive dashboard: `tao ui`
 
-Use `tao ui` for a keyboard-driven version of the cross-repository monitor when
-you want to observe plans and launch routine follow-up without leaving the
-terminal. It requires a terminal; use `tao monitor --once` for redirected or
-pasteable output. The dashboard groups nonempty sections as follows:
+Use `tao ui` for a keyboard-driven, cross-repository view of plans and open
+notes without leaving the terminal. It requires a terminal; use
+`tao monitor --once` for redirected or pasteable plan output. The dashboard
+opens on **Plans**. Press `Tab` or the right arrow to move between **Plans** and
+**Notes**, and the left arrow to move back. Each tab keeps its own selection.
+
+The Plans tab groups nonempty sections as follows:
 
 - **NEEDS ATTENTION** contains actionable conditions such as blocked or
   changes-requested plans, approval gates, pending slice completion, stopped
@@ -120,9 +123,26 @@ alive, whether the runtime record is stale or absent. Either observation may be
 incomplete or delayed; heartbeats and locks are operational liveness hints, not
 lifecycle evidence, review results, or verdicts about semantic progress.
 
-Keys on the table page are:
+The Notes tab lists only open notes owned by registered repositories. It does
+not include archived or promoted notes, and it ignores legacy global note
+files. Missing stores are empty; damaged repository metadata, stores, or note
+records appear as warnings without hiding healthy repositories. Notes is a
+read-only view: `Enter` opens the selected note's complete text and metadata,
+and `Esc` returns to the table.
 
-- `j`/`k` or the arrow keys move the selection.
+Keys shared by the top-level tabs are:
+
+- `Tab` or the right arrow advances to the next tab; the left arrow moves to the
+  previous tab. Plans remains the initial tab.
+- `j`/`k` or the up/down arrow keys move the selection on the active tab.
+- `f` focuses both tabs on the selected plan or note's repository; press `f`
+  again while focused to restore the all-repository view. The focus and each
+  tab's selection remain stable as snapshots refresh.
+- `q` or `Ctrl-C` quits from either tab or a detail page. At a top-level table,
+  two `Esc` presses within one second also quit; a lone or stale `Esc` does not.
+
+Actions specific to the Plans tab are:
+
 - `r` starts the selected plan in a detached `tao run` process. After its
   blocker is cleared, a blocked plan is resumed with `--continue`; a plan with a
   fresh live heartbeat is left alone.
@@ -134,17 +154,16 @@ Keys on the table page are:
 - `M` names and confirms the selected repository (or the active focused
   repository), then starts detached `tao merge --all` with that repository root
   as its working directory. It never batches plans across repositories.
-- `f` focuses the dashboard on the selected plan's repository; press `f` again
-  while focused to restore the all-repository view. Repository warnings and the
-  completed-row setting remain scoped consistently as snapshots refresh.
 - `c` toggles the completed rows already included by `--completed-window`.
 - `Enter` opens the selected plan's queue-ordered slice list and live
   `agent-run.log` tail. On that page, `j`/`k` or the arrow keys select a slice
   and `Enter` opens its full read-only details; empty fields are omitted.
   `Esc` returns one level at a time, and log following continues until you
   leave plan detail for the table.
-- `q` or `Ctrl-C` quits from any page. On the table, two `Esc` presses within one
-  second also quit; a lone or stale `Esc` does not.
+
+The Notes tab has no run, approval, merge, or completed-plan actions. `Enter`
+opens a full read-only note detail; `Esc` returns to the Notes table. Repository
+focus remains available there and is shared with Plans.
 
 Run, approval, and merge subprocesses are launched in new sessions with their
 streams detached, so they survive TUI exit. A `merging…` row label is only

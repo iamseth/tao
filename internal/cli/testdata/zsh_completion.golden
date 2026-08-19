@@ -76,7 +76,7 @@ _tao() {
     'status:Show runtime defaults and plan rollups'
     'mon:Monitor non-completed plans across repositories'
     'monitor:Monitor non-completed plans across repositories'
-    'ui:Open the cross-repository interactive plan dashboard'
+    'ui:Open the cross-repository interactive plans and notes dashboard'
     'insi:Show repository failure and telemetry insights'
     'insights:Show repository failure and telemetry insights'
     'c:Remove merged Tao branches and worktrees'

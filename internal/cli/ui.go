@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/commandrunner"
+	"github.com/iamseth/tao/internal/note"
+	"github.com/iamseth/tao/internal/taodata"
 	"github.com/iamseth/tao/internal/term"
 	"github.com/iamseth/tao/internal/tui"
 )
@@ -20,10 +22,11 @@ const defaultUICompletedWindow = 168 * time.Hour
 var uiCommand = commandMetadata{
 	name:                  "ui",
 	usageLines:            []string{"ui [--interval DURATION] [--completed-window DURATION]"},
-	completionDescription: "Open the cross-repository interactive plan dashboard",
-	long: "Open a keyboard-driven dashboard for plans across registered repositories. Sections group plans needing attention, running work, planned or in-review work, and recent completions. Heartbeats and the stalled?/crashed? labels are liveness hints, not workflow verdicts.\n" +
-		"Completed plans are hidden initially; c reveals or hides rows in the configured lookback window. Use j/k or the arrow keys to move; r runs, a prompts for approval, m confirms a selected reviewed-plan merge, M confirms a repository-scoped merge --all, and Enter opens plan details. In plan detail, move across slices with j/k or the arrows and press Enter for the full read-only slice page. q and Ctrl-C quit globally except that q safely declines confirmation. Esc returns one page or declines confirmation; at the table, press Esc twice within one second to quit. Run, approval, and merge subprocesses are detached and survive dashboard exit.\n" +
-		"Use tao monitor --once for non-interactive output.",
+	completionDescription: "Open the cross-repository interactive plans and notes dashboard",
+	long: "Open a keyboard-driven dashboard with Plans and Notes tabs across registered repositories. Plans is the initial tab. Use Tab or the right arrow to advance tabs and the left arrow to move back; j/k or the up/down arrows move within either table. Repository focus is shared across tabs: f focuses the selected plan or note's repository, and f again restores all repositories.\n" +
+		"Plans groups work needing attention, running work, planned or in-review work, and recent completions. Heartbeats and the stalled?/crashed? labels are liveness hints, not workflow verdicts. Completed plans are hidden initially; c reveals or hides rows in the configured lookback window. On Plans, r runs, a prompts for approval, m confirms a selected reviewed-plan merge, M confirms a repository-scoped merge --all, and Enter opens plan details. In plan detail, move across slices with j/k or the arrows and press Enter for the full read-only slice page.\n" +
+		"Notes lists only repository-owned open notes. Enter opens the selected note's full read-only detail, and Esc returns. Plan actions and the completed toggle do not act on Notes. q and Ctrl-C quit globally except that q safely declines confirmation. Esc returns one page or declines confirmation; at a top-level table, press Esc twice within one second to quit. Run, approval, and merge subprocesses are detached and survive dashboard exit.\n" +
+		"tao ui requires a terminal. Use tao monitor --once for non-interactive plan output.",
 	examples: "  tao ui\n" +
 		"  tao ui --interval 5s\n" +
 		"  tao ui --completed-window 24h\n" +
@@ -76,6 +79,10 @@ func (a App) ui(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	noteCollector, err := a.newUINoteCollector()
+	if err != nil {
+		return err
+	}
 	executable, err := os.Executable()
 	if err != nil {
 		return errors.New("resolve current tao executable: " + err.Error())
@@ -97,9 +104,24 @@ func (a App) ui(ctx context.Context, args []string) error {
 		Terminal:  terminal,
 		Ticker:    a.newMonitorTicker(interval),
 		Collector: collector,
+		Notes:     noteCollector,
 		Actions:   actions,
 		Now:       a.now,
 	}).Run(signalCtx)
+}
+
+func (a App) newUINoteCollector() (tui.NoteSnapshotCollector, error) {
+	inventory, ok := a.registry().(note.RepositoryInventory)
+	if !ok {
+		return nil, errors.New("note repository inventory is unavailable")
+	}
+	collector := note.NewCollector(inventory)
+	if a.NoteRepository != nil {
+		collector.NewLister = func(entry taodata.RepoInventoryEntry) note.Lister {
+			return a.NoteRepository(entry.NotesDir, note.RepoReference{ID: entry.Repo.ID, Root: entry.Repo.Root})
+		}
+	}
+	return collector, nil
 }
 
 func (a App) uiCommandLauncher() tui.CommandLauncher {

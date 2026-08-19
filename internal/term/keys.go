@@ -15,6 +15,7 @@ const (
 	KeyUnknown Key = iota
 	KeyRune
 	KeyEnter
+	KeyTab
 	KeyEsc
 	KeyBackspace
 	KeyArrowUp
@@ -59,6 +60,9 @@ func (d *Decoder) ReadKey() (KeyEvent, error) {
 	case '\r', '\n':
 		d.consume(1)
 		return KeyEvent{Key: KeyEnter}, nil
+	case '\t':
+		d.consume(1)
+		return KeyEvent{Key: KeyTab}, nil
 	case 0x08, 0x7f:
 		d.consume(1)
 		return KeyEvent{Key: KeyBackspace}, nil
