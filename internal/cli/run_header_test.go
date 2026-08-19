@@ -13,7 +13,6 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/runheader"
-	"github.com/iamseth/tao/internal/runqueue"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/term"
 )
@@ -187,56 +186,6 @@ func TestRunHeaderResizePositionsLogsBelowHeaderAfterRegrow(t *testing.T) {
 	}
 	if got := terminal.String()[beforeWrite:]; !strings.HasPrefix(got, "log after regrow\n") {
 		t.Fatalf("post-regrow log was not written from the safe cursor position: %q", got)
-	}
-}
-
-func TestQueueDrainPlanIDsExcludesDurableHistory(t *testing.T) {
-	snapshot := runqueue.QueueSnapshot{Entries: []runqueue.QueueEntry{
-		{PlanID: "old-success", Status: runqueue.QueueStatusSucceeded},
-		{PlanID: "plan-a", Status: runqueue.QueueStatusPending},
-		{PlanID: "old-failure", Status: runqueue.QueueStatusFailed},
-		{PlanID: "plan-b", Status: runqueue.QueueStatusRunning},
-	}}
-	if got := strings.Join(queueDrainPlanIDs(snapshot), ","); got != "plan-a,plan-b" {
-		t.Fatalf("queueDrainPlanIDs() = %q, want %q", got, "plan-a,plan-b")
-	}
-}
-
-func TestRunAllHeaderTracksBatchAndRestoresRegionOnce(t *testing.T) {
-	clearTaoEnv(t)
-	configureQueueDataHome(t)
-	t.Setenv("TERM", "xterm-256color")
-	t.Setenv("NO_COLOR", "1")
-	plansRoot := t.TempDir()
-	planA := "20260812-1900-plan-a"
-	planB := "20260812-1901-plan-b"
-	writeQueuePlan(t, plansRoot, planA)
-	writeQueuePlan(t, plansRoot, planB)
-
-	oldExecutor := newQueueExecutor
-	newQueueExecutor = func(_ run.Repository, out io.Writer, options run.Options) runqueue.Executor {
-		return func(_ context.Context, request run.Request) error {
-			run.ReportHeader(options.HeaderReporter, run.HeaderState{RepoName: "tao", PlanID: request.Input, PlanTitle: request.Input, ReworkRound: 2})
-			_, err := fmt.Fprintf(out, "running %s\n", request.Input)
-			return err
-		}
-	}
-	t.Cleanup(func() { newQueueExecutor = oldExecutor })
-
-	terminal := newFakeRunHeaderTerminalWriter(term.Size{Width: 100, Height: 24})
-	app := queueTestApp(plansRoot, terminal)
-	if err := app.Run(context.Background(), []string{"--plans-dir", plansRoot, "run", "--all"}); err != nil {
-		t.Fatal(err)
-	}
-
-	text := terminal.String()
-	for _, want := range []string{planA, planB, "batch 1/2", "batch 2/2", "rework 2/5"} {
-		if !strings.Contains(text, want) {
-			t.Errorf("run --all header output missing %q: %q", want, text)
-		}
-	}
-	if got := strings.Count(text, "\x1b[r"); got != 1 {
-		t.Fatalf("run --all reset scroll region %d times, want once: %q", got, text)
 	}
 }
 

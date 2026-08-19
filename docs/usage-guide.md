@@ -42,7 +42,7 @@ evidence proves default-branch integration.
 Use `tao note` (or `tao n`) when an idea is worth retaining but not worth interrupting your current work. From a registered checkout, the shortest capture path is:
 
 ```sh
-tao n c tighten queue retry diagnostics
+tao n c tighten run retry diagnostics
 tao n c --tag testing add coverage for stale review heads
 tao note create < longer-idea.md
 ```
@@ -69,7 +69,7 @@ subordinate options, and administrative alternatives may bypass safeguards, so
 they are not equivalent recommendations. A terminal `No action` distinguishes a
 finished or otherwise non-actionable plan from one that should progress.
 
-Use `tao monitor` while runs are active or queued across more than one registered
+Use `tao monitor` while runs are active across more than one registered
 repository. Its urgency-ordered view keeps live and stale runs ahead of blocked
 and quieter plans, while showing lifecycle status, active phase, coarse run
 age, compact slice progress, and durable activity separately. `SLICES` shows
@@ -108,8 +108,6 @@ pasteable output. The dashboard groups nonempty sections as follows:
   rework, and runs whose lock evidence suggests the process exited.
 - **RUNNING** contains plans with live run records and stale records shown as
   `stalled? (<age> old)` when there is no dead-process lock evidence.
-- **QUEUED** contains plans represented in the repository's durable queue that
-  do not belong in either section above.
 - **PLANNED / IN REVIEW** contains the remaining active plans, including plans
   waiting for execution or review rather than a live process.
 - **COMPLETED** contains the remaining plans completed within the configured
@@ -152,8 +150,7 @@ Run, approval, and merge subprocesses are launched in new sessions with their
 streams detached, so they survive TUI exit. A `merging…` row label is only
 best-effort launch feedback, not durable merge evidence or a success claim.
 `Esc` or `q` declines an active merge confirmation before navigation or quit
-handling. The dashboard still displays the durable
-queue in **QUEUED**, but queue mutation and draining remain CLI operations.
+handling.
 
 `--interval DURATION` sets the refresh period (default `2s`) and must be greater
 than zero. `--completed-window DURATION` sets the completed-plan lookback
@@ -188,8 +185,8 @@ asking the user"* and to keep that inspection targeted.
   it needs:
 
   ```text
-  /tao-plan add bounded automatic retries to the durable run queue,
-     must survive process restarts, don't change direct CLI runs
+  /tao-plan add bounded automatic retries to direct plan runs,
+     preserve safe interruption recovery and per-plan locking
   ```
 
 - **Treat it as an interview.** It asks one question at a time, each with a
@@ -368,8 +365,8 @@ Day to day you run **`tao run <plan-id>`** from the CLI. Under the hood the
 `/tao-run` prompt puts the agent in **WORK mode** to implement exactly **one** pending
 slice at a time: select the next slice, honor `depends_on` and approval gates,
 implement only that slice, run its verification commands, and complete it via
-`tao slice-complete` (which Tao uses to update state, queue movement, and
-events). It stops on blockers and failed verification rather than pushing
+`tao slice-complete` (which Tao uses to update state, pending-slice ordering,
+and events). It stops on blockers and failed verification rather than pushing
 through.
 
 **When to use which form:**
@@ -380,14 +377,18 @@ through.
   It explicitly clears the blocked lifecycle state but does **not** infer
   resolution or bypass approval gates, dependencies, or verification preflight.
 
+Run each plan explicitly. If two plans are independent, you can launch one
+`tao run <plan-id>` in each of two terminals. A cross-process per-plan lock
+prevents duplicate drivers for the same plan; it does not make overlapping
+changes across different plans conflict-safe.
+
 In an interactive terminal, `tao run` pins a compact live header above the
 agent log. It combines repository, plan, and run configuration with the active
 slice or phase and elapsed time, a capped progress bar, a titled window of
 nearby slices centered on the current one, and compact session/token/cost
 metrics. A divider and `LIVE OUTPUT` label separate the header from provider
-output. During `tao run --all`, the header also shows the plan's position in the
-current drain. It is TTY-only and requires enough terminal rows; redirected and
-other non-interactive output remains plain. Disable it for one invocation with
+output. It is TTY-only and requires enough terminal rows; redirected and other
+non-interactive output remains plain. Disable it for one invocation with
 `--no-run-header`, or set `TAO_RUN_HEADER=0` to opt out by default.
 
 The pinned region still uses terminal scroll margins rather than an alternate
@@ -417,8 +418,8 @@ that the host integrated it.
 
 When a successful review requests changes, `tao run <plan-id>` automatically
 uses the ordinary rework gates, runs the generated fix slices, and reviews again.
-`tao run --all` uses the same default-on loop. Both stop with an error after five
-rework cycles, when consecutive reviews repeat an equivalent finding set, or
+It stops with an error after five rework cycles, when consecutive reviews repeat
+an equivalent finding set, or
 before another reopen when the same normalized primary finding file appears in
 three consecutive `changes_requested` reviews. The fixed three-review boundary
 applies even when each review reports a different issue in that file. Tao leaves
@@ -433,13 +434,9 @@ Inspect and address the review first. If you deliberately want another bounded
 budget, pass `--rework-restart`; this preserves historical slices but establishes
 the current round as a fresh baseline, so earlier reviews do not count toward
 the new three-review window. Restart is an acknowledgment, not a bypass of
-ordinary rework gates. The refusal never prompts, so unattended `tao run --all`
-selects stopped plans to report the refusal safely even though they have no
-pending slices. Unattended `tao run`/`tao run --all` callers that intentionally
-continue must also pass `--rework-restart`; `run --all` then opens the first
-round of a fresh durable queue budget before dispatch. For a manually managed
-durable queue, continue the stopped plan explicitly before starting another
-drain.
+ordinary rework gates. The refusal never prompts. To intentionally continue,
+rerun that plan directly with `--rework-restart`; Tao then opens the first round
+of a fresh bounded budget.
 
 The installed `/tao-review` slash command is an agent prompt, while `tao review`
 is the ordinary CLI command that runs or displays Tao's persisted plan review.
@@ -491,10 +488,9 @@ reaches Tao, Tao reloads and accepts that result only after ordinary progress
 and completion-boundary validation; it does not launch or charge another retry
 handoff.
 
-Rerun the same direct command, or restart the durable queue, and let Tao inspect
-the recorded execution boundary before touching the workspace. Direct and
-queued runs use the same execution service and cross-process plan lock, so the
-safe choice does not depend on how the run was launched:
+Rerun the same direct command and let Tao inspect the recorded execution
+boundary before touching the workspace. Cross-process per-plan locking prevents
+another direct driver from racing that recovery:
 
 - **Isolated, before commit intent:** when the recorded worktree root, feature
   branch, HEAD, `slice` policy, and clean-start evidence still match, Tao resumes
@@ -590,70 +586,6 @@ Direct `tao run` normally performs the Tao-review rework/run/review loop
 automatically. Use the standalone command when automatic rework is disabled or
 when you want to inspect the generated slices before running them; add `--run`
 to hand the reopened plan back to `tao run`.
-
-Unlike direct runs and `tao run --all`, unattended durable drains remain opt-in:
-`tao queue start --auto-rework` applies the same ordinary, non-forced gates after
-each fresh automatic review. It defaults to five rework cycles beyond the
-initial run; use `--max-rework-attempts N` to set another cap, or zero to disable
-the loop. `TAO_AUTO_REWORK=true` opts in through the environment and
-`TAO_MAX_REWORK_ATTEMPTS` changes the cap; explicit flags take precedence.
-Automatic review must remain enabled.
-
-The queue persists the policy, baseline round, attempt count, and
-high-confidence fingerprint of the complete normalized finding set, so restart
-reconciliation resumes the same bounded loop. It classifies the queue entry as
-failed at the cap, when two consecutive reviews match that full finding identity,
-or when one normalized primary finding file recurs across three consecutive
-reviews in the current baseline window. The third review is the terminal
-observation: recovery settles the failure without another plan execution,
-reopen, or duplicate observation. The plan remains `changes_requested` and the
-latest review is preserved for manual diagnosis. Direct and queued runs use the
-same decision policy; approval and merge always remain manual.
-
-### Unattended queue — batch plan runs
-
-Use the unattended queue when you have several already-sliced, validated plans
-and want Tao to keep working without choosing the next plan by hand. It is
-CLI-first and local: the drainer runs in your terminal, persists per-repo queue
-state under Tao data home, and exits when the queue is drained or stopped. If the
-drainer is interrupted, start it again to reconcile runnable plans from disk and
-resume the remaining work.
-
-Use `tao queue add <plan>...` to record pending entries without starting work,
-and `tao queue status` for an active-first view of the durable queue. Its focused
-default keeps every queued and running entry visible, along with failures from
-the last 24 hours and successes from the last hour. When you need older results,
-use `tao queue status --all`; switching views does not prune queue history.
-`tao queue start` is the foreground drainer: it reconciles currently runnable
-plans into the queue, runs pending plans, records failed plans durably, and
-continues with the rest. Add `--auto-rework` for the bounded review/rework loop
-described above, optionally with `--max-rework-attempts N`. Use
-`tao queue stop <plan>` to remove a pending entry before it starts.
-
-For a one-shot unattended batch, run `tao run --all`; it auto-reworks by default
-just like a single-plan run. Add `--active` when you only want active runnable
-plans. Keep CLI queue concurrency at the default of 1
-unless you have confirmed the plans cannot touch the same files: values above 1
-for `tao queue start --max-parallel N` are not cross-plan-conflict-safe.
-
-When you come back, start with the focused `tao queue status` view and
-`tao status` for the repository-wide plan rollup. Reach for `--all` when an
-older result needs investigation. Together these commands answer the unattended
-check: "N of M done & reviewed, K failed" before you inspect individual plans.
-Then read each slice-complete or reviewed plan's persisted review before deciding
-whether to run `tao rework`, open a PR, run `tao merge`, or queue follow-up work.
-
-To get that headline pushed to another tool, set `TAO_NOTIFY_COMMAND` before
-starting the foreground drainer, for example:
-
-```sh
-export TAO_NOTIFY_COMMAND='notify-send "Tao batch" "$TAO_BATCH_REVIEWED of $TAO_BATCH_TOTAL done & reviewed, $TAO_BATCH_FAILED failed"'
-tao queue start --auto-rework --max-rework-attempts 5
-```
-
-Tao always prints the final batch summary. The notifier is best-effort, runs as a
-shell command with `TAO_BATCH_*` summary variables in its environment, and an
-unset, failing, or timed-out notifier does not fail the batch.
 
 ### `/tao-commit` — local conventional commit
 
@@ -952,8 +884,8 @@ or your own workflow. In current mode this means work may remain uncommitted and
 Tao does not enforce automatic-policy cleanliness. In isolated mode, prefer the
 default slice policy unless you have a concrete manual history requirement.
 
-`plan` is historical metadata only, not an executable policy. New CLI, prompt,
-environment, and queue inputs reject it with migration guidance. For a dirty
+`plan` is historical metadata only, not an executable policy. New CLI, prompt, and
+environment inputs reject it with migration guidance. For a dirty
 legacy plan-policy worktree, inspect the diff, commit or stash it manually, then
 rerun with `slice`; use `none` only if you intentionally accept manual
 uncommitted completion. Tao never guesses how to split or migrate that dirty

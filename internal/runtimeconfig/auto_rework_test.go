@@ -74,6 +74,6 @@ func TestResolveAutoReworkPolicy(t *testing.T) {
 		t.Fatal("expected negative attempts error")
 	}
 	if err := ValidateAutoReworkPolicy(AutoReworkPolicy{Enabled: true, MaxAttempts: 3}, false); err == nil {
-		t.Fatal("expected persisted policy to require review on its queued request")
+		t.Fatal("expected persisted policy to require review on its run request")
 	}
 }

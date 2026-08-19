@@ -7,10 +7,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/iamseth/tao/internal/plan"
-	"github.com/iamseth/tao/internal/runqueue"
 )
 
 func TestStatusShowsRuntimeEnvAndPlanRollup(t *testing.T) {
@@ -88,29 +86,4 @@ func TestStatusJSONWithPlanListErrorIsValidAndEmpty(t *testing.T) {
 	if payload.Plans.Total != 0 || len(payload.RuntimeEnv) != len(taoEnvKeys()) {
 		t.Fatalf("unexpected status payload: %+v", payload)
 	}
-}
-
-func TestQueueStatusSummaryLineCountsReviewedSucceeded(t *testing.T) {
-	clearTaoEnv(t)
-	configureQueueDataHome(t)
-	queuedAt := time.Date(2026, 6, 28, 3, 0, 0, 0, time.UTC)
-	store := queueStoreForTest(t)
-	if err := store.SaveSnapshot(runqueue.QueueSnapshot{Entries: []runqueue.QueueEntry{
-		{PlanID: "plan-a", Status: runqueue.QueueStatusSucceeded, QueuedAt: queuedAt},
-		{PlanID: "plan-b", Status: runqueue.QueueStatusSucceeded, QueuedAt: queuedAt},
-		{PlanID: "plan-c", Status: runqueue.QueueStatusFailed, QueuedAt: queuedAt, Error: "boom"},
-		{PlanID: "plan-d", Status: runqueue.QueueStatusRunning, QueuedAt: queuedAt},
-		{PlanID: "plan-e", Status: runqueue.QueueStatusPending, QueuedAt: queuedAt},
-	}}); err != nil {
-		t.Fatal(err)
-	}
-
-	var out bytes.Buffer
-	app := App{Out: &out, Repository: func(string) Repository {
-		return fakeRepository{summaries: []plan.PlanSummary{{ID: "plan-a", Reviewed: true}, {ID: "plan-b"}}}
-	}}
-	if err := app.Run(context.Background(), []string{"queue", "status"}); err != nil {
-		t.Fatal(err)
-	}
-	assertContains(t, out.String(), "Summary: 5 visible (1 running, 1 queued, 1 failed, 2 succeeded (1 reviewed))")
 }

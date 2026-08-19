@@ -152,8 +152,6 @@ func TestZshCommandArgumentsUseRegisteredFlagsAndSemanticHints(t *testing.T) {
 		{
 			command: "run",
 			want: []string{
-				"'--active[with --all, enqueue only active runnable plans]'",
-				"'--all[enqueue and drain all runnable plans]'",
 				"'--auto-rework=-[automatically rework plans with requested changes]:boolean:(true false)'",
 				"'--commit-policy[automatic commit policy: slice or none]:policy:(slice none)'",
 				"'--execution-mode[execution mode: isolated or current]:mode:(isolated current)'",
@@ -309,7 +307,6 @@ func TestCompletionMetadataPreservesSubcommandFlagScopes(t *testing.T) {
 		subcommandFlag map[string]bool
 	}{
 		{command: "note", parentFlags: true, subcommandFlag: map[string]bool{"create": false, "list": false, "show": false, "edit": false, "archive": false, "reopen": false, "run": false}},
-		{command: "queue", parentFlags: true, subcommandFlag: map[string]bool{"add": false, "start": true, "status": true, "stop": false}},
 		{command: "workspace", parentFlags: true, subcommandFlag: map[string]bool{"list": false, "prepare": false, "status": false, "clean": true}},
 		{command: "edit", parentFlags: true, subcommandFlag: map[string]bool{"remove": false, "skip": false, "move": true}},
 	}
@@ -459,33 +456,8 @@ func TestZshCompletionScriptCompletesReportsWithoutChangingRepo(t *testing.T) {
 	}
 }
 
-func TestZshCompletionScriptCoversQueueSubcommands(t *testing.T) {
-	queueCase := zshCommandCase(commandByName("queue"))
-	for _, want := range []string{
-		"'add:Add one or more plans to the durable run queue'",
-		"'start:Drain the queue and run queued plans'",
-		"'status:Show the durable run queue snapshot'",
-		"'stop:Remove a plan from the queue'",
-		"'dequeue:Remove a plan from the queue'",
-		"case ${words[3]} in",
-		"if _tao_at_positional 4 1 1",
-		"complete run-plan-ids",
-		"--max-parallel[maximum concurrent plan runs",
-		"--auto-rework=-[automatically rework plans with requested changes]:boolean:(true false)",
-		"--max-rework-attempts[maximum automatic rework cycles (0 disables)]:count:",
-		"--all[show complete persisted queue history]",
-		"stop|dequeue)",
-		"if _tao_at_positional 4 1 0",
-		"complete plan-ids",
-	} {
-		if !strings.Contains(queueCase, want) {
-			t.Errorf("queue completion case missing %q", want)
-		}
-	}
-}
-
 func TestZshCompletionPreservesSubcommandFlagScopes(t *testing.T) {
-	for _, command := range []string{"queue", "edit", "workspace"} {
+	for _, command := range []string{"edit", "workspace"} {
 		t.Run(command, func(t *testing.T) {
 			metadata := commandByName(command)
 			if got := zshParentCompletionContext(metadata, ""); strings.Contains(got, "_arguments") {
@@ -500,7 +472,6 @@ func TestZshCompletionPreservesSubcommandFlagScopes(t *testing.T) {
 	for _, test := range []struct {
 		command, subcommand, aggregateFlag string
 	}{
-		{command: "queue", subcommand: "add", aggregateFlag: "--max-parallel"},
 		{command: "edit", subcommand: "remove", aggregateFlag: "--before"},
 		{command: "workspace", subcommand: "prepare", aggregateFlag: "--force"},
 	} {
@@ -526,12 +497,6 @@ func TestZshBooleanCompletionUsesEqualsOnlyParserSyntax(t *testing.T) {
 			command:     "run",
 			register:    registerRunFlags,
 			positionals: []string{"plan-id"},
-		},
-		{
-			name:        "queue start",
-			command:     "queue",
-			subcommands: []string{"start"},
-			register:    registerQueueStartFlags,
 		},
 	}
 
@@ -654,7 +619,7 @@ _test_tao() { print -r -- example; }
 			t.Fatalf("completion output = %q, want no positional candidates while completing an inline flag value", got)
 		}
 	})
-	for _, command := range []string{"run", "merge"} {
+	for _, command := range []string{"merge"} {
 		t.Run(command+" all mode", func(t *testing.T) {
 			got := runCompletion(t, "_test_tao "+command+" --all ''", 4)
 			if got != "" {

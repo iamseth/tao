@@ -21,7 +21,6 @@ const (
 	EnvMaxReworkAttempts    = "TAO_MAX_REWORK_ATTEMPTS"
 	EnvSessionTimeout       = "TAO_SESSION_TIMEOUT"
 	EnvUpdate               = "TAO_UPDATE"
-	EnvNotifyCommand        = "TAO_NOTIFY_COMMAND"
 	EnvSkipPermissions      = "TAO_DANGEROUSLY_SKIP_PERMISSIONS"
 	EnvMaxSliceOutputTokens = "TAO_MAX_SLICE_OUTPUT_TOKENS" // #nosec G101 -- environment key, not a credential.
 	EnvMaxSliceCost         = "TAO_MAX_SLICE_COST"
@@ -45,7 +44,6 @@ type EnvDefaults struct {
 	RunOptionsPatch
 	AutoRework            *bool
 	MaxReworkAttempts     *int
-	NotifyCommand         string
 	UpdateMode            selfupdate.Mode
 	SkipPermissions       bool
 	SliceBudgetCaps       SliceBudgetCaps
@@ -154,15 +152,6 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 		},
 	},
 	{
-		name:         EnvNotifyCommand,
-		defaultValue: func(RunOptionsPatch) string { return "" },
-		apply: func(defaults *EnvDefaults, value string) (string, error) {
-			command := strings.TrimSpace(value)
-			defaults.NotifyCommand = command
-			return command, nil
-		},
-	},
-	{
 		name:         EnvReview,
 		defaultValue: func(d RunOptionsPatch) string { return strconv.FormatBool(d.ReviewEnabledValue()) },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
@@ -175,8 +164,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 		},
 	},
 	{
-		// Direct runs default on and false disables them; queue start remains
-		// opt-in and true enables it.
+		// Direct runs default on; false disables automatic rework.
 		name:         EnvAutoRework,
 		defaultValue: func(RunOptionsPatch) string { return strconv.FormatBool(true) },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
@@ -189,8 +177,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 		},
 	},
 	{
-		// Direct and queued rework default to five bounded cycles; zero disables
-		// automatic rework.
+		// Direct-run rework defaults to five bounded cycles; zero disables it.
 		name:         EnvMaxReworkAttempts,
 		defaultValue: func(RunOptionsPatch) string { return strconv.Itoa(DefaultMaxReworkAttempts) },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {

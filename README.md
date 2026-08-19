@@ -143,8 +143,7 @@ changes with `tao review --run <plan-id>`. Use `tao run --no-review` or
 If the review requests changes, `tao run` automatically reopens the same plan,
 appends deterministic fix slices from the findings, and runs them through a
 fresh review. The loop defaults to five rework cycles; disable it with
-`--auto-rework=false` or use `tao rework <plan-id>` manually. For a persistent
-foreground queue, opt in with `tao queue start --auto-rework`.
+`--auto-rework=false` or use `tao rework <plan-id>` manually.
 
 If you are using the solo no-PR workflow, read the persisted review and merge an
 approved plan with `tao merge <plan-id>`. Tao reuses the approved review's exact
@@ -257,11 +256,6 @@ tao insights --all-repos --digest
 
 ```sh
 tao run [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue] [--no-review] [--no-run-header] [--auto-rework=false] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>
-tao run [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue] [--no-review] [--no-run-header] [--auto-rework=false] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] --all [--active]
-tao queue add <plan-id-or-slug-or-path>...
-tao queue start [--max-parallel N] [--auto-rework] [--max-rework-attempts N]
-tao queue status [--all]
-tao queue stop <plan-id-or-slug-or-path>
 tao approve [--slice ID] [--by NAME] <plan-id-or-slug-or-path>
 ```
 
@@ -299,28 +293,17 @@ and runs detected repository-wide verification before starting a fresh review
 (`TAO_REVIEW=true`). It writes both verification metadata and the review result
 to the data-home plan directory. Review failures and timeouts are recorded but
 do not fail the run; verification failures do. If that review requests changes,
-`tao run` and `tao run --all` apply the ordinary rework gates and rerun by
-default, stopping after five cycles, on repeated equivalent findings, or before
-another reopen when the same normalized primary finding file appears in three
-consecutive `changes_requested` reviews. Use `--max-rework-attempts N` to change
-the cap or `--auto-rework=false` to disable the loop. Pass `--no-review` for one
-run or set `TAO_REVIEW=false` to skip review and automatic rework.
+`tao run` applies the ordinary rework gates and reruns by default, stopping after
+five cycles, on repeated equivalent findings,
+or before another reopen when the same normalized primary finding file appears
+in three consecutive `changes_requested` reviews. Use
+`--max-rework-attempts N` to change the cap or `--auto-rework=false` to disable
+the loop. Pass `--no-review` for one run or set `TAO_REVIEW=false` to skip review
+and automatic rework.
 
-`tao run --all` reconciles runnable plans into the durable per-repo queue and
-drains it once; `--active` limits that batch to active runnable plans. Use
-`tao queue add` to enqueue named plans without draining, `tao queue start` to
-reconcile and drain in the foreground, and `tao queue status` for a focused,
-grouped view of persisted state. The default view always includes queued and
-running entries, plus failures from the last 24 hours and successes from the
-last hour; use `tao queue status --all` for complete persisted history. These
-windows affect display only and never prune queue data. Use `tao queue stop` to
-remove a pending plan.
-The queue-start `--max-parallel` flag defaults to 1; higher values are not yet
-cross-plan-conflict-safe from the CLI. Unlike `tao run`, `tao queue start` keeps
-automatic rework opt-in via `--auto-rework`; `--max-rework-attempts N` changes
-the five-cycle default and zero disables the loop. Automatic review is required.
-A completed foreground drain always prints a final batch summary and can trigger
-`TAO_NOTIFY_COMMAND` (see Configuration).
+Run each plan explicitly with `tao run <plan-id>`. To execute two independent
+plans concurrently, launch one direct run per terminal; Tao's per-plan lock
+prevents duplicate drivers for the same plan.
 
 ### Reworking review findings
 
@@ -353,9 +336,8 @@ them.
 Use `--run` to hand the reopened plan directly to `tao run`. Use `--force` only
 when you intentionally want to bypass the ordinary completed,
 changes-requested, and finding gates; it cannot be combined with `--from-pr`.
-Direct `tao run` and `tao run --all` automate the Tao-review loop by default; an
-opted-in durable CLI queue does the same while preserving progress across
-restarts. Reaching the configured cap, receiving two consecutive
+Direct `tao run` automates the Tao-review loop by default. Reaching the
+configured cap, receiving two consecutive
 high-confidence matches of the complete normalized finding set, or seeing the
 same normalized primary finding file in three consecutive `changes_requested`
 reviews stops with the plan still `changes_requested` and its latest review
@@ -537,7 +519,6 @@ TAO_AUTO_REWORK=true|false
 TAO_MAX_REWORK_ATTEMPTS=5  # automatic rework cycles; 0 disables
 TAO_DANGEROUSLY_SKIP_PERMISSIONS=true|false
 TAO_SESSION_TIMEOUT=20m  # Go duration; 0 disables run-path timeouts
-TAO_NOTIFY_COMMAND='notify-send "Tao batch" "$TAO_BATCH_REVIEWED of $TAO_BATCH_TOTAL done & reviewed, $TAO_BATCH_FAILED failed"'
 TAO_DATA_HOME=/path/to/tao-data
 ```
 
@@ -582,17 +563,9 @@ timeout plus 3 seconds of retry delay (about 60 minutes 3 seconds at the
 default), before other orchestration work. `TAO_REVIEW` defaults
 to true; set it to false to skip automatic post-completion reviews, or use
 `tao run --no-review` for a single run. Direct runs default automatic rework on;
-`TAO_AUTO_REWORK=false` or `--auto-rework=false` disables it. `tao queue start`
-remains opt-in through `TAO_AUTO_REWORK=true` or `--auto-rework`. Explicit flags
-override repository, environment, and built-in defaults. `TAO_MAX_REWORK_ATTEMPTS`
-sets the default five-cycle cap for both paths; zero disables automatic rework.
-
-`TAO_NOTIFY_COMMAND` is an optional shell command run after a foreground queue
-drain (`tao queue start` or `tao run --all`) prints its final batch summary. Tao
-runs it best-effort under a short timeout; an unset or failing command warns at
-most and never fails the batch. The command receives `TAO_BATCH_TOTAL`,
-`TAO_BATCH_SUCCEEDED`, `TAO_BATCH_REVIEWED`, `TAO_BATCH_FAILED`, and
-`TAO_BATCH_PENDING` in its environment.
+`TAO_AUTO_REWORK=false` or `--auto-rework=false` disables it. Explicit flags override repository,
+environment, and built-in defaults. `TAO_MAX_REWORK_ATTEMPTS` sets the default
+five-cycle cap; zero disables automatic rework.
 
 ---
 

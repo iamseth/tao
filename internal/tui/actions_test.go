@@ -10,7 +10,6 @@ import (
 
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/plan"
-	"github.com/iamseth/tao/internal/runqueue"
 	"github.com/iamseth/tao/internal/term"
 )
 
@@ -292,23 +291,20 @@ func TestActionFeedbackTransitionsToObservedOrFailed(t *testing.T) {
 	}
 }
 
-func TestRunFeedbackIgnoresPreexistingTerminalQueueStatus(t *testing.T) {
-	base := time.Date(2026, 8, 10, 17, 0, 0, 0, time.UTC)
-	now := base
+func TestRunFeedbackObservesLiveRunLock(t *testing.T) {
 	launcher := &recordingActionLauncher{}
-	actions := newTestActions(t, launcher, nil, func() time.Time { return now })
+	lockAlive := false
+	actions := newTestActions(t, launcher, func(string) (plan.RunLock, error) {
+		return plan.RunLock{ProcessAlive: lockAlive}, nil
+	}, nil)
 	row := testActionRow()
-	row.QueueStatus = runqueue.QueueStatusFailed
 
 	actions.RunPlan(context.Background(), row)
-	now = base.Add(defaultActionStartupTimeout)
+	lockAlive = true
 	actions.Reconcile(monitor.Snapshot{Rows: []monitor.Row{row}})
 
-	if got := actions.labels()[actionRowKey(row)]; got != "failed to start" {
-		t.Fatalf("feedback with unchanged terminal queue status = %q, want failed to start", got)
-	}
-	if message := actions.statusMessage(); !strings.Contains(message, "no activity observed") {
-		t.Fatalf("timeout message = %q, want no-activity guidance", message)
+	if _, ok := actions.labels()[actionRowKey(row)]; ok {
+		t.Fatalf("observed run lock retained feedback: %v", actions.labels())
 	}
 }
 

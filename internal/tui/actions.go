@@ -9,7 +9,6 @@ import (
 
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/plan"
-	"github.com/iamseth/tao/internal/runqueue"
 )
 
 const defaultActionStartupTimeout = 10 * time.Second
@@ -44,12 +43,11 @@ const (
 )
 
 type actionFeedback struct {
-	kind               actionKind
-	label              string
-	startedAt          time.Time
-	approvalSliceID    string
-	initialQueueStatus runqueue.QueueStatus
-	initialStatus      string
+	kind            actionKind
+	label           string
+	startedAt       time.Time
+	approvalSliceID string
+	initialStatus   string
 }
 
 // Actions launches Tao commands and tracks their best-effort startup feedback.
@@ -246,8 +244,7 @@ func (a *Actions) observed(feedback actionFeedback, row monitor.Row) bool {
 	case actionMerge:
 		return row.Status != feedback.initialStatus
 	default:
-		queueStarted := row.QueueStatus != "" && row.QueueStatus != feedback.initialQueueStatus
-		return row.Liveness == monitor.LivenessLive || queueStarted || a.liveRunLock(row.PlanDir)
+		return row.Liveness == monitor.LivenessLive || a.liveRunLock(row.PlanDir)
 	}
 }
 
@@ -262,12 +259,11 @@ func (a *Actions) liveRunLock(planDir string) bool {
 func (a *Actions) recordPending(row monitor.Row, kind actionKind, label, approvalSliceID string) {
 	key := actionRowKey(row)
 	a.feedback[key] = actionFeedback{
-		kind:               kind,
-		label:              label,
-		startedAt:          a.now(),
-		approvalSliceID:    approvalSliceID,
-		initialQueueStatus: row.QueueStatus,
-		initialStatus:      row.Status,
+		kind:            kind,
+		label:           label,
+		startedAt:       a.now(),
+		approvalSliceID: approvalSliceID,
+		initialStatus:   row.Status,
 	}
 	if a.messageKey == key {
 		a.message = ""

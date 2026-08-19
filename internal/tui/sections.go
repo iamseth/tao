@@ -3,7 +3,6 @@ package tui
 import (
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/plan"
-	"github.com/iamseth/tao/internal/runqueue"
 )
 
 // SectionKind identifies one table-page plan group.
@@ -12,7 +11,6 @@ type SectionKind string
 const (
 	SectionAttention SectionKind = "attention"
 	SectionRunning   SectionKind = "running"
-	SectionQueued    SectionKind = "queued"
 	SectionPlanned   SectionKind = "planned"
 	SectionCompleted SectionKind = "completed"
 )
@@ -36,7 +34,6 @@ func BuildRepositorySections(rows []monitor.Row, showCompleted bool, repositoryI
 	sections := []Section{
 		{Kind: SectionAttention, Title: "NEEDS ATTENTION"},
 		{Kind: SectionRunning, Title: "RUNNING"},
-		{Kind: SectionQueued, Title: "QUEUED"},
 		{Kind: SectionPlanned, Title: "PLANNED / IN REVIEW"},
 		{Kind: SectionCompleted, Title: "COMPLETED"},
 	}
@@ -72,9 +69,6 @@ func sectionKind(row monitor.Row) SectionKind {
 	}
 	if row.Liveness == monitor.LivenessLive {
 		return SectionRunning
-	}
-	if row.QueueStatus == runqueue.QueueStatusPending || row.QueueStatus == runqueue.QueueStatusRunning {
-		return SectionQueued
 	}
 	return SectionPlanned
 }

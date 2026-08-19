@@ -47,7 +47,7 @@ func registerReworkFlags(fs *flag.FlagSet) {
 	fs.Bool("dry-run", false, "classify, persist, and print pull-request triage without reopening")
 }
 
-func (a App) rework(ctx context.Context, repo queueRepository, args []string) error {
+func (a App) rework(ctx context.Context, repo planRunRepository, args []string) error {
 	if repo == nil {
 		return fmt.Errorf("rework requires a plan repository")
 	}
@@ -187,7 +187,7 @@ func (s reworkTriageTextSession) GenerateText(ctx context.Context, repoRoot, pro
 	return text, nil
 }
 
-func (a App) reworkFromPullRequest(ctx context.Context, repo queueRepository, record *plan.PlanRecord, now time.Time, scope reworkpkg.PRThreadAuthorScope, dryRun, runAfter bool) error {
+func (a App) reworkFromPullRequest(ctx context.Context, repo planRunRepository, record *plan.PlanRecord, now time.Time, scope reworkpkg.PRThreadAuthorScope, dryRun, runAfter bool) error {
 	detail := record.Detail()
 	request, err := pullRequestThreadReadRequest(detail, scope)
 	if err != nil {

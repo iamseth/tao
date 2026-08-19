@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
-	"github.com/iamseth/tao/internal/runqueue"
 	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/taodata"
 )
@@ -37,14 +36,6 @@ type PlanListerFactory func(taodata.RepoInventoryEntry) PlanLister
 
 // RuntimeStatusReaderFactory creates an operational status source for one inventory entry.
 type RuntimeStatusReaderFactory func(taodata.RepoInventoryEntry) RuntimeStatusReader
-
-// QueueReader loads one repository's durable queue snapshot without mutating it.
-type QueueReader interface {
-	Load() (runqueue.QueueSnapshot, error)
-}
-
-// QueueReaderFactory creates a queue snapshot source for one inventory entry.
-type QueueReaderFactory func(taodata.RepoInventoryEntry) QueueReader
 
 // RunLockReader reads the operational ownership lock for one plan directory.
 type RunLockReader func(string) (plan.RunLock, error)
@@ -110,9 +101,6 @@ type Row struct {
 	AttentionReasons []AttentionReason
 	ApprovalSliceID  string
 	ApprovalReason   string
-	QueueStatus      runqueue.QueueStatus
-	// QueuePosition is one-based among the latest pending and running entries.
-	QueuePosition int
 
 	Warnings []string
 }
@@ -128,7 +116,6 @@ type Collector struct {
 	Inventory              RepositoryInventory
 	NewPlanLister          PlanListerFactory
 	NewStatusReader        RuntimeStatusReaderFactory
-	NewQueueReader         QueueReaderFactory
 	ReadRunLock            RunLockReader
 	Now                    func() time.Time
 	ShowInvalid            bool
@@ -144,9 +131,6 @@ func NewCollector(inventory RepositoryInventory) Collector {
 		},
 		NewStatusReader: func(entry taodata.RepoInventoryEntry) RuntimeStatusReader {
 			return runstatus.NewStore(entry.RuntimeStatusDir, nil)
-		},
-		NewQueueReader: func(entry taodata.RepoInventoryEntry) QueueReader {
-			return runqueue.NewFileStore(filepath.Dir(entry.PlansDir))
 		},
 		ReadRunLock: plan.ReadRunLock,
 		Now:         time.Now,
@@ -186,7 +170,6 @@ func (c Collector) Collect(ctx context.Context) (Snapshot, error) {
 			continue
 		}
 		reader := c.statusReader(entry)
-		queue := loadQueueOverlay(c.queueReader(entry))
 		for _, summary := range summaries {
 			if err := ctx.Err(); err != nil {
 				return Snapshot{}, err
@@ -199,7 +182,6 @@ func (c Collector) Collect(ctx context.Context) (Snapshot, error) {
 				applyRuntimeStatus(&row, reader, entry.Repo.ID, now)
 				applyCrashedRunAttention(&row, c.runLockReader(), planDir(entry, summary))
 			}
-			applyQueueOverlay(&row, queue)
 			snapshot.Rows = append(snapshot.Rows, row)
 		}
 	}
@@ -227,13 +209,6 @@ func (c Collector) statusReader(entry taodata.RepoInventoryEntry) RuntimeStatusR
 		return c.NewStatusReader(entry)
 	}
 	return runstatus.NewStore(entry.RuntimeStatusDir, nil)
-}
-
-func (c Collector) queueReader(entry taodata.RepoInventoryEntry) QueueReader {
-	if c.NewQueueReader != nil {
-		return c.NewQueueReader(entry)
-	}
-	return runqueue.NewFileStore(filepath.Dir(entry.PlansDir))
 }
 
 func (c Collector) runLockReader() RunLockReader {
@@ -369,47 +344,6 @@ func applyCrashedRunAttention(row *Row, reader RunLockReader, planDir string) {
 	row.RunLockProcessAlive = lock.ProcessAlive
 	if !lock.ProcessAlive {
 		row.AttentionReasons = append(row.AttentionReasons, AttentionRunCrashed)
-	}
-}
-
-type queueOverlay struct {
-	status   runqueue.QueueStatus
-	position int
-}
-
-func loadQueueOverlay(reader QueueReader) map[string]queueOverlay {
-	if reader == nil {
-		return nil
-	}
-	snapshot, err := reader.Load()
-	if err != nil {
-		return nil
-	}
-
-	latest := make(map[string]int, len(snapshot.Entries))
-	for i, entry := range snapshot.Entries {
-		latest[entry.PlanID] = i
-	}
-	overlays := make(map[string]queueOverlay, len(latest))
-	position := 0
-	for i, entry := range snapshot.Entries {
-		if latest[entry.PlanID] != i {
-			continue
-		}
-		overlay := queueOverlay{status: entry.Status}
-		if entry.Status == runqueue.QueueStatusPending || entry.Status == runqueue.QueueStatusRunning {
-			position++
-			overlay.position = position
-		}
-		overlays[entry.PlanID] = overlay
-	}
-	return overlays
-}
-
-func applyQueueOverlay(row *Row, overlays map[string]queueOverlay) {
-	if overlay, ok := overlays[row.PlanID]; ok {
-		row.QueueStatus = overlay.status
-		row.QueuePosition = overlay.position
 	}
 }
 

@@ -9,7 +9,6 @@ import (
 
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/plan"
-	"github.com/iamseth/tao/internal/runqueue"
 )
 
 func TestRenderGoldenColorModes(t *testing.T) {
@@ -51,14 +50,14 @@ func TestRenderSectionsAndOperationalLabels(t *testing.T) {
 	snapshot := monitor.Snapshot{CollectedAt: now, Rows: []monitor.Row{
 		{RepositoryName: "run", PlanID: "live", Status: plan.StatusInProgress, Liveness: monitor.LivenessLive, SliceID: "004-ui", InvocationDuration: 2 * time.Minute, OriginalCompletedCount: 2, OriginalTotalCount: 4, UpdatedAt: &updated},
 		{RepositoryName: "attn", PlanID: "dead", Status: plan.StatusBlocked, Liveness: monitor.LivenessStale, AttentionReasons: []monitor.AttentionReason{monitor.AttentionRunCrashed}, UpdatedAt: &updated},
-		{RepositoryName: "queue", PlanID: "queued", Status: plan.StatusPlanned, QueueStatus: runqueue.QueueStatusPending, QueuePosition: 2, UpdatedAt: &updated},
+		{RepositoryName: "plan", PlanID: "planned", Status: plan.StatusPlanned, UpdatedAt: &updated},
 		{RepositoryName: "plan", PlanID: "review", Status: plan.StatusInReview, UpdatedAt: &updated},
 		{RepositoryName: "done", PlanID: "complete", Status: plan.StatusCompleted, OriginalCompletedCount: 1, OriginalTotalCount: 1, UpdatedAt: &updated},
 		{RepositoryName: "run", PlanID: "stale", Status: plan.StatusInProgress, Liveness: monitor.LivenessStale, HeartbeatAge: 45 * time.Second, RunLockPresent: true, RunLockProcessAlive: true, InvocationDuration: time.Hour, UpdatedAt: &updated},
 	}}
 
 	got := Render(Model{Snapshot: snapshot, Selected: 2})
-	ordered := []string{"NEEDS ATTENTION", "RUNNING", "QUEUED", "PLANNED / IN REVIEW", "COMPLETED"}
+	ordered := []string{"NEEDS ATTENTION", "RUNNING", "PLANNED / IN REVIEW", "COMPLETED"}
 	previous := -1
 	for _, label := range ordered {
 		index := strings.Index(got, label)

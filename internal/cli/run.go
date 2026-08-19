@@ -20,13 +20,11 @@ var runCommand = commandMetadata{
 	minPrefix: "r",
 	usageLines: []string{
 		"run (r) [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>",
-		"run (r) [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] --all [--active]",
 	},
 	completionDescription: "Run pending slices with the selected agent",
 	long:                  "Run pending slices for a Tao plan with the selected agent. Tao prepares the requested workspace, executes pending work, automatically reworks review findings by default, records verification metadata, and follows the configured commit policy. In a sufficiently large terminal, Tao displays a pinned run header unless --no-run-header disables it.",
 	examples: "  tao run 20260628-1618-kubectl-style-help\n" +
 		"  tao run --max-slices 1 --commit-policy slice my-plan\n" +
-		"  tao run --all --active\n" +
 		"  tao run --auto-rework=false my-plan",
 	registerFlags: registerRunFlags,
 	completion: completionContext{
@@ -37,7 +35,7 @@ var runCommand = commandMetadata{
 			"max-rework-attempts": {kind: completionValueCount, label: "count"},
 			"max-slices":          {kind: completionValueCount, label: "count"},
 		},
-		positional: completionPositional{index: 1, label: "plan", completer: completeRunnablePlanIDs, disallowAfterFlags: []string{"--all"}},
+		positional: completionPositional{index: 1, label: "plan", completer: completeRunnablePlanIDs},
 	},
 	repository: repositoryDefault,
 	execute: func(c commandContext) error {
@@ -65,8 +63,6 @@ func registerRunFlags(fs *flag.FlagSet) {
 	fs.Bool("auto-rework", autoRework, "automatically rework plans with requested changes")
 	fs.Int("max-rework-attempts", maxReworkAttempts, "maximum automatic rework cycles (0 disables)")
 	fs.Bool("rework-restart", false, "start a new automatic-rework budget after a previous stop")
-	fs.Bool("all", false, "enqueue and drain all runnable plans")
-	fs.Bool("active", false, "with --all, enqueue only active runnable plans")
 }
 
 type runFlagValues struct {
@@ -146,7 +142,11 @@ func resolveRunAutoReworkPolicy(fs *flag.FlagSet, reviewEnabled bool) (runtimeco
 	return runtimeconfig.ResolveAutoReworkPolicy(enabled, flagIntValue(fs, "max-rework-attempts"), reviewEnabled)
 }
 
-func (a App) run(ctx context.Context, repo queueRepository, args []string) error {
+type planRunRepository interface {
+	run.Repository
+}
+
+func (a App) run(ctx context.Context, repo planRunRepository, args []string) error {
 	fs, positional, err := a.parseArgsFor(&commandMetadata{name: "run", registerFlags: registerRunFlags}, args)
 	if err != nil {
 		return err
@@ -155,29 +155,10 @@ func (a App) run(ctx context.Context, repo queueRepository, args []string) error
 	if err != nil {
 		return err
 	}
-	runAll := flagBoolValue(fs, "all")
-	activeOnly := flagBoolValue(fs, "active")
 	reworkRestart := flagBoolValue(fs, "rework-restart")
-	if activeOnly && !runAll {
-		return errors.New("--active requires --all")
-	}
 	repositoryDefaults, err := a.currentRepositoryRunOptions(ctx)
 	if err != nil {
 		return err
-	}
-	if runAll {
-		if len(positional) != 0 {
-			return errors.New("--all cannot be combined with a positional plan id")
-		}
-		runtime, err := newQueueRuntime(inputs.defaults, repositoryDefaults, inputs.overrides, inputs.skipPermissions, a.StatusReporter)
-		if err != nil {
-			return err
-		}
-		policy, err := resolveRunAutoReworkPolicy(fs, runtime.options.ReviewEnabled)
-		if err != nil {
-			return err
-		}
-		return a.runAll(ctx, repo, runtime, activeOnly, policy, reworkRestart, flagBoolValue(fs, "no-run-header"))
 	}
 	if err := requirePositionals(positional, 1, "usage: tao run [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>"); err != nil {
 		return err
@@ -200,7 +181,7 @@ var executeSinglePlan = func(service run.Service, ctx context.Context, request r
 
 // executeResolvedRun is the single-plan execution boundary shared by run entry
 // points after their inputs and runtime options have been fully resolved.
-func (a App) executeResolvedRun(ctx context.Context, repo queueRepository, input string, request run.Request, skipPermissions bool, policy runtimeconfig.AutoReworkPolicy, reworkRestart, noRunHeader bool) error {
+func (a App) executeResolvedRun(ctx context.Context, repo planRunRepository, input string, request run.Request, skipPermissions bool, policy runtimeconfig.AutoReworkPolicy, reworkRestart, noRunHeader bool) error {
 	runCtx, stopSignals := newCommandSignalContext(ctx)
 	defer stopSignals()
 
@@ -238,7 +219,7 @@ func (a App) executeResolvedRun(ctx context.Context, repo queueRepository, input
 	})
 }
 
-func decorateRunCannotStartError(ctx context.Context, repo queueRepository, input string, err error) error {
+func decorateRunCannotStartError(ctx context.Context, repo planRunRepository, input string, err error) error {
 	if err == nil || !errors.Is(err, run.ErrCannotStart) || repo == nil {
 		return err
 	}
@@ -339,11 +320,4 @@ func shellCommandArg(value string) string {
 		return value
 	}
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
-}
-
-func (a App) runAll(ctx context.Context, repo queueRepository, runtime queueRuntime, activeOnly bool, policy runtimeconfig.AutoReworkPolicy, reworkRestart, noRunHeader bool) error {
-	if repo == nil {
-		return errors.New("run --all requires a plan repository")
-	}
-	return a.startQueueDrain(ctx, repo, queueDrainOptions{maxParallel: 1, runtime: runtime, activeOnly: activeOnly, autoReworkPolicy: policy, reworkRestart: reworkRestart, runHeader: true, noRunHeader: noRunHeader})
 }

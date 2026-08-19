@@ -72,7 +72,7 @@ type ResolvedRunOptions struct {
 
 const (
 	// DefaultMaxReworkAttempts is the number of automatic rework cycles allowed
-	// after the initial queue run.
+	// after the initial direct run.
 	DefaultMaxReworkAttempts = 5
 	// DefaultAggregateReviewConvergenceWindow is the number of consecutive
 	// changes-requested rounds used to detect aggregate review non-convergence.

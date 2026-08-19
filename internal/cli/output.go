@@ -8,7 +8,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/iamseth/tao/internal/plan"
-	"github.com/iamseth/tao/internal/runqueue"
 )
 
 func writef(w io.Writer, format string, args ...any) error {
@@ -122,23 +121,6 @@ func outputIsTerminal(out io.Writer) bool {
 	}
 	info, err := file.Stat()
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
-}
-
-func colorQueueStatus(value string, status runqueue.QueueStatus) string {
-	switch status {
-	case runqueue.QueueStatusRunning:
-		return color(value, "36")
-	case runqueue.QueueStatusPending:
-		return color(value, "33")
-	case runqueue.QueueStatusSucceeded:
-		return color(value, "32")
-	case runqueue.QueueStatusFailed:
-		return color(value, "31")
-	case runqueue.QueueStatusSkipped:
-		return color(value, "35")
-	default:
-		return color(value, "90")
-	}
 }
 
 func color(value, code string) string {

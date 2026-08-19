@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
-	"github.com/iamseth/tao/internal/runqueue"
 	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/taodata"
 )
@@ -38,17 +37,6 @@ type fakeStatusReader struct {
 	records map[string]runstatus.Record
 	errors  map[string]error
 	reads   []string
-}
-
-type fakeQueueReader struct {
-	snapshot runqueue.QueueSnapshot
-	err      error
-	loads    int
-}
-
-func (f *fakeQueueReader) Load() (runqueue.QueueSnapshot, error) {
-	f.loads++
-	return f.snapshot, f.err
 }
 
 func (f *fakeStatusReader) Read(planID string) (runstatus.Record, error) {
@@ -300,12 +288,10 @@ func TestCollectorCompletedWindowIsOptInWithActivityFallback(t *testing.T) {
 		{ID: "unknown", Status: plan.StatusCompleted},
 	}}
 	reader := &fakeStatusReader{}
-	queue := &fakeQueueReader{}
 	collector := Collector{
 		Inventory:       fakeInventory{entries: []taodata.RepoInventoryEntry{entry}},
 		NewPlanLister:   func(taodata.RepoInventoryEntry) PlanLister { return lister },
 		NewStatusReader: func(taodata.RepoInventoryEntry) RuntimeStatusReader { return reader },
-		NewQueueReader:  func(taodata.RepoInventoryEntry) QueueReader { return queue },
 		ReadRunLock:     func(string) (plan.RunLock, error) { return plan.RunLock{}, os.ErrNotExist },
 		Now:             func() time.Time { return now },
 	}
@@ -349,7 +335,6 @@ func TestCollectorMarksDeadLockedStaleOrMissingRunsCrashed(t *testing.T) {
 		Inventory:       fakeInventory{entries: []taodata.RepoInventoryEntry{entry}},
 		NewPlanLister:   func(taodata.RepoInventoryEntry) PlanLister { return lister },
 		NewStatusReader: func(taodata.RepoInventoryEntry) RuntimeStatusReader { return status },
-		NewQueueReader:  func(taodata.RepoInventoryEntry) QueueReader { return &fakeQueueReader{} },
 		ReadRunLock: func(planDir string) (plan.RunLock, error) {
 			lockReads = append(lockReads, planDir)
 			if planDir == "/data/repo/plans/no-lock" {
@@ -386,48 +371,6 @@ func TestCollectorMarksDeadLockedStaleOrMissingRunsCrashed(t *testing.T) {
 	}
 	if want := []string{"/data/repo/plans/missing", "/data/repo/plans/stale", "/data/repo/plans/alive", "/data/repo/plans/no-lock"}; !slices.Equal(lockReads, want) {
 		t.Fatalf("run lock reads = %v, want %v", lockReads, want)
-	}
-}
-
-func TestCollectorOverlaysLatestQueueStatusAndActivePosition(t *testing.T) {
-	now := time.Date(2026, 8, 10, 17, 0, 0, 0, time.UTC)
-	entry := taodata.RepoInventoryEntry{Repo: taodata.Repo{ID: "repo", Name: "repo"}, PlansDir: "/data/repo/plans"}
-	lister := &fakePlanLister{summaries: []plan.PlanSummary{
-		{ID: "plan-a", Status: plan.StatusPlanned},
-		{ID: "plan-b", Status: plan.StatusInProgress},
-		{ID: "plan-c", Status: plan.StatusBlocked},
-	}}
-	queue := &fakeQueueReader{snapshot: runqueue.QueueSnapshot{Entries: []runqueue.QueueEntry{
-		{PlanID: "plan-a", Status: runqueue.QueueStatusSucceeded, QueuedAt: now.Add(-time.Hour)},
-		{PlanID: "plan-b", Status: runqueue.QueueStatusRunning, QueuedAt: now.Add(-2 * time.Minute)},
-		{PlanID: "plan-a", Status: runqueue.QueueStatusPending, QueuedAt: now.Add(-time.Minute)},
-		{PlanID: "plan-c", Status: runqueue.QueueStatusFailed, QueuedAt: now},
-	}}}
-	collector := Collector{
-		Inventory:       fakeInventory{entries: []taodata.RepoInventoryEntry{entry}},
-		NewPlanLister:   func(taodata.RepoInventoryEntry) PlanLister { return lister },
-		NewStatusReader: func(taodata.RepoInventoryEntry) RuntimeStatusReader { return &fakeStatusReader{} },
-		NewQueueReader:  func(taodata.RepoInventoryEntry) QueueReader { return queue },
-		ReadRunLock:     func(string) (plan.RunLock, error) { return plan.RunLock{}, os.ErrNotExist },
-		Now:             func() time.Time { return now },
-	}
-
-	snapshot, err := collector.Collect(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	byPlan := rowsByPlan(snapshot.Rows)
-	if got := byPlan["plan-b"]; got.QueueStatus != runqueue.QueueStatusRunning || got.QueuePosition != 1 {
-		t.Fatalf("plan-b queue overlay = %+v", got)
-	}
-	if got := byPlan["plan-a"]; got.QueueStatus != runqueue.QueueStatusPending || got.QueuePosition != 2 {
-		t.Fatalf("plan-a queue overlay = %+v", got)
-	}
-	if got := byPlan["plan-c"]; got.QueueStatus != runqueue.QueueStatusFailed || got.QueuePosition != 0 {
-		t.Fatalf("plan-c queue overlay = %+v", got)
-	}
-	if queue.loads != 1 {
-		t.Fatalf("queue loads = %d, want one per repository", queue.loads)
 	}
 }
 

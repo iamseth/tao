@@ -72,9 +72,6 @@ func TestCommandHelpRendersOptionsExamplesAndFlaglessCommands(t *testing.T) {
 func TestPlanAndExecutionCommandHelpIncludesSubcommandsOptionsAndExamples(t *testing.T) {
 	assertCommandOutputContains(t, "report help", []string{"report", "--help"},
 		"Export one readable Tao plan", "Options:", "--output", "--planning-only", "--force", "tao report --output -")
-	assertCommandOutputContains(t, "queue help", []string{"queue", "--help"},
-		"Available Commands:", "add", "start", "status", "--auto-rework",
-		"--max-rework-attempts", "maximum automatic rework cycles (0 disables) (default 5)")
 	assertCommandOutputContains(t, "review help", []string{"review", "--help"}, "Options:", "--run", "Examples:")
 }
 
@@ -226,19 +223,6 @@ func TestCommandHelpReflectsRuntimeEnvDefaults(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "plan, slice") || strings.Contains(out.String(), "plan|slice") {
 		t.Fatalf("expected run help to omit plan as an executable commit policy, got %q", out.String())
-	}
-
-	out.Reset()
-	if err := app.Run(context.Background(), []string{"queue", "--help"}); err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{
-		"automatically rework plans with requested changes (default true)",
-		"maximum automatic rework cycles (0 disables) (default 3)",
-	} {
-		if !strings.Contains(out.String(), want) {
-			t.Fatalf("expected queue help to reflect env default %q, got %q", want, out.String())
-		}
 	}
 
 	out.Reset()

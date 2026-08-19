@@ -10,7 +10,6 @@ import (
 
 	"github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/runheader"
-	"github.com/iamseth/tao/internal/runqueue"
 	"github.com/iamseth/tao/internal/term"
 )
 
@@ -21,48 +20,6 @@ const eraseTerminalLineSequence = "\x1b[2K"
 type runHeaderTerminal interface {
 	Size() (term.Size, error)
 	ResizeEvents(context.Context) <-chan struct{}
-}
-
-type batchHeaderReporter struct {
-	reporter          run.HeaderReporter
-	mu                sync.RWMutex
-	position          map[string]int
-	maxReworkAttempts map[string]int
-	total             int
-}
-
-func newBatchHeaderReporter(reporter run.HeaderReporter) *batchHeaderReporter {
-	return &batchHeaderReporter{reporter: reporter}
-}
-
-func (r *batchHeaderReporter) setPlans(snapshot runqueue.QueueSnapshot) {
-	planIDs := queueDrainPlanIDs(snapshot)
-	position := make(map[string]int, len(planIDs))
-	maxReworkAttempts := make(map[string]int, len(planIDs))
-	for i, planID := range planIDs {
-		position[planID] = i + 1
-	}
-	for _, entry := range snapshot.Entries {
-		if entry.AutoReworkPolicy != nil {
-			maxReworkAttempts[entry.PlanID] = entry.AutoReworkPolicy.MaxAttempts
-		}
-	}
-	r.mu.Lock()
-	r.position = position
-	r.maxReworkAttempts = maxReworkAttempts
-	r.total = len(planIDs)
-	r.mu.Unlock()
-}
-
-func (r *batchHeaderReporter) ReportHeader(state run.HeaderState) {
-	r.mu.RLock()
-	state.BatchPosition = r.position[state.PlanID]
-	state.BatchTotal = r.total
-	if maxAttempts, ok := r.maxReworkAttempts[state.PlanID]; ok {
-		state.MaxReworkAttempts = maxAttempts
-	}
-	r.mu.RUnlock()
-	run.ReportHeader(r.reporter, state)
 }
 
 type runHeaderOutput struct {

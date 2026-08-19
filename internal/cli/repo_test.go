@@ -105,21 +105,13 @@ func TestRepoConfigShowsUnsetAndSetsPullRequest(t *testing.T) {
 	}
 }
 
-func TestRepositoryPullRequestDefaultAppliesToQueueAndExplicitRunFlagWins(t *testing.T) {
+func TestRepositoryPullRequestDefaultAppliesToRunAndExplicitFlagWins(t *testing.T) {
 	clearTaoEnv(t)
 	t.Setenv(runtimeconfig.EnvPullRequest, "false")
 	value := true
 	registered := taodata.Repo{ID: "repo-a", RunDefaults: &taodata.RepoRunDefaults{PullRequest: &value}}
 	registry := &fakeNoteRegistry{current: registered, repos: []taodata.Repo{registered}}
 	app := App{Out: io.Discard, Err: io.Discard, Registry: func() NoteRegistry { return registry }}
-
-	queueRuntime, err := app.queueRuntimeFromEnv(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !queueRuntime.options.PullRequest {
-		t.Fatal("queue pull_request = false, want repository default true")
-	}
 
 	first := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
 	active := &first

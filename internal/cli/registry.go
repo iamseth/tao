@@ -128,7 +128,6 @@ var commandRegistry = []commandMetadata{
 	logCommand,
 	runCommand,
 	commitCommand,
-	queueCommand,
 	repoCommand,
 	noteCommand,
 	approveCommand,

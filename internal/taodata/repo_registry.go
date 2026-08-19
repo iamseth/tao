@@ -334,14 +334,6 @@ func (r Registry) NotesDir(repo Repo) string {
 	return filepath.Join(r.DataHome, "repos", repo.ID, "notes")
 }
 
-func (r Registry) QueuePath(repo Repo) string {
-	return filepath.Join(r.DataHome, "repos", repo.ID, "queue.json")
-}
-
-func (r Registry) QueueLogPath(repo Repo) string {
-	return filepath.Join(r.DataHome, "repos", repo.ID, "queue.jsonl")
-}
-
 // MergeBatchesDir returns the repository-owned merge batch store. Batch
 // artifacts deliberately live beside plans, never inside the plans directory.
 func (r Registry) MergeBatchesDir(repo Repo) string {

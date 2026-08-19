@@ -33,10 +33,13 @@ func TestUICommandRegistrationAndHelp(t *testing.T) {
 	if err := renderCommandHelp(&out, metadata); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"keyboard-driven dashboard", "Completed plans are hidden initially", "m confirms a selected reviewed-plan merge", "M confirms a repository-scoped merge --all", "press Enter for the full read-only slice page", "q and Ctrl-C quit globally", "Esc twice within one second", "--interval", "--completed-window", "tao monitor --once", "Usage:\n  tao ui"} {
+	for _, want := range []string{"keyboard-driven dashboard", "running work, planned or in-review work", "Completed plans are hidden initially", "m confirms a selected reviewed-plan merge", "M confirms a repository-scoped merge --all", "press Enter for the full read-only slice page", "q and Ctrl-C quit globally", "Esc twice within one second", "--interval", "--completed-window", "tao monitor --once", "Usage:\n  tao ui"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("ui help missing %q in %q", want, out.String())
 		}
+	}
+	if strings.Contains(out.String(), "queued work") {
+		t.Fatalf("ui help retains removed queue wording in %q", out.String())
 	}
 }
 

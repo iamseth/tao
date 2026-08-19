@@ -261,18 +261,12 @@ func TestRegisterCurrentPreservesRunDefaults(t *testing.T) {
 	})
 }
 
-func TestRegistryQueuePaths(t *testing.T) {
+func TestRegistryNotesDir(t *testing.T) {
 	dataHome := t.TempDir()
 	registry := Registry{DataHome: dataHome}
 	repo := Repo{ID: "repo-123"}
 	if got, want := registry.NotesDir(repo), filepath.Join(dataHome, "repos", repo.ID, "notes"); got != want {
 		t.Fatalf("NotesDir() = %q, want %q", got, want)
-	}
-	if got, want := registry.QueuePath(repo), filepath.Join(dataHome, "repos", repo.ID, "queue.json"); got != want {
-		t.Fatalf("QueuePath() = %q, want %q", got, want)
-	}
-	if got, want := registry.QueueLogPath(repo), filepath.Join(dataHome, "repos", repo.ID, "queue.jsonl"); got != want {
-		t.Fatalf("QueueLogPath() = %q, want %q", got, want)
 	}
 }
 

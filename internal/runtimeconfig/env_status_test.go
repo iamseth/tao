@@ -18,7 +18,6 @@ func TestRuntimeEnvDefaultsAppliesAllSupportedValues(t *testing.T) {
 	t.Setenv(EnvAutoRework, "false")
 	t.Setenv(EnvMaxReworkAttempts, "7")
 	t.Setenv(EnvSessionTimeout, "30m")
-	t.Setenv(EnvNotifyCommand, "echo done")
 	t.Setenv(EnvUpdate, "auto")
 	t.Setenv(EnvSkipPermissions, "true")
 
@@ -26,7 +25,7 @@ func TestRuntimeEnvDefaultsAppliesAllSupportedValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.CommitPolicy != CommitPolicySlice || got.ExecutionMode != ExecutionModeCurrent || got.Agent != AgentCodex || got.PullRequest == nil || !*got.PullRequest || got.ReviewEnabled == nil || *got.ReviewEnabled || got.AutoRework == nil || *got.AutoRework || got.MaxReworkAttempts == nil || *got.MaxReworkAttempts != 7 || got.SessionTimeout == nil || *got.SessionTimeout != 30*time.Minute || got.NotifyCommand != "echo done" || got.UpdateMode != selfupdate.ModeAuto || !got.SkipPermissions {
+	if got.CommitPolicy != CommitPolicySlice || got.ExecutionMode != ExecutionModeCurrent || got.Agent != AgentCodex || got.PullRequest == nil || !*got.PullRequest || got.ReviewEnabled == nil || *got.ReviewEnabled || got.AutoRework == nil || *got.AutoRework || got.MaxReworkAttempts == nil || *got.MaxReworkAttempts != 7 || got.SessionTimeout == nil || *got.SessionTimeout != 30*time.Minute || got.UpdateMode != selfupdate.ModeAuto || !got.SkipPermissions {
 		t.Fatalf("unexpected env defaults: %#v", got)
 	}
 }
@@ -95,7 +94,7 @@ func TestRuntimeEnvDefaultsIgnoresEmptyEnvOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.CommitPolicy != CommitPolicySlice || got.ExecutionMode != ExecutionModeIsolated || got.Agent != AgentPi || got.PullRequest != nil || got.ReviewEnabled != nil || got.SessionTimeout == nil || *got.SessionTimeout != DefaultSessionTimeout || got.NotifyCommand != "" || got.UpdateMode != selfupdate.ModeWarn || got.SkipPermissions {
+	if got.CommitPolicy != CommitPolicySlice || got.ExecutionMode != ExecutionModeIsolated || got.Agent != AgentPi || got.PullRequest != nil || got.ReviewEnabled != nil || got.SessionTimeout == nil || *got.SessionTimeout != DefaultSessionTimeout || got.UpdateMode != selfupdate.ModeWarn || got.SkipPermissions {
 		t.Fatalf("expected built-in defaults with unset optional values, got %#v", got)
 	}
 }
@@ -125,7 +124,6 @@ func TestRuntimeEnvStatusReportsDefaultsAndOverrides(t *testing.T) {
 	t.Setenv(EnvPullRequest, "1")
 	t.Setenv(EnvReview, "off")
 	t.Setenv(EnvSessionTimeout, "45m")
-	t.Setenv(EnvNotifyCommand, "notify-send tao")
 
 	rows, err := RuntimeEnvStatus()
 	if err != nil {
@@ -146,9 +144,6 @@ func TestRuntimeEnvStatusReportsDefaultsAndOverrides(t *testing.T) {
 	}
 	if byName[EnvReview].Value != "false" || byName[EnvReview].Source != "env" {
 		t.Fatalf("unexpected review row: %#v", byName[EnvReview])
-	}
-	if byName[EnvNotifyCommand].Value != "notify-send tao" || byName[EnvNotifyCommand].Source != "env" {
-		t.Fatalf("unexpected notify command row: %#v", byName[EnvNotifyCommand])
 	}
 	if byName[EnvAgent].Value != AgentPi.String() || byName[EnvAgent].Source != "default" {
 		t.Fatalf("unexpected agent row: %#v", byName[EnvAgent])
@@ -173,7 +168,6 @@ func TestRuntimeEnvStatusDefaultRowsDeriveFromRunOptionsPatch(t *testing.T) {
 		{Name: EnvSessionTimeout, Value: defaults.SessionTimeoutValue().String(), Source: "default"},
 		{Name: EnvUpdate, Value: "warn", Source: "default"},
 		{Name: EnvPullRequest, Value: "false", Source: "default"},
-		{Name: EnvNotifyCommand, Value: "", Source: "default"},
 		{Name: EnvReview, Value: "true", Source: "default"},
 		{Name: EnvAutoRework, Value: "true", Source: "default"},
 		{Name: EnvMaxReworkAttempts, Value: "5", Source: "default"},
