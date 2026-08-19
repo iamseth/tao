@@ -97,12 +97,11 @@ type commandMetadata struct {
 }
 
 // repositoryKind selects how the dispatcher resolves a command's plan
-// repository. The zero value, repositoryNone, suits commands that never open a
-// plan repository.
+// repository. The zero value suits commands that never open a plan repository.
 type repositoryKind int
 
 const (
-	repositoryNone repositoryKind = iota
+	_ repositoryKind = iota
 	repositoryDefault
 )
 

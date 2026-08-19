@@ -3075,13 +3075,13 @@ func (s *recordingArtifactMutationStore) writeState(planDir string, state State)
 	return s.writeStateErr
 }
 
-func (s *recordingArtifactMutationStore) writeSlices(planDir string, slices SlicesFile) error {
+func (s *recordingArtifactMutationStore) writeSlices(_ string, slices SlicesFile) error {
 	s.calls = append(s.calls, "slices")
 	s.slices = slices
 	return s.writeSlicesErr
 }
 
-func (s *recordingArtifactMutationStore) appendEvent(planDir string, event Event) error {
+func (s *recordingArtifactMutationStore) appendEvent(_ string, event Event) error {
 	s.calls = append(s.calls, "event")
 	if s.appendEventErr != nil {
 		return s.appendEventErr

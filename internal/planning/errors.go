@@ -10,12 +10,6 @@ import (
 // classification only; the message text returned to callers is preserved
 // verbatim.
 var (
-	// ErrActionInProgress indicates another planning action is already running
-	// for the session.
-	ErrActionInProgress = errors.New("planning action already running")
-	// ErrSessionAlreadySliced indicates the session has already been sliced and
-	// the requested mutation conflicts.
-	ErrSessionAlreadySliced = errors.New("planning session already sliced")
 	// ErrSessionNotFound indicates the requested planning session does not exist.
 	ErrSessionNotFound = errors.New("planning session not found")
 	// ErrInvalidSession indicates a malformed or ambiguous session reference.

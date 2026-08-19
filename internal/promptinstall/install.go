@@ -19,14 +19,6 @@ func Dir(agent runtimeconfig.AgentKind) (string, error) {
 	return descriptor.PromptDir()
 }
 
-func TargetDescription(agent runtimeconfig.AgentKind) string {
-	descriptor, ok := agentpkg.Lookup(agent)
-	if !ok {
-		return unsupportedAgentError(agent).Error()
-	}
-	return descriptor.TargetDescription
-}
-
 func descriptorForAgent(agent runtimeconfig.AgentKind) (agentpkg.Descriptor, bool) {
 	for _, descriptor := range agentpkg.All() {
 		if descriptor.Kind == agent {

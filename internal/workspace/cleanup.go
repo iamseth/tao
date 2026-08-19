@@ -8,14 +8,6 @@ import (
 	"github.com/iamseth/tao/internal/gitops"
 )
 
-const (
-	CleanupPolicyManual        = "manual"
-	CleanupPolicyCompletedOnly = "completed-only"
-	CleanupPolicyBranchMerged  = "branch-merged"
-	CleanupPolicyPRMerged      = "pr-merged"
-	CleanupPolicyForce         = "force"
-)
-
 // PlanClean returns a cleanup decision without deleting files.
 func (m *Manager) PlanClean(ctx context.Context, planID string) (CleanPlan, error) {
 	status, err := m.Status(ctx, planID)

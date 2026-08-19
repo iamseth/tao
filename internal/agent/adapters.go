@@ -2,10 +2,7 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"io"
-
-	"github.com/iamseth/tao/internal/runtimeconfig"
 
 	claudeagent "github.com/iamseth/tao/internal/agent/claude"
 	codexagent "github.com/iamseth/tao/internal/agent/codex"
@@ -19,31 +16,6 @@ import (
 // CollectMetrics onto Pi's best-effort session-info mode, passes the
 // no-progress tool limit and declared verification commands through, and
 // ignores PermissionMode (Pi has no permission policy).
-// SessionAdapter is a narrow provider-neutral entry point for non-run
-// operations such as merge-batch repair. It uses the same registry adapters and
-// timeout wrapper as ordinary run sessions without importing run orchestration.
-type SessionAdapter struct {
-	runtime    Runtime
-	descriptor Descriptor
-}
-
-// NewSessionAdapter resolves a configured provider and transport dependency.
-func NewSessionAdapter(kind runtimeconfig.AgentKind, deps RuntimeDeps) (SessionAdapter, error) {
-	descriptor, ok := Lookup(kind)
-	if !ok {
-		return SessionAdapter{}, fmt.Errorf("unsupported agent %q", kind)
-	}
-	return SessionAdapter{runtime: WithSessionTimeout(descriptor.NewRuntime(deps)), descriptor: descriptor}, nil
-}
-
-// Run executes one neutral session. Provider-specific metrics warnings remain
-// best-effort data on the returned result.
-func (a SessionAdapter) Run(ctx context.Context, session Session) (SessionResult, error) {
-	return a.runtime.RunSession(ctx, session)
-}
-
-func (a SessionAdapter) Descriptor() Descriptor { return a.descriptor }
-
 func providerLog(session Session) io.Writer {
 	if session.Progress == nil {
 		return session.Log

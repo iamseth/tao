@@ -43,16 +43,6 @@ func DetectCommand(root string) string {
 }
 
 // GoModuleForPath returns the repository-relative Go module containing file.
-// It reports no module when no go.mod exists in the file's directory ancestry.
-func GoModuleForPath(root, file string) (string, bool) {
-	detector, ok := OpenRoot(root)
-	if !ok {
-		return "", false
-	}
-	return detector.GoModuleForPath(file)
-}
-
-// GoModuleForPath returns the repository-relative Go module containing file.
 func (d Detector) GoModuleForPath(file string) (string, bool) {
 	file = path.Clean(strings.TrimSpace(strings.ReplaceAll(file, "\\", "/")))
 	if !fs.ValidPath(file) || file == "." {

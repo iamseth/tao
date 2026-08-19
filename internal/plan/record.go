@@ -48,14 +48,6 @@ func (a artStoreAdapter) writeState(d string, s State) error {
 	}
 	return a.store.WriteState(d, payload)
 }
-func (a artStoreAdapter) writeSlices(d string, sf SlicesFile) error {
-	payload, err := marshalPreparedArtifact(sf)
-	if err != nil {
-		return err
-	}
-	return a.store.WriteSlices(d, payload)
-}
-func (a artStoreAdapter) appendEvent(d string, e Event) error { return a.store.AppendEvent(d, e) }
 func (a artStoreAdapter) withMutationLock(_ string, operation func() error) error {
 	return operation()
 }

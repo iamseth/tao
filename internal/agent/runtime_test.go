@@ -4,14 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"strings"
 	"sync"
 	"testing"
 
 	piagent "github.com/iamseth/tao/internal/agent/pi"
-	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
 // runtimes are exercised against a single fake process that satisfies the
@@ -182,23 +180,6 @@ func TestPiRuntimeNormalizesMetricsAndPassesNoProgressConfiguration(t *testing.T
 	}
 	if result.Metrics == nil || *result.Metrics != want {
 		t.Fatalf("metrics = %#v, want %#v", result.Metrics, want)
-	}
-}
-
-func TestBatchAgentSessionAdapterSelectsAllProviders(t *testing.T) {
-	starter := func(context.Context, string, string, []string) (Process, error) {
-		return nil, errors.New("unused injected starter")
-	}
-	for _, kind := range runtimeconfig.AgentKinds {
-		t.Run(string(kind), func(t *testing.T) {
-			adapter, err := NewSessionAdapter(kind, RuntimeDeps{ProcessStarter: starter})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if adapter.Descriptor().Kind != kind || adapter.runtime == nil {
-				t.Fatalf("adapter selected %#v for %q", adapter.Descriptor(), kind)
-			}
-		})
 	}
 }
 

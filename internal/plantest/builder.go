@@ -16,7 +16,6 @@ var defaultTimestamp = time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC)
 type PlanDetailBuilder struct {
 	state  plan.State
 	slices []plan.Slice
-	dir    string
 }
 
 // NewPlanDetail returns a builder for a plan with the given ID.
@@ -40,13 +39,6 @@ func NewPlanDetail(id string) *PlanDetailBuilder {
 	}
 }
 
-// WithDir sets the artifact directory for the detail.
-// When empty the Repository assigns a synthetic path.
-func (b *PlanDetailBuilder) WithDir(dir string) *PlanDetailBuilder {
-	b.dir = dir
-	return b
-}
-
 // WithTitle sets the plan title.
 func (b *PlanDetailBuilder) WithTitle(title string) *PlanDetailBuilder {
 	b.state.Plan.Title = title
@@ -62,12 +54,6 @@ func (b *PlanDetailBuilder) WithStatus(status string) *PlanDetailBuilder {
 // WithRepoRoot sets the repository root in the plan state.
 func (b *PlanDetailBuilder) WithRepoRoot(root string) *PlanDetailBuilder {
 	b.state.Repo.Root = root
-	return b
-}
-
-// WithRepoBranch sets the repository branch in the plan state.
-func (b *PlanDetailBuilder) WithRepoBranch(branch string) *PlanDetailBuilder {
-	b.state.Repo.Branch = branch
 	return b
 }
 
@@ -95,18 +81,6 @@ func (b *PlanDetailBuilder) WithCompletedSlices(ids ...string) *PlanDetailBuilde
 	return b
 }
 
-// WithReview records a persisted review on the plan state.
-func (b *PlanDetailBuilder) WithReview(r plan.PlanReview) *PlanDetailBuilder {
-	b.state.Plan.Review = &r
-	return b
-}
-
-// WithWorkspace attaches workspace metadata to the plan state.
-func (b *PlanDetailBuilder) WithWorkspace(ws *plan.Workspace) *PlanDetailBuilder {
-	b.state.Workspace = ws
-	return b
-}
-
 // AddSlice appends a slice to the plan's slice list.
 func (b *PlanDetailBuilder) AddSlice(s plan.Slice) *PlanDetailBuilder {
 	b.slices = append(b.slices, s)
@@ -118,7 +92,6 @@ func (b *PlanDetailBuilder) Build() *plan.PlanDetail {
 	slices := make([]plan.Slice, len(b.slices))
 	copy(slices, b.slices)
 	return &plan.PlanDetail{
-		Dir:   b.dir,
 		State: b.state,
 		Slices: plan.SlicesFile{
 			Schema:    "tao.plan.slices.v1",
@@ -181,12 +154,6 @@ func (b *SliceBuilder) WithApproval(a *plan.Approval) *SliceBuilder {
 // WithCompletedAt records a completion timestamp on the slice timing.
 func (b *SliceBuilder) WithCompletedAt(t time.Time) *SliceBuilder {
 	b.s.Timing.CompletedAt = &t
-	return b
-}
-
-// WithExpectedFiles sets the declared expected-files list.
-func (b *SliceBuilder) WithExpectedFiles(files ...string) *SliceBuilder {
-	b.s.ExpectedFiles = files
 	return b
 }
 

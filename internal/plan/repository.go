@@ -119,6 +119,8 @@ type FileRepository struct {
 // artifactStore is the internal seam for repository filesystem effects.
 type artifactStore interface {
 	artifactMutationStore
+	writeSlices(planDir string, slices SlicesFile) error
+	appendEvent(planDir string, event Event) error
 	listDirs(ctx context.Context, root string) ([]planDirEntry, error)
 	loadDir(dir string) (*PlanDetail, error)
 	inputDir(path string) (string, bool, error)
@@ -132,8 +134,6 @@ type artifactStore interface {
 
 type artifactMutationStore interface {
 	writeState(planDir string, state State) error
-	writeSlices(planDir string, slices SlicesFile) error
-	appendEvent(planDir string, event Event) error
 	withMutationLock(planDir string, operation func() error) error
 	settleMutationLocked(planDir string, journal mutationJournal) error
 	refreshMutationDetailLocked(planDir string, expectedPlanID string, force bool) (mutationDetailRefresh, error)

@@ -11,8 +11,6 @@ import (
 )
 
 // Verification analysis validates declared commands before run agents execute them.
-type VerificationFindingSeverity = verificationimpl.FindingSeverity
-
 const (
 	VerificationFindingWarning = verificationimpl.FindingWarning
 	VerificationFindingError   = verificationimpl.FindingError

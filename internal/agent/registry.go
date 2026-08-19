@@ -34,8 +34,7 @@ type Descriptor struct {
 	Label string
 	// ToolName is the CLI executable the doctor command probes for.
 	ToolName string
-	// TargetDescription describes the prompt-install target, matching
-	// promptinstall.TargetDescription.
+	// TargetDescription describes the prompt-install target.
 	TargetDescription string
 	// DoctorDescription describes the prompt-install target in doctor output,
 	// matching the CLI doctor prompt description.

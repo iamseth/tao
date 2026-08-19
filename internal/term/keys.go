@@ -24,9 +24,6 @@ const (
 	KeyCtrlC
 )
 
-// KeyEscape is an alias for KeyEsc.
-const KeyEscape = KeyEsc
-
 const escapeSequenceTimeout = 50 * time.Millisecond
 
 // KeyEvent is one decoded keyboard input. Rune is set only when Key is

@@ -11,27 +11,16 @@ type Status string
 
 const (
 	StatusDraft     Status = "draft"
-	StatusActive    Status = "active"
-	StatusSlicing   Status = "slicing"
 	StatusCompleted Status = "completed"
-	StatusFailed    Status = "failed"
 )
 
 type ActionStatus string
 
-const (
-	ActionStatusRunning   ActionStatus = "running"
-	ActionStatusSucceeded ActionStatus = "succeeded"
-	ActionStatusFailed    ActionStatus = "failed"
-)
+const ActionStatusRunning ActionStatus = "running"
 
 type MessageRole string
 
-const (
-	RoleUser      MessageRole = "user"
-	RoleAssistant MessageRole = "assistant"
-	RoleSystem    MessageRole = "system"
-)
+const RoleUser MessageRole = "user"
 
 // Session is a durable, non-executable planning conversation anchored to one repo.
 type Session struct {
