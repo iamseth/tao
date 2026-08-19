@@ -3,7 +3,9 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -213,6 +215,72 @@ func TestShowPrintsAgentBudgetWarnings(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected %q in output:\n%s", want, text)
 		}
+	}
+}
+
+func TestShowJSONUsesExplicitNextActionProjection(t *testing.T) {
+	detail := &plan.PlanDetail{
+		State: plan.State{Status: plan.StatusPlanned, Repo: plan.Repo{Name: "repo", Branch: "main"}, Plan: plan.PlanState{
+			ID: "plan-a", Title: "Plan A", PendingSlices: []string{"001-a"},
+		}},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "001-a", Status: plan.StatusPending}}},
+	}
+	var out bytes.Buffer
+	app := App{Out: &out, Err: &out}
+	if err := app.show(context.Background(), fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}, []string{"plan-a", "--json"}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "\x1b[") {
+		t.Fatalf("structured output contains ANSI control sequences: %q", out.String())
+	}
+	var payload planview.ShowPayload
+	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+		t.Fatalf("show output is not clean JSON: %v\n%s", err, out.String())
+	}
+	if payload.Schema != "tao.show.v1" || payload.ID != "plan-a" {
+		t.Fatalf("unexpected payload identity: %+v", payload)
+	}
+	if !reflect.DeepEqual(payload.NextAction, plan.Derive(detail, time.Time{}).NextAction) {
+		t.Fatalf("JSON recommendation = %+v, want shared projection %+v", payload.NextAction, plan.Derive(detail, time.Time{}).NextAction)
+	}
+	if payload.NextAction.Primary.Command != "tao run plan-a" {
+		t.Fatalf("unexpected next action: %+v", payload.NextAction)
+	}
+}
+
+func TestRenderPlanDetailProminentlyShowsReasonAndSubordinateAlternatives(t *testing.T) {
+	detail := &plan.PlanDetail{
+		State:  plan.State{Status: plan.StatusInReview, Plan: plan.PlanState{ID: "plan-a", Title: "Plan A", CompletedSlices: []string{"001-a"}}},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "001-a", Status: plan.StatusCompleted}}},
+	}
+	loaded := planview.Plan{Detail: detail, Derived: plan.Derive(detail, time.Time{}), Now: time.Now()}
+	var out bytes.Buffer
+	if err := renderPlanDetail(&out, loaded); err != nil {
+		t.Fatal(err)
+	}
+	text := stripANSI(out.String())
+	if strings.Count(text, "Next:") != 1 || !strings.Contains(text, "Next: tao review --run plan-a\nReason: completed slice work needs a current approved review\n") {
+		t.Fatalf("expected one prominent recommendation and reason:\n%s", text)
+	}
+	alternative := "  Alternative (administrative): tao merge --force plan-a"
+	if !strings.Contains(text, alternative) || strings.Index(text, alternative) < strings.Index(text, "Reason:") {
+		t.Fatalf("expected subordinate administrative alternative:\n%s", text)
+	}
+}
+
+func TestRenderPlanDetailShowsTerminalNoActionGuidance(t *testing.T) {
+	detail := &plan.PlanDetail{State: plan.State{Status: plan.StatusCompleted, Plan: plan.PlanState{ID: "done", Title: "Done"}}}
+	loaded := planview.Plan{Detail: detail, Derived: plan.Derive(detail, time.Time{}), Now: time.Now()}
+	var out bytes.Buffer
+	if err := renderPlanDetail(&out, loaded); err != nil {
+		t.Fatal(err)
+	}
+	text := stripANSI(out.String())
+	if !strings.Contains(text, "Next: No action\nReason: legacy completed state is preserved without asserting merge evidence\n") {
+		t.Fatalf("expected terminal no-action guidance:\n%s", text)
+	}
+	if strings.Contains(text, "Alternative (") {
+		t.Fatalf("terminal guidance should not invent alternatives:\n%s", text)
 	}
 }
 

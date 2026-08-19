@@ -148,25 +148,13 @@ func writeSupersededReviewArtifact(out io.Writer, content string) error {
 // detail. Domain commands still enforce their own authoritative lifecycle and
 // exact-revision gates.
 func renderReviewGuidance(out io.Writer, detail *plan.PlanDetail) error {
-	planID := reviewPlanID(detail)
 	if plan.PlanIsMerged(detail.Events) {
 		return writeln(out, "Plan already merged; no further action needed.")
 	}
-	if detail.State.Plan.CurrentSlice != nil || len(detail.State.Plan.PendingSlices) > 0 {
-		return writef(out, "Next: tao run %s\n", planID)
+	if plan.PlanIsPullRequestComplete(detail) {
+		return writeln(out, "Next: use the host's Squash and merge action. Tao does not merge the PR. After the merged change is present on your local default branch, optionally run `tao cleanup --dry-run`, then `tao cleanup`.")
 	}
-	if review := plan.CurrentReview(detail); review != nil && review.Status == plan.ReviewStatusCompleted {
-		switch review.Verdict {
-		case plan.ReviewVerdictApprove:
-			if plan.PlanIsPullRequestComplete(detail) {
-				return writeln(out, "Next: use the host's Squash and merge action. Tao does not merge the PR. After the merged change is present on your local default branch, optionally run `tao cleanup --dry-run`, then `tao cleanup`.")
-			}
-			return writef(out, "Next: tao merge %s\n", planID)
-		case plan.ReviewVerdictChangesRequested:
-			return writef(out, "Next: tao rework %s\n", planID)
-		}
-	}
-	return writef(out, "Next: tao review --run %s\n", planID)
+	return renderPrimaryNextAction(out, plan.DeriveNextAction(detail))
 }
 
 func reviewPlanID(detail *plan.PlanDetail) string {

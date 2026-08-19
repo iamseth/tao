@@ -3,6 +3,7 @@ package view
 import (
 	"bytes"
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -38,6 +39,36 @@ func TestLoadPlanDerivesState(t *testing.T) {
 	}
 	if !loaded.Derived.Runnable || loaded.Derived.NextSliceID != "001-a" {
 		t.Fatalf("unexpected derived state: %+v", loaded.Derived)
+	}
+}
+
+func TestShowPayloadCarriesLoadedRecommendation(t *testing.T) {
+	detail := &plan.PlanDetail{
+		State: plan.State{
+			Status: plan.StatusPlanned,
+			Repo:   plan.Repo{Name: "repo", Branch: "main"},
+			Plan:   plan.PlanState{ID: "plan", Title: "Plan", PendingSlices: []string{"001-a"}},
+		},
+		Slices:   plan.SlicesFile{Slices: []plan.Slice{{ID: "001-a", Status: plan.StatusPending}}},
+		Warnings: []string{"warning"},
+	}
+	loaded, err := LoadPlan(context.Background(), fakeRepository{detail: detail}, "plan", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := loaded.ShowPayload()
+	if payload.Schema != "tao.show.v1" || payload.ID != "plan" || payload.Status != plan.StatusPlanned {
+		t.Fatalf("unexpected show payload: %+v", payload)
+	}
+	if !reflect.DeepEqual(payload.NextAction, loaded.Derived.NextAction) {
+		t.Fatalf("payload recommendation = %+v, loaded recommendation = %+v", payload.NextAction, loaded.Derived.NextAction)
+	}
+	if payload.Progress.Pending != 1 || payload.Progress.NextSliceID != "001-a" {
+		t.Fatalf("unexpected progress projection: %+v", payload.Progress)
+	}
+	payload.Warnings[0] = "changed"
+	if detail.Warnings[0] != "warning" {
+		t.Fatal("show payload aliases raw plan warnings")
 	}
 }
 

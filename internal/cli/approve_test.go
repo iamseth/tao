@@ -40,7 +40,11 @@ func TestApproveCommandApprovesCurrentGatedSlice(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"approve", "--by", "Seth", planID, "--slice", sliceID}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Slice approved: " + sliceID, "Next: tao run --continue " + planID} {
+	for _, want := range []string{
+		"Slice approved: " + sliceID,
+		"Next: tao run --continue " + planID,
+		"Reason: the recorded blocker must be resolved before explicitly continuing",
+	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("expected approve output %q, got %q", want, out.String())
 		}

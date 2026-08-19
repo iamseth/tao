@@ -62,6 +62,13 @@ Direct note execution is not a bypass. Generated slices still honor dependencies
 
 ## Monitoring plans
 
+Use `tao show <plan>` when returning to one plan. Its single `Next:` line is the
+safest read-only recommendation Tao can derive from durable lifecycle evidence;
+the reason explains why it takes precedence. Any indented alternatives are
+subordinate options, and administrative alternatives may bypass safeguards, so
+they are not equivalent recommendations. A terminal `No action` distinguishes a
+finished or otherwise non-actionable plan from one that should progress.
+
 Use `tao monitor` while runs are active or queued across more than one registered
 repository. Its urgency-ordered view keeps live and stale runs ahead of blocked
 and quieter plans, while showing lifecycle status, active phase, coarse run

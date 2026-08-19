@@ -78,7 +78,7 @@ func (a App) approve(ctx context.Context, repo approvalRepository, args []string
 	} else if err := writef(a.Out, "Slice approved: %s\n", targetID); err != nil {
 		return err
 	}
-	return writef(a.Out, "Next: %s %s\n", approveNextCommand(detail, targetID), detail.State.Plan.ID)
+	return renderPrimaryNextAction(a.Out, plan.DeriveNextAction(record.Detail()))
 }
 
 func approvalTargetSlice(detail *plan.PlanDetail, explicit string) (string, error) {
@@ -95,16 +95,6 @@ func approvalTargetSlice(detail *plan.PlanDetail, explicit string) (string, erro
 		return detail.State.Plan.PendingSlices[0], nil
 	}
 	return "", fmt.Errorf("plan %s has no pending slices", detail.State.Plan.ID)
-}
-
-func approveNextCommand(detail *plan.PlanDetail, sliceID string) string {
-	if detail.State.Status == plan.StatusBlocked {
-		return "tao run --continue"
-	}
-	if slice := findSlice(detail, sliceID); slice != nil && slice.Status == plan.StatusBlocked {
-		return "tao run --continue"
-	}
-	return "tao run"
 }
 
 func findSlice(detail *plan.PlanDetail, sliceID string) *plan.Slice {

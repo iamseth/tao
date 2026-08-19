@@ -185,5 +185,5 @@ func (a App) writeEditResult(detail *plan.PlanDetail, summary string) error {
 	if len(detail.State.Plan.PendingSlices) == 0 {
 		return writef(a.Out, "Next: tao validate %s\n", detail.State.Plan.ID)
 	}
-	return writef(a.Out, "Next: tao run %s\n", detail.State.Plan.ID)
+	return renderPrimaryNextAction(a.Out, plan.DeriveNextAction(detail))
 }

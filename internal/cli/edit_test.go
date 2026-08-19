@@ -53,8 +53,14 @@ func TestEditRemoveSkipsAndMovesPendingSlices(t *testing.T) {
 	if sliceByID(updated, "004-d") != nil {
 		t.Fatalf("expected 004-d removed from slices list, found: %v", updated.Slices.Slices)
 	}
-	if !strings.Contains(out.String(), "Removed pending slice: 004-d") || !strings.Contains(out.String(), "Next: tao run "+planID) {
-		t.Fatalf("unexpected remove output %q", out.String())
+	for _, want := range []string{
+		"Removed pending slice: 004-d",
+		"Next: tao run " + planID,
+		"Reason: the next pending slice is runnable",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("remove output %q does not contain %q", out.String(), want)
+		}
 	}
 
 	// Skip 003-c (reuse same app/repo; state already modified).

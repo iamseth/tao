@@ -21,6 +21,55 @@ type Plan struct {
 	Now     time.Time
 }
 
+// ShowPayload is the stable, explicit projection used by structured plan
+// inspection. It deliberately excludes raw plan artifacts.
+type ShowPayload struct {
+	Schema     string              `json:"schema"`
+	ID         string              `json:"id"`
+	Title      string              `json:"title"`
+	Status     string              `json:"status"`
+	Repository ShowRepository      `json:"repository"`
+	Progress   ShowProgress        `json:"progress"`
+	NextAction plan.PlanNextAction `json:"next_action"`
+	Warnings   []string            `json:"warnings"`
+}
+
+type ShowRepository struct {
+	Name   string `json:"name"`
+	Branch string `json:"branch"`
+}
+
+type ShowProgress struct {
+	Completed      int    `json:"completed"`
+	Pending        int    `json:"pending"`
+	Total          int    `json:"total"`
+	CurrentSliceID string `json:"current_slice_id,omitempty"`
+	NextSliceID    string `json:"next_slice_id,omitempty"`
+}
+
+func (loaded Plan) ShowPayload() ShowPayload {
+	detail := loaded.Detail
+	return ShowPayload{
+		Schema: "tao.show.v1",
+		ID:     detail.State.Plan.ID,
+		Title:  detail.State.Plan.Title,
+		Status: plan.PlanLifecycleStatus(detail),
+		Repository: ShowRepository{
+			Name:   detail.State.Repo.Name,
+			Branch: detail.State.Repo.Branch,
+		},
+		Progress: ShowProgress{
+			Completed:      loaded.Derived.CompletedCount,
+			Pending:        loaded.Derived.PendingCount,
+			Total:          loaded.Derived.TotalCount,
+			CurrentSliceID: loaded.Derived.CurrentSliceID,
+			NextSliceID:    loaded.Derived.NextSliceID,
+		},
+		NextAction: loaded.Derived.NextAction,
+		Warnings:   append([]string{}, detail.Warnings...),
+	}
+}
+
 func LoadPlan(ctx context.Context, repo Repository, id string, options Options) (Plan, error) {
 	detail, err := repo.GetPlan(ctx, id)
 	if err != nil {

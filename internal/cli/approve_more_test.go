@@ -7,7 +7,7 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 )
 
-func TestApprovalHelpersSelectTargetsAndNextCommand(t *testing.T) {
+func TestApprovalTargetSlice(t *testing.T) {
 	if _, err := approvalTargetSlice(nil, ""); err == nil || !strings.Contains(err.Error(), "nil") {
 		t.Fatalf("expected nil detail error, got %v", err)
 	}
@@ -27,18 +27,5 @@ func TestApprovalHelpersSelectTargetsAndNextCommand(t *testing.T) {
 	detail.State.Plan.PendingSlices = nil
 	if _, err := approvalTargetSlice(detail, ""); err == nil || !strings.Contains(err.Error(), "no pending") {
 		t.Fatalf("expected no pending error, got %v", err)
-	}
-	detail.State.Plan.PendingSlices = []string{"001-a"}
-	if got := approveNextCommand(detail, "001-a"); got != "tao run" {
-		t.Fatalf("unexpected next command %q", got)
-	}
-	detail.Slices.Slices[0].Status = plan.StatusBlocked
-	if got := approveNextCommand(detail, "001-a"); got != "tao run --continue" {
-		t.Fatalf("unexpected blocked slice next command %q", got)
-	}
-	detail.Slices.Slices[0].Status = plan.StatusPending
-	detail.State.Status = plan.StatusBlocked
-	if got := approveNextCommand(detail, "001-a"); got != "tao run --continue" {
-		t.Fatalf("unexpected blocked plan next command %q", got)
 	}
 }

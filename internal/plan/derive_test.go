@@ -2,6 +2,7 @@ package plan
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -543,6 +544,154 @@ func TestSummarizeExposesAttentionSignals(t *testing.T) {
 		t.Fatalf("summary attention signals = completion:%t rework:%t", summary.SliceCompletionPending, summary.UnresolvedReworkStop)
 	}
 }
+
+func TestDeriveNextActionLifecyclePrecedence(t *testing.T) {
+	pending := func() *PlanDetail {
+		return &PlanDetail{
+			State:  State{Status: StatusPlanned, Plan: PlanState{ID: "plan-a", PendingSlices: []string{"001-a"}}},
+			Slices: SlicesFile{Slices: []Slice{{ID: "001-a", Status: StatusPending}}},
+		}
+	}
+	complete := reviewedCapabilityDetail
+	approve := func() *PlanReview {
+		return &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Head: "head123"}
+	}
+	changes := func() *PlanReview {
+		return &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictChangesRequested, Head: "head123"}
+	}
+
+	tests := []struct {
+		name       string
+		makeDetail func() *PlanDetail
+		wantKind   PlanActionKind
+		wantClass  PlanActionClass
+		wantReason string
+	}{
+		{
+			name: "unsettled post-intent outranks approval and merge evidence",
+			makeDetail: func() *PlanDetail {
+				d := pending()
+				d.Slices.Slices[0].Approval = &Approval{Required: true, Reason: "sign off"}
+				d.Slices.Slices[0].CommitIntent = &SliceCommitIntent{Policy: "slice"}
+				d.Events = []Event{{Type: EventTypePlanMerged}}
+				return d
+			},
+			wantKind: PlanActionRecoverSliceCompletion, wantClass: PlanActionClassRecovery, wantReason: "not settled",
+		},
+		{
+			name: "rework stop outranks approval",
+			makeDetail: func() *PlanDetail {
+				d := pending()
+				d.Slices.Slices[0].Approval = &Approval{Required: true}
+				d.Events = []Event{{Type: EventTypeReworkStopped}}
+				return d
+			},
+			wantKind: PlanActionRestartRework, wantClass: PlanActionClassRecovery, wantReason: "explicit bounded restart",
+		},
+		{
+			name: "approval outranks interrupted active run",
+			makeDetail: func() *PlanDetail {
+				d := pending()
+				d.State.Status = StatusInProgress
+				d.State.Plan.CurrentSlice = ptrString("001-a")
+				d.Slices.Slices[0].Status = StatusInProgress
+				d.Slices.Slices[0].Approval = &Approval{Required: true, Reason: "sign off"}
+				return d
+			},
+			wantKind: PlanActionApprove, wantClass: PlanActionClassProgress, wantReason: "sign off",
+		},
+		{
+			name: "blocked recovery",
+			makeDetail: func() *PlanDetail {
+				d := pending()
+				d.State.Status = StatusBlocked
+				d.State.Plan.CurrentSlice = ptrString("001-a")
+				d.Slices.Slices[0].Status = StatusBlocked
+				return d
+			},
+			wantKind: PlanActionContinue, wantClass: PlanActionClassRecovery, wantReason: "blocker",
+		},
+		{
+			name: "interrupted pre-intent",
+			makeDetail: func() *PlanDetail {
+				d := pending()
+				d.State.Status = StatusInProgress
+				d.State.Plan.CurrentSlice = ptrString("001-a")
+				d.Slices.Slices[0].Status = StatusInProgress
+				return d
+			},
+			wantKind: PlanActionRun, wantClass: PlanActionClassRecovery, wantReason: "interrupted",
+		},
+		{name: "runnable", makeDetail: pending, wantKind: PlanActionRun, wantClass: PlanActionClassProgress, wantReason: "runnable"},
+		{
+			name:       "awaiting review",
+			makeDetail: complete,
+			wantKind:   PlanActionReview, wantClass: PlanActionClassProgress, wantReason: "approved review",
+		},
+		{
+			name:       "changes requested",
+			makeDetail: func() *PlanDetail { d := complete(); d.State.Plan.Review = changes(); return d },
+			wantKind:   PlanActionRework, wantClass: PlanActionClassProgress, wantReason: "actionable changes",
+		},
+		{
+			name:       "reviewed and approved",
+			makeDetail: func() *PlanDetail { d := complete(); d.State.Plan.Review = approve(); return d },
+			wantKind:   PlanActionMerge, wantClass: PlanActionClassProgress, wantReason: "approves",
+		},
+		{
+			name: "pull request completed without merge assertion",
+			makeDetail: func() *PlanDetail {
+				d := complete()
+				d.State.Plan.Review = approve()
+				d.State.Plan.PullRequest = &PullRequest{HeadSHA: "head123"}
+				return d
+			},
+			wantKind: PlanActionNone, wantClass: PlanActionClassTerminal, wantReason: "remote integration is not asserted",
+		},
+		{
+			name:       "recorded merge",
+			makeDetail: func() *PlanDetail { d := complete(); d.Events = []Event{{Type: EventTypePlanMerged}}; return d },
+			wantKind:   PlanActionNone, wantClass: PlanActionClassTerminal, wantReason: "proves the plan is integrated",
+		},
+		{
+			name:       "legacy completed",
+			makeDetail: func() *PlanDetail { d := complete(); d.State.Status = StatusCompleted; return d },
+			wantKind:   PlanActionNone, wantClass: PlanActionClassTerminal, wantReason: "without asserting merge evidence",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			action := Derive(tt.makeDetail(), time.Time{}).NextAction
+			if action.Primary.Kind != tt.wantKind || action.Primary.Class != tt.wantClass || !strings.Contains(action.Primary.Reason, tt.wantReason) {
+				t.Fatalf("primary action = %+v, want kind=%q class=%q reason containing %q", action.Primary, tt.wantKind, tt.wantClass, tt.wantReason)
+			}
+			if action.Primary.Reason == "" {
+				t.Fatal("primary recommendation must always carry one concise reason")
+			}
+		})
+	}
+}
+
+func TestDeriveNextActionClassifiesForcedAlternativesAsAdministrative(t *testing.T) {
+	for _, review := range []*PlanReview{
+		{Status: ReviewStatusCompleted, Verdict: ReviewVerdictChangesRequested},
+		{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove},
+	} {
+		detail := reviewedCapabilityDetail()
+		detail.State.Plan.Review = review
+		next := DeriveNextAction(detail)
+		if len(next.Alternatives) != 1 {
+			t.Fatalf("alternatives = %+v, want one forced administrative exception", next.Alternatives)
+		}
+		alternative := next.Alternatives[0]
+		if alternative.Class != PlanActionClassAdministrative || alternative.Kind != PlanActionMerge || alternative.Command != "tao merge --force plan" {
+			t.Fatalf("forced alternative was not visibly administrative: %+v", alternative)
+		}
+	}
+}
+
+func ptrString(value string) *string { return &value }
 
 func reviewedCapabilityDetail() *PlanDetail {
 	completedAt := time.Date(2026, 6, 28, 6, 40, 0, 0, time.UTC)

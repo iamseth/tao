@@ -62,13 +62,10 @@ func TestCommandHelpRendersOptionsExamplesAndFlaglessCommands(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"show", "--help"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Show detailed status for a Tao plan", "Examples:", "  tao show my-plan", "Usage:\n  tao show (s) <plan-id-or-slug>"} {
+	for _, want := range []string{"Show detailed status for a Tao plan", "Examples:", "  tao show my-plan", "Options:", "--json", "Usage:\n  tao show (s) [--json] <plan-id-or-slug>"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("expected show help to contain %q, got %q", want, out.String())
 		}
-	}
-	if strings.Contains(out.String(), "Options:") {
-		t.Fatalf("expected flagless show help to omit Options block, got %q", out.String())
 	}
 }
 

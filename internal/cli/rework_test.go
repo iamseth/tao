@@ -57,7 +57,12 @@ func TestReworkCommandReopensChangesRequestedPlanWithGeneratedSlices(t *testing.
 	if events := readText(t, filepath.Join(planDir, "events.jsonl")); !strings.Contains(events, `"type":"plan_reopened"`) {
 		t.Fatalf("expected plan_reopened event, got %q", events)
 	}
-	for _, want := range []string{"Rework slices created for " + planID, "- r101-internal-cli-rework-go", "Next: tao run " + planID} {
+	for _, want := range []string{
+		"Rework slices created for " + planID,
+		"- r101-internal-cli-rework-go",
+		"Next: tao run " + planID,
+		"Reason: the active slice was interrupted before a durable commit intent",
+	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("expected output to contain %q, got %q", want, out.String())
 		}

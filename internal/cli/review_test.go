@@ -88,7 +88,7 @@ func TestStalenessWarnsWhenBaseCommitMissing(t *testing.T) {
 
 func TestReviewPrintsPersistedReviewArtifact(t *testing.T) {
 	detail := &plan.PlanDetail{
-		State:  plan.State{Plan: plan.PlanState{ID: "plan-a", Review: &plan.PlanReview{Verdict: "approve", Summary: "ready"}}},
+		State:  plan.State{Status: plan.StatusInReview, Plan: plan.PlanState{ID: "plan-a", Review: &plan.PlanReview{Verdict: "approve", Summary: "ready"}}},
 		Review: plan.PlanReviewArtifact{Content: "# Review\nLooks good."},
 	}
 	repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
@@ -101,8 +101,8 @@ func TestReviewPrintsPersistedReviewArtifact(t *testing.T) {
 	if len(reporter.calls) != 0 {
 		t.Fatalf("persisted review display unexpectedly reported activity: %#v", reporter.calls)
 	}
-	if got := out.String(); got != "# Review\nLooks good.\nNext: tao review --run plan-a\n" {
-		t.Fatalf("expected persisted review artifact with current guidance, got %q", got)
+	if got := out.String(); got != "# Review\nLooks good.\nNext: tao review --run plan-a\nReason: completed slice work needs a current approved review\n" {
+		t.Fatalf("expected persisted review artifact with projected recommendation and reason, got %q", got)
 	}
 }
 
@@ -169,7 +169,7 @@ func TestReviewSuppressesStaleNextStepHints(t *testing.T) {
 
 	t.Run("superseded artifact is labeled historical", func(t *testing.T) {
 		text := renderFor(t, &plan.PlanDetail{
-			State:  plan.State{Plan: plan.PlanState{ID: "plan-a", Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested}}},
+			State:  plan.State{Status: plan.StatusInReview, Plan: plan.PlanState{ID: "plan-a", Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested}}},
 			Review: plan.PlanReviewArtifact{Content: "# Review\nChanges requested."},
 			Events: []plan.Event{
 				{Type: plan.EventTypePlanReviewed},
@@ -199,8 +199,8 @@ func TestReviewSuppressesStaleNextStepHints(t *testing.T) {
 				{Type: plan.EventTypePlanReopened},
 			},
 		})
-		if !strings.Contains(text, "Next: tao run plan-a") || strings.Contains(text, "Next: tao review --run") || strings.Contains(text, "Next: tao rework") {
-			t.Fatalf("reopened executable work should advertise only tao run, got %q", text)
+		if !strings.Contains(text, "Next: tao run plan-a\nReason: the active slice was interrupted before a durable commit intent\n") || strings.Contains(text, "Next: tao review --run") || strings.Contains(text, "Next: tao rework") {
+			t.Fatalf("reopened executable work should recommend and explain only tao run, got %q", text)
 		}
 	})
 
@@ -208,8 +208,13 @@ func TestReviewSuppressesStaleNextStepHints(t *testing.T) {
 		text := renderFor(t, &plan.PlanDetail{
 			State: plan.State{Plan: plan.PlanState{ID: "plan-a", Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove}}},
 		})
-		if !strings.Contains(text, "Next: tao merge plan-a") {
-			t.Fatalf("current approved review should advertise tao merge, got %q", text)
+		if !strings.Contains(text, "Next: tao merge plan-a\nReason: the current review approves the completed plan\n") {
+			t.Fatalf("current approved review should recommend and explain tao merge, got %q", text)
+		}
+		for _, unsafe := range []string{"tao merge --force", "--no-squash", "--pull-request", "tao rework"} {
+			if strings.Contains(text, unsafe) {
+				t.Fatalf("ordinary approval guidance must not present %q alongside the safe default, got %q", unsafe, text)
+			}
 		}
 	})
 
@@ -233,7 +238,7 @@ func TestReviewSuppressesStaleNextStepHints(t *testing.T) {
 }
 
 func TestReviewPrintsClearMessageWhenNoReviewExists(t *testing.T) {
-	detail := &plan.PlanDetail{State: plan.State{Plan: plan.PlanState{ID: "plan-a"}}}
+	detail := &plan.PlanDetail{State: plan.State{Status: plan.StatusInReview, Plan: plan.PlanState{ID: "plan-a"}}}
 	repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
 	var out bytes.Buffer
 

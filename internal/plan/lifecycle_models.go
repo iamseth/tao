@@ -436,6 +436,53 @@ type RunCapabilities struct {
 	Active                 bool   `json:"active"`
 }
 
+// PlanActionKind identifies one read-only lifecycle recommendation. Commands
+// remain subject to their normal dynamic gates; this projection grants no
+// authority to mutate plan or repository state.
+type PlanActionKind string
+
+const (
+	PlanActionRecoverSliceCompletion PlanActionKind = "recover_slice_completion"
+	PlanActionRecoverRebase          PlanActionKind = "recover_rebase"
+	PlanActionRecoverPullRequest     PlanActionKind = "recover_pull_request"
+	PlanActionRecoverMerge           PlanActionKind = "recover_merge"
+	PlanActionRestartRework          PlanActionKind = "restart_rework"
+	PlanActionApprove                PlanActionKind = "approve"
+	PlanActionContinue               PlanActionKind = "continue"
+	PlanActionRun                    PlanActionKind = "run"
+	PlanActionReview                 PlanActionKind = "review"
+	PlanActionRework                 PlanActionKind = "rework"
+	PlanActionMerge                  PlanActionKind = "merge"
+	PlanActionNone                   PlanActionKind = "none"
+)
+
+// PlanActionClass separates ordinary progress, recovery, administrative
+// exceptions, and terminal outcomes so callers never present a forced bypass as
+// equivalent to the primary safe path.
+type PlanActionClass string
+
+const (
+	PlanActionClassProgress       PlanActionClass = "progress"
+	PlanActionClassRecovery       PlanActionClass = "recovery"
+	PlanActionClassAdministrative PlanActionClass = "administrative"
+	PlanActionClassTerminal       PlanActionClass = "terminal"
+)
+
+type PlanAction struct {
+	Kind    PlanActionKind  `json:"kind"`
+	Class   PlanActionClass `json:"class"`
+	Command string          `json:"command,omitempty"`
+	Reason  string          `json:"reason"`
+}
+
+// PlanNextAction contains exactly one primary recommendation and any valid but
+// subordinate alternatives. Alternatives are advisory and independently gated
+// by the command that implements them.
+type PlanNextAction struct {
+	Primary      PlanAction   `json:"primary"`
+	Alternatives []PlanAction `json:"alternatives"`
+}
+
 // Event is one append-only lifecycle entry from events.jsonl.
 type Event struct {
 	Type              string                 `json:"type"`

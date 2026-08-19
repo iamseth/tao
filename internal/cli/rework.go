@@ -357,7 +357,7 @@ func (a App) writeReworkResult(detail *plan.PlanDetail, newSlices []plan.Slice, 
 	if runAfter {
 		return writef(a.Out, "Running: tao run %s\n", id)
 	}
-	return writef(a.Out, "Next: tao run %s\n", id)
+	return renderPrimaryNextAction(a.Out, plan.DeriveNextAction(detail))
 }
 
 func nextReworkRound(detail *plan.PlanDetail) int {

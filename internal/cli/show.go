@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
+	"flag"
 	"io"
 	"strings"
 	"time"
@@ -14,11 +16,12 @@ import (
 var showCommand = commandMetadata{
 	name:                  "show",
 	minPrefix:             "s",
-	usageLines:            []string{"show (s) <plan-id-or-slug>"},
-	completionDescription: "Show plan details",
-	long:                  "Show detailed status for a Tao plan, including repository metadata, timing, slice summaries, warnings, budget warnings, and recent events.",
+	usageLines:            []string{"show (s) [--json] <plan-id-or-slug>"},
+	completionDescription: "Show plan details and the recommended next action",
+	long:                  "Show detailed status for a Tao plan and the single safest recommended next action. Use --json for an explicit structured projection.",
 	examples: "  tao show my-plan\n" +
-		"  tao show 20260628-1618-kubectl-style-help",
+		"  tao show --json 20260628-1618-kubectl-style-help",
+	registerFlags: registerShowFlags,
 	completion: completionContext{
 		positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs},
 	},
@@ -28,13 +31,26 @@ var showCommand = commandMetadata{
 	},
 }
 
+func registerShowFlags(fs *flag.FlagSet) {
+	fs.Bool("json", false, "write JSON")
+}
+
 func (a App) show(ctx context.Context, repo plan.Repository, args []string) error {
-	if err := requirePositionals(args, 1, "usage: tao show <plan-id-or-slug>"); err != nil {
-		return err
-	}
-	loaded, err := planview.LoadPlan(ctx, repo, args[0], planview.Options{})
+	fs, positional, err := a.parseArgs("show", args, registerShowFlags)
 	if err != nil {
 		return err
+	}
+	if err := requirePositionals(positional, 1, "usage: tao show [--json] <plan-id-or-slug>"); err != nil {
+		return err
+	}
+	loaded, err := planview.LoadPlan(ctx, repo, positional[0], planview.Options{})
+	if err != nil {
+		return err
+	}
+	if flagBoolValue(fs, "json") {
+		encoder := json.NewEncoder(a.Out)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(loaded.ShowPayload())
 	}
 	return renderPlanDetailWithThresholds(a.Out, loaded, runtimeconfig.RuntimeAgentBudgetThresholds())
 }
@@ -64,6 +80,9 @@ func renderPlanDetailWithThresholds(out io.Writer, loaded planview.Plan, thresho
 		statusText = colorStatus(statusText, lifecycleStatus)
 	}
 	if err := writef(out, "Status: %s\n", statusText); err != nil {
+		return err
+	}
+	if err := renderNextAction(out, derived.NextAction); err != nil {
 		return err
 	}
 	if err := writef(out, "Repo: %s %s\n", state.Repo.Name, state.Repo.Branch); err != nil {
@@ -160,6 +179,32 @@ func renderPlanDetailWithThresholds(out io.Writer, loaded planview.Plan, thresho
 	}
 
 	return nil
+}
+
+func renderNextAction(out io.Writer, next plan.PlanNextAction) error {
+	if err := renderPrimaryNextAction(out, next); err != nil {
+		return err
+	}
+	for _, alternative := range next.Alternatives {
+		if err := writef(out, "  Alternative (%s): %s — %s\n", alternative.Class, alternative.Command, alternative.Reason); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// renderPrimaryNextAction keeps ordinary command guidance aligned with the
+// shared read-only lifecycle projection without promoting administrative
+// alternatives alongside the safest recommendation.
+func renderPrimaryNextAction(out io.Writer, next plan.PlanNextAction) error {
+	command := next.Primary.Command
+	if command == "" {
+		command = "No action"
+	}
+	if err := writef(out, "Next: %s\n", command); err != nil {
+		return err
+	}
+	return writef(out, "Reason: %s\n", next.Primary.Reason)
 }
 
 func renderShowSlice(out io.Writer, slice plan.Slice, now time.Time, useColor bool) error {

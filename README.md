@@ -205,7 +205,7 @@ tao note run [--repo REPO] [--max-slices N] [--commit-policy slice|none] [--exec
 ```sh
 tao list [--active] [--limit N]
 tao monitor [--once] [--interval DURATION] [--show-invalid]
-tao show <plan-id-or-slug>
+tao show [--json] <plan-id-or-slug>
 tao log [--follow] <plan-id-or-slug>
 tao validate <plan-id-or-slug-or-path>
 tao report --output PATH [--planning-only] [--force] <plan-id-or-slug-or-path>

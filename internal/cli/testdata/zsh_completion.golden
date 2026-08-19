@@ -63,8 +63,8 @@ _tao() {
     'approve:Approve a gated slice'
     'slice-complete:Complete a slice from notes, verification, and a commit proposal'
     'slice-blocked:Block a slice after an exceptional stop'
-    's:Show plan details'
-    'show:Show plan details'
+    's:Show plan details and the recommended next action'
+    'show:Show plan details and the recommended next action'
     'report:Export a share-safe Markdown plan report'
     'rev:Show or refresh the persisted plan review'
     'review:Show or refresh the persisted plan review'
@@ -247,6 +247,7 @@ _tao() {
       _arguments '--corrected-command[mechanically equivalent corrected verification command]:command:' '--invalid-command[verification command that failed before tests loaded]:command:' '--invalid-reason[reason the verification command was invalid]:reason:' '--plan-dir[plan directory]:path:_files' '--reason-file[file containing the blocker reason]:path:_files' '--slice-id[slice id to block]:slice id:'
       ;;
     s|sh|sho|show)
+      _arguments '--json[write JSON]'
       if _tao_at_positional 3 1 0 ',,'; then
         plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
         compadd -a plan_ids

@@ -23,6 +23,7 @@ type DerivedPlan struct {
 	Elapsed                time.Duration
 	SliceCompletionPending bool
 	UnresolvedReworkStop   bool
+	NextAction             PlanNextAction
 }
 
 type Lifecycle struct {
@@ -73,6 +74,7 @@ func Derive(detail *PlanDetail, now time.Time) DerivedPlan {
 		SliceCompletionPending: SliceCompletionPending(detail),
 		UnresolvedReworkStop:   HasUnresolvedReworkStop(detail.Events),
 	}
+	derived.NextAction = deriveNextAction(detail, derived)
 	if !now.IsZero() {
 		derived.Elapsed = elapsed(detail, completedAt, now)
 	}
@@ -81,6 +83,97 @@ func Derive(detail *PlanDetail, now time.Time) DerivedPlan {
 
 func AnalyzeLifecycle(detail *PlanDetail) Lifecycle {
 	return lifecycleState(detail, newDetailIndex(detail))
+}
+
+// DeriveNextAction projects one safest next action from durable lifecycle
+// evidence. It is advisory only: every returned command must still pass its
+// authoritative command-side gates when invoked.
+func DeriveNextAction(detail *PlanDetail) PlanNextAction {
+	derived := Derive(detail, time.Time{})
+	return derived.NextAction
+}
+
+func deriveNextAction(detail *PlanDetail, derived DerivedPlan) PlanNextAction {
+	id := strings.TrimSpace(detail.State.Plan.ID)
+	if id == "" {
+		id = "<plan>"
+	}
+	command := func(name string) string { return name + " " + id }
+	primary := func(kind PlanActionKind, class PlanActionClass, cmd, reason string, alternatives ...PlanAction) PlanNextAction {
+		if alternatives == nil {
+			alternatives = []PlanAction{}
+		}
+		return PlanNextAction{Primary: PlanAction{Kind: kind, Class: class, Command: cmd, Reason: reason}, Alternatives: alternatives}
+	}
+	administrativeMerge := PlanAction{
+		Kind: PlanActionMerge, Class: PlanActionClassAdministrative,
+		Command: command("tao merge --force"), Reason: "administrative exception that bypasses review and merge safeguards",
+	}
+
+	// Durable, unsettled transactions take priority over gates and ordinary
+	// progression. Starting another operation could destroy the exact recovery
+	// boundary that Tao needs to settle first.
+	if derived.SliceCompletionPending {
+		return primary(PlanActionRecoverSliceCompletion, PlanActionClassRecovery, "tao slice-complete", "an automatic slice commit intent is not settled; rerun the original completion invocation")
+	}
+	if detail.State.Workspace != nil && detail.State.Workspace.RebaseIntent != nil {
+		return primary(PlanActionRecoverRebase, PlanActionClassRecovery, command("tao run"), "an interrupted workspace rebase must be settled before other work")
+	}
+	if detail.State.Plan.MergeCommitIntent != nil {
+		return primary(PlanActionRecoverMerge, PlanActionClassRecovery, command("tao merge"), "an interrupted merge transaction must be settled before other work")
+	}
+	if detail.State.Plan.PullRequestIntent != nil {
+		return primary(PlanActionRecoverPullRequest, PlanActionClassRecovery, command("tao run --pull-request"), "an interrupted pull-request handoff must be settled before other work")
+	}
+	if derived.UnresolvedReworkStop {
+		return primary(PlanActionRestartRework, PlanActionClassRecovery, command("tao run --rework-restart"), "automatic rework stopped and requires an explicit bounded restart")
+	}
+
+	if derived.Capabilities.NeedsApproval {
+		sliceID := derived.Capabilities.ApprovalSliceID
+		cmd := "tao approve"
+		if sliceID != "" {
+			cmd += " --slice " + sliceID
+		}
+		cmd += " " + id
+		reason := "the next slice requires approval before execution"
+		if derived.Capabilities.ApprovalReason != "" {
+			reason += ": " + derived.Capabilities.ApprovalReason
+		}
+		return primary(PlanActionApprove, PlanActionClassProgress, cmd, reason)
+	}
+	if derived.Capabilities.CanContinue && !derived.Capabilities.CanRun {
+		return primary(PlanActionContinue, PlanActionClassRecovery, command("tao run --continue"), "the recorded blocker must be resolved before explicitly continuing")
+	}
+	if derived.Active {
+		return primary(PlanActionRun, PlanActionClassRecovery, command("tao run"), "the active slice was interrupted before a durable commit intent")
+	}
+	if derived.Capabilities.CanRun {
+		return primary(PlanActionRun, PlanActionClassProgress, command("tao run"), "the next pending slice is runnable")
+	}
+
+	if PlanIsMerged(detail.Events) {
+		return primary(PlanActionNone, PlanActionClassTerminal, "", "recorded merge evidence proves the plan is integrated")
+	}
+	if PlanIsPullRequestComplete(detail) {
+		return primary(PlanActionNone, PlanActionClassTerminal, "", "the approved pull-request handoff is complete; remote integration is not asserted")
+	}
+	if detail.State.Status == StatusCompleted && !anyPlanMergedEvent(detail.Events) {
+		return primary(PlanActionNone, PlanActionClassTerminal, "", "legacy completed state is preserved without asserting merge evidence")
+	}
+
+	review := CurrentReview(detail)
+	status := PlanLifecycleStatus(detail)
+	switch {
+	case status == StatusChangesRequested || (review != nil && review.Status == ReviewStatusCompleted && review.Verdict == ReviewVerdictChangesRequested):
+		return primary(PlanActionRework, PlanActionClassProgress, command("tao rework"), "the current review has actionable changes", administrativeMerge)
+	case review != nil && review.IsApproved():
+		return primary(PlanActionMerge, PlanActionClassProgress, command("tao merge"), "the current review approves the completed plan", administrativeMerge)
+	case derived.Complete || status == StatusInReview || status == StatusReviewed:
+		return primary(PlanActionReview, PlanActionClassProgress, command("tao review --run"), "completed slice work needs a current approved review", administrativeMerge)
+	default:
+		return primary(PlanActionNone, PlanActionClassTerminal, "", "no safe action can be derived from the current lifecycle evidence")
+	}
 }
 
 func AnalyzeRunCapabilities(detail *PlanDetail) RunCapabilities {
