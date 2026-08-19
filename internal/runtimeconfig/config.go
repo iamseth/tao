@@ -88,16 +88,14 @@ const (
 	ExecutionModeIsolated ExecutionMode = "isolated"
 	ExecutionModeCurrent  ExecutionMode = "current"
 
-	AgentPi       AgentKind = "pi"
-	AgentClaude   AgentKind = "claude"
-	AgentOpenCode AgentKind = "opencode"
-	AgentCodex    AgentKind = "codex"
+	AgentPi     AgentKind = "pi"
+	AgentClaude AgentKind = "claude"
 
 	DefaultSessionTimeout = 20 * time.Minute
 )
 
 // AgentKinds is the canonical ordered roster of supported agent runtimes.
-var AgentKinds = []AgentKind{AgentPi, AgentClaude, AgentOpenCode, AgentCodex}
+var AgentKinds = []AgentKind{AgentPi, AgentClaude}
 
 // SupportedAgentKindsText renders AgentKinds for user-facing "want ..." messages.
 func SupportedAgentKindsText() string {

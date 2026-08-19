@@ -344,7 +344,7 @@ func consumeEvent(data *planData, event plan.Event, line int) {
 		plan.EventTypePlanCommitFallback,
 		plan.EventTypePlanCommitGuard:
 		data.signals = append(data.signals, signalEvent{typeName: event.Type, timestamp: event.Timestamp})
-	case plan.EventTypeAgentMetrics, "opencode_metrics":
+	case plan.EventTypeAgentMetrics:
 		if event.Metrics == nil {
 			return
 		}

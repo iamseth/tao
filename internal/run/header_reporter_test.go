@@ -51,7 +51,7 @@ func TestHeaderReporterPublishesSliceProgressionAndMetricTotals(t *testing.T) {
 		{Type: plan.EventTypeReworkRound, Round: 2},
 		{
 			Type: plan.EventTypeAgentMetrics, PlanID: "plan-a", SliceID: "001-a",
-			Metrics: &plan.AgentMetrics{Agent: "codex", SessionID: "session-1", Status: plan.StatusCompleted, TotalTokens: 77, Cost: 0.25},
+			Metrics: &plan.AgentMetrics{Agent: "claude", SessionID: "session-1", Status: plan.StatusCompleted, TotalTokens: 77, Cost: 0.25},
 		},
 	}
 
@@ -63,14 +63,14 @@ func TestHeaderReporterPublishesSliceProgressionAndMetricTotals(t *testing.T) {
 	}, &out, Options{
 		ExecutionConfig: ExecutionConfig{
 			ResolvedRunOptions: ResolvedRunOptions{
-				CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentCodex,
+				CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentClaude,
 			},
 			MaxReworkAttempts: 7,
 		},
 		RunDependencies: RunDependencies{
 			HeaderReporter: reporter,
 			SliceExecutor: sliceExecutorFunc(func(ctx context.Context, _ SliceRun) error {
-				publishAgentMetrics(ctx, plan.AgentMetrics{Agent: "codex", SessionID: "session-1", TotalTokens: 77, Cost: 0.25})
+				publishAgentMetrics(ctx, plan.AgentMetrics{Agent: "claude", SessionID: "session-1", TotalTokens: 77, Cost: 0.25})
 				return nil
 			}),
 			PlanRecordFactory: memoryPlanRecordFactory,
@@ -85,7 +85,7 @@ func TestHeaderReporterPublishesSliceProgressionAndMetricTotals(t *testing.T) {
 	if initial.RepoName != "tao" || initial.PlanID != "plan-a" || initial.PlanTitle != "Pinned run header" {
 		t.Fatalf("initial identity = %+v", initial)
 	}
-	if initial.Agent != "codex" || initial.ExecutionMode != "current" || initial.ReviewEnabled || initial.CostReported || initial.ReworkRound != 2 || initial.MaxReworkAttempts != 7 {
+	if initial.Agent != "claude" || initial.ExecutionMode != "current" || initial.ReviewEnabled || !initial.CostReported || initial.ReworkRound != 2 || initial.MaxReworkAttempts != 7 {
 		t.Fatalf("initial config = %+v", initial)
 	}
 	if initial.CompletedCount != 0 || initial.TotalCount != 1 || len(initial.Slices) != 1 || initial.Slices[0].Status != plan.StatusPending {

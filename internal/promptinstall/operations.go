@@ -169,15 +169,13 @@ func renderInstallContent(descriptor agentpkg.Descriptor, prompt prompts.Definit
 	// Commit commands must run the Tao boundary from the provider's current
 	// session. Inline this one prompt instead of dynamically invoking `tao
 	// prompt`, which would hide the binary permissions and handoff contract.
-	content, err := promptfmt.ManagedCodexCommand(prompt.CommandName, prompt.Name, prompt.Template)
+	content, err := promptfmt.ManagedInlinePrompt(prompt.CommandName, prompt.Name, prompt.Template)
 	if err != nil {
 		return "", err
 	}
 	switch descriptor.Kind {
 	case runtimeconfig.AgentClaude:
 		return strings.Replace(content, "---\n", "---\nallowed-tools: Bash(tao commit:*), Bash(mktemp:*), Bash(rm:*), Bash(rmdir:*), Read, Write\nargument-hint: [arguments]\n", 1), nil
-	case runtimeconfig.AgentOpenCode:
-		return strings.Replace(content, "---\n", "---\nagent: build\n", 1), nil
 	default:
 		return content, nil
 	}

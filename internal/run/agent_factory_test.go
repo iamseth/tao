@@ -34,29 +34,25 @@ func TestAgentFactoryBuildsPiRunExecutors(t *testing.T) {
 	}
 }
 
-func TestAgentFactoryBuildsMarkdownAgentExecutorsAndAuxiliaryFallbacks(t *testing.T) {
-	for _, agent := range []AgentKind{AgentClaude, AgentOpenCode, AgentCodex} {
-		t.Run(agent.String(), func(t *testing.T) {
-			repo := plan.NewFileRepository(t.TempDir())
-			starter := func(ctx context.Context, cwd string, name string, args []string) (Process, error) {
-				return nil, nil
-			}
-			execution := testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Agent: agent, CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeCurrent}, SkipPermissions: true}, RunDependencies{ProcessStarter: starter, LogAppender: repo, EventAppender: repo})
+func TestAgentFactoryBuildsClaudeExecutorsAndAuxiliaryFallbacks(t *testing.T) {
+	repo := plan.NewFileRepository(t.TempDir())
+	starter := func(ctx context.Context, cwd string, name string, args []string) (Process, error) {
+		return nil, nil
+	}
+	execution := testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Agent: AgentClaude, CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeCurrent}, SkipPermissions: true}, RunDependencies{ProcessStarter: starter, LogAppender: repo, EventAppender: repo})
 
-			capabilities := newAgentFactory(execution).runCapabilities()
-			sliceExecutor, ok := capabilities.sliceExecutor.(agentExecutor)
-			if !ok || sliceExecutor.descriptor.Kind != agent {
-				t.Fatalf("expected %s slice executor, got %T", agent, capabilities.sliceExecutor)
-			}
-			if bodyGenerator, ok := capabilities.pullRequestBodyGenerator.(agentExecutor); !ok || bodyGenerator.descriptor.Kind != agent {
-				t.Fatalf("expected %s pull request body generator, got %T", agent, capabilities.pullRequestBodyGenerator)
-			}
-			if sliceExecutor.options.Deps.ProcessStarter == nil || sliceExecutor.options.CommitPolicy != CommitPolicySlice || sliceExecutor.options.ExecutionMode != ExecutionModeCurrent || !sliceExecutor.options.SkipPermissions {
-				t.Fatalf("unexpected %s run options: %+v", agent, sliceExecutor.options)
-			}
-			if sliceExecutor.logAppender != repo || sliceExecutor.eventAppender != repo {
-				t.Fatalf("expected %s executor to preserve log and event appenders", agent)
-			}
-		})
+	capabilities := newAgentFactory(execution).runCapabilities()
+	sliceExecutor, ok := capabilities.sliceExecutor.(agentExecutor)
+	if !ok || sliceExecutor.descriptor.Kind != AgentClaude {
+		t.Fatalf("expected Claude slice executor, got %T", capabilities.sliceExecutor)
+	}
+	if bodyGenerator, ok := capabilities.pullRequestBodyGenerator.(agentExecutor); !ok || bodyGenerator.descriptor.Kind != AgentClaude {
+		t.Fatalf("expected Claude pull request body generator, got %T", capabilities.pullRequestBodyGenerator)
+	}
+	if sliceExecutor.options.Deps.ProcessStarter == nil || sliceExecutor.options.CommitPolicy != CommitPolicySlice || sliceExecutor.options.ExecutionMode != ExecutionModeCurrent || !sliceExecutor.options.SkipPermissions {
+		t.Fatalf("unexpected Claude run options: %+v", sliceExecutor.options)
+	}
+	if sliceExecutor.logAppender != repo || sliceExecutor.eventAppender != repo {
+		t.Fatal("expected Claude executor to preserve log and event appenders")
 	}
 }

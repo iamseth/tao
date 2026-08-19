@@ -12,7 +12,7 @@ import (
 func TestRuntimeEnvDefaultsAppliesAllSupportedValues(t *testing.T) {
 	t.Setenv(EnvCommitPolicy, "slice")
 	t.Setenv(EnvExecutionMode, "current")
-	t.Setenv(EnvAgent, "codex")
+	t.Setenv(EnvAgent, "claude")
 	t.Setenv(EnvPullRequest, "true")
 	t.Setenv(EnvReview, "off")
 	t.Setenv(EnvAutoRework, "false")
@@ -25,7 +25,7 @@ func TestRuntimeEnvDefaultsAppliesAllSupportedValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.CommitPolicy != CommitPolicySlice || got.ExecutionMode != ExecutionModeCurrent || got.Agent != AgentCodex || got.PullRequest == nil || !*got.PullRequest || got.ReviewEnabled == nil || *got.ReviewEnabled || got.AutoRework == nil || *got.AutoRework || got.MaxReworkAttempts == nil || *got.MaxReworkAttempts != 7 || got.SessionTimeout == nil || *got.SessionTimeout != 30*time.Minute || got.UpdateMode != selfupdate.ModeAuto || !got.SkipPermissions {
+	if got.CommitPolicy != CommitPolicySlice || got.ExecutionMode != ExecutionModeCurrent || got.Agent != AgentClaude || got.PullRequest == nil || !*got.PullRequest || got.ReviewEnabled == nil || *got.ReviewEnabled || got.AutoRework == nil || *got.AutoRework || got.MaxReworkAttempts == nil || *got.MaxReworkAttempts != 7 || got.SessionTimeout == nil || *got.SessionTimeout != 30*time.Minute || got.UpdateMode != selfupdate.ModeAuto || !got.SkipPermissions {
 		t.Fatalf("unexpected env defaults: %#v", got)
 	}
 }
@@ -34,7 +34,7 @@ func TestRuntimeEnvDefaultsApplyInDefaultsRole(t *testing.T) {
 	for _, name := range runtimeEnvKeys() {
 		t.Setenv(name, "")
 	}
-	t.Setenv(EnvAgent, "codex")
+	t.Setenv(EnvAgent, "pi")
 
 	defaults, err := RuntimeEnvDefaults()
 	if err != nil {
@@ -391,7 +391,7 @@ func TestRuntimeEnvStatusReportsInvalidOverride(t *testing.T) {
 }
 
 func TestRuntimeEnvStatusReportsAgentAndExplicitFalsePullRequest(t *testing.T) {
-	for _, agent := range []AgentKind{AgentPi, AgentClaude, AgentOpenCode, AgentCodex} {
+	for _, agent := range []AgentKind{AgentPi, AgentClaude} {
 		t.Run(agent.String(), func(t *testing.T) {
 			for _, name := range runtimeEnvKeys() {
 				t.Setenv(name, "")

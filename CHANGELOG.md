@@ -136,7 +136,7 @@ and Linux on AMD64 and ARM64.
 - Users can validate plans, review lifecycle events, detect base-branch drift, and retain recovery evidence in repository-scoped local storage.
 - Users can execute slices in isolated Git workspaces, resume interrupted work safely, review completed diffs, request bounded rework, and merge one plan or a compatible batch.
 - Teams can place plans in a durable per-repository queue, run independent work in parallel, recover interrupted drains, and receive best-effort completion notifications.
-- Users can choose Pi, Claude Code, OpenCode, or Codex while keeping the same Tao workflow, permission controls, timeouts, structured results, and usage reporting.
+- Users can choose Pi or Claude Code while keeping the same Tao workflow, permission controls, timeouts, structured results, and usage reporting.
 - Users can keep repository ideas in a local note backlog, refine them over time, and promote ready notes through Tao's normal guarded planning and execution workflow.
 - Agent users can install ready-made prompts for planning, slicing, reviewing, merging, checking repository health, capturing notes, and improving a codebase.
 - Contributors can verify changes with CI on Linux and macOS, while maintainers can publish checksum-protected GitHub and Homebrew release artifacts without adding runtime Go dependencies.

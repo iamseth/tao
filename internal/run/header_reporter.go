@@ -191,7 +191,7 @@ func newHeaderState(detail *plan.PlanDetail, config ExecutionConfig, startedAt t
 		AgentSessionCount: metrics.Sessions,
 		TotalTokens:       metrics.TotalTokens,
 		Cost:              metrics.Cost,
-		CostReported:      agent != agentLabel(AgentCodex),
+		CostReported:      true,
 	}
 }
 

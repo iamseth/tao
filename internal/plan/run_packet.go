@@ -363,7 +363,7 @@ func runPacketFailureSignal(event Event) (string, bool) {
 		return firstNonemptyLine(event.Reason, event.Message, event.Command, "verification command invalid"), true
 	case EventTypeSliceResumeFailed:
 		return firstNonemptyLine(event.Reason, event.Message, "slice resume failed"), true
-	case EventTypeAgentMetrics, "opencode_metrics":
+	case EventTypeAgentMetrics:
 		if event.Metrics == nil || (event.Metrics.Status != "failed" && event.Metrics.Result != "failed") {
 			return "", false
 		}
@@ -425,7 +425,7 @@ func writeRecentEvents(b *strings.Builder, events []Event, sliceID string, limit
 
 func runPacketTelemetryEvent(eventType string) bool {
 	switch eventType {
-	case EventTypeAgentMetrics, "opencode_metrics", EventTypeRunContext:
+	case EventTypeAgentMetrics, EventTypeRunContext:
 		return true
 	default:
 		return false

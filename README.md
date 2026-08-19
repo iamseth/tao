@@ -36,7 +36,7 @@ For workflow guidance, see the [usage guide](docs/usage-guide.md). For the artif
 | Autonomous PR agents | Independently produce pull requests | Tao orchestrates user-invoked local runs and can hand off a reviewed head to a PR workflow. |
 
 > [!IMPORTANT]
-> Tao is not a replacement for your coding agent, a generic parallel-agent dashboard, or a cloud platform. Today it supports Pi, Claude, OpenCode, and Codex.
+> Tao is not a replacement for your coding agent, a generic parallel-agent dashboard, or a cloud platform. Today it supports Pi and Claude.
 
 ---
 
@@ -68,8 +68,8 @@ cd /absolute/path/to/your/repository
 tao init
 ```
 
-From that registered repository, plan and slice inside your agent (e.g. Pi,
-Claude, OpenCode, or Codex):
+From that registered repository, plan and slice inside your agent (Pi or
+Claude):
 
 ```text
 /tao-plan add a --hello flag to the CLI
@@ -511,7 +511,7 @@ the repository stage; currently its configurable run default is `pull_request`.
 ```sh
 TAO_COMMIT_POLICY=slice|none
 TAO_EXECUTION_MODE=isolated|current
-TAO_AGENT=pi|claude|opencode|codex
+TAO_AGENT=pi|claude
 TAO_UPDATE=warn|auto|off
 TAO_PULL_REQUEST=true|false
 TAO_REVIEW=true|false

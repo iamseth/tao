@@ -163,8 +163,6 @@ func TestParseAgentKind(t *testing.T) {
 		{name: "default", want: AgentPi},
 		{name: "pi", value: "pi", want: AgentPi},
 		{name: "claude", value: "claude", want: AgentClaude},
-		{name: "opencode", value: "opencode", want: AgentOpenCode},
-		{name: "codex", value: "codex", want: AgentCodex},
 	}
 
 	for _, tt := range tests {
@@ -183,7 +181,7 @@ func TestParseAgentKind(t *testing.T) {
 func TestParseAgentKindRejectsUnsupportedValue(t *testing.T) {
 	for _, value := range []string{"legacy-agent", "other"} {
 		_, err := ParseAgentKind(value)
-		if err == nil || err.Error() != "unsupported agent \""+value+"\" (want pi, claude, opencode, or codex)" {
+		if err == nil || err.Error() != "unsupported agent \""+value+"\" (want pi or claude)" {
 			t.Fatalf("expected unsupported agent error for %q, got %v", value, err)
 		}
 	}
@@ -362,7 +360,7 @@ func TestResolveRunOptionsRejectsInvalidStagedValues(t *testing.T) {
 		overrides RunOptionsPatch
 		want      string
 	}{
-		{name: "default agent", defaults: RunOptionsPatch{Agent: "other"}, want: "unsupported agent \"other\" (want pi, claude, opencode, or codex)"},
+		{name: "default agent", defaults: RunOptionsPatch{Agent: "other"}, want: "unsupported agent \"other\" (want pi or claude)"},
 		{name: "override execution mode", overrides: RunOptionsPatch{ExecutionMode: ExecutionMode("sandbox")}, want: "unsupported execution mode \"sandbox\" (want isolated or current)"},
 		{name: "negative max slices", overrides: RunOptionsPatch{}.WithMaxSlices(-1), want: "--max-slices must be 0 or greater"},
 		{name: "pull request step", overrides: RunOptionsPatch{Mode: ModeStep, CommitPolicy: CommitPolicySlice, PullRequest: new(true)}, want: "--pull-request requires full run mode"},

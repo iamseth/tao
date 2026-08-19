@@ -314,10 +314,10 @@ func TestRunnerMalformedJSONUsesNameAndStreamKindAndKills(t *testing.T) {
 		proc.finish(nil)
 	}()
 
-	runner := New("opencode", "json", proc, nil, collect)
+	runner := New("test-agent", "json", proc, nil, collect)
 	defer runner.Close()
 	_, err := runner.Read(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "parse opencode json line 1") {
+	if err == nil || !strings.Contains(err.Error(), "parse test-agent json line 1") {
 		t.Fatalf("expected parse error labelled with name/streamKind, got %v", err)
 	}
 	if !proc.wasKilled() {

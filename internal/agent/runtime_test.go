@@ -17,8 +17,6 @@ import (
 var (
 	_ Runtime = piRuntime{}
 	_ Runtime = claudeRuntime{}
-	_ Runtime = openCodeRuntime{}
-	_ Runtime = codexRuntime{}
 )
 
 func TestClaudeRuntimeMapsPermissionMode(t *testing.T) {

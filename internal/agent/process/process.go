@@ -1,6 +1,6 @@
 // Package process holds the subprocess primitive shared by every agent runtime.
-// Each runtime (pi, claude, opencode, codex) spawns a child agent the same way, so the
-// Process interface, ProcessStarter signature, and DefaultProcessStarter live
+// Each runtime spawns a child agent the same way, so the Process interface,
+// ProcessStarter signature, and DefaultProcessStarter live
 // here once instead of being copied per runtime. Runtime packages alias these
 // types (see each runtime's process.go) to keep their public API stable.
 package process

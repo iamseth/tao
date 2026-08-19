@@ -2,9 +2,8 @@
 // JSON into map[string]any. Every agent runtime parses provider stream output
 // into generic maps and needs the same coercion (float64/int64/json.Number for
 // numbers, type-asserted strings, JSON fallback for stringification).
-// Centralizing it here keeps the pi, claude, opencode, and codex runtimes from
-// drifting. Coercion that is genuinely runtime-specific (e.g. Pi's two-map
-// lookup, opencode's json.Number-aware numberValue) stays in its runtime.
+// Centralizing it here keeps the agent runtimes from drifting.
+// Coercion that is genuinely runtime-specific stays in its runtime.
 package jsonmap
 
 import "encoding/json"

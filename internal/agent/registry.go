@@ -108,36 +108,6 @@ var descriptors = []Descriptor{
 			return claudeRuntime{starter: deps.ProcessStarter}
 		},
 	},
-	{
-		Kind:                      runtimeconfig.AgentOpenCode,
-		Label:                     "opencode",
-		ToolName:                  "opencode",
-		TargetDescription:         "OpenCode Markdown commands",
-		DoctorDescription:         "OpenCode Markdown commands that render tao prompts dynamically",
-		UsesExtensionPrompts:      false,
-		PromptDir:                 promptfmt.OpenCodeDir,
-		RenderPrompt:              promptfmt.ManagedOpenCodeCommand,
-		SupportsBypassPermissions: true,
-		MetricsMessage:            "Captured OpenCode agent metrics",
-		NewRuntime: func(deps RuntimeDeps) Runtime {
-			return openCodeRuntime{starter: deps.ProcessStarter}
-		},
-	},
-	{
-		Kind:                      runtimeconfig.AgentCodex,
-		Label:                     "codex",
-		ToolName:                  "codex",
-		TargetDescription:         "Codex Markdown commands",
-		DoctorDescription:         "Codex Markdown commands that render tao prompts dynamically",
-		UsesExtensionPrompts:      false,
-		PromptDir:                 promptfmt.CodexDir,
-		RenderPrompt:              promptfmt.ManagedCodexCommand,
-		SupportsBypassPermissions: true,
-		MetricsMessage:            "Captured Codex agent metrics",
-		NewRuntime: func(deps RuntimeDeps) Runtime {
-			return codexRuntime{starter: deps.ProcessStarter}
-		},
-	},
 }
 
 // lookupByKind indexes descriptors by their AgentKind for O(1) lookup.
@@ -164,8 +134,7 @@ func Lookup(kind runtimeconfig.AgentKind) (Descriptor, bool) {
 	return lookupByKind[runtimeconfig.AgentPi], false
 }
 
-// All returns the registered descriptors in deterministic order (Pi, Claude,
-// OpenCode, then Codex).
+// All returns the registered descriptors in deterministic order (Pi, then Claude).
 func All() []Descriptor {
 	out := make([]Descriptor, len(descriptors))
 	copy(out, descriptors)

@@ -19,8 +19,6 @@ func TestLookupResolvesKnownAndDefaultKinds(t *testing.T) {
 	}{
 		{name: "pi", kind: runtimeconfig.AgentPi, wantKind: runtimeconfig.AgentPi, wantOK: true},
 		{name: "claude", kind: runtimeconfig.AgentClaude, wantKind: runtimeconfig.AgentClaude, wantOK: true},
-		{name: "opencode", kind: runtimeconfig.AgentOpenCode, wantKind: runtimeconfig.AgentOpenCode, wantOK: true},
-		{name: "codex", kind: runtimeconfig.AgentCodex, wantKind: runtimeconfig.AgentCodex, wantOK: true},
 		{name: "empty defaults to pi", kind: "", wantKind: runtimeconfig.AgentPi, wantOK: true},
 		{name: "unknown falls back to pi", kind: "gemini", wantKind: runtimeconfig.AgentPi, wantOK: false},
 	} {
@@ -70,46 +68,6 @@ func TestLookupDescriptorFields(t *testing.T) {
 	if claude.UsesExtensionPrompts {
 		t.Fatal("claude should not use extension prompts")
 	}
-
-	opencode, ok := Lookup(runtimeconfig.AgentOpenCode)
-	if !ok {
-		t.Fatal("expected opencode descriptor to be registered")
-	}
-	if opencode.Label != "opencode" || opencode.ToolName != "opencode" {
-		t.Fatalf("opencode label/tool = %q/%q, want opencode/opencode", opencode.Label, opencode.ToolName)
-	}
-	if opencode.TargetDescription != "OpenCode Markdown commands" {
-		t.Fatalf("opencode target description = %q", opencode.TargetDescription)
-	}
-	if opencode.DoctorDescription != "OpenCode Markdown commands that render tao prompts dynamically" {
-		t.Fatalf("opencode doctor description = %q", opencode.DoctorDescription)
-	}
-	if opencode.UsesExtensionPrompts {
-		t.Fatal("opencode should not use extension prompts")
-	}
-	if !opencode.SupportsBypassPermissions {
-		t.Fatal("opencode should support bypass permissions")
-	}
-
-	codex, ok := Lookup(runtimeconfig.AgentCodex)
-	if !ok {
-		t.Fatal("expected codex descriptor to be registered")
-	}
-	if codex.Label != "codex" || codex.ToolName != "codex" {
-		t.Fatalf("codex label/tool = %q/%q, want codex/codex", codex.Label, codex.ToolName)
-	}
-	if codex.TargetDescription != "Codex Markdown commands" {
-		t.Fatalf("codex target description = %q", codex.TargetDescription)
-	}
-	if codex.DoctorDescription != "Codex Markdown commands that render tao prompts dynamically" {
-		t.Fatalf("codex doctor description = %q", codex.DoctorDescription)
-	}
-	if codex.UsesExtensionPrompts {
-		t.Fatal("codex should not use extension prompts")
-	}
-	if !codex.SupportsBypassPermissions {
-		t.Fatal("codex should support bypass permissions")
-	}
 }
 
 func TestAllDescriptorsBuildRuntime(t *testing.T) {
@@ -146,16 +104,6 @@ func TestDescriptorNewRuntimeBuildsMatchingRuntime(t *testing.T) {
 	if _, ok := claude.NewRuntime(deps).(claudeRuntime); !ok {
 		t.Fatalf("claude NewRuntime = %T, want claudeRuntime", claude.NewRuntime(deps))
 	}
-
-	opencode, _ := Lookup(runtimeconfig.AgentOpenCode)
-	if _, ok := opencode.NewRuntime(deps).(openCodeRuntime); !ok {
-		t.Fatalf("opencode NewRuntime = %T, want openCodeRuntime", opencode.NewRuntime(deps))
-	}
-
-	codex, _ := Lookup(runtimeconfig.AgentCodex)
-	if _, ok := codex.NewRuntime(deps).(codexRuntime); !ok {
-		t.Fatalf("codex NewRuntime = %T, want codexRuntime", codex.NewRuntime(deps))
-	}
 }
 
 func TestAllKindsMatchRuntimeConfigRoster(t *testing.T) {
@@ -171,7 +119,7 @@ func TestAllKindsMatchRuntimeConfigRoster(t *testing.T) {
 }
 
 func TestDiscoverInstalledUsesRegistryOrderAndIgnoresLookupFailures(t *testing.T) {
-	available := map[string]bool{"claude": true, "codex": true}
+	available := map[string]bool{"claude": true}
 	var lookedUp []string
 	installed := DiscoverInstalled(func(name string) (string, error) {
 		lookedUp = append(lookedUp, name)
@@ -181,10 +129,10 @@ func TestDiscoverInstalledUsesRegistryOrderAndIgnoresLookupFailures(t *testing.T
 		return "", fmt.Errorf("lookup %s: %w", name, errors.ErrUnsupported)
 	})
 
-	if got := descriptorKinds(installed); got != "claude,codex" {
-		t.Fatalf("installed kinds = %q, want claude,codex", got)
+	if got := descriptorKinds(installed); got != "claude" {
+		t.Fatalf("installed kinds = %q, want claude", got)
 	}
-	if got := fmt.Sprint(lookedUp); got != "[pi claude opencode codex]" {
+	if got := fmt.Sprint(lookedUp); got != "[pi claude]" {
 		t.Fatalf("lookup order = %s, want registry order", got)
 	}
 }
@@ -208,11 +156,11 @@ func descriptorKinds(descriptors []Descriptor) string {
 
 func TestAllReturnsDeterministicOrder(t *testing.T) {
 	all := All()
-	if len(all) != 4 {
-		t.Fatalf("All() len = %d, want 4", len(all))
+	if len(all) != 2 {
+		t.Fatalf("All() len = %d, want 2", len(all))
 	}
-	if all[0].Kind != runtimeconfig.AgentPi || all[1].Kind != runtimeconfig.AgentClaude || all[2].Kind != runtimeconfig.AgentOpenCode || all[3].Kind != runtimeconfig.AgentCodex {
-		t.Fatalf("All() order = %q, %q, %q, %q, want pi, claude, opencode, codex", all[0].Kind, all[1].Kind, all[2].Kind, all[3].Kind)
+	if all[0].Kind != runtimeconfig.AgentPi || all[1].Kind != runtimeconfig.AgentClaude {
+		t.Fatalf("All() order = %q, %q, want pi, claude", all[0].Kind, all[1].Kind)
 	}
 
 	// All() must return a copy: mutating the result must not affect the registry.

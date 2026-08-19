@@ -22,17 +22,17 @@ func TestManagedClaudeCommandWrapper(t *testing.T) {
 	}
 }
 
-func TestInlineProviderTemplatesPreserveNoteSourceMetadata(t *testing.T) {
+func TestInlineTemplatesPreserveNoteSourceMetadata(t *testing.T) {
 	template := "---\ndescription: note aware\nagent: plan\n---\n\n## Source Note\n\n- ID: `<canonical note ID>`\n\n{{ .Arguments }}\n"
 	pi, err := promptfmt.ManagedPiTemplate("tao-plan", "plan", template)
 	if err != nil {
 		t.Fatal(err)
 	}
-	codex, err := promptfmt.ManagedCodexCommand("tao-plan", "plan", template)
+	inline, err := promptfmt.ManagedInlinePrompt("tao-plan", "plan", template)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, text := range map[string]string{"pi": pi, "codex": codex} {
+	for name, text := range map[string]string{"pi": pi, "inline": inline} {
 		for _, want := range []string{"## Source Note", "- ID: `<canonical note ID>`", "$ARGUMENTS"} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("%s installed prompt missing %q: %q", name, want, text)

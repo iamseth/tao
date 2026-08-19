@@ -67,8 +67,8 @@ This audit inventories places where Tao consumes data written by an agent or by 
 
 ## Pi RPC stdout events and shared `streamjson` transport
 
-- **Agent-authored input:** JSONL stdout from `pi --mode rpc`, `claude --output-format stream-json`, `opencode run --format json`, and `codex exec --json`.
-- **Consumed by:** `internal/agent/pi/transport.go`, `internal/agent/pi/session.go`, `internal/agent/streamjson/streamjson.go`, and provider-specific handlers in `internal/agent/{claude,opencode,codex}`.
+- **Agent-authored input:** JSONL stdout from `pi --mode rpc` and `claude --output-format stream-json`.
+- **Consumed by:** `internal/agent/pi/transport.go`, `internal/agent/pi/session.go`, `internal/agent/streamjson/streamjson.go`, and the Claude-specific handler in `internal/agent/claude`.
 - **Current trust assumption:** The selected local agent binary emits well-formed provider events. Parse errors abort loudly; final unterminated lines are parsed; stdout read errors abort; unsupported Pi UI requests are cancelled.
 - **Concrete failure mode:** A provider bug or adversarial wrapper can emit false success/failure events, oversized nested JSON, misleading assistant text, negative or implausible metrics, or log-control content. Removing the historical scanner cap fixed false `token too long` crashes but leaves memory proportional to the largest JSONL line.
 - **Severity:** High for run control and captured review/PR outputs; medium for metrics/log quality.
@@ -77,7 +77,7 @@ This audit inventories places where Tao consumes data written by an agent or by 
 ## Provider-specific assistant text, tool logs, and metrics extraction
 
 - **Agent-authored input:** Assistant text, result events, tool-call events, tool-result text, usage/cost/session metadata in provider JSON maps.
-- **Consumed by:** `internal/agent/pi/session.go`, `internal/agent/pi/metrics.go`, `internal/agent/claude/stream.go`, `internal/agent/opencode/client.go`, `internal/agent/codex/stream.go`, `internal/agent/jsonmap`, and `internal/run/metrics.go`.
+- **Consumed by:** `internal/agent/pi/session.go`, `internal/agent/pi/metrics.go`, `internal/agent/claude/stream.go`, `internal/agent/jsonmap`, and `internal/run/metrics.go`.
 - **Current trust assumption:** Handlers defensively type-assert fields and treat missing metrics as best-effort warnings; raw text is accumulated into session output and logs.
 - **Concrete failure mode:** Very large assistant/tool text can bloat memory and `run.log`; malformed numeric fields become zero or truncated; negative metrics can flow into summaries; duplicated final text can make review/PR extraction ambiguous.
 - **Severity:** Medium.

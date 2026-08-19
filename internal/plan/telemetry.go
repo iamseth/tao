@@ -171,7 +171,7 @@ func SummarizeRework(events []Event) ReworkSummary {
 func AgentMetricsEvents(events []Event) []AgentMetricEvent {
 	metrics := make([]AgentMetricEvent, 0)
 	for _, event := range events {
-		if (event.Type != EventTypeAgentMetrics && event.Type != "opencode_metrics") || event.Metrics == nil {
+		if event.Type != EventTypeAgentMetrics || event.Metrics == nil {
 			continue
 		}
 		metricsPayload := *event.Metrics

@@ -1,7 +1,6 @@
 package insights
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -14,7 +13,6 @@ import (
 
 	"github.com/iamseth/tao/internal/agent/claude"
 	"github.com/iamseth/tao/internal/agent/logrecord"
-	"github.com/iamseth/tao/internal/agent/opencode"
 	"github.com/iamseth/tao/internal/agent/process"
 	"github.com/iamseth/tao/internal/plan"
 )
@@ -99,7 +97,7 @@ func TestAggregateExtractsMissingExecutableFromClaudeStream(t *testing.T) {
 	client := claude.Client{
 		Log: log,
 		ProcessStarter: func(context.Context, string, string, []string) (process.Process, error) {
-			return &openCodeFixtureProcess{stdout: stream}, nil
+			return &streamFixtureProcess{stdout: stream}, nil
 		},
 	}
 	if _, err := client.RunAgentSession(context.Background(), claude.Request{Prompt: "inspect environment"}); err != nil {
@@ -113,47 +111,6 @@ func TestAggregateExtractsMissingExecutableFromClaudeStream(t *testing.T) {
 	missing := findLogSignal(report.RecentLogs.MissingExecutables, "missing-claude-tool")
 	if missing == nil || missing.Count != 1 || missing.PlanCount != 1 {
 		t.Fatalf("missing executable = %#v in %#v", missing, report.RecentLogs.MissingExecutables)
-	}
-	if report.RecentLogs.Coverage.Scanned != 1 {
-		t.Fatalf("coverage = %#v", report.RecentLogs.Coverage)
-	}
-}
-
-func TestAggregateExtractsMissingExecutableFromOpenCodeStream(t *testing.T) {
-	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
-	stream, err := os.ReadFile(filepath.Join("..", "agent", "opencode", "testdata", "missing-executable.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	dir := t.TempDir()
-	log, err := os.Create(filepath.Join(dir, "agent-run.log")) // #nosec G304 -- test temporary directory.
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := logrecord.Write(log, logrecord.Record{Type: logrecord.TypeSession, Content: "test", Timestamp: now.Format(time.RFC3339)}); err != nil {
-		t.Fatal(err)
-	}
-	client := opencode.Client{
-		Log: log,
-		ProcessStarter: func(context.Context, string, string, []string) (process.Process, error) {
-			return &openCodeFixtureProcess{stdout: bytes.NewReader(stream)}, nil
-		},
-	}
-	if _, err := client.RunAgentSession(context.Background(), opencode.Request{Prompt: "inspect environment"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := log.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	report := aggregateLogsAt(t, now, []plan.PlanSummary{{ID: "opencode", Dir: dir, LastActivityAt: new(now)}})
-	missing := findLogSignal(report.RecentLogs.MissingExecutables, "missing-opencode-tool")
-	if missing == nil || missing.Count != 1 || missing.PlanCount != 1 {
-		t.Fatalf("missing executable = %#v in %#v", missing, report.RecentLogs.MissingExecutables)
-	}
-	tool := findLogSignal(report.RecentLogs.ToolUses, "missing-opencode-tool")
-	if tool == nil || tool.Count != 1 {
-		t.Fatalf("tool use = %#v in %#v", tool, report.RecentLogs.ToolUses)
 	}
 	if report.RecentLogs.Coverage.Scanned != 1 {
 		t.Fatalf("coverage = %#v", report.RecentLogs.Coverage)
@@ -576,15 +533,15 @@ func appendFramedLog(t *testing.T, dir string, records ...logrecord.Record) {
 	}
 }
 
-type openCodeFixtureProcess struct {
+type streamFixtureProcess struct {
 	stdout io.Reader
 }
 
-func (p *openCodeFixtureProcess) Stdin() io.WriteCloser { return nopWriteCloser{Writer: io.Discard} }
-func (p *openCodeFixtureProcess) Stdout() io.Reader     { return p.stdout }
-func (p *openCodeFixtureProcess) Stderr() io.Reader     { return strings.NewReader("") }
-func (p *openCodeFixtureProcess) Wait() error           { return nil }
-func (p *openCodeFixtureProcess) Kill() error           { return nil }
+func (p *streamFixtureProcess) Stdin() io.WriteCloser { return nopWriteCloser{Writer: io.Discard} }
+func (p *streamFixtureProcess) Stdout() io.Reader     { return p.stdout }
+func (p *streamFixtureProcess) Stderr() io.Reader     { return strings.NewReader("") }
+func (p *streamFixtureProcess) Wait() error           { return nil }
+func (p *streamFixtureProcess) Kill() error           { return nil }
 
 type nopWriteCloser struct {
 	io.Writer

@@ -71,7 +71,7 @@ func TestBatchAgentSessionTelemetryAppendFailureWarnsAndPreservesProviderError(t
 	var progress bytes.Buffer
 	session := BatchAgentSession{
 		run: func(context.Context, agentsession.Request) (agentsession.Result, error) {
-			return agentsession.Result{Output: "partial", AgentLabel: "codex", MetricsUsable: true}, providerErr
+			return agentsession.Result{Output: "partial", AgentLabel: "test-agent", MetricsUsable: true}, providerErr
 		},
 		log: &progress, eventAppender: store, now: time.Now,
 	}

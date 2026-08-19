@@ -14,8 +14,6 @@ func TestAllAgentsHavePromptInstallHooks(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("PI_CODING_AGENT_DIR", filepath.Join(home, "pi-agent"))
 	t.Setenv("TAO_CLAUDE_COMMANDS_DIR", filepath.Join(home, "claude-commands"))
-	t.Setenv("TAO_OPENCODE_COMMANDS_DIR", filepath.Join(home, "opencode-commands"))
-	t.Setenv("TAO_CODEX_COMMANDS_DIR", filepath.Join(home, "codex-prompts"))
 
 	for _, descriptor := range agentpkg.All() {
 		t.Run(string(descriptor.Kind), func(t *testing.T) {
@@ -48,9 +46,6 @@ func TestDirSelectsAgentTargets(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("PI_CODING_AGENT_DIR", "")
 	t.Setenv("TAO_CLAUDE_COMMANDS_DIR", "")
-	t.Setenv("TAO_OPENCODE_COMMANDS_DIR", "")
-	t.Setenv("TAO_CODEX_COMMANDS_DIR", "")
-	t.Setenv("XDG_CONFIG_HOME", "")
 
 	if _, err := Dir(runtimeconfig.AgentKind("legacy-agent")); err == nil {
 		t.Fatal("expected unsupported agent target")
@@ -90,51 +85,5 @@ func TestDirSelectsAgentTargets(t *testing.T) {
 	}
 	if claude != commands {
 		t.Fatalf("Claude Dir() with env = %q, want %q", claude, commands)
-	}
-
-	opencode, err := Dir(runtimeconfig.AgentOpenCode)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := filepath.Join(home, ".config", "opencode", "commands"); opencode != want {
-		t.Fatalf("OpenCode Dir() = %q, want %q", opencode, want)
-	}
-
-	xdgConfig := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", xdgConfig)
-	opencode, err = Dir(runtimeconfig.AgentOpenCode)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := filepath.Join(xdgConfig, "opencode", "commands"); opencode != want {
-		t.Fatalf("OpenCode Dir() with XDG_CONFIG_HOME = %q, want %q", opencode, want)
-	}
-
-	opencodeCommands := t.TempDir()
-	t.Setenv("TAO_OPENCODE_COMMANDS_DIR", opencodeCommands)
-	opencode, err = Dir(runtimeconfig.AgentOpenCode)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if opencode != opencodeCommands {
-		t.Fatalf("OpenCode Dir() with env = %q, want %q", opencode, opencodeCommands)
-	}
-
-	codex, err := Dir(runtimeconfig.AgentCodex)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := filepath.Join(home, ".codex", "prompts"); codex != want {
-		t.Fatalf("Codex Dir() = %q, want %q", codex, want)
-	}
-
-	prompts := t.TempDir()
-	t.Setenv("TAO_CODEX_COMMANDS_DIR", prompts)
-	codex, err = Dir(runtimeconfig.AgentCodex)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if codex != prompts {
-		t.Fatalf("Codex Dir() with env = %q, want %q", codex, prompts)
 	}
 }

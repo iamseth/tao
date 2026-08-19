@@ -31,8 +31,6 @@ const (
 	ExecutionModeIsolated = runtimeconfig.ExecutionModeIsolated
 	ExecutionModeCurrent  = runtimeconfig.ExecutionModeCurrent
 
-	AgentPi       = runtimeconfig.AgentPi
-	AgentClaude   = runtimeconfig.AgentClaude
-	AgentOpenCode = runtimeconfig.AgentOpenCode
-	AgentCodex    = runtimeconfig.AgentCodex
+	AgentPi     = runtimeconfig.AgentPi
+	AgentClaude = runtimeconfig.AgentClaude
 )

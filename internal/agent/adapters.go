@@ -5,9 +5,7 @@ import (
 	"io"
 
 	claudeagent "github.com/iamseth/tao/internal/agent/claude"
-	codexagent "github.com/iamseth/tao/internal/agent/codex"
 	"github.com/iamseth/tao/internal/agent/logrecord"
-	opencodeagent "github.com/iamseth/tao/internal/agent/opencode"
 	piagent "github.com/iamseth/tao/internal/agent/pi"
 	"github.com/iamseth/tao/internal/agent/process"
 )
@@ -64,53 +62,6 @@ type claudeRuntime struct {
 func (r claudeRuntime) RunSession(ctx context.Context, session Session) (SessionResult, error) {
 	client := claudeagent.Client{ProcessStarter: r.starter, Log: providerLog(session)}
 	result, err := client.RunAgentSession(ctx, claudeagent.Request{
-		RepoRoot:       session.RepoRoot,
-		Prompt:         session.Prompt,
-		PermissionMode: session.PermissionMode,
-	})
-	out := SessionResult{Output: result.Output, FinalText: result.FinalText}
-	if session.CollectMetrics {
-		out.Metrics = &result.Metrics
-		out.MetricsWarning = result.MetricsWarning
-	}
-	return out, err
-}
-
-// openCodeRuntime adapts the leaf opencode.Client onto the neutral Runtime
-// contract. Like claudeRuntime it passes PermissionMode through to OpenCode
-// (only bypassPermissions adds an argv flag) and ignores the no-progress tool
-// limit, since OpenCode has no watchdog. Metrics are best-effort: parse warnings
-// surface through MetricsWarning and never fail the run.
-type openCodeRuntime struct {
-	starter process.ProcessStarter
-}
-
-func (r openCodeRuntime) RunSession(ctx context.Context, session Session) (SessionResult, error) {
-	client := opencodeagent.Client{ProcessStarter: r.starter, Log: providerLog(session)}
-	result, err := client.RunAgentSession(ctx, opencodeagent.Request{
-		RepoRoot:       session.RepoRoot,
-		Prompt:         session.Prompt,
-		PermissionMode: session.PermissionMode,
-	})
-	out := SessionResult{Output: result.Output, FinalText: result.FinalText}
-	if session.CollectMetrics {
-		out.Metrics = &result.Metrics
-		out.MetricsWarning = result.MetricsWarning
-	}
-	return out, err
-}
-
-// codexRuntime adapts the leaf codex.Client onto the neutral Runtime contract.
-// It passes PermissionMode through to Codex and ignores the no-progress tool
-// limit, since Codex has no watchdog. Metrics are best-effort: parse warnings
-// surface through MetricsWarning and never fail the run.
-type codexRuntime struct {
-	starter process.ProcessStarter
-}
-
-func (r codexRuntime) RunSession(ctx context.Context, session Session) (SessionResult, error) {
-	client := codexagent.Client{ProcessStarter: r.starter, Log: providerLog(session)}
-	result, err := client.RunAgentSession(ctx, codexagent.Request{
 		RepoRoot:       session.RepoRoot,
 		Prompt:         session.Prompt,
 		PermissionMode: session.PermissionMode,

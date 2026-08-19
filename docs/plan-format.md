@@ -277,7 +277,7 @@ Resume attempts do not append another `slice_started` event. Each agent handoff 
 
 Within one implementation-slice invocation, Tao may automatically attempt at most two resumes after explicitly structured retryable transport failures, using fixed context-cancellable delays of 1 second and 2 seconds. Each attempt reloads artifacts, repeats selected-slice verification preflight, and must receive `InterruptedSliceResume` authorization from the same execution-boundary classifier described above before a fresh provider session starts. The budget is invocation-local and is independent of durable resume-attempt numbering. A durably completed slice is accepted after ordinary progress and completion-boundary validation without another handoff. This changes no event or artifact schema and adds no retry configuration.
 
-The supported runtimes are `pi`, `claude`, `opencode`, and `codex`. Of those, only Pi currently exposes the retryable structured source, its `provider_transport_failure` diagnostic. Matching text, generic and authentication errors, session timeouts, planning, review, pull-request, and merge sessions, and manual, policy-`none`, unsafe, or post-`commit_intent` states do not retry. In particular, neither a provider error nor an `agent_metrics`, `slice_resume_attempted`, or `slice_resume_failed` event is authorization; the durable execution facts and live Git boundary remain the sole recovery authority.
+The supported runtimes are `pi` and `claude`. Of those, only Pi currently exposes the retryable structured source, its `provider_transport_failure` diagnostic. Matching text, generic and authentication errors, session timeouts, planning, review, pull-request, and merge sessions, and manual, policy-`none`, unsafe, or post-`commit_intent` states do not retry. In particular, neither a provider error nor an `agent_metrics`, `slice_resume_attempted`, or `slice_resume_failed` event is authorization; the durable execution facts and live Git boundary remain the sole recovery authority.
 
 Normal `tao run` rejects blocked plans and blocked selected slices. `tao run --continue` is only for cases where the blocker has already been cleared manually; it clears Tao's blocked lifecycle state and restarts `plan.current_slice`, or falls back to the first pending slice only when the plan or that slice is blocked. Continue mode must not bypass approval gates, dependencies, completed-plan checks, missing-slice checks, branch or commit safeguards, or selected-slice verification preflight.
 
@@ -378,7 +378,7 @@ Changing a tag-driven clearable field to `omitempty` requires migrating every wr
 
 New plans never create these; documented only so old plan directories still load.
 
-Planning-session capture is no longer supported. If optional legacy planning-session sidecars are present in a local plan directory, loaders may display them as best-effort audit metadata, but missing sidecars must not warn, fail validation, or block execution. These files are local-only metadata, and the built-in `pi`, `claude`, `opencode`, and `codex` runtimes do not write transcript or session sidecars.
+Planning-session capture is no longer supported. If optional legacy planning-session sidecars are present in a local plan directory, loaders may display them as best-effort audit metadata, but missing sidecars must not warn, fail validation, or block execution. These files are local-only metadata, and the built-in `pi` and `claude` runtimes do not write transcript or session sidecars.
 
 | File | Purpose |
 | --- | --- |
@@ -386,7 +386,7 @@ Planning-session capture is no longer supported. If optional legacy planning-ses
 | `planning-session-stats.json` | Legacy Tao-owned planning-session summary, including planning agent when known, session ID, repository root, timestamps, provider/model, usage, cost, and stale-metadata status. |
 | `planning-prompt.md` | Legacy extracted planning prompt text used to create the plan. |
 
-`agent` records the planning runtime when known: `pi`, `claude`, `opencode`, or `codex`. It is audit metadata only; plans remain portable and may be run by any supported agent runtime later. `planning_started_at` records when the `/tao-slice` prompt began. It intentionally lives in `planning-session-stats.json`, not core `state.json` timing. Renderers should round positive canonical planning duration to the nearest second and prefer positive `planning_started_at` duration.
+`agent` records the planning runtime when known: `pi` or `claude`. It is audit metadata only; plans remain portable and may be run by either supported agent runtime later. `planning_started_at` records when the `/tao-slice` prompt began. It intentionally lives in `planning-session-stats.json`, not core `state.json` timing. Renderers should round positive canonical planning duration to the nearest second and prefer positive `planning_started_at` duration.
 
 If sidecar metadata appears stale or mismatched, stats should set `capture_suspect` and `capture_suspect_reason`. Stale sidecars must hide all planning metrics, including duration, tokens, messages, cost, model, and tool-call data.
 

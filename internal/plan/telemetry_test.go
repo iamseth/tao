@@ -143,24 +143,20 @@ func TestAgentMetricsEventsFiltersMissingPayloads(t *testing.T) {
 		{Type: EventTypeAgentMetrics, PlanID: "plan", SliceID: "001-a", Agent: "pi", Metrics: &AgentMetrics{SessionID: "session-1"}},
 		{Type: EventTypeAgentMetrics, PlanID: "plan", SliceID: "001-b", Metrics: &AgentMetrics{Agent: "pi", SessionID: "session-2", TotalTokens: 12}},
 		{Type: EventTypeAgentMetrics, PlanID: "plan", SliceID: "001-b"},
-		{Type: "opencode_metrics", PlanID: "plan", SliceID: "legacy", Metrics: &AgentMetrics{Agent: "opencode", SessionID: "legacy", OutputTokens: 9}},
 		{Type: "", PlanID: "plan", Metrics: &AgentMetrics{SessionID: "empty"}},
 		{Type: "slice_completed", PlanID: "plan"},
 		{Type: "legacy_metrics", PlanID: "plan", SliceID: "unknown", Metrics: &AgentMetrics{Agent: "pi", SessionID: "unknown"}},
 	}
 
 	metrics := AgentMetricsEvents(events)
-	if len(metrics) != 3 {
-		t.Fatalf("expected three metrics events, got %d", len(metrics))
+	if len(metrics) != 2 {
+		t.Fatalf("expected two metrics events, got %d", len(metrics))
 	}
 	if metrics[0].PlanID != "plan" || metrics[0].SliceID != "001-a" || metrics[0].Metrics.SessionID != "session-1" || metrics[0].Metrics.Agent != "pi" {
 		t.Fatalf("unexpected metrics event: %+v", metrics[0])
 	}
 	if metrics[1].Metrics.Agent != "pi" || metrics[1].Metrics.TotalTokens != 12 {
 		t.Fatalf("unexpected agent metrics event: %+v", metrics[1])
-	}
-	if metrics[2].SliceID != "legacy" || metrics[2].Metrics.Agent != "opencode" || metrics[2].Metrics.OutputTokens != 9 {
-		t.Fatalf("unexpected legacy opencode metrics event: %+v", metrics[2])
 	}
 }
 

@@ -63,7 +63,7 @@ func TestBatchStoreSynchronizesConcurrentAgentEventAppends(t *testing.T) {
 			defer wg.Done()
 			err := store.AppendAgentEvent(BatchAgentEvent{
 				Schema: BatchAgentEventSchema, Type: BatchAgentEventTypeMetrics, BatchID: "batch-concurrent", Timestamp: time.Now(),
-				Operation: BatchAgentOperationAggregateRework, Attempt: attempt, Agent: "codex",
+				Operation: BatchAgentOperationAggregateRework, Attempt: attempt, Agent: "test-agent",
 				Outcome: BatchAgentOutcomeCompleted, Metrics: &BatchAgentMetrics{},
 			})
 			if err != nil {

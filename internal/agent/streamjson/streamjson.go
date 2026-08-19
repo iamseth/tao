@@ -1,6 +1,6 @@
-// Package streamjson holds the newline-delimited-JSON process pump shared by the
-// claude, opencode, and codex agent transports. These agents spawn a child process,
-// deliver the prompt on stdin, and read a stream of one-JSON-object-per-line
+// Package streamjson holds a reusable newline-delimited-JSON process pump for
+// agent transports. These transports spawn a child process, deliver the prompt
+// on stdin, and read a stream of one-JSON-object-per-line
 // events until the process exits. The concurrency-sensitive machinery for that
 // — reading stdout on a goroutine, draining stderr to the log, context-aware
 // cancellation, killing the process exactly once on abort, and a deterministic
@@ -36,8 +36,8 @@ type readResult struct {
 }
 
 // Runner pumps an agent process's stdout stream and owns the process lifecycle.
-// Name is the agent label used in error messages ("claude"/"opencode"/"codex") and
-// streamKind names the wire format in parse errors ("stream-json"/"json").
+// Name is the agent label used in error messages and streamKind names the wire
+// format in parse errors.
 type Runner[R any] struct {
 	name         string
 	streamKind   string
@@ -264,7 +264,7 @@ func (r *Runner[R]) isDoneConsumed() bool {
 }
 
 // LogError writes a "tao <name> error: ..." line to the runner log, matching the
-// diagnostic both transports emit on a failed event.
+// diagnostic the transports emit on a failed event.
 func (r *Runner[R]) LogError(err error) {
 	if r.log != nil && err != nil {
 		_ = logrecord.Write(r.log, logrecord.Record{Type: logrecord.TypeDiagnostic, Content: fmt.Sprintf("tao %s error: %v", r.name, err)})

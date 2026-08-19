@@ -67,14 +67,14 @@ func TestRenderProgressCompletedAndZeroTotals(t *testing.T) {
 
 func TestRenderOptionalBatchReworkAndUnavailableCost(t *testing.T) {
 	state := testHeaderState()
-	state.Agent = "codex"
+	state.Agent = "agent"
 	state.BatchPosition = 2
 	state.BatchTotal = 7
 	state.ReworkRound = 2
 	state.MaxReworkAttempts = 5
 	state.CostReported = false
 	text := strings.Join(Render(state, 140, false), "\n")
-	for _, want := range []string{"batch 2/7", "rework 2/5", "codex", "cost —"} {
+	for _, want := range []string{"batch 2/7", "rework 2/5", "agent", "cost —"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("Render() missing %q in %q", want, text)
 		}

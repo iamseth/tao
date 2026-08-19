@@ -307,30 +307,6 @@ func TestRunPacketTelemetryFeedbackFailureSignals(t *testing.T) {
 	}
 }
 
-func TestRunPacketLegacyOpenCodeMetricsTelemetryFeedback(t *testing.T) {
-	detail := runPacketDetail()
-	detail.Events = []Event{{
-		Type:      "opencode_metrics",
-		Timestamp: runPacketTime(1),
-		PlanID:    "plan",
-		SliceID:   "002-build",
-		Message:   "legacy metrics should not be a recent event",
-		Metrics:   &AgentMetrics{SessionID: "legacy", Result: "failed", OutputTokens: 12},
-	}}
-
-	packet, err := RenderRunPacket(detail, RunPacketOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := "- Failure 2026-05-03T23:00:01Z opencode_metrics: agent session legacy failed (output_tokens=12 cost=0 tool_calls=0 errored_messages=0)\n"
-	if got := runPacketTelemetryFeedbackSection(packet); got != want {
-		t.Fatalf("telemetry feedback:\n%s\nwant:\n%s", got, want)
-	}
-	if strings.Contains(packet, "legacy metrics should not be a recent event") {
-		t.Fatalf("legacy metrics leaked into recent relevant events:\n%s", packet)
-	}
-}
-
 func TestRunPacketTelemetryFeedbackSizeCap(t *testing.T) {
 	detail := runPacketDetail()
 	metrics := &AgentMetrics{SessionID: "large", OutputTokens: 100, Cost: 100, ToolCalls: 100, AssistantMessages: 100, ErroredMessages: 100}
