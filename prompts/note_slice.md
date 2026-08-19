@@ -22,7 +22,6 @@ Write these files in `{{.PlanDir}}`:
 - `slices.json`
 - `planning-brief.md`
 - `plan.md`
-- `plan-preview.md`
 - optional `events.jsonl`
 
 Keep planning-session capture sidecars out of new plans, use concrete expected files, include focused verification commands, and keep each slice independently runnable.

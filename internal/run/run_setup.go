@@ -201,7 +201,11 @@ func captureStartingBranch(ctx context.Context, detail *plan.PlanDetail, executi
 	if branch == "" {
 		return execution, fmt.Errorf("detect starting branch for branch policy current: git branch --show-current returned empty branch")
 	}
-	if detail.State.Repo.Branch != branch {
+	workspaceBranch := ""
+	if detail.State.Workspace != nil {
+		workspaceBranch = detail.State.Workspace.Branch
+	}
+	if detail.State.Repo.Branch != branch || workspaceBranch != branch {
 		record, err := planMutationRecord(execution, detail)
 		if err != nil {
 			return execution, fmt.Errorf("record starting branch for branch policy current: %w", err)

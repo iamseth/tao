@@ -62,6 +62,13 @@ func RenderRunPacket(detail *PlanDetail, options RunPacketOptions) (string, erro
 		writeRunPacketLine(&b, "Repo Root", detail.State.Repo.Root)
 	}
 	writeRunPacketLine(&b, "Repo Branch", detail.State.Repo.Branch)
+	// Workspace branch is durable handoff evidence and must not fall back to
+	// repository metadata when workspace preparation did not record it.
+	workspaceBranch := ""
+	if detail.State.Workspace != nil {
+		workspaceBranch = detail.State.Workspace.Branch
+	}
+	writeRunPacketLine(&b, "Workspace Branch", workspaceBranch)
 	writeRunPacketLine(&b, "Current Slice", derived.CurrentSliceID)
 	writeRunPacketLine(&b, "Next Slice", derived.NextSliceID)
 	writeRunPacketLine(&b, "Pending Slices", strings.Join(detail.State.Plan.PendingSlices, ", "))

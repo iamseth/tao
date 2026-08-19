@@ -45,26 +45,15 @@ Rerun every verification command declared for the slice, even if the preserved w
 ## Branch rules
 
 {{ if eq .ExecutionMode "current" -}}
-Use the current branch where `tao run` started. Do not create or switch branches.
+Stay on the branch Tao prepared. Do not create or switch branches.
 
-Before making edits, confirm the current branch matches the run packet `repo.branch` when that information is available. If the starting branch cannot be determined or the branch changes during the run, stop and report the blocker.
+Before making edits, verify the checked-out branch matches the run packet `Workspace Branch`. If Workspace Branch is missing or `none`, the checked-out branch is detached or cannot be determined, or the branches do not match, stop and report the blocker. Do not compare the checked-out branch to `Repo Branch`; that is separate repository metadata.
 
-Direct commits to `main` or `master` are allowed only when that is the starting branch and the commit policy explicitly requests a commit. Otherwise, do not commit after successful verification and metadata updates.
+A matching Workspace Branch may be `main` or `master` in current mode. Preserve the requested automatic commit policy: after successful verification, call `tao slice-complete` and let Tao alone perform any automatic commit.
 {{ else -}}
-Create or reuse a single feature branch for the entire plan.
+Stay on the workspace branch Tao prepared. Do not create or switch branches.
 
-Never commit directly to:
-
-- `main`
-- `master`
-
-If currently on `main` or `master`, create a feature branch named:
-
-```text
-<plan-id>
-```
-
-If already on a non-main branch, continue using it unless it clearly belongs to another unrelated task.
+Before making edits, verify the checked-out branch matches the run packet `Workspace Branch`. If Workspace Branch is missing or `none`, the checked-out branch is detached or cannot be determined, the branches do not match, or the matching branch is `main` or `master`, stop and report the blocker. Do not compare the checked-out branch to `Repo Branch`; that is separate repository metadata.
 {{ end }}
 
 ## Select the next slice

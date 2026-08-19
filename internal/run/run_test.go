@@ -2650,6 +2650,10 @@ func (r memoryPlanMutationRecord) RecordFinalVerification(verification plan.Fina
 
 func (r memoryPlanMutationRecord) RecordStartingBranch(branch string) error {
 	r.detail.State.Repo.Branch = branch
+	if r.detail.State.Workspace == nil {
+		r.detail.State.Workspace = &plan.Workspace{}
+	}
+	r.detail.State.Workspace.Branch = branch
 	return nil
 }
 

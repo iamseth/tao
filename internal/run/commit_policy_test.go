@@ -68,26 +68,30 @@ func TestRunWorkPromptExecutionModeText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Use the current branch where `tao run` started", "Do not create or switch branches", "Direct commits to `main` or `master` are allowed only when that is the starting branch"} {
+	for _, want := range []string{"Stay on the branch Tao prepared", "Do not create or switch branches", "matches the run packet `Workspace Branch`", "Do not compare the checked-out branch to `Repo Branch`", "A matching Workspace Branch may be `main` or `master` in current mode", "call `tao slice-complete` and let Tao alone perform any automatic commit"} {
 		if !strings.Contains(currentPrompt, want) {
 			t.Fatalf("expected current policy prompt to contain %q:\n%s", want, currentPrompt)
 		}
 	}
-	if strings.Contains(currentPrompt, "Create or reuse a single feature branch") {
-		t.Fatalf("expected current policy prompt to omit feature branch instructions:\n%s", currentPrompt)
+	for _, forbidden := range []string{"Create or reuse a single feature branch", "create a feature branch named"} {
+		if strings.Contains(currentPrompt, forbidden) {
+			t.Fatalf("expected current policy prompt to omit branch mutation instruction %q:\n%s", forbidden, currentPrompt)
+		}
 	}
 
-	featurePrompt, err := renderWorkPrompt(workPromptData{PlanDir: "/plans/plan-a", ExecutionMode: ExecutionModeIsolated.String(), CommitPolicy: CommitPolicySlice.String()})
+	isolatedPrompt, err := renderWorkPrompt(workPromptData{PlanDir: "/plans/plan-a", ExecutionMode: ExecutionModeIsolated.String(), CommitPolicy: CommitPolicySlice.String()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Create or reuse a single feature branch", "Never commit directly to:", "- `main`", "- `master`"} {
-		if !strings.Contains(featurePrompt, want) {
-			t.Fatalf("expected feature policy prompt to contain %q:\n%s", want, featurePrompt)
+	for _, want := range []string{"Stay on the workspace branch Tao prepared", "Do not create or switch branches", "Workspace Branch is missing or `none`", "checked-out branch is detached", "branches do not match", "matching branch is `main` or `master`", "Do not compare the checked-out branch to `Repo Branch`"} {
+		if !strings.Contains(isolatedPrompt, want) {
+			t.Fatalf("expected isolated policy prompt to contain %q:\n%s", want, isolatedPrompt)
 		}
 	}
-	if strings.Contains(featurePrompt, "Use the current branch where `tao run` started") {
-		t.Fatalf("expected feature policy prompt to omit current branch instructions:\n%s", featurePrompt)
+	for _, forbidden := range []string{"Create or reuse a single feature branch", "create a feature branch named", "Use the current branch where `tao run` started"} {
+		if strings.Contains(isolatedPrompt, forbidden) {
+			t.Fatalf("expected isolated policy prompt to omit branch mutation instruction %q:\n%s", forbidden, isolatedPrompt)
+		}
 	}
 }
 
@@ -174,12 +178,13 @@ func TestServiceExecuteExecutionModeCurrentCapturesStartingBranchBeforeSliceStar
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 	detail.Dir = planDir
 	detail.State.Repo.Root = repoRoot
-	detail.State.Repo.Branch = "planned-feature"
+	detail.State.Repo.Branch = "main"
 	completedDetail := runPlanDetail(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
 	completedDetail.Dir = planDir
 	completedDetail.State.Repo.Root = repoRoot
 	persistRunArtifacts(t, planDir, detail)
 	repo := &memoryRunRepository{details: []*plan.PlanDetail{detail, detail, completedDetail}}
+	executor := &packetCapturingExecutor{}
 	started := false
 	runner := func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
 		if name == "git" && runGitKey(args) == "branch --show-current" {
@@ -188,7 +193,7 @@ func TestServiceExecuteExecutionModeCurrentCapturesStartingBranchBeforeSliceStar
 		return ctx.Err()
 	}
 
-	err := NewService(repo, io.Discard, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeCurrent, CommitPolicy: CommitPolicyNone}}, RunDependencies: RunDependencies{SliceExecutor: fakeSliceExecutor{}, PlanRecordFactory: func(detail *plan.PlanDetail) (PlanMutationRecord, error) {
+	err := NewService(repo, io.Discard, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeCurrent, CommitPolicy: CommitPolicyNone}}, RunDependencies: RunDependencies{SliceExecutor: executor, PlanRecordFactory: func(detail *plan.PlanDetail) (PlanMutationRecord, error) {
 		record, err := plan.NewPlanRecord(planDir, detail)
 		if err != nil {
 			return nil, err
@@ -200,7 +205,10 @@ func TestServiceExecuteExecutionModeCurrentCapturesStartingBranchBeforeSliceStar
 				return err
 			}
 			if state.Repo.Branch != "main" {
-				t.Fatalf("expected starting branch written before slice start, got %q", state.Repo.Branch)
+				t.Fatalf("expected starting repo branch written before slice start, got %q", state.Repo.Branch)
+			}
+			if state.Workspace == nil || state.Workspace.Branch != "main" {
+				t.Fatalf("expected starting workspace branch written before slice start, got %#v", state.Workspace)
 			}
 			return record.StartSlice(sliceID, now)
 		}}, nil
@@ -210,6 +218,9 @@ func TestServiceExecuteExecutionModeCurrentCapturesStartingBranchBeforeSliceStar
 	}
 	if !started {
 		t.Fatal("expected slice starter to run")
+	}
+	if !strings.Contains(executor.packet, "- Repo Branch: main") || !strings.Contains(executor.packet, "- Workspace Branch: main") {
+		t.Fatalf("expected current-mode none-policy packet to contain distinct prepared branch fields:\n%s", executor.packet)
 	}
 }
 

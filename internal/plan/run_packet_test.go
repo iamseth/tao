@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ func TestRunPacketIncludesSelectedSliceContext(t *testing.T) {
 		"# Tao Run Packet",
 		"- Repo Root: /repo/root",
 		"- Repo Branch: main",
+		"- Workspace Branch: tao/plan",
 		"- Pending Slices: 002-build",
 		"- ID: 002-build",
 		"- Approval: required, approved: approval gate",
@@ -97,6 +99,32 @@ func TestRunPacketExecutionModeOutput(t *testing.T) {
 	}
 }
 
+func TestRunPacketRerenderPreservesDistinctWorkspaceBranch(t *testing.T) {
+	detail := runPacketDetail()
+	detail.State.Repo.Branch = "main"
+	detail.State.Workspace.Branch = "tao/durable-plan"
+
+	encoded, err := json.Marshal(detail.State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reloaded State
+	if err := json.Unmarshal(encoded, &reloaded); err != nil {
+		t.Fatal(err)
+	}
+	detail.State = reloaded
+
+	packet, err := RenderRunPacket(detail, RunPacketOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"- Repo Branch: main", "- Workspace Branch: tao/durable-plan"} {
+		if !strings.Contains(packet, want) {
+			t.Fatalf("rerendered packet missing %q:\n%s", want, packet)
+		}
+	}
+}
+
 func TestRunPacketIncludesInterruptedResumeInstructions(t *testing.T) {
 	packet, err := RenderRunPacket(runPacketDetail(), RunPacketOptions{Resuming: true, ResumeAttempt: 2})
 	if err != nil {
@@ -147,6 +175,7 @@ func TestRunPacketHandlesMissingOptionalArtifacts(t *testing.T) {
 	detail.State.GlobalInvariants = nil
 	detail.State.OpenQuestions = nil
 	detail.State.Repo = Repo{}
+	detail.State.Workspace = nil
 	detail.State.Plan.CompletedSlices = nil
 	detail.Slices.Slices[1].Verification.Source = ""
 	detail.Slices.Slices[1].Approval = nil
@@ -156,7 +185,7 @@ func TestRunPacketHandlesMissingOptionalArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"- Repo Root: none", "- Repo Branch: none", "- Approval: not required", "- Source: none", "## Prior Completions\n- none", "## Planning Brief\n- not present", "## Recent Relevant Events\n- none", "## Open Questions\n- none"} {
+	for _, want := range []string{"- Repo Root: none", "- Repo Branch: none", "- Workspace Branch: none", "- Approval: not required", "- Source: none", "## Prior Completions\n- none", "## Planning Brief\n- not present", "## Recent Relevant Events\n- none", "## Open Questions\n- none"} {
 		if !strings.Contains(packet, want) {
 			t.Fatalf("expected packet to contain %q:\n%s", want, packet)
 		}
@@ -363,6 +392,7 @@ func runPacketDetail() *PlanDetail {
 		State: State{
 			Status:           StatusInProgress,
 			Repo:             Repo{Root: "/repo/root", Branch: "main"},
+			Workspace:        &Workspace{Branch: "tao/plan"},
 			GlobalInvariants: []string{"Keep compatibility."},
 			OpenQuestions:    []string{"Should this be exported?"},
 			Plan: PlanState{

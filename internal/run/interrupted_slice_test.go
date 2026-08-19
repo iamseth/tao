@@ -143,7 +143,7 @@ func TestInterruptedSliceClassifiesPolicyNoneWithoutExecutionStart(t *testing.T)
 	}
 }
 
-func TestServiceExecuteClassifiesReloadedPolicyNoneCurrentRunWithoutWorkspaceMetadata(t *testing.T) {
+func TestServiceExecuteClassifiesReloadedPolicyNoneCurrentRunWithWorkspaceBranch(t *testing.T) {
 	plansDir := t.TempDir()
 	planDir := filepath.Join(plansDir, "plan-a")
 	if err := os.MkdirAll(planDir, 0o750); err != nil {
@@ -178,7 +178,7 @@ func TestServiceExecuteClassifiesReloadedPolicyNoneCurrentRunWithoutWorkspaceMet
 		t.Fatal(err)
 	}
 	slice := reloaded.Slices.Slices[0]
-	if reloaded.State.Workspace != nil || slice.ExecutionStart != nil || slice.ExecutionRoot != repoRoot {
+	if reloaded.State.Workspace == nil || reloaded.State.Workspace.Branch != "feature" || slice.ExecutionStart != nil || slice.ExecutionRoot != repoRoot {
 		t.Fatalf("reloaded policy-none artifacts = workspace:%#v slice:%#v", reloaded.State.Workspace, slice)
 	}
 

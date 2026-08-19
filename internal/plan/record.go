@@ -329,9 +329,10 @@ func (r *PlanRecord) PersistArtifacts() error {
 	return err
 }
 
-// RecordStartingBranch stamps the resolved repo branch onto state and persists
-// it. Called when execution mode is current and the live branch differs from
-// the plan-recorded branch.
+// RecordStartingBranch persists the resolved current-checkout branch as both
+// repository metadata and the prepared workspace identity consumed by run
+// packets. The fields remain separate so later workspace preparation can
+// diverge without changing repository metadata.
 func (r *PlanRecord) RecordStartingBranch(branch string) error {
 	store, err := r.storeOrDefault()
 	if err != nil {
@@ -339,6 +340,10 @@ func (r *PlanRecord) RecordStartingBranch(branch string) error {
 	}
 	baseline := r.stateBaseline()
 	r.detail.State.Repo.Branch = branch
+	if r.detail.State.Workspace == nil {
+		r.detail.State.Workspace = &Workspace{}
+	}
+	r.detail.State.Workspace.Branch = branch
 	return r.applyStateUpdate(store, baseline, r.detail.State, nil)
 }
 

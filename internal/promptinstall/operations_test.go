@@ -427,6 +427,9 @@ func assertPromptRenameInstalled(t *testing.T, dir string) string {
 	if !strings.Contains(noteSlice, "<!-- tao-managed: tao-note-slice v1 -->") {
 		t.Fatalf("expected managed note-slice prompt, got %q", noteSlice)
 	}
+	if strings.Contains(noteSlice, "plan-preview.md") {
+		t.Fatalf("managed note-slice prompt requests retired plan preview artifact: %q", noteSlice)
+	}
 	if _, err := os.Stat(filepath.Join(dir, "web-slice.md")); !os.IsNotExist(err) {
 		t.Fatalf("expected retired managed web-slice prompt removed, stat error = %v", err)
 	}

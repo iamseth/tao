@@ -194,8 +194,8 @@ func TestPromptRendersCanonicalPrompts(t *testing.T) {
 		t.Fatal(err)
 	}
 	text = out.String()
-	if !strings.Contains(text, "Use the current branch where `tao run` started") || strings.Contains(text, "Create or reuse a single feature branch") {
-		t.Fatalf("expected current branch run prompt instructions, got %q", text)
+	if !strings.Contains(text, "Stay on the branch Tao prepared") || !strings.Contains(text, "Do not create or switch branches") || strings.Contains(text, "Create or reuse a single feature branch") {
+		t.Fatalf("expected Tao-prepared branch run prompt instructions, got %q", text)
 	}
 
 	err := app.Run(context.Background(), []string{"prompt", "run", "--execution-mode", "main"})
@@ -277,8 +277,8 @@ func TestPromptRunExecutionMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := out.String()
-	if !strings.Contains(text, "Use the current branch where `tao run` started") || strings.Contains(text, "Create or reuse a single feature branch") {
-		t.Fatalf("expected current branch run prompt instructions, got %q", text)
+	if !strings.Contains(text, "Stay on the branch Tao prepared") || !strings.Contains(text, "Do not create or switch branches") || strings.Contains(text, "Create or reuse a single feature branch") {
+		t.Fatalf("expected Tao-prepared branch run prompt instructions, got %q", text)
 	}
 	if !strings.Contains(text, "- Execution Mode: current") {
 		t.Fatalf("expected current execution mode in run packet, got %q", text)
@@ -856,7 +856,7 @@ func TestPromptUsesEnvPolicyDefaults(t *testing.T) {
 	if !strings.Contains(text, "`tao slice-complete` owns the recoverable commit transaction") || strings.Contains(text, "Commit with a message") {
 		t.Fatalf("expected Tao-owned slice commit default from env, got %q", text)
 	}
-	if !strings.Contains(text, "Use the current branch where `tao run` started") || strings.Contains(text, "Create or reuse a single feature branch") {
-		t.Fatalf("expected current branch default from env, got %q", text)
+	if !strings.Contains(text, "Stay on the branch Tao prepared") || !strings.Contains(text, "Do not create or switch branches") || strings.Contains(text, "Create or reuse a single feature branch") {
+		t.Fatalf("expected Tao-prepared branch default from env, got %q", text)
 	}
 }

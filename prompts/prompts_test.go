@@ -16,9 +16,14 @@ func TestRenderRunPromptAppliesDefaultsAndData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"<plan-directory>", "packet-body", "Do not commit changes", "Create or reuse a single feature branch"} {
+	for _, want := range []string{"<plan-directory>", "packet-body", "Do not commit changes", "Stay on the workspace branch Tao prepared", "Do not create or switch branches", "Workspace Branch", "Repo Branch"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("rendered run prompt missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"Create or reuse a single feature branch", "create a feature branch named"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("rendered run prompt retains branch mutation instruction %q", forbidden)
 		}
 	}
 }
@@ -297,6 +302,9 @@ func TestRenderNoteSlicePromptUsesPlanDirectoryAndTranscript(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if strings.Contains(got, "plan-preview.md") {
+		t.Fatalf("rendered note slice prompt requests retired plan preview artifact:\n%s", got)
 	}
 	for _, want := range []string{
 		"Tao Note Slice",
