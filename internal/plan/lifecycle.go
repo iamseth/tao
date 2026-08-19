@@ -683,13 +683,51 @@ func reopen(detail *PlanDetail, changes *ArtifactChangeSet, newSlices []Slice, n
 	}
 	detail.State.Plan.Timing.LastActivityAt = new(now)
 
-	event := Event{Type: EventTypePlanReopened, Timestamp: now, PlanID: detail.State.Plan.ID, Message: "Plan reopened for rework"}
+	event := planReopenedEvent(detail.State.Plan.ID, now)
 	return event, nil
 }
 
 // Reopen transitions the bound completed plan through the file-backed mutation path.
 func (r *PlanRecord) Reopen(newSlices []Slice, now time.Time) error {
 	return r.apply(reopenMutation(newSlices, now, false))
+}
+
+// ReopenAutomatic atomically applies the ordinary reopen gates and records the
+// automatic round evidence after plan_reopened in the same mutation.
+func (r *PlanRecord) ReopenAutomatic(newSlices []Slice, evidence AutomaticReworkRound) error {
+	if err := evidence.Validate(); err != nil {
+		return err
+	}
+	return r.apply(automaticReopenMutation(newSlices, evidence))
+}
+
+func automaticReopenMutation(newSlices []Slice, evidence AutomaticReworkRound) artifactMutationFunc {
+	return func(detail *PlanDetail) (lifecycleMutation, error) {
+		reopened := planReopenedEvent(detail.State.Plan.ID, evidence.ReopenedAt)
+		round := automaticReworkRoundEvent(detail.State.Plan.ID, evidence)
+		if semanticEventsWereRecorded(detail.Events, []Event{reopened, round}) && reopenPostconditionMatches(detail, newSlices) {
+			return unchangedLifecycleMutation(detail), nil
+		}
+		return applyLifecycleMutation(detail, func(changes *ArtifactChangeSet) ([]Event, error) {
+			event, err := reopen(detail, changes, newSlices, evidence.ReopenedAt)
+			if err != nil {
+				return nil, err
+			}
+			return []Event{event, round}, nil
+		})
+	}
+}
+
+func planReopenedEvent(planID string, now time.Time) Event {
+	return Event{Type: EventTypePlanReopened, Timestamp: now, PlanID: planID, Message: "Plan reopened for rework"}
+}
+
+func automaticReworkRoundEvent(planID string, evidence AutomaticReworkRound) Event {
+	return Event{
+		Type: EventTypeReworkRound, Timestamp: evidence.ReopenedAt, PlanID: planID,
+		Round: evidence.Round, Attempts: evidence.Attempts, Fingerprint: evidence.Fingerprint,
+		Message: fmt.Sprintf("Automatic rework round %d (attempt %d of %d)", evidence.Round, evidence.Attempts, evidence.MaxAttempts),
+	}
 }
 
 // ReopenForced explicitly bypasses the reopen status gate while still applying
@@ -700,7 +738,7 @@ func (r *PlanRecord) ReopenForced(newSlices []Slice, now time.Time) error {
 
 func reopenMutation(newSlices []Slice, now time.Time, force bool) artifactMutationFunc {
 	return func(detail *PlanDetail) (lifecycleMutation, error) {
-		expected := Event{Type: EventTypePlanReopened, Timestamp: now, PlanID: detail.State.Plan.ID, Message: "Plan reopened for rework"}
+		expected := planReopenedEvent(detail.State.Plan.ID, now)
 		if semanticEventsWereRecorded(detail.Events, []Event{expected}) && reopenPostconditionMatches(detail, newSlices) {
 			return unchangedLifecycleMutation(detail), nil
 		}

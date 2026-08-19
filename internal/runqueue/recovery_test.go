@@ -60,7 +60,7 @@ func TestRecoveryInspectorClassifiesSliceCompleteReviewPhases(t *testing.T) {
 	}
 }
 
-func TestRecoveryInspectorRestoresSupersededReworkFingerprint(t *testing.T) {
+func TestRecoveryInspectorRestoresLegacyReworkFingerprintWithoutRoundEvent(t *testing.T) {
 	finding := plan.ReviewFinding{Severity: "major", File: "internal/runqueue/recovery.go", Message: "fix recovery"}
 	review := &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, Findings: []plan.ReviewFinding{finding}}
 	detail := completedRecoveryPlan(review, []plan.Event{{Type: plan.EventTypePlanReviewed, Review: review}, {Type: plan.EventTypePlanReopened}})
@@ -77,6 +77,9 @@ func TestRecoveryInspectorRestoresSupersededReworkFingerprint(t *testing.T) {
 	}
 	if inspection.PreviousFindingFingerprint == reworkpkg.BatchLocationFindingsFingerprint([]plan.ReviewFinding{finding}) {
 		t.Fatal("recovery restored the historical location-oriented fingerprint")
+	}
+	if _, found := findRecoveryEvent(detail.Events, plan.EventTypeReworkRound); found {
+		t.Fatal("legacy recovery synthesized missing rework_round evidence")
 	}
 }
 
@@ -108,6 +111,15 @@ func TestRecoveryInspectorReportsRepositoryErrors(t *testing.T) {
 	if _, err := NewRecoveryInspector(nil)(context.Background(), "plan-a"); err == nil {
 		t.Fatal("nil repository inspection unexpectedly succeeded")
 	}
+}
+
+func findRecoveryEvent(events []plan.Event, eventType string) (plan.Event, bool) {
+	for _, event := range events {
+		if event.Type == eventType {
+			return event, true
+		}
+	}
+	return plan.Event{}, false
 }
 
 func recurringFileRecoveryPlan() (*plan.PlanDetail, []plan.ReviewFinding) {

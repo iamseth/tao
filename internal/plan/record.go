@@ -537,6 +537,33 @@ func (r *PlanRecord) RecordPRFeedbackTriage(result PRFeedbackTriageResult, triag
 	})
 }
 
+// RecordAutomaticReworkStop appends a stop decision without changing plan
+// state, review, or slices. Equivalent evidence is recorded at most once.
+func (r *PlanRecord) RecordAutomaticReworkStop(evidence AutomaticReworkStop) error {
+	if err := evidence.Validate(); err != nil {
+		return err
+	}
+	store, err := r.storeOrDefault()
+	if err != nil {
+		return err
+	}
+	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
+		event := automaticReworkStopEvent(detail.State.Plan.ID, evidence)
+		if semanticEventsWereRecorded(detail.Events, []Event{event}) {
+			return nil, nil
+		}
+		return []Event{event}, nil
+	})
+}
+
+func automaticReworkStopEvent(planID string, evidence AutomaticReworkStop) Event {
+	return Event{
+		Type: EventTypeReworkStopped, Timestamp: evidence.StoppedAt, PlanID: planID,
+		Round: evidence.Round, Attempts: evidence.Attempts, Fingerprint: evidence.Fingerprint,
+		Reason: evidence.Reason, Message: evidence.Reason,
+	}
+}
+
 // ReopenFromPullRequest atomically appends pull-request rework slices and
 // records the corresponding triaged change thread IDs as consumed. Consumption
 // evidence is append-only and independent of later triage snapshots.

@@ -14,8 +14,9 @@ import (
 // PlanResolver loads the latest persisted detail for a plan.
 type PlanResolver func(context.Context, string) (*plan.PlanDetail, error)
 
-// RecordFactory binds a loaded plan detail to its lifecycle mutation boundary.
-type RecordFactory func(*plan.PlanDetail) (Record, error)
+// AutomaticRecordFactory binds a loaded plan detail to the dedicated
+// automatic-rework mutation boundary.
+type AutomaticRecordFactory func(*plan.PlanDetail) (AutomaticRecord, error)
 
 // Clock supplies the time used for a rework mutation.
 type Clock func() time.Time
@@ -191,10 +192,9 @@ func formatBlockingFinding(finding plan.ReviewFinding) string {
 
 // Driver owns automatic-rework decisions and the bounded execution loop.
 type Driver struct {
-	Resolve     PlanResolver
-	Record      RecordFactory
-	Now         Clock
-	AppendEvent func(string, plan.Event) error
+	Resolve PlanResolver
+	Record  AutomaticRecordFactory
+	Now     Clock
 
 	// DecideOne lets owners retain an existing decision seam while delegating
 	// round driving to Loop.
@@ -276,17 +276,14 @@ func (d Driver) Decide(ctx context.Context, planID string, baseline, attempts in
 	}
 	fingerprint := ReworkFindingsFingerprint(findings)
 	if budget.Attempts >= maxAttempts {
-		decision := d.stoppedDecision(detail, planID, budget.BaselineRound, budget.Attempts, round, fingerprint, StopKindCapExhausted, fmt.Sprintf("automatic rework cap exhausted after %d cycles", maxAttempts), findings, nil)
-		return decision, nil
+		return d.stoppedDecision(detail, budget.BaselineRound, budget.Attempts, round, fingerprint, StopKindCapExhausted, fmt.Sprintf("automatic rework cap exhausted after %d cycles", maxAttempts), findings, nil)
 	}
 	if budget.PreviousFindingFingerprint != "" && budget.PreviousFindingFingerprint == fingerprint {
-		decision := d.stoppedDecision(detail, planID, budget.BaselineRound, budget.Attempts, round, fingerprint, StopKindFindingsStalled, equivalentFindingsStopReason, findings, nil)
-		return decision, nil
+		return d.stoppedDecision(detail, budget.BaselineRound, budget.Attempts, round, fingerprint, StopKindFindingsStalled, equivalentFindingsStopReason, findings, nil)
 	}
 	if recurringFiles := recurringReworkFiles(detail, budget.BaselineRound, findings); len(recurringFiles) > 0 {
 		reason := recurringFilesStopReason(recurringFiles)
-		decision := d.stoppedDecision(detail, planID, budget.BaselineRound, budget.Attempts, round, fingerprint, StopKindRecurringFiles, reason, findings, recurringFiles)
-		return decision, nil
+		return d.stoppedDecision(detail, budget.BaselineRound, budget.Attempts, round, fingerprint, StopKindRecurringFiles, reason, findings, recurringFiles)
 	}
 	if d.Record == nil {
 		return Decision{}, errors.New("automatic rework record factory is nil")
@@ -296,16 +293,18 @@ func (d Driver) Decide(ctx context.Context, planID string, baseline, attempts in
 		return Decision{}, err
 	}
 	reopenedAt := d.now()
-	if _, err := Reopen(record, reopenedAt); err != nil {
-		return Decision{}, err
+	next := round + 1
+	evidence := plan.AutomaticReworkRound{
+		Round: next, Attempts: budget.Attempts + 1, MaxAttempts: maxAttempts,
+		Fingerprint: fingerprint, ReopenedAt: reopenedAt,
 	}
-	decision := Decision{Reworked: true, Round: RoundCount(record.Detail()), BaselineRound: budget.BaselineRound, Fingerprint: fingerprint}
-	attempt := budget.Attempts + 1
-	d.appendEvent(detail.Dir, plan.Event{Type: plan.EventTypeReworkRound, Timestamp: reopenedAt, PlanID: planID, Round: decision.Round, Attempts: attempt, Fingerprint: fingerprint, Message: fmt.Sprintf("Automatic rework round %d (attempt %d of %d)", decision.Round, attempt, maxAttempts)})
-	return decision, nil
+	if _, err := ReopenAutomatic(record, evidence); err != nil {
+		return Decision{}, reworkMutationError(err)
+	}
+	return Decision{Reworked: true, Round: next, BaselineRound: budget.BaselineRound, Fingerprint: fingerprint}, nil
 }
 
-func (d Driver) stoppedDecision(detail *plan.PlanDetail, planID string, baseline, attempts, round int, fingerprint string, kind StopKind, reason string, findings []plan.ReviewFinding, recurringFiles []string) Decision {
+func (d Driver) stoppedDecision(detail *plan.PlanDetail, baseline, attempts, round int, fingerprint string, kind StopKind, reason string, findings []plan.ReviewFinding, recurringFiles []string) (Decision, error) {
 	decision := Decision{
 		Round:          round,
 		BaselineRound:  baseline,
@@ -315,8 +314,44 @@ func (d Driver) stoppedDecision(detail *plan.PlanDetail, planID string, baseline
 		RecurringFiles: slices.Clone(recurringFiles),
 		Findings:       cloneFindings(findings),
 	}
-	d.appendEvent(detail.Dir, plan.Event{Type: plan.EventTypeReworkStopped, Timestamp: d.now(), PlanID: planID, Round: round, Attempts: attempts, Fingerprint: fingerprint, Reason: reason, Message: reason})
-	return decision
+	if d.Record == nil {
+		return Decision{}, stopMutationError(decision, errors.New("automatic rework record factory is nil"))
+	}
+	record, err := d.Record(detail)
+	if err != nil {
+		return Decision{}, stopMutationError(decision, err)
+	}
+	err = record.RecordAutomaticReworkStop(plan.AutomaticReworkStop{
+		Round: round, Attempts: attempts, Fingerprint: fingerprint,
+		Reason: reason, StoppedAt: d.now(),
+	})
+	if err != nil {
+		return Decision{}, stopMutationError(decision, err)
+	}
+	return decision, nil
+}
+
+type automaticReworkMutationError struct {
+	err         error
+	stopContext string
+}
+
+func (e *automaticReworkMutationError) Error() string {
+	message := "automatic rework mutation failed: " + e.err.Error()
+	if e.stopContext != "" {
+		message += "\n" + e.stopContext
+	}
+	return message
+}
+
+func (e *automaticReworkMutationError) Unwrap() error { return e.err }
+
+func stopMutationError(decision Decision, err error) error {
+	return &automaticReworkMutationError{err: fmt.Errorf("record stop evidence: %w", err), stopContext: FormatStopMessage(decision)}
+}
+
+func reworkMutationError(err error) error {
+	return &automaticReworkMutationError{err: fmt.Errorf("record automatic rework round: %w", err)}
 }
 
 func (d Driver) now() time.Time {
@@ -324,12 +359,6 @@ func (d Driver) now() time.Time {
 		return d.Now().UTC()
 	}
 	return time.Now().UTC()
-}
-
-func (d Driver) appendEvent(dir string, event plan.Event) {
-	if d.AppendEvent != nil {
-		_ = d.AppendEvent(dir, event)
-	}
 }
 
 // Run executes a plan through one automatic-rework policy boundary. Disabled
@@ -435,6 +464,10 @@ func (d Driver) Loop(ctx context.Context, planID string, opts LoopOptions) error
 		}
 		decision, err := d.Decide(ctx, planID, budget.BaselineRound, budget.Attempts, budget.PreviousFindingFingerprint, maxAttempts)
 		if err != nil {
+			var mutationErr *automaticReworkMutationError
+			if errors.As(err, &mutationErr) {
+				return Decision{}, false, err
+			}
 			return Decision{}, false, fmt.Errorf("automatic rework mutation failed: %w", err)
 		}
 		return decision, true, nil

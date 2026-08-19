@@ -9,6 +9,34 @@ import (
 	"time"
 )
 
+func TestAutomaticReworkEvidenceValidation(t *testing.T) {
+	now := time.Date(2026, 8, 18, 1, 0, 0, 0, time.UTC)
+	validStop := AutomaticReworkStop{Round: 1, Attempts: 1, Fingerprint: "fingerprint", Reason: "stopped", StoppedAt: now}
+	validRound := AutomaticReworkRound{Round: 2, Attempts: 1, MaxAttempts: 5, Fingerprint: "fingerprint", ReopenedAt: now}
+	if err := validStop.Validate(); err != nil {
+		t.Fatalf("valid stop: %v", err)
+	}
+	if err := validRound.Validate(); err != nil {
+		t.Fatalf("valid round: %v", err)
+	}
+
+	invalid := []struct {
+		name string
+		err  error
+	}{
+		{name: "negative stop round", err: func() error { value := validStop; value.Round = -1; return value.Validate() }()},
+		{name: "empty stop reason", err: func() error { value := validStop; value.Reason = ""; return value.Validate() }()},
+		{name: "zero round", err: func() error { value := validRound; value.Round = 0; return value.Validate() }()},
+		{name: "attempt above maximum", err: func() error { value := validRound; value.Attempts = 6; return value.Validate() }()},
+		{name: "empty fingerprint", err: func() error { value := validRound; value.Fingerprint = ""; return value.Validate() }()},
+	}
+	for _, test := range invalid {
+		if test.err == nil {
+			t.Errorf("%s unexpectedly passed validation", test.name)
+		}
+	}
+}
+
 func TestEventFailureModeFieldsJSONLRoundTripAndOmitZero(t *testing.T) {
 	planDir := t.TempDir()
 	timestamp := time.Date(2026, 7, 14, 1, 30, 0, 0, time.UTC)

@@ -837,6 +837,148 @@ func TestPlanRecordFinalVerificationWriteFailureRetainsInMemoryMetadata(t *testi
 	}
 }
 
+func TestPlanRecordAutomaticReworkStopIsDurableAndIdempotent(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "plan-a")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	detail := startSliceDetail(dir)
+	detail.State.Status = StatusChangesRequested
+	original := clonePlanDetail(detail)
+	writeStartSliceArtifacts(t, dir, detail)
+	evidence := AutomaticReworkStop{
+		Round: 2, Attempts: 2, Fingerprint: "finding-set", Reason: "automatic rework stalled", StoppedAt: editTime(),
+	}
+	ioStore := &failingMutationJournalIO{delegate: fileMutationJournalIO{}, failOperation: "remove"}
+	record, err := newPlanRecord(journalArtifactMutationStore{fileArtifactStore: fileArtifactStore{}, journalIO: ioStore}, dir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := record.RecordAutomaticReworkStop(evidence); err == nil || !strings.Contains(err.Error(), "injected remove failure") {
+		t.Fatalf("first stop error = %v, want journal removal failure", err)
+	}
+	if !reflect.DeepEqual(detail, original) {
+		t.Fatalf("failed stop published in-memory changes: got %#v want %#v", detail, original)
+	}
+	if err := record.RecordAutomaticReworkStop(evidence); err != nil {
+		t.Fatalf("same-record retry: %v", err)
+	}
+	mutationID := requireSingleEventType(t, detail.Events, EventTypeReworkStopped)
+	if !reflect.DeepEqual(detail.State, original.State) || !reflect.DeepEqual(detail.Slices, original.Slices) {
+		t.Fatalf("stop changed lifecycle artifacts: state=%#v slices=%#v", detail.State, detail.Slices)
+	}
+
+	files, err := loadPlanFiles(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freshDetail := detailFromFiles(files)
+	fresh, err := NewPlanRecord(dir, freshDetail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence.StoppedAt = evidence.StoppedAt.Add(time.Minute)
+	if err := fresh.RecordAutomaticReworkStop(evidence); err != nil {
+		t.Fatalf("fresh-record semantic retry: %v", err)
+	}
+	if got := requireSingleEventType(t, freshDetail.Events, EventTypeReworkStopped); got != mutationID {
+		t.Fatalf("fresh retry mutation_id = %q, want %q", got, mutationID)
+	}
+}
+
+func TestPlanRecordAutomaticReworkStopRefreshesStaleDetail(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "reopen")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	detail := completedReopenDetail()
+	detail.Dir = dir
+	writeStartSliceArtifacts(t, dir, detail)
+	stale := clonePlanDetail(detail)
+	staleRecord, err := NewPlanRecord(dir, stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := clonePlanDetail(detail)
+	currentRecord, err := NewPlanRecord(dir, current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verification := FinalVerification{Command: "make verify", CWD: "/repo", Result: "passed", VerifiedAt: editTime()}
+	if err := currentRecord.RecordFinalVerification(verification); err != nil {
+		t.Fatal(err)
+	}
+	if err := staleRecord.RecordAutomaticReworkStop(AutomaticReworkStop{Round: 1, Attempts: 1, Fingerprint: "finding-set", Reason: "automatic rework stalled", StoppedAt: editTime()}); err != nil {
+		t.Fatal(err)
+	}
+	if stale.State.Plan.FinalVerification == nil || stale.State.Plan.FinalVerification.Command != "make verify" {
+		t.Fatalf("stop erased authoritative state: %#v", stale.State.Plan.FinalVerification)
+	}
+}
+
+func TestPlanRecordAutomaticReopenJournalsOrderedRoundEvidenceOnce(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "reopen")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	detail := completedReopenDetail()
+	detail.Dir = dir
+	original := clonePlanDetail(detail)
+	writeStartSliceArtifacts(t, dir, detail)
+	reopenedAt := editTime()
+	newSlices := []Slice{newReopenSlice("002-fix", "Fix review finding", reopenedAt)}
+	evidence := AutomaticReworkRound{Round: 1, Attempts: 1, MaxAttempts: 5, Fingerprint: "finding-set", ReopenedAt: reopenedAt}
+	ioStore := &failingMutationJournalIO{delegate: fileMutationJournalIO{}, failOperation: "remove"}
+	record, err := newPlanRecord(journalArtifactMutationStore{fileArtifactStore: fileArtifactStore{}, journalIO: ioStore}, dir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := record.ReopenAutomatic(newSlices, evidence); err == nil || !strings.Contains(err.Error(), "injected remove failure") {
+		t.Fatalf("first reopen error = %v, want journal removal failure", err)
+	}
+	if !reflect.DeepEqual(detail, original) {
+		t.Fatalf("failed reopen published in-memory changes: got %#v want %#v", detail, original)
+	}
+	if err := record.ReopenAutomatic(newSlices, evidence); err != nil {
+		t.Fatalf("same-record retry: %v", err)
+	}
+	assertAutomaticReopenEvents(t, detail.Events)
+
+	files, err := loadPlanFiles(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freshDetail := detailFromFiles(files)
+	fresh, err := NewPlanRecord(dir, freshDetail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence.ReopenedAt = evidence.ReopenedAt.Add(time.Minute)
+	if err := fresh.ReopenAutomatic(newSlices, evidence); err != nil {
+		t.Fatalf("fresh-record semantic retry: %v", err)
+	}
+	assertAutomaticReopenEvents(t, freshDetail.Events)
+}
+
+func assertAutomaticReopenEvents(t *testing.T, events []Event) {
+	t.Helper()
+	owned := make([]Event, 0, 2)
+	for _, event := range events {
+		if event.Type == EventTypePlanReopened || event.Type == EventTypeReworkRound {
+			owned = append(owned, event)
+		}
+	}
+	if len(owned) != 2 || owned[0].Type != EventTypePlanReopened || owned[1].Type != EventTypeReworkRound {
+		t.Fatalf("automatic reopen events = %#v", owned)
+	}
+	if owned[0].MutationID == "" || owned[1].MutationID != owned[0].MutationID {
+		t.Fatalf("automatic reopen mutation IDs = %q, %q", owned[0].MutationID, owned[1].MutationID)
+	}
+	if owned[1].Round != 1 || owned[1].Attempts != 1 || owned[1].Fingerprint != "finding-set" || owned[1].Message != "Automatic rework round 1 (attempt 1 of 5)" {
+		t.Fatalf("automatic round evidence = %#v", owned[1])
+	}
+}
+
 func TestReopenCompletedPlanAddsPendingSlicesAndEvent(t *testing.T) {
 	dir := t.TempDir()
 	writeCompletedReopenPlan(t, dir)

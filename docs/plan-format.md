@@ -435,8 +435,8 @@ Current well-known event types include:
 | `run_context` | Pre-attempt run-packet and guardrail telemetry. |
 | `session_timeout` | Agent session exceeded its wall-clock timeout. |
 | `budget_exceeded` | An opt-in hard slice output-token or cost cap was crossed; records the metric, threshold, and observed value. |
-| `rework_round` | Automatic rework round started. |
-| `rework_stopped` | Automatic rework stopped at a persisted safety bound. |
+| `rework_round` | Authoritative evidence that an automatic rework round was atomically reopened. |
+| `rework_stopped` | Authoritative evidence that automatic rework stopped at a persisted safety bound. |
 | `final_verification` | Final repository verification result was recorded. |
 | `merge_verification` | Merge verification result was recorded. |
 | `plan_commit_fallback` | Plan-level commit fell back to the selected agent. |
@@ -460,11 +460,20 @@ or append slices. Existing attempt-cap and exact-fingerprint checks retain their
 precedence. The plan remains `changes_requested`, and its current review and
 actionable findings remain the operator-facing source of truth.
 
-Direct and queued automatic rework use the same decision policy. Queue snapshots
-persist the baseline and bounded progress, so interrupted recovery applies the
-third review as one terminal observation, settles the entry as failed, and does
-not execute or reopen the plan again. Once the stop event is persisted, recovery
-must not append a duplicate observation. A later run refuses a fresh budget
+Direct and queued automatic rework use the same decision policy. Each new
+automatic round records `plan_reopened` followed by `rework_round` in the same
+journaled state/slices/events mutation. A successful rework decision is exposed
+only after that mutation settles. Queue snapshots are a later, separate progress
+boundary; interrupted recovery reconstructs attempts and the prior finding
+fingerprint from the settled plan before deciding whether another execution is
+needed. Plans created by older Tao versions may contain generated rework slices
+without a matching historical `rework_round`; those slices remain the compatible
+round-count source and do not require migration or authorize retroactive stops.
+
+Queue snapshots persist the baseline and bounded progress, so interrupted
+recovery applies the third review as one terminal observation, settles the entry
+as failed, and does not execute or reopen the plan again. Once the stop event is
+persisted, recovery must not append a duplicate observation. A later run refuses a fresh budget
 unless `--rework-restart` is explicit; restart uses the current round as a new
 baseline/window while retaining all historical slices and ordinary gates.
 
@@ -489,7 +498,7 @@ A `verification_command_invalid` event should include the original `command`, a 
 
 An `agent_metrics` event includes the usual event fields plus a top-level `agent` and a `metrics` object. The metrics object records the agent name, session ID, provider and model IDs when available, token counts, cost, assistant message count, tool call count, and run result/status so failed attempts can still be represented in telemetry totals. Metrics are generic across built-in runtimes; consumers should not assume runtime-specific fields.
 
-Metrics events are durable plan artifacts, but collection is best-effort. Unavailable metrics from any supported runtime should skip telemetry without failing the run.
+Metrics events are durable plan artifacts, but collection is best-effort. Unlike authoritative rework lifecycle evidence, unavailable telemetry from any supported runtime may be skipped and must not fail or recover a run.
 
 A `run_context` event includes the usual event fields plus `agent`, `run_packet_provided`, and `guardrail_warnings`. It should be emitted after selected-slice preflight and before invoking the agent.
 

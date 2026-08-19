@@ -225,6 +225,68 @@ type PRFeedbackTriageEntry struct {
 	Rationale string `json:"rationale"`
 }
 
+// AutomaticReworkStop is the durable evidence for a bounded automatic-rework
+// decision that refused to open another round.
+type AutomaticReworkStop struct {
+	Round       int
+	Attempts    int
+	Fingerprint string
+	Reason      string
+	StoppedAt   time.Time
+}
+
+// Validate rejects evidence that cannot reproduce the established
+// rework_stopped event contract.
+func (e AutomaticReworkStop) Validate() error {
+	if e.Round < 0 {
+		return fmt.Errorf("automatic rework stop round cannot be negative")
+	}
+	if e.Attempts < 0 {
+		return fmt.Errorf("automatic rework stop attempts cannot be negative")
+	}
+	if strings.TrimSpace(e.Fingerprint) == "" {
+		return fmt.Errorf("automatic rework stop fingerprint is required")
+	}
+	if strings.TrimSpace(e.Reason) == "" || e.Reason != strings.TrimSpace(e.Reason) {
+		return fmt.Errorf("automatic rework stop reason is required and must not have surrounding whitespace")
+	}
+	if e.StoppedAt.IsZero() {
+		return fmt.Errorf("automatic rework stop timestamp is required")
+	}
+	return nil
+}
+
+// AutomaticReworkRound is the durable evidence coupled to an automatic plan
+// reopen. MaxAttempts is retained to reproduce the existing event message.
+type AutomaticReworkRound struct {
+	Round       int
+	Attempts    int
+	MaxAttempts int
+	Fingerprint string
+	ReopenedAt  time.Time
+}
+
+// Validate rejects evidence that cannot reproduce the established rework_round
+// event contract.
+func (e AutomaticReworkRound) Validate() error {
+	if e.Round <= 0 {
+		return fmt.Errorf("automatic rework round must be positive")
+	}
+	if e.Attempts <= 0 {
+		return fmt.Errorf("automatic rework attempts must be positive")
+	}
+	if e.MaxAttempts <= 0 || e.Attempts > e.MaxAttempts {
+		return fmt.Errorf("automatic rework maximum attempts must include attempt %d", e.Attempts)
+	}
+	if strings.TrimSpace(e.Fingerprint) == "" {
+		return fmt.Errorf("automatic rework round fingerprint is required")
+	}
+	if e.ReopenedAt.IsZero() {
+		return fmt.Errorf("automatic rework round timestamp is required")
+	}
+	return nil
+}
+
 // FinalVerification records broad repository verification performed after all
 // slices settle and before a completed branch is reviewed.
 type FinalVerification struct {

@@ -14,7 +14,9 @@ import (
 )
 
 type driverRecord struct {
-	detail *plan.PlanDetail
+	detail    *plan.PlanDetail
+	stopErr   error
+	reopenErr error
 }
 
 func (r *driverRecord) Detail() *plan.PlanDetail { return r.detail }
@@ -22,6 +24,36 @@ func (r *driverRecord) Detail() *plan.PlanDetail { return r.detail }
 func (r *driverRecord) Reopen(slices []plan.Slice, now time.Time) error {
 	_, err := plan.Reopen(r.detail, slices, now)
 	return err
+}
+
+func (r *driverRecord) RecordAutomaticReworkStop(evidence plan.AutomaticReworkStop) error {
+	if r.stopErr != nil {
+		return r.stopErr
+	}
+	if err := evidence.Validate(); err != nil {
+		return err
+	}
+	r.detail.Events = append(r.detail.Events, plan.Event{
+		Type: plan.EventTypeReworkStopped, Timestamp: evidence.StoppedAt, PlanID: r.detail.State.Plan.ID,
+		Round: evidence.Round, Attempts: evidence.Attempts, Fingerprint: evidence.Fingerprint,
+		Reason: evidence.Reason, Message: evidence.Reason,
+	})
+	return nil
+}
+
+func (r *driverRecord) ReopenAutomatic(newSlices []plan.Slice, evidence plan.AutomaticReworkRound) error {
+	if r.reopenErr != nil {
+		return r.reopenErr
+	}
+	if err := r.Reopen(newSlices, evidence.ReopenedAt); err != nil {
+		return err
+	}
+	r.detail.Events = append(r.detail.Events, plan.Event{
+		Type: plan.EventTypeReworkRound, Timestamp: evidence.ReopenedAt, PlanID: r.detail.State.Plan.ID,
+		Round: evidence.Round, Attempts: evidence.Attempts, Fingerprint: evidence.Fingerprint,
+		Message: fmt.Sprintf("Automatic rework round %d (attempt %d of %d)", evidence.Round, evidence.Attempts, evidence.MaxAttempts),
+	})
+	return nil
 }
 
 func (r *driverRecord) ReopenFromPullRequest(newSlices []plan.Slice, consumedThreadIDs []string, now time.Time) error {
@@ -53,7 +85,7 @@ func TestDriverDecideReturnsZeroForNonActionablePlan(t *testing.T) {
 
 func TestDriverDecideStopsAtCapUsingRoundBaseline(t *testing.T) {
 	detail := actionableDriverDetail(5)
-	driver := Driver{Resolve: fixedDriverResolver(detail)}
+	driver := Driver{Resolve: fixedDriverResolver(detail), Record: fixedAutomaticRecordFactory}
 
 	got, err := driver.Decide(context.Background(), "plan", 2, 1, "", 3)
 	if err != nil {
@@ -70,6 +102,65 @@ func TestDriverDecideStopsAtCapUsingRoundBaseline(t *testing.T) {
 	}
 }
 
+func TestDriverDecideFailsClosedWhenStopCannotSettle(t *testing.T) {
+	detail := actionableDriverDetail(1)
+	settlementErr := errors.New("injected stop settlement failure")
+	driver := Driver{
+		Resolve: fixedDriverResolver(detail),
+		Record: func(detail *plan.PlanDetail) (AutomaticRecord, error) {
+			return &driverRecord{detail: detail, stopErr: settlementErr}, nil
+		},
+	}
+
+	got, err := driver.Decide(context.Background(), "plan", 0, 1, "", 1)
+	if err == nil {
+		t.Fatal("Decide unexpectedly published an unsettled stop")
+	}
+	for _, want := range []string{"automatic rework mutation failed", settlementErr.Error(), "Automatic rework stopped: attempt cap reached"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Decide error %q does not contain %q", err, want)
+		}
+	}
+	if !reflect.DeepEqual(got, Decision{}) {
+		t.Fatalf("Decide = %+v, want zero decision", got)
+	}
+	if hasDriverEvent(detail.Events, plan.EventTypeReworkStopped) {
+		t.Fatal("failed settlement left authoritative stop evidence")
+	}
+}
+
+func TestDriverDecideFailsClosedWhenAutomaticReopenCannotSettle(t *testing.T) {
+	detail := actionableDriverDetail(0)
+	beforeStatus := detail.State.Status
+	beforeSlices := slices.Clone(detail.Slices.Slices)
+	settlementErr := errors.New("injected automatic reopen settlement failure")
+	driver := Driver{
+		Resolve: fixedDriverResolver(detail),
+		Record: func(detail *plan.PlanDetail) (AutomaticRecord, error) {
+			return &driverRecord{detail: detail, reopenErr: settlementErr}, nil
+		},
+	}
+
+	got, err := driver.Decide(context.Background(), "plan", 0, 0, "", 5)
+	if err == nil {
+		t.Fatal("Decide unexpectedly published an unsettled rework round")
+	}
+	for _, want := range []string{"automatic rework mutation failed", "record automatic rework round", settlementErr.Error()} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Decide error %q does not contain %q", err, want)
+		}
+	}
+	if !reflect.DeepEqual(got, Decision{}) {
+		t.Fatalf("Decide = %+v, want zero decision", got)
+	}
+	if detail.State.Status != beforeStatus || !reflect.DeepEqual(detail.Slices.Slices, beforeSlices) {
+		t.Fatalf("failed settlement mutated plan detail: status=%q slices=%+v", detail.State.Status, detail.Slices.Slices)
+	}
+	if hasDriverEvent(detail.Events, plan.EventTypeReworkRound) {
+		t.Fatal("failed settlement left authoritative round evidence")
+	}
+}
+
 func TestDriverDecideStopsOnEquivalentConsecutiveFindings(t *testing.T) {
 	detail := actionableDriverDetail(1)
 	finding := ReviewFindings(detail)[0]
@@ -80,7 +171,7 @@ func TestDriverDecideStopsOnEquivalentConsecutiveFindings(t *testing.T) {
 		Message:    strings.ToUpper(finding.Message),
 		Suggestion: "  ",
 	}})
-	driver := Driver{Resolve: fixedDriverResolver(detail)}
+	driver := Driver{Resolve: fixedDriverResolver(detail), Record: fixedAutomaticRecordFactory}
 
 	got, err := driver.Decide(context.Background(), "plan", 1, 0, fingerprint, 5)
 	if err != nil {
@@ -109,7 +200,7 @@ func TestDriverDecideContinuesForDistinctSameFileFindings(t *testing.T) {
 	}})
 	driver := Driver{
 		Resolve: fixedDriverResolver(detail),
-		Record:  func(detail *plan.PlanDetail) (Record, error) { return &driverRecord{detail: detail}, nil },
+		Record:  func(detail *plan.PlanDetail) (AutomaticRecord, error) { return &driverRecord{detail: detail}, nil },
 	}
 
 	got, err := driver.Decide(context.Background(), "plan", 1, 0, previous, 5)
@@ -129,18 +220,11 @@ func TestDriverDecideStopsOnRecurringFilesWithoutMutation(t *testing.T) {
 	var stoppedEvent *plan.Event
 	driver := Driver{
 		Resolve: fixedDriverResolver(detail),
-		Record: func(detail *plan.PlanDetail) (Record, error) {
+		Record: func(detail *plan.PlanDetail) (AutomaticRecord, error) {
 			recordCalled = true
 			return &driverRecord{detail: detail}, nil
 		},
 		Now: func() time.Time { return time.Date(2026, 7, 29, 22, 0, 0, 0, time.UTC) },
-		AppendEvent: func(_ string, event plan.Event) error {
-			if event.Type == plan.EventTypeReworkStopped {
-				stopped := event
-				stoppedEvent = &stopped
-			}
-			return nil
-		},
 	}
 
 	got, err := driver.Decide(context.Background(), "plan", 0, 0, previous, 5)
@@ -157,14 +241,19 @@ func TestDriverDecideStopsOnRecurringFilesWithoutMutation(t *testing.T) {
 	if got.Fingerprint == previous || !reflect.DeepEqual(got.Findings, ReviewFindings(detail)) {
 		t.Fatalf("recurring-file evidence = %+v, previous fingerprint %q", got, previous)
 	}
-	if recordCalled {
-		t.Fatal("recurring-file stop crossed the plan mutation boundary")
+	if !recordCalled {
+		t.Fatal("recurring-file stop did not cross the plan mutation boundary")
 	}
 	if detail.State.Status != beforeStatus || !reflect.DeepEqual(detail.Slices.Slices, beforeSlices) {
 		t.Fatalf("recurring-file stop mutated plan detail: status=%q slices=%+v", detail.State.Status, detail.Slices.Slices)
 	}
+	for i := range detail.Events {
+		if detail.Events[i].Type == plan.EventTypeReworkStopped {
+			stoppedEvent = &detail.Events[i]
+		}
+	}
 	if stoppedEvent == nil {
-		t.Fatal("recurring-file stop did not append rework_stopped")
+		t.Fatal("recurring-file stop did not record rework_stopped")
 	}
 	if stoppedEvent.PlanID != "plan" || stoppedEvent.Round != 2 || stoppedEvent.Attempts != 2 || stoppedEvent.Fingerprint != got.Fingerprint || stoppedEvent.Reason != got.StopReason || stoppedEvent.Message != got.StopReason {
 		t.Fatalf("rework_stopped event = %+v", *stoppedEvent)
@@ -194,21 +283,16 @@ func TestDriverRunUsesPullRequestReopenAsFreshRecurringFilesBaseline(t *testing.
 			Severity: "major", File: "store/file.go", Message: "A distinct post-PR review finding",
 		}},
 	}
-	var stopped bool
 	driver := Driver{
 		Resolve: fixedDriverResolver(detail),
-		Record:  func(detail *plan.PlanDetail) (Record, error) { return &driverRecord{detail: detail}, nil },
-		AppendEvent: func(_ string, event plan.Event) error {
-			stopped = stopped || event.Type == plan.EventTypeReworkStopped
-			return nil
-		},
+		Record:  func(detail *plan.PlanDetail) (AutomaticRecord, error) { return &driverRecord{detail: detail}, nil },
 	}
 	decision, err := driver.Decide(context.Background(), "plan", 0, 2, "stale-pre-PR-fingerprint", 2)
 	if err != nil {
 		t.Fatalf("Decide returned error: %v", err)
 	}
-	if stopped || !decision.Reworked || decision.BaselineRound != 3 || decision.Round != 4 {
-		t.Fatalf("post-PR decision stopped=%v decision=%+v, want baseline 3 and round 4 reopen", stopped, decision)
+	if !decision.Reworked || decision.BaselineRound != 3 || decision.Round != 4 {
+		t.Fatalf("post-PR decision=%+v, want baseline 3 and round 4 reopen", decision)
 	}
 }
 
@@ -242,7 +326,7 @@ func TestDriverLoopPersistsAttemptsFromPullRequestResetBaseline(t *testing.T) {
 
 func TestDriverReviewDrivenReopenStillConsumesExistingBudget(t *testing.T) {
 	detail, _ := recurringDriverDetail()
-	driver := Driver{Resolve: fixedDriverResolver(detail)}
+	driver := Driver{Resolve: fixedDriverResolver(detail), Record: fixedAutomaticRecordFactory}
 
 	decision, err := driver.Decide(context.Background(), "plan", 0, 0, "", 2)
 	if err != nil {
@@ -281,10 +365,7 @@ func TestDriverDecideStopPrecedenceOverRecurringFiles(t *testing.T) {
 			detail, previous := recurringDriverDetail()
 			driver := Driver{
 				Resolve: fixedDriverResolver(detail),
-				Record: func(*plan.PlanDetail) (Record, error) {
-					t.Fatal("stop precedence crossed the plan mutation boundary")
-					return nil, nil
-				},
+				Record:  fixedAutomaticRecordFactory,
 			}
 
 			got, err := driver.Decide(context.Background(), "plan", 0, 0, test.previous(detail, previous), test.maxAttempts)
@@ -304,7 +385,7 @@ func TestDriverDecideLegacyFingerprintPermitsOneAdditionalRound(t *testing.T) {
 	legacy := BatchLocationFindingsFingerprint(findings)
 	driver := Driver{
 		Resolve: fixedDriverResolver(first),
-		Record:  func(detail *plan.PlanDetail) (Record, error) { return &driverRecord{detail: detail}, nil },
+		Record:  func(detail *plan.PlanDetail) (AutomaticRecord, error) { return &driverRecord{detail: detail}, nil },
 	}
 
 	upgraded, err := driver.Decide(context.Background(), "plan", 1, 0, legacy, 5)
@@ -317,7 +398,7 @@ func TestDriverDecideLegacyFingerprintPermitsOneAdditionalRound(t *testing.T) {
 
 	repeated := actionableDriverDetail(2)
 	repeated.State.Plan.Review.Findings = findings
-	driver = Driver{Resolve: fixedDriverResolver(repeated)}
+	driver = Driver{Resolve: fixedDriverResolver(repeated), Record: fixedAutomaticRecordFactory}
 	stopped, err := driver.Decide(context.Background(), "plan", 1, 1, upgraded.Fingerprint, 5)
 	if err != nil {
 		t.Fatalf("Decide with upgraded fingerprint returned error: %v", err)
@@ -837,7 +918,7 @@ func TestDriverLoopPersistsBeforeEachRerun(t *testing.T) {
 			resolveIndex++
 			return detail, nil
 		},
-		Record: func(detail *plan.PlanDetail) (Record, error) { return &driverRecord{detail: detail}, nil },
+		Record: func(detail *plan.PlanDetail) (AutomaticRecord, error) { return &driverRecord{detail: detail}, nil },
 		Now:    func() time.Time { return time.Date(2026, 7, 14, 1, 0, 0, 0, time.FixedZone("offset", 3600)) },
 	}
 	var calls []string
@@ -868,7 +949,7 @@ func TestDriverLoopCanReopenBeforeFirstExecution(t *testing.T) {
 	detail := actionableDriverDetail(0)
 	driver := Driver{
 		Resolve: fixedDriverResolver(detail),
-		Record:  func(detail *plan.PlanDetail) (Record, error) { return &driverRecord{detail: detail}, nil },
+		Record:  func(detail *plan.PlanDetail) (AutomaticRecord, error) { return &driverRecord{detail: detail}, nil },
 	}
 	var calls []string
 	err := driver.Loop(context.Background(), "plan", LoopOptions{
@@ -917,7 +998,7 @@ func TestDriverLoopAttemptsNeverDecrease(t *testing.T) {
 			resolveIndex++
 			return detail, nil
 		},
-		Record: func(detail *plan.PlanDetail) (Record, error) { return &driverRecord{detail: detail}, nil },
+		Record: func(detail *plan.PlanDetail) (AutomaticRecord, error) { return &driverRecord{detail: detail}, nil },
 	}
 	persistedAttempts := 0
 	err := driver.Loop(context.Background(), "plan", LoopOptions{
@@ -935,6 +1016,19 @@ func TestDriverLoopAttemptsNeverDecrease(t *testing.T) {
 	if persistedAttempts != 4 {
 		t.Fatalf("persisted attempts = %d, want 4", persistedAttempts)
 	}
+}
+
+func hasDriverEvent(events []plan.Event, eventType string) bool {
+	for _, event := range events {
+		if event.Type == eventType {
+			return true
+		}
+	}
+	return false
+}
+
+func fixedAutomaticRecordFactory(detail *plan.PlanDetail) (AutomaticRecord, error) {
+	return &driverRecord{detail: detail}, nil
 }
 
 func fixedDriverResolver(detail *plan.PlanDetail) PlanResolver {

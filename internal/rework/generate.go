@@ -90,10 +90,19 @@ func pullRequestPlanGate(detail *plan.PlanDetail) error {
 	return nil
 }
 
-// Record is the lifecycle mutation surface required to reopen a plan.
+// Record is the narrow lifecycle mutation surface required by manual rework.
 type Record interface {
 	Detail() *plan.PlanDetail
 	Reopen([]plan.Slice, time.Time) error
+}
+
+// AutomaticRecord owns the durable stop and round mutations used only by the
+// automatic-rework driver. Keeping these operations separate leaves manual
+// rework callers on the narrower Record boundary.
+type AutomaticRecord interface {
+	Record
+	RecordAutomaticReworkStop(plan.AutomaticReworkStop) error
+	ReopenAutomatic([]plan.Slice, plan.AutomaticReworkRound) error
 }
 
 // PullRequestRecord atomically reopens a plan while recording the thread node
@@ -120,6 +129,35 @@ func Reopen(record Record, now time.Time) ([]plan.Slice, error) {
 		return nil, refuse(fmt.Sprintf("rework refused: plan %s has no review findings to convert", planID(detail)))
 	}
 	if err := record.Reopen(newSlices, now); err != nil {
+		return nil, err
+	}
+	return newSlices, nil
+}
+
+// ReopenAutomatic prepares all generated slices and round evidence before
+// crossing the automatic record's atomic mutation boundary.
+func ReopenAutomatic(record AutomaticRecord, evidence plan.AutomaticReworkRound) ([]plan.Slice, error) {
+	if record == nil {
+		return nil, fmt.Errorf("plan record is nil")
+	}
+	if err := evidence.Validate(); err != nil {
+		return nil, err
+	}
+	detail := record.Detail()
+	findings := ReviewFindings(detail)
+	if err := Gate(detail, findings); err != nil {
+		return nil, err
+	}
+	if evidence.Round != nextRound(detail) {
+		return nil, fmt.Errorf("automatic rework round %d does not match next round %d", evidence.Round, nextRound(detail))
+	}
+	generationDetail := *detail
+	generationDetail.State.UpdatedAt = evidence.ReopenedAt
+	newSlices := GenerateSlices(&generationDetail, findings, evidence.Round)
+	if len(newSlices) == 0 {
+		return nil, refuse(fmt.Sprintf("rework refused: plan %s has no review findings to convert", planID(detail)))
+	}
+	if err := record.ReopenAutomatic(newSlices, evidence); err != nil {
 		return nil, err
 	}
 	return newSlices, nil

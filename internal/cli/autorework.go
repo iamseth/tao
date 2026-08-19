@@ -15,11 +15,10 @@ import (
 func newReworkDriver(repo queueRepository, now func() time.Time) reworkpkg.Driver {
 	return reworkpkg.Driver{
 		Resolve: repo.ResolvePlan,
-		Record: func(detail *plan.PlanDetail) (reworkpkg.Record, error) {
+		Record: func(detail *plan.PlanDetail) (reworkpkg.AutomaticRecord, error) {
 			return repo.PlanRecord(detail)
 		},
-		Now:         now,
-		AppendEvent: repo.AppendEvent,
+		Now: now,
 	}
 }
 

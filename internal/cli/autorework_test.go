@@ -25,7 +25,29 @@ func (r *recordingAutoReworkRepository) AppendEvent(dir string, event plan.Event
 	return r.appendErr
 }
 
-func TestPlanAutoReworkerAppendsReworkRound(t *testing.T) {
+func (r *recordingAutoReworkRepository) PlanRecord(detail *plan.PlanDetail) (*plan.PlanRecord, error) {
+	dir := detail.Dir
+	if dir == "" {
+		dir = "/plantest/" + detail.State.Plan.ID
+		detail.Dir = dir
+	}
+	store, ok := r.queueRepository.(plan.ArtifactStore)
+	if !ok {
+		return nil, errors.New("recording repository has no artifact store")
+	}
+	return plan.NewPlanRecordWithStore(recordingAutoReworkStore{ArtifactStore: store, repo: r}, dir, detail)
+}
+
+type recordingAutoReworkStore struct {
+	plan.ArtifactStore
+	repo *recordingAutoReworkRepository
+}
+
+func (s recordingAutoReworkStore) AppendEvent(dir string, event plan.Event) error {
+	return s.repo.AppendEvent(dir, event)
+}
+
+func TestPlanAutoReworkerAtomicallyRecordsReworkRound(t *testing.T) {
 	now := time.Date(2026, 7, 14, 2, 30, 0, 0, time.UTC)
 	planID := "20260714-0230-rework-round"
 	detail, fingerprint := autoReworkTestDetail(planID, now)
@@ -38,22 +60,33 @@ func TestPlanAutoReworkerAppendsReworkRound(t *testing.T) {
 	if !result.Reworked || result.Round != 1 || result.Fingerprint != fingerprint {
 		t.Fatalf("automatic rework result = %+v", result)
 	}
-	if len(repo.events) != 1 {
-		t.Fatalf("appended events = %+v, want one", repo.events)
+	var event plan.Event
+	eventDir := ""
+	reopenedIndex, roundIndex := -1, -1
+	var reopened plan.Event
+	for i, candidate := range repo.events {
+		switch candidate.Type {
+		case plan.EventTypePlanReopened:
+			reopened, reopenedIndex = candidate, i
+		case plan.EventTypeReworkRound:
+			event, eventDir, roundIndex = candidate, repo.dirs[i], i
+		}
 	}
-	event := repo.events[0]
 	if event.Type != plan.EventTypeReworkRound || event.PlanID != planID || event.Round != 1 || event.Attempts != 1 || event.Fingerprint != fingerprint {
 		t.Fatalf("rework round event = %+v", event)
 	}
 	if event.Timestamp != now || event.Message != "Automatic rework round 1 (attempt 1 of 3)" {
 		t.Fatalf("rework round event metadata = %+v", event)
 	}
-	if len(repo.dirs) != 1 || repo.dirs[0] != detail.Dir {
-		t.Fatalf("event dirs = %v, want [%s]", repo.dirs, detail.Dir)
+	if eventDir != detail.Dir {
+		t.Fatalf("rework_round dir = %q, want %q", eventDir, detail.Dir)
+	}
+	if reopenedIndex < 0 || roundIndex != reopenedIndex+1 || reopened.MutationID == "" || reopened.MutationID != event.MutationID {
+		t.Fatalf("automatic reopen events are not one ordered mutation: reopened=%+v round=%+v", reopened, event)
 	}
 }
 
-func TestPlanAutoReworkerAppendsReworkStopped(t *testing.T) {
+func TestPlanAutoReworkerRecordsReworkStopped(t *testing.T) {
 	now := time.Date(2026, 7, 14, 2, 35, 0, 0, time.UTC)
 	const stalledReason = "automatic rework stalled on equivalent consecutive findings"
 
@@ -104,14 +137,42 @@ func TestPlanAutoReworkerAppendsReworkStopped(t *testing.T) {
 					t.Errorf("stop output %q unexpectedly contains %q", stopOutput, unwanted)
 				}
 			}
-			if len(repo.events) != 1 {
-				t.Fatalf("appended events = %+v, want one", repo.events)
+			var event plan.Event
+			for _, candidate := range repo.events {
+				if candidate.Type == plan.EventTypeReworkStopped {
+					event = candidate
+				}
 			}
-			event := repo.events[0]
 			if event.Type != plan.EventTypeReworkStopped || event.PlanID != planID || event.Round != 0 || event.Attempts != test.attempts || event.Fingerprint != fingerprint || event.Reason != test.wantReason || event.Message != test.wantReason {
 				t.Fatalf("rework stopped event = %+v", event)
 			}
 		})
+	}
+}
+
+func TestPlanAutoReworkerRoundSettlementFailureFailsClosed(t *testing.T) {
+	now := time.Date(2026, 7, 14, 2, 33, 0, 0, time.UTC)
+	planID := "20260714-0233-rework-round-failure"
+	detail, _ := autoReworkTestDetail(planID, now)
+	beforeStatus := detail.State.Status
+	beforeSlices := len(detail.Slices.Slices)
+	repo := newRecordingAutoReworkRepository(planID, detail)
+	repo.appendErr = errors.New("event journal unavailable")
+
+	result, err := planAutoReworker(repo, func() time.Time { return now })(context.Background(), planID, 0, 0, "", 3)
+	if err == nil {
+		t.Fatal("automatic rework unexpectedly published an unsettled round")
+	}
+	for _, want := range []string{"automatic rework mutation failed", "record automatic rework round", "event journal unavailable"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("automatic rework error %q does not contain %q", err, want)
+		}
+	}
+	if !reflect.DeepEqual(result, rework.Decision{}) {
+		t.Fatalf("automatic rework result = %+v, want zero decision", result)
+	}
+	if detail.State.Status != beforeStatus || len(detail.Slices.Slices) != beforeSlices {
+		t.Fatalf("failed round published mutation: status=%q slices=%+v", detail.State.Status, detail.Slices.Slices)
 	}
 }
 
@@ -182,21 +243,26 @@ func TestPlanAutoReworkerRefusesFreshBudgetAfterPersistedStop(t *testing.T) {
 	}
 }
 
-func TestPlanAutoReworkerAppendFailureDoesNotChangeResult(t *testing.T) {
+func TestPlanAutoReworkerStopSettlementFailureFailsClosed(t *testing.T) {
 	now := time.Date(2026, 7, 14, 2, 40, 0, 0, time.UTC)
 	planID := "20260714-0240-append-failure"
 	detail, fingerprint := autoReworkTestDetail(planID, now)
 	repo := newRecordingAutoReworkRepository(planID, detail)
 	repo.appendErr = errors.New("event journal unavailable")
 
-	result, err := planAutoReworker(repo, func() time.Time { return now })(context.Background(), planID, 0, 0, "", 3)
-	if err != nil {
-		t.Fatalf("automatic rework error = %v, want nil", err)
+	result, err := planAutoReworker(repo, func() time.Time { return now })(context.Background(), planID, 0, 3, "", 3)
+	if err == nil {
+		t.Fatal("automatic rework unexpectedly published an unsettled stop")
 	}
-	want := rework.Decision{Reworked: true, Round: 1, Fingerprint: fingerprint}
-	if !reflect.DeepEqual(result, want) {
-		t.Fatalf("automatic rework result = %+v, want %+v", result, want)
+	for _, want := range []string{"automatic rework mutation failed", "event journal unavailable", "Automatic rework stopped: attempt cap reached"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("automatic rework error %q does not contain %q", err, want)
+		}
 	}
+	if !reflect.DeepEqual(result, rework.Decision{}) {
+		t.Fatalf("automatic rework result = %+v, want zero decision", result)
+	}
+	_ = fingerprint
 }
 
 func TestPlanAutoReworkerSilentDeclinesAppendNothing(t *testing.T) {

@@ -142,9 +142,14 @@ newline-normalized; its hash binds those bytes, including an empty payload.
 
 Event payloads are likewise marshaled once after assigning the transaction's
 mutation ID. Multiple events in one transaction may share that ID, but their
-payload hashes must be unique within the journal. During recovery, an event is
-identified by the pair `(mutation_id, payload SHA-256)`, so a crash after
-appending only a prefix cannot cause either duplicates or skipped later events.
+payload hashes must be unique within the journal. Automatic rework uses this
+multi-event boundary to install the generated pending slices and the final state
+with `plan_reopened` followed by `rework_round`; callers publish a successful
+round only after the combined mutation settles. Queue progress is persisted
+separately and may lag this authoritative plan evidence after interruption.
+During recovery, an event is identified by the pair `(mutation_id, payload
+SHA-256)`, so a crash after appending only a prefix cannot cause either
+duplicates or skipped later events.
 
 ## Write and settlement order
 
@@ -255,8 +260,11 @@ Plans without a journal load exactly as before. A legacy plan that has no
 persistence lock can be inspected from a read-only directory without creating
 one. In particular, pre-journal torn state/slices writes remain readable and
 warning-only where existing validation already permits them; recovery must not
-synthesize a transaction for historical bytes. Existing events without
-`mutation_id` remain valid and are never used as journal deduplication evidence.
+synthesize a transaction for historical bytes. Generated automatic-rework
+slices without a historical `rework_round` remain valid round evidence for
+legacy progress reconstruction and are not repaired or migrated. Existing
+events without `mutation_id` remain valid and are never used as journal
+deduplication evidence.
 
 The protocol changes persistence, not lifecycle decisions. Commit-intent and Git
 recovery gates, review and merge safeguards, locking, telemetry best-effort

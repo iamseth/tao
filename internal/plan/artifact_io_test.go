@@ -129,6 +129,46 @@ func TestStartSlicePreservesUnknownJSONFields(t *testing.T) {
 	}
 }
 
+func TestAutomaticReworkOperationsPreserveUnknownArtifactFields(t *testing.T) {
+	dir := t.TempDir()
+	detail := completedReopenDetail()
+	detail.Dir = dir
+	writeStartSliceArtifacts(t, dir, detail)
+	addUnknownPlanField(t, dir, "custom_rework_state", "keep")
+	addUnknownSlicesField(t, dir, "custom_rework_slices", "keep")
+
+	files, err := loadPlanFiles(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded := detailFromFiles(files)
+	record, err := NewPlanRecord(dir, loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 18, 20, 0, 0, 0, time.UTC)
+	if err := record.RecordAutomaticReworkStop(AutomaticReworkStop{Round: 0, Attempts: 0, Fingerprint: "finding-set", Reason: "automatic rework stopped", StoppedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := record.ReopenAutomatic(
+		[]Slice{newReopenSlice("002-fix", "Fix finding", now)},
+		AutomaticReworkRound{Round: 1, Attempts: 1, MaxAttempts: 5, Fingerprint: "finding-set", ReopenedAt: now},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	var state map[string]any
+	readJSONFile(t, filepath.Join(dir, "state.json"), &state)
+	if state["plan"].(map[string]any)["custom_rework_state"] != "keep" {
+		t.Fatalf("unknown state field was lost: %#v", state)
+	}
+	var slicesArtifact map[string]any
+	readJSONFile(t, filepath.Join(dir, "slices.json"), &slicesArtifact)
+	if slicesArtifact["custom_rework_slices"] != "keep" {
+		t.Fatalf("unknown slices field was lost: %#v", slicesArtifact)
+	}
+}
+
 func TestPlanRecordFinalVerificationPreservesUnknownStateFields(t *testing.T) {
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
@@ -2961,6 +3001,21 @@ func addUnknownPlanField(t *testing.T, dir, key string, value any) {
 	var raw map[string]any
 	readJSONFile(t, path, &raw)
 	raw["plan"].(map[string]any)[key] = value
+	payload, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func addUnknownSlicesField(t *testing.T, dir, key string, value any) {
+	t.Helper()
+	path := filepath.Join(dir, "slices.json")
+	var raw map[string]any
+	readJSONFile(t, path, &raw)
+	raw[key] = value
 	payload, err := json.Marshal(raw)
 	if err != nil {
 		t.Fatal(err)

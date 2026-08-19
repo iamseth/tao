@@ -622,12 +622,10 @@ func TestEntryDriverRecoverStopsRecurringFilesWithoutAnotherRun(t *testing.T) {
 	var appended []plan.Event
 	domainDriver := reworkpkg.Driver{
 		Resolve: repo.ResolvePlan,
-		Now:     func() time.Time { return now },
-		AppendEvent: func(_ string, event plan.Event) error {
-			appended = append(appended, event)
-			detail.Events = append(detail.Events, event)
-			return nil
+		Record: func(detail *plan.PlanDetail) (reworkpkg.AutomaticRecord, error) {
+			return &queueAutomaticRecord{detail: detail, appended: &appended}, nil
 		},
+		Now: func() time.Time { return now },
 	}
 	decisions := 0
 	finalizations := 0
@@ -692,6 +690,30 @@ func TestEntryDriverRecoverStopsRecurringFilesWithoutAnotherRun(t *testing.T) {
 	if stopEvents != 1 {
 		t.Fatalf("recovered recurring review produced %d stop observations, want one", stopEvents)
 	}
+}
+
+type queueAutomaticRecord struct {
+	detail   *plan.PlanDetail
+	appended *[]plan.Event
+}
+
+func (r *queueAutomaticRecord) Detail() *plan.PlanDetail { return r.detail }
+func (r *queueAutomaticRecord) Reopen(newSlices []plan.Slice, now time.Time) error {
+	_, err := plan.Reopen(r.detail, newSlices, now)
+	return err
+}
+func (r *queueAutomaticRecord) ReopenAutomatic(newSlices []plan.Slice, evidence plan.AutomaticReworkRound) error {
+	return r.Reopen(newSlices, evidence.ReopenedAt)
+}
+func (r *queueAutomaticRecord) RecordAutomaticReworkStop(evidence plan.AutomaticReworkStop) error {
+	event := plan.Event{
+		Type: plan.EventTypeReworkStopped, Timestamp: evidence.StoppedAt, PlanID: r.detail.State.Plan.ID,
+		Round: evidence.Round, Attempts: evidence.Attempts, Fingerprint: evidence.Fingerprint,
+		Reason: evidence.Reason, Message: evidence.Reason,
+	}
+	r.detail.Events = append(r.detail.Events, event)
+	*r.appended = append(*r.appended, event)
+	return nil
 }
 
 func TestEntryDriverRecoverDoesNotDuplicatePersistedRecurringFileStop(t *testing.T) {
