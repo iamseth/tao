@@ -37,7 +37,7 @@ evidence proves default-branch integration.
 
 ## Capture first with repository notes
 
-`/tao-note` is the capture end of the note-to-plan pipeline for agent sessions: run the slash command inside a session to distill the conversation into a self-contained repository note, then promote it later with `tao note plan <id>`. Use `tao note create` for manual capture instead; `/tao-note` names the installed slash command, while `tao note` names the CLI command group.
+`/tao-note` is the capture end of the note-to-plan pipeline for agent sessions: run the slash command inside a session to distill the conversation into a self-contained repository note, then plan the open note later with `/tao-plan note:<id>`. Use `tao note create` for manual capture instead; `/tao-note` names the installed slash command, while `tao note` names the CLI command group.
 
 Use `tao note` (or `tao n`) when an idea is worth retaining but not worth interrupting your current work. From a registered checkout, the shortest capture path is:
 
@@ -49,16 +49,16 @@ tao note create < longer-idea.md
 
 Every note belongs to one registered repository. Commands choose the current checkout by default; use `--repo <unique-id-prefix-or-exact-name>` when capturing or inspecting another registered repository. This keeps a backlog attached to its codebase instead of creating a global inbox.
 
-New notes are open. A plain `tao note` or `tao note list` shows open notes newest first; filters and `--all` help with later triage. Open notes can be edited or archived, and archived notes can be reopened. Promotion is a one-way handoff: promoted notes retain their destination and cannot be edited, archived, or reopened.
+New notes are open. A plain `tao note` or `tao note list` shows open notes newest first; filters and `--all` help with later triage. Open notes can be edited or manually archived, and manually archived notes can be reopened.
 
-Choose promotion based on ambiguity, not size alone:
+Choose the handoff based on ambiguity, not size alone:
 
-- **`tao note plan <id>`** is the default for anything that needs questions, tradeoffs, or scope decisions. It creates a durable source-linked planning record, but does not start an agent. Continue with the note as context in a fresh CLI agent planning session and slice only when the work is clear.
-- **`tao note run <id>`** is an explicit shortcut for a note that already states a complete, unambiguous change. Tao first generates and validates a normal plan and rejects unresolved open questions. Only then does it mark the note promoted and invoke the ordinary run lifecycle.
+- **`/tao-plan note:<id> [optional context]`** is the default for anything that needs questions, tradeoffs, or scope decisions. Planning reads the open note as untrusted context without mutating it. When the work is clear, `/tao-slice` creates and validates a normal plan in the same registered repository, then archives the note with that plan link. A plan-linked archive is terminal and cannot be edited, reopened, or linked to another plan.
+- **`tao note run <id>`** is the unchanged explicit shortcut for a note that already states a complete, unambiguous change. Tao first generates and validates a normal plan and rejects unresolved open questions. Only then does it mark the note promoted and invoke the ordinary run lifecycle.
 
-If supervised-session creation or direct plan generation fails, the note remains open so you can edit and retry. If Tao created a destination but could not link it, follow the recovery identifier in the error instead of promoting again. Once direct generation produced and linked a valid plan, any approval stop, blocked slice, failed verification, review result, or later recovery belongs to that plan; resume it with the normal plan commands.
+Historical notes promoted to planning sessions remain readable and are accepted by note-aware planning. Their planning-session provenance is preserved when validation links and archives them; Tao does not create new planning-session records. If linked archival fails after validation, retain the normal plan and use the exact recovery command reported by `/tao-slice`. Once direct generation produced and linked a valid plan, any approval stop, blocked slice, failed verification, review result, or later recovery belongs to that plan; resume it with the normal plan commands.
 
-Direct note execution is not a bypass. Generated slices still honor dependencies and approvals; execution still honors agent, permission, timeout, workspace, commit, and pull-request settings; and completed work still follows the normal review and merge safeguards. When in doubt, use `note plan`.
+Direct note execution is not a bypass. Generated slices still honor dependencies and approvals; execution still honors agent, permission, timeout, workspace, commit, and pull-request settings; and completed work still follows the normal review and merge safeguards. When in doubt, use `/tao-plan note:<id>`.
 
 ## Monitoring plans
 

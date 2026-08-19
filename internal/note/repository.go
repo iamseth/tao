@@ -165,7 +165,7 @@ func (r *Repository) List(ctx context.Context, filter Filter) ([]Note, []Warning
 
 func (r *Repository) Edit(ctx context.Context, id, text string, tags []string) (Note, error) {
 	return r.change(ctx, id, func(n *Note) error {
-		if n.Status == StatusPromoted {
+		if n.Status == StatusPromoted || isPlanLinkedArchive(*n) {
 			return ErrImmutable
 		}
 		if err := validateText(text); err != nil {
@@ -182,6 +182,9 @@ func (r *Repository) Archive(ctx context.Context, id, reason string) (Note, erro
 		case StatusPromoted:
 			return ErrImmutable
 		case StatusArchived:
+			if isPlanLinkedArchive(*n) {
+				return ErrImmutable
+			}
 			return nil
 		case StatusOpen:
 			n.Status = StatusArchived
@@ -198,16 +201,52 @@ func (r *Repository) Reopen(ctx context.Context, id string) (Note, error) {
 		if n.Status != StatusArchived {
 			return fmt.Errorf("%w: only archived notes can be reopened", ErrInvalidState)
 		}
+		if isPlanLinkedArchive(*n) {
+			return ErrImmutable
+		}
 		n.Status, n.Archive = StatusOpen, nil
 		return nil
 	})
 }
 
-func (r *Repository) PromoteToPlanning(ctx context.Context, id string, link PlanningSessionLink) (Note, error) {
+// ArchiveToPlan consumes an open or legacy planning-promoted note after its
+// normal plan has been validated. The mutation lock makes destination checks
+// and the terminal archive transition one atomic repository operation.
+func (r *Repository) ArchiveToPlan(ctx context.Context, id string, link PlanLink) (Note, error) {
 	if strings.TrimSpace(link.ID) == "" {
-		return Note{}, errors.New("planning session id is required")
+		return Note{}, errors.New("plan id is required")
 	}
-	return r.promote(ctx, id, PromotionLinks{PlanningSession: &link})
+	return r.change(ctx, id, func(n *Note) error {
+		switch n.Status {
+		case StatusOpen:
+			n.Status = StatusArchived
+			n.Archive = &ArchiveMetadata{ArchivedAt: r.now().UTC(), Plan: &link}
+			return nil
+		case StatusPromoted:
+			if n.Promotion == nil || n.Promotion.PlanningSession == nil {
+				return ErrImmutable
+			}
+			planningSession := *n.Promotion.PlanningSession
+			n.Status = StatusArchived
+			n.Archive = &ArchiveMetadata{
+				ArchivedAt:      r.now().UTC(),
+				Plan:            &link,
+				PlanningSession: &planningSession,
+			}
+			n.Promotion = nil
+			return nil
+		case StatusArchived:
+			if n.Archive != nil && n.Archive.Plan != nil {
+				if n.Archive.Plan.ID == link.ID {
+					return nil
+				}
+				return ErrImmutable
+			}
+			return fmt.Errorf("%w: manually archived notes cannot be linked to a plan", ErrInvalidState)
+		default:
+			return ErrInvalidState
+		}
+	})
 }
 
 func (r *Repository) PromoteToPlan(ctx context.Context, id string, link PlanLink) (Note, error) {
@@ -296,6 +335,12 @@ func (r *Repository) decode(content []byte, path string) (Note, error) {
 	case StatusArchived:
 		if n.Archive == nil || n.Promotion != nil {
 			return Note{}, errors.New("archived note has invalid lifecycle metadata")
+		}
+		if n.Archive.PlanningSession != nil && n.Archive.Plan == nil {
+			return Note{}, errors.New("archived note has planning provenance without a plan link")
+		}
+		if n.Archive.Plan != nil && strings.TrimSpace(n.Archive.Plan.ID) == "" {
+			return Note{}, errors.New("archived note has invalid plan link")
 		}
 	case StatusPromoted:
 		if n.Archive != nil || n.Promotion == nil || (n.Promotion.Plan == nil) == (n.Promotion.PlanningSession == nil) {
@@ -388,6 +433,10 @@ func hasAllTags(tags, wanted []string) bool {
 	}
 	return true
 }
+func isPlanLinkedArchive(n Note) bool {
+	return n.Status == StatusArchived && n.Archive != nil && n.Archive.Plan != nil
+}
+
 func promotionsEqual(a, b PromotionLinks) bool {
 	if a.Plan != nil && b.Plan != nil {
 		return *a.Plan == *b.Plan

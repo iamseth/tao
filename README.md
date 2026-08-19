@@ -109,11 +109,13 @@ tao note archive --reason "not needed yet" <note-id>
 tao note reopen <note-id>
 ```
 
-Later, use `tao note plan <note-id>` to create a durable source-linked record,
-then continue clarification in a fresh agent planning session. Use
-`tao note run <note-id>` only when the note is already explicit: it still creates
-and validates an ordinary plan and then enters the same approval, permission,
-workspace, commit, pull-request, review, and merge lifecycle described below.
+Later, start `/tao-plan note:<note-id>` to plan from the open note, then run
+`/tao-slice` when the work is clear. Slicing archives the note with a durable
+plan link only after the normal plan validates; that linked archive is terminal.
+Use `tao note run <note-id>` only when the note is already explicit: this direct
+path is unchanged, creates and validates an ordinary plan, and then enters the
+same approval, permission, workspace, commit, pull-request, review, and merge
+lifecycle described below.
 
 Automatic runs start each slice from a clean execution worktree. At successful
 completion, the active implementation agent supplies a bounded structured
@@ -194,11 +196,10 @@ tao note show [--repo REPO] <note-id>
 tao note edit [--repo REPO] [--tag TAG] <note-id> [--] [TEXT...]
 tao note archive [--repo REPO] [--reason TEXT] <note-id>
 tao note reopen [--repo REPO] <note-id>
-tao note plan [--repo REPO] <note-id>
 tao note run [--repo REPO] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--no-review] [--dangerously-skip-permissions] <note-id>
 ```
 
-`tao note` aliases to `tao n`; subcommands also have the short forms shown by `tao help note`, including `tao n c` for capture and `tao n r` for direct promotion. Flag-shaped words after note text begins are preserved as text; use `--` before text that starts with a known option such as `--tag`. Commands use the current registered repository by default. `--repo` selects another registered repository by unique ID prefix or exact name. Listing defaults to open notes, newest first. Use `plan` for durable supervised CLI planning; use `run` only for a clear note that can become a validated normal plan without unresolved questions. Direct promotion does not bypass plan artifacts, approvals, permissions, workspace isolation, commits, pull requests, review, or merge safeguards.
+`tao note` aliases to `tao n`; subcommands also have the short forms shown by `tao help note`, including `tao n c` for capture and `tao n r` for direct promotion. Flag-shaped words after note text begins are preserved as text; use `--` before text that starts with a known option such as `--tag`. Commands use the current registered repository by default. `--repo` selects another registered repository by unique ID prefix or exact name. Listing defaults to open notes, newest first. Use `/tao-plan note:<id>` for supervised planning from an open note; after validation, `/tao-slice` archives it with a terminal plan link. Historical planning-session promotions remain readable and may enter this note-aware planning flow. Use `run` only for a clear note that can become a validated normal plan without unresolved questions. Direct promotion does not bypass plan artifacts, approvals, permissions, workspace isolation, commits, pull requests, review, or merge safeguards.
 
 ### Inspecting plans and repositories
 

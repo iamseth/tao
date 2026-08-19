@@ -13,6 +13,48 @@ import (
 	"github.com/iamseth/tao/prompts"
 )
 
+func TestInstalledProvidersPreserveNoteAwarePlanningContracts(t *testing.T) {
+	definitions := make(map[string]prompts.Definition)
+	for _, definition := range prompts.Definitions() {
+		definitions[definition.Name] = definition
+	}
+	for _, kind := range []runtimeconfig.AgentKind{runtimeconfig.AgentPi, runtimeconfig.AgentClaude, runtimeconfig.AgentOpenCode, runtimeconfig.AgentCodex} {
+		t.Run(string(kind), func(t *testing.T) {
+			descriptor, ok := agentpkg.Lookup(kind)
+			if !ok {
+				t.Fatalf("missing descriptor for %s", kind)
+			}
+			planText, err := renderInstallContent(descriptor, definitions[prompts.PromptPlan])
+			if err != nil {
+				t.Fatal(err)
+			}
+			sliceText, err := renderInstallContent(descriptor, definitions[prompts.PromptSlice])
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch kind {
+			case runtimeconfig.AgentPi, runtimeconfig.AgentCodex:
+				for _, test := range []struct {
+					text string
+					want string
+				}{{planText, "/tao-plan note:<id> [optional trailing context]"}, {planText, "## Source Note"}, {sliceText, "tao note archive --repo <Repository> --plan <plan-id> <ID>"}, {sliceText, "retain the validated plan unchanged"}} {
+					if !strings.Contains(test.text, test.want) {
+						t.Fatalf("installed %s prompt missing %q: %q", kind, test.want, test.text)
+					}
+				}
+			case runtimeconfig.AgentClaude:
+				if !strings.Contains(planText, "tao prompt plan --arguments-stdin") || !strings.Contains(sliceText, "tao prompt slice --arguments-stdin") {
+					t.Fatalf("Claude wrappers do not dynamically render note-aware prompts: plan=%q slice=%q", planText, sliceText)
+				}
+			case runtimeconfig.AgentOpenCode:
+				if !strings.Contains(planText, "tao prompt plan --arguments") || !strings.Contains(sliceText, "tao prompt slice --arguments") {
+					t.Fatalf("OpenCode wrappers do not dynamically render note-aware prompts: plan=%q slice=%q", planText, sliceText)
+				}
+			}
+		})
+	}
+}
+
 func TestInstallAllRejectsUnsupportedAgent(t *testing.T) {
 	unsupported := runtimeconfig.AgentKind("legacy-agent")
 	if _, err := InstallAll(unsupported, false); err == nil || !strings.Contains(err.Error(), "want pi, claude, opencode, or codex") {

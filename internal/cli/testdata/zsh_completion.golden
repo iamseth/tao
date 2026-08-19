@@ -184,9 +184,9 @@ _tao() {
       esac
       ;;
     n|no|not|note)
-      _arguments '--all[include all note statuses]' '--commit-policy[automatic commit policy: slice or none]:policy:(slice none)' '--dangerously-skip-permissions[legacy no-op for the Pi agent]' '--execution-mode[execution mode: isolated or current]:mode:(isolated current)' '--limit[maximum notes to list (0 means unlimited)]:count:' '--max-slices[maximum slices to run; use 0 for all]:count:' '--no-review[disable automatic plan review for this run]' '--pull-request[create a GitHub pull request after a completed full run]' '--reason[archive reason]:text:' '--repo[registered repository ID prefix or exact name]:repository:' '*--status[status to list: open, promoted, or archived (repeatable)]:status:(open promoted archived)' '*--tag[tag to apply or require (repeatable)]:tag:'
+      _arguments '--all[include all note statuses]' '--commit-policy[automatic commit policy: slice or none]:policy:(slice none)' '--dangerously-skip-permissions[legacy no-op for the Pi agent]' '--execution-mode[execution mode: isolated or current]:mode:(isolated current)' '--limit[maximum notes to list (0 means unlimited)]:count:' '--max-slices[maximum slices to run; use 0 for all]:count:' '--no-review[disable automatic plan review for this run]' '--plan[validated normal plan destination]:plan:' '--pull-request[create a GitHub pull request after a completed full run]' '--reason[archive reason]:text:' '--repo[registered repository ID prefix or exact name]:repository:' '*--status[status to list: open, promoted, or archived (repeatable)]:status:(open promoted archived)' '*--tag[tag to apply or require (repeatable)]:tag:'
       if (( CURRENT == 3 )); then
-        subcommands=('create:Create a note from arguments or standard input' 'c:Create a note from arguments or standard input' 'list:List notes (the default subcommand)' 'l:List notes (the default subcommand)' 'show:Show raw note text and provenance' 's:Show raw note text and provenance' 'edit:Edit a note'\''s text and optional tags' 'e:Edit a note'\''s text and optional tags' 'archive:Archive an open note' 'a:Archive an open note' 'reopen:Reopen an archived note' 'plan:Promote a note into a durable CLI planning session' 'p:Promote a note into a durable CLI planning session' 'run:Generate and run a plan for a clear note' 'r:Generate and run a plan for a clear note')
+        subcommands=('create:Create a note from arguments or standard input' 'c:Create a note from arguments or standard input' 'list:List notes (the default subcommand)' 'l:List notes (the default subcommand)' 'show:Show raw note text and provenance' 's:Show raw note text and provenance' 'edit:Edit a note'\''s text and optional tags' 'e:Edit a note'\''s text and optional tags' 'archive:Archive an open note' 'a:Archive an open note' 'reopen:Reopen an archived note' 'run:Generate and run a plan for a clear note' 'r:Generate and run a plan for a clear note')
         _describe -t commands 'note command' subcommands
         return
       fi
@@ -196,37 +196,31 @@ _tao() {
         list|l)
           ;;
         show|s)
-          if _tao_at_positional 4 1 0 ',,' '--commit-policy' '--execution-mode' '--limit' '--max-slices' '--reason' '--repo' '--status' '--tag'; then
+          if _tao_at_positional 4 1 0 ',,' '--commit-policy' '--execution-mode' '--limit' '--max-slices' '--plan' '--reason' '--repo' '--status' '--tag'; then
             plan_ids=("${(@f)$(${words[1]} complete note-ids 2>/dev/null)}")
             compadd -a plan_ids
           fi
           ;;
         edit|e)
-          if _tao_at_positional 4 1 0 ',,' '--commit-policy' '--execution-mode' '--limit' '--max-slices' '--reason' '--repo' '--status' '--tag'; then
+          if _tao_at_positional 4 1 0 ',,' '--commit-policy' '--execution-mode' '--limit' '--max-slices' '--plan' '--reason' '--repo' '--status' '--tag'; then
             plan_ids=("${(@f)$(${words[1]} complete note-ids 2>/dev/null)}")
             compadd -a plan_ids
           fi
           ;;
         archive|a)
-          if _tao_at_positional 4 1 0 ',,' '--commit-policy' '--execution-mode' '--limit' '--max-slices' '--reason' '--repo' '--status' '--tag'; then
+          if _tao_at_positional 4 1 0 ',,' '--commit-policy' '--execution-mode' '--limit' '--max-slices' '--plan' '--reason' '--repo' '--status' '--tag'; then
             plan_ids=("${(@f)$(${words[1]} complete note-ids 2>/dev/null)}")
             compadd -a plan_ids
           fi
           ;;
         reopen)
-          if _tao_at_positional 4 1 0 ',,' '--commit-policy' '--execution-mode' '--limit' '--max-slices' '--reason' '--repo' '--status' '--tag'; then
-            plan_ids=("${(@f)$(${words[1]} complete note-ids 2>/dev/null)}")
-            compadd -a plan_ids
-          fi
-          ;;
-        plan|p)
-          if _tao_at_positional 4 1 0 ',,' '--commit-policy' '--execution-mode' '--limit' '--max-slices' '--reason' '--repo' '--status' '--tag'; then
+          if _tao_at_positional 4 1 0 ',,' '--commit-policy' '--execution-mode' '--limit' '--max-slices' '--plan' '--reason' '--repo' '--status' '--tag'; then
             plan_ids=("${(@f)$(${words[1]} complete note-ids 2>/dev/null)}")
             compadd -a plan_ids
           fi
           ;;
         run|r)
-          if _tao_at_positional 4 1 0 ',,' '--commit-policy' '--execution-mode' '--limit' '--max-slices' '--reason' '--repo' '--status' '--tag'; then
+          if _tao_at_positional 4 1 0 ',,' '--commit-policy' '--execution-mode' '--limit' '--max-slices' '--plan' '--reason' '--repo' '--status' '--tag'; then
             plan_ids=("${(@f)$(${words[1]} complete note-ids 2>/dev/null)}")
             compadd -a plan_ids
           fi

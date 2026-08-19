@@ -15,6 +15,7 @@ import (
 
 	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/note"
+	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/planning"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/taodata"
@@ -25,7 +26,7 @@ const defaultNoteListLimit = 20
 var noteCommand = commandMetadata{
 	name:                  "note",
 	minPrefix:             "n",
-	usageLines:            []string{"note (n) [list (l)] [--repo REPO] [--tag TAG] [--status STATUS] [--all] [--limit N]", "note (n) create (c) [--repo REPO] [--tag TAG] [--] [TEXT...]", "note (n) show (s) [--repo REPO] <note-id>", "note (n) edit (e) [--repo REPO] [--tag TAG] <note-id> [--] [TEXT...]", "note (n) archive (a) [--repo REPO] [--reason TEXT] <note-id>", "note (n) reopen [--repo REPO] <note-id>", "note (n) plan (p) [--repo REPO] <note-id>", "note (n) run (r) [--repo REPO] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--no-review] [--dangerously-skip-permissions] <note-id>"},
+	usageLines:            []string{"note (n) [list (l)] [--repo REPO] [--tag TAG] [--status STATUS] [--all] [--limit N]", "note (n) create (c) [--repo REPO] [--tag TAG] [--] [TEXT...]", "note (n) show (s) [--repo REPO] <note-id>", "note (n) edit (e) [--repo REPO] [--tag TAG] <note-id> [--] [TEXT...]", "note (n) archive (a) [--repo REPO] [--reason TEXT | --plan PLAN] <note-id>", "note (n) reopen [--repo REPO] <note-id>", "note (n) run (r) [--repo REPO] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--no-review] [--dangerously-skip-permissions] <note-id>"},
 	completionDescription: "Capture and maintain repository notes",
 	long:                  "Capture and maintain a private note backlog for a registered repository. With no subcommand, note lists open notes newest first.",
 	examples:              "  tao n c fix flaky queue test\n  printf 'First line\\n\\nMore detail\\n' | tao note create --tag testing\n  tao note list --all\n  tao note archive 20260713-155800-abcd",
@@ -36,7 +37,6 @@ var noteCommand = commandMetadata{
 		{name: "edit", aliases: []commandSubcommandAlias{"e"}, description: "Edit a note's text and optional tags", completion: completionContext{positional: completionPositional{index: 1, label: "note", completer: completeNoteIDs}}},
 		{name: "archive", aliases: []commandSubcommandAlias{"a"}, description: "Archive an open note", completion: completionContext{positional: completionPositional{index: 1, label: "note", completer: completeNoteIDs}}},
 		{name: "reopen", description: "Reopen an archived note", completion: completionContext{positional: completionPositional{index: 1, label: "note", completer: completeNoteIDs}}},
-		{name: "plan", aliases: []commandSubcommandAlias{"p"}, description: "Promote a note into a durable CLI planning session", completion: completionContext{positional: completionPositional{index: 1, label: "note", completer: completeNoteIDs}}},
 		{name: "run", aliases: []commandSubcommandAlias{"r"}, description: "Generate and run a plan for a clear note", completion: completionContext{positional: completionPositional{index: 1, label: "note", completer: completeNoteIDs}}},
 	},
 	registerFlags: registerNoteFlags,
@@ -45,6 +45,7 @@ var noteCommand = commandMetadata{
 		"execution-mode": {kind: completionValueEnum, label: "mode", values: []string{"isolated", "current"}},
 		"limit":          {kind: completionValueCount, label: "count"},
 		"max-slices":     {kind: completionValueCount, label: "count"},
+		"plan":           {kind: completionValueText, label: "plan"},
 		"reason":         {kind: completionValueText, label: "text"},
 		"repo":           {kind: completionValueText, label: "repository"},
 		"status":         {kind: completionValueEnum, label: "status", values: []string{"open", "promoted", "archived"}},
@@ -58,6 +59,7 @@ type NoteRegistry interface {
 	ReadRepo(string) (taodata.Repo, error)
 	ListRepos() ([]taodata.Repo, error)
 	NotesDir(taodata.Repo) string
+	PlansDir(taodata.Repo) string
 }
 
 type RegistryFactory func() NoteRegistry
@@ -77,6 +79,7 @@ func registerNoteFlags(fs *flag.FlagSet) {
 	fs.Bool("all", false, "include all note statuses")
 	fs.Int("limit", defaultNoteListLimit, "maximum notes to list (0 means unlimited)")
 	fs.String("reason", "", "archive reason")
+	fs.String("plan", "", "validated normal plan destination")
 	registerRunRequestFlags(fs)
 }
 
@@ -89,7 +92,7 @@ func (a App) note(ctx context.Context, args []string) error {
 	if len(positional) > 0 {
 		subcommand = normalizeNoteSubcommand(positional[0])
 		if subcommand == "" {
-			return fmt.Errorf("unknown note subcommand %q; use create, list, show, edit, archive, reopen, plan, or run", positional[0])
+			return fmt.Errorf("unknown note subcommand %q; use create, list, show, edit, archive, reopen, or run", positional[0])
 		}
 		positional = positional[1:]
 	}
@@ -114,8 +117,6 @@ func (a App) note(ctx context.Context, args []string) error {
 		return a.noteArchive(ctx, registered, repo, fs, positional)
 	case "reopen":
 		return a.noteReopen(ctx, repo, positional)
-	case "plan":
-		return a.notePlan(ctx, registered, repo, positional)
 	case "run":
 		return a.noteRun(ctx, registered, repo, fs, positional)
 	default:
@@ -129,7 +130,7 @@ func (a App) note(ctx context.Context, args []string) error {
 func boundNoteTextArgs(args []string) []string {
 	valueFlags := map[string]bool{
 		"repo": true, "tag": true, "status": true, "limit": true,
-		"reason": true, "max-slices": true,
+		"reason": true, "plan": true, "max-slices": true,
 		"commit-policy": true, "execution-mode": true,
 	}
 	knownFlags := map[string]bool{
@@ -200,8 +201,6 @@ func normalizeNoteSubcommand(value string) string {
 		return "archive"
 	case "reopen":
 		return "reopen"
-	case "plan", "p":
-		return "plan"
 	case "run", "r":
 		return "run"
 	default:
@@ -215,9 +214,8 @@ func validateNoteFlags(fs *flag.FlagSet, subcommand string) error {
 		"list":    {"repo": true, "tag": true, "status": true, "all": true, "limit": true},
 		"show":    {"repo": true},
 		"edit":    {"repo": true, "tag": true},
-		"archive": {"repo": true, "reason": true},
+		"archive": {"repo": true, "reason": true, "plan": true},
 		"reopen":  {"repo": true},
-		"plan":    {"repo": true},
 		"run":     {"repo": true, "max-slices": true, "commit-policy": true, "execution-mode": true, "pull-request": true, "dangerously-skip-permissions": true, "no-review": true},
 	}
 	var invalid string
@@ -326,6 +324,12 @@ func (a App) noteShow(ctx context.Context, repo NoteRepository, args []string) e
 	}
 	if item.Archive != nil {
 		lines = append(lines, "Archived: "+item.Archive.ArchivedAt.Format("2006-01-02T15:04:05Z07:00"), "Archive reason: "+emptyDash(item.Archive.Reason))
+		if item.Archive.PlanningSession != nil {
+			lines = append(lines, "Planning session: "+item.Archive.PlanningSession.ID)
+		}
+		if item.Archive.Plan != nil {
+			lines = append(lines, "Plan: "+item.Archive.Plan.ID, "Plan directory: "+emptyDash(item.Archive.Plan.Dir))
+		}
 	}
 	if item.Promotion != nil && item.Promotion.PlanningSession != nil {
 		lines = append(lines, "Planning session: "+item.Promotion.PlanningSession.ID)
@@ -376,7 +380,17 @@ func (a App) noteEdit(ctx context.Context, registered taodata.Repo, repo NoteRep
 
 func (a App) noteArchive(ctx context.Context, registered taodata.Repo, repo NoteRepository, fs *flag.FlagSet, args []string) error {
 	if len(args) != 1 {
-		return errors.New("usage: tao note archive <note-id> [--reason TEXT]")
+		return errors.New("usage: tao note archive <note-id> [--reason TEXT | --plan PLAN]")
+	}
+	planInput := strings.TrimSpace(flagStringValue(fs, "plan"))
+	if flagWasProvided(fs, "plan") {
+		if planInput == "" {
+			return errors.New("--plan requires a plan ID")
+		}
+		if flagWasProvided(fs, "reason") {
+			return errors.New("--reason cannot be used with --plan")
+		}
+		return a.noteArchiveToPlan(ctx, registered, repo, args[0], planInput)
 	}
 	current, err := repo.Get(ctx, args[0])
 	if err != nil {
@@ -397,8 +411,109 @@ func (a App) noteArchive(ctx context.Context, registered taodata.Repo, repo Note
 	return writef(a.Out, "Archived note %s\n", updated.ID)
 }
 
-// mutateOpenNote prevents a note from changing while a plan or supervised
-// planning session is being created from its current contents.
+func (a App) noteArchiveToPlan(ctx context.Context, registered taodata.Repo, repo NoteRepository, noteID, planInput string) error {
+	plansDir := a.registry().PlansDir(registered)
+	planRepo := a.repository(plansDir)
+	detail, err := planRepo.ResolvePlan(ctx, planInput)
+	if err != nil {
+		return fmt.Errorf("archive note: resolve plan %q for repository %s: %w", planInput, registered.ID, err)
+	}
+	if err := validateNoteArchivePlan(detail, registered, plansDir); err != nil {
+		return fmt.Errorf("archive note: plan %q is not a valid destination: %w", planInput, err)
+	}
+	current, err := repo.Get(ctx, noteID)
+	if err != nil {
+		return fmt.Errorf("resolve note for plan archival: %w", err)
+	}
+	noteID = current.ID
+	link := note.PlanLink{ID: detail.State.Plan.ID, Dir: detail.Dir, Mode: "plan"}
+	recovery := fmt.Sprintf("tao note archive --repo %s --plan %s %s", registered.ID, link.ID, noteID)
+
+	release, err := a.acquireNotePromotionLock(ctx, a.registry().NotesDir(registered), noteID, "note archive --plan")
+	if err != nil {
+		return fmt.Errorf("lock note %s for plan archival: %w; rerun exactly: `%s`", noteID, err, recovery)
+	}
+	locked := true
+	defer func() {
+		if locked {
+			_ = release()
+		}
+	}()
+
+	current, err = repo.Get(ctx, noteID)
+	if err != nil {
+		return fmt.Errorf("re-read note for plan archival: %w; rerun exactly: `%s`", err, recovery)
+	}
+	if current.Status == note.StatusArchived && current.Archive != nil && current.Archive.Plan != nil && current.Archive.Plan.ID == link.ID {
+		if err := release(); err != nil {
+			return fmt.Errorf("note %s is already linked to plan %s, but its mutation lock could not be released: %w; rerun exactly: `%s`", noteID, link.ID, err, recovery)
+		}
+		locked = false
+		return writef(a.Out, "Note %s is already archived to plan %s\n", noteID, link.ID)
+	}
+	updated, err := repo.ArchiveToPlan(ctx, noteID, link)
+	if err != nil {
+		return fmt.Errorf("plan %s was validated and left untouched, but note %s could not be linked: %w; rerun exactly: `%s`", link.ID, noteID, err, recovery)
+	}
+	if err := release(); err != nil {
+		return fmt.Errorf("note %s was archived to plan %s, but its mutation lock could not be released: %w; rerun exactly: `%s`", updated.ID, link.ID, err, recovery)
+	}
+	locked = false
+	return writef(a.Out, "Archived note %s to plan %s\n", updated.ID, link.ID)
+}
+
+func validateNoteArchivePlan(detail *plan.PlanDetail, registered taodata.Repo, plansDir string) error {
+	if detail == nil {
+		return errors.New("plan loader returned no plan")
+	}
+	if detail.State.Schema != "tao.plan.state.v1" || detail.Slices.Schema != "tao.plan.slices.v1" {
+		return errors.New("normal plan state and slices schemas are required")
+	}
+	id := strings.TrimSpace(detail.State.Plan.ID)
+	if id == "" || detail.Slices.PlanID != id {
+		return errors.New("plan artifact IDs are missing or inconsistent")
+	}
+	if detail.Dir == "" || filepath.Base(filepath.Clean(detail.Dir)) != id {
+		return errors.New("plan directory does not match its recorded ID")
+	}
+	plansRoot, err := filepath.EvalSymlinks(plansDir)
+	if err != nil {
+		return fmt.Errorf("resolve repository plans directory: %w", err)
+	}
+	planDir, err := filepath.EvalSymlinks(detail.Dir)
+	if err != nil {
+		return fmt.Errorf("resolve plan directory: %w", err)
+	}
+	plansRoot, err = filepath.Abs(plansRoot)
+	if err != nil {
+		return fmt.Errorf("make repository plans directory absolute: %w", err)
+	}
+	planDir, err = filepath.Abs(planDir)
+	if err != nil {
+		return fmt.Errorf("make plan directory absolute: %w", err)
+	}
+	if filepath.Dir(filepath.Clean(planDir)) != filepath.Clean(plansRoot) {
+		return fmt.Errorf("plan directory %q is outside repository plans directory %q", detail.Dir, plansDir)
+	}
+	planRoot := strings.TrimSpace(detail.State.Repo.Root)
+	registeredRoot := strings.TrimSpace(registered.Root)
+	if planRoot == "" || registeredRoot == "" || filepath.Clean(planRoot) != filepath.Clean(registeredRoot) {
+		return fmt.Errorf("recorded repository root %q does not match registered repository %s root %q", planRoot, registered.ID, registeredRoot)
+	}
+	if result := plan.ValidatePlanVerification(detail); result.HasErrors() {
+		messages := make([]string, 0, len(result.Findings))
+		for _, finding := range result.Findings {
+			if finding.Severity == plan.VerificationFindingError {
+				messages = append(messages, finding.Message)
+			}
+		}
+		return fmt.Errorf("plan verification is invalid: %s", strings.Join(messages, "; "))
+	}
+	return nil
+}
+
+// mutateOpenNote prevents a note from changing while a plan is being created
+// from its current contents.
 func (a App) mutateOpenNote(ctx context.Context, registered taodata.Repo, noteID, owner string, mutate func() (note.Note, error)) (note.Note, error) {
 	release, err := a.acquireNotePromotionLock(ctx, a.registry().NotesDir(registered), noteID, owner)
 	if err != nil {
@@ -432,7 +547,7 @@ func (a App) noteReopen(ctx context.Context, repo NoteRepository, args []string)
 // notePromotion describes the destination-specific pieces of the shared
 // locked open-note promotion protocol.
 type notePromotion struct {
-	// owner labels the promotion lock owner, such as "note plan".
+	// owner labels the promotion lock owner.
 	owner string
 	// purpose labels lock and re-read errors, such as "planning".
 	purpose string
@@ -446,10 +561,10 @@ type notePromotion struct {
 	promote func(ctx context.Context, item note.Note) (promoted note.Note, destination string, recovery string, err error)
 }
 
-// promoteOpenNote owns the serialized open-note promotion protocol shared by
-// tao note plan and tao note run: gate on status, lock, re-read under the
-// lock, re-gate, promote, release. It returns false without error when the
-// note was already promoted and that outcome has been rendered.
+// promoteOpenNote owns the serialized direct-run promotion protocol: gate on
+// status, lock, re-read under the lock, re-gate, promote, release. It returns
+// false without error when the note was already promoted and that outcome has
+// been rendered.
 func (a App) promoteOpenNote(ctx context.Context, registered taodata.Repo, repo NoteRepository, item note.Note, p notePromotion) (note.Note, bool, error) {
 	if item.Status == note.StatusPromoted {
 		return note.Note{}, false, p.alreadyPromoted(item)
@@ -488,54 +603,6 @@ func (a App) promoteOpenNote(ctx context.Context, registered taodata.Repo, repo 
 	}
 	locked = false
 	return promoted, true, nil
-}
-
-func (a App) notePlan(ctx context.Context, registered taodata.Repo, repo NoteRepository, args []string) error {
-	if len(args) != 1 {
-		return errors.New("usage: tao note plan <note-id> [--repo REPO]")
-	}
-	if err := a.requireHealthyNoteRepository(ctx, registered); err != nil {
-		return err
-	}
-	item, err := repo.Get(ctx, args[0])
-	if err != nil {
-		return fmt.Errorf("plan note: %w", err)
-	}
-	promoted, ok, err := a.promoteOpenNote(ctx, registered, repo, item, notePromotion{
-		owner:           "note plan",
-		purpose:         "planning",
-		alreadyPromoted: func(item note.Note) error { return a.printPlanningDestination(item, true) },
-		notOpen: func(item note.Note) error {
-			return fmt.Errorf("note %s is %s; only open notes can be planned", item.ID, item.Status)
-		},
-		promote: func(ctx context.Context, item note.Note) (note.Note, string, string, error) {
-			capturedAt := a.now().UTC()
-			session, err := a.planningRepository().CreateSession(ctx, planning.CreateRequest{
-				RepoID:        registered.ID,
-				Title:         notePlanningTitle(item.Text),
-				InitialPrompt: item.Text,
-				Source: &planning.SourceEnvelope{Type: "note", Note: &planning.SourceNoteSnapshot{
-					ID: item.ID, Text: item.Text, Tags: item.Tags, RepoID: registered.ID, RepoName: registered.Name, CapturedAt: capturedAt,
-				}},
-			})
-			if err != nil {
-				return note.Note{}, "", "", fmt.Errorf("create planning session for note %s: %w", item.ID, err)
-			}
-			if session == nil || strings.TrimSpace(session.ID) == "" || strings.TrimSpace(session.Repo.ID) == "" {
-				return note.Note{}, "", "", fmt.Errorf("create planning session for note %s: repository returned an invalid session", item.ID)
-			}
-			qualifiedID := planning.QualifyID(session.Repo.ID, session.ID)
-			promoted, err := repo.PromoteToPlanning(ctx, item.ID, note.PlanningSessionLink{ID: qualifiedID})
-			if err != nil {
-				return note.Note{}, "", "", fmt.Errorf("planning session %s was created, but note %s could not be linked: %w; recover with session %s", qualifiedID, item.ID, err, qualifiedID)
-			}
-			return promoted, "planning session " + qualifiedID, "session " + qualifiedID, nil
-		},
-	})
-	if !ok || err != nil {
-		return err
-	}
-	return a.printPlanningDestination(promoted, false)
 }
 
 func (a App) noteRun(ctx context.Context, registered taodata.Repo, repo NoteRepository, fs *flag.FlagSet, args []string) error {
@@ -588,10 +655,10 @@ func (a App) noteRun(ctx context.Context, registered taodata.Repo, repo NoteRepo
 			stopSignals()
 			if err != nil {
 				a.printGenerationWarnings(err)
-				return note.Note{}, "", "", fmt.Errorf("could not generate a runnable plan for note %s: %w\nUse tao note plan %s for supervised clarification", item.ID, err, item.ID)
+				return note.Note{}, "", "", fmt.Errorf("could not generate a runnable plan for note %s: %w\nUse /tao-plan note:%s for supervised clarification", item.ID, err, item.ID)
 			}
 			if generated == nil {
-				return note.Note{}, "", "", fmt.Errorf("could not generate a runnable plan for note %s: generator returned no plan\nUse tao note plan %s for supervised clarification", item.ID, item.ID)
+				return note.Note{}, "", "", fmt.Errorf("could not generate a runnable plan for note %s: generator returned no plan\nUse /tao-plan note:%s for supervised clarification", item.ID, item.ID)
 			}
 			promoted, err := repo.PromoteToPlan(ctx, item.ID, note.PlanLink{ID: generated.Allocation.ID, Dir: generated.Allocation.Dir, Mode: "run"})
 			if err != nil {
@@ -654,13 +721,6 @@ func (a App) printExistingNotePromotion(item note.Note) error {
 	return fmt.Errorf("note %s is promoted but has no destination", item.ID)
 }
 
-func (a App) planningRepository() PlanningRecordCreator {
-	if a.PlanningRepository != nil {
-		return a.PlanningRepository()
-	}
-	return planning.NewFileRepository("")
-}
-
 func (a App) acquireNotePromotionLock(ctx context.Context, dir, noteID, owner string) (func() error, error) {
 	if a.AcquireNotePromotionLock != nil {
 		return a.AcquireNotePromotionLock(ctx, dir, noteID, owner)
@@ -670,22 +730,6 @@ func (a App) acquireNotePromotionLock(ctx context.Context, dir, noteID, owner st
 		return nil, err
 	}
 	return lock.Release, nil
-}
-
-func (a App) printPlanningDestination(item note.Note, existing bool) error {
-	if item.Promotion == nil || item.Promotion.PlanningSession == nil {
-		return fmt.Errorf("note %s was promoted to a non-planning destination and cannot be planned", item.ID)
-	}
-	prefix := "Planning session created"
-	if existing {
-		prefix = "Note already promoted to planning session"
-	}
-	return writeLines(
-		a.Out,
-		prefix+": "+item.Promotion.PlanningSession.ID,
-		"Continue planning in a fresh agent session using the note as /tao-plan context.",
-		"Review the source with: tao note show "+item.ID,
-	)
 }
 
 func (a App) requireHealthyNoteRepository(ctx context.Context, registered taodata.Repo) error {
@@ -713,6 +757,9 @@ func notePlanningTitle(text string) string {
 }
 
 func noteDestination(item note.Note) string {
+	if item.Archive != nil && item.Archive.Plan != nil {
+		return "plan:" + item.Archive.Plan.ID
+	}
 	if item.Promotion == nil {
 		return "-"
 	}

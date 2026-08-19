@@ -64,6 +64,10 @@ func TestRepositoryLifecycleAndDefaultList(t *testing.T) {
 	if _, err := r.Archive(context.Background(), n.ID, "again"); err != nil {
 		t.Fatalf("idempotent archive: %v", err)
 	}
+	n, err = r.Edit(context.Background(), n.ID, "edited while archived", []string{"later"})
+	if err != nil || n.Status != StatusArchived || n.Text != "edited while archived" {
+		t.Fatalf("Edit archived = %#v, %v", n, err)
+	}
 	n, err = r.Reopen(context.Background(), n.ID)
 	if err != nil || n.Status != StatusOpen || n.Archive != nil {
 		t.Fatalf("Reopen = %#v, %v", n, err)
@@ -83,6 +87,118 @@ func TestRepositoryLifecycleAndDefaultList(t *testing.T) {
 	}
 	if _, err := r.Archive(context.Background(), n.ID, ""); !errors.Is(err, ErrImmutable) {
 		t.Fatalf("Archive promoted error = %v", err)
+	}
+}
+
+func TestRepositoryArchiveToPlanLifecycleAndProvenance(t *testing.T) {
+	t.Run("open note is terminal and same-plan retry preserves record", func(t *testing.T) {
+		now := time.Date(2026, 8, 19, 1, 0, 0, 0, time.UTC)
+		r := &Repository{Dir: t.TempDir(), Repo: RepoReference{ID: "repo"}, Now: func() time.Time { now = now.Add(time.Minute); return now }, IDSuffix: func() string { return "open" }}
+		n, err := r.Create(context.Background(), "idea", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		link := PlanLink{ID: "plan-a", Dir: "/plans/plan-a", Mode: "planning"}
+		linked, err := r.ArchiveToPlan(context.Background(), n.ID, link)
+		if err != nil || linked.Status != StatusArchived || linked.Archive == nil || linked.Archive.Plan == nil || *linked.Archive.Plan != link {
+			t.Fatalf("ArchiveToPlan = %#v, %v", linked, err)
+		}
+		before, err := os.ReadFile(r.path(n.ID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		retried, err := r.ArchiveToPlan(context.Background(), n.ID, PlanLink{ID: "plan-a"})
+		if err != nil {
+			t.Fatalf("same-plan ArchiveToPlan: %v", err)
+		}
+		after, err := os.ReadFile(r.path(n.ID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(after) != string(before) || !retried.UpdatedAt.Equal(linked.UpdatedAt) || !retried.Archive.ArchivedAt.Equal(linked.Archive.ArchivedAt) || *retried.Archive.Plan != link {
+			t.Fatalf("same-plan retry changed record: before=%#v after=%#v", linked, retried)
+		}
+		for name, mutate := range map[string]func() error{
+			"edit":    func() error { _, err := r.Edit(context.Background(), n.ID, "changed", nil); return err },
+			"archive": func() error { _, err := r.Archive(context.Background(), n.ID, "manual"); return err },
+			"reopen":  func() error { _, err := r.Reopen(context.Background(), n.ID); return err },
+			"different plan": func() error {
+				_, err := r.ArchiveToPlan(context.Background(), n.ID, PlanLink{ID: "plan-b"})
+				return err
+			},
+		} {
+			if err := mutate(); !errors.Is(err, ErrImmutable) {
+				t.Errorf("%s error = %v", name, err)
+			}
+		}
+	})
+
+	t.Run("planning promotion provenance is retained", func(t *testing.T) {
+		r := &Repository{Dir: t.TempDir(), Repo: RepoReference{ID: "repo"}, Now: time.Now, IDSuffix: func() string { return "planning" }}
+		n, err := r.Create(context.Background(), "idea", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		planning := PlanningSessionLink{ID: "session-a", URL: "https://example.test/session-a"}
+		n.Status = StatusPromoted
+		n.Promotion = &PromotionLinks{PlanningSession: &planning}
+		if err := r.write(context.Background(), n, false); err != nil {
+			t.Fatal(err)
+		}
+		linked, err := r.ArchiveToPlan(context.Background(), n.ID, PlanLink{ID: "plan-a"})
+		if err != nil || linked.Promotion != nil || linked.Archive == nil || linked.Archive.PlanningSession == nil || *linked.Archive.PlanningSession != planning {
+			t.Fatalf("ArchiveToPlan planning-promoted = %#v, %v", linked, err)
+		}
+	})
+
+	for _, test := range []struct {
+		name    string
+		setup   func(*Repository, string) error
+		wantErr error
+	}{
+		{name: "manual archive", setup: func(r *Repository, id string) error {
+			_, err := r.Archive(context.Background(), id, "later")
+			return err
+		}, wantErr: ErrInvalidState},
+		{name: "plan promotion", setup: func(r *Repository, id string) error {
+			_, err := r.PromoteToPlan(context.Background(), id, PlanLink{ID: "legacy-plan"})
+			return err
+		}, wantErr: ErrImmutable},
+	} {
+		t.Run("rejects "+test.name, func(t *testing.T) {
+			r := &Repository{Dir: t.TempDir(), Repo: RepoReference{ID: "repo"}, Now: time.Now, IDSuffix: func() string { return "reject" }}
+			n, err := r.Create(context.Background(), "idea", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := test.setup(r, n.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := r.ArchiveToPlan(context.Background(), n.ID, PlanLink{ID: "plan-a"}); !errors.Is(err, test.wantErr) {
+				t.Fatalf("ArchiveToPlan error = %v, want %v", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestRepositoryReadsHistoricalLifecycleRecords(t *testing.T) {
+	dir := t.TempDir()
+	timestamp := "2026-08-19T01:00:00Z"
+	records := map[string]string{
+		"open":     `{"schema":"tao.repo-note.v1","id":"open","repo":{"id":"repo"},"text":"open","created_at":"` + timestamp + `","updated_at":"` + timestamp + `","status":"open"}`,
+		"archived": `{"schema":"tao.repo-note.v1","id":"archived","repo":{"id":"repo"},"text":"archived","created_at":"` + timestamp + `","updated_at":"` + timestamp + `","status":"archived","archive":{"archived_at":"` + timestamp + `","reason":"later"}}`,
+		"planning": `{"schema":"tao.repo-note.v1","id":"planning","repo":{"id":"repo"},"text":"planning","created_at":"` + timestamp + `","updated_at":"` + timestamp + `","status":"promoted","promotion":{"planning_session":{"id":"session-a"}}}`,
+		"plan":     `{"schema":"tao.repo-note.v1","id":"plan","repo":{"id":"repo"},"text":"plan","created_at":"` + timestamp + `","updated_at":"` + timestamp + `","status":"promoted","promotion":{"plan":{"id":"plan-a"}}}`,
+	}
+	for id, content := range records {
+		if err := os.WriteFile(filepath.Join(dir, id+".json"), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := NewRepository(dir, RepoReference{ID: "repo"})
+	notes, warnings, err := r.List(context.Background(), Filter{All: true})
+	if err != nil || len(warnings) != 0 || len(notes) != len(records) {
+		t.Fatalf("List historical records = %#v, %#v, %v", notes, warnings, err)
 	}
 }
 
@@ -267,6 +383,58 @@ func TestRepositoryMutationRacesDoNotRevertPromotion(t *testing.T) {
 				t.Fatalf("record after race = %#v, %v", got, err)
 			}
 		})
+	}
+}
+
+func TestRepositoryConcurrentPlanArchivesSerializeDestination(t *testing.T) {
+	r := &Repository{Dir: t.TempDir(), Repo: RepoReference{ID: "repo"}, Now: time.Now, IDSuffix: func() string { return "linked" }}
+	n, err := r.Create(context.Background(), "idea", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	firstReplacing := make(chan struct{})
+	allowFirst := make(chan struct{})
+	var renameMu sync.Mutex
+	renameCalls := 0
+	r.Rename = func(oldPath, newPath string) error {
+		renameMu.Lock()
+		renameCalls++
+		call := renameCalls
+		renameMu.Unlock()
+		if call == 1 {
+			close(firstReplacing)
+			<-allowFirst
+		}
+		return os.Rename(oldPath, newPath)
+	}
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, archiveErr := r.ArchiveToPlan(context.Background(), n.ID, PlanLink{ID: "plan-a"})
+		firstDone <- archiveErr
+	}()
+	<-firstReplacing
+	secondDone := make(chan error, 1)
+	go func() {
+		_, archiveErr := r.ArchiveToPlan(context.Background(), n.ID, PlanLink{ID: "plan-b"})
+		secondDone <- archiveErr
+	}()
+	select {
+	case err := <-secondDone:
+		t.Fatalf("second archive completed while first replacement was locked: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(allowFirst)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first ArchiveToPlan: %v", err)
+	}
+	if err := <-secondDone; !errors.Is(err, ErrImmutable) {
+		t.Fatalf("second ArchiveToPlan error = %v", err)
+	}
+	got, err := r.Get(context.Background(), n.ID)
+	if err != nil || got.Archive == nil || got.Archive.Plan == nil || got.Archive.Plan.ID != "plan-a" {
+		t.Fatalf("record after concurrent archives = %#v, %v", got, err)
 	}
 }
 

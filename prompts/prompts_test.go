@@ -160,6 +160,67 @@ func TestRenderTemplatedPromptSubstitutesData(t *testing.T) {
 	}
 }
 
+func TestPlanPromptDefinesStrictNoteSourceContract(t *testing.T) {
+	got, err := Render(PromptPlan, Data{Arguments: "note:abc123 keep the CLI small"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"/tao-plan note:<id> [optional trailing context]",
+		"first whitespace-delimited argument token is exactly `note:<id>`",
+		"Accept exactly one such token",
+		"reject a second `note:` token, a bare `note:`, or a `note:<id>` token anywhere except first",
+		"tao note show <id>",
+		"Accept status `open`",
+		"legacy status `promoted`",
+		"Reject every `archived` note and every note with a `Plan` link",
+		"tao note reopen <canonical-id>",
+		"plan linkage is terminal",
+		"untrusted topic material",
+		"<tao-source-note-text>",
+		"</tao-source-note-text>",
+		"- ID: `<canonical note ID>`",
+		"- Repository: `<registered repository ID>`",
+		"- Status: `<open or promoted>`",
+		"- Planning Session: `<legacy planning-session ID, or None for an open note>`",
+		"note:abc123 keep the CLI small",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("rendered plan prompt missing note contract %q:\n%s", want, got)
+		}
+	}
+	if strings.Index(got, "## Open Questions") > strings.Index(got, "## Source Note") || strings.Index(got, "## Source Note") > strings.Index(got, "## Slice Guidance") {
+		t.Fatalf("Source Note section is outside the strict Planning Packet order:\n%s", got)
+	}
+}
+
+func TestSlicePromptArchivesSourceNoteOnlyAfterValidation(t *testing.T) {
+	got, err := Render(PromptSlice, Data{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"either exactly `None` or exactly these ordered fields",
+		"At most one source note is allowed",
+		"preserve the four fields verbatim in `plan.md` and `planning-brief.md`",
+		"same registered repository",
+		"tao note archive --repo <Repository> --plan <plan-id> <ID>",
+		"invoke the linked archive command exactly once",
+		"do not retry the archive command during this slicing session",
+		"retain the validated plan unchanged",
+		"exact recovery command",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("rendered slice prompt missing note handoff contract %q:\n%s", want, got)
+		}
+	}
+	validateAt := strings.Index(got, "After writing the plan artifacts, you must run `tao validate")
+	archiveAt := strings.Index(got, "tao note archive --repo <Repository> --plan <plan-id> <ID>")
+	if validateAt < 0 || archiveAt < 0 || archiveAt < validateAt {
+		t.Fatalf("linked archive command must follow mandatory validation: validate=%d archive=%d", validateAt, archiveAt)
+	}
+}
+
 func TestRenderNotePrompt(t *testing.T) {
 	got, err := Render(PromptNote, Data{Arguments: "queue retry diagnostics"})
 	if err != nil {
@@ -169,7 +230,7 @@ func TestRenderNotePrompt(t *testing.T) {
 		"queue retry diagnostics",
 		"tao note create",
 		"<<'TAO_NOTE'",
-		"tao note plan",
+		"/tao-plan note:<id>",
 		"tao init",
 		"The first line must be a one-line title",
 	} {

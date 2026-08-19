@@ -24,7 +24,7 @@ cat <<'TAO_NOTE' | tao note create [--tag <topic>]
 TAO_NOTE
 ```
 
-Report the resulting `Created note <id>` output and tell the user that the note can be promoted later with `tao note plan <id>`.
+Report the resulting `Created note <id>` output and tell the user that the open note can be planned later with `/tao-plan note:<id>`.
 
 If creation fails because the repository is not registered, surface the error verbatim and suggest running `tao init`. Do not work around the error.
 

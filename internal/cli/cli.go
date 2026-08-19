@@ -30,7 +30,6 @@ type App struct {
 	Repository               RepositoryFactory
 	Registry                 RegistryFactory
 	NoteRepository           NoteRepositoryFactory
-	PlanningRepository       PlanningRepositoryFactory
 	PlanGenerator            PlanGenerator
 	RepoHealthCheck          func(context.Context, taodata.Repo) taodata.RepoHealth
 	AcquireNotePromotionLock NotePromotionLockAcquirer
@@ -80,18 +79,12 @@ type NoteRepository interface {
 	List(context.Context, note.Filter) ([]note.Note, []note.Warning, error)
 	Edit(context.Context, string, string, []string) (note.Note, error)
 	Archive(context.Context, string, string) (note.Note, error)
+	ArchiveToPlan(context.Context, string, note.PlanLink) (note.Note, error)
 	Reopen(context.Context, string) (note.Note, error)
-	PromoteToPlanning(context.Context, string, note.PlanningSessionLink) (note.Note, error)
 	PromoteToPlan(context.Context, string, note.PlanLink) (note.Note, error)
 }
 
 type NoteRepositoryFactory func(dir string, repo note.RepoReference) NoteRepository
-
-type PlanningRecordCreator interface {
-	CreateSession(context.Context, planning.CreateRequest) (*planning.Session, error)
-}
-
-type PlanningRepositoryFactory func() PlanningRecordCreator
 
 type PlanGenerator interface {
 	GeneratePlan(context.Context, planning.GeneratePlanRequest) (*planning.GeneratePlanResult, error)

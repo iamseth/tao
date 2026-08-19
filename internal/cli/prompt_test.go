@@ -119,7 +119,7 @@ func TestPromptRendersCanonicalPrompts(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := out.String()
-	for _, want := range []string{"You are in PLAN mode.", "add export flow", "# Planning Packet", "Do not implement code.", "Do not edit files.", "Do not create Tao plan artifacts.", "Ask user-facing clarification questions only in the final assistant response"} {
+	for _, want := range []string{"You are in PLAN mode.", "add export flow", "# Planning Packet", "Do not implement code.", "Do not edit files.", "Do not create Tao plan artifacts.", "Ask user-facing clarification questions only in the final assistant response", "/tao-plan note:<id> [optional trailing context]", "tao note show <id>", "## Source Note", "Planning Session"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected rendered plan prompt content %q, got %q", want, text)
 		}
@@ -144,7 +144,7 @@ func TestPromptRendersCanonicalPrompts(t *testing.T) {
 	if strings.Contains(text, "tao capture-planning-session") {
 		t.Fatalf("unexpected planning capture instructions, got %q", text)
 	}
-	for _, want := range []string{"planning-brief.md", "## User Goal", "## Validation Strategy"} {
+	for _, want := range []string{"planning-brief.md", "## User Goal", "## Validation Strategy", "## Source Note", "tao note archive --repo <Repository> --plan <plan-id> <ID>", "do not retry the archive command", "retain the validated plan unchanged"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected planning brief instruction %q, got %q", want, text)
 		}
@@ -640,7 +640,7 @@ func TestInstallPromptsAndDoctorUseSelectedPiAgent(t *testing.T) {
 		t.Fatalf("expected Pi Tao extension to be enabled: %v", err)
 	}
 	planTemplate := readText(t, filepath.Join(piRoot, "tao-plan.md"))
-	for _, want := range []string{"You are in PLAN mode.", "# Planning Packet", "## Planning Topic", "$ARGUMENTS", "Ask user-facing clarification questions only in the final assistant response"} {
+	for _, want := range []string{"You are in PLAN mode.", "# Planning Packet", "## Planning Topic", "$ARGUMENTS", "Ask user-facing clarification questions only in the final assistant response", "/tao-plan note:<id> [optional trailing context]", "tao note show <id>", "## Source Note", "untrusted topic material"} {
 		if !strings.Contains(planTemplate, want) {
 			t.Fatalf("expected installed Pi /tao-plan template to contain %q, got %q", want, planTemplate)
 		}

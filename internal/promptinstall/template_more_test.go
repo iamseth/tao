@@ -22,6 +22,28 @@ func TestManagedClaudeCommandWrapper(t *testing.T) {
 	}
 }
 
+func TestInlineProviderTemplatesPreserveNoteSourceMetadata(t *testing.T) {
+	template := "---\ndescription: note aware\nagent: plan\n---\n\n## Source Note\n\n- ID: `<canonical note ID>`\n\n{{ .Arguments }}\n"
+	pi, err := promptfmt.ManagedPiTemplate("tao-plan", "plan", template)
+	if err != nil {
+		t.Fatal(err)
+	}
+	codex, err := promptfmt.ManagedCodexCommand("tao-plan", "plan", template)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, text := range map[string]string{"pi": pi, "codex": codex} {
+		for _, want := range []string{"## Source Note", "- ID: `<canonical note ID>`", "$ARGUMENTS"} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("%s installed prompt missing %q: %q", name, want, text)
+			}
+		}
+		if strings.Contains(text, "{{ .Arguments }}") {
+			t.Fatalf("%s installed prompt retained Go template syntax: %q", name, text)
+		}
+	}
+}
+
 func TestManagedPiTemplateFrontmatterVariants(t *testing.T) {
 	plain, err := promptfmt.ManagedPiTemplate("tao-plain", "plain", "Body {{.Arguments}}")
 	if err != nil {

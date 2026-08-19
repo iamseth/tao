@@ -1,11 +1,11 @@
-// Package planning owns the two planning seams used by note promotion.
+// Package planning owns provider-neutral plan generation for tao note run and
+// read-only compatibility access to historical planning-session records.
 //
-// FileRepository.CreateSession persists the repo-scoped source record used by
-// tao note plan. Service.GeneratePlan synchronously allocates, generates, and
-// validates an executable plan for tao note run. Session values carry the source
-// provenance and prompt transcript needed by either path.
+// New note-aware planning starts from /tao-plan note:<id>; after /tao-slice
+// validates the resulting normal plan, the note is archived with that plan
+// link. Tao no longer creates planning-session records, but Session models and
+// FileRepository decode paths remain for historical provenance.
 //
 // Planning delegates executable plan artifacts and lifecycle state to
-// internal/plan; it owns only session persistence and provider-neutral plan
-// generation.
+// internal/plan.
 package planning

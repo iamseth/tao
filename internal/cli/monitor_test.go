@@ -63,6 +63,7 @@ func (monitorRegistryStub) Current(context.Context) (taodata.Repo, error) { retu
 func (monitorRegistryStub) ReadRepo(string) (taodata.Repo, error)         { return taodata.Repo{}, nil }
 func (monitorRegistryStub) ListRepos() ([]taodata.Repo, error)            { return nil, nil }
 func (monitorRegistryStub) NotesDir(taodata.Repo) string                  { return "" }
+func (monitorRegistryStub) PlansDir(taodata.Repo) string                  { return "" }
 
 func TestMonitorUsesRegistryRepositoryOutputAndClockSeams(t *testing.T) {
 	now := time.Date(2026, 7, 29, 6, 0, 0, 0, time.UTC)

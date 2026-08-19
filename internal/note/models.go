@@ -27,10 +27,13 @@ type RepoReference struct {
 	Root string `json:"root,omitempty"`
 }
 
-// ArchiveMetadata records the reversible archive transition.
+// ArchiveMetadata records an archive transition. Archives linked to a plan are
+// terminal; archives without a plan retain the ordinary reversible lifecycle.
 type ArchiveMetadata struct {
-	ArchivedAt time.Time `json:"archived_at"`
-	Reason     string    `json:"reason,omitempty"`
+	ArchivedAt      time.Time            `json:"archived_at"`
+	Reason          string               `json:"reason,omitempty"`
+	Plan            *PlanLink            `json:"plan,omitempty"`
+	PlanningSession *PlanningSessionLink `json:"planning_session,omitempty"`
 }
 
 // PlanningSessionLink identifies a durable planning session created from a note.

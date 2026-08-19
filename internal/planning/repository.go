@@ -2,8 +2,6 @@ package planning
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,14 +10,11 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode"
 
-	"github.com/iamseth/tao/internal/atomicfile"
 	"github.com/iamseth/tao/internal/taodata"
 )
 
 type Repository interface {
-	CreateSession(context.Context, CreateRequest) (*Session, error)
 	ListSessions(context.Context, ListFilter) (ListResult, error)
 	GetSession(context.Context, string) (*Session, error)
 }
@@ -28,14 +23,13 @@ type FileRepository struct {
 	DataHome string
 	Registry taodata.Registry
 	Now      func() time.Time
-	Suffix   func() (string, error)
 }
 
 func NewFileRepository(dataHome string) *FileRepository {
 	if dataHome == "" {
 		dataHome = taodata.DataHome()
 	}
-	return &FileRepository{DataHome: dataHome, Registry: taodata.NewRegistry(dataHome), Now: time.Now, Suffix: randomSuffix}
+	return &FileRepository{DataHome: dataHome, Registry: taodata.NewRegistry(dataHome), Now: time.Now}
 }
 
 // NewSession constructs and validates a draft planning session record.
@@ -61,44 +55,6 @@ func NewSession(id, title, initialPrompt string, repo taodata.Repo, source *Sour
 		session.Messages = append(session.Messages, message)
 	}
 	if err := validateSessionRecord(session); err != nil {
-		return nil, err
-	}
-	return session, nil
-}
-
-func (r *FileRepository) CreateSession(ctx context.Context, req CreateRequest) (*Session, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	repoID := strings.TrimSpace(req.RepoID)
-	if repoID == "" {
-		return nil, fmt.Errorf("repo is required")
-	}
-	repo, err := r.registry().ReadRepo(repoID)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("repo %q is not registered", repoID)
-		}
-		return nil, fmt.Errorf("read repo %q: %w", repoID, err)
-	}
-	now := r.now().UTC()
-	title := strings.TrimSpace(req.Title)
-	if title == "" {
-		title = titleFromPrompt(req.InitialPrompt)
-	}
-	if title == "" {
-		title = "Draft Planning Session"
-	}
-	suffix, err := r.suffix()
-	if err != nil {
-		return nil, fmt.Errorf("generate session id: %w", err)
-	}
-	id := r.uniqueSessionID(repo.ID, now, title, suffix)
-	session, err := NewSession(id, title, strings.TrimSpace(req.InitialPrompt), repo, req.Source, now)
-	if err != nil {
-		return nil, err
-	}
-	if err := r.writeSession(session); err != nil {
 		return nil, err
 	}
 	return session, nil
@@ -224,24 +180,6 @@ func (r *FileRepository) reposForFilter(filter ListFilter) ([]taodata.Repo, erro
 	return r.registry().ListRepos()
 }
 
-func (r *FileRepository) writeSession(session *Session) error {
-	if err := validateSessionRecord(session); err != nil {
-		return err
-	}
-	path := filepath.Join(r.sessionsRoot(session.Repo.ID), session.ID, "session.json")
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil { // #nosec G703 -- repo and session IDs are validated above.
-		return fmt.Errorf("create planning session dir: %w", err)
-	}
-	content, err := json.MarshalIndent(session, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode planning session: %w", err)
-	}
-	if err := atomicfile.Write(path, append(content, '\n'), atomicfile.Options{Perm: 0o600}); err != nil {
-		return fmt.Errorf("write planning session: %w", err)
-	}
-	return nil
-}
-
 func (r *FileRepository) readSession(path string) (*Session, error) {
 	content, err := os.ReadFile(path) //nolint:gosec // G304: path derived from trusted session store layout
 	if err != nil {
@@ -264,27 +202,6 @@ func (r *FileRepository) readSession(path string) (*Session, error) {
 		session.Messages = []TranscriptMessage{}
 	}
 	return &session, nil
-}
-
-func (r *FileRepository) uniqueSessionID(repoID string, now time.Time, title string, suffix string) string {
-	base := now.Format("20060102-150405") + "-" + cleanSlug(title)
-	if cleanSlug(title) == "" {
-		base = now.Format("20060102-150405") + "-planning"
-	}
-	if suffix != "" {
-		base += "-" + cleanSlug(suffix)
-	}
-	id := base
-	for i := 2; ; i++ {
-		_, err := os.Stat(filepath.Join(r.sessionsRoot(repoID), id, "session.json"))
-		if errors.Is(err, os.ErrNotExist) {
-			return id
-		}
-		if err != nil {
-			return id
-		}
-		id = fmt.Sprintf("%s-%d", base, i)
-	}
 }
 
 func (r *FileRepository) sessionsRoot(repoID string) string {
@@ -310,13 +227,6 @@ func (r *FileRepository) now() time.Time {
 		return r.Now()
 	}
 	return time.Now()
-}
-
-func (r *FileRepository) suffix() (string, error) {
-	if r.Suffix != nil {
-		return r.Suffix()
-	}
-	return randomSuffix()
 }
 
 func repoRef(repo taodata.Repo) RepoRef {
@@ -367,34 +277,6 @@ func normalizeSource(source *SourceEnvelope, repo taodata.Repo, now time.Time) *
 	return normalized
 }
 
-func titleFromPrompt(prompt string) string {
-	for line := range strings.SplitSeq(prompt, "\n") {
-		line = trimPlanningCommand(strings.TrimSpace(line))
-		if line == "" {
-			continue
-		}
-		if len(line) > 80 {
-			return line[:79] + "…"
-		}
-		return line
-	}
-	return ""
-}
-
-func trimPlanningCommand(line string) string {
-	for _, command := range []string{"/tao-plan", "/plan"} {
-		rest, found := strings.CutPrefix(line, command)
-		if !found {
-			continue
-		}
-		trimmed := strings.TrimLeftFunc(rest, unicode.IsSpace)
-		if rest == "" || trimmed != rest {
-			return trimmed
-		}
-	}
-	return line
-}
-
 func cleanSlug(value string) string {
 	return taodata.Slug(value, 36)
 }
@@ -432,12 +314,4 @@ func validateID(id string) error {
 		return classify(ErrInvalidSession, "invalid planning session id %q", id)
 	}
 	return nil
-}
-
-func randomSuffix() (string, error) {
-	b := make([]byte, 3)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b), nil
 }

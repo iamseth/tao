@@ -132,13 +132,6 @@ type SessionSummary struct {
 	LastActivityAt     time.Time `json:"last_activity_at"`
 }
 
-type CreateRequest struct {
-	RepoID        string
-	Title         string
-	InitialPrompt string
-	Source        *SourceEnvelope
-}
-
 type ListFilter struct {
 	RepoID string
 }
