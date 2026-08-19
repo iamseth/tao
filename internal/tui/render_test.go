@@ -18,13 +18,13 @@ func TestRenderGoldenColorModes(t *testing.T) {
 		PlanID:         "plan",
 		Status:         plan.StatusPlanned,
 	}}}
-	plain := clearScreenSequence + `Tao UI | 1 plan
+	plain := clearScreenSequence + `Tao UI | Repositories: all | 1 plan
 
 PLANNED / IN REVIEW
   REPO  PLAN  STATUS   PHASE/SLICE  RUN  SLICES  UPDATED
 > repo  plan  planned  -            -    0/0     -
 
-r run  q queue  a approve  c completed  Enter detail  Esc quit
+r run  a approve  m merge  M merge all  f repository  c completed  Enter plan  q quit  Esc Esc quit
 `
 	colored := strings.Replace(plain, "planned  -", "\x1b[33mplanned\x1b[0m  -", 1)
 	tests := []struct {
@@ -109,11 +109,11 @@ func TestRenderOmitsEmptyAndHiddenCompletedSections(t *testing.T) {
 		{
 			name:  "empty snapshot",
 			model: Model{},
-			want: clearScreenSequence + `Tao UI | 0 plans
+			want: clearScreenSequence + `Tao UI | Repositories: all | 0 plans
 
   No plans.
 
-r run  q queue  a approve  c completed  Enter detail  Esc quit
+r run  a approve  m merge  M merge all  f repository  c completed  Enter plan  q quit  Esc Esc quit
 `,
 		},
 		{
@@ -122,11 +122,11 @@ r run  q queue  a approve  c completed  Enter detail  Esc quit
 				Snapshot:      monitor.Snapshot{Rows: []monitor.Row{{PlanID: "done", Status: plan.StatusCompleted}}},
 				HideCompleted: true,
 			},
-			want: clearScreenSequence + `Tao UI | 0 plans
+			want: clearScreenSequence + `Tao UI | Repositories: all | 0 plans
 
   No plans.
 
-r run  q queue  a approve  c completed  Enter detail  Esc quit
+r run  a approve  m merge  M merge all  f repository  c completed  Enter plan  q quit  Esc Esc quit
 `,
 		},
 	}
@@ -140,6 +140,28 @@ r run  q queue  a approve  c completed  Enter detail  Esc quit
 				t.Fatalf("Render() unexpectedly included empty completed section: %q", got)
 			}
 		})
+	}
+}
+
+func TestRenderShowsRepositoryFocusAndFiltersRows(t *testing.T) {
+	got := Render(Model{
+		Snapshot: monitor.Snapshot{Rows: []monitor.Row{
+			{RepositoryID: "repo-a", RepositoryName: "alpha", PlanID: "one", Status: plan.StatusPlanned},
+			{RepositoryID: "repo-b", RepositoryName: "beta", PlanID: "two", Status: plan.StatusPlanned},
+		}},
+		FocusRepositoryID:   "repo-b",
+		FocusRepositoryName: "beta",
+	})
+	if !strings.Contains(got, "Tao UI | Repository: beta | 1 plan") || !strings.Contains(got, "> beta  two") {
+		t.Fatalf("focused render missing header or row:\n%s", got)
+	}
+	if strings.Contains(got, "alpha") {
+		t.Fatalf("focused render included another repository:\n%s", got)
+	}
+
+	empty := Render(Model{FocusRepositoryID: "repo-b", FocusRepositoryName: "beta"})
+	if !strings.Contains(empty, "Tao UI | Repository: beta | 0 plans") || !strings.Contains(empty, "No plans.") {
+		t.Fatalf("empty focused render is ambiguous:\n%s", empty)
 	}
 }
 

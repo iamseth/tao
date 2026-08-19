@@ -44,6 +44,7 @@ type App struct {
 	Collector SnapshotCollector
 	Actions   *Actions
 	Details   DetailRepository
+	Now       func() time.Time
 }
 
 type inputResult struct {
@@ -57,13 +58,18 @@ type confirmPrompt struct {
 }
 
 type loopState struct {
-	snapshot      monitor.Snapshot
-	selected      int
-	size          term.Size
-	showCompleted bool
-	useColor      bool
-	confirm       *confirmPrompt
-	detail        *detailState
+	snapshot            monitor.Snapshot
+	selected            int
+	size                term.Size
+	showCompleted       bool
+	focusRepositoryID   string
+	focusRepositoryName string
+	focusRepositoryRoot string
+	useColor            bool
+	confirm             *confirmPrompt
+	detail              *detailState
+	now                 func() time.Time
+	lastRootEscape      time.Time
 }
 
 // Run enters terminal mode and processes input, refresh, resize, and
@@ -74,6 +80,9 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 	}
 	if a.Details == nil {
 		a.Details = plan.NewFileRepository("")
+	}
+	if a.Now == nil {
+		a.Now = time.Now
 	}
 
 	// Keep this as the outermost defer: every path after validation, including a
@@ -113,10 +122,10 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 		return fmt.Errorf("refresh dashboard: %w", err)
 	}
 	state := loopState{
-		snapshot:      snapshot,
-		size:          size,
-		showCompleted: true,
-		useColor:      outputSupportsColor(a.Output),
+		snapshot: snapshot,
+		size:     size,
+		useColor: outputSupportsColor(a.Output),
+		now:      a.Now,
 	}
 	state.clampSelection()
 	if err := a.writeFrame(state); err != nil {
@@ -213,26 +222,30 @@ func (a App) writeFrame(state loopState) error {
 	var frame bytes.Buffer
 	if state.detail != nil {
 		frame.WriteString(RenderDetail(DetailModel{
-			Plan:        state.detail.plan,
-			Row:         state.detail.row,
-			Log:         state.detail.log,
-			Width:       state.size.Width,
-			Height:      state.size.Height,
-			UseColor:    state.useColor,
-			LoadError:   state.detail.loadError,
-			FollowError: state.detail.followError,
+			Plan:            state.detail.plan,
+			Row:             state.detail.row,
+			Log:             state.detail.log,
+			SelectedSliceID: state.detail.selectedSliceID,
+			SliceOpen:       state.detail.sliceOpen,
+			Width:           state.size.Width,
+			Height:          state.size.Height,
+			UseColor:        state.useColor,
+			LoadError:       state.detail.loadError,
+			FollowError:     state.detail.followError,
 		}))
 	} else {
 		frame.WriteString(Render(Model{
-			Snapshot:       state.snapshot,
-			Selected:       state.selected,
-			Width:          state.size.Width,
-			Height:         state.size.Height,
-			HideCompleted:  !state.showCompleted,
-			UseColor:       state.useColor,
-			ConfirmMessage: state.confirmMessage(),
-			ActionLabels:   a.Actions.labels(),
-			ActionMessage:  a.Actions.statusMessage(),
+			Snapshot:            state.snapshot,
+			Selected:            state.selected,
+			Width:               state.size.Width,
+			Height:              state.size.Height,
+			HideCompleted:       !state.showCompleted,
+			FocusRepositoryID:   state.focusRepositoryID,
+			FocusRepositoryName: state.focusRepositoryName,
+			UseColor:            state.useColor,
+			ConfirmMessage:      state.confirmMessage(),
+			ActionLabels:        a.Actions.labels(),
+			ActionMessage:       a.Actions.statusMessage(),
 		}))
 	}
 	contents := frame.Bytes()
@@ -265,33 +278,72 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 	if key.Key == term.KeyCtrlC {
 		return true
 	}
+	if state.confirm != nil {
+		return state.handleKey(key)
+	}
+	if quitKey(key) {
+		return true
+	}
 	if state.detail != nil {
-		if key.Key == term.KeyEsc {
+		state.interruptEscape()
+		switch {
+		case key.Key == term.KeyEsc && state.detail.sliceOpen:
+			state.detail.sliceOpen = false
+		case key.Key == term.KeyEsc:
 			state.closeDetail()
+		case !state.detail.sliceOpen && key.Key == term.KeyEnter:
+			if _, ok := findDetailSlice(state.detail.plan, state.detail.selectedSliceID); ok {
+				state.detail.sliceOpen = true
+			}
+		case !state.detail.sliceOpen && (key.Key == term.KeyArrowUp || (key.Key == term.KeyRune && key.Rune == 'k')):
+			state.detail.moveSlice(-1)
+		case !state.detail.sliceOpen && (key.Key == term.KeyArrowDown || (key.Key == term.KeyRune && key.Rune == 'j')):
+			state.detail.moveSlice(1)
 		}
 		return false
 	}
-	if state.confirm != nil {
-		return state.handleKey(key)
+	if key.Key != term.KeyEsc {
+		state.interruptEscape()
 	}
 	row, selected := state.selectedRow()
 	if key.Key == term.KeyEnter && selected && row.PlanDir != "" {
 		a.openDetail(ctx, state, row)
 		return false
 	}
-	if a.Actions != nil && key.Key == term.KeyRune && selected {
+	if a.Actions != nil && key.Key == term.KeyRune {
+		if key.Rune == 'M' {
+			if repository, ok := state.mergeRepositoryRow(); ok {
+				if message, prompt := a.Actions.MergeAllPrompt(repository); prompt {
+					state.beginConfirm(message, func(accepted bool) {
+						if accepted {
+							a.Actions.MergeAll(ctx, repository)
+						}
+					})
+				}
+			}
+			return false
+		}
+		if !selected {
+			return state.handleKey(key)
+		}
 		switch key.Rune {
 		case 'r', 'R':
 			a.Actions.RunPlan(ctx, row)
-			return false
-		case 'q', 'Q':
-			a.Actions.QueuePlan(ctx, row, state.snapshot)
 			return false
 		case 'a', 'A':
 			if message, ok := a.Actions.ApprovalPrompt(row); ok {
 				state.beginConfirm(message, func(accepted bool) {
 					if accepted {
 						a.Actions.ApproveSlice(ctx, row)
+					}
+				})
+			}
+			return false
+		case 'm':
+			if message, ok := a.Actions.MergePlanPrompt(row); ok {
+				state.beginConfirm(message, func(accepted bool) {
+					if accepted {
+						a.Actions.MergePlan(ctx, row)
 					}
 				})
 			}
@@ -312,6 +364,7 @@ func (a App) openDetail(ctx context.Context, state *loopState, row monitor.Row) 
 		return
 	}
 	detail.plan = loaded
+	detail.reconcileSliceSelection()
 	seed, err := a.Details.ReadLogTail(row.PlanDir, detailLogTailLines)
 	if err != nil {
 		detail.followError = err.Error()
@@ -330,6 +383,7 @@ func (a App) reloadDetail(ctx context.Context, state *loopState) {
 		return
 	}
 	state.detail.plan = loaded
+	state.detail.reconcileSliceSelection()
 	state.detail.loadError = ""
 }
 
@@ -352,6 +406,46 @@ func (s *loopState) refreshDetailRow() {
 	}
 }
 
+func (d *detailState) reconcileSliceSelection() {
+	ordered := orderedDetailSlices(d.plan)
+	for _, slice := range ordered {
+		if slice.ID == d.selectedSliceID {
+			return
+		}
+	}
+	d.selectedSliceID = ""
+	if d.plan != nil && d.plan.State.Plan.CurrentSlice != nil {
+		current := *d.plan.State.Plan.CurrentSlice
+		for _, slice := range ordered {
+			if slice.ID == current {
+				d.selectedSliceID = current
+				return
+			}
+		}
+	}
+	if len(ordered) > 0 {
+		d.selectedSliceID = ordered[0].ID
+	} else {
+		d.sliceOpen = false
+	}
+}
+
+func (d *detailState) moveSlice(delta int) {
+	ordered := orderedDetailSlices(d.plan)
+	if len(ordered) == 0 {
+		return
+	}
+	index := 0
+	for candidate := range ordered {
+		if ordered[candidate].ID == d.selectedSliceID {
+			index = candidate
+			break
+		}
+	}
+	index = max(0, min(len(ordered)-1, index+delta))
+	d.selectedSliceID = ordered[index].ID
+}
+
 func (s *loopState) closeDetail() {
 	if s.detail == nil {
 		return
@@ -372,32 +466,65 @@ func (s *loopState) handleKey(key term.KeyEvent) bool {
 			s.resolveConfirm(true)
 		case key.Key == term.KeyRune && (key.Rune == 'n' || key.Rune == 'N'):
 			s.resolveConfirm(false)
-		case key.Key == term.KeyEsc:
+		case key.Key == term.KeyEsc || quitKey(key):
 			s.resolveConfirm(false)
 		}
 		return false
 	}
+	if quitKey(key) {
+		return true
+	}
+	if key.Key != term.KeyEsc {
+		s.interruptEscape()
+	}
 
 	switch {
 	case key.Key == term.KeyEsc:
-		return true
+		now := s.currentTime()
+		if !s.lastRootEscape.IsZero() {
+			elapsed := now.Sub(s.lastRootEscape)
+			if elapsed >= 0 && elapsed <= time.Second {
+				return true
+			}
+		}
+		s.lastRootEscape = now
 	case key.Key == term.KeyArrowUp || (key.Key == term.KeyRune && key.Rune == 'k'):
 		if s.selected > 0 {
 			s.selected--
 		}
 	case key.Key == term.KeyArrowDown || (key.Key == term.KeyRune && key.Rune == 'j'):
-		if s.selected+1 < len(visibleRows(s.snapshot.Rows, s.showCompleted)) {
+		if s.selected+1 < len(s.visibleRows()) {
 			s.selected++
 		}
 	case key.Key == term.KeyRune && (key.Rune == 'c' || key.Rune == 'C'):
-		s.showCompleted = !s.showCompleted
-		s.clampSelection()
+		s.preserveSelection(func() { s.showCompleted = !s.showCompleted })
+	case key.Key == term.KeyRune && (key.Rune == 'f' || key.Rune == 'F'):
+		s.toggleRepositoryFocus()
 	}
 	return false
 }
 
+func quitKey(key term.KeyEvent) bool {
+	return key.Key == term.KeyRune && (key.Rune == 'q' || key.Rune == 'Q')
+}
+
+func (s *loopState) interruptEscape() {
+	s.lastRootEscape = time.Time{}
+}
+
+func (s loopState) currentTime() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
+}
+
+func (s loopState) visibleRows() []monitor.Row {
+	return visibleRows(s.snapshot.Rows, s.showCompleted, s.focusRepositoryID)
+}
+
 func (s loopState) selectedRow() (monitor.Row, bool) {
-	rows := visibleRows(s.snapshot.Rows, s.showCompleted)
+	rows := s.visibleRows()
 	if s.selected < 0 || s.selected >= len(rows) {
 		return monitor.Row{}, false
 	}
@@ -426,8 +553,69 @@ func (s loopState) confirmMessage() string {
 func (s *loopState) replaceSnapshot(snapshot monitor.Snapshot) {
 	selected, preserve := s.selectedRow()
 	s.snapshot = snapshot
+	if s.focusRepositoryID != "" {
+		for _, row := range snapshot.Rows {
+			if row.RepositoryID == s.focusRepositoryID {
+				if row.RepositoryName != "" {
+					s.focusRepositoryName = row.RepositoryName
+				}
+				if row.RepositoryRoot != "" {
+					s.focusRepositoryRoot = row.RepositoryRoot
+				}
+				break
+			}
+		}
+	}
+	s.restoreSelection(selected, preserve)
+}
+
+func (s *loopState) toggleRepositoryFocus() {
+	selected, ok := s.selectedRow()
+	if s.focusRepositoryID != "" {
+		s.focusRepositoryID = ""
+		s.focusRepositoryName = ""
+		s.focusRepositoryRoot = ""
+		s.restoreSelection(selected, ok)
+		return
+	}
+	if !ok || selected.Kind == monitor.RowKindRepositoryWarning || selected.RepositoryID == "" || selected.PlanID == "" {
+		return
+	}
+	s.focusRepositoryID = selected.RepositoryID
+	s.focusRepositoryName = selected.RepositoryName
+	s.focusRepositoryRoot = selected.RepositoryRoot
+	s.restoreSelection(selected, true)
+}
+
+func (s loopState) mergeRepositoryRow() (monitor.Row, bool) {
+	selected, ok := s.selectedRow()
+	if s.focusRepositoryID == "" {
+		return selected, ok
+	}
+	if ok && selected.RepositoryID == s.focusRepositoryID && actionableRow(selected) {
+		return selected, true
+	}
+	if s.focusRepositoryRoot == "" {
+		return monitor.Row{}, false
+	}
+	return monitor.Row{
+		Kind:           monitor.RowKindPlan,
+		RepositoryID:   s.focusRepositoryID,
+		RepositoryName: s.focusRepositoryName,
+		RepositoryRoot: s.focusRepositoryRoot,
+		PlanID:         "repository batch",
+	}, true
+}
+
+func (s *loopState) preserveSelection(change func()) {
+	selected, preserve := s.selectedRow()
+	change()
+	s.restoreSelection(selected, preserve)
+}
+
+func (s *loopState) restoreSelection(selected monitor.Row, preserve bool) {
 	if preserve && selected.RepositoryID != "" && selected.PlanID != "" {
-		for index, row := range visibleRows(snapshot.Rows, s.showCompleted) {
+		for index, row := range s.visibleRows() {
 			if row.RepositoryID == selected.RepositoryID && row.PlanID == selected.PlanID {
 				s.selected = index
 				return
@@ -438,7 +626,7 @@ func (s *loopState) replaceSnapshot(snapshot monitor.Snapshot) {
 }
 
 func (s *loopState) clampSelection() {
-	count := len(visibleRows(s.snapshot.Rows, s.showCompleted))
+	count := len(s.visibleRows())
 	if count == 0 {
 		s.selected = 0
 		return

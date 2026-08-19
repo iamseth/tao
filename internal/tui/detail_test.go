@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/iamseth/tao/internal/agent/logrecord"
@@ -164,11 +165,130 @@ func TestRenderDetailVerticalResizeKeepsFrameInsideTerminal(t *testing.T) {
 	if len(lines) != 6 {
 		t.Fatalf("resized detail frame has %d lines, want 6:\n%s", len(lines), frame)
 	}
-	if lines[0] != "Tao UI | PLAN DETAIL" || lines[len(lines)-1] != "Esc back" {
+	if lines[0] != "Tao UI | PLAN DETAIL" || lines[len(lines)-1] != "j/k move  Enter slice  Esc back" {
 		t.Fatalf("resized detail frame lost header or footer: %q", lines)
 	}
 	if strings.HasSuffix(frame, "\n") {
 		t.Fatal("full-height resized detail frame ends with a newline that can scroll the terminal")
+	}
+}
+
+func TestRenderSliceDetailShowsUsefulFieldsAndOmitsEmptyOnNarrowTerminal(t *testing.T) {
+	now := time.Date(2026, 8, 19, 2, 0, 0, 0, time.UTC)
+	duration := int64(90)
+	detail := &plan.PlanDetail{
+		State: plan.State{Plan: plan.PlanState{PendingSlices: []string{"001-work"}}},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{{
+			ID: "001-work", Title: "Work", Status: plan.StatusCompleted,
+			Goal: "ship it", Context: "bounded context", Tasks: []string{"change code"},
+			DependsOn: []string{"000-setup"}, ExpectedFiles: []string{"internal/tui/detail.go"},
+			RequiredInputs: []plan.RequiredInput{{Path: "go.mod", Kind: plan.RequiredInputFile, Reason: "module"}},
+			Verification:   plan.Verification{Commands: []string{"go test ./internal/tui"}, ManualChecks: []string{"check keys"}},
+			Approval:       &plan.Approval{Required: true, Approved: true, Reason: "owner choice"},
+			BlockerNote:    "resolved blocker", Notes: "implemented",
+			VerificationResults: []plan.VerificationRun{{Command: "go test ./internal/tui", Result: "passed", Details: "ok"}},
+			Completion:          &plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionCommitted, CommitSHA: "abc123"},
+			Timing:              plan.SliceTiming{CreatedAt: now, StartedAt: &now, CompletedAt: &now, DurationSeconds: &duration},
+		}}},
+	}
+	frame := RenderSliceDetail(DetailModel{Plan: detail, SelectedSliceID: "001-work", Width: 200})
+	for _, want := range []string{"Status: completed", "Goal: ship it", "Context: bounded context", "Tasks:", "Dependencies:", "Expected files:", "Required inputs:", "Verification commands:", "Manual checks:", "Approval: approved", "Blocker: resolved blocker", "Notes: implemented", "Verification results:", "Commit outcome: committed (abc123)", "Timing:"} {
+		if !strings.Contains(frame, want) {
+			t.Fatalf("slice detail missing %q:\n%s", want, frame)
+		}
+	}
+	if strings.Contains(frame, "Execution root") || strings.Contains(frame, "null") {
+		t.Fatalf("slice detail exposed empty or raw fields:\n%s", frame)
+	}
+	empty := RenderSliceDetail(DetailModel{Plan: &plan.PlanDetail{
+		State:  plan.State{Plan: plan.PlanState{PendingSlices: []string{"empty"}}},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "empty", Title: "Empty"}}},
+	}, SelectedSliceID: "empty", Width: 80})
+	for _, omitted := range []string{"Goal:", "Context:", "Tasks:", "Approval:", "Notes:", "Timing:"} {
+		if strings.Contains(empty, omitted) {
+			t.Fatalf("empty slice rendered %q:\n%s", omitted, empty)
+		}
+	}
+
+	narrow := RenderSliceDetail(DetailModel{Plan: detail, SelectedSliceID: "001-work", Width: 18, Height: 5})
+	lines := renderedLines(narrow)
+	if len(lines) != 5 || strings.HasSuffix(narrow, "\n") {
+		t.Fatalf("narrow slice frame lines=%d trailing-newline=%t:\n%s", len(lines), strings.HasSuffix(narrow, "\n"), narrow)
+	}
+	for _, line := range lines {
+		if utf8.RuneCountInString(line) > 18 {
+			t.Fatalf("narrow slice detail line %q exceeds width", line)
+		}
+	}
+}
+
+func TestRenderSliceDetailSanitizesArtifactControls(t *testing.T) {
+	detail := &plan.PlanDetail{
+		State: plan.State{Plan: plan.PlanState{PendingSlices: []string{"001-work"}}},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{{
+			ID:      "001-work",
+			Title:   "unsafe\x1b[31m title\x1b[0m",
+			Status:  "pend\x1b]0;status\aing",
+			Goal:    "goal\x1b]8;;https://example.invalid\a link\x1b]8;;\a",
+			Context: "context\twith\x00controls",
+			Tasks:   []string{"task \x1b[2Jcontent"},
+			RequiredInputs: []plan.RequiredInput{{
+				Path: "input\r.txt", Kind: plan.RequiredInputFile, Reason: "reason\x1b]0;owned\x1b\\ safe",
+			}},
+			Verification: plan.Verification{
+				Commands:     []string{"go test\u009b31m ./internal/tui\u009b0m"},
+				ManualChecks: []string{"check\voutput"},
+			},
+			Approval:    &plan.Approval{Required: true, Reason: "owner\x1b[?25l choice"},
+			BlockerNote: "blocked\bnote",
+			Notes:       "notes\x1b]52;c;payload\a remain",
+			VerificationResults: []plan.VerificationRun{{
+				Command: "verify\ncommand", Result: "pass\x7fed", Details: "details\x1b[1m styled\x1b[0m",
+			}},
+			Completion: &plan.SliceCompletionOutcome{Outcome: "commit\x1b[5mted", CommitSHA: "abc\x1b]0;sha\a123"},
+		}}},
+	}
+
+	frame := RenderSliceDetail(DetailModel{Plan: detail, SelectedSliceID: "001-work", Width: 200})
+	body := strings.TrimPrefix(frame, clearScreenSequence)
+	for _, r := range body {
+		if unicode.IsControl(r) && r != '\n' {
+			t.Fatalf("slice detail contains artifact control %U: %q", r, body)
+		}
+	}
+	for _, unsafe := range []string{"[31m", "]0;status", "example.invalid", "[2J", "]52;", "[?25l"} {
+		if strings.Contains(body, unsafe) {
+			t.Fatalf("slice detail retained terminal sequence content %q: %q", unsafe, body)
+		}
+	}
+	for _, want := range []string{"unsafe title", "Goal: goal link", "Context: context with controls", "task content", "Notes: notes remain", "details styled"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("slice detail lost printable content %q: %q", want, body)
+		}
+	}
+}
+
+func TestDetailSliceSelectionInitializesAndSurvivesRefresh(t *testing.T) {
+	current := "002-current"
+	detail := &detailState{plan: &plan.PlanDetail{
+		State:  plan.State{Plan: plan.PlanState{CompletedSlices: []string{"001-done"}, PendingSlices: []string{current, "003-next"}, CurrentSlice: &current}},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "003-next"}, {ID: current}, {ID: "001-done"}}},
+	}}
+	detail.reconcileSliceSelection()
+	if detail.selectedSliceID != current {
+		t.Fatalf("initial selected slice = %q, want current %q", detail.selectedSliceID, current)
+	}
+	detail.moveSlice(1)
+	if detail.selectedSliceID != "003-next" {
+		t.Fatalf("moved selected slice = %q, want 003-next", detail.selectedSliceID)
+	}
+	detail.plan = &plan.PlanDetail{
+		State:  plan.State{Plan: plan.PlanState{CompletedSlices: []string{"001-done", current}, PendingSlices: []string{"003-next"}}},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "001-done"}, {ID: current}, {ID: "003-next"}}},
+	}
+	detail.reconcileSliceSelection()
+	if detail.selectedSliceID != "003-next" {
+		t.Fatalf("refresh selected slice = %q, want identity preserved", detail.selectedSliceID)
 	}
 }
 
@@ -196,6 +316,18 @@ func TestFollowDetailLogSkipsSeedReplayAndEmitsAppends(t *testing.T) {
 	}
 	if got.String() != "new line\n" {
 		t.Fatalf("follow updates = %q, want only live append", got.String())
+	}
+}
+
+func TestMissingPlanCannotOpenNestedSlice(t *testing.T) {
+	state := loopState{snapshot: monitor.Snapshot{Rows: []monitor.Row{{PlanID: "missing", PlanDir: "/plans/missing"}}}, showCompleted: true}
+	app := App{Details: &fakeDetailRepository{}}
+	if quit := app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyEnter}); quit || state.detail == nil || state.detail.loadError == "" {
+		t.Fatalf("missing plan open quit=%t detail=%#v", quit, state.detail)
+	}
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyEnter})
+	if state.detail.sliceOpen {
+		t.Fatal("missing plan opened a nested slice")
 	}
 }
 
@@ -240,16 +372,30 @@ func TestDetailNavigationEnterAndEscape(t *testing.T) {
 		t.Fatal("detail follower did not start")
 	}
 
+	if quit := app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyEnter}); quit || state.detail == nil || !state.detail.sliceOpen {
+		t.Fatalf("slice Enter quit=%t detail=%#v, want nested slice", quit, state.detail)
+	}
+	if quit := app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyEsc}); quit || state.detail == nil || state.detail.sliceOpen {
+		t.Fatalf("nested Esc quit=%t detail=%#v, want plan detail", quit, state.detail)
+	}
+	select {
+	case <-stopped:
+		t.Fatal("detail follower was canceled while closing nested slice")
+	default:
+	}
 	if quit := app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyEsc}); quit || state.detail != nil {
-		t.Fatalf("detail Esc quit=%t detail=%#v, want table", quit, state.detail)
+		t.Fatalf("plan detail Esc quit=%t detail=%#v, want table", quit, state.detail)
 	}
 	select {
 	case <-stopped:
 	case <-time.After(time.Second):
 		t.Fatal("detail follower was not canceled")
 	}
+	if quit := app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyEsc}); quit {
+		t.Fatal("first table Esc unexpectedly quit")
+	}
 	if quit := app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyEsc}); !quit {
-		t.Fatal("table Esc did not quit")
+		t.Fatal("second table Esc did not quit")
 	}
 }
 

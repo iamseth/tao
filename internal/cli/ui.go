@@ -22,7 +22,7 @@ var uiCommand = commandMetadata{
 	usageLines:            []string{"ui [--interval DURATION] [--completed-window DURATION]"},
 	completionDescription: "Open the cross-repository interactive plan dashboard",
 	long: "Open a keyboard-driven dashboard for plans across registered repositories. Sections group plans needing attention, running or queued work, planned or in-review work, and recent completions. Heartbeats and the stalled?/crashed? labels are liveness hints, not workflow verdicts.\n" +
-		"Use j/k or the arrow keys to move; r runs, q queues and uses a best-effort check to start a drain, a prompts for approval, c toggles completed rows, and Enter opens plan details. Esc returns from details or quits the table; Ctrl-C also quits. Run, drain, and approval subprocesses are detached and survive dashboard exit.\n" +
+		"Completed plans are hidden initially; c reveals or hides rows in the configured lookback window. Use j/k or the arrow keys to move; r runs, a prompts for approval, m confirms a selected reviewed-plan merge, M confirms a repository-scoped merge --all, and Enter opens plan details. In plan detail, move across slices with j/k or the arrows and press Enter for the full read-only slice page. q and Ctrl-C quit globally except that q safely declines confirmation. Esc returns one page or declines confirmation; at the table, press Esc twice within one second to quit. Run, approval, and merge subprocesses are detached and survive dashboard exit.\n" +
 		"Use tao monitor --once for non-interactive output.",
 	examples: "  tao ui\n" +
 		"  tao ui --interval 5s\n" +
@@ -98,6 +98,7 @@ func (a App) ui(ctx context.Context, args []string) error {
 		Ticker:    a.newMonitorTicker(interval),
 		Collector: collector,
 		Actions:   actions,
+		Now:       a.now,
 	}).Run(signalCtx)
 }
 

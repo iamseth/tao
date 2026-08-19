@@ -113,7 +113,7 @@ pasteable output. The dashboard groups nonempty sections as follows:
 - **PLANNED / IN REVIEW** contains the remaining active plans, including plans
   waiting for execution or review rather than a live process.
 - **COMPLETED** contains the remaining plans completed within the configured
-  lookback window. It is visible initially and can be hidden or shown with `c`.
+  lookback window. It is hidden initially and can be shown or hidden with `c`.
 
 The question marks on `stalled?` and `crashed?` are deliberate. `stalled?` means
 the last run heartbeat became stale and Tao found no dead-process lock evidence.
@@ -128,23 +128,32 @@ Keys on the table page are:
 - `r` starts the selected plan in a detached `tao run` process. After its
   blocker is cleared, a blocked plan is resumed with `--continue`; a plan with a
   fresh live heartbeat is left alone.
-- `q` synchronously adds the selected plan to its repository queue, then starts
-  a detached queue drain when the current snapshot does not appear to have one.
 - `a` shows the selected approval-gated slice and reason, then requires `y` or
-  `n` before starting detached approval. `Esc` also declines the prompt.
+  `n` before starting detached approval. `Esc` or `q` declines the prompt.
+- `m` asks for confirmation on a selected `reviewed` plan, then starts detached
+  `tao merge <plan-id>`. Other rows are left alone; the merge command remains
+  responsible for approval, branch, worktree, and lifecycle eligibility.
+- `M` names and confirms the selected repository (or the active focused
+  repository), then starts detached `tao merge --all` with that repository root
+  as its working directory. It never batches plans across repositories.
+- `f` focuses the dashboard on the selected plan's repository; press `f` again
+  while focused to restore the all-repository view. Repository warnings and the
+  completed-row setting remain scoped consistently as snapshots refresh.
 - `c` toggles the completed rows already included by `--completed-window`.
-- `Enter` opens the selected plan's slice list and live `agent-run.log` tail;
-  `Esc` returns to the table.
-- `Esc` on the table or `Ctrl-C` quits.
+- `Enter` opens the selected plan's queue-ordered slice list and live
+  `agent-run.log` tail. On that page, `j`/`k` or the arrow keys select a slice
+  and `Enter` opens its full read-only details; empty fields are omitted.
+  `Esc` returns one level at a time, and log following continues until you
+  leave plan detail for the table.
+- `q` or `Ctrl-C` quits from any page. On the table, two `Esc` presses within one
+  second also quit; a lone or stale `Esc` does not.
 
-Run, drain, and approval subprocesses are launched in new sessions with their
-streams detached, so they survive TUI exit. Run and queue paths still use Tao's
-ordinary per-plan `.run.lock` safeguards. The `q` drain check is only an ensure
-heuristic: it looks for a running queue entry in the same repository with either
-a fresh heartbeat or a live run lock. Queue state has no durable drain owner,
-and the displayed snapshot can race another dashboard or process, so two
-callers may both try to start a drain. Per-plan run locking, not this heuristic,
-is the authoritative double-start guard.
+Run, approval, and merge subprocesses are launched in new sessions with their
+streams detached, so they survive TUI exit. A `merging…` row label is only
+best-effort launch feedback, not durable merge evidence or a success claim.
+`Esc` or `q` declines an active merge confirmation before navigation or quit
+handling. The dashboard still displays the durable
+queue in **QUEUED**, but queue mutation and draining remain CLI operations.
 
 `--interval DURATION` sets the refresh period (default `2s`) and must be greater
 than zero. `--completed-window DURATION` sets the completed-plan lookback

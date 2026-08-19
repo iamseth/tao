@@ -96,6 +96,26 @@ func TestBuildSectionsTreatsTerminalQueueEntriesAsHistory(t *testing.T) {
 	}
 }
 
+func TestBuildRepositorySectionsFiltersPlansAndWarnings(t *testing.T) {
+	rows := []monitor.Row{
+		{Kind: monitor.RowKindRepositoryWarning, RepositoryID: "repo-a"},
+		{Kind: monitor.RowKindPlan, RepositoryID: "repo-b", PlanID: "other"},
+		{Kind: monitor.RowKindPlan, RepositoryID: "repo-a", PlanID: "active"},
+		{Kind: monitor.RowKindPlan, RepositoryID: "repo-a", PlanID: "done", Status: plan.StatusCompleted},
+	}
+
+	var got []monitor.Row
+	for _, section := range BuildRepositorySections(rows, false, "repo-a") {
+		got = append(got, section.Rows...)
+	}
+	if len(got) != 2 || got[0].Kind != monitor.RowKindRepositoryWarning || got[1].PlanID != "active" {
+		t.Fatalf("focused rows = %+v, want warning and active plan", got)
+	}
+	if rows[1].PlanID != "other" || rows[3].PlanID != "done" {
+		t.Fatalf("repository filtering mutated source rows: %+v", rows)
+	}
+}
+
 func TestBuildSectionsHandlesEmptyAndHiddenCompletedSections(t *testing.T) {
 	tests := []struct {
 		name          string

@@ -13,21 +13,23 @@ import (
 
 const (
 	clearScreenSequence = "\x1b[H\x1b[2J"
-	footerHints         = "r run  q queue  a approve  c completed  Enter detail  Esc quit"
+	footerHints         = "r run  a approve  m merge  M merge all  f repository  c completed  Enter plan  q quit  Esc Esc quit"
 	maxSliceIDRunes     = 20
 )
 
 // Model contains the render-neutral state for one UI frame.
 type Model struct {
-	Snapshot       monitor.Snapshot
-	Selected       int
-	Width          int
-	Height         int
-	HideCompleted  bool
-	UseColor       bool
-	ConfirmMessage string
-	ActionLabels   map[string]string
-	ActionMessage  string
+	Snapshot            monitor.Snapshot
+	Selected            int
+	Width               int
+	Height              int
+	HideCompleted       bool
+	FocusRepositoryID   string
+	FocusRepositoryName string
+	UseColor            bool
+	ConfirmMessage      string
+	ActionLabels        map[string]string
+	ActionMessage       string
 }
 
 type rowValues struct {
@@ -54,12 +56,20 @@ type tableWidths struct {
 
 // Render builds one complete terminal frame without writing it.
 func Render(model Model) string {
-	sections := BuildSections(model.Snapshot.Rows, !model.HideCompleted)
+	sections := BuildRepositorySections(model.Snapshot.Rows, !model.HideCompleted, model.FocusRepositoryID)
 	visibleCount := 0
 	for _, section := range sections {
 		visibleCount += len(section.Rows)
 	}
-	lines := []string{fmt.Sprintf("Tao UI | %s", planCountLabel(visibleCount))}
+	focusLabel := "Repositories: all"
+	if model.FocusRepositoryID != "" {
+		name := strings.TrimSpace(model.FocusRepositoryName)
+		if name == "" {
+			name = model.FocusRepositoryID
+		}
+		focusLabel = "Repository: " + name
+	}
+	lines := []string{fmt.Sprintf("Tao UI | %s | %s", focusLabel, planCountLabel(visibleCount))}
 	selectedLine := -1
 	if visibleCount == 0 {
 		lines = append(lines, "", "  No plans.")

@@ -27,6 +27,12 @@ type Section struct {
 
 // BuildSections groups monitor rows for the table page without re-sorting them.
 func BuildSections(rows []monitor.Row, showCompleted bool) []Section {
+	return BuildRepositorySections(rows, showCompleted, "")
+}
+
+// BuildRepositorySections groups rows after optionally restricting them to one
+// repository. Filtering never mutates or reorders the collector snapshot.
+func BuildRepositorySections(rows []monitor.Row, showCompleted bool, repositoryID string) []Section {
 	sections := []Section{
 		{Kind: SectionAttention, Title: "NEEDS ATTENTION"},
 		{Kind: SectionRunning, Title: "RUNNING"},
@@ -35,6 +41,9 @@ func BuildSections(rows []monitor.Row, showCompleted bool) []Section {
 		{Kind: SectionCompleted, Title: "COMPLETED"},
 	}
 	for _, row := range rows {
+		if repositoryID != "" && row.RepositoryID != repositoryID {
+			continue
+		}
 		kind := sectionKind(row)
 		if kind == SectionCompleted && !showCompleted {
 			continue
@@ -74,9 +83,9 @@ func isStalled(row monitor.Row) bool {
 	return row.Liveness == monitor.LivenessStale && row.RunLockPresent && row.RunLockProcessAlive
 }
 
-func visibleRows(rows []monitor.Row, showCompleted bool) []monitor.Row {
+func visibleRows(rows []monitor.Row, showCompleted bool, repositoryID string) []monitor.Row {
 	var visible []monitor.Row
-	for _, section := range BuildSections(rows, showCompleted) {
+	for _, section := range BuildRepositorySections(rows, showCompleted, repositoryID) {
 		visible = append(visible, section.Rows...)
 	}
 	return visible

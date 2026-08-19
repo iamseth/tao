@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/iamseth/tao/internal/agent/logrecord"
@@ -31,24 +32,28 @@ type DetailRepository interface {
 
 // DetailModel contains the render-neutral state for one detail frame.
 type DetailModel struct {
-	Plan        *plan.PlanDetail
-	Row         monitor.Row
-	Log         string
-	Width       int
-	Height      int
-	UseColor    bool
-	LoadError   string
-	FollowError string
+	Plan            *plan.PlanDetail
+	Row             monitor.Row
+	Log             string
+	SelectedSliceID string
+	SliceOpen       bool
+	Width           int
+	Height          int
+	UseColor        bool
+	LoadError       string
+	FollowError     string
 }
 
 type detailState struct {
-	row         monitor.Row
-	plan        *plan.PlanDetail
-	log         string
-	loadError   string
-	followError string
-	updates     <-chan detailFollowUpdate
-	cancel      context.CancelFunc
+	row             monitor.Row
+	plan            *plan.PlanDetail
+	selectedSliceID string
+	sliceOpen       bool
+	log             string
+	loadError       string
+	followError     string
+	updates         <-chan detailFollowUpdate
+	cancel          context.CancelFunc
 }
 
 type detailFollowUpdate struct {
@@ -58,6 +63,9 @@ type detailFollowUpdate struct {
 
 // RenderDetail builds one complete detail-page frame without writing it.
 func RenderDetail(model DetailModel) string {
+	if model.SliceOpen {
+		return RenderSliceDetail(model)
+	}
 	id, title, repoName, status := detailHeaderValues(model)
 	phase := displayValue(strings.TrimSpace(string(model.Row.Phase)))
 	heartbeat := "-"
@@ -78,7 +86,7 @@ func RenderDetail(model DetailModel) string {
 		available = 0
 	}
 
-	allSliceLines := RenderSlicesPane(model.Plan, model.Width, int(^uint(0)>>1), model.UseColor)
+	allSliceLines := renderSlicesPane(model.Plan, model.SelectedSliceID, model.Width, int(^uint(0)>>1), model.UseColor)
 	sliceHeight := min(len(allSliceLines), max(1, available/2))
 	if len(allSliceLines) < available {
 		sliceHeight = len(allSliceLines)
@@ -93,7 +101,7 @@ func RenderDetail(model DetailModel) string {
 	if model.LoadError != "" {
 		lines = append(lines, truncateANSI("  unable to load plan: "+model.LoadError, model.Width))
 	} else {
-		lines = append(lines, RenderSlicesPane(model.Plan, model.Width, sliceHeight, model.UseColor)...)
+		lines = append(lines, renderSlicesPane(model.Plan, model.SelectedSliceID, model.Width, sliceHeight, model.UseColor)...)
 	}
 	lines = append(lines, "LOG (tail)")
 	logLines := RenderLogPane(model.Log, model.Width, logHeight)
@@ -107,7 +115,7 @@ func RenderDetail(model DetailModel) string {
 		}
 	}
 	lines = append(lines, logLines...)
-	lines = append(lines, "Esc back")
+	lines = append(lines, "j/k move  Enter slice  Esc back")
 
 	if model.Width > 0 {
 		for index := range lines {
@@ -155,6 +163,10 @@ func detailHeaderValues(model DetailModel) (id, title, repoName, status string) 
 // array is only an ID lookup; completed_slices followed by pending_slices owns
 // presentation order.
 func RenderSlicesPane(detail *plan.PlanDetail, width, height int, useColor bool) []string {
+	return renderSlicesPane(detail, "", width, height, useColor)
+}
+
+func renderSlicesPane(detail *plan.PlanDetail, selectedID string, width, height int, useColor bool) []string {
 	if detail == nil {
 		return nil
 	}
@@ -167,17 +179,19 @@ func RenderSlicesPane(detail *plan.PlanDetail, width, height int, useColor bool)
 	for _, slice := range ordered {
 		statusWidth = max(statusWidth, utf8.RuneCountInString(displayValue(slice.Status)))
 	}
-	currentID := ""
-	if detail.State.Plan.CurrentSlice != nil {
-		currentID = *detail.State.Plan.CurrentSlice
+	if selectedID == "" && detail.State.Plan.CurrentSlice != nil {
+		selectedID = *detail.State.Plan.CurrentSlice
+	}
+	if selectedID == "" && len(ordered) > 0 {
+		selectedID = ordered[0].ID
 	}
 	lines := make([]string, 0, len(ordered))
-	currentLine := 0
+	selectedLine := 0
 	for _, slice := range ordered {
 		cursor := "  "
-		if slice.ID == currentID {
+		if slice.ID == selectedID {
 			cursor = "> "
-			currentLine = len(lines)
+			selectedLine = len(lines)
 		}
 		status := padRunes(displayValue(slice.Status), statusWidth)
 		if useColor {
@@ -193,7 +207,216 @@ func RenderSlicesPane(detail *plan.PlanDetail, width, height int, useColor bool)
 			lines = append(lines, "    blocker: "+note)
 		}
 	}
-	return fitDetailPane(lines, width, height, currentLine)
+	return fitDetailPane(lines, width, height, selectedLine)
+}
+
+// RenderSliceDetail renders the selected slice as a bounded read-only frame.
+func RenderSliceDetail(model DetailModel) string {
+	selected, ok := findDetailSlice(model.Plan, model.SelectedSliceID)
+	lines := []string{"Tao UI | SLICE DETAIL"}
+	if ok {
+		lines = append(lines, "Slice: "+displayValue(singleLineDetail(selected.ID))+"  "+displayValue(singleLineDetail(selected.Title)))
+		appendDetailValue(&lines, "Status", selected.Status)
+		appendDetailValue(&lines, "Goal", selected.Goal)
+		appendDetailValue(&lines, "Context", selected.Context)
+		appendDetailList(&lines, "Tasks", selected.Tasks)
+		appendDetailList(&lines, "Dependencies", selected.DependsOn)
+		appendDetailList(&lines, "Expected files", selected.ExpectedFiles)
+		if len(selected.RequiredInputs) > 0 {
+			values := make([]string, 0, len(selected.RequiredInputs))
+			for _, input := range selected.RequiredInputs {
+				value := singleLineDetail(input.Path)
+				if input.Kind != "" {
+					value += " (" + input.Kind + ")"
+				}
+				if input.Reason != "" {
+					value += ": " + input.Reason
+				}
+				values = append(values, value)
+			}
+			appendDetailList(&lines, "Required inputs", values)
+		}
+		appendDetailList(&lines, "Verification commands", selected.Verification.Commands)
+		appendDetailList(&lines, "Manual checks", selected.Verification.ManualChecks)
+		if selected.Approval != nil {
+			state := "not required"
+			if selected.Approval.Required {
+				state = "required"
+			}
+			if selected.Approval.Approved {
+				state = "approved"
+			}
+			appendDetailValue(&lines, "Approval", state)
+			appendDetailValue(&lines, "Approval reason", selected.Approval.Reason)
+		}
+		appendDetailValue(&lines, "Blocker", selected.BlockerNote)
+		appendDetailValue(&lines, "Notes", selected.Notes)
+		if len(selected.VerificationResults) > 0 {
+			values := make([]string, 0, len(selected.VerificationResults))
+			for _, result := range selected.VerificationResults {
+				value := singleLineDetail(result.Command)
+				if result.Result != "" {
+					value += ": " + result.Result
+				}
+				if result.Details != "" {
+					value += " — " + result.Details
+				}
+				values = append(values, value)
+			}
+			appendDetailList(&lines, "Verification results", values)
+		}
+		if selected.Completion != nil {
+			value := selected.Completion.Outcome
+			if selected.Completion.CommitSHA != "" {
+				value += " (" + selected.Completion.CommitSHA + ")"
+			}
+			appendDetailValue(&lines, "Commit outcome", value)
+		}
+		appendSliceTiming(&lines, selected.Timing)
+	} else {
+		lines = append(lines, "  Selected slice is unavailable.")
+	}
+	lines = append(lines, "Esc back  q quit")
+	return fitDetailFrame(lines, model.Width, model.Height)
+}
+
+func findDetailSlice(detail *plan.PlanDetail, id string) (plan.Slice, bool) {
+	if detail == nil {
+		return plan.Slice{}, false
+	}
+	for _, slice := range orderedDetailSlices(detail) {
+		if slice.ID == id {
+			return slice, true
+		}
+	}
+	return plan.Slice{}, false
+}
+
+func appendDetailValue(lines *[]string, label, value string) {
+	if value = singleLineDetail(value); value != "" {
+		*lines = append(*lines, label+": "+value)
+	}
+}
+
+func appendDetailList(lines *[]string, label string, values []string) {
+	added := false
+	for _, value := range values {
+		if value = singleLineDetail(value); value != "" {
+			if !added {
+				*lines = append(*lines, label+":")
+				added = true
+			}
+			*lines = append(*lines, "  - "+value)
+		}
+	}
+}
+
+func singleLineDetail(value string) string {
+	var printable strings.Builder
+	for index := 0; index < len(value); {
+		if value[index] == '\x1b' && index+1 < len(value) {
+			switch value[index+1] {
+			case '[':
+				index = skipDetailCSI(value, index+2)
+				printable.WriteByte(' ')
+				continue
+			case ']':
+				index = skipDetailOSC(value, index+2)
+				printable.WriteByte(' ')
+				continue
+			}
+		}
+
+		r, size := utf8.DecodeRuneInString(value[index:])
+		switch r {
+		case '\u009b':
+			index = skipDetailCSI(value, index+size)
+			printable.WriteByte(' ')
+			continue
+		case '\u009d':
+			index = skipDetailOSC(value, index+size)
+			printable.WriteByte(' ')
+			continue
+		}
+		if unicode.IsPrint(r) {
+			printable.WriteRune(r)
+		} else {
+			printable.WriteByte(' ')
+		}
+		index += size
+	}
+	return strings.Join(strings.Fields(printable.String()), " ")
+}
+
+func skipDetailCSI(value string, index int) int {
+	for index < len(value) {
+		if value[index] >= '@' && value[index] <= '~' {
+			return index + 1
+		}
+		index++
+	}
+	return len(value)
+}
+
+func skipDetailOSC(value string, index int) int {
+	for index < len(value) {
+		if value[index] == '\a' {
+			return index + 1
+		}
+		if value[index] == '\x1b' && index+1 < len(value) && value[index+1] == '\\' {
+			return index + 2
+		}
+		r, size := utf8.DecodeRuneInString(value[index:])
+		if r == '\u009c' {
+			return index + size
+		}
+		index += size
+	}
+	return len(value)
+}
+
+func appendSliceTiming(lines *[]string, timing plan.SliceTiming) {
+	values := make([]string, 0, 6)
+	if !timing.CreatedAt.IsZero() {
+		values = append(values, "created "+timing.CreatedAt.Format(time.RFC3339))
+	}
+	if timing.StartedAt != nil {
+		values = append(values, "started "+timing.StartedAt.Format(time.RFC3339))
+	}
+	if timing.CompletedAt != nil {
+		values = append(values, "completed "+timing.CompletedAt.Format(time.RFC3339))
+	}
+	if !timing.UpdatedAt.IsZero() {
+		values = append(values, "updated "+timing.UpdatedAt.Format(time.RFC3339))
+	}
+	if timing.LastActivityAt != nil {
+		values = append(values, "activity "+timing.LastActivityAt.Format(time.RFC3339))
+	}
+	if timing.DurationSeconds != nil {
+		values = append(values, "duration "+(time.Duration(*timing.DurationSeconds)*time.Second).String())
+	}
+	appendDetailList(lines, "Timing", values)
+}
+
+func fitDetailFrame(lines []string, width, height int) string {
+	if width > 0 {
+		for index := range lines {
+			lines[index] = truncateANSI(lines[index], width)
+		}
+	}
+	if height > 0 && len(lines) > height {
+		footer := lines[len(lines)-1]
+		if height == 1 {
+			lines = []string{footer}
+		} else {
+			lines = append(lines[:height-1], footer)
+		}
+	}
+	frame := clearScreenSequence + strings.Join(lines, "\n")
+	if height <= 0 || len(lines) < height {
+		frame += "\n"
+	}
+	return frame
 }
 
 func orderedDetailSlices(detail *plan.PlanDetail) []plan.Slice {

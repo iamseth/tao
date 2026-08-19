@@ -114,7 +114,7 @@ func TestRunMovesSelectionAndRestoresTerminal(t *testing.T) {
 	output := &recordingWriter{writes: make(chan string, 16)}
 
 	err := (App{
-		Input:     strings.NewReader("j\x1b"),
+		Input:     strings.NewReader("jq"),
 		Output:    output,
 		Terminal:  terminal,
 		Ticker:    ticker,
@@ -189,7 +189,7 @@ func TestRunRefreshesAndHandlesResize(t *testing.T) {
 		t.Fatalf("resized frame lost selected row: %q", resized)
 	}
 
-	if _, err := writer.Write([]byte{0x1b}); err != nil {
+	if _, err := writer.Write([]byte("q")); err != nil {
 		t.Fatal(err)
 	}
 	if err := writer.Close(); err != nil {
@@ -362,8 +362,119 @@ func TestLoopStateMovesAcrossSectionsAndTogglesCompleted(t *testing.T) {
 		t.Fatalf("hidden completed state show=%t selected=%d, want false, 2", state.showCompleted, state.selected)
 	}
 	state.handleKey(term.KeyEvent{Key: term.KeyRune, Rune: 'C'})
-	if !state.showCompleted || len(visibleRows(state.snapshot.Rows, state.showCompleted)) != 4 {
-		t.Fatalf("shown completed state show=%t rows=%d, want true, 4", state.showCompleted, len(visibleRows(state.snapshot.Rows, state.showCompleted)))
+	if !state.showCompleted || len(visibleRows(state.snapshot.Rows, state.showCompleted, state.focusRepositoryID)) != 4 {
+		t.Fatalf("shown completed state show=%t rows=%d, want true, 4", state.showCompleted, len(visibleRows(state.snapshot.Rows, state.showCompleted, state.focusRepositoryID)))
+	}
+}
+
+func TestRepositoryFocusComposesWithWarningsCompletedAndRefresh(t *testing.T) {
+	state := loopState{
+		snapshot: monitor.Snapshot{Rows: []monitor.Row{
+			{Kind: monitor.RowKindRepositoryWarning, RepositoryID: "repo-a", RepositoryName: "alpha", Status: "invalid"},
+			{Kind: monitor.RowKindPlan, RepositoryID: "repo-b", RepositoryName: "beta", PlanID: "other", Status: "planned"},
+			{Kind: monitor.RowKindPlan, RepositoryID: "repo-a", RepositoryName: "alpha", PlanID: "target", Status: "planned"},
+			{Kind: monitor.RowKindPlan, RepositoryID: "repo-a", RepositoryName: "alpha", PlanID: "done", Status: "completed"},
+		}},
+		selected: 2,
+	}
+
+	state.handleKey(term.KeyEvent{Key: term.KeyRune, Rune: 'f'})
+	row, ok := state.selectedRow()
+	if !ok || row.PlanID != "target" || state.focusRepositoryID != "repo-a" || state.selected != 1 {
+		t.Fatalf("focused selection index=%d row=%+v ok=%t focus=%q", state.selected, row, ok, state.focusRepositoryID)
+	}
+	rows := state.visibleRows()
+	if len(rows) != 2 || rows[0].Kind != monitor.RowKindRepositoryWarning || rows[1].PlanID != "target" {
+		t.Fatalf("focused rows = %+v, want repository warning and target", rows)
+	}
+
+	state.showCompleted = true
+	state.selected = 2
+	state.handleKey(term.KeyEvent{Key: term.KeyRune, Rune: 'c'})
+	if row, ok = state.selectedRow(); !ok || row.PlanID != "target" {
+		t.Fatalf("completed toggle did not clamp safely: index=%d row=%+v ok=%t", state.selected, row, ok)
+	}
+
+	state.replaceSnapshot(monitor.Snapshot{Rows: []monitor.Row{
+		{Kind: monitor.RowKindPlan, RepositoryID: "repo-b", RepositoryName: "beta", PlanID: "other", Status: "planned"},
+	}})
+	if len(state.visibleRows()) != 0 || state.selected != 0 || state.focusRepositoryName != "alpha" {
+		t.Fatalf("empty focused refresh rows=%+v selected=%d name=%q", state.visibleRows(), state.selected, state.focusRepositoryName)
+	}
+
+	state.handleKey(term.KeyEvent{Key: term.KeyRune, Rune: 'f'})
+	if state.focusRepositoryID != "" || len(state.visibleRows()) != 1 || state.visibleRows()[0].PlanID != "other" {
+		t.Fatalf("restored all-repository rows=%+v focus=%q", state.visibleRows(), state.focusRepositoryID)
+	}
+}
+
+func TestRepositoryFocusIgnoresWarningRows(t *testing.T) {
+	state := loopState{snapshot: monitor.Snapshot{Rows: []monitor.Row{{
+		Kind: monitor.RowKindRepositoryWarning, RepositoryID: "repo-a", RepositoryName: "alpha", Status: "invalid",
+	}}}}
+	state.handleKey(term.KeyEvent{Key: term.KeyRune, Rune: 'f'})
+	if state.focusRepositoryID != "" {
+		t.Fatalf("warning row established repository focus %q", state.focusRepositoryID)
+	}
+}
+
+func TestRootQuitKeysAndCompletedDefault(t *testing.T) {
+	base := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	now := base
+	state := loopState{
+		snapshot: monitor.Snapshot{Rows: []monitor.Row{
+			{PlanID: "active", Status: "planned"},
+			{PlanID: "done", Status: "completed"},
+		}},
+		now: func() time.Time { return now },
+	}
+	if rows := visibleRows(state.snapshot.Rows, state.showCompleted, state.focusRepositoryID); len(rows) != 1 || rows[0].PlanID != "active" {
+		t.Fatalf("initial visible rows = %+v, want only active plan", rows)
+	}
+	if quit := state.handleKey(term.KeyEvent{Key: term.KeyEsc}); quit {
+		t.Fatal("first root Escape unexpectedly quit")
+	}
+	now = base.Add(500 * time.Millisecond)
+	if quit := state.handleKey(term.KeyEvent{Key: term.KeyEsc}); !quit {
+		t.Fatal("second root Escape within one second did not quit")
+	}
+
+	state.lastRootEscape = time.Time{}
+	now = base
+	state.handleKey(term.KeyEvent{Key: term.KeyEsc})
+	now = base.Add(time.Second + time.Nanosecond)
+	if quit := state.handleKey(term.KeyEvent{Key: term.KeyEsc}); quit {
+		t.Fatal("stale Escape sequence unexpectedly quit")
+	}
+	state.handleKey(term.KeyEvent{Key: term.KeyRune, Rune: 'j'})
+	now = now.Add(100 * time.Millisecond)
+	if quit := state.handleKey(term.KeyEvent{Key: term.KeyEsc}); quit {
+		t.Fatal("interrupted Escape sequence unexpectedly quit")
+	}
+	if quit := state.handleKey(term.KeyEvent{Key: term.KeyRune, Rune: 'q'}); !quit {
+		t.Fatal("q did not quit at root")
+	}
+}
+
+func TestQQuitsGloballyButDeclinesConfirmation(t *testing.T) {
+	state := loopState{detail: &detailState{}}
+	if quit := (App{}).handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'Q'}); !quit {
+		t.Fatal("q did not quit from detail")
+	}
+
+	state = loopState{}
+	called := false
+	state.beginConfirm("Continue?", func(accepted bool) {
+		called = true
+		if accepted {
+			t.Fatal("q accepted confirmation")
+		}
+	})
+	if quit := (App{}).handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'q'}); quit {
+		t.Fatal("q quit instead of declining confirmation")
+	}
+	if !called || state.confirm != nil {
+		t.Fatalf("q confirmation decline called=%t prompt=%#v", called, state.confirm)
 	}
 }
 
@@ -404,6 +515,7 @@ func TestConfirmPromptHandlesYesNoAndEscape(t *testing.T) {
 		{name: "yes", key: term.KeyEvent{Key: term.KeyRune, Rune: 'y'}, want: true},
 		{name: "uppercase no", key: term.KeyEvent{Key: term.KeyRune, Rune: 'N'}, want: false},
 		{name: "escape cancels", key: term.KeyEvent{Key: term.KeyEsc}, want: false},
+		{name: "q cancels", key: term.KeyEvent{Key: term.KeyRune, Rune: 'q'}, want: false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

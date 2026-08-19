@@ -43,7 +43,7 @@ func TestRunActionLaunchesExactDetachedCommand(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			launcher := &recordingActionLauncher{}
-			actions := newTestActions(t, launcher, nil, nil)
+			actions := newTestActions(t, launcher, func(string) (plan.RunLock, error) { return plan.RunLock{}, nil }, nil)
 			row := testActionRow()
 			row.Status = test.status
 			row.Liveness = test.live
@@ -59,7 +59,7 @@ func TestRunActionLaunchesExactDetachedCommand(t *testing.T) {
 				}
 				return
 			}
-			assertActionRequest(t, launcher.calls[0], "/repos/alpha", test.args, true)
+			assertActionRequest(t, launcher.calls[0], "/repos/alpha", test.args)
 			if got := actions.labels()[actionRowKey(row)]; got != "starting…" {
 				t.Fatalf("run feedback = %q, want starting…", got)
 			}
@@ -67,61 +67,16 @@ func TestRunActionLaunchesExactDetachedCommand(t *testing.T) {
 	}
 }
 
-func TestQueueActionAddsSynchronouslyAndEnsuresDrain(t *testing.T) {
+func TestQQuitsWithoutLaunchingAction(t *testing.T) {
 	launcher := &recordingActionLauncher{}
 	actions := newTestActions(t, launcher, nil, nil)
-	row := testActionRow()
+	state := loopState{snapshot: monitor.Snapshot{Rows: []monitor.Row{testActionRow()}}}
 
-	actions.QueuePlan(context.Background(), row, monitor.Snapshot{Rows: []monitor.Row{row}})
-
-	if len(launcher.calls) != 2 {
-		t.Fatalf("launch calls = %+v, want queue add and queue start", launcher.calls)
+	if quit := (App{Actions: actions}).handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'q'}); !quit {
+		t.Fatal("q did not quit")
 	}
-	assertActionRequest(t, launcher.calls[0], "/repos/alpha", []string{"queue", "add", "plan-a"}, false)
-	assertActionRequest(t, launcher.calls[1], "/repos/alpha", []string{"queue", "start"}, true)
-	if got := actions.labels()[actionRowKey(row)]; got != "queueing…" {
-		t.Fatalf("queue feedback = %q, want queueing…", got)
-	}
-}
-
-func TestQueueActionDoesNotStartDrainWhenRunningEntryIsActive(t *testing.T) {
-	tests := []struct {
-		name     string
-		running  monitor.Row
-		readLock func(string) (plan.RunLock, error)
-	}{
-		{
-			name: "fresh heartbeat",
-			running: monitor.Row{
-				RepositoryID: "repo-alpha", QueueStatus: runqueue.QueueStatusRunning, Liveness: monitor.LivenessLive,
-			},
-		},
-		{
-			name: "live run lock",
-			running: monitor.Row{
-				RepositoryID: "repo-alpha", QueueStatus: runqueue.QueueStatusRunning, PlanDir: "/plans/running",
-			},
-			readLock: func(path string) (plan.RunLock, error) {
-				if path != "/plans/running" {
-					t.Fatalf("lock path = %q, want /plans/running", path)
-				}
-				return plan.RunLock{PID: 42, ProcessAlive: true}, nil
-			},
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			launcher := &recordingActionLauncher{}
-			actions := newTestActions(t, launcher, test.readLock, nil)
-			row := testActionRow()
-
-			actions.QueuePlan(context.Background(), row, monitor.Snapshot{Rows: []monitor.Row{test.running}})
-
-			if len(launcher.calls) != 1 {
-				t.Fatalf("launch calls = %+v, want only queue add", launcher.calls)
-			}
-			assertActionRequest(t, launcher.calls[0], row.RepositoryRoot, []string{"queue", "add", row.PlanID}, false)
-		})
+	if len(launcher.calls) != 0 {
+		t.Fatalf("q launched dashboard action: %+v", launcher.calls)
 	}
 }
 
@@ -153,9 +108,137 @@ func TestApprovalActionUsesConfirmationFlowAndExactCommand(t *testing.T) {
 	if len(launcher.calls) != 1 {
 		t.Fatalf("confirmed approval calls = %+v, want one", launcher.calls)
 	}
-	assertActionRequest(t, launcher.calls[0], row.RepositoryRoot, []string{"approve", "--slice", "005-risk", "plan-a"}, true)
+	assertActionRequest(t, launcher.calls[0], row.RepositoryRoot, []string{"approve", "--slice", "005-risk", "plan-a"})
 	if got := actions.labels()[actionRowKey(row)]; got != "starting…" {
 		t.Fatalf("approval feedback = %q, want starting…", got)
+	}
+}
+
+func TestMergeActionsRequireConfirmationAndLaunchExactDetachedCommands(t *testing.T) {
+	launcher := &recordingActionLauncher{}
+	actions := newTestActions(t, launcher, nil, nil)
+	row := testActionRow()
+	row.Status = plan.StatusReviewed
+	app := App{Actions: actions}
+	state := loopState{snapshot: monitor.Snapshot{Rows: []monitor.Row{row}}}
+
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'm'})
+	if got := state.confirmMessage(); got != "Merge reviewed plan plan-a in repository alpha?" {
+		t.Fatalf("single merge confirmation = %q", got)
+	}
+	if len(launcher.calls) != 0 {
+		t.Fatalf("single merge launched before confirmation: %+v", launcher.calls)
+	}
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'y'})
+	assertActionRequest(t, launcher.calls[0], row.RepositoryRoot, []string{"merge", "plan-a"})
+	if got := actions.labels()[actionRowKey(row)]; got != "merging…" {
+		t.Fatalf("single merge feedback = %q, want merging…", got)
+	}
+
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'M'})
+	if got := state.confirmMessage(); got != "Merge all eligible plans in repository alpha?" {
+		t.Fatalf("batch merge confirmation = %q", got)
+	}
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'y'})
+	if len(launcher.calls) != 2 {
+		t.Fatalf("merge calls = %+v, want two", launcher.calls)
+	}
+	assertActionRequest(t, launcher.calls[1], row.RepositoryRoot, []string{"merge", "--all"})
+}
+
+func TestMergeKeysDeclineAndIgnoreIneligibleRows(t *testing.T) {
+	launcher := &recordingActionLauncher{}
+	actions := newTestActions(t, launcher, nil, nil)
+	row := testActionRow()
+	app := App{Actions: actions}
+	state := loopState{snapshot: monitor.Snapshot{Rows: []monitor.Row{row}}}
+
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'm'})
+	if state.confirm != nil || len(launcher.calls) != 0 {
+		t.Fatalf("ineligible single merge prompt=%#v calls=%+v", state.confirm, launcher.calls)
+	}
+
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'M'})
+	if quit := app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'q'}); quit {
+		t.Fatal("q quit instead of declining batch merge")
+	}
+	if state.confirm != nil || len(launcher.calls) != 0 {
+		t.Fatalf("declined batch merge prompt=%#v calls=%+v", state.confirm, launcher.calls)
+	}
+
+	row.Status = plan.StatusReviewed
+	state.snapshot.Rows[0] = row
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'm'})
+	if quit := app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyEsc}); quit {
+		t.Fatal("Escape quit instead of declining single merge")
+	}
+	if state.confirm != nil || len(launcher.calls) != 0 {
+		t.Fatalf("declined single merge prompt=%#v calls=%+v", state.confirm, launcher.calls)
+	}
+}
+
+func TestFocusedBatchMergeUsesOnlyFocusedRepositoryRoot(t *testing.T) {
+	launcher := &recordingActionLauncher{}
+	actions := newTestActions(t, launcher, nil, nil)
+	state := loopState{
+		snapshot:            monitor.Snapshot{Rows: []monitor.Row{{Kind: monitor.RowKindPlan, RepositoryID: "repo-other", RepositoryName: "other", RepositoryRoot: "/repos/other", PlanID: "other"}}},
+		focusRepositoryID:   "repo-alpha",
+		focusRepositoryName: "alpha",
+		focusRepositoryRoot: "/repos/alpha",
+	}
+	app := App{Actions: actions}
+
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'M'})
+	if got := state.confirmMessage(); got != "Merge all eligible plans in repository alpha?" {
+		t.Fatalf("focused batch confirmation = %q", got)
+	}
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'y'})
+	if len(launcher.calls) != 1 {
+		t.Fatalf("focused batch calls = %+v, want one", launcher.calls)
+	}
+	assertActionRequest(t, launcher.calls[0], "/repos/alpha", []string{"merge", "--all"})
+}
+
+func TestFocusedBatchMergeUsesStoredRootWhenWarningSelected(t *testing.T) {
+	launcher := &recordingActionLauncher{}
+	actions := newTestActions(t, launcher, nil, nil)
+	state := loopState{
+		snapshot: monitor.Snapshot{Rows: []monitor.Row{{
+			Kind:           monitor.RowKindRepositoryWarning,
+			RepositoryID:   "repo-alpha",
+			RepositoryName: "alpha",
+			Status:         "invalid",
+		}}},
+		focusRepositoryID:   "repo-alpha",
+		focusRepositoryName: "alpha",
+		focusRepositoryRoot: "/repos/alpha",
+	}
+	app := App{Actions: actions}
+
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'M'})
+	if got := state.confirmMessage(); got != "Merge all eligible plans in repository alpha?" {
+		t.Fatalf("focused warning batch confirmation = %q", got)
+	}
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'y'})
+	if len(launcher.calls) != 1 {
+		t.Fatalf("focused warning batch calls = %+v, want one", launcher.calls)
+	}
+	assertActionRequest(t, launcher.calls[0], "/repos/alpha", []string{"merge", "--all"})
+}
+
+func TestMergeLaunchFailureIsImmediateAndDoesNotClaimMerging(t *testing.T) {
+	launcher := &recordingActionLauncher{failAt: 1}
+	actions := newTestActions(t, launcher, nil, nil)
+	row := testActionRow()
+	row.Status = plan.StatusReviewed
+
+	actions.MergePlan(context.Background(), row)
+
+	if got := actions.labels()[actionRowKey(row)]; got != "failed to start" {
+		t.Fatalf("merge failure feedback = %q", got)
+	}
+	if message := actions.statusMessage(); !strings.Contains(message, "spawn unavailable") {
+		t.Fatalf("merge failure message = %q", message)
 	}
 }
 
@@ -246,21 +329,6 @@ func TestActionLaunchFailureImmediatelyShowsLogGuidance(t *testing.T) {
 	}
 }
 
-func TestQueueFeedbackClearsWhenEntryAppears(t *testing.T) {
-	launcher := &recordingActionLauncher{}
-	actions := newTestActions(t, launcher, nil, nil)
-	row := testActionRow()
-	actions.QueuePlan(context.Background(), row, monitor.Snapshot{})
-	queued := row
-	queued.QueueStatus = runqueue.QueueStatusPending
-
-	actions.Reconcile(monitor.Snapshot{Rows: []monitor.Row{queued}})
-
-	if len(actions.labels()) != 0 {
-		t.Fatalf("observed queue retained feedback: %v", actions.labels())
-	}
-}
-
 func newTestActions(t *testing.T, launcher *recordingActionLauncher, readLock func(string) (plan.RunLock, error), now func() time.Time) *Actions {
 	t.Helper()
 	if readLock == nil {
@@ -290,9 +358,9 @@ func testActionRow() monitor.Row {
 	}
 }
 
-func assertActionRequest(t *testing.T, got CommandRequest, cwd string, args []string, detached bool) {
+func assertActionRequest(t *testing.T, got CommandRequest, cwd string, args []string) {
 	t.Helper()
-	if got.CWD != cwd || got.Executable != "/bin/tao" || !slices.Equal(got.Args, args) || got.Detached != detached {
-		t.Fatalf("command request = %+v, want cwd=%q executable=/bin/tao args=%v detached=%t", got, cwd, args, detached)
+	if got.CWD != cwd || got.Executable != "/bin/tao" || !slices.Equal(got.Args, args) || !got.Detached {
+		t.Fatalf("command request = %+v, want cwd=%q executable=/bin/tao args=%v detached=true", got, cwd, args)
 	}
 }

@@ -38,8 +38,8 @@ type actionKind string
 
 const (
 	actionRun     actionKind = "run"
-	actionQueue   actionKind = "queue"
 	actionApprove actionKind = "approve"
+	actionMerge   actionKind = "merge"
 	actionFailed  actionKind = "failed"
 )
 
@@ -49,6 +49,7 @@ type actionFeedback struct {
 	startedAt          time.Time
 	approvalSliceID    string
 	initialQueueStatus runqueue.QueueStatus
+	initialStatus      string
 }
 
 // Actions launches Tao commands and tracks their best-effort startup feedback.
@@ -99,30 +100,11 @@ func (a *Actions) RunPlan(ctx context.Context, row monitor.Row) {
 	if row.Status == plan.StatusBlocked {
 		args = []string{"run", "--continue", row.PlanID}
 	}
-	if err := a.launch(ctx, row, args, true); err != nil {
+	if err := a.launch(ctx, row, args); err != nil {
 		a.recordFailure(row, err)
 		return
 	}
 	a.recordPending(row, actionRun, "starting…", "")
-}
-
-// QueuePlan enqueues the selected plan and starts a detached drain when the
-// current snapshot does not show another drain actively owning work.
-func (a *Actions) QueuePlan(ctx context.Context, row monitor.Row, snapshot monitor.Snapshot) {
-	if !actionableRow(row) {
-		return
-	}
-	if err := a.launch(ctx, row, []string{"queue", "add", row.PlanID}, false); err != nil {
-		a.recordFailure(row, fmt.Errorf("queue add: %w", err))
-		return
-	}
-	if !a.activeDrain(snapshot, row.RepositoryID) {
-		if err := a.launch(ctx, row, []string{"queue", "start"}, true); err != nil {
-			a.recordFailure(row, fmt.Errorf("queue drain: %w", err))
-			return
-		}
-	}
-	a.recordPending(row, actionQueue, "queueing…", "")
 }
 
 // ApprovalPrompt returns the confirmation text for an approval-gated row.
@@ -143,15 +125,57 @@ func (a *Actions) ApproveSlice(ctx context.Context, row monitor.Row) {
 		return
 	}
 	args := []string{"approve", "--slice", row.ApprovalSliceID, row.PlanID}
-	if err := a.launch(ctx, row, args, true); err != nil {
+	if err := a.launch(ctx, row, args); err != nil {
 		a.recordFailure(row, err)
 		return
 	}
 	a.recordPending(row, actionApprove, "starting…", row.ApprovalSliceID)
 }
 
+// MergePlanPrompt returns confirmation text only for a reviewed plan row.
+// The merge command remains responsible for all detailed eligibility checks.
+func (a *Actions) MergePlanPrompt(row monitor.Row) (string, bool) {
+	if !actionableRow(row) || row.Status != plan.StatusReviewed {
+		return "", false
+	}
+	return fmt.Sprintf("Merge reviewed plan %s in repository %s?", row.PlanID, repositoryLabel(row)), true
+}
+
+// MergePlan launches a confirmed single-plan merge.
+func (a *Actions) MergePlan(ctx context.Context, row monitor.Row) {
+	if _, ok := a.MergePlanPrompt(row); !ok {
+		return
+	}
+	if err := a.launch(ctx, row, []string{"merge", row.PlanID}); err != nil {
+		a.recordFailure(row, err)
+		return
+	}
+	a.recordPending(row, actionMerge, "merging…", "")
+}
+
+// MergeAllPrompt returns confirmation text for a repository-scoped batch.
+func (a *Actions) MergeAllPrompt(row monitor.Row) (string, bool) {
+	if !actionableRow(row) {
+		return "", false
+	}
+	return fmt.Sprintf("Merge all eligible plans in repository %s?", repositoryLabel(row)), true
+}
+
+// MergeAll launches a confirmed batch merge in exactly one repository root.
+func (a *Actions) MergeAll(ctx context.Context, row monitor.Row) {
+	if _, ok := a.MergeAllPrompt(row); !ok {
+		return
+	}
+	if err := a.launch(ctx, row, []string{"merge", "--all"}); err != nil {
+		a.recordFailure(row, err)
+		return
+	}
+	a.recordPending(row, actionMerge, "merging…", "")
+}
+
 // Reconcile clears observed starts and turns unobserved pending actions into
-// failed-to-start feedback after the bounded startup window.
+// failed-to-start feedback after the bounded startup window. Merge feedback
+// expires silently because a detached merge may legitimately run for longer.
 func (a *Actions) Reconcile(snapshot monitor.Snapshot) {
 	rows := make(map[string]monitor.Row, len(snapshot.Rows))
 	for _, row := range snapshot.Rows {
@@ -171,6 +195,10 @@ func (a *Actions) Reconcile(snapshot monitor.Snapshot) {
 			continue
 		}
 		if a.now().Sub(feedback.startedAt) < a.startupTimeout {
+			continue
+		}
+		if feedback.kind == actionMerge {
+			delete(a.feedback, key)
 			continue
 		}
 		planID := row.PlanID
@@ -201,36 +229,22 @@ func (a *Actions) statusMessage() string {
 	return a.message
 }
 
-func (a *Actions) launch(ctx context.Context, row monitor.Row, args []string, detached bool) error {
+func (a *Actions) launch(ctx context.Context, row monitor.Row, args []string) error {
 	request := CommandRequest{
 		CWD:        row.RepositoryRoot,
 		Executable: a.executable,
 		Args:       append([]string(nil), args...),
-		Detached:   detached,
+		Detached:   true,
 	}
 	return a.launcher(ctx, request)
 }
 
-func (a *Actions) activeDrain(snapshot monitor.Snapshot, repositoryID string) bool {
-	for _, row := range snapshot.Rows {
-		if row.RepositoryID != repositoryID || row.QueueStatus != runqueue.QueueStatusRunning {
-			continue
-		}
-		if row.Liveness == monitor.LivenessLive || a.liveRunLock(row.PlanDir) {
-			return true
-		}
-	}
-	// Queue state has no drain-owner record. This heuristic can race another UI,
-	// but the per-plan run lock remains the authoritative double-start guard.
-	return false
-}
-
 func (a *Actions) observed(feedback actionFeedback, row monitor.Row) bool {
 	switch feedback.kind {
-	case actionQueue:
-		return row.QueueStatus != ""
 	case actionApprove:
 		return row.ApprovalSliceID == "" || row.ApprovalSliceID != feedback.approvalSliceID
+	case actionMerge:
+		return row.Status != feedback.initialStatus
 	default:
 		queueStarted := row.QueueStatus != "" && row.QueueStatus != feedback.initialQueueStatus
 		return row.Liveness == monitor.LivenessLive || queueStarted || a.liveRunLock(row.PlanDir)
@@ -253,6 +267,7 @@ func (a *Actions) recordPending(row monitor.Row, kind actionKind, label, approva
 		startedAt:          a.now(),
 		approvalSliceID:    approvalSliceID,
 		initialQueueStatus: row.QueueStatus,
+		initialStatus:      row.Status,
 	}
 	if a.messageKey == key {
 		a.message = ""
@@ -265,6 +280,13 @@ func (a *Actions) recordFailure(row monitor.Row, err error) {
 	a.feedback[key] = actionFeedback{kind: actionFailed, label: "failed to start", startedAt: a.now()}
 	a.messageKey = key
 	a.message = failedStartMessage(row.PlanID, err)
+}
+
+func repositoryLabel(row monitor.Row) string {
+	if name := strings.TrimSpace(row.RepositoryName); name != "" {
+		return name
+	}
+	return row.RepositoryID
 }
 
 func actionableRow(row monitor.Row) bool {
