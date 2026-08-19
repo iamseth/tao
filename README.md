@@ -37,24 +37,59 @@ Tao is local-first. It writes plans to a directory under your home, and it
 touches your code or git history only when you run a slice and ask it to.
 Looking around costs you nothing.
 
-Build it and check your tools:
+Build Tao and put its absolute binary directory on `PATH` for this shell:
 
 ```sh
 git clone https://github.com/iamseth/tao.git
 cd tao
 make build
-./bin/tao install-prompts   # install agent prompts
-./bin/tao doctor            # summarize agents and actionable setup problems
+export PATH="$(pwd)/bin:$PATH"
+tao install-prompts
 ```
 
-Plan and slice inside your agent (e.g. Pi, Claude, OpenCode, or Codex) with commands like:
+Run `tao doctor` when you need to inspect discovered agents and actionable setup
+problems. It is diagnostic guidance, not a guaranteed success check; follow any
+setup guidance it reports.
+
+Next, change to the Git repository where you want to use Tao and register it
+(replace the example path):
+
+```sh
+cd /absolute/path/to/your/repository
+tao init
+```
+
+From that registered repository, plan and slice inside your agent (e.g. Pi,
+Claude, OpenCode, or Codex):
 
 ```text
 /tao-plan add a --hello flag to the CLI
 /tao-slice
 ```
 
-If the idea is not ready for a planning session, capture it from the repository instead (the short form is intentionally quick):
+`/tao-slice` writes a plan to Tao's data home and prints its ID. Current IDs
+include seconds, for example `20260818-222003-add-hello-flag`. Substitute the
+exact ID it printed, then validate and run the plan:
+
+```sh
+PLAN_ID=20260818-222003-add-hello-flag # replace with the ID from /tao-slice
+tao validate "$PLAN_ID"
+tao run "$PLAN_ID"
+```
+
+The generated slices determine whether approval is required. Only if `tao run`
+names a slice that requires approval, review that request, substitute its slice
+ID below, approve it, and run the plan again:
+
+```sh
+SLICE_ID=001-add-hello-flag # replace with the gated slice ID
+tao approve --slice "$SLICE_ID" --by you "$PLAN_ID"
+tao run "$PLAN_ID"
+```
+
+Note capture is optional; it is not required for the plan-and-run path above. If
+an idea is not ready for a planning session, capture it from the registered
+repository instead (the short form is intentionally quick):
 
 ```sh
 tao n c add a --hello flag to the CLI
@@ -65,32 +100,11 @@ tao note archive --reason "not needed yet" <note-id>
 tao note reopen <note-id>
 ```
 
-Later, use `tao note plan <note-id>` to create a durable source-linked record, then continue clarification in a fresh agent planning session. Use `tao note run <note-id>` only when the note is already explicit: it still creates and validates an ordinary plan and then enters the same approval, permission, workspace, commit, pull-request, review, and merge lifecycle described below.
-
-`/tao-slice` writes a plan to Tao's data home and prints its ID. Check it before you
-run anything:
-
-```console
-$ tao validate 20260623-1200-example
-Validation: 20260623-1200-example
-No validation findings.
-```
-
-Then run the pending slices:
-
-```console
-$ tao run 20260623-1200-example
-slice 001-add-hello-flag requires approval: Touches the public CLI surface; wants a maintainer to sign off first.
-```
-
-That stop is the point. The slice was gated for sign-off, so Tao refused to
-touch your code and exited cleanly. Approve it and run on:
-
-```console
-$ tao approve --slice 001-add-hello-flag --by you 20260623-1200-example
-Slice approved: 001-add-hello-flag
-Next: tao run 20260623-1200-example
-```
+Later, use `tao note plan <note-id>` to create a durable source-linked record,
+then continue clarification in a fresh agent planning session. Use
+`tao note run <note-id>` only when the note is already explicit: it still creates
+and validates an ordinary plan and then enters the same approval, permission,
+workspace, commit, pull-request, review, and merge lifecycle described below.
 
 Automatic runs start each slice from a clean execution worktree. At successful
 completion, the active implementation agent supplies a bounded structured

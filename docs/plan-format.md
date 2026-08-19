@@ -11,6 +11,8 @@ flowchart LR
     Dir --> Slices["slices.json<br/>required"]
     Dir --> Events["events.jsonl<br/>optional append log"]
     Dir --> Context["Markdown context<br/>plan, brief, handoff"]
+    Dir --> Review["review.md<br/>optional runtime review"]
+    Dir --> Ops["runtime operations<br/>agent log, locks, journal"]
     Dir --> Sidecars["local sidecars<br/>legacy planning metadata"]
 
     Run["tao run"] --> State
@@ -28,10 +30,16 @@ A plan directory is usually allocated by `/tao-slice` through:
 tao init --slug <short-slug> --json
 ```
 
-The command registers the current Git repository and returns `plan.dir` under Tao's data home:
+The command registers the current Git repository and returns `plan.dir` under Tao's data home. Tao uses the first non-empty location in this order:
+
+1. `TAO_DATA_HOME`
+2. `XDG_DATA_HOME/tao`
+3. `HOME/.local/share/tao`
+
+If none of those environment values is available, the final fallback is the relative path `./.local/share/tao`. The selected root contains repository-scoped plans:
 
 ```text
-$TAO_DATA_HOME or ~/.local/share/tao/
+<data-home>/
 └── repos/<repo-id>/plans/<plan-id>/
 ```
 
@@ -41,26 +49,42 @@ Plan loaders validate plan-directory artifacts and must not depend on unrelated 
 
 ## File Contract
 
+### Plan artifacts and context
+
 | File | Loader requirement | New `/tao-slice` expectation | Purpose |
 | --- | --- | --- | --- |
 | `state.json` | Required | Required | Mutable plan lifecycle and queue state. |
 | `slices.json` | Required | Required | Executable slice definitions and verification commands. |
 | `events.jsonl` | Optional | Created | Append-only lifecycle and telemetry events. Invalid lines warn, not fail. |
-| `.mutation.json` | Recovery-only | Absent when settled | Tao-owned intent for an interrupted required-artifact mutation; never agent-authored plan input. |
 | `plan.md` | Optional | Created | Human-readable goal, constraints, decisions, assumptions, risks, and slice overview. |
 | `planning-brief.md` | Optional, warning if missing/malformed | Created | Fixed-section compact planning summary for future build agents. |
 | `handoff.md` | Optional | Created | Concise future-agent context without duplicating Tao-owned run protocol. |
+| `review.md` | Optional | Absent | Latest completed human-readable agent review output. A completed runtime review creates or replaces it; normal persistence journals it with the matching state and event metadata. |
 
-Legacy planning-session sidecars are not part of the live contract. See [Legacy / backward-compatibility (read-only)](#legacy--backward-compatibility-read-only).
+The `/tao-slice` expectation describes planning-agent output. `review.md` is not planning input: Tao owns the runtime-created copy of review output. Legacy planning-session sidecars are not part of the live contract. See [Legacy / backward-compatibility (read-only)](#legacy--backward-compatibility-read-only).
 
-### Recoverable required-artifact mutations
+### Runtime operation files
 
-Tao-owned lifecycle operations that jointly persist `state.json`, `slices.json`,
-and lifecycle events use `.mutation.json` as a private roll-forward journal. The
-journal is made durable before any listed target changes. Full plan loads and
-state-only reads validate and settle a pending journal before returning artifact
-state; retries install exact hashed payload bytes, append only missing
-`(mutation_id, payload hash)` events, and durably remove the journal last.
+These files are Tao-owned operational state, not agent-authored plan artifacts or extension points:
+
+| File | Lifetime | Purpose |
+| --- | --- | --- |
+| `agent-run.log` | Created and appended by agent-backed runtime sessions | Captured session log read by `tao log`; it is diagnostic data, not lifecycle or recovery authority. |
+| `.run.lock` | Present while a plan driver owns the plan; normally removed on release | Cross-process run ownership and contention metadata. |
+| `.mutation.lock` | Created by journal-capable persistence and retained | Stable-inode advisory lock shared by journal writers and recovering readers. |
+| `.mutation.json` | Present only while a journaled mutation needs settlement | Tao-owned roll-forward intent; absent after successful settlement. |
+
+Operational logs and locks are not validated as plan content and never replace `state.json`, `slices.json`, or lifecycle events as durable workflow evidence.
+
+### Recoverable artifact mutations
+
+Tao-owned persistence operations may journal any non-empty combination of
+`state.json`, `slices.json`, optional `review.md`, and lifecycle events in
+`.mutation.json`. The journal is made durable before any listed target changes.
+Full plan loads and state-only reads validate and settle every pending target
+before returning artifact state; retries install exact hashed state, slices, and
+review payload bytes, append only missing `(mutation_id, payload hash)` events,
+and durably remove the journal last.
 Malformed, mismatched, or unsupported journals make the plan unreadable until an
 operator preserves and repairs the intent; Tao never guesses, rolls back, or
 automatically deletes invalid intent.
@@ -109,7 +133,7 @@ There are two current completion paths:
 
 Only a current `plan_merged` event in `events.jsonl` proves integration into the default branch; `status: completed` alone does not. A later `plan_reopened` supersedes earlier review, PR-completion, and merge evidence until the reworked head is reviewed and recorded again. Plans written by releases predating merge-event tracking may carry `status: completed` without modern merge or qualifying PR evidence. Status projection trusts that persisted legacy status rather than demoting historical plans to `in_review` on upgrade, and report projection retains its legacy merged-outcome inference for those records.
 
-`state.json` owns repository context and the queue. New plans should record `repo.base_commit` as the Git commit that was current when the plan was sliced; `tao review PLAN` uses it to detect likely stale pending slices after later commits.
+`state.json` owns repository context and the queue. New plans should record `repo.base_commit` as the Git commit that was current when the plan was sliced; `tao staleness PLAN` uses it to detect likely stale pending slices after later commits.
 
 - `plan.change_type` records the planning-time Conventional Commit type for the whole plan. New plans require exactly one of `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, or `revert`. Repository-facing category names map `feat` to `feature` and preserve every other supported type unchanged. Historical plans that omit the field remain readable and runnable; an invalid non-empty value produces a validation warning.
 - `plan.current_slice` is the selected slice while work is active.
@@ -253,7 +277,7 @@ Resume attempts do not append another `slice_started` event. Each agent handoff 
 
 Within one implementation-slice invocation, Tao may automatically attempt at most two resumes after explicitly structured retryable transport failures, using fixed context-cancellable delays of 1 second and 2 seconds. Each attempt reloads artifacts, repeats selected-slice verification preflight, and must receive `InterruptedSliceResume` authorization from the same execution-boundary classifier described above before a fresh provider session starts. The budget is invocation-local and is independent of durable resume-attempt numbering. A durably completed slice is accepted after ordinary progress and completion-boundary validation without another handoff. This changes no event or artifact schema and adds no retry configuration.
 
-The current structured source is Pi's `provider_transport_failure` diagnostic. Matching text, generic and authentication errors, session timeouts, planning, review, pull-request, and merge sessions, and manual, policy-`none`, unsafe, or post-`commit_intent` states do not retry. In particular, neither a provider error nor an `agent_metrics`, `slice_resume_attempted`, or `slice_resume_failed` event is authorization; the durable execution facts and live Git boundary remain the sole recovery authority.
+The supported runtimes are `pi`, `claude`, `opencode`, and `codex`. Of those, only Pi currently exposes the retryable structured source, its `provider_transport_failure` diagnostic. Matching text, generic and authentication errors, session timeouts, planning, review, pull-request, and merge sessions, and manual, policy-`none`, unsafe, or post-`commit_intent` states do not retry. In particular, neither a provider error nor an `agent_metrics`, `slice_resume_attempted`, or `slice_resume_failed` event is authorization; the durable execution facts and live Git boundary remain the sole recovery authority.
 
 Normal `tao run` rejects blocked plans and blocked selected slices. `tao run --continue` is only for cases where the blocker has already been cleared manually; it clears Tao's blocked lifecycle state and restarts `plan.current_slice`, or falls back to the first pending slice only when the plan or that slice is blocked. Continue mode must not bypass approval gates, dependencies, completed-plan checks, missing-slice checks, branch or commit safeguards, or selected-slice verification preflight.
 
@@ -354,7 +378,7 @@ Changing a tag-driven clearable field to `omitempty` requires migrating every wr
 
 New plans never create these; documented only so old plan directories still load.
 
-Planning-session capture is no longer supported. If optional legacy planning-session sidecars are present in a local plan directory, loaders may display them as best-effort audit metadata, but missing sidecars must not warn, fail validation, or block execution. These files are local-only metadata, and built-in Pi and Claude run support does not write transcript or session sidecars.
+Planning-session capture is no longer supported. If optional legacy planning-session sidecars are present in a local plan directory, loaders may display them as best-effort audit metadata, but missing sidecars must not warn, fail validation, or block execution. These files are local-only metadata, and the built-in `pi`, `claude`, `opencode`, and `codex` runtimes do not write transcript or session sidecars.
 
 | File | Purpose |
 | --- | --- |
@@ -362,36 +386,40 @@ Planning-session capture is no longer supported. If optional legacy planning-ses
 | `planning-session-stats.json` | Legacy Tao-owned planning-session summary, including planning agent when known, session ID, repository root, timestamps, provider/model, usage, cost, and stale-metadata status. |
 | `planning-prompt.md` | Legacy extracted planning prompt text used to create the plan. |
 
-`agent` records the planning runtime when known, such as `pi` or `claude`. It is audit metadata only; plans remain portable and may be run by any supported agent runtime later. `planning_started_at` records when the `/tao-slice` prompt began. It intentionally lives in `planning-session-stats.json`, not core `state.json` timing. Renderers should round positive canonical planning duration to the nearest second and prefer positive `planning_started_at` duration.
+`agent` records the planning runtime when known: `pi`, `claude`, `opencode`, or `codex`. It is audit metadata only; plans remain portable and may be run by any supported agent runtime later. `planning_started_at` records when the `/tao-slice` prompt began. It intentionally lives in `planning-session-stats.json`, not core `state.json` timing. Renderers should round positive canonical planning duration to the nearest second and prefer positive `planning_started_at` duration.
 
 If sidecar metadata appears stale or mismatched, stats should set `capture_suspect` and `capture_suspect_reason`. Stale sidecars must hide all planning metrics, including duration, tokens, messages, cost, model, and tool-call data.
 
 ## Telemetry Warnings
 
-Agent budget warnings are informational summaries derived from `agent_metrics` events. Default thresholds are:
+Agent budget warnings are informational summaries derived from `agent_metrics` events. Slice and whole-plan totals have separate defaults:
 
-| Metric | Threshold |
-| --- | ---: |
-| Total tokens | `200000` |
-| Tool calls | `75` |
-| Assistant messages | `50` |
-| Errored agent messages | any |
+| Metric | Slice threshold | Plan threshold |
+| --- | ---: | ---: |
+| Output tokens | `40000` | `150000` |
+| Cost | `5` | `20` |
+| Tool calls | `120` | `400` |
+| Assistant messages | `80` | `300` |
+| Errored messages | `0` (warn on any) | `0` (warn on any) |
 
-Renderers should show the metric, threshold, observed value, and slice ID when applicable, but warnings must not change plan lifecycle state or block execution.
+These thresholds apply to output tokens, not total tokens. Corresponding `TAO_BUDGET_SLICE_<METRIC>` and `TAO_BUDGET_PLAN_<METRIC>` variables can override each advisory value, where `<METRIC>` is `OUTPUT_TOKENS`, `COST`, `TOOL_CALLS`, `ASSISTANT_MESSAGES`, or `ERRORED_MESSAGES`. Invalid advisory overrides retain the built-in value.
+
+The opt-in hard caps `TAO_MAX_SLICE_OUTPUT_TOKENS` and `TAO_MAX_SLICE_COST` are separate and disabled by default. A crossed hard cap can stop a slice and emit `budget_exceeded`; advisory threshold warnings never change plan lifecycle state or block execution. Renderers should show the metric, threshold, observed value, and slice ID when applicable.
 
 Run-context telemetry is recorded as `run_context` events before each agent slice attempt. It records whether a compact run packet was rendered and how many warning-level selected-slice guardrail findings were present. This supports prompt-efficiency analysis, but missing telemetry must not invalidate plans or block runs.
 
 ## Events
 
-`events.jsonl` records append-only lifecycle and telemetry events.
+`events.jsonl` records append-only lifecycle and telemetry events. Event types are additive: the table describes current well-known entries, not a closed enum, and readers retain tolerance for historical or newer event types.
 
-Known event types include:
+Current well-known event types include:
 
 | Event type | Purpose |
 | --- | --- |
 | `plan_created` | Initial event written by `/tao-slice`; may include `agent` for the planning runtime. |
 | `slice_started` | Selected slice attempt started. |
 | `slice_completed` | Slice completion transaction settled successfully; detailed intent, outcome, and SHA live in `slices.json`. |
+| `slice_blocked` | The selected slice and plan were marked blocked with the persisted reason. |
 | `slice_resume_attempted` | Agent handoff for an interrupted automatic slice was attempted. |
 | `slice_resume_failed` | Agent handoff for an interrupted automatic slice failed. |
 | `slice_removed` | Pending slice removed by `tao edit remove`. |
@@ -399,12 +427,14 @@ Known event types include:
 | `slices_reordered` | Pending queue reordered by `tao edit move`. |
 | `slice_approved` | Approval-gated slice was approved. |
 | `pull_request_created` | Pull request created or discovered and its exact source head recorded after run finalization. |
+| `pr_feedback_triaged` | A validated classification snapshot for the current pull-request review-thread set was persisted. |
 | `plan_reviewed` | Plan review result was persisted. |
 | `plan_reopened` | Plan reopened for rework. |
 | `plan_merged` | Plan merged into the default branch. |
 | `verification_command_invalid` | Verification command failed before tests loaded. |
 | `run_context` | Pre-attempt run-packet and guardrail telemetry. |
 | `session_timeout` | Agent session exceeded its wall-clock timeout. |
+| `budget_exceeded` | An opt-in hard slice output-token or cost cap was crossed; records the metric, threshold, and observed value. |
 | `rework_round` | Automatic rework round started. |
 | `rework_stopped` | Automatic rework stopped at a persisted safety bound. |
 | `final_verification` | Final repository verification result was recorded. |
@@ -457,9 +487,9 @@ A `pull_request_created` event includes the usual event fields plus `pull_reques
 
 A `verification_command_invalid` event should include the original `command`, a concise `reason`, and, when a mechanically equivalent command is used successfully, `corrected_command`.
 
-An `agent_metrics` event includes the usual event fields plus a top-level `agent` and a `metrics` object. The metrics object records the agent name, session ID, provider and model IDs when available, token counts, cost, assistant message count, tool call count, and run result/status so failed attempts can still be represented in telemetry totals. Metrics are generic across built-in runtimes; consumers should not assume Pi-only fields.
+An `agent_metrics` event includes the usual event fields plus a top-level `agent` and a `metrics` object. The metrics object records the agent name, session ID, provider and model IDs when available, token counts, cost, assistant message count, tool call count, and run result/status so failed attempts can still be represented in telemetry totals. Metrics are generic across built-in runtimes; consumers should not assume runtime-specific fields.
 
-Metrics events are durable plan artifacts, but collection is best-effort. Unavailable Pi or Claude stats should skip telemetry without failing the run.
+Metrics events are durable plan artifacts, but collection is best-effort. Unavailable metrics from any supported runtime should skip telemetry without failing the run.
 
 A `run_context` event includes the usual event fields plus `agent`, `run_packet_provided`, and `guardrail_warnings`. It should be emitted after selected-slice preflight and before invoking the agent.
 

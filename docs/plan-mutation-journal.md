@@ -1,9 +1,11 @@
 # Plan Mutation Journal
 
-This note specifies Tao's recoverable protocol for mutations that jointly change
-`state.json`, `slices.json`, and lifecycle entries in `events.jsonl`. It
-supersedes the earlier cross-file-journaling non-goal: legacy tolerance remains,
-but newly journaled Tao-owned mutations must settle to one complete result.
+This note specifies Tao's recoverable protocol for Tao-owned mutations whose
+target set can include `state.json`, `slices.json`, optional `review.md`, and
+lifecycle entries in `events.jsonl`. A journal has at least one target; it does
+not require every target on every mutation. The protocol supersedes the earlier
+cross-file-journaling non-goal: legacy tolerance remains, but newly journaled
+mutations must settle to one complete result.
 
 ## Scope and authority
 
@@ -16,10 +18,10 @@ of a legacy plan with neither journal nor lock does not create the lock; after a
 unlocked legacy snapshot, readers recheck for a concurrently created lock and
 repeat the snapshot under it when necessary. A second mutation must not replace
 an existing journal. While the journal exists
-and validates, it is authoritative: its payloads are the intended post-mutation
-state, regardless of which target files already match them. Recovery always
-rolls forward; it does not infer intent from partially installed targets and
-does not roll back.
+and validates, it is authoritative: its payloads are the intended target bytes
+and event entries, regardless of which target files already match them. Recovery
+always rolls forward; it does not infer intent from partially installed targets
+and does not roll back.
 
 Absence of `.mutation.json` means there is no journal transaction to recover.
 This is the compatibility path for all legacy plans, including plans left in the
@@ -32,8 +34,10 @@ validation remain unchanged for those plans.
 installation, replay, and removal. Run, slice-complete, review, rework, and merge
 code request domain mutations through plan records or reload plan artifacts; they
 do not interpret journal progress or repair target prefixes themselves. Both
-full plan loads and state-only reads settle valid pending intent before exposing
-required-artifact state.
+full plan loads and state-only reads settle every target in valid pending intent,
+including `review.md` when its payload is present, before exposing
+required-artifact state. A journal without `review` leaves the existing review
+artifact untouched.
 
 The file is internal recovery metadata, not an agent-authored extension point or
 a second source of plan semantics. Conforming writers hold the existing plan
@@ -96,22 +100,28 @@ The v1 journal shape is:
   "created_at": "2026-07-20T16:30:00Z",
   "state": {"payload": "<base64 bytes>", "sha256": "<lowercase hex>"},
   "slices": {"payload": "<base64 bytes>", "sha256": "<lowercase hex>"},
+  "review": {"payload": "<base64 bytes>", "sha256": "<lowercase hex>"},
   "events": [
     {"payload": "<base64 bytes>", "sha256": "<lowercase hex>"}
   ]
 }
 ```
 
-`payload` fields are base64 because they carry bytes, not a second mutable JSON
-object. State and slices payloads include indentation and their final newline;
-event payloads are the JSON bytes before the JSONL newline. Every hash is SHA-256
-of exactly the decoded payload bytes. Unknown fields in the journal and payload
-entries are retained by decode/re-encode so additive schema data is not erased.
+`state`, `slices`, and `review` are optional payload entries, and `events` may be
+empty, but at least one file payload or event is required. `payload` fields are
+base64 because they carry bytes, not a second mutable JSON object. State and
+slices payloads include indentation and their final newline; a review payload is
+the exact review-output bytes supplied by the runtime and may be empty; event
+payloads are the JSON bytes before the JSONL newline. Every hash is SHA-256 of exactly the
+decoded payload bytes. Unknown fields in the journal and payload entries are
+retained by decode/re-encode so additive schema data is not erased.
 
-The journal's `plan_id` must match both the selected plan directory's known plan
-ID and the IDs encoded in state and slices. Each event payload must decode as an
+The journal's `plan_id` must match the selected plan directory's known plan ID
+and the ID encoded in each present state or slices payload. The opaque review
+payload has no embedded plan ID to validate. Each event payload must decode as an
 `Event`, have the same `plan_id`, and carry `mutation_id` equal to the journal's
-ID. `mutation_id` is optional in the long-lived event schema for legacy and
+ID.
+`mutation_id` is optional in the long-lived event schema for legacy and
 non-transactional events, but required for every event in a journal.
 
 ## Preparing payloads
@@ -126,6 +136,10 @@ same prepared byte slices are hashed into `.mutation.json` and later passed to
 atomic installation; targets must not be marshaled or merged again after the
 journal becomes durable.
 
+When present, `review.md` is prepared from the runtime's captured review output
+as one exact byte slice. It is not marshaled, deep-merged, JSON-validated, or
+newline-normalized; its hash binds those bytes, including an empty payload.
+
 Event payloads are likewise marshaled once after assigning the transaction's
 mutation ID. Multiple events in one transaction may share that ID, but their
 payload hashes must be unique within the journal. During recovery, an event is
@@ -138,26 +152,31 @@ Under both the plan's existing driver lock and the per-plan persistence lock, a
 journaled mutation performs these steps in order:
 
 1. Refuse or recover any existing `.mutation.json`.
-2. Reload the settled state, slices, and events when intent was recovered or
-   the writer requires a current bundle. For the preserving-edits path, always
-   rebase the pre-refresh caller snapshot's state and slice changes since the
-   record baseline over that bundle, without publishing the rebased result yet.
-3. Clone and mutate the refreshed or rebased detail without changing targets.
-4. Prepare final state, slices, and event bytes; validate all IDs and hashes.
+2. Reload the settled state, slices, events, and optional review when intent was
+   recovered or the writer requires a current bundle. For the preserving-edits
+   path, always rebase the pre-refresh caller snapshot's state and slice changes
+   since the record baseline over that bundle, without publishing the rebased
+   result yet.
+3. Clone and mutate the refreshed or rebased detail, and capture any supplied
+   review bytes, without changing targets.
+4. Prepare every present state, slices, review, and event payload; validate all
+   applicable IDs and hashes.
 5. Atomically write `.mutation.json`, including file sync, rename, and plan
    directory sync. No transaction target may change before this succeeds.
-6. Atomically install the exact state payload.
-7. Atomically install the exact slices payload.
-8. Append and sync each event not already present by mutation ID and payload
+6. If present, atomically install the exact state payload.
+7. If present, atomically install the exact slices payload.
+8. If present, atomically install the exact `review.md` payload.
+9. Append and sync each event not already present by mutation ID and payload
    hash, preserving journal order. After deduplication, sync `events.jsonl`
    again whenever the journal contains events, including when every event was
    already visible from an earlier append whose sync reported failure.
-9. Sync the plan directory after all targets and events are installed, making
-   newly created target entries durable before recovery intent is removed.
-10. Remove `.mutation.json` and sync the plan directory again.
-11. Publish the newly settled values to the caller's in-memory detail.
+10. Sync the plan directory after all targets and events are installed, making
+    newly created target entries durable before recovery intent is removed.
+11. Remove `.mutation.json` and sync the plan directory again.
+12. Publish the settled typed lifecycle values to the caller's in-memory detail.
+    The optional review file is visible through a subsequent artifact reload.
 
-A failure at steps 6–9 or before the step 10 unlink returns an error and leaves
+A failure at steps 6–10 or before the step 11 unlink returns an error and leaves
 the journal in place. A target that already has the expected hash is complete
 and is not rewritten. Repeating all settlement steps is therefore deterministic
 and idempotent. Retrying on the same `PlanRecord` first refreshes its intentionally stale detail
@@ -204,10 +223,11 @@ followed by a lock recheck that closes the race with a first writer. Recovery
 holds the lock across the complete journal scan, target replay, event
 deduplication/appends, and journal removal, then full-plan and state-only readers
 read their required artifacts before releasing it. Recovery validates the
-complete journal before writing anything, then runs the same settlement steps. It is valid to observe
-none, one, or both JSON targets already at their journal hashes and any prefix
-of events already appended. A deduplicated event is not sufficient by visibility
-alone: recovery syncs the event file before removing the journal.
+complete journal before writing anything, then runs the same settlement steps.
+It is valid to observe any subset of the present state, slices, and review file
+targets already at their journal hashes and any prefix of events already
+appended. A deduplicated event is not sufficient by visibility alone: recovery
+syncs the event file before removing the journal.
 
 Event scanning remains tolerant of unrelated malformed legacy JSONL lines. A
 valid existing event suppresses an append only when both its non-empty
@@ -217,10 +237,11 @@ it is not treated as completion.
 
 ## Invalid journals
 
-Malformed JSON, an unsupported schema, missing required fields, a wrong plan ID,
-invalid payload JSON, a missing/wrong hash, or an event ID mismatch makes the
-journal unsafe to replay. Tao must not modify state, slices, events, or the
-journal in that case. It returns an actionable error naming `.mutation.json` and
+Malformed journal JSON, an unsupported schema, missing required fields, a wrong
+plan ID, invalid state/slices/event payload JSON, a missing or wrong file-payload
+hash (including `review`), or an event ID mismatch makes the journal unsafe to
+replay. Tao must not modify state, slices, review, events, or the journal in that
+case. It returns an actionable error naming `.mutation.json` and
 the failed check. Automatic deletion, quarantine, rollback, and best-effort
 continuation are forbidden because they discard or guess durable intent.
 
@@ -244,14 +265,15 @@ semantics remain unchanged.
 
 ## Remaining limitations
 
-The journal covers conforming Tao-owned mutations of required state, slices, and
-lifecycle events. It does not authenticate files or prevent another process with
-write access from forging a valid intent or changing targets after settlement.
-It does not impose general artifact size quotas, transact optional Markdown or
-best-effort telemetry sidecars, coordinate more than one plan directory, or
-reconstruct intent for a historical torn write that has no journal. A malformed
-journal requires operator diagnosis; automatic quarantine or deletion would
-violate the durable-intent contract.
+The journal covers conforming Tao-owned mutations of state, slices, lifecycle
+events, and `review.md` when a runtime review supplies that optional payload. It
+does not authenticate files or prevent another process with write access from
+forging a valid intent or changing targets after settlement. It does not impose
+general artifact size quotas, transact other optional Markdown/context files,
+operational logs, or legacy planning-session sidecars, coordinate more than one
+plan directory, or reconstruct intent for a historical torn write that has no
+journal. A malformed journal requires operator diagnosis; automatic quarantine
+or deletion would violate the durable-intent contract.
 
 Established Git commit-intent recovery retains its existing evidence and
 safeguards even though the slices artifact write now uses the shared journal and
