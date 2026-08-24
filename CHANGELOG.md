@@ -9,6 +9,33 @@ stable release.
 
 ## [Unreleased]
 
+### Week of 2026-08-17
+
+#### Added
+- You can now see *why* a plan is blocked directly in `tao show` and recent events, with guidance focused on resolving the blocker before continuing.
+- You can now get a single, recovery-first “best next action” recommendation (with reason) in `tao show`, including structured JSON output for automation.
+- You can now plan directly from repository notes, keeping notes editable during planning and archiving source notes only after a valid same-repository plan is created.
+- You can now use a more focused `tao ui` with separate **Plans** and **Notes** tabs, independent selection state, shared repository focus, and read-only note detail views.
+
+#### Changed
+- You now get a compact seven-row live run header that is easier to scan for run identity, active work, progress, nearby slices, and agent metrics.
+- You now work in a single-plan execution model: queue-oriented workflows and run-all style scheduling were removed in favor of explicit per-plan runs.
+- You now see a safer, more focused default TUI plan view (completed plans hidden initially), deterministic quit behavior, repository-focused navigation, and queue-ordered read-only slice drilldown.
+- You now have insights digests that better surface meaningful outliers by ranking output-token and cost outliers independently and showing when plans were omitted.
+- You now select from a supported agent roster limited to **Pi** and **Claude**, matching current runtime and docs expectations.
+
+#### Fixed
+- You are now protected from agent branch drift during runs by enforcing Tao-prepared branch verification and carrying durable branch identity through run packets.
+- You now get correct recovery guidance for unsettled slice completion, including rerunning the original full command invocation instead of an incomplete command that only errors.
+- You now avoid unwanted historical note artifacts because `plan-preview.md` is no longer generated during note-slice promotion.
+
+#### Reliability
+- You now get more deterministic recovery after interruptions because automatic rework rounds/stops are persisted atomically as authoritative lifecycle evidence.
+
+#### Documentation
+- You now have a copy-paste-safe source-build quickstart (including absolute `PATH` usage and repository registration steps).
+- You now have updated docs that match current artifact, lifecycle, telemetry, and mutation-journal behavior, plus clearer local-first product positioning and workflow boundaries.
+
 ### Week of 2026-08-10
 
 #### Added
