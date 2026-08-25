@@ -23,6 +23,41 @@ ones are:
 
 Run `make build`, `make lint`, and `make test` before opening a pull request.
 
+## TUI preview workflow
+
+The developer-only `cmd/tui-preview` binary runs the production TUI event loop
+against deterministic in-memory fixtures. It does not read Tao's data home or
+repositories, and its action keys (`r`, `a`, `m`, and `M`) are deliberately
+inert. The preview is not released; `.goreleaser.yml` continues to build only
+`cmd/tao`.
+
+Start the mixed fixture interactively:
+
+```sh
+make tui-preview
+# or choose another fixture
+make tui-preview TUI_PREVIEW_ARGS='--scenario stress'
+```
+
+Use `--list-scenarios` and `--list-views` to discover stable fixture and view
+names. In interactive mode, exercise both Plans and Notes, open plan, note, and
+slice details, navigate with the production keys, and resize the terminal along
+both axes. Quit with `q` or Ctrl-C and confirm the terminal is restored.
+
+For a reproducible frame that does not require a terminal, select a view and
+explicit dimensions with `--plain`:
+
+```sh
+go run ./cmd/tui-preview --plain --scenario mixed --view plans --size 100x30 > /tmp/plans.txt
+go run ./cmd/tui-preview --plain --scenario mixed --view plans --size 100x30 > /tmp/plans-again.txt
+diff -u /tmp/plans.txt /tmp/plans-again.txt
+```
+
+Add `--color` when inspecting ANSI styling in plain output. To extend coverage,
+add or update a typed scenario in `internal/tuipreview/fixtures.go`; keep fixture
+values deterministic and in memory, then cover the scenario through the shared
+collectors and production renderers rather than adding external fixture files.
+
 ## Dependencies
 
 tao deliberately has **zero third-party dependencies**. Please do not add any new

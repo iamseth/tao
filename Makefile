@@ -1,6 +1,7 @@
-.PHONY: help build clean test coverage-html lint install release-check verify verify-no-deps
+.PHONY: help build clean test coverage-html lint install release-check tui-preview verify verify-no-deps
 
 COVERAGE_FILE := coverage.out
+TUI_PREVIEW_ARGS ?=
 # Cached analyzer results contain source paths, so isolate them per checkout/worktree.
 GOLANGCI_LINT_CACHE ?= $(HOME)/.cache/golangci-lint$(CURDIR)
 
@@ -14,6 +15,7 @@ help:
 	@printf "  %-14s %s\n" "lint" "Run golangci-lint."
 	@printf "  %-14s %s\n" "install" "Build and install the tao binary into ~/.bin."
 	@printf "  %-14s %s\n" "release-check" "Validate the GoReleaser config (requires goreleaser)."
+	@printf "  %-14s %s\n" "tui-preview" "Run the developer-only fixture TUI."
 	@printf "  %-14s %s\n" "verify-no-deps" "Fail if any third-party dependency is present."
 	@printf "  %-14s %s\n" "verify" "Run the complete repository verification gate."
 
@@ -45,6 +47,9 @@ install: build
 
 release-check:
 	@goreleaser check
+
+tui-preview:
+	@go run ./cmd/tui-preview $(TUI_PREVIEW_ARGS)
 
 verify: build test lint verify-no-deps
 
