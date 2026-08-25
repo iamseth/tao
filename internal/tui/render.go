@@ -14,9 +14,6 @@ import (
 
 const (
 	clearScreenSequence = "\x1b[H\x1b[2J"
-	plansFooterHints    = "r run  a approve  m merge  M merge all  f repository  c completed  Enter plan  Tab/←/→ tabs  q quit  Esc Esc quit"
-	notesFooterHints    = "f repository  Tab/←/→ tabs  q quit  Esc Esc quit"
-	footerHints         = plansFooterHints
 	maxSliceIDRunes     = 20
 )
 
@@ -24,6 +21,8 @@ const (
 type Model struct {
 	Snapshot            monitor.Snapshot
 	NoteSnapshot        note.Snapshot
+	DebugSnapshot       DebugSnapshot
+	SettingsSnapshot    SettingsSnapshot
 	Page                PageID
 	Selected            int
 	Width               int
@@ -33,9 +32,14 @@ type Model struct {
 	FocusRepositoryID   string
 	FocusRepositoryName string
 	UseColor            bool
+	ShowShortcuts       bool
+	SearchQuery         string
+	SearchActive        bool
+	DebugOffset         int
 	ConfirmMessage      string
 	ActionLabels        map[string]string
 	ActionMessage       string
+	SettingsMessage     string
 }
 
 type rowValues struct {
@@ -63,7 +67,9 @@ type tableWidths struct {
 // Render builds one complete terminal frame without writing it.
 func Render(model Model) string {
 	page := normalizePage(model.Page)
-	sections := BuildRepositorySections(model.Snapshot.Rows, !model.HideCompleted, model.FocusRepositoryID)
+	planRows := FilterPlanRows(model.Snapshot.Rows, model.SearchQuery)
+	noteSnapshot := FilterNoteSnapshot(model.NoteSnapshot, model.SearchQuery)
+	sections := BuildRepositorySections(planRows, !model.HideCompleted, model.FocusRepositoryID)
 	visibleCount := 0
 	for _, section := range sections {
 		visibleCount += len(section.Rows)
@@ -77,21 +83,49 @@ func Render(model Model) string {
 		focusLabel = "Repository: " + name
 	}
 
-	header := fmt.Sprintf("Tao UI | %s", focusLabel)
-	if page == PagePlans {
-		header += " | " + planCountLabel(visibleCount)
-	} else {
-		header += " | " + noteCountLabel(len(visibleNotes(model.NoteSnapshot, model.FocusRepositoryID)))
+	activePageLabel := pageLabel(page)
+	if model.UseColor {
+		activePageLabel = "\x1b[1m" + activePageLabel + "\x1b[0m"
 	}
-	lines := []string{header, renderTabBar(page)}
+	header := fmt.Sprintf("Tao UI | %s | %s", activePageLabel, focusLabel)
+	switch page {
+	case PagePlans:
+		header += " | " + planCountLabel(visibleCount)
+	case PageNotes:
+		header += " | " + noteCountLabel(len(visibleNotes(noteSnapshot, model.FocusRepositoryID)))
+	case PageSettings:
+		header = fmt.Sprintf("Tao UI | %s | %s", activePageLabel, settingsCountLabel(len(model.SettingsSnapshot.Repositories)))
+	case PageDebug:
+		header = fmt.Sprintf("Tao UI | %s | diagnostics", activePageLabel)
+	}
+	if page != PageDebug && page != PageSettings && (model.SearchActive || normalizedSearchQuery(model.SearchQuery) != "") {
+		header += " | " + searchHeaderLabel(model.SearchQuery, model.SearchActive)
+	}
+	lines := []string{header}
 	selectedLine := -1
 	switch {
+	case page == PageSettings:
+		settingsLines, settingsSelectedLine := renderSettingsPage(model)
+		selectedLine = len(lines) + settingsSelectedLine
+		if settingsSelectedLine < 0 {
+			selectedLine = -1
+		}
+		lines = append(lines, settingsLines...)
+	case page == PageDebug:
+		body := renderDebugPage(model)
+		bodyHeight := len(body)
+		if model.Height > 0 {
+			bodyHeight = max(model.Height-1, 0)
+		}
+		start := max(0, min(model.DebugOffset, max(len(body)-bodyHeight, 0)))
+		end := min(start+bodyHeight, len(body))
+		lines = append(lines, body[start:end]...)
 	case page == PageNotes:
 		now := model.Now
 		if now.IsZero() {
 			now = time.Now()
 		}
-		noteLines, noteSelectedLine := renderNotesPage(model.NoteSnapshot, model.Selected, model.FocusRepositoryID, now, model.UseColor)
+		noteLines, noteSelectedLine := renderNotesPage(noteSnapshot, model.Selected, model.FocusRepositoryID, now, model.UseColor)
 		selectedLine = len(lines) + noteSelectedLine
 		if noteSelectedLine < 0 {
 			selectedLine = -1
@@ -120,19 +154,20 @@ func Render(model Model) string {
 	if page == PagePlans && strings.TrimSpace(model.ActionMessage) != "" {
 		lines = append(lines, "", model.ActionMessage)
 	}
+	if page == PageSettings && strings.TrimSpace(model.SettingsMessage) != "" {
+		lines = append(lines, "", model.SettingsMessage)
+	}
 	if strings.TrimSpace(model.ConfirmMessage) != "" {
 		lines = append(lines, "", model.ConfirmMessage+" [y/n]")
 	}
-	footer := plansFooterHints
-	if page == PageNotes {
-		footer = notesFooterHints
-	}
-	lines = append(lines, "", footer)
-	lines = tableViewport(lines, selectedLine, footerStart, 2, model.Height)
+	lines = tableViewport(lines, selectedLine, footerStart, 1, model.Height)
 	if model.Width > 0 {
 		for index := range lines {
 			lines[index] = truncateANSI(lines[index], model.Width)
 		}
+	}
+	if model.ShowShortcuts {
+		lines = overlayShortcutLegend(lines, page, model.Width, model.Height, model.UseColor)
 	}
 	frame := clearScreenSequence + strings.Join(lines, "\n")
 	if model.Height <= 0 || len(lines) < model.Height {

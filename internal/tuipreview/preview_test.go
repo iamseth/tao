@@ -24,8 +24,8 @@ func TestScenarioCatalogIsStableDiscoverableAndTyped(t *testing.T) {
 		t.Fatalf("scenario names = %v, want %v", names, want)
 	}
 	mixed, ok := Lookup(ScenarioMixed)
-	if !ok || len(mixed.Snapshot.Rows) < 10 || len(mixed.Notes.Notes) < 3 || len(mixed.Plans) == 0 {
-		t.Fatalf("mixed scenario is not comprehensive: found=%t rows=%d notes=%d plans=%d", ok, len(mixed.Snapshot.Rows), len(mixed.Notes.Notes), len(mixed.Plans))
+	if !ok || len(mixed.Snapshot.Rows) < 10 || len(mixed.Notes.Notes) < 3 || len(mixed.Settings.Repositories) == 0 || len(mixed.Debug.RuntimeDefaults) == 0 || len(mixed.Plans) == 0 {
+		t.Fatalf("mixed scenario is not comprehensive: found=%t rows=%d notes=%d repositories=%d defaults=%d plans=%d", ok, len(mixed.Snapshot.Rows), len(mixed.Notes.Notes), len(mixed.Settings.Repositories), len(mixed.Debug.RuntimeDefaults), len(mixed.Plans))
 	}
 	if _, ok := Lookup("missing"); ok {
 		t.Fatal("Lookup found an unknown scenario")
@@ -43,6 +43,8 @@ func TestCollectorsReturnIsolatedSnapshotsAndHonorCancellation(t *testing.T) {
 	scenario, _ := Lookup(ScenarioMixed)
 	plans := scenario.NewSnapshotCollector()
 	notes := scenario.NewNoteSnapshotCollector()
+	debug := scenario.NewDebugSnapshotCollector()
+	settings := scenario.NewSettingsService()
 
 	firstPlans, err := plans.Collect(context.Background())
 	if err != nil {
@@ -52,11 +54,23 @@ func TestCollectorsReturnIsolatedSnapshotsAndHonorCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	firstDebug, err := debug.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstSettings, err := settings.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 	firstPlans.Rows[0].AttentionReasons[0] = "changed"
 	firstNotes.Notes[0].Tags[0] = "changed"
+	firstDebug.RuntimeDefaults[0].Value = "changed"
+	*firstSettings.Repositories[0].PullRequest = true
 	secondPlans, _ := plans.Collect(context.Background())
 	secondNotes, _ := notes.Collect(context.Background())
-	if secondPlans.Rows[0].AttentionReasons[0] == "changed" || secondNotes.Notes[0].Tags[0] == "changed" {
+	secondDebug, _ := debug.Collect(context.Background())
+	secondSettings, _ := settings.Collect(context.Background())
+	if secondPlans.Rows[0].AttentionReasons[0] == "changed" || secondNotes.Notes[0].Tags[0] == "changed" || secondDebug.RuntimeDefaults[0].Value == "changed" || *secondSettings.Repositories[0].PullRequest {
 		t.Fatal("collector returned mutable shared fixture data")
 	}
 
@@ -68,6 +82,12 @@ func TestCollectorsReturnIsolatedSnapshotsAndHonorCancellation(t *testing.T) {
 	if _, err := notes.Collect(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("note collector cancellation error = %v", err)
 	}
+	if _, err := debug.Collect(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("debug collector cancellation error = %v", err)
+	}
+	if _, err := settings.Collect(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("settings collector cancellation error = %v", err)
+	}
 }
 
 func TestRenderEveryViewIsDeterministicAndBounded(t *testing.T) {
@@ -77,11 +97,13 @@ func TestRenderEveryViewIsDeterministicAndBounded(t *testing.T) {
 		selection int
 		header    string
 	}{
-		{view: ViewPlans, header: "Tao UI | Repositories: all"},
-		{view: ViewNotes, selection: 1, header: "Tabs: Plans  [Notes]"},
-		{view: ViewPlanDetail, selection: 1, header: "Tao UI | PLAN DETAIL"},
+		{view: ViewPlans, header: "Tao UI | Plans | Repositories: all"},
+		{view: ViewNotes, selection: 1, header: "Tao UI | Notes | Repositories: all"},
+		{view: ViewSettings, selection: 1, header: "Tao UI | Settings | 3 repositories"},
+		{view: ViewDebug, header: "Tao UI | Debug | diagnostics"},
+		{view: ViewPlanDetail, selection: 1, header: "Tao UI | live | alpha"},
 		{view: ViewNoteDetail, selection: 1, header: "Tao UI | NOTE DETAIL"},
-		{view: ViewSliceDetail, selection: 1, header: "Tao UI | SLICE DETAIL"},
+		{view: ViewSliceDetail, selection: 1, header: "Tao UI | 002-render-boundary | in_progress"},
 	}
 	for _, test := range tests {
 		t.Run(string(test.view), func(t *testing.T) {
@@ -102,6 +124,42 @@ func TestRenderEveryViewIsDeterministicAndBounded(t *testing.T) {
 			}
 			assertBoundedFrame(t, first, 72, 18)
 		})
+	}
+}
+
+func TestPlanDetailShortcutPreviewIsContextAware(t *testing.T) {
+	scenario, _ := Lookup(ScenarioMixed)
+	frame, err := Render(scenario, RenderOptions{
+		View: ViewPlanDetail, Width: 72, Height: 16, Plain: true, ShowShortcuts: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Keyboard shortcuts", "Move slice selection", "Open selected slice", "Return to plans"} {
+		if !strings.Contains(frame, want) {
+			t.Fatalf("plan detail shortcut preview missing %q:\n%s", want, frame)
+		}
+	}
+	if strings.Contains(frame, "Search plans and notes") {
+		t.Fatalf("plan detail shortcut preview contains dashboard search action:\n%s", frame)
+	}
+}
+
+func TestSliceDetailShortcutPreviewIsContextAware(t *testing.T) {
+	scenario, _ := Lookup(ScenarioMixed)
+	frame, err := Render(scenario, RenderOptions{
+		View: ViewSliceDetail, Width: 72, Height: 12, Plain: true, ShowShortcuts: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Keyboard shortcuts", "Return to plan", "Close shortcuts"} {
+		if !strings.Contains(frame, want) {
+			t.Fatalf("slice detail shortcut preview missing %q:\n%s", want, frame)
+		}
+	}
+	if strings.Contains(frame, "Move slice selection") || strings.Contains(frame, "Search plans and notes") {
+		t.Fatalf("slice detail shortcut preview contains unavailable actions:\n%s", frame)
 	}
 }
 
@@ -233,6 +291,8 @@ func TestRenderRejectsInvalidOptions(t *testing.T) {
 		{View: ViewNotes, Width: 10, Height: 10, Selection: 99},
 		{View: ViewPlanDetail, Width: 10, Height: 10, PlanDir: "fixture://missing"},
 		{View: ViewSliceDetail, Width: 10, Height: 10, SliceID: "missing"},
+		{View: ViewNoteDetail, Width: 10, Height: 10, ShowShortcuts: true},
+		{View: ViewPlanDetail, Width: 10, Height: 10, SearchQuery: "owner"},
 	} {
 		if _, err := Render(scenario, options); err == nil {
 			t.Fatalf("Render accepted invalid options: %+v", options)

@@ -1,6 +1,7 @@
 package run
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -34,12 +35,12 @@ type agentSessionLog struct {
 	writer io.Writer
 }
 
-func openAgentSessionLog(appender plan.LogAppender, planDir string, out io.Writer, action string, timestamp time.Time) (agentSessionLog, error) {
+func openAgentSessionLog(appender plan.LogAppender, planDir string, out io.Writer, action string, timestamp time.Time, clock func() time.Time) (agentSessionLog, error) {
 	logFile, err := appender.OpenLogAppend(planDir)
 	if err != nil {
 		return agentSessionLog{}, err
 	}
-	log := sessionLogWriter(logFile, out)
+	log := timestampedAgentLogWriter{writer: sessionLogWriter(logFile, out), clock: clock}
 	if err := logrecord.Write(log, logrecord.Record{Type: logrecord.TypeSession, Content: action, Timestamp: timestamp.Format(time.RFC3339)}); err != nil {
 		_ = logFile.Close()
 		return agentSessionLog{}, err
@@ -59,6 +60,35 @@ func sessionLogWriter(logFile io.Writer, out io.Writer) io.Writer {
 		return logFile
 	}
 	return framedSessionLogWriter{log: logFile, out: out}
+}
+
+type timestampedAgentLogWriter struct {
+	writer io.Writer
+	clock  func() time.Time
+}
+
+func (w timestampedAgentLogWriter) Write(p []byte) (int, error) {
+	record, ok := logrecord.Parse(strings.TrimSuffix(string(p), "\n"))
+	if !ok || record.Timestamp != "" {
+		return w.writer.Write(p)
+	}
+	clock := w.clock
+	if clock == nil {
+		clock = time.Now
+	}
+	record.Timestamp = clock().UTC().Format(time.RFC3339Nano)
+	var framed bytes.Buffer
+	if err := logrecord.Write(&framed, record); err != nil {
+		return 0, err
+	}
+	n, err := w.writer.Write(framed.Bytes())
+	if err != nil {
+		return 0, err
+	}
+	if n != framed.Len() {
+		return 0, io.ErrShortWrite
+	}
+	return len(p), nil
 }
 
 type framedSessionLogWriter struct {
@@ -148,7 +178,7 @@ func newAgentSessionRunner(config agentSessionRunnerConfig) agentSessionRunner {
 func (r agentSessionRunner) clock() func() time.Time { return r.nowFn }
 
 func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSessionRequest) (AgentSessionResult, error) {
-	sessionLog, err := openAgentSessionLog(r.logAppender, request.PlanDir, r.sessionLogWriter, request.LogAction, now(r))
+	sessionLog, err := openAgentSessionLog(r.logAppender, request.PlanDir, r.sessionLogWriter, request.LogAction, now(r), r.clock())
 	if err != nil {
 		return AgentSessionResult{}, err
 	}

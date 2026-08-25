@@ -22,7 +22,7 @@ func TestListScenariosAndViews(t *testing.T) {
 	if code := run(context.Background(), []string{"--list-views"}, &bytes.Buffer{}, &views, &bytes.Buffer{}); code != 0 {
 		t.Fatalf("view list exit = %d", code)
 	}
-	if got, want := views.String(), "plans\nnotes\nplan-detail\nnote-detail\nslice-detail\n"; got != want {
+	if got, want := views.String(), "plans\nnotes\nsettings\ndebug\nplan-detail\nnote-detail\nslice-detail\n"; got != want {
 		t.Fatalf("view list = %q, want %q", got, want)
 	}
 }
@@ -47,6 +47,35 @@ func TestPlainOutputIsDeterministicAndUsesSelectedFixture(t *testing.T) {
 	}
 	if lines := strings.Count(strings.TrimSuffix(first.String(), "\n"), "\n") + 1; lines > 8 {
 		t.Fatalf("plain output has %d lines, want at most 8", lines)
+	}
+}
+
+func TestPlainSearchUsesProductionRenderer(t *testing.T) {
+	var output bytes.Buffer
+	err := execute(context.Background(), []string{"--plain", "--search", "owner", "--scenario", "mixed", "--view", "plans", "--size", "80x10"}, &bytes.Buffer{}, &output, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"1 plan", "Search: /owner", "Awaiting owner sign-off"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("search preview missing %q:\n%s", want, output.String())
+		}
+	}
+	if strings.Contains(output.String(), "Blocked database migration") {
+		t.Fatalf("search preview retained a non-match:\n%s", output.String())
+	}
+}
+
+func TestPlainShortcutPopoverUsesProductionRenderer(t *testing.T) {
+	var output bytes.Buffer
+	err := execute(context.Background(), []string{"--plain", "--shortcuts", "--scenario", "mixed", "--view", "plans", "--size", "64x18"}, &bytes.Buffer{}, &output, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Keyboard shortcuts", "KEY", "ACTION", "Backspace", "Go back", "? / Esc", "Close shortcuts"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("shortcut preview missing %q:\n%s", want, output.String())
+		}
 	}
 }
 
@@ -75,6 +104,8 @@ func TestInvalidFlagsAndDimensionsHaveDeterministicFailureExit(t *testing.T) {
 		{name: "plain-only view", args: []string{"--view", "notes"}, want: "require --plain"},
 		{name: "plain-only size", args: []string{"--size", "80x20"}, want: "require --plain"},
 		{name: "plain-only color", args: []string{"--color"}, want: "require --plain"},
+		{name: "plain-only shortcuts", args: []string{"--shortcuts"}, want: "require --plain"},
+		{name: "plain-only search", args: []string{"--search", "owner"}, want: "require --plain"},
 		{name: "listing combination", args: []string{"--list-views", "--plain"}, want: "cannot be combined"},
 		{name: "positional", args: []string{"extra"}, want: "accepts flags only"},
 	}
@@ -104,7 +135,7 @@ func TestNonTerminalInteractivePathIsActionableAndHelpExitsZero(t *testing.T) {
 	if code := run(context.Background(), []string{"--help"}, &bytes.Buffer{}, &bytes.Buffer{}, &errOutput); code != 0 {
 		t.Fatalf("help exit = %d, want 0", code)
 	}
-	for _, flagName := range []string{"-list-scenarios", "-list-views", "-scenario", "-plain", "-view", "-size", "-color"} {
+	for _, flagName := range []string{"-list-scenarios", "-list-views", "-scenario", "-plain", "-view", "-size", "-color", "-shortcuts", "-search"} {
 		if !strings.Contains(errOutput.String(), flagName) {
 			t.Fatalf("help missing %s:\n%s", flagName, errOutput.String())
 		}

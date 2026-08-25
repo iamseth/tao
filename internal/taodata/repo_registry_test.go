@@ -94,6 +94,23 @@ func TestRegistryLegacyRepoRoundTripOmitsRunDefaults(t *testing.T) {
 	}
 }
 
+func TestRepoWithPullRequestDefaultSetsAndClearsExplicitValue(t *testing.T) {
+	repo := Repo{ID: "repo-a"}
+	value := false
+	repo = repo.WithPullRequestDefault(&value)
+	if got, ok := repo.PullRequestDefault(); !ok || got {
+		t.Fatalf("explicit default = (%t, %t), want (false, true)", got, ok)
+	}
+	value = true
+	if got, _ := repo.PullRequestDefault(); got {
+		t.Fatal("repository retained caller pointer instead of copying the value")
+	}
+	repo = repo.WithPullRequestDefault(nil)
+	if got, ok := repo.PullRequestDefault(); ok || got || repo.RunDefaults != nil {
+		t.Fatalf("cleared default = (%t, %t) run_defaults=%#v", got, ok, repo.RunDefaults)
+	}
+}
+
 func TestRepoRunDefaultsSerialization(t *testing.T) {
 	trueValue := true
 	falseValue := false

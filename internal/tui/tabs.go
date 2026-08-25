@@ -1,13 +1,13 @@
 package tui
 
-import "strings"
-
 // PageID identifies a top-level dashboard page.
 type PageID string
 
 const (
-	PagePlans PageID = "plans"
-	PageNotes PageID = "notes"
+	PagePlans    PageID = "plans"
+	PageNotes    PageID = "notes"
+	PageSettings PageID = "settings"
+	PageDebug    PageID = "debug"
 )
 
 // Tab describes one top-level dashboard destination. Adding a page only
@@ -20,6 +20,8 @@ type Tab struct {
 var dashboardTabs = []Tab{
 	{ID: PagePlans, Label: "Plans"},
 	{ID: PageNotes, Label: "Notes"},
+	{ID: PageSettings, Label: "Settings"},
+	{ID: PageDebug, Label: "Debug"},
 }
 
 func normalizePage(page PageID) PageID {
@@ -47,15 +49,12 @@ func adjacentPage(page PageID, delta int) PageID {
 	return dashboardTabs[index].ID
 }
 
-func renderTabBar(page PageID) string {
+func pageLabel(page PageID) string {
 	page = normalizePage(page)
-	labels := make([]string, 0, len(dashboardTabs))
 	for _, tab := range dashboardTabs {
-		label := tab.Label
 		if tab.ID == page {
-			label = "[" + label + "]"
+			return tab.Label
 		}
-		labels = append(labels, label)
 	}
-	return "Tabs: " + strings.Join(labels, "  ")
+	return dashboardTabs[0].Label
 }

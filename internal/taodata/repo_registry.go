@@ -45,6 +45,21 @@ func (r Repo) PullRequestDefault() (bool, bool) {
 	return *r.RunDefaults.PullRequest, true
 }
 
+// WithPullRequestDefault returns a copy with an explicit repository default,
+// or with the default removed when value is nil.
+func (r Repo) WithPullRequestDefault(value *bool) Repo {
+	if value == nil {
+		r.RunDefaults = nil
+		return r
+	}
+	copyValue := *value
+	if r.RunDefaults == nil {
+		r.RunDefaults = &RepoRunDefaults{}
+	}
+	r.RunDefaults.PullRequest = &copyValue
+	return r
+}
+
 // PlanAllocation describes a centralized plan directory allocated for a repo.
 type PlanAllocation struct {
 	ID         string `json:"id"`

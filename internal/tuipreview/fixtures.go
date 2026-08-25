@@ -3,14 +3,17 @@
 package tuipreview
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"time"
 
+	"github.com/iamseth/tao/internal/agent/logrecord"
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runstatus"
+	"github.com/iamseth/tao/internal/tui"
 )
 
 const (
@@ -36,6 +39,8 @@ type Scenario struct {
 	Now         time.Time
 	Snapshot    monitor.Snapshot
 	Notes       note.Snapshot
+	Debug       tui.DebugSnapshot
+	Settings    tui.SettingsSnapshot
 	Plans       []PlanFixture
 }
 
@@ -105,8 +110,8 @@ func mixedScenario() Scenario {
 	}
 
 	return Scenario{
-		Name: ScenarioMixed, Description: "plans and notes across lifecycle, liveness, warning, and approval states",
-		Now: now, Snapshot: monitor.Snapshot{CollectedAt: now, Rows: rows}, Notes: notes,
+		Name: ScenarioMixed, Description: "plans, notes, and diagnostics across lifecycle, liveness, warning, and approval states",
+		Now: now, Snapshot: monitor.Snapshot{CollectedAt: now, Rows: rows}, Notes: notes, Debug: debugFixture(now), Settings: settingsFixture(now),
 		Plans: planFixturesForRows(mixedPlanFixture(now), rows),
 	}
 }
@@ -143,17 +148,21 @@ func mixedPlanFixture(now time.Time) PlanFixture {
 		PlanningBrief: plan.PlanningBriefArtifact{Path: "fixture://mixed/planning-brief.md", Content: "Deterministic preview fixture."},
 		Warnings:      []string{"fixture warning retained for detail coverage"},
 	}
-	log := "agent: loading deterministic run packet\n" +
-		"tool: wrote internal/tuipreview/fixtures.go\n" +
-		"agent: checking widths with 日本語 and 🧭\n" +
-		"tool: go test ./internal/tuipreview ./internal/tui\n"
+	log := fixtureLog(now,
+		logrecord.Record{Type: logrecord.TypeSession, Content: "running 001-fixtures"},
+		logrecord.Record{Type: logrecord.TypeAssistant, Content: "loading deterministic run packet"},
+		logrecord.Record{Type: logrecord.TypeToolResult, Name: "write", Content: "internal/tuipreview/fixtures.go"},
+		logrecord.Record{Type: logrecord.TypeSession, Content: "running 002-render-boundary"},
+		logrecord.Record{Type: logrecord.TypeAssistant, Content: "checking widths with 日本語 and 🧭"},
+		logrecord.Record{Type: logrecord.TypeToolCall, Name: "bash", Payload: `{"command":"go test ./internal/tuipreview ./internal/tui"}`},
+	)
 	return PlanFixture{PlanDir: detail.Dir, Detail: detail, Log: log}
 }
 
 func emptyScenario() Scenario {
 	return Scenario{
 		Name: ScenarioEmpty, Description: "no plans, notes, warnings, details, or logs",
-		Now: fixtureNow, Snapshot: monitor.Snapshot{CollectedAt: fixtureNow}, Notes: note.Snapshot{},
+		Now: fixtureNow, Snapshot: monitor.Snapshot{CollectedAt: fixtureNow}, Notes: note.Snapshot{}, Debug: debugFixture(fixtureNow), Settings: settingsFixture(fixtureNow),
 	}
 }
 
@@ -189,7 +198,7 @@ func stressScenario() Scenario {
 	}
 	return Scenario{
 		Name: ScenarioStress, Description: "long plan and note tables with unicode and viewport pressure", Now: now,
-		Snapshot: monitor.Snapshot{CollectedAt: now, Rows: rows}, Notes: note.Snapshot{Notes: notes},
+		Snapshot: monitor.Snapshot{CollectedAt: now, Rows: rows}, Notes: note.Snapshot{Notes: notes}, Debug: debugFixture(now), Settings: settingsFixture(now),
 		Plans: planFixturesForRows(stressPlanFixture(now), rows),
 	}
 }
@@ -210,7 +219,11 @@ func planFixturesForRows(primary PlanFixture, rows []monitor.Row) []PlanFixture 
 		fixture.Detail.State.Plan.ID = row.PlanID
 		fixture.Detail.State.Plan.Title = row.PlanTitle
 		fixture.Detail.Slices.PlanID = row.PlanID
-		fixture.Log = fmt.Sprintf("agent: deterministic fixture log for %s\ntool: no external state accessed\n", row.PlanID)
+		fixture.Log = fixtureLog(fixtureNow,
+			logrecord.Record{Type: logrecord.TypeSession, Content: "running 002-render-boundary"},
+			logrecord.Record{Type: logrecord.TypeAssistant, Content: fmt.Sprintf("deterministic fixture log for %s", row.PlanID)},
+			logrecord.Record{Type: logrecord.TypeDiagnostic, Content: "no external state accessed"},
+		)
 		fixtures = append(fixtures, fixture)
 	}
 	return fixtures
@@ -225,6 +238,67 @@ func stressPlanFixture(now time.Time) PlanFixture {
 	fixture.Detail.State.Plan.Title = "Long deterministic plan 00 — resize 日本語 🧭 é and an intentionally extended title"
 	fixture.Detail.Slices.PlanID = "stress-00"
 	fixture.Detail.Slices.Slices[1].Context += " " + "日本語とemoji 🧭 remain visible in narrow frames."
-	fixture.Log += "agent: long unicode line 日本語日本語日本語 🧭🧭🧭 ééé\n"
+	fixture.Log += fixtureLog(now.Add(6*time.Second), logrecord.Record{Type: logrecord.TypeAssistant, Content: "long unicode line 日本語日本語日本語 🧭🧭🧭 ééé"})
 	return fixture
+}
+
+func settingsFixture(now time.Time) tui.SettingsSnapshot {
+	explicitFalse := false
+	explicitTrue := true
+	return tui.SettingsSnapshot{
+		CollectedAt: now, InheritedPullRequest: false,
+		RuntimeDefaults: []tui.SettingsRuntimeDefault{
+			{Name: "TAO_AGENT", Value: "pi", Source: "default"},
+			{Name: "TAO_COMMIT_POLICY", Value: "slice", Source: "default"},
+			{Name: "TAO_EXECUTION_MODE", Value: "isolated", Source: "default"},
+			{Name: "TAO_PULL_REQUEST", Value: "false", Source: "environment"},
+			{Name: "TAO_REVIEW", Value: "true", Source: "default"},
+			{Name: "TAO_SESSION_TIMEOUT", Value: "20m", Source: "default"},
+		},
+		Repositories: []tui.RepositorySetting{
+			{ID: "alpha", Name: "alpha", Root: "/preview/alpha", Health: "ok", Finding: "ok", PullRequest: &explicitFalse},
+			{ID: "beta", Name: "βeta", Root: "/preview/beta", Health: "ok", Finding: "ok"},
+			{ID: "damaged", Name: "damaged-repo", Root: "/preview/missing", Health: "missing_root", Finding: "repo root does not exist", PullRequest: &explicitTrue},
+		},
+	}
+}
+
+func debugFixture(now time.Time) tui.DebugSnapshot {
+	return tui.DebugSnapshot{
+		CollectedAt: now,
+		System: []tui.DebugValue{
+			{Label: "version", Value: "dev"},
+			{Label: "commit", Value: "e20b72d"},
+			{Label: "build age", Value: "2 hours old"},
+			{Label: "go", Value: "go1.26.2"},
+			{Label: "platform", Value: "darwin/arm64"},
+			{Label: "executable", Value: "/preview/bin/tao"},
+			{Label: "data home", Value: "/preview/data/tao"},
+			{Label: "working directory", Value: "/preview/alpha"},
+		},
+		SelectedAgent:   "pi",
+		InstalledAgents: []string{"Pi", "Claude Code"},
+		DoctorProblems: []tui.DebugProblem{
+			{Category: "prompt pi", Name: "tao-run", Status: "stale", Detail: "/preview/.pi/prompts/tao-run.md"},
+			{Category: "tool recommended", Name: "jq", Status: "warning", Detail: "missing"},
+		},
+		RuntimeDefaults: []tui.DebugRuntimeDefault{
+			{Name: "TAO_AGENT", Value: "pi", Source: "default"},
+			{Name: "TAO_COMMIT_POLICY", Value: "slice", Source: "default"},
+			{Name: "TAO_EXECUTION_MODE", Value: "isolated", Source: "default"},
+			{Name: "TAO_PULL_REQUEST", Value: "false", Source: "repository"},
+			{Name: "TAO_REVIEW", Value: "true", Source: "default"},
+			{Name: "TAO_SESSION_TIMEOUT", Value: "20m", Source: "default"},
+			{Name: "TAO_UPDATE", Value: "warn", Source: "environment", Warning: "fixture warning"},
+		},
+	}
+}
+
+func fixtureLog(start time.Time, records ...logrecord.Record) string {
+	var output bytes.Buffer
+	for index, record := range records {
+		record.Timestamp = start.Add(time.Duration(index) * time.Second).Format(time.RFC3339)
+		_ = logrecord.Write(&output, record)
+	}
+	return output.String()
 }

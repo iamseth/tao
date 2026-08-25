@@ -17,16 +17,14 @@ func TestRenderGoldenColorModes(t *testing.T) {
 		PlanID:         "plan",
 		Status:         plan.StatusPlanned,
 	}}}
-	plain := clearScreenSequence + `Tao UI | Repositories: all | 1 plan
-Tabs: [Plans]  Notes
+	plain := clearScreenSequence + `Tao UI | Plans | Repositories: all | 1 plan
 
 PLANNED / IN REVIEW
   REPO  PLAN  STATUS   PHASE/SLICE  RUN  SLICES  UPDATED
 > repo  plan  planned  -            -    0/0     -
-
-r run  a approve  m merge  M merge all  f repository  c completed  Enter plan  Tab/←/→ tabs  q quit  Esc Esc quit
 `
-	colored := strings.Replace(plain, "planned  -", "\x1b[33mplanned\x1b[0m  -", 1)
+	colored := strings.Replace(plain, "Plans", "\x1b[1mPlans\x1b[0m", 1)
+	colored = strings.Replace(colored, "planned  -", "\x1b[33mplanned\x1b[0m  -", 1)
 	tests := []struct {
 		name     string
 		useColor bool
@@ -69,7 +67,7 @@ func TestRenderSectionsAndOperationalLabels(t *testing.T) {
 	}
 	for _, want := range []string{
 		"PHASE/SLICE", "ATTENTION", "crashed?", "stalled? (45s old)",
-		"004-ui", "2m", "2/4", "30m", footerHints,
+		"004-ui", "2m", "2/4", "30m",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Render() missing %q in:\n%s", want, got)
@@ -109,12 +107,9 @@ func TestRenderOmitsEmptyAndHiddenCompletedSections(t *testing.T) {
 		{
 			name:  "empty snapshot",
 			model: Model{},
-			want: clearScreenSequence + `Tao UI | Repositories: all | 0 plans
-Tabs: [Plans]  Notes
+			want: clearScreenSequence + `Tao UI | Plans | Repositories: all | 0 plans
 
   No plans.
-
-r run  a approve  m merge  M merge all  f repository  c completed  Enter plan  Tab/←/→ tabs  q quit  Esc Esc quit
 `,
 		},
 		{
@@ -123,12 +118,9 @@ r run  a approve  m merge  M merge all  f repository  c completed  Enter plan  T
 				Snapshot:      monitor.Snapshot{Rows: []monitor.Row{{PlanID: "done", Status: plan.StatusCompleted}}},
 				HideCompleted: true,
 			},
-			want: clearScreenSequence + `Tao UI | Repositories: all | 0 plans
-Tabs: [Plans]  Notes
+			want: clearScreenSequence + `Tao UI | Plans | Repositories: all | 0 plans
 
   No plans.
-
-r run  a approve  m merge  M merge all  f repository  c completed  Enter plan  Tab/←/→ tabs  q quit  Esc Esc quit
 `,
 		},
 	}
@@ -154,7 +146,7 @@ func TestRenderShowsRepositoryFocusAndFiltersRows(t *testing.T) {
 		FocusRepositoryID:   "repo-b",
 		FocusRepositoryName: "beta",
 	})
-	if !strings.Contains(got, "Tao UI | Repository: beta | 1 plan") || !strings.Contains(got, "> beta  two") {
+	if !strings.Contains(got, "Tao UI | Plans | Repository: beta | 1 plan") || !strings.Contains(got, "> beta  two") {
 		t.Fatalf("focused render missing header or row:\n%s", got)
 	}
 	if strings.Contains(got, "alpha") {
@@ -162,39 +154,54 @@ func TestRenderShowsRepositoryFocusAndFiltersRows(t *testing.T) {
 	}
 
 	empty := Render(Model{FocusRepositoryID: "repo-b", FocusRepositoryName: "beta"})
-	if !strings.Contains(empty, "Tao UI | Repository: beta | 0 plans") || !strings.Contains(empty, "No plans.") {
+	if !strings.Contains(empty, "Tao UI | Plans | Repository: beta | 0 plans") || !strings.Contains(empty, "No plans.") {
 		t.Fatalf("empty focused render is ambiguous:\n%s", empty)
 	}
 }
 
-func TestRenderTabsAndPageAwareFooter(t *testing.T) {
+func TestRenderHeaderTracksActivePage(t *testing.T) {
 	snapshot := monitor.Snapshot{Rows: []monitor.Row{{RepositoryName: "repo", PlanID: "plan", Status: plan.StatusPlanned}}}
 
 	plans := Render(Model{Snapshot: snapshot})
-	for _, want := range []string{"Tabs: [Plans]  Notes", "> repo  plan", "r run", "c completed", "Enter plan"} {
+	for _, want := range []string{"Tao UI | Plans | Repositories: all | 1 plan", "> repo  plan"} {
 		if !strings.Contains(plans, want) {
 			t.Fatalf("plans page missing %q:\n%s", want, plans)
 		}
 	}
 
 	notes := Render(Model{Snapshot: snapshot, Page: PageNotes, ActionMessage: "plan action"})
-	for _, want := range []string{"Tabs: Plans  [Notes]", "Notes page.", notesFooterHints} {
+	for _, want := range []string{"Tao UI | Notes | Repositories: all | 0 open notes", "Notes page."} {
 		if !strings.Contains(notes, want) {
 			t.Fatalf("notes page missing %q:\n%s", want, notes)
 		}
 	}
-	for _, unavailable := range []string{"> repo  plan", "r run", "c completed", "Enter plan", "plan action"} {
+	for _, unavailable := range []string{"> repo  plan", "r run", "c completed", "Enter plan", "plan action", "q quit"} {
 		if strings.Contains(notes, unavailable) {
 			t.Fatalf("notes page exposed plan-only content %q:\n%s", unavailable, notes)
 		}
 	}
+
+	for _, test := range []struct {
+		page PageID
+		want string
+	}{
+		{page: PagePlans, want: "Tao UI | \x1b[1mPlans\x1b[0m | Repositories: all | 1 plan"},
+		{page: PageNotes, want: "Tao UI | \x1b[1mNotes\x1b[0m | Repositories: all | 0 open notes"},
+		{page: PageSettings, want: "Tao UI | \x1b[1mSettings\x1b[0m | 0 repositories"},
+		{page: PageDebug, want: "Tao UI | \x1b[1mDebug\x1b[0m | diagnostics"},
+	} {
+		got := Render(Model{Snapshot: snapshot, Page: test.page, UseColor: true})
+		if !strings.Contains(got, test.want) || strings.Contains(got, "[Plans]") || strings.Contains(got, "[Notes]") {
+			t.Fatalf("colored header for %s missing bold active page or retained tab line:\n%q", test.page, got)
+		}
+	}
 }
 
-func TestRenderConstrainedDimensionsKeepTabIdentity(t *testing.T) {
-	got := Render(Model{Page: PageNotes, Width: 18, Height: 2})
+func TestRenderConstrainedDimensionsKeepPageIdentity(t *testing.T) {
+	got := Render(Model{Page: PageNotes, Width: 18, Height: 1})
 	lines := renderedLines(got)
-	if len(lines) != 2 || !strings.Contains(lines[1], "Plans  [Note") {
-		t.Fatalf("constrained tab frame = %#v, want two safely truncated header lines with active tab", lines)
+	if len(lines) != 1 || lines[0] != "Tao UI | Notes | R" {
+		t.Fatalf("constrained frame = %#v, want truncated header with active page", lines)
 	}
 	for _, line := range lines {
 		if utf8.RuneCountInString(stripANSI(line)) > 18 {
@@ -227,9 +234,6 @@ func TestRenderHeightViewportKeepsSelectionVisible(t *testing.T) {
 			if !strings.HasPrefix(lines[0], "Tao UI | ") {
 				t.Fatalf("viewport header = %q, want Tao UI header", lines[0])
 			}
-			if lines[len(lines)-1] != footerHints {
-				t.Fatalf("viewport footer = %q, want %q", lines[len(lines)-1], footerHints)
-			}
 			if strings.HasSuffix(got, "\n") {
 				t.Fatal("full-height frame ends with a newline that can scroll the terminal")
 			}
@@ -247,8 +251,8 @@ func TestRenderVerticalResizeReflowsAroundSelection(t *testing.T) {
 		rows[index] = monitor.Row{RepositoryName: "repo", PlanID: fmt.Sprintf("plan-%02d", index), Status: plan.StatusPlanned}
 	}
 	model := Model{Snapshot: monitor.Snapshot{Rows: rows}, Selected: 7, Height: 20}
-	if lines := renderedLines(Render(model)); len(lines) != 17 {
-		t.Fatalf("tall rendered lines = %d, want complete 17-line dashboard", len(lines))
+	if lines := renderedLines(Render(model)); len(lines) != 14 {
+		t.Fatalf("tall rendered lines = %d, want complete 14-line dashboard", len(lines))
 	}
 
 	model.Height = 6
@@ -279,6 +283,43 @@ func TestRenderNarrowWidthTruncatesRunesAndPreservesColor(t *testing.T) {
 	}
 	if !strings.Contains(got, "\x1b[33mplan\x1b[0m") {
 		t.Fatalf("narrow colored status was not safely truncated: %q", got)
+	}
+}
+
+func TestRenderShortcutLegendAsBoundedPopover(t *testing.T) {
+	for _, test := range []struct {
+		page        PageID
+		want        []string
+		unavailable string
+	}{
+		{
+			page: PagePlans,
+			want: []string{"Keyboard shortcuts", "KEY", "ACTION", "r", "Run selected plan", "/", "Search plans and notes", "Backspace", "Go back / clear search", "? / Esc", "Close shortcuts"},
+		},
+		{
+			page:        PageNotes,
+			want:        []string{"Keyboard shortcuts", "Open selected item", "Cycle repository filter", "/", "Search plans and notes", "Backspace", "Go back / clear search", "? / Esc"},
+			unavailable: "Run selected plan",
+		},
+	} {
+		frame := Render(Model{Page: test.page, ShowShortcuts: true, Width: 64, Height: 18, UseColor: true})
+		for _, want := range test.want {
+			if !strings.Contains(frame, want) {
+				t.Fatalf("%s shortcut popover missing %q:\n%s", test.page, want, frame)
+			}
+		}
+		if test.unavailable != "" && strings.Contains(frame, test.unavailable) {
+			t.Fatalf("%s shortcut popover contains unavailable action %q:\n%s", test.page, test.unavailable, frame)
+		}
+		lines := renderedLines(frame)
+		if len(lines) != 18 {
+			t.Fatalf("%s shortcut popover lines = %d, want 18", test.page, len(lines))
+		}
+		for _, line := range lines {
+			if width := utf8.RuneCountInString(stripANSI(line)); width > 64 {
+				t.Fatalf("%s shortcut line width = %d, want at most 64: %q", test.page, width, line)
+			}
+		}
 	}
 }
 
@@ -318,7 +359,7 @@ func TestRenderBoundedViewportPreservesActionFooter(t *testing.T) {
 	if lines := renderedLines(got); len(lines) != 6 {
 		t.Fatalf("rendered lines = %d, want 6:\n%s", len(lines), got)
 	}
-	for _, want := range []string{"> repo  plan-07", "Run failed.", "Approve this slice? [y/n]", footerHints} {
+	for _, want := range []string{"> repo  plan-07", "Run failed.", "Approve this slice? [y/n]"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("bounded viewport missing %q:\n%s", want, got)
 		}

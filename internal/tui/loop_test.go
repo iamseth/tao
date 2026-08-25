@@ -503,13 +503,29 @@ func TestTopLevelTabNavigationPreservesPlanSelectionAcrossRefresh(t *testing.T) 
 		{RepositoryID: "repo-a", PlanID: "first", Status: "planned"},
 	}})
 	state.handleKey(term.KeyEvent{Key: term.KeyArrowRight})
+	if state.activePage() != PageSettings || state.selected != 0 {
+		t.Fatalf("right navigation page=%q selection=%d, want settings", state.activePage(), state.selected)
+	}
+	state.handleKey(term.KeyEvent{Key: term.KeyArrowRight})
+	if state.activePage() != PageDebug || state.selected != 0 {
+		t.Fatalf("second right navigation page=%q selection=%d, want debug with no selection", state.activePage(), state.selected)
+	}
+	state.handleKey(term.KeyEvent{Key: term.KeyArrowRight})
 	row, ok := state.selectedRow()
 	if state.activePage() != PagePlans || !ok || state.selected != 0 || row.PlanID != "target" {
-		t.Fatalf("right navigation page=%q selection=%d row=%+v ok=%t, want preserved target", state.activePage(), state.selected, row, ok)
+		t.Fatalf("third right navigation page=%q selection=%d row=%+v ok=%t, want preserved target", state.activePage(), state.selected, row, ok)
+	}
+	state.handleKey(term.KeyEvent{Key: term.KeyArrowLeft})
+	if state.activePage() != PageDebug {
+		t.Fatalf("left navigation page = %q, want debug", state.activePage())
+	}
+	state.handleKey(term.KeyEvent{Key: term.KeyArrowLeft})
+	if state.activePage() != PageSettings {
+		t.Fatalf("second left navigation page = %q, want settings", state.activePage())
 	}
 	state.handleKey(term.KeyEvent{Key: term.KeyArrowLeft})
 	if state.activePage() != PageNotes {
-		t.Fatalf("left navigation page = %q, want notes", state.activePage())
+		t.Fatalf("third left navigation page = %q, want notes", state.activePage())
 	}
 }
 
@@ -557,9 +573,9 @@ func TestNoteSelectionRefreshFocusDetailAndPlanActionIsolation(t *testing.T) {
 	if state.noteDetail == nil || state.noteDetail.ID != "target" || state.noteDetail.Text != "updated" {
 		t.Fatalf("opened note detail = %+v", state.noteDetail)
 	}
-	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyEsc})
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyBackspace})
 	if state.noteDetail != nil || state.activePage() != PageNotes {
-		t.Fatalf("Esc did not return to Notes: detail=%+v page=%q", state.noteDetail, state.activePage())
+		t.Fatalf("Backspace did not return to Notes: detail=%+v page=%q", state.noteDetail, state.activePage())
 	}
 }
 
@@ -700,6 +716,32 @@ func TestTabNavigationDoesNotEscapeConfirmationsOrDetails(t *testing.T) {
 	}
 }
 
+func TestShortcutLegendToggleEscapeAndModalKeys(t *testing.T) {
+	state := loopState{snapshot: monitor.Snapshot{Rows: []monitor.Row{{PlanID: "one"}, {PlanID: "two"}}}}
+	app := App{}
+
+	if quit := app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: '?'}); quit || !state.showShortcuts {
+		t.Fatalf("? toggle quit=%t show=%t, want open legend", quit, state.showShortcuts)
+	}
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyArrowDown})
+	if state.selected != 0 {
+		t.Fatalf("modal shortcut legend allowed background selection to move to %d", state.selected)
+	}
+	if quit := app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyEsc}); quit || state.showShortcuts {
+		t.Fatalf("Esc close quit=%t show=%t, want closed legend", quit, state.showShortcuts)
+	}
+
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: '?'})
+	if quit := app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyBackspace}); quit || state.showShortcuts {
+		t.Fatalf("Backspace close quit=%t show=%t, want closed legend", quit, state.showShortcuts)
+	}
+
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: '?'})
+	if quit := app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: '?'}); quit || state.showShortcuts {
+		t.Fatalf("second ? quit=%t show=%t, want toggled closed", quit, state.showShortcuts)
+	}
+}
+
 func TestRootQuitKeysAndCompletedDefault(t *testing.T) {
 	base := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	now := base
@@ -712,6 +754,9 @@ func TestRootQuitKeysAndCompletedDefault(t *testing.T) {
 	}
 	if rows := visibleRows(state.snapshot.Rows, state.showCompleted, state.focusRepositoryID); len(rows) != 1 || rows[0].PlanID != "active" {
 		t.Fatalf("initial visible rows = %+v, want only active plan", rows)
+	}
+	if quit := state.handleKey(term.KeyEvent{Key: term.KeyBackspace}); quit {
+		t.Fatal("root Backspace unexpectedly quit")
 	}
 	if quit := state.handleKey(term.KeyEvent{Key: term.KeyEsc}); quit {
 		t.Fatal("first root Escape unexpectedly quit")
@@ -797,6 +842,7 @@ func TestConfirmPromptHandlesYesNoAndEscape(t *testing.T) {
 		{name: "yes", key: term.KeyEvent{Key: term.KeyRune, Rune: 'y'}, want: true},
 		{name: "uppercase no", key: term.KeyEvent{Key: term.KeyRune, Rune: 'N'}, want: false},
 		{name: "escape cancels", key: term.KeyEvent{Key: term.KeyEsc}, want: false},
+		{name: "backspace cancels", key: term.KeyEvent{Key: term.KeyBackspace}, want: false},
 		{name: "q cancels", key: term.KeyEvent{Key: term.KeyRune, Rune: 'q'}, want: false},
 	}
 	for _, test := range tests {

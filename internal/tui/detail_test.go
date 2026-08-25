@@ -96,6 +96,21 @@ func TestRenderSlicesPaneUsesStateQueueOrderAndShowsCurrentMetadata(t *testing.T
 	if !strings.Contains(text, "[approval required]") || !strings.Contains(text, "blocker: waiting on credentials") {
 		t.Fatalf("approval or blocker metadata missing:\n%s", text)
 	}
+
+	plain := RenderSlicesPane(detail, 120, 10, false)
+	ids := []string{"001-setup", "002-build", "003-release"}
+	titles := []string{"Set up", "Build it", "Release"}
+	idColumn, titleColumn := -1, -1
+	for index := range ids {
+		gotIDColumn := strings.Index(plain[index], ids[index])
+		gotTitleColumn := strings.Index(plain[index], titles[index])
+		if index == 0 {
+			idColumn, titleColumn = gotIDColumn, gotTitleColumn
+		}
+		if gotIDColumn != idColumn || gotTitleColumn != titleColumn {
+			t.Fatalf("slice columns are not aligned at row %d: id=%d/%d title=%d/%d lines=%q", index, gotIDColumn, idColumn, gotTitleColumn, titleColumn, plain)
+		}
+	}
 }
 
 func TestRenderSlicesPaneKeepsCurrentVisibleAtNarrowSizes(t *testing.T) {
@@ -120,16 +135,16 @@ func TestRenderSlicesPaneKeepsCurrentVisibleAtNarrowSizes(t *testing.T) {
 
 func TestRenderLogPaneRendersFramesPassesPlainLinesAndPinsTail(t *testing.T) {
 	var framed bytes.Buffer
-	if err := logrecord.Write(&framed, logrecord.Record{Type: logrecord.TypeAssistant, Content: "implemented"}); err != nil {
+	if err := logrecord.Write(&framed, logrecord.Record{Type: logrecord.TypeAssistant, Content: "implemented", Timestamp: "2026-08-22T12:34:56Z"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := logrecord.Write(&framed, logrecord.Record{Type: logrecord.TypeToolResult, Name: "test", Content: "passed"}); err != nil {
+	if err := logrecord.Write(&framed, logrecord.Record{Type: logrecord.TypeToolResult, Name: "test", Content: "passed", Timestamp: "2026-08-22T12:35:01Z"}); err != nil {
 		t.Fatal(err)
 	}
 	text := "legacy output\n" + framed.String() + "latest output\n"
 
 	all := strings.Join(RenderLogPane(text, 80, 10), "\n")
-	for _, want := range []string{"legacy output", "assistant: implemented", "✓ test", "passed", "latest output"} {
+	for _, want := range []string{"legacy output", "[12:34:56] assistant: implemented", "[12:35:01] ✓ test", "[12:35:01] passed", "latest output"} {
 		if !strings.Contains(all, want) {
 			t.Fatalf("rendered log missing %q:\n%s", want, all)
 		}
@@ -163,17 +178,44 @@ func TestRenderDetailIncludesHeaderAndFitsTerminal(t *testing.T) {
 			HeartbeatAge: 7 * time.Second,
 		},
 		Log:   "working\n",
-		Width: 100, Height: 10,
+		Width: 100, Height: 18,
 	})
-	for _, want := range []string{"plan-a", "Plan A", "alpha", "in_progress", "implement", "7s ago", "Esc back"} {
+	for _, want := range []string{"Tao UI | plan-a | alpha | in_progress | implement | 7s ago", "┌ DESCRIPTION ", "│ Plan A", "┌ SLICES ", "┌ LOG ", "│ working", "└"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("detail frame missing %q:\n%s", want, frame)
 		}
 	}
+	if strings.Contains(frame, "Esc back") || strings.Contains(frame, "Enter slice") {
+		t.Fatalf("detail frame retained the shortcut legend:\n%s", frame)
+	}
 	body := strings.TrimSuffix(strings.TrimPrefix(frame, clearScreenSequence), "\n")
 	lines := strings.Split(body, "\n")
-	if len(lines) > 10 {
-		t.Fatalf("detail frame has %d lines, want at most 10", len(lines))
+	if len(lines) < 3 || lines[1] != "" || !strings.HasPrefix(lines[2], "┌ DESCRIPTION ") {
+		t.Fatalf("detail frame did not preserve the shared section gap below its header: %q", lines)
+	}
+	descriptionTop, descriptionBottom, sliceTop, sliceBottom, logTop := -1, -1, -1, -1, -1
+	for index, line := range lines {
+		switch {
+		case strings.HasPrefix(line, "┌ DESCRIPTION "):
+			descriptionTop = index
+		case strings.HasPrefix(line, "┌ SLICES "):
+			sliceTop = index
+		case strings.HasPrefix(line, "┌ LOG "):
+			logTop = index
+		case strings.HasPrefix(line, "└") && descriptionTop >= 0 && sliceTop < 0:
+			descriptionBottom = index
+		case strings.HasPrefix(line, "└") && sliceTop >= 0 && logTop < 0:
+			sliceBottom = index
+		}
+	}
+	if sliceTop-descriptionBottom-1 != planDetailPaneGap || logTop-sliceBottom-1 != planDetailPaneGap {
+		t.Fatalf("detail pane gaps description=%d..%d slices=%d..%d log=%d lines=%q", descriptionTop, descriptionBottom, sliceTop, sliceBottom, logTop, lines)
+	}
+	if strings.Contains(lines[0], "PLAN DETAIL") || strings.Contains(lines[0], "Plan A") {
+		t.Fatalf("detail header retained page label or plan description: %q", lines[0])
+	}
+	if len(lines) > 18 {
+		t.Fatalf("detail frame has %d lines, want at most 18", len(lines))
 	}
 	for _, line := range lines {
 		if utf8.RuneCountInString(line) > 100 {
@@ -203,21 +245,32 @@ func TestRenderDetailVerticalResizeKeepsFrameInsideTerminal(t *testing.T) {
 		Width:  80,
 		Height: 20,
 	}
-	if frame := RenderDetail(model); !strings.HasSuffix(frame, "\n") {
-		t.Fatal("under-height detail frame should retain its trailing newline")
+	if frame := RenderDetail(model); strings.HasSuffix(frame, "\n") || len(renderedLines(frame)) != 20 {
+		t.Fatalf("full-height detail frame should occupy 20 lines without a trailing newline:\n%s", frame)
 	}
 
 	model.Height = 6
 	frame := RenderDetail(model)
 	lines := renderedLines(frame)
-	if len(lines) != 6 {
-		t.Fatalf("resized detail frame has %d lines, want 6:\n%s", len(lines), frame)
+	if len(lines) > 6 {
+		t.Fatalf("resized detail frame has %d lines, want at most 6:\n%s", len(lines), frame)
 	}
-	if lines[0] != "Tao UI | PLAN DETAIL" || lines[len(lines)-1] != "j/k move  Enter slice  Esc back" {
-		t.Fatalf("resized detail frame lost header or footer: %q", lines)
+	if !strings.HasPrefix(lines[0], "Tao UI | plan-a |") || !strings.HasPrefix(lines[2], "┌ DESCRIPTION ") {
+		t.Fatalf("resized detail frame lost compact header or spaced bordered description pane: %q", lines)
 	}
-	if strings.HasSuffix(frame, "\n") {
-		t.Fatal("full-height resized detail frame ends with a newline that can scroll the terminal")
+}
+
+func TestRenderDetailShortcutPopoverIsContextAware(t *testing.T) {
+	frame := RenderDetail(DetailModel{ShowShortcuts: true, Width: 64, Height: 14})
+	for _, want := range []string{"Keyboard shortcuts", "Move slice selection", "Open selected slice", "Return to plans", "Close shortcuts"} {
+		if !strings.Contains(frame, want) {
+			t.Fatalf("plan detail shortcuts missing %q:\n%s", want, frame)
+		}
+	}
+	for _, unavailable := range []string{"Search plans and notes", "Run selected plan", "Switch tabs"} {
+		if strings.Contains(frame, unavailable) {
+			t.Fatalf("plan detail shortcuts included dashboard action %q:\n%s", unavailable, frame)
+		}
 	}
 }
 
@@ -239,20 +292,49 @@ func TestRenderSliceDetailShowsUsefulFieldsAndOmitsEmptyOnNarrowTerminal(t *test
 			Timing:              plan.SliceTiming{CreatedAt: now, StartedAt: &now, CompletedAt: &now, DurationSeconds: &duration},
 		}}},
 	}
-	frame := RenderSliceDetail(DetailModel{Plan: detail, SelectedSliceID: "001-work", Width: 200})
-	for _, want := range []string{"Status: completed", "Goal: ship it", "Context: bounded context", "Tasks:", "Dependencies:", "Expected files:", "Required inputs:", "Verification commands:", "Manual checks:", "Approval: approved", "Blocker: resolved blocker", "Notes: implemented", "Verification results:", "Commit outcome: committed (abc123)", "Timing:"} {
+	var agentLog bytes.Buffer
+	_ = logrecord.Write(&agentLog, logrecord.Record{Type: logrecord.TypeSession, Content: "running 000-setup"})
+	_ = logrecord.Write(&agentLog, logrecord.Record{Type: logrecord.TypeAssistant, Content: "unrelated output"})
+	_ = logrecord.Write(&agentLog, logrecord.Record{Type: logrecord.TypeSession, Content: "running 001-work"})
+	_ = logrecord.Write(&agentLog, logrecord.Record{Type: logrecord.TypeAssistant, Content: "slice output"})
+	_ = logrecord.Write(&agentLog, logrecord.Record{Type: logrecord.TypeSession, Content: "reviewing plan plan-a"})
+	_ = logrecord.Write(&agentLog, logrecord.Record{Type: logrecord.TypeAssistant, Content: "review output"})
+	frame := RenderSliceDetail(DetailModel{Plan: detail, SelectedSliceID: "001-work", Log: agentLog.String(), Width: 200})
+	for _, want := range []string{"Tao UI | 001-work | completed | approval: approved", "Goal: ship it", "┌ DETAIL ", "Tasks:", "Expected files:", "Verification commands:", "Blocker: resolved blocker", "Notes: implemented", "Verification results:", "Commit outcome: committed (abc123)", "┌ LOG ", "--- running 001-work ---", "assistant: slice output"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("slice detail missing %q:\n%s", want, frame)
 		}
 	}
-	if strings.Contains(frame, "Execution root") || strings.Contains(frame, "null") {
-		t.Fatalf("slice detail exposed empty or raw fields:\n%s", frame)
+	for _, removed := range []string{"SLICE DETAIL", "GOAL & CONTEXT", "Context:", "Status:", "Title:", "Dependencies:", "Required inputs:", "Manual checks:", "Approval:", "Approval reason:", "Timing:", "EVENTS", "unrelated output", "review output", "Bksp/Esc", "Execution root", "null"} {
+		if strings.Contains(frame, removed) {
+			t.Fatalf("slice detail retained removed or raw field %q:\n%s", removed, frame)
+		}
+	}
+	detailLines := renderedLines(frame)
+	if len(detailLines) < 5 || detailLines[1] != "" || detailLines[2] != "Goal: ship it" || detailLines[3] != "" || !strings.HasPrefix(detailLines[4], "┌ DETAIL ") {
+		t.Fatalf("slice detail shared header, goal, or section gaps are wrong: %q", detailLines)
+	}
+	detailBottom, logTop := -1, -1
+	for index, line := range detailLines {
+		if detailBottom < 0 && index > 4 && strings.HasPrefix(line, "└") {
+			detailBottom = index
+		}
+		if strings.HasPrefix(line, "┌ LOG ") {
+			logTop = index
+			break
+		}
+	}
+	if detailBottom < 0 || logTop-detailBottom-1 != planDetailPaneGap {
+		t.Fatalf("slice detail-to-log gap detail-bottom=%d log-top=%d lines=%q", detailBottom, logTop, detailLines)
 	}
 	empty := RenderSliceDetail(DetailModel{Plan: &plan.PlanDetail{
 		State:  plan.State{Plan: plan.PlanState{PendingSlices: []string{"empty"}}},
 		Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "empty", Title: "Empty"}}},
 	}, SelectedSliceID: "empty", Width: 80})
-	for _, omitted := range []string{"Goal:", "Context:", "Tasks:", "Approval:", "Notes:", "Timing:"} {
+	if !strings.Contains(empty, "Goal: -") || !strings.Contains(empty, "┌ DETAIL ") || !strings.Contains(empty, "No additional details.") {
+		t.Fatalf("empty slice lost simple goal or detail section:\n%s", empty)
+	}
+	for _, omitted := range []string{"Context:", "Title:", "Tasks:", "Required inputs:", "Manual checks:", "Approval:", "Approval reason:", "Notes:", "Timing:", "┌ EVENTS "} {
 		if strings.Contains(empty, omitted) {
 			t.Fatalf("empty slice rendered %q:\n%s", omitted, empty)
 		}
@@ -266,6 +348,76 @@ func TestRenderSliceDetailShowsUsefulFieldsAndOmitsEmptyOnNarrowTerminal(t *test
 	for _, line := range lines {
 		if utf8.RuneCountInString(line) > 18 {
 			t.Fatalf("narrow slice detail line %q exceeds width", line)
+		}
+	}
+}
+
+func TestFilterSliceLogCombinesMatchingRunSessions(t *testing.T) {
+	var log bytes.Buffer
+	for _, record := range []logrecord.Record{
+		{Type: logrecord.TypeSession, Content: "running 001-work"},
+		{Type: logrecord.TypeAssistant, Content: "first attempt"},
+		{Type: logrecord.TypeSession, Content: "running 002-other"},
+		{Type: logrecord.TypeAssistant, Content: "other slice"},
+		{Type: logrecord.TypeSession, Content: "running 001-work"},
+		{Type: logrecord.TypeAssistant, Content: "retry"},
+		{Type: logrecord.TypeSession, Content: "reviewing plan plan-a"},
+		{Type: logrecord.TypeAssistant, Content: "review"},
+	} {
+		if err := logrecord.Write(&log, record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	logs, active := projectSliceLogs(log.String(), detailLogKeepLines)
+	if active != "" {
+		t.Fatalf("active slice = %q, want none after review session", active)
+	}
+	got := presentPlanLog(logs["001-work"])
+	for _, want := range []string{"running 001-work", "first attempt", "retry"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("filtered slice log missing %q:\n%s", want, got)
+		}
+	}
+	for _, excluded := range []string{"002-other", "other slice", "reviewing plan", "review"} {
+		if strings.Contains(got, excluded) {
+			t.Fatalf("filtered slice log retained %q:\n%s", excluded, got)
+		}
+	}
+}
+
+func TestDetailStateAttributesLiveLogUpdatesToActiveSlice(t *testing.T) {
+	var seed bytes.Buffer
+	if err := logrecord.Write(&seed, logrecord.Record{Type: logrecord.TypeSession, Content: "running 001-work"}); err != nil {
+		t.Fatal(err)
+	}
+	logs, active := projectSliceLogs(seed.String(), detailLogKeepLines)
+	state := detailState{sliceLogs: logs, activeLogSlice: active}
+
+	var update bytes.Buffer
+	_ = logrecord.Write(&update, logrecord.Record{Type: logrecord.TypeAssistant, Content: "live output"})
+	_ = logrecord.Write(&update, logrecord.Record{Type: logrecord.TypeSession, Content: "reviewing plan plan-a"})
+	_ = logrecord.Write(&update, logrecord.Record{Type: logrecord.TypeAssistant, Content: "review output"})
+	state.appendLog(update.String())
+
+	got := presentPlanLog(state.sliceLogs["001-work"])
+	if !strings.Contains(got, "live output") || strings.Contains(got, "review output") {
+		t.Fatalf("live slice log attribution is wrong:\n%s", got)
+	}
+	if state.activeLogSlice != "" {
+		t.Fatalf("active slice = %q, want cleared by review session", state.activeLogSlice)
+	}
+}
+
+func TestRenderSliceDetailShortcutPopoverIsContextAware(t *testing.T) {
+	frame := RenderSliceDetail(DetailModel{ShowShortcuts: true, Width: 64, Height: 12})
+	for _, want := range []string{"Keyboard shortcuts", "Return to plan", "Quit", "Close shortcuts"} {
+		if !strings.Contains(frame, want) {
+			t.Fatalf("slice detail shortcuts missing %q:\n%s", want, frame)
+		}
+	}
+	for _, unavailable := range []string{"Move slice selection", "Open selected slice", "Search plans and notes"} {
+		if strings.Contains(frame, unavailable) {
+			t.Fatalf("slice detail shortcuts included unavailable action %q:\n%s", unavailable, frame)
 		}
 	}
 }
@@ -309,7 +461,7 @@ func TestRenderSliceDetailSanitizesArtifactControls(t *testing.T) {
 			t.Fatalf("slice detail retained terminal sequence content %q: %q", unsafe, body)
 		}
 	}
-	for _, want := range []string{"unsafe title", "Goal: goal link", "Context: context with controls", "task content", "Notes: notes remain", "details styled"} {
+	for _, want := range []string{"Goal: goal link", "task content", "Notes: notes remain", "details styled"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("slice detail lost printable content %q: %q", want, body)
 		}
@@ -379,7 +531,7 @@ func TestMissingPlanCannotOpenNestedSlice(t *testing.T) {
 	}
 }
 
-func TestDetailNavigationEnterAndEscape(t *testing.T) {
+func TestDetailNavigationEnterBackspaceAndEscape(t *testing.T) {
 	current := "001-work"
 	started := make(chan struct{})
 	stopped := make(chan struct{})
@@ -411,7 +563,7 @@ func TestDetailNavigationEnterAndEscape(t *testing.T) {
 	if quit := app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyEnter}); quit || state.detail == nil {
 		t.Fatalf("Enter navigation quit=%t detail=%#v", quit, state.detail)
 	}
-	if state.detail.plan == nil || state.detail.log != "seed\n" || repository.tailLines != detailLogTailLines {
+	if state.detail.plan == nil || state.detail.log != "seed\n" || repository.tailLines != 0 {
 		t.Fatalf("opened detail = %#v tail lines=%d", state.detail, repository.tailLines)
 	}
 	select {
@@ -420,19 +572,32 @@ func TestDetailNavigationEnterAndEscape(t *testing.T) {
 		t.Fatal("detail follower did not start")
 	}
 
+	if quit := app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyRune, Rune: '?'}); quit || !state.showShortcuts {
+		t.Fatalf("plan detail ? quit=%t show=%t, want open shortcuts", quit, state.showShortcuts)
+	}
+	if quit := app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyEsc}); quit || state.showShortcuts || state.detail == nil {
+		t.Fatalf("plan detail shortcut Esc quit=%t show=%t detail=%#v", quit, state.showShortcuts, state.detail)
+	}
+
 	if quit := app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyEnter}); quit || state.detail == nil || !state.detail.sliceOpen {
 		t.Fatalf("slice Enter quit=%t detail=%#v, want nested slice", quit, state.detail)
 	}
-	if quit := app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyEsc}); quit || state.detail == nil || state.detail.sliceOpen {
-		t.Fatalf("nested Esc quit=%t detail=%#v, want plan detail", quit, state.detail)
+	if quit := app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyRune, Rune: '?'}); quit || !state.showShortcuts {
+		t.Fatalf("slice detail ? quit=%t show=%t, want open shortcuts", quit, state.showShortcuts)
+	}
+	if quit := app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyEsc}); quit || state.showShortcuts || state.detail == nil || !state.detail.sliceOpen {
+		t.Fatalf("slice shortcut Esc quit=%t show=%t detail=%#v", quit, state.showShortcuts, state.detail)
+	}
+	if quit := app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyBackspace}); quit || state.detail == nil || state.detail.sliceOpen {
+		t.Fatalf("nested Backspace quit=%t detail=%#v, want plan detail", quit, state.detail)
 	}
 	select {
 	case <-stopped:
 		t.Fatal("detail follower was canceled while closing nested slice")
 	default:
 	}
-	if quit := app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyEsc}); quit || state.detail != nil {
-		t.Fatalf("plan detail Esc quit=%t detail=%#v, want table", quit, state.detail)
+	if quit := app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyBackspace}); quit || state.detail != nil {
+		t.Fatalf("plan detail Backspace quit=%t detail=%#v, want table", quit, state.detail)
 	}
 	select {
 	case <-stopped:

@@ -40,6 +40,17 @@ type NoteSnapshotCollector interface {
 	Collect(context.Context) (note.Snapshot, error)
 }
 
+// DebugSnapshotCollector supplies read-only runtime and doctor diagnostics.
+type DebugSnapshotCollector interface {
+	Collect(context.Context) (DebugSnapshot, error)
+}
+
+// SettingsService supplies repository settings and persists confirmed updates.
+type SettingsService interface {
+	Collect(context.Context) (SettingsSnapshot, error)
+	SetPullRequestDefault(context.Context, string, *bool) error
+}
+
 // App owns one interactive dashboard event loop. Its boundaries are injectable
 // so terminal behavior can be tested without taking over a real terminal.
 type App struct {
@@ -49,6 +60,8 @@ type App struct {
 	Ticker    Ticker
 	Collector SnapshotCollector
 	Notes     NoteSnapshotCollector
+	Debug     DebugSnapshotCollector
+	Settings  SettingsService
 	Actions   *Actions
 	Details   DetailRepository
 	Now       func() time.Time
@@ -67,6 +80,8 @@ type confirmPrompt struct {
 type loopState struct {
 	snapshot            monitor.Snapshot
 	noteSnapshot        note.Snapshot
+	debugSnapshot       DebugSnapshot
+	settingsSnapshot    SettingsSnapshot
 	page                PageID
 	selected            int
 	pageSelections      map[PageID]int
@@ -76,6 +91,11 @@ type loopState struct {
 	focusRepositoryName string
 	focusRepositoryRoot string
 	useColor            bool
+	showShortcuts       bool
+	searchQuery         string
+	searchActive        bool
+	debugOffset         int
+	settingsMessage     string
 	confirm             *confirmPrompt
 	detail              *detailState
 	noteDetail          *note.CatalogNote
@@ -140,12 +160,16 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 		}
 		return fmt.Errorf("refresh notes: %w", err)
 	}
+	debugSnapshot := a.collectDebug(ctx)
+	settingsSnapshot := a.collectSettings(ctx)
 	state := loopState{
-		snapshot:     snapshot,
-		noteSnapshot: noteSnapshot,
-		size:         size,
-		useColor:     outputSupportsColor(a.Output),
-		now:          a.Now,
+		snapshot:         snapshot,
+		noteSnapshot:     noteSnapshot,
+		debugSnapshot:    debugSnapshot,
+		settingsSnapshot: settingsSnapshot,
+		size:             size,
+		useColor:         outputSupportsColor(a.Output),
+		now:              a.Now,
 	}
 	state.clampSelection()
 	if err := a.writeFrame(state); err != nil {
@@ -180,7 +204,7 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 			if update.err != nil {
 				state.detail.followError = update.err.Error()
 			} else {
-				state.detail.log = tailDetailLog(state.detail.log+update.text, detailLogKeepLines)
+				state.detail.appendLog(update.text)
 			}
 			if err := a.writeFrame(state); err != nil {
 				return err
@@ -202,6 +226,19 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 			}
 			state.replaceSnapshot(snapshot)
 			state.replaceNoteSnapshot(noteSnapshot)
+			if state.activePage() == PageDebug {
+				state.debugSnapshot = a.collectDebug(ctx)
+				state.clampDebugOffset()
+			}
+			if state.activePage() == PageSettings {
+				selectedRepository, selected := state.selectedRepositorySetting()
+				state.settingsSnapshot = a.collectSettings(ctx)
+				if selected {
+					state.restoreSettingsSelection(selectedRepository.ID)
+				} else {
+					state.clampSelection()
+				}
+			}
 			if a.Actions != nil {
 				a.Actions.Reconcile(snapshot)
 			}
@@ -224,6 +261,7 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 			}
 			state.size = size
 			state.clampNoteDetailOffset()
+			state.clampDebugOffset()
 			if err := a.writeFrame(state); err != nil {
 				return err
 			}
@@ -255,6 +293,28 @@ func (a App) collectNotes(ctx context.Context) (note.Snapshot, error) {
 	return a.Notes.Collect(ctx)
 }
 
+func (a App) collectDebug(ctx context.Context) DebugSnapshot {
+	if a.Debug == nil {
+		return DebugSnapshot{CollectionError: "debug collector unavailable"}
+	}
+	snapshot, err := a.Debug.Collect(ctx)
+	if err != nil {
+		snapshot.CollectionError = err.Error()
+	}
+	return snapshot
+}
+
+func (a App) collectSettings(ctx context.Context) SettingsSnapshot {
+	if a.Settings == nil {
+		return SettingsSnapshot{CollectionError: "settings service unavailable"}
+	}
+	snapshot, err := a.Settings.Collect(ctx)
+	if err != nil {
+		snapshot.CollectionError = err.Error()
+	}
+	return snapshot
+}
+
 func (a App) writeFrame(state loopState) error {
 	var frame bytes.Buffer
 	switch {
@@ -265,11 +325,13 @@ func (a App) writeFrame(state loopState) error {
 			Plan:            state.detail.plan,
 			Row:             state.detail.row,
 			Log:             state.detail.log,
+			SliceLog:        state.detail.sliceLogs[state.detail.selectedSliceID],
 			SelectedSliceID: state.detail.selectedSliceID,
 			SliceOpen:       state.detail.sliceOpen,
 			Width:           state.size.Width,
 			Height:          state.size.Height,
 			UseColor:        state.useColor,
+			ShowShortcuts:   state.showShortcuts,
 			LoadError:       state.detail.loadError,
 			FollowError:     state.detail.followError,
 		}))
@@ -277,6 +339,8 @@ func (a App) writeFrame(state loopState) error {
 		frame.WriteString(Render(Model{
 			Snapshot:            state.snapshot,
 			NoteSnapshot:        state.noteSnapshot,
+			DebugSnapshot:       state.debugSnapshot,
+			SettingsSnapshot:    state.settingsSnapshot,
 			Page:                state.activePage(),
 			Selected:            state.selected,
 			Width:               state.size.Width,
@@ -286,9 +350,14 @@ func (a App) writeFrame(state loopState) error {
 			FocusRepositoryID:   state.focusRepositoryID,
 			FocusRepositoryName: state.focusRepositoryName,
 			UseColor:            state.useColor,
+			ShowShortcuts:       state.showShortcuts,
+			SearchQuery:         state.searchQuery,
+			SearchActive:        state.searchActive,
+			DebugOffset:         state.debugOffset,
 			ConfirmMessage:      state.confirmMessage(),
 			ActionLabels:        a.Actions.labels(),
 			ActionMessage:       a.Actions.statusMessage(),
+			SettingsMessage:     state.settingsMessage,
 		}))
 	}
 	contents := frame.Bytes()
@@ -321,16 +390,41 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 	if key.Key == term.KeyCtrlC {
 		return true
 	}
+	if state.showShortcuts {
+		switch {
+		case key.Key == term.KeyEsc || key.Key == term.KeyBackspace:
+			state.showShortcuts = false
+			state.interruptEscape()
+			return false
+		case key.Key == term.KeyRune && key.Rune == '?':
+			state.showShortcuts = false
+			state.interruptEscape()
+			return false
+		case quitKey(key):
+			return true
+		default:
+			return false
+		}
+	}
 	if state.confirm != nil {
 		return state.handleKey(key)
+	}
+	if state.searchActive {
+		state.handleSearchKey(key)
+		return false
 	}
 	if quitKey(key) {
 		return true
 	}
+	if state.noteDetail == nil && key.Key == term.KeyRune && key.Rune == '?' {
+		state.showShortcuts = true
+		state.interruptEscape()
+		return false
+	}
 	if state.noteDetail != nil {
 		state.interruptEscape()
 		switch {
-		case key.Key == term.KeyEsc:
+		case key.Key == term.KeyEsc || key.Key == term.KeyBackspace:
 			state.noteDetail = nil
 			state.noteDetailOffset = 0
 		case key.Key == term.KeyArrowUp || (key.Key == term.KeyRune && key.Rune == 'k'):
@@ -347,9 +441,9 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 	if state.detail != nil {
 		state.interruptEscape()
 		switch {
-		case key.Key == term.KeyEsc && state.detail.sliceOpen:
+		case (key.Key == term.KeyEsc || key.Key == term.KeyBackspace) && state.detail.sliceOpen:
 			state.detail.sliceOpen = false
-		case key.Key == term.KeyEsc:
+		case key.Key == term.KeyEsc || key.Key == term.KeyBackspace:
 			state.closeDetail()
 		case !state.detail.sliceOpen && key.Key == term.KeyEnter:
 			if _, ok := findDetailSlice(state.detail.plan, state.detail.selectedSliceID); ok {
@@ -362,8 +456,40 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 		}
 		return false
 	}
+	if normalizedSearchQuery(state.searchQuery) != "" && (key.Key == term.KeyEsc || key.Key == term.KeyBackspace) {
+		state.clearSearch()
+		return false
+	}
+	if (state.activePage() == PagePlans || state.activePage() == PageNotes) && key.Key == term.KeyRune && key.Rune == '/' {
+		state.setSearchQuery("")
+		state.searchActive = true
+		state.interruptEscape()
+		return false
+	}
 	if key.Key != term.KeyEsc {
 		state.interruptEscape()
+	}
+	if state.activePage() == PageSettings && key.Key == term.KeyRune && (key.Rune == 'p' || key.Rune == 'P') {
+		repository, ok := state.selectedRepositorySetting()
+		if !ok || a.Settings == nil {
+			return false
+		}
+		next := nextPullRequestSetting(repository.PullRequest)
+		currentLabel := pullRequestSetting(repository.PullRequest, state.settingsSnapshot.InheritedPullRequest)
+		nextLabel := pullRequestSetting(next, state.settingsSnapshot.InheritedPullRequest)
+		state.beginConfirm(fmt.Sprintf("Set %s pull_request from %s to %s?", displayValue(repository.Name), currentLabel, nextLabel), func(accepted bool) {
+			if !accepted {
+				return
+			}
+			if err := a.Settings.SetPullRequestDefault(ctx, repository.ID, next); err != nil {
+				state.settingsMessage = "settings update failed: " + err.Error()
+				return
+			}
+			state.settingsSnapshot = a.collectSettings(ctx)
+			state.restoreSettingsSelection(repository.ID)
+			state.settingsMessage = "Updated " + displayValue(repository.Name) + " pull_request to " + nextLabel + "."
+		})
+		return false
 	}
 	row, selected := state.selectedRow()
 	if state.activePage() == PageNotes && key.Key == term.KeyEnter {
@@ -432,12 +558,13 @@ func (a App) openDetail(ctx context.Context, state *loopState, row monitor.Row) 
 	}
 	detail.plan = loaded
 	detail.reconcileSliceSelection()
-	seed, err := a.Details.ReadLogTail(row.PlanDir, detailLogTailLines)
+	seed, err := a.Details.ReadLogTail(row.PlanDir, 0)
 	if err != nil {
 		detail.followError = err.Error()
 		return
 	}
-	detail.log = seed
+	detail.log = tailDetailLog(seed, detailLogTailLines)
+	detail.sliceLogs, detail.activeLogSlice = projectSliceLogs(seed, detailLogKeepLines)
 	updates := make(chan detailFollowUpdate, 16)
 	detail.updates = updates
 	go followDetailLog(detailCtx, a.Details, row.PlanDir, seed, updates)
@@ -471,6 +598,14 @@ func (s *loopState) refreshDetailRow() {
 			return
 		}
 	}
+}
+
+func (d *detailState) appendLog(text string) {
+	d.log = tailDetailLog(d.log+text, detailLogKeepLines)
+	if d.sliceLogs == nil {
+		d.sliceLogs = make(map[string]string)
+	}
+	appendSliceLogRecords(d.sliceLogs, &d.activeLogSlice, text, detailLogKeepLines)
 }
 
 func (d *detailState) reconcileSliceSelection() {
@@ -533,7 +668,7 @@ func (s *loopState) handleKey(key term.KeyEvent) bool {
 			s.resolveConfirm(true)
 		case key.Key == term.KeyRune && (key.Rune == 'n' || key.Rune == 'N'):
 			s.resolveConfirm(false)
-		case key.Key == term.KeyEsc || quitKey(key):
+		case key.Key == term.KeyEsc || key.Key == term.KeyBackspace || quitKey(key):
 			s.resolveConfirm(false)
 		}
 		return false
@@ -543,6 +678,33 @@ func (s *loopState) handleKey(key term.KeyEvent) bool {
 	}
 	if key.Key != term.KeyEsc {
 		s.interruptEscape()
+	}
+	if s.activePage() == PageDebug {
+		handled := true
+		switch key.Key {
+		case term.KeyArrowUp:
+			s.debugOffset = max(s.debugOffset-1, 0)
+		case term.KeyArrowDown:
+			s.debugOffset = min(s.debugOffset+1, s.debugPageMaxOffset())
+		case term.KeyRune:
+			switch key.Rune {
+			case 'k':
+				s.debugOffset = max(s.debugOffset-1, 0)
+			case 'j':
+				s.debugOffset = min(s.debugOffset+1, s.debugPageMaxOffset())
+			case 'g':
+				s.debugOffset = 0
+			case 'G':
+				s.debugOffset = s.debugPageMaxOffset()
+			default:
+				handled = false
+			}
+		default:
+			handled = false
+		}
+		if handled {
+			return false
+		}
 	}
 
 	switch {
@@ -569,7 +731,7 @@ func (s *loopState) handleKey(key term.KeyEvent) bool {
 		}
 	case s.activePage() == PagePlans && key.Key == term.KeyRune && (key.Rune == 'c' || key.Rune == 'C'):
 		s.preserveSelection(func() { s.showCompleted = !s.showCompleted })
-	case key.Key == term.KeyRune && (key.Rune == 'f' || key.Rune == 'F'):
+	case (s.activePage() == PagePlans || s.activePage() == PageNotes) && key.Key == term.KeyRune && (key.Rune == 'f' || key.Rune == 'F'):
 		s.toggleRepositoryFocus()
 	}
 	return false
@@ -581,6 +743,35 @@ func quitKey(key term.KeyEvent) bool {
 
 func (s *loopState) interruptEscape() {
 	s.lastRootEscape = time.Time{}
+}
+
+func (s *loopState) handleSearchKey(key term.KeyEvent) {
+	switch key.Key {
+	case term.KeyEnter:
+		s.searchActive = false
+		if normalizedSearchQuery(s.searchQuery) == "" {
+			s.setSearchQuery("")
+		}
+	case term.KeyEsc, term.KeyBackspace:
+		s.clearSearch()
+	case term.KeyRune:
+		s.setSearchQuery(s.searchQuery + string(key.Rune))
+	}
+	s.interruptEscape()
+}
+
+func (s *loopState) clearSearch() {
+	s.searchActive = false
+	s.setSearchQuery("")
+	s.interruptEscape()
+}
+
+func (s *loopState) setSearchQuery(query string) {
+	selectedPlan, preservePlan := s.planRowAt(s.planSelection())
+	selectedNote, preserveNote := s.noteAt(s.noteSelection())
+	s.searchQuery = query
+	s.restorePlanSelection(selectedPlan, preservePlan)
+	s.restoreNoteSelection(selectedNote, preserveNote)
 }
 
 func (s loopState) currentTime() time.Time {
@@ -606,14 +797,38 @@ func (s *loopState) switchPage(delta int) {
 }
 
 func (s loopState) pageRowCount() int {
-	if s.activePage() == PagePlans {
+	switch s.activePage() {
+	case PagePlans:
 		return len(s.visibleRows())
+	case PageNotes:
+		return len(s.visibleNotes())
+	case PageSettings:
+		return len(s.settingsSnapshot.Repositories)
+	default:
+		return 0
 	}
-	return len(s.visibleNotes())
+}
+
+func (s loopState) selectedRepositorySetting() (RepositorySetting, bool) {
+	if s.activePage() != PageSettings || s.selected < 0 || s.selected >= len(s.settingsSnapshot.Repositories) {
+		return RepositorySetting{}, false
+	}
+	return s.settingsSnapshot.Repositories[s.selected], true
+}
+
+func (s *loopState) restoreSettingsSelection(repositoryID string) {
+	for index, repository := range s.settingsSnapshot.Repositories {
+		if repository.ID == repositoryID {
+			s.selected = index
+			return
+		}
+	}
+	s.clampSelection()
 }
 
 func (s loopState) visibleRows() []monitor.Row {
-	return visibleRows(s.snapshot.Rows, s.showCompleted, s.focusRepositoryID)
+	rows := FilterPlanRows(s.snapshot.Rows, s.searchQuery)
+	return visibleRows(rows, s.showCompleted, s.focusRepositoryID)
 }
 
 func (s loopState) planSelection() int {
@@ -631,7 +846,8 @@ func (s loopState) noteSelection() int {
 }
 
 func (s loopState) visibleNotes() []note.CatalogNote {
-	return visibleNotes(s.noteSnapshot, s.focusRepositoryID)
+	snapshot := FilterNoteSnapshot(s.noteSnapshot, s.searchQuery)
+	return visibleNotes(snapshot, s.focusRepositoryID)
 }
 
 func (s loopState) noteAt(index int) (note.CatalogNote, bool) {
@@ -890,6 +1106,26 @@ func (s *loopState) clampSelection() {
 		return
 	}
 	s.selected = max(0, min(s.selected, count-1))
+}
+
+func (s loopState) debugPageMaxOffset() int {
+	return debugMaxOffset(Model{
+		Snapshot:            s.snapshot,
+		NoteSnapshot:        s.noteSnapshot,
+		DebugSnapshot:       s.debugSnapshot,
+		Width:               s.size.Width,
+		Height:              s.size.Height,
+		UseColor:            s.useColor,
+		HideCompleted:       !s.showCompleted,
+		SearchQuery:         s.searchQuery,
+		SearchActive:        s.searchActive,
+		FocusRepositoryID:   s.focusRepositoryID,
+		FocusRepositoryName: s.focusRepositoryName,
+	})
+}
+
+func (s *loopState) clampDebugOffset() {
+	s.debugOffset = max(0, min(s.debugOffset, s.debugPageMaxOffset()))
 }
 
 type colorTerminalWriter interface {

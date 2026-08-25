@@ -36,7 +36,7 @@ func TestUICommandRegistrationAndHelp(t *testing.T) {
 	if err := renderCommandHelp(&out, metadata); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"keyboard-driven dashboard", "Plans and Notes tabs", "Plans is the initial tab", "Tab or the right arrow", "Repository focus is shared across tabs", "running work, planned or in-review work", "Completed plans are hidden initially", "m confirms a selected reviewed-plan merge", "M confirms a repository-scoped merge --all", "press Enter for the full read-only slice page", "repository-owned open notes", "full read-only detail", "Plan actions and the completed toggle do not act on Notes", "q and Ctrl-C quit globally", "Esc twice within one second", "--interval", "--completed-window", "tao monitor --once", "Usage:\n  tao ui"} {
+	for _, want := range []string{"keyboard-driven dashboard", "Plans, Notes, Settings, and Debug tabs", "Plans is the initial tab", "Tab or the right arrow", "Repository focus is shared by Plans and Notes", "running work, planned or in-review work", "Completed plans are hidden initially", "m confirms a selected reviewed-plan merge", "M confirms a repository-scoped merge --all", "press Enter for the full read-only slice page", "repository-owned open notes", "full read-only detail", "per-repository pull-request defaults", "explicit true, explicit false, and inherited", "doctor problems", "resolved runtime defaults from tao status", "Plan actions and the completed toggle do not act on Notes, Settings, or Debug", "q and Ctrl-C quit globally", "Esc twice within one second", "--interval", "--completed-window", "tao monitor --once", "Usage:\n  tao ui"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("ui help missing %q in %q", want, out.String())
 		}
@@ -171,7 +171,7 @@ func TestUIComposesRepositoryNotesCollector(t *testing.T) {
 	if requestedDir != notesDir || requestedRef.ID != entry.Repo.ID || requestedRef.Root != entry.Repo.Root {
 		t.Fatalf("note repository request = dir %q ref %+v, want %q and %+v", requestedDir, requestedRef, notesDir, note.RepoReference{ID: entry.Repo.ID, Root: entry.Repo.Root})
 	}
-	for _, want := range []string{"Tabs: Plans  [Notes]", created.ID, "CLI-composed open note"} {
+	for _, want := range []string{"Tao UI | Notes | Repositories: all | 1 open note", created.ID, "CLI-composed open note"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("ui output missing %q in %q", want, output.String())
 		}

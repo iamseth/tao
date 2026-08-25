@@ -214,7 +214,7 @@ tao staleness <plan-id-or-slug-or-path>
 tao insights [--digest] [--all-repos]
 tao repo list
 tao repo show <repo-id>
-tao repo config [--pull-request true|false] [<repo-id>]
+tao repo config [--pull-request true|false|unset] [<repo-id>]
 tao repo doctor
 tao workspace list
 tao workspace prepare <plan-id-or-slug-or-path>
@@ -225,7 +225,8 @@ tao workspace clean [--force] [--force-active] [--force-dirty] <plan-id-or-slug-
 `tao init` registers the checkout in Tao's local repository catalog. `tao repo config`
 shows the current checkout's repository run defaults (`unset`, `true`, or `false`);
 pass `--pull-request true|false` to record whether runs should use the pull-request
-path, or pass a repository ID to inspect or update another registered repository.
+path, `--pull-request unset` to inherit the environment or built-in baseline, or
+pass a repository ID to inspect or update another registered repository.
 `tao report`
 exports a sanitized Markdown snapshot for access-controlled sharing with coworkers
 who have repository access: the default is a full lifecycle report organized as
@@ -505,8 +506,9 @@ Tao resolves run settings in three stages: environment and built-in defaults for
 the baseline, repository defaults override that baseline, and explicit per-run
 flags override both, including explicit `false` values. Tao reads these environment
 variables as process defaults, does not load `.env` files, and fails clearly on
-invalid values while naming the offending variable. `tao repo config` shows or sets
-the repository stage; currently its configurable run default is `pull_request`.
+invalid values while naming the offending variable. `tao repo config` shows, sets,
+or unsets the repository stage; currently its configurable run default is
+`pull_request`.
 
 ```sh
 TAO_COMMIT_POLICY=slice|none

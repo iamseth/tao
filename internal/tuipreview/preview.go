@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/iamseth/tao/internal/monitor"
@@ -20,6 +21,8 @@ type View string
 const (
 	ViewPlans       View = "plans"
 	ViewNotes       View = "notes"
+	ViewSettings    View = "settings"
+	ViewDebug       View = "debug"
 	ViewPlanDetail  View = "plan-detail"
 	ViewNoteDetail  View = "note-detail"
 	ViewSliceDetail View = "slice-detail"
@@ -36,6 +39,8 @@ type RenderOptions struct {
 	Color         bool
 	Plain         bool
 	HideCompleted bool
+	ShowShortcuts bool
+	SearchQuery   string
 	PlanDir       string
 	SliceID       string
 }
@@ -45,7 +50,7 @@ var ErrUnknownPlan = errors.New("unknown preview plan directory")
 // Views returns the production renderers available for one-shot previews in a
 // stable display order.
 func Views() []View {
-	return []View{ViewPlans, ViewNotes, ViewPlanDetail, ViewNoteDetail, ViewSliceDetail}
+	return []View{ViewPlans, ViewNotes, ViewSettings, ViewDebug, ViewPlanDetail, ViewNoteDetail, ViewSliceDetail}
 }
 
 // LookupView resolves a one-shot view by name.
@@ -94,6 +99,62 @@ func (c *NoteSnapshotCollector) Collect(ctx context.Context) (note.Snapshot, err
 		return note.Snapshot{}, err
 	}
 	return cloneNoteSnapshot(c.snapshot), nil
+}
+
+// DebugSnapshotCollector is an immutable in-memory diagnostics collector.
+type DebugSnapshotCollector struct {
+	snapshot tui.DebugSnapshot
+}
+
+// NewDebugSnapshotCollector copies snapshot into an in-memory collector.
+func NewDebugSnapshotCollector(snapshot tui.DebugSnapshot) *DebugSnapshotCollector {
+	return &DebugSnapshotCollector{snapshot: cloneDebugSnapshot(snapshot)}
+}
+
+// Collect returns a fresh projection or the context error.
+func (c *DebugSnapshotCollector) Collect(ctx context.Context) (tui.DebugSnapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return tui.DebugSnapshot{}, err
+	}
+	return cloneDebugSnapshot(c.snapshot), nil
+}
+
+// SettingsService is an in-memory repository settings service.
+type SettingsService struct {
+	mu       sync.Mutex
+	snapshot tui.SettingsSnapshot
+}
+
+// NewSettingsService copies snapshot into an in-memory service.
+func NewSettingsService(snapshot tui.SettingsSnapshot) *SettingsService {
+	return &SettingsService{snapshot: cloneSettingsSnapshot(snapshot)}
+}
+
+// Collect returns a fresh projection or the context error.
+func (s *SettingsService) Collect(ctx context.Context) (tui.SettingsSnapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return tui.SettingsSnapshot{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cloneSettingsSnapshot(s.snapshot), nil
+}
+
+// SetPullRequestDefault updates one fixture repository without external state.
+func (s *SettingsService) SetPullRequestDefault(ctx context.Context, repositoryID string, value *bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for index := range s.snapshot.Repositories {
+		if s.snapshot.Repositories[index].ID != repositoryID {
+			continue
+		}
+		s.snapshot.Repositories[index].PullRequest = cloneBool(value)
+		return nil
+	}
+	return fmt.Errorf("fixture repository %q not found", repositoryID)
 }
 
 // DetailRepository is a read-only map of fixture plan directories to typed
@@ -167,6 +228,16 @@ func (s Scenario) NewNoteSnapshotCollector() *NoteSnapshotCollector {
 	return NewNoteSnapshotCollector(s.Notes)
 }
 
+// NewSettingsService returns this scenario's repository settings service.
+func (s Scenario) NewSettingsService() *SettingsService {
+	return NewSettingsService(s.Settings)
+}
+
+// NewDebugSnapshotCollector returns this scenario's diagnostics collector.
+func (s Scenario) NewDebugSnapshotCollector() *DebugSnapshotCollector {
+	return NewDebugSnapshotCollector(s.Debug)
+}
+
 // NewDetailRepository returns this scenario's isolated detail repository.
 func (s Scenario) NewDetailRepository() *DetailRepository {
 	return NewDetailRepository(s.Plans)
@@ -187,25 +258,48 @@ func Render(scenario Scenario, options RenderOptions) (string, error) {
 	var frame string
 	switch options.View {
 	case ViewPlans:
-		count := visiblePlanCount(scenario.Snapshot, options.HideCompleted)
+		count := visiblePlanCount(scenario.Snapshot, options.HideCompleted, options.SearchQuery)
 		if err := validateSelection(options.Selection, count, "plan"); err != nil {
 			return "", err
 		}
 		frame = tui.Render(tui.Model{
 			Snapshot: scenario.Snapshot, Page: tui.PagePlans, Selected: options.Selection,
 			Width: options.Width, Height: options.Height, Now: scenario.Now,
-			HideCompleted: options.HideCompleted, UseColor: options.Color,
+			HideCompleted: options.HideCompleted, UseColor: options.Color, ShowShortcuts: options.ShowShortcuts, SearchQuery: options.SearchQuery,
 		})
 	case ViewNotes:
-		if err := validateSelection(options.Selection, len(scenario.Notes.Notes), "note"); err != nil {
+		filteredNotes := tui.FilterNoteSnapshot(scenario.Notes, options.SearchQuery)
+		if err := validateSelection(options.Selection, len(filteredNotes.Notes), "note"); err != nil {
 			return "", err
 		}
 		frame = tui.Render(tui.Model{
 			Snapshot: scenario.Snapshot, NoteSnapshot: scenario.Notes, Page: tui.PageNotes,
 			Selected: options.Selection, Width: options.Width, Height: options.Height,
-			Now: scenario.Now, UseColor: options.Color,
+			Now: scenario.Now, UseColor: options.Color, ShowShortcuts: options.ShowShortcuts, SearchQuery: options.SearchQuery,
+		})
+	case ViewSettings:
+		if options.SearchQuery != "" {
+			return "", errors.New("search preview is available only for plans and notes views")
+		}
+		if err := validateSelection(options.Selection, len(scenario.Settings.Repositories), "repository"); err != nil {
+			return "", err
+		}
+		frame = tui.Render(tui.Model{
+			SettingsSnapshot: scenario.Settings, Page: tui.PageSettings, Selected: options.Selection,
+			Width: options.Width, Height: options.Height, Now: scenario.Now, UseColor: options.Color, ShowShortcuts: options.ShowShortcuts,
+		})
+	case ViewDebug:
+		if options.SearchQuery != "" {
+			return "", errors.New("search preview is available only for plans and notes views")
+		}
+		frame = tui.Render(tui.Model{
+			Snapshot: scenario.Snapshot, NoteSnapshot: scenario.Notes, DebugSnapshot: scenario.Debug, Page: tui.PageDebug,
+			Width: options.Width, Height: options.Height, Now: scenario.Now, UseColor: options.Color, ShowShortcuts: options.ShowShortcuts,
 		})
 	case ViewPlanDetail:
+		if options.SearchQuery != "" {
+			return "", errors.New("search preview is available only for plans and notes views")
+		}
 		fixture, err := detailFixture(scenario, options.PlanDir)
 		if err != nil {
 			return "", err
@@ -218,8 +312,15 @@ func Render(scenario Scenario, options RenderOptions) (string, error) {
 		frame = tui.RenderDetail(tui.DetailModel{
 			Plan: &fixture.Detail, Row: detailRow(scenario.Snapshot, fixture), Log: fixture.Log,
 			SelectedSliceID: selected, Width: options.Width, Height: options.Height, UseColor: options.Color,
+			ShowShortcuts: options.ShowShortcuts,
 		})
 	case ViewNoteDetail:
+		if options.ShowShortcuts {
+			return "", errors.New("shortcut popover preview is available only for plans and notes views")
+		}
+		if options.SearchQuery != "" {
+			return "", errors.New("search preview is available only for plans and notes views")
+		}
 		if len(scenario.Notes.Notes) == 0 {
 			return "", errors.New("preview note detail is unavailable because the fixture has no notes")
 		}
@@ -228,6 +329,9 @@ func Render(scenario Scenario, options RenderOptions) (string, error) {
 		}
 		frame = tui.RenderNoteDetail(scenario.Notes.Notes[options.Selection], options.Width, options.Height)
 	case ViewSliceDetail:
+		if options.SearchQuery != "" {
+			return "", errors.New("search preview is available only for plans and notes views")
+		}
 		fixture, err := detailFixture(scenario, options.PlanDir)
 		if err != nil {
 			return "", err
@@ -238,8 +342,8 @@ func Render(scenario Scenario, options RenderOptions) (string, error) {
 			return "", err
 		}
 		frame = tui.RenderSliceDetail(tui.DetailModel{
-			Plan: &fixture.Detail, SelectedSliceID: selected,
-			Width: options.Width, Height: options.Height, UseColor: options.Color,
+			Plan: &fixture.Detail, Log: fixture.Log, SelectedSliceID: selected,
+			Width: options.Width, Height: options.Height, UseColor: options.Color, ShowShortcuts: options.ShowShortcuts,
 		})
 	default:
 		return "", fmt.Errorf("unknown preview view %q", options.View)
@@ -309,9 +413,9 @@ func validateSelection(selection, count int, kind string) error {
 	return nil
 }
 
-func visiblePlanCount(snapshot monitor.Snapshot, hideCompleted bool) int {
+func visiblePlanCount(snapshot monitor.Snapshot, hideCompleted bool, searchQuery string) int {
 	count := 0
-	for _, section := range tui.BuildSections(snapshot.Rows, !hideCompleted) {
+	for _, section := range tui.BuildSections(tui.FilterPlanRows(snapshot.Rows, searchQuery), !hideCompleted) {
 		count += len(section.Rows)
 	}
 	return count
@@ -391,6 +495,33 @@ func cloneNoteSnapshot(source note.Snapshot) note.Snapshot {
 		result.Notes[index].Tags = append([]string(nil), result.Notes[index].Tags...)
 	}
 	result.Warnings = append([]note.CatalogWarning(nil), source.Warnings...)
+	return result
+}
+
+func cloneSettingsSnapshot(source tui.SettingsSnapshot) tui.SettingsSnapshot {
+	result := source
+	result.RuntimeDefaults = append([]tui.SettingsRuntimeDefault(nil), source.RuntimeDefaults...)
+	result.Repositories = append([]tui.RepositorySetting(nil), source.Repositories...)
+	for index := range result.Repositories {
+		result.Repositories[index].PullRequest = cloneBool(result.Repositories[index].PullRequest)
+	}
+	return result
+}
+
+func cloneBool(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	copyValue := *value
+	return &copyValue
+}
+
+func cloneDebugSnapshot(source tui.DebugSnapshot) tui.DebugSnapshot {
+	result := source
+	result.System = append([]tui.DebugValue(nil), source.System...)
+	result.InstalledAgents = append([]string(nil), source.InstalledAgents...)
+	result.DoctorProblems = append([]tui.DebugProblem(nil), source.DoctorProblems...)
+	result.RuntimeDefaults = append([]tui.DebugRuntimeDefault(nil), source.RuntimeDefaults...)
 	return result
 }
 

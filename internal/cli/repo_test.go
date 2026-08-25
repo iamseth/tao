@@ -103,6 +103,21 @@ func TestRepoConfigShowsUnsetAndSetsPullRequest(t *testing.T) {
 	if value, ok := stored.PullRequestDefault(); !ok || value {
 		t.Fatalf("stored pull_request = (%t, %t), want (false, true)", value, ok)
 	}
+
+	out.Reset()
+	if err := app.Run(context.Background(), []string{"repo", "config", "--pull-request=unset"}); err != nil {
+		t.Fatal(err)
+	}
+	stored, err = registry.ReadRepo(repo.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, ok := stored.PullRequestDefault(); ok || value {
+		t.Fatalf("unset pull_request = (%t, %t), want (false, false)", value, ok)
+	}
+	if !strings.Contains(out.String(), "pull_request: unset") {
+		t.Fatalf("unset config output = %q", out.String())
+	}
 }
 
 func TestRepositoryPullRequestDefaultAppliesToRunAndExplicitFlagWins(t *testing.T) {

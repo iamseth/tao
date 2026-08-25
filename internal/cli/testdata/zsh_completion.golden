@@ -76,7 +76,7 @@ _tao() {
     'status:Show runtime defaults and plan rollups'
     'mon:Monitor non-completed plans across repositories'
     'monitor:Monitor non-completed plans across repositories'
-    'ui:Open the cross-repository interactive plans and notes dashboard'
+    'ui:Open the cross-repository interactive dashboard'
     'insi:Show repository failure and telemetry insights'
     'insights:Show repository failure and telemetry insights'
     'c:Remove merged Tao branches and worktrees'
@@ -148,7 +148,7 @@ _tao() {
         show)
           ;;
         config)
-          _arguments '--pull-request[set the repository pull_request run default to true or false]:value:'
+          _arguments '--pull-request[set the repository pull_request run default to true, false, or unset]:value:'
           ;;
         doctor)
           ;;

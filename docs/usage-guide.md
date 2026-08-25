@@ -101,8 +101,9 @@ activity remain the sources for semantic state.
 Use `tao ui` for a keyboard-driven, cross-repository view of plans and open
 notes without leaving the terminal. It requires a terminal; use
 `tao monitor --once` for redirected or pasteable plan output. The dashboard
-opens on **Plans**. Press `Tab` or the right arrow to move between **Plans** and
-**Notes**, and the left arrow to move back. Each tab keeps its own selection.
+opens on **Plans**. Press `Tab` or the right arrow to move through **Plans**,
+**Notes**, **Settings**, and **Debug**, and the left arrow to move back. Plans,
+Notes, and Settings each keep their own selection.
 
 The Plans tab groups nonempty sections as follows:
 
@@ -130,14 +131,28 @@ records appear as warnings without hiding healthy repositories. Notes is a
 read-only view: `Enter` opens the selected note's complete text and metadata,
 and `Esc` returns to the table.
 
+The Settings tab shows the environment and built-in runtime baseline plus every
+registered repository's health and `pull_request` run default. Repository values
+are rendered as `explicit true`, `explicit false`, or `inherit (<effective>)`.
+Select a repository and press `p` to confirm cycling through those three states;
+the inherited state removes the repository override. Settings are local Tao data
+and are never written to the checkout.
+
+The Debug tab is a read-only troubleshooting view. It shows the TUI viewport
+and collection state, Tao build and data paths, installed and selected agents,
+actionable `tao doctor` problems, collector warnings, and the resolved runtime
+defaults reported by `tao status`. Use `j`/`k` or the arrows to scroll and `g`/`G`
+to jump to the top or bottom. Debug does not run checks that mutate local state.
+
 Keys shared by the top-level tabs are:
 
 - `Tab` or the right arrow advances to the next tab; the left arrow moves to the
   previous tab. Plans remains the initial tab.
-- `j`/`k` or the up/down arrow keys move the selection on the active tab.
-- `f` focuses both tabs on the selected plan or note's repository; press `f`
-  again while focused to restore the all-repository view. The focus and each
-  tab's selection remain stable as snapshots refresh.
+- `j`/`k` or the up/down arrow keys move the selection on Plans, Notes, and
+  Settings and scroll the Debug diagnostics.
+- `f` focuses Plans and Notes on the selected plan or note's repository; press
+  `f` again while focused to restore the all-repository view. The focus and each
+  table's selection remain stable as snapshots refresh.
 - `q` or `Ctrl-C` quits from either tab or a detail page. At a top-level table,
   two `Esc` presses within one second also quit; a lone or stale `Esc` does not.
 
@@ -161,9 +176,10 @@ Actions specific to the Plans tab are:
   `Esc` returns one level at a time, and log following continues until you
   leave plan detail for the table.
 
-The Notes tab has no run, approval, merge, or completed-plan actions. `Enter`
-opens a full read-only note detail; `Esc` returns to the Notes table. Repository
-focus remains available there and is shared with Plans.
+The Notes, Settings, and Debug tabs have no run, approval, merge, or
+completed-plan actions. On Notes, `Enter` opens a full read-only note detail and `Esc` returns
+to the table. Repository focus remains available on Notes and is shared with
+Plans.
 
 Run, approval, and merge subprocesses are launched in new sessions with their
 streams detached, so they survive TUI exit. A `merging…` row label is only

@@ -56,8 +56,8 @@ func TestRenderNotesEmptyAndSelectedViewport(t *testing.T) {
 	}
 	frame := Render(Model{Page: PageNotes, NoteSnapshot: note.Snapshot{Notes: items}, Selected: 17, Width: 34, Height: 7})
 	lines := renderedLines(frame)
-	if len(lines) != 7 || !strings.Contains(frame, "> repo") || !strings.Contains(frame, "note-17") || !strings.HasPrefix(lines[len(lines)-1], "f repository") {
-		t.Fatalf("notes viewport lost selection or footer: %#v", lines)
+	if len(lines) != 7 || !strings.Contains(frame, "> repo") || !strings.Contains(frame, "note-17") {
+		t.Fatalf("notes viewport lost selection: %#v", lines)
 	}
 	for _, line := range lines {
 		if utf8.RuneCountInString(stripANSI(line)) > 34 {

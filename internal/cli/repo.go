@@ -14,7 +14,7 @@ import (
 var repoCommand = commandMetadata{
 	name:                  "repo",
 	minPrefix:             "repo",
-	usageLines:            []string{"repo list", "repo show <repo-id>", "repo config [--pull-request true|false] [<repo-id>]", "repo doctor"},
+	usageLines:            []string{"repo list", "repo show <repo-id>", "repo config [--pull-request true|false|unset] [<repo-id>]", "repo doctor"},
 	completionDescription: "Inspect registered repositories",
 	long:                  "Inspect and configure repositories registered in Tao's centralized catalog. Use repo commands to list known checkouts, show catalog details, set repository run defaults, and diagnose repository health before running plans.",
 	examples: "  tao repo list\n" +
@@ -35,7 +35,7 @@ var repoCommand = commandMetadata{
 
 func (a App) repo(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: tao repo list|show <repo-id>|config [--pull-request true|false] [<repo-id>]|doctor")
+		return errors.New("usage: tao repo list|show <repo-id>|config [--pull-request true|false|unset] [<repo-id>]|doctor")
 	}
 	registry := taodata.NewRegistry("")
 	switch args[0] {
@@ -107,7 +107,7 @@ func (a App) repoShow(ctx context.Context, registry taodata.Registry, input stri
 }
 
 func registerRepoConfigFlags(fs *flag.FlagSet) {
-	fs.String("pull-request", "", "set the repository pull_request run default to true or false")
+	fs.String("pull-request", "", "set the repository pull_request run default to true, false, or unset")
 }
 
 func (a App) repoConfig(ctx context.Context, registry taodata.Registry, args []string) error {
@@ -116,7 +116,7 @@ func (a App) repoConfig(ctx context.Context, registry taodata.Registry, args []s
 		return err
 	}
 	if len(positional) > 1 {
-		return errors.New("usage: tao repo config [--pull-request true|false] [<repo-id>]")
+		return errors.New("usage: tao repo config [--pull-request true|false|unset] [<repo-id>]")
 	}
 	selector := ""
 	if len(positional) == 1 {
@@ -127,14 +127,15 @@ func (a App) repoConfig(ctx context.Context, registry taodata.Registry, args []s
 		return err
 	}
 	if flagWasProvided(fs, "pull-request") {
-		value, err := strconv.ParseBool(flagStringValue(fs, "pull-request"))
-		if err != nil {
-			return errors.New("--pull-request must be true or false")
+		var value *bool
+		if raw := strings.TrimSpace(flagStringValue(fs, "pull-request")); !strings.EqualFold(raw, "unset") {
+			parsed, err := strconv.ParseBool(raw)
+			if err != nil {
+				return errors.New("--pull-request must be true, false, or unset")
+			}
+			value = &parsed
 		}
-		if repo.RunDefaults == nil {
-			repo.RunDefaults = &taodata.RepoRunDefaults{}
-		}
-		repo.RunDefaults.PullRequest = &value
+		repo = repo.WithPullRequestDefault(value)
 		repo.UpdatedAt = a.now().UTC().Format("2006-01-02T15:04:05Z07:00")
 		if err := registry.WriteRepo(repo); err != nil {
 			return err

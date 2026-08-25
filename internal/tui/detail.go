@@ -20,8 +20,10 @@ import (
 const (
 	detailLogTailLines    = 200
 	detailLogKeepLines    = 1000
+	planDetailHeaderGap   = 1
+	planDetailPaneGap     = 1
 	noteDetailHeaderLines = 8
-	noteDetailFooter      = "↑/↓/j/k scroll  Esc back  q quit"
+	noteDetailFooter      = "↑/↓/j/k scroll  Bksp/Esc back  q quit"
 )
 
 // DetailRepository is the read-only plan and log boundary used by the detail
@@ -38,11 +40,13 @@ type DetailModel struct {
 	Plan            *plan.PlanDetail
 	Row             monitor.Row
 	Log             string
+	SliceLog        string
 	SelectedSliceID string
 	SliceOpen       bool
 	Width           int
 	Height          int
 	UseColor        bool
+	ShowShortcuts   bool
 	LoadError       string
 	FollowError     string
 }
@@ -53,6 +57,8 @@ type detailState struct {
 	selectedSliceID string
 	sliceOpen       bool
 	log             string
+	sliceLogs       map[string]string
+	activeLogSlice  string
 	loadError       string
 	followError     string
 	updates         <-chan detailFollowUpdate
@@ -181,50 +187,63 @@ func RenderDetail(model DetailModel) string {
 	if model.Row.Liveness == monitor.LivenessLive || model.Row.Liveness == monitor.LivenessStale {
 		heartbeat = durationLabel(model.Row.HeartbeatAge) + " ago"
 	}
-	header := []string{
-		"Tao UI | PLAN DETAIL",
-		"Plan: " + id + "  " + title,
-		"Repo: " + repoName + "  Status: " + status + "  Phase: " + phase + "  Heartbeat: " + heartbeat,
-	}
+	header := "Tao UI | " + singleLineDetail(id) + " | " + singleLineDetail(repoName) +
+		" | " + singleLineDetail(status) + " | " + singleLineDetail(phase) + " | " + singleLineDetail(heartbeat)
 
-	available := model.Height - len(header) - 3 // two pane headings and the footer
+	paneAvailable := model.Height - 1 - planDetailHeaderGap
 	if model.Height <= 0 {
-		available = 24
+		paneAvailable = 24
 	}
-	if available < 0 {
-		available = 0
-	}
+	paneAvailable = max(paneAvailable, 0)
 
+	descriptionLines := wrapPaneText(title, model.Width)
+	desiredDescriptionHeight := max(len(descriptionLines)+2, 3)
 	allSliceLines := renderSlicesPane(model.Plan, model.SelectedSliceID, model.Width, int(^uint(0)>>1), model.UseColor)
-	sliceHeight := min(len(allSliceLines), max(1, available/2))
-	if len(allSliceLines) < available {
-		sliceHeight = len(allSliceLines)
+	if model.Plan == nil && model.LoadError == "" {
+		allSliceLines = []string{"Plan details unavailable."}
 	}
-	if available == 0 {
-		sliceHeight = 0
-	}
-	logHeight := max(available-sliceHeight, 0)
-
-	lines := append([]string(nil), header...)
-	lines = append(lines, "SLICES")
 	if model.LoadError != "" {
-		lines = append(lines, truncateANSI("  unable to load plan: "+model.LoadError, model.Width))
-	} else {
-		lines = append(lines, renderSlicesPane(model.Plan, model.SelectedSliceID, model.Width, sliceHeight, model.UseColor)...)
+		allSliceLines = []string{"unable to load plan: " + singleLineDetail(model.LoadError)}
 	}
-	lines = append(lines, "LOG (tail)")
-	logLines := RenderLogPane(model.Log, model.Width, logHeight)
-	if len(logLines) == 0 && logHeight > 0 {
-		logLines = []string{"  No agent log output."}
-	}
-	if model.FollowError != "" && logHeight > 0 {
-		logLines = append(logLines, "  log follow stopped: "+model.FollowError)
-		if len(logLines) > logHeight {
-			logLines = logLines[len(logLines)-logHeight:]
+	desiredSliceHeight := max(len(allSliceLines)+2, 3)
+
+	descriptionHeight := min(desiredDescriptionHeight, paneAvailable)
+	sliceHeight := 0
+	logHeight := 0
+	remaining := paneAvailable - descriptionHeight
+	if descriptionHeight == desiredDescriptionHeight && remaining >= planDetailPaneGap+2 {
+		remaining -= planDetailPaneGap
+		if remaining >= 2+planDetailPaneGap+3 {
+			sliceHeight = min(desiredSliceHeight, remaining-planDetailPaneGap-3)
+			logHeight = remaining - sliceHeight - planDetailPaneGap
+		} else {
+			sliceHeight = remaining
 		}
+	} else if remaining > 0 {
+		descriptionHeight = paneAvailable
 	}
-	lines = append(lines, logLines...)
-	lines = append(lines, "j/k move  Enter slice  Esc back")
+
+	lines := []string{header}
+	lines = append(lines, make([]string, planDetailHeaderGap)...)
+	if descriptionHeight > 0 {
+		bodyHeight := max(descriptionHeight-2, 0)
+		lines = append(lines, renderPaneBox("DESCRIPTION", fitDetailPane(descriptionLines, model.Width, bodyHeight, 0), model.Width, descriptionHeight)...)
+	}
+	if sliceHeight > 0 {
+		lines = append(lines, make([]string, planDetailPaneGap)...)
+		bodyHeight := max(sliceHeight-2, 0)
+		var sliceLines []string
+		if model.LoadError != "" || model.Plan == nil {
+			sliceLines = fitDetailPane(allSliceLines, model.Width, bodyHeight, 0)
+		} else {
+			sliceLines = renderSlicesPane(model.Plan, model.SelectedSliceID, model.Width, bodyHeight, model.UseColor)
+		}
+		lines = append(lines, renderPaneBox("SLICES", sliceLines, model.Width, sliceHeight)...)
+	}
+	if logHeight > 0 {
+		lines = append(lines, make([]string, planDetailPaneGap)...)
+		lines = append(lines, renderLogBox(model.Log, model.FollowError, model.Width, logHeight)...)
+	}
 
 	if model.Width > 0 {
 		for index := range lines {
@@ -232,18 +251,152 @@ func RenderDetail(model DetailModel) string {
 		}
 	}
 	if model.Height > 0 && len(lines) > model.Height {
-		footer := lines[len(lines)-1]
-		if model.Height == 1 {
-			lines = []string{footer}
-		} else {
-			lines = append(lines[:model.Height-1], footer)
-		}
+		lines = lines[:model.Height]
+	}
+	if model.ShowShortcuts {
+		lines = overlayPlanDetailShortcuts(lines, model.Width, model.Height, model.UseColor)
 	}
 	frame := clearScreenSequence + strings.Join(lines, "\n")
 	if model.Height <= 0 || len(lines) < model.Height {
 		frame += "\n"
 	}
 	return frame
+}
+
+func wrapPaneText(value string, width int) []string {
+	value = singleLineDetail(value)
+	if value == "" || value == "-" {
+		return []string{"No description available."}
+	}
+	available := width - 4
+	if width <= 0 {
+		available = 0
+	}
+	return wrapDetailWords(value, available)
+}
+
+func wrapDetailField(label, value string, width, horizontalPadding int) []string {
+	value = singleLineDetail(value)
+	if value == "" {
+		return nil
+	}
+	prefix := label + ": "
+	available := width - horizontalPadding - utf8.RuneCountInString(prefix)
+	if width <= 0 {
+		available = 0
+	}
+	wrapped := wrapDetailWords(value, available)
+	indent := strings.Repeat(" ", utf8.RuneCountInString(prefix))
+	for index := range wrapped {
+		if index == 0 {
+			wrapped[index] = prefix + wrapped[index]
+		} else {
+			wrapped[index] = indent + wrapped[index]
+		}
+	}
+	return wrapped
+}
+
+func wrapDetailWords(value string, available int) []string {
+	if available <= 0 {
+		return []string{value}
+	}
+	var lines []string
+	current := ""
+	for _, word := range strings.Fields(value) {
+		wordRunes := []rune(word)
+		if len(wordRunes) > available {
+			if current != "" {
+				lines = append(lines, current)
+			}
+			for len(wordRunes) > available {
+				lines = append(lines, string(wordRunes[:available]))
+				wordRunes = wordRunes[available:]
+			}
+			current = string(wordRunes)
+			continue
+		}
+		candidate := word
+		if current != "" {
+			candidate = current + " " + word
+		}
+		if utf8.RuneCountInString(candidate) <= available {
+			current = candidate
+			continue
+		}
+		lines = append(lines, current)
+		current = word
+	}
+	if current != "" {
+		lines = append(lines, current)
+	}
+	return lines
+}
+
+func renderLogBox(log, followError string, width, height int) []string {
+	if height <= 0 {
+		return nil
+	}
+	bodyHeight := max(height-2, 0)
+	content := RenderLogPane(log, 0, bodyHeight)
+	if len(content) == 0 && bodyHeight > 0 {
+		content = []string{"No agent log output."}
+	}
+	if followError != "" && bodyHeight > 0 {
+		content = append(content, "log follow stopped: "+singleLineDetail(followError))
+		if len(content) > bodyHeight {
+			content = content[len(content)-bodyHeight:]
+		}
+	}
+	return renderPaneBox("LOG", content, width, height)
+}
+
+func renderPaneBox(title string, content []string, width, height int) []string {
+	if height <= 0 {
+		return nil
+	}
+	if width > 0 && width < 4 {
+		return []string{truncateANSI(title, width)}
+	}
+	boxWidth := width
+	if boxWidth <= 0 {
+		boxWidth = utf8.RuneCountInString(title) + 4
+		for _, line := range content {
+			boxWidth = max(boxWidth, utf8.RuneCountInString(stripANSISequences(line))+4)
+		}
+		boxWidth = max(boxWidth, 40)
+	}
+	if height == 1 {
+		return []string{paneBoxTop(title, boxWidth)}
+	}
+	bodyHeight := max(height-2, 0)
+	innerWidth := max(boxWidth-4, 0)
+	lines := []string{paneBoxTop(title, boxWidth)}
+	for len(content) < bodyHeight {
+		content = append(content, "")
+	}
+	if len(content) > bodyHeight {
+		content = content[:bodyHeight]
+	}
+	for _, line := range content {
+		line = truncateANSI(line, innerWidth)
+		visible := utf8.RuneCountInString(stripANSISequences(line))
+		lines = append(lines, "│ "+line+strings.Repeat(" ", max(innerWidth-visible, 0))+" │")
+	}
+	lines = append(lines, "└"+strings.Repeat("─", boxWidth-2)+"┘")
+	return lines
+}
+
+func paneBoxTop(title string, width int) string {
+	label := " " + title + " "
+	inside := width - 2
+	if inside <= 0 {
+		return truncatePlain(title, width)
+	}
+	if utf8.RuneCountInString(label) > inside {
+		return "┌" + strings.Repeat("─", inside) + "┐"
+	}
+	return "┌" + label + strings.Repeat("─", inside-utf8.RuneCountInString(label)) + "┐"
 }
 
 func detailHeaderValues(model DetailModel) (id, title, repoName, status string) {
@@ -285,8 +438,10 @@ func renderSlicesPane(detail *plan.PlanDetail, selectedID string, width, height 
 	}
 
 	statusWidth := 0
+	idWidth := 0
 	for _, slice := range ordered {
 		statusWidth = max(statusWidth, utf8.RuneCountInString(displayValue(slice.Status)))
+		idWidth = max(idWidth, utf8.RuneCountInString(displayValue(slice.ID)))
 	}
 	if selectedID == "" && detail.State.Plan.CurrentSlice != nil {
 		selectedID = *detail.State.Plan.CurrentSlice
@@ -306,14 +461,15 @@ func renderSlicesPane(detail *plan.PlanDetail, selectedID string, width, height 
 		if useColor {
 			status = colorStatus(status, slice.Status)
 		}
-		line := cursor + status + "  "
+		id := padRunes(displayValue(slice.ID), idWidth)
+		line := cursor + status + "  " + id + "  " + displayValue(slice.Title)
 		if marker := approvalMarker(slice.Approval); marker != "" {
-			line += marker + "  "
+			line += "  " + marker
 		}
-		line += displayValue(slice.ID) + "  " + displayValue(slice.Title)
 		lines = append(lines, line)
 		if note := strings.TrimSpace(slice.BlockerNote); note != "" {
-			lines = append(lines, "    blocker: "+note)
+			titleColumn := 2 + statusWidth + 2 + idWidth + 2
+			lines = append(lines, strings.Repeat(" ", titleColumn)+"blocker: "+note)
 		}
 	}
 	return fitDetailPane(lines, width, height, selectedLine)
@@ -322,44 +478,26 @@ func renderSlicesPane(detail *plan.PlanDetail, selectedID string, width, height 
 // RenderSliceDetail renders the selected slice as a bounded read-only frame.
 func RenderSliceDetail(model DetailModel) string {
 	selected, ok := findDetailSlice(model.Plan, model.SelectedSliceID)
-	lines := []string{"Tao UI | SLICE DETAIL"}
+	id, status, approval, goal := "-", "-", "-", "-"
+	var details []string
 	if ok {
-		lines = append(lines, "Slice: "+displayValue(singleLineDetail(selected.ID))+"  "+displayValue(singleLineDetail(selected.Title)))
-		appendDetailValue(&lines, "Status", selected.Status)
-		appendDetailValue(&lines, "Goal", selected.Goal)
-		appendDetailValue(&lines, "Context", selected.Context)
-		appendDetailList(&lines, "Tasks", selected.Tasks)
-		appendDetailList(&lines, "Dependencies", selected.DependsOn)
-		appendDetailList(&lines, "Expected files", selected.ExpectedFiles)
-		if len(selected.RequiredInputs) > 0 {
-			values := make([]string, 0, len(selected.RequiredInputs))
-			for _, input := range selected.RequiredInputs {
-				value := singleLineDetail(input.Path)
-				if input.Kind != "" {
-					value += " (" + input.Kind + ")"
-				}
-				if input.Reason != "" {
-					value += ": " + input.Reason
-				}
-				values = append(values, value)
-			}
-			appendDetailList(&lines, "Required inputs", values)
+		id = displayValue(singleLineDetail(selected.ID))
+		status = displayValue(singleLineDetail(selected.Status))
+		approval = "not required"
+		if selected.Approval != nil && selected.Approval.Required {
+			approval = "required"
 		}
-		appendDetailList(&lines, "Verification commands", selected.Verification.Commands)
-		appendDetailList(&lines, "Manual checks", selected.Verification.ManualChecks)
-		if selected.Approval != nil {
-			state := "not required"
-			if selected.Approval.Required {
-				state = "required"
-			}
-			if selected.Approval.Approved {
-				state = "approved"
-			}
-			appendDetailValue(&lines, "Approval", state)
-			appendDetailValue(&lines, "Approval reason", selected.Approval.Reason)
+		if selected.Approval != nil && selected.Approval.Approved {
+			approval = "approved"
 		}
-		appendDetailValue(&lines, "Blocker", selected.BlockerNote)
-		appendDetailValue(&lines, "Notes", selected.Notes)
+		if value := singleLineDetail(selected.Goal); value != "" {
+			goal = value
+		}
+		appendDetailList(&details, "Tasks", selected.Tasks)
+		appendDetailList(&details, "Expected files", selected.ExpectedFiles)
+		appendDetailList(&details, "Verification commands", selected.Verification.Commands)
+		appendDetailValue(&details, "Blocker", selected.BlockerNote)
+		appendDetailValue(&details, "Notes", selected.Notes)
 		if len(selected.VerificationResults) > 0 {
 			values := make([]string, 0, len(selected.VerificationResults))
 			for _, result := range selected.VerificationResults {
@@ -372,21 +510,69 @@ func RenderSliceDetail(model DetailModel) string {
 				}
 				values = append(values, value)
 			}
-			appendDetailList(&lines, "Verification results", values)
+			appendDetailList(&details, "Verification results", values)
 		}
 		if selected.Completion != nil {
 			value := selected.Completion.Outcome
 			if selected.Completion.CommitSHA != "" {
 				value += " (" + selected.Completion.CommitSHA + ")"
 			}
-			appendDetailValue(&lines, "Commit outcome", value)
+			appendDetailValue(&details, "Commit outcome", value)
 		}
-		appendSliceTiming(&lines, selected.Timing)
-	} else {
-		lines = append(lines, "  Selected slice is unavailable.")
 	}
-	lines = append(lines, "Esc back  q quit")
-	return fitDetailFrame(lines, model.Width, model.Height)
+	if len(details) == 0 {
+		details = []string{"No additional details."}
+	}
+	goalLines := wrapDetailField("Goal", goal, model.Width, 0)
+
+	filteredLog := model.SliceLog
+	if filteredLog == "" {
+		filteredLog = filterSliceLog(model.Log, id)
+	}
+	allLogLines := RenderLogPane(filteredLog, 0, int(^uint(0)>>1))
+	desiredLogHeight := max(len(allLogLines)+2, 3)
+
+	desiredDetailHeight := max(len(details)+2, 3)
+	detailHeight := desiredDetailHeight
+	logHeight := desiredLogHeight
+	if model.Height > 0 {
+		fixedHeight := 1 + planDetailHeaderGap + len(goalLines) + planDetailPaneGap
+		available := max(model.Height-fixedHeight, 0)
+		detailHeight = min(desiredDetailHeight, available)
+		logHeight = 0
+		if available >= 2+planDetailPaneGap+3 {
+			detailHeight = min(desiredDetailHeight, available-planDetailPaneGap-3)
+			logHeight = available - detailHeight - planDetailPaneGap
+		}
+	}
+
+	lines := []string{"Tao UI | " + id + " | " + status + " | approval: " + approval}
+	lines = append(lines, make([]string, planDetailHeaderGap)...)
+	lines = append(lines, goalLines...)
+	if detailHeight > 0 {
+		lines = append(lines, make([]string, planDetailPaneGap)...)
+		lines = append(lines, renderPaneBox("DETAIL", fitDetailPane(details, model.Width, max(detailHeight-2, 0), 0), model.Width, detailHeight)...)
+	}
+	if logHeight > 0 {
+		lines = append(lines, make([]string, planDetailPaneGap)...)
+		lines = append(lines, renderLogBox(filteredLog, "", model.Width, logHeight)...)
+	}
+	if model.Width > 0 {
+		for index := range lines {
+			lines[index] = truncateANSI(lines[index], model.Width)
+		}
+	}
+	if model.Height > 0 && len(lines) > model.Height {
+		lines = lines[:model.Height]
+	}
+	if model.ShowShortcuts {
+		lines = overlaySliceDetailShortcuts(lines, model.Width, model.Height, model.UseColor)
+	}
+	frame := clearScreenSequence + strings.Join(lines, "\n")
+	if model.Height <= 0 || len(lines) < model.Height {
+		frame += "\n"
+	}
+	return frame
 }
 
 func findDetailSlice(detail *plan.PlanDetail, id string) (plan.Slice, bool) {
@@ -482,29 +668,6 @@ func skipDetailOSC(value string, index int) int {
 		index += size
 	}
 	return len(value)
-}
-
-func appendSliceTiming(lines *[]string, timing plan.SliceTiming) {
-	values := make([]string, 0, 6)
-	if !timing.CreatedAt.IsZero() {
-		values = append(values, "created "+timing.CreatedAt.Format(time.RFC3339))
-	}
-	if timing.StartedAt != nil {
-		values = append(values, "started "+timing.StartedAt.Format(time.RFC3339))
-	}
-	if timing.CompletedAt != nil {
-		values = append(values, "completed "+timing.CompletedAt.Format(time.RFC3339))
-	}
-	if !timing.UpdatedAt.IsZero() {
-		values = append(values, "updated "+timing.UpdatedAt.Format(time.RFC3339))
-	}
-	if timing.LastActivityAt != nil {
-		values = append(values, "activity "+timing.LastActivityAt.Format(time.RFC3339))
-	}
-	if timing.DurationSeconds != nil {
-		values = append(values, "duration "+(time.Duration(*timing.DurationSeconds)*time.Second).String())
-	}
-	appendDetailList(lines, "Timing", values)
 }
 
 func fitDetailFrame(lines []string, width, height int) string {
@@ -605,13 +768,79 @@ func RenderLogPane(text string, width, height int) []string {
 	return lines
 }
 
+func projectSliceLogs(text string, keepLines int) (map[string]string, string) {
+	logs := make(map[string]string)
+	active := ""
+	appendSliceLogRecords(logs, &active, text, keepLines)
+	return logs, active
+}
+
+func appendSliceLogRecords(logs map[string]string, active *string, text string, keepLines int) {
+	for len(text) > 0 {
+		newline := strings.IndexByte(text, '\n')
+		line := text
+		suffix := ""
+		if newline >= 0 {
+			line = text[:newline]
+			suffix = "\n"
+			text = text[newline+1:]
+		} else {
+			text = ""
+		}
+		if record, ok := logrecord.Parse(line); ok && record.Type == logrecord.TypeSession {
+			*active = runningSliceID(record.Content)
+		}
+		if *active == "" {
+			continue
+		}
+		logs[*active] = tailDetailLog(logs[*active]+line+suffix, keepLines)
+	}
+}
+
+func runningSliceID(action string) string {
+	const prefix = "running "
+	action = strings.TrimSpace(action)
+	if !strings.HasPrefix(action, prefix) {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(action, prefix))
+}
+
+func filterSliceLog(text, sliceID string) string {
+	if strings.TrimSpace(sliceID) == "" || sliceID == "-" {
+		return ""
+	}
+	var filtered strings.Builder
+	active := false
+	for len(text) > 0 {
+		newline := strings.IndexByte(text, '\n')
+		line := text
+		suffix := ""
+		if newline >= 0 {
+			line = text[:newline]
+			suffix = "\n"
+			text = text[newline+1:]
+		} else {
+			text = ""
+		}
+		if record, ok := logrecord.Parse(line); ok && record.Type == logrecord.TypeSession {
+			active = strings.TrimSpace(record.Content) == "running "+sliceID
+		}
+		if active {
+			filtered.WriteString(line)
+			filtered.WriteString(suffix)
+		}
+	}
+	return filtered.String()
+}
+
 func presentPlanLog(text string) string {
 	var out strings.Builder
 	for len(text) > 0 {
 		newline := strings.IndexByte(text, '\n')
 		if newline < 0 {
 			if record, ok := logrecord.Parse(text); ok {
-				_ = logrecord.Render(&out, record)
+				out.WriteString(presentLogRecord(record))
 			} else {
 				out.WriteString(text)
 			}
@@ -620,13 +849,40 @@ func presentPlanLog(text string) string {
 		line := text[:newline]
 		text = text[newline+1:]
 		if record, ok := logrecord.Parse(line); ok {
-			_ = logrecord.Render(&out, record)
+			out.WriteString(presentLogRecord(record))
 		} else {
 			out.WriteString(line)
 			out.WriteByte('\n')
 		}
 	}
 	return out.String()
+}
+
+func presentLogRecord(record logrecord.Record) string {
+	var rendered strings.Builder
+	if record.Type == logrecord.TypeSession {
+		rendered.WriteString("--- " + singleLineDetail(record.Content) + " ---\n")
+	} else {
+		_ = logrecord.Render(&rendered, record)
+	}
+	timestamp := logTimestamp(record.Timestamp)
+	if timestamp == "" {
+		return rendered.String()
+	}
+	lines := strings.Split(strings.TrimSuffix(rendered.String(), "\n"), "\n")
+	var presented strings.Builder
+	for _, line := range lines {
+		presented.WriteString("[" + timestamp + "] " + line + "\n")
+	}
+	return presented.String()
+}
+
+func logTimestamp(value string) string {
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return ""
+	}
+	return parsed.Format("15:04:05")
 }
 
 func tailDetailLog(text string, lines int) string {
@@ -701,6 +957,7 @@ func (w *replaySkippingWriter) Write(value []byte) (int, error) {
 	if index := bytes.Index(w.pending, w.seed); index >= 0 {
 		remainder := append([]byte(nil), w.pending[index+len(w.seed):]...)
 		w.pending = nil
+		w.seed = nil
 		w.matched = true
 		if len(remainder) > 0 {
 			if _, err := w.out.Write(remainder); err != nil {

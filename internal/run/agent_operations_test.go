@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/agent"
+	"github.com/iamseth/tao/internal/agent/logrecord"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 )
@@ -52,6 +53,23 @@ func TestGeneratePullRequestBodySessionCarriesNativeAcceptanceContract(t *testin
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("body session prompt missing %q:\n%s", want, prompt)
 		}
+	}
+}
+
+func TestTimestampedAgentLogWriterAddsRecordTime(t *testing.T) {
+	at := time.Date(2026, 8, 22, 12, 34, 56, 789, time.UTC)
+	var output bytes.Buffer
+	writer := timestampedAgentLogWriter{writer: &output, clock: func() time.Time { return at }}
+	var input bytes.Buffer
+	if err := logrecord.Write(&input, logrecord.Record{Type: logrecord.TypeAssistant, Content: "working"}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := writer.Write(input.Bytes()); err != nil || n != input.Len() {
+		t.Fatalf("timestamped write bytes=%d error=%v", n, err)
+	}
+	record, ok := logrecord.Parse(strings.TrimSuffix(output.String(), "\n"))
+	if !ok || record.Timestamp != at.Format(time.RFC3339Nano) || record.Content != "working" {
+		t.Fatalf("timestamped record = %#v, parsed=%t", record, ok)
 	}
 }
 

@@ -33,7 +33,7 @@ func TestNewInteractiveAppUsesOnlyFixtureBoundaries(t *testing.T) {
 	if app.Actions != nil {
 		t.Fatal("interactive fixture app has production actions")
 	}
-	if app.Terminal == nil || app.Ticker != ticker || app.Collector == nil || app.Notes == nil || app.Details == nil {
+	if app.Terminal == nil || app.Ticker != ticker || app.Collector == nil || app.Notes == nil || app.Debug == nil || app.Settings == nil || app.Details == nil {
 		t.Fatalf("interactive fixture app is incompletely wired: %+v", app)
 	}
 	if got := app.Now(); !got.Equal(scenario.Now) {
