@@ -3,16 +3,13 @@ package rework
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/reviewcontract"
 )
-
-var reviewJSONBlockRE = regexp.MustCompile("(?s)```\\s*tao-review-json\\s*(.*?)\\s*```")
 
 // ReviewFindings returns persisted structured findings, falling back to review.md JSON.
 func ReviewFindings(detail *plan.PlanDetail) []plan.ReviewFinding {
@@ -26,19 +23,10 @@ func ReviewFindings(detail *plan.PlanDetail) []plan.ReviewFinding {
 	return ParseReviewFindings(detail.Review.Content)
 }
 
-// ParseReviewFindings extracts findings from the last tao-review-json fenced block.
+// ParseReviewFindings extracts the bounded legacy findings projection from the
+// last tao-review-json fenced block.
 func ParseReviewFindings(content string) []plan.ReviewFinding {
-	matches := reviewJSONBlockRE.FindAllStringSubmatch(content, -1)
-	if len(matches) == 0 || len(matches[len(matches)-1]) != 2 {
-		return nil
-	}
-	var payload struct {
-		Findings []plan.ReviewFinding `json:"findings"`
-	}
-	if err := json.Unmarshal([]byte(strings.TrimSpace(matches[len(matches)-1][1])), &payload); err != nil {
-		return nil
-	}
-	return cloneFindings(payload.Findings)
+	return reviewcontract.ParseLegacyFindings(content)
 }
 
 // NormalizeFindings returns a canonical finding set suitable for comparison.

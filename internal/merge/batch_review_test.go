@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
-	runpkg "github.com/iamseth/tao/internal/run"
+	"github.com/iamseth/tao/internal/reviewcontract"
 )
 
 type batchReviewAgentFunc func(context.Context, string, string) (string, error)
@@ -547,7 +547,7 @@ func TestBatchReviewRecoveryReproposesSamePathAfterAggregateContentDrift(t *test
 	}
 	state.Review = &BatchReview{
 		Status: "applying", Verdict: plan.ReviewVerdictChangesRequested, Summary: "fix",
-		Findings: runpkg.ParseReviewOutput(reviewJSON("changes_requested", "fix", "first")).Findings,
+		Findings: reviewcontract.Parse(reviewJSON("changes_requested", "fix", "first"), reviewcontract.CommitProposalOptional).Findings,
 		BaseSHA:  state.DefaultStartSHA, HeadSHA: state.IntegrationHead, Attempts: 1,
 		CommitMessage: oldMessage, ResolutionPaths: []string{path}, ResolutionFingerprint: fingerprint,
 	}
@@ -878,7 +878,7 @@ func TestBatchReviewRecoversInterruptedAggregateReworkBeforeRetry(t *testing.T) 
 			state.Attempts.AggregateRework = 1
 			state.Review = &BatchReview{
 				Status: status, Verdict: plan.ReviewVerdictChangesRequested, Summary: "fix",
-				Findings: runpkg.ParseReviewOutput(reviewJSON("changes_requested", "fix", "interrupted")).Findings,
+				Findings: reviewcontract.Parse(reviewJSON("changes_requested", "fix", "interrupted"), reviewcontract.CommitProposalOptional).Findings,
 				BaseSHA:  state.DefaultStartSHA, HeadSHA: state.IntegrationHead, Attempts: 1,
 			}
 			state.Verification = &BatchVerification{Command: "true", HeadSHA: state.IntegrationHead, Passed: true, Output: "passed", CompletedAt: time.Now().UTC().Format(time.RFC3339Nano)}

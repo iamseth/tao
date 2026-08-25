@@ -1036,14 +1036,6 @@ func TestExtractApprovedReviewRequiresValidCommitMessage(t *testing.T) {
 	}
 }
 
-func TestParseReviewOutputPreservesAggregateApprovalWithoutCommitMessage(t *testing.T) {
-	output := "Review.\n```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Ready\",\"findings\":[]}\n```"
-	got := ParseReviewOutput(output)
-	if got.Verdict != plan.ReviewVerdictApprove || got.CommitMessage != nil {
-		t.Fatalf("aggregate approval changed by plan commit-message contract: %+v", got)
-	}
-}
-
 func TestExtractApprovedReviewInvalidCommitMessageFallsBackToComment(t *testing.T) {
 	tests := map[string]string{
 		"missing":  "",
@@ -1058,24 +1050,6 @@ func TestExtractApprovedReviewInvalidCommitMessageFallsBackToComment(t *testing.
 				t.Fatalf("invalid approval must use comment fallback: %+v", got)
 			}
 		})
-	}
-}
-
-func TestExtractApprovedReviewOversizedCommitMessageFallsBackToComment(t *testing.T) {
-	payload, err := json.Marshal(map[string]any{
-		"verdict": "approve",
-		"summary": "Ready",
-		"commit_message": map[string]string{
-			"subject": "feat(review): persist approved commit proposals",
-			"body":    "What:\n" + strings.Repeat("x", maxReviewSummaryRunes) + "\n\nWhy:\nNeeded.",
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := extractReview("Review.\n```tao-review-json\n" + string(payload) + "\n```")
-	if got.Verdict != plan.ReviewVerdictComment || got.CommitMessage != nil {
-		t.Fatalf("oversized approval must use comment fallback: %+v", got)
 	}
 }
 
@@ -1099,56 +1073,6 @@ func TestExtractReviewMalformedOutputDegradesGracefully(t *testing.T) {
 				t.Fatalf("expected graceful comment fallback, got %+v", got)
 			}
 		})
-	}
-}
-
-func TestExtractReviewCapsStructuredMetadata(t *testing.T) {
-	findings := make([]plan.ReviewFinding, maxReviewFindings+1)
-	for i := range findings {
-		findings[i] = plan.ReviewFinding{
-			Severity:   "  " + strings.Repeat("s", maxReviewFindingSeverityRunes+3) + "  ",
-			File:       "  " + strings.Repeat("f", maxReviewFindingFileRunes+3) + "  ",
-			Line:       -1,
-			Message:    "  " + strings.Repeat("m", maxReviewFindingTextRunes+3) + "  ",
-			Suggestion: "  " + strings.Repeat("g", maxReviewFindingTextRunes+3) + "  ",
-		}
-	}
-	payload, err := json.Marshal(map[string]any{
-		"verdict":  plan.ReviewVerdictChangesRequested,
-		"summary":  "  " + strings.Repeat("s", maxReviewSummaryRunes+3) + "  ",
-		"findings": findings,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	got := extractReview("Review.\n```tao-review-json\n" + string(payload) + "\n```")
-	if got.Verdict != plan.ReviewVerdictChangesRequested {
-		t.Fatalf("verdict = %q", got.Verdict)
-	}
-	if got.FindingsCount != maxReviewFindings || len(got.Findings) != maxReviewFindings {
-		t.Fatalf("findings = %d/%d", got.FindingsCount, len(got.Findings))
-	}
-	if len([]rune(got.Summary)) != maxReviewSummaryRunes {
-		t.Fatalf("summary length = %d, want %d", len([]rune(got.Summary)), maxReviewSummaryRunes)
-	}
-	finding := got.Findings[0]
-	if finding.Line != 0 {
-		t.Fatalf("negative line should be clamped, got %d", finding.Line)
-	}
-	if len([]rune(finding.Severity)) != maxReviewFindingSeverityRunes || len([]rune(finding.File)) != maxReviewFindingFileRunes || len([]rune(finding.Message)) != maxReviewFindingTextRunes || len([]rune(finding.Suggestion)) != maxReviewFindingTextRunes {
-		t.Fatalf("finding fields were not capped: %+v", finding)
-	}
-}
-
-func TestExtractReviewOversizedJSONBlockFallsBackToCappedComment(t *testing.T) {
-	output := "Review.\n```tao-review-json\n" + strings.Repeat("x", maxReviewJSONBlockBytes+1) + "\n```"
-	got := extractReview(output)
-	if got.Verdict != plan.ReviewVerdictComment || got.FindingsCount != 0 {
-		t.Fatalf("expected capped comment fallback, got %+v", got)
-	}
-	if len([]rune(got.Summary)) != maxReviewSummaryRunes {
-		t.Fatalf("fallback summary length = %d, want %d", len([]rune(got.Summary)), maxReviewSummaryRunes)
 	}
 }
 

@@ -2,16 +2,14 @@ package run
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"strings"
 
-	commitcontract "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/reviewcontract"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/workspace"
 	"github.com/iamseth/tao/prompts"
@@ -323,32 +321,14 @@ type reviewPromptData struct {
 	Head    string
 }
 
-// ParsedReview is the normalized, size-bounded structured result shared by
-// ordinary plan reviews and internal aggregate merge reviews.
-type ParsedReview struct {
-	Verdict       string
-	Summary       string
-	FindingsCount int
-	Findings      []plan.ReviewFinding
-	CommitMessage *plan.ReviewCommitMessage
-}
-
-type extractedReview = ParsedReview
+type extractedReview = reviewcontract.Review
 
 const (
-	maxReviewJSONBlockBytes       = 512 * 1024
-	maxReviewSummaryRunes         = 8 * 1024
-	maxReviewFindings             = 50
-	maxReviewFindingSeverityRunes = 64
-	maxReviewFindingFileRunes     = 512
-	maxReviewFindingTextRunes     = 4 * 1024
-	maxReviewBudgetWarnings       = 20
-	maxReviewContextBytes         = 8 * 1024
-	maxReviewStopReasonBytes      = 512
-	maxReviewWarningScopeBytes    = 256
+	maxReviewBudgetWarnings    = 20
+	maxReviewContextBytes      = 8 * 1024
+	maxReviewStopReasonBytes   = 512
+	maxReviewWarningScopeBytes = 256
 )
-
-var reviewJSONBlockRE = regexp.MustCompile("(?s)```\\s*tao-review-json\\s*(.*?)\\s*```")
 
 func renderReviewPrompt(data reviewPromptData) (string, error) {
 	return prompts.Render(prompts.PromptReview, prompts.Data{PlanDir: data.PlanDir, PlanID: data.PlanID, Base: data.Base, Head: data.Head})
@@ -490,106 +470,7 @@ func requireCleanReviewWorktree(ctx context.Context, git reviewGit, detail *plan
 }
 
 func extractReview(output string) extractedReview {
-	return parseReviewOutput(output, true)
-}
-
-// ParseReviewOutput extracts the shared verdict and findings used by internal
-// aggregate reviews, where commit proposals are not part of the contract.
-func ParseReviewOutput(output string) ParsedReview {
-	return parseReviewOutput(output, false)
-}
-
-// parseReviewOutput safely degrades malformed, oversized, or invalid output to
-// a bounded comment verdict. Plan approvals additionally require a valid commit
-// proposal; aggregate reviews preserve their verdict-only contract.
-func parseReviewOutput(output string, requireCommitMessage bool) ParsedReview {
-	fallback := reviewFallback(output)
-	matches := reviewJSONBlockRE.FindAllStringSubmatch(output, -1)
-	if len(matches) == 0 || len(matches[len(matches)-1]) != 2 {
-		return fallback
-	}
-	block := strings.TrimSpace(matches[len(matches)-1][1])
-	if len(block) > maxReviewJSONBlockBytes {
-		return fallback
-	}
-	var payload struct {
-		Verdict       string                    `json:"verdict"`
-		Summary       string                    `json:"summary"`
-		Findings      json.RawMessage           `json:"findings"`
-		CommitMessage *plan.ReviewCommitMessage `json:"commit_message"`
-	}
-	if err := json.Unmarshal([]byte(block), &payload); err != nil {
-		return fallback
-	}
-	if !validReviewVerdict(payload.Verdict) {
-		return fallback
-	}
-	validCommitMessage := payload.Verdict == plan.ReviewVerdictApprove && validReviewCommitMessage(payload.CommitMessage)
-	if payload.Verdict == plan.ReviewVerdictApprove && requireCommitMessage && !validCommitMessage {
-		return fallback
-	}
-	findings := []plan.ReviewFinding{}
-	if len(payload.Findings) > 0 && string(payload.Findings) != "null" {
-		if err := json.Unmarshal(payload.Findings, &findings); err != nil {
-			return fallback
-		}
-	}
-	findings = normalizeReviewFindings(findings)
-	summary := capReviewString(strings.TrimSpace(payload.Summary), maxReviewSummaryRunes)
-	if summary == "" {
-		summary = fallback.Summary
-	}
-	var commitMessage *plan.ReviewCommitMessage
-	if validCommitMessage {
-		commitMessage = payload.CommitMessage
-	}
-	return extractedReview{Verdict: payload.Verdict, Summary: summary, FindingsCount: len(findings), Findings: findings, CommitMessage: commitMessage}
-}
-
-func validReviewCommitMessage(message *plan.ReviewCommitMessage) bool {
-	if message == nil || len([]rune(message.Subject)) > maxReviewSummaryRunes || len([]rune(message.Body)) > maxReviewSummaryRunes {
-		return false
-	}
-	return commitcontract.ValidateProposalMessage(message.Subject, message.Body) == nil
-}
-
-func reviewFallback(output string) ParsedReview {
-	return ParsedReview{Verdict: plan.ReviewVerdictComment, Summary: capReviewString(strings.TrimSpace(output), maxReviewSummaryRunes), Findings: []plan.ReviewFinding{}}
-}
-
-func normalizeReviewFindings(findings []plan.ReviewFinding) []plan.ReviewFinding {
-	if len(findings) > maxReviewFindings {
-		findings = findings[:maxReviewFindings]
-	}
-	normalized := make([]plan.ReviewFinding, 0, len(findings))
-	for _, finding := range findings {
-		if finding.Line < 0 {
-			finding.Line = 0
-		}
-		finding.Severity = capReviewString(strings.TrimSpace(finding.Severity), maxReviewFindingSeverityRunes)
-		finding.File = capReviewString(strings.TrimSpace(finding.File), maxReviewFindingFileRunes)
-		finding.Message = capReviewString(strings.TrimSpace(finding.Message), maxReviewFindingTextRunes)
-		finding.Suggestion = capReviewString(strings.TrimSpace(finding.Suggestion), maxReviewFindingTextRunes)
-		normalized = append(normalized, finding)
-	}
-	return normalized
-}
-
-func capReviewString(value string, maxRunes int) string {
-	runes := []rune(value)
-	if len(runes) <= maxRunes {
-		return value
-	}
-	return string(runes[:maxRunes])
-}
-
-func validReviewVerdict(verdict string) bool {
-	switch verdict {
-	case plan.ReviewVerdictApprove, plan.ReviewVerdictChangesRequested, plan.ReviewVerdictComment:
-		return true
-	default:
-		return false
-	}
+	return reviewcontract.Parse(output, reviewcontract.CommitProposalRequired)
 }
 
 func reviewPlanRecord(factory PlanRecordFactory, planDir string, detail *plan.PlanDetail) (PlanMutationRecord, error) {

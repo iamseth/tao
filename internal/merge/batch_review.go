@@ -17,8 +17,8 @@ import (
 
 	commitpkg "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/reviewcontract"
 	"github.com/iamseth/tao/internal/rework"
-	runpkg "github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/prompts"
 )
@@ -173,7 +173,7 @@ func (r BatchAggregateReviewer) Review(ctx context.Context, state BatchState, in
 			if artifactErr != nil {
 				return r.block(result, state, BatchBlockKindResumable, "persist aggregate review output: "+artifactErr.Error())
 			}
-			parsed := runpkg.ParseReviewOutput(reviewOutput)
+			parsed := reviewcontract.Parse(reviewOutput, reviewcontract.CommitProposalOptional)
 			fingerprint := ""
 			if parsed.Verdict == plan.ReviewVerdictChangesRequested {
 				fingerprint = rework.BatchLocationFindingsFingerprint(parsed.Findings)

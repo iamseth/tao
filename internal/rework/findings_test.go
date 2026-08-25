@@ -7,6 +7,20 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 )
 
+func TestParseReviewFindingsUsesCanonicalLegacyProjection(t *testing.T) {
+	content := "```tao-review-json\n{\"findings\":[{\"file\":\"old.go\",\"message\":\"old\"}]}\n```\n" +
+		"```tao-review-json\n{\"findings\":[{\"severity\":\" major \",\"file\":\" internal/rework/findings.go \",\"line\":-3,\"message\":\" fix it \",\"suggestion\":\" use the contract \"}]}\n```"
+
+	got := ParseReviewFindings(content)
+	want := plan.ReviewFinding{Severity: "major", File: "internal/rework/findings.go", Line: 0, Message: "fix it", Suggestion: "use the contract"}
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("legacy findings = %+v, want %+v", got, want)
+	}
+	if malformed := ParseReviewFindings("```tao-review-json\n{not-json}\n```"); malformed != nil {
+		t.Fatalf("malformed legacy findings = %+v, want nil", malformed)
+	}
+}
+
 func TestReworkFindingsFingerprintNormalizesEquivalentFindings(t *testing.T) {
 	first := []plan.ReviewFinding{
 		{Severity: " MAJOR ", File: " ./internal/rework/../rework/findings.go ", Line: 10, Message: "Fix   the\nfingerprint", Suggestion: "Include ALL fields"},
