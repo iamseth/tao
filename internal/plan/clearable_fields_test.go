@@ -370,6 +370,42 @@ func TestMigratedPlanReviewRequiresDeclaredReplacement(t *testing.T) {
 	}
 }
 
+func TestRecordWorkspaceReadyExplicitlyClearsPersistedDependencyEvidence(t *testing.T) {
+	dir := t.TempDir()
+	state := clearableContractBaseState()
+	state.Workspace = &Workspace{
+		Strategy: WorkspaceStrategyWorktree, LifecycleStatus: WorkspaceStatusPreparing,
+		DependencyFailure: "npm install failed", DependencyFingerprint: "old-fingerprint",
+	}
+	detail := &PlanDetail{Dir: dir, State: state, Slices: SlicesFile{Schema: "tao.plan.slices.v1", PlanID: state.Plan.ID}}
+	if err := writeState(dir, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSlices(dir, detail.Slices); err != nil {
+		t.Fatal(err)
+	}
+	record, err := NewPlanRecord(dir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := record.RecordWorkspaceReady(WorkspaceReadyRequest{
+		DependencyStatus: DependencyPreparationStatusReady, ClearDependencyFailure: true,
+		ClearDependencyFingerprint: true, PreparedAt: time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var raw map[string]any
+	readJSONFile(t, filepath.Join(dir, "state.json"), &raw)
+	workspace := raw["workspace"].(map[string]any)
+	for _, key := range []string{"dependency_preparation_failure", "dependency_fingerprint"} {
+		value, exists := workspace[key]
+		if !exists || value != "" {
+			t.Fatalf("typed ready clear did not lower %s as an explicit empty string: %#v", key, value)
+		}
+	}
+}
+
 func TestMigratedWorkspaceFieldsRequireDeclaredClear(t *testing.T) {
 	tests := []struct {
 		fieldName string

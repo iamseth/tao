@@ -148,12 +148,22 @@ Only a current `plan_merged` event in `events.jsonl` proves integration into the
 
 `workspace.rebase_intent` uses `omitempty` and therefore preserves an existing
 value when an ordinary typed update has a nil intent. Tao clears settled intent
-only through the artifact change contract, which writes an explicit
+only through the typed clear or settlement operation, which writes an explicit
 `"rebase_intent": null` while preserving unknown workspace fields. Successful
 rebase settlement verifies the exact intent and writes the new base, HEAD, and
 workspace status fields in the same refreshed artifact mutation as that clear.
 Exact re-recording is idempotent; conflicting replacement, mismatched clearing,
 or mismatched settlement is refused.
+
+Workspace and run code request typed plan-record operations for preparing,
+dependency-failure, ready, rebase, and stale-HEAD milestones; they do not prepare
+generic state patches. Each operation is evaluated against refreshed settled
+state and is published in memory only after its journal settles. Stale-HEAD
+repair remains authorized by clean live Git state plus completed automatic-slice
+evidence, then compare-and-set advances only the exact inspected durable branch
+and old HEAD. The exact new HEAD is an idempotent retry; branch or intervening
+HEAD changes are conflicts. These ownership rules do not change the workspace
+artifact schema or mutation-journal protocol.
 
 ```mermaid
 stateDiagram-v2
@@ -341,7 +351,7 @@ When a listed verification command is invalid but a mechanically equivalent corr
 
 **Tag-cleared fields omit `omitempty`.** Marshalling an explicit zero, nil, or empty value emits the key — `null` for pointers, `""` for strings, `[]` for slices — and the merge overwrites the prior stored value.
 
-**Seam-cleared fields use `omitempty` to preserve by default.** A zero-value write omits the key and preserves the stored value unless the writer declares field-specific intent through `ArtifactChangeSet`. The persistence seam lowers that intent to the same explicit `null`, `""`, or `[]` representation before the unknown-field-preserving merge.
+**Seam-cleared fields use `omitempty` to preserve by default.** A zero-value write omits the key and preserves the stored value unless a typed plan-record operation declares field-specific clear intent. Internal plan persistence lowers that intent to the same explicit `null`, `""`, or `[]` representation before the unknown-field-preserving merge.
 
 ### Known clearable fields
 
@@ -353,8 +363,8 @@ When a listed verification command is invalid but a mechanically equivalent corr
 | `PlanState.Review` and known `PlanReview` fields | review block | `review` | Seam-cleared: `ReplacePlanReview` replaces every known field, storing explicit zero values including `findings: []` and `commit_message: null`; `ClearPlanReview` stores `review: null`. Undeclared zero values preserve stored review data. Unknown keys inside a replaced review object survive. |
 | `PlanState.PullRequestIntent` | `*PullRequest` | `pull_request_intent` | Write `nil` → stored as `null`; successful recording clears partial PR-creation recovery evidence. |
 | `PlanState.MergeCommitIntent` | `*SingleMergeCommitIntent` | `merge_commit_intent` | Write `nil` → stored as `null`; clears only through guarded single-merge intent settlement or supersession. |
-| `Workspace.DependencyFailure` | `string` | `dependency_preparation_failure` | Seam-cleared: `ClearWorkspaceDependencyFailure` plus `PersistStateChanges` stores `""` after retry success; an undeclared empty value preserves the stored failure. |
-| `Workspace.DependencyFingerprint` | `string` | `dependency_fingerprint` | Seam-cleared: `ClearWorkspaceDependencyFingerprint` plus `PersistStateChanges` stores `""` when successful-install evidence is unknown; an undeclared empty value preserves prior evidence. |
+| `Workspace.DependencyFailure` | `string` | `dependency_preparation_failure` | Seam-cleared: the typed ready operation stores `""` after retry success when its request declares the clear; an undeclared empty value preserves the stored failure. |
+| `Workspace.DependencyFingerprint` | `string` | `dependency_fingerprint` | Seam-cleared: the typed ready operation stores `""` when its request declares that successful-install evidence is unknown; an undeclared empty value preserves prior evidence. |
 | `Slice.BlockerNote` | `string` | `blocker_note` | Seam-cleared: blocked continuation declares `ClearSliceBlockerNote`, storing `""`; an undeclared empty value preserves the stored blocker note. |
 
 ### Known merge-only fields (omitempty)

@@ -32,8 +32,10 @@
 //   - repository.go, record.go, artifact_operations.go, artifact_io.go,
 //     resolve.go, and log.go load, resolve, bind mutable records, mutate,
 //     delete, and stream plan-directory artifacts. PlanRecord owns complete
-//     durable mutation operations and their persistence ordering; lifecycle.go
-//     supplies the in-memory transition rules used by those operations.
+//     durable mutation operations and their persistence ordering, including
+//     typed workspace milestones and compare-and-set boundary stamps; workspace
+//     callers never select generic artifact persistence. lifecycle.go supplies
+//     the in-memory transition rules used by those operations.
 //   - lifecycle.go and derive.go contain queue transitions, drained-queue
 //     predicates, status analysis, progress snapshots, and summary derivation.
 //   - Review access is intentionally split: PersistedReview exposes the

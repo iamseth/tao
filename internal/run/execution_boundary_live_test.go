@@ -3,15 +3,147 @@ package run
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
 )
+
+type workspaceBoundaryAdvanceRecord struct {
+	PlanMutationRecord
+	detail        *plan.PlanDetail
+	currentBranch string
+	currentHead   string
+	advanceErr    error
+	calls         [][3]string
+}
+
+func (r *workspaceBoundaryAdvanceRecord) AdvanceWorkspaceHead(expectedBranch, expectedHead, newHead string) error {
+	r.calls = append(r.calls, [3]string{expectedBranch, expectedHead, newHead})
+	if r.advanceErr != nil {
+		return r.advanceErr
+	}
+	if r.currentBranch != expectedBranch {
+		return errors.New("workspace branch changed")
+	}
+	if r.currentHead != newHead {
+		if r.currentHead != expectedHead {
+			return errors.New("workspace head changed")
+		}
+		r.currentHead = newHead
+	}
+	r.detail.State.Workspace.HeadSHA = r.currentHead
+	return nil
+}
+
+func TestInspectRecordedWorkspaceAdvancesProvenStaleHeadWithCompareAndSet(t *testing.T) {
+	tests := []struct {
+		name          string
+		currentBranch string
+		currentHead   string
+		advanceErr    error
+		wantErr       string
+		wantHead      string
+	}{
+		{name: "success", currentBranch: "tao/plan-a", currentHead: "base", wantHead: "after-001-a"},
+		{name: "exact new head retry", currentBranch: "tao/plan-a", currentHead: "after-001-a", wantHead: "after-001-a"},
+		{name: "branch conflict", currentBranch: "tao/other", currentHead: "base", wantErr: "workspace branch changed", wantHead: "base"},
+		{name: "head conflict", currentBranch: "tao/plan-a", currentHead: "other", wantErr: "workspace head changed", wantHead: "base"},
+		{name: "persistence failure", currentBranch: "tao/plan-a", currentHead: "base", advanceErr: errors.New("write state: disk full"), wantErr: "disk full", wantHead: "base"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			detail, workspaceRoot := staleWorkspaceBoundaryDetail(t)
+			var calls []string
+			runner := interruptedServiceGitRunner(t, workspaceRoot, &calls, func() string { return "" }, "tao/plan-a", "after-001-a")
+			record := &workspaceBoundaryAdvanceRecord{
+				PlanMutationRecord: memoryPlanMutationRecord{detail: detail}, detail: detail,
+				currentBranch: tt.currentBranch, currentHead: tt.currentHead, advanceErr: tt.advanceErr,
+			}
+			execution := runExecution{
+				Config:       ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated, CommitPolicy: CommitPolicySlice}},
+				Dependencies: RunDependencies{CommandRunner: runner, PlanRecordFactory: func(*plan.PlanDetail) (PlanMutationRecord, error) { return record, nil }},
+			}
+
+			err := inspectRecordedWorkspaceBeforeAutomaticStart(context.Background(), detail, execution)
+			if tt.wantErr == "" && err != nil {
+				t.Fatal(err)
+			}
+			if tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
+				t.Fatalf("error = %v, want %q", err, tt.wantErr)
+			}
+			if len(record.calls) != 1 || record.calls[0] != [3]string{"tao/plan-a", "base", "after-001-a"} {
+				t.Fatalf("head advance calls = %#v", record.calls)
+			}
+			if got := detail.State.Workspace.HeadSHA; got != tt.wantHead {
+				t.Fatalf("published workspace head = %q, want %q", got, tt.wantHead)
+			}
+		})
+	}
+}
+
+func TestInspectRecordedWorkspaceDoesNotAdvanceUnsafeOrUnprovenBoundary(t *testing.T) {
+	tests := []struct {
+		name    string
+		branch  string
+		status  string
+		unprove bool
+		wantErr string
+	}{
+		{name: "unsafe branch", branch: "master", wantErr: "unsafe ready workspace branch"},
+		{name: "dirty workspace", branch: "tao/plan-a", status: " M unproven.go\n", wantErr: "contains unattributed changes"},
+		{name: "unproven clean head", branch: "tao/plan-a", unprove: true, wantErr: "differs from durable workspace metadata"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			detail, workspaceRoot := staleWorkspaceBoundaryDetail(t)
+			if tt.unprove {
+				detail.Slices.Slices[0].Completion = nil
+			}
+			var calls []string
+			runner := interruptedServiceGitRunner(t, workspaceRoot, &calls, func() string { return tt.status }, tt.branch, "after-001-a")
+			factoryCalls := 0
+			execution := runExecution{
+				Config: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated, CommitPolicy: CommitPolicySlice}},
+				Dependencies: RunDependencies{CommandRunner: runner, PlanRecordFactory: func(*plan.PlanDetail) (PlanMutationRecord, error) {
+					factoryCalls++
+					return memoryPlanMutationRecord{detail: detail}, nil
+				}},
+			}
+
+			err := inspectRecordedWorkspaceBeforeAutomaticStart(context.Background(), detail, execution)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %v, want %q", err, tt.wantErr)
+			}
+			if factoryCalls != 0 || detail.State.Workspace.HeadSHA != "base" {
+				t.Fatalf("factory calls = %d, workspace = %#v; want no mutation", factoryCalls, detail.State.Workspace)
+			}
+		})
+	}
+}
+
+func staleWorkspaceBoundaryDetail(t *testing.T) (*plan.PlanDetail, string) {
+	t.Helper()
+	workspaceRoot := t.TempDir()
+	detail := runPlanDetail(plan.StatusInProgress, []string{"002-b"}, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
+	detail.State.Repo.Root = t.TempDir()
+	detail.State.Repo.Branch = "master"
+	detail.State.Workspace = &plan.Workspace{
+		Strategy: plan.WorkspaceStrategyWorktree, Root: filepath.Dir(workspaceRoot), Path: workspaceRoot,
+		Branch: "tao/plan-a", HeadSHA: "base", LifecycleStatus: plan.WorkspaceStatusReady,
+	}
+	slice := &detail.Slices.Slices[0]
+	slice.ExecutionStart = &plan.SliceExecutionStart{Branch: "tao/plan-a", Head: "base"}
+	slice.CommitIntent = &plan.SliceCommitIntent{Policy: CommitPolicySlice.String(), StartingBranch: "tao/plan-a", StartingHead: "base"}
+	slice.Completion = &plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionCommitted, CommitSHA: "after-001-a"}
+	return detail, workspaceRoot
+}
 
 type rebaseRecoveryRecord struct {
 	PlanMutationRecord

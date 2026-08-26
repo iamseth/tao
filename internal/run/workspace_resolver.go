@@ -84,7 +84,11 @@ func workspacePlanRecordFactory(factory PlanRecordFactory) workspace.PlanRecordF
 		return nil
 	}
 	return func(detail *plan.PlanDetail) (workspace.PlanRecord, error) {
-		return factory(detail)
+		record, err := factory(detail)
+		if err != nil {
+			return nil, err
+		}
+		return record, nil
 	}
 }
 

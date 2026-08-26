@@ -19,6 +19,51 @@ type PlanRecord struct {
 	store    artifactMutationStore
 }
 
+// WorkspacePreparingRequest contains the workspace identity and Git boundary
+// established before dependency preparation begins.
+type WorkspacePreparingRequest struct {
+	Strategy       string
+	Root           string
+	Path           string
+	Branch         string
+	BaseBranch     string
+	BaseSHA        string
+	BaseCurrentSHA string
+	BaseStatus     string
+	HeadSHA        string
+	RefreshStatus  string
+	RebaseStatus   string
+	Created        bool
+	RecordedAt     time.Time
+}
+
+// WorkspaceDependencyFailureRequest contains one failed dependency preparation
+// attempt. The existing successful dependency fingerprint remains authoritative.
+type WorkspaceDependencyFailureRequest struct {
+	Status      string
+	Command     string
+	StartedAt   *time.Time
+	CompletedAt *time.Time
+	Failure     string
+}
+
+// WorkspaceReadyRequest contains the dependency result and completion time for
+// a prepared workspace. Empty failure or fingerprint values preserve settled
+// evidence unless the matching Clear field is set.
+type WorkspaceReadyRequest struct {
+	DependencyStatus           string
+	DependencyCommand          string
+	DependencyStartedAt        *time.Time
+	DependencyCompletedAt      *time.Time
+	DependencyFailure          string
+	ClearDependencyFailure     bool
+	DependencyFingerprint      string
+	ClearDependencyFingerprint bool
+	PreparedAt                 time.Time
+}
+
+const maxWorkspaceHeadAdvanceValueBytes = 1024
+
 // NewPlanRecord prepares a file-backed record for lifecycle and edit mutations.
 func NewPlanRecord(planDir string, detail *PlanDetail) (*PlanRecord, error) {
 	return newPlanRecord(fileArtifactStore{}, planDir, detail)
@@ -337,6 +382,185 @@ func (r *PlanRecord) RecordStartingBranch(branch string) error {
 	}
 	r.detail.State.Workspace.Branch = branch
 	return r.applyStateUpdate(store, baseline, r.detail.State, nil)
+}
+
+// MarkWorkspacePreparing applies the in-memory preparing milestone without
+// changing dependency or rebase transaction evidence.
+func MarkWorkspacePreparing(detail *PlanDetail, request WorkspacePreparingRequest) error {
+	if detail == nil {
+		return fmt.Errorf("plan detail is nil")
+	}
+	if detail.State.Workspace == nil {
+		detail.State.Workspace = &Workspace{}
+	}
+	workspace := detail.State.Workspace
+	workspace.Strategy = request.Strategy
+	workspace.Root = request.Root
+	workspace.Path = request.Path
+	workspace.Branch = request.Branch
+	workspace.BaseBranch = request.BaseBranch
+	workspace.BaseSHA = request.BaseSHA
+	workspace.BaseCurrentSHA = request.BaseCurrentSHA
+	workspace.BaseStatus = request.BaseStatus
+	workspace.HeadSHA = request.HeadSHA
+	workspace.RefreshStatus = request.RefreshStatus
+	workspace.RebaseStatus = request.RebaseStatus
+	workspace.LifecycleStatus = WorkspaceStatusPreparing
+	recordedAt := request.RecordedAt.UTC()
+	if request.Created && workspace.Timing.CreatedAt == nil {
+		workspace.Timing.CreatedAt = &recordedAt
+	}
+	workspace.Timing.LastActivityAt = &recordedAt
+	return nil
+}
+
+// MarkWorkspaceDependencyFailure applies a failed dependency attempt while
+// preserving the fingerprint from the last successful installation.
+func MarkWorkspaceDependencyFailure(detail *PlanDetail, request WorkspaceDependencyFailureRequest) error {
+	if detail == nil {
+		return fmt.Errorf("plan detail is nil")
+	}
+	if detail.State.Workspace == nil {
+		detail.State.Workspace = &Workspace{}
+	}
+	workspace := detail.State.Workspace
+	workspace.DependencyPreparation = request.Status
+	workspace.DependencyCommand = request.Command
+	workspace.DependencyStartedAt = cloneTimePointer(request.StartedAt)
+	workspace.DependencyCompletedAt = cloneTimePointer(request.CompletedAt)
+	if request.Failure != "" {
+		workspace.DependencyFailure = request.Failure
+	}
+	workspace.LifecycleStatus = WorkspaceStatusFailed
+	return nil
+}
+
+// MarkWorkspaceReady applies dependency evidence and the ready milestone.
+func MarkWorkspaceReady(detail *PlanDetail, request WorkspaceReadyRequest) error {
+	if detail == nil {
+		return fmt.Errorf("plan detail is nil")
+	}
+	if request.ClearDependencyFailure && request.DependencyFailure != "" {
+		return fmt.Errorf("workspace ready request cannot replace and clear dependency failure")
+	}
+	if request.ClearDependencyFingerprint && request.DependencyFingerprint != "" {
+		return fmt.Errorf("workspace ready request cannot replace and clear dependency fingerprint")
+	}
+	if detail.State.Workspace == nil {
+		detail.State.Workspace = &Workspace{}
+	}
+	workspace := detail.State.Workspace
+	workspace.DependencyPreparation = request.DependencyStatus
+	workspace.DependencyCommand = request.DependencyCommand
+	workspace.DependencyStartedAt = cloneTimePointer(request.DependencyStartedAt)
+	workspace.DependencyCompletedAt = cloneTimePointer(request.DependencyCompletedAt)
+	switch {
+	case request.ClearDependencyFailure:
+		workspace.DependencyFailure = ""
+	case request.DependencyFailure != "":
+		workspace.DependencyFailure = request.DependencyFailure
+	}
+	switch {
+	case request.ClearDependencyFingerprint:
+		workspace.DependencyFingerprint = ""
+	case request.DependencyFingerprint != "":
+		workspace.DependencyFingerprint = request.DependencyFingerprint
+	}
+	workspace.LifecycleStatus = WorkspaceStatusReady
+	preparedAt := request.PreparedAt.UTC()
+	workspace.Timing.PreparedAt = &preparedAt
+	workspace.Timing.LastActivityAt = &preparedAt
+	return nil
+}
+
+func cloneTimePointer(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
+// RecordWorkspacePreparing refreshes settled state and records only the
+// workspace identity, Git boundary, and preparing timing milestone.
+func (r *PlanRecord) RecordWorkspacePreparing(request WorkspacePreparingRequest) error {
+	store, err := r.storeOrDefault()
+	if err != nil {
+		return err
+	}
+	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
+		return nil, MarkWorkspacePreparing(detail, request)
+	})
+}
+
+// RecordWorkspaceDependencyFailure refreshes settled state and records one hard
+// dependency failure without replacing successful fingerprint evidence.
+func (r *PlanRecord) RecordWorkspaceDependencyFailure(request WorkspaceDependencyFailureRequest) error {
+	store, err := r.storeOrDefault()
+	if err != nil {
+		return err
+	}
+	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
+		return nil, MarkWorkspaceDependencyFailure(detail, request)
+	})
+}
+
+// RecordWorkspaceReady refreshes settled state and records the ready milestone,
+// including explicit preserve, replace, or clear dependency evidence semantics.
+func (r *PlanRecord) RecordWorkspaceReady(request WorkspaceReadyRequest) error {
+	store, err := r.storeOrDefault()
+	if err != nil {
+		return err
+	}
+	return r.applyStateEvent(store, func(detail *PlanDetail, changes *ArtifactChangeSet) ([]Event, error) {
+		if request.ClearDependencyFailure {
+			changes.ClearWorkspaceDependencyFailure()
+		}
+		if request.ClearDependencyFingerprint {
+			changes.ClearWorkspaceDependencyFingerprint()
+		}
+		return nil, MarkWorkspaceReady(detail, request)
+	})
+}
+
+// AdvanceWorkspaceHead advances the durable workspace HEAD only from the exact
+// branch and HEAD inspected by the caller. An exact postimage is an idempotent
+// success so recovery can safely retry a journaled mutation.
+func (r *PlanRecord) AdvanceWorkspaceHead(expectedBranch, expectedHead, newHead string) error {
+	if expectedBranch == "" {
+		return fmt.Errorf("workspace head advance requires an expected branch")
+	}
+	for label, value := range map[string]string{
+		"expected branch": expectedBranch,
+		"expected head":   expectedHead,
+		"new head":        newHead,
+	} {
+		if len(value) > maxWorkspaceHeadAdvanceValueBytes {
+			return fmt.Errorf("workspace head advance %s exceeds %d bytes", label, maxWorkspaceHeadAdvanceValueBytes)
+		}
+	}
+	store, err := r.storeOrDefault()
+	if err != nil {
+		return err
+	}
+	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
+		workspace := detail.State.Workspace
+		if workspace == nil {
+			return nil, fmt.Errorf("plan %s has no workspace head to advance", detail.State.Plan.ID)
+		}
+		if workspace.Branch != expectedBranch {
+			return nil, fmt.Errorf("plan %s workspace branch changed: expected %q, got %q", detail.State.Plan.ID, expectedBranch, workspace.Branch)
+		}
+		switch workspace.HeadSHA {
+		case newHead:
+			return nil, nil
+		case expectedHead:
+			workspace.HeadSHA = newHead
+			return nil, nil
+		default:
+			return nil, fmt.Errorf("plan %s workspace head changed: expected %q, got %q", detail.State.Plan.ID, expectedHead, workspace.HeadSHA)
+		}
+	})
 }
 
 // RecordWorkspaceRebaseIntent durably records the exact boundary required to

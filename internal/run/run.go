@@ -20,6 +20,22 @@ type PlanMutationRecord interface {
 	RunMetadataRecorder
 	ReviewRecorder
 	SliceBudgetBlockRecorder
+	WorkspacePreparationRecorder
+	WorkspaceBoundaryRecorder
+}
+
+// WorkspacePreparationRecorder owns the durable milestones requested while an
+// isolated execution workspace is prepared.
+type WorkspacePreparationRecorder interface {
+	RecordWorkspacePreparing(plan.WorkspacePreparingRequest) error
+	RecordWorkspaceDependencyFailure(plan.WorkspaceDependencyFailureRequest) error
+	RecordWorkspaceReady(plan.WorkspaceReadyRequest) error
+}
+
+// WorkspaceBoundaryRecorder owns compare-and-set workspace boundary stamps
+// requested after run validates the corresponding live Git evidence.
+type WorkspaceBoundaryRecorder interface {
+	AdvanceWorkspaceHead(expectedBranch, expectedHead, newHead string) error
 }
 
 // SliceBudgetBlockRecorder owns the exceptional lifecycle transition caused by
@@ -51,8 +67,6 @@ type FinalVerificationRecorder interface {
 // belong to slice start, final verification, or review.
 type RunMetadataRecorder interface {
 	ContinueBlocked(now time.Time) error
-	PersistState() error
-	PersistStateChanges(*plan.ArtifactChangeSet) error
 	RecordStartingBranch(branch string) error
 	RecordPullRequestIntent(pr plan.PullRequest, branch, headSHA string) error
 	RecordPullRequest(pr plan.PullRequest, branch, headSHA string) error

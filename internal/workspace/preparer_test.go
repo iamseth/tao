@@ -76,8 +76,8 @@ func TestExecutionPreparerRecoversTypedWorktreeAfterMetadataPersistenceFailure(t
 	persistErr := errors.New("injected workspace metadata persistence failure")
 	failing := ExecutionPreparer{
 		Config: config,
-		PlanRecordFactory: func(*plan.PlanDetail) (PlanRecord, error) {
-			return persistStateFunc(func() error { return persistErr }), nil
+		PlanRecordFactory: func(detail *plan.PlanDetail) (PlanRecord, error) {
+			return workspacePlanRecord{detail: detail, persist: func() error { return persistErr }}, nil
 		},
 	}
 
@@ -445,11 +445,13 @@ func TestExecutionPreparerWritesPreparingThenReadyMetadata(t *testing.T) {
 		BaseCurrentSHA: "base123", HeadSHA: "head123", BaseStatus: "current", RebaseStatus: "not_needed", Created: true,
 	}, &prepareCalls)
 	var statuses []string
+	recordFactoryCalls := 0
 	recordFactory := func(detail *plan.PlanDetail) (PlanRecord, error) {
-		return persistStateFunc(func() error {
+		recordFactoryCalls++
+		return workspacePlanRecord{detail: detail, persist: func() error {
 			statuses = append(statuses, detail.State.Workspace.LifecycleStatus)
 			return nil
-		}), nil
+		}}, nil
 	}
 
 	root, err := (ExecutionPreparer{managerFactory: managerFactory, PlanRecordFactory: recordFactory, Now: executionPreparerClock(createdAt, readyAt)}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
@@ -474,6 +476,9 @@ func TestExecutionPreparerWritesPreparingThenReadyMetadata(t *testing.T) {
 	}
 	if prepareCalls != 1 {
 		t.Fatalf("workspace manager Prepare calls = %d, want 1", prepareCalls)
+	}
+	if recordFactoryCalls != 1 {
+		t.Fatalf("plan record factory calls = %d, want 1", recordFactoryCalls)
 	}
 }
 
@@ -1051,6 +1056,23 @@ func TestExecutionPreparerRecordsSuccessfulDependencyFingerprint(t *testing.T) {
 	}
 }
 
+func TestExecutionPreparerNeverInstallClearsPriorDependencyFingerprint(t *testing.T) {
+	config := DefaultConfig()
+	config.DependencyInstallBehavior = DependencyInstallNever
+	preparer, detail, _, installCalls := dependencyPreparerFixture(t, config, nil)
+	detail.State.Workspace.DependencyFingerprint = "stale-fingerprint"
+
+	if _, err := preparer.Prepare(context.Background(), detail, ExecutionPrepareOptions{}); err != nil {
+		t.Fatalf("prepare reused workspace: %v", err)
+	}
+	if *installCalls != 0 {
+		t.Fatalf("never behavior attempted dependency installation %d times", *installCalls)
+	}
+	if detail.State.Workspace.DependencyFingerprint != "" {
+		t.Fatalf("dependency fingerprint = %q, want cleared", detail.State.Workspace.DependencyFingerprint)
+	}
+}
+
 func TestExecutionPreparerAlwaysInstallsWithMatchingFingerprint(t *testing.T) {
 	config := DefaultConfig()
 	config.DependencyInstallBehavior = DependencyInstallAlways
@@ -1247,14 +1269,30 @@ func executionPreparerPlanDetail(repoRoot string) *plan.PlanDetail {
 	}
 }
 
-type persistStateFunc func() error
-
-func (f persistStateFunc) PersistState() error {
-	return f()
+type workspacePlanRecord struct {
+	detail  *plan.PlanDetail
+	persist func() error
 }
 
-func (f persistStateFunc) PersistStateChanges(_ *plan.ArtifactChangeSet) error {
-	return f()
+func (r workspacePlanRecord) RecordWorkspacePreparing(request plan.WorkspacePreparingRequest) error {
+	if err := plan.MarkWorkspacePreparing(r.detail, request); err != nil {
+		return err
+	}
+	return r.persist()
+}
+
+func (r workspacePlanRecord) RecordWorkspaceDependencyFailure(request plan.WorkspaceDependencyFailureRequest) error {
+	if err := plan.MarkWorkspaceDependencyFailure(r.detail, request); err != nil {
+		return err
+	}
+	return r.persist()
+}
+
+func (r workspacePlanRecord) RecordWorkspaceReady(request plan.WorkspaceReadyRequest) error {
+	if err := plan.MarkWorkspaceReady(r.detail, request); err != nil {
+		return err
+	}
+	return r.persist()
 }
 
 type executionWorkspaceManagerFunc func(context.Context, PrepareOptions) (Metadata, error)

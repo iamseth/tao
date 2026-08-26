@@ -288,10 +288,7 @@ func inspectRecordedWorkspaceBeforeAutomaticStart(ctx context.Context, detail *p
 		if err != nil {
 			return fmt.Errorf("migrate stale %s boundary: %w", label, err)
 		}
-		previousHead := workspaceState.HeadSHA
-		workspaceState.HeadSHA = head
-		if err := record.PersistState(); err != nil {
-			workspaceState.HeadSHA = previousHead
+		if err := record.AdvanceWorkspaceHead(branch, workspaceState.HeadSHA, head); err != nil {
 			return fmt.Errorf("migrate stale %s boundary: %w", label, err)
 		}
 		return nil

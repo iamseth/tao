@@ -10,6 +10,364 @@ import (
 	"time"
 )
 
+func TestRecordWorkspacePreparationTransitionsPreserveAndClearDependencyEvidence(t *testing.T) {
+	dir := t.TempDir()
+	detail := startSliceDetail(dir)
+	intent := WorkspaceRebaseIntent{
+		Branch: "tao/plan-a", BaseBranch: "main", OldHeadSHA: "abc1234", OldBaseSHA: "def1234",
+		NewBaseSHA: "fed1234", CommitSeriesFingerprint: "v1:series", CreatedAt: time.Date(2026, 8, 25, 8, 0, 0, 0, time.UTC),
+	}
+	detail.State.Workspace = &Workspace{
+		DependencyFailure: "old failure", DependencyFingerprint: "successful-lockfile", RebaseIntent: &intent,
+	}
+	writeStartSliceArtifacts(t, dir, detail)
+	record := testRecord(dir, detail)
+	createdAt := time.Date(2026, 8, 25, 9, 0, 0, 0, time.FixedZone("test", 2*60*60))
+
+	if err := record.RecordWorkspacePreparing(WorkspacePreparingRequest{
+		Strategy: WorkspaceStrategyWorktree, Root: "/worktrees", Path: "/worktrees/plan-a", Branch: "tao/plan-a",
+		BaseBranch: "main", BaseSHA: "def1234", BaseCurrentSHA: "def1234", BaseStatus: WorkspaceBaseStatusCurrent,
+		HeadSHA: "abc1234", RefreshStatus: WorkspaceRefreshStatusNotNeeded, RebaseStatus: WorkspaceRebaseStatusNotNeeded,
+		Created: true, RecordedAt: createdAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	workspace := detail.State.Workspace
+	if workspace.LifecycleStatus != WorkspaceStatusPreparing || workspace.Path != "/worktrees/plan-a" || workspace.HeadSHA != "abc1234" {
+		t.Fatalf("preparing workspace = %#v", workspace)
+	}
+	if workspace.DependencyFailure != "old failure" || workspace.DependencyFingerprint != "successful-lockfile" || workspace.RebaseIntent == nil || *workspace.RebaseIntent != intent {
+		t.Fatalf("preparing mutation replaced unrelated evidence: %#v", workspace)
+	}
+	if workspace.Timing.CreatedAt == nil || !workspace.Timing.CreatedAt.Equal(createdAt.UTC()) || workspace.Timing.LastActivityAt == nil || !workspace.Timing.LastActivityAt.Equal(createdAt.UTC()) {
+		t.Fatalf("preparing timing = %#v", workspace.Timing)
+	}
+
+	startedAt := createdAt.Add(time.Minute).UTC()
+	completedAt := startedAt.Add(time.Minute)
+	if err := record.RecordWorkspaceDependencyFailure(WorkspaceDependencyFailureRequest{
+		Status: DependencyPreparationStatusFailed, Command: "npm ci", StartedAt: &startedAt, CompletedAt: &completedAt, Failure: "registry unavailable",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	workspace = detail.State.Workspace
+	if workspace.LifecycleStatus != WorkspaceStatusFailed || workspace.DependencyFailure != "registry unavailable" || workspace.DependencyFingerprint != "successful-lockfile" {
+		t.Fatalf("failed workspace = %#v", workspace)
+	}
+
+	readyAt := completedAt.Add(time.Minute)
+	if err := record.RecordWorkspaceReady(WorkspaceReadyRequest{
+		DependencyStatus: DependencyPreparationStatusFailed, DependencyCommand: "npm ci", DependencyStartedAt: &startedAt,
+		DependencyCompletedAt: &completedAt, DependencyFailure: "registry unavailable", PreparedAt: readyAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	workspace = detail.State.Workspace
+	if workspace.LifecycleStatus != WorkspaceStatusReady || workspace.DependencyFailure != "registry unavailable" || workspace.DependencyFingerprint != "successful-lockfile" {
+		t.Fatalf("reused-failure ready workspace = %#v", workspace)
+	}
+
+	successAt := readyAt.Add(time.Minute)
+	if err := record.RecordWorkspaceReady(WorkspaceReadyRequest{
+		DependencyStatus: DependencyPreparationStatusReady, DependencyCommand: "npm ci", DependencyStartedAt: &startedAt,
+		DependencyCompletedAt: &completedAt, ClearDependencyFailure: true, ClearDependencyFingerprint: true, PreparedAt: successAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	workspace = detail.State.Workspace
+	if workspace.DependencyFailure != "" || workspace.DependencyFingerprint != "" || workspace.LifecycleStatus != WorkspaceStatusReady {
+		t.Fatalf("successful ready workspace = %#v", workspace)
+	}
+	if workspace.RebaseIntent == nil || *workspace.RebaseIntent != intent {
+		t.Fatalf("workspace rebase intent changed: %#v", workspace.RebaseIntent)
+	}
+	persisted := readStateFile(t, dir)
+	if persisted.Workspace == nil || persisted.Workspace.DependencyFailure != "" || persisted.Workspace.DependencyFingerprint != "" {
+		t.Fatalf("persisted successful ready workspace = %#v", persisted.Workspace)
+	}
+}
+
+func TestRecordWorkspacePreparingRefreshesStaleDisjointWriter(t *testing.T) {
+	dir := t.TempDir()
+	initial := startSliceDetail(dir)
+	writeStartSliceArtifacts(t, dir, initial)
+	files, err := loadPlanFiles(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := detailFromFiles(files)
+	lifecycleRecord := testRecord(dir, detailFromFiles(files))
+	startedAt := time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC)
+	if err := lifecycleRecord.StartSlice("001-a", startedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	workspaceRecord := testRecord(dir, stale)
+	if err := workspaceRecord.RecordWorkspacePreparing(WorkspacePreparingRequest{
+		Strategy: WorkspaceStrategyWorktree, Path: "/worktrees/plan-a", Branch: "tao/plan-a", RecordedAt: startedAt.Add(time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	persisted := readStateFile(t, dir)
+	if persisted.Status != StatusInProgress || persisted.Plan.CurrentSlice == nil || *persisted.Plan.CurrentSlice != "001-a" {
+		t.Fatalf("workspace writer erased concurrent lifecycle state: %#v", persisted.Plan)
+	}
+	if persisted.Workspace == nil || persisted.Workspace.Path != "/worktrees/plan-a" || persisted.Workspace.LifecycleStatus != WorkspaceStatusPreparing {
+		t.Fatalf("workspace mutation was not persisted: %#v", persisted.Workspace)
+	}
+	if stale.State.Status != StatusInProgress || stale.Slices.Slices[0].Status != StatusInProgress {
+		t.Fatalf("workspace record did not publish refreshed settled detail: state=%#v slices=%#v", stale.State, stale.Slices)
+	}
+}
+
+func TestRecordWorkspaceReadyRetryRecoversJournalWithoutPublishingFailedPostimage(t *testing.T) {
+	dir := t.TempDir()
+	detail := startSliceDetail(dir)
+	detail.State.Workspace = &Workspace{
+		Strategy: WorkspaceStrategyWorktree, LifecycleStatus: WorkspaceStatusPreparing,
+		DependencyFailure: "install failed", DependencyFingerprint: "old-lockfile",
+	}
+	writeStartSliceArtifacts(t, dir, detail)
+	original := clonePlanDetail(detail)
+	ioStore := &failingMutationJournalIO{delegate: fileMutationJournalIO{}, failOperation: "state"}
+	store := journalArtifactMutationStore{fileArtifactStore: fileArtifactStore{}, journalIO: ioStore}
+	record, err := newPlanRecord(store, dir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := WorkspaceReadyRequest{
+		DependencyStatus: DependencyPreparationStatusReady, ClearDependencyFailure: true,
+		DependencyFingerprint: "new-lockfile", PreparedAt: time.Date(2026, 8, 25, 11, 0, 0, 0, time.UTC),
+	}
+
+	if err := record.RecordWorkspaceReady(request); err == nil || !strings.Contains(err.Error(), "injected state failure") {
+		t.Fatalf("ready error = %v, want injected state failure", err)
+	}
+	if !reflect.DeepEqual(detail, original) {
+		t.Fatalf("failed ready mutation published postimage:\n got: %#v\nwant: %#v", detail, original)
+	}
+	if _, err := os.Stat(filepath.Join(dir, mutationJournalFile)); err != nil {
+		t.Fatalf("pending journal missing: %v", err)
+	}
+
+	if err := record.RecordWorkspaceReady(request); err != nil {
+		t.Fatalf("retry ready mutation: %v", err)
+	}
+	if detail.State.Workspace == nil || detail.State.Workspace.LifecycleStatus != WorkspaceStatusReady || detail.State.Workspace.DependencyFailure != "" || detail.State.Workspace.DependencyFingerprint != "new-lockfile" {
+		t.Fatalf("retried ready workspace = %#v", detail.State.Workspace)
+	}
+	persisted := readStateFile(t, dir)
+	if persisted.Workspace == nil || !reflect.DeepEqual(persisted.Workspace, detail.State.Workspace) {
+		t.Fatalf("persisted retry workspace = %#v, in-memory = %#v", persisted.Workspace, detail.State.Workspace)
+	}
+	if _, err := os.Stat(filepath.Join(dir, mutationJournalFile)); !os.IsNotExist(err) {
+		t.Fatalf("settled retry journal remains: %v", err)
+	}
+}
+
+func TestAdvanceWorkspaceHeadAdvancesExactBoundaryAndPreservesUnknownFields(t *testing.T) {
+	dir := t.TempDir()
+	detail := startSliceDetail(dir)
+	detail.State.Workspace = &Workspace{Branch: "feature/plan-a", HeadSHA: "old-head", BaseSHA: "base-head"}
+	writeStartSliceArtifacts(t, dir, detail)
+
+	var raw map[string]any
+	readJSONFile(t, filepath.Join(dir, "state.json"), &raw)
+	raw["unknown_state_field"] = "keep"
+	raw["workspace"].(map[string]any)["unknown_workspace_field"] = "keep"
+	payload, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	slicesBefore, err := os.ReadFile(filepath.Join(dir, "slices.json")) // #nosec G304 -- path is under a test-owned temporary plan directory.
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := testRecord(dir, detail)
+
+	if err := record.AdvanceWorkspaceHead("feature/plan-a", "old-head", "new-head"); err != nil {
+		t.Fatal(err)
+	}
+	if detail.State.Workspace == nil || detail.State.Workspace.HeadSHA != "new-head" || detail.State.Workspace.BaseSHA != "base-head" {
+		t.Fatalf("advanced workspace = %#v", detail.State.Workspace)
+	}
+	firstState, err := os.ReadFile(filepath.Join(dir, "state.json")) // #nosec G304 -- path is under a test-owned temporary plan directory.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := record.AdvanceWorkspaceHead("feature/plan-a", "old-head", "new-head"); err != nil {
+		t.Fatalf("exact postimage retry: %v", err)
+	}
+	secondState, err := os.ReadFile(filepath.Join(dir, "state.json")) // #nosec G304 -- path is under a test-owned temporary plan directory.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(secondState, firstState) {
+		t.Fatal("exact postimage retry rewrote state")
+	}
+	slicesAfter, err := os.ReadFile(filepath.Join(dir, "slices.json")) // #nosec G304 -- path is under a test-owned temporary plan directory.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(slicesAfter, slicesBefore) {
+		t.Fatal("workspace head advance rewrote slices")
+	}
+	readJSONFile(t, filepath.Join(dir, "state.json"), &raw)
+	workspace := raw["workspace"].(map[string]any)
+	if raw["unknown_state_field"] != "keep" || workspace["unknown_workspace_field"] != "keep" || workspace["head_sha"] != "new-head" {
+		t.Fatalf("advanced state did not preserve unknown fields: %#v", raw)
+	}
+}
+
+func TestAdvanceWorkspaceHeadRejectsInvalidBoundary(t *testing.T) {
+	t.Run("missing expected branch", func(t *testing.T) {
+		dir := t.TempDir()
+		detail := startSliceDetail(dir)
+		detail.State.Workspace = &Workspace{Branch: "feature/plan-a", HeadSHA: "old-head"}
+		writeStartSliceArtifacts(t, dir, detail)
+		err := testRecord(dir, detail).AdvanceWorkspaceHead("", "old-head", "new-head")
+		if err == nil || !strings.Contains(err.Error(), "expected branch") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+
+	t.Run("missing workspace", func(t *testing.T) {
+		dir := t.TempDir()
+		detail := startSliceDetail(dir)
+		writeStartSliceArtifacts(t, dir, detail)
+		err := testRecord(dir, detail).AdvanceWorkspaceHead("feature/plan-a", "old-head", "new-head")
+		if err == nil || !strings.Contains(err.Error(), "no workspace") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+
+	for _, test := range []struct {
+		name           string
+		branch, head   string
+		expectedBranch string
+		expectedHead   string
+		newHead        string
+		wantError      string
+	}{
+		{name: "branch conflict before idempotence", branch: "other", head: "new-head", expectedBranch: "feature/plan-a", expectedHead: "old-head", newHead: "new-head", wantError: "branch changed"},
+		{name: "head conflict", branch: "feature/plan-a", head: "other-head", expectedBranch: "feature/plan-a", expectedHead: "old-head", newHead: "new-head", wantError: "head changed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			detail := startSliceDetail(dir)
+			detail.State.Workspace = &Workspace{Branch: test.branch, HeadSHA: test.head}
+			writeStartSliceArtifacts(t, dir, detail)
+			original := clonePlanDetail(detail)
+			err := testRecord(dir, detail).AdvanceWorkspaceHead(test.expectedBranch, test.expectedHead, test.newHead)
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("error = %v, want %q", err, test.wantError)
+			}
+			if !reflect.DeepEqual(detail, original) || readStateFile(t, dir).Workspace.HeadSHA != test.head {
+				t.Fatalf("conflict mutated workspace: %#v", detail.State.Workspace)
+			}
+		})
+	}
+}
+
+func TestAdvanceWorkspaceHeadUsesExactBoundedValues(t *testing.T) {
+	dir := t.TempDir()
+	detail := startSliceDetail(dir)
+	detail.State.Workspace = &Workspace{Branch: " feature/plan-a ", HeadSHA: " old head "}
+	writeStartSliceArtifacts(t, dir, detail)
+	record := testRecord(dir, detail)
+	if err := record.AdvanceWorkspaceHead(" feature/plan-a ", " old head ", " new head "); err != nil {
+		t.Fatalf("exact non-SHA boundary: %v", err)
+	}
+	if detail.State.Workspace.HeadSHA != " new head " {
+		t.Fatalf("head was normalized to %q", detail.State.Workspace.HeadSHA)
+	}
+	oversized := strings.Repeat("x", maxWorkspaceHeadAdvanceValueBytes+1)
+	for label, values := range map[string][3]string{
+		"branch": {oversized, " new head ", "next"},
+		"head":   {" feature/plan-a ", oversized, "next"},
+		"new":    {" feature/plan-a ", " new head ", oversized},
+	} {
+		if err := record.AdvanceWorkspaceHead(values[0], values[1], values[2]); err == nil || !strings.Contains(err.Error(), "exceeds") {
+			t.Fatalf("oversized %s error = %v", label, err)
+		}
+	}
+}
+
+func TestAdvanceWorkspaceHeadRejectsStaleConcurrentBoundaryChange(t *testing.T) {
+	dir := t.TempDir()
+	initial := startSliceDetail(dir)
+	initial.State.Workspace = &Workspace{Branch: "feature/plan-a", HeadSHA: "old-head"}
+	writeStartSliceArtifacts(t, dir, initial)
+	files, err := loadPlanFiles(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := detailFromFiles(files)
+	concurrent := detailFromFiles(files)
+	if err := testRecord(dir, concurrent).AdvanceWorkspaceHead("feature/plan-a", "old-head", "concurrent-head"); err != nil {
+		t.Fatal(err)
+	}
+
+	err = testRecord(dir, stale).AdvanceWorkspaceHead("feature/plan-a", "old-head", "requested-head")
+	if err == nil || !strings.Contains(err.Error(), "head changed") {
+		t.Fatalf("stale advance error = %v", err)
+	}
+	if stale.State.Workspace.HeadSHA != "old-head" {
+		t.Fatalf("conflicting postimage published to stale detail: %#v", stale.State.Workspace)
+	}
+	if got := readStateFile(t, dir).Workspace.HeadSHA; got != "concurrent-head" {
+		t.Fatalf("stale advance replaced concurrent head with %q", got)
+	}
+}
+
+func TestAdvanceWorkspaceHeadRetryRecoversJournalWithoutPublishingFailedPostimage(t *testing.T) {
+	dir := t.TempDir()
+	detail := startSliceDetail(dir)
+	detail.State.Workspace = &Workspace{Branch: "feature/plan-a", HeadSHA: "old-head"}
+	writeStartSliceArtifacts(t, dir, detail)
+	original := clonePlanDetail(detail)
+	ioStore := &failingMutationJournalIO{delegate: fileMutationJournalIO{}, failOperation: "state"}
+	store := journalArtifactMutationStore{fileArtifactStore: fileArtifactStore{}, journalIO: ioStore}
+	record, err := newPlanRecord(store, dir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := record.AdvanceWorkspaceHead("feature/plan-a", "old-head", "new-head"); err == nil || !strings.Contains(err.Error(), "injected state failure") {
+		t.Fatalf("advance error = %v, want injected state failure", err)
+	}
+	if !reflect.DeepEqual(detail, original) {
+		t.Fatalf("failed advance published postimage:\n got: %#v\nwant: %#v", detail, original)
+	}
+	if got := readStateFile(t, dir).Workspace.HeadSHA; got != "old-head" {
+		t.Fatalf("failed advance persisted head %q", got)
+	}
+	journalData, err := os.ReadFile(filepath.Join(dir, mutationJournalFile)) // #nosec G304 -- path is under a test-owned temporary plan directory.
+	if err != nil {
+		t.Fatalf("read pending journal: %v", err)
+	}
+	journal, err := decodeMutationJournal(journalData, detail.State.Plan.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.State == nil || journal.Slices != nil || len(journal.Events) != 0 {
+		t.Fatalf("head advance journal is not state-only: %#v", journal)
+	}
+
+	if err := record.AdvanceWorkspaceHead("feature/plan-a", "old-head", "new-head"); err != nil {
+		t.Fatalf("recovered retry: %v", err)
+	}
+	if detail.State.Workspace.HeadSHA != "new-head" || readStateFile(t, dir).Workspace.HeadSHA != "new-head" {
+		t.Fatalf("recovered retry workspace = %#v", detail.State.Workspace)
+	}
+	if _, err := os.Stat(filepath.Join(dir, mutationJournalFile)); !os.IsNotExist(err) {
+		t.Fatalf("settled retry journal remains: %v", err)
+	}
+}
+
 func TestRecordPRFeedbackTriageWritesStateAndEvent(t *testing.T) {
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)

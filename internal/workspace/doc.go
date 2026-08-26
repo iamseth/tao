@@ -4,4 +4,6 @@
 // conflict detection, and cleanup. Low-level git invocations are delegated to
 // internal/gitops, and commands run through the shared internal/commandrunner
 // seam; this package only orchestrates them and enforces workspace invariants.
+// Durable preparation milestones are requested through typed plan-record
+// operations; internal/plan alone persists and journals workspace state.
 package workspace

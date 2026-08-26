@@ -2383,7 +2383,7 @@ func TestExecutionRootResolverPreparesWorktreeStrategyMetadata(t *testing.T) {
 		if recordDetail.Dir != detail.Dir {
 			t.Fatalf("expected plan dir %q, got %q", detail.Dir, recordDetail.Dir)
 		}
-		return persistOnlyRecord{persist: func() error {
+		return persistOnlyRecord{detail: recordDetail, persist: func() error {
 			statuses = append(statuses, recordDetail.State.Workspace.LifecycleStatus)
 			return nil
 		}}, nil
@@ -2514,14 +2514,28 @@ func (f sliceExecutorFunc) RunSlice(ctx context.Context, run SliceRun) error {
 
 type persistOnlyRecord struct {
 	PlanMutationRecord
+	detail  *plan.PlanDetail
 	persist func() error
 }
 
-func (r persistOnlyRecord) PersistState() error {
+func (r persistOnlyRecord) RecordWorkspacePreparing(request plan.WorkspacePreparingRequest) error {
+	if err := plan.MarkWorkspacePreparing(r.detail, request); err != nil {
+		return err
+	}
 	return r.persist()
 }
 
-func (r persistOnlyRecord) PersistStateChanges(_ *plan.ArtifactChangeSet) error {
+func (r persistOnlyRecord) RecordWorkspaceDependencyFailure(request plan.WorkspaceDependencyFailureRequest) error {
+	if err := plan.MarkWorkspaceDependencyFailure(r.detail, request); err != nil {
+		return err
+	}
+	return r.persist()
+}
+
+func (r persistOnlyRecord) RecordWorkspaceReady(request plan.WorkspaceReadyRequest) error {
+	if err := plan.MarkWorkspaceReady(r.detail, request); err != nil {
+		return err
+	}
 	return r.persist()
 }
 
@@ -2640,9 +2654,35 @@ func (r memoryPlanMutationRecord) ContinueBlocked(now time.Time) error {
 	return plan.MarkBlockedContinued(r.detail, now)
 }
 
-func (r memoryPlanMutationRecord) PersistState() error { return nil }
+func (r memoryPlanMutationRecord) AdvanceWorkspaceHead(expectedBranch, expectedHead, newHead string) error {
+	workspace := r.detail.State.Workspace
+	if workspace == nil {
+		return errors.New("workspace is missing")
+	}
+	if workspace.Branch != expectedBranch {
+		return errors.New("workspace branch changed")
+	}
+	if workspace.HeadSHA == newHead {
+		return nil
+	}
+	if workspace.HeadSHA != expectedHead {
+		return errors.New("workspace head changed")
+	}
+	workspace.HeadSHA = newHead
+	return nil
+}
 
-func (r memoryPlanMutationRecord) PersistStateChanges(_ *plan.ArtifactChangeSet) error { return nil }
+func (r memoryPlanMutationRecord) RecordWorkspacePreparing(request plan.WorkspacePreparingRequest) error {
+	return plan.MarkWorkspacePreparing(r.detail, request)
+}
+
+func (r memoryPlanMutationRecord) RecordWorkspaceDependencyFailure(request plan.WorkspaceDependencyFailureRequest) error {
+	return plan.MarkWorkspaceDependencyFailure(r.detail, request)
+}
+
+func (r memoryPlanMutationRecord) RecordWorkspaceReady(request plan.WorkspaceReadyRequest) error {
+	return plan.MarkWorkspaceReady(r.detail, request)
+}
 
 func (r memoryPlanMutationRecord) RecordFinalVerification(verification plan.FinalVerification) error {
 	return plan.MarkFinalVerification(r.detail, verification)

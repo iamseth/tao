@@ -43,9 +43,13 @@ The file is internal recovery metadata, not an agent-authored extension point or
 a second source of plan semantics. Conforming writers hold the existing plan
 lock and the persistence lock from pending-intent recovery through detail
 refresh, mutation evaluation, payload preparation, journal installation,
-settlement, and in-memory publication. This includes incremental state-only and
-slices-only writers such as workspace stamps, final verification, starting
-branch, and slice commit intent. State-only writers rebase fields changed since
+settlement, and in-memory publication. This includes typed state-only workspace operations for preparation milestones,
+dependency evidence, rebase transactions, and compare-and-set HEAD advancement,
+as well as final verification, starting branch, and slice commit intent.
+Workspace and run callers supply operation inputs rather than editing workspace
+state and selecting a generic persistence primitive. Plan records refresh the
+settled artifact, evaluate each typed operation there, and publish its postimage
+only after settlement. Other state-only writers rebase fields changed since
 their record baseline over the latest settled artifact, while slices-only
 writers re-evaluate their semantic update on that artifact before installing a
 one-target journal. A stale metadata stamp therefore cannot erase a concurrent

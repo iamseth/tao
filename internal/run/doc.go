@@ -6,7 +6,10 @@
 // ExecutionBoundaryController; its policy kernel is ClassifyInterruptedSlice,
 // and physical root identity is delegated to internal/workspace. Durable
 // recovery effects stop at the PlanMutationRecord boundary backed by
-// internal/plan.PlanRecord. Runtime request defaulting lives in
+// internal/plan.PlanRecord. Run authorizes workspace boundary repair from live
+// Git and completion evidence, then requests a typed compare-and-set stamp; it
+// does not edit plan state or choose persistence primitives. Runtime request
+// defaulting lives in
 // internal/runtimeconfig. Run may append explicitly best-effort outcome events,
 // but it does not select plan artifact persistence primitives for lifecycle
 // transitions.
