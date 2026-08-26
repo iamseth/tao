@@ -78,6 +78,31 @@ func TestParseMalformedOversizedAndMultipleBlocks(t *testing.T) {
 	}
 }
 
+func TestParseDoesNotCloseFenceOnBackticksInsideJSONString(t *testing.T) {
+	marker := "```not-a-close"
+	payload, err := json.Marshal(map[string]any{
+		"verdict": "changes_requested",
+		"summary": "fix fenced extraction",
+		"findings": []map[string]any{{
+			"severity": "major",
+			"file":     "internal/plan/markdown.go",
+			"line":     50,
+			"message":  "a fence-like value " + marker + " is content",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := Parse(fenced(string(payload)), CommitProposalRequired)
+	if got.Verdict != plan.ReviewVerdictChangesRequested || got.FindingsCount != 1 {
+		t.Fatalf("review = %+v, want one changes-requested finding", got)
+	}
+	if !strings.Contains(got.Findings[0].Message, marker) {
+		t.Fatalf("finding message = %q, want marker %q", got.Findings[0].Message, marker)
+	}
+}
+
 func TestParseVerdictsAndProposalPolicy(t *testing.T) {
 	tests := []struct {
 		name         string

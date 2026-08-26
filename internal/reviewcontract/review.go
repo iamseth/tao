@@ -2,7 +2,6 @@ package reviewcontract
 
 import (
 	"encoding/json"
-	"regexp"
 	"strings"
 
 	commitcontract "github.com/iamseth/tao/internal/commit"
@@ -17,8 +16,6 @@ const (
 	maxFindingFileRunes     = 512
 	maxFindingTextRunes     = 4 * 1024
 )
-
-var reviewJSONBlockRE = regexp.MustCompile("(?s)```\\s*tao-review-json\\s*(.*?)\\s*```")
 
 // CommitProposalPolicy states whether an approval is valid without a bounded,
 // commit-package-validated proposal. Ordinary plan reviews use
@@ -115,15 +112,32 @@ func ParseLegacyFindings(content string) []plan.ReviewFinding {
 }
 
 func lastReviewJSONBlock(output string) (string, bool) {
-	matches := reviewJSONBlockRE.FindAllStringSubmatch(output, -1)
-	if len(matches) == 0 || len(matches[len(matches)-1]) != 2 {
+	lines := strings.Split(strings.ReplaceAll(strings.ReplaceAll(output, "\r\n", "\n"), "\r", "\n"), "\n")
+	var current []string
+	last := ""
+	inBlock := false
+	found := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !inBlock {
+			if trimmed == "```tao-review-json" || trimmed == "``` tao-review-json" {
+				current = current[:0]
+				inBlock = true
+			}
+			continue
+		}
+		if trimmed == "```" {
+			last = strings.TrimSpace(strings.Join(current, "\n"))
+			found = true
+			inBlock = false
+			continue
+		}
+		current = append(current, line)
+	}
+	if !found || len(last) > maxJSONBlockBytes {
 		return "", false
 	}
-	block := strings.TrimSpace(matches[len(matches)-1][1])
-	if len(block) > maxJSONBlockBytes {
-		return "", false
-	}
-	return block, true
+	return last, true
 }
 
 func fallbackReview(output string) Review {
