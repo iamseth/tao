@@ -20,6 +20,7 @@ import (
 const (
 	detailLogTailLines    = 200
 	detailLogKeepLines    = 1000
+	detailLogTabWidth     = 4
 	planDetailHeaderGap   = 1
 	planDetailPaneGap     = 1
 	noteDetailHeaderLines = 8
@@ -760,8 +761,9 @@ func RenderLogPane(text string, width, height int) []string {
 	if len(lines) > height {
 		lines = lines[len(lines)-height:]
 	}
-	if width > 0 {
-		for index := range lines {
+	for index := range lines {
+		lines[index] = strings.ReplaceAll(lines[index], "\t", strings.Repeat(" ", detailLogTabWidth))
+		if width > 0 {
 			lines[index] = truncateANSI(lines[index], width)
 		}
 	}

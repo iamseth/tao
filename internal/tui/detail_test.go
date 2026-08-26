@@ -160,6 +160,16 @@ func TestRenderLogPaneRendersFramesPassesPlainLinesAndPinsTail(t *testing.T) {
 	}
 }
 
+func TestRenderLogPaneExpandsTabsBeforeBoundingWidth(t *testing.T) {
+	lines := RenderLogPane("\t\tpackage settings\n", 12, 1)
+	if len(lines) != 1 || lines[0] != "        pack" {
+		t.Fatalf("tabbed log line = %q, want expanded and width-bounded output", lines)
+	}
+	if strings.ContainsRune(lines[0], '\t') {
+		t.Fatalf("tabbed log line retained a terminal tab: %q", lines[0])
+	}
+}
+
 func TestRenderDetailIncludesHeaderAndFitsTerminal(t *testing.T) {
 	current := "001-work"
 	detail := &plan.PlanDetail{
