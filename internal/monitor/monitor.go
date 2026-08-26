@@ -81,6 +81,7 @@ type Row struct {
 	PlanTitle      string
 	PlanDir        string
 	Status         string
+	Overview       plan.DecisionOverview
 
 	Liveness            Liveness
 	Phase               runstatus.Phase
@@ -258,6 +259,7 @@ func planRow(entry taodata.RepoInventoryEntry, summary plan.PlanSummary) Row {
 		PlanTitle:              summary.Title,
 		PlanDir:                planDir(entry, summary),
 		Status:                 summary.Status,
+		Overview:               cloneOverview(summary.Overview),
 		Liveness:               LivenessMissing,
 		SliceID:                summary.CurrentSliceID,
 		Left:                   summary.PendingCount,
@@ -352,6 +354,21 @@ func planDir(entry taodata.RepoInventoryEntry, summary plan.PlanSummary) string 
 		return summary.Dir
 	}
 	return filepath.Join(entry.PlansDir, summary.ID)
+}
+
+func cloneOverview(value plan.DecisionOverview) plan.DecisionOverview {
+	clone := value
+	clone.SuccessCriteria = append([]string(nil), value.SuccessCriteria...)
+	if value.Priority != nil {
+		priority := *value.Priority
+		clone.Priority = &priority
+	}
+	if value.Sequence != nil {
+		sequence := *value.Sequence
+		sequence.Relationships = append([]plan.PlanRelation(nil), value.Sequence.Relationships...)
+		clone.Sequence = &sequence
+	}
+	return clone
 }
 
 func cloneTime(value *time.Time) *time.Time {

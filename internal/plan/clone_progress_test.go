@@ -17,7 +17,16 @@ func TestClonePlanDetailDeepCopiesMutableFields(t *testing.T) {
 			Workspace:        &Workspace{Path: "/repo/.tao/workspaces/plan", Timing: WorkspaceTiming{CreatedAt: &now, PreparedAt: &now, LastActivityAt: &now, CleanedAt: &now}, DependencyStartedAt: &now, DependencyCompletedAt: &now},
 			GlobalInvariants: []string{"keep scope"},
 			OpenQuestions:    []string{"question"},
-			Plan:             PlanState{ID: "plan-a", ChangeType: ChangeTypeFeat, CurrentSlice: &current, CompletedSlices: []string{"000-z"}, PendingSlices: []string{"001-a"}, LastRunStartingDirty: []string{"README.md"}, Timing: PlanTiming{StartedAt: &now, CompletedAt: &now, LastActivityAt: &now}, PullRequest: &PullRequest{URL: "https://example.com/pr/1"}, Review: &PlanReview{Verdict: "pass", Summary: "ready", CommitMessage: &ReviewCommitMessage{Subject: "feat(review): persist proposal", Body: "What:\nPersist it.\n\nWhy:\nReuse it."}, ReviewedAt: now}},
+			Plan: PlanState{
+				ID: "plan-a", ChangeType: ChangeTypeFeat,
+				Decision: &Decision{
+					Problem: "A concrete planning problem.", WhyNow: "now", ExpectedBenefit: "benefit", Readiness: DecisionReadinessReady,
+					SuccessCriteria: []string{"criterion"}, Disposition: DecisionDispositionReady,
+					DispositionReason: "reason", Priority: Priority{Level: PriorityOverallLevelMust, Impact: PriorityLevelHigh, Urgency: PriorityLevelMedium, Effort: PriorityEffortSmall, Risk: PriorityLevelLow, Confidence: PriorityLevelHigh, Rationale: "rationale"},
+				},
+				Sequence:     &Sequence{Position: 1, Total: 2, Relationships: []PlanRelation{{PlanID: "plan-b", Type: PlanRelationBefore, Reason: "reason"}}},
+				CurrentSlice: &current, CompletedSlices: []string{"000-z"}, PendingSlices: []string{"001-a"}, LastRunStartingDirty: []string{"README.md"}, Timing: PlanTiming{StartedAt: &now, CompletedAt: &now, LastActivityAt: &now}, PullRequest: &PullRequest{URL: "https://example.com/pr/1"}, Review: &PlanReview{Verdict: "pass", Summary: "ready", CommitMessage: &ReviewCommitMessage{Subject: "feat(review): persist proposal", Body: "What:\nPersist it.\n\nWhy:\nReuse it."}, ReviewedAt: now},
+			},
 		},
 		Slices: SlicesFile{PlanID: "plan-a", Slices: []Slice{{
 			ID:                  "001-a",
@@ -44,6 +53,8 @@ func TestClonePlanDetailDeepCopiesMutableFields(t *testing.T) {
 		t.Fatalf("summary change type = %q, want %q", summary.ChangeType, ChangeTypeFeat)
 	}
 	clone.State.Plan.ChangeType = ChangeTypeFix
+	clone.State.Plan.Decision.SuccessCriteria[0] = "changed"
+	clone.State.Plan.Sequence.Relationships[0].Reason = "changed"
 	clone.State.Plan.CompletedSlices[0] = "changed"
 	clone.State.Plan.LastRunStartingDirty[0] = "changed"
 	*clone.State.Plan.CurrentSlice = "changed"
@@ -64,7 +75,7 @@ func TestClonePlanDetailDeepCopiesMutableFields(t *testing.T) {
 	*clone.Events[0].DurationSeconds = 99
 	clone.Warnings[0] = "changed"
 
-	if detail.State.Plan.ChangeType != ChangeTypeFeat || detail.State.Plan.CompletedSlices[0] != "000-z" || detail.State.Plan.LastRunStartingDirty[0] != "README.md" || *detail.State.Plan.CurrentSlice != "001-a" || detail.State.Workspace.Path != "/repo/.tao/workspaces/plan" || !detail.State.Workspace.Timing.CreatedAt.Equal(now) {
+	if detail.State.Plan.ChangeType != ChangeTypeFeat || detail.State.Plan.Decision.SuccessCriteria[0] != "criterion" || detail.State.Plan.Sequence.Relationships[0].Reason != "reason" || detail.State.Plan.CompletedSlices[0] != "000-z" || detail.State.Plan.LastRunStartingDirty[0] != "README.md" || *detail.State.Plan.CurrentSlice != "001-a" || detail.State.Workspace.Path != "/repo/.tao/workspaces/plan" || !detail.State.Workspace.Timing.CreatedAt.Equal(now) {
 		t.Fatalf("state was not deeply cloned: %#v", detail.State)
 	}
 	slice := detail.Slices.Slices[0]
@@ -77,7 +88,7 @@ func TestClonePlanDetailDeepCopiesMutableFields(t *testing.T) {
 	if detail.Events[0].Metrics.SessionID != "session" || detail.Events[0].PullRequest.URL != "https://example.com/pr/1" || detail.Events[0].Review.Summary != "ready" || *detail.Events[0].DurationSeconds != 42 || detail.Warnings[0] != "warning" {
 		t.Fatalf("events/warnings were not deeply cloned: events=%#v warnings=%#v", detail.Events, detail.Warnings)
 	}
-	if clonePlanDetail(nil) != nil || cloneWorkspace(nil) != nil || clonePullRequest(nil) != nil || clonePlanReview(nil) != nil || cloneRequiredInputs(nil) != nil || cloneVerificationSteps(nil) != nil || cloneVerificationRuns(nil) != nil || cloneMap(nil) != nil {
+	if clonePlanDetail(nil) != nil || cloneDecision(nil) != nil || cloneSequence(nil) != nil || cloneWorkspace(nil) != nil || clonePullRequest(nil) != nil || clonePlanReview(nil) != nil || cloneRequiredInputs(nil) != nil || cloneVerificationSteps(nil) != nil || cloneVerificationRuns(nil) != nil || cloneMap(nil) != nil {
 		t.Fatal("nil clone helpers should preserve nil")
 	}
 }

@@ -5,7 +5,264 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
+
+func TestSummarizeProjectsStructuredDecisionOverview(t *testing.T) {
+	detail := &PlanDetail{
+		State: State{Plan: PlanState{
+			ID: "plan", Title: "Explain the work",
+			Decision: &Decision{
+				Problem: "Make planning decisions explainable.", WhyNow: "The dependency is ready.", ExpectedBenefit: "Operators can compare plans.", Readiness: DecisionReadinessReady,
+				SuccessCriteria: []string{"Rationale is visible.", "Legacy plans remain valid."},
+				Disposition:     DecisionDispositionReady, DispositionReason: "The shared projection is small.",
+				Priority: Priority{Level: PriorityOverallLevelMust, Impact: PriorityLevelHigh, Urgency: PriorityLevelMedium, Effort: PriorityEffortSmall, Risk: PriorityLevelLow, Confidence: PriorityLevelHigh, Rationale: "High impact for low effort."},
+			},
+			Sequence: &Sequence{Position: 2, Total: 3, Relationships: []PlanRelation{{PlanID: "plan-a", Type: PlanRelationAfter, Reason: "Consumes its model."}}},
+		}},
+		PlanningBrief: PlanningBriefArtifact{Content: "## User Goal\nThis fallback must not replace structured data.\n"},
+	}
+
+	overview := Summarize(detail, time.Time{}).Overview
+	if overview.Source != DecisionOverviewSourceStructured || overview.Problem != "Make planning decisions explainable." || overview.WhyNow != "The dependency is ready." || overview.ExpectedBenefit != "Operators can compare plans." {
+		t.Fatalf("structured overview identity = %+v", overview)
+	}
+	if overview.Readiness != DecisionReadinessReady || overview.Disposition != DecisionDispositionReady || overview.DispositionReason != "The shared projection is small." {
+		t.Fatalf("structured decision fields = %+v", overview)
+	}
+	if overview.Priority == nil || overview.Priority.Level != PriorityOverallLevelMust || overview.Priority.Impact != PriorityLevelHigh || overview.Priority.Effort != PriorityEffortSmall || overview.Priority.Confidence != PriorityLevelHigh || overview.Priority.Rationale != "High impact for low effort." {
+		t.Fatalf("structured priority = %+v", overview.Priority)
+	}
+	if overview.Sequence == nil || overview.Sequence.Position != 2 || len(overview.Sequence.Relationships) != 1 || overview.Sequence.Relationships[0].Type != PlanRelationAfter {
+		t.Fatalf("structured sequence = %+v", overview.Sequence)
+	}
+	if !slicesEqual(overview.SuccessCriteria, []string{"Rationale is visible.", "Legacy plans remain valid."}) {
+		t.Fatalf("structured criteria = %v", overview.SuccessCriteria)
+	}
+}
+
+func TestSummarizeProjectsLegacyBriefWithoutInferringRank(t *testing.T) {
+	detail := &PlanDetail{
+		State: State{Plan: PlanState{ID: "legacy", Title: "A vague title"}},
+		PlanningBrief: PlanningBriefArtifact{Content: `# Planning Brief
+
+## User Goal
+Make the decision rationale visible.
+
+## Why Now
+Two list views need the same data.
+
+## Expected Benefit
+No consumer parses Markdown independently.
+
+## Success Criteria
+- Legacy plans remain valid.
+- No priority is inferred.
+`},
+		PlanNarrative: PlanNarrativeArtifact{Content: "## Goal\nDo not prefer this narrative.\n"},
+	}
+
+	overview := Summarize(detail, time.Time{}).Overview
+	if overview.Source != DecisionOverviewSourcePlanningBrief || overview.Problem != "Make the decision rationale visible." || overview.WhyNow != "Two list views need the same data." || overview.ExpectedBenefit != "No consumer parses Markdown independently." {
+		t.Fatalf("legacy brief overview = %+v", overview)
+	}
+	if !slicesEqual(overview.SuccessCriteria, []string{"Legacy plans remain valid.", "No priority is inferred."}) {
+		t.Fatalf("legacy criteria = %v", overview.SuccessCriteria)
+	}
+	if overview.Priority != nil || overview.Disposition != "" || overview.Readiness != "" {
+		t.Fatalf("legacy overview inferred rank or decision: %+v", overview)
+	}
+}
+
+func TestProjectDecisionOverviewUsesNarrativeOnlyAfterMissingLegacyBriefProse(t *testing.T) {
+	detail := &PlanDetail{
+		PlanningBrief: PlanningBriefArtifact{Content: "## Constraints\nKeep it small.\n"},
+		PlanNarrative: PlanNarrativeArtifact{Content: "# Plan\n\n## Goal\nRecover the legacy narrative.\n\n## Benefit\nThe old plan remains understandable.\n"},
+	}
+	overview := ProjectDecisionOverview(detail)
+	if overview.Source != DecisionOverviewSourcePlanNarrative || overview.Problem != "Recover the legacy narrative." || overview.ExpectedBenefit != "The old plan remains understandable." {
+		t.Fatalf("legacy narrative overview = %+v", overview)
+	}
+
+	detail.PlanNarrative.Content = "# Plan\n\nUnsectioned prose.\n\n```md\n## Goal\nFenced example.\n```\n"
+	overview = ProjectDecisionOverview(detail)
+	if overview.Source != DecisionOverviewSourceUnavailable || overview.Problem != "" || overview.Priority != nil || overview.Disposition != "" {
+		t.Fatalf("malformed legacy prose overview = %+v", overview)
+	}
+	if got := ProjectDecisionOverview(nil); got.Source != DecisionOverviewSourceUnavailable || got.Priority != nil {
+		t.Fatalf("nil overview = %+v", got)
+	}
+}
+
+func TestProjectDecisionOverviewRecognizesOnlyValidATXClosingSequences(t *testing.T) {
+	tests := []struct {
+		name    string
+		heading string
+		want    string
+		source  DecisionOverviewSource
+	}{
+		{name: "attached hash is heading text", heading: "## Goal#", source: DecisionOverviewSourceUnavailable},
+		{name: "single closing hash", heading: "## Goal #", want: "Project this goal.", source: DecisionOverviewSourcePlanNarrative},
+		{name: "multiple closing hashes", heading: "## Goal ###", want: "Project this goal.", source: DecisionOverviewSourcePlanNarrative},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			detail := &PlanDetail{PlanNarrative: PlanNarrativeArtifact{Content: tt.heading + "\nProject this goal.\n"}}
+			overview := ProjectDecisionOverview(detail)
+			if overview.Source != tt.source || overview.Problem != tt.want {
+				t.Fatalf("overview = %+v, want source %q and problem %q", overview, tt.source, tt.want)
+			}
+		})
+	}
+}
+
+func TestProjectDecisionOverviewRecognizesTabSeparatedATXHeadings(t *testing.T) {
+	t.Run("target heading", func(t *testing.T) {
+		detail := &PlanDetail{PlanNarrative: PlanNarrativeArtifact{Content: "##\tGoal\nProject this goal.\n"}}
+		overview := ProjectDecisionOverview(detail)
+		if overview.Source != DecisionOverviewSourcePlanNarrative || overview.Problem != "Project this goal." {
+			t.Fatalf("overview = %+v, want tab-separated goal", overview)
+		}
+	})
+
+	t.Run("same-level boundary", func(t *testing.T) {
+		detail := &PlanDetail{PlanNarrative: PlanNarrativeArtifact{Content: "## Goal\nProject this goal.\n\n##\tConstraints\nDo not project this prose.\n"}}
+		overview := ProjectDecisionOverview(detail)
+		if overview.Source != DecisionOverviewSourcePlanNarrative || overview.Problem != "Project this goal." {
+			t.Fatalf("overview = %+v, want body stopped at tab-separated boundary", overview)
+		}
+	})
+}
+
+func TestProjectDecisionOverviewHonorsMarkdownCodeIndentation(t *testing.T) {
+	t.Run("indented heading cannot create section", func(t *testing.T) {
+		detail := &PlanDetail{PlanNarrative: PlanNarrativeArtifact{Content: "    ## Goal\n    Example text is code, not rationale.\n"}}
+		overview := ProjectDecisionOverview(detail)
+		if overview.Source != DecisionOverviewSourceUnavailable || overview.Problem != "" {
+			t.Fatalf("indented code projected as decision overview: %+v", overview)
+		}
+	})
+
+	t.Run("indented fence cannot obscure section", func(t *testing.T) {
+		detail := &PlanDetail{PlanNarrative: PlanNarrativeArtifact{Content: "    ```md\n    example code\n    ```\n\n## Goal\nProject this real goal.\n"}}
+		overview := ProjectDecisionOverview(detail)
+		if overview.Source != DecisionOverviewSourcePlanNarrative || overview.Problem != "Project this real goal." {
+			t.Fatalf("overview = %+v, want real goal after indented code", overview)
+		}
+	})
+
+	t.Run("three-space indentation remains valid", func(t *testing.T) {
+		detail := &PlanDetail{PlanNarrative: PlanNarrativeArtifact{Content: "   ## Goal\nProject this goal.\n"}}
+		overview := ProjectDecisionOverview(detail)
+		if overview.Source != DecisionOverviewSourcePlanNarrative || overview.Problem != "Project this goal." {
+			t.Fatalf("overview = %+v, want three-space-indented heading", overview)
+		}
+	})
+}
+
+func TestProjectDecisionOverviewIgnoresHeadingsAfterNonClosingFenceMarkers(t *testing.T) {
+	tests := []struct {
+		name     string
+		markdown string
+	}{
+		{
+			name: "mixed delimiter",
+			markdown: "```md\n" +
+				"~~~\n" +
+				"## Goal\n" +
+				"Do not project this fenced example.\n" +
+				"```\n",
+		},
+		{
+			name: "shorter matching delimiter",
+			markdown: "````md\n" +
+				"```\n" +
+				"## Goal\n" +
+				"Do not project this nested example.\n" +
+				"````\n",
+		},
+		{
+			name: "backtick delimiter with trailing text",
+			markdown: "```md\n" +
+				"```not-a-close\n" +
+				"## Goal\n" +
+				"Do not project content after a false closing fence.\n" +
+				"```\n",
+		},
+		{
+			name: "tilde delimiter with trailing text",
+			markdown: "~~~md\n" +
+				"~~~~not-a-close\n" +
+				"## Goal\n" +
+				"Do not project content after a false closing fence.\n" +
+				"~~~\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			overview := ProjectDecisionOverview(&PlanDetail{PlanNarrative: PlanNarrativeArtifact{Content: tt.markdown}})
+			if overview.Source != DecisionOverviewSourceUnavailable || overview.Problem != "" {
+				t.Fatalf("fenced legacy narrative projected as decision overview: %+v", overview)
+			}
+		})
+	}
+}
+
+func TestProjectDecisionOverviewBoundsListsTextAndControlsDeterministically(t *testing.T) {
+	criteria := make([]string, decisionOverviewMaxCriteria+3)
+	relationships := make([]PlanRelation, decisionOverviewMaxRelationships+3)
+	for i := range criteria {
+		criteria[i] = "criterion\x1b\n" + strings.Repeat("界", decisionOverviewItemRunes+20)
+	}
+	for i := range relationships {
+		relationships[i] = PlanRelation{PlanID: strings.Repeat("p", decisionOverviewPlanIDRunes+20), Type: PlanRelationRelated, Reason: strings.Repeat("r", decisionOverviewItemRunes+20)}
+	}
+	detail := &PlanDetail{State: State{Plan: PlanState{
+		Title: strings.Repeat("界", decisionOverviewTextRunes+20),
+		Decision: &Decision{
+			Problem: strings.Repeat("p", decisionOverviewTextRunes+20), WhyNow: "urgent\x1b[31m\nnow", ExpectedBenefit: strings.Repeat("b", decisionOverviewTextRunes+20),
+			SuccessCriteria: criteria, Disposition: DecisionDispositionReady,
+			Priority: Priority{Rationale: strings.Repeat("r", decisionOverviewTextRunes+20)},
+		},
+		Sequence: &Sequence{Position: 1, Total: 9, Relationships: relationships},
+	}}}
+
+	first := ProjectDecisionOverview(detail)
+	second := ProjectDecisionOverview(detail)
+	if first.Problem != second.Problem || !slicesEqual(first.SuccessCriteria, second.SuccessCriteria) {
+		t.Fatalf("projection is not deterministic: first=%+v second=%+v", first, second)
+	}
+	for name, value := range map[string]string{"problem": first.Problem, "why now": first.WhyNow, "benefit": first.ExpectedBenefit, "priority": first.Priority.Rationale} {
+		if utf8.RuneCountInString(value) > decisionOverviewTextRunes || strings.ContainsAny(value, "\x00\x1b\n\r\t") {
+			t.Errorf("%s is not bounded plain text: runes=%d value=%q", name, utf8.RuneCountInString(value), value)
+		}
+	}
+	if len(first.SuccessCriteria) != decisionOverviewMaxCriteria || len(first.Sequence.Relationships) != decisionOverviewMaxRelationships {
+		t.Fatalf("bounded lists = criteria %d relationships %d", len(first.SuccessCriteria), len(first.Sequence.Relationships))
+	}
+	for _, criterion := range first.SuccessCriteria {
+		if utf8.RuneCountInString(criterion) > decisionOverviewItemRunes || strings.ContainsRune(criterion, '\x1b') {
+			t.Fatalf("unbounded criterion: %q", criterion)
+		}
+	}
+	if len(detail.State.Plan.Decision.SuccessCriteria) != decisionOverviewMaxCriteria+3 || len(detail.State.Plan.Sequence.Relationships) != decisionOverviewMaxRelationships+3 {
+		t.Fatal("projection mutated durable metadata")
+	}
+}
+
+func slicesEqual(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
 
 func TestSummarizeCountsOriginalAndReworkSlicesAcrossRounds(t *testing.T) {
 	detail := &PlanDetail{

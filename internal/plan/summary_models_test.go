@@ -2,6 +2,26 @@ package plan
 
 import "testing"
 
+func TestDecisionOverviewClonePreservesUnrankedAndCopiesNestedValues(t *testing.T) {
+	legacy := cloneDecisionOverview(DecisionOverview{Source: DecisionOverviewSourcePlanningBrief, Problem: "Legacy goal"})
+	if legacy.Priority != nil || legacy.Sequence != nil || legacy.Disposition != "" {
+		t.Fatalf("legacy clone inferred rank: %+v", legacy)
+	}
+
+	source := DecisionOverview{
+		SuccessCriteria: []string{"one"},
+		Priority:        &Priority{Impact: PriorityLevelHigh},
+		Sequence:        &Sequence{Position: 1, Total: 2, Relationships: []PlanRelation{{PlanID: "other"}}},
+	}
+	clone := cloneDecisionOverview(source)
+	clone.SuccessCriteria[0] = "changed"
+	clone.Priority.Impact = PriorityLevelLow
+	clone.Sequence.Relationships[0].PlanID = "changed"
+	if source.SuccessCriteria[0] != "one" || source.Priority.Impact != PriorityLevelHigh || source.Sequence.Relationships[0].PlanID != "other" {
+		t.Fatalf("overview clone aliases source: source=%+v clone=%+v", source, clone)
+	}
+}
+
 func TestSummarizePlansMixedStatuses(t *testing.T) {
 	rollup := SummarizePlans([]PlanSummary{
 		{Status: StatusPlanned},

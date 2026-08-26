@@ -252,6 +252,38 @@ func TestPlanRowDerivesAttentionReasons(t *testing.T) {
 	}
 }
 
+func TestPlanRowCarriesBoundedOverviewWithoutAliasingSummary(t *testing.T) {
+	entry := taodata.RepoInventoryEntry{Repo: taodata.Repo{ID: "repo", Name: "repo"}}
+	summary := plan.PlanSummary{Overview: plan.DecisionOverview{
+		Source:          plan.DecisionOverviewSourceStructured,
+		Problem:         "Make decisions visible",
+		SuccessCriteria: []string{"bounded output"},
+		Priority:        &plan.Priority{Impact: plan.PriorityLevelHigh},
+		Sequence:        &plan.Sequence{Position: 1, Total: 2, Relationships: []plan.PlanRelation{{PlanID: "next", Type: plan.PlanRelationBefore}}},
+	}}
+	row := planRow(entry, summary)
+	if row.Overview.Source != plan.DecisionOverviewSourceStructured || row.Overview.Problem != "Make decisions visible" || row.Overview.Priority == nil || row.Overview.Sequence == nil {
+		t.Fatalf("monitor overview = %+v", row.Overview)
+	}
+
+	row.Overview.SuccessCriteria[0] = "changed"
+	row.Overview.Priority.Impact = plan.PriorityLevelLow
+	row.Overview.Sequence.Relationships[0].PlanID = "changed"
+	if summary.Overview.SuccessCriteria[0] != "bounded output" || summary.Overview.Priority.Impact != plan.PriorityLevelHigh || summary.Overview.Sequence.Relationships[0].PlanID != "next" {
+		t.Fatalf("monitor row aliases summary overview: summary=%+v row=%+v", summary.Overview, row.Overview)
+	}
+}
+
+func TestPlanRowPreservesUnrankedLegacyOverview(t *testing.T) {
+	row := planRow(taodata.RepoInventoryEntry{}, plan.PlanSummary{Overview: plan.DecisionOverview{
+		Source:  plan.DecisionOverviewSourcePlanningBrief,
+		Problem: "Legacy goal",
+	}})
+	if row.Overview.Priority != nil || row.Overview.Sequence != nil || row.Overview.Disposition != "" {
+		t.Fatalf("legacy monitor row inferred rank: %+v", row.Overview)
+	}
+}
+
 func TestPlanRowCarriesActionMetadataFromInventoryAndCapabilities(t *testing.T) {
 	entry := taodata.RepoInventoryEntry{
 		Repo:     taodata.Repo{ID: "repo", Name: "repo", Root: "/repos/repo"},

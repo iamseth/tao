@@ -40,15 +40,17 @@ For a valid note-backed packet, preserve the four fields verbatim in `plan.md` a
 
 ## Output location
 
-Choose a concise `<short-slug>` for the plan, then allocate the plan directory with Tao:
+Choose a concise `<short-slug>` for each plan, then allocate every plan directory with Tao before writing any artifacts:
 
 ```sh
 tao init --slug <short-slug> --json
 ```
 
+For a single-plan request, run the command once. For a multi-plan request, decide the complete plan set first, run `tao init` once per plan, and retain every returned ID and directory. Only after all plans are allocated may you write their artifacts. This makes each sequence position and every cross-plan `plan_id` exact; never predict an ID from a slug or timestamp.
+
 Tao generates new plan IDs in UTC as `YYYYMMDD-HHMMSS-<short-slug>`. Plans created in the same second are distinguished by their slug, with a numeric suffix used when both timestamp and slug collide. Legacy minute-level `YYYYMMDD-HHMM-<short-slug>` IDs remain supported and must not be renamed or migrated.
 
-Use the returned JSON `plan.dir` as the only output directory and `plan.base_commit` as the plan's recorded base commit when present. All plan artifacts must be written inside that returned directory; do not create a hard-coded `.tao/plans/...` directory.
+Use each returned JSON `plan.dir` as that plan's only output directory and `plan.base_commit` as its recorded base commit when present. All plan artifacts must be written inside the matching returned directory; do not create a hard-coded `.tao/plans/...` directory.
 
 Inside the returned plan directory, write these files:
 
@@ -64,6 +66,7 @@ events.jsonl
 - Preserve intent, constraints, and decisions from this session.
 - Select exactly one plan-level `change_type` from the supported Conventional Commit types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, or `revert`.
 - Treat `change_type` as a required planning-time decision for every new plan. Derive it only from the resolved planning conversation; if the planning packet leaves it unresolved, stop and ask the user rather than inventing a type or writing incomplete plan artifacts.
+- Write valid `decision` and `sequence` objects under `state.json`'s `plan` object for every new plan.
 - Run `tao insights --digest` for the current repository and factor recurring failure patterns—such as environment-caused verification failures, rework-prone areas, and cost outliers—into slice boundaries and verification-command choices.
 - Slice work into small serial steps.
 - Each slice must be independently reviewable.
@@ -79,6 +82,29 @@ events.jsonl
 - Mark uncertain assumptions clearly.
 - Do not use YAML.
 - Use Markdown for explanation and JSON for executable structure.
+
+## Decision and sequence metadata
+
+Record the planning judgment in `plan.decision`:
+
+- `problem` states the concrete problem the plan addresses without deriving it from the title.
+- `why_now` states the known timing driver, or explicitly says that no time-sensitive driver is established.
+- `expected_benefit` states the concrete expected outcome.
+- `readiness` is exactly `ready` (resolved enough to execute), `needs_refinement` (more planning is needed), or `blocked` (a known blocker prevents action).
+- `success_criteria` contains at least one non-empty observable outcome.
+- `disposition` is exactly `ready`, `conditional`, `deferred`, or `obsolete`.
+- `disposition_reason` explains that recommendation and any condition.
+- `priority.level` is exactly `must`, `should`, or `could`. `priority.impact`, `priority.urgency`, `priority.risk`, and `priority.confidence` are each exactly `low`, `medium`, or `high`. `priority.effort` is exactly `small`, `medium`, or `large`. They describe overall priority, benefit magnitude, time sensitivity, downside, confidence in the assessment, and implementation size respectively. `priority.rationale` explains the tradeoff. Tao does not combine these categories into a score.
+
+Use only facts and decisions established by the planning conversation. State material uncertainty explicitly in `why_now`, `disposition_reason`, or `priority.rationale`; never invent business priority, deadlines, dependencies, or certainty to fill the fields. If the available context cannot support a categorical value or safe disposition, resolve it with the user before writing artifacts instead of guessing.
+
+Record advisory ordering in `plan.sequence`:
+
+- `position` is this plan's one-based position and `total` is the number of plans in the independently reviewable plan set. A standalone plan uses `1` and `1`.
+- Optional `relationships` entries contain an exact same-repository allocated `plan_id`, a `type` of `before`, `after`, or `related`, and a non-empty `reason`. When a plan should run after another, use an `after` relationship to that exact ID.
+- Relationships and positions explain intended order only. They never replace slice `depends_on`, satisfy approvals, make a plan runnable, or authorize any runtime lifecycle transition.
+
+For multi-plan slicing, allocate the complete set first, then assign stable group positions and write reciprocal relationships where they clarify the order. Do not relate a plan to itself or repeat the same target in one plan.
 
 ## Input readiness
 
@@ -174,7 +200,7 @@ Copy the Planning Packet's strict four-field Source Note block, or write `None` 
 
 Write a concise planning brief for the future build agent. This file is required for new plans and should avoid duplicating the full executable artifacts.
 
-Use exactly these sections:
+Use exactly these sections. Keep decision detail in `state.json`; summarize only the durable context needed by future agents and do not add headings that duplicate the structured decision or sequence contract:
 
 # Planning Brief
 
@@ -225,6 +251,28 @@ Write current state. The example uses `feat`; replace it with the supported type
     "id": "<YYYYMMDD-HHMMSS-short-slug>",
     "title": "<title>",
     "change_type": "feat",
+    "decision": {
+      "problem": "<concrete problem this plan addresses>",
+      "why_now": "<known timing driver or explicit absence of one>",
+      "expected_benefit": "<concrete expected outcome>",
+      "readiness": "ready",
+      "success_criteria": ["<observable outcome>"],
+      "disposition": "ready",
+      "disposition_reason": "<reason for the recommendation>",
+      "priority": {
+        "level": "must",
+        "impact": "high",
+        "urgency": "medium",
+        "effort": "small",
+        "risk": "low",
+        "confidence": "high",
+        "rationale": "<tradeoff and any material uncertainty>"
+      }
+    },
+    "sequence": {
+      "position": 1,
+      "total": 1
+    },
     "current_slice": null,
     "completed_slices": [],
     "pending_slices": ["001-example"],

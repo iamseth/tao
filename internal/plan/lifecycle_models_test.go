@@ -184,6 +184,84 @@ func TestChangeTypeValidationAndCategoryMapping(t *testing.T) {
 	}
 }
 
+func TestPlanDecisionAndSequenceJSONRoundTripAndLegacyCompatibility(t *testing.T) {
+	state := State{Plan: PlanState{
+		ID: "plan-a",
+		Decision: &Decision{
+			Problem: "A concrete planning problem.", WhyNow: "Users cannot compare planned work.", ExpectedBenefit: "Make tradeoffs explainable.",
+			Readiness: DecisionReadinessReady, SuccessCriteria: []string{"Overview exposes the rationale."},
+			Disposition: DecisionDispositionReady, DispositionReason: "The persistence seam is stable.",
+			Priority: Priority{Level: PriorityOverallLevelMust, Impact: PriorityLevelHigh, Urgency: PriorityLevelMedium, Effort: PriorityEffortSmall, Risk: PriorityLevelLow, Confidence: PriorityLevelHigh, Rationale: "High benefit for bounded effort."},
+		},
+		Sequence: &Sequence{Position: 1, Total: 2, Relationships: []PlanRelation{{PlanID: "plan-b", Type: PlanRelationBefore, Reason: "Plan B consumes this schema."}}},
+	}}
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got State
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Plan.Decision == nil || got.Plan.Decision.Problem != "A concrete planning problem." || got.Plan.Decision.Priority.Level != PriorityOverallLevelMust || got.Plan.Decision.Priority.Effort != PriorityEffortSmall || got.Plan.Decision.Priority.Confidence != PriorityLevelHigh || len(got.Plan.Decision.SuccessCriteria) != 1 {
+		t.Fatalf("decision after round trip = %+v", got.Plan.Decision)
+	}
+	if got.Plan.Sequence == nil || got.Plan.Sequence.Position != 1 || len(got.Plan.Sequence.Relationships) != 1 || got.Plan.Sequence.Relationships[0].Type != PlanRelationBefore {
+		t.Fatalf("sequence after round trip = %+v", got.Plan.Sequence)
+	}
+
+	var legacy State
+	if err := json.Unmarshal([]byte(`{"plan":{"id":"legacy"}}`), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if legacy.Plan.Decision != nil || legacy.Plan.Sequence != nil {
+		t.Fatalf("legacy metadata = decision:%+v sequence:%+v, want nil", legacy.Plan.Decision, legacy.Plan.Sequence)
+	}
+	legacyData, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(legacyData), `"decision"`) || strings.Contains(string(legacyData), `"sequence"`) {
+		t.Fatalf("legacy JSON unexpectedly added decision metadata: %s", legacyData)
+	}
+}
+
+func TestPlanDecisionCategoricalValues(t *testing.T) {
+	for _, readiness := range []DecisionReadiness{DecisionReadinessReady, DecisionReadinessNeedsRefinement, DecisionReadinessBlocked} {
+		if !validDecisionReadiness(readiness) {
+			t.Errorf("readiness %q should be valid", readiness)
+		}
+	}
+	for _, disposition := range []DecisionDisposition{DecisionDispositionReady, DecisionDispositionConditional, DecisionDispositionDeferred, DecisionDispositionObsolete} {
+		if !validDecisionDisposition(disposition) {
+			t.Errorf("disposition %q should be valid", disposition)
+		}
+	}
+	for _, level := range []PriorityOverallLevel{PriorityOverallLevelMust, PriorityOverallLevelShould, PriorityOverallLevelCould} {
+		if !validPriorityOverallLevel(level) {
+			t.Errorf("overall priority level %q should be valid", level)
+		}
+	}
+	if validPriorityOverallLevel(PriorityOverallLevel(PriorityLevelHigh)) {
+		t.Error("dimensional priority level high should not be a valid overall priority level")
+	}
+	for _, level := range []PriorityLevel{PriorityLevelLow, PriorityLevelMedium, PriorityLevelHigh} {
+		if !validPriorityLevel(level) {
+			t.Errorf("dimensional priority level %q should be valid", level)
+		}
+	}
+	for _, effort := range []PriorityEffort{PriorityEffortSmall, PriorityEffortMedium, PriorityEffortLarge} {
+		if !validPriorityEffort(effort) {
+			t.Errorf("priority effort %q should be valid", effort)
+		}
+	}
+	for _, relationType := range []PlanRelationType{PlanRelationBefore, PlanRelationAfter, PlanRelationRelated} {
+		if !validPlanRelationType(relationType) {
+			t.Errorf("relation type %q should be valid", relationType)
+		}
+	}
+}
+
 func TestPlanReviewFindingsJSON(t *testing.T) {
 	review := PlanReview{
 		Verdict:       ReviewVerdictChangesRequested,

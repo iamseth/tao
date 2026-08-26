@@ -38,6 +38,8 @@
 //     preserve by default but are explicitly clearable through ArtifactChangeSet.
 //   - Repo.BaseCommit ("base_commit,omitempty")
 //   - PlanState.ChangeType (ChangeType, "change_type,omitempty")
+//   - PlanState.Decision (*Decision, "decision,omitempty") and Sequence
+//     (*Sequence, "sequence,omitempty") preserve optional planning metadata.
 //   - PlanState.PullRequest (*PullRequest, "pull_request,omitempty")
 //   - PlanState.Review and all PlanReview fields preserve by default but the
 //     block is explicitly replaceable or clearable through ArtifactChangeSet.
@@ -199,6 +201,16 @@ func TestClearableFieldsRoundTrip(t *testing.T) {
 		})
 	}
 
+}
+
+func TestDecisionMetadataPreservesByDefaultWithOmitEmpty(t *testing.T) {
+	planType := reflect.TypeOf(PlanState{})
+	for _, fieldName := range []string{"Decision", "Sequence"} {
+		field, ok := planType.FieldByName(fieldName)
+		if !ok || !strings.Contains(field.Tag.Get("json"), "omitempty") {
+			t.Fatalf("PlanState.%s must preserve by default with omitempty, tag=%q", fieldName, field.Tag.Get("json"))
+		}
+	}
 }
 
 func TestMigratedSliceBlockerNoteRequiresDeclaredClear(t *testing.T) {

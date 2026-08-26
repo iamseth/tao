@@ -1389,8 +1389,9 @@ func isUnsupportedDirSyncError(err error) bool {
 }
 
 // mergeJSON deep-merges update over existing: objects are merged key-by-key,
-// arrays are merged by id field (or fully replaced when no id is present or
-// when update is empty), and all other values are replaced by the update.
+// arrays are merged by their id or plan_id field (or fully replaced when no
+// identity is present or when update is empty), and all other values are
+// replaced by the update.
 // See writeJSON for the clearable-field contract that this function enforces.
 func mergeJSON(existing []byte, update []byte) ([]byte, error) {
 	var existingValue any
@@ -1422,16 +1423,16 @@ func mergeJSONValue(existing any, update any) any {
 }
 
 func mergeJSONArray(existing []any, update []any) []any {
-	existingByID := make(map[string]any, len(existing))
+	existingByID := make(map[objectIdentity]any, len(existing))
 	for _, value := range existing {
-		if id := objectID(value); id != "" {
-			existingByID[id] = value
+		for _, identity := range objectIdentities(value) {
+			existingByID[identity] = value
 		}
 	}
 	merged := make([]any, 0, len(update))
 	for _, value := range update {
-		if id := objectID(value); id != "" {
-			if existingValue, ok := existingByID[id]; ok {
+		if identity, ok := objectID(value); ok {
+			if existingValue, found := existingByID[identity]; found {
 				value = mergeJSONValue(existingValue, value)
 			}
 		}
@@ -1440,13 +1441,31 @@ func mergeJSONArray(existing []any, update []any) []any {
 	return merged
 }
 
-func objectID(value any) string {
+type objectIdentity struct {
+	field string
+	value string
+}
+
+func objectIdentities(value any) []objectIdentity {
 	object, ok := value.(map[string]any)
 	if !ok {
-		return ""
+		return nil
 	}
-	id, _ := object["id"].(string)
-	return id
+	identities := make([]objectIdentity, 0, 2)
+	for _, field := range []string{"id", "plan_id"} {
+		if id, _ := object[field].(string); id != "" {
+			identities = append(identities, objectIdentity{field: field, value: id})
+		}
+	}
+	return identities
+}
+
+func objectID(value any) (objectIdentity, bool) {
+	identities := objectIdentities(value)
+	if len(identities) == 0 {
+		return objectIdentity{}, false
+	}
+	return identities[0], true
 }
 
 func readJSON(path string, out any) error {

@@ -179,11 +179,115 @@ type Repo struct {
 	BaseCommit string `json:"base_commit,omitempty"`
 }
 
+// DecisionReadiness describes whether a plan is sufficiently resolved to act on.
+type DecisionReadiness string
+
+const (
+	DecisionReadinessReady           DecisionReadiness = "ready"
+	DecisionReadinessNeedsRefinement DecisionReadiness = "needs_refinement"
+	DecisionReadinessBlocked         DecisionReadiness = "blocked"
+)
+
+// DecisionDisposition records the planning recommendation independently from
+// runtime lifecycle gates.
+type DecisionDisposition string
+
+const (
+	DecisionDispositionReady       DecisionDisposition = "ready"
+	DecisionDispositionConditional DecisionDisposition = "conditional"
+	DecisionDispositionDeferred    DecisionDisposition = "deferred"
+	DecisionDispositionObsolete    DecisionDisposition = "obsolete"
+)
+
+// PriorityOverallLevel records whether a plan is a must, should, or could.
+// Tao deliberately does not combine it with the dimensional inputs into a
+// numeric score.
+type PriorityOverallLevel string
+
+const (
+	PriorityOverallLevelMust   PriorityOverallLevel = "must"
+	PriorityOverallLevelShould PriorityOverallLevel = "should"
+	PriorityOverallLevelCould  PriorityOverallLevel = "could"
+)
+
+// PriorityLevel is a low, medium, or high dimensional priority input.
+type PriorityLevel string
+
+const (
+	PriorityLevelLow    PriorityLevel = "low"
+	PriorityLevelMedium PriorityLevel = "medium"
+	PriorityLevelHigh   PriorityLevel = "high"
+)
+
+// PriorityEffort describes implementation size independently from priority.
+type PriorityEffort string
+
+const (
+	PriorityEffortSmall  PriorityEffort = "small"
+	PriorityEffortMedium PriorityEffort = "medium"
+	PriorityEffortLarge  PriorityEffort = "large"
+)
+
+// PlanRelationType describes an advisory ordering relationship to another plan.
+type PlanRelationType string
+
+const (
+	PlanRelationBefore  PlanRelationType = "before"
+	PlanRelationAfter   PlanRelationType = "after"
+	PlanRelationRelated PlanRelationType = "related"
+)
+
+// Priority records the categorical tradeoffs behind a disposition.
+type Priority struct {
+	Level      PriorityOverallLevel `json:"level"`
+	Impact     PriorityLevel        `json:"impact"`
+	Urgency    PriorityLevel        `json:"urgency"`
+	Effort     PriorityEffort       `json:"effort"`
+	Risk       PriorityLevel        `json:"risk"`
+	Confidence PriorityLevel        `json:"confidence"`
+	Rationale  string               `json:"rationale"`
+}
+
+// Decision records the planning rationale for why a plan should or should not
+// be pursued. It remains descriptive and grants no execution authority.
+type Decision struct {
+	Problem           string              `json:"problem"`
+	WhyNow            string              `json:"why_now"`
+	ExpectedBenefit   string              `json:"expected_benefit"`
+	Readiness         DecisionReadiness   `json:"readiness"`
+	SuccessCriteria   []string            `json:"success_criteria"`
+	Disposition       DecisionDisposition `json:"disposition"`
+	DispositionReason string              `json:"disposition_reason"`
+	Priority          Priority            `json:"priority"`
+}
+
+// PlanRelation records one advisory relationship to another plan.
+type PlanRelation struct {
+	PlanID string           `json:"plan_id"`
+	Type   PlanRelationType `json:"type"`
+	Reason string           `json:"reason"`
+}
+
+// Sequence records a plan's advisory position among a bounded group and any
+// explicit cross-plan relationships.
+type Sequence struct {
+	Position      int            `json:"position"`
+	Total         int            `json:"total"`
+	Relationships []PlanRelation `json:"relationships,omitempty"`
+}
+
+// PlanDecision and PlanSequence retain explicit domain names for callers that
+// prefer them while the persisted schema uses the concise model names above.
+type PlanDecision = Decision
+type PlanSequence = Sequence
+
 // PlanState is the mutable queue state for a plan.
 type PlanState struct {
 	ID              string     `json:"id"`
 	Title           string     `json:"title"`
 	ChangeType      ChangeType `json:"change_type,omitempty"`
+	Decision        *Decision  `json:"decision,omitempty"`
+	Sequence        *Sequence  `json:"sequence,omitempty"`
 	CurrentSlice    *string    `json:"current_slice,omitempty"`
 	CompletedSlices []string   `json:"completed_slices"`
 	PendingSlices   []string   `json:"pending_slices"`

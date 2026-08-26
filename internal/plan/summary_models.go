@@ -32,6 +32,7 @@ type PlanSummary struct {
 	ID                               string
 	Title                            string
 	ChangeType                       ChangeType
+	Overview                         DecisionOverview
 	Status                           string
 	Dir                              string
 	CurrentSliceID                   string

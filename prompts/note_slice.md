@@ -12,6 +12,8 @@ Convert the durable planning transcript below into executable Tao plan artifacts
 - Use the full transcript as slicing context; do not ask follow-up questions unless the transcript is impossible to slice.
 - Select exactly one plan-level `change_type` from the supported Conventional Commit types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, or `revert`.
 - Treat `change_type` as a required planning-time decision for every new plan and persist it as `plan.change_type` in `state.json`. Derive it only from the resolved planning transcript; if the transcript leaves it unresolved, write no plan artifacts and explain the refusal rather than inventing a type or writing an incomplete plan.
+- Write valid `plan.decision` and `plan.sequence` objects in `state.json`, including a concrete `problem`. Decision fields use the same categorical values as `/tao-slice`: readiness is `ready`, `needs_refinement`, or `blocked`; disposition is `ready`, `conditional`, `deferred`, or `obsolete`; overall priority level is `must`, `should`, or `could`; impact, urgency, risk, and confidence are each `low`, `medium`, or `high`; and effort is `small`, `medium`, or `large`.
+- Base decision categories only on the transcript. State material uncertainty explicitly in `why_now`, `disposition_reason`, or `priority.rationale`; never invent priority facts. Use sequence position `1` and total `1` for this single allocated plan, with no fabricated cross-plan relationships.
 - Produce a normal Tao plan that existing `tao validate` and run queue flows can load.
 
 ## Required artifacts
@@ -28,6 +30,8 @@ Keep planning-session capture sidecars out of new plans, use concrete expected f
 
 Artifact contract details:
 
+- `state.json` must include complete non-empty decision rationale and success criteria, plus valid categorical priority values and positive sequence bounds.
+- Decision and sequence metadata is advisory planning context only; it never authorizes execution or bypasses lifecycle gates.
 - `state.json` must include `plan.timing.last_activity_at` at creation time.
 - `state.json` repo metadata must include `base_commit` set to the current repository `HEAD` when it can be read.
 - Keep `state.updated_at` consistent with the plan lifecycle timestamps you write.

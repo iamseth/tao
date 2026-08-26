@@ -36,6 +36,8 @@ func cloneState(state State) State {
 
 func clonePlanState(plan PlanState) PlanState {
 	clone := plan
+	clone.Decision = cloneDecision(plan.Decision)
+	clone.Sequence = cloneSequence(plan.Sequence)
 	clone.CurrentSlice = cloneStringPtr(plan.CurrentSlice)
 	clone.CompletedSlices = cloneStringSlice(plan.CompletedSlices)
 	clone.PendingSlices = cloneStringSlice(plan.PendingSlices)
@@ -49,6 +51,26 @@ func clonePlanState(plan PlanState) PlanState {
 	clone.MergeCommitIntent = cloneSingleMergeCommitIntent(plan.MergeCommitIntent)
 	clone.FinalVerification = cloneFinalVerification(plan.FinalVerification)
 	return clone
+}
+
+func cloneDecision(decision *Decision) *Decision {
+	if decision == nil {
+		return nil
+	}
+	clone := *decision
+	clone.SuccessCriteria = cloneStringSlice(decision.SuccessCriteria)
+	return &clone
+}
+
+func cloneSequence(sequence *Sequence) *Sequence {
+	if sequence == nil {
+		return nil
+	}
+	clone := *sequence
+	if sequence.Relationships != nil {
+		clone.Relationships = append([]PlanRelation(nil), sequence.Relationships...)
+	}
+	return &clone
 }
 
 func clonePlanTiming(timing PlanTiming) PlanTiming {

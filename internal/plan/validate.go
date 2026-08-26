@@ -31,6 +31,8 @@ func ValidateDetail(detail *PlanDetail) []string {
 	if err := ValidateChangeType(detail.State.Plan.ChangeType); err != nil {
 		warnings = append(warnings, "state.json plan.change_type is invalid: "+err.Error())
 	}
+	warnings = append(warnings, validateDecision(detail.State.Plan.Decision)...)
+	warnings = append(warnings, validateSequence(detail.State.Plan.ID, detail.State.Plan.Sequence)...)
 	if detail.Slices.PlanID != "" && detail.State.Plan.ID != "" && detail.Slices.PlanID != detail.State.Plan.ID {
 		warnings = append(warnings, "state.json plan.id does not match slices.json plan_id")
 	}
@@ -97,6 +99,124 @@ func validateWorkspace(workspace *Workspace) []string {
 
 func validValue(value string, allowed []string) bool {
 	return slices.Contains(allowed, value)
+}
+
+func validateDecision(decision *Decision) []string {
+	if decision == nil {
+		return nil
+	}
+	var warnings []string
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "problem", value: decision.Problem},
+		{name: "why_now", value: decision.WhyNow},
+		{name: "expected_benefit", value: decision.ExpectedBenefit},
+		{name: "disposition_reason", value: decision.DispositionReason},
+		{name: "priority.rationale", value: decision.Priority.Rationale},
+	} {
+		if strings.TrimSpace(field.value) == "" {
+			warnings = append(warnings, "state.json plan.decision."+field.name+" is required")
+		}
+	}
+	if !validDecisionReadiness(decision.Readiness) {
+		warnings = append(warnings, "state.json plan.decision.readiness is invalid")
+	}
+	if !validDecisionDisposition(decision.Disposition) {
+		warnings = append(warnings, "state.json plan.decision.disposition is invalid")
+	}
+	if len(decision.SuccessCriteria) == 0 {
+		warnings = append(warnings, "state.json plan.decision.success_criteria must contain at least one criterion")
+	} else {
+		for i, criterion := range decision.SuccessCriteria {
+			if strings.TrimSpace(criterion) == "" {
+				warnings = append(warnings, fmt.Sprintf("state.json plan.decision.success_criteria[%d] is required", i))
+			}
+		}
+	}
+	if !validPriorityOverallLevel(decision.Priority.Level) {
+		warnings = append(warnings, "state.json plan.decision.priority.level is invalid")
+	}
+	for _, field := range []struct {
+		name  string
+		value PriorityLevel
+	}{
+		{name: "impact", value: decision.Priority.Impact},
+		{name: "urgency", value: decision.Priority.Urgency},
+		{name: "risk", value: decision.Priority.Risk},
+		{name: "confidence", value: decision.Priority.Confidence},
+	} {
+		if !validPriorityLevel(field.value) {
+			warnings = append(warnings, "state.json plan.decision.priority."+field.name+" is invalid")
+		}
+	}
+	if !validPriorityEffort(decision.Priority.Effort) {
+		warnings = append(warnings, "state.json plan.decision.priority.effort is invalid")
+	}
+	return warnings
+}
+
+func validateSequence(planID string, sequence *Sequence) []string {
+	if sequence == nil {
+		return nil
+	}
+	var warnings []string
+	if sequence.Position < 1 {
+		warnings = append(warnings, "state.json plan.sequence.position must be at least 1")
+	}
+	if sequence.Total < 1 {
+		warnings = append(warnings, "state.json plan.sequence.total must be at least 1")
+	} else if sequence.Position > sequence.Total {
+		warnings = append(warnings, "state.json plan.sequence.position cannot exceed total")
+	}
+	seen := make(map[string]struct{}, len(sequence.Relationships))
+	for i, relationship := range sequence.Relationships {
+		path := fmt.Sprintf("state.json plan.sequence.relationships[%d]", i)
+		target := strings.TrimSpace(relationship.PlanID)
+		if target == "" {
+			warnings = append(warnings, path+".plan_id is required")
+		} else {
+			if target == strings.TrimSpace(planID) && target != "" {
+				warnings = append(warnings, path+" cannot reference its own plan")
+			}
+			if _, duplicate := seen[target]; duplicate {
+				warnings = append(warnings, path+" duplicates relationship to plan "+target)
+			}
+			seen[target] = struct{}{}
+		}
+		if !validPlanRelationType(relationship.Type) {
+			warnings = append(warnings, path+".type is invalid")
+		}
+		if strings.TrimSpace(relationship.Reason) == "" {
+			warnings = append(warnings, path+".reason is required")
+		}
+	}
+	return warnings
+}
+
+func validDecisionReadiness(value DecisionReadiness) bool {
+	return value == DecisionReadinessReady || value == DecisionReadinessNeedsRefinement || value == DecisionReadinessBlocked
+}
+
+func validDecisionDisposition(value DecisionDisposition) bool {
+	return value == DecisionDispositionReady || value == DecisionDispositionConditional || value == DecisionDispositionDeferred || value == DecisionDispositionObsolete
+}
+
+func validPriorityOverallLevel(value PriorityOverallLevel) bool {
+	return value == PriorityOverallLevelMust || value == PriorityOverallLevelShould || value == PriorityOverallLevelCould
+}
+
+func validPriorityLevel(value PriorityLevel) bool {
+	return value == PriorityLevelLow || value == PriorityLevelMedium || value == PriorityLevelHigh
+}
+
+func validPriorityEffort(value PriorityEffort) bool {
+	return value == PriorityEffortSmall || value == PriorityEffortMedium || value == PriorityEffortLarge
+}
+
+func validPlanRelationType(value PlanRelationType) bool {
+	return value == PlanRelationBefore || value == PlanRelationAfter || value == PlanRelationRelated
 }
 
 func validatePlanningBrief(detail *PlanDetail) []string {

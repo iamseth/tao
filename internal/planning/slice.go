@@ -124,15 +124,26 @@ func (r *FileRepository) ValidateAllocatedPlan(ctx context.Context, allocation P
 		result.Findings = append(result.Findings, ValidationFinding{Severity: "error", Path: allocation.Dir, Message: err.Error()})
 		return nil, finishValidation(result), nil //nolint:nilerr // resolve failure is reported as a validation finding, not a hard error
 	}
-	for _, warning := range detail.Warnings {
-		result.Findings = append(result.Findings, ValidationFinding{Severity: "warning", Message: warning})
-	}
 	statePath := filepath.Join(allocation.Dir, "state.json")
+	for _, warning := range detail.Warnings {
+		finding := ValidationFinding{Severity: "warning", Message: warning}
+		if isDecisionMetadataWarning(warning) {
+			finding.Severity = "error"
+			finding.Path = statePath
+		}
+		result.Findings = append(result.Findings, finding)
+	}
 	changeType := detail.State.Plan.ChangeType
 	if changeType == "" {
 		result.Findings = append(result.Findings, ValidationFinding{Severity: "error", Path: statePath, Message: "state.json plan.change_type is required for a newly allocated plan"})
 	} else if err := plan.ValidateChangeType(changeType); err != nil {
 		result.Findings = append(result.Findings, ValidationFinding{Severity: "error", Path: statePath, Message: "state.json plan.change_type is invalid: " + err.Error()})
+	}
+	if detail.State.Plan.Decision == nil {
+		result.Findings = append(result.Findings, ValidationFinding{Severity: "error", Path: statePath, Message: "state.json plan.decision is required for a newly allocated plan"})
+	}
+	if detail.State.Plan.Sequence == nil {
+		result.Findings = append(result.Findings, ValidationFinding{Severity: "error", Path: statePath, Message: "state.json plan.sequence is required for a newly allocated plan"})
 	}
 	if detail.State.Plan.ID != allocation.ID {
 		result.Findings = append(result.Findings, ValidationFinding{Severity: "error", Path: filepath.Join(allocation.Dir, "state.json"), Message: fmt.Sprintf("state.json plan.id %q does not match allocated plan id %q", detail.State.Plan.ID, allocation.ID)})
@@ -155,6 +166,10 @@ func (r *FileRepository) DeleteAllocatedPlan(ctx context.Context, allocation Pla
 		return fmt.Errorf("refusing to delete allocation %q at %q", allocation.ID, allocation.Dir)
 	}
 	return os.RemoveAll(allocation.Dir)
+}
+
+func isDecisionMetadataWarning(warning string) bool {
+	return strings.HasPrefix(warning, "state.json plan.decision.") || strings.HasPrefix(warning, "state.json plan.sequence.")
 }
 
 func finishValidation(result ValidationResult) ValidationResult {

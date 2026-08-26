@@ -129,6 +129,67 @@ func TestStartSlicePreservesUnknownJSONFields(t *testing.T) {
 	}
 }
 
+func TestPlanRecordLifecycleWritePreservesDecisionMetadataAndUnknownFields(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 8, 26, 18, 0, 0, 0, time.UTC)
+	detail := startSliceDetail(dir)
+	detail.State.Plan.Decision = &Decision{
+		Problem: "Plans cannot expose their rationale.", WhyNow: "Planning views need rationale.", ExpectedBenefit: "Plans become comparable.",
+		Readiness: DecisionReadinessReady, SuccessCriteria: []string{"Rationale survives lifecycle writes."},
+		Disposition: DecisionDispositionReady, DispositionReason: "The model is bounded.",
+		Priority: Priority{Level: PriorityOverallLevelMust, Impact: PriorityLevelHigh, Urgency: PriorityLevelMedium, Effort: PriorityEffortSmall, Risk: PriorityLevelLow, Confidence: PriorityLevelHigh, Rationale: "High value for low effort."},
+	}
+	detail.State.Plan.Sequence = &Sequence{Position: 1, Total: 2, Relationships: []PlanRelation{{PlanID: "plan-b", Type: PlanRelationBefore, Reason: "Plan B consumes this model."}}}
+	writeStartSliceArtifacts(t, dir, detail)
+
+	var raw map[string]any
+	readJSONFile(t, filepath.Join(dir, "state.json"), &raw)
+	planObject := raw["plan"].(map[string]any)
+	decision := planObject["decision"].(map[string]any)
+	decision["custom_decision_field"] = "keep"
+	relationship := planObject["sequence"].(map[string]any)["relationships"].([]any)[0].(map[string]any)
+	relationship["id"] = "extension-id"
+	relationship["custom_relationship_field"] = "keep"
+	payload, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := loadPlanFiles(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded := detailFromFiles(files)
+	record, err := NewPlanRecord(dir, loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := record.StartSlice("001-a", now); err != nil {
+		t.Fatal(err)
+	}
+
+	persisted, err := ReadState(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Plan.Decision == nil || persisted.Plan.Decision.Problem != detail.State.Plan.Decision.Problem || persisted.Plan.Decision.Priority.Effort != PriorityEffortSmall || persisted.Plan.Decision.Priority.Confidence != PriorityLevelHigh || persisted.Plan.Decision.ExpectedBenefit != detail.State.Plan.Decision.ExpectedBenefit || persisted.Plan.Sequence == nil || len(persisted.Plan.Sequence.Relationships) != 1 {
+		t.Fatalf("decision metadata did not survive lifecycle write: %+v", persisted.Plan)
+	}
+	readJSONFile(t, filepath.Join(dir, "state.json"), &raw)
+	planObject = raw["plan"].(map[string]any)
+	decision = planObject["decision"].(map[string]any)
+	if decision["custom_decision_field"] != "keep" {
+		t.Fatalf("unknown decision field was lost: %#v", decision)
+	}
+	relationship = planObject["sequence"].(map[string]any)["relationships"].([]any)[0].(map[string]any)
+	if relationship["id"] != "extension-id" || relationship["custom_relationship_field"] != "keep" {
+		t.Fatalf("unknown relationship fields were lost: %#v", relationship)
+	}
+}
+
 func TestAutomaticReworkOperationsPreserveUnknownArtifactFields(t *testing.T) {
 	dir := t.TempDir()
 	detail := completedReopenDetail()

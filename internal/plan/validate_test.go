@@ -667,6 +667,81 @@ func TestSliceTagsRemainOptionalForExistingPlans(t *testing.T) {
 	}
 }
 
+func TestValidateDetailAllowsValidDecisionAndSequenceMetadata(t *testing.T) {
+	detail := &PlanDetail{
+		State: State{Plan: PlanState{
+			ID: "plan", PendingSlices: []string{"001-a"},
+			Decision: &Decision{
+				Problem: "Plans lack structured rationale.", WhyNow: "The plan overview lacks rationale.", ExpectedBenefit: "Operators can compare work.",
+				Readiness: DecisionReadinessReady, SuccessCriteria: []string{"The rationale is visible."},
+				Disposition: DecisionDispositionReady, DispositionReason: "The work is bounded.",
+				Priority: Priority{Level: PriorityOverallLevelMust, Impact: PriorityLevelHigh, Urgency: PriorityLevelMedium, Effort: PriorityEffortSmall, Risk: PriorityLevelLow, Confidence: PriorityLevelHigh, Rationale: "Benefit outweighs effort."},
+			},
+			Sequence: &Sequence{Position: 1, Total: 2, Relationships: []PlanRelation{{PlanID: "other", Type: PlanRelationBefore, Reason: "Other consumes this schema."}}},
+		}},
+		Slices:        SlicesFile{PlanID: "plan", Slices: []Slice{{ID: "001-a", Status: StatusPending}}},
+		PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
+	}
+
+	if warnings := ValidateDetail(detail); len(warnings) != 0 {
+		t.Fatalf("valid decision metadata produced warnings: %v", warnings)
+	}
+}
+
+func TestValidateDetailWarnsForMalformedPresentDecisionAndSequence(t *testing.T) {
+	detail := &PlanDetail{
+		State: State{Plan: PlanState{
+			ID: "plan", PendingSlices: []string{"001-a"},
+			Decision: &Decision{
+				Readiness: "maybe", SuccessCriteria: []string{" "}, Disposition: "soon",
+				Priority: Priority{Level: "urgent", Impact: "maximum", Urgency: "now", Effort: "tiny", Risk: "none"},
+			},
+			Sequence: &Sequence{Position: 3, Total: 2, Relationships: []PlanRelation{
+				{PlanID: "plan", Type: "depends_on"},
+				{PlanID: "plan", Type: PlanRelationAfter, Reason: "duplicate"},
+				{Type: PlanRelationRelated, Reason: "missing target"},
+			}},
+		}},
+		Slices:        SlicesFile{PlanID: "plan", Slices: []Slice{{ID: "001-a", Status: StatusPending}}},
+		PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
+	}
+
+	warnings := ValidateDetail(detail)
+	for _, want := range []string{
+		"plan.decision.problem is required",
+		"plan.decision.why_now is required",
+		"plan.decision.expected_benefit is required",
+		"plan.decision.readiness is invalid",
+		"plan.decision.success_criteria[0] is required",
+		"plan.decision.disposition is invalid",
+		"plan.decision.disposition_reason is required",
+		"plan.decision.priority.level is invalid",
+		"plan.decision.priority.impact is invalid",
+		"plan.decision.priority.confidence is invalid",
+		"plan.decision.priority.effort is invalid",
+		"plan.decision.priority.rationale is required",
+		"plan.sequence.position cannot exceed total",
+		"cannot reference its own plan",
+		"duplicates relationship to plan plan",
+		"relationships[0].type is invalid",
+		"relationships[0].reason is required",
+		"relationships[2].plan_id is required",
+	} {
+		if !containsWarning(warnings, want) {
+			t.Errorf("expected warning %q, got %v", want, warnings)
+		}
+	}
+}
+
+func TestValidateDetailWarnsForNonPositiveSequenceBounds(t *testing.T) {
+	warnings := validateSequence("plan", &Sequence{})
+	for _, want := range []string{"position must be at least 1", "total must be at least 1"} {
+		if !containsWarning(warnings, want) {
+			t.Errorf("expected warning %q, got %v", want, warnings)
+		}
+	}
+}
+
 func TestValidateDetailAllowsSupportedAndLegacyPlanChangeTypes(t *testing.T) {
 	changeTypes := append(SupportedChangeTypes(), "")
 	for _, changeType := range changeTypes {
