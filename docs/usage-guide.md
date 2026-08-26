@@ -170,11 +170,15 @@ Actions specific to the Plans tab are:
   repository), then starts detached `tao merge --all` with that repository root
   as its working directory. It never batches plans across repositories.
 - `c` toggles the completed rows already included by `--completed-window`.
-- `Enter` opens the selected plan's queue-ordered slice list and live
-  `agent-run.log` tail. On that page, `j`/`k` or the arrow keys select a slice
-  and `Enter` opens its full read-only details; empty fields are omitted.
-  `Esc` returns one level at a time, and log following continues until you
-  leave plan detail for the table.
+- `Enter` opens the selected plan detail. Use `Tab` or the left/right arrows
+  to switch between Overview, Slices, and Activity. Overview shows bounded plan
+  intent and runs advisory base-drift and expected-file overlap inspection only
+  while that detail is open; loading or Git failures do not change plan status
+  or make the dashboard unusable. On Slices, `j`/`k` or the up/down arrows
+  select a queue-ordered slice and `Enter` opens its full read-only details;
+  empty fields are omitted. Activity keeps following `agent-run.log`. `Esc`
+  returns one level at a time, and log following continues until you leave plan
+  detail for the table.
 
 The Notes, Settings, and Debug tabs have no run, approval, merge, or
 completed-plan actions. On Notes, `Enter` opens a full read-only note detail and `Esc` returns

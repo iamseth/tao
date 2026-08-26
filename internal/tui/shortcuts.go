@@ -54,8 +54,10 @@ func shortcutsForPage(page PageID) []shortcut {
 
 func planDetailShortcuts() []shortcut {
 	return []shortcut{
-		{key: "↑ / ↓ / j / k", action: "Move slice selection"},
-		{key: "Enter", action: "Open selected slice"},
+		{key: "Tab / ← / →", action: "Switch detail tabs"},
+		{key: "↑ / ↓ / j / k", action: "Scroll or select"},
+		{key: "g / G", action: "Jump to top / bottom"},
+		{key: "Enter", action: "Open slice on Slices tab"},
 		{key: "Backspace / Esc", action: "Return to plans"},
 		{key: "q", action: "Quit"},
 		{key: "?", action: "Close shortcuts"},
@@ -64,6 +66,8 @@ func planDetailShortcuts() []shortcut {
 
 func sliceDetailShortcuts() []shortcut {
 	return []shortcut{
+		{key: "↑ / ↓ / j / k", action: "Scroll details"},
+		{key: "g / G", action: "Jump to top / bottom"},
 		{key: "Backspace / Esc", action: "Return to plan"},
 		{key: "q", action: "Quit"},
 		{key: "?", action: "Close shortcuts"},

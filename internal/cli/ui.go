@@ -12,6 +12,8 @@ import (
 
 	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/note"
+	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/staleness"
 	"github.com/iamseth/tao/internal/taodata"
 	"github.com/iamseth/tao/internal/term"
 	"github.com/iamseth/tao/internal/tui"
@@ -24,7 +26,7 @@ var uiCommand = commandMetadata{
 	usageLines:            []string{"ui [--interval DURATION] [--completed-window DURATION]"},
 	completionDescription: "Open the cross-repository interactive dashboard",
 	long: "Open a keyboard-driven dashboard with Plans, Notes, Settings, and Debug tabs across registered repositories. Plans is the initial tab. Use Tab or the right arrow to advance tabs and the left arrow to move back; j/k or the up/down arrows move within tables and scroll Debug diagnostics. Repository focus is shared by Plans and Notes: f focuses the selected plan or note's repository, and f again restores all repositories.\n" +
-		"Plans groups work needing attention, running work, planned or in-review work, and recent completions. Heartbeats and the stalled?/crashed? labels are liveness hints, not workflow verdicts. Completed plans are hidden initially; c reveals or hides rows in the configured lookback window. On Plans, r runs, a prompts for approval, m confirms a selected reviewed-plan merge, M confirms a repository-scoped merge --all, and Enter opens plan details. In plan detail, move across slices with j/k or the arrows and press Enter for the full read-only slice page.\n" +
+		"Plans groups work needing attention, running work, planned or in-review work, and recent completions. Heartbeats and the stalled?/crashed? labels are liveness hints, not workflow verdicts. Completed plans are hidden initially; c reveals or hides rows in the configured lookback window. On Plans, r runs, a prompts for approval, m confirms a selected reviewed-plan merge, M confirms a repository-scoped merge --all, and Enter opens plan details. In plan detail, use Tab or the arrows to switch Overview, Slices, and Activity; Overview inspects advisory base drift only while the detail is open. On Slices, move with j/k or the arrows and press Enter for the full read-only slice page.\n" +
 		"Notes lists only repository-owned open notes. Enter opens the selected note's full read-only detail, and Esc returns. Settings shows global runtime defaults and per-repository pull-request defaults; p confirms a cycle through explicit true, explicit false, and inherited. Debug shows UI state, build and data paths, doctor problems, collector warnings, and resolved runtime defaults from tao status; g/G jump to its top or bottom. Plan actions and the completed toggle do not act on Notes, Settings, or Debug. q and Ctrl-C quit globally except that q safely declines confirmation. Esc returns one page or declines confirmation; at a top-level page, press Esc twice within one second to quit. Run, approval, and merge subprocesses are detached and survive dashboard exit.\n" +
 		"tao ui requires a terminal. Use tao monitor --once for non-interactive plan output.",
 	examples: "  tao ui\n" +
@@ -108,6 +110,7 @@ func (a App) ui(ctx context.Context, args []string) error {
 		Debug:     newUIDebugCollector(a, executable),
 		Settings:  newUISettingsService(a),
 		Actions:   actions,
+		Inspector: newUIDetailInspector(a.uiCommandRunner()),
 		Now:       a.now,
 	}).Run(signalCtx)
 }
@@ -126,14 +129,29 @@ func (a App) newUINoteCollector() (tui.NoteSnapshotCollector, error) {
 	return collector, nil
 }
 
+func newUIDetailInspector(runner commandrunner.Runner) tui.DetailInspector {
+	return tui.DetailInspectorFunc(func(ctx context.Context, detail *plan.PlanDetail) (tui.DetailInspection, error) {
+		findings := staleness.Findings(ctx, detail, runner)
+		result := tui.DetailInspection{Findings: make([]tui.DetailFinding, 0, len(findings))}
+		for _, finding := range findings {
+			result.Findings = append(result.Findings, tui.DetailFinding{Severity: finding.Severity, Message: finding.Message})
+		}
+		return result, nil
+	})
+}
+
+func (a App) uiCommandRunner() commandrunner.Runner {
+	if a.CommandRunner != nil {
+		return a.CommandRunner
+	}
+	return commandrunner.DefaultLocal
+}
+
 func (a App) uiCommandLauncher() tui.CommandLauncher {
 	if a.UICommandLauncher != nil {
 		return a.UICommandLauncher
 	}
-	runner := a.CommandRunner
-	if runner == nil {
-		runner = commandrunner.DefaultLocal
-	}
+	runner := a.uiCommandRunner()
 	return func(ctx context.Context, request tui.CommandRequest) error {
 		if request.Detached {
 			return startDetachedUICommand(request)

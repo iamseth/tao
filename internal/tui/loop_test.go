@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/note"
+	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/term"
 )
 
@@ -697,6 +699,139 @@ func TestNotesTabKeepsSharedFocusAndRejectsPlanOnlyKeys(t *testing.T) {
 	}
 	if quit := app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'q'}); !quit {
 		t.Fatal("q did not quit from Notes")
+	}
+}
+
+func TestPlanDetailTabsUseLifecycleDefaultsAndPreserveReloadSelection(t *testing.T) {
+	detail := &plan.PlanDetail{State: plan.State{Plan: plan.PlanState{ID: "plan-a"}}}
+	repository := &fakeDetailRepository{detail: detail, tail: "one\ntwo\nthree\nfour\n"}
+	app := App{Details: repository}
+
+	for _, test := range []struct {
+		name string
+		row  monitor.Row
+		want detailTab
+	}{
+		{name: "planned overview", row: monitor.Row{PlanID: "plan-a", PlanDir: "/plan", Status: plan.StatusPlanned}, want: detailTabOverview},
+		{name: "live activity", row: monitor.Row{PlanID: "plan-a", PlanDir: "/plan", Status: plan.StatusInProgress, Liveness: monitor.LivenessLive}, want: detailTabActivity},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			state := loopState{size: term.Size{Width: 60, Height: 8}}
+			app.openDetail(ctx, &state, test.row)
+			if state.detail == nil || state.detail.activeTab != test.want {
+				t.Fatalf("opened detail tab = %#v, want %v", state.detail, test.want)
+			}
+			state.detail.activeTab = detailTabSlices
+			state.detail.overviewOffset = 1
+			app.reloadDetail(ctx, &state)
+			if state.detail.activeTab != detailTabSlices || state.detail.overviewOffset != 1 {
+				t.Fatalf("reload reset detail navigation: %#v", state.detail)
+			}
+			state.closeDetail()
+		})
+	}
+}
+
+func TestPlanDetailLocalNavigationBoundsEachTab(t *testing.T) {
+	detail := &plan.PlanDetail{
+		State: plan.State{
+			Status: plan.StatusPlanned,
+			Plan: plan.PlanState{PendingSlices: []string{"001-a", "002-b"}, Decision: &plan.Decision{
+				Problem: strings.Repeat("problem ", 20), ExpectedBenefit: strings.Repeat("benefit ", 20),
+			}},
+		},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "001-a"}, {ID: "002-b"}}},
+	}
+	state := loopState{detail: &detailState{plan: detail, selectedSliceID: "001-a", log: "one\ntwo\nthree\nfour\nfive\n"}, size: term.Size{Width: 30, Height: 8}}
+	app := App{}
+
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'G'})
+	if state.detail.overviewOffset != state.detail.maxOffset(detailTabOverview, state.size) || state.detail.overviewOffset == 0 {
+		t.Fatalf("Overview G offset = %d", state.detail.overviewOffset)
+	}
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyTab})
+	if state.detail.activeTab != detailTabSlices || state.activePage() != PagePlans {
+		t.Fatalf("Tab leaked to root page: tab=%v page=%v", state.detail.activeTab, state.activePage())
+	}
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'G'})
+	if state.detail.selectedSliceID != "002-b" {
+		t.Fatalf("Slices G selected %q", state.detail.selectedSliceID)
+	}
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyArrowRight})
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'G'})
+	if state.detail.activeTab != detailTabActivity || state.detail.activityOffset != state.detail.maxOffset(detailTabActivity, state.size) {
+		t.Fatalf("Activity navigation = tab %v offset %d", state.detail.activeTab, state.detail.activityOffset)
+	}
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'g'})
+	if state.detail.activityOffset != 0 {
+		t.Fatalf("Activity g offset = %d", state.detail.activityOffset)
+	}
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyArrowRight})
+	if state.detail.activeTab != detailTabOverview {
+		t.Fatalf("right did not wrap to Overview: %v", state.detail.activeTab)
+	}
+}
+
+func TestPlanDetailOverviewBottomIncludesCompletedInspectionFindings(t *testing.T) {
+	detail := &plan.PlanDetail{State: plan.State{Status: plan.StatusPlanned, Plan: plan.PlanState{ID: "plan-a"}}}
+	state := loopState{
+		detail: &detailState{
+			plan:      detail,
+			activeTab: detailTabOverview,
+			inspection: detailInspectionView{status: detailInspectionReady, findings: []DetailFinding{
+				{Severity: "warning", Message: strings.Repeat("first wrapped finding ", 5)},
+				{Severity: "warning", Message: strings.Repeat("second wrapped finding ", 5)},
+				{Severity: "warning", Message: "last-finding"},
+			}},
+		},
+		size: term.Size{Width: 32, Height: 10},
+	}
+
+	(App{}).handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'G'})
+	frame := RenderDetail(DetailModel{
+		Plan:           detail,
+		ActiveTab:      detailTabOverview,
+		OverviewOffset: state.detail.overviewOffset,
+		Inspection:     state.detail.inspection,
+		Width:          state.size.Width,
+		Height:         state.size.Height,
+	})
+	if !strings.Contains(frame, "last-finding") {
+		t.Fatalf("Overview G did not reach final inspection finding at offset %d:\n%s", state.detail.overviewOffset, frame)
+	}
+}
+
+func TestNestedSliceDetailScrollPreservesSliceSelectionAndReturnsToSlices(t *testing.T) {
+	tasks := make([]string, 20)
+	for index := range tasks {
+		tasks[index] = fmt.Sprintf("task-%02d", index+1)
+	}
+	detail := &plan.PlanDetail{
+		State: plan.State{Plan: plan.PlanState{PendingSlices: []string{"001-work", "002-next"}}},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{
+			{ID: "001-work", Title: "Work", Goal: "goal", Context: "context", Tasks: tasks},
+			{ID: "002-next", Title: "Next"},
+		}},
+	}
+	state := loopState{
+		detail: &detailState{plan: detail, selectedSliceID: "001-work", activeTab: detailTabSlices, sliceOpen: true},
+		size:   term.Size{Width: 40, Height: 12},
+	}
+	app := App{}
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'G'})
+	if state.detail.sliceOffset == 0 || state.detail.selectedSliceID != "001-work" {
+		t.Fatalf("nested G offset=%d selected=%q", state.detail.sliceOffset, state.detail.selectedSliceID)
+	}
+	state.size.Height = 30
+	state.detail.clampOffsets(state.size)
+	if state.detail.sliceOffset != state.detail.sliceMaxOffset(state.size) {
+		t.Fatalf("resized nested offset=%d max=%d", state.detail.sliceOffset, state.detail.sliceMaxOffset(state.size))
+	}
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyBackspace})
+	if state.detail.sliceOpen || state.detail.sliceOffset != 0 || state.detail.activeTab != detailTabSlices || state.detail.selectedSliceID != "001-work" {
+		t.Fatalf("nested return changed Slices state: %#v", state.detail)
 	}
 }
 

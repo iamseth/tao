@@ -135,7 +135,7 @@ func TestPlanDetailShortcutPreviewIsContextAware(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Keyboard shortcuts", "Move slice selection", "Open selected slice", "Return to plans"} {
+	for _, want := range []string{"Keyboard shortcuts", "Switch detail tabs", "Scroll or select", "Open slice on Slices tab", "Return to plans"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("plan detail shortcut preview missing %q:\n%s", want, frame)
 		}

@@ -64,6 +64,7 @@ type App struct {
 	Settings  SettingsService
 	Actions   *Actions
 	Details   DetailRepository
+	Inspector DetailInspector
 	Now       func() time.Time
 }
 
@@ -204,8 +205,33 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 			if update.err != nil {
 				state.detail.followError = update.err.Error()
 			} else {
+				wasFollowing := state.detail.activityOffset == state.detail.maxOffset(detailTabActivity, state.size)
 				state.detail.appendLog(update.text)
+				if wasFollowing {
+					state.detail.activityOffset = state.detail.maxOffset(detailTabActivity, state.size)
+				} else {
+					state.detail.clampOffsets(state.size)
+				}
 			}
+			if err := a.writeFrame(state); err != nil {
+				return err
+			}
+		case update, ok := <-state.inspectionUpdates():
+			if !ok {
+				state.detail.inspectionUpdates = nil
+				continue
+			}
+			if update.key != state.detail.inspectionKey {
+				continue
+			}
+			state.detail.inspectionUpdates = nil
+			if update.err != nil {
+				state.detail.inspection = detailInspectionView{status: detailInspectionFailed, err: truncatePlain(singleLineDetail(update.err.Error()), detailInspectionMaxText)}
+			} else {
+				result := boundedDetailInspection(update.result)
+				state.detail.inspection = detailInspectionView{status: detailInspectionReady, findings: result.Findings}
+			}
+			state.detail.clampOffsets(state.size)
 			if err := a.writeFrame(state); err != nil {
 				return err
 			}
@@ -260,6 +286,9 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 				return fmt.Errorf("read terminal size: %w", err)
 			}
 			state.size = size
+			if state.detail != nil {
+				state.detail.clampOffsets(size)
+			}
 			state.clampNoteDetailOffset()
 			state.clampDebugOffset()
 			if err := a.writeFrame(state); err != nil {
@@ -328,12 +357,17 @@ func (a App) writeFrame(state loopState) error {
 			SliceLog:        state.detail.sliceLogs[state.detail.selectedSliceID],
 			SelectedSliceID: state.detail.selectedSliceID,
 			SliceOpen:       state.detail.sliceOpen,
+			ActiveTab:       state.detail.activeTab,
+			OverviewOffset:  state.detail.overviewOffset,
+			ActivityOffset:  state.detail.activityOffset,
+			SliceOffset:     state.detail.sliceOffset,
 			Width:           state.size.Width,
 			Height:          state.size.Height,
 			UseColor:        state.useColor,
 			ShowShortcuts:   state.showShortcuts,
 			LoadError:       state.detail.loadError,
 			FollowError:     state.detail.followError,
+			Inspection:      state.detail.inspection,
 		}))
 	default:
 		frame.WriteString(Render(Model{
@@ -443,16 +477,34 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 		switch {
 		case (key.Key == term.KeyEsc || key.Key == term.KeyBackspace) && state.detail.sliceOpen:
 			state.detail.sliceOpen = false
+			state.detail.sliceOffset = 0
 		case key.Key == term.KeyEsc || key.Key == term.KeyBackspace:
 			state.closeDetail()
-		case !state.detail.sliceOpen && key.Key == term.KeyEnter:
+		case !state.detail.sliceOpen && (key.Key == term.KeyTab || key.Key == term.KeyArrowRight):
+			state.detail.moveTab(1, state.size)
+		case !state.detail.sliceOpen && key.Key == term.KeyArrowLeft:
+			state.detail.moveTab(-1, state.size)
+		case !state.detail.sliceOpen && state.detail.activeTab == detailTabSlices && key.Key == term.KeyEnter:
 			if _, ok := findDetailSlice(state.detail.plan, state.detail.selectedSliceID); ok {
 				state.detail.sliceOpen = true
+				state.detail.sliceOffset = 0
 			}
+		case state.detail.sliceOpen && (key.Key == term.KeyArrowUp || (key.Key == term.KeyRune && key.Rune == 'k')):
+			state.detail.moveSliceDetail(-1, state.size)
+		case state.detail.sliceOpen && (key.Key == term.KeyArrowDown || (key.Key == term.KeyRune && key.Rune == 'j')):
+			state.detail.moveSliceDetail(1, state.size)
+		case state.detail.sliceOpen && key.Key == term.KeyRune && key.Rune == 'g':
+			state.detail.sliceOffset = 0
+		case state.detail.sliceOpen && key.Key == term.KeyRune && key.Rune == 'G':
+			state.detail.sliceOffset = state.detail.sliceMaxOffset(state.size)
 		case !state.detail.sliceOpen && (key.Key == term.KeyArrowUp || (key.Key == term.KeyRune && key.Rune == 'k')):
-			state.detail.moveSlice(-1)
+			state.detail.moveVertical(-1, state.size)
 		case !state.detail.sliceOpen && (key.Key == term.KeyArrowDown || (key.Key == term.KeyRune && key.Rune == 'j')):
-			state.detail.moveSlice(1)
+			state.detail.moveVertical(1, state.size)
+		case !state.detail.sliceOpen && key.Key == term.KeyRune && key.Rune == 'g':
+			state.detail.jumpVertical(false, state.size)
+		case !state.detail.sliceOpen && key.Key == term.KeyRune && key.Rune == 'G':
+			state.detail.jumpVertical(true, state.size)
 		}
 		return false
 	}
@@ -548,7 +600,10 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 
 func (a App) openDetail(ctx context.Context, state *loopState, row monitor.Row) {
 	detailCtx, cancel := context.WithCancel(ctx)
-	detail := &detailState{row: row, cancel: cancel}
+	detail := &detailState{row: row, ctx: detailCtx, cancel: cancel, activeTab: detailTabOverview, inspection: detailInspectionView{status: detailInspectionUnavailable}}
+	if row.Liveness == monitor.LivenessLive {
+		detail.activeTab = detailTabActivity
+	}
 	state.detail = detail
 
 	loaded, err := a.Details.ResolvePlan(detailCtx, row.PlanDir)
@@ -558,6 +613,7 @@ func (a App) openDetail(ctx context.Context, state *loopState, row monitor.Row) 
 	}
 	detail.plan = loaded
 	detail.reconcileSliceSelection()
+	a.startDetailInspection(detail)
 	seed, err := a.Details.ReadLogTail(row.PlanDir, 0)
 	if err != nil {
 		detail.followError = err.Error()
@@ -565,9 +621,42 @@ func (a App) openDetail(ctx context.Context, state *loopState, row monitor.Row) 
 	}
 	detail.log = tailDetailLog(seed, detailLogTailLines)
 	detail.sliceLogs, detail.activeLogSlice = projectSliceLogs(seed, detailLogKeepLines)
+	detail.activityOffset = detail.maxOffset(detailTabActivity, state.size)
 	updates := make(chan detailFollowUpdate, 16)
 	detail.updates = updates
 	go followDetailLog(detailCtx, a.Details, row.PlanDir, seed, updates)
+}
+
+func (a App) startDetailInspection(detail *detailState) {
+	key := detailInspectionKey(detail.plan)
+	if key == detail.inspectionKey {
+		return
+	}
+	if detail.inspectionCancel != nil {
+		detail.inspectionCancel()
+		detail.inspectionCancel = nil
+	}
+	detail.inspectionKey = key
+	detail.inspectionUpdates = nil
+	if a.Inspector == nil || detail.plan == nil {
+		detail.inspection = detailInspectionView{status: detailInspectionUnavailable}
+		return
+	}
+	inspectionCtx, cancel := context.WithCancel(detail.ctx)
+	detail.inspectionCancel = cancel
+	detail.inspection = detailInspectionView{status: detailInspectionLoading}
+	updates := make(chan detailInspectionUpdate, 1)
+	detail.inspectionUpdates = updates
+	loaded := detail.plan
+	go func() {
+		result, err := a.Inspector.Inspect(inspectionCtx, loaded)
+		update := detailInspectionUpdate{key: key, result: result, err: err}
+		select {
+		case updates <- update:
+		case <-inspectionCtx.Done():
+		}
+		close(updates)
+	}()
 }
 
 func (a App) reloadDetail(ctx context.Context, state *loopState) {
@@ -578,6 +667,8 @@ func (a App) reloadDetail(ctx context.Context, state *loopState) {
 	}
 	state.detail.plan = loaded
 	state.detail.reconcileSliceSelection()
+	a.startDetailInspection(state.detail)
+	state.detail.clampOffsets(state.size)
 	state.detail.loadError = ""
 }
 
@@ -586,6 +677,13 @@ func (s *loopState) detailUpdates() <-chan detailFollowUpdate {
 		return nil
 	}
 	return s.detail.updates
+}
+
+func (s *loopState) inspectionUpdates() <-chan detailInspectionUpdate {
+	if s.detail == nil {
+		return nil
+	}
+	return s.detail.inspectionUpdates
 }
 
 func (s *loopState) refreshDetailRow() {
@@ -648,9 +746,79 @@ func (d *detailState) moveSlice(delta int) {
 	d.selectedSliceID = ordered[index].ID
 }
 
+func (d *detailState) moveTab(delta int, size term.Size) {
+	d.activeTab = detailTab((int(d.activeTab) + delta + int(detailTabCount)) % int(detailTabCount))
+	d.clampOffsets(size)
+}
+
+func (d *detailState) moveVertical(delta int, size term.Size) {
+	switch d.activeTab {
+	case detailTabSlices:
+		d.moveSlice(delta)
+	case detailTabActivity:
+		d.activityOffset = max(0, min(d.maxOffset(detailTabActivity, size), d.activityOffset+delta))
+	default:
+		d.overviewOffset = max(0, min(d.maxOffset(detailTabOverview, size), d.overviewOffset+delta))
+	}
+}
+
+func (d *detailState) jumpVertical(bottom bool, size term.Size) {
+	if d.activeTab == detailTabSlices {
+		ordered := orderedDetailSlices(d.plan)
+		if len(ordered) > 0 {
+			index := 0
+			if bottom {
+				index = len(ordered) - 1
+			}
+			d.selectedSliceID = ordered[index].ID
+		}
+		return
+	}
+	offset := 0
+	if bottom {
+		offset = d.maxOffset(d.activeTab, size)
+	}
+	if d.activeTab == detailTabActivity {
+		d.activityOffset = offset
+	} else {
+		d.overviewOffset = offset
+	}
+}
+
+func (d *detailState) moveSliceDetail(delta int, size term.Size) {
+	d.sliceOffset = max(0, min(d.sliceMaxOffset(size), d.sliceOffset+delta))
+}
+
+func (d *detailState) sliceMaxOffset(size term.Size) int {
+	return sliceDetailMaxOffset(d.plan, d.selectedSliceID, size.Width, size.Height)
+}
+
+func (d *detailState) clampOffsets(size term.Size) {
+	d.overviewOffset = max(0, min(d.overviewOffset, d.maxOffset(detailTabOverview, size)))
+	d.activityOffset = max(0, min(d.activityOffset, d.maxOffset(detailTabActivity, size)))
+	d.sliceOffset = max(0, min(d.sliceOffset, d.sliceMaxOffset(size)))
+}
+
+func (d *detailState) maxOffset(tab detailTab, size term.Size) int {
+	height := max(size.Height-planDetailFixedLines, 0)
+	if height == 0 {
+		return 0
+	}
+	var lines []string
+	if tab == detailTabActivity {
+		lines = renderActivityPane(d.log, d.followError, size.Width, int(^uint(0)>>1), 0)
+	} else {
+		lines = renderOverviewPane(d.plan, size.Width, int(^uint(0)>>1), 0, d.inspection)
+	}
+	return max(len(lines)-height, 0)
+}
+
 func (s *loopState) closeDetail() {
 	if s.detail == nil {
 		return
+	}
+	if s.detail.inspectionCancel != nil {
+		s.detail.inspectionCancel()
 	}
 	if s.detail.cancel != nil {
 		s.detail.cancel()

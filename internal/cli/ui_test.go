@@ -15,6 +15,7 @@ import (
 
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/note"
+	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/taodata"
 	"github.com/iamseth/tao/internal/term"
 	"github.com/iamseth/tao/internal/tui"
@@ -43,6 +44,36 @@ func TestUICommandRegistrationAndHelp(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "queued work") {
 		t.Fatalf("ui help retains removed queue wording in %q", out.String())
+	}
+}
+
+func TestUIDetailInspectorComposesStalenessWithCommandRunner(t *testing.T) {
+	var calls int
+	runner := func(_ context.Context, cwd, name string, args []string, stdout, _ io.Writer) error {
+		calls++
+		if cwd != "" || name != "git" {
+			t.Fatalf("inspection command cwd=%q name=%q", cwd, name)
+		}
+		if len(args) >= 2 && args[0] == "-C" {
+			if args[1] != "/repo" {
+				t.Fatalf("inspection Git root = %q", args[1])
+			}
+			args = args[2:]
+		}
+		if strings.Join(args, " ") == "rev-parse HEAD" {
+			_, _ = io.WriteString(stdout, "aaaaaaaaaaaa1111\n")
+		}
+		return nil
+	}
+	result, err := newUIDetailInspector(runner).Inspect(context.Background(), &plan.PlanDetail{State: plan.State{
+		Repo: plan.Repo{Root: "/repo", BaseCommit: "aaaaaaaaaaaa1111"},
+		Plan: plan.PlanState{ID: "plan-a"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || len(result.Findings) != 0 {
+		t.Fatalf("inspection calls=%d result=%+v, want one Git call and no findings", calls, result)
 	}
 }
 

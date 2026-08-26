@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -18,14 +19,30 @@ import (
 )
 
 const (
-	detailLogTailLines    = 200
-	detailLogKeepLines    = 1000
-	detailLogTabWidth     = 4
-	planDetailHeaderGap   = 1
-	planDetailPaneGap     = 1
-	noteDetailHeaderLines = 8
-	noteDetailFooter      = "↑/↓/j/k scroll  Bksp/Esc back  q quit"
+	detailLogTailLines     = 200
+	detailLogKeepLines     = 1000
+	detailLogTabWidth      = 4
+	planDetailHeaderGap    = 1
+	planDetailPaneGap      = 1
+	planDetailFixedLines   = 6 // header, two gaps, tabs, and pane borders
+	detailOverviewMaxScope = 12
+	noteDetailHeaderLines  = 8
+	noteDetailFooter       = "↑/↓/j/k scroll  Bksp/Esc back  q quit"
 )
+
+// detailTab identifies the independently navigable plan-detail views.
+type detailTab int
+
+const (
+	detailTabOverview detailTab = iota
+	detailTabSlices
+	detailTabActivity
+	detailTabCount
+)
+
+func (t detailTab) label() string {
+	return [...]string{"Overview", "Slices", "Activity"}[max(0, min(int(detailTabCount)-1, int(t)))]
+}
 
 // DetailRepository is the read-only plan and log boundary used by the detail
 // page. FileRepository satisfies it, while tests can inject a follower without
@@ -44,26 +61,40 @@ type DetailModel struct {
 	SliceLog        string
 	SelectedSliceID string
 	SliceOpen       bool
+	ActiveTab       detailTab
+	OverviewOffset  int
+	ActivityOffset  int
+	SliceOffset     int
 	Width           int
 	Height          int
 	UseColor        bool
 	ShowShortcuts   bool
 	LoadError       string
 	FollowError     string
+	Inspection      detailInspectionView
 }
 
 type detailState struct {
-	row             monitor.Row
-	plan            *plan.PlanDetail
-	selectedSliceID string
-	sliceOpen       bool
-	log             string
-	sliceLogs       map[string]string
-	activeLogSlice  string
-	loadError       string
-	followError     string
-	updates         <-chan detailFollowUpdate
-	cancel          context.CancelFunc
+	row               monitor.Row
+	plan              *plan.PlanDetail
+	selectedSliceID   string
+	sliceOpen         bool
+	activeTab         detailTab
+	overviewOffset    int
+	activityOffset    int
+	sliceOffset       int
+	log               string
+	sliceLogs         map[string]string
+	activeLogSlice    string
+	loadError         string
+	followError       string
+	updates           <-chan detailFollowUpdate
+	inspection        detailInspectionView
+	inspectionKey     string
+	inspectionUpdates <-chan detailInspectionUpdate
+	inspectionCancel  context.CancelFunc
+	ctx               context.Context
+	cancel            context.CancelFunc
 }
 
 type detailFollowUpdate struct {
@@ -182,7 +213,7 @@ func RenderDetail(model DetailModel) string {
 	if model.SliceOpen {
 		return RenderSliceDetail(model)
 	}
-	id, title, repoName, status := detailHeaderValues(model)
+	id, _, repoName, status := detailHeaderValues(model)
 	phase := displayValue(strings.TrimSpace(string(model.Row.Phase)))
 	heartbeat := "-"
 	if model.Row.Liveness == monitor.LivenessLive || model.Row.Liveness == monitor.LivenessStale {
@@ -191,61 +222,37 @@ func RenderDetail(model DetailModel) string {
 	header := "Tao UI | " + singleLineDetail(id) + " | " + singleLineDetail(repoName) +
 		" | " + singleLineDetail(status) + " | " + singleLineDetail(phase) + " | " + singleLineDetail(heartbeat)
 
-	paneAvailable := model.Height - 1 - planDetailHeaderGap
-	if model.Height <= 0 {
-		paneAvailable = 24
+	tab := model.ActiveTab
+	if tab < detailTabOverview || tab >= detailTabCount {
+		tab = detailTabOverview
 	}
-	paneAvailable = max(paneAvailable, 0)
-
-	descriptionLines := wrapPaneText(title, model.Width)
-	desiredDescriptionHeight := max(len(descriptionLines)+2, 3)
-	allSliceLines := renderSlicesPane(model.Plan, model.SelectedSliceID, model.Width, int(^uint(0)>>1), model.UseColor)
-	if model.Plan == nil && model.LoadError == "" {
-		allSliceLines = []string{"Plan details unavailable."}
+	tabs := renderDetailTabs(tab)
+	paneHeight := 24
+	if model.Height > 0 {
+		paneHeight = max(model.Height-4, 0)
 	}
-	if model.LoadError != "" {
-		allSliceLines = []string{"unable to load plan: " + singleLineDetail(model.LoadError)}
-	}
-	desiredSliceHeight := max(len(allSliceLines)+2, 3)
-
-	descriptionHeight := min(desiredDescriptionHeight, paneAvailable)
-	sliceHeight := 0
-	logHeight := 0
-	remaining := paneAvailable - descriptionHeight
-	if descriptionHeight == desiredDescriptionHeight && remaining >= planDetailPaneGap+2 {
-		remaining -= planDetailPaneGap
-		if remaining >= 2+planDetailPaneGap+3 {
-			sliceHeight = min(desiredSliceHeight, remaining-planDetailPaneGap-3)
-			logHeight = remaining - sliceHeight - planDetailPaneGap
-		} else {
-			sliceHeight = remaining
+	bodyHeight := max(paneHeight-2, 0)
+	var content []string
+	switch {
+	case model.LoadError != "":
+		content = []string{"unable to load plan: " + singleLineDetail(model.LoadError)}
+	case model.Plan == nil:
+		content = []string{"Plan details unavailable."}
+	default:
+		switch tab {
+		case detailTabSlices:
+			content = renderSlicesPane(model.Plan, model.SelectedSliceID, model.Width, bodyHeight, model.UseColor)
+		case detailTabActivity:
+			content = renderActivityPane(model.Log, model.FollowError, model.Width, bodyHeight, model.ActivityOffset)
+		default:
+			content = renderOverviewPane(model.Plan, model.Width, bodyHeight, model.OverviewOffset, model.Inspection)
 		}
-	} else if remaining > 0 {
-		descriptionHeight = paneAvailable
 	}
 
-	lines := []string{header}
-	lines = append(lines, make([]string, planDetailHeaderGap)...)
-	if descriptionHeight > 0 {
-		bodyHeight := max(descriptionHeight-2, 0)
-		lines = append(lines, renderPaneBox("DESCRIPTION", fitDetailPane(descriptionLines, model.Width, bodyHeight, 0), model.Width, descriptionHeight)...)
+	lines := []string{header, "", tabs, ""}
+	if paneHeight > 0 {
+		lines = append(lines, renderPaneBox(strings.ToUpper(tab.label()), content, model.Width, paneHeight)...)
 	}
-	if sliceHeight > 0 {
-		lines = append(lines, make([]string, planDetailPaneGap)...)
-		bodyHeight := max(sliceHeight-2, 0)
-		var sliceLines []string
-		if model.LoadError != "" || model.Plan == nil {
-			sliceLines = fitDetailPane(allSliceLines, model.Width, bodyHeight, 0)
-		} else {
-			sliceLines = renderSlicesPane(model.Plan, model.SelectedSliceID, model.Width, bodyHeight, model.UseColor)
-		}
-		lines = append(lines, renderPaneBox("SLICES", sliceLines, model.Width, sliceHeight)...)
-	}
-	if logHeight > 0 {
-		lines = append(lines, make([]string, planDetailPaneGap)...)
-		lines = append(lines, renderLogBox(model.Log, model.FollowError, model.Width, logHeight)...)
-	}
-
 	if model.Width > 0 {
 		for index := range lines {
 			lines[index] = truncateANSI(lines[index], model.Width)
@@ -264,25 +271,174 @@ func RenderDetail(model DetailModel) string {
 	return frame
 }
 
-func wrapPaneText(value string, width int) []string {
-	value = singleLineDetail(value)
-	if value == "" || value == "-" {
-		return []string{"No description available."}
+func renderDetailTabs(active detailTab) string {
+	parts := make([]string, 0, detailTabCount)
+	for tab := detailTabOverview; tab < detailTabCount; tab++ {
+		label := tab.label()
+		if tab == active {
+			label = "[" + label + "]"
+		}
+		parts = append(parts, label)
 	}
+	return strings.Join(parts, "  ")
+}
+
+func renderOverviewPane(detail *plan.PlanDetail, width, height, offset int, inspections ...detailInspectionView) []string {
+	if detail == nil {
+		return nil
+	}
+	overview := plan.ProjectDecisionOverview(detail)
+	lines := []string{
+		"Title: " + overviewDisplay(detail.State.Plan.Title),
+		"Change type: " + overviewDisplay(string(detail.State.Plan.ChangeType)),
+		"Status: " + overviewDisplay(detail.State.Status),
+	}
+	appendDetailValue(&lines, "Problem", overview.Problem)
+	appendDetailValue(&lines, "Why now", overview.WhyNow)
+	appendDetailValue(&lines, "Expected benefit", overview.ExpectedBenefit)
+	appendDetailValue(&lines, "Readiness", string(overview.Readiness))
+	appendDetailList(&lines, "Success criteria", overview.SuccessCriteria)
+	appendDetailValue(&lines, "Disposition", string(overview.Disposition))
+	appendDetailValue(&lines, "Disposition reason", overview.DispositionReason)
+	if overview.Priority != nil {
+		priority := overview.Priority
+		lines = append(lines, "Priority: "+strings.Join([]string{
+			"level=" + overviewDisplay(string(priority.Level)),
+			"impact=" + overviewDisplay(string(priority.Impact)),
+			"urgency=" + overviewDisplay(string(priority.Urgency)),
+			"effort=" + overviewDisplay(string(priority.Effort)),
+			"risk=" + overviewDisplay(string(priority.Risk)),
+			"confidence=" + overviewDisplay(string(priority.Confidence)),
+		}, "  "))
+		appendDetailValue(&lines, "Priority rationale", priority.Rationale)
+	}
+	if overview.Sequence != nil {
+		appendDetailValue(&lines, "Sequence", fmt.Sprintf("%d of %d", overview.Sequence.Position, overview.Sequence.Total))
+		for _, relationship := range overview.Sequence.Relationships {
+			appendDetailValue(&lines, "Related plan", string(relationship.Type)+" "+relationship.PlanID+" — "+relationship.Reason)
+		}
+	}
+	appendOverviewList(&lines, "Scope", detailScope(detail))
+	appendOverviewList(&lines, "Open questions", boundedOverviewValues(detail.State.OpenQuestions, detailOverviewMaxScope))
+	inspection := detailInspectionView{status: detailInspectionUnavailable}
+	if len(inspections) > 0 {
+		inspection = inspections[0]
+	}
+	appendInspectionOverview(&lines, inspection)
+	lines = wrapDetailLines(lines, width)
+	return fitDetailPaneAt(lines, width, height, offset)
+}
+
+func overviewDisplay(value string) string {
+	value = truncatePlain(singleLineDetail(value), 240)
+	if value == "" {
+		return "-"
+	}
+	return value
+}
+
+func appendInspectionOverview(lines *[]string, inspection detailInspectionView) {
+	*lines = append(*lines, "Staleness:")
+	switch inspection.status {
+	case detailInspectionLoading:
+		*lines = append(*lines, "  Loading advisory findings…")
+	case detailInspectionReady:
+		if len(inspection.findings) == 0 {
+			*lines = append(*lines, "  No findings; the recorded planning base matches current HEAD.")
+			return
+		}
+		for _, finding := range inspection.findings {
+			*lines = append(*lines, "  - "+overviewDisplay(finding.Severity)+": "+overviewDisplay(finding.Message))
+		}
+	case detailInspectionFailed:
+		*lines = append(*lines, "  Inspection failed: "+overviewDisplay(inspection.err))
+	default:
+		*lines = append(*lines, "  Unavailable; no detail inspector is configured.")
+	}
+}
+
+func appendOverviewList(lines *[]string, label string, values []string) {
+	if len(values) == 0 {
+		*lines = append(*lines, label+": -")
+		return
+	}
+	appendDetailList(lines, label, values)
+}
+
+func boundedOverviewValues(values []string, limit int) []string {
+	result := make([]string, 0, min(len(values), limit))
+	for _, value := range values {
+		if value = truncatePlain(singleLineDetail(value), 240); value != "" {
+			result = append(result, value)
+			if len(result) == limit {
+				break
+			}
+		}
+	}
+	return result
+}
+
+func detailScope(detail *plan.PlanDetail) []string {
+	seen := make(map[string]struct{})
+	var scope []string
+	for _, slice := range orderedDetailSlices(detail) {
+		for _, file := range slice.ExpectedFiles {
+			file = truncatePlain(singleLineDetail(file), 240)
+			if file == "" {
+				continue
+			}
+			if _, exists := seen[file]; exists {
+				continue
+			}
+			seen[file] = struct{}{}
+			scope = append(scope, file)
+			if len(scope) == detailOverviewMaxScope {
+				return scope
+			}
+		}
+	}
+	return scope
+}
+
+func wrapDetailLines(lines []string, width int) []string {
 	available := width - 4
 	if width <= 0 {
 		available = 0
 	}
-	return wrapDetailWords(value, available)
+	var result []string
+	for _, line := range lines {
+		result = append(result, wrapDetailWords(singleLineDetail(line), available)...)
+	}
+	return result
 }
 
-func wrapDetailField(label, value string, width, horizontalPadding int) []string {
+func renderActivityPane(log, followError string, width, height, offset int) []string {
+	lines := RenderLogPane(log, 0, int(^uint(0)>>1))
+	if len(lines) == 0 {
+		lines = []string{"No agent log output."}
+	}
+	if followError != "" {
+		lines = append(lines, "log follow stopped: "+singleLineDetail(followError))
+	}
+	return fitDetailPaneAt(lines, width, height, offset)
+}
+
+func fitDetailPaneAt(lines []string, width, height, offset int) []string {
+	if height <= 0 || len(lines) == 0 {
+		return nil
+	}
+	offset = max(0, min(offset, max(len(lines)-height, 0)))
+	end := min(offset+height, len(lines))
+	return fitDetailPane(lines[offset:end], width, height, 0)
+}
+
+func wrapDetailField(label, value string, width int) []string {
 	value = singleLineDetail(value)
 	if value == "" {
 		return nil
 	}
 	prefix := label + ": "
-	available := width - horizontalPadding - utf8.RuneCountInString(prefix)
+	available := width - utf8.RuneCountInString(prefix)
 	if width <= 0 {
 		available = 0
 	}
@@ -479,52 +635,22 @@ func renderSlicesPane(detail *plan.PlanDetail, selectedID string, width, height 
 // RenderSliceDetail renders the selected slice as a bounded read-only frame.
 func RenderSliceDetail(model DetailModel) string {
 	selected, ok := findDetailSlice(model.Plan, model.SelectedSliceID)
-	id, status, approval, goal := "-", "-", "-", "-"
+	id, status, approval := "-", "-", "-"
 	var details []string
+	var summary []string
 	if ok {
 		id = displayValue(singleLineDetail(selected.ID))
 		status = displayValue(singleLineDetail(selected.Status))
-		approval = "not required"
-		if selected.Approval != nil && selected.Approval.Required {
-			approval = "required"
-		}
-		if selected.Approval != nil && selected.Approval.Approved {
-			approval = "approved"
-		}
-		if value := singleLineDetail(selected.Goal); value != "" {
-			goal = value
-		}
-		appendDetailList(&details, "Tasks", selected.Tasks)
-		appendDetailList(&details, "Expected files", selected.ExpectedFiles)
-		appendDetailList(&details, "Verification commands", selected.Verification.Commands)
-		appendDetailValue(&details, "Blocker", selected.BlockerNote)
-		appendDetailValue(&details, "Notes", selected.Notes)
-		if len(selected.VerificationResults) > 0 {
-			values := make([]string, 0, len(selected.VerificationResults))
-			for _, result := range selected.VerificationResults {
-				value := singleLineDetail(result.Command)
-				if result.Result != "" {
-					value += ": " + result.Result
-				}
-				if result.Details != "" {
-					value += " — " + result.Details
-				}
-				values = append(values, value)
-			}
-			appendDetailList(&details, "Verification results", values)
-		}
-		if selected.Completion != nil {
-			value := selected.Completion.Outcome
-			if selected.Completion.CommitSHA != "" {
-				value += " (" + selected.Completion.CommitSHA + ")"
-			}
-			appendDetailValue(&details, "Commit outcome", value)
-		}
+		approval = sliceApprovalStatus(selected.Approval)
+		summary = append(summary, wrapDetailField("Title", selected.Title, model.Width)...)
+		summary = append(summary, wrapDetailField("Goal", selected.Goal, model.Width)...)
+		summary = append(summary, wrapDetailField("Context", selected.Context, model.Width)...)
+		details = sliceDetailLines(selected)
 	}
 	if len(details) == 0 {
 		details = []string{"No additional details."}
 	}
-	goalLines := wrapDetailField("Goal", goal, model.Width, 0)
+	details = wrapDetailLines(details, model.Width)
 
 	filteredLog := model.SliceLog
 	if filteredLog == "" {
@@ -537,7 +663,7 @@ func RenderSliceDetail(model DetailModel) string {
 	detailHeight := desiredDetailHeight
 	logHeight := desiredLogHeight
 	if model.Height > 0 {
-		fixedHeight := 1 + planDetailHeaderGap + len(goalLines) + planDetailPaneGap
+		fixedHeight := 1 + planDetailHeaderGap + len(summary) + planDetailPaneGap
 		available := max(model.Height-fixedHeight, 0)
 		detailHeight = min(desiredDetailHeight, available)
 		logHeight = 0
@@ -548,11 +674,13 @@ func RenderSliceDetail(model DetailModel) string {
 	}
 
 	lines := []string{"Tao UI | " + id + " | " + status + " | approval: " + approval}
-	lines = append(lines, make([]string, planDetailHeaderGap)...)
-	lines = append(lines, goalLines...)
+	if len(summary) > 0 {
+		lines = append(lines, make([]string, planDetailHeaderGap)...)
+		lines = append(lines, summary...)
+	}
 	if detailHeight > 0 {
 		lines = append(lines, make([]string, planDetailPaneGap)...)
-		lines = append(lines, renderPaneBox("DETAIL", fitDetailPane(details, model.Width, max(detailHeight-2, 0), 0), model.Width, detailHeight)...)
+		lines = append(lines, renderPaneBox("DETAIL", fitDetailPaneAt(details, model.Width, max(detailHeight-2, 0), model.SliceOffset), model.Width, detailHeight)...)
 	}
 	if logHeight > 0 {
 		lines = append(lines, make([]string, planDetailPaneGap)...)
@@ -574,6 +702,93 @@ func RenderSliceDetail(model DetailModel) string {
 		frame += "\n"
 	}
 	return frame
+}
+
+func sliceDetailLines(selected plan.Slice) []string {
+	var details []string
+	appendDetailList(&details, "Dependencies", selected.DependsOn)
+	if selected.Approval != nil {
+		appendDetailValue(&details, "Approval", sliceApprovalStatus(selected.Approval))
+		appendDetailValue(&details, "Approval reason", selected.Approval.Reason)
+	}
+	if len(selected.RequiredInputs) > 0 {
+		values := make([]string, 0, len(selected.RequiredInputs))
+		for _, input := range selected.RequiredInputs {
+			value := input.Path
+			if input.Kind != "" {
+				value += " (" + input.Kind + ")"
+			}
+			if input.Reason != "" {
+				value += " — " + input.Reason
+			}
+			values = append(values, value)
+		}
+		appendDetailList(&details, "Required inputs", values)
+	}
+	appendDetailList(&details, "Tasks", selected.Tasks)
+	appendDetailList(&details, "Expected files", selected.ExpectedFiles)
+	appendDetailValue(&details, "Verification source", selected.Verification.Source)
+	appendDetailList(&details, "Verification commands", selected.Verification.Commands)
+	appendDetailList(&details, "Manual checks", selected.Verification.ManualChecks)
+	appendDetailValue(&details, "Blocker", selected.BlockerNote)
+	appendDetailValue(&details, "Notes", selected.Notes)
+	if len(selected.VerificationResults) > 0 {
+		values := make([]string, 0, len(selected.VerificationResults))
+		for _, result := range selected.VerificationResults {
+			value := result.Command
+			if result.Result != "" {
+				value += ": " + result.Result
+			}
+			if result.Details != "" {
+				value += " — " + result.Details
+			}
+			values = append(values, value)
+		}
+		appendDetailList(&details, "Verification results", values)
+	}
+	if selected.Completion != nil {
+		value := selected.Completion.Outcome
+		if selected.Completion.CommitSHA != "" {
+			value += " (" + selected.Completion.CommitSHA + ")"
+		}
+		appendDetailValue(&details, "Commit outcome", value)
+	}
+	return details
+}
+
+func sliceApprovalStatus(approval *plan.Approval) string {
+	if approval == nil || !approval.Required {
+		return "not required"
+	}
+	if approval.Approved {
+		return "approved"
+	}
+	return "required"
+}
+
+func sliceDetailMaxOffset(detail *plan.PlanDetail, selectedID string, width, height int) int {
+	if height <= 0 {
+		return 0
+	}
+	selected, ok := findDetailSlice(detail, selectedID)
+	if !ok {
+		return 0
+	}
+	var summary []string
+	summary = append(summary, wrapDetailField("Title", selected.Title, width)...)
+	summary = append(summary, wrapDetailField("Goal", selected.Goal, width)...)
+	summary = append(summary, wrapDetailField("Context", selected.Context, width)...)
+	details := sliceDetailLines(selected)
+	if len(details) == 0 {
+		details = []string{"No additional details."}
+	}
+	details = wrapDetailLines(details, width)
+	available := max(height-(1+planDetailHeaderGap+len(summary)+planDetailPaneGap), 0)
+	detailHeight := min(max(len(details)+2, 3), available)
+	if available >= 2+planDetailPaneGap+3 {
+		detailHeight = min(max(len(details)+2, 3), available-planDetailPaneGap-3)
+	}
+	return max(len(details)-max(detailHeight-2, 0), 0)
 }
 
 func findDetailSlice(detail *plan.PlanDetail, id string) (plan.Slice, bool) {
