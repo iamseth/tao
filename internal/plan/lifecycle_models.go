@@ -25,6 +25,7 @@ const (
 	EventTypeSliceBlocked               = "slice_blocked"
 	EventTypeSliceResumeAttempted       = "slice_resume_attempted"
 	EventTypeSliceResumeFailed          = "slice_resume_failed"
+	EventTypeSliceRestarted             = "slice_restarted"
 	EventTypeSliceRemoved               = "slice_removed"
 	EventTypeSliceSkipped               = "slice_skipped"
 	EventTypeSlicesReordered            = "slices_reordered"
@@ -41,6 +42,7 @@ const (
 	EventTypeReworkRound                = "rework_round"
 	EventTypeReworkStopped              = "rework_stopped"
 	EventTypeFinalVerification          = "final_verification"
+	EventTypeVerificationRepairCreated  = "verification_repair_created"
 	EventTypeMergeVerification          = "merge_verification"
 	EventTypePlanCommitFallback         = "plan_commit_fallback"
 	EventTypePlanCommitGuard            = "plan_commit_guard"
@@ -269,11 +271,18 @@ type PlanRelation struct {
 }
 
 // Sequence records a plan's advisory position among a bounded group and any
-// explicit cross-plan relationships.
+// explicit cross-plan relationships. It never grants runtime authority.
 type Sequence struct {
 	Position      int            `json:"position"`
 	Total         int            `json:"total"`
 	Relationships []PlanRelation `json:"relationships,omitempty"`
+}
+
+// RuntimePrerequisite declares a strict same-repository execution dependency.
+// Satisfaction requires durable merge evidence and is independent of Sequence.
+type RuntimePrerequisite struct {
+	PlanID string `json:"plan_id"`
+	Reason string `json:"reason"`
 }
 
 // PlanDecision and PlanSequence retain explicit domain names for callers that
@@ -283,14 +292,15 @@ type PlanSequence = Sequence
 
 // PlanState is the mutable queue state for a plan.
 type PlanState struct {
-	ID              string     `json:"id"`
-	Title           string     `json:"title"`
-	ChangeType      ChangeType `json:"change_type,omitempty"`
-	Decision        *Decision  `json:"decision,omitempty"`
-	Sequence        *Sequence  `json:"sequence,omitempty"`
-	CurrentSlice    *string    `json:"current_slice,omitempty"`
-	CompletedSlices []string   `json:"completed_slices"`
-	PendingSlices   []string   `json:"pending_slices"`
+	ID                   string                `json:"id"`
+	Title                string                `json:"title"`
+	ChangeType           ChangeType            `json:"change_type,omitempty"`
+	Decision             *Decision             `json:"decision,omitempty"`
+	Sequence             *Sequence             `json:"sequence,omitempty"`
+	RuntimePrerequisites []RuntimePrerequisite `json:"runtime_prerequisites,omitempty"`
+	CurrentSlice         *string               `json:"current_slice,omitempty"`
+	CompletedSlices      []string              `json:"completed_slices"`
+	PendingSlices        []string              `json:"pending_slices"`
 	// LastRunCommitPolicy records the commit policy used by the latest run start.
 	LastRunCommitPolicy string `json:"last_run_commit_policy"`
 	// LastRunStartingDirty records run-start dirty paths tolerated by standalone review gates.
@@ -394,11 +404,22 @@ func (e AutomaticReworkRound) Validate() error {
 // FinalVerification records broad repository verification performed after all
 // slices settle and before a completed branch is reviewed.
 type FinalVerification struct {
-	Command    string    `json:"command,omitempty"`
-	CWD        string    `json:"cwd"`
-	Result     string    `json:"result"`
-	Details    string    `json:"details,omitempty"`
-	VerifiedAt time.Time `json:"verified_at"`
+	Command         string    `json:"command,omitempty"`
+	CWD             string    `json:"cwd"`
+	HeadSHA         string    `json:"head_sha,omitempty"`
+	Result          string    `json:"result"`
+	Details         string    `json:"details,omitempty"`
+	Fingerprint     string    `json:"fingerprint,omitempty"`
+	OutputTruncated bool      `json:"output_truncated,omitempty"`
+	VerifiedAt      time.Time `json:"verified_at"`
+}
+
+// VerificationRepairBinding binds one generated repair slice to the exact
+// broad-gate failure that authorized it.
+type VerificationRepairBinding struct {
+	Command     string `json:"command"`
+	HeadSHA     string `json:"head_sha"`
+	Fingerprint string `json:"fingerprint"`
 }
 
 // ReviewFinding records one structured issue from a persisted review.
@@ -553,6 +574,8 @@ const (
 	PlanActionRestartRework          PlanActionKind = "restart_rework"
 	PlanActionApprove                PlanActionKind = "approve"
 	PlanActionContinue               PlanActionKind = "continue"
+	PlanActionRestartBlocked         PlanActionKind = "restart_blocked"
+	PlanActionRepairVerification     PlanActionKind = "repair_verification"
 	PlanActionRun                    PlanActionKind = "run"
 	PlanActionReview                 PlanActionKind = "review"
 	PlanActionRework                 PlanActionKind = "rework"
@@ -596,6 +619,11 @@ type Event struct {
 	MutationID        string                 `json:"mutation_id,omitempty"`
 	SliceID           string                 `json:"slice_id,omitempty"`
 	Branch            string                 `json:"branch,omitempty"`
+	PriorRoot         string                 `json:"prior_root,omitempty"`
+	PriorBranch       string                 `json:"prior_branch,omitempty"`
+	PriorHead         string                 `json:"prior_head,omitempty"`
+	BaselineBranch    string                 `json:"baseline_branch,omitempty"`
+	BaselineHead      string                 `json:"baseline_head,omitempty"`
 	MergedDefaultSHA  string                 `json:"merged_default_sha,omitempty"`
 	Agent             string                 `json:"agent,omitempty"`
 	DurationSeconds   *int64                 `json:"duration_seconds,omitempty"`

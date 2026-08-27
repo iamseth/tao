@@ -362,6 +362,9 @@ func MarkFinalVerification(detail *PlanDetail, verification FinalVerification) e
 	}
 	verification.VerifiedAt = verification.VerifiedAt.UTC()
 	detail.State.Plan.FinalVerification = &verification
+	if detail.State.Workspace != nil && verification.HeadSHA != "" {
+		detail.State.Workspace.HeadSHA = verification.HeadSHA
+	}
 	detail.State.UpdatedAt = verification.VerifiedAt
 	detail.State.Plan.Timing.LastActivityAt = &verification.VerifiedAt
 	return nil
@@ -645,6 +648,65 @@ func markBlockedContinued(detail *PlanDetail, changes *ArtifactChangeSet, now ti
 	slice.Timing.UpdatedAt = now
 	slice.Timing.LastActivityAt = new(now)
 	return nil
+}
+
+func markBlockedSliceRestarted(detail *PlanDetail, changes *ArtifactChangeSet, request BlockedSliceRestartRequest) (Event, error) {
+	if detail == nil || changes == nil || changes.detail != detail {
+		return Event{}, fmt.Errorf("artifact change set must be bound to plan detail")
+	}
+	continuable := blockedContinueState(detail, newDetailIndex(detail))
+	if !continuable.OK {
+		return Event{}, continuable.Err
+	}
+	slice := continuable.Slice
+	if slice.ID != request.SliceID {
+		return Event{}, fmt.Errorf("blocked restart expected slice %s, found %s", request.SliceID, slice.ID)
+	}
+	if len(request.PriorRoot) > maxWorkspaceHeadAdvanceValueBytes || len(request.PriorBoundary.Branch) > maxWorkspaceHeadAdvanceValueBytes || len(request.PriorBoundary.Head) > maxWorkspaceHeadAdvanceValueBytes || len(request.BaselineBranch) > maxWorkspaceHeadAdvanceValueBytes || len(request.BaselineHead) > maxWorkspaceHeadAdvanceValueBytes {
+		return Event{}, fmt.Errorf("blocked restart boundary exceeds %d bytes", maxWorkspaceHeadAdvanceValueBytes)
+	}
+	if request.RestartedAt.IsZero() || strings.TrimSpace(request.PriorRoot) == "" || strings.TrimSpace(request.PriorBoundary.Branch) == "" || strings.TrimSpace(request.PriorBoundary.Head) == "" || strings.TrimSpace(request.BaselineBranch) == "" || strings.TrimSpace(request.BaselineHead) == "" {
+		return Event{}, fmt.Errorf("blocked restart requires prior boundary, fresh baseline, and timestamp")
+	}
+	if slice.ExecutionRoot != request.PriorRoot || slice.ExecutionStart == nil || *slice.ExecutionStart != request.PriorBoundary {
+		return Event{}, fmt.Errorf("blocked restart boundary changed before mutation")
+	}
+	if slice.CommitIntent != nil || slice.Completion != nil {
+		return Event{}, fmt.Errorf("blocked restart refuses post-intent or completion evidence")
+	}
+	if request.BaselineHead == request.PriorBoundary.Head {
+		return Event{}, fmt.Errorf("blocked restart baseline has not advanced")
+	}
+	reason := strings.TrimSpace(request.Reason)
+	if reason == "" {
+		reason = strings.TrimSpace(slice.BlockerNote)
+	}
+	if reason == "" {
+		reason = "blocked prerequisite resolved on a newer baseline"
+	}
+	if runes := []rune(reason); len(runes) > maxBlockerNoteRunes {
+		reason = string(runes[:maxBlockerNoteRunes])
+	}
+
+	detail.State.Status = StatusInProgress
+	detail.State.UpdatedAt = request.RestartedAt
+	detail.State.Plan.Timing.LastActivityAt = new(request.RestartedAt)
+	changes.ClearPlanCurrentSlice()
+	if err := changes.ClearSliceBlockerNote(slice.ID); err != nil {
+		return Event{}, err
+	}
+	if err := changes.ClearSliceExecutionBoundary(slice.ID); err != nil {
+		return Event{}, err
+	}
+	slice.Status = StatusPending
+	slice.Timing.UpdatedAt = request.RestartedAt
+	slice.Timing.LastActivityAt = new(request.RestartedAt)
+	return Event{
+		Type: EventTypeSliceRestarted, Timestamp: request.RestartedAt, PlanID: detail.State.Plan.ID, SliceID: slice.ID,
+		PriorRoot: request.PriorRoot, PriorBranch: request.PriorBoundary.Branch, PriorHead: request.PriorBoundary.Head,
+		BaselineBranch: request.BaselineBranch, BaselineHead: request.BaselineHead,
+		Reason: reason, Message: "Blocked slice restart authorized",
+	}, nil
 }
 
 // Reopen transitions a reviewed plan back to runnable state by appending new pending slices.

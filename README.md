@@ -128,11 +128,14 @@ with no title or deterministic fallback. A slice with no changes records
 `no_changes` without an empty commit. If an isolated automatic run is interrupted
 before commit intent, rerun it normally: Tao resumes only the exact recorded
 worktree/branch/HEAD and preserves its edits; a post-intent interruption is
-recovered by `tao slice-complete`, not by another implementation session. When a
-run stops on a blocker, resolve the recorded blocker first, then resume with
-`tao run --continue`; use explicit
-`--commit-policy none` only when you want manual commit ownership and potentially
-uncommitted completion. Before review,
+recovered by `tao slice-complete`, not by another implementation session. Runtime prerequisites are checked before workspace preparation; integrate each
+named prerequisite with Tao before retrying the dependent plan. When a run stops
+on an ordinary blocker, resolve it and use `tao run --continue`. A blocked clean
+automatic slice may instead use `tao run --restart <plan>` only after its baseline
+advances, and failed final verification must use
+`tao run --repair-verification <plan>`. Use explicit `--commit-policy none` only
+when you want manual commit ownership and potentially uncommitted completion.
+Before review,
 Tao requires automatic-policy worktrees to
 be clean and runs the repository-wide verification command it detects. It then
 runs a fresh best-effort review by default and persists it in the local plan
@@ -256,7 +259,7 @@ tao insights --all-repos --digest
 ### Running
 
 ```sh
-tao run [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue] [--no-review] [--no-run-header] [--auto-rework=false] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>
+tao run [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue|--restart|--repair-verification] [--no-review] [--no-run-header] [--auto-rework=false] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>
 tao approve [--slice ID] [--by NAME] <plan-id-or-slug-or-path>
 ```
 
@@ -498,7 +501,17 @@ and returns it to Tao for validation, safe staging, and local commit creation.
 Use `--message` only as an explicit standalone override; the complete message
 must satisfy the same subject plus `What:`/`Why:` contract. Automatic slice,
 review-backed merge, and active merge-resolution flows never fall back to
-`/tao-commit` or start a second normal message session.
+`/tao-commit` or start a second normal message session. Standalone context and
+finalization refuse an active Tao-managed plan worktree before diff output,
+staging, intent, or commit mutation. Follow the reported plan-specific recovery:
+ordinary blocked work uses `tao run --continue`, and `tao run --restart` is
+recommended only when durable metadata records an isolated automatic pre-intent
+boundary. Manual/current-checkout and post-intent work instead report
+`tao slice-complete`; failed final verification and review findings retain their
+`tao run --repair-verification` and `tao rework` paths. Switching branches or
+detaching HEAD does not make an active managed worktree eligible; branch drift
+fails closed. Control checkouts, unrelated worktrees, and cleaned plan workspaces
+remain eligible for standalone commits.
 
 ## Configuration
 

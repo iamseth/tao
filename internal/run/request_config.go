@@ -19,5 +19,7 @@ func prepareRequestConfig(defaults ExecutionConfig, request Request) (ExecutionC
 	execution := ExecutionConfig{ResolvedRunOptions: config.ResolvedOptions()}
 	execution.SkipPermissions = defaults.SkipPermissions
 	execution.MaxReworkAttempts = defaults.MaxReworkAttempts
+	execution.RestartBlocked = request.RestartBlocked
+	execution.RepairVerification = request.RepairVerification
 	return execution, nil
 }

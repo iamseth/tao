@@ -10,6 +10,97 @@ import (
 	"time"
 )
 
+func TestRestartBlockedSliceSupersedesExactBoundaryWithDurableEvidence(t *testing.T) {
+	dir := t.TempDir()
+	detail := startSliceDetail(dir)
+	writeStartSliceArtifacts(t, dir, detail)
+	record := testRecord(dir, detail)
+	started := time.Date(2026, 8, 27, 1, 0, 0, 0, time.UTC)
+	boundary := SliceExecutionStart{Branch: "feature/plan-a", Head: "old-head", CommitPolicy: "slice", WorkspaceStrategy: WorkspaceStrategyWorktree}
+	if err := record.StartSliceWithRunBoundary("001-a", "/worktrees/plan-a", "slice", nil, boundary, started); err != nil {
+		t.Fatal(err)
+	}
+	if err := record.BlockSlice("001-a", "waiting for dependency", started.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	restarted := started.Add(2 * time.Minute)
+	if err := record.RestartBlockedSlice(BlockedSliceRestartRequest{
+		SliceID: "001-a", PriorRoot: "/worktrees/plan-a", PriorBoundary: boundary,
+		BaselineBranch: "main", BaselineHead: "new-head", Reason: "dependency landed", RestartedAt: restarted,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := loadPlanFiles(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded := &PlanDetail{Dir: dir, State: files.state, Slices: files.slices, Events: files.events}
+	slice := reloaded.Slices.Slices[0]
+	if reloaded.State.Status != StatusInProgress || reloaded.State.Plan.CurrentSlice != nil || slice.Status != StatusPending || slice.ExecutionRoot != "" || slice.ExecutionStart != nil || slice.BlockerNote != "" {
+		t.Fatalf("restart lifecycle = state:%#v slice:%#v", reloaded.State, slice)
+	}
+	var event *Event
+	for i := range reloaded.Events {
+		if reloaded.Events[i].Type == EventTypeSliceRestarted {
+			event = &reloaded.Events[i]
+		}
+	}
+	if event == nil || event.PriorRoot != "/worktrees/plan-a" || event.PriorBranch != boundary.Branch || event.PriorHead != boundary.Head || event.BaselineBranch != "main" || event.BaselineHead != "new-head" || event.Reason != "dependency landed" {
+		t.Fatalf("restart event = %#v", event)
+	}
+	before := reloaded
+	staleRecord := testRecord(dir, before)
+	if err := staleRecord.RestartBlockedSlice(BlockedSliceRestartRequest{SliceID: "001-a", PriorRoot: "/worktrees/plan-a", PriorBoundary: boundary, BaselineBranch: "main", BaselineHead: "other", RestartedAt: restarted}); err == nil {
+		t.Fatal("expected retry against superseded boundary to fail")
+	}
+}
+
+func TestRestartBlockedSliceSettlesJournalOnExactRetry(t *testing.T) {
+	dir := t.TempDir()
+	detail := startSliceDetail(dir)
+	writeStartSliceArtifacts(t, dir, detail)
+	boundary := SliceExecutionStart{Branch: "feature/plan-a", Head: "old-head", CommitPolicy: "slice", WorkspaceStrategy: WorkspaceStrategyWorktree}
+	started := time.Date(2026, 8, 27, 2, 0, 0, 0, time.UTC)
+	setup := testRecord(dir, detail)
+	if err := setup.StartSliceWithRunBoundary("001-a", "/worktrees/plan-a", "slice", nil, boundary, started); err != nil {
+		t.Fatal(err)
+	}
+	if err := setup.BlockSlice("001-a", "dependency", started.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	original := clonePlanDetail(detail)
+	ioStore := &failingMutationJournalIO{delegate: fileMutationJournalIO{}, failOperation: "state"}
+	store := journalArtifactMutationStore{fileArtifactStore: fileArtifactStore{}, journalIO: ioStore}
+	record, err := newPlanRecord(store, dir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := BlockedSliceRestartRequest{SliceID: "001-a", PriorRoot: "/worktrees/plan-a", PriorBoundary: boundary, BaselineBranch: "main", BaselineHead: "new-head", RestartedAt: started.Add(2 * time.Minute)}
+	if err := record.RestartBlockedSlice(request); err == nil || !strings.Contains(err.Error(), "injected state failure") {
+		t.Fatalf("restart error = %v, want injected failure", err)
+	}
+	if !reflect.DeepEqual(detail, original) {
+		t.Fatal("failed restart published its postimage")
+	}
+	ioStore.failOperation = ""
+	if err := record.RestartBlockedSlice(request); err != nil {
+		t.Fatalf("settle exact restart retry: %v", err)
+	}
+	if detail.State.Plan.CurrentSlice != nil || detail.Slices.Slices[0].ExecutionStart != nil {
+		t.Fatalf("settled restart = state:%#v slice:%#v", detail.State, detail.Slices.Slices[0])
+	}
+	count := 0
+	for _, event := range detail.Events {
+		if event.Type == EventTypeSliceRestarted {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("restart events = %d, want 1", count)
+	}
+}
+
 func TestRecordWorkspacePreparationTransitionsPreserveAndClearDependencyEvidence(t *testing.T) {
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)

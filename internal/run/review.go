@@ -90,6 +90,9 @@ func (s Service) Review(ctx context.Context, request Request) (review plan.PlanR
 					return fmt.Errorf("prepare review: %w", err)
 				}
 			}
+			if err := requireNoCurrentFinalVerificationFailure(ownedCtx, detail, execution); err != nil {
+				return fmt.Errorf("prepare review: %w", err)
+			}
 			ReportPhase(ownedCtx, PhaseFinalVerification, nil)
 			if err := writef(s.out, "Verifying completed branch: %s\n", execution.ExecutionRoot); err != nil {
 				return err

@@ -82,8 +82,22 @@ func readPlanFiles(dir string) (planFiles, error) {
 	warnings = append(warnings, reviewWarnings...)
 	planNarrative, narrativeWarnings := readPlanNarrativeArtifact(dir)
 	warnings = append(warnings, narrativeWarnings...)
+	warnings = append(warnings, validateRuntimePrerequisiteCycle(state.Plan.ID, state.Plan.RuntimePrerequisites, runtimePrerequisiteResolver(filepath.Dir(filepath.Clean(dir))))...)
 
 	return planFiles{dir: dir, state: state, slices: slices, events: events, planningSession: planningSession, planningBrief: planningBrief, review: review, planNarrative: planNarrative, warnings: warnings}, nil
+}
+
+func runtimePrerequisiteResolver(plansDir string) func(string) ([]RuntimePrerequisite, bool) {
+	return func(planID string) ([]RuntimePrerequisite, bool) {
+		if planID == "" || len(planID) > maxRuntimePrerequisitePlanID || planID == "." || planID == ".." || strings.ContainsAny(planID, `/\\`) {
+			return nil, false
+		}
+		var state State
+		if err := readJSON(filepath.Join(plansDir, planID, "state.json"), &state); err != nil || state.Plan.ID != planID {
+			return nil, false
+		}
+		return state.Plan.RuntimePrerequisites, true
+	}
 }
 
 // ReadState reads the mutable state.json artifact from a plan directory after
@@ -153,6 +167,7 @@ type ArtifactChangeSet struct {
 	clearPlanCurrentSlice               bool
 	planReview                          planReviewChange
 	clearSliceBlockerNotes              map[string]struct{}
+	clearSliceExecutionBoundaries       map[string]struct{}
 }
 
 type planReviewChange struct {
@@ -235,6 +250,25 @@ func (c *ArtifactChangeSet) ClearSliceBlockerNote(sliceID string) error {
 }
 
 // ClearPlanCurrentSlice explicitly clears the persisted current slice.
+// ClearSliceExecutionBoundary explicitly supersedes one slice's execution
+// root and immutable start while retaining the prior values in restart evidence.
+func (c *ArtifactChangeSet) ClearSliceExecutionBoundary(sliceID string) error {
+	if c == nil || c.detail == nil {
+		return fmt.Errorf("plan detail is nil")
+	}
+	slice := findSlice(c.detail, sliceID)
+	if slice == nil {
+		return classify(ErrNotFound, "slice %s not found", sliceID)
+	}
+	if c.clearSliceExecutionBoundaries == nil {
+		c.clearSliceExecutionBoundaries = make(map[string]struct{})
+	}
+	c.clearSliceExecutionBoundaries[sliceID] = struct{}{}
+	slice.ExecutionRoot = ""
+	slice.ExecutionStart = nil
+	return nil
+}
+
 func (c *ArtifactChangeSet) ClearPlanCurrentSlice() {
 	if c == nil {
 		return
@@ -459,6 +493,18 @@ func continueBlockedMutation(now time.Time) artifactMutationFunc {
 	}
 }
 
+func blockedSliceRestartMutation(request BlockedSliceRestartRequest) artifactMutationFunc {
+	return func(detail *PlanDetail) (lifecycleMutation, error) {
+		return applyLifecycleMutation(detail, func(changes *ArtifactChangeSet) ([]Event, error) {
+			event, err := markBlockedSliceRestarted(detail, changes, request)
+			if err != nil {
+				return nil, err
+			}
+			return []Event{event}, nil
+		})
+	}
+}
+
 func removeSliceMutation(sliceID string, now time.Time) artifactMutationFunc {
 	return func(detail *PlanDetail) (lifecycleMutation, error) {
 		expected := Event{Type: EventTypeSliceRemoved, Timestamp: now, PlanID: detail.State.Plan.ID, SliceID: sliceID, Message: "Pending slice removed by plan edit"}
@@ -510,6 +556,21 @@ func reorderPendingSlicesMutation(pendingOrder []string, now time.Time) artifact
 
 func unchangedLifecycleMutation(detail *PlanDetail) lifecycleMutation {
 	return lifecycleMutation{State: detail.State, Slices: detail.Slices}
+}
+
+func blockedSliceRestartWasRecovered(request BlockedSliceRestartRequest) recoveredArtifactMutationMatch {
+	return func(stale, settled *PlanDetail) bool {
+		if stale == nil || settled == nil {
+			return false
+		}
+		expected := clonePlanDetail(stale)
+		changes := NewArtifactChangeSet(expected)
+		event, err := markBlockedSliceRestarted(expected, changes, request)
+		if err != nil {
+			return false
+		}
+		return reflect.DeepEqual(settled.State, expected.State) && reflect.DeepEqual(settled.Slices, expected.Slices) && semanticEventsWereRecorded(settled.Events, []Event{event})
+	}
 }
 
 func blockedContinuationWasRecovered(stale, settled *PlanDetail) bool {
@@ -1180,7 +1241,7 @@ func lowerArtifactJSONChanges(encoded []byte, projection artifactJSONChanges) ([
 		return encoded, nil
 	}
 	hasStateChanges := changes.clearWorkspaceDependencyFailure || changes.clearWorkspaceDependencyFingerprint || changes.clearWorkspaceRebaseIntent || changes.clearPlanCurrentSlice || changes.planReview.kind != planReviewUnchanged
-	hasSliceChanges := len(changes.clearSliceBlockerNotes) > 0
+	hasSliceChanges := len(changes.clearSliceBlockerNotes) > 0 || len(changes.clearSliceExecutionBoundaries) > 0
 	if projection.kind == artifactJSONState && !hasStateChanges || projection.kind == artifactJSONSlices && !hasSliceChanges || projection.kind == artifactJSONNone {
 		return encoded, nil
 	}
@@ -1354,7 +1415,7 @@ func replacementReviewJSON(review PlanReview) (map[string]any, error) {
 
 func lowerSlicesJSONChanges(root map[string]any, changes *ArtifactChangeSet) error {
 	values, _ := root["slices"].([]any)
-	found := make(map[string]bool, len(changes.clearSliceBlockerNotes))
+	found := make(map[string]bool, len(changes.clearSliceBlockerNotes)+len(changes.clearSliceExecutionBoundaries))
 	for _, value := range values {
 		object, _ := value.(map[string]any)
 		id, _ := object["id"].(string)
@@ -1362,8 +1423,18 @@ func lowerSlicesJSONChanges(root map[string]any, changes *ArtifactChangeSet) err
 			object["blocker_note"] = ""
 			found[id] = true
 		}
+		if _, ok := changes.clearSliceExecutionBoundaries[id]; ok {
+			object["execution_root"] = ""
+			object["execution_start"] = nil
+			found[id] = true
+		}
 	}
 	for id := range changes.clearSliceBlockerNotes {
+		if !found[id] {
+			return fmt.Errorf("lower artifact changes: slice %s not found", id)
+		}
+	}
+	for id := range changes.clearSliceExecutionBoundaries {
 		if !found[id] {
 			return fmt.Errorf("lower artifact changes: slice %s not found", id)
 		}

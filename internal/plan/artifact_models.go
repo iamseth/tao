@@ -27,27 +27,28 @@ type Execution struct {
 
 // Slice is one independently reviewable unit of agent work.
 type Slice struct {
-	ID                  string                  `json:"id"`
-	Title               string                  `json:"title"`
-	Status              string                  `json:"status"`
-	BlockerNote         string                  `json:"blocker_note,omitempty"`
-	ExecutionRoot       string                  `json:"execution_root,omitempty"`
-	ExecutionStart      *SliceExecutionStart    `json:"execution_start,omitempty"`
-	Tags                []string                `json:"tags,omitempty"`
-	DependsOn           []string                `json:"depends_on"`
-	Timing              SliceTiming             `json:"timing"`
-	Goal                string                  `json:"goal"`
-	Context             string                  `json:"context"`
-	Tasks               []string                `json:"tasks"`
-	ExpectedFiles       []string                `json:"expected_files"`
-	RequiredInputs      []RequiredInput         `json:"required_inputs,omitempty"`
-	Verification        Verification            `json:"verification"`
-	Approval            *Approval               `json:"approval,omitempty"`
-	Notes               string                  `json:"notes,omitempty"`
-	VerificationResults []VerificationRun       `json:"verification_results,omitempty"`
-	CommitIntent        *SliceCommitIntent      `json:"commit_intent,omitempty"`
-	Completion          *SliceCompletionOutcome `json:"completion,omitempty"`
-	Extra               map[string]any          `json:"-"`
+	ID                  string                     `json:"id"`
+	Title               string                     `json:"title"`
+	Status              string                     `json:"status"`
+	BlockerNote         string                     `json:"blocker_note,omitempty"`
+	ExecutionRoot       string                     `json:"execution_root,omitempty"`
+	ExecutionStart      *SliceExecutionStart       `json:"execution_start,omitempty"`
+	Tags                []string                   `json:"tags,omitempty"`
+	DependsOn           []string                   `json:"depends_on"`
+	Timing              SliceTiming                `json:"timing"`
+	Goal                string                     `json:"goal"`
+	Context             string                     `json:"context"`
+	Tasks               []string                   `json:"tasks"`
+	ExpectedFiles       []string                   `json:"expected_files"`
+	RequiredInputs      []RequiredInput            `json:"required_inputs,omitempty"`
+	Verification        Verification               `json:"verification"`
+	Approval            *Approval                  `json:"approval,omitempty"`
+	Notes               string                     `json:"notes,omitempty"`
+	VerificationResults []VerificationRun          `json:"verification_results,omitempty"`
+	CommitIntent        *SliceCommitIntent         `json:"commit_intent,omitempty"`
+	Completion          *SliceCompletionOutcome    `json:"completion,omitempty"`
+	VerificationRepair  *VerificationRepairBinding `json:"verification_repair,omitempty"`
+	Extra               map[string]any             `json:"-"`
 }
 
 // SliceExecutionStart protects the branch and HEAD prepared for automatic work.

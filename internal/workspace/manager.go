@@ -265,7 +265,7 @@ func (m *Manager) Prepare(ctx context.Context, options PrepareOptions) (Metadata
 	if branch == "" {
 		branch = strings.ReplaceAll(m.config.BranchNameTemplate, "{plan_id}", planID)
 	}
-	baseBranch, err := m.resolveBaseBranch(ctx, options)
+	baseBranch, err := m.ResolveBaseBranch(ctx, options)
 	if err != nil {
 		return Metadata{}, err
 	}
@@ -344,7 +344,9 @@ func (m *Manager) Prepare(ctx context.Context, options PrepareOptions) (Metadata
 	return metadata, nil
 }
 
-func (m *Manager) resolveBaseBranch(ctx context.Context, options PrepareOptions) (string, error) {
+// ResolveBaseBranch applies the same automatic-versus-manual branch policy
+// used by Prepare without mutating a workspace.
+func (m *Manager) ResolveBaseBranch(ctx context.Context, options PrepareOptions) (string, error) {
 	if options.PreferDefaultBranch && m.config.BaseBranchDetection != BaseBranchDetectManual {
 		if branch, err := m.git.branches.DefaultBranch(ctx); err == nil && branch != "" {
 			if exists, err := m.git.branches.LocalBranchExists(ctx, branch); err == nil && exists {

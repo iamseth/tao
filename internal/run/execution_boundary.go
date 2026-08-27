@@ -8,6 +8,7 @@ type ExecutionBoundaryDurableFacts struct {
 	Detail          *plan.PlanDetail
 	SliceID         string
 	ContinueBlocked bool
+	RestartBlocked  bool
 }
 
 // ExecutionBoundaryLiveFacts is the already-inspected execution state. Keeping
@@ -20,6 +21,10 @@ type ExecutionBoundaryLiveFacts struct {
 	Head               string
 	PorcelainStatus    string
 	ActiveGitOperation string
+	BaselineBranch     string
+	BaselineHead       string
+	BoundaryAncestor   bool
+	AncestryKnown      bool
 }
 
 // ExecutionBoundaryRepairRequirement describes durable recovery that must be
@@ -75,6 +80,11 @@ func (ExecutionBoundaryController) Classify(durable ExecutionBoundaryDurableFact
 		PorcelainStatus:    live.PorcelainStatus,
 		ActiveGitOperation: live.ActiveGitOperation,
 		ContinueBlocked:    durable.ContinueBlocked,
+		RestartBlocked:     durable.RestartBlocked,
+		BaselineBranch:     live.BaselineBranch,
+		BaselineHead:       live.BaselineHead,
+		BoundaryAncestor:   live.BoundaryAncestor,
+		AncestryKnown:      live.AncestryKnown,
 	})
 	effective := result.EffectiveDisposition()
 	action := ExecutionBoundaryAction{

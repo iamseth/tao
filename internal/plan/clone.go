@@ -38,6 +38,7 @@ func clonePlanState(plan PlanState) PlanState {
 	clone := plan
 	clone.Decision = cloneDecision(plan.Decision)
 	clone.Sequence = cloneSequence(plan.Sequence)
+	clone.RuntimePrerequisites = cloneRuntimePrerequisites(plan.RuntimePrerequisites)
 	clone.CurrentSlice = cloneStringPtr(plan.CurrentSlice)
 	clone.CompletedSlices = cloneStringSlice(plan.CompletedSlices)
 	clone.PendingSlices = cloneStringSlice(plan.PendingSlices)
@@ -71,6 +72,13 @@ func cloneSequence(sequence *Sequence) *Sequence {
 		clone.Relationships = append([]PlanRelation(nil), sequence.Relationships...)
 	}
 	return &clone
+}
+
+func cloneRuntimePrerequisites(prerequisites []RuntimePrerequisite) []RuntimePrerequisite {
+	if prerequisites == nil {
+		return nil
+	}
+	return append([]RuntimePrerequisite(nil), prerequisites...)
 }
 
 func clonePlanTiming(timing PlanTiming) PlanTiming {
@@ -182,6 +190,10 @@ func cloneSlice(slice Slice) Slice {
 	clone.RequiredInputs = cloneRequiredInputs(slice.RequiredInputs)
 	clone.Verification = cloneVerification(slice.Verification)
 	clone.Approval = cloneApproval(slice.Approval)
+	if slice.VerificationRepair != nil {
+		binding := *slice.VerificationRepair
+		clone.VerificationRepair = &binding
+	}
 	clone.VerificationResults = cloneVerificationRuns(slice.VerificationResults)
 	clone.Extra = cloneMap(slice.Extra)
 	return clone

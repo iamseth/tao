@@ -19,6 +19,7 @@ type InterruptedSliceDisposition string
 const (
 	InterruptedSliceNewStart           InterruptedSliceDisposition = "new_start"
 	InterruptedSliceBlockedContinue    InterruptedSliceDisposition = "blocked_continue"
+	InterruptedSliceBlockedRestart     InterruptedSliceDisposition = "blocked_restart"
 	InterruptedSliceCleanStartRepair   InterruptedSliceDisposition = "clean_torn_start_repair"
 	InterruptedSliceResume             InterruptedSliceDisposition = "isolated_pre_intent_resume"
 	InterruptedSliceCompletionRecovery InterruptedSliceDisposition = "existing_completion_recovery"
@@ -39,6 +40,11 @@ type InterruptedSliceInput struct {
 	PorcelainStatus    string
 	ActiveGitOperation string
 	ContinueBlocked    bool
+	RestartBlocked     bool
+	BaselineBranch     string
+	BaselineHead       string
+	BoundaryAncestor   bool
+	AncestryKnown      bool
 }
 
 // InterruptedSliceFacts contains diagnostics safe to show to an operator. It
@@ -63,6 +69,10 @@ type InterruptedSliceFacts struct {
 	ActiveGitOperation string
 	IntentPresent      bool
 	CompletionPresent  bool
+	BaselineBranch     string
+	BaselineHead       string
+	BoundaryAncestor   bool
+	AncestryKnown      bool
 }
 
 type InterruptedSliceResult struct {
@@ -91,8 +101,12 @@ func ClassifyInterruptedSlice(input InterruptedSliceInput) InterruptedSliceResul
 		return refuse("current slice is %q, not selected slice %q", facts.CurrentSliceID, input.SliceID)
 	}
 	blockedContinuation := isBlockedContinuation(input, slice)
-	if (input.Detail.State.Status == plan.StatusBlocked || slice.Status == plan.StatusBlocked) && !blockedContinuation {
-		return refuse("blocked slice requires an explicit continuation")
+	blockedRestart := isBlockedRestart(input, slice)
+	if input.ContinueBlocked && input.RestartBlocked {
+		return refuse("blocked continuation and restart are mutually exclusive")
+	}
+	if (input.Detail.State.Status == plan.StatusBlocked || slice.Status == plan.StatusBlocked) && !blockedContinuation && !blockedRestart {
+		return refuse("blocked slice requires explicit --continue or --restart")
 	}
 	action := func(disposition InterruptedSliceDisposition, reason string) InterruptedSliceResult {
 		result := InterruptedSliceResult{Disposition: disposition, Reason: reason, Facts: facts}
@@ -100,10 +114,17 @@ func ClassifyInterruptedSlice(input InterruptedSliceInput) InterruptedSliceResul
 			result.Disposition = InterruptedSliceBlockedContinue
 			result.ContinuationDisposition = disposition
 		}
+		if blockedRestart {
+			result.Disposition = InterruptedSliceBlockedRestart
+			result.ContinuationDisposition = disposition
+		}
 		return result
 	}
 	freshStart := slice.Status == plan.StatusPending && facts.CurrentSliceID == "" && slice.ExecutionStart == nil && slice.CommitIntent == nil && slice.Completion == nil
 	blockedFreshStart := blockedContinuation && slice.ExecutionRoot == "" && slice.ExecutionStart == nil && slice.CommitIntent == nil && slice.Completion == nil
+	if blockedRestart {
+		return classifyBlockedRestart(input, slice, facts)
+	}
 	if freshStart || blockedFreshStart {
 		if !facts.Pending {
 			return refuse("selected pending slice is absent from the pending queue")
@@ -192,6 +213,65 @@ func ClassifyInterruptedSlice(input InterruptedSliceInput) InterruptedSliceResul
 	return action(InterruptedSliceResume, "isolated pre-intent work remains inside its immutable boundary")
 }
 
+func classifyBlockedRestart(input InterruptedSliceInput, slice *plan.Slice, facts InterruptedSliceFacts) InterruptedSliceResult {
+	refuse := func(reason string) InterruptedSliceResult {
+		return InterruptedSliceResult{Disposition: InterruptedSliceRefuse, Reason: reason, Facts: facts}
+	}
+	if slice.CommitIntent != nil || slice.Completion != nil {
+		return refuse("post-intent or completion evidence cannot be restarted")
+	}
+	policy, strategy, reason := effectiveInterruptedBoundary(input.Detail, slice)
+	facts.CommitPolicy, facts.WorkspaceStrategy = policy, strategy
+	if reason != "" {
+		return refuse(reason)
+	}
+	if policy != CommitPolicySlice.String() || strategy != plan.WorkspaceStrategyWorktree {
+		return refuse("only an isolated automatic slice can be restarted")
+	}
+	if input.CommitPolicy != "" && input.CommitPolicy != policy {
+		return refuse("requested commit policy differs from the prior automatic boundary")
+	}
+	if input.WorkspaceStrategy != "" && input.WorkspaceStrategy != strategy {
+		return refuse("requested execution mode differs from the prior isolated boundary")
+	}
+	if slice.ExecutionStart == nil || strings.TrimSpace(slice.ExecutionRoot) == "" {
+		return refuse("restart requires an immutable execution boundary")
+	}
+	if input.ExecutionRoot == "" || filepath.Clean(input.ExecutionRoot) != filepath.Clean(slice.ExecutionRoot) {
+		return refuse("live execution root does not match the recorded root")
+	}
+	if input.ActiveGitOperation != "" {
+		return refuse(fmt.Sprintf("Git operation %q is active", input.ActiveGitOperation))
+	}
+	if facts.Dirty || facts.AmbiguousStatus || facts.Conflicted {
+		return refuse("restart requires a clean, unconflicted worktree with unambiguous status")
+	}
+	if input.Branch != slice.ExecutionStart.Branch || input.Head != slice.ExecutionStart.Head {
+		return refuse("live branch and HEAD must match the prior immutable boundary")
+	}
+	if input.Branch == "" || gitops.ProtectedBranch(input.Branch) {
+		return refuse("automatic slice is on an unsafe branch")
+	}
+	if input.BaselineBranch == "" || input.BaselineHead == "" {
+		return refuse("fresh baseline is unavailable or ambiguous")
+	}
+	if !input.AncestryKnown || !input.BoundaryAncestor {
+		return refuse("prior immutable boundary is not an ancestor of the fresh baseline")
+	}
+	if input.BaselineHead == slice.ExecutionStart.Head {
+		return refuse("fresh baseline has not advanced beyond the prior immutable boundary")
+	}
+	return InterruptedSliceResult{Disposition: InterruptedSliceBlockedRestart, ContinuationDisposition: InterruptedSliceNewStart, Reason: "clean blocked automatic slice may start a fresh attempt on the advanced baseline", Facts: facts}
+}
+
+func isBlockedRestart(input InterruptedSliceInput, slice *plan.Slice) bool {
+	if !input.RestartBlocked || input.Detail == nil || slice == nil {
+		return false
+	}
+	lifecycle := plan.AnalyzeLifecycle(input.Detail)
+	return lifecycle.Continuable && blockedSelectedSliceID(input.Detail) == slice.ID && (input.Detail.State.Status == plan.StatusBlocked || slice.Status == plan.StatusBlocked)
+}
+
 func isBlockedContinuation(input InterruptedSliceInput, slice *plan.Slice) bool {
 	if !input.ContinueBlocked || input.Detail == nil || slice == nil {
 		return false
@@ -217,7 +297,7 @@ func blockedSelectedSliceID(detail *plan.PlanDetail) string {
 // EffectiveDisposition unwraps the validated action represented by an
 // explicit blocked continuation.
 func (result InterruptedSliceResult) EffectiveDisposition() InterruptedSliceDisposition {
-	if result.Disposition == InterruptedSliceBlockedContinue {
+	if result.Disposition == InterruptedSliceBlockedContinue || result.Disposition == InterruptedSliceBlockedRestart {
 		return result.ContinuationDisposition
 	}
 	return result.Disposition
@@ -227,6 +307,7 @@ func interruptedSliceFacts(input InterruptedSliceInput) InterruptedSliceFacts {
 	facts := InterruptedSliceFacts{
 		SliceID: input.SliceID, LiveRoot: input.ExecutionRoot, WorkspaceStrategy: input.WorkspaceStrategy, CommitPolicy: input.CommitPolicy,
 		Branch: input.Branch, Head: input.Head, ActiveGitOperation: strings.TrimSpace(input.ActiveGitOperation),
+		BaselineBranch: input.BaselineBranch, BaselineHead: input.BaselineHead, BoundaryAncestor: input.BoundaryAncestor, AncestryKnown: input.AncestryKnown,
 	}
 	if input.Detail != nil {
 		if input.Detail.State.Plan.CurrentSlice != nil {

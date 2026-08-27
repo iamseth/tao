@@ -20,6 +20,9 @@ var requiredPlanningBriefSections = []string{
 const (
 	largeSliceTaskThreshold         = 8
 	largeSliceExpectedFileThreshold = 10
+	maxRuntimePrerequisites         = 32
+	maxRuntimePrerequisitePlanID    = 200
+	maxRuntimePrerequisiteReason    = 1000
 )
 
 // ValidateDetail reports artifact consistency warnings without rejecting loadable plans.
@@ -33,6 +36,7 @@ func ValidateDetail(detail *PlanDetail) []string {
 	}
 	warnings = append(warnings, validateDecision(detail.State.Plan.Decision)...)
 	warnings = append(warnings, validateSequence(detail.State.Plan.ID, detail.State.Plan.Sequence)...)
+	warnings = append(warnings, validateRuntimePrerequisites(detail.State.Plan.ID, detail.State.Plan.RuntimePrerequisites)...)
 	if detail.Slices.PlanID != "" && detail.State.Plan.ID != "" && detail.Slices.PlanID != detail.State.Plan.ID {
 		warnings = append(warnings, "state.json plan.id does not match slices.json plan_id")
 	}
@@ -193,6 +197,80 @@ func validateSequence(planID string, sequence *Sequence) []string {
 		}
 	}
 	return warnings
+}
+
+func validateRuntimePrerequisites(planID string, prerequisites []RuntimePrerequisite) []string {
+	var warnings []string
+	if len(prerequisites) > maxRuntimePrerequisites {
+		warnings = append(warnings, fmt.Sprintf("state.json plan.runtime_prerequisites must contain at most %d entries", maxRuntimePrerequisites))
+	}
+	seen := make(map[string]struct{}, len(prerequisites))
+	for i, prerequisite := range prerequisites {
+		path := fmt.Sprintf("state.json plan.runtime_prerequisites[%d]", i)
+		target := strings.TrimSpace(prerequisite.PlanID)
+		switch {
+		case target == "":
+			warnings = append(warnings, path+".plan_id is required")
+		case target != prerequisite.PlanID:
+			warnings = append(warnings, path+".plan_id must not have surrounding whitespace")
+		case len(target) > maxRuntimePrerequisitePlanID:
+			warnings = append(warnings, fmt.Sprintf("%s.plan_id must be at most %d bytes", path, maxRuntimePrerequisitePlanID))
+		case target == "." || target == ".." || strings.ContainsAny(target, `/\\`):
+			warnings = append(warnings, path+".plan_id must be an exact plan ID, not a path")
+		case target == strings.TrimSpace(planID):
+			warnings = append(warnings, path+" cannot reference its own plan")
+		}
+		if target != "" {
+			if _, duplicate := seen[target]; duplicate {
+				warnings = append(warnings, path+" duplicates prerequisite plan "+target)
+			}
+			seen[target] = struct{}{}
+		}
+		reason := strings.TrimSpace(prerequisite.Reason)
+		if reason == "" {
+			warnings = append(warnings, path+".reason is required")
+		} else if len(prerequisite.Reason) > maxRuntimePrerequisiteReason {
+			warnings = append(warnings, fmt.Sprintf("%s.reason must be at most %d bytes", path, maxRuntimePrerequisiteReason))
+		}
+	}
+	return warnings
+}
+
+// validateRuntimePrerequisiteCycle follows only prerequisites that can be
+// resolved in the same repository. Missing plans remain a runtime gate concern.
+func validateRuntimePrerequisiteCycle(planID string, prerequisites []RuntimePrerequisite, resolve func(string) ([]RuntimePrerequisite, bool)) []string {
+	visiting := map[string]bool{planID: true}
+	visited := make(map[string]bool)
+	var walk func([]RuntimePrerequisite) bool
+	walk = func(edges []RuntimePrerequisite) bool {
+		for _, edge := range edges {
+			target := edge.PlanID
+			if target == "" {
+				continue
+			}
+			if visiting[target] {
+				return true
+			}
+			if visited[target] {
+				continue
+			}
+			next, ok := resolve(target)
+			if !ok {
+				continue
+			}
+			visiting[target] = true
+			if walk(next) {
+				return true
+			}
+			delete(visiting, target)
+			visited[target] = true
+		}
+		return false
+	}
+	if walk(prerequisites) {
+		return []string{"state.json plan.runtime_prerequisites contains a resolvable cycle"}
+	}
+	return nil
 }
 
 func validDecisionReadiness(value DecisionReadiness) bool {

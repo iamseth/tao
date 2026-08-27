@@ -43,7 +43,7 @@ func TestApproveCommandApprovesCurrentGatedSlice(t *testing.T) {
 	for _, want := range []string{
 		"Slice approved: " + sliceID,
 		"Next: tao run --continue " + planID,
-		"Reason: the recorded blocker must be resolved before explicitly continuing",
+		"Reason: continue at the preserved boundary after resolving its blocker; use restart only for an eligible newer baseline",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("expected approve output %q, got %q", want, out.String())

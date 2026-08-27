@@ -184,6 +184,10 @@ func (f fakeRepository) GetPlan(ctx context.Context, id string) (*plan.PlanDetai
 	return f.details[id], nil
 }
 
+func (f fakeRepository) GetPlanExact(ctx context.Context, id string) (*plan.PlanDetail, error) {
+	return f.GetPlan(ctx, id)
+}
+
 func (f fakeRepository) ResolvePlan(ctx context.Context, input string) (*plan.PlanDetail, error) {
 	detail, err := f.GetPlan(ctx, input)
 	if err != nil || detail != nil {

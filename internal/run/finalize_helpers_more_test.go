@@ -581,6 +581,7 @@ func (f reviewCreatorFunc) CreateReview(ctx context.Context, run ReviewRun) (pla
 type scriptedGitRunner struct {
 	// Scripted responses (consumed in sequence).
 	Branch    string   // response for "branch --show-current" (default "feature")
+	Head      string   // response for "rev-parse HEAD" (default "head123")
 	Origin    string   // response for "symbolic-ref --quiet --short refs/remotes/origin/HEAD" (default "origin/main")
 	Statuses  []string // successive responses for "status --porcelain"
 	Diffs     []string // successive responses for "diff HEAD"
@@ -602,7 +603,7 @@ type scriptedGitRunner struct {
 // newScriptedGitRunner returns a runner that serves statuses in order and
 // defaults to branch="feature" and origin="origin/main".
 func newScriptedGitRunner(statuses ...string) *scriptedGitRunner {
-	return &scriptedGitRunner{Branch: "feature", Origin: "origin/main", Statuses: statuses}
+	return &scriptedGitRunner{Branch: "feature", Head: "head123", Origin: "origin/main", Statuses: statuses}
 }
 
 // Run implements CommandRunner.
@@ -627,6 +628,10 @@ func (r *scriptedGitRunner) Run(ctx context.Context, cwd, name string, args []st
 	case "branch --show-current":
 		if r.Branch != "" {
 			_, _ = io.WriteString(stdout, r.Branch+"\n")
+		}
+	case "rev-parse HEAD":
+		if r.Head != "" {
+			_, _ = io.WriteString(stdout, r.Head+"\n")
 		}
 	case "symbolic-ref --quiet --short refs/remotes/origin/HEAD":
 		if r.Origin != "" {

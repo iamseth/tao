@@ -66,7 +66,8 @@ events.jsonl
 - Preserve intent, constraints, and decisions from this session.
 - Select exactly one plan-level `change_type` from the supported Conventional Commit types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, or `revert`.
 - Treat `change_type` as a required planning-time decision for every new plan. Derive it only from the resolved planning conversation; if the planning packet leaves it unresolved, stop and ask the user rather than inventing a type or writing incomplete plan artifacts.
-- Write valid `decision` and `sequence` objects under `state.json`'s `plan` object for every new plan.
+- Write valid `decision` and `sequence` objects under `state.json`'s `plan` object for every new plan. Sequence metadata is advisory only.
+- Emit optional `plan.runtime_prerequisites` only for true execution dependencies explicitly established by the planning packet; never infer them from sequence order.
 - Run `tao insights --digest` for the current repository and factor recurring failure patterns—such as environment-caused verification failures, rework-prone areas, and cost outliers—into slice boundaries and verification-command choices.
 - Slice work into small serial steps.
 - Each slice must be independently reviewable.
@@ -105,6 +106,12 @@ Record advisory ordering in `plan.sequence`:
 - Relationships and positions explain intended order only. They never replace slice `depends_on`, satisfy approvals, make a plan runnable, or authorize any runtime lifecycle transition.
 
 For multi-plan slicing, allocate the complete set first, then assign stable group positions and write reciprocal relationships where they clarify the order. Do not relate a plan to itself or repeat the same target in one plan.
+
+## Runtime prerequisites
+
+Use optional `plan.runtime_prerequisites` only when the planning packet establishes that another exact same-repository plan must be integrated before this plan can execute. Each entry contains the already allocated exact `plan_id` and a non-empty `reason`. Do not reference the current plan, repeat a target, or create a cycle. Keep the list bounded and omit it entirely when there is no strict dependency so legacy plan shape remains unchanged.
+
+A prerequisite is runtime authority, unlike advisory `plan.sequence`: it is satisfied only by Tao's durable merge evidence for the referenced plan and ancestry of that merge in the selected execution baseline. Never infer a runtime prerequisite from sequence position or an `after` relationship, and never use sequence metadata as evidence that one is satisfied.
 
 ## Input readiness
 

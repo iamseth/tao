@@ -19,7 +19,7 @@ var runCommand = commandMetadata{
 	name:      "run",
 	minPrefix: "r",
 	usageLines: []string{
-		"run (r) [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>",
+		"run (r) [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue|--restart|--repair-verification] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>",
 	},
 	completionDescription: "Run pending slices with the selected agent",
 	long:                  "Run pending slices for a Tao plan with the selected agent. Tao prepares the requested workspace, executes pending work, automatically reworks review findings by default, records verification metadata, and follows the configured commit policy. In a sufficiently large terminal, Tao displays a pinned run header unless --no-run-header disables it.",
@@ -58,7 +58,9 @@ func registerRunRequestFlags(fs *flag.FlagSet) {
 func registerRunFlags(fs *flag.FlagSet) {
 	registerRunRequestFlags(fs)
 	autoRework, maxReworkAttempts, _ := runReworkEnvDefaults()
-	fs.Bool("continue", false, "continue after clearing a plan or slice blocker")
+	fs.Bool("continue", false, "continue a blocked slice at its preserved execution boundary")
+	fs.Bool("restart", false, "restart a safe blocked automatic slice on a newer baseline")
+	fs.Bool("repair-verification", false, "append and run one bounded repair for current failed final verification")
 	fs.Bool("no-run-header", !runHeaderEnvDefault(), "disable the pinned run header")
 	fs.Bool("auto-rework", autoRework, "automatically rework plans with requested changes")
 	fs.Int("max-rework-attempts", maxReworkAttempts, "maximum automatic rework cycles (0 disables)")
@@ -156,11 +158,17 @@ func (a App) run(ctx context.Context, repo planRunRepository, args []string) err
 		return err
 	}
 	reworkRestart := flagBoolValue(fs, "rework-restart")
+	blockedRestart := flagBoolValue(fs, "restart")
+	repairVerification := flagBoolValue(fs, "repair-verification")
+	continueRun := flagBoolValue(fs, "continue")
+	if (continueRun && blockedRestart) || (continueRun && repairVerification) || (blockedRestart && repairVerification) {
+		return fmt.Errorf("--continue, --restart, and --repair-verification are mutually exclusive")
+	}
 	repositoryDefaults, err := a.currentRepositoryRunOptions(ctx)
 	if err != nil {
 		return err
 	}
-	if err := requirePositionals(positional, 1, "usage: tao run [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>"); err != nil {
+	if err := requirePositionals(positional, 1, "usage: tao run [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue|--restart|--repair-verification] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>"); err != nil {
 		return err
 	}
 	input := positional[0]
@@ -168,6 +176,8 @@ func (a App) run(ctx context.Context, repo planRunRepository, args []string) err
 	if err != nil {
 		return err
 	}
+	request.RestartBlocked = blockedRestart
+	request.RepairVerification = repairVerification
 	policy, err := resolveRunAutoReworkPolicy(fs, request.ReviewEnabled)
 	if err != nil {
 		return err

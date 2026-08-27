@@ -136,7 +136,6 @@ func deriveNextAction(detail *PlanDetail, derived DerivedPlan) PlanNextAction {
 	if derived.UnresolvedReworkStop {
 		return primary(PlanActionRestartRework, PlanActionClassRecovery, command("tao run --rework-restart"), "automatic rework stopped and requires an explicit bounded restart")
 	}
-
 	if derived.Capabilities.NeedsApproval {
 		sliceID := derived.Capabilities.ApprovalSliceID
 		cmd := "tao approve"
@@ -151,13 +150,23 @@ func deriveNextAction(detail *PlanDetail, derived DerivedPlan) PlanNextAction {
 		return primary(PlanActionApprove, PlanActionClassProgress, cmd, reason)
 	}
 	if derived.Capabilities.CanContinue && !derived.Capabilities.CanRun {
-		return primary(PlanActionContinue, PlanActionClassRecovery, command("tao run --continue"), "the recorded blocker must be resolved before explicitly continuing")
+		alternatives := []PlanAction{}
+		if slice := derived.CurrentSlice; slice != nil && slice.ExecutionStart != nil && slice.CommitIntent == nil && slice.Completion == nil {
+			alternatives = append(alternatives, PlanAction{
+				Kind: PlanActionRestartBlocked, Class: PlanActionClassRecovery, Command: command("tao run --restart"),
+				Reason: "a clean isolated pre-intent boundary may be restarted only after its baseline advances",
+			})
+		}
+		return primary(PlanActionContinue, PlanActionClassRecovery, command("tao run --continue"), "continue at the preserved boundary after resolving its blocker; use restart only for an eligible newer baseline", alternatives...)
 	}
 	if derived.Active {
 		return primary(PlanActionRun, PlanActionClassRecovery, command("tao run"), "the active slice was interrupted before a durable commit intent")
 	}
 	if derived.Capabilities.CanRun {
 		return primary(PlanActionRun, PlanActionClassProgress, command("tao run"), "the next pending slice is runnable")
+	}
+	if failure := CurrentFailedFinalVerification(detail); failure != nil {
+		return primary(PlanActionRepairVerification, PlanActionClassRecovery, command("tao run --repair-verification"), "current final repository verification failed on the completed branch")
 	}
 
 	if PlanIsMerged(detail.Events) {

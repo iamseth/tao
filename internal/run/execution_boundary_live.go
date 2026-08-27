@@ -111,6 +111,24 @@ func (controller ExecutionBoundaryController) InspectSelected(ctx context.Contex
 	live.Head = head
 	live.PorcelainStatus = status
 	live.ActiveGitOperation = active
+	if durable.RestartBlocked && slice.ExecutionStart != nil {
+		baselineBranch, baselineErr := resolvePreparationBaseBranch(ctx, detail, execution.Config, execution.Dependencies.CommandRunner)
+		if baselineErr != nil {
+			return nil, fmt.Errorf("inspect blocked restart baseline: %w", baselineErr)
+		}
+		baselineHead, baselineErr := gitClient(execution, detail.State.Repo.Root).RevParse(ctx, baselineBranch)
+		if baselineErr != nil {
+			return nil, fmt.Errorf("inspect blocked restart baseline %q: %w", baselineBranch, baselineErr)
+		}
+		ancestor, ancestorErr := git.IsAncestor(ctx, slice.ExecutionStart.Head, baselineHead)
+		if ancestorErr != nil {
+			return nil, fmt.Errorf("prove blocked restart baseline ancestry: %w", ancestorErr)
+		}
+		live.BaselineBranch = baselineBranch
+		live.BaselineHead = baselineHead
+		live.BoundaryAncestor = ancestor
+		live.AncestryKnown = true
+	}
 	action := controller.Classify(durable, live)
 	if (action.EffectiveDisposition == InterruptedSliceResume || action.EffectiveDisposition == InterruptedSliceCleanStartRepair) && len(action.StartingDirtyPaths) > 0 {
 		action = refuseExecutionBoundary(controller, durable, live, "recorded automatic clean-start metadata contains dirty paths")

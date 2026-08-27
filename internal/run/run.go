@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/workspace"
 )
 
 type CommandRunner = commandrunner.Runner
@@ -95,8 +97,11 @@ type Options struct {
 // runtimeconfig.
 type ExecutionConfig struct {
 	ResolvedRunOptions
-	SkipPermissions   bool
-	MaxReworkAttempts int
+	WorkspaceConfig    workspace.Config
+	SkipPermissions    bool
+	MaxReworkAttempts  int
+	RestartBlocked     bool
+	RepairVerification bool
 }
 
 type runExecution struct {
@@ -246,10 +251,13 @@ func CheckRequestCanStart(detail *plan.PlanDetail, request Request) error {
 		}
 	}
 	capabilities := plan.AnalyzeRunCapabilities(detail)
-	if capabilities.CanRun || (request.Continue && capabilities.CanContinue) {
+	if request.RepairVerification && plan.CurrentFailedFinalVerification(detail) != nil {
 		return nil
 	}
-	if request.Continue && capabilities.ContinueDisabledReason != "" {
+	if capabilities.CanRun || ((request.Continue || request.RestartBlocked) && capabilities.CanContinue) {
+		return nil
+	}
+	if (request.Continue || request.RestartBlocked) && capabilities.ContinueDisabledReason != "" {
 		return cannotStartf("%s", capabilities.ContinueDisabledReason)
 	}
 	return runDisabledError(capabilities)
@@ -285,9 +293,39 @@ func (s Service) Execute(ctx context.Context, request Request) error {
 				if err := CheckRequestCanStart(detail, request); err != nil {
 					return err
 				}
+				prerequisiteResolver, _ := s.repo.(plan.ExactPlanResolver)
+				if !config.RestartBlocked && len(detail.State.Plan.RuntimePrerequisites) > 0 {
+					baseline, err := resolvePrerequisiteBaseline(ownedCtx, detail, config, s.dependencies.CommandRunner, false)
+					if err != nil {
+						return cannotStartf("%s", err)
+					}
+					if _, err := checkRuntimePrerequisites(ownedCtx, prerequisiteResolver, detail, baseline, s.dependencies.CommandRunner); err != nil {
+						return err
+					}
+				}
+				if config.RepairVerification {
+					repairExecution := newRunExecution(config, s.dependencies)
+					s.resolveServiceDependencies(&repairExecution)
+					if detail.State.Workspace == nil || strings.TrimSpace(detail.State.Workspace.Path) == "" {
+						return fmt.Errorf("verification repair requires a recorded isolated worktree")
+					}
+					repairExecution.ExecutionRoot = detail.State.Workspace.Path
+					if err := appendVerificationRepair(ownedCtx, detail, repairExecution); err != nil {
+						return err
+					}
+				}
 				execution, err := s.prepareRunExecution(ownedCtx, detail, config)
 				if err != nil {
 					return err
+				}
+				if config.RestartBlocked && len(detail.State.Plan.RuntimePrerequisites) > 0 {
+					baseline, err := resolvePrerequisiteBaseline(ownedCtx, detail, config, s.dependencies.CommandRunner, true)
+					if err != nil {
+						return cannotStartf("%s", err)
+					}
+					if _, err := checkRuntimePrerequisites(ownedCtx, prerequisiteResolver, detail, baseline, s.dependencies.CommandRunner); err != nil {
+						return err
+					}
 				}
 				refreshHeader(ownedCtx, detail, execution.Config)
 				return executeDetailWithExecution(ownedCtx, detail, func(ctx context.Context, detail *plan.PlanDetail) (*plan.PlanDetail, error) {

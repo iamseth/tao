@@ -449,9 +449,18 @@ through.
 
 - `tao run <plan-id>` — normal execution of all pending slices.
 - `tao run --max-slices 1 <plan-id>` — run a single slice to inspect results.
-- `tao run --continue <plan-id>` — resume only after you've cleared a blocker.
-  It explicitly clears the blocked lifecycle state but does **not** infer
-  resolution or bypass approval gates, dependencies, or verification preflight.
+- `tao run --continue <plan-id>` — resume only after you've cleared an ordinary
+  blocker. It explicitly clears lifecycle state but does **not** infer resolution.
+- `tao run --restart <plan-id>` — restart only a blocked clean isolated
+  automatic slice on a strictly newer baseline, commonly after integrating a
+  runtime prerequisite. It does not reuse the superseded execution boundary.
+- `tao run --repair-verification <plan-id>` — append and run one bounded repair
+  slice for a failed final repository verification bound to the current head.
+
+Runtime prerequisites are checked before workspace preparation or agent launch.
+A dependent plan becomes runnable only after each exact same-repository
+prerequisite has current Tao merge evidence that is ancestral to the selected
+baseline; advisory sequence order is not authority.
 
 Run each plan explicitly. If two plans are independent, you can launch one
 `tao run <plan-id>` in each of two terminals. A cross-process per-plan lock
@@ -591,7 +600,12 @@ another direct driver from racing that recovery:
 `tao run --continue` has a different purpose: it explicitly clears lifecycle
 blocker state after you resolve a recorded blocker. Tao does not infer that
 resolution from Git state, blocker prose, or external conditions, and continue
-does not override any interrupted-slice boundary check.
+does not override any interrupted-slice boundary check. When a clean automatic
+slice was blocked by a prerequisite and the baseline has since advanced, use
+`tao run --restart` instead; Tao records the superseded boundary and re-runs
+prerequisite and selected-slice preflight before handoff. A failed broad final
+gate is not an interrupted implementation slice: use
+`tao run --repair-verification` so Tao creates and runs the bound repair slice.
 
 ### `tao rework` — turn review findings into follow-up slices
 
@@ -683,6 +697,23 @@ passes it through the same central validation and safety boundary. This is an
 explicit standalone override, not an automatic-workflow escape hatch. Automatic
 runs never delegate slice commits to this command: `tao slice-complete` owns the
 recoverable transaction and Tao owns Git.
+
+Both standalone context generation and finalization refuse an active
+Tao-managed plan worktree before exposing diff context or mutating Git. The
+canonical repository identity, exact physical worktree path, and active plan
+metadata identify candidate ownership; branch names alone are never used.
+A switched branch or detached HEAD that disagrees with the recorded branch fails
+closed as unresolved ownership. Follow the bounded path in the refusal. Ordinary
+blocked work reports `tao run --continue`; restart is reported only when durable
+slice metadata proves
+an isolated automatic pre-intent boundary, and the run path still checks the live
+cleanliness and newer-baseline requirements. Manual/current-checkout and
+post-intent states report `tao slice-complete` so operators preserve or settle
+the existing completion boundary rather than rerunning implementation. Failed
+final verification and review findings continue to report
+`tao run --repair-verification` and `tao rework`. The control checkout, unrelated
+worktrees, cleaned workspaces, and repositories with no exact active plan match
+remain available.
 
 ### `/tao-pr` — open a pull request
 

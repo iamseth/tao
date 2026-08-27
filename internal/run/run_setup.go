@@ -40,10 +40,45 @@ func (s Service) prepareRunExecution(ctx context.Context, detail *plan.PlanDetai
 	s.resolveServiceDependencies(&execution)
 
 	boundary, err := (ExecutionBoundaryController{}).InspectSelected(ctx, ExecutionBoundaryDurableFacts{
-		Detail: detail, ContinueBlocked: execution.Config.Continue,
+		Detail: detail, ContinueBlocked: execution.Config.Continue, RestartBlocked: execution.Config.RestartBlocked,
 	}, execution)
 	if err != nil {
 		return execution, err
+	}
+	if execution.Config.RestartBlocked {
+		slice := selectedRunSlice(detail)
+		settledRetry := blockedRestartSettledForRetry(detail, slice)
+		if boundary == nil || boundary.EffectiveDisposition != InterruptedSliceNewStart || !boundary.AllowWorkspacePreparation || !boundary.AllowAgentHandoff || (!settledRetry && boundary.Disposition != InterruptedSliceBlockedRestart) {
+			if boundary == nil {
+				return execution, fmt.Errorf("blocked restart has no selected slice")
+			}
+			return execution, interruptedSliceRunError(boundary.Diagnostics.Facts.SliceID, *boundary)
+		}
+		if !settledRetry {
+			if slice == nil || slice.ExecutionStart == nil {
+				return execution, fmt.Errorf("blocked restart lost its prior immutable boundary")
+			}
+			record, recordErr := planMutationRecord(execution, detail)
+			if recordErr != nil {
+				return execution, fmt.Errorf("record blocked slice restart: %w", recordErr)
+			}
+			request := plan.BlockedSliceRestartRequest{
+				SliceID: slice.ID, PriorRoot: slice.ExecutionRoot, PriorBoundary: *slice.ExecutionStart,
+				BaselineBranch: boundary.live.BaselineBranch, BaselineHead: boundary.live.BaselineHead,
+				Reason: slice.BlockerNote, RestartedAt: now(execution).UTC(),
+			}
+			restarter, ok := record.(interface {
+				RestartBlockedSlice(plan.BlockedSliceRestartRequest) error
+			})
+			if !ok {
+				return execution, fmt.Errorf("plan record does not support blocked slice restart")
+			}
+			if err := restarter.RestartBlockedSlice(request); err != nil {
+				return execution, fmt.Errorf("record blocked slice restart: %w", err)
+			}
+			fresh := (ExecutionBoundaryController{}).Classify(ExecutionBoundaryDurableFacts{Detail: detail, SliceID: slice.ID}, ExecutionBoundaryLiveFacts{})
+			boundary = &fresh
+		}
 	}
 	execution.ExecutionBoundary = boundary
 	if boundary != nil && !boundary.AllowWorkspacePreparation {
@@ -76,6 +111,30 @@ func (s Service) prepareRunExecution(ctx context.Context, detail *plan.PlanDetai
 		return execution, err
 	}
 	return execution, nil
+}
+
+func blockedRestartSettledForRetry(detail *plan.PlanDetail, slice *plan.Slice) bool {
+	if detail == nil || slice == nil || detail.State.Status != plan.StatusInProgress || detail.State.Plan.CurrentSlice != nil || slice.Status != plan.StatusPending || slice.ExecutionRoot != "" || slice.ExecutionStart != nil || slice.CommitIntent != nil || slice.Completion != nil || strings.TrimSpace(slice.BlockerNote) != "" {
+		return false
+	}
+	pending := false
+	for _, sliceID := range detail.State.Plan.PendingSlices {
+		if sliceID == slice.ID {
+			pending = true
+			break
+		}
+	}
+	if !pending {
+		return false
+	}
+	for i := len(detail.Events) - 1; i >= 0; i-- {
+		event := detail.Events[i]
+		if event.Type != plan.EventTypeSliceRestarted || event.PlanID != detail.State.Plan.ID || event.SliceID != slice.ID {
+			continue
+		}
+		return !event.Timestamp.IsZero() && event.Timestamp.Equal(detail.State.UpdatedAt) && event.Timestamp.Equal(slice.Timing.UpdatedAt) && strings.TrimSpace(event.PriorRoot) != "" && strings.TrimSpace(event.PriorBranch) != "" && strings.TrimSpace(event.PriorHead) != "" && strings.TrimSpace(event.BaselineBranch) != "" && strings.TrimSpace(event.BaselineHead) != ""
+	}
+	return false
 }
 
 // resolveServiceDependencies is the single home for every pre-capture default:
@@ -137,6 +196,9 @@ func resolveServiceExecutionRoot(ctx context.Context, detail *plan.PlanDetail, e
 
 func interruptedSliceRunError(sliceID string, action ExecutionBoundaryAction) error {
 	facts := interruptedSliceDiagnosticFacts(action.Diagnostics.Facts)
+	if action.Disposition == InterruptedSliceRefuse && action.Diagnostics.Facts.BaselineHead != "" {
+		return fmt.Errorf("slice %s cannot be restarted safely: %s (%s); --continue preserves the prior immutable boundary, while --restart requires a clean pre-intent automatic slice and a strictly newer descendant baseline", sliceID, action.Diagnostics.Reason, facts)
+	}
 	switch action.EffectiveDisposition {
 	case InterruptedSliceCompletionRecovery:
 		return fmt.Errorf("slice %s has an interrupted post-intent completion transaction: %s (%s); rerun tao slice-complete with the original notes and verification inputs; do not rerun the implementation agent or commit the automatic slice by hand", sliceID, action.Diagnostics.Reason, facts)
@@ -155,6 +217,8 @@ func interruptedSliceDiagnosticFacts(facts InterruptedSliceFacts) string {
 		fmt.Sprintf("live_branch=%q", facts.Branch),
 		fmt.Sprintf("recorded_HEAD=%q", facts.RecordedHead),
 		fmt.Sprintf("live_HEAD=%q", facts.Head),
+		fmt.Sprintf("baseline_branch=%q", facts.BaselineBranch),
+		fmt.Sprintf("baseline_HEAD=%q", facts.BaselineHead),
 		fmt.Sprintf("policy=%q", facts.CommitPolicy),
 		fmt.Sprintf("workspace=%q", facts.WorkspaceStrategy),
 	}

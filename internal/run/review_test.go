@@ -403,7 +403,7 @@ func TestServiceReviewReportsStandalonePhasesInOrderAndStopsOnFailure(t *testing
 				t.Fatalf("current phase = %+v, want %q", reporter.phases, want)
 			}
 		}
-		git := &fakeReviewGit{statusHook: func() { requirePhase(PhasePreparingExecution) }}
+		git := &fakeReviewGit{head: "head123", statusHook: func() { requirePhase(PhasePreparingExecution) }}
 		runner := func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
 			if name == "sh" && strings.Join(args, " ") == "-c go build ./... && go test ./..." {
 				requirePhase(PhaseFinalVerification)
@@ -480,7 +480,7 @@ func TestServiceReviewReportsStandalonePhasesInOrderAndStopsOnFailure(t *testing
 	t.Run("verification failure", func(t *testing.T) {
 		var out bytes.Buffer
 		creatorCalled := false
-		git := &fakeReviewGit{}
+		git := &fakeReviewGit{head: "head123"}
 		runner := func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
 			if name == "sh" {
 				return fmt.Errorf("tests failed")

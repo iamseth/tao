@@ -85,6 +85,36 @@ func TestGetPlanAcceptsExactIDBeforePrefix(t *testing.T) {
 	}
 }
 
+func TestGetPlanExactRejectsPrefixSlugPathAndMismatchedArtifactID(t *testing.T) {
+	dir := t.TempDir()
+	id := "20260427-1802-example-plan"
+	writeMinimalPlan(t, dir, id, "Example Plan")
+	repo := NewFileRepository(dir)
+	if detail, err := repo.GetPlanExact(context.Background(), id); err != nil || detail.State.Plan.ID != id {
+		t.Fatalf("exact lookup = %+v, %v", detail, err)
+	}
+	for _, input := range []string{"20260427-1802", "example-plan", filepath.Join(dir, id)} {
+		if _, err := repo.GetPlanExact(context.Background(), input); err == nil {
+			t.Fatalf("GetPlanExact(%q) accepted non-exact input", input)
+		}
+	}
+
+	mismatched := "20260427-1810-directory"
+	writeMinimalPlan(t, dir, mismatched, "Mismatch")
+	statePath := filepath.Join(dir, mismatched, "state.json")
+	data, err := os.ReadFile(statePath) //nolint:gosec // G304: test-controlled plan artifact path
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = []byte(strings.Replace(string(data), mismatched, "20260427-1810-other", 1))
+	if err := os.WriteFile(statePath, data, 0o600); err != nil { //nolint:gosec // G703: test-controlled plan artifact path
+		t.Fatal(err)
+	}
+	if _, err := repo.GetPlanExact(context.Background(), mismatched); err == nil || !strings.Contains(err.Error(), "contains plan id") {
+		t.Fatalf("mismatched artifact error = %v", err)
+	}
+}
+
 func TestGetPlanAcceptsUniquePrefix(t *testing.T) {
 	dir := t.TempDir()
 	writeMinimalPlan(t, dir, "20260427-1802-example-plan", "Example Plan")

@@ -193,7 +193,8 @@ func TestPlanDecisionAndSequenceJSONRoundTripAndLegacyCompatibility(t *testing.T
 			Disposition: DecisionDispositionReady, DispositionReason: "The persistence seam is stable.",
 			Priority: Priority{Level: PriorityOverallLevelMust, Impact: PriorityLevelHigh, Urgency: PriorityLevelMedium, Effort: PriorityEffortSmall, Risk: PriorityLevelLow, Confidence: PriorityLevelHigh, Rationale: "High benefit for bounded effort."},
 		},
-		Sequence: &Sequence{Position: 1, Total: 2, Relationships: []PlanRelation{{PlanID: "plan-b", Type: PlanRelationBefore, Reason: "Plan B consumes this schema."}}},
+		Sequence:             &Sequence{Position: 1, Total: 2, Relationships: []PlanRelation{{PlanID: "plan-b", Type: PlanRelationBefore, Reason: "Plan B consumes this schema."}}},
+		RuntimePrerequisites: []RuntimePrerequisite{{PlanID: "plan-c", Reason: "Plan C must be merged first."}},
 	}}
 	data, err := json.Marshal(state)
 	if err != nil {
@@ -209,20 +210,23 @@ func TestPlanDecisionAndSequenceJSONRoundTripAndLegacyCompatibility(t *testing.T
 	if got.Plan.Sequence == nil || got.Plan.Sequence.Position != 1 || len(got.Plan.Sequence.Relationships) != 1 || got.Plan.Sequence.Relationships[0].Type != PlanRelationBefore {
 		t.Fatalf("sequence after round trip = %+v", got.Plan.Sequence)
 	}
+	if len(got.Plan.RuntimePrerequisites) != 1 || got.Plan.RuntimePrerequisites[0].PlanID != "plan-c" || got.Plan.RuntimePrerequisites[0].Reason == "" {
+		t.Fatalf("runtime prerequisites after round trip = %+v", got.Plan.RuntimePrerequisites)
+	}
 
 	var legacy State
 	if err := json.Unmarshal([]byte(`{"plan":{"id":"legacy"}}`), &legacy); err != nil {
 		t.Fatal(err)
 	}
-	if legacy.Plan.Decision != nil || legacy.Plan.Sequence != nil {
-		t.Fatalf("legacy metadata = decision:%+v sequence:%+v, want nil", legacy.Plan.Decision, legacy.Plan.Sequence)
+	if legacy.Plan.Decision != nil || legacy.Plan.Sequence != nil || legacy.Plan.RuntimePrerequisites != nil {
+		t.Fatalf("legacy metadata = decision:%+v sequence:%+v prerequisites:%+v, want nil", legacy.Plan.Decision, legacy.Plan.Sequence, legacy.Plan.RuntimePrerequisites)
 	}
 	legacyData, err := json.Marshal(legacy)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(legacyData), `"decision"`) || strings.Contains(string(legacyData), `"sequence"`) {
-		t.Fatalf("legacy JSON unexpectedly added decision metadata: %s", legacyData)
+	if strings.Contains(string(legacyData), `"decision"`) || strings.Contains(string(legacyData), `"sequence"`) || strings.Contains(string(legacyData), `"runtime_prerequisites"`) {
+		t.Fatalf("legacy JSON unexpectedly added optional planning metadata: %s", legacyData)
 	}
 }
 

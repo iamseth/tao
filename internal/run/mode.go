@@ -16,7 +16,9 @@ type ResolvedRunOptions = runtimeconfig.ResolvedRunOptions
 // resolved run options the executor reads. Callers build it from the staged
 // runtimeconfig model (NewConfigFromStages(...).ResolvedOptions()).
 type Request struct {
-	Input string
+	Input              string
+	RestartBlocked     bool
+	RepairVerification bool
 	ResolvedRunOptions
 }
 

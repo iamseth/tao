@@ -348,6 +348,22 @@ func TestNoteSlicePromptRequiresResolvedPlanChangeType(t *testing.T) {
 	}
 }
 
+func TestSlicePromptSeparatesRuntimePrerequisitesFromAdvisorySequence(t *testing.T) {
+	for _, want := range []string{
+		"optional `plan.runtime_prerequisites`",
+		"exact same-repository plan",
+		"already allocated exact `plan_id`",
+		"durable merge evidence",
+		"ancestry of that merge in the selected execution baseline",
+		"Never infer a runtime prerequisite from sequence position or an `after` relationship",
+		"omit it entirely when there is no strict dependency",
+	} {
+		if !strings.Contains(SlicePromptTemplate, want) {
+			t.Fatalf("slice prompt missing runtime-prerequisite contract %q", want)
+		}
+	}
+}
+
 func TestSlicePromptDeclaresConcreteRequiredInputs(t *testing.T) {
 	for _, want := range []string{
 		"concrete repository files or directories",

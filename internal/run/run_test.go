@@ -1931,6 +1931,91 @@ func TestRunContinueRestartsBlockedPlanBeforeCapabilityGate(t *testing.T) {
 	}
 }
 
+func TestServiceExecuteRestartRetriesAfterDurableRestartBeforeWorkspacePreparation(t *testing.T) {
+	repoRoot := t.TempDir()
+	runRebaseRecoveryGit(t, repoRoot, "init", "-b", "main")
+	runRebaseRecoveryGit(t, repoRoot, "config", "user.email", "tao@example.com")
+	runRebaseRecoveryGit(t, repoRoot, "config", "user.name", "Tao Test")
+	if err := os.WriteFile(filepath.Join(repoRoot, "base.txt"), []byte("base\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runRebaseRecoveryGit(t, repoRoot, "add", "base.txt")
+	runRebaseRecoveryGit(t, repoRoot, "commit", "-m", "base")
+	oldHead := rebaseRecoveryGitOutput(t, repoRoot, "rev-parse", "HEAD")
+	workspaceRoot := filepath.Join(t.TempDir(), "worktree")
+	runRebaseRecoveryGit(t, repoRoot, "worktree", "add", "-b", "feature/restart", workspaceRoot, oldHead)
+	if err := os.WriteFile(filepath.Join(repoRoot, "dependency.txt"), []byte("landed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runRebaseRecoveryGit(t, repoRoot, "add", "dependency.txt")
+	runRebaseRecoveryGit(t, repoRoot, "commit", "-m", "dependency landed")
+
+	planDir := filepath.Join(t.TempDir(), "plan-a")
+	if err := os.MkdirAll(planDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	current := "001-a"
+	startedAt := time.Date(2026, 8, 27, 2, 0, 0, 0, time.UTC)
+	blockedAt := startedAt.Add(time.Minute)
+	detail := &plan.PlanDetail{
+		Dir: planDir,
+		State: plan.State{Schema: "tao.plan.state.v1", Status: plan.StatusBlocked, UpdatedAt: blockedAt, Repo: plan.Repo{Root: repoRoot, Branch: "main"}, Workspace: &plan.Workspace{
+			Strategy: plan.WorkspaceStrategyWorktree, Root: filepath.Dir(workspaceRoot), Path: workspaceRoot, Branch: "feature/restart", BaseBranch: "main", HeadSHA: oldHead, LifecycleStatus: plan.WorkspaceStatusReady,
+		}, Plan: plan.PlanState{ID: "plan-a", CurrentSlice: &current, PendingSlices: []string{current}, LastRunCommitPolicy: CommitPolicySlice.String(), Timing: plan.PlanTiming{StartedAt: &startedAt, LastActivityAt: &blockedAt}}},
+		Slices: plan.SlicesFile{Schema: "tao.plan.slices.v1", PlanID: "plan-a", Slices: []plan.Slice{{
+			ID: current, Status: plan.StatusBlocked, BlockerNote: "waiting for dependency", ExecutionRoot: workspaceRoot,
+			ExecutionStart: &plan.SliceExecutionStart{Branch: "feature/restart", Head: oldHead, CommitPolicy: CommitPolicySlice.String(), WorkspaceStrategy: plan.WorkspaceStrategyWorktree},
+			Timing:         plan.SliceTiming{StartedAt: &startedAt, UpdatedAt: blockedAt, LastActivityAt: &blockedAt}, Verification: plan.Verification{Commands: []string{"go test ."}},
+		}}},
+		Events: []plan.Event{{Type: plan.EventTypeSliceStarted, Timestamp: startedAt, PlanID: "plan-a", SliceID: current, Message: "Work started on slice"}, {Type: plan.EventTypeSliceBlocked, Timestamp: blockedAt, PlanID: "plan-a", SliceID: current, Message: "Slice blocked"}},
+	}
+	persistRunArtifacts(t, planDir, detail)
+
+	workspaceAttempts := 0
+	interrupted := errors.New("interrupted immediately after restart")
+	providerErr := errors.New("provider stopped after retry")
+	dependencies := RunDependencies{
+		CommandRunner: defaultCommandRunner,
+		WorkspacePreparer: func(context.Context, *plan.PlanDetail, WorkspaceResolverInput) (string, error) {
+			workspaceAttempts++
+			if workspaceAttempts == 1 {
+				return "", interrupted
+			}
+			return workspaceRoot, nil
+		},
+		SliceExecutor: sliceExecutorFunc(func(context.Context, SliceRun) error { return providerErr }),
+		Now:           runClock(blockedAt.Add(time.Minute), blockedAt.Add(2*time.Minute)),
+	}
+	request := Request{Input: planDir, ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated, CommitPolicy: CommitPolicySlice}, RestartBlocked: true}
+	service := NewService(plan.NewFileRepository(filepath.Dir(planDir)), io.Discard, Options{RunDependencies: dependencies})
+	if err := service.Execute(context.Background(), request); !errors.Is(err, interrupted) {
+		t.Fatalf("first restart error = %v, want interruption", err)
+	}
+
+	restarted, err := plan.NewFileRepository(filepath.Dir(planDir)).ResolvePlan(context.Background(), planDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restarted.State.Plan.CurrentSlice != nil || restarted.Slices.Slices[0].Status != plan.StatusPending || restarted.Slices.Slices[0].ExecutionStart != nil || countPlanEvents(restarted.Events, plan.EventTypeSliceRestarted) != 1 {
+		t.Fatalf("durably restarted boundary = state:%#v slice:%#v events:%#v", restarted.State.Plan, restarted.Slices.Slices[0], restarted.Events)
+	}
+
+	service = NewService(plan.NewFileRepository(filepath.Dir(planDir)), io.Discard, Options{RunDependencies: dependencies})
+	if err := service.Execute(context.Background(), request); !errors.Is(err, providerErr) {
+		t.Fatalf("retry error = %v, want provider handoff error", err)
+	}
+	if workspaceAttempts != 2 {
+		t.Fatalf("workspace preparation attempts = %d, want 2", workspaceAttempts)
+	}
+	retried, err := plan.NewFileRepository(filepath.Dir(planDir)).ResolvePlan(context.Background(), planDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countPlanEvents(retried.Events, plan.EventTypeSliceRestarted) != 1 {
+		t.Fatalf("slice_restarted events = %d, want one", countPlanEvents(retried.Events, plan.EventTypeSliceRestarted))
+	}
+}
+
 func TestRunContinueDoesNotSkipVerificationPreflight(t *testing.T) {
 	repo := t.TempDir()
 	detail := &plan.PlanDetail{
@@ -2461,6 +2546,18 @@ func (r *memoryRunRepository) ResolvePlan(ctx context.Context, input string) (*p
 	detail := r.details[r.calls]
 	r.calls++
 	return detail, nil
+}
+
+func (r *memoryRunRepository) GetPlanExact(ctx context.Context, id string) (*plan.PlanDetail, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	for _, detail := range r.details {
+		if detail != nil && detail.State.Plan.ID == id {
+			return detail, nil
+		}
+	}
+	return nil, nil
 }
 
 func (r *memoryRunRepository) PlanRecord(detail *plan.PlanDetail) (*plan.PlanRecord, error) {

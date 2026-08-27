@@ -53,6 +53,12 @@ type Resolver interface {
 	ResolvePlan(ctx context.Context, input string) (*PlanDetail, error)
 }
 
+// ExactPlanResolver loads one plan by its complete repository-scoped ID. It
+// deliberately excludes path, prefix, and slug resolution for runtime links.
+type ExactPlanResolver interface {
+	GetPlanExact(ctx context.Context, id string) (*PlanDetail, error)
+}
+
 // PlanRecordStore creates the preferred lifecycle mutation boundary for an
 // already-loaded plan detail.
 type PlanRecordStore interface {
@@ -99,6 +105,7 @@ type repositoryLogOperations interface {
 var (
 	_ Repository                   = (*FileRepository)(nil)
 	_ Resolver                     = (*FileRepository)(nil)
+	_ ExactPlanResolver            = (*FileRepository)(nil)
 	_ PlanRecordStore              = (*FileRepository)(nil)
 	_ PlanRecordResolver           = (*FileRepository)(nil)
 	_ PlanDeleter                  = (*FileRepository)(nil)

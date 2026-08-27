@@ -41,6 +41,7 @@ func TestVerifyCompletedBranchAppendsOutcomeEvents(t *testing.T) {
 			}
 			finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{}, RunDependencies{
 				CommandRunner:     runner,
+				reviewGitFactory:  fixedReviewGit(&fakeReviewGit{head: "live-head"}),
 				Now:               clock,
 				PlanRecordFactory: memoryPlanRecordFactory,
 				EventAppender: eventAppenderFunc(func(_ string, event plan.Event) error {
@@ -83,6 +84,84 @@ func TestVerifyCompletedBranchAppendsOutcomeEvents(t *testing.T) {
 	}
 }
 
+func TestVerifyCompletedBranchRefusesToRunWhenLiveHeadCannotBeResolved(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	commandRan := false
+	detail := completedReviewPlanDetail(t.TempDir())
+	finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{}, RunDependencies{
+		CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error {
+			commandRan = true
+			return nil
+		},
+		reviewGitFactory:  fixedReviewGit(&fakeReviewGit{headErr: errors.New("revision unavailable")}),
+		PlanRecordFactory: memoryPlanRecordFactory,
+	}))
+
+	err := finalizer.verifyCompletedBranch(context.Background(), detail, root)
+	if err == nil || !strings.Contains(err.Error(), "resolve final verification HEAD") {
+		t.Fatalf("error = %v, want live HEAD resolution failure", err)
+	}
+	if commandRan {
+		t.Fatal("verification command ran without a resolved live HEAD")
+	}
+	if detail.State.Plan.FinalVerification != nil {
+		t.Fatalf("final verification was recorded without a live HEAD: %#v", detail.State.Plan.FinalVerification)
+	}
+}
+
+func TestFailedFinalVerificationAfterCleanRebaseRemainsRepairable(t *testing.T) {
+	root := initSliceCompletionRepo(t)
+	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runCommitTestGitCommand(t, root, "add", "Makefile")
+	runCommitTestGitCommand(t, root, "commit", "-m", "feature before rebase")
+	staleHead := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
+	runCommitTestGitCommand(t, root, "commit", "--amend", "-m", "feature after rebase")
+	liveHead := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
+	if liveHead == staleHead {
+		t.Fatal("amended commit did not change HEAD")
+	}
+
+	detail := completedReviewPlanDetail(t.TempDir())
+	detail.State.Workspace = &plan.Workspace{Branch: "tao/test", HeadSHA: staleHead}
+	factory := func(detail *plan.PlanDetail) (PlanMutationRecord, error) {
+		return plan.NewPlanRecord(detail.Dir, detail)
+	}
+	execution := testRunExecution(ExecutionConfig{
+		ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeIsolated},
+	}, RunDependencies{
+		CommandRunner:     defaultCommandRunner,
+		PlanRecordFactory: factory,
+	})
+	execution.ExecutionRoot = root
+	finalizer := newFinalizer(io.Discard, execution)
+
+	err := finalizer.verifyCompletedBranch(context.Background(), detail, root)
+	var verificationErr *FinalVerificationError
+	if !errors.As(err, &verificationErr) {
+		t.Fatalf("error = %v, want FinalVerificationError", err)
+	}
+	if verificationErr.Verification.HeadSHA != liveHead {
+		t.Fatalf("failed verification head = %q, want live rebased head %q", verificationErr.Verification.HeadSHA, liveHead)
+	}
+	if detail.State.Workspace.HeadSHA != liveHead {
+		t.Fatalf("persisted workspace head = %q, want live rebased head %q", detail.State.Workspace.HeadSHA, liveHead)
+	}
+	if plan.CurrentFailedFinalVerification(detail) == nil {
+		t.Fatal("failed verification was not current after rebased HEAD was persisted")
+	}
+	if err := appendVerificationRepair(context.Background(), detail, execution); err != nil {
+		t.Fatalf("append verification repair after clean rebase: %v", err)
+	}
+	if len(detail.State.Plan.PendingSlices) != 1 || !strings.HasPrefix(detail.State.Plan.PendingSlices[0], plan.VerificationRepairSlicePrefix) {
+		t.Fatalf("pending repair slices = %v", detail.State.Plan.PendingSlices)
+	}
+}
+
 func TestVerifyCompletedBranchPreservesPersistedTimestampAndUsesCompletionForEvent(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@true\n"), 0o600); err != nil {
@@ -97,7 +176,8 @@ func TestVerifyCompletedBranchPreservesPersistedTimestampAndUsesCompletionForEve
 		CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error {
 			return nil
 		},
-		Now: advancingFinalVerificationClock(initial, 3*time.Second),
+		reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "live-head"}),
+		Now:              advancingFinalVerificationClock(initial, 3*time.Second),
 		PlanRecordFactory: func(detail *plan.PlanDetail) (PlanMutationRecord, error) {
 			return captureReviewRecord{detail: detail, wrote: &persisted}, nil
 		},
@@ -136,8 +216,9 @@ func TestVerifyCompletedBranchStateWriteFailureStillEmitsOutcomeEvent(t *testing
 	var appended plan.Event
 	persistErr := errors.New("state unavailable")
 	finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{}, RunDependencies{
-		CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error { return nil },
-		Now:           advancingFinalVerificationClock(verifiedAt, 3*time.Second),
+		CommandRunner:    func(context.Context, string, string, []string, io.Writer, io.Writer) error { return nil },
+		reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "live-head"}),
+		Now:              advancingFinalVerificationClock(verifiedAt, 3*time.Second),
 		PlanRecordFactory: func(detail *plan.PlanDetail) (PlanMutationRecord, error) {
 			return failingFinalVerificationRecord{detail: detail, err: persistErr}, nil
 		},
@@ -180,6 +261,7 @@ func TestVerifyCompletedBranchTruncatesEventReason(t *testing.T) {
 			_, _ = io.WriteString(stdout, details)
 			return nil
 		},
+		reviewGitFactory:  fixedReviewGit(&fakeReviewGit{head: "live-head"}),
 		PlanRecordFactory: memoryPlanRecordFactory,
 		EventAppender: eventAppenderFunc(func(_ string, appended plan.Event) error {
 			event = appended
@@ -198,6 +280,24 @@ func TestVerifyCompletedBranchTruncatesEventReason(t *testing.T) {
 	}
 }
 
+func TestFinalVerificationOutputKeepsBoundedTailWithExplicitTruncation(t *testing.T) {
+	prefix := strings.Repeat("successful package\n", 1000)
+	tail := "FAIL\tgithub.com/iamseth/tao/internal/actionable\nfinal assertion failed"
+	details, truncated := boundedFinalVerificationDetails(prefix + tail)
+	if !truncated {
+		t.Fatal("long output was not marked truncated")
+	}
+	if len(details) > maxFinalVerificationOutputBytes {
+		t.Fatalf("details bytes = %d, want at most %d", len(details), maxFinalVerificationOutputBytes)
+	}
+	if !strings.HasSuffix(details, tail) {
+		t.Fatalf("actionable output tail was not retained: %q", details[len(details)-100:])
+	}
+	if strings.HasPrefix(details, "successful package") {
+		t.Fatal("long successful prefix was retained instead of the failure tail")
+	}
+}
+
 func TestVerifyCompletedBranchEventAppendFailureIsBestEffort(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@true\n"), 0o600); err != nil {
@@ -212,6 +312,7 @@ func TestVerifyCompletedBranchEventAppendFailureIsBestEffort(t *testing.T) {
 			_, _ = io.WriteString(stderr, "full verification failure")
 			return commandErr
 		},
+		reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "live-head"}),
 		PlanRecordFactory: func(detail *plan.PlanDetail) (PlanMutationRecord, error) {
 			return captureReviewRecord{detail: detail, wrote: &persisted}, nil
 		},

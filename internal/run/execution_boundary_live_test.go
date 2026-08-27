@@ -15,6 +15,52 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 )
 
+func TestInspectSelectedAuthorizesOnlyCleanDescendantBlockedRestart(t *testing.T) {
+	repoRoot := t.TempDir()
+	runRebaseRecoveryGit(t, repoRoot, "init", "-b", "main")
+	runRebaseRecoveryGit(t, repoRoot, "config", "user.email", "tao@example.com")
+	runRebaseRecoveryGit(t, repoRoot, "config", "user.name", "Tao Test")
+	if err := os.WriteFile(filepath.Join(repoRoot, "base.txt"), []byte("base\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runRebaseRecoveryGit(t, repoRoot, "add", "base.txt")
+	runRebaseRecoveryGit(t, repoRoot, "commit", "-m", "base")
+	oldHead := rebaseRecoveryGitOutput(t, repoRoot, "rev-parse", "HEAD")
+	worktreeRoot := filepath.Join(t.TempDir(), "worktree")
+	runRebaseRecoveryGit(t, repoRoot, "worktree", "add", "-b", "feature/restart", worktreeRoot, oldHead)
+	if err := os.WriteFile(filepath.Join(repoRoot, "landed.txt"), []byte("landed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runRebaseRecoveryGit(t, repoRoot, "add", "landed.txt")
+	runRebaseRecoveryGit(t, repoRoot, "commit", "-m", "dependency landed")
+	newHead := rebaseRecoveryGitOutput(t, repoRoot, "rev-parse", "HEAD")
+
+	current := "001-a"
+	detail := &plan.PlanDetail{
+		State:  plan.State{Status: plan.StatusBlocked, Repo: plan.Repo{Root: repoRoot, Branch: "release"}, Plan: plan.PlanState{ID: "plan-a", CurrentSlice: &current, PendingSlices: []string{current}, LastRunCommitPolicy: "slice"}, Workspace: &plan.Workspace{Strategy: plan.WorkspaceStrategyWorktree, Path: worktreeRoot, Branch: "feature/restart", BaseBranch: "release", HeadSHA: oldHead, LifecycleStatus: plan.WorkspaceStatusReady}},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: current, Status: plan.StatusBlocked, ExecutionRoot: worktreeRoot, ExecutionStart: &plan.SliceExecutionStart{Branch: "feature/restart", Head: oldHead, CommitPolicy: "slice", WorkspaceStrategy: plan.WorkspaceStrategyWorktree}}}},
+	}
+	execution := runExecution{Config: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated, CommitPolicy: CommitPolicySlice}}, Dependencies: RunDependencies{CommandRunner: defaultCommandRunner}}
+	action, err := (ExecutionBoundaryController{}).InspectSelected(context.Background(), ExecutionBoundaryDurableFacts{Detail: detail, RestartBlocked: true}, execution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if action.Disposition != InterruptedSliceBlockedRestart || action.live.BaselineBranch != "main" || action.live.BaselineHead != newHead || !action.live.BoundaryAncestor {
+		t.Fatalf("restart action = %#v, want automatic default-branch baseline main at %s", action, newHead)
+	}
+
+	if err := os.WriteFile(filepath.Join(worktreeRoot, "dirty.txt"), []byte("dirty\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	action, err = (ExecutionBoundaryController{}).InspectSelected(context.Background(), ExecutionBoundaryDurableFacts{Detail: detail, RestartBlocked: true}, execution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if action.Disposition != InterruptedSliceRefuse || !strings.Contains(action.Diagnostics.Reason, "clean") {
+		t.Fatalf("dirty restart action = %#v, want no-side-effect refusal", action)
+	}
+}
+
 type workspaceBoundaryAdvanceRecord struct {
 	PlanMutationRecord
 	detail        *plan.PlanDetail

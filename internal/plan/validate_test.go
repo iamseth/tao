@@ -742,6 +742,44 @@ func TestValidateDetailWarnsForNonPositiveSequenceBounds(t *testing.T) {
 	}
 }
 
+func TestValidateRuntimePrerequisites(t *testing.T) {
+	valid := []RuntimePrerequisite{{PlanID: "other-plan", Reason: "Its merged schema is required."}}
+	if warnings := validateRuntimePrerequisites("plan", valid); len(warnings) != 0 {
+		t.Fatalf("valid prerequisites produced warnings: %v", warnings)
+	}
+
+	tooMany := make([]RuntimePrerequisite, maxRuntimePrerequisites+1)
+	warnings := validateRuntimePrerequisites("plan", append([]RuntimePrerequisite{
+		{PlanID: "plan", Reason: "self"},
+		{PlanID: "other", Reason: ""},
+		{PlanID: "other", Reason: "duplicate"},
+		{PlanID: "../other", Reason: "path"},
+	}, tooMany...))
+	for _, want := range []string{"must contain at most", "cannot reference its own plan", "reason is required", "duplicates prerequisite plan other", "must be an exact plan ID"} {
+		if !containsWarning(warnings, want) {
+			t.Errorf("expected warning %q, got %v", want, warnings)
+		}
+	}
+}
+
+func TestValidateRuntimePrerequisiteCycleFollowsOnlyResolvablePlans(t *testing.T) {
+	plans := map[string][]RuntimePrerequisite{
+		"plan-b": {{PlanID: "plan-c", Reason: "C first"}},
+		"plan-c": {{PlanID: "plan-a", Reason: "A first"}},
+	}
+	resolve := func(id string) ([]RuntimePrerequisite, bool) {
+		prerequisites, ok := plans[id]
+		return prerequisites, ok
+	}
+	warnings := validateRuntimePrerequisiteCycle("plan-a", []RuntimePrerequisite{{PlanID: "plan-b", Reason: "B first"}}, resolve)
+	if !containsWarning(warnings, "resolvable cycle") {
+		t.Fatalf("expected cycle warning, got %v", warnings)
+	}
+	if warnings := validateRuntimePrerequisiteCycle("plan-a", []RuntimePrerequisite{{PlanID: "missing", Reason: "missing first"}}, resolve); len(warnings) != 0 {
+		t.Fatalf("unresolvable prerequisite should not report a validation cycle: %v", warnings)
+	}
+}
+
 func TestValidateDetailAllowsSupportedAndLegacyPlanChangeTypes(t *testing.T) {
 	changeTypes := append(SupportedChangeTypes(), "")
 	for _, changeType := range changeTypes {

@@ -15,6 +15,30 @@ func (r *FileRepository) GetPlan(ctx context.Context, id string) (*PlanDetail, e
 	return r.loadPlanDir(candidate.Dir)
 }
 
+// GetPlanExact resolves only a complete plan ID beneath this repository's
+// plans directory. Runtime prerequisite links use this method so a missing ID
+// can never silently bind to a prefix, slug, or filesystem path.
+func (r *FileRepository) GetPlanExact(ctx context.Context, id string) (*PlanDetail, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if id == "" || id == "." || id == ".." || strings.ContainsAny(id, `/\\`) {
+		return nil, classify(ErrInvalid, "invalid exact plan id %q", id)
+	}
+	dir := filepath.Join(r.Dir, id)
+	if !r.artifacts().isDir(dir) {
+		return nil, classify(ErrNotFound, "plan %q not found", id)
+	}
+	detail, err := r.loadPlanDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	if detail.State.Plan.ID != id {
+		return nil, classify(ErrInvalid, "plan directory %q contains plan id %q", id, detail.State.Plan.ID)
+	}
+	return detail, nil
+}
+
 func (r *FileRepository) GetPlanInput(ctx context.Context, input string) (*PlanDetail, error) {
 	return r.ResolvePlan(ctx, input)
 }

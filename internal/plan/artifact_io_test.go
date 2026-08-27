@@ -140,6 +140,7 @@ func TestPlanRecordLifecycleWritePreservesDecisionMetadataAndUnknownFields(t *te
 		Priority: Priority{Level: PriorityOverallLevelMust, Impact: PriorityLevelHigh, Urgency: PriorityLevelMedium, Effort: PriorityEffortSmall, Risk: PriorityLevelLow, Confidence: PriorityLevelHigh, Rationale: "High value for low effort."},
 	}
 	detail.State.Plan.Sequence = &Sequence{Position: 1, Total: 2, Relationships: []PlanRelation{{PlanID: "plan-b", Type: PlanRelationBefore, Reason: "Plan B consumes this model."}}}
+	detail.State.Plan.RuntimePrerequisites = []RuntimePrerequisite{{PlanID: "plan-c", Reason: "Plan C must be merged first."}}
 	writeStartSliceArtifacts(t, dir, detail)
 
 	var raw map[string]any
@@ -150,6 +151,8 @@ func TestPlanRecordLifecycleWritePreservesDecisionMetadataAndUnknownFields(t *te
 	relationship := planObject["sequence"].(map[string]any)["relationships"].([]any)[0].(map[string]any)
 	relationship["id"] = "extension-id"
 	relationship["custom_relationship_field"] = "keep"
+	prerequisite := planObject["runtime_prerequisites"].([]any)[0].(map[string]any)
+	prerequisite["custom_prerequisite_field"] = "keep"
 	payload, err := json.Marshal(raw)
 	if err != nil {
 		t.Fatal(err)
@@ -175,7 +178,7 @@ func TestPlanRecordLifecycleWritePreservesDecisionMetadataAndUnknownFields(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if persisted.Plan.Decision == nil || persisted.Plan.Decision.Problem != detail.State.Plan.Decision.Problem || persisted.Plan.Decision.Priority.Effort != PriorityEffortSmall || persisted.Plan.Decision.Priority.Confidence != PriorityLevelHigh || persisted.Plan.Decision.ExpectedBenefit != detail.State.Plan.Decision.ExpectedBenefit || persisted.Plan.Sequence == nil || len(persisted.Plan.Sequence.Relationships) != 1 {
+	if persisted.Plan.Decision == nil || persisted.Plan.Decision.Problem != detail.State.Plan.Decision.Problem || persisted.Plan.Decision.Priority.Effort != PriorityEffortSmall || persisted.Plan.Decision.Priority.Confidence != PriorityLevelHigh || persisted.Plan.Decision.ExpectedBenefit != detail.State.Plan.Decision.ExpectedBenefit || persisted.Plan.Sequence == nil || len(persisted.Plan.Sequence.Relationships) != 1 || len(persisted.Plan.RuntimePrerequisites) != 1 {
 		t.Fatalf("decision metadata did not survive lifecycle write: %+v", persisted.Plan)
 	}
 	readJSONFile(t, filepath.Join(dir, "state.json"), &raw)
@@ -187,6 +190,34 @@ func TestPlanRecordLifecycleWritePreservesDecisionMetadataAndUnknownFields(t *te
 	relationship = planObject["sequence"].(map[string]any)["relationships"].([]any)[0].(map[string]any)
 	if relationship["id"] != "extension-id" || relationship["custom_relationship_field"] != "keep" {
 		t.Fatalf("unknown relationship fields were lost: %#v", relationship)
+	}
+	prerequisite = planObject["runtime_prerequisites"].([]any)[0].(map[string]any)
+	if prerequisite["custom_prerequisite_field"] != "keep" {
+		t.Fatalf("unknown prerequisite fields were lost: %#v", prerequisite)
+	}
+}
+
+func TestLoadPlanFilesWarnsForResolvableRuntimePrerequisiteCycle(t *testing.T) {
+	plansDir := t.TempDir()
+	for id, prerequisite := range map[string]string{"plan-a": "plan-b", "plan-b": "plan-a"} {
+		dir := filepath.Join(plansDir, id)
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		state := State{Schema: "tao.plan.state.v1", Plan: PlanState{ID: id, RuntimePrerequisites: []RuntimePrerequisite{{PlanID: prerequisite, Reason: "must merge first"}}}}
+		if err := writeJSON(filepath.Join(dir, "state.json"), state); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeJSON(filepath.Join(dir, "slices.json"), SlicesFile{Schema: "tao.plan.slices.v1", PlanID: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files, err := loadPlanFiles(filepath.Join(plansDir, "plan-a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsWarning(files.warnings, "resolvable cycle") {
+		t.Fatalf("expected cycle warning, got %v", files.warnings)
 	}
 }
 

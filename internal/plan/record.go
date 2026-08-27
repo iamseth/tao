@@ -64,6 +64,18 @@ type WorkspaceReadyRequest struct {
 
 const maxWorkspaceHeadAdvanceValueBytes = 1024
 
+// BlockedSliceRestartRequest binds a blocked automatic slice's exact prior
+// boundary to the fresh baseline selected from live Git evidence.
+type BlockedSliceRestartRequest struct {
+	SliceID        string
+	PriorRoot      string
+	PriorBoundary  SliceExecutionStart
+	BaselineBranch string
+	BaselineHead   string
+	Reason         string
+	RestartedAt    time.Time
+}
+
 // NewPlanRecord prepares a file-backed record for lifecycle and edit mutations.
 func NewPlanRecord(planDir string, detail *PlanDetail) (*PlanRecord, error) {
 	return newPlanRecord(fileArtifactStore{}, planDir, detail)
@@ -270,6 +282,12 @@ func (r *PlanRecord) BlockSliceForBudget(sliceID string, reason string, now time
 
 func (r *PlanRecord) ContinueBlocked(now time.Time) error {
 	return r.applyWithRecoveredMatch(continueBlockedMutation(now), blockedContinuationWasRecovered)
+}
+
+// RestartBlockedSlice supersedes an exact clean pre-intent boundary and records
+// its replacement baseline before a workspace refresh or fresh attempt begins.
+func (r *PlanRecord) RestartBlockedSlice(request BlockedSliceRestartRequest) error {
+	return r.applyWithRecoveredMatch(blockedSliceRestartMutation(request), blockedSliceRestartWasRecovered(request))
 }
 
 func (r *PlanRecord) RemoveSlice(sliceID string, now time.Time) error {

@@ -218,6 +218,50 @@ func TestInterruptedSliceClassifiesBlockedContinuation(t *testing.T) {
 	}
 }
 
+func TestInterruptedSliceClassifiesBlockedRestart(t *testing.T) {
+	input := interruptedInput()
+	input.Detail.State.Status = plan.StatusBlocked
+	input.Detail.Slices.Slices[0].Status = plan.StatusBlocked
+	input.RestartBlocked = true
+	input.BaselineBranch = "main"
+	input.BaselineHead = "new-base"
+	input.AncestryKnown = true
+	input.BoundaryAncestor = true
+
+	got := ClassifyInterruptedSlice(input)
+	if got.Disposition != InterruptedSliceBlockedRestart || got.ContinuationDisposition != InterruptedSliceNewStart {
+		t.Fatalf("blocked restart = %#v, want fresh attempt", got)
+	}
+	for _, tt := range []struct {
+		name   string
+		mutate func(*InterruptedSliceInput)
+		want   string
+	}{
+		{name: "dirty", mutate: func(i *InterruptedSliceInput) { i.PorcelainStatus = " M partial.go\n" }, want: "clean"},
+		{name: "current checkout", mutate: func(i *InterruptedSliceInput) { i.WorkspaceStrategy = plan.WorkspaceStrategyCurrent }, want: "execution mode differs"},
+		{name: "manual policy", mutate: func(i *InterruptedSliceInput) { i.CommitPolicy = CommitPolicyNone.String() }, want: "commit policy differs"},
+		{name: "non ancestor", mutate: func(i *InterruptedSliceInput) { i.BoundaryAncestor = false }, want: "not an ancestor"},
+		{name: "unchanged baseline", mutate: func(i *InterruptedSliceInput) { i.BaselineHead = "base" }, want: "has not advanced"},
+		{name: "post intent", mutate: func(i *InterruptedSliceInput) { i.Detail.Slices.Slices[0].CommitIntent = &plan.SliceCommitIntent{} }, want: "post-intent"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := interruptedInput()
+			candidate.Detail.State.Status = plan.StatusBlocked
+			candidate.Detail.Slices.Slices[0].Status = plan.StatusBlocked
+			candidate.RestartBlocked = true
+			candidate.BaselineBranch = "main"
+			candidate.BaselineHead = "new-base"
+			candidate.AncestryKnown = true
+			candidate.BoundaryAncestor = true
+			tt.mutate(&candidate)
+			result := ClassifyInterruptedSlice(candidate)
+			if result.Disposition != InterruptedSliceRefuse || !strings.Contains(result.Reason, tt.want) {
+				t.Fatalf("restart result = %#v, want refusal containing %q", result, tt.want)
+			}
+		})
+	}
+}
+
 func TestInterruptedSliceCanonicalBlockMatchesHandEditedState(t *testing.T) {
 	tests := []struct {
 		name   string

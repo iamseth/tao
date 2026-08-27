@@ -251,6 +251,15 @@ func TestCLIRunRequestBuilderPreservesEnvDefaultsAndFlagOverrides(t *testing.T) 
 	}
 }
 
+func TestRunRejectsContinueWithBlockedRestart(t *testing.T) {
+	clearTaoEnv(t)
+	app := App{Out: io.Discard, Err: io.Discard}
+	err := app.run(context.Background(), nil, []string{"--continue", "--restart", "plan-a"})
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("run error = %v, want mutually exclusive recovery flags", err)
+	}
+}
+
 func TestRunNoReviewFlagOverridesRunRequest(t *testing.T) {
 	clearTaoEnv(t)
 	defaults, err := cliEnvDefaults()
@@ -377,6 +386,69 @@ func TestRunApprovalGateShowsUnblockCommands(t *testing.T) {
 	}
 	if out.Len() != 0 {
 		t.Fatalf("expected no stdout before run starts, got %q", out.String())
+	}
+}
+
+func TestRunPrerequisiteGateRefusesBeforeWorkspaceOrAgentSideEffects(t *testing.T) {
+	clearTaoEnv(t)
+	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+	repo := plan.NewFileRepository(fixture.root)
+	detail, err := repo.ResolvePlan(context.Background(), fixture.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail.State.Plan.RuntimePrerequisites = []plan.RuntimePrerequisite{{PlanID: "20260430-1100-required", Reason: "required first"}}
+	record, err := plan.NewPlanRecord(fixture.dir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := record.PersistArtifacts(); err != nil {
+		t.Fatal(err)
+	}
+	commandCalls := 0
+	baselineCalls := 0
+	agentCalls := 0
+	app := App{
+		Out: io.Discard, Err: io.Discard,
+		CommandRunner: func(_ context.Context, _ string, name string, args []string, stdout, _ io.Writer) error {
+			if name == "git" && len(args) >= 3 {
+				switch {
+				case args[2] == "symbolic-ref":
+					baselineCalls++
+					_, _ = io.WriteString(stdout, "origin/main\n")
+					return nil
+				case args[2] == "branch" && args[len(args)-1] == "main":
+					baselineCalls++
+					_, _ = io.WriteString(stdout, "main\n")
+					return nil
+				case args[2] == "rev-parse" && args[3] == "main":
+					baselineCalls++
+					_, _ = io.WriteString(stdout, "main-sha\n")
+					return nil
+				}
+			}
+			commandCalls++
+			return errors.New("workspace command must not run")
+		},
+		ProcessStarter: func(context.Context, string, string, []string) (run.Process, error) {
+			agentCalls++
+			return nil, errors.New("agent must not start")
+		},
+	}
+
+	err = app.run(context.Background(), repo, []string{"--execution-mode", "isolated", "--commit-policy", "none", "--no-review", fixture.id})
+	if err == nil || !strings.Contains(err.Error(), "runtime prerequisite 20260430-1100-required is missing") || !strings.Contains(err.Error(), "next: tao show 20260430-1100-required") {
+		t.Fatalf("unexpected prerequisite refusal: %v", err)
+	}
+	if baselineCalls != 3 || commandCalls != 0 || agentCalls != 0 {
+		t.Fatalf("effects before prerequisite refusal: baseline_reads=%d workspace_commands=%d agents=%d", baselineCalls, commandCalls, agentCalls)
+	}
+	reloaded, err := repo.ResolvePlan(context.Background(), fixture.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.State.Plan.CurrentSlice != nil || reloaded.Slices.Slices[0].Status != plan.StatusPending || reloaded.State.Workspace.Strategy != plan.WorkspaceStrategyCurrent {
+		t.Fatalf("prerequisite refusal mutated run lifecycle: state=%+v slice=%+v", reloaded.State, reloaded.Slices.Slices[0])
 	}
 }
 
