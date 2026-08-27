@@ -34,6 +34,43 @@ func TestSearchFiltersPlansAndNotesCaseInsensitively(t *testing.T) {
 	}
 }
 
+func TestSearchFiltersPlansByDecisionMetadata(t *testing.T) {
+	decisionRow := monitor.Row{
+		PlanID: "decision-plan",
+		Overview: plan.DecisionOverview{
+			Problem:           "Operators cannot compare work.",
+			WhyNow:            "The backlog is growing.",
+			ExpectedBenefit:   "Faster portfolio choices.",
+			Readiness:         plan.DecisionReadinessNeedsRefinement,
+			SuccessCriteria:   []string{"Tradeoffs remain explainable."},
+			Disposition:       plan.DecisionDispositionConditional,
+			DispositionReason: "Confirm staffing first.",
+			Priority: &plan.Priority{
+				Level: plan.PriorityOverallLevelMust, Impact: plan.PriorityLevelHigh,
+				Urgency: plan.PriorityLevelMedium, Effort: plan.PriorityEffortSmall,
+				Risk: plan.PriorityLevelLow, Confidence: plan.PriorityLevelHigh,
+				Rationale: "High leverage with bounded effort.",
+			},
+			Sequence: &plan.Sequence{Position: 2, Total: 7, Relationships: []plan.PlanRelation{{
+				PlanID: "foundation-plan", Type: plan.PlanRelationAfter, Reason: "Reuse its stable projection.",
+			}}},
+		},
+	}
+	rows := []monitor.Row{decisionRow, {PlanID: "unrelated", PlanTitle: "Routine maintenance"}}
+	for _, query := range []string{
+		"cannot compare", "backlog is growing", "portfolio choices", "needs_refinement",
+		"tradeoffs remain", "conditional", "staffing first", "must", "bounded effort",
+		"2 of 7", "foundation-plan", "after", "stable projection",
+	} {
+		t.Run(query, func(t *testing.T) {
+			got := FilterPlanRows(rows, query)
+			if len(got) != 1 || got[0].PlanID != decisionRow.PlanID {
+				t.Fatalf("FilterPlanRows(%q) = %+v, want decision-plan", query, got)
+			}
+		})
+	}
+}
+
 func TestRenderSearchStateAndResults(t *testing.T) {
 	model := Model{
 		Snapshot: monitor.Snapshot{Rows: []monitor.Row{

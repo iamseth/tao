@@ -117,6 +117,43 @@ The Plans tab groups nonempty sections as follows:
 - **COMPLETED** contains the remaining plans completed within the configured
   lookback window. It is hidden initially and can be shown or hidden with `c`.
 
+The table separates operational observations from planning advice. **RUN AGE** is
+elapsed time for the current or last observed run invocation; it is not the age
+of the plan or the time since durable plan activity. **NEXT** is Tao's compact,
+derived suggestion for the selected lifecycle state (`RUN`, `CHECK`, `WAIT`,
+`SKIP`, `REVIEW`, and similar labels). It does not approve a slice, satisfy a
+run or merge gate, or dispatch anything. The selected-plan preview gives the
+bounded reason behind the planning advice—benefit, readiness and disposition,
+priority tradeoffs, sequence, current slice scope, and relationship health—but
+is equally read-only and advisory.
+
+Operational urgency wins before business ordering: **NEEDS ATTENTION** and
+**RUNNING** are not displaced by a high-priority planned item. Tao reorders only
+ordinary planned rows. Within those rows, use the decision states as workflow
+judgment:
+
+- **Ready** work is the first business-ordering class and normally shows `RUN`;
+  still check the plan's ordinary approval and lifecycle gates before acting.
+- **Unranked** work is a visible legacy compatibility case, not a claim of
+  medium priority. Inspect its plan detail when comparing it with newer plans;
+  Tao keeps it after ready work and before conditional work rather than
+  inventing decision metadata.
+- **Conditional** work normally shows `CHECK`. Resolve or consciously assess
+  the stated condition before choosing to run it; the label does not enforce
+  that condition.
+- **Deferred** work normally shows `WAIT`. Revisit it when its stated timing or
+  dependency changes instead of treating recency as urgency.
+- **Obsolete** work normally shows `SKIP`. Keep it for history unless its
+  premise materially changes; visibility is not a recommendation to execute it.
+
+Inside a disposition class, valid `before` and `after` relationships guide
+sequence, then categorical priority and recent durable activity break remaining
+ties. Sequence is advisory: a `related` link supplies context but no ordering,
+and a missing, duplicate, or cyclic target produces a warning and is ignored for
+ordering. When such a warning appears, inspect the selected preview or plan
+detail and repair the planning metadata if the intended order matters; never
+use the warning or a `NEXT` label as action authority.
+
 The question marks on `stalled?` and `crashed?` are deliberate. `stalled?` means
 the last run heartbeat became stale and Tao found no dead-process lock evidence.
 `crashed?` means Tao found run-lock evidence whose recorded process is no longer

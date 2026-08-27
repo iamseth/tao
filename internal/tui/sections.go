@@ -52,6 +52,11 @@ func BuildRepositorySections(rows []monitor.Row, showCompleted bool, repositoryI
 			}
 		}
 	}
+	for index := range sections {
+		if sections[index].Kind == SectionPlanned {
+			orderPlannedRows(sections[index].Rows)
+		}
+	}
 	return sections
 }
 

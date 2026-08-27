@@ -3,6 +3,7 @@ package tui
 import (
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/plan"
@@ -83,6 +84,84 @@ func TestBuildRepositorySectionsFiltersPlansAndWarnings(t *testing.T) {
 	}
 	if rows[1].PlanID != "other" || rows[3].PlanID != "done" {
 		t.Fatalf("repository filtering mutated source rows: %+v", rows)
+	}
+}
+
+func TestBuildSectionsOrdersOnlyOrdinaryPlannedRows(t *testing.T) {
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	older := now.Add(-time.Hour)
+	rows := []monitor.Row{
+		{PlanID: "running", Status: plan.StatusPlanned, Liveness: monitor.LivenessLive, Overview: plan.DecisionOverview{Disposition: plan.DecisionDispositionObsolete}},
+		{PlanID: "attention", Status: plan.StatusPlanned, AttentionReasons: []monitor.AttentionReason{monitor.AttentionBlocked}, Overview: plan.DecisionOverview{Disposition: plan.DecisionDispositionReady}},
+		{PlanID: "deferred", Status: plan.StatusPlanned, Overview: plan.DecisionOverview{Disposition: plan.DecisionDispositionDeferred}},
+		{PlanID: "post-first", Status: plan.StatusInReview},
+		{PlanID: "unranked", Status: plan.StatusPlanned},
+		{PlanID: "post-second", Status: plan.StatusReviewed},
+		{PlanID: "ready-low", Status: plan.StatusPlanned, UpdatedAt: &now, Overview: plan.DecisionOverview{Disposition: plan.DecisionDispositionReady, Priority: &plan.Priority{Level: plan.PriorityOverallLevelCould}}},
+		{PlanID: "ready-must", Status: plan.StatusPlanned, UpdatedAt: &older, Overview: plan.DecisionOverview{Disposition: plan.DecisionDispositionReady, Priority: &plan.Priority{Level: plan.PriorityOverallLevelMust}}},
+		{PlanID: "obsolete", Status: plan.StatusPlanned, Overview: plan.DecisionOverview{Disposition: plan.DecisionDispositionObsolete}},
+		{PlanID: "completed", Status: plan.StatusCompleted},
+	}
+
+	sections := BuildSections(rows, true)
+	got := make(map[SectionKind][]string)
+	for _, section := range sections {
+		for _, row := range section.Rows {
+			got[section.Kind] = append(got[section.Kind], row.PlanID)
+		}
+	}
+	if want := []string{"attention"}; !slices.Equal(got[SectionAttention], want) {
+		t.Fatalf("attention = %v, want %v", got[SectionAttention], want)
+	}
+	if want := []string{"running"}; !slices.Equal(got[SectionRunning], want) {
+		t.Fatalf("running = %v, want %v", got[SectionRunning], want)
+	}
+	wantPlanned := []string{"ready-must", "post-first", "ready-low", "post-second", "unranked", "deferred", "obsolete"}
+	if !slices.Equal(got[SectionPlanned], wantPlanned) {
+		t.Fatalf("planned = %v, want %v", got[SectionPlanned], wantPlanned)
+	}
+	if rows[2].PlanID != "deferred" || rows[4].PlanID != "unranked" {
+		t.Fatalf("section ordering mutated snapshot identity: %+v", rows)
+	}
+}
+
+func TestPriorityOrderHonorsValidSequenceAndIgnoresCycles(t *testing.T) {
+	row := func(id string) monitor.Row {
+		return monitor.Row{RepositoryID: "repo", PlanID: id, Status: plan.StatusPlanned, Overview: plan.DecisionOverview{Disposition: plan.DecisionDispositionReady}}
+	}
+	before := row("before")
+	after := row("after")
+	after.Relationships = []monitor.ResolvedRelationship{{PlanID: "before", Type: plan.PlanRelationAfter, State: monitor.RelationshipIncomplete}}
+	cycleA := row("cycle-a")
+	cycleA.Relationships = []monitor.ResolvedRelationship{{PlanID: "cycle-b", Type: plan.PlanRelationAfter, State: monitor.RelationshipCyclic}}
+	cycleB := row("cycle-b")
+	cycleB.Relationships = []monitor.ResolvedRelationship{{PlanID: "cycle-a", Type: plan.PlanRelationAfter, State: monitor.RelationshipCyclic}}
+
+	ordered := priorityOrder([]monitor.Row{after, cycleB, before, cycleA})
+	var got []string
+	for _, item := range ordered {
+		got = append(got, item.PlanID)
+	}
+	if want := []string{"cycle-b", "before", "after", "cycle-a"}; !slices.Equal(got, want) {
+		t.Fatalf("priority order = %v, want %v", got, want)
+	}
+}
+
+func TestPriorityOrderIgnoresEveryRepeatedTargetRelationship(t *testing.T) {
+	row := func(id string) monitor.Row {
+		return monitor.Row{RepositoryID: "repo", PlanID: id, Status: plan.StatusPlanned, Overview: plan.DecisionOverview{Disposition: plan.DecisionDispositionReady}}
+	}
+	before := row("before")
+	after := row("after")
+	after.Relationships = []monitor.ResolvedRelationship{
+		{PlanID: "before", Type: plan.PlanRelationAfter, State: monitor.RelationshipDuplicate},
+		{PlanID: "before", Type: plan.PlanRelationBefore, State: monitor.RelationshipDuplicate},
+	}
+
+	ordered := priorityOrder([]monitor.Row{after, before})
+	got := []string{ordered[0].PlanID, ordered[1].PlanID}
+	if want := []string{"after", "before"}; !slices.Equal(got, want) {
+		t.Fatalf("priority order = %v, want %v", got, want)
 	}
 }
 

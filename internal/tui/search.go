@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/iamseth/tao/internal/monitor"
@@ -27,7 +28,31 @@ func FilterPlanRows(rows []monitor.Row, query string) []monitor.Row {
 			row.SliceID,
 			row.ApprovalSliceID,
 			row.ApprovalReason,
+			row.Overview.Problem,
+			row.Overview.WhyNow,
+			row.Overview.ExpectedBenefit,
+			string(row.Overview.Readiness),
+			strings.Join(row.Overview.SuccessCriteria, " "),
+			string(row.Overview.Disposition),
+			row.Overview.DispositionReason,
 			strings.Join(row.Warnings, " "),
+		}
+		if priority := row.Overview.Priority; priority != nil {
+			values = append(values,
+				string(priority.Level),
+				string(priority.Impact),
+				string(priority.Urgency),
+				string(priority.Effort),
+				string(priority.Risk),
+				string(priority.Confidence),
+				priority.Rationale,
+			)
+		}
+		if sequence := row.Overview.Sequence; sequence != nil {
+			values = append(values, fmt.Sprintf("%d of %d", sequence.Position, sequence.Total))
+			for _, relationship := range sequence.Relationships {
+				values = append(values, relationship.PlanID, string(relationship.Type), relationship.Reason)
+			}
 		}
 		for _, reason := range row.AttentionReasons {
 			values = append(values, string(reason))

@@ -284,6 +284,74 @@ func TestPlanRowPreservesUnrankedLegacyOverview(t *testing.T) {
 	}
 }
 
+func TestDeriveNextActionIsPureAndExhaustive(t *testing.T) {
+	tests := []struct {
+		name string
+		row  Row
+		want string
+	}{
+		{name: "repository warning", row: Row{Kind: RowKindRepositoryWarning}, want: "INSPECT"},
+		{name: "completed", row: Row{Status: plan.StatusCompleted}, want: "DONE"},
+		{name: "live", row: Row{Liveness: LivenessLive}, want: "MONITOR"},
+		{name: "stalled owned", row: Row{Liveness: LivenessStale, RunLockPresent: true, RunLockProcessAlive: true}, want: "MONITOR"},
+		{name: "approval", row: Row{AttentionReasons: []AttentionReason{AttentionApprovalRequired}}, want: "APPROVE"},
+		{name: "blocked", row: Row{Status: plan.StatusBlocked}, want: "CONTINUE"},
+		{name: "changes", row: Row{Status: plan.StatusChangesRequested}, want: "REWORK"},
+		{name: "review", row: Row{Status: plan.StatusInReview}, want: "REVIEW"},
+		{name: "reviewed", row: Row{Status: plan.StatusReviewed}, want: "MERGE"},
+		{name: "attention", row: Row{AttentionReasons: []AttentionReason{AttentionRunCrashed}}, want: "RESOLVE"},
+		{name: "ready", row: Row{Overview: plan.DecisionOverview{Disposition: plan.DecisionDispositionReady}}, want: "RUN"},
+		{name: "legacy unranked", row: Row{}, want: "RUN"},
+		{name: "conditional", row: Row{Overview: plan.DecisionOverview{Disposition: plan.DecisionDispositionConditional}}, want: "CHECK"},
+		{name: "deferred", row: Row{Overview: plan.DecisionOverview{Disposition: plan.DecisionDispositionDeferred}}, want: "WAIT"},
+		{name: "obsolete", row: Row{Overview: plan.DecisionOverview{Disposition: plan.DecisionDispositionObsolete}}, want: "SKIP"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			before := test.row
+			if got := DeriveNextAction(test.row); got != test.want {
+				t.Fatalf("DeriveNextAction() = %q, want %q", got, test.want)
+			}
+			if test.row.NextAction != before.NextAction {
+				t.Fatal("DeriveNextAction mutated its input")
+			}
+		})
+	}
+}
+
+func TestResolveRelationshipsClassifiesHealthAndCycles(t *testing.T) {
+	rows := []Row{
+		{Kind: RowKindPlan, RepositoryID: "repo", PlanID: "done", Status: plan.StatusCompleted},
+		{Kind: RowKindPlan, RepositoryID: "repo", PlanID: "open", Status: plan.StatusPlanned},
+		{Kind: RowKindPlan, RepositoryID: "repo", PlanID: "health", Overview: plan.DecisionOverview{Sequence: &plan.Sequence{Relationships: []plan.PlanRelation{
+			{PlanID: "done", Type: plan.PlanRelationAfter},
+			{PlanID: "open", Type: plan.PlanRelationAfter},
+			{PlanID: "missing", Type: plan.PlanRelationAfter},
+			{PlanID: "open", Type: plan.PlanRelationBefore},
+		}}}},
+		{Kind: RowKindPlan, RepositoryID: "repo", PlanID: "cycle-a", Overview: plan.DecisionOverview{Sequence: &plan.Sequence{Relationships: []plan.PlanRelation{{PlanID: "cycle-b", Type: plan.PlanRelationAfter}}}}},
+		{Kind: RowKindPlan, RepositoryID: "repo", PlanID: "cycle-b", Overview: plan.DecisionOverview{Sequence: &plan.Sequence{Relationships: []plan.PlanRelation{{PlanID: "cycle-a", Type: plan.PlanRelationAfter}}}}},
+		{Kind: RowKindPlan, RepositoryID: "other", PlanID: "missing", Status: plan.StatusCompleted},
+	}
+	resolveRelationships(rows)
+	got := rows[2].Relationships
+	want := []RelationshipState{RelationshipComplete, RelationshipDuplicate, RelationshipMissing, RelationshipDuplicate}
+	if len(got) != len(want) {
+		t.Fatalf("relationships = %+v", got)
+	}
+	for index := range want {
+		if got[index].State != want[index] {
+			t.Errorf("relationship %d state = %q, want %q", index, got[index].State, want[index])
+		}
+	}
+	if rows[3].Relationships[0].State != RelationshipCyclic || rows[4].Relationships[0].State != RelationshipCyclic {
+		t.Fatalf("cycle health = %+v / %+v", rows[3].Relationships, rows[4].Relationships)
+	}
+	if len(rows[2].RelationshipWarnings) != 3 || len(rows[3].RelationshipWarnings) != 1 || len(rows[4].RelationshipWarnings) != 1 {
+		t.Fatalf("relationship warnings = %v / %v / %v", rows[2].RelationshipWarnings, rows[3].RelationshipWarnings, rows[4].RelationshipWarnings)
+	}
+}
+
 func TestPlanRowCarriesActionMetadataFromInventoryAndCapabilities(t *testing.T) {
 	entry := taodata.RepoInventoryEntry{
 		Repo:     taodata.Repo{ID: "repo", Name: "repo", Root: "/repos/repo"},

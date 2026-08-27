@@ -46,6 +46,7 @@ type rowValues struct {
 	repo      string
 	plan      string
 	status    string
+	next      string
 	phase     string
 	run       string
 	slices    string
@@ -57,6 +58,7 @@ type tableWidths struct {
 	repo      int
 	plan      int
 	status    int
+	next      int
 	phase     int
 	run       int
 	slices    int
@@ -103,6 +105,7 @@ func Render(model Model) string {
 	}
 	lines := []string{header}
 	selectedLine := -1
+	previewStart := -1
 	switch {
 	case page == PageSettings:
 		settingsLines, settingsSelectedLine := renderSettingsPage(model)
@@ -136,6 +139,8 @@ func Render(model Model) string {
 	default:
 		widths := measureTable(sections, model.Snapshot.CollectedAt, model.ActionLabels)
 		selected := 0
+		var selectedRow monitor.Row
+		hasSelectedRow := false
 		for _, section := range sections {
 			if len(section.Rows) == 0 {
 				continue
@@ -144,10 +149,16 @@ func Render(model Model) string {
 			for _, row := range section.Rows {
 				if selected == model.Selected {
 					selectedLine = len(lines)
+					selectedRow = row
+					hasSelectedRow = true
 				}
 				lines = append(lines, renderTableRow(row, model.Snapshot.CollectedAt, widths, section.Kind == SectionAttention, selected == model.Selected, model.UseColor, model.ActionLabels[actionRowKey(row)]))
 				selected++
 			}
+		}
+		if hasSelectedRow {
+			previewStart = len(lines)
+			lines = append(lines, renderPlanPreview(selectedRow, model.Width)...)
 		}
 	}
 	footerStart := len(lines)
@@ -160,7 +171,11 @@ func Render(model Model) string {
 	if strings.TrimSpace(model.ConfirmMessage) != "" {
 		lines = append(lines, "", model.ConfirmMessage+" [y/n]")
 	}
-	lines = tableViewport(lines, selectedLine, footerStart, 1, model.Height)
+	if page == PagePlans && previewStart >= 0 {
+		lines = planTableViewport(lines, selectedLine, previewStart, footerStart, model.Height)
+	} else {
+		lines = tableViewport(lines, selectedLine, footerStart, 1, model.Height)
+	}
 	if model.Width > 0 {
 		for index := range lines {
 			lines[index] = truncateANSI(lines[index], model.Width)
@@ -176,6 +191,49 @@ func Render(model Model) string {
 	return frame
 }
 
+func planTableViewport(lines []string, selectedLine, previewStart, footerStart, height int) []string {
+	if height <= 0 || len(lines) <= height {
+		return lines
+	}
+	const headerCount = 1
+	if height <= headerCount {
+		return lines[:height]
+	}
+
+	footer := compactFooter(lines[footerStart:])
+	available := height - headerCount
+	if len(footer) >= available {
+		footer = footer[len(footer)-(available-1):]
+	}
+
+	available -= len(footer)
+	tableBody := lines[headerCount:previewStart]
+	preview := lines[previewStart:footerStart]
+	// Keep enough table context for its section and column headings when space
+	// permits. A selected row always takes precedence over preview content.
+	tableHeight := min(len(tableBody), min(3, available))
+	previewHeight := min(len(preview), available-tableHeight)
+	tableHeight = min(len(tableBody), available-previewHeight)
+
+	start := selectedLine - headerCount - tableHeight/2
+	start = max(0, min(start, len(tableBody)-tableHeight))
+	viewport := make([]string, 0, height)
+	viewport = append(viewport, lines[:headerCount]...)
+	viewport = append(viewport, tableBody[start:start+tableHeight]...)
+	viewport = append(viewport, preview[:previewHeight]...)
+	return append(viewport, footer...)
+}
+
+func compactFooter(lines []string) []string {
+	footer := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			footer = append(footer, line)
+		}
+	}
+	return footer
+}
+
 func tableViewport(lines []string, selectedLine, footerStart, headerCount, height int) []string {
 	if height <= 0 || len(lines) <= height {
 		return lines
@@ -189,12 +247,7 @@ func tableViewport(lines []string, selectedLine, footerStart, headerCount, heigh
 	}
 
 	body := lines[headerCount:footerStart]
-	footer := make([]string, 0, len(lines)-footerStart)
-	for _, line := range lines[footerStart:] {
-		if strings.TrimSpace(line) != "" {
-			footer = append(footer, line)
-		}
-	}
+	footer := compactFooter(lines[footerStart:])
 	available := height - headerCount
 	footerLimit := available
 	if len(body) > 0 {
@@ -231,8 +284,8 @@ func planCountLabel(count int) string {
 
 func measureTable(sections []Section, now time.Time, actionLabels map[string]string) tableWidths {
 	widths := tableWidths{
-		repo: len("REPO"), plan: len("PLAN"), status: len("STATUS"), phase: len("PHASE/SLICE"),
-		run: len("RUN"), slices: len("SLICES"), updated: len("UPDATED"), attention: len("ATTENTION"),
+		repo: len("REPO"), plan: len("PLAN"), status: len("STATUS"), next: len("NEXT"), phase: len("PHASE/SLICE"),
+		run: len("RUN AGE"), slices: len("SLICES"), updated: len("UPDATED"), attention: len("ATTENTION"),
 	}
 	for _, section := range sections {
 		for _, row := range section.Rows {
@@ -240,6 +293,7 @@ func measureTable(sections []Section, now time.Time, actionLabels map[string]str
 			widths.repo = max(widths.repo, utf8.RuneCountInString(values.repo))
 			widths.plan = max(widths.plan, utf8.RuneCountInString(values.plan))
 			widths.status = max(widths.status, utf8.RuneCountInString(values.status))
+			widths.next = max(widths.next, utf8.RuneCountInString(values.next))
 			widths.phase = max(widths.phase, utf8.RuneCountInString(values.phase))
 			widths.run = max(widths.run, utf8.RuneCountInString(values.run))
 			widths.slices = max(widths.slices, utf8.RuneCountInString(values.slices))
@@ -259,8 +313,9 @@ func renderHeader(widths tableWidths, withAttention bool) string {
 		padRunes("REPO", widths.repo),
 		padRunes("PLAN", widths.plan),
 		padRunes("STATUS", widths.status),
+		padRunes("NEXT", widths.next),
 		padRunes("PHASE/SLICE", widths.phase),
-		padRunes("RUN", widths.run),
+		padRunes("RUN AGE", widths.run),
 		padRunes("SLICES", widths.slices),
 		updated,
 	}, "  ")
@@ -288,6 +343,7 @@ func renderTableRow(row monitor.Row, now time.Time, widths tableWidths, withAtte
 		padRunes(values.repo, widths.repo),
 		padRunes(values.plan, widths.plan),
 		status,
+		padRunes(values.next, widths.next),
 		padRunes(values.phase, widths.phase),
 		padRunes(values.run, widths.run),
 		padRunes(values.slices, widths.slices),
@@ -299,15 +355,63 @@ func renderTableRow(row monitor.Row, now time.Time, widths tableWidths, withAtte
 	return line
 }
 
+func renderPlanPreview(row monitor.Row, width int) []string {
+	overview := row.Overview
+	lines := []string{"SELECTED PLAN — advisory context", "Benefit: " + displayValue(singleLineDetail(overview.ExpectedBenefit))}
+	if width > 0 && width < 50 {
+		lines = append(lines, fmt.Sprintf("Decision: %s / %s", displayValue(string(overview.Disposition)), displayValue(string(overview.Readiness))))
+	} else {
+		lines = append(lines,
+			"Readiness: "+displayValue(string(overview.Readiness)),
+			"Disposition: "+displayValue(string(overview.Disposition))+" — "+displayValue(singleLineDetail(overview.DispositionReason)),
+		)
+	}
+	if priority := overview.Priority; priority != nil {
+		if width > 0 && width < 80 {
+			lines = append(lines, fmt.Sprintf("Priority: %s I:%s U:%s E:%s R:%s C:%s", priority.Level, priority.Impact, priority.Urgency, priority.Effort, priority.Risk, priority.Confidence))
+		} else {
+			lines = append(lines, fmt.Sprintf("Priority: level=%s  impact=%s  urgency=%s  effort=%s  risk=%s  confidence=%s", priority.Level, priority.Impact, priority.Urgency, priority.Effort, priority.Risk, priority.Confidence))
+		}
+		if width <= 0 || width >= 50 {
+			lines = append(lines, "Priority rationale: "+displayValue(singleLineDetail(priority.Rationale)))
+		}
+	} else {
+		lines = append(lines, "Priority: unranked")
+	}
+	sequence := "-"
+	if overview.Sequence != nil {
+		sequence = fmt.Sprintf("%d of %d", overview.Sequence.Position, overview.Sequence.Total)
+	}
+	lines = append(lines, "Sequence: "+sequence)
+	scope := strings.TrimSpace(strings.Join([]string{row.SliceID, row.SliceTitle}, " — "))
+	scope = strings.Trim(scope, " —")
+	lines = append(lines, "Slice scope: "+displayValue(singleLineDetail(scope)))
+	if len(row.Relationships) == 0 {
+		lines = append(lines, "Relationships: -")
+	} else {
+		values := make([]string, 0, len(row.Relationships))
+		for _, relationship := range row.Relationships {
+			values = append(values, fmt.Sprintf("%s %s [%s]", relationship.Type, relationship.PlanID, relationship.State))
+		}
+		lines = append(lines, "Relationships: "+strings.Join(values, "; "))
+	}
+	return lines
+}
+
 func tableRowValues(row monitor.Row, now time.Time, actionLabel string) rowValues {
 	status := row.Status
 	if strings.TrimSpace(actionLabel) != "" {
 		status = actionLabel
 	}
+	next := row.NextAction
+	if strings.TrimSpace(next) == "" {
+		next = monitor.DeriveNextAction(row)
+	}
 	return rowValues{
 		repo:      displayValue(row.RepositoryName),
 		plan:      planLabel(row),
 		status:    displayValue(status),
+		next:      displayValue(next),
 		phase:     phaseLabel(row),
 		run:       runAgeLabel(row),
 		slices:    slicesLabel(row),

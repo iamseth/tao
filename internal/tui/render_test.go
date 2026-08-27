@@ -20,11 +20,19 @@ func TestRenderGoldenColorModes(t *testing.T) {
 	plain := clearScreenSequence + `Tao UI | Plans | Repositories: all | 1 plan
 
 PLANNED / IN REVIEW
-  REPO  PLAN  STATUS   PHASE/SLICE  RUN  SLICES  UPDATED
-> repo  plan  planned  -            -    0/0     -
+  REPO  PLAN  STATUS   NEXT  PHASE/SLICE  RUN AGE  SLICES  UPDATED
+> repo  plan  planned  RUN   -            -        0/0     -
+SELECTED PLAN — advisory context
+Benefit: -
+Readiness: -
+Disposition: - — -
+Priority: unranked
+Sequence: -
+Slice scope: -
+Relationships: -
 `
 	colored := strings.Replace(plain, "Plans", "\x1b[1mPlans\x1b[0m", 1)
-	colored = strings.Replace(colored, "planned  -", "\x1b[33mplanned\x1b[0m  -", 1)
+	colored = strings.Replace(colored, "planned  RUN", "\x1b[33mplanned\x1b[0m  RUN", 1)
 	tests := []struct {
 		name     string
 		useColor bool
@@ -66,7 +74,7 @@ func TestRenderSectionsAndOperationalLabels(t *testing.T) {
 		previous = index
 	}
 	for _, want := range []string{
-		"PHASE/SLICE", "ATTENTION", "crashed?", "stalled? (45s old)",
+		"NEXT", "RUN AGE", "RUN", "REVIEW", "DONE", "PHASE/SLICE", "ATTENTION", "crashed?", "stalled? (45s old)",
 		"004-ui", "2m", "2/4", "30m",
 	} {
 		if !strings.Contains(got, want) {
@@ -251,8 +259,8 @@ func TestRenderVerticalResizeReflowsAroundSelection(t *testing.T) {
 		rows[index] = monitor.Row{RepositoryName: "repo", PlanID: fmt.Sprintf("plan-%02d", index), Status: plan.StatusPlanned}
 	}
 	model := Model{Snapshot: monitor.Snapshot{Rows: rows}, Selected: 7, Height: 20}
-	if lines := renderedLines(Render(model)); len(lines) != 14 {
-		t.Fatalf("tall rendered lines = %d, want complete 14-line dashboard", len(lines))
+	if lines := renderedLines(Render(model)); len(lines) != 20 {
+		t.Fatalf("tall rendered lines = %d, want bounded 20-line dashboard", len(lines))
 	}
 
 	model.Height = 6
@@ -262,6 +270,55 @@ func TestRenderVerticalResizeReflowsAroundSelection(t *testing.T) {
 	}
 	if !strings.Contains(got, "> repo  plan-07") {
 		t.Fatalf("resized viewport lost selected row:\n%s", got)
+	}
+}
+
+func TestRenderSelectedPlanPreviewShowsBoundedDecisionContext(t *testing.T) {
+	row := monitor.Row{
+		RepositoryName: "repo", PlanID: "priority-plan", Status: plan.StatusPlanned,
+		SliceID: "002-preview", SliceTitle: "Render decision context",
+		Overview: plan.DecisionOverview{
+			ExpectedBenefit: "Operators can choose the right plan.", Readiness: plan.DecisionReadinessReady,
+			Disposition: plan.DecisionDispositionConditional, DispositionReason: "Confirm the dependency first.",
+			Priority: &plan.Priority{Level: plan.PriorityOverallLevelMust, Impact: plan.PriorityLevelHigh, Urgency: plan.PriorityLevelMedium, Effort: plan.PriorityEffortSmall, Risk: plan.PriorityLevelLow, Confidence: plan.PriorityLevelHigh, Rationale: "High benefit for little work."},
+			Sequence: &plan.Sequence{Position: 2, Total: 4},
+		},
+		Relationships: []monitor.ResolvedRelationship{{PlanID: "foundation", Type: plan.PlanRelationAfter, State: monitor.RelationshipComplete}},
+	}
+	got := Render(Model{Snapshot: monitor.Snapshot{Rows: []monitor.Row{row}}, Width: 120})
+	for _, want := range []string{
+		"RUN AGE", "NEXT", "SELECTED PLAN — advisory context",
+		"Benefit: Operators can choose the right plan.", "Readiness: ready",
+		"Disposition: conditional — Confirm the dependency first.",
+		"Priority: level=must  impact=high  urgency=medium  effort=small  risk=low  confidence=high",
+		"Priority rationale: High benefit for little work.", "Sequence: 2 of 4",
+		"Slice scope: 002-preview — Render decision context", "Relationships: after foundation [complete]",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("preview missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestRenderPlanPreviewYieldsToTableSelectionAndConfirmation(t *testing.T) {
+	rows := []monitor.Row{
+		{RepositoryName: "repo", PlanID: "first", Status: plan.StatusPlanned},
+		{RepositoryName: "repo", PlanID: "selected", Status: plan.StatusPlanned, Overview: plan.DecisionOverview{ExpectedBenefit: strings.Repeat("benefit ", 20), Readiness: plan.DecisionReadinessReady}},
+	}
+	got := Render(Model{Snapshot: monitor.Snapshot{Rows: rows}, Selected: 1, Width: 36, Height: 7, ConfirmMessage: "Run selected plan?"})
+	lines := renderedLines(got)
+	if len(lines) != 7 {
+		t.Fatalf("rendered lines = %d, want 7:\n%s", len(lines), got)
+	}
+	for _, want := range []string{"Tao UI | Plans", "> repo  selected", "SELECTED PLAN", "Run selected plan? [y/n]"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("responsive frame missing %q:\n%s", want, got)
+		}
+	}
+	for _, line := range lines {
+		if width := utf8.RuneCountInString(stripANSI(line)); width > 36 {
+			t.Fatalf("responsive line width = %d, want <= 36: %q", width, line)
+		}
 	}
 }
 

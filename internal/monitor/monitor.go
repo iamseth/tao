@@ -69,6 +69,25 @@ const (
 	AttentionRunCrashed             AttentionReason = "run_crashed"
 )
 
+// RelationshipState describes how an advisory sequence relationship resolved
+// against the repository-local snapshot.
+type RelationshipState string
+
+const (
+	RelationshipComplete   RelationshipState = "complete"
+	RelationshipIncomplete RelationshipState = "incomplete"
+	RelationshipMissing    RelationshipState = "missing"
+	RelationshipDuplicate  RelationshipState = "duplicate"
+	RelationshipCyclic     RelationshipState = "cyclic"
+)
+
+// ResolvedRelationship retains the bounded relationship and its snapshot health.
+type ResolvedRelationship struct {
+	PlanID string
+	Type   plan.PlanRelationType
+	State  RelationshipState
+}
+
 // Row is one render-neutral monitor line. UpdatedAt is durable plan activity;
 // invocation fields are operational observations and never lifecycle evidence.
 type Row struct {
@@ -103,7 +122,10 @@ type Row struct {
 	ApprovalSliceID  string
 	ApprovalReason   string
 
-	Warnings []string
+	NextAction           string
+	Relationships        []ResolvedRelationship
+	RelationshipWarnings []string
+	Warnings             []string
 }
 
 // Snapshot is a deterministic observation collected at one instant.
@@ -187,6 +209,10 @@ func (c Collector) Collect(ctx context.Context) (Snapshot, error) {
 		}
 	}
 
+	resolveRelationships(snapshot.Rows)
+	for index := range snapshot.Rows {
+		snapshot.Rows[index].NextAction = DeriveNextAction(snapshot.Rows[index])
+	}
 	sortRows(snapshot.Rows)
 	return snapshot, nil
 }
@@ -369,6 +395,128 @@ func cloneOverview(value plan.DecisionOverview) plan.DecisionOverview {
 		clone.Sequence = &sequence
 	}
 	return clone
+}
+
+// DeriveNextAction returns advisory workflow text without granting action authority.
+func DeriveNextAction(row Row) string {
+	if row.Kind == RowKindRepositoryWarning || row.Status == plan.StatusInvalid {
+		return "INSPECT"
+	}
+	if row.Status == plan.StatusCompleted {
+		return "DONE"
+	}
+	if row.Liveness == LivenessLive || (row.Liveness == LivenessStale && row.RunLockPresent && row.RunLockProcessAlive) {
+		return "MONITOR"
+	}
+	for _, reason := range row.AttentionReasons {
+		if reason == AttentionApprovalRequired {
+			return "APPROVE"
+		}
+	}
+	switch row.Status {
+	case plan.StatusBlocked:
+		return "CONTINUE"
+	case plan.StatusChangesRequested:
+		return "REWORK"
+	case plan.StatusInReview:
+		return "REVIEW"
+	case plan.StatusReviewed:
+		return "MERGE"
+	}
+	if len(row.AttentionReasons) > 0 {
+		return "RESOLVE"
+	}
+	switch row.Overview.Disposition {
+	case plan.DecisionDispositionConditional:
+		return "CHECK"
+	case plan.DecisionDispositionDeferred:
+		return "WAIT"
+	case plan.DecisionDispositionObsolete:
+		return "SKIP"
+	default:
+		return "RUN"
+	}
+}
+
+func resolveRelationships(rows []Row) {
+	type key struct{ repo, plan string }
+	indexes := make(map[key][]int)
+	for index, row := range rows {
+		if row.Kind != RowKindRepositoryWarning && row.PlanID != "" {
+			indexes[key{row.RepositoryID, row.PlanID}] = append(indexes[key{row.RepositoryID, row.PlanID}], index)
+		}
+	}
+	type edge struct{ from, to, row, relation int }
+	var edges []edge
+	for index := range rows {
+		sequence := rows[index].Overview.Sequence
+		if sequence == nil {
+			continue
+		}
+		occurrences := make(map[string]int, len(sequence.Relationships))
+		for _, relationship := range sequence.Relationships {
+			occurrences[relationship.PlanID]++
+		}
+		for _, relation := range sequence.Relationships {
+			resolved := ResolvedRelationship{PlanID: relation.PlanID, Type: relation.Type}
+			targets := indexes[key{rows[index].RepositoryID, relation.PlanID}]
+			switch {
+			case strings.TrimSpace(relation.PlanID) == "" || len(targets) == 0:
+				resolved.State = RelationshipMissing
+			case occurrences[relation.PlanID] > 1 || len(targets) > 1:
+				resolved.State = RelationshipDuplicate
+			default:
+				target := targets[0]
+				if rows[target].Status == plan.StatusCompleted {
+					resolved.State = RelationshipComplete
+				} else {
+					resolved.State = RelationshipIncomplete
+				}
+				switch relation.Type {
+				case plan.PlanRelationAfter:
+					edges = append(edges, edge{from: target, to: index, row: index, relation: len(rows[index].Relationships)})
+				case plan.PlanRelationBefore:
+					edges = append(edges, edge{from: index, to: target, row: index, relation: len(rows[index].Relationships)})
+				}
+			}
+			rows[index].Relationships = append(rows[index].Relationships, resolved)
+		}
+	}
+	adjacent := make(map[int][]int)
+	for _, edge := range edges {
+		adjacent[edge.from] = append(adjacent[edge.from], edge.to)
+	}
+	for _, edge := range edges {
+		if pathExists(adjacent, edge.to, edge.from, make(map[int]bool)) {
+			rows[edge.row].Relationships[edge.relation].State = RelationshipCyclic
+		}
+	}
+	for index := range rows {
+		for _, relationship := range rows[index].Relationships {
+			if relationship.State != RelationshipMissing && relationship.State != RelationshipDuplicate && relationship.State != RelationshipCyclic {
+				continue
+			}
+			warning := fmt.Sprintf("sequence %s relationship to %q is %s", relationship.Type, relationship.PlanID, relationship.State)
+			rows[index].RelationshipWarnings = append(rows[index].RelationshipWarnings, warning)
+			rows[index].Warnings = append(rows[index].Warnings, warning)
+		}
+	}
+}
+
+func pathExists(adjacency map[int][]int, current, target int, visited map[int]bool) bool {
+	if current == target {
+		return true
+	}
+	if visited[current] {
+		return false
+	}
+	visited[current] = true
+	for _, next := range adjacency[current] {
+		if pathExists(adjacency, next, target, visited) {
+			return true
+		}
+	}
+	return false
 }
 
 func cloneTime(value *time.Time) *time.Time {
