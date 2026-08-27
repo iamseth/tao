@@ -173,6 +173,7 @@ func (c Collector) Collect(ctx context.Context) (Snapshot, error) {
 		return Snapshot{}, fmt.Errorf("read monitor repository inventory: %w", err)
 	}
 
+	var relationshipCatalog []Row
 	for _, entry := range inventory {
 		if err := ctx.Err(); err != nil {
 			return Snapshot{}, err
@@ -197,10 +198,11 @@ func (c Collector) Collect(ctx context.Context) (Snapshot, error) {
 			if err := ctx.Err(); err != nil {
 				return Snapshot{}, err
 			}
+			row := planRow(entry, summary)
+			relationshipCatalog = append(relationshipCatalog, row)
 			if !c.includeSummary(summary, now) || (summary.Status == plan.StatusInvalid && !c.ShowInvalid) {
 				continue
 			}
-			row := planRow(entry, summary)
 			if summary.Status != plan.StatusInvalid {
 				applyRuntimeStatus(&row, reader, entry.Repo.ID, now)
 				applyCrashedRunAttention(&row, c.runLockReader(), planDir(entry, summary))
@@ -209,7 +211,7 @@ func (c Collector) Collect(ctx context.Context) (Snapshot, error) {
 		}
 	}
 
-	resolveRelationships(snapshot.Rows)
+	resolveRelationships(snapshot.Rows, relationshipCatalog)
 	for index := range snapshot.Rows {
 		snapshot.Rows[index].NextAction = DeriveNextAction(snapshot.Rows[index])
 	}
@@ -438,16 +440,43 @@ func DeriveNextAction(row Row) string {
 	}
 }
 
-func resolveRelationships(rows []Row) {
+func resolveRelationships(rows, catalog []Row) {
 	type key struct{ repo, plan string }
 	indexes := make(map[key][]int)
-	for index, row := range rows {
+	for index, row := range catalog {
 		if row.Kind != RowKindRepositoryWarning && row.PlanID != "" {
 			indexes[key{row.RepositoryID, row.PlanID}] = append(indexes[key{row.RepositoryID, row.PlanID}], index)
 		}
 	}
-	type edge struct{ from, to, row, relation int }
+	type edge struct{ from, to int }
 	var edges []edge
+	for index, row := range catalog {
+		sequence := row.Overview.Sequence
+		if sequence == nil {
+			continue
+		}
+		occurrences := make(map[string]int, len(sequence.Relationships))
+		for _, relationship := range sequence.Relationships {
+			occurrences[relationship.PlanID]++
+		}
+		for _, relation := range sequence.Relationships {
+			targets := indexes[key{row.RepositoryID, relation.PlanID}]
+			if strings.TrimSpace(relation.PlanID) == "" || occurrences[relation.PlanID] > 1 || len(targets) != 1 {
+				continue
+			}
+			switch relation.Type {
+			case plan.PlanRelationAfter:
+				edges = append(edges, edge{from: targets[0], to: index})
+			case plan.PlanRelationBefore:
+				edges = append(edges, edge{from: index, to: targets[0]})
+			}
+		}
+	}
+	adjacent := make(map[int][]int)
+	for _, edge := range edges {
+		adjacent[edge.from] = append(adjacent[edge.from], edge.to)
+	}
+
 	for index := range rows {
 		sequence := rows[index].Overview.Sequence
 		if sequence == nil {
@@ -460,35 +489,33 @@ func resolveRelationships(rows []Row) {
 		for _, relation := range sequence.Relationships {
 			resolved := ResolvedRelationship{PlanID: relation.PlanID, Type: relation.Type}
 			targets := indexes[key{rows[index].RepositoryID, relation.PlanID}]
+			sources := indexes[key{rows[index].RepositoryID, rows[index].PlanID}]
 			switch {
 			case strings.TrimSpace(relation.PlanID) == "" || len(targets) == 0:
 				resolved.State = RelationshipMissing
 			case occurrences[relation.PlanID] > 1 || len(targets) > 1:
 				resolved.State = RelationshipDuplicate
 			default:
-				target := targets[0]
-				if rows[target].Status == plan.StatusCompleted {
+				if catalog[targets[0]].Status == plan.StatusCompleted {
 					resolved.State = RelationshipComplete
 				} else {
 					resolved.State = RelationshipIncomplete
 				}
-				switch relation.Type {
-				case plan.PlanRelationAfter:
-					edges = append(edges, edge{from: target, to: index, row: index, relation: len(rows[index].Relationships)})
-				case plan.PlanRelationBefore:
-					edges = append(edges, edge{from: index, to: target, row: index, relation: len(rows[index].Relationships)})
+				if len(sources) == 1 {
+					from, to, ordered := sources[0], targets[0], true
+					switch relation.Type {
+					case plan.PlanRelationAfter:
+						from, to = targets[0], sources[0]
+					case plan.PlanRelationBefore:
+					default:
+						ordered = false
+					}
+					if ordered && pathExists(adjacent, to, from, make(map[int]bool)) {
+						resolved.State = RelationshipCyclic
+					}
 				}
 			}
 			rows[index].Relationships = append(rows[index].Relationships, resolved)
-		}
-	}
-	adjacent := make(map[int][]int)
-	for _, edge := range edges {
-		adjacent[edge.from] = append(adjacent[edge.from], edge.to)
-	}
-	for _, edge := range edges {
-		if pathExists(adjacent, edge.to, edge.from, make(map[int]bool)) {
-			rows[edge.row].Relationships[edge.relation].State = RelationshipCyclic
 		}
 	}
 	for index := range rows {

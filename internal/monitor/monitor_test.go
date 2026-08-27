@@ -333,7 +333,7 @@ func TestResolveRelationshipsClassifiesHealthAndCycles(t *testing.T) {
 		{Kind: RowKindPlan, RepositoryID: "repo", PlanID: "cycle-b", Overview: plan.DecisionOverview{Sequence: &plan.Sequence{Relationships: []plan.PlanRelation{{PlanID: "cycle-a", Type: plan.PlanRelationAfter}}}}},
 		{Kind: RowKindPlan, RepositoryID: "other", PlanID: "missing", Status: plan.StatusCompleted},
 	}
-	resolveRelationships(rows)
+	resolveRelationships(rows, rows)
 	got := rows[2].Relationships
 	want := []RelationshipState{RelationshipComplete, RelationshipDuplicate, RelationshipMissing, RelationshipDuplicate}
 	if len(got) != len(want) {
@@ -381,7 +381,7 @@ func TestCollectorCompletedWindowIsOptInWithActivityFallback(t *testing.T) {
 	fallback := now.Add(-45 * time.Minute)
 	entry := taodata.RepoInventoryEntry{Repo: taodata.Repo{ID: "repo", Name: "repo"}, PlansDir: "/data/repo/plans"}
 	lister := &fakePlanLister{summaries: []plan.PlanSummary{
-		{ID: "active", Status: plan.StatusPlanned},
+		{ID: "active", Status: plan.StatusPlanned, Overview: plan.DecisionOverview{Sequence: &plan.Sequence{Relationships: []plan.PlanRelation{{PlanID: "old", Type: plan.PlanRelationAfter}}}}},
 		{ID: "recent", Status: plan.StatusCompleted, CompletedAt: &recent, LastActivityAt: &old},
 		{ID: "fallback", Status: plan.StatusCompleted, LastActivityAt: &fallback},
 		{ID: "old", Status: plan.StatusCompleted, CompletedAt: &old},
@@ -402,6 +402,10 @@ func TestCollectorCompletedWindowIsOptInWithActivityFallback(t *testing.T) {
 	}
 	if got := planIDs(defaultSnapshot.Rows); !slices.Equal(got, []string{"active"}) {
 		t.Fatalf("default plan ids = %v, want only active", got)
+	}
+	active := rowsByPlan(defaultSnapshot.Rows)["active"]
+	if len(active.Relationships) != 1 || active.Relationships[0].State != RelationshipComplete || len(active.RelationshipWarnings) != 0 {
+		t.Fatalf("relationship to completed plan outside window = %+v, warnings %v", active.Relationships, active.RelationshipWarnings)
 	}
 
 	collector.IncludeCompletedWithin = time.Hour
