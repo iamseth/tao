@@ -67,6 +67,7 @@
 - Keep prompt changes narrow because they directly shape future agent behavior.
 
 ## Repo-Local Agent Commands
+- Keep `/tao-pr` reviewer-facing title, body, category-label, and assignment conventions synchronized with the automated pull-request path unless an intentional divergence is documented.
 - `prompts/run.md` implements exactly one pending slice and asks that same active agent for the structured commit proposal, then delegates validation, trusted trailers, intent, staging, recovery, and completion to `tao slice-complete`; it must not ask the agent to commit automatic slice work or start a nested message session.
 - `prompts/slice.md` allocates plan artifacts with `tao init --slug <short-slug> --json` and must not edit application files.
 - `prompts/commit.md` is standalone/manual only and is a wrapper around `tao commit --context` plus `--proposal-file` (or explicit `--message`); Tao owns filtering, validation, staging, and Git. It never pushes, and automatic run or merge completion must not fall back to it.

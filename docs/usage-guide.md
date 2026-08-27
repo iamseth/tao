@@ -687,19 +687,27 @@ recoverable transaction and Tao owns Git.
 ### `/tao-pr` — open a pull request
 
 Inspects the branch, status, recent commits, and diff against the base branch
-(defaults to `main`), pushes if needed, and opens a PR with a structured
-description (summary, motivation, scope, testing, risks, rollback). Returns the
-PR URL.
+(defaults to `main`), pushes if needed, and opens a PR using the automated path's
+reviewer-facing conventions: a scoped Conventional Commit title; ordered
+Problem, Fix, Tests, Deploy, and Scope sections with the exact changed-file
+summary; a type-derived category label; and assignment to the authenticated
+GitHub user. Test reporting reflects repository commands actually run, not Tao
+lifecycle commands. Returns the PR URL.
 
 **When to use:** after a run's work is committed and you want a PR by hand.
+`/tao-pr` remains agent-driven, accepts additional user direction, and does not
+record or mutate Tao plan lifecycle state. Refresh installed prompt copies after
+an update with `tao install-prompts --force`.
+
 Equivalent automated path: `tao run --pull-request`, which is gated — it's
 rejected with `--commit-policy none`, or when the run is not in
 `--execution-mode isolated`. The automated path requires the current approved
 exact-head review proposal, uses its Conventional Commit subject verbatim as the
-title, and records the exact branch head. Typed plans also receive their category
-label and every new PR is assigned to the authenticated GitHub user. When the
-recorded head matches the approved review head, Tao's lifecycle is complete even
-though the hosting provider still owns integration.
+title, records the exact branch head, and deterministically owns lifecycle
+metadata. Typed plans also receive their category label and every new PR is
+assigned to the authenticated GitHub user. When the recorded head matches the
+approved review head, Tao's lifecycle is complete even though the hosting
+provider still owns integration.
 
 ### `tao merge` — integrate an approved plan without a PR
 

@@ -99,6 +99,46 @@ func TestRenderCommitPromptDelegatesProposalAndGitAuthorityToTao(t *testing.T) {
 	}
 }
 
+func TestRenderPRPromptDefinesAutomatedStyleWithoutLifecycleAuthority(t *testing.T) {
+	got, err := Render(PromptPR, Data{Arguments: "draft first and target release/next"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"`<type>(<scope>): <summary>`",
+		"scope containing only lowercase letters, digits, and hyphens",
+		"summary of at most 72 characters with no ending punctuation",
+		"`feat` to `feature`",
+		"keep every other supported type unchanged",
+		"exactly these level-two sections in this order: `## Problem`, `## Fix`, `## Tests`, `## Deploy`, and `## Scope`",
+		"<summary>Changed files</summary>",
+		"git diff --stat <base>...HEAD",
+		"<exact diff-stat output>",
+		"reviewer-authored narrative in Problem, Fix, and Deploy",
+		"free of Tao plan or slice details, lifecycle state, merge guidance, and other Tao-specific planning narrative",
+		"truthfully report repository test commands actually run and their results",
+		"Do not report `tao` lifecycle commands as tests",
+		"Truthful repository paths and commands may contain `tao`",
+		"The narrative exclusion does not apply to Tests or Scope",
+		"exact unmodified diff stat in Scope, including paths or commands containing `tao`",
+		"preserve the exact name of an existing matching label",
+		"--color", "1D76DB", "Repository change category",
+		"--assignee @me",
+		"report the failure clearly",
+		"do not read or mutate Tao plan lifecycle state",
+		"draft first and target release/next",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("rendered PR prompt missing %q:\n%s", want, got)
+		}
+	}
+	for _, forbidden := range []string{"summary, motivation, scope, testing, risks, rollback", "mutate Tao plan lifecycle state to record"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("rendered PR prompt retains excluded guidance %q:\n%s", forbidden, got)
+		}
+	}
+}
+
 func TestRenderReviewPromptUsesInjectedPlanAndDiff(t *testing.T) {
 	got, err := Render(PromptReview, Data{PlanDir: "/tmp/tao/plans/plan-a", PlanID: "plan-a", Base: "base123", Head: "head456"})
 	if err != nil {
