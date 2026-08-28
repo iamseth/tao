@@ -2,7 +2,7 @@
 
 Tao plans are local execution artifacts for agent work. They preserve planning intent, divide work into serial slices, and record progress as slices run.
 
-This document is the artifact contract for Tao contributors and advanced users. For the day-to-day workflow, start with the project [`README.md`](../README.md).
+This document is the artifact contract for Tao contributors and advanced users. For command reference and day-to-day workflow judgment, use the project [`README.md`](../README.md) and [usage guide](usage-guide.md). Maintainers working on persistence and compatibility should follow the [mutation-journal protocol](plan-mutation-journal.md) and [typed clear-vs-preserve design](design/typed-clear-seam.md); those documents explain implementation mechanics while this page defines observable artifact behavior.
 
 ```mermaid
 flowchart LR
@@ -59,7 +59,7 @@ Plan loaders validate plan-directory artifacts and must not depend on unrelated 
 | `plan.md` | Optional | Created | Human-readable goal, constraints, decisions, assumptions, risks, and slice overview. |
 | `planning-brief.md` | Optional, warning if missing/malformed | Created | Fixed-section compact planning summary for future build agents. |
 | `handoff.md` | Optional | Created | Concise future-agent context without duplicating Tao-owned run protocol. |
-| `review.md` | Optional | Absent | Latest completed human-readable agent review output. A completed runtime review creates or replaces it; normal persistence journals it with the matching state and event metadata. |
+| `review.md` | Optional | Absent | Latest persisted human-readable agent review output. When present, it belongs to the same recoverable artifact mutation as the matching state and event changes. |
 
 The `/tao-slice` expectation describes planning-agent output. `review.md` is not planning input: Tao owns the runtime-created copy of review output. Legacy planning-session sidecars are not part of the live contract. See [Legacy / backward-compatibility (read-only)](#legacy--backward-compatibility-read-only).
 
@@ -78,24 +78,20 @@ Operational logs and locks are not validated as plan content and never replace `
 
 ### Recoverable artifact mutations
 
-Tao-owned persistence operations may journal any non-empty combination of
-`state.json`, `slices.json`, optional `review.md`, and lifecycle events in
-`.mutation.json`. The journal is made durable before any listed target changes.
-Full plan loads and state-only reads validate and settle every pending target
-before returning artifact state; retries install exact hashed state, slices, and
-review payload bytes, append only missing `(mutation_id, payload hash)` events,
-and durably remove the journal last.
-Malformed, mismatched, or unsupported journals make the plan unreadable until an
-operator preserves and repairs the intent; Tao never guesses, rolls back, or
-automatically deletes invalid intent.
+Tao-owned persistence may use `.mutation.json` to make a non-empty combination
+of `state.json`, `slices.json`, optional `review.md`, and lifecycle events settle
+as one roll-forward mutation. A valid pending journal is authoritative and is
+settled before mutable artifact state is exposed. A malformed, mismatched, or
+unsupported journal makes the plan unreadable; Tao does not guess, roll back, or
+delete the intent.
 
-The journal does not change the public schemas of required artifacts except that
-transaction-owned events may carry `mutation_id`. It is owned by Tao's plan
-persistence layer, not by agents or individual run/review/merge consumers. Plans
-without a journal retain the legacy tolerant load path, including historical
-torn state/slices combinations and events without `mutation_id`. See
-[Plan Mutation Journal](plan-mutation-journal.md) for the byte-level protocol and
-remaining limitations.
+The journal does not change required-artifact schemas, except that
+transaction-owned events may carry `mutation_id`. Plans without a journal retain
+the tolerant legacy load path, including historical torn state/slices
+combinations and events without `mutation_id`. The journal is Tao-owned recovery
+metadata, not an agent or consumer extension point. See
+[Plan Mutation Journal](plan-mutation-journal.md) for payload preparation,
+settlement order, replay, validation, and limitations.
 
 ## Context Markdown
 
@@ -151,26 +147,17 @@ Only a current `plan_merged` event in `events.jsonl` proves integration into the
 - Optional `plan.review.commit_message` is the untrusted proposal produced by the reviewer of the exact recorded `base..head` diff. It has `subject` and `body` strings; the subject is `<type>(<lowercase-scope>): <lowercase-imperative-summary>`, and the body has non-empty canonical `What:` and `Why:` sections. It must not contain `Tao-*` trailers. New `approve` reviews require a valid proposal; a missing, malformed, oversized, or reserved-trailer proposal downgrades the parsed result to bounded `comment` rather than persisting approval. `changes_requested` and `comment` reviews store `commit_message: null`, explicitly clearing a stale approved proposal. Historical reviews without this field remain readable.
 - Optional `plan.merge_commit_intent` binds `message`, `plan_id`, `source_head`, `default_branch`, `default_parent`, and `created_at` before a single squash mutates Git. `message` is the exact final validated review (or exceptional generated) proposal plus Tao-owned evidence. Matching retries reuse it without another agent call. Historical intents remain exact recovery authority and are not reformatted.
 - A worktree is actively Tao-managed only when canonical repository identity, exact physical `workspace.path`, recorded `workspace.branch`, and non-cleaned workspace metadata all match. Standalone commit context and finalization use this durable ownership tuple rather than branch-name conventions; multiple exact active claims are ambiguous and fail closed. Their recovery hint recommends blocked restart only when the current blocked slice records a complete isolated automatic pre-intent `execution_start` and execution root. Ordinary blockers use continuation, while manual/current-checkout or post-intent boundaries use slice-completion recovery; live Git and baseline checks remain authoritative in the run path. Control checkouts, unrelated worktrees, stale paths, and workspaces with `cleanup_status: done` or lifecycle `cleaned` are not claimed.
-- Optional `workspace.rebase_intent` is written before a workspace rebase mutates Git. It binds the workspace `branch`, `base_branch`, `old_head_sha`, `old_base_sha`, `new_base_sha`, ordered `commit_count`, versioned `commit_series_fingerprint`, and UTC `created_at`. The fingerprint proves the exact linear `old_base_sha..old_head_sha` feature series from rebase-stable commit metadata, messages, and content changes; ancestry alone is not proof. Current `v5` fingerprints bind each edit to its immediately adjacent unchanged context, reject ambiguous locations, and canonicalize paths through upstream rename detection while retaining destination-file identity. This distinguishes duplicate edit locations, survives conflict-free upstream renames, and prevents a distant newly unique line from displacing an anchor. Historical `v1`, ordinal-based `v2`, nearest-unique-anchor `v3`, and adjacent-context `v4` intents remain readable but cannot match a newly computed `v5` recovery proof. Plans without this field remain readable.
+- Optional `workspace.rebase_intent` is written before a workspace rebase mutates Git. It binds the workspace `branch`, `base_branch`, `old_head_sha`, `old_base_sha`, `new_base_sha`, ordered `commit_count`, versioned `commit_series_fingerprint`, and UTC `created_at`. The fingerprint proves the exact linear `old_base_sha..old_head_sha` feature series from rebase-stable commit metadata, messages, and content changes; ancestry alone is not proof. Current writers use `v5`, whose proof remains stable across a conflict-free upstream rename but rejects ambiguous or displaced edits. Historical `v1`–`v4` intents remain readable but cannot satisfy a newly computed `v5` recovery proof. Plans without this field remain readable.
 
-`workspace.rebase_intent` uses `omitempty` and therefore preserves an existing
-value when an ordinary typed update has a nil intent. Tao clears settled intent
-only through the typed clear or settlement operation, which writes an explicit
-`"rebase_intent": null` while preserving unknown workspace fields. Successful
-rebase settlement verifies the exact intent and writes the new base, HEAD, and
-workspace status fields in the same refreshed artifact mutation as that clear.
-Exact re-recording is idempotent; conflicting replacement, mismatched clearing,
-or mismatched settlement is refused.
-
-Workspace and run code request typed plan-record operations for preparing,
-dependency-failure, ready, rebase, and stale-HEAD milestones; they do not prepare
-generic state patches. Each operation is evaluated against refreshed settled
-state and is published in memory only after its journal settles. Stale-HEAD
-repair remains authorized by clean live Git state plus completed automatic-slice
-evidence, then compare-and-set advances only the exact inspected durable branch
-and old HEAD. The exact new HEAD is an idempotent retry; branch or intervening
-HEAD changes are conflicts. These ownership rules do not change the workspace
-artifact schema or mutation-journal protocol.
+An ordinary update that omits `workspace.rebase_intent` preserves an existing
+intent. Exact clear or successful settlement writes `"rebase_intent": null`
+while preserving unknown workspace fields; settlement records the new base,
+HEAD, and workspace status in the same artifact mutation. Exact retries are
+idempotent, while conflicting replacement, mismatched clearing or settlement,
+and an intervening branch or HEAD change are refused. The
+[typed clear-vs-preserve design](design/typed-clear-seam.md) describes the writer
+seam, and the [mutation-journal protocol](plan-mutation-journal.md) describes
+atomic settlement and replay.
 
 ```mermaid
 stateDiagram-v2
@@ -292,7 +279,7 @@ An interrupted in-progress automatic slice is classified from durable slice/work
 
 Resume attempts do not append another `slice_started` event. Each agent handoff appends `slice_resume_attempted` with its numbered `attempts` value; a failed handoff best-effort appends `slice_resume_failed` with the same attempt number and failure reason. These events are audit history, not recovery evidence: provider errors, metrics, and event availability never authorize a retry or redefine the execution boundary.
 
-Within one implementation-slice invocation, Tao may automatically attempt at most two resumes after explicitly structured retryable transport failures, using fixed context-cancellable delays of 1 second and 2 seconds. Each attempt reloads artifacts, repeats selected-slice verification preflight, and must receive `InterruptedSliceResume` authorization from the same execution-boundary classifier described above before a fresh provider session starts. The budget is invocation-local and is independent of durable resume-attempt numbering. A durably completed slice is accepted after ordinary progress and completion-boundary validation without another handoff. This changes no event or artifact schema and adds no retry configuration.
+Within one implementation-slice invocation, Tao may automatically attempt at most two resumes after explicitly structured retryable transport failures, using fixed context-cancellable delays of 1 second and 2 seconds. Each attempt reloads artifacts, repeats selected-slice verification preflight, and must satisfy the same durable execution-boundary checks described above before a fresh provider session starts. The budget is invocation-local and is independent of durable resume-attempt numbering. A durably completed slice is accepted after ordinary progress and completion-boundary validation without another handoff. This changes no event or artifact schema and adds no retry configuration.
 
 The supported runtimes are `pi` and `claude`. Of those, only Pi currently exposes the retryable structured source, its `provider_transport_failure` diagnostic. Matching text, generic and authentication errors, session timeouts, planning, review, pull-request, and merge sessions, and manual, policy-`none`, unsafe, or post-`commit_intent` states do not retry. In particular, neither a provider error nor an `agent_metrics`, `slice_resume_attempted`, or `slice_resume_failed` event is authorization; the durable execution facts and live Git boundary remain the sole recovery authority.
 
@@ -300,7 +287,7 @@ Normal `tao run` rejects blocked plans and blocked selected slices. `tao run --c
 
 `tao slice-complete --plan-dir DIR --slice-id ID --notes-file FILE --verification-results-file FILE [--commit-proposal-file FILE]` owns deterministic completion bookkeeping after verification passes. A new automatic slice intent requires the structured proposal file; Tao validates it and persists the exact trusted final message before staging. Existing intents settle from durable state and do not require or authorize a fresh proposal session. Tao creates or recovers the commit, persists `completion`, then marks the slice completed and moves the queue. Policy `none` skips Git and records `manual_uncommitted`. State, timing, notes, verification results, and at most one `slice_completed` event are written only after the transaction outcome is known.
 
-Recovery is split at `commit_intent`. Before intent, only an exact isolated automatic boundary can return to the implementation agent. Once `commit_intent` or `completion` exists, Tao does not start an agent: the original `tao slice-complete` inputs must settle or recover that transaction. Changed branch/HEAD boundaries, active Git operations, conflicts, ambiguous status, and unrelated dirt without a boundary are refusal states, not alternate baselines. Direct and queued execution apply this same classification through `run.Service.Execute` while retaining one cross-process plan lock.
+Recovery is split at `commit_intent`. Before intent, only an exact isolated automatic boundary can return to the implementation agent. Once `commit_intent` or `completion` exists, Tao does not start an agent: the original `tao slice-complete` inputs must settle or recover that transaction. Changed branch/HEAD boundaries, active Git operations, conflicts, ambiguous status, and unrelated dirt without a boundary are refusal states, not alternate baselines. Direct and queued execution apply the same classification under a cross-process plan lock.
 
 ## ID Resolution
 
@@ -354,42 +341,38 @@ When a listed verification command is invalid but a mechanically equivalent corr
 
 ## Clearable fields and the merge-write contract
 
-`writeJSON` deep-merges every write over the on-disk JSON rather than replacing it wholesale. This preserves unknown fields from older agent runs. Clearable fields currently use one of two mechanisms:
-
-**Tag-cleared fields omit `omitempty`.** Marshalling an explicit zero, nil, or empty value emits the key — `null` for pointers, `""` for strings, `[]` for slices — and the merge overwrites the prior stored value.
-
-**Seam-cleared fields use `omitempty` to preserve by default.** A zero-value write omits the key and preserves the stored value unless a typed plan-record operation declares field-specific clear intent. Internal plan persistence lowers that intent to the same explicit `null`, `""`, or `[]` representation before the unknown-field-preserving merge.
+Tao deep-merges state and slice updates over the stored JSON so unknown fields
+survive. Intentional clears are serialized explicitly as `null`, `""`, or `[]`;
+omitting a preserve-by-default field does not erase its stored value. Consumers
+must therefore treat an explicit empty representation as a clear and must not
+infer a clear from a field being absent in an update.
 
 ### Known clearable fields
 
-| Field | Type | JSON key | Clear mechanism |
-| --- | --- | --- | --- |
-| `State.Plan.CurrentSlice` | `*string` | `current_slice` | Seam-cleared: lifecycle completion, reopen, and plan-edit transitions declare `ClearPlanCurrentSlice`, storing `null`; an undeclared `nil` preserves the stored current slice. |
-| `PlanState.LastRunCommitPolicy` | `string` | `last_run_commit_policy` | Write `""` → stored as `""`; clears the persisted run policy so review uses legacy event fallback or `none`. |
-| `PlanState.LastRunStartingDirty` | `[]string` | `last_run_starting_dirty` | Write `[]string{}` → stored as `[]`; clears stale run-start dirty-path tolerance after a clean run start. |
-| `PlanState.Review` and known `PlanReview` fields | review block | `review` | Seam-cleared: `ReplacePlanReview` replaces every known field, storing explicit zero values including `findings: []` and `commit_message: null`; `ClearPlanReview` stores `review: null`. Undeclared zero values preserve stored review data. Unknown keys inside a replaced review object survive. |
-| `PlanState.PullRequestIntent` | `*PullRequest` | `pull_request_intent` | Write `nil` → stored as `null`; successful recording clears partial PR-creation recovery evidence. |
-| `PlanState.MergeCommitIntent` | `*SingleMergeCommitIntent` | `merge_commit_intent` | Write `nil` → stored as `null`; clears only through guarded single-merge intent settlement or supersession. |
-| `Workspace.DependencyFailure` | `string` | `dependency_preparation_failure` | Seam-cleared: the typed ready operation stores `""` after retry success when its request declares the clear; an undeclared empty value preserves the stored failure. |
-| `Workspace.DependencyFingerprint` | `string` | `dependency_fingerprint` | Seam-cleared: the typed ready operation stores `""` when its request declares that successful-install evidence is unknown; an undeclared empty value preserves prior evidence. |
-| `Slice.BlockerNote` | `string` | `blocker_note` | Seam-cleared: blocked continuation declares `ClearSliceBlockerNote`, storing `""`; an undeclared empty value preserves the stored blocker note. |
+| Field | JSON key | Stored clear and compatibility behavior |
+| --- | --- | --- |
+| `State.Plan.CurrentSlice` | `current_slice` | `null`; an ordinary omitted/nil value preserves the stored selection. |
+| `PlanState.LastRunCommitPolicy` | `last_run_commit_policy` | `""`; review then uses legacy event fallback or `none`. |
+| `PlanState.LastRunStartingDirty` | `last_run_starting_dirty` | `[]`; removes stale dirty-path tolerance after a clean run start. |
+| `PlanState.Review` and known `PlanReview` fields | `review` | Replacing the object emits every known field, including `findings: []` and `commit_message: null`, while preserving unknown keys. Clearing the whole block stores `null`. An ordinary omitted value preserves the stored review. |
+| `PlanState.PullRequestIntent` | `pull_request_intent` | `null`; removes partial PR-creation recovery evidence after successful recording. |
+| `PlanState.MergeCommitIntent` | `merge_commit_intent` | `null`; guarded settlement or supersession removes single-merge recovery evidence. |
+| `Workspace.DependencyFailure` | `dependency_preparation_failure` | `""`; an ordinary omitted/empty value preserves the stored failure. |
+| `Workspace.DependencyFingerprint` | `dependency_fingerprint` | `""`; an ordinary omitted/empty value preserves stored evidence. |
+| `Workspace.RebaseIntent` | `rebase_intent` | `null`; only exact clear or settlement removes the stored rebase boundary. |
+| `Slice.BlockerNote` | `blocker_note` | `""`; an ordinary omitted/empty value preserves the stored blocker note. |
+| `Slice.ExecutionRoot` and `Slice.ExecutionStart` | `execution_root`, `execution_start` | A blocked restart superseding an exact pre-intent boundary stores `""` and `null`, respectively. Ordinary omitted/empty or omitted/nil values preserve the stored boundary; directly zeroing the typed fields without the blocked-restart clear intent has that preserve-on-omission result rather than clearing them. |
 
-### Known merge-only fields (omitempty)
+Other preserve-by-default fields include the `State.Workspace` pointer and its
+non-clearable sub-fields, `Repo.BaseCommit`, `PlanState.ChangeType`,
+`PlanState.PullRequest`, and slice `Tags`, `Approval`, `Notes`, and
+`VerificationResults`. Their zero values do not clear previously stored values.
+Historical artifacts using the explicit representations above remain
+schema-compatible and readable.
 
-These fields carry `omitempty`. A later write with a zero value does **not** clear a previously stored non-zero value unless the field is listed above with typed seam intent:
-
-- `State.Workspace` — the whole struct pointer (`omitempty`)
-  - `Workspace.Branch`, `BaseSHA`, `HeadSHA`, and other Workspace sub-fields without a seam clear. `Workspace.DependencyFailure` and `Workspace.DependencyFingerprint` also carry `omitempty`, but are seam-clearable and listed above.
-- `Repo.BaseCommit`
-- `PlanState.ChangeType` — missing historical values remain absent, while ordinary typed mutations preserve a stored non-empty value.
-- `PlanState.CurrentSlice` carries `omitempty`, but is seam-clearable and listed above.
-- `PlanState.PullRequest` — the whole struct pointer (`omitempty`)
-- `PlanState.Review` and its known sub-fields carry `omitempty`, but the block is seam-replaceable or seam-clearable and listed above.
-- Slice fields: `ExecutionRoot`, `Tags`, `Approval`, `Notes`, `VerificationResults`. `BlockerNote` also carries `omitempty`, but is seam-clearable and listed above.
-
-The four migrated groups are `Workspace.DependencyFailure`/`DependencyFingerprint`, `Slice.BlockerNote`, `State.Plan.CurrentSlice`, and the `PlanState.Review` block with its known sub-fields. All remaining fields in the table retain the tag-driven clear contract.
-
-Changing a tag-driven clearable field to `omitempty` requires migrating every writer to a typed seam clear in the same change; otherwise explicit-zero writes silently preserve stale data. Removing `omitempty` from a merge-only field is a deliberate schema extension. Both changes require contract coverage in `internal/plan/clearable_fields_test.go`.
+See [Typed clear-vs-preserve persistence seam](design/typed-clear-seam.md) for
+the field-specific validation limits, Go lowering seam, preserve-on-omission
+behavior, and typed-writer test coverage.
 
 ## Legacy / backward-compatibility (read-only)
 
@@ -439,6 +422,7 @@ Current well-known event types include:
 | `slice_blocked` | The selected slice and plan were marked blocked with the persisted reason. |
 | `slice_resume_attempted` | Agent handoff for an interrupted automatic slice was attempted. |
 | `slice_resume_failed` | Agent handoff for an interrupted automatic slice failed. |
+| `slice_restarted` | A blocked pre-intent slice was reset to pending after its baseline advanced; records the slice ID, prior execution root/branch/head, fresh baseline branch/head, and restart reason. |
 | `slice_removed` | Pending slice removed by `tao edit remove`. |
 | `slice_skipped` | Pending slice skipped by `tao edit skip`. |
 | `slices_reordered` | Pending queue reordered by `tao edit move`. |
@@ -455,49 +439,36 @@ Current well-known event types include:
 | `rework_round` | Authoritative evidence that an automatic rework round was atomically reopened. |
 | `rework_stopped` | Authoritative evidence that automatic rework stopped at a persisted safety bound. |
 | `final_verification` | Final repository verification result was recorded. |
+| `verification_repair_created` | A bounded repair slice was generated for the current failed final verification; records the generated slice ID, failed command and fingerprint, and the failed head in `reason`. |
 | `merge_verification` | Merge verification result was recorded. |
-| `plan_commit_fallback` | Plan-level commit fell back to the selected agent. |
-| `plan_commit_guard` | Plan-level leftover commit guard result was recorded. |
+| `plan_commit_fallback` | Historical/read-only signal that plan-level commit generation fell back to the selected agent; retained for compatible loading and insights, with no current producer. |
+| `plan_commit_guard` | Historical/read-only signal recording the plan-level leftover commit guard result; retained for compatible loading and insights, with no current producer. |
 | `agent_metrics` | Agent metrics from run attempts when available. |
 
 Legacy planning-session audit events may also appear in older local plans.
 
-A recurring-file `rework_stopped` event is written after the third consecutive
-`changes_requested` review and before another reopen when at least one normalized
-primary finding file appears in all three reviews. The current review is the
-third observation; the preceding two are reconstructed from the first
-`expected_files` entry of slices in the two immediately preceding generated
-rework rounds. Associated expected files do not count. Evidence must be safe,
-complete, and contiguous for generated rounds after the current rework baseline.
-The event's `reason` begins
-`automatic rework stalled on files recurring across three consecutive reviews: `
+A recurring-file `rework_stopped` event is written before another reopen when a
+normalized primary finding file appears in three consecutive
+`changes_requested` reviews after the current rework baseline. Its `reason`
+begins `automatic rework stalled on files recurring across three consecutive reviews: `
 and ends with a sorted JSON string array of the recurring paths. `round` and
-`attempts` describe the already-created rounds; the stop does not reopen the plan
-or append slices. Existing attempt-cap and exact-fingerprint checks retain their
-precedence. The plan remains `changes_requested`, and its current review and
-actionable findings remain the operator-facing source of truth.
+`attempts` describe rounds already created; the stop does not reopen the plan or
+append slices. Attempt-cap and exact-fingerprint stops retain precedence, and
+the plan remains `changes_requested` with its latest review intact.
 
-Direct and queued automatic rework use the same decision policy. Each new
-automatic round records `plan_reopened` followed by `rework_round` in the same
-journaled state/slices/events mutation. A successful rework decision is exposed
-only after that mutation settles. Queue snapshots are a later, separate progress
-boundary; interrupted recovery reconstructs attempts and the prior finding
-fingerprint from the settled plan before deciding whether another execution is
-needed. Plans created by older Tao versions may contain generated rework slices
-without a matching historical `rework_round`; those slices remain the compatible
-round-count source and do not require migration or authorize retroactive stops.
+Direct and queued rework use the same policy. A successful automatic round
+atomically records `plan_reopened`, `rework_round`, state, and generated slices.
+Once a stop is persisted, retries do not append another observation, and later
+runs require explicit `--rework-restart` to establish a fresh baseline and
+bounded window while retaining historical slices and ordinary gates.
 
-Queue snapshots persist the baseline and bounded progress, so interrupted
-recovery applies the third review as one terminal observation, settles the entry
-as failed, and does not execute or reopen the plan again. Once the stop event is
-persisted, recovery must not append a duplicate observation. A later run refuses a fresh budget
-unless `--rework-restart` is explicit; restart uses the current round as a new
-baseline/window while retaining all historical slices and ordinary gates.
-
-This adds no event or artifact field. Existing cap and equivalent-finding stop
-reasons remain readable. Legacy plans with missing, unsafe, associated-only, or
-incomplete generated-round evidence do not receive a retroactive recurring-file
-stop; they continue under the existing exact-fingerprint and attempt-cap bounds.
+This adds no event type or artifact field. Historical generated rework slices
+without matching `rework_round` events remain readable round-count evidence and
+are not migrated.
+Legacy evidence that is missing, unsafe, associated-only, or incomplete never
+authorizes a retroactive recurring-file stop; existing cap and
+equivalent-finding records also remain readable. Reconstruction and interrupted
+settlement mechanics live in [Plan Mutation Journal](plan-mutation-journal.md).
 
 A `slice_approved` event records the approved slice ID and timestamp. It is appended at most once per slice; repeated approvals are idempotent and preserve the original `approved_by` and `approved_at` metadata.
 
@@ -521,4 +492,4 @@ A `run_context` event includes the usual event fields plus `agent`, `run_packet_
 
 ## Local-Only Data
 
-Treat Tao data-home contents and workspace-local `.tao/` metadata as local-only. Do not commit plan artifacts, notes, or planning-session sidecars unless a task explicitly changes Tao plan state or prompt behavior and repository guidance says those artifacts are tracked.
+Tao data-home contents and workspace-local `.tao/` metadata are always local-only. Never commit plan artifacts, notes, runtime operation files, or planning-session sidecars. A task may explicitly require Tao commands to update local plan state, but that does not make those files repository content.

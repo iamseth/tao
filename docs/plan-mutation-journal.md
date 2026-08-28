@@ -140,6 +140,17 @@ same prepared byte slices are hashed into `.mutation.json` and later passed to
 atomic installation; targets must not be marshaled or merged again after the
 journal becomes durable.
 
+Blocked restart uses this seam as one multi-target mutation. Its typed
+`ClearSliceExecutionBoundary` intent lowers to `execution_root: ""` and
+`execution_start: null`; ordinary omission of those preserve-by-default fields
+leaves the stored boundary unchanged. A direct typed zero assignment without
+that restart intent is omitted and preserved, not promoted to a clear or
+rejected by a declaration validator. The prepared slices payload is journaled
+with the coupled state transition and `slice_restarted` event, so settlement
+cannot expose only part of the restart. See the
+[typed clear-vs-preserve design](design/typed-clear-seam.md) for the lowering and
+recovery mechanics.
+
 When present, `review.md` is prepared from the runtime's captured review output
 as one exact byte slice. It is not marshaled, deep-merged, JSON-validated, or
 newline-normalized; its hash binds those bytes, including an empty payload.
@@ -147,13 +158,29 @@ newline-normalized; its hash binds those bytes, including an empty payload.
 Event payloads are likewise marshaled once after assigning the transaction's
 mutation ID. Multiple events in one transaction may share that ID, but their
 payload hashes must be unique within the journal. Automatic rework uses this
-multi-event boundary to install the generated pending slices and the final state
-with `plan_reopened` followed by `rework_round`; callers publish a successful
-round only after the combined mutation settles. Queue progress is persisted
-separately and may lag this authoritative plan evidence after interruption.
-During recovery, an event is identified by the pair `(mutation_id, payload
-SHA-256)`, so a crash after appending only a prefix cannot cause either
-duplicates or skipped later events.
+multi-event boundary to install generated pending slices and final state with
+`plan_reopened` followed by `rework_round`; callers publish a successful round
+only after the combined mutation settles. During recovery, an event is
+identified by `(mutation_id, payload SHA-256)`, so a crash after appending only a
+prefix cannot cause duplicates or skipped later events.
+
+### Automatic rework reconstruction
+
+Queue progress is persisted after the authoritative plan mutation and may lag it
+after interruption. A recovering driver reconstructs attempts and prior-finding
+state from the settled plan before deciding whether execution is still needed.
+For the recurring-file window, the current review is the terminal observation;
+the preceding observations come from the first `expected_files` entry of slices
+in the two immediately preceding generated rounds. Associated expected files do
+not count, and generated-round evidence after the current baseline must be safe,
+complete, and contiguous. Queue recovery records that third observation once and
+must not execute or reopen after the corresponding `rework_stopped` event has
+settled.
+
+Historical generated slices without `rework_round` remain compatible round-count
+evidence, but incomplete, unsafe, or associated-only history never authorizes a
+retroactive recurring-file stop. This reconstruction does not add artifact
+fields or make queue snapshots lifecycle authority.
 
 ## Write and settlement order
 

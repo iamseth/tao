@@ -16,7 +16,9 @@ func NewArtifactChangeSet(detail *PlanDetail) *ArtifactChangeSet
 
 func (*ArtifactChangeSet) ClearWorkspaceDependencyFailure()
 func (*ArtifactChangeSet) ClearWorkspaceDependencyFingerprint()
+func (*ArtifactChangeSet) ClearWorkspaceRebaseIntent()
 func (*ArtifactChangeSet) ClearSliceBlockerNote(sliceID string) error
+func (*ArtifactChangeSet) ClearSliceExecutionBoundary(sliceID string) error
 func (*ArtifactChangeSet) ClearPlanCurrentSlice()
 func (*ArtifactChangeSet) ReplacePlanReview(review PlanReview) error
 func (*ArtifactChangeSet) ClearPlanReview()
@@ -28,7 +30,7 @@ Ordinary non-zero assignments may remain direct assignments. The clear methods a
 
 ### Rejected alternatives
 
-- **Derive clears from a before/after diff:** concise, but a zero value still ambiguously means either “clear” or “not supplied.” It would recreate an implicit contract, make stale-record rebases infer intent, and allow newly added zero-valued fields to become destructive without a writer decision. Diffs are used only to validate that a writer did not forget a declaration.
+- **Derive clears from a before/after diff:** concise, but a zero value still ambiguously means either “clear” or “not supplied.” It would recreate an implicit contract, make stale-record rebases infer intent, and allow newly added zero-valued fields to become destructive without a writer decision. Field-specific declaration validators use diffs only where implemented; they never infer clear intent.
 - **Typed `PlanRecord` methods for every clear:** strongly typed, but it pushes domain operations such as dependency preparation into a growing persistence API and does not naturally compose with atomic state+slices+events lifecycle mutations. The change set retains typed methods while remaining usable in every existing apply path.
 - **Generic string-path patch builder:** flexible but not typed. Renames would compile while silently targeting obsolete JSON keys, and callers could clear arbitrary schema locations. JSON paths remain private to the lowering code.
 
@@ -75,14 +77,14 @@ Consequently file-backed settlement and `artStoreAdapter`-backed settlement rece
 
 Each migrated field flips to `omitempty`, making it **preserve by default**:
 
-- `Workspace.DependencyFailure` and `Workspace.DependencyFingerprint`
-- `Slice.BlockerNote`
+- `Workspace.DependencyFailure`, `Workspace.DependencyFingerprint`, and `Workspace.RebaseIntent`
+- `Slice.BlockerNote`, `Slice.ExecutionRoot`, and `Slice.ExecutionStart`
 - `PlanState.CurrentSlice`
 - `PlanState.Review` and the known `PlanReview` fields covered by review replacement
 
 Readers remain unchanged, and the emitted explicit clear values are schema- and byte-compatible with current artifacts.
 
-A direct non-zero-to-zero transition of a migrated field without the matching change-set intent is an error before `prepareJSON`. The validator compares the writer baseline/intended values (not the concurrent settled result) and reports the typed field name and writer path. This diff is a guard only; it never manufactures clear intent. Since change-set clear methods both mutate and declare, normal callers cannot split those operations. Unit tests pin the validator so adding a migrated field to the lowering registry without its transition check fails. Per-writer regressions then catch a writer that accidentally keeps using direct zero assignment.
+Declaration validation is field-specific rather than a blanket registry guard. `validateStateChangeDeclarations` rejects undeclared non-zero-to-zero transitions for the migrated state and review fields, and `validateSlicesChangeDeclarations` does the same for `Slice.BlockerNote`; these checks compare the writer baseline and intended values before `prepareJSON` and never manufacture clear intent. The slices validator does not inspect `Slice.ExecutionRoot` or `Slice.ExecutionStart`. Directly zeroing either execution-boundary field without `ClearSliceExecutionBoundary` omits its `omitempty` key, so the deep merge preserves the stored value rather than clearing or rejecting it. The supported clear path is the typed blocked-restart operation, which records both intent and zero values before lowering them to explicit JSON.
 
 ## Migration order and writer coverage
 
@@ -97,7 +99,11 @@ Writers:
 
 The writer regression seeds a real `state.json` with a prior failure, fingerprint, and a nested unknown workspace key; runs the actual preparation/persistence path for a successful retry with unknown fingerprint; then asserts `dependency_preparation_failure: ""`, `dependency_fingerprint: ""`, and the unknown key unchanged. A companion adapter case compares prepared payload bytes.
 
-### 2. Blocker note
+### 2. Workspace rebase intent
+
+`PlanRecord.SettleWorkspaceRebase` and `PlanRecord.ClearWorkspaceRebaseIntent` require the exact recorded intent and declare `ArtifactChangeSet.ClearWorkspaceRebaseIntent`; ordinary nil state preserves it. Settlement writes the new base, HEAD, and lifecycle values in the same state mutation as `rebase_intent: null`. Regression coverage seeds unknown workspace keys and verifies preserve-only writes, exact-match clear/settlement, idempotent retries, and rejection of undeclared or mismatched clears.
+
+### 3. Blocker note
 
 Writer:
 
@@ -105,7 +111,13 @@ Writer:
 
 The regression seeds a blocked slice plus an unknown key on that slice, calls `ContinueBlocked`, and asserts `blocker_note: ""`, the lifecycle transition, and the unknown key unchanged. It also exercises recovered-mutation matching so retry does not append or journal duplicate work.
 
-### 3. Current slice
+### 4. Slice execution boundary
+
+`PlanRecord.RestartBlockedSlice` / `markBlockedSliceRestarted` declares `ArtifactChangeSet.ClearSliceExecutionBoundary` when an exact isolated pre-intent boundary is superseded on a newer baseline. The typed clear targets the slice by stable ID and emits `execution_root: ""` together with `execution_start: null`; ordinary empty/nil values omit those keys and preserve the stored boundary. The same artifact mutation retains the prior root, branch, and head in the `slice_restarted` event and preserves unknown per-slice keys.
+
+Regression coverage performs an exact blocked restart from a slice with both boundary fields and verifies that the persisted boundary is cleared, the slice returns to pending, and the event retains the prior boundary. Recovered-mutation coverage verifies that an exact retry settles without duplicate work while a changed boundary is rejected. This coverage exercises the typed writer and lowering path; it does not claim an undeclared-clear validator or an execution-boundary-specific unknown-field fixture.
+
+### 5. Current slice
 
 Writers:
 
@@ -115,7 +127,7 @@ Writers:
 
 Each distinct public writer shape gets a table case. The case seeds a non-null `plan.current_slice` and an unknown key under `plan`, invokes the public record operation, and asserts `current_slice: null` plus preservation of the unknown key. Completion also checks its coupled slices/event journal behavior; edit and reopen cases check their own lifecycle postconditions.
 
-### 4. Plan review block
+### 6. Plan review block
 
 Writers:
 
@@ -130,8 +142,9 @@ Regression cases first persist an approval containing findings, commit message, 
 `clearable_fields_test.go` remains the registry for fields that still depend on non-`omitempty` emission. After each group migrates:
 
 - remove that group's tag-driven “direct zero clears” round trip;
-- assert its JSON tag now contains `omitempty` and a preserve-only direct write does **not** erase the seeded value;
-- assert an undeclared non-zero-to-zero transition is rejected by the seam validator; and
+- pin its `omitempty` tag and, where a field-level test covers it, verify that a preserve-only direct write does **not** erase the seeded value;
+- for fields inspected by a declaration validator, assert an undeclared non-zero-to-zero transition is rejected;
+- for the execution-boundary pair, document the preserve-on-omission result and exercise the explicit clear through the blocked-restart writer and recovery tests, without implying validator or unknown-field-fixture coverage; and
 - leave the existing round trips intact for non-goal fields such as `LastRunCommitPolicy`, `LastRunStartingDirty`, and `MergeCommitIntent` until a follow-up plan migrates them.
 
-This mid-migration split prevents both regressions: migrated fields cannot silently fall back to tag-driven clearing, and unmigrated clearable fields cannot accidentally gain `omitempty` before they have typed writers.
+This mid-migration split prevents tag-driven clearing from returning and keeps unmigrated clearable fields from accidentally gaining `omitempty` before they have typed writers. Validator coverage remains limited to the fields those validators actually inspect.
