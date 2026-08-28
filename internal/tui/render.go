@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/note"
@@ -14,7 +13,7 @@ import (
 
 const (
 	clearScreenSequence = "\x1b[H\x1b[2J"
-	maxSliceIDRunes     = 20
+	maxSliceIDCells     = 20
 )
 
 // Model contains the render-neutral state for one UI frame.
@@ -178,7 +177,7 @@ func Render(model Model) string {
 	}
 	if model.Width > 0 {
 		for index := range lines {
-			lines[index] = truncateANSI(lines[index], model.Width)
+			lines[index] = truncateCells(lines[index], model.Width)
 		}
 	}
 	if model.ShowShortcuts {
@@ -290,15 +289,15 @@ func measureTable(sections []Section, now time.Time, actionLabels map[string]str
 	for _, section := range sections {
 		for _, row := range section.Rows {
 			values := tableRowValues(row, now, actionLabels[actionRowKey(row)])
-			widths.repo = max(widths.repo, utf8.RuneCountInString(values.repo))
-			widths.plan = max(widths.plan, utf8.RuneCountInString(values.plan))
-			widths.status = max(widths.status, utf8.RuneCountInString(values.status))
-			widths.next = max(widths.next, utf8.RuneCountInString(values.next))
-			widths.phase = max(widths.phase, utf8.RuneCountInString(values.phase))
-			widths.run = max(widths.run, utf8.RuneCountInString(values.run))
-			widths.slices = max(widths.slices, utf8.RuneCountInString(values.slices))
-			widths.updated = max(widths.updated, utf8.RuneCountInString(values.updated))
-			widths.attention = max(widths.attention, utf8.RuneCountInString(values.attention))
+			widths.repo = max(widths.repo, visibleWidth(values.repo))
+			widths.plan = max(widths.plan, visibleWidth(values.plan))
+			widths.status = max(widths.status, visibleWidth(values.status))
+			widths.next = max(widths.next, visibleWidth(values.next))
+			widths.phase = max(widths.phase, visibleWidth(values.phase))
+			widths.run = max(widths.run, visibleWidth(values.run))
+			widths.slices = max(widths.slices, visibleWidth(values.slices))
+			widths.updated = max(widths.updated, visibleWidth(values.updated))
+			widths.attention = max(widths.attention, visibleWidth(values.attention))
 		}
 	}
 	return widths
@@ -307,16 +306,16 @@ func measureTable(sections []Section, now time.Time, actionLabels map[string]str
 func renderHeader(widths tableWidths, withAttention bool) string {
 	updated := "UPDATED"
 	if withAttention {
-		updated = padRunes(updated, widths.updated)
+		updated = padCells(updated, widths.updated)
 	}
 	line := "  " + strings.Join([]string{
-		padRunes("REPO", widths.repo),
-		padRunes("PLAN", widths.plan),
-		padRunes("STATUS", widths.status),
-		padRunes("NEXT", widths.next),
-		padRunes("PHASE/SLICE", widths.phase),
-		padRunes("RUN AGE", widths.run),
-		padRunes("SLICES", widths.slices),
+		padCells("REPO", widths.repo),
+		padCells("PLAN", widths.plan),
+		padCells("STATUS", widths.status),
+		padCells("NEXT", widths.next),
+		padCells("PHASE/SLICE", widths.phase),
+		padCells("RUN AGE", widths.run),
+		padCells("SLICES", widths.slices),
 		updated,
 	}, "  ")
 	if withAttention {
@@ -331,22 +330,22 @@ func renderTableRow(row monitor.Row, now time.Time, widths tableWidths, withAtte
 	if selected {
 		cursor = "> "
 	}
-	status := padRunes(values.status, widths.status)
+	status := padCells(values.status, widths.status)
 	if useColor {
 		status = colorStatus(status, row.Status)
 	}
 	updated := values.updated
 	if withAttention {
-		updated = padRunes(updated, widths.updated)
+		updated = padCells(updated, widths.updated)
 	}
 	line := cursor + strings.Join([]string{
-		padRunes(values.repo, widths.repo),
-		padRunes(values.plan, widths.plan),
+		padCells(values.repo, widths.repo),
+		padCells(values.plan, widths.plan),
 		status,
-		padRunes(values.next, widths.next),
-		padRunes(values.phase, widths.phase),
-		padRunes(values.run, widths.run),
-		padRunes(values.slices, widths.slices),
+		padCells(values.next, widths.next),
+		padCells(values.phase, widths.phase),
+		padCells(values.run, widths.run),
+		padCells(values.slices, widths.slices),
 		updated,
 	}, "  ")
 	if withAttention {
@@ -441,11 +440,7 @@ func phaseLabel(row monitor.Row) string {
 	phase := strings.TrimSpace(string(row.Phase))
 	sliceID := strings.TrimSpace(row.SliceID)
 	if sliceID != "" && (phase == "" || phase == "running_slice") {
-		runes := []rune(sliceID)
-		if len(runes) > maxSliceIDRunes {
-			runes = runes[:maxSliceIDRunes]
-		}
-		return string(runes)
+		return truncateCells(sliceID, maxSliceIDCells)
 	}
 	return displayValue(phase)
 }
@@ -511,14 +506,6 @@ func displayValue(value string) string {
 	return value
 }
 
-func padRunes(value string, width int) string {
-	visible := utf8.RuneCountInString(value)
-	if visible >= width {
-		return value
-	}
-	return value + strings.Repeat(" ", width-visible)
-}
-
 func colorStatus(value, status string) string {
 	code := "35"
 	switch status {
@@ -534,41 +521,4 @@ func colorStatus(value, status string) string {
 		code = "33"
 	}
 	return "\x1b[" + code + "m" + value + "\x1b[0m"
-}
-
-func truncateANSI(value string, width int) string {
-	if width <= 0 {
-		return value
-	}
-	var result strings.Builder
-	visible := 0
-	styleActive := false
-	for index := 0; index < len(value); {
-		if value[index] == '\x1b' && index+1 < len(value) && value[index+1] == '[' {
-			end := index + 2
-			for end < len(value) && (value[end] < '@' || value[end] > '~') {
-				end++
-			}
-			if end < len(value) {
-				sequence := value[index : end+1]
-				result.WriteString(sequence)
-				if value[end] == 'm' {
-					styleActive = sequence != "\x1b[0m"
-				}
-				index = end + 1
-				continue
-			}
-		}
-		if visible >= width {
-			break
-		}
-		r, size := utf8.DecodeRuneInString(value[index:])
-		result.WriteRune(r)
-		visible++
-		index += size
-	}
-	if styleActive {
-		result.WriteString("\x1b[0m")
-	}
-	return result.String()
 }

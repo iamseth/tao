@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode/utf8"
 )
 
 // SettingsSnapshot is the read-only projection rendered by the Settings tab.
@@ -40,15 +39,15 @@ func renderSettingsPage(model Model) ([]string, int) {
 	if len(model.SettingsSnapshot.RuntimeDefaults) == 0 {
 		lines = append(lines, "  Runtime defaults unavailable.")
 	} else {
-		nameWidth := utf8.RuneCountInString("NAME")
-		valueWidth := utf8.RuneCountInString("VALUE")
+		nameWidth := visibleWidth("NAME")
+		valueWidth := visibleWidth("VALUE")
 		for _, row := range model.SettingsSnapshot.RuntimeDefaults {
-			nameWidth = max(nameWidth, utf8.RuneCountInString(row.Name))
-			valueWidth = max(valueWidth, utf8.RuneCountInString(row.Value))
+			nameWidth = max(nameWidth, visibleWidth(row.Name))
+			valueWidth = max(valueWidth, visibleWidth(row.Value))
 		}
-		lines = append(lines, "  "+padRunes("NAME", nameWidth)+"  "+padRunes("VALUE", valueWidth)+"  SOURCE")
+		lines = append(lines, "  "+padCells("NAME", nameWidth)+"  "+padCells("VALUE", valueWidth)+"  SOURCE")
 		for _, row := range model.SettingsSnapshot.RuntimeDefaults {
-			lines = append(lines, "  "+padRunes(singleLineDetail(row.Name), nameWidth)+"  "+padRunes(singleLineDetail(row.Value), valueWidth)+"  "+singleLineDetail(row.Source))
+			lines = append(lines, "  "+padCells(singleLineDetail(row.Name), nameWidth)+"  "+padCells(singleLineDetail(row.Value), valueWidth)+"  "+singleLineDetail(row.Source))
 			if row.Warning != "" {
 				lines = append(lines, "    warning: "+singleLineDetail(row.Warning))
 			}
@@ -64,15 +63,15 @@ func renderSettingsPage(model Model) ([]string, int) {
 		return lines, -1
 	}
 
-	nameWidth := utf8.RuneCountInString("REPOSITORY")
-	healthWidth := utf8.RuneCountInString("HEALTH")
-	pullRequestWidth := utf8.RuneCountInString("PULL_REQUEST")
+	nameWidth := visibleWidth("REPOSITORY")
+	healthWidth := visibleWidth("HEALTH")
+	pullRequestWidth := visibleWidth("PULL_REQUEST")
 	for _, repository := range model.SettingsSnapshot.Repositories {
-		nameWidth = max(nameWidth, utf8.RuneCountInString(settingsRepositoryName(repository)))
-		healthWidth = max(healthWidth, utf8.RuneCountInString(displayValue(repository.Health)))
-		pullRequestWidth = max(pullRequestWidth, utf8.RuneCountInString(pullRequestSetting(repository.PullRequest, model.SettingsSnapshot.InheritedPullRequest)))
+		nameWidth = max(nameWidth, visibleWidth(settingsRepositoryName(repository)))
+		healthWidth = max(healthWidth, visibleWidth(displayValue(repository.Health)))
+		pullRequestWidth = max(pullRequestWidth, visibleWidth(pullRequestSetting(repository.PullRequest, model.SettingsSnapshot.InheritedPullRequest)))
 	}
-	lines = append(lines, "  "+padRunes("REPOSITORY", nameWidth)+"  "+padRunes("HEALTH", healthWidth)+"  "+padRunes("PULL_REQUEST", pullRequestWidth)+"  ROOT")
+	lines = append(lines, "  "+padCells("REPOSITORY", nameWidth)+"  "+padCells("HEALTH", healthWidth)+"  "+padCells("PULL_REQUEST", pullRequestWidth)+"  ROOT")
 	selectedLine := -1
 	for index, repository := range model.SettingsSnapshot.Repositories {
 		cursor := "  "
@@ -80,9 +79,9 @@ func renderSettingsPage(model Model) ([]string, int) {
 			cursor = "> "
 			selectedLine = len(lines)
 		}
-		line := cursor + padRunes(settingsRepositoryName(repository), nameWidth) + "  " +
-			padRunes(displayValue(singleLineDetail(repository.Health)), healthWidth) + "  " +
-			padRunes(pullRequestSetting(repository.PullRequest, model.SettingsSnapshot.InheritedPullRequest), pullRequestWidth) + "  " +
+		line := cursor + padCells(settingsRepositoryName(repository), nameWidth) + "  " +
+			padCells(displayValue(singleLineDetail(repository.Health)), healthWidth) + "  " +
+			padCells(pullRequestSetting(repository.PullRequest, model.SettingsSnapshot.InheritedPullRequest), pullRequestWidth) + "  " +
 			displayValue(singleLineDetail(repository.Root))
 		lines = append(lines, line)
 		finding := strings.TrimSpace(repository.Finding)

@@ -1,9 +1,6 @@
 package tui
 
-import (
-	"strings"
-	"unicode/utf8"
-)
+import "strings"
 
 type shortcut struct {
 	key    string
@@ -90,7 +87,7 @@ func overlayShortcutTable(background []string, entries []shortcut, width, height
 	canvasWidth := width
 	if canvasWidth <= 0 {
 		for _, line := range background {
-			canvasWidth = max(canvasWidth, utf8.RuneCountInString(stripANSISequences(line)))
+			canvasWidth = max(canvasWidth, visibleWidth(line))
 		}
 		canvasWidth = max(canvasWidth, 60)
 	}
@@ -114,7 +111,7 @@ func overlayShortcutTable(background []string, entries []shortcut, width, height
 		if start+index >= len(background) {
 			break
 		}
-		lineWidth := utf8.RuneCountInString(stripANSISequences(line))
+		lineWidth := visibleWidth(line)
 		left := max(0, (canvasWidth-lineWidth)/2)
 		background[start+index] = strings.Repeat(" ", left) + line
 	}
@@ -126,22 +123,22 @@ func renderShortcutLegend(entries []shortcut, maxWidth, maxHeight int, useColor 
 		return nil
 	}
 	if maxWidth < 12 || maxHeight < 4 {
-		return []string{truncateANSI("[? shortcuts]", maxWidth)}
+		return []string{truncateCells("[? shortcuts]", maxWidth)}
 	}
 
 	if capacity := maxHeight - 6; capacity < len(entries) {
 		if capacity <= 0 {
-			return []string{truncateANSI("[Keyboard shortcuts]", maxWidth)}
+			return []string{truncateCells("[Keyboard shortcuts]", maxWidth)}
 		}
 		closeEntry := entries[len(entries)-1]
 		entries = append(append([]shortcut(nil), entries[:max(0, capacity-1)]...), closeEntry)
 	}
 
-	keyWidth := utf8.RuneCountInString("KEY")
-	actionWidth := utf8.RuneCountInString("ACTION")
+	keyWidth := visibleWidth("KEY")
+	actionWidth := visibleWidth("ACTION")
 	for _, entry := range entries {
-		keyWidth = max(keyWidth, utf8.RuneCountInString(entry.key))
-		actionWidth = max(actionWidth, utf8.RuneCountInString(entry.action))
+		keyWidth = max(keyWidth, visibleWidth(entry.key))
+		actionWidth = max(actionWidth, visibleWidth(entry.action))
 	}
 	const tableOverhead = 7
 	if keyWidth+actionWidth+tableOverhead > maxWidth {
@@ -153,8 +150,8 @@ func renderShortcutLegend(entries []shortcut, maxWidth, maxHeight int, useColor 
 	tableWidth := keyWidth + actionWidth + tableOverhead
 
 	horizontal := strings.Repeat("─", tableWidth-2)
-	title := truncatePlain("Keyboard shortcuts", tableWidth-4)
-	title = padRunes(title, tableWidth-4)
+	title := truncateCells("Keyboard shortcuts", tableWidth-4)
+	title = padCells(title, tableWidth-4)
 	if useColor {
 		title = "\x1b[1m" + title + "\x1b[0m"
 	}
@@ -173,45 +170,13 @@ func renderShortcutLegend(entries []shortcut, maxWidth, maxHeight int, useColor 
 }
 
 func shortcutTableRow(key, action string, keyWidth, actionWidth int, bold bool) string {
-	key = truncatePlain(key, keyWidth)
-	action = truncatePlain(action, actionWidth)
-	key = padRunes(key, keyWidth)
-	action = padRunes(action, actionWidth)
+	key = truncateCells(key, keyWidth)
+	action = truncateCells(action, actionWidth)
+	key = padCells(key, keyWidth)
+	action = padCells(action, actionWidth)
 	if bold {
 		key = "\x1b[1m" + key + "\x1b[0m"
 		action = "\x1b[1m" + action + "\x1b[0m"
 	}
 	return "│ " + key + " │ " + action + " │"
-}
-
-func truncatePlain(value string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	runes := []rune(value)
-	if len(runes) <= width {
-		return value
-	}
-	return string(runes[:width])
-}
-
-func stripANSISequences(value string) string {
-	var result strings.Builder
-	for index := 0; index < len(value); {
-		if value[index] == '\x1b' && index+1 < len(value) && value[index+1] == '[' {
-			index += 2
-			for index < len(value) {
-				final := value[index] >= '@' && value[index] <= '~'
-				index++
-				if final {
-					break
-				}
-			}
-			continue
-		}
-		r, size := utf8.DecodeRuneInString(value[index:])
-		result.WriteRune(r)
-		index += size
-	}
-	return result.String()
 }

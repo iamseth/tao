@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/plan"
@@ -103,6 +102,13 @@ func TestPhaseLabelRequiresLiveRunLockForStalledLabel(t *testing.T) {
 				t.Fatalf("phaseLabel() = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+func TestPhaseLabelTruncatesByCells(t *testing.T) {
+	got := phaseLabel(monitor.Row{Phase: "running_slice", SliceID: strings.Repeat("界", 11)})
+	if width := visibleWidth(got); width != maxSliceIDCells {
+		t.Fatalf("phaseLabel() width = %d, want %d: %q", width, maxSliceIDCells, got)
 	}
 }
 
@@ -212,7 +218,7 @@ func TestRenderConstrainedDimensionsKeepPageIdentity(t *testing.T) {
 		t.Fatalf("constrained frame = %#v, want truncated header with active page", lines)
 	}
 	for _, line := range lines {
-		if utf8.RuneCountInString(stripANSI(line)) > 18 {
+		if visibleWidth(line) > 18 {
 			t.Fatalf("constrained line exceeds width: %q", line)
 		}
 	}
@@ -316,7 +322,7 @@ func TestRenderPlanPreviewYieldsToTableSelectionAndConfirmation(t *testing.T) {
 		}
 	}
 	for _, line := range lines {
-		if width := utf8.RuneCountInString(stripANSI(line)); width > 36 {
+		if width := visibleWidth(line); width > 36 {
 			t.Fatalf("responsive line width = %d, want <= 36: %q", width, line)
 		}
 	}
@@ -330,9 +336,8 @@ func TestRenderNarrowWidthTruncatesRunesAndPreservesColor(t *testing.T) {
 	})
 	body := strings.TrimPrefix(got, clearScreenSequence)
 	for _, line := range strings.Split(strings.TrimSuffix(body, "\n"), "\n") {
-		plain := stripANSI(line)
-		if count := utf8.RuneCountInString(plain); count > 18 {
-			t.Fatalf("rendered line %q has %d visible runes, want at most 18", line, count)
+		if width := visibleWidth(line); width > 18 {
+			t.Fatalf("rendered line %q has %d visible cells, want at most 18", line, width)
 		}
 		if strings.Count(line, "\x1b[")%2 != 0 {
 			t.Fatalf("rendered line has an unterminated color sequence: %q", line)
@@ -373,7 +378,7 @@ func TestRenderShortcutLegendAsBoundedPopover(t *testing.T) {
 			t.Fatalf("%s shortcut popover lines = %d, want 18", test.page, len(lines))
 		}
 		for _, line := range lines {
-			if width := utf8.RuneCountInString(stripANSI(line)); width > 64 {
+			if width := visibleWidth(line); width > 64 {
 				t.Fatalf("%s shortcut line width = %d, want at most 64: %q", test.page, width, line)
 			}
 		}
@@ -426,18 +431,4 @@ func TestRenderBoundedViewportPreservesActionFooter(t *testing.T) {
 func renderedLines(frame string) []string {
 	body := strings.TrimPrefix(frame, clearScreenSequence)
 	return strings.Split(strings.TrimSuffix(body, "\n"), "\n")
-}
-
-func stripANSI(value string) string {
-	for {
-		start := strings.Index(value, "\x1b[")
-		if start < 0 {
-			return value
-		}
-		end := strings.IndexByte(value[start:], 'm')
-		if end < 0 {
-			return value[:start]
-		}
-		value = value[:start] + value[start+end+1:]
-	}
 }

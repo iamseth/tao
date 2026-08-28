@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 	"unicode"
-	"unicode/utf8"
 
 	"github.com/iamseth/tao/internal/agent/logrecord"
 	"github.com/iamseth/tao/internal/monitor"
@@ -129,7 +128,7 @@ func TestRenderSlicesPaneKeepsCurrentVisibleAtNarrowSizes(t *testing.T) {
 	if len(lines) != 1 || !strings.Contains(lines[0], "> ") {
 		t.Fatalf("narrow current slice lines = %q, want highlighted current line", lines)
 	}
-	if utf8.RuneCountInString(lines[0]) > 18 {
+	if visibleWidth(lines[0]) > 18 {
 		t.Fatalf("narrow slice line = %q, exceeds width", lines[0])
 	}
 }
@@ -156,8 +155,8 @@ func TestRenderLogPaneRendersFramesPassesPlainLinesAndPinsTail(t *testing.T) {
 		t.Fatalf("pinned log = %q, want newest two lines", got)
 	}
 	narrow := RenderLogPane("界界界界\n", 3, 1)
-	if len(narrow) != 1 || utf8.RuneCountInString(narrow[0]) != 3 {
-		t.Fatalf("narrow log = %q, want three runes", narrow)
+	if len(narrow) != 1 || visibleWidth(narrow[0]) > 3 {
+		t.Fatalf("narrow log = %q, want at most three cells", narrow)
 	}
 }
 
@@ -211,7 +210,7 @@ func TestRenderDetailIncludesHeaderAndFitsTerminal(t *testing.T) {
 		t.Fatalf("detail frame has %d lines, want at most 18", len(lines))
 	}
 	for _, line := range lines {
-		if utf8.RuneCountInString(line) > 100 {
+		if visibleWidth(line) > 100 {
 			t.Fatalf("detail line %q exceeds width", line)
 		}
 	}
@@ -279,7 +278,7 @@ func TestRenderDetailTabsShowBoundedOverviewSlicesAndActivity(t *testing.T) {
 	}
 	for _, frame := range []string{overview, slices, activity} {
 		for _, line := range renderedLines(frame) {
-			if utf8.RuneCountInString(line) > 72 {
+			if visibleWidth(line) > 72 {
 				t.Fatalf("tab frame line exceeds terminal width: %q", line)
 			}
 		}
@@ -410,7 +409,7 @@ func TestRenderSliceDetailShowsUsefulFieldsAndOmitsEmptyOnNarrowTerminal(t *test
 		t.Fatalf("narrow slice frame lines=%d trailing-newline=%t:\n%s", len(lines), strings.HasSuffix(narrow, "\n"), narrow)
 	}
 	for _, line := range lines {
-		if utf8.RuneCountInString(line) > 18 {
+		if visibleWidth(line) > 18 {
 			t.Fatalf("narrow slice detail line %q exceeds width", line)
 		}
 	}

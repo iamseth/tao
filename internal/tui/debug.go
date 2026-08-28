@@ -5,7 +5,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/note"
@@ -93,15 +92,15 @@ func renderDebugPage(model Model) []string {
 	if len(model.DebugSnapshot.RuntimeDefaults) == 0 {
 		lines = append(lines, "  Runtime defaults unavailable.")
 	} else {
-		nameWidth := utf8.RuneCountInString("NAME")
-		valueWidth := utf8.RuneCountInString("VALUE")
+		nameWidth := visibleWidth("NAME")
+		valueWidth := visibleWidth("VALUE")
 		for _, row := range model.DebugSnapshot.RuntimeDefaults {
-			nameWidth = max(nameWidth, utf8.RuneCountInString(row.Name))
-			valueWidth = max(valueWidth, utf8.RuneCountInString(row.Value))
+			nameWidth = max(nameWidth, visibleWidth(row.Name))
+			valueWidth = max(valueWidth, visibleWidth(row.Value))
 		}
-		lines = append(lines, "  "+padRunes("NAME", nameWidth)+"  "+padRunes("VALUE", valueWidth)+"  SOURCE")
+		lines = append(lines, "  "+padCells("NAME", nameWidth)+"  "+padCells("VALUE", valueWidth)+"  SOURCE")
 		for _, row := range model.DebugSnapshot.RuntimeDefaults {
-			lines = append(lines, "  "+padRunes(singleLineDetail(row.Name), nameWidth)+"  "+padRunes(singleLineDetail(row.Value), valueWidth)+"  "+singleLineDetail(row.Source))
+			lines = append(lines, "  "+padCells(singleLineDetail(row.Name), nameWidth)+"  "+padCells(singleLineDetail(row.Value), valueWidth)+"  "+singleLineDetail(row.Source))
 			if row.Warning != "" {
 				lines = append(lines, "    warning: "+singleLineDetail(row.Warning))
 			}

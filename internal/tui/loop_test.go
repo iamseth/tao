@@ -247,7 +247,7 @@ func TestRunRefreshesAndHandlesResize(t *testing.T) {
 		t.Fatalf("resized frame has %d lines, want at most 6: %q", len(lines), resized)
 	}
 	for _, line := range lines {
-		if len([]rune(line)) > 10 {
+		if visibleWidth(line) > 10 {
 			t.Fatalf("resized frame line %q exceeds new width", line)
 		}
 	}

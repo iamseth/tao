@@ -3,11 +3,13 @@ package tuipreview
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -124,6 +126,29 @@ func TestRenderEveryViewIsDeterministicAndBounded(t *testing.T) {
 			}
 			assertBoundedFrame(t, first, 72, 18)
 		})
+	}
+}
+
+func TestStressViewsAreCellBoundedAcrossWidths(t *testing.T) {
+	scenario, _ := Lookup(ScenarioStress)
+	for _, width := range []int{199, 120, 100, 80, 70} {
+		for _, view := range Views() {
+			t.Run(fmt.Sprintf("%s/%d", view, width), func(t *testing.T) {
+				frame, err := Render(scenario, RenderOptions{
+					View: view, Width: width, Height: 30, Plain: true, Color: true,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertBoundedFrame(t, frame, width, 30)
+				switch view {
+				case ViewPlans:
+					assertUnicodeTableAlignment(t, frame, "REPO", "PLAN", "stress-")
+				case ViewNotes:
+					assertUnicodeTableAlignment(t, frame, "REPO", "NOTE", "stress-note-")
+				}
+			})
+		}
 	}
 }
 
@@ -307,11 +332,81 @@ func assertBoundedFrame(t *testing.T, frame string, width, height int) {
 		t.Fatalf("frame has %d lines, height is %d:\n%s", len(lines), height, frame)
 	}
 	for _, line := range lines {
-		plain := stripCSI(line)
-		if got := utf8.RuneCountInString(plain); got > width {
-			t.Fatalf("frame line has %d runes, width is %d: %q", got, width, line)
+		if got := fixtureVisibleWidth(line); got > width {
+			t.Fatalf("frame line has %d visible cells, width is %d: %q", got, width, line)
 		}
 	}
+}
+
+func assertUnicodeTableAlignment(t *testing.T, frame, firstHeader, secondHeader, rowSecond string) {
+	t.Helper()
+	lines := strings.Split(strings.TrimSuffix(frame, "\n"), "\n")
+	var header string
+	for _, line := range lines {
+		plain := stripCSI(line)
+		if strings.Contains(plain, firstHeader) && strings.Contains(plain, secondHeader) {
+			header = plain
+			break
+		}
+	}
+	if header == "" {
+		t.Fatalf("frame has no %s/%s table header:\n%s", firstHeader, secondHeader, frame)
+	}
+	firstStart := fixtureCellOffset(t, header, firstHeader)
+	secondStart := fixtureCellOffset(t, header, secondHeader)
+	seen := make(map[string]bool)
+	for _, line := range lines {
+		plain := stripCSI(line)
+		if !strings.Contains(plain, rowSecond) {
+			continue
+		}
+		for _, repository := range []string{"日本語リポジトリ", "emoji-🧭-workspace", "combining-é-repo"} {
+			if !strings.Contains(plain, repository) {
+				continue
+			}
+			seen[repository] = true
+			if got := fixtureCellOffset(t, plain, repository); got != firstStart {
+				t.Errorf("%s row starts at cell %d, %s header starts at %d: %q", repository, got, firstHeader, firstStart, plain)
+			}
+			if got := fixtureCellOffset(t, plain, rowSecond); got != secondStart {
+				t.Errorf("%s row %s column starts at cell %d, header starts at %d: %q", repository, secondHeader, got, secondStart, plain)
+			}
+		}
+	}
+	for _, repository := range []string{"日本語リポジトリ", "emoji-🧭-workspace", "combining-é-repo"} {
+		if !seen[repository] {
+			t.Errorf("frame has no visible %s table row for %q", secondHeader, repository)
+		}
+	}
+}
+
+func fixtureCellOffset(t *testing.T, line, marker string) int {
+	t.Helper()
+	index := strings.Index(line, marker)
+	if index < 0 {
+		t.Fatalf("line has no marker %q: %q", marker, line)
+	}
+	return fixtureVisibleWidth(line[:index])
+}
+
+func fixtureVisibleWidth(value string) int {
+	width := 0
+	for _, r := range stripCSI(value) {
+		switch {
+		case r == 0 || unicode.IsControl(r) || unicode.In(r, unicode.Mn, unicode.Me, unicode.Cf):
+			continue
+		case r >= 0x1100 && (r <= 0x115F || r == 0x2329 || r == 0x232A ||
+			(r >= 0x2E80 && r <= 0xA4CF) || (r >= 0xAC00 && r <= 0xD7A3) ||
+			(r >= 0xF900 && r <= 0xFAFF) || (r >= 0xFE10 && r <= 0xFE19) ||
+			(r >= 0xFE30 && r <= 0xFE6F) || (r >= 0xFF00 && r <= 0xFF60) ||
+			(r >= 0xFFE0 && r <= 0xFFE6) || (r >= 0x1F000 && r <= 0x1FAFF) ||
+			(r >= 0x20000 && r <= 0x3FFFD)):
+			width += 2
+		default:
+			width++
+		}
+	}
+	return width
 }
 
 func stripCSI(value string) string {

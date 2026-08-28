@@ -226,7 +226,7 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 			}
 			state.detail.inspectionUpdates = nil
 			if update.err != nil {
-				state.detail.inspection = detailInspectionView{status: detailInspectionFailed, err: truncatePlain(singleLineDetail(update.err.Error()), detailInspectionMaxText)}
+				state.detail.inspection = detailInspectionView{status: detailInspectionFailed, err: truncateCells(singleLineDetail(update.err.Error()), detailInspectionMaxText)}
 			} else {
 				result := boundedDetailInspection(update.result)
 				state.detail.inspection = detailInspectionView{status: detailInspectionReady, findings: result.Findings}

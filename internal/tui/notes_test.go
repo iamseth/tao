@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 	"unicode"
-	"unicode/utf8"
 
 	"github.com/iamseth/tao/internal/note"
 )
@@ -44,6 +43,24 @@ func TestRenderNotesRowsWarningsFocusAndSanitization(t *testing.T) {
 	}
 }
 
+func TestBoundedNoteValueTruncatesByCells(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value string
+		limit int
+		want  string
+	}{
+		{name: "wide", value: "日本語", limit: 5, want: "日本…"},
+		{name: "combining", value: "e\u0301abcdef", limit: 4, want: "e\u0301ab…"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := boundedNoteValue(test.value, test.limit); got != test.want {
+				t.Fatalf("boundedNoteValue(%q, %d) = %q, want %q", test.value, test.limit, got, test.want)
+			}
+		})
+	}
+}
+
 func TestRenderNotesEmptyAndSelectedViewport(t *testing.T) {
 	empty := Render(Model{Page: PageNotes, NoteSnapshot: note.Snapshot{Warnings: []note.CatalogWarning{{RepositoryID: "repo", RepositoryName: "repo", Err: errors.New("unreadable")}}}})
 	if !strings.Contains(empty, "0 open notes") || !strings.Contains(empty, "No open notes") || !strings.Contains(empty, "unreadable") {
@@ -60,7 +77,7 @@ func TestRenderNotesEmptyAndSelectedViewport(t *testing.T) {
 		t.Fatalf("notes viewport lost selection: %#v", lines)
 	}
 	for _, line := range lines {
-		if utf8.RuneCountInString(stripANSI(line)) > 34 {
+		if visibleWidth(line) > 34 {
 			t.Fatalf("notes viewport line exceeds width: %q", line)
 		}
 	}

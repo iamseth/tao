@@ -61,8 +61,8 @@ type detailInspectionUpdate struct {
 func boundedDetailInspection(result DetailInspection) DetailInspection {
 	bounded := DetailInspection{Findings: make([]DetailFinding, 0, min(len(result.Findings), detailInspectionMaxFindings))}
 	for _, finding := range result.Findings {
-		severity := truncatePlain(singleLineDetail(finding.Severity), 24)
-		message := truncatePlain(singleLineDetail(finding.Message), detailInspectionMaxText)
+		severity := truncateCells(singleLineDetail(finding.Severity), 24)
+		message := truncateCells(singleLineDetail(finding.Message), detailInspectionMaxText)
 		if message == "" {
 			continue
 		}
