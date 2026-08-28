@@ -2,6 +2,7 @@ package gitops
 
 import (
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -35,6 +36,15 @@ func PorcelainPath(line string) (string, bool) {
 	status := line[:2]
 	path := strings.TrimSpace(line[3:])
 	if strings.ContainsAny(status, "RC") || strings.Contains(path, " -> ") || path == "" {
+		return "", true
+	}
+	if strings.HasPrefix(path, `"`) {
+		decoded, err := strconv.Unquote(path)
+		if err != nil {
+			return "", true
+		}
+		path = decoded
+	} else if strings.Contains(path, `"`) {
 		return "", true
 	}
 	return filepath.ToSlash(path), false
