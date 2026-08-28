@@ -30,8 +30,8 @@ Sequence: -
 Slice scope: -
 Relationships: -
 `
-	colored := strings.Replace(plain, "Plans", "\x1b[1mPlans\x1b[0m", 1)
-	colored = strings.Replace(colored, "planned  RUN", "\x1b[33mplanned\x1b[0m  RUN", 1)
+	colored := strings.Replace(plain, "Plans", Paint(ProfileTrueColor, RoleNeutral5, "Plans"), 1)
+	colored = strings.Replace(colored, "planned  RUN", Paint(ProfileTrueColor, RoleWarn, "planned")+"  RUN", 1)
 	tests := []struct {
 		name     string
 		useColor bool
@@ -42,7 +42,11 @@ Relationships: -
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := Render(Model{Snapshot: snapshot, UseColor: test.useColor})
+			profile := ProfileNone
+			if test.useColor {
+				profile = ProfileTrueColor
+			}
+			got := Render(Model{Snapshot: snapshot, Profile: profile})
 			if got != test.want {
 				t.Fatalf("Render() mismatch\nwant:\n%q\n got:\n%q", test.want, got)
 			}
@@ -199,12 +203,12 @@ func TestRenderHeaderTracksActivePage(t *testing.T) {
 		page PageID
 		want string
 	}{
-		{page: PagePlans, want: "Tao UI | \x1b[1mPlans\x1b[0m | Repositories: all | 1 plan"},
-		{page: PageNotes, want: "Tao UI | \x1b[1mNotes\x1b[0m | Repositories: all | 0 open notes"},
-		{page: PageSettings, want: "Tao UI | \x1b[1mSettings\x1b[0m | 0 repositories"},
-		{page: PageDebug, want: "Tao UI | \x1b[1mDebug\x1b[0m | diagnostics"},
+		{page: PagePlans, want: "Tao UI | " + Paint(ProfileTrueColor, RoleNeutral5, "Plans") + " | Repositories: all | 1 plan"},
+		{page: PageNotes, want: "Tao UI | " + Paint(ProfileTrueColor, RoleNeutral5, "Notes") + " | Repositories: all | 0 open notes"},
+		{page: PageSettings, want: "Tao UI | " + Paint(ProfileTrueColor, RoleNeutral5, "Settings") + " | 0 repositories"},
+		{page: PageDebug, want: "Tao UI | " + Paint(ProfileTrueColor, RoleNeutral5, "Debug") + " | diagnostics"},
 	} {
-		got := Render(Model{Snapshot: snapshot, Page: test.page, UseColor: true})
+		got := Render(Model{Snapshot: snapshot, Page: test.page, Profile: ProfileTrueColor})
 		if !strings.Contains(got, test.want) || strings.Contains(got, "[Plans]") || strings.Contains(got, "[Notes]") {
 			t.Fatalf("colored header for %s missing bold active page or retained tab line:\n%q", test.page, got)
 		}
@@ -332,7 +336,7 @@ func TestRenderNarrowWidthTruncatesRunesAndPreservesColor(t *testing.T) {
 	got := Render(Model{
 		Snapshot: monitor.Snapshot{Rows: []monitor.Row{{RepositoryName: "répo", PlanID: "plan", Status: plan.StatusPlanned}}},
 		Width:    18,
-		UseColor: true,
+		Profile:  ProfileTrueColor,
 	})
 	body := strings.TrimPrefix(got, clearScreenSequence)
 	for _, line := range strings.Split(strings.TrimSuffix(body, "\n"), "\n") {
@@ -343,7 +347,7 @@ func TestRenderNarrowWidthTruncatesRunesAndPreservesColor(t *testing.T) {
 			t.Fatalf("rendered line has an unterminated color sequence: %q", line)
 		}
 	}
-	if !strings.Contains(got, "\x1b[33mplan\x1b[0m") {
+	if !strings.Contains(got, Paint(ProfileTrueColor, RoleWarn, "plan")) {
 		t.Fatalf("narrow colored status was not safely truncated: %q", got)
 	}
 }
@@ -364,7 +368,7 @@ func TestRenderShortcutLegendAsBoundedPopover(t *testing.T) {
 			unavailable: "Run selected plan",
 		},
 	} {
-		frame := Render(Model{Page: test.page, ShowShortcuts: true, Width: 64, Height: 18, UseColor: true})
+		frame := Render(Model{Page: test.page, ShowShortcuts: true, Width: 64, Height: 18, Profile: ProfileTrueColor})
 		for _, want := range test.want {
 			if !strings.Contains(frame, want) {
 				t.Fatalf("%s shortcut popover missing %q:\n%s", test.page, want, frame)

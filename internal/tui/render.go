@@ -30,7 +30,7 @@ type Model struct {
 	HideCompleted       bool
 	FocusRepositoryID   string
 	FocusRepositoryName string
-	UseColor            bool
+	Profile             Profile
 	ShowShortcuts       bool
 	SearchQuery         string
 	SearchActive        bool
@@ -84,10 +84,7 @@ func Render(model Model) string {
 		focusLabel = "Repository: " + name
 	}
 
-	activePageLabel := pageLabel(page)
-	if model.UseColor {
-		activePageLabel = "\x1b[1m" + activePageLabel + "\x1b[0m"
-	}
+	activePageLabel := Paint(model.Profile, RoleNeutral5, pageLabel(page))
 	header := fmt.Sprintf("Tao UI | %s | %s", activePageLabel, focusLabel)
 	switch page {
 	case PagePlans:
@@ -127,7 +124,7 @@ func Render(model Model) string {
 		if now.IsZero() {
 			now = time.Now()
 		}
-		noteLines, noteSelectedLine := renderNotesPage(noteSnapshot, model.Selected, model.FocusRepositoryID, now, model.UseColor)
+		noteLines, noteSelectedLine := renderNotesPage(noteSnapshot, model.Selected, model.FocusRepositoryID, now, model.Profile)
 		selectedLine = len(lines) + noteSelectedLine
 		if noteSelectedLine < 0 {
 			selectedLine = -1
@@ -151,7 +148,7 @@ func Render(model Model) string {
 					selectedRow = row
 					hasSelectedRow = true
 				}
-				lines = append(lines, renderTableRow(row, model.Snapshot.CollectedAt, widths, section.Kind == SectionAttention, selected == model.Selected, model.UseColor, model.ActionLabels[actionRowKey(row)]))
+				lines = append(lines, renderTableRow(row, model.Snapshot.CollectedAt, widths, section.Kind == SectionAttention, selected == model.Selected, model.Profile, model.ActionLabels[actionRowKey(row)]))
 				selected++
 			}
 		}
@@ -181,7 +178,7 @@ func Render(model Model) string {
 		}
 	}
 	if model.ShowShortcuts {
-		lines = overlayShortcutLegend(lines, page, model.Width, model.Height, model.UseColor)
+		lines = overlayShortcutLegend(lines, page, model.Width, model.Height, model.Profile)
 	}
 	frame := clearScreenSequence + strings.Join(lines, "\n")
 	if model.Height <= 0 || len(lines) < model.Height {
@@ -324,16 +321,14 @@ func renderHeader(widths tableWidths, withAttention bool) string {
 	return line
 }
 
-func renderTableRow(row monitor.Row, now time.Time, widths tableWidths, withAttention, selected, useColor bool, actionLabel string) string {
+func renderTableRow(row monitor.Row, now time.Time, widths tableWidths, withAttention, selected bool, profile Profile, actionLabel string) string {
 	values := tableRowValues(row, now, actionLabel)
 	cursor := "  "
 	if selected {
 		cursor = "> "
 	}
 	status := padCells(values.status, widths.status)
-	if useColor {
-		status = colorStatus(status, row.Status)
-	}
+	status = colorStatus(profile, status, row.Status)
 	updated := values.updated
 	if withAttention {
 		updated = padCells(updated, widths.updated)
@@ -506,19 +501,15 @@ func displayValue(value string) string {
 	return value
 }
 
-func colorStatus(value, status string) string {
-	code := "35"
+func colorStatus(profile Profile, value, status string) string {
+	role := RoleRepo
 	switch status {
 	case plan.StatusCompleted, plan.StatusReviewed:
-		code = "32"
+		role = RoleSuccess
 	case plan.StatusInProgress:
-		code = "36"
-	case plan.StatusInReview:
-		code = "34"
-	case plan.StatusBlocked:
-		code = "31"
-	case plan.StatusPlanned, plan.StatusPending, plan.StatusChangesRequested:
-		code = "33"
+		role = RoleAccent
+	case plan.StatusBlocked, plan.StatusPlanned, plan.StatusPending, plan.StatusChangesRequested:
+		role = RoleWarn
 	}
-	return "\x1b[" + code + "m" + value + "\x1b[0m"
+	return Paint(profile, role, value)
 }

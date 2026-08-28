@@ -940,24 +940,28 @@ func TestQQuitsGloballyButDeclinesConfirmation(t *testing.T) {
 	}
 }
 
-func TestOutputSupportsColorHonorsEnvironmentAndTerminal(t *testing.T) {
+func TestOutputSupportsColorResolvesProfileFromEnvironmentAndTerminal(t *testing.T) {
 	writer := terminalRecordingWriter{terminal: true}
 	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("COLORTERM", "")
+	t.Setenv("CLICOLOR", "")
+	t.Setenv("CLICOLOR_FORCE", "")
 	t.Setenv("NO_COLOR", "")
-	if !outputSupportsColor(writer) {
-		t.Fatal("terminal output should support color")
+	if got := outputSupportsColor(writer); got != ProfileANSI256 {
+		t.Fatalf("terminal profile = %s, want %s", got, ProfileANSI256)
 	}
 	t.Setenv("NO_COLOR", "1")
-	if outputSupportsColor(writer) {
-		t.Fatal("NO_COLOR should disable color")
+	if got := outputSupportsColor(writer); got != ProfileNone {
+		t.Fatalf("NO_COLOR profile = %s, want none", got)
 	}
 	t.Setenv("NO_COLOR", "")
 	t.Setenv("TERM", "dumb")
-	if outputSupportsColor(writer) {
-		t.Fatal("TERM=dumb should disable color")
+	if got := outputSupportsColor(writer); got != ProfileNone {
+		t.Fatalf("dumb terminal profile = %s, want none", got)
 	}
-	if outputSupportsColor(&recordingWriter{writes: make(chan string, 1)}) {
-		t.Fatal("non-terminal output should disable color")
+	t.Setenv("TERM", "xterm-256color")
+	if got := outputSupportsColor(&recordingWriter{writes: make(chan string, 1)}); got != ProfileNone {
+		t.Fatalf("non-terminal profile = %s, want none", got)
 	}
 }
 

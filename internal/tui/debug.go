@@ -48,7 +48,7 @@ func renderDebugPage(model Model) []string {
 	var lines []string
 	lines = append(lines, "", "UI")
 	appendDebugValue(&lines, "viewport", fmt.Sprintf("%dx%d", model.Width, model.Height))
-	appendDebugValue(&lines, "color", fmt.Sprintf("%t", model.UseColor))
+	appendDebugValue(&lines, "color", model.Profile.String())
 	appendDebugValue(&lines, "repository focus", debugFocusLabel(model))
 	appendDebugValue(&lines, "search", displayValue(normalizedSearchQuery(model.SearchQuery)))
 	appendDebugValue(&lines, "completed visible", fmt.Sprintf("%t", !model.HideCompleted))

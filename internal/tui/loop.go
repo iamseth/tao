@@ -91,7 +91,7 @@ type loopState struct {
 	focusRepositoryID   string
 	focusRepositoryName string
 	focusRepositoryRoot string
-	useColor            bool
+	profile             Profile
 	showShortcuts       bool
 	searchQuery         string
 	searchActive        bool
@@ -169,7 +169,7 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 		debugSnapshot:    debugSnapshot,
 		settingsSnapshot: settingsSnapshot,
 		size:             size,
-		useColor:         outputSupportsColor(a.Output),
+		profile:          outputSupportsColor(a.Output),
 		now:              a.Now,
 	}
 	state.clampSelection()
@@ -363,7 +363,7 @@ func (a App) writeFrame(state loopState) error {
 			SliceOffset:     state.detail.sliceOffset,
 			Width:           state.size.Width,
 			Height:          state.size.Height,
-			UseColor:        state.useColor,
+			UseColor:        state.profile.supportsColor(),
 			ShowShortcuts:   state.showShortcuts,
 			LoadError:       state.detail.loadError,
 			FollowError:     state.detail.followError,
@@ -383,7 +383,7 @@ func (a App) writeFrame(state loopState) error {
 			HideCompleted:       !state.showCompleted,
 			FocusRepositoryID:   state.focusRepositoryID,
 			FocusRepositoryName: state.focusRepositoryName,
-			UseColor:            state.useColor,
+			Profile:             state.profile,
 			ShowShortcuts:       state.showShortcuts,
 			SearchQuery:         state.searchQuery,
 			SearchActive:        state.searchActive,
@@ -1283,7 +1283,7 @@ func (s loopState) debugPageMaxOffset() int {
 		DebugSnapshot:       s.debugSnapshot,
 		Width:               s.size.Width,
 		Height:              s.size.Height,
-		UseColor:            s.useColor,
+		Profile:             s.profile,
 		HideCompleted:       !s.showCompleted,
 		SearchQuery:         s.searchQuery,
 		SearchActive:        s.searchActive,
@@ -1300,19 +1300,15 @@ type colorTerminalWriter interface {
 	IsTerminal() bool
 }
 
-func outputSupportsColor(output io.Writer) bool {
-	if os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
-		return false
-	}
+func outputSupportsColor(output io.Writer) Profile {
+	isTerminal := false
 	if terminal, ok := output.(colorTerminalWriter); ok {
-		return terminal.IsTerminal()
+		isTerminal = terminal.IsTerminal()
+	} else if file, ok := output.(*os.File); ok {
+		info, err := file.Stat()
+		isTerminal = err == nil && info.Mode()&os.ModeCharDevice != 0
 	}
-	file, ok := output.(*os.File)
-	if !ok {
-		return false
-	}
-	info, err := file.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
+	return detectProfile(isTerminal, os.Getenv)
 }
 
 func restoreTerminalState(terminal Terminal, output io.Writer) error {

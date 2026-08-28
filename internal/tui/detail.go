@@ -625,9 +625,7 @@ func renderSlicesPane(detail *plan.PlanDetail, selectedID string, width, height 
 			selectedLine = len(lines)
 		}
 		status := padCells(displayValue(slice.Status), statusWidth)
-		if useColor {
-			status = colorStatus(status, slice.Status)
-		}
+		status = colorStatus(profileForEnabledColor(useColor), status, slice.Status)
 		id := padCells(displayValue(slice.ID), idWidth)
 		line := cursor + status + "  " + id + "  " + displayValue(slice.Title)
 		if marker := approvalMarker(slice.Approval); marker != "" {

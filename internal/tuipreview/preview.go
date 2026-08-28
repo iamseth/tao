@@ -255,6 +255,11 @@ func Render(scenario Scenario, options RenderOptions) (string, error) {
 		return "", errors.New("preview selection must not be negative")
 	}
 
+	profile := tui.ProfileNone
+	if options.Color {
+		profile = tui.ProfileTrueColor
+	}
+
 	var frame string
 	switch options.View {
 	case ViewPlans:
@@ -265,7 +270,7 @@ func Render(scenario Scenario, options RenderOptions) (string, error) {
 		frame = tui.Render(tui.Model{
 			Snapshot: scenario.Snapshot, Page: tui.PagePlans, Selected: options.Selection,
 			Width: options.Width, Height: options.Height, Now: scenario.Now,
-			HideCompleted: options.HideCompleted, UseColor: options.Color, ShowShortcuts: options.ShowShortcuts, SearchQuery: options.SearchQuery,
+			HideCompleted: options.HideCompleted, Profile: profile, ShowShortcuts: options.ShowShortcuts, SearchQuery: options.SearchQuery,
 		})
 	case ViewNotes:
 		filteredNotes := tui.FilterNoteSnapshot(scenario.Notes, options.SearchQuery)
@@ -275,7 +280,7 @@ func Render(scenario Scenario, options RenderOptions) (string, error) {
 		frame = tui.Render(tui.Model{
 			Snapshot: scenario.Snapshot, NoteSnapshot: scenario.Notes, Page: tui.PageNotes,
 			Selected: options.Selection, Width: options.Width, Height: options.Height,
-			Now: scenario.Now, UseColor: options.Color, ShowShortcuts: options.ShowShortcuts, SearchQuery: options.SearchQuery,
+			Now: scenario.Now, Profile: profile, ShowShortcuts: options.ShowShortcuts, SearchQuery: options.SearchQuery,
 		})
 	case ViewSettings:
 		if options.SearchQuery != "" {
@@ -286,7 +291,7 @@ func Render(scenario Scenario, options RenderOptions) (string, error) {
 		}
 		frame = tui.Render(tui.Model{
 			SettingsSnapshot: scenario.Settings, Page: tui.PageSettings, Selected: options.Selection,
-			Width: options.Width, Height: options.Height, Now: scenario.Now, UseColor: options.Color, ShowShortcuts: options.ShowShortcuts,
+			Width: options.Width, Height: options.Height, Now: scenario.Now, Profile: profile, ShowShortcuts: options.ShowShortcuts,
 		})
 	case ViewDebug:
 		if options.SearchQuery != "" {
@@ -294,7 +299,7 @@ func Render(scenario Scenario, options RenderOptions) (string, error) {
 		}
 		frame = tui.Render(tui.Model{
 			Snapshot: scenario.Snapshot, NoteSnapshot: scenario.Notes, DebugSnapshot: scenario.Debug, Page: tui.PageDebug,
-			Width: options.Width, Height: options.Height, Now: scenario.Now, UseColor: options.Color, ShowShortcuts: options.ShowShortcuts,
+			Width: options.Width, Height: options.Height, Now: scenario.Now, Profile: profile, ShowShortcuts: options.ShowShortcuts,
 		})
 	case ViewPlanDetail:
 		if options.SearchQuery != "" {

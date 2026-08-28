@@ -59,7 +59,7 @@ func visibleNoteWarnings(snapshot note.Snapshot, focusRepositoryID string) []not
 	return visible
 }
 
-func renderNotesPage(snapshot note.Snapshot, selected int, focusRepositoryID string, now time.Time, useColor bool) (lines []string, selectedLine int) {
+func renderNotesPage(snapshot note.Snapshot, selected int, focusRepositoryID string, now time.Time, profile Profile) (lines []string, selectedLine int) {
 	items := visibleNotes(snapshot, focusRepositoryID)
 	warnings := visibleNoteWarnings(snapshot, focusRepositoryID)
 	selectedLine = -1
@@ -72,7 +72,7 @@ func renderNotesPage(snapshot note.Snapshot, selected int, focusRepositoryID str
 			if index == selected {
 				selectedLine = len(lines)
 			}
-			lines = append(lines, renderNoteRow(item, now, widths, index == selected, useColor))
+			lines = append(lines, renderNoteRow(item, now, widths, index == selected, profile))
 		}
 	}
 	if len(warnings) > 0 {
@@ -116,16 +116,14 @@ func renderNoteHeader(widths noteTableWidths) string {
 	}, "  ")
 }
 
-func renderNoteRow(item note.CatalogNote, now time.Time, widths noteTableWidths, selected, useColor bool) string {
+func renderNoteRow(item note.CatalogNote, now time.Time, widths noteTableWidths, selected bool, profile Profile) string {
 	values := noteValues(item, now)
 	cursor := "  "
 	if selected {
 		cursor = "> "
 	}
 	status := padCells(values.status, widths.status)
-	if useColor {
-		status = "\x1b[36m" + status + "\x1b[0m"
-	}
+	status = Paint(profile, RoleAccent, status)
 	return cursor + strings.Join([]string{
 		padCells(values.repository, widths.repository),
 		padCells(values.id, widths.id),

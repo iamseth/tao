@@ -296,7 +296,7 @@ func TestPlainOutputRemovesOnlyScreenControls(t *testing.T) {
 	if strings.HasPrefix(frame, "\x1b[H") || strings.Contains(frame, "\x1b[2J") {
 		t.Fatalf("plain frame retained screen controls: %q", frame[:min(len(frame), 20)])
 	}
-	if !strings.Contains(frame, "\x1b[31m") || !strings.Contains(frame, "\x1b[0m") {
+	if !strings.Contains(frame, "\x1b[38;2;") || !strings.Contains(frame, "\x1b[0m") {
 		t.Fatal("plain colored frame stripped intentional SGR styling")
 	}
 

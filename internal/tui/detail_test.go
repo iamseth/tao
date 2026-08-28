@@ -90,7 +90,7 @@ func TestRenderSlicesPaneUsesStateQueueOrderAndShowsCurrentMetadata(t *testing.T
 	if setup < 0 || build < setup || release < build {
 		t.Fatalf("slice order does not follow completed/pending queues:\n%s", text)
 	}
-	if !strings.Contains(text, "> ") || !strings.Contains(text, "\x1b[36m") {
+	if !strings.Contains(text, "> ") || !strings.Contains(text, colorSequence(Accent(ProfileANSI16), false)) {
 		t.Fatalf("current colored slice is not highlighted:\n%q", text)
 	}
 	if !strings.Contains(text, "[approval required]") || !strings.Contains(text, "blocker: waiting on credentials") {

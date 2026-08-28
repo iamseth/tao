@@ -71,19 +71,26 @@ func sliceDetailShortcuts() []shortcut {
 	}
 }
 
-func overlayShortcutLegend(background []string, page PageID, width, height int, useColor bool) []string {
-	return overlayShortcutTable(background, shortcutsForPage(page), width, height, useColor)
+func overlayShortcutLegend(background []string, page PageID, width, height int, profile Profile) []string {
+	return overlayShortcutTable(background, shortcutsForPage(page), width, height, profile)
 }
 
 func overlayPlanDetailShortcuts(background []string, width, height int, useColor bool) []string {
-	return overlayShortcutTable(background, planDetailShortcuts(), width, height, useColor)
+	return overlayShortcutTable(background, planDetailShortcuts(), width, height, profileForEnabledColor(useColor))
 }
 
 func overlaySliceDetailShortcuts(background []string, width, height int, useColor bool) []string {
-	return overlayShortcutTable(background, sliceDetailShortcuts(), width, height, useColor)
+	return overlayShortcutTable(background, sliceDetailShortcuts(), width, height, profileForEnabledColor(useColor))
 }
 
-func overlayShortcutTable(background []string, entries []shortcut, width, height int, useColor bool) []string {
+func profileForEnabledColor(enabled bool) Profile {
+	if enabled {
+		return ProfileANSI16
+	}
+	return ProfileNone
+}
+
+func overlayShortcutTable(background []string, entries []shortcut, width, height int, profile Profile) []string {
 	canvasWidth := width
 	if canvasWidth <= 0 {
 		for _, line := range background {
@@ -96,7 +103,7 @@ func overlayShortcutTable(background []string, entries []shortcut, width, height
 		canvasHeight = max(len(background), 20)
 	}
 
-	legend := renderShortcutLegend(entries, canvasWidth, canvasHeight, useColor)
+	legend := renderShortcutLegend(entries, canvasWidth, canvasHeight, profile)
 	if len(legend) == 0 || canvasHeight <= 0 {
 		return background
 	}
@@ -118,7 +125,7 @@ func overlayShortcutTable(background []string, entries []shortcut, width, height
 	return background
 }
 
-func renderShortcutLegend(entries []shortcut, maxWidth, maxHeight int, useColor bool) []string {
+func renderShortcutLegend(entries []shortcut, maxWidth, maxHeight int, profile Profile) []string {
 	if maxWidth <= 0 || maxHeight <= 0 {
 		return nil
 	}
@@ -151,32 +158,25 @@ func renderShortcutLegend(entries []shortcut, maxWidth, maxHeight int, useColor 
 
 	horizontal := strings.Repeat("─", tableWidth-2)
 	title := truncateCells("Keyboard shortcuts", tableWidth-4)
-	title = padCells(title, tableWidth-4)
-	if useColor {
-		title = "\x1b[1m" + title + "\x1b[0m"
-	}
+	title = Paint(profile, RoleNeutral5, padCells(title, tableWidth-4))
 	lines := []string{
 		"┌" + horizontal + "┐",
 		"│ " + title + " │",
 		"├" + strings.Repeat("─", keyWidth+2) + "┬" + strings.Repeat("─", actionWidth+2) + "┤",
-		shortcutTableRow("KEY", "ACTION", keyWidth, actionWidth, useColor),
+		shortcutTableRow("KEY", "ACTION", keyWidth, actionWidth, profile),
 		"├" + strings.Repeat("─", keyWidth+2) + "┼" + strings.Repeat("─", actionWidth+2) + "┤",
 	}
 	for _, entry := range entries {
-		lines = append(lines, shortcutTableRow(entry.key, entry.action, keyWidth, actionWidth, false))
+		lines = append(lines, shortcutTableRow(entry.key, entry.action, keyWidth, actionWidth, ProfileNone))
 	}
 	lines = append(lines, "└"+strings.Repeat("─", keyWidth+2)+"┴"+strings.Repeat("─", actionWidth+2)+"┘")
 	return lines
 }
 
-func shortcutTableRow(key, action string, keyWidth, actionWidth int, bold bool) string {
+func shortcutTableRow(key, action string, keyWidth, actionWidth int, profile Profile) string {
 	key = truncateCells(key, keyWidth)
 	action = truncateCells(action, actionWidth)
-	key = padCells(key, keyWidth)
-	action = padCells(action, actionWidth)
-	if bold {
-		key = "\x1b[1m" + key + "\x1b[0m"
-		action = "\x1b[1m" + action + "\x1b[0m"
-	}
+	key = Paint(profile, RoleNeutral5, padCells(key, keyWidth))
+	action = Paint(profile, RoleNeutral5, padCells(action, actionWidth))
 	return "│ " + key + " │ " + action + " │"
 }
