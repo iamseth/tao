@@ -52,8 +52,9 @@ func RepositoryRootFromGitCommonDir(worktreeRoot, commonDir string) (string, err
 // ManagedWorktreeOwnership identifies the one active plan that canonically
 // owns a standalone-commit target.
 type ManagedWorktreeOwnership struct {
-	PlanID  string
-	Command string
+	PlanID      string
+	Command     string
+	Instruction string
 }
 
 // UnresolvedInvalidManagedWorktreeOwners returns invalid plans whose ownership
@@ -169,7 +170,8 @@ func ResolveManagedWorktreeOwnership(repoRoot, worktreeRoot, branch string, deta
 	if recordedBranch == "" || branch == "" || recordedBranch != branch {
 		return nil, fmt.Errorf("managed worktree ownership cannot be safely resolved for plan %s: recorded branch %q does not match live branch %q", planIDForError(detail), recordedBranch, branch)
 	}
-	return &ManagedWorktreeOwnership{PlanID: detail.State.Plan.ID, Command: managedWorktreeRecoveryCommand(detail)}, nil
+	command, instruction := managedWorktreeRecoveryCommand(detail)
+	return &ManagedWorktreeOwnership{PlanID: detail.State.Plan.ID, Command: command, Instruction: instruction}, nil
 }
 
 func managedPlanCanOwnWorktree(detail *plan.PlanDetail) bool {
@@ -180,18 +182,19 @@ func managedPlanCanOwnWorktree(detail *plan.PlanDetail) bool {
 	return workspace.CleanupStatus != plan.WorkspaceCleanupStatusDone && workspace.LifecycleStatus != plan.WorkspaceStatusCleaned
 }
 
-func managedWorktreeRecoveryCommand(detail *plan.PlanDetail) string {
+func managedWorktreeRecoveryCommand(detail *plan.PlanDetail) (string, string) {
 	id := strings.TrimSpace(detail.State.Plan.ID)
 	for _, slice := range detail.Slices.Slices {
 		if slice.VerificationRepair != nil && slice.Completion == nil {
-			return "tao run " + id
+			return "tao run " + id, ""
 		}
 	}
 	if plan.CurrentFailedFinalVerification(detail) != nil {
-		return "tao run --repair-verification " + id
+		action := plan.DeriveNextAction(detail).Primary
+		return action.Command, action.Instruction
 	}
 	if plan.PlanLifecycleStatus(detail) == plan.StatusChangesRequested {
-		return "tao rework " + id
+		return "tao rework " + id, ""
 	}
 	if detail.State.Plan.CurrentSlice != nil {
 		for i := range detail.Slices.Slices {
@@ -200,15 +203,15 @@ func managedWorktreeRecoveryCommand(detail *plan.PlanDetail) string {
 				continue
 			}
 			if slice.CommitIntent != nil || slice.Completion != nil || blockedSliceRequiresManualCompletion(detail, slice) {
-				return "tao slice-complete"
+				return "tao slice-complete", ""
 			}
 			if blockedSliceHasRestartBoundary(slice) {
-				return "tao run --restart " + id
+				return "tao run --restart " + id, ""
 			}
-			return "tao run --continue " + id
+			return "tao run --continue " + id, ""
 		}
 	}
-	return "tao run " + id
+	return "tao run " + id, ""
 }
 
 func blockedSliceHasRestartBoundary(slice *plan.Slice) bool {

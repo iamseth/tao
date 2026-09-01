@@ -19,6 +19,7 @@ type Request struct {
 	Input              string
 	RestartBlocked     bool
 	RepairVerification bool
+	Reverify           bool
 	ResolvedRunOptions
 }
 

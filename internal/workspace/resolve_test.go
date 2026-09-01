@@ -254,8 +254,39 @@ func TestManagedWorktreeRecoveryCommandRunsPendingVerificationRepair(t *testing.
 		},
 	}}
 
-	if got := managedWorktreeRecoveryCommand(detail); got != "tao run plan-a" {
-		t.Fatalf("managedWorktreeRecoveryCommand() = %q, want ordinary run after repair creation", got)
+	command, instruction := managedWorktreeRecoveryCommand(detail)
+	if command != "tao run plan-a" || instruction != "" {
+		t.Fatalf("managedWorktreeRecoveryCommand() = command %q instruction %q, want ordinary run after repair creation", command, instruction)
+	}
+}
+
+func TestManagedWorktreeRecoveryCommandRoutesFinalVerificationByClassification(t *testing.T) {
+	tests := []struct {
+		name            string
+		kind            plan.FinalVerificationFailureKind
+		wantCommand     string
+		wantInstruction string
+	}{
+		{name: "code", kind: plan.FinalVerificationFailureKindCode, wantCommand: "tao run --repair-verification plan-a"},
+		{name: "tool missing", kind: plan.FinalVerificationFailureKindToolMissing, wantInstruction: "Restore the tool"},
+		{name: "timeout", kind: plan.FinalVerificationFailureKindTimeout, wantInstruction: "Resolve the repository verification timeout"},
+		{name: "cancelled", kind: plan.FinalVerificationFailureKindCancelled, wantInstruction: "Resolve the repository verification cancellation"},
+		{name: "invalid command", kind: plan.FinalVerificationFailureKindInvalidCommand, wantInstruction: "Correct the repository verification command"},
+		{name: "legacy unclassified", wantCommand: "tao run --reverify plan-a"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			detail := executionRootDetail("/repo", "plan-a", &plan.Workspace{HeadSHA: "head-a"})
+			detail.State.Status = plan.StatusInReview
+			detail.State.Plan.FinalVerification = &plan.FinalVerification{
+				Command: "make verify", HeadSHA: "head-a", Result: "failed", FailureKind: test.kind, Fingerprint: "failure-a",
+			}
+
+			command, instruction := managedWorktreeRecoveryCommand(detail)
+			if command != test.wantCommand || !strings.Contains(instruction, test.wantInstruction) {
+				t.Fatalf("managedWorktreeRecoveryCommand() = command %q instruction %q", command, instruction)
+			}
+		})
 	}
 }
 
@@ -326,8 +357,9 @@ func TestManagedWorktreeRecoveryCommandBoundsBlockedRecovery(t *testing.T) {
 			if tt.mutate != nil {
 				tt.mutate(detail, &detail.Slices.Slices[0])
 			}
-			if got := managedWorktreeRecoveryCommand(detail); got != tt.want {
-				t.Fatalf("managedWorktreeRecoveryCommand() = %q, want %q", got, tt.want)
+			command, instruction := managedWorktreeRecoveryCommand(detail)
+			if command != tt.want || instruction != "" {
+				t.Fatalf("managedWorktreeRecoveryCommand() = command %q instruction %q, want command %q", command, instruction, tt.want)
 			}
 		})
 	}

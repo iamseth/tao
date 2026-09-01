@@ -19,7 +19,7 @@ var runCommand = commandMetadata{
 	name:      "run",
 	minPrefix: "r",
 	usageLines: []string{
-		"run (r) [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue|--restart|--repair-verification] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>",
+		"run (r) [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue|--restart|--repair-verification|--reverify] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>",
 	},
 	completionDescription: "Run pending slices with the selected agent",
 	long:                  "Run pending slices for a Tao plan with the selected agent. Tao prepares the requested workspace, executes pending work, automatically reworks review findings by default, records verification metadata, and follows the configured commit policy. In a sufficiently large terminal, Tao displays a pinned run header unless --no-run-header disables it.",
@@ -61,6 +61,7 @@ func registerRunFlags(fs *flag.FlagSet) {
 	fs.Bool("continue", false, "continue a blocked slice at its preserved execution boundary")
 	fs.Bool("restart", false, "restart a safe blocked automatic slice on a newer baseline")
 	fs.Bool("repair-verification", false, "append and run one bounded repair for current failed final verification")
+	fs.Bool("reverify", false, "rerun final verification at the exact recorded failed head")
 	fs.Bool("no-run-header", !runHeaderEnvDefault(), "disable the pinned run header")
 	fs.Bool("auto-rework", autoRework, "automatically rework plans with requested changes")
 	fs.Int("max-rework-attempts", maxReworkAttempts, "maximum automatic rework cycles (0 disables)")
@@ -160,15 +161,22 @@ func (a App) run(ctx context.Context, repo planRunRepository, args []string) err
 	reworkRestart := flagBoolValue(fs, "rework-restart")
 	blockedRestart := flagBoolValue(fs, "restart")
 	repairVerification := flagBoolValue(fs, "repair-verification")
+	reverify := flagBoolValue(fs, "reverify")
 	continueRun := flagBoolValue(fs, "continue")
-	if (continueRun && blockedRestart) || (continueRun && repairVerification) || (blockedRestart && repairVerification) {
-		return fmt.Errorf("--continue, --restart, and --repair-verification are mutually exclusive")
+	recoveryModeCount := 0
+	for _, enabled := range []bool{continueRun, blockedRestart, repairVerification, reverify} {
+		if enabled {
+			recoveryModeCount++
+		}
+	}
+	if recoveryModeCount > 1 {
+		return fmt.Errorf("--continue, --restart, --repair-verification, and --reverify are mutually exclusive")
 	}
 	repositoryDefaults, err := a.currentRepositoryRunOptions(ctx)
 	if err != nil {
 		return err
 	}
-	if err := requirePositionals(positional, 1, "usage: tao run [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue|--restart|--repair-verification] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>"); err != nil {
+	if err := requirePositionals(positional, 1, "usage: tao run [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue|--restart|--repair-verification|--reverify] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>"); err != nil {
 		return err
 	}
 	input := positional[0]
@@ -178,6 +186,7 @@ func (a App) run(ctx context.Context, repo planRunRepository, args []string) err
 	}
 	request.RestartBlocked = blockedRestart
 	request.RepairVerification = repairVerification
+	request.Reverify = reverify
 	policy, err := resolveRunAutoReworkPolicy(fs, request.ReviewEnabled)
 	if err != nil {
 		return err
@@ -192,6 +201,9 @@ var executeSinglePlan = func(service run.Service, ctx context.Context, request r
 // executeResolvedRun is the single-plan execution boundary shared by run entry
 // points after their inputs and runtime options have been fully resolved.
 func (a App) executeResolvedRun(ctx context.Context, repo planRunRepository, input string, request run.Request, skipPermissions bool, policy runtimeconfig.AutoReworkPolicy, reworkRestart, noRunHeader bool) error {
+	if request.Reverify {
+		policy.Enabled = false
+	}
 	runCtx, stopSignals := newCommandSignalContext(ctx)
 	defer stopSignals()
 

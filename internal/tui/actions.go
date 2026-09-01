@@ -95,8 +95,16 @@ func (a *Actions) RunPlan(ctx context.Context, row monitor.Row) {
 		return
 	}
 	args := []string{"run", row.PlanID}
-	if row.Status == plan.StatusBlocked {
+	switch row.Status {
+	case plan.StatusBlocked:
 		args = []string{"run", "--continue", row.PlanID}
+	case plan.StatusVerificationFailed:
+		var err error
+		args, err = verificationRecoveryArgs(row)
+		if err != nil {
+			a.recordFailure(row, err)
+			return
+		}
 	}
 	if err := a.launch(ctx, row, args); err != nil {
 		a.recordFailure(row, err)
@@ -276,6 +284,31 @@ func (a *Actions) recordFailure(row monitor.Row, err error) {
 	a.feedback[key] = actionFeedback{kind: actionFailed, label: "failed to start", startedAt: a.now()}
 	a.messageKey = key
 	a.message = failedStartMessage(row.PlanID, err)
+}
+
+func verificationRecoveryArgs(row monitor.Row) ([]string, error) {
+	action := row.VerificationRecoveryAction
+	command := strings.TrimSpace(action.Command)
+	if command == "" {
+		instruction := strings.TrimSpace(action.Instruction)
+		if instruction == "" {
+			instruction = "resolve the external verification failure before explicitly reverifying"
+		}
+		return nil, fmt.Errorf("verification recovery cannot be launched automatically: %s", instruction)
+	}
+	if action.Kind == plan.PlanActionRun && action.Command == "tao run "+row.PlanID {
+		return []string{"run", row.PlanID}, nil
+	}
+	fields := strings.Fields(command)
+	if len(fields) != 4 || fields[0] != "tao" || fields[1] != "run" || fields[3] != row.PlanID {
+		return nil, fmt.Errorf("unsupported projected verification recovery command %q", command)
+	}
+	switch fields[2] {
+	case "--repair-verification", "--reverify":
+		return append([]string(nil), fields[1:]...), nil
+	default:
+		return nil, fmt.Errorf("unsupported projected verification recovery command %q", command)
+	}
 }
 
 func repositoryLabel(row monitor.Row) string {

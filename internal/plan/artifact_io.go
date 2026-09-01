@@ -167,6 +167,7 @@ type ArtifactChangeSet struct {
 	clearPlanCurrentSlice               bool
 	clearPlanFinalizationFailure        bool
 	planFinalizationFailure             *FinalizationFailure
+	finalVerification                   *FinalVerification
 	planReview                          planReviewChange
 	clearSliceBlockerNotes              map[string]struct{}
 	clearSliceExecutionBoundaries       map[string]struct{}
@@ -309,6 +310,17 @@ func (c *ArtifactChangeSet) ReplacePlanFinalizationFailure(failure FinalizationF
 	return nil
 }
 
+// replaceFinalVerification binds a complete final-verification replacement to
+// the evidence mutation so omitted classifications cannot survive a fresh write.
+func (c *ArtifactChangeSet) replaceFinalVerification(verification FinalVerification) error {
+	if c == nil || c.detail == nil {
+		return fmt.Errorf("plan detail is nil")
+	}
+	c.finalVerification = cloneFinalVerification(&verification)
+	c.detail.State.Plan.FinalVerification = cloneFinalVerification(&verification)
+	return nil
+}
+
 // ReplacePlanReview replaces every known persisted review field. Empty findings
 // are normalized to [] so replacement cannot retain an older findings array.
 func (c *ArtifactChangeSet) ReplacePlanReview(review PlanReview) error {
@@ -388,6 +400,9 @@ func (c *ArtifactChangeSet) applyState(state *State) {
 		state.Plan.FinalizationFailure = nil
 	} else if c.planFinalizationFailure != nil {
 		state.Plan.FinalizationFailure = cloneFinalizationFailure(c.planFinalizationFailure)
+	}
+	if c.finalVerification != nil {
+		state.Plan.FinalVerification = cloneFinalVerification(c.finalVerification)
 	}
 	switch c.planReview.kind {
 	case planReviewReplaced:
@@ -1229,10 +1244,9 @@ func AppendEvent(planDir string, event Event) error {
 // writeJSON encodes value as JSON and deep-merges it over any existing file at
 // path before writing atomically. The merge preserves unknown fields from older
 // plan artifacts. PlanRecord writers carry explicit clear-or-replace intent in
-// ArtifactChangeSet; the four migrated omitempty groups — workspace dependency
-// failure/fingerprint, slice blocker notes, plan current slice, and the plan
-// review block — emit explicit replacement or empty values only when that intent
-// is declared. Remaining clearable fields retain the tag-driven contract. The
+// ArtifactChangeSet; migrated omitempty groups emit explicit replacement or
+// empty values only when that intent is declared. Remaining clearable fields
+// retain the tag-driven contract. The
 // low-level creation/test writer remains preserve-free and emits exactly what
 // the current struct tags encode.
 func writeJSON(path string, value any) error {
@@ -1263,6 +1277,10 @@ func prepareJSON(path string, value any, changes artifactJSONChanges) ([]byte, e
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
+	encoded, err = removeOmittedArtifactJSONFields(encoded, changes)
+	if err != nil {
+		return nil, err
+	}
 	var formatted bytes.Buffer
 	if err := json.Indent(&formatted, encoded, "", "  "); err != nil {
 		return nil, err
@@ -1275,7 +1293,7 @@ func lowerArtifactJSONChanges(encoded []byte, projection artifactJSONChanges) ([
 	if changes == nil {
 		return encoded, nil
 	}
-	hasStateChanges := changes.clearWorkspaceDependencyFailure || changes.clearWorkspaceDependencyFingerprint || changes.clearWorkspaceRebaseIntent || changes.clearPlanCurrentSlice || changes.clearPlanFinalizationFailure || changes.planFinalizationFailure != nil || changes.planReview.kind != planReviewUnchanged
+	hasStateChanges := changes.clearWorkspaceDependencyFailure || changes.clearWorkspaceDependencyFingerprint || changes.clearWorkspaceRebaseIntent || changes.clearPlanCurrentSlice || changes.clearPlanFinalizationFailure || changes.planFinalizationFailure != nil || changes.finalVerification != nil || changes.planReview.kind != planReviewUnchanged
 	hasSliceChanges := len(changes.clearSliceBlockerNotes) > 0 || len(changes.clearSliceExecutionBoundaries) > 0
 	if projection.kind == artifactJSONState && !hasStateChanges || projection.kind == artifactJSONSlices && !hasSliceChanges || projection.kind == artifactJSONNone {
 		return encoded, nil
@@ -1300,6 +1318,30 @@ func lowerArtifactJSONChanges(encoded []byte, projection artifactJSONChanges) ([
 		return nil, fmt.Errorf("lower artifact changes: %w", err)
 	}
 	return lowered, nil
+}
+
+func removeOmittedArtifactJSONFields(encoded []byte, projection artifactJSONChanges) ([]byte, error) {
+	changes := projection.changes
+	if projection.kind != artifactJSONState || changes == nil || changes.finalVerification == nil || changes.finalVerification.FailureKind != "" && changes.finalVerification.ExitCode != nil {
+		return encoded, nil
+	}
+	var root map[string]any
+	if err := json.Unmarshal(encoded, &root); err != nil {
+		return nil, fmt.Errorf("remove omitted artifact fields: %w", err)
+	}
+	plan, _ := root["plan"].(map[string]any)
+	verification, _ := plan["final_verification"].(map[string]any)
+	if changes.finalVerification.FailureKind == "" {
+		delete(verification, "failure_kind")
+	}
+	if changes.finalVerification.ExitCode == nil {
+		delete(verification, "exit_code")
+	}
+	cleaned, err := json.Marshal(root)
+	if err != nil {
+		return nil, fmt.Errorf("remove omitted artifact fields: %w", err)
+	}
+	return cleaned, nil
 }
 
 func validateSlicesChangeDeclarations(baseline, intended SlicesFile, changes *ArtifactChangeSet) error {
@@ -1411,6 +1453,17 @@ func lowerStateJSONChanges(root map[string]any, changes *ArtifactChangeSet) erro
 	plan := jsonObject(root, "plan")
 	if changes.clearPlanCurrentSlice {
 		plan["current_slice"] = nil
+	}
+	if changes.finalVerification != nil {
+		encoded, err := json.Marshal(changes.finalVerification)
+		if err != nil {
+			return fmt.Errorf("lower final verification replacement: %w", err)
+		}
+		var replacement map[string]any
+		if err := json.Unmarshal(encoded, &replacement); err != nil {
+			return fmt.Errorf("lower final verification replacement: %w", err)
+		}
+		plan["final_verification"] = replacement
 	}
 	if changes.clearPlanFinalizationFailure {
 		plan["finalization_failure"] = nil

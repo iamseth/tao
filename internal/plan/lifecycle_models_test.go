@@ -69,14 +69,40 @@ func TestAutomaticReworkEvidenceValidation(t *testing.T) {
 	}
 }
 
+func TestFinalVerificationLegacyJSONLoadsWithoutFailureEvidence(t *testing.T) {
+	dir := t.TempDir()
+	legacy := `{"schema":"tao.plan.state.v1","status":"in_review","created_at":"2026-07-14T01:00:00Z","updated_at":"2026-07-14T01:00:00Z","repo":{"name":"tao","root":"/repo","branch":"main"},"plan":{"id":"legacy","title":"Legacy","completed_slices":[],"pending_slices":[],"timing":{},"final_verification":{"command":"make verify","cwd":"/repo","head_sha":"head-a","result":"failed","verified_at":"2026-07-14T01:00:00Z"}},"global_invariants":[],"open_questions":[]}`
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state, err := ReadState(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verification := state.Plan.FinalVerification
+	if verification == nil || verification.Result != "failed" || verification.FailureKind != "" || verification.ExitCode != nil {
+		t.Fatalf("legacy final verification = %+v", verification)
+	}
+	encoded, err := json.Marshal(verification)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "failure_kind") || strings.Contains(string(encoded), "exit_code") {
+		t.Fatalf("legacy evidence gained optional fields: %s", encoded)
+	}
+}
+
 func TestEventFailureModeFieldsJSONLRoundTripAndOmitZero(t *testing.T) {
 	planDir := t.TempDir()
 	timestamp := time.Date(2026, 7, 14, 1, 30, 0, 0, time.UTC)
+	exitCode := 127
 	event := Event{
 		Type:        EventTypeReworkStopped,
 		Timestamp:   timestamp,
 		PlanID:      "failure-events",
 		Result:      "failed",
+		FailureKind: FinalVerificationFailureKindToolMissing,
+		ExitCode:    &exitCode,
 		Round:       2,
 		Attempts:    3,
 		Fingerprint: "finding-set",
@@ -100,7 +126,7 @@ func TestEventFailureModeFieldsJSONLRoundTripAndOmitZero(t *testing.T) {
 		t.Fatalf("event count = %d, want 2", len(events))
 	}
 	got := events[0]
-	if got.Result != event.Result || got.Round != event.Round || got.Attempts != event.Attempts || got.Fingerprint != event.Fingerprint {
+	if got.Result != event.Result || got.FailureKind != event.FailureKind || got.ExitCode == nil || *got.ExitCode != exitCode || got.Round != event.Round || got.Attempts != event.Attempts || got.Fingerprint != event.Fingerprint {
 		t.Fatalf("unexpected failure-mode fields after JSONL round trip: %+v", got)
 	}
 
@@ -109,7 +135,7 @@ func TestEventFailureModeFieldsJSONLRoundTripAndOmitZero(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	for _, field := range []string{`"result"`, `"round"`, `"attempts"`, `"fingerprint"`} {
+	for _, field := range []string{`"result"`, `"failure_kind"`, `"exit_code"`, `"round"`, `"attempts"`, `"fingerprint"`} {
 		if strings.Contains(lines[1], field) {
 			t.Errorf("zero-value field %s was not omitted from JSON: %s", field, lines[1])
 		}

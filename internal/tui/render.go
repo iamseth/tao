@@ -508,7 +508,7 @@ func colorStatus(profile Profile, value, status string) string {
 		role = RoleSuccess
 	case plan.StatusInProgress:
 		role = RoleAccent
-	case plan.StatusBlocked, plan.StatusPlanned, plan.StatusPending, plan.StatusChangesRequested:
+	case plan.StatusBlocked, plan.StatusPlanned, plan.StatusPending, plan.StatusChangesRequested, plan.StatusVerificationFailed:
 		role = RoleWarn
 	}
 	return Paint(profile, role, value)

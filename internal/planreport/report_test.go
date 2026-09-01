@@ -50,6 +50,23 @@ func TestProjectFullAcrossLifecyclePhases(t *testing.T) {
 	}
 }
 
+func TestProjectFullAcceptsProjectedVerificationFailureStatus(t *testing.T) {
+	now := time.Date(2026, 8, 4, 15, 0, 0, 0, time.UTC)
+	detail := reportFixture(now)
+	detail.State.Status = plan.StatusInReview
+	detail.State.Workspace = &plan.Workspace{HeadSHA: "head-a"}
+	detail.State.Plan.PendingSlices = nil
+	detail.State.Plan.CompletedSlices = []string{"001-build", "002-ship"}
+	detail.State.Plan.FinalVerification = &plan.FinalVerification{Command: "make verify", HeadSHA: "head-a", Result: "failed", FailureKind: plan.FinalVerificationFailureKindCode, Fingerprint: "failure-a"}
+	for i := range detail.Slices.Slices {
+		detail.Slices.Slices[i].Status = plan.StatusCompleted
+	}
+
+	if got := ProjectFull(detail, now).Status; got != plan.StatusVerificationFailed {
+		t.Fatalf("projected report status = %q, want %q", got, plan.StatusVerificationFailed)
+	}
+}
+
 func TestProjectFullPullRequestCompletionDistinguishesMergeEvidence(t *testing.T) {
 	now := time.Date(2026, 8, 4, 15, 0, 0, 0, time.UTC)
 	detail := reportFixture(now)

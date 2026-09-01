@@ -66,6 +66,7 @@ const (
 	AttentionApprovalRequired       AttentionReason = "approval_required"
 	AttentionSliceCompletionPending AttentionReason = "slice_completion_pending"
 	AttentionReworkStopped          AttentionReason = "rework_stopped"
+	AttentionVerificationFailed     AttentionReason = "verification_failed"
 	AttentionFinalizationFailed     AttentionReason = "finalization_failed"
 	AttentionRunCrashed             AttentionReason = "run_crashed"
 )
@@ -119,13 +120,15 @@ type Row struct {
 	ReworkCompletedCount   int
 	ReworkTotalCount       int
 
-	AttentionReasons           []AttentionReason
-	ApprovalSliceID            string
-	ApprovalReason             string
-	FinalizationPhase          plan.FinalizationFailurePhase
-	FinalizationCategory       string
-	FinalizationRecoveryAction string
-	RecommendedAction          plan.PlanAction
+	AttentionReasons             []AttentionReason
+	ApprovalSliceID              string
+	ApprovalReason               string
+	FinalVerificationFailureKind plan.FinalVerificationFailureKind
+	VerificationRecoveryAction   plan.PlanAction
+	FinalizationPhase            plan.FinalizationFailurePhase
+	FinalizationCategory         string
+	FinalizationRecoveryAction   string
+	RecommendedAction            plan.PlanAction
 
 	NextAction           string
 	Relationships        []ResolvedRelationship
@@ -284,27 +287,29 @@ func repositoryWarningRow(entry taodata.RepoInventoryEntry, err error) Row {
 func planRow(entry taodata.RepoInventoryEntry, summary plan.PlanSummary) Row {
 	warnings := append([]string(nil), summary.Warnings...)
 	row := Row{
-		Kind:                   RowKindPlan,
-		RepositoryID:           entry.Repo.ID,
-		RepositoryName:         entry.Repo.Name,
-		RepositoryRoot:         entry.Repo.Root,
-		PlanID:                 summary.ID,
-		PlanTitle:              summary.Title,
-		PlanDir:                planDir(entry, summary),
-		Status:                 summary.Status,
-		Overview:               cloneOverview(summary.Overview),
-		Liveness:               LivenessMissing,
-		SliceID:                summary.CurrentSliceID,
-		Left:                   summary.PendingCount,
-		UpdatedAt:              cloneTime(summary.LastActivityAt),
-		OriginalCompletedCount: summary.OriginalCompletedCount,
-		OriginalTotalCount:     summary.OriginalTotalCount,
-		ReworkCompletedCount:   summary.ReworkCompletedCount,
-		ReworkTotalCount:       summary.ReworkTotalCount,
-		ApprovalSliceID:        summary.Capabilities.ApprovalSliceID,
-		ApprovalReason:         summary.Capabilities.ApprovalReason,
-		RecommendedAction:      summary.NextAction.Primary,
-		Warnings:               warnings,
+		Kind:                         RowKindPlan,
+		RepositoryID:                 entry.Repo.ID,
+		RepositoryName:               entry.Repo.Name,
+		RepositoryRoot:               entry.Repo.Root,
+		PlanID:                       summary.ID,
+		PlanTitle:                    summary.Title,
+		PlanDir:                      planDir(entry, summary),
+		Status:                       summary.Status,
+		Overview:                     cloneOverview(summary.Overview),
+		Liveness:                     LivenessMissing,
+		SliceID:                      summary.CurrentSliceID,
+		Left:                         summary.PendingCount,
+		UpdatedAt:                    cloneTime(summary.LastActivityAt),
+		OriginalCompletedCount:       summary.OriginalCompletedCount,
+		OriginalTotalCount:           summary.OriginalTotalCount,
+		ReworkCompletedCount:         summary.ReworkCompletedCount,
+		ReworkTotalCount:             summary.ReworkTotalCount,
+		ApprovalSliceID:              summary.Capabilities.ApprovalSliceID,
+		ApprovalReason:               summary.Capabilities.ApprovalReason,
+		FinalVerificationFailureKind: summary.FinalVerificationFailureKind,
+		VerificationRecoveryAction:   summary.NextAction.Primary,
+		RecommendedAction:            summary.NextAction.Primary,
+		Warnings:                     warnings,
 	}
 	if summary.CurrentSlice != nil {
 		row.SliceTitle = summary.CurrentSlice.Title
@@ -325,6 +330,8 @@ func attentionReasons(summary plan.PlanSummary) []AttentionReason {
 		reasons = append(reasons, AttentionBlocked)
 	case plan.StatusChangesRequested:
 		reasons = append(reasons, AttentionChangesRequested)
+	case plan.StatusVerificationFailed:
+		reasons = append(reasons, AttentionVerificationFailed)
 	}
 	if summary.Capabilities.NeedsApproval {
 		reasons = append(reasons, AttentionApprovalRequired)
@@ -420,6 +427,24 @@ func DeriveNextAction(row Row) string {
 	}
 	if row.Liveness == LivenessLive || (row.Liveness == LivenessStale && row.RunLockPresent && row.RunLockProcessAlive) {
 		return "MONITOR"
+	}
+	for _, reason := range row.AttentionReasons {
+		if reason != AttentionVerificationFailed {
+			continue
+		}
+		switch row.VerificationRecoveryAction.Kind {
+		case plan.PlanActionRepairVerification:
+			return "REPAIR VERIFICATION"
+		case plan.PlanActionReverify:
+			return "REVERIFY"
+		case plan.PlanActionRun:
+			if row.VerificationRecoveryAction.Command == "tao run "+row.PlanID {
+				return "RUN"
+			}
+			return "RESOLVE VERIFICATION"
+		default:
+			return "RESOLVE VERIFICATION"
+		}
 	}
 	for _, reason := range row.AttentionReasons {
 		if reason != AttentionFinalizationFailed {
@@ -636,7 +661,7 @@ func urgency(row Row) int {
 	case LivenessStale:
 		return 1
 	}
-	if row.Status == plan.StatusBlocked || row.Status == plan.StatusChangesRequested {
+	if row.Status == plan.StatusBlocked || row.Status == plan.StatusChangesRequested || row.Status == plan.StatusVerificationFailed {
 		return 2
 	}
 	return 3

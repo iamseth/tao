@@ -7,15 +7,16 @@ type PlanFilter struct {
 	ActiveOnly bool
 }
 
-// PlanStatusRollup counts plans by their recorded status value.
+// PlanStatusRollup counts plans by their projected summary status.
 type PlanStatusRollup struct {
-	Planned          int `json:"planned"`
-	InProgress       int `json:"in_progress"`
-	InReview         int `json:"in_review"`
-	Reviewed         int `json:"reviewed"`
-	ChangesRequested int `json:"changes_requested"`
-	Completed        int `json:"completed"`
-	Blocked          int `json:"blocked"`
+	Planned            int `json:"planned"`
+	InProgress         int `json:"in_progress"`
+	InReview           int `json:"in_review"`
+	Reviewed           int `json:"reviewed"`
+	ChangesRequested   int `json:"changes_requested"`
+	VerificationFailed int `json:"verification_failed"`
+	Completed          int `json:"completed"`
+	Blocked            int `json:"blocked"`
 }
 
 // PlanRollup is a pure aggregation of repository plan summaries.
@@ -66,6 +67,9 @@ type PlanSummary struct {
 	SliceCompletionPending           bool
 	UnresolvedReworkStop             bool
 	NextAction                       PlanNextAction
+	FinalVerificationFailureKind     FinalVerificationFailureKind
+	VerificationRecoveryAction       PlanActionKind
+	VerificationRecoveryCommand      string
 	FinalizationRecovery             *FinalizationRecovery
 	PlanningSessionPresent           bool
 	PlanningSessionValid             bool
@@ -95,6 +99,8 @@ func SummarizePlans(summaries []PlanSummary) PlanRollup {
 			rollup.Statuses.Reviewed++
 		case StatusChangesRequested:
 			rollup.Statuses.ChangesRequested++
+		case StatusVerificationFailed:
+			rollup.Statuses.VerificationFailed++
 		case StatusCompleted:
 			rollup.Statuses.Completed++
 		case StatusBlocked:

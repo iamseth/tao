@@ -10,6 +10,8 @@ func TestClonePlanDetailDeepCopiesMutableFields(t *testing.T) {
 	approvedBy := "alice"
 	approvedAt := "2026-05-31T12:00:00Z"
 	duration := int64(42)
+	verificationExitCode := 1
+	eventExitCode := 127
 	now := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
 	detail := &PlanDetail{
 		State: State{
@@ -27,6 +29,7 @@ func TestClonePlanDetailDeepCopiesMutableFields(t *testing.T) {
 				Sequence:             &Sequence{Position: 1, Total: 2, Relationships: []PlanRelation{{PlanID: "plan-b", Type: PlanRelationBefore, Reason: "reason"}}},
 				RuntimePrerequisites: []RuntimePrerequisite{{PlanID: "plan-c", Reason: "must merge first"}},
 				CurrentSlice:         &current, CompletedSlices: []string{"000-z"}, PendingSlices: []string{"001-a"}, LastRunStartingDirty: []string{"README.md"}, Timing: PlanTiming{StartedAt: &now, CompletedAt: &now, LastActivityAt: &now}, PullRequest: &PullRequest{URL: "https://example.com/pr/1"}, Review: &PlanReview{Verdict: "pass", Summary: "ready", CommitMessage: &ReviewCommitMessage{Subject: "feat(review): persist proposal", Body: "What:\nPersist it.\n\nWhy:\nReuse it."}, ReviewedAt: now},
+				FinalVerification: &FinalVerification{FailureKind: FinalVerificationFailureKindCode, ExitCode: &verificationExitCode},
 			},
 		},
 		Slices: SlicesFile{PlanID: "plan-a", Slices: []Slice{{
@@ -43,7 +46,7 @@ func TestClonePlanDetailDeepCopiesMutableFields(t *testing.T) {
 			VerificationResults: []VerificationRun{{Command: "go test ./...", Result: "passed"}},
 			Extra:               map[string]any{"key": "value"},
 		}}},
-		Events:   []Event{{Type: EventTypeSliceCompleted, Metrics: &AgentMetrics{SessionID: "session"}, PullRequest: &PullRequest{URL: "https://example.com/pr/1"}, Review: &PlanReview{Verdict: "pass", Summary: "ready", ReviewedAt: now}, DurationSeconds: &duration}},
+		Events:   []Event{{Type: EventTypeSliceCompleted, Metrics: &AgentMetrics{SessionID: "session"}, PullRequest: &PullRequest{URL: "https://example.com/pr/1"}, Review: &PlanReview{Verdict: "pass", Summary: "ready", ReviewedAt: now}, DurationSeconds: &duration, ExitCode: &eventExitCode}},
 		Warnings: []string{"warning"},
 	}
 	clone := clonePlanDetail(detail)
@@ -72,9 +75,11 @@ func TestClonePlanDetailDeepCopiesMutableFields(t *testing.T) {
 	*clone.Events[0].Metrics = AgentMetrics{SessionID: "changed"}
 	clone.State.Plan.Review.Summary = "changed"
 	clone.State.Plan.Review.CommitMessage.Subject = "changed"
+	*clone.State.Plan.FinalVerification.ExitCode = 2
 	*clone.Events[0].PullRequest = PullRequest{URL: "changed"}
 	clone.Events[0].Review.Summary = "changed"
 	*clone.Events[0].DurationSeconds = 99
+	*clone.Events[0].ExitCode = 126
 	clone.Warnings[0] = "changed"
 
 	if detail.State.Plan.ChangeType != ChangeTypeFeat || detail.State.Plan.Decision.SuccessCriteria[0] != "criterion" || detail.State.Plan.Sequence.Relationships[0].Reason != "reason" || detail.State.Plan.RuntimePrerequisites[0].Reason != "must merge first" || detail.State.Plan.CompletedSlices[0] != "000-z" || detail.State.Plan.LastRunStartingDirty[0] != "README.md" || *detail.State.Plan.CurrentSlice != "001-a" || detail.State.Workspace.Path != "/repo/.tao/workspaces/plan" || !detail.State.Workspace.Timing.CreatedAt.Equal(now) {
@@ -87,10 +92,13 @@ func TestClonePlanDetailDeepCopiesMutableFields(t *testing.T) {
 	if detail.State.Plan.Review.Summary != "ready" || detail.State.Plan.Review.CommitMessage.Subject != "feat(review): persist proposal" {
 		t.Fatalf("review metadata was not deeply cloned: %#v", detail.State.Plan.Review)
 	}
-	if detail.Events[0].Metrics.SessionID != "session" || detail.Events[0].PullRequest.URL != "https://example.com/pr/1" || detail.Events[0].Review.Summary != "ready" || *detail.Events[0].DurationSeconds != 42 || detail.Warnings[0] != "warning" {
+	if detail.State.Plan.FinalVerification.ExitCode == clone.State.Plan.FinalVerification.ExitCode || *detail.State.Plan.FinalVerification.ExitCode != 1 {
+		t.Fatalf("final verification exit code was not deeply cloned: %#v", detail.State.Plan.FinalVerification)
+	}
+	if detail.Events[0].Metrics.SessionID != "session" || detail.Events[0].PullRequest.URL != "https://example.com/pr/1" || detail.Events[0].Review.Summary != "ready" || *detail.Events[0].DurationSeconds != 42 || detail.Events[0].ExitCode == clone.Events[0].ExitCode || *detail.Events[0].ExitCode != 127 || detail.Warnings[0] != "warning" {
 		t.Fatalf("events/warnings were not deeply cloned: events=%#v warnings=%#v", detail.Events, detail.Warnings)
 	}
-	if clonePlanDetail(nil) != nil || cloneDecision(nil) != nil || cloneSequence(nil) != nil || cloneRuntimePrerequisites(nil) != nil || cloneWorkspace(nil) != nil || clonePullRequest(nil) != nil || clonePlanReview(nil) != nil || cloneRequiredInputs(nil) != nil || cloneVerificationSteps(nil) != nil || cloneVerificationRuns(nil) != nil || cloneMap(nil) != nil {
+	if clonePlanDetail(nil) != nil || cloneDecision(nil) != nil || cloneSequence(nil) != nil || cloneRuntimePrerequisites(nil) != nil || cloneWorkspace(nil) != nil || clonePullRequest(nil) != nil || clonePlanReview(nil) != nil || cloneFinalVerification(nil) != nil || cloneRequiredInputs(nil) != nil || cloneVerificationSteps(nil) != nil || cloneVerificationRuns(nil) != nil || cloneMap(nil) != nil {
 		t.Fatal("nil clone helpers should preserve nil")
 	}
 }

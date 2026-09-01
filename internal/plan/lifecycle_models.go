@@ -7,16 +7,17 @@ import (
 )
 
 const (
-	StatusPlanned          = "planned"
-	StatusPending          = "pending"
-	StatusInProgress       = "in_progress"
-	StatusInReview         = "in_review"
-	StatusReviewed         = "reviewed"
-	StatusChangesRequested = "changes_requested"
-	StatusCompleted        = "completed"
-	StatusSkipped          = "skipped"
-	StatusBlocked          = "blocked"
-	StatusInvalid          = "invalid"
+	StatusPlanned            = "planned"
+	StatusPending            = "pending"
+	StatusInProgress         = "in_progress"
+	StatusInReview           = "in_review"
+	StatusReviewed           = "reviewed"
+	StatusChangesRequested   = "changes_requested"
+	StatusVerificationFailed = "verification_failed"
+	StatusCompleted          = "completed"
+	StatusSkipped            = "skipped"
+	StatusBlocked            = "blocked"
+	StatusInvalid            = "invalid"
 )
 
 const (
@@ -404,17 +405,30 @@ func (e AutomaticReworkRound) Validate() error {
 	return nil
 }
 
+// FinalVerificationFailureKind classifies a failed repository-wide gate.
+type FinalVerificationFailureKind string
+
+const (
+	FinalVerificationFailureKindCode           FinalVerificationFailureKind = "code"
+	FinalVerificationFailureKindToolMissing    FinalVerificationFailureKind = "tool_missing"
+	FinalVerificationFailureKindTimeout        FinalVerificationFailureKind = "timeout"
+	FinalVerificationFailureKindCancelled      FinalVerificationFailureKind = "cancelled"
+	FinalVerificationFailureKindInvalidCommand FinalVerificationFailureKind = "invalid_command"
+)
+
 // FinalVerification records broad repository verification performed after all
 // slices settle and before a completed branch is reviewed.
 type FinalVerification struct {
-	Command         string    `json:"command,omitempty"`
-	CWD             string    `json:"cwd"`
-	HeadSHA         string    `json:"head_sha,omitempty"`
-	Result          string    `json:"result"`
-	Details         string    `json:"details,omitempty"`
-	Fingerprint     string    `json:"fingerprint,omitempty"`
-	OutputTruncated bool      `json:"output_truncated,omitempty"`
-	VerifiedAt      time.Time `json:"verified_at"`
+	Command         string                       `json:"command,omitempty"`
+	CWD             string                       `json:"cwd"`
+	HeadSHA         string                       `json:"head_sha,omitempty"`
+	Result          string                       `json:"result"`
+	FailureKind     FinalVerificationFailureKind `json:"failure_kind,omitempty"`
+	ExitCode        *int                         `json:"exit_code,omitempty"`
+	Details         string                       `json:"details,omitempty"`
+	Fingerprint     string                       `json:"fingerprint,omitempty"`
+	OutputTruncated bool                         `json:"output_truncated,omitempty"`
+	VerifiedAt      time.Time                    `json:"verified_at"`
 }
 
 // VerificationRepairBinding binds one generated repair slice to the exact
@@ -691,6 +705,8 @@ const (
 	PlanActionContinue               PlanActionKind = "continue"
 	PlanActionRestartBlocked         PlanActionKind = "restart_blocked"
 	PlanActionRepairVerification     PlanActionKind = "repair_verification"
+	PlanActionReverify               PlanActionKind = "reverify"
+	PlanActionResolveVerification    PlanActionKind = "resolve_verification"
 	PlanActionRepairReviewProposal   PlanActionKind = "repair_review_proposal"
 	PlanActionRun                    PlanActionKind = "run"
 	PlanActionReview                 PlanActionKind = "review"
@@ -729,37 +745,39 @@ type PlanNextAction struct {
 
 // Event is one append-only lifecycle entry from events.jsonl.
 type Event struct {
-	Type                string                 `json:"type"`
-	Timestamp           time.Time              `json:"timestamp"`
-	PlanID              string                 `json:"plan_id"`
-	MutationID          string                 `json:"mutation_id,omitempty"`
-	SliceID             string                 `json:"slice_id,omitempty"`
-	Branch              string                 `json:"branch,omitempty"`
-	PriorRoot           string                 `json:"prior_root,omitempty"`
-	PriorBranch         string                 `json:"prior_branch,omitempty"`
-	PriorHead           string                 `json:"prior_head,omitempty"`
-	BaselineBranch      string                 `json:"baseline_branch,omitempty"`
-	BaselineHead        string                 `json:"baseline_head,omitempty"`
-	MergedDefaultSHA    string                 `json:"merged_default_sha,omitempty"`
-	Agent               string                 `json:"agent,omitempty"`
-	DurationSeconds     *int64                 `json:"duration_seconds,omitempty"`
-	Metrics             *AgentMetrics          `json:"metrics,omitempty"`
-	PullRequest         *PullRequest           `json:"pull_request,omitempty"`
-	PRFeedbackTriage    PRFeedbackTriageResult `json:"pr_feedback_triage,omitempty"`
-	Review              *PlanReview            `json:"review,omitempty"`
-	FinalizationFailure *FinalizationFailure   `json:"finalization_failure,omitempty"`
-	Command             string                 `json:"command,omitempty"`
-	CorrectedCommand    string                 `json:"corrected_command,omitempty"`
-	Result              string                 `json:"result,omitempty"`
-	Round               int                    `json:"round,omitempty"`
-	Attempts            int                    `json:"attempts,omitempty"`
-	Fingerprint         string                 `json:"fingerprint,omitempty"`
-	Reason              string                 `json:"reason,omitempty"`
-	CommitPolicy        string                 `json:"commit_policy,omitempty"`
-	RunPacketProvided   bool                   `json:"run_packet_provided,omitempty"`
-	GuardrailWarnings   int                    `json:"guardrail_warnings,omitempty"`
-	Metric              string                 `json:"metric,omitempty"`
-	Threshold           *float64               `json:"threshold,omitempty"`
-	Observed            *float64               `json:"observed,omitempty"`
-	Message             string                 `json:"message"`
+	Type                string                       `json:"type"`
+	Timestamp           time.Time                    `json:"timestamp"`
+	PlanID              string                       `json:"plan_id"`
+	MutationID          string                       `json:"mutation_id,omitempty"`
+	SliceID             string                       `json:"slice_id,omitempty"`
+	Branch              string                       `json:"branch,omitempty"`
+	PriorRoot           string                       `json:"prior_root,omitempty"`
+	PriorBranch         string                       `json:"prior_branch,omitempty"`
+	PriorHead           string                       `json:"prior_head,omitempty"`
+	BaselineBranch      string                       `json:"baseline_branch,omitempty"`
+	BaselineHead        string                       `json:"baseline_head,omitempty"`
+	MergedDefaultSHA    string                       `json:"merged_default_sha,omitempty"`
+	Agent               string                       `json:"agent,omitempty"`
+	DurationSeconds     *int64                       `json:"duration_seconds,omitempty"`
+	Metrics             *AgentMetrics                `json:"metrics,omitempty"`
+	PullRequest         *PullRequest                 `json:"pull_request,omitempty"`
+	PRFeedbackTriage    PRFeedbackTriageResult       `json:"pr_feedback_triage,omitempty"`
+	Review              *PlanReview                  `json:"review,omitempty"`
+	FinalizationFailure *FinalizationFailure         `json:"finalization_failure,omitempty"`
+	Command             string                       `json:"command,omitempty"`
+	CorrectedCommand    string                       `json:"corrected_command,omitempty"`
+	Result              string                       `json:"result,omitempty"`
+	FailureKind         FinalVerificationFailureKind `json:"failure_kind,omitempty"`
+	ExitCode            *int                         `json:"exit_code,omitempty"`
+	Round               int                          `json:"round,omitempty"`
+	Attempts            int                          `json:"attempts,omitempty"`
+	Fingerprint         string                       `json:"fingerprint,omitempty"`
+	Reason              string                       `json:"reason,omitempty"`
+	CommitPolicy        string                       `json:"commit_policy,omitempty"`
+	RunPacketProvided   bool                         `json:"run_packet_provided,omitempty"`
+	GuardrailWarnings   int                          `json:"guardrail_warnings,omitempty"`
+	Metric              string                       `json:"metric,omitempty"`
+	Threshold           *float64                     `json:"threshold,omitempty"`
+	Observed            *float64                     `json:"observed,omitempty"`
+	Message             string                       `json:"message"`
 }

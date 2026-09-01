@@ -230,15 +230,14 @@ func deriveNextAction(detail *PlanDetail, derived DerivedPlan) PlanNextAction {
 	if derived.Capabilities.CanRun {
 		return primary(PlanActionRun, PlanActionClassProgress, command("tao run"), "the next pending slice is runnable")
 	}
-	if failure := CurrentFailedFinalVerification(detail); failure != nil {
-		return primary(PlanActionRepairVerification, PlanActionClassRecovery, command("tao run --repair-verification"), "current final repository verification failed on the completed branch")
-	}
-
 	if PlanIsPullRequestComplete(detail) {
 		return primary(PlanActionNone, PlanActionClassTerminal, "", "the approved pull-request handoff is complete; remote integration is not asserted")
 	}
 	if detail.State.Status == StatusCompleted && !anyPlanMergedEvent(detail.Events) {
 		return primary(PlanActionNone, PlanActionClassTerminal, "", "legacy completed state is preserved without asserting merge evidence")
+	}
+	if failure := CurrentFailedFinalVerification(detail); failure != nil {
+		return PlanNextAction{Primary: deriveVerificationRecoveryAction(detail, failure), Alternatives: []PlanAction{}}
 	}
 
 	review := CurrentReview(detail)
@@ -253,6 +252,38 @@ func deriveNextAction(detail *PlanDetail, derived DerivedPlan) PlanNextAction {
 	default:
 		return primary(PlanActionNone, PlanActionClassTerminal, "", "no safe action can be derived from the current lifecycle evidence")
 	}
+}
+
+func deriveVerificationRecoveryAction(detail *PlanDetail, failure *FinalVerification) PlanAction {
+	id := "<plan>"
+	if detail != nil && strings.TrimSpace(detail.State.Plan.ID) != "" {
+		id = strings.TrimSpace(detail.State.Plan.ID)
+	}
+	action := PlanAction{
+		Class:  PlanActionClassRecovery,
+		Reason: "current final repository verification failed on the completed branch",
+	}
+	switch failure.FailureKind {
+	case FinalVerificationFailureKindCode:
+		action.Kind = PlanActionRepairVerification
+		action.Command = "tao run --repair-verification " + id
+	case FinalVerificationFailureKindToolMissing:
+		action.Kind = PlanActionResolveVerification
+		action.Instruction = "Restore the tool required by the repository verification command before explicitly reverifying the unchanged head"
+	case FinalVerificationFailureKindTimeout:
+		action.Kind = PlanActionResolveVerification
+		action.Instruction = "Resolve the repository verification timeout before explicitly reverifying the unchanged head"
+	case FinalVerificationFailureKindCancelled:
+		action.Kind = PlanActionResolveVerification
+		action.Instruction = "Resolve the repository verification cancellation before explicitly reverifying the unchanged head"
+	case FinalVerificationFailureKindInvalidCommand:
+		action.Kind = PlanActionResolveVerification
+		action.Instruction = "Correct the repository verification command before explicitly reverifying the unchanged head"
+	default:
+		action.Kind = PlanActionReverify
+		action.Command = "tao run --reverify " + id
+	}
+	return action
 }
 
 func AnalyzeRunCapabilities(detail *PlanDetail) RunCapabilities {
@@ -515,13 +546,14 @@ func currentSliceID(detail *PlanDetail, index detailIndex) string {
 func Summarize(detail *PlanDetail, now time.Time) PlanSummary {
 	state := detail.State
 	derived := Derive(detail, now)
+	status := PlanLifecycleStatus(detail)
 	planningSummary := SummarizePlanningSessionMetrics(detail.PlanningSession.Stats, state.CreatedAt)
 	summary := PlanSummary{
 		ID:                               state.Plan.ID,
 		Title:                            state.Plan.Title,
 		ChangeType:                       state.Plan.ChangeType,
 		Overview:                         ProjectDecisionOverview(detail),
-		Status:                           PlanLifecycleStatus(detail),
+		Status:                           status,
 		Dir:                              detail.Dir,
 		CompletedCount:                   derived.CompletedCount,
 		PendingCount:                     derived.PendingCount,
@@ -556,6 +588,15 @@ func Summarize(detail *PlanDetail, now time.Time) PlanSummary {
 		Warnings:                         detail.Warnings,
 	}
 
+	if status == StatusVerificationFailed {
+		if failure := CurrentFailedFinalVerification(detail); failure != nil {
+			recovery := deriveVerificationRecoveryAction(detail, failure)
+			summary.FinalVerificationFailureKind = failure.FailureKind
+			summary.VerificationRecoveryAction = recovery.Kind
+			summary.VerificationRecoveryCommand = recovery.Command
+		}
+	}
+
 	if currentID := derived.CurrentSliceID; summary.Status != StatusCompleted && currentID != "" {
 		summary.CurrentSliceID = currentID
 		summary.CurrentSlice = derived.CurrentSlice
@@ -587,6 +628,9 @@ func PlanLifecycleStatus(detail *PlanDetail) string {
 	// projection and gating aligned.
 	if detail.State.Status == StatusCompleted && !anyPlanMergedEvent(detail.Events) {
 		return StatusCompleted
+	}
+	if CurrentFailedFinalVerification(detail) != nil {
+		return StatusVerificationFailed
 	}
 	if slicesComplete(detail) || IsPostSliceStatus(detail.State.Status) {
 		return reviewProjectedStatus(CurrentReview(detail))

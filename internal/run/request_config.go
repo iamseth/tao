@@ -21,5 +21,6 @@ func prepareRequestConfig(defaults ExecutionConfig, request Request) (ExecutionC
 	execution.MaxReworkAttempts = defaults.MaxReworkAttempts
 	execution.RestartBlocked = request.RestartBlocked
 	execution.RepairVerification = request.RepairVerification
+	execution.Reverify = request.Reverify
 	return execution, nil
 }

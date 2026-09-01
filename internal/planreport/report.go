@@ -545,7 +545,7 @@ func firstSection(primary, secondary map[string]string, names ...string) string 
 
 func knownStatus(value string) string {
 	switch value {
-	case plan.StatusPlanned, plan.StatusPending, plan.StatusInProgress, plan.StatusInReview, plan.StatusReviewed, plan.StatusChangesRequested, plan.StatusCompleted, plan.StatusSkipped, plan.StatusBlocked, plan.StatusInvalid:
+	case plan.StatusPlanned, plan.StatusPending, plan.StatusInProgress, plan.StatusInReview, plan.StatusReviewed, plan.StatusChangesRequested, plan.StatusVerificationFailed, plan.StatusCompleted, plan.StatusSkipped, plan.StatusBlocked, plan.StatusInvalid:
 		return value
 	default:
 		return "unavailable"

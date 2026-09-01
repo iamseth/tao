@@ -5,8 +5,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -78,6 +81,7 @@ func (f Finalizer) verifyCompletedBranch(ctx context.Context, detail *plan.PlanD
 	combined := combineFinalVerificationOutput(stdout.String(), stderr.String())
 	if runErr != nil {
 		verification.Result = finalVerificationFailed
+		verification.FailureKind, verification.ExitCode = classifyFinalVerificationFailure(ctx, runErr)
 		verification.Details, verification.OutputTruncated = boundedFinalVerificationDetails(combined)
 		verification.Fingerprint = finalVerificationFingerprint(verification)
 		recordErr := f.recordFinalVerification(detail, verification)
@@ -107,6 +111,11 @@ func (f Finalizer) appendFinalVerificationEvent(detail *plan.PlanDetail, verific
 	if len(reason) > 1000 {
 		reason = reason[:1000]
 	}
+	var exitCode *int
+	if verification.ExitCode != nil {
+		copied := *verification.ExitCode
+		exitCode = &copied
+	}
 	event := plan.Event{
 		Type:            plan.EventTypeFinalVerification,
 		Timestamp:       timestamp,
@@ -114,6 +123,8 @@ func (f Finalizer) appendFinalVerificationEvent(detail *plan.PlanDetail, verific
 		DurationSeconds: durationSeconds,
 		Command:         verification.Command,
 		Result:          verification.Result,
+		FailureKind:     verification.FailureKind,
+		ExitCode:        exitCode,
 		Reason:          string(reason),
 		Message:         fmt.Sprintf("Final verification %s in %s", verification.Result, verification.CWD),
 	}
@@ -146,6 +157,41 @@ func finalVerificationCommand(detail *plan.PlanDetail, executionRoot string) str
 		}
 	}
 	return verifydetect.DetectCommand(executionRoot)
+}
+
+func classifyFinalVerificationFailure(ctx context.Context, runErr error) (plan.FinalVerificationFailureKind, *int) {
+	switch ctx.Err() {
+	case context.DeadlineExceeded:
+		return plan.FinalVerificationFailureKindTimeout, finalVerificationExitCode(runErr)
+	case context.Canceled:
+		return plan.FinalVerificationFailureKindCancelled, finalVerificationExitCode(runErr)
+	}
+	exitCode := finalVerificationExitCode(runErr)
+	if exitCode != nil {
+		switch *exitCode {
+		case 126:
+			return plan.FinalVerificationFailureKindInvalidCommand, exitCode
+		case 127:
+			return plan.FinalVerificationFailureKindToolMissing, exitCode
+		}
+	}
+	return plan.FinalVerificationFailureKindCode, exitCode
+}
+
+func finalVerificationExitCode(runErr error) *int {
+	var exitErr *exec.ExitError
+	if !errors.As(runErr, &exitErr) || exitErr.ProcessState == nil {
+		return nil
+	}
+	waitStatus, ok := exitErr.Sys().(syscall.WaitStatus)
+	if !ok || !waitStatus.Exited() {
+		return nil
+	}
+	exitCode := waitStatus.ExitStatus()
+	if exitCode < 0 {
+		return nil
+	}
+	return &exitCode
 }
 
 func boundedFinalVerificationDetails(output string) (string, bool) {

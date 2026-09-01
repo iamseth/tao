@@ -11,7 +11,7 @@ func TestAppendVerificationRepairIsBoundAndSingleUse(t *testing.T) {
 	detail.Dir = t.TempDir()
 	detail.State.Status = StatusInReview
 	detail.State.Workspace = &Workspace{Strategy: WorkspaceStrategyWorktree, Path: "/worktree", Branch: "feature/repair", HeadSHA: "head-a"}
-	detail.State.Plan.FinalVerification = &FinalVerification{Command: "make verify", CWD: "/worktree", HeadSHA: "head-a", Result: "failed", Details: "failing package", Fingerprint: "abcdef1234567890", OutputTruncated: true, VerifiedAt: time.Now()}
+	detail.State.Plan.FinalVerification = &FinalVerification{Command: "make verify", CWD: "/worktree", HeadSHA: "head-a", Result: "failed", FailureKind: FinalVerificationFailureKindCode, Details: "failing package", Fingerprint: "abcdef1234567890", OutputTruncated: true, VerifiedAt: time.Now()}
 	record := testRecord(detail.Dir, detail)
 	request := VerificationRepairRequest{Binding: VerificationRepairBinding{Command: "make verify", HeadSHA: "head-a", Fingerprint: "abcdef1234567890"}, CreatedAt: time.Now().UTC()}
 
@@ -43,7 +43,7 @@ func TestAppendVerificationRepairAllowsNewFailureAfterCompletedRepair(t *testing
 	detail.Dir = t.TempDir()
 	detail.State.Status = StatusInReview
 	detail.State.Workspace = &Workspace{Strategy: WorkspaceStrategyWorktree, Path: "/worktree", Branch: "feature/repair", HeadSHA: "head-b"}
-	detail.State.Plan.FinalVerification = &FinalVerification{Command: "make verify", HeadSHA: "head-b", Result: "failed", Fingerprint: "failure-b"}
+	detail.State.Plan.FinalVerification = &FinalVerification{Command: "make verify", HeadSHA: "head-b", Result: "failed", FailureKind: FinalVerificationFailureKindCode, Fingerprint: "failure-b"}
 	firstRepair := Slice{
 		ID: "vr01-final-verification-failure-a", Title: "Repair final verification", Status: StatusCompleted,
 		DependsOn: []string{}, Timing: SliceTiming{CreatedAt: time.Now().Add(-time.Hour), UpdatedAt: time.Now().Add(-time.Minute)},
@@ -74,7 +74,7 @@ func TestDeriveNextActionPrefersCurrentVerificationRepair(t *testing.T) {
 	detail := completedReopenDetail()
 	detail.State.Status = StatusInReview
 	detail.State.Workspace = &Workspace{HeadSHA: "head-a"}
-	detail.State.Plan.FinalVerification = &FinalVerification{Command: "make verify", HeadSHA: "head-a", Result: "failed", Fingerprint: "fingerprint"}
+	detail.State.Plan.FinalVerification = &FinalVerification{Command: "make verify", HeadSHA: "head-a", Result: "failed", FailureKind: FinalVerificationFailureKindCode, Fingerprint: "fingerprint"}
 
 	action := DeriveNextAction(detail).Primary
 	if action.Kind != PlanActionRepairVerification || action.Command != "tao run --repair-verification "+detail.State.Plan.ID {

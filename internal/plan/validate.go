@@ -35,6 +35,14 @@ func ValidateDetail(detail *PlanDetail) []string {
 		warnings = append(warnings, "state.json plan.change_type is invalid: "+err.Error())
 	}
 	warnings = append(warnings, validateApprovedProposalType(detail.State.Plan)...)
+	if verification := detail.State.Plan.FinalVerification; verification != nil && !validFinalVerificationFailureKind(verification.FailureKind) {
+		warnings = append(warnings, "state.json plan.final_verification.failure_kind is invalid")
+	}
+	for i, event := range detail.Events {
+		if !validFinalVerificationFailureKind(event.FailureKind) {
+			warnings = append(warnings, fmt.Sprintf("events.jsonl event %d failure_kind is invalid", i+1))
+		}
+	}
 	if failure := detail.State.Plan.FinalizationFailure; failure != nil {
 		if err := failure.Validate(); err != nil {
 			warnings = append(warnings, "state.json plan.finalization_failure is invalid: "+err.Error())
@@ -109,6 +117,15 @@ func validateWorkspace(workspace *Workspace) []string {
 
 func validValue(value string, allowed []string) bool {
 	return slices.Contains(allowed, value)
+}
+
+func validFinalVerificationFailureKind(kind FinalVerificationFailureKind) bool {
+	switch kind {
+	case "", FinalVerificationFailureKindCode, FinalVerificationFailureKindToolMissing, FinalVerificationFailureKindTimeout, FinalVerificationFailureKindCancelled, FinalVerificationFailureKindInvalidCommand:
+		return true
+	default:
+		return false
+	}
 }
 
 func validateApprovedProposalType(state PlanState) []string {

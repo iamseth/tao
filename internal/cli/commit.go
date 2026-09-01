@@ -160,7 +160,13 @@ func (a App) guardStandaloneCommit(ctx context.Context, git gitops.Client, workt
 		return fmt.Errorf("refuse standalone commit: %w", err)
 	}
 	if owner != nil {
-		return fmt.Errorf("refuse standalone commit in active Tao-managed worktree for plan %s; use `%s`", owner.PlanID, owner.Command)
+		if strings.TrimSpace(owner.Command) != "" {
+			return fmt.Errorf("refuse standalone commit in active Tao-managed worktree for plan %s; use `%s`", owner.PlanID, owner.Command)
+		}
+		if strings.TrimSpace(owner.Instruction) != "" {
+			return fmt.Errorf("refuse standalone commit in active Tao-managed worktree for plan %s; %s", owner.PlanID, owner.Instruction)
+		}
+		return fmt.Errorf("refuse standalone commit in active Tao-managed worktree for plan %s; inspect the plan's recovery guidance", owner.PlanID)
 	}
 	return nil
 }

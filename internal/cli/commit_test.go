@@ -101,6 +101,50 @@ func TestCommitRefusesManagedWorktreeBeforeContextOrGitMutation(t *testing.T) {
 	}
 }
 
+func TestCommitRefusalRendersCommandlessVerificationRecoveryInstruction(t *testing.T) {
+	control := newCLICommitRepo(t)
+	worktree := filepath.Join(t.TempDir(), "managed")
+	runCLICommitGit(t, control, "worktree", "add", "-b", "feature/managed", worktree)
+	writeCLICommitFile(t, worktree, "managed.go", "package managed\n")
+	dataHome := t.TempDir()
+	t.Setenv("TAO_DATA_HOME", dataHome)
+	canonicalControl, err := filepath.EvalSymlinks(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plansDir := filepath.Join(dataHome, "repos", taodata.RepoID(canonicalControl), "plans")
+	planDir := writeRunPlan(t, plansDir, "plan-managed", plan.StatusInReview, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
+	configureManagedCommitPlan(t, planDir, control, worktree, "feature/managed", false)
+
+	statePath := filepath.Join(planDir, "state.json")
+	content, err := os.ReadFile(statePath) //nolint:gosec // G304: test-controlled plan artifact path
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state plan.State
+	if err := json.Unmarshal(content, &state); err != nil {
+		t.Fatal(err)
+	}
+	state.Plan.CurrentSlice = nil
+	state.Workspace.HeadSHA = strings.TrimSpace(runCLICommitGit(t, worktree, "rev-parse", "HEAD"))
+	state.Plan.FinalVerification = &plan.FinalVerification{
+		Command: "make verify", HeadSHA: state.Workspace.HeadSHA, Result: "failed",
+		FailureKind: plan.FinalVerificationFailureKindInvalidCommand, Fingerprint: "failure-a",
+	}
+	content, err = json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statePath, append(content, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err = (App{Out: io.Discard, Err: io.Discard}).Run(context.Background(), []string{"commit", "--context", "--repo-root", worktree})
+	if err == nil || !strings.Contains(err.Error(), "active Tao-managed worktree") || !strings.Contains(err.Error(), "Correct the repository verification command") || strings.Contains(err.Error(), "--repair-verification") {
+		t.Fatalf("commandless verification recovery error = %v", err)
+	}
+}
+
 func TestCommitRefusesActiveManagedWorktreeAfterLiveBranchDrift(t *testing.T) {
 	for _, tt := range []struct {
 		name      string

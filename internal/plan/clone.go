@@ -142,6 +142,7 @@ func cloneFinalVerification(verification *FinalVerification) *FinalVerification 
 		return nil
 	}
 	clone := *verification
+	clone.ExitCode = cloneIntPtr(verification.ExitCode)
 	return &clone
 }
 
@@ -267,6 +268,7 @@ func cloneEvents(events []Event) []Event {
 func cloneEvent(event Event) Event {
 	clone := event
 	clone.DurationSeconds = cloneInt64Ptr(event.DurationSeconds)
+	clone.ExitCode = cloneIntPtr(event.ExitCode)
 	if event.Metrics != nil {
 		metrics := *event.Metrics
 		clone.Metrics = &metrics
@@ -296,6 +298,14 @@ func cloneStringPtr(value *string) *string {
 }
 
 func cloneTimePtr(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
+func cloneIntPtr(value *int) *int {
 	if value == nil {
 		return nil
 	}

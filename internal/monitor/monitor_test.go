@@ -238,6 +238,7 @@ func TestPlanRowDerivesAttentionReasons(t *testing.T) {
 	}{
 		{name: "blocked", summary: plan.PlanSummary{Status: plan.StatusBlocked}, want: AttentionBlocked},
 		{name: "changes requested", summary: plan.PlanSummary{Status: plan.StatusChangesRequested}, want: AttentionChangesRequested},
+		{name: "verification failed", summary: plan.PlanSummary{Status: plan.StatusVerificationFailed}, want: AttentionVerificationFailed},
 		{name: "approval required", summary: plan.PlanSummary{Capabilities: plan.RunCapabilities{NeedsApproval: true}}, want: AttentionApprovalRequired},
 		{name: "slice completion pending", summary: plan.PlanSummary{SliceCompletionPending: true}, want: AttentionSliceCompletionPending},
 		{name: "rework stopped", summary: plan.PlanSummary{UnresolvedReworkStop: true}, want: AttentionReworkStopped},
@@ -248,6 +249,44 @@ func TestPlanRowDerivesAttentionReasons(t *testing.T) {
 			row := planRow(entry, test.summary)
 			if !slices.Equal(row.AttentionReasons, []AttentionReason{test.want}) {
 				t.Fatalf("attention reasons = %v, want %v", row.AttentionReasons, test.want)
+			}
+		})
+	}
+}
+
+func TestPlanRowProjectsVerificationRecoveryByClassification(t *testing.T) {
+	tests := []struct {
+		name     string
+		kind     plan.FinalVerificationFailureKind
+		action   plan.PlanAction
+		wantNext string
+	}{
+		{name: "code", kind: plan.FinalVerificationFailureKindCode, action: plan.PlanAction{Kind: plan.PlanActionRepairVerification, Command: "tao run --repair-verification plan-a"}, wantNext: "REPAIR VERIFICATION"},
+		{name: "tool missing", kind: plan.FinalVerificationFailureKindToolMissing, action: plan.PlanAction{Kind: plan.PlanActionResolveVerification, Instruction: "restore tool"}, wantNext: "RESOLVE VERIFICATION"},
+		{name: "timeout", kind: plan.FinalVerificationFailureKindTimeout, action: plan.PlanAction{Kind: plan.PlanActionResolveVerification, Instruction: "resolve timeout"}, wantNext: "RESOLVE VERIFICATION"},
+		{name: "cancelled", kind: plan.FinalVerificationFailureKindCancelled, action: plan.PlanAction{Kind: plan.PlanActionResolveVerification, Instruction: "resolve cancellation"}, wantNext: "RESOLVE VERIFICATION"},
+		{name: "invalid command", kind: plan.FinalVerificationFailureKindInvalidCommand, action: plan.PlanAction{Kind: plan.PlanActionResolveVerification, Instruction: "correct command"}, wantNext: "RESOLVE VERIFICATION"},
+		{name: "legacy unclassified", action: plan.PlanAction{Kind: plan.PlanActionReverify, Command: "tao run --reverify plan-a"}, wantNext: "REVERIFY"},
+		{name: "pending verification repair", kind: plan.FinalVerificationFailureKindCode, action: plan.PlanAction{Kind: plan.PlanActionRun, Command: "tao run plan-a"}, wantNext: "RUN"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			summary := plan.PlanSummary{
+				ID: "plan-a", Status: plan.StatusVerificationFailed,
+				FinalVerificationFailureKind: test.kind,
+				NextAction:                   plan.PlanNextAction{Primary: test.action},
+			}
+			if test.action.Kind == plan.PlanActionRun {
+				summary.CurrentSliceID = "vr01-final-verification-failure"
+				summary.CurrentSlice = &plan.Slice{
+					ID:                 summary.CurrentSliceID,
+					VerificationRepair: &plan.VerificationRepairBinding{Command: "make verify", HeadSHA: "failed-head", Fingerprint: "failure"},
+				}
+				summary.PendingCount = 1
+			}
+			row := planRow(taodata.RepoInventoryEntry{}, summary)
+			if row.FinalVerificationFailureKind != test.kind || row.VerificationRecoveryAction != test.action || !slices.Contains(row.AttentionReasons, AttentionVerificationFailed) || DeriveNextAction(row) != test.wantNext {
+				t.Fatalf("verification recovery row = %+v", row)
 			}
 		})
 	}
@@ -415,6 +454,11 @@ func TestDeriveNextActionIsPureAndExhaustive(t *testing.T) {
 		{name: "approval", row: Row{AttentionReasons: []AttentionReason{AttentionApprovalRequired}}, want: "APPROVE"},
 		{name: "blocked", row: Row{Status: plan.StatusBlocked}, want: "CONTINUE"},
 		{name: "changes", row: Row{Status: plan.StatusChangesRequested}, want: "REWORK"},
+		{name: "code verification failure", row: Row{Status: plan.StatusVerificationFailed, AttentionReasons: []AttentionReason{AttentionVerificationFailed}, VerificationRecoveryAction: plan.PlanAction{Kind: plan.PlanActionRepairVerification}}, want: "REPAIR VERIFICATION"},
+		{name: "external verification failure", row: Row{Status: plan.StatusVerificationFailed, AttentionReasons: []AttentionReason{AttentionVerificationFailed}, VerificationRecoveryAction: plan.PlanAction{Kind: plan.PlanActionResolveVerification}}, want: "RESOLVE VERIFICATION"},
+		{name: "legacy verification failure", row: Row{Status: plan.StatusVerificationFailed, AttentionReasons: []AttentionReason{AttentionVerificationFailed}, VerificationRecoveryAction: plan.PlanAction{Kind: plan.PlanActionReverify}}, want: "REVERIFY"},
+		{name: "pending verification repair", row: Row{PlanID: "plan-a", Status: plan.StatusVerificationFailed, AttentionReasons: []AttentionReason{AttentionVerificationFailed}, VerificationRecoveryAction: plan.PlanAction{Kind: plan.PlanActionRun, Command: "tao run plan-a"}}, want: "RUN"},
+		{name: "unrecognized verification run", row: Row{PlanID: "plan-a", Status: plan.StatusVerificationFailed, AttentionReasons: []AttentionReason{AttentionVerificationFailed}, VerificationRecoveryAction: plan.PlanAction{Kind: plan.PlanActionRun, Command: "tao run --continue plan-a"}}, want: "RESOLVE VERIFICATION"},
 		{name: "review", row: Row{Status: plan.StatusInReview}, want: "REVIEW"},
 		{name: "reviewed", row: Row{Status: plan.StatusReviewed}, want: "MERGE"},
 		{name: "pending intent with approval", row: Row{Status: plan.StatusReviewed, RecommendedAction: plan.PlanAction{Kind: plan.PlanActionRecoverPullRequest}}, want: "FINALIZE PR"},
@@ -449,6 +493,12 @@ func TestDeriveNextActionIsPureAndExhaustive(t *testing.T) {
 				t.Fatal("DeriveNextAction mutated its input")
 			}
 		})
+	}
+}
+
+func TestVerificationFailureHasAttentionUrgency(t *testing.T) {
+	if got := urgency(Row{Status: plan.StatusVerificationFailed}); got != 2 {
+		t.Fatalf("verification-failed urgency = %d, want 2", got)
 	}
 }
 

@@ -66,6 +66,77 @@ func TestRunActionLaunchesExactDetachedCommand(t *testing.T) {
 	}
 }
 
+func TestRunActionDispatchesProjectedVerificationRecoveryByCommand(t *testing.T) {
+	tests := []struct {
+		name        string
+		kind        plan.FinalVerificationFailureKind
+		action      plan.PlanAction
+		wantArgs    []string
+		wantMessage string
+	}{
+		{name: "code", kind: plan.FinalVerificationFailureKindCode, action: plan.PlanAction{Kind: plan.PlanActionRepairVerification, Command: "tao run --repair-verification plan-a"}, wantArgs: []string{"run", "--repair-verification", "plan-a"}},
+		{name: "tool missing", kind: plan.FinalVerificationFailureKindToolMissing, action: plan.PlanAction{Kind: plan.PlanActionResolveVerification, Instruction: "restore the required tool"}, wantMessage: "restore the required tool"},
+		{name: "timeout", kind: plan.FinalVerificationFailureKindTimeout, action: plan.PlanAction{Kind: plan.PlanActionResolveVerification, Instruction: "resolve the timeout"}, wantMessage: "resolve the timeout"},
+		{name: "cancelled", kind: plan.FinalVerificationFailureKindCancelled, action: plan.PlanAction{Kind: plan.PlanActionResolveVerification, Instruction: "resolve the cancellation"}, wantMessage: "resolve the cancellation"},
+		{name: "invalid command", kind: plan.FinalVerificationFailureKindInvalidCommand, action: plan.PlanAction{Kind: plan.PlanActionResolveVerification, Instruction: "correct the command"}, wantMessage: "correct the command"},
+		{name: "legacy unclassified", action: plan.PlanAction{Kind: plan.PlanActionReverify, Command: "tao run --reverify plan-a"}, wantArgs: []string{"run", "--reverify", "plan-a"}},
+		{name: "pending verification repair", kind: plan.FinalVerificationFailureKindCode, action: plan.PlanAction{Kind: plan.PlanActionRun, Command: "tao run plan-a"}, wantArgs: []string{"run", "plan-a"}},
+		{name: "projected command overrides stale classification", kind: plan.FinalVerificationFailureKindToolMissing, action: plan.PlanAction{Kind: plan.PlanActionRepairVerification, Command: "tao run --repair-verification plan-a"}, wantArgs: []string{"run", "--repair-verification", "plan-a"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			launcher := &recordingActionLauncher{}
+			actions := newTestActions(t, launcher, nil, nil)
+			row := testActionRow()
+			row.Status = plan.StatusVerificationFailed
+			row.FinalVerificationFailureKind = test.kind
+			row.VerificationRecoveryAction = test.action
+
+			actions.RunPlan(context.Background(), row)
+
+			if test.wantArgs != nil {
+				if len(launcher.calls) != 1 {
+					t.Fatalf("launch calls = %+v, want one", launcher.calls)
+				}
+				assertActionRequest(t, launcher.calls[0], row.RepositoryRoot, test.wantArgs)
+				return
+			}
+			if len(launcher.calls) != 0 {
+				t.Fatalf("commandless recovery launched: %+v", launcher.calls)
+			}
+			if !strings.Contains(actions.statusMessage(), test.wantMessage) {
+				t.Fatalf("refusal message = %q, want instruction %q", actions.statusMessage(), test.wantMessage)
+			}
+		})
+	}
+}
+
+func TestRunActionRejectsUnrecognizedProjectedVerificationCommand(t *testing.T) {
+	tests := []struct {
+		name   string
+		action plan.PlanAction
+	}{
+		{name: "run command without projected kind", action: plan.PlanAction{Command: "tao run plan-a"}},
+		{name: "run kind with unsupported flag", action: plan.PlanAction{Kind: plan.PlanActionRun, Command: "tao run --continue plan-a"}},
+		{name: "run kind with non-exact command", action: plan.PlanAction{Kind: plan.PlanActionRun, Command: " tao run plan-a"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			launcher := &recordingActionLauncher{}
+			actions := newTestActions(t, launcher, nil, nil)
+			row := testActionRow()
+			row.Status = plan.StatusVerificationFailed
+			row.VerificationRecoveryAction = test.action
+
+			actions.RunPlan(context.Background(), row)
+
+			if len(launcher.calls) != 0 || !strings.Contains(actions.statusMessage(), "unsupported projected verification recovery command") {
+				t.Fatalf("unrecognized recovery calls=%+v message=%q", launcher.calls, actions.statusMessage())
+			}
+		})
+	}
+}
+
 func TestQQuitsWithoutLaunchingAction(t *testing.T) {
 	launcher := &recordingActionLauncher{}
 	actions := newTestActions(t, launcher, nil, nil)

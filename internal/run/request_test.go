@@ -88,6 +88,7 @@ func TestPrepareRequestConfigMapsRunRequestToExecutionConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	request.Reverify = true
 	got, err := prepareRequestConfig(ExecutionConfig{
 		ResolvedRunOptions: ResolvedRunOptions{
 			MaxSlices:     3,
@@ -103,8 +104,16 @@ func TestPrepareRequestConfigMapsRunRequestToExecutionConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.MaxSlices != 1 || got.Continue || !got.SkipPermissions || got.MaxReworkAttempts != 7 || got.CommitPolicy != CommitPolicySlice || got.ExecutionMode != ExecutionModeCurrent || got.Agent != AgentPi || got.PullRequest {
+	if got.MaxSlices != 1 || got.Continue || !got.SkipPermissions || got.MaxReworkAttempts != 7 || got.CommitPolicy != CommitPolicySlice || got.ExecutionMode != ExecutionModeCurrent || got.Agent != AgentPi || got.PullRequest || !got.Reverify {
 		t.Fatalf("unexpected execution config: %#v", got)
+	}
+}
+
+func TestCheckRequestCanStartRefusesReverifyWithoutCurrentFailedEvidence(t *testing.T) {
+	detail := completedReviewPlanDetail(t.TempDir())
+	err := CheckRequestCanStart(detail, Request{Reverify: true})
+	if err == nil || !strings.Contains(err.Error(), "--reverify requires current failed final-verification evidence") {
+		t.Fatalf("reverify admission error = %v", err)
 	}
 }
 

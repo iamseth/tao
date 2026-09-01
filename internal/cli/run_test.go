@@ -251,12 +251,17 @@ func TestCLIRunRequestBuilderPreservesEnvDefaultsAndFlagOverrides(t *testing.T) 
 	}
 }
 
-func TestRunRejectsContinueWithBlockedRestart(t *testing.T) {
+func TestRunRejectsMutuallyExclusiveRecoveryModes(t *testing.T) {
 	clearTaoEnv(t)
 	app := App{Out: io.Discard, Err: io.Discard}
-	err := app.run(context.Background(), nil, []string{"--continue", "--restart", "plan-a"})
-	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
-		t.Fatalf("run error = %v, want mutually exclusive recovery flags", err)
+	for _, args := range [][]string{
+		{"--continue", "--restart", "plan-a"},
+		{"--repair-verification", "--reverify", "plan-a"},
+	} {
+		err := app.run(context.Background(), nil, args)
+		if err == nil || !strings.Contains(err.Error(), "--continue, --restart, --repair-verification, and --reverify are mutually exclusive") {
+			t.Fatalf("run %v error = %v, want mutually exclusive recovery flags", args, err)
+		}
 	}
 }
 
@@ -695,6 +700,48 @@ func TestRunAutoReworkPolicyResolution(t *testing.T) {
 				t.Fatalf("policy = %+v, want %+v", policy, tt.want)
 			}
 		})
+	}
+}
+
+func TestRunReverifyBypassesAutomaticReworkForChangesRequestedPlan(t *testing.T) {
+	clearTaoEnv(t)
+	now := time.Date(2026, 9, 1, 16, 0, 0, 0, time.UTC)
+	planID := "20260901-1600-reverify"
+	finding := plan.ReviewFinding{Severity: "major", File: "internal/cli/run.go", Line: 190, Message: "fix the run loop"}
+	detail := singleRunReworkDetail(planID, plan.StatusChangesRequested, reworkReview(plan.ReviewVerdictChangesRequested, []plan.ReviewFinding{finding}), now)
+	detail.Dir = t.TempDir()
+	detail.State.Plan.FinalVerification = &plan.FinalVerification{HeadSHA: "failed-head", Result: "failed", VerifiedAt: now.Add(-time.Minute)}
+	repo := fakeRepository{details: map[string]*plan.PlanDetail{planID: detail}}
+	initialSliceCount := len(detail.Slices.Slices)
+
+	calls := 0
+	oldExecutor := executeSinglePlan
+	executeSinglePlan = func(_ run.Service, _ context.Context, request run.Request) error {
+		calls++
+		if !request.Reverify {
+			t.Fatal("run request did not retain reverify mode")
+		}
+		detail.State.Plan.FinalVerification = &plan.FinalVerification{HeadSHA: "failed-head", Result: "passed", VerifiedAt: now}
+		return nil
+	}
+	t.Cleanup(func() { executeSinglePlan = oldExecutor })
+
+	if err := (App{Out: io.Discard, Now: func() time.Time { return now }}).run(context.Background(), repo, []string{"--reverify", planID}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("execute calls = %d, want one reverification without automatic rework", calls)
+	}
+	if detail.State.Status != plan.StatusChangesRequested {
+		t.Fatalf("plan status = %q, want unchanged changes_requested", detail.State.Status)
+	}
+	if len(detail.Slices.Slices) != initialSliceCount || len(detail.State.Plan.PendingSlices) != 0 {
+		t.Fatalf("reverification appended slices: slices=%d pending=%v", len(detail.Slices.Slices), detail.State.Plan.PendingSlices)
+	}
+	for _, event := range detail.Events {
+		if event.Type == plan.EventTypePlanReopened || event.Type == plan.EventTypeReworkRound {
+			t.Fatalf("reverification appended automatic-rework event: %+v", event)
+		}
 	}
 }
 

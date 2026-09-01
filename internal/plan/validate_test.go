@@ -509,6 +509,31 @@ func TestValidateSelectedSliceVerificationBlocksBlankCommandLists(t *testing.T) 
 	}
 }
 
+func TestValidateDetailConstrainsFinalVerificationFailureKind(t *testing.T) {
+	validKinds := []FinalVerificationFailureKind{"", FinalVerificationFailureKindCode, FinalVerificationFailureKindToolMissing, FinalVerificationFailureKindTimeout, FinalVerificationFailureKindCancelled, FinalVerificationFailureKindInvalidCommand}
+	for _, kind := range validKinds {
+		detail := &PlanDetail{
+			State:         State{Plan: PlanState{ID: "plan", FinalVerification: &FinalVerification{FailureKind: kind}}},
+			Slices:        SlicesFile{PlanID: "plan"},
+			PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
+		}
+		if warnings := ValidateDetail(detail); containsWarning(warnings, "final_verification.failure_kind") {
+			t.Fatalf("valid failure kind %q produced warnings: %v", kind, warnings)
+		}
+	}
+
+	detail := &PlanDetail{
+		State:         State{Plan: PlanState{ID: "plan", FinalVerification: &FinalVerification{FailureKind: "network"}}},
+		Slices:        SlicesFile{PlanID: "plan"},
+		Events:        []Event{{FailureKind: "environment"}},
+		PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
+	}
+	warnings := ValidateDetail(detail)
+	if !containsWarning(warnings, "final_verification.failure_kind is invalid") || !containsWarning(warnings, "event 1 failure_kind is invalid") {
+		t.Fatalf("invalid failure kinds were not reported: %v", warnings)
+	}
+}
+
 func TestValidateDetailAllowsCanonicalCurrentSliceStatuses(t *testing.T) {
 	for _, status := range []string{StatusPending, StatusInProgress, StatusBlocked} {
 		t.Run(status, func(t *testing.T) {

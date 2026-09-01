@@ -462,8 +462,14 @@ through.
 - `tao run --restart <plan-id>` — restart only a blocked clean isolated
   automatic slice on a strictly newer baseline, commonly after integrating a
   runtime prerequisite. It does not reuse the superseded execution boundary.
-- `tao run --repair-verification <plan-id>` — append and run one bounded repair
-  slice for a failed final repository verification bound to the current head.
+- `tao run --repair-verification <plan-id>` — when the recorded classification
+  is `code`, append and run one bounded repair slice for the failed final gate.
+- `tao run --reverify <plan-id>` — for a legacy unclassified failure, or after
+  first resolving the external cause recorded for `tool_missing`, `timeout`,
+  `cancelled`, or `invalid_command`, rerun final verification without creating a
+  repair slice. Reverification requires and runs at the same recorded Git head;
+  under `--commit-policy none`, do not interpret that as evidence of committed
+  work only because permitted uncommitted work may also be present.
 
 Runtime prerequisites are checked before workspace preparation or agent launch.
 A dependent plan becomes runnable only after each exact same-repository
@@ -612,8 +618,9 @@ does not override any interrupted-slice boundary check. When a clean automatic
 slice was blocked by a prerequisite and the baseline has since advanced, use
 `tao run --restart` instead; Tao records the superseded boundary and re-runs
 prerequisite and selected-slice preflight before handoff. A failed broad final
-gate is not an interrupted implementation slice: use
-`tao run --repair-verification` so Tao creates and runs the bound repair slice.
+gate is not an interrupted implementation slice: follow its recorded
+classification, using `tao run --repair-verification` for code repair or, after
+resolving a non-code cause, `tao run --reverify` at the recorded head.
 
 ### `tao rework` — turn review findings into follow-up slices
 
@@ -718,8 +725,8 @@ an isolated automatic pre-intent boundary, and the run path still checks the liv
 cleanliness and newer-baseline requirements. Manual/current-checkout and
 post-intent states report `tao slice-complete` so operators preserve or settle
 the existing completion boundary rather than rerunning implementation. Failed
-final verification and review findings continue to report
-`tao run --repair-verification` and `tao rework`. The control checkout, unrelated
+final verification reports its classification-aware repair or reverify path;
+review findings continue to report `tao rework`. The control checkout, unrelated
 worktrees, cleaned workspaces, and repositories with no exact active plan match
 remain available.
 

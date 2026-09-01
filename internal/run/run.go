@@ -123,6 +123,7 @@ type ExecutionConfig struct {
 	MaxReworkAttempts  int
 	RestartBlocked     bool
 	RepairVerification bool
+	Reverify           bool
 }
 
 type runExecution struct {
@@ -264,6 +265,15 @@ func (s Service) WithPlanRunLock(ctx context.Context, request Request, operation
 }
 
 func CheckRequestCanStart(detail *plan.PlanDetail, request Request) error {
+	if request.Reverify {
+		if plan.CurrentFailedFinalVerification(detail) == nil {
+			return cannotStartf("--reverify requires current failed final-verification evidence")
+		}
+		if !plan.AnalyzeRunCapabilities(detail).Complete {
+			return cannotStartf("--reverify requires settled slice work with all slices complete")
+		}
+		return nil
+	}
 	// An unsettled automatic completion is intentionally non-runnable to normal
 	// lifecycle consumers, but Execute must inspect it to produce the guarded
 	// post-intent recovery path without starting an agent.
@@ -316,7 +326,7 @@ func (s Service) Execute(ctx context.Context, request Request) error {
 					return err
 				}
 				prerequisiteResolver, _ := s.repo.(plan.ExactPlanResolver)
-				resumingFinalization := plan.AnalyzeRunCapabilities(detail).Complete && config.PullRequest
+				resumingFinalization := plan.AnalyzeRunCapabilities(detail).Complete && (config.PullRequest || config.Reverify)
 				if !resumingFinalization && !config.RestartBlocked && len(detail.State.Plan.RuntimePrerequisites) > 0 {
 					baseline, err := resolvePrerequisiteBaseline(ownedCtx, detail, config, s.dependencies.CommandRunner, false)
 					if err != nil {

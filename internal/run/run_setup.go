@@ -35,11 +35,28 @@ func runExecutionFromOptions(options Options) runExecution {
 // retain the clean-start metadata captured by the original run.
 func (s Service) prepareRunExecution(ctx context.Context, detail *plan.PlanDetail, config ExecutionConfig) (runExecution, error) {
 	execution := newRunExecution(config, s.dependencies)
+	complete := plan.AnalyzeRunCapabilities(detail).Complete
+	if complete && execution.Config.Reverify {
+		// Reverification is an exact-head verification-only operation. Resolve it
+		// before pull-request admission or recovery so inherited pull-request
+		// defaults cannot impose isolated mode or select remote mutation paths.
+		s.resolveServiceDependencies(&execution)
+		identity, err := workspace.ResolveExecutionRoot(detail, workspaceConfigForExecutionMode(execution.Config.ExecutionMode))
+		if err != nil {
+			return execution, fmt.Errorf("resolve reverification workspace: %w", err)
+		}
+		execution.ExecutionRoot = identity.Root
+		resolveExecutorDefaults(&execution)
+		if err := requireResolvedDependencies(execution.Dependencies); err != nil {
+			return execution, err
+		}
+		return execution, nil
+	}
 	if execution.Config.PullRequest && execution.Config.ExecutionMode == ExecutionModeCurrent {
 		return execution, fmt.Errorf("--pull-request requires --execution-mode isolated")
 	}
 	s.resolveServiceDependencies(&execution)
-	if plan.AnalyzeRunCapabilities(detail).Complete && execution.Config.PullRequest {
+	if complete && execution.Config.PullRequest {
 		// A slice-complete PR retry must not pass through normal workspace
 		// preparation: preparation may rebase an exact reviewed head before the
 		// finalizer can validate it. Bind to the durable worktree and let the
@@ -51,7 +68,6 @@ func (s Service) prepareRunExecution(ctx context.Context, detail *plan.PlanDetai
 		}
 		return execution, nil
 	}
-
 	boundary, err := (ExecutionBoundaryController{}).InspectSelected(ctx, ExecutionBoundaryDurableFacts{
 		Detail: detail, ContinueBlocked: execution.Config.Continue, RestartBlocked: execution.Config.RestartBlocked,
 	}, execution)

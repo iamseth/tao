@@ -132,8 +132,10 @@ recovered by `tao slice-complete`, not by another implementation session. Runtim
 named prerequisite with Tao before retrying the dependent plan. When a run stops
 on an ordinary blocker, resolve it and use `tao run --continue`. A blocked clean
 automatic slice may instead use `tao run --restart <plan>` only after its baseline
-advances, and failed final verification must use
-`tao run --repair-verification <plan>`. Use explicit `--commit-policy none` only
+advances. For failed final verification, use the recovery Tao reports:
+`tao run --repair-verification <plan>` for code repair or
+`tao run --reverify <plan>` after resolving a non-code cause. Use explicit
+`--commit-policy none` only
 when you want manual commit ownership and potentially uncommitted completion.
 Before review,
 Tao requires automatic-policy worktrees to
@@ -259,7 +261,7 @@ tao insights --all-repos --digest
 ### Running
 
 ```sh
-tao run [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue|--restart|--repair-verification] [--no-review] [--no-run-header] [--auto-rework=false] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>
+tao run [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue|--restart|--repair-verification|--reverify] [--no-review] [--no-run-header] [--auto-rework=false] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>
 tao approve [--slice ID] [--by NAME] <plan-id-or-slug-or-path>
 ```
 
@@ -507,8 +509,9 @@ staging, intent, or commit mutation. Follow the reported plan-specific recovery:
 ordinary blocked work uses `tao run --continue`, and `tao run --restart` is
 recommended only when durable metadata records an isolated automatic pre-intent
 boundary. Manual/current-checkout and post-intent work instead report
-`tao slice-complete`; failed final verification and review findings retain their
-`tao run --repair-verification` and `tao rework` paths. Switching branches or
+`tao slice-complete`; failed final verification retains its reported
+`tao run --repair-verification` or `tao run --reverify` path, and review findings
+retain `tao rework`. Switching branches or
 detaching HEAD does not make an active managed worktree eligible; branch drift
 fails closed. Control checkouts, unrelated worktrees, and cleaned plan workspaces
 remain eligible for standalone commits.

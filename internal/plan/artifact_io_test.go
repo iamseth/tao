@@ -288,6 +288,33 @@ func TestPlanRecordFinalVerificationPreservesUnknownStateFields(t *testing.T) {
 	}
 }
 
+func TestPlanRecordFinalVerificationDeletesOmittedFailureEvidence(t *testing.T) {
+	dir := t.TempDir()
+	detail := startSliceDetail(dir)
+	stateJSON := `{"schema":"tao.plan.state.v1","status":"planned","created_at":"2026-05-03T23:00:00Z","updated_at":"2026-05-03T23:00:00Z","repo":{"name":"","root":"","branch":""},"plan":{"id":"plan-a","title":"Plan A","current_slice":null,"completed_slices":[],"pending_slices":["001-a"],"last_run_commit_policy":"","last_run_starting_dirty":[],"timing":{"started_at":null,"completed_at":null,"last_activity_at":null},"final_verification":{"command":"make verify","cwd":"/repo","head_sha":"head-a","result":"failed","failure_kind":"code","exit_code":1,"verified_at":"2026-05-03T23:00:00Z","unknown_verification":"keep"}},"global_invariants":[],"open_questions":[]}`
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(stateJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	verification := FinalVerification{Command: "make verify", CWD: "/repo", HeadSHA: "head-a", Result: "passed", VerifiedAt: time.Date(2026, 7, 18, 2, 0, 0, 0, time.UTC)}
+
+	if err := testRecord(dir, detail).RecordFinalVerification(verification); err != nil {
+		t.Fatal(err)
+	}
+
+	var state map[string]any
+	readJSONFile(t, filepath.Join(dir, "state.json"), &state)
+	persisted := state["plan"].(map[string]any)["final_verification"].(map[string]any)
+	if _, ok := persisted["failure_kind"]; ok {
+		t.Fatalf("omitted failure_kind survived replacement: %#v", persisted)
+	}
+	if _, ok := persisted["exit_code"]; ok {
+		t.Fatalf("omitted exit_code survived replacement: %#v", persisted)
+	}
+	if persisted["unknown_verification"] != "keep" || persisted["result"] != "passed" {
+		t.Fatalf("replacement lost unknown field or fresh result: %#v", persisted)
+	}
+}
+
 func TestWriteStateAndSlicesUseSameDirectoryAtomicReplacement(t *testing.T) {
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)

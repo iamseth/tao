@@ -50,6 +50,9 @@ func (f Finalizer) FinalizeIfComplete(ctx context.Context, runCount int, detail 
 	}
 	defer refreshHeader(ctx, detail, f.execution.Config)
 	if runCount <= 0 {
+		if f.execution.Config.Reverify {
+			return true, f.reverifyCompletedRun(ctx, detail)
+		}
 		if f.pullRequestRecoveryEnabled(detail) {
 			// A pending intent is an unsettled transaction even when a later
 			// substantive review replaced the approval that authorized it. Route
@@ -80,6 +83,28 @@ func (f Finalizer) pullRequestRecoveryEnabled(detail *plan.PlanDetail) bool {
 		return false
 	}
 	return detail != nil && !plan.PlanIsMerged(detail.Events)
+}
+
+func (f Finalizer) reverifyCompletedRun(ctx context.Context, detail *plan.PlanDetail) error {
+	executionRoot, err := f.executionRoot(ctx, detail)
+	if err != nil {
+		return fmt.Errorf("reverify completed run: %w", err)
+	}
+	execution := f.execution
+	execution.ExecutionRoot = executionRoot
+	if _, err := requireCurrentFailedFinalVerificationBoundary(ctx, detail, execution, "reverification"); err != nil {
+		return err
+	}
+	if execution.Config.CommitPolicy != CommitPolicyNone {
+		if err := requireCleanReviewWorktree(ctx, execution.Dependencies.reviewGitFactory(executionRoot), detail, nil); err != nil {
+			return fmt.Errorf("reverify completed run: %w", err)
+		}
+	}
+	ReportPhase(ctx, PhaseFinalVerification, nil)
+	if err := f.verifyCompletedBranch(ctx, detail, executionRoot); err != nil {
+		return fmt.Errorf("reverify completed run: %w", err)
+	}
+	return nil
 }
 
 func (f Finalizer) writeAlreadyCompleteRun(detail *plan.PlanDetail) error {

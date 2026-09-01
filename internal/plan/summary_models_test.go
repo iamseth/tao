@@ -45,6 +45,17 @@ func TestSummarizePlansMixedStatuses(t *testing.T) {
 	}
 }
 
+func TestSummarizePlansCountsVerificationFailedProjection(t *testing.T) {
+	rollup := SummarizePlans([]PlanSummary{
+		{Status: StatusVerificationFailed},
+		{Status: StatusInReview},
+	})
+
+	if rollup.Total != 2 || rollup.Statuses.VerificationFailed != 1 || rollup.Statuses.InReview != 1 {
+		t.Fatalf("unexpected verification-failed rollup: %#v", rollup)
+	}
+}
+
 func TestSummarizePlansReviewedVersusUnreviewedCompleted(t *testing.T) {
 	rollup := SummarizePlans([]PlanSummary{
 		{Status: StatusCompleted, Complete: true, Reviewed: true, ReviewVerdict: "approve"},

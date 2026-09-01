@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -77,11 +78,84 @@ func TestVerifyCompletedBranchAppendsOutcomeEvents(t *testing.T) {
 				if event.Command != "make verify" || event.DurationSeconds == nil || *event.DurationSeconds != 3 {
 					t.Fatalf("unexpected executed event: %+v", event)
 				}
-			} else if event.Command != "" || event.DurationSeconds != nil {
+			} else if event.Command != "" || event.DurationSeconds != nil || event.FailureKind != "" || event.ExitCode != nil {
 				t.Fatalf("unexpected skipped event: %+v", event)
+			}
+			verification := detail.State.Plan.FinalVerification
+			if verification == nil || verification.Result != tt.wantResult {
+				t.Fatalf("persisted final verification = %+v, want result %q", verification, tt.wantResult)
+			}
+			if tt.wantResult != finalVerificationFailed && (verification.FailureKind != "" || verification.ExitCode != nil) {
+				t.Fatalf("non-failure was classified: %+v", verification)
+			}
+			if tt.wantResult == finalVerificationFailed && (verification.FailureKind != plan.FinalVerificationFailureKindCode || verification.ExitCode != nil || event.FailureKind != verification.FailureKind || event.ExitCode != nil) {
+				t.Fatalf("failed verification classification was not carried to its event: verification=%+v event=%+v", verification, event)
 			}
 		})
 	}
+}
+
+func TestClassifyFinalVerificationFailure(t *testing.T) {
+	deadlineCtx, deadlineCancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer deadlineCancel()
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	tests := []struct {
+		name     string
+		ctx      context.Context
+		runErr   error
+		wantKind plan.FinalVerificationFailureKind
+		wantCode int
+	}{
+		{name: "code", ctx: context.Background(), runErr: finalVerificationProcessError(t, exec.Command("sh", "-c", "exit 1")), wantKind: plan.FinalVerificationFailureKindCode, wantCode: 1},
+		{name: "tool missing", ctx: context.Background(), runErr: finalVerificationProcessError(t, exec.Command("sh", "-c", "exit 127")), wantKind: plan.FinalVerificationFailureKindToolMissing, wantCode: 127},
+		{name: "timeout", ctx: deadlineCtx, runErr: finalVerificationProcessError(t, exec.Command("sh", "-c", "exit 1")), wantKind: plan.FinalVerificationFailureKindTimeout, wantCode: 1},
+		{name: "cancelled", ctx: cancelledCtx, runErr: finalVerificationProcessError(t, exec.Command("sh", "-c", "exit 1")), wantKind: plan.FinalVerificationFailureKindCancelled, wantCode: 1},
+		{name: "invalid command", ctx: context.Background(), runErr: finalVerificationProcessError(t, exec.Command("sh", "-c", "exit 126")), wantKind: plan.FinalVerificationFailureKindInvalidCommand, wantCode: 126},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			kind, code := classifyFinalVerificationFailure(test.ctx, test.runErr)
+			if kind != test.wantKind || code == nil || *code != test.wantCode {
+				t.Fatalf("classification = %q, %v, want %q, %d", kind, code, test.wantKind, test.wantCode)
+			}
+		})
+	}
+}
+
+func TestFinalVerificationSignalExitCodeIsOmitted(t *testing.T) {
+	kind, code := classifyFinalVerificationFailure(context.Background(), finalVerificationProcessError(t, exec.Command("sh", "-c", "kill -TERM $$")))
+	if kind != plan.FinalVerificationFailureKindCode || code != nil {
+		t.Fatalf("signal classification = %q, %v, want code with nil exit code", kind, code)
+	}
+}
+
+func TestAppendFinalVerificationEventCopiesFailureEvidence(t *testing.T) {
+	exitCode := 127
+	var event plan.Event
+	finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{}, RunDependencies{
+		EventAppender: eventAppenderFunc(func(_ string, appended plan.Event) error {
+			event = appended
+			return nil
+		}),
+	}))
+	detail := completedReviewPlanDetail(t.TempDir())
+	verification := plan.FinalVerification{CWD: "/repo", Result: finalVerificationFailed, FailureKind: plan.FinalVerificationFailureKindToolMissing, ExitCode: &exitCode}
+	finalizer.appendFinalVerificationEvent(detail, verification, time.Now(), nil)
+	exitCode = 1
+	if event.FailureKind != plan.FinalVerificationFailureKindToolMissing || event.ExitCode == nil || *event.ExitCode != 127 || event.ExitCode == verification.ExitCode {
+		t.Fatalf("event failure evidence = %+v", event)
+	}
+}
+
+func finalVerificationProcessError(t *testing.T, command *exec.Cmd) error {
+	t.Helper()
+	err := command.Run()
+	if err == nil {
+		t.Fatalf("command %q unexpectedly passed", command.String())
+	}
+	return err
 }
 
 func TestVerifyCompletedBranchRefusesToRunWhenLiveHeadCannotBeResolved(t *testing.T) {
@@ -159,6 +233,46 @@ func TestFailedFinalVerificationAfterCleanRebaseRemainsRepairable(t *testing.T) 
 	}
 	if len(detail.State.Plan.PendingSlices) != 1 || !strings.HasPrefix(detail.State.Plan.PendingSlices[0], plan.VerificationRepairSlicePrefix) {
 		t.Fatalf("pending repair slices = %v", detail.State.Plan.PendingSlices)
+	}
+}
+
+func TestReverifyCompletedRunReplacesEvidenceAtSameHeadWithoutAppendingSlice(t *testing.T) {
+	root := initSliceCompletionRepo(t)
+	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runCommitTestGitCommand(t, root, "add", "Makefile")
+	runCommitTestGitCommand(t, root, "commit", "-m", "add verification")
+	branch := strings.TrimSpace(runCommitTestGitOutput(t, root, "branch", "--show-current"))
+	head := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
+	detail := completedReviewPlanDetail(t.TempDir())
+	detail.State.Repo.Root = root
+	detail.State.Workspace = &plan.Workspace{Strategy: plan.WorkspaceStrategyWorktree, Path: root, Branch: branch, HeadSHA: head}
+	detail.State.Plan.FinalVerification = &plan.FinalVerification{Command: "make verify", CWD: root, HeadSHA: head, Result: finalVerificationFailed, Fingerprint: "prior-failure", VerifiedAt: time.Now().Add(-time.Hour)}
+	sliceCount := len(detail.Slices.Slices)
+	execution := testRunExecution(ExecutionConfig{
+		ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeIsolated},
+		Reverify:           true,
+	}, RunDependencies{
+		CommandRunner:     defaultCommandRunner,
+		PlanRecordFactory: memoryPlanRecordFactory,
+	})
+	execution.ExecutionRoot = root
+	finalizer := newFinalizer(io.Discard, execution)
+
+	complete, err := finalizer.FinalizeIfComplete(context.Background(), 0, detail, plan.AnalyzeRunCapabilities(detail))
+	if err != nil {
+		t.Fatalf("reverify completed run: %v", err)
+	}
+	if !complete {
+		t.Fatal("completed run was not finalized")
+	}
+	verification := detail.State.Plan.FinalVerification
+	if verification == nil || verification.Result != finalVerificationPassed || verification.HeadSHA != head || verification.Fingerprint == "prior-failure" {
+		t.Fatalf("replacement verification = %+v", verification)
+	}
+	if len(detail.Slices.Slices) != sliceCount || len(detail.State.Plan.PendingSlices) != 0 {
+		t.Fatalf("reverify changed slices: slices=%d pending=%v", len(detail.Slices.Slices), detail.State.Plan.PendingSlices)
 	}
 }
 

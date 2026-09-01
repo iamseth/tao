@@ -54,6 +54,14 @@ Relationships: -
 	}
 }
 
+func TestColorStatusRendersVerificationFailureAsWarning(t *testing.T) {
+	got := colorStatus(ProfileTrueColor, plan.StatusVerificationFailed, plan.StatusVerificationFailed)
+	want := Paint(ProfileTrueColor, RoleWarn, plan.StatusVerificationFailed)
+	if got != want {
+		t.Fatalf("verification-failed status color = %q, want %q", got, want)
+	}
+}
+
 func TestRenderSectionsAndOperationalLabels(t *testing.T) {
 	now := time.Date(2026, time.January, 2, 12, 0, 0, 0, time.UTC)
 	updated := now.Add(-30 * time.Minute)

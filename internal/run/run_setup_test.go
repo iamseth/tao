@@ -20,6 +20,41 @@ func TestPrepareRunExecutionResolvesAllRequiredDependencies(t *testing.T) {
 	}
 }
 
+func TestPrepareRunExecutionAllowsCurrentModeReverifyWithPullRequestDefault(t *testing.T) {
+	detail := completedReviewPlanDetail(t.TempDir())
+	detail.State.Repo.Root = "/current-root"
+	detail.State.Workspace = &plan.Workspace{
+		Strategy: plan.WorkspaceStrategyCurrent,
+		Path:     "/recorded-worktree",
+		Branch:   "feature/plan-a",
+		HeadSHA:  "head123",
+	}
+	detail.State.Plan.FinalVerification = &plan.FinalVerification{
+		Result:      finalVerificationFailed,
+		HeadSHA:     "head123",
+		Fingerprint: "failed-verification",
+	}
+	var out bytes.Buffer
+	service := NewService(&memoryRunRepository{}, &out, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{
+		CommitPolicy:  CommitPolicySlice,
+		ExecutionMode: ExecutionModeCurrent,
+		PullRequest:   true,
+	}}})
+	config := service.config
+	config.Reverify = true
+
+	execution, err := service.prepareRunExecution(context.Background(), detail, config)
+	if err != nil {
+		t.Fatalf("prepare current-mode reverification with pull-request default: %v", err)
+	}
+	if execution.ExecutionRoot != detail.State.Repo.Root {
+		t.Fatalf("reverification execution root = %q, want current root %q", execution.ExecutionRoot, detail.State.Repo.Root)
+	}
+	if !execution.Config.Reverify || !execution.Config.PullRequest || execution.Config.ExecutionMode != ExecutionModeCurrent {
+		t.Fatalf("reverification config changed inherited settings: %#v", execution.Config)
+	}
+}
+
 // TestRequireResolvedDependenciesNamesMissingDependency asserts the guard trips
 // loudly and names the offending field when a required dependency stays nil.
 func TestRequireResolvedDependenciesNamesMissingDependency(t *testing.T) {

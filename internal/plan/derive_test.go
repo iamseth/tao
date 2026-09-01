@@ -362,6 +362,73 @@ func TestPlanLifecycleStatusReflectsReviewAndMergeStages(t *testing.T) {
 	}
 }
 
+func TestFinalVerificationFailureProjectionAndRecoveryByClassification(t *testing.T) {
+	tests := []struct {
+		name        string
+		kind        FinalVerificationFailureKind
+		wantAction  PlanActionKind
+		wantCommand string
+	}{
+		{name: "code", kind: FinalVerificationFailureKindCode, wantAction: PlanActionRepairVerification, wantCommand: "tao run --repair-verification plan"},
+		{name: "tool missing", kind: FinalVerificationFailureKindToolMissing, wantAction: PlanActionResolveVerification},
+		{name: "timeout", kind: FinalVerificationFailureKindTimeout, wantAction: PlanActionResolveVerification},
+		{name: "cancelled", kind: FinalVerificationFailureKindCancelled, wantAction: PlanActionResolveVerification},
+		{name: "invalid command", kind: FinalVerificationFailureKindInvalidCommand, wantAction: PlanActionResolveVerification},
+		{name: "legacy unclassified", wantAction: PlanActionReverify, wantCommand: "tao run --reverify plan"},
+		{name: "unrecognized", kind: FinalVerificationFailureKind("network"), wantAction: PlanActionReverify, wantCommand: "tao run --reverify plan"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			detail := failedFinalVerificationDetail(test.kind)
+			persistedStatus := detail.State.Status
+
+			if got := PlanLifecycleStatus(detail); got != StatusVerificationFailed {
+				t.Fatalf("lifecycle status = %q, want %q", got, StatusVerificationFailed)
+			}
+			if detail.State.Status != persistedStatus {
+				t.Fatalf("status projection mutated persisted status from %q to %q", persistedStatus, detail.State.Status)
+			}
+
+			action := DeriveNextAction(detail).Primary
+			if action.Kind != test.wantAction || action.Class != PlanActionClassRecovery || action.Command != test.wantCommand {
+				t.Fatalf("recovery action = %#v, want kind %q recovery command %q", action, test.wantAction, test.wantCommand)
+			}
+			if test.wantAction == PlanActionResolveVerification && action.Instruction == "" {
+				t.Fatal("environmental verification recovery must carry an instruction")
+			}
+			if test.wantAction == PlanActionResolveVerification && action.Command != "" {
+				t.Fatalf("environmental verification recovery command = %q, want none", action.Command)
+			}
+
+			summary := Summarize(detail, time.Time{})
+			if summary.Status != StatusVerificationFailed || summary.FinalVerificationFailureKind != test.kind || summary.VerificationRecoveryAction != test.wantAction || summary.VerificationRecoveryCommand != test.wantCommand {
+				t.Fatalf("verification summary projection = status:%q kind:%q action:%q command:%q", summary.Status, summary.FinalVerificationFailureKind, summary.VerificationRecoveryAction, summary.VerificationRecoveryCommand)
+			}
+		})
+	}
+}
+
+func TestFinalVerificationFailureDoesNotOverrideCompletionEvidence(t *testing.T) {
+	merged := failedFinalVerificationDetail(FinalVerificationFailureKindCode)
+	merged.Events = []Event{{Type: EventTypePlanMerged}}
+	if status := PlanLifecycleStatus(merged); status != StatusCompleted {
+		t.Fatalf("merged failed-verification status = %q, want %q", status, StatusCompleted)
+	}
+	if action := DeriveNextAction(merged).Primary; action.Kind != PlanActionNone {
+		t.Fatalf("merged failed-verification action = %#v, want terminal completion", action)
+	}
+
+	legacy := failedFinalVerificationDetail(FinalVerificationFailureKindCode)
+	legacy.State.Status = StatusCompleted
+	if status := PlanLifecycleStatus(legacy); status != StatusCompleted {
+		t.Fatalf("legacy completed failed-verification status = %q, want %q", status, StatusCompleted)
+	}
+	if action := DeriveNextAction(legacy).Primary; action.Kind != PlanActionNone {
+		t.Fatalf("legacy completed failed-verification action = %#v, want terminal completion", action)
+	}
+}
+
 func TestPlanIsPullRequestCompleteRequiresCurrentMatchingEvidence(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1200,6 +1267,15 @@ func TestDeriveNextActionClassifiesForcedAlternativesAsAdministrative(t *testing
 }
 
 func ptrString(value string) *string { return &value }
+
+func failedFinalVerificationDetail(kind FinalVerificationFailureKind) *PlanDetail {
+	detail := reviewedCapabilityDetail()
+	detail.State.Workspace = &Workspace{HeadSHA: "head123"}
+	detail.State.Plan.FinalVerification = &FinalVerification{
+		Command: "make verify", HeadSHA: "head123", Result: "failed", FailureKind: kind, Fingerprint: "failure123",
+	}
+	return detail
+}
 
 func reviewedCapabilityDetail() *PlanDetail {
 	completedAt := time.Date(2026, 6, 28, 6, 40, 0, 0, time.UTC)

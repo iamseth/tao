@@ -355,8 +355,11 @@ func (r *PlanRecord) RecordFinalVerification(verification FinalVerification) err
 	if err != nil {
 		return err
 	}
-	err = r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
+	err = r.applyStateEvent(store, func(detail *PlanDetail, changes *ArtifactChangeSet) ([]Event, error) {
 		if err := MarkFinalVerification(detail, verification); err != nil {
+			return nil, err
+		}
+		if err := changes.replaceFinalVerification(*detail.State.Plan.FinalVerification); err != nil {
 			return nil, err
 		}
 		return nil, nil
