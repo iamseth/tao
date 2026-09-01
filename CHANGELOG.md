@@ -9,6 +9,34 @@ stable release.
 
 ## [Unreleased]
 
+### Week of 2026-08-24
+
+#### Added
+- You can now manage runtime behavior directly in the TUI with a new **Settings** tab, including controls for repository default inheritance.
+- You can now troubleshoot runs from the TUI with a new read-only **Debug** tab, including richer diagnostics and timestamped agent log records.
+- You can now review plan intent and context in dedicated TUI views with new **Overview**, **Slices**, and **Activity** tabs, plus expanded decision details for the selected plan.
+- You can now identify likely next planned work more easily: the dashboard now prioritizes planned rows using advisory decision/sequence context and shows **NEXT** indicators without overriding operational urgency.
+- You now have safer recovery paths after interrupted work: Tao adds bounded restart/repair flows for blocked slices and final verification recovery, with stricter runtime prerequisite checks.
+
+#### Changed
+- You now get more consistent pull-request formatting when creating PRs manually, with prompts and guidance aligned to Tao’s title/body/label/assignment conventions.
+- You now get a more consistent TUI visual hierarchy across terminal types, with centralized semantic colors that degrade cleanly and respect no-color settings.
+
+#### Fixed
+- You’re now protected from misaligned or overflowing TUI layouts when using CJK, emoji, or combining characters; sizing, truncation, wrapping, and alignment now use terminal cell widths.
+- You now get predictable log-pane alignment in the TUI when logs contain tab characters, because tabs are expanded before width truncation.
+- You’re now protected from dropped findings when review JSON contains ``` sequences inside text; fenced review contracts are parsed line-by-line to avoid premature truncation.
+- You now get correct relationship resolution in plan views even when related plans are outside the visible completed window, reducing misleading missing-target warnings.
+- You’re now protected from Git status path parsing errors for valid quoted porcelain paths (including spaces and escapes), while malformed quoting is treated as ambiguous instead of misread.
+
+#### Reliability
+- You now get more consistent review outcomes across run/rework/merge flows because review output parsing and normalization are unified behind one contract.
+- You now get stronger execution-boundary safety during Tao-managed work: standalone commits are prevented in active managed worktrees to reduce unsafe state drift.
+- TUI changes are now easier for maintainers to verify deterministically via fixture-driven preview tooling, improving release confidence for navigation and rendering behavior.
+
+#### Documentation
+- Plan artifact documentation now more clearly defines the contract (including clear-vs-preserve semantics, event inventory, and blocked-restart behavior), making advanced integrations and maintenance expectations easier to follow.
+
 ### Week of 2026-08-17
 
 #### Added
