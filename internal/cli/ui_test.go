@@ -202,7 +202,7 @@ func TestUIComposesRepositoryNotesCollector(t *testing.T) {
 	if requestedDir != notesDir || requestedRef.ID != entry.Repo.ID || requestedRef.Root != entry.Repo.Root {
 		t.Fatalf("note repository request = dir %q ref %+v, want %q and %+v", requestedDir, requestedRef, notesDir, note.RepoReference{ID: entry.Repo.ID, Root: entry.Repo.Root})
 	}
-	for _, want := range []string{"Tao UI | Notes | Repositories: all | 1 open note", created.ID, "CLI-composed open note"} {
+	for _, want := range []string{"tao │ plans ▸notes  settings  debug", "all repos", "1 open note", created.ID, "CLI-composed open note"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("ui output missing %q in %q", want, output.String())
 		}

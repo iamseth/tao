@@ -123,10 +123,10 @@ func TestRenderEveryViewIsDeterministicAndBounded(t *testing.T) {
 		selection int
 		header    string
 	}{
-		{view: ViewPlans, header: "Tao UI | Plans | Repositories: all"},
-		{view: ViewNotes, selection: 1, header: "Tao UI | Notes | Repositories: all"},
-		{view: ViewSettings, selection: 1, header: "Tao UI | Settings | 3 repositories"},
-		{view: ViewDebug, header: "Tao UI | Debug | diagnostics"},
+		{view: ViewPlans, header: "tao │▸plans  notes  settings  debug"},
+		{view: ViewNotes, selection: 1, header: "tao │ plans ▸notes  settings  debug"},
+		{view: ViewSettings, selection: 1, header: "tao │ plans  notes ▸settings  debug"},
+		{view: ViewDebug, header: "tao │ plans  notes  settings ▸debug"},
 		{view: ViewPlanDetail, selection: 1, header: "Tao UI | live | alpha"},
 		{view: ViewNoteDetail, selection: 1, header: "Tao UI | NOTE DETAIL"},
 		{view: ViewSliceDetail, selection: 1, header: "Tao UI | 002-render-boundary | in_progress"},
@@ -150,6 +150,28 @@ func TestRenderEveryViewIsDeterministicAndBounded(t *testing.T) {
 			}
 			assertBoundedFrame(t, first, 72, 18)
 		})
+	}
+}
+
+func TestSettingsPreviewStartsWithFirstSectionAfterTabRule(t *testing.T) {
+	scenario, _ := Lookup(ScenarioMixed)
+	frame, err := Render(scenario, RenderOptions{View: ViewSettings, Width: 70, Height: 20, Plain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(frame, "\n"), "\n")
+	sectionIndex := -1
+	for index := 2; index < len(lines); index++ {
+		if strings.TrimSpace(lines[index]) != "" {
+			sectionIndex = index
+			break
+		}
+	}
+	if sectionIndex < 0 || !strings.Contains(lines[sectionIndex], "▌ GLOBAL RUNTIME DEFAULTS ") {
+		t.Fatalf("first Settings section does not follow the tab rule:\n%s", frame)
+	}
+	if strings.Contains(frame, "3 repositories") || strings.Contains(frame, "need attention") {
+		t.Fatalf("Settings preview unexpectedly contains a summary:\n%s", frame)
 	}
 }
 

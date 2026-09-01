@@ -46,7 +46,7 @@ type DebugRuntimeDefault struct {
 
 func renderDebugPage(model Model) []string {
 	var lines []string
-	lines = append(lines, "", "UI")
+	lines = append(lines, "", debugSectionRule(model, RoleAccent, "UI", 10))
 	appendDebugValue(&lines, "viewport", fmt.Sprintf("%dx%d", model.Width, model.Height))
 	appendDebugValue(&lines, "color", model.Profile.String())
 	appendDebugValue(&lines, "repository focus", debugFocusLabel(model))
@@ -59,13 +59,21 @@ func renderDebugPage(model Model) []string {
 	lines = appendDebugTime(lines, "diagnostics collected", model.DebugSnapshot.CollectedAt)
 
 	if len(model.DebugSnapshot.System) > 0 {
-		lines = append(lines, "", "SYSTEM")
+		lines = append(lines, "", debugSectionRule(model, RoleNeutral5, "SYSTEM", len(model.DebugSnapshot.System)))
 		for _, value := range model.DebugSnapshot.System {
 			appendDebugValue(&lines, value.Label, value.Value)
 		}
 	}
 
-	lines = append(lines, "", "DOCTOR")
+	doctorProblemCount := len(model.DebugSnapshot.DoctorProblems)
+	if model.DebugSnapshot.CollectionError != "" {
+		doctorProblemCount++
+	}
+	doctorRole := RoleSuccess
+	if doctorProblemCount > 0 {
+		doctorRole = RoleWarn
+	}
+	lines = append(lines, "", debugSectionRule(model, doctorRole, "DOCTOR", doctorProblemCount))
 	appendDebugValue(&lines, "selected agent", displayValue(singleLineDetail(model.DebugSnapshot.SelectedAgent)))
 	agents := strings.Join(model.DebugSnapshot.InstalledAgents, ", ")
 	appendDebugValue(&lines, "installed agents", displayValue(singleLineDetail(agents)))
@@ -88,9 +96,8 @@ func renderDebugPage(model Model) []string {
 		}
 	}
 
-	lines = append(lines, "", "RUNTIME DEFAULTS")
 	if len(model.DebugSnapshot.RuntimeDefaults) == 0 {
-		lines = append(lines, "  Runtime defaults unavailable.")
+		lines = append(lines, "", debugSectionRule(model, RoleAccent, "RUNTIME DEFAULTS", 0), "  Runtime defaults unavailable.")
 	} else {
 		nameWidth := visibleWidth("NAME")
 		valueWidth := visibleWidth("VALUE")
@@ -98,7 +105,9 @@ func renderDebugPage(model Model) []string {
 			nameWidth = max(nameWidth, visibleWidth(row.Name))
 			valueWidth = max(valueWidth, visibleWidth(row.Value))
 		}
-		lines = append(lines, "  "+padCells("NAME", nameWidth)+"  "+padCells("VALUE", valueWidth)+"  SOURCE")
+		columns := settingsRuntimeColumns(nameWidth, valueWidth)
+		sectionWidth := dashboardSectionWidth(model, PageDebug, "RUNTIME DEFAULTS", columnsWidth(columns))
+		lines = append(lines, "", dashboardSectionRuleColumns(model.Profile, RoleAccent, "RUNTIME DEFAULTS", columns, sectionWidth))
 		for _, row := range model.DebugSnapshot.RuntimeDefaults {
 			lines = append(lines, "  "+padCells(singleLineDetail(row.Name), nameWidth)+"  "+padCells(singleLineDetail(row.Value), valueWidth)+"  "+singleLineDetail(row.Source))
 			if row.Warning != "" {
@@ -109,12 +118,17 @@ func renderDebugPage(model Model) []string {
 
 	warnings := debugCollectorWarnings(model.Snapshot, model.NoteSnapshot)
 	if len(warnings) > 0 {
-		lines = append(lines, "", "COLLECTOR WARNINGS")
+		lines = append(lines, "", debugSectionRule(model, RoleWarn, "COLLECTOR WARNINGS", len(warnings)))
 		for _, warning := range warnings {
 			lines = append(lines, "  ⚠ "+warning)
 		}
 	}
 	return lines
+}
+
+func debugSectionRule(model Model, role Role, title string, count int) string {
+	width := dashboardSectionWidth(model, PageDebug, title, visibleWidth(fmt.Sprintf("%d", count)))
+	return sectionRule(model.Profile, role, title, count, width)
 }
 
 func appendDebugValue(lines *[]string, label, value string) {
@@ -170,6 +184,11 @@ func debugCollectorWarnings(snapshot monitor.Snapshot, notes note.Snapshot) []st
 }
 
 func debugMaxOffset(model Model) int {
-	bodyHeight := max(model.Height-1, 0)
+	frameHeight := len(renderFrame(model, PageDebug, nil))
+	footerHeight := 0
+	if shouldRenderKeyHintsFooter(model, frameHeight, 0) && renderKeyHintsFooter(model.Profile, PageDebug, model.Width) != "" {
+		footerHeight = 1
+	}
+	bodyHeight := max(model.Height-frameHeight-footerHeight, 0)
 	return max(len(renderDebugPage(model))-bodyHeight, 0)
 }

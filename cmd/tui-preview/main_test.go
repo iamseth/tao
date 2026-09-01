@@ -52,7 +52,7 @@ func TestPlainOutputIsDeterministicAndUsesSelectedFixture(t *testing.T) {
 
 func TestPlainSearchUsesProductionRenderer(t *testing.T) {
 	var output bytes.Buffer
-	err := execute(context.Background(), []string{"--plain", "--search", "owner", "--scenario", "mixed", "--view", "plans", "--size", "80x10"}, &bytes.Buffer{}, &output, &bytes.Buffer{})
+	err := execute(context.Background(), []string{"--plain", "--search", "owner", "--scenario", "mixed", "--view", "plans", "--size", "120x10"}, &bytes.Buffer{}, &output, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}

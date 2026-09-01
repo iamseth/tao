@@ -59,34 +59,44 @@ func visibleNoteWarnings(snapshot note.Snapshot, focusRepositoryID string) []not
 	return visible
 }
 
-func renderNotesPage(snapshot note.Snapshot, selected int, focusRepositoryID string, now time.Time, profile Profile) (lines []string, selectedLine int) {
+func renderNotesPage(snapshot note.Snapshot, selected int, focusRepositoryID string, now time.Time, model Model) (lines []string, selectedLine int, metadata tableViewportMetadata) {
 	items := visibleNotes(snapshot, focusRepositoryID)
 	warnings := visibleNoteWarnings(snapshot, focusRepositoryID)
 	selectedLine = -1
 	if len(items) == 0 {
-		lines = append(lines, "", "  Notes page. No open notes.")
+		sectionWidth := dashboardSectionWidth(model, PageNotes, "OPEN NOTES", 1)
+		lines = append(lines, "", sectionRule(model.Profile, RoleAccent, "OPEN NOTES", 0, sectionWidth), "  Notes page. No open notes.")
+		metadata.sections = append(metadata.sections, tableViewportSection{headingLines: []int{1}, contentLines: []int{2}})
 	} else {
 		widths := measureNoteTable(items, now)
-		lines = append(lines, "", renderNoteHeader(widths))
+		sectionWidth := dashboardSectionWidth(model, PageNotes, "OPEN NOTES", visibleWidth(fmt.Sprintf("%d", len(items))))
+		lines = append(lines, "", sectionRule(model.Profile, RoleAccent, "OPEN NOTES", len(items), sectionWidth), renderNoteHeader(widths))
+		section := tableViewportSection{headingLines: []int{1, 2}}
 		for index, item := range items {
 			if index == selected {
 				selectedLine = len(lines)
 			}
-			lines = append(lines, renderNoteRow(item, now, widths, index == selected, profile))
+			section.contentLines = append(section.contentLines, len(lines))
+			lines = append(lines, renderNoteRow(item, now, widths, index == selected, model.Profile))
 		}
+		metadata.sections = append(metadata.sections, section)
 	}
 	if len(warnings) > 0 {
-		lines = append(lines, "", "Warnings")
+		sectionWidth := dashboardSectionWidth(model, PageNotes, "Warnings", visibleWidth(fmt.Sprintf("%d", len(warnings))))
+		lines = append(lines, "", sectionRule(model.Profile, RoleWarn, "Warnings", len(warnings), sectionWidth))
+		section := tableViewportSection{headingLines: []int{len(lines) - 1}}
 		for _, warning := range warnings {
 			repository := boundedNoteValue(warning.RepositoryName, maxNoteRepositoryCells)
 			if repository == "-" {
 				repository = boundedNoteValue(warning.RepositoryID, maxNoteRepositoryCells)
 			}
 			message := singleLineDetail(warning.Error())
+			section.contentLines = append(section.contentLines, len(lines))
 			lines = append(lines, "  "+repository+": "+displayValue(message))
 		}
+		metadata.sections = append(metadata.sections, section)
 	}
-	return lines, selectedLine
+	return lines, selectedLine, metadata
 }
 
 func measureNoteTable(items []note.CatalogNote, now time.Time) noteTableWidths {

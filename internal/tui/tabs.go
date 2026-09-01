@@ -18,10 +18,10 @@ type Tab struct {
 }
 
 var dashboardTabs = []Tab{
-	{ID: PagePlans, Label: "Plans"},
-	{ID: PageNotes, Label: "Notes"},
-	{ID: PageSettings, Label: "Settings"},
-	{ID: PageDebug, Label: "Debug"},
+	{ID: PagePlans, Label: "plans"},
+	{ID: PageNotes, Label: "notes"},
+	{ID: PageSettings, Label: "settings"},
+	{ID: PageDebug, Label: "debug"},
 }
 
 func normalizePage(page PageID) PageID {
@@ -47,14 +47,4 @@ func adjacentPage(page PageID, delta int) PageID {
 		index += len(dashboardTabs)
 	}
 	return dashboardTabs[index].ID
-}
-
-func pageLabel(page PageID) string {
-	page = normalizePage(page)
-	for _, tab := range dashboardTabs {
-		if tab.ID == page {
-			return tab.Label
-		}
-	}
-	return dashboardTabs[0].Label
 }

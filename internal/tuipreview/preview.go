@@ -268,8 +268,8 @@ func Render(scenario Scenario, options RenderOptions) (string, error) {
 			return "", err
 		}
 		frame = tui.Render(tui.Model{
-			Snapshot: scenario.Snapshot, Page: tui.PagePlans, Selected: options.Selection,
-			Width: options.Width, Height: options.Height, Now: scenario.Now,
+			Snapshot: scenario.Snapshot, NoteSnapshot: scenario.Notes, DebugSnapshot: scenario.Debug, SettingsSnapshot: scenario.Settings,
+			Page: tui.PagePlans, Selected: options.Selection, Width: options.Width, Height: options.Height, Now: scenario.Now,
 			HideCompleted: options.HideCompleted, Profile: profile, ShowShortcuts: options.ShowShortcuts, SearchQuery: options.SearchQuery,
 		})
 	case ViewNotes:
@@ -278,8 +278,8 @@ func Render(scenario Scenario, options RenderOptions) (string, error) {
 			return "", err
 		}
 		frame = tui.Render(tui.Model{
-			Snapshot: scenario.Snapshot, NoteSnapshot: scenario.Notes, Page: tui.PageNotes,
-			Selected: options.Selection, Width: options.Width, Height: options.Height,
+			Snapshot: scenario.Snapshot, NoteSnapshot: scenario.Notes, DebugSnapshot: scenario.Debug, SettingsSnapshot: scenario.Settings,
+			Page: tui.PageNotes, Selected: options.Selection, Width: options.Width, Height: options.Height,
 			Now: scenario.Now, Profile: profile, ShowShortcuts: options.ShowShortcuts, SearchQuery: options.SearchQuery,
 		})
 	case ViewSettings:
@@ -290,16 +290,17 @@ func Render(scenario Scenario, options RenderOptions) (string, error) {
 			return "", err
 		}
 		frame = tui.Render(tui.Model{
-			SettingsSnapshot: scenario.Settings, Page: tui.PageSettings, Selected: options.Selection,
-			Width: options.Width, Height: options.Height, Now: scenario.Now, Profile: profile, ShowShortcuts: options.ShowShortcuts,
+			Snapshot: scenario.Snapshot, NoteSnapshot: scenario.Notes, DebugSnapshot: scenario.Debug, SettingsSnapshot: scenario.Settings,
+			Page: tui.PageSettings, Selected: options.Selection, Width: options.Width, Height: options.Height,
+			Now: scenario.Now, Profile: profile, ShowShortcuts: options.ShowShortcuts,
 		})
 	case ViewDebug:
 		if options.SearchQuery != "" {
 			return "", errors.New("search preview is available only for plans and notes views")
 		}
 		frame = tui.Render(tui.Model{
-			Snapshot: scenario.Snapshot, NoteSnapshot: scenario.Notes, DebugSnapshot: scenario.Debug, Page: tui.PageDebug,
-			Width: options.Width, Height: options.Height, Now: scenario.Now, Profile: profile, ShowShortcuts: options.ShowShortcuts,
+			Snapshot: scenario.Snapshot, NoteSnapshot: scenario.Notes, DebugSnapshot: scenario.Debug, SettingsSnapshot: scenario.Settings,
+			Page: tui.PageDebug, Width: options.Width, Height: options.Height, Now: scenario.Now, Profile: profile, ShowShortcuts: options.ShowShortcuts,
 		})
 	case ViewPlanDetail:
 		if options.SearchQuery != "" {
