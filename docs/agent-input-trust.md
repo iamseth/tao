@@ -2,170 +2,166 @@
 
 This audit inventories places where Tao consumes data written by an agent or by an agent-driven tool. The focus is reliability hardening at interface boundaries: plan artifacts, agent stdout transports, captured agent output, and plan metadata that agents can edit during `/tao-slice` or `/tao-run`.
 
+Each boundary separates **Current mitigation** from **Residual risk** and **Future recommendation**. Current mitigations describe implemented behavior, not proof that the input is authentic or correct. The traceability appendix ties completed audit work to its present code and focused tests.
+
 ## Core `state.json` and `slices.json` plan artifacts
 
 - **Agent-authored input:** `/tao-slice` agents write `state.json`, `slices.json`, `planning-brief.md`, and related plan files; `/tao-run` agents can also edit `slices.json` on exceptional paths.
 - **Consumed by:** `internal/plan/artifact_io.go`, `internal/plan/repository.go`, `internal/plan/validate.go`, `internal/plan/lifecycle.go`, `internal/run/execute.go`, `internal/run/finalize.go`, and CLI commands that resolve or render plans.
-- **Current trust assumption:** Required JSON must parse. Tao-owned multi-artifact lifecycle writes use a private mutation journal, but most inconsistencies in legacy or directly edited plans remain warnings so they stay readable; selected-slice verification preflight blocks only a narrow set of runnable-slice hazards.
-- **Concrete failure mode:** A malformed required JSON file makes a plan invalid. A syntactically valid but wrong `pending_slices`, `current_slice`, `repo.root`, `workspace`, `expected_files`, or `verification.commands` field can select the wrong slice, point execution at the wrong checkout, obscure advisory commit-scope warnings, or send bad instructions back to the agent in the run packet. The journal provides crash consistency for conforming Tao writers, not authenticity for agent-writable targets.
+- **Current mitigation:** Required JSON must parse. Tao-owned multi-artifact lifecycle writes use a private mutation journal, while tolerant validation keeps most legacy inconsistencies readable. `internal/plan/validate.go` warns on broad, absolute, Windows-absolute, and parent-traversing `expected_files`; selected-slice verification preflight blocks only the narrower hazards that make a slice unrunnable. `internal/plan/artifact_io.go` skips malformed or oversized `events.jsonl` lines with warnings rather than making the required plan artifacts unloadable.
+- **Residual risk:** A malformed required JSON file still makes a plan invalid. A syntactically valid but false `pending_slices`, `current_slice`, `repo.root`, `workspace`, `expected_files`, or `verification.commands` field can select the wrong slice, point execution at the wrong checkout, weaken advisory scope evidence, or send hostile instructions back to the agent. Validation and the journal provide shape checks and crash consistency, not authenticity for agent-writable targets; skipped event lines can also remove audit evidence from projections.
 - **Severity:** High.
-- **Recommendation:** Keep load tolerant, but add targeted validation warnings/errors for unsafe paths and workspace roots at run-gating boundaries; warn on broad or parent-traversing `expected_files` that weaken advisory slice-commit scope comparisons.
+- **Future recommendation:** Keep tolerant reads, selected-slice preflight, and the implemented `expected_files` warnings. Establish stronger ownership or provenance for execution-authoritative repository, workspace, slice-selection, and verification fields rather than treating warning-only scope declarations or event history as authenticated authority.
 
 ## Tao-owned plan mutation journal
 
 - **Agent-authored input:** None on the conforming path. `.mutation.json` is an internal Tao intent file, although the current filesystem boundary does not prevent a non-conforming agent or local process from altering it or its targets.
 - **Consumed by:** `internal/plan/mutation_journal.go` at full-plan load, state-only read, and journaled mutation entry points; run, slice-complete, review, and merge consumers receive only settled required artifacts.
-- **Current trust assumption:** A valid `tao.plan.mutation.v1` journal is authoritative. Tao checks plan IDs, exact payload hashes, event mutation IDs, and event conflicts before replay, then rolls forward idempotently and removes the journal durably last. Invalid intent blocks reads and writes without changing any target.
-- **Concrete failure mode:** A process with artifact write access can forge a self-consistent journal, replace targets after settlement, or exhaust storage with large payloads. The protocol does not authenticate the writer, impose a general artifact quota, transact optional Markdown/telemetry sidecars, or repair historical torn writes that have no journal.
+- **Current mitigation:** A valid `tao.plan.mutation.v1` journal is authoritative. Tao checks plan IDs, exact payload hashes, event mutation IDs, and event conflicts before replay, then rolls forward idempotently and removes the journal durably last. Invalid intent blocks reads and writes without changing any target.
+- **Residual risk:** A process with artifact write access can forge a self-consistent journal, replace targets after settlement, or exhaust storage with large payloads. The protocol does not authenticate the writer, impose a general artifact quota, or repair historical torn writes that have no journal. `review.md` is journaled with its state and event projection; other optional Markdown artifacts, logs, and direct telemetry appends remain outside that transaction.
 - **Severity:** High if the shared filesystem is hostile; low for the crash-prefix failures the journal is designed to recover.
-- **Recommendation:** Keep journal creation and settlement inside `internal/plan`, preserve explicit no-journal legacy recovery, and treat stronger ownership, authentication, and artifact quotas as separate hardening work rather than weakening deterministic replay.
+- **Future recommendation:** Keep journal creation and settlement inside `internal/plan`, preserve explicit no-journal legacy recovery, and treat stronger ownership, authentication, and artifact quotas as separate hardening work rather than weakening deterministic replay.
 
 ## `slice-complete` notes and verification-results files
 
 - **Agent-authored input:** Temporary notes and verification-results JSON files passed to `tao slice-complete --notes-file ... --verification-results-file ...`.
-- **Consumed by:** `internal/cli/slice_complete.go` reads both files, unmarshals `[]plan.VerificationRun`, normalizes relative `cwd` values against the command's current working directory, and passes them to `PlanRecord.CompleteSlice`.
-- **Current trust assumption:** The agent is responsible for accurate notes and verification results. Tao only requires parseable JSON and then persists trimmed notes and arbitrary command/cwd/result/details strings into `slices.json`.
-- **Concrete failure mode:** Oversized notes or result details can bloat `slices.json`; a bogus `result` can falsely record verification as passed; a relative or misleading `cwd` can become durable drift evidence; an excessive result array can make summaries and run packets noisy.
-- **Severity:** High for correctness of completed-slice evidence; medium for bloat/availability.
-- **Recommendation:** Add size caps and shape validation at the `slice-complete` boundary, while preserving legacy readability for already persisted artifacts.
+- **Consumed by:** `internal/cli/slice_complete.go` delegates loading to `internal/run/completion_inputs.go`, which bounds both files, unmarshals `[]plan.VerificationRun`, validates and trims required fields, caps result count and detail length, and normalizes relative `cwd` values against the command's current working directory before completion.
+- **Current mitigation:** Notes and verification-results files have byte limits; verification results have a count limit; every result requires non-empty `command`, `cwd`, and `result`; and durable details are rune-capped. Existing persisted artifacts remain readable.
+- **Residual risk:** These checks bound size and shape, not truth. An agent can still claim a command passed, provide a misleading absolute `cwd`, or submit concise but false notes. Bounded false evidence can still influence completion history, summaries, and later drift heuristics.
+- **Severity:** High for correctness of completed-slice evidence; low to medium for bounded bloat/availability.
+- **Future recommendation:** Make completion evidence Tao-owned by executing and recording verification outside the agent. Preserve the current input bounds as defense in depth and retain tolerant reads for historical artifacts.
 
 ## Tao-owned blocked-path input and residual direct artifact writes
 
 - **Agent-authored input:** `prompts/run.md` instructs agents to pass a temporary blocker-reason file and optional invalid/corrected verification-command flags to `tao slice-blocked`; non-conforming agents can still write plan artifacts directly.
 - **Consumed by:** `internal/cli/slice_blocked.go` bounds and validates the inputs, calls `PlanRecord.BlockSlice` to update `state.json` and `slices.json`, and records Tao-owned `slice_blocked` plus optional `verification_command_invalid` events in `events.jsonl`.
-- **Current trust assumption:** The command owns the canonical blocked shape and idempotent event emission, but it trusts bounded agent-provided reasons and verification evidence. Plan files remain writable to the agent, and readers preserve tolerant legacy handling.
-- **Concrete failure mode:** An agent can supply false but bounded blocker or verification evidence. A non-conforming agent can bypass the command and directly forge events or create inconsistent state/slice metadata; bounded event-line reading prevents oversized lines from making the whole plan unloadable but cannot establish event authenticity.
+- **Current mitigation:** The command owns the canonical blocked shape and idempotent event emission, but it trusts bounded agent-provided reasons and verification evidence. Plan files remain writable to the agent, and readers preserve tolerant legacy handling.
+- **Residual risk:** An agent can supply false but bounded blocker or verification evidence. A non-conforming agent can bypass the command and directly forge events or create inconsistent state/slice metadata; bounded event-line reading prevents oversized lines from making the whole plan unloadable but cannot establish event authenticity.
 - **Severity:** Medium for false bounded evidence and audit confusion; high only if non-conforming direct writes corrupt required artifacts.
-- **Recommendation:** Keep conforming blocked-path mutations behind `slice-blocked`, treat event content as untrusted audit data, and preserve tolerant legacy reads. Preventing forged direct writes requires a stronger ownership or filesystem boundary.
+- **Future recommendation:** Keep conforming blocked-path mutations behind `slice-blocked`, treat event content as untrusted audit data, and preserve tolerant legacy reads. Preventing forged direct writes requires a stronger ownership or filesystem boundary.
 
 ## Run packet and prompt rendering from agent-written plan fields
 
 - **Agent-authored input:** Slice titles, goals, context, tasks, expected files, verification commands, planning brief, prior notes, and recent events.
-- **Consumed by:** `internal/plan/run_packet.go` and `internal/run/agent_prompts.go` render these values into the next agent prompt.
-- **Current trust assumption:** Plan text is operational context for the next agent. Tao does not escape or label individual fields as untrusted beyond surrounding system/run instructions.
-- **Concrete failure mode:** Prompt-injection text in an agent-authored plan field can tell the next agent to ignore Tao's run protocol, skip verification, edit outside scope, or alter completion metadata incorrectly.
+- **Consumed by:** `internal/plan/run_packet.go` builds the selected-slice projection; `internal/run/execute.go` records bounded run-context telemetry and hands the packet to `internal/run/agent_prompts.go`, which inserts it into `prompts/run.md` for the next implementation session.
+- **Current mitigation:** Tao derives and preflights the selected execution boundary before handoff, and the fixed run protocol outside the packet retains branch, verification, and lifecycle ownership. The projection limits prior completions and recent events and separately caps Telemetry Feedback by line count and bytes. It does not escape, delimit, or individually label core plan fields, event messages, or the planning brief as untrusted, and those sections have no packet-wide size cap.
+- **Residual risk:** An agent-written value can manufacture Markdown sections or close the surrounding code fence, inject instructions that compete with the fixed protocol, or make the prompt very large. Tao's independent execution and completion gates reduce the effect of a compliant agent being misled, but they do not prevent out-of-scope edits, skipped reasoning, or a denial of service during prompt construction/provider submission.
 - **Severity:** Medium.
-- **Recommendation:** Keep compact packets, but make future prompt templates mark plan fields as untrusted data and preserve stronger instructions outside agent-authored sections.
+- **Future recommendation:** Encode and explicitly delimit every agent-authored packet section as untrusted data, and add a deterministic packet-wide size policy with visible truncation. Keep trusted protocol instructions outside those delimiters and preserve Tao-owned execution and lifecycle gates.
 
 ## Verification commands and verification step metadata
 
 - **Agent-authored input:** `slices[].verification.commands`, optional `verification.steps`, and completed-slice `verification_results`.
 - **Consumed by:** `internal/plan/verification.go`, `internal/plan/verification/*`, `internal/run/execute.go`, `internal/workspace/preparer.go`, and run-packet rendering.
-- **Current trust assumption:** Commands are planned by agents but preflighted before the selected slice runs. Completed verification results are evidence, not re-executed facts; `execution_root` now takes precedence over legacy `cwd` drift heuristics.
-- **Concrete failure mode:** A command can be too broad, shell-sensitive, or path-mismatched; result details can be false; legacy `cwd` values can still influence workspace drift when no `execution_root` exists; optional step `cwd` values are preserved but not deeply normalized.
+- **Current mitigation:** Commands are planned by agents but preflighted before the selected slice runs. Completed verification results are evidence, not re-executed facts; `execution_root` now takes precedence over legacy `cwd` drift heuristics.
+- **Residual risk:** A command can be too broad, shell-sensitive, or path-mismatched; result details can be false; legacy `cwd` values can still influence workspace drift when no `execution_root` exists; optional step `cwd` values are preserved but not deeply normalized.
 - **Severity:** Medium to high depending on whether the command gates a run or only records history.
-- **Recommendation:** Continue strict selected-slice preflight and add artifact validation for unsafe absolute/parent paths in verification metadata.
+- **Future recommendation:** Continue strict selected-slice preflight and add artifact validation for unsafe absolute/parent paths in verification metadata.
 
 ## Slice-commit scope warnings derived from `expected_files`
 
 - **Agent-authored input:** The current and completed slices' `expected_files` entries.
 - **Consumed by:** `internal/run/commit_safety.go` builds the expected-path comparison set, and `internal/run/slice_completion.go` warns when actual slice-commit paths fall outside it.
-- **Current trust assumption:** Expected files describe intended implementation scope but are advisory only. Slice completion safety-screens and stages all non-`.tao`, unambiguous changed paths; a safe undeclared path is still committed and produces a warning.
-- **Concrete failure mode:** A broad glob, absolute-looking path, or `..` path can suppress or confuse the advisory scope warning and hide drift from the declared implementation scope. It cannot expand staging because candidates come from Git status and every candidate is screened independently of `expected_files`.
+- **Current mitigation:** Expected files describe intended implementation scope but are advisory only. `internal/plan/validate.go` warns on broad or vague patterns and on absolute or parent-traversing paths. Slice completion safety-screens and stages all non-`.tao`, unambiguous changed paths; a safe undeclared path is still committed and produces a warning.
+- **Residual risk:** A warned but accepted broad or misleading declaration can still make advisory scope comparisons less useful and hide intent drift in noise. It cannot expand staging because candidates come from Git status and every candidate is screened independently of `expected_files`.
 - **Severity:** Medium.
-- **Recommendation:** Preserve validation warnings for unsafe `expected_files` patterns and keep the field advisory; never use it as staging authorization or to bypass commit-safety screening.
+- **Future recommendation:** Preserve these validation warnings and keep `expected_files` advisory; never use the field as staging authorization or to bypass commit-safety screening.
 
-## Pi RPC stdout events and shared `streamjson` transport
+## Pi RPC and Claude stream-JSON stdout events
 
 - **Agent-authored input:** JSONL stdout from `pi --mode rpc` and `claude --output-format stream-json`.
-- **Consumed by:** `internal/agent/pi/transport.go`, `internal/agent/pi/session.go`, `internal/agent/streamjson/streamjson.go`, and the Claude-specific handler in `internal/agent/claude`.
-- **Current trust assumption:** The selected local agent binary emits well-formed provider events. Parse errors abort loudly; final unterminated lines are parsed; stdout read errors abort; unsupported Pi UI requests are cancelled.
-- **Concrete failure mode:** A provider bug or adversarial wrapper can emit false success/failure events, oversized nested JSON, misleading assistant text, negative or implausible metrics, or log-control content. Removing the historical scanner cap fixed false `token too long` crashes but leaves memory proportional to the largest JSONL line.
+- **Consumed by:** Pi uses `internal/agent/pi/transport.go` and `internal/agent/pi/session.go`; Claude uses `internal/agent/streamjson/streamjson.go` with its handler in `internal/agent/claude`. `internal/run/execute.go` applies the only automatic transport recovery policy.
+- **Current mitigation:** Both readers require parseable JSON lines: parse and stdout-read errors abort loudly, final unterminated lines are parsed, process cancellation is context-aware, and unsupported Pi UI requests are cancelled. A literal `null` decodes into their map event types without error and is currently accepted as a nil map, so the readers do not consistently enforce a non-null object shape. Run-path sessions have a provider-neutral wall-clock timeout unless explicitly disabled. Only Pi's explicit `provider_transport_failure` diagnostic marks an implementation-slice handoff retryable; Tao allows two invocation-local retries with fixed delays and reloads, revalidates, and rechecks the execution boundary before each fresh handoff. Other operations and generic/text-matched failures are not retried.
+- **Residual risk:** A provider bug or adversarial wrapper can emit false success/failure events, a false retry marker, oversized nested JSON, misleading assistant text, implausible metrics, or log-control content. Recovery checks prevent a retry from bypassing the durable execution boundary, but they cannot authenticate the provider's diagnosis. Removing the historical scanner cap fixed false `token too long` crashes while leaving memory proportional to the largest JSONL line.
 - **Severity:** High for run control and captured review/PR outputs; medium for metrics/log quality.
-- **Recommendation:** Preserve current loud parse-error semantics, but consider high, documented output/metric caps and defensive metric normalization where doing so does not reintroduce the old 1 MiB failure mode.
+- **Future recommendation:** Preserve loud parse errors and the narrow retry classifier. Reject nil maps after decoding so accepted events must be non-null JSON objects. Add high, documented per-line and accumulated-output policies only with explicit oversized-output diagnostics and without recreating the historical 1 MiB scanner failure.
 
 ## Provider-specific assistant text, tool logs, and metrics extraction
 
-- **Agent-authored input:** Assistant text, result events, tool-call events, tool-result text, usage/cost/session metadata in provider JSON maps.
-- **Consumed by:** `internal/agent/pi/session.go`, `internal/agent/pi/metrics.go`, `internal/agent/claude/stream.go`, `internal/agent/jsonmap`, and `internal/run/metrics.go`.
-- **Current trust assumption:** Handlers defensively type-assert fields and treat missing metrics as best-effort warnings; raw text is accumulated into session output and logs.
-- **Concrete failure mode:** Very large assistant/tool text can bloat memory and `run.log`; malformed numeric fields become zero or truncated; negative metrics can flow into summaries; duplicated final text can make review/PR extraction ambiguous.
+- **Agent-authored input:** Assistant text, result events, tool-call events, tool-result text, and usage/cost/session metadata in provider JSON maps.
+- **Consumed by:** `internal/agent/pi/session.go`, `internal/agent/pi/metrics.go`, `internal/agent/claude/stream.go`, `internal/agent/jsonmap`, and `internal/run/agent_operations.go` / `internal/run/metrics.go`; framed diagnostic and tool records are appended to the plan's `agent-run.log` through `internal/plan/log.go` and `internal/plan/repository.go`.
+- **Current mitigation:** Handlers defensively type-assert fields, de-duplicate identifiable Pi tool results, frame durable log records, and treat missing metrics as best-effort warnings. `internal/plan/telemetry.go` clamps negative values when producing summaries. Selected assistant/tool text is still accumulated in memory or appended to the log without an aggregate size limit.
+- **Residual risk:** Very large assistant/tool text can bloat memory and `agent-run.log`; malformed numeric fields can become zero or truncate during conversion; implausibly large positive metrics remain possible; and duplicated final text can make review or other structured-output extraction ambiguous. Framing improves rendering but does not sanitize the semantic content or bound file growth.
 - **Severity:** Medium.
-- **Recommendation:** Clamp metric values to non-negative ranges and consider output/log size policies separately from transport line parsing.
+- **Future recommendation:** Preserve defensive extraction and non-negative summaries, but define separate accumulated-output and log-retention policies in addition to any transport-line limit. Truncation must remain visible and must not turn partial structured output into lifecycle authority.
 
 ## Merge-batch conflict packets and aggregate reviews
 
 - **Agent-authored input:** Provider output from deferred `tao merge --all` conflict/verification resolution, aggregate review verdicts and findings, and aggregate rework sessions.
 - **Consumed by:** `internal/merge/batch_agent.go` confines resolution edits and records bounded summaries/fingerprints; `internal/merge/batch_review.go` parses aggregate output through the ordinary review parser and stores full review artifacts under repository-scoped merge-batch data.
-- **Current trust assumption:** Packets contain untrusted source plan titles, review summaries, changed paths, conflict status, verification output, and prior-plan evidence. The configured agent may edit only the isolated integration worktree; it never owns staging, commits, source/default refs, landing, plan events, or cleanup. Aggregate `approve` is authoritative only when bound to the exact default base and integration head after full verification.
-- **Concrete failure mode:** Plan or diff text can inject instructions; an agent can return malformed/false review output, leave conflict markers, make unsafe metadata edits, change refs, repeatedly produce equivalent findings, or create very large summaries/reviews. Semantic edits can be wrong even when Git conflicts are resolved.
+- **Current mitigation:** Prompts label packet sections—including source plan titles, review summaries, changed paths, conflict status, verification output, and prior-plan evidence—as untrusted data. The configured agent may edit only the isolated integration worktree. Tao checks protected refs and workspace status around every session, rejects unsafe or empty edits, bounds summaries and durable findings, fingerprints repeated failures, caps conflict and aggregate-rework attempts, runs full verification after edits, and requires aggregate approval bound to the exact default base and integration head. Staging, commits, source/default refs, landing, plan events, and cleanup remain Tao-owned; reruns resume durable state rather than trusting agent claims about prior work.
+- **Residual risk:** Plan or diff text can inject instructions; an agent can return malformed or false review output, leave conflict markers, attempt unsafe metadata or ref edits, repeatedly produce equivalent findings, or create very large full review artifacts. Semantic edits can be wrong even when Git conflicts are resolved and bounded summary evidence looks plausible.
 - **Severity:** High because the combined output can gate atomic landing.
-- **Mitigation:** Prompts label packet sections as untrusted data. Tao checks protected refs and workspace status around every session, rejects unsafe/empty edits, bounds summaries and durable findings, fingerprints repeated failures, caps conflict and aggregate-rework attempts, runs full verification after edits, requires a fresh aggregate approval, and keeps default/source cleanup Tao-owned. Full review output remains an audit artifact; reruns resume durable state rather than trusting agent claims about prior work.
-- **Recommendation:** Preserve these ownership boundaries and size caps. Treat additional batch packet fields as untrusted, and never let provider output directly select candidates, execute Git settlement, weaken verification, or mutate source plan reviews.
+- **Future recommendation:** Preserve these ownership boundaries and size caps. Treat additional batch packet fields as untrusted, and never let provider output directly select candidates, execute Git settlement, weaken verification, or mutate source plan reviews.
 
 ## Review verdict and findings extraction
 
-- **Agent-authored input:** A fresh review agent's stdout, including an optional fenced ```tao-review-json``` block with verdict, summary, and findings.
-- **Consumed by:** `internal/run/review.go` parses the last fenced JSON block, persists full output to `review.md`, records `state.plan.review`, appends a `plan_reviewed` event, and downstream `tao review`, `tao rework`, `tao merge`, and CLI views consume that metadata.
-- **Current trust assumption:** Valid review JSON is authoritative. Malformed JSON, unknown verdicts, or malformed findings degrade to a `comment` verdict with freeform summary; findings are otherwise trusted and counted.
-- **Concrete failure mode:** An oversized review can bloat `review.md`, `state.json`, and `events.jsonl`; a malformed block can accidentally downgrade changes-requested to comment; findings with absolute, parent-traversing, or empty paths can generate unsafe rework slices; a false approve can gate `tao merge` if other merge checks pass.
-- **Severity:** High because review metadata gates rework/merge decisions.
-- **Recommendation:** Add bounds and normalization for review JSON fields and findings, and treat unsafe finding paths as non-actionable for deterministic rework.
+- **Agent-authored input:** A fresh review agent's stdout, including an optional fenced ```tao-review-json``` block with verdict, summary, findings, and an approval commit proposal.
+- **Consumed by:** `internal/run/review.go` delegates the last fenced JSON block to `internal/reviewcontract`, then `internal/plan` journal-persistently records full output in `review.md` with the bounded state/event projection. `tao review`, `internal/rework`, merge/PR gates, and CLI views consume those distinct forms.
+- **Current mitigation:** `internal/reviewcontract/review.go` caps the JSON block, summary, finding count, finding fields, and proposal fields; trims structured text; changes negative line numbers to zero; and degrades a missing, malformed, or oversized block, an unrecognized verdict, an invalid proposal policy, or findings that cannot decode as an array to a bounded `comment`. A fresh `approve` without a centrally valid typed commit proposal is persisted as `comment` and permits only one durable proposal-correction attempt. Review and correction sessions are bound to recorded base/head evidence, and Tao reinspects the worktree after an untrusted correction before accepting it. Merge and PR consumers add exact-range, cleanliness, proposal, and verification gates; deterministic rework separately rejects unsafe finding paths.
+- **Residual risk:** Full provider output is still persisted in `review.md` without a size cap. Review prompts direct the agent to read agent-written plan intent and the exact diff without encoding that source material, so prompt injection and semantic deception remain possible. The parser bounds but does not validate finding severity or enforce consistency between verdict and findings: an `approve` with `major` findings and a valid typed proposal remains approved, while `changes_requested` with no findings remains changes requested. These accepted combinations can affect integration and rework projections. A rejected block can lose an intended substantive verdict by degrading to `comment`; a bounded finding can still be false; and a semantically false `approve` can influence integration after the independent mechanical gates pass.
+- **Severity:** High because review metadata gates rework, PR, and merge decisions.
+- **Future recommendation:** Use a stricter review protocol with explicit parse-failure status and explicit human-approval semantics, validate an allowed severity vocabulary and verdict/finding consistency, delimit plan intent as untrusted review data, and apply a separate size policy to the full review artifact. Keep current proposal validation, exact-range binding, normalization, and unsafe-path filtering as defense in depth.
 
 ## Review findings reused by `tao rework`
 
 - **Agent-authored input:** `state.plan.review.findings` or fallback findings parsed from `review.md`.
 - **Consumed by:** `internal/rework/findings.go`, `internal/rework/generate.go`, and `internal/cli/rework.go`.
-- **Current trust assumption:** Review findings can be converted directly into pending rework slices, with file strings normalized only enough to create slugs and package-level verification commands.
-- **Concrete failure mode:** A finding can produce an empty, broad, parent-traversing, or misleading expected file; suggestions become tasks verbatim; generated verification can fall back to repo-wide tests when the file is not a Go path.
+- **Current mitigation:** `internal/rework/generate.go` normalizes separators and leading `./`, then skips empty, absolute, Windows-absolute, parent-traversing, wildcard, and broad `...` finding paths before generating deterministic pending slices.
+- **Residual risk:** A syntactically safe path can still be false, misleading, or broader in meaning than intended; suggestions become tasks verbatim; and generated verification can fall back to repo-wide tests when the file is not a Go path. Skipped unsafe findings also require manual interpretation rather than automatic rework.
 - **Severity:** Medium.
-- **Recommendation:** Normalize and filter finding file paths before slice generation; leave richer review-to-work planning for a future design.
+- **Future recommendation:** Preserve path filtering. Leave richer review-to-work planning, semantic path validation, and handling of non-actionable findings for a future design.
 
 ## PR body drafting and PR command output
 
-- **Agent-authored input:** Optional Markdown body text from a best-effort PR-body agent session.
-- **Consumed by:** `internal/prbody` validates or deterministically rebuilds the body, `internal/run/pull_request.go` orchestrates the lifecycle and writes the body to a temp file, `internal/run/pull_request_push.go` applies Tao-owned push policy, and `internal/forge/github.go` runs `gh pr create/view` and parses forge responses.
-- **Current trust assumption:** The agent only drafts prose; branch push, PR creation, existing-PR detection, and URL/number parsing are Tao-owned.
-- **Concrete failure mode:** The body can be misleading or oversized, but a body-agent failure falls back to a deterministic Tao body and no longer blocks completed work.
-- **Severity:** Low to medium.
-- **Recommendation:** Keep PR body generation best-effort and preserve deterministic `gh` creation as the source of PR metadata.
+- **Agent-authored input:** Optional Markdown from a best-effort PR-body agent session, plus tool-authored stdout/JSON returned by Tao-invoked `git` and `gh` commands.
+- **Consumed by:** `internal/prbody` builds and validates the body; `internal/run/pull_request.go` enforces review/proposal preflight and orchestrates persistence; `internal/run/pull_request_push.go` owns publication policy; and `internal/forge/github.go` runs `gh pr list/create/view/edit` and parses forge responses.
+- **Current mitigation:** Agent prose must preserve the deterministic five-heading structure, exact Tests and Scope sections, and reviewer-facing content rules or Tao falls back to its deterministic body. Before push or forge mutation, Tao requires a current approved review for the exact head and a centrally valid proposal. Typed branches use recorded-head force-with-lease policy; discovery filters exact base/head candidates to the origin repository; and durable identity intent controls recovery/metadata repair. Creation output must contain one distinct GitHub PR URL, although repeated copies are accepted.
+- **Residual risk:** A structurally valid body can still be misleading, and body and command output have no dedicated size cap. A successful `gh pr create` URL is parsed but not followed by the same origin-identity verification used for discovery and failure recovery; a compromised wrapper can therefore emit one plausible but false URL. Remote state and authenticated-user claims remain tool outputs rather than cryptographically authenticated Tao evidence, and legacy untyped pushes retain their compatibility behavior without the typed lease policy.
+- **Severity:** Medium for publication identity and mutation; low for body prose.
+- **Future recommendation:** Keep drafting best-effort and forge mutation Tao-owned, add body/command-output bounds, and bind successful creation identity back to the expected origin repository before lifecycle settlement. Preserve deterministic fallback, exact-head preflight, lease safeguards, and unambiguous URL extraction.
 
 ## Optional markdown and planning sidecars
 
-- **Agent-authored input:** `planning-brief.md`, `plan.md`, legacy planning-session sidecars, and `review.md`.
-- **Consumed by:** `internal/plan/artifact_io.go`, `internal/plan/derive.go`, `internal/plan/run_packet.go`, and `internal/cli/show.go`.
-- **Current trust assumption:** Optional sidecars are local context and warnings; missing files usually stay non-fatal. Markdown is parsed with simple heading/list helpers or displayed as content.
-- **Concrete failure mode:** Very large sidecars can inflate memory, prompts, and terminal output; misleading planning metrics can influence operator judgment even though lifecycle remains state/slice based.
+- **Agent-authored input:** `planning-brief.md`, legacy `plan.md`, legacy `planning-session.json`, `planning-session-stats.json`, `planning-prompt.md`, and Tao-persisted agent output in `review.md`.
+- **Consumed by:** `internal/plan/artifact_io.go` loads Markdown/statistics sidecars and records the legacy export's presence with every plan detail; `internal/plan/validate.go`, `internal/plan/decision_overview.go`, `internal/plan/derive.go`, `internal/plan/run_packet.go`, and `internal/planreport` project planning content; `internal/rework/findings.go` falls back to `review.md`; and `internal/cli/review.go` renders the full review artifact. `internal/cli/show.go` renders legacy planning statistics, not the Markdown bodies.
+- **Current mitigation:** Sidecars are optional local context: missing files are normally non-fatal and unreadable files become plan warnings. The legacy session export is only checked for presence, not loaded into memory. New planning-session capture sidecars are no longer created, but legacy files remain readable. Planning Markdown is projected with simple heading/list helpers, while lifecycle state remains in required JSON and Tao journal-persistently records new `review.md` output with its bounded review projection.
+- **Residual risk:** Markdown and statistics readers do not impose file-size limits. Very large consumed sidecars can inflate memory, reports, prompts, or terminal output; plan Markdown can carry prompt injection; full review prose can contain misleading or sensitive text; and forged legacy statistics can influence operator judgment even though they do not prove lifecycle state.
 - **Severity:** Low to medium.
-- **Recommendation:** Add read-size caps for optional sidecars and surface truncation/unreadable warnings rather than failing core plan loads.
+- **Future recommendation:** Add per-sidecar read caps and visible truncation/unreadable warnings without failing required plan loads. Keep legacy readability, but label projected Markdown and statistics as untrusted context wherever they enter prompts or reports.
 
-## Agent telemetry events and budget warnings
+## Agent telemetry events, warnings, and configured caps
 
-- **Agent-authored input:** Metrics extracted from agent stdout and durable `agent_metrics` events in `events.jsonl`.
-- **Consumed by:** `internal/run/metrics.go`, `internal/plan/telemetry.go`, CLI status summaries, and pre-run budget warnings.
-- **Current trust assumption:** Telemetry is best-effort and non-blocking; missing metrics cannot fail a run.
-- **Concrete failure mode:** Forged or malformed metrics can create noisy budget warnings, negative totals, implausible costs, or misleading agent audit attribution.
-- **Severity:** Low.
-- **Recommendation:** Clamp negative values and keep telemetry out of lifecycle decisions.
+- **Agent-authored input:** Metrics extracted from provider stdout and durable `agent_metrics` events in `events.jsonl`.
+- **Consumed by:** `internal/run/agent_operations.go` / `internal/run/metrics.go` shape and append events; `internal/plan/telemetry.go` aggregates them; runtime configuration supplies advisory thresholds and optional slice caps; run packets, review context, CLI status, and validation render derived warnings.
+- **Current mitigation:** Collection and event persistence are best-effort: missing or unusable metrics and append/read failures do not by themselves fail an agent session. Aggregation clamps negative token, cost, message, and tool-call values to zero. Built-in thresholds only produce advisory warnings. Explicit `TAO_MAX_SLICE_OUTPUT_TOKENS` or `TAO_MAX_SLICE_COST` caps are different: after a usable metrics event is durably appended, exceeding a configured cap causes Tao to record `budget_exceeded` and block the selected slice. Metrics never authorize completion, integration, or recovery.
+- **Residual risk:** Forged or implausible positive metrics can create noisy warnings and misleading agent/provider attribution; with an explicit cap enabled they can also stop otherwise correct work. Clamping prevents negative subtraction but does not authenticate provider, model, session, or usage claims, and a missing metric bypasses cap enforcement by design.
+- **Severity:** Low with advisory defaults; medium when an operator enables a hard slice cap.
+- **Future recommendation:** Preserve fail-open collection, non-negative aggregation, and the distinction between advisory thresholds and explicit operational caps. Add provenance/plausibility diagnostics before expanding metrics-derived enforcement, and keep any display bound visibly separate from retained raw audit data.
 
 ## `Slice.Extra` / `State.Extra` and unknown-field preservation
 
 - **Agent-authored input:** Unknown fields in `state.json` and `slices.json`, including nested unknown fields on known objects.
-- **Consumed by:** Model structs expose `State.Extra` and `Slice.Extra`, but current round-tripping primarily relies on `internal/plan/artifact_io.go` merging new JSON into existing artifact JSON before atomic writes.
-- **Current trust assumption:** Unknown fields are preserved for forward compatibility and ignored by current behavior.
-- **Concrete failure mode:** Unknown fields can bloat artifacts, survive mutations indefinitely, and become surprising if future Tao versions start interpreting a previously ignored key. Because merge-by-`id` preserves unknown slice fields, a malicious or stale field can be long-lived.
-- **Severity:** Low today; medium for future compatibility.
-- **Recommendation:** Keep preservation, but document that unknown fields are untrusted and consider size warnings for unusually large unknown-field payloads.
+- **Consumed by:** Standard JSON decoding drops unknown fields from typed behavior; `internal/plan/artifact_io.go` preserves their existing raw JSON by deep-merging Tao's typed update before atomic or journaled writes. Arrays of identified objects, including slices, merge by `id` or `plan_id`. The `State.Extra` and `Slice.Extra` model members are not the primary decode/round-trip mechanism.
+- **Current mitigation:** Current code does not interpret unknown artifact fields, while merge-preserving writes retain them for forward compatibility. Typed clear/replace declarations prevent selected known fields from accidentally surviving that merge.
+- **Residual risk:** Required JSON and merge preparation have no general artifact-size quota, so unknown trees can bloat reads and writes or survive mutations indefinitely. A future version can assign meaning to a previously ignored key, and merge-by-ID makes unknown fields on a long-lived slice especially persistent. Preservation is compatibility, not validation or writer authentication.
+- **Severity:** Low today; medium for future compatibility and availability.
+- **Future recommendation:** Keep merge preservation, explicitly reserve/version newly interpreted keys, and warn on unusually large unknown-field payloads before they become operational inputs. Do not silently discard legacy fields as a substitute for an artifact-size policy.
 
-## Small fixes
+## Implemented-outcome traceability
 
-These are bounded validation, normalization, or ownership changes addressed from this audit.
+The current-state sections above are authoritative. This compact index preserves where earlier audit fixes landed and names representative regression coverage.
 
-1. **Fixed in slice 007** — `internal/cli/slice_complete.go` now caps notes and verification-results input file sizes, caps verification result count/details length, trims required result fields, and rejects result objects missing command/cwd/result fields; covered by `internal/cli/slice_complete_test.go`.
-2. **Fixed in slice 007** — `internal/plan/artifact_io.go` replaced `readEvents` scanner usage with a bounded JSONL reader that reports malformed or oversized `events.jsonl` lines as warnings and skips them instead of failing plan load; covered by `internal/plan/artifact_io_test.go`.
-3. **Fixed in slice 007** — `internal/run/review.go` caps review JSON block size, structured review summary length, findings count, finding field lengths, and negative finding line numbers before persisting review metadata; covered by `internal/run/review_test.go`.
-4. **Fixed in slice 007** — `internal/rework/generate.go` normalizes review finding file paths and skips absolute, empty, parent-traversing, wildcard, and broad `...` paths when generating deterministic rework slices; covered by `internal/rework/generate_test.go`.
-5. **Fixed in slice 007** — `internal/forge/github.go` rejects PR extraction when captured output contains multiple distinct GitHub pull request URLs while allowing repeated identical URLs; covered by `internal/forge/github_test.go`.
-6. **Fixed after slice 007** — `internal/run/pull_request.go`, `internal/run/pull_request_push.go`, and `internal/forge/github.go` keep automatic `tao run --pull-request` creation behind Tao-owned push and forge commands; agents can only best-effort draft the Markdown body, with deterministic fallback.
-7. **Fixed in slice 007** — `internal/plan/validate.go` now warns for unsafe `expected_files` entries with absolute paths or `..` traversal, while the existing broad-glob guardrail continues to warn for broad commit-scope patterns; covered by `internal/plan/validate_test.go`.
-8. **Fixed in slice 007** — `internal/plan/telemetry.go` clamps negative token, cost, message, and tool-call metrics to zero when summarizing agent telemetry; covered by `internal/plan/telemetry_test.go`.
-9. **Fixed by `tao slice-blocked`** — prompted exceptional stops now use bounded inputs and Tao-owned canonical state, slice, and event mutations, including optional `verification_command_invalid` evidence.
+- **Bounded completion and artifact inputs:** `internal/run/completion_inputs.go` bounds and validates slice-completion files (`TestLoadSliceCompletionInputsBoundsAndNormalizes`, `TestLoadSliceCompletionInputsRejectsInvalidEvidence`); `internal/plan/artifact_io.go` skips malformed or oversized event lines with warnings (`TestReadEventsWarnsAndSkipsMalformedOrOversizedLines`); and `internal/plan/validate.go` warns on unsafe or over-broad `expected_files` (`TestValidatePlanVerificationWarnsForUnsafeExpectedFiles`, `TestValidatePlanVerificationWarnsForOversizedSliceGuardrails`).
+- **Bounded review-derived control data:** `internal/reviewcontract/review.go` caps and normalizes structured reviews (`TestParseBoundsAndNormalizesFindings`, `TestParseMalformedOversizedAndMultipleBlocks`), while `internal/rework/generate.go` rejects unsafe deterministic finding paths (`TestGenerateSlicesNormalizesAndSkipsUnsafeFindingPaths`).
+- **Tao-owned PR and blocked-path mutation:** `internal/run/pull_request.go`, `internal/run/pull_request_push.go`, and `internal/forge/github.go` retain push/forge ownership, deterministic body fallback, and unambiguous URL extraction (`TestDeterministicPullRequestCreatorFallsBackWithoutTaoNoise`, `TestPullRequestPushLeasePolicy`, `TestParsePullRequestOutputRejectsMultipleDistinctURLs`, `TestParsePullRequestOutputAllowsRepeatedSameURL`). `internal/cli/slice_blocked.go` bounds prompted evidence and delegates canonical mutation to `PlanRecord.BlockSlice` (`TestSliceBlockedCommandBlocksCurrentSlice`, `TestSliceBlockedCommandRejectsOversizedInputs`).
+- **Non-negative telemetry summaries:** `internal/plan/telemetry.go` clamps all additive negative metric fields (`TestSummarizeAgentMetricsClampsNegativeValues`).
 
 ## Future-plan candidates
 
-- Strengthen plan-artifact ownership against non-conforming direct writes; `slice-blocked` now owns the prompted blocked path, but writable artifacts still permit forged events.
-- Make verification completion evidence Tao-owned by executing and recording verification commands outside the agent, rather than trusting agent-authored result JSON.
-- Redesign review output as a stricter schema with explicit parse failures, human approval semantics, and safe rework planning.
-- Add a general artifact quota/truncation policy for optional markdown, logs, review output, and unknown JSON fields.
-- Introduce stronger prompt-injection boundaries for agent-authored plan text in run packets and review prompts.
-- Strengthen mutation-journal ownership and artifact size limits if plan directories become writable by less-trusted processes.
+- Strengthen plan-artifact and mutation-journal ownership against non-conforming direct writes; `slice-blocked` owns the prompted blocked path, but writable artifacts still permit forged state, events, and self-consistent intent.
+- Make verification completion evidence Tao-owned by executing and recording verification commands outside the agent rather than trusting agent-authored result JSON.
+- Encode untrusted plan/review context, cap complete run packets, and redesign review output with explicit parse failures, human approval semantics, and safe rework planning.
+- Add explicit size/retention policies for optional Markdown, provider output, `agent-run.log`, full reviews, forge output, and unknown JSON fields.
+- Bind a successful forge creation identity to the expected origin repository before settlement, not only on discovery or recovery paths.
+- Add provenance and plausibility diagnostics before expanding metrics-derived enforcement beyond today's explicit slice caps.
