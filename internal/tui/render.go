@@ -15,6 +15,7 @@ import (
 const (
 	clearScreenSequence = "\x1b[H\x1b[2J"
 	maxSliceIDCells     = 20
+	sliceBarCells       = 10
 )
 
 // Model contains the render-neutral state for one UI frame.
@@ -44,26 +45,23 @@ type Model struct {
 
 type rowValues struct {
 	repo      string
-	plan      string
-	status    string
 	next      string
-	phase     string
-	run       string
+	plan      string
 	slices    string
-	updated   string
+	run       string
+	age       string
 	attention string
 }
 
 type tableWidths struct {
-	repo      int
-	plan      int
-	status    int
-	next      int
-	phase     int
-	run       int
-	slices    int
-	updated   int
-	attention int
+	repo       int
+	next       int
+	plan       int
+	slices     int
+	run        int
+	age        int
+	attention  int
+	hasRunning bool
 }
 
 type tableViewportSection struct {
@@ -211,7 +209,7 @@ func Render(model Model) string {
 				}
 				planRowLines = append(planRowLines, len(lines))
 				viewportSection.contentLines = append(viewportSection.contentLines, len(lines))
-				lines = append(lines, renderTableRow(row, model.Snapshot.CollectedAt, columns, paneWidth, selected == model.Selected, model.Profile, model.ActionLabels[actionRowKey(row)]))
+				lines = append(lines, renderTableRow(row, model.Snapshot.CollectedAt, columns, paneWidth, selected == model.Selected, model.Profile, planSectionRole(section.Kind), model.ActionLabels[actionRowKey(row)]))
 				selected++
 			}
 			viewportMetadata.sections = append(viewportMetadata.sections, viewportSection)
@@ -598,21 +596,20 @@ func planCountLabel(count int) string {
 
 func measureTable(sections []Section, now time.Time, actionLabels map[string]string) tableWidths {
 	widths := tableWidths{
-		repo: len("REPO"), plan: len("PLAN"), status: len("STATUS"), next: len("NEXT"), phase: len("PHASE/SLICE"),
-		run: len("RUN AGE"), slices: len("SLICES"), updated: len("UPDATED"), attention: len("ATTENTION"),
+		repo: len("REPO"), next: len("NEXT"), plan: len("PLAN"), slices: len("SLICES"),
+		run: len("RUN"), age: len("AGE"), attention: len("ATTENTION"),
 	}
 	for _, section := range sections {
 		for _, row := range section.Rows {
 			values := tableRowValues(row, now, actionLabels[actionRowKey(row)])
 			widths.repo = max(widths.repo, visibleWidth(values.repo))
-			widths.plan = max(widths.plan, visibleWidth(values.plan))
-			widths.status = max(widths.status, visibleWidth(values.status))
 			widths.next = max(widths.next, visibleWidth(values.next))
-			widths.phase = max(widths.phase, visibleWidth(values.phase))
+			widths.plan = max(widths.plan, visibleWidth(values.plan))
+			widths.slices = max(widths.slices, sliceBarCells+1+visibleWidth(values.slices))
 			widths.run = max(widths.run, visibleWidth(values.run))
-			widths.slices = max(widths.slices, visibleWidth(values.slices))
-			widths.updated = max(widths.updated, visibleWidth(values.updated))
+			widths.age = max(widths.age, visibleWidth(values.age))
 			widths.attention = max(widths.attention, visibleWidth(values.attention))
+			widths.hasRunning = widths.hasRunning || hasVisibleRun(row)
 		}
 	}
 	return widths
@@ -624,21 +621,23 @@ func planTableColumns(widths tableWidths, withAttention bool, frameWidth int) []
 	repoWidth := max(widths.repo, visibleWidth("REPO"))
 	if frameWidth > 0 {
 		paneWidth := max(frameWidth-visibleWidth("  "), 0)
-		maxRepoWidth := max(paneWidth-columnGapWidth-minimumPlanColumnWidth, visibleWidth("REPO"))
+		reservedWidth := max(widths.next, visibleWidth("NEXT")) + minimumPlanColumnWidth + 2*columnGapWidth
+		if withAttention {
+			reservedWidth += max(widths.attention, visibleWidth("ATTENTION")) + columnGapWidth
+		}
+		maxRepoWidth := max(paneWidth-reservedWidth, visibleWidth("REPO"))
 		repoWidth = min(repoWidth, maxRepoWidth)
 	}
 	base := []column{
 		{name: "REPO", width: repoWidth},
+		{name: "NEXT", width: max(widths.next, visibleWidth("NEXT"))},
 		{name: "PLAN", width: widths.plan, flex: true},
 	}
-	operational := []column{
-		{name: "STATUS", width: max(widths.status, visibleWidth("STATUS"))},
-		{name: "NEXT", width: max(widths.next, visibleWidth("NEXT"))},
-		{name: "PHASE/SLICE", width: max(widths.phase, visibleWidth("PHASE/SLICE"))},
-		{name: "RUN AGE", width: max(widths.run, visibleWidth("RUN AGE"))},
-		{name: "SLICES", width: max(widths.slices, visibleWidth("SLICES"))},
-		{name: "UPDATED", width: max(widths.updated, visibleWidth("UPDATED"))},
+	operational := []column{{name: "SLICES", width: max(widths.slices, visibleWidth("SLICES"))}}
+	if widths.hasRunning {
+		operational = append(operational, column{name: "RUN", width: max(widths.run, visibleWidth("RUN"))})
 	}
+	operational = append(operational, column{name: "AGE", width: max(widths.age, visibleWidth("AGE"))})
 	var attention []column
 	if withAttention {
 		attention = []column{{name: "ATTENTION", width: max(widths.attention, visibleWidth("ATTENTION"))}}
@@ -679,11 +678,10 @@ func minimumPlanTableWidth(columns []column) int {
 }
 
 func planTablePaneWidth(width int, columns []column) int {
-	contentWidth := columnsWidth(columns)
 	if width > 0 {
-		return min(max(width-visibleWidth("  "), 0), contentWidth)
+		return max(width-visibleWidth("  "), 0)
 	}
-	return contentWidth
+	return columnsWidth(columns)
 }
 
 func renderHeader(columns []column, paneWidth int) string {
@@ -698,47 +696,77 @@ func planSectionRole(kind SectionKind) Role {
 	switch kind {
 	case SectionAttention:
 		return RoleWarn
-	case SectionRunning:
-		return RoleAccent
-	case SectionCompleted:
+	case SectionReadyToMerge:
 		return RoleSuccess
-	case SectionAbandoned:
-		return RoleNeutral2
+	case SectionPlanned:
+		return RoleInfo
+	case SectionHistory:
+		return RoleNeutral5
 	default:
 		return RoleNeutral5
 	}
 }
 
-func renderTableRow(row monitor.Row, now time.Time, columns []column, paneWidth int, selected bool, profile Profile, actionLabel string) string {
+func renderTableRow(row monitor.Row, now time.Time, columns []column, paneWidth int, selected bool, profile Profile, sectionRole Role, actionLabel string) string {
 	values := tableRowValues(row, now, actionLabel)
-	cursor := "  "
+	repositoryKey := strings.TrimSpace(row.RepositoryID)
+	if repositoryKey == "" {
+		repositoryKey = strings.TrimSpace(row.RepositoryName)
+	}
+	repositoryRole := RepoColor(repositoryKey)
 	if selected {
-		cursor = "> "
+		repositoryRole = RoleRepoSelected
 	}
 	cells := make([]string, 0, len(columns))
 	for _, item := range columns {
 		switch item.name {
 		case "REPO":
-			cells = append(cells, values.repo)
+			cells = append(cells, Paint(profile, repositoryRole, values.repo))
+		case "NEXT":
+			cells = append(cells, filledBadge(profile, sectionRole, values.next))
 		case "PLAN":
 			cells = append(cells, values.plan)
-		case "STATUS":
-			cells = append(cells, colorStatus(profile, values.status, row.Status))
-		case "NEXT":
-			cells = append(cells, values.next)
-		case "PHASE/SLICE":
-			cells = append(cells, values.phase)
-		case "RUN AGE":
-			cells = append(cells, values.run)
 		case "SLICES":
-			cells = append(cells, values.slices)
-		case "UPDATED":
-			cells = append(cells, values.updated)
+			cells = append(cells, renderSlicesValue(profile, row))
+		case "RUN":
+			cells = append(cells, values.run)
+		case "AGE":
+			cells = append(cells, values.age)
 		case "ATTENTION":
 			cells = append(cells, values.attention)
 		}
 	}
-	return cursor + joinRow(columns, cells, paneWidth)
+	line := "  " + joinRow(columns, cells, paneWidth)
+	if paneWidth > 0 {
+		line = padCells(line, paneWidth+visibleWidth("  "))
+	}
+	if selected {
+		line = SelectRow(profile, line)
+	}
+	return line
+}
+
+func renderSlicesValue(profile Profile, row monitor.Row) string {
+	completed := max(row.OriginalCompletedCount+row.ReworkCompletedCount, 0)
+	total := max(row.OriginalTotalCount+row.ReworkTotalCount, 0)
+	filled := 0
+	if total > 0 {
+		filled = min(completed*sliceBarCells/total, sliceBarCells)
+	}
+	bar := Paint(profile, RoleSuccess, strings.Repeat("█", filled)) +
+		Paint(profile, RoleNeutral1, strings.Repeat("░", sliceBarCells-filled))
+	return bar + " " + slicesLabel(row)
+}
+
+func filledBadge(profile Profile, role Role, text string) string {
+	if profile == ProfileNone || text == "" {
+		return text
+	}
+	background, ok := RoleColor(profile, role)
+	if !ok {
+		return text
+	}
+	return colorSequence(background, true) + text + resetSequence
 }
 
 func renderPlanPreview(row monitor.Row, width int) []string {
@@ -792,39 +820,30 @@ func renderPlanPreview(row monitor.Row, width int) []string {
 }
 
 func tableRowValues(row monitor.Row, now time.Time, actionLabel string) rowValues {
-	status := row.Status
+	next := planNextAction(row)
 	if strings.TrimSpace(actionLabel) != "" {
-		status = actionLabel
-	}
-	next := row.NextAction
-	if strings.TrimSpace(next) == "" || row.Status == plan.StatusAbandoned {
-		next = monitor.DeriveNextAction(row)
+		next = actionLabel
 	}
 	return rowValues{
 		repo:      displayValue(row.RepositoryName),
+		next:      " " + displayValue(next) + " ",
 		plan:      planLabel(row),
-		status:    displayValue(status),
-		next:      displayValue(next),
-		phase:     phaseLabel(row),
-		run:       runAgeLabel(row),
 		slices:    slicesLabel(row),
-		updated:   plan.FormatHumanTime(row.UpdatedAt, now),
+		run:       combinedRunLabel(row),
+		age:       relativeAge(row.UpdatedAt, now),
 		attention: attentionLabel(row.AttentionReasons),
 	}
 }
 
 func planLabel(row monitor.Row) string {
-	if strings.TrimSpace(row.PlanID) == "" {
-		return displayValue(row.PlanTitle)
+	id := strings.TrimSpace(row.PlanID)
+	if slug, ok := plan.PlanSlug(id); ok {
+		return slug
 	}
-	if _, ok := plan.PlanSlug(row.PlanID); ok {
-		return row.PlanID
+	if id != "" {
+		return id
 	}
-	title := strings.TrimSpace(row.PlanTitle)
-	if title == "" || title == row.PlanID {
-		return row.PlanID
-	}
-	return planview.ShortPlanID(row.PlanID) + " " + title
+	return displayValue(row.PlanTitle)
 }
 
 func phaseLabel(row monitor.Row) string {
@@ -847,6 +866,46 @@ func runAgeLabel(row monitor.Row) string {
 		return "-"
 	}
 	return durationLabel(row.InvocationDuration)
+}
+
+func hasVisibleRun(row monitor.Row) bool {
+	return row.Liveness == monitor.LivenessLive || isStalled(row)
+}
+
+func combinedRunLabel(row monitor.Row) string {
+	if !hasVisibleRun(row) {
+		return "-"
+	}
+	phase := phaseLabel(row)
+	age := runAgeLabel(row)
+	if phase == "-" {
+		return age
+	}
+	if age == "-" {
+		return phase
+	}
+	return phase + " " + age
+}
+
+func relativeAge(value *time.Time, now time.Time) string {
+	if value == nil {
+		return "-"
+	}
+	age := max(now.Sub(*value), 0)
+	switch {
+	case age < time.Hour:
+		return fmt.Sprintf("%dm", max(int(age/time.Minute), 1))
+	case age < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(age/time.Hour))
+	case age < 7*24*time.Hour:
+		return fmt.Sprintf("%dd", int(age/(24*time.Hour)))
+	case age < 30*24*time.Hour:
+		return fmt.Sprintf("%dw", int(age/(7*24*time.Hour)))
+	case age < 365*24*time.Hour:
+		return fmt.Sprintf("%dmo", int(age/(30*24*time.Hour)))
+	default:
+		return fmt.Sprintf("%dy", int(age/(365*24*time.Hour)))
+	}
 }
 
 func formatAbandonedAt(value *time.Time) string {

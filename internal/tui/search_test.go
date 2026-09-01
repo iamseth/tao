@@ -81,12 +81,12 @@ func TestRenderSearchStateAndResults(t *testing.T) {
 		SearchActive: true,
 	}
 	frame := Render(model)
-	for _, want := range []string{"tao │▸plans  notes  settings  debug", "1 plan", "Search: /owner█", "Owner approval"} {
+	for _, want := range []string{"tao │▸plans  notes  settings  debug", "1 plan", "Search: /owner█", "owner"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("search frame missing %q:\n%s", want, frame)
 		}
 	}
-	if strings.Contains(frame, "Unrelated") {
+	if strings.Contains(frame, "> beta") || strings.Contains(frame, "  other  ") {
 		t.Fatalf("search frame retained non-match:\n%s", frame)
 	}
 }

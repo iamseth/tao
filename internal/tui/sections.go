@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"strings"
+
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/plan"
 )
@@ -9,11 +11,13 @@ import (
 type SectionKind string
 
 const (
-	SectionAttention SectionKind = "attention"
-	SectionRunning   SectionKind = "running"
-	SectionPlanned   SectionKind = "planned"
-	SectionCompleted SectionKind = "completed"
-	SectionAbandoned SectionKind = "abandoned"
+	SectionAttention    SectionKind = "attention"
+	SectionReadyToMerge SectionKind = "ready_to_merge"
+	SectionPlanned      SectionKind = "planned"
+	SectionHistory      SectionKind = "history"
+	SectionRunning      SectionKind = "running"
+	SectionCompleted    SectionKind = "completed"
+	SectionAbandoned    SectionKind = "abandoned"
 )
 
 // Section is one stable partition of monitor rows. Rows retain the collector's
@@ -34,19 +38,19 @@ func BuildSections(rows []monitor.Row, showCompleted bool) []Section {
 func BuildRepositorySections(rows []monitor.Row, showCompleted bool, repositoryID string) []Section {
 	sections := []Section{
 		{Kind: SectionAttention, Title: "NEEDS ATTENTION"},
-		{Kind: SectionRunning, Title: "RUNNING"},
-		{Kind: SectionPlanned, Title: "PLANNED / IN REVIEW"},
-		{Kind: SectionCompleted, Title: "COMPLETED"},
-		{Kind: SectionAbandoned, Title: "ABANDONED (HISTORICAL)"},
+		{Kind: SectionReadyToMerge, Title: "READY TO MERGE"},
+		{Kind: SectionPlanned, Title: "PLANNED"},
+		{Kind: SectionHistory, Title: "HISTORY"},
 	}
 	for _, row := range rows {
 		if repositoryID != "" && row.RepositoryID != repositoryID {
 			continue
 		}
-		kind := sectionKind(row)
-		if kind == SectionCompleted && !showCompleted {
+		classification := sectionKind(row)
+		if classification == SectionCompleted && !showCompleted {
 			continue
 		}
+		kind := nextActionSectionKind(row, classification)
 		for index := range sections {
 			if sections[index].Kind == kind {
 				sections[index].Rows = append(sections[index].Rows, row)
@@ -60,6 +64,29 @@ func BuildRepositorySections(rows []monitor.Row, showCompleted bool, repositoryI
 		}
 	}
 	return sections
+}
+
+func nextActionSectionKind(row monitor.Row, classification SectionKind) SectionKind {
+	if classification == SectionAttention {
+		return SectionAttention
+	}
+	switch planNextAction(row) {
+	case "INSPECT":
+		return SectionAttention
+	case "MERGE":
+		return SectionReadyToMerge
+	}
+	if classification == SectionCompleted || classification == SectionAbandoned {
+		return SectionHistory
+	}
+	return SectionPlanned
+}
+
+func planNextAction(row monitor.Row) string {
+	if strings.TrimSpace(row.NextAction) != "" && row.Status != plan.StatusAbandoned {
+		return row.NextAction
+	}
+	return monitor.DeriveNextAction(row)
 }
 
 func sectionKind(row monitor.Row) SectionKind {

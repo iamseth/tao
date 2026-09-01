@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -19,7 +20,7 @@ func TestRenderGoldenColorModes(t *testing.T) {
 	plain := Render(Model{Snapshot: snapshot})
 	for _, want := range []string{
 		"tao │▸plans  notes  settings  debug", "all repos", "agent -", "1 plan",
-		"PLANNED / IN REVIEW", "> repo  plan  planned", "SELECTED PLAN — advisory context",
+		"PLANNED", "REPO  NEXT   PLAN", "  repo   RUN   plan", "SELECTED PLAN — advisory context",
 	} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("plain frame missing %q:\n%s", want, plain)
@@ -33,10 +34,36 @@ func TestRenderGoldenColorModes(t *testing.T) {
 	for _, want := range []string{
 		Paint(ProfileTrueColor, RoleAccent, "plans"),
 		Paint(ProfileTrueColor, RoleNeutral2, "notes"),
-		Paint(ProfileTrueColor, RoleWarn, "planned"),
+		filledBadge(ProfileTrueColor, RoleInfo, " RUN "),
 	} {
 		if !strings.Contains(colored, want) {
 			t.Fatalf("colored frame missing %q:\n%q", want, colored)
+		}
+	}
+}
+
+func TestNextBadgeUsesContainingSectionRole(t *testing.T) {
+	rows := []monitor.Row{
+		{RepositoryID: "attention", PlanID: "attention", Status: plan.StatusBlocked, AttentionReasons: []monitor.AttentionReason{monitor.AttentionBlocked}},
+		{RepositoryID: "ready", PlanID: "ready", Status: plan.StatusReviewed},
+		{RepositoryID: "planned", PlanID: "planned", Status: plan.StatusPlanned},
+		{RepositoryID: "history", PlanID: "history", Status: plan.StatusCompleted},
+	}
+	labels := map[string]string{
+		actionRowKey(rows[0]): "attention-action",
+		actionRowKey(rows[1]): "ready-action",
+		actionRowKey(rows[2]): "planned-action",
+		actionRowKey(rows[3]): "history-action",
+	}
+	got := Render(Model{Snapshot: monitor.Snapshot{Rows: rows}, Profile: ProfileTrueColor, ActionLabels: labels})
+	for _, want := range []string{
+		filledBadge(ProfileTrueColor, RoleWarn, " attention-action "),
+		filledBadge(ProfileTrueColor, RoleSuccess, " ready-action "),
+		filledBadge(ProfileTrueColor, RoleInfo, " planned-action "),
+		filledBadge(ProfileTrueColor, RoleNeutral5, " history-action "),
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered frame missing section-colored badge %q", want)
 		}
 	}
 }
@@ -56,14 +83,14 @@ func TestRenderSectionsAndOperationalLabels(t *testing.T) {
 		{RepositoryName: "run", PlanID: "live", Status: plan.StatusInProgress, Liveness: monitor.LivenessLive, SliceID: "004-ui", InvocationDuration: 2 * time.Minute, OriginalCompletedCount: 2, OriginalTotalCount: 4, UpdatedAt: &updated},
 		{RepositoryName: "attn", PlanID: "dead", Status: plan.StatusBlocked, Liveness: monitor.LivenessStale, AttentionReasons: []monitor.AttentionReason{monitor.AttentionRunCrashed}, UpdatedAt: &updated},
 		{RepositoryName: "plan", PlanID: "planned", Status: plan.StatusPlanned, UpdatedAt: &updated},
-		{RepositoryName: "plan", PlanID: "review", Status: plan.StatusInReview, UpdatedAt: &updated},
+		{RepositoryName: "plan", PlanID: "review", Status: plan.StatusInReview, NextAction: "MERGE", UpdatedAt: &updated},
 		{RepositoryName: "done", PlanID: "complete", Status: plan.StatusCompleted, OriginalCompletedCount: 1, OriginalTotalCount: 1, UpdatedAt: &updated},
 		{RepositoryName: "old", PlanID: "abandoned", Status: plan.StatusAbandoned, UpdatedAt: &updated},
 		{RepositoryName: "run", PlanID: "stale", Status: plan.StatusInProgress, Liveness: monitor.LivenessStale, HeartbeatAge: 45 * time.Second, RunLockPresent: true, RunLockProcessAlive: true, InvocationDuration: time.Hour, UpdatedAt: &updated},
 	}}
 
 	got := Render(Model{Snapshot: snapshot, Selected: 2})
-	ordered := []string{"NEEDS ATTENTION", "RUNNING", "PLANNED / IN REVIEW", "COMPLETED", "ABANDONED (HISTORICAL)"}
+	ordered := []string{"NEEDS ATTENTION", "READY TO MERGE", "PLANNED", "HISTORY"}
 	previous := -1
 	for _, label := range ordered {
 		index := strings.Index(got, label)
@@ -73,16 +100,198 @@ func TestRenderSectionsAndOperationalLabels(t *testing.T) {
 		previous = index
 	}
 	for _, want := range []string{
-		"NEXT", "RUN AGE", "RUN", "REVIEW", "DONE", "ABANDONED", "PHASE/SLICE", "ATTENTION", "crashed?", "stalled? (45s old)",
-		"004-ui", "2m", "2/4", "30m",
+		"NEXT", "RUN", "AGE", "MERGE", "DONE", "ABANDONED", "SLICES", "ATTENTION", "crashed?", "stalled? (45s old)",
+		"004-ui 2m", "2/4", "30m",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Render() missing %q in:\n%s", want, got)
 		}
 	}
-	if !strings.Contains(got, "> run") {
+	if !strings.Contains(got, "  run    MONITOR") || !strings.Contains(got, "Slice scope: 004-ui") {
 		t.Errorf("selection did not cross into the running section:\n%s", got)
 	}
+}
+
+func TestSlicesValueAddsTenCellProgressBarWithoutChangingLabel(t *testing.T) {
+	row := monitor.Row{
+		OriginalCompletedCount: 2,
+		OriginalTotalCount:     3,
+		ReworkCompletedCount:   1,
+		ReworkTotalCount:       2,
+	}
+	if got := slicesLabel(row); got != "3/3+2" {
+		t.Fatalf("slicesLabel() = %q, want existing combined label", got)
+	}
+	if got := renderSlicesValue(ProfileNone, row); got != "██████░░░░ 3/3+2" {
+		t.Fatalf("renderSlicesValue() = %q, want ten-cell bar followed by label", got)
+	}
+
+	complete := monitor.Row{
+		OriginalCompletedCount: 3,
+		OriginalTotalCount:     3,
+		ReworkCompletedCount:   5,
+		ReworkTotalCount:       5,
+	}
+	if got := renderSlicesValue(ProfileNone, complete); got != "██████████ 8/3+5" {
+		t.Fatalf("complete renderSlicesValue() = %q", got)
+	}
+}
+
+func TestSelectedPlanRowFillsPaneAndPreservesCellRoles(t *testing.T) {
+	const width = 120
+	row := monitor.Row{
+		RepositoryID:           "repo-id",
+		RepositoryName:         "repo",
+		PlanID:                 "selected-plan",
+		Status:                 plan.StatusPlanned,
+		OriginalCompletedCount: 1,
+		OriginalTotalCount:     3,
+	}
+	frame := Render(Model{
+		Snapshot: monitor.Snapshot{Rows: []monitor.Row{row}},
+		Width:    width,
+		Profile:  ProfileTrueColor,
+	})
+	var selectedLine string
+	for _, line := range renderedLines(frame) {
+		if strings.Contains(line, Paint(ProfileTrueColor, RoleRepoSelected, "repo")) {
+			selectedLine = line
+			break
+		}
+	}
+	if selectedLine == "" {
+		t.Fatalf("selected row not found in frame: %q", frame)
+	}
+	selectionPrefix := boldSequence + colorSequence(SelectionBackground(ProfileTrueColor), true)
+	if !strings.HasPrefix(selectedLine, selectionPrefix) || !strings.HasSuffix(selectedLine, resetSequence) {
+		t.Fatalf("selected row does not wrap the full rendered line: %q", selectedLine)
+	}
+	if got := visibleWidth(selectedLine); got != width {
+		t.Fatalf("selected row width = %d, want pane width %d: %q", got, width, selectedLine)
+	}
+	if !strings.HasSuffix(strings.TrimSuffix(selectedLine, resetSequence), " ") {
+		t.Fatalf("selection background was applied before full-width padding: %q", selectedLine)
+	}
+	for _, role := range []Role{RoleRepoSelected, RoleSuccess, RoleNeutral1} {
+		color, _ := RoleColor(ProfileTrueColor, role)
+		if !strings.Contains(selectedLine, colorSequence(color, false)) {
+			t.Errorf("selected row lost foreground role %d: %q", role, selectedLine)
+		}
+	}
+	if !strings.Contains(selectedLine, filledBadge(ProfileTrueColor, RoleInfo, " RUN ")) {
+		t.Errorf("selected row lost NEXT badge role: %q", selectedLine)
+	}
+	if strings.Contains(selectedLine, "\x1b[7m") || strings.Contains(selectedLine, "> repo") {
+		t.Fatalf("selected row uses a reverse-video or cursor marker: %q", selectedLine)
+	}
+}
+
+func TestPlanLabelUsesReadableSlugWithoutFullPlanID(t *testing.T) {
+	const id = "20260828-181339-tui-plans-rows"
+	if got := planLabel(monitor.Row{PlanID: id, PlanTitle: "TUI Plans tab"}); got != "tui-plans-rows" {
+		t.Fatalf("planLabel() = %q, want readable slug", got)
+	}
+	values := tableRowValues(monitor.Row{PlanID: id, Status: plan.StatusPlanned}, time.Time{}, "")
+	if strings.Contains(values.plan, id) {
+		t.Fatalf("plan list value contains full ID %q", values.plan)
+	}
+}
+
+func TestRelativeAgeRemainsRelativeBeyondOneDay(t *testing.T) {
+	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	tests := []struct {
+		age  time.Duration
+		want string
+	}{
+		{age: 3 * 24 * time.Hour, want: "3d"},
+		{age: 14 * 24 * time.Hour, want: "2w"},
+		{age: 120 * 24 * time.Hour, want: "4mo"},
+		{age: 365 * 24 * time.Hour, want: "1y"},
+	}
+	for _, test := range tests {
+		updated := now.Add(-test.age)
+		if got := relativeAge(&updated, now); got != test.want {
+			t.Errorf("relativeAge(%s) = %q, want %q", test.age, got, test.want)
+		}
+	}
+}
+
+func TestPlanColumnsVaryAcrossMixedAndStressScenarios(t *testing.T) {
+	now := time.Date(2026, time.August, 21, 23, 0, 0, 0, time.UTC)
+	updated := func(age time.Duration) *time.Time {
+		value := now.Add(-age)
+		return &value
+	}
+	mixed := []monitor.Row{
+		{RepositoryName: "alpha", PlanID: "blocked", Status: plan.StatusBlocked, OriginalTotalCount: 3, UpdatedAt: updated(3 * time.Minute)},
+		{RepositoryName: "beta", PlanID: "live", Status: plan.StatusInProgress, Liveness: monitor.LivenessLive, SliceID: "002-render", InvocationDuration: 7 * time.Minute, OriginalCompletedCount: 1, OriginalTotalCount: 3, UpdatedAt: updated(2 * time.Hour)},
+		{RepositoryName: "alpha", PlanID: "done", Status: plan.StatusCompleted, OriginalCompletedCount: 2, OriginalTotalCount: 2, UpdatedAt: updated(3 * 24 * time.Hour)},
+	}
+	stress := make([]monitor.Row, 12)
+	for index := range stress {
+		status := plan.StatusPlanned
+		liveness := monitor.LivenessMissing
+		if index%5 == 0 {
+			status = plan.StatusInProgress
+			liveness = monitor.LivenessLive
+		} else if index%4 == 0 {
+			status = plan.StatusCompleted
+		}
+		stress[index] = monitor.Row{
+			RepositoryName: fmt.Sprintf("repo-%d", index%4), PlanID: fmt.Sprintf("stress-%02d", index),
+			Status: status, Liveness: liveness, SliceID: fmt.Sprintf("%03d-slice", index), InvocationDuration: time.Duration(index+1) * time.Minute,
+			OriginalCompletedCount: index % 4, OriginalTotalCount: 5, UpdatedAt: updated(time.Duration(index+1) * time.Hour),
+		}
+	}
+
+	for name, rows := range map[string][]monitor.Row{"mixed": mixed, "stress": stress} {
+		t.Run(name, func(t *testing.T) {
+			values := make([]rowValues, len(rows))
+			for index, row := range rows {
+				values[index] = tableRowValues(row, now, "")
+			}
+			columns := []struct {
+				name  string
+				value func(rowValues) string
+			}{
+				{name: "REPO", value: func(value rowValues) string { return value.repo }},
+				{name: "NEXT", value: func(value rowValues) string { return value.next }},
+				{name: "PLAN", value: func(value rowValues) string { return value.plan }},
+				{name: "SLICES", value: func(value rowValues) string { return value.slices }},
+				{name: "RUN", value: func(value rowValues) string { return value.run }},
+				{name: "AGE", value: func(value rowValues) string { return value.age }},
+			}
+			for _, column := range columns {
+				seen := make(map[string]struct{})
+				for _, value := range values {
+					seen[column.value(value)] = struct{}{}
+				}
+				if len(seen) < 2 {
+					t.Errorf("%s renders an identical value across all visible rows: %v", column.name, seen)
+				}
+			}
+		})
+	}
+}
+
+func TestPlanRunColumnIsConditional(t *testing.T) {
+	now := time.Now()
+	withoutRun := measureTable([]Section{{Rows: []monitor.Row{{PlanID: "planned", Status: plan.StatusPlanned}}}}, now, nil)
+	if names := columnNames(planTableColumns(withoutRun, false, 199)); slices.Contains(names, "RUN") {
+		t.Fatalf("non-running plans rendered RUN column: %v", names)
+	}
+	withRun := measureTable([]Section{{Rows: []monitor.Row{{PlanID: "live", Status: plan.StatusInProgress, Liveness: monitor.LivenessLive}}}}, now, nil)
+	if names := columnNames(planTableColumns(withRun, false, 199)); !slices.Contains(names, "RUN") {
+		t.Fatalf("running plan omitted RUN column: %v", names)
+	}
+}
+
+func columnNames(columns []column) []string {
+	names := make([]string, len(columns))
+	for index, column := range columns {
+		names[index] = column.name
+	}
+	return names
 }
 
 func TestPhaseLabelRequiresLiveRunLockForStalledLabel(t *testing.T) {
@@ -166,7 +375,7 @@ func TestRenderShowsRepositoryFocusAndFiltersRows(t *testing.T) {
 		FocusRepositoryID:   "repo-b",
 		FocusRepositoryName: "beta",
 	})
-	if !strings.Contains(got, "repo beta") || !strings.Contains(got, "1 plan") || !strings.Contains(got, "> beta  two") {
+	if !strings.Contains(got, "repo beta") || !strings.Contains(got, "1 plan") || !strings.Contains(got, "  beta   RUN   two") {
 		t.Fatalf("focused render missing header or row:\n%s", got)
 	}
 	if strings.Contains(got, "alpha") {
@@ -183,7 +392,7 @@ func TestRenderHeaderTracksActivePage(t *testing.T) {
 	snapshot := monitor.Snapshot{Rows: []monitor.Row{{RepositoryName: "repo", PlanID: "plan", Status: plan.StatusPlanned}}}
 
 	plans := Render(Model{Snapshot: snapshot})
-	for _, want := range []string{"tao │▸plans  notes  settings  debug", "1 plan", "> repo  plan"} {
+	for _, want := range []string{"tao │▸plans  notes  settings  debug", "1 plan", "  repo   RUN   plan"} {
 		if !strings.Contains(plans, want) {
 			t.Fatalf("plans page missing %q:\n%s", want, plans)
 		}
@@ -257,7 +466,7 @@ func TestRenderHeightViewportKeepsSelectionVisible(t *testing.T) {
 			if strings.HasSuffix(got, "\n") {
 				t.Fatal("full-height frame ends with a newline that can scroll the terminal")
 			}
-			selectedLabel := fmt.Sprintf("> repo  plan-%02d", selected)
+			selectedLabel := fmt.Sprintf("  repo   RUN   plan-%02d", selected)
 			if !strings.Contains(got, selectedLabel) {
 				t.Fatalf("viewport does not contain selected row %q:\n%s", selectedLabel, got)
 			}
@@ -280,7 +489,7 @@ func TestRenderVerticalResizeReflowsAroundSelection(t *testing.T) {
 	if lines := renderedLines(got); len(lines) != 6 {
 		t.Fatalf("resized rendered lines = %d, want 6:\n%s", len(lines), got)
 	}
-	if !strings.Contains(got, "> repo  plan-07") {
+	if !strings.Contains(got, "  repo   RUN   plan-07") {
 		t.Fatalf("resized viewport lost selected row:\n%s", got)
 	}
 }
@@ -299,7 +508,7 @@ func TestRenderSelectedPlanPreviewShowsBoundedDecisionContext(t *testing.T) {
 	}
 	got := Render(Model{Snapshot: monitor.Snapshot{Rows: []monitor.Row{row}}, Width: 120})
 	for _, want := range []string{
-		"RUN AGE", "NEXT", "SELECTED PLAN — advisory context",
+		"AGE", "NEXT", "SELECTED PLAN — advisory context",
 		"Benefit: Operators can choose the right plan.", "Readiness: ready",
 		"Disposition: conditional — Confirm the dependency first.",
 		"Priority: level=must  impact=high  urgency=medium  effort=small  risk=low  confidence=high",
@@ -330,7 +539,7 @@ func TestRenderNarrowPlanTableKeepsPlanVisibleWithLongRepositoryName(t *testing.
 		if strings.HasPrefix(line, "  REPO") {
 			header = line
 		}
-		if strings.HasPrefix(line, "> ") {
+		if strings.Contains(line, planID) {
 			selectedRow = line
 		}
 	}
@@ -404,7 +613,7 @@ func TestRenderAbandonmentAsSafeHistoricalOutcome(t *testing.T) {
 		NextAction:       "FINALIZE PR",
 	}
 	got := Render(Model{Snapshot: monitor.Snapshot{Rows: []monitor.Row{row}}, HideCompleted: true, Width: 120})
-	for _, want := range []string{"ABANDONED (HISTORICAL)", "abandoned  ABANDONED", "Abandoned at: 2026-09-01T21:00:00Z", "Abandonment reason: superseded by", "SELECTED PLAN"} {
+	for _, want := range []string{"HISTORY", "ABANDONED   old-plan", "Abandoned at: 2026-09-01T21:00:00Z", "Abandonment reason: superseded by", "SELECTED PLAN"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("abandonment render missing %q:\n%s", want, got)
 		}
@@ -435,7 +644,7 @@ func TestRenderPlanPreviewYieldsToTableSelectionAndConfirmation(t *testing.T) {
 	if len(lines) != 7 {
 		t.Fatalf("rendered lines = %d, want 7:\n%s", len(lines), got)
 	}
-	for _, want := range []string{"tao │▸plans", "> repo  selected", "SELECTED PLAN", "Run selected plan? [y/n]"} {
+	for _, want := range []string{"tao │▸plans", "  repo   RUN   selected", "SELECTED PLAN", "Run selected plan? [y/n]"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("responsive frame missing %q:\n%s", want, got)
 		}
@@ -455,8 +664,10 @@ func TestRenderPlanTruncationCountsOnlyHiddenPlanRows(t *testing.T) {
 	for index := 0; index < 36; index++ {
 		status := plan.StatusPlanned
 		liveness := monitor.LivenessMissing
+		nextAction := ""
 		if index%7 == 0 {
 			status = plan.StatusCompleted
+			nextAction = "MERGE"
 		} else if index%5 == 0 {
 			status = plan.StatusInProgress
 			liveness = monitor.LivenessLive
@@ -466,11 +677,12 @@ func TestRenderPlanTruncationCountsOnlyHiddenPlanRows(t *testing.T) {
 			PlanID:         fmt.Sprintf("stress-%02d", index),
 			Status:         status,
 			Liveness:       liveness,
+			NextAction:     nextAction,
 		})
 	}
 
 	got := Render(Model{Snapshot: monitor.Snapshot{Rows: rows}, Width: 70, Height: 20})
-	if !strings.Contains(got, "RUNNING") || !strings.Contains(got, "PLANNED / IN REVIEW") {
+	if !strings.Contains(got, "READY TO MERGE") || !strings.Contains(got, "PLANNED") {
 		t.Fatalf("constrained frame did not span plan sections:\n%s", got)
 	}
 	if visible := strings.Count(got, "stress-"); visible != 6 {
@@ -495,7 +707,7 @@ func TestRenderSelectedLastPlanKeepsSectionSkeleton(t *testing.T) {
 	}
 
 	got := Render(Model{Snapshot: monitor.Snapshot{Rows: rows}, Selected: 29, Width: 70, Height: 20})
-	for _, want := range []string{"PLANNED / IN REVIEW", "REPO", "> repo  plan-29"} {
+	for _, want := range []string{"PLANNED", "REPO", "  repo   RUN   plan-29"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("selected-last viewport missing %q:\n%s", want, got)
 		}
@@ -520,12 +732,12 @@ func TestRenderNarrowWidthTruncatesRunesAndPreservesColor(t *testing.T) {
 		if gotWidth := visibleWidth(line); gotWidth > width {
 			t.Fatalf("rendered line %q has %d visible cells, want at most %d", line, gotWidth, width)
 		}
-		if strings.Count(line, "\x1b[")%2 != 0 {
+		if _, styleActive := ansiState(line); styleActive {
 			t.Fatalf("rendered line has an unterminated color sequence: %q", line)
 		}
 	}
-	if !strings.Contains(got, Paint(ProfileTrueColor, RoleWarn, plan.StatusPlanned)) {
-		t.Fatalf("narrow colored status was not preserved: %q", got)
+	if !strings.Contains(got, filledBadge(ProfileTrueColor, RoleInfo, " RUN ")) {
+		t.Fatalf("narrow colored next-action badge was not preserved: %q", got)
 	}
 }
 
@@ -602,7 +814,7 @@ func TestRenderBoundedViewportPreservesActionFooter(t *testing.T) {
 	if lines := renderedLines(got); len(lines) != 6 {
 		t.Fatalf("rendered lines = %d, want 6:\n%s", len(lines), got)
 	}
-	for _, want := range []string{"> repo  plan-07", "Run failed.", "Approve this slice? [y/n]"} {
+	for _, want := range []string{"  repo   RUN   plan-07", "Run failed.", "Approve this slice? [y/n]"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("bounded viewport missing %q:\n%s", want, got)
 		}

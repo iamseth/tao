@@ -239,8 +239,8 @@ func TestSemanticPaletteUsesApprovedColors(t *testing.T) {
 		})
 	}
 
-	if _, assigned := Info(ProfileTrueColor); assigned {
-		t.Fatal("reserved info role is assigned")
+	if info, assigned := Info(ProfileTrueColor); !assigned || info != Accent(ProfileTrueColor) {
+		t.Fatalf("info role = %#v, assigned %t; want assigned accent hue", info, assigned)
 	}
 }
 

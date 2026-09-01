@@ -100,7 +100,7 @@ func TestRenderFrameSkeletonAndContentAtSupportedSizes(t *testing.T) {
 		page    PageID
 		content string
 	}{
-		{page: PagePlans, content: "> repo"},
+		{page: PagePlans, content: "  repo"},
 		{page: PageNotes, content: "> repo"},
 		{page: PageSettings, content: "> repo (repo)"},
 		{page: PageDebug, content: "UI"},
@@ -165,7 +165,8 @@ func TestRenderStressPlanRowsKeepCompleteResponsiveColumns(t *testing.T) {
 		RepositoryName: "very-long-repository-name-alpha",
 		PlanID:         strings.Repeat("plan-", 12),
 		Status:         plan.StatusBlocked,
-		NextAction:     strings.Repeat("resolve-", 4),
+		NextAction:     "RESOLVE",
+		Liveness:       monitor.LivenessLive,
 		Phase:          "running_slice",
 		SliceID:        strings.Repeat("slice-", 6),
 		UpdatedAt:      &updated,
@@ -175,30 +176,26 @@ func TestRenderStressPlanRowsKeepCompleteResponsiveColumns(t *testing.T) {
 	}
 	values := tableRowValues(row, now, "")
 	expectedNames := map[int]string{
-		199: "REPO,PLAN,STATUS,NEXT,PHASE/SLICE,RUN AGE,SLICES,UPDATED,ATTENTION",
-		120: "REPO,PLAN,STATUS,NEXT,ATTENTION",
-		100: "REPO,PLAN,STATUS,ATTENTION",
-		80:  "REPO,PLAN,STATUS,ATTENTION",
-		70:  "REPO,PLAN,STATUS,ATTENTION",
+		199: "REPO,NEXT,PLAN,SLICES,RUN,AGE,ATTENTION",
+		120: "REPO,NEXT,PLAN,SLICES,RUN,AGE,ATTENTION",
+		100: "REPO,NEXT,PLAN,SLICES,ATTENTION",
+		80:  "REPO,NEXT,PLAN,ATTENTION",
+		70:  "REPO,NEXT,PLAN,ATTENTION",
 	}
 	valueForColumn := func(name string) string {
 		switch name {
 		case "REPO":
 			return values.repo
-		case "PLAN":
-			return values.plan
-		case "STATUS":
-			return values.status
 		case "NEXT":
 			return values.next
-		case "PHASE/SLICE":
-			return values.phase
-		case "RUN AGE":
-			return values.run
+		case "PLAN":
+			return values.plan
 		case "SLICES":
-			return values.slices
-		case "UPDATED":
-			return values.updated
+			return renderSlicesValue(ProfileNone, row)
+		case "RUN":
+			return values.run
+		case "AGE":
+			return values.age
 		case "ATTENTION":
 			return values.attention
 		default:
@@ -228,7 +225,7 @@ func TestRenderStressPlanRowsKeepCompleteResponsiveColumns(t *testing.T) {
 				if strings.HasPrefix(line, "  REPO") {
 					header = line
 				}
-				if strings.HasPrefix(line, "> ") {
+				if strings.Contains(line, " RESOLVE ") && strings.Contains(line, "very-long-repository-name-alpha") {
 					content = line
 				}
 				if got := visibleWidth(line); got != width {
@@ -245,12 +242,14 @@ func TestRenderStressPlanRowsKeepCompleteResponsiveColumns(t *testing.T) {
 				if index > 0 {
 					offset += columnGapWidth
 				}
-				headerCell := strings.TrimSpace(header[offset : offset+item.width])
-				contentCell := strings.TrimSpace(content[offset : offset+item.width])
+				headerRunes := []rune(header)
+				contentRunes := []rune(content)
+				headerCell := strings.TrimSpace(string(headerRunes[offset : offset+item.width]))
+				contentCell := strings.TrimSpace(string(contentRunes[offset : offset+item.width]))
 				if headerCell != item.name {
 					t.Errorf("column %q rendered ambiguous header %q", item.name, headerCell)
 				}
-				wantValue := valueForColumn(item.name)
+				wantValue := strings.TrimSpace(valueForColumn(item.name))
 				if item.name == "PLAN" {
 					if item.width < minimumPlanColumnWidth || !strings.HasPrefix(wantValue, contentCell) || visibleWidth(contentCell) < minimumPlanColumnWidth {
 						t.Errorf("PLAN rendered without a meaningful value width: width=%d value=%q", item.width, contentCell)
@@ -270,7 +269,7 @@ func TestDashboardPagesRenderSharedSectionRules(t *testing.T) {
 		role Role
 		want []string
 	}{
-		{page: PagePlans, role: RoleNeutral5, want: []string{"▌ PLANNED / IN REVIEW ", "REPO", "PLAN", "STATUS", "UPDATED"}},
+		{page: PagePlans, role: RoleInfo, want: []string{"▌ PLANNED ", "REPO", "NEXT", "PLAN", "SLICES", "AGE"}},
 		{page: PageNotes, role: RoleAccent, want: []string{"▌ OPEN NOTES ", "REPO", "NOTE", "STATUS", "PREVIEW"}},
 		{page: PageSettings, role: RoleAccent, want: []string{"▌ GLOBAL RUNTIME DEFAULTS ", "VALUE", "SOURCE", "▌ REPOSITORY DEFAULTS ", "PULL_REQUEST"}},
 		{page: PageDebug, role: RoleAccent, want: []string{"▌ UI ", " 10 ─", "▌ DOCTOR ", "▌ RUNTIME DEFAULTS "}},

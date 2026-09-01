@@ -13,7 +13,7 @@ func orderPlannedRows(rows []monitor.Row) {
 	var positions []int
 	var planned []monitor.Row
 	for index, row := range rows {
-		if row.Kind != monitor.RowKindRepositoryWarning && row.Status == plan.StatusPlanned {
+		if row.Kind != monitor.RowKindRepositoryWarning && row.Status == plan.StatusPlanned && sectionKind(row) == SectionPlanned {
 			positions = append(positions, index)
 			planned = append(planned, row)
 		}

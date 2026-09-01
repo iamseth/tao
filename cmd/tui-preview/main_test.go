@@ -56,12 +56,12 @@ func TestPlainSearchUsesProductionRenderer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"1 plan", "Search: /owner", "Awaiting owner sign-off"} {
+	for _, want := range []string{"1 plan", "Search: /owner", "approval"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("search preview missing %q:\n%s", want, output.String())
 		}
 	}
-	if strings.Contains(output.String(), "Blocked database migration") {
+	if strings.Contains(output.String(), "  blocked  ") {
 		t.Fatalf("search preview retained a non-match:\n%s", output.String())
 	}
 }

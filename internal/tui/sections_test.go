@@ -23,11 +23,10 @@ func TestBuildSectionsGroupsEveryRowAndPreservesOrder(t *testing.T) {
 
 	sections := BuildSections(rows, true)
 	want := map[SectionKind][]string{
-		SectionAttention: {"attention-first", "attention-second"},
-		SectionRunning:   {"running-first", "stalled"},
-		SectionPlanned:   {"planned-first", "planned-second"},
-		SectionCompleted: {"completed"},
-		SectionAbandoned: {"abandoned"},
+		SectionAttention:    {"attention-first", "attention-second"},
+		SectionReadyToMerge: nil,
+		SectionPlanned:      {"running-first", "planned-first", "planned-second", "stalled"},
+		SectionHistory:      {"completed", "abandoned"},
 	}
 	for _, section := range sections {
 		var got []string
@@ -50,23 +49,17 @@ func TestBuildSectionsRequiresLiveRunLockForStalledClassification(t *testing.T) 
 		{PlanID: "abandoned", Status: plan.StatusAbandoned, Liveness: monitor.LivenessStale, RunLockPresent: true, RunLockProcessAlive: true, AttentionReasons: []monitor.AttentionReason{monitor.AttentionRunCrashed}},
 	}
 
-	sections := BuildSections(rows, true)
-	got := make(map[SectionKind][]string)
-	for _, section := range sections {
-		for _, row := range section.Rows {
-			got[section.Kind] = append(got[section.Kind], row.PlanID)
-		}
+	want := []SectionKind{
+		SectionPlanned,
+		SectionRunning,
+		SectionAttention,
+		SectionAttention,
+		SectionCompleted,
+		SectionAbandoned,
 	}
-	want := map[SectionKind][]string{
-		SectionAttention: {"dead-lock", "attention"},
-		SectionRunning:   {"live-lock"},
-		SectionPlanned:   {"missing-lock"},
-		SectionCompleted: {"recently-completed"},
-		SectionAbandoned: {"abandoned"},
-	}
-	for kind, wantIDs := range want {
-		if !slices.Equal(got[kind], wantIDs) {
-			t.Errorf("%s rows = %v, want %v", kind, got[kind], wantIDs)
+	for index, row := range rows {
+		if got := sectionKind(row); got != want[index] {
+			t.Errorf("sectionKind(%s) = %s, want %s", row.PlanID, got, want[index])
 		}
 	}
 }
@@ -117,10 +110,13 @@ func TestBuildSectionsOrdersOnlyOrdinaryPlannedRows(t *testing.T) {
 	if want := []string{"attention"}; !slices.Equal(got[SectionAttention], want) {
 		t.Fatalf("attention = %v, want %v", got[SectionAttention], want)
 	}
-	if want := []string{"running"}; !slices.Equal(got[SectionRunning], want) {
-		t.Fatalf("running = %v, want %v", got[SectionRunning], want)
+	if want := []string{"post-second"}; !slices.Equal(got[SectionReadyToMerge], want) {
+		t.Fatalf("ready to merge = %v, want %v", got[SectionReadyToMerge], want)
 	}
-	wantPlanned := []string{"ready-must", "post-first", "ready-low", "post-second", "unranked", "deferred", "obsolete"}
+	if want := []string{"completed"}; !slices.Equal(got[SectionHistory], want) {
+		t.Fatalf("history = %v, want %v", got[SectionHistory], want)
+	}
+	wantPlanned := []string{"running", "ready-must", "post-first", "ready-low", "unranked", "deferred", "obsolete"}
 	if !slices.Equal(got[SectionPlanned], wantPlanned) {
 		t.Fatalf("planned = %v, want %v", got[SectionPlanned], wantPlanned)
 	}
@@ -169,31 +165,69 @@ func TestPriorityOrderIgnoresEveryRepeatedTargetRelationship(t *testing.T) {
 	}
 }
 
+func TestBuildSectionsRoutesInspectActionsToAttention(t *testing.T) {
+	rows := []monitor.Row{
+		{Kind: monitor.RowKindRepositoryWarning, RepositoryID: "warning", Status: plan.StatusInvalid, Warnings: []string{"repository unavailable"}},
+		{Kind: monitor.RowKindPlan, RepositoryID: "repo", PlanID: "invalid", Status: plan.StatusInvalid, Warnings: []string{"invalid state.json"}},
+	}
+
+	sections := BuildSections(rows, true)
+	for _, section := range sections {
+		switch section.Kind {
+		case SectionAttention:
+			if len(section.Rows) != 2 || section.Rows[0].Kind != monitor.RowKindRepositoryWarning || section.Rows[1].PlanID != "invalid" {
+				t.Fatalf("attention rows = %+v, want repository warning and visible invalid plan", section.Rows)
+			}
+		case SectionPlanned:
+			if len(section.Rows) != 0 {
+				t.Fatalf("planned rows = %+v, want no effective INSPECT rows", section.Rows)
+			}
+		}
+	}
+}
+
+func TestBuildSectionsRoutesOnlyMergeActionsToReadyToMerge(t *testing.T) {
+	rows := []monitor.Row{
+		{PlanID: "done", Status: plan.StatusCompleted},
+		{PlanID: "merge", Status: plan.StatusCompleted, NextAction: "MERGE"},
+	}
+
+	sections := BuildSections(rows, true)
+	got := make(map[SectionKind][]string)
+	for _, section := range sections {
+		for _, row := range section.Rows {
+			got[section.Kind] = append(got[section.Kind], row.PlanID)
+		}
+	}
+	if want := []string{"merge"}; !slices.Equal(got[SectionReadyToMerge], want) {
+		t.Fatalf("ready to merge = %v, want only effective MERGE rows %v", got[SectionReadyToMerge], want)
+	}
+	if want := []string{"done"}; !slices.Equal(got[SectionHistory], want) {
+		t.Fatalf("history = %v, want visible DONE row %v", got[SectionHistory], want)
+	}
+}
+
 func TestBuildSectionsHandlesEmptyAndHiddenCompletedSections(t *testing.T) {
 	tests := []struct {
 		name          string
 		rows          []monitor.Row
 		showCompleted bool
-		wantCompleted int
-		wantAbandoned int
+		wantHistory   int
 	}{
 		{name: "empty", showCompleted: true},
-		{name: "terminal outcomes shown", rows: []monitor.Row{{Status: plan.StatusCompleted}, {Status: plan.StatusAbandoned}}, showCompleted: true, wantCompleted: 1, wantAbandoned: 1},
-		{name: "completed hidden without hiding abandonment", rows: []monitor.Row{{Status: plan.StatusCompleted}, {Status: plan.StatusAbandoned}}, showCompleted: false, wantAbandoned: 1},
+		{name: "terminal outcomes shown", rows: []monitor.Row{{Status: plan.StatusCompleted}, {Status: plan.StatusAbandoned}}, showCompleted: true, wantHistory: 2},
+		{name: "completed hidden without hiding abandonment", rows: []monitor.Row{{Status: plan.StatusCompleted}, {Status: plan.StatusAbandoned}}, showCompleted: false, wantHistory: 1},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			sections := BuildSections(test.rows, test.showCompleted)
-			if len(sections) != 5 {
-				t.Fatalf("section count = %d, want 5", len(sections))
+			if len(sections) != 4 {
+				t.Fatalf("section count = %d, want 4", len(sections))
 			}
 			for _, section := range sections {
 				want := 0
-				switch section.Kind {
-				case SectionCompleted:
-					want = test.wantCompleted
-				case SectionAbandoned:
-					want = test.wantAbandoned
+				if section.Kind == SectionHistory {
+					want = test.wantHistory
 				}
 				if len(section.Rows) != want {
 					t.Errorf("%s row count = %d, want %d", section.Kind, len(section.Rows), want)

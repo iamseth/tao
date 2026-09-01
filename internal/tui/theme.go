@@ -28,8 +28,7 @@ type Color struct {
 	Index   uint8
 }
 
-// Role identifies a semantic palette slot. RoleInfo is deliberately reserved
-// without an assigned color until the Plans tab needs it.
+// Role identifies a semantic palette slot.
 type Role uint8
 
 const (
@@ -87,8 +86,7 @@ func SelectionBackground(profile Profile) Color {
 	return mustRoleColor(profile, RoleSelectionBackground)
 }
 
-// Info reports the reserved info role as unassigned.
-func Info(Profile) (Color, bool) { return Color{}, false }
+func Info(profile Profile) (Color, bool) { return RoleColor(profile, RoleInfo) }
 
 // RepoColor maps a repository ID to one of the fixed hue slots with FNV-1a.
 // Returning the role keeps the assignment independent of terminal profile.
@@ -121,7 +119,7 @@ func SelectRow(profile Profile, row string) string {
 
 func roleSpecification(role Role) (roleSpec, bool) {
 	switch role {
-	case RoleAccent:
+	case RoleAccent, RoleInfo:
 		return roleSpec{hex: "#5dcaa5", ansi16: 14}, true
 	case RoleWarn:
 		return roleSpec{hex: "#efa027", ansi16: 11}, true
