@@ -370,9 +370,17 @@ The `/tao-insights-review` planning prompt evaluates that evidence against
 current Tao code and guidance, rejects obsolete or application-specific
 signals, and produces zero or more agent-generated recommendations. It reads
 all available structured plan history, while agent-log analysis is limited to
-plans active in the last 30 days. Missing roots, damaged records, unreadable
-logs, stale logs, and evidence concentrated in one repository are reported as
-limits rather than silently generalized.
+plans active in the last 30 days. Tao discovers recent log candidates before
+scanning, orders each repository's candidates newest first, and takes balanced
+repository rounds: every active repository receives one candidate opportunity
+before any receives another. These are candidate-level turns, not equal byte
+allocations; the existing global candidate, byte, line, signal, and excerpt
+limits remain shared and unchanged. The aggregate coverage line is always
+shown, while incomplete or work-limited all-repository reports add stable,
+repository-qualified coverage rows; complete reports and single-repository
+output stay concise. Missing roots, damaged records, unreadable logs, stale
+logs, and evidence concentrated in one repository are reported as limits
+rather than silently generalized.
 
 **How to interpret and use the review:**
 

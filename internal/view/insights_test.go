@@ -260,6 +260,107 @@ func TestRenderSignalContextByScopeAndFormat(t *testing.T) {
 	}
 }
 
+func TestRenderRecentLogCoverageLimits(t *testing.T) {
+	coverage := func(eligible, scanned int) insights.LogCoverage {
+		return insights.LogCoverage{Eligible: eligible, Scanned: scanned}
+	}
+	tests := []struct {
+		name        string
+		report      insights.RecentLogReport
+		want        []string
+		wantAbsent  []string
+		orderedRows []string
+	}{
+		{
+			name: "complete coverage stays concise",
+			report: insights.RecentLogReport{
+				Coverage: coverage(2, 2),
+				Repositories: []insights.RepositoryLogCoverage{
+					{RepositoryID: "repo-b", RepositoryName: "beta", Coverage: coverage(1, 1)},
+					{RepositoryID: "repo-a", RepositoryName: "alpha", Coverage: coverage(1, 1)},
+				},
+			},
+			wantAbsent: []string{"Repository coverage limits:", "alpha [repo-a]", "beta [repo-b]"},
+		},
+		{
+			name: "partially unavailable coverage is qualified and ordered",
+			report: insights.RecentLogReport{
+				Coverage: insights.LogCoverage{Eligible: 3, Scanned: 1, MissingRecency: 1, Missing: 1, Unreadable: 1},
+				Repositories: []insights.RepositoryLogCoverage{
+					{RepositoryID: "repo-z", RepositoryName: "zeta", Coverage: insights.LogCoverage{Eligible: 1, Missing: 1}},
+					{RepositoryID: "repo-a", RepositoryName: "alpha", Coverage: coverage(1, 1)},
+					{RepositoryID: "repo-m", RepositoryName: "middle", Coverage: insights.LogCoverage{Eligible: 1, MissingRecency: 1, Unreadable: 1}},
+				},
+			},
+			want: []string{
+				"Repository coverage limits:",
+				"middle [repo-m]: eligible=1 scanned=0 missing_recency=1 outside_window=0 missing=0 unreadable=1 unsupported=0 oversized=0 work_limited=0",
+				"zeta [repo-z]: eligible=1 scanned=0 missing_recency=0 outside_window=0 missing=1 unreadable=0 unsupported=0 oversized=0 work_limited=0",
+			},
+			wantAbsent:  []string{"alpha [repo-a]"},
+			orderedRows: []string{"middle [repo-m]", "zeta [repo-z]"},
+		},
+		{
+			name: "oversized coverage is disclosed",
+			report: insights.RecentLogReport{
+				Coverage:     insights.LogCoverage{Eligible: 1, Oversized: 1},
+				Repositories: []insights.RepositoryLogCoverage{{RepositoryID: "repo-a", RepositoryName: "alpha", Coverage: insights.LogCoverage{Eligible: 1, Oversized: 1}}},
+			},
+			want: []string{"alpha [repo-a]: eligible=1 scanned=0 missing_recency=0 outside_window=0 missing=0 unreadable=0 unsupported=0 oversized=1 work_limited=0"},
+		},
+		{
+			name: "work-limited coverage is disclosed",
+			report: insights.RecentLogReport{
+				Coverage:     insights.LogCoverage{Eligible: 1, WorkLimited: 1},
+				Repositories: []insights.RepositoryLogCoverage{{RepositoryID: "repo-a", RepositoryName: "alpha", Coverage: insights.LogCoverage{Eligible: 1, WorkLimited: 1}}},
+			},
+			want: []string{"alpha [repo-a]: eligible=1 scanned=0 missing_recency=0 outside_window=0 missing=0 unreadable=0 unsupported=0 oversized=0 work_limited=1"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var out bytes.Buffer
+			if err := renderRecentLogSignals(&out, test.report, allReportMaxSignals, false); err != nil {
+				t.Fatal(err)
+			}
+			text := out.String()
+			for _, want := range test.want {
+				if !strings.Contains(text, want) {
+					t.Errorf("output missing %q:\n%s", want, text)
+				}
+			}
+			for _, absent := range test.wantAbsent {
+				if strings.Contains(text, absent) {
+					t.Errorf("output unexpectedly contains %q:\n%s", absent, text)
+				}
+			}
+			last := -1
+			for _, row := range test.orderedRows {
+				index := strings.Index(text, row)
+				if index <= last {
+					t.Fatalf("coverage rows not ordered as %v:\n%s", test.orderedRows, text)
+				}
+				last = index
+			}
+		})
+	}
+}
+
+func TestRepositoryInsightsDoNotRenderRecentLogCoverage(t *testing.T) {
+	report := insights.Report{PlansScanned: 1, RecentLogs: insights.RecentLogReport{
+		Coverage:     insights.LogCoverage{Eligible: 1, WorkLimited: 1},
+		Repositories: []insights.RepositoryLogCoverage{{RepositoryID: "repo-a", RepositoryName: "alpha", Coverage: insights.LogCoverage{Eligible: 1, WorkLimited: 1}}},
+	}}
+	var out bytes.Buffer
+	if err := RenderInsights(&out, report, InsightsOptions{Scope: InsightsScopeRepository, Format: InsightsFormatReport}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "Coverage:") || strings.Contains(out.String(), "alpha [repo-a]") {
+		t.Fatalf("repository output changed to include all-repository log coverage:\n%s", out.String())
+	}
+}
+
 func TestInsightsDigestTruncationPreservesUTF8AtBoundaries(t *testing.T) {
 	for _, test := range []struct {
 		name string

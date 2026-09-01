@@ -3,10 +3,12 @@ package insights
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -428,6 +430,100 @@ func TestAggregateScansRecentLogWhenEventsAreDamaged(t *testing.T) {
 	}
 }
 
+func TestBalancedLogRoundsAreRepositoryFairAndDeterministic(t *testing.T) {
+	at := func(hour int) time.Time { return time.Date(2026, 7, 29, hour, 0, 0, 0, time.UTC) }
+	candidates := []logCandidate{
+		{repository: sourceIdentity{id: "repo-b"}, planID: "b-old", dir: "/b/old", lastActivity: at(8)},
+		{repository: sourceIdentity{id: "repo-a"}, planID: "a-z", dir: "/a/z", lastActivity: at(10)},
+		{repository: sourceIdentity{id: "repo-c"}, planID: "c-only", dir: "/c/only", lastActivity: at(9)},
+		{repository: sourceIdentity{id: "repo-b"}, planID: "b-new", dir: "/b/new", lastActivity: at(10)},
+		{repository: sourceIdentity{id: "repo-a"}, planID: "a-a", dir: "/a/a", lastActivity: at(10)},
+		{repository: sourceIdentity{id: "repo-a"}, planID: "a-old", dir: "/a/old", lastActivity: at(7)},
+	}
+
+	want := [][]string{
+		{"repo-a/a-a", "repo-b/b-new", "repo-c/c-only"},
+		{"repo-a/a-z", "repo-b/b-old"},
+		{"repo-a/a-old"},
+	}
+	inputs := [][]logCandidate{slices.Clone(candidates), slices.Clone(candidates)}
+	slices.Reverse(inputs[1])
+	for _, input := range inputs {
+		rounds := balancedLogRounds(input)
+		if len(rounds) != len(want) {
+			t.Fatalf("rounds = %#v", rounds)
+		}
+		for i, round := range rounds {
+			var got []string
+			for _, candidate := range round {
+				got = append(got, candidate.repository.id+"/"+candidate.planID)
+			}
+			if !slices.Equal(got, want[i]) {
+				t.Fatalf("round %d = %v, want %v", i, got, want[i])
+			}
+		}
+	}
+}
+
+func TestScanRecentLogsUsesDeterministicMidRoundCutoff(t *testing.T) {
+	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	report := Report{}
+	acc := newLogAccumulator()
+	for _, item := range []struct {
+		repository string
+		plans      int
+	}{{"repo-c", 1}, {"repo-a", 2}, {"repo-b", 2}} {
+		for i := range item.plans {
+			dir := filepath.Join(t.TempDir(), "missing")
+			discoverRecentLog(&report, acc, now, planSummary{id: fmt.Sprintf("plan-%d", i), dir: dir, lastActivity: new(now)}, sourceIdentity{id: item.repository})
+		}
+	}
+	acc.scannedCandidates = maxLogCandidates - 2
+
+	if err := scanRecentLogs(context.Background(), &report, acc, now); err != nil {
+		t.Fatal(err)
+	}
+	finalizeLogSignals(&report, acc)
+	if report.RecentLogs.Coverage.Eligible != 5 || report.RecentLogs.Coverage.Missing != 2 || report.RecentLogs.Coverage.WorkLimited != 3 {
+		t.Fatalf("aggregate coverage = %#v", report.RecentLogs.Coverage)
+	}
+	if len(report.RecentLogs.Repositories) != 3 {
+		t.Fatalf("repository coverage = %#v", report.RecentLogs.Repositories)
+	}
+	for i, id := range []string{"repo-a", "repo-b", "repo-c"} {
+		detail := report.RecentLogs.Repositories[i]
+		wantEligible := 2
+		if id == "repo-c" {
+			wantEligible = 1
+		}
+		if detail.RepositoryID != id || detail.Coverage.Eligible != wantEligible || detail.Coverage.WorkLimited != 1 {
+			t.Fatalf("repository coverage = %#v", report.RecentLogs.Repositories)
+		}
+		if id == "repo-c" && detail.Coverage.Missing != 0 {
+			t.Fatalf("cutoff repository coverage = %#v", detail)
+		}
+		if id != "repo-c" && detail.Coverage.Missing != 1 {
+			t.Fatalf("scanned repository coverage = %#v", detail)
+		}
+	}
+	assertLogCoverageEqualsRepositorySum(t, report.RecentLogs)
+}
+
+func TestScanRecentLogsHonorsCancellationBeforeOpeningCandidates(t *testing.T) {
+	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	report := Report{}
+	acc := newLogAccumulator()
+	discoverRecentLog(&report, acc, now, planSummary{id: "plan", dir: t.TempDir(), lastActivity: new(now)}, sourceIdentity{id: "repo-a"})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := scanRecentLogs(ctx, &report, acc, now); !errors.Is(err, context.Canceled) {
+		t.Fatalf("scan error = %v, want context canceled", err)
+	}
+	if report.RecentLogs.Coverage.Scanned != 0 || report.RecentLogs.Coverage.Missing != 0 || report.RecentLogs.Coverage.WorkLimited != 0 {
+		t.Fatalf("coverage after cancellation = %#v", report.RecentLogs.Coverage)
+	}
+}
+
 func TestAggregateBoundsAndSkipsUnusableRecentLogs(t *testing.T) {
 	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
 	old := writeLogPlan(t, logrecord.Record{Type: logrecord.TypeToolCall, Name: "bash", Payload: `{"command":"old-tool"}`})
@@ -451,6 +547,7 @@ func TestAggregateBoundsAndSkipsUnusableRecentLogs(t *testing.T) {
 	if coverage.MissingRecency != 1 || coverage.OutsideWindow != 1 || coverage.Eligible != 4 || coverage.Scanned != 0 || coverage.Missing != 1 || coverage.Unreadable != 1 || coverage.Unsupported != 1 || coverage.Oversized != 1 {
 		t.Fatalf("coverage = %#v", coverage)
 	}
+	assertLogCoverageEqualsRepositorySum(t, report.RecentLogs)
 	if len(report.RecentLogs.MissingExecutables) != 0 || len(report.RecentLogs.ToolUses) != 0 || len(report.RecentLogs.ExternalSystems) != 0 {
 		t.Fatalf("unusable logs produced signals: %#v", report.RecentLogs)
 	}
@@ -473,11 +570,33 @@ func TestSanitizeExcerptCapsAndRedactsCredentialForms(t *testing.T) {
 	}
 }
 
+func assertLogCoverageEqualsRepositorySum(t *testing.T, report RecentLogReport) {
+	t.Helper()
+	var sum LogCoverage
+	for _, repository := range report.Repositories {
+		sum.Eligible += repository.Coverage.Eligible
+		sum.Scanned += repository.Coverage.Scanned
+		sum.MissingRecency += repository.Coverage.MissingRecency
+		sum.OutsideWindow += repository.Coverage.OutsideWindow
+		sum.Missing += repository.Coverage.Missing
+		sum.Unreadable += repository.Coverage.Unreadable
+		sum.Unsupported += repository.Coverage.Unsupported
+		sum.Oversized += repository.Coverage.Oversized
+		sum.WorkLimited += repository.Coverage.WorkLimited
+	}
+	if sum != report.Coverage {
+		t.Fatalf("repository coverage sum = %#v, aggregate = %#v", sum, report.Coverage)
+	}
+}
+
 func aggregateLogsAt(t *testing.T, now time.Time, summaries []plan.PlanSummary) Report {
 	t.Helper()
 	report := Report{}
-	acc := accumulator{buckets: make(map[string]*ReasonBucket), logs: newLogAccumulator()}
+	acc := newAccumulator()
 	if err := aggregateSource(context.Background(), &report, &acc, sourceIdentity{id: "repo-a", name: "Alpha"}, fixtureLister{summaries: summaries}, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := scanRecentLogs(context.Background(), &report, acc.logs, now); err != nil {
 		t.Fatal(err)
 	}
 	finalize(&report, &acc)

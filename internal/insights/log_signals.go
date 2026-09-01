@@ -33,10 +33,18 @@ const (
 // RecentLogReport contains bounded, normalized evidence from recent agent logs.
 // It never contains complete provider output or raw tool payloads.
 type RecentLogReport struct {
-	Coverage           LogCoverage `json:"coverage"`
-	MissingExecutables []LogSignal `json:"missing_executables,omitempty"`
-	ToolUses           []LogSignal `json:"tool_uses,omitempty"`
-	ExternalSystems    []LogSignal `json:"external_systems,omitempty"`
+	Coverage           LogCoverage             `json:"coverage"`
+	Repositories       []RepositoryLogCoverage `json:"repositories,omitempty"`
+	MissingExecutables []LogSignal             `json:"missing_executables,omitempty"`
+	ToolUses           []LogSignal             `json:"tool_uses,omitempty"`
+	ExternalSystems    []LogSignal             `json:"external_systems,omitempty"`
+}
+
+// RepositoryLogCoverage qualifies recent-log coverage by repository.
+type RepositoryLogCoverage struct {
+	RepositoryID   string      `json:"repository_id"`
+	RepositoryName string      `json:"repository_name,omitempty"`
+	Coverage       LogCoverage `json:"coverage"`
 }
 
 // LogCoverage explains which plan logs were eligible for recent-log analysis.
@@ -70,13 +78,36 @@ type LogExemplar struct {
 }
 
 type logAccumulator struct {
-	missing    map[string]*logSignalAccumulator
-	tools      map[string]*logSignalAccumulator
-	external   map[string]*logSignalAccumulator
-	bytesRead  int64
-	signals    int
-	candidates int
+	missing            map[string]*logSignalAccumulator
+	tools              map[string]*logSignalAccumulator
+	external           map[string]*logSignalAccumulator
+	candidates         []logCandidate
+	repositoryCoverage map[string]*RepositoryLogCoverage
+	bytesRead          int64
+	signals            int
+	scannedCandidates  int
 }
+
+type logCandidate struct {
+	repository   sourceIdentity
+	planID       string
+	dir          string
+	lastActivity time.Time
+}
+
+type logCoverageClass int
+
+const (
+	logEligible logCoverageClass = iota
+	logScanned
+	logMissingRecency
+	logOutsideWindow
+	logMissing
+	logUnreadable
+	logUnsupported
+	logOversized
+	logWorkLimited
+)
 
 type logSignalAccumulator struct {
 	count        int
@@ -104,49 +135,124 @@ var (
 
 func newLogAccumulator() *logAccumulator {
 	return &logAccumulator{
-		missing:  make(map[string]*logSignalAccumulator),
-		tools:    make(map[string]*logSignalAccumulator),
-		external: make(map[string]*logSignalAccumulator),
+		missing:            make(map[string]*logSignalAccumulator),
+		tools:              make(map[string]*logSignalAccumulator),
+		external:           make(map[string]*logSignalAccumulator),
+		repositoryCoverage: make(map[string]*RepositoryLogCoverage),
 	}
 }
 
-func scanRecentLog(ctx context.Context, report *Report, acc *logAccumulator, now time.Time, summary planSummary, repository sourceIdentity) error {
+func discoverRecentLog(report *Report, acc *logAccumulator, now time.Time, summary planSummary, repository sourceIdentity) {
 	if summary.lastActivity == nil || summary.lastActivity.IsZero() {
-		report.RecentLogs.Coverage.MissingRecency++
-		return nil
+		classifyLogCoverage(report, acc, repository, logMissingRecency)
+		return
 	}
 	if summary.lastActivity.Before(now.Add(-logLookback)) {
-		report.RecentLogs.Coverage.OutsideWindow++
-		return nil
+		classifyLogCoverage(report, acc, repository, logOutsideWindow)
+		return
 	}
-	report.RecentLogs.Coverage.Eligible++
-	if acc.candidates >= maxLogCandidates || acc.bytesRead >= maxTotalLogBytes || acc.signals >= maxSignals {
-		report.RecentLogs.Coverage.WorkLimited++
-		return nil
-	}
-	acc.candidates++
+	classifyLogCoverage(report, acc, repository, logEligible)
+	acc.candidates = append(acc.candidates, logCandidate{
+		repository:   repository,
+		planID:       summary.id,
+		dir:          summary.dir,
+		lastActivity: *summary.lastActivity,
+	})
+}
 
-	file, err := os.Open(filepath.Join(summary.dir, "agent-run.log")) // #nosec G304 -- paths come from Tao's plan repository listing.
+func scanRecentLogs(ctx context.Context, report *Report, acc *logAccumulator, now time.Time) error {
+	for _, round := range balancedLogRounds(acc.candidates) {
+		for _, candidate := range round {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if acc.scannedCandidates >= maxLogCandidates || acc.bytesRead >= maxTotalLogBytes || acc.signals >= maxSignals {
+				classifyLogCoverage(report, acc, candidate.repository, logWorkLimited)
+				continue
+			}
+			acc.scannedCandidates++
+			if err := scanRecentLog(ctx, report, acc, now, candidate); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func balancedLogRounds(candidates []logCandidate) [][]logCandidate {
+	groups := make(map[string][]logCandidate)
+	for _, candidate := range candidates {
+		key := logRepositoryKey(candidate.repository)
+		groups[key] = append(groups[key], candidate)
+	}
+	keys := make([]string, 0, len(groups))
+	for key, group := range groups {
+		sort.SliceStable(group, func(i, j int) bool {
+			if !group[i].lastActivity.Equal(group[j].lastActivity) {
+				return group[i].lastActivity.After(group[j].lastActivity)
+			}
+			if group[i].planID != group[j].planID {
+				return group[i].planID < group[j].planID
+			}
+			return group[i].dir < group[j].dir
+		})
+		groups[key] = group
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	var rounds [][]logCandidate
+	for index := 0; ; index++ {
+		var round []logCandidate
+		for _, key := range keys {
+			if index < len(groups[key]) {
+				round = append(round, groups[key][index])
+			}
+		}
+		if len(round) == 0 {
+			return rounds
+		}
+		sort.SliceStable(round, func(i, j int) bool {
+			if !round[i].lastActivity.Equal(round[j].lastActivity) {
+				return round[i].lastActivity.After(round[j].lastActivity)
+			}
+			if round[i].repository.id != round[j].repository.id {
+				return round[i].repository.id < round[j].repository.id
+			}
+			if round[i].repository.name != round[j].repository.name {
+				return round[i].repository.name < round[j].repository.name
+			}
+			if round[i].planID != round[j].planID {
+				return round[i].planID < round[j].planID
+			}
+			return round[i].dir < round[j].dir
+		})
+		rounds = append(rounds, round)
+	}
+}
+
+func scanRecentLog(ctx context.Context, report *Report, acc *logAccumulator, now time.Time, candidate logCandidate) error {
+	file, err := os.Open(filepath.Join(candidate.dir, "agent-run.log")) // #nosec G304 -- paths come from Tao's plan repository listing.
 	if errors.Is(err, os.ErrNotExist) {
-		report.RecentLogs.Coverage.Missing++
+		classifyLogCoverage(report, acc, candidate.repository, logMissing)
 		return nil
 	}
 	if err != nil {
-		report.RecentLogs.Coverage.Unreadable++
+		classifyLogCoverage(report, acc, candidate.repository, logUnreadable)
 		return nil
 	}
 	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil {
-		report.RecentLogs.Coverage.Unreadable++
+		classifyLogCoverage(report, acc, candidate.repository, logUnreadable)
 		return nil
 	}
 	if info.Size() > maxLogBytes {
-		report.RecentLogs.Coverage.Oversized++
+		classifyLogCoverage(report, acc, candidate.repository, logOversized)
 		return nil
 	}
 	if info.Size() > int64(maxTotalLogBytes)-acc.bytesRead {
-		report.RecentLogs.Coverage.WorkLimited++
+		classifyLogCoverage(report, acc, candidate.repository, logWorkLimited)
 		return nil
 	}
 
@@ -176,23 +282,67 @@ func scanRecentLog(ctx context.Context, report *Report, acc *logAccumulator, now
 	acc.bytesRead += reader.read
 	if scanErr := scanner.Err(); scanErr != nil {
 		if reader.read > remaining || strings.Contains(scanErr.Error(), "token too long") {
-			report.RecentLogs.Coverage.Oversized++
+			classifyLogCoverage(report, acc, candidate.repository, logOversized)
 		} else {
-			report.RecentLogs.Coverage.Unreadable++
+			classifyLogCoverage(report, acc, candidate.repository, logUnreadable)
 		}
 		return nil
 	}
 	if reader.read > remaining {
-		report.RecentLogs.Coverage.Oversized++
+		classifyLogCoverage(report, acc, candidate.repository, logOversized)
 		return nil
 	}
 	if !framed || !started {
-		report.RecentLogs.Coverage.Unsupported++
+		classifyLogCoverage(report, acc, candidate.repository, logUnsupported)
 		return nil
 	}
-	consumeLogRecords(acc, logAttribution{repository: repository, planID: summary.id}, records, now.Add(-logLookback))
-	report.RecentLogs.Coverage.Scanned++
+	consumeLogRecords(acc, logAttribution{repository: candidate.repository, planID: candidate.planID}, records, now.Add(-logLookback))
+	classifyLogCoverage(report, acc, candidate.repository, logScanned)
 	return nil
+}
+
+func classifyLogCoverage(report *Report, acc *logAccumulator, repository sourceIdentity, class logCoverageClass) {
+	incrementLogCoverage(&report.RecentLogs.Coverage, class)
+	if repository.id == "" {
+		return
+	}
+	key := logRepositoryKey(repository)
+	detail := acc.repositoryCoverage[key]
+	if detail == nil {
+		detail = &RepositoryLogCoverage{RepositoryID: repository.id, RepositoryName: repository.name}
+		acc.repositoryCoverage[key] = detail
+	}
+	incrementLogCoverage(&detail.Coverage, class)
+}
+
+func incrementLogCoverage(coverage *LogCoverage, class logCoverageClass) {
+	switch class {
+	case logEligible:
+		coverage.Eligible++
+	case logScanned:
+		coverage.Scanned++
+	case logMissingRecency:
+		coverage.MissingRecency++
+	case logOutsideWindow:
+		coverage.OutsideWindow++
+	case logMissing:
+		coverage.Missing++
+	case logUnreadable:
+		coverage.Unreadable++
+	case logUnsupported:
+		coverage.Unsupported++
+	case logOversized:
+		coverage.Oversized++
+	case logWorkLimited:
+		coverage.WorkLimited++
+	}
+}
+
+func logRepositoryKey(repository sourceIdentity) string {
+	if repository.id != "" {
+		return repository.id
+	}
+	return "\x00" + repository.name
 }
 
 func consumeLogRecords(acc *logAccumulator, attr logAttribution, records []logrecord.Record, cutoff time.Time) {
@@ -635,6 +785,16 @@ func normalizeName(value string) string {
 }
 
 func finalizeLogSignals(report *Report, acc *logAccumulator) {
+	report.RecentLogs.Repositories = make([]RepositoryLogCoverage, 0, len(acc.repositoryCoverage))
+	for _, coverage := range acc.repositoryCoverage {
+		report.RecentLogs.Repositories = append(report.RecentLogs.Repositories, *coverage)
+	}
+	sort.Slice(report.RecentLogs.Repositories, func(i, j int) bool {
+		if report.RecentLogs.Repositories[i].RepositoryID != report.RecentLogs.Repositories[j].RepositoryID {
+			return report.RecentLogs.Repositories[i].RepositoryID < report.RecentLogs.Repositories[j].RepositoryID
+		}
+		return report.RecentLogs.Repositories[i].RepositoryName < report.RecentLogs.Repositories[j].RepositoryName
+	})
 	report.RecentLogs.MissingExecutables = flattenLogSignals(acc.missing)
 	report.RecentLogs.ToolUses = flattenLogSignals(acc.tools)
 	report.RecentLogs.ExternalSystems = flattenLogSignals(acc.external)

@@ -149,7 +149,12 @@ func representativeInsightsReport() insights.Report {
 		OutputTokens: insights.Percentiles{Sessions: 7, P50: 1200, P90: 3400, P95: 5600},
 		Cost:         insights.Percentiles{},
 		RecentLogs: insights.RecentLogReport{
-			Coverage:           insights.LogCoverage{Eligible: 8, Scanned: 5, MissingRecency: 1, OutsideWindow: 2, Missing: 1, Unreadable: 1, Unsupported: 0, Oversized: 1, WorkLimited: 0},
+			Coverage: insights.LogCoverage{Eligible: 9, Scanned: 5, MissingRecency: 1, OutsideWindow: 2, Missing: 1, Unreadable: 1, Unsupported: 0, Oversized: 1, WorkLimited: 1},
+			Repositories: []insights.RepositoryLogCoverage{
+				{RepositoryID: "repo-c", RepositoryName: "gamma", Coverage: insights.LogCoverage{Eligible: 3, Scanned: 1, MissingRecency: 1, OutsideWindow: 1, Unreadable: 1, WorkLimited: 1}},
+				{RepositoryID: "repo-a", RepositoryName: "alpha", Coverage: insights.LogCoverage{Eligible: 3, Scanned: 3}},
+				{RepositoryID: "repo-b", RepositoryName: "beta", Coverage: insights.LogCoverage{Eligible: 3, Scanned: 1, OutsideWindow: 1, Missing: 1, Oversized: 1}},
+			},
 			MissingExecutables: []insights.LogSignal{{Name: "jq", Count: 2, PlanCount: 2, RepositoryCount: 1, Exemplars: []insights.LogExemplar{{RepositoryID: "repo-a", RepositoryName: "alpha", PlanID: "plan-1", Excerpt: "jq: command not found"}}}},
 			ToolUses: []insights.LogSignal{
 				{Name: "git", Count: 8, PlanCount: 4, RepositoryCount: 3, Exemplars: []insights.LogExemplar{{RepositoryID: "repo-a", RepositoryName: "alpha", PlanID: "plan-1", Excerpt: "git status --short"}}},
@@ -428,6 +433,9 @@ func TestInsightsAllReposCatalogCoverageSignalsAndOrdering(t *testing.T) {
 	}
 	if alpha, middle, zeta := strings.Index(text, "alpha [repo-a]: scanned"), strings.Index(text, "middle [repo-m]: empty"), strings.Index(text, "zeta [repo-z]: unreadable"); alpha < 0 || alpha >= middle || middle >= zeta {
 		t.Errorf("repository ordering is not stable by catalog id:\n%s", text)
+	}
+	if strings.Contains(text, "Repository coverage limits:") {
+		t.Errorf("complete recent-log coverage should not render repository limit rows:\n%s", text)
 	}
 }
 

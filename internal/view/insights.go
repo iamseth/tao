@@ -536,7 +536,10 @@ func renderRecentLogSignals(out io.Writer, report insights.RecentLogReport, limi
 	if err := writeln(out, heading); err != nil {
 		return err
 	}
-	if err := writef(out, "%sCoverage: eligible=%d scanned=%d missing_recency=%d outside_window=%d missing=%d unreadable=%d unsupported=%d oversized=%d work_limited=%d\n", prefix, coverage.Eligible, coverage.Scanned, coverage.MissingRecency, coverage.OutsideWindow, coverage.Missing, coverage.Unreadable, coverage.Unsupported, coverage.Oversized, coverage.WorkLimited); err != nil {
+	if err := writef(out, "%sCoverage: %s\n", prefix, formatLogCoverage(coverage)); err != nil {
+		return err
+	}
+	if err := renderRepositoryLogCoverageLimits(out, report.Repositories, digest); err != nil {
 		return err
 	}
 	sections := []struct {
@@ -570,6 +573,59 @@ func renderRecentLogSignals(out io.Writer, report insights.RecentLogReport, limi
 		}
 	}
 	return nil
+}
+
+func renderRepositoryLogCoverageLimits(out io.Writer, repositories []insights.RepositoryLogCoverage, digest bool) error {
+	limited := make([]insights.RepositoryLogCoverage, 0, len(repositories))
+	for _, repository := range repositories {
+		if incompleteLogCoverage(repository.Coverage) {
+			limited = append(limited, repository)
+		}
+	}
+	if len(limited) == 0 {
+		return nil
+	}
+	slices.SortFunc(limited, func(a, b insights.RepositoryLogCoverage) int {
+		if result := strings.Compare(a.RepositoryID, b.RepositoryID); result != 0 {
+			return result
+		}
+		return strings.Compare(a.RepositoryName, b.RepositoryName)
+	})
+
+	prefix := "  "
+	rowPrefix := "    "
+	visible := limited
+	if digest {
+		prefix = "- "
+		rowPrefix = "-   "
+		visible = limited[:min(len(limited), allDigestMaxSources)]
+	}
+	if err := writeln(out, prefix+"Repository coverage limits:"); err != nil {
+		return err
+	}
+	for _, repository := range visible {
+		label := repositoryLabel(repository.RepositoryName, repository.RepositoryID)
+		if digest {
+			label = limitDigestText(label)
+		}
+		if err := writef(out, "%s%s: %s\n", rowPrefix, label, formatLogCoverage(repository.Coverage)); err != nil {
+			return err
+		}
+	}
+	if len(visible) < len(limited) {
+		return writef(out, "%s… %d more repositories with coverage limits\n", rowPrefix, len(limited)-len(visible))
+	}
+	return nil
+}
+
+func incompleteLogCoverage(coverage insights.LogCoverage) bool {
+	return coverage.MissingRecency > 0 || coverage.Missing > 0 || coverage.Unreadable > 0 ||
+		coverage.Unsupported > 0 || coverage.Oversized > 0 || coverage.WorkLimited > 0 ||
+		coverage.Eligible != coverage.Scanned
+}
+
+func formatLogCoverage(coverage insights.LogCoverage) string {
+	return fmt.Sprintf("eligible=%d scanned=%d missing_recency=%d outside_window=%d missing=%d unreadable=%d unsupported=%d oversized=%d work_limited=%d", coverage.Eligible, coverage.Scanned, coverage.MissingRecency, coverage.OutsideWindow, coverage.Missing, coverage.Unreadable, coverage.Unsupported, coverage.Oversized, coverage.WorkLimited)
 }
 
 func repositoryEvidence(bucket insights.ReasonBucket) string {

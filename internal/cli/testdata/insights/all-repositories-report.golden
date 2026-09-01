@@ -59,7 +59,10 @@ Repository-qualified outlier plans:
   alpha [repo-a]/outlier-6: output_tokens=6500 cost=$5.50
 
 Recent agent-log signals (cutoff: plan activity within the last 30 days):
-  Coverage: eligible=8 scanned=5 missing_recency=1 outside_window=2 missing=1 unreadable=1 unsupported=0 oversized=1 work_limited=0
+  Coverage: eligible=9 scanned=5 missing_recency=1 outside_window=2 missing=1 unreadable=1 unsupported=0 oversized=1 work_limited=1
+  Repository coverage limits:
+    beta [repo-b]: eligible=3 scanned=1 missing_recency=0 outside_window=1 missing=1 unreadable=0 unsupported=0 oversized=1 work_limited=0
+    gamma [repo-c]: eligible=3 scanned=1 missing_recency=1 outside_window=1 missing=0 unreadable=1 unsupported=0 oversized=0 work_limited=1
   Missing executables:
     jq: 2 occurrences across 2 plans / 1 repositories
       - alpha [repo-a]/plan-1: jq: command not found

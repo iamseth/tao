@@ -203,7 +203,11 @@ type sourceIdentity struct {
 func Aggregate(ctx context.Context, repository PlanLister) (Report, error) {
 	report := Report{}
 	acc := newAccumulator()
-	if err := aggregateSource(ctx, &report, &acc, sourceIdentity{}, repository, time.Now()); err != nil {
+	now := time.Now()
+	if err := aggregateSource(ctx, &report, &acc, sourceIdentity{}, repository, now); err != nil {
+		return Report{}, err
+	}
+	if err := scanRecentLogs(ctx, &report, acc.logs, now); err != nil {
 		return Report{}, err
 	}
 	finalize(&report, &acc)
@@ -256,6 +260,9 @@ func AggregateSources(ctx context.Context, lister SourceLister) (Report, error) 
 		}
 		report.RepositoryCoverage.Repositories = append(report.RepositoryCoverage.Repositories, result)
 	}
+	if err := scanRecentLogs(ctx, &report, acc.logs, now); err != nil {
+		return Report{}, err
+	}
 	finalize(&report, &acc)
 	return report, nil
 }
@@ -280,9 +287,7 @@ func aggregateSource(ctx context.Context, report *Report, acc *accumulator, repo
 			report.PlansSkipped++
 			continue
 		}
-		if err := scanRecentLog(ctx, report, acc.logs, now, planSummary{id: summary.ID, dir: summary.Dir, lastActivity: summary.LastActivityAt}, repository); err != nil {
-			return err
-		}
+		discoverRecentLog(report, acc.logs, now, planSummary{id: summary.ID, dir: summary.Dir, lastActivity: summary.LastActivityAt}, repository)
 		data, err := readPlanEvents(ctx, summary.Dir)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
