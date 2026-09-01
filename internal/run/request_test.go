@@ -3,6 +3,7 @@ package run
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -75,6 +76,33 @@ func TestRunReturnsCapabilityDisabledReasonsBeforeExecutor(t *testing.T) {
 				t.Fatalf("expected no output before executor, got %q", out.String())
 			}
 		})
+	}
+}
+
+func TestCheckRequestCanStartRejectsEveryAbandonedRunModeWithSafeReason(t *testing.T) {
+	detail := runPlanDetail(plan.StatusAbandoned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
+	detail.Events = append(detail.Events, plan.Event{
+		Type: plan.EventTypePlanAbandoned, Reason: "superseded\nby safer work\x1b[31m",
+	})
+	requests := []Request{
+		{},
+		{ResolvedRunOptions: ResolvedRunOptions{Continue: true}},
+		{RestartBlocked: true},
+		{RepairVerification: true},
+		{Reverify: true},
+		{ResolvedRunOptions: ResolvedRunOptions{PullRequest: true}},
+	}
+	for _, request := range requests {
+		err := CheckRequestCanStart(detail, request)
+		if err == nil || !strings.Contains(err.Error(), "plan plan-a is abandoned: superseded by safer work [31m") {
+			t.Fatalf("CheckRequestCanStart(%+v) error = %v", request, err)
+		}
+		if !errors.Is(err, ErrCannotStart) {
+			t.Fatalf("abandoned request error = %v, want ErrCannotStart", err)
+		}
+		if strings.ContainsAny(err.Error(), "\n\r\x1b") {
+			t.Fatalf("abandoned request emitted unsafe controls: %q", err)
+		}
 	}
 }
 

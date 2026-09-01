@@ -265,6 +265,9 @@ func (s Service) WithPlanRunLock(ctx context.Context, request Request, operation
 }
 
 func CheckRequestCanStart(detail *plan.PlanDetail, request Request) error {
+	if err := plan.RequireNotAbandoned(detail); err != nil {
+		return cannotStartf("%s", err)
+	}
 	if request.Reverify {
 		if plan.CurrentFailedFinalVerification(detail) == nil {
 			return cannotStartf("--reverify requires current failed final-verification evidence")

@@ -19,13 +19,16 @@ type sliceCompletionStore struct {
 	failState    bool
 	failSlicesAt int
 	failEvent    bool
+	stateWrites  int
 	slicesWrites int
+	eventWrites  int
 	state        plan.State
 	slices       plan.SlicesFile
 	events       []plan.Event
 }
 
 func (s *sliceCompletionStore) WriteState(_ string, payload []byte) error {
+	s.stateWrites++
 	if s.failState {
 		s.failState = false
 		return errors.New("interrupted metadata write")
@@ -40,12 +43,129 @@ func (s *sliceCompletionStore) WriteSlices(_ string, payload []byte) error {
 	return json.Unmarshal(payload, &s.slices)
 }
 func (s *sliceCompletionStore) AppendEvent(_ string, event plan.Event) error {
+	s.eventWrites++
 	if s.failEvent {
 		s.failEvent = false
 		return errors.New("interrupted event append")
 	}
 	s.events = append(s.events, event)
 	return nil
+}
+
+func TestSliceCompletionRejectsAbandonedBeforeGitOrArtifactMutation(t *testing.T) {
+	root := initSliceCompletionRepo(t)
+	store := &sliceCompletionStore{}
+	detail, record := sliceCompletionRecord(t, root, CommitPolicySlice, store)
+	detail.State.Status = plan.StatusAbandoned
+	detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypePlanAbandoned, Reason: "superseded by safer work"})
+	if err := os.WriteFile(filepath.Join(root, "work.go"), []byte("package work\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	detailBefore, err := json.Marshal(detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	headBefore := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
+	statusBefore := runCommitTestGitOutput(t, root, "status", "--short")
+	var gitCalls []string
+	err = (SliceCompletionService{CommandRunner: runGitFake(&gitCalls, nil)}).Complete(context.Background(), SliceCompletionRequest{
+		Record: record, SliceID: "001-a", Notes: "must not complete", CommitProposal: sliceCompletionProposal(), Now: time.Now().UTC(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "plan plan-a is abandoned: superseded by safer work") {
+		t.Fatalf("completion error = %v, want abandonment refusal", err)
+	}
+	if len(gitCalls) != 0 {
+		t.Fatalf("abandoned completion inspected or mutated Git: %v", gitCalls)
+	}
+	if store.stateWrites != 0 || store.slicesWrites != 0 || store.eventWrites != 0 {
+		t.Fatalf("abandoned completion wrote artifacts: state=%d slices=%d events=%d", store.stateWrites, store.slicesWrites, store.eventWrites)
+	}
+	detailAfter, err := json.Marshal(detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(detailAfter, detailBefore) {
+		t.Fatalf("abandoned completion mutated in-memory plan artifacts")
+	}
+	if headAfter := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD")); headAfter != headBefore {
+		t.Fatalf("abandoned completion changed HEAD: %s -> %s", headBefore, headAfter)
+	}
+	if statusAfter := runCommitTestGitOutput(t, root, "status", "--short"); statusAfter != statusBefore {
+		t.Fatalf("abandoned completion mutated worktree status:\nbefore:\n%safter:\n%s", statusBefore, statusAfter)
+	}
+}
+
+func TestSliceCompletionRejectsAbandonmentSettledBeforeRefreshedMutation(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		policy CommitPolicy
+	}{
+		{name: "commit intent", policy: CommitPolicySlice},
+		{name: "legacy completion", policy: CommitPolicyPlan},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := initSliceCompletionRepo(t)
+			detail, _ := sliceCompletionRecord(t, root, test.policy, &sliceCompletionStore{})
+			if err := os.MkdirAll(detail.Dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			record, err := plan.NewPlanRecord(detail.Dir, detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := record.PersistArtifacts(); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "work.go"), []byte("package work\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			// The standalone service has already accepted this stale in-memory
+			// detail when another process wins the durable abandonment mutation.
+			if err := plan.RequireNotAbandoned(record.Detail()); err != nil {
+				t.Fatalf("initial service gate: %v", err)
+			}
+			repo := plan.NewFileRepository(filepath.Dir(detail.Dir))
+			abandonRecord, err := repo.ResolvePlanRecord(context.Background(), detail.Dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := abandonRecord.Abandon("superseded concurrently", time.Date(2026, 9, 1, 18, 0, 0, 0, time.UTC)); err != nil {
+				t.Fatal(err)
+			}
+			if record.Detail().State.Status == plan.StatusAbandoned {
+				t.Fatal("test requires the completion record to remain stale")
+			}
+
+			headBefore := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
+			statusBefore := runCommitTestGitOutput(t, root, "status", "--short")
+			err = (SliceCompletionService{}).Complete(context.Background(), SliceCompletionRequest{
+				Record: record, SliceID: "001-a", Notes: "must not complete", CommitProposal: sliceCompletionProposal(), Now: time.Now().UTC(),
+			})
+			if err == nil || !strings.Contains(err.Error(), "plan plan-a is abandoned: superseded concurrently") {
+				t.Fatalf("completion error = %v, want refreshed abandonment refusal", err)
+			}
+
+			persisted, err := repo.ResolvePlan(context.Background(), detail.Dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			slice := completionSlice(persisted, "001-a")
+			if persisted.State.Status != plan.StatusAbandoned || slice == nil || slice.CommitIntent != nil || slice.Completion != nil || slice.Status != plan.StatusInProgress {
+				t.Fatalf("artifacts after refused completion: status=%q slice=%#v", persisted.State.Status, slice)
+			}
+			if got := countPlanEvents(persisted.Events, plan.EventTypeSliceCompleted); got != 0 {
+				t.Fatalf("slice_completed events = %d, want 0", got)
+			}
+			if headAfter := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD")); headAfter != headBefore {
+				t.Fatalf("refused completion changed HEAD: %s -> %s", headBefore, headAfter)
+			}
+			if statusAfter := runCommitTestGitOutput(t, root, "status", "--short"); statusAfter != statusBefore {
+				t.Fatalf("refused completion mutated Git status:\nbefore:\n%safter:\n%s", statusBefore, statusAfter)
+			}
+		})
+	}
 }
 
 func TestSliceCompletionCommitsInterruptedTrackedStagedAndUntrackedWorkAtOriginalParent(t *testing.T) {

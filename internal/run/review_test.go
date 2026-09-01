@@ -847,6 +847,46 @@ func TestReviewLockReloadsAuthoritativePlanDetail(t *testing.T) {
 	}
 }
 
+func TestReviewAndResumeRejectAbandonedPlanBeforeVerificationOrAgent(t *testing.T) {
+	for _, operation := range []string{"review", "resume"} {
+		t.Run(operation, func(t *testing.T) {
+			detail := runPlanDetail(plan.StatusAbandoned, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
+			detail.Dir = t.TempDir()
+			detail.State.Repo.Root = t.TempDir()
+			detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypePlanAbandoned, Reason: "superseded by safer work"})
+			commandCalled := false
+			creatorCalled := false
+			var out bytes.Buffer
+			service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail, detail}}, &out, Options{
+				ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi}},
+				RunDependencies: RunDependencies{
+					CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error {
+						commandCalled = true
+						return nil
+					},
+					ReviewCreator: reviewCreatorFunc(func(context.Context, ReviewRun) (plan.PlanReview, error) {
+						creatorCalled = true
+						return plan.PlanReview{}, nil
+					}),
+				},
+			})
+			request := Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi}}
+			var err error
+			if operation == "review" {
+				_, err = service.Review(context.Background(), request)
+			} else {
+				err = service.ResumeReview(context.Background(), request)
+			}
+			if err == nil || !strings.Contains(err.Error(), "plan plan-a is abandoned: superseded by safer work") {
+				t.Fatalf("%s error = %v", operation, err)
+			}
+			if commandCalled || creatorCalled || out.Len() != 0 {
+				t.Fatalf("refused %s had side effects: command=%v creator=%v output=%q", operation, commandCalled, creatorCalled, out.String())
+			}
+		})
+	}
+}
+
 func TestReviewRejectsPendingSliceWorkBeforeVerificationOrAgent(t *testing.T) {
 	current := "002-current"
 	tests := []struct {

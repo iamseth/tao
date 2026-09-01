@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // lifecycleCheck carries one executable-slice decision and the reason it failed.
@@ -36,8 +37,16 @@ func applyLifecycleMutation(detail *PlanDetail, mutate func(*ArtifactChangeSet) 
 // must preserve the same current/next/pending semantics.
 func lifecycleState(detail *PlanDetail, index detailIndex) Lifecycle {
 	currentID := currentSliceID(detail, index)
-	nextID := nextSliceID(detail, currentID)
 	currentSlice := index.slice(currentID)
+	if err := RequireNotAbandoned(detail); err != nil {
+		return Lifecycle{
+			CurrentSliceID: currentID,
+			CurrentSlice:   currentSlice,
+			RunnableError:  err,
+			ContinueError:  err,
+		}
+	}
+	nextID := nextSliceID(detail, currentID)
 	complete := lifecycleComplete(detail, currentID, currentSlice)
 	runnable := runnableState(detail, index, complete, nextID)
 	continuable := blockedContinueState(detail, index)
@@ -53,6 +62,71 @@ func lifecycleState(detail *PlanDetail, index detailIndex) Lifecycle {
 		Continuable:    continuable.OK,
 		ContinueError:  continuable.Err,
 	}
+}
+
+const maxAbandonmentErrorReasonRunes = 256
+
+// RequireNotAbandoned is the authoritative operation gate for the abandoned
+// terminal state. Its error retains useful durable context without emitting
+// control characters or unbounded legacy event prose.
+func RequireNotAbandoned(detail *PlanDetail) error {
+	if detail == nil || detail.State.Status != StatusAbandoned {
+		return nil
+	}
+	planID := strings.TrimSpace(detail.State.Plan.ID)
+	if planID == "" {
+		planID = "<plan>"
+	}
+	message := fmt.Sprintf("plan %s is abandoned", planID)
+	if evidence := ProjectAbandonment(detail.Events); evidence != nil {
+		if reason := safeAbandonmentErrorReason(evidence.Reason); reason != "" {
+			message += ": " + reason
+		}
+	}
+	return fmt.Errorf("%s", message)
+}
+
+func safeAbandonmentErrorReason(value string) string {
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, value)
+	value = strings.Join(strings.Fields(value), " ")
+	runes := []rune(value)
+	if len(runes) > maxAbandonmentErrorReasonRunes {
+		value = string(runes[:maxAbandonmentErrorReasonRunes]) + "…"
+	}
+	return value
+}
+
+// RequireAbandonable refuses outcomes whose current completion or durable
+// transaction evidence must retain authority over lifecycle mutation.
+func RequireAbandonable(detail *PlanDetail) error {
+	if detail == nil {
+		return fmt.Errorf("cannot abandon a nil plan")
+	}
+	if detail.State.Status == StatusAbandoned {
+		return nil
+	}
+	planID := detail.State.Plan.ID
+	if PlanLifecycleStatus(detail) == StatusCompleted {
+		return fmt.Errorf("plan %s is completed and cannot be abandoned", planID)
+	}
+	if err := automaticSliceCompletionError(detail); err != nil {
+		return fmt.Errorf("plan %s cannot be abandoned while %w", planID, err)
+	}
+	if detail.State.Workspace != nil && detail.State.Workspace.RebaseIntent != nil {
+		return fmt.Errorf("plan %s cannot be abandoned while its workspace rebase transaction is unsettled", planID)
+	}
+	if detail.State.Plan.MergeCommitIntent != nil {
+		return fmt.Errorf("plan %s cannot be abandoned while its merge transaction is unsettled", planID)
+	}
+	if detail.State.Plan.PullRequestIntent != nil {
+		return fmt.Errorf("plan %s cannot be abandoned while its pull-request transaction is unsettled", planID)
+	}
+	return nil
 }
 
 func nextSliceID(detail *PlanDetail, currentID string) string {
@@ -139,19 +213,26 @@ func automaticSliceCompletionError(detail *PlanDetail) error {
 	}
 	for i := range detail.Slices.Slices {
 		slice := &detail.Slices.Slices[i]
-		if slice.CommitIntent == nil || slice.CommitIntent.Policy != "slice" {
+		if slice.CommitIntent == nil || (slice.CommitIntent.Policy != "slice" && slice.CommitIntent.Policy != "none") {
 			continue
 		}
 		if slice.Completion == nil {
 			return &SliceCompletionPendingError{SliceID: slice.ID, Reason: "completion outcome is missing"}
 		}
-		switch slice.Completion.Outcome {
-		case SliceCompletionCommitted, SliceCompletionNoChanges:
-			if strings.TrimSpace(slice.Completion.CommitSHA) == "" {
-				return &SliceCompletionPendingError{SliceID: slice.ID, Reason: "completion commit SHA is missing"}
+		switch slice.CommitIntent.Policy {
+		case "slice":
+			switch slice.Completion.Outcome {
+			case SliceCompletionCommitted, SliceCompletionNoChanges:
+				if strings.TrimSpace(slice.Completion.CommitSHA) == "" {
+					return &SliceCompletionPendingError{SliceID: slice.ID, Reason: "completion commit SHA is missing"}
+				}
+			default:
+				return &SliceCompletionPendingError{SliceID: slice.ID, Reason: fmt.Sprintf("completion outcome %q is invalid for commit policy slice", slice.Completion.Outcome)}
 			}
-		default:
-			return &SliceCompletionPendingError{SliceID: slice.ID, Reason: fmt.Sprintf("completion outcome %q is invalid", slice.Completion.Outcome)}
+		case "none":
+			if slice.Completion.Outcome != SliceCompletionManualUncommitted {
+				return &SliceCompletionPendingError{SliceID: slice.ID, Reason: fmt.Sprintf("completion outcome %q is invalid for commit policy none", slice.Completion.Outcome)}
+			}
 		}
 	}
 	return nil
@@ -402,6 +483,9 @@ func MarkSliceCommitIntent(detail *PlanDetail, sliceID string, intent SliceCommi
 	if detail == nil {
 		return fmt.Errorf("plan detail is nil")
 	}
+	if err := RequireNotAbandoned(detail); err != nil {
+		return err
+	}
 	slice := findSlice(detail, sliceID)
 	if slice == nil {
 		return classify(ErrNotFound, "slice %s not found", sliceID)
@@ -432,6 +516,9 @@ func MarkSliceCompletedWithOutcome(detail *PlanDetail, sliceID string, notes str
 func markSliceCompletedWithOutcome(detail *PlanDetail, changes *ArtifactChangeSet, sliceID string, notes string, verificationResults []VerificationRun, outcome *SliceCompletionOutcome, now time.Time) (Event, bool, error) {
 	if detail == nil {
 		return Event{}, false, fmt.Errorf("plan detail is nil")
+	}
+	if err := RequireNotAbandoned(detail); err != nil {
+		return Event{}, false, err
 	}
 	if changes == nil || changes.detail != detail {
 		return Event{}, false, fmt.Errorf("artifact change set must be bound to plan detail")
@@ -500,6 +587,9 @@ func MarkSliceApproved(detail *PlanDetail, sliceID string, approvedBy string, no
 	if detail == nil {
 		return Event{}, false, fmt.Errorf("plan detail is nil")
 	}
+	if err := RequireNotAbandoned(detail); err != nil {
+		return Event{}, false, err
+	}
 	slice := findSlice(detail, sliceID)
 	if slice == nil {
 		return Event{}, false, classify(ErrNotFound, "slice %s not found", sliceID)
@@ -534,6 +624,9 @@ const maxBlockerNoteRunes = 16 * 1024
 func MarkSliceBlocked(detail *PlanDetail, sliceID string, reason string, now time.Time) (Event, bool, error) {
 	if detail == nil {
 		return Event{}, false, fmt.Errorf("plan detail is nil")
+	}
+	if err := RequireNotAbandoned(detail); err != nil {
+		return Event{}, false, err
 	}
 	slice := findSlice(detail, sliceID)
 	if slice == nil {
@@ -602,6 +695,9 @@ func MarkSliceBudgetBlocked(detail *PlanDetail, sliceID string, reason string, n
 	if detail == nil {
 		return Event{}, false, fmt.Errorf("plan detail is nil")
 	}
+	if err := RequireNotAbandoned(detail); err != nil {
+		return Event{}, false, err
+	}
 	slice := findSlice(detail, sliceID)
 	if slice == nil {
 		return Event{}, false, classify(ErrNotFound, "slice %s not found", sliceID)
@@ -624,6 +720,9 @@ func MarkBlockedContinued(detail *PlanDetail, now time.Time) error {
 func markBlockedContinued(detail *PlanDetail, changes *ArtifactChangeSet, now time.Time) error {
 	if detail == nil {
 		return fmt.Errorf("plan detail is nil")
+	}
+	if err := RequireNotAbandoned(detail); err != nil {
+		return err
 	}
 	if changes == nil || changes.detail != detail {
 		return fmt.Errorf("artifact change set must be bound to plan detail")
@@ -653,6 +752,9 @@ func markBlockedContinued(detail *PlanDetail, changes *ArtifactChangeSet, now ti
 func markBlockedSliceRestarted(detail *PlanDetail, changes *ArtifactChangeSet, request BlockedSliceRestartRequest) (Event, error) {
 	if detail == nil || changes == nil || changes.detail != detail {
 		return Event{}, fmt.Errorf("artifact change set must be bound to plan detail")
+	}
+	if err := RequireNotAbandoned(detail); err != nil {
+		return Event{}, err
 	}
 	continuable := blockedContinueState(detail, newDetailIndex(detail))
 	if !continuable.OK {
@@ -717,6 +819,9 @@ func Reopen(detail *PlanDetail, newSlices []Slice, now time.Time) (Event, error)
 func reopen(detail *PlanDetail, changes *ArtifactChangeSet, newSlices []Slice, now time.Time) (Event, error) {
 	if detail == nil {
 		return Event{}, fmt.Errorf("plan detail is nil")
+	}
+	if err := RequireNotAbandoned(detail); err != nil {
+		return Event{}, err
 	}
 	if changes == nil || changes.detail != detail {
 		return Event{}, fmt.Errorf("artifact change set must be bound to plan detail")
@@ -803,6 +908,9 @@ func (r *PlanRecord) ReopenForced(newSlices []Slice, now time.Time) error {
 
 func reopenMutation(newSlices []Slice, now time.Time, force bool) artifactMutationFunc {
 	return func(detail *PlanDetail) (lifecycleMutation, error) {
+		if err := RequireNotAbandoned(detail); err != nil {
+			return lifecycleMutation{}, err
+		}
 		expected := planReopenedEvent(detail.State.Plan.ID, now)
 		if semanticEventsWereRecorded(detail.Events, []Event{expected}) && reopenPostconditionMatches(detail, newSlices) {
 			return unchangedLifecycleMutation(detail), nil
@@ -878,6 +986,9 @@ func markSliceRemoved(detail *PlanDetail, changes *ArtifactChangeSet, sliceID st
 	if detail == nil {
 		return Event{}, fmt.Errorf("plan detail is nil")
 	}
+	if err := RequireNotAbandoned(detail); err != nil {
+		return Event{}, err
+	}
 	if changes == nil || changes.detail != detail {
 		return Event{}, fmt.Errorf("artifact change set must be bound to plan detail")
 	}
@@ -905,6 +1016,9 @@ func MarkSliceSkipped(detail *PlanDetail, sliceID string, now time.Time) (Event,
 func markSliceSkipped(detail *PlanDetail, changes *ArtifactChangeSet, sliceID string, now time.Time) (Event, error) {
 	if detail == nil {
 		return Event{}, fmt.Errorf("plan detail is nil")
+	}
+	if err := RequireNotAbandoned(detail); err != nil {
+		return Event{}, err
 	}
 	if changes == nil || changes.detail != detail {
 		return Event{}, fmt.Errorf("artifact change set must be bound to plan detail")
@@ -934,6 +1048,9 @@ func MarkPendingSlicesReordered(detail *PlanDetail, pendingOrder []string, now t
 func markPendingSlicesReordered(detail *PlanDetail, changes *ArtifactChangeSet, pendingOrder []string, now time.Time) (Event, error) {
 	if detail == nil {
 		return Event{}, fmt.Errorf("plan detail is nil")
+	}
+	if err := RequireNotAbandoned(detail); err != nil {
+		return Event{}, err
 	}
 	if changes == nil || changes.detail != detail {
 		return Event{}, fmt.Errorf("artifact change set must be bound to plan detail")

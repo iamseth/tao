@@ -3,12 +3,15 @@ package merge
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/workspace"
 )
 
@@ -140,6 +143,75 @@ func TestBatchCoordinatorPlansInitializesAndStartsNewBatch(t *testing.T) {
 	workspaceOwner.requireOwnershipReleased(t)
 }
 
+func TestBatchCoordinatorRevalidatesConcurrentAbandonmentBeforeInitialization(t *testing.T) {
+	repoRoot := t.TempDir()
+	planDir := filepath.Join(t.TempDir(), "plan-a")
+	if err := os.MkdirAll(planDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	batchesDir := filepath.Join(t.TempDir(), "merge-batches")
+	store := NewBatchStore(batchesDir, filepath.Join(batchesDir, "active.json"))
+	workspaceOwner, err := NewBatchWorkspace(repoRoot, batchesDir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := BatchCandidate{
+		PlanID: "plan-a", PlanDir: planDir, RepoRoot: repoRoot, Branch: "tao/plan-a",
+		ReviewBase: strings.Repeat("1", 40), ReviewHead: strings.Repeat("2", 40), SourceTip: strings.Repeat("2", 40),
+		DefaultBranch: "main", DefaultStartSHA: strings.Repeat("0", 40),
+	}
+	discovery := &coordinatorConcurrentAbandonmentDiscovery{
+		result: BatchPreflightResult{
+			Candidates: []BatchCandidate{candidate}, RepoRoot: repoRoot, DefaultBranch: "main", DefaultStartSHA: candidate.DefaultStartSHA,
+		},
+		started: make(chan struct{}), abandoned: make(chan struct{}),
+	}
+	now := time.Date(2026, 9, 1, 18, 0, 0, 0, time.UTC)
+	type runResult struct {
+		result BatchCoordinatorResult
+		err    error
+	}
+	done := make(chan runResult, 1)
+	go func() {
+		result, runErr := NewBatchCoordinator(BatchCoordinatorSeams{
+			Store: store, Workspace: workspaceOwner, Discovery: discovery,
+			Planner:    coordinatorPlanner{result: BatchPlanningResult{Ordered: []BatchCandidate{candidate}}},
+			Integrator: &coordinatorIntegrator{}, Now: func() time.Time { return now },
+		}).Run(context.Background(), BatchCoordinatorOptions{})
+		done <- runResult{result: result, err: runErr}
+	}()
+
+	<-discovery.started
+	abandonmentOwnership, err := workspaceOwner.AcquirePlanOwnership(candidate.PlanID, candidate.PlanDir, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeID, err := store.ActiveID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if activeID != "" {
+		t.Fatalf("abandonment observed active batch %q while discovery was in flight", activeID)
+	}
+	discovery.wasAbandoned = true
+	if err := abandonmentOwnership.Release(); err != nil {
+		t.Fatal(err)
+	}
+	close(discovery.abandoned)
+
+	got := <-done
+	if got.err == nil || !strings.Contains(got.err.Error(), "plan plan-a is abandoned") {
+		t.Fatalf("Run() error = %v, want abandonment refusal", got.err)
+	}
+	activeID, err = store.ActiveID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if activeID != "" {
+		t.Fatalf("coordinator published abandoned candidate in active batch %q: %+v", activeID, got.result.State)
+	}
+}
+
 func TestBatchCoordinatorReportsDiscoveryAndPlanningBlockersWithoutDurableState(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -216,6 +288,31 @@ func TestBatchCoordinatorResumesWithOrdinaryEjectionAndPostLandingValidation(t *
 				t.Fatalf("resume calls: validated=%q statused=%q started=%q", workspaceOwner.validated, workspaceOwner.statused, workspaceOwner.started)
 			}
 			workspaceOwner.requireOwnershipReleased(t)
+		})
+	}
+}
+
+func TestBatchCoordinatorRefusesAbandonedSnapshotBeforeResumeOrRestart(t *testing.T) {
+	for _, restart := range []bool{false, true} {
+		t.Run(fmt.Sprintf("restart=%t", restart), func(t *testing.T) {
+			state := coordinatorActiveState(BatchStatusIntegrating)
+			detailA := batchReadyDetail("plan-a", "tao/plan-a")
+			detailA.State.Status = plan.StatusAbandoned
+			detailB := batchReadyDetail("plan-b", "tao/plan-b")
+			repo := &batchRepository{details: map[string]*plan.PlanDetail{"plan-a": detailA, "plan-b": detailB}}
+			store := &coordinatorStore{activeID: state.ID, loaded: state}
+			workspaceOwner := &coordinatorWorkspace{}
+
+			result, err := NewBatchCoordinator(BatchCoordinatorSeams{
+				Store: store, Workspace: workspaceOwner,
+				Discovery: BatchCandidateDiscovery{Repository: repo},
+			}).Run(context.Background(), BatchCoordinatorOptions{Restart: restart})
+			if err == nil || !strings.Contains(err.Error(), "plan plan-a is abandoned") {
+				t.Fatalf("Run() error = %v, want abandonment refusal", err)
+			}
+			if result.State.ID != state.ID || workspaceOwner.restarted || workspaceOwner.validated != "" || workspaceOwner.started != "" || workspaceOwner.statused != "" || store.transitioned.ID != "" {
+				t.Fatalf("abandoned snapshot advanced batch: result=%+v workspace=%+v transitioned=%+v", result, workspaceOwner, store.transitioned)
+			}
 		})
 	}
 }
@@ -493,6 +590,26 @@ type coordinatorDiscovery struct {
 
 func (d coordinatorDiscovery) Discover(context.Context) (BatchPreflightResult, error) {
 	return d.result, d.err
+}
+
+type coordinatorConcurrentAbandonmentDiscovery struct {
+	result       BatchPreflightResult
+	started      chan struct{}
+	abandoned    chan struct{}
+	wasAbandoned bool
+}
+
+func (d *coordinatorConcurrentAbandonmentDiscovery) Discover(context.Context) (BatchPreflightResult, error) {
+	close(d.started)
+	<-d.abandoned
+	return d.result, nil
+}
+
+func (d *coordinatorConcurrentAbandonmentDiscovery) ValidateCandidateSnapshot(context.Context, []BatchCandidate) error {
+	if d.wasAbandoned {
+		return errors.New("plan plan-a is abandoned: obsolete")
+	}
+	return nil
 }
 
 type coordinatorPlanner struct {

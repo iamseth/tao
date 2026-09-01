@@ -72,6 +72,43 @@ func TestShowPayloadCarriesLoadedRecommendation(t *testing.T) {
 	}
 }
 
+func TestShowPayloadProjectsBoundedAbandonmentWithoutAliasingRawReason(t *testing.T) {
+	at := time.Date(2026, 9, 1, 17, 0, 0, 0, time.FixedZone("offset", 3600))
+	raw := "superseded\nby\ta safer path\x1b[31m " + strings.Repeat("界", 120)
+	detail := &plan.PlanDetail{
+		State:  plan.State{Status: plan.StatusAbandoned, Plan: plan.PlanState{ID: "plan", Title: "Plan"}},
+		Events: []plan.Event{{Type: plan.EventTypePlanAbandoned, Timestamp: at, Reason: raw}},
+	}
+	loaded, err := LoadPlan(context.Background(), fakeRepository{detail: detail}, "plan", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := loaded.ShowPayload()
+	if payload.Abandonment == nil || payload.Abandonment.AbandonedAt == nil || payload.Abandonment.AbandonedAt.Location() != time.UTC {
+		t.Fatalf("abandonment payload = %+v", payload.Abandonment)
+	}
+	if got := payload.Abandonment.Reason; strings.ContainsAny(got, "\n\t\x1b") || len([]rune(got)) > abandonmentReasonExcerptRunes || !strings.HasSuffix(got, "…") {
+		t.Fatalf("unsafe or unbounded reason = %q", got)
+	}
+	if payload.NextAction.Primary.Reason != "the plan was abandoned" || strings.Contains(payload.NextAction.Primary.Reason, raw) {
+		t.Fatalf("unsafe next action = %+v", payload.NextAction.Primary)
+	}
+	payload.Abandonment.Reason = "changed"
+	if detail.Events[0].Reason != raw {
+		t.Fatal("show abandonment aliases raw event evidence")
+	}
+}
+
+func TestFormatAbandonmentTextHandlesMissingAndMalformedReasons(t *testing.T) {
+	if got := FormatAbandonmentText(" \n\t "); got != abandonmentReasonFallback {
+		t.Fatalf("missing reason = %q", got)
+	}
+	got := FormatAbandonmentText(" stop\nnow\x00 " + strings.Repeat("界", 120))
+	if strings.ContainsAny(got, "\n\x00") || len([]rune(got)) != abandonmentReasonExcerptRunes || !strings.HasSuffix(got, "…") {
+		t.Fatalf("malformed reason = %q", got)
+	}
+}
+
 func TestRenderVerificationFindings(t *testing.T) {
 	var out bytes.Buffer
 	err := RenderVerificationFindings(&out, []plan.VerificationFinding{{

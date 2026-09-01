@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"slices"
 	"strings"
@@ -100,6 +101,55 @@ func TestEditRemoveSkipsAndMovesPendingSlices(t *testing.T) {
 		if !containsID(types, want) {
 			t.Fatalf("expected event %q, got %v", want, types)
 		}
+	}
+}
+
+func TestEditRejectsAbandonedPlanWithoutChangingPreservedWork(t *testing.T) {
+	const planID = "20260526-1200-edit"
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "remove", args: []string{"edit", "remove", planID, "004-d"}},
+		{name: "skip", args: []string{"edit", "skip", planID, "003-c"}},
+		{name: "move", args: []string{"edit", "move", planID, "004-d", "--before", "003-c"}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repo := editPlanRepo(planID)
+			detail, err := repo.GetPlan(context.Background(), planID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			detail.State.Status = plan.StatusAbandoned
+			detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypePlanAbandoned, PlanID: planID, Reason: "superseded by safer work"})
+			before, err := json.Marshal(detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			app := App{Out: &out, Err: &out, Repository: func(_ string) Repository { return repo }}
+
+			err = app.Run(context.Background(), test.args)
+			if err == nil || !strings.Contains(err.Error(), "plan "+planID+" is abandoned: superseded by safer work") {
+				t.Fatalf("edit error = %v", err)
+			}
+			afterDetail, resolveErr := repo.GetPlan(context.Background(), planID)
+			if resolveErr != nil {
+				t.Fatal(resolveErr)
+			}
+			after, err := json.Marshal(afterDetail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(after, before) {
+				t.Fatalf("edit changed abandoned status, slices, queue, or events:\n got: %s\nwant: %s", after, before)
+			}
+			if out.Len() != 0 {
+				t.Fatalf("edit emitted success output: %q", out.String())
+			}
+		})
 	}
 }
 

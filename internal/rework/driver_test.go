@@ -69,6 +69,36 @@ func (r *driverRecord) ReopenFromPullRequest(newSlices []plan.Slice, consumedThr
 	return nil
 }
 
+func TestDriverRunRejectsAbandonedPlanBeforeRestartDecisionOrExecution(t *testing.T) {
+	detail := &plan.PlanDetail{
+		State:  plan.State{Status: plan.StatusAbandoned, Plan: plan.PlanState{ID: "plan-a"}},
+		Events: []plan.Event{{Type: plan.EventTypePlanAbandoned, Reason: "superseded by safer work"}},
+	}
+	executed := false
+	recordBound := false
+	driver := Driver{
+		Resolve: fixedDriverResolver(detail),
+		Record: func(*plan.PlanDetail) (AutomaticRecord, error) {
+			recordBound = true
+			return &driverRecord{detail: detail}, nil
+		},
+	}
+
+	err := driver.Run(context.Background(), "plan-a", RunOptions{
+		Enabled: true, MaxAttempts: 5, AllowRestart: true,
+		Execute: func(context.Context) error {
+			executed = true
+			return nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "plan plan-a is abandoned: superseded by safer work") {
+		t.Fatalf("Run error = %v", err)
+	}
+	if executed || recordBound {
+		t.Fatalf("abandoned automatic rework had side effects: executed=%v record=%v", executed, recordBound)
+	}
+}
+
 func TestDriverDecideReturnsZeroForNonActionablePlan(t *testing.T) {
 	driver := Driver{Resolve: func(context.Context, string) (*plan.PlanDetail, error) {
 		return &plan.PlanDetail{State: plan.State{Status: plan.StatusReviewed}}, nil

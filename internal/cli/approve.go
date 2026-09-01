@@ -52,6 +52,9 @@ func (a App) approve(ctx context.Context, repo approvalRepository, args []string
 		return err
 	}
 	detail := record.Detail()
+	if err := plan.RequireNotAbandoned(detail); err != nil {
+		return err
+	}
 	targetID, err := approvalTargetSlice(detail, flagStringValue(fs, "slice"))
 	if err != nil {
 		return err

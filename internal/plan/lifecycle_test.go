@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -245,6 +246,81 @@ func TestLifecycleMutationHelpersRejectInvalidMutations(t *testing.T) {
 			err := tt.mutate()
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("expected error containing %q, got %v", tt.want, err)
+			}
+		})
+	}
+}
+
+func TestAbandonedLifecycleMutatorsPreserveStatusSlicesQueueAndEvents(t *testing.T) {
+	tests := []struct {
+		name   string
+		setup  func(*PlanDetail)
+		mutate func(*PlanDetail) error
+	}{
+		{
+			name: "block slice",
+			mutate: func(detail *PlanDetail) error {
+				_, _, err := MarkSliceBlocked(detail, "001-a", "cannot continue", editTime())
+				return err
+			},
+		},
+		{
+			name: "budget block completed slice",
+			setup: func(detail *PlanDetail) {
+				detail.State.Plan.CompletedSlices = []string{"001-a"}
+				detail.State.Plan.PendingSlices = []string{"002-b", "003-c"}
+				detail.Slices.Slices[0].Status = StatusCompleted
+			},
+			mutate: func(detail *PlanDetail) error {
+				_, _, err := MarkSliceBudgetBlocked(detail, "001-a", "budget exceeded", editTime())
+				return err
+			},
+		},
+		{
+			name: "remove pending slice",
+			setup: func(detail *PlanDetail) {
+				detail.Slices.Slices[1].DependsOn = nil
+			},
+			mutate: func(detail *PlanDetail) error {
+				_, err := MarkSliceRemoved(detail, "001-a", editTime())
+				return err
+			},
+		},
+		{
+			name: "skip pending slice",
+			setup: func(detail *PlanDetail) {
+				detail.Slices.Slices[1].DependsOn = nil
+			},
+			mutate: func(detail *PlanDetail) error {
+				_, err := MarkSliceSkipped(detail, "001-a", editTime())
+				return err
+			},
+		},
+		{
+			name: "reorder pending slices",
+			mutate: func(detail *PlanDetail) error {
+				_, err := MarkPendingSlicesReordered(detail, []string{"001-a", "003-c", "002-b"}, editTime())
+				return err
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			detail := editPlanDetail()
+			detail.State.Status = StatusAbandoned
+			detail.Events = []Event{{Type: EventTypePlanAbandoned, Timestamp: editTime().Add(-time.Hour), PlanID: "edit", Reason: "superseded"}}
+			if test.setup != nil {
+				test.setup(detail)
+			}
+			before := clonePlanDetail(detail)
+
+			err := test.mutate(detail)
+			if err == nil || !strings.Contains(err.Error(), "plan edit is abandoned: superseded") {
+				t.Fatalf("mutation error = %v", err)
+			}
+			if !reflect.DeepEqual(detail.State, before.State) || !reflect.DeepEqual(detail.Slices, before.Slices) || !reflect.DeepEqual(detail.Events, before.Events) {
+				t.Fatalf("abandoned mutation changed preserved artifacts:\n got: %#v\nwant: %#v", detail, before)
 			}
 		})
 	}

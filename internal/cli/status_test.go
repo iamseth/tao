@@ -33,6 +33,23 @@ func TestStatusShowsRuntimeEnvAndPlanRollup(t *testing.T) {
 	}
 }
 
+func TestStatusCountsAbandonmentSeparatelyFromCompletion(t *testing.T) {
+	clearTaoEnv(t)
+	summaries := []plan.PlanSummary{
+		{ID: "abandoned", Status: plan.StatusAbandoned},
+		{ID: "completed", Status: plan.StatusCompleted, Complete: true, Reviewed: true},
+	}
+	var out bytes.Buffer
+	app := App{Out: &out, Repository: func(string) Repository { return fakeRepository{summaries: summaries} }}
+	if err := app.Run(context.Background(), []string{"status"}); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	if !strings.Contains(text, "1 completed, 1 abandoned") || !strings.Contains(text, "done       1 complete, 1 reviewed") || !strings.Contains(text, "abandoned  1") {
+		t.Fatalf("status did not separate abandonment:\n%s", text)
+	}
+}
+
 func TestStatusJSONContainsOnlyLocalStatus(t *testing.T) {
 	clearTaoEnv(t)
 	var out bytes.Buffer

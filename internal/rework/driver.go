@@ -256,6 +256,9 @@ func (d Driver) Decide(ctx context.Context, planID string, baseline, attempts in
 	if err != nil {
 		return Decision{}, err
 	}
+	if err := plan.RequireNotAbandoned(detail); err != nil {
+		return Decision{}, err
+	}
 	review := plan.PersistedReview(detail)
 	findings := ReviewFindings(detail)
 	if detail == nil || detail.State.Status != plan.StatusChangesRequested || review == nil || review.Status != plan.ReviewStatusCompleted || review.Verdict != plan.ReviewVerdictChangesRequested || len(findings) == 0 {
@@ -381,6 +384,9 @@ func (d Driver) Run(ctx context.Context, planID string, opts RunOptions) error {
 			}
 			detail, err := d.Resolve(ctx, planID)
 			if err != nil {
+				return err
+			}
+			if err := plan.RequireNotAbandoned(detail); err != nil {
 				return err
 			}
 			_, stopped, err := GuardAutoReworkRestart(detail, opts.AllowRestart)

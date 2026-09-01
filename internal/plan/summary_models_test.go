@@ -45,6 +45,21 @@ func TestSummarizePlansMixedStatuses(t *testing.T) {
 	}
 }
 
+func TestSummarizePlansCountsAbandonedSeparately(t *testing.T) {
+	rollup := SummarizePlans([]PlanSummary{
+		{Status: StatusAbandoned, Complete: false},
+		{Status: StatusCompleted, Complete: true},
+		{Status: StatusInProgress},
+	})
+
+	if rollup.Total != 3 || rollup.Statuses.Abandoned != 1 || rollup.Abandoned != 1 {
+		t.Fatalf("unexpected abandoned rollup: %#v", rollup)
+	}
+	if rollup.Statuses.Completed != 1 || rollup.Completed != 1 {
+		t.Fatalf("abandonment was counted as completion: %#v", rollup)
+	}
+}
+
 func TestSummarizePlansCountsVerificationFailedProjection(t *testing.T) {
 	rollup := SummarizePlans([]PlanSummary{
 		{Status: StatusVerificationFailed},

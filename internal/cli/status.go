@@ -118,10 +118,13 @@ func (a App) writePlanRollup(rollup plan.PlanRollup) error {
 	if err := writef(a.Out, "  total      %d\n", rollup.Total); err != nil {
 		return err
 	}
-	if err := writef(a.Out, "  statuses   %d planned, %d in_progress, %d in_review, %d changes_requested, %d reviewed, %d completed, %d blocked\n", rollup.Statuses.Planned, rollup.Statuses.InProgress, rollup.Statuses.InReview, rollup.Statuses.ChangesRequested, rollup.Statuses.Reviewed, rollup.Statuses.Completed, rollup.Statuses.Blocked); err != nil {
+	if err := writef(a.Out, "  statuses   %d planned, %d in_progress, %d in_review, %d changes_requested, %d reviewed, %d completed, %d abandoned, %d blocked\n", rollup.Statuses.Planned, rollup.Statuses.InProgress, rollup.Statuses.InReview, rollup.Statuses.ChangesRequested, rollup.Statuses.Reviewed, rollup.Statuses.Completed, rollup.Statuses.Abandoned, rollup.Statuses.Blocked); err != nil {
 		return err
 	}
 	if err := writef(a.Out, "  done       %d complete, %d reviewed\n", rollup.Completed, rollup.Reviewed); err != nil {
+		return err
+	}
+	if err := writef(a.Out, "  abandoned  %d\n", rollup.Abandoned); err != nil {
 		return err
 	}
 	if len(rollup.Verdicts) == 0 {

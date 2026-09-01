@@ -162,7 +162,7 @@ commands also accept the short unambiguous prefixes shown by help.
 
 | Command group | Commands | Use |
 | --- | --- | --- |
-| Plan | `list`, `show`, `report`, `note`, `validate`, `staleness`, `edit`, `delete` | Capture backlog items and inspect, validate, share, or maintain local plans. |
+| Plan | `list`, `show`, `report`, `note`, `validate`, `staleness`, `edit`, `abandon`, `delete` | Capture backlog items and inspect, validate, share, or maintain local plans. |
 | Execution | `run`, `commit`, `approve`, `review`, `rework` | Execute slices, satisfy gates, inspect exact-diff reviews, and address findings. |
 | Workspace and cleanup | `workspace`, `cleanup`, `merge` | Inspect managed worktrees, clean eligible Git state, and integrate approved plans. |
 | Repository | `init`, `repo` | Register checkouts and inspect repository configuration and health. |
@@ -185,7 +185,16 @@ A typical execution path uses `tao run <plan>`, `tao review <plan>`, and then
 `tao merge <plan>`. If a review requests changes, `tao rework <plan>` creates
 bounded follow-up slices; `tao rework --run <plan>` immediately hands them back
 to the ordinary run path. Use `tao show <plan>` whenever you need Tao's
-recommended next action.
+recommended next action. If unfinished work is intentionally no longer needed,
+record that terminal outcome without deleting its history:
+
+```sh
+tao abandon --reason "superseded by a different approach" <plan>
+```
+
+Abandonment preserves plan and workspace evidence and does not clean branches
+or worktrees. Tao refuses it while a durable lifecycle transaction still needs
+recovery.
 
 For an approved set of independent plans, preview batch integration before
 running it:

@@ -10,9 +10,11 @@ import (
 )
 
 const (
-	blockerReasonDetailRunes  = 320
-	blockerReasonExcerptRunes = 96
-	blockerReasonFallback     = "No blocker reason was recorded."
+	blockerReasonDetailRunes      = 320
+	blockerReasonExcerptRunes     = 96
+	blockerReasonFallback         = "No blocker reason was recorded."
+	abandonmentReasonExcerptRunes = 96
+	abandonmentReasonFallback     = "No abandonment reason was recorded."
 )
 
 // BlockerText returns display-only detailed and concise forms of an untrusted
@@ -42,7 +44,24 @@ func FormatBlockedRunGuidance(sliceID, reason, continueCommand string) string {
 	return fmt.Sprintf("Blocked slice %s: %s\nResolve this blocker before continuing, then run:\n  %s", sliceID, FormatBlockerText(reason).Detailed, continueCommand)
 }
 
+// FormatAbandonmentText returns a compact display-only form of durable
+// abandonment evidence. Legacy malformed values cannot inject terminal
+// controls or force unbounded table and detail output.
+func FormatAbandonmentText(reason string) string {
+	normalized := strings.Join(strings.FieldsFunc(reason, func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.IsControl(r)
+	}), " ")
+	if normalized == "" {
+		normalized = abandonmentReasonFallback
+	}
+	return boundDisplayText(normalized, abandonmentReasonExcerptRunes)
+}
+
 func boundBlockerText(value string, limit int) string {
+	return boundDisplayText(value, limit)
+}
+
+func boundDisplayText(value string, limit int) string {
 	runes := []rune(value)
 	if len(runes) <= limit {
 		return value

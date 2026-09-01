@@ -31,6 +31,7 @@ func TestPlanFormatDocumentsEmittedEventContract(t *testing.T) {
 		EventTypePlanReviewed,
 		EventTypePlanReopened,
 		EventTypePlanMerged,
+		EventTypePlanAbandoned,
 		EventTypeVerificationCommandInvalid,
 		EventTypeRunContext,
 		EventTypeSessionTimeout,
@@ -73,6 +74,23 @@ func TestPlanFormatDocumentsEmittedEventContract(t *testing.T) {
 				t.Errorf("docs/plan-format.md event %q must retain an explicit %s classification (one of %q)", eventType, classification.name, classification.markers)
 			}
 		}
+	}
+}
+
+func TestAbandonedStatusAndEventLegacyJSONParsing(t *testing.T) {
+	var state State
+	if err := json.Unmarshal([]byte(`{"status":"abandoned","plan":{"id":"legacy","completed_slices":[],"pending_slices":["001-a"],"timing":{}}}`), &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.Status != StatusAbandoned || len(state.Plan.PendingSlices) != 1 {
+		t.Fatalf("legacy abandoned state = %#v", state)
+	}
+	var event Event
+	if err := json.Unmarshal([]byte(`{"type":"plan_abandoned","timestamp":"2026-09-01T16:00:00Z","plan_id":"legacy","reason":"No longer needed","message":"Plan abandoned","future_field":true}`), &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.Type != EventTypePlanAbandoned || event.Reason != "No longer needed" || event.Timestamp.IsZero() {
+		t.Fatalf("legacy abandonment event = %#v", event)
 	}
 }
 

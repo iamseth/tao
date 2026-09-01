@@ -82,7 +82,16 @@ func renderPlanDetailWithThresholds(out io.Writer, loaded planview.Plan, thresho
 	if err := writef(out, "Status: %s\n", statusText); err != nil {
 		return err
 	}
-	if err := renderNextAction(out, derived.NextAction); err != nil {
+	if abandonment := loaded.ShowPayload().Abandonment; abandonment != nil {
+		abandonedAt := "-"
+		if abandonment.AbandonedAt != nil {
+			abandonedAt = abandonment.AbandonedAt.Format(time.RFC3339)
+		}
+		if err := writef(out, "Abandoned: %s\nAbandonment reason: %s\n", abandonedAt, abandonment.Reason); err != nil {
+			return err
+		}
+	}
+	if err := renderNextAction(out, loaded.DisplayNextAction()); err != nil {
 		return err
 	}
 	if recovery := derived.FinalizationRecovery; recovery != nil {

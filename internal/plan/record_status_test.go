@@ -4,10 +4,250 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestPlanRecordAbandonmentPreservesEvidenceAndFirstEvent(t *testing.T) {
+	detail := startSliceDetail("/plans/plan-a")
+	detail.State.Status = StatusBlocked
+	detail.State.Plan.CurrentSlice = ptrString("001-a")
+	detail.State.Plan.Review = &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictChangesRequested, Summary: "historical review"}
+	detail.State.Plan.PullRequest = &PullRequest{Number: 42, Branch: "feature/plan-a", HeadSHA: "historical-head"}
+	detail.State.Workspace = &Workspace{Strategy: WorkspaceStrategyWorktree, Branch: "feature/plan-a", HeadSHA: "head123"}
+	detail.Slices.Slices[0].Status = StatusBlocked
+	detail.Slices.Slices[0].BlockerNote = "preserve me"
+	detail.Slices.Slices[0].CommitIntent = &SliceCommitIntent{Policy: "slice"}
+	detail.Slices.Slices[0].Completion = &SliceCompletionOutcome{Outcome: SliceCompletionCommitted, CommitSHA: "head123"}
+	detail.Events = []Event{{Type: EventTypeAgentMetrics, PlanID: "plan-a", Message: "historical telemetry"}}
+	before := clonePlanDetail(detail)
+	store := &recordingArtifactMutationStore{}
+	record, err := newPlanRecord(store, detail.Dir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstAt := time.Date(2026, 9, 1, 16, 0, 0, 0, time.UTC)
+	if err := record.Abandon("Work is no longer needed", firstAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := record.Abandon("A later reason must not replace evidence", firstAt.Add(time.Hour)); err != nil {
+		t.Fatalf("idempotent abandonment: %v", err)
+	}
+
+	if detail.State.Status != StatusAbandoned {
+		t.Fatalf("status = %q, want abandoned", detail.State.Status)
+	}
+	preserved := clonePlanDetail(detail)
+	preserved.State.Status = before.State.Status
+	preserved.Events = before.Events
+	if !reflect.DeepEqual(preserved.State, before.State) || !reflect.DeepEqual(preserved.Slices, before.Slices) || !reflect.DeepEqual(preserved.Events, before.Events) {
+		t.Fatalf("abandonment changed historical artifacts:\n got: %#v\nwant: %#v", preserved, before)
+	}
+	evidence := ProjectAbandonment(detail.Events)
+	if evidence == nil || evidence.Reason != "Work is no longer needed" || !evidence.AbandonedAt.Equal(firstAt) {
+		t.Fatalf("abandonment evidence = %#v", evidence)
+	}
+	ownedEvents := 0
+	for _, event := range detail.Events {
+		if event.Type == EventTypePlanAbandoned {
+			ownedEvents++
+			if event.Message != "Plan abandoned" || event.MutationID == "" {
+				t.Fatalf("abandonment event = %#v", event)
+			}
+		}
+	}
+	if ownedEvents != 1 {
+		t.Fatalf("plan_abandoned events = %d, want 1", ownedEvents)
+	}
+	if got := strings.Join(store.calls, ","); got != "state,event" {
+		t.Fatalf("mutation writes = %q, want journaled state,event only", got)
+	}
+}
+
+func TestPlanRecordAbandonAllowsNonCompletedSourceStatuses(t *testing.T) {
+	statuses := []string{StatusPlanned, StatusInProgress, StatusBlocked, StatusInReview, StatusReviewed, StatusChangesRequested, StatusVerificationFailed}
+	for _, status := range statuses {
+		t.Run(status, func(t *testing.T) {
+			detail := startSliceDetail("/plans/plan-a")
+			detail.State.Status = status
+			record, err := newPlanRecord(&recordingArtifactMutationStore{}, detail.Dir, detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := record.Abandon("Intentional stop", time.Date(2026, 9, 1, 16, 0, 0, 0, time.UTC)); err != nil {
+				t.Fatalf("Abandon() error = %v", err)
+			}
+			if detail.State.Status != StatusAbandoned {
+				t.Fatalf("status = %q, want abandoned", detail.State.Status)
+			}
+		})
+	}
+}
+
+func TestPlanRecordAbandonRefusesProjectedCompletion(t *testing.T) {
+	tests := []struct {
+		name  string
+		apply func(*PlanDetail)
+	}{
+		{name: "merged", apply: func(detail *PlanDetail) { detail.Events = []Event{{Type: EventTypePlanMerged}} }},
+		{name: "pull request completed", apply: func(detail *PlanDetail) {
+			detail.State.Plan.Review = &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Head: "head123"}
+			detail.State.Plan.PullRequest = &PullRequest{HeadSHA: "head123"}
+		}},
+		{name: "legacy completed", apply: func(detail *PlanDetail) { detail.State.Status = StatusCompleted }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			detail := startSliceDetail("/plans/plan-a")
+			test.apply(detail)
+			before := clonePlanDetail(detail)
+			store := &recordingArtifactMutationStore{}
+			record, err := newPlanRecord(store, detail.Dir, detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = record.Abandon("Too late", time.Date(2026, 9, 1, 16, 0, 0, 0, time.UTC))
+			if err == nil || !strings.Contains(err.Error(), "completed and cannot be abandoned") {
+				t.Fatalf("Abandon() error = %v", err)
+			}
+			if !reflect.DeepEqual(detail, before) || len(store.calls) != 0 {
+				t.Fatalf("refused abandonment mutated evidence: detail=%#v calls=%v", detail, store.calls)
+			}
+		})
+	}
+}
+
+func TestPlanRecordAbandonRefusesUnsettledTransactionsWithoutChangingEvidence(t *testing.T) {
+	tests := []struct {
+		name  string
+		apply func(*PlanDetail)
+		want  string
+	}{
+		{name: "slice completion", apply: func(detail *PlanDetail) {
+			detail.Slices.Slices[0].CommitIntent = &SliceCommitIntent{Policy: "slice"}
+		}, want: "automatic completion transaction is unsettled"},
+		{name: "manual slice completion", apply: func(detail *PlanDetail) {
+			detail.Slices.Slices[0].CommitIntent = &SliceCommitIntent{Policy: "none"}
+		}, want: "automatic completion transaction is unsettled"},
+		{name: "rebase", apply: func(detail *PlanDetail) {
+			detail.State.Workspace = &Workspace{RebaseIntent: &WorkspaceRebaseIntent{Branch: "feature/plan-a"}}
+		}, want: "rebase transaction is unsettled"},
+		{name: "merge", apply: func(detail *PlanDetail) {
+			detail.State.Plan.MergeCommitIntent = &SingleMergeCommitIntent{PlanID: "plan-a"}
+		}, want: "merge transaction is unsettled"},
+		{name: "pull request", apply: func(detail *PlanDetail) {
+			detail.State.Plan.PullRequestIntent = &PullRequest{Branch: "feature/plan-a", HeadSHA: "head123"}
+		}, want: "pull-request transaction is unsettled"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			detail := startSliceDetail("/plans/plan-a")
+			test.apply(detail)
+			before := clonePlanDetail(detail)
+			store := &recordingArtifactMutationStore{}
+			record, err := newPlanRecord(store, detail.Dir, detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = record.Abandon("Intentional stop", time.Date(2026, 9, 1, 16, 0, 0, 0, time.UTC))
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Abandon() error = %v, want containing %q", err, test.want)
+			}
+			if !reflect.DeepEqual(detail, before) || len(store.calls) != 0 {
+				t.Fatalf("refused transaction changed evidence: detail=%#v calls=%v", detail, store.calls)
+			}
+		})
+	}
+}
+
+func TestPlanRecordAbandonRefreshRefusesNonePolicyIntentBeforeCompletion(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "plan-a")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	initial := startSliceDetail(dir)
+	writeStartSliceArtifacts(t, dir, initial)
+	startedAt := time.Date(2026, 9, 1, 16, 0, 0, 0, time.UTC)
+	if err := testRecord(dir, initial).StartSlice("001-a", startedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	loadRecord := func() *PlanRecord {
+		files, err := loadPlanFiles(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return testRecord(dir, detailFromFiles(files))
+	}
+	intentRecord := loadRecord()
+	abandonRecord := loadRecord()
+	intent := SliceCommitIntent{Hash: "none-intent", Policy: "none", CreatedAt: startedAt.Add(time.Minute)}
+	if err := intentRecord.RecordSliceCommitIntent("001-a", intent); err != nil {
+		t.Fatalf("record none-policy intent: %v", err)
+	}
+
+	err := abandonRecord.Abandon("Stop during completion", startedAt.Add(2*time.Minute))
+	if err == nil || !strings.Contains(err.Error(), "completion transaction is unsettled") {
+		t.Fatalf("Abandon() error = %v, want unsettled completion refusal", err)
+	}
+	files, err := loadPlanFiles(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted := detailFromFiles(files)
+	if persisted.State.Status == StatusAbandoned || ProjectAbandonment(persisted.Events) != nil {
+		t.Fatalf("refused abandonment published terminal evidence: status=%q events=%#v", persisted.State.Status, persisted.Events)
+	}
+	slice := findSlice(persisted, "001-a")
+	if slice == nil || slice.CommitIntent == nil || *slice.CommitIntent != intent || slice.Completion != nil {
+		t.Fatalf("none-policy completion boundary changed: %#v", slice)
+	}
+
+	outcome := SliceCompletionOutcome{Outcome: SliceCompletionManualUncommitted}
+	if err := intentRecord.CompleteSliceWithOutcome("001-a", "manual ownership", nil, outcome, startedAt.Add(3*time.Minute)); err != nil {
+		t.Fatalf("complete none-policy transaction after refused abandonment: %v", err)
+	}
+	files, err = loadPlanFiles(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := detailFromFiles(files)
+	if completed.State.Status != StatusInReview || SliceCompletionPending(completed) {
+		t.Fatalf("none-policy completion did not settle normally: status=%q pending=%t", completed.State.Status, SliceCompletionPending(completed))
+	}
+}
+
+func TestPlanRecordAbandonValidatesReasonAndPublishesAtomically(t *testing.T) {
+	detail := startSliceDetail("/plans/plan-a")
+	record, err := newPlanRecord(&recordingArtifactMutationStore{}, detail.Dir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 9, 1, 16, 0, 0, 0, time.UTC)
+	for _, reason := range []string{"", " surrounding ", strings.Repeat("x", MaxAbandonmentReasonBytes+1)} {
+		if err := record.Abandon(reason, at); err == nil {
+			t.Fatalf("Abandon(%q) succeeded", reason)
+		}
+	}
+	if err := record.Abandon("valid", time.Time{}); err == nil {
+		t.Fatal("Abandon() accepted a zero timestamp")
+	}
+
+	before := clonePlanDetail(detail)
+	failing := &recordingArtifactMutationStore{writeStateErr: errArtifactStore("injected state failure")}
+	failedRecord, err := newPlanRecord(failing, detail.Dir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := failedRecord.Abandon("valid", at); err == nil {
+		t.Fatal("Abandon() succeeded through persistence failure")
+	}
+	if !reflect.DeepEqual(detail, before) {
+		t.Fatal("failed abandonment published partial in-memory state")
+	}
+}
 
 func TestPlanRecordReviewStatusesBeforeMerge(t *testing.T) {
 	dir := t.TempDir()
@@ -478,6 +718,22 @@ func TestPlanRecordMergedStatus(t *testing.T) {
 	}
 	if !PlanIsMerged(detail.Events) {
 		t.Fatal("RecordMerged must retain exclusive actual-merge evidence")
+	}
+}
+
+func TestPlanRecordMergedRefusesAbandonedPlan(t *testing.T) {
+	dir := t.TempDir()
+	detail := startSliceDetail(dir)
+	detail.State.Status = StatusAbandoned
+	detail.Events = []Event{{Type: EventTypePlanAbandoned, Reason: "superseded"}}
+	record := testRecord(dir, detail)
+
+	err := record.RecordMerged("tao/plan-a", "abc123", time.Now())
+	if err == nil || !strings.Contains(err.Error(), "plan plan-a is abandoned: superseded") {
+		t.Fatalf("RecordMerged() error = %v, want abandonment refusal", err)
+	}
+	if detail.State.Status != StatusAbandoned || PlanIsMerged(detail.Events) {
+		t.Fatalf("abandoned merge mutation changed lifecycle evidence: status=%q events=%v", detail.State.Status, detail.Events)
 	}
 }
 

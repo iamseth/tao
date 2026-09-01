@@ -35,6 +35,9 @@ func runExecutionFromOptions(options Options) runExecution {
 // retain the clean-start metadata captured by the original run.
 func (s Service) prepareRunExecution(ctx context.Context, detail *plan.PlanDetail, config ExecutionConfig) (runExecution, error) {
 	execution := newRunExecution(config, s.dependencies)
+	if err := plan.RequireNotAbandoned(detail); err != nil {
+		return execution, cannotStartf("%s", err)
+	}
 	complete := plan.AnalyzeRunCapabilities(detail).Complete
 	if complete && execution.Config.Reverify {
 		// Reverification is an exact-head verification-only operation. Resolve it

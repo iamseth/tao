@@ -15,6 +15,7 @@ const (
 	StatusChangesRequested   = "changes_requested"
 	StatusVerificationFailed = "verification_failed"
 	StatusCompleted          = "completed"
+	StatusAbandoned          = "abandoned"
 	StatusSkipped            = "skipped"
 	StatusBlocked            = "blocked"
 	StatusInvalid            = "invalid"
@@ -38,6 +39,7 @@ const (
 	EventTypePlanReviewed               = "plan_reviewed"
 	EventTypePlanReopened               = "plan_reopened"
 	EventTypePlanMerged                 = "plan_merged"
+	EventTypePlanAbandoned              = "plan_abandoned"
 	EventTypeVerificationCommandInvalid = "verification_command_invalid"
 	EventTypeRunContext                 = "run_context"
 	EventTypeSessionTimeout             = "session_timeout"
@@ -55,6 +57,31 @@ const (
 	ReviewStatusCompleted = "completed"
 	ReviewStatusError     = "error"
 )
+
+// MaxAbandonmentReasonBytes bounds durable user-supplied abandonment evidence.
+const MaxAbandonmentReasonBytes = 1000
+
+// AbandonmentEvidence is the authoritative projection of the first
+// plan_abandoned event. Later duplicate events never replace this evidence.
+type AbandonmentEvidence struct {
+	Reason      string    `json:"reason"`
+	AbandonedAt time.Time `json:"abandoned_at"`
+}
+
+// ValidateAbandonmentReason rejects reasons that cannot be stored as bounded,
+// intentional user evidence.
+func ValidateAbandonmentReason(reason string) error {
+	if strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("abandonment reason is required")
+	}
+	if reason != strings.TrimSpace(reason) {
+		return fmt.Errorf("abandonment reason must not have surrounding whitespace")
+	}
+	if len(reason) > MaxAbandonmentReasonBytes {
+		return fmt.Errorf("abandonment reason must be at most %d bytes", MaxAbandonmentReasonBytes)
+	}
+	return nil
+}
 
 const (
 	ReviewVerdictApprove          = "approve"

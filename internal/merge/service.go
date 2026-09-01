@@ -104,6 +104,9 @@ func (s Service) Merge(ctx context.Context, detail *plan.PlanDetail, options Opt
 	if detail == nil {
 		return fmt.Errorf("merge plan detail is nil")
 	}
+	if err := plan.RequireNotAbandoned(detail); err != nil {
+		return err
+	}
 	git, err := s.gitClient()
 	if err != nil {
 		return err
@@ -197,6 +200,9 @@ func (s Service) prepareSingleMergeIntent(ctx context.Context, git GitClient, de
 }
 
 func (s Service) prepareSingleMergeIntentForMerge(ctx context.Context, git GitClient, detail *plan.PlanDetail, force bool) (*plan.SingleMergeCommitIntent, error) {
+	if err := plan.RequireNotAbandoned(detail); err != nil {
+		return nil, err
+	}
 	planID := strings.TrimSpace(detail.State.Plan.ID)
 	planBranch, err := resolvePlanBranch(detail)
 	if err != nil {
@@ -421,6 +427,9 @@ type externalMerge struct {
 }
 
 func (s Service) tryRecordExternalMerge(ctx context.Context, git GitClient, detail *plan.PlanDetail, options Options) (bool, error) {
+	if err := plan.RequireNotAbandoned(detail); err != nil {
+		return false, err
+	}
 	if planMergeRecorded(detail) {
 		s.logf("Plan merge already recorded for %s.", detail.State.Plan.ID)
 		return true, s.retryRecordedMergeCleanup(ctx, git, detail, options)
@@ -814,11 +823,14 @@ func (e *DirtyWorktreeError) Error() string {
 func (e *DirtyWorktreeError) Unwrap() error { return ErrDirtyWorktree }
 
 func (s Service) CheckPreMergeGate(ctx context.Context, detail *plan.PlanDetail, options Options) error {
-	if options.Force {
-		return nil
-	}
 	if detail == nil {
 		return fmt.Errorf("merge plan detail is nil")
+	}
+	if err := plan.RequireNotAbandoned(detail); err != nil {
+		return err
+	}
+	if options.Force {
+		return nil
 	}
 	if err := requireApproved(detail); err != nil {
 		return err

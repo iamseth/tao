@@ -20,6 +20,7 @@ const (
 	sectionSlices    Section = "slices"
 	sectionExecution Section = "execution"
 	sectionReview    Section = "review"
+	sectionOutcome   Section = "outcome"
 )
 
 // OptionalText distinguishes absent source material from present, sanitized
@@ -114,7 +115,10 @@ type ReviewSummary struct {
 }
 
 type OutcomeSummary struct {
-	Merged bool
+	Merged      bool
+	Abandoned   bool
+	AbandonedAt time.Time
+	Reason      OptionalText
 }
 
 // FinalizationSummary is an explicit share-safe projection. It excludes exact
@@ -227,8 +231,10 @@ func ProjectFull(detail *plan.PlanDetail, snapshotAt time.Time) FullReport {
 		FinalVerification: projectFinalVerification(s, detail.State.Plan.FinalVerification),
 		Telemetry:         projectTelemetry(detail.Events),
 	}
-	if review := plan.CurrentReview(detail); review != nil {
-		report.Review = ReviewSummary{Available: true, Status: knownReviewStatus(review.Status), Verdict: knownVerdict(review.Verdict), Summary: optional(s, sectionReview, review.Summary), FindingCount: nonNegative(review.FindingsCount)}
+	if lifecycleStatus != plan.StatusAbandoned {
+		if review := plan.CurrentReview(detail); review != nil {
+			report.Review = ReviewSummary{Available: true, Status: knownReviewStatus(review.Status), Verdict: knownVerdict(review.Verdict), Summary: optional(s, sectionReview, review.Summary), FindingCount: nonNegative(review.FindingsCount)}
+		}
 	}
 	if recovery := derived.FinalizationRecovery; recovery != nil {
 		action := derived.NextAction.Primary.Command
@@ -240,11 +246,20 @@ func ProjectFull(detail *plan.PlanDetail, snapshotAt time.Time) FullReport {
 			Category: optional(s, sectionExecution, recovery.Category), Action: optional(s, sectionExecution, action),
 		}
 	}
-	// Current merge evidence is authoritative. Infer a merged outcome from a
-	// completed lifecycle only for legacy records without qualifying PR,
-	// pending PR intent, or finalization-recovery evidence.
-	report.Outcome.Merged = plan.PlanIsMerged(detail.Events) ||
-		(lifecycleStatus == plan.StatusCompleted && !plan.PlanIsPullRequestComplete(detail) && detail.State.Plan.PullRequestIntent == nil && derived.FinalizationRecovery == nil)
+	if lifecycleStatus == plan.StatusAbandoned {
+		report.Outcome.Abandoned = true
+		if evidence := plan.ProjectAbandonment(detail.Events); evidence != nil {
+			report.Outcome.AbandonedAt = evidence.AbandonedAt.UTC()
+			report.Outcome.Reason = optional(s, sectionOutcome, evidence.Reason)
+		}
+	} else {
+		// Current merge evidence is authoritative. Infer a merged outcome from a
+		// completed lifecycle only for legacy records without qualifying PR,
+		// pending PR intent, or finalization-recovery evidence. Abandonment never
+		// asserts integration, even when malformed history retains stale events.
+		report.Outcome.Merged = plan.PlanIsMerged(detail.Events) ||
+			(lifecycleStatus == plan.StatusCompleted && !plan.PlanIsPullRequestComplete(detail) && detail.State.Plan.PullRequestIntent == nil && derived.FinalizationRecovery == nil)
+	}
 	report.Disclosures = s.Disclosures()
 	return report
 }
@@ -545,7 +560,7 @@ func firstSection(primary, secondary map[string]string, names ...string) string 
 
 func knownStatus(value string) string {
 	switch value {
-	case plan.StatusPlanned, plan.StatusPending, plan.StatusInProgress, plan.StatusInReview, plan.StatusReviewed, plan.StatusChangesRequested, plan.StatusVerificationFailed, plan.StatusCompleted, plan.StatusSkipped, plan.StatusBlocked, plan.StatusInvalid:
+	case plan.StatusPlanned, plan.StatusPending, plan.StatusInProgress, plan.StatusInReview, plan.StatusReviewed, plan.StatusChangesRequested, plan.StatusVerificationFailed, plan.StatusCompleted, plan.StatusAbandoned, plan.StatusSkipped, plan.StatusBlocked, plan.StatusInvalid:
 		return value
 	default:
 		return "unavailable"

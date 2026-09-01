@@ -216,6 +216,37 @@ func TestRenderDetailIncludesHeaderAndFitsTerminal(t *testing.T) {
 	}
 }
 
+func TestRenderDetailShowsSafeAbandonmentEvidence(t *testing.T) {
+	at := time.Date(2026, 9, 1, 17, 0, 0, 0, time.FixedZone("offset", 3*60*60))
+	detail := &plan.PlanDetail{
+		State:  plan.State{Status: plan.StatusAbandoned, Repo: plan.Repo{Name: "repo"}, Plan: plan.PlanState{ID: "plan-a", Title: "Old plan"}},
+		Events: []plan.Event{{Type: plan.EventTypePlanAbandoned, Timestamp: at, Reason: "raw\nreason\x1b[31m"}},
+	}
+	frame := RenderDetail(DetailModel{
+		Plan:      detail,
+		Row:       monitor.Row{Status: plan.StatusAbandoned, AbandonmentReason: "bounded\nreason\x1b[2J", AbandonedAt: &at},
+		ActiveTab: detailTabOverview, Width: 80, Height: 24,
+	})
+	for _, want := range []string{"Status: abandoned", "Abandoned at: 2026-09-01T14:00:00Z", "Abandonment reason: bounded reason [2J"} {
+		if !strings.Contains(frame, want) {
+			t.Fatalf("abandoned detail missing %q:\n%s", want, frame)
+		}
+	}
+	body := strings.TrimPrefix(frame, clearScreenSequence)
+	for _, forbidden := range []string{"raw reason", "\x1b[31m", "\x1b[2J"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("abandoned detail retained unsafe value %q: %q", forbidden, body)
+		}
+	}
+
+	narrow := RenderDetail(DetailModel{Plan: detail, Row: monitor.Row{Status: plan.StatusAbandoned, AbandonmentReason: strings.Repeat("界", 120), AbandonedAt: &at}, Width: 18, Height: 16})
+	for _, line := range renderedLines(narrow) {
+		if visibleWidth(line) > 18 {
+			t.Fatalf("narrow abandoned detail exceeds width: %q", line)
+		}
+	}
+}
+
 func TestRenderOverviewShowsAdvisoryInspectionStates(t *testing.T) {
 	detail := &plan.PlanDetail{State: plan.State{Plan: plan.PlanState{ID: "plan-a", Title: "Plan A"}}}
 	tests := []struct {

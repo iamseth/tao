@@ -77,6 +77,107 @@ func TestMergeCommandApprovedPlanSuccess(t *testing.T) {
 	}
 }
 
+func TestMergeCommandRefusesAbandonedPlanBeforeServiceConstruction(t *testing.T) {
+	detail := cliMergeDetail(t)
+	detail.State.Status = plan.StatusAbandoned
+	detail.Events = []plan.Event{{Type: plan.EventTypePlanAbandoned, Reason: "superseded"}}
+	constructed := false
+	original := newMergeServiceRunner
+	newMergeServiceRunner = func(App, *plan.PlanDetail) (mergeServiceRunner, error) {
+		constructed = true
+		return &fakeCLIMergeService{}, nil
+	}
+	t.Cleanup(func() { newMergeServiceRunner = original })
+	var out bytes.Buffer
+	app := App{
+		Out: &out, Err: &out,
+		Repository: func(string) Repository {
+			return fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
+		},
+	}
+
+	err := app.Run(context.Background(), []string{"merge", "--force", "plan-a"})
+	if err == nil || !strings.Contains(err.Error(), "plan plan-a is abandoned: superseded") {
+		t.Fatalf("merge error = %v, want abandonment refusal", err)
+	}
+	if constructed {
+		t.Fatal("abandoned merge constructed the merge service")
+	}
+	if strings.Contains(out.String(), "Merge completed") {
+		t.Fatalf("abandoned merge reported completion: %q", out.String())
+	}
+}
+
+func TestMergeCommandReloadsUnderLockBeforeSquashOrNoSquashMutation(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+	}{
+		{name: "squash"},
+		{name: "no squash", args: []string{"--no-squash"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			isolateAbandonBatchData(t)
+			fixture := newRunPlanFixture(t, plan.StatusReviewed, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
+			inner := plan.NewFileRepository(fixture.root)
+			repo := &mergeResolveRaceRepository{
+				inner:    inner,
+				resolved: make(chan struct{}),
+				release:  make(chan struct{}),
+			}
+			service := &fakeCLIMergeService{}
+			stubMergeServiceRunner(t, service)
+			var mergeOut bytes.Buffer
+			app := App{Out: &mergeOut, Err: &mergeOut}
+			mergeDone := make(chan error, 1)
+			go func() {
+				mergeDone <- app.merge(context.Background(), repo, append(test.args, fixture.id))
+			}()
+
+			<-repo.resolved
+			abandonErr := (App{Out: io.Discard, Err: io.Discard}).abandon(context.Background(), inner, []string{"--reason", "superseded concurrently", fixture.id})
+			close(repo.release)
+			if abandonErr != nil {
+				t.Fatal(abandonErr)
+			}
+			mergeErr := <-mergeDone
+			if mergeErr == nil || !strings.Contains(mergeErr.Error(), "plan "+fixture.id+" is abandoned: superseded concurrently") {
+				t.Fatalf("merge error = %v, want reloaded abandonment refusal", mergeErr)
+			}
+			if service.calls != 0 {
+				t.Fatalf("merge reached agent or Git mutation service %d times", service.calls)
+			}
+			if strings.Contains(mergeOut.String(), "Merge completed") {
+				t.Fatalf("refused merge reported success: %q", mergeOut.String())
+			}
+		})
+	}
+}
+
+type mergeResolveRaceRepository struct {
+	inner    *plan.FileRepository
+	resolved chan struct{}
+	release  chan struct{}
+	calls    int
+}
+
+func (r *mergeResolveRaceRepository) ResolvePlan(ctx context.Context, input string) (*plan.PlanDetail, error) {
+	detail, err := r.inner.ResolvePlan(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	r.calls++
+	if r.calls == 1 {
+		close(r.resolved)
+		select {
+		case <-r.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return detail, nil
+}
+
 func TestMergeCommandRendersTypedFailures(t *testing.T) {
 	tests := []struct {
 		name string

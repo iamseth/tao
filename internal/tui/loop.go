@@ -808,7 +808,7 @@ func (d *detailState) maxOffset(tab detailTab, size term.Size) int {
 	if tab == detailTabActivity {
 		lines = renderActivityPane(d.log, d.followError, size.Width, int(^uint(0)>>1), 0)
 	} else {
-		lines = renderOverviewPane(d.plan, size.Width, int(^uint(0)>>1), 0, d.inspection)
+		lines = renderOverviewPane(d.plan, d.row, size.Width, int(^uint(0)>>1), 0, d.inspection)
 	}
 	return max(len(lines)-height, 0)
 }
@@ -1136,7 +1136,7 @@ func (s *loopState) toggleRepositoryFocus() {
 
 func (s loopState) mergeRepositoryRow() (monitor.Row, bool) {
 	selected, ok := s.selectedRow()
-	if s.focusRepositoryID == "" {
+	if s.focusRepositoryID == "" || (ok && selected.Status == plan.StatusAbandoned) {
 		return selected, ok
 	}
 	if ok && selected.RepositoryID == s.focusRepositoryID && actionableRow(selected) {

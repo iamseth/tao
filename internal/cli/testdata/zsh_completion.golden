@@ -59,6 +59,7 @@ _tao() {
     'note:Capture and maintain repository notes'
     'a:Approve a gated slice'
     'approve:Approve a gated slice'
+    'abandon:Record an intentional terminal plan outcome'
     'slice-complete:Complete a slice from notes, verification, and a commit proposal'
     'slice-blocked:Block a slice after an exceptional stop'
     's:Show plan details and the recommended next action'
@@ -201,6 +202,13 @@ _tao() {
     a|ap|app|appr|appro|approv|approve)
       _arguments '--by[approver name]:value:' '--slice[slice id to approve]:value:'
       if _tao_at_positional 3 1 0 ',,' '--by' '--slice'; then
+        plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
+        compadd -a plan_ids
+      fi
+      ;;
+    abandon)
+      _arguments '--reason[required reason for abandoning the plan]:text:'
+      if _tao_at_positional 3 1 0 ',,' '--reason'; then
         plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
         compadd -a plan_ids
       fi

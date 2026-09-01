@@ -113,6 +113,8 @@ func TestCommandHelpRendersOptionsExamplesAndFlaglessCommands(t *testing.T) {
 func TestPlanAndExecutionCommandHelpIncludesSubcommandsOptionsAndExamples(t *testing.T) {
 	assertCommandOutputContains(t, "report help", []string{"report", "--help"},
 		"Export one readable Tao plan", "Options:", "--output", "--planning-only", "--force", "tao report --output -")
+	assertCommandOutputContains(t, "abandon help", []string{"abandon", "--help"},
+		"Mark an unfinished plan abandoned", "Options:", "--reason", "does not clean branches or worktrees", "tao abandon --reason")
 	assertCommandOutputContains(t, "review help", []string{"review", "--help"}, "Options:", "--run", "Examples:")
 }
 

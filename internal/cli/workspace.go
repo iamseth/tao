@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/iamseth/tao/internal/plan"
+	runpkg "github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/workspace"
 )
 
@@ -82,22 +83,48 @@ func (a App) workspacePrepare(ctx context.Context, repo plan.Resolver, args []st
 	if err := requirePositionals(args, 1, "usage: tao workspace prepare <plan-id-or-slug-or-path>"); err != nil {
 		return err
 	}
-	detail, manager, err := a.resolveWorkspacePlan(ctx, repo, args[0]) //nolint:gosec // G602: args[0] guarded by requirePositionals(args, 1) above
+	planSelector := args[0] //nolint:gosec // G602: args[0] guarded by requirePositionals(args, 1) above
+	detail, err := repo.ResolvePlan(ctx, planSelector)
 	if err != nil {
 		return err
 	}
-	identity, err := workspace.ResolvePlanBranch(detail, workspace.DefaultConfig())
-	if err != nil {
-		return err
+	if detail == nil {
+		return fmt.Errorf("plan %q not found", planSelector)
 	}
-	metadata, err := manager.Prepare(ctx, workspace.PrepareOptions{PlanID: detail.State.Plan.ID, BaseBranch: detail.State.Repo.Branch, Branch: identity.Name, RequireNewBranch: identity.RequireNew})
-	if err != nil {
-		return err
-	}
-	if err := renderWorkspaceMetadata(a.Out, metadata); err != nil {
-		return err
-	}
-	return writef(a.Out, "Plan Dir: %s\n", detail.Dir)
+	return runpkg.WithPlanRunLock(ctx, detail, a.now().UTC(), func(ownedCtx context.Context) error {
+		// Reload by exact directory after acquisition so abandonment and workspace
+		// preparation use one authoritative, ownership-protected snapshot.
+		refreshed, err := repo.ResolvePlan(ownedCtx, detail.Dir)
+		if err != nil {
+			return err
+		}
+		if refreshed == nil {
+			return fmt.Errorf("plan %q not found", detail.Dir)
+		}
+		if err := plan.RequireNotAbandoned(refreshed); err != nil {
+			return err
+		}
+		repoRoot := refreshed.State.Repo.Root
+		if repoRoot == "" {
+			return fmt.Errorf("plan %s does not record a repo root", refreshed.State.Plan.ID)
+		}
+		manager, err := a.workspaceManager(repoRoot)
+		if err != nil {
+			return err
+		}
+		identity, err := workspace.ResolvePlanBranch(refreshed, workspace.DefaultConfig())
+		if err != nil {
+			return err
+		}
+		metadata, err := manager.Prepare(ownedCtx, workspace.PrepareOptions{PlanID: refreshed.State.Plan.ID, BaseBranch: refreshed.State.Repo.Branch, Branch: identity.Name, RequireNewBranch: identity.RequireNew})
+		if err != nil {
+			return err
+		}
+		if err := renderWorkspaceMetadata(a.Out, metadata); err != nil {
+			return err
+		}
+		return writef(a.Out, "Plan Dir: %s\n", refreshed.Dir)
+	})
 }
 
 func (a App) workspaceStatus(ctx context.Context, repo plan.Resolver, args []string) error {
@@ -132,7 +159,7 @@ func (a App) workspaceClean(ctx context.Context, repo plan.Resolver, args []stri
 	if err != nil {
 		return err
 	}
-	active := detail.State.Status == plan.StatusInProgress || detail.State.Plan.CurrentSlice != nil
+	active := detail.State.Status != plan.StatusAbandoned && (detail.State.Status == plan.StatusInProgress || detail.State.Plan.CurrentSlice != nil)
 	if active && !forceActive {
 		return fmt.Errorf("refusing to clean active plan %s; pass --force-active to override", detail.State.Plan.ID)
 	}

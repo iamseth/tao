@@ -27,6 +27,7 @@ func TestCommandRegistryOrder(t *testing.T) {
 		{name: "repo", minPrefix: "repo"},
 		{name: "note", minPrefix: "n"},
 		{name: "approve", minPrefix: "a"},
+		{name: "abandon"},
 		{name: "slice-complete"},
 		{name: "slice-blocked"},
 		{name: "show", minPrefix: "s"},
@@ -69,6 +70,25 @@ func TestCommandRegistryOrder(t *testing.T) {
 		if len(got.usageLines) == 0 {
 			t.Fatalf("commandRegistry[%d] %q missing usage", i, got.name)
 		}
+	}
+}
+
+func TestAbandonDispatchesThroughRegistry(t *testing.T) {
+	isolateAbandonBatchData(t)
+	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+	var out bytes.Buffer
+	app := App{
+		Out: &out,
+		Err: &out,
+		Repository: func(string) Repository {
+			return plan.NewFileRepository(fixture.root)
+		},
+	}
+	if err := app.Run(context.Background(), []string{"abandon", "--reason", "obsolete", fixture.id}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Plan abandoned: "+fixture.id) {
+		t.Fatalf("dispatch output = %q", out.String())
 	}
 }
 

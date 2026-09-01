@@ -49,6 +49,9 @@ func (c deterministicPullRequestCreator) CreatePullRequest(ctx context.Context, 
 
 func (c deterministicPullRequestCreator) createPullRequestWithProvenance(ctx context.Context, run PullRequestRun) (plan.PullRequest, pullRequestIdentityProvenance, error) {
 	run = c.normalizeRun(ctx, run)
+	if err := plan.RequireNotAbandoned(run.Detail); err != nil {
+		return plan.PullRequest{}, pullRequestIdentityUnknown, pullRequestFailure("preflight_failed", err)
+	}
 	if strings.TrimSpace(run.RepoRoot) == "" {
 		return plan.PullRequest{}, pullRequestIdentityUnknown, pullRequestFailure("preflight_failed", fmt.Errorf("create pull request: repo root is empty"))
 	}

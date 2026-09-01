@@ -16,6 +16,7 @@ type PlanStatusRollup struct {
 	ChangesRequested   int `json:"changes_requested"`
 	VerificationFailed int `json:"verification_failed"`
 	Completed          int `json:"completed"`
+	Abandoned          int `json:"abandoned"`
 	Blocked            int `json:"blocked"`
 }
 
@@ -24,6 +25,7 @@ type PlanRollup struct {
 	Total     int              `json:"total"`
 	Statuses  PlanStatusRollup `json:"statuses"`
 	Completed int              `json:"completed"`
+	Abandoned int              `json:"abandoned"`
 	Reviewed  int              `json:"reviewed"`
 	Verdicts  map[string]int   `json:"verdicts,omitempty"`
 }
@@ -71,6 +73,7 @@ type PlanSummary struct {
 	VerificationRecoveryAction       PlanActionKind
 	VerificationRecoveryCommand      string
 	FinalizationRecovery             *FinalizationRecovery
+	Abandonment                      *AbandonmentEvidence
 	PlanningSessionPresent           bool
 	PlanningSessionValid             bool
 	PlanningSessionUnavailableReason string
@@ -103,6 +106,9 @@ func SummarizePlans(summaries []PlanSummary) PlanRollup {
 			rollup.Statuses.VerificationFailed++
 		case StatusCompleted:
 			rollup.Statuses.Completed++
+		case StatusAbandoned:
+			rollup.Statuses.Abandoned++
+			rollup.Abandoned++
 		case StatusBlocked:
 			rollup.Statuses.Blocked++
 		}
@@ -120,9 +126,12 @@ func SummarizePlans(summaries []PlanSummary) PlanRollup {
 }
 
 func (p PlanSummary) Active() bool {
+	if p.Status == StatusAbandoned {
+		return false
+	}
 	return p.IsActive || active(p.Status, p.CurrentSliceID, p.CurrentSlice, p.Complete)
 }
 
 func (p PlanSummary) Runnable() bool {
-	return !p.Complete && p.Status != StatusCompleted && p.PendingCount > 0
+	return !p.Complete && p.Status != StatusCompleted && p.Status != StatusAbandoned && p.PendingCount > 0
 }

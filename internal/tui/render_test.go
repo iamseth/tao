@@ -71,11 +71,12 @@ func TestRenderSectionsAndOperationalLabels(t *testing.T) {
 		{RepositoryName: "plan", PlanID: "planned", Status: plan.StatusPlanned, UpdatedAt: &updated},
 		{RepositoryName: "plan", PlanID: "review", Status: plan.StatusInReview, UpdatedAt: &updated},
 		{RepositoryName: "done", PlanID: "complete", Status: plan.StatusCompleted, OriginalCompletedCount: 1, OriginalTotalCount: 1, UpdatedAt: &updated},
+		{RepositoryName: "old", PlanID: "abandoned", Status: plan.StatusAbandoned, UpdatedAt: &updated},
 		{RepositoryName: "run", PlanID: "stale", Status: plan.StatusInProgress, Liveness: monitor.LivenessStale, HeartbeatAge: 45 * time.Second, RunLockPresent: true, RunLockProcessAlive: true, InvocationDuration: time.Hour, UpdatedAt: &updated},
 	}}
 
 	got := Render(Model{Snapshot: snapshot, Selected: 2})
-	ordered := []string{"NEEDS ATTENTION", "RUNNING", "PLANNED / IN REVIEW", "COMPLETED"}
+	ordered := []string{"NEEDS ATTENTION", "RUNNING", "PLANNED / IN REVIEW", "COMPLETED", "ABANDONED (HISTORICAL)"}
 	previous := -1
 	for _, label := range ordered {
 		index := strings.Index(got, label)
@@ -85,7 +86,7 @@ func TestRenderSectionsAndOperationalLabels(t *testing.T) {
 		previous = index
 	}
 	for _, want := range []string{
-		"NEXT", "RUN AGE", "RUN", "REVIEW", "DONE", "PHASE/SLICE", "ATTENTION", "crashed?", "stalled? (45s old)",
+		"NEXT", "RUN AGE", "RUN", "REVIEW", "DONE", "ABANDONED", "PHASE/SLICE", "ATTENTION", "crashed?", "stalled? (45s old)",
 		"004-ui", "2m", "2/4", "30m",
 	} {
 		if !strings.Contains(got, want) {
@@ -314,6 +315,35 @@ func TestRenderSelectedPlanPreviewShowsBoundedDecisionContext(t *testing.T) {
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("preview missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestRenderAbandonmentAsSafeHistoricalOutcome(t *testing.T) {
+	at := time.Date(2026, 9, 1, 17, 0, 0, 0, time.FixedZone("offset", -4*60*60))
+	row := monitor.Row{
+		RepositoryID: "repo", RepositoryName: "repo", PlanID: "old-plan", Status: plan.StatusAbandoned,
+		AbandonedAt: &at, AbandonmentReason: "superseded\nby\t" + strings.Repeat("界", 120) + "\x1b[31m",
+		Liveness: monitor.LivenessLive, Phase: "merge", InvocationDuration: time.Hour,
+		AttentionReasons: []monitor.AttentionReason{monitor.AttentionApprovalRequired, monitor.AttentionFinalizationFailed},
+		NextAction:       "FINALIZE PR",
+	}
+	got := Render(Model{Snapshot: monitor.Snapshot{Rows: []monitor.Row{row}}, HideCompleted: true, Width: 120})
+	for _, want := range []string{"ABANDONED (HISTORICAL)", "abandoned  ABANDONED", "Abandoned at: 2026-09-01T21:00:00Z", "Abandonment reason: superseded by", "SELECTED PLAN"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("abandonment render missing %q:\n%s", want, got)
+		}
+	}
+	for _, forbidden := range []string{"NEEDS ATTENTION", "RUNNING\n", "FINALIZE PR", "1h", "merge", "\x1b[31m"} {
+		if strings.Contains(strings.TrimPrefix(got, clearScreenSequence), forbidden) {
+			t.Fatalf("abandonment render retained %q:\n%s", forbidden, got)
+		}
+	}
+
+	narrow := Render(Model{Snapshot: monitor.Snapshot{Rows: []monitor.Row{row}}, HideCompleted: true, Width: 24})
+	for _, line := range renderedLines(narrow) {
+		if visibleWidth(line) > 24 {
+			t.Fatalf("narrow abandonment line exceeds width: %q", line)
 		}
 	}
 }

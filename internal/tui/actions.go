@@ -319,7 +319,7 @@ func repositoryLabel(row monitor.Row) string {
 }
 
 func actionableRow(row monitor.Row) bool {
-	return row.Kind != monitor.RowKindRepositoryWarning && strings.TrimSpace(row.PlanID) != "" && strings.TrimSpace(row.RepositoryRoot) != ""
+	return row.Kind != monitor.RowKindRepositoryWarning && row.Status != plan.StatusAbandoned && strings.TrimSpace(row.PlanID) != "" && strings.TrimSpace(row.RepositoryRoot) != ""
 }
 
 func actionRowKey(row monitor.Row) string {

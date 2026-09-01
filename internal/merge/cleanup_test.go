@@ -121,6 +121,35 @@ func (c *realManagedCleaner) CleanManaged(ctx context.Context, item workspace.Ma
 	return c.manager.CleanManaged(ctx, item, options)
 }
 
+func TestCleanupRefusesAbandonedPlanEvenWithForce(t *testing.T) {
+	detail := mergeReadyDetail("base123")
+	detail.State.Status = plan.StatusAbandoned
+	cleaner := successfulCleanup()
+
+	result, err := (Service{Cleaner: cleaner}).Cleanup(context.Background(), detail, Options{Force: true, allowNonAncestralCleanup: true})
+	if err == nil || !strings.Contains(err.Error(), "plan plan-a is abandoned") {
+		t.Fatalf("Cleanup() error = %v, want abandonment refusal", err)
+	}
+	if !reflect.DeepEqual(result, CleanupResult{}) || len(cleaner.calls) != 0 || len(cleaner.cleaned) != 0 {
+		t.Fatalf("abandoned cleanup had side effects: result=%+v calls=%v cleaned=%v", result, cleaner.calls, cleaner.cleaned)
+	}
+}
+
+func TestAppendPlanMergedEventRefusesAbandonedSettlement(t *testing.T) {
+	detail := mergeReadyDetail("base123")
+	detail.Dir = "/plans/plan-a"
+	detail.State.Status = plan.StatusAbandoned
+	events := &fakeEventAppender{}
+
+	err := (Service{Events: events}).AppendPlanMergedEvent(detail, "tao/plan-a", "merged-sha")
+	if err == nil || !strings.Contains(err.Error(), "plan plan-a is abandoned") {
+		t.Fatalf("AppendPlanMergedEvent() error = %v, want abandonment refusal", err)
+	}
+	if len(events.events) != 0 || len(events.stateWrites) != 0 {
+		t.Fatalf("abandoned settlement wrote evidence: events=%v states=%v", events.events, events.stateWrites)
+	}
+}
+
 func commitRealPlanChange(t *testing.T, fixture realGitWorktree) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "feature.txt"), []byte("planned change\n"), 0o600); err != nil {

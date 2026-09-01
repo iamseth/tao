@@ -200,6 +200,50 @@ None
 	}
 }
 
+func TestRenderFullShowsSanitizedAbandonmentOutcome(t *testing.T) {
+	now := time.Date(2026, 9, 1, 17, 0, 0, 0, time.UTC)
+	detail := reportFixture(now)
+	detail.State.Status = plan.StatusAbandoned
+	detail.Events = []plan.Event{{
+		Type: plan.EventTypePlanAbandoned, Timestamp: now,
+		Reason: "superseded by owner@example.com\n## injected\x1b[31m",
+	}}
+	plan.SetPersistedReview(detail, plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Summary: "approved"})
+
+	got, err := RenderFull(ProjectFull(detail, now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(got)
+	for _, want := range []string{
+		"status: abandoned", "`not merged`", "**Abandonment**",
+		"- Abandoned at: 2026-09-01T17:00:00Z", `- Reason: superseded by \[email redacted\] \## injected�\[31m`,
+		"- Outcome: 1 normalized", "- Outcome: 1 redacted",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("abandoned report missing %q:\n%s", want, text)
+		}
+	}
+	for _, forbidden := range []string{"owner@example.com", "`approve`", "\n## injected", "\x1b"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("abandoned report retained %q:\n%s", forbidden, text)
+		}
+	}
+}
+
+func TestRenderFullShowsUnavailableMalformedAbandonmentEvidence(t *testing.T) {
+	report := FullReport{Status: plan.StatusAbandoned, Outcome: OutcomeSummary{Abandoned: true}}
+	got, err := RenderFull(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"status: abandoned", "- Abandoned at: Unavailable", "- Reason: Unavailable"} {
+		if !bytes.Contains(got, []byte(want)) {
+			t.Fatalf("missing malformed-evidence fallback %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestRenderFullUsesTargetSectionsAcrossPhases(t *testing.T) {
 	now := time.Date(2026, 8, 4, 15, 0, 0, 0, time.UTC)
 	statuses := []string{plan.StatusPlanned, plan.StatusInProgress, plan.StatusBlocked, plan.StatusInReview, plan.StatusReviewed, plan.StatusChangesRequested, plan.StatusCompleted}

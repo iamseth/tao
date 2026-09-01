@@ -16,6 +16,7 @@ import (
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/plan"
+	planview "github.com/iamseth/tao/internal/view"
 )
 
 const (
@@ -250,7 +251,7 @@ func RenderDetail(model DetailModel) string {
 		case detailTabActivity:
 			content = renderActivityPane(model.Log, model.FollowError, model.Width, bodyHeight, model.ActivityOffset)
 		default:
-			content = renderOverviewPane(model.Plan, model.Width, bodyHeight, model.OverviewOffset, model.Inspection)
+			content = renderOverviewPane(model.Plan, model.Row, model.Width, bodyHeight, model.OverviewOffset, model.Inspection)
 		}
 	}
 
@@ -288,7 +289,7 @@ func renderDetailTabs(active detailTab) string {
 	return strings.Join(parts, "  ")
 }
 
-func renderOverviewPane(detail *plan.PlanDetail, width, height, offset int, inspections ...detailInspectionView) []string {
+func renderOverviewPane(detail *plan.PlanDetail, row monitor.Row, width, height, offset int, inspections ...detailInspectionView) []string {
 	if detail == nil {
 		return nil
 	}
@@ -298,6 +299,7 @@ func renderOverviewPane(detail *plan.PlanDetail, width, height, offset int, insp
 		"Change type: " + overviewDisplay(string(detail.State.Plan.ChangeType)),
 		"Status: " + overviewDisplay(detail.State.Status),
 	}
+	lines = append(lines, detailAbandonmentLines(detail, row)...)
 	appendDetailValue(&lines, "Problem", overview.Problem)
 	appendDetailValue(&lines, "Why now", overview.WhyNow)
 	appendDetailValue(&lines, "Expected benefit", overview.ExpectedBenefit)
@@ -332,6 +334,27 @@ func renderOverviewPane(detail *plan.PlanDetail, width, height, offset int, insp
 	appendInspectionOverview(&lines, inspection)
 	lines = wrapDetailLines(lines, width)
 	return fitDetailPaneAt(lines, width, height, offset)
+}
+
+func detailAbandonmentLines(detail *plan.PlanDetail, row monitor.Row) []string {
+	if detail.State.Status != plan.StatusAbandoned && row.Status != plan.StatusAbandoned {
+		return nil
+	}
+	abandonedAt := row.AbandonedAt
+	reason := row.AbandonmentReason
+	if evidence := plan.ProjectAbandonment(detail.Events); evidence != nil {
+		if abandonedAt == nil && !evidence.AbandonedAt.IsZero() {
+			at := evidence.AbandonedAt.UTC()
+			abandonedAt = &at
+		}
+		if strings.TrimSpace(reason) == "" {
+			reason = evidence.Reason
+		}
+	}
+	return []string{
+		"Abandoned at: " + formatAbandonedAt(abandonedAt),
+		"Abandonment reason: " + planview.FormatAbandonmentText(reason),
+	}
 }
 
 func overviewDisplay(value string) string {

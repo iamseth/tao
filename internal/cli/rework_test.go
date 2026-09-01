@@ -277,6 +277,52 @@ func TestReworkRunRetainsLockOwnershipForNestedRun(t *testing.T) {
 	}
 }
 
+func TestReworkCommandRejectsAbandonedPlanAcrossAuthorityArmsWithoutSideEffects(t *testing.T) {
+	oldRead := readReworkPRThreads
+	prReads := 0
+	readReworkPRThreads = func(context.Context, App, reworkpkg.PRThreadReadRequest) (reworkpkg.PRThreadReadResult, error) {
+		prReads++
+		return reworkpkg.PRThreadReadResult{}, nil
+	}
+	t.Cleanup(func() { readReworkPRThreads = oldRead })
+
+	for _, test := range []struct {
+		name string
+		args []string
+	}{
+		{name: "ordinary", args: nil},
+		{name: "forced", args: []string{"--force"}},
+		{name: "from pull request", args: []string{"--from-pr"}},
+		{name: "from pull request dry run", args: []string{"--from-pr", "--dry-run"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			planID := "20260628-1200-abandoned-" + strings.ReplaceAll(test.name, " ", "-")
+			finding := plan.ReviewFinding{File: "internal/cli/rework.go", Message: "must not reopen"}
+			planDir := writeCLIReworkPlan(t, root, planID, plan.StatusAbandoned, reworkReview(plan.ReviewVerdictChangesRequested, []plan.ReviewFinding{finding}))
+			addCLIReworkPullRequest(t, planDir)
+			before := readReworkArtifacts(t, planDir)
+			var out bytes.Buffer
+			args := append([]string{"--plans-dir", root, "rework"}, test.args...)
+			args = append(args, planID)
+
+			err := (App{Out: &out, Err: &out}).Run(context.Background(), args)
+			if err == nil || !strings.Contains(err.Error(), "plan "+planID+" is abandoned") {
+				t.Fatalf("rework error = %v", err)
+			}
+			if after := readReworkArtifacts(t, planDir); after != before {
+				t.Fatalf("abandoned rework mutated artifacts\nbefore:\n%s\nafter:\n%s", before, after)
+			}
+			if out.Len() != 0 {
+				t.Fatalf("abandoned rework emitted output: %q", out.String())
+			}
+		})
+	}
+	if prReads != 0 {
+		t.Fatalf("abandoned --from-pr read forge threads %d times", prReads)
+	}
+}
+
 func TestReworkCommandRefusesWithoutMutating(t *testing.T) {
 	finding := plan.ReviewFinding{File: "internal/cli/rework.go", Message: "Fix it"}
 	tests := []struct {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +42,34 @@ func TestSliceBlockedCommandBlocksCurrentSlice(t *testing.T) {
 	event := requireSliceBlockedEvent(t, detail.Events, "001-a")
 	if event.Reason != slice.BlockerNote || event.Timestamp != blockedAt {
 		t.Fatalf("slice_blocked event = %#v", event)
+	}
+}
+
+func TestSliceBlockedCommandRejectsAbandonedPlanWithoutMutation(t *testing.T) {
+	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+	detail := resolveSliceBlockedDetail(t, fixture.dir)
+	record, err := plan.NewPlanRecord(fixture.dir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := record.Abandon("superseded by safer work", time.Date(2026, 7, 19, 16, 5, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	before := resolveSliceBlockedDetail(t, fixture.dir)
+	reasonFile := writeSliceBlockedReason(t, "later blocker must not revive work")
+	var out bytes.Buffer
+	app := App{Out: &out, Err: &out}
+
+	err = app.Run(context.Background(), []string{"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--reason-file", reasonFile})
+	if err == nil || !strings.Contains(err.Error(), "plan "+fixture.id+" is abandoned: superseded by safer work") {
+		t.Fatalf("slice-blocked error = %v", err)
+	}
+	after := resolveSliceBlockedDetail(t, fixture.dir)
+	if !reflect.DeepEqual(after.State, before.State) || !reflect.DeepEqual(after.Slices, before.Slices) || !reflect.DeepEqual(after.Events, before.Events) {
+		t.Fatalf("slice-blocked changed abandoned artifacts:\n got: %#v\nwant: %#v", after, before)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("slice-blocked emitted success output: %q", out.String())
 	}
 }
 

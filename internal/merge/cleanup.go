@@ -66,6 +66,9 @@ func (s Service) Cleanup(ctx context.Context, detail *plan.PlanDetail, options O
 	if detail == nil {
 		return CleanupResult{}, fmt.Errorf("merge plan detail is nil")
 	}
+	if err := plan.RequireNotAbandoned(detail); err != nil {
+		return CleanupResult{}, err
+	}
 	planID := strings.TrimSpace(detail.State.Plan.ID)
 	if planID == "" {
 		return CleanupResult{}, fmt.Errorf("merge cleanup plan id is missing")
@@ -181,6 +184,9 @@ func (s Service) AppendPlanMergedEvent(detail *plan.PlanDetail, branch string, m
 			// directories whose required artifact bundle is incomplete.
 			detail.State = state
 		}
+	}
+	if err := plan.RequireNotAbandoned(detail); err != nil {
+		return err
 	}
 	record, err := s.planMergeRecord(planDir, detail)
 	if err != nil {

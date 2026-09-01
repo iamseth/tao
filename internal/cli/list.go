@@ -54,29 +54,33 @@ func (a App) list(ctx context.Context, repo planLister, args []string) error {
 }
 
 func renderPlanList(out io.Writer, summaries []plan.PlanSummary, now time.Time) error {
-	headers := []string{"STATUS", "PLAN ID", "PLAN", "DONE", "UPDATED"}
+	headers := []string{"STATUS", "PLAN ID", "PLAN", "DONE", "UPDATED", "ABANDONED", "REASON"}
 	rows := make([][]string, 0, len(summaries))
 	for _, summary := range summaries {
 		rows = append(rows, planListRow(summary, now))
 	}
 	widths := planview.ColumnWidths(headers, rows)
-	if err := writef(out, "%s  %s  %s  %s  %s\n",
+	if err := writef(out, "%s  %s  %s  %s  %s  %s  %s\n",
 		planview.Pad(headers[0], widths[0]),
 		planview.Pad(headers[1], widths[1]),
 		planview.Pad(headers[2], widths[2]),
 		planview.Pad(headers[3], widths[3]),
 		planview.Pad(headers[4], widths[4]),
+		planview.Pad(headers[5], widths[5]),
+		planview.Pad(headers[6], widths[6]),
 	); err != nil {
 		return err
 	}
 	for _, summary := range summaries {
 		row := planListRow(summary, now)
-		if err := writef(out, "%s  %s  %s  %s  %s\n",
+		if err := writef(out, "%s  %s  %s  %s  %s  %s  %s\n",
 			colorStatus(planview.Pad(row[0], widths[0]), summary.Status),
 			planview.Pad(row[1], widths[1]),
 			planview.Pad(row[2], widths[2]),
 			colorDone(planview.Pad(row[3], widths[3]), summary.CompletedCount, summary.TotalCount),
 			planview.Pad(row[4], widths[4]),
+			planview.Pad(row[5], widths[5]),
+			planview.Pad(row[6], widths[6]),
 		); err != nil {
 			return err
 		}
@@ -85,11 +89,21 @@ func renderPlanList(out io.Writer, summaries []plan.PlanSummary, now time.Time) 
 }
 
 func planListRow(summary plan.PlanSummary, now time.Time) []string {
+	abandonedAt, reason := "-", "-"
+	if summary.Status == plan.StatusAbandoned && summary.Abandonment != nil {
+		if !summary.Abandonment.AbandonedAt.IsZero() {
+			at := summary.Abandonment.AbandonedAt
+			abandonedAt = plan.FormatHumanTime(&at, now)
+		}
+		reason = planview.FormatAbandonmentText(summary.Abandonment.Reason)
+	}
 	return []string{
 		summary.Status,
 		planview.ShortPlanID(summary.ID),
 		listPlanLabel(summary),
 		planview.DoneLabel(summary),
 		plan.FormatHumanTime(summary.LastActivityAt, now),
+		abandonedAt,
+		reason,
 	}
 }

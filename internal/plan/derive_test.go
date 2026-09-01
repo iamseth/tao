@@ -816,17 +816,29 @@ func TestApprovalRequiredErrorCarriesTypedFields(t *testing.T) {
 }
 
 func TestSliceCompletionPending(t *testing.T) {
-	detail := &PlanDetail{Slices: SlicesFile{Slices: []Slice{{
-		ID:           "001-a",
-		CommitIntent: &SliceCommitIntent{Policy: "slice"},
-	}}}}
-	if !SliceCompletionPending(detail) {
-		t.Fatal("automatic slice intent without completion must remain pending")
+	tests := []struct {
+		name       string
+		intent     *SliceCommitIntent
+		completion *SliceCompletionOutcome
+		want       bool
+	}{
+		{name: "slice missing completion", intent: &SliceCommitIntent{Policy: "slice"}, want: true},
+		{name: "slice committed", intent: &SliceCommitIntent{Policy: "slice"}, completion: &SliceCompletionOutcome{Outcome: SliceCompletionCommitted, CommitSHA: "abc123"}},
+		{name: "slice manual outcome", intent: &SliceCommitIntent{Policy: "slice"}, completion: &SliceCompletionOutcome{Outcome: SliceCompletionManualUncommitted}, want: true},
+		{name: "none missing completion", intent: &SliceCommitIntent{Policy: "none"}, want: true},
+		{name: "none manual outcome", intent: &SliceCommitIntent{Policy: "none"}, completion: &SliceCompletionOutcome{Outcome: SliceCompletionManualUncommitted}},
+		{name: "none committed outcome", intent: &SliceCommitIntent{Policy: "none"}, completion: &SliceCompletionOutcome{Outcome: SliceCompletionCommitted, CommitSHA: "abc123"}, want: true},
+		{name: "unsupported historical policy", intent: &SliceCommitIntent{Policy: "plan"}},
 	}
-
-	detail.Slices.Slices[0].Completion = &SliceCompletionOutcome{Outcome: SliceCompletionCommitted, CommitSHA: "abc123"}
-	if SliceCompletionPending(detail) {
-		t.Fatal("valid committed completion must settle the pending signal")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			detail := &PlanDetail{Slices: SlicesFile{Slices: []Slice{{
+				ID: "001-a", CommitIntent: test.intent, Completion: test.completion,
+			}}}}
+			if got := SliceCompletionPending(detail); got != test.want {
+				t.Fatalf("SliceCompletionPending() = %t, want %t", got, test.want)
+			}
+		})
 	}
 	if SliceCompletionPending(nil) {
 		t.Fatal("nil detail must not report pending completion")
@@ -851,6 +863,49 @@ func TestHasUnresolvedReworkStopUsesLatestAttemptSignal(t *testing.T) {
 				t.Fatalf("HasUnresolvedReworkStop() = %t, want %t", got, test.want)
 			}
 		})
+	}
+}
+
+func TestAbandonedLifecycleIsTerminalWithoutRewritingUnfinishedWork(t *testing.T) {
+	firstAt := time.Date(2026, 9, 1, 16, 0, 0, 0, time.UTC)
+	detail := &PlanDetail{
+		State: State{Status: StatusAbandoned, Plan: PlanState{
+			ID: "plan", CurrentSlice: ptrString("001-a"), PendingSlices: []string{"001-a", "002-b"},
+			Review: &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove},
+		}},
+		Slices: SlicesFile{Slices: []Slice{
+			{ID: "001-a", Status: StatusInProgress, CommitIntent: &SliceCommitIntent{Policy: "slice"}},
+			{ID: "002-b", Status: StatusPending},
+		}},
+		Events: []Event{
+			{Type: EventTypePlanAbandoned, Timestamp: firstAt, Reason: "Superseded by a simpler change"},
+			{Type: EventTypePlanAbandoned, Timestamp: firstAt.Add(time.Hour), Reason: "Later duplicate"},
+			{Type: EventTypeReworkStopped},
+		},
+	}
+
+	derived := Derive(detail, time.Time{})
+	if PlanLifecycleStatus(detail) != StatusAbandoned || derived.Complete || derived.Active || derived.Runnable || derived.Continuable {
+		t.Fatalf("abandoned lifecycle = %+v status=%q", derived.Lifecycle, PlanLifecycleStatus(detail))
+	}
+	if derived.CurrentSliceID != "001-a" || derived.NextSliceID != "" || derived.CompletedCount != 0 || derived.PendingCount != 2 {
+		t.Fatalf("abandoned unfinished projection = %+v", derived)
+	}
+	if derived.SliceCompletionPending || derived.UnresolvedReworkStop || derived.FinalizationRecovery != nil || derived.Capabilities.Reviewed {
+		t.Fatalf("abandoned plan retained attention or approval projections: %+v", derived)
+	}
+	if derived.RunnableError == nil || !strings.Contains(derived.RunnableError.Error(), "Superseded by a simpler change") {
+		t.Fatalf("runnable error = %v", derived.RunnableError)
+	}
+	if action := derived.NextAction.Primary; action.Kind != PlanActionNone || action.Class != PlanActionClassTerminal || action.Command != "" || !strings.Contains(action.Reason, "Superseded by a simpler change") {
+		t.Fatalf("abandoned next action = %+v", action)
+	}
+	if derived.Abandonment == nil || derived.Abandonment.Reason != "Superseded by a simpler change" || !derived.Abandonment.AbandonedAt.Equal(firstAt) {
+		t.Fatalf("first abandonment projection = %#v", derived.Abandonment)
+	}
+	summary := Summarize(detail, time.Time{})
+	if summary.Status != StatusAbandoned || summary.Active() || summary.Runnable() || summary.Complete || summary.Abandonment == nil || summary.Reviewed || summary.ReviewVerdict != "" {
+		t.Fatalf("abandoned summary = %+v", summary)
 	}
 }
 

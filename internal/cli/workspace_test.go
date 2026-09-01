@@ -12,6 +12,7 @@ import (
 
 type fakeWorkspaceManager struct {
 	prepareOptions       workspace.PrepareOptions
+	prepareCalled        bool
 	prepared             workspace.Metadata
 	status               workspace.Metadata
 	statusExpectedBranch string
@@ -28,6 +29,7 @@ type fakeWorkspaceManager struct {
 }
 
 func (f *fakeWorkspaceManager) Prepare(ctx context.Context, options workspace.PrepareOptions) (workspace.Metadata, error) {
+	f.prepareCalled = true
 	f.prepareOptions = options
 	return f.prepared, ctx.Err()
 }
@@ -168,7 +170,9 @@ func TestWorkspacePrepareUsesPlanRepoRootAndBaseBranch(t *testing.T) {
 		gotRepoRoot = repoRoot
 		return manager, nil
 	}}
-	repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": workspacePlanDetail("plan-a", plan.StatusPlanned)}}
+	detail := workspacePlanDetail("plan-a", plan.StatusPlanned)
+	detail.Dir = t.TempDir()
+	repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
 
 	if err := app.workspace(context.Background(), repo, []string{"prepare", "plan-a"}); err != nil {
 		t.Fatal(err)
@@ -179,14 +183,97 @@ func TestWorkspacePrepareUsesPlanRepoRootAndBaseBranch(t *testing.T) {
 	if manager.prepareOptions.PlanID != "plan-a" || manager.prepareOptions.BaseBranch != "master" {
 		t.Fatalf("unexpected prepare options: %#v", manager.prepareOptions)
 	}
-	if !strings.Contains(out.String(), "State: created") || !strings.Contains(out.String(), "Plan Dir: /repo/.tao/plans/plan-a") {
+	if !strings.Contains(out.String(), "State: created") || !strings.Contains(out.String(), "Plan Dir: "+detail.Dir) {
 		t.Fatalf("unexpected prepare output: %q", out.String())
+	}
+}
+
+func TestWorkspacePrepareRefusesAbandonedPlan(t *testing.T) {
+	manager := &fakeWorkspaceManager{}
+	app := workspaceTestApp(&bytes.Buffer{}, manager)
+	detail := workspacePlanDetail("plan-a", plan.StatusAbandoned)
+	detail.Dir = t.TempDir()
+	current := "001-work"
+	detail.State.Plan.CurrentSlice = &current
+	repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
+
+	err := app.workspace(context.Background(), repo, []string{"prepare", "plan-a"})
+	if err == nil || !strings.Contains(err.Error(), "plan plan-a is abandoned") {
+		t.Fatalf("prepare error = %v, want abandonment refusal", err)
+	}
+	if manager.prepareCalled {
+		t.Fatal("abandoned prepare called workspace manager")
+	}
+}
+
+type workspacePrepareInterleavingRepository struct {
+	inner           *plan.FileRepository
+	initialResolved chan struct{}
+	continuePrepare chan struct{}
+	calls           int
+}
+
+func (r *workspacePrepareInterleavingRepository) ResolvePlan(ctx context.Context, input string) (*plan.PlanDetail, error) {
+	detail, err := r.inner.ResolvePlan(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	r.calls++
+	if r.calls == 1 {
+		close(r.initialResolved)
+		select {
+		case <-r.continuePrepare:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return detail, nil
+}
+
+func TestWorkspacePrepareReloadsAbandonmentUnderPlanLock(t *testing.T) {
+	isolateAbandonBatchData(t)
+	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+	inner := plan.NewFileRepository(fixture.root)
+	repo := &workspacePrepareInterleavingRepository{
+		inner:           inner,
+		initialResolved: make(chan struct{}),
+		continuePrepare: make(chan struct{}),
+	}
+	manager := &fakeWorkspaceManager{}
+	managerCreated := false
+	var out bytes.Buffer
+	app := App{Out: &out, Err: &out, WorkspaceManager: func(string) (WorkspaceManager, error) {
+		managerCreated = true
+		return manager, nil
+	}}
+
+	prepareDone := make(chan error, 1)
+	go func() {
+		prepareDone <- app.workspace(context.Background(), repo, []string{"prepare", fixture.id})
+	}()
+	<-repo.initialResolved
+
+	var abandonOut bytes.Buffer
+	abandonErr := (App{Out: &abandonOut, Err: &abandonOut}).abandon(context.Background(), inner, []string{"--reason", "superseded", fixture.id})
+	close(repo.continuePrepare)
+	if abandonErr != nil {
+		t.Fatal(abandonErr)
+	}
+	if err := <-prepareDone; err == nil || !strings.Contains(err.Error(), "is abandoned") {
+		t.Fatalf("prepare error = %v, want post-lock abandonment refusal", err)
+	}
+	if repo.calls != 2 {
+		t.Fatalf("ResolvePlan calls = %d, want initial resolution and locked reload", repo.calls)
+	}
+	if managerCreated || manager.prepareCalled {
+		t.Fatalf("abandoned interleaving reached workspace mutation: managerCreated=%t prepareCalled=%t", managerCreated, manager.prepareCalled)
 	}
 }
 
 func TestWorkspacePrepareAndStatusUseTypedPlanBranch(t *testing.T) {
 	const planID = "20260812-183359-native-pr-format"
 	detail := workspacePlanDetail(planID, plan.StatusPlanned)
+	detail.Dir = t.TempDir()
 	detail.State.Plan.ChangeType = plan.ChangeTypeFeat
 	repo := fakeRepository{details: map[string]*plan.PlanDetail{planID: detail}}
 	manager := &fakeWorkspaceManager{prepared: workspace.Metadata{PlanID: planID, Branch: "feature/native-pr-format", Created: true}}
@@ -222,6 +309,33 @@ func TestWorkspaceCleanPreviewsByDefault(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("expected %q in preview output, got %q", want, out.String())
 		}
+	}
+}
+
+func TestWorkspaceCleanPreviewsAbandonedPlanWithPreservedCurrentSlice(t *testing.T) {
+	var out bytes.Buffer
+	manager := &fakeWorkspaceManager{cleanPlan: workspace.CleanPlan{
+		Path:      "/repo/.tao/workspaces/plan-a",
+		Branch:    "tao/plan-a",
+		Status:    "clean",
+		CanRemove: true,
+		Reason:    "workspace is clean",
+		Actions:   []string{"git worktree remove /repo/.tao/workspaces/plan-a"},
+	}}
+	app := workspaceTestApp(&out, manager)
+	detail := workspacePlanDetail("plan-a", plan.StatusAbandoned)
+	current := "001-work"
+	detail.State.Plan.CurrentSlice = &current
+	repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
+
+	if err := app.workspace(context.Background(), repo, []string{"clean", "plan-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if manager.cleanCalled {
+		t.Fatal("abandoned cleanup preview should not remove workspace")
+	}
+	if !strings.Contains(out.String(), "Clean: would clean") {
+		t.Fatalf("expected cleanup preview, got %q", out.String())
 	}
 }
 

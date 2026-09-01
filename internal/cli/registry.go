@@ -131,6 +131,7 @@ var commandRegistry = []commandMetadata{
 	repoCommand,
 	noteCommand,
 	approveCommand,
+	abandonCommand,
 	sliceCompleteCommand,
 	sliceBlockedCommand,
 	showCommand,

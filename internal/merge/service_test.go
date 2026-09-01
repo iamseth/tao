@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -301,6 +302,50 @@ func TestCheckPreMergeGateAllowsApprovedMatchingReviewBase(t *testing.T) {
 	wantCalls := []string{"status", "default-branch", "merge-base main tao/plan-a"}
 	if !reflect.DeepEqual(git.calls, wantCalls) {
 		t.Fatalf("calls mismatch\nwant: %#v\n got: %#v", wantCalls, git.calls)
+	}
+}
+
+func TestMergeRefusesAbandonedPlanBeforeEverySideEffect(t *testing.T) {
+	for _, options := range []Options{
+		{},
+		{Force: true},
+		{RecordOnly: true},
+		{RecordOnly: true, Force: true},
+		{NoSquash: true, NoVerify: true},
+	} {
+		t.Run(strings.ReplaceAll(strings.TrimSpace(strings.Join([]string{
+			fmt.Sprintf("force=%t", options.Force),
+			fmt.Sprintf("record=%t", options.RecordOnly),
+			fmt.Sprintf("no-squash=%t", options.NoSquash),
+		}, "_")), "=", "-"), func(t *testing.T) {
+			detail := mergeReadyDetail("base123")
+			detail.State.Status = plan.StatusAbandoned
+			detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypePlanAbandoned, Reason: "superseded"})
+			git := &fakeGitClient{}
+			cleaner := successfulCleanup()
+			events := &fakeEventAppender{}
+			generator := &fakeMergeProposalGenerator{proposal: generatedMergeProposal()}
+
+			err := (Service{Git: git, Cleaner: cleaner, Events: events, ProposalGenerator: generator}).Merge(context.Background(), detail, options)
+			if err == nil || !strings.Contains(err.Error(), "plan plan-a is abandoned: superseded") {
+				t.Fatalf("Merge() error = %v, want abandonment refusal", err)
+			}
+			if len(git.calls) != 0 || len(cleaner.calls) != 0 || len(events.events) != 0 || len(events.stateWrites) != 0 || generator.calls != 0 {
+				t.Fatalf("abandoned merge had side effects: git=%v cleaner=%v events=%v states=%v proposals=%d", git.calls, cleaner.calls, events.events, events.stateWrites, generator.calls)
+			}
+		})
+	}
+}
+
+func TestCheckPreMergeGateRefusesAbandonedPlanEvenWithForce(t *testing.T) {
+	detail := mergeReadyDetail("base123")
+	detail.State.Status = plan.StatusAbandoned
+	git := &fakeGitClient{}
+	if err := (Service{Git: git}).CheckPreMergeGate(context.Background(), detail, Options{Force: true}); err == nil || !strings.Contains(err.Error(), "is abandoned") {
+		t.Fatalf("CheckPreMergeGate() error = %v, want abandonment refusal", err)
+	}
+	if len(git.calls) != 0 {
+		t.Fatalf("abandoned preflight called Git: %v", git.calls)
 	}
 }
 

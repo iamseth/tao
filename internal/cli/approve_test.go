@@ -105,6 +105,36 @@ func TestApproveCommandStampsInjectedClock(t *testing.T) {
 	}
 }
 
+func TestApproveCommandRejectsAbandonedPlanWithoutMutation(t *testing.T) {
+	const planID = "20260430-1200-abandoned"
+	const sliceID = "001-a"
+	repo := blockedApproveRepo(planID, sliceID, plan.StatusAbandoned, plan.StatusBlocked, false)
+	detail, err := repo.GetPlan(context.Background(), planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypePlanAbandoned, Reason: "superseded by safer work"})
+	repo = plantest.NewRepository()
+	repo.AddDetail(detail)
+	var out bytes.Buffer
+
+	err = (App{Out: &out, Err: &out}).approve(context.Background(), repo, []string{"--by", "Seth", planID})
+	if err == nil || !strings.Contains(err.Error(), "plan "+planID+" is abandoned: superseded by safer work") {
+		t.Fatalf("approve error = %v", err)
+	}
+	updated, resolveErr := repo.GetPlan(context.Background(), planID)
+	if resolveErr != nil {
+		t.Fatal(resolveErr)
+	}
+	slice := findSlice(updated, sliceID)
+	if slice == nil || slice.Approval == nil || slice.Approval.Approved {
+		t.Fatalf("abandoned approval mutated slice: %#v", slice)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("abandoned approval emitted output: %q", out.String())
+	}
+}
+
 func TestApproveCommandRejectsNonGatedSlice(t *testing.T) {
 	const planID = "20260430-1200-run-plan"
 	const sliceID = "001-a"

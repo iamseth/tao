@@ -66,6 +66,50 @@ func TestRunActionLaunchesExactDetachedCommand(t *testing.T) {
 	}
 }
 
+func TestAbandonedPlanSuppressesEveryPlanAction(t *testing.T) {
+	launcher := &recordingActionLauncher{}
+	actions := newTestActions(t, launcher, nil, nil)
+	row := testActionRow()
+	row.Status = plan.StatusAbandoned
+	row.ApprovalSliceID = "001-risk"
+	row.ApprovalReason = "stale approval"
+
+	actions.RunPlan(context.Background(), row)
+	if _, ok := actions.ApprovalPrompt(row); ok {
+		t.Fatal("abandoned row exposed approval prompt")
+	}
+	actions.ApproveSlice(context.Background(), row)
+	if _, ok := actions.MergePlanPrompt(row); ok {
+		t.Fatal("abandoned row exposed single merge prompt")
+	}
+	actions.MergePlan(context.Background(), row)
+	if _, ok := actions.MergeAllPrompt(row); ok {
+		t.Fatal("abandoned row exposed batch merge prompt")
+	}
+	actions.MergeAll(context.Background(), row)
+	if len(launcher.calls) != 0 || len(actions.labels()) != 0 {
+		t.Fatalf("abandoned actions launched or recorded feedback: calls=%+v labels=%v", launcher.calls, actions.labels())
+	}
+
+	state := loopState{
+		snapshot:            monitor.Snapshot{Rows: []monitor.Row{row}},
+		showCompleted:       true,
+		focusRepositoryID:   row.RepositoryID,
+		focusRepositoryName: row.RepositoryName,
+		focusRepositoryRoot: row.RepositoryRoot,
+	}
+	app := App{Actions: actions}
+	for _, key := range []rune{'r', 'a', 'm', 'M'} {
+		app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: key})
+		if state.confirm != nil {
+			t.Fatalf("abandoned key %q opened confirmation %q", key, state.confirmMessage())
+		}
+	}
+	if len(launcher.calls) != 0 {
+		t.Fatalf("abandoned keyboard actions launched: %+v", launcher.calls)
+	}
+}
+
 func TestRunActionDispatchesProjectedVerificationRecoveryByCommand(t *testing.T) {
 	tests := []struct {
 		name        string

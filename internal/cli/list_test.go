@@ -121,8 +121,8 @@ func TestRenderPlanListPreservesExactASCIIOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "STATUS   PLAN ID        PLAN        DONE  UPDATED\n" +
-		"planned  20260810-2142  first-plan  1/2   42m    \n"
+	want := "STATUS   PLAN ID        PLAN        DONE  UPDATED  ABANDONED  REASON\n" +
+		"planned  20260810-2142  first-plan  1/2   42m      -          -     \n"
 	if got := stripANSI(out.String()); got != want {
 		t.Fatalf("renderPlanList() output:\n%q\nwant:\n%q", got, want)
 	}
@@ -137,10 +137,34 @@ func TestRenderPlanListUsesRuneWidthsForUnicode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "STATUS   PLAN ID        PLAN  DONE  UPDATED\n" +
-		"planned  20260810-2142  café  0/0   -      \n"
+	want := "STATUS   PLAN ID        PLAN  DONE  UPDATED  ABANDONED  REASON\n" +
+		"planned  20260810-2142  café  0/0   -        -          -     \n"
 	if got := stripANSI(out.String()); got != want {
 		t.Fatalf("renderPlanList() Unicode output:\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestRenderPlanListShowsSafeCompactAbandonmentEvidence(t *testing.T) {
+	now := time.Date(2026, 9, 1, 18, 0, 0, 0, time.UTC)
+	abandonedAt := now.Add(-30 * time.Minute)
+	var out bytes.Buffer
+
+	err := renderPlanList(&out, []plan.PlanSummary{{
+		ID: "20260901-1700-abandoned", Status: plan.StatusAbandoned,
+		Abandonment: &plan.AbandonmentEvidence{
+			AbandonedAt: abandonedAt,
+			Reason:      " superseded\nby\ta safer path\x1b[31m " + strings.Repeat("界", 120),
+		},
+	}}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := stripANSI(out.String())
+	if !strings.Contains(text, "ABANDONED") || !strings.Contains(text, "30m") || !strings.Contains(text, "superseded by a safer path [31m") {
+		t.Fatalf("abandonment evidence missing from list:\n%s", text)
+	}
+	if strings.Contains(text, "\nby") || strings.Contains(text, "\t") || strings.Contains(text, "\x1b") || strings.Contains(text, strings.Repeat("界", 100)) {
+		t.Fatalf("list rendered unsafe or unbounded abandonment reason: %q", text)
 	}
 }
 

@@ -87,6 +87,9 @@ func (a App) rework(ctx context.Context, repo planRunRepository, args []string) 
 		if refreshed == nil {
 			return fmt.Errorf("plan %q not found", detail.Dir)
 		}
+		if err := plan.RequireNotAbandoned(refreshed); err != nil {
+			return err
+		}
 		record, err := repo.PlanRecord(refreshed)
 		if err != nil {
 			return err

@@ -41,13 +41,16 @@ func (s SliceCompletionService) Complete(ctx context.Context, request SliceCompl
 		return fmt.Errorf("slice completion requires a plan record")
 	}
 	detail := request.Record.Detail()
+	if err := plan.RequireNotAbandoned(detail); err != nil {
+		return err
+	}
 	slice := completionSlice(detail, request.SliceID)
 	if slice == nil {
 		return fmt.Errorf("slice %s not found", request.SliceID)
 	}
 	policy := strings.TrimSpace(detail.State.Plan.LastRunCommitPolicy)
 	if policy == "" || policy == CommitPolicyPlan.String() {
-		return request.Record.CompleteSlice(request.SliceID, request.Notes, request.VerificationResults, request.Now)
+		return persistSliceCompletion(request, nil, request.Now)
 	}
 	if policy != CommitPolicySlice.String() && policy != CommitPolicyNone.String() {
 		return fmt.Errorf("slice %s has unsupported commit policy %q", request.SliceID, policy)
@@ -103,7 +106,7 @@ func (s SliceCompletionService) Complete(ctx context.Context, request SliceCompl
 		if slice.Timing.CompletedAt != nil {
 			completedAt = *slice.Timing.CompletedAt
 		}
-		return request.Record.CompleteSliceWithOutcome(request.SliceID, request.Notes, request.VerificationResults, *slice.Completion, completedAt)
+		return persistSliceCompletion(request, slice.Completion, completedAt)
 	}
 
 	root := strings.TrimSpace(slice.ExecutionRoot)
@@ -137,13 +140,14 @@ func (s SliceCompletionService) Complete(ctx context.Context, request SliceCompl
 			}
 		}
 		intent = &plan.SliceCommitIntent{Hash: hash, Policy: policy, StartingBranch: branch, StartingHead: head, Message: message, CreatedAt: request.Now}
-		if err := request.Record.RecordSliceCommitIntent(request.SliceID, *intent); err != nil {
+		if err := persistSliceCommitIntent(request, *intent); err != nil {
 			return fmt.Errorf("record slice commit intent: %w", err)
 		}
 	}
 
 	if policy == CommitPolicyNone.String() {
-		return request.Record.CompleteSliceWithOutcome(request.SliceID, request.Notes, request.VerificationResults, plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionManualUncommitted}, request.Now)
+		outcome := plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionManualUncommitted}
+		return persistSliceCompletion(request, &outcome, request.Now)
 	}
 	if gitops.ProtectedBranch(intent.StartingBranch) || intent.StartingBranch == "" {
 		return fmt.Errorf("slice commit refused: unsafe execution branch %q", intent.StartingBranch)
@@ -177,7 +181,8 @@ func (s SliceCompletionService) Complete(ctx context.Context, request SliceCompl
 		return fmt.Errorf("slice commit refused: %w", err)
 	}
 	if len(paths) == 0 {
-		return request.Record.CompleteSliceWithOutcome(request.SliceID, request.Notes, request.VerificationResults, plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionNoChanges, CommitSHA: head}, request.Now)
+		outcome := plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionNoChanges, CommitSHA: head}
+		return persistSliceCompletion(request, &outcome, request.Now)
 	}
 	if len(classification.TaoStagedPaths) > 0 {
 		if err := git.RestoreStaged(ctx, commitcontract.UniquePaths(classification.TaoStagedPaths)...); err != nil {
@@ -211,7 +216,25 @@ func (s SliceCompletionService) Complete(ctx context.Context, request SliceCompl
 	if err := writeSliceCompletionUnexpectedWarning(s.Output, unexpected); err != nil {
 		return err
 	}
-	return request.Record.CompleteSliceWithOutcome(request.SliceID, request.Notes, request.VerificationResults, plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionCommitted, CommitSHA: commitSHA}, request.Now)
+	outcome := plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionCommitted, CommitSHA: commitSHA}
+	return persistSliceCompletion(request, &outcome, request.Now)
+}
+
+func persistSliceCommitIntent(request SliceCompletionRequest, intent plan.SliceCommitIntent) error {
+	if err := plan.RequireNotAbandoned(request.Record.Detail()); err != nil {
+		return err
+	}
+	return request.Record.RecordSliceCommitIntent(request.SliceID, intent)
+}
+
+func persistSliceCompletion(request SliceCompletionRequest, outcome *plan.SliceCompletionOutcome, completedAt time.Time) error {
+	if err := plan.RequireNotAbandoned(request.Record.Detail()); err != nil {
+		return err
+	}
+	if outcome == nil {
+		return request.Record.CompleteSlice(request.SliceID, request.Notes, request.VerificationResults, completedAt)
+	}
+	return request.Record.CompleteSliceWithOutcome(request.SliceID, request.Notes, request.VerificationResults, *outcome, completedAt)
 }
 
 func (s SliceCompletionService) recoverCommit(ctx context.Context, git gitops.Client, request SliceCompletionRequest, intent plan.SliceCommitIntent, head string) error {
@@ -234,7 +257,8 @@ func (s SliceCompletionService) recoverCommit(ctx context.Context, git gitops.Cl
 	if len(classification.CommitCandidates) > 0 || len(classification.AmbiguousLines) > 0 {
 		return fmt.Errorf("slice commit recovery refused: worktree is not clean")
 	}
-	return request.Record.CompleteSliceWithOutcome(request.SliceID, request.Notes, request.VerificationResults, plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionCommitted, CommitSHA: head}, request.Now)
+	outcome := plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionCommitted, CommitSHA: head}
+	return persistSliceCompletion(request, &outcome, request.Now)
 }
 
 func writeSliceCompletionUnexpectedWarning(out io.Writer, unexpected []string) error {

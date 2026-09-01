@@ -45,6 +45,9 @@ func newFinalizer(out io.Writer, execution runExecution) Finalizer {
 }
 
 func (f Finalizer) FinalizeIfComplete(ctx context.Context, runCount int, detail *plan.PlanDetail, capabilities plan.RunCapabilities) (bool, error) {
+	if err := plan.RequireNotAbandoned(detail); err != nil {
+		return false, err
+	}
 	if !capabilities.Complete {
 		return false, nil
 	}
@@ -119,6 +122,9 @@ func (f Finalizer) writeAlreadyCompleteRun(detail *plan.PlanDetail) error {
 }
 
 func (f Finalizer) finalizeCompletedRun(ctx context.Context, runCount int, detail *plan.PlanDetail) error {
+	if err := plan.RequireNotAbandoned(detail); err != nil {
+		return err
+	}
 	execution := f.execution
 	out := f.outputWriter()
 	executionRoot, err := f.executionRoot(ctx, detail)
@@ -186,6 +192,9 @@ func (f Finalizer) finalizeCompletedRun(ctx context.Context, runCount int, detai
 }
 
 func (f Finalizer) resumePullRequestFinalization(ctx context.Context, detail *plan.PlanDetail) error {
+	if err := plan.RequireNotAbandoned(detail); err != nil {
+		return err
+	}
 	if plan.PlanIsPullRequestComplete(detail) && detail.State.Plan.PullRequest != nil {
 		return f.writePullRequestCompletion(detail, *detail.State.Plan.PullRequest)
 	}
@@ -228,6 +237,9 @@ func (f Finalizer) pullRequestRecoveryBoundary(ctx context.Context, detail *plan
 }
 
 func (f Finalizer) createAndRecordPullRequest(ctx context.Context, detail *plan.PlanDetail, executionRoot string) error {
+	if err := plan.RequireNotAbandoned(detail); err != nil {
+		return err
+	}
 	branch, headSHA, err := currentBranchHead(ctx, f.execution, executionRoot)
 	if err != nil {
 		fallbackBranch, fallbackHead := recordedWorkspaceBoundary(detail)
@@ -251,6 +263,9 @@ func (f Finalizer) createAndRecordPullRequest(ctx context.Context, detail *plan.
 }
 
 func (f Finalizer) createAndRecordPullRequestAtHead(ctx context.Context, detail *plan.PlanDetail, executionRoot, branch, headSHA string) error {
+	if err := plan.RequireNotAbandoned(detail); err != nil {
+		return err
+	}
 	record, err := planMutationRecord(f.execution, detail)
 	if err != nil {
 		return fmt.Errorf("bind plan mutation record before pull request creation: %w", err)

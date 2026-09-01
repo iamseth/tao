@@ -557,6 +557,9 @@ func blockedSliceRestartMutation(request BlockedSliceRestartRequest) artifactMut
 
 func removeSliceMutation(sliceID string, now time.Time) artifactMutationFunc {
 	return func(detail *PlanDetail) (lifecycleMutation, error) {
+		if err := RequireNotAbandoned(detail); err != nil {
+			return lifecycleMutation{}, err
+		}
 		expected := Event{Type: EventTypeSliceRemoved, Timestamp: now, PlanID: detail.State.Plan.ID, SliceID: sliceID, Message: "Pending slice removed by plan edit"}
 		if semanticEventsWereRecorded(detail.Events, []Event{expected}) && findSlice(detail, sliceID) == nil && !slices.Contains(detail.State.Plan.PendingSlices, sliceID) {
 			return unchangedLifecycleMutation(detail), nil
@@ -573,6 +576,9 @@ func removeSliceMutation(sliceID string, now time.Time) artifactMutationFunc {
 
 func skipSliceMutation(sliceID string, now time.Time) artifactMutationFunc {
 	return func(detail *PlanDetail) (lifecycleMutation, error) {
+		if err := RequireNotAbandoned(detail); err != nil {
+			return lifecycleMutation{}, err
+		}
 		expected := Event{Type: EventTypeSliceSkipped, Timestamp: now, PlanID: detail.State.Plan.ID, SliceID: sliceID, Message: "Pending slice skipped by plan edit"}
 		slice := findSlice(detail, sliceID)
 		if semanticEventsWereRecorded(detail.Events, []Event{expected}) && slice != nil && slice.Status == StatusSkipped && !slices.Contains(detail.State.Plan.PendingSlices, sliceID) {
@@ -590,6 +596,9 @@ func skipSliceMutation(sliceID string, now time.Time) artifactMutationFunc {
 
 func reorderPendingSlicesMutation(pendingOrder []string, now time.Time) artifactMutationFunc {
 	return func(detail *PlanDetail) (lifecycleMutation, error) {
+		if err := RequireNotAbandoned(detail); err != nil {
+			return lifecycleMutation{}, err
+		}
 		expected := Event{Type: EventTypeSlicesReordered, Timestamp: now, PlanID: detail.State.Plan.ID, Message: "Pending slices reordered by plan edit"}
 		if semanticEventsWereRecorded(detail.Events, []Event{expected}) && slices.Equal(detail.State.Plan.PendingSlices, pendingOrder) {
 			return unchangedLifecycleMutation(detail), nil

@@ -13,6 +13,7 @@ const (
 	SectionRunning   SectionKind = "running"
 	SectionPlanned   SectionKind = "planned"
 	SectionCompleted SectionKind = "completed"
+	SectionAbandoned SectionKind = "abandoned"
 )
 
 // Section is one stable partition of monitor rows. Rows retain the collector's
@@ -36,6 +37,7 @@ func BuildRepositorySections(rows []monitor.Row, showCompleted bool, repositoryI
 		{Kind: SectionRunning, Title: "RUNNING"},
 		{Kind: SectionPlanned, Title: "PLANNED / IN REVIEW"},
 		{Kind: SectionCompleted, Title: "COMPLETED"},
+		{Kind: SectionAbandoned, Title: "ABANDONED (HISTORICAL)"},
 	}
 	for _, row := range rows {
 		if repositoryID != "" && row.RepositoryID != repositoryID {
@@ -61,6 +63,9 @@ func BuildRepositorySections(rows []monitor.Row, showCompleted bool, repositoryI
 }
 
 func sectionKind(row monitor.Row) SectionKind {
+	if row.Status == plan.StatusAbandoned {
+		return SectionAbandoned
+	}
 	// A stale heartbeat is display-only. It identifies a stalled run only while
 	// the collector can still observe a live process through the run lock.
 	if isStalled(row) {

@@ -121,6 +121,26 @@ func TestServiceExecutePullRequestRejectsCurrentMode(t *testing.T) {
 	}
 }
 
+func TestDeterministicPullRequestCreatorRejectsAbandonedPlanBeforeGitOrForge(t *testing.T) {
+	detail := approvedPullRequestDetail(plan.ChangeTypeFeat, "head123")
+	detail.State.Status = plan.StatusAbandoned
+	detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypePlanAbandoned, Reason: "superseded by safer work"})
+	calls := 0
+	runner := func(context.Context, string, string, []string, io.Writer, io.Writer) error {
+		calls++
+		return nil
+	}
+	creator := deterministicPullRequestCreator{execution: testRunExecution(ExecutionConfig{}, RunDependencies{CommandRunner: runner})}
+
+	_, err := creator.CreatePullRequest(context.Background(), PullRequestRun{Detail: detail, RepoRoot: "/repo", Branch: "feature/plan-a", HeadSHA: "head123"})
+	if err == nil || !strings.Contains(err.Error(), "plan plan-a is abandoned: superseded by safer work") {
+		t.Fatalf("CreatePullRequest error = %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("abandoned pull-request creation ran %d Git or forge commands", calls)
+	}
+}
+
 func TestDeterministicPullRequestCreatorPushesLabelsAssignsAndCreatesNativePullRequest(t *testing.T) {
 	detail := approvedPullRequestDetail(plan.ChangeTypeFeat, "head123")
 	createdAt := time.Date(2026, 5, 21, 20, 0, 0, 0, time.UTC)

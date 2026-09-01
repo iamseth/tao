@@ -248,6 +248,60 @@ func TestShowJSONUsesExplicitNextActionProjection(t *testing.T) {
 	}
 }
 
+func TestShowProjectsSafeAbandonmentEvidenceInTextAndJSON(t *testing.T) {
+	abandonedAt := time.Date(2026, 9, 1, 17, 0, 0, 0, time.FixedZone("offset", 3600))
+	reason := "superseded\nby\ta safer path\x1b[31m " + strings.Repeat("界", 120)
+	detail := &plan.PlanDetail{
+		State:  plan.State{Status: plan.StatusAbandoned, Plan: plan.PlanState{ID: "plan-a", Title: "Plan A"}},
+		Events: []plan.Event{{Type: plan.EventTypePlanAbandoned, Timestamp: abandonedAt, Reason: reason, Message: "Plan abandoned"}},
+	}
+	repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
+
+	var textOut bytes.Buffer
+	if err := (App{Out: &textOut, Err: &textOut}).show(context.Background(), repo, []string{"plan-a"}); err != nil {
+		t.Fatal(err)
+	}
+	text := stripANSI(textOut.String())
+	for _, want := range []string{"Status: abandoned", "Abandoned: 2026-09-01T16:00:00Z", "Abandonment reason: superseded by a safer path [31m", "Next: No action", "Reason: the plan was abandoned"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("show output missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "\nby") || strings.Contains(text, "\t") || strings.Contains(text, "\x1b") || strings.Contains(text, strings.Repeat("界", 100)) {
+		t.Fatalf("show rendered unsafe or unbounded abandonment reason: %q", text)
+	}
+
+	var jsonOut bytes.Buffer
+	if err := (App{Out: &jsonOut, Err: &jsonOut}).show(context.Background(), repo, []string{"plan-a", "--json"}); err != nil {
+		t.Fatal(err)
+	}
+	var payload planview.ShowPayload
+	if err := json.Unmarshal(jsonOut.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Abandonment == nil || payload.Abandonment.AbandonedAt == nil || payload.Abandonment.AbandonedAt.Format(time.RFC3339) != "2026-09-01T16:00:00Z" || strings.Contains(payload.Abandonment.Reason, "\n") {
+		t.Fatalf("show JSON abandonment = %+v", payload.Abandonment)
+	}
+	if strings.Contains(payload.NextAction.Primary.Reason, reason) {
+		t.Fatalf("show JSON duplicated raw abandonment reason: %+v", payload.NextAction)
+	}
+}
+
+func TestShowHandlesAbandonedStatusWithoutEvidence(t *testing.T) {
+	detail := &plan.PlanDetail{State: plan.State{Status: plan.StatusAbandoned, Plan: plan.PlanState{ID: "plan-a", Title: "Plan A"}}}
+	var out bytes.Buffer
+	if err := (App{Out: &out, Err: &out}).show(context.Background(), fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}, []string{"plan-a", "--json"}); err != nil {
+		t.Fatal(err)
+	}
+	var payload planview.ShowPayload
+	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Status != plan.StatusAbandoned || payload.Abandonment != nil {
+		t.Fatalf("missing-evidence abandonment payload = %+v", payload)
+	}
+}
+
 func TestShowProjectsDurableFinalizationRecoveryInTextJSONAndEvents(t *testing.T) {
 	failedAt := time.Date(2026, 8, 29, 20, 0, 0, 0, time.UTC)
 	failure := &plan.FinalizationFailure{

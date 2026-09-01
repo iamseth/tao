@@ -302,6 +302,40 @@ func (r *PlanRecord) ReorderPendingSlices(pendingOrder []string, now time.Time) 
 	return r.apply(reorderPendingSlicesMutation(pendingOrder, now))
 }
 
+// Abandon records an intentional terminal outcome without changing slice,
+// review, transaction, Git, workspace, or timing evidence. An abandoned record
+// keeps its first event as the authoritative reason and timestamp.
+func (r *PlanRecord) Abandon(reason string, abandonedAt time.Time) error {
+	if err := ValidateAbandonmentReason(reason); err != nil {
+		return err
+	}
+	if abandonedAt.IsZero() {
+		return fmt.Errorf("abandonment timestamp is required")
+	}
+	store, err := r.storeOrDefault()
+	if err != nil {
+		return err
+	}
+	abandonedAt = abandonedAt.UTC()
+	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
+		if detail.State.Status == StatusAbandoned && ProjectAbandonment(detail.Events) != nil {
+			return nil, nil
+		}
+		if err := RequireAbandonable(detail); err != nil {
+			return nil, err
+		}
+
+		detail.State.Status = StatusAbandoned
+		if ProjectAbandonment(detail.Events) != nil {
+			return nil, nil
+		}
+		return []Event{{
+			Type: EventTypePlanAbandoned, Timestamp: abandonedAt, PlanID: detail.State.Plan.ID,
+			Reason: reason, Message: "Plan abandoned",
+		}}, nil
+	})
+}
+
 // storeOrDefault returns the record's store (defaulting to the file-backed
 // store) after validating the record's essential fields. It is the shared guard
 // for PlanRecord operations that write selected artifacts directly.
@@ -1373,6 +1407,9 @@ func (r *PlanRecord) RecordMerged(branch string, mergedDefaultSHA string, merged
 	mergedDefaultSHA = strings.TrimSpace(mergedDefaultSHA)
 	mergedAt = mergedAt.UTC()
 	return r.applyStateEvent(store, func(detail *PlanDetail, changes *ArtifactChangeSet) ([]Event, error) {
+		if err := RequireNotAbandoned(detail); err != nil {
+			return nil, err
+		}
 		for _, event := range slices.Backward(detail.Events) {
 			if event.Type == EventTypePlanReopened {
 				break

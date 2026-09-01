@@ -88,7 +88,7 @@ func (d BatchCandidateDiscovery) Discover(ctx context.Context) (BatchPreflightRe
 	}
 	selected := make([]plan.PlanSummary, 0, len(summaries))
 	for _, summary := range summaries {
-		if !summary.Reviewed || summary.ReviewVerdict != plan.ReviewVerdictApprove {
+		if summary.Status == plan.StatusAbandoned || !summary.Reviewed || summary.ReviewVerdict != plan.ReviewVerdictApprove {
 			continue
 		}
 		// Legacy completed summaries have no PR metadata and retain their
@@ -114,6 +114,11 @@ func (d BatchCandidateDiscovery) Discover(ctx context.Context) (BatchPreflightRe
 		if resolveErr != nil {
 			d.addBlocker(&result, &candidate, "resolve", resolveErr)
 			result.Candidates = append(result.Candidates, candidate)
+			continue
+		}
+		// An abandoned detail is excluded even when a stale summary still carries
+		// old approval or completed-slice projections.
+		if detail.State.Status == plan.StatusAbandoned {
 			continue
 		}
 		// PR completion projects completed before integration, so lifecycle
@@ -198,6 +203,28 @@ func (d BatchCandidateDiscovery) Discover(ctx context.Context) (BatchPreflightRe
 		result.Candidates = append(result.Candidates, candidate)
 	}
 	return result, nil
+}
+
+// ValidateCandidateSnapshot reloads a durable batch snapshot before resume or
+// restart so later phases cannot reuse stale approval after abandonment.
+func (d BatchCandidateDiscovery) ValidateCandidateSnapshot(ctx context.Context, candidates []BatchCandidate) error {
+	if d.Repository == nil {
+		return fmt.Errorf("batch plan repository is nil")
+	}
+	for _, candidate := range candidates {
+		input := strings.TrimSpace(candidate.PlanDir)
+		if input == "" {
+			input = candidate.PlanID
+		}
+		detail, err := d.Repository.ResolvePlan(ctx, input)
+		if err != nil {
+			return fmt.Errorf("reload plan %s for batch lifecycle gate: %w", candidate.PlanID, err)
+		}
+		if err := plan.RequireNotAbandoned(detail); err != nil {
+			return fmt.Errorf("plan %s batch lifecycle gate: %w", candidate.PlanID, err)
+		}
+	}
+	return nil
 }
 
 func defaultBatchHealthCheck(ctx context.Context, repo plan.Repo) error {

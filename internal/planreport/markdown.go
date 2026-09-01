@@ -33,6 +33,7 @@ var reportLabels = map[string]struct{}{
 	"**Execution**":             {},
 	"**Tokens**":                {},
 	"**Finalization recovery**": {},
+	"**Abandonment**":           {},
 }
 
 type markdownBuilder struct {
@@ -107,6 +108,11 @@ func RenderFull(report FullReport) ([]byte, error) {
 		b.paragraph("No review recorded.")
 	} else {
 		b.optionalParagraph(report.Review.Summary)
+	}
+	if report.Outcome.Abandoned {
+		b.label("**Abandonment**")
+		b.item("Abandoned at", formatSnapshot(report.Outcome.AbandonedAt))
+		b.optionalItem("Reason", report.Outcome.Reason)
 	}
 	if report.Finalization.Available {
 		b.label("**Finalization recovery**")
@@ -443,7 +449,7 @@ func numberedLine(line string) bool {
 
 func allowsBullets(heading string) bool {
 	return heading == "### Planning Effort" || heading == "## Planned Slices" ||
-		heading == "**Verification**" || heading == "**Execution**" || heading == "**Tokens**" || heading == "**Finalization recovery**" ||
+		heading == "**Verification**" || heading == "**Execution**" || heading == "**Tokens**" || heading == "**Finalization recovery**" || heading == "**Abandonment**" ||
 		heading == "### Safety transformations"
 }
 
@@ -595,6 +601,8 @@ func disclosureSection(section Section) string {
 		return "Execution"
 	case sectionReview:
 		return "Review"
+	case sectionOutcome:
+		return "Outcome"
 	default:
 		return "Other"
 	}

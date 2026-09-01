@@ -14,6 +14,7 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/taodata"
+	planview "github.com/iamseth/tao/internal/view"
 )
 
 // RepositoryInventory is the metadata-only catalog boundary used by Collector.
@@ -95,14 +96,16 @@ type ResolvedRelationship struct {
 type Row struct {
 	Kind RowKind
 
-	RepositoryID   string
-	RepositoryName string
-	RepositoryRoot string
-	PlanID         string
-	PlanTitle      string
-	PlanDir        string
-	Status         string
-	Overview       plan.DecisionOverview
+	RepositoryID      string
+	RepositoryName    string
+	RepositoryRoot    string
+	PlanID            string
+	PlanTitle         string
+	PlanDir           string
+	Status            string
+	Overview          plan.DecisionOverview
+	AbandonedAt       *time.Time
+	AbandonmentReason string
 
 	Liveness            Liveness
 	Phase               runstatus.Phase
@@ -211,7 +214,7 @@ func (c Collector) Collect(ctx context.Context) (Snapshot, error) {
 			if !c.includeSummary(summary, now) || (summary.Status == plan.StatusInvalid && !c.ShowInvalid) {
 				continue
 			}
-			if summary.Status != plan.StatusInvalid {
+			if summary.Status != plan.StatusInvalid && summary.Status != plan.StatusAbandoned {
 				applyRuntimeStatus(&row, reader, entry.Repo.ID, now)
 				applyCrashedRunAttention(&row, c.runLockReader(), planDir(entry, summary))
 			}
@@ -287,33 +290,43 @@ func repositoryWarningRow(entry taodata.RepoInventoryEntry, err error) Row {
 func planRow(entry taodata.RepoInventoryEntry, summary plan.PlanSummary) Row {
 	warnings := append([]string(nil), summary.Warnings...)
 	row := Row{
-		Kind:                         RowKindPlan,
-		RepositoryID:                 entry.Repo.ID,
-		RepositoryName:               entry.Repo.Name,
-		RepositoryRoot:               entry.Repo.Root,
-		PlanID:                       summary.ID,
-		PlanTitle:                    summary.Title,
-		PlanDir:                      planDir(entry, summary),
-		Status:                       summary.Status,
-		Overview:                     cloneOverview(summary.Overview),
-		Liveness:                     LivenessMissing,
-		SliceID:                      summary.CurrentSliceID,
-		Left:                         summary.PendingCount,
-		UpdatedAt:                    cloneTime(summary.LastActivityAt),
-		OriginalCompletedCount:       summary.OriginalCompletedCount,
-		OriginalTotalCount:           summary.OriginalTotalCount,
-		ReworkCompletedCount:         summary.ReworkCompletedCount,
-		ReworkTotalCount:             summary.ReworkTotalCount,
-		ApprovalSliceID:              summary.Capabilities.ApprovalSliceID,
-		ApprovalReason:               summary.Capabilities.ApprovalReason,
-		FinalVerificationFailureKind: summary.FinalVerificationFailureKind,
-		VerificationRecoveryAction:   summary.NextAction.Primary,
-		RecommendedAction:            summary.NextAction.Primary,
-		Warnings:                     warnings,
+		Kind:                   RowKindPlan,
+		RepositoryID:           entry.Repo.ID,
+		RepositoryName:         entry.Repo.Name,
+		RepositoryRoot:         entry.Repo.Root,
+		PlanID:                 summary.ID,
+		PlanTitle:              summary.Title,
+		PlanDir:                planDir(entry, summary),
+		Status:                 summary.Status,
+		Overview:               cloneOverview(summary.Overview),
+		Liveness:               LivenessMissing,
+		SliceID:                summary.CurrentSliceID,
+		Left:                   summary.PendingCount,
+		UpdatedAt:              cloneTime(summary.LastActivityAt),
+		OriginalCompletedCount: summary.OriginalCompletedCount,
+		OriginalTotalCount:     summary.OriginalTotalCount,
+		ReworkCompletedCount:   summary.ReworkCompletedCount,
+		ReworkTotalCount:       summary.ReworkTotalCount,
+		Warnings:               warnings,
 	}
 	if summary.CurrentSlice != nil {
 		row.SliceTitle = summary.CurrentSlice.Title
 	}
+	if summary.Status == plan.StatusAbandoned {
+		if evidence := summary.Abandonment; evidence != nil {
+			if !evidence.AbandonedAt.IsZero() {
+				abandonedAt := evidence.AbandonedAt.UTC()
+				row.AbandonedAt = &abandonedAt
+			}
+			row.AbandonmentReason = planview.FormatAbandonmentText(evidence.Reason)
+		}
+		return row
+	}
+	row.ApprovalSliceID = summary.Capabilities.ApprovalSliceID
+	row.ApprovalReason = summary.Capabilities.ApprovalReason
+	row.FinalVerificationFailureKind = summary.FinalVerificationFailureKind
+	row.VerificationRecoveryAction = summary.NextAction.Primary
+	row.RecommendedAction = summary.NextAction.Primary
 	if recovery := summary.FinalizationRecovery; recovery != nil {
 		row.FinalizationPhase = recovery.Phase
 		row.FinalizationCategory = recovery.Category
@@ -324,6 +337,9 @@ func planRow(entry taodata.RepoInventoryEntry, summary plan.PlanSummary) Row {
 }
 
 func attentionReasons(summary plan.PlanSummary) []AttentionReason {
+	if summary.Status == plan.StatusAbandoned {
+		return nil
+	}
 	var reasons []AttentionReason
 	switch summary.Status {
 	case plan.StatusBlocked:
@@ -424,6 +440,9 @@ func cloneOverview(value plan.DecisionOverview) plan.DecisionOverview {
 func DeriveNextAction(row Row) string {
 	if row.Kind == RowKindRepositoryWarning || row.Status == plan.StatusInvalid {
 		return "INSPECT"
+	}
+	if row.Status == plan.StatusAbandoned {
+		return "ABANDONED"
 	}
 	if row.Liveness == LivenessLive || (row.Liveness == LivenessStale && row.RunLockPresent && row.RunLockProcessAlive) {
 		return "MONITOR"
@@ -655,6 +674,9 @@ func sortRows(rows []Row) {
 }
 
 func urgency(row Row) int {
+	if row.Status == plan.StatusAbandoned {
+		return 4
+	}
 	switch row.Liveness {
 	case LivenessLive:
 		return 0

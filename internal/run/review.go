@@ -87,6 +87,9 @@ func (s Service) Review(ctx context.Context, request Request) (review plan.PlanR
 			if detail == nil {
 				return fmt.Errorf("plan %q not found", lockDetail.Dir)
 			}
+			if err := plan.RequireNotAbandoned(detail); err != nil {
+				return err
+			}
 			if err := plan.RequireSliceWorkSettled(detail); err != nil {
 				return err
 			}
@@ -149,6 +152,9 @@ func (s Service) ResumeReview(ctx context.Context, request Request) error {
 		if detail == nil {
 			return fmt.Errorf("plan %q not found", planDir)
 		}
+		if err := plan.RequireNotAbandoned(detail); err != nil {
+			return err
+		}
 		if err := plan.RequireSliceWorkSettled(detail); err != nil {
 			return err
 		}
@@ -165,6 +171,9 @@ func (s Service) ResumeReview(ctx context.Context, request Request) error {
 // phase completed; a persisted pull request proves all phases through PR
 // creation completed.
 func (f Finalizer) resumeCompletedRun(ctx context.Context, detail *plan.PlanDetail) error {
+	if err := plan.RequireNotAbandoned(detail); err != nil {
+		return err
+	}
 	reviewAttempted := completedRunReviewAttempted(detail)
 	pullRequestCreated := completedRunPullRequestCreated(detail)
 
@@ -415,6 +424,9 @@ func completedRunPullRequestCreated(detail *plan.PlanDetail) bool {
 
 func (s Service) prepareReviewExecution(detail *plan.PlanDetail, config ExecutionConfig) (runExecution, error) {
 	execution := newRunExecution(config, s.dependencies)
+	if err := plan.RequireNotAbandoned(detail); err != nil {
+		return execution, err
+	}
 	root, err := reviewExecutionRoot(detail)
 	if err != nil {
 		return execution, err

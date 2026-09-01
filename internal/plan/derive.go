@@ -24,6 +24,7 @@ type DerivedPlan struct {
 	SliceCompletionPending bool
 	UnresolvedReworkStop   bool
 	FinalizationRecovery   *FinalizationRecovery
+	Abandonment            *AbandonmentEvidence
 	NextAction             PlanNextAction
 }
 
@@ -75,6 +76,12 @@ func Derive(detail *PlanDetail, now time.Time) DerivedPlan {
 		SliceCompletionPending: SliceCompletionPending(detail),
 		UnresolvedReworkStop:   HasUnresolvedReworkStop(detail.Events),
 		FinalizationRecovery:   CurrentFinalizationRecovery(detail),
+		Abandonment:            ProjectAbandonment(detail.Events),
+	}
+	if detail.State.Status == StatusAbandoned {
+		derived.SliceCompletionPending = false
+		derived.UnresolvedReworkStop = false
+		derived.FinalizationRecovery = nil
 	}
 	derived.NextAction = deriveNextAction(detail, derived)
 	if !now.IsZero() {
@@ -113,6 +120,13 @@ func deriveNextAction(detail *PlanDetail, derived DerivedPlan) PlanNextAction {
 	administrativeMerge := PlanAction{
 		Kind: PlanActionMerge, Class: PlanActionClassAdministrative,
 		Command: command("tao merge --force"), Reason: "administrative exception that bypasses review and merge safeguards",
+	}
+	if detail.State.Status == StatusAbandoned {
+		reason := "the plan was abandoned"
+		if derived.Abandonment != nil {
+			reason += ": " + derived.Abandonment.Reason
+		}
+		return primary(PlanActionNone, PlanActionClassTerminal, "", reason)
 	}
 	currentReviewAction := func(reason string) PlanNextAction {
 		review := CurrentReview(detail)
@@ -292,7 +306,7 @@ func AnalyzeRunCapabilities(detail *PlanDetail) RunCapabilities {
 
 func runCapabilitiesForDetail(detail *PlanDetail, lifecycle Lifecycle) RunCapabilities {
 	capabilities := RunCapabilitiesFromLifecycle(lifecycle)
-	capabilities.Reviewed = CurrentReview(detail) != nil
+	capabilities.Reviewed = detail.State.Status != StatusAbandoned && CurrentReview(detail) != nil
 	return capabilities
 }
 
@@ -575,6 +589,7 @@ func Summarize(detail *PlanDetail, now time.Time) PlanSummary {
 		UnresolvedReworkStop:             derived.UnresolvedReworkStop,
 		NextAction:                       derived.NextAction,
 		FinalizationRecovery:             derived.FinalizationRecovery,
+		Abandonment:                      derived.Abandonment,
 		PlanningSessionPresent:           planningSummary.Present,
 		PlanningSessionValid:             planningSummary.Valid,
 		PlanningSessionUnavailableReason: planningSummary.UnavailableReason,
@@ -586,6 +601,10 @@ func Summarize(detail *PlanDetail, now time.Time) PlanSummary {
 		FinalizationFailure:              cloneFinalizationFailure(state.Plan.FinalizationFailure),
 		Workspace:                        cloneWorkspace(state.Workspace),
 		Warnings:                         detail.Warnings,
+	}
+
+	if status == StatusAbandoned {
+		summary.ReviewVerdict = ""
 	}
 
 	if status == StatusVerificationFailed {
@@ -612,6 +631,9 @@ func Summarize(detail *PlanDetail, now time.Time) PlanSummary {
 func PlanLifecycleStatus(detail *PlanDetail) string {
 	if detail == nil {
 		return ""
+	}
+	if detail.State.Status == StatusAbandoned {
+		return StatusAbandoned
 	}
 	if PlanIsMerged(detail.Events) || PlanIsPullRequestComplete(detail) {
 		return StatusCompleted
@@ -649,6 +671,17 @@ func IsPostSliceStatus(status string) bool {
 	default:
 		return false
 	}
+}
+
+// ProjectAbandonment returns the first recorded abandonment reason and time.
+// The event log is append-only, so later duplicate evidence is non-authoritative.
+func ProjectAbandonment(events []Event) *AbandonmentEvidence {
+	for _, event := range events {
+		if event.Type == EventTypePlanAbandoned {
+			return &AbandonmentEvidence{Reason: event.Reason, AbandonedAt: event.Timestamp}
+		}
+	}
+	return nil
 }
 
 // PlanIsMerged reports whether the plan is currently in its terminal merged

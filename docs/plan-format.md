@@ -120,12 +120,15 @@ Plan status values:
 | `reviewed` | Review completed without requested changes; an approved review may be merged or paired with matching PR metadata. |
 | `changes_requested` | Review completed with requested changes; use `tao rework` or address manually. |
 | `completed` | Tao's lifecycle is terminal through recorded merge evidence or a qualifying reviewed PR handoff. |
+| `abandoned` | The unfinished plan was intentionally made terminal with a durable reason; this does not assert completion, approval, PR success, or merge integration. |
 | `blocked` | Work cannot continue without a fix, decision, approval, or dependency. |
 
 There are two current completion paths:
 
 - The no-PR path records integration into the default branch and appends a current `plan_merged` event.
 - The PR path requires a current review with status `completed` and verdict `approve`, plus recorded pull-request metadata whose head SHA exactly matches the review's same non-empty head. This is local workflow completion only: Tao does not query or assert the remote PR's merge, review, CI, open/closed, or draft state. Lifecycle readers apply this predicate too, so existing matching artifacts project `completed` without requiring a rewrite first.
+
+`tao abandon --reason TEXT PLAN` transitions any non-completed lifecycle state to `abandoned`. It trims and bounds the required reason, serializes through the ordinary per-plan run lock, reloads under that lock, and refuses unsettled automatic slice-completion, workspace-rebase, single-merge, or pull-request transactions. Repeating the command is idempotent: the first `plan_abandoned` event remains authoritative for reason and timestamp. Abandonment preserves slices, reviews, prior events, telemetry, Git and workspace evidence, branches, and worktrees; cleanup remains an explicit preview-first operation.
 
 Only a current `plan_merged` event in `events.jsonl` proves integration into the default branch; `status: completed` alone does not. A later `plan_reopened` supersedes earlier review, PR-completion, and merge evidence until the reworked head is reviewed and recorded again. Plans written by releases predating merge-event tracking may carry `status: completed` without modern merge or qualifying PR evidence. Status projection trusts that persisted legacy status rather than demoting historical plans to `in_review` on upgrade, and report projection retains its legacy merged-outcome inference for those records.
 
@@ -174,6 +177,12 @@ stateDiagram-v2
     planned --> blocked: blocker recorded
     in_progress --> blocked: blocker recorded
     blocked --> in_progress: tao run --continue
+    planned --> abandoned: tao abandon
+    in_progress --> abandoned: tao abandon
+    blocked --> abandoned: tao abandon
+    in_review --> abandoned: tao abandon
+    reviewed --> abandoned: tao abandon
+    changes_requested --> abandoned: tao abandon
 ```
 
 First-class plan edits mutate only pending work:
@@ -418,6 +427,7 @@ Current well-known event types include:
 | Event type | Purpose |
 | --- | --- |
 | `plan_created` | Initial event written by `/tao-slice`; may include `agent` for the planning runtime. |
+| `plan_abandoned` | First authoritative abandonment timestamp and bounded reason recorded by `tao abandon`; it does not prove completion or integration. |
 | `slice_started` | Selected slice attempt started. |
 | `slice_completed` | Slice completion transaction settled successfully; detailed intent, outcome, and SHA live in `slices.json`. |
 | `slice_blocked` | The selected slice and plan were marked blocked with the persisted reason. |
@@ -472,6 +482,8 @@ Legacy evidence that is missing, unsafe, associated-only, or incomplete never
 authorizes a retroactive recurring-file stop; existing cap and
 equivalent-finding records also remain readable. Reconstruction and interrupted
 settlement mechanics live in [Plan Mutation Journal](plan-mutation-journal.md).
+
+A `plan_abandoned` event records the required trimmed `reason` and UTC `timestamp`. The first such event is authoritative; retries do not append or replace it. The event and `status: abandoned` make the plan terminal and non-runnable while preserving unfinished slice state and all historical evidence.
 
 A `slice_approved` event records the approved slice ID and timestamp. It is appended at most once per slice; repeated approvals are idempotent and preserve the original `approved_by` and `approved_at` metadata.
 

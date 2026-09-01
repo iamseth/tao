@@ -38,10 +38,29 @@ func ValidateDetail(detail *PlanDetail) []string {
 	if verification := detail.State.Plan.FinalVerification; verification != nil && !validFinalVerificationFailureKind(verification.FailureKind) {
 		warnings = append(warnings, "state.json plan.final_verification.failure_kind is invalid")
 	}
+	abandonmentEvents := 0
 	for i, event := range detail.Events {
 		if !validFinalVerificationFailureKind(event.FailureKind) {
 			warnings = append(warnings, fmt.Sprintf("events.jsonl event %d failure_kind is invalid", i+1))
 		}
+		if event.Type == EventTypePlanAbandoned {
+			abandonmentEvents++
+			if err := ValidateAbandonmentReason(event.Reason); err != nil {
+				warnings = append(warnings, fmt.Sprintf("events.jsonl event %d plan_abandoned reason is invalid: %v", i+1, err))
+			}
+			if event.Timestamp.IsZero() {
+				warnings = append(warnings, fmt.Sprintf("events.jsonl event %d plan_abandoned timestamp is required", i+1))
+			}
+		}
+	}
+	if detail.State.Status == StatusAbandoned && abandonmentEvents == 0 {
+		warnings = append(warnings, "state.json status is abandoned but events.jsonl has no plan_abandoned evidence")
+	}
+	if detail.State.Status != StatusAbandoned && abandonmentEvents > 0 {
+		warnings = append(warnings, "events.jsonl has plan_abandoned evidence but state.json status is not abandoned")
+	}
+	if abandonmentEvents > 1 {
+		warnings = append(warnings, "events.jsonl has multiple plan_abandoned events; the first remains authoritative")
 	}
 	if failure := detail.State.Plan.FinalizationFailure; failure != nil {
 		if err := failure.Validate(); err != nil {

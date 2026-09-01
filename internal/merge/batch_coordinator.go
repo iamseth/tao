@@ -60,6 +60,12 @@ type BatchCoordinatorDiscovery interface {
 	Discover(context.Context) (BatchPreflightResult, error)
 }
 
+// BatchCandidateSnapshotValidator is an optional discovery capability used by
+// resumed batches to recheck terminal lifecycle state before any phase runs.
+type BatchCandidateSnapshotValidator interface {
+	ValidateCandidateSnapshot(context.Context, []BatchCandidate) error
+}
+
 // BatchCoordinatorPlanner deterministically orders a candidate snapshot.
 type BatchCoordinatorPlanner interface {
 	PlanBatchCandidatesWithGit(context.Context, []BatchCandidate) (BatchPlanningResult, error)
@@ -123,6 +129,7 @@ func (c *BatchCoordinator) Run(ctx context.Context, options BatchCoordinatorOpti
 		return result, errors.New("batch coordinator workspace is required")
 	}
 
+	var ownership *BatchOwnership
 	activeID, err := c.seams.Store.ActiveID()
 	if err != nil {
 		return result, err
@@ -134,6 +141,9 @@ func (c *BatchCoordinator) Run(ctx context.Context, options BatchCoordinatorOpti
 		}
 		result.State = state
 		result.Candidates = append([]BatchCandidate(nil), state.Candidates...)
+		if err := c.validateCandidateSnapshot(ctx, state); err != nil {
+			return result, err
+		}
 
 		defaultReachedIntent, landingErr := c.seams.Workspace.DefaultReachedLandingIntent(ctx, state)
 		if landingErr != nil {
@@ -211,13 +221,19 @@ func (c *BatchCoordinator) Run(ctx context.Context, options BatchCoordinatorOpti
 			Candidates: preflight.Candidates, ChosenOrder: order, CreatedAt: at, UpdatedAt: at,
 		}
 		result.State = state
+		ownership, err = c.seams.Workspace.AcquireOwnership(state, now)
+		if err != nil {
+			return result, err
+		}
+		defer func() { _ = ownership.Release() }()
+		// Discovery and planning intentionally run without ownership. Revalidate
+		// after taking the repository and candidate-plan locks, before publishing
+		// active state, so a lifecycle mutation that won the discovery race cannot
+		// be stranded in a newly initialized batch.
+		if err := c.validateCandidateSnapshot(ctx, state); err != nil {
+			return result, err
+		}
 		if options.DryRun {
-			ownership, ownershipErr := c.seams.Workspace.AcquireOwnership(state, now)
-			if ownershipErr != nil {
-				return result, ownershipErr
-			}
-			defer func() { _ = ownership.Release() }()
-
 			integrated, integrateErr := c.dryRunIntegration(ctx, state, options.VerifyCommand)
 			result.State = integrated.State
 			result.Deferred = integrated.Deferred
@@ -230,11 +246,18 @@ func (c *BatchCoordinator) Run(ctx context.Context, options BatchCoordinatorOpti
 		result.State = state
 	}
 
-	ownership, err := c.seams.Workspace.AcquireOwnership(result.State, now)
-	if err != nil {
-		return result, err
+	if ownership == nil {
+		ownership, err = c.seams.Workspace.AcquireOwnership(result.State, now)
+		if err != nil {
+			return result, err
+		}
+		defer func() { _ = ownership.Release() }()
+		// Ownership includes every effective plan lock. Recheck after acquiring it
+		// to close the gap between the initial resume check and phase dispatch.
+		if err := c.validateCandidateSnapshot(ctx, result.State); err != nil {
+			return result, err
+		}
 	}
-	defer func() { _ = ownership.Release() }()
 	var integrationRoot string
 	if result.Resumed {
 		status, statusErr := c.seams.Workspace.Status(ctx, result.State.ID)
@@ -336,6 +359,14 @@ func (c *BatchCoordinator) resolveAndReview(ctx context.Context, state BatchStat
 			return state, nil
 		}
 	}
+}
+
+func (c *BatchCoordinator) validateCandidateSnapshot(ctx context.Context, state BatchState) error {
+	validator, ok := c.seams.Discovery.(BatchCandidateSnapshotValidator)
+	if !ok {
+		return nil
+	}
+	return validator.ValidateCandidateSnapshot(ctx, effectiveBatchCandidates(state))
 }
 
 func (c *BatchCoordinator) dryRunIntegration(ctx context.Context, state BatchState, verifyCommand string) (result BatchIntegrateResult, err error) {

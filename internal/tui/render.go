@@ -351,7 +351,14 @@ func renderTableRow(row monitor.Row, now time.Time, widths tableWidths, withAtte
 
 func renderPlanPreview(row monitor.Row, width int) []string {
 	overview := row.Overview
-	lines := []string{"SELECTED PLAN — advisory context", "Benefit: " + displayValue(singleLineDetail(overview.ExpectedBenefit))}
+	lines := []string{"SELECTED PLAN — advisory context"}
+	if row.Status == plan.StatusAbandoned {
+		lines = append(lines,
+			"Abandoned at: "+formatAbandonedAt(row.AbandonedAt),
+			"Abandonment reason: "+planview.FormatAbandonmentText(row.AbandonmentReason),
+		)
+	}
+	lines = append(lines, "Benefit: "+displayValue(singleLineDetail(overview.ExpectedBenefit)))
 	if width > 0 && width < 50 {
 		lines = append(lines, fmt.Sprintf("Decision: %s / %s", displayValue(string(overview.Disposition)), displayValue(string(overview.Readiness))))
 	} else {
@@ -398,7 +405,7 @@ func tableRowValues(row monitor.Row, now time.Time, actionLabel string) rowValue
 		status = actionLabel
 	}
 	next := row.NextAction
-	if strings.TrimSpace(next) == "" {
+	if strings.TrimSpace(next) == "" || row.Status == plan.StatusAbandoned {
 		next = monitor.DeriveNextAction(row)
 	}
 	return rowValues{
@@ -429,6 +436,9 @@ func planLabel(row monitor.Row) string {
 }
 
 func phaseLabel(row monitor.Row) string {
+	if row.Status == plan.StatusAbandoned {
+		return "-"
+	}
 	if isStalled(row) {
 		return fmt.Sprintf("stalled? (%s old)", durationLabel(row.HeartbeatAge))
 	}
@@ -441,10 +451,17 @@ func phaseLabel(row monitor.Row) string {
 }
 
 func runAgeLabel(row monitor.Row) string {
-	if row.Liveness != monitor.LivenessLive && row.Liveness != monitor.LivenessStale {
+	if row.Status == plan.StatusAbandoned || (row.Liveness != monitor.LivenessLive && row.Liveness != monitor.LivenessStale) {
 		return "-"
 	}
 	return durationLabel(row.InvocationDuration)
+}
+
+func formatAbandonedAt(value *time.Time) string {
+	if value == nil || value.IsZero() {
+		return "-"
+	}
+	return value.UTC().Format(time.RFC3339)
 }
 
 func durationLabel(duration time.Duration) string {

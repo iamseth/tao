@@ -16,6 +16,7 @@ func TestBuildSectionsGroupsEveryRowAndPreservesOrder(t *testing.T) {
 		{PlanID: "planned-first", Status: plan.StatusPlanned},
 		{PlanID: "planned-second", Status: plan.StatusInReview},
 		{PlanID: "completed", Status: plan.StatusCompleted},
+		{PlanID: "abandoned", Status: plan.StatusAbandoned, Liveness: monitor.LivenessLive, AttentionReasons: []monitor.AttentionReason{monitor.AttentionApprovalRequired}},
 		{PlanID: "stalled", Liveness: monitor.LivenessStale, RunLockPresent: true, RunLockProcessAlive: true, AttentionReasons: []monitor.AttentionReason{monitor.AttentionApprovalRequired}},
 		{PlanID: "attention-second", Liveness: monitor.LivenessStale, AttentionReasons: []monitor.AttentionReason{monitor.AttentionRunCrashed}},
 	}
@@ -26,6 +27,7 @@ func TestBuildSectionsGroupsEveryRowAndPreservesOrder(t *testing.T) {
 		SectionRunning:   {"running-first", "stalled"},
 		SectionPlanned:   {"planned-first", "planned-second"},
 		SectionCompleted: {"completed"},
+		SectionAbandoned: {"abandoned"},
 	}
 	for _, section := range sections {
 		var got []string
@@ -45,6 +47,7 @@ func TestBuildSectionsRequiresLiveRunLockForStalledClassification(t *testing.T) 
 		{PlanID: "dead-lock", Status: plan.StatusInProgress, Liveness: monitor.LivenessStale, RunLockPresent: true, AttentionReasons: []monitor.AttentionReason{monitor.AttentionRunCrashed}},
 		{PlanID: "attention", Status: plan.StatusBlocked, Liveness: monitor.LivenessStale, AttentionReasons: []monitor.AttentionReason{monitor.AttentionBlocked}},
 		{PlanID: "recently-completed", Status: plan.StatusCompleted, Liveness: monitor.LivenessStale},
+		{PlanID: "abandoned", Status: plan.StatusAbandoned, Liveness: monitor.LivenessStale, RunLockPresent: true, RunLockProcessAlive: true, AttentionReasons: []monitor.AttentionReason{monitor.AttentionRunCrashed}},
 	}
 
 	sections := BuildSections(rows, true)
@@ -59,6 +62,7 @@ func TestBuildSectionsRequiresLiveRunLockForStalledClassification(t *testing.T) 
 		SectionRunning:   {"live-lock"},
 		SectionPlanned:   {"missing-lock"},
 		SectionCompleted: {"recently-completed"},
+		SectionAbandoned: {"abandoned"},
 	}
 	for kind, wantIDs := range want {
 		if !slices.Equal(got[kind], wantIDs) {
@@ -171,21 +175,25 @@ func TestBuildSectionsHandlesEmptyAndHiddenCompletedSections(t *testing.T) {
 		rows          []monitor.Row
 		showCompleted bool
 		wantCompleted int
+		wantAbandoned int
 	}{
 		{name: "empty", showCompleted: true},
-		{name: "completed shown", rows: []monitor.Row{{Status: plan.StatusCompleted}}, showCompleted: true, wantCompleted: 1},
-		{name: "completed hidden", rows: []monitor.Row{{Status: plan.StatusCompleted}}, showCompleted: false},
+		{name: "terminal outcomes shown", rows: []monitor.Row{{Status: plan.StatusCompleted}, {Status: plan.StatusAbandoned}}, showCompleted: true, wantCompleted: 1, wantAbandoned: 1},
+		{name: "completed hidden without hiding abandonment", rows: []monitor.Row{{Status: plan.StatusCompleted}, {Status: plan.StatusAbandoned}}, showCompleted: false, wantAbandoned: 1},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			sections := BuildSections(test.rows, test.showCompleted)
-			if len(sections) != 4 {
-				t.Fatalf("section count = %d, want 4", len(sections))
+			if len(sections) != 5 {
+				t.Fatalf("section count = %d, want 5", len(sections))
 			}
 			for _, section := range sections {
 				want := 0
-				if section.Kind == SectionCompleted {
+				switch section.Kind {
+				case SectionCompleted:
 					want = test.wantCompleted
+				case SectionAbandoned:
+					want = test.wantAbandoned
 				}
 				if len(section.Rows) != want {
 					t.Errorf("%s row count = %d, want %d", section.Kind, len(section.Rows), want)

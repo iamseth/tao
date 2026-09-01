@@ -50,6 +50,68 @@ func TestProjectFullAcrossLifecyclePhases(t *testing.T) {
 	}
 }
 
+func TestProjectFullSanitizesAbandonmentAndNeverProjectsMergeOrApproval(t *testing.T) {
+	now := time.Date(2026, 9, 1, 17, 0, 0, 0, time.UTC)
+	detail := reportFixture(now)
+	detail.State.Status = plan.StatusAbandoned
+	detail.Events = []plan.Event{
+		{Type: plan.EventTypePlanAbandoned, Timestamp: now, Reason: "superseded\nowner@example.com\x1b[31m"},
+		{Type: plan.EventTypePlanMerged, Timestamp: now.Add(time.Minute)},
+	}
+	plan.SetPersistedReview(detail, plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Summary: "approved secret"})
+
+	got := ProjectFull(detail, now)
+	if got.Status != plan.StatusAbandoned || !got.Outcome.Abandoned || got.Outcome.Merged || !got.Outcome.AbandonedAt.Equal(now) {
+		t.Fatalf("abandonment outcome = status %q outcome %+v", got.Status, got.Outcome)
+	}
+	if got.Review.Available || got.Outcome.Reason.Text.text == "" {
+		t.Fatalf("abandonment projected approval or omitted reason: review=%+v outcome=%+v", got.Review, got.Outcome)
+	}
+	values := collectSafeText(got)
+	for _, forbidden := range []string{"owner@example.com", "approved secret", "\x1b"} {
+		if strings.Contains(values, forbidden) {
+			t.Fatalf("abandonment projection retained %q in %q", forbidden, values)
+		}
+	}
+
+	planningJSON, err := json.Marshal(ProjectPlanningOnly(detail, now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"Abandon", "abandon", "superseded", "owner@example.com"} {
+		if strings.Contains(string(planningJSON), forbidden) {
+			t.Fatalf("planning-only projection contains abandonment data: %s", planningJSON)
+		}
+	}
+}
+
+func TestProjectFullHandlesMissingAndMalformedAbandonmentEvidence(t *testing.T) {
+	now := time.Date(2026, 9, 1, 17, 0, 0, 0, time.UTC)
+	missing := reportFixture(now)
+	missing.State.Status = plan.StatusAbandoned
+	got := ProjectFull(missing, now)
+	if !got.Outcome.Abandoned || got.Outcome.Reason.Available || !got.Outcome.AbandonedAt.IsZero() || got.Outcome.Merged {
+		t.Fatalf("missing abandonment evidence = %+v", got.Outcome)
+	}
+
+	malformed := reportFixture(now)
+	malformed.State.Status = plan.StatusAbandoned
+	malformed.Events = []plan.Event{{Type: plan.EventTypePlanAbandoned, Reason: strings.Repeat("x", defaultTextLimit+100)}}
+	got = ProjectFull(malformed, now)
+	if !got.Outcome.Reason.Available || len([]rune(got.Outcome.Reason.Text.text)) > defaultTextLimit || !got.Outcome.AbandonedAt.IsZero() {
+		t.Fatalf("malformed abandonment evidence = %+v", got.Outcome)
+	}
+	foundTruncation := false
+	for _, disclosure := range got.Disclosures {
+		if disclosure.Section == sectionOutcome && disclosure.Category == DisclosureTruncated {
+			foundTruncation = true
+		}
+	}
+	if !foundTruncation {
+		t.Fatalf("malformed long reason lacks outcome disclosure: %+v", got.Disclosures)
+	}
+}
+
 func TestProjectFullAcceptsProjectedVerificationFailureStatus(t *testing.T) {
 	now := time.Date(2026, 8, 4, 15, 0, 0, 0, time.UTC)
 	detail := reportFixture(now)

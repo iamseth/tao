@@ -29,6 +29,7 @@ func TestCommandAliases(t *testing.T) {
 		{name: "note", want: []string{"n", "no", "not", "note"}},
 		{name: "monitor", want: []string{"mon", "moni", "monit", "monito", "monitor"}},
 		{name: "slice-complete", want: []string{"slice-complete"}},
+		{name: "abandon", want: []string{"abandon"}},
 		{name: "commit", want: []string{"commit"}},
 		{name: "version", want: []string{"version"}},
 		{name: "update", want: []string{"update"}},
@@ -130,6 +131,7 @@ func TestCommandAliasPatternCompletionSpecialCases(t *testing.T) {
 		{command: "note", want: "n|no|not|note"},
 		{command: "monitor", want: "mon|moni|monit|monito|monitor"},
 		{command: "slice-complete", want: "slice-complete"},
+		{command: "abandon", want: "abandon"},
 		{command: "commit", want: "commit"},
 		{command: "update", want: "update"},
 		{command: "missing", want: "missing"},
@@ -181,6 +183,12 @@ func TestZshCommandArgumentsUseRegisteredFlagsAndSemanticHints(t *testing.T) {
 				"'--output[output Markdown path, or - for stdout (required)]:path:_files'",
 				"'--planning-only[export a synthesized planning record without execution history]'",
 				"'--force[safely replace an existing output file]'",
+			},
+		},
+		{
+			command: "abandon",
+			want: []string{
+				"'--reason[required reason for abandoning the plan]:text:'",
 			},
 		},
 	}

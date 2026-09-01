@@ -32,6 +32,7 @@ type ShowPayload struct {
 	Progress     ShowProgress               `json:"progress"`
 	NextAction   plan.PlanNextAction        `json:"next_action"`
 	Finalization *plan.FinalizationRecovery `json:"finalization,omitempty"`
+	Abandonment  *ShowAbandonment           `json:"abandonment,omitempty"`
 	Warnings     []string                   `json:"warnings"`
 }
 
@@ -48,8 +49,20 @@ type ShowProgress struct {
 	NextSliceID    string `json:"next_slice_id,omitempty"`
 }
 
+// ShowAbandonment is an explicit display-safe projection rather than a raw
+// event. Reason is normalized and bounded; malformed zero timestamps remain
+// absent instead of being presented as evidence.
+type ShowAbandonment struct {
+	Reason      string     `json:"reason"`
+	AbandonedAt *time.Time `json:"abandoned_at,omitempty"`
+}
+
 func (loaded Plan) ShowPayload() ShowPayload {
 	detail := loaded.Detail
+	var abandonment *ShowAbandonment
+	if plan.PlanLifecycleStatus(detail) == plan.StatusAbandoned {
+		abandonment = projectShowAbandonment(loaded.Derived.Abandonment)
+	}
 	return ShowPayload{
 		Schema: "tao.show.v1",
 		ID:     detail.State.Plan.ID,
@@ -66,10 +79,35 @@ func (loaded Plan) ShowPayload() ShowPayload {
 			CurrentSliceID: loaded.Derived.CurrentSliceID,
 			NextSliceID:    loaded.Derived.NextSliceID,
 		},
-		NextAction:   loaded.Derived.NextAction,
+		NextAction:   loaded.DisplayNextAction(),
 		Finalization: cloneFinalizationRecovery(loaded.Derived.FinalizationRecovery),
+		Abandonment:  abandonment,
 		Warnings:     append([]string{}, detail.Warnings...),
 	}
+}
+
+// DisplayNextAction removes duplicated untrusted abandonment prose from the
+// generic lifecycle recommendation. The bounded evidence is projected in its
+// dedicated field and rendered separately by text views.
+func (loaded Plan) DisplayNextAction() plan.PlanNextAction {
+	next := loaded.Derived.NextAction
+	next.Alternatives = append([]plan.PlanAction{}, next.Alternatives...)
+	if loaded.Detail != nil && plan.PlanLifecycleStatus(loaded.Detail) == plan.StatusAbandoned {
+		next.Primary.Reason = "the plan was abandoned"
+	}
+	return next
+}
+
+func projectShowAbandonment(source *plan.AbandonmentEvidence) *ShowAbandonment {
+	if source == nil {
+		return nil
+	}
+	out := &ShowAbandonment{Reason: FormatAbandonmentText(source.Reason)}
+	if !source.AbandonedAt.IsZero() {
+		at := source.AbandonedAt.UTC()
+		out.AbandonedAt = &at
+	}
+	return out
 }
 
 func cloneFinalizationRecovery(source *plan.FinalizationRecovery) *plan.FinalizationRecovery {

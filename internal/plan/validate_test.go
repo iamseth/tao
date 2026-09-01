@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestValidatePlanVerificationFindsEverySliceCommand(t *testing.T) {
@@ -506,6 +507,49 @@ func TestValidateSelectedSliceVerificationBlocksBlankCommandLists(t *testing.T) 
 		if !result.HasErrors() || findFindingByCode(result.Findings, "slice_verification_missing") == nil {
 			t.Fatalf("expected blank verification structure to block, commands=%q findings=%+v", commands, result.Findings)
 		}
+	}
+}
+
+func TestValidateDetailAcceptsAbandonedOverrideWithUnfinishedSlices(t *testing.T) {
+	at := time.Date(2026, 9, 1, 16, 0, 0, 0, time.UTC)
+	detail := &PlanDetail{
+		State: State{Status: StatusAbandoned, Plan: PlanState{
+			ID: "plan", CurrentSlice: ptrString("001-a"), PendingSlices: []string{"001-a", "002-b"},
+		}},
+		Slices: SlicesFile{PlanID: "plan", Slices: []Slice{
+			{ID: "001-a", Status: StatusInProgress},
+			{ID: "002-b", Status: StatusPending},
+		}},
+		Events: []Event{{Type: EventTypePlanAbandoned, Timestamp: at, Reason: "No longer needed"}},
+	}
+	warnings := ValidateDetail(detail)
+	for _, unwanted := range []string{"active lifecycle metadata", "current_slice references", "pending_slices references", "plan_abandoned"} {
+		if containsWarning(warnings, unwanted) {
+			t.Fatalf("abandoned unfinished state warning containing %q: %v", unwanted, warnings)
+		}
+	}
+}
+
+func TestValidateDetailReportsInvalidAbandonmentEvidence(t *testing.T) {
+	detail := &PlanDetail{
+		State:  State{Status: StatusAbandoned, Plan: PlanState{ID: "plan"}},
+		Slices: SlicesFile{PlanID: "plan"},
+		Events: []Event{
+			{Type: EventTypePlanAbandoned, Reason: " "},
+			{Type: EventTypePlanAbandoned, Timestamp: time.Date(2026, 9, 1, 17, 0, 0, 0, time.UTC), Reason: "duplicate"},
+		},
+	}
+	warnings := ValidateDetail(detail)
+	for _, want := range []string{"reason is invalid", "timestamp is required", "multiple plan_abandoned events"} {
+		if !containsWarning(warnings, want) {
+			t.Fatalf("warnings missing %q: %v", want, warnings)
+		}
+	}
+
+	detail.Events = nil
+	warnings = ValidateDetail(detail)
+	if !containsWarning(warnings, "no plan_abandoned evidence") {
+		t.Fatalf("missing-event warnings = %v", warnings)
 	}
 }
 

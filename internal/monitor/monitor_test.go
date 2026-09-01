@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -254,6 +255,63 @@ func TestPlanRowDerivesAttentionReasons(t *testing.T) {
 	}
 }
 
+func TestPlanRowProjectsBoundedTerminalAbandonment(t *testing.T) {
+	at := time.Date(2026, 9, 1, 17, 0, 0, 123, time.FixedZone("offset", 2*60*60))
+	summary := plan.PlanSummary{
+		ID: "plan-a", Status: plan.StatusAbandoned,
+		Abandonment:            &plan.AbandonmentEvidence{AbandonedAt: at, Reason: "superseded\nby\t" + strings.Repeat("界", 120) + "\x1b[31m"},
+		Capabilities:           plan.RunCapabilities{NeedsApproval: true, ApprovalSliceID: "001-risk", ApprovalReason: "approve"},
+		SliceCompletionPending: true,
+		UnresolvedReworkStop:   true,
+		FinalizationRecovery:   &plan.FinalizationRecovery{Phase: plan.FinalizationFailurePhasePullRequest, Category: "publication_failed"},
+		NextAction:             plan.PlanNextAction{Primary: plan.PlanAction{Kind: plan.PlanActionRecoverPullRequest, Class: plan.PlanActionClassRecovery}},
+	}
+
+	row := planRow(taodata.RepoInventoryEntry{}, summary)
+	if row.AbandonedAt == nil || !row.AbandonedAt.Equal(at) || row.AbandonedAt.Location() != time.UTC {
+		t.Fatalf("abandoned timestamp = %v, want UTC %v", row.AbandonedAt, at)
+	}
+	if strings.ContainsAny(row.AbandonmentReason, "\n\t\x1b") || len([]rune(row.AbandonmentReason)) > 96 || !strings.HasSuffix(row.AbandonmentReason, "…") {
+		t.Fatalf("unsafe or unbounded abandonment reason = %q", row.AbandonmentReason)
+	}
+	if len(row.AttentionReasons) != 0 || row.ApprovalSliceID != "" || row.ApprovalReason != "" || row.FinalizationPhase != "" || row.RecommendedAction.Kind != "" || row.VerificationRecoveryAction.Kind != "" {
+		t.Fatalf("abandoned row retained actionable projection: %+v", row)
+	}
+	if got := DeriveNextAction(row); got != "ABANDONED" {
+		t.Fatalf("abandoned next action = %q", got)
+	}
+}
+
+func TestCollectorDoesNotReadOperationalStateForAbandonedPlans(t *testing.T) {
+	entry := taodata.RepoInventoryEntry{Repo: taodata.Repo{ID: "repo", Name: "repo"}, PlansDir: "/data/repo/plans"}
+	reader := &fakeStatusReader{records: map[string]runstatus.Record{
+		"abandoned": runtimeRecord("repo", "abandoned", time.Now().Add(-time.Hour), time.Now(), "run", nil),
+	}}
+	lockReads := 0
+	collector := Collector{
+		Inventory: fakeInventory{entries: []taodata.RepoInventoryEntry{entry}},
+		NewPlanLister: func(taodata.RepoInventoryEntry) PlanLister {
+			return &fakePlanLister{summaries: []plan.PlanSummary{{ID: "abandoned", Status: plan.StatusAbandoned}}}
+		},
+		NewStatusReader: func(taodata.RepoInventoryEntry) RuntimeStatusReader { return reader },
+		ReadRunLock: func(string) (plan.RunLock, error) {
+			lockReads++
+			return plan.RunLock{ProcessAlive: true}, nil
+		},
+	}
+
+	snapshot, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Rows) != 1 || snapshot.Rows[0].Liveness != LivenessMissing || len(snapshot.Rows[0].AttentionReasons) != 0 || snapshot.Rows[0].NextAction != "ABANDONED" {
+		t.Fatalf("abandoned snapshot row = %+v", snapshot.Rows)
+	}
+	if len(reader.reads) != 0 || lockReads != 0 {
+		t.Fatalf("abandoned operational reads = status %v lock %d", reader.reads, lockReads)
+	}
+}
+
 func TestPlanRowProjectsVerificationRecoveryByClassification(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -448,6 +506,7 @@ func TestDeriveNextActionIsPureAndExhaustive(t *testing.T) {
 	}{
 		{name: "repository warning", row: Row{Kind: RowKindRepositoryWarning}, want: "INSPECT"},
 		{name: "completed", row: Row{Status: plan.StatusCompleted}, want: "DONE"},
+		{name: "abandoned overrides stale action state", row: Row{Status: plan.StatusAbandoned, Liveness: LivenessLive, AttentionReasons: []AttentionReason{AttentionFinalizationFailed}, RecommendedAction: plan.PlanAction{Kind: plan.PlanActionRecoverPullRequest}}, want: "ABANDONED"},
 		{name: "completed with PR recovery", row: Row{Status: plan.StatusCompleted, AttentionReasons: []AttentionReason{AttentionFinalizationFailed}, FinalizationPhase: plan.FinalizationFailurePhasePullRequest}, want: "FINALIZE PR"},
 		{name: "live", row: Row{Liveness: LivenessLive}, want: "MONITOR"},
 		{name: "stalled owned", row: Row{Liveness: LivenessStale, RunLockPresent: true, RunLockProcessAlive: true}, want: "MONITOR"},
@@ -499,6 +558,9 @@ func TestDeriveNextActionIsPureAndExhaustive(t *testing.T) {
 func TestVerificationFailureHasAttentionUrgency(t *testing.T) {
 	if got := urgency(Row{Status: plan.StatusVerificationFailed}); got != 2 {
 		t.Fatalf("verification-failed urgency = %d, want 2", got)
+	}
+	if got := urgency(Row{Status: plan.StatusAbandoned, Liveness: LivenessLive}); got != 4 {
+		t.Fatalf("abandoned urgency = %d, want terminal priority 4", got)
 	}
 }
 

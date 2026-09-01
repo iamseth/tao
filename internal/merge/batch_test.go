@@ -42,6 +42,42 @@ func TestBatchCandidateDiscoveryEmpty(t *testing.T) {
 	}
 }
 
+func TestBatchCandidateDiscoveryExcludesAbandonedPlansWithStaleApproval(t *testing.T) {
+	abandoned := batchReadyDetail("plan-a", "tao/plan-a")
+	abandoned.State.Status = plan.StatusAbandoned
+	repo := &batchRepository{
+		summaries: []plan.PlanSummary{
+			{ID: "plan-a", Dir: abandoned.Dir, Status: plan.StatusAbandoned, Reviewed: true, ReviewVerdict: plan.ReviewVerdictApprove},
+			{ID: "plan-b", Dir: "/plans/plan-b", Status: plan.StatusReviewed, Reviewed: true, ReviewVerdict: plan.ReviewVerdictApprove},
+		},
+		details: map[string]*plan.PlanDetail{"plan-b": abandoned},
+	}
+	git := &fakeGitClient{}
+	got, err := (BatchCandidateDiscovery{Repository: repo, Merge: Service{Git: git}}).Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Candidates) != 0 || len(got.Blockers) != 0 {
+		t.Fatalf("abandoned plans entered batch result: %+v", got)
+	}
+	if len(git.calls) != 0 {
+		t.Fatalf("abandoned discovery called Git: %v", git.calls)
+	}
+}
+
+func TestBatchCandidateSnapshotValidationRejectsAbandonment(t *testing.T) {
+	detail := batchReadyDetail("plan-a", "tao/plan-a")
+	detail.State.Status = plan.StatusAbandoned
+	detail.Events = []plan.Event{{Type: plan.EventTypePlanAbandoned, Reason: "superseded"}}
+	repo := &batchRepository{details: map[string]*plan.PlanDetail{detail.Dir: detail}}
+	discovery := BatchCandidateDiscovery{Repository: repo}
+
+	err := discovery.ValidateCandidateSnapshot(context.Background(), []BatchCandidate{{PlanID: "plan-a", PlanDir: detail.Dir}})
+	if err == nil || !strings.Contains(err.Error(), "plan plan-a is abandoned: superseded") {
+		t.Fatalf("ValidateCandidateSnapshot() error = %v, want abandonment refusal", err)
+	}
+}
+
 func TestBatchCandidateDiscoveryExcludesLegacyCompletedApprovedPlans(t *testing.T) {
 	legacy := batchReadyDetail("legacy", "tao/legacy")
 	repo := &batchRepository{

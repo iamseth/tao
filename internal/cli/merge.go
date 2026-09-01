@@ -11,6 +11,7 @@ import (
 	"github.com/iamseth/tao/internal/commandrunner"
 	mergepkg "github.com/iamseth/tao/internal/merge"
 	"github.com/iamseth/tao/internal/plan"
+	runpkg "github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/taodata"
 	"github.com/iamseth/tao/internal/workspace"
 )
@@ -122,10 +123,6 @@ func (a App) merge(ctx context.Context, repo plan.Resolver, args []string) error
 	if detail == nil {
 		return fmt.Errorf("plan %q not found", positional[0])
 	}
-	service, err := newMergeServiceRunner(a, detail)
-	if err != nil {
-		return err
-	}
 	options := mergepkg.Options{
 		Force:         flagBoolValue(fs, "force"),
 		NoVerify:      flagBoolValue(fs, "no-verify"),
@@ -133,13 +130,31 @@ func (a App) merge(ctx context.Context, repo plan.Resolver, args []string) error
 		RecordOnly:    flagBoolValue(fs, "record-only"),
 		NoSquash:      flagBoolValue(fs, "no-squash"),
 	}
-	if err := service.Merge(ctx, detail, options); err != nil {
-		if renderErr := renderMergeFailure(a.Out, detail, err); renderErr != nil {
-			return renderErr
+	return runpkg.WithPlanRunLock(ctx, detail, a.now().UTC(), func(ownedCtx context.Context) error {
+		// Reload by exact directory after acquisition so every merge gate and
+		// mutation uses state protected from concurrent lifecycle drivers.
+		refreshed, err := repo.ResolvePlan(ownedCtx, detail.Dir)
+		if err != nil {
+			return err
 		}
-		return err
-	}
-	return renderMergeSuccess(a.Out, detail)
+		if refreshed == nil {
+			return fmt.Errorf("plan %q not found", detail.Dir)
+		}
+		if err := plan.RequireNotAbandoned(refreshed); err != nil {
+			return err
+		}
+		service, err := newMergeServiceRunner(a, refreshed)
+		if err != nil {
+			return err
+		}
+		if err := service.Merge(ownedCtx, refreshed, options); err != nil {
+			if renderErr := renderMergeFailure(a.Out, refreshed, err); renderErr != nil {
+				return renderErr
+			}
+			return err
+		}
+		return renderMergeSuccess(a.Out, refreshed)
+	})
 }
 
 type mergeBatchRegistry interface {
