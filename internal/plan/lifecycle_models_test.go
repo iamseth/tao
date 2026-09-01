@@ -9,6 +9,73 @@ import (
 	"time"
 )
 
+func TestPlanFormatDocumentsEmittedEventContract(t *testing.T) {
+	// Keep this list intentional: Event readers tolerate historical and newer values,
+	// so not every accepted EventType constant represents a current producer.
+	currentEmittedEventTypes := []string{
+		"plan_created",
+		EventTypeSliceStarted,
+		EventTypeSliceCompleted,
+		EventTypeSliceBlocked,
+		EventTypeSliceResumeAttempted,
+		EventTypeSliceResumeFailed,
+		EventTypeSliceRestarted,
+		EventTypeSliceRemoved,
+		EventTypeSliceSkipped,
+		EventTypeSlicesReordered,
+		EventTypeSliceApproved,
+		EventTypePullRequestCreated,
+		EventTypeFinalizationFailed,
+		EventTypeFinalizationFailureCleared,
+		EventTypePRFeedbackTriaged,
+		EventTypePlanReviewed,
+		EventTypePlanReopened,
+		EventTypePlanMerged,
+		EventTypeVerificationCommandInvalid,
+		EventTypeRunContext,
+		EventTypeSessionTimeout,
+		EventTypeBudgetExceeded,
+		EventTypeReworkRound,
+		EventTypeReworkStopped,
+		EventTypeFinalVerification,
+		EventTypeVerificationRepairCreated,
+		EventTypeMergeVerification,
+		EventTypeAgentMetrics,
+	}
+	historicalOnlyEventTypes := []string{EventTypePlanCommitFallback, EventTypePlanCommitGuard}
+
+	contract := readPlanFormatContract(t)
+	eventsSection := planFormatEventsSection(t, contract)
+	for _, eventType := range currentEmittedEventTypes {
+		if !strings.Contains(eventsSection, "`"+eventType+"`") {
+			t.Errorf("docs/plan-format.md Events section must document currently emitted event %q", eventType)
+		}
+	}
+
+	allEventTypes := append(append([]string(nil), currentEmittedEventTypes...), historicalOnlyEventTypes...)
+	for _, eventType := range historicalOnlyEventTypes {
+		entry, ok := planFormatEventEntry(eventsSection, eventType, allEventTypes)
+		if !ok {
+			t.Errorf("docs/plan-format.md Events section must retain historical-only event %q", eventType)
+			continue
+		}
+		entry = strings.ToLower(entry)
+		classifications := []struct {
+			name    string
+			markers []string
+		}{
+			{name: "historical", markers: []string{"historical", "legacy"}},
+			{name: "read-only/no-producer", markers: []string{"read-only", "no current producer", "not currently emitted", "no longer emitted"}},
+			{name: "compatibility", markers: []string{"compatib"}},
+		}
+		for _, classification := range classifications {
+			if !containsAny(entry, classification.markers...) {
+				t.Errorf("docs/plan-format.md event %q must retain an explicit %s classification (one of %q)", eventType, classification.name, classification.markers)
+			}
+		}
+	}
+}
+
 func TestFinalizationFailureValidation(t *testing.T) {
 	validProposal := FinalizationFailure{
 		Phase: FinalizationFailurePhaseProposalRepair, Category: "proposal_invalid", ReviewBase: "base123", ReviewHead: "head123",
@@ -364,6 +431,68 @@ func TestPlanReviewFindingsJSON(t *testing.T) {
 	if older.CommitMessage != nil {
 		t.Fatalf("older review should have no commit message, got %+v", older.CommitMessage)
 	}
+}
+
+func readPlanFormatContract(t *testing.T) string {
+	t.Helper()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("resolve repository root for docs/plan-format.md: get working directory: %v", err)
+	}
+	for dir := filepath.Clean(cwd); ; dir = filepath.Dir(dir) {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			path := filepath.Join(dir, "docs", "plan-format.md")
+			contents, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read docs/plan-format.md: %v", err)
+			}
+			return string(contents)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatalf("resolve repository root for docs/plan-format.md from %s: go.mod not found", cwd)
+		}
+	}
+}
+
+func planFormatEventsSection(t *testing.T, contract string) string {
+	t.Helper()
+	const heading = "## Events"
+	start := strings.Index(contract, heading)
+	if start < 0 {
+		t.Fatalf("docs/plan-format.md must retain the %q contract section", heading)
+	}
+	section := contract[start+len(heading):]
+	if end := strings.Index(section, "\n## "); end >= 0 {
+		section = section[:end]
+	}
+	return section
+}
+
+func planFormatEventEntry(eventsSection, eventType string, knownEventTypes []string) (string, bool) {
+	marker := "`" + eventType + "`"
+	start := strings.Index(eventsSection, marker)
+	if start < 0 {
+		return "", false
+	}
+	end := len(eventsSection)
+	searchStart := start + len(marker)
+	for _, knownType := range knownEventTypes {
+		next := strings.Index(eventsSection[searchStart:], "`"+knownType+"`")
+		if next >= 0 && searchStart+next < end {
+			end = searchStart + next
+		}
+	}
+	return eventsSection[start:end], true
+}
+
+func containsAny(value string, candidates ...string) bool {
+	for _, candidate := range candidates {
+		if strings.Contains(value, candidate) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestPlanReviewIsApproved(t *testing.T) {

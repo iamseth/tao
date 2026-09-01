@@ -2,6 +2,8 @@ package prompts
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"slices"
@@ -706,6 +708,31 @@ func TestPromptMetadata(t *testing.T) {
 	}
 }
 
+func TestUsageGuideUsesInstalledPlanPromptName(t *testing.T) {
+	definitions := Definitions()
+	var planDefinition *Definition
+	for i := range definitions {
+		if definitions[i].Name == PromptPlan {
+			planDefinition = &definitions[i]
+			break
+		}
+	}
+	if planDefinition == nil {
+		t.Fatalf("prompt registry has no definition for %q", PromptPlan)
+	}
+
+	usageGuide := readPromptRepositoryFile(t, filepath.Join("docs", "usage-guide.md"))
+	installedMarker := "/" + planDefinition.CommandName
+	if !strings.Contains(usageGuide, installedMarker) {
+		t.Errorf("docs/usage-guide.md must name the installed planning prompt %q", installedMarker)
+	}
+
+	obsoleteCommand := regexp.MustCompile(`(^|[^[:alnum:]_-])/` + regexp.QuoteMeta(planDefinition.Name) + `([^[:alnum:]_-]|$)`)
+	if match := obsoleteCommand.FindString(usageGuide); match != "" {
+		t.Errorf("docs/usage-guide.md contains obsolete unprefixed planning command %q; use %q", strings.TrimSpace(match), installedMarker)
+	}
+}
+
 func TestInstallablePromptGuidanceUsesPrefixedSlashCommands(t *testing.T) {
 	for _, definition := range Definitions() {
 		if match := unprefixedSlashCommand.FindString(definition.Template); match != "" {
@@ -732,5 +759,27 @@ func TestUnknownPromptErrors(t *testing.T) {
 func TestRenderTemplateReportsParseErrors(t *testing.T) {
 	if _, err := renderTemplate("{{", Data{}); err == nil {
 		t.Fatal("expected template parse error")
+	}
+}
+
+func readPromptRepositoryFile(t *testing.T, relativePath string) string {
+	t.Helper()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("resolve repository root for %s: get working directory: %v", relativePath, err)
+	}
+	for dir := filepath.Clean(cwd); ; dir = filepath.Dir(dir) {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			path := filepath.Join(dir, relativePath)
+			contents, err := os.ReadFile(path) //nolint:gosec // The path is rooted at this repository's go.mod.
+			if err != nil {
+				t.Fatalf("read repository documentation %s: %v", relativePath, err)
+			}
+			return string(contents)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatalf("resolve repository root for %s from %s: go.mod not found", relativePath, cwd)
+		}
 	}
 }

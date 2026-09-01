@@ -3,6 +3,9 @@ package cli
 import (
 	"bytes"
 	"context"
+	"flag"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -44,6 +47,44 @@ func TestUsageRendersGroupedLayout(t *testing.T) {
 	if !strings.Contains(output, wantFooter) {
 		t.Fatalf("expected usage footer %q, got %q", wantFooter, output)
 	}
+}
+
+func TestReadmeDocumentsSelectedPublicCommandMarkers(t *testing.T) {
+	readme := readCLIRepositoryFile(t, "README.md")
+	uiMetadata := commandByName(uiCommand.name)
+	mergeMetadata := commandByName(mergeCommand.name)
+	if uiMetadata == nil || mergeMetadata == nil {
+		t.Fatalf("README guard requires registered %q and %q commands", uiCommand.name, mergeCommand.name)
+	}
+	allFlag := registeredCommandFlag(t, mergeMetadata, "all")
+	autoEjectFlag := registeredCommandFlag(t, mergeMetadata, "auto-eject")
+	markers := []struct {
+		metadata *commandMetadata
+		line     string
+	}{
+		{metadata: uiMetadata, line: "tao " + uiMetadata.name},
+		{metadata: mergeMetadata, line: "tao " + mergeMetadata.name + " " + allFlag + " " + autoEjectFlag},
+	}
+
+	for _, marker := range markers {
+		if !strings.Contains(readme, "\n"+marker.line+"\n") {
+			t.Errorf("README.md must include the stable command marker %q for registered command %q", marker.line, marker.metadata.name)
+		}
+	}
+}
+
+func registeredCommandFlag(t *testing.T, metadata *commandMetadata, name string) string {
+	t.Helper()
+	if metadata.registerFlags == nil {
+		t.Fatalf("registered command %q has no flags; cannot guard README marker --%s", metadata.name, name)
+	}
+	flags := flag.NewFlagSet(metadata.name, flag.ContinueOnError)
+	metadata.registerFlags(flags)
+	registered := flags.Lookup(name)
+	if registered == nil {
+		t.Fatalf("registered command %q no longer exposes --%s required by README marker", metadata.name, name)
+	}
+	return "--" + registered.Name
 }
 
 func TestCommandHelpRendersOptionsExamplesAndFlaglessCommands(t *testing.T) {
@@ -261,4 +302,26 @@ func topLevelHelpRow(t *testing.T, commandName string) string {
 		t.Fatalf("unknown command %q", commandName)
 	}
 	return "  " + pad(commandName, topLevelCommandNameWidth()+2) + metadata.completionDescription
+}
+
+func readCLIRepositoryFile(t *testing.T, relativePath string) string {
+	t.Helper()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("resolve repository root for %s: get working directory: %v", relativePath, err)
+	}
+	for dir := filepath.Clean(cwd); ; dir = filepath.Dir(dir) {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			path := filepath.Join(dir, relativePath)
+			contents, err := os.ReadFile(path) //nolint:gosec // The path is rooted at this repository's go.mod.
+			if err != nil {
+				t.Fatalf("read repository documentation %s: %v", relativePath, err)
+			}
+			return string(contents)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatalf("resolve repository root for %s from %s: go.mod not found", relativePath, cwd)
+		}
+	}
 }
