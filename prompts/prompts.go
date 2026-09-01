@@ -95,6 +95,8 @@ type ReworkTriageData struct {
 	ThreadPackets string
 }
 
+// Data carries values shared by the installable prompt renderers. Each prompt
+// consumes only the fields it references; unused fields are ignored.
 type Data struct {
 	PlanDir            string
 	PlanID             string
@@ -125,6 +127,9 @@ type promptDefinition struct {
 	render   func(string, Data) (string, error)
 }
 
+// Definition describes one embedded prompt available for installation. Name is
+// the selector accepted by Render, CommandName is its provider-facing command
+// name without a leading slash, and Template is the embedded source.
 type Definition struct {
 	Name        string
 	CommandName string
@@ -173,6 +178,9 @@ func newPrompt(name string, template string, render func(string, Data) (string, 
 	return promptDefinition{name: name, template: template, render: render}
 }
 
+// Render renders an installable prompt selected by name. It returns an error
+// when name is not present in PromptNames or the selected template cannot be
+// rendered with data.
 func Render(name string, data Data) (string, error) {
 	prompt, ok := promptByName(name)
 	if !ok {
@@ -347,6 +355,8 @@ func RenderMergeReview(data MergeReviewData) (string, error) {
 	return out.String(), nil
 }
 
+// PromptNames returns the selectors accepted by Render in registry order. The
+// returned slice is a new allocation and may be modified by the caller.
 func PromptNames() []string {
 	names := make([]string, 0, len(promptRegistry))
 	for _, prompt := range promptRegistry {
@@ -355,6 +365,9 @@ func PromptNames() []string {
 	return names
 }
 
+// Definitions returns installation metadata for the installable prompts in the
+// same order as PromptNames. The returned slice is a new allocation and may be
+// modified by the caller.
 func Definitions() []Definition {
 	definitions := make([]Definition, 0, len(promptRegistry))
 	for _, prompt := range promptRegistry {

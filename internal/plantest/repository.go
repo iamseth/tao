@@ -61,16 +61,19 @@ func (r *Repository) AddDetail(detail *plan.PlanDetail) {
 	r.details[detail.State.Plan.ID] = detail
 }
 
-// WriteState implements plan.ArtifactStore. Mutations are applied directly to
-// the detail pointer by applyArtifactMutation so this is a no-op.
+// WriteState implements plan.ArtifactStore. PlanRecord publishes settled state
+// to its bound PlanDetail after this adapter succeeds; Repository retains that
+// same pointer, so no separate payload write is needed.
 func (r *Repository) WriteState(_ string, _ []byte) error { return nil }
 
-// WriteSlices implements plan.ArtifactStore. Mutations are applied directly to
-// the detail pointer by applyArtifactMutation so this is a no-op.
+// WriteSlices implements plan.ArtifactStore. PlanRecord publishes settled slices
+// to its bound PlanDetail after this adapter succeeds; Repository retains that
+// same pointer, so no separate payload write is needed.
 func (r *Repository) WriteSlices(_ string, _ []byte) error { return nil }
 
-// AppendEvent implements plan.EventAppender.  Events are appended to
-// detail.Events by applyArtifactMutation so this is a no-op.
+// AppendEvent implements plan.ArtifactStore. PlanRecord publishes settled events
+// to its bound PlanDetail after this adapter succeeds; Repository retains that
+// same pointer, so no separate append is needed.
 func (r *Repository) AppendEvent(_ string, _ plan.Event) error { return nil }
 
 // ListPlans implements plan.Repository.  It summarizes all registered details

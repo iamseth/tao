@@ -6,24 +6,26 @@
 // lifecycle allows warnings, and exposes summaries/capabilities so callers do
 // not reimplement queue, blocking, or runnable-slice decisions.
 //
-// What is a plan? Four roles split across four files:
+// What is a plan? Four roles split across package seams:
 //   - Raw artifacts (artifact_models.go): the durable on-disk schemas a plan
 //     directory holds, such as SlicesFile, written exactly per docs/plan-format.md.
 //   - Mutable lifecycle State (lifecycle_models.go): the State the queue advances
 //     through, plus the status constants and lifecycle metadata that gate
 //     transitions.
-//   - Persistence coordination (artifact_io.go): loads and writes those artifacts
-//     and sequences lifecycle mutations onto disk.
+//   - Persistence coordination (artifact_io.go and mutation_journal.go): refreshes
+//     settled artifacts, prepares exact target payloads, and installs or rolls
+//     forward recoverable mutations.
 //   - Derived read-side (derive.go): read-only DerivedPlan values (counts,
 //     progress, elapsed) computed from the durable artifacts for callers that only
 //     read.
 //
-// Write-order invariant: lifecycle mutations persist in state -> slices -> events
-// order so a crash never leaves events referencing slice state that was never
-// written. applyArtifactMutation (artifact_io.go) enforces this order. Note the
-// artifactMutationFunc indirection: mutation RULES (what each transition changes)
-// live in lifecycle.go, while PERSISTENCE (writing the result in order) lives in
-// artifact_io.go.
+// Persistence invariant: Tao-owned PlanRecord mutations prepare their complete
+// target payloads before installing one durable journal, roll that intent forward,
+// and publish the in-memory result only after settlement. Reads settle valid
+// pending intent under the same persistence boundary. Plans with neither journal
+// nor lock retain a non-mutating legacy read path; historical torn artifacts are
+// not synthesized into transactions. Lifecycle rules remain in lifecycle.go;
+// docs/plan-mutation-journal.md defines the full persistence protocol.
 //
 // Navigation map:
 //   - models.go points to model groupings; artifact_models.go,
