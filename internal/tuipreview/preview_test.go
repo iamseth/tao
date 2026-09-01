@@ -403,7 +403,7 @@ func assertUnicodeTableAlignment(t *testing.T, frame, firstHeader, secondHeader,
 	seen := make(map[string]bool)
 	for _, line := range lines {
 		plain := stripCSI(line)
-		if !strings.Contains(plain, rowSecond) {
+		if !strings.HasPrefix(plain, "  ") || !strings.Contains(plain, rowSecond) {
 			continue
 		}
 		for _, repository := range []string{"日本語リポジトリ", "emoji-🧭-workspace", "combining-é-repo"} {

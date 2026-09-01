@@ -134,10 +134,9 @@ func borderedPane(profile Profile, width int, title, identity string, hasSelecti
 	}
 
 	innerWidth := width - 2
-	top := paneTopBorder(innerWidth, title, identity)
 	bottom := "╰" + strings.Repeat("─", innerWidth) + "╯"
 	pane := make([]string, 0, len(lines)+2)
-	pane = append(pane, Paint(profile, borderRole, "╭"+top+"╮"))
+	pane = append(pane, paintPaneTopBorder(profile, borderRole, innerWidth, title, identity))
 	for _, line := range lines {
 		body := padCells(truncateCells(line, innerWidth), innerWidth)
 		pane = append(pane, Paint(profile, borderRole, "│")+body+Paint(profile, borderRole, "│"))
@@ -146,9 +145,31 @@ func borderedPane(profile Profile, width int, title, identity string, hasSelecti
 	return pane
 }
 
-func paneTopBorder(width int, title, identity string) string {
+type paneTopBorderParts struct {
+	left   string
+	middle string
+	right  string
+}
+
+func paintPaneTopBorder(profile Profile, borderRole Role, width int, title, identity string) string {
+	parts := paneTopBorderLayout(width, title, identity)
+	if parts.right == "" {
+		return Paint(profile, borderRole, "╭"+parts.left+parts.middle+"╮")
+	}
+
+	rightWidth := visibleWidth(parts.right)
+	identityWidth := min(visibleWidth(identity), max(rightWidth-1, 0))
+	renderedIdentity := truncateCells(identity, identityWidth)
+	suffixWidth := max(rightWidth-1-visibleWidth(renderedIdentity), 0)
+	suffix := truncateCells(" ─", suffixWidth)
+	return Paint(profile, borderRole, "╭"+parts.left+parts.middle+" ") +
+		Paint(profile, RoleNeutral3, renderedIdentity) +
+		Paint(profile, borderRole, suffix+"╮")
+}
+
+func paneTopBorderLayout(width int, title, identity string) paneTopBorderParts {
 	if width <= 0 {
-		return ""
+		return paneTopBorderParts{}
 	}
 	left := "─"
 	if strings.TrimSpace(title) != "" {
@@ -160,11 +181,12 @@ func paneTopBorder(width int, title, identity string) string {
 	}
 	if visibleWidth(left)+visibleWidth(right) > width {
 		if right == "" {
-			return padCells(truncateCells(left, width), width)
+			return paneTopBorderParts{left: padCells(truncateCells(left, width), width)}
 		}
 		rightWidth := min(visibleWidth(right), max(width/2, 1))
 		right = truncateCells(right, rightWidth)
 		left = truncateCells(left, width-visibleWidth(right))
 	}
-	return left + strings.Repeat("─", max(width-visibleWidth(left)-visibleWidth(right), 0)) + right
+	middle := strings.Repeat("─", max(width-visibleWidth(left)-visibleWidth(right), 0))
+	return paneTopBorderParts{left: left, middle: middle, right: right}
 }

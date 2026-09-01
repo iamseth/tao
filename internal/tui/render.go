@@ -217,9 +217,10 @@ func Render(model Model) string {
 		if hasSelectedRow {
 			previewStart = len(lines)
 			paneWidth := dashboardFrameWidth(model, PagePlans)
-			preview := renderPlanPreview(selectedRow, max(paneWidth-2, 0))
-			identity := displayValue(singleLineDetail(selectedRow.RepositoryName))
-			lines = append(lines, borderedPane(model.Profile, paneWidth, "SELECTED PLAN — advisory context", identity, hasSelectedRow, preview)...)
+			preview := renderPlanPreview(model.Profile, selectedRow, max(paneWidth-2, 0))
+			title := displayValue(singleLineDetail(planLabel(selectedRow)))
+			identity := planPreviewIdentity(selectedRow)
+			lines = append(lines, borderedPane(model.Profile, paneWidth, title, identity, hasSelectedRow, preview)...)
 		}
 	}
 	footerStart := len(lines)
@@ -769,7 +770,19 @@ func filledBadge(profile Profile, role Role, text string) string {
 	return colorSequence(background, true) + text + resetSequence
 }
 
-func renderPlanPreview(row monitor.Row, width int) []string {
+func planPreviewIdentity(row monitor.Row) string {
+	sequence := "-"
+	if row.Overview.Sequence != nil {
+		sequence = fmt.Sprintf("%d of %d", row.Overview.Sequence.Position, row.Overview.Sequence.Total)
+	}
+	return strings.Join([]string{
+		displayValue(singleLineDetail(row.PlanID)),
+		displayValue(singleLineDetail(row.RepositoryName)),
+		sequence,
+	}, "  ·  ")
+}
+
+func renderPlanPreview(profile Profile, row monitor.Row, width int) []string {
 	overview := row.Overview
 	var lines []string
 	if row.Status == plan.StatusAbandoned {
@@ -778,26 +791,26 @@ func renderPlanPreview(row monitor.Row, width int) []string {
 			"Abandonment reason: "+planview.FormatAbandonmentText(row.AbandonmentReason),
 		)
 	}
-	lines = append(lines, "Benefit: "+displayValue(singleLineDetail(overview.ExpectedBenefit)))
+	lines = append(lines, planPreviewField(profile, "Benefit", overview.ExpectedBenefit, width)...)
 	if width > 0 && width < 50 {
-		lines = append(lines, fmt.Sprintf("Decision: %s / %s", displayValue(string(overview.Disposition)), displayValue(string(overview.Readiness))))
+		decision := fmt.Sprintf("%s / %s", displayValue(string(overview.Disposition)), displayValue(string(overview.Readiness)))
+		lines = append(lines, planPreviewField(profile, "Decision", decision, width)...)
 	} else {
-		lines = append(lines,
-			"Readiness: "+displayValue(string(overview.Readiness)),
-			"Disposition: "+displayValue(string(overview.Disposition))+" — "+displayValue(singleLineDetail(overview.DispositionReason)),
-		)
+		lines = append(lines, planPreviewField(profile, "Readiness", string(overview.Readiness), width)...)
+		disposition := displayValue(string(overview.Disposition)) + " — " + displayValue(overview.DispositionReason)
+		lines = append(lines, planPreviewField(profile, "Disposition", disposition, width)...)
 	}
 	if priority := overview.Priority; priority != nil {
 		if width > 0 && width < 80 {
 			lines = append(lines, fmt.Sprintf("Priority: %s I:%s U:%s E:%s R:%s C:%s", priority.Level, priority.Impact, priority.Urgency, priority.Effort, priority.Risk, priority.Confidence))
 		} else {
-			lines = append(lines, fmt.Sprintf("Priority: level=%s  impact=%s  urgency=%s  effort=%s  risk=%s  confidence=%s", priority.Level, priority.Impact, priority.Urgency, priority.Effort, priority.Risk, priority.Confidence))
+			lines = append(lines, renderPriorityBadges(profile, *priority))
 		}
 		if width <= 0 || width >= 50 {
-			lines = append(lines, "Priority rationale: "+displayValue(singleLineDetail(priority.Rationale)))
+			lines = append(lines, planPreviewField(profile, "Priority rationale", priority.Rationale, width)...)
 		}
 	} else {
-		lines = append(lines, "Priority: unranked")
+		lines = append(lines, planPreviewField(profile, "Priority", "unranked", width)...)
 	}
 	sequence := "-"
 	if overview.Sequence != nil {
@@ -807,16 +820,63 @@ func renderPlanPreview(row monitor.Row, width int) []string {
 	scope := strings.TrimSpace(strings.Join([]string{row.SliceID, row.SliceTitle}, " — "))
 	scope = strings.Trim(scope, " —")
 	lines = append(lines, "Slice scope: "+displayValue(singleLineDetail(scope)))
-	if len(row.Relationships) == 0 {
-		lines = append(lines, "Relationships: -")
-	} else {
+	relationships := "-"
+	if len(row.Relationships) > 0 {
 		values := make([]string, 0, len(row.Relationships))
 		for _, relationship := range row.Relationships {
 			values = append(values, fmt.Sprintf("%s %s [%s]", relationship.Type, relationship.PlanID, relationship.State))
 		}
-		lines = append(lines, "Relationships: "+strings.Join(values, "; "))
+		relationships = strings.Join(values, "; ")
 	}
+	lines = append(lines, planPreviewField(profile, "Relationships", relationships, width)...)
 	return lines
+}
+
+func renderPriorityBadges(profile Profile, priority plan.Priority) string {
+	badges := []string{filledBadge(profile, priorityLevelRole(priority.Level), displayValue(string(priority.Level)))}
+	for _, dimension := range []struct {
+		label string
+		value string
+	}{
+		{label: "impact", value: string(priority.Impact)},
+		{label: "urgency", value: string(priority.Urgency)},
+		{label: "effort", value: string(priority.Effort)},
+		{label: "risk", value: string(priority.Risk)},
+		{label: "confidence", value: string(priority.Confidence)},
+	} {
+		badges = append(badges, Paint(profile, RoleNeutral2, dimension.label)+" "+Paint(profile, RoleNeutral4, displayValue(dimension.value)))
+	}
+	return strings.Join(badges, "  ")
+}
+
+func priorityLevelRole(level plan.PriorityOverallLevel) Role {
+	switch level {
+	case plan.PriorityOverallLevelMust:
+		return RoleWarn
+	case plan.PriorityOverallLevelShould:
+		return RoleInfo
+	default:
+		return RoleNeutral3
+	}
+}
+
+func planPreviewField(profile Profile, label, value string, width int) []string {
+	prefix := label + ": "
+	value = displayValue(singleLineDetail(value))
+	available := 0
+	if width > 0 {
+		available = width - visibleWidth(prefix)
+	}
+	wrapped := wrapDetailWords(value, available)
+	indent := strings.Repeat(" ", visibleWidth(prefix))
+	for index := range wrapped {
+		if index == 0 {
+			wrapped[index] = Paint(profile, RoleNeutral2, prefix) + Paint(profile, RoleNeutral4, wrapped[index])
+		} else {
+			wrapped[index] = indent + Paint(profile, RoleNeutral4, wrapped[index])
+		}
+	}
+	return wrapped
 }
 
 func tableRowValues(row monitor.Row, now time.Time, actionLabel string) rowValues {

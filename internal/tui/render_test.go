@@ -20,7 +20,7 @@ func TestRenderGoldenColorModes(t *testing.T) {
 	plain := Render(Model{Snapshot: snapshot})
 	for _, want := range []string{
 		"tao │▸plans  notes  settings  debug", "all repos", "agent -", "1 plan",
-		"PLANNED", "REPO  NEXT   PLAN", "  repo   RUN   plan", "SELECTED PLAN — advisory context",
+		"PLANNED", "REPO  NEXT   PLAN", "  repo   RUN   plan", "╭─ plan ",
 	} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("plain frame missing %q:\n%s", want, plain)
@@ -508,16 +508,110 @@ func TestRenderSelectedPlanPreviewShowsBoundedDecisionContext(t *testing.T) {
 	}
 	got := Render(Model{Snapshot: monitor.Snapshot{Rows: []monitor.Row{row}}, Width: 120})
 	for _, want := range []string{
-		"AGE", "NEXT", "SELECTED PLAN — advisory context",
+		"AGE", "NEXT", "╭─ priority-plan ", "priority-plan  ·  repo  ·  2 of 4",
 		"Benefit: Operators can choose the right plan.", "Readiness: ready",
 		"Disposition: conditional — Confirm the dependency first.",
-		"Priority: level=must  impact=high  urgency=medium  effort=small  risk=low  confidence=high",
+		"must  impact high  urgency medium  effort small  risk low  confidence high",
 		"Priority rationale: High benefit for little work.", "Sequence: 2 of 4",
 		"Slice scope: 002-preview — Render decision context", "Relationships: after foundation [complete]",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("preview missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestRenderPlanPreviewStylesPriorityBadgesAndLabelRows(t *testing.T) {
+	priority := plan.Priority{
+		Level: plan.PriorityOverallLevelMust, Impact: plan.PriorityLevelHigh,
+		Urgency: plan.PriorityLevelMedium, Effort: plan.PriorityEffortSmall,
+		Risk: plan.PriorityLevelLow, Confidence: plan.PriorityLevelHigh,
+	}
+	row := monitor.Row{Overview: plan.DecisionOverview{
+		ExpectedBenefit: "A clear visual hierarchy.", Readiness: plan.DecisionReadinessReady,
+		Disposition: plan.DecisionDispositionConditional, DispositionReason: "Confirm the rendering seam.",
+		Priority: &priority,
+	}}
+	lines := renderPlanPreview(ProfileTrueColor, row, 100)
+	got := strings.Join(lines, "\n")
+	wantBadges := filledBadge(ProfileTrueColor, RoleWarn, "must") + "  " +
+		Paint(ProfileTrueColor, RoleNeutral2, "impact") + " " + Paint(ProfileTrueColor, RoleNeutral4, "high") + "  " +
+		Paint(ProfileTrueColor, RoleNeutral2, "urgency") + " " + Paint(ProfileTrueColor, RoleNeutral4, "medium")
+	if !strings.Contains(got, wantBadges) {
+		t.Fatalf("priority badge row lacks severity and label/value styling: %q", got)
+	}
+	for _, want := range []string{
+		Paint(ProfileTrueColor, RoleNeutral2, "Benefit: ") + Paint(ProfileTrueColor, RoleNeutral4, "A clear visual hierarchy."),
+		Paint(ProfileTrueColor, RoleNeutral2, "Readiness: ") + Paint(ProfileTrueColor, RoleNeutral4, "ready"),
+		Paint(ProfileTrueColor, RoleNeutral2, "Disposition: ") + Paint(ProfileTrueColor, RoleNeutral4, "conditional — Confirm the rendering seam."),
+		Paint(ProfileTrueColor, RoleNeutral2, "Relationships: ") + Paint(ProfileTrueColor, RoleNeutral4, "-"),
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("preview lacks styled label/value row %q: %q", want, got)
+		}
+	}
+}
+
+func TestRenderPlanPreviewWrapsLabelValuesAtSeveralWidths(t *testing.T) {
+	row := monitor.Row{
+		SliceID: "002", SliceTitle: "preview",
+		Overview: plan.DecisionOverview{
+			ExpectedBenefit:   strings.Repeat("bounded benefit ", 8),
+			Readiness:         plan.DecisionReadinessReady,
+			Disposition:       plan.DecisionDispositionConditional,
+			DispositionReason: strings.Repeat("confirm dependency ", 6),
+		},
+		Relationships: []monitor.ResolvedRelationship{{
+			PlanID: strings.Repeat("foundation-", 5), Type: plan.PlanRelationAfter, State: monitor.RelationshipIncomplete,
+		}},
+	}
+	for _, width := range []int{78, 58, 42} {
+		t.Run(fmt.Sprintf("width %d", width), func(t *testing.T) {
+			lines := renderPlanPreview(ProfileNone, row, width)
+			for _, line := range lines {
+				if got := visibleWidth(line); got > width {
+					t.Fatalf("preview line width = %d, want <= %d: %q", got, width, line)
+				}
+			}
+			joined := strings.Join(lines, "\n")
+			for _, want := range []string{"Benefit: bounded benefit", "Relationships: after"} {
+				if !strings.Contains(joined, want) {
+					t.Errorf("wrapped preview lacks %q:\n%s", want, joined)
+				}
+			}
+			if !strings.Contains(joined, "\n"+strings.Repeat(" ", visibleWidth("Benefit: "))+"bounded") {
+				t.Errorf("benefit continuation does not align beneath its value:\n%s", joined)
+			}
+		})
+	}
+}
+
+func TestRenderPlanPreviewKeepsNarrowFallbacksAndUnrankedPlain(t *testing.T) {
+	priority := &plan.Priority{
+		Level: plan.PriorityOverallLevelShould, Impact: plan.PriorityLevelHigh,
+		Urgency: plan.PriorityLevelMedium, Effort: plan.PriorityEffortMedium,
+		Risk: plan.PriorityLevelLow, Confidence: plan.PriorityLevelHigh,
+	}
+	row := monitor.Row{Overview: plan.DecisionOverview{
+		Readiness: plan.DecisionReadinessReady, Disposition: plan.DecisionDispositionConditional,
+		Priority: priority,
+	}}
+	joined := strings.Join(renderPlanPreview(ProfileNone, row, 49), "\n")
+	for _, want := range []string{"Decision: conditional / ready", "Priority: should I:high U:medium E:medium R:low C:high"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("narrow preview lacks fallback %q: %q", want, joined)
+		}
+	}
+	colored := strings.Join(renderPlanPreview(ProfileTrueColor, row, 49), "\n")
+	if strings.Contains(joined, "Priority rationale:") || strings.Contains(colored, filledBadge(ProfileTrueColor, RoleInfo, "should")) {
+		t.Fatalf("narrow preview did not retain compact fallback: %q", colored)
+	}
+
+	row.Overview.Priority = nil
+	unranked := strings.Join(renderPlanPreview(ProfileTrueColor, row, 100), "\n")
+	want := Paint(ProfileTrueColor, RoleNeutral2, "Priority: ") + Paint(ProfileTrueColor, RoleNeutral4, "unranked")
+	if !strings.Contains(unranked, want) {
+		t.Fatalf("unranked preview lacks clean label/value row: %q", unranked)
 	}
 }
 
@@ -558,23 +652,28 @@ func TestRenderNarrowPlanTableKeepsPlanVisibleWithLongRepositoryName(t *testing.
 }
 
 func TestRenderSelectedPlanPreviewUsesBorderedPaneAtFrameWidths(t *testing.T) {
+	const planID = "20260828-181339-frame"
 	row := monitor.Row{
-		RepositoryName: "tao", PlanID: "frame", Status: plan.StatusPlanned,
-		Overview: plan.DecisionOverview{ExpectedBenefit: "Make selection context distinct."},
+		RepositoryName: "tao", PlanID: planID, Status: plan.StatusPlanned,
+		Overview: plan.DecisionOverview{
+			ExpectedBenefit: "Make selection context distinct.",
+			Sequence:        &plan.Sequence{Position: 5, Total: 9},
+		},
 	}
+	const identity = planID + "  ·  tao  ·  5 of 9"
 	for _, width := range []int{199, 120, 100, 80, 70} {
 		t.Run(fmt.Sprintf("width %d", width), func(t *testing.T) {
 			frame := Render(Model{Snapshot: monitor.Snapshot{Rows: []monitor.Row{row}}, Width: width, Height: 20})
 			lines := renderedLines(frame)
 			top := -1
 			for index, line := range lines {
-				if strings.HasPrefix(line, "╭") && strings.Contains(line, "SELECTED PLAN — advisory context") {
+				if strings.HasPrefix(line, "╭") && strings.Contains(line, "─ frame ") {
 					top = index
 					break
 				}
 			}
-			if top < 0 || !strings.Contains(lines[top], "tao") {
-				t.Fatalf("selected-plan pane lacks its title or identity at width %d:\n%s", width, frame)
+			if top < 0 || !strings.Contains(lines[top], identity) {
+				t.Fatalf("selected-plan pane lacks its slug or identity at width %d:\n%s", width, frame)
 			}
 			bottom := -1
 			for index := top + 1; index < len(lines); index++ {
@@ -586,7 +685,7 @@ func TestRenderSelectedPlanPreviewUsesBorderedPaneAtFrameWidths(t *testing.T) {
 					t.Fatalf("selected-plan pane has an unbordered body line at width %d: %q", width, lines[index])
 				}
 			}
-			if bottom < 0 || bottom-top != len(renderPlanPreview(row, width-2))+1 {
+			if bottom < 0 || bottom-top != len(renderPlanPreview(ProfileNone, row, width-2))+1 {
 				t.Fatalf("selected-plan pane border budgeting is incomplete at width %d:\n%s", width, frame)
 			}
 			for _, line := range lines[top : bottom+1] {
@@ -597,9 +696,17 @@ func TestRenderSelectedPlanPreviewUsesBorderedPaneAtFrameWidths(t *testing.T) {
 		})
 	}
 
-	colored := Render(Model{Snapshot: monitor.Snapshot{Rows: []monitor.Row{row}}, Width: 70, Profile: ProfileANSI16})
+	colored := Render(Model{Snapshot: monitor.Snapshot{Rows: []monitor.Row{row}}, Width: 120, Profile: ProfileANSI16})
 	if !strings.Contains(colored, colorSequence(Accent(ProfileANSI16), false)+"╭") {
 		t.Fatalf("selected-plan pane does not use its selected accent border: %q", colored)
+	}
+	paintedIdentity := Paint(ProfileANSI16, RoleNeutral3, identity)
+	if !strings.Contains(colored, paintedIdentity) {
+		t.Fatalf("selected-plan identity does not use neutral n3: %q", colored)
+	}
+	paintedTrailingBorder := Paint(ProfileANSI16, RoleAccent, " ─╮")
+	if !strings.Contains(colored, paintedIdentity+paintedTrailingBorder) {
+		t.Fatalf("selected-plan trailing rule and corner do not restore the accent border: %q", colored)
 	}
 }
 
@@ -613,7 +720,7 @@ func TestRenderAbandonmentAsSafeHistoricalOutcome(t *testing.T) {
 		NextAction:       "FINALIZE PR",
 	}
 	got := Render(Model{Snapshot: monitor.Snapshot{Rows: []monitor.Row{row}}, HideCompleted: true, Width: 120})
-	for _, want := range []string{"HISTORY", "ABANDONED   old-plan", "Abandoned at: 2026-09-01T21:00:00Z", "Abandonment reason: superseded by", "SELECTED PLAN"} {
+	for _, want := range []string{"HISTORY", "ABANDONED   old-plan", "Abandoned at: 2026-09-01T21:00:00Z", "Abandonment reason: superseded by", "╭─ old-plan "} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("abandonment render missing %q:\n%s", want, got)
 		}
@@ -644,7 +751,7 @@ func TestRenderPlanPreviewYieldsToTableSelectionAndConfirmation(t *testing.T) {
 	if len(lines) != 7 {
 		t.Fatalf("rendered lines = %d, want 7:\n%s", len(lines), got)
 	}
-	for _, want := range []string{"tao │▸plans", "  repo   RUN   selected", "SELECTED PLAN", "Run selected plan? [y/n]"} {
+	for _, want := range []string{"tao │▸plans", "  repo   RUN   selected", "╭─ selected ", "Run selected plan? [y/n]"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("responsive frame missing %q:\n%s", want, got)
 		}
@@ -685,7 +792,7 @@ func TestRenderPlanTruncationCountsOnlyHiddenPlanRows(t *testing.T) {
 	if !strings.Contains(got, "READY TO MERGE") || !strings.Contains(got, "PLANNED") {
 		t.Fatalf("constrained frame did not span plan sections:\n%s", got)
 	}
-	if visible := strings.Count(got, "stress-"); visible != 6 {
+	if visible := strings.Count(got, "\n  repo "); visible != 6 {
 		t.Fatalf("visible plan rows = %d, want 6 after budgeting the selected-plan pane borders:\n%s", visible, got)
 	}
 	if !strings.Contains(got, "+ 30 more  ↓") {
@@ -712,7 +819,7 @@ func TestRenderSelectedLastPlanKeepsSectionSkeleton(t *testing.T) {
 			t.Fatalf("selected-last viewport missing %q:\n%s", want, got)
 		}
 	}
-	if visible := strings.Count(got, "plan-"); visible != 10 {
+	if visible := strings.Count(got, "\n  repo "); visible != 10 {
 		t.Fatalf("visible plan rows = %d, want 10 after preserving the section skeleton and pane borders:\n%s", visible, got)
 	}
 	if !strings.Contains(got, "+ 20 more  ↓") {

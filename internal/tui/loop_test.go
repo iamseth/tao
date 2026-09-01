@@ -161,7 +161,7 @@ func TestRunMovesSelectionAndRestoresTerminal(t *testing.T) {
 	if len(frames) != 2 {
 		t.Fatalf("frame writes = %d, want 2; frames=%q", len(frames), frames)
 	}
-	if !strings.Contains(frames[0], " alpha ─╮") || !strings.Contains(frames[1], " beta ─╮") {
+	if !strings.Contains(frames[0], "one  ·  alpha  ·  - ─╮") || !strings.Contains(frames[1], "two  ·  beta  ·  - ─╮") {
 		t.Fatalf("selected-plan context did not move in complete frame writes: %q", frames)
 	}
 	entered, restored := terminal.state()
