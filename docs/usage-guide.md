@@ -1036,6 +1036,17 @@ persisted it first. A matching PR discovered after the failure—or on a later
 retry with only legacy branch/head intent—is returned without Tao adding labels
 or assignment because a human may have created it concurrently.
 
+If the handoff is interrupted, rerun `tao run --pull-request <plan>`. This is the
+right recovery command only while the recorded isolated worktree still has the
+exact approved branch head. Tao skips completed implementation and review work,
+repairs an unusable historical proposal with at most one proposal-only session,
+and resumes push, existing-PR discovery, identity-bound metadata repair, or
+final recording from durable evidence. It refuses stale review/worktree heads
+before remote mutation; update the branch and run a fresh review instead of
+forcing the old handoff. A deliberate `--pull-request=false` remains an opt-out,
+not a failed finalization. Use `tao show <plan>` for the single projected recovery
+action after a recorded failure.
+
 The body uses Problem, Fix, Tests, Deploy, and Scope sections. Tests report
 recorded repository command results while omitting lifecycle-only Tao commands,
 Deploy defaults to no special steps, and Scope keeps the exact diff stat in a

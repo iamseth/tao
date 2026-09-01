@@ -148,17 +148,34 @@ func refuseExecutionBoundary(controller ExecutionBoundaryController, durable Exe
 	return action
 }
 
+type structuralWorktreeIdentityError struct {
+	cause error
+}
+
+func (e *structuralWorktreeIdentityError) Error() string { return e.cause.Error() }
+func (e *structuralWorktreeIdentityError) Unwrap() error { return e.cause }
+
+func structuralWorktreeIdentityErrorf(format string, args ...any) error {
+	return &structuralWorktreeIdentityError{cause: fmt.Errorf(format, args...)}
+}
+
 func inspectLinkedWorktreeIdentity(ctx context.Context, detail *plan.PlanDetail, sliceRoot string, runner CommandRunner) error {
 	physicalRoot, err := workspace.PhysicalPath(sliceRoot)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return structuralWorktreeIdentityErrorf("resolve interrupted worktree path: %w", err)
+		}
 		return fmt.Errorf("resolve interrupted worktree path: %w", err)
 	}
 	physicalRepo, err := workspace.PhysicalPath(detail.State.Repo.Root)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return structuralWorktreeIdentityErrorf("resolve recorded repository path: %w", err)
+		}
 		return fmt.Errorf("resolve recorded repository path: %w", err)
 	}
 	if physicalRoot == physicalRepo {
-		return fmt.Errorf("interrupted automatic slice worktree physically resolves to the repository checkout")
+		return structuralWorktreeIdentityErrorf("interrupted automatic slice worktree physically resolves to the repository checkout")
 	}
 
 	worktreeGit := gitops.NewClient(sliceRoot, runner)
@@ -171,7 +188,7 @@ func inspectLinkedWorktreeIdentity(ctx context.Context, detail *plan.PlanDetail,
 		return fmt.Errorf("resolve interrupted worktree Git top-level path: %w", err)
 	}
 	if physicalTop != physicalRoot {
-		return fmt.Errorf("interrupted automatic slice Git top-level does not match the recorded execution root")
+		return structuralWorktreeIdentityErrorf("interrupted automatic slice Git top-level does not match the recorded execution root")
 	}
 
 	repoGit := gitops.NewClient(detail.State.Repo.Root, runner)
@@ -184,7 +201,7 @@ func inspectLinkedWorktreeIdentity(ctx context.Context, detail *plan.PlanDetail,
 		return fmt.Errorf("resolve recorded repository Git top-level path: %w", err)
 	}
 	if physicalRepoTop != physicalRepo {
-		return fmt.Errorf("recorded repository root is not its Git top-level")
+		return structuralWorktreeIdentityErrorf("recorded repository root is not its Git top-level")
 	}
 
 	worktreeCommon, err := physicalGitMetadataPath(ctx, worktreeGit, sliceRoot, "--git-common-dir")
@@ -196,7 +213,7 @@ func inspectLinkedWorktreeIdentity(ctx context.Context, detail *plan.PlanDetail,
 		return fmt.Errorf("resolve recorded repository common Git directory: %w", err)
 	}
 	if worktreeCommon != repoCommon {
-		return fmt.Errorf("interrupted automatic slice is not a worktree of the recorded repository")
+		return structuralWorktreeIdentityErrorf("interrupted automatic slice is not a worktree of the recorded repository")
 	}
 	worktreeGitDir, err := physicalGitMetadataPath(ctx, worktreeGit, sliceRoot, "--git-dir")
 	if err != nil {
@@ -207,7 +224,7 @@ func inspectLinkedWorktreeIdentity(ctx context.Context, detail *plan.PlanDetail,
 		return fmt.Errorf("inspect interrupted linked worktree: %w", err)
 	}
 	if !linked {
-		return fmt.Errorf("interrupted automatic slice is not a linked worktree")
+		return structuralWorktreeIdentityErrorf("interrupted automatic slice is not a linked worktree")
 	}
 	return nil
 }

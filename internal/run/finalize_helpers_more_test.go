@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/iamseth/tao/internal/forge"
 	"github.com/iamseth/tao/internal/plan"
 )
 
@@ -33,6 +34,186 @@ func TestFinalizerHelperDefaultsAndPathUtilities(t *testing.T) {
 	}
 	if planCommitGlobRegexp("[bad") != `^\[bad$` {
 		t.Fatalf("unexpected malformed glob regexp %q", planCommitGlobRegexp("[bad"))
+	}
+}
+
+func TestFinalizerStopsBeforeRemoteMutationWhenPlanRecordBindingFails(t *testing.T) {
+	detail := approvedPullRequestDetail(plan.ChangeTypeFix, "head123")
+	bindErr := errors.New("injected file-backed plan record binding failure")
+	factoryCalls := 0
+	creatorCalls := 0
+	finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{}, RunDependencies{
+		PlanRecordFactory: func(*plan.PlanDetail) (PlanMutationRecord, error) {
+			factoryCalls++
+			return nil, bindErr
+		},
+		PullRequestCreator: pullRequestCreatorFunc(func(context.Context, PullRequestRun) (plan.PullRequest, error) {
+			creatorCalls++
+			return plan.PullRequest{}, nil
+		}),
+	}))
+
+	err := finalizer.createAndRecordPullRequestAtHead(context.Background(), detail, "/repo", "feature", "head123")
+	if !errors.Is(err, bindErr) || !strings.Contains(err.Error(), "before pull request creation") {
+		t.Fatalf("finalization error = %v, want pre-creation binding failure", err)
+	}
+	if factoryCalls != 1 || creatorCalls != 0 {
+		t.Fatalf("factory/creator calls = %d/%d, want 1/0", factoryCalls, creatorCalls)
+	}
+	if detail.State.Plan.PullRequestIntent != nil || detail.State.Plan.PullRequest != nil || detail.State.Plan.FinalizationFailure != nil {
+		t.Fatalf("binding failure changed finalization state: intent=%#v pull_request=%#v failure=%#v", detail.State.Plan.PullRequestIntent, detail.State.Plan.PullRequest, detail.State.Plan.FinalizationFailure)
+	}
+}
+
+func TestFinalizerClassifiesPullRequestFailureRecovery(t *testing.T) {
+	tests := []struct {
+		category string
+		want     string
+	}{
+		{category: "publication_failed", want: plan.FinalizationRecoveryResumePullRequest},
+		{category: "workspace_mismatch", want: plan.FinalizationRecoveryRestoreBoundary},
+		{category: "head_drift", want: plan.FinalizationRecoveryRestoreBoundary},
+		{category: "review_head_mismatch", want: plan.FinalizationRecoveryRerunReview},
+		{category: "intent_mismatch", want: plan.FinalizationRecoveryRepairIntent},
+		{category: "identity_mismatch", want: plan.FinalizationRecoveryRepairIdentity},
+	}
+	for _, test := range tests {
+		t.Run(test.category, func(t *testing.T) {
+			detail := approvedPullRequestDetail(plan.ChangeTypeFix, "head123")
+			finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{}, RunDependencies{
+				PlanRecordFactory: memoryPlanRecordFactory,
+				Now:               func() time.Time { return time.Date(2026, 8, 31, 17, 0, 0, 0, time.UTC) },
+			}))
+
+			err := errors.New("classified failure")
+			if got := finalizer.failPullRequestFinalization(detail, "feature", "head123", test.category, err); !errors.Is(got, err) {
+				t.Fatalf("failure error = %v, want %v", got, err)
+			}
+			failure := detail.State.Plan.FinalizationFailure
+			if failure == nil || failure.Category != test.category || failure.RecoveryAction != test.want {
+				t.Fatalf("classified failure = %#v, want action %q", failure, test.want)
+			}
+		})
+	}
+}
+
+func TestPullRequestRecoveryBoundarySeparatesStructuralWorkspaceFailuresFromInspectionErrors(t *testing.T) {
+	tests := []struct {
+		name         string
+		prepare      func(*testing.T) (string, string)
+		cleanup      string
+		runner       CommandRunner
+		wantCategory string
+		wantAction   string
+	}{
+		{
+			name: "missing recorded worktree",
+			prepare: func(t *testing.T) (string, string) {
+				root := t.TempDir()
+				return root, filepath.Join(root, "missing-worktree")
+			},
+			cleanup:      plan.WorkspaceCleanupStatusPending,
+			wantCategory: "workspace_mismatch",
+			wantAction:   plan.FinalizationRecoveryRestoreBoundary,
+		},
+		{
+			name: "incompatible cleanup state",
+			prepare: func(t *testing.T) (string, string) {
+				root := t.TempDir()
+				return root, filepath.Join(root, "worktree")
+			},
+			cleanup:      plan.WorkspaceCleanupStatusRunning,
+			wantCategory: "workspace_mismatch",
+			wantAction:   plan.FinalizationRecoveryRestoreBoundary,
+		},
+		{
+			name: "mismatched linked worktree",
+			prepare: func(t *testing.T) (string, string) {
+				root := t.TempDir()
+				worktree := t.TempDir()
+				runCommitTestGitCommand(t, root, "init")
+				runCommitTestGitCommand(t, worktree, "init")
+				return root, worktree
+			},
+			cleanup:      plan.WorkspaceCleanupStatusPending,
+			runner:       defaultCommandRunner,
+			wantCategory: "workspace_mismatch",
+			wantAction:   plan.FinalizationRecoveryRestoreBoundary,
+		},
+		{
+			name: "retryable Git inspection error",
+			prepare: func(t *testing.T) (string, string) {
+				root := t.TempDir()
+				worktree := t.TempDir()
+				return root, worktree
+			},
+			cleanup: plan.WorkspaceCleanupStatusPending,
+			runner: func(context.Context, string, string, []string, io.Writer, io.Writer) error {
+				return errors.New("temporary Git inspection failure")
+			},
+			wantCategory: "workspace_preflight_failed",
+			wantAction:   plan.FinalizationRecoveryResumePullRequest,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repoRoot, worktreeRoot := test.prepare(t)
+			detail := approvedPullRequestDetail(plan.ChangeTypeFix, "head123")
+			detail.State.Repo.Root = repoRoot
+			detail.State.Workspace = &plan.Workspace{
+				Strategy: plan.WorkspaceStrategyWorktree, Root: filepath.Dir(worktreeRoot), Path: worktreeRoot,
+				Branch: "feature", HeadSHA: "head123", LifecycleStatus: plan.WorkspaceStatusReady, CleanupStatus: test.cleanup,
+			}
+			finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{}, RunDependencies{
+				CommandRunner: test.runner, PlanRecordFactory: memoryPlanRecordFactory,
+			}))
+
+			if _, _, _, err := finalizer.pullRequestRecoveryBoundary(context.Background(), detail); err == nil {
+				t.Fatal("recovery boundary unexpectedly succeeded")
+			}
+			failure := detail.State.Plan.FinalizationFailure
+			if failure == nil || failure.Category != test.wantCategory || failure.RecoveryAction != test.wantAction {
+				t.Fatalf("workspace failure = %#v, want category %q action %q", failure, test.wantCategory, test.wantAction)
+			}
+			action := plan.DeriveNextAction(detail).Primary
+			if test.wantCategory == "workspace_mismatch" && (action.Command != "" || !strings.Contains(action.Instruction, "Repair or restore") || !strings.Contains(action.Instruction, "recorded path, branch, and HEAD")) {
+				t.Fatalf("structural workspace next action = %#v", action)
+			}
+			if test.wantCategory == "workspace_preflight_failed" && action.Command != "tao run --pull-request plan-a" {
+				t.Fatalf("retryable inspection next action = %#v", action)
+			}
+		})
+	}
+}
+
+func TestFinalizerReplacementFailurePreservesCurrentRecoveryEvidence(t *testing.T) {
+	detail := approvedPullRequestDetail(plan.ChangeTypeFix, "head123")
+	original := plan.FinalizationFailure{
+		Phase: plan.FinalizationFailurePhasePullRequest, Category: "publication_failed", Branch: "feature", HeadSHA: "head123",
+		FailedAt: time.Date(2026, 8, 31, 16, 0, 0, 0, time.UTC), RecoveryAction: plan.FinalizationRecoveryResumePullRequest,
+	}
+	detail.State.Plan.FinalizationFailure = &original
+	baseRecord, err := memoryPlanRecordFactory(detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := &failingFinalizationReplacementRecord{PlanMutationRecord: baseRecord, detail: detail}
+	finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{}, RunDependencies{
+		PlanRecordFactory: func(*plan.PlanDetail) (PlanMutationRecord, error) { return record, nil },
+		Now:               func() time.Time { return original.FailedAt.Add(time.Hour) },
+	}))
+
+	localErr := errors.New("push still rejected")
+	err = finalizer.failPullRequestFinalization(detail, "feature", "head123", "publication_failed", localErr)
+	if !errors.Is(err, localErr) || !strings.Contains(err.Error(), "injected atomic replacement failure") {
+		t.Fatalf("failure error = %v, want local and replacement errors", err)
+	}
+	if failure := detail.State.Plan.FinalizationFailure; failure == nil || *failure != original {
+		t.Fatalf("failed replacement lost current recovery evidence: %#v", failure)
+	}
+	if record.replaceCalls != 1 || record.clearCalls != 0 || record.recordCalls != 0 {
+		t.Fatalf("mutation calls: replace=%d clear=%d record=%d", record.replaceCalls, record.clearCalls, record.recordCalls)
 	}
 }
 
@@ -85,19 +266,70 @@ func TestFinalizerSkipsReviewWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestFinalizerStopsPullRequestRunAfterFreshReviewCorrectionExhaustion(t *testing.T) {
+	detail := completedReviewPlanDetail(t.TempDir())
+	detail.State.Workspace.Strategy = plan.WorkspaceStrategyWorktree
+	review := plan.PlanReview{
+		Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictComment,
+		Summary: "The exact review approved the change but its proposal could not be repaired.",
+		Base:    "base123", Head: "head123", ReviewedAt: time.Date(2026, 8, 31, 16, 0, 0, 0, time.UTC),
+	}
+	reviewCalls := 0
+	reviewer := reviewCreatorFunc(func(context.Context, ReviewRun) (plan.PlanReview, error) {
+		reviewCalls++
+		return review, &reviewProposalRepairError{
+			category: "proposal_invalid",
+			cause:    errors.New("proposal-only correction did not return a valid typed commit proposal"),
+		}
+	})
+	creatorCalls := 0
+	finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{
+		CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeIsolated, ReviewEnabled: true, PullRequest: true,
+	}}, RunDependencies{
+		CommandRunner: runGitFake(&[]string{}, nil), PlanRecordFactory: memoryPlanRecordFactory,
+		PullRequestCreator: pullRequestCreatorFunc(func(context.Context, PullRequestRun) (plan.PullRequest, error) {
+			creatorCalls++
+			return plan.PullRequest{}, nil
+		}),
+		ReviewCreator: reviewer, RootResolver: staticRootResolver(),
+		Now: func() time.Time { return time.Date(2026, 8, 31, 16, 1, 0, 0, time.UTC) },
+	}))
+
+	complete, err := finalizer.FinalizeIfComplete(context.Background(), 1, detail, plan.RunCapabilities{Complete: true})
+	if !complete || err == nil || !strings.Contains(err.Error(), "valid typed commit proposal") {
+		t.Fatalf("full pull-request finalization = complete %t, error %v", complete, err)
+	}
+	if reviewCalls != 1 || creatorCalls != 0 {
+		t.Fatalf("review/creator calls = %d/%d, want 1/0", reviewCalls, creatorCalls)
+	}
+	failure := detail.State.Plan.FinalizationFailure
+	if failure == nil || failure.Phase != plan.FinalizationFailurePhaseProposalRepair || failure.Category != "proposal_invalid" || failure.ReviewBase != "base123" || failure.ReviewHead != "head123" || failure.RecoveryAction != "rerun_review" {
+		t.Fatalf("fresh review proposal failure = %#v", failure)
+	}
+	action := plan.DeriveNextAction(detail).Primary
+	if action.Kind != plan.PlanActionReview || action.Command != "tao review --run plan-a" {
+		t.Fatalf("fresh review recovery action = %+v", action)
+	}
+}
+
 func TestFinalizerReportsPullRequestCompletionOnlyForMatchingApproval(t *testing.T) {
+	validProposal := &plan.ReviewCommitMessage{
+		Subject: "fix(pr): finalize approved pull request",
+		Body:    "What:\nFinalize the approved branch head.\n\nWhy:\nHand off the exact reviewed change.",
+	}
 	tests := []struct {
 		name          string
 		reviewEnabled bool
 		review        plan.PlanReview
 		reviewErr     error
-		wantComplete  bool
+		wantPR        bool
+		wantError     string
 	}{
-		{name: "approved exact head", reviewEnabled: true, review: plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Head: "head123"}, wantComplete: true},
+		{name: "approved exact head", reviewEnabled: true, review: plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Base: "base123", Head: "head123", CommitMessage: validProposal}, wantPR: true},
 		{name: "comment", reviewEnabled: true, review: plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictComment, Head: "head123"}},
 		{name: "changes requested", reviewEnabled: true, review: plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, Head: "head123"}},
 		{name: "review error", reviewEnabled: true, reviewErr: errors.New("review failed")},
-		{name: "stale review head", reviewEnabled: true, review: plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Head: "head456"}},
+		{name: "stale review head", reviewEnabled: true, review: plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Base: "base123", Head: "head456", CommitMessage: validProposal}, wantError: "exact approved review"},
 		{name: "review disabled", review: plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Head: "head123"}},
 	}
 
@@ -108,7 +340,9 @@ func TestFinalizerReportsPullRequestCompletionOnlyForMatchingApproval(t *testing
 			var out bytes.Buffer
 			var gitCalls []string
 			reviewer := &recordingReviewCreator{review: tt.review, err: tt.reviewErr}
+			creatorCalls := 0
 			creator := pullRequestCreatorFunc(func(context.Context, PullRequestRun) (plan.PullRequest, error) {
+				creatorCalls++
 				return plan.PullRequest{Number: 42, URL: "https://github.com/iamseth/tao/pull/42"}, nil
 			})
 			finalizer := newFinalizer(&out, testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{
@@ -125,8 +359,11 @@ func TestFinalizerReportsPullRequestCompletionOnlyForMatchingApproval(t *testing
 			}))
 
 			complete, err := finalizer.FinalizeIfComplete(context.Background(), 1, detail, plan.RunCapabilities{Complete: true})
-			if err != nil {
+			if tt.wantError == "" && err != nil {
 				t.Fatal(err)
+			}
+			if tt.wantError != "" && (err == nil || !strings.Contains(err.Error(), tt.wantError)) {
+				t.Fatalf("error = %v, want %q", err, tt.wantError)
 			}
 			if !complete {
 				t.Fatal("expected completed slice run")
@@ -138,20 +375,26 @@ func TestFinalizerReportsPullRequestCompletionOnlyForMatchingApproval(t *testing
 			if got := reviewer.calls; got != wantReviewCalls {
 				t.Fatalf("review calls = %d, want %d", got, wantReviewCalls)
 			}
-			if detail.State.Plan.PullRequest == nil || detail.State.Plan.PullRequest.HeadSHA != "head123" {
+			if got := creatorCalls == 1; got != tt.wantPR {
+				t.Fatalf("pull request creator called = %t, want %t", got, tt.wantPR)
+			}
+			if got := detail.State.Plan.PullRequest != nil; got != tt.wantPR {
+				t.Fatalf("pull request recorded = %t, want %t: %+v", got, tt.wantPR, detail.State.Plan.PullRequest)
+			}
+			if tt.wantPR && detail.State.Plan.PullRequest.HeadSHA != "head123" {
 				t.Fatalf("pull request was not recorded against the live head: %+v", detail.State.Plan.PullRequest)
 			}
-			if got := plan.PlanIsPullRequestComplete(detail); got != tt.wantComplete {
-				t.Fatalf("PlanIsPullRequestComplete() = %t, want %t", got, tt.wantComplete)
+			if got := plan.PlanIsPullRequestComplete(detail); got != tt.wantPR {
+				t.Fatalf("PlanIsPullRequestComplete() = %t, want %t", got, tt.wantPR)
 			}
 
 			text := out.String()
-			if !strings.Contains(text, "Pull request: #42 https://github.com/iamseth/tao/pull/42") {
-				t.Fatalf("missing recorded pull request output:\n%s", text)
+			if got := strings.Contains(text, "Pull request: #42 https://github.com/iamseth/tao/pull/42"); got != tt.wantPR {
+				t.Fatalf("pull request output present = %t, want %t:\n%s", got, tt.wantPR, text)
 			}
 			for _, marker := range []string{"Plan complete in Tao: plan-a", "Next: use the host's Squash and merge action", "`tao cleanup --dry-run`"} {
-				if got := strings.Contains(text, marker); got != tt.wantComplete {
-					t.Fatalf("output contains %q = %t, want %t:\n%s", marker, got, tt.wantComplete, text)
+				if got := strings.Contains(text, marker); got != tt.wantPR {
+					t.Fatalf("output contains %q = %t, want %t:\n%s", marker, got, tt.wantPR, text)
 				}
 			}
 			if strings.Contains(text, "tao merge --record-only --force") {
@@ -245,7 +488,13 @@ func TestRunRecoversPersistedPullRequestIntentAfterDefaultBranchAdvancesWithoutR
 		LifecycleStatus: plan.WorkspaceStatusReady,
 		CleanupStatus:   plan.WorkspaceCleanupStatusPending,
 	}
-	detail.State.Plan.Review = &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Head: "head123"}
+	detail.State.Plan.Review = &plan.PlanReview{
+		Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Base: "base123", Head: "head123",
+		CommitMessage: &plan.ReviewCommitMessage{
+			Subject: "fix(pr): recover pull request finalization",
+			Body:    "What:\nRecover the exact approved pull request head.\n\nWhy:\nComplete interrupted finalization without rerunning slices.",
+		},
+	}
 	detail.Slices.Schema = "tao.plan.slices.v1"
 	detail.Slices.PlanID = "plan-a"
 	persistRunArtifacts(t, planDir, detail)
@@ -335,6 +584,13 @@ func TestRunRecoversPersistedPullRequestIntentAfterDefaultBranchAdvancesWithoutR
 	if reloaded.State.Plan.PullRequestIntent == nil || *reloaded.State.Plan.PullRequestIntent != createdPR {
 		t.Fatalf("persisted pull request intent = %#v, want %#v", reloaded.State.Plan.PullRequestIntent, createdPR)
 	}
+	if failure := reloaded.State.Plan.FinalizationFailure; failure == nil || failure.Phase != plan.FinalizationFailurePhasePullRequest || failure.Branch != createdPR.Branch || failure.HeadSHA != createdPR.HeadSHA {
+		t.Fatalf("persisted pull request failure = %#v, want exact branch/head evidence", failure)
+	}
+	requireOwnedEvent(t, reloaded.Events, plan.EventTypeFinalizationFailed, func(event plan.Event) bool {
+		failure := event.FinalizationFailure
+		return failure != nil && failure.Phase == plan.FinalizationFailurePhasePullRequest && failure.Category == "pull_request_failed" && failure.Branch == createdPR.Branch && failure.HeadSHA == createdPR.HeadSHA && failure.RecoveryAction == "resume_pull_request"
+	})
 
 	// The default branch moves after the failed attempt. The normal workspace
 	// preparer would rebase this stale clean worktree and rewrite its HEAD.
@@ -379,9 +635,367 @@ func TestRunRecoversPersistedPullRequestIntentAfterDefaultBranchAdvancesWithoutR
 	if finalDetail.State.Plan.PullRequest == nil || *finalDetail.State.Plan.PullRequest != createdPR || finalDetail.State.Plan.PullRequestIntent != nil {
 		t.Fatalf("recovered pull request state: pull_request=%#v intent=%#v", finalDetail.State.Plan.PullRequest, finalDetail.State.Plan.PullRequestIntent)
 	}
+	if finalDetail.State.Plan.FinalizationFailure != nil {
+		t.Fatalf("successful recovery retained failure evidence: %#v", finalDetail.State.Plan.FinalizationFailure)
+	}
 	if !strings.Contains(out.String(), "Pull request: #42 https://github.com/iamseth/tao/pull/42") {
 		t.Fatalf("missing recovered pull request output: %q", out.String())
 	}
+}
+
+func TestPendingPullRequestIntentAndReplacementNonApprovalRecommendsActionableNextStep(t *testing.T) {
+	for _, verdict := range []string{plan.ReviewVerdictComment, plan.ReviewVerdictChangesRequested} {
+		t.Run(verdict, func(t *testing.T) {
+			fixture := newPullRequestOrchestrationFixture(t)
+			repo := plan.NewFileRepository(fixture.plansRoot)
+			detail, err := repo.ResolvePlan(context.Background(), fixture.planDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			record, err := repo.PlanRecord(detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			intent := plan.PullRequest{
+				Number: 73, URL: "https://github.com/iamseth/tao/pull/73",
+				CreatedAt: time.Date(2026, 8, 31, 13, 30, 0, 0, time.UTC),
+				Branch:    fixture.branch, HeadSHA: fixture.head,
+			}
+			if err := record.RecordPullRequestIntent(intent, fixture.branch, fixture.head); err != nil {
+				t.Fatal(err)
+			}
+			replacement := plan.PlanReview{
+				Status: plan.ReviewStatusCompleted, Verdict: verdict, Summary: "approval replaced",
+				Base: fixture.base, Head: fixture.head, ReviewedAt: intent.CreatedAt.Add(time.Minute),
+			}
+			if verdict == plan.ReviewVerdictChangesRequested {
+				replacement.Findings = []plan.ReviewFinding{{Severity: "major", File: "change.txt", Line: 1, Message: "revise the change"}}
+				replacement.FindingsCount = 1
+			}
+			if err := record.RecordReviewCompleted(replacement, "pi"); err != nil {
+				t.Fatal(err)
+			}
+
+			reloaded, err := repo.ResolvePlan(context.Background(), fixture.planDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantKind := plan.PlanActionReview
+			wantCommand := "tao review --run plan-a"
+			if verdict == plan.ReviewVerdictChangesRequested {
+				wantKind = plan.PlanActionRework
+				wantCommand = "tao rework plan-a"
+			}
+			advertised := plan.DeriveNextAction(reloaded).Primary
+			if advertised.Kind != wantKind || advertised.Command != wantCommand {
+				t.Fatalf("pending-intent action = %#v, want kind %q command %q", advertised, wantKind, wantCommand)
+			}
+			if reloaded.State.Plan.PullRequestIntent == nil || *reloaded.State.Plan.PullRequestIntent != intent {
+				t.Fatalf("read-only derivation changed remote identity intent: %#v", reloaded.State.Plan.PullRequestIntent)
+			}
+			if reloaded.State.Plan.FinalizationFailure != nil {
+				t.Fatalf("read-only derivation recorded failure evidence: %#v", reloaded.State.Plan.FinalizationFailure)
+			}
+		})
+	}
+}
+
+func TestFinalizerRepairsHistoricalApprovedProposalBeforePullRequestPreflight(t *testing.T) {
+	fixture := newPullRequestOrchestrationFixture(t)
+	repo := plan.NewFileRepository(fixture.plansRoot)
+	detail, err := repo.ResolvePlan(context.Background(), fixture.planDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Exercise the legacy fallback to the immutable plan base while retaining a
+	// real linked worktree for the post-session safety inspection.
+	detail.State.Plan.Review.Base = ""
+	requests := 0
+	reviewer := struct {
+		ReviewCreator
+		AgentSessionExecutor
+	}{
+		ReviewCreator: reviewCreatorFunc(func(context.Context, ReviewRun) (plan.PlanReview, error) {
+			t.Fatal("substantive review must not rerun during proposal repair")
+			return plan.PlanReview{}, nil
+		}),
+		AgentSessionExecutor: agentSessionExecutorFunc(func(_ context.Context, request AgentSessionRequest) (AgentSessionResult, error) {
+			requests++
+			if !request.CaptureOutput || !strings.Contains(request.Prompt, "COMMIT PROPOSAL CORRECTION mode") {
+				t.Fatalf("unexpected correction request: %#v", request)
+			}
+			return AgentSessionResult{Output: "```tao-review-proposal-json\n{\"commit_message\":{\"subject\":\"fix(pr): recover exact finalization\",\"body\":\"What:\\nRecover the exact approved head.\\n\\nWhy:\\nFinish pull request handoff safely.\"}}\n```"}, nil
+		}),
+	}
+	finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{}, RunDependencies{
+		CommandRunner:     defaultCommandRunner,
+		PlanRecordFactory: fileReviewRecordFactory(repo),
+		ReviewCreator:     reviewer,
+	}))
+
+	if err := finalizer.ensureApprovedReviewProposal(context.Background(), detail, fixture.worktreeRoot, fixture.branch, fixture.head); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("proposal correction requests = %d, want 1", requests)
+	}
+	review := detail.State.Plan.Review
+	if review == nil || review.Base != fixture.base || review.Head != fixture.head || review.CommitMessage == nil || review.CommitMessage.Subject != "fix(pr): recover exact finalization" {
+		t.Fatalf("corrected historical review = %#v", review)
+	}
+	if detail.State.Plan.FinalizationFailure != nil {
+		t.Fatalf("successful correction recorded failure: %#v", detail.State.Plan.FinalizationFailure)
+	}
+}
+
+func TestFinalizerRecordsHistoricalProposalCorrectionFailureAgainstFallbackBase(t *testing.T) {
+	fixture := newPullRequestOrchestrationFixture(t)
+	repo := plan.NewFileRepository(fixture.plansRoot)
+	detail, err := repo.ResolvePlan(context.Background(), fixture.planDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail.State.Plan.Review.Base = ""
+	reviewer := struct {
+		ReviewCreator
+		AgentSessionExecutor
+	}{
+		ReviewCreator: reviewCreatorFunc(func(context.Context, ReviewRun) (plan.PlanReview, error) {
+			t.Fatal("substantive review must not rerun during proposal repair")
+			return plan.PlanReview{}, nil
+		}),
+		AgentSessionExecutor: agentSessionExecutorFunc(func(context.Context, AgentSessionRequest) (AgentSessionResult, error) {
+			return AgentSessionResult{Output: "not a proposal"}, nil
+		}),
+	}
+	failedAt := time.Date(2026, 8, 30, 9, 0, 0, 0, time.UTC)
+	finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{}, RunDependencies{
+		CommandRunner:     defaultCommandRunner,
+		PlanRecordFactory: memoryPlanRecordFactory,
+		ReviewCreator:     reviewer,
+		Now:               func() time.Time { return failedAt },
+	}))
+
+	err = finalizer.ensureApprovedReviewProposal(context.Background(), detail, fixture.worktreeRoot, fixture.branch, fixture.head)
+	if err == nil || !strings.Contains(err.Error(), "valid typed commit proposal") {
+		t.Fatalf("error = %v, want invalid proposal", err)
+	}
+	failure := detail.State.Plan.FinalizationFailure
+	if failure == nil || failure.Phase != plan.FinalizationFailurePhaseProposalRepair || failure.Category != "proposal_invalid" || failure.ReviewBase != fixture.base || failure.ReviewHead != fixture.head || failure.FailedAt != failedAt {
+		t.Fatalf("proposal correction failure = %#v", failure)
+	}
+}
+
+func TestFinalizerTreatsHistoricalProposalFailureAsConsumedCorrection(t *testing.T) {
+	detail := completedReviewPlanDetail(t.TempDir())
+	detail.State.Plan.ChangeType = plan.ChangeTypeFix
+	detail.State.Plan.Review = &plan.PlanReview{
+		Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove,
+		Base: "base123", Head: "head123",
+	}
+	detail.State.Plan.FinalizationFailure = &plan.FinalizationFailure{
+		Phase: plan.FinalizationFailurePhaseProposalRepair, Category: "proposal_invalid",
+		ReviewBase: "base123", ReviewHead: "head123",
+		FailedAt: time.Date(2026, 8, 30, 9, 0, 0, 0, time.UTC), RecoveryAction: "resume_pull_request",
+	}
+	correctionCalls := 0
+	reviewer := struct {
+		ReviewCreator
+		AgentSessionExecutor
+	}{
+		ReviewCreator: reviewCreatorFunc(func(context.Context, ReviewRun) (plan.PlanReview, error) {
+			t.Fatal("substantive review must not rerun during proposal repair")
+			return plan.PlanReview{}, nil
+		}),
+		AgentSessionExecutor: agentSessionExecutorFunc(func(context.Context, AgentSessionRequest) (AgentSessionResult, error) {
+			correctionCalls++
+			return AgentSessionResult{}, nil
+		}),
+	}
+	finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{}, RunDependencies{
+		PlanRecordFactory: memoryPlanRecordFactory,
+		ReviewCreator:     reviewer,
+		Now:               func() time.Time { return time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC) },
+	}))
+
+	err := finalizer.ensureApprovedReviewProposal(context.Background(), detail, "/repo", "feature", "head123")
+	if err == nil || !strings.Contains(err.Error(), "already attempted") || !strings.Contains(err.Error(), "tao review --run plan-a") {
+		t.Fatalf("error = %v, want replacement-review guidance", err)
+	}
+	if correctionCalls != 0 {
+		t.Fatalf("proposal correction calls = %d, want 0", correctionCalls)
+	}
+	failure := detail.State.Plan.FinalizationFailure
+	if failure == nil || failure.Category != "proposal_invalid" || failure.ReviewBase != "base123" || failure.ReviewHead != "head123" || failure.RecoveryAction != "rerun_review" {
+		t.Fatalf("upgraded proposal failure = %#v", failure)
+	}
+}
+
+func TestFinalizerRecordsUninspectableWorktreeBeforePullRequestCreation(t *testing.T) {
+	detail := approvedPullRequestDetail(plan.ChangeTypeFix, "head123")
+	statusErr := errors.New("status unavailable")
+	creatorCalls := 0
+	finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{}, RunDependencies{
+		CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error {
+			return statusErr
+		},
+		PlanRecordFactory: memoryPlanRecordFactory,
+		PullRequestCreator: pullRequestCreatorFunc(func(context.Context, PullRequestRun) (plan.PullRequest, error) {
+			creatorCalls++
+			return plan.PullRequest{}, nil
+		}),
+	}))
+
+	err := finalizer.createAndRecordPullRequestAtHead(context.Background(), detail, "/repo", "feature", "head123")
+	if !errors.Is(err, statusErr) || !strings.Contains(err.Error(), "inspect pull request worktree status before pull request creation") {
+		t.Fatalf("uninspectable worktree error = %v", err)
+	}
+	if creatorCalls != 0 {
+		t.Fatalf("pull request creator calls = %d, want 0", creatorCalls)
+	}
+	failure := detail.State.Plan.FinalizationFailure
+	if failure == nil || failure.Phase != plan.FinalizationFailurePhasePullRequest || failure.Category != "workspace_preflight_failed" || failure.Branch != "feature" || failure.HeadSHA != "head123" || failure.RecoveryAction != plan.FinalizationRecoveryResumePullRequest {
+		t.Fatalf("uninspectable worktree failure = %#v", failure)
+	}
+	if action := plan.DeriveNextAction(detail).Primary; action.Command != "tao run --pull-request plan-a" {
+		t.Fatalf("uninspectable worktree next action = %#v", action)
+	}
+}
+
+func TestFinalizerReplacesPullRequestFailureOnlyAfterMatchingSuccess(t *testing.T) {
+	detail := approvedPullRequestDetail(plan.ChangeTypeFeat, "head123")
+	failedAt := time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC)
+	createdAt := failedAt.Add(time.Minute)
+	calls := 0
+	creator := pullRequestCreatorFunc(func(context.Context, PullRequestRun) (plan.PullRequest, error) {
+		calls++
+		if calls == 1 {
+			return plan.PullRequest{}, pullRequestFailure("publication_failed", errors.New("push rejected"))
+		}
+		return plan.PullRequest{Number: 42, URL: "https://github.com/iamseth/tao/pull/42", CreatedAt: createdAt}, nil
+	})
+	finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{}, RunDependencies{
+		CommandRunner:      pullRequestCommandRunner(t, nil, nil),
+		PlanRecordFactory:  memoryPlanRecordFactory,
+		PullRequestCreator: creator,
+		Now:                func() time.Time { return failedAt },
+	}))
+
+	err := finalizer.createAndRecordPullRequestAtHead(context.Background(), detail, "/repo", "feature", "head123")
+	if err == nil || !strings.Contains(err.Error(), "push rejected") {
+		t.Fatalf("error = %v, want publication failure", err)
+	}
+	failure := detail.State.Plan.FinalizationFailure
+	if failure == nil || failure.Phase != plan.FinalizationFailurePhasePullRequest || failure.Category != "publication_failed" || failure.Branch != "feature" || failure.HeadSHA != "head123" {
+		t.Fatalf("pull request failure = %#v", failure)
+	}
+
+	if err := finalizer.createAndRecordPullRequestAtHead(context.Background(), detail, "/repo", "feature", "head123"); err != nil {
+		t.Fatal(err)
+	}
+	if detail.State.Plan.PullRequest == nil || detail.State.Plan.PullRequest.Number != 42 {
+		t.Fatalf("pull request was not recorded: %#v", detail.State.Plan.PullRequest)
+	}
+	if detail.State.Plan.FinalizationFailure != nil {
+		t.Fatalf("matching success retained failure: %#v", detail.State.Plan.FinalizationFailure)
+	}
+}
+
+type failFirstPullRequestRecord struct {
+	PlanMutationRecord
+	recordCalls int
+}
+
+func (r *failFirstPullRequestRecord) RecordPullRequest(pr plan.PullRequest, branch, headSHA string) error {
+	r.recordCalls++
+	if r.recordCalls == 1 {
+		return errors.New("interrupted final pull request recording")
+	}
+	return r.PlanMutationRecord.RecordPullRequest(pr, branch, headSHA)
+}
+
+func TestFinalizerInterruptedUnownedDiscoveryDoesNotAuthorizeMetadataRepair(t *testing.T) {
+	detail := approvedPullRequestDetail(plan.ChangeTypeFeat, "head123")
+	createdAt := time.Date(2026, 8, 31, 18, 0, 0, 0, time.UTC)
+	identity := forge.PullRequest{Number: 42, URL: "https://github.com/iamseth/tao/pull/42", CreatedAt: createdAt}
+	findCalls := 0
+	metadataCalls := 0
+	boundary := pullRequestsFake{
+		find: func(context.Context, forge.FindRequest) (forge.PullRequest, forge.Metadata, bool, error) {
+			findCalls++
+			return identity, forge.Metadata{}, true, nil
+		},
+		view: func(context.Context, forge.ViewRequest) (forge.PullRequest, forge.Metadata, bool, error) {
+			t.Fatal("unowned discovery must not become identity-based recovery")
+			return forge.PullRequest{}, forge.Metadata{}, false, nil
+		},
+		create: func(context.Context, forge.CreateRequest) forge.CreationOutcome {
+			t.Fatal("matching pull request discovery must not create another pull request")
+			return forge.CreationOutcome{}
+		},
+		ensureMetadata: func(context.Context, forge.MetadataRequest) error {
+			metadataCalls++
+			return nil
+		},
+	}
+	runner := pullRequestCommandRunner(t, nil, nil)
+	baseRecord, err := memoryPlanRecordFactory(detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := &failFirstPullRequestRecord{PlanMutationRecord: baseRecord}
+	recordFactory := func(*plan.PlanDetail) (PlanMutationRecord, error) { return record, nil }
+	creator := deterministicPullRequestCreator{
+		execution:    testRunExecution(ExecutionConfig{}, RunDependencies{CommandRunner: runner, PlanRecordFactory: recordFactory}),
+		pullRequests: boundary,
+	}
+	finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{}, RunDependencies{
+		CommandRunner: runner, PlanRecordFactory: recordFactory, PullRequestCreator: creator,
+	}))
+
+	err = finalizer.createAndRecordPullRequestAtHead(context.Background(), detail, "/repo", "feature/plan-a", "head123")
+	if err == nil || !strings.Contains(err.Error(), "interrupted final pull request recording") {
+		t.Fatalf("first finalization error = %v, want interrupted recording", err)
+	}
+	intent := detail.State.Plan.PullRequestIntent
+	if intent == nil || intent.Branch != "feature/plan-a" || intent.HeadSHA != "head123" || pullRequestIntentHasIdentity(*intent) {
+		t.Fatalf("unowned discovery intent = %#v, want branch/head-only creation intent", intent)
+	}
+
+	if err := finalizer.createAndRecordPullRequestAtHead(context.Background(), detail, "/repo", "feature/plan-a", "head123"); err != nil {
+		t.Fatal(err)
+	}
+	if findCalls != 2 || metadataCalls != 0 {
+		t.Fatalf("retry discovery/metadata calls = %d/%d, want 2/0", findCalls, metadataCalls)
+	}
+	if detail.State.Plan.PullRequest == nil || detail.State.Plan.PullRequest.Number != identity.Number || detail.State.Plan.PullRequestIntent != nil {
+		t.Fatalf("settled pull request state = pr:%#v intent:%#v", detail.State.Plan.PullRequest, detail.State.Plan.PullRequestIntent)
+	}
+}
+
+type failingFinalizationReplacementRecord struct {
+	PlanMutationRecord
+	detail       *plan.PlanDetail
+	replaceCalls int
+	clearCalls   int
+	recordCalls  int
+}
+
+func (r *failingFinalizationReplacementRecord) RecordFinalizationFailure(failure plan.FinalizationFailure) error {
+	r.recordCalls++
+	r.detail.State.Plan.FinalizationFailure = &failure
+	return nil
+}
+
+func (r *failingFinalizationReplacementRecord) ReplaceFinalizationFailure(_, _ plan.FinalizationFailure) error {
+	r.replaceCalls++
+	return errors.New("injected atomic replacement failure")
+}
+
+func (r *failingFinalizationReplacementRecord) ClearFinalizationFailure(_ plan.FinalizationFailure, _ time.Time) error {
+	r.clearCalls++
+	r.detail.State.Plan.FinalizationFailure = nil
+	return errors.New("interrupted after clear")
 }
 
 func TestFinalizerCommitPolicyNoneSkipsReviewCleanlinessGate(t *testing.T) {

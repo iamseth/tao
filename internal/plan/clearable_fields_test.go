@@ -41,6 +41,8 @@
 //   - PlanState.Decision (*Decision, "decision,omitempty") and Sequence
 //     (*Sequence, "sequence,omitempty") preserve optional planning metadata.
 //   - PlanState.PullRequest (*PullRequest, "pull_request,omitempty")
+//   - PlanState.FinalizationFailure preserves by default and is explicitly
+//     clearable through ArtifactChangeSet.
 //   - PlanState.Review and all PlanReview fields preserve by default but the
 //     block is explicitly replaceable or clearable through ArtifactChangeSet.
 //
@@ -313,6 +315,53 @@ func TestMigratedCurrentSliceRequiresDeclaredClear(t *testing.T) {
 	planObject := raw["plan"].(map[string]any)
 	if value, exists := planObject["current_slice"]; !exists || value != nil {
 		t.Fatalf("declared clear did not persist current_slice as explicit null: %#v", value)
+	}
+}
+
+func TestMigratedFinalizationFailureRequiresDeclaredClear(t *testing.T) {
+	field, ok := reflect.TypeOf(PlanState{}).FieldByName("FinalizationFailure")
+	if !ok || !strings.Contains(field.Tag.Get("json"), "omitempty") {
+		t.Fatalf("PlanState.FinalizationFailure must preserve by default with omitempty, tag=%q", field.Tag.Get("json"))
+	}
+
+	dir := t.TempDir()
+	state := clearableContractBaseState()
+	state.Plan.FinalizationFailure = &FinalizationFailure{
+		Phase: FinalizationFailurePhasePullRequest, Category: "push_failed", Branch: "fix/plan-a", HeadSHA: "head123",
+		FailedAt: time.Date(2026, 8, 29, 20, 0, 0, 0, time.UTC), RecoveryAction: "resume_pull_request",
+	}
+	if err := writeState(dir, state); err != nil {
+		t.Fatal(err)
+	}
+	intended := cloneState(state)
+	intended.Plan.FinalizationFailure = nil
+	if err := writeState(dir, intended); err != nil {
+		t.Fatal(err)
+	}
+	if got := readStateFile(t, dir).Plan.FinalizationFailure; got == nil {
+		t.Fatal("preserve-only write cleared finalization failure")
+	}
+
+	detail := &PlanDetail{Dir: dir, State: intended}
+	loadedBaseline := cloneState(state)
+	detail.loadedStateBaseline = &loadedBaseline
+	record, err := NewPlanRecord(dir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := record.PersistState(); err == nil || !strings.Contains(err.Error(), "FinalizationFailure") {
+		t.Fatalf("undeclared clear error = %v, want field-specific rejection", err)
+	}
+	changes := NewArtifactChangeSet(detail)
+	changes.ClearPlanFinalizationFailure()
+	if err := record.PersistStateChanges(changes); err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	readJSONFile(t, filepath.Join(dir, "state.json"), &raw)
+	planObject := raw["plan"].(map[string]any)
+	if value, exists := planObject["finalization_failure"]; !exists || value != nil {
+		t.Fatalf("declared clear did not persist finalization_failure as null: %#v", value)
 	}
 }
 

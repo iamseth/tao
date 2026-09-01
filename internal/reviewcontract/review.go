@@ -29,38 +29,42 @@ const (
 
 // Review is the safe projection of one modern structured review block.
 type Review struct {
-	Verdict       string
-	Summary       string
-	FindingsCount int
-	Findings      []plan.ReviewFinding
-	CommitMessage *plan.ReviewCommitMessage
+	Verdict        string
+	Summary        string
+	FindingsCount  int
+	Findings       []plan.ReviewFinding
+	CommitMessage  *plan.ReviewCommitMessage
+	ProposalUsable bool
 }
 
-// Parse decodes the last tao-review-json fenced block. Malformed, oversized,
-// unsupported, or policy-invalid output degrades to a bounded comment whose
-// summary is the original output. Findings are always non-nil in the result.
+// Parse decodes a structured review without requiring a specific plan change
+// type. Typed plan review boundaries should use ParseTyped.
 func Parse(output string, proposalPolicy CommitProposalPolicy) Review {
+	return ParseTyped(output, proposalPolicy, "")
+}
+
+// ParseTyped decodes the last tao-review-json fenced block. Malformed,
+// oversized, unsupported, or policy-invalid substantive output degrades to a
+// bounded comment. Proposal decoding and validation are independent: an
+// otherwise valid approval remains available with ProposalUsable false so a
+// caller can repair only its proposal without discarding review evidence.
+func ParseTyped(output string, proposalPolicy CommitProposalPolicy, expectedType plan.ChangeType) Review {
 	fallback := fallbackReview(output)
-	block, ok := lastReviewJSONBlock(output)
+	block, ok := lastJSONBlock(output, "tao-review-json")
 	if !ok {
 		return fallback
 	}
 
 	var payload struct {
-		Verdict       string                    `json:"verdict"`
-		Summary       string                    `json:"summary"`
-		Findings      json.RawMessage           `json:"findings"`
-		CommitMessage *plan.ReviewCommitMessage `json:"commit_message"`
+		Verdict       string          `json:"verdict"`
+		Summary       string          `json:"summary"`
+		Findings      json.RawMessage `json:"findings"`
+		CommitMessage json.RawMessage `json:"commit_message"`
 	}
 	if err := json.Unmarshal([]byte(block), &payload); err != nil {
 		return fallback
 	}
 	if !validVerdict(payload.Verdict) || !validProposalPolicy(proposalPolicy) {
-		return fallback
-	}
-
-	validCommitMessage := payload.Verdict == plan.ReviewVerdictApprove && validCommitProposal(payload.CommitMessage)
-	if payload.Verdict == plan.ReviewVerdictApprove && proposalPolicy == CommitProposalRequired && !validCommitMessage {
 		return fallback
 	}
 
@@ -77,16 +81,38 @@ func Parse(output string, proposalPolicy CommitProposalPolicy) Review {
 		summary = fallback.Summary
 	}
 	var commitMessage *plan.ReviewCommitMessage
-	if validCommitMessage {
-		commitMessage = payload.CommitMessage
+	proposalUsable := false
+	if payload.Verdict == plan.ReviewVerdictApprove {
+		commitMessage, proposalUsable = decodeCommitProposal(payload.CommitMessage, expectedType)
 	}
 	return Review{
-		Verdict:       payload.Verdict,
-		Summary:       summary,
-		FindingsCount: len(findings),
-		Findings:      findings,
-		CommitMessage: commitMessage,
+		Verdict:        payload.Verdict,
+		Summary:        summary,
+		FindingsCount:  len(findings),
+		Findings:       findings,
+		CommitMessage:  commitMessage,
+		ProposalUsable: proposalUsable,
 	}
+}
+
+// ParseCommitProposal decodes one bounded proposal-only correction response and
+// validates both the central commit contract and the authoritative plan type.
+func ParseCommitProposal(output string, expectedType plan.ChangeType) *plan.ReviewCommitMessage {
+	block, ok := lastJSONBlock(output, "tao-review-proposal-json")
+	if !ok {
+		return nil
+	}
+	var payload struct {
+		CommitMessage json.RawMessage `json:"commit_message"`
+	}
+	if err := json.Unmarshal([]byte(block), &payload); err != nil {
+		return nil
+	}
+	message, usable := decodeCommitProposal(payload.CommitMessage, expectedType)
+	if !usable {
+		return nil
+	}
+	return message
 }
 
 // ParseLegacyFindings returns a bounded findings-only projection from the last
@@ -94,7 +120,7 @@ func Parse(output string, proposalPolicy CommitProposalPolicy) Review {
 // summary, or commit proposal so historical review artifacts remain readable.
 // Missing, malformed, and oversized blocks return nil.
 func ParseLegacyFindings(content string) []plan.ReviewFinding {
-	block, ok := lastReviewJSONBlock(content)
+	block, ok := lastJSONBlock(content, "tao-review-json")
 	if !ok {
 		return nil
 	}
@@ -111,7 +137,7 @@ func ParseLegacyFindings(content string) []plan.ReviewFinding {
 	return normalizeFindings(findings)
 }
 
-func lastReviewJSONBlock(output string) (string, bool) {
+func lastJSONBlock(output, fence string) (string, bool) {
 	lines := strings.Split(strings.ReplaceAll(strings.ReplaceAll(output, "\r\n", "\n"), "\r", "\n"), "\n")
 	var current []string
 	last := ""
@@ -120,7 +146,7 @@ func lastReviewJSONBlock(output string) (string, bool) {
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if !inBlock {
-			if trimmed == "```tao-review-json" || trimmed == "``` tao-review-json" {
+			if trimmed == "```"+fence || trimmed == "``` "+fence {
 				current = current[:0]
 				inBlock = true
 			}
@@ -152,11 +178,32 @@ func validProposalPolicy(policy CommitProposalPolicy) bool {
 	return policy == CommitProposalRequired || policy == CommitProposalOptional
 }
 
-func validCommitProposal(message *plan.ReviewCommitMessage) bool {
+func decodeCommitProposal(raw json.RawMessage, expectedType plan.ChangeType) (*plan.ReviewCommitMessage, bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, false
+	}
+	var message plan.ReviewCommitMessage
+	if err := json.Unmarshal(raw, &message); err != nil || !validCommitProposal(&message, expectedType) {
+		return nil, false
+	}
+	return &message, true
+}
+
+func validCommitProposal(message *plan.ReviewCommitMessage, expectedType plan.ChangeType) bool {
 	if message == nil || len([]rune(message.Subject)) > maxSummaryRunes || len([]rune(message.Body)) > maxSummaryRunes {
 		return false
 	}
-	return commitcontract.ValidateProposalMessage(message.Subject, message.Body) == nil
+	if commitcontract.ValidateProposalMessage(message.Subject, message.Body) != nil {
+		return false
+	}
+	if expectedType == "" {
+		return true
+	}
+	if plan.ValidateChangeType(expectedType) != nil {
+		return false
+	}
+	subjectType, _, ok := strings.Cut(message.Subject, "(")
+	return ok && subjectType == string(expectedType)
 }
 
 func validVerdict(verdict string) bool {

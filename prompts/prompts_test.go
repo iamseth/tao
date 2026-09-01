@@ -140,13 +140,37 @@ func TestRenderPRPromptDefinesAutomatedStyleWithoutLifecycleAuthority(t *testing
 }
 
 func TestRenderReviewPromptUsesInjectedPlanAndDiff(t *testing.T) {
-	got, err := Render(PromptReview, Data{PlanDir: "/tmp/tao/plans/plan-a", PlanID: "plan-a", Base: "base123", Head: "head456"})
+	got, err := Render(PromptReview, Data{PlanDir: "/tmp/tao/plans/plan-a", PlanID: "plan-a", Base: "base123", Head: "head456", ChangeType: "fix"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Plan ID: `plan-a`", "Plan directory: `/tmp/tao/plans/plan-a`", "Base: `base123`", "Head: `head456`", "git diff --stat base123..head456", "\"verdict\"", "\"findings\"", "\"commit_message\"", "complete exact `Base..Head` diff", "Do not include verification output or any `Tao-*` trailers"} {
+	for _, want := range []string{"Plan ID: `plan-a`", "Plan directory: `/tmp/tao/plans/plan-a`", "Base: `base123`", "Head: `head456`", "Plan change type: `fix`", "git diff --stat base123..head456", "\"verdict\"", "\"findings\"", "\"commit_message\"", "complete exact `Base..Head` diff", "authoritative plan change type `fix`", "Do not include verification output or any `Tao-*` trailers"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("rendered review prompt missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestRenderReviewProposalCorrectionCannotChangeSubstantiveReview(t *testing.T) {
+	got, err := Render(PromptReview, Data{PlanID: "plan-a", Base: "base123", Head: "head456", ChangeType: "fix", ProposalOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"COMMIT PROPOSAL CORRECTION mode",
+		"exact `base123..head456` diff",
+		"Required change type: `fix`",
+		"tao-review-proposal-json",
+		"subject type must be exactly `fix`",
+		"Do not include a verdict, summary, findings",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("rendered correction prompt missing %q:\n%s", want, got)
+		}
+	}
+	for _, forbidden := range []string{"Assess the scoped diff", "Review criteria", "tao-review-json\n{\n  \"verdict\""} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("rendered correction prompt retained substantive review instruction %q:\n%s", forbidden, got)
 		}
 	}
 }

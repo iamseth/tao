@@ -557,6 +557,11 @@ already define it, and new PRs are assigned to the authenticated user. If
 `gh pr create` fails after emitting the created PR's identity, Tao persists that
 exact identity before attempting metadata repair; post-failure branch discovery
 alone never authorizes Tao to label or assign a potentially human-created PR.
+If this finalization stops, rerun `tao run --pull-request <plan>`: Tao resumes only
+from the recorded exact review, worktree branch/head, push, and PR identity, and
+does not rerun completed slices. An unusable historical approval proposal gets
+one proposal-only correction before any push; exhaustion or stale-head evidence
+stops with a recovery action visible in `tao show`.
 The selected agent may best-effort polish the repository-native
 Problem/Fix/Tests/Deploy/Scope body. Tao omits lifecycle-only verification
 commands, preserves the exact changed-file diff stat, rejects lifecycle or

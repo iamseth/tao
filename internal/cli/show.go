@@ -85,6 +85,14 @@ func renderPlanDetailWithThresholds(out io.Writer, loaded planview.Plan, thresho
 	if err := renderNextAction(out, derived.NextAction); err != nil {
 		return err
 	}
+	if recovery := derived.FinalizationRecovery; recovery != nil {
+		if err := writef(out, "Finalization failure: %s (%s)\n", recovery.Phase, recovery.Category); err != nil {
+			return err
+		}
+		if err := writef(out, "Failed at: %s\n", recovery.FailedAt.UTC().Format(time.RFC3339)); err != nil {
+			return err
+		}
+	}
 	if err := writef(out, "Repo: %s %s\n", state.Repo.Name, state.Repo.Branch); err != nil {
 		return err
 	}
@@ -169,8 +177,13 @@ func renderPlanDetailWithThresholds(out io.Writer, loaded planview.Plan, thresho
 		start := max(len(detail.Events)-5, 0)
 		for _, event := range detail.Events[start:] {
 			message := event.Message
-			if event.Type == plan.EventTypeSliceBlocked {
+			switch event.Type {
+			case plan.EventTypeSliceBlocked:
 				message = planview.FormatBlockerText(event.Reason).Concise
+			case plan.EventTypeFinalizationFailed, plan.EventTypeFinalizationFailureCleared:
+				if recovery := plan.FinalizationRecoveryFromFailure(event.FinalizationFailure); recovery != nil {
+					message = string(recovery.Phase) + " " + recovery.Category + "; recovery: " + recovery.RecoveryAction
+				}
 			}
 			if err := writef(out, "- %s %s %s\n", event.Timestamp.Format(time.RFC3339), event.Type, message); err != nil {
 				return err

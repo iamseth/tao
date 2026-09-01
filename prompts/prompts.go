@@ -100,6 +100,8 @@ type Data struct {
 	PlanID             string
 	Base               string
 	Head               string
+	ChangeType         string
+	ProposalOnly       bool
 	RunPacket          string
 	Resuming           bool
 	ResumeAttempt      int

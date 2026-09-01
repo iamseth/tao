@@ -9,6 +9,38 @@ import (
 	"time"
 )
 
+func TestFinalizationFailureValidation(t *testing.T) {
+	validProposal := FinalizationFailure{
+		Phase: FinalizationFailurePhaseProposalRepair, Category: "proposal_invalid", ReviewBase: "base123", ReviewHead: "head123",
+		FailedAt: time.Date(2026, 8, 29, 20, 0, 0, 0, time.UTC), RecoveryAction: "rerun_review",
+	}
+	if err := validProposal.Validate(); err != nil {
+		t.Fatalf("valid proposal failure: %v", err)
+	}
+	validPR := FinalizationFailure{
+		Phase: FinalizationFailurePhasePullRequest, Category: "push_failed", Branch: "fix/plan", HeadSHA: "head123",
+		FailedAt: validProposal.FailedAt, RecoveryAction: "resume_pull_request",
+	}
+	if err := validPR.Validate(); err != nil {
+		t.Fatalf("valid pull-request failure: %v", err)
+	}
+	for name, mutate := range map[string]func(*FinalizationFailure){
+		"raw category":       func(f *FinalizationFailure) { f.Category = "push failed: provider output" },
+		"unbounded recovery": func(f *FinalizationFailure) { f.RecoveryAction = strings.Repeat("a", 129) },
+		"missing boundary":   func(f *FinalizationFailure) { f.HeadSHA = "" },
+		"mixed boundary":     func(f *FinalizationFailure) { f.ReviewHead = "head123" },
+		"missing timestamp":  func(f *FinalizationFailure) { f.FailedAt = time.Time{} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			failure := validPR
+			mutate(&failure)
+			if err := failure.Validate(); err == nil {
+				t.Fatalf("invalid failure passed validation: %#v", failure)
+			}
+		})
+	}
+}
+
 func TestAutomaticReworkEvidenceValidation(t *testing.T) {
 	now := time.Date(2026, 8, 18, 1, 0, 0, 0, time.UTC)
 	validStop := AutomaticReworkStop{Round: 1, Attempts: 1, Fingerprint: "fingerprint", Reason: "stopped", StoppedAt: now}

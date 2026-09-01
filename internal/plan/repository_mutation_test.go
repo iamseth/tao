@@ -122,6 +122,237 @@ func TestPlanRecordSingleMergeCommitIntentRoundTripsAndClears(t *testing.T) {
 	}
 }
 
+func TestPlanRecordFinalizationFailureLifecycle(t *testing.T) {
+	root := t.TempDir()
+	writeMinimalPlan(t, root, "failure", "Failure")
+	planDir := filepath.Join(root, "failure")
+	repo := NewFileRepository(root)
+	detail, err := repo.GetPlan(context.Background(), "failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := NewPlanRecord(planDir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedAt := time.Date(2026, 8, 29, 12, 0, 0, 0, time.FixedZone("offset", -7*60*60))
+	failure := FinalizationFailure{
+		Phase: FinalizationFailurePhasePullRequest, Category: "push_failed", Branch: "fix/failure", HeadSHA: "head123",
+		FailedAt: failedAt, RecoveryAction: "resume_pull_request",
+	}
+	if err := record.RecordFinalizationFailure(failure); err != nil {
+		t.Fatal(err)
+	}
+	failure.FailedAt = failure.FailedAt.UTC()
+	if err := record.RecordFinalizationFailure(failure); err != nil {
+		t.Fatalf("idempotent retry: %v", err)
+	}
+	if got := len(detail.Events); got != 1 {
+		t.Fatalf("failure event count = %d, want 1", got)
+	}
+	conflict := failure
+	conflict.Category = "create_failed"
+	if err := record.RecordFinalizationFailure(conflict); err == nil || !strings.Contains(err.Error(), "conflicting") {
+		t.Fatalf("conflicting failure error = %v", err)
+	}
+
+	reloaded, err := repo.GetPlan(context.Background(), "failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.State.Plan.FinalizationFailure == nil || *reloaded.State.Plan.FinalizationFailure != failure {
+		t.Fatalf("failure did not round-trip: %#v", reloaded.State.Plan.FinalizationFailure)
+	}
+	if eventFailure := reloaded.Events[0].FinalizationFailure; eventFailure == nil || *eventFailure != failure {
+		t.Fatalf("failure event did not replay: %#v", reloaded.Events[0])
+	}
+	summary := Summarize(reloaded, failure.FailedAt.Add(time.Minute))
+	if summary.FinalizationFailure == nil || *summary.FinalizationFailure != failure {
+		t.Fatalf("summary failure = %#v", summary.FinalizationFailure)
+	}
+	summary.FinalizationFailure.Category = "mutated"
+	if reloaded.State.Plan.FinalizationFailure.Category != "push_failed" {
+		t.Fatal("summary shared finalization failure storage")
+	}
+
+	clearedAt := failure.FailedAt.Add(time.Minute)
+	if err := record.ClearFinalizationFailure(failure, clearedAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := record.ClearFinalizationFailure(failure, clearedAt); err != nil {
+		t.Fatalf("idempotent clear retry: %v", err)
+	}
+	reloaded, err = repo.GetPlan(context.Background(), "failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.State.Plan.FinalizationFailure != nil {
+		t.Fatalf("failure was not cleared: %#v", reloaded.State.Plan.FinalizationFailure)
+	}
+	clearEvents := 0
+	for _, event := range reloaded.Events {
+		if event.Type == EventTypeFinalizationFailureCleared {
+			clearEvents++
+		}
+	}
+	if clearEvents != 1 {
+		t.Fatalf("clear event count = %d, want 1", clearEvents)
+	}
+}
+
+func TestPlanRecordReplaceFinalizationFailurePersistenceFailuresPreserveEvidence(t *testing.T) {
+	for _, operation := range []string{"journal", "state", "event-1", "event-2", "remove"} {
+		t.Run(operation, func(t *testing.T) {
+			root := t.TempDir()
+			writeMinimalPlan(t, root, "replace-failure", "Replace Failure")
+			planDir := filepath.Join(root, "replace-failure")
+			repo := NewFileRepository(root)
+			detail, err := repo.GetPlan(context.Background(), "replace-failure")
+			if err != nil {
+				t.Fatal(err)
+			}
+			initialRecord, err := NewPlanRecord(planDir, detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			original := FinalizationFailure{
+				Phase: FinalizationFailurePhasePullRequest, Category: "publication_failed", Branch: "fix/failure", HeadSHA: "head123",
+				FailedAt: time.Date(2026, 8, 31, 16, 0, 0, 0, time.UTC), RecoveryAction: FinalizationRecoveryResumePullRequest,
+			}
+			if err := initialRecord.RecordFinalizationFailure(original); err != nil {
+				t.Fatal(err)
+			}
+			replacement := original
+			replacement.FailedAt = original.FailedAt.Add(time.Hour)
+
+			ioStore := &failingMutationJournalIO{delegate: fileMutationJournalIO{}, failOperation: operation}
+			store := journalArtifactMutationStore{fileArtifactStore: fileArtifactStore{}, journalIO: ioStore}
+			record, err := newPlanRecord(store, planDir, detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = record.ReplaceFinalizationFailure(original, replacement)
+			if err == nil || !strings.Contains(err.Error(), "injected "+operation+" failure") {
+				t.Fatalf("replacement error = %v, want injected %s failure", err, operation)
+			}
+			if current := detail.State.Plan.FinalizationFailure; current == nil || *current != original {
+				t.Fatalf("failed replacement changed in-memory evidence: %#v", current)
+			}
+
+			reloaded, err := repo.GetPlan(context.Background(), "replace-failure")
+			if err != nil {
+				t.Fatalf("recover replacement: %v", err)
+			}
+			current := reloaded.State.Plan.FinalizationFailure
+			if current == nil || (*current != original && *current != replacement) {
+				t.Fatalf("recovered evidence = %#v, want old or replacement", current)
+			}
+			if operation == "journal" && *current != original {
+				t.Fatalf("pre-journal failure evidence = %#v, want original", current)
+			}
+			if operation != "journal" && *current != replacement {
+				t.Fatalf("journaled replacement evidence = %#v, want replacement", current)
+			}
+			if *current == replacement {
+				var cleared, recorded bool
+				for _, event := range reloaded.Events {
+					if event.Timestamp != replacement.FailedAt || event.FinalizationFailure == nil {
+						continue
+					}
+					switch event.Type {
+					case EventTypeFinalizationFailureCleared:
+						cleared = *event.FinalizationFailure == original
+					case EventTypeFinalizationFailed:
+						recorded = *event.FinalizationFailure == replacement
+					}
+				}
+				if !cleared || !recorded {
+					t.Fatalf("replacement lifecycle events missing: %#v", reloaded.Events)
+				}
+			}
+		})
+	}
+}
+
+func TestPlanRecordReplaceFinalizationFailureRejectsBoundaryDrift(t *testing.T) {
+	root := t.TempDir()
+	writeMinimalPlan(t, root, "replace-boundary", "Replace Boundary")
+	planDir := filepath.Join(root, "replace-boundary")
+	detail, err := NewFileRepository(root).GetPlan(context.Background(), "replace-boundary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := NewPlanRecord(planDir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := FinalizationFailure{
+		Phase: FinalizationFailurePhasePullRequest, Category: "publication_failed", Branch: "fix/failure", HeadSHA: "head123",
+		FailedAt: time.Date(2026, 8, 31, 16, 0, 0, 0, time.UTC), RecoveryAction: FinalizationRecoveryResumePullRequest,
+	}
+	if err := record.RecordFinalizationFailure(original); err != nil {
+		t.Fatal(err)
+	}
+	replacement := original
+	replacement.HeadSHA = "head456"
+	replacement.FailedAt = original.FailedAt.Add(time.Hour)
+	if err := record.ReplaceFinalizationFailure(original, replacement); err == nil || !strings.Contains(err.Error(), "preserve the durable boundary") {
+		t.Fatalf("boundary replacement error = %v", err)
+	}
+	if current := detail.State.Plan.FinalizationFailure; current == nil || *current != original {
+		t.Fatalf("boundary rejection changed evidence: %#v", current)
+	}
+}
+
+func TestPlanRecordFinalizationFailureClearsOnHeadReplacementAndSuccess(t *testing.T) {
+	root := t.TempDir()
+	writeMinimalPlan(t, root, "settle-failure", "Settle Failure")
+	planDir := filepath.Join(root, "settle-failure")
+	state, err := ReadState(planDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Workspace = &Workspace{Branch: "fix/failure", HeadSHA: "head123"}
+	if err := writeState(planDir, state); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewFileRepository(root)
+	detail, err := repo.GetPlan(context.Background(), "settle-failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := NewPlanRecord(planDir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure := FinalizationFailure{
+		Phase: FinalizationFailurePhasePullRequest, Category: "push_failed", Branch: "fix/failure", HeadSHA: "head123",
+		FailedAt: time.Date(2026, 8, 29, 19, 0, 0, 0, time.UTC), RecoveryAction: "resume_pull_request",
+	}
+	if err := record.RecordFinalizationFailure(failure); err != nil {
+		t.Fatal(err)
+	}
+	if err := record.AdvanceWorkspaceHead("fix/failure", "head123", "head456"); err != nil {
+		t.Fatal(err)
+	}
+	if detail.State.Plan.FinalizationFailure != nil {
+		t.Fatal("head replacement retained stale failure")
+	}
+
+	failure.HeadSHA = "head456"
+	failure.FailedAt = failure.FailedAt.Add(time.Minute)
+	if err := record.RecordFinalizationFailure(failure); err != nil {
+		t.Fatal(err)
+	}
+	createdAt := failure.FailedAt.Add(time.Minute)
+	if err := record.RecordPullRequest(PullRequest{Number: 7, URL: "https://example.test/pull/7", CreatedAt: createdAt}, "fix/failure", "head456"); err != nil {
+		t.Fatal(err)
+	}
+	if detail.State.Plan.FinalizationFailure != nil {
+		t.Fatal("successful pull request retained failure")
+	}
+}
+
 func TestPlanRecordPullRequestIntentRoundTripsAndClearsOnSuccess(t *testing.T) {
 	root := t.TempDir()
 	writeMinimalPlan(t, root, "pr-intent", "PR Intent")
@@ -263,6 +494,22 @@ func TestPlanRecordStateEventMutationsRecoverInstalledPrefixes(t *testing.T) {
 		eventType string
 		assert    func(*testing.T, *PlanDetail)
 	}{
+		{
+			name: "finalization failure",
+			apply: func(record *PlanRecord) error {
+				return record.RecordFinalizationFailure(FinalizationFailure{
+					Phase: FinalizationFailurePhaseProposalRepair, Category: "proposal_invalid", ReviewBase: "base123", ReviewHead: "head123",
+					FailedAt: mutatedAt, RecoveryAction: "rerun_review",
+				})
+			},
+			eventType: EventTypeFinalizationFailed,
+			assert: func(t *testing.T, detail *PlanDetail) {
+				t.Helper()
+				if failure := detail.State.Plan.FinalizationFailure; failure == nil || failure.Category != "proposal_invalid" || failure.ReviewHead != "head123" {
+					t.Fatalf("replayed finalization failure = %#v", failure)
+				}
+			},
+		},
 		{
 			name: "pull request",
 			apply: func(record *PlanRecord) error {
@@ -993,6 +1240,13 @@ func TestReopenCompletedPlanAddsPendingSlicesAndEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	reopened := time.Date(2026, 5, 4, 1, 0, 0, 0, time.UTC)
+	detail.State.Plan.FinalizationFailure = &FinalizationFailure{
+		Phase: FinalizationFailurePhaseProposalRepair, Category: "proposal_invalid", ReviewBase: "base123", ReviewHead: "head123",
+		FailedAt: reopened.Add(-time.Minute), RecoveryAction: "rerun_review",
+	}
+	if err := testRepoRecord(repo, detail).PersistState(); err != nil {
+		t.Fatal(err)
+	}
 	newSlices := []Slice{
 		newReopenSlice("002-fix", "Fix review finding", reopened),
 		newReopenSlice("003-cover", "Cover review finding", reopened),
@@ -1003,6 +1257,9 @@ func TestReopenCompletedPlanAddsPendingSlicesAndEvent(t *testing.T) {
 	}
 
 	assertReopenedPlan(t, detail, reopened)
+	if detail.State.Plan.FinalizationFailure != nil {
+		t.Fatal("plan reopen retained finalization failure")
+	}
 	reloaded, err := repo.GetPlan(context.Background(), "reopen")
 	if err != nil {
 		t.Fatal(err)

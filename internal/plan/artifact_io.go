@@ -165,6 +165,8 @@ type ArtifactChangeSet struct {
 	clearWorkspaceDependencyFingerprint bool
 	clearWorkspaceRebaseIntent          bool
 	clearPlanCurrentSlice               bool
+	clearPlanFinalizationFailure        bool
+	planFinalizationFailure             *FinalizationFailure
 	planReview                          planReviewChange
 	clearSliceBlockerNotes              map[string]struct{}
 	clearSliceExecutionBoundaries       map[string]struct{}
@@ -279,6 +281,34 @@ func (c *ArtifactChangeSet) ClearPlanCurrentSlice() {
 	}
 }
 
+// ClearPlanFinalizationFailure explicitly supersedes the current bounded
+// failure evidence while preserving its append-only lifecycle event.
+func (c *ArtifactChangeSet) ClearPlanFinalizationFailure() {
+	if c == nil {
+		return
+	}
+	c.clearPlanFinalizationFailure = true
+	c.planFinalizationFailure = nil
+	if c.detail != nil {
+		c.detail.State.Plan.FinalizationFailure = nil
+	}
+}
+
+// ReplacePlanFinalizationFailure replaces every persisted failure field so a
+// transition between phase-specific evidence cannot retain omitted JSON keys.
+func (c *ArtifactChangeSet) ReplacePlanFinalizationFailure(failure FinalizationFailure) error {
+	if c == nil || c.detail == nil {
+		return fmt.Errorf("plan detail is nil")
+	}
+	if err := failure.Validate(); err != nil {
+		return err
+	}
+	c.clearPlanFinalizationFailure = false
+	c.planFinalizationFailure = cloneFinalizationFailure(&failure)
+	c.detail.State.Plan.FinalizationFailure = cloneFinalizationFailure(&failure)
+	return nil
+}
+
 // ReplacePlanReview replaces every known persisted review field. Empty findings
 // are normalized to [] so replacement cannot retain an older findings array.
 func (c *ArtifactChangeSet) ReplacePlanReview(review PlanReview) error {
@@ -353,6 +383,11 @@ func (c *ArtifactChangeSet) applyState(state *State) {
 	}
 	if c.clearPlanCurrentSlice {
 		state.Plan.CurrentSlice = nil
+	}
+	if c.clearPlanFinalizationFailure {
+		state.Plan.FinalizationFailure = nil
+	} else if c.planFinalizationFailure != nil {
+		state.Plan.FinalizationFailure = cloneFinalizationFailure(c.planFinalizationFailure)
 	}
 	switch c.planReview.kind {
 	case planReviewReplaced:
@@ -1240,7 +1275,7 @@ func lowerArtifactJSONChanges(encoded []byte, projection artifactJSONChanges) ([
 	if changes == nil {
 		return encoded, nil
 	}
-	hasStateChanges := changes.clearWorkspaceDependencyFailure || changes.clearWorkspaceDependencyFingerprint || changes.clearWorkspaceRebaseIntent || changes.clearPlanCurrentSlice || changes.planReview.kind != planReviewUnchanged
+	hasStateChanges := changes.clearWorkspaceDependencyFailure || changes.clearWorkspaceDependencyFingerprint || changes.clearWorkspaceRebaseIntent || changes.clearPlanCurrentSlice || changes.clearPlanFinalizationFailure || changes.planFinalizationFailure != nil || changes.planReview.kind != planReviewUnchanged
 	hasSliceChanges := len(changes.clearSliceBlockerNotes) > 0 || len(changes.clearSliceExecutionBoundaries) > 0
 	if projection.kind == artifactJSONState && !hasStateChanges || projection.kind == artifactJSONSlices && !hasSliceChanges || projection.kind == artifactJSONNone {
 		return encoded, nil
@@ -1313,6 +1348,9 @@ func validateStateChangeDeclarations(baseline, intended State, changes *Artifact
 	if baseline.Plan.CurrentSlice != nil && intended.Plan.CurrentSlice == nil && (changes == nil || !changes.clearPlanCurrentSlice) {
 		return fmt.Errorf("persist state: State.Plan.CurrentSlice changed from non-zero to zero without ClearPlanCurrentSlice")
 	}
+	if baseline.Plan.FinalizationFailure != nil && intended.Plan.FinalizationFailure == nil && (changes == nil || !changes.clearPlanFinalizationFailure) {
+		return fmt.Errorf("persist state: State.Plan.FinalizationFailure changed from non-zero to zero without ClearPlanFinalizationFailure")
+	}
 	if err := validatePlanReviewChangeDeclaration(baseline.Plan.Review, intended.Plan.Review, changes); err != nil {
 		return err
 	}
@@ -1373,6 +1411,25 @@ func lowerStateJSONChanges(root map[string]any, changes *ArtifactChangeSet) erro
 	plan := jsonObject(root, "plan")
 	if changes.clearPlanCurrentSlice {
 		plan["current_slice"] = nil
+	}
+	if changes.clearPlanFinalizationFailure {
+		plan["finalization_failure"] = nil
+	} else if changes.planFinalizationFailure != nil {
+		encoded, err := json.Marshal(changes.planFinalizationFailure)
+		if err != nil {
+			return fmt.Errorf("lower finalization failure replacement: %w", err)
+		}
+		var replacement map[string]any
+		if err := json.Unmarshal(encoded, &replacement); err != nil {
+			return fmt.Errorf("lower finalization failure replacement: %w", err)
+		}
+		// The merge-preserving writer combines objects recursively, so include
+		// every phase-specific key to overwrite fields omitted by struct tags.
+		replacement["branch"] = changes.planFinalizationFailure.Branch
+		replacement["head_sha"] = changes.planFinalizationFailure.HeadSHA
+		replacement["review_base"] = changes.planFinalizationFailure.ReviewBase
+		replacement["review_head"] = changes.planFinalizationFailure.ReviewHead
+		plan["finalization_failure"] = replacement
 	}
 	switch changes.planReview.kind {
 	case planReviewReplaced:

@@ -248,6 +248,204 @@ func TestShowJSONUsesExplicitNextActionProjection(t *testing.T) {
 	}
 }
 
+func TestShowProjectsDurableFinalizationRecoveryInTextJSONAndEvents(t *testing.T) {
+	failedAt := time.Date(2026, 8, 29, 20, 0, 0, 0, time.UTC)
+	failure := &plan.FinalizationFailure{
+		Phase: plan.FinalizationFailurePhasePullRequest, Category: "publication_failed", Branch: "fix/plan-a", HeadSHA: "head-secret",
+		FailedAt: failedAt, RecoveryAction: "resume_pull_request",
+	}
+	detail := &plan.PlanDetail{
+		State: plan.State{Status: plan.StatusReviewed, Repo: plan.Repo{Name: "repo", Branch: "main"}, Workspace: &plan.Workspace{Branch: "fix/plan-a", HeadSHA: "head-secret"}, Plan: plan.PlanState{
+			ID: "plan-a", Title: "Plan A", CompletedSlices: []string{"001-a"}, FinalizationFailure: failure,
+		}},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "001-a", Status: plan.StatusCompleted}}},
+		Events: []plan.Event{{Type: plan.EventTypeFinalizationFailed, Timestamp: failedAt, FinalizationFailure: failure, Message: "Plan finalization failed"}},
+	}
+	plan.SetPersistedReview(detail, plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Head: "head-secret"})
+	repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
+
+	var textOut bytes.Buffer
+	if err := (App{Out: &textOut, Err: &textOut}).show(context.Background(), repo, []string{"plan-a"}); err != nil {
+		t.Fatal(err)
+	}
+	text := stripANSI(textOut.String())
+	for _, want := range []string{
+		"Next: tao run --pull-request plan-a", "Finalization failure: pull_request_finalization (publication_failed)",
+		"finalization_failed pull_request_finalization publication_failed; recovery: resume_pull_request",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("show output missing %q:\n%s", want, text)
+		}
+	}
+
+	var jsonOut bytes.Buffer
+	if err := (App{Out: &jsonOut, Err: &jsonOut}).show(context.Background(), repo, []string{"plan-a", "--json"}); err != nil {
+		t.Fatal(err)
+	}
+	var payload planview.ShowPayload
+	if err := json.Unmarshal(jsonOut.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Finalization == nil || payload.Finalization.Phase != plan.FinalizationFailurePhasePullRequest || payload.NextAction.Primary.Command != "tao run --pull-request plan-a" {
+		t.Fatalf("show JSON recovery = finalization %+v next %+v", payload.Finalization, payload.NextAction.Primary)
+	}
+	if strings.Contains(jsonOut.String(), "head-secret") || strings.Contains(jsonOut.String(), "fix/plan-a") {
+		t.Fatalf("show JSON exposed exact recovery boundaries: %s", jsonOut.String())
+	}
+}
+
+func TestShowProjectsNonRetryablePullRequestRecoveryActions(t *testing.T) {
+	tests := []struct {
+		name      string
+		category  string
+		action    string
+		wantText  string
+		wantCmd   string
+		wantInstr string
+	}{
+		{name: "missing or mismatched linked worktree", category: "workspace_mismatch", action: plan.FinalizationRecoveryResumePullRequest, wantText: "Repair or restore the plan's recorded linked worktree", wantInstr: "recorded path, branch, and HEAD"},
+		{name: "head drift", category: "head_drift", action: plan.FinalizationRecoveryResumePullRequest, wantText: "Restore the plan worktree to its recorded branch and HEAD", wantInstr: "recorded branch and HEAD"},
+		{name: "dirty worktree", category: "workspace_dirty", action: plan.FinalizationRecoveryRestoreBoundary, wantText: "Restore a clean plan worktree", wantInstr: "clean plan worktree"},
+		{name: "review mismatch", category: "review_head_mismatch", action: plan.FinalizationRecoveryRerunReview, wantText: "Next: tao review --run plan-a", wantCmd: "tao review --run plan-a"},
+		{name: "intent mismatch", category: "intent_mismatch", action: plan.FinalizationRecoveryRepairIntent, wantText: "Repair the conflicting durable pull-request intent", wantInstr: "durable pull-request intent"},
+		{name: "identity mismatch", category: "identity_mismatch", action: plan.FinalizationRecoveryRepairIntent, wantText: "Repair the stale recorded pull-request number and URL", wantInstr: "do not adopt a remotely discovered identity"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			failedAt := time.Date(2026, 8, 31, 17, 0, 0, 0, time.UTC)
+			detail := &plan.PlanDetail{
+				State: plan.State{Status: plan.StatusReviewed, Workspace: &plan.Workspace{Branch: "fix/plan-a", HeadSHA: "head-secret"}, Plan: plan.PlanState{
+					ID: "plan-a", Title: "Plan A", CompletedSlices: []string{"001-a"}, FinalizationFailure: &plan.FinalizationFailure{
+						Phase: plan.FinalizationFailurePhasePullRequest, Category: test.category, Branch: "fix/plan-a", HeadSHA: "head-secret", FailedAt: failedAt, RecoveryAction: test.action,
+					},
+				}},
+				Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "001-a", Status: plan.StatusCompleted}}},
+			}
+			plan.SetPersistedReview(detail, plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Head: "head-secret"})
+			repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
+
+			var textOut bytes.Buffer
+			if err := (App{Out: &textOut, Err: &textOut}).show(context.Background(), repo, []string{"plan-a"}); err != nil {
+				t.Fatal(err)
+			}
+			if text := stripANSI(textOut.String()); !strings.Contains(text, test.wantText) || strings.Contains(text, "Next: tao run --pull-request") {
+				t.Fatalf("show text recovery:\n%s", text)
+			}
+
+			var jsonOut bytes.Buffer
+			if err := (App{Out: &jsonOut, Err: &jsonOut}).show(context.Background(), repo, []string{"plan-a", "--json"}); err != nil {
+				t.Fatal(err)
+			}
+			var payload planview.ShowPayload
+			if err := json.Unmarshal(jsonOut.Bytes(), &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.NextAction.Primary.Command != test.wantCmd || !strings.Contains(payload.NextAction.Primary.Instruction, test.wantInstr) {
+				t.Fatalf("show JSON next action = %#v", payload.NextAction.Primary)
+			}
+			if test.category == "identity_mismatch" && payload.Finalization.RecoveryAction != plan.FinalizationRecoveryRepairIdentity {
+				t.Fatalf("show JSON identity recovery = finalization %+v", payload.Finalization)
+			}
+		})
+	}
+}
+
+func TestShowProjectsPostCorrectionRecoveryActions(t *testing.T) {
+	tests := []struct {
+		name      string
+		category  string
+		action    string
+		wantText  string
+		wantCmd   string
+		wantInstr string
+	}{
+		{name: "head drift", category: "head_drift", action: plan.FinalizationRecoveryRerunReview, wantText: "Restore the plan worktree to its recorded branch and HEAD", wantInstr: "recorded branch and HEAD"},
+		{name: "workspace mismatch", category: "workspace_mismatch", action: plan.FinalizationRecoveryRestoreBoundary, wantText: "Repair or restore the plan's recorded linked worktree", wantInstr: "recorded path, branch, and HEAD"},
+		{name: "dirty worktree", category: "workspace_dirty", action: plan.FinalizationRecoveryRerunReview, wantText: "Restore a clean plan worktree", wantInstr: "clean plan worktree"},
+		{name: "intent mismatch", category: "intent_mismatch", action: plan.FinalizationRecoveryRepairIntent, wantText: "Repair the conflicting durable pull-request intent", wantInstr: "durable pull-request intent"},
+		{name: "invalid proposal", category: "proposal_invalid", action: plan.FinalizationRecoveryRerunReview, wantText: "Next: tao review --run plan-a", wantCmd: "tao review --run plan-a"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			failedAt := time.Date(2026, 8, 31, 17, 30, 0, 0, time.UTC)
+			detail := &plan.PlanDetail{
+				State: plan.State{Status: plan.StatusReviewed, Plan: plan.PlanState{
+					ID: "plan-a", Title: "Plan A", CompletedSlices: []string{"001-a"}, FinalizationFailure: &plan.FinalizationFailure{
+						Phase: plan.FinalizationFailurePhaseProposalRepair, Category: test.category, ReviewBase: "base123", ReviewHead: "head123", FailedAt: failedAt, RecoveryAction: test.action,
+					},
+				}},
+				Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "001-a", Status: plan.StatusCompleted}}},
+			}
+			plan.SetPersistedReview(detail, plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Base: "base123", Head: "head123"})
+			repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
+
+			var textOut bytes.Buffer
+			if err := (App{Out: &textOut, Err: &textOut}).show(context.Background(), repo, []string{"plan-a"}); err != nil {
+				t.Fatal(err)
+			}
+			if text := stripANSI(textOut.String()); !strings.Contains(text, test.wantText) {
+				t.Fatalf("show text recovery missing %q:\n%s", test.wantText, text)
+			}
+
+			var jsonOut bytes.Buffer
+			if err := (App{Out: &jsonOut, Err: &jsonOut}).show(context.Background(), repo, []string{"plan-a", "--json"}); err != nil {
+				t.Fatal(err)
+			}
+			var payload planview.ShowPayload
+			if err := json.Unmarshal(jsonOut.Bytes(), &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.Finalization == nil || payload.Finalization.RecoveryAction != plan.ProposalRepairRecoveryAction(test.category) || payload.NextAction.Primary.Command != test.wantCmd || !strings.Contains(payload.NextAction.Primary.Instruction, test.wantInstr) {
+				t.Fatalf("show JSON recovery = finalization %+v next %+v", payload.Finalization, payload.NextAction.Primary)
+			}
+		})
+	}
+}
+
+func TestShowProjectsFailedProposalCorrectionForLegacyEmptyReviewBase(t *testing.T) {
+	failedAt := time.Date(2026, 8, 30, 1, 0, 0, 0, time.UTC)
+	failure := &plan.FinalizationFailure{
+		Phase: plan.FinalizationFailurePhaseProposalRepair, Category: "proposal_invalid", ReviewBase: "workspace-base", ReviewHead: "head123",
+		FailedAt: failedAt, RecoveryAction: "rerun_review",
+	}
+	detail := &plan.PlanDetail{
+		State: plan.State{
+			Status:    plan.StatusReviewed,
+			Repo:      plan.Repo{Name: "repo", Branch: "main", BaseCommit: "plan-base"},
+			Workspace: &plan.Workspace{BaseSHA: "workspace-base"},
+			Plan: plan.PlanState{
+				ID: "plan-a", Title: "Plan A", CompletedSlices: []string{"001-a"}, FinalizationFailure: failure,
+			},
+		},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "001-a", Status: plan.StatusCompleted}}},
+	}
+	plan.SetPersistedReview(detail, plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Head: "head123"})
+	repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
+
+	var textOut bytes.Buffer
+	if err := (App{Out: &textOut, Err: &textOut}).show(context.Background(), repo, []string{"plan-a"}); err != nil {
+		t.Fatal(err)
+	}
+	text := stripANSI(textOut.String())
+	for _, want := range []string{"Next: tao review --run plan-a", "Finalization failure: proposal_repair (proposal_invalid)"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("legacy proposal recovery output missing %q:\n%s", want, text)
+		}
+	}
+
+	var jsonOut bytes.Buffer
+	if err := (App{Out: &jsonOut, Err: &jsonOut}).show(context.Background(), repo, []string{"plan-a", "--json"}); err != nil {
+		t.Fatal(err)
+	}
+	var payload planview.ShowPayload
+	if err := json.Unmarshal(jsonOut.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Finalization == nil || payload.Finalization.RecoveryAction != "rerun_review" || payload.NextAction.Primary.Command != "tao review --run plan-a" {
+		t.Fatalf("legacy proposal recovery JSON = finalization %+v next %+v", payload.Finalization, payload.NextAction.Primary)
+	}
+}
+
 func TestRenderPlanDetailProminentlyShowsReasonAndSubordinateAlternatives(t *testing.T) {
 	detail := &plan.PlanDetail{
 		State:  plan.State{Status: plan.StatusInReview, Plan: plan.PlanState{ID: "plan-a", Title: "Plan A", CompletedSlices: []string{"001-a"}}},

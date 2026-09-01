@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -400,6 +401,51 @@ func TestTornFinalSliceWriteStillSettles(t *testing.T) {
 	}
 	if got := PlanLifecycleStatus(detail); got != StatusReviewed {
 		t.Fatalf("status projection = %q, want %q", got, StatusReviewed)
+	}
+}
+
+func TestRecordReviewProposalCorrectionRejectsChangedConsumedMarker(t *testing.T) {
+	dir := t.TempDir()
+	detail := startSliceDetail(dir)
+	record := testRecord(dir, detail)
+	started := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	if err := record.StartSlice("001-a", started); err != nil {
+		t.Fatal(err)
+	}
+	if err := record.CompleteSlice("001-a", "done", nil, started.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	wrong := &ReviewCommitMessage{Subject: "feat(pr): propose wrong type", Body: "What:\nPropose a message.\n\nWhy:\nExercise correction."}
+	approval := PlanReview{
+		Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Summary: "approved", Findings: []ReviewFinding{},
+		Base: "base123", Head: "head123", CommitMessage: wrong, ReviewedAt: started.Add(2 * time.Minute),
+	}
+	if err := record.RecordReviewCompleted(approval, "pi"); err != nil {
+		t.Fatal(err)
+	}
+	attempt := FinalizationFailure{
+		Phase: FinalizationFailurePhaseProposalRepair, Category: "proposal_correction_started",
+		ReviewBase: approval.Base, ReviewHead: approval.Head, FailedAt: started.Add(3 * time.Minute), RecoveryAction: FinalizationRecoveryRerunReview,
+	}
+	if err := record.ConsumeReviewProposalCorrection(nil, attempt); err != nil {
+		t.Fatal(err)
+	}
+	replacement := attempt
+	replacement.Category = "proposal_invalid"
+	replacement.FailedAt = attempt.FailedAt.Add(time.Minute)
+	if err := record.ReplaceFinalizationFailure(attempt, replacement); err != nil {
+		t.Fatal(err)
+	}
+	corrected := approval
+	corrected.CommitMessage = &ReviewCommitMessage{Subject: "fix(pr): propose correct type", Body: wrong.Body}
+	if err := record.RecordReviewProposalCorrection(attempt, corrected, "pi"); err == nil || !strings.Contains(err.Error(), "marker changed") {
+		t.Fatalf("stale correction error = %v", err)
+	}
+	if got := detail.State.Plan.Review; got == nil || got.CommitMessage == nil || got.CommitMessage.Subject != wrong.Subject {
+		t.Fatalf("stale correction replaced review: %#v", got)
+	}
+	if got := detail.State.Plan.FinalizationFailure; got == nil || *got != replacement {
+		t.Fatalf("stale correction cleared replacement marker: %#v", got)
 	}
 }
 

@@ -29,6 +29,12 @@ func TestCheckRequestCanStartHonorsRunAndContinueCapabilities(t *testing.T) {
 	if err := CheckRequestCanStart(complete, Request{}); err == nil || !strings.Contains(err.Error(), "complete") {
 		t.Fatalf("expected complete plan error, got %v", err)
 	}
+	if err := CheckRequestCanStart(complete, Request{ResolvedRunOptions: ResolvedRunOptions{PullRequest: true}}); err != nil {
+		t.Fatalf("expected effective pull-request run to resume completed finalization: %v", err)
+	}
+	if err := CheckRequestCanStart(complete, Request{ResolvedRunOptions: ResolvedRunOptions{PullRequest: false}}); err == nil || !strings.Contains(err.Error(), "complete") {
+		t.Fatalf("expected explicit pull-request opt-out to preserve completed-plan refusal, got %v", err)
+	}
 	if got := runDisabledError(plan.RunCapabilities{}); got == nil || got.Error() != "plan cannot run" {
 		t.Fatalf("unexpected generic disabled error: %v", got)
 	}

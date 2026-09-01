@@ -19,6 +19,21 @@ type deterministicPullRequestCreator struct {
 	pullRequests  forge.PullRequests
 }
 
+type pullRequestFinalizationError struct {
+	category string
+	err      error
+}
+
+func (e *pullRequestFinalizationError) Error() string { return e.err.Error() }
+func (e *pullRequestFinalizationError) Unwrap() error { return e.err }
+
+func pullRequestFailure(category string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &pullRequestFinalizationError{category: category, err: err}
+}
+
 func defaultPullRequestCreatorWithBody(execution runExecution, bodyGenerator PullRequestBodyGenerator) PullRequestCreator {
 	return deterministicPullRequestCreator{
 		execution:     execution,
@@ -28,48 +43,53 @@ func defaultPullRequestCreatorWithBody(execution runExecution, bodyGenerator Pul
 }
 
 func (c deterministicPullRequestCreator) CreatePullRequest(ctx context.Context, run PullRequestRun) (plan.PullRequest, error) {
+	pr, _, err := c.createPullRequestWithProvenance(ctx, run)
+	return pr, err
+}
+
+func (c deterministicPullRequestCreator) createPullRequestWithProvenance(ctx context.Context, run PullRequestRun) (plan.PullRequest, pullRequestIdentityProvenance, error) {
 	run = c.normalizeRun(ctx, run)
 	if strings.TrimSpace(run.RepoRoot) == "" {
-		return plan.PullRequest{}, fmt.Errorf("create pull request: repo root is empty")
+		return plan.PullRequest{}, pullRequestIdentityUnknown, pullRequestFailure("preflight_failed", fmt.Errorf("create pull request: repo root is empty"))
 	}
 	if strings.TrimSpace(run.Branch) == "" {
-		return plan.PullRequest{}, fmt.Errorf("create pull request: branch is empty")
+		return plan.PullRequest{}, pullRequestIdentityUnknown, pullRequestFailure("preflight_failed", fmt.Errorf("create pull request: branch is empty"))
 	}
 
 	git := gitClient(c.execution, run.RepoRoot)
 	baseBranch, err := git.DefaultBranch(ctx)
 	if err != nil {
-		return plan.PullRequest{}, err
+		return plan.PullRequest{}, pullRequestIdentityUnknown, pullRequestFailure("preflight_failed", err)
 	}
 	title, label, err := pullRequestPreflight(run)
 	if err != nil {
-		return plan.PullRequest{}, err
+		return plan.PullRequest{}, pullRequestIdentityUnknown, pullRequestFailure("preflight_failed", err)
 	}
 	intent := run.Detail.State.Plan.PullRequestIntent
 	if intent != nil && (intent.Branch != run.Branch || intent.HeadSHA != run.HeadSHA) {
-		return plan.PullRequest{}, fmt.Errorf("recover pull request intent for #%d: recorded branch and head do not match requested branch and head", intent.Number)
+		return plan.PullRequest{}, pullRequestIdentityUnknown, pullRequestFailure("intent_mismatch", fmt.Errorf("recover pull request intent for #%d: recorded branch and head do not match requested branch and head", intent.Number))
 	}
 	if err := c.pushBranch(ctx, run); err != nil {
-		return plan.PullRequest{}, err
+		return plan.PullRequest{}, pullRequestIdentityUnknown, pullRequestFailure("publication_failed", err)
 	}
 
 	pullRequests := c.pullRequestService()
 	if intent != nil && pullRequestIntentHasIdentity(*intent) {
 		identity, metadata, found, viewErr := pullRequests.View(ctx, forge.ViewRequest{RepoRoot: run.RepoRoot, Number: intent.Number, FallbackCreatedAt: intent.CreatedAt})
 		if viewErr != nil {
-			return plan.PullRequest{}, fmt.Errorf("recover pull request intent for #%d: %w", intent.Number, viewErr)
+			return plan.PullRequest{}, pullRequestIdentityOwned, pullRequestFailure("discovery_failed", fmt.Errorf("recover pull request intent for #%d: %w", intent.Number, viewErr))
 		}
 		pr := lifecyclePullRequest(identity, run)
 		if !found || !pullRequestMatchesIntent(pr, *intent) {
-			return plan.PullRequest{}, fmt.Errorf("recover pull request intent for #%d: discovered pull request does not match recorded number and URL", intent.Number)
+			return plan.PullRequest{}, pullRequestIdentityOwned, pullRequestFailure("identity_mismatch", fmt.Errorf("recover pull request intent for #%d: discovered pull request does not match recorded number and URL", intent.Number))
 		}
 		// Preserve the creation timestamp recorded with the emitted identity so
 		// final recording matches the durable recovery intent exactly.
 		pr.CreatedAt = intent.CreatedAt
 		if err := pullRequests.EnsureMetadata(ctx, forge.MetadataRequest{RepoRoot: run.RepoRoot, PullRequest: identity, Metadata: metadata, Label: label}); err != nil {
-			return plan.PullRequest{}, err
+			return plan.PullRequest{}, pullRequestIdentityOwned, pullRequestFailure("metadata_repair_failed", err)
 		}
-		return pr, nil
+		return pr, pullRequestIdentityOwned, nil
 	}
 
 	identity, _, found, err := pullRequests.Find(ctx, forge.FindRequest{
@@ -81,26 +101,26 @@ func (c deterministicPullRequestCreator) CreatePullRequest(ctx context.Context, 
 		},
 	})
 	if err != nil {
-		return plan.PullRequest{}, err
+		return plan.PullRequest{}, pullRequestIdentityUnknown, pullRequestFailure("discovery_failed", err)
 	}
 	if found {
 		// Discovery alone never proves that Tao created the pull request. In
 		// particular, a legacy branch/head-only intent must not authorize Tao to
 		// mutate a matching pull request that a human may have created.
-		return lifecyclePullRequest(identity, run), nil
+		return lifecyclePullRequest(identity, run), pullRequestIdentityUnowned, nil
 	}
 
 	diffStat, err := git.DiffStat(ctx, baseBranch+"...HEAD")
 	if err != nil {
-		return plan.PullRequest{}, fmt.Errorf("build pull request scope: %w", err)
+		return plan.PullRequest{}, pullRequestIdentityUnknown, pullRequestFailure("body_generation_failed", fmt.Errorf("build pull request scope: %w", err))
 	}
 	body, err := c.pullRequestBody(ctx, run, baseBranch, title, diffStat)
 	if err != nil {
-		return plan.PullRequest{}, err
+		return plan.PullRequest{}, pullRequestIdentityUnknown, pullRequestFailure("body_generation_failed", err)
 	}
 	bodyFile, cleanup, err := writePullRequestBodyFile(body)
 	if err != nil {
-		return plan.PullRequest{}, err
+		return plan.PullRequest{}, pullRequestIdentityUnknown, pullRequestFailure("body_generation_failed", err)
 	}
 	defer cleanup()
 
@@ -122,30 +142,30 @@ func (c deterministicPullRequestCreator) CreatePullRequest(ctx context.Context, 
 			// been opened concurrently by a human. Without an identity emitted by
 			// this create attempt, Tao has no ownership evidence and must not
 			// repair metadata or persist branch/head-only recovery intent.
-			return plan.PullRequest{}, outcome.OperationErr
+			return plan.PullRequest{}, pullRequestIdentityUnknown, pullRequestFailure("creation_failed", outcome.OperationErr)
 		}
 		if persistErr := c.persistPullRequestIntent(run, createdPR); persistErr != nil {
-			return plan.PullRequest{}, fmt.Errorf("%w; persist partial pull request recovery intent: %w", outcome.OperationErr, persistErr)
+			return plan.PullRequest{}, pullRequestIdentityOwned, pullRequestFailure("intent_settlement_failed", fmt.Errorf("%w; persist partial pull request recovery intent: %w", outcome.OperationErr, persistErr))
 		}
 
 		identity, metadata, found, viewErr := pullRequests.View(ctx, forge.ViewRequest{RepoRoot: run.RepoRoot, Number: createdPR.Number, FallbackCreatedAt: createdPR.CreatedAt})
 		if viewErr != nil {
-			return plan.PullRequest{}, fmt.Errorf("%w; verify emitted pull request identity #%d: %w", outcome.OperationErr, createdPR.Number, viewErr)
+			return plan.PullRequest{}, pullRequestIdentityOwned, pullRequestFailure("discovery_failed", fmt.Errorf("%w; verify emitted pull request identity #%d: %w", outcome.OperationErr, createdPR.Number, viewErr))
 		}
 		pr := lifecyclePullRequest(identity, run)
 		if !found || !pullRequestMatchesIntent(pr, createdPR) {
-			return plan.PullRequest{}, fmt.Errorf("%w; emitted pull request identity #%d did not match GitHub", outcome.OperationErr, createdPR.Number)
+			return plan.PullRequest{}, pullRequestIdentityOwned, pullRequestFailure("identity_mismatch", fmt.Errorf("%w; emitted pull request identity #%d did not match GitHub", outcome.OperationErr, createdPR.Number))
 		}
 		pr.CreatedAt = createdPR.CreatedAt
 		if metadataErr := pullRequests.EnsureMetadata(ctx, forge.MetadataRequest{RepoRoot: run.RepoRoot, PullRequest: identity, Metadata: metadata, Label: label}); metadataErr != nil {
-			return plan.PullRequest{}, metadataErr
+			return plan.PullRequest{}, pullRequestIdentityOwned, pullRequestFailure("metadata_repair_failed", metadataErr)
 		}
-		return pr, nil
+		return pr, pullRequestIdentityOwned, nil
 	}
 	if outcome.ParseErr != nil {
-		return plan.PullRequest{}, outcome.ParseErr
+		return plan.PullRequest{}, pullRequestIdentityUnknown, pullRequestFailure("creation_failed", outcome.ParseErr)
 	}
-	return createdPR, nil
+	return createdPR, pullRequestIdentityOwned, nil
 }
 
 func (c deterministicPullRequestCreator) pullRequestService() forge.PullRequests {
@@ -174,9 +194,13 @@ func pullRequestMatchesIntent(pr plan.PullRequest, intent plan.PullRequest) bool
 }
 
 func (c deterministicPullRequestCreator) persistPullRequestIntent(run PullRequestRun, pr plan.PullRequest) error {
-	record, err := planMutationRecord(c.execution, run.Detail)
-	if err != nil {
-		return err
+	record := run.mutationRecord
+	if record == nil {
+		var err error
+		record, err = planMutationRecord(c.execution, run.Detail)
+		if err != nil {
+			return err
+		}
 	}
 	return record.RecordPullRequestIntent(pr, run.Branch, run.HeadSHA)
 }

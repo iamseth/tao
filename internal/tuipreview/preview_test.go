@@ -6,11 +6,15 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/iamseth/tao/internal/monitor"
+	"github.com/iamseth/tao/internal/plan"
 )
 
 func TestScenarioCatalogIsStableDiscoverableAndTyped(t *testing.T) {
@@ -38,6 +42,26 @@ func TestScenarioCatalogIsStableDiscoverableAndTyped(t *testing.T) {
 	fresh, _ := Lookup(ScenarioMixed)
 	if fresh.Snapshot.Rows[0].PlanTitle == "mutated" {
 		t.Fatal("scenario catalog retained caller mutation")
+	}
+}
+
+func TestMixedScenarioIncludesTerminalFinalizationRecoveryGuidance(t *testing.T) {
+	scenario, _ := Lookup(ScenarioMixed)
+	var recovery string
+	for _, row := range scenario.Snapshot.Rows {
+		if row.PlanID == "finalize" {
+			recovery = row.NextAction
+			if recovery == "" {
+				recovery = monitor.DeriveNextAction(row)
+			}
+			if row.FinalizationPhase != plan.FinalizationFailurePhasePullRequest || !slices.Contains(row.AttentionReasons, monitor.AttentionFinalizationFailed) {
+				t.Fatalf("finalization fixture = %+v", row)
+			}
+			break
+		}
+	}
+	if recovery != "FINALIZE PR" {
+		t.Fatalf("fixture recovery guidance = %q, want FINALIZE PR", recovery)
 	}
 }
 

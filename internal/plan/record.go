@@ -561,7 +561,7 @@ func (r *PlanRecord) AdvanceWorkspaceHead(expectedBranch, expectedHead, newHead 
 	if err != nil {
 		return err
 	}
-	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
+	return r.applyStateEvent(store, func(detail *PlanDetail, changes *ArtifactChangeSet) ([]Event, error) {
 		workspace := detail.State.Workspace
 		if workspace == nil {
 			return nil, fmt.Errorf("plan %s has no workspace head to advance", detail.State.Plan.ID)
@@ -574,6 +574,9 @@ func (r *PlanRecord) AdvanceWorkspaceHead(expectedBranch, expectedHead, newHead 
 			return nil, nil
 		case expectedHead:
 			workspace.HeadSHA = newHead
+			if detail.State.Plan.FinalizationFailure != nil {
+				changes.ClearPlanFinalizationFailure()
+			}
 			return nil, nil
 		default:
 			return nil, fmt.Errorf("plan %s workspace head changed: expected %q, got %q", detail.State.Plan.ID, expectedHead, workspace.HeadSHA)
@@ -867,6 +870,121 @@ func samePRFeedbackThreadSet(left, right PRFeedbackTriageResult) bool {
 	return true
 }
 
+// RecordFinalizationFailure atomically records current bounded failure
+// evidence and its append-only lifecycle event. An exact retry is idempotent;
+// different evidence must first be safely superseded by an explicit clear or a
+// lifecycle mutation that replaces its review/head boundary.
+func (r *PlanRecord) RecordFinalizationFailure(failure FinalizationFailure) error {
+	failure.FailedAt = failure.FailedAt.UTC()
+	if err := failure.Validate(); err != nil {
+		return err
+	}
+	store, err := r.storeOrDefault()
+	if err != nil {
+		return err
+	}
+	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
+		if existing := detail.State.Plan.FinalizationFailure; existing != nil {
+			if *existing == failure {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("plan %s has conflicting finalization failure evidence", detail.State.Plan.ID)
+		}
+		detail.State.Plan.FinalizationFailure = cloneFinalizationFailure(&failure)
+		detail.State.UpdatedAt = failure.FailedAt
+		detail.State.Plan.Timing.LastActivityAt = new(failure.FailedAt)
+		event := Event{
+			Type: EventTypeFinalizationFailed, Timestamp: failure.FailedAt, PlanID: detail.State.Plan.ID,
+			FinalizationFailure: cloneFinalizationFailure(&failure), Message: "Plan finalization failed",
+		}
+		return []Event{event}, nil
+	})
+}
+
+// ReplaceFinalizationFailure atomically supersedes exact current evidence at
+// the same durable boundary. An interrupted retry recognizes the replacement
+// as its postcondition, while a concurrent change fails the compare-and-swap.
+func (r *PlanRecord) ReplaceFinalizationFailure(expected, replacement FinalizationFailure) error {
+	expected.FailedAt = expected.FailedAt.UTC()
+	if err := expected.Validate(); err != nil {
+		return fmt.Errorf("expected finalization failure: %w", err)
+	}
+	replacement.FailedAt = replacement.FailedAt.UTC()
+	if err := replacement.Validate(); err != nil {
+		return fmt.Errorf("replacement finalization failure: %w", err)
+	}
+	if !sameFinalizationFailureBoundary(expected, replacement) {
+		return fmt.Errorf("replacement finalization failure must preserve the durable boundary")
+	}
+	store, err := r.storeOrDefault()
+	if err != nil {
+		return err
+	}
+	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
+		existing := detail.State.Plan.FinalizationFailure
+		if existing != nil && *existing == replacement {
+			return nil, nil
+		}
+		if existing == nil || *existing != expected {
+			return nil, fmt.Errorf("plan %s finalization failure evidence changed; reload and retry", detail.State.Plan.ID)
+		}
+		detail.State.Plan.FinalizationFailure = cloneFinalizationFailure(&replacement)
+		detail.State.UpdatedAt = replacement.FailedAt
+		detail.State.Plan.Timing.LastActivityAt = new(replacement.FailedAt)
+		return []Event{
+			{
+				Type: EventTypeFinalizationFailureCleared, Timestamp: replacement.FailedAt, PlanID: detail.State.Plan.ID,
+				FinalizationFailure: cloneFinalizationFailure(existing), Message: "Plan finalization failure cleared",
+			},
+			{
+				Type: EventTypeFinalizationFailed, Timestamp: replacement.FailedAt, PlanID: detail.State.Plan.ID,
+				FinalizationFailure: cloneFinalizationFailure(&replacement), Message: "Plan finalization failed",
+			},
+		}, nil
+	})
+}
+
+func sameFinalizationFailureBoundary(left, right FinalizationFailure) bool {
+	return left.Phase == right.Phase &&
+		left.Branch == right.Branch && left.HeadSHA == right.HeadSHA &&
+		left.ReviewBase == right.ReviewBase && left.ReviewHead == right.ReviewHead
+}
+
+// ClearFinalizationFailure clears only the exact evidence inspected by the
+// caller and records that supersession. Failure evidence itself grants no
+// authority to call this operation.
+func (r *PlanRecord) ClearFinalizationFailure(expected FinalizationFailure, clearedAt time.Time) error {
+	expected.FailedAt = expected.FailedAt.UTC()
+	if err := expected.Validate(); err != nil {
+		return err
+	}
+	if clearedAt.IsZero() {
+		return fmt.Errorf("finalization failure clear timestamp is required")
+	}
+	clearedAt = clearedAt.UTC()
+	store, err := r.storeOrDefault()
+	if err != nil {
+		return err
+	}
+	return r.applyStateEvent(store, func(detail *PlanDetail, changes *ArtifactChangeSet) ([]Event, error) {
+		existing := detail.State.Plan.FinalizationFailure
+		if existing == nil {
+			return nil, nil
+		}
+		if *existing != expected {
+			return nil, fmt.Errorf("plan %s finalization failure evidence changed; reload and retry", detail.State.Plan.ID)
+		}
+		changes.ClearPlanFinalizationFailure()
+		detail.State.UpdatedAt = clearedAt
+		detail.State.Plan.Timing.LastActivityAt = new(clearedAt)
+		event := Event{
+			Type: EventTypeFinalizationFailureCleared, Timestamp: clearedAt, PlanID: detail.State.Plan.ID,
+			FinalizationFailure: cloneFinalizationFailure(existing), Message: "Plan finalization failure cleared",
+		}
+		return []Event{event}, nil
+	})
+}
+
 // RecordPullRequestIntent persists an uncertain PR creation attempt. Number and
 // URL are the ownership evidence used by recovery; branch/head-only values are
 // retained for compatibility but must not authorize remote metadata mutation.
@@ -915,7 +1033,7 @@ func (r *PlanRecord) RecordPullRequest(pr PullRequest, branch, headSHA string) e
 	if err != nil {
 		return err
 	}
-	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
+	return r.applyStateEvent(store, func(detail *PlanDetail, changes *ArtifactChangeSet) ([]Event, error) {
 		pr.Branch = branch
 		pr.HeadSHA = headSHA
 		if intent := detail.State.Plan.PullRequestIntent; intent != nil {
@@ -929,6 +1047,9 @@ func (r *PlanRecord) RecordPullRequest(pr PullRequest, branch, headSHA string) e
 		}
 		detail.State.Plan.PullRequest = &pr
 		detail.State.Plan.PullRequestIntent = nil
+		if detail.State.Plan.FinalizationFailure != nil {
+			changes.ClearPlanFinalizationFailure()
+		}
 		if detail.State.Workspace == nil {
 			detail.State.Workspace = &Workspace{}
 		}
@@ -1029,6 +1150,9 @@ func (r *PlanRecord) RecordReviewError(review PlanReview, agent string) error {
 		if intent := detail.State.Plan.MergeCommitIntent; intent != nil && (strings.TrimSpace(review.Head) != intent.SourceHead || !review.IsApproved()) {
 			detail.State.Plan.MergeCommitIntent = nil
 		}
+		if detail.State.Plan.FinalizationFailure != nil {
+			changes.ClearPlanFinalizationFailure()
+		}
 		if err := changes.ReplacePlanReview(review); err != nil {
 			return nil, err
 		}
@@ -1047,16 +1171,106 @@ func (r *PlanRecord) RecordReviewError(review PlanReview, agent string) error {
 // RecordReviewCompleted stamps a completed review onto state and appends a
 // plan_reviewed event. The caller sets review.ReviewedAt before calling.
 func (r *PlanRecord) RecordReviewCompleted(review PlanReview, agent string) error {
-	return r.recordReviewCompleted(review, agent, nil)
+	return r.recordReviewCompleted(review, agent, nil, nil)
 }
 
 // RecordReviewCompletedWithArtifact persists review.md with the completed
 // review metadata after the refreshed settled-work gate accepts the mutation.
 func (r *PlanRecord) RecordReviewCompletedWithArtifact(review PlanReview, agent, content string) error {
-	return r.recordReviewCompleted(review, agent, &content)
+	return r.recordReviewCompleted(review, agent, &content, nil)
 }
 
-func (r *PlanRecord) recordReviewCompleted(review PlanReview, agent string, content *string) error {
+// ConsumeReviewProposalCorrection atomically records that the one correction
+// attempt for the exact current review range has been consumed. A fresh review
+// with an unusable proposal is intentionally projected as a non-approval while
+// its raw artifact retains the substantive approval. When repairedWorkspace is
+// non-nil, the same mutation supersedes that exact
+// pre-correction workspace failure, avoiding a clear-then-consume window.
+func (r *PlanRecord) ConsumeReviewProposalCorrection(repairedWorkspace *FinalizationFailure, attempt FinalizationFailure) error {
+	attempt.FailedAt = attempt.FailedAt.UTC()
+	if err := attempt.Validate(); err != nil {
+		return fmt.Errorf("proposal correction attempt: %w", err)
+	}
+	if attempt.Phase != FinalizationFailurePhaseProposalRepair {
+		return fmt.Errorf("proposal correction attempt must use proposal repair phase")
+	}
+	var repaired *FinalizationFailure
+	if repairedWorkspace != nil {
+		copy := *repairedWorkspace
+		copy.FailedAt = copy.FailedAt.UTC()
+		if err := copy.Validate(); err != nil {
+			return fmt.Errorf("repaired proposal correction workspace failure: %w", err)
+		}
+		if copy.Phase != FinalizationFailurePhasePullRequest || (copy.Category != "workspace_dirty" && copy.Category != "workspace_preflight_failed") {
+			return fmt.Errorf("repaired proposal correction evidence must be a pull-request workspace failure")
+		}
+		repaired = &copy
+	}
+	store, err := r.storeOrDefault()
+	if err != nil {
+		return err
+	}
+	return r.applyStateEvent(store, func(detail *PlanDetail, changes *ArtifactChangeSet) ([]Event, error) {
+		currentReview := CurrentReview(detail)
+		if currentReview == nil || currentReview.Status != ReviewStatusCompleted {
+			return nil, fmt.Errorf("plan %s completed review changed; reload and retry", detail.State.Plan.ID)
+		}
+		base, head := finalizationReviewRange(detail, currentReview)
+		if base != attempt.ReviewBase || head != attempt.ReviewHead {
+			return nil, fmt.Errorf("plan %s review range changed; reload and retry", detail.State.Plan.ID)
+		}
+		existing := detail.State.Plan.FinalizationFailure
+		if existing != nil && *existing == attempt {
+			return nil, nil
+		}
+		if repaired == nil {
+			if existing != nil {
+				return nil, fmt.Errorf("plan %s has conflicting finalization failure evidence", detail.State.Plan.ID)
+			}
+		} else {
+			workspace := detail.State.Workspace
+			if workspace == nil || repaired.Branch != strings.TrimSpace(workspace.Branch) || repaired.HeadSHA != strings.TrimSpace(workspace.HeadSHA) || repaired.HeadSHA != head {
+				return nil, fmt.Errorf("plan %s repaired workspace failure is not bound to the approved review head", detail.State.Plan.ID)
+			}
+			if existing == nil || *existing != *repaired {
+				return nil, fmt.Errorf("plan %s finalization failure evidence changed; reload and retry", detail.State.Plan.ID)
+			}
+		}
+		if err := changes.ReplacePlanFinalizationFailure(attempt); err != nil {
+			return nil, err
+		}
+		detail.State.UpdatedAt = attempt.FailedAt
+		detail.State.Plan.Timing.LastActivityAt = new(attempt.FailedAt)
+		events := make([]Event, 0, 2)
+		if repaired != nil {
+			events = append(events, Event{
+				Type: EventTypeFinalizationFailureCleared, Timestamp: attempt.FailedAt, PlanID: detail.State.Plan.ID,
+				FinalizationFailure: cloneFinalizationFailure(repaired), Message: "Plan finalization failure cleared",
+			})
+		}
+		return append(events, Event{
+			Type: EventTypeFinalizationFailed, Timestamp: attempt.FailedAt, PlanID: detail.State.Plan.ID,
+			FinalizationFailure: cloneFinalizationFailure(&attempt), Message: "Plan finalization failed",
+		}), nil
+	})
+}
+
+// RecordReviewProposalCorrection atomically replaces the safe exact-range
+// review projection with its approval and corrected proposal only while the
+// consumed-attempt marker remains current. This prevents a stale correction
+// from clearing newer finalization evidence.
+func (r *PlanRecord) RecordReviewProposalCorrection(expected FinalizationFailure, review PlanReview, agent string) error {
+	expected.FailedAt = expected.FailedAt.UTC()
+	if err := expected.Validate(); err != nil {
+		return fmt.Errorf("expected proposal correction marker: %w", err)
+	}
+	if expected.Phase != FinalizationFailurePhaseProposalRepair {
+		return fmt.Errorf("expected proposal correction marker must use proposal repair phase")
+	}
+	return r.recordReviewCompleted(review, agent, nil, &expected)
+}
+
+func (r *PlanRecord) recordReviewCompleted(review PlanReview, agent string, content *string, expectedFailure *FinalizationFailure) error {
 	if review.Status != ReviewStatusCompleted || review.Verdict != ReviewVerdictApprove {
 		review.CommitMessage = nil
 	}
@@ -1072,8 +1286,32 @@ func (r *PlanRecord) recordReviewCompleted(review PlanReview, agent string, cont
 			return nil, fmt.Errorf("record plan review: %w", err)
 		}
 		reviewedAt := review.ReviewedAt
+		mutationAt := reviewedAt
+		if expectedFailure != nil && expectedFailure.FailedAt.After(mutationAt) {
+			mutationAt = expectedFailure.FailedAt
+		}
 		if intent := detail.State.Plan.MergeCommitIntent; intent != nil && (strings.TrimSpace(review.Head) != intent.SourceHead || !review.IsApproved()) {
 			detail.State.Plan.MergeCommitIntent = nil
+		}
+		if expectedFailure != nil {
+			existing := detail.State.Plan.FinalizationFailure
+			if existing == nil || *existing != *expectedFailure {
+				return nil, fmt.Errorf("plan %s proposal correction marker changed; reload and retry", detail.State.Plan.ID)
+			}
+			currentReview := CurrentReview(detail)
+			if currentReview == nil {
+				return nil, fmt.Errorf("plan %s approved review changed; reload and retry", detail.State.Plan.ID)
+			}
+			base := strings.TrimSpace(currentReview.Base)
+			if base == "" {
+				base, _ = finalizationReviewRange(detail, currentReview)
+			}
+			if base != expectedFailure.ReviewBase || strings.TrimSpace(currentReview.Head) != expectedFailure.ReviewHead {
+				return nil, fmt.Errorf("plan %s approved review range changed; reload and retry", detail.State.Plan.ID)
+			}
+		}
+		if detail.State.Plan.FinalizationFailure != nil {
+			changes.ClearPlanFinalizationFailure()
 		}
 		if err := changes.ReplacePlanReview(review); err != nil {
 			return nil, err
@@ -1092,8 +1330,15 @@ func (r *PlanRecord) recordReviewCompleted(review PlanReview, agent string, cont
 				detail.State.Status = StatusCompleted
 			}
 		}
-		detail.State.UpdatedAt = reviewedAt
-		detail.State.Plan.Timing.LastActivityAt = &reviewedAt
+		detail.State.UpdatedAt = mutationAt
+		detail.State.Plan.Timing.LastActivityAt = &mutationAt
+		if expectedFailure != nil {
+			cleared := Event{
+				Type: EventTypeFinalizationFailureCleared, Timestamp: expectedFailure.FailedAt, PlanID: detail.State.Plan.ID,
+				FinalizationFailure: cloneFinalizationFailure(expectedFailure), Message: "Plan finalization failure cleared",
+			}
+			return []Event{cleared, event}, nil
+		}
 		return []Event{event}, nil
 	}
 	if content != nil {
@@ -1124,7 +1369,7 @@ func (r *PlanRecord) RecordMerged(branch string, mergedDefaultSHA string, merged
 	branch = strings.TrimSpace(branch)
 	mergedDefaultSHA = strings.TrimSpace(mergedDefaultSHA)
 	mergedAt = mergedAt.UTC()
-	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
+	return r.applyStateEvent(store, func(detail *PlanDetail, changes *ArtifactChangeSet) ([]Event, error) {
 		for _, event := range slices.Backward(detail.Events) {
 			if event.Type == EventTypePlanReopened {
 				break
@@ -1139,6 +1384,9 @@ func (r *PlanRecord) RecordMerged(branch string, mergedDefaultSHA string, merged
 		}
 		detail.State.Status = StatusCompleted
 		detail.State.Plan.MergeCommitIntent = nil
+		if detail.State.Plan.FinalizationFailure != nil {
+			changes.ClearPlanFinalizationFailure()
+		}
 		detail.State.UpdatedAt = mergedAt
 		detail.State.Plan.Timing.LastActivityAt = &mergedAt
 		// CompletedAt is stamped when the final slice completes; the merge may

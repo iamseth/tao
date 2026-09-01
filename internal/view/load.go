@@ -24,14 +24,15 @@ type Plan struct {
 // ShowPayload is the stable, explicit projection used by structured plan
 // inspection. It deliberately excludes raw plan artifacts.
 type ShowPayload struct {
-	Schema     string              `json:"schema"`
-	ID         string              `json:"id"`
-	Title      string              `json:"title"`
-	Status     string              `json:"status"`
-	Repository ShowRepository      `json:"repository"`
-	Progress   ShowProgress        `json:"progress"`
-	NextAction plan.PlanNextAction `json:"next_action"`
-	Warnings   []string            `json:"warnings"`
+	Schema       string                     `json:"schema"`
+	ID           string                     `json:"id"`
+	Title        string                     `json:"title"`
+	Status       string                     `json:"status"`
+	Repository   ShowRepository             `json:"repository"`
+	Progress     ShowProgress               `json:"progress"`
+	NextAction   plan.PlanNextAction        `json:"next_action"`
+	Finalization *plan.FinalizationRecovery `json:"finalization,omitempty"`
+	Warnings     []string                   `json:"warnings"`
 }
 
 type ShowRepository struct {
@@ -65,9 +66,18 @@ func (loaded Plan) ShowPayload() ShowPayload {
 			CurrentSliceID: loaded.Derived.CurrentSliceID,
 			NextSliceID:    loaded.Derived.NextSliceID,
 		},
-		NextAction: loaded.Derived.NextAction,
-		Warnings:   append([]string{}, detail.Warnings...),
+		NextAction:   loaded.Derived.NextAction,
+		Finalization: cloneFinalizationRecovery(loaded.Derived.FinalizationRecovery),
+		Warnings:     append([]string{}, detail.Warnings...),
 	}
+}
+
+func cloneFinalizationRecovery(source *plan.FinalizationRecovery) *plan.FinalizationRecovery {
+	if source == nil {
+		return nil
+	}
+	clone := *source
+	return &clone
 }
 
 func LoadPlan(ctx context.Context, repo Repository, id string, options Options) (Plan, error) {

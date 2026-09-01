@@ -739,6 +739,9 @@ func reopen(detail *PlanDetail, changes *ArtifactChangeSet, newSlices []Slice, n
 	detail.State.Status = StatusInProgress
 	detail.State.UpdatedAt = now
 	changes.ClearPlanCurrentSlice()
+	if detail.State.Plan.FinalizationFailure != nil {
+		changes.ClearPlanFinalizationFailure()
+	}
 	detail.State.Plan.Timing.CompletedAt = nil
 	if detail.State.Plan.Timing.StartedAt == nil {
 		detail.State.Plan.Timing.StartedAt = new(now)

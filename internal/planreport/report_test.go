@@ -112,6 +112,66 @@ func TestProjectFullLegacyCompletedPlanReportsMerged(t *testing.T) {
 	}
 }
 
+func TestProjectFullLegacyCompletedPlanWithPullRequestIntentIsNotMerged(t *testing.T) {
+	now := time.Date(2026, 8, 31, 18, 0, 0, 0, time.UTC)
+	detail := reportFixture(now)
+	detail.State.Status = plan.StatusCompleted
+	detail.State.Plan.PendingSlices = nil
+	for i := range detail.Slices.Slices {
+		detail.Slices.Slices[i].Status = plan.StatusCompleted
+	}
+	plan.SetPersistedReview(detail, plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Head: "current-head"})
+	detail.State.Plan.PullRequestIntent = &plan.PullRequest{Branch: "fix/report", HeadSHA: "current-head"}
+
+	if action := plan.DeriveNextAction(detail).Primary; action.Kind != plan.PlanActionRecoverPullRequest {
+		t.Fatalf("intent-only next action = %+v, want pull-request recovery", action)
+	}
+	got := ProjectFull(detail, now)
+	if got.Status != plan.StatusCompleted || got.Outcome.Merged || got.Finalization.Available {
+		t.Fatalf("intent-only projection = status %q merged %v finalization %+v, want completed, not merged, and no failure projection", got.Status, got.Outcome.Merged, got.Finalization)
+	}
+	markdown, err := RenderFull(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := string(markdown); !strings.Contains(text, "`not merged`") {
+		t.Fatalf("intent-only report must not infer integration:\n%s", text)
+	}
+
+	detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypePlanMerged, Timestamp: now})
+	if got = ProjectFull(detail, now); !got.Outcome.Merged {
+		t.Fatalf("explicit merge projection = merged %v, want true despite retained intent", got.Outcome.Merged)
+	}
+}
+
+func TestProjectFullLegacyCompletedPlanWithFinalizationRecoveryIsNotMerged(t *testing.T) {
+	now := time.Date(2026, 8, 31, 18, 0, 0, 0, time.UTC)
+	detail := reportFixture(now)
+	detail.State.Status = plan.StatusCompleted
+	detail.State.Plan.PendingSlices = nil
+	for i := range detail.Slices.Slices {
+		detail.Slices.Slices[i].Status = plan.StatusCompleted
+	}
+	detail.State.Workspace = &plan.Workspace{Branch: "fix/report", HeadSHA: "current-head"}
+	detail.State.Plan.FinalizationFailure = &plan.FinalizationFailure{
+		Phase: plan.FinalizationFailurePhasePullRequest, Category: "publication_failed", Branch: "fix/report", HeadSHA: "current-head",
+		FailedAt: now, RecoveryAction: plan.FinalizationRecoveryResumePullRequest,
+	}
+
+	got := ProjectFull(detail, now)
+	if got.Status != plan.StatusCompleted || got.Outcome.Merged || !got.Finalization.Available {
+		t.Fatalf("legacy recovery projection = status %q merged %v finalization %+v, want completed, not merged, and available recovery", got.Status, got.Outcome.Merged, got.Finalization)
+	}
+	markdown, err := RenderFull(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(markdown)
+	if !strings.Contains(text, "`not merged`") || !strings.Contains(text, "**Finalization recovery**") || !strings.Contains(text, "tao run --pull-request leadership-report") {
+		t.Fatalf("legacy recovery report must distinguish pending finalization from integration:\n%s", text)
+	}
+}
+
 func TestProjectFullSummarizesWithoutRawExecutionEvidence(t *testing.T) {
 	now := time.Date(2026, 8, 4, 15, 0, 0, 0, time.UTC)
 	detail := reportFixture(now)
@@ -143,6 +203,45 @@ func TestProjectFullSummarizesWithoutRawExecutionEvidence(t *testing.T) {
 		if strings.Contains(values, forbidden) {
 			t.Fatalf("projection retained forbidden value %q in %q", forbidden, values)
 		}
+	}
+}
+
+func TestProjectFullSanitizesCurrentFinalizationRecovery(t *testing.T) {
+	now := time.Date(2026, 8, 29, 20, 0, 0, 0, time.UTC)
+	detail := reportFixture(now)
+	detail.State.Workspace = &plan.Workspace{Branch: "owner@example.com", HeadSHA: "secret-head-identity"}
+	detail.State.Plan.FinalizationFailure = &plan.FinalizationFailure{
+		Phase: plan.FinalizationFailurePhasePullRequest, Category: "publication_failed", Branch: "owner@example.com", HeadSHA: "secret-head-identity",
+		FailedAt: now, RecoveryAction: "resume_pull_request",
+	}
+
+	got := ProjectFull(detail, now)
+	if !got.Finalization.Available || got.Finalization.Phase != string(plan.FinalizationFailurePhasePullRequest) || !got.Finalization.Category.Available || !got.Finalization.Action.Available {
+		t.Fatalf("finalization projection = %+v", got.Finalization)
+	}
+	markdown, err := RenderFull(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(markdown)
+	for _, want := range []string{"**Finalization recovery**", "- Failed phase: pull request finalization", `- Category: publication\_failed`, "- Next action: tao run --pull-request leadership-report"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("full report missing %q:\n%s", want, text)
+		}
+	}
+	for _, forbidden := range []string{"owner@example.com", "secret-head-identity", "resume_pull_request"} {
+		if strings.Contains(collectSafeText(got)+text, forbidden) {
+			t.Fatalf("full report exposed raw finalization value %q", forbidden)
+		}
+	}
+
+	planning := ProjectPlanningOnly(detail, now)
+	planningJSON, err := json.Marshal(planning)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.ToLower(string(planningJSON)), "finalization") || strings.Contains(string(planningJSON), "publication_failed") {
+		t.Fatalf("planning-only projection contains execution finalization: %s", planningJSON)
 	}
 }
 
@@ -252,7 +351,7 @@ func TestPlanningOnlyProductionTypesExcludeExecutionFields(t *testing.T) {
 		typeOf    reflect.Type
 		forbidden []string
 	}{
-		{reflect.TypeOf(PlanningOnlyReport{}), []string{"Status", "Execution", "Review", "Outcome", "Telemetry", "Verification", "Commit"}},
+		{reflect.TypeOf(PlanningOnlyReport{}), []string{"Status", "Execution", "Review", "Finalization", "Outcome", "Telemetry", "Verification", "Commit"}},
 		{reflect.TypeOf(PlannedSlice{}), []string{"Status", "Rework", "Duration", "Verification", "Commit", "TotalTokens", "Completion", "Timing"}},
 		{reflect.TypeOf(PlanningEffortSummary{}), []string{"Agent", "Provider", "Model", "Session", "Prompt", "Cost", "ToolCalls"}},
 	} {
@@ -328,6 +427,7 @@ func TestPlanningOnlyProjectionIsPhaseIndependent(t *testing.T) {
 	}
 	completed.Slices.Slices = append(completed.Slices.Slices, plan.Slice{ID: "r101-fix", Title: "execution-tainted-rework", Goal: "execution-tainted-finding"})
 	completed.Events = []plan.Event{{Type: plan.EventTypeAgentMetrics, Agent: "execution-tainted-agent", Metrics: &plan.AgentMetrics{SessionID: "execution-tainted-session", OutputTokens: 99}}, {Type: plan.EventTypePlanMerged, MergedDefaultSHA: "execution-tainted-sha"}}
+	completed.State.Plan.FinalizationFailure = &plan.FinalizationFailure{Phase: plan.FinalizationFailurePhasePullRequest, Category: "publication_failed", Branch: "execution-tainted-branch", HeadSHA: "execution-tainted-head", FailedAt: now, RecoveryAction: "resume_pull_request"}
 	plan.SetPersistedReview(completed, plan.PlanReview{Summary: "execution-tainted-review", FindingsCount: 1})
 
 	left := ProjectPlanningOnly(planned, now)

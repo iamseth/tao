@@ -117,6 +117,16 @@ type OutcomeSummary struct {
 	Merged bool
 }
 
+// FinalizationSummary is an explicit share-safe projection. It excludes exact
+// review ranges, branches, heads, forge data, and raw failure text.
+type FinalizationSummary struct {
+	Available bool
+	Phase     string
+	Category  OptionalText
+	FailedAt  time.Time
+	Action    OptionalText
+}
+
 type OptionalInt64 struct {
 	Available bool
 	Value     int64
@@ -166,6 +176,7 @@ type FullReport struct {
 	Slices         []SliceReport
 	Execution      ExecutionSummary
 	Review         ReviewSummary
+	Finalization   FinalizationSummary
 	Outcome        OutcomeSummary
 	Disclosures    []Disclosure
 }
@@ -219,10 +230,21 @@ func ProjectFull(detail *plan.PlanDetail, snapshotAt time.Time) FullReport {
 	if review := plan.CurrentReview(detail); review != nil {
 		report.Review = ReviewSummary{Available: true, Status: knownReviewStatus(review.Status), Verdict: knownVerdict(review.Verdict), Summary: optional(s, sectionReview, review.Summary), FindingCount: nonNegative(review.FindingsCount)}
 	}
+	if recovery := derived.FinalizationRecovery; recovery != nil {
+		action := derived.NextAction.Primary.Command
+		if action == "" {
+			action = derived.NextAction.Primary.Instruction
+		}
+		report.Finalization = FinalizationSummary{
+			Available: true, Phase: knownFinalizationPhase(recovery.Phase), FailedAt: recovery.FailedAt.UTC(),
+			Category: optional(s, sectionExecution, recovery.Category), Action: optional(s, sectionExecution, action),
+		}
+	}
 	// Current merge evidence is authoritative. Infer a merged outcome from a
-	// completed lifecycle only for legacy records without qualifying PR evidence.
+	// completed lifecycle only for legacy records without qualifying PR,
+	// pending PR intent, or finalization-recovery evidence.
 	report.Outcome.Merged = plan.PlanIsMerged(detail.Events) ||
-		(lifecycleStatus == plan.StatusCompleted && !plan.PlanIsPullRequestComplete(detail))
+		(lifecycleStatus == plan.StatusCompleted && !plan.PlanIsPullRequestComplete(detail) && detail.State.Plan.PullRequestIntent == nil && derived.FinalizationRecovery == nil)
 	report.Disclosures = s.Disclosures()
 	return report
 }
@@ -525,6 +547,15 @@ func knownStatus(value string) string {
 	switch value {
 	case plan.StatusPlanned, plan.StatusPending, plan.StatusInProgress, plan.StatusInReview, plan.StatusReviewed, plan.StatusChangesRequested, plan.StatusCompleted, plan.StatusSkipped, plan.StatusBlocked, plan.StatusInvalid:
 		return value
+	default:
+		return "unavailable"
+	}
+}
+
+func knownFinalizationPhase(value plan.FinalizationFailurePhase) string {
+	switch value {
+	case plan.FinalizationFailurePhaseProposalRepair, plan.FinalizationFailurePhasePullRequest:
+		return string(value)
 	default:
 		return "unavailable"
 	}

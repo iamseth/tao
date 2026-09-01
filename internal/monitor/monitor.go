@@ -66,6 +66,7 @@ const (
 	AttentionApprovalRequired       AttentionReason = "approval_required"
 	AttentionSliceCompletionPending AttentionReason = "slice_completion_pending"
 	AttentionReworkStopped          AttentionReason = "rework_stopped"
+	AttentionFinalizationFailed     AttentionReason = "finalization_failed"
 	AttentionRunCrashed             AttentionReason = "run_crashed"
 )
 
@@ -118,9 +119,13 @@ type Row struct {
 	ReworkCompletedCount   int
 	ReworkTotalCount       int
 
-	AttentionReasons []AttentionReason
-	ApprovalSliceID  string
-	ApprovalReason   string
+	AttentionReasons           []AttentionReason
+	ApprovalSliceID            string
+	ApprovalReason             string
+	FinalizationPhase          plan.FinalizationFailurePhase
+	FinalizationCategory       string
+	FinalizationRecoveryAction string
+	RecommendedAction          plan.PlanAction
 
 	NextAction           string
 	Relationships        []ResolvedRelationship
@@ -248,7 +253,7 @@ func (c Collector) runLockReader() RunLockReader {
 }
 
 func (c Collector) includeSummary(summary plan.PlanSummary, now time.Time) bool {
-	if summary.Status != plan.StatusCompleted {
+	if summary.Status != plan.StatusCompleted || summary.NextAction.Primary.Class == plan.PlanActionClassRecovery {
 		return true
 	}
 	if c.IncludeCompletedWithin <= 0 {
@@ -298,10 +303,16 @@ func planRow(entry taodata.RepoInventoryEntry, summary plan.PlanSummary) Row {
 		ReworkTotalCount:       summary.ReworkTotalCount,
 		ApprovalSliceID:        summary.Capabilities.ApprovalSliceID,
 		ApprovalReason:         summary.Capabilities.ApprovalReason,
+		RecommendedAction:      summary.NextAction.Primary,
 		Warnings:               warnings,
 	}
 	if summary.CurrentSlice != nil {
 		row.SliceTitle = summary.CurrentSlice.Title
+	}
+	if recovery := summary.FinalizationRecovery; recovery != nil {
+		row.FinalizationPhase = recovery.Phase
+		row.FinalizationCategory = recovery.Category
+		row.FinalizationRecoveryAction = recovery.RecoveryAction
 	}
 	row.AttentionReasons = attentionReasons(summary)
 	return row
@@ -323,6 +334,9 @@ func attentionReasons(summary plan.PlanSummary) []AttentionReason {
 	}
 	if summary.UnresolvedReworkStop {
 		reasons = append(reasons, AttentionReworkStopped)
+	}
+	if summary.FinalizationRecovery != nil {
+		reasons = append(reasons, AttentionFinalizationFailed)
 	}
 	return reasons
 }
@@ -404,11 +418,53 @@ func DeriveNextAction(row Row) string {
 	if row.Kind == RowKindRepositoryWarning || row.Status == plan.StatusInvalid {
 		return "INSPECT"
 	}
-	if row.Status == plan.StatusCompleted {
-		return "DONE"
-	}
 	if row.Liveness == LivenessLive || (row.Liveness == LivenessStale && row.RunLockPresent && row.RunLockProcessAlive) {
 		return "MONITOR"
+	}
+	for _, reason := range row.AttentionReasons {
+		if reason != AttentionFinalizationFailed {
+			continue
+		}
+		switch row.RecommendedAction.Kind {
+		case plan.PlanActionRework:
+			return "REWORK"
+		case plan.PlanActionRestartRework:
+			return "RESTART REWORK"
+		}
+		switch row.FinalizationRecoveryAction {
+		case plan.FinalizationRecoveryRestoreBoundary:
+			if row.FinalizationCategory == "workspace_mismatch" {
+				return "REPAIR WORKTREE"
+			}
+			return "RESTORE BOUNDARY"
+		case plan.FinalizationRecoveryRerunReview:
+			return "FRESH REVIEW"
+		case plan.FinalizationRecoveryRepairIntent:
+			return "REPAIR INTENT"
+		case plan.FinalizationRecoveryRepairIdentity:
+			return "REPAIR PR IDENTITY"
+		default:
+			if row.RecommendedAction.Kind == plan.PlanActionRepairReviewProposal || row.FinalizationPhase == plan.FinalizationFailurePhaseProposalRepair {
+				return "REPAIR PROPOSAL"
+			}
+			return "FINALIZE PR"
+		}
+	}
+	switch row.RecommendedAction.Kind {
+	case plan.PlanActionRecoverPullRequest:
+		return "FINALIZE PR"
+	case plan.PlanActionReview:
+		if row.RecommendedAction.Class == plan.PlanActionClassRecovery {
+			return "FRESH REVIEW"
+		}
+		return "REVIEW"
+	case plan.PlanActionRework:
+		return "REWORK"
+	case plan.PlanActionRestartRework:
+		return "RESTART REWORK"
+	}
+	if row.Status == plan.StatusCompleted {
+		return "DONE"
 	}
 	for _, reason := range row.AttentionReasons {
 		if reason == AttentionApprovalRequired {

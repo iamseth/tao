@@ -9,6 +9,7 @@ import (
 
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/workspace"
 )
 
 // run_setup.go owns dependency wiring. It is the single place where omitted
@@ -38,6 +39,18 @@ func (s Service) prepareRunExecution(ctx context.Context, detail *plan.PlanDetai
 		return execution, fmt.Errorf("--pull-request requires --execution-mode isolated")
 	}
 	s.resolveServiceDependencies(&execution)
+	if plan.AnalyzeRunCapabilities(detail).Complete && execution.Config.PullRequest {
+		// A slice-complete PR retry must not pass through normal workspace
+		// preparation: preparation may rebase an exact reviewed head before the
+		// finalizer can validate it. Bind to the durable worktree and let the
+		// guarded finalization path inspect its identity and live branch/head.
+		execution.ExecutionRoot = workspace.ResolveRecordedWorktree(detail).Path
+		resolveExecutorDefaults(&execution)
+		if err := requireResolvedDependencies(execution.Dependencies); err != nil {
+			return execution, err
+		}
+		return execution, nil
+	}
 
 	boundary, err := (ExecutionBoundaryController{}).InspectSelected(ctx, ExecutionBoundaryDurableFacts{
 		Detail: detail, ContinueBlocked: execution.Config.Continue, RestartBlocked: execution.Config.RestartBlocked,

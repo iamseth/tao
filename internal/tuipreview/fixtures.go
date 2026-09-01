@@ -71,6 +71,13 @@ func mixedScenario() Scenario {
 		previewRow("beta", "βeta", "changes", "Review found regressions", plan.StatusChangesRequested, updated(9*time.Minute), monitor.AttentionChangesRequested),
 		previewRow("alpha", "alpha", "approval", "Awaiting owner sign-off", plan.StatusPlanned, updated(12*time.Minute), monitor.AttentionApprovalRequired),
 		previewRow("beta", "βeta", "completion", "Commit proposal pending", plan.StatusInProgress, updated(15*time.Minute), monitor.AttentionSliceCompletionPending),
+		{
+			Kind: monitor.RowKindPlan, RepositoryID: "alpha", RepositoryName: "alpha", RepositoryRoot: "/preview/alpha",
+			PlanID: "finalize", PlanTitle: "Recover pull-request handoff", PlanDir: "fixture://mixed/finalize", Status: plan.StatusReviewed,
+			Liveness: monitor.LivenessMissing, OriginalCompletedCount: 3, OriginalTotalCount: 3, UpdatedAt: updated(18 * time.Minute),
+			AttentionReasons: []monitor.AttentionReason{monitor.AttentionFinalizationFailed}, FinalizationPhase: plan.FinalizationFailurePhasePullRequest,
+			FinalizationCategory: "publication_failed", RecommendedAction: plan.PlanAction{Kind: plan.PlanActionRecoverPullRequest, Class: plan.PlanActionClassRecovery, Command: "tao run --pull-request finalize"},
+		},
 		previewRow("alpha", "alpha", "rework", "Repeated review finding", plan.StatusChangesRequested, updated(20*time.Minute), monitor.AttentionReworkStopped),
 		previewRow("beta", "βeta", "crashed", "Interrupted provider run", plan.StatusInProgress, updated(24*time.Minute), monitor.AttentionRunCrashed),
 		{

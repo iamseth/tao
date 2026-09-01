@@ -809,6 +809,50 @@ func TestValidateDetailWarnsForInvalidPlanChangeType(t *testing.T) {
 	}
 }
 
+func TestValidateDetailWarnsForTypedApprovedProposalMismatch(t *testing.T) {
+	base := PlanDetail{
+		State: State{Plan: PlanState{
+			ID: "plan", ChangeType: ChangeTypeFix, PendingSlices: []string{"001-a"},
+			Review: &PlanReview{
+				Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove,
+				CommitMessage: &ReviewCommitMessage{Subject: "feat(plan): wrong type", Body: "What:\nChange it.\n\nWhy:\nIt matters."},
+			},
+		}},
+		Slices:        SlicesFile{PlanID: "plan", Slices: []Slice{{ID: "001-a", Status: StatusPending}}},
+		PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
+	}
+	warnings := ValidateDetail(&base)
+	if !containsWarning(warnings, `commit_message type mismatch: expected "fix", observed "feat"`) {
+		t.Fatalf("expected typed proposal mismatch warning, got %v", warnings)
+	}
+
+	legacy := clonePlanDetail(&base)
+	legacy.State.Plan.ChangeType = ""
+	if warnings := ValidateDetail(legacy); containsWarning(warnings, "commit_message type mismatch") {
+		t.Fatalf("legacy untyped proposal produced mismatch warning: %v", warnings)
+	}
+	incomplete := clonePlanDetail(&base)
+	incomplete.State.Plan.Review.CommitMessage = nil
+	if warnings := ValidateDetail(incomplete); containsWarning(warnings, "commit_message type mismatch") {
+		t.Fatalf("incomplete proposal produced mismatch warning: %v", warnings)
+	}
+}
+
+func TestValidateDetailWarnsForMalformedHistoricalFinalizationFailure(t *testing.T) {
+	detail := &PlanDetail{
+		State: State{Plan: PlanState{
+			ID: "plan", PendingSlices: []string{"001-a"},
+			FinalizationFailure: &FinalizationFailure{Phase: FinalizationFailurePhasePullRequest, Category: "raw output is not a label"},
+		}},
+		Slices:        SlicesFile{PlanID: "plan", Slices: []Slice{{ID: "001-a", Status: StatusPending}}},
+		PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
+	}
+	warnings := ValidateDetail(detail)
+	if !containsWarning(warnings, "plan.finalization_failure is invalid") {
+		t.Fatalf("expected historical failure warning, got %v", warnings)
+	}
+}
+
 func TestValidateDetailAllowsMissingWorkspaceMetadata(t *testing.T) {
 	detail := &PlanDetail{
 		State:         State{Plan: PlanState{ID: "plan", PendingSlices: []string{"001-a"}}},

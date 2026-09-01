@@ -19,6 +19,14 @@ func TestRunPullRequestFailureSkipsCheckout(t *testing.T) {
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, &started, nil)
 	completedDetail := runPlanDetail(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, &started, &completed)
 	settleRunTestSlice(completedDetail)
+	completedDetail.State.Plan.ChangeType = plan.ChangeTypeFix
+	completedDetail.State.Plan.Review = &plan.PlanReview{
+		Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Base: "base123", Head: "head123",
+		CommitMessage: &plan.ReviewCommitMessage{
+			Subject: "fix(pr): finalize approved pull request",
+			Body:    "What:\nFinalize the approved pull request.\n\nWhy:\nExercise failures after exact-head preflight.",
+		},
+	}
 	completedDetail.Dir = t.TempDir()
 	var calls []string
 

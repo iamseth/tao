@@ -131,10 +131,10 @@ func TestParseVerdictsAndProposalPolicy(t *testing.T) {
 			wantProposal: true,
 		},
 		{
-			name:        "ordinary approval without proposal falls back",
+			name:        "ordinary approval without proposal preserves substantive verdict",
 			payload:     `{"verdict":"approve","summary":"ready"}`,
 			policy:      CommitProposalRequired,
-			wantVerdict: plan.ReviewVerdictComment,
+			wantVerdict: plan.ReviewVerdictApprove,
 		},
 		{
 			name:        "aggregate approval without proposal",
@@ -187,6 +187,53 @@ func TestParseVerdictsAndProposalPolicy(t *testing.T) {
 			}
 			if test.wantVerdict == plan.ReviewVerdictComment && strings.Contains(test.name, "falls back") && got.Summary != output {
 				t.Fatalf("fallback summary = %q, want original output", got.Summary)
+			}
+			if got.ProposalUsable != test.wantProposal {
+				t.Fatalf("proposal usability = %t, want %t", got.ProposalUsable, test.wantProposal)
+			}
+		})
+	}
+}
+
+func TestParseTypedSeparatesSubstantiveReviewFromProposalUsability(t *testing.T) {
+	tests := []struct {
+		name     string
+		proposal string
+	}{
+		{name: "missing"},
+		{name: "malformed", proposal: `,"commit_message":"not-an-object"`},
+		{name: "wrong type", proposal: `,"commit_message":{"subject":"feat(review): preserve typed review evidence","body":"What:\nPreserve the substantive review.\n\nWhy:\nRepair only unusable proposals."}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			output := fenced(`{"verdict":"approve","summary":"exact summary","findings":[]` + test.proposal + `}`)
+			got := ParseTyped(output, CommitProposalRequired, plan.ChangeTypeFix)
+			if got.Verdict != plan.ReviewVerdictApprove || got.Summary != "exact summary" || got.CommitMessage != nil || got.ProposalUsable {
+				t.Fatalf("repairable typed approval = %+v", got)
+			}
+		})
+	}
+
+	valid := fenced(`{"verdict":"approve","summary":"ready","findings":[],"commit_message":{"subject":"fix(review): preserve typed review evidence","body":"What:\nPreserve the substantive review.\n\nWhy:\nRepair only unusable proposals."}}`)
+	got := ParseTyped(valid, CommitProposalRequired, plan.ChangeTypeFix)
+	if !got.ProposalUsable || got.CommitMessage == nil || got.CommitMessage.Subject != "fix(review): preserve typed review evidence" {
+		t.Fatalf("valid typed approval = %+v", got)
+	}
+}
+
+func TestParseCommitProposalRequiresBoundedCanonicalExpectedType(t *testing.T) {
+	valid := "```tao-review-proposal-json\n{\"commit_message\":{\"subject\":\"fix(review): correct typed proposal\",\"body\":\"What:\\nCorrect the proposal type.\\n\\nWhy:\\nMatch the authoritative plan.\"}}\n```"
+	if got := ParseCommitProposal(valid, plan.ChangeTypeFix); got == nil || got.Subject != "fix(review): correct typed proposal" {
+		t.Fatalf("valid correction = %+v", got)
+	}
+	for name, output := range map[string]string{
+		"wrong type": strings.Replace(valid, "fix(review)", "feat(review)", 1),
+		"malformed":  "```tao-review-proposal-json\n{\"commit_message\":\n```",
+		"oversized":  "```tao-review-proposal-json\n" + strings.Repeat("x", maxJSONBlockBytes+1) + "\n```",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := ParseCommitProposal(output, plan.ChangeTypeFix); got != nil {
+				t.Fatalf("invalid correction = %+v", got)
 			}
 		})
 	}
@@ -273,8 +320,8 @@ func TestParseBoundsCommitProposalStrings(t *testing.T) {
 				t.Fatal(err)
 			}
 			got := Parse(fenced(string(payload)), CommitProposalRequired)
-			if got.Verdict != plan.ReviewVerdictComment || got.CommitMessage != nil {
-				t.Fatalf("oversized proposal did not fall back: %+v", got)
+			if got.Verdict != plan.ReviewVerdictApprove || got.CommitMessage != nil || got.ProposalUsable {
+				t.Fatalf("oversized proposal did not preserve repairable approval: %+v", got)
 			}
 		})
 	}

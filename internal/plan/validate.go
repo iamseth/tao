@@ -34,6 +34,12 @@ func ValidateDetail(detail *PlanDetail) []string {
 	if err := ValidateChangeType(detail.State.Plan.ChangeType); err != nil {
 		warnings = append(warnings, "state.json plan.change_type is invalid: "+err.Error())
 	}
+	warnings = append(warnings, validateApprovedProposalType(detail.State.Plan)...)
+	if failure := detail.State.Plan.FinalizationFailure; failure != nil {
+		if err := failure.Validate(); err != nil {
+			warnings = append(warnings, "state.json plan.finalization_failure is invalid: "+err.Error())
+		}
+	}
 	warnings = append(warnings, validateDecision(detail.State.Plan.Decision)...)
 	warnings = append(warnings, validateSequence(detail.State.Plan.ID, detail.State.Plan.Sequence)...)
 	warnings = append(warnings, validateRuntimePrerequisites(detail.State.Plan.ID, detail.State.Plan.RuntimePrerequisites)...)
@@ -103,6 +109,24 @@ func validateWorkspace(workspace *Workspace) []string {
 
 func validValue(value string, allowed []string) bool {
 	return slices.Contains(allowed, value)
+}
+
+func validateApprovedProposalType(state PlanState) []string {
+	review := state.Review
+	if state.ChangeType == "" || review == nil || !review.IsApproved() || review.CommitMessage == nil {
+		return nil
+	}
+	subject := strings.TrimSpace(review.CommitMessage.Subject)
+	open := strings.IndexByte(subject, '(')
+	colon := strings.Index(subject, "): ")
+	if open <= 0 || colon <= open {
+		return nil
+	}
+	observed := subject[:open]
+	if observed == string(state.ChangeType) {
+		return nil
+	}
+	return []string{fmt.Sprintf("state.json plan.review.commit_message type mismatch: expected %q, observed %q", state.ChangeType, observed)}
 }
 
 func validateDecision(decision *Decision) []string {

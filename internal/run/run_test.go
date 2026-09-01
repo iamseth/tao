@@ -2822,6 +2822,7 @@ func (r memoryPlanMutationRecord) RecordPullRequest(pr plan.PullRequest, branch,
 	}
 	r.detail.State.Plan.PullRequest = &pr
 	r.detail.State.Plan.PullRequestIntent = nil
+	r.detail.State.Plan.FinalizationFailure = nil
 	if r.detail.State.Workspace == nil {
 		r.detail.State.Workspace = &plan.Workspace{}
 	}
@@ -2836,6 +2837,7 @@ func (r memoryPlanMutationRecord) RecordPullRequest(pr plan.PullRequest, branch,
 func (r memoryPlanMutationRecord) RecordReviewError(review plan.PlanReview, _ string) error {
 	reviewedAt := review.ReviewedAt
 	r.detail.State.Plan.Review = &review
+	r.detail.State.Plan.FinalizationFailure = nil
 	r.detail.State.UpdatedAt = reviewedAt
 	r.detail.State.Plan.Timing.LastActivityAt = &reviewedAt
 	return nil
@@ -2847,6 +2849,75 @@ func (r memoryPlanMutationRecord) RecordReviewCompleted(review plan.PlanReview, 
 
 func (r memoryPlanMutationRecord) RecordReviewCompletedWithArtifact(review plan.PlanReview, agent, _ string) error {
 	return r.RecordReviewCompleted(review, agent)
+}
+
+func (r memoryPlanMutationRecord) ConsumeReviewProposalCorrection(repaired *plan.FinalizationFailure, attempt plan.FinalizationFailure) error {
+	review := plan.CurrentReview(r.detail)
+	if review == nil || !review.IsApproved() {
+		return errors.New("approved review changed")
+	}
+	base := review.Base
+	if base == "" {
+		base = r.detail.State.Repo.BaseCommit
+		if r.detail.State.Workspace != nil && r.detail.State.Workspace.BaseSHA != "" {
+			base = r.detail.State.Workspace.BaseSHA
+		}
+	}
+	if base != attempt.ReviewBase || review.Head != attempt.ReviewHead {
+		return errors.New("approved review range changed")
+	}
+	if existing := r.detail.State.Plan.FinalizationFailure; existing != nil && *existing == attempt {
+		return nil
+	}
+	if repaired != nil {
+		if existing := r.detail.State.Plan.FinalizationFailure; existing == nil || *existing != *repaired {
+			return errors.New("finalization failure changed")
+		}
+		r.detail.State.Plan.FinalizationFailure = nil
+	}
+	return r.RecordFinalizationFailure(attempt)
+}
+
+func (r memoryPlanMutationRecord) RecordReviewProposalCorrection(expected plan.FinalizationFailure, review plan.PlanReview, agent string) error {
+	if existing := r.detail.State.Plan.FinalizationFailure; existing == nil || *existing != expected {
+		return errors.New("proposal correction marker changed")
+	}
+	return r.RecordReviewCompleted(review, agent)
+}
+
+func (r memoryPlanMutationRecord) RecordFinalizationFailure(failure plan.FinalizationFailure) error {
+	if err := failure.Validate(); err != nil {
+		return err
+	}
+	if existing := r.detail.State.Plan.FinalizationFailure; existing != nil {
+		if *existing == failure {
+			return nil
+		}
+		return errors.New("conflicting finalization failure")
+	}
+	r.detail.State.Plan.FinalizationFailure = &failure
+	return nil
+}
+
+func (r memoryPlanMutationRecord) ReplaceFinalizationFailure(expected, replacement plan.FinalizationFailure) error {
+	if err := replacement.Validate(); err != nil {
+		return err
+	}
+	if existing := r.detail.State.Plan.FinalizationFailure; existing != nil && *existing == replacement {
+		return nil
+	} else if existing == nil || *existing != expected {
+		return errors.New("finalization failure changed")
+	}
+	r.detail.State.Plan.FinalizationFailure = &replacement
+	return nil
+}
+
+func (r memoryPlanMutationRecord) ClearFinalizationFailure(expected plan.FinalizationFailure, _ time.Time) error {
+	if existing := r.detail.State.Plan.FinalizationFailure; existing != nil && *existing != expected {
+		return errors.New("finalization failure changed")
+	}
+	r.detail.State.Plan.FinalizationFailure = nil
+	return nil
 }
 
 func testRunExecution(config ExecutionConfig, dependencies RunDependencies) runExecution {

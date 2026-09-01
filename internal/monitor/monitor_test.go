@@ -241,6 +241,7 @@ func TestPlanRowDerivesAttentionReasons(t *testing.T) {
 		{name: "approval required", summary: plan.PlanSummary{Capabilities: plan.RunCapabilities{NeedsApproval: true}}, want: AttentionApprovalRequired},
 		{name: "slice completion pending", summary: plan.PlanSummary{SliceCompletionPending: true}, want: AttentionSliceCompletionPending},
 		{name: "rework stopped", summary: plan.PlanSummary{UnresolvedReworkStop: true}, want: AttentionReworkStopped},
+		{name: "finalization failed", summary: plan.PlanSummary{FinalizationRecovery: &plan.FinalizationRecovery{Phase: plan.FinalizationFailurePhasePullRequest, Category: "publication_failed"}}, want: AttentionFinalizationFailed},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -249,6 +250,122 @@ func TestPlanRowDerivesAttentionReasons(t *testing.T) {
 				t.Fatalf("attention reasons = %v, want %v", row.AttentionReasons, test.want)
 			}
 		})
+	}
+}
+
+func TestPlanRowProjectsClassifiedPullRequestRecoveryAction(t *testing.T) {
+	summary := plan.PlanSummary{
+		Status: plan.StatusReviewed,
+		FinalizationRecovery: &plan.FinalizationRecovery{
+			Phase: plan.FinalizationFailurePhasePullRequest, Category: "head_drift", RecoveryAction: plan.FinalizationRecoveryRestoreBoundary,
+		},
+		NextAction: plan.PlanNextAction{Primary: plan.PlanAction{Kind: plan.PlanActionRecoverPullRequest, Class: plan.PlanActionClassRecovery}},
+	}
+	row := planRow(taodata.RepoInventoryEntry{}, summary)
+	if row.FinalizationRecoveryAction != plan.FinalizationRecoveryRestoreBoundary || DeriveNextAction(row) != "RESTORE BOUNDARY" {
+		t.Fatalf("classified recovery row = %+v", row)
+	}
+}
+
+func TestPlanRowProjectsDirtyWorktreeRecovery(t *testing.T) {
+	summary := plan.PlanSummary{
+		Status: plan.StatusReviewed,
+		FinalizationRecovery: &plan.FinalizationRecovery{
+			Phase: plan.FinalizationFailurePhasePullRequest, Category: "workspace_dirty", RecoveryAction: plan.FinalizationRecoveryRestoreBoundary,
+		},
+		NextAction: plan.PlanNextAction{Primary: plan.PlanAction{Kind: plan.PlanActionRecoverPullRequest, Class: plan.PlanActionClassRecovery, Instruction: "Restore a clean plan worktree"}},
+	}
+	row := planRow(taodata.RepoInventoryEntry{}, summary)
+	if row.FinalizationCategory != "workspace_dirty" || row.FinalizationRecoveryAction != plan.FinalizationRecoveryRestoreBoundary || DeriveNextAction(row) != "RESTORE BOUNDARY" {
+		t.Fatalf("dirty worktree recovery row = %+v", row)
+	}
+}
+
+func TestPlanRowProjectsWorkspaceMismatchRepair(t *testing.T) {
+	summary := plan.PlanSummary{
+		Status: plan.StatusReviewed,
+		FinalizationRecovery: &plan.FinalizationRecovery{
+			Phase: plan.FinalizationFailurePhasePullRequest, Category: "workspace_mismatch", RecoveryAction: plan.FinalizationRecoveryRestoreBoundary,
+		},
+		NextAction: plan.PlanNextAction{Primary: plan.PlanAction{Kind: plan.PlanActionRecoverPullRequest, Class: plan.PlanActionClassRecovery, Instruction: "Repair or restore the recorded linked worktree"}},
+	}
+	row := planRow(taodata.RepoInventoryEntry{}, summary)
+	if row.FinalizationCategory != "workspace_mismatch" || row.FinalizationRecoveryAction != plan.FinalizationRecoveryRestoreBoundary || DeriveNextAction(row) != "REPAIR WORKTREE" {
+		t.Fatalf("workspace mismatch recovery row = %+v", row)
+	}
+}
+
+func TestPlanRowProjectsIdentityMismatchRepair(t *testing.T) {
+	summary := plan.PlanSummary{
+		Status: plan.StatusReviewed,
+		FinalizationRecovery: &plan.FinalizationRecovery{
+			Phase: plan.FinalizationFailurePhasePullRequest, Category: "identity_mismatch", RecoveryAction: plan.FinalizationRecoveryRepairIdentity,
+		},
+		NextAction: plan.PlanNextAction{Primary: plan.PlanAction{Kind: plan.PlanActionRecoverPullRequest, Class: plan.PlanActionClassRecovery, Instruction: "Repair or clear stale recorded pull-request identity without adopting remote ownership"}},
+	}
+	row := planRow(taodata.RepoInventoryEntry{}, summary)
+	if row.FinalizationCategory != "identity_mismatch" || row.FinalizationRecoveryAction != plan.FinalizationRecoveryRepairIdentity || DeriveNextAction(row) != "REPAIR PR IDENTITY" {
+		t.Fatalf("identity mismatch recovery row = %+v", row)
+	}
+}
+
+func TestPlanRowProjectsPostCorrectionRecoveryActions(t *testing.T) {
+	tests := []struct {
+		name     string
+		category string
+		action   string
+		want     string
+	}{
+		{name: "head drift", category: "head_drift", action: plan.FinalizationRecoveryRestoreBoundary, want: "RESTORE BOUNDARY"},
+		{name: "workspace mismatch", category: "workspace_mismatch", action: plan.FinalizationRecoveryRestoreBoundary, want: "REPAIR WORKTREE"},
+		{name: "dirty worktree", category: "workspace_dirty", action: plan.FinalizationRecoveryRestoreBoundary, want: "RESTORE BOUNDARY"},
+		{name: "intent mismatch", category: "intent_mismatch", action: plan.FinalizationRecoveryRepairIntent, want: "REPAIR INTENT"},
+		{name: "invalid proposal", category: "proposal_invalid", action: plan.FinalizationRecoveryRerunReview, want: "FRESH REVIEW"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			summary := plan.PlanSummary{
+				Status: plan.StatusReviewed,
+				FinalizationRecovery: &plan.FinalizationRecovery{
+					Phase: plan.FinalizationFailurePhaseProposalRepair, Category: test.category, RecoveryAction: test.action,
+				},
+				NextAction: plan.PlanNextAction{Primary: plan.PlanAction{Kind: plan.PlanActionRecoverPullRequest, Class: plan.PlanActionClassRecovery}},
+			}
+			row := planRow(taodata.RepoInventoryEntry{}, summary)
+			if row.FinalizationCategory != test.category || row.FinalizationRecoveryAction != test.action || DeriveNextAction(row) != test.want {
+				t.Fatalf("post-correction recovery row = %+v, want %q", row, test.want)
+			}
+		})
+	}
+}
+
+func TestPlanRowProjectsFailedProposalCorrectionForLegacyEmptyReviewBase(t *testing.T) {
+	failedAt := time.Date(2026, 8, 30, 1, 0, 0, 0, time.UTC)
+	detail := &plan.PlanDetail{
+		State: plan.State{
+			Status: plan.StatusReviewed,
+			Repo:   plan.Repo{BaseCommit: "plan-base"},
+			Plan: plan.PlanState{
+				ID: "plan-a", CompletedSlices: []string{"001-a"},
+				FinalizationFailure: &plan.FinalizationFailure{
+					Phase: plan.FinalizationFailurePhaseProposalRepair, Category: "proposal_invalid", ReviewBase: "plan-base", ReviewHead: "head123",
+					FailedAt: failedAt, RecoveryAction: "rerun_review",
+				},
+			},
+		},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "001-a", Status: plan.StatusCompleted}}},
+	}
+	plan.SetPersistedReview(detail, plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Head: "head123"})
+
+	row := planRow(taodata.RepoInventoryEntry{}, plan.Summarize(detail, time.Time{}))
+	if !slices.Contains(row.AttentionReasons, AttentionFinalizationFailed) {
+		t.Fatalf("legacy proposal failure attention = %v", row.AttentionReasons)
+	}
+	if row.FinalizationPhase != plan.FinalizationFailurePhaseProposalRepair || row.RecommendedAction.Command != "tao review --run plan-a" {
+		t.Fatalf("legacy proposal failure row = %+v", row)
+	}
+	if action := DeriveNextAction(row); action != "FRESH REVIEW" {
+		t.Fatalf("legacy proposal failure monitor action = %q", action)
 	}
 }
 
@@ -292,6 +409,7 @@ func TestDeriveNextActionIsPureAndExhaustive(t *testing.T) {
 	}{
 		{name: "repository warning", row: Row{Kind: RowKindRepositoryWarning}, want: "INSPECT"},
 		{name: "completed", row: Row{Status: plan.StatusCompleted}, want: "DONE"},
+		{name: "completed with PR recovery", row: Row{Status: plan.StatusCompleted, AttentionReasons: []AttentionReason{AttentionFinalizationFailed}, FinalizationPhase: plan.FinalizationFailurePhasePullRequest}, want: "FINALIZE PR"},
 		{name: "live", row: Row{Liveness: LivenessLive}, want: "MONITOR"},
 		{name: "stalled owned", row: Row{Liveness: LivenessStale, RunLockPresent: true, RunLockProcessAlive: true}, want: "MONITOR"},
 		{name: "approval", row: Row{AttentionReasons: []AttentionReason{AttentionApprovalRequired}}, want: "APPROVE"},
@@ -299,6 +417,21 @@ func TestDeriveNextActionIsPureAndExhaustive(t *testing.T) {
 		{name: "changes", row: Row{Status: plan.StatusChangesRequested}, want: "REWORK"},
 		{name: "review", row: Row{Status: plan.StatusInReview}, want: "REVIEW"},
 		{name: "reviewed", row: Row{Status: plan.StatusReviewed}, want: "MERGE"},
+		{name: "pending intent with approval", row: Row{Status: plan.StatusReviewed, RecommendedAction: plan.PlanAction{Kind: plan.PlanActionRecoverPullRequest}}, want: "FINALIZE PR"},
+		{name: "pending intent after comment", row: Row{Status: plan.StatusReviewed, RecommendedAction: plan.PlanAction{Kind: plan.PlanActionReview, Class: plan.PlanActionClassRecovery}}, want: "FRESH REVIEW"},
+		{name: "pending intent after changes", row: Row{Status: plan.StatusChangesRequested, RecommendedAction: plan.PlanAction{Kind: plan.PlanActionRework}}, want: "REWORK"},
+		{name: "stopped rework with pending intent", row: Row{Status: plan.StatusChangesRequested, RecommendedAction: plan.PlanAction{Kind: plan.PlanActionRestartRework}}, want: "RESTART REWORK"},
+		{name: "legacy proposal recovery outranks reviewed", row: Row{Status: plan.StatusReviewed, AttentionReasons: []AttentionReason{AttentionFinalizationFailed}, FinalizationPhase: plan.FinalizationFailurePhaseProposalRepair}, want: "REPAIR PROPOSAL"},
+		{name: "proposal head drift restores boundary", row: Row{Status: plan.StatusReviewed, AttentionReasons: []AttentionReason{AttentionFinalizationFailed}, FinalizationPhase: plan.FinalizationFailurePhaseProposalRepair, FinalizationRecoveryAction: plan.FinalizationRecoveryRestoreBoundary}, want: "RESTORE BOUNDARY"},
+		{name: "proposal intent mismatch repairs intent", row: Row{Status: plan.StatusReviewed, AttentionReasons: []AttentionReason{AttentionFinalizationFailed}, FinalizationPhase: plan.FinalizationFailurePhaseProposalRepair, FinalizationRecoveryAction: plan.FinalizationRecoveryRepairIntent}, want: "REPAIR INTENT"},
+		{name: "proposal replacement requests fresh review", row: Row{Status: plan.StatusReviewed, AttentionReasons: []AttentionReason{AttentionFinalizationFailed}, FinalizationPhase: plan.FinalizationFailurePhaseProposalRepair, FinalizationRecoveryAction: plan.FinalizationRecoveryRerunReview}, want: "FRESH REVIEW"},
+		{name: "PR recovery outranks reviewed", row: Row{Status: plan.StatusReviewed, AttentionReasons: []AttentionReason{AttentionFinalizationFailed}, FinalizationPhase: plan.FinalizationFailurePhasePullRequest}, want: "FINALIZE PR"},
+		{name: "head drift restores boundary", row: Row{Status: plan.StatusReviewed, AttentionReasons: []AttentionReason{AttentionFinalizationFailed}, FinalizationPhase: plan.FinalizationFailurePhasePullRequest, FinalizationRecoveryAction: plan.FinalizationRecoveryRestoreBoundary}, want: "RESTORE BOUNDARY"},
+		{name: "workspace mismatch repairs worktree", row: Row{Status: plan.StatusReviewed, AttentionReasons: []AttentionReason{AttentionFinalizationFailed}, FinalizationPhase: plan.FinalizationFailurePhasePullRequest, FinalizationCategory: "workspace_mismatch", FinalizationRecoveryAction: plan.FinalizationRecoveryRestoreBoundary}, want: "REPAIR WORKTREE"},
+		{name: "review mismatch requests fresh review", row: Row{Status: plan.StatusReviewed, AttentionReasons: []AttentionReason{AttentionFinalizationFailed}, FinalizationPhase: plan.FinalizationFailurePhasePullRequest, FinalizationRecoveryAction: plan.FinalizationRecoveryRerunReview}, want: "FRESH REVIEW"},
+		{name: "non-approval failure with changes requests rework", row: Row{Status: plan.StatusChangesRequested, AttentionReasons: []AttentionReason{AttentionFinalizationFailed}, FinalizationPhase: plan.FinalizationFailurePhasePullRequest, FinalizationRecoveryAction: plan.FinalizationRecoveryRerunReview, RecommendedAction: plan.PlanAction{Kind: plan.PlanActionRework}}, want: "REWORK"},
+		{name: "intent mismatch requires repair", row: Row{Status: plan.StatusReviewed, AttentionReasons: []AttentionReason{AttentionFinalizationFailed}, FinalizationPhase: plan.FinalizationFailurePhasePullRequest, FinalizationRecoveryAction: plan.FinalizationRecoveryRepairIntent}, want: "REPAIR INTENT"},
+		{name: "identity mismatch repairs identity", row: Row{Status: plan.StatusReviewed, AttentionReasons: []AttentionReason{AttentionFinalizationFailed}, FinalizationPhase: plan.FinalizationFailurePhasePullRequest, FinalizationRecoveryAction: plan.FinalizationRecoveryRepairIdentity}, want: "REPAIR PR IDENTITY"},
 		{name: "attention", row: Row{AttentionReasons: []AttentionReason{AttentionRunCrashed}}, want: "RESOLVE"},
 		{name: "ready", row: Row{Overview: plan.DecisionOverview{Disposition: plan.DecisionDispositionReady}}, want: "RUN"},
 		{name: "legacy unranked", row: Row{}, want: "RUN"},
@@ -415,6 +548,96 @@ func TestCollectorCompletedWindowIsOptInWithActivityFallback(t *testing.T) {
 	}
 	if got := planIDs(windowSnapshot.Rows); !slices.Equal(got, []string{"fallback", "recent", "active"}) {
 		t.Fatalf("window plan ids = %v, want recent completed plans plus active", got)
+	}
+}
+
+func TestCollectorIncludesLegacyCompletedPlanWithPendingPullRequestIntent(t *testing.T) {
+	now := time.Date(2026, 8, 31, 18, 0, 0, 0, time.UTC)
+	detail := &plan.PlanDetail{
+		State: plan.State{
+			Status: plan.StatusCompleted,
+			Plan: plan.PlanState{
+				ID: "legacy-completed", CompletedSlices: []string{"001-work"},
+				PullRequestIntent: &plan.PullRequest{Branch: "fix/legacy", HeadSHA: "head123"},
+			},
+			Workspace: &plan.Workspace{Path: "/worktrees/legacy", Branch: "fix/legacy", HeadSHA: "head123"},
+		},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "001-work", Status: plan.StatusCompleted}}},
+	}
+	plan.SetPersistedReview(detail, plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Head: "head123"})
+	summary := plan.Summarize(detail, now)
+	if summary.Status != plan.StatusCompleted || summary.FinalizationRecovery != nil {
+		t.Fatalf("legacy summary status = %q, recovery = %+v", summary.Status, summary.FinalizationRecovery)
+	}
+	if action := summary.NextAction.Primary; action.Kind != plan.PlanActionRecoverPullRequest || action.Class != plan.PlanActionClassRecovery {
+		t.Fatalf("legacy summary action = %+v, want pull-request recovery", action)
+	}
+
+	entry := taodata.RepoInventoryEntry{Repo: taodata.Repo{ID: "repo", Name: "repo"}, PlansDir: "/data/repo/plans"}
+	lister := &fakePlanLister{summaries: []plan.PlanSummary{summary}}
+	collector := Collector{
+		Inventory:       fakeInventory{entries: []taodata.RepoInventoryEntry{entry}},
+		NewPlanLister:   func(taodata.RepoInventoryEntry) PlanLister { return lister },
+		NewStatusReader: func(taodata.RepoInventoryEntry) RuntimeStatusReader { return &fakeStatusReader{} },
+		ReadRunLock:     func(string) (plan.RunLock, error) { return plan.RunLock{}, os.ErrNotExist },
+		Now:             func() time.Time { return now },
+	}
+
+	snapshot, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Rows) != 1 {
+		t.Fatalf("rows = %+v, want intent-only pull-request recovery", snapshot.Rows)
+	}
+	row := snapshot.Rows[0]
+	if row.Status != plan.StatusCompleted || slices.Contains(row.AttentionReasons, AttentionFinalizationFailed) || row.NextAction != "FINALIZE PR" {
+		t.Fatalf("legacy intent-only row = %+v", row)
+	}
+}
+
+func TestCollectorIncludesLegacyCompletedPlanWithCurrentFinalizationFailure(t *testing.T) {
+	now := time.Date(2026, 8, 31, 18, 0, 0, 0, time.UTC)
+	detail := &plan.PlanDetail{
+		State: plan.State{
+			Status: plan.StatusCompleted,
+			Plan: plan.PlanState{
+				ID: "legacy-completed", CompletedSlices: []string{"001-work"},
+				FinalizationFailure: &plan.FinalizationFailure{
+					Phase: plan.FinalizationFailurePhasePullRequest, Category: "publication_failed", Branch: "fix/legacy", HeadSHA: "head123",
+					FailedAt: now.Add(-time.Minute), RecoveryAction: plan.FinalizationRecoveryResumePullRequest,
+				},
+			},
+			Workspace: &plan.Workspace{Branch: "fix/legacy", HeadSHA: "head123"},
+		},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "001-work", Status: plan.StatusCompleted}}},
+	}
+	plan.SetPersistedReview(detail, plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Head: "head123"})
+	summary := plan.Summarize(detail, now)
+	if summary.Status != plan.StatusCompleted || summary.FinalizationRecovery == nil {
+		t.Fatalf("legacy summary status = %q, recovery = %+v", summary.Status, summary.FinalizationRecovery)
+	}
+
+	entry := taodata.RepoInventoryEntry{Repo: taodata.Repo{ID: "repo", Name: "repo"}, PlansDir: "/data/repo/plans"}
+	lister := &fakePlanLister{summaries: []plan.PlanSummary{summary}}
+	collector := Collector{
+		Inventory:       fakeInventory{entries: []taodata.RepoInventoryEntry{entry}},
+		NewPlanLister:   func(taodata.RepoInventoryEntry) PlanLister { return lister },
+		NewStatusReader: func(taodata.RepoInventoryEntry) RuntimeStatusReader { return &fakeStatusReader{} },
+		ReadRunLock:     func(string) (plan.RunLock, error) { return plan.RunLock{}, os.ErrNotExist },
+		Now:             func() time.Time { return now },
+	}
+
+	snapshot, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Rows) != 1 {
+		t.Fatalf("rows = %+v, want current legacy finalization recovery", snapshot.Rows)
+	}
+	row := snapshot.Rows[0]
+	if row.Status != plan.StatusCompleted || !slices.Contains(row.AttentionReasons, AttentionFinalizationFailed) || row.NextAction != "FINALIZE PR" {
+		t.Fatalf("legacy finalization row = %+v", row)
 	}
 }
 

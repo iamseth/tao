@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
@@ -29,9 +30,21 @@ type ReviewCreator interface {
 	CreateReview(ctx context.Context, run ReviewRun) (plan.PlanReview, error)
 }
 
+type reviewProposalRepairError struct {
+	category string
+	cause    error
+}
+
+func (e *reviewProposalRepairError) Error() string {
+	return fmt.Sprintf("review proposal repair failed: %v", e.cause)
+}
+
+func (e *reviewProposalRepairError) Unwrap() error { return e.cause }
+
 type reviewGit interface {
 	StatusPorcelain(context.Context) (string, error)
 	RevParse(context.Context, string) (string, error)
+	CurrentBranch(context.Context) (string, error)
 	DefaultBranch(context.Context) (string, error)
 	MergeBase(context.Context, string, string) (string, error)
 }
@@ -161,6 +174,211 @@ func (f Finalizer) resumeCompletedRun(ctx context.Context, detail *plan.PlanDeta
 	f.execution.Config.ReviewEnabled = f.execution.Config.ReviewEnabled && !reviewAttempted
 	f.execution.Config.PullRequest = f.execution.Config.PullRequest && !pullRequestCreated
 	return f.finalizeCompletedRun(ctx, 1, detail)
+}
+
+// ensureApprovedReviewProposal validates the exact durable approval before any
+// push or forge operation. Historical approvals with an unusable proposal get
+// one proposal-only correction session; substantive review is never rerun.
+func (f Finalizer) ensureApprovedReviewProposal(ctx context.Context, detail *plan.PlanDetail, repoRoot, branch, headSHA string) error {
+	review := plan.CurrentReview(detail)
+	if review == nil {
+		return f.failPullRequestFinalization(detail, branch, headSHA, "review_not_approved", fmt.Errorf("pull request preflight requires a current approved review"))
+	}
+	reviewBase := strings.TrimSpace(review.Base)
+	if reviewBase == "" {
+		// Legacy approvals predate persisted live review bases. Their immutable
+		// plan/workspace base remains the compatibility boundary.
+		reviewBase = reviewDetailBase(detail)
+	}
+	evidenceReview := *review
+	evidenceReview.Base = reviewBase
+	// A fresh unusable approval is deliberately projected as a comment while its
+	// correction attempt is in flight. Recognize that exact consumed marker before
+	// the approval gate so interruption keeps one recovery action without replacing
+	// the stronger proposal-repair evidence.
+	if failure := matchingProposalRepairFailure(detail, reviewBase, review.Head); failure != nil {
+		err := consumedProposalCorrectionError(detail.State.Plan.ID, reviewBase, review.Head, failure)
+		recoveryAction := plan.ProposalRepairRecoveryAction(failure.Category)
+		if failure.RecoveryAction == recoveryAction {
+			return err
+		}
+		return f.failProposalRepairWithAction(detail, evidenceReview, failure.Category, recoveryAction, err)
+	}
+	if !review.IsApproved() {
+		return f.failPullRequestFinalization(detail, branch, headSHA, "review_not_approved", fmt.Errorf("pull request preflight requires a current approved review"))
+	}
+	if reviewBase == "" || strings.TrimSpace(review.Head) != strings.TrimSpace(headSHA) {
+		err := fmt.Errorf("pull request preflight requires an exact approved review for head %q; recorded review is %q..%q", headSHA, reviewBase, review.Head)
+		return f.failPullRequestFinalization(detail, branch, headSHA, "review_head_mismatch", err)
+	}
+	if _, _, err := pullRequestPreflight(PullRequestRun{Detail: detail, Branch: branch, HeadSHA: headSHA}); err == nil {
+		return nil
+	}
+	if category, err := f.inspectCleanPullRequestWorktree(ctx, repoRoot, "proposal repair"); err != nil {
+		return f.failPullRequestFinalization(detail, branch, headSHA, category, err)
+	}
+
+	session, ok := f.reviewer().(AgentSessionExecutor)
+	if !ok {
+		return f.failProposalRepair(detail, evidenceReview, "proposal_correction_unavailable", fmt.Errorf("approved review commit proposal is unusable and the proposal-only correction session is unavailable"))
+	}
+	prompt, err := renderReviewPrompt(reviewPromptData{
+		PlanID: detail.State.Plan.ID, Base: reviewBase, Head: review.Head,
+		ChangeType: detail.State.Plan.ChangeType, ProposalOnly: true,
+	})
+	if err != nil {
+		return f.failProposalRepair(detail, evidenceReview, "proposal_prompt_failed", err)
+	}
+	record, err := planMutationRecord(f.execution, detail)
+	if err != nil {
+		return fmt.Errorf("record consumed proposal correction attempt: %w", err)
+	}
+	repairRecorder, ok := record.(ReviewProposalCorrectionRecorder)
+	if !ok {
+		return fmt.Errorf("approved review commit proposal is unusable and the plan record cannot durably consume a proposal-only correction attempt")
+	}
+	consumedAttempt := plan.FinalizationFailure{
+		Phase: plan.FinalizationFailurePhaseProposalRepair, Category: "proposal_correction_started",
+		ReviewBase: reviewBase, ReviewHead: strings.TrimSpace(review.Head),
+		FailedAt: now(f.execution).UTC(), RecoveryAction: plan.FinalizationRecoveryRerunReview,
+	}
+	// A previous pre-correction cleanliness failure is obsolete only after the
+	// live cleanliness check above succeeds. Compare and supersede that exact
+	// evidence in the same mutation that consumes the one correction attempt;
+	// clearing it first would leave an interruption window for a second attempt.
+	repairedWorkspaceFailure := matchingPreCorrectionWorkspaceFailure(detail, branch, headSHA)
+	if err := repairRecorder.ConsumeReviewProposalCorrection(repairedWorkspaceFailure, consumedAttempt); err != nil {
+		return fmt.Errorf("record consumed proposal correction attempt: %w", err)
+	}
+
+	result, sessionErr := session.RunAgentSession(ctx, AgentSessionRequest{
+		PlanDir: absolutePlanDir(detail.Dir), RepoRoot: repoRoot,
+		LogAction: "correcting review proposal for plan " + detail.State.Plan.ID,
+		Prompt:    prompt, CaptureOutput: true,
+	})
+	if category, err := f.reinspectProposalCorrectionWorktree(ctx, detail, repoRoot, branch, headSHA); err != nil {
+		return f.failProposalRepairWithAction(detail, evidenceReview, category, plan.ProposalRepairRecoveryAction(category), err)
+	}
+	if sessionErr != nil {
+		return f.failProposalRepair(detail, evidenceReview, "proposal_correction_failed", sessionErr)
+	}
+	proposal := reviewcontract.ParseCommitProposal(result.Output, detail.State.Plan.ChangeType)
+	if proposal == nil {
+		return f.failProposalRepair(detail, evidenceReview, "proposal_invalid", fmt.Errorf("proposal-only correction did not return a valid typed commit proposal"))
+	}
+	corrected := evidenceReview
+	corrected.CommitMessage = proposal
+	agent := corrected.Agent
+	if strings.TrimSpace(agent) == "" {
+		agent = f.execution.Config.Agent.String()
+	}
+	if err := repairRecorder.RecordReviewProposalCorrection(consumedAttempt, corrected, agent); err != nil {
+		return f.failProposalRepair(detail, evidenceReview, "proposal_recording_failed", err)
+	}
+	if _, _, err := pullRequestPreflight(PullRequestRun{Detail: detail, Branch: branch, HeadSHA: headSHA}); err != nil {
+		return f.failProposalRepair(detail, corrected, "proposal_invalid", err)
+	}
+	return nil
+}
+
+// reinspectProposalCorrectionWorktree ensures the untrusted correction session
+// did not alter the exact linked-worktree boundary that was reviewed. This must
+// run before the corrected approval is persisted or any remote operation starts.
+func (f Finalizer) reinspectProposalCorrectionWorktree(ctx context.Context, detail *plan.PlanDetail, repoRoot, branch, headSHA string) (string, error) {
+	fallbackBranch, fallbackHead := recordedWorkspaceBoundary(detail)
+	if reason := interruptedWorktreeIdentityError(detail, repoRoot); reason != "" {
+		return "workspace_mismatch", fmt.Errorf("reinspect pull request correction worktree: %s", reason)
+	}
+	if err := inspectLinkedWorktreeIdentity(ctx, detail, repoRoot, f.execution.Dependencies.CommandRunner); err != nil {
+		return pullRequestWorkspaceFailureCategory(err), fmt.Errorf("reinspect pull request correction worktree ownership: %w", err)
+	}
+	liveBranch, liveHead, err := currentBranchHead(ctx, f.execution, repoRoot)
+	if err != nil {
+		return "workspace_preflight_failed", err
+	}
+	status, err := gitClient(f.execution, repoRoot).StatusPorcelain(ctx)
+	if err != nil {
+		return "workspace_preflight_failed", fmt.Errorf("reinspect pull request correction worktree status: %w", err)
+	}
+	if fallbackBranch == "" || fallbackHead == "" || liveBranch != branch || liveHead != headSHA || liveBranch != fallbackBranch || liveHead != fallbackHead {
+		return "head_drift", fmt.Errorf("proposal correction changed the reviewed worktree boundary: recorded branch %q HEAD %s; captured branch %q HEAD %s; live branch %q HEAD %s", fallbackBranch, diagnosticSHA(fallbackHead), branch, diagnosticSHA(headSHA), liveBranch, diagnosticSHA(liveHead))
+	}
+	if strings.TrimSpace(status) != "" {
+		return "workspace_dirty", fmt.Errorf("proposal correction left the reviewed worktree dirty; refusing pull request finalization")
+	}
+	if intent := detail.State.Plan.PullRequestIntent; intent != nil && (liveBranch != intent.Branch || liveHead != intent.HeadSHA) {
+		return "intent_mismatch", fmt.Errorf("proposal correction worktree branch %q HEAD %s does not match recorded intent branch %q HEAD %s", liveBranch, diagnosticSHA(liveHead), intent.Branch, diagnosticSHA(intent.HeadSHA))
+	}
+	return "", nil
+}
+
+func consumedProposalCorrectionError(planID, reviewBase, reviewHead string, failure *plan.FinalizationFailure) error {
+	prefix := fmt.Sprintf("proposal-only correction was already attempted for exact review range %q..%q", reviewBase, reviewHead)
+	switch plan.ProposalRepairRecoveryAction(failure.Category) {
+	case plan.FinalizationRecoveryRestoreBoundary:
+		if failure.Category == "workspace_mismatch" {
+			return fmt.Errorf("%s; repair or restore the recorded linked worktree before recording a fresh review", prefix)
+		}
+		if failure.Category == "workspace_dirty" || failure.Category == "workspace_preflight_failed" {
+			return fmt.Errorf("%s; restore a clean worktree at the recorded branch and HEAD before recording a fresh review", prefix)
+		}
+		return fmt.Errorf("%s; restore the worktree to its recorded branch and HEAD before recording a fresh review", prefix)
+	case plan.FinalizationRecoveryRepairIntent:
+		return fmt.Errorf("%s; repair the conflicting durable pull-request intent before recording a fresh review", prefix)
+	default:
+		return fmt.Errorf("%s; run `tao review --run %s` to record a replacement substantive review", prefix, planID)
+	}
+}
+
+func matchingProposalRepairFailure(detail *plan.PlanDetail, reviewBase, reviewHead string) *plan.FinalizationFailure {
+	if detail == nil {
+		return nil
+	}
+	failure := detail.State.Plan.FinalizationFailure
+	if failure == nil || failure.Phase != plan.FinalizationFailurePhaseProposalRepair {
+		return nil
+	}
+	if failure.ReviewBase != strings.TrimSpace(reviewBase) || failure.ReviewHead != strings.TrimSpace(reviewHead) {
+		return nil
+	}
+	return failure
+}
+
+func matchingPreCorrectionWorkspaceFailure(detail *plan.PlanDetail, branch, headSHA string) *plan.FinalizationFailure {
+	if detail == nil {
+		return nil
+	}
+	failure := detail.State.Plan.FinalizationFailure
+	if failure == nil || failure.Phase != plan.FinalizationFailurePhasePullRequest {
+		return nil
+	}
+	if failure.Category != "workspace_dirty" && failure.Category != "workspace_preflight_failed" {
+		return nil
+	}
+	if failure.Branch != strings.TrimSpace(branch) || failure.HeadSHA != strings.TrimSpace(headSHA) {
+		return nil
+	}
+	copy := *failure
+	return &copy
+}
+
+func (f Finalizer) failProposalRepair(detail *plan.PlanDetail, review plan.PlanReview, category string, localErr error) error {
+	return f.failProposalRepairWithAction(detail, review, category, plan.FinalizationRecoveryRerunReview, localErr)
+}
+
+func (f Finalizer) failProposalRepairWithAction(detail *plan.PlanDetail, review plan.PlanReview, category, recoveryAction string, localErr error) error {
+	failure := plan.FinalizationFailure{
+		Phase: plan.FinalizationFailurePhaseProposalRepair, Category: category,
+		ReviewBase: strings.TrimSpace(review.Base), ReviewHead: strings.TrimSpace(review.Head),
+		FailedAt: now(f.execution).UTC(), RecoveryAction: recoveryAction,
+	}
+	if failure.ReviewBase == "" || failure.ReviewHead == "" {
+		return localErr
+	}
+	if err := f.recordFinalizationFailure(detail, failure); err != nil {
+		return fmt.Errorf("%w; record proposal repair failure: %w", localErr, err)
+	}
+	return localErr
 }
 
 func completedRunReviewAttempted(detail *plan.PlanDetail) bool {
@@ -318,10 +536,12 @@ func absoluteReviewPath(path string) (string, error) {
 }
 
 type reviewPromptData struct {
-	PlanDir string
-	PlanID  string
-	Base    string
-	Head    string
+	PlanDir      string
+	PlanID       string
+	Base         string
+	Head         string
+	ChangeType   plan.ChangeType
+	ProposalOnly bool
 }
 
 type extractedReview = reviewcontract.Review
@@ -334,7 +554,10 @@ const (
 )
 
 func renderReviewPrompt(data reviewPromptData) (string, error) {
-	return prompts.Render(prompts.PromptReview, prompts.Data{PlanDir: data.PlanDir, PlanID: data.PlanID, Base: data.Base, Head: data.Head})
+	return prompts.Render(prompts.PromptReview, prompts.Data{
+		PlanDir: data.PlanDir, PlanID: data.PlanID, Base: data.Base, Head: data.Head,
+		ChangeType: string(data.ChangeType), ProposalOnly: data.ProposalOnly,
+	})
 }
 
 func appendPriorReworkAndBudgetContext(prompt string, detail *plan.PlanDetail, thresholds plan.AgentBudgetThresholds) string {
@@ -428,7 +651,8 @@ func createReviewWithAgentSession(ctx context.Context, executor AgentSessionExec
 			return plan.PlanReview{}, fmt.Errorf("detect review head: %w", err)
 		}
 	}
-	prompt, err := renderReviewPrompt(reviewPromptData{PlanDir: planDir, PlanID: planID, Base: base, Head: head})
+	changeType := state.Plan.ChangeType
+	prompt, err := renderReviewPrompt(reviewPromptData{PlanDir: planDir, PlanID: planID, Base: base, Head: head, ChangeType: changeType})
 	if err != nil {
 		return plan.PlanReview{}, err
 	}
@@ -437,17 +661,134 @@ func createReviewWithAgentSession(ctx context.Context, executor AgentSessionExec
 	if err != nil {
 		return plan.PlanReview{}, err
 	}
-	extracted := extractReview(result.Output)
+	extracted := extractTypedReview(result.Output, changeType)
 	reviewedAt := now(options).UTC()
 	review := plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: extracted.Verdict, Summary: extracted.Summary, FindingsCount: extracted.FindingsCount, Findings: extracted.Findings, CommitMessage: extracted.CommitMessage, Base: base, Head: head, Agent: options.Agent, ReviewedAt: reviewedAt}
 	record, err := reviewPlanRecord(recordFactory, planDir, detail)
 	if err != nil {
 		return plan.PlanReview{}, err
 	}
-	if err := record.RecordReviewCompletedWithArtifact(review, options.Agent, result.Output); err != nil {
+	persistedReview := review
+	if extracted.Verdict == plan.ReviewVerdictApprove && !extracted.ProposalUsable {
+		// The raw artifact retains the substantive exact-range approval, but the
+		// lifecycle projection must remain a non-approval until Tao can atomically
+		// persist a centrally validated proposal with it. Otherwise interruption or
+		// correction failure would leave an approval that ordinary merge accepts.
+		persistedReview.Verdict = plan.ReviewVerdictComment
+		persistedReview.CommitMessage = nil
+	}
+	if err := record.RecordReviewCompletedWithArtifact(persistedReview, options.Agent, result.Output); err != nil {
 		return plan.PlanReview{}, err
 	}
-	return review, nil
+	if extracted.Verdict != plan.ReviewVerdictApprove || extracted.ProposalUsable {
+		return persistedReview, nil
+	}
+
+	correctionPrompt, err := renderReviewPrompt(reviewPromptData{PlanID: planID, Base: base, Head: head, ChangeType: changeType, ProposalOnly: true})
+	if err != nil {
+		return persistedReview, &reviewProposalRepairError{category: "proposal_prompt_failed", cause: err}
+	}
+	repairRecorder, ok := record.(ReviewProposalCorrectionRecorder)
+	if !ok {
+		return persistedReview, &reviewProposalRepairError{category: "proposal_correction_unavailable", cause: fmt.Errorf("plan record cannot durably consume a proposal-only correction attempt")}
+	}
+	consumedAttempt := plan.FinalizationFailure{
+		Phase: plan.FinalizationFailurePhaseProposalRepair, Category: "proposal_correction_started",
+		ReviewBase: strings.TrimSpace(base), ReviewHead: strings.TrimSpace(head),
+		FailedAt: now(options).UTC(), RecoveryAction: plan.FinalizationRecoveryRerunReview,
+	}
+	if err := repairRecorder.ConsumeReviewProposalCorrection(nil, consumedAttempt); err != nil {
+		return persistedReview, fmt.Errorf("record consumed proposal correction attempt: %w", err)
+	}
+
+	correctionResult, correctionErr := executor.RunAgentSession(ctx, AgentSessionRequest{
+		PlanDir: planDir, RepoRoot: repoRoot, LogAction: "correcting review proposal for plan " + planID,
+		Prompt: correctionPrompt, CaptureOutput: true,
+	})
+	if category, inspectErr := reinspectFreshReviewProposalCorrectionWorktree(ctx, options, detail, repoRoot, git, head); inspectErr != nil {
+		return persistedReview, settleFreshReviewProposalCorrectionFailure(record, consumedAttempt, category, now(options).UTC(), inspectErr)
+	}
+	if correctionErr != nil {
+		return persistedReview, settleFreshReviewProposalCorrectionFailure(record, consumedAttempt, "proposal_correction_failed", now(options).UTC(), correctionErr)
+	}
+	proposal := reviewcontract.ParseCommitProposal(correctionResult.Output, changeType)
+	if proposal == nil {
+		return persistedReview, settleFreshReviewProposalCorrectionFailure(record, consumedAttempt, "proposal_invalid", now(options).UTC(), fmt.Errorf("proposal-only correction did not return a valid typed commit proposal"))
+	}
+	corrected := review
+	corrected.CommitMessage = proposal
+	if err := repairRecorder.RecordReviewProposalCorrection(consumedAttempt, corrected, options.Agent); err != nil {
+		return persistedReview, settleFreshReviewProposalCorrectionFailure(record, consumedAttempt, "proposal_recording_failed", now(options).UTC(), err)
+	}
+	return corrected, nil
+}
+
+// reinspectFreshReviewProposalCorrectionWorktree classifies any mutation made
+// by the untrusted correction session before its error or output is handled.
+// The captured review head and durable workspace/intent records remain the only
+// authority for choosing a recovery action.
+func reinspectFreshReviewProposalCorrectionWorktree(ctx context.Context, options agentOperationOptions, detail *plan.PlanDetail, repoRoot string, git reviewGit, reviewedHead string) (string, error) {
+	if detail != nil && recordedAutomaticWorktree(detail.State.Workspace) {
+		if reason := interruptedWorktreeIdentityError(detail, repoRoot); reason != "" {
+			return "workspace_mismatch", fmt.Errorf("reinspect review proposal correction worktree: %s", reason)
+		}
+		if err := inspectLinkedWorktreeIdentity(ctx, detail, repoRoot, options.CommandRunner); err != nil {
+			return pullRequestWorkspaceFailureCategory(err), fmt.Errorf("reinspect review proposal correction worktree ownership: %w", err)
+		}
+	}
+
+	liveBranch, err := git.CurrentBranch(ctx)
+	if err != nil {
+		return "workspace_preflight_failed", fmt.Errorf("reinspect review proposal correction worktree branch: %w", err)
+	}
+	liveBranch = strings.TrimSpace(liveBranch)
+	if liveBranch == "" {
+		return "workspace_preflight_failed", fmt.Errorf("reinspect review proposal correction worktree branch: git branch --show-current returned empty branch")
+	}
+	liveHead, err := git.RevParse(ctx, "HEAD")
+	if err != nil {
+		return "workspace_preflight_failed", fmt.Errorf("reinspect review proposal correction worktree HEAD: %w", err)
+	}
+	liveHead = strings.TrimSpace(liveHead)
+	status, err := git.StatusPorcelain(ctx)
+	if err != nil {
+		return "workspace_preflight_failed", fmt.Errorf("reinspect review proposal correction worktree status: %w", err)
+	}
+
+	recordedBranch, recordedHead := recordedWorkspaceBoundary(detail)
+	capturedBranch := strings.TrimSpace(options.StartingBranch)
+	if capturedBranch == "" {
+		capturedBranch = recordedBranch
+	}
+	if liveHead != strings.TrimSpace(reviewedHead) || (recordedHead != "" && liveHead != recordedHead) || (capturedBranch != "" && liveBranch != capturedBranch) || (recordedBranch != "" && liveBranch != recordedBranch) {
+		return "head_drift", fmt.Errorf("proposal correction changed the reviewed worktree boundary: recorded branch %q HEAD %s; captured branch %q HEAD %s; live branch %q HEAD %s", recordedBranch, diagnosticSHA(recordedHead), capturedBranch, diagnosticSHA(reviewedHead), liveBranch, diagnosticSHA(liveHead))
+	}
+	if strings.TrimSpace(status) != "" {
+		return "workspace_dirty", fmt.Errorf("proposal correction left the reviewed worktree dirty; refusing to persist the corrected review")
+	}
+	if intent := detail.State.Plan.PullRequestIntent; intent != nil && (liveBranch != strings.TrimSpace(intent.Branch) || liveHead != strings.TrimSpace(intent.HeadSHA)) {
+		return "intent_mismatch", fmt.Errorf("proposal correction worktree branch %q HEAD %s does not match recorded intent branch %q HEAD %s", liveBranch, diagnosticSHA(liveHead), intent.Branch, diagnosticSHA(intent.HeadSHA))
+	}
+	return "", nil
+}
+
+// settleFreshReviewProposalCorrectionFailure compare-and-swaps the consumed
+// marker to its terminal failure. The substantive approval remains in the raw
+// review artifact while the lifecycle projection stays a safe non-approval, so
+// failure cannot authorize integration or a second correction session.
+func settleFreshReviewProposalCorrectionFailure(record PlanMutationRecord, consumed plan.FinalizationFailure, category string, failedAt time.Time, cause error) error {
+	replacer, ok := record.(FinalizationFailureReplacer)
+	if !ok {
+		return &reviewProposalRepairError{category: category, cause: fmt.Errorf("%w; plan record cannot settle the consumed proposal correction attempt", cause)}
+	}
+	replacement := consumed
+	replacement.Category = category
+	replacement.FailedAt = failedAt
+	replacement.RecoveryAction = plan.ProposalRepairRecoveryAction(category)
+	if err := replacer.ReplaceFinalizationFailure(consumed, replacement); err != nil {
+		return &reviewProposalRepairError{category: category, cause: fmt.Errorf("%w; settle consumed proposal correction attempt: %w", cause, err)}
+	}
+	return &reviewProposalRepairError{category: category, cause: cause}
 }
 
 // requireCleanReviewWorktree blocks any run-produced uncommitted work before
@@ -473,7 +814,11 @@ func requireCleanReviewWorktree(ctx context.Context, git reviewGit, detail *plan
 }
 
 func extractReview(output string) extractedReview {
-	return reviewcontract.Parse(output, reviewcontract.CommitProposalRequired)
+	return extractTypedReview(output, "")
+}
+
+func extractTypedReview(output string, changeType plan.ChangeType) extractedReview {
+	return reviewcontract.ParseTyped(output, reviewcontract.CommitProposalRequired, changeType)
 }
 
 func reviewPlanRecord(factory PlanRecordFactory, planDir string, detail *plan.PlanDetail) (PlanMutationRecord, error) {

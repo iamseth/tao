@@ -182,6 +182,289 @@ func TestCreateReviewWithAgentSessionPersistsParsedReview(t *testing.T) {
 	}
 }
 
+func TestCreateReviewWithAgentSessionCorrectsTypedApprovalProposalOnce(t *testing.T) {
+	const (
+		wrongTypeReview = "Review prose.\n```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Exact review is approved.\",\"findings\":[],\"commit_message\":{\"subject\":\"feat(review): correct typed proposal\",\"body\":\"What:\\nCorrect the typed proposal.\\n\\nWhy:\\nMatch the reviewed plan.\"}}\n```"
+		correction      = "```tao-review-proposal-json\n{\"commit_message\":{\"subject\":\"fix(review): correct typed proposal\",\"body\":\"What:\\nCorrect the typed proposal.\\n\\nWhy:\\nMatch the reviewed plan.\"}}\n```"
+	)
+	planDir := t.TempDir()
+	repoRoot := t.TempDir()
+	reviewedAt := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	detail := runPlanDetail(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, &reviewedAt)
+	detail.Dir = planDir
+	detail.State.Repo.Root = repoRoot
+	detail.State.Repo.BaseCommit = "base123"
+	detail.State.Plan.ChangeType = plan.ChangeTypeFix
+	persistReviewState(t, planDir, detail)
+
+	outputs := []string{wrongTypeReview, correction}
+	executor := &recordingAgentSessionExecutor{}
+	executorFunc := agentSessionExecutorFunc(func(ctx context.Context, request AgentSessionRequest) (AgentSessionResult, error) {
+		executor.requests = append(executor.requests, request)
+		return AgentSessionResult{Output: outputs[len(executor.requests)-1]}, ctx.Err()
+	})
+	review, err := createReviewWithAgentSession(context.Background(), executorFunc, agentOperationOptions{Agent: "pi", reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123", currentBranch: "feature"}), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(plan.NewFileRepository("")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if review.Verdict != plan.ReviewVerdictApprove || review.Summary != "Exact review is approved." || review.Base != "base123" || review.Head != "head123" || review.CommitMessage == nil || review.CommitMessage.Subject != "fix(review): correct typed proposal" {
+		t.Fatalf("corrected review = %+v", review)
+	}
+	if len(executor.requests) != 2 {
+		t.Fatalf("session count = %d, want one review and one correction", len(executor.requests))
+	}
+	if prompt := executor.requests[0].Prompt; !strings.Contains(prompt, "Plan change type: `fix`") || !strings.Contains(prompt, "authoritative plan change type `fix`") {
+		t.Fatalf("typed review prompt missing authoritative type:\n%s", prompt)
+	}
+	correctionRequest := executor.requests[1]
+	for _, want := range []string{"correcting review proposal for plan plan-a", "COMMIT PROPOSAL CORRECTION mode", "exact `base123..head123` diff", "Do not include a verdict, summary, findings"} {
+		if !strings.Contains(correctionRequest.LogAction+"\n"+correctionRequest.Prompt, want) {
+			t.Fatalf("correction request missing %q: %#v", want, correctionRequest)
+		}
+	}
+	artifact, err := os.ReadFile(filepath.Join(planDir, plan.ReviewFile)) //nolint:gosec // test reads a t.TempDir-derived artifact.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(artifact) != wrongTypeReview {
+		t.Fatalf("review artifact changed substantive output: %q", artifact)
+	}
+}
+
+func TestCreateReviewWithAgentSessionConsumesFreshCorrectionBeforeHardInterruption(t *testing.T) {
+	const wrongTypeReview = "Review prose.\n```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Exact review is approved.\",\"findings\":[],\"commit_message\":{\"subject\":\"feat(review): wrong typed proposal\",\"body\":\"What:\\nPropose a message.\\n\\nWhy:\\nExercise interruption recovery.\"}}\n```"
+	planDir := t.TempDir()
+	repoRoot := t.TempDir()
+	reviewedAt := time.Date(2026, 8, 29, 12, 10, 0, 0, time.UTC)
+	detail := runPlanDetail(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, &reviewedAt)
+	detail.Dir = planDir
+	detail.State.Repo.Root = repoRoot
+	detail.State.Repo.BaseCommit = "base123"
+	detail.State.Plan.ChangeType = plan.ChangeTypeFix
+	persistReviewState(t, planDir, detail)
+
+	interruption := errors.New("simulated hard interruption")
+	calls := 0
+	executor := agentSessionExecutorFunc(func(context.Context, AgentSessionRequest) (AgentSessionResult, error) {
+		calls++
+		if calls == 1 {
+			return AgentSessionResult{Output: wrongTypeReview}, nil
+		}
+		persisted, err := plan.ReadState(planDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		review := persisted.Plan.Review
+		failure := persisted.Plan.FinalizationFailure
+		if review == nil || review.Verdict != plan.ReviewVerdictComment || review.IsApproved() || review.Summary != "Exact review is approved." || review.Base != "base123" || review.Head != "head123" || review.CommitMessage != nil {
+			t.Fatalf("safe review projection at correction launch = %#v", review)
+		}
+		if failure == nil || failure.Phase != plan.FinalizationFailurePhaseProposalRepair || failure.Category != "proposal_correction_started" || failure.ReviewBase != "base123" || failure.ReviewHead != "head123" {
+			t.Fatalf("durable consumed correction at launch = %#v", failure)
+		}
+		panic(interruption)
+	})
+
+	func() {
+		defer func() {
+			recovered := recover()
+			recoveredErr, ok := recovered.(error)
+			if !ok || !errors.Is(recoveredErr, interruption) {
+				t.Fatalf("recovered interruption = %#v, want sentinel", recovered)
+			}
+		}()
+		_, _ = createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123"}), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(plan.NewFileRepository("")))
+	}()
+
+	persisted, err := plan.ReadState(planDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded := *detail
+	reloaded.State = persisted
+	if !completedRunReviewAttempted(&reloaded) {
+		t.Fatal("durable substantive review must prevent a resumed full run from rerunning review")
+	}
+	if review := plan.CurrentReview(&reloaded); review == nil || review.IsApproved() || review.Verdict != plan.ReviewVerdictComment {
+		t.Fatalf("interrupted correction passed the ordinary approval gate: %#v", review)
+	}
+	artifact, err := os.ReadFile(filepath.Join(planDir, plan.ReviewFile)) //nolint:gosec // test reads a t.TempDir-derived artifact.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(artifact), `"verdict":"approve"`) || !strings.Contains(string(artifact), "Exact review is approved.") {
+		t.Fatalf("substantive approval was not retained in review artifact: %q", artifact)
+	}
+	reviewer := struct {
+		ReviewCreator
+		AgentSessionExecutor
+	}{AgentSessionExecutor: agentSessionExecutorFunc(func(context.Context, AgentSessionRequest) (AgentSessionResult, error) {
+		calls++
+		return AgentSessionResult{}, errors.New("second correction must not launch")
+	})}
+	finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{}, RunDependencies{ReviewCreator: reviewer}))
+	if err := finalizer.ensureApprovedReviewProposal(context.Background(), &reloaded, repoRoot, "fix/plan-a", "head123"); err == nil || !strings.Contains(err.Error(), "already attempted") {
+		t.Fatalf("resumed proposal preflight error = %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("agent session calls = %d, want one substantive review and one correction", calls)
+	}
+}
+
+func TestCreateReviewWithAgentSessionSkipsCorrectionForValidTypedApproval(t *testing.T) {
+	const output = "Review prose.\n```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Exact review is approved.\",\"findings\":[],\"commit_message\":{\"subject\":\"fix(review): retain valid typed proposal\",\"body\":\"What:\\nRetain the valid proposal.\\n\\nWhy:\\nAvoid an unnecessary provider session.\"}}\n```"
+	planDir := t.TempDir()
+	repoRoot := t.TempDir()
+	reviewedAt := time.Date(2026, 8, 29, 12, 15, 0, 0, time.UTC)
+	detail := runPlanDetail(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, &reviewedAt)
+	detail.Dir = planDir
+	detail.State.Repo.Root = repoRoot
+	detail.State.Repo.BaseCommit = "base123"
+	detail.State.Plan.ChangeType = plan.ChangeTypeFix
+	persistReviewState(t, planDir, detail)
+	executor := &recordingAgentSessionExecutor{result: AgentSessionResult{Output: output}}
+
+	review, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123"}), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(plan.NewFileRepository("")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if review.Verdict != plan.ReviewVerdictApprove || review.CommitMessage == nil || review.CommitMessage.Subject != "fix(review): retain valid typed proposal" {
+		t.Fatalf("valid typed review = %+v", review)
+	}
+	if len(executor.requests) != 1 {
+		t.Fatalf("session count = %d, want no correction session", len(executor.requests))
+	}
+}
+
+func TestCreateReviewWithAgentSessionReportsOneCorrectionExhaustion(t *testing.T) {
+	const initial = "Review prose.\n```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Exact review is approved.\",\"findings\":[],\"commit_message\":\"malformed\"}\n```"
+	planDir := t.TempDir()
+	repoRoot := t.TempDir()
+	reviewedAt := time.Date(2026, 8, 29, 12, 30, 0, 0, time.UTC)
+	detail := runPlanDetail(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, &reviewedAt)
+	detail.Dir = planDir
+	detail.State.Repo.Root = repoRoot
+	detail.State.Repo.BaseCommit = "base123"
+	detail.State.Plan.ChangeType = plan.ChangeTypeFix
+	persistReviewState(t, planDir, detail)
+
+	var requests []AgentSessionRequest
+	executor := agentSessionExecutorFunc(func(ctx context.Context, request AgentSessionRequest) (AgentSessionResult, error) {
+		requests = append(requests, request)
+		if len(requests) == 1 {
+			return AgentSessionResult{Output: initial}, ctx.Err()
+		}
+		return AgentSessionResult{Output: "```tao-review-proposal-json\n{bad}\n```"}, ctx.Err()
+	})
+	review, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123", currentBranch: "feature"}), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(plan.NewFileRepository("")))
+	repairErr, ok := errors.AsType[*reviewProposalRepairError](err)
+	if !ok || repairErr.category != "proposal_invalid" || !strings.Contains(err.Error(), "valid typed commit proposal") {
+		t.Fatalf("correction exhaustion error = %v", err)
+	}
+	if review.Verdict != plan.ReviewVerdictComment || review.IsApproved() || review.Summary != "Exact review is approved." || review.Base != "base123" || review.Head != "head123" || review.CommitMessage != nil {
+		t.Fatalf("exhausted review passed the ordinary approval gate: %+v", review)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("session count = %d, want exactly two", len(requests))
+	}
+	persisted, err := plan.ReadState(planDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Plan.Review == nil || persisted.Plan.Review.Verdict != plan.ReviewVerdictComment || persisted.Plan.Review.IsApproved() || persisted.Plan.Review.Summary != "Exact review is approved." || persisted.Plan.Review.CommitMessage != nil {
+		t.Fatalf("persisted exhausted review passed the ordinary approval gate: %+v", persisted.Plan.Review)
+	}
+	artifact, err := os.ReadFile(filepath.Join(planDir, plan.ReviewFile)) //nolint:gosec // test reads a t.TempDir-derived artifact.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(artifact), `"verdict":"approve"`) || !strings.Contains(string(artifact), "Exact review is approved.") {
+		t.Fatalf("substantive approval was not retained in review artifact: %q", artifact)
+	}
+	failure := persisted.Plan.FinalizationFailure
+	if failure == nil || failure.Phase != plan.FinalizationFailurePhaseProposalRepair || failure.Category != "proposal_invalid" || failure.ReviewBase != "base123" || failure.ReviewHead != "head123" {
+		t.Fatalf("settled correction failure = %#v", failure)
+	}
+}
+
+func TestCreateReviewWithAgentSessionReinspectsFailedCorrectionBeforeClassifyingOutput(t *testing.T) {
+	const wrongTypeReview = "Review prose.\n```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Exact review is approved.\",\"findings\":[],\"commit_message\":{\"subject\":\"feat(review): wrong typed proposal\",\"body\":\"What:\\nPropose a message.\\n\\nWhy:\\nExercise correction boundary recovery.\"}}\n```"
+
+	tests := []struct {
+		name       string
+		category   string
+		correction func(*testing.T, pullRequestOrchestrationFixture) (AgentSessionResult, error)
+	}{
+		{
+			name:     "erroring correction dirties worktree",
+			category: "workspace_dirty",
+			correction: func(t *testing.T, fixture pullRequestOrchestrationFixture) (AgentSessionResult, error) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(fixture.worktreeRoot, "dirty-after-correction.txt"), []byte("dirty\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return AgentSessionResult{}, errors.New("proposal correction session failed")
+			},
+		},
+		{
+			name:     "invalid correction commits",
+			category: "head_drift",
+			correction: func(t *testing.T, fixture pullRequestOrchestrationFixture) (AgentSessionResult, error) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(fixture.worktreeRoot, "committed-after-correction.txt"), []byte("committed\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				runCommitTestGitCommand(t, fixture.worktreeRoot, "add", "committed-after-correction.txt")
+				runCommitTestGitCommand(t, fixture.worktreeRoot, "commit", "-m", "test: advance correction head")
+				return AgentSessionResult{Output: "not a valid proposal"}, nil
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newPullRequestOrchestrationFixture(t)
+			repo := plan.NewFileRepository(fixture.plansRoot)
+			detail, err := repo.ResolvePlan(context.Background(), fixture.planDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			executor := agentSessionExecutorFunc(func(context.Context, AgentSessionRequest) (AgentSessionResult, error) {
+				calls++
+				if calls == 1 {
+					return AgentSessionResult{Output: wrongTypeReview}, nil
+				}
+				return tt.correction(t, fixture)
+			})
+			reviewedAt := time.Date(2026, 8, 31, 16, 0, 0, 0, time.UTC)
+			review, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{
+				Agent: "pi", CommitPolicy: CommitPolicySlice, StartingBranch: fixture.branch,
+				CommandRunner: defaultCommandRunner, reviewGitFactory: newReviewGitFactory(defaultCommandRunner),
+				Now: func() time.Time { return reviewedAt },
+			}, ReviewRun{PlanDir: fixture.planDir, PlanID: "plan-a", Detail: detail, RepoRoot: fixture.worktreeRoot, HeadSHA: fixture.head}, fileReviewRecordFactory(repo))
+			repairErr, ok := errors.AsType[*reviewProposalRepairError](err)
+			if !ok || repairErr.category != tt.category {
+				t.Fatalf("correction error = %v, want category %q", err, tt.category)
+			}
+			if calls != 2 {
+				t.Fatalf("agent session calls = %d, want substantive review and one correction", calls)
+			}
+			if review.IsApproved() || review.Verdict != plan.ReviewVerdictComment || review.CommitMessage != nil {
+				t.Fatalf("failed correction passed the ordinary approval gate: %#v", review)
+			}
+			reloaded, err := repo.ResolvePlan(context.Background(), fixture.planDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			failure := reloaded.State.Plan.FinalizationFailure
+			if failure == nil || failure.Phase != plan.FinalizationFailurePhaseProposalRepair || failure.Category != tt.category || failure.ReviewBase != fixture.base || failure.ReviewHead != fixture.head || failure.RecoveryAction != plan.FinalizationRecoveryRestoreBoundary {
+				t.Fatalf("settled correction boundary failure = %#v", failure)
+			}
+		})
+	}
+}
+
 func TestCreateReviewWithAgentSessionUsesWorkspaceBaseSHA(t *testing.T) {
 	planDir := t.TempDir()
 	repoRoot := t.TempDir()
@@ -692,10 +975,12 @@ func reviewGateDetail(expected ...string) *plan.PlanDetail {
 type fakeReviewGit struct {
 	status           string
 	head             string
+	currentBranch    string
 	defaultBranch    string
 	mergeBase        string
 	statusErr        error
 	headErr          error
+	currentBranchErr error
 	defaultBranchErr error
 	mergeBaseErr     error
 	statusHook       func()
@@ -717,6 +1002,11 @@ func (g *fakeReviewGit) StatusPorcelain(context.Context) (string, error) {
 func (g *fakeReviewGit) RevParse(_ context.Context, revision string) (string, error) {
 	g.calls = append(g.calls, "rev-parse "+revision)
 	return g.head, g.headErr
+}
+
+func (g *fakeReviewGit) CurrentBranch(context.Context) (string, error) {
+	g.calls = append(g.calls, "current-branch")
+	return g.currentBranch, g.currentBranchErr
 }
 
 func (g *fakeReviewGit) DefaultBranch(context.Context) (string, error) {
@@ -1036,7 +1326,7 @@ func TestExtractApprovedReviewRequiresValidCommitMessage(t *testing.T) {
 	}
 }
 
-func TestExtractApprovedReviewInvalidCommitMessageFallsBackToComment(t *testing.T) {
+func TestExtractApprovedReviewInvalidCommitMessagePreservesRepairableApproval(t *testing.T) {
 	tests := map[string]string{
 		"missing":  "",
 		"invalid":  `,"commit_message":{"subject":"review work","body":"details"}`,
@@ -1046,8 +1336,8 @@ func TestExtractApprovedReviewInvalidCommitMessageFallsBackToComment(t *testing.
 		t.Run(name, func(t *testing.T) {
 			output := "Review.\n```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Ready\"" + commitMessage + "}\n```"
 			got := extractReview(output)
-			if got.Verdict != plan.ReviewVerdictComment || got.CommitMessage != nil || got.FindingsCount != 0 {
-				t.Fatalf("invalid approval must use comment fallback: %+v", got)
+			if got.Verdict != plan.ReviewVerdictApprove || got.CommitMessage != nil || got.ProposalUsable || got.FindingsCount != 0 || got.Summary != "Ready" {
+				t.Fatalf("invalid proposal must preserve a repairable approval: %+v", got)
 			}
 		})
 	}

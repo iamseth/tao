@@ -27,6 +27,16 @@ type PlanRollup struct {
 	Verdicts  map[string]int   `json:"verdicts,omitempty"`
 }
 
+// FinalizationRecovery is the bounded read-side projection of a current
+// finalization failure. It deliberately excludes review ranges, branch names,
+// and commit identities; command-side gates remain the recovery authority.
+type FinalizationRecovery struct {
+	Phase          FinalizationFailurePhase `json:"phase"`
+	Category       string                   `json:"category"`
+	FailedAt       time.Time                `json:"failed_at"`
+	RecoveryAction string                   `json:"recovery_action"`
+}
+
 // PlanSummary is the compact representation used by list views.
 type PlanSummary struct {
 	ID                               string
@@ -55,6 +65,8 @@ type PlanSummary struct {
 	Capabilities                     RunCapabilities
 	SliceCompletionPending           bool
 	UnresolvedReworkStop             bool
+	NextAction                       PlanNextAction
+	FinalizationRecovery             *FinalizationRecovery
 	PlanningSessionPresent           bool
 	PlanningSessionValid             bool
 	PlanningSessionUnavailableReason string
@@ -63,6 +75,7 @@ type PlanSummary struct {
 	PlanningSessionTotalMessages     int64
 	Metrics                          AgentMetricsTotals
 	PullRequest                      *PullRequest
+	FinalizationFailure              *FinalizationFailure
 	Workspace                        *Workspace
 	Warnings                         []string
 }

@@ -23,6 +23,7 @@ type DerivedPlan struct {
 	Elapsed                time.Duration
 	SliceCompletionPending bool
 	UnresolvedReworkStop   bool
+	FinalizationRecovery   *FinalizationRecovery
 	NextAction             PlanNextAction
 }
 
@@ -73,6 +74,7 @@ func Derive(detail *PlanDetail, now time.Time) DerivedPlan {
 		CompletedAt:            completedAt,
 		SliceCompletionPending: SliceCompletionPending(detail),
 		UnresolvedReworkStop:   HasUnresolvedReworkStop(detail.Events),
+		FinalizationRecovery:   CurrentFinalizationRecovery(detail),
 	}
 	derived.NextAction = deriveNextAction(detail, derived)
 	if !now.IsZero() {
@@ -105,9 +107,22 @@ func deriveNextAction(detail *PlanDetail, derived DerivedPlan) PlanNextAction {
 		}
 		return PlanNextAction{Primary: PlanAction{Kind: kind, Class: class, Command: cmd, Reason: reason}, Alternatives: alternatives}
 	}
+	instruction := func(text, reason string) PlanNextAction {
+		return PlanNextAction{Primary: PlanAction{Kind: PlanActionRecoverPullRequest, Class: PlanActionClassRecovery, Instruction: text, Reason: reason}, Alternatives: []PlanAction{}}
+	}
 	administrativeMerge := PlanAction{
 		Kind: PlanActionMerge, Class: PlanActionClassAdministrative,
 		Command: command("tao merge --force"), Reason: "administrative exception that bypasses review and merge safeguards",
+	}
+	currentReviewAction := func(reason string) PlanNextAction {
+		review := CurrentReview(detail)
+		if review != nil && review.Status == ReviewStatusCompleted && review.Verdict == ReviewVerdictChangesRequested {
+			if derived.UnresolvedReworkStop {
+				return primary(PlanActionRestartRework, PlanActionClassRecovery, command("tao run --rework-restart"), reason+"; the actionable review is behind a stopped automatic rework cycle")
+			}
+			return primary(PlanActionRework, PlanActionClassRecovery, command("tao rework"), reason+"; the current review has actionable changes")
+		}
+		return primary(PlanActionReview, PlanActionClassRecovery, command("tao review --run"), reason+"; record a fresh current review before any pull-request mutation")
 	}
 
 	// Durable, unsettled transactions take priority over gates and ordinary
@@ -130,8 +145,58 @@ func deriveNextAction(detail *PlanDetail, derived DerivedPlan) PlanNextAction {
 	if detail.State.Plan.MergeCommitIntent != nil {
 		return primary(PlanActionRecoverMerge, PlanActionClassRecovery, command("tao merge"), "an interrupted merge transaction must be settled before other work")
 	}
-	if detail.State.Plan.PullRequestIntent != nil {
-		return primary(PlanActionRecoverPullRequest, PlanActionClassRecovery, command("tao run --pull-request"), "an interrupted pull-request handoff must be settled before other work")
+	if recovery := derived.FinalizationRecovery; recovery != nil {
+		category := strings.ReplaceAll(recovery.Category, "_", " ")
+		switch recovery.Phase {
+		case FinalizationFailurePhaseProposalRepair:
+			switch recovery.RecoveryAction {
+			case FinalizationRecoveryRestoreBoundary:
+				if recovery.Category == "workspace_mismatch" {
+					return instruction("Repair or restore the plan's recorded linked worktree at its recorded path, branch, and HEAD before recording a fresh review", "review proposal repair failed ("+category+"); a fresh review cannot restore the durable linked-worktree boundary")
+				}
+				if recovery.Category == "workspace_dirty" {
+					return instruction("Restore a clean plan worktree at its recorded branch and HEAD before recording a fresh review", "review proposal repair failed ("+category+"); a fresh review cannot repair a dirty worktree")
+				}
+				if recovery.Category == "workspace_preflight_failed" {
+					return instruction("Restore a clean plan worktree at its recorded branch and HEAD before recording a fresh review", "review proposal repair failed ("+category+"); a fresh review cannot repair an uninspectable worktree")
+				}
+				return instruction("Restore the plan worktree to its recorded branch and HEAD before recording a fresh review", "review proposal repair failed ("+category+"); a fresh review cannot restore the durable workspace boundary")
+			case FinalizationRecoveryRepairIntent:
+				return instruction("Repair the conflicting durable pull-request intent so it matches the recorded workspace boundary before recording a fresh review", "review proposal repair failed ("+category+"); a fresh review cannot repair conflicting intent evidence")
+			default:
+				return currentReviewAction("review proposal repair failed (" + category + ")")
+			}
+		case FinalizationFailurePhasePullRequest:
+			switch recovery.RecoveryAction {
+			case FinalizationRecoveryRestoreBoundary:
+				if recovery.Category == "workspace_mismatch" {
+					return instruction("Repair or restore the plan's recorded linked worktree at its recorded path, branch, and HEAD before retrying pull-request finalization", "pull-request finalization failed ("+category+"); the recorded linked worktree is missing or has incompatible identity or lifecycle state")
+				}
+				if recovery.Category == "workspace_dirty" {
+					return instruction("Restore a clean plan worktree at its recorded branch and HEAD before retrying pull-request finalization", "pull-request finalization failed ("+category+"); retry cannot safely proceed with uncommitted worktree changes")
+				}
+				return instruction("Restore the plan worktree to its recorded branch and HEAD before retrying pull-request finalization", "pull-request finalization failed ("+category+"); the live worktree is outside the durable recovery boundary")
+			case FinalizationRecoveryRerunReview:
+				return currentReviewAction("pull-request finalization failed (" + category + ")")
+			case FinalizationRecoveryRepairIntent:
+				return instruction("Repair the conflicting durable pull-request intent so it matches the recorded workspace boundary before retrying finalization", "pull-request finalization failed ("+category+"); retry cannot resolve conflicting intent evidence")
+			case FinalizationRecoveryRepairIdentity:
+				return instruction("Repair the stale recorded pull-request number and URL only from existing Tao-owned identity evidence, or clear both fields while retaining the recorded branch and HEAD; do not adopt a remotely discovered identity or authorize metadata mutation", "pull-request finalization failed ("+category+"); retry cannot reconcile stale recorded identity without changing its ownership meaning")
+			default:
+				return primary(PlanActionRecoverPullRequest, PlanActionClassRecovery, command("tao run --pull-request"), "pull-request finalization failed ("+category+"); retry the exact-head handoff")
+			}
+		}
+	}
+	// A current merge is terminal even when RecordMerged follows an interrupted
+	// pull-request handoff and leaves its exact identity intent intact.
+	if PlanIsMerged(detail.Events) {
+		return primary(PlanActionNone, PlanActionClassTerminal, "", "recorded merge evidence proves the plan is integrated")
+	}
+	if detail.State.Plan.PullRequestIntent != nil && derived.Complete {
+		if review := CurrentReview(detail); review == nil || !review.IsApproved() {
+			return currentReviewAction("an interrupted pull-request handoff no longer has a current approval")
+		}
+		return primary(PlanActionRecoverPullRequest, PlanActionClassRecovery, command("tao run --pull-request"), "an interrupted pull-request handoff has a current approval and must be settled before other work")
 	}
 	if derived.UnresolvedReworkStop {
 		return primary(PlanActionRestartRework, PlanActionClassRecovery, command("tao run --rework-restart"), "automatic rework stopped and requires an explicit bounded restart")
@@ -169,9 +234,6 @@ func deriveNextAction(detail *PlanDetail, derived DerivedPlan) PlanNextAction {
 		return primary(PlanActionRepairVerification, PlanActionClassRecovery, command("tao run --repair-verification"), "current final repository verification failed on the completed branch")
 	}
 
-	if PlanIsMerged(detail.Events) {
-		return primary(PlanActionNone, PlanActionClassTerminal, "", "recorded merge evidence proves the plan is integrated")
-	}
 	if PlanIsPullRequestComplete(detail) {
 		return primary(PlanActionNone, PlanActionClassTerminal, "", "the approved pull-request handoff is complete; remote integration is not asserted")
 	}
@@ -256,6 +318,78 @@ func SliceCompleted(detail *PlanDetail, sliceID string) bool {
 // not yet been settled by a valid completion outcome.
 func SliceCompletionPending(detail *PlanDetail) bool {
 	return automaticSliceCompletionError(detail) != nil
+}
+
+// CurrentFinalizationRecovery returns only valid current bounded evidence.
+// Failure evidence is descriptive and never grants command-side authority.
+func CurrentFinalizationRecovery(detail *PlanDetail) *FinalizationRecovery {
+	if detail == nil || PlanIsMerged(detail.Events) || PlanIsPullRequestComplete(detail) {
+		return nil
+	}
+	failure := detail.State.Plan.FinalizationFailure
+	recovery := FinalizationRecoveryFromFailure(failure)
+	if recovery == nil {
+		return nil
+	}
+	switch failure.Phase {
+	case FinalizationFailurePhaseProposalRepair:
+		expectedAction := ProposalRepairRecoveryAction(failure.Category)
+		// Older proposal-repair failures used generic resume or fresh-review
+		// guidance. Keep them readable, but project structural failures to the
+		// prerequisite workspace or intent repair they actually require.
+		if failure.RecoveryAction != expectedAction && failure.RecoveryAction != FinalizationRecoveryResumePullRequest && failure.RecoveryAction != FinalizationRecoveryRerunReview {
+			return nil
+		}
+		review := CurrentReview(detail)
+		if review == nil {
+			return nil
+		}
+		reviewBase, reviewHead := finalizationReviewRange(detail, review)
+		if reviewBase != failure.ReviewBase || reviewHead != failure.ReviewHead {
+			return nil
+		}
+		recovery.RecoveryAction = expectedAction
+	case FinalizationFailurePhasePullRequest:
+		expectedAction := PullRequestFinalizationRecoveryAction(failure.Category)
+		// Historical mismatch failures were recorded with the generic resume
+		// action. Keep them readable while projecting the now-classified safe
+		// action; failure metadata remains descriptive and grants no authority.
+		legacyIdentityAction := failure.Category == "identity_mismatch" && failure.RecoveryAction == FinalizationRecoveryRepairIntent
+		if failure.RecoveryAction != expectedAction && failure.RecoveryAction != FinalizationRecoveryResumePullRequest && !legacyIdentityAction {
+			return nil
+		}
+		workspace := detail.State.Workspace
+		if workspace == nil || workspace.Branch != failure.Branch || workspace.HeadSHA != failure.HeadSHA {
+			return nil
+		}
+		recovery.RecoveryAction = expectedAction
+	}
+	return recovery
+}
+
+// finalizationReviewRange applies the compatibility boundary used when
+// finalizing historical approvals that predate persisted review bases.
+func finalizationReviewRange(detail *PlanDetail, review *PlanReview) (string, string) {
+	base := strings.TrimSpace(review.Base)
+	if base == "" && detail.State.Workspace != nil {
+		base = strings.TrimSpace(detail.State.Workspace.BaseSHA)
+	}
+	if base == "" {
+		base = strings.TrimSpace(detail.State.Repo.BaseCommit)
+	}
+	return base, strings.TrimSpace(review.Head)
+}
+
+// FinalizationRecoveryFromFailure creates the safe shared read projection used
+// by status, event, and report views.
+func FinalizationRecoveryFromFailure(failure *FinalizationFailure) *FinalizationRecovery {
+	if failure == nil || failure.Validate() != nil {
+		return nil
+	}
+	return &FinalizationRecovery{
+		Phase: failure.Phase, Category: failure.Category, FailedAt: failure.FailedAt,
+		RecoveryAction: failure.RecoveryAction,
+	}
 }
 
 // HasUnresolvedReworkStop reports whether the latest automatic-rework signal
@@ -407,6 +541,8 @@ func Summarize(detail *PlanDetail, now time.Time) PlanSummary {
 		Capabilities:                     derived.Capabilities,
 		SliceCompletionPending:           derived.SliceCompletionPending,
 		UnresolvedReworkStop:             derived.UnresolvedReworkStop,
+		NextAction:                       derived.NextAction,
+		FinalizationRecovery:             derived.FinalizationRecovery,
 		PlanningSessionPresent:           planningSummary.Present,
 		PlanningSessionValid:             planningSummary.Valid,
 		PlanningSessionUnavailableReason: planningSummary.UnavailableReason,
@@ -414,8 +550,9 @@ func Summarize(detail *PlanDetail, now time.Time) PlanSummary {
 		PlanningSessionTotalTokens:       planningSummary.TotalTokens,
 		PlanningSessionTotalMessages:     planningSummary.TotalMessages,
 		Metrics:                          SummarizeAgentTelemetry(detail).Totals,
-		PullRequest:                      state.Plan.PullRequest,
-		Workspace:                        state.Workspace,
+		PullRequest:                      clonePullRequest(state.Plan.PullRequest),
+		FinalizationFailure:              cloneFinalizationFailure(state.Plan.FinalizationFailure),
+		Workspace:                        cloneWorkspace(state.Workspace),
 		Warnings:                         detail.Warnings,
 	}
 

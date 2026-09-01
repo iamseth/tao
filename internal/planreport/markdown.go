@@ -29,9 +29,10 @@ var reportHeadings = map[string]struct{}{
 }
 
 var reportLabels = map[string]struct{}{
-	"**Verification**": {},
-	"**Execution**":    {},
-	"**Tokens**":       {},
+	"**Verification**":          {},
+	"**Execution**":             {},
+	"**Tokens**":                {},
+	"**Finalization recovery**": {},
 }
 
 type markdownBuilder struct {
@@ -106,6 +107,13 @@ func RenderFull(report FullReport) ([]byte, error) {
 		b.paragraph("No review recorded.")
 	} else {
 		b.optionalParagraph(report.Review.Summary)
+	}
+	if report.Finalization.Available {
+		b.label("**Finalization recovery**")
+		b.item("Failed phase", displayToken(knownFinalizationPhaseToken(report.Finalization.Phase)))
+		b.optionalItem("Category", report.Finalization.Category)
+		b.item("Failed at", formatSnapshot(report.Finalization.FailedAt))
+		b.optionalItem("Next action", report.Finalization.Action)
 	}
 
 	b.heading("## Redactions and Omissions")
@@ -435,7 +443,7 @@ func numberedLine(line string) bool {
 
 func allowsBullets(heading string) bool {
 	return heading == "### Planning Effort" || heading == "## Planned Slices" ||
-		heading == "**Verification**" || heading == "**Execution**" || heading == "**Tokens**" ||
+		heading == "**Verification**" || heading == "**Execution**" || heading == "**Tokens**" || heading == "**Finalization recovery**" ||
 		heading == "### Safety transformations"
 }
 
@@ -565,6 +573,15 @@ func formatSliceCommit(value SliceCommitSummary) string {
 }
 
 func displayToken(value string) string { return strings.ReplaceAll(value, "_", " ") }
+
+func knownFinalizationPhaseToken(value string) string {
+	switch value {
+	case "proposal_repair", "pull_request_finalization":
+		return value
+	default:
+		return "unavailable"
+	}
+}
 
 func disclosureSection(section Section) string {
 	switch section {

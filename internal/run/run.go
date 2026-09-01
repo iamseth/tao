@@ -74,6 +74,27 @@ type RunMetadataRecorder interface {
 	RecordPullRequest(pr plan.PullRequest, branch, headSHA string) error
 }
 
+// FinalizationFailureRecorder is deliberately optional on the broad mutation
+// interface so focused collaborators need not implement lifecycle evidence
+// they never exercise. Production plan records implement it.
+type FinalizationFailureRecorder interface {
+	RecordFinalizationFailure(plan.FinalizationFailure) error
+}
+
+// FinalizationFailureReplacer atomically compares and supersedes current
+// failure evidence. Replacement must never degrade to a clear-then-record pair.
+type FinalizationFailureReplacer interface {
+	ReplaceFinalizationFailure(plan.FinalizationFailure, plan.FinalizationFailure) error
+}
+
+// ReviewProposalCorrectionRecorder atomically consumes the correction attempt,
+// optionally superseding exact pre-correction workspace evidence, then replaces
+// the exact reviewed approval only while that consumed marker remains current.
+type ReviewProposalCorrectionRecorder interface {
+	ConsumeReviewProposalCorrection(*plan.FinalizationFailure, plan.FinalizationFailure) error
+	RecordReviewProposalCorrection(plan.FinalizationFailure, plan.PlanReview, string) error
+}
+
 // ReviewRecorder owns durable review outcomes used by run finalization.
 type ReviewRecorder interface {
 	RecordReviewError(review plan.PlanReview, agent string) error
@@ -129,13 +150,14 @@ type SliceExecutor interface {
 }
 
 type PullRequestRun struct {
-	PlanDir  string
-	PlanID   string
-	LogPath  string
-	Detail   *plan.PlanDetail
-	RepoRoot string
-	Branch   string
-	HeadSHA  string
+	PlanDir        string
+	PlanID         string
+	LogPath        string
+	Detail         *plan.PlanDetail
+	RepoRoot       string
+	Branch         string
+	HeadSHA        string
+	mutationRecord PlanMutationRecord
 }
 
 type PullRequestCreator interface {
@@ -254,7 +276,7 @@ func CheckRequestCanStart(detail *plan.PlanDetail, request Request) error {
 	if request.RepairVerification && plan.CurrentFailedFinalVerification(detail) != nil {
 		return nil
 	}
-	if capabilities.CanRun || ((request.Continue || request.RestartBlocked) && capabilities.CanContinue) {
+	if capabilities.CanRun || (capabilities.Complete && request.PullRequest) || ((request.Continue || request.RestartBlocked) && capabilities.CanContinue) {
 		return nil
 	}
 	if (request.Continue || request.RestartBlocked) && capabilities.ContinueDisabledReason != "" {
@@ -294,7 +316,8 @@ func (s Service) Execute(ctx context.Context, request Request) error {
 					return err
 				}
 				prerequisiteResolver, _ := s.repo.(plan.ExactPlanResolver)
-				if !config.RestartBlocked && len(detail.State.Plan.RuntimePrerequisites) > 0 {
+				resumingFinalization := plan.AnalyzeRunCapabilities(detail).Complete && config.PullRequest
+				if !resumingFinalization && !config.RestartBlocked && len(detail.State.Plan.RuntimePrerequisites) > 0 {
 					baseline, err := resolvePrerequisiteBaseline(ownedCtx, detail, config, s.dependencies.CommandRunner, false)
 					if err != nil {
 						return cannotStartf("%s", err)

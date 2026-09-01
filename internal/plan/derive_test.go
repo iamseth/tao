@@ -930,6 +930,238 @@ func TestDeriveNextActionLifecyclePrecedence(t *testing.T) {
 	}
 }
 
+func TestDeriveNextActionUsesCurrentReviewForPendingPullRequestIntent(t *testing.T) {
+	tests := []struct {
+		name        string
+		review      *PlanReview
+		events      []Event
+		wantKind    PlanActionKind
+		wantCommand string
+	}{
+		{name: "missing review", wantKind: PlanActionReview, wantCommand: "tao review --run plan"},
+		{name: "comment review", review: &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictComment}, wantKind: PlanActionReview, wantCommand: "tao review --run plan"},
+		{name: "error review", review: &PlanReview{Status: ReviewStatusError}, wantKind: PlanActionReview, wantCommand: "tao review --run plan"},
+		{name: "changes requested", review: &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictChangesRequested}, wantKind: PlanActionRework, wantCommand: "tao rework plan"},
+		{name: "changes requested after rework stop", review: &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictChangesRequested}, events: []Event{{Type: EventTypeReworkStopped}}, wantKind: PlanActionRestartRework, wantCommand: "tao run --rework-restart plan"},
+		{name: "approved review", review: &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove}, wantKind: PlanActionRecoverPullRequest, wantCommand: "tao run --pull-request plan"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			detail := reviewedCapabilityDetail()
+			detail.State.Plan.PullRequestIntent = &PullRequest{Branch: "fix/plan", HeadSHA: "head123"}
+			detail.State.Plan.Review = test.review
+			detail.Events = test.events
+
+			action := DeriveNextAction(detail).Primary
+			if action.Kind != test.wantKind || action.Class != PlanActionClassRecovery || action.Command != test.wantCommand {
+				t.Fatalf("pending-intent action = %#v, want kind %q recovery command %q", action, test.wantKind, test.wantCommand)
+			}
+		})
+	}
+
+	reopened := &PlanDetail{
+		State: State{Status: StatusInProgress, Plan: PlanState{
+			ID: "plan", PendingSlices: []string{"r101-fix"},
+			PullRequestIntent: &PullRequest{Branch: "fix/plan", HeadSHA: "old-head"},
+			Review:            &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictChangesRequested},
+		}},
+		Slices: SlicesFile{Slices: []Slice{{ID: "r101-fix", Status: StatusPending}}},
+		Events: []Event{{Type: EventTypePlanReviewed}, {Type: EventTypePlanReopened}},
+	}
+	if action := DeriveNextAction(reopened).Primary; action.Kind != PlanActionRun || action.Command != "tao run plan" {
+		t.Fatalf("reopened plan action = %#v, want runnable rework to proceed before later intent settlement", action)
+	}
+
+	failed := reviewedCapabilityDetail()
+	failed.State.Plan.Review = &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictChangesRequested, Head: "head123"}
+	failed.State.Plan.PullRequestIntent = &PullRequest{Branch: "fix/plan", HeadSHA: "head123"}
+	failed.State.Workspace = &Workspace{Branch: "fix/plan", HeadSHA: "head123"}
+	failed.State.Plan.FinalizationFailure = &FinalizationFailure{
+		Phase: FinalizationFailurePhasePullRequest, Category: "review_not_approved", Branch: "fix/plan", HeadSHA: "head123",
+		FailedAt: time.Now(), RecoveryAction: FinalizationRecoveryRerunReview,
+	}
+	if action := DeriveNextAction(failed).Primary; action.Kind != PlanActionRework || action.Command != "tao rework plan" {
+		t.Fatalf("recorded non-approval action = %#v, want the current actionable review to remain authoritative", action)
+	}
+}
+
+func TestDeriveNextActionTreatsMergeAsTerminalWithIdentityBearingPullRequestIntent(t *testing.T) {
+	detail := reviewedCapabilityDetail()
+	detail.State.Plan.Review = &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Head: "head123"}
+	detail.State.Plan.PullRequestIntent = &PullRequest{
+		Number: 42, URL: "https://example.test/pull/42", CreatedAt: time.Date(2026, 8, 31, 18, 0, 0, 0, time.UTC),
+		Branch: "fix/plan", HeadSHA: "head123",
+	}
+	detail.Events = []Event{{Type: EventTypePlanMerged}}
+
+	if !PlanIsMerged(detail.Events) {
+		t.Fatal("fixture must contain current merge evidence")
+	}
+	action := DeriveNextAction(detail).Primary
+	if action.Kind != PlanActionNone || action.Class != PlanActionClassTerminal || action.Command != "" || !strings.Contains(action.Reason, "proves the plan is integrated") {
+		t.Fatalf("merged plan action = %#v, want terminal no-action despite retained pull-request intent", action)
+	}
+}
+
+func TestDeriveNextActionPrefersCurrentFinalizationRecoveryAndClearsOnSuccess(t *testing.T) {
+	failedAt := time.Date(2026, 8, 29, 20, 0, 0, 0, time.UTC)
+	proposal := reviewedCapabilityDetail()
+	proposal.State.Plan.Review = &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Base: "base123", Head: "head123"}
+	proposal.State.Plan.FinalizationFailure = &FinalizationFailure{
+		Phase: FinalizationFailurePhaseProposalRepair, Category: "proposal_invalid", ReviewBase: "base123", ReviewHead: "head123",
+		FailedAt: failedAt, RecoveryAction: "resume_pull_request",
+	}
+	action := DeriveNextAction(proposal).Primary
+	if action.Kind != PlanActionReview || action.Command != "tao review --run plan" || !strings.Contains(action.Reason, "proposal invalid") {
+		t.Fatalf("proposal recovery action = %+v", action)
+	}
+	if summary := Summarize(proposal, time.Time{}); summary.FinalizationRecovery == nil || summary.NextAction.Primary != action {
+		t.Fatalf("summary finalization projection = %+v next=%+v", summary.FinalizationRecovery, summary.NextAction.Primary)
+	}
+
+	pullRequest := reviewedCapabilityDetail()
+	pullRequest.State.Plan.Review = &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Head: "head123"}
+	pullRequest.State.Workspace = &Workspace{Branch: "fix/plan", HeadSHA: "head123"}
+	pullRequest.State.Plan.FinalizationFailure = &FinalizationFailure{
+		Phase: FinalizationFailurePhasePullRequest, Category: "publication_failed", Branch: "fix/plan", HeadSHA: "head123",
+		FailedAt: failedAt, RecoveryAction: "resume_pull_request",
+	}
+	action = DeriveNextAction(pullRequest).Primary
+	if action.Kind != PlanActionRecoverPullRequest || action.Command != "tao run --pull-request plan" || !strings.Contains(action.Reason, "publication failed") {
+		t.Fatalf("pull-request recovery action = %+v", action)
+	}
+
+	pullRequest.State.Plan.PullRequest = &PullRequest{HeadSHA: "head123"}
+	if action = DeriveNextAction(pullRequest).Primary; action.Kind != PlanActionNone || !strings.Contains(action.Reason, "handoff is complete") {
+		t.Fatalf("successful PR did not clear projected recovery: %+v", action)
+	}
+	if recovery := CurrentFinalizationRecovery(pullRequest); recovery != nil {
+		t.Fatalf("successful PR retained current recovery: %+v", recovery)
+	}
+}
+
+func TestDeriveNextActionClassifiesPullRequestMismatchRecovery(t *testing.T) {
+	failedAt := time.Date(2026, 8, 31, 17, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name            string
+		category        string
+		recordedAction  string
+		wantAction      string
+		wantCommand     string
+		wantInstruction string
+	}{
+		{name: "head drift upgrades legacy resume", category: "head_drift", recordedAction: FinalizationRecoveryResumePullRequest, wantAction: FinalizationRecoveryRestoreBoundary, wantInstruction: "recorded branch and HEAD"},
+		{name: "dirty worktree restores clean boundary", category: "workspace_dirty", recordedAction: FinalizationRecoveryRestoreBoundary, wantAction: FinalizationRecoveryRestoreBoundary, wantInstruction: "clean plan worktree"},
+		{name: "review mismatch requests fresh review", category: "review_head_mismatch", recordedAction: FinalizationRecoveryRerunReview, wantAction: FinalizationRecoveryRerunReview, wantCommand: "tao review --run plan"},
+		{name: "intent mismatch requires repair", category: "intent_mismatch", recordedAction: FinalizationRecoveryRepairIntent, wantAction: FinalizationRecoveryRepairIntent, wantInstruction: "durable pull-request intent"},
+		{name: "identity mismatch repairs only owned identity evidence", category: "identity_mismatch", recordedAction: FinalizationRecoveryRepairIntent, wantAction: FinalizationRecoveryRepairIdentity, wantInstruction: "stale recorded pull-request number and URL"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			detail := reviewedCapabilityDetail()
+			detail.State.Plan.Review = &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Head: "head123"}
+			detail.State.Workspace = &Workspace{Branch: "fix/plan", HeadSHA: "head123"}
+			detail.State.Plan.FinalizationFailure = &FinalizationFailure{
+				Phase: FinalizationFailurePhasePullRequest, Category: test.category, Branch: "fix/plan", HeadSHA: "head123",
+				FailedAt: failedAt, RecoveryAction: test.recordedAction,
+			}
+
+			recovery := CurrentFinalizationRecovery(detail)
+			if recovery == nil || recovery.RecoveryAction != test.wantAction {
+				t.Fatalf("recovery = %#v, want action %q", recovery, test.wantAction)
+			}
+			action := DeriveNextAction(detail).Primary
+			if action.Command != test.wantCommand || !strings.Contains(action.Instruction, test.wantInstruction) {
+				t.Fatalf("next action = %#v, want command %q instruction containing %q", action, test.wantCommand, test.wantInstruction)
+			}
+		})
+	}
+}
+
+func TestDeriveNextActionClassifiesProposalCorrectionReinspectionRecovery(t *testing.T) {
+	failedAt := time.Date(2026, 8, 31, 17, 30, 0, 0, time.UTC)
+	tests := []struct {
+		name            string
+		category        string
+		recordedAction  string
+		wantAction      string
+		wantCommand     string
+		wantInstruction string
+	}{
+		{name: "head drift restores boundary", category: "head_drift", recordedAction: FinalizationRecoveryRerunReview, wantAction: FinalizationRecoveryRestoreBoundary, wantInstruction: "recorded branch and HEAD"},
+		{name: "workspace mismatch repairs linked worktree", category: "workspace_mismatch", recordedAction: FinalizationRecoveryRestoreBoundary, wantAction: FinalizationRecoveryRestoreBoundary, wantInstruction: "recorded path, branch, and HEAD"},
+		{name: "dirty worktree restores clean boundary", category: "workspace_dirty", recordedAction: FinalizationRecoveryRerunReview, wantAction: FinalizationRecoveryRestoreBoundary, wantInstruction: "clean plan worktree"},
+		{name: "intent mismatch repairs intent", category: "intent_mismatch", recordedAction: FinalizationRecoveryRepairIntent, wantAction: FinalizationRecoveryRepairIntent, wantInstruction: "durable pull-request intent"},
+		{name: "invalid proposal requests fresh review", category: "proposal_invalid", recordedAction: FinalizationRecoveryRerunReview, wantAction: FinalizationRecoveryRerunReview, wantCommand: "tao review --run plan"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			detail := reviewedCapabilityDetail()
+			detail.State.Plan.Review = &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Base: "base123", Head: "head123"}
+			detail.State.Plan.FinalizationFailure = &FinalizationFailure{
+				Phase: FinalizationFailurePhaseProposalRepair, Category: test.category, ReviewBase: "base123", ReviewHead: "head123",
+				FailedAt: failedAt, RecoveryAction: test.recordedAction,
+			}
+
+			recovery := CurrentFinalizationRecovery(detail)
+			if recovery == nil || recovery.RecoveryAction != test.wantAction {
+				t.Fatalf("recovery = %#v, want action %q", recovery, test.wantAction)
+			}
+			action := DeriveNextAction(detail).Primary
+			if action.Command != test.wantCommand || !strings.Contains(action.Instruction, test.wantInstruction) {
+				t.Fatalf("next action = %#v, want command %q instruction containing %q", action, test.wantCommand, test.wantInstruction)
+			}
+		})
+	}
+}
+
+func TestCurrentFinalizationRecoveryMatchesLegacyReviewBaseFallback(t *testing.T) {
+	failedAt := time.Date(2026, 8, 30, 1, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name      string
+		workspace *Workspace
+		repoBase  string
+		wantBase  string
+	}{
+		{name: "workspace base", workspace: &Workspace{BaseSHA: " workspace-base "}, repoBase: "plan-base", wantBase: "workspace-base"},
+		{name: "plan base", repoBase: " plan-base ", wantBase: "plan-base"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			detail := reviewedCapabilityDetail()
+			detail.State.Repo.BaseCommit = test.repoBase
+			detail.State.Workspace = test.workspace
+			detail.State.Plan.Review = &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Head: " head123 "}
+			detail.State.Plan.FinalizationFailure = &FinalizationFailure{
+				Phase: FinalizationFailurePhaseProposalRepair, Category: "proposal_invalid", ReviewBase: test.wantBase, ReviewHead: "head123",
+				FailedAt: failedAt, RecoveryAction: "rerun_review",
+			}
+
+			if recovery := CurrentFinalizationRecovery(detail); recovery == nil || recovery.RecoveryAction != "rerun_review" {
+				t.Fatalf("legacy review failure recovery = %+v", recovery)
+			}
+			if action := DeriveNextAction(detail).Primary; action.Kind != PlanActionReview || action.Command != "tao review --run plan" {
+				t.Fatalf("legacy review failure action = %+v", action)
+			}
+		})
+	}
+}
+
+func TestCurrentFinalizationRecoveryRejectsStaleBoundaries(t *testing.T) {
+	detail := reviewedCapabilityDetail()
+	detail.State.Plan.Review = &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Base: "new-base", Head: "new-head"}
+	detail.State.Plan.FinalizationFailure = &FinalizationFailure{
+		Phase: FinalizationFailurePhaseProposalRepair, Category: "proposal_invalid", ReviewBase: "old-base", ReviewHead: "old-head",
+		FailedAt: time.Now(), RecoveryAction: "rerun_review",
+	}
+	if recovery := CurrentFinalizationRecovery(detail); recovery != nil {
+		t.Fatalf("stale review failure projected as current: %+v", recovery)
+	}
+	if action := DeriveNextAction(detail).Primary; action.Kind != PlanActionMerge {
+		t.Fatalf("stale failure displaced normal reviewed action: %+v", action)
+	}
+}
+
 func TestDeriveNextActionDescribesSliceRecoveryWithoutPartialCommand(t *testing.T) {
 	detail := &PlanDetail{
 		State: State{Status: StatusInProgress, Plan: PlanState{ID: "plan-a", CurrentSlice: ptrString("001-a")}},

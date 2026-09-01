@@ -51,6 +51,7 @@ func clonePlanState(plan PlanState) PlanState {
 	clone.Review = clonePlanReview(plan.Review)
 	clone.MergeCommitIntent = cloneSingleMergeCommitIntent(plan.MergeCommitIntent)
 	clone.FinalVerification = cloneFinalVerification(plan.FinalVerification)
+	clone.FinalizationFailure = cloneFinalizationFailure(plan.FinalizationFailure)
 	return clone
 }
 
@@ -141,6 +142,14 @@ func cloneFinalVerification(verification *FinalVerification) *FinalVerification 
 		return nil
 	}
 	clone := *verification
+	return &clone
+}
+
+func cloneFinalizationFailure(failure *FinalizationFailure) *FinalizationFailure {
+	if failure == nil {
+		return nil
+	}
+	clone := *failure
 	return &clone
 }
 
@@ -265,6 +274,7 @@ func cloneEvent(event Event) Event {
 	clone.PullRequest = clonePullRequest(event.PullRequest)
 	clone.PRFeedbackTriage = clonePRFeedbackTriageResult(event.PRFeedbackTriage)
 	clone.Review = clonePlanReview(event.Review)
+	clone.FinalizationFailure = cloneFinalizationFailure(event.FinalizationFailure)
 	return clone
 }
 
