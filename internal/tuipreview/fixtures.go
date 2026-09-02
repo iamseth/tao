@@ -197,10 +197,16 @@ func stressScenario() Scenario {
 	}
 	created := now.Add(-14 * 24 * time.Hour)
 	for index := 0; index < 30; index++ {
+		tags := []string{"stress", "unicode", fmt.Sprintf("group-%d", index%3)}
+		// Tier tags on a deterministic subset keep both the tiered ordering
+		// and the empty TIER cell exercised across the width sweep.
+		if index%4 == 0 {
+			tags = append(tags, fmt.Sprintf("tier%d", index%3))
+		}
 		notes = append(notes, note.CatalogNote{
 			RepositoryID: fmt.Sprintf("repo-%02d", index%4), RepositoryName: []string{"very-long-repository-name-alpha", "日本語リポジトリ", "emoji-🧭-workspace", "combining-é-repo"}[index%4], RepositoryRoot: fmt.Sprintf("/preview/stress/repo-%02d", index%4),
 			ID: fmt.Sprintf("stress-note-%02d-with-a-long-id", index), Text: fmt.Sprintf("Stress note %02d: 日本語 🧭 é. %s", index, "A long line repeats deterministic text to exercise narrow and wide viewports without external data."),
-			Tags: []string{"stress", "unicode", fmt.Sprintf("group-%d", index%3)}, CreatedAt: created.Add(time.Duration(index) * time.Hour), UpdatedAt: now.Add(-time.Duration(index+1) * time.Hour),
+			Tags: tags, CreatedAt: created.Add(time.Duration(index) * time.Hour), UpdatedAt: now.Add(-time.Duration(index+1) * time.Hour),
 		})
 	}
 	return Scenario{

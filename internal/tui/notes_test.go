@@ -245,3 +245,65 @@ func TestRenderNoteRowUsesSemanticPaintSelectionAndEmptyTagCell(t *testing.T) {
 		t.Fatalf("note row does not paint only the primary tag: %q", taggedRow)
 	}
 }
+
+func TestNoteTierColumnAppearsOnlyWithTierTags(t *testing.T) {
+	now := time.Date(2026, time.September, 1, 12, 0, 0, 0, time.UTC)
+	untagged := note.CatalogNote{RepositoryName: "repo", Text: "plain backlog item", Tags: []string{"workflow"}, UpdatedAt: now.Add(-time.Hour)}
+	columns := noteTableColumns(measureNoteTable([]note.CatalogNote{untagged}, now), 100)
+	if got := strings.Join(columnNames(columns), ","); got != "REPO,PREVIEW,TAG,AGE" {
+		t.Fatalf("columns without tier tags = %q, want no TIER column", got)
+	}
+
+	tiered := note.CatalogNote{RepositoryName: "repo", Text: "tiered work", Tags: []string{"arch-2026-09", "tier1"}, UpdatedAt: now.Add(-time.Hour)}
+	items := []note.CatalogNote{untagged, tiered}
+	columns = noteTableColumns(measureNoteTable(items, now), 100)
+	if got := strings.Join(columnNames(columns), ","); got != "REPO,TIER,PREVIEW,TAG,AGE" {
+		t.Fatalf("columns with a tier tag = %q, want TIER after REPO", got)
+	}
+	paneWidth := noteTablePaneWidth(100, columns)
+	row := renderNoteRow(tiered, now, columns, paneWidth, false, ProfileTrueColor)
+	if !strings.Contains(row, Paint(ProfileTrueColor, RoleInfo, "tier1")) {
+		t.Fatalf("tier cell lacks tier value with info paint: %q", row)
+	}
+	if !strings.Contains(row, Paint(ProfileTrueColor, RoleAccent, "arch-2026-09")) {
+		t.Fatalf("tag cell should show the first non-tier tag: %q", row)
+	}
+	header := renderNoteHeader(columns, paneWidth)
+	plain := renderNoteRow(tiered, now, columns, paneWidth, false, ProfileNone)
+	if strings.Index(header, "TIER") != strings.Index(plain, "tier1") {
+		t.Fatalf("TIER column misaligned: header=%q row=%q", header, plain)
+	}
+	if withoutTier := renderNoteRow(untagged, now, columns, paneWidth, false, ProfileNone); strings.Contains(withoutTier, "tier") {
+		t.Fatalf("tierless row should leave the TIER cell empty: %q", withoutTier)
+	}
+}
+
+func TestIsNoteTierTagRecognizesDigitSuffixOnly(t *testing.T) {
+	for tag, want := range map[string]bool{
+		"tier0": true, "tier3": true, "tier12": true,
+		"tier": false, "tiered": false, "tier-1": false, "Tier1": false, "notier1": false,
+	} {
+		if got := isNoteTierTag(tag); got != want {
+			t.Errorf("isNoteTierTag(%q) = %v, want %v", tag, got, want)
+		}
+	}
+}
+
+func TestVisibleNotesOrderTierFirstThenRecency(t *testing.T) {
+	now := time.Date(2026, time.September, 1, 12, 0, 0, 0, time.UTC)
+	snapshot := note.Snapshot{Notes: []note.CatalogNote{
+		{ID: "tier3-new", Tags: []string{"tier3"}, UpdatedAt: now.Add(-time.Minute)},
+		{ID: "untiered-new", Tags: []string{"workflow"}, UpdatedAt: now.Add(-2 * time.Minute)},
+		{ID: "tier0-old", Tags: []string{"arch-2026-09", "tier0"}, UpdatedAt: now.Add(-3 * time.Hour)},
+		{ID: "tier1-newer", Tags: []string{"tier1"}, UpdatedAt: now.Add(-time.Hour)},
+		{ID: "tier1-older", Tags: []string{"tier1"}, UpdatedAt: now.Add(-2 * time.Hour)},
+	}}
+	got := make([]string, 0, len(snapshot.Notes))
+	for _, item := range visibleNotes(snapshot, "") {
+		got = append(got, item.ID)
+	}
+	want := []string{"tier0-old", "tier1-newer", "tier1-older", "tier3-new", "untiered-new"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("visible note order = %v, want %v", got, want)
+	}
+}

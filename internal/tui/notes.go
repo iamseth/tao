@@ -2,7 +2,9 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,6 +21,7 @@ const (
 type noteRowValues struct {
 	repository string
 	preview    string
+	tier       string
 	primaryTag string
 	age        string
 }
@@ -26,6 +29,7 @@ type noteRowValues struct {
 type noteTableWidths struct {
 	repository int
 	preview    int
+	tier       int
 	primaryTag int
 	age        int
 }
@@ -41,16 +45,31 @@ type noteDateBucket struct {
 }
 
 func visibleNotes(snapshot note.Snapshot, focusRepositoryID string) []note.CatalogNote {
-	if focusRepositoryID == "" {
-		return snapshot.Notes
-	}
 	visible := make([]note.CatalogNote, 0, len(snapshot.Notes))
 	for _, item := range snapshot.Notes {
-		if item.RepositoryID == focusRepositoryID {
+		if focusRepositoryID == "" || item.RepositoryID == focusRepositoryID {
 			visible = append(visible, item)
 		}
 	}
+	// Stable tier ordering on top of the collector's recency order: lower
+	// tiers first, untiered notes last, recency preserved within a tier.
+	sort.SliceStable(visible, func(i, j int) bool {
+		return noteTierRank(visible[i]) < noteTierRank(visible[j])
+	})
 	return visible
+}
+
+// noteTierRank orders tiered notes ahead of untiered ones, lowest tier first.
+func noteTierRank(item note.CatalogNote) int {
+	for _, tag := range item.Tags {
+		if !isNoteTierTag(tag) {
+			continue
+		}
+		if rank, err := strconv.Atoi(strings.TrimPrefix(tag, "tier")); err == nil {
+			return rank
+		}
+	}
+	return math.MaxInt
 }
 
 func visibleNoteWarnings(snapshot note.Snapshot, focusRepositoryID string) []note.CatalogWarning {
@@ -195,17 +214,26 @@ func measureNoteTable(items []note.CatalogNote, now time.Time) noteTableWidths {
 		widths.preview = max(widths.preview, visibleWidth(values.preview))
 		widths.primaryTag = max(widths.primaryTag, visibleWidth(values.primaryTag))
 		widths.age = max(widths.age, visibleWidth(values.age))
+		if values.tier != "" {
+			widths.tier = max(widths.tier, len("TIER"), visibleWidth(values.tier))
+		}
 	}
 	return widths
 }
 
 func noteTableColumns(widths noteTableWidths, frameWidth int) []column {
-	columns := []column{
-		{name: "REPO", width: widths.repository, priority: 20},
-		{name: "PREVIEW", width: widths.preview, flex: true, required: true, priority: 40, minimum: minimumNotePreviewCells},
-		{name: "TAG", width: widths.primaryTag, priority: 10},
-		{name: "AGE", width: widths.age, required: true, priority: 40},
+	columns := make([]column, 0, 5)
+	columns = append(columns, column{name: "REPO", width: widths.repository, priority: 20})
+	// A zero tier width means no visible note carries a tier tag; the column
+	// stays out entirely rather than rendering with no information.
+	if widths.tier > 0 {
+		columns = append(columns, column{name: "TIER", width: widths.tier, priority: 30})
 	}
+	columns = append(columns,
+		column{name: "PREVIEW", width: widths.preview, flex: true, required: true, priority: 40, minimum: minimumNotePreviewCells},
+		column{name: "TAG", width: widths.primaryTag, priority: 10},
+		column{name: "AGE", width: widths.age, required: true, priority: 40},
+	)
 	if frameWidth <= 0 {
 		return columns
 	}
@@ -234,6 +262,8 @@ func renderNoteRow(item note.CatalogNote, now time.Time, columns []column, paneW
 		switch item.name {
 		case "REPO":
 			cells = append(cells, values.repository)
+		case "TIER":
+			cells = append(cells, Paint(profile, RoleInfo, values.tier))
 		case "PREVIEW":
 			cells = append(cells, Paint(profile, RoleNeutral4, values.preview))
 		case "TAG":
@@ -254,16 +284,41 @@ func renderNoteRow(item note.CatalogNote, now time.Time, columns []column, paneW
 
 func noteValues(item note.CatalogNote, now time.Time) noteRowValues {
 	updated := item.UpdatedAt
+	tier := ""
 	primaryTag := ""
-	if len(item.Tags) > 0 {
-		primaryTag = boundedOptionalNoteValue(item.Tags[0], maxNotePrimaryTagCells)
+	for _, tag := range item.Tags {
+		if isNoteTierTag(tag) {
+			if tier == "" {
+				tier = boundedOptionalNoteValue(tag, maxNotePrimaryTagCells)
+			}
+			continue
+		}
+		if primaryTag == "" {
+			primaryTag = boundedOptionalNoteValue(tag, maxNotePrimaryTagCells)
+		}
 	}
 	return noteRowValues{
 		repository: boundedNoteValue(item.RepositoryName, maxNoteRepositoryCells),
 		preview:    boundedNoteValue(item.Text, maxNotePreviewCells),
+		tier:       tier,
 		primaryTag: primaryTag,
 		age:        relativeAge(&updated, now),
 	}
+}
+
+// isNoteTierTag recognizes the priority convention "tier<digits>" so the tier
+// can render as its own column instead of competing for the single TAG cell.
+func isNoteTierTag(tag string) bool {
+	rest, found := strings.CutPrefix(tag, "tier")
+	if !found || rest == "" {
+		return false
+	}
+	for _, r := range rest {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func boundedOptionalNoteValue(value string, limit int) string {
