@@ -37,7 +37,7 @@ func TestUICommandRegistrationAndHelp(t *testing.T) {
 	if err := renderCommandHelp(&out, metadata); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"keyboard-driven dashboard", "Plans, Notes, Settings, and Debug tabs", "Plans is the initial tab", "Tab or the right arrow", "Repository focus is shared by Plans and Notes", "running work, planned or in-review work", "Operational urgency always takes precedence", "disposition, valid sequence relationships, categorical priority, and recent activity", "missing, duplicate, or cyclic relationships only warn", "legacy plans remain visible as unranked", "RUN AGE is elapsed time for an observed invocation", "NEXT is a derived advisory label", "selected-plan preview explains benefit", "Completed plans are hidden initially", "m confirms a selected reviewed-plan merge", "M confirms a repository-scoped merge --all", "press Enter for the full read-only slice page", "repository-owned open notes", "full read-only detail", "per-repository pull-request defaults", "explicit true, explicit false, and inherited", "doctor problems", "resolved runtime defaults from tao status", "Plan actions and the completed toggle do not act on Notes, Settings, or Debug", "q and Ctrl-C quit globally", "Esc twice within one second", "--interval", "--completed-window", "tao monitor --once", "Usage:\n  tao ui"} {
+	for _, want := range []string{"keyboard-driven dashboard", "Notes, Plans, Settings, and Debug tabs", "Plans is the initial tab", "Tab or the right arrow", "Shift+Tab or the left arrow", "Repository focus is shared by Plans and Notes", "running work, planned or in-review work", "Operational urgency always takes precedence", "disposition, valid sequence relationships, categorical priority, and recent activity", "missing, duplicate, or cyclic relationships only warn", "legacy plans remain visible as unranked", "RUN AGE is elapsed time for an observed invocation", "NEXT is a derived advisory label", "Press Enter to inspect the selected plan's full decision and lifecycle context", "Completed plans are hidden initially", "m confirms a selected reviewed-plan merge", "M confirms a repository-scoped merge --all", "press Enter for the full read-only slice page", "repository-owned open notes", "full read-only detail", "per-repository pull-request defaults", "explicit true, explicit false, and inherited", "doctor problems", "resolved runtime defaults from tao status", "Plan actions and the completed toggle do not act on Notes, Settings, or Debug", "q and Ctrl-C quit globally", "Esc twice within one second", "--interval", "--completed-window", "tao monitor --once", "Usage:\n  tao ui"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("ui help missing %q in %q", want, out.String())
 		}
@@ -175,7 +175,7 @@ func TestUIComposesRepositoryNotesCollector(t *testing.T) {
 	repository := note.NewRepository(notesDir, note.RepoReference{ID: entry.Repo.ID, Root: entry.Repo.Root})
 	repository.Now = func() time.Time { return time.Date(2026, 8, 19, 16, 0, 0, 0, time.UTC) }
 	repository.IDSuffix = func() string { return "ui01" }
-	created, err := repository.Create(context.Background(), "CLI-composed open note", []string{"tui"})
+	_, err := repository.Create(context.Background(), "CLI-composed open note", []string{"tui"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestUIComposesRepositoryNotesCollector(t *testing.T) {
 	var output bytes.Buffer
 	ticker := &monitorTickerStub{ch: make(chan time.Time), stopped: make(chan struct{})}
 	app := App{
-		In: strings.NewReader("\tq"), Out: &output, Err: &output,
+		In: strings.NewReader("\x1b[Zq"), Out: &output, Err: &output,
 		MonitorCollector:  collectingMonitorFunc(func(context.Context) error { return nil }),
 		MonitorIsTerminal: func(io.Writer) bool { return true },
 		MonitorTicker:     func(time.Duration) MonitorTicker { return ticker },
@@ -202,7 +202,7 @@ func TestUIComposesRepositoryNotesCollector(t *testing.T) {
 	if requestedDir != notesDir || requestedRef.ID != entry.Repo.ID || requestedRef.Root != entry.Repo.Root {
 		t.Fatalf("note repository request = dir %q ref %+v, want %q and %+v", requestedDir, requestedRef, notesDir, note.RepoReference{ID: entry.Repo.ID, Root: entry.Repo.Root})
 	}
-	for _, want := range []string{"tao │ plans ▸notes  settings  debug", "all repos", "1 open note", created.ID, "CLI-composed open note"} {
+	for _, want := range []string{"tao │▸notes  plans  settings  debug", "all repos", "1 open note", "CLI-composed open note"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("ui output missing %q in %q", want, output.String())
 		}

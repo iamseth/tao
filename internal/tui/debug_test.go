@@ -46,7 +46,7 @@ func TestRenderDebugShowsRuntimeDoctorAndUIInformation(t *testing.T) {
 	}
 	frame := Render(model)
 	for _, want := range []string{
-		"tao │ plans  notes  settings ▸debug", "agent pi", "UI", "viewport", "100x60", "plan rows", "open notes", "SYSTEM", "version", "v1.2.3",
+		"tao │ notes  plans  settings ▸debug", "agent pi", "UI", "viewport", "100x60", "plan rows", "open notes", "SYSTEM", "version", "v1.2.3",
 		"DOCTOR", "selected agent", "installed agents", "tool recommended jq", "RUNTIME ANOMALIES", "TAO_PULL_REQUEST", "repository", "false",
 		"1 active of 2 registered", "warning: test warning", "COLLECTOR WARNINGS", "plan store damaged", "/notes/bad.json: invalid note",
 	} {

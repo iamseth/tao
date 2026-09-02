@@ -12,13 +12,8 @@ type frameSummary struct {
 	extra          string
 }
 
-type footerHint struct {
-	key   string
-	label string
-}
-
-func renderFrame(model Model, page PageID, summary *frameSummary) []string {
-	strip, activeEnd := renderTabStrip(model.Profile, page)
+func renderFrame(model Model, page PageID) []string {
+	strip, _ := renderTabStrip(model.Profile, page)
 	width := dashboardFrameWidth(model, page)
 	contextWidth := width - visibleWidth(strip) - 2
 	context := renderGlobalContextWidth(model, contextWidth)
@@ -32,18 +27,7 @@ func renderFrame(model Model, page PageID, summary *frameSummary) []string {
 	}
 	line = truncateCells(line, width)
 
-	ruleWidth := max(width, 0)
-	accentWidth := min(activeEnd, ruleWidth)
-	rule := Paint(model.Profile, RoleAccent, strings.Repeat("─", accentWidth))
-	if neutralWidth := ruleWidth - accentWidth; neutralWidth > 0 {
-		rule += Paint(model.Profile, RoleNeutral0, strings.Repeat("─", neutralWidth))
-	}
-
-	lines := []string{line, rule}
-	if summary != nil {
-		lines = append(lines, renderFrameSummary(model.Profile, *summary))
-	}
-	return lines
+	return []string{line}
 }
 
 func dashboardFrameWidth(model Model, page PageID) int {
@@ -97,74 +81,6 @@ func fitDashboardSectionColumns(title string, columns []column, width int) []col
 		return columns
 	}
 	return fitted
-}
-
-func renderKeyHintsFooter(profile Profile, page PageID, width int) string {
-	hints := footerHintsForPage(page, width)
-	parts := make([]string, 0, len(hints))
-	for _, hint := range hints {
-		parts = append(parts,
-			Paint(profile, RoleAccent, hint.key)+" "+Paint(profile, RoleNeutral2, hint.label),
-		)
-	}
-	return strings.Join(parts, "  ")
-}
-
-func footerHintsForPage(page PageID, width int) []footerHint {
-	entries := shortcutsForPage(page)
-	regular := make([]footerHint, 0, len(entries))
-	persistent := make([]footerHint, 0, 2)
-	for _, entry := range entries {
-		if entry.footerLabel == "" {
-			continue
-		}
-		hint := footerHint{key: shortcutFooterKey(entry.key), label: entry.footerLabel}
-		if hint.key == "q" || hint.key == "?" {
-			persistent = appendHintIfFits(persistent, hint, width)
-			continue
-		}
-		regular = append(regular, hint)
-	}
-	if width <= 0 {
-		return append(regular, persistent...)
-	}
-
-	fitted := make([]footerHint, 0, len(regular)+len(persistent))
-	for _, hint := range regular {
-		candidate := append(append(append([]footerHint(nil), fitted...), hint), persistent...)
-		if footerHintsWidth(candidate) <= width {
-			fitted = append(fitted, hint)
-		}
-	}
-	return append(fitted, persistent...)
-}
-
-func appendHintIfFits(hints []footerHint, hint footerHint, width int) []footerHint {
-	candidate := append(append([]footerHint(nil), hints...), hint)
-	if width > 0 && footerHintsWidth(candidate) > width {
-		return hints
-	}
-	return candidate
-}
-
-func shortcutFooterKey(key string) string {
-	key, _, _ = strings.Cut(key, " / ")
-	return strings.TrimSpace(key)
-}
-
-func footerHintsWidth(hints []footerHint) int {
-	width := max(len(hints)-1, 0) * 2
-	for _, hint := range hints {
-		width += visibleWidth(hint.key) + 1 + visibleWidth(hint.label)
-	}
-	return width
-}
-
-func shouldRenderKeyHintsFooter(model Model, frameLines, feedbackLines int) bool {
-	if model.Height <= 0 {
-		return true
-	}
-	return model.Height >= 8 && model.Height >= frameLines+feedbackLines+2
 }
 
 func renderTabStrip(profile Profile, page PageID) (string, int) {

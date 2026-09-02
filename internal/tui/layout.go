@@ -154,6 +154,15 @@ func sectionRule(profile Profile, role Role, title string, count, width int) str
 	return sectionRuleTail(profile, role, title, fmt.Sprintf("%d", count), width)
 }
 
+// sectionTitleRule renders a section title without a trailing count or label.
+func sectionTitleRule(profile Profile, role Role, title string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	lead := "▌ " + title + " "
+	return Paint(profile, role, lead) + Paint(profile, RoleNeutral0, strings.Repeat("─", max(width-visibleWidth(lead), 0)))
+}
+
 // sectionRuleColumns replaces the section count with aligned column headers.
 func sectionRuleColumns(profile Profile, role Role, title string, columns []column, width int) string {
 	headers := make([]string, len(columns))
@@ -190,76 +199,4 @@ func columnsWidth(columns []column) int {
 
 func moreIndicator(profile Profile, count int) string {
 	return Paint(profile, RoleNeutral2, fmt.Sprintf("+ %d more  ↓", max(count, 0)))
-}
-
-// borderedPane wraps lines in a fixed-width border. The selected border uses
-// the accent role; an unselected list uses a subdued neutral border.
-func borderedPane(profile Profile, width int, title, identity string, hasSelection bool, lines []string) []string {
-	if width <= 0 {
-		return nil
-	}
-	borderRole := RoleNeutral1
-	if hasSelection {
-		borderRole = RoleAccent
-	}
-	if width == 1 {
-		return []string{Paint(profile, borderRole, "│")}
-	}
-
-	innerWidth := width - 2
-	bottom := "╰" + strings.Repeat("─", innerWidth) + "╯"
-	pane := make([]string, 0, len(lines)+2)
-	pane = append(pane, paintPaneTopBorder(profile, borderRole, innerWidth, title, identity))
-	for _, line := range lines {
-		body := padCells(truncateCells(line, innerWidth), innerWidth)
-		pane = append(pane, Paint(profile, borderRole, "│")+body+Paint(profile, borderRole, "│"))
-	}
-	pane = append(pane, Paint(profile, borderRole, bottom))
-	return pane
-}
-
-type paneTopBorderParts struct {
-	left   string
-	middle string
-	right  string
-}
-
-func paintPaneTopBorder(profile Profile, borderRole Role, width int, title, identity string) string {
-	parts := paneTopBorderLayout(width, title, identity)
-	if parts.right == "" {
-		return Paint(profile, borderRole, "╭"+parts.left+parts.middle+"╮")
-	}
-
-	rightWidth := visibleWidth(parts.right)
-	identityWidth := min(visibleWidth(identity), max(rightWidth-1, 0))
-	renderedIdentity := truncateCells(identity, identityWidth)
-	suffixWidth := max(rightWidth-1-visibleWidth(renderedIdentity), 0)
-	suffix := truncateCells(" ─", suffixWidth)
-	return Paint(profile, borderRole, "╭"+parts.left+parts.middle+" ") +
-		Paint(profile, RoleNeutral3, renderedIdentity) +
-		Paint(profile, borderRole, suffix+"╮")
-}
-
-func paneTopBorderLayout(width int, title, identity string) paneTopBorderParts {
-	if width <= 0 {
-		return paneTopBorderParts{}
-	}
-	left := "─"
-	if strings.TrimSpace(title) != "" {
-		left = "─ " + title + " "
-	}
-	right := ""
-	if strings.TrimSpace(identity) != "" {
-		right = " " + identity + " ─"
-	}
-	if visibleWidth(left)+visibleWidth(right) > width {
-		if right == "" {
-			return paneTopBorderParts{left: padCells(truncateCells(left, width), width)}
-		}
-		rightWidth := min(visibleWidth(right), max(width/2, 1))
-		right = truncateCells(right, rightWidth)
-		left = truncateCells(left, width-visibleWidth(right))
-	}
-	middle := strings.Repeat("─", max(width-visibleWidth(left)-visibleWidth(right), 0))
-	return paneTopBorderParts{left: left, middle: middle, right: right}
 }

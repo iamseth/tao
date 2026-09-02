@@ -16,6 +16,7 @@ const (
 	KeyRune
 	KeyEnter
 	KeyTab
+	KeyShiftTab
 	KeyEsc
 	KeyBackspace
 	KeyArrowUp
@@ -112,6 +113,8 @@ func (d *Decoder) readEscape() (KeyEvent, error) {
 		key = KeyArrowRight
 	case 'D':
 		key = KeyArrowLeft
+	case 'Z':
+		key = KeyShiftTab
 	}
 	if key != KeyUnknown {
 		d.consume(3)

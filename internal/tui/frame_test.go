@@ -12,16 +12,16 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 )
 
-func TestRenderFrameStylesTabsRuleSummaryAndContext(t *testing.T) {
+func TestRenderFrameStylesTabsSummaryAndContextWithoutRule(t *testing.T) {
 	model := Model{
 		Page: PageNotes, Width: 70, Profile: ProfileANSI16,
 		FocusRepositoryID: "repo", FocusRepositoryName: "alpha",
 		DebugSnapshot: DebugSnapshot{SelectedAgent: "pi"},
 	}
 	summary := &frameSummary{primary: "4 open notes", attentionCount: 2, attentionNoun: "warnings"}
-	lines := renderFrame(model, PageNotes, summary)
-	if len(lines) != 3 {
-		t.Fatalf("frame lines = %d, want 3: %q", len(lines), lines)
+	lines := append(renderFrame(model, PageNotes), renderFrameSummary(model.Profile, *summary))
+	if len(lines) != 2 {
+		t.Fatalf("frame lines = %d, want 2: %q", len(lines), lines)
 	}
 	for _, want := range []string{
 		Paint(ProfileANSI16, RoleNeutral5, "tao"),
@@ -35,11 +35,8 @@ func TestRenderFrameStylesTabsRuleSummaryAndContext(t *testing.T) {
 		}
 	}
 
-	_, activeEnd := renderTabStrip(ProfileNone, PageNotes)
-	wantRule := Paint(ProfileANSI16, RoleAccent, strings.Repeat("─", activeEnd)) +
-		Paint(ProfileANSI16, RoleNeutral0, strings.Repeat("─", model.Width-activeEnd))
-	if lines[1] != wantRule {
-		t.Fatalf("active rule extent mismatch\nwant: %q\n got: %q", wantRule, lines[1])
+	if strings.Contains(lines[0], "─") || strings.Contains(lines[1], "─") {
+		t.Fatalf("frame retained a tab underline: %q", lines)
 	}
 	if width := visibleWidth(lines[0]); width != model.Width {
 		t.Fatalf("context line width = %d, want %d: %q", width, model.Width, lines[0])
@@ -54,7 +51,7 @@ func TestRenderFrameCompactsLongFocusedRepositoryAtSeventyColumns(t *testing.T) 
 		DebugSnapshot:       DebugSnapshot{SelectedAgent: "pi"},
 	}
 
-	lines := renderFrame(model, PagePlans, nil)
+	lines := renderFrame(model, PagePlans)
 	if got := visibleWidth(lines[0]); got != model.Width {
 		t.Fatalf("context line width = %d, want %d: %q", got, model.Width, lines[0])
 	}
@@ -71,10 +68,10 @@ func TestRenderFrameCompactsLongFocusedRepositoryAtSeventyColumns(t *testing.T) 
 
 func TestRenderTabStripMarksEveryActivePageWithoutColor(t *testing.T) {
 	wantStrips := map[PageID]string{
-		PagePlans:    "tao │▸plans  notes  settings  debug",
-		PageNotes:    "tao │ plans ▸notes  settings  debug",
-		PageSettings: "tao │ plans  notes ▸settings  debug",
-		PageDebug:    "tao │ plans  notes  settings ▸debug",
+		PageNotes:    "tao │▸notes  plans  settings  debug",
+		PagePlans:    "tao │ notes ▸plans  settings  debug",
+		PageSettings: "tao │ notes  plans ▸settings  debug",
+		PageDebug:    "tao │ notes  plans  settings ▸debug",
 	}
 	for _, tab := range dashboardTabs {
 		t.Run(string(tab.ID), func(t *testing.T) {
@@ -118,17 +115,17 @@ func TestRenderFrameSkeletonAndContentAtSupportedSizes(t *testing.T) {
 				if !strings.HasPrefix(lines[0], wantStrip) {
 					t.Fatalf("tab strip is not first: %q", lines)
 				}
-				if !strings.Contains(lines[1], "─") {
-					t.Fatalf("tab rule is not second: %q", lines)
+				if strings.TrimSpace(lines[1]) != "" {
+					t.Fatalf("tab strip is followed by an unexpected rule: %q", lines)
 				}
 				switch test.page {
 				case PagePlans, PageNotes:
-					if !strings.Contains(lines[2], map[PageID]string{PagePlans: "plan", PageNotes: "note"}[test.page]) {
-						t.Fatalf("summary is not third for %s: %q", test.page, lines)
+					if !strings.Contains(lines[len(lines)-1], map[PageID]string{PagePlans: "plan", PageNotes: "note"}[test.page]) {
+						t.Fatalf("summary is not bottom-aligned for %s: %q", test.page, lines)
 					}
 				case PageSettings:
 					sectionIndex := -1
-					for index := 2; index < len(lines); index++ {
+					for index := 1; index < len(lines); index++ {
 						if strings.TrimSpace(lines[index]) != "" {
 							sectionIndex = index
 							break
@@ -143,10 +140,6 @@ func TestRenderFrameSkeletonAndContentAtSupportedSizes(t *testing.T) {
 				}
 				if !strings.Contains(frame, test.content) {
 					t.Fatalf("%s frame has no visible content row at %dx20:\n%s", test.page, width, frame)
-				}
-				wantFooter := renderKeyHintsFooter(ProfileNone, test.page, width)
-				if got := strings.TrimRight(lines[len(lines)-1], " "); got != wantFooter {
-					t.Fatalf("%s key hints are not the final frame element\nwant: %q\n got: %q", test.page, wantFooter, got)
 				}
 				for _, line := range lines {
 					if got := visibleWidth(line); got != model.Width {
@@ -272,7 +265,7 @@ func TestDashboardPagesRenderSharedSectionRules(t *testing.T) {
 		{page: PagePlans, role: RoleInfo, want: []string{"▌ PLANNED ", "REPO", "NEXT", "PLAN", "SLICES", "AGE"}},
 		{page: PageNotes, role: RoleAccent, want: []string{"▌ OLDER ", "REPO", "PREVIEW", "TAG", "AGE"}},
 		{page: PageSettings, role: RoleAccent, want: []string{"▌ EXECUTION · all default ", "Agent", "▌ REPOSITORY DEFAULTS ", "PR", "ROOT"}},
-		{page: PageDebug, role: RoleAccent, want: []string{"▌ UI ", " 10 ─", "▌ DOCTOR "}},
+		{page: PageDebug, role: RoleAccent, want: []string{"▌ UI ", "▌ DOCTOR "}},
 	}
 	for _, test := range tests {
 		t.Run(string(test.page), func(t *testing.T) {
@@ -288,52 +281,6 @@ func TestDashboardPagesRenderSharedSectionRules(t *testing.T) {
 			styled := Render(model)
 			if !strings.Contains(styled, Paint(ProfileANSI16, test.role, test.want[0])) {
 				t.Fatalf("%s frame does not apply the section's semantic role: %q", test.page, styled)
-			}
-		})
-	}
-}
-
-func TestRenderKeyHintsFooterIsStyledBoundedAndHonest(t *testing.T) {
-	for _, page := range []PageID{PagePlans, PageNotes, PageSettings, PageDebug} {
-		t.Run(string(page), func(t *testing.T) {
-			const width = 70
-			hints := footerHintsForPage(page, width)
-			if len(hints) == 0 {
-				t.Fatal("footer has no hints")
-			}
-			footer := renderKeyHintsFooter(ProfileANSI16, page, width)
-			if got := visibleWidth(footer); got > width {
-				t.Fatalf("footer width = %d, want <= %d: %q", got, width, footer)
-			}
-
-			entries := shortcutsForPage(page)
-			for _, hint := range hints {
-				honest := false
-				for _, entry := range entries {
-					if shortcutFooterKey(entry.key) == hint.key && entry.footerLabel == hint.label {
-						honest = true
-						break
-					}
-				}
-				if !honest {
-					t.Errorf("rendered hint %q %q does not come from shortcutsForPage", hint.key, hint.label)
-				}
-				for _, want := range []string{
-					Paint(ProfileANSI16, RoleAccent, hint.key),
-					Paint(ProfileANSI16, RoleNeutral2, hint.label),
-				} {
-					if !strings.Contains(footer, want) {
-						t.Errorf("footer missing semantic style %q: %q", want, footer)
-					}
-				}
-				for _, unavailable := range []string{"n", "e", "a", "t", "d", "g"} {
-					if hint.key == unavailable {
-						t.Errorf("footer advertises unavailable key %q", unavailable)
-					}
-				}
-				if hint.key == "Enter" && hint.label == "edit" {
-					t.Error("footer advertises unavailable Enter edit action")
-				}
 			}
 		})
 	}
@@ -363,20 +310,20 @@ func TestNotesViewportKeepsSectionContextAndCountsOnlyHiddenNotes(t *testing.T) 
 	model.Selected = len(items) - 1
 
 	frame := Render(model)
-	for _, want := range []string{"▌ OLDER ", "REPO", "PREVIEW", "preview-29", "╭─ preview-29", "╰", "+ 26 more  ↓"} {
+	for _, want := range []string{"▌ OLDER ", "REPO", "PREVIEW", "preview-29", "+ 15 more  ↓"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("selected-last Notes viewport missing %q:\n%s", want, frame)
 		}
 	}
-	if visible := strings.Count(frame, "  repo  preview-"); visible != 4 {
-		t.Fatalf("visible note rows = %d, want 4:\n%s", visible, frame)
+	if visible := strings.Count(frame, "  repo  preview-"); visible != 15 {
+		t.Fatalf("visible note rows = %d, want 15:\n%s", visible, frame)
 	}
 	if strings.Contains(frame, "+ 23 more  ↓") {
 		t.Fatalf("hidden count includes section structure:\n%s", frame)
 	}
 }
 
-func TestNotesViewportUsesRoomForCompleteSelectedPane(t *testing.T) {
+func TestNotesViewportUsesRoomForSelectedRow(t *testing.T) {
 	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
 	created := now.Add(-48 * time.Hour)
 	updated := now.Add(-time.Hour)
@@ -397,12 +344,7 @@ func TestNotesViewportUsesRoomForCompleteSelectedPane(t *testing.T) {
 	}
 
 	frame := Render(model)
-	for _, want := range []string{
-		"▌ TODAY ", "full body first line", "+ 27 more  ↓",
-		"Note ID: note-selected-complete", "Repository: selected-repository", "Tags: first, second",
-		"Created: " + created.Format(time.RFC3339), "Updated: " + updated.Format(time.RFC3339),
-		"Body:", "full body second line", "╰",
-	} {
+	for _, want := range []string{"▌ TODAY ", "full body first line full body second line", "+ 15 more  ↓"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("roomy constrained Notes viewport missing %q:\n%s", want, frame)
 		}
@@ -424,7 +366,7 @@ func TestNotesViewportKeepsWarningsVisibleWithManyNotes(t *testing.T) {
 	model.Selected = len(model.NoteSnapshot.Notes) - 1
 
 	frame := Render(model)
-	for _, want := range []string{"▌ OLDER ", "preview-29", "▌ Warnings ", "repo: catalog damaged", "╭─ preview-29", "╰", "+ 28 more  ↓"} {
+	for _, want := range []string{"▌ OLDER ", "preview-29", "▌ Warnings ", "repo: catalog damaged", "+ 17 more  ↓"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("constrained Notes viewport missing %q:\n%s", want, frame)
 		}
@@ -447,7 +389,7 @@ func TestSettingsViewportKeepsGroupedDefaultsVisibleWithManyRepositories(t *test
 	model.Selected = len(model.SettingsSnapshot.Repositories) - 1
 
 	frame := Render(model)
-	for _, want := range []string{"▌ EXECUTION · all default ", "Agent", "Session timeout", "▌ WORKFLOW · all default ", "Auto rework", "▌ REPOSITORY DEFAULTS ", "> repo", "+ 19 more  ↓"} {
+	for _, want := range []string{"▌ EXECUTION · all default ", "Agent", "Session timeout", "▌ WORKFLOW · all default ", "Auto rework", "▌ REPOSITORY DEFAULTS ", "> repo", "+ 17 more  ↓"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("constrained Settings viewport missing %q:\n%s", want, frame)
 		}

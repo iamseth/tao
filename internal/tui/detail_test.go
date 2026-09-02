@@ -354,7 +354,7 @@ func TestRenderDetailVerticalResizeKeepsFrameInsideTerminal(t *testing.T) {
 
 func TestRenderDetailShortcutPopoverIsContextAware(t *testing.T) {
 	frame := RenderDetail(DetailModel{ShowShortcuts: true, Width: 64, Height: 14})
-	for _, want := range []string{"Keyboard shortcuts", "Switch detail tabs", "Scroll or select", "Open slice on Slices tab", "Return to plans", "Close shortcuts"} {
+	for _, want := range []string{"Keyboard shortcuts", "Shift+Tab", "Switch detail tabs", "Scroll or select", "Open slice on Slices tab", "Return to plans", "Close shortcuts"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("plan detail shortcuts missing %q:\n%s", want, frame)
 		}

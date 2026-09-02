@@ -482,7 +482,7 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 			state.closeDetail()
 		case !state.detail.sliceOpen && (key.Key == term.KeyTab || key.Key == term.KeyArrowRight):
 			state.detail.moveTab(1, state.size)
-		case !state.detail.sliceOpen && key.Key == term.KeyArrowLeft:
+		case !state.detail.sliceOpen && (key.Key == term.KeyShiftTab || key.Key == term.KeyArrowLeft):
 			state.detail.moveTab(-1, state.size)
 		case !state.detail.sliceOpen && state.detail.activeTab == detailTabSlices && key.Key == term.KeyEnter:
 			if _, ok := findDetailSlice(state.detail.plan, state.detail.selectedSliceID); ok {
@@ -887,7 +887,7 @@ func (s *loopState) handleKey(key term.KeyEvent) bool {
 		s.lastRootEscape = now
 	case key.Key == term.KeyTab || key.Key == term.KeyArrowRight:
 		s.switchPage(1)
-	case key.Key == term.KeyArrowLeft:
+	case key.Key == term.KeyShiftTab || key.Key == term.KeyArrowLeft:
 		s.switchPage(-1)
 	case key.Key == term.KeyArrowUp || (key.Key == term.KeyRune && key.Rune == 'k'):
 		if s.selected > 0 {

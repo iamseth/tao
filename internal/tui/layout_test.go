@@ -112,26 +112,3 @@ func TestMoreIndicatorIsDim(t *testing.T) {
 		t.Fatalf("indicator does not use dim neutral role: %q", got)
 	}
 }
-
-func TestBorderedPaneWidthLabelsAndSelectionColor(t *testing.T) {
-	selected := borderedPane(ProfileANSI16, 30, "Selected plan", "tao", true, []string{"body"})
-	if len(selected) != 3 {
-		t.Fatalf("pane has %d lines, want 3", len(selected))
-	}
-	for index, line := range selected {
-		if got := visibleWidth(line); got != 30 {
-			t.Fatalf("pane line %d width = %d, want 30: %q", index, got, line)
-		}
-	}
-	if !strings.Contains(selected[0], "Selected plan") || !strings.Contains(selected[0], "tao") {
-		t.Fatalf("top border omits labels: %q", selected[0])
-	}
-	if !strings.Contains(selected[0], colorSequence(Accent(ProfileANSI16), false)) {
-		t.Fatalf("selected pane border is not accented: %q", selected[0])
-	}
-
-	unselected := borderedPane(ProfileANSI16, 30, "Plan", "", false, nil)
-	if !strings.Contains(unselected[0], colorSequence(N1(ProfileANSI16), false)) {
-		t.Fatalf("unselected pane border is not neutral: %q", unselected[0])
-	}
-}

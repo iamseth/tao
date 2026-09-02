@@ -12,7 +12,7 @@ import (
 func TestDecoderReadsKeyEvents(t *testing.T) {
 	t.Parallel()
 
-	input := "a界\r\n\t\x08\x7f\x1b[A\x1b[B\x1b[C\x1b[D\x03\x1b"
+	input := "a界\r\n\t\x08\x7f\x1b[A\x1b[B\x1b[C\x1b[D\x1b[Z\x03\x1b"
 	decoder := NewDecoder(strings.NewReader(input))
 	want := []KeyEvent{
 		{Key: KeyRune, Rune: 'a'},
@@ -26,6 +26,7 @@ func TestDecoderReadsKeyEvents(t *testing.T) {
 		{Key: KeyArrowDown},
 		{Key: KeyArrowRight},
 		{Key: KeyArrowLeft},
+		{Key: KeyShiftTab},
 		{Key: KeyCtrlC},
 		{Key: KeyEsc},
 	}
@@ -60,8 +61,8 @@ func TestDecoderReadsSplitUTF8Rune(t *testing.T) {
 func TestDecoderReadsArrowSequencesOneByteAtATime(t *testing.T) {
 	t.Parallel()
 
-	decoder := NewDecoder(&oneByteReader{input: []byte("\x1b[A\x1b[B\x1b[C\x1b[D")})
-	want := []Key{KeyArrowUp, KeyArrowDown, KeyArrowRight, KeyArrowLeft}
+	decoder := NewDecoder(&oneByteReader{input: []byte("\x1b[A\x1b[B\x1b[C\x1b[D\x1b[Z")})
+	want := []Key{KeyArrowUp, KeyArrowDown, KeyArrowRight, KeyArrowLeft, KeyShiftTab}
 	for index, expected := range want {
 		got, err := decoder.ReadKey()
 		if err != nil {
@@ -118,11 +119,11 @@ func TestDecoderWaitsBrieflyForStandaloneEscapeSequence(t *testing.T) {
 func TestDecoderPreservesUnknownEscapeSequenceInput(t *testing.T) {
 	t.Parallel()
 
-	decoder := NewDecoder(strings.NewReader("\x1b[Z"))
+	decoder := NewDecoder(strings.NewReader("\x1b[X"))
 	want := []KeyEvent{
 		{Key: KeyEsc},
 		{Key: KeyRune, Rune: '['},
-		{Key: KeyRune, Rune: 'Z'},
+		{Key: KeyRune, Rune: 'X'},
 	}
 	for index, expected := range want {
 		got, err := decoder.ReadKey()

@@ -123,72 +123,19 @@ func TestRenderNotesSelectsRowInLaterDateBucket(t *testing.T) {
 	}
 }
 
-func TestRenderNotePaneUsesCompleteSanitizedSnapshotContext(t *testing.T) {
-	created := time.Date(2026, time.August, 17, 9, 15, 0, 0, time.FixedZone("local", 2*60*60))
-	updated := created.Add(26 * time.Hour)
-	item := note.CatalogNote{
-		RepositoryID: "repo-id", RepositoryName: "répo\x1b]0;owned\a",
-		ID: "note-complete-identifier", Text: "first line\nsecond \x1b[2Jline",
-		Tags: []string{"one", "tw\x1b]52;c;owned\ao", "three"}, CreatedAt: created, UpdatedAt: updated,
-	}
-	joined := strings.Join(renderNotePane(ProfileNone, item, 100), "\n")
-	for _, want := range []string{
-		"Note ID: note-complete-identifier", "Repository: répo", "Tags: one, two, three",
-		created.Format(time.RFC3339), updated.Format(time.RFC3339), "Body:", "first line", "second line",
-	} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("note pane missing %q:\n%s", want, joined)
-		}
-	}
-	for _, unsafe := range []string{"[2J", "]0;", "]52;"} {
-		if strings.Contains(joined, unsafe) {
-			t.Errorf("note pane retained unsafe content %q:\n%s", unsafe, joined)
-		}
-	}
-	if title := notePaneTitle(item); visibleWidth(title) > maxNotePaneTitleCells || !strings.HasPrefix(title, "first line") {
-		t.Errorf("note pane title = %q", title)
-	}
-	if identity := notePaneIdentity(item); visibleWidth(identity) > maxNotePaneIdentityCells || !strings.Contains(identity, "note-complete-identifier") {
-		t.Errorf("note pane identity = %q", identity)
-	}
-}
-
-func TestRenderNotesPaneViewportAtSupportedSizes(t *testing.T) {
+func TestRenderNotesListOmitsSelectedNoteDetails(t *testing.T) {
 	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
-	items := []note.CatalogNote{
-		{RepositoryID: "repo", RepositoryName: "repo", ID: "today", Text: "today preview", CreatedAt: now.Add(-48 * time.Hour), UpdatedAt: now.Add(-time.Hour)},
-		{RepositoryID: "repo", RepositoryName: "repo", ID: "yesterday", Text: "yesterday preview", CreatedAt: now.Add(-72 * time.Hour), UpdatedAt: now.AddDate(0, 0, -1)},
-		{RepositoryID: "repo", RepositoryName: "repo", ID: "older", Text: "selected older body first\nselected older body second", Tags: []string{"one", "two"}, CreatedAt: now.AddDate(0, 0, -20), UpdatedAt: now.AddDate(0, 0, -10)},
+	item := note.CatalogNote{
+		RepositoryID: "repo", RepositoryName: "repo", ID: "older",
+		Text: "selected preview\nbody only visible after opening", Tags: []string{"one", "two"}, UpdatedAt: now.AddDate(0, 0, -10),
 	}
-	for _, width := range []int{199, 120, 100, 80, 70} {
-		for _, test := range []struct {
-			name        string
-			height      int
-			wantPane    bool
-			wantDetails bool
-		}{
-			{name: "roomy", height: 32, wantPane: true, wantDetails: true},
-			{name: "cropped", height: 9, wantPane: true},
-			{name: "short", height: 8},
-		} {
-			t.Run(fmt.Sprintf("%d/%s", width, test.name), func(t *testing.T) {
-				frame := Render(Model{Page: PageNotes, NoteSnapshot: note.Snapshot{Notes: items}, Selected: 2, Now: now, Width: width, Height: test.height})
-				if !strings.Contains(frame, "older") {
-					t.Fatalf("selected later-bucket row is missing:\n%s", frame)
-				}
-				hasTop := strings.Contains(frame, "╭")
-				hasBottom := strings.Contains(frame, "╰")
-				if hasTop != test.wantPane || hasBottom != test.wantPane {
-					t.Fatalf("pane borders top=%t bottom=%t, want both %t:\n%s", hasTop, hasBottom, test.wantPane, frame)
-				}
-				if test.wantDetails {
-					for _, want := range []string{"Note ID: older", "Tags: one, two", now.AddDate(0, 0, -20).Format(time.RFC3339), "selected older body second"} {
-						if !strings.Contains(frame, want) {
-							t.Errorf("roomy pane missing %q:\n%s", want, frame)
-						}
-					}
-				}
-			})
+	frame := Render(Model{Page: PageNotes, NoteSnapshot: note.Snapshot{Notes: []note.CatalogNote{item}}, Now: now, Width: 80, Height: 20})
+	if !strings.Contains(frame, "selected preview body only visible after opening") {
+		t.Fatalf("selected note row is missing:\n%s", frame)
+	}
+	for _, unwanted := range []string{"╭", "Note ID:", "Tags:", "Body:"} {
+		if strings.Contains(frame, unwanted) {
+			t.Fatalf("notes list includes selected-note detail %q:\n%s", unwanted, frame)
 		}
 	}
 }

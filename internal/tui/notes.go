@@ -10,12 +10,10 @@ import (
 )
 
 const (
-	maxNoteRepositoryCells   = 24
-	maxNotePrimaryTagCells   = 32
-	maxNotePreviewCells      = 64
-	minimumNotePreviewCells  = 12
-	maxNotePaneTitleCells    = 36
-	maxNotePaneIdentityCells = 48
+	maxNoteRepositoryCells  = 24
+	maxNotePrimaryTagCells  = 32
+	maxNotePreviewCells     = 64
+	minimumNotePreviewCells = 12
 )
 
 type noteRowValues struct {
@@ -73,16 +71,16 @@ func renderNotesPage(snapshot note.Snapshot, selected int, focusRepositoryID str
 	warnings := visibleNoteWarnings(snapshot, focusRepositoryID)
 	selectedLine = -1
 	if len(items) == 0 {
-		sectionWidth := dashboardSectionWidth(model, PageNotes, "OPEN NOTES", 1)
-		lines = append(lines, "", sectionRule(model.Profile, RoleAccent, "OPEN NOTES", 0, sectionWidth), "  Notes page. No open notes.")
+		sectionWidth := dashboardSectionWidth(model, PageNotes, "OPEN NOTES", 0)
+		lines = append(lines, "", sectionTitleRule(model.Profile, RoleAccent, "OPEN NOTES", sectionWidth), "  Notes page. No open notes.")
 		metadata.sections = append(metadata.sections, tableViewportSection{headingLines: []int{1}, contentLines: []int{2}})
 	} else {
 		widths := measureNoteTable(items, now)
 		columns := noteTableColumns(widths, model.Width)
 		paneWidth := noteTablePaneWidth(model.Width, columns)
 		for _, bucket := range noteDateBuckets(items, now) {
-			sectionWidth := dashboardSectionWidth(model, PageNotes, bucket.title, visibleWidth(fmt.Sprintf("%d", len(bucket.items))))
-			lines = append(lines, "", sectionRule(model.Profile, RoleAccent, bucket.title, len(bucket.items), sectionWidth), renderNoteHeader(columns, paneWidth))
+			sectionWidth := dashboardSectionWidth(model, PageNotes, bucket.title, 0)
+			lines = append(lines, "", sectionTitleRule(model.Profile, RoleAccent, bucket.title, sectionWidth), renderNoteHeader(columns, paneWidth))
 			section := tableViewportSection{headingLines: []int{len(lines) - 2, len(lines) - 1}}
 			for _, indexed := range bucket.items {
 				isSelected := indexed.index == selected
@@ -96,8 +94,8 @@ func renderNotesPage(snapshot note.Snapshot, selected int, focusRepositoryID str
 		}
 	}
 	if len(warnings) > 0 {
-		sectionWidth := dashboardSectionWidth(model, PageNotes, "Warnings", visibleWidth(fmt.Sprintf("%d", len(warnings))))
-		lines = append(lines, "", sectionRule(model.Profile, RoleWarn, "Warnings", len(warnings), sectionWidth))
+		sectionWidth := dashboardSectionWidth(model, PageNotes, "Warnings", 0)
+		lines = append(lines, "", sectionTitleRule(model.Profile, RoleWarn, "Warnings", sectionWidth))
 		section := tableViewportSection{headingLines: []int{len(lines) - 1}}
 		for _, warning := range warnings {
 			repository := boundedNoteValue(warning.RepositoryName, maxNoteRepositoryCells)
@@ -266,59 +264,6 @@ func noteValues(item note.CatalogNote, now time.Time) noteRowValues {
 		primaryTag: primaryTag,
 		age:        relativeAge(&updated, now),
 	}
-}
-
-func notePaneTitle(item note.CatalogNote) string {
-	title := boundedOptionalNoteValue(item.Text, maxNotePaneTitleCells)
-	if title == "" {
-		return "Selected note"
-	}
-	return displayValue(title)
-}
-
-func notePaneIdentity(item note.CatalogNote) string {
-	repository := singleLineNoteValue(item.RepositoryName)
-	if repository == "" {
-		repository = singleLineNoteValue(item.RepositoryID)
-	}
-	identity := strings.Trim(strings.Join([]string{repository, singleLineNoteValue(item.ID)}, " · "), " ·")
-	return displayValue(boundedOptionalNoteValue(identity, maxNotePaneIdentityCells))
-}
-
-func renderNotePane(profile Profile, item note.CatalogNote, width int) []string {
-	created := "-"
-	if !item.CreatedAt.IsZero() {
-		created = item.CreatedAt.Format(time.RFC3339)
-	}
-	updated := "-"
-	if !item.UpdatedAt.IsZero() {
-		updated = item.UpdatedAt.Format(time.RFC3339)
-	}
-	tags := singleLineNoteValue(strings.Join(item.Tags, ", "))
-	if tags == "" {
-		tags = "-"
-	}
-	repository := singleLineNoteValue(item.RepositoryName)
-	if repository == "" {
-		repository = singleLineNoteValue(item.RepositoryID)
-	}
-
-	var lines []string
-	for _, field := range []struct {
-		label string
-		value string
-	}{
-		{label: "Note ID", value: singleLineNoteValue(item.ID)},
-		{label: "Repository", value: repository},
-		{label: "Tags", value: tags},
-		{label: "Created", value: created},
-		{label: "Updated", value: updated},
-	} {
-		lines = append(lines, planPreviewField(profile, field.label, field.value, width)...)
-	}
-	lines = append(lines, "Body:")
-	lines = append(lines, renderNoteText(item.Text, width)...)
-	return lines
 }
 
 func boundedOptionalNoteValue(value string, limit int) string {

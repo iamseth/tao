@@ -3,56 +3,55 @@ package tui
 import "strings"
 
 type shortcut struct {
-	key         string
-	action      string
-	footerLabel string
+	key    string
+	action string
 }
 
 func shortcutsForPage(page PageID) []shortcut {
 	if normalizePage(page) == PageSettings {
 		return []shortcut{
-			{key: "↑ / ↓ / j / k", action: "Select repository", footerLabel: "select"},
-			{key: "p", action: "Cycle pull-request default", footerLabel: "pull request"},
-			{key: "Tab / ← / →", action: "Switch tabs", footerLabel: "tabs"},
-			{key: "q / Esc Esc", action: "Quit", footerLabel: "quit"},
-			{key: "? / Esc", action: "Close shortcuts", footerLabel: "shortcuts"},
+			{key: "↑ / ↓ / j / k", action: "Select repository"},
+			{key: "p", action: "Cycle pull-request default"},
+			{key: "Tab / Shift+Tab / ← / →", action: "Switch tabs"},
+			{key: "q / Esc Esc", action: "Quit"},
+			{key: "? / Esc", action: "Close shortcuts"},
 		}
 	}
 	if normalizePage(page) == PageDebug {
 		return []shortcut{
-			{key: "↑ / ↓ / j / k", action: "Scroll diagnostics", footerLabel: "scroll"},
+			{key: "↑ / ↓ / j / k", action: "Scroll diagnostics"},
 			{key: "g / G", action: "Jump to top / bottom"},
-			{key: "Tab / ← / →", action: "Switch tabs", footerLabel: "tabs"},
-			{key: "q / Esc Esc", action: "Quit", footerLabel: "quit"},
-			{key: "? / Esc", action: "Close shortcuts", footerLabel: "shortcuts"},
+			{key: "Tab / Shift+Tab / ← / →", action: "Switch tabs"},
+			{key: "q / Esc Esc", action: "Quit"},
+			{key: "? / Esc", action: "Close shortcuts"},
 		}
 	}
 	common := []shortcut{
-		{key: "↑ / ↓ / j / k", action: "Move selection", footerLabel: "select"},
-		{key: "Tab / ← / →", action: "Switch tabs", footerLabel: "tabs"},
-		{key: "Enter", action: "Open selected item", footerLabel: "open"},
-		{key: "f", action: "Cycle repository filter", footerLabel: "filter"},
+		{key: "↑ / ↓ / j / k", action: "Move selection"},
+		{key: "Tab / Shift+Tab / ← / →", action: "Switch tabs"},
+		{key: "Enter", action: "Open selected item"},
+		{key: "f", action: "Cycle repository filter"},
 	}
 	if normalizePage(page) == PagePlans {
 		common = append(common,
-			shortcut{key: "c", action: "Toggle completed plans", footerLabel: "completed"},
-			shortcut{key: "r", action: "Run selected plan", footerLabel: "run"},
+			shortcut{key: "c", action: "Toggle completed plans"},
+			shortcut{key: "r", action: "Run selected plan"},
 			shortcut{key: "a", action: "Approve selected slice"},
-			shortcut{key: "m", action: "Merge selected plan", footerLabel: "merge"},
+			shortcut{key: "m", action: "Merge selected plan"},
 			shortcut{key: "M", action: "Merge all eligible plans"},
 		)
 	}
 	return append(common,
-		shortcut{key: "/", action: "Search plans and notes", footerLabel: "search"},
-		shortcut{key: "Backspace", action: "Go back / clear search", footerLabel: "back"},
-		shortcut{key: "q / Esc Esc", action: "Quit", footerLabel: "quit"},
-		shortcut{key: "? / Esc", action: "Close shortcuts", footerLabel: "shortcuts"},
+		shortcut{key: "/", action: "Search plans and notes"},
+		shortcut{key: "Backspace", action: "Go back / clear search"},
+		shortcut{key: "q / Esc Esc", action: "Quit"},
+		shortcut{key: "? / Esc", action: "Close shortcuts"},
 	)
 }
 
 func planDetailShortcuts() []shortcut {
 	return []shortcut{
-		{key: "Tab / ← / →", action: "Switch detail tabs"},
+		{key: "Tab / Shift+Tab / ← / →", action: "Switch detail tabs"},
 		{key: "↑ / ↓ / j / k", action: "Scroll or select"},
 		{key: "g / G", action: "Jump to top / bottom"},
 		{key: "Enter", action: "Open slice on Slices tab"},

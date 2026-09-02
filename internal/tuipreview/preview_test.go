@@ -124,10 +124,10 @@ func TestRenderEveryViewIsDeterministicAndBounded(t *testing.T) {
 		selection int
 		header    string
 	}{
-		{view: ViewPlans, header: "tao │▸plans  notes  settings  debug"},
-		{view: ViewNotes, selection: 1, header: "tao │ plans ▸notes  settings  debug"},
-		{view: ViewSettings, selection: 1, header: "tao │ plans  notes ▸settings  debug"},
-		{view: ViewDebug, header: "tao │ plans  notes  settings ▸debug"},
+		{view: ViewPlans, header: "tao │ notes ▸plans  settings  debug"},
+		{view: ViewNotes, selection: 1, header: "tao │▸notes  plans  settings  debug"},
+		{view: ViewSettings, selection: 1, header: "tao │ notes  plans ▸settings  debug"},
+		{view: ViewDebug, header: "tao │ notes  plans  settings ▸debug"},
 		{view: ViewPlanDetail, selection: 1, header: "Tao UI | live | alpha"},
 		{view: ViewNoteDetail, selection: 1, header: "Tao UI | NOTE DETAIL"},
 		{view: ViewSliceDetail, selection: 1, header: "Tao UI | 002-render-boundary | in_progress"},
@@ -196,14 +196,14 @@ func TestSettingsPreviewLeadsWithTruthfulOverrides(t *testing.T) {
 	}
 	lines := strings.Split(strings.TrimSuffix(frame, "\n"), "\n")
 	sectionIndex := -1
-	for index := 2; index < len(lines); index++ {
+	for index := 1; index < len(lines); index++ {
 		if strings.TrimSpace(lines[index]) != "" {
 			sectionIndex = index
 			break
 		}
 	}
 	if sectionIndex < 0 || !strings.Contains(lines[sectionIndex], "▌ OVERRIDES ") {
-		t.Fatalf("Overrides does not follow the tab rule:\n%s", frame)
+		t.Fatalf("Overrides does not follow the tab strip:\n%s", frame)
 	}
 	for _, want := range []string{"← env", "← damaged-repo", "← default", "warning: fixture warning"} {
 		if !strings.Contains(frame, want) {

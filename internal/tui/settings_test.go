@@ -27,7 +27,7 @@ func TestRenderSettingsShowsGlobalAndRepositoryDefaults(t *testing.T) {
 		},
 	})
 	for _, want := range []string{
-		"tao │ plans  notes ▸settings  debug", "OVERRIDES", "EXECUTION · all default", "Agent", "← env", "← alpha", "warning: example warning",
+		"tao │ notes  plans ▸settings  debug", "OVERRIDES", "EXECUTION · all default", "Agent", "← env", "← alpha", "warning: example warning",
 		"REPOSITORY DEFAULTS", "alpha", "● ok", "pr=on", "/repos/alpha", "> beta", "● missing root", "pr=inherit", "finding: repo root does not exist",
 	} {
 		if !strings.Contains(frame, want) {
@@ -85,7 +85,7 @@ func TestRenderSettingsUnavailableRuntimeViewportKeepsSectionContext(t *testing.
 	frame := Render(model)
 	for _, want := range []string{
 		"OVERRIDES", "RUNTIME DEFAULTS", "Runtime defaults unavailable.",
-		"REPOSITORY DEFAULTS", "runtime status collection failed", "> override-repo", "+ 26 more  ↓",
+		"REPOSITORY DEFAULTS", "runtime status collection failed", "> override-repo", "+ 24 more  ↓",
 	} {
 		if !strings.Contains(frame, want) {
 			t.Errorf("constrained Settings viewport missing %q:\n%s", want, frame)

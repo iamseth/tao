@@ -9,7 +9,6 @@ import (
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/plan"
-	planview "github.com/iamseth/tao/internal/view"
 )
 
 const (
@@ -131,26 +130,9 @@ func Render(model Model) string {
 			extra:          extra,
 		}
 	}
-	lines := renderFrame(model, page, summary)
+	lines := renderFrame(model, page)
 	frameLineCount := len(lines)
-	feedbackLineCount := 0
-	if page == PagePlans && strings.TrimSpace(model.ActionMessage) != "" {
-		feedbackLineCount++
-	}
-	if page == PageSettings && strings.TrimSpace(model.SettingsMessage) != "" {
-		feedbackLineCount++
-	}
-	if strings.TrimSpace(model.ConfirmMessage) != "" {
-		feedbackLineCount++
-	}
-	keyHintsFooter := ""
-	if shouldRenderKeyHintsFooter(model, frameLineCount, feedbackLineCount) {
-		keyHintsFooter = renderKeyHintsFooter(model.Profile, page, model.Width)
-	}
 	selectedLine := -1
-	previewStart := -1
-	notePaneStart := -1
-	var planRowLines []int
 	var viewportMetadata tableViewportMetadata
 	switch {
 	case page == PageSettings:
@@ -165,11 +147,7 @@ func Render(model Model) string {
 		body := renderDebugPage(model)
 		bodyHeight := len(body)
 		if model.Height > 0 {
-			footerHeight := 0
-			if keyHintsFooter != "" {
-				footerHeight = 1
-			}
-			bodyHeight = max(model.Height-frameLineCount-footerHeight, 0)
+			bodyHeight = max(model.Height-frameLineCount, 0)
 		}
 		start := max(0, min(model.DebugOffset, max(len(body)-bodyHeight, 0)))
 		if bodyHeight > 0 && len(body)-start > bodyHeight {
@@ -193,51 +171,30 @@ func Render(model Model) string {
 			selectedLine = -1
 		}
 		lines = append(lines, noteLines...)
-		items := visibleNotes(noteSnapshot, model.FocusRepositoryID)
-		if model.Selected >= 0 && model.Selected < len(items) && selectedLine >= 0 {
-			notePaneStart = len(lines)
-			paneWidth := dashboardFrameWidth(model, PageNotes)
-			selectedNote := items[model.Selected]
-			details := renderNotePane(model.Profile, selectedNote, max(paneWidth-2, 0))
-			lines = append(lines, borderedPane(model.Profile, paneWidth, notePaneTitle(selectedNote), notePaneIdentity(selectedNote), true, details)...)
-		}
 	case visibleCount == 0:
 		lines = append(lines, "", "  No plans.")
 	default:
 		widths := measureTable(sections, model.Snapshot.CollectedAt, model.ActionLabels)
 		selected := 0
-		var selectedRow monitor.Row
-		hasSelectedRow := false
 		for _, section := range sections {
 			if len(section.Rows) == 0 {
 				continue
 			}
 			withAttention := section.Kind == SectionAttention
-			sectionWidth := dashboardSectionWidth(model, PagePlans, section.Title, visibleWidth(fmt.Sprintf("%d", len(section.Rows))))
+			sectionWidth := dashboardSectionWidth(model, PagePlans, section.Title, 0)
 			columns := planTableColumns(widths, withAttention, model.Width)
 			paneWidth := planTablePaneWidth(model.Width, columns)
-			lines = append(lines, "", sectionRule(model.Profile, planSectionRole(section.Kind), section.Title, len(section.Rows), sectionWidth), renderHeader(columns, paneWidth))
+			lines = append(lines, "", sectionTitleRule(model.Profile, planSectionRole(section.Kind), section.Title, sectionWidth), renderHeader(columns, paneWidth))
 			viewportSection := tableViewportSection{headingLines: []int{len(lines) - 2, len(lines) - 1}}
 			for _, row := range section.Rows {
 				if selected == model.Selected {
 					selectedLine = len(lines)
-					selectedRow = row
-					hasSelectedRow = true
 				}
-				planRowLines = append(planRowLines, len(lines))
 				viewportSection.contentLines = append(viewportSection.contentLines, len(lines))
-				lines = append(lines, renderTableRow(row, model.Snapshot.CollectedAt, columns, paneWidth, selected == model.Selected, model.Profile, planSectionRole(section.Kind), model.ActionLabels[actionRowKey(row)]))
+				lines = append(lines, renderTableRow(row, model.Snapshot.CollectedAt, columns, paneWidth, selected == model.Selected, model.Profile, model.ActionLabels[actionRowKey(row)]))
 				selected++
 			}
 			viewportMetadata.sections = append(viewportMetadata.sections, viewportSection)
-		}
-		if hasSelectedRow {
-			previewStart = len(lines)
-			paneWidth := dashboardFrameWidth(model, PagePlans)
-			preview := renderPlanPreview(model.Profile, selectedRow, max(paneWidth-2, 0))
-			title := displayValue(singleLineDetail(planLabel(selectedRow)))
-			identity := planPreviewIdentity(selectedRow)
-			lines = append(lines, borderedPane(model.Profile, paneWidth, title, identity, hasSelectedRow, preview)...)
 		}
 	}
 	footerStart := len(lines)
@@ -250,16 +207,14 @@ func Render(model Model) string {
 	if strings.TrimSpace(model.ConfirmMessage) != "" {
 		lines = append(lines, "", model.ConfirmMessage+" [y/n]")
 	}
-	if keyHintsFooter != "" {
-		lines = append(lines, keyHintsFooter)
+	if summary != nil {
+		lines = append(lines, renderFrameSummary(model.Profile, *summary))
 	}
-	switch {
-	case page == PagePlans && previewStart >= 0:
-		lines = planTableViewport(lines, planRowLines, selectedLine, previewStart, footerStart, frameLineCount, model.Height, model.Profile, viewportMetadata)
-	case page == PageNotes && notePaneStart >= 0:
-		lines = noteTableViewport(lines, selectedLine, notePaneStart, footerStart, frameLineCount, model.Height, model.Profile, viewportMetadata)
-	default:
-		lines = tableViewport(lines, selectedLine, footerStart, frameLineCount, model.Height, model.Profile, viewportMetadata)
+	lines = tableViewport(lines, selectedLine, footerStart, frameLineCount, model.Height, model.Profile, viewportMetadata)
+	if summary != nil && model.Height > len(lines) {
+		bottom := lines[len(lines)-1]
+		lines = append(lines[:len(lines)-1], make([]string, model.Height-len(lines))...)
+		lines = append(lines, bottom)
 	}
 	if model.ShowShortcuts {
 		lines = overlayShortcutLegend(lines, page, model.Width, model.Height, model.Profile)
@@ -276,192 +231,6 @@ func Render(model Model) string {
 	return frame
 }
 
-func planTableViewport(lines []string, planRowLines []int, selectedLine, previewStart, footerStart, headerCount, height int, profile Profile, metadata tableViewportMetadata) []string {
-	if height <= 0 || len(lines) <= height {
-		return lines
-	}
-	headerCount = min(headerCount, footerStart)
-	if height <= headerCount {
-		return lines[:height]
-	}
-
-	footer := compactFooter(lines[footerStart:])
-	available := height - headerCount
-	footerLimit := max(available-1, 0) // A selected plan row takes precedence over feedback.
-	if len(footer) > footerLimit {
-		footer = footer[len(footer)-footerLimit:]
-	}
-	available -= len(footer)
-
-	tableBody := lines[headerCount:previewStart]
-	preview := lines[previewStart:footerStart]
-	viewportBounds := func(contentHeight int) (tableLines []int, previewHeight, hiddenPlanRows int) {
-		if len(preview) > 0 && contentHeight >= 2 {
-			previewHeight = 1
-			// Keep table context in extremely short frames. Once there is room
-			// for both, reserve both pane borders and one advisory detail line
-			// so cropping still leaves a coherent selected-plan frame.
-			if contentHeight >= 6 {
-				previewHeight = min(len(preview), 3)
-			}
-		}
-		tableHeight := min(len(tableBody), contentHeight-previewHeight)
-		previewHeight = min(len(preview), contentHeight-tableHeight)
-		if tableHeight < min(len(tableBody), min(3, contentHeight)) && previewHeight == 0 {
-			tableHeight = min(len(tableBody), min(3, contentHeight))
-		}
-
-		start := 0
-		if tableHeight > 0 {
-			start = selectedLine - headerCount - tableHeight/2
-			start = max(0, min(start, len(tableBody)-tableHeight))
-		}
-		tableLines = make([]int, tableHeight)
-		for index := range tableLines {
-			tableLines[index] = headerCount + start + index
-		}
-		tableLines = metadata.preserveSelectedSectionHeadings(tableLines, selectedLine, tableHeight, headerCount, previewStart)
-
-		hiddenPlanRows = len(planRowLines)
-		visible := make(map[int]struct{}, len(tableLines))
-		for _, line := range tableLines {
-			visible[line] = struct{}{}
-		}
-		for _, line := range planRowLines {
-			if _, ok := visible[line]; ok {
-				hiddenPlanRows--
-			}
-		}
-		return tableLines, previewHeight, hiddenPlanRows
-	}
-
-	tableLines, previewHeight, hiddenPlanRows := viewportBounds(available)
-	if hiddenPlanRows > 0 && available > 1 {
-		tableLines, previewHeight, hiddenPlanRows = viewportBounds(available - 1)
-	}
-	viewport := make([]string, 0, height)
-	viewport = append(viewport, lines[:headerCount]...)
-	for _, line := range tableLines {
-		viewport = append(viewport, lines[line])
-	}
-	viewport = append(viewport, borderedPaneViewport(preview, previewHeight)...)
-	if hiddenPlanRows > 0 && len(viewport) < height-len(footer) {
-		viewport = append(viewport, moreIndicator(profile, hiddenPlanRows))
-	}
-	return append(viewport, footer...)
-}
-
-func noteTableViewport(lines []string, selectedLine, paneStart, footerStart, headerCount, height int, profile Profile, metadata tableViewportMetadata) []string {
-	if height <= 0 || len(lines) <= height {
-		return lines
-	}
-	headerCount = min(headerCount, paneStart)
-	if height <= headerCount {
-		return lines[:height]
-	}
-
-	contentCount := 0
-	for _, section := range metadata.sections {
-		contentCount += len(section.contentLines)
-	}
-	if contentCount == 0 {
-		return tableViewport(lines, selectedLine, footerStart, headerCount, height, profile, metadata)
-	}
-
-	footer := compactFooter(lines[footerStart:])
-	available := height - headerCount
-	footerLimit := max(available-1, 0)
-	if len(footer) > footerLimit {
-		footer = footer[len(footer)-footerLimit:]
-	}
-	available -= len(footer)
-	pane := lines[paneStart:footerStart]
-
-	viewportBounds := func(contentHeight int) (bodyLines []int, paneHeight, visibleContent int) {
-		// Prefer the complete pane whenever it fits below the selected section's
-		// headings and selected row. Otherwise retain the compact crop used by
-		// very short frames.
-		contextHeight := metadata.selectedSectionContextHeight(selectedLine, headerCount, paneStart)
-		if len(pane) >= 3 && selectedLine >= 0 {
-			switch {
-			case contextHeight > 0 && len(pane)+contextHeight <= contentHeight:
-				paneHeight = len(pane)
-			case contentHeight >= 4:
-				paneHeight = 3
-			}
-		}
-		bodyLines, visibleContent = metadata.viewportLines(selectedLine, contentHeight-paneHeight, headerCount, paneStart)
-		return bodyLines, paneHeight, visibleContent
-	}
-
-	bodyLines, paneHeight, visibleContent := viewportBounds(available)
-	hiddenContent := contentCount - visibleContent
-	if hiddenContent > 0 && available > 1 {
-		bodyLines, paneHeight, visibleContent = viewportBounds(available - 1)
-		hiddenContent = contentCount - visibleContent
-	}
-
-	viewport := make([]string, 0, height)
-	viewport = append(viewport, lines[:headerCount]...)
-	for _, line := range bodyLines {
-		viewport = append(viewport, lines[line])
-	}
-	viewport = append(viewport, borderedPaneViewport(pane, paneHeight)...)
-	if hiddenContent > 0 && len(viewport) < height-len(footer) {
-		viewport = append(viewport, moreIndicator(profile, hiddenContent))
-	}
-	return append(viewport, footer...)
-}
-
-func borderedPaneViewport(lines []string, height int) []string {
-	height = min(max(height, 0), len(lines))
-	if height == 0 {
-		return nil
-	}
-	if height == len(lines) || height == 1 {
-		return lines[:height]
-	}
-	viewport := make([]string, 0, height)
-	viewport = append(viewport, lines[0])
-	viewport = append(viewport, lines[1:height-1]...)
-	return append(viewport, lines[len(lines)-1])
-}
-
-func (metadata tableViewportMetadata) selectedSectionContextHeight(selectedLine, bodyStart, bodyEnd int) int {
-	for _, section := range metadata.sections {
-		if slices.Contains(section.contentLines, selectedLine) {
-			return len(linesWithin(section.headingLines, bodyStart, bodyEnd)) + 1
-		}
-	}
-	return 0
-}
-
-func (metadata tableViewportMetadata) preserveSelectedSectionHeadings(tableLines []int, selectedLine, capacity, bodyStart, bodyEnd int) []int {
-	if capacity <= 0 {
-		return tableLines
-	}
-	for _, section := range metadata.sections {
-		selectedContent := slices.Index(section.contentLines, selectedLine)
-		if selectedContent < 0 {
-			continue
-		}
-		headings := linesWithin(section.headingLines, bodyStart, bodyEnd)
-		content := linesWithin(section.contentLines, bodyStart, bodyEnd)
-		if len(headings)+1 > capacity || containsAllLines(tableLines, headings) {
-			return tableLines
-		}
-		contentCapacity := capacity - len(headings)
-		start := selectedContent - contentCapacity/2
-		start = max(0, min(start, len(content)-contentCapacity))
-		visibleContent := min(contentCapacity, len(content))
-		preserved := make([]int, 0, len(headings)+visibleContent)
-		preserved = append(preserved, headings...)
-		preserved = append(preserved, content[start:start+visibleContent]...)
-		return preserved
-	}
-	return tableLines
-}
-
 func linesWithin(lines []int, start, end int) []int {
 	within := make([]int, 0, len(lines))
 	for _, line := range lines {
@@ -470,19 +239,6 @@ func linesWithin(lines []int, start, end int) []int {
 		}
 	}
 	return within
-}
-
-func containsAllLines(lines, required []int) bool {
-	available := make(map[int]struct{}, len(lines))
-	for _, line := range lines {
-		available[line] = struct{}{}
-	}
-	for _, line := range required {
-		if _, ok := available[line]; !ok {
-			return false
-		}
-	}
-	return true
 }
 
 func compactFooter(lines []string) []string {
@@ -765,7 +521,7 @@ func planSectionRole(kind SectionKind) Role {
 	}
 }
 
-func renderTableRow(row monitor.Row, now time.Time, columns []column, paneWidth int, selected bool, profile Profile, sectionRole Role, actionLabel string) string {
+func renderTableRow(row monitor.Row, now time.Time, columns []column, paneWidth int, selected bool, profile Profile, actionLabel string) string {
 	values := tableRowValues(row, now, actionLabel)
 	repositoryKey := strings.TrimSpace(row.RepositoryID)
 	if repositoryKey == "" {
@@ -781,7 +537,7 @@ func renderTableRow(row monitor.Row, now time.Time, columns []column, paneWidth 
 		case "REPO":
 			cells = append(cells, Paint(profile, repositoryRole, values.repo))
 		case "NEXT":
-			cells = append(cells, filledBadge(profile, sectionRole, values.next))
+			cells = append(cells, values.next)
 		case "PLAN":
 			cells = append(cells, values.plan)
 		case "SLICES":
@@ -811,129 +567,9 @@ func renderSlicesValue(profile Profile, row monitor.Row) string {
 	if total > 0 {
 		filled = min(completed*sliceBarCells/total, sliceBarCells)
 	}
-	bar := Paint(profile, RoleSuccess, strings.Repeat("█", filled)) +
-		Paint(profile, RoleNeutral1, strings.Repeat("░", sliceBarCells-filled))
+	bar := Paint(profile, RoleNeutral5, strings.Repeat("━", filled)) +
+		Paint(profile, RoleNeutral2, strings.Repeat("─", sliceBarCells-filled))
 	return bar + " " + slicesLabel(row)
-}
-
-func filledBadge(profile Profile, role Role, text string) string {
-	if profile == ProfileNone || text == "" {
-		return text
-	}
-	background, ok := RoleColor(profile, role)
-	if !ok {
-		return text
-	}
-	return colorSequence(background, true) + text + resetSequence
-}
-
-func planPreviewIdentity(row monitor.Row) string {
-	sequence := "-"
-	if row.Overview.Sequence != nil {
-		sequence = fmt.Sprintf("%d of %d", row.Overview.Sequence.Position, row.Overview.Sequence.Total)
-	}
-	return strings.Join([]string{
-		displayValue(singleLineDetail(row.PlanID)),
-		displayValue(singleLineDetail(row.RepositoryName)),
-		sequence,
-	}, "  ·  ")
-}
-
-func renderPlanPreview(profile Profile, row monitor.Row, width int) []string {
-	overview := row.Overview
-	var lines []string
-	if row.Status == plan.StatusAbandoned {
-		lines = append(lines,
-			"Abandoned at: "+formatAbandonedAt(row.AbandonedAt),
-			"Abandonment reason: "+planview.FormatAbandonmentText(row.AbandonmentReason),
-		)
-	}
-	lines = append(lines, planPreviewField(profile, "Benefit", overview.ExpectedBenefit, width)...)
-	if width > 0 && width < 50 {
-		decision := fmt.Sprintf("%s / %s", displayValue(string(overview.Disposition)), displayValue(string(overview.Readiness)))
-		lines = append(lines, planPreviewField(profile, "Decision", decision, width)...)
-	} else {
-		lines = append(lines, planPreviewField(profile, "Readiness", string(overview.Readiness), width)...)
-		disposition := displayValue(string(overview.Disposition)) + " — " + displayValue(overview.DispositionReason)
-		lines = append(lines, planPreviewField(profile, "Disposition", disposition, width)...)
-	}
-	if priority := overview.Priority; priority != nil {
-		if width > 0 && width < 80 {
-			lines = append(lines, fmt.Sprintf("Priority: %s I:%s U:%s E:%s R:%s C:%s", priority.Level, priority.Impact, priority.Urgency, priority.Effort, priority.Risk, priority.Confidence))
-		} else {
-			lines = append(lines, renderPriorityBadges(profile, *priority))
-		}
-		if width <= 0 || width >= 50 {
-			lines = append(lines, planPreviewField(profile, "Priority rationale", priority.Rationale, width)...)
-		}
-	} else {
-		lines = append(lines, planPreviewField(profile, "Priority", "unranked", width)...)
-	}
-	sequence := "-"
-	if overview.Sequence != nil {
-		sequence = fmt.Sprintf("%d of %d", overview.Sequence.Position, overview.Sequence.Total)
-	}
-	lines = append(lines, "Sequence: "+sequence)
-	scope := strings.TrimSpace(strings.Join([]string{row.SliceID, row.SliceTitle}, " — "))
-	scope = strings.Trim(scope, " —")
-	lines = append(lines, "Slice scope: "+displayValue(singleLineDetail(scope)))
-	relationships := "-"
-	if len(row.Relationships) > 0 {
-		values := make([]string, 0, len(row.Relationships))
-		for _, relationship := range row.Relationships {
-			values = append(values, fmt.Sprintf("%s %s [%s]", relationship.Type, relationship.PlanID, relationship.State))
-		}
-		relationships = strings.Join(values, "; ")
-	}
-	lines = append(lines, planPreviewField(profile, "Relationships", relationships, width)...)
-	return lines
-}
-
-func renderPriorityBadges(profile Profile, priority plan.Priority) string {
-	badges := []string{filledBadge(profile, priorityLevelRole(priority.Level), displayValue(string(priority.Level)))}
-	for _, dimension := range []struct {
-		label string
-		value string
-	}{
-		{label: "impact", value: string(priority.Impact)},
-		{label: "urgency", value: string(priority.Urgency)},
-		{label: "effort", value: string(priority.Effort)},
-		{label: "risk", value: string(priority.Risk)},
-		{label: "confidence", value: string(priority.Confidence)},
-	} {
-		badges = append(badges, Paint(profile, RoleNeutral2, dimension.label)+" "+Paint(profile, RoleNeutral4, displayValue(dimension.value)))
-	}
-	return strings.Join(badges, "  ")
-}
-
-func priorityLevelRole(level plan.PriorityOverallLevel) Role {
-	switch level {
-	case plan.PriorityOverallLevelMust:
-		return RoleWarn
-	case plan.PriorityOverallLevelShould:
-		return RoleInfo
-	default:
-		return RoleNeutral3
-	}
-}
-
-func planPreviewField(profile Profile, label, value string, width int) []string {
-	prefix := label + ": "
-	value = displayValue(singleLineDetail(value))
-	available := 0
-	if width > 0 {
-		available = width - visibleWidth(prefix)
-	}
-	wrapped := wrapDetailWords(value, available)
-	indent := strings.Repeat(" ", visibleWidth(prefix))
-	for index := range wrapped {
-		if index == 0 {
-			wrapped[index] = Paint(profile, RoleNeutral2, prefix) + Paint(profile, RoleNeutral4, wrapped[index])
-		} else {
-			wrapped[index] = indent + Paint(profile, RoleNeutral4, wrapped[index])
-		}
-	}
-	return wrapped
 }
 
 func tableRowValues(row monitor.Row, now time.Time, actionLabel string) rowValues {

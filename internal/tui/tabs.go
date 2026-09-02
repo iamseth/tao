@@ -18,8 +18,8 @@ type Tab struct {
 }
 
 var dashboardTabs = []Tab{
-	{ID: PagePlans, Label: "plans"},
 	{ID: PageNotes, Label: "notes"},
+	{ID: PagePlans, Label: "plans"},
 	{ID: PageSettings, Label: "settings"},
 	{ID: PageDebug, Label: "debug"},
 }

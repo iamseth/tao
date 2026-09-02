@@ -46,7 +46,7 @@ type DebugRuntimeDefault struct {
 
 func renderDebugPage(model Model) []string {
 	var lines []string
-	lines = append(lines, "", debugSectionRule(model, RoleAccent, "UI", 10))
+	lines = append(lines, "", debugSectionRule(model, RoleAccent, "UI"))
 	appendDebugValue(&lines, "viewport", fmt.Sprintf("%dx%d", model.Width, model.Height))
 	appendDebugValue(&lines, "color", model.Profile.String())
 	appendDebugValue(&lines, "repository focus", debugFocusLabel(model))
@@ -59,7 +59,7 @@ func renderDebugPage(model Model) []string {
 	lines = appendDebugTime(lines, "diagnostics collected", model.DebugSnapshot.CollectedAt)
 
 	if len(model.DebugSnapshot.System) > 0 {
-		lines = append(lines, "", debugSectionRule(model, RoleNeutral5, "SYSTEM", len(model.DebugSnapshot.System)))
+		lines = append(lines, "", debugSectionRule(model, RoleNeutral5, "SYSTEM"))
 		for _, value := range model.DebugSnapshot.System {
 			appendDebugValue(&lines, value.Label, value.Value)
 		}
@@ -73,7 +73,7 @@ func renderDebugPage(model Model) []string {
 	if doctorProblemCount > 0 {
 		doctorRole = RoleWarn
 	}
-	lines = append(lines, "", debugSectionRule(model, doctorRole, "DOCTOR", doctorProblemCount))
+	lines = append(lines, "", debugSectionRule(model, doctorRole, "DOCTOR"))
 	appendDebugValue(&lines, "selected agent", displayValue(singleLineDetail(model.DebugSnapshot.SelectedAgent)))
 	agents := strings.Join(model.DebugSnapshot.InstalledAgents, ", ")
 	appendDebugValue(&lines, "installed agents", displayValue(singleLineDetail(agents)))
@@ -132,7 +132,7 @@ func renderDebugPage(model Model) []string {
 
 	warnings := debugCollectorWarnings(model.Snapshot, model.NoteSnapshot)
 	if len(warnings) > 0 {
-		lines = append(lines, "", debugSectionRule(model, RoleWarn, "COLLECTOR WARNINGS", len(warnings)))
+		lines = append(lines, "", debugSectionRule(model, RoleWarn, "COLLECTOR WARNINGS"))
 		for _, warning := range warnings {
 			lines = append(lines, "  ⚠ "+warning)
 		}
@@ -166,9 +166,9 @@ func debugRuntimeAnomalies(rows []DebugRuntimeDefault, globalRows []SettingsRunt
 	return anomalies
 }
 
-func debugSectionRule(model Model, role Role, title string, count int) string {
-	width := dashboardSectionWidth(model, PageDebug, title, visibleWidth(fmt.Sprintf("%d", count)))
-	return sectionRule(model.Profile, role, title, count, width)
+func debugSectionRule(model Model, role Role, title string) string {
+	width := dashboardSectionWidth(model, PageDebug, title, 0)
+	return sectionTitleRule(model.Profile, role, title, width)
 }
 
 func appendDebugValue(lines *[]string, label, value string) {
@@ -224,11 +224,7 @@ func debugCollectorWarnings(snapshot monitor.Snapshot, notes note.Snapshot) []st
 }
 
 func debugMaxOffset(model Model) int {
-	frameHeight := len(renderFrame(model, PageDebug, nil))
-	footerHeight := 0
-	if shouldRenderKeyHintsFooter(model, frameHeight, 0) && renderKeyHintsFooter(model.Profile, PageDebug, model.Width) != "" {
-		footerHeight = 1
-	}
-	bodyHeight := max(model.Height-frameHeight-footerHeight, 0)
+	frameHeight := len(renderFrame(model, PageDebug))
+	bodyHeight := max(model.Height-frameHeight, 0)
 	return max(len(renderDebugPage(model))-bodyHeight, 0)
 }

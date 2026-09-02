@@ -161,8 +161,10 @@ func TestRunMovesSelectionAndRestoresTerminal(t *testing.T) {
 	if len(frames) != 2 {
 		t.Fatalf("frame writes = %d, want 2; frames=%q", len(frames), frames)
 	}
-	if !strings.Contains(frames[0], "one  ·  alpha  ·  - ─╮") || !strings.Contains(frames[1], "two  ·  beta  ·  - ─╮") {
-		t.Fatalf("selected-plan context did not move in complete frame writes: %q", frames)
+	for _, frame := range frames {
+		if !strings.Contains(frame, "one") || !strings.Contains(frame, "two") {
+			t.Fatalf("complete frame write lost plan rows: %q", frames)
+		}
 	}
 	entered, restored := terminal.state()
 	if !entered || !restored {
@@ -192,7 +194,7 @@ func TestRunCollectsNotesInitiallyAndOnRefresh(t *testing.T) {
 	}()
 
 	_ = waitForFrame(t, output.writes)
-	if _, err := io.WriteString(writer, "\t"); err != nil {
+	if _, err := io.WriteString(writer, "\x1b[Z"); err != nil {
 		t.Fatal(err)
 	}
 	initialNotes := waitForFrame(t, output.writes)
@@ -251,8 +253,8 @@ func TestRunRefreshesAndHandlesResize(t *testing.T) {
 			t.Fatalf("resized frame line %q exceeds new width", line)
 		}
 	}
-	if !strings.Contains(resized, "two") {
-		t.Fatalf("resized frame lost the selected plan identity: %q", resized)
+	if !strings.Contains(resized, "RUN") || !strings.Contains(resized, "1 plan") {
+		t.Fatalf("resized frame lost plan context: %q", resized)
 	}
 
 	if _, err := writer.Write([]byte("q")); err != nil {
@@ -496,38 +498,28 @@ func TestTopLevelTabNavigationPreservesPlanSelectionAcrossRefresh(t *testing.T) 
 		t.Fatalf("initial page = %q, want plans", state.activePage())
 	}
 
-	state.handleKey(term.KeyEvent{Key: term.KeyTab})
+	state.handleKey(term.KeyEvent{Key: term.KeyShiftTab})
 	if state.activePage() != PageNotes || state.selected != 0 {
-		t.Fatalf("Tab page=%q selection=%d, want notes selection 0", state.activePage(), state.selected)
+		t.Fatalf("Shift+Tab page=%q selection=%d, want notes selection 0", state.activePage(), state.selected)
 	}
 	state.replaceSnapshot(monitor.Snapshot{Rows: []monitor.Row{
 		{RepositoryID: "repo-b", PlanID: "target", Status: "planned"},
 		{RepositoryID: "repo-a", PlanID: "first", Status: "planned"},
 	}})
-	state.handleKey(term.KeyEvent{Key: term.KeyArrowRight})
-	if state.activePage() != PageSettings || state.selected != 0 {
-		t.Fatalf("right navigation page=%q selection=%d, want settings", state.activePage(), state.selected)
-	}
-	state.handleKey(term.KeyEvent{Key: term.KeyArrowRight})
-	if state.activePage() != PageDebug || state.selected != 0 {
-		t.Fatalf("second right navigation page=%q selection=%d, want debug with no selection", state.activePage(), state.selected)
-	}
-	state.handleKey(term.KeyEvent{Key: term.KeyArrowRight})
+	state.handleKey(term.KeyEvent{Key: term.KeyTab})
 	row, ok := state.selectedRow()
 	if state.activePage() != PagePlans || !ok || state.selected != 0 || row.PlanID != "target" {
-		t.Fatalf("third right navigation page=%q selection=%d row=%+v ok=%t, want preserved target", state.activePage(), state.selected, row, ok)
+		t.Fatalf("Tab page=%q selection=%d row=%+v ok=%t, want preserved target", state.activePage(), state.selected, row, ok)
 	}
-	state.handleKey(term.KeyEvent{Key: term.KeyArrowLeft})
-	if state.activePage() != PageDebug {
-		t.Fatalf("left navigation page = %q, want debug", state.activePage())
+	for _, want := range []PageID{PageSettings, PageDebug, PageNotes, PagePlans} {
+		state.handleKey(term.KeyEvent{Key: term.KeyArrowRight})
+		if state.activePage() != want {
+			t.Fatalf("right navigation page=%q, want %q", state.activePage(), want)
+		}
 	}
-	state.handleKey(term.KeyEvent{Key: term.KeyArrowLeft})
-	if state.activePage() != PageSettings {
-		t.Fatalf("second left navigation page = %q, want settings", state.activePage())
-	}
-	state.handleKey(term.KeyEvent{Key: term.KeyArrowLeft})
+	state.handleKey(term.KeyEvent{Key: term.KeyShiftTab})
 	if state.activePage() != PageNotes {
-		t.Fatalf("third left navigation page = %q, want notes", state.activePage())
+		t.Fatalf("Shift+Tab from plans page=%q, want notes", state.activePage())
 	}
 }
 
@@ -672,7 +664,7 @@ func TestNotesTabKeepsSharedFocusAndRejectsPlanOnlyKeys(t *testing.T) {
 	}
 	app := App{Actions: actions}
 	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'f'})
-	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyTab})
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyShiftTab})
 	if state.activePage() != PageNotes || state.focusRepositoryID != "repo-a" {
 		t.Fatalf("notes page=%q focus=%q, want shared repo-a focus", state.activePage(), state.focusRepositoryID)
 	}

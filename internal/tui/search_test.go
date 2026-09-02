@@ -81,7 +81,7 @@ func TestRenderSearchStateAndResults(t *testing.T) {
 		SearchActive: true,
 	}
 	frame := Render(model)
-	for _, want := range []string{"tao │▸plans  notes  settings  debug", "1 plan", "Search: /owner█", "owner"} {
+	for _, want := range []string{"tao │ notes ▸plans  settings  debug", "1 plan", "Search: /owner█", "owner"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("search frame missing %q:\n%s", want, frame)
 		}
@@ -120,7 +120,7 @@ func TestSearchInputAppliesAcrossPagesAndEscapeOrBackspaceClears(t *testing.T) {
 	if state.searchActive || state.searchQuery != "owner" {
 		t.Fatalf("submitted search active=%t query=%q", state.searchActive, state.searchQuery)
 	}
-	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyTab})
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyShiftTab})
 	if state.activePage() != PageNotes || len(state.visibleNotes()) != 1 || state.visibleNotes()[0].ID != "owner-note" {
 		t.Fatalf("note search page=%q notes=%+v", state.activePage(), state.visibleNotes())
 	}
