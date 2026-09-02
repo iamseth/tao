@@ -4,6 +4,8 @@ import (
 	"flag"
 	"io"
 	"strings"
+
+	"github.com/iamseth/tao/internal/term/cells"
 )
 
 const (
@@ -29,7 +31,7 @@ func (a App) usage() error {
 			if metadata == nil {
 				continue
 			}
-			lines = append(lines, "  "+pad(commandName, nameWidth+2)+metadata.completionDescription)
+			lines = append(lines, "  "+cells.Pad(commandName, nameWidth+2)+metadata.completionDescription)
 		}
 	}
 	lines = append(lines,
@@ -117,7 +119,7 @@ func commandHelpSubcommandLines(subcommands []commandSubcommand) []string {
 	}
 	lines := make([]string, 0, len(subcommands))
 	for _, subcommand := range subcommands {
-		lines = append(lines, "  "+pad(subcommand.helpName(), nameWidth+2)+subcommand.description)
+		lines = append(lines, "  "+cells.Pad(subcommand.helpName(), nameWidth+2)+subcommand.description)
 	}
 	return lines
 }
@@ -144,7 +146,7 @@ func commandHelpOptionLines(metadata *commandMetadata) []string {
 	}
 	lines := make([]string, 0, len(flags))
 	for _, fl := range flags {
-		lines = append(lines, "  "+pad("--"+fl.Name, nameWidth+2)+commandHelpFlagUsage(fl))
+		lines = append(lines, "  "+cells.Pad("--"+fl.Name, nameWidth+2)+commandHelpFlagUsage(fl))
 	}
 	return lines
 }

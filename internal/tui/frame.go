@@ -3,6 +3,8 @@ package tui
 import (
 	"fmt"
 	"strings"
+
+	"github.com/iamseth/tao/internal/term/cells"
 )
 
 type frameSummary struct {
@@ -15,17 +17,17 @@ type frameSummary struct {
 func renderFrame(model Model, page PageID) []string {
 	strip, _ := renderTabStrip(model.Profile, page)
 	width := dashboardFrameWidth(model, page)
-	contextWidth := width - visibleWidth(strip) - 2
+	contextWidth := width - cells.Width(strip) - 2
 	context := renderGlobalContextWidth(model, contextWidth)
 
 	line := strip
-	if context != "" && width > visibleWidth(strip) {
-		gap := width - visibleWidth(strip) - visibleWidth(context)
+	if context != "" && width > cells.Width(strip) {
+		gap := width - cells.Width(strip) - cells.Width(context)
 		if gap >= 2 {
 			line += strings.Repeat(" ", gap) + context
 		}
 	}
-	line = truncateCells(line, width)
+	line = cells.Truncate(line, width)
 
 	return []string{line}
 }
@@ -36,7 +38,7 @@ func dashboardFrameWidth(model Model, page PageID) int {
 	}
 	strip, _ := renderTabStrip(model.Profile, page)
 	context := renderGlobalContext(model)
-	return visibleWidth(strip) + 2 + visibleWidth(context)
+	return cells.Width(strip) + 2 + cells.Width(context)
 }
 
 func dashboardSectionWidth(model Model, page PageID, title string, tailWidth int) int {
@@ -45,7 +47,7 @@ func dashboardSectionWidth(model Model, page PageID, title string, tailWidth int
 	}
 	// Leave enough room for both rule runs when rendering without a bounded
 	// terminal width, rather than forcing sectionRuleTail's narrow fallback.
-	minimum := visibleWidth("▌ "+title+" ") + tailWidth + 5
+	minimum := cells.Width("▌ "+title+" ") + tailWidth + 5
 	return max(dashboardFrameWidth(model, page), minimum)
 }
 
@@ -57,7 +59,7 @@ func fitDashboardSectionColumns(title string, columns []column, width int) []col
 	// Reserve the title, both spaces around the tail, the final rule cell, and
 	// at least one middle-rule cell. Narrow frames keep as many leading headers
 	// as can still render as an inline rule instead of degrading to bare text.
-	available := width - visibleWidth("▌ "+title+" ") - 4
+	available := width - cells.Width("▌ "+title+" ") - 4
 	if available <= 0 {
 		return columns
 	}
@@ -69,7 +71,7 @@ func fitDashboardSectionColumns(title string, columns []column, width int) []col
 			gap = columnGapWidth
 		}
 		remaining := available - used - gap
-		nameWidth := visibleWidth(item.name)
+		nameWidth := cells.Width(item.name)
 		if remaining < nameWidth {
 			break
 		}
@@ -89,7 +91,7 @@ func renderTabStrip(profile Profile, page PageID) (string, int) {
 	strip.WriteString(Paint(profile, RoleNeutral5, "tao"))
 	strip.WriteString(" ")
 	strip.WriteString(Paint(profile, RoleNeutral1, "│"))
-	activeEnd := visibleWidth(strip.String())
+	activeEnd := cells.Width(strip.String())
 	for index, tab := range dashboardTabs {
 		if index > 0 {
 			strip.WriteString(" ")
@@ -103,7 +105,7 @@ func renderTabStrip(profile Profile, page PageID) (string, int) {
 		}
 		strip.WriteString(Paint(profile, role, tab.Label))
 		if tab.ID == page {
-			activeEnd = visibleWidth(strip.String())
+			activeEnd = cells.Width(strip.String())
 		}
 	}
 	return strip.String(), activeEnd
@@ -125,7 +127,7 @@ func renderGlobalContextWidth(model Model, maxWidth int) string {
 	agent := displayValue(singleLineDetail(model.DebugSnapshot.SelectedAgent))
 	suffix := "  agent " + agent + "  "
 	if maxWidth > 0 {
-		repositoryWidth := maxWidth - visibleWidth(suffix) - visibleWidth("●")
+		repositoryWidth := maxWidth - cells.Width(suffix) - cells.Width("●")
 		if repositoryWidth <= 0 {
 			return ""
 		}
@@ -139,13 +141,7 @@ func renderGlobalContextWidth(model Model, maxWidth int) string {
 }
 
 func truncateFrameRepository(repository string, width int) string {
-	if visibleWidth(repository) <= width {
-		return repository
-	}
-	if width <= 1 {
-		return truncateCells(repository, width)
-	}
-	return truncateCells(repository, width-1) + "…"
+	return cells.TruncateEllipsis(repository, width)
 }
 
 func frameNeedsAttention(model Model) bool {

@@ -291,7 +291,7 @@ func TestMonitorUnicodeColumnsMatchExactPlainAndColoredOutput(t *testing.T) {
 		OriginalTotalCount:     2,
 		Warnings:               []string{"this warning is intentionally wider than the table"},
 	}}}
-	const want = "LIVE  STATUS       REPO   PLAN ID/name    PHASE  RUN  SLICES  UPDATED\n" +
+	const want = "LIVE  STATUS       REPO        PLAN ID/name          PHASE       RUN  SLICES  UPDATED\n" +
 		"LIVE  in_progress  倉庫名前長  unicode 日本語の計画  検証段階中  0s   1/2     -      \n" +
 		"warning: 倉庫名前長/unicode: this warning is intentionally wider than the table\n"
 

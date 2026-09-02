@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/note"
+	"github.com/iamseth/tao/internal/term/cells"
 )
 
 const (
@@ -210,12 +211,12 @@ func measureNoteTable(items []note.CatalogNote, now time.Time) noteTableWidths {
 	}
 	for _, item := range items {
 		values := noteValues(item, now)
-		widths.repository = max(widths.repository, visibleWidth(values.repository))
-		widths.preview = max(widths.preview, visibleWidth(values.preview))
-		widths.primaryTag = max(widths.primaryTag, visibleWidth(values.primaryTag))
-		widths.age = max(widths.age, visibleWidth(values.age))
+		widths.repository = max(widths.repository, cells.Width(values.repository))
+		widths.preview = max(widths.preview, cells.Width(values.preview))
+		widths.primaryTag = max(widths.primaryTag, cells.Width(values.primaryTag))
+		widths.age = max(widths.age, cells.Width(values.age))
 		if values.tier != "" {
-			widths.tier = max(widths.tier, len("TIER"), visibleWidth(values.tier))
+			widths.tier = max(widths.tier, len("TIER"), cells.Width(values.tier))
 		}
 	}
 	return widths
@@ -237,12 +238,12 @@ func noteTableColumns(widths noteTableWidths, frameWidth int) []column {
 	if frameWidth <= 0 {
 		return columns
 	}
-	return fitColumns(columns, max(frameWidth-visibleWidth("  "), 0))
+	return fitColumns(columns, max(frameWidth-cells.Width("  "), 0))
 }
 
 func noteTablePaneWidth(frameWidth int, columns []column) int {
 	if frameWidth > 0 {
-		return max(frameWidth-visibleWidth("  "), 0)
+		return max(frameWidth-cells.Width("  "), 0)
 	}
 	return columnsWidth(columns)
 }
@@ -257,24 +258,24 @@ func renderNoteHeader(columns []column, paneWidth int) string {
 
 func renderNoteRow(item note.CatalogNote, now time.Time, columns []column, paneWidth int, selected bool, profile Profile) string {
 	values := noteValues(item, now)
-	cells := make([]string, 0, len(columns))
+	rowCells := make([]string, 0, len(columns))
 	for _, item := range columns {
 		switch item.name {
 		case "REPO":
-			cells = append(cells, values.repository)
+			rowCells = append(rowCells, values.repository)
 		case "TIER":
-			cells = append(cells, Paint(profile, RoleInfo, values.tier))
+			rowCells = append(rowCells, Paint(profile, RoleInfo, values.tier))
 		case "PREVIEW":
-			cells = append(cells, Paint(profile, RoleNeutral4, values.preview))
+			rowCells = append(rowCells, Paint(profile, RoleNeutral4, values.preview))
 		case "TAG":
-			cells = append(cells, Paint(profile, RoleAccent, values.primaryTag))
+			rowCells = append(rowCells, Paint(profile, RoleAccent, values.primaryTag))
 		case "AGE":
-			cells = append(cells, values.age)
+			rowCells = append(rowCells, values.age)
 		}
 	}
-	line := "  " + joinRow(columns, cells, paneWidth)
+	line := "  " + joinRow(columns, rowCells, paneWidth)
 	if paneWidth > 0 {
-		line = padCells(line, paneWidth+visibleWidth("  "))
+		line = cells.Pad(line, paneWidth+cells.Width("  "))
 	}
 	if selected {
 		line = SelectRow(profile, line)
@@ -322,14 +323,7 @@ func isNoteTierTag(tag string) bool {
 }
 
 func boundedOptionalNoteValue(value string, limit int) string {
-	value = singleLineNoteValue(value)
-	if visibleWidth(value) <= limit {
-		return value
-	}
-	if limit <= 1 {
-		return truncateCells(value, limit)
-	}
-	return truncateCells(value, limit-1) + "…"
+	return cells.TruncateEllipsis(singleLineNoteValue(value), limit)
 }
 
 func boundedNoteValue(value string, limit int) string {
@@ -337,13 +331,7 @@ func boundedNoteValue(value string, limit int) string {
 	if value == "" {
 		return "-"
 	}
-	if visibleWidth(value) <= limit {
-		return value
-	}
-	if limit <= 1 {
-		return truncateCells(value, limit)
-	}
-	return truncateCells(value, limit-1) + "…"
+	return cells.TruncateEllipsis(value, limit)
 }
 
 func singleLineNoteValue(value string) string {

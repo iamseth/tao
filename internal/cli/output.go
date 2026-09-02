@@ -126,11 +126,3 @@ func outputIsTerminal(out io.Writer) bool {
 func color(value, code string) string {
 	return "\x1b[" + code + "m" + value + "\x1b[0m"
 }
-
-func pad(value string, width int) string {
-	visibleWidth := utf8.RuneCountInString(value)
-	if visibleWidth >= width {
-		return value
-	}
-	return value + strings.Repeat(" ", width-visibleWidth)
-}

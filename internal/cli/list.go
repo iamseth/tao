@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/term/cells"
 	planview "github.com/iamseth/tao/internal/view"
 )
 
@@ -59,28 +60,28 @@ func renderPlanList(out io.Writer, summaries []plan.PlanSummary, now time.Time) 
 	for _, summary := range summaries {
 		rows = append(rows, planListRow(summary, now))
 	}
-	widths := planview.ColumnWidths(headers, rows)
+	widths := cells.ColumnWidths(headers, rows)
 	if err := writef(out, "%s  %s  %s  %s  %s  %s  %s\n",
-		planview.Pad(headers[0], widths[0]),
-		planview.Pad(headers[1], widths[1]),
-		planview.Pad(headers[2], widths[2]),
-		planview.Pad(headers[3], widths[3]),
-		planview.Pad(headers[4], widths[4]),
-		planview.Pad(headers[5], widths[5]),
-		planview.Pad(headers[6], widths[6]),
+		cells.Pad(headers[0], widths[0]),
+		cells.Pad(headers[1], widths[1]),
+		cells.Pad(headers[2], widths[2]),
+		cells.Pad(headers[3], widths[3]),
+		cells.Pad(headers[4], widths[4]),
+		cells.Pad(headers[5], widths[5]),
+		cells.Pad(headers[6], widths[6]),
 	); err != nil {
 		return err
 	}
 	for _, summary := range summaries {
 		row := planListRow(summary, now)
 		if err := writef(out, "%s  %s  %s  %s  %s  %s  %s\n",
-			colorStatus(planview.Pad(row[0], widths[0]), summary.Status),
-			planview.Pad(row[1], widths[1]),
-			planview.Pad(row[2], widths[2]),
-			colorDone(planview.Pad(row[3], widths[3]), summary.CompletedCount, summary.TotalCount),
-			planview.Pad(row[4], widths[4]),
-			planview.Pad(row[5], widths[5]),
-			planview.Pad(row[6], widths[6]),
+			colorStatus(cells.Pad(row[0], widths[0]), summary.Status),
+			cells.Pad(row[1], widths[1]),
+			cells.Pad(row[2], widths[2]),
+			colorDone(cells.Pad(row[3], widths[3]), summary.CompletedCount, summary.TotalCount),
+			cells.Pad(row[4], widths[4]),
+			cells.Pad(row[5], widths[5]),
+			cells.Pad(row[6], widths[6]),
 		); err != nil {
 			return err
 		}

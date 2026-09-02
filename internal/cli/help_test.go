@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/iamseth/tao/internal/term/cells"
 )
 
 func TestUsageRendersGroupedLayout(t *testing.T) {
@@ -303,7 +305,7 @@ func topLevelHelpRow(t *testing.T, commandName string) string {
 	if metadata == nil {
 		t.Fatalf("unknown command %q", commandName)
 	}
-	return "  " + pad(commandName, topLevelCommandNameWidth()+2) + metadata.completionDescription
+	return "  " + cells.Pad(commandName, topLevelCommandNameWidth()+2) + metadata.completionDescription
 }
 
 func readCLIRepositoryFile(t *testing.T, relativePath string) string {

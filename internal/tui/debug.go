@@ -8,6 +8,7 @@ import (
 
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/note"
+	"github.com/iamseth/tao/internal/term/cells"
 )
 
 // DebugSnapshot is a share-safe projection of runtime configuration and local
@@ -98,15 +99,15 @@ func renderDebugPage(model Model) []string {
 
 	anomalies := debugRuntimeAnomalies(model.DebugSnapshot.RuntimeDefaults, model.SettingsSnapshot.RuntimeDefaults)
 	if len(anomalies) > 0 {
-		nameWidth := visibleWidth("NAME")
-		repositoryWidth := visibleWidth("REPOSITORY")
-		globalWidth := visibleWidth("GLOBAL")
-		sourceWidth := visibleWidth("SOURCE")
+		nameWidth := cells.Width("NAME")
+		repositoryWidth := cells.Width("REPOSITORY")
+		globalWidth := cells.Width("GLOBAL")
+		sourceWidth := cells.Width("SOURCE")
 		for _, anomaly := range anomalies {
-			nameWidth = max(nameWidth, visibleWidth(anomaly.row.Name))
-			repositoryWidth = max(repositoryWidth, visibleWidth(anomaly.row.Value))
-			globalWidth = max(globalWidth, visibleWidth(anomaly.globalValue))
-			sourceWidth = max(sourceWidth, visibleWidth(anomaly.row.Source))
+			nameWidth = max(nameWidth, cells.Width(anomaly.row.Name))
+			repositoryWidth = max(repositoryWidth, cells.Width(anomaly.row.Value))
+			globalWidth = max(globalWidth, cells.Width(anomaly.globalValue))
+			sourceWidth = max(sourceWidth, cells.Width(anomaly.row.Source))
 		}
 		columns := []column{
 			{name: "NAME", width: nameWidth},

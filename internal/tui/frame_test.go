@@ -10,6 +10,7 @@ import (
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/term/cells"
 )
 
 func TestRenderFrameStylesTabsSummaryAndContextWithoutRule(t *testing.T) {
@@ -38,7 +39,7 @@ func TestRenderFrameStylesTabsSummaryAndContextWithoutRule(t *testing.T) {
 	if strings.Contains(lines[0], "─") || strings.Contains(lines[1], "─") {
 		t.Fatalf("frame retained a tab underline: %q", lines)
 	}
-	if width := visibleWidth(lines[0]); width != model.Width {
+	if width := cells.Width(lines[0]); width != model.Width {
 		t.Fatalf("context line width = %d, want %d: %q", width, model.Width, lines[0])
 	}
 }
@@ -52,7 +53,7 @@ func TestRenderFrameCompactsLongFocusedRepositoryAtSeventyColumns(t *testing.T) 
 	}
 
 	lines := renderFrame(model, PagePlans)
-	if got := visibleWidth(lines[0]); got != model.Width {
+	if got := cells.Width(lines[0]); got != model.Width {
 		t.Fatalf("context line width = %d, want %d: %q", got, model.Width, lines[0])
 	}
 	if !strings.Contains(lines[0], "  repo ") || !strings.Contains(lines[0], "…") {
@@ -84,7 +85,7 @@ func TestRenderTabStripMarksEveryActivePageWithoutColor(t *testing.T) {
 			if markerAt < 0 {
 				t.Fatalf("tab strip has no active marker before %q: %q", tab.Label, strip)
 			}
-			wantActiveEnd := visibleWidth(strip[:markerAt+len(markedLabel)])
+			wantActiveEnd := cells.Width(strip[:markerAt+len(markedLabel)])
 			if activeEnd != wantActiveEnd {
 				t.Fatalf("active rule end = %d, want %d for %q", activeEnd, wantActiveEnd, strip)
 			}
@@ -142,7 +143,7 @@ func TestRenderFrameSkeletonAndContentAtSupportedSizes(t *testing.T) {
 					t.Fatalf("%s frame has no visible content row at %dx20:\n%s", test.page, width, frame)
 				}
 				for _, line := range lines {
-					if got := visibleWidth(line); got != model.Width {
+					if got := cells.Width(line); got != model.Width {
 						t.Fatalf("line width = %d, want %d: %q", got, model.Width, line)
 					}
 				}
@@ -221,7 +222,7 @@ func TestRenderStressPlanRowsKeepCompleteResponsiveColumns(t *testing.T) {
 				if strings.Contains(line, " RESOLVE ") && strings.Contains(line, "very-long-repository-name-alpha") {
 					content = line
 				}
-				if got := visibleWidth(line); got != width {
+				if got := cells.Width(line); got != width {
 					t.Fatalf("line width = %d, want %d: %q", got, width, line)
 				}
 			}
@@ -230,7 +231,7 @@ func TestRenderStressPlanRowsKeepCompleteResponsiveColumns(t *testing.T) {
 			}
 
 			resolved := resolveColumns(columns, planTablePaneWidth(width, columns))
-			offset := visibleWidth("  ")
+			offset := cells.Width("  ")
 			for index, item := range resolved {
 				if index > 0 {
 					offset += columnGapWidth
@@ -244,7 +245,7 @@ func TestRenderStressPlanRowsKeepCompleteResponsiveColumns(t *testing.T) {
 				}
 				wantValue := strings.TrimSpace(valueForColumn(item.name))
 				if item.name == "PLAN" {
-					if item.width < minimumPlanColumnWidth || !strings.HasPrefix(wantValue, contentCell) || visibleWidth(contentCell) < minimumPlanColumnWidth {
+					if item.width < minimumPlanColumnWidth || !strings.HasPrefix(wantValue, contentCell) || cells.Width(contentCell) < minimumPlanColumnWidth {
 						t.Errorf("PLAN rendered without a meaningful value width: width=%d value=%q", item.width, contentCell)
 					}
 				} else if contentCell != wantValue {

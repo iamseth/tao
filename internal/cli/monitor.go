@@ -14,6 +14,7 @@ import (
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/taodata"
+	"github.com/iamseth/tao/internal/term/cells"
 	planview "github.com/iamseth/tao/internal/view"
 )
 
@@ -193,25 +194,25 @@ func renderMonitorSnapshot(out io.Writer, snapshot monitor.Snapshot, useColor bo
 	for _, row := range snapshot.Rows {
 		rows = append(rows, monitorRowValues(row, snapshot.CollectedAt).columns())
 	}
-	widths := planview.ColumnWidths(headers, rows)
+	widths := cells.ColumnWidths(headers, rows)
 	if err := writef(out, "%s  %s  %s  %s  %s  %s  %s  %s\n",
-		planview.Pad(headers[0], widths[0]),
-		planview.Pad(headers[1], widths[1]),
-		planview.Pad(headers[2], widths[2]),
-		planview.Pad(headers[3], widths[3]),
-		planview.Pad(headers[4], widths[4]),
-		planview.Pad(headers[5], widths[5]),
-		planview.Pad(headers[6], widths[6]),
-		planview.Pad(headers[7], widths[7]),
+		cells.Pad(headers[0], widths[0]),
+		cells.Pad(headers[1], widths[1]),
+		cells.Pad(headers[2], widths[2]),
+		cells.Pad(headers[3], widths[3]),
+		cells.Pad(headers[4], widths[4]),
+		cells.Pad(headers[5], widths[5]),
+		cells.Pad(headers[6], widths[6]),
+		cells.Pad(headers[7], widths[7]),
 	); err != nil {
 		return err
 	}
 
 	for index, values := range rows {
 		row := snapshot.Rows[index]
-		live := planview.Pad(values[0], widths[0])
-		status := planview.Pad(values[1], widths[1])
-		slices := planview.Pad(values[6], widths[6])
+		live := cells.Pad(values[0], widths[0])
+		status := cells.Pad(values[1], widths[1])
+		slices := cells.Pad(values[6], widths[6])
 		if useColor {
 			live = colorMonitorLiveness(live, row.Liveness)
 			status = colorStatus(status, row.Status)
@@ -224,12 +225,12 @@ func renderMonitorSnapshot(out io.Writer, snapshot monitor.Snapshot, useColor bo
 		if err := writef(out, "%s  %s  %s  %s  %s  %s  %s  %s\n",
 			live,
 			status,
-			planview.Pad(values[2], widths[2]),
-			planview.Pad(values[3], widths[3]),
-			planview.Pad(values[4], widths[4]),
-			planview.Pad(values[5], widths[5]),
+			cells.Pad(values[2], widths[2]),
+			cells.Pad(values[3], widths[3]),
+			cells.Pad(values[4], widths[4]),
+			cells.Pad(values[5], widths[5]),
 			slices,
-			planview.Pad(values[7], widths[7]),
+			cells.Pad(values[7], widths[7]),
 		); err != nil {
 			return err
 		}

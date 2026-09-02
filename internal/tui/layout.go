@@ -3,6 +3,8 @@ package tui
 import (
 	"fmt"
 	"strings"
+
+	"github.com/iamseth/tao/internal/term/cells"
 )
 
 const (
@@ -81,7 +83,7 @@ func preferredColumnsWidth(columns []column) int {
 func columnMinimum(item column) int {
 	minimum := item.minimum
 	if minimum <= 0 {
-		minimum = visibleWidth(item.name)
+		minimum = cells.Width(item.name)
 	}
 	if item.flex {
 		minimum = max(minimum, minimumFlexWidth)
@@ -92,19 +94,19 @@ func columnMinimum(item column) int {
 // joinRow pads cells to their corresponding column widths and separates them
 // with the frame's fixed gap. A flex column consumes the space left in the
 // pane after fixed columns and gaps.
-func joinRow(columns []column, cells []string, paneWidth int) string {
+func joinRow(columns []column, values []string, paneWidth int) string {
 	resolved := resolveColumns(columns, paneWidth)
 	parts := make([]string, 0, len(resolved))
 	for index, item := range resolved {
 		value := ""
-		if index < len(cells) {
-			value = cells[index]
+		if index < len(values) {
+			value = values[index]
 		}
-		parts = append(parts, padCells(truncateCells(value, item.width), item.width))
+		parts = append(parts, cells.Pad(cells.Truncate(value, item.width), item.width))
 	}
 	row := strings.Join(parts, strings.Repeat(" ", columnGapWidth))
 	if paneWidth > 0 {
-		return padCells(truncateCells(row, paneWidth), paneWidth)
+		return cells.Pad(cells.Truncate(row, paneWidth), paneWidth)
 	}
 	return row
 }
@@ -160,7 +162,7 @@ func sectionTitleRule(profile Profile, role Role, title string, width int) strin
 		return ""
 	}
 	lead := "▌ " + title + " "
-	return Paint(profile, role, lead) + Paint(profile, RoleNeutral0, strings.Repeat("─", max(width-visibleWidth(lead), 0)))
+	return Paint(profile, role, lead) + Paint(profile, RoleNeutral0, strings.Repeat("─", max(width-cells.Width(lead), 0)))
 }
 
 // sectionRuleColumns replaces the section count with aligned column headers.
@@ -178,9 +180,9 @@ func sectionRuleTail(profile Profile, role Role, title, tail string, width int) 
 	}
 	lead := "▌ " + title + " "
 	trailing := " " + tail + " "
-	fixedWidth := visibleWidth(lead) + visibleWidth(trailing) + 1
+	fixedWidth := cells.Width(lead) + cells.Width(trailing) + 1
 	if fixedWidth > width {
-		return truncateCells(Paint(profile, role, lead+tail), width)
+		return cells.Truncate(Paint(profile, role, lead+tail), width)
 	}
 	middle := strings.Repeat("─", width-fixedWidth)
 	return Paint(profile, role, lead) +

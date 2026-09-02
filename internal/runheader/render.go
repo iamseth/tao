@@ -6,10 +6,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/run"
+	"github.com/iamseth/tao/internal/term/cells"
 )
 
 // LineCount is the fixed number of terminal rows occupied by the header.
@@ -28,7 +28,7 @@ func Render(state run.HeaderState, width int, useColor bool) []string {
 	identity := renderIdentity(state, width)
 	active := renderActive(state)
 	progress := renderProgress(state, width)
-	checklist := "SLICES  " + renderChecklist(state, max(width-cellWidth("SLICES  "), 0))
+	checklist := "SLICES  " + renderChecklist(state, max(width-cells.Width("SLICES  "), 0))
 	metrics := renderMetrics(state)
 
 	lines := []string{
@@ -76,9 +76,9 @@ func renderIdentity(state run.HeaderState, width int) string {
 	parts := append([]string{identity}, context...)
 	if strings.TrimSpace(state.PlanTitle) != "" {
 		withoutTitle := strings.Join(parts, fieldSeparator)
-		titleWidth := width - cellWidth(withoutTitle) - 2*cellWidth(fieldSeparator)
+		titleWidth := width - cells.Width(withoutTitle) - 2*cells.Width(fieldSeparator)
 		if titleWidth > 0 {
-			parts = append([]string{identity, truncateCells(display(state.PlanTitle), titleWidth)}, context...)
+			parts = append([]string{identity, cells.TruncateEllipsis(display(state.PlanTitle), titleWidth)}, context...)
 		}
 	}
 	return strings.Join(parts, fieldSeparator)
@@ -103,7 +103,7 @@ func renderProgress(state run.HeaderState, width int) string {
 		percent = min(completed*100/total, 100)
 	}
 	stats := fmt.Sprintf("%d/%d · %d%%", completed, total, percent)
-	barWidth := min(maxProgressBar, max(width-cellWidth(stats)-3, 0))
+	barWidth := min(maxProgressBar, max(width-cells.Width(stats)-3, 0))
 	if barWidth == 0 {
 		return stats
 	}
@@ -202,7 +202,7 @@ func renderChecklist(state run.HeaderState, width int) string {
 	}
 
 	all := strings.Join(items, "   ")
-	if cellWidth(all) <= width {
+	if cells.Width(all) <= width {
 		return all
 	}
 
@@ -211,7 +211,7 @@ func renderChecklist(state run.HeaderState, width int) string {
 	for start := 0; start <= current; start++ {
 		for end := current; end < len(items); end++ {
 			candidate := checklistWindow(items, start, end)
-			if cellWidth(candidate) > width {
+			if cells.Width(candidate) > width {
 				continue
 			}
 			count := end - start + 1
@@ -228,12 +228,12 @@ func renderChecklist(state run.HeaderState, width int) string {
 	leading, trailing := current > 0, current < len(items)-1
 	reserved := 0
 	if leading {
-		reserved += cellWidth("…   ")
+		reserved += cells.Width("…   ")
 	}
 	if trailing {
-		reserved += cellWidth("   …")
+		reserved += cells.Width("   …")
 	}
-	item := truncateCells(items[current], max(width-reserved, 0))
+	item := cells.TruncateEllipsis(items[current], max(width-reserved, 0))
 	parts := make([]string, 0, 3)
 	if leading {
 		parts = append(parts, "…")
@@ -242,7 +242,7 @@ func renderChecklist(state run.HeaderState, width int) string {
 	if trailing {
 		parts = append(parts, "…")
 	}
-	return truncateCells(strings.Join(parts, "   "), width)
+	return cells.TruncateEllipsis(strings.Join(parts, "   "), width)
 }
 
 func checklistWindow(items []string, start, end int) string {
@@ -266,8 +266,8 @@ func slicePrefix(id string) string {
 }
 
 func line(content string, width int) string {
-	content = truncateCells(content, width)
-	return content + strings.Repeat(" ", max(width-cellWidth(content), 0))
+	content = cells.TruncateEllipsis(content, width)
+	return content + strings.Repeat(" ", max(width-cells.Width(content), 0))
 }
 
 func colorChecklist(value string) string {
@@ -299,53 +299,6 @@ func terminalSafe(value string) string {
 		}
 		return r
 	}, value)
-}
-
-func truncateCells(value string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	if cellWidth(value) <= width {
-		return value
-	}
-	if width == 1 {
-		return "…"
-	}
-	target := width - 1
-	used := 0
-	var result strings.Builder
-	for _, r := range value {
-		runeWidth := terminalRuneWidth(r)
-		if used+runeWidth > target {
-			break
-		}
-		result.WriteRune(r)
-		used += runeWidth
-	}
-	return result.String() + "…"
-}
-
-func cellWidth(value string) int {
-	width := 0
-	for _, r := range value {
-		width += terminalRuneWidth(r)
-	}
-	return width
-}
-
-func terminalRuneWidth(r rune) int {
-	if unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r) || unicode.Is(unicode.Cf, r) {
-		return 0
-	}
-	if r >= 0x1100 && (r <= 0x115f || r == 0x2329 || r == 0x232a ||
-		r >= 0x2e80 && r <= 0xa4cf && r != 0x303f ||
-		r >= 0xac00 && r <= 0xd7a3 || r >= 0xf900 && r <= 0xfaff ||
-		r >= 0xfe10 && r <= 0xfe19 || r >= 0xfe30 && r <= 0xfe6f ||
-		r >= 0xff00 && r <= 0xff60 || r >= 0xffe0 && r <= 0xffe6 ||
-		r >= 0x1f300 && r <= 0x1faff || r >= 0x20000 && r <= 0x3fffd) {
-		return 2
-	}
-	return 1
 }
 
 func abs(value int) int {

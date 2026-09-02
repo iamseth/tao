@@ -18,6 +18,7 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/term"
+	"github.com/iamseth/tao/internal/term/cells"
 )
 
 func TestRenderNoteDetailShowsFullSanitizedMultilineText(t *testing.T) {
@@ -128,7 +129,7 @@ func TestRenderSlicesPaneKeepsCurrentVisibleAtNarrowSizes(t *testing.T) {
 	if len(lines) != 1 || !strings.Contains(lines[0], "> ") {
 		t.Fatalf("narrow current slice lines = %q, want highlighted current line", lines)
 	}
-	if visibleWidth(lines[0]) > 18 {
+	if cells.Width(lines[0]) > 18 {
 		t.Fatalf("narrow slice line = %q, exceeds width", lines[0])
 	}
 }
@@ -155,7 +156,7 @@ func TestRenderLogPaneRendersFramesPassesPlainLinesAndPinsTail(t *testing.T) {
 		t.Fatalf("pinned log = %q, want newest two lines", got)
 	}
 	narrow := RenderLogPane("界界界界\n", 3, 1)
-	if len(narrow) != 1 || visibleWidth(narrow[0]) > 3 {
+	if len(narrow) != 1 || cells.Width(narrow[0]) > 3 {
 		t.Fatalf("narrow log = %q, want at most three cells", narrow)
 	}
 }
@@ -210,7 +211,7 @@ func TestRenderDetailIncludesHeaderAndFitsTerminal(t *testing.T) {
 		t.Fatalf("detail frame has %d lines, want at most 18", len(lines))
 	}
 	for _, line := range lines {
-		if visibleWidth(line) > 100 {
+		if cells.Width(line) > 100 {
 			t.Fatalf("detail line %q exceeds width", line)
 		}
 	}
@@ -241,7 +242,7 @@ func TestRenderDetailShowsSafeAbandonmentEvidence(t *testing.T) {
 
 	narrow := RenderDetail(DetailModel{Plan: detail, Row: monitor.Row{Status: plan.StatusAbandoned, AbandonmentReason: strings.Repeat("界", 120), AbandonedAt: &at}, Width: 18, Height: 16})
 	for _, line := range renderedLines(narrow) {
-		if visibleWidth(line) > 18 {
+		if cells.Width(line) > 18 {
 			t.Fatalf("narrow abandoned detail exceeds width: %q", line)
 		}
 	}
@@ -309,7 +310,7 @@ func TestRenderDetailTabsShowBoundedOverviewSlicesAndActivity(t *testing.T) {
 	}
 	for _, frame := range []string{overview, slices, activity} {
 		for _, line := range renderedLines(frame) {
-			if visibleWidth(line) > 72 {
+			if cells.Width(line) > 72 {
 				t.Fatalf("tab frame line exceeds terminal width: %q", line)
 			}
 		}
@@ -440,7 +441,7 @@ func TestRenderSliceDetailShowsUsefulFieldsAndOmitsEmptyOnNarrowTerminal(t *test
 		t.Fatalf("narrow slice frame lines=%d trailing-newline=%t:\n%s", len(lines), strings.HasSuffix(narrow, "\n"), narrow)
 	}
 	for _, line := range lines {
-		if visibleWidth(line) > 18 {
+		if cells.Width(line) > 18 {
 			t.Fatalf("narrow slice detail line %q exceeds width", line)
 		}
 	}

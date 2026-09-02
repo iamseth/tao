@@ -10,6 +10,7 @@ import (
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/term/cells"
 )
 
 func TestRenderGoldenColorModes(t *testing.T) {
@@ -155,7 +156,7 @@ func TestSelectedPlanRowFillsPaneAndPreservesCellRoles(t *testing.T) {
 	if !strings.HasPrefix(selectedLine, selectionPrefix) || !strings.HasSuffix(selectedLine, resetSequence) {
 		t.Fatalf("selected row does not wrap the full rendered line: %q", selectedLine)
 	}
-	if got := visibleWidth(selectedLine); got != width {
+	if got := cells.Width(selectedLine); got != width {
 		t.Fatalf("selected row width = %d, want pane width %d: %q", got, width, selectedLine)
 	}
 	if !strings.HasSuffix(strings.TrimSuffix(selectedLine, resetSequence), " ") {
@@ -361,7 +362,7 @@ func TestPhaseLabelRequiresLiveRunLockForStalledLabel(t *testing.T) {
 
 func TestPhaseLabelTruncatesByCells(t *testing.T) {
 	got := phaseLabel(monitor.Row{Phase: "running_slice", SliceID: strings.Repeat("界", 11)})
-	if width := visibleWidth(got); width != maxSliceIDCells {
+	if width := cells.Width(got); width != maxSliceIDCells {
 		t.Fatalf("phaseLabel() width = %d, want %d: %q", width, maxSliceIDCells, got)
 	}
 }
@@ -509,7 +510,7 @@ func TestRenderConstrainedDimensionsKeepPageIdentity(t *testing.T) {
 		t.Fatalf("constrained frame = %#v, want truncated header with active page", lines)
 	}
 	for _, line := range lines {
-		if visibleWidth(line) > 18 {
+		if cells.Width(line) > 18 {
 			t.Fatalf("constrained line exceeds width: %q", line)
 		}
 	}
@@ -619,7 +620,7 @@ func TestRenderNarrowPlanTableKeepsPlanVisibleWithLongRepositoryName(t *testing.
 	if strings.Contains(selectedRow, repositoryName) {
 		t.Fatalf("70-column table retained oversized repository context: %q", selectedRow)
 	}
-	if got := visibleWidth(selectedRow); got != 70 {
+	if got := cells.Width(selectedRow); got != 70 {
 		t.Fatalf("selected row width = %d, want 70: %q", got, selectedRow)
 	}
 }
@@ -649,7 +650,7 @@ func TestRenderAbandonmentAsSafeHistoricalOutcome(t *testing.T) {
 
 	narrow := Render(Model{Snapshot: monitor.Snapshot{Rows: []monitor.Row{row}}, HideCompleted: true, Width: 24})
 	for _, line := range renderedLines(narrow) {
-		if visibleWidth(line) > 24 {
+		if cells.Width(line) > 24 {
 			t.Fatalf("narrow abandonment line exceeds width: %q", line)
 		}
 	}
@@ -674,7 +675,7 @@ func TestRenderPlanTableKeepsSelectionAndConfirmation(t *testing.T) {
 		t.Fatalf("responsive frame includes the removed selected-plan detail pane:\n%s", got)
 	}
 	for _, line := range lines {
-		if width := visibleWidth(line); width > 36 {
+		if width := cells.Width(line); width > 36 {
 			t.Fatalf("responsive line width = %d, want <= 36: %q", width, line)
 		}
 	}
@@ -750,10 +751,11 @@ func TestRenderNarrowWidthTruncatesRunesAndPreservesColor(t *testing.T) {
 	})
 	body := strings.TrimPrefix(got, clearScreenSequence)
 	for _, line := range strings.Split(strings.TrimSuffix(body, "\n"), "\n") {
-		if gotWidth := visibleWidth(line); gotWidth > width {
-			t.Fatalf("rendered line %q has %d visible cells, want at most %d", line, gotWidth, width)
+		lineWidth := cells.Width(line)
+		if lineWidth > width {
+			t.Fatalf("rendered line %q has %d visible cells, want at most %d", line, lineWidth, width)
 		}
-		if _, styleActive := ansiState(line); styleActive {
+		if padded := cells.Pad(line, lineWidth); padded != line {
 			t.Fatalf("rendered line has an unterminated color sequence: %q", line)
 		}
 	}
@@ -792,7 +794,7 @@ func TestRenderShortcutLegendAsBoundedPopover(t *testing.T) {
 			t.Fatalf("%s shortcut popover lines = %d, want 18", test.page, len(lines))
 		}
 		for _, line := range lines {
-			if width := visibleWidth(line); width > 64 {
+			if width := cells.Width(line); width > 64 {
 				t.Fatalf("%s shortcut line width = %d, want at most 64: %q", test.page, width, line)
 			}
 		}

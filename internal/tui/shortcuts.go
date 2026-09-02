@@ -1,6 +1,10 @@
 package tui
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/iamseth/tao/internal/term/cells"
+)
 
 type shortcut struct {
 	key    string
@@ -94,7 +98,7 @@ func overlayShortcutTable(background []string, entries []shortcut, width, height
 	canvasWidth := width
 	if canvasWidth <= 0 {
 		for _, line := range background {
-			canvasWidth = max(canvasWidth, visibleWidth(line))
+			canvasWidth = max(canvasWidth, cells.Width(line))
 		}
 		canvasWidth = max(canvasWidth, 60)
 	}
@@ -118,7 +122,7 @@ func overlayShortcutTable(background []string, entries []shortcut, width, height
 		if start+index >= len(background) {
 			break
 		}
-		lineWidth := visibleWidth(line)
+		lineWidth := cells.Width(line)
 		left := max(0, (canvasWidth-lineWidth)/2)
 		background[start+index] = strings.Repeat(" ", left) + line
 	}
@@ -130,22 +134,22 @@ func renderShortcutLegend(entries []shortcut, maxWidth, maxHeight int, profile P
 		return nil
 	}
 	if maxWidth < 12 || maxHeight < 4 {
-		return []string{truncateCells("[? shortcuts]", maxWidth)}
+		return []string{cells.Truncate("[? shortcuts]", maxWidth)}
 	}
 
 	if capacity := maxHeight - 6; capacity < len(entries) {
 		if capacity <= 0 {
-			return []string{truncateCells("[Keyboard shortcuts]", maxWidth)}
+			return []string{cells.Truncate("[Keyboard shortcuts]", maxWidth)}
 		}
 		closeEntry := entries[len(entries)-1]
 		entries = append(append([]shortcut(nil), entries[:max(0, capacity-1)]...), closeEntry)
 	}
 
-	keyWidth := visibleWidth("KEY")
-	actionWidth := visibleWidth("ACTION")
+	keyWidth := cells.Width("KEY")
+	actionWidth := cells.Width("ACTION")
 	for _, entry := range entries {
-		keyWidth = max(keyWidth, visibleWidth(entry.key))
-		actionWidth = max(actionWidth, visibleWidth(entry.action))
+		keyWidth = max(keyWidth, cells.Width(entry.key))
+		actionWidth = max(actionWidth, cells.Width(entry.action))
 	}
 	const tableOverhead = 7
 	if keyWidth+actionWidth+tableOverhead > maxWidth {
@@ -157,8 +161,8 @@ func renderShortcutLegend(entries []shortcut, maxWidth, maxHeight int, profile P
 	tableWidth := keyWidth + actionWidth + tableOverhead
 
 	horizontal := strings.Repeat("─", tableWidth-2)
-	title := truncateCells("Keyboard shortcuts", tableWidth-4)
-	title = Paint(profile, RoleNeutral5, padCells(title, tableWidth-4))
+	title := cells.Truncate("Keyboard shortcuts", tableWidth-4)
+	title = Paint(profile, RoleNeutral5, cells.Pad(title, tableWidth-4))
 	lines := []string{
 		"┌" + horizontal + "┐",
 		"│ " + title + " │",
@@ -174,9 +178,9 @@ func renderShortcutLegend(entries []shortcut, maxWidth, maxHeight int, profile P
 }
 
 func shortcutTableRow(key, action string, keyWidth, actionWidth int, profile Profile) string {
-	key = truncateCells(key, keyWidth)
-	action = truncateCells(action, actionWidth)
-	key = Paint(profile, RoleNeutral5, padCells(key, keyWidth))
-	action = Paint(profile, RoleNeutral5, padCells(action, actionWidth))
+	key = cells.Truncate(key, keyWidth)
+	action = cells.Truncate(action, actionWidth)
+	key = Paint(profile, RoleNeutral5, cells.Pad(key, keyWidth))
+	action = Paint(profile, RoleNeutral5, cells.Pad(action, actionWidth))
 	return "│ " + key + " │ " + action + " │"
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/term/cells"
 	planview "github.com/iamseth/tao/internal/view"
 )
 
@@ -160,12 +161,12 @@ func renderNoteText(text string, width int) []string {
 	}
 	var lines []string
 	for _, source := range strings.Split(text, "\n") {
-		if available <= 0 || visibleWidth(source) <= available {
+		if available <= 0 || cells.Width(source) <= available {
 			lines = append(lines, "  "+source)
 			continue
 		}
-		for visibleWidth(source) > available {
-			prefix := truncateCells(source, available)
+		for cells.Width(source) > available {
+			prefix := cells.Truncate(source, available)
 			if prefix == "" {
 				_, size := utf8.DecodeRuneInString(source)
 				source = source[size:]
@@ -261,7 +262,7 @@ func RenderDetail(model DetailModel) string {
 	}
 	if model.Width > 0 {
 		for index := range lines {
-			lines[index] = truncateCells(lines[index], model.Width)
+			lines[index] = cells.Truncate(lines[index], model.Width)
 		}
 	}
 	if model.Height > 0 && len(lines) > model.Height {
@@ -358,7 +359,7 @@ func detailAbandonmentLines(detail *plan.PlanDetail, row monitor.Row) []string {
 }
 
 func overviewDisplay(value string) string {
-	value = truncateCells(singleLineDetail(value), 240)
+	value = cells.Truncate(singleLineDetail(value), 240)
 	if value == "" {
 		return "-"
 	}
@@ -396,7 +397,7 @@ func appendOverviewList(lines *[]string, label string, values []string) {
 func boundedOverviewValues(values []string, limit int) []string {
 	result := make([]string, 0, min(len(values), limit))
 	for _, value := range values {
-		if value = truncateCells(singleLineDetail(value), 240); value != "" {
+		if value = cells.Truncate(singleLineDetail(value), 240); value != "" {
 			result = append(result, value)
 			if len(result) == limit {
 				break
@@ -411,7 +412,7 @@ func detailScope(detail *plan.PlanDetail) []string {
 	var scope []string
 	for _, slice := range orderedDetailSlices(detail) {
 		for _, file := range slice.ExpectedFiles {
-			file = truncateCells(singleLineDetail(file), 240)
+			file = cells.Truncate(singleLineDetail(file), 240)
 			if file == "" {
 				continue
 			}
@@ -466,12 +467,12 @@ func wrapDetailField(label, value string, width int) []string {
 		return nil
 	}
 	prefix := label + ": "
-	available := width - visibleWidth(prefix)
+	available := width - cells.Width(prefix)
 	if width <= 0 {
 		available = 0
 	}
 	wrapped := wrapDetailWords(value, available)
-	indent := strings.Repeat(" ", visibleWidth(prefix))
+	indent := strings.Repeat(" ", cells.Width(prefix))
 	for index := range wrapped {
 		if index == 0 {
 			wrapped[index] = prefix + wrapped[index]
@@ -489,12 +490,12 @@ func wrapDetailWords(value string, available int) []string {
 	var lines []string
 	current := ""
 	for _, word := range strings.Fields(value) {
-		if visibleWidth(word) > available {
+		if cells.Width(word) > available {
 			if current != "" {
 				lines = append(lines, current)
 			}
-			for visibleWidth(word) > available {
-				prefix := truncateCells(word, available)
+			for cells.Width(word) > available {
+				prefix := cells.Truncate(word, available)
 				if prefix == "" {
 					_, size := utf8.DecodeRuneInString(word)
 					word = word[size:]
@@ -510,7 +511,7 @@ func wrapDetailWords(value string, available int) []string {
 		if current != "" {
 			candidate = current + " " + word
 		}
-		if visibleWidth(candidate) <= available {
+		if cells.Width(candidate) <= available {
 			current = candidate
 			continue
 		}
@@ -546,13 +547,13 @@ func renderPaneBox(title string, content []string, width, height int) []string {
 		return nil
 	}
 	if width > 0 && width < 4 {
-		return []string{truncateCells(title, width)}
+		return []string{cells.Truncate(title, width)}
 	}
 	boxWidth := width
 	if boxWidth <= 0 {
-		boxWidth = visibleWidth(title) + 4
+		boxWidth = cells.Width(title) + 4
 		for _, line := range content {
-			boxWidth = max(boxWidth, visibleWidth(line)+4)
+			boxWidth = max(boxWidth, cells.Width(line)+4)
 		}
 		boxWidth = max(boxWidth, 40)
 	}
@@ -569,8 +570,8 @@ func renderPaneBox(title string, content []string, width, height int) []string {
 		content = content[:bodyHeight]
 	}
 	for _, line := range content {
-		line = truncateCells(line, innerWidth)
-		visible := visibleWidth(line)
+		line = cells.Truncate(line, innerWidth)
+		visible := cells.Width(line)
 		lines = append(lines, "│ "+line+strings.Repeat(" ", max(innerWidth-visible, 0))+" │")
 	}
 	lines = append(lines, "└"+strings.Repeat("─", boxWidth-2)+"┘")
@@ -581,12 +582,12 @@ func paneBoxTop(title string, width int) string {
 	label := " " + title + " "
 	inside := width - 2
 	if inside <= 0 {
-		return truncateCells(title, width)
+		return cells.Truncate(title, width)
 	}
-	if visibleWidth(label) > inside {
+	if cells.Width(label) > inside {
 		return "┌" + strings.Repeat("─", inside) + "┐"
 	}
-	return "┌" + label + strings.Repeat("─", inside-visibleWidth(label)) + "┐"
+	return "┌" + label + strings.Repeat("─", inside-cells.Width(label)) + "┐"
 }
 
 func detailHeaderValues(model DetailModel) (id, title, repoName, status string) {
@@ -630,8 +631,8 @@ func renderSlicesPane(detail *plan.PlanDetail, selectedID string, width, height 
 	statusWidth := 0
 	idWidth := 0
 	for _, slice := range ordered {
-		statusWidth = max(statusWidth, visibleWidth(displayValue(slice.Status)))
-		idWidth = max(idWidth, visibleWidth(displayValue(slice.ID)))
+		statusWidth = max(statusWidth, cells.Width(displayValue(slice.Status)))
+		idWidth = max(idWidth, cells.Width(displayValue(slice.ID)))
 	}
 	if selectedID == "" && detail.State.Plan.CurrentSlice != nil {
 		selectedID = *detail.State.Plan.CurrentSlice
@@ -647,9 +648,9 @@ func renderSlicesPane(detail *plan.PlanDetail, selectedID string, width, height 
 			cursor = "> "
 			selectedLine = len(lines)
 		}
-		status := padCells(displayValue(slice.Status), statusWidth)
+		status := cells.Pad(displayValue(slice.Status), statusWidth)
 		status = colorStatus(profileForEnabledColor(useColor), status, slice.Status)
-		id := padCells(displayValue(slice.ID), idWidth)
+		id := cells.Pad(displayValue(slice.ID), idWidth)
 		line := cursor + status + "  " + id + "  " + displayValue(slice.Title)
 		if marker := approvalMarker(slice.Approval); marker != "" {
 			line += "  " + marker
@@ -719,7 +720,7 @@ func RenderSliceDetail(model DetailModel) string {
 	}
 	if model.Width > 0 {
 		for index := range lines {
-			lines[index] = truncateCells(lines[index], model.Width)
+			lines[index] = cells.Truncate(lines[index], model.Width)
 		}
 	}
 	if model.Height > 0 && len(lines) > model.Height {
@@ -920,7 +921,7 @@ func skipDetailOSC(value string, index int) int {
 func fitDetailFrame(lines []string, width, height int) string {
 	if width > 0 {
 		for index := range lines {
-			lines[index] = truncateCells(lines[index], width)
+			lines[index] = cells.Truncate(lines[index], width)
 		}
 	}
 	if height > 0 && len(lines) > height {
@@ -987,7 +988,7 @@ func fitDetailPane(lines []string, width, height, focus int) []string {
 	result := append([]string(nil), lines...)
 	if width > 0 {
 		for index := range result {
-			result[index] = truncateCells(result[index], width)
+			result[index] = cells.Truncate(result[index], width)
 		}
 	}
 	return result
@@ -1010,7 +1011,7 @@ func RenderLogPane(text string, width, height int) []string {
 	for index := range lines {
 		lines[index] = strings.ReplaceAll(lines[index], "\t", strings.Repeat(" ", detailLogTabWidth))
 		if width > 0 {
-			lines[index] = truncateCells(lines[index], width)
+			lines[index] = cells.Truncate(lines[index], width)
 		}
 	}
 	return lines

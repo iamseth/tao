@@ -10,6 +10,7 @@ import (
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/plantest"
+	"github.com/iamseth/tao/internal/term/cells"
 )
 
 func TestListAppliesLimitAndShowsShortIDAndSlug(t *testing.T) {
@@ -128,7 +129,7 @@ func TestRenderPlanListPreservesExactASCIIOutput(t *testing.T) {
 	}
 }
 
-func TestRenderPlanListUsesRuneWidthsForUnicode(t *testing.T) {
+func TestRenderPlanListUsesCellWidthsForUnicode(t *testing.T) {
 	var out bytes.Buffer
 
 	err := renderPlanList(&out, []plan.PlanSummary{{
@@ -165,6 +166,10 @@ func TestRenderPlanListShowsSafeCompactAbandonmentEvidence(t *testing.T) {
 	}
 	if strings.Contains(text, "\nby") || strings.Contains(text, "\t") || strings.Contains(text, "\x1b") || strings.Contains(text, strings.Repeat("界", 100)) {
 		t.Fatalf("list rendered unsafe or unbounded abandonment reason: %q", text)
+	}
+	lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
+	if len(lines) != 2 || cells.Width(lines[0]) != cells.Width(lines[1]) {
+		t.Fatalf("list columns do not align for CJK abandonment reason: %q", text)
 	}
 }
 

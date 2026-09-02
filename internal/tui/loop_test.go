@@ -14,6 +14,7 @@ import (
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/term"
+	"github.com/iamseth/tao/internal/term/cells"
 )
 
 type fakeTerminal struct {
@@ -249,7 +250,7 @@ func TestRunRefreshesAndHandlesResize(t *testing.T) {
 		t.Fatalf("resized frame has %d lines, want at most 6: %q", len(lines), resized)
 	}
 	for _, line := range lines {
-		if visibleWidth(line) > 10 {
+		if cells.Width(line) > 10 {
 			t.Fatalf("resized frame line %q exceeds new width", line)
 		}
 	}

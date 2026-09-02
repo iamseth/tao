@@ -8,6 +8,7 @@ import (
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/run"
+	"github.com/iamseth/tao/internal/term/cells"
 )
 
 func TestRenderWideHeaderExact(t *testing.T) {
@@ -171,9 +172,42 @@ func TestRenderUsesTerminalCellWidthForUnicode(t *testing.T) {
 	state.Slices[1].Title = "界面"
 	const width = 60
 	for i, line := range Render(state, width, false) {
-		if got := cellWidth(line); got != width {
+		if got := cells.Width(line); got != width {
 			t.Fatalf("line %d occupies %d cells, want %d: %q", i, got, width, line)
 		}
+	}
+}
+
+func TestRenderCellWidthMatchesSharedCellsForEmojiAndCJK(t *testing.T) {
+	tests := []struct {
+		name  string
+		title string
+	}{
+		{name: "watch", title: "⌚ watch"},
+		{name: "lightning", title: "⚡ lightning"},
+		{name: "check mark", title: "✅ check"},
+		{name: "star", title: "⭐ star"},
+		{name: "CJK", title: "界 world"},
+		{name: "grinning face", title: "😀 grin"},
+		{name: "skin tone modifier", title: "👍🏽 tone"},
+		{name: "combining acute", title: "cafe\u0301"},
+	}
+	const width = 100
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			state := testHeaderState()
+			state.PlanTitle = test.title
+			lines := Render(state, width, false)
+			if !strings.Contains(lines[0], test.title) {
+				t.Fatalf("identity line does not contain sample title %q: %q", test.title, lines[0])
+			}
+			for i, line := range lines {
+				if got := cells.Width(line); got != width {
+					t.Fatalf("line %d occupies %d cells, want %d: %q", i, got, width, line)
+				}
+			}
+		})
 	}
 }
 
@@ -202,7 +236,7 @@ func TestRenderAlwaysReturnsFixedLineCount(t *testing.T) {
 			t.Fatalf("Render(width %d) returned %d lines, want %d", width, len(got), LineCount)
 		}
 		for i, line := range got {
-			if gotWidth := cellWidth(line); gotWidth != max(width, 0) {
+			if gotWidth := cells.Width(line); gotWidth != max(width, 0) {
 				t.Fatalf("Render(width %d) line %d occupies %d cells", width, i, gotWidth)
 			}
 		}
@@ -239,7 +273,7 @@ func testHeaderState() run.HeaderState {
 func expectedRows(width int, contents ...string) []string {
 	result := make([]string, len(contents))
 	for i, content := range contents {
-		result[i] = content + strings.Repeat(" ", width-cellWidth(content))
+		result[i] = content + strings.Repeat(" ", width-cells.Width(content))
 	}
 	return result
 }
@@ -250,7 +284,7 @@ func assertLines(t *testing.T, got, want []string, width int) {
 		t.Fatalf("Render() mismatch\n got: %#v\nwant: %#v", got, want)
 	}
 	for i, line := range got {
-		if gotWidth := cellWidth(line); gotWidth != width {
+		if gotWidth := cells.Width(line); gotWidth != width {
 			t.Fatalf("line %d occupies %d cells, want %d", i, gotWidth, width)
 		}
 	}

@@ -9,6 +9,7 @@ import (
 	"unicode"
 
 	"github.com/iamseth/tao/internal/note"
+	"github.com/iamseth/tao/internal/term/cells"
 )
 
 func TestRenderNotesRowsWarningsFocusAndSanitization(t *testing.T) {
@@ -156,7 +157,7 @@ func TestRenderNotesEmptyAndSelectedViewport(t *testing.T) {
 		t.Fatalf("notes viewport lost selection: %#v", lines)
 	}
 	for _, line := range lines {
-		if visibleWidth(line) > 34 {
+		if cells.Width(line) > 34 {
 			t.Fatalf("notes viewport line exceeds width: %q", line)
 		}
 	}
@@ -178,8 +179,8 @@ func TestRenderNotesColumnsAlignAtSupportedWidths(t *testing.T) {
 			if strings.Contains(header, "NOTE") || strings.Contains(header, "STATUS") {
 				t.Fatalf("legacy columns remain at width %d: %q", width, header)
 			}
-			if visibleWidth(header) != width || visibleWidth(row) != width {
-				t.Fatalf("rendered widths at %d = header %d row %d", width, visibleWidth(header), visibleWidth(row))
+			if cells.Width(header) != width || cells.Width(row) != width {
+				t.Fatalf("rendered widths at %d = header %d row %d", width, cells.Width(header), cells.Width(row))
 			}
 			for _, pair := range [][2]string{{"REPO", "alpha"}, {"PREVIEW", "preview text"}, {"TAG", "primary"}, {"AGE", "2h"}} {
 				if strings.Index(header, pair[0]) != strings.Index(row, pair[1]) {
@@ -227,7 +228,7 @@ func TestRenderNoteRowUsesSemanticPaintSelectionAndEmptyTagCell(t *testing.T) {
 
 	plain := renderNoteRow(item, now, columns, paneWidth, false, ProfileNone)
 	resolved := resolveColumns(columns, paneWidth)
-	tagStart := visibleWidth("  ") + resolved[0].width + columnGapWidth + resolved[1].width + columnGapWidth
+	tagStart := cells.Width("  ") + resolved[0].width + columnGapWidth + resolved[1].width + columnGapWidth
 	tagCell := string([]rune(plain)[tagStart : tagStart+resolved[2].width])
 	if strings.TrimSpace(tagCell) != "" {
 		t.Fatalf("untagged note cell = %q, want genuinely empty", tagCell)

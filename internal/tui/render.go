@@ -9,6 +9,7 @@ import (
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/term/cells"
 )
 
 const (
@@ -221,7 +222,7 @@ func Render(model Model) string {
 	}
 	if model.Width > 0 {
 		for index := range lines {
-			lines[index] = padCells(truncateCells(lines[index], model.Width), model.Width)
+			lines[index] = cells.Pad(cells.Truncate(lines[index], model.Width), model.Width)
 		}
 	}
 	frame := clearScreenSequence + strings.Join(lines, "\n")
@@ -450,13 +451,13 @@ func measureTable(sections []Section, now time.Time, actionLabels map[string]str
 	for _, section := range sections {
 		for _, row := range section.Rows {
 			values := tableRowValues(row, now, actionLabels[actionRowKey(row)])
-			widths.repo = max(widths.repo, visibleWidth(values.repo))
-			widths.next = max(widths.next, visibleWidth(values.next))
-			widths.plan = max(widths.plan, visibleWidth(values.plan))
-			widths.slices = max(widths.slices, sliceBarCells+1+visibleWidth(values.slices))
-			widths.run = max(widths.run, visibleWidth(values.run))
-			widths.age = max(widths.age, visibleWidth(values.age))
-			widths.attention = max(widths.attention, visibleWidth(values.attention))
+			widths.repo = max(widths.repo, cells.Width(values.repo))
+			widths.next = max(widths.next, cells.Width(values.next))
+			widths.plan = max(widths.plan, cells.Width(values.plan))
+			widths.slices = max(widths.slices, sliceBarCells+1+cells.Width(values.slices))
+			widths.run = max(widths.run, cells.Width(values.run))
+			widths.age = max(widths.age, cells.Width(values.age))
+			widths.attention = max(widths.attention, cells.Width(values.attention))
 			widths.hasRunning = widths.hasRunning || hasVisibleRun(row)
 		}
 	}
@@ -470,30 +471,30 @@ const (
 
 func planTableColumns(widths tableWidths, withAttention bool, frameWidth int) []column {
 	columns := []column{
-		{name: "REPO", width: max(widths.repo, visibleWidth("REPO")), priority: 40},
-		{name: "NEXT", width: max(widths.next, visibleWidth("NEXT")), required: true, priority: 60, minimum: minimumNextColumnWidth},
+		{name: "REPO", width: max(widths.repo, cells.Width("REPO")), priority: 40},
+		{name: "NEXT", width: max(widths.next, cells.Width("NEXT")), required: true, priority: 60, minimum: minimumNextColumnWidth},
 		{name: "PLAN", width: widths.plan, flex: true, required: true, priority: 60, minimum: minimumPlanColumnWidth},
-		{name: "SLICES", width: max(widths.slices, visibleWidth("SLICES")), priority: 30},
+		{name: "SLICES", width: max(widths.slices, cells.Width("SLICES")), priority: 30},
 	}
 	if widths.hasRunning {
-		columns = append(columns, column{name: "RUN", width: max(widths.run, visibleWidth("RUN")), priority: 20})
+		columns = append(columns, column{name: "RUN", width: max(widths.run, cells.Width("RUN")), priority: 20})
 	}
-	columns = append(columns, column{name: "AGE", width: max(widths.age, visibleWidth("AGE")), priority: 10})
+	columns = append(columns, column{name: "AGE", width: max(widths.age, cells.Width("AGE")), priority: 10})
 	if withAttention {
 		columns = append(columns, column{
-			name: "ATTENTION", width: max(widths.attention, visibleWidth("ATTENTION")),
+			name: "ATTENTION", width: max(widths.attention, cells.Width("ATTENTION")),
 			priority: 50,
 		})
 	}
 	if frameWidth <= 0 {
 		return columns
 	}
-	return fitColumns(columns, max(frameWidth-visibleWidth("  "), 0))
+	return fitColumns(columns, max(frameWidth-cells.Width("  "), 0))
 }
 
 func planTablePaneWidth(width int, columns []column) int {
 	if width > 0 {
-		return max(width-visibleWidth("  "), 0)
+		return max(width-cells.Width("  "), 0)
 	}
 	return columnsWidth(columns)
 }
@@ -531,28 +532,28 @@ func renderTableRow(row monitor.Row, now time.Time, columns []column, paneWidth 
 	if selected {
 		repositoryRole = RoleRepoSelected
 	}
-	cells := make([]string, 0, len(columns))
+	rowCells := make([]string, 0, len(columns))
 	for _, item := range columns {
 		switch item.name {
 		case "REPO":
-			cells = append(cells, Paint(profile, repositoryRole, values.repo))
+			rowCells = append(rowCells, Paint(profile, repositoryRole, values.repo))
 		case "NEXT":
-			cells = append(cells, values.next)
+			rowCells = append(rowCells, values.next)
 		case "PLAN":
-			cells = append(cells, values.plan)
+			rowCells = append(rowCells, values.plan)
 		case "SLICES":
-			cells = append(cells, renderSlicesValue(profile, row))
+			rowCells = append(rowCells, renderSlicesValue(profile, row))
 		case "RUN":
-			cells = append(cells, values.run)
+			rowCells = append(rowCells, values.run)
 		case "AGE":
-			cells = append(cells, values.age)
+			rowCells = append(rowCells, values.age)
 		case "ATTENTION":
-			cells = append(cells, values.attention)
+			rowCells = append(rowCells, values.attention)
 		}
 	}
-	line := "  " + joinRow(columns, cells, paneWidth)
+	line := "  " + joinRow(columns, rowCells, paneWidth)
 	if paneWidth > 0 {
-		line = padCells(line, paneWidth+visibleWidth("  "))
+		line = cells.Pad(line, paneWidth+cells.Width("  "))
 	}
 	if selected {
 		line = SelectRow(profile, line)
@@ -609,7 +610,7 @@ func phaseLabel(row monitor.Row) string {
 	phase := strings.TrimSpace(string(row.Phase))
 	sliceID := strings.TrimSpace(row.SliceID)
 	if sliceID != "" && (phase == "" || phase == "running_slice") {
-		return truncateCells(sliceID, maxSliceIDCells)
+		return cells.Truncate(sliceID, maxSliceIDCells)
 	}
 	return displayValue(phase)
 }

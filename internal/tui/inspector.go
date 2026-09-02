@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/term/cells"
 )
 
 const (
@@ -61,8 +62,8 @@ type detailInspectionUpdate struct {
 func boundedDetailInspection(result DetailInspection) DetailInspection {
 	bounded := DetailInspection{Findings: make([]DetailFinding, 0, min(len(result.Findings), detailInspectionMaxFindings))}
 	for _, finding := range result.Findings {
-		severity := truncateCells(singleLineDetail(finding.Severity), 24)
-		message := truncateCells(singleLineDetail(finding.Message), detailInspectionMaxText)
+		severity := cells.Truncate(singleLineDetail(finding.Severity), 24)
+		message := cells.Truncate(singleLineDetail(finding.Message), detailInspectionMaxText)
 		if message == "" {
 			continue
 		}

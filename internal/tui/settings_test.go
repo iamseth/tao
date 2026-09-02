@@ -8,6 +8,7 @@ import (
 
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/term"
+	"github.com/iamseth/tao/internal/term/cells"
 )
 
 func TestRenderSettingsShowsGlobalAndRepositoryDefaults(t *testing.T) {
@@ -224,7 +225,7 @@ func TestSettingsRepositoryRowsUseCellAlignmentAndHomeAbbreviation(t *testing.T)
 			if byteOffset < 0 {
 				t.Fatalf("repository row lacks semantic health dot: %q", line)
 			}
-			healthOffsets = append(healthOffsets, visibleWidth(line[:byteOffset]))
+			healthOffsets = append(healthOffsets, cells.Width(line[:byteOffset]))
 			if !strings.Contains(line, "~/src/") {
 				t.Errorf("repository root is not home-abbreviated: %q", line)
 			}
@@ -293,7 +294,7 @@ func TestSettingsRepositoryRowsUseSemanticStyles(t *testing.T) {
 }
 
 func TestSettingsDefaultPairsUseSemanticStyles(t *testing.T) {
-	labelWidth := visibleWidth("Pull request")
+	labelWidth := cells.Width("Pull request")
 	for _, test := range []struct {
 		row  SettingsRuntimeDefault
 		role Role

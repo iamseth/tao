@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/iamseth/tao/internal/term/cells"
 )
 
 // SettingsSnapshot is the read-only projection rendered by the Settings tab.
@@ -103,15 +105,15 @@ func renderSettingsPage(model Model) ([]string, int, tableViewportMetadata) {
 		}
 	}
 
-	nameWidth := visibleWidth("REPOSITORY")
-	healthWidth := visibleWidth("HEALTH")
-	pullRequestWidth := visibleWidth("PR")
-	rootWidth := visibleWidth("ROOT")
+	nameWidth := cells.Width("REPOSITORY")
+	healthWidth := cells.Width("HEALTH")
+	pullRequestWidth := cells.Width("PR")
+	rootWidth := cells.Width("ROOT")
 	for _, repository := range model.SettingsSnapshot.Repositories {
-		nameWidth = max(nameWidth, visibleWidth(settingsRepositoryName(repository)))
-		healthWidth = max(healthWidth, visibleWidth(settingsRepositoryHealth(model.Profile, repository.Health)))
-		pullRequestWidth = max(pullRequestWidth, visibleWidth(pullRequestSetting(repository.PullRequest, model.SettingsSnapshot.InheritedPullRequest)))
-		rootWidth = max(rootWidth, visibleWidth(settingsRepositoryRoot(repository.Root, model.SettingsSnapshot.DisplayHome)))
+		nameWidth = max(nameWidth, cells.Width(settingsRepositoryName(repository)))
+		healthWidth = max(healthWidth, cells.Width(settingsRepositoryHealth(model.Profile, repository.Health)))
+		pullRequestWidth = max(pullRequestWidth, cells.Width(pullRequestSetting(repository.PullRequest, model.SettingsSnapshot.InheritedPullRequest)))
+		rootWidth = max(rootWidth, cells.Width(settingsRepositoryRoot(repository.Root, model.SettingsSnapshot.DisplayHome)))
 	}
 	repositoryColumns := settingsRepositoryColumns(nameWidth, healthWidth, pullRequestWidth, rootWidth)
 	repositoryRole := RoleAccent
@@ -205,13 +207,13 @@ func renderSettingsOverrides(model Model) ([]string, tableViewportSection) {
 		return nil, tableViewportSection{}
 	}
 
-	nameWidth := visibleWidth("OVERRIDES")
-	valueWidth := visibleWidth("VALUE")
-	sourceWidth := visibleWidth("SOURCE")
+	nameWidth := cells.Width("OVERRIDES")
+	valueWidth := cells.Width("VALUE")
+	sourceWidth := cells.Width("SOURCE")
 	for _, row := range overrides {
-		nameWidth = max(nameWidth, visibleWidth(row.name))
-		valueWidth = max(valueWidth, visibleWidth(row.value))
-		sourceWidth = max(sourceWidth, visibleWidth(row.source))
+		nameWidth = max(nameWidth, cells.Width(row.name))
+		valueWidth = max(valueWidth, cells.Width(row.value))
+		sourceWidth = max(sourceWidth, cells.Width(row.source))
 	}
 	columns := settingsRuntimeColumnsWithSource(nameWidth, valueWidth, sourceWidth)
 	sectionWidth := dashboardSectionWidth(model, PageSettings, "OVERRIDES", columnsWidth(columns))
@@ -249,7 +251,7 @@ func renderSettingsDefaultGroups(model Model) ([]string, []tableViewportSection)
 		labelWidth := 0
 		pairWidth := 0
 		for _, row := range group.rows {
-			labelWidth = max(labelWidth, visibleWidth(humanizeSettingsName(row.Name)))
+			labelWidth = max(labelWidth, cells.Width(humanizeSettingsName(row.Name)))
 		}
 		for _, row := range group.rows {
 			pairWidth = max(pairWidth, settingsDefaultPairWidth(row, labelWidth))
@@ -273,21 +275,21 @@ func renderSettingsDefaultGroups(model Model) ([]string, []tableViewportSection)
 			if columns == 2 {
 				cellWidth = (contentWidth - 4) / 2
 			}
-			cells := make([]string, 0, columns)
+			rowCells := make([]string, 0, columns)
 			for _, row := range group.rows[index:rowEnd] {
-				cells = append(cells, settingsDefaultPair(model.Profile, row, labelWidth, true))
+				rowCells = append(rowCells, settingsDefaultPair(model.Profile, row, labelWidth, true))
 			}
-			for len(cells) < columns {
-				cells = append(cells, "")
+			for len(rowCells) < columns {
+				rowCells = append(rowCells, "")
 			}
-			for cellIndex := range cells {
-				cells[cellIndex] = padCells(truncateCells(cells[cellIndex], cellWidth), cellWidth)
+			for cellIndex := range rowCells {
+				rowCells[cellIndex] = cells.Pad(cells.Truncate(rowCells[cellIndex], cellWidth), cellWidth)
 			}
 			section.contentLines = append(section.contentLines, len(lines))
-			lines = append(lines, "  "+strings.Join(cells, "    "))
+			lines = append(lines, "  "+strings.Join(rowCells, "    "))
 
 			if columns == 1 && rowEnd == index+1 && group.rows[index].Warning != "" && settingsDefaultPairWidth(group.rows[index], labelWidth) > cellWidth {
-				lines[len(lines)-1] = "  " + padCells(truncateCells(settingsDefaultPair(model.Profile, group.rows[index], labelWidth, false), cellWidth), cellWidth)
+				lines[len(lines)-1] = "  " + cells.Pad(cells.Truncate(settingsDefaultPair(model.Profile, group.rows[index], labelWidth, false), cellWidth), cellWidth)
 				section.contentLines = append(section.contentLines, len(lines))
 				lines = append(lines, "    "+Paint(model.Profile, RoleWarn, "warning: "+singleLineDetail(group.rows[index].Warning)))
 			}
@@ -315,13 +317,13 @@ func renderSettingsBudgets(model Model) ([]string, tableViewportSection) {
 		return nil, tableViewportSection{}
 	}
 
-	labelWidth := visibleWidth("METRIC")
-	sliceWidth := visibleWidth("SLICE")
-	planWidth := visibleWidth("PLAN")
+	labelWidth := cells.Width("METRIC")
+	sliceWidth := cells.Width("SLICE")
+	planWidth := cells.Width("PLAN")
 	for _, metric := range metrics {
-		labelWidth = max(labelWidth, visibleWidth(metric.label))
-		sliceWidth = max(sliceWidth, visibleWidth(settingsBudgetValue(byName[metric.sliceName], metric.cost)))
-		planWidth = max(planWidth, visibleWidth(settingsBudgetValue(byName[metric.planName], metric.cost)))
+		labelWidth = max(labelWidth, cells.Width(metric.label))
+		sliceWidth = max(sliceWidth, cells.Width(settingsBudgetValue(byName[metric.sliceName], metric.cost)))
+		planWidth = max(planWidth, cells.Width(settingsBudgetValue(byName[metric.planName], metric.cost)))
 	}
 	columns := []column{
 		{name: "METRIC", width: labelWidth, required: true, priority: 30},
@@ -386,7 +388,7 @@ func settingsBudgetValue(row SettingsRuntimeDefault, cost bool) string {
 
 func settingsRightAlignedValue(profile Profile, value string, width int) string {
 	value = singleLineDetail(value)
-	return Paint(profile, RoleNeutral4, strings.Repeat(" ", max(width-visibleWidth(value), 0))+value)
+	return Paint(profile, RoleNeutral4, strings.Repeat(" ", max(width-cells.Width(value), 0))+value)
 }
 
 func settingsDefaultGroupRule(profile Profile, title string, width int) string {
@@ -394,10 +396,10 @@ func settingsDefaultGroupRule(profile Profile, title string, width int) string {
 		return ""
 	}
 	lead := "▌ " + title + " "
-	if visibleWidth(lead) >= width {
-		return truncateCells(Paint(profile, RoleAccent, lead), width)
+	if cells.Width(lead) >= width {
+		return cells.Truncate(Paint(profile, RoleAccent, lead), width)
 	}
-	return Paint(profile, RoleAccent, lead) + Paint(profile, RoleNeutral0, strings.Repeat("─", width-visibleWidth(lead)))
+	return Paint(profile, RoleAccent, lead) + Paint(profile, RoleNeutral0, strings.Repeat("─", width-cells.Width(lead)))
 }
 
 func settingsDefaultGroups(rows []SettingsRuntimeDefault) []settingsDefaultGroup {
@@ -472,15 +474,15 @@ func settingsGroupAllDefault(group settingsDefaultGroup) bool {
 }
 
 func settingsDefaultPairWidth(row SettingsRuntimeDefault, labelWidth int) int {
-	width := labelWidth + 1 + visibleWidth(singleLineDetail(row.Value))
+	width := labelWidth + 1 + cells.Width(singleLineDetail(row.Value))
 	if row.Warning != "" {
-		width += visibleWidth("  warning: " + singleLineDetail(row.Warning))
+		width += cells.Width("  warning: " + singleLineDetail(row.Warning))
 	}
 	return width
 }
 
 func settingsDefaultPair(profile Profile, row SettingsRuntimeDefault, labelWidth int, includeWarning bool) string {
-	label := Paint(profile, RoleNeutral2, padCells(humanizeSettingsName(row.Name), labelWidth))
+	label := Paint(profile, RoleNeutral2, cells.Pad(humanizeSettingsName(row.Name), labelWidth))
 	value := singleLineDetail(row.Value)
 	role := RoleNeutral4
 	switch strings.ToLower(strings.TrimSpace(value)) {
@@ -520,7 +522,7 @@ func fitSettingsSectionColumns(title string, columns []column, width int) []colu
 		return append([]column(nil), columns...)
 	}
 	columns = append([]column(nil), columns...)
-	columns[0].minimum = max(columns[0].minimum, visibleWidth(title))
+	columns[0].minimum = max(columns[0].minimum, cells.Width(title))
 	return fitColumns(columns, width-2) // The rule marker and row cursor occupy two cells.
 }
 
@@ -529,12 +531,12 @@ func settingsSectionRuleColumns(profile Profile, role Role, title string, column
 		return ""
 	}
 	line := Paint(profile, role, "▌ "+title+" ")
-	position := visibleWidth("▌ " + title + " ")
+	position := cells.Width("▌ " + title + " ")
 	for index := 1; index < len(columns); index++ {
 		target := 2 + columnsWidth(columns[:index]) + columnGapWidth
 		line += settingsSectionRuleGap(profile, target-position, true)
 		line += Paint(profile, role, columns[index].name)
-		position = target + visibleWidth(columns[index].name)
+		position = target + cells.Width(columns[index].name)
 	}
 	line += settingsSectionRuleGap(profile, width-position, false)
 	return line

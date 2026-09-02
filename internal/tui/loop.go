@@ -14,6 +14,7 @@ import (
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/term"
+	"github.com/iamseth/tao/internal/term/cells"
 )
 
 // Terminal is the terminal-state and resize boundary used by the event loop.
@@ -226,7 +227,7 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 			}
 			state.detail.inspectionUpdates = nil
 			if update.err != nil {
-				state.detail.inspection = detailInspectionView{status: detailInspectionFailed, err: truncateCells(singleLineDetail(update.err.Error()), detailInspectionMaxText)}
+				state.detail.inspection = detailInspectionView{status: detailInspectionFailed, err: cells.Truncate(singleLineDetail(update.err.Error()), detailInspectionMaxText)}
 			} else {
 				result := boundedDetailInspection(update.result)
 				state.detail.inspection = detailInspectionView{status: detailInspectionReady, findings: result.Findings}

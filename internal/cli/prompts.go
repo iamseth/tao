@@ -16,6 +16,7 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/promptinstall"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+	"github.com/iamseth/tao/internal/term/cells"
 	"github.com/iamseth/tao/prompts"
 )
 
@@ -384,7 +385,7 @@ func doctorPromptNameWidth(results []promptinstall.Result) int {
 }
 
 func doctorStatusLabel(status string, width int) string {
-	label := pad(doctorStatusSymbol(status)+" "+status, width)
+	label := cells.Pad(doctorStatusSymbol(status)+" "+status, width)
 	if status == "current" || status == "ok" {
 		return colorGreen(label)
 	}

@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/iamseth/tao/internal/term/cells"
 )
 
 func TestJoinRowFlexArithmeticAtFrameWidths(t *testing.T) {
@@ -20,7 +22,7 @@ func TestJoinRowFlexArithmeticAtFrameWidths(t *testing.T) {
 				t.Fatalf("flex width at %d = %d, want %d", width, got, wantFlex)
 			}
 			row := joinRow(columns, []string{"repo", "plan", "running"}, width)
-			if got := visibleWidth(row); got != width {
+			if got := cells.Width(row); got != width {
 				t.Fatalf("row width at %d = %d, want %d: %q", width, got, width, row)
 			}
 		})
@@ -61,7 +63,7 @@ func TestSectionRuleAtFrameWidths(t *testing.T) {
 	for _, width := range []int{199, 120, 100, 80, 70} {
 		t.Run(strconv.Itoa(width), func(t *testing.T) {
 			got := sectionRule(ProfileNone, RoleWarn, "NEEDS ATTENTION", 12, width)
-			if visible := visibleWidth(got); visible != width {
+			if visible := cells.Width(got); visible != width {
 				t.Fatalf("section rule width = %d, want %d: %q", visible, width, got)
 			}
 			if !strings.HasPrefix(got, "▌ NEEDS ATTENTION ") {
@@ -84,8 +86,8 @@ func TestSectionRuleUsesSemanticRoles(t *testing.T) {
 	if strings.Count(got, neutralSequence) != 2 {
 		t.Fatalf("section rule does not paint both rule runs neutral: %q", got)
 	}
-	if visibleWidth(got) != 70 {
-		t.Fatalf("styled section rule width = %d, want 70", visibleWidth(got))
+	if cells.Width(got) != 70 {
+		t.Fatalf("styled section rule width = %d, want 70", cells.Width(got))
 	}
 }
 
@@ -98,14 +100,14 @@ func TestSectionRuleColumnsReplaceCount(t *testing.T) {
 	if !strings.HasSuffix(got, " USED    LIMIT  ─") {
 		t.Fatalf("column section rule suffix = %q", got)
 	}
-	if visibleWidth(got) != 70 {
-		t.Fatalf("column section rule width = %d, want 70", visibleWidth(got))
+	if cells.Width(got) != 70 {
+		t.Fatalf("column section rule width = %d, want 70", cells.Width(got))
 	}
 }
 
 func TestMoreIndicatorIsDim(t *testing.T) {
 	got := moreIndicator(ProfileANSI16, 4)
-	if visible := visibleWidth(got); visible != visibleWidth("+ 4 more  ↓") {
+	if visible := cells.Width(got); visible != cells.Width("+ 4 more  ↓") {
 		t.Fatalf("indicator width = %d: %q", visible, got)
 	}
 	if !strings.Contains(got, colorSequence(N2(ProfileANSI16), false)) {
