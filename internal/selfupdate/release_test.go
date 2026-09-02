@@ -144,21 +144,17 @@ func TestDiscovererLatestRequiresUniqueExactAssets(t *testing.T) {
 	}
 }
 
-func TestDiscovererLatestTimesOutStalledServerWithoutCallerDeadline(t *testing.T) {
+func TestDiscovererLatestTimesOutStalledRequestWithoutCallerDeadline(t *testing.T) {
 	t.Parallel()
 
-	requestStarted := make(chan struct{})
-	requestDone := make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
-		close(requestStarted)
+	requestStarted := false
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requestStarted = true
 		<-request.Context().Done()
-		close(requestDone)
-	}))
-	defer server.Close()
-
+		return nil, request.Context().Err()
+	})}
 	discoverer := Discoverer{
-		HTTPClient:     server.Client(),
-		APIBaseURL:     server.URL,
+		HTTPClient:     client,
 		GOOS:           "linux",
 		GOARCH:         "amd64",
 		RequestTimeout: 50 * time.Millisecond,
@@ -167,16 +163,15 @@ func TestDiscovererLatestTimesOutStalledServerWithoutCallerDeadline(t *testing.T
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Latest() error = %v, want deadline exceeded", err)
 	}
-	select {
-	case <-requestStarted:
-	case <-time.After(time.Second):
-		t.Fatal("stalled server did not receive request")
+	if !requestStarted {
+		t.Fatal("stalled request did not start")
 	}
-	select {
-	case <-requestDone:
-	case <-time.After(time.Second):
-		t.Fatal("request context was not canceled after discovery timeout")
-	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (roundTrip roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return roundTrip(request)
 }
 
 func TestDiscovererRequestContextHasFiniteDefaultTimeout(t *testing.T) {

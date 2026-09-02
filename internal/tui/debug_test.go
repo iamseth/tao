@@ -36,30 +36,75 @@ func TestRenderDebugShowsRuntimeDoctorAndUIInformation(t *testing.T) {
 				{Name: "TAO_PULL_REQUEST", Value: "true", Source: "repository", Warning: "test warning"},
 			},
 		},
+		SettingsSnapshot: SettingsSnapshot{
+			RuntimeDefaults: []SettingsRuntimeDefault{
+				{Name: "TAO_AGENT", Value: "pi", Source: "default"},
+				{Name: "TAO_PULL_REQUEST", Value: "false", Source: "env"},
+			},
+			Repositories: []RepositorySetting{{ID: "repo-a"}, {ID: "repo-b"}},
+		},
 	}
 	frame := Render(model)
 	for _, want := range []string{
 		"tao │ plans  notes  settings ▸debug", "agent pi", "UI", "viewport", "100x60", "plan rows", "open notes", "SYSTEM", "version", "v1.2.3",
-		"DOCTOR", "selected agent", "installed agents", "tool recommended jq", "RUNTIME DEFAULTS", "TAO_AGENT", "TAO_PULL_REQUEST", "repository",
-		"warning: test warning", "COLLECTOR WARNINGS", "plan store damaged", "/notes/bad.json: invalid note",
+		"DOCTOR", "selected agent", "installed agents", "tool recommended jq", "RUNTIME ANOMALIES", "TAO_PULL_REQUEST", "repository", "false",
+		"1 active of 2 registered", "warning: test warning", "COLLECTOR WARNINGS", "plan store damaged", "/notes/bad.json: invalid note",
 	} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("debug frame missing %q:\n%s", want, frame)
 		}
+	}
+	if strings.Contains(frame, "TAO_AGENT") {
+		t.Fatalf("debug frame retained a runtime value identical to the global baseline:\n%s", frame)
 	}
 	if strings.Contains(frame, "Repositories: all") || strings.Contains(frame, "open notes |") {
 		t.Fatalf("debug frame retained table-page header metadata:\n%s", frame)
 	}
 }
 
+func TestRenderDebugRuntimeAnomalies(t *testing.T) {
+	model := Model{
+		Page: PageDebug, Width: 120, Height: 60,
+		DebugSnapshot: DebugSnapshot{RuntimeDefaults: []DebugRuntimeDefault{
+			{Name: "TAO_DIFFERENT", Value: "repository-value", Source: "repository"},
+			{Name: "TAO_WARNING_ONLY", Value: "same", Source: "default", Warning: "fallback retained"},
+			{Name: "TAO_MISSING_BASELINE", Value: "repository-only", Source: "repository"},
+			{Name: "TAO_IDENTICAL", Value: "same", Source: "default"},
+		}},
+		SettingsSnapshot: SettingsSnapshot{RuntimeDefaults: []SettingsRuntimeDefault{
+			{Name: "TAO_DIFFERENT", Value: "global-value", Source: "env"},
+			{Name: "TAO_WARNING_ONLY", Value: "same", Source: "default"},
+			{Name: "TAO_IDENTICAL", Value: "same", Source: "default"},
+		}},
+	}
+	frame := Render(model)
+	for _, want := range []string{
+		"RUNTIME ANOMALIES", "TAO_DIFFERENT", "repository-value", "global-value", "repository",
+		"TAO_WARNING_ONLY", "warning: fallback retained", "TAO_MISSING_BASELINE", "repository-only", "(missing)",
+	} {
+		if !strings.Contains(frame, want) {
+			t.Errorf("debug anomalies missing %q:\n%s", want, frame)
+		}
+	}
+	if strings.Contains(frame, "TAO_IDENTICAL") {
+		t.Fatalf("debug anomalies include identical runtime value:\n%s", frame)
+	}
+
+	model.DebugSnapshot.RuntimeDefaults = []DebugRuntimeDefault{{Name: "TAO_IDENTICAL", Value: "same", Source: "default"}}
+	frame = Render(model)
+	if strings.Contains(frame, "RUNTIME ANOMALIES") || strings.Contains(frame, "TAO_IDENTICAL") {
+		t.Fatalf("debug frame renders an empty anomaly section:\n%s", frame)
+	}
+}
+
 func TestDebugPageScrollAndShortcuts(t *testing.T) {
-	defaults := make([]DebugRuntimeDefault, 30)
-	for index := range defaults {
-		defaults[index] = DebugRuntimeDefault{Name: "TAO_SETTING_" + strings.Repeat("X", index%4), Value: "value", Source: "default"}
+	system := make([]DebugValue, 30)
+	for index := range system {
+		system[index] = DebugValue{Label: "diagnostic " + strings.Repeat("X", index%4), Value: "value"}
 	}
 	state := loopState{
 		page: PageDebug, size: term.Size{Width: 70, Height: 10},
-		debugSnapshot: DebugSnapshot{RuntimeDefaults: defaults},
+		debugSnapshot: DebugSnapshot{System: system},
 	}
 	if state.pageRowCount() != 0 {
 		t.Fatalf("debug row count = %d, want no selection rows", state.pageRowCount())

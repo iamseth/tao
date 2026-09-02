@@ -54,7 +54,7 @@ func renderDebugPage(model Model) []string {
 	appendDebugValue(&lines, "completed visible", fmt.Sprintf("%t", !model.HideCompleted))
 	appendDebugValue(&lines, "plan rows", fmt.Sprintf("%d", len(model.Snapshot.Rows)))
 	appendDebugValue(&lines, "open notes", fmt.Sprintf("%d", len(model.NoteSnapshot.Notes)))
-	appendDebugValue(&lines, "repositories", fmt.Sprintf("%d", debugRepositoryCount(model.Snapshot, model.NoteSnapshot)))
+	appendDebugValue(&lines, "repositories", fmt.Sprintf("%d active of %d registered", debugRepositoryCount(model.Snapshot, model.NoteSnapshot), len(model.SettingsSnapshot.Repositories)))
 	lines = appendDebugTime(lines, "monitor collected", model.Snapshot.CollectedAt)
 	lines = appendDebugTime(lines, "diagnostics collected", model.DebugSnapshot.CollectedAt)
 
@@ -96,22 +96,36 @@ func renderDebugPage(model Model) []string {
 		}
 	}
 
-	if len(model.DebugSnapshot.RuntimeDefaults) == 0 {
-		lines = append(lines, "", debugSectionRule(model, RoleAccent, "RUNTIME DEFAULTS", 0), "  Runtime defaults unavailable.")
-	} else {
+	anomalies := debugRuntimeAnomalies(model.DebugSnapshot.RuntimeDefaults, model.SettingsSnapshot.RuntimeDefaults)
+	if len(anomalies) > 0 {
 		nameWidth := visibleWidth("NAME")
-		valueWidth := visibleWidth("VALUE")
-		for _, row := range model.DebugSnapshot.RuntimeDefaults {
-			nameWidth = max(nameWidth, visibleWidth(row.Name))
-			valueWidth = max(valueWidth, visibleWidth(row.Value))
+		repositoryWidth := visibleWidth("REPOSITORY")
+		globalWidth := visibleWidth("GLOBAL")
+		sourceWidth := visibleWidth("SOURCE")
+		for _, anomaly := range anomalies {
+			nameWidth = max(nameWidth, visibleWidth(anomaly.row.Name))
+			repositoryWidth = max(repositoryWidth, visibleWidth(anomaly.row.Value))
+			globalWidth = max(globalWidth, visibleWidth(anomaly.globalValue))
+			sourceWidth = max(sourceWidth, visibleWidth(anomaly.row.Source))
 		}
-		columns := settingsRuntimeColumns(nameWidth, valueWidth)
-		sectionWidth := dashboardSectionWidth(model, PageDebug, "RUNTIME DEFAULTS", columnsWidth(columns))
-		lines = append(lines, "", dashboardSectionRuleColumns(model.Profile, RoleAccent, "RUNTIME DEFAULTS", columns, sectionWidth))
-		for _, row := range model.DebugSnapshot.RuntimeDefaults {
-			lines = append(lines, "  "+padCells(singleLineDetail(row.Name), nameWidth)+"  "+padCells(singleLineDetail(row.Value), valueWidth)+"  "+singleLineDetail(row.Source))
-			if row.Warning != "" {
-				lines = append(lines, "    warning: "+singleLineDetail(row.Warning))
+		columns := []column{
+			{name: "NAME", width: nameWidth},
+			{name: "REPOSITORY", width: repositoryWidth},
+			{name: "GLOBAL", width: globalWidth},
+			{name: "SOURCE", width: sourceWidth},
+		}
+		sectionWidth := dashboardSectionWidth(model, PageDebug, "RUNTIME ANOMALIES", columnsWidth(columns))
+		lines = append(lines, "", dashboardSectionRuleColumns(model.Profile, RoleWarn, "RUNTIME ANOMALIES", columns, sectionWidth))
+		for _, anomaly := range anomalies {
+			cells := []string{
+				singleLineDetail(anomaly.row.Name),
+				singleLineDetail(anomaly.row.Value),
+				singleLineDetail(anomaly.globalValue),
+				singleLineDetail(anomaly.row.Source),
+			}
+			lines = append(lines, "  "+joinRow(columns, cells, columnsWidth(columns)))
+			if anomaly.row.Warning != "" {
+				lines = append(lines, "    warning: "+singleLineDetail(anomaly.row.Warning))
 			}
 		}
 	}
@@ -124,6 +138,32 @@ func renderDebugPage(model Model) []string {
 		}
 	}
 	return lines
+}
+
+type debugRuntimeAnomaly struct {
+	row         DebugRuntimeDefault
+	globalValue string
+}
+
+func debugRuntimeAnomalies(rows []DebugRuntimeDefault, globalRows []SettingsRuntimeDefault) []debugRuntimeAnomaly {
+	globalByName := make(map[string]SettingsRuntimeDefault, len(globalRows))
+	for _, row := range globalRows {
+		globalByName[row.Name] = row
+	}
+
+	var anomalies []debugRuntimeAnomaly
+	for _, row := range rows {
+		global, found := globalByName[row.Name]
+		if found && row.Value == global.Value && row.Warning == "" {
+			continue
+		}
+		globalValue := "(missing)"
+		if found {
+			globalValue = global.Value
+		}
+		anomalies = append(anomalies, debugRuntimeAnomaly{row: row, globalValue: globalValue})
+	}
+	return anomalies
 }
 
 func debugSectionRule(model Model, role Role, title string, count int) string {

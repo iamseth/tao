@@ -272,7 +272,7 @@ func TestDashboardPagesRenderSharedSectionRules(t *testing.T) {
 		{page: PagePlans, role: RoleInfo, want: []string{"▌ PLANNED ", "REPO", "NEXT", "PLAN", "SLICES", "AGE"}},
 		{page: PageNotes, role: RoleAccent, want: []string{"▌ OLDER ", "REPO", "PREVIEW", "TAG", "AGE"}},
 		{page: PageSettings, role: RoleAccent, want: []string{"▌ EXECUTION · all default ", "Agent", "▌ REPOSITORY DEFAULTS ", "PR", "ROOT"}},
-		{page: PageDebug, role: RoleAccent, want: []string{"▌ UI ", " 10 ─", "▌ DOCTOR ", "▌ RUNTIME DEFAULTS "}},
+		{page: PageDebug, role: RoleAccent, want: []string{"▌ UI ", " 10 ─", "▌ DOCTOR "}},
 	}
 	for _, test := range tests {
 		t.Run(string(test.page), func(t *testing.T) {

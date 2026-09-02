@@ -169,7 +169,7 @@ func mixedPlanFixture(now time.Time) PlanFixture {
 func emptyScenario() Scenario {
 	return Scenario{
 		Name: ScenarioEmpty, Description: "no plans, notes, warnings, details, or logs",
-		Now: fixtureNow, Snapshot: monitor.Snapshot{CollectedAt: fixtureNow}, Notes: note.Snapshot{}, Debug: debugFixture(fixtureNow), Settings: settingsWithoutOverridesFixture(fixtureNow),
+		Now: fixtureNow, Snapshot: monitor.Snapshot{CollectedAt: fixtureNow}, Notes: note.Snapshot{}, Debug: debugWithoutAnomaliesFixture(fixtureNow), Settings: settingsWithoutOverridesFixture(fixtureNow),
 	}
 }
 
@@ -298,6 +298,23 @@ func settingsWithoutOverridesFixture(now time.Time) tui.SettingsSnapshot {
 	return snapshot
 }
 
+func debugWithoutAnomaliesFixture(now time.Time) tui.DebugSnapshot {
+	snapshot := debugFixture(now)
+	rows := snapshot.RuntimeDefaults[:0]
+	for _, row := range snapshot.RuntimeDefaults {
+		if row.Name == "TAO_REPOSITORY_ONLY" {
+			continue
+		}
+		if row.Name == "TAO_PULL_REQUEST" {
+			row.Value = "false"
+		}
+		row.Warning = ""
+		rows = append(rows, row)
+	}
+	snapshot.RuntimeDefaults = rows
+	return snapshot
+}
+
 func debugFixture(now time.Time) tui.DebugSnapshot {
 	return tui.DebugSnapshot{
 		CollectedAt: now,
@@ -321,10 +338,11 @@ func debugFixture(now time.Time) tui.DebugSnapshot {
 			{Name: "TAO_AGENT", Value: "pi", Source: "default"},
 			{Name: "TAO_COMMIT_POLICY", Value: "slice", Source: "default"},
 			{Name: "TAO_EXECUTION_MODE", Value: "isolated", Source: "default"},
-			{Name: "TAO_PULL_REQUEST", Value: "false", Source: "repository"},
+			{Name: "TAO_PULL_REQUEST", Value: "true", Source: "repository"},
 			{Name: "TAO_REVIEW", Value: "true", Source: "default"},
 			{Name: "TAO_SESSION_TIMEOUT", Value: "20m", Source: "default"},
 			{Name: "TAO_UPDATE", Value: "warn", Source: "env", Warning: "fixture warning"},
+			{Name: "TAO_REPOSITORY_ONLY", Value: "enabled", Source: "repository"},
 		},
 	}
 }

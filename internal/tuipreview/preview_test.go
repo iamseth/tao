@@ -154,6 +154,40 @@ func TestRenderEveryViewIsDeterministicAndBounded(t *testing.T) {
 	}
 }
 
+func TestDebugPreviewShowsOnlyRepositoryRuntimeAnomalies(t *testing.T) {
+	mixed, _ := Lookup(ScenarioMixed)
+	frame, err := Render(mixed, RenderOptions{View: ViewDebug, Width: 120, Height: 60, Plain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"RUNTIME ANOMALIES", "TAO_PULL_REQUEST", "true", "false", "repository",
+		"TAO_UPDATE", "warning: fixture warning", "TAO_REPOSITORY_ONLY", "(missing)",
+		"3 active of 3 registered",
+	} {
+		if !strings.Contains(frame, want) {
+			t.Errorf("mixed Debug preview missing %q:\n%s", want, frame)
+		}
+	}
+	for _, identical := range []string{"TAO_AGENT", "TAO_COMMIT_POLICY", "TAO_EXECUTION_MODE", "TAO_REVIEW", "TAO_SESSION_TIMEOUT"} {
+		if strings.Contains(frame, identical) {
+			t.Errorf("mixed Debug preview includes identical row %q:\n%s", identical, frame)
+		}
+	}
+
+	empty, _ := Lookup(ScenarioEmpty)
+	frame, err = Render(empty, RenderOptions{View: ViewDebug, Width: 120, Height: 60, Plain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(frame, "RUNTIME ANOMALIES") {
+		t.Fatalf("empty Debug preview renders an anomaly section:\n%s", frame)
+	}
+	if !strings.Contains(frame, "0 active of 3 registered") {
+		t.Fatalf("empty Debug preview omits repository denominators:\n%s", frame)
+	}
+}
+
 func TestSettingsPreviewLeadsWithTruthfulOverrides(t *testing.T) {
 	scenario, _ := Lookup(ScenarioMixed)
 	frame, err := Render(scenario, RenderOptions{View: ViewSettings, Width: 70, Height: 20, Plain: true})

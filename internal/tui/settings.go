@@ -471,10 +471,6 @@ func settingsDefaultPair(profile Profile, row SettingsRuntimeDefault, labelWidth
 	return pair
 }
 
-func settingsRuntimeColumns(nameWidth, valueWidth int) []column {
-	return settingsRuntimeColumnsWithSource(nameWidth, valueWidth, visibleWidth("SOURCE"))
-}
-
 func settingsRuntimeColumnsWithSource(nameWidth, valueWidth, sourceWidth int) []column {
 	return []column{
 		{name: "NAME", width: nameWidth},
