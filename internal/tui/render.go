@@ -707,66 +707,32 @@ func measureTable(sections []Section, now time.Time, actionLabels map[string]str
 	return widths
 }
 
-const minimumPlanColumnWidth = 12
+const (
+	minimumNextColumnWidth = 7
+	minimumPlanColumnWidth = 12
+)
 
 func planTableColumns(widths tableWidths, withAttention bool, frameWidth int) []column {
-	repoWidth := max(widths.repo, visibleWidth("REPO"))
-	if frameWidth > 0 {
-		paneWidth := max(frameWidth-visibleWidth("  "), 0)
-		reservedWidth := max(widths.next, visibleWidth("NEXT")) + minimumPlanColumnWidth + 2*columnGapWidth
-		if withAttention {
-			reservedWidth += max(widths.attention, visibleWidth("ATTENTION")) + columnGapWidth
-		}
-		maxRepoWidth := max(paneWidth-reservedWidth, visibleWidth("REPO"))
-		repoWidth = min(repoWidth, maxRepoWidth)
+	columns := []column{
+		{name: "REPO", width: max(widths.repo, visibleWidth("REPO")), priority: 40},
+		{name: "NEXT", width: max(widths.next, visibleWidth("NEXT")), required: true, priority: 60, minimum: minimumNextColumnWidth},
+		{name: "PLAN", width: widths.plan, flex: true, required: true, priority: 60, minimum: minimumPlanColumnWidth},
+		{name: "SLICES", width: max(widths.slices, visibleWidth("SLICES")), priority: 30},
 	}
-	base := []column{
-		{name: "REPO", width: repoWidth},
-		{name: "NEXT", width: max(widths.next, visibleWidth("NEXT"))},
-		{name: "PLAN", width: widths.plan, flex: true},
-	}
-	operational := []column{{name: "SLICES", width: max(widths.slices, visibleWidth("SLICES"))}}
 	if widths.hasRunning {
-		operational = append(operational, column{name: "RUN", width: max(widths.run, visibleWidth("RUN"))})
+		columns = append(columns, column{name: "RUN", width: max(widths.run, visibleWidth("RUN")), priority: 20})
 	}
-	operational = append(operational, column{name: "AGE", width: max(widths.age, visibleWidth("AGE"))})
-	var attention []column
+	columns = append(columns, column{name: "AGE", width: max(widths.age, visibleWidth("AGE")), priority: 10})
 	if withAttention {
-		attention = []column{{name: "ATTENTION", width: max(widths.attention, visibleWidth("ATTENTION"))}}
+		columns = append(columns, column{
+			name: "ATTENTION", width: max(widths.attention, visibleWidth("ATTENTION")),
+			priority: 50,
+		})
 	}
-
-	columns := appendPlanTableColumns(base, operational, attention)
 	if frameWidth <= 0 {
 		return columns
 	}
-	paneWidth := max(frameWidth-visibleWidth("  "), 0)
-	for len(operational) > 0 && minimumPlanTableWidth(columns) > paneWidth {
-		operational = operational[:len(operational)-1]
-		columns = appendPlanTableColumns(base, operational, attention)
-	}
-	if len(attention) > 0 && minimumPlanTableWidth(columns) > paneWidth {
-		columns = appendPlanTableColumns(base, operational, nil)
-	}
-	return columns
-}
-
-func appendPlanTableColumns(base, operational, attention []column) []column {
-	columns := make([]column, 0, len(base)+len(operational)+len(attention))
-	columns = append(columns, base...)
-	columns = append(columns, operational...)
-	return append(columns, attention...)
-}
-
-func minimumPlanTableWidth(columns []column) int {
-	width := columnGapWidth * max(len(columns)-1, 0)
-	for _, item := range columns {
-		if item.flex {
-			width += minimumPlanColumnWidth
-		} else {
-			width += item.width
-		}
-	}
-	return width
+	return fitColumns(columns, max(frameWidth-visibleWidth("  "), 0))
 }
 
 func planTablePaneWidth(width int, columns []column) int {

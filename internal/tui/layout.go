@@ -11,9 +11,82 @@ const (
 )
 
 type column struct {
-	name  string
-	width int
-	flex  bool
+	name     string
+	width    int
+	flex     bool
+	required bool
+	priority int
+	minimum  int
+}
+
+// fitColumns keeps required columns and removes optional columns from lowest
+// to highest priority until their preferred widths fit. If only required
+// columns remain, values shrink to their declared semantic minima while the
+// original column order is preserved.
+func fitColumns(columns []column, paneWidth int) []column {
+	if len(columns) == 0 || paneWidth <= 0 {
+		return append([]column(nil), columns...)
+	}
+	fitted := append([]column(nil), columns...)
+	for index := range fitted {
+		fitted[index].width = max(fitted[index].width, columnMinimum(fitted[index]))
+	}
+	for preferredColumnsWidth(fitted) > paneWidth {
+		drop := -1
+		for index, item := range fitted {
+			if item.required || (drop >= 0 && item.priority >= fitted[drop].priority) {
+				continue
+			}
+			drop = index
+		}
+		if drop < 0 {
+			break
+		}
+		fitted = append(fitted[:drop], fitted[drop+1:]...)
+	}
+
+	overflow := preferredColumnsWidth(fitted) - paneWidth
+	for overflow > 0 {
+		shrink := -1
+		for index, item := range fitted {
+			if item.flex || item.width <= columnMinimum(item) {
+				continue
+			}
+			if shrink < 0 || item.priority < fitted[shrink].priority {
+				shrink = index
+			}
+		}
+		if shrink < 0 {
+			break
+		}
+		amount := min(overflow, fitted[shrink].width-columnMinimum(fitted[shrink]))
+		fitted[shrink].width -= amount
+		overflow -= amount
+	}
+	return fitted
+}
+
+func preferredColumnsWidth(columns []column) int {
+	width := columnGapWidth * max(len(columns)-1, 0)
+	for _, item := range columns {
+		if item.flex {
+			width += columnMinimum(item)
+		} else {
+			width += max(item.width, columnMinimum(item))
+		}
+	}
+	return width
+}
+
+func columnMinimum(item column) int {
+	minimum := item.minimum
+	if minimum <= 0 {
+		minimum = visibleWidth(item.name)
+	}
+	if item.flex {
+		minimum = max(minimum, minimumFlexWidth)
+	}
+	return minimum
 }
 
 // joinRow pads cells to their corresponding column widths and separates them

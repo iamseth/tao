@@ -275,6 +275,62 @@ func TestPlanColumnsVaryAcrossMixedAndStressScenarios(t *testing.T) {
 	}
 }
 
+func TestPlanColumnsKeepSemanticCoreThroughNarrowDegradation(t *testing.T) {
+	widths := tableWidths{
+		repo: 32, next: 8, plan: 64, slices: 15, run: 12, age: 4,
+		attention: 20, hasRunning: true,
+	}
+	for _, width := range []int{100, 80, 70} {
+		names := columnNames(planTableColumns(widths, true, width))
+		for _, required := range []string{"NEXT", "PLAN"} {
+			if !slices.Contains(names, required) {
+				t.Errorf("width %d dropped required %s column: %v", width, required, names)
+			}
+		}
+		if !slices.Contains(names, "ATTENTION") {
+			t.Errorf("width %d dropped high-priority attention context: %v", width, names)
+		}
+	}
+	if names := columnNames(planTableColumns(widths, true, 70)); slices.Contains(names, "RUN") || slices.Contains(names, "AGE") {
+		t.Fatalf("70-cell attention table retained low-priority operational context: %v", names)
+	}
+	if names := columnNames(planTableColumns(widths, false, 44)); strings.Join(names, ",") != "NEXT,PLAN" {
+		t.Fatalf("44-cell table columns = %v, want trustworthy action and plan identity", names)
+	}
+}
+
+func TestRender44CellAttentionTableKeepsRecognizableActions(t *testing.T) {
+	rows := []monitor.Row{
+		{
+			RepositoryName: "repo", PlanID: "continue-plan", Status: plan.StatusBlocked,
+			NextAction: "CONTINUE", AttentionReasons: []monitor.AttentionReason{monitor.AttentionChangesRequested},
+		},
+		{
+			RepositoryName: "repo", PlanID: "finalize-plan", Status: plan.StatusBlocked,
+			NextAction: "FINALIZE PR", AttentionReasons: []monitor.AttentionReason{monitor.AttentionChangesRequested},
+		},
+	}
+	frame := Render(Model{Snapshot: monitor.Snapshot{Rows: rows}, Width: 44, Height: 20})
+	lines := renderedLines(frame)
+	for action, planID := range map[string]string{"CONTINUE": "continue-plan", "FINALIZE PR": "finalize-plan"} {
+		var rowLine string
+		for _, line := range lines {
+			if strings.Contains(line, planID) {
+				rowLine = line
+				break
+			}
+		}
+		if rowLine == "" || !strings.Contains(rowLine, action) {
+			t.Errorf("44-cell attention row lost recognizable %s action: %q\n%s", action, rowLine, frame)
+		}
+	}
+	for _, line := range lines {
+		if strings.HasPrefix(line, "  NEXT") && strings.Contains(line, "ATTENTION") {
+			t.Fatalf("44-cell table retained attention context at the expense of NEXT: %q", line)
+		}
+	}
+}
+
 func TestPlanRunColumnIsConditional(t *testing.T) {
 	now := time.Now()
 	withoutRun := measureTable([]Section{{Rows: []monitor.Row{{PlanID: "planned", Status: plan.StatusPlanned}}}}, now, nil)
@@ -675,21 +731,21 @@ func TestRenderNarrowPlanTableKeepsPlanVisibleWithLongRepositoryName(t *testing.
 
 	var header, selectedRow string
 	for _, line := range renderedLines(frame) {
-		if strings.HasPrefix(line, "  REPO") {
+		if strings.HasPrefix(line, "  NEXT") {
 			header = line
 		}
-		if strings.Contains(line, planID) {
+		if strings.HasPrefix(line, "   RUN") && strings.Contains(line, planID) {
 			selectedRow = line
 		}
 	}
-	if header == "" || !strings.Contains(header, "PLAN") {
-		t.Fatalf("70-column table lost the PLAN header with an overlong repository name:\n%s", frame)
+	if header == "" || !strings.Contains(header, "PLAN") || strings.Contains(header, "REPO") {
+		t.Fatalf("70-column table did not prioritize NEXT and PLAN over oversized repository context:\n%s", frame)
 	}
 	if selectedRow == "" || !strings.Contains(selectedRow, planID) {
 		t.Fatalf("70-column table lost the meaningful plan identifier with an overlong repository name:\n%s", frame)
 	}
 	if strings.Contains(selectedRow, repositoryName) {
-		t.Fatalf("70-column table did not truncate the repository cell: %q", selectedRow)
+		t.Fatalf("70-column table retained oversized repository context: %q", selectedRow)
 	}
 	if got := visibleWidth(selectedRow); got != 70 {
 		t.Fatalf("selected row width = %d, want 70: %q", got, selectedRow)
@@ -796,7 +852,7 @@ func TestRenderPlanPreviewYieldsToTableSelectionAndConfirmation(t *testing.T) {
 	if len(lines) != 7 {
 		t.Fatalf("rendered lines = %d, want 7:\n%s", len(lines), got)
 	}
-	for _, want := range []string{"tao │▸plans", "  repo   RUN   selected", "╭─ selected ", "Run selected plan? [y/n]"} {
+	for _, want := range []string{"tao │▸plans", "  repo   RUN     selected", "╭─ selected ", "Run selected plan? [y/n]"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("responsive frame missing %q:\n%s", want, got)
 		}
@@ -859,7 +915,7 @@ func TestRenderSelectedLastPlanKeepsSectionSkeleton(t *testing.T) {
 	}
 
 	got := Render(Model{Snapshot: monitor.Snapshot{Rows: rows}, Selected: 29, Width: 70, Height: 20})
-	for _, want := range []string{"PLANNED", "REPO", "  repo   RUN   plan-29"} {
+	for _, want := range []string{"PLANNED", "REPO", "  repo   RUN     plan-29"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("selected-last viewport missing %q:\n%s", want, got)
 		}

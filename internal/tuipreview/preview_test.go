@@ -269,23 +269,92 @@ func TestSettingsPreviewExercisesFinalizedGroupsAcrossWidths(t *testing.T) {
 
 func TestStressViewsAreCellBoundedAcrossWidths(t *testing.T) {
 	scenario, _ := Lookup(ScenarioStress)
+	required := map[View][]string{
+		ViewPlans:    {"NEXT", "PLAN"},
+		ViewNotes:    {"PREVIEW", "AGE"},
+		ViewSettings: {"REPOSITORY DEFAULTS", "PR"},
+		ViewDebug:    {"UI", "DOCTOR"},
+	}
 	for _, width := range []int{199, 120, 100, 80, 70} {
 		for _, view := range Views() {
 			t.Run(fmt.Sprintf("%s/%d", view, width), func(t *testing.T) {
-				frame, err := Render(scenario, RenderOptions{
-					View: view, Width: width, Height: 30, Plain: true, Color: true,
-				})
+				options := RenderOptions{View: view, Width: width, Height: 30, Plain: true, Color: true}
+				frame, err := Render(scenario, options)
 				if err != nil {
 					t.Fatal(err)
 				}
 				assertBoundedFrame(t, frame, width, 30)
+				_, dashboard := required[view]
+				if dashboard {
+					assertFullWidthFrame(t, frame, width)
+				}
 				switch view {
 				case ViewPlans:
 					assertUnicodeTableAlignment(t, frame, "REPO", "PLAN", "stress-")
 				case ViewNotes:
 					assertUnicodeTableAlignment(t, frame, "REPO", "PREVIEW", "Stress note")
 				}
+
+				options.Color = false
+				plain, err := Render(scenario, options)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(plain, "\x1b[") {
+					t.Fatalf("ProfileNone plain frame contains an ANSI CSI sequence: %q", plain)
+				}
+				assertBoundedFrame(t, plain, width, 30)
+				if dashboard {
+					assertFullWidthFrame(t, plain, width)
+				}
+				for _, want := range required[view] {
+					if !strings.Contains(plain, want) {
+						t.Errorf("ProfileNone plain %s frame missing %q:\n%s", view, want, plain)
+					}
+				}
 			})
+		}
+	}
+}
+
+func TestDashboardViewsRemoveZeroInformationColumns(t *testing.T) {
+	stress, _ := Lookup(ScenarioStress)
+	notes, err := Render(stress, RenderOptions{View: ViewNotes, Width: 120, Height: 30, Plain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	header := frameLineContaining(notes, "REPO", "PREVIEW")
+	if header == "" {
+		t.Fatalf("Notes preview has no list header:\n%s", notes)
+	}
+	for _, column := range []string{"STATUS", "ID"} {
+		if slices.Contains(strings.Fields(header), column) {
+			t.Errorf("Notes list retained zero-information %s column: %q", column, header)
+		}
+	}
+
+	allDefaults, _ := Lookup(ScenarioEmpty)
+	settings, err := Render(allDefaults, RenderOptions{View: ViewSettings, Width: 120, Height: 60, Plain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(settings, "all default") {
+		t.Fatalf("Settings fixture does not exercise all-default groups:\n%s", settings)
+	}
+	if strings.Contains(settings, "SOURCE") {
+		t.Fatalf("Settings all-default view retained a SOURCE column:\n%s", settings)
+	}
+
+	debug, err := Render(allDefaults, RenderOptions{View: ViewDebug, Width: 120, Height: 60, Plain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(debug, "RUNTIME DEFAULTS") {
+		t.Fatalf("Debug view duplicated the full runtime defaults table:\n%s", debug)
+	}
+	for _, name := range []string{"TAO_AGENT", "TAO_COMMIT_POLICY", "TAO_EXECUTION_MODE", "TAO_REVIEW", "TAO_SESSION_TIMEOUT"} {
+		if strings.Contains(debug, name) {
+			t.Errorf("Debug view duplicated default runtime row %q:\n%s", name, debug)
 		}
 	}
 }
@@ -474,6 +543,28 @@ func assertBoundedFrame(t *testing.T, frame string, width, height int) {
 			t.Fatalf("frame line has %d visible cells, width is %d: %q", got, width, line)
 		}
 	}
+}
+
+func assertFullWidthFrame(t *testing.T, frame string, width int) {
+	t.Helper()
+	for index, line := range strings.Split(strings.TrimSuffix(frame, "\n"), "\n") {
+		if got := fixtureVisibleWidth(line); got != width {
+			t.Fatalf("frame line %d has %d visible cells, want %d: %q", index+1, got, width, line)
+		}
+	}
+}
+
+func frameLineContaining(frame string, values ...string) string {
+	for _, line := range strings.Split(strings.TrimSuffix(frame, "\n"), "\n") {
+		matches := true
+		for _, value := range values {
+			matches = matches && strings.Contains(line, value)
+		}
+		if matches {
+			return stripCSI(line)
+		}
+	}
+	return ""
 }
 
 func assertUnicodeTableAlignment(t *testing.T, frame, firstHeader, secondHeader, rowSecond string) {

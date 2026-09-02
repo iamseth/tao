@@ -202,24 +202,16 @@ func measureNoteTable(items []note.CatalogNote, now time.Time) noteTableWidths {
 }
 
 func noteTableColumns(widths noteTableWidths, frameWidth int) []column {
-	repositoryWidth := widths.repository
-	primaryTagWidth := widths.primaryTag
-	ageWidth := widths.age
-	if frameWidth > 0 {
-		paneWidth := max(frameWidth-visibleWidth("  "), 0)
-		fixedBudget := paneWidth - 3*columnGapWidth - ageWidth - minimumNotePreviewCells
-		overflow := repositoryWidth + primaryTagWidth - max(fixedBudget, 0)
-		shrink := min(max(primaryTagWidth-visibleWidth("TAG"), 0), max(overflow, 0))
-		primaryTagWidth -= shrink
-		overflow -= shrink
-		repositoryWidth -= min(max(repositoryWidth-visibleWidth("REPO"), 0), max(overflow, 0))
+	columns := []column{
+		{name: "REPO", width: widths.repository, priority: 20},
+		{name: "PREVIEW", width: widths.preview, flex: true, required: true, priority: 40, minimum: minimumNotePreviewCells},
+		{name: "TAG", width: widths.primaryTag, priority: 10},
+		{name: "AGE", width: widths.age, required: true, priority: 40},
 	}
-	return []column{
-		{name: "REPO", width: repositoryWidth},
-		{name: "PREVIEW", width: widths.preview, flex: true},
-		{name: "TAG", width: primaryTagWidth},
-		{name: "AGE", width: ageWidth},
+	if frameWidth <= 0 {
+		return columns
 	}
+	return fitColumns(columns, max(frameWidth-visibleWidth("  "), 0))
 }
 
 func noteTablePaneWidth(frameWidth int, columns []column) int {
@@ -239,11 +231,18 @@ func renderNoteHeader(columns []column, paneWidth int) string {
 
 func renderNoteRow(item note.CatalogNote, now time.Time, columns []column, paneWidth int, selected bool, profile Profile) string {
 	values := noteValues(item, now)
-	cells := []string{
-		values.repository,
-		Paint(profile, RoleNeutral4, values.preview),
-		Paint(profile, RoleAccent, values.primaryTag),
-		values.age,
+	cells := make([]string, 0, len(columns))
+	for _, item := range columns {
+		switch item.name {
+		case "REPO":
+			cells = append(cells, values.repository)
+		case "PREVIEW":
+			cells = append(cells, Paint(profile, RoleNeutral4, values.preview))
+		case "TAG":
+			cells = append(cells, Paint(profile, RoleAccent, values.primaryTag))
+		case "AGE":
+			cells = append(cells, values.age)
+		}
 	}
 	line := "  " + joinRow(columns, cells, paneWidth)
 	if paneWidth > 0 {

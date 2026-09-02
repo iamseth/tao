@@ -243,6 +243,30 @@ func TestRenderNotesColumnsAlignAtSupportedWidths(t *testing.T) {
 	}
 }
 
+func TestNoteColumnsKeepPreviewAndAgeThroughDeclaredDegradation(t *testing.T) {
+	widths := noteTableWidths{repository: 24, preview: 64, primaryTag: 32, age: 3}
+	expected := map[int]string{
+		100: "REPO,PREVIEW,TAG,AGE",
+		80:  "REPO,PREVIEW,TAG,AGE",
+		70:  "REPO,PREVIEW,AGE",
+		44:  "PREVIEW,AGE",
+	}
+	for _, width := range []int{100, 80, 70, 44} {
+		columns := noteTableColumns(widths, width)
+		if got := strings.Join(columnNames(columns), ","); got != expected[width] {
+			t.Errorf("width %d columns = %q, want %q", width, got, expected[width])
+		}
+	}
+
+	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+	item := note.CatalogNote{RepositoryName: strings.Repeat("repository", 3), Text: "recognizable preview", Tags: []string{strings.Repeat("tag", 12)}, UpdatedAt: now.Add(-2 * time.Hour)}
+	columns := noteTableColumns(measureNoteTable([]note.CatalogNote{item}, now), 44)
+	row := renderNoteRow(item, now, columns, noteTablePaneWidth(44, columns), false, ProfileNone)
+	if !strings.Contains(row, "recognizable") || !strings.Contains(row, "2h") || strings.Contains(row, "repository") || strings.Contains(row, "tagtag") {
+		t.Fatalf("44-cell note row did not preserve preview and age while shedding metadata: %q", row)
+	}
+}
+
 func TestRenderNoteRowUsesSemanticPaintSelectionAndEmptyTagCell(t *testing.T) {
 	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
 	item := note.CatalogNote{RepositoryName: "repo", Text: "preview", UpdatedAt: now.Add(-time.Hour)}

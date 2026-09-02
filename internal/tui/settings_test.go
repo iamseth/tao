@@ -235,6 +235,33 @@ func TestSettingsRepositoryRowsUseCellAlignmentAndHomeAbbreviation(t *testing.T)
 	}
 }
 
+func TestSettingsRepositoryColumnsKeepIdentityHealthAndEditablePR(t *testing.T) {
+	model := Model{Page: PageSettings, SettingsSnapshot: SettingsSnapshot{Repositories: []RepositorySetting{{
+		ID: "repository-alpha-long", Name: "repository-alpha-long", Health: "missing_root",
+		Root: "/long/repository/root/optional-context",
+	}}}}
+	for _, width := range []int{100, 80, 70, 44} {
+		model.Width = width
+		lines, _, _ := renderSettingsPage(model)
+		joined := strings.Join(lines, "\n")
+		for _, want := range []string{"REPOSITORY DEFAULTS", "repository-alpha-long", "HEALTH", "PR", "pr=inherit", "●"} {
+			if !strings.Contains(joined, want) {
+				t.Errorf("width %d Settings rows missing %q:\n%s", width, want, joined)
+			}
+		}
+		if width == 100 {
+			if !strings.Contains(joined, "/long/repository") {
+				t.Errorf("wide Settings row shed root prematurely:\n%s", joined)
+			}
+		} else if strings.Contains(joined, "ROOT") || strings.Contains(joined, "/long/repository") {
+			t.Errorf("width %d Settings row retained optional root:\n%s", width, joined)
+		}
+		if width == 44 && strings.Contains(joined, "missing root") {
+			t.Errorf("44-cell Settings row retained health detail instead of its semantic indicator:\n%s", joined)
+		}
+	}
+}
+
 func TestSettingsRepositoryRootAbbreviationIsBoundarySafe(t *testing.T) {
 	for _, test := range []struct {
 		name string

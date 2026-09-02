@@ -27,6 +27,21 @@ func TestJoinRowFlexArithmeticAtFrameWidths(t *testing.T) {
 	}
 }
 
+func TestFitColumnsUsesDeclaredPriorityAndKeepsRequiredOrder(t *testing.T) {
+	columns := []column{
+		{name: "CONTEXT", width: 8, priority: 20},
+		{name: "CORE", width: 20, flex: true, required: true, minimum: 6},
+		{name: "LOW", width: 8, priority: 10},
+		{name: "END", width: 3, required: true, priority: 30},
+	}
+	if got := columnNames(fitColumns(columns, 22)); strings.Join(got, ",") != "CONTEXT,CORE,END" {
+		t.Fatalf("22-cell columns = %v, want lowest-priority optional column removed", got)
+	}
+	if got := columnNames(fitColumns(columns, 12)); strings.Join(got, ",") != "CORE,END" {
+		t.Fatalf("12-cell columns = %v, want only required columns in original order", got)
+	}
+}
+
 func TestResolveColumnsClampsFlexWidth(t *testing.T) {
 	columns := []column{
 		{name: "ONE", width: 40},

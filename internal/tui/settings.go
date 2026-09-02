@@ -139,11 +139,22 @@ func renderSettingsPage(model Model) ([]string, int, tableViewportMetadata) {
 			cursor = "> "
 			selectedLine = len(lines)
 		}
-		cells := []string{
-			settingsStyledRepositoryName(model.Profile, repository),
-			settingsRepositoryHealth(model.Profile, repository.Health),
-			pullRequestSetting(repository.PullRequest, model.SettingsSnapshot.InheritedPullRequest),
-			Paint(model.Profile, RoleNeutral2, settingsRepositoryRoot(repository.Root, model.SettingsSnapshot.DisplayHome)),
+		cells := make([]string, 0, len(repositoryColumns))
+		for _, item := range repositoryColumns {
+			switch item.name {
+			case "REPOSITORY":
+				cells = append(cells, settingsStyledRepositoryName(model.Profile, repository))
+			case "HEALTH":
+				health := settingsRepositoryHealth(model.Profile, repository.Health)
+				if item.width < healthWidth {
+					health = settingsRepositoryHealthIndicator(model.Profile, repository.Health)
+				}
+				cells = append(cells, health)
+			case "PR":
+				cells = append(cells, pullRequestSetting(repository.PullRequest, model.SettingsSnapshot.InheritedPullRequest))
+			case "ROOT":
+				cells = append(cells, Paint(model.Profile, RoleNeutral2, settingsRepositoryRoot(repository.Root, model.SettingsSnapshot.DisplayHome)))
+			}
 		}
 		repositorySection.contentLines = append(repositorySection.contentLines, len(lines))
 		lines = append(lines, cursor+joinRow(repositoryColumns, cells, columnsWidth(repositoryColumns)))
@@ -210,7 +221,17 @@ func renderSettingsOverrides(model Model) ([]string, tableViewportSection) {
 	for _, row := range overrides {
 		section.contentLines = append(section.contentLines, len(lines))
 		source := Paint(model.Profile, row.sourceRole, row.source)
-		cells := []string{row.name, Paint(model.Profile, RoleNeutral5, row.value), source}
+		cells := make([]string, 0, len(columns))
+		for _, item := range columns {
+			switch item.name {
+			case "NAME":
+				cells = append(cells, row.name)
+			case "VALUE":
+				cells = append(cells, Paint(model.Profile, RoleNeutral5, row.value))
+			case "SOURCE":
+				cells = append(cells, source)
+			}
+		}
 		lines = append(lines, "  "+joinRow(columns, cells, columnsWidth(columns)))
 		if row.warning != "" {
 			section.contentLines = append(section.contentLines, len(lines))
@@ -302,7 +323,11 @@ func renderSettingsBudgets(model Model) ([]string, tableViewportSection) {
 		sliceWidth = max(sliceWidth, visibleWidth(settingsBudgetValue(byName[metric.sliceName], metric.cost)))
 		planWidth = max(planWidth, visibleWidth(settingsBudgetValue(byName[metric.planName], metric.cost)))
 	}
-	columns := []column{{name: "METRIC", width: labelWidth}, {name: "SLICE", width: sliceWidth}, {name: "PLAN", width: planWidth}}
+	columns := []column{
+		{name: "METRIC", width: labelWidth, required: true, priority: 30},
+		{name: "SLICE", width: sliceWidth, required: true, priority: 40},
+		{name: "PLAN", width: planWidth, required: true, priority: 40},
+	}
 	sectionWidth := dashboardSectionWidth(model, PageSettings, "BUDGET WARNINGS", columnsWidth(columns))
 	columns = fitSettingsSectionColumns("BUDGET WARNINGS", columns, sectionWidth)
 	if len(columns) > 1 {
@@ -473,18 +498,18 @@ func settingsDefaultPair(profile Profile, row SettingsRuntimeDefault, labelWidth
 
 func settingsRuntimeColumnsWithSource(nameWidth, valueWidth, sourceWidth int) []column {
 	return []column{
-		{name: "NAME", width: nameWidth},
-		{name: "VALUE", width: valueWidth},
-		{name: "SOURCE", width: sourceWidth},
+		{name: "NAME", width: nameWidth, required: true, priority: 30},
+		{name: "VALUE", width: valueWidth, required: true, priority: 40},
+		{name: "SOURCE", width: sourceWidth, priority: 10},
 	}
 }
 
 func settingsRepositoryColumns(nameWidth, healthWidth, pullRequestWidth, rootWidth int) []column {
 	return []column{
-		{name: "REPOSITORY", width: nameWidth},
-		{name: "HEALTH", width: healthWidth},
-		{name: "PR", width: pullRequestWidth},
-		{name: "ROOT", width: rootWidth},
+		{name: "REPOSITORY", width: nameWidth, required: true, priority: 30},
+		{name: "HEALTH", width: healthWidth, required: true, priority: 10},
+		{name: "PR", width: pullRequestWidth, required: true, priority: 40, minimum: len("pr=inherit")},
+		{name: "ROOT", width: rootWidth, priority: 5},
 	}
 }
 
@@ -492,32 +517,11 @@ func settingsRepositoryColumns(nameWidth, healthWidth, pullRequestWidth, rootWid
 // header. This lets the rule and rows share one left-aligned column layout.
 func fitSettingsSectionColumns(title string, columns []column, width int) []column {
 	if len(columns) == 0 || width <= 2 {
-		return columns
+		return append([]column(nil), columns...)
 	}
-	available := width - 2 // The rule marker and row cursor occupy two cells.
-	fitted := make([]column, 0, len(columns))
-	used := 0
-	for index, item := range columns {
-		gap := 0
-		if index > 0 {
-			gap = columnGapWidth
-		}
-		remaining := available - used - gap
-		headerWidth := visibleWidth(item.name)
-		if index == 0 {
-			headerWidth = visibleWidth(title)
-		}
-		if remaining < headerWidth {
-			break
-		}
-		item.width = min(max(item.width, headerWidth), remaining)
-		fitted = append(fitted, item)
-		used += gap + item.width
-	}
-	if len(fitted) == 0 {
-		return columns[:1]
-	}
-	return fitted
+	columns = append([]column(nil), columns...)
+	columns[0].minimum = max(columns[0].minimum, visibleWidth(title))
+	return fitColumns(columns, width-2) // The rule marker and row cursor occupy two cells.
 }
 
 func settingsSectionRuleColumns(profile Profile, role Role, title string, columns []column, width int) string {
@@ -580,15 +584,23 @@ func settingsStyledRepositoryName(profile Profile, repository RepositorySetting)
 
 func settingsRepositoryHealth(profile Profile, health string) string {
 	status := strings.TrimSpace(singleLineDetail(health))
-	role := RoleSuccess
+	role := settingsRepositoryHealthRole(status)
 	if status == "" {
 		status = "unknown"
-		role = RoleWarn
-	} else if status != "ok" {
-		role = RoleWarn
 	}
 	text := strings.ReplaceAll(status, "_", " ")
 	return Paint(profile, role, "●") + " " + text
+}
+
+func settingsRepositoryHealthIndicator(profile Profile, health string) string {
+	return Paint(profile, settingsRepositoryHealthRole(strings.TrimSpace(singleLineDetail(health))), "●")
+}
+
+func settingsRepositoryHealthRole(status string) Role {
+	if status == "ok" {
+		return RoleSuccess
+	}
+	return RoleWarn
 }
 
 func settingsRepositoryRoot(root, displayHome string) string {

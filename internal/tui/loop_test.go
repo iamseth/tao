@@ -251,8 +251,8 @@ func TestRunRefreshesAndHandlesResize(t *testing.T) {
 			t.Fatalf("resized frame line %q exceeds new width", line)
 		}
 	}
-	if !strings.Contains(resized, "beta") {
-		t.Fatalf("resized frame lost selected row: %q", resized)
+	if !strings.Contains(resized, "two") {
+		t.Fatalf("resized frame lost the selected plan identity: %q", resized)
 	}
 
 	if _, err := writer.Write([]byte("q")); err != nil {

@@ -1,9 +1,13 @@
 package tui
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -310,8 +314,11 @@ func TestSelectRowPreservesForegroundWithoutReverseVideo(t *testing.T) {
 }
 
 func TestNoRawSGRLiteralsOutsideTheme(t *testing.T) {
-	pattern := regexp.MustCompile(`\\x1b\[[0-9;]*m`)
-	var paths []string
+	// Parse string values so alternate Go spellings such as \u001b cannot
+	// bypass theme ownership. width.go is the ANSI parser; render.go remains
+	// scanned because its screen controls are CSI sequences, not SGR colors.
+	pattern := regexp.MustCompile(`\x1b\[[0-9:;<=>?]*m`)
+	fileSet := token.NewFileSet()
 	err := filepath.WalkDir(".", func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -323,21 +330,29 @@ func TestNoRawSGRLiteralsOutsideTheme(t *testing.T) {
 		if strings.HasSuffix(name, "_test.go") || name == "theme.go" || name == "width.go" {
 			return nil
 		}
-		paths = append(paths, path)
+		parsed, err := parser.ParseFile(fileSet, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		ast.Inspect(parsed, func(node ast.Node) bool {
+			literal, ok := node.(*ast.BasicLit)
+			if !ok || literal.Kind != token.STRING {
+				return true
+			}
+			value, err := strconv.Unquote(literal.Value)
+			if err != nil {
+				t.Errorf("%s: cannot decode string literal: %v", fileSet.Position(literal.Pos()), err)
+				return true
+			}
+			if pattern.MatchString(value) {
+				t.Errorf("%s contains an authored ANSI SGR literal; use theme.go", fileSet.Position(literal.Pos()))
+			}
+			return true
+		})
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
-	}
-	for _, path := range paths {
-		// #nosec G304 -- WalkDir supplied paths rooted at this package for this source gate.
-		source, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if pattern.Match(source) {
-			t.Errorf("%s contains a raw ANSI SGR literal", path)
-		}
 	}
 }
 
