@@ -11,9 +11,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"unicode/utf8"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/textbound"
 	"github.com/iamseth/tao/internal/verifydetect"
 )
 
@@ -196,14 +196,7 @@ func finalVerificationExitCode(runErr error) *int {
 
 func boundedFinalVerificationDetails(output string) (string, bool) {
 	output = strings.TrimSpace(output)
-	truncated := len(output) > maxFinalVerificationOutputBytes
-	if truncated {
-		output = output[len(output)-maxFinalVerificationOutputBytes:]
-		for len(output) > 0 && !utf8.ValidString(output) {
-			output = output[1:]
-		}
-	}
-	return output, truncated
+	return textbound.Tail(output, maxFinalVerificationOutputBytes)
 }
 
 func finalVerificationFingerprint(verification plan.FinalVerification) string {

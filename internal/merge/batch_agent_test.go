@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
@@ -42,6 +43,35 @@ func batchResolutionJSONWithProposal(summary string, proposal plan.ReviewCommitM
 		panic(err)
 	}
 	return string(encoded)
+}
+
+func TestBoundResolutionSummaryRepairsSplitRuneAtHeadBoundary(t *testing.T) {
+	const marker = " [TRUNCATED]"
+	prefix := strings.Repeat("a", 4094)
+	input := prefix + "€tail"
+	if input[4096]&0xc0 != 0x80 {
+		t.Fatal("test input does not split a multi-byte rune at the head boundary")
+	}
+
+	got := boundResolutionSummary(input)
+	if !utf8.ValidString(got) {
+		t.Fatalf("bounded summary is not valid UTF-8: %q", got[len(got)-32:])
+	}
+	if strings.ContainsRune(got, utf8.RuneError) {
+		t.Fatalf("bounded summary contains U+FFFD: %q", got[len(got)-32:])
+	}
+	if !strings.HasSuffix(got, marker) {
+		t.Fatalf("bounded summary = %q, want truncation marker", got[len(got)-32:])
+	}
+	if retained := strings.TrimSuffix(got, marker); len(retained) > 4096 {
+		t.Fatalf("retained summary length = %d, want at most 4096", len(retained))
+	}
+
+	ascii := strings.Repeat("b", 4097)
+	asciiGot := boundResolutionSummary(ascii)
+	if want := ascii[:4096] + marker; asciiGot != want {
+		t.Fatalf("ASCII summary changed\nwant length: %d\n got length: %d", len(want), len(asciiGot))
+	}
 }
 
 type durableFailingBatchTransitionStore struct {

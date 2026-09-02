@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/iamseth/tao/internal/plan"
 )
@@ -19,6 +20,29 @@ type verifyRunnerCall struct {
 	cwd  string
 	name string
 	args []string
+}
+
+func TestBoundMergeVerifyOutputRepairsSplitRuneAtTailBoundary(t *testing.T) {
+	const suffix = "original trailing bytes"
+	trailing := strings.Repeat("z", mergeVerifyOutputLimit-2-len(suffix)) + suffix
+	output := "x€" + trailing
+	if len(output) <= mergeVerifyOutputLimit || output[len(output)-mergeVerifyOutputLimit]&0xc0 != 0x80 {
+		t.Fatal("test input does not split a multi-byte rune at the tail boundary")
+	}
+
+	got := boundMergeVerifyOutput(output)
+	if !utf8.ValidString(got) {
+		t.Fatalf("bounded output is not valid UTF-8: %q", got[:16])
+	}
+	if strings.ContainsRune(got, utf8.RuneError) {
+		t.Fatalf("bounded output contains U+FFFD: %q", got[:16])
+	}
+	if len(got) > mergeVerifyOutputLimit {
+		t.Fatalf("bounded output length = %d, want at most %d", len(got), mergeVerifyOutputLimit)
+	}
+	if !strings.HasSuffix(got, suffix) {
+		t.Fatalf("bounded output does not retain original trailing bytes: %q", got[len(got)-32:])
+	}
 }
 
 func TestMergeRunsPassingVerifyAfterSquash(t *testing.T) {

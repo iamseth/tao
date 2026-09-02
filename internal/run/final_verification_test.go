@@ -412,6 +412,17 @@ func TestFinalVerificationOutputKeepsBoundedTailWithExplicitTruncation(t *testin
 	}
 }
 
+func TestFinalVerificationOutputRetainsInvalidByteAwayFromCut(t *testing.T) {
+	retained := strings.Repeat("x", maxFinalVerificationOutputBytes-1) + "\xff"
+	details, truncated := boundedFinalVerificationDetails("discarded" + retained)
+	if !truncated {
+		t.Fatal("long output was not marked truncated")
+	}
+	if details != retained {
+		t.Fatalf("details = %q, want invalid byte and preceding output retained", details)
+	}
+}
+
 func TestVerifyCompletedBranchEventAppendFailureIsBestEffort(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@true\n"), 0o600); err != nil {

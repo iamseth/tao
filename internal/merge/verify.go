@@ -9,6 +9,7 @@ import (
 
 	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/textbound"
 	"github.com/iamseth/tao/internal/verifydetect"
 )
 
@@ -146,10 +147,8 @@ func (s Service) runMergeVerifyAtRoot(ctx context.Context, repoRoot, command str
 }
 
 func boundMergeVerifyOutput(output string) string {
-	if len(output) <= mergeVerifyOutputLimit {
-		return output
-	}
-	return output[len(output)-mergeVerifyOutputLimit:]
+	bounded, _ := textbound.Tail(output, mergeVerifyOutputLimit)
+	return bounded
 }
 
 func (s Service) verifyFailed(ctx context.Context, git GitClient, snapshot mergeVerifySnapshot, command string, repoRoot string, output string, cause error) error {

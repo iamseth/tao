@@ -18,6 +18,7 @@ import (
 
 	commitpkg "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/textbound"
 	"github.com/iamseth/tao/prompts"
 )
 
@@ -640,11 +641,11 @@ func resolutionKind(i BatchIntegration) string {
 	return "verification"
 }
 func boundResolutionSummary(s string) string {
-	const limit = 4096
-	if len(s) > limit {
-		return s[:limit] + " [TRUNCATED]"
+	bounded, truncated := textbound.Head(s, 4096)
+	if truncated {
+		return bounded + " [TRUNCATED]"
 	}
-	return s
+	return bounded
 }
 func resolutionFingerprint(status, output string) string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(status+"\x00"+output)))
