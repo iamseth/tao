@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,8 +14,9 @@ import (
 )
 
 type uiSettingsService struct {
-	app      App
-	registry NoteRegistry
+	app         App
+	registry    NoteRegistry
+	userHomeDir func() (string, error)
 }
 
 func (s uiSettingsService) Collect(ctx context.Context) (tui.SettingsSnapshot, error) {
@@ -22,6 +24,13 @@ func (s uiSettingsService) Collect(ctx context.Context) (tui.SettingsSnapshot, e
 		return tui.SettingsSnapshot{}, err
 	}
 	snapshot := tui.SettingsSnapshot{CollectedAt: s.app.now()}
+	userHomeDir := s.userHomeDir
+	if userHomeDir == nil {
+		userHomeDir = os.UserHomeDir
+	}
+	if home, err := userHomeDir(); err == nil {
+		snapshot.DisplayHome = home
+	}
 	rows, err := runtimeconfig.RuntimeEnvStatus()
 	if err != nil {
 		snapshot.CollectionError = "runtime defaults: " + err.Error()

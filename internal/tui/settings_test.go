@@ -2,11 +2,11 @@ package tui
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/term"
 )
 
@@ -18,7 +18,7 @@ func TestRenderSettingsShowsGlobalAndRepositoryDefaults(t *testing.T) {
 			InheritedPullRequest: false,
 			RuntimeDefaults: []SettingsRuntimeDefault{
 				{Name: "TAO_AGENT", Value: "pi", Source: "default"},
-				{Name: "TAO_PULL_REQUEST", Value: "false", Source: "environment", Warning: "example warning"},
+				{Name: "TAO_PULL_REQUEST", Value: "false", Source: "env", Warning: "example warning"},
 			},
 			Repositories: []RepositorySetting{
 				{ID: "alpha-123", Name: "alpha", Root: "/repos/alpha", Health: "ok", Finding: "ok", PullRequest: &explicit},
@@ -27,8 +27,8 @@ func TestRenderSettingsShowsGlobalAndRepositoryDefaults(t *testing.T) {
 		},
 	})
 	for _, want := range []string{
-		"tao │ plans  notes ▸settings  debug", "GLOBAL RUNTIME DEFAULTS", "TAO_AGENT", "TAO_PULL_REQUEST", "environment", "warning: example warning",
-		"REPOSITORY DEFAULTS", "alpha (alpha-123)", "explicit true", "/repos/alpha", "> beta (beta-456)", "inherit (false)", "finding: repo root does not exist",
+		"tao │ plans  notes ▸settings  debug", "OVERRIDES", "EXECUTION · all default", "Agent", "← env", "← alpha", "warning: example warning",
+		"REPOSITORY DEFAULTS", "alpha", "● ok", "pr=on", "/repos/alpha", "> beta", "● missing root", "pr=inherit", "finding: repo root does not exist",
 	} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("settings frame missing %q:\n%s", want, frame)
@@ -39,77 +39,338 @@ func TestRenderSettingsShowsGlobalAndRepositoryDefaults(t *testing.T) {
 	}
 }
 
-func TestRenderSettingsHeadersMatchCellOffsets(t *testing.T) {
-	explicitFalse := false
-	explicitTrue := true
-	for _, width := range []int{70, 120} {
-		t.Run(fmt.Sprintf("width_%d", width), func(t *testing.T) {
-			frame := Render(Model{
-				Page: PageSettings, Width: width, Height: 20,
-				SettingsSnapshot: SettingsSnapshot{
-					InheritedPullRequest: false,
-					RuntimeDefaults:      []SettingsRuntimeDefault{{Name: "TAO_AGENT", Value: "pi", Source: "builtin"}},
-					Repositories: []RepositorySetting{
-						{ID: "alpha", Name: "alpha", Root: "/preview/alpha", Health: "ok", PullRequest: &explicitFalse},
-						{ID: "beta", Name: "βeta", Root: "/preview/beta", Health: "ok"},
-						{ID: "damaged", Name: "damaged-repo", Root: "/preview/missing", Health: "missing_root", PullRequest: &explicitTrue},
-					},
-				},
-			})
+func TestRenderSettingsDefaultsUsesResponsivePairGrid(t *testing.T) {
+	rows := []SettingsRuntimeDefault{
+		{Name: "TAO_COMMIT_POLICY", Value: "slice", Source: "default"},
+		{Name: "TAO_EXECUTION_MODE", Value: "isolated", Source: "default"},
+		{Name: "TAO_AGENT", Value: "pi", Source: "default"},
+		{Name: "TAO_SESSION_TIMEOUT", Value: "20m", Source: "default"},
+		{Name: "TAO_PULL_REQUEST", Value: "false", Source: "default"},
+	}
+	wide, _ := renderSettingsDefaultGroups(Model{Page: PageSettings, Width: 120, SettingsSnapshot: SettingsSnapshot{RuntimeDefaults: rows}})
+	wideText := strings.Join(wide, "\n")
+	if !strings.Contains(wideText, "EXECUTION · all default") || !strings.Contains(wideText, "WORKFLOW · all default") {
+		t.Fatalf("group default annotations are not truthful:\n%s", wideText)
+	}
+	if !lineContainsAll(wide, "Commit policy", "Execution mode") || !lineContainsAll(wide, "Agent", "Session timeout") {
+		t.Fatalf("wide Settings defaults do not render paired rows:\n%s", wideText)
+	}
 
-			var runtimeHeader, runtimeRow, repositoryHeader, alpha, damaged string
-			for _, line := range renderedLines(frame) {
-				plain := strings.TrimRight(line, " ")
-				switch {
-				case strings.Contains(plain, "▌ GLOBAL RUNTIME DEFAULTS"):
-					runtimeHeader = plain
-				case strings.HasPrefix(plain, "  TAO_AGENT"):
-					runtimeRow = plain
-				case strings.Contains(plain, "▌ REPOSITORY DEFAULTS"):
-					repositoryHeader = plain
-				case strings.HasPrefix(plain, "> alpha"):
-					alpha = plain
-				case strings.HasPrefix(plain, "  damaged-repo"):
-					damaged = plain
-				}
+	narrow, _ := renderSettingsDefaultGroups(Model{Page: PageSettings, Width: 35, SettingsSnapshot: SettingsSnapshot{RuntimeDefaults: rows}})
+	for _, labels := range [][2]string{{"Commit policy", "Execution mode"}, {"Agent", "Session timeout"}} {
+		if lineContainsAll(narrow, labels[0], labels[1]) {
+			t.Fatalf("narrow Settings defaults kept pair %q/%q on one line:\n%s", labels[0], labels[1], strings.Join(narrow, "\n"))
+		}
+	}
+}
+
+func TestRenderSettingsUnavailableRuntimeViewportKeepsSectionContext(t *testing.T) {
+	explicit := true
+	model := Model{
+		Page: PageSettings, Width: 70, Height: 14,
+		SettingsSnapshot: SettingsSnapshot{
+			CollectionError:      "runtime status collection failed",
+			InheritedPullRequest: false,
+			Repositories: []RepositorySetting{{
+				ID: "override", Name: "override-repo", Health: "ok", Root: "/override", PullRequest: &explicit,
+			}},
+		},
+	}
+	for range 29 {
+		model.SettingsSnapshot.Repositories = append(model.SettingsSnapshot.Repositories, RepositorySetting{
+			ID: "repo", Name: "repo", Health: "ok", Root: "/repo",
+		})
+	}
+
+	frame := Render(model)
+	for _, want := range []string{
+		"OVERRIDES", "RUNTIME DEFAULTS", "Runtime defaults unavailable.",
+		"REPOSITORY DEFAULTS", "runtime status collection failed", "> override-repo", "+ 26 more  ↓",
+	} {
+		if !strings.Contains(frame, want) {
+			t.Errorf("constrained Settings viewport missing %q:\n%s", want, frame)
+		}
+	}
+	if count := strings.Count(frame, "OVERRIDES"); count != 1 {
+		t.Errorf("constrained Settings viewport rendered OVERRIDES %d times, want once:\n%s", count, frame)
+	}
+}
+
+func lineContainsAll(lines []string, values ...string) bool {
+	for _, line := range lines {
+		matches := true
+		for _, value := range values {
+			matches = matches && strings.Contains(line, value)
+		}
+		if matches {
+			return true
+		}
+	}
+	return false
+}
+
+func TestSettingsDefaultsClassifyAndRenderEveryRuntimeStatusOnce(t *testing.T) {
+	statuses, err := runtimeconfig.RuntimeEnvStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := make([]SettingsRuntimeDefault, 0, len(statuses))
+	for _, status := range statuses {
+		rows = append(rows, SettingsRuntimeDefault{Name: status.Name, Value: status.Value, Source: "default"})
+	}
+	groups := settingsDefaultGroups(rows)
+	counts := make(map[string]int)
+	for _, group := range groups {
+		for _, row := range group.rows {
+			counts[row.Name]++
+		}
+	}
+	renderedLines, _ := renderSettingsDefaultGroups(Model{Page: PageSettings, Width: 200, SettingsSnapshot: SettingsSnapshot{RuntimeDefaults: rows}})
+	rendered := strings.Join(renderedLines, "\n")
+	for _, status := range statuses {
+		if strings.HasPrefix(status.Name, "TAO_BUDGET_") {
+			if counts[status.Name] != 0 {
+				t.Errorf("advisory budget %s rendered in defaults", status.Name)
 			}
-			assertSettingsColumnOffsets(t, runtimeHeader, runtimeRow, [][2]string{
-				{"GLOBAL RUNTIME DEFAULTS", "TAO_AGENT"},
-				{"VALUE", "pi"},
-				{"SOURCE", "builtin"},
-			})
-			for _, row := range []string{alpha, damaged} {
-				assertSettingsColumnOffsets(t, repositoryHeader, row, [][2]string{
-					{"REPOSITORY DEFAULTS", map[bool]string{true: "damaged-repo (damaged)", false: "alpha (alpha)"}[row == damaged]},
-					{"HEALTH", map[bool]string{true: "missing_root", false: "ok"}[row == damaged]},
-					{"PULL_REQUEST", map[bool]string{true: "explicit true", false: "explicit false"}[row == damaged]},
-					{"ROOT", map[bool]string{true: "/preview/miss", false: "/preview/alph"}[row == damaged]},
-				})
+			continue
+		}
+		if _, known := settingsDefaultGroupForName(status.Name); !known {
+			t.Errorf("runtime setting %s is not explicitly classified", status.Name)
+		}
+		if counts[status.Name] != 1 {
+			t.Errorf("runtime setting %s grouped %d times, want once", status.Name, counts[status.Name])
+		}
+		if got := strings.Count(rendered, humanizeSettingsName(status.Name)); got != 1 {
+			t.Errorf("runtime setting %s rendered %d times, want once:\n%s", status.Name, got, rendered)
+		}
+	}
+}
+
+func TestRenderSettingsShowsRuntimeOverridesExactlyOnce(t *testing.T) {
+	frame := Render(Model{
+		Page: PageSettings, Width: 120, Height: 40,
+		SettingsSnapshot: SettingsSnapshot{RuntimeDefaults: []SettingsRuntimeDefault{
+			{Name: "TAO_AGENT", Value: "pi", Source: "default"},
+			{Name: "TAO_PULL_REQUEST", Value: "false", Source: "env"},
+			{Name: "TAO_REVIEW", Value: "true", Source: "default"},
+			{Name: "TAO_UPDATE", Value: "warn", Source: "default", Warning: "invalid value; using fallback"},
+		}},
+	})
+
+	for _, name := range []string{"TAO_PULL_REQUEST", "TAO_UPDATE"} {
+		got := strings.Count(frame, name) + strings.Count(frame, humanizeSettingsName(name))
+		if got != 1 {
+			t.Errorf("runtime setting %s rendered %d times, want once:\n%s", name, got, frame)
+		}
+	}
+	if !strings.Contains(frame, "WORKFLOW") || strings.Contains(frame, "WORKFLOW · all default") {
+		t.Errorf("Workflow heading does not reflect its environment override:\n%s", frame)
+	}
+	if got := strings.Count(frame, "warning: invalid value; using fallback"); got != 1 {
+		t.Errorf("warning rendered %d times, want once:\n%s", got, frame)
+	}
+	if got := strings.Count(frame, "Agent"); got != 1 {
+		t.Errorf("remaining default Agent rendered %d times, want once:\n%s", got, frame)
+	}
+}
+
+func TestRenderSettingsBudgetsPairsScopesAndKeepsZeroTruthful(t *testing.T) {
+	rows := []SettingsRuntimeDefault{
+		{Name: "TAO_BUDGET_PLAN_TOOL_CALLS", Value: "400"},
+		{Name: "TAO_BUDGET_SLICE_ERRORED_MESSAGES", Value: "0"},
+		{Name: "TAO_BUDGET_PLAN_OUTPUT_TOKENS", Value: "150000"},
+		{Name: "TAO_BUDGET_SLICE_COST", Value: "5.00"},
+		{Name: "TAO_BUDGET_PLAN_ASSISTANT_MESSAGES", Value: "300"},
+		{Name: "TAO_BUDGET_SLICE_OUTPUT_TOKENS", Value: "40000"},
+		{Name: "TAO_BUDGET_PLAN_ERRORED_MESSAGES", Value: "2"},
+		{Name: "TAO_BUDGET_SLICE_TOOL_CALLS", Value: "120"},
+		{Name: "TAO_BUDGET_PLAN_COST", Value: "20.000"},
+		{Name: "TAO_BUDGET_SLICE_ASSISTANT_MESSAGES", Value: "80"},
+	}
+	lines, _ := renderSettingsBudgets(Model{Page: PageSettings, Width: 120, SettingsSnapshot: SettingsSnapshot{RuntimeDefaults: rows}})
+	for _, want := range [][]string{
+		{"Output tokens", "40 000", "150 000"},
+		{"Cost", "5.00", "20.000"},
+		{"Tool calls", "120", "400"},
+		{"Assistant messages", "80", "300"},
+		{"Errored messages", "0", "2"},
+	} {
+		if !lineContainsAll(lines, want...) {
+			t.Errorf("budget row missing exact slice/plan pair %q:\n%s", want, strings.Join(lines, "\n"))
+		}
+	}
+	joined := strings.ToLower(strings.Join(lines, "\n"))
+	if strings.Contains(joined, "unlimited") || strings.Contains(joined, "none") {
+		t.Fatalf("zero budget rendered as a sentinel:\n%s", joined)
+	}
+}
+
+func TestSettingsRepositoryRowsUseCellAlignmentAndHomeAbbreviation(t *testing.T) {
+	model := Model{Page: PageSettings, Width: 100, Selected: 1, SettingsSnapshot: SettingsSnapshot{
+		DisplayHome: "/Users/example",
+		Repositories: []RepositorySetting{
+			{ID: "beta", Name: "βeta", Root: "/Users/example/src/βeta", Health: "ok"},
+			{ID: "nihongo", Name: "日本語", Root: "/Users/example/src/日本語", Health: "missing_root"},
+		},
+	}}
+	lines, selected, _ := renderSettingsPage(model)
+	if selected < 0 || !strings.HasPrefix(lines[selected], "> ") || !strings.Contains(lines[selected], "日本語") {
+		t.Fatalf("selected repository line = %d %q", selected, lines[selected])
+	}
+	var healthOffsets []int
+	for _, line := range lines {
+		if strings.Contains(line, "βeta") || strings.Contains(line, "日本語") {
+			byteOffset := strings.Index(line, "●")
+			if byteOffset < 0 {
+				t.Fatalf("repository row lacks semantic health dot: %q", line)
+			}
+			healthOffsets = append(healthOffsets, visibleWidth(line[:byteOffset]))
+			if !strings.Contains(line, "~/src/") {
+				t.Errorf("repository root is not home-abbreviated: %q", line)
+			}
+		}
+	}
+	if len(healthOffsets) != 2 || healthOffsets[0] != healthOffsets[1] {
+		t.Fatalf("Unicode repository health columns are not cell-aligned: %v\n%s", healthOffsets, strings.Join(lines, "\n"))
+	}
+}
+
+func TestSettingsRepositoryRootAbbreviationIsBoundarySafe(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		root string
+		home string
+		want string
+	}{
+		{name: "home", root: "/Users/example", home: "/Users/example", want: "~"},
+		{name: "descendant", root: "/Users/example/src/tao", home: "/Users/example", want: "~/src/tao"},
+		{name: "sibling prefix", root: "/Users/example-other/src", home: "/Users/example", want: "/Users/example-other/src"},
+		{name: "unavailable home", root: "/Users/example/src", want: "/Users/example/src"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := settingsRepositoryRoot(test.root, test.home); got != test.want {
+				t.Fatalf("settingsRepositoryRoot(%q, %q) = %q, want %q", test.root, test.home, got, test.want)
 			}
 		})
 	}
 }
 
-func assertSettingsColumnOffsets(t *testing.T, header, row string, labelsAndCells [][2]string) {
-	t.Helper()
-	if header == "" || row == "" {
-		t.Fatalf("missing Settings header or row: header=%q row=%q", header, row)
+func TestSettingsRepositoryRowsUseSemanticStyles(t *testing.T) {
+	repository := RepositorySetting{ID: "beta", Name: "βeta", Health: "ok"}
+	if got := settingsStyledRepositoryName(ProfileANSI16, repository); got != Paint(ProfileANSI16, RepoColor("beta"), "βeta") {
+		t.Fatalf("styled repository name = %q", got)
 	}
-	for _, pair := range labelsAndCells {
-		headerOffset := settingsVisibleOffset(header, pair[0])
-		cellOffset := settingsVisibleOffset(row, pair[1])
-		if headerOffset < 0 || cellOffset < 0 || headerOffset != cellOffset {
-			t.Errorf("Settings header %q at %d does not match cell %q at %d: header=%q row=%q", pair[0], headerOffset, pair[1], cellOffset, header, row)
+	if got := settingsRepositoryHealth(ProfileANSI16, "missing_root"); !strings.Contains(got, Paint(ProfileANSI16, RoleWarn, "●")) || !strings.Contains(got, "missing root") {
+		t.Fatalf("styled unhealthy status = %q", got)
+	}
+}
+
+func TestSettingsDefaultPairsUseSemanticStyles(t *testing.T) {
+	labelWidth := visibleWidth("Pull request")
+	for _, test := range []struct {
+		row  SettingsRuntimeDefault
+		role Role
+	}{
+		{row: SettingsRuntimeDefault{Name: "TAO_PULL_REQUEST", Value: "true"}, role: RoleSuccess},
+		{row: SettingsRuntimeDefault{Name: "TAO_PULL_REQUEST", Value: "false"}, role: RoleNeutral2},
+		{row: SettingsRuntimeDefault{Name: "TAO_PULL_REQUEST", Value: "none"}, role: RoleNeutral2},
+	} {
+		got := settingsDefaultPair(ProfileANSI16, test.row, labelWidth, false)
+		if !strings.Contains(got, Paint(ProfileANSI16, RoleNeutral2, "Pull request")) || !strings.Contains(got, Paint(ProfileANSI16, test.role, test.row.Value)) {
+			t.Errorf("styled default pair = %q", got)
 		}
 	}
 }
 
-func settingsVisibleOffset(line, value string) int {
-	offset := strings.Index(line, value)
-	if offset < 0 {
-		return -1
+func TestRenderSettingsOverridesIncludesOnlyTruthfulOverridesAndWarnings(t *testing.T) {
+	explicitFalse := false
+	explicitTrue := true
+	tests := []struct {
+		name     string
+		snapshot SettingsSnapshot
+		want     []string
+		absent   []string
+	}{
+		{
+			name: "environment",
+			snapshot: SettingsSnapshot{RuntimeDefaults: []SettingsRuntimeDefault{
+				{Name: "TAO_AGENT", Value: "claude", Source: "env"},
+				{Name: "TAO_REVIEW", Value: "true", Source: "default"},
+			}},
+			want:   []string{"OVERRIDES", "TAO_AGENT", "claude", "← env"},
+			absent: []string{"TAO_REVIEW"},
+		},
+		{
+			name: "differing repository",
+			snapshot: SettingsSnapshot{
+				InheritedPullRequest: false,
+				Repositories: []RepositorySetting{
+					{ID: "alpha", Name: "alpha", PullRequest: &explicitFalse},
+					{ID: "beta", Name: "βeta", PullRequest: &explicitTrue},
+				},
+			},
+			want:   []string{"OVERRIDES", "TAO_PULL_REQUEST", "true", "← βeta"},
+			absent: []string{"← alpha", "explicit"},
+		},
+		{
+			name: "warning only",
+			snapshot: SettingsSnapshot{RuntimeDefaults: []SettingsRuntimeDefault{
+				{Name: "TAO_UPDATE", Value: "warn", Source: "default", Warning: "invalid value; using fallback"},
+			}},
+			want: []string{"OVERRIDES", "TAO_UPDATE", "warn", "← default", "warning: invalid value; using fallback"},
+		},
+		{
+			name: "empty",
+			snapshot: SettingsSnapshot{
+				InheritedPullRequest: false,
+				RuntimeDefaults:      []SettingsRuntimeDefault{{Name: "TAO_AGENT", Value: "pi", Source: "default"}},
+				Repositories:         []RepositorySetting{{ID: "alpha", Name: "alpha", PullRequest: &explicitFalse}},
+			},
+			absent: []string{"OVERRIDES"},
+		},
 	}
-	return visibleWidth(line[:offset])
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			lines, _ := renderSettingsOverrides(Model{Page: PageSettings, Width: 120, SettingsSnapshot: test.snapshot})
+			got := strings.Join(lines, "\n")
+			for _, want := range test.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("overrides missing %q:\n%s", want, got)
+				}
+			}
+			for _, absent := range test.absent {
+				if strings.Contains(got, absent) {
+					t.Errorf("overrides unexpectedly contain %q:\n%s", absent, got)
+				}
+			}
+		})
+	}
+}
+
+func TestRenderSettingsOverridesUsesSemanticStyles(t *testing.T) {
+	explicitTrue := true
+	model := Model{
+		Page: PageSettings, Width: 120, Profile: ProfileANSI16,
+		SettingsSnapshot: SettingsSnapshot{
+			InheritedPullRequest: false,
+			RuntimeDefaults: []SettingsRuntimeDefault{
+				{Name: "TAO_AGENT", Value: "claude", Source: "env", Warning: "fallback warning"},
+			},
+			Repositories: []RepositorySetting{{ID: "beta", Name: "βeta", PullRequest: &explicitTrue}},
+		},
+	}
+	lines, _ := renderSettingsOverrides(model)
+	got := strings.Join(lines, "\n")
+	for _, want := range []string{
+		Paint(ProfileANSI16, RoleNeutral5, "claude"),
+		Paint(ProfileANSI16, RoleWarn, "warning: fallback warning"),
+		Paint(ProfileANSI16, RepoColor("beta"), "← βeta"),
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("styled overrides missing %q: %q", want, got)
+		}
+	}
 }
 
 func TestPullRequestSettingCycleIncludesInheritedState(t *testing.T) {
@@ -131,14 +392,14 @@ func TestSettingsUpdateRequiresConfirmationAndRefreshesSnapshot(t *testing.T) {
 	if quit := app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'p'}); quit || state.confirm == nil || service.calls != 0 {
 		t.Fatalf("settings edit did not open confirmation: quit=%t confirm=%#v calls=%d", quit, state.confirm, service.calls)
 	}
-	if !strings.Contains(state.confirm.message, "inherit (false) to explicit true") {
+	if !strings.Contains(state.confirm.message, "pr=inherit to pr=on") {
 		t.Fatalf("settings confirmation = %q", state.confirm.message)
 	}
 	if quit := app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'y'}); quit || state.confirm != nil || service.calls != 1 {
 		t.Fatalf("settings confirmation did not update: quit=%t confirm=%#v calls=%d", quit, state.confirm, service.calls)
 	}
 	value := state.settingsSnapshot.Repositories[0].PullRequest
-	if value == nil || !*value || !strings.Contains(state.settingsMessage, "explicit true") {
+	if value == nil || !*value || !strings.Contains(state.settingsMessage, "pr=on") {
 		t.Fatalf("updated settings = value=%v message=%q", value, state.settingsMessage)
 	}
 }

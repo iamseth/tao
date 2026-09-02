@@ -15,6 +15,7 @@ import (
 
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
 func TestScenarioCatalogIsStableDiscoverableAndTyped(t *testing.T) {
@@ -153,7 +154,7 @@ func TestRenderEveryViewIsDeterministicAndBounded(t *testing.T) {
 	}
 }
 
-func TestSettingsPreviewStartsWithFirstSectionAfterTabRule(t *testing.T) {
+func TestSettingsPreviewLeadsWithTruthfulOverrides(t *testing.T) {
 	scenario, _ := Lookup(ScenarioMixed)
 	frame, err := Render(scenario, RenderOptions{View: ViewSettings, Width: 70, Height: 20, Plain: true})
 	if err != nil {
@@ -167,11 +168,68 @@ func TestSettingsPreviewStartsWithFirstSectionAfterTabRule(t *testing.T) {
 			break
 		}
 	}
-	if sectionIndex < 0 || !strings.Contains(lines[sectionIndex], "▌ GLOBAL RUNTIME DEFAULTS ") {
-		t.Fatalf("first Settings section does not follow the tab rule:\n%s", frame)
+	if sectionIndex < 0 || !strings.Contains(lines[sectionIndex], "▌ OVERRIDES ") {
+		t.Fatalf("Overrides does not follow the tab rule:\n%s", frame)
+	}
+	for _, want := range []string{"← env", "← damaged-repo", "← default", "warning: fixture warning"} {
+		if !strings.Contains(frame, want) {
+			t.Errorf("Settings preview missing override %q:\n%s", want, frame)
+		}
 	}
 	if strings.Contains(frame, "3 repositories") || strings.Contains(frame, "need attention") {
 		t.Fatalf("Settings preview unexpectedly contains a summary:\n%s", frame)
+	}
+
+	empty, _ := Lookup(ScenarioEmpty)
+	withoutOverrides, err := Render(empty, RenderOptions{View: ViewSettings, Width: 70, Height: 20, Plain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(withoutOverrides, "OVERRIDES") {
+		t.Fatalf("Settings preview renders an empty Overrides section:\n%s", withoutOverrides)
+	}
+}
+
+func TestSettingsFixtureCoversEveryRuntimeStatus(t *testing.T) {
+	statuses, err := runtimeconfig.RuntimeEnvStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	scenario, _ := Lookup(ScenarioMixed)
+	counts := make(map[string]int)
+	for _, row := range scenario.Settings.RuntimeDefaults {
+		counts[row.Name]++
+	}
+	for _, status := range statuses {
+		if counts[status.Name] != 1 {
+			t.Errorf("Settings fixture count for %s = %d, want 1", status.Name, counts[status.Name])
+		}
+	}
+}
+
+func TestSettingsPreviewExercisesFinalizedGroupsAcrossWidths(t *testing.T) {
+	scenario, _ := Lookup(ScenarioMixed)
+	for _, width := range []int{120, 80, 70} {
+		frame, err := Render(scenario, RenderOptions{View: ViewSettings, Width: width, Height: 40, Plain: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{
+			"OVERRIDES", "EXECUTION · all default", "WORKFLOW", "SAFETY / UPDATE", "BUDGET WARNINGS",
+			"Commit policy", "Execution mode", "Agent", "Session timeout",
+			"TAO_PULL_REQUEST", "Review", "Auto rework", "Max rework attempts",
+			"TAO_UPDATE", "Skip permissions", "Slice output cap", "Slice cost cap",
+			"Output tokens", "40 000", "150 000", "5.00", "20.000", "Errored messages", "0",
+		} {
+			if !strings.Contains(frame, want) {
+				t.Errorf("width %d Settings preview missing %q:\n%s", width, want, frame)
+			}
+		}
+		for _, overriddenGroup := range []string{"WORKFLOW", "SAFETY / UPDATE"} {
+			if strings.Contains(frame, overriddenGroup+" · all default") {
+				t.Errorf("width %d Settings preview marks overridden %s group all default:\n%s", width, overriddenGroup, frame)
+			}
+		}
 	}
 }
 

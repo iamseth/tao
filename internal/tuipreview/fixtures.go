@@ -169,7 +169,7 @@ func mixedPlanFixture(now time.Time) PlanFixture {
 func emptyScenario() Scenario {
 	return Scenario{
 		Name: ScenarioEmpty, Description: "no plans, notes, warnings, details, or logs",
-		Now: fixtureNow, Snapshot: monitor.Snapshot{CollectedAt: fixtureNow}, Notes: note.Snapshot{}, Debug: debugFixture(fixtureNow), Settings: settingsFixture(fixtureNow),
+		Now: fixtureNow, Snapshot: monitor.Snapshot{CollectedAt: fixtureNow}, Notes: note.Snapshot{}, Debug: debugFixture(fixtureNow), Settings: settingsWithoutOverridesFixture(fixtureNow),
 	}
 }
 
@@ -253,14 +253,30 @@ func settingsFixture(now time.Time) tui.SettingsSnapshot {
 	explicitFalse := false
 	explicitTrue := true
 	return tui.SettingsSnapshot{
-		CollectedAt: now, InheritedPullRequest: false,
+		CollectedAt: now, InheritedPullRequest: false, DisplayHome: "/preview",
 		RuntimeDefaults: []tui.SettingsRuntimeDefault{
-			{Name: "TAO_AGENT", Value: "pi", Source: "default"},
 			{Name: "TAO_COMMIT_POLICY", Value: "slice", Source: "default"},
 			{Name: "TAO_EXECUTION_MODE", Value: "isolated", Source: "default"},
-			{Name: "TAO_PULL_REQUEST", Value: "false", Source: "environment"},
-			{Name: "TAO_REVIEW", Value: "true", Source: "default"},
+			{Name: "TAO_AGENT", Value: "pi", Source: "default"},
 			{Name: "TAO_SESSION_TIMEOUT", Value: "20m", Source: "default"},
+			{Name: "TAO_UPDATE", Value: "warn", Source: "default", Warning: "fixture warning"},
+			{Name: "TAO_PULL_REQUEST", Value: "false", Source: "env"},
+			{Name: "TAO_REVIEW", Value: "true", Source: "default"},
+			{Name: "TAO_AUTO_REWORK", Value: "true", Source: "default"},
+			{Name: "TAO_MAX_REWORK_ATTEMPTS", Value: "5", Source: "default"},
+			{Name: "TAO_DANGEROUSLY_SKIP_PERMISSIONS", Value: "false", Source: "default"},
+			{Name: "TAO_MAX_SLICE_OUTPUT_TOKENS", Value: "disabled", Source: "default"},
+			{Name: "TAO_MAX_SLICE_COST", Value: "disabled", Source: "default"},
+			{Name: "TAO_BUDGET_SLICE_OUTPUT_TOKENS", Value: "40000", Source: "default"},
+			{Name: "TAO_BUDGET_SLICE_COST", Value: "5.00", Source: "default"},
+			{Name: "TAO_BUDGET_SLICE_TOOL_CALLS", Value: "120", Source: "default"},
+			{Name: "TAO_BUDGET_SLICE_ASSISTANT_MESSAGES", Value: "80", Source: "default"},
+			{Name: "TAO_BUDGET_SLICE_ERRORED_MESSAGES", Value: "0", Source: "default"},
+			{Name: "TAO_BUDGET_PLAN_OUTPUT_TOKENS", Value: "150000", Source: "default"},
+			{Name: "TAO_BUDGET_PLAN_COST", Value: "20.000", Source: "default"},
+			{Name: "TAO_BUDGET_PLAN_TOOL_CALLS", Value: "400", Source: "default"},
+			{Name: "TAO_BUDGET_PLAN_ASSISTANT_MESSAGES", Value: "300", Source: "default"},
+			{Name: "TAO_BUDGET_PLAN_ERRORED_MESSAGES", Value: "0", Source: "default"},
 		},
 		Repositories: []tui.RepositorySetting{
 			{ID: "alpha", Name: "alpha", Root: "/preview/alpha", Health: "ok", Finding: "ok", PullRequest: &explicitFalse},
@@ -268,6 +284,18 @@ func settingsFixture(now time.Time) tui.SettingsSnapshot {
 			{ID: "damaged", Name: "damaged-repo", Root: "/preview/missing", Health: "missing_root", Finding: "repo root does not exist", PullRequest: &explicitTrue},
 		},
 	}
+}
+
+func settingsWithoutOverridesFixture(now time.Time) tui.SettingsSnapshot {
+	snapshot := settingsFixture(now)
+	for index := range snapshot.RuntimeDefaults {
+		snapshot.RuntimeDefaults[index].Source = "default"
+		snapshot.RuntimeDefaults[index].Warning = ""
+	}
+	for index := range snapshot.Repositories {
+		snapshot.Repositories[index].PullRequest = nil
+	}
+	return snapshot
 }
 
 func debugFixture(now time.Time) tui.DebugSnapshot {
@@ -296,7 +324,7 @@ func debugFixture(now time.Time) tui.DebugSnapshot {
 			{Name: "TAO_PULL_REQUEST", Value: "false", Source: "repository"},
 			{Name: "TAO_REVIEW", Value: "true", Source: "default"},
 			{Name: "TAO_SESSION_TIMEOUT", Value: "20m", Source: "default"},
-			{Name: "TAO_UPDATE", Value: "warn", Source: "environment", Warning: "fixture warning"},
+			{Name: "TAO_UPDATE", Value: "warn", Source: "env", Warning: "fixture warning"},
 		},
 	}
 }

@@ -102,7 +102,7 @@ func TestRenderFrameSkeletonAndContentAtSupportedSizes(t *testing.T) {
 	}{
 		{page: PagePlans, content: "  repo"},
 		{page: PageNotes, content: "  repo"},
-		{page: PageSettings, content: "> repo (repo)"},
+		{page: PageSettings, content: "> repo"},
 		{page: PageDebug, content: "UI"},
 	}
 	for _, width := range []int{199, 120, 100, 80, 70} {
@@ -134,7 +134,7 @@ func TestRenderFrameSkeletonAndContentAtSupportedSizes(t *testing.T) {
 							break
 						}
 					}
-					if sectionIndex < 0 || !strings.Contains(lines[sectionIndex], "▌ GLOBAL RUNTIME DEFAULTS ") {
+					if sectionIndex < 0 || !strings.Contains(lines[sectionIndex], "▌ EXECUTION · all default ") {
 						t.Fatalf("first Settings section does not follow the tab rule: %q", lines)
 					}
 					if strings.Contains(frame, "1 repository") || strings.Contains(frame, "need attention") {
@@ -271,7 +271,7 @@ func TestDashboardPagesRenderSharedSectionRules(t *testing.T) {
 	}{
 		{page: PagePlans, role: RoleInfo, want: []string{"▌ PLANNED ", "REPO", "NEXT", "PLAN", "SLICES", "AGE"}},
 		{page: PageNotes, role: RoleAccent, want: []string{"▌ OLDER ", "REPO", "PREVIEW", "TAG", "AGE"}},
-		{page: PageSettings, role: RoleAccent, want: []string{"▌ GLOBAL RUNTIME DEFAULTS ", "VALUE", "SOURCE", "▌ REPOSITORY DEFAULTS ", "PULL_REQUEST"}},
+		{page: PageSettings, role: RoleAccent, want: []string{"▌ EXECUTION · all default ", "Agent", "▌ REPOSITORY DEFAULTS ", "PR", "ROOT"}},
 		{page: PageDebug, role: RoleAccent, want: []string{"▌ UI ", " 10 ─", "▌ DOCTOR ", "▌ RUNTIME DEFAULTS "}},
 	}
 	for _, test := range tests {
@@ -431,7 +431,7 @@ func TestNotesViewportKeepsWarningsVisibleWithManyNotes(t *testing.T) {
 	}
 }
 
-func TestSettingsViewportKeepsGlobalDefaultsVisibleWithManyRepositories(t *testing.T) {
+func TestSettingsViewportKeepsGroupedDefaultsVisibleWithManyRepositories(t *testing.T) {
 	model := frameFixtureModel(PageSettings, 70, 20)
 	model.SettingsSnapshot.RuntimeDefaults = []SettingsRuntimeDefault{
 		{Name: "TAO_AGENT", Value: "pi", Source: "default"},
@@ -447,7 +447,7 @@ func TestSettingsViewportKeepsGlobalDefaultsVisibleWithManyRepositories(t *testi
 	model.Selected = len(model.SettingsSnapshot.Repositories) - 1
 
 	frame := Render(model)
-	for _, want := range []string{"▌ GLOBAL RUNTIME DEFAULTS ", "TAO_AGENT", "TAO_AUTO_REWORK", "TAO_SESSION_TIMEOUT", "▌ REPOSITORY DEFAULTS ", "> repo (repo-29)", "+ 19 more  ↓"} {
+	for _, want := range []string{"▌ EXECUTION · all default ", "Agent", "Session timeout", "▌ WORKFLOW · all default ", "Auto rework", "▌ REPOSITORY DEFAULTS ", "> repo", "+ 19 more  ↓"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("constrained Settings viewport missing %q:\n%s", want, frame)
 		}

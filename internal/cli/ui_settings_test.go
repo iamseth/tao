@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -31,13 +32,13 @@ func TestUISettingsServiceCollectsAndUpdatesRepositoryDefaults(t *testing.T) {
 			return taodata.RepoHealth{Status: taodata.RepoHealthOK, Message: "ok"}
 		},
 	}
-	service := uiSettingsService{app: app, registry: registry}
+	service := uiSettingsService{app: app, registry: registry, userHomeDir: func() (string, error) { return "/test/home", nil }}
 	snapshot, err := service.Collect(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !snapshot.InheritedPullRequest || len(snapshot.Repositories) != 2 || snapshot.Repositories[0].ID != "repo-a" {
-		t.Fatalf("settings snapshot baseline=%t repositories=%+v", snapshot.InheritedPullRequest, snapshot.Repositories)
+	if !snapshot.InheritedPullRequest || snapshot.DisplayHome != "/test/home" || len(snapshot.Repositories) != 2 || snapshot.Repositories[0].ID != "repo-a" {
+		t.Fatalf("settings snapshot baseline=%t home=%q repositories=%+v", snapshot.InheritedPullRequest, snapshot.DisplayHome, snapshot.Repositories)
 	}
 	if value := snapshot.Repositories[0].PullRequest; value == nil || *value {
 		t.Fatalf("explicit repository setting = %v, want false", value)
@@ -55,5 +56,23 @@ func TestUISettingsServiceCollectsAndUpdatesRepositoryDefaults(t *testing.T) {
 	}
 	if _, ok := stored.PullRequestDefault(); ok || stored.UpdatedAt != now.Format(time.RFC3339) {
 		t.Fatalf("stored unset repository = %+v", stored)
+	}
+}
+
+func TestUISettingsServiceLeavesDisplayHomeEmptyWhenLookupFails(t *testing.T) {
+	for _, name := range runtimeconfig.RuntimeEnvKeys() {
+		t.Setenv(name, "")
+	}
+	service := uiSettingsService{
+		app:         App{},
+		registry:    taodata.Registry{DataHome: t.TempDir()},
+		userHomeDir: func() (string, error) { return "", errors.New("home unavailable") },
+	}
+	snapshot, err := service.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.DisplayHome != "" {
+		t.Fatalf("display home = %q, want empty fallback context", snapshot.DisplayHome)
 	}
 }
