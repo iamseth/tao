@@ -116,11 +116,19 @@ func Render(model Model) string {
 		}
 		summary = &frameSummary{primary: planCountLabel(visibleCount), attentionCount: attentionCount, extra: searchSummary}
 	case PageNotes:
+		items := visibleNotes(noteSnapshot, model.FocusRepositoryID)
+		extra := searchSummary
+		if breakdown := noteRepositoryBreakdown(items); breakdown != "" {
+			if extra != "" {
+				extra += "  ·  "
+			}
+			extra += breakdown
+		}
 		summary = &frameSummary{
-			primary:        noteCountLabel(len(visibleNotes(noteSnapshot, model.FocusRepositoryID))),
+			primary:        noteCountLabel(len(items)),
 			attentionCount: len(visibleNoteWarnings(noteSnapshot, model.FocusRepositoryID)),
 			attentionNoun:  "warnings",
-			extra:          searchSummary,
+			extra:          extra,
 		}
 	}
 	lines := renderFrame(model, page, summary)
@@ -141,6 +149,7 @@ func Render(model Model) string {
 	}
 	selectedLine := -1
 	previewStart := -1
+	notePaneStart := -1
 	var planRowLines []int
 	var viewportMetadata tableViewportMetadata
 	switch {
@@ -184,6 +193,14 @@ func Render(model Model) string {
 			selectedLine = -1
 		}
 		lines = append(lines, noteLines...)
+		items := visibleNotes(noteSnapshot, model.FocusRepositoryID)
+		if model.Selected >= 0 && model.Selected < len(items) && selectedLine >= 0 {
+			notePaneStart = len(lines)
+			paneWidth := dashboardFrameWidth(model, PageNotes)
+			selectedNote := items[model.Selected]
+			details := renderNotePane(model.Profile, selectedNote, max(paneWidth-2, 0))
+			lines = append(lines, borderedPane(model.Profile, paneWidth, notePaneTitle(selectedNote), notePaneIdentity(selectedNote), true, details)...)
+		}
 	case visibleCount == 0:
 		lines = append(lines, "", "  No plans.")
 	default:
@@ -236,9 +253,12 @@ func Render(model Model) string {
 	if keyHintsFooter != "" {
 		lines = append(lines, keyHintsFooter)
 	}
-	if page == PagePlans && previewStart >= 0 {
+	switch {
+	case page == PagePlans && previewStart >= 0:
 		lines = planTableViewport(lines, planRowLines, selectedLine, previewStart, footerStart, frameLineCount, model.Height, model.Profile, viewportMetadata)
-	} else {
+	case page == PageNotes && notePaneStart >= 0:
+		lines = noteTableViewport(lines, selectedLine, notePaneStart, footerStart, frameLineCount, model.Height, model.Profile, viewportMetadata)
+	default:
 		lines = tableViewport(lines, selectedLine, footerStart, frameLineCount, model.Height, model.Profile, viewportMetadata)
 	}
 	if model.ShowShortcuts {
@@ -331,6 +351,68 @@ func planTableViewport(lines []string, planRowLines []int, selectedLine, preview
 	return append(viewport, footer...)
 }
 
+func noteTableViewport(lines []string, selectedLine, paneStart, footerStart, headerCount, height int, profile Profile, metadata tableViewportMetadata) []string {
+	if height <= 0 || len(lines) <= height {
+		return lines
+	}
+	headerCount = min(headerCount, paneStart)
+	if height <= headerCount {
+		return lines[:height]
+	}
+
+	contentCount := 0
+	for _, section := range metadata.sections {
+		contentCount += len(section.contentLines)
+	}
+	if contentCount == 0 {
+		return tableViewport(lines, selectedLine, footerStart, headerCount, height, profile, metadata)
+	}
+
+	footer := compactFooter(lines[footerStart:])
+	available := height - headerCount
+	footerLimit := max(available-1, 0)
+	if len(footer) > footerLimit {
+		footer = footer[len(footer)-footerLimit:]
+	}
+	available -= len(footer)
+	pane := lines[paneStart:footerStart]
+
+	viewportBounds := func(contentHeight int) (bodyLines []int, paneHeight, visibleContent int) {
+		// Prefer the complete pane whenever it fits below the selected section's
+		// headings and selected row. Otherwise retain the compact crop used by
+		// very short frames.
+		contextHeight := metadata.selectedSectionContextHeight(selectedLine, headerCount, paneStart)
+		if len(pane) >= 3 && selectedLine >= 0 {
+			switch {
+			case contextHeight > 0 && len(pane)+contextHeight <= contentHeight:
+				paneHeight = len(pane)
+			case contentHeight >= 4:
+				paneHeight = 3
+			}
+		}
+		bodyLines, visibleContent = metadata.viewportLines(selectedLine, contentHeight-paneHeight, headerCount, paneStart)
+		return bodyLines, paneHeight, visibleContent
+	}
+
+	bodyLines, paneHeight, visibleContent := viewportBounds(available)
+	hiddenContent := contentCount - visibleContent
+	if hiddenContent > 0 && available > 1 {
+		bodyLines, paneHeight, visibleContent = viewportBounds(available - 1)
+		hiddenContent = contentCount - visibleContent
+	}
+
+	viewport := make([]string, 0, height)
+	viewport = append(viewport, lines[:headerCount]...)
+	for _, line := range bodyLines {
+		viewport = append(viewport, lines[line])
+	}
+	viewport = append(viewport, borderedPaneViewport(pane, paneHeight)...)
+	if hiddenContent > 0 && len(viewport) < height-len(footer) {
+		viewport = append(viewport, moreIndicator(profile, hiddenContent))
+	}
+	return append(viewport, footer...)
+}
+
 func borderedPaneViewport(lines []string, height int) []string {
 	height = min(max(height, 0), len(lines))
 	if height == 0 {
@@ -343,6 +425,15 @@ func borderedPaneViewport(lines []string, height int) []string {
 	viewport = append(viewport, lines[0])
 	viewport = append(viewport, lines[1:height-1]...)
 	return append(viewport, lines[len(lines)-1])
+}
+
+func (metadata tableViewportMetadata) selectedSectionContextHeight(selectedLine, bodyStart, bodyEnd int) int {
+	for _, section := range metadata.sections {
+		if slices.Contains(section.contentLines, selectedLine) {
+			return len(linesWithin(section.headingLines, bodyStart, bodyEnd)) + 1
+		}
+	}
+	return 0
 }
 
 func (metadata tableViewportMetadata) preserveSelectedSectionHeadings(tableLines []int, selectedLine, capacity, bodyStart, bodyEnd int) []int {

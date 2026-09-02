@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/monitor"
+	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/plan"
 )
 
@@ -423,6 +424,50 @@ func TestRenderHeaderTracksActivePage(t *testing.T) {
 		if !strings.Contains(got, Paint(ProfileTrueColor, RoleAccent, test.want)) {
 			t.Fatalf("colored tab strip for %s does not accent the active tab:\n%q", test.page, got)
 		}
+	}
+}
+
+func TestRenderNotesSummaryCountsRepositoriesStablyAndRespectsFocus(t *testing.T) {
+	snapshot := note.Snapshot{Notes: []note.CatalogNote{
+		{RepositoryID: "repo-b", RepositoryName: "beta", ID: "b"},
+		{RepositoryID: "repo-a", RepositoryName: "alpha", ID: "a-1"},
+		{RepositoryID: "repo-a", RepositoryName: "alpha", ID: "a-2"},
+	}}
+
+	all := Render(Model{Page: PageNotes, NoteSnapshot: snapshot})
+	if !strings.Contains(all, "3 open notes  ·  alpha 2 · beta 1") {
+		t.Fatalf("all-repository Notes summary lacks stable counts:\n%s", all)
+	}
+
+	focused := Render(Model{
+		Page: PageNotes, NoteSnapshot: snapshot,
+		FocusRepositoryID: "repo-b", FocusRepositoryName: "beta",
+	})
+	if !strings.Contains(focused, "1 open note  ·  beta 1") || strings.Contains(focused, "alpha") {
+		t.Fatalf("focused Notes summary or rows ignored repository focus:\n%s", focused)
+	}
+}
+
+func TestRenderNotesSummaryPreservesActiveSearchBeforeRepositoryBreakdown(t *testing.T) {
+	snapshot := note.Snapshot{Notes: []note.CatalogNote{
+		{RepositoryID: "repo-b", RepositoryName: "long-beta-repository", ID: "b", Text: "needle beta"},
+		{RepositoryID: "repo-a", RepositoryName: "long-alpha-repository", ID: "a-1", Text: "needle alpha one"},
+		{RepositoryID: "repo-a", RepositoryName: "long-alpha-repository", ID: "a-2", Text: "needle alpha two"},
+	}}
+
+	lines := renderedLines(Render(Model{
+		Page: PageNotes, NoteSnapshot: snapshot, SearchQuery: "needle", SearchActive: true, Width: 50,
+	}))
+	summary := lines[2]
+	search := "Search: /needle█"
+	if !strings.Contains(summary, search) {
+		t.Fatalf("narrow Notes summary lost the complete active search indicator: %q", summary)
+	}
+	if repositoryAt := strings.Index(summary, "long-alpha"); repositoryAt < 0 || strings.Index(summary, search) > repositoryAt {
+		t.Fatalf("narrow Notes summary does not keep search ahead of repository breakdown: %q", summary)
+	}
+	if strings.Contains(summary, "long-beta-repository") {
+		t.Fatalf("narrow Notes summary preserved trailing repository data instead of search state: %q", summary)
 	}
 }
 

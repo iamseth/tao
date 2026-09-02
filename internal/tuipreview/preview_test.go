@@ -191,7 +191,7 @@ func TestStressViewsAreCellBoundedAcrossWidths(t *testing.T) {
 				case ViewPlans:
 					assertUnicodeTableAlignment(t, frame, "REPO", "PLAN", "stress-")
 				case ViewNotes:
-					assertUnicodeTableAlignment(t, frame, "REPO", "NOTE", "stress-note-")
+					assertUnicodeTableAlignment(t, frame, "REPO", "PREVIEW", "Stress note")
 				}
 			})
 		}

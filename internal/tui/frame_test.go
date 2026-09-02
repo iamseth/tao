@@ -101,7 +101,7 @@ func TestRenderFrameSkeletonAndContentAtSupportedSizes(t *testing.T) {
 		content string
 	}{
 		{page: PagePlans, content: "  repo"},
-		{page: PageNotes, content: "> repo"},
+		{page: PageNotes, content: "  repo"},
 		{page: PageSettings, content: "> repo (repo)"},
 		{page: PageDebug, content: "UI"},
 	}
@@ -270,7 +270,7 @@ func TestDashboardPagesRenderSharedSectionRules(t *testing.T) {
 		want []string
 	}{
 		{page: PagePlans, role: RoleInfo, want: []string{"▌ PLANNED ", "REPO", "NEXT", "PLAN", "SLICES", "AGE"}},
-		{page: PageNotes, role: RoleAccent, want: []string{"▌ OPEN NOTES ", "REPO", "NOTE", "STATUS", "PREVIEW"}},
+		{page: PageNotes, role: RoleAccent, want: []string{"▌ OLDER ", "REPO", "PREVIEW", "TAG", "AGE"}},
 		{page: PageSettings, role: RoleAccent, want: []string{"▌ GLOBAL RUNTIME DEFAULTS ", "VALUE", "SOURCE", "▌ REPOSITORY DEFAULTS ", "PULL_REQUEST"}},
 		{page: PageDebug, role: RoleAccent, want: []string{"▌ UI ", " 10 ─", "▌ DOCTOR ", "▌ RUNTIME DEFAULTS "}},
 	}
@@ -343,12 +343,12 @@ func TestViewportReportsTruncatedRows(t *testing.T) {
 	model := frameFixtureModel(PageNotes, 70, 8)
 	items := make([]note.CatalogNote, 12)
 	for index := range items {
-		items[index] = note.CatalogNote{RepositoryID: "repo", RepositoryName: "repo", ID: fmt.Sprintf("note-%02d", index), Text: "preview"}
+		items[index] = note.CatalogNote{RepositoryID: "repo", RepositoryName: "repo", ID: fmt.Sprintf("note-%02d", index), Text: fmt.Sprintf("preview-%02d", index)}
 	}
 	model.NoteSnapshot.Notes = items
 	model.Selected = 8
 	frame := Render(model)
-	if !strings.Contains(frame, "+ ") || !strings.Contains(frame, " more  ↓") || !strings.Contains(frame, "note-08") {
+	if !strings.Contains(frame, "+ ") || !strings.Contains(frame, " more  ↓") || !strings.Contains(frame, "preview-08") {
 		t.Fatalf("truncated viewport lacks indicator or selection:\n%s", frame)
 	}
 }
@@ -357,22 +357,55 @@ func TestNotesViewportKeepsSectionContextAndCountsOnlyHiddenNotes(t *testing.T) 
 	model := frameFixtureModel(PageNotes, 70, 20)
 	items := make([]note.CatalogNote, 30)
 	for index := range items {
-		items[index] = note.CatalogNote{RepositoryID: "repo", RepositoryName: "repo", ID: fmt.Sprintf("note-%02d", index), Text: "preview"}
+		items[index] = note.CatalogNote{RepositoryID: "repo", RepositoryName: "repo", ID: fmt.Sprintf("note-%02d", index), Text: fmt.Sprintf("preview-%02d", index)}
 	}
 	model.NoteSnapshot.Notes = items
 	model.Selected = len(items) - 1
 
 	frame := Render(model)
-	for _, want := range []string{"▌ OPEN NOTES ", "REPO", "NOTE", "> repo  note-29", "+ 17 more  ↓"} {
+	for _, want := range []string{"▌ OLDER ", "REPO", "PREVIEW", "preview-29", "╭─ preview-29", "╰", "+ 26 more  ↓"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("selected-last Notes viewport missing %q:\n%s", want, frame)
 		}
 	}
-	if visible := strings.Count(frame, "note-"); visible != 13 {
-		t.Fatalf("visible note rows = %d, want 13:\n%s", visible, frame)
+	if visible := strings.Count(frame, "  repo  preview-"); visible != 4 {
+		t.Fatalf("visible note rows = %d, want 4:\n%s", visible, frame)
 	}
-	if strings.Contains(frame, "+ 20 more  ↓") {
+	if strings.Contains(frame, "+ 23 more  ↓") {
 		t.Fatalf("hidden count includes section structure:\n%s", frame)
+	}
+}
+
+func TestNotesViewportUsesRoomForCompleteSelectedPane(t *testing.T) {
+	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+	created := now.Add(-48 * time.Hour)
+	updated := now.Add(-time.Hour)
+	model := frameFixtureModel(PageNotes, 100, 20)
+	model.Now = now
+	model.NoteSnapshot.Notes = make([]note.CatalogNote, 30)
+	for index := range model.NoteSnapshot.Notes {
+		model.NoteSnapshot.Notes[index] = note.CatalogNote{
+			RepositoryID: "repo", RepositoryName: "repo", ID: fmt.Sprintf("note-%02d", index),
+			Text: "ordinary preview", CreatedAt: created, UpdatedAt: updated,
+		}
+	}
+	model.Selected = 17
+	model.NoteSnapshot.Notes[model.Selected] = note.CatalogNote{
+		RepositoryID: "selected-repo", RepositoryName: "selected-repository", ID: "note-selected-complete",
+		Text: "full body first line\nfull body second line", Tags: []string{"first", "second"},
+		CreatedAt: created, UpdatedAt: updated,
+	}
+
+	frame := Render(model)
+	for _, want := range []string{
+		"▌ TODAY ", "full body first line", "+ 27 more  ↓",
+		"Note ID: note-selected-complete", "Repository: selected-repository", "Tags: first, second",
+		"Created: " + created.Format(time.RFC3339), "Updated: " + updated.Format(time.RFC3339),
+		"Body:", "full body second line", "╰",
+	} {
+		if !strings.Contains(frame, want) {
+			t.Fatalf("roomy constrained Notes viewport missing %q:\n%s", want, frame)
+		}
 	}
 }
 
@@ -382,7 +415,7 @@ func TestNotesViewportKeepsWarningsVisibleWithManyNotes(t *testing.T) {
 	for index := range model.NoteSnapshot.Notes {
 		model.NoteSnapshot.Notes[index] = note.CatalogNote{
 			RepositoryID: "repo", RepositoryName: "repo",
-			ID: fmt.Sprintf("note-%02d", index), Text: "preview",
+			ID: fmt.Sprintf("note-%02d", index), Text: fmt.Sprintf("preview-%02d", index),
 		}
 	}
 	model.NoteSnapshot.Warnings = []note.CatalogWarning{{
@@ -391,7 +424,7 @@ func TestNotesViewportKeepsWarningsVisibleWithManyNotes(t *testing.T) {
 	model.Selected = len(model.NoteSnapshot.Notes) - 1
 
 	frame := Render(model)
-	for _, want := range []string{"▌ OPEN NOTES ", "> repo  note-29", "▌ Warnings ", "repo: catalog damaged", "+ 19 more  ↓"} {
+	for _, want := range []string{"▌ OLDER ", "preview-29", "▌ Warnings ", "repo: catalog damaged", "╭─ preview-29", "╰", "+ 28 more  ↓"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("constrained Notes viewport missing %q:\n%s", want, frame)
 		}

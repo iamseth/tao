@@ -196,12 +196,12 @@ func TestRunCollectsNotesInitiallyAndOnRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	initialNotes := waitForFrame(t, output.writes)
-	if !strings.Contains(initialNotes, "note-first") || notes.callCount() != 1 {
+	if !strings.Contains(initialNotes, "first") || notes.callCount() != 1 {
 		t.Fatalf("initial notes frame=%q calls=%d", initialNotes, notes.callCount())
 	}
 	ticker.channel <- time.Now()
 	refreshed := waitForFrame(t, output.writes)
-	if !strings.Contains(refreshed, "note-refreshed") || notes.callCount() != 2 {
+	if !strings.Contains(refreshed, "refreshed") || notes.callCount() != 2 {
 		t.Fatalf("refreshed notes frame=%q calls=%d", refreshed, notes.callCount())
 	}
 	if _, err := io.WriteString(writer, "q"); err != nil {
