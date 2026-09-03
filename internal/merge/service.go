@@ -12,6 +12,7 @@ import (
 	commitpkg "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/workspace"
 )
 
@@ -101,7 +102,7 @@ func mergeVerifyMayNeedSnapshot(options Options) bool {
 	if options.VerifyCommand != "" {
 		return strings.TrimSpace(options.VerifyCommand) != ""
 	}
-	envCommand, envSet := os.LookupEnv(envMergeVerifyCommand)
+	envCommand, envSet := runtimeconfig.RuntimeMergeVerifyCommand()
 	if envSet {
 		return strings.TrimSpace(envCommand) != ""
 	}

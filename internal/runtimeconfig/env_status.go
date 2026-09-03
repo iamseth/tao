@@ -12,18 +12,22 @@ import (
 )
 
 const (
-	EnvCommitPolicy         = "TAO_COMMIT_POLICY"
-	EnvExecutionMode        = "TAO_EXECUTION_MODE"
-	EnvAgent                = "TAO_AGENT"
-	EnvPullRequest          = "TAO_PULL_REQUEST"
-	EnvReview               = "TAO_REVIEW"
-	EnvAutoRework           = "TAO_AUTO_REWORK"
-	EnvMaxReworkAttempts    = "TAO_MAX_REWORK_ATTEMPTS"
-	EnvSessionTimeout       = "TAO_SESSION_TIMEOUT"
-	EnvUpdate               = "TAO_UPDATE"
-	EnvSkipPermissions      = "TAO_DANGEROUSLY_SKIP_PERMISSIONS"
-	EnvMaxSliceOutputTokens = "TAO_MAX_SLICE_OUTPUT_TOKENS" // #nosec G101 -- environment key, not a credential.
-	EnvMaxSliceCost         = "TAO_MAX_SLICE_COST"
+	EnvCommitPolicy                     = "TAO_COMMIT_POLICY"
+	EnvExecutionMode                    = "TAO_EXECUTION_MODE"
+	EnvAgent                            = "TAO_AGENT"
+	EnvPullRequest                      = "TAO_PULL_REQUEST"
+	EnvReview                           = "TAO_REVIEW"
+	EnvAutoRework                       = "TAO_AUTO_REWORK"
+	EnvMaxReworkAttempts                = "TAO_MAX_REWORK_ATTEMPTS"
+	EnvSessionTimeout                   = "TAO_SESSION_TIMEOUT"
+	EnvUpdate                           = "TAO_UPDATE"
+	EnvSkipPermissions                  = "TAO_DANGEROUSLY_SKIP_PERMISSIONS"
+	EnvMaxSliceOutputTokens             = "TAO_MAX_SLICE_OUTPUT_TOKENS" // #nosec G101 -- environment key, not a credential.
+	EnvMaxSliceCost                     = "TAO_MAX_SLICE_COST"
+	EnvMergeVerifyCommand               = "TAO_MERGE_VERIFY_COMMAND"
+	EnvAggregateReviewConvergenceWindow = "TAO_AGGREGATE_REVIEW_CONVERGENCE_WINDOW"
+	EnvApprovedBy                       = "TAO_APPROVED_BY"
+	EnvRunHeader                        = "TAO_RUN_HEADER"
 
 	EnvBudgetSliceOutputTokens      = "TAO_BUDGET_SLICE_OUTPUT_TOKENS" // #nosec G101 -- environment key, not a credential.
 	EnvBudgetSliceCost              = "TAO_BUDGET_SLICE_COST"
@@ -72,6 +76,7 @@ type runtimeEnvVar struct {
 	// string form. It is the only per-var logic: the loader uses the mutation,
 	// the status reporter uses the canonical string, neither duplicates parsing.
 	apply             func(defaults *EnvDefaults, value string) (string, error)
+	applyWhenEmpty    bool
 	budget            bool
 	fallbackOnInvalid bool
 }
@@ -202,6 +207,41 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 		},
 	},
 	{
+		// An explicitly empty merge command disables verification, while an unset
+		// variable allows command auto-detection.
+		name: EnvMergeVerifyCommand, applyWhenEmpty: true,
+		defaultValue: func(RunOptionsPatch) string { return "auto-detect" },
+		apply: func(_ *EnvDefaults, value string) (string, error) {
+			return value, nil
+		},
+	},
+	{
+		name:              EnvAggregateReviewConvergenceWindow,
+		fallbackOnInvalid: true,
+		defaultValue:      func(RunOptionsPatch) string { return strconv.Itoa(DefaultAggregateReviewConvergenceWindow) },
+		apply: func(_ *EnvDefaults, value string) (string, error) {
+			parsed, err := parseAggregateReviewConvergenceWindow(value)
+			if err != nil {
+				return "", err
+			}
+			return strconv.Itoa(parsed), nil
+		},
+	},
+	{
+		name:         EnvApprovedBy,
+		defaultValue: func(RunOptionsPatch) string { return "" },
+		apply: func(_ *EnvDefaults, value string) (string, error) {
+			return value, nil
+		},
+	},
+	{
+		name:         EnvRunHeader,
+		defaultValue: func(RunOptionsPatch) string { return strconv.FormatBool(true) },
+		apply: func(_ *EnvDefaults, value string) (string, error) {
+			return strconv.FormatBool(value != "0"), nil
+		},
+	},
+	{
 		name: EnvMaxSliceOutputTokens, fallbackOnInvalid: true,
 		defaultValue: func(RunOptionsPatch) string { return "disabled" },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
@@ -293,6 +333,34 @@ func parseReviewEnabled(value string) (bool, error) {
 	}
 }
 
+func parseAggregateReviewConvergenceWindow(value string) (int, error) {
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 2 {
+		return 0, fmt.Errorf("must be an integer of at least 2")
+	}
+	return parsed, nil
+}
+
+// RuntimeMergeVerifyCommand returns the configured merge verification command
+// and whether the environment variable is set. An empty, set value is retained.
+func RuntimeMergeVerifyCommand() (string, bool) {
+	return os.LookupEnv(EnvMergeVerifyCommand)
+}
+
+// RuntimeAggregateReviewConvergenceWindow returns the validated aggregate
+// review convergence window.
+func RuntimeAggregateReviewConvergenceWindow() (int, error) {
+	raw, ok := os.LookupEnv(EnvAggregateReviewConvergenceWindow)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return DefaultAggregateReviewConvergenceWindow, nil
+	}
+	parsed, err := parseAggregateReviewConvergenceWindow(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer of at least 2", EnvAggregateReviewConvergenceWindow)
+	}
+	return parsed, nil
+}
+
 func RuntimeEnvDefaults() (EnvDefaults, error) {
 	defaults := EnvDefaults{
 		RunOptionsPatch:       DefaultRunOptionsPatch(),
@@ -301,7 +369,7 @@ func RuntimeEnvDefaults() (EnvDefaults, error) {
 	}
 	for _, v := range runtimeEnvVars {
 		value, ok := os.LookupEnv(v.name)
-		if !ok || value == "" {
+		if !ok || (value == "" && !v.applyWhenEmpty) {
 			continue
 		}
 		if _, err := v.apply(&defaults, value); err != nil {
@@ -357,7 +425,7 @@ func RuntimeEnvStatus() ([]EnvVarStatus, error) {
 	for i, v := range runtimeEnvVars {
 		rows[i] = EnvVarStatus{Name: v.name, Value: v.defaultValue(defaults), Source: "default"}
 		value, ok := os.LookupEnv(v.name)
-		if !ok || value == "" {
+		if !ok || (value == "" && !v.applyWhenEmpty) {
 			continue
 		}
 		scratch := EnvDefaults{AgentBudgetThresholds: defaultAgentBudgetThresholds()}

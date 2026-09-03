@@ -447,6 +447,8 @@ func settingsDefaultGroupForName(name string) (string, bool) {
 		return settingsGroupWorkflow, true
 	case "TAO_UPDATE", "TAO_DANGEROUSLY_SKIP_PERMISSIONS", "TAO_MAX_SLICE_OUTPUT_TOKENS", "TAO_MAX_SLICE_COST":
 		return settingsGroupSafety, true
+	case "TAO_MERGE_VERIFY_COMMAND", "TAO_AGGREGATE_REVIEW_CONVERGENCE_WINDOW", "TAO_APPROVED_BY", "TAO_RUN_HEADER":
+		return settingsGroupOther, true
 	default:
 		return settingsGroupOther, false
 	}

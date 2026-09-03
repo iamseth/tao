@@ -16,6 +16,7 @@ import (
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/reviewcontract"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
 type batchReviewAgentFunc func(context.Context, string, string) (string, error)
@@ -1337,11 +1338,11 @@ func TestBatchReviewAutoEjectDoesNotAttributeCountStallWithMissingFile(t *testin
 }
 
 func TestBatchReviewConvergenceWindowEnvironment(t *testing.T) {
-	t.Setenv(envAggregateReviewConvergenceWindow, "4")
+	t.Setenv(runtimeconfig.EnvAggregateReviewConvergenceWindow, "4")
 	if got, err := batchReviewConvergenceWindow(); err != nil || got != 4 {
 		t.Fatalf("batchReviewConvergenceWindow() = %d, %v", got, err)
 	}
-	t.Setenv(envAggregateReviewConvergenceWindow, "1")
+	t.Setenv(runtimeconfig.EnvAggregateReviewConvergenceWindow, "1")
 	if _, err := batchReviewConvergenceWindow(); err == nil {
 		t.Fatal("expected unsafe convergence window to fail")
 	}
@@ -1361,7 +1362,7 @@ func TestBatchReviewEquivalentFindingsAndCapExhaustionStop(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.convergenceWindow != "" {
-				t.Setenv(envAggregateReviewConvergenceWindow, tt.convergenceWindow)
+				t.Setenv(runtimeconfig.EnvAggregateReviewConvergenceWindow, tt.convergenceWindow)
 			}
 			fixture, state, root := batchReviewFixture(t)
 			store := &batchReviewTestStore{dir: t.TempDir()}

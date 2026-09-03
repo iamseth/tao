@@ -4,16 +4,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/textbound"
 	"github.com/iamseth/tao/internal/verifydetect"
 )
-
-const envMergeVerifyCommand = "TAO_MERGE_VERIFY_COMMAND"
 
 type mergeVerifyCommandSource int
 
@@ -170,7 +168,7 @@ func (s Service) verifyFailed(ctx context.Context, git GitClient, snapshot merge
 }
 
 func resolveMergeVerifyCommandForDetail(detail *plan.PlanDetail, options Options) (mergeVerifyCommandResolution, error) {
-	envCommand, envSet := os.LookupEnv(envMergeVerifyCommand)
+	envCommand, envSet := runtimeconfig.RuntimeMergeVerifyCommand()
 	if !mergeVerifyNeedsDetection(options, envSet) {
 		return resolveMergeVerifyCommand(options, mergeVerifyCommandInputs{envCommand: envCommand, envSet: envSet}), nil
 	}
@@ -182,7 +180,7 @@ func resolveMergeVerifyCommandForDetail(detail *plan.PlanDetail, options Options
 }
 
 func resolveMergeVerifyCommandAtRoot(repoRoot string, options Options) mergeVerifyCommandResolution {
-	envCommand, envSet := os.LookupEnv(envMergeVerifyCommand)
+	envCommand, envSet := runtimeconfig.RuntimeMergeVerifyCommand()
 	inputs := mergeVerifyCommandInputs{envCommand: envCommand, envSet: envSet}
 	if mergeVerifyNeedsDetection(options, envSet) {
 		if command := verifydetect.DetectCommand(repoRoot); command != "" {

@@ -4,6 +4,8 @@ import (
 	"flag"
 	"io"
 	"testing"
+
+	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
 func TestRunHeaderEnabled(t *testing.T) {
@@ -35,7 +37,7 @@ func TestRunHeaderEnabled(t *testing.T) {
 }
 
 func TestRunHeaderEnabledByDefaultWhenEnvUnset(t *testing.T) {
-	unsetEnvForTest(t, envRunHeader)
+	unsetEnvForTest(t, runtimeconfig.EnvRunHeader)
 
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -47,7 +49,7 @@ func TestRunHeaderEnabledByDefaultWhenEnvUnset(t *testing.T) {
 }
 
 func TestRunHeaderEnvZeroDisablesDefault(t *testing.T) {
-	t.Setenv(envRunHeader, "0")
+	t.Setenv(runtimeconfig.EnvRunHeader, "0")
 
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)

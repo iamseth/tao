@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
 type verifyRunnerCall struct {
@@ -341,7 +342,7 @@ func TestMergeIntentionalVerifySkipsEmitEventsWithoutLogging(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			unsetMergeVerifyCommandEnv(t)
 			if tt.envSet {
-				t.Setenv(envMergeVerifyCommand, "")
+				t.Setenv(runtimeconfig.EnvMergeVerifyCommand, "")
 			}
 			git := mergeVerifyGit()
 			called := false
@@ -420,18 +421,18 @@ func mergeVerifyFixtureDetail(t *testing.T, files map[string]string) *plan.PlanD
 
 func unsetMergeVerifyCommandEnv(t *testing.T) {
 	t.Helper()
-	original, ok := os.LookupEnv(envMergeVerifyCommand)
-	if err := os.Unsetenv(envMergeVerifyCommand); err != nil {
+	original, ok := os.LookupEnv(runtimeconfig.EnvMergeVerifyCommand)
+	if err := os.Unsetenv(runtimeconfig.EnvMergeVerifyCommand); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		if ok {
-			if err := os.Setenv(envMergeVerifyCommand, original); err != nil {
+			if err := os.Setenv(runtimeconfig.EnvMergeVerifyCommand, original); err != nil {
 				t.Fatal(err)
 			}
 			return
 		}
-		if err := os.Unsetenv(envMergeVerifyCommand); err != nil {
+		if err := os.Unsetenv(runtimeconfig.EnvMergeVerifyCommand); err != nil {
 			t.Fatal(err)
 		}
 	})

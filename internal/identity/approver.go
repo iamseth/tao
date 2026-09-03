@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/user"
 	"strings"
+
+	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
 // Approver resolves the approver identity to record for an approval action. It
@@ -27,7 +29,7 @@ func approver(currentUser func() (*user.User, error), getenv func(string) string
 			return username
 		}
 	}
-	for _, key := range []string{"TAO_APPROVED_BY", "USER", "USERNAME"} {
+	for _, key := range []string{runtimeconfig.EnvApprovedBy, "USER", "USERNAME"} {
 		if value := strings.TrimSpace(getenv(key)); value != "" {
 			return value
 		}

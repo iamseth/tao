@@ -16,6 +16,7 @@ import (
 	mergepkg "github.com/iamseth/tao/internal/merge"
 	"github.com/iamseth/tao/internal/plan"
 	runpkg "github.com/iamseth/tao/internal/run"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/workspace"
 )
 
@@ -83,7 +84,7 @@ func TestNewMergeServiceRunnerWiresDeferredGuardedSinglePlanSessions(t *testing.
 }
 
 func TestMergeCommandApprovedPlanSuccess(t *testing.T) {
-	unsetEnvForTest(t, "TAO_MERGE_VERIFY_COMMAND")
+	unsetEnvForTest(t, runtimeconfig.EnvMergeVerifyCommand)
 	t.Setenv("TAO_AGENT", "invalid-unused-provider")
 	detail := cliMergeDetail(t)
 	manager := &fakeWorkspaceManager{

@@ -1,6 +1,7 @@
 package runtimeconfig
 
 import (
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -154,6 +155,7 @@ func TestRuntimeEnvStatusDefaultRowsDeriveFromRunOptionsPatch(t *testing.T) {
 	for _, name := range runtimeEnvKeys() {
 		t.Setenv(name, "")
 	}
+	unsetEnv(t, EnvMergeVerifyCommand)
 
 	rows, err := RuntimeEnvStatus()
 	if err != nil {
@@ -172,6 +174,10 @@ func TestRuntimeEnvStatusDefaultRowsDeriveFromRunOptionsPatch(t *testing.T) {
 		{Name: EnvAutoRework, Value: "true", Source: "default"},
 		{Name: EnvMaxReworkAttempts, Value: "5", Source: "default"},
 		{Name: EnvSkipPermissions, Value: "false", Source: "default"},
+		{Name: EnvMergeVerifyCommand, Value: "auto-detect", Source: "default"},
+		{Name: EnvAggregateReviewConvergenceWindow, Value: "2", Source: "default"},
+		{Name: EnvApprovedBy, Value: "", Source: "default"},
+		{Name: EnvRunHeader, Value: "true", Source: "default"},
 		{Name: EnvMaxSliceOutputTokens, Value: "disabled", Source: "default"},
 		{Name: EnvMaxSliceCost, Value: "disabled", Source: "default"},
 		{Name: EnvBudgetSliceOutputTokens, Value: "40000", Source: "default"},
@@ -192,6 +198,133 @@ func TestRuntimeEnvStatusDefaultRowsDeriveFromRunOptionsPatch(t *testing.T) {
 		if rows[i] != expected {
 			t.Fatalf("row %d = %#v, want %#v", i, rows[i], expected)
 		}
+	}
+}
+
+func TestRuntimeEnvStatusReportsNewOverrides(t *testing.T) {
+	for _, name := range runtimeEnvKeys() {
+		t.Setenv(name, "")
+	}
+	t.Setenv(EnvMergeVerifyCommand, "go test ./...")
+	t.Setenv(EnvAggregateReviewConvergenceWindow, "4")
+	t.Setenv(EnvApprovedBy, "release-bot")
+	t.Setenv(EnvRunHeader, "0")
+
+	rows, err := RuntimeEnvStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := make(map[string]EnvVarStatus, len(rows))
+	for _, row := range rows {
+		byName[row.Name] = row
+	}
+	want := map[string]string{
+		EnvMergeVerifyCommand:               "go test ./...",
+		EnvAggregateReviewConvergenceWindow: "4",
+		EnvApprovedBy:                       "release-bot",
+		EnvRunHeader:                        "false",
+	}
+	for name, value := range want {
+		row := byName[name]
+		if row.Value != value || row.Source != "env" || row.Warning != "" {
+			t.Fatalf("unexpected %s row: %#v", name, row)
+		}
+	}
+}
+
+func TestRuntimeMergeVerifyCommandRetainsSetEmpty(t *testing.T) {
+	unsetEnv(t, EnvMergeVerifyCommand)
+	if command, set := RuntimeMergeVerifyCommand(); command != "" || set {
+		t.Fatalf("unset RuntimeMergeVerifyCommand() = %q, %t", command, set)
+	}
+	t.Setenv(EnvMergeVerifyCommand, "")
+
+	command, set := RuntimeMergeVerifyCommand()
+	if command != "" || !set {
+		t.Fatalf("RuntimeMergeVerifyCommand() = %q, %t, want empty and set", command, set)
+	}
+	if _, err := RuntimeEnvDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := RuntimeEnvStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		if row.Name == EnvMergeVerifyCommand {
+			if row.Value != "" || row.Source != "env" {
+				t.Fatalf("set-empty merge verify row = %#v", row)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing %s status row", EnvMergeVerifyCommand)
+}
+
+func TestRuntimeAggregateReviewConvergenceWindow(t *testing.T) {
+	t.Setenv(EnvAggregateReviewConvergenceWindow, "")
+	if got, err := RuntimeAggregateReviewConvergenceWindow(); err != nil || got != DefaultAggregateReviewConvergenceWindow {
+		t.Fatalf("empty window = %d, %v", got, err)
+	}
+
+	t.Setenv(EnvAggregateReviewConvergenceWindow, "5")
+	if got, err := RuntimeAggregateReviewConvergenceWindow(); err != nil || got != 5 {
+		t.Fatalf("override window = %d, %v", got, err)
+	}
+
+	for _, value := range []string{"1", "many"} {
+		t.Setenv(EnvAggregateReviewConvergenceWindow, value)
+		if _, err := RuntimeEnvDefaults(); err != nil {
+			t.Fatalf("RuntimeEnvDefaults() with window %q: %v", value, err)
+		}
+		rows, err := RuntimeEnvStatus()
+		if err != nil {
+			t.Fatalf("RuntimeEnvStatus() with window %q: %v", value, err)
+		}
+		var windowRow EnvVarStatus
+		for _, row := range rows {
+			if row.Name == EnvAggregateReviewConvergenceWindow {
+				windowRow = row
+				break
+			}
+		}
+		if windowRow.Value != "2" || windowRow.Source != "default" || windowRow.Warning == "" {
+			t.Fatalf("invalid window status = %#v", windowRow)
+		}
+
+		_, err = RuntimeAggregateReviewConvergenceWindow()
+		want := EnvAggregateReviewConvergenceWindow + " must be an integer of at least 2"
+		if err == nil || err.Error() != want {
+			t.Fatalf("window %q error = %v, want %q", value, err, want)
+		}
+	}
+}
+
+func TestRuntimeRunHeaderUsesEnabledUnlessExactlyZeroSemantics(t *testing.T) {
+	for _, tt := range []struct {
+		value string
+		want  string
+	}{
+		{value: "0", want: "false"},
+		{value: "false", want: "true"},
+		{value: "00", want: "true"},
+	} {
+		t.Run(tt.value, func(t *testing.T) {
+			t.Setenv(EnvRunHeader, tt.value)
+			rows, err := RuntimeEnvStatus()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, row := range rows {
+				if row.Name == EnvRunHeader {
+					if row.Value != tt.want || row.Source != "env" {
+						t.Fatalf("run header row = %#v, want value %q from env", row, tt.want)
+					}
+					return
+				}
+			}
+			t.Fatalf("missing %s status row", EnvRunHeader)
+		})
 	}
 }
 
@@ -415,4 +548,23 @@ func TestRuntimeEnvStatusReportsAgentAndExplicitFalsePullRequest(t *testing.T) {
 			}
 		})
 	}
+}
+
+func unsetEnv(t *testing.T, name string) {
+	t.Helper()
+	original, ok := os.LookupEnv(name)
+	if err := os.Unsetenv(name); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if ok {
+			if err := os.Setenv(name, original); err != nil {
+				t.Errorf("restore %s: %v", name, err)
+			}
+			return
+		}
+		if err := os.Unsetenv(name); err != nil {
+			t.Errorf("unset %s: %v", name, err)
+		}
+	})
 }

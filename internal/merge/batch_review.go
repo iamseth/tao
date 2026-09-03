@@ -23,10 +23,7 @@ import (
 	"github.com/iamseth/tao/prompts"
 )
 
-const (
-	defaultBatchReviewMaxAttempts       = runtimeconfig.DefaultMaxReworkAttempts
-	envAggregateReviewConvergenceWindow = "TAO_AGGREGATE_REVIEW_CONVERGENCE_WINDOW"
-)
+const defaultBatchReviewMaxAttempts = runtimeconfig.DefaultMaxReworkAttempts
 
 // BatchReviewStore persists normalized transitions and full aggregate output.
 type BatchReviewStore interface {
@@ -753,15 +750,7 @@ func aggregateReviewNonConvergenceReason(files []string, planID string) string {
 }
 
 func batchReviewConvergenceWindow() (int, error) {
-	value := runtimeconfig.DefaultAggregateReviewConvergenceWindow
-	if raw, ok := os.LookupEnv(envAggregateReviewConvergenceWindow); ok && strings.TrimSpace(raw) != "" {
-		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed < 2 {
-			return 0, fmt.Errorf("%s must be an integer of at least 2", envAggregateReviewConvergenceWindow)
-		}
-		value = parsed
-	}
-	return value, nil
+	return runtimeconfig.RuntimeAggregateReviewConvergenceWindow()
 }
 
 func batchReviewMaxAttempts(value int) (int, error) {

@@ -395,7 +395,8 @@ nearby slices centered on the current one, and compact session/token/cost
 metrics. A divider and `LIVE OUTPUT` label separate the header from provider
 output. It is TTY-only and requires enough terminal rows; redirected and other
 non-interactive output remains plain. Disable it for one invocation with
-`--no-run-header`, or set `TAO_RUN_HEADER=0` to opt out by default.
+`--no-run-header`, or set `TAO_RUN_HEADER=0` to opt out by default. The header is
+enabled when `TAO_RUN_HEADER` is unset or has any value other than exactly `0`.
 
 The pinned region still uses terminal scroll margins rather than an alternate
 screen. Lines that scroll out of that region are therefore dropped from
@@ -458,6 +459,11 @@ commits, amend the branch, or otherwise change the diff after the recorded
 review, run `tao review --run <plan-id>` to refresh both review and proposal
 against current `HEAD`. Use `tao staleness <plan-id>` for the separate base-commit
 drift check on pending work.
+
+When Tao records who approved an approval gate, it prefers the OS user's display
+name and then login name. `TAO_APPROVED_BY` is only a fallback (ahead of `USER`
+and `USERNAME`), so a status row showing it as an environment override may not
+reflect the approver ultimately recorded.
 
 Run-path agent sessions have a wall-clock hang ceiling so unattended batches do
 not stall forever on one stuck agent process. The default is 20 minutes; set
@@ -740,8 +746,10 @@ declared `make verify` target. Without one, it uses declared Make `build` and/or
 Make is not required: Tao invokes it only when the repository declares a
 recognized target, and skips automatic verification when no supported gate is
 detected. `--verify-command CMD` overrides detection for one merge;
-`TAO_MERGE_VERIFY_COMMAND` provides the environment override. If verification
-fails, Tao resets default to the pre-merge SHA before cleanup. If it passes, Tao
+`TAO_MERGE_VERIFY_COMMAND` provides the environment override. Leaving the
+variable unset uses build-system detection, while setting it to an empty string
+disables merge verification. If verification fails, Tao resets default to the
+pre-merge SHA before cleanup. If it passes, Tao
 records the merged default SHA, marks the plan `completed`, and delegates
 worktree/branch removal to managed cleanup. For Tao-created squashes, that
 recorded evidence lets cleanup safely remove the now non-ancestral source branch.
@@ -812,8 +820,11 @@ recovery evidence intact and no fallback message.
 the full merge verification command and reviews the combined diff. An aggregate
 `changes_requested` verdict can invoke bounded agent rework, producing a
 Tao-owned integration-resolution commit, followed by full verification and a
-fresh aggregate review. Separately from automatic rework's high-confidence
-finding equality, batch merge uses a location-oriented safeguard: if different
+fresh aggregate review. `TAO_AGGREGATE_REVIEW_CONVERGENCE_WINDOW` controls how
+many consecutive changes-requested rounds the batch convergence check considers;
+it defaults to `2` and must be an integer of at least `2`. Separately from
+automatic rework's high-confidence finding equality, batch merge uses a
+location-oriented safeguard: if different
 findings keep recurring in the same files, Tao detects non-convergence early
 and, when one candidate uniquely owns those files, prints an attributed block
 naming the files and plan. The default is
