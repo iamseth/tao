@@ -2,6 +2,7 @@ package merge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -47,9 +48,31 @@ func (e *MergeConflictError) Unwrap() error {
 	return e.Cause
 }
 
+// preparedSquashConflict is returned only to the ordinary single-plan merge
+// coordinator. It deliberately leaves Git's conflicted index and worktree at
+// the durable default parent so the guarded resolver can inspect them.
+type preparedSquashConflict struct {
+	files               []string
+	status              string
+	cause               error
+	preexistingPaths    []string
+	preexistingBoundary *worktreePathSnapshot
+}
+
+func (e *preparedSquashConflict) Error() string {
+	return "squash conflict prepared for guarded resolution"
+}
+func (e *preparedSquashConflict) Unwrap() error { return e.cause }
+
 // IntegrateSquash consumes the durable single-merge intent and either creates
 // its exact squash commit or recognizes that exact commit after interruption.
+// Its public behavior remains rollback-on-conflict; Merge uses the private
+// prepared variant when a guarded resolver is configured.
 func (s Service) IntegrateSquash(ctx context.Context, detail *plan.PlanDetail) error {
+	return s.integrateSquash(ctx, detail, false)
+}
+
+func (s Service) integrateSquash(ctx context.Context, detail *plan.PlanDetail, preserveConflict bool) error {
 	if detail == nil {
 		return fmt.Errorf("merge plan detail is nil")
 	}
@@ -78,12 +101,39 @@ func (s Service) IntegrateSquash(ctx context.Context, detail *plan.PlanDetail) e
 		preMergeSHA:         intent.DefaultParent,
 		resetBeforeCheckout: true,
 	}
+	var preexistingPaths []string
+	var preexistingBoundary *worktreePathSnapshot
+	if preserveConflict {
+		preexistingPaths, preexistingBoundary, err = snapshotPreexistingWorktreeBoundary(ctx, git)
+		if err != nil {
+			return fmt.Errorf("snapshot worktree before possible conflict resolution: %w", err)
+		}
+		defer func() {
+			if preexistingBoundary != nil {
+				preexistingBoundary.cleanup()
+			}
+		}()
+	}
 	if err := git.Checkout(ctx, intent.DefaultBranch); err != nil {
 		return fmt.Errorf("checkout default branch %s: %w", intent.DefaultBranch, err)
 	}
 	if err := git.MergeSquash(ctx, planBranch); err != nil {
 		failure.phase = "squash merge"
 		failure.cause = err
+		files := collectConflictFiles(ctx, git)
+		if preserveConflict && len(files) > 0 {
+			status, statusErr := git.StatusPorcelain(ctx)
+			if statusErr != nil {
+				failure.cause = errors.Join(err, fmt.Errorf("inspect prepared squash conflict: %w", statusErr))
+				return recoverIntegrationFailure(ctx, git, git, failure)
+			}
+			prepared := &preparedSquashConflict{
+				files: files, status: status, cause: err,
+				preexistingPaths: preexistingPaths, preexistingBoundary: preexistingBoundary,
+			}
+			preexistingBoundary = nil
+			return prepared
+		}
 		return recoverIntegrationFailure(ctx, git, git, failure)
 	}
 	if err := git.Commit(ctx, intent.Message); err != nil {
@@ -245,6 +295,19 @@ func recoverIntegrationFailure(ctx context.Context, conflictGit GitClient, resto
 // collectConflictFiles returns only the paths left unmerged by the failed
 // merge or rebase; auto-merged staged files are deliberately excluded.
 func collectConflictFiles(ctx context.Context, git GitClient) []string {
+	if zeroStatus, ok := git.(porcelainV1ZClient); ok {
+		status, err := zeroStatus.StatusPorcelainV1Z(ctx)
+		if err != nil {
+			return nil
+		}
+		changes, err := parsePorcelainV1Z(status)
+		if err != nil {
+			return nil
+		}
+		return append([]string(nil), changes.unmergedPaths...)
+	}
+
+	// Retain the line-oriented fallback for lightweight GitClient test doubles.
 	status, err := git.StatusPorcelain(ctx)
 	if err != nil {
 		return nil

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 )
 
 // lifecycleCheck carries one executable-slice decision and the reason it failed.
@@ -22,6 +23,91 @@ type lifecycleMutation struct {
 	Slices  SlicesFile
 	Events  []Event
 	Changes *ArtifactChangeSet
+}
+
+const (
+	maxSingleMergeResolutionEventPaths        = 24
+	maxSingleMergeResolutionEventSummaryBytes = 4 * 1024
+	maxSingleMergeResolutionEventFindings     = 10
+	maxSingleMergeEventFindingTextBytes       = 2 * 1024
+)
+
+// projectSingleMergeResolutionEvent keeps exact phase, commit, rollback, and
+// review identity while bounding the human-oriented diagnostics copied to one
+// events.jsonl line. The caps leave ample room below maxEventJSONLLineBytes even
+// under worst-case JSON escaping of every retained byte.
+func projectSingleMergeResolutionEvent(resolution *SingleMergeResolution) *SingleMergeResolutionEvent {
+	if resolution == nil {
+		return nil
+	}
+	projection := &SingleMergeResolutionEvent{
+		Phase: resolution.Phase, RequestedAt: resolution.RequestedAt,
+		Outcome: resolution.Outcome, ContentFingerprint: resolution.ContentFingerprint,
+		ResolvedAt: resolution.ResolvedAt, IntegrationHead: resolution.IntegrationHead,
+		CommittedAt: resolution.CommittedAt, RollbackReason: resolution.RollbackReason,
+		RolledBackAt:       resolution.RolledBackAt,
+		ConflictFilesCount: len(resolution.ConflictFiles), ChangedPathsCount: len(resolution.ChangedPaths),
+	}
+	projection.ConflictFiles, projection.DiagnosticsTruncated = boundedSingleMergeEventPaths(resolution.ConflictFiles)
+	var truncated bool
+	projection.ChangedPaths, truncated = boundedSingleMergeEventPaths(resolution.ChangedPaths)
+	projection.DiagnosticsTruncated = projection.DiagnosticsTruncated || truncated
+	projection.Summary, truncated = boundSingleMergeEventText(resolution.Summary, maxSingleMergeResolutionEventSummaryBytes)
+	projection.DiagnosticsTruncated = projection.DiagnosticsTruncated || truncated
+	if resolution.Review != nil {
+		review := *resolution.Review
+		review.Summary, truncated = boundSingleMergeEventText(resolution.Review.Summary, maxSingleMergeResolutionEventSummaryBytes)
+		projection.DiagnosticsTruncated = projection.DiagnosticsTruncated || truncated
+		limit := min(len(resolution.Review.Findings), maxSingleMergeResolutionEventFindings)
+		review.Findings = make([]ReviewFinding, limit)
+		for i := range limit {
+			review.Findings[i] = resolution.Review.Findings[i]
+			review.Findings[i].Message, truncated = boundSingleMergeEventText(review.Findings[i].Message, maxSingleMergeEventFindingTextBytes)
+			projection.DiagnosticsTruncated = projection.DiagnosticsTruncated || truncated
+			review.Findings[i].Suggestion, truncated = boundSingleMergeEventText(review.Findings[i].Suggestion, maxSingleMergeEventFindingTextBytes)
+			projection.DiagnosticsTruncated = projection.DiagnosticsTruncated || truncated
+		}
+		if limit != len(resolution.Review.Findings) {
+			projection.DiagnosticsTruncated = true
+		}
+		projection.Review = &review
+	}
+	return projection
+}
+
+func boundedSingleMergeEventPaths(paths []string) ([]string, bool) {
+	limit := min(len(paths), maxSingleMergeResolutionEventPaths)
+	bounded := append([]string(nil), paths[:limit]...)
+	if paths != nil && bounded == nil {
+		bounded = []string{}
+	}
+	return bounded, limit != len(paths)
+}
+
+func boundSingleMergeEventText(value string, maxBytes int) (string, bool) {
+	if len(value) <= maxBytes {
+		return value, false
+	}
+	const marker = "…"
+	end := maxBytes - len(marker)
+	for end > 0 && !utf8.RuneStart(value[end]) {
+		end--
+	}
+	return value[:end] + marker, true
+}
+
+func singleMergeResolutionFromEvent(event *SingleMergeResolutionEvent) *SingleMergeResolution {
+	if event == nil {
+		return nil
+	}
+	return &SingleMergeResolution{
+		Phase: event.Phase, ConflictFiles: cloneStringSlice(event.ConflictFiles), RequestedAt: event.RequestedAt,
+		Outcome: event.Outcome, Summary: event.Summary, ChangedPaths: cloneStringSlice(event.ChangedPaths),
+		ContentFingerprint: event.ContentFingerprint, CommitMessage: event.CommitMessage,
+		ResolvedAt: event.ResolvedAt, IntegrationHead: event.IntegrationHead, CommittedAt: event.CommittedAt,
+		Review: cloneSingleMergeResolutionReview(event.Review), RollbackReason: event.RollbackReason,
+		RolledBackAt: event.RolledBackAt,
+	}
 }
 
 func applyLifecycleMutation(detail *PlanDetail, mutate func(*ArtifactChangeSet) ([]Event, error)) (lifecycleMutation, error) {
@@ -120,7 +206,7 @@ func RequireAbandonable(detail *PlanDetail) error {
 	if detail.State.Workspace != nil && detail.State.Workspace.RebaseIntent != nil {
 		return fmt.Errorf("plan %s cannot be abandoned while its workspace rebase transaction is unsettled", planID)
 	}
-	if detail.State.Plan.MergeCommitIntent != nil {
+	if detail.State.Plan.MergeCommitIntent.IsActive() {
 		return fmt.Errorf("plan %s cannot be abandoned while its merge transaction is unsettled", planID)
 	}
 	if detail.State.Plan.PullRequestIntent != nil {
@@ -834,6 +920,12 @@ func reopen(detail *PlanDetail, changes *ArtifactChangeSet, newSlices []Slice, n
 	}
 	if err := validateReopenSlices(detail, newSlices); err != nil {
 		return Event{}, err
+	}
+	if intent := detail.State.Plan.MergeCommitIntent; intent != nil {
+		if singleMergeResolutionHasCommittedAuthority(intent.Resolution) {
+			return Event{}, fmt.Errorf("plan %s cannot be reopened while committed single-merge resolution authority is unsettled", detail.State.Plan.ID)
+		}
+		detail.State.Plan.MergeCommitIntent = nil
 	}
 
 	for _, slice := range newSlices {

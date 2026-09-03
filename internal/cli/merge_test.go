@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/iamseth/tao/internal/agent"
+	"github.com/iamseth/tao/internal/agentsession"
 	mergepkg "github.com/iamseth/tao/internal/merge"
 	"github.com/iamseth/tao/internal/plan"
 	runpkg "github.com/iamseth/tao/internal/run"
@@ -24,6 +26,59 @@ func TestNewMergeBatchAgentConfigWiresRepositoryTelemetryStoreAndClock(t *testin
 	config := newMergeBatchAgentConfig(App{Out: io.Discard, Now: func() time.Time { return fixed }}, "/control", nil, store)
 	if config.EventAppender != store || config.ControlRoot != "/control" || config.Now == nil || !config.Now().Equal(fixed) {
 		t.Fatalf("batch agent config = %#v", config)
+	}
+}
+
+type recordingMergeMetricsAppender struct {
+	events []plan.Event
+	err    error
+}
+
+func (a *recordingMergeMetricsAppender) AppendEvent(_ string, event plan.Event) error {
+	a.events = append(a.events, event)
+	return a.err
+}
+
+func TestNewSingleMergeAgentConfigWiresPlanTelemetryBestEffort(t *testing.T) {
+	fixed := time.Date(2026, 9, 2, 20, 30, 0, 0, time.UTC)
+	detail := cliMergeDetail(t)
+	appender := &recordingMergeMetricsAppender{}
+	var out bytes.Buffer
+	runner := newCLIMergeGitRunner(t, detail.State.Repo.Root)
+	config := newSingleMergeAgentConfig(App{Out: &out, Now: func() time.Time { return fixed }}, detail, detail.State.Repo.Root, runner, appender)
+	if config.ControlRoot != detail.State.Repo.Root || config.CommandRunner == nil || config.Now == nil || !config.Now().Equal(fixed) || config.Observe == nil {
+		t.Fatalf("single merge agent config = %#v", config)
+	}
+	request := mergepkg.BatchAgentSessionRequest{Operation: mergepkg.BatchAgentOperationSinglePlanResolution, CandidatePlanID: "plan-a"}
+	result := mergepkg.BatchAgentSessionResult{Provider: agentsession.Result{AgentLabel: "pi", MetricsUsable: true, Metrics: &agent.Metrics{SessionID: "session-a", OutputTokens: 9}}}
+	config.Observe(request, result, nil)
+	config.Observe(request, mergepkg.BatchAgentSessionResult{}, nil)
+	if len(appender.events) != 1 || appender.events[0].Type != plan.EventTypeAgentMetrics || appender.events[0].PlanID != "plan-a" || appender.events[0].Message != "Captured single-plan conflict resolver agent metrics" {
+		t.Fatalf("generic single-plan metrics = %#v", appender.events)
+	}
+
+	appender.err = errors.New("disk full")
+	config.Observe(request, result, errors.New("provider failed"))
+	if !strings.Contains(out.String(), "tao telemetry warning: append agent_metrics event: disk full") {
+		t.Fatalf("append warning missing from %q", out.String())
+	}
+}
+
+func TestNewMergeServiceRunnerWiresDeferredGuardedSinglePlanSessions(t *testing.T) {
+	t.Setenv("TAO_AGENT", "invalid-unused-provider")
+	detail := cliMergeDetail(t)
+	manager := &fakeWorkspaceManager{}
+	app := App{
+		Out:              io.Discard,
+		WorkspaceManager: func(string) (WorkspaceManager, error) { return manager, nil },
+	}
+	runner, err := app.newMergeServiceRunner(detail)
+	if err != nil {
+		t.Fatalf("non-conflicting merge configured provider eagerly: %v", err)
+	}
+	service, ok := runner.(mergepkg.Service)
+	if !ok || service.SingleResolver == nil || service.SingleReviewer == nil || service.ProposalGenerator == nil || service.Cleaner != manager {
+		t.Fatalf("single-plan merge service wiring = %#v", runner)
 	}
 }
 
@@ -243,6 +298,89 @@ func TestMergeCommandRendersTypedFailures(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRenderMergeAutomaticResolutionAndReviewFailuresAreActionable(t *testing.T) {
+	tests := []struct {
+		name   string
+		detail func(*plan.PlanDetail)
+		err    error
+		want   []string
+	}{
+		{
+			name: "unsafe resolver edits",
+			err:  errors.Join(mergepkg.ErrSingleResolutionRejected, errors.New("resolver left conflict markers in README.md")),
+			want: []string{"rejected unsafe or unresolved edits", "restored main", "one attempt", "--force cannot bypass"},
+		},
+		{
+			name: "confinement preflight unavailable",
+			err:  errors.Join(mergepkg.ErrSingleResolutionRejected, mergepkg.ErrSingleResolutionPreflight, errors.New("bubblewrap is unavailable")),
+			want: []string{"could not start safely", "started no provider", "recorded no one-shot resolution request", "Linux requires bwrap", "tao doctor", "tao merge plan-a"},
+		},
+		{
+			name: "changes requested with rollback warning",
+			detail: func(detail *plan.PlanDetail) {
+				detail.State.Plan.MergeCommitIntent = &plan.SingleMergeCommitIntent{Resolution: &plan.SingleMergeResolution{Review: &plan.SingleMergeResolutionReview{
+					Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, Summary: "Fix the merged behavior.",
+					Findings: []plan.ReviewFinding{{File: "internal/merge/service.go", Message: "Handle the edge case."}},
+				}}}
+			},
+			err:  errors.Join(mergepkg.ErrSingleReviewNotApproved, errors.New("automatic rollback refused because Git no longer matches the exact resolved transaction")),
+			want: []string{"review requested changes", "Fix the merged behavior", "internal/merge/service.go", "Rollback warning", "automatic review is not retried", "--no-verify"},
+		},
+		{
+			name: "exact recovery refusal",
+			err:  errors.Join(mergepkg.ErrSingleResolutionDrift, errors.New("source ref changed")),
+			want: []string{"recovery refused", "recorded default/source SHAs", "reconcile the transaction manually"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			detail := cliMergeDetail(t)
+			if tt.detail != nil {
+				tt.detail(detail)
+			}
+			var out bytes.Buffer
+			if err := renderMergeFailure(&out, detail, tt.err); err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(out.String(), want) {
+					t.Fatalf("output missing %q: %q", want, out.String())
+				}
+			}
+			if strings.Contains(out.String(), "merge --all") {
+				t.Fatalf("single-plan failure suggested batch workaround: %q", out.String())
+			}
+		})
+	}
+}
+
+func TestRenderMergeSuccessNamesIndependentApprovalAfterRecordMerged(t *testing.T) {
+	detail := cliMergeDetail(t)
+	integrationHead := strings.Repeat("c", 40)
+	detail.State.Plan.MergeCommitIntent = &plan.SingleMergeCommitIntent{Resolution: &plan.SingleMergeResolution{
+		Phase: plan.SingleMergeResolutionPhaseReviewed, IntegrationHead: integrationHead,
+		Review: &plan.SingleMergeResolutionReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove},
+	}}
+	record, err := plan.NewPlanRecordWithStore(fakeRepository{}, detail.Dir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := record.RecordMerged("tao/plan-a", integrationHead, time.Date(2026, 9, 3, 1, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	if detail.State.Plan.MergeCommitIntent != nil {
+		t.Fatal("RecordMerged retained active resolution intent")
+	}
+
+	var out bytes.Buffer
+	if err := renderMergeSuccess(&out, detail); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Independent review approved the exact conflict-resolved integration") || !strings.Contains(out.String(), "Merge completed") {
+		t.Fatalf("success output = %q", out.String())
 	}
 }
 
@@ -539,7 +677,7 @@ func TestMergeCommandHelpDocumentsVerifyCommand(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"merge", "--help"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"--all", "--dry-run", "--restart", "--auto-eject", "eject-and-reland", "--verify-command", "override the post-merge build/test verification command", "bounded agent resolution", "aggregate approval before one fast-forward", "Batch mode rejects --force, --record-only, --no-squash, and --no-verify", "single-plan only", "Usage:\n  tao merge (m) [--force] [--record-only] [--no-squash] [--no-verify] [--verify-command CMD]", "merge (m) --all [--dry-run] [--restart] [--auto-eject] [--verify-command CMD]"} {
+	for _, want := range []string{"--all", "--dry-run", "--restart", "--auto-eject", "eject-and-reland", "--verify-command", "override the post-merge build/test verification command", "one automatic resolver attempt", "independent fresh-session review", "--force cannot bypass these safety and review gates", "--no-verify skips only command verification", "--no-squash rebase conflicts remain manual", "bounded agent resolution", "aggregate approval before one fast-forward", "Batch mode rejects --force, --record-only, --no-squash, and --no-verify", "single-plan only", "Usage:\n  tao merge (m) [--force] [--record-only] [--no-squash] [--no-verify] [--verify-command CMD]", "merge (m) --all [--dry-run] [--restart] [--auto-eject] [--verify-command CMD]"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("expected help to contain %q, got %q", want, out.String())
 		}
@@ -663,7 +801,7 @@ func newCLIMergeGitRunner(t *testing.T, repoRoot string) CommandRunner {
 			t.Fatalf("unexpected git args %#v, want -C %q or the plan worktree", args, repoRoot)
 		}
 		switch command {
-		case "status --porcelain":
+		case "status --porcelain", "status --porcelain=v1 -z --untracked-files=all":
 			return nil
 		case "symbolic-ref --quiet --short refs/remotes/origin/HEAD":
 			_, _ = io.WriteString(stdout, "origin/main\n")

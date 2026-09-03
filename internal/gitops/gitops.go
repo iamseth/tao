@@ -151,6 +151,14 @@ func (c Client) StatusPorcelainAllUntracked(ctx context.Context) (string, error)
 	return c.rawOutput(ctx, "status", "--porcelain", "--untracked-files=all")
 }
 
+// StatusPorcelainIgnoredV1Z returns unquoted, NUL-delimited status including
+// ignored paths. Matching mode reports an ignored directory as one root so a
+// caller can inspect its complete filesystem state without Git collapsing
+// unrelated untracked directories.
+func (c Client) StatusPorcelainIgnoredV1Z(ctx context.Context) (string, error) {
+	return c.rawOutput(ctx, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching")
+}
+
 // ActiveOperation reports an in-progress Git operation in root. Git owns the
 // operation-marker layout, so callers do not inspect .git internals themselves.
 func ActiveOperation(root string) (string, error) {
@@ -224,6 +232,53 @@ func (c Client) Diff(ctx context.Context, revspec string) (string, error) {
 	return c.rawOutput(ctx, "diff", revspec)
 }
 
+// DiffBounded returns at most maxBytes of diff output for revspec. It keeps
+// draining Git's stdout after reaching the limit so a large diff cannot block
+// the child process or grow the retained review packet without bound.
+func (c Client) DiffBounded(ctx context.Context, revspec string, maxBytes int) (string, bool, error) {
+	if maxBytes <= 0 {
+		return "", false, errors.New("bounded diff limit must be positive")
+	}
+	stdout := boundedWriter{limit: maxBytes}
+	stderr := boundedWriter{limit: maxBytes}
+	args := []string{"diff", revspec}
+	if err := c.git(ctx, args, &stdout, &stderr); err != nil {
+		message := stderr.String()
+		if stderr.truncated {
+			message += "\n[git stderr truncated]"
+		}
+		return "", stdout.truncated, commandError(args, err, message)
+	}
+	return stdout.String(), stdout.truncated, nil
+}
+
+// boundedWriter retains only a prefix while reporting successful full writes,
+// allowing command pipes to be drained after the retained bound is reached.
+type boundedWriter struct {
+	buffer    bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func (w *boundedWriter) Write(p []byte) (int, error) {
+	written := len(p)
+	remaining := w.limit - w.buffer.Len()
+	if remaining > 0 {
+		if remaining > len(p) {
+			remaining = len(p)
+		}
+		_, _ = w.buffer.Write(p[:remaining])
+	}
+	if len(p) > remaining {
+		w.truncated = true
+	}
+	return written, nil
+}
+
+func (w *boundedWriter) String() string {
+	return w.buffer.String()
+}
+
 // WorkingDiff returns the combined staged and unstaged worktree diff from HEAD
 // for only paths. Untracked files are not included by Git and must be supplied
 // by callers that intentionally expose their contents.
@@ -251,6 +306,29 @@ func (c Client) ChangedFiles(ctx context.Context, revspec string) ([]string, err
 		line = strings.TrimSpace(line)
 		if line != "" {
 			files = append(files, line)
+		}
+	}
+	return files, nil
+}
+
+// ChangedFilesExact returns the exact changed path scope for revspec. Rename
+// detection is disabled so both endpoints are present, and NUL delimiters keep
+// unusual filenames unquoted and unambiguous.
+func (c Client) ChangedFilesExact(ctx context.Context, revspec string) ([]string, error) {
+	out, err := c.rawOutput(ctx, "diff", "--name-only", "--no-renames", "-z", revspec)
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	if !strings.HasSuffix(out, "\x00") {
+		return nil, errors.New("truncated NUL-delimited git diff paths")
+	}
+	files := strings.Split(out[:len(out)-1], "\x00")
+	for _, file := range files {
+		if file == "" {
+			return nil, errors.New("empty path in NUL-delimited git diff paths")
 		}
 	}
 	return files, nil
@@ -336,6 +414,13 @@ func (c Client) RestoreStaged(ctx context.Context, paths ...string) error {
 // Commit creates a commit with message.
 func (c Client) Commit(ctx context.Context, message string) error {
 	return c.run(ctx, "commit", "-m", message)
+}
+
+// CommitWithoutHooks creates a commit while disabling repository and user Git
+// hooks for this invocation. This is for transactions whose staged contents
+// are already centrally validated and must not run repository-controlled code.
+func (c Client) CommitWithoutHooks(ctx context.Context, message string) error {
+	return c.run(ctx, "-c", "core.hooksPath="+os.DevNull, "commit", "-m", message)
 }
 
 // CommitPaths creates a commit with message limited to paths.

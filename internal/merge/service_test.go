@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -32,12 +33,16 @@ type fakeGitClient struct {
 	revParseErr         error
 	commitMessages      map[string]string
 	commitMessageErr    error
+	commitPathStates    []gitops.CommitPathState
+	commitPathStateErr  error
 	mergeBase           string
 	mergeErr            error
 	ancestors           map[string]bool
 	ancestorErr         error
 	status              string
 	statusErr           error
+	ignoredStatus       string
+	ignoredStatusErr    error
 	changedFiles        []string
 	changedErr          error
 	diff                string
@@ -107,6 +112,12 @@ func (f *fakeGitClient) CommitMessage(ctx context.Context, rev string) (string, 
 	return f.commitMessages[rev], nil
 }
 
+func (f *fakeGitClient) CommitPathStates(ctx context.Context, parent, commit string) ([]gitops.CommitPathState, error) {
+	_ = ctx
+	f.calls = append(f.calls, "commit-path-states "+parent+" "+commit)
+	return append([]gitops.CommitPathState(nil), f.commitPathStates...), f.commitPathStateErr
+}
+
 func (f *fakeGitClient) MergeBase(ctx context.Context, a string, b string) (string, error) {
 	_ = ctx
 	f.calls = append(f.calls, "merge-base "+a+" "+b)
@@ -128,9 +139,21 @@ func (f *fakeGitClient) StatusPorcelain(ctx context.Context) (string, error) {
 	return f.status, f.statusErr
 }
 
+func (f *fakeGitClient) StatusPorcelainIgnoredV1Z(ctx context.Context) (string, error) {
+	_ = ctx
+	f.calls = append(f.calls, "status-ignored")
+	return f.ignoredStatus, f.ignoredStatusErr
+}
+
 func (f *fakeGitClient) ChangedFiles(ctx context.Context, revspec string) ([]string, error) {
 	_ = ctx
 	f.calls = append(f.calls, "changed-files "+revspec)
+	return append([]string(nil), f.changedFiles...), f.changedErr
+}
+
+func (f *fakeGitClient) ChangedFilesExact(ctx context.Context, revspec string) ([]string, error) {
+	_ = ctx
+	f.calls = append(f.calls, "changed-files-exact "+revspec)
 	return append([]string(nil), f.changedFiles...), f.changedErr
 }
 
@@ -138,6 +161,18 @@ func (f *fakeGitClient) Diff(ctx context.Context, revspec string) (string, error
 	_ = ctx
 	f.calls = append(f.calls, "diff "+revspec)
 	return f.diff, f.diffErr
+}
+
+func (f *fakeGitClient) DiffBounded(ctx context.Context, revspec string, maxBytes int) (string, bool, error) {
+	_ = ctx
+	f.calls = append(f.calls, fmt.Sprintf("diff-bounded %s %d", revspec, maxBytes))
+	if f.diffErr != nil {
+		return "", false, f.diffErr
+	}
+	if len(f.diff) > maxBytes {
+		return f.diff[:maxBytes], true, nil
+	}
+	return f.diff, false, nil
 }
 
 func (f *fakeGitClient) DiffStat(ctx context.Context, revspec string) (string, error) {
@@ -199,6 +234,12 @@ func (f *fakeGitClient) Add(ctx context.Context, paths ...string) error {
 func (f *fakeGitClient) Commit(ctx context.Context, message string) error {
 	_ = ctx
 	f.calls = append(f.calls, "commit "+message)
+	return f.commitErr
+}
+
+func (f *fakeGitClient) CommitWithoutHooks(ctx context.Context, message string) error {
+	_ = ctx
+	f.calls = append(f.calls, "commit-without-hooks "+message)
 	return f.commitErr
 }
 
@@ -1050,6 +1091,612 @@ func generatedMergeProposal() commitcontract.Proposal {
 	return commitcontract.Proposal{
 		Type: "feat", Scope: "merge", Summary: "generate legacy merge messages",
 		What: "Generate a proposal from the exact source diff.", Why: "Keep exceptional squash merges recoverable without a fallback.",
+	}
+}
+
+func TestMergeResolvesSquashConflictVerifiesAndRequiresIndependentApproval(t *testing.T) {
+	tests := []struct {
+		name        string
+		verdict     string
+		force       bool
+		noVerify    bool
+		verifyCalls int
+		wantMerged  bool
+	}{
+		{name: "approved", verdict: "approve", verifyCalls: 1, wantMerged: true},
+		{name: "explicit verification skip still reviews", verdict: "approve", noVerify: true, wantMerged: true},
+		{name: "force cannot bypass changes requested", verdict: "changes_requested", force: true, verifyCalls: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture, sourceHead, defaultHead, _ := batchAgentConflictFixture(t)
+			base := realGitOutput(t, fixture.repoRoot, "merge-base", defaultHead, sourceHead)
+			detail := mergeReadyDetail(base)
+			detail.Dir = t.TempDir()
+			detail.State.Repo.Root = fixture.repoRoot
+			detail.State.Plan.Title = "Resolve an ordinary squash conflict"
+			detail.State.Plan.Review.Head = sourceHead
+			detail.State.Workspace.Branch = fixture.planBranch
+			detail.State.Workspace.BaseBranch = fixture.defaultBranch
+			detail.Review.Content = "approved source review"
+			events := &fakeEventAppender{}
+			record, err := plan.NewPlanRecordWithStore(events, detail.Dir, detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			git := gitops.NewClient(fixture.repoRoot, nil)
+			resolverCalls, reviewerCalls, verifyCalls := 0, 0, 0
+			resolver := GuardedSingleConflictResolver{Git: git, Recorder: record, Agent: batchSessionAgentFunc(func(_ context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+				resolverCalls++
+				if head := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch); head != defaultHead {
+					t.Fatalf("default moved before resolver edit: got %s want %s", head, defaultHead)
+				}
+				return BatchAgentSessionResult{Output: batchResolutionJSON("combined both sides")}, os.WriteFile(filepath.Join(request.IntegrationRoot, "README.md"), []byte("combined\n"), 0o600)
+			})}
+			reviewer := GuardedSingleIntegrationReviewer{Git: git, Recorder: record, Agent: batchSessionAgentFunc(func(_ context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+				reviewerCalls++
+				if verifyCalls != tt.verifyCalls {
+					t.Fatalf("review ran at wrong verification boundary: calls=%d want=%d", verifyCalls, tt.verifyCalls)
+				}
+				finding := ""
+				if tt.verdict != "approve" {
+					finding = "resolve interaction"
+				}
+				return BatchAgentSessionResult{Output: reviewJSON(tt.verdict, "independent result", finding)}, nil
+			})}
+			runner := func(_ context.Context, cwd, name string, args []string, stdout, _ io.Writer) error {
+				verifyCalls++
+				if cwd != fixture.repoRoot || name != "sh" || !reflect.DeepEqual(args, []string{"-c", "test -f README.md"}) {
+					t.Fatalf("unexpected verification invocation: %s %s %#v", cwd, name, args)
+				}
+				_, _ = io.WriteString(stdout, "verified resolved head\n")
+				return nil
+			}
+			service := Service{Git: git, Runner: runner, Cleaner: successfulCleanup(), Events: events, SingleResolver: resolver, SingleReviewer: reviewer}
+			err = service.Merge(context.Background(), detail, Options{Force: tt.force, NoVerify: tt.noVerify, VerifyCommand: "test -f README.md"})
+			if tt.wantMerged {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if events.count(plan.EventTypePlanMerged) != 1 {
+					t.Fatalf("approved resolution did not record merge: %#v", events.events)
+				}
+				if got := realGitOutput(t, fixture.repoRoot, "show", "HEAD:README.md"); got != "combined" {
+					t.Fatalf("resolved content = %q", got)
+				}
+			} else {
+				if !errors.Is(err, ErrSingleReviewNotApproved) {
+					t.Fatalf("non-approval error = %v", err)
+				}
+				if events.count(plan.EventTypePlanMerged) != 0 {
+					t.Fatalf("non-approval recorded merge: %#v", events.events)
+				}
+				if head := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch); head != defaultHead {
+					t.Fatalf("non-approval did not roll back default: got %s want %s", head, defaultHead)
+				}
+			}
+			if resolverCalls != 1 || reviewerCalls != 1 || verifyCalls != tt.verifyCalls {
+				t.Fatalf("transaction calls resolver=%d verify=%d reviewer=%d", resolverCalls, verifyCalls, reviewerCalls)
+			}
+			if got := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch); got != sourceHead {
+				t.Fatalf("source moved: got %s want %s", got, sourceHead)
+			}
+		})
+	}
+}
+
+func TestMergeResolutionFailureRollsBackAfterCallerCancellation(t *testing.T) {
+	tests := []struct {
+		name       string
+		cancelAt   string
+		wantReason plan.SingleMergeResolutionRollbackReason
+	}{
+		{name: "verification", cancelAt: "verification", wantReason: plan.SingleMergeResolutionRollbackVerificationFailed},
+		{name: "independent review", cancelAt: "review", wantReason: plan.SingleMergeResolutionRollbackReviewNotApproved},
+		{name: "approved review before recording", cancelAt: "approved-review", wantReason: plan.SingleMergeResolutionRollbackMergeRecordingFailed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture, sourceHead, defaultHead, _ := batchAgentConflictFixture(t)
+			base := realGitOutput(t, fixture.repoRoot, "merge-base", defaultHead, sourceHead)
+			detail := mergeReadyDetail(base)
+			detail.Dir = t.TempDir()
+			detail.State.Repo.Root = fixture.repoRoot
+			detail.State.Plan.Title = "Roll back a canceled single-plan resolution"
+			detail.State.Plan.Review.Head = sourceHead
+			detail.State.Workspace.Branch = fixture.planBranch
+			detail.State.Workspace.BaseBranch = fixture.defaultBranch
+			detail.Review.Content = "approved source review"
+			events := &fakeEventAppender{}
+			record, err := plan.NewPlanRecordWithStore(events, detail.Dir, detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			git := gitops.NewClient(fixture.repoRoot, nil)
+			resolver := GuardedSingleConflictResolver{Git: git, Recorder: record, Agent: batchSessionAgentFunc(func(_ context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+				return BatchAgentSessionResult{Output: batchResolutionJSON("combined both sides")}, os.WriteFile(filepath.Join(request.IntegrationRoot, "README.md"), []byte("combined\n"), 0o600)
+			})}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			reviewerCalls := 0
+			reviewer := GuardedSingleIntegrationReviewer{Git: git, Recorder: record, Agent: batchSessionAgentFunc(func(agentCtx context.Context, _ BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+				reviewerCalls++
+				if tt.cancelAt == "review" {
+					cancel()
+					return BatchAgentSessionResult{}, agentCtx.Err()
+				}
+				if tt.cancelAt == "approved-review" {
+					cancel()
+				}
+				return BatchAgentSessionResult{Output: reviewJSON("approve", "independent result", "")}, nil
+			})}
+			runner := func(verifyCtx context.Context, _, _ string, _ []string, stdout, _ io.Writer) error {
+				if tt.cancelAt == "verification" {
+					cancel()
+					return verifyCtx.Err()
+				}
+				_, _ = io.WriteString(stdout, "verified resolved head\n")
+				return nil
+			}
+			service := Service{Git: git, Runner: runner, Cleaner: successfulCleanup(), Events: events, SingleResolver: resolver, SingleReviewer: reviewer}
+
+			err = service.Merge(ctx, detail, Options{VerifyCommand: "test -f README.md"})
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("merge error = %v, want caller cancellation", err)
+			}
+			if tt.cancelAt == "verification" {
+				var verifyErr *VerifyFailedError
+				if !errors.As(err, &verifyErr) || len(verifyErr.CleanupErrors) != 0 {
+					t.Fatalf("verification rollback error = %#v, want successful detached cleanup", verifyErr)
+				}
+				if reviewerCalls != 0 {
+					t.Fatalf("reviewer calls after failed verification = %d, want 0", reviewerCalls)
+				}
+			} else {
+				if reviewerCalls != 1 {
+					t.Fatalf("reviewer calls = %d, want 1", reviewerCalls)
+				}
+				if tt.cancelAt == "approved-review" {
+					approved := detail.State.Plan.MergeCommitIntent
+					if approved == nil || approved.Resolution == nil || approved.Resolution.Review == nil || !approved.Resolution.Review.IsApproved() {
+						t.Fatalf("reviewer did not return durable approval before canceled recording: %#v", approved)
+					}
+				}
+			}
+			if events.count(plan.EventTypePlanMerged) != 0 {
+				t.Fatalf("canceled transaction recorded merge evidence: %#v", events.events)
+			}
+			rolledBack := detail.State.Plan.MergeCommitIntent
+			if rolledBack == nil || rolledBack.Resolution == nil || rolledBack.Resolution.Phase != plan.SingleMergeResolutionPhaseRolledBack || rolledBack.Resolution.RollbackReason != tt.wantReason {
+				t.Fatalf("canceled rollback settlement = %#v, want reason %s", rolledBack, tt.wantReason)
+			}
+			if got := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch); got != defaultHead {
+				t.Fatalf("canceled transaction left default at %s, want %s", got, defaultHead)
+			}
+			if got := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch); got != sourceHead {
+				t.Fatalf("canceled transaction moved source to %s, want %s", got, sourceHead)
+			}
+			if status := realGitOutput(t, fixture.repoRoot, "status", "--porcelain"); status != "" {
+				t.Fatalf("canceled transaction left dirty worktree: %q", status)
+			}
+		})
+	}
+}
+
+func TestMergeRecoversExactResolutionCommitBeforeSettlementPersistence(t *testing.T) {
+	fixture, request, git := preparedSingleResolutionFixture(t)
+	detail := mergeReadyDetail(request.Intent.DefaultParent)
+	detail.Dir = t.TempDir()
+	detail.State.Repo.Root = fixture.repoRoot
+	detail.State.Plan.Title = request.PlanTitle
+	detail.State.Plan.Review.Head = request.Intent.SourceHead
+	detail.State.Plan.MergeCommitIntent = &request.Intent
+	detail.State.Workspace.Branch = fixture.planBranch
+	detail.State.Workspace.BaseBranch = fixture.defaultBranch
+	detail.Review.Content = request.SourceReview
+	events := &fakeEventAppender{}
+	record, err := plan.NewPlanRecordWithStore(events, detail.Dir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resolverCalls := 0
+	resolver := GuardedSingleConflictResolver{Git: git, Recorder: record, Agent: batchSessionAgentFunc(func(_ context.Context, session BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+		resolverCalls++
+		return BatchAgentSessionResult{Output: batchResolutionJSON("combined both sides before interruption")}, os.WriteFile(filepath.Join(session.IntegrationRoot, "README.md"), []byte("combined\n"), 0o600)
+	})}
+	resolved, err := resolver.ResolveConflict(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Intent.Resolution == nil || resolved.Intent.Resolution.Phase != plan.SingleMergeResolutionPhaseResolved {
+		t.Fatalf("pre-crash resolution evidence = %#v", resolved.Intent.Resolution)
+	}
+	runRealGit(t, fixture.repoRoot, "add", "--", "README.md")
+	runRealGit(t, fixture.repoRoot, "commit", "-m", resolved.Intent.Resolution.CommitMessage)
+	exactHead := realGitOutput(t, fixture.repoRoot, "rev-parse", "HEAD")
+	if detail.State.Plan.MergeCommitIntent == nil || detail.State.Plan.MergeCommitIntent.Resolution == nil || detail.State.Plan.MergeCommitIntent.Resolution.Phase != plan.SingleMergeResolutionPhaseResolved {
+		t.Fatalf("simulated crash did not leave resolved evidence: %#v", detail.State.Plan.MergeCommitIntent)
+	}
+
+	reviewerCalls := 0
+	reviewer := GuardedSingleIntegrationReviewer{Git: git, Recorder: record, Agent: batchSessionAgentFunc(func(_ context.Context, _ BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+		reviewerCalls++
+		return BatchAgentSessionResult{Output: reviewJSON("approve", "recovered exact resolution approved", "")}, nil
+	})}
+	service := Service{Git: git, Cleaner: successfulCleanup(), Events: events, SingleResolver: resolver, SingleReviewer: reviewer}
+	if err := service.Merge(context.Background(), detail, Options{NoVerify: true}); err != nil {
+		t.Fatal(err)
+	}
+	if resolverCalls != 1 {
+		t.Fatalf("settlement recovery reran resolver: calls=%d", resolverCalls)
+	}
+	if reviewerCalls != 1 {
+		t.Fatalf("settlement recovery reviewer calls=%d, want 1", reviewerCalls)
+	}
+	if events.count(plan.EventTypePlanMerged) != 1 {
+		t.Fatalf("settlement recovery merge evidence = %#v", events.events)
+	}
+	if got := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch); got != exactHead {
+		t.Fatalf("recovered default head = %s, want %s", got, exactHead)
+	}
+	if got := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch); got != request.Intent.SourceHead {
+		t.Fatalf("settlement recovery moved source: got %s want %s", got, request.Intent.SourceHead)
+	}
+}
+
+func TestMergeAutomaticallyResolvesConflictsWithExactFilenames(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "non-ASCII", path: "café.txt"},
+		{name: "control character", path: "control\tname.txt"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newRealGitWorktree(t)
+			conflictPath := filepath.Join(fixture.repoRoot, tt.path)
+			if err := os.WriteFile(filepath.Join(fixture.worktreePath, tt.path), []byte("source\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runRealGit(t, fixture.worktreePath, "add", "--", tt.path)
+			runRealGit(t, fixture.worktreePath, "commit", "-m", "add source path")
+			sourceHead := realGitOutput(t, fixture.worktreePath, "rev-parse", "HEAD")
+			if err := os.WriteFile(conflictPath, []byte("default\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runRealGit(t, fixture.repoRoot, "add", "--", tt.path)
+			runRealGit(t, fixture.repoRoot, "commit", "-m", "add default path")
+			defaultHead := realGitOutput(t, fixture.repoRoot, "rev-parse", "HEAD")
+			base := realGitOutput(t, fixture.repoRoot, "merge-base", defaultHead, sourceHead)
+
+			detail := mergeReadyDetail(base)
+			detail.Dir = t.TempDir()
+			detail.State.Repo.Root = fixture.repoRoot
+			detail.State.Plan.Title = "Resolve an exact-path squash conflict"
+			detail.State.Plan.Review.Head = sourceHead
+			detail.State.Workspace.Branch = fixture.planBranch
+			detail.State.Workspace.BaseBranch = fixture.defaultBranch
+			detail.Review.Content = "approved source review"
+			events := &fakeEventAppender{}
+			record, err := plan.NewPlanRecordWithStore(events, detail.Dir, detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			git := gitops.NewClient(fixture.repoRoot, nil)
+			resolverCalls := 0
+			var conflictFiles []string
+			resolver := GuardedSingleConflictResolver{Git: git, Recorder: record, Agent: batchSessionAgentFunc(func(_ context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+				resolverCalls++
+				conflictFiles = append([]string(nil), detail.State.Plan.MergeCommitIntent.Resolution.ConflictFiles...)
+				return BatchAgentSessionResult{Output: batchResolutionJSON("resolved exact filename")}, os.WriteFile(filepath.Join(request.IntegrationRoot, tt.path), []byte("combined\n"), 0o600)
+			})}
+			reviewer := GuardedSingleIntegrationReviewer{Git: git, Recorder: record, Agent: batchSessionAgentFunc(func(_ context.Context, _ BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+				return BatchAgentSessionResult{Output: reviewJSON("approve", "exact path approved", "")}, nil
+			})}
+			service := Service{Git: git, Cleaner: successfulCleanup(), Events: events, SingleResolver: resolver, SingleReviewer: reviewer}
+
+			if err := service.Merge(context.Background(), detail, Options{NoVerify: true}); err != nil {
+				t.Fatal(err)
+			}
+			if resolverCalls != 1 {
+				t.Fatalf("resolver calls = %d, want 1", resolverCalls)
+			}
+			if !slices.Equal(conflictFiles, []string{tt.path}) {
+				t.Fatalf("conflict files = %q, want exact path %q", conflictFiles, tt.path)
+			}
+			if got := realGitOutput(t, fixture.repoRoot, "show", "HEAD:"+tt.path); got != "combined" {
+				t.Fatalf("resolved content = %q, want combined", got)
+			}
+			if got := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch); got != sourceHead {
+				t.Fatalf("source moved: got %s want %s", got, sourceHead)
+			}
+		})
+	}
+}
+
+func TestMergeAutomaticallyResolvesConflictWithExactSourcePathScope(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*testing.T, realGitWorktree) string
+	}{
+		{
+			name: "rename includes both endpoints",
+			configure: func(t *testing.T, fixture realGitWorktree) string {
+				t.Helper()
+				const oldPath = "before.txt"
+				if err := os.WriteFile(filepath.Join(fixture.repoRoot, oldPath), []byte("renamed content\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				runRealGit(t, fixture.repoRoot, "add", "--", oldPath)
+				runRealGit(t, fixture.repoRoot, "commit", "-m", "add file before branches diverge")
+				runRealGit(t, fixture.worktreePath, "merge", "--ff-only", fixture.defaultBranch)
+				const newPath = "after.txt"
+				runRealGit(t, fixture.worktreePath, "mv", "--", oldPath, newPath)
+				return newPath
+			},
+		},
+		{
+			name: "non-conflicting control-character filename remains exact",
+			configure: func(t *testing.T, fixture realGitWorktree) string {
+				t.Helper()
+				const path = "control\tname.txt"
+				if err := os.WriteFile(filepath.Join(fixture.worktreePath, path), []byte("unusual path\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newRealGitWorktree(t)
+			extraPath := tt.configure(t, fixture)
+			if err := os.WriteFile(filepath.Join(fixture.worktreePath, "README.md"), []byte("source\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runRealGit(t, fixture.worktreePath, "add", "--all")
+			runRealGit(t, fixture.worktreePath, "commit", "-m", "source conflict and exact path change")
+			sourceHead := realGitOutput(t, fixture.worktreePath, "rev-parse", "HEAD")
+			if err := os.WriteFile(filepath.Join(fixture.repoRoot, "README.md"), []byte("default\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runRealGit(t, fixture.repoRoot, "add", "--", "README.md")
+			runRealGit(t, fixture.repoRoot, "commit", "-m", "default conflict")
+			defaultHead := realGitOutput(t, fixture.repoRoot, "rev-parse", "HEAD")
+			base := realGitOutput(t, fixture.repoRoot, "merge-base", defaultHead, sourceHead)
+
+			detail := mergeReadyDetail(base)
+			detail.Dir = t.TempDir()
+			detail.State.Repo.Root = fixture.repoRoot
+			detail.State.Plan.Title = "Resolve a conflict without losing exact source scope"
+			detail.State.Plan.Review.Head = sourceHead
+			detail.State.Workspace.Branch = fixture.planBranch
+			detail.State.Workspace.BaseBranch = fixture.defaultBranch
+			detail.Review.Content = "approved source review"
+			events := &fakeEventAppender{}
+			record, err := plan.NewPlanRecordWithStore(events, detail.Dir, detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			git := gitops.NewClient(fixture.repoRoot, nil)
+			resolverCalls := 0
+			resolver := GuardedSingleConflictResolver{Git: git, Recorder: record, Agent: batchSessionAgentFunc(func(_ context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+				resolverCalls++
+				return BatchAgentSessionResult{Output: batchResolutionJSON("resolved conflict with exact source scope")}, os.WriteFile(filepath.Join(request.IntegrationRoot, "README.md"), []byte("combined\n"), 0o600)
+			})}
+			reviewer := GuardedSingleIntegrationReviewer{Git: git, Recorder: record, Agent: batchSessionAgentFunc(func(_ context.Context, _ BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+				return BatchAgentSessionResult{Output: reviewJSON("approve", "exact source scope approved", "")}, nil
+			})}
+			service := Service{Git: git, Cleaner: successfulCleanup(), Events: events, SingleResolver: resolver, SingleReviewer: reviewer}
+
+			if err := service.Merge(context.Background(), detail, Options{NoVerify: true}); err != nil {
+				t.Fatal(err)
+			}
+			if resolverCalls != 1 {
+				t.Fatalf("resolver calls = %d, want 1", resolverCalls)
+			}
+			if got := realGitOutput(t, fixture.repoRoot, "show", "HEAD:README.md"); got != "combined" {
+				t.Fatalf("resolved content = %q, want combined", got)
+			}
+			if got := realGitOutput(t, fixture.repoRoot, "show", "HEAD:"+extraPath); got == "" {
+				t.Fatalf("exact source path %q was not integrated", extraPath)
+			}
+			if got := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch); got != sourceHead {
+				t.Fatalf("source moved: got %s want %s", got, sourceHead)
+			}
+		})
+	}
+}
+
+func TestMergeConflictResolutionRejectsDefaultOnlyPathEdits(t *testing.T) {
+	fixture, sourceHead, _, _ := batchAgentConflictFixture(t)
+	const defaultOnlyPath = "default-only.txt"
+	if err := os.WriteFile(filepath.Join(fixture.repoRoot, defaultOnlyPath), []byte("default-owned\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runRealGit(t, fixture.repoRoot, "add", "--", defaultOnlyPath)
+	runRealGit(t, fixture.repoRoot, "commit", "-m", "add default-only path")
+	defaultHead := realGitOutput(t, fixture.repoRoot, "rev-parse", "HEAD")
+	base := realGitOutput(t, fixture.repoRoot, "merge-base", defaultHead, sourceHead)
+
+	detail := mergeReadyDetail(base)
+	detail.Dir = t.TempDir()
+	detail.State.Repo.Root = fixture.repoRoot
+	detail.State.Plan.Title = "Reject edits outside the source-owned scope"
+	detail.State.Plan.Review.Head = sourceHead
+	detail.State.Workspace.Branch = fixture.planBranch
+	detail.State.Workspace.BaseBranch = fixture.defaultBranch
+	detail.Review.Content = "approved source review"
+	events := &fakeEventAppender{}
+	record, err := plan.NewPlanRecordWithStore(events, detail.Dir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	git := gitops.NewClient(fixture.repoRoot, nil)
+	resolverCalls, reviewerCalls := 0, 0
+	resolver := GuardedSingleConflictResolver{Git: git, Recorder: record, Agent: batchSessionAgentFunc(func(_ context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+		resolverCalls++
+		if strings.Contains(request.Prompt, defaultOnlyPath) {
+			t.Fatalf("default-only path leaked into source-owned resolution scope: %q", request.Prompt)
+		}
+		if err := os.WriteFile(filepath.Join(request.IntegrationRoot, "README.md"), []byte("combined\n"), 0o600); err != nil {
+			return BatchAgentSessionResult{}, err
+		}
+		return BatchAgentSessionResult{Output: batchResolutionJSON("attempted out-of-scope edit")}, os.WriteFile(filepath.Join(request.IntegrationRoot, defaultOnlyPath), []byte("resolver overwrite\n"), 0o600)
+	})}
+	reviewer := GuardedSingleIntegrationReviewer{Git: git, Recorder: record, Agent: batchSessionAgentFunc(func(_ context.Context, _ BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+		reviewerCalls++
+		return BatchAgentSessionResult{Output: reviewJSON("approve", "should not review unsafe scope", "")}, nil
+	})}
+	service := Service{Git: git, Cleaner: successfulCleanup(), Events: events, SingleResolver: resolver, SingleReviewer: reviewer}
+
+	err = service.Merge(context.Background(), detail, Options{NoVerify: true})
+	if !errors.Is(err, ErrSingleResolutionRejected) {
+		t.Fatalf("merge error = %v, want source-scope rejection", err)
+	}
+	if resolverCalls != 1 || reviewerCalls != 0 {
+		t.Fatalf("transaction calls resolver=%d reviewer=%d, want 1 and 0", resolverCalls, reviewerCalls)
+	}
+	if events.count(plan.EventTypePlanMerged) != 0 {
+		t.Fatalf("unsafe resolution recorded merge: %#v", events.events)
+	}
+	if got := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch); got != defaultHead {
+		t.Fatalf("default moved after rejection: got %s want %s", got, defaultHead)
+	}
+	if got := realGitOutput(t, fixture.repoRoot, "show", "HEAD:"+defaultOnlyPath); got != "default-owned" {
+		t.Fatalf("default-only path = %q after rejection, want preserved content", got)
+	}
+	if got := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch); got != sourceHead {
+		t.Fatalf("source moved after rejection: got %s want %s", got, sourceHead)
+	}
+	if status := realGitOutput(t, fixture.repoRoot, "status", "--porcelain"); status != "" {
+		t.Fatalf("rejected resolution left dirty worktree: %q", status)
+	}
+}
+
+func TestMergeResolutionFailureSettlesRollbackAndAllowsReworkedRerun(t *testing.T) {
+	tests := []struct {
+		name       string
+		failVerify bool
+		wantReason plan.SingleMergeResolutionRollbackReason
+	}{
+		{name: "verification failure", failVerify: true, wantReason: plan.SingleMergeResolutionRollbackVerificationFailed},
+		{name: "review non-approval", wantReason: plan.SingleMergeResolutionRollbackReviewNotApproved},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture, sourceHead, defaultHead, _ := batchAgentConflictFixture(t)
+			base := realGitOutput(t, fixture.repoRoot, "merge-base", defaultHead, sourceHead)
+			detail := mergeReadyDetail(base)
+			detail.Dir = t.TempDir()
+			detail.State.Status = plan.StatusReviewed
+			detail.State.Repo.Root = fixture.repoRoot
+			detail.State.Plan.Title = "Resolve and rework an ordinary squash conflict"
+			detail.State.Plan.Review.Head = sourceHead
+			detail.State.Workspace.Branch = fixture.planBranch
+			detail.State.Workspace.BaseBranch = fixture.defaultBranch
+			detail.Review.Content = "approved source review"
+			events := &fakeEventAppender{}
+			record, err := plan.NewPlanRecordWithStore(events, detail.Dir, detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			git := gitops.NewClient(fixture.repoRoot, nil)
+			resolverCalls, reviewerCalls, verifyCalls := 0, 0, 0
+			resolver := GuardedSingleConflictResolver{Git: git, Recorder: record, Agent: batchSessionAgentFunc(func(_ context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+				resolverCalls++
+				content := fmt.Sprintf("combined round %d\n", resolverCalls)
+				return BatchAgentSessionResult{Output: batchResolutionJSON("combined both sides")}, os.WriteFile(filepath.Join(request.IntegrationRoot, "README.md"), []byte(content), 0o600)
+			})}
+			reviewer := GuardedSingleIntegrationReviewer{Git: git, Recorder: record, Agent: batchSessionAgentFunc(func(_ context.Context, _ BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+				reviewerCalls++
+				if !tt.failVerify && reviewerCalls == 1 {
+					return BatchAgentSessionResult{Output: reviewJSON("changes_requested", "rework required", "resolve interaction")}, nil
+				}
+				return BatchAgentSessionResult{Output: reviewJSON("approve", "independent result", "")}, nil
+			})}
+			runner := func(_ context.Context, _, _ string, _ []string, stdout, _ io.Writer) error {
+				verifyCalls++
+				if tt.failVerify && verifyCalls == 1 {
+					return errors.New("verification failed")
+				}
+				_, _ = io.WriteString(stdout, "verified resolved head\n")
+				return nil
+			}
+			service := Service{Git: git, Runner: runner, Cleaner: successfulCleanup(), Events: events, SingleResolver: resolver, SingleReviewer: reviewer}
+
+			err = service.Merge(context.Background(), detail, Options{VerifyCommand: "test -f README.md"})
+			if tt.failVerify {
+				if !errors.Is(err, ErrVerifyFailed) {
+					t.Fatalf("first merge error = %v, want verification failure", err)
+				}
+			} else if !errors.Is(err, ErrSingleReviewNotApproved) {
+				t.Fatalf("first merge error = %v, want review non-approval", err)
+			}
+			rolledBack := detail.State.Plan.MergeCommitIntent
+			if rolledBack == nil || rolledBack.Resolution == nil || rolledBack.Resolution.Phase != plan.SingleMergeResolutionPhaseRolledBack || rolledBack.Resolution.RollbackReason != tt.wantReason || rolledBack.Resolution.RolledBackAt.IsZero() {
+				t.Fatalf("rollback settlement = %#v, want durable %s settlement", rolledBack, tt.wantReason)
+			}
+			if !tt.failVerify && (rolledBack.Resolution.Review == nil || rolledBack.Resolution.Review.Verdict != plan.ReviewVerdictChangesRequested) {
+				t.Fatalf("rollback settlement lost reviewer diagnostics: %#v", rolledBack.Resolution.Review)
+			}
+			if got := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch); got != defaultHead {
+				t.Fatalf("first merge left default at %s, want restored %s", got, defaultHead)
+			}
+			rollbackEvent := events.requireSingle(t, plan.EventTypeSingleMergeRolledBack)
+			if rollbackEvent.Reason != string(tt.wantReason) || rollbackEvent.SingleMergeResolution == nil || rollbackEvent.SingleMergeResolution.Phase != plan.SingleMergeResolutionPhaseRolledBack {
+				t.Fatalf("rollback event lost durable diagnostics: %#v", rollbackEvent)
+			}
+			if tt.failVerify {
+				if err := record.ClearSingleMergeCommitIntent(*rolledBack); err != nil {
+					t.Fatalf("clear settled rollback: %v", err)
+				}
+			}
+			if events.count(plan.EventTypeSingleMergeRolledBack) != 1 {
+				t.Fatalf("superseding inactive intent changed rollback history: %#v", events.events)
+			}
+
+			if err := os.WriteFile(filepath.Join(fixture.worktreePath, "README.md"), []byte("reworked source\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runRealGit(t, fixture.worktreePath, "commit", "-am", "rework conflict")
+			newSourceHead := realGitOutput(t, fixture.worktreePath, "rev-parse", "HEAD")
+			newBase := realGitOutput(t, fixture.repoRoot, "merge-base", defaultHead, newSourceHead)
+			freshReview := plan.PlanReview{
+				Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove,
+				CommitMessage: &plan.ReviewCommitMessage{
+					Subject: "fix(merge): integrate reworked conflict",
+					Body:    "What:\nIntegrate the refreshed source resolution.\n\nWhy:\nReplace the rolled-back integration safely.",
+				},
+				Base: newBase, Head: newSourceHead, ReviewedAt: time.Now().UTC(),
+			}
+			if err := record.RecordReviewCompleted(freshReview, "pi"); err != nil {
+				t.Fatalf("record refreshed source review: %v", err)
+			}
+			if detail.State.Plan.MergeCommitIntent != nil {
+				t.Fatalf("refreshed changed-source review retained inactive rollback: %#v", detail.State.Plan.MergeCommitIntent)
+			}
+
+			if err := service.Merge(context.Background(), detail, Options{VerifyCommand: "test -f README.md"}); err != nil {
+				t.Fatalf("merge reworked and refreshed source: %v", err)
+			}
+			wantReviewerCalls := 2
+			if tt.failVerify {
+				wantReviewerCalls = 1
+			}
+			if resolverCalls != 2 || reviewerCalls != wantReviewerCalls || verifyCalls != 2 {
+				t.Fatalf("rerun calls resolver=%d reviewer=%d verify=%d", resolverCalls, reviewerCalls, verifyCalls)
+			}
+			if events.count(plan.EventTypePlanMerged) != 1 {
+				t.Fatalf("rerun merge evidence = %#v", events.events)
+			}
+			if got := realGitOutput(t, fixture.repoRoot, "show", "HEAD:README.md"); got != "combined round 2" {
+				t.Fatalf("rerun resolved content = %q", got)
+			}
+		})
 	}
 }
 

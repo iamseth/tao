@@ -114,25 +114,30 @@ func captureMergeVerifySnapshot(ctx context.Context, git GitClient, detail *plan
 }
 
 func (s Service) runMergeVerify(ctx context.Context, detail *plan.PlanDetail, snapshot mergeVerifySnapshot, command string) error {
+	_, err := s.runMergeVerifyCapture(ctx, detail, snapshot, command)
+	return err
+}
+
+func (s Service) runMergeVerifyCapture(ctx context.Context, detail *plan.PlanDetail, snapshot mergeVerifySnapshot, command string) (string, error) {
 	repoRoot, err := mergeVerifyRepoRoot(detail)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if snapshot.defaultBranch == "" {
-		return fmt.Errorf("merge verification default branch is missing")
+		return "", fmt.Errorf("merge verification default branch is missing")
 	}
 	if snapshot.preMergeSHA == "" {
-		return fmt.Errorf("merge verification pre-merge SHA is missing")
+		return "", fmt.Errorf("merge verification pre-merge SHA is missing")
 	}
 	git, err := s.gitClient()
 	if err != nil {
-		return err
+		return "", err
 	}
 	output, runErr := s.runMergeVerifyAtRoot(ctx, repoRoot, command)
 	if runErr != nil {
-		return s.verifyFailed(ctx, git, snapshot, command, repoRoot, output, runErr)
+		return output, s.verifyFailed(ctx, git, snapshot, command, repoRoot, output, runErr)
 	}
-	return nil
+	return output, nil
 }
 
 const mergeVerifyOutputLimit = 32 * 1024
@@ -152,11 +157,13 @@ func boundMergeVerifyOutput(output string) string {
 }
 
 func (s Service) verifyFailed(ctx context.Context, git GitClient, snapshot mergeVerifySnapshot, command string, repoRoot string, output string, cause error) error {
+	cleanupCtx, cancelCleanup := singleAgentCleanupContext(ctx)
+	defer cancelCleanup()
 	cleanupErrs := make([]error, 0)
-	if err := git.ResetHard(ctx, snapshot.preMergeSHA); err != nil {
+	if err := git.ResetHard(cleanupCtx, snapshot.preMergeSHA); err != nil {
 		cleanupErrs = append(cleanupErrs, fmt.Errorf("reset %s to %s: %w", snapshot.defaultBranch, snapshot.preMergeSHA, err))
 	}
-	if err := git.Checkout(ctx, snapshot.defaultBranch); err != nil {
+	if err := git.Checkout(cleanupCtx, snapshot.defaultBranch); err != nil {
 		cleanupErrs = append(cleanupErrs, fmt.Errorf("re-checkout default branch %s: %w", snapshot.defaultBranch, err))
 	}
 	return &VerifyFailedError{Command: command, RepoRoot: repoRoot, Output: output, Cause: cause, CleanupErrors: cleanupErrs}

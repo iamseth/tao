@@ -301,7 +301,7 @@ func (r BatchAggregateReviewer) Review(ctx context.Context, state BatchState, in
 		if outputErr != nil {
 			return r.blockResumableAfterRestore(ctx, result, state, git, beforeHead, "aggregate rework agent returned malformed output: "+outputErr.Error())
 		}
-		validation := validateAgentEdits(integrationRoot, changes.changedPaths, changes.markerScanPaths)
+		validation := validateAgentEdits(ctx, integrationRoot, changes.changedPaths, changes.markerScanPaths)
 		switch validation.issue {
 		case agentEditIssueConflictMarkers:
 			reason := "aggregate rework agent left conflict markers in " + strings.Join(validation.markerPaths, ", ")
@@ -486,7 +486,7 @@ func (r BatchAggregateReviewer) finishAggregateRework(ctx context.Context, git G
 			return state, fmt.Errorf("%w: file content changed", errAggregateReworkContentDrift)
 		}
 	}
-	validation := validateAgentEdits(integrationRoot, changes.changedPaths, changes.markerScanPaths)
+	validation := validateAgentEdits(ctx, integrationRoot, changes.changedPaths, changes.markerScanPaths)
 	switch validation.issue {
 	case agentEditIssueConflictMarkers:
 		return state, fmt.Errorf("aggregate rework left conflict markers in %s", strings.Join(validation.markerPaths, ", "))

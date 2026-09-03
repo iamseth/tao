@@ -156,7 +156,7 @@ func deriveNextAction(detail *PlanDetail, derived DerivedPlan) PlanNextAction {
 	if detail.State.Workspace != nil && detail.State.Workspace.RebaseIntent != nil {
 		return primary(PlanActionRecoverRebase, PlanActionClassRecovery, command("tao run"), "an interrupted workspace rebase must be settled before other work")
 	}
-	if detail.State.Plan.MergeCommitIntent != nil {
+	if detail.State.Plan.MergeCommitIntent.IsActive() {
 		return primary(PlanActionRecoverMerge, PlanActionClassRecovery, command("tao merge"), "an interrupted merge transaction must be settled before other work")
 	}
 	if recovery := derived.FinalizationRecovery; recovery != nil {
@@ -205,6 +205,17 @@ func deriveNextAction(detail *PlanDetail, derived DerivedPlan) PlanNextAction {
 	// pull-request handoff and leaves its exact identity intent intact.
 	if PlanIsMerged(detail.Events) {
 		return primary(PlanActionNone, PlanActionClassTerminal, "", "recorded merge evidence proves the plan is integrated")
+	}
+	if intent := detail.State.Plan.MergeCommitIntent; intent != nil && intent.Resolution != nil && intent.Resolution.Phase == SingleMergeResolutionPhaseRolledBack {
+		return PlanNextAction{
+			Primary: PlanAction{
+				Kind:        PlanActionRecoverMerge,
+				Class:       PlanActionClassRecovery,
+				Instruction: "Update the source branch, then run " + command("tao review --run") + " to record a fresh source review before merging again",
+				Reason:      "the prior conflict resolution was rolled back and its inactive intent cannot be reused",
+			},
+			Alternatives: []PlanAction{},
+		}
 	}
 	if detail.State.Plan.PullRequestIntent != nil && derived.Complete {
 		if review := CurrentReview(detail); review == nil || !review.IsApproved() {
@@ -699,6 +710,30 @@ func PlanIsMerged(events []Event) bool {
 		}
 	}
 	return merged
+}
+
+// CurrentSingleMergeResolution returns active resolution evidence while a
+// single merge is unsettled, or the append-only evidence for the current merge
+// after RecordMerged clears the active intent. Reopening supersedes evidence
+// from an earlier integration round.
+func CurrentSingleMergeResolution(detail *PlanDetail) *SingleMergeResolution {
+	if detail == nil {
+		return nil
+	}
+	if intent := detail.State.Plan.MergeCommitIntent; intent != nil && intent.Resolution != nil {
+		return intent.Resolution
+	}
+	var resolution *SingleMergeResolution
+	for i := range detail.Events {
+		event := &detail.Events[i]
+		switch event.Type {
+		case EventTypePlanMerged:
+			resolution = singleMergeResolutionFromEvent(event.SingleMergeResolution)
+		case EventTypePlanReopened:
+			resolution = nil
+		}
+	}
+	return resolution
 }
 
 // PlanIsPullRequestComplete reports whether Tao has current local evidence for

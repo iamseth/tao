@@ -4,7 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -13,7 +18,11 @@ import (
 	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/agentsession"
 	commitcontract "github.com/iamseth/tao/internal/commit"
+	"github.com/iamseth/tao/internal/plan"
 )
+
+func testProviderLookPath(name string) (string, error) { return name, nil }
+func successfulConfinementProbe() error                { return nil }
 
 type recordingBatchAgentEvents struct {
 	events []BatchAgentEvent
@@ -123,6 +132,522 @@ func TestBatchAgentSessionHonorsConfiguredProviderPermissionsAndRoot(t *testing.
 	}
 }
 
+func TestSingleMergeAgentSessionExposesMetricsWithoutBatchPersistence(t *testing.T) {
+	t.Setenv("TAO_AGENT", "claude")
+	var got mergeFakeClaudeStart
+	batchEvents := &recordingBatchAgentEvents{}
+	var metrics agent.Metrics
+	session, err := NewSingleMergeAgentSession(SingleMergeAgentSessionConfig{
+		ProviderLookPath: testProviderLookPath, ConfinementProbe: successfulConfinementProbe,
+		ProcessStarter: mergeFakeProcessStarter(t, &got, `{"type":"result","result":"resolved"}`),
+		EventAppender:  batchEvents,
+		Metrics:        func(value agent.Metrics, _ string) { metrics = value },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	integrationRoot, protectedRoot := singleMergeAgentTestBoundary(t)
+	result, err := session.Resolve(context.Background(), BatchAgentSessionRequest{
+		BatchID: "must-not-persist", Operation: BatchAgentOperationSinglePlanResolution,
+		Attempt: 1, IntegrationRoot: integrationRoot, Prompt: "resolve", CandidatePlanID: "plan-a",
+		ProtectedGitObjectRoot: protectedRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "resolved" || got.cwd != integrationRoot || got.prompt != "resolve" {
+		t.Fatalf("unexpected single-merge provider result: %#v / %#v", result, got)
+	}
+	if len(batchEvents.events) != 0 {
+		t.Fatalf("single-plan session leaked repository batch telemetry: %#v", batchEvents.events)
+	}
+	if metrics.SessionID != "" {
+		t.Fatalf("unexpected fabricated metrics: %#v", metrics)
+	}
+}
+
+func TestSingleMergeAgentSessionMissingProviderDoesNotProbeOrStart(t *testing.T) {
+	t.Setenv("TAO_AGENT", "claude")
+	starts := 0
+	probes := 0
+	session, err := NewSingleMergeAgentSession(SingleMergeAgentSessionConfig{
+		ProviderLookPath: func(name string) (string, error) {
+			return "", fmt.Errorf("%s missing: %w", name, exec.ErrNotFound)
+		},
+		ConfinementProbe: func() error {
+			probes++
+			return nil
+		},
+		ProcessStarter: func(context.Context, string, string, []string) (agent.Process, error) {
+			starts++
+			return nil, errors.New("unexpected provider start")
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	integrationRoot, protectedRoot := singleMergeAgentTestBoundary(t)
+	request := BatchAgentSessionRequest{
+		Operation: BatchAgentOperationSinglePlanResolution, IntegrationRoot: integrationRoot,
+		ProtectedGitObjectRoot: protectedRoot,
+	}
+	if err := session.Preflight(context.Background(), request); err == nil || !strings.Contains(err.Error(), `resolve provider executable "claude"`) {
+		t.Fatalf("missing-provider preflight error = %v", err)
+	}
+	if starts != 0 || probes != 0 {
+		t.Fatalf("missing provider started %d processes and %d confinement probes", starts, probes)
+	}
+}
+
+func TestSingleMergeConfinementProbeOutputRetainsOnlyBoundedPrefix(t *testing.T) {
+	var output singleMergeConfinementProbeOutput
+	prefix := bytes.Repeat([]byte("p"), maxSingleMergeConfinementProbeOutputBytes)
+	oversized := append(append([]byte{}, prefix...), bytes.Repeat([]byte("tail"), 1024)...)
+	written, err := output.Write(oversized)
+	if err != nil || written != len(oversized) {
+		t.Fatalf("bounded probe write = %d, %v; want %d, nil", written, err, len(oversized))
+	}
+	if retained := output.String(); len(retained) != maxSingleMergeConfinementProbeOutputBytes || retained != string(prefix) {
+		t.Fatalf("retained probe output bytes = %d, want bounded prefix of %d", len(retained), maxSingleMergeConfinementProbeOutputBytes)
+	}
+	if written, err := output.Write([]byte("more")); err != nil || written != len("more") || len(output.String()) != maxSingleMergeConfinementProbeOutputBytes {
+		t.Fatalf("drained post-limit write = %d, %v; retained=%d", written, err, len(output.String()))
+	}
+}
+
+func TestSingleMergeConfinementProbeKeepsIntegrationReadOnlyAndRuntimeWritable(t *testing.T) {
+	integrationRoot, protectedRoot := t.TempDir(), t.TempDir()
+	if err := probeSingleMergeFilesystemConfinement(context.Background(), singleMergeFilesystemConfinement{
+		protectedPaths: []string{protectedRoot}, integrationRoot: integrationRoot, allowEdits: true,
+	}, "/usr/bin/true"); err != nil {
+		t.Skipf("OS confinement is unavailable for provider launch regression: %v", err)
+	}
+
+	target := filepath.Join(integrationRoot, "prepared-conflict.txt")
+	if err := os.WriteFile(target, []byte("prepared conflict\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TAO_TEST_VERSION_PROBE_TARGET", target)
+	provider := filepath.Join(t.TempDir(), "provider")
+	const script = `#!/bin/sh
+printf runtime >"$TMPDIR/version-probe-runtime" || exit 41
+if printf mutation >"$TAO_TEST_VERSION_PROBE_TARGET"; then
+  exit 42
+fi
+printf 'provider version\n'
+`
+	if err := os.WriteFile(provider, []byte(script), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(provider, 0o700); err != nil { //nolint:gosec // executable mode is required for the fixture provider.
+		t.Fatal(err)
+	}
+	if err := probeSingleMergeFilesystemConfinement(context.Background(), singleMergeFilesystemConfinement{
+		protectedPaths: []string{protectedRoot}, integrationRoot: integrationRoot, allowEdits: true,
+	}, provider); err != nil {
+		t.Fatalf("read-only provider launch probe failed: %v", err)
+	}
+	if contents, err := os.ReadFile(target); err != nil || string(contents) != "prepared conflict\n" { //nolint:gosec // fixture-owned worktree content is the confinement assertion.
+		t.Fatalf("provider launch probe changed prepared worktree: %q, %v", contents, err)
+	}
+}
+
+func TestSingleMergePiRPCUsesEphemeralConfinedSessionDirectory(t *testing.T) {
+	t.Setenv("TAO_AGENT", "pi")
+	integrationRoot, protectedRoot := singleMergeAgentTestBoundary(t)
+	if err := probeSingleMergeFilesystemConfinement(context.Background(), singleMergeFilesystemConfinement{
+		protectedPaths: []string{protectedRoot}, integrationRoot: integrationRoot, allowEdits: true,
+	}, "/usr/bin/true"); err != nil {
+		t.Skipf("OS confinement is unavailable for Pi RPC launch regression: %v", err)
+	}
+
+	hostSessionRoot := t.TempDir()
+	hostSentinel := filepath.Join(hostSessionRoot, "host-sentinel")
+	if err := os.WriteFile(hostSentinel, []byte("unchanged\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", hostSessionRoot)
+	t.Setenv("TAO_TEST_HOST_PI_SESSION_DIR", hostSessionRoot)
+	provider := filepath.Join(t.TempDir(), "pi")
+	const script = `#!/bin/sh
+set -eu
+if [ "${1:-}" = "--version" ]; then
+  printf 'pi fixture version\n'
+  exit 0
+fi
+if [ "${1:-}" != "--mode" ] || [ "${2:-}" != "rpc" ]; then
+  exit 31
+fi
+if [ "$PI_CODING_AGENT_SESSION_DIR" = "$TAO_TEST_HOST_PI_SESSION_DIR" ]; then
+  exit 32
+fi
+mkdir -p "$PI_CODING_AGENT_SESSION_DIR"
+sidecar="$PI_CODING_AGENT_SESSION_DIR/session.jsonl"
+printf 'ephemeral session\n' >"$sidecar"
+IFS= read -r _
+printf '{"type":"message","role":"assistant","text":"%s"}\n' "$sidecar"
+printf '{"type":"agent_end","session_id":"fixture-session"}\n'
+IFS= read -r _
+printf '{"id":"2","type":"response","command":"get_state","success":true,"data":{"sessionId":"fixture-session","model":{"provider":"fixture","id":"fixture"}}}\n'
+IFS= read -r _
+printf '{"id":"3","type":"response","command":"get_session_stats","success":true,"data":{"sessionId":"fixture-session","tokens":{"total":1}}}\n'
+`
+	if err := os.WriteFile(provider, []byte(script), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(provider, 0o700); err != nil { //nolint:gosec // executable mode is required for the fixture provider.
+		t.Fatal(err)
+	}
+	session, err := NewSingleMergeAgentSession(SingleMergeAgentSessionConfig{
+		ProviderLookPath: func(string) (string, error) { return provider, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := BatchAgentSessionRequest{
+		Operation: BatchAgentOperationSinglePlanResolution, Attempt: 1,
+		IntegrationRoot: integrationRoot, Prompt: "resolve", CandidatePlanID: "plan-a",
+		ProtectedGitObjectRoot: protectedRoot,
+	}
+	if err := session.Preflight(context.Background(), request); err != nil {
+		t.Fatalf("Pi preflight failed: %v", err)
+	}
+	result, err := session.Resolve(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Pi RPC resolution failed: %v", err)
+	}
+	runtimeRoot := filepath.Dir(filepath.Dir(result.Output))
+	if !strings.HasPrefix(filepath.Base(runtimeRoot), "tao-merge-agent-runtime-") {
+		t.Fatalf("Pi session sidecar was not redirected into the invocation runtime: %q", result.Output)
+	}
+	if _, err := os.Stat(result.Output); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ephemeral Pi session sidecar survived process cleanup: %v", err)
+	}
+	entries, err := os.ReadDir(hostSessionRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != filepath.Base(hostSentinel) {
+		t.Fatalf("Pi wrote a host session sidecar: %#v", entries)
+	}
+}
+
+func TestSingleMergeAgentSessionUnavailableConfinementDoesNotStartProvider(t *testing.T) {
+	t.Setenv("TAO_AGENT", "claude")
+	probeErr := errors.New("bubblewrap unavailable")
+	starts := 0
+	session, err := NewSingleMergeAgentSession(SingleMergeAgentSessionConfig{
+		ProviderLookPath: func(name string) (string, error) { return "/installed/" + name, nil },
+		ConfinementProbe: func() error { return probeErr },
+		ProcessStarter: func(context.Context, string, string, []string) (agent.Process, error) {
+			starts++
+			return nil, errors.New("unexpected provider start")
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	integrationRoot, protectedRoot := singleMergeAgentTestBoundary(t)
+	request := BatchAgentSessionRequest{
+		Operation: BatchAgentOperationSinglePlanResolution, IntegrationRoot: integrationRoot,
+		ProtectedGitObjectRoot: protectedRoot,
+	}
+	if err := session.Preflight(context.Background(), request); !errors.Is(err, probeErr) {
+		t.Fatalf("preflight error = %v", err)
+	}
+	if _, err := session.Resolve(context.Background(), request); !errors.Is(err, probeErr) {
+		t.Fatalf("resolve error = %v", err)
+	}
+	if starts != 0 {
+		t.Fatalf("unavailable confinement started %d provider processes", starts)
+	}
+}
+
+func TestSingleMergeAgentSessionFailsClosedWithoutProtectedFilesystemBoundary(t *testing.T) {
+	t.Setenv("TAO_AGENT", "claude")
+	starts := 0
+	session, err := NewSingleMergeAgentSession(SingleMergeAgentSessionConfig{
+		ProcessStarter: func(context.Context, string, string, []string) (agent.Process, error) {
+			starts++
+			return nil, errors.New("unexpected provider start")
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = session.Resolve(context.Background(), BatchAgentSessionRequest{
+		Operation: BatchAgentOperationSinglePlanResolution, IntegrationRoot: t.TempDir(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "no protected Git paths") {
+		t.Fatalf("missing-boundary error = %v", err)
+	}
+	if starts != 0 {
+		t.Fatalf("unsafe single-plan session started %d providers", starts)
+	}
+}
+
+func TestSingleMergeAgentSessionConfinesProtectedObjectRootAtProcessBoundary(t *testing.T) {
+	t.Setenv("TAO_AGENT", "claude")
+	objectRoot := t.TempDir()
+	integrationRoot := t.TempDir()
+	runtimeRoot := t.TempDir()
+	if _, _, err := singleMergeFilesystemConfinementCommand(singleMergeFilesystemConfinement{
+		protectedPaths: []string{objectRoot}, integrationRoot: integrationRoot, allowEdits: true,
+	}, runtimeRoot, "claude", nil); err != nil {
+		t.Skipf("OS-enforced provider filesystem confinement unavailable: %v", err)
+	}
+	var got mergeFakeClaudeStart
+	session, err := NewSingleMergeAgentSession(SingleMergeAgentSessionConfig{
+		ProviderLookPath: testProviderLookPath, ConfinementProbe: successfulConfinementProbe,
+		ProcessStarter: mergeFakeProcessStarter(t, &got, `{"type":"result","result":"done"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := session.Resolve(context.Background(), BatchAgentSessionRequest{
+		Operation: BatchAgentOperationSinglePlanResolution, Attempt: 1,
+		IntegrationRoot: integrationRoot, Prompt: "resolve", CandidatePlanID: "plan-a",
+		ProtectedGitObjectRoot: objectRoot,
+	})
+	if err != nil || result.Output != "done" {
+		t.Fatalf("confined result/error = %#v / %v", result, err)
+	}
+	if got.name == "claude" || !strings.Contains(strings.Join(got.args, "\x00"), "claude") {
+		t.Fatalf("provider was not launched through OS confinement: name=%q args=%q", got.name, got.args)
+	}
+	canonical, err := canonicalGitObjectRoot(objectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(got.args, "\x00")
+	if !strings.Contains(joined, canonical) || !strings.Contains(joined, integrationRoot) || !strings.Contains(joined, "TMPDIR=") {
+		t.Fatalf("confinement omitted protected, integration, or runtime boundary: %q", got.args)
+	}
+}
+
+func TestSingleMergeProcessBoundaryRejectsExistingExternalHardLink(t *testing.T) {
+	root := t.TempDir()
+	integration := filepath.Join(root, "integration")
+	external := filepath.Join(root, "external.txt")
+	protected := filepath.Join(root, "protected")
+	runtimeRoot := filepath.Join(root, "runtime")
+	for _, path := range []string{integration, protected, runtimeRoot, filepath.Join(runtimeRoot, "cache"), filepath.Join(runtimeRoot, "state")} {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(external, []byte("external original\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(integration, "tracked.txt")
+	if err := os.Link(external, alias); err != nil {
+		t.Skipf("filesystem does not support hard links: %v", err)
+	}
+
+	_, _, err := singleMergeFilesystemConfinementCommand(singleMergeFilesystemConfinement{
+		protectedPaths: []string{protected}, integrationRoot: integration, allowEdits: true,
+	}, runtimeRoot, "/bin/sh", []string{"-c", `printf compromised >"$1"`, "sh", alias})
+	if err == nil || !strings.Contains(err.Error(), `multiply linked regular file "tracked.txt"`) {
+		t.Fatalf("existing-hard-link confinement error = %v", err)
+	}
+	if contents, readErr := os.ReadFile(external); readErr != nil || string(contents) != "external original\n" { //nolint:gosec // fixture-owned external alias is the security assertion.
+		t.Fatalf("rejected resolver changed external inode: %q, %v", contents, readErr)
+	}
+}
+
+func TestSingleMergeProcessSandboxDeniesHostWritesByDefault(t *testing.T) {
+	root := t.TempDir()
+	integration := filepath.Join(root, "integration")
+	metadata := filepath.Join(integration, ".git")
+	linked := filepath.Join(root, "linked-checkout")
+	external := filepath.Join(root, "unrelated-repository")
+	taoDataHome := filepath.Join(root, "tao-data-home")
+	t.Setenv("TAO_DATA_HOME", taoDataHome)
+	runtimeRoot := filepath.Join(root, "provider-runtime")
+	for _, path := range []string{integration, metadata, linked, external, taoDataHome, runtimeRoot} {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, dir := range []string{"cache", "state"} {
+		if err := os.Mkdir(filepath.Join(runtimeRoot, dir), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	originals := []string{
+		filepath.Join(metadata, "config"), filepath.Join(linked, "README.md"),
+		filepath.Join(external, "README.md"), filepath.Join(taoDataHome, "state.json"),
+	}
+	for _, path := range originals {
+		if err := os.WriteFile(path, []byte("original\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	const resolverScript = `set -u
+printf allowed >"$1/allowed.txt" || exit 11
+printf runtime >"$TMPDIR/scratch" || exit 12
+if printf overwritten >"$2/config" 2>/dev/null; then exit 13; fi
+if printf overwritten >"$3/README.md" 2>/dev/null; then exit 14; fi
+if printf overwritten >"$4/README.md" 2>/dev/null; then exit 15; fi
+if printf overwritten >"$5/state.json" 2>/dev/null; then exit 16; fi
+if printf created >"$2/new-ref" 2>/dev/null; then exit 17; fi
+if printf created >"$3/new-file" 2>/dev/null; then exit 18; fi
+if printf created >"$4/new-file" 2>/dev/null; then exit 19; fi
+if printf created >"$5/new-plan" 2>/dev/null; then exit 20; fi
+if [ "$6" = linux ] && ln "$4/README.md" "$1/external-hard-link" 2>/dev/null; then exit 21; fi`
+	resolverPolicy := singleMergeFilesystemConfinement{
+		protectedPaths: []string{metadata, linked}, integrationRoot: integration, allowEdits: true,
+	}
+	name, args, err := singleMergeFilesystemConfinementCommand(resolverPolicy, runtimeRoot, "/bin/sh", []string{
+		"-c", resolverScript, "sh", integration, metadata, linked, external, taoDataHome, runtime.GOOS,
+	})
+	if err != nil {
+		t.Skipf("OS-enforced provider filesystem confinement unavailable: %v", err)
+	}
+	if output, err := exec.Command(name, args...).CombinedOutput(); err != nil { //nolint:gosec // fixed test shell probes the generated confinement boundary.
+		t.Skipf("OS-enforced provider filesystem confinement cannot start: %v: %s", err, output)
+	}
+	if contents, err := os.ReadFile(filepath.Join(integration, "allowed.txt")); err != nil || string(contents) != "allowed" { //nolint:gosec // fixture-owned integration path.
+		t.Fatalf("resolver integration edit was denied: %q, %v", contents, err)
+	}
+	if contents, err := os.ReadFile(filepath.Join(runtimeRoot, "scratch")); err != nil || string(contents) != "runtime" { //nolint:gosec // fixture-owned bounded runtime path.
+		t.Fatalf("bounded runtime write was denied: %q, %v", contents, err)
+	}
+	for _, path := range originals {
+		if contents, err := os.ReadFile(path); err != nil || string(contents) != "original\n" { //nolint:gosec // fixture-owned denied path.
+			t.Fatalf("denied file %s changed: %q, %v", path, contents, err)
+		}
+	}
+	for _, path := range []string{
+		filepath.Join(metadata, "new-ref"), filepath.Join(linked, "new-file"),
+		filepath.Join(external, "new-file"), filepath.Join(taoDataHome, "new-plan"),
+	} {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("denied path was created: %s: %v", path, err)
+		}
+	}
+	if runtime.GOOS == "linux" {
+		if _, err := os.Lstat(filepath.Join(integration, "external-hard-link")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("resolver created a hard link across the writable mount boundary: %v", err)
+		}
+	}
+
+	const reviewerScript = `set -u
+if printf forbidden >"$1/reviewer-edit" 2>/dev/null; then exit 21; fi
+if printf overwritten >"$2/README.md" 2>/dev/null; then exit 22; fi
+if printf overwritten >"$3/state.json" 2>/dev/null; then exit 23; fi
+printf runtime >"$TMPDIR/reviewer-scratch" || exit 24`
+	reviewerPolicy := singleMergeFilesystemConfinement{
+		protectedPaths: []string{metadata, linked}, integrationRoot: integration,
+	}
+	name, args, err = singleMergeFilesystemConfinementCommand(reviewerPolicy, runtimeRoot, "/bin/sh", []string{
+		"-c", reviewerScript, "sh", integration, external, taoDataHome,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output, err := exec.Command(name, args...).CombinedOutput(); err != nil { //nolint:gosec // fixed test shell probes the generated confinement boundary.
+		t.Fatalf("reviewer confinement failed: %v: %s", err, output)
+	}
+	if _, err := os.Lstat(filepath.Join(integration, "reviewer-edit")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("reviewer mutated integration worktree: %v", err)
+	}
+	for _, path := range originals {
+		if contents, err := os.ReadFile(path); err != nil || string(contents) != "original\n" { //nolint:gosec // fixture-owned denied path.
+			t.Fatalf("reviewer changed denied file %s: %q, %v", path, contents, err)
+		}
+	}
+}
+
+func TestSingleMergeAgentSessionStartsFreshProviderForResolverAndReviewer(t *testing.T) {
+	t.Setenv("TAO_AGENT", "claude")
+	starts := 0
+	var got mergeFakeClaudeStart
+	starter := mergeFakeProcessStarter(t, &got, `{"type":"result","result":"done"}`)
+	session, err := NewSingleMergeAgentSession(SingleMergeAgentSessionConfig{
+		ProviderLookPath: testProviderLookPath, ConfinementProbe: successfulConfinementProbe,
+		ProcessStarter: func(ctx context.Context, cwd, name string, args []string) (agent.Process, error) {
+			starts++
+			return starter(ctx, cwd, name, args)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	integrationRoot, protectedRoot := singleMergeAgentTestBoundary(t)
+	for _, operation := range []BatchAgentOperation{BatchAgentOperationSinglePlanResolution, BatchAgentOperationSinglePlanReview} {
+		result, resolveErr := session.Resolve(context.Background(), BatchAgentSessionRequest{
+			Operation: operation, Attempt: 1, IntegrationRoot: integrationRoot, Prompt: string(operation), CandidatePlanID: "plan-a",
+			ProtectedGitObjectRoot: protectedRoot,
+		})
+		if resolveErr != nil || result.Output != "done" {
+			t.Fatalf("%s result/error = %#v / %v", operation, result, resolveErr)
+		}
+	}
+	if starts != 2 {
+		t.Fatalf("single-plan operations started %d providers, want one fresh provider each", starts)
+	}
+}
+
+func TestFreshSingleMergeAgentSessionDefersConfigurationAndStartsEachOperationOnce(t *testing.T) {
+	t.Setenv("TAO_AGENT", "invalid")
+	deferred := NewFreshSingleMergeAgentSession(SingleMergeAgentSessionConfig{})
+	if _, err := deferred.Resolve(context.Background(), BatchAgentSessionRequest{Operation: BatchAgentOperationSinglePlanResolution}); err == nil || !strings.Contains(err.Error(), "unsupported agent") {
+		t.Fatalf("deferred runtime error = %v", err)
+	}
+
+	t.Setenv("TAO_AGENT", "claude")
+	starts := 0
+	var progress bytes.Buffer
+	var got mergeFakeClaudeStart
+	starter := mergeFakeProcessStarter(t, &got, `{"type":"result","result":"done"}`)
+	fresh := NewFreshSingleMergeAgentSession(SingleMergeAgentSessionConfig{
+		Log: &progress, ProviderLookPath: testProviderLookPath, ConfinementProbe: successfulConfinementProbe,
+		ProcessStarter: func(ctx context.Context, cwd, name string, args []string) (agent.Process, error) {
+			starts++
+			return starter(ctx, cwd, name, args)
+		},
+	})
+	integrationRoot, protectedRoot := singleMergeAgentTestBoundary(t)
+	for _, operation := range []BatchAgentOperation{BatchAgentOperationSinglePlanResolution, BatchAgentOperationSinglePlanReview} {
+		result, err := fresh.Resolve(context.Background(), BatchAgentSessionRequest{
+			Operation: operation, Attempt: 1, IntegrationRoot: integrationRoot, Prompt: string(operation), CandidatePlanID: "plan-a",
+			ProtectedGitObjectRoot: protectedRoot,
+		})
+		if err != nil || result.Output != "done" {
+			t.Fatalf("%s result/error = %#v / %v", operation, result, err)
+		}
+	}
+	if starts != 2 {
+		t.Fatalf("fresh single-plan agent started %d processes, want 2", starts)
+	}
+	for _, want := range []string{"Automatic squash conflict resolution started (attempt 1 of 1).", "Independent exact-integration review started in a fresh session (attempt 1 of 1)."} {
+		if !strings.Contains(progress.String(), want) {
+			t.Fatalf("progress missing %q: %q", want, progress.String())
+		}
+	}
+}
+
+func TestSingleMergeAgentMetricsEventUsesGenericPlanTelemetry(t *testing.T) {
+	timestamp := time.Date(2026, 9, 2, 20, 0, 0, 0, time.UTC)
+	if event := SingleMergeAgentMetricsEvent(BatchAgentSessionRequest{}, BatchAgentSessionResult{}, nil, timestamp); event != nil {
+		t.Fatalf("unusable metrics produced event %#v", event)
+	}
+	request := BatchAgentSessionRequest{Operation: BatchAgentOperationSinglePlanReview, CandidatePlanID: "plan-a"}
+	result := BatchAgentSessionResult{Provider: agentsession.Result{
+		AgentLabel: "claude", MetricsUsable: true,
+		Metrics: &agent.Metrics{SessionID: "session-a", ProviderID: "anthropic", ModelID: "model-a", OutputTokens: 17, ToolCalls: 2},
+	}}
+	event := SingleMergeAgentMetricsEvent(request, result, errors.New("provider failed"), timestamp)
+	if event == nil || event.Type != plan.EventTypeAgentMetrics || event.PlanID != "plan-a" || event.Agent != "claude" || event.Timestamp != timestamp {
+		t.Fatalf("generic metrics event = %#v", event)
+	}
+	if event.Message != "Captured independent integration reviewer agent metrics" || event.Metrics == nil || event.Metrics.SessionID != "session-a" || event.Metrics.OutputTokens != 17 || event.Metrics.ToolCalls != 2 || event.Metrics.Status != "failed" || event.Metrics.Result != "failed" {
+		t.Fatalf("projected metrics = %#v", event)
+	}
+}
+
 func TestBatchAgentSessionRendersMetricsWarningAsReadableProgress(t *testing.T) {
 	t.Setenv("TAO_AGENT", "claude")
 	var progress bytes.Buffer
@@ -202,6 +727,11 @@ func TestMergeProposalGeneratorUsesOneConfiguredNeutralSession(t *testing.T) {
 	if !strings.Contains(strings.Join(got.args, " "), "--permission-mode bypassPermissions") {
 		t.Fatalf("proposal permission was not propagated: %v", got.args)
 	}
+}
+
+func singleMergeAgentTestBoundary(t *testing.T) (string, string) {
+	t.Helper()
+	return t.TempDir(), t.TempDir()
 }
 
 func mergeProposalContext() commitcontract.MergeProposalContext {

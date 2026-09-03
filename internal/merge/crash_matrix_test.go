@@ -2,9 +2,11 @@ package merge
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/iamseth/tao/internal/durableintent/crashfixture"
 	"github.com/iamseth/tao/internal/plan"
@@ -59,6 +61,111 @@ func TestInspectSingleMergeIntentRefusesLiveDefaultDrift(t *testing.T) {
 	}
 	if integrated {
 		t.Fatal("mismatched live commit message was accepted")
+	}
+}
+
+func TestMergeRecoversInterruptedSingleResolutionRollbackSettlement(t *testing.T) {
+	fixture := crashfixture.New(t)
+	state := fixture.AfterGitMutation(t, crashfixture.DefaultTarget)
+	message := "fix(merge): recover interrupted rollback\n\nWhat:\nSettle the exact restored integration boundary.\n\nWhy:\nAllow safe source rework without manual state edits.\n\nTao-Plan: plan-crash\nTao-Source-Head: " + fixture.SourceSHA
+	amendCrashCommitMessage(t, fixture, message)
+	integrationHead := crashRev(t, fixture, "HEAD")
+	runCrashGit(t, fixture, "reset", "--hard", fixture.BaseSHA)
+
+	createdAt := time.Date(2026, 9, 2, 18, 0, 0, 0, time.UTC)
+	resolution := plan.SingleMergeResolution{
+		Phase: plan.SingleMergeResolutionPhaseCommitted, ConflictFiles: []string{"source.txt"}, RequestedAt: createdAt.Add(time.Minute),
+		Outcome: plan.SingleMergeResolutionOutcomeResolved, Summary: "Resolved the source conflict.", ChangedPaths: []string{"source.txt"},
+		ContentFingerprint: strings.Repeat("a", 64), CommitMessage: message, ResolvedAt: createdAt.Add(2 * time.Minute),
+		IntegrationHead: integrationHead, CommittedAt: createdAt.Add(3 * time.Minute),
+	}
+	intent := plan.SingleMergeCommitIntent{
+		Message: message, PlanID: "plan-crash", SourceHead: fixture.SourceSHA,
+		DefaultBranch: crashfixture.DefaultBranch, DefaultParent: fixture.BaseSHA,
+		CreatedAt: createdAt, Resolution: &resolution,
+	}
+	detail := &plan.PlanDetail{
+		Dir:   t.TempDir(),
+		State: plan.State{Status: plan.StatusReviewed, Repo: plan.Repo{Root: fixture.RepoRoot}, Plan: plan.PlanState{ID: "plan-crash", MergeCommitIntent: &intent}, Workspace: &plan.Workspace{Branch: crashfixture.SourceBranch, BaseBranch: crashfixture.DefaultBranch}},
+	}
+	events := &fakeEventAppender{}
+	service := Service{Git: fixture.Git, Events: events, Now: func() time.Time { return createdAt.Add(4 * time.Minute) }}
+
+	err := service.Merge(context.Background(), detail, Options{NoVerify: true})
+	if !errors.Is(err, ErrSingleResolutionRolledBack) {
+		t.Fatalf("recover interrupted rollback at %s: %v", state.Point, err)
+	}
+	settled := detail.State.Plan.MergeCommitIntent
+	if settled == nil || settled.Resolution == nil || settled.Resolution.Phase != plan.SingleMergeResolutionPhaseRolledBack || settled.Resolution.RollbackReason != plan.SingleMergeResolutionRollbackRecoveredInterruption {
+		t.Fatalf("interrupted rollback settlement = %#v", settled)
+	}
+	event := events.requireSingle(t, plan.EventTypeSingleMergeRolledBack)
+	if event.SingleMergeResolution == nil || event.SingleMergeResolution.IntegrationHead != integrationHead {
+		t.Fatalf("interrupted rollback event lost exact commit evidence: %#v", event)
+	}
+	if head := crashRev(t, fixture, crashfixture.DefaultBranch); head != fixture.BaseSHA {
+		t.Fatalf("recovery moved restored default: got %s want %s", head, fixture.BaseSHA)
+	}
+}
+
+func TestMergeNoSquashRefusesActiveSingleResolutionBeforeRefMutation(t *testing.T) {
+	tests := []struct {
+		name        string
+		phase       plan.SingleMergeResolutionPhase
+		nonApproval bool
+	}{
+		{name: "committed evidence", phase: plan.SingleMergeResolutionPhaseCommitted},
+		{name: "reviewed non-approval evidence", phase: plan.SingleMergeResolutionPhaseReviewed, nonApproval: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := crashfixture.New(t)
+			state := fixture.AfterGitMutation(t, crashfixture.DefaultTarget)
+			detail, intent := singleMergeCrashIntent(fixture)
+			resolution := &plan.SingleMergeResolution{
+				Phase: tt.phase, IntegrationHead: state.MutationSHA,
+			}
+			if tt.nonApproval {
+				resolution.Review = &plan.SingleMergeResolutionReview{
+					Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested,
+					Base: fixture.BaseSHA, Head: state.MutationSHA,
+				}
+			}
+			intent.Resolution = resolution
+			detail.State.Status = plan.StatusReviewed
+			detail.State.Repo.Root = fixture.RepoRoot
+			detail.State.Plan.MergeCommitIntent = &intent
+			detail.State.Workspace.Strategy = plan.WorkspaceStrategyWorktree
+			detail.State.Workspace.Path = fixture.SourceWorktree
+
+			defaultBefore := crashRev(t, fixture, crashfixture.DefaultBranch)
+			sourceBefore := crashRev(t, fixture, crashfixture.SourceBranch)
+			events := &fakeEventAppender{}
+			service := Service{
+				Git: fixture.Git,
+				NewGit: func(dir string) GitClient {
+					if dir != fixture.SourceWorktree {
+						t.Fatalf("worktree Git root = %q, want %q", dir, fixture.SourceWorktree)
+					}
+					return fixture.SourceGit
+				},
+				Cleaner: successfulCleanup(), Events: events,
+			}
+
+			err := service.Merge(context.Background(), detail, Options{Force: true, NoSquash: true, NoVerify: true})
+			if !errors.Is(err, ErrSingleResolutionRejected) || !strings.Contains(err.Error(), "--no-squash") {
+				t.Fatalf("Merge() error = %v, want no-squash active-resolution refusal", err)
+			}
+			if got := crashRev(t, fixture, crashfixture.DefaultBranch); got != defaultBefore {
+				t.Fatalf("default ref moved: got %s want %s", got, defaultBefore)
+			}
+			if got := crashRev(t, fixture, crashfixture.SourceBranch); got != sourceBefore {
+				t.Fatalf("source ref moved: got %s want %s", got, sourceBefore)
+			}
+			if events.count(plan.EventTypePlanMerged) != 0 {
+				t.Fatalf("refused no-squash merge recorded completion: %#v", events.events)
+			}
+		})
 	}
 }
 

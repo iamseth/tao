@@ -37,6 +37,39 @@ func (r *fakeRunner) run(ctx context.Context, cwd string, name string, args []st
 	return nil
 }
 
+func TestDiffBoundedDrainsOversizedOutput(t *testing.T) {
+	const (
+		chunkCount = 32
+		chunkSize  = 1024
+		limit      = 4096
+	)
+	drained := 0
+	runner := func(_ context.Context, _ string, name string, args []string, stdout io.Writer, _ io.Writer) error {
+		if name != "git" || !reflect.DeepEqual(args, []string{"-C", "/repo", "diff", "base..head"}) {
+			t.Fatalf("command = %s %#v", name, args)
+		}
+		chunk := strings.Repeat("x", chunkSize)
+		for range chunkCount {
+			n, err := io.WriteString(stdout, chunk)
+			drained += n
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	got, truncated, err := NewClient("/repo", runner).DiffBounded(context.Background(), "base..head", limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !truncated || len(got) != limit || got != strings.Repeat("x", limit) {
+		t.Fatalf("bounded diff = (%d bytes, truncated=%t)", len(got), truncated)
+	}
+	if drained != chunkCount*chunkSize {
+		t.Fatalf("drained bytes = %d, want %d", drained, chunkCount*chunkSize)
+	}
+}
+
 func TestActiveOperationAndLinkedWorktreeDirectory(t *testing.T) {
 	root := t.TempDir()
 	gitDir := filepath.Join(root, ".git")

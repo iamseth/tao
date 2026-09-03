@@ -701,11 +701,38 @@ its per-slice checkpoint history for review and recovery until managed cleanup
 succeeds. Use `--no-squash` to preserve those commits by rebasing the plan branch
 and fast-forwarding default.
 
-**Single-plan failure behavior:** squash, squash-commit, rebase, or fast-forward
-failures abort the attempt, restore the default tip and worktree when possible,
-and print conflicted files. Single-plan mode does not ask an agent to resolve
-conflicts; resolve them manually on the plan branch, refresh the review if the
-diff changes, and rerun `tao merge`.
+**Single-plan conflict behavior:** an ordinary squash conflict starts exactly
+one configured provider-neutral resolver session in the default worktree while
+the default and source refs remain at their recorded boundaries. These sessions
+use the platform filesystem sandbox; Linux requires an externally installed
+`bwrap` at `/usr/bin/bwrap` or `/bin/bwrap`, which `tao doctor` reports as a
+required tool. Tao probes the sandbox before recording one-shot `requested`
+evidence. An unavailable sandbox therefore starts no provider, restores the
+prepared squash boundary, and leaves a later invocation free to try again after
+the prerequisite is installed. Tao treats the
+plan title, source review, changed paths, conflict status, and provider output as
+untrusted. The resolver may edit only; Tao rejects unsafe paths, unresolved
+entries or markers, malformed output, protected-ref or HEAD movement, empty
+edits, and invalid proposals before it stages or commits. Tao then fingerprints
+the exact edits, persists intent, creates the resolution commit itself, runs the
+configured verification gate, and asks a separate fresh session to review the
+exact parent/head integration. Only independent `approve` authorizes merge
+evidence and cleanup. There is no retry or automatic rework: comment,
+`changes_requested`, malformed output, timeout, provider failure, or mutation
+fails closed and prints the recorded rollback state and a manual next action.
+
+`--force` does not bypass resolver validation or independent review.
+`--no-verify` skips only command verification; structural validation and exact
+independent review remain required. A failed attempt restores the recorded
+default boundary when it still matches and otherwise refuses rollback rather
+than overwriting drift. Reconcile findings or drift on the plan branch and its
+source review; do not use `tao merge --all` as a repair path for a failed
+single-plan transaction.
+
+`--no-squash` remains different: rebase or fast-forward conflicts abort, print
+the conflicted files, and require manual resolution on the plan branch followed
+by a refreshed review when content changes. It never invokes this squash
+resolver/reviewer lifecycle.
 
 **Verification and cleanup:** after integration, Tao prefers a repository's
 declared `make verify` target. Without one, it uses declared Make `build` and/or
@@ -750,10 +777,12 @@ for such a branch also needs `--force` to remove it.
 
 **Flags and limits:** `--record-only` records an already external merge without
 integrating. `--no-squash` preserves checkpoint commits with rebase plus
-fast-forward. `--no-verify` skips the post-merge verify gate, including explicit
-flag or environment overrides. `--force` bypasses approval, review-base,
-review-head, and dirty-worktree pre-merge gates and is passed to managed cleanup;
-it does not make conflicts safe or replace review.
+fast-forward and keeps conflict resolution manual. `--no-verify` skips the
+post-merge command gate, including explicit flag or environment overrides, but
+not structural conflict checks or the independent exact-integration review.
+`--force` bypasses approval, review-base, review-head, and dirty-worktree
+pre-merge gates and is passed to managed cleanup; it cannot bypass automatic
+resolution safety or turn any independent non-approval into authorization.
 
 ### `tao merge --all` — atomically integrate the approved set
 

@@ -35,6 +35,9 @@ type Review struct {
 	Findings       []plan.ReviewFinding
 	CommitMessage  *plan.ReviewCommitMessage
 	ProposalUsable bool
+	// Structured reports whether the result came from a valid bounded modern
+	// review block rather than the safe comment fallback.
+	Structured bool
 }
 
 // Parse decodes a structured review without requiring a specific plan change
@@ -92,6 +95,7 @@ func ParseTyped(output string, proposalPolicy CommitProposalPolicy, expectedType
 		Findings:       findings,
 		CommitMessage:  commitMessage,
 		ProposalUsable: proposalUsable,
+		Structured:     true,
 	}
 }
 

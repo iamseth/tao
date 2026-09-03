@@ -41,6 +41,7 @@ func TestPlanFormatDocumentsEmittedEventContract(t *testing.T) {
 		EventTypeFinalVerification,
 		EventTypeVerificationRepairCreated,
 		EventTypeMergeVerification,
+		EventTypeSingleMergeRolledBack,
 		EventTypeAgentMetrics,
 	}
 	historicalOnlyEventTypes := []string{EventTypePlanCommitFallback, EventTypePlanCommitGuard}

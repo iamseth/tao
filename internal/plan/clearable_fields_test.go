@@ -19,6 +19,9 @@
 //     cleared to null after the partial PR is successfully recorded.
 //   - PlanState.MergeCommitIntent (*SingleMergeCommitIntent, "merge_commit_intent"):
 //     cleared to null after durable merge evidence or safe source supersession.
+//     Its optional Resolution uses omitempty for legacy shape compatibility,
+//     while every known field inside a present resolution is emitted so phase
+//     replacement cannot retain stale recovery evidence.
 
 // # Merge-only fields (omitempty)
 //
@@ -55,6 +58,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -203,6 +207,53 @@ func TestClearableFieldsRoundTrip(t *testing.T) {
 		})
 	}
 
+}
+
+func TestSingleMergeResolutionOptionalLegacyShapeEmitsExactPresentState(t *testing.T) {
+	field, ok := reflect.TypeOf(SingleMergeCommitIntent{}).FieldByName("Resolution")
+	if !ok || !strings.Contains(field.Tag.Get("json"), "omitempty") {
+		t.Fatalf("SingleMergeCommitIntent.Resolution must preserve legacy shape with omitempty, tag=%q", field.Tag.Get("json"))
+	}
+	intent := validSingleMergeResolutionIntent("plan-a")
+	legacy, err := json.Marshal(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(legacy), "resolution") {
+		t.Fatalf("absent resolution changed legacy JSON shape: %s", legacy)
+	}
+
+	request := validSingleMergeResolutionRequest(intent)
+	intent.Resolution = &request
+	encoded, err := json.Marshal(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var object map[string]any
+	if err := json.Unmarshal(encoded, &object); err != nil {
+		t.Fatal(err)
+	}
+	resolution := object["resolution"].(map[string]any)
+	for _, key := range []string{"phase", "conflict_files", "requested_at", "outcome", "summary", "changed_paths", "content_fingerprint", "commit_message", "resolved_at", "integration_head", "committed_at", "review"} {
+		if _, exists := resolution[key]; !exists {
+			t.Errorf("present resolution omitted exact known field %q: %#v", key, resolution)
+		}
+	}
+	if resolution["review"] != nil || resolution["outcome"] != "" {
+		t.Fatalf("requested resolution did not emit explicit empty future evidence: %#v", resolution)
+	}
+
+	eventField, ok := reflect.TypeOf(Event{}).FieldByName("SingleMergeResolution")
+	if !ok || !strings.Contains(eventField.Tag.Get("json"), "omitempty") {
+		t.Fatalf("Event.SingleMergeResolution must preserve legacy merge-event shape with omitempty, tag=%q", eventField.Tag.Get("json"))
+	}
+	legacyEvent, err := json.Marshal(Event{Type: EventTypePlanMerged})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(legacyEvent), "single_merge_resolution") {
+		t.Fatalf("absent merge resolution changed legacy event shape: %s", legacyEvent)
+	}
 }
 
 func TestDecisionMetadataPreservesByDefaultWithOmitEmpty(t *testing.T) {

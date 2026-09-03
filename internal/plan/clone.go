@@ -134,6 +134,38 @@ func cloneSingleMergeCommitIntent(intent *SingleMergeCommitIntent) *SingleMergeC
 		return nil
 	}
 	clone := *intent
+	clone.Resolution = cloneSingleMergeResolution(intent.Resolution)
+	return &clone
+}
+
+func cloneSingleMergeResolution(resolution *SingleMergeResolution) *SingleMergeResolution {
+	if resolution == nil {
+		return nil
+	}
+	clone := *resolution
+	clone.ConflictFiles = cloneStringSlice(resolution.ConflictFiles)
+	clone.ChangedPaths = cloneStringSlice(resolution.ChangedPaths)
+	clone.Review = cloneSingleMergeResolutionReview(resolution.Review)
+	return &clone
+}
+
+func cloneSingleMergeResolutionReview(review *SingleMergeResolutionReview) *SingleMergeResolutionReview {
+	if review == nil {
+		return nil
+	}
+	clone := *review
+	clone.Findings = append([]ReviewFinding{}, review.Findings...)
+	return &clone
+}
+
+func cloneSingleMergeResolutionEvent(event *SingleMergeResolutionEvent) *SingleMergeResolutionEvent {
+	if event == nil {
+		return nil
+	}
+	clone := *event
+	clone.ConflictFiles = cloneStringSlice(event.ConflictFiles)
+	clone.ChangedPaths = cloneStringSlice(event.ChangedPaths)
+	clone.Review = cloneSingleMergeResolutionReview(event.Review)
 	return &clone
 }
 
@@ -276,6 +308,7 @@ func cloneEvent(event Event) Event {
 	clone.PullRequest = clonePullRequest(event.PullRequest)
 	clone.PRFeedbackTriage = clonePRFeedbackTriageResult(event.PRFeedbackTriage)
 	clone.Review = clonePlanReview(event.Review)
+	clone.SingleMergeResolution = cloneSingleMergeResolutionEvent(event.SingleMergeResolution)
 	clone.FinalizationFailure = cloneFinalizationFailure(event.FinalizationFailure)
 	return clone
 }

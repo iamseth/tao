@@ -74,11 +74,21 @@ var MergeReviewPromptTemplate string
 
 const mergeResolveFieldLimit = 8 * 1024
 
+// MergeReviewPacketLimit is the maximum untrusted text retained for one merge
+// review packet before rendering.
+const MergeReviewPacketLimit = mergeResolveFieldLimit
+
+const singleMergeReviewDiffTruncationMarker = "\n[TRUNCATED BY TAO WHILE STREAMING GIT DIFF]"
+
+// SingleMergeReviewDiffCaptureLimit reserves packet space for an explicit
+// marker when streaming the exact integration diff reaches its bound.
+const SingleMergeReviewDiffCaptureLimit = MergeReviewPacketLimit - len(singleMergeReviewDiffTruncationMarker)
+
 // MergeResolveData is the internal-only packet for a batch conflict or
 // verification repair. It is deliberately not part of the installable prompt
 // registry.
 type MergeResolveData struct {
-	BatchID, PlanID, SourceHead, IntegrationBase, VerifyCommand                  string
+	BatchID, Operation, PlanID, SourceHead, IntegrationBase, VerifyCommand       string
 	PlanBrief, SourceReview, Diff, ConflictFiles, PriorPlans, VerificationOutput string
 }
 
@@ -86,6 +96,17 @@ type MergeResolveData struct {
 type MergeReviewData struct {
 	BatchID, DefaultStart, IntegrationHead, VerifyCommand string
 	Candidates, ResolutionCommits, DiffStat, Verification string
+}
+
+// SingleMergeReviewData is the internal-only review packet for one resolved
+// squash integration. Every descriptive field is bounded and encoded as
+// untrusted data by RenderSingleMergeReview, whose output contract requires an
+// explicit non-empty summary and explicit findings array.
+type SingleMergeReviewData struct {
+	PlanID, DefaultStart, IntegrationHead, VerifyCommand string
+	Candidate, SourceReview, ResolutionSummary, Diff     string
+	DiffStat, Verification                               string
+	DiffTruncated                                        bool
 }
 
 // ReworkTriageData is the internal-only prompt input for pull-request thread
@@ -293,7 +314,8 @@ func RenderMergeResolve(data MergeResolveData) (string, error) {
 	packets := []struct{ name, value string }{
 		{"PLAN BRIEF", data.PlanBrief}, {"SOURCE REVIEW", data.SourceReview},
 		{"DIFF", data.Diff}, {"CONFLICT FILES", data.ConflictFiles},
-		{"PRIOR INTEGRATED PLANS", data.PriorPlans}, {"VERIFICATION OUTPUT", data.VerificationOutput},
+		{"PRIOR INTEGRATED PLANS", data.PriorPlans}, {"VERIFICATION COMMAND", data.VerifyCommand},
+		{"VERIFICATION OUTPUT", data.VerificationOutput},
 	}
 	var body strings.Builder
 	for _, packet := range packets {
@@ -307,9 +329,17 @@ func RenderMergeResolve(data MergeResolveData) (string, error) {
 		}
 		fmt.Fprintf(&body, "BEGIN TAO UNTRUSTED %s\n%s\nEND TAO UNTRUSTED %s\n\n", packet.name, encoded, packet.name)
 	}
+	operation := strings.TrimSpace(data.Operation)
+	transactionID := strings.TrimSpace(data.BatchID)
+	if operation == "" {
+		operation = "merge batch candidate resolution"
+	}
+	if transactionID == "" {
+		transactionID = data.PlanID
+	}
 	input := struct {
-		BatchID, PlanID, SourceHead, IntegrationBase, VerifyCommand, Packets string
-	}{data.BatchID, data.PlanID, data.SourceHead, data.IntegrationBase, data.VerifyCommand, body.String()}
+		Operation, TransactionID, PlanID, SourceHead, IntegrationBase, Packets string
+	}{operation, transactionID, data.PlanID, data.SourceHead, data.IntegrationBase, body.String()}
 	tmpl, err := template.New("merge-resolve").Parse(MergeResolvePromptTemplate)
 	if err != nil {
 		return "", err
@@ -323,12 +353,59 @@ func RenderMergeResolve(data MergeResolveData) (string, error) {
 
 // RenderMergeReview renders size-bounded, JSON-encoded aggregate evidence.
 func RenderMergeReview(data MergeReviewData) (string, error) {
-	packets := []struct{ name, value string }{
+	packets, err := renderMergeReviewPackets([]struct{ name, value string }{
+		{"VERIFICATION COMMAND", data.VerifyCommand},
 		{"CANDIDATES AND SOURCE REVIEWS", data.Candidates},
 		{"RESOLUTION COMMITS", data.ResolutionCommits},
 		{"FINAL DIFF STAT", data.DiffStat},
 		{"VERIFICATION EVIDENCE", data.Verification},
+	})
+	if err != nil {
+		return "", err
 	}
+	return renderMergeReview(mergeReviewTemplateData{
+		ReviewSubject:  "the complete staged result of a Tao merge batch",
+		Assessment:     "combined correctness, regressions, conflict-resolution edits, and verification coverage",
+		DiffStatPacket: "FINAL DIFF STAT", IdentityLabel: "Batch", Identity: data.BatchID,
+		DefaultStart: data.DefaultStart, IntegrationHead: data.IntegrationHead,
+		Packets: packets,
+	})
+}
+
+// RenderSingleMergeReview renders size-bounded, JSON-encoded evidence for one
+// exact conflict-resolved integration. It is not installable.
+func RenderSingleMergeReview(data SingleMergeReviewData) (string, error) {
+	diff := data.Diff
+	if data.DiffTruncated {
+		diff += singleMergeReviewDiffTruncationMarker
+	}
+	packets, err := renderMergeReviewPackets([]struct{ name, value string }{
+		{"VERIFICATION COMMAND", data.VerifyCommand},
+		{"CANDIDATE", data.Candidate},
+		{"SOURCE REVIEW", data.SourceReview},
+		{"RESOLUTION SUMMARY", data.ResolutionSummary},
+		{"EXACT INTEGRATION DIFF", diff},
+		{"EXACT INTEGRATION DIFF STAT", data.DiffStat},
+		{"VERIFICATION EVIDENCE", data.Verification},
+	})
+	if err != nil {
+		return "", err
+	}
+	return renderMergeReview(mergeReviewTemplateData{
+		ReviewSubject:  "one conflict-resolved Tao squash integration",
+		Assessment:     "the exact resolved integration's correctness, regressions, semantic conflict-resolution choices, and verification coverage",
+		DiffStatPacket: "EXACT INTEGRATION DIFF STAT", IdentityLabel: "Plan", Identity: data.PlanID,
+		DefaultStart: data.DefaultStart, IntegrationHead: data.IntegrationHead,
+		Packets: packets,
+	})
+}
+
+type mergeReviewTemplateData struct {
+	ReviewSubject, Assessment, DiffStatPacket, IdentityLabel, Identity string
+	DefaultStart, IntegrationHead, Packets                             string
+}
+
+func renderMergeReviewPackets(packets []struct{ name, value string }) (string, error) {
 	var body strings.Builder
 	for _, packet := range packets {
 		value := packet.value
@@ -341,9 +418,10 @@ func RenderMergeReview(data MergeReviewData) (string, error) {
 		}
 		fmt.Fprintf(&body, "BEGIN TAO UNTRUSTED %s\n%s\nEND TAO UNTRUSTED %s\n\n", packet.name, encoded, packet.name)
 	}
-	input := struct {
-		BatchID, DefaultStart, IntegrationHead, VerifyCommand, Packets string
-	}{data.BatchID, data.DefaultStart, data.IntegrationHead, data.VerifyCommand, body.String()}
+	return body.String(), nil
+}
+
+func renderMergeReview(input mergeReviewTemplateData) (string, error) {
 	tmpl, err := template.New("merge-review").Parse(MergeReviewPromptTemplate)
 	if err != nil {
 		return "", err

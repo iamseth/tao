@@ -5,10 +5,16 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"path"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"github.com/iamseth/tao/internal/agentinput"
+	commitpkg "github.com/iamseth/tao/internal/commit"
 )
 
 // PlanRecord binds one loaded plan detail to the directory that owns its mutable artifacts.
@@ -1120,7 +1126,7 @@ func (r *PlanRecord) RecordSingleMergeCommitIntent(intent SingleMergeCommitInten
 	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
 		existing := detail.State.Plan.MergeCommitIntent
 		if existing != nil {
-			if *existing == intent {
+			if reflect.DeepEqual(*existing, intent) {
 				return nil, nil
 			}
 			return nil, fmt.Errorf("plan %s has a conflicting single-merge commit intent", detail.State.Plan.ID)
@@ -1130,8 +1136,135 @@ func (r *PlanRecord) RecordSingleMergeCommitIntent(intent SingleMergeCommitInten
 	})
 }
 
+// RecordSingleMergeResolution adds a validated pre-mutation request to the
+// exact intent inspected by the caller. An exact post-write retry is a no-op.
+func (r *PlanRecord) RecordSingleMergeResolution(expected SingleMergeCommitIntent, resolution SingleMergeResolution) error {
+	if expected.Resolution != nil {
+		return fmt.Errorf("single-merge resolution recording requires an intent without resolution evidence")
+	}
+	if err := validateSingleMergeResolutionCandidate(expected, resolution); err != nil {
+		return err
+	}
+	if resolution.Phase != SingleMergeResolutionPhaseRequested {
+		return fmt.Errorf("single-merge resolution must begin in requested phase")
+	}
+	return r.mutateSingleMergeResolution(expected, resolution, singleMergeResolutionRecord)
+}
+
+// AdvanceSingleMergeResolution advances one exact durable phase. Earlier phase
+// evidence is immutable, and an exact retry after a successful write is a no-op.
+func (r *PlanRecord) AdvanceSingleMergeResolution(expected SingleMergeCommitIntent, next SingleMergeResolution) error {
+	if next.Phase == SingleMergeResolutionPhaseRolledBack {
+		return fmt.Errorf("single-merge resolution rollback requires exact rollback settlement")
+	}
+	if expected.Resolution == nil {
+		return fmt.Errorf("single-merge resolution advancement requires expected resolution evidence")
+	}
+	if err := validateSingleMergeCommitIntent(expected); err != nil {
+		return err
+	}
+	if err := validateSingleMergeResolutionCandidate(expected, next); err != nil {
+		return err
+	}
+	if err := validateSingleMergeResolutionTransition(*expected.Resolution, next); err != nil {
+		return err
+	}
+	return r.mutateSingleMergeResolution(expected, next, singleMergeResolutionAdvance)
+}
+
+// SettleSingleMergeResolutionRollback records that Git was restored to the
+// exact durable parent after a committed or reviewed integration failed. The
+// append-only event retains diagnostics after lifecycle operations supersede
+// the inactive intent.
+func (r *PlanRecord) SettleSingleMergeResolutionRollback(expected SingleMergeCommitIntent, settled SingleMergeResolution) error {
+	if expected.Resolution == nil {
+		return fmt.Errorf("single-merge resolution rollback settlement requires expected resolution evidence")
+	}
+	if settled.Phase != SingleMergeResolutionPhaseRolledBack {
+		return fmt.Errorf("single-merge resolution rollback settlement requires rolled_back phase")
+	}
+	if err := validateSingleMergeCommitIntent(expected); err != nil {
+		return err
+	}
+	if err := validateSingleMergeResolutionCandidate(expected, settled); err != nil {
+		return err
+	}
+	if err := validateSingleMergeResolutionTransition(*expected.Resolution, settled); err != nil {
+		return err
+	}
+	return r.mutateSingleMergeResolution(expected, settled, singleMergeResolutionRollback)
+}
+
+// ReplaceSingleMergeResolution compare-and-sets only requested, pre-mutation
+// evidence. Resolved or committed authority must be advanced or settled.
+func (r *PlanRecord) ReplaceSingleMergeResolution(expected SingleMergeCommitIntent, replacement SingleMergeResolution) error {
+	if expected.Resolution == nil || expected.Resolution.Phase != SingleMergeResolutionPhaseRequested {
+		return fmt.Errorf("only requested single-merge resolution evidence can be replaced")
+	}
+	if replacement.Phase != SingleMergeResolutionPhaseRequested {
+		return fmt.Errorf("single-merge resolution replacement must remain in requested phase")
+	}
+	if err := validateSingleMergeCommitIntent(expected); err != nil {
+		return err
+	}
+	if err := validateSingleMergeResolutionCandidate(expected, replacement); err != nil {
+		return err
+	}
+	return r.mutateSingleMergeResolution(expected, replacement, singleMergeResolutionReplace)
+}
+
+type singleMergeResolutionMutation uint8
+
+const (
+	singleMergeResolutionRecord singleMergeResolutionMutation = iota
+	singleMergeResolutionAdvance
+	singleMergeResolutionReplace
+	singleMergeResolutionRollback
+)
+
+func (r *PlanRecord) mutateSingleMergeResolution(expected SingleMergeCommitIntent, next SingleMergeResolution, kind singleMergeResolutionMutation) error {
+	store, err := r.storeOrDefault()
+	if err != nil {
+		return err
+	}
+	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
+		existing := detail.State.Plan.MergeCommitIntent
+		if existing == nil {
+			return nil, fmt.Errorf("plan %s has no single-merge commit intent", detail.State.Plan.ID)
+		}
+		postcondition := cloneSingleMergeCommitIntent(&expected)
+		postcondition.Resolution = cloneSingleMergeResolution(&next)
+		if reflect.DeepEqual(existing, postcondition) {
+			return nil, nil
+		}
+		if !reflect.DeepEqual(existing, &expected) {
+			return nil, fmt.Errorf("plan %s single-merge resolution evidence changed; reload and retry", detail.State.Plan.ID)
+		}
+		if kind == singleMergeResolutionRecord && existing.Resolution != nil {
+			return nil, fmt.Errorf("plan %s already has single-merge resolution evidence", detail.State.Plan.ID)
+		}
+		if kind == singleMergeResolutionReplace && existing.Resolution.Phase != SingleMergeResolutionPhaseRequested {
+			return nil, fmt.Errorf("plan %s single-merge resolution is no longer safely replaceable", detail.State.Plan.ID)
+		}
+		existing.Resolution = cloneSingleMergeResolution(&next)
+		if kind != singleMergeResolutionRollback {
+			return nil, nil
+		}
+		event := Event{
+			Type: EventTypeSingleMergeRolledBack, Timestamp: next.RolledBackAt,
+			PlanID: detail.State.Plan.ID, SingleMergeResolution: projectSingleMergeResolutionEvent(&next),
+			Reason: string(next.RollbackReason), Message: "Single-plan merge resolution rolled back",
+		}
+		if err := validateSingleMergeResolutionEventSize(event); err != nil {
+			return nil, err
+		}
+		return []Event{event}, nil
+	})
+}
+
 // ClearSingleMergeCommitIntent clears only the exact intent the caller
 // inspected, preventing a stale recovery path from deleting newer intent.
+// Committed resolution authority is cleared only by merge settlement.
 func (r *PlanRecord) ClearSingleMergeCommitIntent(expected SingleMergeCommitIntent) error {
 	store, err := r.storeOrDefault()
 	if err != nil {
@@ -1142,12 +1275,32 @@ func (r *PlanRecord) ClearSingleMergeCommitIntent(expected SingleMergeCommitInte
 		if existing == nil {
 			return nil, nil
 		}
-		if *existing != expected {
+		if !reflect.DeepEqual(*existing, expected) {
 			return nil, fmt.Errorf("plan %s single-merge commit intent changed; reload and retry", detail.State.Plan.ID)
+		}
+		if singleMergeResolutionHasCommittedAuthority(existing.Resolution) {
+			return nil, fmt.Errorf("plan %s single-merge commit intent has committed resolution authority and must be settled", detail.State.Plan.ID)
 		}
 		detail.State.Plan.MergeCommitIntent = nil
 		return nil, nil
 	})
+}
+
+const (
+	maxSingleMergeResolutionPaths         = 256
+	maxSingleMergeResolutionPathBytes     = 1024
+	maxSingleMergeResolutionSummaryRunes  = 8 * 1024
+	maxSingleMergeResolutionFindings      = 50
+	maxSingleMergeResolutionIdentityBytes = 1024
+	maxSingleMergeFindingSeverityRunes    = 64
+	maxSingleMergeFindingFileRunes        = 512
+	maxSingleMergeFindingTextRunes        = 4 * 1024
+)
+
+// Validate rejects malformed modern resolution evidence while retaining the
+// historical validation contract for intents that predate conflict resolution.
+func (intent SingleMergeCommitIntent) Validate() error {
+	return validateSingleMergeCommitIntent(intent)
 }
 
 func validateSingleMergeCommitIntent(intent SingleMergeCommitIntent) error {
@@ -1164,6 +1317,235 @@ func validateSingleMergeCommitIntent(intent SingleMergeCommitIntent) error {
 	}
 	if intent.CreatedAt.IsZero() {
 		return fmt.Errorf("single-merge commit intent requires creation time")
+	}
+	if intent.Resolution != nil {
+		if !isSHALike(intent.SourceHead) || !isSHALike(intent.DefaultParent) {
+			return fmt.Errorf("single-merge resolution requires valid source and default revisions")
+		}
+		if len(intent.PlanID) > maxSingleMergeResolutionIdentityBytes || len(intent.DefaultBranch) > maxSingleMergeResolutionIdentityBytes {
+			return fmt.Errorf("single-merge resolution intent identities are unbounded")
+		}
+		if utf8.RuneCountInString(intent.Message) > agentinput.MaxTextRunes {
+			return fmt.Errorf("single-merge resolution intent message is unbounded")
+		}
+		if intent.CreatedAt.Location() != time.UTC {
+			return fmt.Errorf("single-merge resolution requires a UTC intent creation time")
+		}
+		if err := commitpkg.ValidateMessage(intent.Message); err != nil {
+			return fmt.Errorf("single-merge resolution requires an exact centrally validated intent message: %w", err)
+		}
+		if err := validateSingleMergeResolution(intent, *intent.Resolution); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateSingleMergeResolutionCandidate(intent SingleMergeCommitIntent, resolution SingleMergeResolution) error {
+	candidate := intent
+	candidate.Resolution = cloneSingleMergeResolution(&resolution)
+	return validateSingleMergeCommitIntent(candidate)
+}
+
+func validateSingleMergeResolution(intent SingleMergeCommitIntent, resolution SingleMergeResolution) error {
+	if !slices.Contains([]SingleMergeResolutionPhase{
+		SingleMergeResolutionPhaseRequested, SingleMergeResolutionPhaseResolved,
+		SingleMergeResolutionPhaseCommitted, SingleMergeResolutionPhaseReviewed,
+		SingleMergeResolutionPhaseRolledBack,
+	}, resolution.Phase) {
+		return fmt.Errorf("single-merge resolution phase %q is invalid", resolution.Phase)
+	}
+	if err := validateSingleMergePaths("conflict files", resolution.ConflictFiles, true); err != nil {
+		return err
+	}
+	if resolution.RequestedAt.IsZero() || resolution.RequestedAt.Location() != time.UTC || resolution.RequestedAt.Before(intent.CreatedAt) {
+		return fmt.Errorf("single-merge resolution requires a non-zero UTC request time at or after intent creation")
+	}
+	if resolution.Phase == SingleMergeResolutionPhaseRequested {
+		if resolution.Outcome != "" || resolution.Summary != "" || len(resolution.ChangedPaths) != 0 || resolution.ContentFingerprint != "" || resolution.CommitMessage != "" || !resolution.ResolvedAt.IsZero() || resolution.IntegrationHead != "" || !resolution.CommittedAt.IsZero() || resolution.Review != nil || resolution.RollbackReason != "" || !resolution.RolledBackAt.IsZero() {
+			return fmt.Errorf("requested single-merge resolution contains premature outcome evidence")
+		}
+		return nil
+	}
+	if resolution.Outcome != SingleMergeResolutionOutcomeResolved {
+		return fmt.Errorf("single-merge resolution outcome %q is invalid", resolution.Outcome)
+	}
+	if err := validateBoundedSingleMergeText("summary", resolution.Summary, maxSingleMergeResolutionSummaryRunes, true); err != nil {
+		return err
+	}
+	if err := validateSingleMergePaths("changed paths", resolution.ChangedPaths, true); err != nil {
+		return err
+	}
+	if !validLowerSHA256(resolution.ContentFingerprint) {
+		return fmt.Errorf("single-merge resolution content fingerprint must be a lowercase SHA-256")
+	}
+	if utf8.RuneCountInString(resolution.CommitMessage) > agentinput.MaxTextRunes {
+		return fmt.Errorf("single-merge resolution commit message is unbounded")
+	}
+	if err := commitpkg.ValidateMessage(resolution.CommitMessage); err != nil {
+		return fmt.Errorf("single-merge resolution commit message is not exact and centrally valid: %w", err)
+	}
+	if resolution.ResolvedAt.IsZero() || resolution.ResolvedAt.Location() != time.UTC || resolution.ResolvedAt.Before(resolution.RequestedAt) {
+		return fmt.Errorf("single-merge resolution requires a non-zero UTC resolution time at or after its request")
+	}
+	if resolution.Phase == SingleMergeResolutionPhaseResolved {
+		if resolution.IntegrationHead != "" || !resolution.CommittedAt.IsZero() || resolution.Review != nil || resolution.RollbackReason != "" || !resolution.RolledBackAt.IsZero() {
+			return fmt.Errorf("resolved single-merge resolution contains premature commit, review, or rollback evidence")
+		}
+		return nil
+	}
+	if !isSHALike(resolution.IntegrationHead) {
+		return fmt.Errorf("single-merge resolution requires a valid integration head")
+	}
+	if resolution.CommittedAt.IsZero() || resolution.CommittedAt.Location() != time.UTC || resolution.CommittedAt.Before(resolution.ResolvedAt) {
+		return fmt.Errorf("single-merge resolution requires a non-zero UTC commit time at or after resolution")
+	}
+	if resolution.Phase == SingleMergeResolutionPhaseCommitted {
+		if resolution.Review != nil || resolution.RollbackReason != "" || !resolution.RolledBackAt.IsZero() {
+			return fmt.Errorf("committed single-merge resolution contains premature review or rollback evidence")
+		}
+		return nil
+	}
+	if resolution.Phase == SingleMergeResolutionPhaseReviewed {
+		if resolution.Review == nil {
+			return fmt.Errorf("reviewed single-merge resolution requires independent review evidence")
+		}
+		if resolution.RollbackReason != "" || !resolution.RolledBackAt.IsZero() {
+			return fmt.Errorf("reviewed single-merge resolution contains premature rollback evidence")
+		}
+		return validateSingleMergeResolutionReview(intent, resolution)
+	}
+	if !slices.Contains([]SingleMergeResolutionRollbackReason{
+		SingleMergeResolutionRollbackVerificationFailed,
+		SingleMergeResolutionRollbackReviewUnavailable,
+		SingleMergeResolutionRollbackReviewNotApproved,
+		SingleMergeResolutionRollbackMergeRecordingFailed,
+		SingleMergeResolutionRollbackRecoveredInterruption,
+	}, resolution.RollbackReason) {
+		return fmt.Errorf("single-merge resolution rollback reason %q is invalid", resolution.RollbackReason)
+	}
+	if resolution.RolledBackAt.IsZero() || resolution.RolledBackAt.Location() != time.UTC || resolution.RolledBackAt.Before(resolution.CommittedAt) {
+		return fmt.Errorf("single-merge resolution requires a non-zero UTC rollback time at or after commit")
+	}
+	if resolution.Review != nil {
+		return validateSingleMergeResolutionReview(intent, resolution)
+	}
+	return nil
+}
+
+func validateSingleMergeResolutionTransition(current, next SingleMergeResolution) error {
+	order := map[SingleMergeResolutionPhase]int{
+		SingleMergeResolutionPhaseRequested: 0, SingleMergeResolutionPhaseResolved: 1,
+		SingleMergeResolutionPhaseCommitted: 2, SingleMergeResolutionPhaseReviewed: 3,
+	}
+	rollback := next.Phase == SingleMergeResolutionPhaseRolledBack &&
+		(current.Phase == SingleMergeResolutionPhaseCommitted || current.Phase == SingleMergeResolutionPhaseReviewed)
+	if !rollback && order[next.Phase] != order[current.Phase]+1 {
+		return fmt.Errorf("unsupported single-merge resolution transition %q to %q", current.Phase, next.Phase)
+	}
+	if !reflect.DeepEqual(current.ConflictFiles, next.ConflictFiles) || !current.RequestedAt.Equal(next.RequestedAt) {
+		return fmt.Errorf("single-merge resolution request evidence changed during phase advancement")
+	}
+	if current.Phase != SingleMergeResolutionPhaseRequested && (current.Outcome != next.Outcome || current.Summary != next.Summary || !reflect.DeepEqual(current.ChangedPaths, next.ChangedPaths) || current.ContentFingerprint != next.ContentFingerprint || current.CommitMessage != next.CommitMessage || !current.ResolvedAt.Equal(next.ResolvedAt)) {
+		return fmt.Errorf("single-merge resolution outcome evidence changed during phase advancement")
+	}
+	if current.Phase == SingleMergeResolutionPhaseCommitted || current.Phase == SingleMergeResolutionPhaseReviewed {
+		if current.IntegrationHead != next.IntegrationHead || !current.CommittedAt.Equal(next.CommittedAt) {
+			return fmt.Errorf("single-merge resolution commit evidence changed during phase advancement")
+		}
+	}
+	if rollback && !reflect.DeepEqual(current.Review, next.Review) {
+		return fmt.Errorf("single-merge resolution review evidence changed during rollback settlement")
+	}
+	return nil
+}
+
+func validateSingleMergeResolutionReview(intent SingleMergeCommitIntent, resolution SingleMergeResolution) error {
+	review := resolution.Review
+	if review.Status != ReviewStatusCompleted {
+		return fmt.Errorf("single-merge resolution review status %q is invalid", review.Status)
+	}
+	if !slices.Contains([]string{ReviewVerdictApprove, ReviewVerdictChangesRequested, ReviewVerdictComment}, review.Verdict) {
+		return fmt.Errorf("single-merge resolution review verdict %q is invalid", review.Verdict)
+	}
+	if err := validateBoundedSingleMergeText("review summary", review.Summary, maxSingleMergeResolutionSummaryRunes, true); err != nil {
+		return err
+	}
+	if review.FindingsCount != len(review.Findings) || len(review.Findings) > maxSingleMergeResolutionFindings {
+		return fmt.Errorf("single-merge resolution review findings are incomplete or unbounded")
+	}
+	for i, finding := range review.Findings {
+		if finding.Line < 0 {
+			return fmt.Errorf("single-merge resolution review finding %d has a negative line", i)
+		}
+		for label, value := range map[string]string{"severity": finding.Severity, "file": finding.File, "message": finding.Message, "suggestion": finding.Suggestion} {
+			limit := maxSingleMergeFindingTextRunes
+			switch label {
+			case "severity":
+				limit = maxSingleMergeFindingSeverityRunes
+			case "file":
+				limit = maxSingleMergeFindingFileRunes
+			}
+			if err := validateBoundedSingleMergeText(fmt.Sprintf("review finding %d %s", i, label), value, limit, false); err != nil {
+				return err
+			}
+		}
+	}
+	if review.Base != intent.DefaultParent || review.Head != resolution.IntegrationHead || !isSHALike(review.Base) || !isSHALike(review.Head) {
+		return fmt.Errorf("single-merge resolution review is not bound to the exact default parent and integration head")
+	}
+	if err := validateBoundedSingleMergeText("review agent", review.Agent, 128, true); err != nil || strings.ContainsAny(review.Agent, "\r\n") {
+		return fmt.Errorf("single-merge resolution review agent is invalid")
+	}
+	if review.ReviewedAt.IsZero() || review.ReviewedAt.Location() != time.UTC || review.ReviewedAt.Before(resolution.CommittedAt) {
+		return fmt.Errorf("single-merge resolution review requires a non-zero UTC timestamp at or after commit")
+	}
+	return nil
+}
+
+func validateSingleMergePaths(label string, paths []string, required bool) error {
+	if (required && len(paths) == 0) || len(paths) > maxSingleMergeResolutionPaths {
+		return fmt.Errorf("single-merge resolution %s must contain 1-%d paths", label, maxSingleMergeResolutionPaths)
+	}
+	if !slices.IsSorted(paths) {
+		return fmt.Errorf("single-merge resolution %s must be sorted", label)
+	}
+	for i, value := range paths {
+		if value == "" || len(value) > maxSingleMergeResolutionPathBytes || value != strings.TrimSpace(value) || strings.ContainsAny(value, "\\\r\n") || path.IsAbs(value) || path.Clean(value) != value || value == "." || strings.HasPrefix(value, "../") || (i > 0 && paths[i-1] == value) {
+			return fmt.Errorf("single-merge resolution %s contains an invalid or duplicate path", label)
+		}
+	}
+	return nil
+}
+
+func validateBoundedSingleMergeText(label, value string, maxRunes int, required bool) error {
+	if value != strings.TrimSpace(value) || utf8.RuneCountInString(value) > maxRunes || (required && value == "") || strings.ContainsRune(value, '\r') {
+		return fmt.Errorf("single-merge resolution %s is empty, inexact, or unbounded", label)
+	}
+	return nil
+}
+
+func validLowerSHA256(value string) bool {
+	if len(value) != 64 || value != strings.ToLower(value) {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func singleMergeResolutionHasCommittedAuthority(resolution *SingleMergeResolution) bool {
+	return resolution != nil && (resolution.Phase == SingleMergeResolutionPhaseCommitted || resolution.Phase == SingleMergeResolutionPhaseReviewed)
+}
+
+func validateSingleMergeResolutionEventSize(event Event) error {
+	// applyArtifactMutation adds one fixed-width mutation ID before marshaling.
+	event.MutationID = strings.Repeat("0", 32)
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("encode single-merge resolution event: %w", err)
+	}
+	if len(payload)+1 > maxEventJSONLLineBytes {
+		return fmt.Errorf("single-merge resolution event exceeds %d-byte events.jsonl line limit", maxEventJSONLLineBytes)
 	}
 	return nil
 }
@@ -1184,8 +1566,8 @@ func (r *PlanRecord) RecordReviewError(review PlanReview, agent string) error {
 			return nil, fmt.Errorf("record plan review: %w", err)
 		}
 		reviewedAt := review.ReviewedAt
-		if intent := detail.State.Plan.MergeCommitIntent; intent != nil && (strings.TrimSpace(review.Head) != intent.SourceHead || !review.IsApproved()) {
-			detail.State.Plan.MergeCommitIntent = nil
+		if err := invalidateStaleSingleMergeIntent(detail, review); err != nil {
+			return nil, err
 		}
 		if detail.State.Plan.FinalizationFailure != nil {
 			changes.ClearPlanFinalizationFailure()
@@ -1327,8 +1709,8 @@ func (r *PlanRecord) recordReviewCompleted(review PlanReview, agent string, cont
 		if expectedFailure != nil && expectedFailure.FailedAt.After(mutationAt) {
 			mutationAt = expectedFailure.FailedAt
 		}
-		if intent := detail.State.Plan.MergeCommitIntent; intent != nil && (strings.TrimSpace(review.Head) != intent.SourceHead || !review.IsApproved()) {
-			detail.State.Plan.MergeCommitIntent = nil
+		if err := invalidateStaleSingleMergeIntent(detail, review); err != nil {
+			return nil, err
 		}
 		if expectedFailure != nil {
 			existing := detail.State.Plan.FinalizationFailure
@@ -1396,6 +1778,18 @@ func reviewEventSnapshot(review *PlanReview) *PlanReview {
 	return eventReview
 }
 
+func invalidateStaleSingleMergeIntent(detail *PlanDetail, review PlanReview) error {
+	intent := detail.State.Plan.MergeCommitIntent
+	if intent == nil || (strings.TrimSpace(review.Head) == intent.SourceHead && review.IsApproved()) {
+		return nil
+	}
+	if singleMergeResolutionHasCommittedAuthority(intent.Resolution) {
+		return fmt.Errorf("plan %s source review changed while committed single-merge resolution authority is unsettled", detail.State.Plan.ID)
+	}
+	detail.State.Plan.MergeCommitIntent = nil
+	return nil
+}
+
 // RecordMerged marks actual default-branch integration after a verified merge
 // and appends the plan_merged event. PR completion never emits this evidence.
 func (r *PlanRecord) RecordMerged(branch string, mergedDefaultSHA string, mergedAt time.Time) error {
@@ -1422,6 +1816,17 @@ func (r *PlanRecord) RecordMerged(branch string, mergedDefaultSHA string, merged
 			}
 			return nil, fmt.Errorf("plan merge is already recorded with different evidence")
 		}
+		var resolutionEvidence *SingleMergeResolution
+		if intent := detail.State.Plan.MergeCommitIntent; intent != nil && intent.Resolution != nil {
+			resolution := intent.Resolution
+			if resolution.Phase != SingleMergeResolutionPhaseReviewed || resolution.Review == nil || !resolution.Review.IsApproved() || resolution.IntegrationHead != mergedDefaultSHA {
+				return nil, fmt.Errorf("plan %s resolved merge lacks exact independent approval for integration head %s", detail.State.Plan.ID, mergedDefaultSHA)
+			}
+			// The active intent is cleared below, so retain a bounded projection
+			// of the approved resolution and exact review identity on append-only
+			// merge evidence.
+			resolutionEvidence = cloneSingleMergeResolution(resolution)
+		}
 		detail.State.Status = StatusCompleted
 		detail.State.Plan.MergeCommitIntent = nil
 		if detail.State.Plan.FinalizationFailure != nil {
@@ -1436,7 +1841,17 @@ func (r *PlanRecord) RecordMerged(branch string, mergedDefaultSHA string, merged
 		if detail.State.Plan.Timing.CompletedAt == nil {
 			detail.State.Plan.Timing.CompletedAt = &mergedAt
 		}
-		event := Event{Type: EventTypePlanMerged, Timestamp: mergedAt, PlanID: detail.State.Plan.ID, Branch: branch, MergedDefaultSHA: mergedDefaultSHA, Message: "Plan merged into default branch"}
+		event := Event{
+			Type: EventTypePlanMerged, Timestamp: mergedAt, PlanID: detail.State.Plan.ID,
+			Branch: branch, MergedDefaultSHA: mergedDefaultSHA,
+			SingleMergeResolution: projectSingleMergeResolutionEvent(resolutionEvidence),
+			Message:               "Plan merged into default branch",
+		}
+		if event.SingleMergeResolution != nil {
+			if err := validateSingleMergeResolutionEventSize(event); err != nil {
+				return nil, err
+			}
+		}
 		return []Event{event}, nil
 	})
 }

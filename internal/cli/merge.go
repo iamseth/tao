@@ -24,7 +24,7 @@ var mergeCommand = commandMetadata{
 		"merge (m) --all [--dry-run] [--restart] [--auto-eject] [--verify-command CMD]",
 	},
 	completionDescription: "Merge approved plans into the default branch",
-	long:                  "Merge one reviewed, approved Tao plan, or atomically stage every reviewed and approved plan with --all. Batch mode keeps default unchanged while it orders and stages one squash per source, uses bounded agent resolution, then requires full verification and aggregate approval before one fast-forward. Eligible attributed aggregate-review non-convergence stops and offers to eject that plan on the next rerun; --auto-eject performs the eject-and-reland in the same run. Ejection is offered only when it leaves a non-empty batch and no plan was already ejected. Reruns resume durable progress; --dry-run previews and --restart discards only pre-landing batch recovery. Batch mode rejects --force, --record-only, --no-squash, and --no-verify.",
+	long:                  "Merge one reviewed, approved Tao plan, or atomically stage every reviewed and approved plan with --all. An ordinary single-plan squash conflict gets one automatic resolver attempt, exact structural validation, the configured verification gate, and an independent fresh-session review before completion; --force cannot bypass these safety and review gates, while --no-verify skips only command verification. --no-squash rebase conflicts remain manual. Batch mode keeps default unchanged while it orders and stages one squash per source, uses bounded agent resolution, then requires full verification and aggregate approval before one fast-forward. Eligible attributed aggregate-review non-convergence stops and offers to eject that plan on the next rerun; --auto-eject performs the eject-and-reland in the same run. Ejection is offered only when it leaves a non-empty batch and no plan was already ejected. Reruns resume durable progress; --dry-run previews and --restart discards only pre-landing batch recovery. Batch mode rejects --force, --record-only, --no-squash, and --no-verify.",
 	examples: "  tao merge my-plan\n" +
 		"  tao merge --all\n" +
 		"  tao merge --all --auto-eject\n" +
@@ -50,10 +50,10 @@ func registerMergeFlags(fs *flag.FlagSet) {
 	fs.Bool("dry-run", false, "preview batch candidates and order without durable changes")
 	fs.Bool("restart", false, "discard safe pre-landing batch recovery state and start again")
 	fs.Bool("auto-eject", false, "automatically eject an attributed non-converging plan and reland the rest")
-	fs.Bool("force", false, "bypass approval, review-base, and dirty-worktree gates (single-plan only)")
+	fs.Bool("force", false, "bypass pre-merge approval, review-base, and dirty-worktree gates, not conflict-resolution safety or independent review (single-plan only)")
 	fs.Bool("record-only", false, "record an external merge and run cleanup (single-plan only)")
-	fs.Bool("no-squash", false, "preserve plan commits with rebase-plus-fast-forward (single-plan only)")
-	fs.Bool("no-verify", false, "skip post-merge build/test verification (single-plan only)")
+	fs.Bool("no-squash", false, "preserve plan commits with rebase-plus-fast-forward; conflicts remain manual (single-plan only)")
+	fs.Bool("no-verify", false, "skip post-merge command verification, not structural validation or independent review (single-plan only)")
 	fs.String("verify-command", "", "override the post-merge build/test verification command")
 }
 
@@ -375,13 +375,37 @@ func (a App) newMergeServiceRunner(detail *plan.PlanDetail) (mergeServiceRunner,
 	if err != nil {
 		return nil, fmt.Errorf("configure exceptional merge proposal generator: %w", err)
 	}
+	record, err := plan.NewPlanRecord(detail.Dir, detail)
+	if err != nil {
+		return nil, fmt.Errorf("configure single-plan merge record: %w", err)
+	}
+	eventAppender := plan.NewFileRepository("")
+	agentSession := mergepkg.NewFreshSingleMergeAgentSession(newSingleMergeAgentConfig(a, detail, repoRoot, runner, eventAppender))
 	svc := mergepkg.NewService(repoRoot, runner)
+	git := svc.Git
 	svc.Runner = runner
 	svc.Cleaner = manager
 	svc.Logf = logf
 	svc.Now = a.Now
 	svc.ProposalGenerator = generator
+	svc.SingleResolver = mergepkg.GuardedSingleConflictResolver{Git: git, Recorder: record, Agent: agentSession, Now: a.Now}
+	svc.SingleReviewer = mergepkg.GuardedSingleIntegrationReviewer{Git: git, Recorder: record, Agent: agentSession, Now: a.Now}
 	return svc, nil
+}
+
+func newSingleMergeAgentConfig(a App, detail *plan.PlanDetail, controlRoot string, runner commandrunner.Runner, appender plan.EventAppender) mergepkg.SingleMergeAgentSessionConfig {
+	return mergepkg.SingleMergeAgentSessionConfig{
+		ProcessStarter: a.ProcessStarter, Log: a.Out, ControlRoot: controlRoot, CommandRunner: runner, Now: a.Now,
+		Observe: func(request mergepkg.BatchAgentSessionRequest, result mergepkg.BatchAgentSessionResult, sessionErr error) {
+			event := mergepkg.SingleMergeAgentMetricsEvent(request, result, sessionErr, a.now())
+			if event == nil || appender == nil {
+				return
+			}
+			if err := appender.AppendEvent(detail.Dir, *event); err != nil && a.Out != nil {
+				_ = writef(a.Out, "tao telemetry warning: append %s event: %v\n", event.Type, err)
+			}
+		},
+	}
 }
 
 func (a App) mergeRunner() commandrunner.Runner {
@@ -402,6 +426,11 @@ func renderMergeSuccess(out io.Writer, detail *plan.PlanDetail) error {
 	planID := mergePlanID(detail)
 	defaultBranch := mergeDefaultBranch(detail)
 	planBranch := mergePlanBranch(detail)
+	if review := singleMergeResolutionReview(detail); review != nil && review.IsApproved() {
+		if err := writeln(out, "Independent review approved the exact conflict-resolved integration."); err != nil {
+			return err
+		}
+	}
 	if err := writef(out, "Merge completed: %s merged into %s\n", planID, defaultBranch); err != nil {
 		return err
 	}
@@ -422,6 +451,12 @@ func renderMergeFailure(out io.Writer, detail *plan.PlanDetail, err error) error
 		return renderMergeReviewHeadMismatch(out, planID, err)
 	case errors.Is(err, mergepkg.ErrDirtyWorktree):
 		return renderMergeDirtyWorktree(out, detail, planID, err)
+	case errors.Is(err, mergepkg.ErrSingleResolutionDrift):
+		return renderMergeResolutionRecoveryRefusal(out, detail, planID, err)
+	case errors.Is(err, mergepkg.ErrSingleResolutionRejected):
+		return renderMergeResolutionRejected(out, detail, planID, err)
+	case errors.Is(err, mergepkg.ErrSingleReviewNotApproved), errors.Is(err, mergepkg.ErrSingleReviewRejected):
+		return renderMergeIndependentReviewFailure(out, detail, err)
 	case errors.Is(err, mergepkg.ErrMergeConflict):
 		return renderMergeConflict(out, detail, planID, err)
 	case errors.Is(err, mergepkg.ErrVerifyFailed):
@@ -498,6 +533,118 @@ func renderMergeDirtyWorktree(out io.Writer, detail *plan.PlanDetail, planID str
 	return writef(out, "Next: commit, stash, or discard changes in %s, then rerun `tao merge %s`; pass --force only if you intentionally bypass the dirty-worktree gate.\n", repoRoot, planID)
 }
 
+func renderMergeResolutionRejected(out io.Writer, detail *plan.PlanDetail, planID string, err error) error {
+	if errors.Is(err, mergepkg.ErrSingleResolutionPreflight) {
+		if err := writeln(out, "Automatic squash conflict resolution could not start safely"); err != nil {
+			return err
+		}
+		if err := writef(out, "Reason: %v\n", err); err != nil {
+			return err
+		}
+		if err := writef(out, "Tao started no provider, recorded no one-shot resolution request, and restored %s to its pre-merge boundary when possible.\n", mergeDefaultBranch(detail)); err != nil {
+			return err
+		}
+		return writef(out, "Next: install the reported confinement prerequisite (Linux requires bwrap), run `tao doctor`, then rerun `tao merge %s`.\n", planID)
+	}
+	heading := "Automatic squash conflict resolution failed"
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "unsafe") || strings.Contains(message, "unresolved") || strings.Contains(message, "conflict marker") || strings.Contains(message, "no content or path changes") {
+		heading = "Automatic squash conflict resolution rejected unsafe or unresolved edits"
+	}
+	if err := writeln(out, heading); err != nil {
+		return err
+	}
+	if err := writef(out, "Reason: %v\n", err); err != nil {
+		return err
+	}
+	if err := writef(out, "Tao discarded resolver edits and restored %s to its recorded pre-merge boundary when possible.\n", mergeDefaultBranch(detail)); err != nil {
+		return err
+	}
+	if strings.Contains(message, "restore durable parent") || strings.Contains(message, "rollback") {
+		if err := writeln(out, "Rollback warning: automatic restoration reported a problem; inspect the default worktree and protected refs before any retry."); err != nil {
+			return err
+		}
+	}
+	return writef(out, "Next: resolve the source interaction manually on %s, refresh its source review, then start a new `tao merge %s`; automatic resolution is limited to one attempt and --force cannot bypass its safety checks.\n", emptyMergeField(mergePlanBranch(detail)), planID)
+}
+
+func renderMergeResolutionRecoveryRefusal(out io.Writer, detail *plan.PlanDetail, planID string, err error) error {
+	if err := writeln(out, "Automatic conflict-resolution recovery refused"); err != nil {
+		return err
+	}
+	if err := writef(out, "Reason: %v\n", err); err != nil {
+		return err
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "rollback refused") || strings.Contains(strings.ToLower(err.Error()), "no longer matches") {
+		if err := writeln(out, "Rollback warning: Tao left the current Git state untouched because it no longer matched the exact recorded transaction."); err != nil {
+			return err
+		}
+	}
+	return writef(out, "Next: inspect %s, %s, and the recorded default/source SHAs; restore the exact recorded boundary or reconcile the transaction manually before rerunning `tao merge %s`.\n", mergeDefaultBranch(detail), emptyMergeField(mergePlanBranch(detail)), planID)
+}
+
+func renderMergeIndependentReviewFailure(out io.Writer, detail *plan.PlanDetail, err error) error {
+	review := singleMergeResolutionReview(detail)
+	heading := "Independent integration review failed"
+	if review != nil {
+		switch {
+		case review.Verdict == plan.ReviewVerdictChangesRequested:
+			heading = "Independent integration review requested changes"
+		case strings.HasPrefix(review.Summary, "Independent integration review provider failed"):
+			heading = "Independent integration review provider failed"
+		case strings.HasPrefix(review.Summary, "Independent integration review timed out"):
+			heading = "Independent integration review timed out"
+		case strings.HasPrefix(review.Summary, "Independent integration reviewer returned malformed"):
+			heading = "Independent integration review returned malformed output"
+		case review.Verdict == plan.ReviewVerdictComment:
+			heading = "Independent integration review returned comment"
+		}
+	}
+	if err := writeln(out, heading); err != nil {
+		return err
+	}
+	if review != nil {
+		if summary := strings.TrimSpace(review.Summary); summary != "" {
+			if err := writef(out, "Summary: %s\n", summary); err != nil {
+				return err
+			}
+		}
+		if len(review.Findings) > 0 {
+			if err := writeln(out, "Findings:"); err != nil {
+				return err
+			}
+			for _, finding := range review.Findings {
+				if err := writef(out, "- %s: %s\n", emptyMergeField(finding.File), strings.TrimSpace(finding.Message)); err != nil {
+					return err
+				}
+			}
+		}
+	} else if err := writef(out, "Reason: %v\n", err); err != nil {
+		return err
+	}
+	if err := writef(out, "Tao did not accept the integration and restored %s to its recorded pre-merge SHA when the exact rollback boundary still matched.\n", mergeDefaultBranch(detail)); err != nil {
+		return err
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "automatic rollback refused") {
+		if err := writeln(out, "Rollback warning: Git no longer matched the exact resolved transaction, so Tao refused to overwrite it."); err != nil {
+			return err
+		}
+	}
+	return writef(out, "Next: inspect the recorded one-shot review and reconcile its findings or provider failure on %s; automatic review is not retried, and neither --force nor --no-verify can authorize a non-approval.\n", emptyMergeField(mergePlanBranch(detail)))
+}
+
+func singleMergeResolutionReview(detail *plan.PlanDetail) *plan.SingleMergeResolutionReview {
+	resolution := singleMergeResolution(detail)
+	if resolution == nil {
+		return nil
+	}
+	return resolution.Review
+}
+
+func singleMergeResolution(detail *plan.PlanDetail) *plan.SingleMergeResolution {
+	return plan.CurrentSingleMergeResolution(detail)
+}
+
 func renderMergeConflict(out io.Writer, detail *plan.PlanDetail, planID string, err error) error {
 	var conflict *mergepkg.MergeConflictError
 	phase := "integration"
@@ -559,6 +706,12 @@ func renderMergeVerifyFailed(out io.Writer, detail *plan.PlanDetail, planID stri
 	}
 	if err := writef(out, "Tao reset %s to its pre-merge SHA when possible.\n", mergeDefaultBranch(detail)); err != nil {
 		return err
+	}
+	if singleMergeResolution(detail) != nil {
+		if err := writeln(out, "The exact conflict-resolved integration was not independently approved, recorded, or cleaned up."); err != nil {
+			return err
+		}
+		return writef(out, "Next: reproduce and fix verification on %s, then reconcile the recorded one-shot transaction before rerunning `tao merge %s`; --no-verify skips only the command and cannot bypass structural validation or independent review.\n", emptyMergeField(mergePlanBranch(detail)), planID)
 	}
 	return writef(out, "Next: fix verification failures on %s and rerun `tao merge %s`, or pass --no-verify only if you intentionally skip this check.\n", emptyMergeField(mergePlanBranch(detail)), planID)
 }

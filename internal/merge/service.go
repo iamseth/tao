@@ -29,12 +29,13 @@ func NewService(repoRoot string, runner commandrunner.Runner) Service {
 }
 
 var (
-	ErrNotApproved        = errors.New("plan is not approved for merge")
-	ErrReviewBaseMismatch = errors.New("review base does not match merge base")
-	ErrReviewHeadMismatch = errors.New("review head does not match plan branch tip")
-	ErrDirtyWorktree      = errors.New("worktree has uncommitted changes")
-	ErrMergeConflict      = errors.New("merge conflict")
-	ErrVerifyFailed       = errors.New("merge verification failed")
+	ErrNotApproved                = errors.New("plan is not approved for merge")
+	ErrReviewBaseMismatch         = errors.New("review base does not match merge base")
+	ErrReviewHeadMismatch         = errors.New("review head does not match plan branch tip")
+	ErrDirtyWorktree              = errors.New("worktree has uncommitted changes")
+	ErrMergeConflict              = errors.New("merge conflict")
+	ErrVerifyFailed               = errors.New("merge verification failed")
+	ErrSingleResolutionRolledBack = errors.New("single-plan conflict resolution was rolled back; update the source and refresh its review before merging again")
 )
 
 type Options struct {
@@ -53,11 +54,15 @@ type GitClient interface {
 	CurrentBranch(ctx context.Context) (string, error)
 	RevParse(ctx context.Context, rev string) (string, error)
 	CommitMessage(ctx context.Context, rev string) (string, error)
+	CommitPathStates(ctx context.Context, parent, commit string) ([]gitops.CommitPathState, error)
 	MergeBase(ctx context.Context, a string, b string) (string, error)
 	IsAncestor(ctx context.Context, ancestor string, descendant string) (bool, error)
 	StatusPorcelain(ctx context.Context) (string, error)
+	StatusPorcelainIgnoredV1Z(ctx context.Context) (string, error)
 	ChangedFiles(ctx context.Context, revspec string) ([]string, error)
+	ChangedFilesExact(ctx context.Context, revspec string) ([]string, error)
 	Diff(ctx context.Context, revspec string) (string, error)
+	DiffBounded(ctx context.Context, revspec string, maxBytes int) (string, bool, error)
 	DiffStat(ctx context.Context, revspec string) (string, error)
 	DirtyFingerprint(ctx context.Context) (gitops.DirtyFingerprint, error)
 	Checkout(ctx context.Context, branch string) error
@@ -67,6 +72,7 @@ type GitClient interface {
 	CleanUntracked(ctx context.Context) error
 	Add(ctx context.Context, paths ...string) error
 	Commit(ctx context.Context, message string) error
+	CommitWithoutHooks(ctx context.Context, message string) error
 	UpdateRefCAS(ctx context.Context, ref, newSHA, oldSHA string) error
 	Rebase(ctx context.Context, onto string) error
 	RebaseAbort(ctx context.Context) error
@@ -84,6 +90,8 @@ type Service struct {
 	Logf              func(format string, args ...any)
 	Now               func() time.Time
 	ProposalGenerator commitpkg.MergeProposalGenerator
+	SingleResolver    SingleConflictResolutionService
+	SingleReviewer    SingleIntegrationReviewer
 }
 
 func mergeVerifyMayNeedSnapshot(options Options) bool {
@@ -107,9 +115,21 @@ func (s Service) Merge(ctx context.Context, detail *plan.PlanDetail, options Opt
 	if err := plan.RequireNotAbandoned(detail); err != nil {
 		return err
 	}
+	intent := detail.State.Plan.MergeCommitIntent
+	activeResolution := intent != nil && intent.Resolution != nil && intent.Resolution.Phase != plan.SingleMergeResolutionPhaseRolledBack
+	if activeResolution && options.NoSquash {
+		return fmt.Errorf("%w: --no-squash cannot be used while non-rolled-back single-plan conflict-resolution evidence exists", ErrSingleResolutionRejected)
+	}
 	git, err := s.gitClient()
 	if err != nil {
 		return err
+	}
+	// Resolution evidence is classified before the ordinary clean-worktree gate:
+	// requested/resolved phases legitimately own a dirty default worktree, while
+	// committed/reviewed phases own one exact Tao commit. Never mistake either
+	// for unrelated user dirt on an interrupted rerun.
+	if activeResolution {
+		return s.resumeSingleResolutionMerge(ctx, git, detail, options)
 	}
 	if recorded, err := s.tryRecordExternalMerge(ctx, git, detail, options); recorded || err != nil {
 		return err
@@ -129,9 +149,6 @@ func (s Service) Merge(ctx context.Context, detail *plan.PlanDetail, options Opt
 			return err
 		}
 	}
-	// The pre-merge snapshot protects the complete integration transaction, not
-	// only verification. Squash mode derives it from the durable exact intent so
-	// an interrupted post-commit rerun still rolls back to the original parent.
 	var mergeSnapshot mergeVerifySnapshot
 	if options.NoSquash {
 		mergeSnapshot, err = captureMergeVerifySnapshot(ctx, git, detail)
@@ -145,52 +162,328 @@ func (s Service) Merge(ctx context.Context, detail *plan.PlanDetail, options Opt
 	if err != nil {
 		return err
 	}
-	defaultBranch := mergeSnapshot.defaultBranch
 	if options.NoSquash {
-		err = s.Integrate(ctx, detail)
-	} else {
-		err = s.IntegrateSquash(ctx, detail)
+		if err = s.Integrate(ctx, detail); err != nil {
+			return err
+		}
+		return s.finishIntegratedMerge(ctx, git, detail, planBranch, mergeSnapshot, options)
 	}
+
+	err = s.integrateSquash(ctx, detail, s.SingleResolver != nil)
+	if err == nil {
+		return s.finishIntegratedMerge(ctx, git, detail, planBranch, mergeSnapshot, options)
+	}
+	var prepared *preparedSquashConflict
+	if !errors.As(err, &prepared) {
+		return err
+	}
+	if prepared.preexistingBoundary != nil {
+		defer prepared.preexistingBoundary.cleanup()
+		cause := fmt.Errorf("%w: automatic conflict resolution refuses pre-existing non-ignored worktree changes: %s", ErrSingleResolutionRejected, strings.Join(prepared.preexistingPaths, ", "))
+		return errors.Join(cause, restoreSingleResolutionBoundary(ctx, git, *detail.State.Plan.MergeCommitIntent, *prepared.preexistingBoundary))
+	}
+	return s.resolveAndFinishSingleMerge(ctx, git, detail, options, prepared)
+}
+
+func (s Service) resumeSingleResolutionMerge(ctx context.Context, git GitClient, detail *plan.PlanDetail, options Options) error {
+	if options.RecordOnly {
+		return errors.New("record-only merge cannot resume a single-plan conflict-resolution transaction")
+	}
+	intent := detail.State.Plan.MergeCommitIntent
+	if intent != nil && intent.Resolution != nil && (intent.Resolution.Phase == plan.SingleMergeResolutionPhaseCommitted || intent.Resolution.Phase == plan.SingleMergeResolutionPhaseReviewed) {
+		planBranch, err := resolvePlanBranch(detail)
+		if err != nil {
+			return err
+		}
+		if inspectSingleResolutionRollbackBoundary(ctx, git, *intent, planBranch) == nil {
+			return s.rollbackAndSettleSingleResolution(ctx, git, detail, *intent, planBranch, plan.SingleMergeResolutionRollbackRecoveredInterruption, ErrSingleResolutionRolledBack)
+		}
+	}
+	if s.SingleResolver == nil {
+		return errors.New("single-plan conflict-resolution evidence exists, but no guarded resolver is configured")
+	}
+	return s.resolveAndFinishSingleMerge(ctx, git, detail, options, nil)
+}
+
+func (s Service) resolveAndFinishSingleMerge(ctx context.Context, git GitClient, detail *plan.PlanDetail, options Options, prepared *preparedSquashConflict) error {
+	intent := detail.State.Plan.MergeCommitIntent
+	if intent == nil {
+		return errors.New("single-plan resolution requires durable merge intent")
+	}
+	planBranch, err := resolvePlanBranch(detail)
 	if err != nil {
 		return err
 	}
-	verifyResolution, err := resolveMergeVerifyCommandForDetail(detail, options)
-	if err != nil {
-		return rollbackIntegratedMerge(ctx, git, mergeSnapshot, err)
-	}
-	verifyCommand := verifyResolution.command
-	if verifyCommand != "" {
-		if err := s.runMergeVerify(ctx, detail, mergeSnapshot, verifyCommand); err != nil {
-			s.appendMergeVerificationEvent(detail, plan.Event{
-				Command: verifyCommand,
-				Result:  "failed",
-				Message: "Merge verification failed; the merge was rolled back",
-			})
+	if prepared == nil && intent.Resolution != nil {
+		if err := classifySingleResolutionState(ctx, git, *intent, planBranch); err != nil {
 			return err
 		}
-		s.appendMergeVerificationEvent(detail, plan.Event{
-			Command: verifyCommand,
-			Result:  "passed",
-			Message: "Merge verification passed",
-		})
-	} else {
-		s.logMergeVerifySkipped(verifyResolution)
-		s.appendMergeVerificationEvent(detail, plan.Event{
-			Result:  "skipped",
-			Reason:  mergeVerifySkippedReason(verifyResolution),
-			Message: "Merge verification skipped",
-		})
 	}
-	mergedDefaultSHA, err := captureMergedDefaultSHA(ctx, git, defaultBranch)
+	verify, err := resolveMergeVerifyCommandForDetail(detail, options)
 	if err != nil {
-		return rollbackIntegratedMerge(ctx, git, mergeSnapshot, err)
+		return rollbackPreparedSingleMerge(ctx, git, *intent, err)
+	}
+	request := SingleResolutionRequest{
+		Intent: *intent, SourceBranch: planBranch, IntegrationRoot: git.Root(),
+		PlanTitle: detail.State.Plan.Title, SourceReview: detail.Review.Content,
+		VerifyCommand: verify.command,
+	}
+	sourceBase, err := git.MergeBase(ctx, intent.DefaultParent, intent.SourceHead)
+	if err != nil {
+		return rollbackPreparedSingleMerge(ctx, git, *intent, fmt.Errorf("read conflict-resolution source merge base: %w", err))
+	}
+	sourceBase = strings.TrimSpace(sourceBase)
+	if sourceBase == "" {
+		return rollbackPreparedSingleMerge(ctx, git, *intent, errors.New("conflict-resolution source merge base is empty"))
+	}
+	request.ChangedFiles, err = git.ChangedFilesExact(ctx, sourceBase+".."+intent.SourceHead)
+	if err != nil {
+		return rollbackPreparedSingleMerge(ctx, git, *intent, fmt.Errorf("read conflict-resolution source paths: %w", err))
+	}
+	if prepared != nil {
+		request.ConflictFiles = append([]string(nil), prepared.files...)
+		request.ConflictStatus = prepared.status
+	} else if intent.Resolution != nil {
+		request.ConflictFiles = append([]string(nil), intent.Resolution.ConflictFiles...)
+		request.ConflictStatus, err = git.StatusPorcelain(ctx)
+		if err != nil {
+			return fmt.Errorf("classify durable conflict-resolution worktree: %w", err)
+		}
+	}
+
+	resolved, err := s.SingleResolver.ResolveConflict(ctx, request)
+	if err != nil {
+		if errors.Is(err, ErrSingleResolutionPreflight) {
+			return rollbackPreparedSingleMerge(ctx, git, *intent, err)
+		}
+		return err
+	}
+	request.Intent = resolved.Intent
+	settled, err := s.SingleResolver.SettleResolved(ctx, request)
+	if err != nil {
+		return err
+	}
+	if settled.Intent.Resolution == nil || settled.Intent.Resolution.Phase != plan.SingleMergeResolutionPhaseCommitted && settled.Intent.Resolution.Phase != plan.SingleMergeResolutionPhaseReviewed {
+		return rollbackPreparedSingleMerge(ctx, git, settled.Intent, errors.New("guarded resolver did not settle an exact integration commit"))
+	}
+	if settled.Head != settled.Intent.Resolution.IntegrationHead {
+		return rollbackPreparedSingleMerge(ctx, git, settled.Intent, errors.New("guarded resolver settlement head does not match durable evidence"))
+	}
+	return s.finishResolvedSingleMerge(ctx, git, detail, planBranch, settled.Intent, verify, options)
+}
+
+func (s Service) finishResolvedSingleMerge(ctx context.Context, git GitClient, detail *plan.PlanDetail, planBranch string, intent plan.SingleMergeCommitIntent, verify mergeVerifyCommandResolution, options Options) error {
+	snapshot := mergeVerifySnapshot{defaultBranch: intent.DefaultBranch, preMergeSHA: intent.DefaultParent}
+	verificationEvidence, err := s.verifyIntegratedMerge(ctx, detail, snapshot, verify)
+	if err != nil {
+		return s.rollbackAndSettleSingleResolution(ctx, git, detail, intent, planBranch, plan.SingleMergeResolutionRollbackVerificationFailed, err)
+	}
+	if s.SingleReviewer == nil {
+		return s.rollbackAndSettleSingleResolution(ctx, git, detail, intent, planBranch, plan.SingleMergeResolutionRollbackReviewUnavailable, errors.New("resolved squash requires a separately configured independent reviewer"))
+	}
+	result, err := s.SingleReviewer.ReviewResolvedIntegration(ctx, SingleReviewRequest{
+		Intent: intent, SourceBranch: planBranch, IntegrationRoot: git.Root(),
+		PlanTitle: detail.State.Plan.Title, SourceReview: detail.Review.Content,
+		VerifyCommand: verify.command, VerificationHead: intent.Resolution.IntegrationHead,
+		VerificationEvidence: verificationEvidence,
+	})
+	if err != nil {
+		reason := plan.SingleMergeResolutionRollbackReviewUnavailable
+		if errors.Is(err, ErrSingleReviewNotApproved) {
+			reason = plan.SingleMergeResolutionRollbackReviewNotApproved
+		}
+		return s.rollbackAndSettleSingleResolution(ctx, git, detail, result.Intent, planBranch, reason, err)
+	}
+	if !result.Authorized || result.Intent.Resolution == nil || result.Intent.Resolution.Review == nil || !result.Intent.Resolution.Review.IsApproved() {
+		return s.rollbackAndSettleSingleResolution(ctx, git, detail, result.Intent, planBranch, plan.SingleMergeResolutionRollbackReviewNotApproved, ErrSingleReviewNotApproved)
+	}
+	// Keep the caller's projection current even when an injected recorder owns
+	// persistence; RecordMerged independently reloads and validates authority.
+	detail.State.Plan.MergeCommitIntent = &result.Intent
+	recorded, err := s.recordIntegratedMerge(ctx, git, detail, planBranch, snapshot, options)
+	if err != nil && !recorded {
+		return s.rollbackAndSettleSingleResolution(ctx, git, detail, result.Intent, planBranch, plan.SingleMergeResolutionRollbackMergeRecordingFailed, err)
+	}
+	return err
+}
+
+func (s Service) finishIntegratedMerge(ctx context.Context, git GitClient, detail *plan.PlanDetail, planBranch string, snapshot mergeVerifySnapshot, options Options) error {
+	verify, err := resolveMergeVerifyCommandForDetail(detail, options)
+	if err != nil {
+		return rollbackIntegratedMerge(ctx, git, snapshot, err)
+	}
+	if _, err := s.verifyIntegratedMerge(ctx, detail, snapshot, verify); err != nil {
+		return err
+	}
+	recorded, err := s.recordIntegratedMerge(ctx, git, detail, planBranch, snapshot, options)
+	if err != nil && !recorded {
+		return rollbackIntegratedMerge(ctx, git, snapshot, err)
+	}
+	return err
+}
+
+func (s Service) verifyIntegratedMerge(ctx context.Context, detail *plan.PlanDetail, snapshot mergeVerifySnapshot, verify mergeVerifyCommandResolution) (string, error) {
+	if verify.command != "" {
+		output, err := s.runMergeVerifyCapture(ctx, detail, snapshot, verify.command)
+		if err != nil {
+			s.appendMergeVerificationEvent(detail, plan.Event{Command: verify.command, Result: "failed", Message: "Merge verification failed; the merge was rolled back"})
+			return output, err
+		}
+		s.appendMergeVerificationEvent(detail, plan.Event{Command: verify.command, Result: "passed", Message: "Merge verification passed"})
+		if strings.TrimSpace(output) == "" {
+			return "passed with no output", nil
+		}
+		return output, nil
+	}
+	reason := mergeVerifySkippedReason(verify)
+	s.logMergeVerifySkipped(verify)
+	s.appendMergeVerificationEvent(detail, plan.Event{Result: "skipped", Reason: reason, Message: "Merge verification skipped"})
+	return "skipped: " + reason, nil
+}
+
+func (s Service) recordIntegratedMerge(ctx context.Context, git GitClient, detail *plan.PlanDetail, planBranch string, snapshot mergeVerifySnapshot, options Options) (bool, error) {
+	mergedDefaultSHA, err := captureMergedDefaultSHA(ctx, git, snapshot.defaultBranch)
+	if err != nil {
+		return false, err
 	}
 	if err := s.AppendPlanMergedEvent(detail, planBranch, mergedDefaultSHA); err != nil {
-		return rollbackIntegratedMerge(ctx, git, mergeSnapshot, err)
+		return false, err
 	}
 	options.allowNonAncestralCleanup = !options.NoSquash
 	if _, err := s.Cleanup(ctx, detail, options); err != nil && !cleanupAlreadySettled(err) {
-		return fmt.Errorf("plan %s merged and recorded, but cleanup failed: %w", detail.State.Plan.ID, err)
+		return true, fmt.Errorf("plan %s merged and recorded, but cleanup failed: %w", detail.State.Plan.ID, err)
+	}
+	return true, nil
+}
+
+func classifySingleResolutionState(ctx context.Context, git GitClient, intent plan.SingleMergeCommitIntent, sourceBranch string) error {
+	if err := intent.Validate(); err != nil {
+		return fmt.Errorf("classify single-plan resolution evidence: %w", err)
+	}
+	liveSource, sourceErr := git.RevParse(ctx, "refs/heads/"+strings.TrimSpace(sourceBranch))
+	liveDefault, defaultErr := git.RevParse(ctx, "refs/heads/"+intent.DefaultBranch)
+	head, headErr := git.RevParse(ctx, "HEAD")
+	branch, branchErr := git.CurrentBranch(ctx)
+	if sourceErr != nil || defaultErr != nil || headErr != nil || branchErr != nil {
+		return fmt.Errorf("classify single-plan resolution refs: %w", errors.Join(sourceErr, defaultErr, headErr, branchErr))
+	}
+	if strings.TrimSpace(liveSource) != intent.SourceHead {
+		return fmt.Errorf("%w: source ref changed", ErrSingleResolutionDrift)
+	}
+	if strings.TrimSpace(branch) != intent.DefaultBranch || strings.TrimSpace(head) != strings.TrimSpace(liveDefault) {
+		return fmt.Errorf("%w: integration checkout is not the exact default ref", ErrSingleResolutionDrift)
+	}
+	phase := intent.Resolution.Phase
+	if phase == plan.SingleMergeResolutionPhaseRequested {
+		if strings.TrimSpace(head) != intent.DefaultParent {
+			return fmt.Errorf("%w: pre-commit resolution no longer has the durable parent checked out", ErrSingleResolutionDrift)
+		}
+		return nil
+	}
+	if phase == plan.SingleMergeResolutionPhaseResolved {
+		if strings.TrimSpace(head) == intent.DefaultParent {
+			return nil
+		}
+		exact, inspectErr := inspectExactResolutionCommit(ctx, git, intent, strings.TrimSpace(head))
+		if inspectErr != nil {
+			return fmt.Errorf("%w: inspect possible resolution commit: %w", ErrSingleResolutionDrift, inspectErr)
+		}
+		if !exact {
+			return fmt.Errorf("%w: resolved HEAD is neither the durable parent nor exact resolution commit", ErrSingleResolutionDrift)
+		}
+		status, err := git.StatusPorcelain(ctx)
+		if err != nil {
+			return fmt.Errorf("classify exact resolved commit worktree: %w", err)
+		}
+		if strings.TrimSpace(status) != "" {
+			return &DirtyWorktreeError{Status: status}
+		}
+		return nil
+	}
+	if strings.TrimSpace(head) == intent.DefaultParent {
+		return fmt.Errorf("%w: committed resolution was already rolled back and cannot be re-authorized automatically", ErrSingleResolutionDrift)
+	}
+	if strings.TrimSpace(head) != intent.Resolution.IntegrationHead {
+		return fmt.Errorf("%w: default ref does not match the durable integration head", ErrSingleResolutionDrift)
+	}
+	status, err := git.StatusPorcelain(ctx)
+	if err != nil {
+		return fmt.Errorf("classify committed resolution worktree: %w", err)
+	}
+	if strings.TrimSpace(status) != "" {
+		return &DirtyWorktreeError{Status: status}
+	}
+	return nil
+}
+
+func rollbackPreparedSingleMerge(ctx context.Context, git GitClient, intent plan.SingleMergeCommitIntent, cause error) error {
+	return rollbackIntegratedMerge(ctx, git, mergeVerifySnapshot{defaultBranch: intent.DefaultBranch, preMergeSHA: intent.DefaultParent}, cause)
+}
+
+// rollbackSingleResolutionCommit refuses to overwrite ambiguous or unrelated
+// state. Only a clean exact integration head (or its already-restored parent)
+// may be moved back to the durable parent.
+func rollbackSingleResolutionCommit(ctx context.Context, git GitClient, intent plan.SingleMergeCommitIntent, sourceBranch string, cause error) (bool, error) {
+	if intent.Resolution == nil || strings.TrimSpace(intent.Resolution.IntegrationHead) == "" {
+		return false, errors.Join(cause, errors.New("automatic rollback refused: committed resolution evidence is incomplete"))
+	}
+	liveSource, sourceErr := git.RevParse(ctx, "refs/heads/"+strings.TrimSpace(sourceBranch))
+	liveDefault, defaultErr := git.RevParse(ctx, "refs/heads/"+intent.DefaultBranch)
+	status, statusErr := git.StatusPorcelain(ctx)
+	branch, branchErr := git.CurrentBranch(ctx)
+	if sourceErr != nil || defaultErr != nil || statusErr != nil || branchErr != nil || strings.TrimSpace(liveSource) != intent.SourceHead || (strings.TrimSpace(liveDefault) != intent.Resolution.IntegrationHead && strings.TrimSpace(liveDefault) != intent.DefaultParent) || strings.TrimSpace(status) != "" || strings.TrimSpace(branch) != intent.DefaultBranch {
+		return false, errors.Join(cause, fmt.Errorf("automatic rollback refused because Git no longer matches the exact resolved transaction: %w", errors.Join(sourceErr, defaultErr, statusErr, branchErr)))
+	}
+	if strings.TrimSpace(liveDefault) == intent.DefaultParent {
+		return true, cause
+	}
+	if err := git.ResetHard(ctx, intent.DefaultParent); err != nil {
+		return false, errors.Join(cause, fmt.Errorf("automatic rollback reset %s to %s: %w", intent.DefaultBranch, intent.DefaultParent, err))
+	}
+	if err := git.Checkout(ctx, intent.DefaultBranch); err != nil {
+		return false, errors.Join(cause, fmt.Errorf("automatic rollback re-checkout default branch %s: %w", intent.DefaultBranch, err))
+	}
+	return true, cause
+}
+
+func (s Service) rollbackAndSettleSingleResolution(ctx context.Context, git GitClient, detail *plan.PlanDetail, intent plan.SingleMergeCommitIntent, sourceBranch string, reason plan.SingleMergeResolutionRollbackReason, cause error) error {
+	cleanupCtx, cancelCleanup := singleAgentCleanupContext(ctx)
+	defer cancelCleanup()
+	rolledBack, rollbackErr := rollbackSingleResolutionCommit(cleanupCtx, git, intent, sourceBranch, cause)
+	if !rolledBack {
+		return rollbackErr
+	}
+	if err := inspectSingleResolutionRollbackBoundary(cleanupCtx, git, intent, sourceBranch); err != nil {
+		return errors.Join(rollbackErr, fmt.Errorf("settle single-plan resolution rollback: %w", err))
+	}
+	settled := *intent.Resolution
+	settled.Phase = plan.SingleMergeResolutionPhaseRolledBack
+	settled.RollbackReason = reason
+	settled.RolledBackAt = s.now().UTC()
+	if settled.RolledBackAt.Before(settled.CommittedAt) {
+		settled.RolledBackAt = settled.CommittedAt
+	}
+	record, err := s.planMergeRecord(detail.Dir, detail)
+	if err == nil {
+		err = record.SettleSingleMergeResolutionRollback(intent, settled)
+	}
+	if err != nil {
+		return errors.Join(rollbackErr, fmt.Errorf("persist single-plan resolution rollback settlement: %w", err))
+	}
+	return rollbackErr
+}
+
+func inspectSingleResolutionRollbackBoundary(ctx context.Context, git GitClient, intent plan.SingleMergeCommitIntent, sourceBranch string) error {
+	liveSource, sourceErr := git.RevParse(ctx, "refs/heads/"+strings.TrimSpace(sourceBranch))
+	liveDefault, defaultErr := git.RevParse(ctx, "refs/heads/"+intent.DefaultBranch)
+	head, headErr := git.RevParse(ctx, "HEAD")
+	status, statusErr := git.StatusPorcelain(ctx)
+	branch, branchErr := git.CurrentBranch(ctx)
+	if sourceErr != nil || defaultErr != nil || headErr != nil || statusErr != nil || branchErr != nil {
+		return fmt.Errorf("inspect restored refs and worktree: %w", errors.Join(sourceErr, defaultErr, headErr, statusErr, branchErr))
+	}
+	if strings.TrimSpace(liveSource) != intent.SourceHead || strings.TrimSpace(liveDefault) != intent.DefaultParent || strings.TrimSpace(head) != intent.DefaultParent || strings.TrimSpace(status) != "" || strings.TrimSpace(branch) != intent.DefaultBranch {
+		return ErrSingleResolutionDrift
 	}
 	return nil
 }

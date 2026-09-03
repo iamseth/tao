@@ -67,6 +67,11 @@ func ValidateDetail(detail *PlanDetail) []string {
 			warnings = append(warnings, "state.json plan.finalization_failure is invalid: "+err.Error())
 		}
 	}
+	if intent := detail.State.Plan.MergeCommitIntent; intent != nil {
+		if err := validateSingleMergeCommitIntent(*intent); err != nil {
+			warnings = append(warnings, "state.json plan.merge_commit_intent is invalid: "+err.Error())
+		}
+	}
 	warnings = append(warnings, validateDecision(detail.State.Plan.Decision)...)
 	warnings = append(warnings, validateSequence(detail.State.Plan.ID, detail.State.Plan.Sequence)...)
 	warnings = append(warnings, validateRuntimePrerequisites(detail.State.Plan.ID, detail.State.Plan.RuntimePrerequisites)...)

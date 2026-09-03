@@ -48,6 +48,9 @@ For workflow guidance, see the [usage guide](docs/usage-guide.md). For the artif
 - Git and either [Pi](https://github.com/badlogic/pi-mono) or
   [Claude Code](https://docs.anthropic.com/en/docs/claude-code), installed and
   authenticated. Pi is the default; set `TAO_AGENT=claude` to select Claude.
+- On Linux, `bubblewrap` (`bwrap`) is required for the OS-confined resolver and
+  reviewer sessions used by automatic squash-conflict resolution. `tao doctor`
+  reports whether Tao can find it at a supported system path.
 - Go 1.26.2 and `make` only if you install from source.
 
 ### Install Tao

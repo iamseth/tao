@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -677,6 +678,16 @@ func TestInstallPromptsReportsNoSupportedAgents(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".pi")); !os.IsNotExist(err) {
 		t.Fatalf("expected no Pi fallback installation, got %v", err)
+	}
+}
+
+func TestDoctorRequiresBubblewrapForLinuxMergeConfinement(t *testing.T) {
+	tools := doctorRequiredTools("linux", nil)
+	if len(tools) != 1 || tools[0].name != "bubblewrap (bwrap)" || !slices.Equal(tools[0].executables, []string{"/usr/bin/bwrap", "/bin/bwrap"}) {
+		t.Fatalf("linux required tools = %#v", tools)
+	}
+	if tools := doctorRequiredTools("darwin", nil); len(tools) != 0 {
+		t.Fatalf("darwin required tools unexpectedly include Linux confinement prerequisite: %#v", tools)
 	}
 }
 

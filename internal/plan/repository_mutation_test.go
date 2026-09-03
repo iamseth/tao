@@ -2,7 +2,9 @@ package plan
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -10,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/iamseth/tao/internal/agentinput"
 )
 
 func TestReadStateReadsStateJSON(t *testing.T) {
@@ -119,6 +123,542 @@ func TestPlanRecordSingleMergeCommitIntentRoundTripsAndClears(t *testing.T) {
 	}
 	if reloaded.State.Plan.MergeCommitIntent != nil {
 		t.Fatalf("single-merge intent was not cleared: %#v", reloaded.State.Plan.MergeCommitIntent)
+	}
+}
+
+func TestPlanRecordSingleMergeResolutionRoundTripsAdvancesAndSettles(t *testing.T) {
+	root := t.TempDir()
+	writeMinimalPlan(t, root, "resolution", "Resolution")
+	planDir := filepath.Join(root, "resolution")
+	repo := NewFileRepository(root)
+	detail, err := repo.GetPlan(context.Background(), "resolution")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := NewPlanRecord(planDir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := validSingleMergeResolutionIntent("resolution")
+	if err := record.RecordSingleMergeCommitIntent(intent); err != nil {
+		t.Fatal(err)
+	}
+
+	request := validSingleMergeResolutionRequest(intent)
+	if err := record.RecordSingleMergeResolution(intent, request); err != nil {
+		t.Fatal(err)
+	}
+	if err := record.RecordSingleMergeResolution(intent, request); err != nil {
+		t.Fatalf("exact request retry: %v", err)
+	}
+	var raw map[string]any
+	readJSONFile(t, filepath.Join(planDir, "state.json"), &raw)
+	resolutionObject := raw["plan"].(map[string]any)["merge_commit_intent"].(map[string]any)["resolution"].(map[string]any)
+	resolutionObject["unknown_resolution_field"] = "keep"
+	payload, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(planDir, "state.json"), payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	current := *record.Detail().State.Plan.MergeCommitIntent
+	conflict := request
+	conflict.ConflictFiles = []string{"different.go"}
+	if err := record.ReplaceSingleMergeResolution(current, conflict); err != nil {
+		t.Fatal(err)
+	}
+	if err := record.ReplaceSingleMergeResolution(current, conflict); err != nil {
+		t.Fatalf("exact replacement retry: %v", err)
+	}
+	stale := current
+	current = *record.Detail().State.Plan.MergeCommitIntent
+	if err := record.ReplaceSingleMergeResolution(stale, request); err == nil || !strings.Contains(err.Error(), "changed") {
+		t.Fatalf("stale replacement error = %v", err)
+	}
+
+	resolved := validSingleMergeResolution(intent)
+	resolved.ConflictFiles = append([]string(nil), conflict.ConflictFiles...)
+	resolved.RequestedAt = conflict.RequestedAt
+	if err := record.AdvanceSingleMergeResolution(current, resolved); err != nil {
+		t.Fatal(err)
+	}
+	if err := record.AdvanceSingleMergeResolution(current, resolved); err != nil {
+		t.Fatalf("exact resolved retry: %v", err)
+	}
+	current = *record.Detail().State.Plan.MergeCommitIntent
+	committed := resolved
+	committed.Phase = SingleMergeResolutionPhaseCommitted
+	committed.IntegrationHead = strings.Repeat("c", 40)
+	committed.CommittedAt = resolved.ResolvedAt.Add(time.Minute)
+	if err := record.AdvanceSingleMergeResolution(current, committed); err != nil {
+		t.Fatal(err)
+	}
+	current = *record.Detail().State.Plan.MergeCommitIntent
+	if err := record.ClearSingleMergeCommitIntent(current); err == nil || !strings.Contains(err.Error(), "committed resolution authority") {
+		t.Fatalf("committed clear error = %v", err)
+	}
+
+	reviewed := committed
+	reviewed.Phase = SingleMergeResolutionPhaseReviewed
+	reviewed.Review = &SingleMergeResolutionReview{
+		Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Summary: "The exact integration is safe.", Findings: []ReviewFinding{},
+		Base: intent.DefaultParent, Head: committed.IntegrationHead, Agent: "pi", ReviewedAt: committed.CommittedAt.Add(time.Minute),
+	}
+	if err := record.AdvanceSingleMergeResolution(current, reviewed); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := repo.GetPlan(context.Background(), "resolution")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(reloaded.State.Plan.MergeCommitIntent.Resolution, &reviewed) {
+		t.Fatalf("reviewed resolution did not round-trip:\n got: %#v review=%#v\nwant: %#v review=%#v", reloaded.State.Plan.MergeCommitIntent.Resolution, reloaded.State.Plan.MergeCommitIntent.Resolution.Review, &reviewed, reviewed.Review)
+	}
+	readJSONFile(t, filepath.Join(planDir, "state.json"), &raw)
+	resolutionObject = raw["plan"].(map[string]any)["merge_commit_intent"].(map[string]any)["resolution"].(map[string]any)
+	if resolutionObject["unknown_resolution_field"] != "keep" {
+		t.Fatalf("resolution advancement erased unknown state: %#v", resolutionObject)
+	}
+	if err := record.RecordMerged("feature/resolution", strings.Repeat("d", 40), reviewed.Review.ReviewedAt.Add(time.Minute)); err == nil || !strings.Contains(err.Error(), "exact independent approval") {
+		t.Fatalf("mismatched merge evidence error = %v", err)
+	}
+	if err := record.RecordMerged("feature/resolution", reviewed.IntegrationHead, reviewed.Review.ReviewedAt.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if record.Detail().State.Plan.MergeCommitIntent != nil {
+		t.Fatal("merge settlement retained resolution intent")
+	}
+	mergedEvent := record.Detail().Events[len(record.Detail().Events)-1]
+	wantEventResolution := projectSingleMergeResolutionEvent(&reviewed)
+	if mergedEvent.Type != EventTypePlanMerged || !reflect.DeepEqual(mergedEvent.SingleMergeResolution, wantEventResolution) {
+		t.Fatalf("merge event did not retain bounded approved resolution evidence: %#v", mergedEvent)
+	}
+	wantCurrentResolution := singleMergeResolutionFromEvent(wantEventResolution)
+	if got := CurrentSingleMergeResolution(record.Detail()); !reflect.DeepEqual(got, wantCurrentResolution) {
+		t.Fatalf("current merge resolution = %#v, want %#v", got, wantCurrentResolution)
+	}
+	reloaded, err = repo.GetPlan(context.Background(), "resolution")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.State.Plan.MergeCommitIntent != nil {
+		t.Fatalf("loaded merge settlement retained active intent: %#v", reloaded.State.Plan.MergeCommitIntent)
+	}
+	if got := CurrentSingleMergeResolution(reloaded); !reflect.DeepEqual(got, wantCurrentResolution) {
+		t.Fatalf("loaded merge resolution = %#v, want %#v", got, wantCurrentResolution)
+	}
+}
+
+func TestPlanRecordMaximumSingleMergeRollbackEventWritesAndReloads(t *testing.T) {
+	root := t.TempDir()
+	writeMinimalPlan(t, root, "resolution-max", "Maximum Resolution")
+	planDir := filepath.Join(root, "resolution-max")
+	repo := NewFileRepository(root)
+	detail, err := repo.GetPlan(context.Background(), "resolution-max")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := NewPlanRecord(planDir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	intent := validSingleMergeResolutionIntent("resolution-max")
+	intent.Message = maximumValidSingleMergeCommitMessage()
+	if err := record.RecordSingleMergeCommitIntent(intent); err != nil {
+		t.Fatal(err)
+	}
+	request := validSingleMergeResolutionRequest(intent)
+	request.ConflictFiles = maximumValidSingleMergePaths()
+	if err := record.RecordSingleMergeResolution(intent, request); err != nil {
+		t.Fatal(err)
+	}
+
+	current := *record.Detail().State.Plan.MergeCommitIntent
+	resolved := validSingleMergeResolution(intent)
+	resolved.ConflictFiles = cloneStringSlice(request.ConflictFiles)
+	resolved.RequestedAt = request.RequestedAt
+	resolved.Summary = strings.Repeat("界", maxSingleMergeResolutionSummaryRunes)
+	resolved.ChangedPaths = maximumValidSingleMergePaths()
+	resolved.CommitMessage = maximumValidSingleMergeCommitMessage()
+	if err := record.AdvanceSingleMergeResolution(current, resolved); err != nil {
+		t.Fatal(err)
+	}
+	current = *record.Detail().State.Plan.MergeCommitIntent
+	committed := resolved
+	committed.Phase = SingleMergeResolutionPhaseCommitted
+	committed.IntegrationHead = strings.Repeat("c", 40)
+	committed.CommittedAt = resolved.ResolvedAt.Add(time.Minute)
+	if err := record.AdvanceSingleMergeResolution(current, committed); err != nil {
+		t.Fatal(err)
+	}
+	current = *record.Detail().State.Plan.MergeCommitIntent
+	reviewed := committed
+	reviewed.Phase = SingleMergeResolutionPhaseReviewed
+	findings := make([]ReviewFinding, maxSingleMergeResolutionFindings)
+	for i := range findings {
+		findings[i] = ReviewFinding{
+			Severity: strings.Repeat("界", maxSingleMergeFindingSeverityRunes),
+			File:     strings.Repeat("界", maxSingleMergeFindingFileRunes), Line: i + 1,
+			Message:    strings.Repeat("界", maxSingleMergeFindingTextRunes),
+			Suggestion: strings.Repeat("界", maxSingleMergeFindingTextRunes),
+		}
+	}
+	reviewed.Review = &SingleMergeResolutionReview{
+		Status: ReviewStatusCompleted, Verdict: ReviewVerdictChangesRequested,
+		Summary:       strings.Repeat("界", maxSingleMergeResolutionSummaryRunes),
+		FindingsCount: len(findings), Findings: findings,
+		Base: intent.DefaultParent, Head: committed.IntegrationHead,
+		Agent: strings.Repeat("界", 128), ReviewedAt: committed.CommittedAt.Add(time.Minute),
+	}
+	if err := record.AdvanceSingleMergeResolution(current, reviewed); err != nil {
+		t.Fatal(err)
+	}
+	current = *record.Detail().State.Plan.MergeCommitIntent
+	rolledBack := reviewed
+	rolledBack.Phase = SingleMergeResolutionPhaseRolledBack
+	rolledBack.RollbackReason = SingleMergeResolutionRollbackReviewNotApproved
+	rolledBack.RolledBackAt = reviewed.Review.ReviewedAt.Add(time.Minute)
+	fullPayload, err := json.Marshal(rolledBack)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fullPayload) <= maxEventJSONLLineBytes {
+		t.Fatalf("maximum valid resolution fixture is only %d bytes", len(fullPayload))
+	}
+	if err := record.SettleSingleMergeResolutionRollback(current, rolledBack); err != nil {
+		t.Fatal(err)
+	}
+	if err := record.ClearSingleMergeCommitIntent(*record.Detail().State.Plan.MergeCommitIntent); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(planDir, "events.jsonl")) // #nosec G304 -- path is under a test-owned temporary plan directory.
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(strings.TrimSuffix(string(data), "\n"), "\n") {
+		if strings.Contains(line, `"type":"single_merge_resolution_rolled_back"`) && len(line)+1 > maxEventJSONLLineBytes {
+			t.Fatalf("rollback event line is %d bytes, limit %d", len(line)+1, maxEventJSONLLineBytes)
+		}
+	}
+	events, warnings, err := readEvents(filepath.Join(planDir, "events.jsonl"))
+	if err != nil || len(warnings) != 0 {
+		t.Fatalf("reload events: warnings=%v err=%v", warnings, err)
+	}
+	var rollbackEvent *Event
+	for i := range events {
+		if events[i].Type == EventTypeSingleMergeRolledBack {
+			rollbackEvent = &events[i]
+			break
+		}
+	}
+	if rollbackEvent == nil || rollbackEvent.SingleMergeResolution == nil {
+		t.Fatalf("reloaded rollback diagnostics missing: %#v", events)
+	}
+	projection := rollbackEvent.SingleMergeResolution
+	if !projection.DiagnosticsTruncated || projection.ConflictFilesCount != len(rolledBack.ConflictFiles) || projection.ChangedPathsCount != len(rolledBack.ChangedPaths) {
+		t.Fatalf("reloaded rollback projection lost truncation cardinality: %#v", projection)
+	}
+	if projection.Review == nil || projection.Review.Status != reviewed.Review.Status || projection.Review.Verdict != reviewed.Review.Verdict || projection.Review.FindingsCount != reviewed.Review.FindingsCount || projection.Review.Base != reviewed.Review.Base || projection.Review.Head != reviewed.Review.Head || projection.Review.Agent != reviewed.Review.Agent || !projection.Review.ReviewedAt.Equal(reviewed.Review.ReviewedAt) {
+		t.Fatalf("reloaded rollback projection lost exact review identity: %#v", projection.Review)
+	}
+	if projection.Summary == "" || projection.Review.Summary == "" || len(projection.Review.Findings) == 0 || projection.Review.Findings[0].Message == "" || projection.Review.Findings[0].Suggestion == "" {
+		t.Fatalf("reloaded rollback projection lost actionable diagnostics: %#v", projection)
+	}
+	reloaded, err := repo.GetPlan(context.Background(), "resolution-max")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.State.Plan.MergeCommitIntent != nil {
+		t.Fatalf("reloaded plan retained cleared inactive intent: %#v", reloaded.State.Plan.MergeCommitIntent)
+	}
+}
+
+func maximumValidSingleMergePaths() []string {
+	paths := make([]string, maxSingleMergeResolutionPaths)
+	for i := range paths {
+		prefix := fmt.Sprintf("%03d-", i)
+		paths[i] = prefix + strings.Repeat("x", maxSingleMergeResolutionPathBytes-len(prefix))
+	}
+	return paths
+}
+
+func maximumValidSingleMergeCommitMessage() string {
+	prefix := "fix(merge): resolve conflicts\n\nWhat:\n"
+	suffix := "\n\nWhy:\npreserve exact merge authority"
+	return prefix + strings.Repeat("界", agentinput.MaxTextRunes-len([]rune(prefix))-len([]rune(suffix))) + suffix
+}
+
+func TestPlanRecordSingleMergeResolutionClearAndLifecycleInvalidation(t *testing.T) {
+	dir := t.TempDir()
+	detail := startSliceDetail(dir)
+	writeStartSliceArtifacts(t, dir, detail)
+	record := testRecord(dir, detail)
+	started := time.Date(2026, 9, 2, 16, 0, 0, 0, time.UTC)
+	if err := record.StartSlice("001-a", started); err != nil {
+		t.Fatal(err)
+	}
+	if err := record.CompleteSlice("001-a", "done", nil, started.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	intent := validSingleMergeResolutionIntent("plan-a")
+	approved := PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Head: intent.SourceHead, ReviewedAt: started.Add(2 * time.Minute)}
+	if err := record.RecordReviewCompleted(approved, "pi"); err != nil {
+		t.Fatal(err)
+	}
+	if err := record.RecordSingleMergeCommitIntent(intent); err != nil {
+		t.Fatal(err)
+	}
+	request := validSingleMergeResolutionRequest(intent)
+	if err := record.RecordSingleMergeResolution(intent, request); err != nil {
+		t.Fatal(err)
+	}
+	if err := record.ClearSingleMergeCommitIntent(intent); err == nil || !strings.Contains(err.Error(), "changed") {
+		t.Fatalf("stale clear error = %v", err)
+	}
+	inspected := *record.Detail().State.Plan.MergeCommitIntent
+	if err := record.ClearSingleMergeCommitIntent(inspected); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := record.RecordSingleMergeCommitIntent(intent); err != nil {
+		t.Fatal(err)
+	}
+	if err := record.RecordSingleMergeResolution(intent, request); err != nil {
+		t.Fatal(err)
+	}
+	changedReview := PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictChangesRequested, Summary: "Source changed.", Head: strings.Repeat("e", 40), ReviewedAt: started.Add(3 * time.Minute)}
+	if err := record.RecordReviewCompleted(changedReview, "pi"); err != nil {
+		t.Fatal(err)
+	}
+	if record.Detail().State.Plan.MergeCommitIntent != nil {
+		t.Fatal("changed source review retained pre-commit resolution evidence")
+	}
+
+	if err := record.RecordReviewCompleted(approved, "pi"); err != nil {
+		t.Fatal(err)
+	}
+	if err := record.RecordSingleMergeCommitIntent(intent); err != nil {
+		t.Fatal(err)
+	}
+	if err := record.RecordSingleMergeResolution(intent, request); err != nil {
+		t.Fatal(err)
+	}
+	current := *record.Detail().State.Plan.MergeCommitIntent
+	resolved := validSingleMergeResolution(intent)
+	if err := record.AdvanceSingleMergeResolution(current, resolved); err != nil {
+		t.Fatal(err)
+	}
+	current = *record.Detail().State.Plan.MergeCommitIntent
+	committed := resolved
+	committed.Phase = SingleMergeResolutionPhaseCommitted
+	committed.IntegrationHead = strings.Repeat("c", 40)
+	committed.CommittedAt = resolved.ResolvedAt.Add(time.Minute)
+	if err := record.AdvanceSingleMergeResolution(current, committed); err != nil {
+		t.Fatal(err)
+	}
+	current = *record.Detail().State.Plan.MergeCommitIntent
+	newSlice := Slice{ID: "002-rework", Title: "Rework", Status: StatusPending, Timing: SliceTiming{CreatedAt: committed.CommittedAt, UpdatedAt: committed.CommittedAt}}
+	if err := record.Reopen([]Slice{newSlice}, committed.CommittedAt.Add(time.Minute)); err == nil || !strings.Contains(err.Error(), "committed single-merge resolution authority") {
+		t.Fatalf("reopen committed-resolution error = %v", err)
+	}
+	replacement := PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictComment, Summary: "Replacement.", Head: strings.Repeat("e", 40), ReviewedAt: committed.CommittedAt.Add(2 * time.Minute)}
+	if err := record.RecordReviewCompleted(replacement, "pi"); err == nil || !strings.Contains(err.Error(), "committed single-merge resolution authority") {
+		t.Fatalf("review replacement error = %v", err)
+	}
+	for _, event := range record.Detail().Events {
+		if event.Type == EventTypePlanReviewed && event.Review != nil && event.Review.Summary == replacement.Summary {
+			t.Fatal("refused source review replacement appended an event")
+		}
+	}
+
+	rolledBack := committed
+	rolledBack.Phase = SingleMergeResolutionPhaseRolledBack
+	rolledBack.RollbackReason = SingleMergeResolutionRollbackReviewNotApproved
+	rolledBack.RolledBackAt = replacement.ReviewedAt
+	if err := record.SettleSingleMergeResolutionRollback(current, rolledBack); err != nil {
+		t.Fatal(err)
+	}
+	rollbackEvents := 0
+	for _, event := range record.Detail().Events {
+		if event.Type == EventTypeSingleMergeRolledBack {
+			rollbackEvents++
+			if event.SingleMergeResolution == nil || event.SingleMergeResolution.RollbackReason != rolledBack.RollbackReason {
+				t.Fatalf("rollback event diagnostics = %#v", event)
+			}
+		}
+	}
+	if rollbackEvents != 1 {
+		t.Fatalf("rollback events = %d, want 1", rollbackEvents)
+	}
+
+	rolledBackDetail := record.Detail()
+	if rolledBackDetail.State.Plan.MergeCommitIntent.IsActive() {
+		t.Fatal("exact rollback settlement retained an active merge transaction")
+	}
+	action := DeriveNextAction(rolledBackDetail).Primary
+	if action.Kind != PlanActionRecoverMerge || action.Class != PlanActionClassRecovery || action.Command != "" || !strings.Contains(action.Instruction, "Update the source branch") || !strings.Contains(action.Instruction, "tao review --run plan-a") || !strings.Contains(action.Reason, "inactive intent cannot be reused") {
+		t.Fatalf("post-rollback next action = %#v, want commandless source-update and fresh-review guidance", action)
+	}
+
+	abandonDetail := clonePlanDetail(rolledBackDetail)
+	abandonRecord, err := newPlanRecord(&recordingArtifactMutationStore{}, abandonDetail.Dir, abandonDetail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := abandonRecord.Abandon("Do not retry the rejected integration", rolledBack.RolledBackAt.Add(time.Minute)); err != nil {
+		t.Fatalf("abandon after exact rollback settlement: %v", err)
+	}
+	if abandonDetail.State.Status != StatusAbandoned || abandonDetail.State.Plan.MergeCommitIntent == nil || abandonDetail.State.Plan.MergeCommitIntent.Resolution == nil || abandonDetail.State.Plan.MergeCommitIntent.Resolution.Phase != SingleMergeResolutionPhaseRolledBack {
+		t.Fatalf("abandonment did not preserve inactive rollback evidence: status=%q intent=%#v", abandonDetail.State.Status, abandonDetail.State.Plan.MergeCommitIntent)
+	}
+
+	reopenDetail := clonePlanDetail(record.Detail())
+	if _, err := Reopen(reopenDetail, []Slice{newSlice}, rolledBack.RolledBackAt.Add(time.Minute)); err != nil {
+		t.Fatalf("reopen after exact rollback settlement: %v", err)
+	}
+	if reopenDetail.State.Plan.MergeCommitIntent != nil {
+		t.Fatal("reopen retained inactive rolled-back intent")
+	}
+	if err := record.RecordReviewCompleted(replacement, "pi"); err != nil {
+		t.Fatalf("replace source review after exact rollback settlement: %v", err)
+	}
+	if record.Detail().State.Plan.MergeCommitIntent != nil {
+		t.Fatal("source review replacement retained inactive rolled-back intent")
+	}
+}
+
+func TestSingleMergeResolutionValidationAndLegacyCompatibility(t *testing.T) {
+	intent := validSingleMergeResolutionIntent("plan-a")
+	legacyJSON := `{"message":"legacy message","plan_id":"plan-a","source_head":"source123","default_branch":"main","default_parent":"base123","created_at":"2026-07-23T20:15:00Z"}`
+	var legacy SingleMergeCommitIntent
+	if err := json.Unmarshal([]byte(legacyJSON), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateSingleMergeCommitIntent(legacy); err != nil {
+		t.Fatalf("legacy intent rejected: %v", err)
+	}
+	encoded, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "resolution") {
+		t.Fatalf("legacy intent gained optional resolution field: %s", encoded)
+	}
+
+	valid := validSingleMergeResolution(intent)
+	tests := []struct {
+		name   string
+		mutate func(*SingleMergeCommitIntent, *SingleMergeResolution)
+	}{
+		{name: "unknown phase", mutate: func(_ *SingleMergeCommitIntent, r *SingleMergeResolution) { r.Phase = "unknown" }},
+		{name: "malformed source", mutate: func(i *SingleMergeCommitIntent, _ *SingleMergeResolution) { i.SourceHead = "not-a-revision" }},
+		{name: "unsorted conflict files", mutate: func(_ *SingleMergeCommitIntent, r *SingleMergeResolution) { r.ConflictFiles = []string{"z.go", "a.go"} }},
+		{name: "unsafe changed path", mutate: func(_ *SingleMergeCommitIntent, r *SingleMergeResolution) { r.ChangedPaths = []string{"../outside"} }},
+		{name: "malformed fingerprint", mutate: func(_ *SingleMergeCommitIntent, r *SingleMergeResolution) { r.ContentFingerprint = "sha256:bad" }},
+		{name: "inexact message", mutate: func(_ *SingleMergeCommitIntent, r *SingleMergeResolution) { r.CommitMessage += "\n" }},
+		{name: "premature committed phase", mutate: func(_ *SingleMergeCommitIntent, r *SingleMergeResolution) {
+			r.Phase = SingleMergeResolutionPhaseCommitted
+		}},
+		{name: "unbounded summary", mutate: func(_ *SingleMergeCommitIntent, r *SingleMergeResolution) {
+			r.Summary = strings.Repeat("x", maxSingleMergeResolutionSummaryRunes+1)
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidateIntent := intent
+			candidate := valid
+			tt.mutate(&candidateIntent, &candidate)
+			candidateIntent.Resolution = &candidate
+			if err := validateSingleMergeCommitIntent(candidateIntent); err == nil {
+				t.Fatalf("invalid resolution accepted: %#v", candidate)
+			}
+		})
+	}
+
+	committed := valid
+	committed.Phase = SingleMergeResolutionPhaseCommitted
+	committed.IntegrationHead = strings.Repeat("c", 40)
+	committed.CommittedAt = valid.ResolvedAt.Add(time.Minute)
+	reviewed := committed
+	reviewed.Phase = SingleMergeResolutionPhaseReviewed
+	reviewed.Review = &SingleMergeResolutionReview{
+		Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Summary: "Approved.", FindingsCount: 1,
+		Findings: []ReviewFinding{{Message: strings.Repeat("x", maxSingleMergeFindingTextRunes+1)}},
+		Base:     intent.DefaultParent, Head: committed.IntegrationHead, Agent: "pi", ReviewedAt: committed.CommittedAt.Add(time.Minute),
+	}
+	intent.Resolution = &reviewed
+	if err := validateSingleMergeCommitIntent(intent); err == nil {
+		t.Fatal("unbounded independent review finding was accepted")
+	}
+
+	unknown := validSingleMergeResolution(validSingleMergeResolutionIntent("plan-a"))
+	unknown.Phase = "future_phase"
+	unknownIntent := validSingleMergeResolutionIntent("plan-a")
+	unknownIntent.Resolution = &unknown
+	detail := &PlanDetail{State: State{Plan: PlanState{ID: "plan-a", MergeCommitIntent: &unknownIntent}}}
+	warnings := ValidateDetail(detail)
+	if !slices.ContainsFunc(warnings, func(warning string) bool { return strings.Contains(warning, "merge_commit_intent is invalid") }) {
+		t.Fatalf("unknown resolution shape did not fail closed during validation: %v", warnings)
+	}
+}
+
+func TestSingleMergeResolutionCloneDoesNotAliasEvidence(t *testing.T) {
+	intent := validSingleMergeResolutionIntent("plan-a")
+	resolution := validSingleMergeResolution(intent)
+	resolution.Phase = SingleMergeResolutionPhaseCommitted
+	resolution.IntegrationHead = strings.Repeat("c", 40)
+	resolution.CommittedAt = resolution.ResolvedAt.Add(time.Minute)
+	resolution.Phase = SingleMergeResolutionPhaseReviewed
+	resolution.Review = &SingleMergeResolutionReview{
+		Status: ReviewStatusCompleted, Verdict: ReviewVerdictComment, Summary: "Review.", FindingsCount: 1,
+		Findings: []ReviewFinding{{File: "a.go", Message: "Finding."}}, Base: intent.DefaultParent, Head: resolution.IntegrationHead, Agent: "pi", ReviewedAt: resolution.CommittedAt.Add(time.Minute),
+	}
+	intent.Resolution = &resolution
+	clone := cloneSingleMergeCommitIntent(&intent)
+	clone.Resolution.ConflictFiles[0] = "changed.go"
+	clone.Resolution.ChangedPaths[0] = "changed.go"
+	clone.Resolution.Review.Findings[0].Message = "Changed."
+	if intent.Resolution.ConflictFiles[0] != "a.go" || intent.Resolution.ChangedPaths[0] != "a.go" || intent.Resolution.Review.Findings[0].Message != "Finding." {
+		t.Fatalf("single-merge resolution clone aliased source: %#v", intent.Resolution)
+	}
+
+	event := Event{Type: EventTypePlanMerged, SingleMergeResolution: projectSingleMergeResolutionEvent(&resolution)}
+	eventClone := cloneEvent(event)
+	eventClone.SingleMergeResolution.ConflictFiles[0] = "event-changed.go"
+	eventClone.SingleMergeResolution.Review.Findings[0].Message = "Event changed."
+	if event.SingleMergeResolution.ConflictFiles[0] != "a.go" || event.SingleMergeResolution.Review.Findings[0].Message != "Finding." {
+		t.Fatalf("single-merge event clone aliased source: %#v", event.SingleMergeResolution)
+	}
+}
+
+func validSingleMergeResolutionIntent(planID string) SingleMergeCommitIntent {
+	return SingleMergeCommitIntent{
+		Message:       "fix(merge): resolve conflicts\n\nWhat:\nResolve the squash conflict.\n\nWhy:\nIntegrate the reviewed source safely.",
+		PlanID:        planID,
+		SourceHead:    strings.Repeat("a", 40),
+		DefaultBranch: "main",
+		DefaultParent: strings.Repeat("b", 40),
+		CreatedAt:     time.Date(2026, 9, 2, 17, 0, 0, 0, time.UTC),
+	}
+}
+
+func validSingleMergeResolutionRequest(intent SingleMergeCommitIntent) SingleMergeResolution {
+	return SingleMergeResolution{
+		Phase: SingleMergeResolutionPhaseRequested, ConflictFiles: []string{"a.go"}, RequestedAt: intent.CreatedAt.Add(time.Minute),
+		ChangedPaths: []string{},
+	}
+}
+
+func validSingleMergeResolution(intent SingleMergeCommitIntent) SingleMergeResolution {
+	return SingleMergeResolution{
+		Phase: SingleMergeResolutionPhaseResolved, ConflictFiles: []string{"a.go"}, RequestedAt: intent.CreatedAt.Add(time.Minute),
+		Outcome: SingleMergeResolutionOutcomeResolved, Summary: "Resolved the conflict.", ChangedPaths: []string{"a.go"},
+		ContentFingerprint: strings.Repeat("d", 64),
+		CommitMessage:      "fix(merge): apply resolution\n\nWhat:\nApply the validated conflict resolution.\n\nWhy:\nPreserve exact recovery authority.",
+		ResolvedAt:         intent.CreatedAt.Add(2 * time.Minute),
 	}
 }
 

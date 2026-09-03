@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,11 +20,17 @@ import (
 
 type batchSessionAgentFunc func(context.Context, BatchAgentSessionRequest) (BatchAgentSessionResult, error)
 
+func (f batchSessionAgentFunc) Preflight(context.Context, BatchAgentSessionRequest) error { return nil }
+
 func (f batchSessionAgentFunc) Resolve(ctx context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
 	return f(ctx, request)
 }
 
 type batchResolutionAgentFunc func(context.Context, string, string) (string, error)
+
+func (f batchResolutionAgentFunc) Preflight(context.Context, BatchAgentSessionRequest) error {
+	return nil
+}
 
 func (f batchResolutionAgentFunc) Resolve(ctx context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
 	output, err := f(ctx, request.IntegrationRoot, request.Prompt)
@@ -752,9 +759,12 @@ func batchAgentDeferredState(fixture realGitWorktree, sourceHead, defaultHead st
 
 func TestConflictMarkersRemainIgnoresMarkerLikeSource(t *testing.T) {
 	root := t.TempDir()
+	runRealGit(t, root, "init")
 	source := "package scan\n\n" +
 		"var l = \"" + strings.Repeat("<", 7) + "\"\n" +
-		"var r = \"" + strings.Repeat(">", 7) + "\"\n"
+		"var r = \"" + strings.Repeat(">", 7) + "\"\n" +
+		"var separator = \"" + strings.Repeat("=", 7) + "\"\n" +
+		"var ancestor = \"" + strings.Repeat("|", 7) + "\"\n"
 	if err := os.WriteFile(filepath.Join(root, "scanner.go"), []byte(source), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -769,10 +779,65 @@ func TestConflictMarkersRemainIgnoresMarkerLikeSource(t *testing.T) {
 	if !conflictMarkersRemain(root, []string{"conflicted.txt"}) {
 		t.Fatal("real line-anchored conflict markers must be detected")
 	}
+
+	for _, tc := range []struct {
+		name    string
+		content string
+	}{
+		{name: "separator", content: "ours\n=======\ntheirs\n"},
+		{name: "diff3 ancestor", content: "ours\n||||||| parent\nancestor\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := strings.ReplaceAll(tc.name, " ", "-") + ".txt"
+			if err := os.WriteFile(filepath.Join(root, path), []byte(tc.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if !conflictMarkersRemain(root, []string{path}) {
+				t.Fatalf("residual %s marker was not detected", tc.name)
+			}
+
+			boundaryPath := "boundary-" + path
+			boundaryContent := strings.Repeat("x", conflictMarkerScanBufferBytes-4) + "\n" + tc.content
+			if err := os.WriteFile(filepath.Join(root, boundaryPath), []byte(boundaryContent), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if !conflictMarkersRemain(root, []string{boundaryPath}) {
+				t.Fatalf("residual %s marker spanning streaming buffers was not detected", tc.name)
+			}
+		})
+	}
+
+	boundaryConflict := strings.Repeat("x", conflictMarkerScanBufferBytes-4) + "\n" + conflicted
+	if err := os.WriteFile(filepath.Join(root, "boundary.txt"), []byte(boundaryConflict), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !conflictMarkersRemain(root, []string{"boundary.txt"}) {
+		t.Fatal("conflict marker spanning streaming buffers was not detected")
+	}
+
+	const customMarkerSize = 12
+	if err := os.WriteFile(filepath.Join(root, ".gitattributes"), []byte("custom.txt conflict-marker-size=12\ncustom-extra.txt conflict-marker-size=12\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	customMarker := strings.Repeat("=", customMarkerSize)
+	customBoundary := strings.Repeat("x", conflictMarkerScanBufferBytes-4) + "\n" + customMarker + "\n"
+	if err := os.WriteFile(filepath.Join(root, "custom.txt"), []byte(customBoundary), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !conflictMarkersRemain(root, []string{"custom.txt"}) {
+		t.Fatal("custom-width marker spanning streaming buffers was not detected")
+	}
+	if err := os.WriteFile(filepath.Join(root, "custom-extra.txt"), []byte(customMarker+"=\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if conflictMarkersRemain(root, []string{"custom-extra.txt"}) {
+		t.Fatal("marker run longer than the effective custom width must be ordinary content")
+	}
 }
 
 func TestValidateAgentEditsScansOnlyRequestedFiles(t *testing.T) {
 	root := t.TempDir()
+	runRealGit(t, root, "init")
 	if err := os.WriteFile(filepath.Join(root, "changed.txt"), []byte("safe edit\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -781,17 +846,75 @@ func TestValidateAgentEditsScansOnlyRequestedFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	validation := validateAgentEdits(root, []string{"changed.txt"}, []string{"changed.txt"})
+	validation := validateAgentEdits(context.Background(), root, []string{"changed.txt"}, []string{"changed.txt"})
 	if validation.issue != agentEditIssueNone {
 		t.Fatalf("unchanged marker file affected validation: %+v", validation)
 	}
-	validation = validateAgentEdits(root, []string{"changed.txt"}, []string{"unchanged.txt"})
+	validation = validateAgentEdits(context.Background(), root, []string{"changed.txt"}, []string{"unchanged.txt"})
 	if validation.issue != agentEditIssueConflictMarkers || !reflect.DeepEqual(validation.markerPaths, []string{"unchanged.txt"}) {
 		t.Fatalf("requested marker file was not reported: %+v", validation)
 	}
-	validation = validateAgentEdits(root, []string{"missing.txt"}, []string{"missing.txt"})
+	validation = validateAgentEdits(context.Background(), root, []string{"missing.txt"}, []string{"missing.txt"})
 	if validation.issue != agentEditIssueUnscannablePaths || validation.scanErr == nil || !strings.Contains(validation.scanErr.Error(), "missing.txt") {
 		t.Fatalf("unreadable requested path did not fail closed: %+v", validation)
+	}
+}
+
+func TestValidateAgentEditsRejectsOversizedAndCancelledMarkerScans(t *testing.T) {
+	root := t.TempDir()
+	runRealGit(t, root, "init")
+	oversized := filepath.Join(root, "oversized.txt")
+	file, err := os.Create(oversized) //nolint:gosec // test path is rooted in t.TempDir.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Truncate(maxConflictMarkerScanFileBytes + 1); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	validation := validateAgentEdits(context.Background(), root, []string{"oversized.txt"}, []string{"oversized.txt"})
+	if validation.issue != agentEditIssueUnscannablePaths || validation.scanErr == nil || !strings.Contains(validation.scanErr.Error(), "per-file scan limit") {
+		t.Fatalf("oversized marker scan did not fail closed: %+v", validation)
+	}
+
+	if err := os.WriteFile(filepath.Join(root, "safe.txt"), []byte("safe\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	validation = validateAgentEdits(ctx, root, []string{"safe.txt"}, []string{"safe.txt"})
+	if validation.issue != agentEditIssueUnscannablePaths || !errors.Is(validation.scanErr, context.Canceled) {
+		t.Fatalf("cancelled marker scan did not fail closed: %+v", validation)
+	}
+}
+
+func TestConflictMarkerPathsEnforcesAggregateByteLimit(t *testing.T) {
+	root := t.TempDir()
+	runRealGit(t, root, "init")
+	paths := make([]string, 0, maxConflictMarkerScanAggregateBytes/maxConflictMarkerScanFileBytes+1)
+	for i := 0; i < cap(paths); i++ {
+		path := fmt.Sprintf("large-%d.txt", i)
+		file, err := os.Create(filepath.Join(root, path)) //nolint:gosec // test path is rooted in t.TempDir.
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := file.Truncate(maxConflictMarkerScanFileBytes); err != nil {
+			_ = file.Close()
+			t.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, path)
+	}
+
+	_, err := conflictMarkerPaths(context.Background(), root, paths)
+	if err == nil || !strings.Contains(err.Error(), "aggregate scan limit") {
+		t.Fatalf("aggregate marker scan did not fail closed: %v", err)
 	}
 }
 

@@ -1,6 +1,7 @@
 package merge
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -35,6 +37,14 @@ type BatchResolver interface {
 // BatchResolutionAgent performs exactly one provider-neutral editing session.
 type BatchResolutionAgent interface {
 	Resolve(context.Context, BatchAgentSessionRequest) (BatchAgentSessionResult, error)
+}
+
+// SingleMergeAgent additionally proves that provider configuration and the
+// OS filesystem boundary are available before durable one-shot evidence is
+// written.
+type SingleMergeAgent interface {
+	BatchResolutionAgent
+	Preflight(context.Context, BatchAgentSessionRequest) error
 }
 
 type BatchResolveOptions struct {
@@ -217,7 +227,7 @@ func (r BatchAgentResolver) Resolve(ctx context.Context, state BatchState, integ
 				return r.block(ctx, result, state, git, BatchBlockKindResumable, fmt.Sprintf("agent returned malformed output for %s: %v", candidate.PlanID, outputErr))
 			}
 			markerScanPaths := presentMarkerScanPaths(integrationRoot, integration.ConflictFiles)
-			validation := validateAgentEdits(integrationRoot, changed, markerScanPaths)
+			validation := validateAgentEdits(ctx, integrationRoot, changed, markerScanPaths)
 			switch validation.issue {
 			case agentEditIssueUnsafePaths:
 				return r.block(ctx, result, state, git, BatchBlockKindResumable, fmt.Sprintf("agent made unsafe metadata edits while resolving %s", candidate.PlanID))
@@ -305,16 +315,22 @@ func (r BatchAgentResolver) Resolve(ctx context.Context, state BatchState, integ
 	return result, err
 }
 
-type batchProtectedRefs map[string]string
+type protectedRefs map[string]string
+
+type batchProtectedRefs = protectedRefs
 
 func snapshotBatchProtectedRefs(ctx context.Context, git GitClient, state BatchState) (batchProtectedRefs, error) {
 	candidates := effectiveBatchCandidates(state)
-	refs := make(batchProtectedRefs, len(candidates)+1)
 	branches := make([]string, 0, len(candidates)+1)
 	branches = append(branches, state.DefaultBranch)
 	for _, candidate := range candidates {
 		branches = append(branches, candidate.Branch)
 	}
+	return snapshotProtectedRefs(ctx, git, branches)
+}
+
+func snapshotProtectedRefs(ctx context.Context, git GitClient, branches []string) (protectedRefs, error) {
+	refs := make(protectedRefs, len(branches))
 	for _, branch := range branches {
 		branch = strings.TrimSpace(branch)
 		if branch == "" {
@@ -337,6 +353,10 @@ func snapshotBatchProtectedRefs(ctx context.Context, git GitClient, state BatchS
 }
 
 func compareBatchProtectedRefs(ctx context.Context, git GitClient, before batchProtectedRefs) error {
+	return compareProtectedRefs(ctx, git, before)
+}
+
+func compareProtectedRefs(ctx context.Context, git GitClient, before protectedRefs) error {
 	const missingRefSHA = "0000000000000000000000000000000000000000"
 	refs := make([]string, 0, len(before))
 	for ref := range before {
@@ -481,7 +501,7 @@ func (r BatchAgentResolver) finishResolvedCandidate(ctx context.Context, state B
 		changed = porcelainPaths(status)
 	}
 	markerScanPaths := presentMarkerScanPaths(git.Root(), integration.ConflictFiles)
-	validation := validateAgentEdits(git.Root(), changed, markerScanPaths)
+	validation := validateAgentEdits(ctx, git.Root(), changed, markerScanPaths)
 	switch validation.issue {
 	case agentEditIssueUnsafePaths:
 		return state, false, false, fmt.Errorf("agent made unsafe metadata edits while resolving %s", planID)
@@ -679,7 +699,10 @@ func porcelainPaths(status string) []string {
 
 type porcelainChanges struct {
 	changedPaths    []string
+	stagePaths      []string
 	markerScanPaths []string
+	unmergedPaths   []string
+	unmerged        bool
 }
 
 type porcelainV1ZClient interface {
@@ -804,6 +827,17 @@ func validatePorcelainPath(path string) (string, error) {
 
 func recordPorcelainChange(changes *porcelainChanges, code, target, source string) {
 	changes.changedPaths = append(changes.changedPaths, target)
+	// A staged deletion is already absent from the index, so passing its missing
+	// path back to git add is an unmatched pathspec. Rename source endpoints are
+	// staged through their target; worktree and conflict deletions still need the
+	// target so git add -A records them.
+	if code != "D " {
+		changes.stagePaths = append(changes.stagePaths, target)
+	}
+	if unmergedStatusCode(code) {
+		changes.unmerged = true
+		changes.unmergedPaths = append(changes.unmergedPaths, target)
+	}
 	if strings.Contains(code, "R") && source != "" {
 		changes.changedPaths = append(changes.changedPaths, source)
 	}
@@ -819,8 +853,12 @@ func porcelainWorktreePathPresent(code string) bool {
 func (c *porcelainChanges) normalize() {
 	sort.Strings(c.changedPaths)
 	c.changedPaths = slices.Compact(c.changedPaths)
+	sort.Strings(c.stagePaths)
+	c.stagePaths = slices.Compact(c.stagePaths)
 	sort.Strings(c.markerScanPaths)
 	c.markerScanPaths = slices.Compact(c.markerScanPaths)
+	sort.Strings(c.unmergedPaths)
+	c.unmergedPaths = slices.Compact(c.unmergedPaths)
 }
 
 // presentMarkerScanPaths preserves valid delete-based conflict resolutions.
@@ -858,14 +896,21 @@ type agentEditValidation struct {
 
 // validateAgentEdits scans only markerScanPaths. Callers must pass the real
 // conflict files or the files changed by the agent, never a repository-wide list.
-func validateAgentEdits(root string, changedPaths, markerScanPaths []string) agentEditValidation {
+func validateAgentEdits(ctx context.Context, root string, changedPaths, markerScanPaths []string) agentEditValidation {
+	return validateAgentEditsAtMarkerSizes(ctx, root, changedPaths, markerScanPaths, nil)
+}
+
+// validateAgentEditsAtMarkerSizes additionally scans a path at its immutable
+// pre-agent marker size. The worktree's newly effective size is always checked
+// too, so an allowed .gitattributes edit cannot weaken the structural gate.
+func validateAgentEditsAtMarkerSizes(ctx context.Context, root string, changedPaths, markerScanPaths []string, originalMarkerSizes map[string]int) agentEditValidation {
 	if unsafeResolutionPaths(changedPaths) || unsafeResolutionPaths(markerScanPaths) {
 		return agentEditValidation{issue: agentEditIssueUnsafePaths}
 	}
 	if len(changedPaths) == 0 {
 		return agentEditValidation{issue: agentEditIssueNoChanges}
 	}
-	markerPaths, err := conflictMarkerPaths(root, markerScanPaths)
+	markerPaths, err := conflictMarkerPathsAtSizes(ctx, root, markerScanPaths, originalMarkerSizes)
 	if err != nil {
 		return agentEditValidation{issue: agentEditIssueUnscannablePaths, markerPaths: markerPaths, scanErr: err}
 	}
@@ -875,52 +920,264 @@ func validateAgentEdits(root string, changedPaths, markerScanPaths []string) age
 	return agentEditValidation{issue: agentEditIssueNone}
 }
 
-// Marker prefixes are built at runtime so this function can never match its
-// own source if this file ends up in a conflict-file list.
-var conflictMarkerPrefixes = []string{strings.Repeat("<", 7), strings.Repeat(">", 7)}
+const (
+	maxConflictMarkerScanFileBytes      int64 = 8 << 20
+	maxConflictMarkerScanAggregateBytes int64 = 32 << 20
+	conflictMarkerScanBufferBytes             = 32 << 10
+	defaultConflictMarkerSize                 = 7
+)
 
 func conflictMarkersRemain(root string, paths []string) bool {
-	found, err := conflictMarkerPaths(root, paths)
+	found, err := conflictMarkerPaths(context.Background(), root, paths)
 	return err != nil || len(found) > 0
 }
 
-func conflictMarkerPaths(root string, paths []string) ([]string, error) {
+func conflictMarkerPaths(ctx context.Context, root string, paths []string) ([]string, error) {
+	return conflictMarkerPathsAtSizes(ctx, root, paths, nil)
+}
+
+func conflictMarkerPathsAtSizes(ctx context.Context, root string, paths []string, originalMarkerSizes map[string]int) ([]string, error) {
+	markerSizes, err := effectiveConflictMarkerSizes(ctx, root, paths)
+	if err != nil {
+		return nil, err
+	}
 	var found []string
-	for _, path := range paths {
+	var scannedBytes int64
+	for pathIndex, path := range paths {
+		if err := ctx.Err(); err != nil {
+			return found, err
+		}
 		fullPath := filepath.Join(root, filepath.Clean(filepath.FromSlash(path)))
 		info, err := os.Lstat(fullPath)
 		if err != nil {
 			return found, fmt.Errorf("inspect conflict-marker path %q: %w", path, err)
 		}
-		var content []byte
+		if info.Size() > maxConflictMarkerScanFileBytes {
+			return found, fmt.Errorf("inspect conflict-marker path %q: file size %d exceeds %d-byte per-file scan limit", path, info.Size(), maxConflictMarkerScanFileBytes)
+		}
+		if info.Size() > maxConflictMarkerScanAggregateBytes-scannedBytes {
+			return found, fmt.Errorf("inspect conflict-marker path %q: files exceed %d-byte aggregate scan limit", path, maxConflictMarkerScanAggregateBytes)
+		}
+
+		sizes := []int{markerSizes[pathIndex]}
+		if originalSize := originalMarkerSizes[path]; originalSize > 0 && originalSize != markerSizes[pathIndex] {
+			sizes = append(sizes, originalSize)
+		}
+		var hasMarker bool
 		switch {
 		case info.Mode().IsRegular():
-			content, err = os.ReadFile(fullPath) //nolint:gosec // Git path is validated and confined to the integration root.
+			hasMarker, err = streamConflictMarkers(ctx, fullPath, sizes, &scannedBytes)
 		case info.Mode()&os.ModeSymlink != 0:
 			var target string
 			target, err = os.Readlink(fullPath)
-			content = []byte(target)
+			if err == nil {
+				err = ctx.Err()
+			}
+			if err == nil {
+				targetBytes := int64(len(target))
+				if targetBytes > maxConflictMarkerScanFileBytes || targetBytes > maxConflictMarkerScanAggregateBytes-scannedBytes {
+					err = fmt.Errorf("symbolic link target exceeds conflict-marker scan limit")
+				} else {
+					scannedBytes += targetBytes
+					hasMarker = contentHasConflictMarkerSizes(target, sizes)
+				}
+			}
 		default:
 			err = fmt.Errorf("unsupported file type %s", info.Mode().Type())
 		}
 		if err != nil {
 			return found, fmt.Errorf("read conflict-marker path %q: %w", path, err)
 		}
-		if contentHasConflictMarker(string(content)) {
+		if hasMarker {
 			found = append(found, path)
 		}
 	}
 	return found, nil
 }
 
-func contentHasConflictMarker(content string) bool {
-	for line := range strings.SplitSeq(content, "\n") {
-		line = strings.TrimSuffix(line, "\r")
-		for _, marker := range conflictMarkerPrefixes {
-			rest, found := strings.CutPrefix(line, marker)
-			if found && (rest == "" || strings.HasPrefix(rest, " ")) {
+func effectiveConflictMarkerSizes(ctx context.Context, root string, paths []string) ([]int, error) {
+	return effectiveConflictMarkerSizesFrom(ctx, root, paths, false)
+}
+
+func cachedConflictMarkerSizes(ctx context.Context, root string, paths []string) ([]int, error) {
+	return effectiveConflictMarkerSizesFrom(ctx, root, paths, true)
+}
+
+func effectiveConflictMarkerSizesFrom(ctx context.Context, root string, paths []string, cached bool) ([]int, error) {
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	if _, err := os.Lstat(filepath.Join(root, ".git")); errors.Is(err, os.ErrNotExist) {
+		markerSizes := make([]int, len(paths))
+		for i := range markerSizes {
+			markerSizes[i] = defaultConflictMarkerSize
+		}
+		return markerSizes, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("inspect Git worktree for conflict-marker sizes: %w", err)
+	}
+	var input bytes.Buffer
+	for _, path := range paths {
+		input.WriteString(path)
+		input.WriteByte(0)
+	}
+	args := []string{"-C", root, "check-attr", "-z"}
+	if cached {
+		args = append(args, "--cached")
+	}
+	args = append(args, "--stdin", "conflict-marker-size")
+	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec // Paths are sent as NUL-delimited stdin, not command arguments.
+	cmd.Stdin = &input
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("inspect effective conflict-marker sizes: %w", err)
+	}
+	fields := bytes.Split(output, []byte{0})
+	if len(fields) == 0 || len(fields[len(fields)-1]) != 0 {
+		return nil, errors.New("inspect effective conflict-marker sizes: malformed git check-attr output")
+	}
+	fields = fields[:len(fields)-1]
+	if len(fields) != len(paths)*3 {
+		return nil, errors.New("inspect effective conflict-marker sizes: incomplete git check-attr output")
+	}
+	markerSizes := make([]int, len(paths))
+	for i, path := range paths {
+		pathField, attributeField, valueField := fields[i*3], fields[i*3+1], fields[i*3+2]
+		if string(pathField) != path || string(attributeField) != "conflict-marker-size" {
+			return nil, errors.New("inspect effective conflict-marker sizes: mismatched git check-attr output")
+		}
+		markerSizes[i] = defaultConflictMarkerSize
+		if size, parseErr := strconv.Atoi(string(valueField)); parseErr == nil && size > 0 {
+			markerSizes[i] = size
+		}
+	}
+	return markerSizes, nil
+}
+
+func streamConflictMarkers(ctx context.Context, path string, markerSizes []int, aggregateBytes *int64) (bool, error) {
+	file, err := os.Open(path) //nolint:gosec // Git path is validated and confined to the integration root.
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = file.Close() }()
+
+	scanners := make([]conflictMarkerScanner, len(markerSizes))
+	for i, markerSize := range markerSizes {
+		scanners[i].markerSize = markerSize
+	}
+	buffer := make([]byte, conflictMarkerScanBufferBytes)
+	var fileBytes int64
+	var found bool
+	for {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		n, readErr := file.Read(buffer)
+		if n > 0 {
+			fileBytes += int64(n)
+			*aggregateBytes += int64(n)
+			if fileBytes > maxConflictMarkerScanFileBytes {
+				return false, fmt.Errorf("file exceeds %d-byte per-file scan limit", maxConflictMarkerScanFileBytes)
+			}
+			if *aggregateBytes > maxConflictMarkerScanAggregateBytes {
+				return false, fmt.Errorf("files exceed %d-byte aggregate scan limit", maxConflictMarkerScanAggregateBytes)
+			}
+			if !found {
+				for i := range scanners {
+					found = scanners[i].write(buffer[:n]) || found
+				}
+			}
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				for i := range scanners {
+					found = scanners[i].atEOF() || found
+				}
+				return found, nil
+			}
+			return false, readErr
+		}
+	}
+}
+
+type conflictMarkerScanner struct {
+	marker     byte
+	matched    int
+	markerSize int
+	state      uint8
+}
+
+const (
+	conflictMarkerScanLineStart uint8 = iota
+	conflictMarkerScanMatching
+	conflictMarkerScanAfterCR
+	conflictMarkerScanSkipLine
+)
+
+func (s *conflictMarkerScanner) write(content []byte) bool {
+	for _, current := range content {
+		switch s.state {
+		case conflictMarkerScanLineStart:
+			if current == '\n' {
+				continue
+			}
+			if current == '<' || current == '>' || current == '=' || current == '|' {
+				s.marker, s.matched, s.state = current, 1, conflictMarkerScanMatching
+			} else {
+				s.state = conflictMarkerScanSkipLine
+			}
+		case conflictMarkerScanMatching:
+			if s.matched < s.markerSize {
+				switch current {
+				case s.marker:
+					s.matched++
+				case '\n':
+					s.reset()
+				default:
+					s.state = conflictMarkerScanSkipLine
+				}
+				continue
+			}
+			switch current {
+			case '\n':
+				return true
+			case ' ':
+				if s.marker != '=' {
+					return true
+				}
+				s.state = conflictMarkerScanSkipLine
+			case '\r':
+				s.state = conflictMarkerScanAfterCR
+			default:
+				s.state = conflictMarkerScanSkipLine
+			}
+		case conflictMarkerScanAfterCR:
+			if current == '\n' {
 				return true
 			}
+			s.state = conflictMarkerScanSkipLine
+		case conflictMarkerScanSkipLine:
+			if current == '\n' {
+				s.reset()
+			}
+		}
+	}
+	return false
+}
+
+func (s *conflictMarkerScanner) atEOF() bool {
+	return (s.state == conflictMarkerScanMatching && s.matched == s.markerSize) || s.state == conflictMarkerScanAfterCR
+}
+
+func (s *conflictMarkerScanner) reset() {
+	s.marker, s.matched, s.state = 0, 0, conflictMarkerScanLineStart
+}
+
+func contentHasConflictMarkerSizes(content string, markerSizes []int) bool {
+	for _, markerSize := range markerSizes {
+		scanner := conflictMarkerScanner{markerSize: markerSize}
+		if scanner.write([]byte(content)) || scanner.atEOF() {
+			return true
 		}
 	}
 	return false

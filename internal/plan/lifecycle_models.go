@@ -49,6 +49,7 @@ const (
 	EventTypeFinalVerification          = "final_verification"
 	EventTypeVerificationRepairCreated  = "verification_repair_created"
 	EventTypeMergeVerification          = "merge_verification"
+	EventTypeSingleMergeRolledBack      = "single_merge_resolution_rolled_back"
 	EventTypePlanCommitFallback         = "plan_commit_fallback"
 	EventTypePlanCommitGuard            = "plan_commit_guard"
 )
@@ -594,15 +595,117 @@ func validFinalizationLabel(value string) bool {
 	return true
 }
 
+// SingleMergeResolutionPhase identifies the durable boundary reached by an
+// ordinary squash-conflict transaction. Each phase adds exact recovery
+// evidence; phases never infer authority from the worktree.
+type SingleMergeResolutionPhase string
+
+const (
+	SingleMergeResolutionPhaseRequested  SingleMergeResolutionPhase = "requested"
+	SingleMergeResolutionPhaseResolved   SingleMergeResolutionPhase = "resolved"
+	SingleMergeResolutionPhaseCommitted  SingleMergeResolutionPhase = "committed"
+	SingleMergeResolutionPhaseReviewed   SingleMergeResolutionPhase = "reviewed"
+	SingleMergeResolutionPhaseRolledBack SingleMergeResolutionPhase = "rolled_back"
+)
+
+type SingleMergeResolutionOutcome string
+
+const SingleMergeResolutionOutcomeResolved SingleMergeResolutionOutcome = "resolved"
+
+type SingleMergeResolutionRollbackReason string
+
+const (
+	SingleMergeResolutionRollbackVerificationFailed    SingleMergeResolutionRollbackReason = "verification_failed"
+	SingleMergeResolutionRollbackReviewUnavailable     SingleMergeResolutionRollbackReason = "review_unavailable"
+	SingleMergeResolutionRollbackReviewNotApproved     SingleMergeResolutionRollbackReason = "review_not_approved"
+	SingleMergeResolutionRollbackMergeRecordingFailed  SingleMergeResolutionRollbackReason = "merge_recording_failed"
+	SingleMergeResolutionRollbackRecoveredInterruption SingleMergeResolutionRollbackReason = "recovered_interruption"
+)
+
+// SingleMergeResolutionReview is an independent fresh-session review of the
+// exact integration commit. It is deliberately separate from PlanReview,
+// which continues to describe the source-plan diff.
+type SingleMergeResolutionReview struct {
+	Status        string          `json:"status"`
+	Verdict       string          `json:"verdict"`
+	Summary       string          `json:"summary"`
+	FindingsCount int             `json:"findings_count"`
+	Findings      []ReviewFinding `json:"findings"`
+	Base          string          `json:"base"`
+	Head          string          `json:"head"`
+	Agent         string          `json:"agent"`
+	ReviewedAt    time.Time       `json:"reviewed_at"`
+}
+
+func (r *SingleMergeResolutionReview) IsApproved() bool {
+	return r != nil && r.Status == ReviewStatusCompleted && r.Verdict == ReviewVerdictApprove
+}
+
+// SingleMergeResolution records the request before an untrusted resolver runs,
+// then the exact validated output, Tao-owned commit, and independent review.
+// Fields are intentionally non-omitempty once the optional resolution object
+// exists so phase advancement cannot retain stale known fields through the
+// merge-preserving state writer.
+type SingleMergeResolution struct {
+	Phase              SingleMergeResolutionPhase          `json:"phase"`
+	ConflictFiles      []string                            `json:"conflict_files"`
+	RequestedAt        time.Time                           `json:"requested_at"`
+	Outcome            SingleMergeResolutionOutcome        `json:"outcome"`
+	Summary            string                              `json:"summary"`
+	ChangedPaths       []string                            `json:"changed_paths"`
+	ContentFingerprint string                              `json:"content_fingerprint"`
+	CommitMessage      string                              `json:"commit_message"`
+	ResolvedAt         time.Time                           `json:"resolved_at"`
+	IntegrationHead    string                              `json:"integration_head"`
+	CommittedAt        time.Time                           `json:"committed_at"`
+	Review             *SingleMergeResolutionReview        `json:"review"`
+	RollbackReason     SingleMergeResolutionRollbackReason `json:"rollback_reason"`
+	RolledBackAt       time.Time                           `json:"rolled_back_at"`
+}
+
+// SingleMergeResolutionEvent is the bounded append-only projection of
+// resolution evidence. Counts preserve the complete diagnostic cardinality
+// when path or finding details are capped. CommitMessage remains decode-only
+// compatibility for historical events; new events omit it because exact commit
+// authority belongs to the state transaction, not event diagnostics.
+type SingleMergeResolutionEvent struct {
+	Phase                SingleMergeResolutionPhase          `json:"phase"`
+	ConflictFiles        []string                            `json:"conflict_files"`
+	ConflictFilesCount   int                                 `json:"conflict_files_count,omitempty"`
+	RequestedAt          time.Time                           `json:"requested_at"`
+	Outcome              SingleMergeResolutionOutcome        `json:"outcome"`
+	Summary              string                              `json:"summary"`
+	ChangedPaths         []string                            `json:"changed_paths"`
+	ChangedPathsCount    int                                 `json:"changed_paths_count,omitempty"`
+	ContentFingerprint   string                              `json:"content_fingerprint"`
+	CommitMessage        string                              `json:"commit_message,omitempty"`
+	ResolvedAt           time.Time                           `json:"resolved_at"`
+	IntegrationHead      string                              `json:"integration_head"`
+	CommittedAt          time.Time                           `json:"committed_at"`
+	Review               *SingleMergeResolutionReview        `json:"review"`
+	RollbackReason       SingleMergeResolutionRollbackReason `json:"rollback_reason"`
+	RolledBackAt         time.Time                           `json:"rolled_back_at"`
+	DiagnosticsTruncated bool                                `json:"diagnostics_truncated,omitempty"`
+}
+
 // SingleMergeCommitIntent binds the exact trusted squash message to the Git
-// refs Tao validated before mutating the default worktree.
+// refs Tao validated before mutating the default worktree. Resolution is
+// optional so historical intents retain their original JSON shape and meaning.
 type SingleMergeCommitIntent struct {
-	Message       string    `json:"message"`
-	PlanID        string    `json:"plan_id"`
-	SourceHead    string    `json:"source_head"`
-	DefaultBranch string    `json:"default_branch"`
-	DefaultParent string    `json:"default_parent"`
-	CreatedAt     time.Time `json:"created_at"`
+	Message       string                 `json:"message"`
+	PlanID        string                 `json:"plan_id"`
+	SourceHead    string                 `json:"source_head"`
+	DefaultBranch string                 `json:"default_branch"`
+	DefaultParent string                 `json:"default_parent"`
+	CreatedAt     time.Time              `json:"created_at"`
+	Resolution    *SingleMergeResolution `json:"resolution,omitempty"`
+}
+
+// IsActive reports whether the intent still owns an unsettled single-merge
+// transaction. Exact rollback settlement retains diagnostics without retaining
+// transaction authority; legacy and all pre-rollback intents remain active.
+func (i *SingleMergeCommitIntent) IsActive() bool {
+	return i != nil && (i.Resolution == nil || i.Resolution.Phase != SingleMergeResolutionPhaseRolledBack)
 }
 
 // PlanReview records the persisted fresh-session review for a completed plan.
@@ -772,39 +875,40 @@ type PlanNextAction struct {
 
 // Event is one append-only lifecycle entry from events.jsonl.
 type Event struct {
-	Type                string                       `json:"type"`
-	Timestamp           time.Time                    `json:"timestamp"`
-	PlanID              string                       `json:"plan_id"`
-	MutationID          string                       `json:"mutation_id,omitempty"`
-	SliceID             string                       `json:"slice_id,omitempty"`
-	Branch              string                       `json:"branch,omitempty"`
-	PriorRoot           string                       `json:"prior_root,omitempty"`
-	PriorBranch         string                       `json:"prior_branch,omitempty"`
-	PriorHead           string                       `json:"prior_head,omitempty"`
-	BaselineBranch      string                       `json:"baseline_branch,omitempty"`
-	BaselineHead        string                       `json:"baseline_head,omitempty"`
-	MergedDefaultSHA    string                       `json:"merged_default_sha,omitempty"`
-	Agent               string                       `json:"agent,omitempty"`
-	DurationSeconds     *int64                       `json:"duration_seconds,omitempty"`
-	Metrics             *AgentMetrics                `json:"metrics,omitempty"`
-	PullRequest         *PullRequest                 `json:"pull_request,omitempty"`
-	PRFeedbackTriage    PRFeedbackTriageResult       `json:"pr_feedback_triage,omitempty"`
-	Review              *PlanReview                  `json:"review,omitempty"`
-	FinalizationFailure *FinalizationFailure         `json:"finalization_failure,omitempty"`
-	Command             string                       `json:"command,omitempty"`
-	CorrectedCommand    string                       `json:"corrected_command,omitempty"`
-	Result              string                       `json:"result,omitempty"`
-	FailureKind         FinalVerificationFailureKind `json:"failure_kind,omitempty"`
-	ExitCode            *int                         `json:"exit_code,omitempty"`
-	Round               int                          `json:"round,omitempty"`
-	Attempts            int                          `json:"attempts,omitempty"`
-	Fingerprint         string                       `json:"fingerprint,omitempty"`
-	Reason              string                       `json:"reason,omitempty"`
-	CommitPolicy        string                       `json:"commit_policy,omitempty"`
-	RunPacketProvided   bool                         `json:"run_packet_provided,omitempty"`
-	GuardrailWarnings   int                          `json:"guardrail_warnings,omitempty"`
-	Metric              string                       `json:"metric,omitempty"`
-	Threshold           *float64                     `json:"threshold,omitempty"`
-	Observed            *float64                     `json:"observed,omitempty"`
-	Message             string                       `json:"message"`
+	Type                  string                       `json:"type"`
+	Timestamp             time.Time                    `json:"timestamp"`
+	PlanID                string                       `json:"plan_id"`
+	MutationID            string                       `json:"mutation_id,omitempty"`
+	SliceID               string                       `json:"slice_id,omitempty"`
+	Branch                string                       `json:"branch,omitempty"`
+	PriorRoot             string                       `json:"prior_root,omitempty"`
+	PriorBranch           string                       `json:"prior_branch,omitempty"`
+	PriorHead             string                       `json:"prior_head,omitempty"`
+	BaselineBranch        string                       `json:"baseline_branch,omitempty"`
+	BaselineHead          string                       `json:"baseline_head,omitempty"`
+	MergedDefaultSHA      string                       `json:"merged_default_sha,omitempty"`
+	Agent                 string                       `json:"agent,omitempty"`
+	DurationSeconds       *int64                       `json:"duration_seconds,omitempty"`
+	Metrics               *AgentMetrics                `json:"metrics,omitempty"`
+	PullRequest           *PullRequest                 `json:"pull_request,omitempty"`
+	PRFeedbackTriage      PRFeedbackTriageResult       `json:"pr_feedback_triage,omitempty"`
+	Review                *PlanReview                  `json:"review,omitempty"`
+	SingleMergeResolution *SingleMergeResolutionEvent  `json:"single_merge_resolution,omitempty"`
+	FinalizationFailure   *FinalizationFailure         `json:"finalization_failure,omitempty"`
+	Command               string                       `json:"command,omitempty"`
+	CorrectedCommand      string                       `json:"corrected_command,omitempty"`
+	Result                string                       `json:"result,omitempty"`
+	FailureKind           FinalVerificationFailureKind `json:"failure_kind,omitempty"`
+	ExitCode              *int                         `json:"exit_code,omitempty"`
+	Round                 int                          `json:"round,omitempty"`
+	Attempts              int                          `json:"attempts,omitempty"`
+	Fingerprint           string                       `json:"fingerprint,omitempty"`
+	Reason                string                       `json:"reason,omitempty"`
+	CommitPolicy          string                       `json:"commit_policy,omitempty"`
+	RunPacketProvided     bool                         `json:"run_packet_provided,omitempty"`
+	GuardrailWarnings     int                          `json:"guardrail_warnings,omitempty"`
+	Metric                string                       `json:"metric,omitempty"`
+	Threshold             *float64                     `json:"threshold,omitempty"`
+	Observed              *float64                     `json:"observed,omitempty"`
+	Message               string                       `json:"message"`
 }

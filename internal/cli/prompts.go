@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	agentpkg "github.com/iamseth/tao/internal/agent"
@@ -260,8 +261,8 @@ func collectDoctorReport() (doctorReport, error) {
 	}
 
 	required := doctorToolResultCategory{name: "required"}
-	for _, descriptor := range report.agents {
-		required.results = append(required.results, collectDoctorTool(doctorAgentTool(descriptor.Kind)))
+	for _, tool := range doctorRequiredTools(runtime.GOOS, report.agents) {
+		required.results = append(required.results, collectDoctorTool(tool))
 	}
 	report.tools = append(report.tools, required)
 	for _, category := range doctorSharedToolCategories() {
@@ -411,6 +412,17 @@ type doctorToolCategory struct {
 type doctorTool struct {
 	name        string
 	executables []string
+}
+
+func doctorRequiredTools(goos string, agents []agentpkg.Descriptor) []doctorTool {
+	tools := make([]doctorTool, 0, len(agents)+1)
+	for _, descriptor := range agents {
+		tools = append(tools, doctorAgentTool(descriptor.Kind))
+	}
+	if goos == "linux" {
+		tools = append(tools, doctorTool{name: "bubblewrap (bwrap)", executables: []string{"/usr/bin/bwrap", "/bin/bwrap"}})
+	}
+	return tools
 }
 
 func doctorSharedToolCategories() []doctorToolCategory {
