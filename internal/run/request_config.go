@@ -16,9 +16,9 @@ func prepareRequestConfig(defaults ExecutionConfig, request Request) (ExecutionC
 	if err != nil {
 		return ExecutionConfig{}, err
 	}
-	execution := ExecutionConfig{ResolvedRunOptions: config.ResolvedOptions()}
-	execution.SkipPermissions = defaults.SkipPermissions
-	execution.MaxReworkAttempts = defaults.MaxReworkAttempts
+	// Fields not explicitly overridden inherit from the service defaults by design.
+	execution := defaults
+	execution.ResolvedRunOptions = config.ResolvedOptions()
 	execution.RestartBlocked = request.RestartBlocked
 	execution.RepairVerification = request.RepairVerification
 	execution.Reverify = request.Reverify
