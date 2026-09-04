@@ -891,7 +891,11 @@ func (d *detailState) moveSliceDetail(delta int, size term.Size) {
 }
 
 func (d *detailState) sliceMaxOffset(size term.Size) int {
-	return sliceDetailMaxOffset(d.plan, d.selectedSliceID, size.Width, size.Height)
+	log := d.sliceLogs[d.selectedSliceID]
+	if log == "" {
+		log = filterSliceLog(d.log, d.selectedSliceID)
+	}
+	return sliceDetailMaxOffset(d.plan, d.selectedSliceID, size.Width, size.Height, log)
 }
 
 func (d *detailState) clampOffsets(size term.Size) {

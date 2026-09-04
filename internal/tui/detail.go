@@ -24,8 +24,6 @@ const (
 	detailLogTailLines         = 200
 	detailLogKeepLines         = 1000
 	detailLogTabWidth          = 4
-	planDetailHeaderGap        = 1
-	planDetailPaneGap          = 1
 	planDetailFixedLines       = 6 // header, two gaps, tabs, and pane borders
 	planOverviewFixedLines     = 4 // header, gap, tabs, and content gap
 	detailOverviewScopePreview = 6
@@ -620,9 +618,9 @@ func detailSectionHeading(title string, width int, profile Profile) string {
 
 func detailStateRole(value string) Role {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "ready", "completed", "approved", "current", "done":
+	case "ready", "completed", "approved", "current", "done", "pass", "passed", "success", "succeeded", "committed":
 		return RoleDetailSuccess
-	case "blocked", "invalid", "failed", "error", "abandoned", "obsolete":
+	case "blocked", "invalid", "fail", "failed", "failure", "error", "abandoned", "obsolete":
 		return RoleDetailError
 	case "needs_refinement", "conditional", "deferred", "changes_requested", "stale":
 		return RoleDetailWarning
@@ -789,18 +787,6 @@ func detailScope(detail *plan.PlanDetail) []string {
 	return scope
 }
 
-func wrapDetailLines(lines []string, width int) []string {
-	available := width - 4
-	if width <= 0 {
-		available = 0
-	}
-	var result []string
-	for _, line := range lines {
-		result = append(result, wrapDetailWords(singleLineDetail(line), available)...)
-	}
-	return result
-}
-
 func renderActivityPane(log, followError string, width, height, offset int) []string {
 	lines := RenderLogPane(log, 0, int(^uint(0)>>1))
 	if len(lines) == 0 {
@@ -819,28 +805,6 @@ func fitDetailPaneAt(lines []string, width, height, offset int) []string {
 	offset = max(0, min(offset, max(len(lines)-height, 0)))
 	end := min(offset+height, len(lines))
 	return fitDetailPane(lines[offset:end], width, height, 0)
-}
-
-func wrapDetailField(label, value string, width int) []string {
-	value = singleLineDetail(value)
-	if value == "" {
-		return nil
-	}
-	prefix := label + ": "
-	available := width - cells.Width(prefix)
-	if width <= 0 {
-		available = 0
-	}
-	wrapped := wrapDetailWords(value, available)
-	indent := strings.Repeat(" ", cells.Width(prefix))
-	for index := range wrapped {
-		if index == 0 {
-			wrapped[index] = prefix + wrapped[index]
-		} else {
-			wrapped[index] = indent + wrapped[index]
-		}
-	}
-	return wrapped
 }
 
 func wrapDetailWords(value string, available int) []string {
@@ -882,24 +846,6 @@ func wrapDetailWords(value string, available int) []string {
 		lines = append(lines, current)
 	}
 	return lines
-}
-
-func renderLogBox(log, followError string, width, height int) []string {
-	if height <= 0 {
-		return nil
-	}
-	bodyHeight := max(height-2, 0)
-	content := RenderLogPane(log, 0, bodyHeight)
-	if len(content) == 0 && bodyHeight > 0 {
-		content = []string{"No agent log output."}
-	}
-	if followError != "" && bodyHeight > 0 {
-		content = append(content, "log follow stopped: "+singleLineDetail(followError))
-		if len(content) > bodyHeight {
-			content = content[len(content)-bodyHeight:]
-		}
-	}
-	return renderPaneBox("LOG", content, width, height)
 }
 
 func renderPaneBox(title string, content []string, width, height int) []string {
@@ -1026,57 +972,46 @@ func renderSlicesPane(detail *plan.PlanDetail, selectedID string, width, height 
 
 // RenderSliceDetail renders the selected slice as a bounded read-only frame.
 func RenderSliceDetail(model DetailModel) string {
+	profile := model.Profile
+	if profile == ProfileNone {
+		profile = profileForEnabledColor(model.UseColor)
+	}
 	selected, ok := findDetailSlice(model.Plan, model.SelectedSliceID)
-	id, status, approval := "-", "-", "-"
-	var details []string
-	var summary []string
+	id := "-"
+	header := []string{Paint(profile, RoleDetailMuted, "Tao UI | -")}
+	body := []string{Paint(profile, RoleDetailMuted, "Slice details unavailable.")}
 	if ok {
 		id = displayValue(singleLineDetail(selected.ID))
-		status = displayValue(singleLineDetail(selected.Status))
-		approval = sliceApprovalStatus(selected.Approval)
-		summary = append(summary, wrapDetailField("Title", selected.Title, model.Width)...)
-		summary = append(summary, wrapDetailField("Goal", selected.Goal, model.Width)...)
-		summary = append(summary, wrapDetailField("Context", selected.Context, model.Width)...)
-		details = sliceDetailLines(selected)
+		header = []string{Paint(profile, RoleDetailMuted, "Tao UI | "+id), ""}
+		appendOverviewTitle(&header, selected.Title, model.Width, profile)
+		header = append(header, renderDetailMetadata([]detailGridField{
+			{label: "STATUS", value: selected.Status, role: detailStateRole(selected.Status)},
+			{label: "APPROVAL", value: sliceApprovalStatus(selected.Approval), role: sliceApprovalRole(selected.Approval)},
+		}, model.Width, profile)...)
+		if selected.Approval != nil {
+			appendOverviewMutedParagraph(&header, "Approval rationale", selected.Approval.Reason, model.Width, profile)
+		}
+		body = renderSlicePlan(selected, model.Width, profile)
 	}
-	if len(details) == 0 {
-		details = []string{"No additional details."}
-	}
-	details = wrapDetailLines(details, model.Width)
 
 	filteredLog := model.SliceLog
 	if filteredLog == "" {
 		filteredLog = filterSliceLog(model.Log, id)
 	}
-	allLogLines := RenderLogPane(filteredLog, 0, int(^uint(0)>>1))
-	desiredLogHeight := max(len(allLogLines)+2, 3)
-
-	desiredDetailHeight := max(len(details)+2, 3)
-	detailHeight := desiredDetailHeight
-	logHeight := desiredLogHeight
+	document := append([]string(nil), body...)
+	if len(document) > 0 {
+		document = append(document, "")
+	}
+	document = append(document, renderSliceLogSection(filteredLog, model.Width, profile)...)
+	bodyHeight := len(document)
 	if model.Height > 0 {
-		fixedHeight := 1 + planDetailHeaderGap + len(summary) + planDetailPaneGap
-		available := max(model.Height-fixedHeight, 0)
-		detailHeight = min(desiredDetailHeight, available)
-		logHeight = 0
-		if available >= 2+planDetailPaneGap+3 {
-			detailHeight = min(desiredDetailHeight, available-planDetailPaneGap-3)
-			logHeight = available - detailHeight - planDetailPaneGap
-		}
+		bodyHeight = max(model.Height-len(header)-1, 0)
 	}
 
-	lines := []string{"Tao UI | " + id + " | " + status + " | approval: " + approval}
-	if len(summary) > 0 {
-		lines = append(lines, make([]string, planDetailHeaderGap)...)
-		lines = append(lines, summary...)
-	}
-	if detailHeight > 0 {
-		lines = append(lines, make([]string, planDetailPaneGap)...)
-		lines = append(lines, renderPaneBox("DETAIL", fitDetailPaneAt(details, model.Width, max(detailHeight-2, 0), model.SliceOffset), model.Width, detailHeight)...)
-	}
-	if logHeight > 0 {
-		lines = append(lines, make([]string, planDetailPaneGap)...)
-		lines = append(lines, renderLogBox(filteredLog, "", model.Width, logHeight)...)
+	lines := append([]string(nil), header...)
+	if bodyHeight > 0 {
+		lines = append(lines, "")
+		lines = append(lines, fitDetailPaneAt(document, model.Width, bodyHeight, model.SliceOffset)...)
 	}
 	if model.Width > 0 {
 		for index := range lines {
@@ -1089,6 +1024,17 @@ func RenderSliceDetail(model DetailModel) string {
 	if model.ShowShortcuts {
 		lines = overlaySliceDetailShortcuts(lines, model.Width, model.Height, model.UseColor)
 	}
+	if profile != ProfileNone {
+		for index, line := range lines {
+			if model.Width > 0 {
+				line = cells.Pad(line, model.Width)
+			}
+			if line == "" {
+				line = " "
+			}
+			lines[index] = fillRow(profile, RoleDetailBackground, line)
+		}
+	}
 	frame := clearScreenSequence + strings.Join(lines, "\n")
 	if model.Height <= 0 || len(lines) < model.Height {
 		frame += "\n"
@@ -1096,56 +1042,211 @@ func RenderSliceDetail(model DetailModel) string {
 	return frame
 }
 
-func sliceDetailLines(selected plan.Slice) []string {
-	var details []string
-	appendDetailList(&details, "Dependencies", selected.DependsOn)
-	if selected.Approval != nil {
-		appendDetailValue(&details, "Approval", sliceApprovalStatus(selected.Approval))
-		appendDetailValue(&details, "Approval reason", selected.Approval.Reason)
-	}
-	if len(selected.RequiredInputs) > 0 {
-		values := make([]string, 0, len(selected.RequiredInputs))
-		for _, input := range selected.RequiredInputs {
-			value := input.Path
-			if input.Kind != "" {
-				value += " (" + input.Kind + ")"
-			}
-			if input.Reason != "" {
-				value += " — " + input.Reason
-			}
-			values = append(values, value)
+func renderSlicePlan(selected plan.Slice, width int, profile Profile) []string {
+	var lines []string
+	appendSliceSection(&lines, "GOAL", width, profile)
+	appendSliceParagraph(&lines, selected.Goal, width, profile, RoleDetailBody)
+
+	appendSliceSection(&lines, "CONTEXT", width, profile)
+	appendSliceParagraph(&lines, selected.Context, width, profile, RoleDetailBody)
+
+	appendSliceSection(&lines, "DEPENDENCY", width, profile)
+	dependencyCount := 0
+	for _, dependency := range selected.DependsOn {
+		if dependency = singleLineDetail(dependency); dependency != "" {
+			appendSliceLabeledValue(&lines, "Depends on", dependency, width, profile, RoleDetailPrimary)
+			dependencyCount++
 		}
-		appendDetailList(&details, "Required inputs", values)
 	}
-	appendDetailList(&details, "Tasks", selected.Tasks)
-	appendDetailList(&details, "Expected files", selected.ExpectedFiles)
-	appendDetailValue(&details, "Verification source", selected.Verification.Source)
-	appendDetailList(&details, "Verification commands", selected.Verification.Commands)
-	appendDetailList(&details, "Manual checks", selected.Verification.ManualChecks)
-	appendDetailValue(&details, "Blocker", selected.BlockerNote)
-	appendDetailValue(&details, "Notes", selected.Notes)
+	for _, input := range selected.RequiredInputs {
+		path := singleLineDetail(input.Path)
+		if path == "" {
+			continue
+		}
+		if kind := singleLineDetail(input.Kind); kind != "" {
+			path += " (" + kind + ")"
+		}
+		appendSliceLabeledValue(&lines, "Input", path, width, profile, RoleDetailPrimary)
+		if reason := singleLineDetail(input.Reason); reason != "" {
+			appendSliceIndentedText(&lines, reason, width, profile, RoleDetailBody, "    ")
+		}
+		dependencyCount++
+	}
+	if dependencyCount == 0 {
+		appendSliceEmpty(&lines, profile)
+	}
+
+	if blocker := singleLineDetail(selected.BlockerNote); blocker != "" {
+		appendSliceSection(&lines, "BLOCKER", width, profile)
+		appendSliceParagraph(&lines, blocker, width, profile, RoleDetailWarning)
+	}
+
+	appendSliceSection(&lines, "TASKS", width, profile)
+	appendSliceChecklist(&lines, selected.Tasks, width, profile, RoleDetailSecondary)
+
+	appendSliceSection(&lines, "EXPECTED FILES", width, profile)
+	if !appendSliceValues(&lines, selected.ExpectedFiles, width, profile, RoleDetailPrimary, "•") {
+		appendSliceEmpty(&lines, profile)
+	}
+
+	appendSliceSection(&lines, "VERIFICATION", width, profile)
+	lines = append(lines, Paint(profile, RoleDetailMuted, "Source / rationale"))
+	appendSliceParagraph(&lines, selected.Verification.Source, width, profile, RoleDetailBody)
+	lines = append(lines, "", Paint(profile, RoleDetailMuted, "Commands"))
+	if !appendSliceValues(&lines, selected.Verification.Commands, width, profile, RoleDetailInfo, "›") {
+		appendSliceEmpty(&lines, profile)
+	}
 	if len(selected.VerificationResults) > 0 {
-		values := make([]string, 0, len(selected.VerificationResults))
+		lines = append(lines, "", Paint(profile, RoleDetailMuted, "Results"))
 		for _, result := range selected.VerificationResults {
-			value := result.Command
-			if result.Result != "" {
-				value += ": " + result.Result
+			if command := singleLineDetail(result.Command); command != "" {
+				appendSliceBullet(&lines, command, width, profile, RoleDetailPrimary, "›")
 			}
-			if result.Details != "" {
-				value += " — " + result.Details
+			resultText := singleLineDetail(result.Result)
+			if details := singleLineDetail(result.Details); details != "" {
+				if resultText != "" {
+					resultText += " — "
+				}
+				resultText += details
 			}
-			values = append(values, value)
+			if resultText != "" {
+				appendSliceIndentedText(&lines, resultText, width, profile, detailStateRole(result.Result), "    ")
+			}
 		}
-		appendDetailList(&details, "Verification results", values)
+	}
+
+	appendSliceSection(&lines, "MANUAL CHECKS", width, profile)
+	appendSliceChecklist(&lines, selected.Verification.ManualChecks, width, profile, RoleDetailSecondary)
+
+	if notes := singleLineDetail(selected.Notes); notes != "" {
+		appendSliceSection(&lines, "NOTES", width, profile)
+		appendSliceParagraph(&lines, notes, width, profile, RoleDetailBody)
 	}
 	if selected.Completion != nil {
-		value := selected.Completion.Outcome
-		if selected.Completion.CommitSHA != "" {
-			value += " (" + selected.Completion.CommitSHA + ")"
-		}
-		appendDetailValue(&details, "Commit outcome", value)
+		appendSliceSection(&lines, "COMPLETION", width, profile)
+		appendSliceLabeledValue(&lines, "Outcome", selected.Completion.Outcome, width, profile, detailStateRole(selected.Completion.Outcome))
+		appendSliceLabeledValue(&lines, "Commit", selected.Completion.CommitSHA, width, profile, RoleDetailPrimary)
 	}
-	return details
+	return lines
+}
+
+func appendSliceSection(lines *[]string, title string, width int, profile Profile) {
+	if len(*lines) > 0 {
+		*lines = append(*lines, "")
+	}
+	*lines = append(*lines, detailSectionHeading(title, width, profile))
+}
+
+func appendSliceParagraph(lines *[]string, value string, width int, profile Profile, role Role) {
+	value = singleLineDetail(value)
+	if value == "" {
+		appendSliceEmpty(lines, profile)
+		return
+	}
+	appendSliceIndentedText(lines, value, width, profile, role, "  ")
+}
+
+func appendSliceChecklist(lines *[]string, values []string, width int, profile Profile, role Role) {
+	added := false
+	for _, value := range values {
+		if value = singleLineDetail(value); value != "" {
+			appendSliceBullet(lines, value, width, profile, role, "☐")
+			added = true
+		}
+	}
+	if !added {
+		appendSliceEmpty(lines, profile)
+	}
+}
+
+func appendSliceValues(lines *[]string, values []string, width int, profile Profile, role Role, marker string) bool {
+	added := false
+	for _, value := range values {
+		if value = singleLineDetail(value); value != "" {
+			appendSliceBullet(lines, value, width, profile, role, marker)
+			added = true
+		}
+	}
+	return added
+}
+
+func appendSliceBullet(lines *[]string, value string, width int, profile Profile, role Role, marker string) {
+	prefix := "  " + marker + " "
+	wrapped := wrapDetailWords(value, sliceDetailContentWidth(width, cells.Width(prefix)))
+	for index, line := range wrapped {
+		if index == 0 {
+			*lines = append(*lines, Paint(profile, RoleDetailMuted, prefix)+Paint(profile, role, line))
+		} else {
+			*lines = append(*lines, strings.Repeat(" ", cells.Width(prefix))+Paint(profile, role, line))
+		}
+	}
+}
+
+func appendSliceIndentedText(lines *[]string, value string, width int, profile Profile, role Role, indent string) {
+	for _, line := range wrapDetailWords(value, sliceDetailContentWidth(width, cells.Width(indent))) {
+		*lines = append(*lines, indent+Paint(profile, role, line))
+	}
+}
+
+func appendSliceLabeledValue(lines *[]string, label, value string, width int, profile Profile, role Role) {
+	value = singleLineDetail(value)
+	if value == "" {
+		return
+	}
+	prefix := "  " + label + "  "
+	wrapped := wrapDetailWords(value, sliceDetailContentWidth(width, cells.Width(prefix)))
+	for index, line := range wrapped {
+		if index == 0 {
+			*lines = append(*lines, Paint(profile, RoleDetailMuted, prefix)+Paint(profile, role, line))
+		} else {
+			*lines = append(*lines, strings.Repeat(" ", cells.Width(prefix))+Paint(profile, role, line))
+		}
+	}
+}
+
+func appendSliceEmpty(lines *[]string, profile Profile) {
+	*lines = append(*lines, "  "+Paint(profile, RoleDetailMuted, "None."))
+}
+
+func sliceDetailContentWidth(width, prefix int) int {
+	const proseWidth = 88
+	if width <= 0 {
+		width = proseWidth
+	}
+	return max(min(width, proseWidth)-prefix, 1)
+}
+
+func sliceApprovalRole(approval *plan.Approval) Role {
+	if approval == nil || !approval.Required || approval.Approved {
+		return RoleDetailSuccess
+	}
+	return RoleDetailWarning
+}
+
+func renderSliceLogSection(log string, width int, profile Profile) []string {
+	lines := []string{detailSectionHeading("LOG", width, profile)}
+	entries := RenderLogPane(log, 0, int(^uint(0)>>1))
+	if len(entries) == 0 {
+		return append(lines, "  "+Paint(profile, RoleDetailMuted, "No log output."))
+	}
+	for _, entry := range entries {
+		lines = append(lines, Paint(profile, sliceLogRole(entry), entry))
+	}
+	return lines
+}
+
+func sliceLogRole(line string) Role {
+	lower := strings.ToLower(line)
+	switch {
+	case strings.Contains(lower, "error"), strings.Contains(lower, "failed"), strings.Contains(lower, "failure"):
+		return RoleDetailError
+	case strings.Contains(lower, "warning"), strings.Contains(lower, "warn:"):
+		return RoleDetailWarning
+	case strings.Contains(lower, "passed"), strings.Contains(lower, "success"), strings.Contains(lower, "completed"), strings.Contains(line, "✓"):
+		return RoleDetailSuccess
+	default:
+		return RoleDetailMuted
+	}
 }
 
 func sliceApprovalStatus(approval *plan.Approval) string {
@@ -1158,7 +1259,7 @@ func sliceApprovalStatus(approval *plan.Approval) string {
 	return "required"
 }
 
-func sliceDetailMaxOffset(detail *plan.PlanDetail, selectedID string, width, height int) int {
+func sliceDetailMaxOffset(detail *plan.PlanDetail, selectedID string, width, height int, logs ...string) int {
 	if height <= 0 {
 		return 0
 	}
@@ -1166,21 +1267,24 @@ func sliceDetailMaxOffset(detail *plan.PlanDetail, selectedID string, width, hei
 	if !ok {
 		return 0
 	}
-	var summary []string
-	summary = append(summary, wrapDetailField("Title", selected.Title, width)...)
-	summary = append(summary, wrapDetailField("Goal", selected.Goal, width)...)
-	summary = append(summary, wrapDetailField("Context", selected.Context, width)...)
-	details := sliceDetailLines(selected)
-	if len(details) == 0 {
-		details = []string{"No additional details."}
+	header := []string{"Tao UI | " + displayValue(singleLineDetail(selected.ID)), ""}
+	appendOverviewTitle(&header, selected.Title, width, ProfileNone)
+	header = append(header, renderDetailMetadata([]detailGridField{
+		{label: "STATUS", value: selected.Status},
+		{label: "APPROVAL", value: sliceApprovalStatus(selected.Approval)},
+	}, width, ProfileNone)...)
+	if selected.Approval != nil {
+		appendOverviewMutedParagraph(&header, "Approval rationale", selected.Approval.Reason, width, ProfileNone)
 	}
-	details = wrapDetailLines(details, width)
-	available := max(height-(1+planDetailHeaderGap+len(summary)+planDetailPaneGap), 0)
-	detailHeight := min(max(len(details)+2, 3), available)
-	if available >= 2+planDetailPaneGap+3 {
-		detailHeight = min(max(len(details)+2, 3), available-planDetailPaneGap-3)
+	document := renderSlicePlan(selected, width, ProfileNone)
+	document = append(document, "")
+	log := ""
+	if len(logs) > 0 {
+		log = logs[0]
 	}
-	return max(len(details)-max(detailHeight-2, 0), 0)
+	document = append(document, renderSliceLogSection(log, width, ProfileNone)...)
+	bodyHeight := max(height-len(header)-1, 0)
+	return max(len(document)-bodyHeight, 0)
 }
 
 func findDetailSlice(detail *plan.PlanDetail, id string) (plan.Slice, bool) {
@@ -1193,25 +1297,6 @@ func findDetailSlice(detail *plan.PlanDetail, id string) (plan.Slice, bool) {
 		}
 	}
 	return plan.Slice{}, false
-}
-
-func appendDetailValue(lines *[]string, label, value string) {
-	if value = singleLineDetail(value); value != "" {
-		*lines = append(*lines, label+": "+value)
-	}
-}
-
-func appendDetailList(lines *[]string, label string, values []string) {
-	added := false
-	for _, value := range values {
-		if value = singleLineDetail(value); value != "" {
-			if !added {
-				*lines = append(*lines, label+":")
-				added = true
-			}
-			*lines = append(*lines, "  - "+value)
-		}
-	}
 }
 
 func singleLineDetail(value string) string {

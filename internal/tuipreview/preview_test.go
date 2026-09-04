@@ -130,7 +130,7 @@ func TestRenderEveryViewIsDeterministicAndBounded(t *testing.T) {
 		{view: ViewDebug, header: "tao │ notes  plans  settings ▸debug"},
 		{view: ViewPlanDetail, selection: 1, header: "Tao UI | live | alpha"},
 		{view: ViewNoteDetail, selection: 1, header: "Tao UI | NOTE DETAIL"},
-		{view: ViewSliceDetail, selection: 1, header: "Tao UI | 002-render-boundary | in_progress"},
+		{view: ViewSliceDetail, selection: 1, header: "Tao UI | 002-render-boundary"},
 	}
 	for _, test := range tests {
 		t.Run(string(test.view), func(t *testing.T) {

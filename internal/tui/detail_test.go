@@ -464,7 +464,7 @@ func TestRenderDetailShortcutPopoverIsContextAware(t *testing.T) {
 	}
 }
 
-func TestRenderSliceDetailShowsUsefulFieldsAndOmitsEmptyOnNarrowTerminal(t *testing.T) {
+func TestRenderSliceDetailUsesExecutionPlanHierarchyAndFitsNarrowTerminal(t *testing.T) {
 	now := time.Date(2026, 8, 19, 2, 0, 0, 0, time.UTC)
 	duration := int64(90)
 	detail := &plan.PlanDetail{
@@ -492,41 +492,37 @@ func TestRenderSliceDetailShowsUsefulFieldsAndOmitsEmptyOnNarrowTerminal(t *test
 	_ = logrecord.Write(&agentLog, logrecord.Record{Type: logrecord.TypeSession, Content: "reviewing plan plan-a"})
 	_ = logrecord.Write(&agentLog, logrecord.Record{Type: logrecord.TypeAssistant, Content: "review output"})
 	frame := RenderSliceDetail(DetailModel{Plan: detail, SelectedSliceID: "001-work", Log: agentLog.String(), Width: 200})
-	for _, want := range []string{"Tao UI | 001-work | completed | approval: approved", "Title: Work", "Goal: ship it", "Context: bounded context", "┌ DETAIL ", "Dependencies:", "Approval: approved", "Approval reason: owner choice", "Required inputs:", "go.mod (file) — module", "Tasks:", "Expected files:", "Verification source: package guidance", "Verification commands:", "Manual checks:", "Blocker: resolved blocker", "Notes: implemented", "Verification results:", "Commit outcome: committed (abc123)", "┌ LOG ", "--- running 001-work ---", "assistant: slice output"} {
+	for _, want := range []string{
+		"Tao UI | 001-work", "Work", "STATUS  completed  ·  APPROVAL  approved", "Approval rationale  owner choice",
+		"GOAL", "  ship it", "CONTEXT", "  bounded context", "DEPENDENCY", "Depends on  000-setup", "Input  go.mod (file)", "    module",
+		"BLOCKER", "  resolved blocker", "TASKS", "☐ change code", "EXPECTED FILES", "• internal/tui/detail.go",
+		"VERIFICATION", "Source / rationale", "  package guidance", "Commands", "› go test ./internal/tui",
+		"Results", "passed — ok", "MANUAL CHECKS", "☐ check keys", "NOTES", "  implemented",
+		"COMPLETION", "Outcome  committed", "Commit  abc123", "LOG", "--- running 001-work ---", "assistant: slice output",
+	} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("slice detail missing %q:\n%s", want, frame)
 		}
 	}
-	for _, removed := range []string{"SLICE DETAIL", "GOAL & CONTEXT", "Status:", "Timing:", "EVENTS", "unrelated output", "review output", "Bksp/Esc", "Execution root", "null"} {
+	for _, removed := range []string{"SLICE DETAIL", "GOAL & CONTEXT", "┌", "└", "│", "Timing:", "EVENTS", "unrelated output", "review output", "Bksp/Esc", "Execution root", "null"} {
 		if strings.Contains(frame, removed) {
 			t.Fatalf("slice detail retained removed or raw field %q:\n%s", removed, frame)
 		}
 	}
 	detailLines := renderedLines(frame)
-	if len(detailLines) < 7 || detailLines[1] != "" || detailLines[2] != "Title: Work" || detailLines[3] != "Goal: ship it" || detailLines[4] != "Context: bounded context" || detailLines[5] != "" || !strings.HasPrefix(detailLines[6], "┌ DETAIL ") {
-		t.Fatalf("slice detail shared header, summary, or section gaps are wrong: %q", detailLines)
-	}
-	detailBottom, logTop := -1, -1
-	for index, line := range detailLines {
-		if detailBottom < 0 && index > 6 && strings.HasPrefix(line, "└") {
-			detailBottom = index
-		}
-		if strings.HasPrefix(line, "┌ LOG ") {
-			logTop = index
-			break
-		}
-	}
-	if detailBottom < 0 || logTop-detailBottom-1 != planDetailPaneGap {
-		t.Fatalf("slice detail-to-log gap detail-bottom=%d log-top=%d lines=%q", detailBottom, logTop, detailLines)
+	if len(detailLines) < 7 || detailLines[0] != "Tao UI | 001-work" || detailLines[1] != "" || detailLines[2] != "Work" || detailLines[3] != "STATUS  completed  ·  APPROVAL  approved" || detailLines[4] != "  Approval rationale  owner choice" || detailLines[5] != "" || !strings.HasPrefix(detailLines[6], "GOAL ") {
+		t.Fatalf("slice detail header and section hierarchy are wrong: %q", detailLines)
 	}
 	empty := RenderSliceDetail(DetailModel{Plan: &plan.PlanDetail{
 		State:  plan.State{Plan: plan.PlanState{PendingSlices: []string{"empty"}}},
 		Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "empty", Title: "Empty"}}},
 	}, SelectedSliceID: "empty", Width: 80})
-	if !strings.Contains(empty, "Title: Empty") || !strings.Contains(empty, "┌ DETAIL ") || !strings.Contains(empty, "No additional details.") {
-		t.Fatalf("empty slice lost its bounded detail section:\n%s", empty)
+	for _, want := range []string{"Empty", "STATUS  -  ·  APPROVAL  not required", "GOAL", "CONTEXT", "DEPENDENCY", "TASKS", "EXPECTED FILES", "VERIFICATION", "MANUAL CHECKS", "LOG", "No log output."} {
+		if !strings.Contains(empty, want) {
+			t.Fatalf("empty slice missing compact section %q:\n%s", want, empty)
+		}
 	}
-	for _, omitted := range []string{"Goal:", "Context:", "Dependencies:", "Tasks:", "Required inputs:", "Manual checks:", "Approval:", "Approval reason:", "Verification source:", "Notes:", "Timing:", "┌ EVENTS ", "null"} {
+	for _, omitted := range []string{"┌", "└", "│", "Timing:", "EVENTS", "null"} {
 		if strings.Contains(empty, omitted) {
 			t.Fatalf("empty slice rendered %q:\n%s", omitted, empty)
 		}
@@ -544,7 +540,54 @@ func TestRenderSliceDetailShowsUsefulFieldsAndOmitsEmptyOnNarrowTerminal(t *test
 	}
 }
 
-func TestRenderSliceDetailScrollsOverflowWithoutChangingSummary(t *testing.T) {
+func TestRenderSliceDetailWrapsChecklistItemsWithHangingIndent(t *testing.T) {
+	detail := &plan.PlanDetail{
+		State: plan.State{Plan: plan.PlanState{PendingSlices: []string{"001-work"}}},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{{
+			ID: "001-work", Title: "Work", Tasks: []string{"implement a deliberately long task description that wraps cleanly"},
+		}}},
+	}
+	lines := renderedLines(RenderSliceDetail(DetailModel{Plan: detail, SelectedSliceID: "001-work", Width: 30}))
+	for index, line := range lines {
+		if !strings.Contains(line, "☐ implement") {
+			continue
+		}
+		if index+1 >= len(lines) || !strings.HasPrefix(lines[index+1], "    ") || strings.Contains(lines[index+1], "☐") {
+			t.Fatalf("wrapped task lacks a four-cell hanging indent: %q", lines[index:min(index+2, len(lines))])
+		}
+		return
+	}
+	t.Fatalf("wrapped task was not rendered: %q", lines)
+}
+
+func TestRenderSliceDetailUsesSemanticTokyoNightRoles(t *testing.T) {
+	detail := &plan.PlanDetail{
+		State: plan.State{Plan: plan.PlanState{PendingSlices: []string{"001-work"}}},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{{
+			ID: "001-work", Title: "Work", Goal: "muted prose", BlockerNote: "blocked now",
+			ExpectedFiles:       []string{"internal/tui/detail.go"},
+			Verification:        plan.Verification{Commands: []string{"go test ./internal/tui"}},
+			VerificationResults: []plan.VerificationRun{{Command: "go test", Result: "failed", Details: "bad output"}},
+			Completion:          &plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionCommitted},
+		}}},
+	}
+	profile := ProfileTrueColor
+	frame := RenderSliceDetail(DetailModel{Plan: detail, SelectedSliceID: "001-work", Width: 100, Profile: profile})
+	for _, want := range []string{
+		Paint(profile, RoleDetailBody, "muted prose"),
+		Paint(profile, RoleDetailWarning, "blocked now"),
+		Paint(profile, RoleDetailPrimary, "internal/tui/detail.go"),
+		Paint(profile, RoleDetailInfo, "go test ./internal/tui"),
+		Paint(profile, RoleDetailError, "failed — bad output"),
+		Paint(profile, RoleDetailSuccess, "committed"),
+	} {
+		if !strings.Contains(frame, want) {
+			t.Fatalf("slice detail missing semantic color sequence %q:\n%q", want, frame)
+		}
+	}
+}
+
+func TestRenderSliceDetailScrollsOverflowWithoutChangingTitleAndMetadata(t *testing.T) {
 	tasks := make([]string, 14)
 	for index := range tasks {
 		tasks[index] = fmt.Sprintf("task-%02d", index+1)
@@ -560,13 +603,32 @@ func TestRenderSliceDetailScrollsOverflowWithoutChangingSummary(t *testing.T) {
 		t.Fatal("overflow detail has no scroll range")
 	}
 	frame := RenderSliceDetail(DetailModel{Plan: detail, SelectedSliceID: "001-work", SliceOffset: maxOffset, Width: 50, Height: 14})
-	for _, want := range []string{"Title: Long work", "Goal: bounded goal", "Context: decision context", "task-14"} {
+	for _, want := range []string{"Long work", "STATUS  -  ·  APPROVAL  not required", "MANUAL CHECKS", "LOG", "No log output."} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("scrolled slice detail missing %q:\n%s", want, frame)
 		}
 	}
-	if strings.Contains(frame, "task-01") {
-		t.Fatalf("scrolled slice detail retained first task:\n%s", frame)
+	for _, hidden := range []string{"bounded goal", "decision context", "task-01"} {
+		if strings.Contains(frame, hidden) {
+			t.Fatalf("scrolled slice detail retained offscreen content %q:\n%s", hidden, frame)
+		}
+	}
+}
+
+func TestSliceDetailScrollRangeIncludesLogTail(t *testing.T) {
+	detail := &plan.PlanDetail{
+		State:  plan.State{Plan: plan.PlanState{PendingSlices: []string{"001-work"}}},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "001-work", Title: "Work"}}},
+	}
+	log := strings.Join([]string{"log-01", "log-02", "log-03", "log-04", "log-05", "log-tail"}, "\n")
+	withoutLog := sliceDetailMaxOffset(detail, "001-work", 50, 12)
+	withLog := sliceDetailMaxOffset(detail, "001-work", 50, 12, log)
+	if withLog <= withoutLog {
+		t.Fatalf("log-aware max offset = %d, want greater than %d", withLog, withoutLog)
+	}
+	frame := RenderSliceDetail(DetailModel{Plan: detail, SelectedSliceID: "001-work", SliceLog: log, SliceOffset: withLog, Width: 50, Height: 12})
+	if !strings.Contains(frame, "LOG") || !strings.Contains(frame, "log-tail") {
+		t.Fatalf("slice detail did not scroll to log tail:\n%s", frame)
 	}
 }
 
@@ -681,7 +743,7 @@ func TestRenderSliceDetailSanitizesArtifactControls(t *testing.T) {
 			t.Fatalf("slice detail retained terminal sequence content %q: %q", unsafe, body)
 		}
 	}
-	for _, want := range []string{"Title: unsafe title", "Goal: goal link", "Context: context with controls", "000-setup", "input .txt", "reason safe", "Verification source: guide text", "check output", "Approval reason: owner choice", "task content", "Notes: notes remain", "details styled"} {
+	for _, want := range []string{"unsafe title", "GOAL", "goal link", "CONTEXT", "context with controls", "000-setup", "input .txt", "reason safe", "Source / rationale", "guide text", "check output", "Approval rationale  owner choice", "task content", "NOTES", "notes remain", "details styled"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("slice detail lost printable content %q: %q", want, body)
 		}
