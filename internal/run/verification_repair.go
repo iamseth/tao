@@ -44,9 +44,7 @@ func appendVerificationRepair(ctx context.Context, detail *plan.PlanDetail, exec
 	if err != nil {
 		return fmt.Errorf("prepare verification repair: %w", err)
 	}
-	appender, ok := record.(interface {
-		AppendVerificationRepair(plan.VerificationRepairRequest) error
-	})
+	appender, ok := record.(VerificationRepairAppender)
 	if !ok {
 		return fmt.Errorf("plan record does not support verification repair")
 	}

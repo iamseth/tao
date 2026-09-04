@@ -414,7 +414,7 @@ func (f Finalizer) recordFinalizationFailure(detail *plan.PlanDetail, failure pl
 func recordFinalizationFailure(record PlanMutationRecord, detail *plan.PlanDetail, failure plan.FinalizationFailure) error {
 	recorder, ok := record.(FinalizationFailureRecorder)
 	if !ok {
-		return nil
+		return fmt.Errorf("plan mutation record does not implement FinalizationFailureRecorder")
 	}
 	if existing := detail.State.Plan.FinalizationFailure; existing != nil {
 		if *existing == failure {

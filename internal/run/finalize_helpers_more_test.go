@@ -187,6 +187,21 @@ func TestPullRequestRecoveryBoundarySeparatesStructuralWorkspaceFailuresFromInsp
 	}
 }
 
+func TestFinalizerMissingFailureRecorderSurfacesWrappedError(t *testing.T) {
+	detail := approvedPullRequestDetail(plan.ChangeTypeFix, "head123")
+	record := struct{ PlanMutationRecord }{}
+	localErr := errors.New("push rejected")
+
+	err := (Finalizer{}).failPullRequestFinalizationWithRecord(record, detail, "feature", "head123", "publication_failed", localErr)
+	if !errors.Is(err, localErr) {
+		t.Fatalf("error = %v, want original finalization error", err)
+	}
+	want := "push rejected; record pull request finalization failure: plan mutation record does not implement FinalizationFailureRecorder"
+	if err == nil || err.Error() != want {
+		t.Fatalf("error = %v, want %q", err, want)
+	}
+}
+
 func TestFinalizerReplacementFailurePreservesCurrentRecoveryEvidence(t *testing.T) {
 	detail := approvedPullRequestDetail(plan.ChangeTypeFix, "head123")
 	original := plan.FinalizationFailure{

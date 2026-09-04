@@ -99,9 +99,7 @@ func (s Service) prepareRunExecution(ctx context.Context, detail *plan.PlanDetai
 				BaselineBranch: boundary.live.BaselineBranch, BaselineHead: boundary.live.BaselineHead,
 				Reason: slice.BlockerNote, RestartedAt: now(execution).UTC(),
 			}
-			restarter, ok := record.(interface {
-				RestartBlockedSlice(plan.BlockedSliceRestartRequest) error
-			})
+			restarter, ok := record.(BlockedSliceRestarter)
 			if !ok {
 				return execution, fmt.Errorf("plan record does not support blocked slice restart")
 			}

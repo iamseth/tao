@@ -65,6 +65,11 @@ type FinalVerificationRecorder interface {
 	RecordFinalVerification(verification plan.FinalVerification) error
 }
 
+// VerificationRepairAppender owns durable verification-repair requests.
+type VerificationRepairAppender interface {
+	AppendVerificationRepair(plan.VerificationRepairRequest) error
+}
+
 // RunMetadataRecorder groups remaining run metadata operations that do not
 // belong to slice start, final verification, or review.
 type RunMetadataRecorder interface {
@@ -86,6 +91,20 @@ type FinalizationFailureRecorder interface {
 type FinalizationFailureReplacer interface {
 	ReplaceFinalizationFailure(plan.FinalizationFailure, plan.FinalizationFailure) error
 }
+
+// BlockedSliceRestarter owns the durable restart of a blocked slice.
+type BlockedSliceRestarter interface {
+	RestartBlockedSlice(plan.BlockedSliceRestartRequest) error
+}
+
+// These capabilities are optional on PlanMutationRecord but mandatory for the
+// production record.
+var (
+	_ FinalizationFailureRecorder = (*plan.PlanRecord)(nil)
+	_ FinalizationFailureReplacer = (*plan.PlanRecord)(nil)
+	_ BlockedSliceRestarter       = (*plan.PlanRecord)(nil)
+	_ VerificationRepairAppender  = (*plan.PlanRecord)(nil)
+)
 
 // ReviewProposalCorrectionRecorder atomically consumes the correction attempt,
 // optionally superseding exact pre-correction workspace evidence, then replaces
