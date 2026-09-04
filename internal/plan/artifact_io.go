@@ -166,6 +166,7 @@ type ArtifactChangeSet struct {
 	clearWorkspaceRebaseIntent          bool
 	clearPlanCurrentSlice               bool
 	clearPlanFinalizationFailure        bool
+	clearSingleMergeResolution          bool
 	planFinalizationFailure             *FinalizationFailure
 	finalVerification                   *FinalVerification
 	planReview                          planReviewChange
@@ -295,6 +296,18 @@ func (c *ArtifactChangeSet) ClearPlanFinalizationFailure() {
 	}
 }
 
+// ClearSingleMergeResolution explicitly clears only provisional resolution
+// evidence while retaining its parent single-merge commit intent.
+func (c *ArtifactChangeSet) ClearSingleMergeResolution() {
+	if c == nil {
+		return
+	}
+	c.clearSingleMergeResolution = true
+	if c.detail != nil && c.detail.State.Plan.MergeCommitIntent != nil {
+		c.detail.State.Plan.MergeCommitIntent.Resolution = nil
+	}
+}
+
 // ReplacePlanFinalizationFailure replaces every persisted failure field so a
 // transition between phase-specific evidence cannot retain omitted JSON keys.
 func (c *ArtifactChangeSet) ReplacePlanFinalizationFailure(failure FinalizationFailure) error {
@@ -395,6 +408,9 @@ func (c *ArtifactChangeSet) applyState(state *State) {
 	}
 	if c.clearPlanCurrentSlice {
 		state.Plan.CurrentSlice = nil
+	}
+	if c.clearSingleMergeResolution && state.Plan.MergeCommitIntent != nil {
+		state.Plan.MergeCommitIntent.Resolution = nil
 	}
 	if c.clearPlanFinalizationFailure {
 		state.Plan.FinalizationFailure = nil
@@ -1302,7 +1318,7 @@ func lowerArtifactJSONChanges(encoded []byte, projection artifactJSONChanges) ([
 	if changes == nil {
 		return encoded, nil
 	}
-	hasStateChanges := changes.clearWorkspaceDependencyFailure || changes.clearWorkspaceDependencyFingerprint || changes.clearWorkspaceRebaseIntent || changes.clearPlanCurrentSlice || changes.clearPlanFinalizationFailure || changes.planFinalizationFailure != nil || changes.finalVerification != nil || changes.planReview.kind != planReviewUnchanged
+	hasStateChanges := changes.clearWorkspaceDependencyFailure || changes.clearWorkspaceDependencyFingerprint || changes.clearWorkspaceRebaseIntent || changes.clearPlanCurrentSlice || changes.clearPlanFinalizationFailure || changes.clearSingleMergeResolution || changes.planFinalizationFailure != nil || changes.finalVerification != nil || changes.planReview.kind != planReviewUnchanged
 	hasSliceChanges := len(changes.clearSliceBlockerNotes) > 0 || len(changes.clearSliceExecutionBoundaries) > 0
 	if projection.kind == artifactJSONState && !hasStateChanges || projection.kind == artifactJSONSlices && !hasSliceChanges || projection.kind == artifactJSONNone {
 		return encoded, nil
@@ -1402,6 +1418,9 @@ func validateStateChangeDeclarations(baseline, intended State, changes *Artifact
 	if baseline.Plan.FinalizationFailure != nil && intended.Plan.FinalizationFailure == nil && (changes == nil || !changes.clearPlanFinalizationFailure) {
 		return fmt.Errorf("persist state: State.Plan.FinalizationFailure changed from non-zero to zero without ClearPlanFinalizationFailure")
 	}
+	if baseline.Plan.MergeCommitIntent != nil && baseline.Plan.MergeCommitIntent.Resolution != nil && intended.Plan.MergeCommitIntent != nil && intended.Plan.MergeCommitIntent.Resolution == nil && (changes == nil || !changes.clearSingleMergeResolution) {
+		return fmt.Errorf("persist state: SingleMergeCommitIntent.Resolution changed from non-zero to zero without ClearSingleMergeResolution")
+	}
 	if err := validatePlanReviewChangeDeclaration(baseline.Plan.Review, intended.Plan.Review, changes); err != nil {
 		return err
 	}
@@ -1460,6 +1479,10 @@ func lowerStateJSONChanges(root map[string]any, changes *ArtifactChangeSet) erro
 		}
 	}
 	plan := jsonObject(root, "plan")
+	if changes.clearSingleMergeResolution {
+		intent := jsonObject(plan, "merge_commit_intent")
+		intent["resolution"] = nil
+	}
 	if changes.clearPlanCurrentSlice {
 		plan["current_slice"] = nil
 	}

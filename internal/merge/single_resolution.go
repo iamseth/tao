@@ -29,11 +29,68 @@ var (
 	ErrSingleResolutionPreflight = errors.New("single-plan conflict resolution could not start safely")
 )
 
+const (
+	SingleResolutionAuthorityPreserved = "preserved"
+	SingleResolutionAuthorityRearmed   = "rearmed"
+	SingleResolutionAuthorityConsumed  = "consumed"
+)
+
+// SingleResolutionStartupError is safe rendering metadata for one launch
+// failure. Cause may contain bounded provider diagnostics; Capability and
+// Authority are the stable user-facing classifications.
+type SingleResolutionStartupError struct {
+	Capability       plan.SingleMergeStartupCapability
+	PromptAcceptance string
+	Authority        string
+	Cause            error
+}
+
+func (e *SingleResolutionStartupError) Error() string {
+	return fmt.Sprintf("%s failed (%s one-shot authority): %v", e.Capability, e.Authority, e.Cause)
+}
+
+func (e *SingleResolutionStartupError) Unwrap() error { return e.Cause }
+
+func startupCapability(err error) plan.SingleMergeStartupCapability {
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "resolve provider executable"), strings.Contains(message, "executable") && strings.Contains(message, "not found"):
+		return plan.SingleMergeStartupExecutable
+	case strings.Contains(message, "private pi configuration"), strings.Contains(message, "configuration projection"), strings.Contains(message, "prepare private pi"):
+		return plan.SingleMergeStartupConfigProjection
+	case strings.Contains(message, "no selected model"), strings.Contains(message, "selected model is incomplete"):
+		return plan.SingleMergeStartupSelectedModel
+	case strings.Contains(message, "no local credentials"):
+		return plan.SingleMergeStartupLocalCredentials
+	case strings.Contains(message, "confinement"), strings.Contains(message, "sandbox"), strings.Contains(message, "bubblewrap"), strings.Contains(message, "bwrap"):
+		return plan.SingleMergeStartupConfinement
+	default:
+		return plan.SingleMergeStartupRPCInitialization
+	}
+}
+
+func safePreAcceptanceFailure(acceptance string, err error) bool {
+	if acceptance != "not_transmitted" && acceptance != "rejected" {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	for _, unsafe := range []string{"authentication", "unauthorized", "forbidden", "remote credential", "api key"} {
+		if strings.Contains(message, unsafe) {
+			return false
+		}
+	}
+	return true
+}
+
 // SingleResolutionRecorder is the plan-scoped durable authority used by the
 // resolver. PlanRecord implements this interface with compare-and-set writes.
 type SingleResolutionRecorder interface {
 	RecordSingleMergeResolution(plan.SingleMergeCommitIntent, plan.SingleMergeResolution) error
 	AdvanceSingleMergeResolution(plan.SingleMergeCommitIntent, plan.SingleMergeResolution) error
+	RearmSingleMergeResolution(plan.SingleMergeCommitIntent, plan.SingleMergeStartupFailure) error
 }
 
 // SingleConflictResolver is the editing seam used by ordinary squash merges.
@@ -207,7 +264,11 @@ func (r GuardedSingleConflictResolver) ResolveConflict(ctx context.Context, requ
 		ProtectedGitWritePaths: gitBoundary.protectedGitWritePaths(),
 	}
 	if err := r.Agent.Preflight(ctx, agentRequest); err != nil {
-		return reject(result, request.Intent, fmt.Errorf("%w: %w", ErrSingleResolutionPreflight, err))
+		classified := &SingleResolutionStartupError{
+			Capability: startupCapability(err), PromptAcceptance: "not_transmitted",
+			Authority: SingleResolutionAuthorityPreserved, Cause: fmt.Errorf("%w: %w", ErrSingleResolutionPreflight, err),
+		}
+		return reject(result, request.Intent, classified)
 	}
 
 	requestedAt := r.timestamp(request.Intent.CreatedAt)
@@ -259,7 +320,18 @@ func (r GuardedSingleConflictResolver) ResolveConflict(ctx context.Context, requ
 		return reject(result, result.Intent, errors.New("resolver created, deleted, or changed an ignored path"))
 	}
 	if err != nil {
-		return reject(result, result.Intent, fmt.Errorf("provider session failed: %w", err))
+		acceptance := string(result.Provider.Provider.PromptAcceptance)
+		if safePreAcceptanceFailure(acceptance, err) {
+			capability := startupCapability(err)
+			if acceptance == "rejected" {
+				capability = plan.SingleMergeStartupPromptAcceptance
+			}
+			return r.rejectAndRearm(cleanupCtx, result, request, boundary, capability, acceptance, fmt.Errorf("provider session failed: %w", err))
+		}
+		return reject(result, result.Intent, &SingleResolutionStartupError{
+			Capability: startupCapability(err), PromptAcceptance: acceptance,
+			Authority: SingleResolutionAuthorityConsumed, Cause: fmt.Errorf("provider session failed: %w", err),
+		})
 	}
 	if statusErr != nil {
 		return reject(result, result.Intent, fmt.Errorf("inspect resolver edits: %w", statusErr))
@@ -520,6 +592,52 @@ func resolutionCommitContentFingerprint(states []gitops.CommitPathState) (string
 
 func (r GuardedSingleConflictResolver) reject(ctx context.Context, result SingleResolutionResult, intent plan.SingleMergeCommitIntent, boundary worktreePathSnapshot, cause error) (SingleResolutionResult, error) {
 	return result, fmt.Errorf("%w: %w", ErrSingleResolutionRejected, errors.Join(cause, restoreSingleResolutionBoundary(ctx, r.Git, intent, boundary)))
+}
+
+func (r GuardedSingleConflictResolver) rejectAndRearm(ctx context.Context, result SingleResolutionResult, request SingleResolutionRequest, boundary worktreePathSnapshot, capability plan.SingleMergeStartupCapability, acceptance string, cause error) (SingleResolutionResult, error) {
+	consumed := func(extra error) (SingleResolutionResult, error) {
+		return result, fmt.Errorf("%w: %w", ErrSingleResolutionRejected, &SingleResolutionStartupError{
+			Capability: capability, PromptAcceptance: acceptance,
+			Authority: SingleResolutionAuthorityConsumed, Cause: errors.Join(cause, extra),
+		})
+	}
+	if err := restoreSingleResolutionBoundary(ctx, r.Git, result.Intent, boundary); err != nil {
+		return consumed(fmt.Errorf("restore durable parent: %w", err))
+	}
+	if err := inspectRequestedRearmBoundary(ctx, r.Git, result.Intent, request.SourceBranch); err != nil {
+		return consumed(fmt.Errorf("prove restored request boundary: %w", err))
+	}
+	failure := plan.SingleMergeStartupFailure{
+		Capability: capability, PromptAcceptance: acceptance,
+		FailedAt: r.timestamp(result.Intent.Resolution.RequestedAt),
+	}
+	if err := r.Recorder.RearmSingleMergeResolution(result.Intent, failure); err != nil {
+		return consumed(fmt.Errorf("persist exact request rearm: %w", err))
+	}
+	result.Intent.Resolution = nil
+	return result, fmt.Errorf("%w: %w", ErrSingleResolutionRejected, &SingleResolutionStartupError{
+		Capability: capability, PromptAcceptance: acceptance,
+		Authority: SingleResolutionAuthorityRearmed, Cause: cause,
+	})
+}
+
+func inspectRequestedRearmBoundary(ctx context.Context, git GitClient, intent plan.SingleMergeCommitIntent, sourceBranch string) error {
+	sourceBranch, err := cleanProtectedBranch(sourceBranch)
+	if err != nil {
+		return err
+	}
+	liveSource, sourceErr := git.RevParse(ctx, "refs/heads/"+sourceBranch)
+	liveDefault, defaultErr := git.RevParse(ctx, "refs/heads/"+intent.DefaultBranch)
+	head, headErr := git.RevParse(ctx, "HEAD")
+	branch, branchErr := git.CurrentBranch(ctx)
+	status, statusErr := git.StatusPorcelain(ctx)
+	if sourceErr != nil || defaultErr != nil || headErr != nil || branchErr != nil || statusErr != nil {
+		return errors.Join(sourceErr, defaultErr, headErr, branchErr, statusErr)
+	}
+	if strings.TrimSpace(liveSource) != intent.SourceHead || strings.TrimSpace(liveDefault) != intent.DefaultParent || strings.TrimSpace(head) != intent.DefaultParent || strings.TrimSpace(branch) != intent.DefaultBranch || strings.TrimSpace(status) != "" {
+		return ErrSingleResolutionDrift
+	}
+	return nil
 }
 
 func (r GuardedSingleConflictResolver) settlementReject(ctx context.Context, intent plan.SingleMergeCommitIntent, boundary worktreePathSnapshot, cause error) error {

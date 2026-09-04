@@ -309,6 +309,10 @@ func cloneEvent(event Event) Event {
 	clone.PRFeedbackTriage = clonePRFeedbackTriageResult(event.PRFeedbackTriage)
 	clone.Review = clonePlanReview(event.Review)
 	clone.SingleMergeResolution = cloneSingleMergeResolutionEvent(event.SingleMergeResolution)
+	if event.SingleMergeStartup != nil {
+		startup := *event.SingleMergeStartup
+		clone.SingleMergeStartup = &startup
+	}
 	clone.FinalizationFailure = cloneFinalizationFailure(event.FinalizationFailure)
 	return clone
 }

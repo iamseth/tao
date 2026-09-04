@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/iamseth/tao/internal/agent/lifecycle"
 	"github.com/iamseth/tao/internal/agent/logrecord"
 )
 
@@ -88,8 +89,11 @@ func TestClientRunsFreshSessionAndCollectsStateAndStats(t *testing.T) {
 	if err := <-serverErr; err != nil {
 		t.Fatal(err)
 	}
-	if gotCwd != "/repo" || gotName != "pi" || strings.Join(gotArgs, " ") != "--mode rpc" {
+	if gotCwd != "/repo" || gotName != "pi" || strings.Join(gotArgs, " ") != "--mode rpc --no-session" {
 		t.Fatalf("unexpected process start: cwd=%q name=%q args=%#v", gotCwd, gotName, gotArgs)
+	}
+	if result.PromptAcceptance != lifecycle.PromptAcceptanceAccepted {
+		t.Fatalf("prompt acceptance = %q, want accepted", result.PromptAcceptance)
 	}
 	if result.FinalText != `{"result":true}` || result.Output != result.FinalText {
 		t.Fatalf("unexpected final text: %#v", result)
@@ -116,6 +120,94 @@ func TestClientRunsFreshSessionAndCollectsStateAndStats(t *testing.T) {
 		if _, ok := logrecord.Parse(line); !ok {
 			t.Fatalf("expected framed log record, got %q", line)
 		}
+	}
+}
+
+func TestClientCheckReadinessUsesDisposableNoSessionRPCWithoutPrompt(t *testing.T) {
+	proc := newFakeProcess(t)
+	proc.disableAutoReadiness = true
+	proc.disableAutoPromptResponse = true
+	var gotCwd, gotName string
+	var gotArgs []string
+	serverErr := make(chan error, 1)
+	go func() {
+		defer proc.finish()
+		state, err := proc.readCommand()
+		if err != nil || state["type"] != "get_state" {
+			serverErr <- errors.Join(fmt.Errorf("state command = %#v", state), err)
+			return
+		}
+		proc.writeEvent(`{"id":"tao-readiness-state","type":"response","command":"get_state","success":true,"data":{"model":{"provider":"test-provider","id":"test-model"}}}`)
+		models, err := proc.readCommand()
+		if err != nil || models["type"] != "get_available_models" {
+			serverErr <- errors.Join(fmt.Errorf("models command = %#v", models), err)
+			return
+		}
+		proc.writeEvent(`{"id":"tao-readiness-models","type":"response","command":"get_available_models","success":true,"data":{"models":[{"provider":"test-provider","id":"test-model"}]}}`)
+		stop, err := proc.readCommand()
+		if err != nil || stop["type"] != "abort" {
+			serverErr <- errors.Join(fmt.Errorf("post-readiness command = %#v", stop), err)
+			return
+		}
+		serverErr <- nil
+	}()
+	client := Client{ProcessStarter: func(_ context.Context, cwd, name string, args []string) (Process, error) {
+		gotCwd, gotName, gotArgs = cwd, name, append([]string(nil), args...)
+		return proc, nil
+	}}
+	if err := client.CheckReadiness(context.Background(), "/repo"); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatal(err)
+	}
+	if gotCwd != "/repo" || gotName != "pi" || strings.Join(gotArgs, " ") != "--mode rpc --no-session" {
+		t.Fatalf("readiness process = cwd %q name %q args %q", gotCwd, gotName, gotArgs)
+	}
+	if !proc.killed {
+		t.Fatal("disposable readiness process was not stopped")
+	}
+}
+
+func TestClientPerformsStructuredReadinessBeforePrompt(t *testing.T) {
+	proc := newFakeProcess(t)
+	proc.disableAutoReadiness = true
+	proc.disableAutoPromptResponse = true
+	serverErr := make(chan error, 1)
+	go func() {
+		defer proc.finish()
+		state, err := proc.readCommand()
+		if err != nil || state["type"] != "get_state" || state["id"] != readinessStateID {
+			serverErr <- errors.Join(fmt.Errorf("state command = %#v", state), err)
+			return
+		}
+		proc.writeEvent(`{"id":"tao-readiness-state","type":"response","command":"get_state","success":true,"data":{"model":{"provider":"test-provider","id":"test-model"}}}`)
+		models, err := proc.readCommand()
+		if err != nil || models["type"] != "get_available_models" || models["id"] != readinessModelsID {
+			serverErr <- errors.Join(fmt.Errorf("models command = %#v", models), err)
+			return
+		}
+		proc.writeEvent(`{"id":"tao-readiness-models","type":"response","command":"get_available_models","success":true,"data":{"models":[{"provider":"test-provider","id":"test-model"}]}}`)
+		prompt, err := proc.readCommand()
+		if err != nil || prompt["type"] != "prompt" || prompt["id"] != promptID || prompt["message"] != "work" {
+			serverErr <- errors.Join(fmt.Errorf("prompt command = %#v", prompt), err)
+			return
+		}
+		proc.writeEvent(`{"id":"tao-prompt","type":"response","command":"prompt","success":true}`)
+		proc.writeEvent(`{"type":"agent_end","session_id":"session-1"}`)
+		serverErr <- nil
+	}()
+	client := Client{ProcessStarter: func(context.Context, string, string, []string) (Process, error) { return proc, nil }}
+
+	result, err := client.RunAgentSession(context.Background(), Request{Prompt: "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatal(err)
+	}
+	if result.PromptAcceptance != lifecycle.PromptAcceptanceAccepted {
+		t.Fatalf("prompt acceptance = %q, want accepted", result.PromptAcceptance)
 	}
 }
 
@@ -487,25 +579,167 @@ func TestPiClientExtractsFinalAssistantTextFromMessageEndContent(t *testing.T) {
 	}
 }
 
-func TestClientErrorResponseReturnsClearError(t *testing.T) {
+func TestClientClassifiesReadinessFailuresBeforePromptTransmission(t *testing.T) {
+	t.Run("process start", func(t *testing.T) {
+		wantErr := errors.New("missing pi")
+		client := Client{ProcessStarter: func(context.Context, string, string, []string) (Process, error) {
+			return nil, wantErr
+		}}
+		result, err := client.RunAgentSession(context.Background(), Request{Prompt: "work"})
+		if !errors.Is(err, wantErr) || result.PromptAcceptance != lifecycle.PromptAcceptanceNotTransmitted {
+			t.Fatalf("result, error = %#v, %v", result, err)
+		}
+	})
+
+	for _, tc := range []struct {
+		name      string
+		responses []string
+		wantError string
+	}{
+		{
+			name:      "readiness rejection",
+			responses: []string{`{"id":"tao-readiness-state","type":"response","command":"get_state","success":false,"error":"not ready"}`},
+			wantError: "not ready",
+		},
+		{
+			name:      "missing selected model",
+			responses: []string{`{"id":"tao-readiness-state","type":"response","command":"get_state","success":true,"data":{}}`},
+			wantError: "no selected model",
+		},
+		{
+			name: "missing local credentials",
+			responses: []string{
+				`{"id":"tao-readiness-state","type":"response","command":"get_state","success":true,"data":{"model":{"provider":"test-provider","id":"test-model"}}}`,
+				`{"id":"tao-readiness-models","type":"response","command":"get_available_models","success":true,"data":{"models":[]}}`,
+			},
+			wantError: "has no local credentials",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newFakeProcess(t)
+			proc.disableAutoReadiness = true
+			go func() {
+				defer proc.finish()
+				for _, response := range tc.responses {
+					if _, err := proc.readCommand(); err != nil {
+						return
+					}
+					proc.writeEvent(response)
+				}
+			}()
+			client := Client{ProcessStarter: func(context.Context, string, string, []string) (Process, error) { return proc, nil }}
+			result, err := client.RunAgentSession(context.Background(), Request{Prompt: "work"})
+			if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("error = %v, want containing %q", err, tc.wantError)
+			}
+			if result.PromptAcceptance != lifecycle.PromptAcceptanceNotTransmitted {
+				t.Fatalf("prompt acceptance = %q, want not transmitted", result.PromptAcceptance)
+			}
+		})
+	}
+}
+
+func TestClientClosedStreamBeforePromptResponseIsUnknown(t *testing.T) {
+	proc := newFakeProcess(t)
+	proc.disableAutoPromptResponse = true
+	go func() {
+		defer proc.finish()
+		_, _ = proc.readCommand()
+		proc.writeEvent(`{"type":"message","role":"assistant","text":"partial"}`)
+	}()
+	client := Client{ProcessStarter: func(context.Context, string, string, []string) (Process, error) { return proc, nil }}
+
+	result, err := client.RunAgentSession(context.Background(), Request{Prompt: "work"})
+	if err == nil || !strings.Contains(err.Error(), "stdout closed") {
+		t.Fatalf("expected closed-stream error, got %v", err)
+	}
+	if result.Output != "partial" || result.FinalText != "partial" {
+		t.Fatalf("partial output was not preserved: %#v", result)
+	}
+	if result.PromptAcceptance != lifecycle.PromptAcceptanceUnknown {
+		t.Fatalf("prompt acceptance = %q, want unknown", result.PromptAcceptance)
+	}
+}
+
+func TestClientAcceptanceRemainsAcceptedAfterMalformedAgentOutput(t *testing.T) {
 	proc := newFakeProcess(t)
 	go func() {
 		defer proc.finish()
 		_, _ = proc.readCommand()
-		proc.writeEvent(`{"id":"1","type":"response","command":"prompt","success":false,"error":"Unknown command: undefined"}`)
+		_, _ = io.WriteString(proc.stdoutWriter, "not-json\n")
+	}()
+	client := Client{ProcessStarter: func(context.Context, string, string, []string) (Process, error) { return proc, nil }}
+
+	result, err := client.RunAgentSession(context.Background(), Request{Prompt: "work"})
+	if err == nil || !strings.Contains(err.Error(), "parse pi rpc jsonl") {
+		t.Fatalf("expected malformed output error, got %v", err)
+	}
+	if result.PromptAcceptance != lifecycle.PromptAcceptanceAccepted {
+		t.Fatalf("prompt acceptance = %q, want accepted", result.PromptAcceptance)
+	}
+}
+
+func TestClientCancellationBeforePromptResponseIsUnknown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	proc := newFakeProcess(t)
+	proc.disableAutoPromptResponse = true
+	serverErr := make(chan error, 1)
+	go func() {
+		defer proc.finish()
+		if _, err := proc.readCommand(); err != nil {
+			serverErr <- err
+			return
+		}
+		cancel()
+		cmd, err := proc.readCommand()
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		if cmd["type"] != "abort" {
+			serverErr <- fmt.Errorf("command = %#v, want abort", cmd)
+			return
+		}
+		serverErr <- nil
+	}()
+	client := Client{ProcessStarter: func(context.Context, string, string, []string) (Process, error) { return proc, nil }}
+
+	result, err := client.RunAgentSession(ctx, Request{Prompt: "work"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected cancellation, got %v", err)
+	}
+	if result.PromptAcceptance != lifecycle.PromptAcceptanceUnknown {
+		t.Fatalf("prompt acceptance = %q, want unknown", result.PromptAcceptance)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClientErrorResponseReturnsClearError(t *testing.T) {
+	proc := newFakeProcess(t)
+	proc.disableAutoPromptResponse = true
+	go func() {
+		defer proc.finish()
+		_, _ = proc.readCommand()
+		proc.writeEvent(`{"id":"tao-prompt","type":"response","command":"prompt","success":false,"error":"Unknown command: undefined"}`)
 	}()
 	client := Client{ProcessStarter: func(ctx context.Context, cwd string, name string, args []string) (Process, error) {
 		return proc, nil
 	}}
 
-	_, err := client.RunAgentSession(context.Background(), Request{Prompt: "work"})
+	result, err := client.RunAgentSession(context.Background(), Request{Prompt: "work"})
 	if err == nil || !strings.Contains(err.Error(), "pi rpc prompt: Unknown command: undefined") {
 		t.Fatalf("expected pi rpc response error, got %v", err)
+	}
+	if result.PromptAcceptance != lifecycle.PromptAcceptanceRejected {
+		t.Fatalf("prompt acceptance = %q, want rejected", result.PromptAcceptance)
 	}
 }
 
 func TestClientMalformedJSONLReturnsClearError(t *testing.T) {
 	proc := newFakeProcess(t)
+	proc.disableAutoPromptResponse = true
 	go func() {
 		defer proc.finish()
 		_, _ = proc.readCommand()
@@ -515,15 +749,19 @@ func TestClientMalformedJSONLReturnsClearError(t *testing.T) {
 		return proc, nil
 	}}
 
-	_, err := client.RunAgentSession(context.Background(), Request{Prompt: "work"})
-	if err == nil || !strings.Contains(err.Error(), "parse pi rpc jsonl line 1") {
+	result, err := client.RunAgentSession(context.Background(), Request{Prompt: "work"})
+	if err == nil || !strings.Contains(err.Error(), "parse pi rpc jsonl line") {
 		t.Fatalf("expected malformed jsonl error, got %v", err)
+	}
+	if result.PromptAcceptance != lifecycle.PromptAcceptanceUnknown {
+		t.Fatalf("prompt acceptance = %q, want unknown", result.PromptAcceptance)
 	}
 }
 
 func TestClientContextCancellationSendsAbortAndCleansProcess(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	proc := newFakeProcess(t)
+	proc.disableAutoPromptResponse = true
 	serverErr := make(chan error, 1)
 	go func() {
 		defer proc.finish()
@@ -547,9 +785,12 @@ func TestClientContextCancellationSendsAbortAndCleansProcess(t *testing.T) {
 		return proc, nil
 	}}
 
-	_, err := client.RunAgentSession(ctx, Request{Prompt: "work"})
+	result, err := client.RunAgentSession(ctx, Request{Prompt: "work"})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context cancellation, got %v", err)
+	}
+	if result.PromptAcceptance != lifecycle.PromptAcceptanceUnknown {
+		t.Fatalf("prompt acceptance = %q, want unknown", result.PromptAcceptance)
 	}
 	if err := <-serverErr; err != nil {
 		t.Fatal(err)
@@ -577,16 +818,18 @@ func (b *lockedBuffer) String() string {
 }
 
 type fakeProcess struct {
-	t            *testing.T
-	stdinReader  *io.PipeReader
-	stdinWriter  *io.PipeWriter
-	stdinDecoder *json.Decoder
-	stdoutReader *io.PipeReader
-	stdoutWriter *io.PipeWriter
-	stderr       io.Reader
-	done         chan struct{}
-	once         sync.Once
-	killed       bool
+	t                         *testing.T
+	stdinReader               *io.PipeReader
+	stdinWriter               *io.PipeWriter
+	stdinDecoder              *json.Decoder
+	stdoutReader              *io.PipeReader
+	stdoutWriter              *io.PipeWriter
+	stderr                    io.Reader
+	done                      chan struct{}
+	once                      sync.Once
+	killed                    bool
+	disableAutoReadiness      bool
+	disableAutoPromptResponse bool
 }
 
 func newFakeProcess(t *testing.T) *fakeProcess {
@@ -617,11 +860,25 @@ func (p *fakeProcess) finish() {
 }
 
 func (p *fakeProcess) readCommand() (map[string]any, error) {
-	var cmd map[string]any
-	if err := p.stdinDecoder.Decode(&cmd); err != nil {
-		return nil, err
+	for {
+		var cmd map[string]any
+		if err := p.stdinDecoder.Decode(&cmd); err != nil {
+			return nil, err
+		}
+		id, _ := cmd["id"].(string)
+		if !p.disableAutoReadiness && id == readinessStateID {
+			p.writeEvent(`{"id":"tao-readiness-state","type":"response","command":"get_state","success":true,"data":{"model":{"provider":"test-provider","id":"test-model"}}}`)
+			continue
+		}
+		if !p.disableAutoReadiness && id == readinessModelsID {
+			p.writeEvent(`{"id":"tao-readiness-models","type":"response","command":"get_available_models","success":true,"data":{"models":[{"provider":"test-provider","id":"test-model"}]}}`)
+			continue
+		}
+		if !p.disableAutoPromptResponse && id == promptID {
+			p.writeEvent(`{"id":"tao-prompt","type":"response","command":"prompt","success":true}`)
+		}
+		return cmd, nil
 	}
-	return cmd, nil
 }
 
 func (p *fakeProcess) writeEvent(line string) {

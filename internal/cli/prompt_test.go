@@ -681,6 +681,41 @@ func TestInstallPromptsReportsNoSupportedAgents(t *testing.T) {
 	}
 }
 
+func TestDoctorPiReadinessReportsPassiveCapabilitiesWithoutRemoteClaim(t *testing.T) {
+	clearTaoEnv(t)
+	t.Setenv("TAO_AGENT", "pi")
+	setPathExecutables(t, "pi")
+	original := probeDoctorPiReadiness
+	t.Cleanup(func() { probeDoctorPiReadiness = original })
+	for _, tc := range []struct {
+		name       string
+		probeErr   error
+		capability string
+	}{
+		{name: "ready", capability: ""},
+		{name: "malformed config", probeErr: errors.New("prepare private Pi configuration: settings.json is malformed"), capability: "configuration projection"},
+		{name: "missing credentials", probeErr: errors.New("pi selected model local/test has no local credentials"), capability: "local credentials"},
+		{name: "sandbox unavailable", probeErr: errors.New("protect provider filesystem boundary: bubblewrap is unavailable"), capability: "confinement"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			probeDoctorPiReadiness = func(context.Context, string) error { return tc.probeErr }
+			var out bytes.Buffer
+			if err := (App{Out: &out, Err: &out}).Run(context.Background(), []string{"doctor", "--verbose"}); err != nil {
+				t.Fatal(err)
+			}
+			text := stripANSIGreen(out.String())
+			for _, want := range []string{"Pi merge readiness (passive; no model request)", "executable", "configuration projection", "RPC initialization", "selected model", "local credentials", "remote credential validity is not proven"} {
+				if !strings.Contains(strings.ToLower(text), strings.ToLower(want)) {
+					t.Fatalf("doctor output missing %q: %q", want, text)
+				}
+			}
+			if tc.capability != "" && !strings.Contains(text, "⚠ warning "+tc.capability) {
+				t.Fatalf("doctor did not identify failed capability %q: %q", tc.capability, text)
+			}
+		})
+	}
+}
+
 func TestDoctorRequiresBubblewrapForLinuxMergeConfinement(t *testing.T) {
 	tools := doctorRequiredTools("linux", nil)
 	if len(tools) != 1 || tools[0].name != "bubblewrap (bwrap)" || !slices.Equal(tools[0].executables, []string{"/usr/bin/bwrap", "/bin/bwrap"}) {

@@ -1197,12 +1197,20 @@ func writeRunGitOutput(stdout io.Writer, args []string) {
 func fakeCLIProcessStarter(t *testing.T, finalText string, onPrompt func(string)) run.ProcessStarter {
 	t.Helper()
 	return func(ctx context.Context, cwd string, name string, args []string) (run.Process, error) {
-		if name != "pi" || strings.Join(args, " ") != "--mode rpc" {
+		if name != "pi" || strings.Join(args, " ") != "--mode rpc --no-session" {
 			t.Fatalf("unexpected pi process start: %s %#v", name, args)
 		}
 		proc := newFakeCLIPiProcess(t)
 		go func() {
 			defer proc.finish()
+			if _, err := proc.readCommand(); err != nil {
+				return
+			}
+			proc.writeEvent(`{"id":"tao-readiness-state","type":"response","command":"get_state","success":true,"data":{"model":{"provider":"test-provider","id":"test-model"}}}`)
+			if _, err := proc.readCommand(); err != nil {
+				return
+			}
+			proc.writeEvent(`{"id":"tao-readiness-models","type":"response","command":"get_available_models","success":true,"data":{"models":[{"provider":"test-provider","id":"test-model"}]}}`)
 			cmd, err := proc.readCommand()
 			if err != nil {
 				return
@@ -1210,6 +1218,7 @@ func fakeCLIProcessStarter(t *testing.T, finalText string, onPrompt func(string)
 			if cmd["type"] == "prompt" && onPrompt != nil {
 				onPrompt(stringValue(cmd["message"]))
 			}
+			proc.writeEvent(`{"id":"tao-prompt","type":"response","command":"prompt","success":true}`)
 			proc.writeEvent(`{"type":"message","role":"assistant","text":` + strconv.Quote(finalText) + `}`)
 			proc.writeEvent(`{"type":"agent_end","session_id":"session-1"}`)
 			if _, err := proc.readCommand(); err != nil {

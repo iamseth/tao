@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/iamseth/tao/internal/agent/lifecycle"
 	agentmetrics "github.com/iamseth/tao/internal/agent/metrics"
 	"github.com/iamseth/tao/internal/agent/perm"
 	"github.com/iamseth/tao/internal/agent/process"
@@ -36,7 +37,8 @@ type Result struct {
 	Metrics agentmetrics.Metrics
 	// MetricsWarning explains why typed metrics could not be captured from the
 	// stream output, or is empty when Metrics is usable.
-	MetricsWarning string
+	MetricsWarning   string
+	PromptAcceptance lifecycle.PromptAcceptance
 
 	pendingToolCalls []toolCall
 }
@@ -47,11 +49,23 @@ func (c Client) RunAgentSession(ctx context.Context, request Request) (Result, e
 		mode = perm.PermissionModeAuto
 	}
 	if !perm.Valid(mode) {
-		return Result{}, fmt.Errorf("unsupported claude permission mode %q", mode)
+		return Result{PromptAcceptance: lifecycle.PromptAcceptanceUnknown}, fmt.Errorf("unsupported claude permission mode %q", mode)
+	}
+	starter := c.ProcessStarter
+	if starter == nil {
+		starter = process.DefaultProcessStarter
+	}
+	started := false
+	observedStarter := func(ctx context.Context, cwd, name string, args []string) (process.Process, error) {
+		proc, err := starter(ctx, cwd, name, args)
+		if err == nil {
+			started = true
+		}
+		return proc, err
 	}
 	args := []string{"--print", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--permission-mode", string(mode)}
 	result, err := streamjson.RunSession(ctx, streamjson.SessionConfig[Result]{
-		Starter:    c.ProcessStarter,
+		Starter:    observedStarter,
 		RepoRoot:   request.RepoRoot,
 		Executable: "claude",
 		Args:       args,
@@ -60,6 +74,12 @@ func (c Client) RunAgentSession(ctx context.Context, request Request) (Result, e
 		Log:        c.Log,
 		Handle:     c.handleEvent,
 	})
+	result.PromptAcceptance = lifecycle.PromptAcceptanceUnknown
+	if !started {
+		result.PromptAcceptance = lifecycle.PromptAcceptanceNotTransmitted
+	} else if err == nil {
+		result.PromptAcceptance = lifecycle.PromptAcceptanceAccepted
+	}
 	if !streamjson.IsPreReadError(err) {
 		result.Metrics = parseSessionMetrics(result)
 		result.MetricsWarning = metricsWarning(result)

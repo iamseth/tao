@@ -3,6 +3,7 @@ package run
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"path/filepath"
 	"strconv"
@@ -149,7 +150,7 @@ func TestServiceExecuteRecoversStructuredPiTransportFailureThroughFreshRPCProces
 
 	var processes []*fakePiProcess
 	starter := func(ctx context.Context, cwd string, name string, args []string) (Process, error) {
-		if name != "pi" || strings.Join(args, " ") != "--mode rpc" || cwd != root {
+		if name != "pi" || strings.Join(args, " ") != "--mode rpc --no-session" || cwd != root {
 			t.Fatalf("unexpected pi process start: cwd=%q command=%s %#v", cwd, name, args)
 		}
 		proc := newFakePiProcess(t)
@@ -157,7 +158,7 @@ func TestServiceExecuteRecoversStructuredPiTransportFailureThroughFreshRPCProces
 		attempt := len(processes)
 		go func() {
 			defer proc.finish()
-			if _, err := proc.readCommand(); err != nil {
+			if _, err := readPiPrompt(proc); err != nil {
 				return
 			}
 			if attempt == 1 {
@@ -237,7 +238,7 @@ func TestServiceExecuteStructuredPiTransportFailuresStopAfterThirdSession(t *tes
 		processes = append(processes, proc)
 		go func() {
 			defer proc.finish()
-			if _, err := proc.readCommand(); err != nil {
+			if _, err := readPiPrompt(proc); err != nil {
 				return
 			}
 			proc.writeEvent(`{"type":"message","message":{"role":"assistant","stopReason":"error","errorMessage":"WebSocket closed 1006 Connection ended","diagnostics":[{"type":"provider_transport_failure"}]}}`)
@@ -322,7 +323,7 @@ func TestServiceExecuteDoesNotRetryUnstructuredPiWebSocketErrorOrTimeout(t *test
 				proc := newFakePiProcess(t)
 				go func() {
 					defer proc.finish()
-					if _, err := proc.readCommand(); err != nil {
+					if _, err := readPiPrompt(proc); err != nil {
 						return
 					}
 					tt.serve(ctx, proc)
@@ -371,7 +372,7 @@ func TestPiExecutorMarksAgentMetricsFailedOnPiError(t *testing.T) {
 		proc := newFakePiProcess(t)
 		go func() {
 			defer proc.finish()
-			_, _ = proc.readCommand()
+			_, _ = readPiPrompt(proc)
 			proc.writeEvent(`{"type":"message","message":{"role":"assistant","stopReason":"error","errorMessage":"WebSocket closed 1006 Connection ended"}}`)
 		}()
 		return proc, nil
@@ -410,6 +411,34 @@ func piTransportGitRunner(t *testing.T, detail *plan.PlanDetail, root string, st
 	}
 }
 
+func readPiPrompt(proc *fakePiProcess) (map[string]any, error) {
+	state, err := proc.readCommand()
+	if err != nil {
+		return nil, err
+	}
+	if state["type"] != "get_state" {
+		return nil, fmt.Errorf("readiness command = %#v, want get_state", state)
+	}
+	proc.writeEvent(`{"id":"tao-readiness-state","type":"response","command":"get_state","success":true,"data":{"model":{"provider":"test-provider","id":"test-model"}}}`)
+	models, err := proc.readCommand()
+	if err != nil {
+		return nil, err
+	}
+	if models["type"] != "get_available_models" {
+		return nil, fmt.Errorf("readiness command = %#v, want get_available_models", models)
+	}
+	proc.writeEvent(`{"id":"tao-readiness-models","type":"response","command":"get_available_models","success":true,"data":{"models":[{"provider":"test-provider","id":"test-model"}]}}`)
+	prompt, err := proc.readCommand()
+	if err != nil {
+		return nil, err
+	}
+	if prompt["type"] != "prompt" {
+		return nil, fmt.Errorf("session command = %#v, want prompt", prompt)
+	}
+	proc.writeEvent(`{"id":"tao-prompt","type":"response","command":"prompt","success":true}`)
+	return prompt, nil
+}
+
 func serveSuccessfulPiSession(proc *fakePiProcess, sessionID string) {
 	proc.writeEvent(`{"type":"message","role":"assistant","text":"done"}`)
 	proc.writeEvent(`{"type":"agent_end","session_id":"` + sessionID + `"}`)
@@ -431,13 +460,13 @@ func fakePiSessionStarter(t *testing.T, finalText string, promptSeen *bool) Proc
 func fakePiSessionInfoFailureStarter(t *testing.T, promptSeen *bool) ProcessStarter {
 	t.Helper()
 	return func(ctx context.Context, cwd string, name string, args []string) (Process, error) {
-		if name != "pi" || strings.Join(args, " ") != "--mode rpc" {
+		if name != "pi" || strings.Join(args, " ") != "--mode rpc --no-session" {
 			t.Fatalf("unexpected pi process start: %s %#v", name, args)
 		}
 		proc := newFakePiProcess(t)
 		go func() {
 			defer proc.finish()
-			cmd, err := proc.readCommand()
+			cmd, err := readPiPrompt(proc)
 			if err != nil {
 				return
 			}
@@ -458,13 +487,13 @@ func fakePiSessionInfoFailureStarter(t *testing.T, promptSeen *bool) ProcessStar
 func fakePiSessionStarterWithStats(t *testing.T, finalText string, promptSeen *bool, statsEvent string) ProcessStarter {
 	t.Helper()
 	return func(ctx context.Context, cwd string, name string, args []string) (Process, error) {
-		if name != "pi" || strings.Join(args, " ") != "--mode rpc" {
+		if name != "pi" || strings.Join(args, " ") != "--mode rpc --no-session" {
 			t.Fatalf("unexpected pi process start: %s %#v", name, args)
 		}
 		proc := newFakePiProcess(t)
 		go func() {
 			defer proc.finish()
-			cmd, err := proc.readCommand()
+			cmd, err := readPiPrompt(proc)
 			if err != nil {
 				return
 			}

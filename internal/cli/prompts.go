@@ -11,9 +11,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	agentpkg "github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/gitops"
+	mergepkg "github.com/iamseth/tao/internal/merge"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/promptinstall"
 	"github.com/iamseth/tao/internal/runtimeconfig"
@@ -236,6 +238,12 @@ type doctorReport struct {
 	agents        []agentpkg.Descriptor
 	prompts       []promptinstall.Result
 	tools         []doctorToolResultCategory
+	piReadiness   []doctorReadinessResult
+}
+
+type doctorReadinessResult struct {
+	capability string
+	status     string
 }
 
 type doctorToolResultCategory struct {
@@ -272,7 +280,52 @@ func collectDoctorReport() (doctorReport, error) {
 		}
 		report.tools = append(report.tools, collected)
 	}
+	if report.selectedAgent == runtimeconfig.AgentPi {
+		report.piReadiness = collectPiReadiness()
+	}
 	return report, nil
+}
+
+var probeDoctorPiReadiness = mergepkg.ProbeSingleMergePiReadiness
+
+func collectPiReadiness() []doctorReadinessResult {
+	stages := []string{
+		string(plan.SingleMergeStartupExecutable), string(plan.SingleMergeStartupConfigProjection),
+		string(plan.SingleMergeStartupConfinement), string(plan.SingleMergeStartupRPCInitialization),
+		string(plan.SingleMergeStartupSelectedModel), string(plan.SingleMergeStartupLocalCredentials),
+	}
+	results := make([]doctorReadinessResult, len(stages))
+	for i, capability := range stages {
+		results[i] = doctorReadinessResult{capability: capability, status: "unknown"}
+	}
+	provider, err := exec.LookPath("pi")
+	if err != nil {
+		results[0].status = "warning"
+		return results
+	}
+	results[0].status = "ok"
+	probeCtx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	err = probeDoctorPiReadiness(probeCtx, provider)
+	if err == nil {
+		for i := 1; i < len(results); i++ {
+			results[i].status = "ok"
+		}
+		return results
+	}
+	failed := string(mergepkg.SingleMergeStartupCapabilityForError(err))
+	failedIndex := 3
+	for i := 1; i < len(results); i++ {
+		if results[i].capability == failed {
+			failedIndex = i
+			break
+		}
+	}
+	for i := 1; i < failedIndex; i++ {
+		results[i].status = "ok"
+	}
+	results[failedIndex].status = "warning"
+	return results
 }
 
 func collectDoctorTool(tool doctorTool) doctorToolResult {
@@ -330,6 +383,23 @@ func renderCompactDoctor(out io.Writer, report doctorReport) error {
 			}
 		}
 	}
+	var readinessProblems []doctorReadinessResult
+	for _, result := range report.piReadiness {
+		if result.status != "ok" {
+			readinessProblems = append(readinessProblems, result)
+		}
+	}
+	if len(readinessProblems) > 0 {
+		if err := writeln(out, "\nPi merge readiness (passive; no model request):"); err != nil {
+			return err
+		}
+		for _, result := range readinessProblems {
+			if err := writef(out, "  %s %s\n", doctorStatusLabel(result.status, 9), strings.ReplaceAll(result.capability, "_", " ")); err != nil {
+				return err
+			}
+		}
+		return writeln(out, "  Remote credential validity is not proven until an attributed request.")
+	}
 	return nil
 }
 
@@ -370,6 +440,19 @@ func renderVerboseDoctor(out io.Writer, report doctorReport) error {
 			if err := writeDoctorToolResult(out, result); err != nil {
 				return err
 			}
+		}
+	}
+	if len(report.piReadiness) > 0 {
+		if err := writeln(out, "\nPi merge readiness (passive; no model request):"); err != nil {
+			return err
+		}
+		for _, result := range report.piReadiness {
+			if err := writef(out, "  %s %s\n", doctorStatusLabel(result.status, 9), strings.ReplaceAll(result.capability, "_", " ")); err != nil {
+				return err
+			}
+		}
+		if err := writeln(out, "  Uses an ephemeral private configuration view; remote credential validity is not proven."); err != nil {
+			return err
 		}
 	}
 	return nil

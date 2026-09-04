@@ -2,6 +2,7 @@ package merge
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/agent/logrecord"
+	piagent "github.com/iamseth/tao/internal/agent/pi"
 	"github.com/iamseth/tao/internal/agentsession"
 	"github.com/iamseth/tao/internal/commandrunner"
 	commitcontract "github.com/iamseth/tao/internal/commit"
@@ -322,56 +324,282 @@ type singleMergeFilesystemConfinement struct {
 
 // singleMergeFilesystemConfiningProcessStarter gives the provider a read-only
 // view of the host filesystem. A resolver may write only beneath the exact
-// integration root; a reviewer cannot write there either. Provider scratch
-// writes are redirected into one Tao-owned temporary directory that is removed
-// with the process.
+// integration root; a reviewer cannot write there either. The launch builder
+// owns executable resolution, the private runtime projection, sandbox command,
+// and cleanup for both readiness and attributed processes.
 func singleMergeFilesystemConfiningProcessStarter(next agent.ProcessStarter, lookPath agent.LookPath) agent.ProcessStarter {
+	builder := singleMergeLaunchSpecBuilder{lookPath: lookPath}
 	return func(ctx context.Context, cwd, name string, args []string) (agent.Process, error) {
-		resolvedName, err := resolveSingleMergeProviderExecutable(lookPath, name)
-		if err != nil {
-			return nil, err
-		}
 		policy, ok := ctx.Value(singleMergeFilesystemConfinementContextKey{}).(singleMergeFilesystemConfinement)
 		if !ok {
 			return next(ctx, cwd, name, args)
 		}
-		runtimeRoot, err := os.MkdirTemp("/tmp", "tao-merge-agent-runtime-*")
-		if err != nil {
-			return nil, fmt.Errorf("create provider confinement runtime: %w", err)
-		}
-		for _, dir := range []string{"cache", "state", "sessions"} {
-			if err := os.Mkdir(filepath.Join(runtimeRoot, dir), 0o700); err != nil {
-				_ = os.RemoveAll(runtimeRoot)
-				return nil, fmt.Errorf("create provider confinement runtime: %w", err)
-			}
-		}
-		confiner, confinedArgs, err := singleMergeFilesystemConfinementCommand(policy, runtimeRoot, resolvedName, args)
-		if err != nil {
-			_ = os.RemoveAll(runtimeRoot)
+		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		process, err := next(ctx, cwd, confiner, confinedArgs)
+		spec, err := builder.build(policy, cwd, name, args)
 		if err != nil {
-			_ = os.RemoveAll(runtimeRoot)
 			return nil, err
 		}
-		return &confinementCleanupProcess{Process: process, runtimeRoot: runtimeRoot}, nil
+		process, err := next(ctx, spec.cwd, spec.name, spec.args)
+		if err != nil {
+			_ = spec.runtime.cleanup()
+			return nil, err
+		}
+		return newConfinementCleanupProcess(process, spec.runtime), nil
 	}
 }
 
-type confinementCleanupProcess struct {
-	agent.Process
-	runtimeRoot string
-	cleanupOnce sync.Once
+type singleMergeLaunchSpecBuilder struct {
+	lookPath agent.LookPath
 }
 
+type singleMergeLaunchSpec struct {
+	cwd     string
+	name    string
+	args    []string
+	runtime *singleMergeInvocationRuntime
+}
+
+func (b singleMergeLaunchSpecBuilder) build(policy singleMergeFilesystemConfinement, cwd, providerName string, args []string) (*singleMergeLaunchSpec, error) {
+	resolvedName, err := resolveSingleMergeProviderExecutable(b.lookPath, providerName)
+	if err != nil {
+		return nil, err
+	}
+	runtime, err := newSingleMergeInvocationRuntime(providerName)
+	if err != nil {
+		return nil, err
+	}
+	confiner, confinedArgs, err := singleMergeFilesystemConfinementCommandForProvider(policy, runtime.root, resolvedName, args, providerName == "pi")
+	if err != nil {
+		_ = runtime.cleanup()
+		return nil, err
+	}
+	canonicalCWD, err := canonicalConfinementDirectory(cwd, "provider working directory")
+	if err != nil {
+		_ = runtime.cleanup()
+		return nil, err
+	}
+	return &singleMergeLaunchSpec{cwd: canonicalCWD, name: confiner, args: confinedArgs, runtime: runtime}, nil
+}
+
+const maxSingleMergePiConfigBytes = 4 << 20
+
+var singleMergePiMutableInputs = []string{
+	"settings.json", "auth.json", "models.json", "models-store.json", "trust.json", "trusted-folders.json",
+}
+
+var singleMergePiResourceInputs = []string{"extensions", "npm", "prompts", "skills", "themes", "bin"}
+
+type singleMergeInvocationRuntime struct {
+	root        string
+	cleanupOnce sync.Once
+	cleanupErr  error
+}
+
+func newSingleMergeInvocationRuntime(providerName string) (*singleMergeInvocationRuntime, error) {
+	root, err := os.MkdirTemp("/tmp", "tao-merge-agent-runtime-*")
+	if err != nil {
+		return nil, fmt.Errorf("create provider confinement runtime: %w", err)
+	}
+	if err := os.Chmod(root, 0o700); err != nil { //nolint:gosec // private directories require owner traversal as well as read/write.
+		_ = os.RemoveAll(root)
+		return nil, fmt.Errorf("create provider confinement runtime: set private mode: %w", err)
+	}
+	runtime := &singleMergeInvocationRuntime{root: root}
+	for _, relative := range []string{"agent", "cache", "config", "data", "home", "sessions", "state", "tmp"} {
+		if err := os.Mkdir(filepath.Join(root, relative), 0o700); err != nil {
+			_ = runtime.cleanup()
+			return nil, fmt.Errorf("create provider confinement runtime: %w", err)
+		}
+	}
+	if providerName == "pi" {
+		if err := materializeSingleMergePiView(filepath.Join(root, "agent")); err != nil {
+			_ = runtime.cleanup()
+			return nil, err
+		}
+	}
+	return runtime, nil
+}
+
+func (r *singleMergeInvocationRuntime) path() string { return r.root }
+
+func (r *singleMergeInvocationRuntime) cleanup() error {
+	if r == nil {
+		return nil
+	}
+	r.cleanupOnce.Do(func() { r.cleanupErr = os.RemoveAll(r.path()) })
+	return r.cleanupErr
+}
+
+func materializeSingleMergePiView(destination string) error {
+	hostRoot, err := hostPiAgentDirectory()
+	if err != nil {
+		return err
+	}
+	if hostRoot == "" {
+		return nil
+	}
+	for _, name := range singleMergePiMutableInputs {
+		if err := copySingleMergePiInput(hostRoot, destination, name); err != nil {
+			return err
+		}
+	}
+	for _, name := range singleMergePiResourceInputs {
+		if err := linkSingleMergePiResource(hostRoot, destination, name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func hostPiAgentDirectory() (string, error) {
+	root := strings.TrimSpace(os.Getenv("PI_CODING_AGENT_DIR"))
+	if root == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", safeSingleMergePiConfigError("resolve", "home", err)
+		}
+		root = filepath.Join(home, ".pi", "agent")
+	}
+	info, err := os.Stat(root) //nolint:gosec // this is the user-selected Pi agent directory, not provider output.
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", safeSingleMergePiConfigError("inspect", "agent directory", err)
+	}
+	if !info.IsDir() {
+		return "", errors.New("prepare private Pi configuration: agent directory is not a directory")
+	}
+	canonical, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", safeSingleMergePiConfigError("resolve", "agent directory", err)
+	}
+	return canonical, nil
+}
+
+func copySingleMergePiInput(hostRoot, destination, label string) error {
+	source := filepath.Join(hostRoot, label)
+	info, err := os.Lstat(source)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return safeSingleMergePiConfigError("inspect", label, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("prepare private Pi configuration: %s is not a regular file", label)
+	}
+	if info.Size() > maxSingleMergePiConfigBytes {
+		return fmt.Errorf("prepare private Pi configuration: %s exceeds %d bytes", label, maxSingleMergePiConfigBytes)
+	}
+	input, err := os.Open(source) //nolint:gosec // source is one allowlisted file below the canonical Pi agent directory.
+	if err != nil {
+		return safeSingleMergePiConfigError("open", label, err)
+	}
+	defer func() { _ = input.Close() }()
+	openedInfo, err := input.Stat()
+	if err != nil {
+		return safeSingleMergePiConfigError("inspect opened", label, err)
+	}
+	if !os.SameFile(info, openedInfo) || !openedInfo.Mode().IsRegular() {
+		return fmt.Errorf("prepare private Pi configuration: %s changed while opening", label)
+	}
+	contents, err := io.ReadAll(io.LimitReader(input, maxSingleMergePiConfigBytes+1))
+	if err != nil {
+		return safeSingleMergePiConfigError("copy", label, err)
+	}
+	if len(contents) > maxSingleMergePiConfigBytes {
+		return fmt.Errorf("prepare private Pi configuration: %s exceeds %d bytes", label, maxSingleMergePiConfigBytes)
+	}
+	if !json.Valid(contents) {
+		return fmt.Errorf("prepare private Pi configuration: %s is malformed JSON", label)
+	}
+	if err := os.WriteFile(filepath.Join(destination, label), contents, 0o600); err != nil {
+		return safeSingleMergePiConfigError("create projection for", label, err)
+	}
+	return nil
+}
+
+func linkSingleMergePiResource(hostRoot, destination, label string) error {
+	source := filepath.Join(hostRoot, label)
+	info, err := os.Stat(source)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return safeSingleMergePiConfigError("inspect", label, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("prepare private Pi configuration: %s is not a directory", label)
+	}
+	canonical, err := filepath.EvalSymlinks(source)
+	if err != nil {
+		return safeSingleMergePiConfigError("resolve", label, err)
+	}
+	if err := os.Symlink(canonical, filepath.Join(destination, label)); err != nil {
+		return safeSingleMergePiConfigError("expose read-only", label, err)
+	}
+	return nil
+}
+
+func safeSingleMergePiConfigError(action, label string, err error) error {
+	detail := "unavailable"
+	if errors.Is(err, os.ErrPermission) {
+		detail = "permission denied"
+	} else if errors.Is(err, os.ErrExist) {
+		detail = "already exists"
+	}
+	return fmt.Errorf("prepare private Pi configuration: %s %s: %s", action, label, detail)
+}
+
+type confinementCleanupProcess struct {
+	process    agent.Process
+	runtime    *singleMergeInvocationRuntime
+	waitOnce   sync.Once
+	killOnce   sync.Once
+	waitDone   chan struct{}
+	waitErr    error
+	killErr    error
+	cleanupErr error
+}
+
+func newConfinementCleanupProcess(process agent.Process, runtime *singleMergeInvocationRuntime) *confinementCleanupProcess {
+	return &confinementCleanupProcess{process: process, runtime: runtime, waitDone: make(chan struct{})}
+}
+
+func (p *confinementCleanupProcess) Stdin() io.WriteCloser { return p.process.Stdin() }
+func (p *confinementCleanupProcess) Stdout() io.Reader     { return p.process.Stdout() }
+func (p *confinementCleanupProcess) Stderr() io.Reader     { return p.process.Stderr() }
+
 func (p *confinementCleanupProcess) Wait() error {
-	err := p.Process.Wait()
-	p.cleanupOnce.Do(func() { _ = os.RemoveAll(p.runtimeRoot) })
-	return err
+	p.waitOnce.Do(func() {
+		p.waitErr = p.process.Wait()
+		p.cleanupErr = p.runtime.cleanup()
+		if p.cleanupErr != nil {
+			p.waitErr = errors.Join(p.waitErr, fmt.Errorf("remove provider confinement runtime: %w", p.cleanupErr))
+		}
+		close(p.waitDone)
+	})
+	<-p.waitDone
+	return p.waitErr
+}
+
+func (p *confinementCleanupProcess) Kill() error {
+	p.killOnce.Do(func() { p.killErr = p.process.Kill() })
+	_ = p.Wait()
+	if p.cleanupErr != nil {
+		return errors.Join(p.killErr, fmt.Errorf("remove provider confinement runtime: %w", p.cleanupErr))
+	}
+	return p.killErr
 }
 
 func singleMergeFilesystemConfinementCommand(policy singleMergeFilesystemConfinement, runtimeRoot, name string, args []string) (string, []string, error) {
+	return singleMergeFilesystemConfinementCommandForProvider(policy, runtimeRoot, name, args, filepath.Base(name) == "pi")
+}
+
+func singleMergeFilesystemConfinementCommandForProvider(policy singleMergeFilesystemConfinement, runtimeRoot, name string, args []string, piProvider bool) (string, []string, error) {
 	protected, err := canonicalGitWritePaths(policy.protectedPaths)
 	if err != nil {
 		return "", nil, err
@@ -396,7 +624,7 @@ func singleMergeFilesystemConfinementCommand(policy singleMergeFilesystemConfine
 	if policy.allowEdits {
 		writable = append(writable, integrationRoot)
 	}
-	command := append([]string{
+	environment := []string{
 		"/usr/bin/env",
 		"TMPDIR=" + runtimeRoot,
 		"TMP=" + runtimeRoot,
@@ -404,8 +632,25 @@ func singleMergeFilesystemConfinementCommand(policy singleMergeFilesystemConfine
 		"XDG_CACHE_HOME=" + filepath.Join(runtimeRoot, "cache"),
 		"XDG_STATE_HOME=" + filepath.Join(runtimeRoot, "state"),
 		"PI_CODING_AGENT_SESSION_DIR=" + filepath.Join(runtimeRoot, "sessions"),
-		name,
-	}, args...)
+	}
+	if piProvider {
+		environment = append(environment,
+			"HOME="+filepath.Join(runtimeRoot, "home"),
+			"XDG_CONFIG_HOME="+filepath.Join(runtimeRoot, "config"),
+			"XDG_DATA_HOME="+filepath.Join(runtimeRoot, "data"),
+			"PI_CODING_AGENT_DIR="+filepath.Join(runtimeRoot, "agent"),
+			"PI_OFFLINE=1",
+			"PI_NO_UPDATE_CHECK=1",
+			"PI_SKIP_VERSION_CHECK=1",
+			"NO_UPDATE_NOTIFIER=1",
+			"NPM_CONFIG_UPDATE_NOTIFIER=false",
+			"NPM_CONFIG_OFFLINE=true",
+		)
+	}
+	command := make([]string, 0, len(environment)+1+len(args))
+	command = append(command, environment...)
+	command = append(command, name)
+	command = append(command, args...)
 	confiner, err := singleMergeFilesystemConfinementExecutable()
 	if err != nil {
 		return "", nil, err
@@ -621,29 +866,85 @@ func (w *singleMergeConfinementProbeOutput) String() string {
 	return string(w.retained)
 }
 
-func probeSingleMergeFilesystemConfinement(ctx context.Context, policy singleMergeFilesystemConfinement, providerExecutable string) error {
-	runtimeRoot, err := os.MkdirTemp("/tmp", "tao-merge-confinement-probe-*")
+type boundedSingleMergeProbeError struct {
+	cause error
+}
+
+func (e boundedSingleMergeProbeError) Error() string {
+	const prefix = "probe provider filesystem confinement: "
+	detail := e.cause.Error()
+	limit := maxSingleMergeConfinementProbeOutputBytes - len(prefix)
+	if len(detail) > limit {
+		detail = detail[:limit]
+	}
+	return prefix + detail
+}
+
+func (e boundedSingleMergeProbeError) Unwrap() error { return e.cause }
+
+// ProbeSingleMergePiReadiness passively exercises the production confinement,
+// ephemeral configuration projection, RPC initialization, selected-model, and
+// local-credential readiness path. It sends no prompt and therefore makes no
+// model request. The temporary roots and invocation runtime are always removed.
+func ProbeSingleMergePiReadiness(ctx context.Context, providerExecutable string) error {
+	integrationRoot, err := os.MkdirTemp("", "tao-doctor-pi-worktree-*")
 	if err != nil {
-		return fmt.Errorf("probe provider filesystem confinement: create runtime: %w", err)
+		return fmt.Errorf("prepare Pi readiness worktree: %w", err)
 	}
-	defer func() { _ = os.RemoveAll(runtimeRoot) }()
-	for _, dir := range []string{"cache", "state", "sessions"} {
-		if err := os.Mkdir(filepath.Join(runtimeRoot, dir), 0o700); err != nil {
-			return fmt.Errorf("probe provider filesystem confinement: create runtime: %w", err)
-		}
+	defer func() { _ = os.RemoveAll(integrationRoot) }()
+	protectedRoot, err := os.MkdirTemp("", "tao-doctor-pi-protected-*")
+	if err != nil {
+		return fmt.Errorf("prepare Pi readiness protected path: %w", err)
 	}
-	// Preflight proves only that the selected executable can launch. It must not
-	// inherit resolver edit authority before Tao persists requested evidence.
+	defer func() { _ = os.RemoveAll(protectedRoot) }()
+	return probeSingleMergePiRPCReadiness(ctx, singleMergeFilesystemConfinement{
+		protectedPaths: []string{protectedRoot}, integrationRoot: integrationRoot,
+	}, providerExecutable)
+}
+
+// SingleMergeStartupCapabilityForError maps a bounded launch diagnostic to its
+// stable capability name for doctor and merge rendering.
+func SingleMergeStartupCapabilityForError(err error) plan.SingleMergeStartupCapability {
+	if err == nil {
+		return ""
+	}
+	return startupCapability(err)
+}
+
+func probeSingleMergePiRPCReadiness(ctx context.Context, policy singleMergeFilesystemConfinement, providerExecutable string) error {
+	// Readiness gets the same fresh projection and generated sandbox as the
+	// attributed process, but never receives integration-worktree write access.
 	probePolicy := policy
 	probePolicy.allowEdits = false
-	name, args, err := singleMergeFilesystemConfinementCommand(probePolicy, runtimeRoot, providerExecutable, []string{"--version"})
+	starter := singleMergeFilesystemConfiningProcessStarter(agent.DefaultProcessStarter, func(string) (string, error) {
+		return providerExecutable, nil
+	})
+	probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	probeCtx = context.WithValue(probeCtx, singleMergeFilesystemConfinementContextKey{}, probePolicy)
+	if err := (piagent.Client{ProcessStarter: starter}).CheckReadiness(probeCtx, policy.integrationRoot); err != nil {
+		return boundedSingleMergeProbeError{cause: err}
+	}
+	return nil
+}
+
+func probeSingleMergeFilesystemConfinement(ctx context.Context, policy singleMergeFilesystemConfinement, providerExecutable string) error {
+	// Non-Pi providers retain a no-session version launch. Pi uses the RPC
+	// readiness path above because --version cannot exercise configuration locks
+	// or selected-model loading.
+	probePolicy := policy
+	probePolicy.allowEdits = false
+	providerName := filepath.Base(providerExecutable)
+	builder := singleMergeLaunchSpecBuilder{lookPath: func(string) (string, error) { return providerExecutable, nil }}
+	spec, err := builder.build(probePolicy, policy.integrationRoot, providerName, []string{"--version"})
 	if err != nil {
 		return err
 	}
+	defer func() { _ = spec.runtime.cleanup() }()
 	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	command := exec.CommandContext(probeCtx, name, args...) // #nosec G204,G702 -- Tao resolves the configured provider and runs only its fixed version probe through Tao's platform confiner.
-	command.Dir = policy.integrationRoot
+	command := exec.CommandContext(probeCtx, spec.name, spec.args...) // #nosec G204,G702 -- Tao resolves the configured provider and runs only its fixed version probe through Tao's platform confiner.
+	command.Dir = spec.cwd
 	var output singleMergeConfinementProbeOutput
 	command.Stdout = &output
 	command.Stderr = &output
@@ -758,6 +1059,10 @@ func (s BatchAgentSession) confinementPolicy(ctx context.Context, request BatchA
 			if err := s.confinementProbe(); err != nil {
 				return nil, err
 			}
+		} else if s.providerToolName == "pi" {
+			if err := probeSingleMergePiRPCReadiness(ctx, *policy, providerExecutable); err != nil {
+				return nil, err
+			}
 		} else if err := probeSingleMergeFilesystemConfinement(ctx, *policy, providerExecutable); err != nil {
 			return nil, err
 		}
@@ -768,7 +1073,12 @@ func (s BatchAgentSession) confinementPolicy(ctx context.Context, request BatchA
 // Resolve runs exactly one attributed session. Metrics parse failures are
 // warnings and never replace the provider result or error.
 func (s BatchAgentSession) Resolve(ctx context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
-	policy, err := s.confinementPolicy(ctx, request, true)
+	// Guarded single-plan callers run the disposable readiness preflight before
+	// recording request authority. The attributed process performs its own RPC
+	// readiness handshake before prompt transmission, so probing again here
+	// would add an unattributed process after durable request evidence. Explicit
+	// test probes retain the historical direct-Resolve capability check.
+	policy, err := s.confinementPolicy(ctx, request, s.confinementProbe != nil)
 	if err != nil {
 		return BatchAgentSessionResult{}, err
 	}

@@ -250,6 +250,74 @@ func TestPlanRecordSingleMergeResolutionRoundTripsAdvancesAndSettles(t *testing.
 	}
 }
 
+func TestPlanRecordRearmsExactRequestedResolutionWithBoundedDiagnostic(t *testing.T) {
+	root := t.TempDir()
+	writeMinimalPlan(t, root, "resolution-rearm", "Resolution Rearm")
+	planDir := filepath.Join(root, "resolution-rearm")
+	repo := NewFileRepository(root)
+	detail, err := repo.GetPlan(context.Background(), "resolution-rearm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := NewPlanRecord(planDir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := validSingleMergeResolutionIntent("resolution-rearm")
+	if err := record.RecordSingleMergeCommitIntent(intent); err != nil {
+		t.Fatal(err)
+	}
+	request := validSingleMergeResolutionRequest(intent)
+	if err := record.RecordSingleMergeResolution(intent, request); err != nil {
+		t.Fatal(err)
+	}
+	expected := *record.Detail().State.Plan.MergeCommitIntent
+	failure := SingleMergeStartupFailure{
+		Capability: SingleMergeStartupPromptAcceptance, PromptAcceptance: "rejected",
+		FailedAt: request.RequestedAt.Add(time.Second),
+	}
+	if err := record.RearmSingleMergeResolution(expected, failure); err != nil {
+		t.Fatal(err)
+	}
+	if intent := record.Detail().State.Plan.MergeCommitIntent; intent == nil || intent.Resolution != nil {
+		t.Fatalf("rearm did not retain intent and clear only request authority: %#v", intent)
+	}
+	var event *Event
+	for i := range record.Detail().Events {
+		if record.Detail().Events[i].Type == EventTypeSingleMergeRearmed {
+			event = &record.Detail().Events[i]
+			break
+		}
+	}
+	if event == nil || event.SingleMergeStartup == nil || !reflect.DeepEqual(*event.SingleMergeStartup, failure) || event.SingleMergeResolution == nil || event.SingleMergeResolution.Phase != SingleMergeResolutionPhaseRequested {
+		t.Fatalf("rearm diagnostic event = %#v", event)
+	}
+	reloaded, err := repo.GetPlan(context.Background(), "resolution-rearm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	warnings := ValidateDetail(reloaded)
+	if reloaded.State.Plan.MergeCommitIntent == nil || reloaded.State.Plan.MergeCommitIntent.Resolution != nil {
+		t.Fatalf("reloaded rearm state = %#v", reloaded.State.Plan.MergeCommitIntent)
+	}
+	for _, warning := range warnings {
+		if strings.Contains(warning, "single_merge_startup") || strings.Contains(warning, "merge_commit_intent") {
+			t.Fatalf("reloaded rearm warning = %q", warning)
+		}
+	}
+	reloadedRecord, err := NewPlanRecord(planDir, reloaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := expected
+	staleResolution := *expected.Resolution
+	staleResolution.ConflictFiles = []string{"other.go"}
+	stale.Resolution = &staleResolution
+	if err := reloadedRecord.RearmSingleMergeResolution(stale, failure); err == nil || !strings.Contains(err.Error(), "changed") {
+		t.Fatalf("stale rearm error = %v", err)
+	}
+}
+
 func TestPlanRecordMaximumSingleMergeRollbackEventWritesAndReloads(t *testing.T) {
 	root := t.TempDir()
 	writeMinimalPlan(t, root, "resolution-max", "Maximum Resolution")

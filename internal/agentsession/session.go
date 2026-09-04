@@ -68,6 +68,7 @@ type Request struct {
 type Result struct {
 	Output                string
 	FinalText             string
+	PromptAcceptance      agent.PromptAcceptance
 	Metrics               *agent.Metrics
 	MetricsWarning        string
 	MetricsWarningMessage string
@@ -114,6 +115,7 @@ func (r Runner) Run(ctx context.Context, request Request) (Result, error) {
 	return Result{
 		Output:                raw.Output,
 		FinalText:             raw.FinalText,
+		PromptAcceptance:      raw.PromptAcceptance,
 		Metrics:               raw.Metrics,
 		MetricsWarning:        raw.MetricsWarning,
 		MetricsWarningMessage: warningMessage,

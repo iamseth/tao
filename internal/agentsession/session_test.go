@@ -27,7 +27,7 @@ func TestRunnerInvokesOneProviderWithBoundedDescriptorPolicy(t *testing.T) {
 		if _, ok := ctx.Deadline(); !ok {
 			t.Fatal("bounded session did not apply a deadline")
 		}
-		return agent.SessionResult{Output: "partial", FinalText: "done", Metrics: &metrics}, nil
+		return agent.SessionResult{Output: "partial", FinalText: "done", PromptAcceptance: agent.PromptAcceptanceAccepted, Metrics: &metrics}, nil
 	})
 	descriptor := agent.Descriptor{
 		Label: "test", MetricsMessage: "captured test metrics", SupportsBypassPermissions: true,
@@ -50,7 +50,7 @@ func TestRunnerInvokesOneProviderWithBoundedDescriptorPolicy(t *testing.T) {
 	if got.Progress != &progress || got.NoProgressToolLimit != 4 || len(got.VerificationCommands) != 1 {
 		t.Fatalf("progress and run safeguards were not routed: %+v", got)
 	}
-	if result.Output != "partial" || result.FinalText != "done" || result.AgentLabel != "test" || result.MetricsMessage != "captured test metrics" || !result.MetricsUsable {
+	if result.Output != "partial" || result.FinalText != "done" || result.PromptAcceptance != agent.PromptAcceptanceAccepted || result.AgentLabel != "test" || result.MetricsMessage != "captured test metrics" || !result.MetricsUsable {
 		t.Fatalf("result = %+v", result)
 	}
 }

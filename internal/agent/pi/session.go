@@ -18,6 +18,7 @@ type session struct {
 	proc                   Process
 	stdin                  io.WriteCloser
 	events                 chan readResult
+	queuedEvents           []event
 	log                    io.Writer
 	stderrDone             chan struct{}
 	mu                     sync.Mutex
@@ -62,6 +63,28 @@ func drainStderr(stderr io.Reader, log io.Writer) {
 	if err := scanner.Err(); err != nil {
 		_ = logrecord.Write(log, logrecord.Record{Type: logrecord.TypeDiagnostic, Content: fmt.Sprintf("tao pi stderr: %v", err)})
 	}
+}
+
+func (s *session) queuedResult() Result {
+	var result Result
+	for _, event := range s.queuedEvents {
+		if err := s.logAgentEvent(event); err != nil {
+			s.logPiError(err)
+		}
+		if text := assistantText(event); text != "" {
+			if result.Output != "" {
+				result.Output += "\n"
+			}
+			result.Output += text
+			result.FinalText = text
+		}
+		if eventType(event) == "agent_end" {
+			result.SessionID = jsonmap.String(event, "session_id")
+			result.State = event
+		}
+	}
+	s.queuedEvents = nil
+	return result
 }
 
 func (s *session) waitForAgentEnd(ctx context.Context) (Result, error) {

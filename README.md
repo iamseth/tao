@@ -97,7 +97,9 @@ tao doctor
 ```
 
 `tao doctor` provides diagnostic guidance rather than a guaranteed success
-check. Follow any actionable setup guidance it reports.
+check. For Pi it passively exercises the confined ephemeral configuration and
+RPC readiness path without a model request; local readiness does not prove that
+remote credentials will be accepted. Follow any actionable setup guidance.
 
 ### Complete a first plan
 

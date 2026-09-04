@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/iamseth/tao/internal/agent/lifecycle"
 	"github.com/iamseth/tao/internal/agent/perm"
 	"github.com/iamseth/tao/internal/agent/process"
 )
@@ -58,6 +59,9 @@ func TestClientStartsClaudeWithPromptAndPermissionMode(t *testing.T) {
 	if result.FinalText != "done" || result.Output != "done" || result.SessionID != "session-1" || result.Model != "claude-sonnet-4" {
 		t.Fatalf("unexpected result: %#v", result)
 	}
+	if result.PromptAcceptance != lifecycle.PromptAcceptanceAccepted {
+		t.Fatalf("prompt acceptance = %q, want accepted", result.PromptAcceptance)
+	}
 	if result.Usage["input_tokens"] != float64(10) || result.CostUSD != 0.02 {
 		t.Fatalf("expected telemetry, got %#v", result)
 	}
@@ -98,6 +102,39 @@ func TestClientDefaultsPermissionModeAndAcceptsBypass(t *testing.T) {
 				t.Fatalf("permission mode = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestClientPromptWriteFailureIsAmbiguousAfterDeliveryAttempt(t *testing.T) {
+	wantErr := errors.New("partial write")
+	proc := newFakeProcess(t)
+	proc.stdinOverride = partialWriteCloser{err: wantErr}
+	proc.finish(nil)
+	client := Client{ProcessStarter: func(context.Context, string, string, []string) (process.Process, error) {
+		return proc, nil
+	}}
+
+	result, err := client.RunAgentSession(context.Background(), Request{Prompt: "work"})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want %v", err, wantErr)
+	}
+	if result.PromptAcceptance != lifecycle.PromptAcceptanceUnknown {
+		t.Fatalf("prompt acceptance = %q, want unknown", result.PromptAcceptance)
+	}
+}
+
+func TestClientStarterFailureProvesPromptWasNotTransmitted(t *testing.T) {
+	wantErr := errors.New("missing claude")
+	client := Client{ProcessStarter: func(context.Context, string, string, []string) (process.Process, error) {
+		return nil, wantErr
+	}}
+
+	result, err := client.RunAgentSession(context.Background(), Request{Prompt: "work"})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want %v", err, wantErr)
+	}
+	if result.PromptAcceptance != lifecycle.PromptAcceptanceNotTransmitted {
+		t.Fatalf("prompt acceptance = %q, want not transmitted", result.PromptAcceptance)
 	}
 }
 
@@ -147,9 +184,12 @@ func TestClientContextCancellationKillsProcess(t *testing.T) {
 		return proc, nil
 	}}
 
-	_, err := client.RunAgentSession(ctx, Request{Prompt: "work"})
+	result, err := client.RunAgentSession(ctx, Request{Prompt: "work"})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context cancellation, got %v", err)
+	}
+	if result.PromptAcceptance != lifecycle.PromptAcceptanceUnknown {
+		t.Fatalf("prompt acceptance = %q, want unknown", result.PromptAcceptance)
 	}
 	if !proc.killed {
 		t.Fatal("expected process kill")
@@ -167,22 +207,26 @@ func TestClientWaitError(t *testing.T) {
 		return proc, nil
 	}}
 
-	_, err := client.RunAgentSession(context.Background(), Request{Prompt: "work"})
+	result, err := client.RunAgentSession(context.Background(), Request{Prompt: "work"})
 	if err == nil || !strings.Contains(err.Error(), "claude exited: exit status 1") {
 		t.Fatalf("expected wait error, got %v", err)
+	}
+	if result.PromptAcceptance != lifecycle.PromptAcceptanceUnknown {
+		t.Fatalf("prompt acceptance = %q, want unknown", result.PromptAcceptance)
 	}
 }
 
 type fakeProcess struct {
-	t            *testing.T
-	stdinReader  *io.PipeReader
-	stdinWriter  *io.PipeWriter
-	stdoutReader *io.PipeReader
-	stdoutWriter *io.PipeWriter
-	done         chan struct{}
-	once         sync.Once
-	waitErr      error
-	killed       bool
+	t             *testing.T
+	stdinReader   *io.PipeReader
+	stdinWriter   *io.PipeWriter
+	stdoutReader  *io.PipeReader
+	stdoutWriter  *io.PipeWriter
+	done          chan struct{}
+	once          sync.Once
+	waitErr       error
+	killed        bool
+	stdinOverride io.WriteCloser
 }
 
 func newFakeProcess(t *testing.T) *fakeProcess {
@@ -192,9 +236,14 @@ func newFakeProcess(t *testing.T) *fakeProcess {
 	return &fakeProcess{t: t, stdinReader: stdinReader, stdinWriter: stdinWriter, stdoutReader: stdoutReader, stdoutWriter: stdoutWriter, done: make(chan struct{})}
 }
 
-func (p *fakeProcess) Stdin() io.WriteCloser { return p.stdinWriter }
-func (p *fakeProcess) Stdout() io.Reader     { return p.stdoutReader }
-func (p *fakeProcess) Stderr() io.Reader     { return strings.NewReader("") }
+func (p *fakeProcess) Stdin() io.WriteCloser {
+	if p.stdinOverride != nil {
+		return p.stdinOverride
+	}
+	return p.stdinWriter
+}
+func (p *fakeProcess) Stdout() io.Reader { return p.stdoutReader }
+func (p *fakeProcess) Stderr() io.Reader { return strings.NewReader("") }
 func (p *fakeProcess) Wait() error {
 	<-p.done
 	return p.waitErr
@@ -225,3 +274,8 @@ func (p *fakeProcess) writeEvent(line string) {
 		p.t.Fatal(err)
 	}
 }
+
+type partialWriteCloser struct{ err error }
+
+func (w partialWriteCloser) Write(data []byte) (int, error) { return len(data) / 2, w.err }
+func (partialWriteCloser) Close() error                     { return nil }

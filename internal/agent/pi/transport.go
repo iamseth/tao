@@ -9,6 +9,7 @@ import (
 	"io"
 
 	"github.com/iamseth/tao/internal/agent/jsonmap"
+	"github.com/iamseth/tao/internal/agent/lifecycle"
 	"github.com/iamseth/tao/internal/agent/logrecord"
 )
 
@@ -66,21 +67,30 @@ func trimJSONLLineEnding(raw []byte) []byte {
 }
 
 func (s *session) send(ctx context.Context, command command) error {
+	_, err := s.sendCommand(ctx, command)
+	return err
+}
+
+func (s *session) sendPrompt(ctx context.Context, command command) (bool, error) {
+	return s.sendCommand(ctx, command)
+}
+
+func (s *session) sendCommand(ctx context.Context, command command) (bool, error) {
 	select {
 	case <-ctx.Done():
-		return s.abort(ctx.Err())
+		return false, s.abort(ctx.Err())
 	default:
 	}
 	data, err := json.Marshal(command)
 	if err != nil {
-		return err
+		return false, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, err := s.stdin.Write(append(data, '\n')); err != nil {
-		return fmt.Errorf("send pi rpc %s: %w", command.Type, err)
+		return true, fmt.Errorf("send pi rpc %s: %w", command.Type, err)
 	}
-	return nil
+	return true, nil
 }
 
 func (s *session) requestMap(ctx context.Context, command command, wantType string) (map[string]any, error) {
@@ -88,11 +98,8 @@ func (s *session) requestMap(ctx context.Context, command command, wantType stri
 		return nil, err
 	}
 	for {
-		event, err := s.next(ctx)
+		event, err := s.nextTransport(ctx)
 		if err != nil {
-			return nil, err
-		}
-		if err := s.handleResponseError(event); err != nil {
 			return nil, err
 		}
 		if err := s.handleUIRequest(ctx, event); err != nil {
@@ -105,16 +112,95 @@ func (s *session) requestMap(ctx context.Context, command command, wantType stri
 		if eventType(event) == wantType {
 			return event, nil
 		}
-		if eventType(event) == "response" && jsonmap.String(event, "id") == command.ID {
-			if data, ok := event["data"].(map[string]any); ok {
-				return data, nil
-			}
-			return event, nil
+		if eventType(event) != "response" || jsonmap.String(event, "id") != command.ID {
+			continue
 		}
+		success, ok := event["success"].(bool)
+		if !ok {
+			return nil, fmt.Errorf("pi rpc %s response omitted success", command.Type)
+		}
+		if !success {
+			return nil, s.responseError(event)
+		}
+		if data, ok := event["data"].(map[string]any); ok {
+			return data, nil
+		}
+		return event, nil
+	}
+}
+
+func (s *session) verifyReadiness(ctx context.Context) error {
+	state, err := s.requestMap(ctx, command{ID: readinessStateID, Type: "get_state"}, "state")
+	if err != nil {
+		return err
+	}
+	model, ok := state["model"].(map[string]any)
+	if !ok {
+		return errors.New("pi has no selected model")
+	}
+	provider := jsonmap.String(model, "provider")
+	modelID := jsonmap.String(model, "id")
+	if provider == "" || modelID == "" {
+		return errors.New("pi selected model is incomplete")
+	}
+
+	available, err := s.requestMap(ctx, command{ID: readinessModelsID, Type: "get_available_models"}, "available_models")
+	if err != nil {
+		return err
+	}
+	models, ok := available["models"].([]any)
+	if !ok {
+		return errors.New("pi available-model response omitted models")
+	}
+	for _, value := range models {
+		candidate, ok := value.(map[string]any)
+		if ok && jsonmap.String(candidate, "provider") == provider && jsonmap.String(candidate, "id") == modelID {
+			return nil
+		}
+	}
+	return fmt.Errorf("pi selected model %s/%s has no local credentials", provider, modelID)
+}
+
+func (s *session) waitForPromptResponse(ctx context.Context, id string) (lifecycle.PromptAcceptance, error) {
+	for {
+		event, err := s.nextTransport(ctx)
+		if err != nil {
+			return lifecycle.PromptAcceptanceUnknown, err
+		}
+		if err := s.handleUIRequest(ctx, event); err != nil {
+			return lifecycle.PromptAcceptanceUnknown, err
+		}
+		if eventType(event) == "extension_ui_request" {
+			continue
+		}
+		if eventType(event) != "response" || jsonmap.String(event, "id") != id {
+			s.queuedEvents = append(s.queuedEvents, event)
+			continue
+		}
+		if commandName := jsonmap.String(event, "command"); commandName != "prompt" {
+			return lifecycle.PromptAcceptanceUnknown, fmt.Errorf("pi rpc prompt response has command %q", commandName)
+		}
+		success, ok := event["success"].(bool)
+		if !ok {
+			return lifecycle.PromptAcceptanceUnknown, errors.New("pi rpc prompt response omitted success")
+		}
+		if !success {
+			return lifecycle.PromptAcceptanceRejected, s.responseError(event)
+		}
+		return lifecycle.PromptAcceptanceAccepted, nil
 	}
 }
 
 func (s *session) next(ctx context.Context) (event, error) {
+	if len(s.queuedEvents) > 0 {
+		event := s.queuedEvents[0]
+		s.queuedEvents = s.queuedEvents[1:]
+		return event, nil
+	}
+	return s.nextTransport(ctx)
+}
+
+func (s *session) nextTransport(ctx context.Context) (event, error) {
 	select {
 	case <-ctx.Done():
 		return nil, s.abort(ctx.Err())
@@ -136,6 +222,10 @@ func (s *session) handleResponseError(event event) error {
 	if success, ok := event["success"].(bool); !ok || success {
 		return nil
 	}
+	return s.responseError(event)
+}
+
+func (s *session) responseError(event event) error {
 	message := jsonmap.String(event, "error")
 	if message == "" {
 		message = "pi rpc command failed"

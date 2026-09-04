@@ -19,6 +19,22 @@ var (
 	_ Runtime = claudeRuntime{}
 )
 
+func TestPromptAcceptanceProvesOnlyPreAcceptanceOutcomes(t *testing.T) {
+	for _, tc := range []struct {
+		value PromptAcceptance
+		want  bool
+	}{
+		{value: PromptAcceptanceUnknown},
+		{value: PromptAcceptanceNotTransmitted, want: true},
+		{value: PromptAcceptanceRejected, want: true},
+		{value: PromptAcceptanceAccepted},
+	} {
+		if got := tc.value.ProvenPreAcceptance(); got != tc.want {
+			t.Fatalf("%q ProvenPreAcceptance() = %t, want %t", tc.value, got, tc.want)
+		}
+	}
+}
+
 func TestClaudeRuntimeMapsPermissionMode(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -46,7 +62,7 @@ func TestClaudeRuntimeMapsPermissionMode(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if result.FinalText != "ok" {
+			if result.FinalText != "ok" || result.PromptAcceptance != PromptAcceptanceAccepted {
 				t.Fatalf("unexpected result: %#v", result)
 			}
 			if got := gotArgs[len(gotArgs)-1]; got != tc.want {
@@ -162,8 +178,11 @@ func TestPiRuntimeNormalizesMetricsAndPassesNoProgressConfiguration(t *testing.T
 	if err := <-serverErr; err != nil {
 		t.Fatal(err)
 	}
-	if gotCwd != "/repo" || gotName != "pi" || strings.Join(gotArgs, " ") != "--mode rpc" {
+	if gotCwd != "/repo" || gotName != "pi" || strings.Join(gotArgs, " ") != "--mode rpc --no-session" {
 		t.Fatalf("unexpected process start: cwd=%q name=%q args=%#v", gotCwd, gotName, gotArgs)
+	}
+	if result.PromptAcceptance != PromptAcceptanceAccepted {
+		t.Fatalf("prompt acceptance = %q, want accepted", result.PromptAcceptance)
 	}
 	if result.Output != "done" || result.FinalText != "done" {
 		t.Fatalf("unexpected result: %#v", result)
@@ -291,8 +310,24 @@ func (p *fakeProcess) readPrompt() error {
 }
 
 func (p *fakeProcess) readCommand() error {
-	var cmd map[string]any
-	return p.stdinDecoder.Decode(&cmd)
+	for {
+		var cmd map[string]any
+		if err := p.stdinDecoder.Decode(&cmd); err != nil {
+			return err
+		}
+		id, _ := cmd["id"].(string)
+		switch id {
+		case "tao-readiness-state":
+			p.writeEvent(`{"id":"tao-readiness-state","type":"response","command":"get_state","success":true,"data":{"model":{"provider":"test-provider","id":"test-model"}}}`)
+		case "tao-readiness-models":
+			p.writeEvent(`{"id":"tao-readiness-models","type":"response","command":"get_available_models","success":true,"data":{"models":[{"provider":"test-provider","id":"test-model"}]}}`)
+		case "tao-prompt":
+			p.writeEvent(`{"id":"tao-prompt","type":"response","command":"prompt","success":true}`)
+			return nil
+		default:
+			return nil
+		}
+	}
 }
 
 func (p *fakeProcess) writeEvent(line string) {

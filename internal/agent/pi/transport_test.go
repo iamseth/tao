@@ -1,11 +1,42 @@
 package pi
 
 import (
+	"context"
 	"errors"
 	"io"
 	"strings"
 	"testing"
 )
+
+func TestSendPromptDistinguishesNoAttemptFromPartialWrite(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s := &session{proc: inertProcess{}, stdin: partialWriteCloser{err: errors.New("partial")}}
+	attempted, err := s.sendPrompt(ctx, command{Type: "prompt", Message: "work"})
+	if !errors.Is(err, context.Canceled) || attempted {
+		t.Fatalf("cancelled send = attempted %t, error %v", attempted, err)
+	}
+
+	wantErr := errors.New("partial")
+	s = &session{stdin: partialWriteCloser{err: wantErr}}
+	attempted, err = s.sendPrompt(context.Background(), command{Type: "prompt", Message: "work"})
+	if !errors.Is(err, wantErr) || !attempted {
+		t.Fatalf("partial send = attempted %t, error %v", attempted, err)
+	}
+}
+
+type partialWriteCloser struct{ err error }
+
+func (w partialWriteCloser) Write(data []byte) (int, error) { return len(data) / 2, w.err }
+func (partialWriteCloser) Close() error                     { return nil }
+
+type inertProcess struct{}
+
+func (inertProcess) Stdin() io.WriteCloser { return partialWriteCloser{} }
+func (inertProcess) Stdout() io.Reader     { return strings.NewReader("") }
+func (inertProcess) Stderr() io.Reader     { return strings.NewReader("") }
+func (inertProcess) Wait() error           { return nil }
+func (inertProcess) Kill() error           { return nil }
 
 func TestReadStdoutAcceptsLargeJSONLLine(t *testing.T) {
 	payload := strings.Repeat("x", 2*1024*1024)

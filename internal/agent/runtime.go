@@ -5,6 +5,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/iamseth/tao/internal/agent/lifecycle"
 	agentmetrics "github.com/iamseth/tao/internal/agent/metrics"
 	"github.com/iamseth/tao/internal/agent/perm"
 )
@@ -51,11 +52,23 @@ type Session struct {
 // explains why typed metrics could not be captured, or is empty when Metrics is
 // usable.
 type SessionResult struct {
-	Output         string
-	FinalText      string
-	Metrics        *Metrics
-	MetricsWarning string
+	Output           string
+	FinalText        string
+	PromptAcceptance PromptAcceptance
+	Metrics          *Metrics
+	MetricsWarning   string
 }
+
+// PromptAcceptance is the provider-neutral classification of whether an
+// attributed prompt could have been accepted by the provider.
+type PromptAcceptance = lifecycle.PromptAcceptance
+
+const (
+	PromptAcceptanceUnknown        = lifecycle.PromptAcceptanceUnknown
+	PromptAcceptanceNotTransmitted = lifecycle.PromptAcceptanceNotTransmitted
+	PromptAcceptanceRejected       = lifecycle.PromptAcceptanceRejected
+	PromptAcceptanceAccepted       = lifecycle.PromptAcceptanceAccepted
+)
 
 // Metrics is the provider-neutral superset of typed agent session metrics.
 type Metrics = agentmetrics.Metrics

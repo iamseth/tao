@@ -2,9 +2,12 @@ package pi
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"time"
 
 	"github.com/iamseth/tao/internal/agent/jsonmap"
+	"github.com/iamseth/tao/internal/agent/lifecycle"
 	"github.com/iamseth/tao/internal/agent/logrecord"
 	agentmetrics "github.com/iamseth/tao/internal/agent/metrics"
 )
@@ -30,6 +33,7 @@ type Result struct {
 	Stats            map[string]any
 	Metrics          agentmetrics.Metrics
 	SessionInfoError error
+	PromptAcceptance lifecycle.PromptAcceptance
 }
 
 type SessionInfoMode int
@@ -39,30 +43,86 @@ const (
 	SessionInfoBestEffort
 )
 
-const DefaultNoProgressToolLimit = 75
+const (
+	DefaultNoProgressToolLimit = 75
+	readinessTimeout           = 10 * time.Second
+	readinessStateID           = "tao-readiness-state"
+	readinessModelsID          = "tao-readiness-models"
+	promptID                   = "tao-prompt"
+)
 
-func (c Client) RunAgentSession(ctx context.Context, request Request) (Result, error) {
+// CheckReadiness starts a disposable RPC process, verifies that Pi selected a
+// locally available model, and stops it without sending a prompt. Callers use
+// this to prove startup separately from an attributed model request.
+func (c Client) CheckReadiness(ctx context.Context, repoRoot string) error {
 	starter := c.ProcessStarter
 	if starter == nil {
 		starter = DefaultProcessStarter
 	}
-	proc, err := starter(ctx, request.RepoRoot, "pi", []string{"--mode", "rpc"})
+	proc, err := starter(ctx, repoRoot, "pi", []string{"--mode", "rpc", "--no-session"})
 	if err != nil {
-		return Result{}, err
+		return err
+	}
+	session := newSession(proc, c.Log, 0, nil)
+	readyCtx, cancelReady := context.WithTimeout(ctx, readinessTimeout)
+	err = session.verifyReadiness(readyCtx)
+	cancelReady()
+	if err != nil {
+		return session.abort(fmt.Errorf("pi rpc readiness: %w", err))
+	}
+	// Readiness never owns a model request or a persistent session. Stopping the
+	// disposable process also lets confinement owners remove its private view.
+	return session.abort(nil)
+}
+
+func (c Client) RunAgentSession(ctx context.Context, request Request) (Result, error) {
+	result := Result{PromptAcceptance: lifecycle.PromptAcceptanceUnknown}
+	starter := c.ProcessStarter
+	if starter == nil {
+		starter = DefaultProcessStarter
+	}
+	proc, err := starter(ctx, request.RepoRoot, "pi", []string{"--mode", "rpc", "--no-session"})
+	if err != nil {
+		result.PromptAcceptance = lifecycle.PromptAcceptanceNotTransmitted
+		return result, err
 	}
 	session := newSession(proc, c.Log, request.NoProgressToolLimit, request.VerificationCommands)
 	defer session.close()
 
-	if err := session.send(ctx, command{ID: "1", Type: "prompt", Message: request.Prompt}); err != nil {
-		return Result{}, err
+	readyCtx, cancelReady := context.WithTimeout(ctx, readinessTimeout)
+	err = session.verifyReadiness(readyCtx)
+	cancelReady()
+	if err != nil {
+		result.PromptAcceptance = lifecycle.PromptAcceptanceNotTransmitted
+		return result, session.abort(fmt.Errorf("pi rpc readiness: %w", err))
 	}
-	result, err := session.waitForAgentEnd(ctx)
+
+	// Once prompt delivery is attempted, every outcome is ambiguous until the
+	// matching structured response explicitly accepts or rejects it.
+	attempted, err := session.sendPrompt(ctx, command{ID: promptID, Type: "prompt", Message: request.Prompt})
+	if err != nil {
+		if !attempted {
+			result.PromptAcceptance = lifecycle.PromptAcceptanceNotTransmitted
+		}
+		return result, session.abort(err)
+	}
+	acceptance, err := session.waitForPromptResponse(ctx, promptID)
+	result.PromptAcceptance = acceptance
+	if err != nil {
+		partial := session.queuedResult()
+		partial.PromptAcceptance = acceptance
+		return partial, session.abort(err)
+	}
+
+	agentResult, err := session.waitForAgentEnd(ctx)
+	agentResult.PromptAcceptance = result.PromptAcceptance
 	if err != nil {
 		if session.log != nil {
 			_ = logrecord.Write(session.log, logrecord.Record{Type: logrecord.TypeDiagnostic, Content: "tao pi: agent session ended with an error; stopping the RPC process..."})
 		}
-		return result, session.abort(err)
+		return agentResult, session.abort(err)
 	}
+	result = agentResult
 	if request.SessionInfoMode != SessionInfoBestEffort {
 		return result, nil
 	}

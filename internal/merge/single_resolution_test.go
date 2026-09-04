@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/agent"
+	"github.com/iamseth/tao/internal/agentsession"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
 )
@@ -27,6 +28,7 @@ type recordingSingleResolutionStore struct {
 	records   int
 	advances  int
 	onAdvance func(plan.SingleMergeResolution) error
+	rearmErr  error
 }
 
 func (s *recordingSingleResolutionStore) RecordSingleMergeResolution(expected plan.SingleMergeCommitIntent, resolution plan.SingleMergeResolution) error {
@@ -62,6 +64,27 @@ func (s *recordingSingleResolutionStore) AdvanceSingleMergeResolution(expected p
 	return nil
 }
 
+func (s *recordingSingleResolutionStore) RearmSingleMergeResolution(expected plan.SingleMergeCommitIntent, failure plan.SingleMergeStartupFailure) error {
+	if !reflect.DeepEqual(s.current, expected) {
+		return errors.New("rearm compare-and-set mismatch")
+	}
+	if err := failure.Validate(); err != nil {
+		return err
+	}
+	if s.rearmErr != nil {
+		return s.rearmErr
+	}
+	s.current.Resolution = nil
+	return nil
+}
+
+type resetFailingSingleResolutionGit struct {
+	GitClient
+	err error
+}
+
+func (g resetFailingSingleResolutionGit) ResetHard(context.Context, string) error { return g.err }
+
 type preflightSingleMergeAgent struct {
 	preflightErr error
 	calls        int
@@ -89,6 +112,109 @@ func TestGuardedSingleConflictResolverPreflightsBeforeRequestedEvidence(t *testi
 	}
 	if store.records != 0 || store.current.Resolution != nil || agent.calls != 0 {
 		t.Fatalf("preflight failure persisted or started provider: records=%d intent=%+v calls=%d", store.records, store.current, agent.calls)
+	}
+}
+
+func TestGuardedSingleConflictResolverRearmsOnlyProvenPreAcceptanceFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		acceptance agent.PromptAcceptance
+		wantRearm  bool
+	}{
+		{name: "explicit rejection", acceptance: agent.PromptAcceptanceRejected, wantRearm: true},
+		{name: "startup not transmitted", acceptance: agent.PromptAcceptanceNotTransmitted, wantRearm: true},
+		{name: "accepted", acceptance: agent.PromptAcceptanceAccepted},
+		{name: "unknown", acceptance: agent.PromptAcceptanceUnknown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture, request, git := preparedSingleResolutionFixture(t)
+			store := &recordingSingleResolutionStore{current: request.Intent}
+			agentSession := &preflightSingleMergeAgent{resolve: func(context.Context, BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+				return BatchAgentSessionResult{Provider: agentsession.Result{PromptAcceptance: tc.acceptance}}, errors.New("fixture provider startup failed")
+			}}
+			resolver := GuardedSingleConflictResolver{Git: git, Recorder: store, Agent: agentSession}
+			result, err := resolver.ResolveConflict(context.Background(), request)
+			startup, ok := errors.AsType[*SingleResolutionStartupError](err)
+			if !errors.Is(err, ErrSingleResolutionRejected) || !ok {
+				t.Fatalf("startup failure = %+v, %v", result, err)
+			}
+			if tc.wantRearm {
+				if startup.Authority != SingleResolutionAuthorityRearmed || store.current.Resolution != nil || result.Intent.Resolution != nil {
+					t.Fatalf("proven pre-acceptance did not rearm: startup=%+v store=%+v result=%+v", startup, store.current, result)
+				}
+			} else if startup.Authority != SingleResolutionAuthorityConsumed || store.current.Resolution == nil || result.Intent.Resolution == nil {
+				t.Fatalf("ambiguous/accepted failure did not remain consumed: startup=%+v store=%+v result=%+v", startup, store.current, result)
+			}
+			if head := strings.TrimSpace(realGitOutput(t, fixture.repoRoot, "rev-parse", "HEAD")); head != request.Intent.DefaultParent {
+				t.Fatalf("startup rollback left HEAD at %s", head)
+			}
+			if status := strings.TrimSpace(realGitOutput(t, fixture.repoRoot, "status", "--porcelain")); status != "" {
+				t.Fatalf("startup rollback left dirty worktree: %q", status)
+			}
+		})
+	}
+}
+
+func TestGuardedSingleConflictResolverPreservesRequestedAuthorityWhenRearmSettlementFails(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		wrapGit  func(GitClient) GitClient
+		rearmErr error
+		want     string
+	}{
+		{
+			name: "rollback failure",
+			wrapGit: func(git GitClient) GitClient {
+				return resetFailingSingleResolutionGit{GitClient: git, err: errors.New("fixture reset failure")}
+			},
+			want: "restore durable parent",
+		},
+		{name: "compare and set failure", rearmErr: errors.New("fixture concurrent state drift"), want: "persist exact request rearm"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, request, git := preparedSingleResolutionFixture(t)
+			store := &recordingSingleResolutionStore{current: request.Intent, rearmErr: tc.rearmErr}
+			guardedGit := func() GitClient {
+				if tc.wrapGit != nil {
+					return tc.wrapGit(git)
+				}
+				return git
+			}()
+			resolver := GuardedSingleConflictResolver{Git: guardedGit, Recorder: store, Agent: &preflightSingleMergeAgent{resolve: func(context.Context, BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+				return BatchAgentSessionResult{Provider: agentsession.Result{PromptAcceptance: agent.PromptAcceptanceRejected}}, errors.New("explicit prompt rejection")
+			}}}
+			result, err := resolver.ResolveConflict(context.Background(), request)
+			startup, ok := errors.AsType[*SingleResolutionStartupError](err)
+			if !ok || startup.Authority != SingleResolutionAuthorityConsumed || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("failed settlement = %+v, %v", result, err)
+			}
+			if store.current.Resolution == nil || result.Intent.Resolution == nil || store.current.Resolution.Phase != plan.SingleMergeResolutionPhaseRequested {
+				t.Fatalf("failed settlement cleared consumed request: store=%+v result=%+v", store.current, result.Intent)
+			}
+		})
+	}
+}
+
+func TestGuardedSingleConflictResolverExplicitRerunSucceedsAfterRearm(t *testing.T) {
+	fixture, request, git := preparedSingleResolutionFixture(t)
+	store := &recordingSingleResolutionStore{current: request.Intent}
+	resolver := GuardedSingleConflictResolver{Git: git, Recorder: store, Agent: &preflightSingleMergeAgent{resolve: func(context.Context, BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+		return BatchAgentSessionResult{Provider: agentsession.Result{PromptAcceptance: agent.PromptAcceptanceRejected}}, errors.New("explicit prompt rejection")
+	}}}
+	if _, err := resolver.ResolveConflict(context.Background(), request); err == nil || store.current.Resolution != nil {
+		t.Fatalf("first explicit attempt did not rearm: %v / %+v", err, store.current)
+	}
+
+	request.Intent = store.current
+	if err := git.MergeSquash(context.Background(), fixture.planBranch); err == nil {
+		t.Fatal("explicit rerun fixture unexpectedly merged without conflict")
+	}
+	resolver.Agent = batchResolutionAgentFunc(func(_ context.Context, root, _ string) (string, error) {
+		return batchResolutionJSON("resolved on explicit rerun"), os.WriteFile(filepath.Join(root, "README.md"), []byte("combined\n"), 0o600)
+	})
+	result, err := resolver.ResolveConflict(context.Background(), request)
+	if err != nil || result.Intent.Resolution == nil || result.Intent.Resolution.Phase != plan.SingleMergeResolutionPhaseResolved {
+		t.Fatalf("explicit rerun result = %+v, %v", result, err)
 	}
 }
 
@@ -391,6 +517,65 @@ func TestMergeCapabilityPreflightFailureRestoresRetryableBoundary(t *testing.T) 
 				t.Fatalf("retry sessions/events = %d / %#v", retryAgent.calls, events.events)
 			}
 		})
+	}
+}
+
+func TestMergeRearmsRejectedAttributedStartupForExactLaterExplicitSuccess(t *testing.T) {
+	fixture, _, _, _ := batchAgentConflictFixture(t)
+	sourceHead := strings.TrimSpace(realGitOutput(t, fixture.worktreePath, "rev-parse", "HEAD"))
+	defaultHead := strings.TrimSpace(realGitOutput(t, fixture.repoRoot, "rev-parse", "HEAD"))
+	base := strings.TrimSpace(realGitOutput(t, fixture.repoRoot, "merge-base", defaultHead, sourceHead))
+	detail := mergeReadyDetail(base)
+	detail.Dir = t.TempDir()
+	detail.State.Repo.Root = fixture.repoRoot
+	detail.State.Plan.Review.Head = sourceHead
+	detail.State.Workspace.Branch = fixture.planBranch
+	detail.State.Workspace.BaseBranch = fixture.defaultBranch
+	events := &fakeEventAppender{}
+	record, err := plan.NewPlanRecordWithStore(events, detail.Dir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	git := gitops.NewClient(fixture.repoRoot, nil)
+	failedAgent := &preflightSingleMergeAgent{resolve: func(context.Context, BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+		return BatchAgentSessionResult{Provider: agentsession.Result{PromptAcceptance: agent.PromptAcceptanceRejected}}, errors.New("fixture explicit rejection")
+	}}
+	service := Service{
+		Git: git, Events: events, Cleaner: successfulCleanup(),
+		SingleResolver: GuardedSingleConflictResolver{Git: git, Recorder: record, Agent: failedAgent},
+	}
+	err = service.Merge(context.Background(), detail, Options{NoVerify: true})
+	startup, ok := errors.AsType[*SingleResolutionStartupError](err)
+	if !ok || startup.Authority != SingleResolutionAuthorityRearmed {
+		t.Fatalf("first merge startup failure = %v", err)
+	}
+	if detail.State.Plan.MergeCommitIntent == nil || detail.State.Plan.MergeCommitIntent.Resolution != nil || events.count(plan.EventTypeSingleMergeRearmed) != 1 {
+		t.Fatalf("rearmed merge state/events = %#v / %#v", detail.State.Plan.MergeCommitIntent, events.events)
+	}
+	if status := strings.TrimSpace(realGitOutput(t, fixture.repoRoot, "status", "--porcelain")); status != "" {
+		t.Fatalf("rearmed merge left dirty worktree: %q", status)
+	}
+
+	retryAgent := &preflightSingleMergeAgent{resolve: func(_ context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+		switch request.Operation {
+		case BatchAgentOperationSinglePlanResolution:
+			if err := os.WriteFile(filepath.Join(request.IntegrationRoot, "README.md"), []byte("combined after explicit retry\n"), 0o600); err != nil {
+				return BatchAgentSessionResult{}, err
+			}
+			return BatchAgentSessionResult{Output: batchResolutionJSON("resolved after explicit retry")}, nil
+		case BatchAgentOperationSinglePlanReview:
+			return BatchAgentSessionResult{Output: reviewJSON("approve", "exact retry is safe", "")}, nil
+		default:
+			return BatchAgentSessionResult{}, fmt.Errorf("unexpected operation %s", request.Operation)
+		}
+	}}
+	service.SingleResolver = GuardedSingleConflictResolver{Git: git, Recorder: record, Agent: retryAgent}
+	service.SingleReviewer = GuardedSingleIntegrationReviewer{Git: git, Recorder: record, Agent: retryAgent}
+	if err := service.Merge(context.Background(), detail, Options{NoVerify: true}); err != nil {
+		t.Fatalf("later explicit merge: %v", err)
+	}
+	if events.count(plan.EventTypePlanMerged) != 1 || retryAgent.calls != 2 {
+		t.Fatalf("later explicit merge sessions/events = %d / %#v", retryAgent.calls, events.events)
 	}
 }
 

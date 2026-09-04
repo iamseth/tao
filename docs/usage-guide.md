@@ -725,11 +725,13 @@ and fast-forwarding default.
 one configured provider-neutral resolver session in the default worktree while
 the default and source refs remain at their recorded boundaries. These sessions
 use the platform filesystem sandbox; Linux requires an externally installed
-`bwrap` at `/usr/bin/bwrap` or `/bin/bwrap`, which `tao doctor` reports as a
-required tool. Tao probes the sandbox before recording one-shot `requested`
-evidence. An unavailable sandbox therefore starts no provider, restores the
-prepared squash boundary, and leaves a later invocation free to try again after
-the prerequisite is installed. Tao treats the
+`bwrap` at `/usr/bin/bwrap` or `/bin/bwrap`. `tao doctor` passively checks the
+executable, confinement, ephemeral configuration projection, RPC initialization,
+selected model, and local credential readiness without sending a model request;
+remote credential validity remains unproven. Tao runs that same disposable RPC
+readiness path before recording one-shot `requested` evidence. A readiness
+failure sends no attributed prompt, restores the prepared squash boundary, and
+leaves a later explicit invocation free to try again. Tao treats the
 plan title, source review, changed paths, conflict status, and provider output as
 untrusted. The resolver may edit only; Tao rejects unsafe paths, unresolved
 entries or markers, malformed output, protected-ref or HEAD movement, empty
@@ -737,9 +739,14 @@ edits, and invalid proposals before it stages or commits. Tao then fingerprints
 the exact edits, persists intent, creates the resolution commit itself, runs the
 configured verification gate, and asks a separate fresh session to review the
 exact parent/head integration. Only independent `approve` authorizes merge
-evidence and cleanup. There is no retry or automatic rework: comment,
-`changes_requested`, malformed output, timeout, provider failure, or mutation
-fails closed and prints the recorded rollback state and a manual next action.
+evidence and cleanup. Tao never retries automatically. After `requested`, only
+structured `not_transmitted` or explicit prompt-rejection evidence can rearm a
+later explicit `tao merge`, and only after the exact default/source refs, HEAD,
+branch, and clean worktree are restored and the matching request is cleared by
+compare-and-set. Accepted or unknown delivery, partial writes, missing responses,
+timeouts, post-transmission cancellation, remote authentication rejection,
+provider/model execution errors, rollback failure, or concurrent drift consume
+the one-shot authority and retain manual recovery behavior.
 
 `--force` does not bypass resolver validation or independent review.
 `--no-verify` skips only command verification; structural validation and exact

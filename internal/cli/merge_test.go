@@ -317,7 +317,23 @@ func TestRenderMergeAutomaticResolutionAndReviewFailuresAreActionable(t *testing
 		{
 			name: "confinement preflight unavailable",
 			err:  errors.Join(mergepkg.ErrSingleResolutionRejected, mergepkg.ErrSingleResolutionPreflight, errors.New("bubblewrap is unavailable")),
-			want: []string{"could not start safely", "started no provider", "recorded no one-shot resolution request", "Linux requires bwrap", "tao doctor", "tao merge plan-a"},
+			want: []string{"could not start safely", "sent no attributed prompt", "recorded no one-shot resolution request", "tao doctor", "tao merge plan-a", "will not retry automatically"},
+		},
+		{
+			name: "proven prompt rejection rearmed",
+			err: errors.Join(mergepkg.ErrSingleResolutionRejected, &mergepkg.SingleResolutionStartupError{
+				Capability: plan.SingleMergeStartupPromptAcceptance, PromptAcceptance: "rejected",
+				Authority: mergepkg.SingleResolutionAuthorityRearmed, Cause: errors.New("provider rejected prompt"),
+			}),
+			want: []string{"Failed capability: prompt acceptance", "One-shot authority rearmed", "no prompt was accepted", "explicitly rerun `tao merge plan-a`", "will not retry automatically"},
+		},
+		{
+			name: "ambiguous startup consumed",
+			err: errors.Join(mergepkg.ErrSingleResolutionRejected, &mergepkg.SingleResolutionStartupError{
+				Capability: plan.SingleMergeStartupRPCInitialization, PromptAcceptance: "unknown",
+				Authority: mergepkg.SingleResolutionAuthorityConsumed, Cause: errors.New("response missing after transmission"),
+			}),
+			want: []string{"Failed capability: rpc initialization", "One-shot authority consumed", "reconcile the recorded transaction manually", "do not use --force"},
 		},
 		{
 			name: "changes requested with rollback warning",

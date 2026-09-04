@@ -534,6 +534,38 @@ func renderMergeDirtyWorktree(out io.Writer, detail *plan.PlanDetail, planID str
 }
 
 func renderMergeResolutionRejected(out io.Writer, detail *plan.PlanDetail, planID string, err error) error {
+	if startup, ok := errors.AsType[*mergepkg.SingleResolutionStartupError](err); ok {
+		heading := "Automatic squash conflict resolution failed during startup"
+		if errors.Is(err, mergepkg.ErrSingleResolutionPreflight) {
+			heading = "Automatic squash conflict resolution could not start safely"
+		}
+		if err := writeln(out, heading); err != nil {
+			return err
+		}
+		if err := writef(out, "Failed capability: %s\n", strings.ReplaceAll(string(startup.Capability), "_", " ")); err != nil {
+			return err
+		}
+		if err := writef(out, "Reason: %v\n", startup.Cause); err != nil {
+			return err
+		}
+		switch startup.Authority {
+		case mergepkg.SingleResolutionAuthorityPreserved:
+			if err := writef(out, "One-shot authority preserved: Tao sent no attributed prompt, recorded no one-shot resolution request, and restored %s to its pre-merge boundary when possible.\n", mergeDefaultBranch(detail)); err != nil {
+				return err
+			}
+			return writef(out, "Next: run `tao doctor`, fix the reported %s capability, then explicitly rerun `tao merge %s`; Tao will not retry automatically.\n", strings.ReplaceAll(string(startup.Capability), "_", " "), planID)
+		case mergepkg.SingleResolutionAuthorityRearmed:
+			if err := writef(out, "One-shot authority rearmed: structured %s proof showed no prompt was accepted, and Tao restored the exact default/source refs, HEAD, branch, and clean worktree boundary.\n", startup.PromptAcceptance); err != nil {
+				return err
+			}
+			return writef(out, "Next: fix the reported %s capability, then explicitly rerun `tao merge %s`; Tao will not retry automatically.\n", strings.ReplaceAll(string(startup.Capability), "_", " "), planID)
+		default:
+			if err := writeln(out, "One-shot authority consumed: prompt acceptance was accepted or ambiguous, or exact rollback/rearm settlement could not be proven."); err != nil {
+				return err
+			}
+			return writef(out, "Next: inspect %s and %s, then reconcile the recorded transaction manually; do not rerun the resolver and do not use --force as retry authority.\n", mergeDefaultBranch(detail), emptyMergeField(mergePlanBranch(detail)))
+		}
+	}
 	if errors.Is(err, mergepkg.ErrSingleResolutionPreflight) {
 		if err := writeln(out, "Automatic squash conflict resolution could not start safely"); err != nil {
 			return err
@@ -541,10 +573,10 @@ func renderMergeResolutionRejected(out io.Writer, detail *plan.PlanDetail, planI
 		if err := writef(out, "Reason: %v\n", err); err != nil {
 			return err
 		}
-		if err := writef(out, "Tao started no provider, recorded no one-shot resolution request, and restored %s to its pre-merge boundary when possible.\n", mergeDefaultBranch(detail)); err != nil {
+		if err := writef(out, "Tao sent no attributed prompt, recorded no one-shot resolution request, and restored %s to its pre-merge boundary when possible.\n", mergeDefaultBranch(detail)); err != nil {
 			return err
 		}
-		return writef(out, "Next: install the reported confinement prerequisite (Linux requires bwrap), run `tao doctor`, then rerun `tao merge %s`.\n", planID)
+		return writef(out, "Next: run `tao doctor`, fix the reported capability, then explicitly rerun `tao merge %s`; Tao will not retry automatically.\n", planID)
 	}
 	heading := "Automatic squash conflict resolution failed"
 	message := strings.ToLower(err.Error())

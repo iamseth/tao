@@ -40,6 +40,14 @@ func ValidateDetail(detail *PlanDetail) []string {
 	}
 	abandonmentEvents := 0
 	for i, event := range detail.Events {
+		if event.SingleMergeStartup != nil {
+			if err := event.SingleMergeStartup.Validate(); err != nil {
+				warnings = append(warnings, fmt.Sprintf("events.jsonl event %d single_merge_startup is invalid: %v", i+1, err))
+			}
+			if event.Type != EventTypeSingleMergeRearmed || event.SingleMergeResolution == nil || event.SingleMergeResolution.Phase != SingleMergeResolutionPhaseRequested {
+				warnings = append(warnings, fmt.Sprintf("events.jsonl event %d single_merge_startup lacks matching rearmed request evidence", i+1))
+			}
+		}
 		if !validFinalVerificationFailureKind(event.FailureKind) {
 			warnings = append(warnings, fmt.Sprintf("events.jsonl event %d failure_kind is invalid", i+1))
 		}

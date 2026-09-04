@@ -2,6 +2,7 @@ package plan
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -50,6 +51,7 @@ const (
 	EventTypeVerificationRepairCreated  = "verification_repair_created"
 	EventTypeMergeVerification          = "merge_verification"
 	EventTypeSingleMergeRolledBack      = "single_merge_resolution_rolled_back"
+	EventTypeSingleMergeRearmed         = "single_merge_resolution_rearmed"
 	EventTypePlanCommitFallback         = "plan_commit_fallback"
 	EventTypePlanCommitGuard            = "plan_commit_guard"
 )
@@ -612,6 +614,48 @@ type SingleMergeResolutionOutcome string
 
 const SingleMergeResolutionOutcomeResolved SingleMergeResolutionOutcome = "resolved"
 
+// SingleMergeStartupCapability is the stable launch stage that prevented an
+// attributed resolver prompt from being accepted. These labels are diagnostic
+// only and never grant retry authority by themselves.
+type SingleMergeStartupCapability string
+
+const (
+	SingleMergeStartupExecutable        SingleMergeStartupCapability = "executable"
+	SingleMergeStartupConfinement       SingleMergeStartupCapability = "confinement"
+	SingleMergeStartupConfigProjection  SingleMergeStartupCapability = "configuration_projection"
+	SingleMergeStartupRPCInitialization SingleMergeStartupCapability = "rpc_initialization"
+	SingleMergeStartupSelectedModel     SingleMergeStartupCapability = "selected_model"
+	SingleMergeStartupLocalCredentials  SingleMergeStartupCapability = "local_credentials" //nolint:gosec // capability label, never credential material.
+	SingleMergeStartupPromptAcceptance  SingleMergeStartupCapability = "prompt_acceptance"
+)
+
+// SingleMergeStartupFailure is bounded append-only evidence that Tao restored
+// the exact provisional request boundary and rearmed it. Error text and
+// credentials are deliberately excluded.
+type SingleMergeStartupFailure struct {
+	Capability       SingleMergeStartupCapability `json:"capability"`
+	PromptAcceptance string                       `json:"prompt_acceptance"`
+	FailedAt         time.Time                    `json:"failed_at"`
+}
+
+func (f SingleMergeStartupFailure) Validate() error {
+	if !slices.Contains([]SingleMergeStartupCapability{
+		SingleMergeStartupExecutable, SingleMergeStartupConfinement,
+		SingleMergeStartupConfigProjection, SingleMergeStartupRPCInitialization,
+		SingleMergeStartupSelectedModel, SingleMergeStartupLocalCredentials,
+		SingleMergeStartupPromptAcceptance,
+	}, f.Capability) {
+		return fmt.Errorf("single-merge startup capability %q is invalid", f.Capability)
+	}
+	if f.PromptAcceptance != "not_transmitted" && f.PromptAcceptance != "rejected" {
+		return fmt.Errorf("single-merge startup failure requires proven pre-acceptance")
+	}
+	if f.FailedAt.IsZero() || f.FailedAt.Location() != time.UTC {
+		return fmt.Errorf("single-merge startup failure requires a non-zero UTC timestamp")
+	}
+	return nil
+}
+
 type SingleMergeResolutionRollbackReason string
 
 const (
@@ -894,6 +938,7 @@ type Event struct {
 	PRFeedbackTriage      PRFeedbackTriageResult       `json:"pr_feedback_triage,omitempty"`
 	Review                *PlanReview                  `json:"review,omitempty"`
 	SingleMergeResolution *SingleMergeResolutionEvent  `json:"single_merge_resolution,omitempty"`
+	SingleMergeStartup    *SingleMergeStartupFailure   `json:"single_merge_startup,omitempty"`
 	FinalizationFailure   *FinalizationFailure         `json:"finalization_failure,omitempty"`
 	Command               string                       `json:"command,omitempty"`
 	CorrectedCommand      string                       `json:"corrected_command,omitempty"`

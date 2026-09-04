@@ -1195,6 +1195,49 @@ func (r *PlanRecord) SettleSingleMergeResolutionRollback(expected SingleMergeCom
 	return r.mutateSingleMergeResolution(expected, settled, singleMergeResolutionRollback)
 }
 
+// RearmSingleMergeResolution compare-and-sets the exact provisional request
+// after the caller has independently proved both pre-acceptance and exact Git
+// rollback. It clears only resolution request authority and retains a bounded,
+// non-authoritative diagnostic event.
+func (r *PlanRecord) RearmSingleMergeResolution(expected SingleMergeCommitIntent, failure SingleMergeStartupFailure) error {
+	if expected.Resolution == nil || expected.Resolution.Phase != SingleMergeResolutionPhaseRequested {
+		return fmt.Errorf("single-merge resolution rearm requires exact requested evidence")
+	}
+	if err := validateSingleMergeCommitIntent(expected); err != nil {
+		return err
+	}
+	if err := failure.Validate(); err != nil {
+		return err
+	}
+	if failure.FailedAt.Before(expected.Resolution.RequestedAt) {
+		return fmt.Errorf("single-merge startup failure predates its request")
+	}
+	store, err := r.storeOrDefault()
+	if err != nil {
+		return err
+	}
+	return r.applyStateEvent(store, func(detail *PlanDetail, changes *ArtifactChangeSet) ([]Event, error) {
+		existing := detail.State.Plan.MergeCommitIntent
+		if existing == nil {
+			return nil, fmt.Errorf("plan %s has no single-merge commit intent", detail.State.Plan.ID)
+		}
+		if !reflect.DeepEqual(existing, &expected) {
+			return nil, fmt.Errorf("plan %s single-merge resolution evidence changed; reload and retry", detail.State.Plan.ID)
+		}
+		changes.ClearSingleMergeResolution()
+		event := Event{
+			Type: EventTypeSingleMergeRearmed, Timestamp: failure.FailedAt,
+			PlanID: detail.State.Plan.ID, SingleMergeResolution: projectSingleMergeResolutionEvent(expected.Resolution),
+			SingleMergeStartup: &failure, Reason: string(failure.Capability),
+			Message: "Single-plan merge resolution rearmed after proven pre-acceptance failure",
+		}
+		if err := validateSingleMergeResolutionEventSize(event); err != nil {
+			return nil, err
+		}
+		return []Event{event}, nil
+	})
+}
+
 // ReplaceSingleMergeResolution compare-and-sets only requested, pre-mutation
 // evidence. Resolved or committed authority must be advanced or settled.
 func (r *PlanRecord) ReplaceSingleMergeResolution(expected SingleMergeCommitIntent, replacement SingleMergeResolution) error {

@@ -42,7 +42,7 @@ func (r piRuntime) RunSession(ctx context.Context, session Session) (SessionResu
 		VerificationCommands: session.VerificationCommands,
 		SessionInfoMode:      mode,
 	})
-	out := SessionResult{Output: result.Output, FinalText: result.FinalText}
+	out := SessionResult{Output: result.Output, FinalText: result.FinalText, PromptAcceptance: result.PromptAcceptance}
 	if session.CollectMetrics {
 		out.Metrics = &result.Metrics
 		if result.SessionInfoError != nil {
@@ -66,7 +66,7 @@ func (r claudeRuntime) RunSession(ctx context.Context, session Session) (Session
 		Prompt:         session.Prompt,
 		PermissionMode: session.PermissionMode,
 	})
-	out := SessionResult{Output: result.Output, FinalText: result.FinalText}
+	out := SessionResult{Output: result.Output, FinalText: result.FinalText, PromptAcceptance: result.PromptAcceptance}
 	if session.CollectMetrics {
 		out.Metrics = &result.Metrics
 		out.MetricsWarning = result.MetricsWarning

@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -155,7 +156,11 @@ func TestSingleMergeAgentSessionExposesMetricsWithoutBatchPersistence(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Output != "resolved" || got.cwd != integrationRoot || got.prompt != "resolve" {
+	canonicalIntegration, err := canonicalConfinementDirectory(integrationRoot, "test integration worktree")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "resolved" || got.cwd != canonicalIntegration || got.prompt != "resolve" {
 		t.Fatalf("unexpected single-merge provider result: %#v / %#v", result, got)
 	}
 	if len(batchEvents.events) != 0 {
@@ -196,6 +201,138 @@ func TestSingleMergeAgentSessionMissingProviderDoesNotProbeOrStart(t *testing.T)
 	}
 	if starts != 0 || probes != 0 {
 		t.Fatalf("missing provider started %d processes and %d confinement probes", starts, probes)
+	}
+}
+
+func TestConfinementCleanupProcessWaitsForStopAndSettlesOnce(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		waitErr error
+		kill    bool
+	}{
+		{name: "normal completion"},
+		{name: "explicit process error", waitErr: errors.New("process failed")},
+		{name: "kill", kill: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			runtimeRoot := t.TempDir()
+			runtime := &singleMergeInvocationRuntime{root: runtimeRoot}
+			child := newCleanupTestProcess(tt.waitErr)
+			process := newConfinementCleanupProcess(child, runtime)
+			waitResult := make(chan error, 1)
+			go func() { waitResult <- process.Wait() }()
+			<-child.waitStarted
+			if _, err := os.Stat(runtimeRoot); err != nil {
+				t.Fatalf("runtime removed before child stopped: %v", err)
+			}
+			if tt.kill {
+				if err := process.Kill(); err != nil {
+					t.Fatalf("Kill() error = %v", err)
+				}
+			} else {
+				child.complete()
+			}
+			if err := <-waitResult; !errors.Is(err, tt.waitErr) {
+				t.Fatalf("Wait() error = %v, want %v", err, tt.waitErr)
+			}
+			if _, err := os.Stat(runtimeRoot); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("settled runtime survived: %v", err)
+			}
+			_ = process.Kill()
+			_ = process.Wait()
+			waitCalls, killCalls := child.calls()
+			if waitCalls != 1 || killCalls != 1 {
+				t.Fatalf("child wait/kill calls = %d/%d, want 1/1", waitCalls, killCalls)
+			}
+		})
+	}
+}
+
+func TestSingleMergePiRuntimeProjectionUsesPrivateModesAndAllowlist(t *testing.T) {
+	hostRoot := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_DIR", hostRoot)
+	if err := os.WriteFile(filepath.Join(hostRoot, "auth.json"), []byte("{\"fixture\":\"credentials\"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hostRoot, "models-store.json"), []byte("{\"selected\":\"fixture\"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hostRoot, "not-allowlisted.json"), []byte("excluded\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(hostRoot, "npm"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := newSingleMergeInvocationRuntime("pi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = runtime.cleanup() }()
+	for _, path := range []string{runtime.path(), filepath.Join(runtime.path(), "agent"), filepath.Join(runtime.path(), "sessions")} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o700 {
+			t.Fatalf("private directory mode for %s = %v", filepath.Base(path), info.Mode().Perm())
+		}
+	}
+	projectedAuth := filepath.Join(runtime.path(), "agent", "auth.json")
+	info, err := os.Stat(projectedAuth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("projected auth mode = %v", info.Mode().Perm())
+	}
+	if got, err := os.ReadFile(projectedAuth); err != nil || string(got) != "{\"fixture\":\"credentials\"}\n" { //nolint:gosec // fixture projection validates byte preservation.
+		t.Fatalf("projected auth = %q, %v", got, err)
+	}
+	projectedModels := filepath.Join(runtime.path(), "agent", "models-store.json")
+	if got, err := os.ReadFile(projectedModels); err != nil || string(got) != "{\"selected\":\"fixture\"}\n" { //nolint:gosec // fixture projection validates the production model catalog name and byte preservation.
+		t.Fatalf("projected models store = %q, %v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(runtime.path(), "agent", "not-allowlisted.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unexpected non-allowlisted projection: %v", err)
+	}
+	target, err := os.Readlink(filepath.Join(runtime.path(), "agent", "npm"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalNPM, err := filepath.EvalSymlinks(filepath.Join(hostRoot, "npm"))
+	if err != nil || target != canonicalNPM {
+		t.Fatalf("npm projection target = %q, %v; want %q", target, err, canonicalNPM)
+	}
+}
+
+func TestSingleMergeConfiningStarterCleansRuntimeOnStartupError(t *testing.T) {
+	integrationRoot, protectedRoot := singleMergeAgentTestBoundary(t)
+	policy := singleMergeFilesystemConfinement{
+		protectedPaths: []string{protectedRoot}, integrationRoot: integrationRoot, allowEdits: true,
+	}
+	startupErr := errors.New("fixture startup failed")
+	var runtimeRoot string
+	starter := singleMergeFilesystemConfiningProcessStarter(func(_ context.Context, _ string, _ string, args []string) (agent.Process, error) {
+		for _, arg := range args {
+			if strings.HasPrefix(arg, "TMPDIR=") {
+				runtimeRoot = strings.TrimPrefix(arg, "TMPDIR=")
+				break
+			}
+		}
+		return nil, startupErr
+	}, func(string) (string, error) { return "/usr/bin/true", nil })
+	ctx := context.WithValue(context.Background(), singleMergeFilesystemConfinementContextKey{}, policy)
+	if _, err := starter(ctx, integrationRoot, "claude", []string{"--version"}); !errors.Is(err, startupErr) {
+		if strings.Contains(fmt.Sprint(err), "confinement executable") || strings.Contains(fmt.Sprint(err), "bubblewrap") {
+			t.Skipf("OS confinement unavailable: %v", err)
+		}
+		t.Fatalf("startup error = %v", err)
+	}
+	if runtimeRoot == "" {
+		t.Fatal("startup did not receive a generated runtime")
+	}
+	if _, err := os.Stat(runtimeRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("runtime survived provider startup error: %v", err)
 	}
 }
 
@@ -252,7 +389,26 @@ printf 'provider version\n'
 	}
 }
 
-func TestSingleMergePiRPCUsesEphemeralConfinedSessionDirectory(t *testing.T) {
+func TestSingleMergePiProjectionRejectsMalformedConfigurationWithoutCopyingIt(t *testing.T) {
+	hostAgentRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(hostAgentRoot, "settings.json"), []byte("{not-json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PI_CODING_AGENT_DIR", hostAgentRoot)
+	destination := t.TempDir()
+	err := materializeSingleMergePiView(destination)
+	if err == nil || !strings.Contains(err.Error(), "settings.json is malformed JSON") {
+		t.Fatalf("malformed configuration error = %v", err)
+	}
+	if capability := SingleMergeStartupCapabilityForError(err); capability != plan.SingleMergeStartupConfigProjection {
+		t.Fatalf("malformed configuration capability = %q", capability)
+	}
+	if _, statErr := os.Stat(filepath.Join(destination, "settings.json")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("malformed configuration was projected: %v", statErr)
+	}
+}
+
+func TestSingleMergePiRPCProjectsConfigAndResourcesIntoEphemeralRuntime(t *testing.T) {
 	t.Setenv("TAO_AGENT", "pi")
 	integrationRoot, protectedRoot := singleMergeAgentTestBoundary(t)
 	if err := probeSingleMergeFilesystemConfinement(context.Background(), singleMergeFilesystemConfinement{
@@ -261,12 +417,42 @@ func TestSingleMergePiRPCUsesEphemeralConfinedSessionDirectory(t *testing.T) {
 		t.Skipf("OS confinement is unavailable for Pi RPC launch regression: %v", err)
 	}
 
+	hostAgentRoot := t.TempDir()
 	hostSessionRoot := t.TempDir()
+	hostInputs := map[string]string{
+		"settings.json":     "{\"model\":\"fixture\"}\n",
+		"auth.json":         "{\"token\":\"fixture-secret\"}\n",
+		"models.json":       "{\"models\":[\"fixture\"]}\n",
+		"models-store.json": "{\"selected\":\"fixture\"}\n",
+		"trust.json":        "{\"trusted\":true}\n",
+	}
+	for name, contents := range hostInputs {
+		if err := os.WriteFile(filepath.Join(hostAgentRoot, name), []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	promptRoot := filepath.Join(hostAgentRoot, "prompts")
+	npmRoot := filepath.Join(hostAgentRoot, "npm")
+	for _, root := range []string{promptRoot, npmRoot} {
+		if err := os.Mkdir(root, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(promptRoot, "fixture.md"), []byte("projected resource\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(npmRoot, "package.json"), []byte("{\"name\":\"fixture-package\"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	hostSentinel := filepath.Join(hostSessionRoot, "host-sentinel")
 	if err := os.WriteFile(hostSentinel, []byte("unchanged\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	beforeAgentEntries := directoryEntryNames(t, hostAgentRoot)
+	beforeSessionEntries := directoryEntryNames(t, hostSessionRoot)
+	t.Setenv("PI_CODING_AGENT_DIR", hostAgentRoot)
 	t.Setenv("PI_CODING_AGENT_SESSION_DIR", hostSessionRoot)
+	t.Setenv("TAO_TEST_HOST_PI_DIR", hostAgentRoot)
 	t.Setenv("TAO_TEST_HOST_PI_SESSION_DIR", hostSessionRoot)
 	provider := filepath.Join(t.TempDir(), "pi")
 	const script = `#!/bin/sh
@@ -275,16 +461,38 @@ if [ "${1:-}" = "--version" ]; then
   printf 'pi fixture version\n'
   exit 0
 fi
-if [ "${1:-}" != "--mode" ] || [ "${2:-}" != "rpc" ]; then
-  exit 31
-fi
-if [ "$PI_CODING_AGENT_SESSION_DIR" = "$TAO_TEST_HOST_PI_SESSION_DIR" ]; then
-  exit 32
-fi
-mkdir -p "$PI_CODING_AGENT_SESSION_DIR"
+if [ "${1:-}" != "--mode" ] || [ "${2:-}" != "rpc" ] || [ "${3:-}" != "--no-session" ]; then exit 31; fi
+if [ "${PI_OFFLINE:-}" != "1" ]; then exit 47; fi
+if [ "$PI_CODING_AGENT_DIR" = "$TAO_TEST_HOST_PI_DIR" ] || [ "$PI_CODING_AGENT_SESSION_DIR" = "$TAO_TEST_HOST_PI_SESSION_DIR" ]; then exit 32; fi
+case "$PI_CODING_AGENT_DIR" in "$TMPDIR"/*) ;; *) exit 33;; esac
+case "$PI_CODING_AGENT_SESSION_DIR" in "$TMPDIR"/*) ;; *) exit 34;; esac
+case "$XDG_CACHE_HOME" in "$TMPDIR"/*) ;; *) exit 35;; esac
+case "$XDG_STATE_HOME" in "$TMPDIR"/*) ;; *) exit 36;; esac
+cmp "$PI_CODING_AGENT_DIR/settings.json" "$TAO_TEST_HOST_PI_DIR/settings.json" || exit 37
+cmp "$PI_CODING_AGENT_DIR/auth.json" "$TAO_TEST_HOST_PI_DIR/auth.json" || exit 38
+cmp "$PI_CODING_AGENT_DIR/models-store.json" "$TAO_TEST_HOST_PI_DIR/models-store.json" || exit 39
+[ "$(cat "$PI_CODING_AGENT_DIR/prompts/fixture.md")" = "projected resource" ] || exit 40
+[ "$(cat "$PI_CODING_AGENT_DIR/npm/package.json")" = '{"name":"fixture-package"}' ] || exit 41
+if printf denied >"$TAO_TEST_HOST_PI_DIR/settings.json.lock" 2>/dev/null; then exit 42; fi
+if printf denied >"$TAO_TEST_HOST_PI_DIR/models-store.json" 2>/dev/null; then exit 43; fi
+if printf denied >"$TAO_TEST_HOST_PI_SESSION_DIR/session.jsonl" 2>/dev/null; then exit 44; fi
+if printf denied >"$PI_CODING_AGENT_DIR/prompts/fixture.md" 2>/dev/null; then exit 45; fi
+if printf denied >"$PI_CODING_AGENT_DIR/npm/package.json" 2>/dev/null; then exit 46; fi
+printf private >"$PI_CODING_AGENT_DIR/settings.json.lock"
+printf private >"$PI_CODING_AGENT_DIR/auth.json.lock"
+printf private >"$PI_CODING_AGENT_DIR/models-store.json"
+printf cache >"$XDG_CACHE_HOME/cache-entry"
+printf state >"$XDG_STATE_HOME/state-entry"
 sidecar="$PI_CODING_AGENT_SESSION_DIR/session.jsonl"
 printf 'ephemeral session\n' >"$sidecar"
 IFS= read -r _
+printf '{"id":"tao-readiness-state","type":"response","command":"get_state","success":true,"data":{"model":{"provider":"fixture","id":"fixture"}}}\n'
+IFS= read -r _
+printf '{"id":"tao-readiness-models","type":"response","command":"get_available_models","success":true,"data":{"models":[{"provider":"fixture","id":"fixture"}]}}\n'
+IFS= read -r command
+case "$command" in *'"type":"abort"'*) exit 0;; *'"type":"prompt"'*) ;; *) exit 43;; esac
+printf 'one attributed request\n' >"$PWD/prompt-marker"
+printf '{"id":"tao-prompt","type":"response","command":"prompt","success":true}\n'
 printf '{"type":"message","role":"assistant","text":"%s"}\n' "$sidecar"
 printf '{"type":"agent_end","session_id":"fixture-session"}\n'
 IFS= read -r _
@@ -310,7 +518,7 @@ printf '{"id":"3","type":"response","command":"get_session_stats","success":true
 		ProtectedGitObjectRoot: protectedRoot,
 	}
 	if err := session.Preflight(context.Background(), request); err != nil {
-		t.Fatalf("Pi preflight failed: %v", err)
+		t.Fatalf("Pi RPC readiness failed: %v", err)
 	}
 	result, err := session.Resolve(context.Background(), request)
 	if err != nil {
@@ -320,15 +528,168 @@ printf '{"id":"3","type":"response","command":"get_session_stats","success":true
 	if !strings.HasPrefix(filepath.Base(runtimeRoot), "tao-merge-agent-runtime-") {
 		t.Fatalf("Pi session sidecar was not redirected into the invocation runtime: %q", result.Output)
 	}
-	if _, err := os.Stat(result.Output); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("ephemeral Pi session sidecar survived process cleanup: %v", err)
+	if _, err := os.Stat(runtimeRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("private Pi runtime survived process cleanup: %v", err)
 	}
-	entries, err := os.ReadDir(hostSessionRoot)
+	if got, err := os.ReadFile(filepath.Join(integrationRoot, "prompt-marker")); err != nil || string(got) != "one attributed request\n" { //nolint:gosec // fixture output proves readiness did not receive the prompt.
+		t.Fatalf("attributed request marker = %q, %v", got, err)
+	}
+	for name, want := range hostInputs {
+		if got, err := os.ReadFile(filepath.Join(hostAgentRoot, name)); err != nil || string(got) != want { //nolint:gosec // fixture-owned host input is the immutability assertion.
+			t.Fatalf("host Pi %s changed: %q, %v", name, got, err)
+		}
+	}
+	if got, err := os.ReadFile(filepath.Join(npmRoot, "package.json")); err != nil || string(got) != "{\"name\":\"fixture-package\"}\n" { //nolint:gosec // fixture-owned host resource is the immutability assertion.
+		t.Fatalf("host Pi npm resource changed: %q, %v", got, err)
+	}
+	if got := directoryEntryNames(t, hostAgentRoot); !slices.Equal(got, beforeAgentEntries) {
+		t.Fatalf("host Pi directory entries changed: got %v want %v", got, beforeAgentEntries)
+	}
+	if got := directoryEntryNames(t, hostSessionRoot); !slices.Equal(got, beforeSessionEntries) {
+		t.Fatalf("host Pi session entries changed: got %v want %v", got, beforeSessionEntries)
+	}
+}
+
+func directoryEntryNames(t *testing.T, root string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Name() != filepath.Base(hostSentinel) {
-		t.Fatalf("Pi wrote a host session sidecar: %#v", entries)
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	return names
+}
+
+func TestSingleMergePiRuntimeCleansAfterCancellationAndTimeout(t *testing.T) {
+	integrationRoot, protectedRoot := singleMergeAgentTestBoundary(t)
+	if err := probeSingleMergeFilesystemConfinement(context.Background(), singleMergeFilesystemConfinement{
+		protectedPaths: []string{protectedRoot}, integrationRoot: integrationRoot,
+	}, "/usr/bin/true"); err != nil {
+		t.Skipf("OS confinement is unavailable for Pi RPC cleanup regression: %v", err)
+	}
+	provider := filepath.Join(t.TempDir(), "pi")
+	const script = `#!/bin/sh
+set -eu
+IFS= read -r _
+printf '{"id":"tao-readiness-state","type":"response","command":"get_state","success":true,"data":{"model":{"provider":"fixture","id":"fixture"}}}\n'
+IFS= read -r _
+printf '{"id":"tao-readiness-models","type":"response","command":"get_available_models","success":true,"data":{"models":[{"provider":"fixture","id":"fixture"}]}}\n'
+IFS= read -r command
+case "$command" in
+  *'"type":"abort"'*) exit 0;;
+  *'"type":"prompt"'*)
+    printf '%s' "$TMPDIR" >"$PWD/runtime-root"
+    printf '{"id":"tao-prompt","type":"response","command":"prompt","success":true}\n'
+    while :; do sleep 1; done;;
+  *) exit 44;;
+esac
+`
+	if err := os.WriteFile(provider, []byte(script), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(provider, 0o700); err != nil { //nolint:gosec // executable mode is required for the fixture provider.
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name    string
+		timeout time.Duration
+		cancel  bool
+		wantErr error
+	}{
+		{name: "cancellation", cancel: true, wantErr: context.Canceled},
+		{name: "timeout", timeout: time.Second, wantErr: context.DeadlineExceeded},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("TAO_AGENT", "pi")
+			t.Setenv("PI_CODING_AGENT_DIR", t.TempDir())
+			var timeout *time.Duration
+			if tt.timeout > 0 {
+				timeout = &tt.timeout
+			}
+			session, err := NewSingleMergeAgentSession(SingleMergeAgentSessionConfig{
+				ProviderLookPath: func(string) (string, error) { return provider, nil }, Timeout: timeout,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := context.Background()
+			if tt.cancel {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				t.Cleanup(cancel)
+				time.AfterFunc(time.Second, cancel)
+			}
+			_ = os.Remove(filepath.Join(integrationRoot, "runtime-root"))
+			_, err = session.Resolve(ctx, BatchAgentSessionRequest{
+				Operation: BatchAgentOperationSinglePlanResolution, IntegrationRoot: integrationRoot, Prompt: "resolve",
+				ProtectedGitObjectRoot: protectedRoot,
+			})
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("session error = %v, want %v", err, tt.wantErr)
+			}
+			runtimeBytes, readErr := os.ReadFile(filepath.Join(integrationRoot, "runtime-root")) //nolint:gosec // fixture-owned resolver output identifies its runtime.
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			runtimeRoot := string(runtimeBytes)
+			if !strings.HasPrefix(filepath.Base(runtimeRoot), "tao-merge-agent-runtime-") {
+				t.Fatalf("fixture did not identify private runtime: %q", runtimeRoot)
+			}
+			if _, err := os.Stat(runtimeRoot); !errors.Is(err, os.ErrNotExist) { //nolint:gosec // sandboxed fixture emits only its Tao-provided TMPDIR.
+				t.Fatalf("runtime survived %s: %v", tt.name, err)
+			}
+		})
+	}
+}
+
+func TestSingleMergePiPreflightRejectsRPCStartupAfterVersionWouldSucceed(t *testing.T) {
+	t.Setenv("TAO_AGENT", "pi")
+	t.Setenv("PI_CODING_AGENT_DIR", t.TempDir())
+	integrationRoot, protectedRoot := singleMergeAgentTestBoundary(t)
+	if err := probeSingleMergeFilesystemConfinement(context.Background(), singleMergeFilesystemConfinement{
+		protectedPaths: []string{protectedRoot}, integrationRoot: integrationRoot,
+	}, "/usr/bin/true"); err != nil {
+		t.Skipf("OS confinement is unavailable for Pi RPC launch regression: %v", err)
+	}
+	provider := filepath.Join(t.TempDir(), "pi")
+	const script = `#!/bin/sh
+if [ "${1:-}" = "--version" ]; then
+  printf 'version succeeds\n'
+  exit 0
+fi
+IFS= read -r _
+printf '{"id":"tao-readiness-state","type":"response","command":"get_state","success":false,"error":"fixture-readiness-prefix:'
+i=0
+while [ "$i" -lt 2048 ]; do
+  printf x
+  i=$((i + 1))
+done
+printf ':fixture-readiness-tail"}\n'
+`
+	if err := os.WriteFile(provider, []byte(script), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(provider, 0o700); err != nil { //nolint:gosec // executable mode is required for the fixture provider.
+		t.Fatal(err)
+	}
+	session, err := NewSingleMergeAgentSession(SingleMergeAgentSessionConfig{
+		ProviderLookPath: func(string) (string, error) { return provider, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = session.Preflight(context.Background(), BatchAgentSessionRequest{
+		Operation: BatchAgentOperationSinglePlanResolution, IntegrationRoot: integrationRoot,
+		ProtectedGitObjectRoot: protectedRoot,
+	})
+	if err == nil || !strings.Contains(err.Error(), "pi rpc readiness") || !strings.Contains(err.Error(), "fixture-readiness-prefix") {
+		t.Fatalf("RPC startup failure = %v", err)
+	}
+	if len(err.Error()) > maxSingleMergeConfinementProbeOutputBytes || strings.Contains(err.Error(), "fixture-readiness-tail") {
+		t.Fatalf("RPC startup diagnostic was not bounded: %d bytes: %v", len(err.Error()), err)
 	}
 }
 
@@ -740,6 +1101,52 @@ func mergeProposalContext() commitcontract.MergeProposalContext {
 		MergeBase: "base123", SourceBranch: "tao/plan-a", SourceHead: "head456", Diff: "diff --git a/a.go b/a.go\n+change\n",
 	}
 }
+
+type cleanupTestProcess struct {
+	waitStarted chan struct{}
+	stopped     chan struct{}
+	stopOnce    sync.Once
+	startOnce   sync.Once
+	mu          sync.Mutex
+	waitCalls   int
+	killCalls   int
+	waitErr     error
+}
+
+func newCleanupTestProcess(waitErr error) *cleanupTestProcess {
+	return &cleanupTestProcess{waitStarted: make(chan struct{}), stopped: make(chan struct{}), waitErr: waitErr}
+}
+
+func (p *cleanupTestProcess) Stdin() io.WriteCloser {
+	return cleanupTestWriteCloser{Writer: io.Discard}
+}
+func (p *cleanupTestProcess) Stdout() io.Reader { return strings.NewReader("") }
+func (p *cleanupTestProcess) Stderr() io.Reader { return strings.NewReader("") }
+func (p *cleanupTestProcess) Wait() error {
+	p.mu.Lock()
+	p.waitCalls++
+	p.mu.Unlock()
+	p.startOnce.Do(func() { close(p.waitStarted) })
+	<-p.stopped
+	return p.waitErr
+}
+func (p *cleanupTestProcess) Kill() error {
+	p.mu.Lock()
+	p.killCalls++
+	p.mu.Unlock()
+	p.complete()
+	return nil
+}
+func (p *cleanupTestProcess) complete() { p.stopOnce.Do(func() { close(p.stopped) }) }
+func (p *cleanupTestProcess) calls() (int, int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.waitCalls, p.killCalls
+}
+
+type cleanupTestWriteCloser struct{ io.Writer }
+
+func (cleanupTestWriteCloser) Close() error { return nil }
 
 type mergeFakeClaudeStart struct {
 	cwd    string
