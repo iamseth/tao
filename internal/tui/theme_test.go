@@ -236,6 +236,7 @@ func TestSemanticPaletteUsesApprovedColors(t *testing.T) {
 		{name: "detail primary", got: mustRoleColor(ProfileTrueColor, RoleDetailPrimary), hex: "#C0CAF5"},
 		{name: "detail secondary", got: mustRoleColor(ProfileTrueColor, RoleDetailSecondary), hex: "#A9B1D6"},
 		{name: "detail muted", got: mustRoleColor(ProfileTrueColor, RoleDetailMuted), hex: "#565F89"},
+		{name: "detail body", got: mustRoleColor(ProfileTrueColor, RoleDetailBody), hex: "#737AA2"},
 		{name: "detail success", got: mustRoleColor(ProfileTrueColor, RoleDetailSuccess), hex: "#9ECE6A"},
 		{name: "detail info", got: mustRoleColor(ProfileTrueColor, RoleDetailInfo), hex: "#7AA2F7"},
 		{name: "detail warning", got: mustRoleColor(ProfileTrueColor, RoleDetailWarning), hex: "#E0AF68"},

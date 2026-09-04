@@ -53,6 +53,7 @@ const (
 	RoleDetailPrimary
 	RoleDetailSecondary
 	RoleDetailMuted
+	RoleDetailBody
 	RoleDetailSuccess
 	RoleDetailInfo
 	RoleDetailWarning
@@ -172,6 +173,8 @@ func roleSpecification(role Role) (roleSpec, bool) {
 		return roleSpec{hex: "#7AA2F7", ansi16: 12}, true
 	case RolePlanHistory, RoleSettingsSection, RoleDebugSection, RoleDetailMuted:
 		return roleSpec{hex: "#565F89", ansi16: 8}, true
+	case RoleDetailBody:
+		return roleSpec{hex: "#737AA2", ansi16: 8}, true
 	case RoleDetailBackground, RolePlanNowBackground:
 		return roleSpec{hex: "#1A1B26", ansi16: 0}, true
 	case RoleDetailPrimary:

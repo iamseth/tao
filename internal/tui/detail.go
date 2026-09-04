@@ -373,7 +373,7 @@ func renderOverviewPane(detail *plan.PlanDetail, row monitor.Row, width, height,
 	if len(questions) > 0 {
 		lines = append(lines, "", Paint(profile, RoleDetailMuted, "Open questions"))
 		for _, question := range questions {
-			appendOverviewBullet(&lines, question, width, profile, RoleDetailSecondary, "?")
+			appendOverviewBullet(&lines, question, width, profile, RoleDetailBody, "?")
 		}
 	}
 
@@ -494,7 +494,7 @@ func renderDetailMetadata(fields []detailGridField, width int, profile Profile) 
 
 func appendOverviewLabeledText(lines *[]string, label, value string, width int, profile Profile) {
 	*lines = append(*lines, Paint(profile, RoleDetailSecondary, label))
-	appendOverviewText(lines, overviewDisplay(value), width, profile, RoleDetailMuted, "  ")
+	appendOverviewText(lines, overviewDisplay(value), width, profile, RoleDetailBody, "  ")
 }
 
 func renderPriorityGrid(priority *plan.Priority, width int, profile Profile) []string {
@@ -541,7 +541,7 @@ func appendOverviewMutedParagraph(lines *[]string, label, value string, width in
 	if value = singleLineDetail(value); value == "" {
 		return
 	}
-	prefix := label + "  "
+	prefix := "  " + label + "  "
 	wrapped := wrapDetailWords(value, detailContentWidth(width, cells.Width(prefix)))
 	for index, line := range wrapped {
 		if index == 0 {

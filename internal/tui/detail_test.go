@@ -354,7 +354,7 @@ func TestRenderOverviewUsesScannableSectionsChecklistPriorityGridAndExpandableSc
 			t.Fatalf("scannable overview missing %q:\n%s", want, collapsed)
 		}
 	}
-	for _, row := range []string{"Impact high    Urgency medium     Risk low", "Effort small   Confidence high"} {
+	for _, row := range []string{"Impact high    Urgency medium     Risk low", "Effort small   Confidence high", "  Rationale  High operator value."} {
 		if !strings.Contains(collapsed, row) {
 			t.Fatalf("priority grid row is not compact and aligned: want %q:\n%s", row, collapsed)
 		}
@@ -403,6 +403,7 @@ func TestRenderOverviewUsesTokyoNightStatePalette(t *testing.T) {
 	for _, sequence := range []string{
 		colorSequence(mustRoleColor(ProfileTrueColor, RoleDetailBackground), true),
 		colorSequence(mustRoleColor(ProfileTrueColor, RoleDetailPrimary), false),
+		colorSequence(mustRoleColor(ProfileTrueColor, RoleDetailBody), false),
 		colorSequence(mustRoleColor(ProfileTrueColor, RoleDetailSuccess), false),
 		colorSequence(mustRoleColor(ProfileTrueColor, RoleDetailError), false),
 		colorSequence(mustRoleColor(ProfileTrueColor, RoleDetailDivider), false),
