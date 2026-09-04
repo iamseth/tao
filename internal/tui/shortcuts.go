@@ -32,6 +32,7 @@ func shortcutsForPage(page PageID) []shortcut {
 	}
 	common := []shortcut{
 		{key: "↑ / ↓ / j / k", action: "Move selection"},
+		{key: "gg / G", action: "Jump to top / bottom"},
 		{key: "Tab / Shift+Tab / ← / →", action: "Switch tabs"},
 		{key: "Enter", action: "Open selected item"},
 		{key: "f", action: "Cycle repository filter"},

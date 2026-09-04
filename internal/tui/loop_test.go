@@ -432,6 +432,58 @@ func TestLoopStateMovesAcrossSectionsAndKeepsHistoryVisible(t *testing.T) {
 	}
 }
 
+func TestPlanAndNoteListsSupportVimStyleTopAndBottomJumps(t *testing.T) {
+	tests := []struct {
+		name  string
+		state loopState
+		last  int
+	}{
+		{
+			name: "plans",
+			state: loopState{snapshot: monitor.Snapshot{Rows: []monitor.Row{
+				{PlanID: "one"}, {PlanID: "two"}, {PlanID: "three"},
+			}}, selected: 1},
+			last: 2,
+		},
+		{
+			name: "notes",
+			state: loopState{page: PageNotes, noteSnapshot: note.Snapshot{Notes: []note.CatalogNote{
+				{ID: "one"}, {ID: "two"}, {ID: "three"},
+			}}, selected: 1},
+			last: 2,
+		},
+	}
+	app := App{}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			state := test.state
+			app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'g'})
+			if state.selected != 1 || !state.listTopPending {
+				t.Fatalf("first g selection=%d pending=%t, want 1 and true", state.selected, state.listTopPending)
+			}
+			app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'g'})
+			if state.selected != 0 || state.listTopPending {
+				t.Fatalf("gg selection=%d pending=%t, want top and false", state.selected, state.listTopPending)
+			}
+			app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'G'})
+			if state.selected != test.last {
+				t.Fatalf("G selection=%d, want bottom %d", state.selected, test.last)
+			}
+
+			state.selected = 1
+			app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'g'})
+			app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'j'})
+			if state.selected != 2 || state.listTopPending {
+				t.Fatalf("interrupted g then j selection=%d pending=%t, want 2 and false", state.selected, state.listTopPending)
+			}
+			app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'g'})
+			if state.selected != 2 {
+				t.Fatalf("new first g moved selection to %d", state.selected)
+			}
+		})
+	}
+}
+
 func TestRepositoryFocusComposesWithWarningsHistoryAndRefresh(t *testing.T) {
 	state := loopState{
 		snapshot: monitor.Snapshot{Rows: []monitor.Row{

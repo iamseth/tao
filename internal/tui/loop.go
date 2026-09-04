@@ -103,6 +103,7 @@ type loopState struct {
 	noteDetailOffset    int
 	now                 func() time.Time
 	lastRootEscape      time.Time
+	listTopPending      bool
 }
 
 // Run enters terminal mode and processes input, refresh, resize, and
@@ -450,6 +451,9 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 	}
 	if quitKey(key) {
 		return true
+	}
+	if state.detail == nil && state.noteDetail == nil && state.handleListJumpKey(key) {
+		return false
 	}
 	if state.noteDetail == nil && key.Key == term.KeyRune && key.Rune == '?' {
 		state.showShortcuts = true
@@ -957,6 +961,30 @@ func (s loopState) currentTime() time.Time {
 
 func (s loopState) activePage() PageID {
 	return normalizePage(s.page)
+}
+
+func (s *loopState) handleListJumpKey(key term.KeyEvent) bool {
+	if s.activePage() != PagePlans && s.activePage() != PageNotes {
+		s.listTopPending = false
+		return false
+	}
+	if key.Key == term.KeyRune && key.Rune == 'g' {
+		if s.listTopPending {
+			s.selected = 0
+			s.listTopPending = false
+		} else {
+			s.listTopPending = true
+		}
+		s.interruptEscape()
+		return true
+	}
+	s.listTopPending = false
+	if key.Key == term.KeyRune && key.Rune == 'G' {
+		s.selected = max(s.pageRowCount()-1, 0)
+		s.interruptEscape()
+		return true
+	}
+	return false
 }
 
 func (s *loopState) switchPage(delta int) {
