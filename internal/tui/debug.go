@@ -52,7 +52,7 @@ func renderDebugPage(model Model) []string {
 	appendDebugValue(&lines, "color", model.Profile.String())
 	appendDebugValue(&lines, "repository focus", debugFocusLabel(model))
 	appendDebugValue(&lines, "search", displayValue(normalizedSearchQuery(model.SearchQuery)))
-	appendDebugValue(&lines, "completed visible", fmt.Sprintf("%t", !model.HideCompleted))
+	appendDebugValue(&lines, "history visible", fmt.Sprintf("%t", !model.HideHistory))
 	appendDebugValue(&lines, "plan rows", fmt.Sprintf("%d", len(model.Snapshot.Rows)))
 	appendDebugValue(&lines, "open notes", fmt.Sprintf("%d", len(model.NoteSnapshot.Notes)))
 	appendDebugValue(&lines, "repositories", fmt.Sprintf("%d active of %d registered", debugRepositoryCount(model.Snapshot, model.NoteSnapshot), len(model.SettingsSnapshot.Repositories)))

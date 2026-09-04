@@ -88,7 +88,7 @@ type loopState struct {
 	selected            int
 	pageSelections      map[PageID]int
 	size                term.Size
-	showCompleted       bool
+	showHistory         bool
 	focusRepositoryID   string
 	focusRepositoryName string
 	focusRepositoryRoot string
@@ -381,7 +381,7 @@ func (a App) writeFrame(state loopState) error {
 			Width:               state.size.Width,
 			Height:              state.size.Height,
 			Now:                 state.currentTime(),
-			HideCompleted:       !state.showCompleted,
+			HideHistory:         !state.showHistory,
 			FocusRepositoryID:   state.focusRepositoryID,
 			FocusRepositoryName: state.focusRepositoryName,
 			Profile:             state.profile,
@@ -898,8 +898,8 @@ func (s *loopState) handleKey(key term.KeyEvent) bool {
 		if s.selected+1 < s.pageRowCount() {
 			s.selected++
 		}
-	case s.activePage() == PagePlans && key.Key == term.KeyRune && (key.Rune == 'c' || key.Rune == 'C'):
-		s.preserveSelection(func() { s.showCompleted = !s.showCompleted })
+	case s.activePage() == PagePlans && key.Key == term.KeyRune && (key.Rune == 'h' || key.Rune == 'H'):
+		s.preserveSelection(func() { s.showHistory = !s.showHistory })
 	case (s.activePage() == PagePlans || s.activePage() == PageNotes) && key.Key == term.KeyRune && (key.Rune == 'f' || key.Rune == 'F'):
 		s.toggleRepositoryFocus()
 	}
@@ -997,7 +997,7 @@ func (s *loopState) restoreSettingsSelection(repositoryID string) {
 
 func (s loopState) visibleRows() []monitor.Row {
 	rows := FilterPlanRows(s.snapshot.Rows, s.searchQuery)
-	return visibleRows(rows, s.showCompleted, s.focusRepositoryID)
+	return visibleRows(rows, s.showHistory, s.focusRepositoryID)
 }
 
 func (s loopState) planSelection() int {
@@ -1285,7 +1285,7 @@ func (s loopState) debugPageMaxOffset() int {
 		Width:               s.size.Width,
 		Height:              s.size.Height,
 		Profile:             s.profile,
-		HideCompleted:       !s.showCompleted,
+		HideHistory:         !s.showHistory,
 		SearchQuery:         s.searchQuery,
 		SearchActive:        s.searchActive,
 		FocusRepositoryID:   s.focusRepositoryID,

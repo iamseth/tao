@@ -127,11 +127,12 @@ or pasteable output.
 The dashboard opens on **Plans**. Use `Tab` or the horizontal arrows to move
 among **Plans**, **Notes**, **Settings**, and **Debug**; use `j`/`k` or the
 vertical arrows to select rows. `Enter` opens details, `Esc` returns, and `f`
-toggles repository focus on Plans and Notes. On Plans, the principal actions are
-run (`r`), approve (`a`), merge one (`m`), and merge the repository's approved
-set (`M`); confirmations and the underlying commands still enforce every normal
-gate. Settings can change a repository's pull-request default, while Notes and
-Debug are read-only.
+toggles repository focus on Plans and Notes. Completed and abandoned plans are
+hidden initially; press `h` to toggle up to 15 plans in this history. On Plans, the
+principal actions are run (`r`), approve (`a`), merge one (`m`), and merge the
+repository's approved set (`M`); confirmations and the underlying commands still
+enforce every normal gate. Settings can change a repository's pull-request
+default, while Notes and Debug are read-only.
 
 Treat **NEXT**, ordering, heartbeats, and `stalled?`/`crashed?` labels as advice
 or liveness hints, never as approval, failure, or merge evidence. TUI-launched

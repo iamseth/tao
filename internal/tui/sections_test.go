@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -207,20 +208,46 @@ func TestBuildSectionsRoutesOnlyMergeActionsToReadyToMerge(t *testing.T) {
 	}
 }
 
-func TestBuildSectionsHandlesEmptyAndHiddenCompletedSections(t *testing.T) {
+func TestBuildSectionsLimitsHistoryToFifteenPlans(t *testing.T) {
+	rows := make([]monitor.Row, maxHistoryPlans+2)
+	for index := range rows {
+		status := plan.StatusCompleted
+		if index%2 != 0 {
+			status = plan.StatusAbandoned
+		}
+		rows[index] = monitor.Row{PlanID: fmt.Sprintf("history-%02d", index), Status: status}
+	}
+
+	sections := BuildSections(rows, true)
+	for _, section := range sections {
+		if section.Kind != SectionHistory {
+			continue
+		}
+		if len(section.Rows) != maxHistoryPlans {
+			t.Fatalf("history row count = %d, want %d", len(section.Rows), maxHistoryPlans)
+		}
+		if section.Rows[0].PlanID != "history-00" || section.Rows[maxHistoryPlans-1].PlanID != "history-14" {
+			t.Fatalf("history rows did not retain collector order: first=%q last=%q", section.Rows[0].PlanID, section.Rows[maxHistoryPlans-1].PlanID)
+		}
+		return
+	}
+	t.Fatal("history section missing")
+}
+
+func TestBuildSectionsHandlesEmptyAndHiddenHistorySections(t *testing.T) {
 	tests := []struct {
-		name          string
-		rows          []monitor.Row
-		showCompleted bool
-		wantHistory   int
+		name        string
+		rows        []monitor.Row
+		showHistory bool
+		wantHistory int
 	}{
-		{name: "empty", showCompleted: true},
-		{name: "terminal outcomes shown", rows: []monitor.Row{{Status: plan.StatusCompleted}, {Status: plan.StatusAbandoned}}, showCompleted: true, wantHistory: 2},
-		{name: "completed hidden without hiding abandonment", rows: []monitor.Row{{Status: plan.StatusCompleted}, {Status: plan.StatusAbandoned}}, showCompleted: false, wantHistory: 1},
+		{name: "empty", showHistory: true},
+		{name: "terminal outcomes shown", rows: []monitor.Row{{Status: plan.StatusCompleted}, {Status: plan.StatusAbandoned}}, showHistory: true, wantHistory: 2},
+		{name: "history hidden", rows: []monitor.Row{{Status: plan.StatusCompleted, AttentionReasons: []monitor.AttentionReason{monitor.AttentionFinalizationFailed}}, {Status: plan.StatusAbandoned}}, showHistory: false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			sections := BuildSections(test.rows, test.showCompleted)
+			sections := BuildSections(test.rows, test.showHistory)
 			if len(sections) != 4 {
 				t.Fatalf("section count = %d, want 4", len(sections))
 			}

@@ -367,17 +367,20 @@ func TestPhaseLabelTruncatesByCells(t *testing.T) {
 	}
 }
 
-func TestRenderOmitsEmptyAndHiddenCompletedSections(t *testing.T) {
+func TestRenderOmitsEmptyAndHiddenHistorySections(t *testing.T) {
 	tests := []struct {
 		name  string
 		model Model
 	}{
 		{name: "empty snapshot", model: Model{}},
 		{
-			name: "completed hidden",
+			name: "history hidden",
 			model: Model{
-				Snapshot:      monitor.Snapshot{Rows: []monitor.Row{{PlanID: "done", Status: plan.StatusCompleted}}},
-				HideCompleted: true,
+				Snapshot: monitor.Snapshot{Rows: []monitor.Row{
+					{PlanID: "done", Status: plan.StatusCompleted},
+					{PlanID: "abandoned", Status: plan.StatusAbandoned},
+				}},
+				HideHistory: true,
 			},
 		},
 	}
@@ -634,7 +637,7 @@ func TestRenderAbandonmentAsSafeHistoricalOutcome(t *testing.T) {
 		AttentionReasons: []monitor.AttentionReason{monitor.AttentionApprovalRequired, monitor.AttentionFinalizationFailed},
 		NextAction:       "FINALIZE PR",
 	}
-	got := Render(Model{Snapshot: monitor.Snapshot{Rows: []monitor.Row{row}}, HideCompleted: true, Width: 120})
+	got := Render(Model{Snapshot: monitor.Snapshot{Rows: []monitor.Row{row}}, Width: 120})
 	for _, want := range []string{"HISTORY", "ABANDONED   old-plan"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("abandonment render missing %q:\n%s", want, got)
@@ -648,7 +651,7 @@ func TestRenderAbandonmentAsSafeHistoricalOutcome(t *testing.T) {
 		}
 	}
 
-	narrow := Render(Model{Snapshot: monitor.Snapshot{Rows: []monitor.Row{row}}, HideCompleted: true, Width: 24})
+	narrow := Render(Model{Snapshot: monitor.Snapshot{Rows: []monitor.Row{row}}, Width: 24})
 	for _, line := range renderedLines(narrow) {
 		if cells.Width(line) > 24 {
 			t.Fatalf("narrow abandonment line exceeds width: %q", line)
@@ -772,7 +775,7 @@ func TestRenderShortcutLegendAsBoundedPopover(t *testing.T) {
 	}{
 		{
 			page: PagePlans,
-			want: []string{"Keyboard shortcuts", "KEY", "ACTION", "Shift+Tab", "r", "Run selected plan", "/", "Search plans and notes", "Backspace", "Go back / clear search", "? / Esc", "Close shortcuts"},
+			want: []string{"Keyboard shortcuts", "KEY", "ACTION", "Shift+Tab", "h", "Toggle plan history", "r", "Run selected plan", "/", "Search plans and notes", "Backspace", "Go back / clear search", "? / Esc", "Close shortcuts"},
 		},
 		{
 			page:        PageNotes,

@@ -643,7 +643,7 @@ func TestFollowDetailLogSkipsSeedReplayAndEmitsAppends(t *testing.T) {
 }
 
 func TestMissingPlanCannotOpenNestedSlice(t *testing.T) {
-	state := loopState{snapshot: monitor.Snapshot{Rows: []monitor.Row{{PlanID: "missing", PlanDir: "/plans/missing"}}}, showCompleted: true}
+	state := loopState{snapshot: monitor.Snapshot{Rows: []monitor.Row{{PlanID: "missing", PlanDir: "/plans/missing"}}}, showHistory: true}
 	app := App{Details: &fakeDetailRepository{}}
 	if quit := app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyEnter}); quit || state.detail == nil || state.detail.loadError == "" {
 		t.Fatalf("missing plan open quit=%t detail=%#v", quit, state.detail)
@@ -676,8 +676,8 @@ func TestDetailNavigationEnterBackspaceAndEscape(t *testing.T) {
 		},
 	}
 	state := loopState{
-		snapshot:      monitor.Snapshot{Rows: []monitor.Row{{RepositoryID: "repo-a", PlanID: "plan-a", PlanDir: "/plans/one"}}},
-		showCompleted: true,
+		snapshot:    monitor.Snapshot{Rows: []monitor.Row{{RepositoryID: "repo-a", PlanID: "plan-a", PlanDir: "/plans/one"}}},
+		showHistory: true,
 	}
 	app := App{Details: repository}
 	ctx, cancel := context.WithCancel(context.Background())

@@ -29,7 +29,7 @@ type Model struct {
 	Width               int
 	Height              int
 	Now                 time.Time
-	HideCompleted       bool
+	HideHistory         bool
 	FocusRepositoryID   string
 	FocusRepositoryName string
 	Profile             Profile
@@ -95,7 +95,7 @@ func Render(model Model) string {
 	page := normalizePage(model.Page)
 	planRows := FilterPlanRows(model.Snapshot.Rows, model.SearchQuery)
 	noteSnapshot := FilterNoteSnapshot(model.NoteSnapshot, model.SearchQuery)
-	sections := BuildRepositorySections(planRows, !model.HideCompleted, model.FocusRepositoryID)
+	sections := BuildRepositorySections(planRows, !model.HideHistory, model.FocusRepositoryID)
 	visibleCount := 0
 	for _, section := range sections {
 		visibleCount += len(section.Rows)

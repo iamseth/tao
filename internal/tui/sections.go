@@ -11,6 +11,8 @@ import (
 type SectionKind string
 
 const (
+	maxHistoryPlans = 15
+
 	SectionAttention    SectionKind = "attention"
 	SectionReadyToMerge SectionKind = "ready_to_merge"
 	SectionPlanned      SectionKind = "planned"
@@ -29,13 +31,13 @@ type Section struct {
 }
 
 // BuildSections groups monitor rows for the table page without re-sorting them.
-func BuildSections(rows []monitor.Row, showCompleted bool) []Section {
-	return BuildRepositorySections(rows, showCompleted, "")
+func BuildSections(rows []monitor.Row, showHistory bool) []Section {
+	return BuildRepositorySections(rows, showHistory, "")
 }
 
 // BuildRepositorySections groups rows after optionally restricting them to one
 // repository. Filtering never mutates or reorders the collector snapshot.
-func BuildRepositorySections(rows []monitor.Row, showCompleted bool, repositoryID string) []Section {
+func BuildRepositorySections(rows []monitor.Row, showHistory bool, repositoryID string) []Section {
 	sections := []Section{
 		{Kind: SectionAttention, Title: "NEEDS ATTENTION"},
 		{Kind: SectionReadyToMerge, Title: "READY TO MERGE"},
@@ -46,10 +48,10 @@ func BuildRepositorySections(rows []monitor.Row, showCompleted bool, repositoryI
 		if repositoryID != "" && row.RepositoryID != repositoryID {
 			continue
 		}
-		classification := sectionKind(row)
-		if classification == SectionCompleted && !showCompleted {
+		if !showHistory && (row.Status == plan.StatusCompleted || row.Status == plan.StatusAbandoned) {
 			continue
 		}
+		classification := sectionKind(row)
 		kind := nextActionSectionKind(row, classification)
 		for index := range sections {
 			if sections[index].Kind == kind {
@@ -59,8 +61,13 @@ func BuildRepositorySections(rows []monitor.Row, showCompleted bool, repositoryI
 		}
 	}
 	for index := range sections {
-		if sections[index].Kind == SectionPlanned {
+		switch sections[index].Kind {
+		case SectionPlanned:
 			orderPlannedRows(sections[index].Rows)
+		case SectionHistory:
+			if len(sections[index].Rows) > maxHistoryPlans {
+				sections[index].Rows = sections[index].Rows[:maxHistoryPlans]
+			}
 		}
 	}
 	return sections
@@ -114,9 +121,9 @@ func isStalled(row monitor.Row) bool {
 	return row.Liveness == monitor.LivenessStale && row.RunLockPresent && row.RunLockProcessAlive
 }
 
-func visibleRows(rows []monitor.Row, showCompleted bool, repositoryID string) []monitor.Row {
+func visibleRows(rows []monitor.Row, showHistory bool, repositoryID string) []monitor.Row {
 	var visible []monitor.Row
-	for _, section := range BuildRepositorySections(rows, showCompleted, repositoryID) {
+	for _, section := range BuildRepositorySections(rows, showHistory, repositoryID) {
 		visible = append(visible, section.Rows...)
 	}
 	return visible

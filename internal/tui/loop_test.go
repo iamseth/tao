@@ -331,7 +331,7 @@ func TestRefreshPreservesSelectedPlanBeforeAction(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			state := loopState{snapshot: test.initial, selected: test.selected, showCompleted: true}
+			state := loopState{snapshot: test.initial, selected: test.selected, showHistory: true}
 
 			state.replaceSnapshot(test.refreshed)
 			row, ok := state.selectedRow()
@@ -410,33 +410,34 @@ func TestRunRestoresTerminalBeforeResumingPanic(t *testing.T) {
 	}).Run(context.Background())
 }
 
-func TestLoopStateMovesAcrossSectionsAndTogglesCompleted(t *testing.T) {
+func TestLoopStateMovesAcrossSectionsAndTogglesHistory(t *testing.T) {
 	state := loopState{
 		snapshot: monitor.Snapshot{Rows: []monitor.Row{
 			{PlanID: "running", Liveness: monitor.LivenessLive},
 			{PlanID: "attention", AttentionReasons: []monitor.AttentionReason{monitor.AttentionBlocked}},
 			{PlanID: "planned"},
-			{PlanID: "completed", Status: "completed"},
+			{PlanID: "completed", Status: plan.StatusCompleted},
+			{PlanID: "abandoned", Status: plan.StatusAbandoned},
 		}},
-		showCompleted: true,
+		showHistory: true,
 	}
 	if quit := state.handleKey(term.KeyEvent{Key: term.KeyArrowDown}); quit || state.selected != 1 {
 		t.Fatalf("down across section boundary quit=%t selected=%d, want false, 1", quit, state.selected)
 	}
-	state.selected = 3
-	if quit := state.handleKey(term.KeyEvent{Key: term.KeyRune, Rune: 'c'}); quit {
-		t.Fatal("completed toggle unexpectedly quit")
+	state.selected = 4
+	if quit := state.handleKey(term.KeyEvent{Key: term.KeyRune, Rune: 'h'}); quit {
+		t.Fatal("history toggle unexpectedly quit")
 	}
-	if state.showCompleted || state.selected != 2 {
-		t.Fatalf("hidden completed state show=%t selected=%d, want false, 2", state.showCompleted, state.selected)
+	if state.showHistory || state.selected != 2 {
+		t.Fatalf("hidden history state show=%t selected=%d, want false, 2", state.showHistory, state.selected)
 	}
-	state.handleKey(term.KeyEvent{Key: term.KeyRune, Rune: 'C'})
-	if !state.showCompleted || len(visibleRows(state.snapshot.Rows, state.showCompleted, state.focusRepositoryID)) != 4 {
-		t.Fatalf("shown completed state show=%t rows=%d, want true, 4", state.showCompleted, len(visibleRows(state.snapshot.Rows, state.showCompleted, state.focusRepositoryID)))
+	state.handleKey(term.KeyEvent{Key: term.KeyRune, Rune: 'H'})
+	if !state.showHistory || len(visibleRows(state.snapshot.Rows, state.showHistory, state.focusRepositoryID)) != 5 {
+		t.Fatalf("shown history state show=%t rows=%d, want true, 5", state.showHistory, len(visibleRows(state.snapshot.Rows, state.showHistory, state.focusRepositoryID)))
 	}
 }
 
-func TestRepositoryFocusComposesWithWarningsCompletedAndRefresh(t *testing.T) {
+func TestRepositoryFocusComposesWithWarningsHistoryAndRefresh(t *testing.T) {
 	state := loopState{
 		snapshot: monitor.Snapshot{Rows: []monitor.Row{
 			{Kind: monitor.RowKindRepositoryWarning, RepositoryID: "repo-a", RepositoryName: "alpha", Status: "invalid"},
@@ -457,11 +458,11 @@ func TestRepositoryFocusComposesWithWarningsCompletedAndRefresh(t *testing.T) {
 		t.Fatalf("focused rows = %+v, want repository warning and target", rows)
 	}
 
-	state.showCompleted = true
+	state.showHistory = true
 	state.selected = 2
-	state.handleKey(term.KeyEvent{Key: term.KeyRune, Rune: 'c'})
+	state.handleKey(term.KeyEvent{Key: term.KeyRune, Rune: 'h'})
 	if row, ok = state.selectedRow(); !ok || row.PlanID != "target" {
-		t.Fatalf("completed toggle did not clamp safely: index=%d row=%+v ok=%t", state.selected, row, ok)
+		t.Fatalf("history toggle did not clamp safely: index=%d row=%+v ok=%t", state.selected, row, ok)
 	}
 
 	state.replaceSnapshot(monitor.Snapshot{Rows: []monitor.Row{
@@ -531,8 +532,8 @@ func TestNoteSelectionRefreshFocusDetailAndPlanActionIsolation(t *testing.T) {
 			{RepositoryID: "repo-a", RepositoryName: "alpha", RepositoryRoot: "/alpha", ID: "first", Text: "first"},
 			{RepositoryID: "repo-b", RepositoryName: "beta", RepositoryRoot: "/beta", ID: "target", Text: "old"},
 		}},
-		selected:      1,
-		showCompleted: true,
+		selected:    1,
+		showHistory: true,
 	}
 	state.replaceNoteSnapshot(note.Snapshot{Notes: []note.CatalogNote{
 		{RepositoryID: "repo-b", RepositoryName: "beta", RepositoryRoot: "/beta", ID: "target", Text: "updated"},
@@ -551,13 +552,13 @@ func TestNoteSelectionRefreshFocusDetailAndPlanActionIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{Actions: actions}
-	for _, r := range []rune{'r', 'R', 'a', 'A', 'm', 'M', 'c', 'C'} {
+	for _, r := range []rune{'r', 'R', 'a', 'A', 'm', 'M', 'h', 'H'} {
 		if app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: r}) {
 			t.Fatalf("plan action key %q quit Notes", r)
 		}
 	}
-	if len(requests) != 0 || !state.showCompleted || state.confirm != nil {
-		t.Fatalf("plan keys requests=%+v completed=%t confirm=%#v", requests, state.showCompleted, state.confirm)
+	if len(requests) != 0 || !state.showHistory || state.confirm != nil {
+		t.Fatalf("plan keys requests=%+v history=%t confirm=%#v", requests, state.showHistory, state.confirm)
 	}
 
 	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'f'})
@@ -661,7 +662,7 @@ func TestNotesTabKeepsSharedFocusAndRejectsPlanOnlyKeys(t *testing.T) {
 		snapshot: monitor.Snapshot{Rows: []monitor.Row{{
 			Kind: monitor.RowKindPlan, RepositoryID: "repo-a", RepositoryName: "alpha", RepositoryRoot: "/alpha", PlanID: "plan", PlanDir: "/plans/plan", Status: "planned",
 		}}},
-		showCompleted: true,
+		showHistory: true,
 	}
 	app := App{Actions: actions}
 	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'f'})
@@ -675,15 +676,15 @@ func TestNotesTabKeepsSharedFocusAndRejectsPlanOnlyKeys(t *testing.T) {
 		{Key: term.KeyRune, Rune: 'a'},
 		{Key: term.KeyRune, Rune: 'm'},
 		{Key: term.KeyRune, Rune: 'M'},
-		{Key: term.KeyRune, Rune: 'c'},
+		{Key: term.KeyRune, Rune: 'h'},
 		{Key: term.KeyEnter},
 	} {
 		if quit := app.handleKey(context.Background(), &state, key); quit {
 			t.Fatalf("notes key %+v unexpectedly quit", key)
 		}
 	}
-	if len(requests) != 0 || !state.showCompleted || state.detail != nil {
-		t.Fatalf("notes plan isolation requests=%+v completed=%t detail=%#v", requests, state.showCompleted, state.detail)
+	if len(requests) != 0 || !state.showHistory || state.detail != nil {
+		t.Fatalf("notes plan isolation requests=%+v history=%t detail=%#v", requests, state.showHistory, state.detail)
 	}
 
 	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'f'})
@@ -870,17 +871,18 @@ func TestShortcutLegendToggleEscapeAndModalKeys(t *testing.T) {
 	}
 }
 
-func TestRootQuitKeysAndCompletedDefault(t *testing.T) {
+func TestRootQuitKeysAndHistoryDefault(t *testing.T) {
 	base := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	now := base
 	state := loopState{
 		snapshot: monitor.Snapshot{Rows: []monitor.Row{
-			{PlanID: "active", Status: "planned"},
-			{PlanID: "done", Status: "completed"},
+			{PlanID: "active", Status: plan.StatusPlanned},
+			{PlanID: "done", Status: plan.StatusCompleted},
+			{PlanID: "abandoned", Status: plan.StatusAbandoned},
 		}},
 		now: func() time.Time { return now },
 	}
-	if rows := visibleRows(state.snapshot.Rows, state.showCompleted, state.focusRepositoryID); len(rows) != 1 || rows[0].PlanID != "active" {
+	if rows := visibleRows(state.snapshot.Rows, state.showHistory, state.focusRepositoryID); len(rows) != 1 || rows[0].PlanID != "active" {
 		t.Fatalf("initial visible rows = %+v, want only active plan", rows)
 	}
 	if quit := state.handleKey(term.KeyEvent{Key: term.KeyBackspace}); quit {
