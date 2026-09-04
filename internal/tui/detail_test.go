@@ -256,8 +256,8 @@ func TestRenderOverviewShowsOnlyMeaningfulAdvisoryInspectionState(t *testing.T) 
 		want          string
 		wantAttention bool
 	}{
-		{name: "unavailable", inspection: detailInspectionView{status: detailInspectionUnavailable}, want: "STALENESS  unavailable"},
-		{name: "loading", inspection: detailInspectionView{status: detailInspectionLoading}, want: "STALENESS  checking"},
+		{name: "unavailable", inspection: detailInspectionView{status: detailInspectionUnavailable}, want: "INSPECTION  unavailable"},
+		{name: "loading", inspection: detailInspectionView{status: detailInspectionLoading}, want: "INSPECTION  checking"},
 		{name: "current", inspection: detailInspectionView{status: detailInspectionReady}, want: "CONTEXT"},
 		{name: "drift", inspection: detailInspectionView{status: detailInspectionReady, findings: []DetailFinding{{Severity: "info", Message: "repository HEAD changed since planning"}, {Severity: "warning", Message: "pending slice 003 expects file(s) changed since planning"}}}, want: "pending slice 003 expects file(s) changed since planning", wantAttention: true},
 		{name: "failure", inspection: detailInspectionView{status: detailInspectionFailed, err: "git unavailable"}, want: "Inspection failed: git unavailable", wantAttention: true},
@@ -345,13 +345,18 @@ func TestRenderOverviewUsesScannableSectionsChecklistPriorityGridAndExpandableSc
 	collapsed := RenderDetail(DetailModel{Plan: detail, ActiveTab: detailTabOverview, Inspection: inspection, Width: 96, Height: 80})
 	for _, want := range []string{
 		"Make plan details easy to scan", "TYPE  feat", "STATUS  planned", "READINESS  ready", "PRIORITY  must",
-		"SEQUENCE  2 of 4", "DISPOSITION  ready", "CONTEXT", "Problem", "Why now", "Expected benefit",
+		"CONTEXT", "Problem\n  Important context is difficult to find.", "Why now\n  Operators need faster decisions.", "Expected benefit\n  The first screen answers the key questions.",
 		"SUCCESS CRITERIA", "☐ Summary is visible", "☐ Scope can expand",
-		"PRIORITY", "Impact  high", "Urgency  medium", "Effort  small", "Risk  low", "Confidence  high",
+		"PRIORITY", "Impact high", "Urgency medium", "Effort small", "Risk low", "Confidence high", "Rationale  High operator value.",
 		"SCOPE", "internal/six.go", "+2 more — press e to expand",
 	} {
 		if !strings.Contains(collapsed, want) {
 			t.Fatalf("scannable overview missing %q:\n%s", want, collapsed)
+		}
+	}
+	for _, redundant := range []string{"SEQUENCE", "DISPOSITION", "The plan is actionable."} {
+		if strings.Contains(collapsed, redundant) {
+			t.Fatalf("overview retained redundant %q detail:\n%s", redundant, collapsed)
 		}
 	}
 	if strings.Contains(collapsed, "internal/seven.go") || strings.Contains(collapsed, "┌ OVERVIEW") {

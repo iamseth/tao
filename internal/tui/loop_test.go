@@ -767,11 +767,16 @@ func TestPlanDetailOverviewPromotesInspectionFindingsAndKeepsBottomReachable(t *
 	}
 
 	all := strings.Join(renderOverviewPane(detail, monitor.Row{}, 32, 1_000, 0, inspection, ProfileNone, false), "\n")
-	if !strings.Contains(all, "! ATTENTION") || !strings.Contains(all, "last-finding") || strings.Index(all, "! ATTENTION") > strings.Index(all, "CONTEXT") {
-		t.Fatalf("inspection findings were not promoted above Context:\n%s", all)
+	if !strings.Contains(all, "! ATTENTION\n  • warning: first wrapped") || !strings.Contains(all, "last-finding") || strings.Index(all, "! ATTENTION") > strings.Index(all, "CONTEXT") {
+		t.Fatalf("inspection findings were not rendered as a compact warning block above Context:\n%s", all)
 	}
-	if strings.Contains(all, "PROGRESS") {
-		t.Fatalf("overview retained redundant Progress section:\n%s", all)
+	if strings.Contains(all, "\n\n! ATTENTION") {
+		t.Fatalf("attention block was separated from summary metadata:\n%s", all)
+	}
+	for _, redundant := range []string{"PROGRESS", "SEQUENCE", "DISPOSITION"} {
+		if strings.Contains(all, redundant) {
+			t.Fatalf("overview retained redundant %s detail:\n%s", redundant, all)
+		}
 	}
 
 	(App{}).handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'G'})

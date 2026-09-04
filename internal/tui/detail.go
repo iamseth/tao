@@ -27,7 +27,7 @@ const (
 	planDetailHeaderGap        = 1
 	planDetailPaneGap          = 1
 	planDetailFixedLines       = 6 // header, two gaps, tabs, and pane borders
-	planOverviewFixedLines     = 4 // header, gap, tabs, and divider
+	planOverviewFixedLines     = 4 // header, gap, tabs, and content gap
 	detailOverviewScopePreview = 6
 	detailOverviewMaxQuestions = 12
 	noteDetailHeaderLines      = 8
@@ -357,14 +357,10 @@ func renderOverviewPane(detail *plan.PlanDetail, row monitor.Row, width, height,
 
 	attention := detailAttentionLines(detail, row, inspection, width, profile)
 	if len(attention) > 0 {
-		lines = append(lines, "", Paint(profile, RoleDetailWarning, "! ATTENTION"))
+		lines = append(lines, Paint(profile, RoleDetailWarning, "! ATTENTION"))
 		lines = append(lines, attention...)
-	}
-
-	progress := overviewProgressLines(overview, inspection, width, profile)
-	if len(progress) > 0 {
-		lines = append(lines, "")
-		lines = append(lines, progress...)
+	} else if inspection.status == detailInspectionLoading || inspection.status == detailInspectionUnavailable {
+		lines = append(lines, Paint(profile, RoleDetailMuted, "INSPECTION  ")+Paint(profile, detailStalenessRole(inspection), detailStalenessSummary(inspection)))
 	}
 
 	lines = append(lines, "", detailSectionHeading("CONTEXT", width, profile))
@@ -375,7 +371,7 @@ func renderOverviewPane(detail *plan.PlanDetail, row monitor.Row, width, height,
 	appendOverviewLabeledText(&lines, "Expected benefit", overview.ExpectedBenefit, width, profile)
 	questions := boundedOverviewValues(detail.State.OpenQuestions, detailOverviewMaxQuestions)
 	if len(questions) > 0 {
-		lines = append(lines, "", Paint(profile, RoleDetailMuted, "  Open questions"))
+		lines = append(lines, "", Paint(profile, RoleDetailMuted, "Open questions"))
 		for _, question := range questions {
 			appendOverviewBullet(&lines, question, width, profile, RoleDetailSecondary, "?")
 		}
@@ -393,14 +389,8 @@ func renderOverviewPane(detail *plan.PlanDetail, row monitor.Row, width, height,
 	if overview.Priority != nil {
 		priority := overview.Priority
 		lines = append(lines, "", detailSectionHeading("PRIORITY", width, profile))
-		lines = append(lines, renderDetailGrid([]detailGridField{
-			{label: "Impact", value: overviewDisplay(string(priority.Impact)), role: detailPriorityRole(string(priority.Impact))},
-			{label: "Urgency", value: overviewDisplay(string(priority.Urgency)), role: detailPriorityRole(string(priority.Urgency))},
-			{label: "Risk", value: overviewDisplay(string(priority.Risk)), role: detailRiskRole(string(priority.Risk))},
-			{label: "Effort", value: overviewDisplay(string(priority.Effort)), role: RoleDetailSecondary},
-			{label: "Confidence", value: overviewDisplay(string(priority.Confidence)), role: detailPriorityRole(string(priority.Confidence))},
-		}, width, 3, profile)...)
-		appendOverviewParagraph(&lines, "Rationale", priority.Rationale, width, profile)
+		lines = append(lines, renderPriorityGrid(priority, width, profile)...)
+		appendOverviewMutedParagraph(&lines, "Rationale", priority.Rationale, width, profile)
 	}
 
 	lines = append(lines, "", detailSectionHeading("SCOPE", width, profile))
@@ -502,43 +492,57 @@ func renderDetailMetadata(fields []detailGridField, width int, profile Profile) 
 	return lines
 }
 
-func overviewProgressLines(overview plan.DecisionOverview, inspection detailInspectionView, width int, profile Profile) []string {
-	var fields []detailGridField
-	if overview.Sequence != nil {
-		fields = append(fields, detailGridField{label: "SEQUENCE", value: fmt.Sprintf("%d of %d", overview.Sequence.Position, overview.Sequence.Total), role: RoleDetailInfo})
+func appendOverviewLabeledText(lines *[]string, label, value string, width int, profile Profile) {
+	*lines = append(*lines, Paint(profile, RoleDetailMuted, label))
+	appendOverviewText(lines, overviewDisplay(value), width, profile, RoleDetailSecondary, "  ")
+}
+
+func renderPriorityGrid(priority *plan.Priority, width int, profile Profile) []string {
+	rows := [][]detailGridField{
+		{
+			{label: "Impact", value: string(priority.Impact), role: detailPriorityRole(string(priority.Impact))},
+			{label: "Urgency", value: string(priority.Urgency), role: detailPriorityRole(string(priority.Urgency))},
+			{label: "Risk", value: string(priority.Risk), role: detailRiskRole(string(priority.Risk))},
+		},
+		{
+			{label: "Effort", value: string(priority.Effort), role: RoleDetailSecondary},
+			{label: "Confidence", value: string(priority.Confidence), role: detailPriorityRole(string(priority.Confidence))},
+		},
 	}
-	if overview.Disposition != "" {
-		fields = append(fields, detailGridField{label: "DISPOSITION", value: string(overview.Disposition), role: detailStateRole(string(overview.Disposition))})
+	const gutter = 2
+	columnWidths := []int{15, 19}
+	thirdWidth := cells.Width(rows[0][2].label + " " + overviewDisplay(rows[0][2].value))
+	requiredWidth := columnWidths[0] + gutter + columnWidths[1] + gutter + thirdWidth
+	if width > 0 && requiredWidth > width {
+		return renderDetailGrid(append(rows[0], rows[1]...), width, 3, profile)
 	}
-	if inspection.status == detailInspectionLoading || inspection.status == detailInspectionUnavailable {
-		fields = append(fields, detailGridField{label: "STALENESS", value: detailStalenessSummary(inspection), role: detailStalenessRole(inspection)})
-	}
-	lines := renderDetailMetadata(fields, width, profile)
-	appendOverviewParagraph(&lines, "Disposition", overview.DispositionReason, width, profile)
-	if overview.Sequence != nil {
-		for _, relationship := range overview.Sequence.Relationships {
-			appendOverviewBullet(&lines, string(relationship.Type)+" "+relationship.PlanID+" — "+relationship.Reason, width, profile, RoleDetailSecondary, "↳")
+	lines := make([]string, 0, len(rows))
+	for _, fields := range rows {
+		var line strings.Builder
+		for column, field := range fields {
+			value := overviewDisplay(field.value)
+			cell := Paint(profile, RoleDetailMuted, field.label) + " " + Paint(profile, field.role, value)
+			if column < len(fields)-1 {
+				cell = cells.Pad(cell, columnWidths[column]) + strings.Repeat(" ", gutter)
+			}
+			line.WriteString(cell)
 		}
+		lines = append(lines, line.String())
 	}
 	return lines
 }
 
-func appendOverviewLabeledText(lines *[]string, label, value string, width int, profile Profile) {
-	*lines = append(*lines, Paint(profile, RoleDetailMuted, "  "+label))
-	appendOverviewText(lines, overviewDisplay(value), width, profile, RoleDetailSecondary, "    ")
-}
-
-func appendOverviewParagraph(lines *[]string, label, value string, width int, profile Profile) {
+func appendOverviewMutedParagraph(lines *[]string, label, value string, width int, profile Profile) {
 	if value = singleLineDetail(value); value == "" {
 		return
 	}
-	prefix := label + " — "
+	prefix := label + "  "
 	wrapped := wrapDetailWords(value, detailContentWidth(width, cells.Width(prefix)))
 	for index, line := range wrapped {
 		if index == 0 {
-			*lines = append(*lines, Paint(profile, RoleDetailMuted, prefix)+Paint(profile, RoleDetailSecondary, line))
+			*lines = append(*lines, Paint(profile, RoleDetailMuted, prefix+line))
 		} else {
-			*lines = append(*lines, strings.Repeat(" ", cells.Width(prefix))+Paint(profile, RoleDetailSecondary, line))
+			*lines = append(*lines, Paint(profile, RoleDetailMuted, strings.Repeat(" ", cells.Width(prefix))+line))
 		}
 	}
 }
@@ -701,7 +705,7 @@ func detailAttentionLines(detail *plan.PlanDetail, row monitor.Row, inspection d
 		items = append(items, struct {
 			text string
 			role Role
-		}{text: "Plan requires attention: " + strings.ReplaceAll(string(reason), "_", " "), role: RoleDetailWarning})
+		}{text: strings.ReplaceAll(string(reason), "_", " "), role: RoleDetailWarning})
 	}
 	for _, warning := range append(append([]string(nil), row.Warnings...), row.RelationshipWarnings...) {
 		items = append(items, struct {
@@ -741,7 +745,7 @@ func detailAttentionLines(detail *plan.PlanDetail, row monitor.Row, inspection d
 			continue
 		}
 		seen[item.text] = struct{}{}
-		appendOverviewBullet(&lines, item.text, width, profile, item.role, "!")
+		appendOverviewBullet(&lines, item.text, width, profile, item.role, "•")
 	}
 	return lines
 }
