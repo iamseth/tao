@@ -93,7 +93,6 @@ func TestAbandonedPlanSuppressesEveryPlanAction(t *testing.T) {
 
 	state := loopState{
 		snapshot:            monitor.Snapshot{Rows: []monitor.Row{row}},
-		showHistory:         true,
 		focusRepositoryID:   row.RepositoryID,
 		focusRepositoryName: row.RepositoryName,
 		focusRepositoryRoot: row.RepositoryRoot,
@@ -201,7 +200,7 @@ func TestApprovalActionUsesConfirmationFlowAndExactCommand(t *testing.T) {
 	row.ApprovalSliceID = "005-risk"
 	row.ApprovalReason = "security owner sign-off"
 	app := App{Actions: actions}
-	state := loopState{snapshot: monitor.Snapshot{Rows: []monitor.Row{row}}, showHistory: true}
+	state := loopState{snapshot: monitor.Snapshot{Rows: []monitor.Row{row}}}
 
 	if quit := app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'a'}); quit {
 		t.Fatal("approval key unexpectedly quit")
@@ -359,7 +358,7 @@ func TestMergeLaunchFailureIsImmediateAndDoesNotClaimMerging(t *testing.T) {
 func TestApprovalKeyIsIgnoredWithoutGate(t *testing.T) {
 	launcher := &recordingActionLauncher{}
 	actions := newTestActions(t, launcher, nil, nil)
-	state := loopState{snapshot: monitor.Snapshot{Rows: []monitor.Row{testActionRow()}}, showHistory: true}
+	state := loopState{snapshot: monitor.Snapshot{Rows: []monitor.Row{testActionRow()}}}
 
 	App{Actions: actions}.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'a'})
 

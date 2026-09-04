@@ -29,7 +29,6 @@ type Model struct {
 	Width               int
 	Height              int
 	Now                 time.Time
-	HideHistory         bool
 	FocusRepositoryID   string
 	FocusRepositoryName string
 	Profile             Profile
@@ -44,13 +43,12 @@ type Model struct {
 }
 
 type rowValues struct {
-	repo      string
-	next      string
-	plan      string
-	slices    string
-	run       string
-	age       string
-	attention string
+	repo   string
+	next   string
+	plan   string
+	slices string
+	run    string
+	age    string
 }
 
 type tableWidths struct {
@@ -60,7 +58,6 @@ type tableWidths struct {
 	slices     int
 	run        int
 	age        int
-	attention  int
 	hasRunning bool
 }
 
@@ -95,7 +92,7 @@ func Render(model Model) string {
 	page := normalizePage(model.Page)
 	planRows := FilterPlanRows(model.Snapshot.Rows, model.SearchQuery)
 	noteSnapshot := FilterNoteSnapshot(model.NoteSnapshot, model.SearchQuery)
-	sections := BuildRepositorySections(planRows, !model.HideHistory, model.FocusRepositoryID)
+	sections := BuildRepositorySections(planRows, model.FocusRepositoryID)
 	visibleCount := 0
 	for _, section := range sections {
 		visibleCount += len(section.Rows)
@@ -177,15 +174,14 @@ func Render(model Model) string {
 		lines = append(lines, "", "  No plans.")
 	default:
 		widths := measureTable(sections, model.Snapshot.CollectedAt, model.ActionLabels)
+		columns := planTableColumns(widths, model.Width)
+		paneWidth := planTablePaneWidth(model.Width, columns)
 		selected := 0
 		for _, section := range sections {
 			if len(section.Rows) == 0 {
 				continue
 			}
-			withAttention := section.Kind == SectionNow
 			sectionWidth := dashboardSectionWidth(model, PagePlans, section.Title, 0)
-			columns := planTableColumns(widths, withAttention, model.Width)
-			paneWidth := planTablePaneWidth(model.Width, columns)
 			lines = append(lines, "", sectionTitleRule(model.Profile, planSectionRole(section.Kind), section.Title, sectionWidth), renderHeader(columns, paneWidth))
 			viewportSection := tableViewportSection{headingLines: []int{len(lines) - 2, len(lines) - 1}}
 			for _, row := range section.Rows {
@@ -193,7 +189,7 @@ func Render(model Model) string {
 					selectedLine = len(lines)
 				}
 				viewportSection.contentLines = append(viewportSection.contentLines, len(lines))
-				lines = append(lines, renderTableRow(row, model.Snapshot.CollectedAt, columns, paneWidth, selected == model.Selected, model.Profile, model.ActionLabels[actionRowKey(row)]))
+				lines = append(lines, renderTableRow(row, section.Kind, model.Snapshot.CollectedAt, columns, paneWidth, selected == model.Selected, model.Profile, model.ActionLabels[actionRowKey(row)]))
 				selected++
 			}
 			viewportMetadata.sections = append(viewportMetadata.sections, viewportSection)
@@ -447,7 +443,7 @@ func planCountLabel(count int) string {
 func measureTable(sections []Section, now time.Time, actionLabels map[string]string) tableWidths {
 	widths := tableWidths{
 		repo: len("REPO"), next: len("NEXT"), plan: len("PLAN"), slices: len("SLICES"),
-		run: len("RUN"), age: len("AGE"), attention: len("ATTENTION"),
+		run: len("RUN"), age: len("AGE"),
 	}
 	for _, section := range sections {
 		for _, row := range section.Rows {
@@ -458,7 +454,6 @@ func measureTable(sections []Section, now time.Time, actionLabels map[string]str
 			widths.slices = max(widths.slices, sliceBarCells+1+cells.Width(values.slices))
 			widths.run = max(widths.run, cells.Width(values.run))
 			widths.age = max(widths.age, cells.Width(values.age))
-			widths.attention = max(widths.attention, cells.Width(values.attention))
 			widths.hasRunning = widths.hasRunning || hasVisibleRun(row)
 		}
 	}
@@ -470,7 +465,7 @@ const (
 	minimumPlanColumnWidth = 12
 )
 
-func planTableColumns(widths tableWidths, withAttention bool, frameWidth int) []column {
+func planTableColumns(widths tableWidths, frameWidth int) []column {
 	columns := []column{
 		{name: "REPO", width: max(widths.repo, cells.Width("REPO")), priority: 40},
 		{name: "NEXT", width: max(widths.next, cells.Width("NEXT")), required: true, priority: 60, minimum: minimumNextColumnWidth},
@@ -481,12 +476,6 @@ func planTableColumns(widths tableWidths, withAttention bool, frameWidth int) []
 		columns = append(columns, column{name: "RUN", width: max(widths.run, cells.Width("RUN")), priority: 20})
 	}
 	columns = append(columns, column{name: "AGE", width: max(widths.age, cells.Width("AGE")), priority: 10})
-	if withAttention {
-		columns = append(columns, column{
-			name: "ATTENTION", width: max(widths.attention, cells.Width("ATTENTION")),
-			priority: 50,
-		})
-	}
 	if frameWidth <= 0 {
 		return columns
 	}
@@ -521,8 +510,12 @@ func planSectionRole(kind SectionKind) Role {
 	}
 }
 
-func renderTableRow(row monitor.Row, now time.Time, columns []column, paneWidth int, selected bool, profile Profile, actionLabel string) string {
+func renderTableRow(row monitor.Row, section SectionKind, now time.Time, columns []column, paneWidth int, selected bool, profile Profile, actionLabel string) string {
 	values := tableRowValues(row, now, actionLabel)
+	cellProfile := profile
+	if selected || section == SectionHistory {
+		cellProfile = ProfileNone
+	}
 	repositoryKey := strings.TrimSpace(row.RepositoryID)
 	if repositoryKey == "" {
 		repositoryKey = strings.TrimSpace(row.RepositoryName)
@@ -535,19 +528,17 @@ func renderTableRow(row monitor.Row, now time.Time, columns []column, paneWidth 
 	for _, item := range columns {
 		switch item.name {
 		case "REPO":
-			rowCells = append(rowCells, Paint(profile, repositoryRole, values.repo))
+			rowCells = append(rowCells, Paint(cellProfile, repositoryRole, values.repo))
 		case "NEXT":
 			rowCells = append(rowCells, values.next)
 		case "PLAN":
 			rowCells = append(rowCells, values.plan)
 		case "SLICES":
-			rowCells = append(rowCells, renderSlicesValue(profile, row))
+			rowCells = append(rowCells, renderSlicesValue(cellProfile, row))
 		case "RUN":
 			rowCells = append(rowCells, values.run)
 		case "AGE":
 			rowCells = append(rowCells, values.age)
-		case "ATTENTION":
-			rowCells = append(rowCells, values.attention)
 		}
 	}
 	line := "  " + joinRow(columns, rowCells, paneWidth)
@@ -555,9 +546,18 @@ func renderTableRow(row monitor.Row, now time.Time, columns []column, paneWidth 
 		line = cells.Pad(line, paneWidth+cells.Width("  "))
 	}
 	if selected {
-		line = SelectRow(profile, line)
+		return fillRowWithText(profile, RolePlanSelectionText, RolePlanSelectionBackground, true, line)
 	}
-	return line
+	switch section {
+	case SectionNow:
+		return fillRow(profile, RolePlanNowBackground, line)
+	case SectionNext:
+		return fillRow(profile, RolePlanNextBackground, line)
+	case SectionHistory:
+		return fillRowWithText(profile, RolePlanHistoryText, RolePlanHistoryBackground, false, line)
+	default:
+		return line
+	}
 }
 
 func renderSlicesValue(profile Profile, row monitor.Row) string {
@@ -578,13 +578,12 @@ func tableRowValues(row monitor.Row, now time.Time, actionLabel string) rowValue
 		next = actionLabel
 	}
 	return rowValues{
-		repo:      displayValue(row.RepositoryName),
-		next:      " " + displayValue(next) + " ",
-		plan:      planLabel(row),
-		slices:    slicesLabel(row),
-		run:       combinedRunLabel(row),
-		age:       relativeAge(row.UpdatedAt, now),
-		attention: attentionLabel(row.AttentionReasons),
+		repo:   displayValue(row.RepositoryName),
+		next:   " " + displayValue(next) + " ",
+		plan:   planLabel(row),
+		slices: slicesLabel(row),
+		run:    combinedRunLabel(row),
+		age:    relativeAge(row.UpdatedAt, now),
 	}
 }
 
@@ -687,32 +686,6 @@ func slicesLabel(row monitor.Row) string {
 		value += fmt.Sprintf("+%d", row.ReworkTotalCount)
 	}
 	return value
-}
-
-func attentionLabel(reasons []monitor.AttentionReason) string {
-	if len(reasons) == 0 {
-		return "-"
-	}
-	labels := make([]string, 0, len(reasons))
-	for _, reason := range reasons {
-		switch reason {
-		case monitor.AttentionBlocked:
-			labels = append(labels, "blocked")
-		case monitor.AttentionChangesRequested:
-			labels = append(labels, "changes requested")
-		case monitor.AttentionApprovalRequired:
-			labels = append(labels, "approval required")
-		case monitor.AttentionSliceCompletionPending:
-			labels = append(labels, "slice completion pending")
-		case monitor.AttentionReworkStopped:
-			labels = append(labels, "rework stopped")
-		case monitor.AttentionRunCrashed:
-			labels = append(labels, "crashed?")
-		default:
-			labels = append(labels, strings.ReplaceAll(string(reason), "_", " "))
-		}
-	}
-	return strings.Join(labels, ", ")
 }
 
 func displayValue(value string) string {

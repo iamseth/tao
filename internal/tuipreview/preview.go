@@ -38,7 +38,6 @@ type RenderOptions struct {
 	Selection     int
 	Color         bool
 	Plain         bool
-	HideHistory   bool
 	ShowShortcuts bool
 	SearchQuery   string
 	PlanDir       string
@@ -263,14 +262,14 @@ func Render(scenario Scenario, options RenderOptions) (string, error) {
 	var frame string
 	switch options.View {
 	case ViewPlans:
-		count := visiblePlanCount(scenario.Snapshot, options.HideHistory, options.SearchQuery)
+		count := visiblePlanCount(scenario.Snapshot, options.SearchQuery)
 		if err := validateSelection(options.Selection, count, "plan"); err != nil {
 			return "", err
 		}
 		frame = tui.Render(tui.Model{
 			Snapshot: scenario.Snapshot, NoteSnapshot: scenario.Notes, DebugSnapshot: scenario.Debug, SettingsSnapshot: scenario.Settings,
 			Page: tui.PagePlans, Selected: options.Selection, Width: options.Width, Height: options.Height, Now: scenario.Now,
-			HideHistory: options.HideHistory, Profile: profile, ShowShortcuts: options.ShowShortcuts, SearchQuery: options.SearchQuery,
+			Profile: profile, ShowShortcuts: options.ShowShortcuts, SearchQuery: options.SearchQuery,
 		})
 	case ViewNotes:
 		filteredNotes := tui.FilterNoteSnapshot(scenario.Notes, options.SearchQuery)
@@ -419,9 +418,9 @@ func validateSelection(selection, count int, kind string) error {
 	return nil
 }
 
-func visiblePlanCount(snapshot monitor.Snapshot, hideHistory bool, searchQuery string) int {
+func visiblePlanCount(snapshot monitor.Snapshot, searchQuery string) int {
 	count := 0
-	for _, section := range tui.BuildSections(tui.FilterPlanRows(snapshot.Rows, searchQuery), !hideHistory) {
+	for _, section := range tui.BuildSections(tui.FilterPlanRows(snapshot.Rows, searchQuery)) {
 		count += len(section.Rows)
 	}
 	return count

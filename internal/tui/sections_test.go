@@ -22,7 +22,7 @@ func TestBuildSectionsGroupsEveryRowAndPreservesOrder(t *testing.T) {
 		{PlanID: "attention-second", Liveness: monitor.LivenessStale, AttentionReasons: []monitor.AttentionReason{monitor.AttentionRunCrashed}},
 	}
 
-	sections := BuildSections(rows, true)
+	sections := BuildSections(rows)
 	want := map[SectionKind][]string{
 		SectionNow:     {"running-first", "attention-first", "planned-second", "stalled", "attention-second"},
 		SectionNext:    {"planned-first"},
@@ -73,11 +73,11 @@ func TestBuildRepositorySectionsFiltersPlansAndWarnings(t *testing.T) {
 	}
 
 	var got []monitor.Row
-	for _, section := range BuildRepositorySections(rows, false, "repo-a") {
+	for _, section := range BuildRepositorySections(rows, "repo-a") {
 		got = append(got, section.Rows...)
 	}
-	if len(got) != 2 || got[0].Kind != monitor.RowKindRepositoryWarning || got[1].PlanID != "active" {
-		t.Fatalf("focused rows = %+v, want warning and active plan", got)
+	if len(got) != 3 || got[0].Kind != monitor.RowKindRepositoryWarning || got[1].PlanID != "active" || got[2].PlanID != "done" {
+		t.Fatalf("focused rows = %+v, want warning, active plan, and done plan", got)
 	}
 	if rows[1].PlanID != "other" || rows[3].PlanID != "done" {
 		t.Fatalf("repository filtering mutated source rows: %+v", rows)
@@ -100,7 +100,7 @@ func TestBuildSectionsOrdersOnlyNextPlannedRows(t *testing.T) {
 		{PlanID: "completed", Status: plan.StatusCompleted},
 	}
 
-	sections := BuildSections(rows, true)
+	sections := BuildSections(rows)
 	got := make(map[SectionKind][]string)
 	for _, section := range sections {
 		for _, row := range section.Rows {
@@ -168,7 +168,7 @@ func TestBuildSectionsRoutesInspectActionsToNow(t *testing.T) {
 		{Kind: monitor.RowKindPlan, RepositoryID: "repo", PlanID: "invalid", Status: plan.StatusInvalid, Warnings: []string{"invalid state.json"}},
 	}
 
-	sections := BuildSections(rows, true)
+	sections := BuildSections(rows)
 	for _, section := range sections {
 		switch section.Kind {
 		case SectionNow:
@@ -191,7 +191,7 @@ func TestBuildSectionsRoutesOperationalActionsToNow(t *testing.T) {
 		{PlanID: "approve", Status: plan.StatusPlanned, AttentionReasons: []monitor.AttentionReason{monitor.AttentionApprovalRequired}},
 	}
 
-	sections := BuildSections(rows, true)
+	sections := BuildSections(rows)
 	got := make(map[SectionKind][]string)
 	for _, section := range sections {
 		for _, row := range section.Rows {
@@ -216,7 +216,7 @@ func TestBuildSectionsLimitsHistoryToFifteenPlans(t *testing.T) {
 		rows[index] = monitor.Row{PlanID: fmt.Sprintf("history-%02d", index), Status: status}
 	}
 
-	sections := BuildSections(rows, true)
+	sections := BuildSections(rows)
 	for _, section := range sections {
 		if section.Kind != SectionHistory {
 			continue
@@ -232,20 +232,18 @@ func TestBuildSectionsLimitsHistoryToFifteenPlans(t *testing.T) {
 	t.Fatal("history section missing")
 }
 
-func TestBuildSectionsHandlesEmptyAndHiddenHistorySections(t *testing.T) {
+func TestBuildSectionsAlwaysIncludesHistory(t *testing.T) {
 	tests := []struct {
 		name        string
 		rows        []monitor.Row
-		showHistory bool
 		wantHistory int
 	}{
-		{name: "empty", showHistory: true},
-		{name: "terminal outcomes shown", rows: []monitor.Row{{Status: plan.StatusCompleted}, {Status: plan.StatusAbandoned}}, showHistory: true, wantHistory: 2},
-		{name: "history hidden", rows: []monitor.Row{{Status: plan.StatusCompleted, AttentionReasons: []monitor.AttentionReason{monitor.AttentionFinalizationFailed}}, {Status: plan.StatusAbandoned}}, showHistory: false},
+		{name: "empty"},
+		{name: "terminal outcomes shown", rows: []monitor.Row{{Status: plan.StatusCompleted}, {Status: plan.StatusAbandoned}}, wantHistory: 2},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			sections := BuildSections(test.rows, test.showHistory)
+			sections := BuildSections(test.rows)
 			if len(sections) != 3 {
 				t.Fatalf("section count = %d, want 3", len(sections))
 			}

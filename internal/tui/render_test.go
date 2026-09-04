@@ -55,6 +55,43 @@ func TestPlanSectionsUseDedicatedColors(t *testing.T) {
 	}
 }
 
+func TestPlanRowsUseSectionBackgroundsAndNeutralHistoryText(t *testing.T) {
+	frame := Render(Model{
+		Snapshot: monitor.Snapshot{Rows: []monitor.Row{
+			{RepositoryName: "alpha", PlanID: "now-row", Status: plan.StatusBlocked, AttentionReasons: []monitor.AttentionReason{monitor.AttentionBlocked}},
+			{RepositoryName: "alpha", PlanID: "next-row", Status: plan.StatusPlanned},
+			{RepositoryName: "alpha", PlanID: "history-row", Status: plan.StatusCompleted},
+		}},
+		Selected: 99,
+		Width:    120,
+		Profile:  ProfileTrueColor,
+	})
+
+	backgrounds := map[string]Role{
+		"now-row":     RolePlanNowBackground,
+		"next-row":    RolePlanNextBackground,
+		"history-row": RolePlanHistoryBackground,
+	}
+	for planID, role := range backgrounds {
+		var rowLine string
+		for _, line := range renderedLines(frame) {
+			if strings.Contains(line, planID) {
+				rowLine = line
+				break
+			}
+		}
+		prefix := colorSequence(mustRoleColor(ProfileTrueColor, role), true)
+		if rowLine == "" || !strings.HasPrefix(rowLine, prefix) {
+			t.Errorf("%s row does not use background role %d: %q", planID, role, rowLine)
+		}
+	}
+	for _, line := range renderedLines(frame) {
+		if strings.Contains(line, "history-row") && !strings.Contains(line, colorSequence(mustRoleColor(ProfileTrueColor, RolePlanHistoryText), false)) {
+			t.Errorf("history row does not use dim neutral text: %q", line)
+		}
+	}
+}
+
 func TestNextActionsRenderAsNormalText(t *testing.T) {
 	row := monitor.Row{RepositoryID: "planned", PlanID: "planned", Status: plan.StatusPlanned}
 	got := Render(Model{
@@ -92,7 +129,7 @@ func TestRenderSectionsAndOperationalLabels(t *testing.T) {
 	}}
 
 	got := Render(Model{Snapshot: snapshot, Selected: 2})
-	ordered := []string{"NOW", "NEXT", "HISTORY"}
+	ordered := []string{"NOW", "NEXT", "DONE"}
 	previous := -1
 	for _, label := range ordered {
 		index := strings.Index(got, label)
@@ -102,7 +139,7 @@ func TestRenderSectionsAndOperationalLabels(t *testing.T) {
 		previous = index
 	}
 	for _, want := range []string{
-		"NEXT", "RUN", "AGE", "MERGE", "DONE", "ABANDONED", "SLICES", "ATTENTION", "crashed?", "stalled? (45s old)",
+		"NEXT", "RUN", "AGE", "MERGE", "DONE", "ABANDONED", "SLICES", "stalled? (45s old)",
 		"004-ui 2m", "2/4", "30m",
 	} {
 		if !strings.Contains(got, want) {
@@ -139,7 +176,7 @@ func TestSlicesValueAddsTenCellProgressBarWithoutChangingLabel(t *testing.T) {
 	}
 }
 
-func TestSelectedPlanRowFillsPaneAndPreservesCellRoles(t *testing.T) {
+func TestSelectedPlanRowUsesTokyoNightSelectionColors(t *testing.T) {
 	const width = 120
 	row := monitor.Row{
 		RepositoryID:           "repo-id",
@@ -156,7 +193,7 @@ func TestSelectedPlanRowFillsPaneAndPreservesCellRoles(t *testing.T) {
 	})
 	var selectedLine string
 	for _, line := range renderedLines(frame) {
-		if strings.Contains(line, Paint(ProfileTrueColor, RoleRepoSelected, "repo")) {
+		if strings.Contains(line, "selected-plan") {
 			selectedLine = line
 			break
 		}
@@ -164,7 +201,9 @@ func TestSelectedPlanRowFillsPaneAndPreservesCellRoles(t *testing.T) {
 	if selectedLine == "" {
 		t.Fatalf("selected row not found in frame: %q", frame)
 	}
-	selectionPrefix := boldSequence + colorSequence(SelectionBackground(ProfileTrueColor), true)
+	selectionPrefix := boldSequence +
+		colorSequence(mustRoleColor(ProfileTrueColor, RolePlanSelectionBackground), true) +
+		colorSequence(mustRoleColor(ProfileTrueColor, RolePlanSelectionText), false)
 	if !strings.HasPrefix(selectedLine, selectionPrefix) || !strings.HasSuffix(selectedLine, resetSequence) {
 		t.Fatalf("selected row does not wrap the full rendered line: %q", selectedLine)
 	}
@@ -176,8 +215,8 @@ func TestSelectedPlanRowFillsPaneAndPreservesCellRoles(t *testing.T) {
 	}
 	for _, role := range []Role{RoleRepoSelected, RoleNeutral5, RoleNeutral2} {
 		color, _ := RoleColor(ProfileTrueColor, role)
-		if !strings.Contains(selectedLine, colorSequence(color, false)) {
-			t.Errorf("selected row lost foreground role %d: %q", role, selectedLine)
+		if strings.Contains(selectedLine, colorSequence(color, false)) {
+			t.Errorf("selected row retained foreground role %d instead of the selection text color: %q", role, selectedLine)
 		}
 	}
 	if !strings.Contains(selectedLine, " RUN ") {
@@ -276,31 +315,62 @@ func TestPlanColumnsVaryAcrossMixedAndStressScenarios(t *testing.T) {
 	}
 }
 
+func TestPlanColumnsAlignAcrossNowNextAndHistory(t *testing.T) {
+	frame := Render(Model{
+		Snapshot: monitor.Snapshot{Rows: []monitor.Row{
+			{RepositoryName: "alpha", PlanID: "blocked", Status: plan.StatusBlocked, AttentionReasons: []monitor.AttentionReason{monitor.AttentionBlocked}},
+			{RepositoryName: "alpha", PlanID: "planned", Status: plan.StatusPlanned},
+			{RepositoryName: "beta", PlanID: "completed", Status: plan.StatusCompleted},
+		}},
+		Width: 160,
+	})
+
+	var headers []string
+	for _, line := range renderedLines(frame) {
+		if strings.HasPrefix(line, "  REPO") {
+			headers = append(headers, line)
+		}
+	}
+	if len(headers) != 3 {
+		t.Fatalf("plan header count = %d, want 3:\n%s", len(headers), frame)
+	}
+	for _, name := range []string{"REPO", "NEXT", "PLAN", "SLICES", "AGE"} {
+		wantOffset := strings.Index(headers[0], name)
+		for index, header := range headers[1:] {
+			if got := strings.Index(header, name); got != wantOffset {
+				t.Errorf("%s offset in section %d = %d, want %d:\n%s", name, index+1, got, wantOffset, frame)
+			}
+		}
+	}
+	for _, header := range headers {
+		if strings.Contains(header, "ATTENTION") {
+			t.Fatalf("plan header retained removed ATTENTION column:\n%s", frame)
+		}
+	}
+}
+
 func TestPlanColumnsKeepSemanticCoreThroughNarrowDegradation(t *testing.T) {
 	widths := tableWidths{
 		repo: 32, next: 8, plan: 64, slices: 15, run: 12, age: 4,
-		attention: 20, hasRunning: true,
+		hasRunning: true,
 	}
 	for _, width := range []int{100, 80, 70} {
-		names := columnNames(planTableColumns(widths, true, width))
+		names := columnNames(planTableColumns(widths, width))
 		for _, required := range []string{"NEXT", "PLAN"} {
 			if !slices.Contains(names, required) {
 				t.Errorf("width %d dropped required %s column: %v", width, required, names)
 			}
 		}
-		if !slices.Contains(names, "ATTENTION") {
-			t.Errorf("width %d dropped high-priority attention context: %v", width, names)
-		}
 	}
-	if names := columnNames(planTableColumns(widths, true, 70)); slices.Contains(names, "RUN") || slices.Contains(names, "AGE") {
+	if names := columnNames(planTableColumns(widths, 70)); slices.Contains(names, "RUN") || slices.Contains(names, "AGE") {
 		t.Fatalf("70-cell attention table retained low-priority operational context: %v", names)
 	}
-	if names := columnNames(planTableColumns(widths, false, 44)); strings.Join(names, ",") != "NEXT,PLAN" {
+	if names := columnNames(planTableColumns(widths, 44)); strings.Join(names, ",") != "NEXT,PLAN" {
 		t.Fatalf("44-cell table columns = %v, want trustworthy action and plan identity", names)
 	}
 }
 
-func TestRender44CellAttentionTableKeepsRecognizableActions(t *testing.T) {
+func TestRender44CellNowTableKeepsRecognizableActions(t *testing.T) {
 	rows := []monitor.Row{
 		{
 			RepositoryName: "repo", PlanID: "continue-plan", Status: plan.StatusBlocked,
@@ -322,12 +392,12 @@ func TestRender44CellAttentionTableKeepsRecognizableActions(t *testing.T) {
 			}
 		}
 		if rowLine == "" || !strings.Contains(rowLine, action) {
-			t.Errorf("44-cell attention row lost recognizable %s action: %q\n%s", action, rowLine, frame)
+			t.Errorf("44-cell NOW row lost recognizable %s action: %q\n%s", action, rowLine, frame)
 		}
 	}
 	for _, line := range lines {
 		if strings.HasPrefix(line, "  NEXT") && strings.Contains(line, "ATTENTION") {
-			t.Fatalf("44-cell table retained attention context at the expense of NEXT: %q", line)
+			t.Fatalf("44-cell table retained removed ATTENTION column: %q", line)
 		}
 	}
 }
@@ -335,11 +405,11 @@ func TestRender44CellAttentionTableKeepsRecognizableActions(t *testing.T) {
 func TestPlanRunColumnIsConditional(t *testing.T) {
 	now := time.Now()
 	withoutRun := measureTable([]Section{{Rows: []monitor.Row{{PlanID: "planned", Status: plan.StatusPlanned}}}}, now, nil)
-	if names := columnNames(planTableColumns(withoutRun, false, 199)); slices.Contains(names, "RUN") {
+	if names := columnNames(planTableColumns(withoutRun, 199)); slices.Contains(names, "RUN") {
 		t.Fatalf("non-running plans rendered RUN column: %v", names)
 	}
 	withRun := measureTable([]Section{{Rows: []monitor.Row{{PlanID: "live", Status: plan.StatusInProgress, Liveness: monitor.LivenessLive}}}}, now, nil)
-	if names := columnNames(planTableColumns(withRun, false, 199)); !slices.Contains(names, "RUN") {
+	if names := columnNames(planTableColumns(withRun, 199)); !slices.Contains(names, "RUN") {
 		t.Fatalf("running plan omitted RUN column: %v", names)
 	}
 }
@@ -379,38 +449,24 @@ func TestPhaseLabelTruncatesByCells(t *testing.T) {
 	}
 }
 
-func TestRenderOmitsEmptyAndHiddenHistorySections(t *testing.T) {
-	tests := []struct {
-		name  string
-		model Model
-	}{
-		{name: "empty snapshot", model: Model{}},
-		{
-			name: "history hidden",
-			model: Model{
-				Snapshot: monitor.Snapshot{Rows: []monitor.Row{
-					{PlanID: "done", Status: plan.StatusCompleted},
-					{PlanID: "abandoned", Status: plan.StatusAbandoned},
-				}},
-				HideHistory: true,
-			},
-		},
-	}
-	const want = clearScreenSequence + `tao │ notes ▸plans  settings  debug  all repos  agent -  ●
+func TestRenderOmitsEmptySectionsAndAlwaysShowsDonePlans(t *testing.T) {
+	const wantEmpty = clearScreenSequence + `tao │ notes ▸plans  settings  debug  all repos  agent -  ●
 
   No plans.
 0 plans
 `
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got := Render(test.model)
-			if got != want {
-				t.Fatalf("Render() mismatch\nwant:\n%q\n got:\n%q", want, got)
-			}
-			if strings.Contains(got, "COMPLETED") {
-				t.Fatalf("Render() unexpectedly included empty completed section: %q", got)
-			}
-		})
+	if got := Render(Model{}); got != wantEmpty {
+		t.Fatalf("empty Render() mismatch\nwant:\n%q\n got:\n%q", wantEmpty, got)
+	}
+
+	got := Render(Model{Snapshot: monitor.Snapshot{Rows: []monitor.Row{
+		{PlanID: "done", Status: plan.StatusCompleted},
+		{PlanID: "abandoned", Status: plan.StatusAbandoned},
+	}}})
+	for _, want := range []string{"DONE", "done", "abandoned", "2 plans"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("terminal plans Render() missing %q: %q", want, got)
+		}
 	}
 }
 
@@ -650,7 +706,7 @@ func TestRenderAbandonmentAsSafeHistoricalOutcome(t *testing.T) {
 		NextAction:       "FINALIZE PR",
 	}
 	got := Render(Model{Snapshot: monitor.Snapshot{Rows: []monitor.Row{row}}, Width: 120})
-	for _, want := range []string{"HISTORY", "ABANDONED   old-plan"} {
+	for _, want := range []string{"DONE", "ABANDONED   old-plan"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("abandonment render missing %q:\n%s", want, got)
 		}
@@ -787,7 +843,7 @@ func TestRenderShortcutLegendAsBoundedPopover(t *testing.T) {
 	}{
 		{
 			page: PagePlans,
-			want: []string{"Keyboard shortcuts", "KEY", "ACTION", "Shift+Tab", "h", "Toggle plan history", "r", "Run selected plan", "/", "Search plans and notes", "Backspace", "Go back / clear search", "? / Esc", "Close shortcuts"},
+			want: []string{"Keyboard shortcuts", "KEY", "ACTION", "Shift+Tab", "r", "Run selected plan", "/", "Search plans and notes", "Backspace", "Go back / clear search", "? / Esc", "Close shortcuts"},
 		},
 		{
 			page:        PageNotes,

@@ -170,11 +170,11 @@ func TestRenderStressPlanRowsKeepCompleteResponsiveColumns(t *testing.T) {
 	}
 	values := tableRowValues(row, now, "")
 	expectedNames := map[int]string{
-		199: "REPO,NEXT,PLAN,SLICES,RUN,AGE,ATTENTION",
-		120: "REPO,NEXT,PLAN,SLICES,RUN,AGE,ATTENTION",
-		100: "REPO,NEXT,PLAN,SLICES,ATTENTION",
-		80:  "REPO,NEXT,PLAN,ATTENTION",
-		70:  "REPO,NEXT,PLAN,ATTENTION",
+		199: "REPO,NEXT,PLAN,SLICES,RUN,AGE",
+		120: "REPO,NEXT,PLAN,SLICES,RUN,AGE",
+		100: "REPO,NEXT,PLAN,SLICES,RUN",
+		80:  "REPO,NEXT,PLAN,SLICES",
+		70:  "REPO,NEXT,PLAN",
 	}
 	valueForColumn := func(name string) string {
 		switch name {
@@ -190,8 +190,6 @@ func TestRenderStressPlanRowsKeepCompleteResponsiveColumns(t *testing.T) {
 			return values.run
 		case "AGE":
 			return values.age
-		case "ATTENTION":
-			return values.attention
 		default:
 			return ""
 		}
@@ -200,7 +198,7 @@ func TestRenderStressPlanRowsKeepCompleteResponsiveColumns(t *testing.T) {
 	widths := measureTable([]Section{{Kind: SectionNow, Rows: []monitor.Row{row}}}, now, nil)
 	for _, width := range []int{199, 120, 100, 80, 70} {
 		t.Run(fmt.Sprintf("%d", width), func(t *testing.T) {
-			columns := planTableColumns(widths, true, width)
+			columns := planTableColumns(widths, width)
 			names := make([]string, len(columns))
 			for index, item := range columns {
 				names[index] = item.name

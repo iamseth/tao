@@ -41,6 +41,12 @@ const (
 	RolePlanNow
 	RolePlanNext
 	RolePlanHistory
+	RolePlanNowBackground
+	RolePlanNextBackground
+	RolePlanHistoryBackground
+	RolePlanHistoryText
+	RolePlanSelectionBackground
+	RolePlanSelectionText
 	RoleSettingsSection
 	RoleDebugSection
 	RoleNeutral0
@@ -113,6 +119,27 @@ func Paint(profile Profile, role Role, text string) string {
 // SelectRow fills a row with the selection background while preserving any
 // foreground sequences already present. Bold brightens foreground glyphs
 // without reverse-video inversion; resets within the row restore both effects.
+func fillRow(profile Profile, background Role, row string) string {
+	if profile == ProfileNone || row == "" {
+		return row
+	}
+	prefix := colorSequence(mustRoleColor(profile, background), true)
+	row = strings.ReplaceAll(row, resetSequence, resetSequence+prefix)
+	return prefix + row + resetSequence
+}
+
+func fillRowWithText(profile Profile, foreground, background Role, bold bool, row string) string {
+	if profile == ProfileNone || row == "" {
+		return row
+	}
+	prefix := colorSequence(mustRoleColor(profile, background), true) + colorSequence(mustRoleColor(profile, foreground), false)
+	if bold {
+		prefix = boldSequence + prefix
+	}
+	row = strings.ReplaceAll(row, resetSequence, resetSequence+prefix)
+	return prefix + row + resetSequence
+}
+
 func SelectRow(profile Profile, row string) string {
 	if profile == ProfileNone || row == "" {
 		return row
@@ -136,6 +163,18 @@ func roleSpecification(role Role) (roleSpec, bool) {
 		return roleSpec{hex: "#7AA2F7", ansi16: 12}, true
 	case RolePlanHistory, RoleSettingsSection, RoleDebugSection:
 		return roleSpec{hex: "#565F89", ansi16: 8}, true
+	case RolePlanNowBackground:
+		return roleSpec{hex: "#1A1B26", ansi16: 0}, true
+	case RolePlanNextBackground:
+		return roleSpec{hex: "#171C2C", ansi16: 0}, true
+	case RolePlanHistoryBackground:
+		return roleSpec{hex: "#161821", ansi16: 0}, true
+	case RolePlanHistoryText:
+		return roleSpec{hex: "#737AA2", ansi16: 8}, true
+	case RolePlanSelectionBackground:
+		return roleSpec{hex: "#283457", ansi16: 4}, true
+	case RolePlanSelectionText:
+		return roleSpec{hex: "#C0CAF5", ansi16: 15}, true
 	case RoleRepo:
 		return roleSpec{hex: "#afa9ec", ansi16: 13}, true
 	case RoleRepoSelected:
