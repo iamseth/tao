@@ -109,9 +109,10 @@ func Render(model Model) string {
 	case PagePlans:
 		attentionCount := 0
 		for _, section := range sections {
-			if section.Kind == SectionAttention {
-				attentionCount = len(section.Rows)
-				break
+			for _, row := range section.Rows {
+				if row.Kind == monitor.RowKindRepositoryWarning || row.Status == plan.StatusInvalid || len(row.AttentionReasons) > 0 {
+					attentionCount++
+				}
 			}
 		}
 		summary = &frameSummary{primary: planCountLabel(visibleCount), attentionCount: attentionCount, extra: searchSummary}
@@ -181,7 +182,7 @@ func Render(model Model) string {
 			if len(section.Rows) == 0 {
 				continue
 			}
-			withAttention := section.Kind == SectionAttention
+			withAttention := section.Kind == SectionNow
 			sectionWidth := dashboardSectionWidth(model, PagePlans, section.Title, 0)
 			columns := planTableColumns(widths, withAttention, model.Width)
 			paneWidth := planTablePaneWidth(model.Width, columns)
@@ -509,14 +510,12 @@ func renderHeader(columns []column, paneWidth int) string {
 
 func planSectionRole(kind SectionKind) Role {
 	switch kind {
-	case SectionAttention:
-		return RoleWarn
-	case SectionReadyToMerge:
-		return RoleSuccess
-	case SectionPlanned:
-		return RoleInfo
+	case SectionNow:
+		return RolePlanNow
+	case SectionNext:
+		return RolePlanNext
 	case SectionHistory:
-		return RoleNeutral5
+		return RolePlanHistory
 	default:
 		return RoleNeutral5
 	}

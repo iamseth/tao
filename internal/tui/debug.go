@@ -47,7 +47,7 @@ type DebugRuntimeDefault struct {
 
 func renderDebugPage(model Model) []string {
 	var lines []string
-	lines = append(lines, "", debugSectionRule(model, RoleAccent, "UI"))
+	lines = append(lines, "", debugSectionRule(model, "UI"))
 	appendDebugValue(&lines, "viewport", fmt.Sprintf("%dx%d", model.Width, model.Height))
 	appendDebugValue(&lines, "color", model.Profile.String())
 	appendDebugValue(&lines, "repository focus", debugFocusLabel(model))
@@ -60,21 +60,13 @@ func renderDebugPage(model Model) []string {
 	lines = appendDebugTime(lines, "diagnostics collected", model.DebugSnapshot.CollectedAt)
 
 	if len(model.DebugSnapshot.System) > 0 {
-		lines = append(lines, "", debugSectionRule(model, RoleNeutral5, "SYSTEM"))
+		lines = append(lines, "", debugSectionRule(model, "SYSTEM"))
 		for _, value := range model.DebugSnapshot.System {
 			appendDebugValue(&lines, value.Label, value.Value)
 		}
 	}
 
-	doctorProblemCount := len(model.DebugSnapshot.DoctorProblems)
-	if model.DebugSnapshot.CollectionError != "" {
-		doctorProblemCount++
-	}
-	doctorRole := RoleSuccess
-	if doctorProblemCount > 0 {
-		doctorRole = RoleWarn
-	}
-	lines = append(lines, "", debugSectionRule(model, doctorRole, "DOCTOR"))
+	lines = append(lines, "", debugSectionRule(model, "DOCTOR"))
 	appendDebugValue(&lines, "selected agent", displayValue(singleLineDetail(model.DebugSnapshot.SelectedAgent)))
 	agents := strings.Join(model.DebugSnapshot.InstalledAgents, ", ")
 	appendDebugValue(&lines, "installed agents", displayValue(singleLineDetail(agents)))
@@ -116,7 +108,7 @@ func renderDebugPage(model Model) []string {
 			{name: "SOURCE", width: sourceWidth},
 		}
 		sectionWidth := dashboardSectionWidth(model, PageDebug, "RUNTIME ANOMALIES", columnsWidth(columns))
-		lines = append(lines, "", dashboardSectionRuleColumns(model.Profile, RoleWarn, "RUNTIME ANOMALIES", columns, sectionWidth))
+		lines = append(lines, "", dashboardSectionRuleColumns(model.Profile, RoleDebugSection, "RUNTIME ANOMALIES", columns, sectionWidth))
 		for _, anomaly := range anomalies {
 			cells := []string{
 				singleLineDetail(anomaly.row.Name),
@@ -133,7 +125,7 @@ func renderDebugPage(model Model) []string {
 
 	warnings := debugCollectorWarnings(model.Snapshot, model.NoteSnapshot)
 	if len(warnings) > 0 {
-		lines = append(lines, "", debugSectionRule(model, RoleWarn, "COLLECTOR WARNINGS"))
+		lines = append(lines, "", debugSectionRule(model, "COLLECTOR WARNINGS"))
 		for _, warning := range warnings {
 			lines = append(lines, "  ⚠ "+warning)
 		}
@@ -167,9 +159,9 @@ func debugRuntimeAnomalies(rows []DebugRuntimeDefault, globalRows []SettingsRunt
 	return anomalies
 }
 
-func debugSectionRule(model Model, role Role, title string) string {
+func debugSectionRule(model Model, title string) string {
 	width := dashboardSectionWidth(model, PageDebug, title, 0)
-	return sectionTitleRule(model.Profile, role, title, width)
+	return sectionTitleRule(model.Profile, RoleDebugSection, title, width)
 }
 
 func appendDebugValue(lines *[]string, label, value string) {

@@ -7,13 +7,13 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 )
 
-// orderPlannedRows applies advisory business ordering only to ordinary planned
+// orderNextRows applies advisory business ordering only to ordinary planned
 // rows. Other rows retain both their positions and relative order.
-func orderPlannedRows(rows []monitor.Row) {
+func orderNextRows(rows []monitor.Row) {
 	var positions []int
 	var planned []monitor.Row
 	for index, row := range rows {
-		if row.Kind != monitor.RowKindRepositoryWarning && row.Status == plan.StatusPlanned && sectionKind(row) == SectionPlanned {
+		if row.Kind != monitor.RowKindRepositoryWarning && row.Status == plan.StatusPlanned && sectionKind(row) == SectionNext {
 			positions = append(positions, index)
 			planned = append(planned, row)
 		}

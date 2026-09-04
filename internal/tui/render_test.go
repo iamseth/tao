@@ -22,7 +22,7 @@ func TestRenderGoldenColorModes(t *testing.T) {
 	plain := Render(Model{Snapshot: snapshot})
 	for _, want := range []string{
 		"tao │ notes ▸plans  settings  debug", "all repos", "agent -", "1 plan",
-		"PLANNED", "REPO  NEXT   PLAN", "  repo   RUN   plan",
+		"NEXT", "REPO  NEXT   PLAN", "  repo   RUN   plan",
 	} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("plain frame missing %q:\n%s", want, plain)
@@ -39,6 +39,18 @@ func TestRenderGoldenColorModes(t *testing.T) {
 	} {
 		if !strings.Contains(colored, want) {
 			t.Fatalf("colored frame missing %q:\n%q", want, colored)
+		}
+	}
+}
+
+func TestPlanSectionsUseDedicatedColors(t *testing.T) {
+	for kind, want := range map[SectionKind]Role{
+		SectionNow:     RolePlanNow,
+		SectionNext:    RolePlanNext,
+		SectionHistory: RolePlanHistory,
+	} {
+		if got := planSectionRole(kind); got != want {
+			t.Errorf("planSectionRole(%q) = %d, want %d", kind, got, want)
 		}
 	}
 }
@@ -80,7 +92,7 @@ func TestRenderSectionsAndOperationalLabels(t *testing.T) {
 	}}
 
 	got := Render(Model{Snapshot: snapshot, Selected: 2})
-	ordered := []string{"NEEDS ATTENTION", "READY TO MERGE", "PLANNED", "HISTORY"}
+	ordered := []string{"NOW", "NEXT", "HISTORY"}
 	previous := -1
 	for _, label := range ordered {
 		index := strings.Index(got, label)
@@ -645,7 +657,7 @@ func TestRenderAbandonmentAsSafeHistoricalOutcome(t *testing.T) {
 	}
 	bodyLines := renderedLines(got)
 	bodyWithoutFooter := strings.Join(bodyLines[:len(bodyLines)-1], "\n")
-	for _, forbidden := range []string{"NEEDS ATTENTION", "RUNNING\n", "FINALIZE PR", "Abandoned at:", "Abandonment reason:", "1h", "merge", "\x1b[31m"} {
+	for _, forbidden := range []string{"NOW", "FINALIZE PR", "Abandoned at:", "Abandonment reason:", "1h", "merge", "\x1b[31m"} {
 		if strings.Contains(bodyWithoutFooter, forbidden) {
 			t.Fatalf("abandonment render retained %q:\n%s", forbidden, got)
 		}
@@ -691,7 +703,7 @@ func TestRenderPlanTruncationCountsOnlyHiddenPlanRows(t *testing.T) {
 		liveness := monitor.LivenessMissing
 		nextAction := ""
 		if index%7 == 0 {
-			status = plan.StatusCompleted
+			status = plan.StatusReviewed
 			nextAction = "MERGE"
 		} else if index%5 == 0 {
 			status = plan.StatusInProgress
@@ -707,7 +719,7 @@ func TestRenderPlanTruncationCountsOnlyHiddenPlanRows(t *testing.T) {
 	}
 
 	got := Render(Model{Snapshot: monitor.Snapshot{Rows: rows}, Width: 70, Height: 20})
-	if !strings.Contains(got, "READY TO MERGE") || !strings.Contains(got, "PLANNED") {
+	if !strings.Contains(got, "NOW") || !strings.Contains(got, "NEXT") {
 		t.Fatalf("constrained frame did not span plan sections:\n%s", got)
 	}
 	if visible := strings.Count(got, "\n  repo "); visible != 13 {
@@ -732,7 +744,7 @@ func TestRenderSelectedLastPlanKeepsSectionSkeleton(t *testing.T) {
 	}
 
 	got := Render(Model{Snapshot: monitor.Snapshot{Rows: rows}, Selected: 29, Width: 70, Height: 20})
-	for _, want := range []string{"PLANNED", "REPO", "  repo   RUN     plan-29"} {
+	for _, want := range []string{"NEXT", "REPO", "  repo   RUN     plan-29"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("selected-last viewport missing %q:\n%s", want, got)
 		}

@@ -128,7 +128,9 @@ The dashboard opens on **Plans**. Use `Tab` or the horizontal arrows to move
 among **Plans**, **Notes**, **Settings**, and **Debug**; use `j`/`k` or the
 vertical arrows to select rows. `Enter` opens details, `Esc` returns, and `f`
 toggles repository focus on Plans and Notes. Completed and abandoned plans are
-hidden initially; press `h` to toggle up to 15 plans in this history. On Plans, the
+hidden initially; press `h` to toggle up to 15 plans in **History**. **Now**
+contains in-progress, blocked, reviewed, and other plans with an immediate action
+such as monitor, approve, or merge. **Next** contains planned work. On Plans, the
 principal actions are run (`r`), approve (`a`), merge one (`m`), and merge the
 repository's approved set (`M`); confirmations and the underlying commands still
 enforce every normal gate. Settings can change a repository's pull-request

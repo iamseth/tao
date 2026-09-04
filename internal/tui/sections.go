@@ -13,13 +13,9 @@ type SectionKind string
 const (
 	maxHistoryPlans = 15
 
-	SectionAttention    SectionKind = "attention"
-	SectionReadyToMerge SectionKind = "ready_to_merge"
-	SectionPlanned      SectionKind = "planned"
-	SectionHistory      SectionKind = "history"
-	SectionRunning      SectionKind = "running"
-	SectionCompleted    SectionKind = "completed"
-	SectionAbandoned    SectionKind = "abandoned"
+	SectionNow     SectionKind = "now"
+	SectionNext    SectionKind = "next"
+	SectionHistory SectionKind = "history"
 )
 
 // Section is one stable partition of monitor rows. Rows retain the collector's
@@ -39,9 +35,8 @@ func BuildSections(rows []monitor.Row, showHistory bool) []Section {
 // repository. Filtering never mutates or reorders the collector snapshot.
 func BuildRepositorySections(rows []monitor.Row, showHistory bool, repositoryID string) []Section {
 	sections := []Section{
-		{Kind: SectionAttention, Title: "NEEDS ATTENTION"},
-		{Kind: SectionReadyToMerge, Title: "READY TO MERGE"},
-		{Kind: SectionPlanned, Title: "PLANNED"},
+		{Kind: SectionNow, Title: "NOW"},
+		{Kind: SectionNext, Title: "NEXT"},
 		{Kind: SectionHistory, Title: "HISTORY"},
 	}
 	for _, row := range rows {
@@ -51,8 +46,7 @@ func BuildRepositorySections(rows []monitor.Row, showHistory bool, repositoryID 
 		if !showHistory && (row.Status == plan.StatusCompleted || row.Status == plan.StatusAbandoned) {
 			continue
 		}
-		classification := sectionKind(row)
-		kind := nextActionSectionKind(row, classification)
+		kind := sectionKind(row)
 		for index := range sections {
 			if sections[index].Kind == kind {
 				sections[index].Rows = append(sections[index].Rows, row)
@@ -62,8 +56,8 @@ func BuildRepositorySections(rows []monitor.Row, showHistory bool, repositoryID 
 	}
 	for index := range sections {
 		switch sections[index].Kind {
-		case SectionPlanned:
-			orderPlannedRows(sections[index].Rows)
+		case SectionNext:
+			orderNextRows(sections[index].Rows)
 		case SectionHistory:
 			if len(sections[index].Rows) > maxHistoryPlans {
 				sections[index].Rows = sections[index].Rows[:maxHistoryPlans]
@@ -71,22 +65,6 @@ func BuildRepositorySections(rows []monitor.Row, showHistory bool, repositoryID 
 		}
 	}
 	return sections
-}
-
-func nextActionSectionKind(row monitor.Row, classification SectionKind) SectionKind {
-	if classification == SectionAttention {
-		return SectionAttention
-	}
-	switch planNextAction(row) {
-	case "INSPECT":
-		return SectionAttention
-	case "MERGE":
-		return SectionReadyToMerge
-	}
-	if classification == SectionCompleted || classification == SectionAbandoned {
-		return SectionHistory
-	}
-	return SectionPlanned
 }
 
 func planNextAction(row monitor.Row) string {
@@ -97,24 +75,18 @@ func planNextAction(row monitor.Row) string {
 }
 
 func sectionKind(row monitor.Row) SectionKind {
-	if row.Status == plan.StatusAbandoned {
-		return SectionAbandoned
+	if row.Status == plan.StatusCompleted || row.Status == plan.StatusAbandoned {
+		return SectionHistory
 	}
-	// A stale heartbeat is display-only. It identifies a stalled run only while
-	// the collector can still observe a live process through the run lock.
-	if isStalled(row) {
-		return SectionRunning
+	if row.Status == plan.StatusInProgress || row.Status == plan.StatusBlocked || row.Status == plan.StatusReviewed {
+		return SectionNow
 	}
-	if len(row.AttentionReasons) > 0 {
-		return SectionAttention
+	switch planNextAction(row) {
+	case "RUN", "CHECK", "WAIT", "SKIP":
+		return SectionNext
+	default:
+		return SectionNow
 	}
-	if row.Status == plan.StatusCompleted {
-		return SectionCompleted
-	}
-	if row.Liveness == monitor.LivenessLive {
-		return SectionRunning
-	}
-	return SectionPlanned
 }
 
 func isStalled(row monitor.Row) bool {

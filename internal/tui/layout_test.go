@@ -62,11 +62,11 @@ func TestResolveColumnsClampsFlexWidth(t *testing.T) {
 func TestSectionRuleAtFrameWidths(t *testing.T) {
 	for _, width := range []int{199, 120, 100, 80, 70} {
 		t.Run(strconv.Itoa(width), func(t *testing.T) {
-			got := sectionRule(ProfileNone, RoleWarn, "NEEDS ATTENTION", 12, width)
+			got := sectionRule(ProfileNone, RolePlanNow, "NOW", 12, width)
 			if visible := cells.Width(got); visible != width {
 				t.Fatalf("section rule width = %d, want %d: %q", visible, width, got)
 			}
-			if !strings.HasPrefix(got, "▌ NEEDS ATTENTION ") {
+			if !strings.HasPrefix(got, "▌ NOW ") {
 				t.Fatalf("section rule prefix = %q", got)
 			}
 			if !strings.HasSuffix(got, " 12 ─") {

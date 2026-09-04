@@ -38,6 +38,11 @@ const (
 	RoleRepo
 	RoleRepoSelected
 	RoleInfo
+	RolePlanNow
+	RolePlanNext
+	RolePlanHistory
+	RoleSettingsSection
+	RoleDebugSection
 	RoleNeutral0
 	RoleNeutral1
 	RoleNeutral2
@@ -125,6 +130,12 @@ func roleSpecification(role Role) (roleSpec, bool) {
 		return roleSpec{hex: "#efa027", ansi16: 11}, true
 	case RoleSuccess:
 		return roleSpec{hex: "#97c459", ansi16: 10}, true
+	case RolePlanNow:
+		return roleSpec{hex: "#9ECE6A", ansi16: 10}, true
+	case RolePlanNext:
+		return roleSpec{hex: "#7AA2F7", ansi16: 12}, true
+	case RolePlanHistory, RoleSettingsSection, RoleDebugSection:
+		return roleSpec{hex: "#565F89", ansi16: 8}, true
 	case RoleRepo:
 		return roleSpec{hex: "#afa9ec", ansi16: 13}, true
 	case RoleRepoSelected:

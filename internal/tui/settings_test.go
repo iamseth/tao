@@ -40,6 +40,32 @@ func TestRenderSettingsShowsGlobalAndRepositoryDefaults(t *testing.T) {
 	}
 }
 
+func TestSettingsSectionsUseMutedHeadingColor(t *testing.T) {
+	explicit := true
+	model := Model{
+		Page: PageSettings, Width: 120, Height: 60, Profile: ProfileTrueColor,
+		SettingsSnapshot: SettingsSnapshot{
+			InheritedPullRequest: false,
+			RuntimeDefaults: []SettingsRuntimeDefault{
+				{Name: "TAO_AGENT", Value: "pi", Source: "default"},
+				{Name: "TAO_PULL_REQUEST", Value: "true", Source: "env"},
+				{Name: "TAO_BUDGET_PLAN_COST", Value: "20"},
+			},
+			Repositories: []RepositorySetting{{ID: "repo", Name: "repo", Health: "missing_root", PullRequest: &explicit}},
+		},
+	}
+	frame := Render(model)
+	for _, title := range []string{"OVERRIDES", "EXECUTION · all default", "BUDGET WARNINGS", "REPOSITORY DEFAULTS"} {
+		want := Paint(ProfileTrueColor, RoleSettingsSection, "▌ "+title+" ")
+		if !strings.Contains(frame, want) {
+			t.Errorf("settings section %q does not use the settings section color: %q", title, frame)
+		}
+	}
+	if !strings.Contains(frame, Paint(ProfileTrueColor, RoleWarn, "●")) {
+		t.Errorf("settings warning content lost its warning color: %q", frame)
+	}
+}
+
 func TestRenderSettingsDefaultsUsesResponsivePairGrid(t *testing.T) {
 	rows := []SettingsRuntimeDefault{
 		{Name: "TAO_COMMIT_POLICY", Value: "slice", Source: "default"},

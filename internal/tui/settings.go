@@ -77,7 +77,7 @@ func renderSettingsPage(model Model) ([]string, int, tableViewportMetadata) {
 	if len(model.SettingsSnapshot.RuntimeDefaults) == 0 {
 		offset := len(lines)
 		sectionWidth := dashboardSectionWidth(model, PageSettings, "RUNTIME DEFAULTS", 1)
-		lines = append(lines, "", sectionRule(model.Profile, RoleAccent, "RUNTIME DEFAULTS", 0, sectionWidth), "  Runtime defaults unavailable.")
+		lines = append(lines, "", sectionRule(model.Profile, RoleSettingsSection, "RUNTIME DEFAULTS", 0, sectionWidth), "  Runtime defaults unavailable.")
 		metadata.sections = append(metadata.sections, tableViewportSection{headingLines: []int{offset + 1}, contentLines: []int{offset + 2}})
 	} else {
 		defaultLines, defaultSections := renderSettingsDefaultGroups(model)
@@ -116,13 +116,9 @@ func renderSettingsPage(model Model) ([]string, int, tableViewportMetadata) {
 		rootWidth = max(rootWidth, cells.Width(settingsRepositoryRoot(repository.Root, model.SettingsSnapshot.DisplayHome)))
 	}
 	repositoryColumns := settingsRepositoryColumns(nameWidth, healthWidth, pullRequestWidth, rootWidth)
-	repositoryRole := RoleAccent
-	if settingsNeedsAttention(model.SettingsSnapshot) {
-		repositoryRole = RoleWarn
-	}
 	sectionWidth := dashboardSectionWidth(model, PageSettings, "REPOSITORY DEFAULTS", columnsWidth(repositoryColumns))
 	repositoryColumns = fitSettingsSectionColumns("REPOSITORY DEFAULTS", repositoryColumns, sectionWidth)
-	lines = append(lines, "", settingsSectionRuleColumns(model.Profile, repositoryRole, "REPOSITORY DEFAULTS", repositoryColumns, sectionWidth))
+	lines = append(lines, "", settingsSectionRuleColumns(model.Profile, RoleSettingsSection, "REPOSITORY DEFAULTS", repositoryColumns, sectionWidth))
 	repositorySection := tableViewportSection{headingLines: []int{len(lines) - 1}}
 	if model.SettingsSnapshot.CollectionError != "" {
 		repositorySection.contentLines = append(repositorySection.contentLines, len(lines))
@@ -218,7 +214,7 @@ func renderSettingsOverrides(model Model) ([]string, tableViewportSection) {
 	columns := settingsRuntimeColumnsWithSource(nameWidth, valueWidth, sourceWidth)
 	sectionWidth := dashboardSectionWidth(model, PageSettings, "OVERRIDES", columnsWidth(columns))
 	columns = fitSettingsSectionColumns("OVERRIDES", columns, sectionWidth)
-	lines := []string{"", settingsSectionRuleColumns(model.Profile, RoleAccent, "OVERRIDES", columns, sectionWidth)}
+	lines := []string{"", settingsSectionRuleColumns(model.Profile, RoleSettingsSection, "OVERRIDES", columns, sectionWidth)}
 	section := tableViewportSection{headingLines: []int{1}}
 	for _, row := range overrides {
 		section.contentLines = append(section.contentLines, len(lines))
@@ -338,7 +334,7 @@ func renderSettingsBudgets(model Model) ([]string, tableViewportSection) {
 	if len(columns) > 2 {
 		planWidth = columns[2].width
 	}
-	lines := []string{"", settingsSectionRuleColumns(model.Profile, RoleAccent, "BUDGET WARNINGS", columns, sectionWidth)}
+	lines := []string{"", settingsSectionRuleColumns(model.Profile, RoleSettingsSection, "BUDGET WARNINGS", columns, sectionWidth)}
 	section := tableViewportSection{headingLines: []int{1}}
 	for _, metric := range metrics {
 		sliceRow, sliceOK := byName[metric.sliceName]
@@ -397,9 +393,9 @@ func settingsDefaultGroupRule(profile Profile, title string, width int) string {
 	}
 	lead := "▌ " + title + " "
 	if cells.Width(lead) >= width {
-		return cells.Truncate(Paint(profile, RoleAccent, lead), width)
+		return cells.Truncate(Paint(profile, RoleSettingsSection, lead), width)
 	}
-	return Paint(profile, RoleAccent, lead) + Paint(profile, RoleNeutral0, strings.Repeat("─", width-cells.Width(lead)))
+	return Paint(profile, RoleSettingsSection, lead) + Paint(profile, RoleNeutral0, strings.Repeat("─", width-cells.Width(lead)))
 }
 
 func settingsDefaultGroups(rows []SettingsRuntimeDefault) []settingsDefaultGroup {
@@ -555,19 +551,6 @@ func settingsSectionRuleGap(profile Profile, width int, beforeHeader bool) strin
 		return strings.Repeat(" ", width)
 	}
 	return Paint(profile, RoleNeutral0, " "+strings.Repeat("─", width-1))
-}
-
-func settingsNeedsAttention(snapshot SettingsSnapshot) bool {
-	if snapshot.CollectionError != "" {
-		return true
-	}
-	for _, repository := range snapshot.Repositories {
-		health := strings.TrimSpace(repository.Health)
-		if health != "" && health != "ok" {
-			return true
-		}
-	}
-	return false
 }
 
 func settingsRepositoryName(repository RepositorySetting) string {

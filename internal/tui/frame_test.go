@@ -197,7 +197,7 @@ func TestRenderStressPlanRowsKeepCompleteResponsiveColumns(t *testing.T) {
 		}
 	}
 
-	widths := measureTable([]Section{{Kind: SectionAttention, Rows: []monitor.Row{row}}}, now, nil)
+	widths := measureTable([]Section{{Kind: SectionNow, Rows: []monitor.Row{row}}}, now, nil)
 	for _, width := range []int{199, 120, 100, 80, 70} {
 		t.Run(fmt.Sprintf("%d", width), func(t *testing.T) {
 			columns := planTableColumns(widths, true, width)
@@ -263,10 +263,10 @@ func TestDashboardPagesRenderSharedSectionRules(t *testing.T) {
 		role Role
 		want []string
 	}{
-		{page: PagePlans, role: RoleInfo, want: []string{"▌ PLANNED ", "REPO", "NEXT", "PLAN", "SLICES", "AGE"}},
+		{page: PagePlans, role: RolePlanNext, want: []string{"▌ NEXT ", "REPO", "NEXT", "PLAN", "SLICES", "AGE"}},
 		{page: PageNotes, role: RoleAccent, want: []string{"▌ OLDER ", "REPO", "PREVIEW", "TAG", "AGE"}},
-		{page: PageSettings, role: RoleAccent, want: []string{"▌ EXECUTION · all default ", "Agent", "▌ REPOSITORY DEFAULTS ", "PR", "ROOT"}},
-		{page: PageDebug, role: RoleAccent, want: []string{"▌ UI ", "▌ DOCTOR "}},
+		{page: PageSettings, role: RoleSettingsSection, want: []string{"▌ EXECUTION · all default ", "Agent", "▌ REPOSITORY DEFAULTS ", "PR", "ROOT"}},
+		{page: PageDebug, role: RoleDebugSection, want: []string{"▌ UI ", "▌ DOCTOR "}},
 	}
 	for _, test := range tests {
 		t.Run(string(test.page), func(t *testing.T) {

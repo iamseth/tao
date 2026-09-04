@@ -60,6 +60,15 @@ func TestRenderDebugShowsRuntimeDoctorAndUIInformation(t *testing.T) {
 	if strings.Contains(frame, "Repositories: all") || strings.Contains(frame, "open notes |") {
 		t.Fatalf("debug frame retained table-page header metadata:\n%s", frame)
 	}
+
+	model.Profile = ProfileTrueColor
+	styled := Render(model)
+	for _, title := range []string{"UI", "SYSTEM", "DOCTOR", "RUNTIME ANOMALIES", "COLLECTOR WARNINGS"} {
+		want := Paint(ProfileTrueColor, RoleDebugSection, "▌ "+title+" ")
+		if !strings.Contains(styled, want) {
+			t.Errorf("debug section %q does not use the debug section color: %q", title, styled)
+		}
+	}
 }
 
 func TestRenderDebugRuntimeAnomalies(t *testing.T) {
