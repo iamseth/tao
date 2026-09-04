@@ -757,7 +757,7 @@ func TestPlanDetailLocalNavigationBoundsEachTab(t *testing.T) {
 func TestPlanDetailOverviewPromotesInspectionFindingsAndKeepsBottomReachable(t *testing.T) {
 	detail := &plan.PlanDetail{State: plan.State{Status: plan.StatusPlanned, Plan: plan.PlanState{ID: "plan-a"}}}
 	inspection := detailInspectionView{status: detailInspectionReady, findings: []DetailFinding{
-		{Severity: "warning", Message: strings.Repeat("first wrapped finding ", 5)},
+		{Severity: "info", Message: "info: " + strings.Repeat("first wrapped finding ", 5)},
 		{Severity: "warning", Message: strings.Repeat("second wrapped finding ", 5)},
 		{Severity: "warning", Message: "last-finding"},
 	}}
@@ -767,11 +767,14 @@ func TestPlanDetailOverviewPromotesInspectionFindingsAndKeepsBottomReachable(t *
 	}
 
 	all := strings.Join(renderOverviewPane(detail, monitor.Row{}, 32, 1_000, 0, inspection, ProfileNone, false), "\n")
-	if !strings.Contains(all, "! ATTENTION\n  • warning: first wrapped") || !strings.Contains(all, "last-finding") || strings.Index(all, "! ATTENTION") > strings.Index(all, "CONTEXT") {
+	if !strings.Contains(all, "! ATTENTION\n  • first wrapped") || !strings.Contains(all, "last-finding") || strings.Index(all, "! ATTENTION") > strings.Index(all, "CONTEXT") {
 		t.Fatalf("inspection findings were not rendered as a compact warning block above Context:\n%s", all)
 	}
 	if strings.Contains(all, "\n\n! ATTENTION") {
 		t.Fatalf("attention block was separated from summary metadata:\n%s", all)
+	}
+	if strings.Contains(all, "warning:") || strings.Contains(all, "info:") {
+		t.Fatalf("attention findings retained redundant severity prefixes:\n%s", all)
 	}
 	for _, redundant := range []string{"PROGRESS", "SEQUENCE", "DISPOSITION"} {
 		if strings.Contains(all, redundant) {

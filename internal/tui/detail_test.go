@@ -354,6 +354,11 @@ func TestRenderOverviewUsesScannableSectionsChecklistPriorityGridAndExpandableSc
 			t.Fatalf("scannable overview missing %q:\n%s", want, collapsed)
 		}
 	}
+	for _, row := range []string{"Impact high    Urgency medium     Risk low", "Effort small   Confidence high"} {
+		if !strings.Contains(collapsed, row) {
+			t.Fatalf("priority grid row is not compact and aligned: want %q:\n%s", row, collapsed)
+		}
+	}
 	for _, redundant := range []string{"SEQUENCE", "DISPOSITION", "The plan is actionable."} {
 		if strings.Contains(collapsed, redundant) {
 			t.Fatalf("overview retained redundant %q detail:\n%s", redundant, collapsed)
@@ -367,6 +372,20 @@ func TestRenderOverviewUsesScannableSectionsChecklistPriorityGridAndExpandableSc
 	for _, want := range []string{"internal/seven.go", "internal/eight.go", "press e to collapse"} {
 		if !strings.Contains(expanded, want) {
 			t.Fatalf("expanded overview missing %q:\n%s", want, expanded)
+		}
+	}
+}
+
+func TestAppendOverviewChecklistItemUsesHangingIndent(t *testing.T) {
+	var lines []string
+	appendOverviewChecklistItem(&lines, "A long success criterion wraps beneath its text instead of its checkbox", 28, ProfileNone, RoleDetailSecondary)
+	if len(lines) < 2 {
+		t.Fatalf("checklist item did not wrap: %q", lines)
+	}
+	continuation := strings.Repeat(" ", cells.Width("  ☐ "))
+	for _, line := range lines[1:] {
+		if !strings.HasPrefix(line, continuation) || strings.HasPrefix(strings.TrimLeft(line, " "), "☐") {
+			t.Fatalf("checklist continuation does not use a hanging indent: %q", lines)
 		}
 	}
 }

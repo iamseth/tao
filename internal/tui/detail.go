@@ -379,10 +379,10 @@ func renderOverviewPane(detail *plan.PlanDetail, row monitor.Row, width, height,
 
 	lines = append(lines, "", detailSectionHeading("SUCCESS CRITERIA", width, profile))
 	if len(overview.SuccessCriteria) == 0 {
-		appendOverviewBullet(&lines, "-", width, profile, RoleDetailMuted, "☐")
+		appendOverviewChecklistItem(&lines, "-", width, profile, RoleDetailMuted)
 	} else {
 		for _, criterion := range overview.SuccessCriteria {
-			appendOverviewBullet(&lines, criterion, width, profile, RoleDetailSecondary, "☐")
+			appendOverviewChecklistItem(&lines, criterion, width, profile, RoleDetailSecondary)
 		}
 	}
 
@@ -493,8 +493,8 @@ func renderDetailMetadata(fields []detailGridField, width int, profile Profile) 
 }
 
 func appendOverviewLabeledText(lines *[]string, label, value string, width int, profile Profile) {
-	*lines = append(*lines, Paint(profile, RoleDetailMuted, label))
-	appendOverviewText(lines, overviewDisplay(value), width, profile, RoleDetailSecondary, "  ")
+	*lines = append(*lines, Paint(profile, RoleDetailSecondary, label))
+	appendOverviewText(lines, overviewDisplay(value), width, profile, RoleDetailMuted, "  ")
 }
 
 func renderPriorityGrid(priority *plan.Priority, width int, profile Profile) []string {
@@ -509,19 +509,24 @@ func renderPriorityGrid(priority *plan.Priority, width int, profile Profile) []s
 			{label: "Confidence", value: string(priority.Confidence), role: detailPriorityRole(string(priority.Confidence))},
 		},
 	}
+	columnWidths := []int{13, 17}
 	const gutter = 2
-	columnWidths := []int{15, 19}
-	thirdWidth := cells.Width(rows[0][2].label + " " + overviewDisplay(rows[0][2].value))
+	thirdWidth := cells.Width(rows[0][2].label) + 1 + cells.Width(overviewDisplay(rows[0][2].value))
 	requiredWidth := columnWidths[0] + gutter + columnWidths[1] + gutter + thirdWidth
 	if width > 0 && requiredWidth > width {
-		return renderDetailGrid(append(rows[0], rows[1]...), width, 3, profile)
+		fields := append(append([]detailGridField(nil), rows[0]...), rows[1]...)
+		lines := make([]string, 0, len(fields))
+		for _, field := range fields {
+			line := Paint(profile, RoleDetailMuted, cells.Pad(field.label, 10)) + " " + Paint(profile, field.role, overviewDisplay(field.value))
+			lines = append(lines, cells.TruncateEllipsis(line, width))
+		}
+		return lines
 	}
 	lines := make([]string, 0, len(rows))
 	for _, fields := range rows {
 		var line strings.Builder
 		for column, field := range fields {
-			value := overviewDisplay(field.value)
-			cell := Paint(profile, RoleDetailMuted, field.label) + " " + Paint(profile, field.role, value)
+			cell := Paint(profile, RoleDetailMuted, field.label) + " " + Paint(profile, field.role, overviewDisplay(field.value))
 			if column < len(fields)-1 {
 				cell = cells.Pad(cell, columnWidths[column]) + strings.Repeat(" ", gutter)
 			}
@@ -569,6 +574,23 @@ func appendOverviewBullet(lines *[]string, value string, width int, profile Prof
 	}
 }
 
+func appendOverviewChecklistItem(lines *[]string, value string, width int, profile Profile, role Role) {
+	value = singleLineDetail(value)
+	if value == "" {
+		return
+	}
+	prefix := "  ☐ "
+	continuation := strings.Repeat(" ", cells.Width(prefix))
+	wrapped := wrapDetailWords(value, detailContentWidth(width, cells.Width(prefix)))
+	for index, line := range wrapped {
+		if index == 0 {
+			*lines = append(*lines, Paint(profile, RoleDetailMuted, prefix)+Paint(profile, role, line))
+		} else {
+			*lines = append(*lines, continuation+Paint(profile, role, line))
+		}
+	}
+}
+
 func detailContentWidth(width, prefix int) int {
 	if width <= 0 {
 		return 0
@@ -583,43 +605,6 @@ func detailSectionHeading(title string, width int, profile Profile) string {
 	}
 	dividerWidth := max(min(width-cells.Width(plainTitle)-1, 20), 1)
 	return Paint(profile, RoleDetailSecondary, plainTitle) + " " + Paint(profile, RoleDetailDivider, strings.Repeat("─", dividerWidth))
-}
-
-func renderDetailGrid(fields []detailGridField, width, maxColumns int, profile Profile) []string {
-	if len(fields) == 0 {
-		return nil
-	}
-	available := width
-	if available <= 0 {
-		available = 96
-	}
-	columns := min(maxColumns, len(fields))
-	const gutter = 3
-	for columns > 1 && (available-gutter*(columns-1))/columns < 18 {
-		columns--
-	}
-	columnWidth := max((available-gutter*(columns-1))/columns, 1)
-	rows := make([]string, 0, (len(fields)+columns-1)/columns)
-	for start := 0; start < len(fields); start += columns {
-		var row strings.Builder
-		for column := 0; column < columns && start+column < len(fields); column++ {
-			field := fields[start+column]
-			plain := field.label + "  " + overviewDisplay(field.value)
-			plain = cells.TruncateEllipsis(plain, columnWidth)
-			labelWidth := min(cells.Width(field.label), cells.Width(plain))
-			value := strings.TrimSpace(cells.Truncate(plain, columnWidth)[labelWidth:])
-			cell := Paint(profile, RoleDetailMuted, cells.Truncate(field.label, labelWidth))
-			if value != "" {
-				cell += "  " + Paint(profile, field.role, value)
-			}
-			if column+1 < columns && start+column+1 < len(fields) {
-				cell = cells.Pad(cell, columnWidth) + strings.Repeat(" ", gutter)
-			}
-			row.WriteString(cell)
-		}
-		rows = append(rows, row.String())
-	}
-	return rows
 }
 
 func detailStateRole(value string) Role {
@@ -726,7 +711,7 @@ func detailAttentionLines(detail *plan.PlanDetail, row monitor.Row, inspection d
 			items = append(items, struct {
 				text string
 				role Role
-			}{text: overviewDisplay(finding.Severity) + ": " + overviewDisplay(finding.Message), role: role})
+			}{text: overviewDisplay(finding.Message), role: role})
 		}
 	case detailInspectionFailed:
 		items = append(items, struct {
@@ -737,7 +722,7 @@ func detailAttentionLines(detail *plan.PlanDetail, row monitor.Row, inspection d
 	var lines []string
 	seen := make(map[string]struct{})
 	for _, item := range items {
-		item.text = singleLineDetail(item.text)
+		item.text = conciseAttentionText(item.text)
 		if item.text == "" {
 			continue
 		}
@@ -748,6 +733,17 @@ func detailAttentionLines(detail *plan.PlanDetail, row monitor.Row, inspection d
 		appendOverviewBullet(&lines, item.text, width, profile, item.role, "•")
 	}
 	return lines
+}
+
+func conciseAttentionText(value string) string {
+	value = singleLineDetail(value)
+	lower := strings.ToLower(value)
+	for _, prefix := range []string{"info:", "warning:", "error:"} {
+		if strings.HasPrefix(lower, prefix) {
+			return strings.TrimSpace(value[len(prefix):])
+		}
+	}
+	return value
 }
 
 func boundedOverviewValues(values []string, limit int) []string {
