@@ -156,8 +156,52 @@ func deriveNextAction(detail *PlanDetail, derived DerivedPlan) PlanNextAction {
 	if detail.State.Workspace != nil && detail.State.Workspace.RebaseIntent != nil {
 		return primary(PlanActionRecoverRebase, PlanActionClassRecovery, command("tao run"), "an interrupted workspace rebase must be settled before other work")
 	}
-	if detail.State.Plan.MergeCommitIntent.IsActive() {
-		return primary(PlanActionRecoverMerge, PlanActionClassRecovery, command("tao merge"), "an interrupted merge transaction must be settled before other work")
+	if intent := detail.State.Plan.MergeCommitIntent; intent.IsActive() {
+		recovery := detail.SingleMergeIntentRecovery
+		if recovery == nil {
+			// Without a live repository observation, fail closed from the durable
+			// phase instead of recommending an ordinary merge that may already be
+			// known to refuse. Show and monitor enrich this projection when Git is
+			// inspectable.
+			recovery = &SingleMergeIntentRecovery{Verdict: SingleMergeRecoveryManualOnly, Reason: "the live post-provider merge state has not been inspected"}
+			if intent.Resolution != nil {
+				recovery.Phase = string(intent.Resolution.Phase)
+				switch intent.Resolution.Phase {
+				case SingleMergeResolutionPhaseResolved, SingleMergeResolutionPhaseCommitted, SingleMergeResolutionPhaseReviewed:
+					recovery.Verdict = SingleMergeRecoverySettleExisting
+					recovery.Reason = "durable conflict-resolution authority must be settled"
+				}
+			}
+		}
+		switch recovery.Verdict {
+		case SingleMergeRecoveryRestartable:
+			return primary(PlanActionRestartMerge, PlanActionClassRecovery, command("tao merge --restart"), recovery.Reason)
+		case SingleMergeRecoveryRebaseAndReviewRequired:
+			return PlanNextAction{Primary: PlanAction{
+				Kind: PlanActionRecoverMerge, Class: PlanActionClassRecovery,
+				Instruction: "Manually rebase the plan branch onto " + intent.DefaultBranch + ", then run " + command("tao review --run"),
+				Reason:      recovery.Reason,
+			}, Alternatives: []PlanAction{}}
+		case SingleMergeRecoverySettleExisting:
+			return primary(PlanActionRecoverMerge, PlanActionClassRecovery, command("tao merge"), recovery.Reason)
+		default:
+			return PlanNextAction{Primary: PlanAction{
+				Kind: PlanActionRecoverMerge, Class: PlanActionClassRecovery,
+				Instruction: "Inspect the integration worktree and durable merge intent before choosing a recovery action",
+				Reason:      recovery.Reason,
+			}, Alternatives: []PlanAction{}}
+		}
+	}
+	if restarted := latestSingleMergeRestartEvent(detail.Events); restarted != nil && !PlanIsMerged(detail.Events) && (detail.SingleMergeIntentRecovery == nil || detail.SingleMergeIntentRecovery.Verdict != SingleMergeRecoverySatisfied) {
+		reason := "the stale merge intent was restarted and its rebase-and-review recovery boundary is still pending"
+		if recovery := detail.SingleMergeIntentRecovery; recovery != nil && strings.TrimSpace(recovery.Reason) != "" {
+			reason = recovery.Reason
+		}
+		return PlanNextAction{Primary: PlanAction{
+			Kind: PlanActionRebaseAndReview, Class: PlanActionClassRecovery,
+			Instruction: "Manually rebase the plan branch " + restarted.Branch + " onto " + restarted.BaselineBranch + ", then run " + command("tao review --run"),
+			Reason:      reason,
+		}, Alternatives: []PlanAction{}}
 	}
 	if recovery := derived.FinalizationRecovery; recovery != nil {
 		category := strings.ReplaceAll(recovery.Category, "_", " ")
@@ -760,6 +804,17 @@ func anyPlanMergedEvent(events []Event) bool {
 		}
 	}
 	return false
+}
+
+func latestSingleMergeRestartEvent(events []Event) *Event {
+	var latest *Event
+	for i := range events {
+		event := &events[i]
+		if event.Type == EventTypeSingleMergeIntentRestarted && (latest == nil || event.Timestamp.After(latest.Timestamp)) {
+			latest = event
+		}
+	}
+	return latest
 }
 
 // CurrentReview returns the persisted review only when it still describes the

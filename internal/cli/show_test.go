@@ -5,12 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	mergepkg "github.com/iamseth/tao/internal/merge"
+	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/tui"
 	planview "github.com/iamseth/tao/internal/view"
 )
 
@@ -497,6 +502,117 @@ func TestShowProjectsFailedProposalCorrectionForLegacyEmptyReviewBase(t *testing
 	}
 	if payload.Finalization == nil || payload.Finalization.RecoveryAction != "rerun_review" || payload.NextAction.Primary.Command != "tao review --run plan-a" {
 		t.Fatalf("legacy proposal recovery JSON = finalization %+v next %+v", payload.Finalization, payload.NextAction.Primary)
+	}
+}
+
+func TestShowUsesLiveGitToResumeExactBoundaryAndRestartStaleIntent(t *testing.T) {
+	root := t.TempDir()
+	runCLICommitGit(t, root, "init", "-b", "main")
+	runCLICommitGit(t, root, "config", "user.name", "Tao Test")
+	runCLICommitGit(t, root, "config", "user.email", "tao@example.invalid")
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("initial\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runCLICommitGit(t, root, "add", "README.md")
+	runCLICommitGit(t, root, "commit", "-m", "initial")
+	parent := strings.TrimSpace(runCLICommitGit(t, root, "rev-parse", "HEAD"))
+	runCLICommitGit(t, root, "branch", "tao/plan-a", parent)
+
+	detail := &plan.PlanDetail{State: plan.State{
+		Status: plan.StatusReviewed,
+		Repo:   plan.Repo{Name: "repo", Root: root, Branch: "main", BaseCommit: parent},
+		Plan: plan.PlanState{ID: "plan-a", Title: "Plan A", MergeCommitIntent: &plan.SingleMergeCommitIntent{
+			Message: "feat(merge): apply plan", PlanID: "plan-a", SourceHead: parent,
+			DefaultBranch: "main", DefaultParent: parent, CreatedAt: time.Now().UTC(),
+		}},
+		Workspace: &plan.Workspace{Strategy: plan.WorkspaceStrategyCurrent, Root: root, Path: root, Branch: "tao/plan-a", BaseBranch: "main"},
+	}}
+	repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
+	render := func() string {
+		t.Helper()
+		var out bytes.Buffer
+		if err := (App{Out: &out, Err: &out}).show(context.Background(), repo, []string{"plan-a"}); err != nil {
+			t.Fatal(err)
+		}
+		return stripANSI(out.String())
+	}
+
+	exact := render()
+	if !strings.Contains(exact, "Next: tao merge plan-a") || !strings.Contains(exact, "recorded source and default boundary") || strings.Contains(exact, "tao merge --restart plan-a") {
+		t.Fatalf("exact-boundary show recommendation is not resumable settlement:\n%s", exact)
+	}
+
+	if err := os.WriteFile(filepath.Join(root, "default.txt"), []byte("advanced\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runCLICommitGit(t, root, "add", "default.txt")
+	runCLICommitGit(t, root, "commit", "-m", "advance default")
+	stale := render()
+	if !strings.Contains(stale, "Next: tao merge --restart plan-a") || !strings.Contains(stale, "default branch advanced cleanly") {
+		t.Fatalf("stale show recommendation is not restart:\n%s", stale)
+	}
+
+	restartedAt := time.Now().UTC()
+	detail.State.Plan.MergeCommitIntent = nil
+	detail.Events = append(detail.Events, plan.Event{
+		Type: plan.EventTypeSingleMergeIntentRestarted, Timestamp: restartedAt, PlanID: "plan-a",
+		Branch: "tao/plan-a", PriorHead: parent, BaselineBranch: "main",
+		BaselineHead: strings.TrimSpace(runCLICommitGit(t, root, "rev-parse", "main")),
+	})
+	postClear := render()
+	if !strings.Contains(postClear, "Manually rebase the plan branch tao/plan-a onto main, then run tao review --run plan-a") || strings.Contains(postClear, "Next: tao merge plan-a") {
+		t.Fatalf("post-clear show recommendation bypassed restart settlement:\n%s", postClear)
+	}
+}
+
+func TestStaleSingleMergeIntentPrimaryActionMatchesShowMergeAndTUI(t *testing.T) {
+	const (
+		command = "tao merge --restart plan-a"
+		reason  = "the source is unchanged and the default branch advanced cleanly"
+	)
+	intent := &plan.SingleMergeCommitIntent{
+		PlanID: "plan-a", DefaultBranch: "main", DefaultParent: "parent-a",
+		SourceHead: "head-a", Message: "feat(core): change\n\nwhat and why",
+	}
+	detail := &plan.PlanDetail{
+		State: plan.State{Status: plan.StatusReviewed, Repo: plan.Repo{Branch: "main"}, Plan: plan.PlanState{
+			ID: "plan-a", Title: "Plan A", MergeCommitIntent: intent,
+		}},
+		SingleMergeIntentRecovery: &plan.SingleMergeIntentRecovery{
+			Phase: "unresolved", Verdict: plan.SingleMergeRecoveryRestartable, Reason: reason,
+		},
+	}
+	next := plan.DeriveNextAction(detail)
+	if next.Primary.Kind != plan.PlanActionRestartMerge || next.Primary.Command != command || next.Primary.Reason != reason {
+		t.Fatalf("stale fixture action = %+v", next.Primary)
+	}
+
+	var showOut bytes.Buffer
+	if err := renderPlanDetail(&showOut, planview.Plan{Detail: detail, Derived: plan.Derive(detail, time.Time{}), Now: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+
+	drift := &mergepkg.SingleMergeIntentDriftError{
+		PlanID: "plan-a", DefaultBranch: "main", DefaultParent: "parent-a", LiveDefault: "live-a",
+		SourceHead: "head-a", Phase: mergepkg.SingleMergeIntentPhaseUnresolved,
+		Verdict: mergepkg.SingleMergeIntentRecoveryRestartable, Reason: reason,
+	}
+	var mergeOut bytes.Buffer
+	if err := renderMergeFailure(&mergeOut, detail, drift); err != nil {
+		t.Fatal(err)
+	}
+
+	row := monitor.Row{
+		RepositoryName: "repo", PlanID: "plan-a", Status: plan.StatusReviewed,
+		RecommendedAction: next.Primary, NextAction: "RESTART MERGE",
+	}
+	tuiOut := tui.Render(tui.Model{Snapshot: monitor.Snapshot{Rows: []monitor.Row{row}}, Page: tui.PagePlans})
+	for name, output := range map[string]string{
+		"tao show": stripANSI(showOut.String()), "merge refusal": mergeOut.String(), "TUI": tuiOut,
+	} {
+		if !strings.Contains(output, command) || !strings.Contains(output, reason) {
+			t.Errorf("%s did not print identical command %q and reason %q:\n%s", name, command, reason, output)
+		}
 	}
 }
 

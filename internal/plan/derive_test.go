@@ -1052,6 +1052,68 @@ func TestDeriveNextActionLifecyclePrecedence(t *testing.T) {
 	}
 }
 
+func TestDeriveNextActionClassifiesActiveSingleMergeIntent(t *testing.T) {
+	base := func() *PlanDetail {
+		return &PlanDetail{State: State{Status: StatusReviewed, Repo: Repo{Branch: "main"}, Plan: PlanState{
+			ID: "plan", MergeCommitIntent: &SingleMergeCommitIntent{
+				PlanID: "plan", DefaultBranch: "main", DefaultParent: "parent", SourceHead: "head", Message: "feat(core): change\n\nwhat and why",
+			},
+		}}}
+	}
+	tests := []struct {
+		name        string
+		recovery    SingleMergeIntentRecovery
+		wantKind    PlanActionKind
+		wantCommand string
+		wantText    string
+	}{
+		{name: "stale pre-mutation intent", recovery: SingleMergeIntentRecovery{Verdict: SingleMergeRecoveryRestartable, Reason: "default advanced cleanly"}, wantKind: PlanActionRestartMerge, wantCommand: "tao merge --restart plan", wantText: "default advanced cleanly"},
+		{name: "rebase and review", recovery: SingleMergeIntentRecovery{Verdict: SingleMergeRecoveryRebaseAndReviewRequired, Reason: "refresh review"}, wantKind: PlanActionRecoverMerge, wantText: "Manually rebase the plan branch onto main, then run tao review --run plan"},
+		{name: "settle authority", recovery: SingleMergeIntentRecovery{Verdict: SingleMergeRecoverySettleExisting, Reason: "authority must be settled"}, wantKind: PlanActionRecoverMerge, wantCommand: "tao merge plan", wantText: "authority must be settled"},
+		{name: "ambiguous post-provider state", recovery: SingleMergeIntentRecovery{Verdict: SingleMergeRecoveryManualOnly, Reason: "provider effects are ambiguous"}, wantKind: PlanActionRecoverMerge, wantText: "Inspect the integration worktree"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			detail := base()
+			detail.SingleMergeIntentRecovery = &tt.recovery
+			action := DeriveNextAction(detail).Primary
+			if action.Kind != tt.wantKind || action.Command != tt.wantCommand || (!strings.Contains(action.Instruction, tt.wantText) && !strings.Contains(action.Reason, tt.wantText)) {
+				t.Fatalf("action = %+v, want kind=%q command=%q text containing %q", action, tt.wantKind, tt.wantCommand, tt.wantText)
+			}
+		})
+	}
+
+	withoutIntent := base()
+	withoutIntent.State.Plan.MergeCommitIntent = nil
+	withoutIntent.State.Plan.Review = &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove}
+	if action := DeriveNextAction(withoutIntent).Primary; action.Kind != PlanActionMerge || action.Command != "tao merge plan" {
+		t.Fatalf("plan without active intent changed recommendation: %+v", action)
+	}
+}
+
+func TestDeriveNextActionKeepsRestartedSingleMergeRecoveryPending(t *testing.T) {
+	restartedAt := time.Date(2026, 9, 4, 22, 0, 0, 0, time.UTC)
+	detail := &PlanDetail{
+		State: State{Status: StatusReviewed, Plan: PlanState{
+			ID: "plan", Review: &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Head: "new-head", ReviewedAt: restartedAt.Add(time.Minute)},
+		}},
+		Events: []Event{{
+			Type: EventTypeSingleMergeIntentRestarted, Timestamp: restartedAt, PlanID: "plan",
+			Branch: "tao/plan", PriorHead: "old-head", BaselineBranch: "main", BaselineHead: "advanced-head",
+		}},
+	}
+
+	action := DeriveNextAction(detail).Primary
+	if action.Kind != PlanActionRebaseAndReview || action.Command != "" || !strings.Contains(action.Instruction, "Manually rebase the plan branch tao/plan onto main, then run tao review --run plan") {
+		t.Fatalf("pending restarted intent action = %+v", action)
+	}
+
+	detail.SingleMergeIntentRecovery = &SingleMergeIntentRecovery{Verdict: SingleMergeRecoverySatisfied}
+	if action = DeriveNextAction(detail).Primary; action.Kind != PlanActionMerge || action.Command != "tao merge plan" {
+		t.Fatalf("satisfied restarted intent action = %+v", action)
+	}
+}
+
 func TestDeriveNextActionUsesCurrentReviewForPendingPullRequestIntent(t *testing.T) {
 	tests := []struct {
 		name        string

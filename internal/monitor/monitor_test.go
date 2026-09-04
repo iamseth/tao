@@ -2,8 +2,11 @@ package monitor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -145,6 +148,147 @@ func TestCollectorBuildsAndOrdersCrossRepositorySnapshot(t *testing.T) {
 	warning := snapshot.Rows[len(snapshot.Rows)-1]
 	if warning.Kind != RowKindRepositoryWarning || warning.Status != plan.StatusInvalid || len(warning.Warnings) != 1 {
 		t.Fatalf("repository warning row = %+v", warning)
+	}
+}
+
+func TestCollectorWithFileRepositoryRecommendsMergeForExactSingleMergeIntentBoundary(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "repo")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runMonitorGit(t, root, "init", "-b", "main")
+	runMonitorGit(t, root, "config", "user.name", "Tao Test")
+	runMonitorGit(t, root, "config", "user.email", "tao@example.invalid")
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("initial\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runMonitorGit(t, root, "add", "README.md")
+	runMonitorGit(t, root, "commit", "-m", "initial")
+	parent := monitorGitOutput(t, root, "rev-parse", "HEAD")
+	runMonitorGit(t, root, "branch", "tao/plan-a", parent)
+
+	plansDir := filepath.Join(t.TempDir(), "plans")
+	planDir := filepath.Join(plansDir, "plan-a")
+	if err := os.MkdirAll(planDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 4, 21, 0, 0, 0, time.UTC)
+	state := plan.State{
+		Schema: "tao.plan.state.v1", Status: plan.StatusReviewed, CreatedAt: now, UpdatedAt: now,
+		Repo: plan.Repo{Name: "repo", Root: root, Branch: "main", BaseCommit: parent},
+		Plan: plan.PlanState{
+			ID: "plan-a", Title: "Pending merge", CompletedSlices: []string{"001-work"},
+			MergeCommitIntent: &plan.SingleMergeCommitIntent{
+				Message: "feat(merge): apply plan", PlanID: "plan-a", SourceHead: parent,
+				DefaultBranch: "main", DefaultParent: parent, CreatedAt: now,
+			},
+		},
+		Workspace: &plan.Workspace{Strategy: plan.WorkspaceStrategyCurrent, Root: root, Path: root, Branch: "tao/plan-a", BaseBranch: "main"},
+	}
+	slicesFile := plan.SlicesFile{
+		Schema: "tao.plan.slices.v1", PlanID: "plan-a", Execution: plan.Execution{Mode: "serial"},
+		Slices: []plan.Slice{{ID: "001-work", Title: "Work", Status: plan.StatusCompleted}},
+	}
+	writeMonitorJSON(t, filepath.Join(planDir, "state.json"), state)
+	writeMonitorJSON(t, filepath.Join(planDir, "slices.json"), slicesFile)
+
+	entry := taodata.RepoInventoryEntry{Repo: taodata.Repo{ID: "repo-id", Name: "repo", Root: root}, PlansDir: plansDir}
+	collector := NewCollector(fakeInventory{entries: []taodata.RepoInventoryEntry{entry}})
+	collector.Now = func() time.Time { return now }
+	snapshot, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Rows) != 1 {
+		t.Fatalf("rows = %+v, want one plan", snapshot.Rows)
+	}
+	action := snapshot.Rows[0].RecommendedAction
+	if action.Kind != plan.PlanActionRecoverMerge || action.Command != "tao merge plan-a" || !strings.Contains(action.Reason, "recorded source and default boundary") {
+		t.Fatalf("recommended action = %#v, want classifier-derived merge resume", action)
+	}
+}
+
+func TestCollectorWithFileRepositoryRecommendsRestartForStaleSingleMergeIntent(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "repo")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runMonitorGit(t, root, "init", "-b", "main")
+	runMonitorGit(t, root, "config", "user.name", "Tao Test")
+	runMonitorGit(t, root, "config", "user.email", "tao@example.invalid")
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("initial\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runMonitorGit(t, root, "add", "README.md")
+	runMonitorGit(t, root, "commit", "-m", "initial")
+	parent := monitorGitOutput(t, root, "rev-parse", "HEAD")
+	runMonitorGit(t, root, "branch", "tao/plan-a", parent)
+	if err := os.WriteFile(filepath.Join(root, "default.txt"), []byte("advanced\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runMonitorGit(t, root, "add", "default.txt")
+	runMonitorGit(t, root, "commit", "-m", "advance default")
+
+	plansDir := filepath.Join(t.TempDir(), "plans")
+	planDir := filepath.Join(plansDir, "plan-a")
+	if err := os.MkdirAll(planDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 4, 21, 0, 0, 0, time.UTC)
+	state := plan.State{
+		Schema: "tao.plan.state.v1", Status: plan.StatusReviewed, CreatedAt: now, UpdatedAt: now,
+		Repo: plan.Repo{Name: "repo", Root: root, Branch: "main", BaseCommit: parent},
+		Plan: plan.PlanState{
+			ID: "plan-a", Title: "Stale merge", CompletedSlices: []string{"001-work"},
+			MergeCommitIntent: &plan.SingleMergeCommitIntent{
+				Message: "feat(merge): apply plan", PlanID: "plan-a", SourceHead: parent,
+				DefaultBranch: "main", DefaultParent: parent, CreatedAt: now,
+			},
+		},
+		Workspace: &plan.Workspace{Strategy: plan.WorkspaceStrategyCurrent, Root: root, Path: root, Branch: "tao/plan-a", BaseBranch: "main"},
+	}
+	slicesFile := plan.SlicesFile{
+		Schema: "tao.plan.slices.v1", PlanID: "plan-a", Execution: plan.Execution{Mode: "serial"},
+		Slices: []plan.Slice{{ID: "001-work", Title: "Work", Status: plan.StatusCompleted}},
+	}
+	writeMonitorJSON(t, filepath.Join(planDir, "state.json"), state)
+	writeMonitorJSON(t, filepath.Join(planDir, "slices.json"), slicesFile)
+
+	entry := taodata.RepoInventoryEntry{Repo: taodata.Repo{ID: "repo-id", Name: "repo", Root: root}, PlansDir: plansDir}
+	collector := NewCollector(fakeInventory{entries: []taodata.RepoInventoryEntry{entry}})
+	collector.Now = func() time.Time { return now }
+	snapshot, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Rows) != 1 {
+		t.Fatalf("rows = %+v, want one plan", snapshot.Rows)
+	}
+	action := snapshot.Rows[0].RecommendedAction
+	if action.Kind != plan.PlanActionRestartMerge || action.Command != "tao merge --restart plan-a" || !strings.Contains(action.Reason, "default branch advanced cleanly") {
+		t.Fatalf("recommended action = %#v, want classifier-derived restart", action)
+	}
+
+	state.Plan.MergeCommitIntent = nil
+	writeMonitorJSON(t, filepath.Join(planDir, "state.json"), state)
+	event, err := json.Marshal(plan.Event{
+		Type: plan.EventTypeSingleMergeIntentRestarted, Timestamp: now.Add(time.Minute), PlanID: "plan-a",
+		Branch: "tao/plan-a", PriorHead: parent, BaselineBranch: "main",
+		BaselineHead: monitorGitOutput(t, root, "rev-parse", "main"), Message: "Stale single-plan merge intent restarted",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(planDir, "events.jsonl"), append(event, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	postClear, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	action = postClear.Rows[0].RecommendedAction
+	if action.Kind != plan.PlanActionRebaseAndReview || !strings.Contains(action.Instruction, "tao review --run plan-a") || DeriveNextAction(postClear.Rows[0]) != "REBASE AND REVIEW" {
+		t.Fatalf("post-clear monitor action = %#v next=%q", action, DeriveNextAction(postClear.Rows[0]))
 	}
 }
 
@@ -829,6 +973,37 @@ func rowsByPlan(rows []Row) map[string]Row {
 		result[row.PlanID] = row
 	}
 	return result
+}
+
+func runMonitorGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...) //nolint:gosec // Test arguments are fixed or created within the test.
+	cmd.Dir = dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, output)
+	}
+}
+
+func monitorGitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...) //nolint:gosec // Test arguments are fixed or created within the test.
+	cmd.Dir = dir
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %s failed: %v", strings.Join(args, " "), err)
+	}
+	return strings.TrimSpace(string(output))
+}
+
+func writeMonitorJSON(t *testing.T, path string, value any) {
+	t.Helper()
+	payload, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(payload, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func runtimeRecord(repoID, planID string, startedAt, heartbeatAt time.Time, phase runstatus.Phase, detail *runstatus.SliceDetail) runstatus.Record {

@@ -1309,6 +1309,19 @@ func (r *PlanRecord) mutateSingleMergeResolution(expected SingleMergeCommitInten
 // inspected, preventing a stale recovery path from deleting newer intent.
 // Committed resolution authority is cleared only by merge settlement.
 func (r *PlanRecord) ClearSingleMergeCommitIntent(expected SingleMergeCommitIntent) error {
+	return r.clearSingleMergeCommitIntent(expected, nil)
+}
+
+// ClearSingleMergeCommitIntentForRestart atomically clears an exact stale
+// intent and appends the bounded boundary that keeps retries stop-and-instruct.
+func (r *PlanRecord) ClearSingleMergeCommitIntentForRestart(expected SingleMergeCommitIntent, event Event) error {
+	if event.Type != EventTypeSingleMergeIntentRestarted || event.PlanID != expected.PlanID || event.Branch == "" || event.PriorHead != expected.SourceHead || event.BaselineBranch != expected.DefaultBranch || !isSHALike(event.BaselineHead) || event.Timestamp.IsZero() || event.Timestamp.Location() != time.UTC {
+		return fmt.Errorf("single-merge restart event does not match the exact intent boundary")
+	}
+	return r.clearSingleMergeCommitIntent(expected, &event)
+}
+
+func (r *PlanRecord) clearSingleMergeCommitIntent(expected SingleMergeCommitIntent, restartEvent *Event) error {
 	store, err := r.storeOrDefault()
 	if err != nil {
 		return err
@@ -1325,7 +1338,10 @@ func (r *PlanRecord) ClearSingleMergeCommitIntent(expected SingleMergeCommitInte
 			return nil, fmt.Errorf("plan %s single-merge commit intent has committed resolution authority and must be settled", detail.State.Plan.ID)
 		}
 		detail.State.Plan.MergeCommitIntent = nil
-		return nil, nil
+		if restartEvent == nil {
+			return nil, nil
+		}
+		return []Event{*restartEvent}, nil
 	})
 }
 

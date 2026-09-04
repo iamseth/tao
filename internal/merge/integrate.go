@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
 )
 
@@ -177,10 +178,37 @@ func inspectSingleMergeIntent(ctx context.Context, git GitClient, detail *plan.P
 	}
 	parent, parentErr := git.RevParse(ctx, defaultHead+"^")
 	message, messageErr := git.CommitMessage(ctx, defaultHead)
-	if parentErr == nil && messageErr == nil && strings.TrimSpace(parent) == intent.DefaultParent && strings.TrimSpace(message) == intent.Message {
+	exactLanded := parentErr == nil && messageErr == nil && strings.TrimSpace(parent) == intent.DefaultParent && strings.TrimSpace(message) == intent.Message
+	if exactLanded {
 		return true, nil
 	}
-	return false, fmt.Errorf("default branch %s drifted from single-merge intent parent %s and does not contain the exact intended squash", defaultBranch, intent.DefaultParent)
+
+	advanced, advancedErr := git.IsAncestor(ctx, intent.DefaultParent, defaultHead)
+	rewound, rewoundErr := git.IsAncestor(ctx, defaultHead, intent.DefaultParent)
+	status, statusErr := git.StatusPorcelain(ctx)
+	operation := ""
+	if strings.TrimSpace(git.Root()) != "" {
+		operation, _ = gitops.ActiveOperation(git.Root())
+	}
+	classification := ClassifySingleMergeIntentRecovery(intent, SingleMergeIntentLiveState{
+		PlanID: detail.State.Plan.ID, DefaultBranch: defaultBranch,
+		SourceHead: sourceHead, LiveDefault: defaultHead,
+		SourceBranchExists: true, DefaultBranchExists: true,
+		DefaultAdvanced: advancedErr == nil && advanced,
+		DefaultRewound:  rewoundErr == nil && rewound,
+		Dirty:           statusErr != nil || strings.TrimSpace(status) != "",
+		ActiveOperation: operation,
+		// Once requested evidence is loaded from disk, provider invocation is
+		// conservatively ambiguous; only invocation-local code can prove the
+		// narrower pre-usable-provider category.
+		ProviderWasUsable: intent.Resolution != nil && intent.Resolution.Phase == plan.SingleMergeResolutionPhaseRequested,
+	})
+	return false, &SingleMergeIntentDriftError{
+		PlanID: intent.PlanID, DefaultBranch: defaultBranch,
+		DefaultParent: intent.DefaultParent, LiveDefault: defaultHead,
+		SourceHead: sourceHead, Phase: classification.Phase,
+		Verdict: classification.Verdict, Reason: classification.Reason,
+	}
 }
 
 // Integrate preserves plan-branch commits by rebasing and fast-forwarding.

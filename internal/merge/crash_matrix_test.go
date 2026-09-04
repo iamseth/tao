@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/iamseth/tao/internal/durableintent/crashfixture"
+	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
 )
 
@@ -44,6 +46,68 @@ func TestInspectSingleMergeIntentCrashMatrix(t *testing.T) {
 			}
 			if integrated != test.wantMutation {
 				t.Fatalf("integrated at %s = %t, want %t", state.Point, integrated, test.wantMutation)
+			}
+		})
+	}
+}
+
+func TestRestartSingleMergeInterruptedRestartMatrix(t *testing.T) {
+	for _, point := range []string{"after safety checks", "after clear before render"} {
+		t.Run(point, func(t *testing.T) {
+			fixture := newRealGitWorktree(t)
+			parent := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
+			runRealGit(t, fixture.worktreePath, "commit", "--allow-empty", "-m", "source work")
+			sourceHead := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch)
+			runRealGit(t, fixture.repoRoot, "commit", "--allow-empty", "-m", "advance default")
+			advanced := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
+			planDir, intent := persistSingleMergeRestartPlan(t, fixture, parent, sourceHead)
+			service := Service{Git: gitops.NewClient(fixture.repoRoot, nil), NewGit: func(dir string) GitClient { return gitops.NewClient(dir, nil) }}
+
+			detail, err := plan.NewFileRepository(filepath.Dir(planDir)).ResolvePlan(context.Background(), planDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if point == "after safety checks" {
+				live, _, _, inspectErr := service.inspectSingleMergeRestartBoundary(context.Background(), service.Git, detail, intent)
+				if inspectErr != nil {
+					t.Fatal(inspectErr)
+				}
+				if recovery := ClassifySingleMergeIntentRecovery(intent, live); recovery.Verdict != SingleMergeIntentRecoveryRestartable {
+					t.Fatalf("pre-interruption recovery = %#v", recovery)
+				}
+			} else {
+				record, recordErr := plan.NewPlanRecord(planDir, detail)
+				if recordErr != nil {
+					t.Fatal(recordErr)
+				}
+				if clearErr := record.ClearSingleMergeCommitIntent(intent); clearErr != nil {
+					t.Fatal(clearErr)
+				}
+			}
+
+			result, err := service.RestartSingleMerge(context.Background(), planDir)
+			if err != nil {
+				t.Fatalf("resume restart: %v", err)
+			}
+			if point == "after safety checks" {
+				if result.Discarded == nil || *result.Discarded != intent {
+					t.Fatalf("resumed safety-check interruption = %#v", result)
+				}
+			} else if result.Discarded != nil || result.MergedDefaultSHA != "" || result.NextAction != "tao merge plan-a" {
+				t.Fatalf("resumed post-clear interruption = %#v", result)
+			}
+			reloaded, reloadErr := plan.NewFileRepository(filepath.Dir(planDir)).ResolvePlan(context.Background(), planDir)
+			if reloadErr != nil {
+				t.Fatal(reloadErr)
+			}
+			if reloaded.State.Plan.MergeCommitIntent != nil {
+				t.Fatalf("resumed restart retained intent: %#v", reloaded.State.Plan.MergeCommitIntent)
+			}
+			if got := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch); got != advanced {
+				t.Fatalf("restart moved default: got %s want %s", got, advanced)
+			}
+			if got := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch); got != sourceHead {
+				t.Fatalf("restart moved source: got %s want %s", got, sourceHead)
 			}
 		})
 	}

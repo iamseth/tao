@@ -804,6 +804,15 @@ only after you have manually verified the default branch contains the intended
 changes — and because ancestry cannot prove those merges, a later cleanup retry
 for such a branch also needs `--force` to remove it.
 
+**Restarting a stale single-plan intent:** when `tao show` or a merge refusal
+reports that an unresolved intent is stale because default advanced cleanly, run
+`tao merge --restart <plan>`. Single-plan restart compare-and-set clears only
+that exact safe pre-mutation intent, leaves all Git work untouched, and stops.
+Manually rebase the plan branch, then run `tao review --run <plan>` before a new
+merge. This is distinct from `tao merge --all --restart`: batch restart removes
+only batch-owned pre-landing recovery state, branch, and worktree so the batch
+can start again; it does not clear any source plan's single-plan intent.
+
 **Flags and limits:** `--record-only` records an already external merge without
 integrating. `--no-squash` preserves checkpoint commits with rebase plus
 fast-forward and keeps conflict resolution manual. `--no-verify` skips the
@@ -877,8 +886,10 @@ branch, and worktree. Restart is refused after landing and never removes source
 plans. Resolve reported source/default drift rather than deleting recovery
 files by hand.
 
-**Strict batch flags:** `--dry-run`, `--restart`, and `--auto-eject` require
-`--all`. Batch mode allows one `--verify-command CMD` override and the separate
+**Strict batch flags:** `--dry-run` and `--auto-eject` require `--all`.
+`--restart` works in both forms and means something different in each: with a
+plan argument it clears that plan's stale pre-landing merge intent, and with
+`--all` it discards batch-owned pre-landing recovery state. Batch mode allows one `--verify-command CMD` override and the separate
 `--auto-eject` convergence opt-in, but still rejects `--force`, `--record-only`,
 `--no-squash`, and `--no-verify`. Those bypass semantics remain available only
 to the explicit single-plan workflow.

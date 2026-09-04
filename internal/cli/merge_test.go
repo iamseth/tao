@@ -401,6 +401,133 @@ func TestRenderMergeSuccessNamesIndependentApprovalAfterRecordMerged(t *testing.
 	}
 }
 
+func TestMergeRestartStopsAfterSinglePlanRecoveryWithoutBatchMutation(t *testing.T) {
+	detail := cliMergeDetail(t)
+	intent := plan.SingleMergeCommitIntent{
+		PlanID: "plan-a", DefaultBranch: "main", DefaultParent: "parent-a", SourceHead: "head-a",
+	}
+	service := &fakeCLIMergeService{restartResult: mergepkg.SingleMergeRestartResult{
+		Recovery:   mergepkg.SingleMergeIntentRecovery{Phase: mergepkg.SingleMergeIntentPhaseUnresolved, Verdict: mergepkg.SingleMergeIntentRecoveryRestartable, Reason: "the source is unchanged and the default branch advanced cleanly"},
+		Discarded:  &intent,
+		NextAction: "rebase tao/plan-a onto main, then run tao review --run plan-a",
+	}}
+	stubMergeServiceRunner(t, service)
+	batch := &fakeCLIMergeBatchRunner{}
+	stubMergeBatchRunner(t, batch)
+	var out bytes.Buffer
+	app := App{Out: &out, Err: &out, Repository: func(string) Repository {
+		return fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
+	}}
+
+	if err := app.Run(context.Background(), []string{"merge", "--restart", "plan-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if service.restartCalls != 1 || service.calls != 0 {
+		t.Fatalf("single restart calls=%d merge calls=%d", service.restartCalls, service.calls)
+	}
+	if batch.calls != 0 {
+		t.Fatalf("single-plan restart touched batch state through %d calls", batch.calls)
+	}
+	for _, want := range []string{"Discarded stale single-plan merge intent", "Default Parent: parent-a", "Source Head: head-a", "Intent Phase: unresolved", "Next: rebase tao/plan-a onto main, then run tao review --run plan-a."} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("restart output missing %q: %q", want, out.String())
+		}
+	}
+}
+
+func TestMergeBatchRestartDoesNotConstructSinglePlanService(t *testing.T) {
+	batch := &fakeCLIMergeBatchRunner{}
+	stubMergeBatchRunner(t, batch)
+	constructed := false
+	original := newMergeServiceRunner
+	newMergeServiceRunner = func(App, *plan.PlanDetail) (mergeServiceRunner, error) {
+		constructed = true
+		return &fakeCLIMergeService{}, nil
+	}
+	t.Cleanup(func() { newMergeServiceRunner = original })
+	app := App{Out: io.Discard, Err: io.Discard, Repository: func(string) Repository { return fakeRepository{} }}
+
+	if err := app.Run(context.Background(), []string{"merge", "--all", "--restart"}); err != nil {
+		t.Fatal(err)
+	}
+	if batch.calls != 1 || !batch.options.Restart {
+		t.Fatalf("batch restart options=%#v calls=%d", batch.options, batch.calls)
+	}
+	if constructed {
+		t.Fatal("batch restart constructed the single-plan merge service")
+	}
+}
+
+func TestMergeRestartRejectsForceBeforeDiscardingReviewedResolutionAuthority(t *testing.T) {
+	detail := cliMergeDetail(t)
+	detail.State.Plan.MergeCommitIntent = &plan.SingleMergeCommitIntent{
+		PlanID: "plan-a", DefaultBranch: "main", DefaultParent: "parent-a", SourceHead: "head-a",
+		Resolution: &plan.SingleMergeResolution{Phase: plan.SingleMergeResolutionPhaseReviewed},
+	}
+	service := &fakeCLIMergeService{}
+	stubMergeServiceRunner(t, service)
+	app := App{Out: io.Discard, Err: io.Discard, Repository: func(string) Repository {
+		return fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
+	}}
+
+	err := app.Run(context.Background(), []string{"merge", "--restart", "--force", "plan-a"})
+	if err == nil || !strings.Contains(err.Error(), "--restart cannot be combined with --force") {
+		t.Fatalf("force restart error = %v", err)
+	}
+	if service.restartCalls != 0 || service.calls != 0 {
+		t.Fatalf("force restart reached mutation: restart=%d merge=%d", service.restartCalls, service.calls)
+	}
+}
+
+func TestRenderSingleMergeIntentDriftUsesClassifierNextAction(t *testing.T) {
+	tests := []struct {
+		name    string
+		verdict mergepkg.SingleMergeIntentRecoveryVerdict
+		phase   mergepkg.SingleMergeIntentPhase
+		want    string
+		notWant string
+	}{
+		{name: "restartable stale intent", verdict: mergepkg.SingleMergeIntentRecoveryRestartable, phase: mergepkg.SingleMergeIntentPhaseUnresolved, want: "Next: `tao merge --restart plan-a`", notWant: "then rerun `tao merge`"},
+		{name: "textual conflict rollback", verdict: mergepkg.SingleMergeIntentRecoveryRebaseAndReviewRequired, phase: mergepkg.SingleMergeIntentPhaseRolledBack, want: "rebase tao/plan-a onto main, then run `tao review --run plan-a`", notWant: "tao merge plan-a"},
+		{name: "exact authority settlement", verdict: mergepkg.SingleMergeIntentRecoverySettleExistingResolution, phase: mergepkg.SingleMergeIntentPhaseReviewed, want: "then run `tao review --run plan-a`", notWant: "tao merge plan-a"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			detail := cliMergeDetail(t)
+			drift := &mergepkg.SingleMergeIntentDriftError{
+				PlanID: "plan-a", DefaultBranch: "main", DefaultParent: "parent-a", LiveDefault: "default-b", SourceHead: "head-a",
+				Phase: tt.phase, Verdict: tt.verdict, Reason: "classified recovery reason",
+			}
+			var out bytes.Buffer
+			if err := renderMergeFailure(&out, detail, drift); err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{"Stale Parent: parent-a", "Live Default: default-b", "Source Head: head-a", "Intent Phase: " + string(tt.phase), tt.want} {
+				if !strings.Contains(out.String(), want) {
+					t.Fatalf("output missing %q: %q", want, out.String())
+				}
+			}
+			if strings.Contains(out.String(), tt.notWant) {
+				t.Fatalf("output contains stale guidance %q: %q", tt.notWant, out.String())
+			}
+		})
+	}
+}
+
+func TestRenderSingleMergeRestartExactLandingDoesNotRerunMerge(t *testing.T) {
+	var out bytes.Buffer
+	result := mergepkg.SingleMergeRestartResult{
+		Recovery:         mergepkg.SingleMergeIntentRecovery{Phase: mergepkg.SingleMergeIntentPhaseUnresolved, Verdict: mergepkg.SingleMergeIntentRecoverySettleExistingResolution, Reason: "the exact intended squash is already present"},
+		MergedDefaultSHA: "landed-a", NextAction: "merge is recorded; no restart is required",
+	}
+	if err := renderSingleMergeRestartResult(&out, result); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "already landed at landed-a") || !strings.Contains(out.String(), "merge is recorded; no restart is required") || strings.Contains(out.String(), "tao merge plan-a") {
+		t.Fatalf("exact landing output = %q", out.String())
+	}
+}
+
 func TestMergeCommandPassesForceNoSquashNoVerifyAndVerifyCommandOptions(t *testing.T) {
 	detail := cliMergeDetail(t)
 	service := &fakeCLIMergeService{}
@@ -634,8 +761,8 @@ func TestMergeAllFlagCompatibilityAndPositionals(t *testing.T) {
 	for _, args := range [][]string{
 		{"merge", "--all", "plan-a"},
 		{"merge", "--dry-run", "plan-a"},
-		{"merge", "--restart", "plan-a"},
 		{"merge", "--auto-eject", "plan-a"},
+		{"merge", "--restart", "--force", "plan-a"},
 		{"merge", "--all", "--force"},
 		{"merge", "--all", "--auto-eject", "--force"},
 		{"merge", "--all", "--record-only"},
@@ -694,7 +821,7 @@ func TestMergeCommandHelpDocumentsVerifyCommand(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"merge", "--help"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"--all", "--dry-run", "--restart", "--auto-eject", "eject-and-reland", "--verify-command", "override the post-merge build/test verification command", "one automatic resolver attempt", "independent fresh-session review", "--force cannot bypass these safety and review gates", "--no-verify skips only command verification", "--no-squash rebase conflicts remain manual", "bounded agent resolution", "aggregate approval before one fast-forward", "Batch mode rejects --force, --record-only, --no-squash, and --no-verify", "single-plan only", "Usage:\n  tao merge (m) [--force] [--record-only] [--no-squash] [--no-verify] [--verify-command CMD]", "merge (m) --all [--dry-run] [--restart] [--auto-eject] [--verify-command CMD]"} {
+	for _, want := range []string{"--all", "--dry-run", "--restart", "--auto-eject", "eject-and-reland", "--verify-command", "override the post-merge build/test verification command", "one automatic resolver attempt", "independent fresh-session review", "--force cannot bypass these safety and review gates", "--no-verify skips only command verification", "--no-squash rebase conflicts remain manual", "bounded agent resolution", "aggregate approval before one fast-forward", "For one plan, --restart safely discards only an eligible stale pre-landing merge intent", "--all --restart discards only pre-landing batch recovery", "Batch mode rejects --force, --record-only, --no-squash, and --no-verify", "single-plan only", "Usage:\n  tao merge (m) [--force] [--record-only] [--no-squash] [--no-verify] [--verify-command CMD]", "merge (m) --restart <plan-id-or-slug-or-path>", "merge (m) --all [--dry-run] [--restart] [--auto-eject] [--verify-command CMD]"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("expected help to contain %q, got %q", want, out.String())
 		}
@@ -722,10 +849,14 @@ func stubMergeBatchRunner(t *testing.T, runner mergeBatchRunner) {
 }
 
 type fakeCLIMergeService struct {
-	err     error
-	calls   int
-	detail  *plan.PlanDetail
-	options mergepkg.Options
+	err           error
+	calls         int
+	detail        *plan.PlanDetail
+	options       mergepkg.Options
+	restartResult mergepkg.SingleMergeRestartResult
+	restartErr    error
+	restartCalls  int
+	restartDir    string
 }
 
 func (f *fakeCLIMergeService) Merge(ctx context.Context, detail *plan.PlanDetail, options mergepkg.Options) error {
@@ -734,6 +865,12 @@ func (f *fakeCLIMergeService) Merge(ctx context.Context, detail *plan.PlanDetail
 	f.detail = detail
 	f.options = options
 	return f.err
+}
+
+func (f *fakeCLIMergeService) RestartSingleMerge(_ context.Context, planDir string) (mergepkg.SingleMergeRestartResult, error) {
+	f.restartCalls++
+	f.restartDir = planDir
+	return f.restartResult, f.restartErr
 }
 
 func stubMergeServiceRunner(t *testing.T, service mergeServiceRunner) {

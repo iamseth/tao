@@ -577,7 +577,7 @@ func renderSlicesValue(profile Profile, row monitor.Row) string {
 }
 
 func tableRowValues(row monitor.Row, now time.Time, actionLabel string) rowValues {
-	next := planNextAction(row)
+	next := planNextActionDisplay(row)
 	if strings.TrimSpace(actionLabel) != "" {
 		next = actionLabel
 	}

@@ -52,6 +52,7 @@ const (
 	EventTypeMergeVerification          = "merge_verification"
 	EventTypeSingleMergeRolledBack      = "single_merge_resolution_rolled_back"
 	EventTypeSingleMergeRearmed         = "single_merge_resolution_rearmed"
+	EventTypeSingleMergeIntentRestarted = "single_merge_intent_restarted"
 	EventTypePlanCommitFallback         = "plan_commit_fallback"
 	EventTypePlanCommitGuard            = "plan_commit_guard"
 )
@@ -874,10 +875,12 @@ const (
 	PlanActionRecoverRebase          PlanActionKind = "recover_rebase"
 	PlanActionRecoverPullRequest     PlanActionKind = "recover_pull_request"
 	PlanActionRecoverMerge           PlanActionKind = "recover_merge"
+	PlanActionRebaseAndReview        PlanActionKind = "rebase_and_review"
 	PlanActionRestartRework          PlanActionKind = "restart_rework"
 	PlanActionApprove                PlanActionKind = "approve"
 	PlanActionContinue               PlanActionKind = "continue"
 	PlanActionRestartBlocked         PlanActionKind = "restart_blocked"
+	PlanActionRestartMerge           PlanActionKind = "restart_merge"
 	PlanActionRepairVerification     PlanActionKind = "repair_verification"
 	PlanActionReverify               PlanActionKind = "reverify"
 	PlanActionResolveVerification    PlanActionKind = "resolve_verification"
@@ -899,6 +902,23 @@ const (
 	PlanActionClassRecovery       PlanActionClass = "recovery"
 	PlanActionClassAdministrative PlanActionClass = "administrative"
 	PlanActionClassTerminal       PlanActionClass = "terminal"
+)
+
+// SingleMergeIntentRecovery is a transient read-side classification of the
+// live repository boundary for an active single-plan merge intent. It is never
+// persisted in plan artifacts and grants no mutation authority.
+type SingleMergeIntentRecovery struct {
+	Phase   string
+	Verdict string
+	Reason  string
+}
+
+const (
+	SingleMergeRecoveryRestartable             = "restartable"
+	SingleMergeRecoveryRebaseAndReviewRequired = "rebase-and-review-required"
+	SingleMergeRecoverySettleExisting          = "settle-existing-resolution"
+	SingleMergeRecoveryManualOnly              = "manual-only"
+	SingleMergeRecoverySatisfied               = "satisfied"
 )
 
 type PlanAction struct {

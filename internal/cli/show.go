@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	mergepkg "github.com/iamseth/tao/internal/merge"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	planview "github.com/iamseth/tao/internal/view"
@@ -46,6 +47,14 @@ func (a App) show(ctx context.Context, repo plan.Repository, args []string) erro
 	loaded, err := planview.LoadPlan(ctx, repo, positional[0], planview.Options{})
 	if err != nil {
 		return err
+	}
+	root := strings.TrimSpace(loaded.Detail.State.Repo.Root)
+	if root != "" {
+		observation, inspectErr := mergepkg.NewService(root, a.mergeRunner()).InspectSingleMergeIntentRecovery(ctx, loaded.Detail)
+		if inspectErr == nil {
+			loaded.Detail.SingleMergeIntentRecovery = &observation
+			loaded.Derived = plan.Derive(loaded.Detail, loaded.Now)
+		}
 	}
 	if flagBoolValue(fs, "json") {
 		encoder := json.NewEncoder(a.Out)

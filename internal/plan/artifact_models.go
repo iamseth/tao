@@ -151,6 +151,10 @@ type PlanDetail struct {
 	PlanNarrative   PlanNarrativeArtifact
 	Warnings        []string
 
+	// SingleMergeIntentRecovery is a best-effort live read-side observation.
+	// It is not part of state.json or any other plan artifact.
+	SingleMergeIntentRecovery *SingleMergeIntentRecovery
+
 	// Loaded baselines retain artifact snapshots so a later PlanRecord can
 	// distinguish caller edits from concurrently settled changes. Hand-built
 	// details leave them nil and use persisted artifacts at record construction.

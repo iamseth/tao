@@ -65,10 +65,39 @@ func BuildRepositorySections(rows []monitor.Row, repositoryID string) []Section 
 }
 
 func planNextAction(row monitor.Row) string {
+	switch row.RecommendedAction.Kind {
+	case plan.PlanActionRestartMerge:
+		return "RESTART MERGE"
+	case plan.PlanActionRecoverMerge:
+		if strings.TrimSpace(row.RecommendedAction.Command) != "" {
+			return "SETTLE MERGE"
+		}
+		return "INSPECT MERGE"
+	case plan.PlanActionRebaseAndReview:
+		return "REBASE AND REVIEW"
+	}
 	if strings.TrimSpace(row.NextAction) != "" && row.Status != plan.StatusAbandoned {
 		return row.NextAction
 	}
 	return monitor.DeriveNextAction(row)
+}
+
+func planNextActionDisplay(row monitor.Row) string {
+	action := row.RecommendedAction
+	if action.Kind != plan.PlanActionRestartMerge && action.Kind != plan.PlanActionRecoverMerge && action.Kind != plan.PlanActionRebaseAndReview {
+		return planNextAction(row)
+	}
+	guidance := strings.TrimSpace(action.Command)
+	if guidance == "" {
+		guidance = strings.TrimSpace(action.Instruction)
+	}
+	if guidance == "" {
+		return planNextAction(row)
+	}
+	if reason := strings.TrimSpace(action.Reason); reason != "" {
+		return guidance + " — " + reason
+	}
+	return guidance
 }
 
 func sectionKind(row monitor.Row) SectionKind {

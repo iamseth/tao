@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -95,6 +97,252 @@ type Service struct {
 	SingleReviewer    SingleIntegrationReviewer
 }
 
+// InspectSingleMergeIntentRecovery classifies an active intent or the recovery
+// boundary retained by its latest restart event against the current repository
+// without mutating either one.
+func (s Service) InspectSingleMergeIntentRecovery(ctx context.Context, detail *plan.PlanDetail) (plan.SingleMergeIntentRecovery, error) {
+	if detail == nil {
+		return plan.SingleMergeIntentRecovery{}, fmt.Errorf("single-merge recovery detail is missing")
+	}
+	git, err := s.gitClient()
+	if err != nil {
+		return plan.SingleMergeIntentRecovery{}, err
+	}
+	if detail.State.Plan.MergeCommitIntent == nil {
+		if latestSingleMergeRestart(detail) == nil {
+			return plan.SingleMergeIntentRecovery{}, fmt.Errorf("single-merge recovery evidence is missing")
+		}
+		pending, pendingErr := pendingSingleMergeRestart(ctx, git, detail)
+		if pendingErr != nil {
+			return plan.SingleMergeIntentRecovery{}, pendingErr
+		}
+		if pending == nil {
+			return plan.SingleMergeIntentRecovery{Verdict: plan.SingleMergeRecoverySatisfied, Reason: "the restarted merge recovery boundary is satisfied"}, nil
+		}
+		return plan.SingleMergeIntentRecovery{
+			Verdict: plan.SingleMergeRecoveryRebaseAndReviewRequired,
+			Reason:  "the restarted merge still requires a reviewed source tip containing its recorded baseline",
+		}, nil
+	}
+	intent := *detail.State.Plan.MergeCommitIntent
+	if err := intent.Validate(); err != nil {
+		return plan.SingleMergeIntentRecovery{}, fmt.Errorf("validate single-merge intent: %w", err)
+	}
+	live, _, _, err := s.inspectSingleMergeRestartBoundary(ctx, git, detail, intent)
+	if err != nil {
+		return plan.SingleMergeIntentRecovery{}, err
+	}
+	// Persisted requested evidence cannot prove that the provider never became
+	// usable, so read-side inspection always treats it as post-provider ambiguity.
+	live.ProviderWasUsable = intent.Resolution != nil && intent.Resolution.Phase == plan.SingleMergeResolutionPhaseRequested
+	classified := ClassifySingleMergeIntentRecovery(intent, live)
+	return plan.SingleMergeIntentRecovery{Phase: string(classified.Phase), Verdict: string(classified.Verdict), Reason: classified.Reason}, nil
+}
+
+// RestartSingleMerge clears one exact stale, pre-landing squash intent. It is
+// intentionally a stop-and-instruct operation: callers must rebase the source
+// and refresh review before attempting a new merge transaction.
+func (s Service) RestartSingleMerge(ctx context.Context, planDir string) (SingleMergeRestartResult, error) {
+	planDir = strings.TrimSpace(planDir)
+	if planDir == "" {
+		return SingleMergeRestartResult{}, fmt.Errorf("single-merge restart plan dir is missing")
+	}
+	repo := plan.NewFileRepository(filepath.Dir(planDir))
+	detail, err := repo.ResolvePlan(ctx, planDir)
+	if err != nil {
+		return SingleMergeRestartResult{}, fmt.Errorf("load single-merge restart plan: %w", err)
+	}
+	if err := plan.RequireNotAbandoned(detail); err != nil {
+		return SingleMergeRestartResult{}, err
+	}
+	intent := detail.State.Plan.MergeCommitIntent
+	if intent == nil {
+		if restarted := latestSingleMergeRestart(detail); restarted != nil {
+			git, gitErr := s.gitClient()
+			if gitErr != nil {
+				return SingleMergeRestartResult{}, gitErr
+			}
+			pending, pendingErr := pendingSingleMergeRestart(ctx, git, detail)
+			if pendingErr != nil {
+				return SingleMergeRestartResult{}, pendingErr
+			}
+			if pending != nil {
+				return SingleMergeRestartResult{
+					Recovery: SingleMergeIntentRecovery{
+						Verdict: SingleMergeIntentRecoveryRebaseAndReviewRequired,
+						Reason:  pending.Reason,
+					},
+					NextAction: singleMergeRestartInstruction(*pending),
+				}, nil
+			}
+		}
+		next := plan.DeriveNextAction(detail).Primary
+		nextAction := strings.TrimSpace(next.Command)
+		if nextAction == "" {
+			nextAction = strings.TrimSpace(next.Instruction)
+		}
+		if nextAction == "" {
+			nextAction = "no further action is required"
+		}
+		return SingleMergeRestartResult{
+			Recovery:   SingleMergeIntentRecovery{Reason: "no stale single-plan merge intent is recorded"},
+			NextAction: nextAction,
+		}, nil
+	}
+	inspected := *intent
+	if inspected.Resolution != nil {
+		resolution := *inspected.Resolution
+		inspected.Resolution = &resolution
+	}
+	if err := inspected.Validate(); err != nil {
+		return SingleMergeRestartResult{}, fmt.Errorf("validate single-merge restart intent: %w", err)
+	}
+
+	git, err := s.gitClient()
+	if err != nil {
+		return SingleMergeRestartResult{}, err
+	}
+	live, defaultHead, sourceBranch, err := s.inspectSingleMergeRestartBoundary(ctx, git, detail, inspected)
+	if err != nil {
+		return SingleMergeRestartResult{}, err
+	}
+	classification := ClassifySingleMergeIntentRecovery(inspected, live)
+	result := SingleMergeRestartResult{Recovery: classification}
+	if live.ExactIntendedSquash {
+		safetyLive := live
+		safetyLive.ExactIntendedSquash = false
+		safety := ClassifySingleMergeIntentRecovery(inspected, safetyLive)
+		if safety.Verdict != SingleMergeIntentRecoveryRestartable {
+			return result, fmt.Errorf("exact intended squash was found but cannot be recorded safely: %s", safety.Reason)
+		}
+		snapshot := mergeVerifySnapshot{defaultBranch: inspected.DefaultBranch, preMergeSHA: inspected.DefaultParent}
+		if err := s.settleIntegratedMerge(ctx, git, detail, sourceBranch, snapshot, Options{}, false); err != nil {
+			return result, fmt.Errorf("settle exact intended squash during single-merge restart: %w", err)
+		}
+		result.MergedDefaultSHA = defaultHead
+		result.NextAction = "merge is recorded; no restart is required"
+		return result, nil
+	}
+	if classification.Verdict != SingleMergeIntentRecoveryRestartable {
+		return result, fmt.Errorf("single-merge intent cannot be restarted: %s", classification.Reason)
+	}
+	record, err := s.planMergeRecord(detail.Dir, detail)
+	if err != nil {
+		return result, fmt.Errorf("clear stale single-merge intent: %w", err)
+	}
+	restarted := plan.Event{
+		Type: plan.EventTypeSingleMergeIntentRestarted, Timestamp: s.now().UTC(), PlanID: inspected.PlanID,
+		Branch: sourceBranch, PriorHead: inspected.SourceHead, BaselineBranch: inspected.DefaultBranch, BaselineHead: defaultHead,
+		Reason: classification.Reason, Message: "Stale single-plan merge intent restarted",
+	}
+	if err := record.ClearSingleMergeCommitIntentForRestart(inspected, restarted); err != nil {
+		return result, fmt.Errorf("clear stale single-merge intent: %w", err)
+	}
+	result.Discarded = &inspected
+	result.NextAction = singleMergeRestartInstruction(restarted)
+	return result, nil
+}
+
+func (s Service) inspectSingleMergeRestartBoundary(ctx context.Context, git GitClient, detail *plan.PlanDetail, intent plan.SingleMergeCommitIntent) (SingleMergeIntentLiveState, string, string, error) {
+	live := SingleMergeIntentLiveState{PlanID: strings.TrimSpace(detail.State.Plan.ID), DefaultBranch: intent.DefaultBranch}
+	defaultBranch, err := resolveDefaultBranch(ctx, git, detail)
+	if err != nil {
+		return live, "", "", err
+	}
+	live.DefaultBranch = defaultBranch
+	planBranch, err := resolvePlanBranch(detail)
+	if err != nil {
+		return live, "", "", err
+	}
+
+	defaultHead, defaultErr := git.RevParse(ctx, "refs/heads/"+intent.DefaultBranch)
+	live.DefaultBranchExists = defaultErr == nil && strings.TrimSpace(defaultHead) != ""
+	defaultHead = strings.TrimSpace(defaultHead)
+	live.LiveDefault = defaultHead
+	if live.DefaultBranchExists && defaultHead != intent.DefaultParent {
+		parent, parentErr := git.RevParse(ctx, defaultHead+"^")
+		message, messageErr := git.CommitMessage(ctx, defaultHead)
+		live.ExactIntendedSquash = parentErr == nil && messageErr == nil && strings.TrimSpace(parent) == intent.DefaultParent && strings.TrimSpace(message) == intent.Message
+	}
+	// Exact landing is computed before every gate that exists solely to protect
+	// intent deletion. The full boundary is still inspected before settlement.
+	sourceHead, sourceErr := git.RevParse(ctx, "refs/heads/"+planBranch)
+	live.SourceBranchExists = sourceErr == nil && strings.TrimSpace(sourceHead) != ""
+	live.SourceHead = strings.TrimSpace(sourceHead)
+	if current, currentErr := git.CurrentBranch(ctx); currentErr != nil || strings.TrimSpace(current) != intent.DefaultBranch {
+		live.OwnershipUnsafe = true
+	}
+	status, statusErr := git.StatusPorcelain(ctx)
+	live.Dirty = statusErr != nil || strings.TrimSpace(status) != ""
+	if resolution := intent.Resolution; resolution != nil && resolution.Phase == plan.SingleMergeResolutionPhaseResolved && statusErr == nil {
+		changes, changesErr := concretePorcelainChanges(ctx, git)
+		if changesErr == nil && slices.Equal(changes.changedPaths, resolution.ChangedPaths) {
+			fingerprint, fingerprintErr := resolutionContentFingerprint(git.Root(), changes.changedPaths)
+			live.ExactResolutionEdits = fingerprintErr == nil && fingerprint == resolution.ContentFingerprint
+		}
+	}
+	if root := strings.TrimSpace(git.Root()); root == "" {
+		live.OwnershipUnsafe = true
+	} else {
+		operation, operationErr := gitops.ActiveOperation(root)
+		if operationErr != nil {
+			live.OwnershipUnsafe = true
+		} else {
+			live.ActiveOperation = operation
+		}
+		if recordedRoot := strings.TrimSpace(detail.State.Repo.Root); recordedRoot == "" || !samePhysicalPath(root, recordedRoot) {
+			live.OwnershipUnsafe = true
+		}
+	}
+
+	identity := mergePlanWorktreeIdentity(detail)
+	if identity.Separate {
+		if !hasSeparatePlanWorktree(detail) {
+			live.OwnershipUnsafe = true
+		} else {
+			worktreeGit, worktreeErr := s.worktreeGit(detail)
+			if worktreeErr != nil {
+				live.OwnershipUnsafe = true
+			} else {
+				branch, branchErr := worktreeGit.CurrentBranch(ctx)
+				head, headErr := worktreeGit.RevParse(ctx, "HEAD")
+				worktreeStatus, worktreeStatusErr := worktreeGit.StatusPorcelain(ctx)
+				operation, operationErr := gitops.ActiveOperation(worktreeGit.Root())
+				if branchErr != nil || strings.TrimSpace(branch) != planBranch || headErr != nil || strings.TrimSpace(head) != live.SourceHead || worktreeStatusErr != nil || operationErr != nil {
+					live.OwnershipUnsafe = true
+				}
+				live.PlanWorktreeDirty = strings.TrimSpace(worktreeStatus) != ""
+				if live.ActiveOperation == "" {
+					live.ActiveOperation = operation
+				}
+			}
+		}
+	}
+
+	if live.DefaultBranchExists {
+		advanced, advancedErr := git.IsAncestor(ctx, intent.DefaultParent, defaultHead)
+		rewound, rewoundErr := git.IsAncestor(ctx, defaultHead, intent.DefaultParent)
+		if advancedErr != nil || rewoundErr != nil {
+			return live, defaultHead, planBranch, fmt.Errorf("inspect default relation to single-merge intent parent: %w", errors.Join(advancedErr, rewoundErr))
+		}
+		live.DefaultAdvanced = defaultHead != intent.DefaultParent && advanced
+		live.DefaultRewound = defaultHead != intent.DefaultParent && rewound
+	}
+	return live, defaultHead, planBranch, nil
+}
+
+func samePhysicalPath(a, b string) bool {
+	physical := func(value string) string {
+		resolved, err := filepath.EvalSymlinks(filepath.Clean(value))
+		if err != nil {
+			return ""
+		}
+		return resolved
+	}
+	left, right := physical(a), physical(b)
+	return left != "" && left == right
+}
+
 func mergeVerifyMayNeedSnapshot(options Options) bool {
 	if options.NoVerify {
 		return false
@@ -116,14 +364,23 @@ func (s Service) Merge(ctx context.Context, detail *plan.PlanDetail, options Opt
 	if err := plan.RequireNotAbandoned(detail); err != nil {
 		return err
 	}
+	git, err := s.gitClient()
+	if err != nil {
+		return err
+	}
+	if !options.Force {
+		restarted, restartErr := pendingSingleMergeRestart(ctx, git, detail)
+		if restartErr != nil {
+			return restartErr
+		}
+		if restarted != nil {
+			return fmt.Errorf("single-merge restart requires recovery before another merge: %s", singleMergeRestartInstruction(*restarted))
+		}
+	}
 	intent := detail.State.Plan.MergeCommitIntent
 	activeResolution := intent != nil && intent.Resolution != nil && intent.Resolution.Phase != plan.SingleMergeResolutionPhaseRolledBack
 	if activeResolution && options.NoSquash {
 		return fmt.Errorf("%w: --no-squash cannot be used while non-rolled-back single-plan conflict-resolution evidence exists", ErrSingleResolutionRejected)
-	}
-	git, err := s.gitClient()
-	if err != nil {
-		return err
 	}
 	// Resolution evidence is classified before the ordinary clean-worktree gate:
 	// requested/resolved phases legitimately own a dirty default worktree, while
@@ -309,15 +566,31 @@ func (s Service) finishResolvedSingleMerge(ctx context.Context, git GitClient, d
 }
 
 func (s Service) finishIntegratedMerge(ctx context.Context, git GitClient, detail *plan.PlanDetail, planBranch string, snapshot mergeVerifySnapshot, options Options) error {
+	return s.settleIntegratedMerge(ctx, git, detail, planBranch, snapshot, options, true)
+}
+
+// settleIntegratedMerge is the shared post-integration gate and settlement
+// path. Ordinary merges own their newly-created commit and may roll it back;
+// restart recovery only observes an already-landed commit and must leave it in
+// place when verification or recording fails.
+func (s Service) settleIntegratedMerge(ctx context.Context, git GitClient, detail *plan.PlanDetail, planBranch string, snapshot mergeVerifySnapshot, options Options, rollbackOnFailure bool) error {
 	verify, err := resolveMergeVerifyCommandForDetail(detail, options)
 	if err != nil {
-		return rollbackIntegratedMerge(ctx, git, snapshot, err)
+		if rollbackOnFailure {
+			return rollbackIntegratedMerge(ctx, git, snapshot, err)
+		}
+		return err
 	}
-	if _, err := s.verifyIntegratedMerge(ctx, detail, snapshot, verify); err != nil {
+	if rollbackOnFailure {
+		_, err = s.verifyIntegratedMerge(ctx, detail, snapshot, verify)
+	} else {
+		_, err = s.verifyRecoveredIntegratedMerge(ctx, detail, snapshot, verify)
+	}
+	if err != nil {
 		return err
 	}
 	recorded, err := s.recordIntegratedMerge(ctx, git, detail, planBranch, snapshot, options)
-	if err != nil && !recorded {
+	if err != nil && !recorded && rollbackOnFailure {
 		return rollbackIntegratedMerge(ctx, git, snapshot, err)
 	}
 	return err
@@ -340,6 +613,26 @@ func (s Service) verifyIntegratedMerge(ctx context.Context, detail *plan.PlanDet
 	s.logMergeVerifySkipped(verify)
 	s.appendMergeVerificationEvent(detail, plan.Event{Result: "skipped", Reason: reason, Message: "Merge verification skipped"})
 	return "skipped: " + reason, nil
+}
+
+func (s Service) verifyRecoveredIntegratedMerge(ctx context.Context, detail *plan.PlanDetail, snapshot mergeVerifySnapshot, verify mergeVerifyCommandResolution) (string, error) {
+	if verify.command == "" {
+		return s.verifyIntegratedMerge(ctx, detail, snapshot, verify)
+	}
+	repoRoot, err := mergeVerifyRepoRoot(detail)
+	if err != nil {
+		return "", err
+	}
+	output, runErr := s.runMergeVerifyAtRoot(ctx, repoRoot, verify.command)
+	if runErr != nil {
+		s.appendMergeVerificationEvent(detail, plan.Event{Command: verify.command, Result: "failed", Message: "Merge verification failed; the recovered merge was not recorded"})
+		return output, &VerifyFailedError{Command: verify.command, RepoRoot: repoRoot, Output: output, Cause: runErr}
+	}
+	s.appendMergeVerificationEvent(detail, plan.Event{Command: verify.command, Result: "passed", Message: "Merge verification passed"})
+	if strings.TrimSpace(output) == "" {
+		return "passed with no output", nil
+	}
+	return output, nil
 }
 
 func (s Service) recordIntegratedMerge(ctx context.Context, git GitClient, detail *plan.PlanDetail, planBranch string, snapshot mergeVerifySnapshot, options Options) (bool, error) {

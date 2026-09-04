@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,6 +10,73 @@ import (
 	"testing"
 	"time"
 )
+
+func TestPlanRecordClearSingleMergeIntentReplaysInterruptedJournalIdempotently(t *testing.T) {
+	for _, operation := range []string{"state", "remove"} {
+		t.Run(operation, func(t *testing.T) {
+			root := t.TempDir()
+			writeMinimalPlan(t, root, "merge-intent", "Merge Intent")
+			planDir := filepath.Join(root, "merge-intent")
+			repo := NewFileRepository(root)
+			detail, err := repo.GetPlan(context.Background(), "merge-intent")
+			if err != nil {
+				t.Fatal(err)
+			}
+			intent := SingleMergeCommitIntent{
+				Message: "fix(merge): retain exact recovery\n\nWhat:\nClear stale state.\n\nWhy:\nResume safely.",
+				PlanID:  "merge-intent", SourceHead: "source123", DefaultBranch: "main", DefaultParent: "base123",
+				CreatedAt: time.Date(2026, 9, 4, 21, 0, 0, 0, time.UTC),
+			}
+			initial, err := NewPlanRecord(planDir, detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := initial.RecordSingleMergeCommitIntent(intent); err != nil {
+				t.Fatal(err)
+			}
+			detail, err = repo.GetPlan(context.Background(), "merge-intent")
+			if err != nil {
+				t.Fatal(err)
+			}
+			ioStore := &failingMutationJournalIO{delegate: fileMutationJournalIO{}, failOperation: operation}
+			store := journalArtifactMutationStore{fileArtifactStore: fileArtifactStore{}, journalIO: ioStore}
+			record, err := newPlanRecord(store, planDir, detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			err = record.ClearSingleMergeCommitIntent(intent)
+			if err == nil || !strings.Contains(err.Error(), "injected "+operation+" failure") {
+				t.Fatalf("clear error = %v, want injected %s failure", err, operation)
+			}
+			if detail.State.Plan.MergeCommitIntent == nil {
+				t.Fatal("failed clear published an uncommitted in-memory mutation")
+			}
+			if _, err := os.Stat(filepath.Join(planDir, mutationJournalFile)); err != nil {
+				t.Fatalf("interrupted clear did not retain mutation journal: %v", err)
+			}
+
+			// A retry through the stale record settles the exact journal first,
+			// then observes that the requested clear is already complete.
+			if err := record.ClearSingleMergeCommitIntent(intent); err != nil {
+				t.Fatalf("resume interrupted clear: %v", err)
+			}
+			if detail.State.Plan.MergeCommitIntent != nil {
+				t.Fatalf("resumed clear retained intent: %#v", detail.State.Plan.MergeCommitIntent)
+			}
+			reloaded, err := repo.GetPlan(context.Background(), "merge-intent")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reloaded.State.Plan.MergeCommitIntent != nil {
+				t.Fatalf("persisted resumed clear retained intent: %#v", reloaded.State.Plan.MergeCommitIntent)
+			}
+			if _, err := os.Stat(filepath.Join(planDir, mutationJournalFile)); !os.IsNotExist(err) {
+				t.Fatalf("resumed clear retained mutation journal: %v", err)
+			}
+		})
+	}
+}
 
 func TestRestartBlockedSliceSupersedesExactBoundaryWithDurableEvidence(t *testing.T) {
 	dir := t.TempDir()

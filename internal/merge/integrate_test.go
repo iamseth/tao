@@ -99,8 +99,16 @@ func TestIntegrateSquashRefusesMismatchedPartialCommitWithoutMutation(t *testing
 		},
 		commitMessages: map[string]string{"partial789": "not the intended message"},
 	}
-	if err := (Service{Git: git}).IntegrateSquash(context.Background(), detail); err == nil || !strings.Contains(err.Error(), "does not contain the exact intended squash") {
+	err := (Service{Git: git}).IntegrateSquash(context.Background(), detail)
+	if err == nil || !strings.Contains(err.Error(), "does not contain the exact intended squash") {
 		t.Fatalf("expected mismatched partial-commit refusal, got %v", err)
+	}
+	var drift *SingleMergeIntentDriftError
+	if !errors.Is(err, ErrSingleMergeIntentDrift) || !errors.As(err, &drift) {
+		t.Fatalf("expected typed single-merge intent drift, got %T: %v", err, err)
+	}
+	if drift.PlanID != "plan-a" || drift.DefaultBranch != "main" || drift.DefaultParent != "pre123" || drift.LiveDefault != "partial789" || drift.SourceHead != "source456" || drift.Phase != SingleMergeIntentPhaseUnresolved {
+		t.Fatalf("drift fields = %#v", drift)
 	}
 	for _, call := range git.calls {
 		if strings.HasPrefix(call, "checkout ") || strings.HasPrefix(call, "merge-squash ") || strings.HasPrefix(call, "commit ") {

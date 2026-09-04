@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	mergepkg "github.com/iamseth/tao/internal/merge"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/taodata"
@@ -209,6 +210,7 @@ func (c Collector) Collect(ctx context.Context) (Snapshot, error) {
 			if err := ctx.Err(); err != nil {
 				return Snapshot{}, err
 			}
+			summary = observeSingleMergeRecovery(ctx, entry, lister, summary, now)
 			row := planRow(entry, summary)
 			relationshipCatalog = append(relationshipCatalog, row)
 			if !c.includeSummary(summary, now) || (summary.Status == plan.StatusInvalid && !c.ShowInvalid) {
@@ -228,6 +230,34 @@ func (c Collector) Collect(ctx context.Context) (Snapshot, error) {
 	}
 	sortRows(snapshot.Rows)
 	return snapshot, nil
+}
+
+func observeSingleMergeRecovery(ctx context.Context, entry taodata.RepoInventoryEntry, lister PlanLister, summary plan.PlanSummary, now time.Time) plan.PlanSummary {
+	switch summary.NextAction.Primary.Kind {
+	case plan.PlanActionRecoverMerge, plan.PlanActionRebaseAndReview:
+	default:
+		return summary
+	}
+	loader, ok := lister.(interface {
+		GetPlan(context.Context, string) (*plan.PlanDetail, error)
+	})
+	if !ok {
+		return summary
+	}
+	detail, err := loader.GetPlan(ctx, summary.ID)
+	if err != nil || detail == nil {
+		return summary
+	}
+	root := strings.TrimSpace(entry.Repo.Root)
+	if root == "" {
+		root = strings.TrimSpace(detail.State.Repo.Root)
+	}
+	observation, err := mergepkg.NewService(root, nil).InspectSingleMergeIntentRecovery(ctx, detail)
+	if err != nil {
+		return summary
+	}
+	detail.SingleMergeIntentRecovery = &observation
+	return plan.Summarize(detail, now)
 }
 
 func (c Collector) now() time.Time {
@@ -495,6 +525,15 @@ func DeriveNextAction(row Row) string {
 		}
 	}
 	switch row.RecommendedAction.Kind {
+	case plan.PlanActionRestartMerge:
+		return "RESTART MERGE"
+	case plan.PlanActionRecoverMerge:
+		if row.RecommendedAction.Command != "" {
+			return "SETTLE MERGE"
+		}
+		return "INSPECT MERGE"
+	case plan.PlanActionRebaseAndReview:
+		return "REBASE AND REVIEW"
 	case plan.PlanActionRecoverPullRequest:
 		return "FINALIZE PR"
 	case plan.PlanActionReview:

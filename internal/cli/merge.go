@@ -21,11 +21,13 @@ var mergeCommand = commandMetadata{
 	minPrefix: "m",
 	usageLines: []string{
 		"merge (m) [--force] [--record-only] [--no-squash] [--no-verify] [--verify-command CMD] <plan-id-or-slug-or-path>",
+		"merge (m) --restart <plan-id-or-slug-or-path>",
 		"merge (m) --all [--dry-run] [--restart] [--auto-eject] [--verify-command CMD]",
 	},
 	completionDescription: "Merge approved plans into the default branch",
-	long:                  "Merge one reviewed, approved Tao plan, or atomically stage every reviewed and approved plan with --all. An ordinary single-plan squash conflict gets one automatic resolver attempt, exact structural validation, the configured verification gate, and an independent fresh-session review before completion; --force cannot bypass these safety and review gates, while --no-verify skips only command verification. --no-squash rebase conflicts remain manual. Batch mode keeps default unchanged while it orders and stages one squash per source, uses bounded agent resolution, then requires full verification and aggregate approval before one fast-forward. Eligible attributed aggregate-review non-convergence stops and offers to eject that plan on the next rerun; --auto-eject performs the eject-and-reland in the same run. Ejection is offered only when it leaves a non-empty batch and no plan was already ejected. Reruns resume durable progress; --dry-run previews and --restart discards only pre-landing batch recovery. Batch mode rejects --force, --record-only, --no-squash, and --no-verify.",
+	long:                  "Merge one reviewed, approved Tao plan, or atomically stage every reviewed and approved plan with --all. For one plan, --restart safely discards only an eligible stale pre-landing merge intent, then stops so the branch can be rebased and reviewed again; it cannot be combined with --force. An ordinary single-plan squash conflict gets one automatic resolver attempt, exact structural validation, the configured verification gate, and an independent fresh-session review before completion; --force cannot bypass these safety and review gates, while --no-verify skips only command verification. --no-squash rebase conflicts remain manual. Batch mode keeps default unchanged while it orders and stages one squash per source, uses bounded agent resolution, then requires full verification and aggregate approval before one fast-forward. Eligible attributed aggregate-review non-convergence stops and offers to eject that plan on the next rerun; --auto-eject performs the eject-and-reland in the same run. Ejection is offered only when it leaves a non-empty batch and no plan was already ejected. Reruns resume durable progress; --dry-run previews and --all --restart discards only pre-landing batch recovery. Batch mode rejects --force, --record-only, --no-squash, and --no-verify.",
 	examples: "  tao merge my-plan\n" +
+		"  tao merge --restart my-plan\n" +
 		"  tao merge --all\n" +
 		"  tao merge --all --auto-eject\n" +
 		"  tao merge --all --dry-run\n" +
@@ -48,7 +50,7 @@ var mergeCommand = commandMetadata{
 func registerMergeFlags(fs *flag.FlagSet) {
 	fs.Bool("all", false, "merge every reviewed and approved plan in one atomic batch")
 	fs.Bool("dry-run", false, "preview batch candidates and order without durable changes")
-	fs.Bool("restart", false, "discard safe pre-landing batch recovery state and start again")
+	fs.Bool("restart", false, "discard safe pre-landing recovery state and start again: a stale single-plan merge intent, or batch recovery state with --all")
 	fs.Bool("auto-eject", false, "automatically eject an attributed non-converging plan and reland the rest")
 	fs.Bool("force", false, "bypass pre-merge approval, review-base, and dirty-worktree gates, not conflict-resolution safety or independent review (single-plan only)")
 	fs.Bool("record-only", false, "record an external merge and run cleanup (single-plan only)")
@@ -59,6 +61,7 @@ func registerMergeFlags(fs *flag.FlagSet) {
 
 type mergeServiceRunner interface {
 	Merge(ctx context.Context, detail *plan.PlanDetail, options mergepkg.Options) error
+	RestartSingleMerge(ctx context.Context, planDir string) (mergepkg.SingleMergeRestartResult, error)
 }
 
 type mergeBatchOptions = mergepkg.BatchCoordinatorOptions
@@ -109,10 +112,18 @@ func (a App) merge(ctx context.Context, repo plan.Resolver, args []string) error
 		}
 		return runErr
 	}
-	if flagBoolValue(fs, "dry-run") || flagBoolValue(fs, "restart") || flagBoolValue(fs, "auto-eject") {
-		return errors.New("--dry-run, --restart, and --auto-eject require --all")
+	restart := flagBoolValue(fs, "restart")
+	if flagBoolValue(fs, "dry-run") || flagBoolValue(fs, "auto-eject") {
+		return errors.New("--dry-run and --auto-eject require --all")
 	}
-	if err := requirePositionals(positional, 1, "usage: tao merge [--force] [--record-only] [--no-squash] [--no-verify] [--verify-command CMD] <plan-id-or-slug-or-path>"); err != nil {
+	if restart && flagBoolValue(fs, "force") {
+		return errors.New("--restart cannot be combined with --force")
+	}
+	usage := "usage: tao merge [--force] [--record-only] [--no-squash] [--no-verify] [--verify-command CMD] <plan-id-or-slug-or-path>"
+	if restart {
+		usage = "usage: tao merge --restart <plan-id-or-slug-or-path>"
+	}
+	if err := requirePositionals(positional, 1, usage); err != nil {
 		return err
 	}
 
@@ -146,6 +157,13 @@ func (a App) merge(ctx context.Context, repo plan.Resolver, args []string) error
 		service, err := newMergeServiceRunner(a, refreshed)
 		if err != nil {
 			return err
+		}
+		if restart {
+			result, err := service.RestartSingleMerge(ownedCtx, refreshed.Dir)
+			if err != nil {
+				return err
+			}
+			return renderSingleMergeRestartResult(a.Out, result)
 		}
 		if err := service.Merge(ownedCtx, refreshed, options); err != nil {
 			if renderErr := renderMergeFailure(a.Out, refreshed, err); renderErr != nil {
@@ -440,6 +458,38 @@ func renderMergeSuccess(out io.Writer, detail *plan.PlanDetail) error {
 	return writeln(out, "Cleanup completed: plan worktree/branch removed")
 }
 
+func renderSingleMergeRestartResult(out io.Writer, result mergepkg.SingleMergeRestartResult) error {
+	switch {
+	case result.Discarded != nil:
+		intent := result.Discarded
+		if err := writeln(out, "Discarded stale single-plan merge intent:"); err != nil {
+			return err
+		}
+		if err := writeLines(out,
+			"Plan: "+emptyMergeField(intent.PlanID),
+			"Default Parent: "+emptyMergeField(intent.DefaultParent),
+			"Source Head: "+emptyMergeField(intent.SourceHead),
+			"Intent Phase: "+emptyMergeField(string(result.Recovery.Phase)),
+		); err != nil {
+			return err
+		}
+	case result.MergedDefaultSHA != "":
+		if err := writef(out, "Exact intended squash already landed at %s; merge evidence was recorded.\n", result.MergedDefaultSHA); err != nil {
+			return err
+		}
+	default:
+		if err := writeln(out, "Single-plan merge restart made no change."); err != nil {
+			return err
+		}
+	}
+	if reason := strings.TrimSpace(result.Recovery.Reason); reason != "" {
+		if err := writef(out, "Reason: %s\n", reason); err != nil {
+			return err
+		}
+	}
+	return writef(out, "Next: %s.\n", strings.TrimSuffix(strings.TrimSpace(result.NextAction), "."))
+}
+
 func renderMergeFailure(out io.Writer, detail *plan.PlanDetail, err error) error {
 	planID := mergePlanID(detail)
 	switch {
@@ -451,6 +501,8 @@ func renderMergeFailure(out io.Writer, detail *plan.PlanDetail, err error) error
 		return renderMergeReviewHeadMismatch(out, planID, err)
 	case errors.Is(err, mergepkg.ErrDirtyWorktree):
 		return renderMergeDirtyWorktree(out, detail, planID, err)
+	case errors.Is(err, mergepkg.ErrSingleMergeIntentDrift):
+		return renderSingleMergeIntentDrift(out, detail, planID, err)
 	case errors.Is(err, mergepkg.ErrSingleResolutionDrift):
 		return renderMergeResolutionRecoveryRefusal(out, detail, planID, err)
 	case errors.Is(err, mergepkg.ErrSingleResolutionRejected):
@@ -468,6 +520,35 @@ func renderMergeFailure(out io.Writer, detail *plan.PlanDetail, err error) error
 			return err
 		}
 		return writeln(out, "Next: inspect the repository state, fix the reported problem, then rerun `tao merge`.")
+	}
+}
+
+func renderSingleMergeIntentDrift(out io.Writer, detail *plan.PlanDetail, planID string, err error) error {
+	drift, ok := errors.AsType[*mergepkg.SingleMergeIntentDriftError](err)
+	if !ok {
+		return renderMergeGenericRefusal(out, planID, err, "inspect the stale merge intent")
+	}
+	if err := writeln(out, "Merge refused: stale single-plan merge intent"); err != nil {
+		return err
+	}
+	if err := writeLines(out,
+		"Stale Parent: "+emptyMergeField(drift.DefaultParent),
+		"Live Default: "+emptyMergeField(drift.LiveDefault),
+		"Source Head: "+emptyMergeField(drift.SourceHead),
+		"Intent Phase: "+emptyMergeField(string(drift.Phase)),
+		"Reason: "+emptyMergeField(drift.Reason),
+	); err != nil {
+		return err
+	}
+	switch drift.Verdict {
+	case mergepkg.SingleMergeIntentRecoveryRestartable:
+		return writef(out, "Next: `tao merge --restart %s`\n", planID)
+	case mergepkg.SingleMergeIntentRecoveryRebaseAndReviewRequired:
+		return writef(out, "Next: rebase %s onto %s, then run `tao review --run %s`\n", emptyMergeField(mergePlanBranch(detail)), emptyMergeField(drift.DefaultBranch), planID)
+	case mergepkg.SingleMergeIntentRecoverySettleExistingResolution:
+		return writef(out, "Next: settle the recorded resolution authority, then run `tao review --run %s`\n", planID)
+	default:
+		return writef(out, "Next: inspect the plan and recovery reason with `tao show %s`\n", planID)
 	}
 }
 
