@@ -767,8 +767,11 @@ func TestPlanDetailOverviewPromotesInspectionFindingsAndKeepsBottomReachable(t *
 	}
 
 	all := strings.Join(renderOverviewPane(detail, monitor.Row{}, 32, 1_000, 0, inspection, ProfileNone, false), "\n")
-	if !strings.Contains(all, "ATTENTION") || !strings.Contains(all, "last-finding") || strings.Index(all, "ATTENTION") > strings.Index(all, "PROGRESS") {
-		t.Fatalf("inspection findings were not promoted above Progress:\n%s", all)
+	if !strings.Contains(all, "! ATTENTION") || !strings.Contains(all, "last-finding") || strings.Index(all, "! ATTENTION") > strings.Index(all, "CONTEXT") {
+		t.Fatalf("inspection findings were not promoted above Context:\n%s", all)
+	}
+	if strings.Contains(all, "PROGRESS") {
+		t.Fatalf("overview retained redundant Progress section:\n%s", all)
 	}
 
 	(App{}).handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'G'})

@@ -191,7 +191,7 @@ func TestRenderDetailIncludesHeaderAndFitsTerminal(t *testing.T) {
 		Log:   "working\n",
 		Width: 100, Height: 18,
 	})
-	for _, want := range []string{"Tao UI | plan-a | alpha | in_progress | implement | 7s ago", "[Overview]  Slices  Activity", "Plan A", "Status  in_progress", "PROGRESS", "PROBLEM"} {
+	for _, want := range []string{"Tao UI | plan-a | alpha | implement | 7s ago", "[Overview]  Slices  Activity", "Plan A", "STATUS  in_progress", "CONTEXT", "Problem"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("detail frame missing %q:\n%s", want, frame)
 		}
@@ -201,7 +201,7 @@ func TestRenderDetailIncludesHeaderAndFitsTerminal(t *testing.T) {
 	}
 	body := strings.TrimSuffix(strings.TrimPrefix(frame, clearScreenSequence), "\n")
 	lines := strings.Split(body, "\n")
-	if len(lines) < 5 || lines[1] != "" || lines[2] != "[Overview]  Slices  Activity" || !strings.HasPrefix(lines[3], "─") || lines[4] != "Plan A" {
+	if len(lines) < 5 || lines[1] != "" || lines[2] != "[Overview]  Slices  Activity" || lines[3] != "" || lines[4] != "Plan A" {
 		t.Fatalf("detail frame did not preserve the tab layout and summary: %q", lines)
 	}
 	if strings.Contains(lines[0], "PLAN DETAIL") || strings.Contains(lines[0], "Plan A") {
@@ -228,7 +228,7 @@ func TestRenderDetailShowsSafeAbandonmentEvidence(t *testing.T) {
 		Row:       monitor.Row{Status: plan.StatusAbandoned, AbandonmentReason: "bounded\nreason\x1b[2J", AbandonedAt: &at},
 		ActiveTab: detailTabOverview, Width: 80, Height: 24,
 	})
-	for _, want := range []string{"Status  abandoned", "ATTENTION", "Abandoned at: 2026-09-01T14:00:00Z", "Abandonment reason: bounded reason [2J"} {
+	for _, want := range []string{"STATUS  abandoned", "! ATTENTION", "Abandoned at: 2026-09-01T14:00:00Z", "Abandonment reason: bounded reason [2J"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("abandoned detail missing %q:\n%s", want, frame)
 		}
@@ -248,24 +248,28 @@ func TestRenderDetailShowsSafeAbandonmentEvidence(t *testing.T) {
 	}
 }
 
-func TestRenderOverviewShowsAdvisoryInspectionStates(t *testing.T) {
+func TestRenderOverviewShowsOnlyMeaningfulAdvisoryInspectionState(t *testing.T) {
 	detail := &plan.PlanDetail{State: plan.State{Plan: plan.PlanState{ID: "plan-a", Title: "Plan A"}}}
 	tests := []struct {
-		name       string
-		inspection detailInspectionView
-		want       string
+		name          string
+		inspection    detailInspectionView
+		want          string
+		wantAttention bool
 	}{
-		{name: "unavailable", inspection: detailInspectionView{status: detailInspectionUnavailable}, want: "Unavailable; no detail inspector is configured."},
-		{name: "loading", inspection: detailInspectionView{status: detailInspectionLoading}, want: "Loading advisory findings"},
-		{name: "current", inspection: detailInspectionView{status: detailInspectionReady}, want: "No findings; the recorded planning base matches current HEAD."},
-		{name: "drift", inspection: detailInspectionView{status: detailInspectionReady, findings: []DetailFinding{{Severity: "info", Message: "repository HEAD changed since planning"}, {Severity: "warning", Message: "pending slice 003 expects file(s) changed since planning"}}}, want: "pending slice 003 expects file(s) changed since planning"},
-		{name: "failure", inspection: detailInspectionView{status: detailInspectionFailed, err: "git unavailable"}, want: "Inspection failed: git unavailable"},
+		{name: "unavailable", inspection: detailInspectionView{status: detailInspectionUnavailable}, want: "STALENESS  unavailable"},
+		{name: "loading", inspection: detailInspectionView{status: detailInspectionLoading}, want: "STALENESS  checking"},
+		{name: "current", inspection: detailInspectionView{status: detailInspectionReady}, want: "CONTEXT"},
+		{name: "drift", inspection: detailInspectionView{status: detailInspectionReady, findings: []DetailFinding{{Severity: "info", Message: "repository HEAD changed since planning"}, {Severity: "warning", Message: "pending slice 003 expects file(s) changed since planning"}}}, want: "pending slice 003 expects file(s) changed since planning", wantAttention: true},
+		{name: "failure", inspection: detailInspectionView{status: detailInspectionFailed, err: "git unavailable"}, want: "Inspection failed: git unavailable", wantAttention: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			frame := RenderDetail(DetailModel{Plan: detail, ActiveTab: detailTabOverview, Inspection: test.inspection, Width: 100, Height: 28})
-			if !strings.Contains(frame, "Staleness") || !strings.Contains(frame, test.want) {
+			if !strings.Contains(frame, test.want) {
 				t.Fatalf("inspection frame missing %q:\n%s", test.want, frame)
+			}
+			if got := strings.Contains(frame, "! ATTENTION"); got != test.wantAttention {
+				t.Fatalf("attention visibility = %t, want %t:\n%s", got, test.wantAttention, frame)
 			}
 		})
 	}
@@ -290,7 +294,7 @@ func TestRenderDetailTabsShowBoundedOverviewSlicesAndActivity(t *testing.T) {
 	}
 
 	overview := RenderDetail(DetailModel{Plan: detail, ActiveTab: detailTabOverview, Width: 72, Height: 50})
-	for _, want := range []string{"[Overview]  Slices  Activity", "Change type  feat", "PROBLEM", "Operators lack context.", "SCOPE", "internal/tui/detail.go", "OPEN QUESTIONS"} {
+	for _, want := range []string{"[Overview]  Slices  Activity", "TYPE  feat", "CONTEXT", "Problem", "Operators lack context.", "SCOPE", "internal/tui/detail.go", "Open questions"} {
 		if !strings.Contains(overview, want) {
 			t.Fatalf("overview missing %q:\n%s", want, overview)
 		}
@@ -340,11 +344,11 @@ func TestRenderOverviewUsesScannableSectionsChecklistPriorityGridAndExpandableSc
 
 	collapsed := RenderDetail(DetailModel{Plan: detail, ActiveTab: detailTabOverview, Inspection: inspection, Width: 96, Height: 80})
 	for _, want := range []string{
-		"Make plan details easy to scan", "Change type  feat", "Status  planned", "Readiness  ready", "Priority  must",
-		"WHY NOW  Operators need faster decisions.", "PROGRESS", "Sequence  2 of 4", "Disposition  ready", "Staleness  current",
-		"PROBLEM", "EXPECTED BENEFIT", "SUCCESS CRITERIA", "☐ Summary is visible", "☐ Scope can expand",
-		"PRIORITY", "Level  must", "Impact  high", "Urgency  medium", "Effort  small", "Risk  low", "Confidence  high",
-		"SCOPE", "internal/six.go", "2 more — press e to expand",
+		"Make plan details easy to scan", "TYPE  feat", "STATUS  planned", "READINESS  ready", "PRIORITY  must",
+		"SEQUENCE  2 of 4", "DISPOSITION  ready", "CONTEXT", "Problem", "Why now", "Expected benefit",
+		"SUCCESS CRITERIA", "☐ Summary is visible", "☐ Scope can expand",
+		"PRIORITY", "Impact  high", "Urgency  medium", "Effort  small", "Risk  low", "Confidence  high",
+		"SCOPE", "internal/six.go", "+2 more — press e to expand",
 	} {
 		if !strings.Contains(collapsed, want) {
 			t.Fatalf("scannable overview missing %q:\n%s", want, collapsed)
@@ -365,7 +369,7 @@ func TestRenderOverviewUsesScannableSectionsChecklistPriorityGridAndExpandableSc
 func TestRenderOverviewUsesTokyoNightStatePalette(t *testing.T) {
 	detail := &plan.PlanDetail{State: plan.State{Status: plan.StatusBlocked, Plan: plan.PlanState{
 		Title:    "Blocked plan",
-		Decision: &plan.Decision{WhyNow: "A dependency is unavailable.", Readiness: plan.DecisionReadinessBlocked, Disposition: plan.DecisionDispositionConditional},
+		Decision: &plan.Decision{WhyNow: "A dependency is unavailable.", Readiness: plan.DecisionReadinessReady, Disposition: plan.DecisionDispositionReady},
 	}}}
 	frame := RenderDetail(DetailModel{
 		Plan: detail, Row: monitor.Row{AttentionReasons: []monitor.AttentionReason{monitor.AttentionBlocked}},
@@ -416,7 +420,7 @@ func TestRenderDetailVerticalResizeKeepsFrameInsideTerminal(t *testing.T) {
 	if len(lines) > 6 {
 		t.Fatalf("resized detail frame has %d lines, want at most 6:\n%s", len(lines), frame)
 	}
-	if !strings.HasPrefix(lines[0], "Tao UI | plan-a |") || lines[2] != "[Overview]  Slices  Activity" || !strings.HasPrefix(lines[3], "─") || lines[4] != "Plan details unavailable." {
+	if !strings.HasPrefix(lines[0], "Tao UI | plan-a |") || lines[2] != "[Overview]  Slices  Activity" || lines[3] != "" || lines[4] != "Plan details unavailable." {
 		t.Fatalf("resized detail frame lost compact header or detail tabs: %q", lines)
 	}
 }

@@ -235,15 +235,18 @@ func RenderDetail(model DetailModel) string {
 	if profile == ProfileNone {
 		profile = profileForEnabledColor(model.UseColor)
 	}
-	header := "Tao UI | " + singleLineDetail(id) + " | " + singleLineDetail(repoName) +
-		" | " + singleLineDetail(status) + " | " + singleLineDetail(phase) + " | " + singleLineDetail(heartbeat)
-	if profile != ProfileNone {
-		header = Paint(profile, RoleDetailSecondary, header)
-	}
-
 	tab := model.ActiveTab
 	if tab < detailTabOverview || tab >= detailTabCount {
 		tab = detailTabOverview
+	}
+	header := "Tao UI | " + singleLineDetail(id) + " | " + singleLineDetail(repoName)
+	if tab != detailTabOverview {
+		header += " | " + singleLineDetail(status) + " | " + singleLineDetail(phase) + " | " + singleLineDetail(heartbeat)
+	} else if phase != "-" || heartbeat != "-" {
+		header += " | " + singleLineDetail(phase) + " | " + singleLineDetail(heartbeat)
+	}
+	if profile != ProfileNone {
+		header = Paint(profile, RoleDetailSecondary, header)
 	}
 	tabs := renderDetailTabs(tab, profile)
 	paneHeight := 24
@@ -273,7 +276,7 @@ func RenderDetail(model DetailModel) string {
 
 	lines := []string{header, "", tabs}
 	if tab == detailTabOverview {
-		lines = append(lines, detailDivider(profile, model.Width))
+		lines = append(lines, "")
 		lines = append(lines, content...)
 	} else {
 		lines = append(lines, "")
@@ -329,13 +332,6 @@ func renderDetailTabs(active detailTab, profile Profile) string {
 	return strings.Join(parts, "  ")
 }
 
-func detailDivider(profile Profile, width int) string {
-	if width <= 0 {
-		width = 72
-	}
-	return Paint(profile, RoleDetailDivider, strings.Repeat("─", width))
-}
-
 func renderOverviewPane(detail *plan.PlanDetail, row monitor.Row, width, height, offset int, inspection detailInspectionView, profile Profile, scopeExpanded bool) []string {
 	if detail == nil {
 		return nil
@@ -352,44 +348,40 @@ func renderOverviewPane(detail *plan.PlanDetail, row monitor.Row, width, height,
 
 	var lines []string
 	appendOverviewTitle(&lines, detail.State.Plan.Title, width, profile)
-	lines = append(lines, renderDetailGrid([]detailGridField{
-		{label: "Change type", value: overviewDisplay(string(detail.State.Plan.ChangeType)), role: RoleDetailInfo},
-		{label: "Status", value: overviewDisplay(status), role: detailStateRole(status)},
-		{label: "Readiness", value: overviewDisplay(string(overview.Readiness)), role: detailStateRole(string(overview.Readiness))},
-		{label: "Priority", value: priorityLevel, role: detailPriorityRole(priorityLevel)},
-	}, width, 4, profile)...)
-	appendOverviewLead(&lines, "Why now", overview.WhyNow, width, profile)
+	lines = append(lines, renderDetailMetadata([]detailGridField{
+		{label: "TYPE", value: overviewDisplay(string(detail.State.Plan.ChangeType)), role: RoleDetailInfo},
+		{label: "STATUS", value: overviewDisplay(status), role: detailStateRole(status)},
+		{label: "READINESS", value: overviewDisplay(string(overview.Readiness)), role: detailStateRole(string(overview.Readiness))},
+		{label: "PRIORITY", value: priorityLevel, role: detailPriorityRole(priorityLevel)},
+	}, width, profile)...)
 
 	attention := detailAttentionLines(detail, row, inspection, width, profile)
 	if len(attention) > 0 {
-		lines = append(lines, "", detailSectionHeading("ATTENTION", width, profile, RoleDetailWarning))
+		lines = append(lines, "", Paint(profile, RoleDetailWarning, "! ATTENTION"))
 		lines = append(lines, attention...)
 	}
 
-	lines = append(lines, "", detailSectionHeading("PROGRESS", width, profile, RoleDetailSecondary))
-	sequence := "-"
-	if overview.Sequence != nil {
-		sequence = fmt.Sprintf("%d of %d", overview.Sequence.Position, overview.Sequence.Total)
+	progress := overviewProgressLines(overview, inspection, width, profile)
+	if len(progress) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, progress...)
 	}
-	lines = append(lines, renderDetailGrid([]detailGridField{
-		{label: "Sequence", value: sequence, role: RoleDetailInfo},
-		{label: "Readiness", value: overviewDisplay(string(overview.Readiness)), role: detailStateRole(string(overview.Readiness))},
-		{label: "Disposition", value: overviewDisplay(string(overview.Disposition)), role: detailStateRole(string(overview.Disposition))},
-		{label: "Staleness", value: detailStalenessSummary(inspection), role: detailStalenessRole(inspection)},
-	}, width, 4, profile)...)
-	appendOverviewParagraph(&lines, "Disposition", overview.DispositionReason, width, profile)
-	appendOverviewParagraph(&lines, "Staleness", detailStalenessDescription(inspection), width, profile)
-	if overview.Sequence != nil {
-		for _, relationship := range overview.Sequence.Relationships {
-			appendOverviewBullet(&lines, string(relationship.Type)+" "+relationship.PlanID+" — "+relationship.Reason, width, profile, RoleDetailSecondary, "↳")
+
+	lines = append(lines, "", detailSectionHeading("CONTEXT", width, profile))
+	appendOverviewLabeledText(&lines, "Problem", overview.Problem, width, profile)
+	lines = append(lines, "")
+	appendOverviewLabeledText(&lines, "Why now", overview.WhyNow, width, profile)
+	lines = append(lines, "")
+	appendOverviewLabeledText(&lines, "Expected benefit", overview.ExpectedBenefit, width, profile)
+	questions := boundedOverviewValues(detail.State.OpenQuestions, detailOverviewMaxQuestions)
+	if len(questions) > 0 {
+		lines = append(lines, "", Paint(profile, RoleDetailMuted, "  Open questions"))
+		for _, question := range questions {
+			appendOverviewBullet(&lines, question, width, profile, RoleDetailSecondary, "?")
 		}
 	}
 
-	appendOverviewSection(&lines, "PROBLEM", overview.Problem, width, profile)
-	appendOverviewSection(&lines, "WHY NOW", overview.WhyNow, width, profile)
-	appendOverviewSection(&lines, "EXPECTED BENEFIT", overview.ExpectedBenefit, width, profile)
-
-	lines = append(lines, "", detailSectionHeading("SUCCESS CRITERIA", width, profile, RoleDetailSecondary))
+	lines = append(lines, "", detailSectionHeading("SUCCESS CRITERIA", width, profile))
 	if len(overview.SuccessCriteria) == 0 {
 		appendOverviewBullet(&lines, "-", width, profile, RoleDetailMuted, "☐")
 	} else {
@@ -400,19 +392,18 @@ func renderOverviewPane(detail *plan.PlanDetail, row monitor.Row, width, height,
 
 	if overview.Priority != nil {
 		priority := overview.Priority
-		lines = append(lines, "", detailSectionHeading("PRIORITY", width, profile, RoleDetailSecondary))
+		lines = append(lines, "", detailSectionHeading("PRIORITY", width, profile))
 		lines = append(lines, renderDetailGrid([]detailGridField{
-			{label: "Level", value: overviewDisplay(string(priority.Level)), role: detailPriorityRole(string(priority.Level))},
 			{label: "Impact", value: overviewDisplay(string(priority.Impact)), role: detailPriorityRole(string(priority.Impact))},
 			{label: "Urgency", value: overviewDisplay(string(priority.Urgency)), role: detailPriorityRole(string(priority.Urgency))},
-			{label: "Effort", value: overviewDisplay(string(priority.Effort)), role: RoleDetailSecondary},
 			{label: "Risk", value: overviewDisplay(string(priority.Risk)), role: detailRiskRole(string(priority.Risk))},
+			{label: "Effort", value: overviewDisplay(string(priority.Effort)), role: RoleDetailSecondary},
 			{label: "Confidence", value: overviewDisplay(string(priority.Confidence)), role: detailPriorityRole(string(priority.Confidence))},
 		}, width, 3, profile)...)
 		appendOverviewParagraph(&lines, "Rationale", priority.Rationale, width, profile)
 	}
 
-	lines = append(lines, "", detailSectionHeading("SCOPE", width, profile, RoleDetailSecondary))
+	lines = append(lines, "", detailSectionHeading("SCOPE", width, profile))
 	scope := detailScope(detail)
 	visibleScope := scope
 	if !scopeExpanded && len(visibleScope) > detailOverviewScopePreview {
@@ -426,18 +417,11 @@ func renderOverviewPane(detail *plan.PlanDetail, row monitor.Row, width, height,
 		}
 	}
 	if remaining := len(scope) - len(visibleScope); remaining > 0 {
-		appendOverviewBullet(&lines, fmt.Sprintf("%d more — press e to expand", remaining), width, profile, RoleDetailInfo, "…")
+		appendOverviewBullet(&lines, fmt.Sprintf("+%d more — press e to expand", remaining), width, profile, RoleDetailInfo, "")
 	} else if scopeExpanded && len(scope) > detailOverviewScopePreview {
 		appendOverviewBullet(&lines, "press e to collapse", width, profile, RoleDetailInfo, "↥")
 	}
 
-	questions := boundedOverviewValues(detail.State.OpenQuestions, detailOverviewMaxQuestions)
-	if len(questions) > 0 {
-		lines = append(lines, "", detailSectionHeading("OPEN QUESTIONS", width, profile, RoleDetailSecondary))
-		for _, question := range questions {
-			appendOverviewBullet(&lines, question, width, profile, RoleDetailSecondary, "?")
-		}
-	}
 	return fitDetailPaneAt(lines, width, height, offset)
 }
 
@@ -487,27 +471,61 @@ func appendOverviewTitle(lines *[]string, title string, width int, profile Profi
 	}
 }
 
-func appendOverviewLead(lines *[]string, label, value string, width int, profile Profile) {
-	value = overviewDisplay(value)
-	limit := 110
-	if width > 0 {
-		limit = max(width-cells.Width(label)-3, 20)
-	}
-	value = cells.TruncateEllipsis(value, limit)
-	prefix := Paint(profile, RoleDetailMuted, strings.ToUpper(label)+"  ")
-	wrapped := wrapDetailWords(value, detailContentWidth(width, cells.Width(strings.ToUpper(label))+2))
-	for index, line := range wrapped {
-		if index == 0 {
-			*lines = append(*lines, prefix+Paint(profile, RoleDetailSecondary, line))
-		} else {
-			*lines = append(*lines, strings.Repeat(" ", cells.Width(strings.ToUpper(label))+2)+Paint(profile, RoleDetailSecondary, line))
+func renderDetailMetadata(fields []detailGridField, width int, profile Profile) []string {
+	var lines []string
+	var line strings.Builder
+	lineWidth := 0
+	separator := Paint(profile, RoleDetailMuted, "  ·  ")
+	for _, field := range fields {
+		value := overviewDisplay(field.value)
+		plainWidth := cells.Width(field.label) + 2 + cells.Width(value)
+		styled := Paint(profile, RoleDetailMuted, field.label) + "  " + Paint(profile, field.role, value)
+		separatorWidth := 0
+		if lineWidth > 0 {
+			separatorWidth = 5
 		}
+		if width > 0 && lineWidth > 0 && lineWidth+separatorWidth+plainWidth > width {
+			lines = append(lines, line.String())
+			line.Reset()
+			lineWidth = 0
+			separatorWidth = 0
+		}
+		if separatorWidth > 0 {
+			line.WriteString(separator)
+		}
+		line.WriteString(styled)
+		lineWidth += separatorWidth + plainWidth
 	}
+	if line.Len() > 0 {
+		lines = append(lines, line.String())
+	}
+	return lines
 }
 
-func appendOverviewSection(lines *[]string, title, value string, width int, profile Profile) {
-	*lines = append(*lines, "", detailSectionHeading(title, width, profile, RoleDetailSecondary))
-	appendOverviewText(lines, overviewDisplay(value), width, profile, RoleDetailSecondary, "  ")
+func overviewProgressLines(overview plan.DecisionOverview, inspection detailInspectionView, width int, profile Profile) []string {
+	var fields []detailGridField
+	if overview.Sequence != nil {
+		fields = append(fields, detailGridField{label: "SEQUENCE", value: fmt.Sprintf("%d of %d", overview.Sequence.Position, overview.Sequence.Total), role: RoleDetailInfo})
+	}
+	if overview.Disposition != "" {
+		fields = append(fields, detailGridField{label: "DISPOSITION", value: string(overview.Disposition), role: detailStateRole(string(overview.Disposition))})
+	}
+	if inspection.status == detailInspectionLoading || inspection.status == detailInspectionUnavailable {
+		fields = append(fields, detailGridField{label: "STALENESS", value: detailStalenessSummary(inspection), role: detailStalenessRole(inspection)})
+	}
+	lines := renderDetailMetadata(fields, width, profile)
+	appendOverviewParagraph(&lines, "Disposition", overview.DispositionReason, width, profile)
+	if overview.Sequence != nil {
+		for _, relationship := range overview.Sequence.Relationships {
+			appendOverviewBullet(&lines, string(relationship.Type)+" "+relationship.PlanID+" — "+relationship.Reason, width, profile, RoleDetailSecondary, "↳")
+		}
+	}
+	return lines
+}
+
+func appendOverviewLabeledText(lines *[]string, label, value string, width int, profile Profile) {
+	*lines = append(*lines, Paint(profile, RoleDetailMuted, "  "+label))
+	appendOverviewText(lines, overviewDisplay(value), width, profile, RoleDetailSecondary, "    ")
 }
 
 func appendOverviewParagraph(lines *[]string, label, value string, width int, profile Profile) {
@@ -554,13 +572,13 @@ func detailContentWidth(width, prefix int) int {
 	return max(width-prefix, 1)
 }
 
-func detailSectionHeading(title string, width int, profile Profile, role Role) string {
+func detailSectionHeading(title string, width int, profile Profile) string {
 	plainTitle := strings.ToUpper(singleLineDetail(title))
 	if width <= 0 {
 		width = 72
 	}
-	dividerWidth := max(width-cells.Width(plainTitle)-1, 1)
-	return Paint(profile, role, plainTitle) + " " + Paint(profile, RoleDetailDivider, strings.Repeat("─", dividerWidth))
+	dividerWidth := max(min(width-cells.Width(plainTitle)-1, 20), 1)
+	return Paint(profile, RoleDetailSecondary, plainTitle) + " " + Paint(profile, RoleDetailDivider, strings.Repeat("─", dividerWidth))
 }
 
 func renderDetailGrid(fields []detailGridField, width, maxColumns int, profile Profile) []string {
@@ -649,22 +667,6 @@ func detailStalenessSummary(inspection detailInspectionView) string {
 		return "check failed"
 	default:
 		return "unavailable"
-	}
-}
-
-func detailStalenessDescription(inspection detailInspectionView) string {
-	switch inspection.status {
-	case detailInspectionLoading:
-		return "Loading advisory findings…"
-	case detailInspectionReady:
-		if len(inspection.findings) == 0 {
-			return "No findings; the recorded planning base matches current HEAD."
-		}
-		return "See Attention for advisory findings."
-	case detailInspectionFailed:
-		return "Inspection failed: " + overviewDisplay(inspection.err)
-	default:
-		return "Unavailable; no detail inspector is configured."
 	}
 }
 
