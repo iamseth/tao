@@ -29,7 +29,8 @@ const (
 	detailOverviewScopePreview = 6
 	detailOverviewMaxQuestions = 12
 	noteDetailHeaderLines      = 8
-	noteDetailFooter           = "↑/↓/j/k  ^G edit  Esc back  q quit"
+	noteDetailFooter           = "↑/↓ PgUp/PgDn  ^G edit  Esc back"
+	noteDetailFooterWide       = "↑/↓ PgUp/PgDn  ^G edit  c copy  d/D del  0-3 tier  Esc back"
 )
 
 // detailTab identifies the independently navigable plan-detail views.
@@ -129,7 +130,11 @@ func renderNoteDetailWithMessage(item note.CatalogNote, width, height, offset in
 	if strings.TrimSpace(message) != "" {
 		lines = append(lines, singleLineDetail(message))
 	}
-	lines = append(lines, noteDetailFooter)
+	footer := noteDetailFooter
+	if width <= 0 || width >= cells.Width(noteDetailFooterWide) {
+		footer = noteDetailFooterWide
+	}
+	lines = append(lines, footer)
 	return fitDetailFrame(lines, width, height)
 }
 
@@ -1045,19 +1050,19 @@ func RenderSliceDetail(model DetailModel) string {
 func renderSlicePlan(selected plan.Slice, width int, profile Profile) []string {
 	var lines []string
 	appendSliceSection(&lines, "GOAL", width, profile)
-	appendSliceParagraph(&lines, selected.Goal, width, profile, RoleDetailBody)
+	appendSliceParagraph(&lines, selected.Goal, width, profile, RoleNeutral3)
 
 	appendSliceSection(&lines, "CONTEXT", width, profile)
-	appendSliceParagraph(&lines, selected.Context, width, profile, RoleDetailBody)
+	appendSliceParagraph(&lines, selected.Context, width, profile, RoleNeutral3)
 
 	appendSliceSection(&lines, "DEPENDENCY", width, profile)
-	dependencyCount := 0
+	dependencies := make([]sliceDependencyItem, 0, len(selected.DependsOn))
 	for _, dependency := range selected.DependsOn {
 		if dependency = singleLineDetail(dependency); dependency != "" {
-			appendSliceLabeledValue(&lines, "Depends on", dependency, width, profile, RoleDetailPrimary)
-			dependencyCount++
+			dependencies = append(dependencies, sliceDependencyItem{value: dependency})
 		}
 	}
+	inputs := make([]sliceDependencyItem, 0, len(selected.RequiredInputs))
 	for _, input := range selected.RequiredInputs {
 		path := singleLineDetail(input.Path)
 		if path == "" {
@@ -1066,14 +1071,13 @@ func renderSlicePlan(selected plan.Slice, width int, profile Profile) []string {
 		if kind := singleLineDetail(input.Kind); kind != "" {
 			path += " (" + kind + ")"
 		}
-		appendSliceLabeledValue(&lines, "Input", path, width, profile, RoleDetailPrimary)
-		if reason := singleLineDetail(input.Reason); reason != "" {
-			appendSliceIndentedText(&lines, reason, width, profile, RoleDetailBody, "    ")
-		}
-		dependencyCount++
+		inputs = append(inputs, sliceDependencyItem{value: path, reason: singleLineDetail(input.Reason)})
 	}
-	if dependencyCount == 0 {
+	if len(dependencies) == 0 && len(inputs) == 0 {
 		appendSliceEmpty(&lines, profile)
+	} else {
+		appendSliceDependencyGroup(&lines, "Slices", dependencies, width, profile)
+		appendSliceDependencyGroup(&lines, "Inputs", inputs, width, profile)
 	}
 
 	if blocker := singleLineDetail(selected.BlockerNote); blocker != "" {
@@ -1082,7 +1086,7 @@ func renderSlicePlan(selected plan.Slice, width int, profile Profile) []string {
 	}
 
 	appendSliceSection(&lines, "TASKS", width, profile)
-	appendSliceChecklist(&lines, selected.Tasks, width, profile, RoleDetailSecondary)
+	appendSliceTasks(&lines, selected.Tasks, width, profile)
 
 	appendSliceSection(&lines, "EXPECTED FILES", width, profile)
 	if !appendSliceValues(&lines, selected.ExpectedFiles, width, profile, RoleDetailPrimary, "•") {
@@ -1096,6 +1100,8 @@ func renderSlicePlan(selected plan.Slice, width int, profile Profile) []string {
 	if !appendSliceValues(&lines, selected.Verification.Commands, width, profile, RoleDetailInfo, "›") {
 		appendSliceEmpty(&lines, profile)
 	}
+	lines = append(lines, "", Paint(profile, RoleDetailMuted, "Manual checks"))
+	appendSliceChecklist(&lines, selected.Verification.ManualChecks, width, profile, RoleDetailSecondary)
 	if len(selected.VerificationResults) > 0 {
 		lines = append(lines, "", Paint(profile, RoleDetailMuted, "Results"))
 		for _, result := range selected.VerificationResults {
@@ -1114,9 +1120,6 @@ func renderSlicePlan(selected plan.Slice, width int, profile Profile) []string {
 			}
 		}
 	}
-
-	appendSliceSection(&lines, "MANUAL CHECKS", width, profile)
-	appendSliceChecklist(&lines, selected.Verification.ManualChecks, width, profile, RoleDetailSecondary)
 
 	if notes := singleLineDetail(selected.Notes); notes != "" {
 		appendSliceSection(&lines, "NOTES", width, profile)
@@ -1144,6 +1147,60 @@ func appendSliceParagraph(lines *[]string, value string, width int, profile Prof
 		return
 	}
 	appendSliceIndentedText(lines, value, width, profile, role, "  ")
+}
+
+type sliceDependencyItem struct {
+	value  string
+	reason string
+}
+
+func appendSliceDependencyGroup(lines *[]string, label string, items []sliceDependencyItem, width int, profile Profile) {
+	if len(items) == 0 {
+		return
+	}
+	const labelWidth = 6
+	compact := width <= 0 || width >= 24
+	if !compact {
+		*lines = append(*lines, "  "+Paint(profile, RoleDetailMuted, label))
+	}
+	for index, item := range items {
+		prefix := "    • "
+		if compact {
+			groupLabel := ""
+			if index == 0 {
+				groupLabel = label
+			}
+			prefix = "  " + cells.Pad(groupLabel, labelWidth) + "  • "
+		}
+		wrapped := wrapDetailWords(item.value, sliceDetailContentWidth(width, cells.Width(prefix)))
+		for lineIndex, line := range wrapped {
+			if lineIndex == 0 {
+				*lines = append(*lines, Paint(profile, RoleDetailMuted, prefix)+Paint(profile, RoleDetailPrimary, line))
+			} else {
+				*lines = append(*lines, strings.Repeat(" ", cells.Width(prefix))+Paint(profile, RoleDetailPrimary, line))
+			}
+		}
+		if item.reason != "" {
+			indent := strings.Repeat(" ", cells.Width(prefix))
+			appendSliceIndentedText(lines, item.reason, width, profile, RoleDetailBody, indent)
+		}
+	}
+}
+
+func appendSliceTasks(lines *[]string, values []string, width int, profile Profile) {
+	added := false
+	for _, value := range values {
+		if value = singleLineDetail(value); value != "" {
+			if added {
+				*lines = append(*lines, "")
+			}
+			appendSliceBullet(lines, value, width, profile, RoleDetailSecondary, "☐")
+			added = true
+		}
+	}
+	if !added {
+		appendSliceEmpty(lines, profile)
+	}
 }
 
 func appendSliceChecklist(lines *[]string, values []string, width int, profile Profile, role Role) {

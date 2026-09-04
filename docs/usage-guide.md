@@ -126,13 +126,19 @@ or pasteable output.
 
 The dashboard opens on **Plans**. Use `Tab` or the horizontal arrows to move
 among **Plans**, **Notes**, **Settings**, and **Debug**; use `j`/`k` or the
-vertical arrows to select rows. `Enter` opens details, `Esc` returns, and `f`
-toggles repository focus on Plans and Notes. On either list, `gg` jumps to the
-first visible item and `G` jumps to the last. Notes are grouped by numeric tier,
+vertical arrows to select rows. `Page Up` and `Page Down` move by a viewport on
+long pages. `Enter` opens details, `Esc` returns, and `f` toggles repository
+focus on Plans and Notes. On either list, `gg` jumps to the first visible item
+and `G` jumps to the last. In plan detail, `Tab` and `Shift+Tab` switch detail
+tabs while left and right open the previous or next visible plan. Notes are grouped by numeric tier,
 with lower tiers first and untiered notes last; their rows show all non-tier tags
 plus both creation age and update recency. On the Notes list or detail view,
 `Ctrl+G` opens the selected note in `$EDITOR` (or `nvim` when unset); edit the
-tag lines and body, then write and quit to persist the changes. **Done** is always
+tag lines and body, then write and quit to persist the changes. Press `c` to
+copy the selected note ID to the system clipboard for a planning session. Keys
+`0` through `3` replace the selected note's tier tag. Lowercase `d` asks before deleting the
+note; uppercase `D` deletes it immediately. Deletion archives the note and
+removes it from the open Notes list. **Done** is always
 displayed with up to 15 completed or abandoned plans. **Now** contains
 in-progress, blocked, reviewed, and other plans with an immediate action
 such as monitor, approve, or merge. **Next** contains planned work. On Plans, the

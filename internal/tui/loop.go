@@ -47,6 +47,17 @@ type NoteEditor interface {
 	Edit(context.Context, note.CatalogNote) (bool, error)
 }
 
+// NoteActions applies non-interactive mutations to a selected open note.
+type NoteActions interface {
+	Delete(context.Context, note.CatalogNote) error
+	SetTier(context.Context, note.CatalogNote, int) (bool, error)
+}
+
+// Clipboard copies text to the user's copy/paste buffer.
+type Clipboard interface {
+	Copy(context.Context, string) error
+}
+
 // DebugSnapshotCollector supplies read-only runtime and doctor diagnostics.
 type DebugSnapshotCollector interface {
 	Collect(context.Context) (DebugSnapshot, error)
@@ -61,19 +72,21 @@ type SettingsService interface {
 // App owns one interactive dashboard event loop. Its boundaries are injectable
 // so terminal behavior can be tested without taking over a real terminal.
 type App struct {
-	Input      io.Reader
-	Output     io.Writer
-	Terminal   Terminal
-	Ticker     Ticker
-	Collector  SnapshotCollector
-	Notes      NoteSnapshotCollector
-	NoteEditor NoteEditor
-	Debug      DebugSnapshotCollector
-	Settings   SettingsService
-	Actions    *Actions
-	Details    DetailRepository
-	Inspector  DetailInspector
-	Now        func() time.Time
+	Input       io.Reader
+	Output      io.Writer
+	Terminal    Terminal
+	Ticker      Ticker
+	Collector   SnapshotCollector
+	Notes       NoteSnapshotCollector
+	NoteEditor  NoteEditor
+	NoteActions NoteActions
+	Clipboard   Clipboard
+	Debug       DebugSnapshotCollector
+	Settings    SettingsService
+	Actions     *Actions
+	Details     DetailRepository
+	Inspector   DetailInspector
+	Now         func() time.Time
 }
 
 type inputResult struct {
@@ -391,6 +404,77 @@ func (a App) editSelectedNote(ctx context.Context, state *loopState) (bool, erro
 	return true, nil
 }
 
+func (a App) copyNoteID(ctx context.Context, state *loopState, item note.CatalogNote) {
+	state.setNoteEditMessage("")
+	if a.Clipboard == nil {
+		state.setNoteEditMessage("Clipboard copying is unavailable.")
+		return
+	}
+	if err := a.Clipboard.Copy(ctx, item.ID); err != nil {
+		state.setNoteEditMessage("Copy note ID failed: " + cells.Truncate(singleLineDetail(err.Error()), 220))
+		return
+	}
+	state.setNoteEditMessage("Copied note ID " + singleLineNoteValue(item.ID) + ".")
+}
+
+func (a App) requestNoteDelete(ctx context.Context, state *loopState, item note.CatalogNote, confirm bool) {
+	state.setNoteEditMessage("")
+	if a.NoteActions == nil {
+		state.setNoteEditMessage("Note deletion is unavailable.")
+		return
+	}
+	apply := func(accepted bool) {
+		if !accepted {
+			return
+		}
+		if err := a.NoteActions.Delete(ctx, item); err != nil {
+			state.setNoteEditMessage("Note delete failed: " + cells.Truncate(singleLineDetail(err.Error()), 220))
+			return
+		}
+		refreshed, err := a.collectNotes(ctx)
+		if err != nil {
+			state.setNoteEditMessage("Note deleted; refresh failed: " + cells.Truncate(singleLineDetail(err.Error()), 200))
+			return
+		}
+		state.replaceNoteSnapshot(refreshed)
+		if state.noteDetail != nil && state.noteDetail.RepositoryID == item.RepositoryID && state.noteDetail.ID == item.ID {
+			state.noteDetail = nil
+			state.noteDetailOffset = 0
+		}
+		state.setNoteEditMessage("Deleted note " + singleLineNoteValue(item.ID) + ".")
+	}
+	if confirm {
+		state.beginConfirm("Delete note "+singleLineNoteValue(item.ID)+"? This archives it and removes it from Notes.", apply)
+		return
+	}
+	apply(true)
+}
+
+func (a App) setSelectedNoteTier(ctx context.Context, state *loopState, item note.CatalogNote, tier int) {
+	state.setNoteEditMessage("")
+	if a.NoteActions == nil {
+		state.setNoteEditMessage("Note tier updates are unavailable.")
+		return
+	}
+	changed, err := a.NoteActions.SetTier(ctx, item, tier)
+	if err != nil {
+		state.setNoteEditMessage("Note tier update failed: " + cells.Truncate(singleLineDetail(err.Error()), 210))
+		return
+	}
+	if !changed {
+		state.setNoteEditMessage(fmt.Sprintf("Note %s is already tier%d.", singleLineNoteValue(item.ID), tier))
+		return
+	}
+	refreshed, err := a.collectNotes(ctx)
+	if err != nil {
+		state.setNoteEditMessage("Note tier updated; refresh failed: " + cells.Truncate(singleLineDetail(err.Error()), 190))
+		return
+	}
+	state.replaceNoteSnapshot(refreshed)
+	state.refreshNoteDetail()
+	state.setNoteEditMessage(fmt.Sprintf("Updated note %s to tier%d.", singleLineNoteValue(item.ID), tier))
+}
+
 func (s *loopState) setNoteEditMessage(message string) {
 	s.noteEditMessage = message
 	s.clampNoteDetailOffset()
@@ -435,7 +519,11 @@ func (a App) writeFrame(state loopState) error {
 	var frame bytes.Buffer
 	switch {
 	case state.noteDetail != nil:
-		frame.WriteString(renderNoteDetailWithMessage(*state.noteDetail, state.size.Width, state.size.Height, state.noteDetailOffset, state.noteEditMessage))
+		message := state.noteEditMessage
+		if prompt := state.confirmMessage(); prompt != "" {
+			message = prompt + " [y/n]"
+		}
+		frame.WriteString(renderNoteDetailWithMessage(*state.noteDetail, state.size.Width, state.size.Height, state.noteDetailOffset, message))
 	case state.detail != nil:
 		frame.WriteString(RenderDetail(DetailModel{
 			Plan:            state.detail.plan,
@@ -555,6 +643,7 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 	}
 	if state.noteDetail != nil {
 		state.interruptEscape()
+		item := *state.noteDetail
 		switch {
 		case key.Key == term.KeyEsc || key.Key == term.KeyBackspace:
 			state.noteDetail = nil
@@ -563,10 +652,22 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 			state.moveNoteDetail(-1)
 		case key.Key == term.KeyArrowDown || (key.Key == term.KeyRune && key.Rune == 'j'):
 			state.moveNoteDetail(1)
+		case key.Key == term.KeyPageUp:
+			state.moveNoteDetail(-state.noteDetailPageStep())
+		case key.Key == term.KeyPageDown:
+			state.moveNoteDetail(state.noteDetailPageStep())
 		case key.Key == term.KeyRune && key.Rune == 'g':
 			state.noteDetailOffset = 0
 		case key.Key == term.KeyRune && key.Rune == 'G':
 			state.noteDetailOffset = state.noteDetailMaxOffset()
+		case key.Key == term.KeyRune && key.Rune == 'c':
+			a.copyNoteID(ctx, state, item)
+		case key.Key == term.KeyRune && key.Rune == 'd':
+			a.requestNoteDelete(ctx, state, item, true)
+		case key.Key == term.KeyRune && key.Rune == 'D':
+			a.requestNoteDelete(ctx, state, item, false)
+		case key.Key == term.KeyRune && key.Rune >= '0' && key.Rune <= '3':
+			a.setSelectedNoteTier(ctx, state, item, int(key.Rune-'0'))
 		}
 		return false
 	}
@@ -578,10 +679,14 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 			state.detail.sliceOffset = 0
 		case key.Key == term.KeyEsc || key.Key == term.KeyBackspace:
 			state.closeDetail()
-		case !state.detail.sliceOpen && (key.Key == term.KeyTab || key.Key == term.KeyArrowRight):
+		case !state.detail.sliceOpen && key.Key == term.KeyTab:
 			state.detail.moveTab(1, state.size)
-		case !state.detail.sliceOpen && (key.Key == term.KeyShiftTab || key.Key == term.KeyArrowLeft):
+		case !state.detail.sliceOpen && key.Key == term.KeyShiftTab:
 			state.detail.moveTab(-1, state.size)
+		case !state.detail.sliceOpen && key.Key == term.KeyArrowRight:
+			a.movePlanDetail(ctx, state, 1)
+		case !state.detail.sliceOpen && key.Key == term.KeyArrowLeft:
+			a.movePlanDetail(ctx, state, -1)
 		case !state.detail.sliceOpen && state.detail.activeTab == detailTabSlices && key.Key == term.KeyEnter:
 			if _, ok := findDetailSlice(state.detail.plan, state.detail.selectedSliceID); ok {
 				state.detail.sliceOpen = true
@@ -594,6 +699,10 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 			state.detail.moveSliceDetail(-1, state.size)
 		case state.detail.sliceOpen && (key.Key == term.KeyArrowDown || (key.Key == term.KeyRune && key.Rune == 'j')):
 			state.detail.moveSliceDetail(1, state.size)
+		case state.detail.sliceOpen && key.Key == term.KeyPageUp:
+			state.detail.moveSliceDetail(-detailPageStep(state.size, 6), state.size)
+		case state.detail.sliceOpen && key.Key == term.KeyPageDown:
+			state.detail.moveSliceDetail(detailPageStep(state.size, 6), state.size)
 		case state.detail.sliceOpen && key.Key == term.KeyRune && key.Rune == 'g':
 			state.detail.sliceOffset = 0
 		case state.detail.sliceOpen && key.Key == term.KeyRune && key.Rune == 'G':
@@ -602,6 +711,10 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 			state.detail.moveVertical(-1, state.size)
 		case !state.detail.sliceOpen && (key.Key == term.KeyArrowDown || (key.Key == term.KeyRune && key.Rune == 'j')):
 			state.detail.moveVertical(1, state.size)
+		case !state.detail.sliceOpen && key.Key == term.KeyPageUp:
+			state.detail.moveVertical(-state.detail.pageStep(state.size), state.size)
+		case !state.detail.sliceOpen && key.Key == term.KeyPageDown:
+			state.detail.moveVertical(state.detail.pageStep(state.size), state.size)
 		case !state.detail.sliceOpen && key.Key == term.KeyRune && key.Rune == 'g':
 			state.detail.jumpVertical(false, state.size)
 		case !state.detail.sliceOpen && key.Key == term.KeyRune && key.Rune == 'G':
@@ -621,6 +734,14 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 	}
 	if key.Key != term.KeyEsc {
 		state.interruptEscape()
+	}
+	if key.Key == term.KeyPageUp || key.Key == term.KeyPageDown {
+		direction := 1
+		if key.Key == term.KeyPageUp {
+			direction = -1
+		}
+		state.movePage(direction)
+		return false
 	}
 	if state.activePage() == PageSettings && key.Key == term.KeyRune && (key.Rune == 'p' || key.Rune == 'P') {
 		repository, ok := state.selectedRepositorySetting()
@@ -645,6 +766,24 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 		return false
 	}
 	row, selected := state.selectedRow()
+	if state.activePage() == PageNotes && key.Key == term.KeyRune {
+		if item, ok := state.selectedNote(); ok {
+			switch {
+			case key.Rune == 'c':
+				a.copyNoteID(ctx, state, item)
+				return false
+			case key.Rune == 'd':
+				a.requestNoteDelete(ctx, state, item, true)
+				return false
+			case key.Rune == 'D':
+				a.requestNoteDelete(ctx, state, item, false)
+				return false
+			case key.Rune >= '0' && key.Rune <= '3':
+				a.setSelectedNoteTier(ctx, state, item, int(key.Rune-'0'))
+				return false
+			}
+		}
+	}
 	if state.activePage() == PageNotes && key.Key == term.KeyEnter {
 		if item, ok := state.selectedNote(); ok {
 			state.noteDetail = &item
@@ -726,6 +865,34 @@ func (a App) openDetail(ctx context.Context, state *loopState, row monitor.Row) 
 	updates := make(chan detailFollowUpdate, 16)
 	detail.updates = updates
 	go followDetailLog(detailCtx, a.Details, row.PlanDir, seed, updates)
+}
+
+func (a App) movePlanDetail(ctx context.Context, state *loopState, delta int) {
+	if state.detail == nil || delta == 0 {
+		return
+	}
+	rows := state.visibleRows()
+	current := state.selected
+	for index, row := range rows {
+		if row.RepositoryID == state.detail.row.RepositoryID && row.PlanID == state.detail.row.PlanID {
+			current = index
+			break
+		}
+	}
+	for candidate := current + delta; candidate >= 0 && candidate < len(rows); candidate += delta {
+		if rows[candidate].PlanDir == "" {
+			continue
+		}
+		tab := state.detail.activeTab
+		state.closeDetail()
+		state.selected = candidate
+		a.openDetail(ctx, state, rows[candidate])
+		if state.detail != nil {
+			state.detail.activeTab = tab
+			state.detail.clampOffsets(state.size)
+		}
+		return
+	}
 }
 
 func (a App) startDetailInspection(detail *detailState) {
@@ -861,6 +1028,18 @@ func (d *detailState) moveVertical(delta int, size term.Size) {
 	default:
 		d.overviewOffset = max(0, min(d.maxOffset(detailTabOverview, size), d.overviewOffset+delta))
 	}
+}
+
+func (d *detailState) pageStep(size term.Size) int {
+	fixedLines := planDetailFixedLines
+	if d.activeTab == detailTabOverview {
+		fixedLines = planOverviewFixedLines
+	}
+	return detailPageStep(size, fixedLines)
+}
+
+func detailPageStep(size term.Size, fixedLines int) int {
+	return max(size.Height-fixedLines-1, 1)
 }
 
 func (d *detailState) jumpVertical(bottom bool, size term.Size) {
@@ -1082,6 +1261,19 @@ func (s *loopState) handleListJumpKey(key term.KeyEvent) bool {
 		return true
 	}
 	return false
+}
+
+func (s *loopState) movePage(direction int) {
+	step := detailPageStep(s.size, 8)
+	switch s.activePage() {
+	case PageDebug:
+		s.debugOffset = max(0, min(s.debugPageMaxOffset(), s.debugOffset+direction*step))
+	default:
+		count := s.pageRowCount()
+		if count > 0 {
+			s.selected = max(0, min(count-1, s.selected+direction*step))
+		}
+	}
 }
 
 func (s *loopState) switchPage(delta int) {
@@ -1339,6 +1531,10 @@ func (s *loopState) refreshNoteDetail() {
 
 func (s *loopState) moveNoteDetail(delta int) {
 	s.noteDetailOffset = max(0, min(s.noteDetailOffset+delta, s.noteDetailMaxOffset()))
+}
+
+func (s loopState) noteDetailPageStep() int {
+	return detailPageStep(s.size, noteDetailHeaderLines+2)
 }
 
 func (s *loopState) clampNoteDetailOffset() {

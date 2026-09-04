@@ -26,8 +26,8 @@ var uiCommand = commandMetadata{
 	usageLines:            []string{"ui [--interval DURATION] [--completed-window DURATION]"},
 	completionDescription: "Open the cross-repository interactive dashboard",
 	long: "Open a keyboard-driven dashboard with Notes, Plans, Settings, and Debug tabs across registered repositories. Plans is the initial tab. Use Tab or the right arrow to advance tabs and Shift+Tab or the left arrow to move back; j/k or the up/down arrows move within tables and scroll Debug diagnostics. On Plans and Notes, gg jumps to the top of the visible list and G jumps to the bottom. Repository focus is shared by Plans and Notes: f focuses the selected plan or note's repository, and f again restores all repositories.\n" +
-		"Plans groups immediate work under NOW, planned work under NEXT, and terminal plans under DONE. NOW includes in-progress, blocked, reviewed, and other plans with immediate operational actions such as MONITOR, APPROVE, or MERGE. Operational urgency always takes precedence: NOW remains ahead of advisory business ordering. Within NEXT, disposition, valid sequence relationships, categorical priority, and recent activity guide the order; missing, duplicate, or cyclic relationships only warn, and legacy plans remain visible as unranked. RUN AGE is elapsed time for an observed invocation, not plan age. NEXT is a derived advisory label and never authorizes an action. Press Enter to inspect the selected plan's full decision and lifecycle context. Heartbeats and the stalled?/crashed? labels are liveness hints, not workflow verdicts. DONE is always displayed with up to 15 completed or abandoned plans. The completed-plan lookback window controls how far back completed plans are loaded. On Plans, r runs, a prompts for approval, m confirms a selected reviewed-plan merge, M confirms a repository-scoped merge --all, and Enter opens plan details. In plan detail, use Tab or the arrows to switch Overview, Slices, and Activity; Overview inspects advisory base drift only while the detail is open, and e expands or collapses its scope file list. On Slices, move with j/k or the arrows and press Enter for the full read-only slice page.\n" +
-		"Notes lists only repository-owned open notes, grouped by ascending tier so lower-numbered tiers appear first and untiered notes appear last. Its table shows every non-tier tag plus separate created and updated ages. Ctrl+G edits the selected note's text and tags in $EDITOR, falling back to nvim, from either the list or detail view. Enter opens the selected note's full detail, and Esc returns. Settings shows global runtime defaults and per-repository pull-request defaults; p confirms a cycle through explicit true, explicit false, and inherited. Debug shows UI state, build and data paths, doctor problems, collector warnings, and resolved runtime defaults from tao status; g/G jump to its top or bottom. Plan actions do not act on Notes, Settings, or Debug. q and Ctrl-C quit globally except that q safely declines confirmation. Esc returns one page or declines confirmation; at a top-level page, press Esc twice within one second to quit. Run, approval, and merge subprocesses are detached and survive dashboard exit.\n" +
+		"Plans groups immediate work under NOW, planned work under NEXT, and terminal plans under DONE. NOW includes in-progress, blocked, reviewed, and other plans with immediate operational actions such as MONITOR, APPROVE, or MERGE. Operational urgency always takes precedence: NOW remains ahead of advisory business ordering. Within NEXT, disposition, valid sequence relationships, categorical priority, and recent activity guide the order; missing, duplicate, or cyclic relationships only warn, and legacy plans remain visible as unranked. RUN AGE is elapsed time for an observed invocation, not plan age. NEXT is a derived advisory label and never authorizes an action. Press Enter to inspect the selected plan's full decision and lifecycle context. Page Up and Page Down move by a viewport on long detail pages. Heartbeats and the stalled?/crashed? labels are liveness hints, not workflow verdicts. DONE is always displayed with up to 15 completed or abandoned plans. The completed-plan lookback window controls how far back completed plans are loaded. On Plans, r runs, a prompts for approval, m confirms a selected reviewed-plan merge, M confirms a repository-scoped merge --all, and Enter opens plan details. In plan detail, use Tab or Shift+Tab to switch Overview, Slices, and Activity; left and right open the previous or next visible plan. Overview inspects advisory base drift only while the detail is open, and e expands or collapses its scope file list. On Slices, move with j/k or the arrows and press Enter for the full read-only slice page.\n" +
+		"Notes lists only repository-owned open notes, grouped by ascending tier so lower-numbered tiers appear first and untiered notes appear last. Its table shows every non-tier tag plus separate created and updated ages. Ctrl+G edits the selected note's text and tags in $EDITOR, falling back to nvim, from either the list or detail view. The c key copies its note ID to the system clipboard for use in planning sessions. Keys 0 through 3 replace its tier tag with tier0 through tier3. Lowercase d asks before deleting the selected note; uppercase D deletes it immediately. Enter opens the selected note's full detail, and Esc returns. Settings shows global runtime defaults and per-repository pull-request defaults; p confirms a cycle through explicit true, explicit false, and inherited. Debug shows UI state, build and data paths, doctor problems, collector warnings, and resolved runtime defaults from tao status; g/G jump to its top or bottom. Plan actions do not act on Notes, Settings, or Debug. q and Ctrl-C quit globally except that q safely declines confirmation. Esc returns one page or declines confirmation; at a top-level page, press Esc twice within one second to quit. Run, approval, and merge subprocesses are detached and survive dashboard exit.\n" +
 		"tao ui requires a terminal. Use tao monitor --once for non-interactive plan output.",
 	examples: "  tao ui\n" +
 		"  tao ui --interval 5s\n" +
@@ -101,22 +101,36 @@ func (a App) ui(ctx context.Context, args []string) error {
 	if noteEditor == nil {
 		noteEditor = newUINoteEditor(a, input, a.Out)
 	}
+	noteActions := a.UINoteActions
+	if noteActions == nil {
+		if actions, ok := noteEditor.(tui.NoteActions); ok {
+			noteActions = actions
+		} else {
+			noteActions = newUINoteEditor(a, input, a.Out)
+		}
+	}
+	clipboard := a.UIClipboard
+	if clipboard == nil {
+		clipboard = newUIClipboard(a)
+	}
 
 	signalCtx, cancel := newCommandSignalContext(ctx)
 	defer cancel()
 	return (tui.App{
-		Input:      input,
-		Output:     a.Out,
-		Terminal:   terminal,
-		Ticker:     a.newMonitorTicker(interval),
-		Collector:  collector,
-		Notes:      noteCollector,
-		NoteEditor: noteEditor,
-		Debug:      newUIDebugCollector(a, executable),
-		Settings:   newUISettingsService(a),
-		Actions:    actions,
-		Inspector:  newUIDetailInspector(a.uiCommandRunner()),
-		Now:        a.now,
+		Input:       input,
+		Output:      a.Out,
+		Terminal:    terminal,
+		Ticker:      a.newMonitorTicker(interval),
+		Collector:   collector,
+		Notes:       noteCollector,
+		NoteEditor:  noteEditor,
+		NoteActions: noteActions,
+		Clipboard:   clipboard,
+		Debug:       newUIDebugCollector(a, executable),
+		Settings:    newUISettingsService(a),
+		Actions:     actions,
+		Inspector:   newUIDetailInspector(a.uiCommandRunner()),
+		Now:         a.now,
 	}).Run(signalCtx)
 }
 

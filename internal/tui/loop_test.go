@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -130,6 +132,33 @@ type noteEditorFunc func(context.Context, note.CatalogNote) (bool, error)
 
 func (edit noteEditorFunc) Edit(ctx context.Context, item note.CatalogNote) (bool, error) {
 	return edit(ctx, item)
+}
+
+type fakeNoteActions struct {
+	deleted []note.CatalogNote
+	tiers   []int
+	err     error
+	changed bool
+}
+
+type fakeClipboard struct {
+	values []string
+	err    error
+}
+
+func (clipboard *fakeClipboard) Copy(_ context.Context, value string) error {
+	clipboard.values = append(clipboard.values, value)
+	return clipboard.err
+}
+
+func (actions *fakeNoteActions) Delete(_ context.Context, item note.CatalogNote) error {
+	actions.deleted = append(actions.deleted, item)
+	return actions.err
+}
+
+func (actions *fakeNoteActions) SetTier(_ context.Context, _ note.CatalogNote, tier int) (bool, error) {
+	actions.tiers = append(actions.tiers, tier)
+	return actions.changed, actions.err
 }
 
 type recordingWriter struct {
@@ -704,6 +733,86 @@ func TestEditSelectedNoteResumesAfterEditorFailureAndShowsMessage(t *testing.T) 
 	}
 }
 
+func TestNoteCopyKeyCopiesSelectedIDFromListAndDetail(t *testing.T) {
+	item := note.CatalogNote{RepositoryID: "repo", ID: "note-123", Text: "text"}
+	clipboard := &fakeClipboard{}
+	app := App{Clipboard: clipboard}
+	state := loopState{page: PageNotes, noteSnapshot: note.Snapshot{Notes: []note.CatalogNote{item}}}
+
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'c'})
+	if !slices.Equal(clipboard.values, []string{"note-123"}) || state.noteEditMessage != "Copied note ID note-123." {
+		t.Fatalf("list copy values=%v message=%q", clipboard.values, state.noteEditMessage)
+	}
+	state.noteDetail = &item
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'c'})
+	if !slices.Equal(clipboard.values, []string{"note-123", "note-123"}) {
+		t.Fatalf("detail copy values=%v", clipboard.values)
+	}
+
+	clipboard.err = errors.New("clipboard unavailable")
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'c'})
+	if !strings.Contains(state.noteEditMessage, "clipboard unavailable") {
+		t.Fatalf("copy failure message=%q", state.noteEditMessage)
+	}
+}
+
+func TestNoteDeleteKeysConfirmOrActImmediately(t *testing.T) {
+	item := note.CatalogNote{RepositoryID: "repo", ID: "note", Text: "text"}
+	actions := &fakeNoteActions{}
+	collector := &fakeNoteCollector{snapshots: []note.Snapshot{{}}}
+	app := App{Notes: collector, NoteActions: actions}
+	state := loopState{page: PageNotes, noteSnapshot: note.Snapshot{Notes: []note.CatalogNote{item}}}
+
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'd'})
+	if state.confirm == nil || len(actions.deleted) != 0 || !strings.Contains(state.confirmMessage(), "archives it") {
+		t.Fatalf("lowercase delete confirm=%#v deleted=%v", state.confirm, actions.deleted)
+	}
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'n'})
+	if state.confirm != nil || len(actions.deleted) != 0 {
+		t.Fatalf("declined delete confirm=%#v deleted=%v", state.confirm, actions.deleted)
+	}
+
+	state.noteDetail = &item
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'd'})
+	var prompt bytes.Buffer
+	promptApp := app
+	promptApp.Output = &prompt
+	if err := promptApp.writeFrame(state); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt.String(), "archives it and removes it from Notes. [y/n]") {
+		t.Fatalf("note detail delete prompt is not visible:\n%s", prompt.String())
+	}
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'n'})
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'D'})
+	if len(actions.deleted) != 1 || actions.deleted[0].ID != item.ID || state.confirm != nil || state.noteDetail != nil {
+		t.Fatalf("immediate delete deleted=%v confirm=%#v detail=%#v", actions.deleted, state.confirm, state.noteDetail)
+	}
+	if !strings.Contains(state.noteEditMessage, "Deleted note") || collector.callCount() != 1 {
+		t.Fatalf("delete message=%q refreshes=%d", state.noteEditMessage, collector.callCount())
+	}
+}
+
+func TestNoteNumberKeysReplaceTierAndRefreshSelection(t *testing.T) {
+	item := note.CatalogNote{RepositoryID: "repo", ID: "note", Text: "text", Tags: []string{"tier3", "backend"}}
+	actions := &fakeNoteActions{changed: true}
+	collector := &fakeNoteCollector{snapshots: []note.Snapshot{
+		{Notes: []note.CatalogNote{item}}, {Notes: []note.CatalogNote{item}},
+		{Notes: []note.CatalogNote{item}}, {Notes: []note.CatalogNote{item}},
+	}}
+	app := App{Notes: collector, NoteActions: actions}
+	state := loopState{page: PageNotes, noteSnapshot: note.Snapshot{Notes: []note.CatalogNote{item}}}
+	for tier := 0; tier <= 3; tier++ {
+		app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: rune('0' + tier)})
+	}
+	if !slices.Equal(actions.tiers, []int{0, 1, 2, 3}) {
+		t.Fatalf("tier updates = %v", actions.tiers)
+	}
+	if collector.callCount() != 4 || state.selected != 0 || !strings.Contains(state.noteEditMessage, "tier3") {
+		t.Fatalf("tier refreshes=%d selected=%d message=%q", collector.callCount(), state.selected, state.noteEditMessage)
+	}
+}
+
 func TestNoteDetailNavigationAndViewportClamping(t *testing.T) {
 	item := note.CatalogNote{RepositoryID: "repo", ID: "note", Text: "one\ntwo\nthree\nfour\nfive"}
 	state := loopState{
@@ -881,7 +990,7 @@ func TestPlanDetailLocalNavigationBoundsEachTab(t *testing.T) {
 	if state.detail.selectedSliceID != "002-b" {
 		t.Fatalf("Slices G selected %q", state.detail.selectedSliceID)
 	}
-	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyArrowRight})
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyTab})
 	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'G'})
 	if state.detail.activeTab != detailTabActivity || state.detail.activityOffset != state.detail.maxOffset(detailTabActivity, state.size) {
 		t.Fatalf("Activity navigation = tab %v offset %d", state.detail.activeTab, state.detail.activityOffset)
@@ -890,10 +999,76 @@ func TestPlanDetailLocalNavigationBoundsEachTab(t *testing.T) {
 	if state.detail.activityOffset != 0 {
 		t.Fatalf("Activity g offset = %d", state.detail.activityOffset)
 	}
-	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyArrowRight})
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyTab})
 	if state.detail.activeTab != detailTabOverview {
-		t.Fatalf("right did not wrap to Overview: %v", state.detail.activeTab)
+		t.Fatalf("Tab did not wrap to Overview: %v", state.detail.activeTab)
 	}
+}
+
+func TestPageKeysMoveLongDetailsByViewport(t *testing.T) {
+	detail := &plan.PlanDetail{State: plan.State{Plan: plan.PlanState{
+		Title: "Long", Decision: &plan.Decision{Problem: strings.Repeat("problem ", 40), ExpectedBenefit: strings.Repeat("benefit ", 40)},
+	}}}
+	state := loopState{detail: &detailState{plan: detail}, size: term.Size{Width: 30, Height: 10}}
+	app := App{}
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyPageDown})
+	if state.detail.overviewOffset <= 1 {
+		t.Fatalf("PageDown overview offset = %d, want viewport movement", state.detail.overviewOffset)
+	}
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyPageUp})
+	if state.detail.overviewOffset != 0 {
+		t.Fatalf("PageUp overview offset = %d, want top", state.detail.overviewOffset)
+	}
+
+	tasks := make([]string, 20)
+	for index := range tasks {
+		tasks[index] = fmt.Sprintf("task-%02d", index)
+	}
+	state.detail = &detailState{plan: &plan.PlanDetail{
+		State:  plan.State{Plan: plan.PlanState{PendingSlices: []string{"slice"}}},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "slice", Title: "Long slice", Tasks: tasks}}},
+	}, selectedSliceID: "slice", sliceOpen: true}
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyPageDown})
+	if state.detail.sliceOffset <= 1 {
+		t.Fatalf("PageDown slice offset = %d, want viewport movement", state.detail.sliceOffset)
+	}
+
+	item := note.CatalogNote{ID: "note", Text: strings.Repeat("long note text ", 40)}
+	state.detail = nil
+	state.noteDetail = &item
+	state.size.Height = 16
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyPageDown})
+	if state.noteDetailOffset <= 1 {
+		t.Fatalf("PageDown note offset = %d, want viewport movement", state.noteDetailOffset)
+	}
+}
+
+func TestPlanDetailArrowKeysMoveBetweenPlansAndPreserveTab(t *testing.T) {
+	rows := []monitor.Row{
+		{RepositoryID: "repo", PlanID: "one", PlanDir: "/one", Status: plan.StatusPlanned},
+		{RepositoryID: "repo", PlanID: "two", PlanDir: "/two", Status: plan.StatusPlanned},
+	}
+	repository := &fakeDetailRepository{detail: &plan.PlanDetail{State: plan.State{Plan: plan.PlanState{ID: "loaded"}}}}
+	app := App{Details: repository}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	state := loopState{snapshot: monitor.Snapshot{Rows: rows}, size: term.Size{Width: 80, Height: 20}}
+	app.openDetail(ctx, &state, rows[0])
+	state.detail.activeTab = detailTabSlices
+
+	app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyArrowRight})
+	if state.detail == nil || state.detail.row.PlanID != "two" || state.selected != 1 || state.detail.activeTab != detailTabSlices {
+		t.Fatalf("right navigation state = selected %d detail %#v", state.selected, state.detail)
+	}
+	app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyArrowLeft})
+	if state.detail == nil || state.detail.row.PlanID != "one" || state.selected != 0 || state.detail.activeTab != detailTabSlices {
+		t.Fatalf("left navigation state = selected %d detail %#v", state.selected, state.detail)
+	}
+	app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyArrowLeft})
+	if state.detail == nil || state.detail.row.PlanID != "one" || state.selected != 0 {
+		t.Fatalf("left boundary changed plan: selected %d detail %#v", state.selected, state.detail)
+	}
+	state.closeDetail()
 }
 
 func TestPlanDetailOverviewPromotesInspectionFindingsAndKeepsBottomReachable(t *testing.T) {

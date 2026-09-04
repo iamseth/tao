@@ -14,7 +14,7 @@ type shortcut struct {
 func shortcutsForPage(page PageID) []shortcut {
 	if normalizePage(page) == PageSettings {
 		return []shortcut{
-			{key: "↑ / ↓ / j / k", action: "Select repository"},
+			{key: "↑ / ↓ / j / k / PgUp / PgDn", action: "Select repository / page"},
 			{key: "p", action: "Cycle pull-request default"},
 			{key: "Tab / Shift+Tab / ← / →", action: "Switch tabs"},
 			{key: "q / Esc Esc", action: "Quit"},
@@ -23,7 +23,7 @@ func shortcutsForPage(page PageID) []shortcut {
 	}
 	if normalizePage(page) == PageDebug {
 		return []shortcut{
-			{key: "↑ / ↓ / j / k", action: "Scroll diagnostics"},
+			{key: "↑ / ↓ / j / k / PgUp / PgDn", action: "Scroll diagnostics"},
 			{key: "g / G", action: "Jump to top / bottom"},
 			{key: "Tab / Shift+Tab / ← / →", action: "Switch tabs"},
 			{key: "q / Esc Esc", action: "Quit"},
@@ -31,14 +31,19 @@ func shortcutsForPage(page PageID) []shortcut {
 		}
 	}
 	common := []shortcut{
-		{key: "↑ / ↓ / j / k", action: "Move selection"},
+		{key: "↑ / ↓ / j / k / PgUp / PgDn", action: "Move selection / page"},
 		{key: "gg / G", action: "Jump to top / bottom"},
 		{key: "Tab / Shift+Tab / ← / →", action: "Switch tabs"},
 		{key: "Enter", action: "Open selected item"},
 		{key: "f", action: "Cycle repository filter"},
 	}
 	if normalizePage(page) == PageNotes {
-		common = append(common, shortcut{key: "Ctrl+G", action: "Edit selected note"})
+		common = append(common,
+			shortcut{key: "Ctrl+G", action: "Edit selected note"},
+			shortcut{key: "c", action: "Copy selected note ID"},
+			shortcut{key: "0 / 1 / 2 / 3", action: "Set selected note tier"},
+			shortcut{key: "d / D", action: "Delete with / without confirmation"},
+		)
 	}
 	if normalizePage(page) == PagePlans {
 		common = append(common,
@@ -58,20 +63,20 @@ func shortcutsForPage(page PageID) []shortcut {
 
 func planDetailShortcuts() []shortcut {
 	return []shortcut{
-		{key: "Tab / Shift+Tab / ← / →", action: "Switch detail tabs"},
-		{key: "↑ / ↓ / j / k", action: "Scroll or select"},
+		{key: "Tab / Shift+Tab", action: "Switch detail tabs"},
+		{key: "← / →", action: "Previous / next plan"},
+		{key: "↑ / ↓ / j / k / PgUp / PgDn", action: "Scroll/select line or page"},
 		{key: "g / G", action: "Jump to top / bottom"},
 		{key: "e", action: "Expand scope on Overview"},
 		{key: "Enter", action: "Open slice on Slices tab"},
-		{key: "Backspace / Esc", action: "Return to plans"},
-		{key: "q", action: "Quit"},
+		{key: "Backspace / Esc / q", action: "Return to plans / quit"},
 		{key: "?", action: "Close shortcuts"},
 	}
 }
 
 func sliceDetailShortcuts() []shortcut {
 	return []shortcut{
-		{key: "↑ / ↓ / j / k", action: "Scroll details"},
+		{key: "↑ / ↓ / j / k / PgUp / PgDn", action: "Scroll details / page"},
 		{key: "g / G", action: "Jump to top / bottom"},
 		{key: "Backspace / Esc", action: "Return to plan"},
 		{key: "q", action: "Quit"},

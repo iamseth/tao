@@ -23,6 +23,8 @@ const (
 	KeyArrowDown
 	KeyArrowRight
 	KeyArrowLeft
+	KeyPageUp
+	KeyPageDown
 	KeyCtrlC
 	KeyCtrlG
 )
@@ -123,6 +125,20 @@ func (d *Decoder) readEscape() (KeyEvent, error) {
 	if key != KeyUnknown {
 		d.consume(3)
 		return KeyEvent{Key: key}, nil
+	}
+	if d.buffer[2] == '5' || d.buffer[2] == '6' {
+		complete, err = d.ensureEscapeBytes(4, deadline)
+		if err != nil {
+			return KeyEvent{}, err
+		}
+		if complete && d.buffer[3] == '~' {
+			key = KeyPageUp
+			if d.buffer[2] == '6' {
+				key = KeyPageDown
+			}
+			d.consume(4)
+			return KeyEvent{Key: key}, nil
+		}
 	}
 	return d.consumeEscape(), nil
 }
