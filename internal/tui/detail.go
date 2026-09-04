@@ -31,7 +31,7 @@ const (
 	detailOverviewScopePreview = 6
 	detailOverviewMaxQuestions = 12
 	noteDetailHeaderLines      = 8
-	noteDetailFooter           = "↑/↓/j/k scroll  Bksp/Esc back  q quit"
+	noteDetailFooter           = "↑/↓/j/k  ^G edit  Esc back  q quit"
 )
 
 // detailTab identifies the independently navigable plan-detail views.
@@ -109,17 +109,28 @@ type detailFollowUpdate struct {
 	err  error
 }
 
-// RenderNoteDetail builds a bounded, read-only frame for one open note.
+// RenderNoteDetail builds a bounded frame for one open note.
 func RenderNoteDetail(item note.CatalogNote, width, height int) string {
 	return renderNoteDetail(item, width, height, 0)
 }
 
 func renderNoteDetail(item note.CatalogNote, width, height, offset int) string {
+	return renderNoteDetailWithMessage(item, width, height, offset, "")
+}
+
+func renderNoteDetailWithMessage(item note.CatalogNote, width, height, offset int, message string) string {
 	header, body := noteDetailSections(item, width)
-	bodyHeight := noteDetailBodyHeight(len(body), height)
+	footerLines := 1
+	if strings.TrimSpace(message) != "" {
+		footerLines++
+	}
+	bodyHeight := noteDetailBodyHeightWithFooter(len(body), height, footerLines)
 	offset = max(0, min(offset, len(body)-bodyHeight))
 	lines := append([]string(nil), header...)
 	lines = append(lines, body[offset:offset+bodyHeight]...)
+	if strings.TrimSpace(message) != "" {
+		lines = append(lines, singleLineDetail(message))
+	}
 	lines = append(lines, noteDetailFooter)
 	return fitDetailFrame(lines, width, height)
 }
@@ -146,11 +157,11 @@ func noteDetailSections(item note.CatalogNote, width int) (header, body []string
 	return header, renderNoteText(item.Text, width)
 }
 
-func noteDetailBodyHeight(bodyLines, height int) int {
+func noteDetailBodyHeightWithFooter(bodyLines, height, footerLines int) int {
 	if height <= 0 {
 		return bodyLines
 	}
-	return max(0, min(bodyLines, height-noteDetailHeaderLines-1))
+	return max(0, min(bodyLines, height-noteDetailHeaderLines-footerLines))
 }
 
 func renderNoteText(text string, width int) []string {

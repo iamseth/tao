@@ -37,6 +37,9 @@ func shortcutsForPage(page PageID) []shortcut {
 		{key: "Enter", action: "Open selected item"},
 		{key: "f", action: "Cycle repository filter"},
 	}
+	if normalizePage(page) == PageNotes {
+		common = append(common, shortcut{key: "Ctrl+G", action: "Edit selected note"})
+	}
 	if normalizePage(page) == PagePlans {
 		common = append(common,
 			shortcut{key: "r", action: "Run selected plan"},

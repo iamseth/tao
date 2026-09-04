@@ -40,6 +40,7 @@ type App struct {
 	MonitorIsTerminal        func(io.Writer) bool
 	UITerminal               tui.Terminal
 	UICommandLauncher        tui.CommandLauncher
+	UINoteEditor             tui.NoteEditor
 	SelfUpdater              SelfUpdater
 	// Now supplies the wall clock for timestamps recorded by commands. Tests
 	// inject a fixed clock; when nil it defaults to time.Now.

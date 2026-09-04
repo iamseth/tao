@@ -39,6 +39,7 @@ type Model struct {
 	ConfirmMessage      string
 	ActionLabels        map[string]string
 	ActionMessage       string
+	NoteMessage         string
 	SettingsMessage     string
 }
 
@@ -198,6 +199,9 @@ func Render(model Model) string {
 	footerStart := len(lines)
 	if page == PagePlans && strings.TrimSpace(model.ActionMessage) != "" {
 		lines = append(lines, "", model.ActionMessage)
+	}
+	if page == PageNotes && strings.TrimSpace(model.NoteMessage) != "" {
+		lines = append(lines, "", model.NoteMessage)
 	}
 	if page == PageSettings && strings.TrimSpace(model.SettingsMessage) != "" {
 		lines = append(lines, "", model.SettingsMessage)

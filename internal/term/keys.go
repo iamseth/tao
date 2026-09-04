@@ -24,6 +24,7 @@ const (
 	KeyArrowRight
 	KeyArrowLeft
 	KeyCtrlC
+	KeyCtrlG
 )
 
 const escapeSequenceTimeout = 50 * time.Millisecond
@@ -58,6 +59,9 @@ func (d *Decoder) ReadKey() (KeyEvent, error) {
 	case 0x03:
 		d.consume(1)
 		return KeyEvent{Key: KeyCtrlC}, nil
+	case 0x07:
+		d.consume(1)
+		return KeyEvent{Key: KeyCtrlG}, nil
 	case '\r', '\n':
 		d.consume(1)
 		return KeyEvent{Key: KeyEnter}, nil

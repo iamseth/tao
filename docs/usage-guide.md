@@ -130,13 +130,16 @@ vertical arrows to select rows. `Enter` opens details, `Esc` returns, and `f`
 toggles repository focus on Plans and Notes. On either list, `gg` jumps to the
 first visible item and `G` jumps to the last. Notes are grouped by numeric tier,
 with lower tiers first and untiered notes last; their rows show all non-tier tags
-plus both creation age and update recency. **Done** is always displayed with up
-to 15 completed or abandoned plans. **Now** contains in-progress, blocked, reviewed, and other plans with an immediate action
+plus both creation age and update recency. On the Notes list or detail view,
+`Ctrl+G` opens the selected note in `$EDITOR` (or `nvim` when unset); edit the
+tag lines and body, then write and quit to persist the changes. **Done** is always
+displayed with up to 15 completed or abandoned plans. **Now** contains
+in-progress, blocked, reviewed, and other plans with an immediate action
 such as monitor, approve, or merge. **Next** contains planned work. On Plans, the
 principal actions are run (`r`), approve (`a`), merge one (`m`), and merge the
 repository's approved set (`M`); confirmations and the underlying commands still
 enforce every normal gate. Settings can change a repository's pull-request
-default, while Notes and Debug are read-only.
+default, while Debug remains read-only.
 
 Treat **NEXT**, ordering, heartbeats, and `stalled?`/`crashed?` labels as advice
 or liveness hints, never as approval, failure, or merge evidence. TUI-launched

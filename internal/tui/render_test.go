@@ -847,7 +847,7 @@ func TestRenderShortcutLegendAsBoundedPopover(t *testing.T) {
 		},
 		{
 			page:        PageNotes,
-			want:        []string{"Keyboard shortcuts", "gg / G", "Jump to top / bottom", "Open selected item", "Cycle repository filter", "/", "Search plans and notes", "Backspace", "Go back / clear search", "? / Esc"},
+			want:        []string{"Keyboard shortcuts", "gg / G", "Jump to top / bottom", "Open selected item", "Ctrl+G", "Edit selected note", "Cycle repository filter", "/", "Search plans and notes", "Backspace", "Go back / clear search", "? / Esc"},
 			unavailable: "Run selected plan",
 		},
 	} {

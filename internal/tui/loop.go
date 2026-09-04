@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/iamseth/tao/internal/monitor"
@@ -36,9 +37,14 @@ type SnapshotCollector interface {
 	Collect(context.Context) (monitor.Snapshot, error)
 }
 
-// NoteSnapshotCollector supplies read-only open-note refreshes.
+// NoteSnapshotCollector supplies open-note refreshes.
 type NoteSnapshotCollector interface {
 	Collect(context.Context) (note.Snapshot, error)
+}
+
+// NoteEditor edits one selected note through an interactive external editor.
+type NoteEditor interface {
+	Edit(context.Context, note.CatalogNote) (bool, error)
 }
 
 // DebugSnapshotCollector supplies read-only runtime and doctor diagnostics.
@@ -55,23 +61,25 @@ type SettingsService interface {
 // App owns one interactive dashboard event loop. Its boundaries are injectable
 // so terminal behavior can be tested without taking over a real terminal.
 type App struct {
-	Input     io.Reader
-	Output    io.Writer
-	Terminal  Terminal
-	Ticker    Ticker
-	Collector SnapshotCollector
-	Notes     NoteSnapshotCollector
-	Debug     DebugSnapshotCollector
-	Settings  SettingsService
-	Actions   *Actions
-	Details   DetailRepository
-	Inspector DetailInspector
-	Now       func() time.Time
+	Input      io.Reader
+	Output     io.Writer
+	Terminal   Terminal
+	Ticker     Ticker
+	Collector  SnapshotCollector
+	Notes      NoteSnapshotCollector
+	NoteEditor NoteEditor
+	Debug      DebugSnapshotCollector
+	Settings   SettingsService
+	Actions    *Actions
+	Details    DetailRepository
+	Inspector  DetailInspector
+	Now        func() time.Time
 }
 
 type inputResult struct {
-	key term.KeyEvent
-	err error
+	key    term.KeyEvent
+	err    error
+	resume chan struct{}
 }
 
 type confirmPrompt struct {
@@ -101,6 +109,7 @@ type loopState struct {
 	detail              *detailState
 	noteDetail          *note.CatalogNote
 	noteDetailOffset    int
+	noteEditMessage     string
 	now                 func() time.Time
 	lastRootEscape      time.Time
 	listTopPending      bool
@@ -192,12 +201,26 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 			if result.err != nil {
 				return fmt.Errorf("read terminal input: %w", result.err)
 			}
+			if result.key.Key == term.KeyCtrlG {
+				handled, err := a.editSelectedNote(loopCtx, &state)
+				if err != nil {
+					return err
+				}
+				if handled {
+					if err := a.writeFrame(state); err != nil {
+						return err
+					}
+					close(result.resume)
+					continue
+				}
+			}
 			if a.handleKey(loopCtx, &state, result.key) {
 				return nil
 			}
 			if err := a.writeFrame(state); err != nil {
 				return err
 			}
+			close(result.resume)
 		case update, ok := <-state.detailUpdates():
 			if !ok {
 				state.detail.updates = nil
@@ -323,6 +346,69 @@ func (a App) collectNotes(ctx context.Context) (note.Snapshot, error) {
 	return a.Notes.Collect(ctx)
 }
 
+func (a App) editSelectedNote(ctx context.Context, state *loopState) (bool, error) {
+	if state.showShortcuts || state.searchActive || state.confirm != nil || state.detail != nil {
+		return false, nil
+	}
+	var item note.CatalogNote
+	var ok bool
+	if state.noteDetail != nil {
+		item, ok = *state.noteDetail, true
+	} else if state.activePage() == PageNotes {
+		item, ok = state.selectedNote()
+	}
+	if !ok {
+		return false, nil
+	}
+	state.setNoteEditMessage("")
+	if a.NoteEditor == nil {
+		state.setNoteEditMessage("Note editing is unavailable.")
+		return true, nil
+	}
+	if err := restoreTerminalState(a.Terminal, a.Output); err != nil {
+		return true, fmt.Errorf("suspend dashboard for note editor: %w", err)
+	}
+	changed, editErr := a.NoteEditor.Edit(ctx, item)
+	if err := enterTerminalState(a.Terminal, a.Output); err != nil {
+		return true, fmt.Errorf("resume dashboard after note editor: %w", err)
+	}
+	if editErr != nil {
+		state.setNoteEditMessage("Note edit failed: " + cells.Truncate(singleLineDetail(editErr.Error()), 240))
+		return true, nil
+	}
+	if !changed {
+		state.setNoteEditMessage("Note unchanged.")
+		return true, nil
+	}
+	refreshed, err := a.collectNotes(ctx)
+	if err != nil {
+		state.setNoteEditMessage("Note updated; refresh failed: " + cells.Truncate(singleLineDetail(err.Error()), 200))
+		return true, nil
+	}
+	state.replaceNoteSnapshot(refreshed)
+	state.refreshNoteDetail()
+	state.setNoteEditMessage("Updated note " + singleLineNoteValue(item.ID) + ".")
+	return true, nil
+}
+
+func (s *loopState) setNoteEditMessage(message string) {
+	s.noteEditMessage = message
+	s.clampNoteDetailOffset()
+}
+
+func enterTerminalState(terminal Terminal, output io.Writer) error {
+	if err := terminal.EnterRaw(); err != nil {
+		return fmt.Errorf("enter terminal raw mode: %w", err)
+	}
+	if err := term.EnterAlternateScreen(output); err != nil {
+		return fmt.Errorf("enter alternate screen: %w", err)
+	}
+	if err := term.HideCursor(output); err != nil {
+		return fmt.Errorf("hide cursor: %w", err)
+	}
+	return nil
+}
+
 func (a App) collectDebug(ctx context.Context) DebugSnapshot {
 	if a.Debug == nil {
 		return DebugSnapshot{CollectionError: "debug collector unavailable"}
@@ -349,7 +435,7 @@ func (a App) writeFrame(state loopState) error {
 	var frame bytes.Buffer
 	switch {
 	case state.noteDetail != nil:
-		frame.WriteString(renderNoteDetail(*state.noteDetail, state.size.Width, state.size.Height, state.noteDetailOffset))
+		frame.WriteString(renderNoteDetailWithMessage(*state.noteDetail, state.size.Width, state.size.Height, state.noteDetailOffset, state.noteEditMessage))
 	case state.detail != nil:
 		frame.WriteString(RenderDetail(DetailModel{
 			Plan:            state.detail.plan,
@@ -393,6 +479,7 @@ func (a App) writeFrame(state loopState) error {
 			ConfirmMessage:      state.confirmMessage(),
 			ActionLabels:        a.Actions.labels(),
 			ActionMessage:       a.Actions.statusMessage(),
+			NoteMessage:         state.noteEditMessage,
 			SettingsMessage:     state.settingsMessage,
 		}))
 	}
@@ -411,12 +498,18 @@ func readInput(ctx context.Context, input io.Reader, results chan<- inputResult)
 	decoder := term.NewDecoder(input)
 	for {
 		key, err := decoder.ReadKey()
+		resume := make(chan struct{})
 		select {
-		case results <- inputResult{key: key, err: err}:
+		case results <- inputResult{key: key, err: err, resume: resume}:
 		case <-ctx.Done():
 			return
 		}
 		if err != nil {
+			return
+		}
+		select {
+		case <-resume:
+		case <-ctx.Done():
 			return
 		}
 	}
@@ -1253,7 +1346,11 @@ func (s *loopState) noteDetailMaxOffset() int {
 		return 0
 	}
 	bodyLines := len(renderNoteText(s.noteDetail.Text, s.size.Width))
-	bodyHeight := noteDetailBodyHeight(bodyLines, s.size.Height)
+	footerLines := 1
+	if strings.TrimSpace(s.noteEditMessage) != "" {
+		footerLines++
+	}
+	bodyHeight := noteDetailBodyHeightWithFooter(bodyLines, s.size.Height, footerLines)
 	return max(0, bodyLines-bodyHeight)
 }
 

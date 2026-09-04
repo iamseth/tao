@@ -18,17 +18,20 @@ import (
 )
 
 type fakeTerminal struct {
-	mu       sync.Mutex
-	size     term.Size
-	resizes  chan struct{}
-	entered  bool
-	restored bool
+	mu           sync.Mutex
+	size         term.Size
+	resizes      chan struct{}
+	entered      bool
+	restored     bool
+	enterCalls   int
+	restoreCalls int
 }
 
 func (t *fakeTerminal) EnterRaw() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.entered = true
+	t.enterCalls++
 	return nil
 }
 
@@ -36,6 +39,7 @@ func (t *fakeTerminal) Restore() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.restored = true
+	t.restoreCalls++
 	return nil
 }
 
@@ -120,6 +124,12 @@ func (c *fakeNoteCollector) callCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.calls
+}
+
+type noteEditorFunc func(context.Context, note.CatalogNote) (bool, error)
+
+func (edit noteEditorFunc) Edit(ctx context.Context, item note.CatalogNote) (bool, error) {
+	return edit(ctx, item)
 }
 
 type recordingWriter struct {
@@ -611,6 +621,86 @@ func TestNoteSelectionRefreshFocusDetailAndPlanActionIsolation(t *testing.T) {
 	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyBackspace})
 	if state.noteDetail != nil || state.activePage() != PageNotes {
 		t.Fatalf("Backspace did not return to Notes: detail=%+v page=%q", state.noteDetail, state.activePage())
+	}
+}
+
+func TestRunDispatchesCtrlGToSelectedNoteEditor(t *testing.T) {
+	terminal := &fakeTerminal{size: term.Size{Width: 80, Height: 20}, resizes: make(chan struct{})}
+	ticker := &fakeTicker{channel: make(chan time.Time)}
+	collector := &fakeCollector{snapshots: []monitor.Snapshot{{}}}
+	item := note.CatalogNote{RepositoryID: "repo", ID: "note", Text: "text"}
+	notes := &fakeNoteCollector{snapshots: []note.Snapshot{{Notes: []note.CatalogNote{item}}, {Notes: []note.CatalogNote{item}}}}
+	var calls int
+	err := (App{
+		Input: strings.NewReader("\x1b[Z\x07q"), Output: io.Discard, Terminal: terminal, Ticker: ticker,
+		Collector: collector, Notes: notes,
+		NoteEditor: noteEditorFunc(func(_ context.Context, got note.CatalogNote) (bool, error) {
+			calls++
+			if got.ID != item.ID {
+				t.Fatalf("edited note = %+v", got)
+			}
+			return true, nil
+		}),
+	}).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || notes.callCount() != 2 || terminal.enterCalls != 2 || terminal.restoreCalls != 2 {
+		t.Fatalf("calls=%d note refreshes=%d terminal enter=%d restore=%d", calls, notes.callCount(), terminal.enterCalls, terminal.restoreCalls)
+	}
+}
+
+func TestEditSelectedNoteSuspendsTerminalRefreshesAndPreservesSelection(t *testing.T) {
+	old := note.CatalogNote{RepositoryID: "repo", ID: "note", Text: "old", Tags: []string{"tier1"}}
+	updated := old
+	updated.Text = "updated"
+	updated.Tags = []string{"tier0", "edited"}
+	collector := &fakeNoteCollector{snapshots: []note.Snapshot{{Notes: []note.CatalogNote{updated}}}}
+	terminal := &fakeTerminal{}
+	var edited note.CatalogNote
+	app := App{
+		Output:   io.Discard,
+		Terminal: terminal,
+		Notes:    collector,
+		NoteEditor: noteEditorFunc(func(_ context.Context, item note.CatalogNote) (bool, error) {
+			edited = item
+			return true, nil
+		}),
+	}
+	state := loopState{page: PageNotes, noteSnapshot: note.Snapshot{Notes: []note.CatalogNote{old}}}
+	handled, err := app.editSelectedNote(context.Background(), &state)
+	if err != nil || !handled {
+		t.Fatalf("edit handled=%t err=%v", handled, err)
+	}
+	if edited.ID != old.ID || terminal.restoreCalls != 1 || terminal.enterCalls != 1 {
+		t.Fatalf("edited=%+v terminal enter=%d restore=%d", edited, terminal.enterCalls, terminal.restoreCalls)
+	}
+	selected, ok := state.selectedNote()
+	if !ok || selected.Text != "updated" || state.selected != 0 || collector.callCount() != 1 {
+		t.Fatalf("refreshed selected=%+v ok=%t index=%d calls=%d", selected, ok, state.selected, collector.callCount())
+	}
+	if state.noteEditMessage != "Updated note note." {
+		t.Fatalf("edit message = %q", state.noteEditMessage)
+	}
+}
+
+func TestEditSelectedNoteResumesAfterEditorFailureAndShowsMessage(t *testing.T) {
+	item := note.CatalogNote{RepositoryID: "repo", ID: "note", Text: "old"}
+	terminal := &fakeTerminal{}
+	app := App{
+		Output:   io.Discard,
+		Terminal: terminal,
+		NoteEditor: noteEditorFunc(func(context.Context, note.CatalogNote) (bool, error) {
+			return false, errors.New("nvim failed")
+		}),
+	}
+	state := loopState{page: PageNotes, noteSnapshot: note.Snapshot{Notes: []note.CatalogNote{item}}}
+	handled, err := app.editSelectedNote(context.Background(), &state)
+	if err != nil || !handled {
+		t.Fatalf("edit handled=%t err=%v", handled, err)
+	}
+	if terminal.restoreCalls != 1 || terminal.enterCalls != 1 || !strings.Contains(state.noteEditMessage, "nvim failed") {
+		t.Fatalf("terminal enter=%d restore=%d message=%q", terminal.enterCalls, terminal.restoreCalls, state.noteEditMessage)
 	}
 }
 
