@@ -262,7 +262,7 @@ func TestDashboardPagesRenderSharedSectionRules(t *testing.T) {
 		want []string
 	}{
 		{page: PagePlans, role: RolePlanNext, want: []string{"▌ NEXT ", "REPO", "NEXT", "PLAN", "SLICES", "AGE"}},
-		{page: PageNotes, role: RoleAccent, want: []string{"▌ OLDER ", "REPO", "PREVIEW", "TAG", "AGE"}},
+		{page: PageNotes, role: RoleAccent, want: []string{"▌ UNTIERED ", "REPO", "PREVIEW", "TAGS", "CREATED", "UPDATED"}},
 		{page: PageSettings, role: RoleSettingsSection, want: []string{"▌ EXECUTION · all default ", "Agent", "▌ REPOSITORY DEFAULTS ", "PR", "ROOT"}},
 		{page: PageDebug, role: RoleDebugSection, want: []string{"▌ UI ", "▌ DOCTOR "}},
 	}
@@ -309,7 +309,7 @@ func TestNotesViewportKeepsSectionContextAndCountsOnlyHiddenNotes(t *testing.T) 
 	model.Selected = len(items) - 1
 
 	frame := Render(model)
-	for _, want := range []string{"▌ OLDER ", "REPO", "PREVIEW", "preview-29", "+ 15 more  ↓"} {
+	for _, want := range []string{"▌ UNTIERED ", "REPO", "PREVIEW", "preview-29", "+ 15 more  ↓"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("selected-last Notes viewport missing %q:\n%s", want, frame)
 		}
@@ -343,7 +343,7 @@ func TestNotesViewportUsesRoomForSelectedRow(t *testing.T) {
 	}
 
 	frame := Render(model)
-	for _, want := range []string{"▌ TODAY ", "full body first line full body second line", "+ 15 more  ↓"} {
+	for _, want := range []string{"▌ UNTIERED ", "full body first line full body second line", "+ 15 more  ↓"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("roomy constrained Notes viewport missing %q:\n%s", want, frame)
 		}
@@ -365,7 +365,7 @@ func TestNotesViewportKeepsWarningsVisibleWithManyNotes(t *testing.T) {
 	model.Selected = len(model.NoteSnapshot.Notes) - 1
 
 	frame := Render(model)
-	for _, want := range []string{"▌ OLDER ", "preview-29", "▌ Warnings ", "repo: catalog damaged", "+ 17 more  ↓"} {
+	for _, want := range []string{"▌ UNTIERED ", "preview-29", "▌ Warnings ", "repo: catalog damaged", "+ 17 more  ↓"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("constrained Notes viewport missing %q:\n%s", want, frame)
 		}

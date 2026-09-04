@@ -142,10 +142,23 @@ func resolveColumns(columns []column, paneWidth int) []column {
 		return resolved
 	}
 
+	minimumTotal := 0
+	for _, index := range flexIndexes {
+		minimumTotal += columnMinimum(resolved[index])
+	}
+	useSemanticMinimums := available >= minimumTotal
 	remaining := available
 	for offset, index := range flexIndexes {
+		minimum := minimumFlexWidth
 		minimumForLater := minimumFlexWidth * (len(flexIndexes) - offset - 1)
-		resolved[index].width = min(resolved[index].width, max(remaining-minimumForLater, minimumFlexWidth))
+		if useSemanticMinimums {
+			minimum = columnMinimum(resolved[index])
+			minimumForLater = 0
+			for _, later := range flexIndexes[offset+1:] {
+				minimumForLater += resolved[later].width
+			}
+		}
+		resolved[index].width = min(resolved[index].width, max(remaining-minimumForLater, minimum))
 		remaining -= resolved[index].width
 	}
 	return resolved

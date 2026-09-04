@@ -271,7 +271,7 @@ func TestStressViewsAreCellBoundedAcrossWidths(t *testing.T) {
 	scenario, _ := Lookup(ScenarioStress)
 	required := map[View][]string{
 		ViewPlans:    {"NEXT", "PLAN"},
-		ViewNotes:    {"PREVIEW", "AGE"},
+		ViewNotes:    {"PREVIEW", "TAGS", "CREATED", "UPDATED"},
 		ViewSettings: {"REPOSITORY DEFAULTS", "PR"},
 		ViewDebug:    {"UI", "DOCTOR"},
 	}
@@ -327,7 +327,7 @@ func TestDashboardViewsRemoveZeroInformationColumns(t *testing.T) {
 	if header == "" {
 		t.Fatalf("Notes preview has no list header:\n%s", notes)
 	}
-	for _, column := range []string{"STATUS", "ID"} {
+	for _, column := range []string{"STATUS", "ID", "TIER"} {
 		if slices.Contains(strings.Fields(header), column) {
 			t.Errorf("Notes list retained zero-information %s column: %q", column, header)
 		}

@@ -14,25 +14,26 @@ import (
 
 const (
 	maxNoteRepositoryCells  = 24
-	maxNotePrimaryTagCells  = 32
+	maxNoteTagsCells        = 64
 	maxNotePreviewCells     = 64
 	minimumNotePreviewCells = 12
+	minimumNoteTagsCells    = 8
 )
 
 type noteRowValues struct {
 	repository string
 	preview    string
-	tier       string
-	primaryTag string
-	age        string
+	tags       string
+	created    string
+	updated    string
 }
 
 type noteTableWidths struct {
 	repository int
 	preview    int
-	tier       int
-	primaryTag int
-	age        int
+	tags       int
+	created    int
+	updated    int
 }
 
 type indexedNote struct {
@@ -40,7 +41,7 @@ type indexedNote struct {
 	index int
 }
 
-type noteDateBucket struct {
+type noteTierBucket struct {
 	title string
 	items []indexedNote
 }
@@ -62,15 +63,16 @@ func visibleNotes(snapshot note.Snapshot, focusRepositoryID string) []note.Catal
 
 // noteTierRank orders tiered notes ahead of untiered ones, lowest tier first.
 func noteTierRank(item note.CatalogNote) int {
+	rank := math.MaxInt
 	for _, tag := range item.Tags {
 		if !isNoteTierTag(tag) {
 			continue
 		}
-		if rank, err := strconv.Atoi(strings.TrimPrefix(tag, "tier")); err == nil {
-			return rank
+		if candidate, err := strconv.Atoi(strings.TrimPrefix(tag, "tier")); err == nil {
+			rank = min(rank, candidate)
 		}
 	}
-	return math.MaxInt
+	return rank
 }
 
 func visibleNoteWarnings(snapshot note.Snapshot, focusRepositoryID string) []note.CatalogWarning {
@@ -98,7 +100,7 @@ func renderNotesPage(snapshot note.Snapshot, selected int, focusRepositoryID str
 		widths := measureNoteTable(items, now)
 		columns := noteTableColumns(widths, model.Width)
 		paneWidth := noteTablePaneWidth(model.Width, columns)
-		for _, bucket := range noteDateBuckets(items, now) {
+		for _, bucket := range noteTierBuckets(items) {
 			sectionWidth := dashboardSectionWidth(model, PageNotes, bucket.title, 0)
 			lines = append(lines, "", sectionTitleRule(model.Profile, RoleAccent, bucket.title, sectionWidth), renderNoteHeader(columns, paneWidth))
 			section := tableViewportSection{headingLines: []int{len(lines) - 2, len(lines) - 1}}
@@ -131,37 +133,21 @@ func renderNotesPage(snapshot note.Snapshot, selected int, focusRepositoryID str
 	return lines, selectedLine, metadata
 }
 
-func noteDateBuckets(items []note.CatalogNote, now time.Time) []noteDateBucket {
-	location := now.Location()
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, location)
-	yesterday := today.AddDate(0, 0, -1)
-	weekStart := today.AddDate(0, 0, -((int(today.Weekday()) + 6) % 7))
-	buckets := []noteDateBucket{
-		{title: "TODAY"},
-		{title: "YESTERDAY"},
-		{title: "EARLIER THIS WEEK"},
-		{title: "OLDER"},
-	}
+func noteTierBuckets(items []note.CatalogNote) []noteTierBucket {
+	var buckets []noteTierBucket
 	for index, item := range items {
-		updated := item.UpdatedAt.In(location)
-		bucketIndex := 3
-		switch {
-		case !updated.Before(today):
-			bucketIndex = 0
-		case !updated.Before(yesterday):
-			bucketIndex = 1
-		case !updated.Before(weekStart):
-			bucketIndex = 2
+		rank := noteTierRank(item)
+		title := "UNTIERED"
+		if rank != math.MaxInt {
+			title = fmt.Sprintf("TIER %d", rank)
 		}
-		buckets[bucketIndex].items = append(buckets[bucketIndex].items, indexedNote{item: item, index: index})
-	}
-	visible := buckets[:0]
-	for _, bucket := range buckets {
-		if len(bucket.items) > 0 {
-			visible = append(visible, bucket)
+		if len(buckets) == 0 || buckets[len(buckets)-1].title != title {
+			buckets = append(buckets, noteTierBucket{title: title})
 		}
+		last := len(buckets) - 1
+		buckets[last].items = append(buckets[last].items, indexedNote{item: item, index: index})
 	}
-	return visible
+	return buckets
 }
 
 func noteRepositoryBreakdown(items []note.CatalogNote) string {
@@ -206,35 +192,28 @@ func noteRepositoryBreakdown(items []note.CatalogNote) string {
 
 func measureNoteTable(items []note.CatalogNote, now time.Time) noteTableWidths {
 	widths := noteTableWidths{
-		repository: len("REPO"), preview: len("PREVIEW"),
-		primaryTag: len("TAG"), age: len("AGE"),
+		repository: len("REPO"), preview: len("PREVIEW"), tags: len("TAGS"),
+		created: len("CREATED"), updated: len("UPDATED"),
 	}
 	for _, item := range items {
 		values := noteValues(item, now)
 		widths.repository = max(widths.repository, cells.Width(values.repository))
 		widths.preview = max(widths.preview, cells.Width(values.preview))
-		widths.primaryTag = max(widths.primaryTag, cells.Width(values.primaryTag))
-		widths.age = max(widths.age, cells.Width(values.age))
-		if values.tier != "" {
-			widths.tier = max(widths.tier, len("TIER"), cells.Width(values.tier))
-		}
+		widths.tags = max(widths.tags, cells.Width(values.tags))
+		widths.created = max(widths.created, cells.Width(values.created))
+		widths.updated = max(widths.updated, cells.Width(values.updated))
 	}
 	return widths
 }
 
 func noteTableColumns(widths noteTableWidths, frameWidth int) []column {
-	columns := make([]column, 0, 5)
-	columns = append(columns, column{name: "REPO", width: widths.repository, priority: 20})
-	// A zero tier width means no visible note carries a tier tag; the column
-	// stays out entirely rather than rendering with no information.
-	if widths.tier > 0 {
-		columns = append(columns, column{name: "TIER", width: widths.tier, priority: 30})
+	columns := []column{
+		{name: "REPO", width: widths.repository, priority: 20},
+		{name: "PREVIEW", width: widths.preview, flex: true, required: true, priority: 40, minimum: minimumNotePreviewCells},
+		{name: "TAGS", width: widths.tags, flex: true, required: true, priority: 40, minimum: minimumNoteTagsCells},
+		{name: "CREATED", width: widths.created, required: true, priority: 40},
+		{name: "UPDATED", width: widths.updated, required: true, priority: 40},
 	}
-	columns = append(columns,
-		column{name: "PREVIEW", width: widths.preview, flex: true, required: true, priority: 40, minimum: minimumNotePreviewCells},
-		column{name: "TAG", width: widths.primaryTag, priority: 10},
-		column{name: "AGE", width: widths.age, required: true, priority: 40},
-	)
 	if frameWidth <= 0 {
 		return columns
 	}
@@ -263,14 +242,14 @@ func renderNoteRow(item note.CatalogNote, now time.Time, columns []column, paneW
 		switch item.name {
 		case "REPO":
 			rowCells = append(rowCells, values.repository)
-		case "TIER":
-			rowCells = append(rowCells, Paint(profile, RoleInfo, values.tier))
 		case "PREVIEW":
 			rowCells = append(rowCells, Paint(profile, RoleNeutral4, values.preview))
-		case "TAG":
-			rowCells = append(rowCells, Paint(profile, RoleAccent, values.primaryTag))
-		case "AGE":
-			rowCells = append(rowCells, values.age)
+		case "TAGS":
+			rowCells = append(rowCells, Paint(profile, RoleAccent, values.tags))
+		case "CREATED":
+			rowCells = append(rowCells, values.created)
+		case "UPDATED":
+			rowCells = append(rowCells, values.updated)
 		}
 	}
 	line := "  " + joinRow(columns, rowCells, paneWidth)
@@ -284,31 +263,32 @@ func renderNoteRow(item note.CatalogNote, now time.Time, columns []column, paneW
 }
 
 func noteValues(item note.CatalogNote, now time.Time) noteRowValues {
-	updated := item.UpdatedAt
-	tier := ""
-	primaryTag := ""
+	tags := make([]string, 0, len(item.Tags))
 	for _, tag := range item.Tags {
-		if isNoteTierTag(tag) {
-			if tier == "" {
-				tier = boundedOptionalNoteValue(tag, maxNotePrimaryTagCells)
+		if !isNoteTierTag(tag) {
+			if tag = singleLineNoteValue(tag); tag != "" {
+				tags = append(tags, tag)
 			}
-			continue
-		}
-		if primaryTag == "" {
-			primaryTag = boundedOptionalNoteValue(tag, maxNotePrimaryTagCells)
 		}
 	}
 	return noteRowValues{
 		repository: boundedNoteValue(item.RepositoryName, maxNoteRepositoryCells),
 		preview:    boundedNoteValue(item.Text, maxNotePreviewCells),
-		tier:       tier,
-		primaryTag: primaryTag,
-		age:        relativeAge(&updated, now),
+		tags:       cells.TruncateEllipsis(strings.Join(tags, ", "), maxNoteTagsCells),
+		created:    noteRelativeAge(item.CreatedAt, now),
+		updated:    noteRelativeAge(item.UpdatedAt, now),
 	}
 }
 
-// isNoteTierTag recognizes the priority convention "tier<digits>" so the tier
-// can render as its own column instead of competing for the single TAG cell.
+func noteRelativeAge(value, now time.Time) string {
+	if value.IsZero() {
+		return "-"
+	}
+	return relativeAge(&value, now)
+}
+
+// isNoteTierTag recognizes the priority convention "tier<digits>" used to
+// group notes into ordered priority sections.
 func isNoteTierTag(tag string) bool {
 	rest, found := strings.CutPrefix(tag, "tier")
 	if !found || rest == "" {
@@ -320,10 +300,6 @@ func isNoteTierTag(tag string) bool {
 		}
 	}
 	return true
-}
-
-func boundedOptionalNoteValue(value string, limit int) string {
-	return cells.TruncateEllipsis(singleLineNoteValue(value), limit)
 }
 
 func boundedNoteValue(value string, limit int) string {
