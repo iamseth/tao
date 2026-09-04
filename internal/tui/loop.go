@@ -364,7 +364,9 @@ func (a App) writeFrame(state loopState) error {
 			Width:           state.size.Width,
 			Height:          state.size.Height,
 			UseColor:        state.profile.supportsColor(),
+			Profile:         state.profile,
 			ShowShortcuts:   state.showShortcuts,
+			ScopeExpanded:   state.detail.scopeExpanded,
 			LoadError:       state.detail.loadError,
 			FollowError:     state.detail.followError,
 			Inspection:      state.detail.inspection,
@@ -488,6 +490,9 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 				state.detail.sliceOpen = true
 				state.detail.sliceOffset = 0
 			}
+		case !state.detail.sliceOpen && state.detail.activeTab == detailTabOverview && key.Key == term.KeyRune && (key.Rune == 'e' || key.Rune == 'E'):
+			state.detail.scopeExpanded = !state.detail.scopeExpanded
+			state.detail.clampOffsets(state.size)
 		case state.detail.sliceOpen && (key.Key == term.KeyArrowUp || (key.Key == term.KeyRune && key.Rune == 'k')):
 			state.detail.moveSliceDetail(-1, state.size)
 		case state.detail.sliceOpen && (key.Key == term.KeyArrowDown || (key.Key == term.KeyRune && key.Rune == 'j')):
@@ -799,7 +804,11 @@ func (d *detailState) clampOffsets(size term.Size) {
 }
 
 func (d *detailState) maxOffset(tab detailTab, size term.Size) int {
-	height := max(size.Height-planDetailFixedLines, 0)
+	fixedLines := planDetailFixedLines
+	if tab == detailTabOverview {
+		fixedLines = planOverviewFixedLines
+	}
+	height := max(size.Height-fixedLines, 0)
 	if height == 0 {
 		return 0
 	}
@@ -807,7 +816,7 @@ func (d *detailState) maxOffset(tab detailTab, size term.Size) int {
 	if tab == detailTabActivity {
 		lines = renderActivityPane(d.log, d.followError, size.Width, int(^uint(0)>>1), 0)
 	} else {
-		lines = renderOverviewPane(d.plan, d.row, size.Width, int(^uint(0)>>1), 0, d.inspection)
+		lines = renderOverviewPane(d.plan, d.row, size.Width, int(^uint(0)>>1), 0, d.inspection, ProfileNone, d.scopeExpanded)
 	}
 	return max(len(lines)-height, 0)
 }

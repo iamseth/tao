@@ -57,6 +57,7 @@ func planDetailShortcuts() []shortcut {
 		{key: "Tab / Shift+Tab / ← / →", action: "Switch detail tabs"},
 		{key: "↑ / ↓ / j / k", action: "Scroll or select"},
 		{key: "g / G", action: "Jump to top / bottom"},
+		{key: "e", action: "Expand scope on Overview"},
 		{key: "Enter", action: "Open slice on Slices tab"},
 		{key: "Backspace / Esc", action: "Return to plans"},
 		{key: "q", action: "Quit"},

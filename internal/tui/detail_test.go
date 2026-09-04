@@ -191,7 +191,7 @@ func TestRenderDetailIncludesHeaderAndFitsTerminal(t *testing.T) {
 		Log:   "working\n",
 		Width: 100, Height: 18,
 	})
-	for _, want := range []string{"Tao UI | plan-a | alpha | in_progress | implement | 7s ago", "[Overview]  Slices  Activity", "┌ OVERVIEW ", "│ Title: Plan A", "│ Status: in_progress", "└"} {
+	for _, want := range []string{"Tao UI | plan-a | alpha | in_progress | implement | 7s ago", "[Overview]  Slices  Activity", "Plan A", "Status  in_progress", "PROGRESS", "PROBLEM"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("detail frame missing %q:\n%s", want, frame)
 		}
@@ -201,8 +201,8 @@ func TestRenderDetailIncludesHeaderAndFitsTerminal(t *testing.T) {
 	}
 	body := strings.TrimSuffix(strings.TrimPrefix(frame, clearScreenSequence), "\n")
 	lines := strings.Split(body, "\n")
-	if len(lines) < 5 || lines[1] != "" || lines[2] != "[Overview]  Slices  Activity" || lines[3] != "" || !strings.HasPrefix(lines[4], "┌ OVERVIEW ") {
-		t.Fatalf("detail frame did not preserve the tab layout and section gaps: %q", lines)
+	if len(lines) < 5 || lines[1] != "" || lines[2] != "[Overview]  Slices  Activity" || !strings.HasPrefix(lines[3], "─") || lines[4] != "Plan A" {
+		t.Fatalf("detail frame did not preserve the tab layout and summary: %q", lines)
 	}
 	if strings.Contains(lines[0], "PLAN DETAIL") || strings.Contains(lines[0], "Plan A") {
 		t.Fatalf("detail header retained page label or plan description: %q", lines[0])
@@ -228,7 +228,7 @@ func TestRenderDetailShowsSafeAbandonmentEvidence(t *testing.T) {
 		Row:       monitor.Row{Status: plan.StatusAbandoned, AbandonmentReason: "bounded\nreason\x1b[2J", AbandonedAt: &at},
 		ActiveTab: detailTabOverview, Width: 80, Height: 24,
 	})
-	for _, want := range []string{"Status: abandoned", "Abandoned at: 2026-09-01T14:00:00Z", "Abandonment reason: bounded reason [2J"} {
+	for _, want := range []string{"Status  abandoned", "ATTENTION", "Abandoned at: 2026-09-01T14:00:00Z", "Abandonment reason: bounded reason [2J"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("abandoned detail missing %q:\n%s", want, frame)
 		}
@@ -264,7 +264,7 @@ func TestRenderOverviewShowsAdvisoryInspectionStates(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			frame := RenderDetail(DetailModel{Plan: detail, ActiveTab: detailTabOverview, Inspection: test.inspection, Width: 100, Height: 28})
-			if !strings.Contains(frame, "Staleness:") || !strings.Contains(frame, test.want) {
+			if !strings.Contains(frame, "Staleness") || !strings.Contains(frame, test.want) {
 				t.Fatalf("inspection frame missing %q:\n%s", test.want, frame)
 			}
 		})
@@ -289,8 +289,8 @@ func TestRenderDetailTabsShowBoundedOverviewSlicesAndActivity(t *testing.T) {
 		Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "001-work", Title: "Work", Status: plan.StatusPending, ExpectedFiles: []string{"internal/tui/detail.go"}}}},
 	}
 
-	overview := RenderDetail(DetailModel{Plan: detail, ActiveTab: detailTabOverview, Width: 72, Height: 26})
-	for _, want := range []string{"[Overview]  Slices  Activity", "Change type: feat", "Problem: Operators lack context.", "Scope:", "internal/tui/detail.go", "Open questions:"} {
+	overview := RenderDetail(DetailModel{Plan: detail, ActiveTab: detailTabOverview, Width: 72, Height: 50})
+	for _, want := range []string{"[Overview]  Slices  Activity", "Change type  feat", "PROBLEM", "Operators lack context.", "SCOPE", "internal/tui/detail.go", "OPEN QUESTIONS"} {
 		if !strings.Contains(overview, want) {
 			t.Fatalf("overview missing %q:\n%s", want, overview)
 		}
@@ -313,6 +313,74 @@ func TestRenderDetailTabsShowBoundedOverviewSlicesAndActivity(t *testing.T) {
 			if cells.Width(line) > 72 {
 				t.Fatalf("tab frame line exceeds terminal width: %q", line)
 			}
+		}
+	}
+}
+
+func TestRenderOverviewUsesScannableSectionsChecklistPriorityGridAndExpandableScope(t *testing.T) {
+	files := []string{
+		"internal/one.go", "internal/two.go", "internal/three.go", "internal/four.go",
+		"internal/five.go", "internal/six.go", "internal/seven.go", "internal/eight.go",
+	}
+	detail := &plan.PlanDetail{
+		State: plan.State{Status: plan.StatusPlanned, Plan: plan.PlanState{
+			ID: "scan-plan", Title: "Make plan details easy to scan", ChangeType: plan.ChangeTypeFeat,
+			PendingSlices: []string{"001-work"},
+			Decision: &plan.Decision{
+				Problem: "Important context is difficult to find.", WhyNow: "Operators need faster decisions.", ExpectedBenefit: "The first screen answers the key questions.",
+				Readiness: plan.DecisionReadinessReady, SuccessCriteria: []string{"Summary is visible", "Scope can expand"},
+				Disposition: plan.DecisionDispositionReady, DispositionReason: "The plan is actionable.",
+				Priority: plan.Priority{Level: plan.PriorityOverallLevelMust, Impact: plan.PriorityLevelHigh, Urgency: plan.PriorityLevelMedium, Effort: plan.PriorityEffortSmall, Risk: plan.PriorityLevelLow, Confidence: plan.PriorityLevelHigh, Rationale: "High operator value."},
+			},
+			Sequence: &plan.Sequence{Position: 2, Total: 4},
+		}},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "001-work", Status: plan.StatusPending, ExpectedFiles: files}}},
+	}
+	inspection := detailInspectionView{status: detailInspectionReady}
+
+	collapsed := RenderDetail(DetailModel{Plan: detail, ActiveTab: detailTabOverview, Inspection: inspection, Width: 96, Height: 80})
+	for _, want := range []string{
+		"Make plan details easy to scan", "Change type  feat", "Status  planned", "Readiness  ready", "Priority  must",
+		"WHY NOW  Operators need faster decisions.", "PROGRESS", "Sequence  2 of 4", "Disposition  ready", "Staleness  current",
+		"PROBLEM", "EXPECTED BENEFIT", "SUCCESS CRITERIA", "☐ Summary is visible", "☐ Scope can expand",
+		"PRIORITY", "Level  must", "Impact  high", "Urgency  medium", "Effort  small", "Risk  low", "Confidence  high",
+		"SCOPE", "internal/six.go", "2 more — press e to expand",
+	} {
+		if !strings.Contains(collapsed, want) {
+			t.Fatalf("scannable overview missing %q:\n%s", want, collapsed)
+		}
+	}
+	if strings.Contains(collapsed, "internal/seven.go") || strings.Contains(collapsed, "┌ OVERVIEW") {
+		t.Fatalf("collapsed overview showed hidden scope or heavy box:\n%s", collapsed)
+	}
+
+	expanded := RenderDetail(DetailModel{Plan: detail, ActiveTab: detailTabOverview, Inspection: inspection, ScopeExpanded: true, Width: 96, Height: 80})
+	for _, want := range []string{"internal/seven.go", "internal/eight.go", "press e to collapse"} {
+		if !strings.Contains(expanded, want) {
+			t.Fatalf("expanded overview missing %q:\n%s", want, expanded)
+		}
+	}
+}
+
+func TestRenderOverviewUsesTokyoNightStatePalette(t *testing.T) {
+	detail := &plan.PlanDetail{State: plan.State{Status: plan.StatusBlocked, Plan: plan.PlanState{
+		Title:    "Blocked plan",
+		Decision: &plan.Decision{WhyNow: "A dependency is unavailable.", Readiness: plan.DecisionReadinessBlocked, Disposition: plan.DecisionDispositionConditional},
+	}}}
+	frame := RenderDetail(DetailModel{
+		Plan: detail, Row: monitor.Row{AttentionReasons: []monitor.AttentionReason{monitor.AttentionBlocked}},
+		Inspection: detailInspectionView{status: detailInspectionReady}, Width: 80, Height: 24,
+		UseColor: true, Profile: ProfileTrueColor,
+	})
+	for _, sequence := range []string{
+		colorSequence(mustRoleColor(ProfileTrueColor, RoleDetailBackground), true),
+		colorSequence(mustRoleColor(ProfileTrueColor, RoleDetailPrimary), false),
+		colorSequence(mustRoleColor(ProfileTrueColor, RoleDetailSuccess), false),
+		colorSequence(mustRoleColor(ProfileTrueColor, RoleDetailError), false),
+		colorSequence(mustRoleColor(ProfileTrueColor, RoleDetailDivider), false),
+	} {
+		if !strings.Contains(frame, sequence) {
+			t.Fatalf("colored overview missing sequence %q: %q", sequence, frame)
 		}
 	}
 }
@@ -348,14 +416,14 @@ func TestRenderDetailVerticalResizeKeepsFrameInsideTerminal(t *testing.T) {
 	if len(lines) > 6 {
 		t.Fatalf("resized detail frame has %d lines, want at most 6:\n%s", len(lines), frame)
 	}
-	if !strings.HasPrefix(lines[0], "Tao UI | plan-a |") || lines[2] != "[Overview]  Slices  Activity" || !strings.HasPrefix(lines[4], "┌ OVERVIEW ") {
+	if !strings.HasPrefix(lines[0], "Tao UI | plan-a |") || lines[2] != "[Overview]  Slices  Activity" || !strings.HasPrefix(lines[3], "─") || lines[4] != "Plan details unavailable." {
 		t.Fatalf("resized detail frame lost compact header or detail tabs: %q", lines)
 	}
 }
 
 func TestRenderDetailShortcutPopoverIsContextAware(t *testing.T) {
 	frame := RenderDetail(DetailModel{ShowShortcuts: true, Width: 64, Height: 14})
-	for _, want := range []string{"Keyboard shortcuts", "Shift+Tab", "Switch detail tabs", "Scroll or select", "Open slice on Slices tab", "Return to plans", "Close shortcuts"} {
+	for _, want := range []string{"Keyboard shortcuts", "Shift+Tab", "Switch detail tabs", "Scroll or select", "Expand scope on Overview", "Open slice on Slices tab", "Return to plans", "Close shortcuts"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("plan detail shortcuts missing %q:\n%s", want, frame)
 		}

@@ -49,6 +49,15 @@ const (
 	RolePlanSelectionText
 	RoleSettingsSection
 	RoleDebugSection
+	RoleDetailBackground
+	RoleDetailPrimary
+	RoleDetailSecondary
+	RoleDetailMuted
+	RoleDetailSuccess
+	RoleDetailInfo
+	RoleDetailWarning
+	RoleDetailError
+	RoleDetailDivider
 	RoleNeutral0
 	RoleNeutral1
 	RoleNeutral2
@@ -161,10 +170,24 @@ func roleSpecification(role Role) (roleSpec, bool) {
 		return roleSpec{hex: "#9ECE6A", ansi16: 10}, true
 	case RolePlanNext:
 		return roleSpec{hex: "#7AA2F7", ansi16: 12}, true
-	case RolePlanHistory, RoleSettingsSection, RoleDebugSection:
+	case RolePlanHistory, RoleSettingsSection, RoleDebugSection, RoleDetailMuted:
 		return roleSpec{hex: "#565F89", ansi16: 8}, true
-	case RolePlanNowBackground:
+	case RoleDetailBackground, RolePlanNowBackground:
 		return roleSpec{hex: "#1A1B26", ansi16: 0}, true
+	case RoleDetailPrimary:
+		return roleSpec{hex: "#C0CAF5", ansi16: 15}, true
+	case RoleDetailSecondary:
+		return roleSpec{hex: "#A9B1D6", ansi16: 7}, true
+	case RoleDetailSuccess:
+		return roleSpec{hex: "#9ECE6A", ansi16: 10}, true
+	case RoleDetailInfo:
+		return roleSpec{hex: "#7AA2F7", ansi16: 12}, true
+	case RoleDetailWarning:
+		return roleSpec{hex: "#E0AF68", ansi16: 11}, true
+	case RoleDetailError:
+		return roleSpec{hex: "#F7768E", ansi16: 9}, true
+	case RoleDetailDivider:
+		return roleSpec{hex: "#292E42", ansi16: 8}, true
 	case RolePlanNextBackground:
 		return roleSpec{hex: "#171C2C", ansi16: 0}, true
 	case RolePlanHistoryBackground:

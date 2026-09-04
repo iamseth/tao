@@ -316,7 +316,7 @@ func Render(scenario Scenario, options RenderOptions) (string, error) {
 		}
 		frame = tui.RenderDetail(tui.DetailModel{
 			Plan: &fixture.Detail, Row: detailRow(scenario.Snapshot, fixture), Log: fixture.Log,
-			SelectedSliceID: selected, Width: options.Width, Height: options.Height, UseColor: options.Color,
+			SelectedSliceID: selected, Width: options.Width, Height: options.Height, UseColor: options.Color, Profile: profile,
 			ShowShortcuts: options.ShowShortcuts,
 		})
 	case ViewNoteDetail:

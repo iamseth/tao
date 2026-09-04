@@ -754,19 +754,21 @@ func TestPlanDetailLocalNavigationBoundsEachTab(t *testing.T) {
 	}
 }
 
-func TestPlanDetailOverviewBottomIncludesCompletedInspectionFindings(t *testing.T) {
+func TestPlanDetailOverviewPromotesInspectionFindingsAndKeepsBottomReachable(t *testing.T) {
 	detail := &plan.PlanDetail{State: plan.State{Status: plan.StatusPlanned, Plan: plan.PlanState{ID: "plan-a"}}}
+	inspection := detailInspectionView{status: detailInspectionReady, findings: []DetailFinding{
+		{Severity: "warning", Message: strings.Repeat("first wrapped finding ", 5)},
+		{Severity: "warning", Message: strings.Repeat("second wrapped finding ", 5)},
+		{Severity: "warning", Message: "last-finding"},
+	}}
 	state := loopState{
-		detail: &detailState{
-			plan:      detail,
-			activeTab: detailTabOverview,
-			inspection: detailInspectionView{status: detailInspectionReady, findings: []DetailFinding{
-				{Severity: "warning", Message: strings.Repeat("first wrapped finding ", 5)},
-				{Severity: "warning", Message: strings.Repeat("second wrapped finding ", 5)},
-				{Severity: "warning", Message: "last-finding"},
-			}},
-		},
-		size: term.Size{Width: 32, Height: 10},
+		detail: &detailState{plan: detail, activeTab: detailTabOverview, inspection: inspection},
+		size:   term.Size{Width: 32, Height: 10},
+	}
+
+	all := strings.Join(renderOverviewPane(detail, monitor.Row{}, 32, 1_000, 0, inspection, ProfileNone, false), "\n")
+	if !strings.Contains(all, "ATTENTION") || !strings.Contains(all, "last-finding") || strings.Index(all, "ATTENTION") > strings.Index(all, "PROGRESS") {
+		t.Fatalf("inspection findings were not promoted above Progress:\n%s", all)
 	}
 
 	(App{}).handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'G'})
@@ -774,12 +776,31 @@ func TestPlanDetailOverviewBottomIncludesCompletedInspectionFindings(t *testing.
 		Plan:           detail,
 		ActiveTab:      detailTabOverview,
 		OverviewOffset: state.detail.overviewOffset,
-		Inspection:     state.detail.inspection,
+		Inspection:     inspection,
 		Width:          state.size.Width,
 		Height:         state.size.Height,
 	})
-	if !strings.Contains(frame, "last-finding") {
-		t.Fatalf("Overview G did not reach final inspection finding at offset %d:\n%s", state.detail.overviewOffset, frame)
+	if !strings.Contains(frame, "SCOPE") {
+		t.Fatalf("Overview G did not reach final section at offset %d:\n%s", state.detail.overviewOffset, frame)
+	}
+}
+
+func TestPlanDetailOverviewTogglesScopeExpansion(t *testing.T) {
+	state := loopState{
+		detail: &detailState{plan: &plan.PlanDetail{}, activeTab: detailTabOverview},
+		size:   term.Size{Width: 80, Height: 24},
+	}
+	app := App{}
+	if quit := app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'e'}); quit || !state.detail.scopeExpanded {
+		t.Fatalf("e scope toggle quit=%t expanded=%t, want false/true", quit, state.detail.scopeExpanded)
+	}
+	if quit := app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'E'}); quit || state.detail.scopeExpanded {
+		t.Fatalf("E scope toggle quit=%t expanded=%t, want false/false", quit, state.detail.scopeExpanded)
+	}
+	state.detail.activeTab = detailTabSlices
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'e'})
+	if state.detail.scopeExpanded {
+		t.Fatal("scope toggle acted outside Overview")
 	}
 }
 
