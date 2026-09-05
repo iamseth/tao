@@ -8,6 +8,16 @@ linters:
   exclusions:
     paths:
       - (^|/)\.tao/
+    rules:
+      # Stat_t.Nlink is uint64 on linux/amd64, where CI lints, so the conversion
+      # there is redundant and unconvert needs the nolint directive. It is uint16
+      # on darwin and uint32 on linux/arm64, where unconvert stays quiet and
+      # nolintlint would report that same directive as unused. Only one platform
+      # can be satisfied, so exempt the file from nolintlint rather than let the
+      # local gate and CI demand opposite edits.
+      - path: internal/merge/agent_session_nlink_unix\.go
+        linters:
+          - nolintlint
   enable:
     - bodyclose
     - copyloopvar
