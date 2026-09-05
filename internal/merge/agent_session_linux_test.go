@@ -44,11 +44,11 @@ func TestSingleMergeProcessSandboxHidesTaoParent(t *testing.T) {
 	// Model Tao's unlinked rollback backing: its contents have no filesystem
 	// name and are reachable only through the parent process's open descriptor.
 	backingPath := filepath.Join(root, "rollback-backing")
-	backing, err := os.OpenFile(backingPath, os.O_CREATE|os.O_RDWR, 0o600)
+	backing, err := os.OpenFile(backingPath, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // G304: backingPath is a test-owned path rooted in t.TempDir.
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer backing.Close()
+	defer func() { _ = backing.Close() }()
 	if _, err := backing.WriteString("parent-only rollback contents\n"); err != nil {
 		t.Fatal(err)
 	}

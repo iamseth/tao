@@ -20,6 +20,11 @@ jobs:
         with:
           go-version: "1.26.2"
 
+      - name: Install bubblewrap
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+
       - name: Verify no third-party dependencies
         run: make verify-no-deps
 
