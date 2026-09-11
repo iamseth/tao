@@ -464,6 +464,7 @@ func TestPlanRowProjectsVerificationRecoveryByClassification(t *testing.T) {
 		wantNext string
 	}{
 		{name: "code", kind: plan.FinalVerificationFailureKindCode, action: plan.PlanAction{Kind: plan.PlanActionRepairVerification, Command: "tao run --repair-verification plan-a"}, wantNext: "REPAIR VERIFICATION"},
+		{name: "code repair cap reached", kind: plan.FinalVerificationFailureKindCode, action: plan.PlanAction{Kind: plan.PlanActionResolveVerification, Instruction: "Repair the repository verification failure manually before explicitly reverifying"}, wantNext: "RESOLVE VERIFICATION"},
 		{name: "tool missing", kind: plan.FinalVerificationFailureKindToolMissing, action: plan.PlanAction{Kind: plan.PlanActionResolveVerification, Instruction: "restore tool"}, wantNext: "RESOLVE VERIFICATION"},
 		{name: "timeout", kind: plan.FinalVerificationFailureKindTimeout, action: plan.PlanAction{Kind: plan.PlanActionResolveVerification, Instruction: "resolve timeout"}, wantNext: "RESOLVE VERIFICATION"},
 		{name: "cancelled", kind: plan.FinalVerificationFailureKindCancelled, action: plan.PlanAction{Kind: plan.PlanActionResolveVerification, Instruction: "resolve cancellation"}, wantNext: "RESOLVE VERIFICATION"},

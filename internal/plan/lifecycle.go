@@ -1088,6 +1088,9 @@ func markSliceRemoved(detail *PlanDetail, changes *ArtifactChangeSet, sliceID st
 	if err != nil {
 		return Event{}, err
 	}
+	if slice.VerificationRepair != nil {
+		return Event{}, generatedVerificationRepairEditError(detail, sliceID, "remove")
+	}
 	if dependents := pendingDependents(detail, sliceID); len(dependents) > 0 {
 		return Event{}, fmt.Errorf("cannot remove slice %s; pending slices depend on it: %s", sliceID, strings.Join(dependents, ", "))
 	}
@@ -1119,6 +1122,9 @@ func markSliceSkipped(detail *PlanDetail, changes *ArtifactChangeSet, sliceID st
 	if err != nil {
 		return Event{}, err
 	}
+	if slice.VerificationRepair != nil {
+		return Event{}, generatedVerificationRepairEditError(detail, sliceID, "skip")
+	}
 	if dependents := pendingDependents(detail, sliceID); len(dependents) > 0 {
 		return Event{}, fmt.Errorf("cannot skip slice %s; pending slices depend on it: %s", sliceID, strings.Join(dependents, ", "))
 	}
@@ -1130,6 +1136,11 @@ func markSliceSkipped(detail *PlanDetail, changes *ArtifactChangeSet, sliceID st
 	markPlanEdited(detail, changes, now)
 	event := Event{Type: EventTypeSliceSkipped, Timestamp: now, PlanID: detail.State.Plan.ID, SliceID: sliceID, Message: "Pending slice skipped by plan edit"}
 	return event, nil
+}
+
+func generatedVerificationRepairEditError(detail *PlanDetail, sliceID string, action string) error {
+	planID := detail.State.Plan.ID
+	return fmt.Errorf("cannot %s generated verification-repair slice %s; run `tao run %s` to complete it, or use `tao abandon --reason TEXT %s` before recovering manually", action, sliceID, planID, planID)
 }
 
 // MarkPendingSlicesReordered replaces the pending queue after dependency validation.

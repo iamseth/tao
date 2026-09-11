@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -92,6 +93,109 @@ func TestVerifyCompletedBranchAppendsOutcomeEvents(t *testing.T) {
 				t.Fatalf("failed verification classification was not carried to its event: verification=%+v event=%+v", verification, event)
 			}
 		})
+	}
+}
+
+func TestVerifyCompletedBranchRecordsRepairStopOnlyAtExhaustion(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		attempts  int
+		wantStops int
+	}{
+		{name: "below cap", attempts: plan.VerificationRepairAttemptCap - 1},
+		{name: "at cap", attempts: plan.VerificationRepairAttemptCap, wantStops: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@true\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			detail := completedReviewPlanDetail(t.TempDir())
+			for i := 0; i < test.attempts; i++ {
+				binding := plan.VerificationRepairBinding{Command: "make verify", HeadSHA: "prior-head", Fingerprint: "prior-failure"}
+				detail.Slices.Slices = append(detail.Slices.Slices, plan.Slice{ID: fmt.Sprintf("vr%02d", i+1), Status: plan.StatusCompleted, VerificationRepair: &binding})
+			}
+			var events []plan.Event
+			finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{}, RunDependencies{
+				CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error {
+					return errors.New("exit status 1")
+				},
+				reviewGitFactory:  fixedReviewGit(&fakeReviewGit{head: "live-head"}),
+				PlanRecordFactory: memoryPlanRecordFactory,
+				EventAppender: eventAppenderFunc(func(_ string, event plan.Event) error {
+					events = append(events, event)
+					return nil
+				}),
+			}))
+
+			err := finalizer.verifyCompletedBranch(context.Background(), detail, root)
+			var verificationErr *FinalVerificationError
+			if !errors.As(err, &verificationErr) {
+				t.Fatalf("error = %v, want FinalVerificationError", err)
+			}
+			var stops []plan.Event
+			for _, event := range events {
+				if event.Type == plan.EventTypeVerificationRepairStopped {
+					stops = append(stops, event)
+				}
+			}
+			if len(stops) != test.wantStops {
+				t.Fatalf("stop events = %+v, want %d", stops, test.wantStops)
+			}
+			if test.wantStops == 1 {
+				stop := stops[0]
+				if stop.Command != "make verify" || stop.HeadSHA != "live-head" || stop.Fingerprint == "" || stop.Fingerprint != verificationErr.Verification.Fingerprint || stop.Attempts != test.attempts {
+					t.Fatalf("stop evidence = %+v, verification = %+v", stop, verificationErr.Verification)
+				}
+				if !strings.Contains(stop.Reason, "repair") || !strings.Contains(stop.Reason, "--reverify") {
+					t.Fatalf("stop reason is not actionable: %q", stop.Reason)
+				}
+			}
+		})
+	}
+}
+
+func TestVerifyCompletedBranchReturnsRepairStopAppendFailureAtExhaustion(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	detail := completedReviewPlanDetail(t.TempDir())
+	for i := range plan.VerificationRepairAttemptCap {
+		binding := plan.VerificationRepairBinding{Command: "make verify", HeadSHA: "prior-head", Fingerprint: "prior-failure"}
+		detail.Slices.Slices = append(detail.Slices.Slices, plan.Slice{ID: fmt.Sprintf("vr%02d", i+1), Status: plan.StatusCompleted, VerificationRepair: &binding})
+	}
+	commandErr := errors.New("exit status 1")
+	journalErr := errors.New("journal unavailable")
+	appendCalls := 0
+	finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{}, RunDependencies{
+		CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error {
+			return commandErr
+		},
+		reviewGitFactory:  fixedReviewGit(&fakeReviewGit{head: "live-head"}),
+		PlanRecordFactory: memoryPlanRecordFactory,
+		EventAppender: eventAppenderFunc(func(_ string, event plan.Event) error {
+			appendCalls++
+			if event.Type == plan.EventTypeVerificationRepairStopped {
+				return journalErr
+			}
+			return nil
+		}),
+	}))
+
+	err := finalizer.verifyCompletedBranch(context.Background(), detail, root)
+	var verificationErr *FinalVerificationError
+	if !errors.Is(err, journalErr) {
+		t.Fatalf("error = %v, want repair stop journal error", err)
+	}
+	if !errors.As(err, &verificationErr) || !errors.Is(err, commandErr) {
+		t.Fatalf("error = %v, want original FinalVerificationError context", err)
+	}
+	if appendCalls != 2 {
+		t.Fatalf("event append calls = %d, want final verification and repair stop", appendCalls)
+	}
+	if verificationErr.Verification.Result != finalVerificationFailed || verificationErr.Verification.HeadSHA != "live-head" {
+		t.Fatalf("returned verification = %+v", verificationErr.Verification)
 	}
 }
 
@@ -273,6 +377,80 @@ func TestReverifyCompletedRunReplacesEvidenceAtSameHeadWithoutAppendingSlice(t *
 	}
 	if len(detail.Slices.Slices) != sliceCount || len(detail.State.Plan.PendingSlices) != 0 {
 		t.Fatalf("reverify changed slices: slices=%d pending=%v", len(detail.Slices.Slices), detail.State.Plan.PendingSlices)
+	}
+}
+
+func TestReverifyCompletedRunReplacesEvidenceAtAdvancedHead(t *testing.T) {
+	root := initSliceCompletionRepo(t)
+	failedHead := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
+	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runCommitTestGitCommand(t, root, "add", "Makefile")
+	runCommitTestGitCommand(t, root, "commit", "-m", "manually repair verification")
+	advancedHead := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
+
+	detail := completedReviewPlanDetail(t.TempDir())
+	detail.State.Repo.Root = root
+	detail.State.Workspace = &plan.Workspace{Strategy: plan.WorkspaceStrategyWorktree, Path: root, Branch: "tao/test", HeadSHA: failedHead}
+	detail.State.Plan.FinalVerification = &plan.FinalVerification{Command: "make verify", CWD: root, HeadSHA: failedHead, Result: finalVerificationFailed, FailureKind: plan.FinalVerificationFailureKindCode, Fingerprint: "prior-failure"}
+	execution := testRunExecution(ExecutionConfig{
+		ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeIsolated},
+		Reverify:           true,
+	}, RunDependencies{CommandRunner: defaultCommandRunner, PlanRecordFactory: memoryPlanRecordFactory})
+	execution.ExecutionRoot = root
+
+	complete, err := newFinalizer(io.Discard, execution).FinalizeIfComplete(context.Background(), 0, detail, plan.AnalyzeRunCapabilities(detail))
+	if err != nil || !complete {
+		t.Fatalf("advanced-head reverify = complete %t, error %v", complete, err)
+	}
+	verification := detail.State.Plan.FinalVerification
+	if verification == nil || verification.Result != finalVerificationPassed || verification.HeadSHA != advancedHead {
+		t.Fatalf("replacement verification = %+v, want passed at %s", verification, advancedHead)
+	}
+	if detail.State.Workspace.HeadSHA != advancedHead {
+		t.Fatalf("workspace head = %q, want %q", detail.State.Workspace.HeadSHA, advancedHead)
+	}
+}
+
+func TestAdvancedHeadReverifyFailurePreservesRepairAttemptCount(t *testing.T) {
+	root := initSliceCompletionRepo(t)
+	failedHead := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
+	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runCommitTestGitCommand(t, root, "add", "Makefile")
+	runCommitTestGitCommand(t, root, "commit", "-m", "manual repair attempt")
+	advancedHead := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
+
+	detail := completedReviewPlanDetail(t.TempDir())
+	detail.State.Repo.Root = root
+	detail.State.Workspace = &plan.Workspace{Strategy: plan.WorkspaceStrategyWorktree, Path: root, Branch: "tao/test", HeadSHA: failedHead}
+	detail.State.Plan.FinalVerification = &plan.FinalVerification{Command: "make verify", CWD: root, HeadSHA: failedHead, Result: finalVerificationFailed, FailureKind: plan.FinalVerificationFailureKindCode, Fingerprint: "prior-failure"}
+	binding := plan.VerificationRepairBinding{Command: "make verify", HeadSHA: failedHead, Fingerprint: "prior-failure"}
+	detail.Slices.Slices[0].VerificationRepair = &binding
+	detail.Slices.Slices = append(detail.Slices.Slices, plan.Slice{ID: "vr02-final-verification-repair", Status: plan.StatusCompleted, VerificationRepair: &binding})
+	detail.State.Plan.CompletedSlices = append(detail.State.Plan.CompletedSlices, "vr02-final-verification-repair")
+	attempts := plan.VerificationRepairAttemptCount(detail)
+	execution := testRunExecution(ExecutionConfig{
+		ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeIsolated},
+		Reverify:           true,
+	}, RunDependencies{CommandRunner: defaultCommandRunner, PlanRecordFactory: memoryPlanRecordFactory})
+	execution.ExecutionRoot = root
+
+	complete, err := newFinalizer(io.Discard, execution).FinalizeIfComplete(context.Background(), 0, detail, plan.AnalyzeRunCapabilities(detail))
+	var verificationErr *FinalVerificationError
+	if !complete || !errors.As(err, &verificationErr) {
+		t.Fatalf("advanced-head failed reverify = complete %t, error %v", complete, err)
+	}
+	if verificationErr.Verification.HeadSHA != advancedHead || detail.State.Workspace.HeadSHA != advancedHead {
+		t.Fatalf("failed evidence = %+v, workspace = %+v, want head %s", verificationErr.Verification, detail.State.Workspace, advancedHead)
+	}
+	if got := plan.VerificationRepairAttemptCount(detail); got != attempts {
+		t.Fatalf("repair attempts = %d, want preserved count %d", got, attempts)
+	}
+	if decision := plan.DeriveVerificationRecovery(detail); decision.Kind == plan.PlanActionRepairVerification || !decision.AttemptCapReached {
+		t.Fatalf("failed advanced-head recovery = %+v, want capped manual recovery", decision)
 	}
 }
 

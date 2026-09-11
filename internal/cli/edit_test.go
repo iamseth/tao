@@ -17,9 +17,9 @@ import (
 // editPlanRepo builds a plantest.Repository that mirrors the fixture used
 // by the edit tests: four pending slices (001-a through 004-d, with 002-b
 // depending on 001-a) and one completed slice 005-e.
-func editPlanRepo(planID string) *plantest.Repository {
+func editPlanRepo() *plantest.Repository {
 	completedAt := time.Date(2026, 5, 26, 12, 30, 0, 0, time.UTC)
-	detail := plantest.NewPlanDetail(planID).
+	detail := plantest.NewPlanDetail("20260526-1200-edit").
 		WithStatus(plan.StatusPlanned).
 		WithPendingSlices("001-a", "002-b", "003-c", "004-d").
 		WithCompletedSlices("005-e").
@@ -39,7 +39,7 @@ func editPlanRepo(planID string) *plantest.Repository {
 
 func TestEditRemoveSkipsAndMovesPendingSlices(t *testing.T) {
 	const planID = "20260526-1200-edit"
-	repo := editPlanRepo(planID)
+	repo := editPlanRepo()
 	var out bytes.Buffer
 	app := App{Out: &out, Err: &out, Repository: func(_ string) Repository { return repo }}
 
@@ -104,6 +104,56 @@ func TestEditRemoveSkipsAndMovesPendingSlices(t *testing.T) {
 	}
 }
 
+func TestEditSurfacesGeneratedVerificationRepairRefusalWithoutPersistence(t *testing.T) {
+	const planID = "20260526-1200-edit"
+	for _, test := range []struct {
+		name    string
+		action  string
+		sliceID string
+	}{
+		{name: "remove", action: "remove", sliceID: "004-d"},
+		{name: "skip", action: "skip", sliceID: "003-c"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo := editPlanRepo()
+			detail, err := repo.GetPlan(context.Background(), planID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sliceByID(detail, test.sliceID).VerificationRepair = &plan.VerificationRepairBinding{
+				Command: "make verify", HeadSHA: "failed-head", Fingerprint: "failure",
+			}
+			before, err := json.Marshal(detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			app := App{Out: &out, Err: &out, Repository: func(_ string) Repository { return repo }}
+
+			err = app.Run(context.Background(), []string{"edit", test.action, planID, test.sliceID})
+			want := "cannot " + test.action + " generated verification-repair slice " + test.sliceID +
+				"; run `tao run " + planID + "` to complete it, or use `tao abandon --reason TEXT " + planID + "` before recovering manually"
+			if err == nil || err.Error() != want {
+				t.Fatalf("edit error = %v, want %q", err, want)
+			}
+			afterDetail, resolveErr := repo.GetPlan(context.Background(), planID)
+			if resolveErr != nil {
+				t.Fatal(resolveErr)
+			}
+			after, err := json.Marshal(afterDetail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(after, before) {
+				t.Fatalf("refused edit persisted artifact mutation:\n got: %s\nwant: %s", after, before)
+			}
+			if out.Len() != 0 {
+				t.Fatalf("edit emitted success output: %q", out.String())
+			}
+		})
+	}
+}
+
 func TestEditRejectsAbandonedPlanWithoutChangingPreservedWork(t *testing.T) {
 	const planID = "20260526-1200-edit"
 	tests := []struct {
@@ -117,7 +167,7 @@ func TestEditRejectsAbandonedPlanWithoutChangingPreservedWork(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			repo := editPlanRepo(planID)
+			repo := editPlanRepo()
 			detail, err := repo.GetPlan(context.Background(), planID)
 			if err != nil {
 				t.Fatal(err)
@@ -155,7 +205,7 @@ func TestEditRejectsAbandonedPlanWithoutChangingPreservedWork(t *testing.T) {
 
 func TestEditRejectsInvalidFlagsUnknownSubcommandsAndUnsafeEdits(t *testing.T) {
 	const planID = "20260526-1200-edit"
-	repo := editPlanRepo(planID)
+	repo := editPlanRepo()
 	app := App{Out: io.Discard, Err: io.Discard, Repository: func(_ string) Repository { return repo }}
 
 	for _, test := range []struct {

@@ -49,6 +49,7 @@ const (
 	EventTypeReworkStopped              = "rework_stopped"
 	EventTypeFinalVerification          = "final_verification"
 	EventTypeVerificationRepairCreated  = "verification_repair_created"
+	EventTypeVerificationRepairStopped  = "verification_repair_stopped"
 	EventTypeMergeVerification          = "merge_verification"
 	EventTypeSingleMergeRolledBack      = "single_merge_resolution_rolled_back"
 	EventTypeSingleMergeRearmed         = "single_merge_resolution_rearmed"
@@ -961,6 +962,7 @@ type Event struct {
 	SingleMergeStartup    *SingleMergeStartupFailure   `json:"single_merge_startup,omitempty"`
 	FinalizationFailure   *FinalizationFailure         `json:"finalization_failure,omitempty"`
 	Command               string                       `json:"command,omitempty"`
+	HeadSHA               string                       `json:"head_sha,omitempty"`
 	CorrectedCommand      string                       `json:"corrected_command,omitempty"`
 	Result                string                       `json:"result,omitempty"`
 	FailureKind           FinalVerificationFailureKind `json:"failure_kind,omitempty"`

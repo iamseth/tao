@@ -6,7 +6,109 @@ import (
 	"time"
 )
 
-const VerificationRepairSlicePrefix = "vr01-final-verification-"
+const (
+	VerificationRepairSlicePrefix = "vr01-final-verification-"
+	VerificationRepairAttemptCap  = 2
+)
+
+// VerificationRecoveryDecision is the centralized read-side interpretation of
+// current final-verification evidence and the plan's generated repair history.
+type VerificationRecoveryDecision struct {
+	Kind              PlanActionKind
+	Command           string
+	Instruction       string
+	Reason            string
+	AttemptCapReached bool
+}
+
+// VerificationRepairAttemptCount returns the lifetime number of generated
+// verification-repair slices. Completed attempts remain part of the count.
+func VerificationRepairAttemptCount(detail *PlanDetail) int {
+	if detail == nil {
+		return 0
+	}
+	count := 0
+	for i := range detail.Slices.Slices {
+		if detail.Slices.Slices[i].VerificationRepair != nil {
+			count++
+		}
+	}
+	return count
+}
+
+// DeriveVerificationRecovery classifies the safe recovery for current failed
+// final-verification evidence. It grants no mutation authority.
+func DeriveVerificationRecovery(detail *PlanDetail) VerificationRecoveryDecision {
+	failure := CurrentFailedFinalVerification(detail)
+	if failure == nil {
+		return VerificationRecoveryDecision{Kind: PlanActionNone, Reason: "no current failed final-verification evidence authorizes repair"}
+	}
+
+	id := "<plan>"
+	if strings.TrimSpace(detail.State.Plan.ID) != "" {
+		id = strings.TrimSpace(detail.State.Plan.ID)
+	}
+	attempts := VerificationRepairAttemptCount(detail)
+	decision := VerificationRecoveryDecision{AttemptCapReached: attempts >= VerificationRepairAttemptCap}
+	stopReason := ""
+	if decision.AttemptCapReached {
+		if stopped := currentVerificationRepairStop(detail, *failure); stopped != nil {
+			stopReason = strings.TrimSpace(stopped.Reason)
+		}
+	}
+	switch failure.FailureKind {
+	case FinalVerificationFailureKindCode:
+		if decision.AttemptCapReached {
+			decision.Kind = PlanActionResolveVerification
+			decision.Instruction = "Repair the repository verification failure manually before explicitly reverifying"
+			decision.Reason = "verification repair attempt cap reached"
+			if stopReason != "" {
+				decision.Reason = stopReason
+			}
+			return decision
+		}
+		decision.Kind = PlanActionRepairVerification
+		decision.Command = "tao run --repair-verification " + id
+		decision.Reason = "current code-classified final repository verification failed on the completed branch"
+	case FinalVerificationFailureKindToolMissing:
+		decision.Kind = PlanActionResolveVerification
+		decision.Instruction = "Restore the tool required by the repository verification command before explicitly reverifying the unchanged head"
+		decision.Reason = "tool-missing verification evidence does not authorize code repair"
+	case FinalVerificationFailureKindTimeout:
+		decision.Kind = PlanActionResolveVerification
+		decision.Instruction = "Resolve the repository verification timeout before explicitly reverifying the unchanged head"
+		decision.Reason = "timed-out verification evidence does not authorize code repair"
+	case FinalVerificationFailureKindCancelled:
+		decision.Kind = PlanActionResolveVerification
+		decision.Instruction = "Resolve the repository verification cancellation before explicitly reverifying the unchanged head"
+		decision.Reason = "cancelled verification evidence does not authorize code repair"
+	case FinalVerificationFailureKindInvalidCommand:
+		decision.Kind = PlanActionResolveVerification
+		decision.Instruction = "Correct the repository verification command before explicitly reverifying the unchanged head"
+		decision.Reason = "invalid-command verification evidence does not authorize code repair"
+	default:
+		decision.Kind = PlanActionReverify
+		decision.Command = "tao run --reverify " + id
+		decision.Reason = "unclassified verification evidence does not authorize code repair"
+	}
+	if stopReason != "" {
+		decision.Reason = stopReason
+	}
+	return decision
+}
+
+func currentVerificationRepairStop(detail *PlanDetail, failure FinalVerification) *Event {
+	if detail == nil {
+		return nil
+	}
+	for i := len(detail.Events) - 1; i >= 0; i-- {
+		event := &detail.Events[i]
+		if event.Type == EventTypeVerificationRepairStopped && event.Command == failure.Command && event.HeadSHA == failure.HeadSHA && event.Fingerprint == failure.Fingerprint {
+			return event
+		}
+	}
+	return nil
+}
 
 // VerificationRepairRequest carries live Git evidence checked by run before the
 // journaled mutation appends an evidence-bound generated repair slice.
@@ -42,6 +144,10 @@ func (r *PlanRecord) AppendVerificationRepair(request VerificationRepairRequest)
 		}
 		if failed.Command != request.Binding.Command || failed.HeadSHA != request.Binding.HeadSHA || failed.Fingerprint != request.Binding.Fingerprint {
 			return lifecycleMutation{}, fmt.Errorf("verification repair evidence changed before mutation")
+		}
+		decision := DeriveVerificationRecovery(detail)
+		if decision.Kind != PlanActionRepairVerification {
+			return lifecycleMutation{}, fmt.Errorf("verification repair refused: %s", decision.Reason)
 		}
 		repairNumber := 1
 		for i := range detail.Slices.Slices {

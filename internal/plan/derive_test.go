@@ -409,6 +409,63 @@ func TestFinalVerificationFailureProjectionAndRecoveryByClassification(t *testin
 	}
 }
 
+func TestLegacyFinalVerificationReplacementClearsStaleClassification(t *testing.T) {
+	detail := failedFinalVerificationDetail(FinalVerificationFailureKindCode)
+	detail.Dir = t.TempDir()
+	if err := writeState(detail.Dir, detail.State); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSlices(detail.Dir, detail.Slices); err != nil {
+		t.Fatal(err)
+	}
+
+	olderWriterEvidence := FinalVerification{
+		Command: "make verify", HeadSHA: "head123", Result: "failed", Fingerprint: "replacement123", VerifiedAt: time.Now().UTC(),
+	}
+	if err := testRecord(detail.Dir, detail).RecordFinalVerification(olderWriterEvidence); err != nil {
+		t.Fatal(err)
+	}
+	files, err := loadPlanFiles(detail.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded := &PlanDetail{Dir: detail.Dir, State: files.state, Slices: files.slices, Events: files.events}
+	if got := loaded.State.Plan.FinalVerification.FailureKind; got != "" {
+		t.Fatalf("replacement retained stale failure classification %q", got)
+	}
+	decision := DeriveVerificationRecovery(loaded)
+	if decision.Kind != PlanActionReverify || decision.Command != "tao run --reverify plan" {
+		t.Fatalf("legacy-unclassified replacement recovery = %+v", decision)
+	}
+}
+
+func TestLegacyGeneratedVerificationRepairsProjectCapReached(t *testing.T) {
+	detail := failedFinalVerificationDetail(FinalVerificationFailureKindCode)
+	for _, head := range []string{"repair-head-a", "repair-head-b"} {
+		detail.Slices.Slices = append(detail.Slices.Slices, Slice{
+			ID:     "legacy-repair-" + head,
+			Status: StatusCompleted,
+			VerificationRepair: &VerificationRepairBinding{
+				Command: "make verify", HeadSHA: head, Fingerprint: head,
+			},
+			Completion: &SliceCompletionOutcome{Outcome: SliceCompletionCommitted, CommitSHA: head},
+		})
+		detail.State.Plan.CompletedSlices = append(detail.State.Plan.CompletedSlices, detail.Slices.Slices[len(detail.Slices.Slices)-1].ID)
+	}
+
+	decision := DeriveVerificationRecovery(detail)
+	if decision.Kind != PlanActionResolveVerification || decision.Command != "" || !decision.AttemptCapReached || decision.Instruction == "" {
+		t.Fatalf("cap-reached recovery = %+v", decision)
+	}
+	if action := DeriveNextAction(detail).Primary; action.Kind != PlanActionResolveVerification || action.Command != "" {
+		t.Fatalf("cap-reached next action = %+v", action)
+	}
+	summary := Summarize(detail, time.Time{})
+	if summary.VerificationRecoveryAction != PlanActionResolveVerification || summary.VerificationRecoveryCommand != "" {
+		t.Fatalf("cap-reached summary recovery = action:%q command:%q", summary.VerificationRecoveryAction, summary.VerificationRecoveryCommand)
+	}
+}
+
 func TestFinalVerificationFailureDoesNotOverrideCompletionEvidence(t *testing.T) {
 	merged := failedFinalVerificationDetail(FinalVerificationFailureKindCode)
 	merged.Events = []Event{{Type: EventTypePlanMerged}}

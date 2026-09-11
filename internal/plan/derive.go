@@ -305,8 +305,8 @@ func deriveNextAction(detail *PlanDetail, derived DerivedPlan) PlanNextAction {
 	if detail.State.Status == StatusCompleted && !anyPlanMergedEvent(detail.Events) {
 		return primary(PlanActionNone, PlanActionClassTerminal, "", "legacy completed state is preserved without asserting merge evidence")
 	}
-	if failure := CurrentFailedFinalVerification(detail); failure != nil {
-		return PlanNextAction{Primary: deriveVerificationRecoveryAction(detail, failure), Alternatives: []PlanAction{}}
+	if CurrentFailedFinalVerification(detail) != nil {
+		return PlanNextAction{Primary: deriveVerificationRecoveryAction(detail), Alternatives: []PlanAction{}}
 	}
 
 	review := CurrentReview(detail)
@@ -323,36 +323,15 @@ func deriveNextAction(detail *PlanDetail, derived DerivedPlan) PlanNextAction {
 	}
 }
 
-func deriveVerificationRecoveryAction(detail *PlanDetail, failure *FinalVerification) PlanAction {
-	id := "<plan>"
-	if detail != nil && strings.TrimSpace(detail.State.Plan.ID) != "" {
-		id = strings.TrimSpace(detail.State.Plan.ID)
+func deriveVerificationRecoveryAction(detail *PlanDetail) PlanAction {
+	decision := DeriveVerificationRecovery(detail)
+	return PlanAction{
+		Kind:        decision.Kind,
+		Class:       PlanActionClassRecovery,
+		Command:     decision.Command,
+		Instruction: decision.Instruction,
+		Reason:      decision.Reason,
 	}
-	action := PlanAction{
-		Class:  PlanActionClassRecovery,
-		Reason: "current final repository verification failed on the completed branch",
-	}
-	switch failure.FailureKind {
-	case FinalVerificationFailureKindCode:
-		action.Kind = PlanActionRepairVerification
-		action.Command = "tao run --repair-verification " + id
-	case FinalVerificationFailureKindToolMissing:
-		action.Kind = PlanActionResolveVerification
-		action.Instruction = "Restore the tool required by the repository verification command before explicitly reverifying the unchanged head"
-	case FinalVerificationFailureKindTimeout:
-		action.Kind = PlanActionResolveVerification
-		action.Instruction = "Resolve the repository verification timeout before explicitly reverifying the unchanged head"
-	case FinalVerificationFailureKindCancelled:
-		action.Kind = PlanActionResolveVerification
-		action.Instruction = "Resolve the repository verification cancellation before explicitly reverifying the unchanged head"
-	case FinalVerificationFailureKindInvalidCommand:
-		action.Kind = PlanActionResolveVerification
-		action.Instruction = "Correct the repository verification command before explicitly reverifying the unchanged head"
-	default:
-		action.Kind = PlanActionReverify
-		action.Command = "tao run --reverify " + id
-	}
-	return action
 }
 
 func AnalyzeRunCapabilities(detail *PlanDetail) RunCapabilities {
@@ -664,7 +643,7 @@ func Summarize(detail *PlanDetail, now time.Time) PlanSummary {
 
 	if status == StatusVerificationFailed {
 		if failure := CurrentFailedFinalVerification(detail); failure != nil {
-			recovery := deriveVerificationRecoveryAction(detail, failure)
+			recovery := DeriveVerificationRecovery(detail)
 			summary.FinalVerificationFailureKind = failure.FailureKind
 			summary.VerificationRecoveryAction = recovery.Kind
 			summary.VerificationRecoveryCommand = recovery.Command

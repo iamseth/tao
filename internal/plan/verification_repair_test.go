@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -54,6 +55,9 @@ func TestAppendVerificationRepairAllowsNewFailureAfterCompletedRepair(t *testing
 	detail.State.Plan.CompletedSlices = append(detail.State.Plan.CompletedSlices, firstRepair.ID)
 	record := testRecord(detail.Dir, detail)
 
+	if got := VerificationRepairAttemptCount(detail); got != 1 {
+		t.Fatalf("completed verification repair count = %d, want 1", got)
+	}
 	if action := DeriveNextAction(detail).Primary; action.Kind != PlanActionRepairVerification {
 		t.Fatalf("post-repair failure next action = %+v", action)
 	}
@@ -67,6 +71,97 @@ func TestAppendVerificationRepairAllowsNewFailureAfterCompletedRepair(t *testing
 	followUp := findSlice(detail, detail.State.Plan.PendingSlices[0])
 	if followUp == nil || followUp.VerificationRepair == nil || followUp.VerificationRepair.HeadSHA != "head-b" {
 		t.Fatalf("follow-up repair = %+v", followUp)
+	}
+	if got := VerificationRepairAttemptCount(detail); got != 2 {
+		t.Fatalf("lifetime verification repair count = %d, want 2", got)
+	}
+}
+
+func TestAppendVerificationRepairRefusesEvidenceWithoutCodeAuthority(t *testing.T) {
+	tests := []struct {
+		name string
+		kind FinalVerificationFailureKind
+	}{
+		{name: "tool missing", kind: FinalVerificationFailureKindToolMissing},
+		{name: "timeout", kind: FinalVerificationFailureKindTimeout},
+		{name: "cancelled", kind: FinalVerificationFailureKindCancelled},
+		{name: "invalid command", kind: FinalVerificationFailureKindInvalidCommand},
+		{name: "legacy unclassified"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			detail := completedReopenDetail()
+			detail.Dir = t.TempDir()
+			detail.State.Workspace = &Workspace{HeadSHA: "failed-head"}
+			detail.State.Plan.FinalVerification = &FinalVerification{Command: "make verify", HeadSHA: "failed-head", Result: "failed", FailureKind: test.kind, Fingerprint: "failure"}
+			record := testRecord(detail.Dir, detail)
+			request := VerificationRepairRequest{Binding: VerificationRepairBinding{Command: "make verify", HeadSHA: "failed-head", Fingerprint: "failure"}, CreatedAt: time.Now().UTC()}
+
+			err := record.AppendVerificationRepair(request)
+			if err == nil || !strings.Contains(err.Error(), "does not authorize code repair") {
+				t.Fatalf("append error = %v", err)
+			}
+			if got := VerificationRepairAttemptCount(detail); got != 0 {
+				t.Fatalf("repair count after refusal = %d", got)
+			}
+		})
+	}
+}
+
+func TestAppendVerificationRepairRefusesThirdLifetimeAttempt(t *testing.T) {
+	detail := completedReopenDetail()
+	detail.Dir = t.TempDir()
+	detail.State.Workspace = &Workspace{HeadSHA: "head-c"}
+	detail.State.Plan.FinalVerification = &FinalVerification{Command: "make verify", HeadSHA: "head-c", Result: "failed", FailureKind: FinalVerificationFailureKindCode, Fingerprint: "failure-c"}
+	for i, binding := range []VerificationRepairBinding{
+		{Command: "make verify", HeadSHA: "head-a", Fingerprint: "failure-a"},
+		{Command: "make verify", HeadSHA: "head-b", Fingerprint: "failure-b"},
+	} {
+		detail.Slices.Slices = append(detail.Slices.Slices, Slice{ID: fmt.Sprintf("vr%02d", i+1), Status: StatusCompleted, VerificationRepair: &binding, Completion: &SliceCompletionOutcome{Outcome: SliceCompletionCommitted}})
+	}
+	record := testRecord(detail.Dir, detail)
+	request := VerificationRepairRequest{Binding: VerificationRepairBinding{Command: "make verify", HeadSHA: "head-c", Fingerprint: "failure-c"}, CreatedAt: time.Now().UTC()}
+
+	err := record.AppendVerificationRepair(request)
+	if err == nil || !strings.Contains(err.Error(), "attempt cap reached") {
+		t.Fatalf("third repair error = %v", err)
+	}
+	if got := VerificationRepairAttemptCount(detail); got != VerificationRepairAttemptCap {
+		t.Fatalf("repair count after refusal = %d", got)
+	}
+}
+
+func TestDeriveVerificationRecoveryWithoutCurrentFailure(t *testing.T) {
+	if decision := DeriveVerificationRecovery(nil); decision.Kind != PlanActionNone || decision.AttemptCapReached {
+		t.Fatalf("recovery without current failure = %+v", decision)
+	}
+	if decision := DeriveVerificationRecovery(completedReopenDetail()); decision.Kind != PlanActionNone || decision.AttemptCapReached {
+		t.Fatalf("recovery without failed evidence = %+v", decision)
+	}
+}
+
+func TestDeriveVerificationRecoveryRemainsCappedWithoutCurrentStopEvidence(t *testing.T) {
+	detail := completedReopenDetail()
+	detail.State.Workspace = &Workspace{HeadSHA: "head-c"}
+	detail.State.Plan.FinalVerification = &FinalVerification{Command: "make verify", HeadSHA: "head-c", Result: "failed", FailureKind: FinalVerificationFailureKindCode, Fingerprint: "failure-c"}
+	for i, binding := range []VerificationRepairBinding{
+		{Command: "make verify", HeadSHA: "head-a", Fingerprint: "failure-a"},
+		{Command: "make verify", HeadSHA: "head-b", Fingerprint: "failure-b"},
+	} {
+		detail.Slices.Slices = append(detail.Slices.Slices, Slice{ID: fmt.Sprintf("vr%02d", i+1), Status: StatusCompleted, VerificationRepair: &binding})
+	}
+	detail.Events = append(detail.Events, Event{Type: EventTypeVerificationRepairStopped, Command: "make verify", HeadSHA: "head-b", Fingerprint: "failure-b", Reason: "older stop reason"})
+
+	decision := DeriveVerificationRecovery(detail)
+	if decision.Kind != PlanActionResolveVerification || !decision.AttemptCapReached || decision.Reason != "verification repair attempt cap reached" {
+		t.Fatalf("capped recovery without matching stop = %+v", decision)
+	}
+
+	const recordedReason = "repair manually, then explicitly reverify"
+	detail.Events = append(detail.Events, Event{Type: EventTypeVerificationRepairStopped, Command: "make verify", HeadSHA: "head-c", Fingerprint: "failure-c", Attempts: VerificationRepairAttemptCap, Reason: recordedReason})
+	decision = DeriveVerificationRecovery(detail)
+	if !decision.AttemptCapReached || decision.Reason != recordedReason {
+		t.Fatalf("capped recovery with matching stop = %+v", decision)
 	}
 }
 

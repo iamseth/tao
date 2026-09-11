@@ -190,8 +190,21 @@ A typical execution path uses `tao run <plan>`, `tao review <plan>`, and then
 `tao merge <plan>`. If a review requests changes, `tao rework <plan>` creates
 bounded follow-up slices; `tao rework --run <plan>` immediately hands them back
 to the ordinary run path. Use `tao show <plan>` whenever you need Tao's
-recommended next action. If unfinished work is intentionally no longer needed,
-record that terminal outcome without deleting its history:
+recommended next action.
+
+For final-verification recovery, a code-classified failure permits at most two
+explicit generated repairs per plan. After that fixed cap, repair and commit the
+source manually on the same branch, leave the worktree clean, and explicitly
+reverify; the clean head may be the failed head or its descendant:
+
+```sh
+tao run --repair-verification <plan> # code failure while the budget remains
+tao run --reverify <plan>            # resolved external cause or manual fix after the cap
+```
+
+Generated verification-repair slices are system-owned: `tao edit skip` and
+`tao edit remove` refuse them. If unfinished work is intentionally no longer
+needed, record that terminal outcome without deleting its history:
 
 ```sh
 tao abandon --reason "superseded by a different approach" <plan>

@@ -101,7 +101,7 @@ func TestCommitRefusesManagedWorktreeBeforeContextOrGitMutation(t *testing.T) {
 	}
 }
 
-func TestCommitRefusalRendersCommandlessVerificationRecoveryInstruction(t *testing.T) {
+func TestCommitRefusalRendersCommandlessRepairCapInstruction(t *testing.T) {
 	control := newCLICommitRepo(t)
 	worktree := filepath.Join(t.TempDir(), "managed")
 	runCLICommitGit(t, control, "worktree", "add", "-b", "feature/managed", worktree)
@@ -129,8 +129,9 @@ func TestCommitRefusalRendersCommandlessVerificationRecoveryInstruction(t *testi
 	state.Workspace.HeadSHA = strings.TrimSpace(runCLICommitGit(t, worktree, "rev-parse", "HEAD"))
 	state.Plan.FinalVerification = &plan.FinalVerification{
 		Command: "make verify", HeadSHA: state.Workspace.HeadSHA, Result: "failed",
-		FailureKind: plan.FinalVerificationFailureKindInvalidCommand, Fingerprint: "failure-a",
+		FailureKind: plan.FinalVerificationFailureKindCode, Fingerprint: "failure-a",
 	}
+	state.Plan.CompletedSlices = append(state.Plan.CompletedSlices, "vr01-final-verification-old-a", "vr02-final-verification-old-b")
 	content, err = json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		t.Fatal(err)
@@ -138,9 +139,37 @@ func TestCommitRefusalRendersCommandlessVerificationRecoveryInstruction(t *testi
 	if err := os.WriteFile(statePath, append(content, '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	slicesPath := filepath.Join(planDir, "slices.json")
+	content, err = os.ReadFile(slicesPath) //nolint:gosec // G304: test-controlled plan artifact path
+	if err != nil {
+		t.Fatal(err)
+	}
+	var slicesFile plan.SlicesFile
+	if err := json.Unmarshal(content, &slicesFile); err != nil {
+		t.Fatal(err)
+	}
+	slicesFile.Slices = append(slicesFile.Slices,
+		plan.Slice{
+			ID: "vr01-final-verification-old-a", Status: plan.StatusCompleted,
+			VerificationRepair: &plan.VerificationRepairBinding{Command: "make verify", HeadSHA: "older-head-a", Fingerprint: "older-failure-a"},
+			Completion:         &plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionCommitted},
+		},
+		plan.Slice{
+			ID: "vr02-final-verification-old-b", Status: plan.StatusCompleted,
+			VerificationRepair: &plan.VerificationRepairBinding{Command: "make verify", HeadSHA: "older-head-b", Fingerprint: "older-failure-b"},
+			Completion:         &plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionCommitted},
+		},
+	)
+	content, err = json.MarshalIndent(slicesFile, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(slicesPath, append(content, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	err = (App{Out: io.Discard, Err: io.Discard}).Run(context.Background(), []string{"commit", "--context", "--repo-root", worktree})
-	if err == nil || !strings.Contains(err.Error(), "active Tao-managed worktree") || !strings.Contains(err.Error(), "Correct the repository verification command") || strings.Contains(err.Error(), "--repair-verification") {
+	if err == nil || !strings.Contains(err.Error(), "active Tao-managed worktree") || !strings.Contains(err.Error(), "Repair the repository verification failure manually before explicitly reverifying") || strings.Contains(err.Error(), "use `") || strings.Contains(err.Error(), "--repair-verification") {
 		t.Fatalf("commandless verification recovery error = %v", err)
 	}
 }

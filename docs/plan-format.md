@@ -192,7 +192,15 @@ First-class plan edits mutate only pending work:
 - `tao edit skip PLAN SLICE` removes a pending slice from `plan.pending_slices` and keeps its slice record with status `skipped`.
 - `tao edit move PLAN SLICE --before ID` and `--after ID` reorder only `plan.pending_slices`.
 
-Edit mutations must reject completed, in-progress, blocked, missing, or dependency-invalid slices and keep `state.json` and `slices.json` consistent.
+Edit mutations must reject completed, in-progress, blocked, missing, or dependency-invalid slices and keep `state.json` and `slices.json` consistent. Generated final-verification repair slices are system-owned: a slice with a non-null `verification_repair` binding must refuse both `tao edit skip` and `tao edit remove` rather than weakening or deleting repair history.
+
+### Final-verification repair evidence
+
+Final-verification code repair is explicit and has a fixed lifetime cap of two generated attempts per plan. Each accepted `tao run --repair-verification` appends one slice whose non-null `verification_repair` binding contains the failed verification's `command`, `head_sha`, and `fingerprint`. The attempt count is the number of all such slices in `slices.json`, including completed attempts; it does not reset when failure evidence changes. Reaching two permanently disables further generated verification-repair slices for that plan. The cap is repository policy, not configuration.
+
+When final verification fails after the cap is reached, Tao appends a `verification_repair_stopped` event. In addition to the ordinary event fields, it records the failed evidence's exact `command`, `head_sha`, and `fingerprint`, the lifetime generated-slice count in `attempts`, and an actionable manual-recovery `reason`. Stop evidence applies only when its command, head, and fingerprint match the current failed evidence. Historical plans without this event remain readable: absence means no stop event was recorded, while the generated-slice count still enforces the cap.
+
+The terminal cap forbids only more generated attempts. After manually repairing and committing the source on the recorded workspace branch, explicit reverification may accept a clean live head equal to or descending from the failed head, provided all slice work is settled. A successful advanced-head reverification records the live head as the new verification boundary.
 
 When an opt-in full run successfully creates or discovers a GitHub pull request, `state.json` may include `plan.pull_request` with the PR `number`, `url`, `created_at`, source `branch`, and exact `head_sha`. This metadata is durable so renderers can show a stable PR link after restart and compare the recorded head with the current approved review. Missing or mismatched heads remain readable but do not qualify for PR completion. If `gh pr create` emits an exact PR identity before required metadata application fails, `plan.pull_request_intent` stores that number, URL, branch, and exact head before Tao attempts repair, so later retries mutate only that identified PR; successful PR recording clears the intent. Legacy branch/head-only intents remain readable but are not ownership evidence and never authorize metadata repair on a discovered PR.
 
@@ -454,6 +462,7 @@ Current well-known event types include:
 | `rework_stopped` | Authoritative evidence that automatic rework stopped at a persisted safety bound. |
 | `final_verification` | Final repository verification result was recorded, including optional `failure_kind` and `exit_code`. |
 | `verification_repair_created` | A bounded repair slice was generated for the current failed final verification; records the generated slice ID, failed command and fingerprint, and the failed head in `reason`. |
+| `verification_repair_stopped` | Authoritative stop evidence emitted when failed final verification exhausts the fixed cap of two generated attempts; records the failed `command`, `head_sha`, and `fingerprint`, the lifetime `attempts`, and an actionable manual-recovery `reason`. |
 | `merge_verification` | Merge verification result was recorded. |
 | `single_merge_resolution_rolled_back` | An exact committed or reviewed single-plan conflict resolution was restored to its durable default parent; retains the bounded rollback reason and resolution/review diagnostics after the inactive intent is superseded. |
 | `single_merge_resolution_rearmed` | The exact provisional `requested` resolution was cleared after structured pre-acceptance proof and exact rollback; retains only bounded diagnostic startup capability, acceptance, request, and timestamp evidence and grants no retry authority by itself. |

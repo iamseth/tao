@@ -1950,6 +1950,38 @@ func TestEditSkipSlicePreservesAuditableRecord(t *testing.T) {
 	}
 }
 
+func TestEditRejectsGeneratedVerificationRepairBeforeMutation(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		action string
+		edit   func(*PlanDetail) (Event, error)
+	}{
+		{name: "remove", action: "remove", edit: func(detail *PlanDetail) (Event, error) {
+			return MarkSliceRemoved(detail, "003-c", editTime())
+		}},
+		{name: "skip", action: "skip", edit: func(detail *PlanDetail) (Event, error) {
+			return MarkSliceSkipped(detail, "003-c", editTime())
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			detail := editPlanDetail()
+			detail.Slices.Slices[2].VerificationRepair = &VerificationRepairBinding{
+				Command: "make verify", HeadSHA: "failed-head", Fingerprint: "failure",
+			}
+			original := clonePlanDetail(detail)
+
+			_, err := test.edit(detail)
+			want := "cannot " + test.action + " generated verification-repair slice 003-c"
+			if err == nil || !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), "tao abandon --reason TEXT edit") {
+				t.Fatalf("edit error = %v, want refusal and manual recovery path", err)
+			}
+			if !reflect.DeepEqual(detail, original) {
+				t.Fatalf("refused edit mutated plan artifacts:\n got: %#v\nwant: %#v", detail, original)
+			}
+		})
+	}
+}
+
 func TestEditRejectsCompletedOrInProgressSlices(t *testing.T) {
 	for _, status := range []string{StatusCompleted, StatusInProgress} {
 		t.Run(status, func(t *testing.T) {

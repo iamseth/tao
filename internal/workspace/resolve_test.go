@@ -290,6 +290,43 @@ func TestManagedWorktreeRecoveryCommandRoutesFinalVerificationByClassification(t
 	}
 }
 
+func TestResolveManagedWorktreeOwnershipProjectsCommandlessRepairCapGuidance(t *testing.T) {
+	repoRoot := t.TempDir()
+	worktree := t.TempDir()
+	detail := executionRootDetail(repoRoot, "plan-a", &plan.Workspace{
+		Strategy: plan.WorkspaceStrategyWorktree,
+		Path:     worktree,
+		Branch:   "feature/plan-a",
+		HeadSHA:  "head-a",
+	})
+	detail.State.Status = plan.StatusVerificationFailed
+	detail.State.Plan.FinalVerification = &plan.FinalVerification{
+		Command: "make verify", HeadSHA: "head-a", Result: "failed",
+		FailureKind: plan.FinalVerificationFailureKindCode, Fingerprint: "failure-a",
+	}
+	for range plan.VerificationRepairAttemptCap {
+		detail.Slices.Slices = append(detail.Slices.Slices, plan.Slice{
+			Status: plan.StatusCompleted,
+			VerificationRepair: &plan.VerificationRepairBinding{
+				Command: "make verify", HeadSHA: "older-head", Fingerprint: "older-failure",
+			},
+			Completion: &plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionCommitted},
+		})
+	}
+	detail.Events = append(detail.Events, plan.Event{
+		Type: plan.EventTypeVerificationRepairStopped, Command: "make verify",
+		HeadSHA: "head-a", Fingerprint: "failure-a", Reason: "manual recovery required",
+	})
+
+	owner, err := ResolveManagedWorktreeOwnership(repoRoot, worktree, "feature/plan-a", []*plan.PlanDetail{detail})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owner == nil || owner.PlanID != "plan-a" || owner.Command != "" || owner.Instruction != "Repair the repository verification failure manually before explicitly reverifying" {
+		t.Fatalf("managed worktree owner = %#v", owner)
+	}
+}
+
 func TestManagedWorktreeRecoveryCommandBoundsBlockedRecovery(t *testing.T) {
 	const planID = "plan-a"
 	boundary := &plan.SliceExecutionStart{

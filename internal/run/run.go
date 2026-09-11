@@ -296,6 +296,13 @@ func CheckRequestCanStart(detail *plan.PlanDetail, request Request) error {
 		}
 		return nil
 	}
+	if request.RepairVerification {
+		decision := plan.DeriveVerificationRecovery(detail)
+		if decision.Kind != plan.PlanActionRepairVerification {
+			return cannotStartf("--repair-verification refused: %s", decision.Reason)
+		}
+		return nil
+	}
 	// An unsettled automatic completion is intentionally non-runnable to normal
 	// lifecycle consumers, but Execute must inspect it to produce the guarded
 	// post-intent recovery path without starting an agent.
@@ -305,9 +312,6 @@ func CheckRequestCanStart(detail *plan.PlanDetail, request Request) error {
 		}
 	}
 	capabilities := plan.AnalyzeRunCapabilities(detail)
-	if request.RepairVerification && plan.CurrentFailedFinalVerification(detail) != nil {
-		return nil
-	}
 	if capabilities.CanRun || (capabilities.Complete && request.PullRequest) || ((request.Continue || request.RestartBlocked) && capabilities.CanContinue) {
 		return nil
 	}

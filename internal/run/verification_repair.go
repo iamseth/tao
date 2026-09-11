@@ -15,9 +15,9 @@ func appendVerificationRepair(ctx context.Context, detail *plan.PlanDetail, exec
 	if execution.Config.ExecutionMode != ExecutionModeIsolated {
 		return fmt.Errorf("verification repair requires isolated execution mode")
 	}
-	failure := plan.CurrentFailedFinalVerification(detail)
-	if failure == nil {
-		return fmt.Errorf("verification repair requires current failed final-verification evidence")
+	decision := plan.DeriveVerificationRecovery(detail)
+	if decision.Kind != plan.PlanActionRepairVerification {
+		return fmt.Errorf("verification repair refused: %s", decision.Reason)
 	}
 	if detail.State.Plan.MergeCommitIntent != nil || detail.State.Plan.PullRequestIntent != nil {
 		return fmt.Errorf("verification repair refuses unsettled post-slice intent")
@@ -36,7 +36,7 @@ func appendVerificationRepair(ctx context.Context, detail *plan.PlanDetail, exec
 	if strings.TrimSpace(status) != "" {
 		return fmt.Errorf("verification repair requires a clean worktree")
 	}
-	failure, err = requireCurrentFailedFinalVerificationBoundary(ctx, detail, execution, "verification repair")
+	failure, err := requireCurrentFailedFinalVerificationBoundary(ctx, detail, execution, "verification repair")
 	if err != nil {
 		return err
 	}
@@ -56,6 +56,46 @@ func appendVerificationRepair(ctx context.Context, detail *plan.PlanDetail, exec
 		return fmt.Errorf("prepare verification repair: %w", err)
 	}
 	return nil
+}
+
+func requireReverifyFinalVerificationBoundary(ctx context.Context, detail *plan.PlanDetail, execution runExecution) (*plan.FinalVerification, error) {
+	failure := plan.CurrentFailedFinalVerification(detail)
+	if failure == nil {
+		return nil, fmt.Errorf("reverification requires current failed final-verification evidence")
+	}
+	if !plan.AnalyzeRunCapabilities(detail).Complete {
+		return nil, fmt.Errorf("reverification requires settled slice work with all slices complete")
+	}
+	git := gitClient(execution, execution.ExecutionRoot)
+	status, err := git.StatusPorcelain(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("inspect reverification worktree: %w", err)
+	}
+	if strings.TrimSpace(status) != "" {
+		return nil, fmt.Errorf("reverification requires a clean worktree")
+	}
+	branch, err := git.CurrentBranch(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("inspect reverification branch: %w", err)
+	}
+	head, err := git.RevParse(ctx, "HEAD")
+	if err != nil {
+		return nil, fmt.Errorf("inspect reverification head: %w", err)
+	}
+	head = strings.TrimSpace(head)
+	if detail.State.Workspace == nil || strings.TrimSpace(branch) == "" || branch != detail.State.Workspace.Branch {
+		return nil, fmt.Errorf("reverification worktree boundary is stale: branch %q does not match recorded branch", branch)
+	}
+	if head != failure.HeadSHA {
+		descendsFromFailure, err := git.IsAncestor(ctx, failure.HeadSHA, head)
+		if err != nil {
+			return nil, fmt.Errorf("inspect reverification ancestry: %w", err)
+		}
+		if !descendsFromFailure {
+			return nil, fmt.Errorf("reverification worktree boundary is stale: head %s is not the recorded failed head %s or its descendant", diagnosticSHA(head), diagnosticSHA(failure.HeadSHA))
+		}
+	}
+	return failure, nil
 }
 
 func requireCurrentFailedFinalVerificationBoundary(ctx context.Context, detail *plan.PlanDetail, execution runExecution, operation string) (*plan.FinalVerification, error) {
@@ -91,19 +131,12 @@ func requireNoCurrentFinalVerificationFailure(ctx context.Context, detail *plan.
 	if strings.TrimSpace(head) != failure.HeadSHA {
 		return nil
 	}
-	id := detail.State.Plan.ID
-	switch failure.FailureKind {
-	case plan.FinalVerificationFailureKindCode:
-		return fmt.Errorf("final repository verification failed for current head %s because code verification failed; run `tao run --repair-verification %s` before review", diagnosticSHA(failure.HeadSHA), id)
-	case plan.FinalVerificationFailureKindToolMissing:
-		return fmt.Errorf("final repository verification failed for current head %s because a required verification tool is missing; restore the tool, then run `tao run --reverify %s` before review", diagnosticSHA(failure.HeadSHA), id)
-	case plan.FinalVerificationFailureKindTimeout:
-		return fmt.Errorf("final repository verification failed for current head %s because verification timed out; resolve the timeout, then run `tao run --reverify %s` before review", diagnosticSHA(failure.HeadSHA), id)
-	case plan.FinalVerificationFailureKindCancelled:
-		return fmt.Errorf("final repository verification failed for current head %s because verification was cancelled; resolve the cancellation, then run `tao run --reverify %s` before review", diagnosticSHA(failure.HeadSHA), id)
-	case plan.FinalVerificationFailureKindInvalidCommand:
-		return fmt.Errorf("final repository verification failed for current head %s because the verification command is invalid; correct the command, then run `tao run --reverify %s` before review", diagnosticSHA(failure.HeadSHA), id)
-	default:
-		return fmt.Errorf("final repository verification failed for current head %s without a current classification; run `tao run --reverify %s` to rerun and classify it before review", diagnosticSHA(failure.HeadSHA), id)
+	decision := plan.DeriveVerificationRecovery(detail)
+	if command := strings.TrimSpace(decision.Command); command != "" {
+		return fmt.Errorf("final repository verification failed for current head %s; run `%s` before review", diagnosticSHA(failure.HeadSHA), command)
 	}
+	if instruction := strings.TrimSpace(decision.Instruction); instruction != "" {
+		return fmt.Errorf("final repository verification failed for current head %s; recovery required before review: %s", diagnosticSHA(failure.HeadSHA), instruction)
+	}
+	return fmt.Errorf("final repository verification failed for current head %s; recovery required before review: %s", diagnosticSHA(failure.HeadSHA), decision.Reason)
 }

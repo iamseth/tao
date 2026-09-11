@@ -118,6 +118,7 @@ func TestRunActionDispatchesProjectedVerificationRecoveryByCommand(t *testing.T)
 		wantMessage string
 	}{
 		{name: "code", kind: plan.FinalVerificationFailureKindCode, action: plan.PlanAction{Kind: plan.PlanActionRepairVerification, Command: "tao run --repair-verification plan-a"}, wantArgs: []string{"run", "--repair-verification", "plan-a"}},
+		{name: "code repair cap reached", kind: plan.FinalVerificationFailureKindCode, action: plan.PlanAction{Kind: plan.PlanActionResolveVerification, Instruction: "Repair the repository verification failure manually before explicitly reverifying"}, wantMessage: "Repair the repository verification failure manually before explicitly reverifying"},
 		{name: "tool missing", kind: plan.FinalVerificationFailureKindToolMissing, action: plan.PlanAction{Kind: plan.PlanActionResolveVerification, Instruction: "restore the required tool"}, wantMessage: "restore the required tool"},
 		{name: "timeout", kind: plan.FinalVerificationFailureKindTimeout, action: plan.PlanAction{Kind: plan.PlanActionResolveVerification, Instruction: "resolve the timeout"}, wantMessage: "resolve the timeout"},
 		{name: "cancelled", kind: plan.FinalVerificationFailureKindCancelled, action: plan.PlanAction{Kind: plan.PlanActionResolveVerification, Instruction: "resolve the cancellation"}, wantMessage: "resolve the cancellation"},

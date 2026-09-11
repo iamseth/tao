@@ -18,6 +18,49 @@ import (
 	"github.com/iamseth/tao/internal/taodata"
 )
 
+func TestRequireNoCurrentFinalVerificationFailureUsesProjectedGuidance(t *testing.T) {
+	tests := []struct {
+		name       string
+		kind       plan.FinalVerificationFailureKind
+		capReached bool
+		want       string
+	}{
+		{name: "code", kind: plan.FinalVerificationFailureKindCode, want: "final repository verification failed for current head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa (short aaaaaaaaaaaa); run `tao run --repair-verification plan-a` before review"},
+		{name: "tool missing", kind: plan.FinalVerificationFailureKindToolMissing, want: "final repository verification failed for current head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa (short aaaaaaaaaaaa); recovery required before review: Restore the tool required by the repository verification command before explicitly reverifying the unchanged head"},
+		{name: "timeout", kind: plan.FinalVerificationFailureKindTimeout, want: "final repository verification failed for current head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa (short aaaaaaaaaaaa); recovery required before review: Resolve the repository verification timeout before explicitly reverifying the unchanged head"},
+		{name: "cancelled", kind: plan.FinalVerificationFailureKindCancelled, want: "final repository verification failed for current head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa (short aaaaaaaaaaaa); recovery required before review: Resolve the repository verification cancellation before explicitly reverifying the unchanged head"},
+		{name: "invalid command", kind: plan.FinalVerificationFailureKindInvalidCommand, want: "final repository verification failed for current head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa (short aaaaaaaaaaaa); recovery required before review: Correct the repository verification command before explicitly reverifying the unchanged head"},
+		{name: "legacy unclassified", want: "final repository verification failed for current head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa (short aaaaaaaaaaaa); run `tao run --reverify plan-a` before review"},
+		{name: "code repair cap reached", kind: plan.FinalVerificationFailureKindCode, capReached: true, want: "final repository verification failed for current head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa (short aaaaaaaaaaaa); recovery required before review: Repair the repository verification failure manually before explicitly reverifying"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			detail := completedReviewPlanDetail(t.TempDir())
+			detail.State.Workspace = &plan.Workspace{HeadSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+			detail.State.Plan.FinalVerification = &plan.FinalVerification{Command: "make verify", HeadSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Result: finalVerificationFailed, FailureKind: test.kind, Fingerprint: "failure"}
+			if test.capReached {
+				for range plan.VerificationRepairAttemptCap {
+					detail.Slices.Slices = append(detail.Slices.Slices, plan.Slice{VerificationRepair: &plan.VerificationRepairBinding{Command: "make verify", HeadSHA: "older-head", Fingerprint: "older-failure"}})
+				}
+				detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypeVerificationRepairStopped, Command: "make verify", HeadSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Fingerprint: "failure", Reason: "manual source repair and explicit reverification required"})
+			}
+			runner := func(_ context.Context, _ string, command string, args []string, stdout, _ io.Writer) error {
+				if command == "git" && len(args) >= 3 && args[len(args)-2] == "rev-parse" {
+					_, _ = io.WriteString(stdout, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n")
+				}
+				return nil
+			}
+			execution := testRunExecution(ExecutionConfig{}, RunDependencies{CommandRunner: runner})
+			execution.ExecutionRoot = t.TempDir()
+
+			err := requireNoCurrentFinalVerificationFailure(context.Background(), detail, execution)
+			if err == nil || err.Error() != test.want {
+				t.Fatalf("review gate error = %q, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestAppendPriorReworkAndBudgetContext(t *testing.T) {
 	thresholds := plan.DefaultAgentBudgetThresholds()
 	tests := []struct {

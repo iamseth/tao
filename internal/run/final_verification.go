@@ -89,7 +89,11 @@ func (f Finalizer) verifyCompletedBranch(ctx context.Context, detail *plan.PlanD
 		if recordErr != nil {
 			return fmt.Errorf("record failed final repository verification: %w (verification error: %w)", recordErr, runErr)
 		}
-		return &FinalVerificationError{Verification: verification, Cause: runErr}
+		verificationErr := &FinalVerificationError{Verification: verification, Cause: runErr}
+		if stopErr := f.appendVerificationRepairStoppedEvent(detail, verification, finishedAt.UTC()); stopErr != nil {
+			return fmt.Errorf("append verification repair stop event: %w (verification error: %w)", stopErr, verificationErr)
+		}
+		return verificationErr
 	}
 	verification.Result = finalVerificationPassed
 	verification.Details, verification.OutputTruncated = boundedFinalVerificationDetails(combined)
@@ -131,6 +135,31 @@ func (f Finalizer) appendFinalVerificationEvent(detail *plan.PlanDetail, verific
 	if err := appender.AppendEvent(detail.Dir, event); err != nil {
 		_, _ = fmt.Fprintf(f.outputWriter(), "Warning: append final verification event: %v\n", err)
 	}
+}
+
+func (f Finalizer) appendVerificationRepairStoppedEvent(detail *plan.PlanDetail, verification plan.FinalVerification, timestamp time.Time) error {
+	attempts := plan.VerificationRepairAttemptCount(detail)
+	appender := f.execution.Dependencies.EventAppender
+	if detail == nil || appender == nil || attempts < plan.VerificationRepairAttemptCap {
+		return nil
+	}
+	id := strings.TrimSpace(detail.State.Plan.ID)
+	reason := "verification repair attempt cap reached; repair the repository verification failure manually, then explicitly reverify"
+	if id != "" {
+		reason += " with `tao run --reverify " + id + "`"
+	}
+	event := plan.Event{
+		Type:        plan.EventTypeVerificationRepairStopped,
+		Timestamp:   timestamp,
+		PlanID:      detail.State.Plan.ID,
+		Command:     verification.Command,
+		HeadSHA:     verification.HeadSHA,
+		Fingerprint: verification.Fingerprint,
+		Attempts:    attempts,
+		Reason:      reason,
+		Message:     "Stopped generated final-verification repair at the attempt cap",
+	}
+	return appender.AppendEvent(detail.Dir, event)
 }
 
 func (f Finalizer) recordFinalVerification(detail *plan.PlanDetail, verification plan.FinalVerification) error {

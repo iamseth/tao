@@ -95,13 +95,8 @@ func (f Finalizer) reverifyCompletedRun(ctx context.Context, detail *plan.PlanDe
 	}
 	execution := f.execution
 	execution.ExecutionRoot = executionRoot
-	if _, err := requireCurrentFailedFinalVerificationBoundary(ctx, detail, execution, "reverification"); err != nil {
+	if _, err := requireReverifyFinalVerificationBoundary(ctx, detail, execution); err != nil {
 		return err
-	}
-	if execution.Config.CommitPolicy != CommitPolicyNone {
-		if err := requireCleanReviewWorktree(ctx, execution.Dependencies.reviewGitFactory(executionRoot), detail, nil); err != nil {
-			return fmt.Errorf("reverify completed run: %w", err)
-		}
 	}
 	ReportPhase(ctx, PhaseFinalVerification, nil)
 	if err := f.verifyCompletedBranch(ctx, detail, executionRoot); err != nil {

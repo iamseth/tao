@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -156,6 +157,53 @@ func TestPrepareRequestConfigPreservesWorkspaceConfig(t *testing.T) {
 	}
 	if got.WorkspaceConfig.MaxParallelRuns != want.MaxParallelRuns {
 		t.Fatalf("WorkspaceConfig.MaxParallelRuns = %d, want %d", got.WorkspaceConfig.MaxParallelRuns, want.MaxParallelRuns)
+	}
+}
+
+func TestCheckRequestCanStartRequiresRepairVerificationDecision(t *testing.T) {
+	tests := []struct {
+		name string
+		kind plan.FinalVerificationFailureKind
+	}{
+		{name: "tool missing", kind: plan.FinalVerificationFailureKindToolMissing},
+		{name: "timeout", kind: plan.FinalVerificationFailureKindTimeout},
+		{name: "cancelled", kind: plan.FinalVerificationFailureKindCancelled},
+		{name: "invalid command", kind: plan.FinalVerificationFailureKindInvalidCommand},
+		{name: "legacy unclassified"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			detail := completedReviewPlanDetail(t.TempDir())
+			detail.State.Workspace = &plan.Workspace{HeadSHA: "failed-head"}
+			detail.State.Plan.FinalVerification = &plan.FinalVerification{Command: "make verify", HeadSHA: "failed-head", Result: finalVerificationFailed, FailureKind: test.kind, Fingerprint: "failure"}
+
+			err := CheckRequestCanStart(detail, Request{RepairVerification: true})
+			if err == nil || !strings.Contains(err.Error(), "does not authorize code repair") {
+				t.Fatalf("repair admission error = %v", err)
+			}
+		})
+	}
+}
+
+func TestCheckRequestCanStartAdmitsFirstTwoRepairAttemptsAndRefusesThird(t *testing.T) {
+	detail := completedReviewPlanDetail(t.TempDir())
+	detail.State.Workspace = &plan.Workspace{HeadSHA: "failed-head"}
+	detail.State.Plan.FinalVerification = &plan.FinalVerification{Command: "make verify", HeadSHA: "failed-head", Result: finalVerificationFailed, FailureKind: plan.FinalVerificationFailureKindCode, Fingerprint: "failure"}
+
+	if err := CheckRequestCanStart(detail, Request{RepairVerification: true}); err != nil {
+		t.Fatalf("first repair refused: %v", err)
+	}
+	for attempt := 1; attempt <= plan.VerificationRepairAttemptCap; attempt++ {
+		binding := plan.VerificationRepairBinding{Command: "make verify", HeadSHA: "prior-head", Fingerprint: fmt.Sprintf("prior-%d", attempt)}
+		detail.Slices.Slices = append(detail.Slices.Slices, plan.Slice{ID: fmt.Sprintf("vr%02d", attempt), Status: plan.StatusCompleted, VerificationRepair: &binding, Completion: &plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionCommitted}})
+		if attempt == 1 {
+			if err := CheckRequestCanStart(detail, Request{RepairVerification: true}); err != nil {
+				t.Fatalf("second repair refused: %v", err)
+			}
+		}
+	}
+	if err := CheckRequestCanStart(detail, Request{RepairVerification: true}); err == nil || !strings.Contains(err.Error(), "attempt cap reached") {
+		t.Fatalf("third repair admission error = %v", err)
 	}
 }
 
