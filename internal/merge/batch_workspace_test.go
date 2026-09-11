@@ -289,6 +289,96 @@ func TestBatchWorkspaceResumeReportsAllDefaultSourceAndCleanlinessDrift(t *testi
 	}
 }
 
+func TestBatchWorkspaceResumeClassifiesDriftedPreLandingBatchAsRestartable(t *testing.T) {
+	fixture := newRealGitWorktree(t)
+	state := batchWorkspaceState(t, fixture)
+	owner, err := NewBatchWorkspace(fixture.repoRoot, filepath.Join(t.TempDir(), "merge-batches"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.Start(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.RemoveIntegration(context.Background(), state.ID); err != nil {
+		t.Fatal(err)
+	}
+	runRealGit(t, fixture.repoRoot, "worktree", "remove", fixture.worktreePath)
+	runRealGit(t, fixture.repoRoot, "branch", "-D", fixture.planBranch)
+	if err := os.WriteFile(filepath.Join(fixture.repoRoot, "default.txt"), []byte("default drift\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runRealGit(t, fixture.repoRoot, "add", "default.txt")
+	runRealGit(t, fixture.repoRoot, "commit", "-m", "default drift")
+	state.Status = BatchStatusBlocked
+	state.BlockedReason = "resume inputs drifted"
+	state.ResumeStatus = BatchStatusIntegrating
+
+	err = owner.ValidateResume(context.Background(), state)
+	resumeErr, ok := errors.AsType[*BatchResumeError](err)
+	if !ok {
+		t.Fatalf("expected aggregate resume error, got %v", err)
+	}
+	if resumeErr.RestartVerdict != BatchRestartVerdictRestartable || resumeErr.RestartReason != "" {
+		t.Fatalf("restart verdict = %q (%q), want restartable", resumeErr.RestartVerdict, resumeErr.RestartReason)
+	}
+	for _, want := range []string{"default tip drifted", "plan plan-a source", "recorded workspace is absent"} {
+		if !strings.Contains(resumeErr.Error(), want) {
+			t.Fatalf("resume error missing %q: %v", want, resumeErr)
+		}
+	}
+}
+
+func TestBatchWorkspaceResumeDoesNotClassifyLandedBatchAsRestartable(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*BatchState)
+	}{
+		{name: "landed sha", mutate: func(state *BatchState) { state.LandedSHA = "landed-sha" }},
+		{name: "landed status", mutate: func(state *BatchState) { state.Status = BatchStatusLanded }},
+		{name: "settling status", mutate: func(state *BatchState) { state.Status = BatchStatusSettling }},
+		{name: "completed status", mutate: func(state *BatchState) { state.Status = BatchStatusCompleted }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newRealGitWorktree(t)
+			state := batchWorkspaceState(t, fixture)
+			tc.mutate(&state)
+			owner, err := NewBatchWorkspace(fixture.repoRoot, filepath.Join(t.TempDir(), "merge-batches"), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			err = owner.ValidateResume(context.Background(), state)
+			resumeErr, ok := errors.AsType[*BatchResumeError](err)
+			if !ok {
+				t.Fatalf("expected aggregate resume error, got %v", err)
+			}
+			if resumeErr.RestartVerdict != BatchRestartVerdictNotRestartable || !strings.Contains(resumeErr.RestartReason, "has landed") {
+				t.Fatalf("restart verdict = %q (%q), want not restartable landing reason", resumeErr.RestartVerdict, resumeErr.RestartReason)
+			}
+		})
+	}
+}
+
+func TestBatchWorkspaceResumeRecordsUnknownRestartVerdictOnProbeFailure(t *testing.T) {
+	fixture := newRealGitWorktree(t)
+	state := batchWorkspaceState(t, fixture)
+	state.DefaultBranch = "missing-default"
+	state.Landing = &BatchLanding{IntegrationHead: state.DefaultStartSHA}
+	owner, err := NewBatchWorkspace(fixture.repoRoot, filepath.Join(t.TempDir(), "merge-batches"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = owner.ValidateResume(context.Background(), state)
+	resumeErr, ok := errors.AsType[*BatchResumeError](err)
+	if !ok {
+		t.Fatalf("expected aggregate resume error, got %v", err)
+	}
+	if resumeErr.RestartVerdict != BatchRestartVerdictUnknown || resumeErr.RestartReason == "" {
+		t.Fatalf("restart verdict = %q (%q), want unknown with probe reason", resumeErr.RestartVerdict, resumeErr.RestartReason)
+	}
+}
+
 func TestBatchWorkspaceRestartRemovesOnlyBatchResources(t *testing.T) {
 	fixture := newRealGitWorktree(t)
 	state := batchWorkspaceState(t, fixture)
@@ -369,6 +459,13 @@ func TestBatchWorkspaceRestartRefusesWhenDefaultReachedLandingIntentBeforeLanded
 	reached, err := owner.DefaultReachedLandingIntent(context.Background(), state)
 	if err != nil || !reached {
 		t.Fatalf("landing intent reached = %t, err = %v", reached, err)
+	}
+	resumeErr, ok := errors.AsType[*BatchResumeError](owner.ValidateResume(context.Background(), state))
+	if !ok {
+		t.Fatal("expected resume drift after default reached landing intent")
+	}
+	if resumeErr.RestartVerdict != BatchRestartVerdictNotRestartable || !strings.Contains(resumeErr.RestartReason, "durable landing intent") {
+		t.Fatalf("restart verdict = %q (%q), want not restartable landing-intent reason", resumeErr.RestartVerdict, resumeErr.RestartReason)
 	}
 	if _, err := owner.Restart(context.Background(), state); err == nil || !strings.Contains(err.Error(), "durable landing intent") {
 		t.Fatalf("expected durable landing intent restart refusal, got %v", err)

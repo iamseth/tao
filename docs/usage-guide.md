@@ -885,22 +885,33 @@ successful same-run or rerun-triggered ejection. Verification, review, drift,
 or cleanup failure cannot land an unverified subset into default.
 
 **Resume, restart, and recovery:** rerun `tao merge --all` to resume matching
-durable progress. A rerun of an eligible attributed non-convergence block is the
-explicit operator action to eject that plan and re-land the rest; Tao prints
-manual-only guidance when no non-empty reduced set is available or an earlier
-ejection already completed. If an interruption
-happened after the guarded fast-forward, the durable landing intent proves the
-exact head and settlement resumes without
-a second merge; evidence recording and cleanup are idempotent. Use
-`tao merge --all --restart` only to discard stale, batch-owned pre-landing state,
-branch, and worktree. Restart is refused after landing and never removes source
-plans. Resolve reported source/default drift rather than deleting recovery
-files by hand.
+durable progress. When an active durable batch exists, even `--dry-run` first
+inspects and resume-validates that batch; it can snapshot fresh candidates only
+after no active batch remains. A rerun of an eligible attributed non-convergence
+block is the explicit operator action to eject that plan and re-land the rest;
+Tao prints manual-only guidance when no non-empty reduced set is available or an
+earlier ejection already completed. If an interruption happened after the
+guarded fast-forward, the durable landing intent proves the exact head and
+settlement resumes without a second merge; evidence recording and cleanup are
+idempotent. Use `tao merge --all --restart` only to discard stale, batch-owned
+pre-landing state, branch, and worktree. When Tao reports that restart is safe,
+preview that recovery and a fresh candidate snapshot with:
+
+```sh
+tao merge --all --restart --dry-run
+```
+
+Restart is refused after landing and never removes source plans. Resolve
+reported source/default drift rather than deleting recovery files by hand.
 
 **Strict batch flags:** `--dry-run` and `--auto-eject` require `--all`.
-`--restart` works in both forms and means something different in each: with a
-plan argument it clears that plan's stale pre-landing merge intent, and with
-`--all` it discards batch-owned pre-landing recovery state. Batch mode allows one `--verify-command CMD` override and the separate
+`--dry-run` is observational but does not bypass an active batch: Tao inspects
+and resume-validates durable progress before producing a fresh candidate
+snapshot. `--restart` works in both forms and means something different in each:
+with a plan argument it clears that plan's stale pre-landing merge intent, and
+with `--all` it discards batch-owned pre-landing recovery state. Combining
+`--all --restart --dry-run` is the safe preview for eligible pre-landing batch
+recovery. Batch mode allows one `--verify-command CMD` override and the separate
 `--auto-eject` convergence opt-in, but still rejects `--force`, `--record-only`,
 `--no-squash`, and `--no-verify`. Those bypass semantics remain available only
 to the explicit single-plan workflow.

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -660,6 +661,72 @@ func TestMergeAllDefaultStopsWithAttributedNonConvergenceOffer(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("expected output to contain %q, got %q", want, out.String())
 		}
+	}
+}
+
+func TestMergeAllResumeFailureOffersRestartPreviewIndependentOfDryRun(t *testing.T) {
+	resumeErr := &mergepkg.BatchResumeError{
+		Drifts:         []mergepkg.BatchDrift{{Scope: "integration branch", Expected: "head-a", Actual: "head-b", Reason: "tip changed"}},
+		RestartVerdict: mergepkg.BatchRestartVerdictRestartable,
+	}
+	var outputs []string
+	for _, args := range [][]string{{"merge", "--all"}, {"merge", "--all", "--dry-run"}} {
+		batch := &fakeCLIMergeBatchRunner{err: fmt.Errorf("resume merge batch: %w", resumeErr)}
+		stubMergeBatchRunner(t, batch)
+		var out bytes.Buffer
+		app := App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }}
+
+		err := app.Run(context.Background(), args)
+		if !errors.Is(err, resumeErr) {
+			t.Fatalf("merge error = %v, want original resume error", err)
+		}
+		for _, want := range []string{
+			"integration branch: tip changed",
+			`expected "head-a", actual "head-b"`,
+			"Restart discards only safe pre-landing batch recovery state and previews a fresh candidate snapshot without landing.",
+			"Next: `tao merge --all --restart --dry-run`",
+		} {
+			if !strings.Contains(out.String(), want) {
+				t.Fatalf("resume failure output missing %q: %q", want, out.String())
+			}
+		}
+		outputs = append(outputs, out.String())
+	}
+	if outputs[0] != outputs[1] {
+		t.Fatalf("resume guidance changed with --dry-run:\nwithout: %q\nwith: %q", outputs[0], outputs[1])
+	}
+}
+
+func TestMergeAllResumeFailureDoesNotOfferUnsafeRestart(t *testing.T) {
+	tests := []struct {
+		name    string
+		verdict mergepkg.BatchRestartVerdict
+		reason  string
+	}{
+		{name: "landed", verdict: mergepkg.BatchRestartVerdictNotRestartable, reason: "batch has landed"},
+		{name: "unknown probe result", verdict: mergepkg.BatchRestartVerdictUnknown, reason: "restart probe failed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resumeErr := &mergepkg.BatchResumeError{
+				Drifts:         []mergepkg.BatchDrift{{Scope: "default branch", Expected: "base-a", Actual: "landed-a", Reason: tt.reason}},
+				RestartVerdict: tt.verdict,
+			}
+			batch := &fakeCLIMergeBatchRunner{err: resumeErr}
+			stubMergeBatchRunner(t, batch)
+			var out bytes.Buffer
+			app := App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }}
+
+			if err := app.Run(context.Background(), []string{"merge", "--all"}); !errors.Is(err, resumeErr) {
+				t.Fatalf("merge error = %v, want original resume error", err)
+			}
+			if !strings.Contains(out.String(), tt.reason) {
+				t.Fatalf("drift evidence missing from %q", out.String())
+			}
+			if strings.Contains(out.String(), "tao merge --all --restart --dry-run") {
+				t.Fatalf("unsafe restart was recommended: %q", out.String())
+			}
+		})
 	}
 }
 

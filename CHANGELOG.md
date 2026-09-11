@@ -23,6 +23,7 @@ stable release.
 - You now get a more consistent TUI visual hierarchy across terminal types, with centralized semantic colors that degrade cleanly and respect no-color settings.
 
 #### Fixed
+- You now get actionable restart guidance when a stale pre-landing merge batch cannot resume, including the safe restart preview command; merge documentation also clarifies that `--dry-run` resume-validates active durable batch state before snapshotting fresh candidates.
 - You’re now protected from misaligned or overflowing TUI layouts when using CJK, emoji, or combining characters; sizing, truncation, wrapping, and alignment now use terminal cell widths.
 - You now get predictable log-pane alignment in the TUI when logs contain tab characters, because tabs are expanded before width truncation.
 - You’re now protected from dropped findings when review JSON contains ``` sequences inside text; fenced review contracts are parsed line-by-line to avoid premature truncation.

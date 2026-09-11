@@ -26,10 +26,22 @@ type BatchDrift struct {
 	Reason   string `json:"reason"`
 }
 
+// BatchRestartVerdict reports whether authoritative restart planning found a
+// safe recovery path for a failed resume.
+type BatchRestartVerdict string
+
+const (
+	BatchRestartVerdictRestartable    BatchRestartVerdict = "restartable"
+	BatchRestartVerdictNotRestartable BatchRestartVerdict = "not-restartable"
+	BatchRestartVerdictUnknown        BatchRestartVerdict = "unknown"
+)
+
 // BatchResumeError reports every observed mismatch rather than stopping at the
 // first drift, allowing the operator to make one restart decision.
 type BatchResumeError struct {
-	Drifts []BatchDrift
+	Drifts         []BatchDrift
+	RestartVerdict BatchRestartVerdict
+	RestartReason  string
 }
 
 func (e *BatchResumeError) Error() string {
@@ -205,9 +217,21 @@ func (b *BatchWorkspace) validateResume(ctx context.Context, state BatchState, e
 	}
 	drifts = append(drifts, validatePersistedProgress(state)...)
 	if len(drifts) != 0 {
-		return &BatchResumeError{Drifts: drifts}
+		verdict, reason := b.classifyRestart(ctx, state)
+		return &BatchResumeError{Drifts: drifts, RestartVerdict: verdict, RestartReason: reason}
 	}
 	return nil
+}
+
+func (b *BatchWorkspace) classifyRestart(ctx context.Context, state BatchState) (BatchRestartVerdict, string) {
+	if _, err := b.PlanRestart(ctx, state); err != nil {
+		var refusal *batchRestartRefusalError
+		if errors.As(err, &refusal) {
+			return BatchRestartVerdictNotRestartable, err.Error()
+		}
+		return BatchRestartVerdictUnknown, err.Error()
+	}
+	return BatchRestartVerdictRestartable, ""
 }
 
 func resettableBatchEjectionDirt(state BatchState, head, expectedHead string) bool {
@@ -394,18 +418,26 @@ type BatchRestartPlan struct {
 	RemoveRecovery bool
 }
 
+type batchRestartRefusalError struct {
+	reason string
+}
+
+func (e *batchRestartRefusalError) Error() string {
+	return e.reason
+}
+
 // PlanRestart refuses all post-landing phases and reports exact batch-owned
 // resources. It does not inspect or propose source/default refs.
 func (b *BatchWorkspace) PlanRestart(ctx context.Context, state BatchState) (BatchRestartPlan, error) {
 	if state.LandedSHA != "" || state.Status == BatchStatusLanded || state.Status == BatchStatusSettling || state.Status == BatchStatusCompleted {
-		return BatchRestartPlan{}, fmt.Errorf("merge batch %s has landed; restart is forbidden", state.ID)
+		return BatchRestartPlan{}, &batchRestartRefusalError{reason: fmt.Sprintf("merge batch %s has landed; restart is forbidden", state.ID)}
 	}
 	landed, err := b.DefaultReachedLandingIntent(ctx, state)
 	if err != nil {
 		return BatchRestartPlan{}, err
 	}
 	if landed {
-		return BatchRestartPlan{}, fmt.Errorf("merge batch %s default has reached durable landing intent; restart is forbidden", state.ID)
+		return BatchRestartPlan{}, &batchRestartRefusalError{reason: fmt.Sprintf("merge batch %s default has reached durable landing intent; restart is forbidden", state.ID)}
 	}
 	status, err := b.workspaces.IntegrationStatus(ctx, state.ID)
 	if err != nil {
