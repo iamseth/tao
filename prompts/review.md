@@ -65,6 +65,8 @@ git diff {{ .Base }}..{{ .Head }}
 When the Prior Rework and Budget Context block shows earlier rounds:
 
 - Re-raise a finding equivalent to a prior-round finding only with fresh evidence naming what the current head still fails to do.
+- If a finding at the same location contradicts a prior round's requested change, name the concrete new evidence at the current head that justifies the reversal.
+- Treat a decision settled by an earlier round as settled; do not re-raise it without a demonstrated concrete violation at the current head.
 - Re-report a still-valid finding with identical severity, file, message, and suggestion text; do not rephrase it.
 - Keep the same line unless the anchored code moved; if it moved, update only the line.
 

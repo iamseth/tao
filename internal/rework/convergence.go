@@ -2,81 +2,162 @@ package rework
 
 import (
 	"encoding/json"
+	"math"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/iamseth/tao/internal/plan"
 )
 
-const recurringFilesStopReasonPrefix = "automatic rework stalled on files recurring across three consecutive reviews: "
+const (
+	recurringFilesStopReasonPrefix = "automatic rework stalled on files recurring across three consecutive reviews: "
+	fileRecurrenceStopReasonPrefix = "automatic rework stalled on files recurring in three review rounds: "
+	anchorReversalStopReasonPrefix = "automatic rework stopped on repeated finding anchors across review rounds: "
+	planBudgetStopReasonPrefix     = "automatic rework stopped after plan agent budget warning: "
+)
 
-type reworkRoundFiles struct {
-	files    map[string]struct{}
-	complete bool
+type planBudgetWarning struct {
+	Metric    string  `json:"metric"`
+	Observed  float64 `json:"observed"`
+	Threshold float64 `json:"threshold"`
 }
 
-// recurringReworkFiles returns safe finding files shared by the current review
-// and the two most recent contiguous generated rework rounds in this budget.
-func recurringReworkFiles(detail *plan.PlanDetail, baseline int, current []plan.ReviewFinding) []string {
-	if detail == nil {
-		return nil
-	}
-	baseline = max(baseline, 0)
-	rounds := make(map[int]*reworkRoundFiles)
-	latest := baseline
-	for _, slice := range detail.Slices.Slices {
-		round := RoundFromSliceID(slice.ID)
-		if round == 0 || round <= baseline {
-			continue
-		}
-		observation, ok := rounds[round]
-		if !ok {
-			observation = &reworkRoundFiles{files: make(map[string]struct{}), complete: true}
-			rounds[round] = observation
-		}
-		latest = max(latest, round)
-		if len(slice.ExpectedFiles) == 0 {
-			observation.complete = false
-			continue
-		}
-		file, ok := normalizeReviewFindingFile(slice.ExpectedFiles[0])
-		if !ok {
-			observation.complete = false
-			continue
-		}
-		observation.files[file] = struct{}{}
-	}
-	if latest-baseline < 2 {
-		return nil
-	}
-	for round := baseline + 1; round <= latest; round++ {
-		observation, ok := rounds[round]
-		if !ok || !observation.complete || len(observation.files) == 0 {
-			return nil
-		}
-	}
+type recurringFileRounds struct {
+	File   string `json:"file"`
+	Rounds []int  `json:"rounds"`
+}
 
-	currentFiles := make(map[string]struct{}, len(current))
-	for _, finding := range current {
-		if file, ok := normalizeReviewFindingFile(finding.File); ok {
-			currentFiles[file] = struct{}{}
-		}
-	}
-	previous := rounds[latest-1].files
-	latestFiles := rounds[latest].files
-	recurring := make([]string, 0, len(currentFiles))
-	for file := range currentFiles {
-		if _, ok := previous[file]; !ok {
+type anchorReversalRounds struct {
+	Anchor string `json:"anchor"`
+	Rounds []int  `json:"rounds"`
+}
+
+func trippedPlanBudgetWarning(warnings []plan.AgentBudgetWarning) (planBudgetWarning, bool) {
+	for _, warning := range warnings {
+		if warning.Scope != "plan" || strings.TrimSpace(warning.Metric) == "" ||
+			math.IsNaN(warning.Observed) || math.IsInf(warning.Observed, 0) ||
+			math.IsNaN(warning.Threshold) || math.IsInf(warning.Threshold, 0) ||
+			warning.Threshold < 0 || warning.Observed <= warning.Threshold {
 			continue
 		}
-		if _, ok := latestFiles[file]; ok {
-			recurring = append(recurring, file)
-		}
+		return planBudgetWarning{Metric: warning.Metric, Observed: warning.Observed, Threshold: warning.Threshold}, true
 	}
-	slices.Sort(recurring)
+	return planBudgetWarning{}, false
+}
+
+func planBudgetStopReason(warning planBudgetWarning) string {
+	encoded, _ := json.Marshal(warning)
+	return planBudgetStopReasonPrefix + string(encoded)
+}
+
+func planBudgetWarningFromStopReason(reason string) (planBudgetWarning, bool) {
+	encoded, ok := strings.CutPrefix(reason, planBudgetStopReasonPrefix)
+	if !ok {
+		return planBudgetWarning{}, false
+	}
+	var warning planBudgetWarning
+	if err := json.Unmarshal([]byte(encoded), &warning); err != nil || strings.TrimSpace(warning.Metric) == "" ||
+		math.IsNaN(warning.Observed) || math.IsInf(warning.Observed, 0) ||
+		math.IsNaN(warning.Threshold) || math.IsInf(warning.Threshold, 0) ||
+		warning.Threshold < 0 || warning.Observed <= warning.Threshold {
+		return planBudgetWarning{}, false
+	}
+	return warning, true
+}
+
+func anchorReversalsInChurn(churn plan.ReworkChurn) []anchorReversalRounds {
+	reversals := make([]anchorReversalRounds, 0)
+	for anchor, rounds := range churn.AnchorRounds {
+		if len(rounds) < 2 {
+			continue
+		}
+		if _, ok := normalizeReviewFindingAnchor(anchor); !ok {
+			continue
+		}
+		reversals = append(reversals, anchorReversalRounds{Anchor: anchor, Rounds: slices.Clone(rounds)})
+	}
+	slices.SortFunc(reversals, func(a, b anchorReversalRounds) int {
+		return strings.Compare(a.Anchor, b.Anchor)
+	})
+	return reversals
+}
+
+func anchorReversalStopReason(reversals []anchorReversalRounds) string {
+	reversals = slices.Clone(reversals)
+	slices.SortFunc(reversals, func(a, b anchorReversalRounds) int {
+		return strings.Compare(a.Anchor, b.Anchor)
+	})
+	encoded, _ := json.Marshal(reversals)
+	return anchorReversalStopReasonPrefix + string(encoded)
+}
+
+func anchorReversalsFromStopReason(reason string) ([]anchorReversalRounds, bool) {
+	encoded, ok := strings.CutPrefix(reason, anchorReversalStopReasonPrefix)
+	if !ok {
+		return nil, false
+	}
+	var persisted []anchorReversalRounds
+	if err := json.Unmarshal([]byte(encoded), &persisted); err != nil || len(persisted) == 0 {
+		return nil, false
+	}
+	seen := make(map[string]struct{}, len(persisted))
+	for index := range persisted {
+		anchor, rounds, ok := normalizePersistedRounds(persisted[index].Anchor, persisted[index].Rounds, 2, seen, normalizeReviewFindingAnchor)
+		if !ok {
+			return nil, false
+		}
+		persisted[index].Anchor = anchor
+		persisted[index].Rounds = rounds
+	}
+	slices.SortFunc(persisted, func(a, b anchorReversalRounds) int {
+		return strings.Compare(a.Anchor, b.Anchor)
+	})
+	return persisted, true
+}
+
+func normalizeReviewFindingAnchor(value string) (string, bool) {
+	separator := strings.LastIndexByte(value, ':')
+	if separator < 1 || separator == len(value)-1 {
+		return "", false
+	}
+	file, lineText := value[:separator], value[separator+1:]
+	file, ok := normalizeReviewFindingFile(file)
+	if !ok {
+		return "", false
+	}
+	line, err := strconv.Atoi(lineText)
+	if err != nil || line <= 0 {
+		return "", false
+	}
+	return file + ":" + strconv.Itoa(line), true
+}
+
+func recurringFilesInChurn(churn plan.ReworkChurn) []recurringFileRounds {
+	recurring := make([]recurringFileRounds, 0)
+	for file, rounds := range churn.FileRounds {
+		if len(rounds) < 3 {
+			continue
+		}
+		recurring = append(recurring, recurringFileRounds{File: file, Rounds: slices.Clone(rounds)})
+	}
+	slices.SortFunc(recurring, func(a, b recurringFileRounds) int {
+		return strings.Compare(a.File, b.File)
+	})
 	return recurring
 }
 
+func fileRecurrenceStopReason(recurring []recurringFileRounds) string {
+	recurring = slices.Clone(recurring)
+	slices.SortFunc(recurring, func(a, b recurringFileRounds) int {
+		return strings.Compare(a.File, b.File)
+	})
+	encoded, _ := json.Marshal(recurring)
+	return fileRecurrenceStopReasonPrefix + string(encoded)
+}
+
+// recurringFilesStopReason retains the historical consecutive-review encoding
+// for persisted stop compatibility.
 func recurringFilesStopReason(files []string) string {
 	files = slices.Clone(files)
 	slices.Sort(files)
@@ -85,7 +166,56 @@ func recurringFilesStopReason(files []string) string {
 	return recurringFilesStopReasonPrefix + string(encoded)
 }
 
+func recurringFileRoundsFromStopReason(reason string) ([]recurringFileRounds, bool) {
+	encoded, ok := strings.CutPrefix(reason, fileRecurrenceStopReasonPrefix)
+	if !ok {
+		return nil, false
+	}
+	var persisted []recurringFileRounds
+	if err := json.Unmarshal([]byte(encoded), &persisted); err != nil || len(persisted) == 0 {
+		return nil, false
+	}
+	seen := make(map[string]struct{}, len(persisted))
+	for index := range persisted {
+		file, rounds, ok := normalizePersistedRounds(persisted[index].File, persisted[index].Rounds, 3, seen, normalizeReviewFindingFile)
+		if !ok {
+			return nil, false
+		}
+		persisted[index].File = file
+		persisted[index].Rounds = rounds
+	}
+	slices.SortFunc(persisted, func(a, b recurringFileRounds) int {
+		return strings.Compare(a.File, b.File)
+	})
+	return persisted, true
+}
+
+func normalizePersistedRounds(value string, rounds []int, minimum int, seen map[string]struct{}, normalize func(string) (string, bool)) (string, []int, bool) {
+	value, ok := normalize(value)
+	if !ok || len(rounds) < minimum {
+		return "", nil, false
+	}
+	if _, duplicate := seen[value]; duplicate {
+		return "", nil, false
+	}
+	seen[value] = struct{}{}
+	slices.Sort(rounds)
+	rounds = slices.Compact(rounds)
+	if len(rounds) < minimum || rounds[0] <= 0 {
+		return "", nil, false
+	}
+	return value, rounds, true
+}
+
 func recurringFilesFromStopReason(reason string) ([]string, bool) {
+	if recurring, ok := recurringFileRoundsFromStopReason(reason); ok {
+		files := make([]string, len(recurring))
+		for index := range recurring {
+			files[index] = recurring[index].File
+		}
+		return files, true
+	}
+
 	encoded, ok := strings.CutPrefix(reason, recurringFilesStopReasonPrefix)
 	if !ok {
 		return nil, false

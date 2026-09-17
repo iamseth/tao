@@ -109,6 +109,24 @@ func TestHeaderReporterPublishesSliceProgressionAndMetricTotals(t *testing.T) {
 	}
 }
 
+func TestNewHeaderStateProjectsPrimaryRecurringFindingFile(t *testing.T) {
+	detail := runPlanDetail(plan.StatusInProgress, nil, nil, "001-a", plan.StatusInProgress, nil, nil)
+	detail.Events = []plan.Event{
+		{Type: plan.EventTypePlanReviewed, Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, FindingsCount: 1, Findings: []plan.ReviewFinding{{File: "initial.go", Line: 1}}}},
+		{Type: plan.EventTypeReworkRound, Round: 1},
+		{Type: plan.EventTypePlanReviewed, Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, FindingsCount: 2, Findings: []plan.ReviewFinding{{File: "second.go", Line: 2}, {File: "first.go", Line: 3}}}},
+		{Type: plan.EventTypeReworkRound, Round: 2},
+		{Type: plan.EventTypePlanReviewed, Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, FindingsCount: 2, Findings: []plan.ReviewFinding{{File: "second.go", Line: 4}, {File: "first.go", Line: 5}}}},
+		{Type: plan.EventTypeReworkRound, Round: 3},
+		{Type: plan.EventTypePlanReviewed, Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, FindingsCount: 1, Findings: []plan.ReviewFinding{{File: "second.go", Line: 6}}}},
+	}
+
+	state := newHeaderState(detail, ExecutionConfig{}, time.Time{})
+	if state.ReworkRound != 3 || state.RecurringFindingFile != "second.go" {
+		t.Fatalf("rework header facts = %+v", state)
+	}
+}
+
 type panickingHeaderReporter struct{}
 
 func (panickingHeaderReporter) ReportHeader(HeaderState) { panic("presentation failed") }

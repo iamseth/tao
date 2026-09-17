@@ -53,7 +53,7 @@ func TestReworkDriverAtomicallyRecordsReworkRound(t *testing.T) {
 	detail, fingerprint := autoReworkTestDetail(planID, now)
 	repo := newRecordingAutoReworkRepository(planID, detail)
 
-	result, err := newReworkDriver(repo, func() time.Time { return now }).Decide(context.Background(), planID, 0, 0, "", 3)
+	result, err := newReworkDriver(repo, func() time.Time { return now }).Decide(context.Background(), planID, 0, 0, "", 3, plan.AgentBudgetThresholds{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestReworkDriverRecordsReworkStopped(t *testing.T) {
 			detail, fingerprint := autoReworkTestDetail(planID, now)
 			repo := newRecordingAutoReworkRepository(planID, detail)
 
-			result, err := newReworkDriver(repo, func() time.Time { return now }).Decide(context.Background(), planID, 0, test.attempts, test.previous(fingerprint), test.maxAttempts)
+			result, err := newReworkDriver(repo, func() time.Time { return now }).Decide(context.Background(), planID, 0, test.attempts, test.previous(fingerprint), test.maxAttempts, plan.AgentBudgetThresholds{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -159,7 +159,7 @@ func TestReworkDriverRoundSettlementFailureFailsClosed(t *testing.T) {
 	repo := newRecordingAutoReworkRepository(planID, detail)
 	repo.appendErr = errors.New("event journal unavailable")
 
-	result, err := newReworkDriver(repo, func() time.Time { return now }).Decide(context.Background(), planID, 0, 0, "", 3)
+	result, err := newReworkDriver(repo, func() time.Time { return now }).Decide(context.Background(), planID, 0, 0, "", 3, plan.AgentBudgetThresholds{})
 	if err == nil {
 		t.Fatal("automatic rework unexpectedly published an unsettled round")
 	}
@@ -176,36 +176,47 @@ func TestReworkDriverRoundSettlementFailureFailsClosed(t *testing.T) {
 	}
 }
 
-func TestReworkDriverStopsOnThirdRecurringFileReview(t *testing.T) {
+func TestReworkDriverStopsOnThirdRecurringFileReworkReview(t *testing.T) {
 	now := time.Date(2026, 7, 14, 2, 36, 0, 0, time.UTC)
 	planID := "20260714-0236-recurring-file"
 	detail, fingerprint := autoReworkTestDetail(planID, now)
-	detail.Slices.Slices = append(detail.Slices.Slices,
-		plan.Slice{ID: "r101-internal-cli-autorework-go", Status: plan.StatusCompleted, ExpectedFiles: []string{"internal/cli/autorework.go"}},
-		plan.Slice{ID: "r201-internal-cli-autorework-go", Status: plan.StatusCompleted, ExpectedFiles: []string{"./internal/cli/autorework.go"}},
-	)
-	detail.State.Plan.CompletedSlices = append(detail.State.Plan.CompletedSlices,
-		"r101-internal-cli-autorework-go",
-		"r201-internal-cli-autorework-go",
-	)
+	reworkSlices := []plan.Slice{
+		{ID: "r101-internal-cli-autorework-go", Status: plan.StatusCompleted},
+		{ID: "r201-internal-cli-autorework-go", Status: plan.StatusCompleted},
+		{ID: "r301-internal-cli-autorework-go", Status: plan.StatusCompleted},
+	}
+	detail.Slices.Slices = append(detail.Slices.Slices, reworkSlices...)
+	for i, slice := range reworkSlices {
+		detail.State.Plan.CompletedSlices = append(detail.State.Plan.CompletedSlices, slice.ID)
+		finding := detail.State.Plan.Review.Findings[0]
+		finding.Line = 40 + i
+		finding.Message = "round-specific finding"
+		detail.Events = append(detail.Events, plan.Event{
+			Type: plan.EventTypePlanReviewed, PlanID: planID, SliceID: slice.ID,
+			Review: reworkReview(plan.ReviewVerdictChangesRequested, []plan.ReviewFinding{finding}),
+		})
+	}
 	repo := newRecordingAutoReworkRepository(planID, detail)
 
-	result, err := newReworkDriver(repo, func() time.Time { return now }).Decide(context.Background(), planID, 0, 1, "different-fingerprint", 5)
+	result, err := newReworkDriver(repo, func() time.Time { return now }).Decide(context.Background(), planID, 0, 1, "different-fingerprint", 5, plan.AgentBudgetThresholds{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Reworked || result.Round != 2 || result.Fingerprint != fingerprint || result.StopKind != rework.StopKindRecurringFiles {
+	if result.Reworked || result.Round != 3 || result.Fingerprint != fingerprint || result.StopKind != rework.StopKindFileRecurrence {
 		t.Fatalf("automatic rework result = %+v", result)
 	}
 	if want := []string{"internal/cli/autorework.go"}; !reflect.DeepEqual(result.RecurringFiles, want) {
 		t.Fatalf("recurring files = %#v, want %#v", result.RecurringFiles, want)
 	}
-	for _, want := range []string{"THE SAME FILES KEEP RECURRING", "- internal/cli/autorework.go", "internal/cli/autorework.go:45", "preserve automatic rework history", "append a typed plan event"} {
+	if want := map[string][]int{"internal/cli/autorework.go": {1, 2, 3}}; !reflect.DeepEqual(result.RecurringFileRounds, want) {
+		t.Fatalf("recurring file rounds = %#v, want %#v", result.RecurringFileRounds, want)
+	}
+	for _, want := range []string{"A FINDING FILE KEEPS RECURRING", "- internal/cli/autorework.go (rounds [1 2 3])", "internal/cli/autorework.go:45", "preserve automatic rework history", "append a typed plan event"} {
 		if output := rework.FormatStopMessage(result); !strings.Contains(output, want) {
 			t.Errorf("stop output %q does not contain %q", output, want)
 		}
 	}
-	if len(detail.Slices.Slices) != 3 || detail.State.Status != plan.StatusChangesRequested {
+	if len(detail.Slices.Slices) != 4 || detail.State.Status != plan.StatusChangesRequested {
 		t.Fatalf("recurring-file stop crossed the reopen boundary: status=%q slices=%+v", detail.State.Status, detail.Slices.Slices)
 	}
 	var stopped *plan.Event
@@ -214,7 +225,7 @@ func TestReworkDriverStopsOnThirdRecurringFileReview(t *testing.T) {
 			stopped = &repo.events[i]
 		}
 	}
-	if stopped == nil || stopped.PlanID != planID || stopped.Round != 2 || stopped.Attempts != 2 || stopped.Fingerprint != fingerprint || rework.StopKindForPersistedReason(stopped.Reason) != rework.StopKindRecurringFiles {
+	if stopped == nil || stopped.PlanID != planID || stopped.Round != 3 || stopped.Attempts != 3 || stopped.Fingerprint != fingerprint || rework.StopKindForPersistedReason(stopped.Reason) != rework.StopKindFileRecurrence {
 		t.Fatalf("rework_stopped event = %+v", stopped)
 	}
 }
@@ -226,7 +237,7 @@ func TestReworkDriverStopSettlementFailureFailsClosed(t *testing.T) {
 	repo := newRecordingAutoReworkRepository(planID, detail)
 	repo.appendErr = errors.New("event journal unavailable")
 
-	result, err := newReworkDriver(repo, func() time.Time { return now }).Decide(context.Background(), planID, 0, 3, "", 3)
+	result, err := newReworkDriver(repo, func() time.Time { return now }).Decide(context.Background(), planID, 0, 3, "", 3, plan.AgentBudgetThresholds{})
 	if err == nil {
 		t.Fatal("automatic rework unexpectedly published an unsettled stop")
 	}
@@ -257,7 +268,7 @@ func TestReworkDriverSilentDeclinesAppendNothing(t *testing.T) {
 			test.mutate(detail)
 			repo := newRecordingAutoReworkRepository(planID, detail)
 
-			result, err := newReworkDriver(repo, func() time.Time { return now }).Decide(context.Background(), planID, 0, 0, "", 3)
+			result, err := newReworkDriver(repo, func() time.Time { return now }).Decide(context.Background(), planID, 0, 0, "", 3, plan.AgentBudgetThresholds{})
 			if err != nil {
 				t.Fatal(err)
 			}

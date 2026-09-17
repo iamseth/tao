@@ -73,12 +73,20 @@ func TestRenderOptionalBatchReworkAndUnavailableCost(t *testing.T) {
 	state.BatchTotal = 7
 	state.ReworkRound = 2
 	state.MaxReworkAttempts = 5
+	state.RecurringFindingFile = "internal/run/recovery.go"
 	state.CostReported = false
 	text := strings.Join(Render(state, 140, false), "\n")
-	for _, want := range []string{"batch 2/7", "rework 2/5", "agent", "cost —"} {
+	for _, want := range []string{"batch 2/7", "rework 2/5", "agent", "cost —", "recurring internal/run/recovery.go"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("Render() missing %q in %q", want, text)
 		}
+	}
+}
+
+func TestRenderOmitsRecurringFindingFileWhenEmpty(t *testing.T) {
+	text := strings.Join(Render(testHeaderState(), 100, false), "\n")
+	if strings.Contains(text, "recurring") {
+		t.Fatalf("empty recurring finding file rendered in %q", text)
 	}
 }
 

@@ -3,7 +3,10 @@ package plan
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"path"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -141,6 +144,143 @@ type ReworkSummary struct {
 	Rounds                      int
 	LatestStoppedReason         string
 	DistinctFindingFingerprints int
+}
+
+// ReworkChurn is a read-only projection of the review rounds in which finding
+// files and file:line anchors appeared. Map values contain distinct rounds in
+// ascending order.
+type ReworkChurn struct {
+	Rounds       []int
+	FileRounds   map[string][]int
+	AnchorRounds map[string][]int
+}
+
+// ReviewRound pairs one durable findings review with the rework round it
+// requests.
+type ReviewRound struct {
+	Round int
+	Event Event
+}
+
+// ProjectReviewRounds assigns every durable review that requested rework the
+// round it requests, so the initial changes-requested review requests round one.
+// Durable rework-round events and review ordering supply current round numbers,
+// while an encoded rework slice ID takes precedence for legacy review events.
+// Only completed changes-requested reviews request a round: the review contract
+// permits findings under comment and approve verdicts, but those observations
+// never asked for work, so they neither consume a round number nor reach churn
+// classification. Reviews carrying no findings are skipped. Complete reports
+// whether every requesting review carried a usable finding payload; callers that
+// must not act on partial history discard the whole sequence when it is false.
+//
+// This is the single round assignment for durable review history. Callers that
+// need per-round findings must project through it rather than reproducing the
+// ordering, so churn detection, review context, and stop evidence cannot drift
+// apart.
+func ProjectReviewRounds(events []Event) ([]ReviewRound, bool) {
+	rounds := make([]ReviewRound, 0, len(events))
+	complete := true
+	nextRound := 1
+	for _, event := range events {
+		if event.Type == EventTypeReworkRound && event.Round >= nextRound {
+			nextRound = event.Round + 1
+		}
+		if event.Type != EventTypePlanReviewed || event.Review == nil || event.Review.Status != ReviewStatusCompleted {
+			continue
+		}
+		// A dropped payload is judged before the verdict, because a review that
+		// lost its findings may also have lost the verdict that would have made
+		// them a rework request.
+		if event.Review.FindingsCount > 0 && len(event.Review.Findings) == 0 {
+			complete = false
+		}
+		if event.Review.Verdict != ReviewVerdictChangesRequested || len(event.Review.Findings) == 0 {
+			continue
+		}
+
+		round := nextRound
+		if encoded := ReworkRoundFromSliceID(event.SliceID); encoded > 0 {
+			round = encoded
+		}
+		if round >= nextRound {
+			nextRound = round + 1
+		} else {
+			nextRound++
+		}
+		rounds = append(rounds, ReviewRound{Round: round, Event: event})
+	}
+	return rounds, complete
+}
+
+// ProjectReworkChurn derives finding history after baseline from the durable
+// review rounds ProjectReviewRounds assigns. Incomplete legacy finding payloads
+// make the entire projection unavailable rather than allowing partial history to
+// drive current behavior.
+func ProjectReworkChurn(events []Event, baseline int) ReworkChurn {
+	if baseline < 0 {
+		baseline = 0
+	}
+	projection := ReworkChurn{}
+	reviewRounds, complete := ProjectReviewRounds(events)
+	if !complete {
+		return ReworkChurn{}
+	}
+	for _, reviewRound := range reviewRounds {
+		round := reviewRound.Round
+		if round <= baseline {
+			continue
+		}
+
+		projection.Rounds = appendDistinctRound(projection.Rounds, round)
+		for _, finding := range reviewRound.Event.Review.Findings {
+			file := normalizeReworkFindingPath(finding.File)
+			if file == "" {
+				continue
+			}
+			if projection.FileRounds == nil {
+				projection.FileRounds = make(map[string][]int)
+			}
+			projection.FileRounds[file] = appendDistinctRound(projection.FileRounds[file], round)
+			if projection.AnchorRounds == nil {
+				projection.AnchorRounds = make(map[string][]int)
+			}
+			anchor := fmt.Sprintf("%s:%d", file, finding.Line)
+			projection.AnchorRounds[anchor] = appendDistinctRound(projection.AnchorRounds[anchor], round)
+		}
+	}
+	sort.Ints(projection.Rounds)
+	for file := range projection.FileRounds {
+		sort.Ints(projection.FileRounds[file])
+	}
+	for anchor := range projection.AnchorRounds {
+		sort.Ints(projection.AnchorRounds[anchor])
+	}
+	return projection
+}
+
+func appendDistinctRound(rounds []int, round int) []int {
+	for _, existing := range rounds {
+		if existing == round {
+			return rounds
+		}
+	}
+	return append(rounds, round)
+}
+
+// normalizeReworkFindingPath intentionally matches the canonical path treatment
+// used by rework finding comparison.
+func normalizeReworkFindingPath(value string) string {
+	value = strings.TrimSpace(strings.ReplaceAll(value, "\\", "/"))
+	value = strings.TrimPrefix(value, "./")
+	value = strings.Trim(value, "/")
+	if value == "" {
+		return ""
+	}
+	clean := path.Clean(value)
+	if clean == "." {
+		return ""
+	}
+	return clean
 }
 
 // SummarizeRework derives rework history without affecting plan readability.

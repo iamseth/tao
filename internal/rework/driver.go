@@ -28,7 +28,7 @@ type ExecuteFunc func(context.Context) error
 type PersistProgressFunc func(context.Context, int, int, string) error
 
 // DecisionFunc applies at most one automatic-rework decision.
-type DecisionFunc func(context.Context, string, int, int, string, int) (Decision, error)
+type DecisionFunc func(context.Context, string, int, int, string, int, plan.AgentBudgetThresholds) (Decision, error)
 
 // ProgressLogger reports a successfully reopened rework round.
 type ProgressLogger func(int) error
@@ -48,6 +48,9 @@ const (
 	StopKindCapExhausted    StopKind = "cap_exhausted"
 	StopKindFindingsStalled StopKind = "findings_stalled"
 	StopKindRecurringFiles  StopKind = "recurring_files"
+	StopKindAnchorReversal  StopKind = "anchor_reversal"
+	StopKindFileRecurrence  StopKind = "file_recurrence"
+	StopKindPlanBudget      StopKind = "plan_budget"
 )
 
 // StopKindForPersistedReason upgrades the frozen reason field in historical
@@ -56,8 +59,17 @@ func StopKindForPersistedReason(reason string) StopKind {
 	if reason == equivalentFindingsStopReason {
 		return StopKindFindingsStalled
 	}
+	if _, ok := anchorReversalsFromStopReason(reason); ok {
+		return StopKindAnchorReversal
+	}
+	if _, ok := recurringFileRoundsFromStopReason(reason); ok {
+		return StopKindFileRecurrence
+	}
 	if _, ok := recurringFilesFromStopReason(reason); ok {
 		return StopKindRecurringFiles
+	}
+	if _, ok := planBudgetWarningFromStopReason(reason); ok {
+		return StopKindPlanBudget
 	}
 	var maxAttempts int
 	if _, err := fmt.Sscanf(reason, "automatic rework cap exhausted after %d cycles", &maxAttempts); err == nil && reason == fmt.Sprintf("automatic rework cap exhausted after %d cycles", maxAttempts) {
@@ -66,16 +78,26 @@ func StopKindForPersistedReason(reason string) StopKind {
 	return StopKindNone
 }
 
+// AnchorFindingEvidence identifies one blocking message at a repeated anchor.
+type AnchorFindingEvidence struct {
+	Anchor  string
+	Round   int
+	Message string
+}
+
 // Decision describes the outcome of inspecting and possibly reopening a plan.
 type Decision struct {
-	Reworked       bool
-	Round          int
-	BaselineRound  int
-	Fingerprint    string
-	StopKind       StopKind
-	StopReason     string
-	RecurringFiles []string
-	Findings       []plan.ReviewFinding
+	Reworked            bool
+	Round               int
+	BaselineRound       int
+	Fingerprint         string
+	StopKind            StopKind
+	StopReason          string
+	RecurringFiles      []string
+	RecurringFileRounds map[string][]int
+	AnchorRounds        map[string][]int
+	AnchorFindings      []AnchorFindingEvidence
+	Findings            []plan.ReviewFinding
 }
 
 // GuardAutoReworkRestart interprets persisted automatic-rework events and
@@ -106,7 +128,14 @@ func mostRecentAutoReworkStop(detail *plan.PlanDetail) (Decision, bool) {
 				reason = "automatic rework previously stopped"
 			}
 			recurringFiles, _ := recurringFilesFromStopReason(reason)
-			return Decision{StopKind: StopKindForPersistedReason(reason), StopReason: reason, RecurringFiles: recurringFiles, Findings: ReviewFindings(detail)}, true
+			recurringRounds, _ := recurringFileRoundsFromStopReason(reason)
+			anchorReversals, _ := anchorReversalsFromStopReason(reason)
+			return Decision{
+				StopKind: StopKindForPersistedReason(reason), StopReason: reason,
+				RecurringFiles: recurringFiles, RecurringFileRounds: recurringFileRoundMap(recurringRounds),
+				AnchorRounds: anchorReversalRoundMap(anchorReversals), AnchorFindings: anchorFindingEvidence(detail.Events, anchorReversals),
+				Findings: ReviewFindings(detail),
+			}, true
 		}
 	}
 	return Decision{}, false
@@ -126,6 +155,12 @@ func FormatStopMessage(decision Decision) string {
 		return "Automatic rework stopped: attempt cap reached.\nReason: " + decision.StopReason + "\nRead the review and address the remaining findings before re-running."
 	case StopKindRecurringFiles:
 		return formatRecurringFilesStopMessage(decision)
+	case StopKindAnchorReversal:
+		return formatAnchorReversalStopMessage(decision)
+	case StopKindFileRecurrence:
+		return formatFileRecurrenceStopMessage(decision)
+	case StopKindPlanBudget:
+		return formatPlanBudgetStopMessage(decision)
 	case StopKindFindingsStalled:
 	default:
 		return decision.StopReason
@@ -166,6 +201,68 @@ func formatRecurringFilesStopMessage(decision Decision) string {
 	}
 	message.WriteString("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
 	return message.String()
+}
+
+func formatAnchorReversalStopMessage(decision Decision) string {
+	reversals, _ := anchorReversalsFromStopReason(decision.StopReason)
+	if len(decision.AnchorRounds) > 0 {
+		reversals = reversals[:0]
+		for anchor, rounds := range decision.AnchorRounds {
+			reversals = append(reversals, anchorReversalRounds{Anchor: anchor, Rounds: slices.Clone(rounds)})
+		}
+		slices.SortFunc(reversals, func(a, b anchorReversalRounds) int { return strings.Compare(a.Anchor, b.Anchor) })
+	}
+
+	var message strings.Builder
+	message.WriteString("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
+	message.WriteString("AUTOMATIC REWORK STOPPED: A FINDING ANCHOR REPEATED\n")
+	message.WriteString("Blocking findings returned at the same file and line in distinct rounds:\n")
+	for _, reversal := range reversals {
+		fmt.Fprintf(&message, "- %s (rounds %v)\n", reversal.Anchor, reversal.Rounds)
+		for _, finding := range decision.AnchorFindings {
+			if finding.Anchor == reversal.Anchor {
+				fmt.Fprintf(&message, "  - round %d: %s\n", finding.Round, finding.Message)
+			}
+		}
+	}
+	message.WriteString("Reason: " + decision.StopReason + "\n")
+	message.WriteString("Compare the round messages and resolve the policy direction before re-running.\n")
+	message.WriteString("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+	return message.String()
+}
+
+func formatFileRecurrenceStopMessage(decision Decision) string {
+	recurring, _ := recurringFileRoundsFromStopReason(decision.StopReason)
+	if len(decision.RecurringFileRounds) > 0 {
+		recurring = recurring[:0]
+		for file, rounds := range decision.RecurringFileRounds {
+			recurring = append(recurring, recurringFileRounds{File: file, Rounds: slices.Clone(rounds)})
+		}
+		slices.SortFunc(recurring, func(a, b recurringFileRounds) int { return strings.Compare(a.File, b.File) })
+	}
+
+	var message strings.Builder
+	message.WriteString("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
+	message.WriteString("AUTOMATIC REWORK STOPPED: A FINDING FILE KEEPS RECURRING\n")
+	message.WriteString("Blocking findings returned in these files across three or more rounds in the current rework window:\n")
+	for _, item := range recurring {
+		fmt.Fprintf(&message, "- %s (rounds %v)\n", item.File, item.Rounds)
+	}
+	message.WriteString("Reason: " + decision.StopReason + "\n")
+	message.WriteString("Read the latest review and address these current findings before re-running:\n")
+	for _, finding := range decision.Findings {
+		message.WriteString(formatBlockingFinding(finding))
+	}
+	message.WriteString("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+	return message.String()
+}
+
+func formatPlanBudgetStopMessage(decision Decision) string {
+	warning, ok := planBudgetWarningFromStopReason(decision.StopReason)
+	if !ok {
+		return decision.StopReason
+	}
+	return fmt.Sprintf("Automatic rework stopped: plan agent budget warning after multiple rework rounds.\nMetric: %s (observed %g, threshold %g)\nReason: %s\nReview the remaining findings and resource use before re-running.", warning.Metric, warning.Observed, warning.Threshold, decision.StopReason)
 }
 
 func formatBlockingFinding(finding plan.ReviewFinding) string {
@@ -212,10 +309,11 @@ type ExecutionState struct {
 
 // RunOptions configures the shared automatic-rework execution entry.
 type RunOptions struct {
-	Enabled      bool
-	MaxAttempts  int
-	AllowRestart bool
-	Recovered    *ExecutionState
+	Enabled          bool
+	MaxAttempts      int
+	BudgetThresholds plan.AgentBudgetThresholds
+	AllowRestart     bool
+	Recovered        *ExecutionState
 
 	Execute         ExecuteFunc
 	PersistProgress PersistProgressFunc
@@ -229,6 +327,7 @@ type LoopOptions struct {
 	Attempts            int
 	PreviousFingerprint string
 	MaxAttempts         int
+	BudgetThresholds    plan.AgentBudgetThresholds
 	// DecideBeforeExecute reopens an already-reviewed plan before the first
 	// execution. Normal runs preserve the execute-then-decide sequence.
 	DecideBeforeExecute bool
@@ -244,10 +343,11 @@ type LoopOptions struct {
 }
 
 // Decide inspects the latest completed review and applies at most one rework mutation.
-func (d Driver) Decide(ctx context.Context, planID string, baseline, attempts int, previous string, maxAttempts int) (Decision, error) {
+func (d Driver) Decide(ctx context.Context, planID string, baseline, attempts int, previous string, maxAttempts int, thresholds plan.AgentBudgetThresholds) (Decision, error) {
 	budget := Budget{BaselineRound: baseline, Attempts: attempts, PreviousFindingFingerprint: previous}
+	thresholds = resolvedBudgetThresholds(thresholds)
 	if d.DecideOne != nil {
-		return d.DecideOne(ctx, planID, budget.BaselineRound, budget.Attempts, budget.PreviousFindingFingerprint, maxAttempts)
+		return d.DecideOne(ctx, planID, budget.BaselineRound, budget.Attempts, budget.PreviousFindingFingerprint, maxAttempts, thresholds)
 	}
 	if d.Resolve == nil {
 		return Decision{}, errors.New("automatic rework plan resolver is nil")
@@ -284,9 +384,20 @@ func (d Driver) Decide(ctx context.Context, planID string, baseline, attempts in
 	if budget.PreviousFindingFingerprint != "" && budget.PreviousFindingFingerprint == fingerprint {
 		return d.stoppedDecision(detail, budget.BaselineRound, budget.Attempts, round, fingerprint, StopKindFindingsStalled, equivalentFindingsStopReason, findings, nil)
 	}
-	if recurringFiles := recurringReworkFiles(detail, budget.BaselineRound, findings); len(recurringFiles) > 0 {
-		reason := recurringFilesStopReason(recurringFiles)
-		return d.stoppedDecision(detail, budget.BaselineRound, budget.Attempts, round, fingerprint, StopKindRecurringFiles, reason, findings, recurringFiles)
+	churn := plan.ProjectReworkChurn(detail.Events, budget.BaselineRound)
+	if reversals := anchorReversalsInChurn(churn); len(reversals) > 0 {
+		reason := anchorReversalStopReason(reversals)
+		return d.stoppedDecision(detail, budget.BaselineRound, budget.Attempts, round, fingerprint, StopKindAnchorReversal, reason, findings, nil)
+	}
+	if recurring := recurringFilesInChurn(churn); len(recurring) > 0 {
+		reason := fileRecurrenceStopReason(recurring)
+		return d.stoppedDecision(detail, budget.BaselineRound, budget.Attempts, round, fingerprint, StopKindFileRecurrence, reason, findings, recurring)
+	}
+	if budget.Attempts >= 2 {
+		if warning, ok := trippedPlanBudgetWarning(plan.AgentBudgetWarnings(detail, thresholds)); ok {
+			reason := planBudgetStopReason(warning)
+			return d.stoppedDecision(detail, budget.BaselineRound, budget.Attempts, round, fingerprint, StopKindPlanBudget, reason, findings, nil)
+		}
 	}
 	if d.Record == nil {
 		return Decision{}, errors.New("automatic rework record factory is nil")
@@ -307,15 +418,17 @@ func (d Driver) Decide(ctx context.Context, planID string, baseline, attempts in
 	return Decision{Reworked: true, Round: next, BaselineRound: budget.BaselineRound, Fingerprint: fingerprint}, nil
 }
 
-func (d Driver) stoppedDecision(detail *plan.PlanDetail, baseline, attempts, round int, fingerprint string, kind StopKind, reason string, findings []plan.ReviewFinding, recurringFiles []string) (Decision, error) {
+func (d Driver) stoppedDecision(detail *plan.PlanDetail, baseline, attempts, round int, fingerprint string, kind StopKind, reason string, findings []plan.ReviewFinding, recurring []recurringFileRounds) (Decision, error) {
+	anchorReversals, _ := anchorReversalsFromStopReason(reason)
 	decision := Decision{
-		Round:          round,
-		BaselineRound:  baseline,
-		Fingerprint:    fingerprint,
-		StopKind:       kind,
-		StopReason:     reason,
-		RecurringFiles: slices.Clone(recurringFiles),
-		Findings:       cloneFindings(findings),
+		Round: round, BaselineRound: baseline, Fingerprint: fingerprint,
+		StopKind: kind, StopReason: reason,
+		RecurringFileRounds: recurringFileRoundMap(recurring),
+		AnchorRounds:        anchorReversalRoundMap(anchorReversals), AnchorFindings: anchorFindingEvidence(detail.Events, anchorReversals),
+		Findings: cloneFindings(findings),
+	}
+	for _, item := range recurring {
+		decision.RecurringFiles = append(decision.RecurringFiles, item.File)
 	}
 	if d.Record == nil {
 		return Decision{}, stopMutationError(decision, errors.New("automatic rework record factory is nil"))
@@ -332,6 +445,75 @@ func (d Driver) stoppedDecision(detail *plan.PlanDetail, baseline, attempts, rou
 		return Decision{}, stopMutationError(decision, err)
 	}
 	return decision, nil
+}
+
+func anchorReversalRoundMap(reversals []anchorReversalRounds) map[string][]int {
+	if len(reversals) == 0 {
+		return nil
+	}
+	result := make(map[string][]int, len(reversals))
+	for _, reversal := range reversals {
+		result[reversal.Anchor] = slices.Clone(reversal.Rounds)
+	}
+	return result
+}
+
+func anchorFindingEvidence(events []plan.Event, reversals []anchorReversalRounds) []AnchorFindingEvidence {
+	if len(reversals) == 0 {
+		return nil
+	}
+	wanted := make(map[string]map[int]struct{}, len(reversals))
+	for _, reversal := range reversals {
+		wanted[reversal.Anchor] = make(map[int]struct{}, len(reversal.Rounds))
+		for _, round := range reversal.Rounds {
+			wanted[reversal.Anchor][round] = struct{}{}
+		}
+	}
+
+	var evidence []AnchorFindingEvidence
+	reviewRounds, _ := plan.ProjectReviewRounds(events)
+	for _, reviewRound := range reviewRounds {
+		round := reviewRound.Round
+		for _, finding := range reviewRound.Event.Review.Findings {
+			if finding.Line <= 0 {
+				continue
+			}
+			file, ok := normalizeReviewFindingFile(finding.File)
+			if !ok {
+				continue
+			}
+			anchor := fmt.Sprintf("%s:%d", file, finding.Line)
+			if _, ok := wanted[anchor][round]; !ok {
+				continue
+			}
+			message := strings.TrimSpace(finding.Message)
+			if message == "" {
+				message = "Blocking review finding"
+			}
+			evidence = append(evidence, AnchorFindingEvidence{Anchor: anchor, Round: round, Message: message})
+		}
+	}
+	slices.SortFunc(evidence, func(a, b AnchorFindingEvidence) int {
+		if order := strings.Compare(a.Anchor, b.Anchor); order != 0 {
+			return order
+		}
+		if a.Round != b.Round {
+			return a.Round - b.Round
+		}
+		return strings.Compare(a.Message, b.Message)
+	})
+	return evidence
+}
+
+func recurringFileRoundMap(recurring []recurringFileRounds) map[string][]int {
+	if len(recurring) == 0 {
+		return nil
+	}
+	result := make(map[string][]int, len(recurring))
+	for _, item := range recurring {
+		result[item.File] = slices.Clone(item.Rounds)
+	}
+	return result
 }
 
 type automaticReworkMutationError struct {
@@ -362,6 +544,13 @@ func (d Driver) now() time.Time {
 		return d.Now().UTC()
 	}
 	return time.Now().UTC()
+}
+
+func resolvedBudgetThresholds(thresholds plan.AgentBudgetThresholds) plan.AgentBudgetThresholds {
+	if thresholds == (plan.AgentBudgetThresholds{}) {
+		return plan.DefaultAgentBudgetThresholds()
+	}
+	return thresholds
 }
 
 // Run executes a plan through one automatic-rework policy boundary. Disabled
@@ -403,6 +592,7 @@ func (d Driver) Run(ctx context.Context, planID string, opts RunOptions) error {
 		PersistProgress:     opts.PersistProgress,
 		LogProgress:         opts.LogProgress,
 		MaxAttempts:         opts.MaxAttempts,
+		BudgetThresholds:    resolvedBudgetThresholds(opts.BudgetThresholds),
 		CheckBeforeDecision: opts.BeforeDecision,
 	}
 	if enabled {
@@ -468,7 +658,7 @@ func (d Driver) Loop(ctx context.Context, planID string, opts LoopOptions) error
 				return Decision{}, false, nil
 			}
 		}
-		decision, err := d.Decide(ctx, planID, budget.BaselineRound, budget.Attempts, budget.PreviousFindingFingerprint, maxAttempts)
+		decision, err := d.Decide(ctx, planID, budget.BaselineRound, budget.Attempts, budget.PreviousFindingFingerprint, maxAttempts, resolvedBudgetThresholds(opts.BudgetThresholds))
 		if err != nil {
 			var mutationErr *automaticReworkMutationError
 			if errors.As(err, &mutationErr) {

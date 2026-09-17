@@ -115,6 +115,78 @@ func TestAppendPriorReworkAndBudgetContext(t *testing.T) {
 	}
 }
 
+func TestAppendPriorReworkAndBudgetContextIncludesRecurringFindingHistory(t *testing.T) {
+	review := func(file string, line int, message string) plan.Event {
+		findings := []plan.ReviewFinding{{File: file, Line: line, Message: message}}
+		return plan.Event{Type: plan.EventTypePlanReviewed, Review: &plan.PlanReview{
+			Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested,
+			FindingsCount: len(findings), Findings: findings,
+		}}
+	}
+	events := make([]plan.Event, 0, 8)
+	for round := 1; round <= 8; round++ {
+		file, line, message := "other.go", round, fmt.Sprintf("round %d unrelated", round)
+		if round == 1 || round == 8 {
+			file, line, message = "internal/run/verification_repair.go", 47, fmt.Sprintf("round %d settled decision", round)
+		}
+		events = append(events, review(file, line, message))
+	}
+
+	got := appendPriorReworkAndBudgetContext("review prompt\n", &plan.PlanDetail{Events: events}, plan.DefaultAgentBudgetThresholds())
+	for _, want := range []string{
+		"- Recurring finding anchor: internal/run/verification_repair.go:47 (rounds 1, 8)",
+		"- Prior finding (round 1, internal/run/verification_repair.go:47): round 1 settled decision",
+		"- Prior finding (round 8, internal/run/verification_repair.go:47): round 8 settled decision",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("context missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestAppendPriorReworkAndBudgetContextSelectsLargeHistoryBeforeWarnings(t *testing.T) {
+	thresholds := plan.DefaultAgentBudgetThresholds()
+	events := []plan.Event{{Type: plan.EventTypePlanReviewed, Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted}}}
+	for round := 1; round <= 100; round++ {
+		findings := make([]plan.ReviewFinding, 5)
+		for i := range findings {
+			findings[i] = plan.ReviewFinding{
+				File:    "internal/run/large_history.go",
+				Line:    40 + i,
+				Message: fmt.Sprintf("round %d finding %d: %s", round, i, strings.Repeat("long finding text ", 300)),
+			}
+		}
+		events = append(events, plan.Event{Type: plan.EventTypePlanReviewed, Review: &plan.PlanReview{
+			Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested,
+			FindingsCount: len(findings), Findings: findings,
+		}})
+	}
+	for i := 0; i < 100; i++ {
+		events = append(events, plan.Event{
+			Type: plan.EventTypeAgentMetrics, SliceID: fmt.Sprintf("%03d-slice", i),
+			Metrics: &plan.AgentMetrics{OutputTokens: thresholds.Slice.OutputTokens + int64(i) + 1},
+		})
+	}
+
+	prompt := "review prompt\n"
+	got := appendPriorReworkAndBudgetContext(prompt, &plan.PlanDetail{Events: events}, thresholds)
+	contextBytes := len(got) - len(strings.TrimRight(prompt, "\n"))
+	if contextBytes > maxReviewContextBytes {
+		t.Fatalf("review context bytes = %d, want at most %d", contextBytes, maxReviewContextBytes)
+	}
+	for _, want := range []string{
+		"- Recurring finding file: internal/run/large_history.go",
+		"- Prior finding (round 1, internal/run/large_history.go:40)",
+		"- Prior finding (round 100, internal/run/large_history.go:40)",
+		"- Budget warning (slice 081-slice): output_tokens observed 40082 > threshold 40000",
+		"- Additional budget warnings omitted: 81",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("bounded context missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestAppendPriorReworkAndBudgetContextCapsWarnings(t *testing.T) {
 	thresholds := plan.DefaultAgentBudgetThresholds()
 	events := make([]plan.Event, 100)

@@ -853,3 +853,75 @@ func TestRecordReviewRejectsUnsettledWorkWithoutMutation(t *testing.T) {
 		})
 	}
 }
+
+func TestReopenFromPullRequestRecordsTheRoundItCreated(t *testing.T) {
+	dir := t.TempDir()
+	detail := completedReopenDetail()
+	detail.State.Plan.PullRequest = &PullRequest{Number: 21, URL: "https://github.com/owner/repo/pull/21", CreatedAt: detail.State.UpdatedAt, Branch: "feature", HeadSHA: "old-head"}
+	detail.State.Plan.Review = &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Head: "old-head", ReviewedAt: detail.State.UpdatedAt}
+	detail.State.Plan.PRFeedbackTriage = PRFeedbackTriageResult{
+		"PRRT_change": {Kind: "change", Rationale: "Requests a lifecycle fix."},
+	}
+	writeStartSliceArtifacts(t, dir, detail)
+	record := testRecord(dir, detail)
+	reopenedAt := time.Date(2026, 9, 17, 9, 0, 0, 0, time.UTC)
+	newSlices := []Slice{newReopenSlice("r201-pr-fix", "Fix pull request feedback", reopenedAt)}
+
+	roundEvents := func() []Event {
+		var rounds []Event
+		for _, event := range readRecordTestEvents(t, dir) {
+			if event.Type == EventTypeReworkRound {
+				rounds = append(rounds, event)
+			}
+		}
+		return rounds
+	}
+
+	if err := record.ReopenFromPullRequest(newSlices, []string{"PRRT_change"}, reopenedAt); err != nil {
+		t.Fatal(err)
+	}
+	rounds := roundEvents()
+	if len(rounds) != 1 {
+		t.Fatalf("rework round events = %#v, want exactly one for the round the reopen created", rounds)
+	}
+
+	// The same atomic transaction stays idempotent now that it records two
+	// events: the recorded-event check and the emission must agree.
+	if err := record.ReopenFromPullRequest(newSlices, []string{"PRRT_change"}, reopenedAt); err != nil {
+		t.Fatalf("retry atomic reopen: %v", err)
+	}
+	if rounds = roundEvents(); len(rounds) != 1 {
+		t.Fatalf("retried reopen duplicated rework round events: %#v", rounds)
+	}
+	if rounds[0].Round != 2 || !rounds[0].Timestamp.Equal(reopenedAt) || rounds[0].MutationID == "" {
+		t.Fatalf("pull-request rework round event = %#v", rounds[0])
+	}
+	// A pull-request round opens a window rather than consuming an automatic
+	// attempt, so it carries no attempt or fingerprint evidence.
+	if rounds[0].Attempts != 0 || rounds[0].Fingerprint != "" {
+		t.Fatalf("pull-request round carried automatic attempt evidence: %#v", rounds[0])
+	}
+}
+
+func TestReopenFromPullRequestOmitsRoundEventForUnencodedSlices(t *testing.T) {
+	dir := t.TempDir()
+	detail := completedReopenDetail()
+	detail.State.Plan.PullRequest = &PullRequest{Number: 22, URL: "https://github.com/owner/repo/pull/22", CreatedAt: detail.State.UpdatedAt, Branch: "feature", HeadSHA: "old-head"}
+	detail.State.Plan.Review = &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Head: "old-head", ReviewedAt: detail.State.UpdatedAt}
+	detail.State.Plan.PRFeedbackTriage = PRFeedbackTriageResult{
+		"PRRT_change": {Kind: "change", Rationale: "Requests a lifecycle fix."},
+	}
+	writeStartSliceArtifacts(t, dir, detail)
+	record := testRecord(dir, detail)
+	reopenedAt := time.Date(2026, 9, 17, 10, 0, 0, 0, time.UTC)
+
+	if err := record.ReopenFromPullRequest([]Slice{newReopenSlice("002-pr-fix", "Fix pull request feedback", reopenedAt)}, []string{"PRRT_change"}, reopenedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, event := range readRecordTestEvents(t, dir) {
+		if event.Type == EventTypeReworkRound {
+			t.Fatalf("unencoded reopen slices recorded a rework round: %#v", event)
+		}
+	}
+}

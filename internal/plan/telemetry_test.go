@@ -2,6 +2,7 @@ package plan
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 )
 
@@ -82,6 +83,184 @@ func TestSummarizeRework(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := SummarizeRework(tt.events); got != tt.want {
 				t.Fatalf("SummarizeRework() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProjectReworkChurn(t *testing.T) {
+	review := func(sliceID string, findings ...ReviewFinding) Event {
+		return Event{
+			Type:    EventTypePlanReviewed,
+			SliceID: sliceID,
+			Review: &PlanReview{
+				Status:        ReviewStatusCompleted,
+				Verdict:       ReviewVerdictChangesRequested,
+				FindingsCount: len(findings),
+				Findings:      findings,
+			},
+		}
+	}
+	finding := func(file string, line int) ReviewFinding {
+		return ReviewFinding{Severity: "important", File: file, Line: line, Message: "case-study finding"}
+	}
+	completedRounds := func(findings ...ReviewFinding) []Event {
+		events := make([]Event, 0, len(findings)*3)
+		for index, item := range findings {
+			requestedRound := index + 1
+			events = append(events, review("", item))
+			if requestedRound < len(findings) {
+				events = append(events,
+					Event{Type: EventTypePlanReopened},
+					Event{Type: EventTypeReworkRound, Round: requestedRound},
+				)
+			}
+		}
+		return events
+	}
+
+	tests := []struct {
+		name       string
+		baseline   int
+		stopBefore int
+		events     []Event
+		want       ReworkChurn
+	}{
+		{
+			name:       "workflow recovery stops before round seven opens",
+			stopBefore: 7,
+			events: completedRounds(
+				finding("internal/run/run.go", 81),
+				finding("internal/workspace/resolve.go", 144),
+				finding("internal/run/run.go", 82),
+				finding("internal/workspace/resolve.go", 145),
+				finding("internal/run/run.go", 83),
+				finding("internal/run/run.go", 84),
+				finding("internal/workspace/resolve.go", 146),
+			),
+			want: ReworkChurn{
+				Rounds: []int{1, 2, 3, 4, 5, 6, 7},
+				FileRounds: map[string][]int{
+					"internal/run/run.go":           {1, 3, 5, 6},
+					"internal/workspace/resolve.go": {2, 4, 7},
+				},
+				AnchorRounds: map[string][]int{
+					"internal/run/run.go:81":            {1},
+					"internal/run/run.go:82":            {3},
+					"internal/run/run.go:83":            {5},
+					"internal/run/run.go:84":            {6},
+					"internal/workspace/resolve.go:144": {2},
+					"internal/workspace/resolve.go:145": {4},
+					"internal/workspace/resolve.go:146": {7},
+				},
+			},
+		},
+		{
+			name:       "verification repair stops before round four opens",
+			stopBefore: 4,
+			events: completedRounds(
+				finding("internal/plan/derive.go", 180),
+				finding("internal/plan/derive.go", 181),
+				finding("internal/plan/derive.go", 205),
+				finding("internal/run/run.go", 42),
+			),
+			want: ReworkChurn{
+				Rounds: []int{1, 2, 3, 4},
+				FileRounds: map[string][]int{
+					"internal/plan/derive.go": {1, 2, 3},
+					"internal/run/run.go":     {4},
+				},
+				AnchorRounds: map[string][]int{
+					"internal/plan/derive.go:180": {1},
+					"internal/plan/derive.go:181": {2},
+					"internal/plan/derive.go:205": {3},
+					"internal/run/run.go:42":      {4},
+				},
+			},
+		},
+		{
+			name:       "stale merge intent stops before round three opens",
+			stopBefore: 3,
+			events: completedRounds(
+				finding("internal/merge/intent.go", 55),
+				finding("internal\\merge\\intent.go", 72),
+				finding("internal/merge/tmp/../intent.go/", 55),
+			),
+			want: ReworkChurn{
+				Rounds:     []int{1, 2, 3},
+				FileRounds: map[string][]int{"internal/merge/intent.go": {1, 2, 3}},
+				AnchorRounds: map[string][]int{
+					"internal/merge/intent.go:55": {1, 3},
+					"internal/merge/intent.go:72": {2},
+				},
+			},
+		},
+		{
+			name:   "unrelated files remain distinct",
+			events: completedRounds(finding("first.go", 10), finding("second.go", 20)),
+			want: ReworkChurn{
+				Rounds:       []int{1, 2},
+				FileRounds:   map[string][]int{"first.go": {1}, "second.go": {2}},
+				AnchorRounds: map[string][]int{"first.go:10": {1}, "second.go:20": {2}},
+			},
+		},
+		{
+			name:     "baseline excludes earlier rounds",
+			baseline: 1,
+			events:   completedRounds(finding("initial.go", 1), finding("shared.go", 10), finding("shared.go", 10)),
+			want: ReworkChurn{
+				Rounds:       []int{2, 3},
+				FileRounds:   map[string][]int{"shared.go": {2, 3}},
+				AnchorRounds: map[string][]int{"shared.go:10": {2, 3}},
+			},
+		},
+		{
+			name:     "encoded slice round reconciles ordering mismatch",
+			baseline: 1,
+			events: []Event{
+				review("", finding("initial.go", 1)),
+				review("r301-fix", finding("mismatch.go", 30)),
+				review("", finding("after.go", 40)),
+			},
+			want: ReworkChurn{
+				Rounds:       []int{3, 4},
+				FileRounds:   map[string][]int{"mismatch.go": {3}, "after.go": {4}},
+				AnchorRounds: map[string][]int{"mismatch.go:30": {3}, "after.go:40": {4}},
+			},
+		},
+		{
+			name: "rework event reconciles missing encoded slice",
+			events: []Event{
+				review("", finding("initial.go", 1)),
+				{Type: EventTypeReworkRound, Round: 3},
+				review("", finding("after.go", 40)),
+			},
+			want: ReworkChurn{
+				Rounds:       []int{1, 4},
+				FileRounds:   map[string][]int{"initial.go": {1}, "after.go": {4}},
+				AnchorRounds: map[string][]int{"initial.go:1": {1}, "after.go:40": {4}},
+			},
+		},
+		{name: "events absent"},
+		{
+			name: "legacy findings count without payload degrades empty",
+			events: []Event{
+				review("", finding("initial.go", 1)),
+				review("", finding("visible.go", 2)),
+				{Type: EventTypePlanReviewed, Review: &PlanReview{Status: ReviewStatusCompleted, FindingsCount: 1}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ProjectReworkChurn(tt.events, tt.baseline); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("ProjectReworkChurn() = %#v, want %#v", got, tt.want)
+			}
+			for _, event := range tt.events {
+				if tt.stopBefore > 0 && event.Type == EventTypeReworkRound && event.Round >= tt.stopBefore {
+					t.Fatalf("fixture opened rework round %d before the round-%d stop decision", event.Round, tt.stopBefore)
+				}
 			}
 		})
 	}
@@ -259,5 +438,152 @@ func TestAgentTelemetryBudgetWarningsUsePlanThresholds(t *testing.T) {
 	}
 	if planWarning == nil || planWarning.Threshold != 150000 || planWarning.Observed != 160000 {
 		t.Fatalf("unexpected plan warning: %+v", planWarning)
+	}
+}
+
+func TestProjectReviewRoundsAssignsRequestedRoundsFromDurableOrdering(t *testing.T) {
+	findings := func(file string) *PlanReview {
+		return &PlanReview{
+			Status:        ReviewStatusCompleted,
+			Verdict:       ReviewVerdictChangesRequested,
+			FindingsCount: 1,
+			Findings:      []ReviewFinding{{File: file, Line: 12, Message: file}},
+		}
+	}
+	events := []Event{
+		{Type: EventTypePlanReviewed, Review: findings("first.go")},
+		{Type: EventTypeReworkRound, Round: 1},
+		{Type: EventTypePlanReviewed, Review: &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictChangesRequested}},
+		{Type: EventTypePlanReviewed, Review: findings("second.go")},
+		{Type: EventTypeReworkRound, Round: 2},
+		{Type: EventTypePlanReviewed, SliceID: "r701-encoded", Review: findings("third.go")},
+		{Type: EventTypePlanReviewed, Review: findings("fourth.go")},
+	}
+
+	rounds, complete := ProjectReviewRounds(events)
+	if !complete {
+		t.Fatal("durable findings payloads reported incomplete")
+	}
+	want := []int{1, 2, 7, 8}
+	got := make([]int, 0, len(rounds))
+	for _, round := range rounds {
+		got = append(got, round.Round)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("assigned rounds = %#v, want %#v", got, want)
+	}
+	if file := rounds[0].Event.Review.Findings[0].File; file != "first.go" {
+		t.Fatalf("round one review = %q, want the initial findings review", file)
+	}
+}
+
+func TestProjectReviewRoundsReportsIncompleteLegacyFindingPayloads(t *testing.T) {
+	events := []Event{
+		{Type: EventTypePlanReviewed, Review: &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictChangesRequested, FindingsCount: 2}},
+	}
+	rounds, complete := ProjectReviewRounds(events)
+	if complete {
+		t.Fatal("counted findings without a payload reported complete")
+	}
+	if len(rounds) != 0 {
+		t.Fatalf("assigned rounds = %#v, want none", rounds)
+	}
+}
+
+func TestProjectReviewRoundsIgnoresNonBlockingReviewFindings(t *testing.T) {
+	blocking := func(file string) *PlanReview {
+		return &PlanReview{
+			Status:        ReviewStatusCompleted,
+			Verdict:       ReviewVerdictChangesRequested,
+			FindingsCount: 1,
+			Findings:      []ReviewFinding{{File: file, Line: 47, Message: file}},
+		}
+	}
+	nonBlocking := func(verdict, file string) *PlanReview {
+		return &PlanReview{
+			Status:        ReviewStatusCompleted,
+			Verdict:       verdict,
+			FindingsCount: 1,
+			Findings:      []ReviewFinding{{File: file, Line: 47, Message: file}},
+		}
+	}
+	events := []Event{
+		{Type: EventTypePlanReviewed, Review: blocking("recurring.go")},
+		{Type: EventTypeReworkRound, Round: 1},
+		{Type: EventTypePlanReviewed, Review: nonBlocking(ReviewVerdictComment, "recurring.go")},
+		{Type: EventTypePlanReviewed, Review: nonBlocking(ReviewVerdictApprove, "recurring.go")},
+		{Type: EventTypePlanReviewed, Review: blocking("recurring.go")},
+	}
+
+	rounds, complete := ProjectReviewRounds(events)
+	if !complete {
+		t.Fatal("non-blocking findings reported an incomplete payload")
+	}
+	want := []int{1, 2}
+	got := make([]int, 0, len(rounds))
+	for _, round := range rounds {
+		got = append(got, round.Round)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("assigned rounds = %#v, want %#v; comment and approve reviews must not consume rounds", got, want)
+	}
+
+	churn := ProjectReworkChurn(events, 0)
+	if got, want := churn.FileRounds["recurring.go"], []int{1, 2}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("file rounds = %#v, want %#v; non-blocking findings must not reach churn", got, want)
+	}
+	if got, want := churn.AnchorRounds["recurring.go:47"], []int{1, 2}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("anchor rounds = %#v, want %#v; non-blocking findings must not reach churn", got, want)
+	}
+}
+
+func TestProjectReworkChurnCountsFirstReviewAfterPullRequestReopen(t *testing.T) {
+	blocking := func(file string, line int) *PlanReview {
+		return &PlanReview{
+			Status:        ReviewStatusCompleted,
+			Verdict:       ReviewVerdictChangesRequested,
+			FindingsCount: 1,
+			Findings:      []ReviewFinding{{File: file, Line: line, Message: file}},
+		}
+	}
+	// A pull-request reopen creates round 2 and now records it durably. That
+	// round becomes the fresh baseline, so the Tao reviews that follow must be
+	// assigned rounds 3, 4 and 5 rather than reusing the baseline round.
+	events := []Event{
+		{Type: EventTypePlanReviewed, Review: blocking("pre-pr.go", 1)},
+		{Type: EventTypePlanReopened},
+		{Type: EventTypeReworkRound, Round: 2},
+		{Type: EventTypePlanReviewed, Review: blocking("recurring.go", 47)},
+		{Type: EventTypeReworkRound, Round: 3},
+		{Type: EventTypePlanReviewed, Review: blocking("recurring.go", 47)},
+		{Type: EventTypeReworkRound, Round: 4},
+		{Type: EventTypePlanReviewed, Review: blocking("recurring.go", 47)},
+	}
+
+	rounds, complete := ProjectReviewRounds(events)
+	if !complete {
+		t.Fatal("durable findings payloads reported incomplete")
+	}
+	want := []int{1, 3, 4, 5}
+	got := make([]int, 0, len(rounds))
+	for _, round := range rounds {
+		got = append(got, round.Round)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("assigned rounds = %#v, want %#v; the first post-reopen review must follow the recorded round", got, want)
+	}
+
+	// Under the fresh pull-request baseline every post-baseline review counts,
+	// so three recurrences of one file reach the recurrence threshold here
+	// rather than one review later.
+	churn := ProjectReworkChurn(events, 2)
+	if got, want := churn.FileRounds["recurring.go"], []int{3, 4, 5}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("post-baseline file rounds = %#v, want %#v", got, want)
+	}
+	if got, want := churn.AnchorRounds["recurring.go:47"], []int{3, 4, 5}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("post-baseline anchor rounds = %#v, want %#v", got, want)
+	}
+	if _, carried := churn.FileRounds["pre-pr.go"]; carried {
+		t.Fatal("pre-reopen findings leaked past the fresh pull-request baseline")
 	}
 }

@@ -222,10 +222,11 @@ func (a App) executeResolvedRun(ctx context.Context, repo planRunRepository, inp
 		firstExecution := true
 		driver := newReworkDriver(repo, a.now)
 		return driver.Run(ownedCtx, request.Input, reworkpkg.RunOptions{
-			Enabled:        policy.Enabled,
-			MaxAttempts:    policy.MaxAttempts,
-			AllowRestart:   reworkRestart,
-			BeforeDecision: automaticReworkPhaseHook(policy.MaxAttempts, policy.Enabled),
+			Enabled:          policy.Enabled,
+			MaxAttempts:      policy.MaxAttempts,
+			BudgetThresholds: runtimeconfig.RuntimeAgentBudgetThresholds(),
+			AllowRestart:     reworkRestart,
+			BeforeDecision:   automaticReworkPhaseHook(policy.MaxAttempts, policy.Enabled),
 			Execute: func(executeCtx context.Context) error {
 				err := executeSinglePlan(service, executeCtx, request)
 				if firstExecution {

@@ -139,6 +139,9 @@ func renderPlanDetailWithThresholds(out io.Writer, loaded planview.Plan, thresho
 	if err := planview.RenderAgentBudgetWarnings(out, plan.AgentBudgetWarnings(detail, thresholds)); err != nil {
 		return err
 	}
+	if err := planview.RenderShowRework(out, planview.ProjectShowRework(detail.Events)); err != nil {
+		return err
+	}
 	if stats := detail.PlanningSession.Stats; stats != nil {
 		planningSummary := plan.SummarizePlanningSessionMetrics(stats, state.CreatedAt)
 		if err := writeln(out, "\nPlanning Session:"); err != nil {

@@ -864,9 +864,14 @@ func (r *PlanRecord) ReopenFromPullRequest(newSlices []Slice, consumedThreadIDs 
 	}
 	slices.Sort(threadIDs)
 
+	round := reworkRoundOfSlices(newSlices)
+
 	return r.apply(func(detail *PlanDetail) (lifecycleMutation, error) {
-		expected := Event{Type: EventTypePlanReopened, Timestamp: now, PlanID: detail.State.Plan.ID, Message: "Plan reopened for rework"}
-		if semanticEventsWereRecorded(detail.Events, []Event{expected}) && reopenPostconditionMatches(detail, newSlices) && prFeedbackThreadsConsumed(detail.State.Plan.PRFeedbackConsumedThreadIDs, threadIDs) {
+		expected := []Event{planReopenedEvent(detail.State.Plan.ID, now)}
+		if round > 0 {
+			expected = append(expected, pullRequestReworkRoundEvent(detail.State.Plan.ID, round, now))
+		}
+		if semanticEventsWereRecorded(detail.Events, expected) && reopenPostconditionMatches(detail, newSlices) && prFeedbackThreadsConsumed(detail.State.Plan.PRFeedbackConsumedThreadIDs, threadIDs) {
 			return unchangedLifecycleMutation(detail), nil
 		}
 		return applyLifecycleMutation(detail, func(changes *ArtifactChangeSet) ([]Event, error) {
@@ -887,9 +892,24 @@ func (r *PlanRecord) ReopenFromPullRequest(newSlices []Slice, consumedThreadIDs 
 				return nil, err
 			}
 			detail.State.Plan.PRFeedbackConsumedThreadIDs = append(detail.State.Plan.PRFeedbackConsumedThreadIDs, threadIDs...)
-			return []Event{event}, nil
+			if round <= 0 {
+				return []Event{event}, nil
+			}
+			return []Event{event, pullRequestReworkRoundEvent(detail.State.Plan.ID, round, now)}, nil
 		})
 	})
+}
+
+// reworkRoundOfSlices reports the round encoded in generated rework slice IDs,
+// or zero when the slices carry no durable round encoding.
+func reworkRoundOfSlices(newSlices []Slice) int {
+	round := 0
+	for _, slice := range newSlices {
+		if encoded := ReworkRoundFromSliceID(slice.ID); encoded > round {
+			round = encoded
+		}
+	}
+	return round
 }
 
 func prFeedbackThreadsConsumed(consumed []string, threadIDs []string) bool {

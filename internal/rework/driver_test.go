@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"slices"
 	"strings"
@@ -104,7 +105,7 @@ func TestDriverDecideReturnsZeroForNonActionablePlan(t *testing.T) {
 		return &plan.PlanDetail{State: plan.State{Status: plan.StatusReviewed}}, nil
 	}}
 
-	got, err := driver.Decide(context.Background(), "plan", 0, 0, "", 5)
+	got, err := driver.Decide(context.Background(), "plan", 0, 0, "", 5, plan.AgentBudgetThresholds{})
 	if err != nil {
 		t.Fatalf("Decide returned error: %v", err)
 	}
@@ -117,7 +118,7 @@ func TestDriverDecideStopsAtCapUsingRoundBaseline(t *testing.T) {
 	detail := actionableDriverDetail(5)
 	driver := Driver{Resolve: fixedDriverResolver(detail), Record: fixedAutomaticRecordFactory}
 
-	got, err := driver.Decide(context.Background(), "plan", 2, 1, "", 3)
+	got, err := driver.Decide(context.Background(), "plan", 2, 1, "", 3, plan.AgentBudgetThresholds{})
 	if err != nil {
 		t.Fatalf("Decide returned error: %v", err)
 	}
@@ -142,7 +143,7 @@ func TestDriverDecideFailsClosedWhenStopCannotSettle(t *testing.T) {
 		},
 	}
 
-	got, err := driver.Decide(context.Background(), "plan", 0, 1, "", 1)
+	got, err := driver.Decide(context.Background(), "plan", 0, 1, "", 1, plan.AgentBudgetThresholds{})
 	if err == nil {
 		t.Fatal("Decide unexpectedly published an unsettled stop")
 	}
@@ -171,7 +172,7 @@ func TestDriverDecideFailsClosedWhenAutomaticReopenCannotSettle(t *testing.T) {
 		},
 	}
 
-	got, err := driver.Decide(context.Background(), "plan", 0, 0, "", 5)
+	got, err := driver.Decide(context.Background(), "plan", 0, 0, "", 5, plan.AgentBudgetThresholds{})
 	if err == nil {
 		t.Fatal("Decide unexpectedly published an unsettled rework round")
 	}
@@ -203,7 +204,7 @@ func TestDriverDecideStopsOnEquivalentConsecutiveFindings(t *testing.T) {
 	}})
 	driver := Driver{Resolve: fixedDriverResolver(detail), Record: fixedAutomaticRecordFactory}
 
-	got, err := driver.Decide(context.Background(), "plan", 1, 0, fingerprint, 5)
+	got, err := driver.Decide(context.Background(), "plan", 1, 0, fingerprint, 5, plan.AgentBudgetThresholds{})
 	if err != nil {
 		t.Fatalf("Decide returned error: %v", err)
 	}
@@ -233,7 +234,7 @@ func TestDriverDecideContinuesForDistinctSameFileFindings(t *testing.T) {
 		Record:  func(detail *plan.PlanDetail) (AutomaticRecord, error) { return &driverRecord{detail: detail}, nil },
 	}
 
-	got, err := driver.Decide(context.Background(), "plan", 1, 0, previous, 5)
+	got, err := driver.Decide(context.Background(), "plan", 1, 0, previous, 5, plan.AgentBudgetThresholds{})
 	if err != nil {
 		t.Fatalf("Decide returned error: %v", err)
 	}
@@ -257,16 +258,17 @@ func TestDriverDecideStopsOnRecurringFilesWithoutMutation(t *testing.T) {
 		Now: func() time.Time { return time.Date(2026, 7, 29, 22, 0, 0, 0, time.UTC) },
 	}
 
-	got, err := driver.Decide(context.Background(), "plan", 0, 0, previous, 5)
+	got, err := driver.Decide(context.Background(), "plan", 0, 0, previous, 5, plan.AgentBudgetThresholds{})
 	if err != nil {
 		t.Fatalf("Decide returned error: %v", err)
 	}
 	wantFiles := []string{"store/file.go"}
-	if got.Reworked || got.StopKind != StopKindRecurringFiles || !slices.Equal(got.RecurringFiles, wantFiles) {
+	if got.Reworked || got.StopKind != StopKindFileRecurrence || !slices.Equal(got.RecurringFiles, wantFiles) {
 		t.Fatalf("recurring-file decision = %+v", got)
 	}
-	if got.StopReason != recurringFilesStopReason(wantFiles) {
-		t.Fatalf("stop reason = %q", got.StopReason)
+	wantRounds := map[string][]int{"store/file.go": {1, 2, 3}}
+	if got.StopReason != fileRecurrenceStopReason([]recurringFileRounds{{File: "store/file.go", Rounds: []int{1, 2, 3}}}) || !reflect.DeepEqual(got.RecurringFileRounds, wantRounds) {
+		t.Fatalf("stop evidence = (%q, %#v), want rounds %#v", got.StopReason, got.RecurringFileRounds, wantRounds)
 	}
 	if got.Fingerprint == previous || !reflect.DeepEqual(got.Findings, ReviewFindings(detail)) {
 		t.Fatalf("recurring-file evidence = %+v, previous fingerprint %q", got, previous)
@@ -287,6 +289,228 @@ func TestDriverDecideStopsOnRecurringFilesWithoutMutation(t *testing.T) {
 	}
 	if stoppedEvent.PlanID != "plan" || stoppedEvent.Round != 2 || stoppedEvent.Attempts != 2 || stoppedEvent.Fingerprint != got.Fingerprint || stoppedEvent.Reason != got.StopReason || stoppedEvent.Message != got.StopReason {
 		t.Fatalf("rework_stopped event = %+v", *stoppedEvent)
+	}
+}
+
+func TestDriverDecideUsesWindowWideFileRecurrenceCaseStudies(t *testing.T) {
+	tests := []struct {
+		name      string
+		files     []string
+		wantRound int
+		wantStop  bool
+		wantFile  string
+		wantAt    []int
+	}{
+		{
+			name: "workflow recovery stops at round seven",
+			files: []string{
+				"internal/run/run.go", "internal/workspace/resolve.go", "internal/run/run.go",
+				"internal/workspace/resolve.go", "internal/run/run.go", "internal/run/run.go",
+				"internal/workspace/resolve.go",
+			},
+			wantRound: 7, wantStop: true, wantFile: "internal/workspace/resolve.go", wantAt: []int{2, 4, 7},
+		},
+		{
+			name: "verification repair stops at round four after finding moves",
+			files: []string{
+				"internal/plan/derive.go", "internal/plan/derive.go", "internal/plan/derive.go", "internal/run/run.go",
+			},
+			wantRound: 4, wantStop: true, wantFile: "internal/plan/derive.go", wantAt: []int{1, 2, 3},
+		},
+		{
+			name:      "two unrelated rounds do not stop",
+			files:     []string{"first.go", "second.go"},
+			wantRound: 2,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			detail := actionableDriverDetail(test.wantRound)
+			detail.Events = []plan.Event{{
+				Type:   plan.EventTypePlanReviewed,
+				Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, Findings: []plan.ReviewFinding{{File: "initial.go", Message: "initial"}}, FindingsCount: 1},
+			}}
+			for round, file := range test.files {
+				finding := plan.ReviewFinding{Severity: "major", File: file, Line: round + 1, Message: fmt.Sprintf("round %d finding", round+1)}
+				detail.Events = append(detail.Events, plan.Event{
+					Type: plan.EventTypePlanReviewed, SliceID: fmt.Sprintf("r%d01-finding", round+1),
+					Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, Findings: []plan.ReviewFinding{finding}, FindingsCount: 1},
+				})
+				if round == len(test.files)-1 {
+					detail.State.Plan.Review.Findings = []plan.ReviewFinding{finding}
+				}
+			}
+			driver := Driver{Resolve: fixedDriverResolver(detail), Record: fixedAutomaticRecordFactory}
+			got, err := driver.Decide(context.Background(), "plan", 0, 0, "distinct-previous-fingerprint", 10, plan.AgentBudgetThresholds{})
+			if err != nil {
+				t.Fatalf("Decide returned error: %v", err)
+			}
+			if test.wantStop {
+				if got.StopKind != StopKindFileRecurrence || got.Round != test.wantRound || !slices.Equal(got.RecurringFileRounds[test.wantFile], test.wantAt) {
+					t.Fatalf("decision = %+v, want recurrence of %s at %v in round %d", got, test.wantFile, test.wantAt, test.wantRound)
+				}
+			} else if !got.Reworked || got.StopKind != StopKindNone {
+				t.Fatalf("decision = %+v, want another rework round", got)
+			}
+		})
+	}
+}
+
+func TestDriverDecideStopsOnStaleMergeIntentPlanBudgetAtRoundThree(t *testing.T) {
+	detail := actionableDriverDetail(3)
+	detail.Events = []plan.Event{{
+		Type:    plan.EventTypeAgentMetrics,
+		Metrics: &plan.AgentMetrics{SessionID: "stale-merge-intent-recovery", ToolCalls: 516, AssistantMessages: 320},
+	}}
+	driver := Driver{Resolve: fixedDriverResolver(detail), Record: fixedAutomaticRecordFactory}
+
+	got, err := driver.Decide(context.Background(), "plan", 0, 0, "distinct-previous-fingerprint", 10, plan.DefaultAgentBudgetThresholds())
+	if err != nil {
+		t.Fatalf("Decide returned error: %v", err)
+	}
+	warning := planBudgetWarning{Metric: "tool_calls", Observed: 516, Threshold: 400}
+	if got.StopKind != StopKindPlanBudget || got.Round != 3 || got.StopReason != planBudgetStopReason(warning) {
+		t.Fatalf("decision = %+v, want tool-call budget stop at round 3", got)
+	}
+	for _, want := range []string{"plan agent budget warning", "tool_calls", "observed 516", "threshold 400"} {
+		if message := FormatStopMessage(got); !strings.Contains(message, want) {
+			t.Errorf("stop message %q does not contain %q", message, want)
+		}
+	}
+}
+
+func TestDriverDecidePlanBudgetFailsOpenAndRequiresTwoSpentRounds(t *testing.T) {
+	tests := []struct {
+		name       string
+		round      int
+		metrics    *plan.AgentMetrics
+		thresholds plan.AgentBudgetThresholds
+	}{
+		{name: "only one round spent", round: 1, metrics: &plan.AgentMetrics{SessionID: "one", ToolCalls: 516}, thresholds: plan.DefaultAgentBudgetThresholds()},
+		{name: "missing metrics", round: 3, thresholds: plan.DefaultAgentBudgetThresholds()},
+		{name: "malformed infinite metric", round: 3, metrics: &plan.AgentMetrics{SessionID: "bad", Cost: math.Inf(1)}, thresholds: plan.DefaultAgentBudgetThresholds()},
+		{name: "slice scope warning only", round: 3, metrics: &plan.AgentMetrics{SessionID: "slice", ToolCalls: 516}, thresholds: plan.AgentBudgetThresholds{Slice: plan.AgentBudgetScopeThresholds{ToolCalls: 120}, Plan: plan.AgentBudgetScopeThresholds{ToolCalls: 1000}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			detail := actionableDriverDetail(test.round)
+			if test.metrics != nil {
+				detail.Events = []plan.Event{{Type: plan.EventTypeAgentMetrics, SliceID: "003-work", Metrics: test.metrics}}
+			}
+			driver := Driver{Resolve: fixedDriverResolver(detail), Record: fixedAutomaticRecordFactory}
+			got, err := driver.Decide(context.Background(), "plan", 0, 0, "distinct-previous-fingerprint", 10, test.thresholds)
+			if err != nil {
+				t.Fatalf("Decide returned error: %v", err)
+			}
+			if !got.Reworked || got.StopKind != StopKindNone {
+				t.Fatalf("decision = %+v, want fail-open rework", got)
+			}
+		})
+	}
+}
+
+func TestDriverDecideConcreteRecurrencePrecedesPlanBudget(t *testing.T) {
+	detail, previous := recurringDriverDetail()
+	detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypeAgentMetrics, Metrics: &plan.AgentMetrics{SessionID: "large", ToolCalls: 516}})
+	driver := Driver{Resolve: fixedDriverResolver(detail), Record: fixedAutomaticRecordFactory}
+
+	got, err := driver.Decide(context.Background(), "plan", 0, 0, previous, 10, plan.DefaultAgentBudgetThresholds())
+	if err != nil {
+		t.Fatalf("Decide returned error: %v", err)
+	}
+	if got.StopKind != StopKindFileRecurrence {
+		t.Fatalf("stop kind = %q, want concrete file recurrence before plan budget", got.StopKind)
+	}
+}
+
+func TestDriverDecideStopsOnWorkflowRecoveryAnchorReversalBeforeFileRecurrence(t *testing.T) {
+	detail := actionableDriverDetail(8)
+	detail.Events = []plan.Event{{
+		Type:   plan.EventTypePlanReviewed,
+		Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, FindingsCount: 1, Findings: []plan.ReviewFinding{{File: "initial.go", Line: 1, Message: "initial"}}},
+	}}
+	for round := 1; round <= 8; round++ {
+		finding := plan.ReviewFinding{Severity: "major", File: fmt.Sprintf("round-%d.go", round), Line: round, Message: fmt.Sprintf("round %d finding", round)}
+		if round == 1 {
+			finding = plan.ReviewFinding{Severity: "major", File: "internal/plan/verification_repair.go", Line: 47, Message: "the check is too strict"}
+		}
+		if round == 4 {
+			finding = plan.ReviewFinding{Severity: "major", File: "internal/plan/verification_repair.go", Line: 48, Message: "preserve the bounded path"}
+		}
+		if round == 8 {
+			finding = plan.ReviewFinding{Severity: "major", File: "./internal/plan/verification_repair.go", Line: 47, Message: "the counting is never capped"}
+		}
+		detail.Events = append(detail.Events, plan.Event{
+			Type: plan.EventTypePlanReviewed, SliceID: fmt.Sprintf("r%d01-finding", round),
+			Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, FindingsCount: 1, Findings: []plan.ReviewFinding{finding}},
+		})
+		if round == 8 {
+			detail.State.Plan.Review.Findings = []plan.ReviewFinding{finding}
+		}
+	}
+	driver := Driver{Resolve: fixedDriverResolver(detail), Record: fixedAutomaticRecordFactory}
+
+	got, err := driver.Decide(context.Background(), "plan", 0, 0, "distinct-previous-fingerprint", 10, plan.AgentBudgetThresholds{})
+	if err != nil {
+		t.Fatalf("Decide returned error: %v", err)
+	}
+	anchor := "internal/plan/verification_repair.go:47"
+	if got.StopKind != StopKindAnchorReversal || !slices.Equal(got.AnchorRounds[anchor], []int{1, 8}) {
+		t.Fatalf("decision = %+v, want anchor reversal at rounds 1 and 8", got)
+	}
+	if got.StopReason != anchorReversalStopReason([]anchorReversalRounds{{Anchor: anchor, Rounds: []int{1, 8}}}) {
+		t.Fatalf("stop reason = %q", got.StopReason)
+	}
+	message := FormatStopMessage(got)
+	for _, want := range []string{anchor, "round 1: the check is too strict", "round 8: the counting is never capped"} {
+		if !strings.Contains(message, want) {
+			t.Errorf("stop message %q does not contain %q", message, want)
+		}
+	}
+}
+
+func TestDriverDecideNullLinesDoNotFormSharedAnchor(t *testing.T) {
+	detail := actionableDriverDetail(2)
+	detail.Events = []plan.Event{{Type: plan.EventTypePlanReviewed, Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted}}}
+	for round, message := range []string{"first unanchored finding", "second unanchored finding"} {
+		finding := plan.ReviewFinding{Severity: "major", File: "shared.go", Line: 0, Message: message}
+		detail.Events = append(detail.Events, plan.Event{
+			Type: plan.EventTypePlanReviewed, SliceID: fmt.Sprintf("r%d01-finding", round+1),
+			Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, FindingsCount: 1, Findings: []plan.ReviewFinding{finding}},
+		})
+		if round == 1 {
+			detail.State.Plan.Review.Findings = []plan.ReviewFinding{finding}
+		}
+	}
+	driver := Driver{Resolve: fixedDriverResolver(detail), Record: fixedAutomaticRecordFactory}
+
+	got, err := driver.Decide(context.Background(), "plan", 0, 0, "distinct-previous-fingerprint", 10, plan.AgentBudgetThresholds{})
+	if err != nil {
+		t.Fatalf("Decide returned error: %v", err)
+	}
+	if !got.Reworked || got.StopKind != StopKindNone {
+		t.Fatalf("decision = %+v, want another rework round", got)
+	}
+}
+
+func TestDriverDecideLegacyReviewWithoutFindingPayloadDoesNotStop(t *testing.T) {
+	detail := actionableDriverDetail(3)
+	detail.Events = []plan.Event{
+		{Type: plan.EventTypePlanReviewed, Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, FindingsCount: 1, Findings: []plan.ReviewFinding{{File: "initial.go", Message: "initial"}}}},
+		{Type: plan.EventTypePlanReviewed, SliceID: "r101-finding", Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, FindingsCount: 1, Findings: []plan.ReviewFinding{{File: "shared.go", Message: "first"}}}},
+		{Type: plan.EventTypePlanReviewed, SliceID: "r201-finding", Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, FindingsCount: 1}},
+		{Type: plan.EventTypePlanReviewed, SliceID: "r301-finding", Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, FindingsCount: 1, Findings: []plan.ReviewFinding{{File: "shared.go", Message: "third"}}}},
+	}
+	detail.State.Plan.Review.Findings = []plan.ReviewFinding{{Severity: "major", File: "shared.go", Message: "third"}}
+	driver := Driver{Resolve: fixedDriverResolver(detail), Record: fixedAutomaticRecordFactory}
+
+	got, err := driver.Decide(context.Background(), "plan", 0, 0, "distinct-previous-fingerprint", 10, plan.AgentBudgetThresholds{})
+	if err != nil {
+		t.Fatalf("Decide returned error: %v", err)
+	}
+	if !got.Reworked || got.StopKind != StopKindNone {
+		t.Fatalf("decision = %+v, want fail-open rework for legacy history", got)
 	}
 }
 
@@ -317,7 +541,7 @@ func TestDriverRunUsesPullRequestReopenAsFreshRecurringFilesBaseline(t *testing.
 		Resolve: fixedDriverResolver(detail),
 		Record:  func(detail *plan.PlanDetail) (AutomaticRecord, error) { return &driverRecord{detail: detail}, nil },
 	}
-	decision, err := driver.Decide(context.Background(), "plan", 0, 2, "stale-pre-PR-fingerprint", 2)
+	decision, err := driver.Decide(context.Background(), "plan", 0, 2, "stale-pre-PR-fingerprint", 2, plan.AgentBudgetThresholds{})
 	if err != nil {
 		t.Fatalf("Decide returned error: %v", err)
 	}
@@ -329,7 +553,7 @@ func TestDriverRunUsesPullRequestReopenAsFreshRecurringFilesBaseline(t *testing.
 func TestDriverLoopPersistsAttemptsFromPullRequestResetBaseline(t *testing.T) {
 	decisions := 0
 	persistedAttempts := -1
-	driver := Driver{DecideOne: func(context.Context, string, int, int, string, int) (Decision, error) {
+	driver := Driver{DecideOne: func(context.Context, string, int, int, string, int, plan.AgentBudgetThresholds) (Decision, error) {
 		decisions++
 		if decisions == 1 {
 			return Decision{Reworked: true, BaselineRound: 3, Round: 4, Fingerprint: "post-pr"}, nil
@@ -358,7 +582,7 @@ func TestDriverReviewDrivenReopenStillConsumesExistingBudget(t *testing.T) {
 	detail, _ := recurringDriverDetail()
 	driver := Driver{Resolve: fixedDriverResolver(detail), Record: fixedAutomaticRecordFactory}
 
-	decision, err := driver.Decide(context.Background(), "plan", 0, 0, "", 2)
+	decision, err := driver.Decide(context.Background(), "plan", 0, 0, "", 2, plan.AgentBudgetThresholds{})
 	if err != nil {
 		t.Fatalf("Decide returned error: %v", err)
 	}
@@ -393,12 +617,19 @@ func TestDriverDecideStopPrecedenceOverRecurringFiles(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			detail, previous := recurringDriverDetail()
+			for _, event := range detail.Events {
+				if event.Review != nil {
+					for index := range event.Review.Findings {
+						event.Review.Findings[index].Line = 42
+					}
+				}
+			}
 			driver := Driver{
 				Resolve: fixedDriverResolver(detail),
 				Record:  fixedAutomaticRecordFactory,
 			}
 
-			got, err := driver.Decide(context.Background(), "plan", 0, 0, test.previous(detail, previous), test.maxAttempts)
+			got, err := driver.Decide(context.Background(), "plan", 0, 0, test.previous(detail, previous), test.maxAttempts, plan.AgentBudgetThresholds{})
 			if err != nil {
 				t.Fatalf("Decide returned error: %v", err)
 			}
@@ -418,7 +649,7 @@ func TestDriverDecideLegacyFingerprintPermitsOneAdditionalRound(t *testing.T) {
 		Record:  func(detail *plan.PlanDetail) (AutomaticRecord, error) { return &driverRecord{detail: detail}, nil },
 	}
 
-	upgraded, err := driver.Decide(context.Background(), "plan", 1, 0, legacy, 5)
+	upgraded, err := driver.Decide(context.Background(), "plan", 1, 0, legacy, 5, plan.AgentBudgetThresholds{})
 	if err != nil {
 		t.Fatalf("Decide with legacy fingerprint returned error: %v", err)
 	}
@@ -429,7 +660,7 @@ func TestDriverDecideLegacyFingerprintPermitsOneAdditionalRound(t *testing.T) {
 	repeated := actionableDriverDetail(2)
 	repeated.State.Plan.Review.Findings = findings
 	driver = Driver{Resolve: fixedDriverResolver(repeated), Record: fixedAutomaticRecordFactory}
-	stopped, err := driver.Decide(context.Background(), "plan", 1, 1, upgraded.Fingerprint, 5)
+	stopped, err := driver.Decide(context.Background(), "plan", 1, 1, upgraded.Fingerprint, 5, plan.AgentBudgetThresholds{})
 	if err != nil {
 		t.Fatalf("Decide with upgraded fingerprint returned error: %v", err)
 	}
@@ -447,8 +678,13 @@ func TestStopKindForPersistedReason(t *testing.T) {
 		{name: "empty", want: StopKindNone},
 		{name: "cap", reason: "automatic rework cap exhausted after 5 cycles", want: StopKindCapExhausted},
 		{name: "stalled findings", reason: equivalentFindingsStopReason, want: StopKindFindingsStalled},
-		{name: "recurring files", reason: recurringFilesStopReason([]string{"b.go", "a.go"}), want: StopKindRecurringFiles},
+		{name: "legacy recurring files", reason: recurringFilesStopReason([]string{"b.go", "a.go"}), want: StopKindRecurringFiles},
+		{name: "anchor reversal", reason: anchorReversalStopReason([]anchorReversalRounds{{Anchor: "a.go:4", Rounds: []int{1, 4}}}), want: StopKindAnchorReversal},
+		{name: "window file recurrence", reason: fileRecurrenceStopReason([]recurringFileRounds{{File: "a.go", Rounds: []int{1, 3, 4}}}), want: StopKindFileRecurrence},
+		{name: "plan budget", reason: planBudgetStopReason(planBudgetWarning{Metric: "tool_calls", Observed: 516, Threshold: 400}), want: StopKindPlanBudget},
+		{name: "malformed plan budget", reason: planBudgetStopReasonPrefix + "not-json", want: StopKindNone},
 		{name: "malformed recurring files", reason: recurringFilesStopReasonPrefix + "not-json", want: StopKindNone},
+		{name: "malformed window recurrence", reason: fileRecurrenceStopReasonPrefix + "not-json", want: StopKindNone},
 		{name: "unknown", reason: "automatic rework stopped for another reason", want: StopKindNone},
 		{name: "cap prefix only", reason: "automatic rework cap exhausted", want: StopKindNone},
 	}
@@ -530,13 +766,26 @@ func TestGuardAutoReworkRestart(t *testing.T) {
 			wantReason:   capReason,
 		},
 		{
-			name:         "recurring-file stop restores classification",
+			name:         "legacy recurring-file stop restores classification",
 			events:       []plan.Event{{Type: plan.EventTypeReworkStopped, Reason: recurringFilesStopReason([]string{"z.go", "a.go"})}},
 			allowRestart: true,
 			wantStopped:  true,
 			wantKind:     StopKindRecurringFiles,
 			wantReason:   recurringFilesStopReason([]string{"a.go", "z.go"}),
 			wantFiles:    []string{"a.go", "z.go"},
+		},
+		{
+			name: "window recurrence stop restores classification",
+			events: []plan.Event{{Type: plan.EventTypeReworkStopped, Reason: fileRecurrenceStopReason([]recurringFileRounds{
+				{File: "z.go", Rounds: []int{2, 4, 7}},
+			})}},
+			allowRestart: true,
+			wantStopped:  true,
+			wantKind:     StopKindFileRecurrence,
+			wantReason: fileRecurrenceStopReason([]recurringFileRounds{
+				{File: "z.go", Rounds: []int{2, 4, 7}},
+			}),
+			wantFiles: []string{"z.go"},
 		},
 	}
 
@@ -617,9 +866,28 @@ func TestFormatStopMessageDistinguishesStallFromCap(t *testing.T) {
 			want:     []string{"!!!!!!!!!!!!!!!!", "THE LOOP IS GOING IN CIRCLES", "internal/rework/driver.go:99", finding.Message, finding.Suggestion, "before re-running"},
 		},
 		{
-			name:     "recurring files are distinct and finding-bearing",
+			name:     "legacy recurring files remain distinct and finding-bearing",
 			decision: Decision{StopKind: StopKindRecurringFiles, StopReason: recurringFilesStopReason([]string{"z.go", "a.go"}), RecurringFiles: []string{"z.go", "a.go"}, Findings: []plan.ReviewFinding{finding}},
 			want:     []string{"!!!!!!!!!!!!!!!!", "THE SAME FILES KEEP RECURRING", "three consecutive reviews", "- a.go", "- z.go", finding.Message, finding.Suggestion, "before re-running"},
+		},
+		{
+			name: "window-wide recurrence reports file rounds and current findings",
+			decision: Decision{
+				StopKind: StopKindFileRecurrence,
+				StopReason: fileRecurrenceStopReason([]recurringFileRounds{
+					{File: "internal/plan/derive.go", Rounds: []int{1, 2, 3}},
+				}),
+				Findings: []plan.ReviewFinding{finding},
+			},
+			want: []string{"!!!!!!!!!!!!!!!!", "A FINDING FILE KEEPS RECURRING", "internal/plan/derive.go", "rounds [1 2 3]", "current findings", finding.Message, finding.Suggestion, "before re-running"},
+		},
+		{
+			name: "plan budget warning names the tripped measurement",
+			decision: Decision{
+				StopKind:   StopKindPlanBudget,
+				StopReason: planBudgetStopReason(planBudgetWarning{Metric: "assistant_messages", Observed: 320, Threshold: 300}),
+			},
+			want: []string{"plan agent budget warning", "assistant_messages", "observed 320", "threshold 300", "resource use"},
 		},
 		{
 			name:      "cap exhaustion is milder",
@@ -658,7 +926,7 @@ func TestDriverRunDisabledPolicyExecutesOnceWithoutLoadingState(t *testing.T) {
 			t.Fatal("disabled automatic rework resolved plan detail")
 			return nil, nil
 		},
-		DecideOne: func(context.Context, string, int, int, string, int) (Decision, error) {
+		DecideOne: func(context.Context, string, int, int, string, int, plan.AgentBudgetThresholds) (Decision, error) {
 			t.Fatal("disabled automatic rework made a decision")
 			return Decision{}, nil
 		},
@@ -690,7 +958,7 @@ func TestDriverRunExecutesThenDecidesWithFreshBudget(t *testing.T) {
 	decisions := 0
 	driver := Driver{
 		Resolve: fixedDriverResolver(detail),
-		DecideOne: func(_ context.Context, _ string, baseline, attempts int, previous string, maxAttempts int) (Decision, error) {
+		DecideOne: func(_ context.Context, _ string, baseline, attempts int, previous string, maxAttempts int, _ plan.AgentBudgetThresholds) (Decision, error) {
 			calls = append(calls, fmt.Sprintf("decide:%d:%d:%s:%d", baseline, attempts, previous, maxAttempts))
 			decisions++
 			if decisions == 1 {
@@ -731,6 +999,44 @@ func TestDriverRunExecutesThenDecidesWithFreshBudget(t *testing.T) {
 	}
 }
 
+func TestDriverRunSuppliesBudgetThresholdsToDecision(t *testing.T) {
+	custom := plan.DefaultAgentBudgetThresholds()
+	custom.Plan.Cost++
+	tests := []struct {
+		name       string
+		configured plan.AgentBudgetThresholds
+		want       plan.AgentBudgetThresholds
+	}{
+		{name: "defaults when unset", want: plan.DefaultAgentBudgetThresholds()},
+		{name: "preserves configured thresholds", configured: custom, want: custom},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var got plan.AgentBudgetThresholds
+			driver := Driver{
+				Resolve: fixedDriverResolver(actionableDriverDetail(0)),
+				DecideOne: func(_ context.Context, _ string, _, _ int, _ string, _ int, thresholds plan.AgentBudgetThresholds) (Decision, error) {
+					got = thresholds
+					return Decision{}, nil
+				},
+			}
+			err := driver.Run(context.Background(), "plan", RunOptions{
+				Enabled:          true,
+				MaxAttempts:      5,
+				BudgetThresholds: test.configured,
+				Execute:          func(context.Context) error { return nil },
+			})
+			if err != nil {
+				t.Fatalf("Run returned error: %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("decision thresholds = %#v, want %#v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestDriverRunAcknowledgedRestartDecidesBeforeFirstExecution(t *testing.T) {
 	detail := actionableDriverDetail(0)
 	detail.Events = []plan.Event{{Type: plan.EventTypeReworkStopped, Reason: equivalentFindingsStopReason}}
@@ -738,7 +1044,7 @@ func TestDriverRunAcknowledgedRestartDecidesBeforeFirstExecution(t *testing.T) {
 	decisions := 0
 	driver := Driver{
 		Resolve: fixedDriverResolver(detail),
-		DecideOne: func(context.Context, string, int, int, string, int) (Decision, error) {
+		DecideOne: func(context.Context, string, int, int, string, int, plan.AgentBudgetThresholds) (Decision, error) {
 			calls = append(calls, "decide")
 			decisions++
 			if decisions == 1 {
@@ -778,7 +1084,7 @@ func TestDriverRunRefusesPersistedStopBeforeExecution(t *testing.T) {
 	detail.Events = []plan.Event{{Type: plan.EventTypeReworkStopped, Reason: equivalentFindingsStopReason}}
 	driver := Driver{
 		Resolve: fixedDriverResolver(detail),
-		DecideOne: func(context.Context, string, int, int, string, int) (Decision, error) {
+		DecideOne: func(context.Context, string, int, int, string, int, plan.AgentBudgetThresholds) (Decision, error) {
 			t.Fatal("guarded run made a decision")
 			return Decision{}, nil
 		},
@@ -808,7 +1114,7 @@ func TestDriverRunAcceptsRecoveredBudgetState(t *testing.T) {
 			t.Fatal("recovered automatic rework resolved fresh plan detail")
 			return nil, nil
 		},
-		DecideOne: func(_ context.Context, _ string, baseline, attempts int, previous string, maxAttempts int) (Decision, error) {
+		DecideOne: func(_ context.Context, _ string, baseline, attempts int, previous string, maxAttempts int, _ plan.AgentBudgetThresholds) (Decision, error) {
 			gotBaseline, gotAttempts, gotPrevious, gotMax = baseline, attempts, previous, maxAttempts
 			return Decision{}, nil
 		},
@@ -862,7 +1168,7 @@ func TestDriverRunPropagatesHookErrors(t *testing.T) {
 			run: func(want error) error {
 				driver := Driver{
 					Resolve: fixedDriverResolver(actionableDriverDetail(0)),
-					DecideOne: func(context.Context, string, int, int, string, int) (Decision, error) {
+					DecideOne: func(context.Context, string, int, int, string, int, plan.AgentBudgetThresholds) (Decision, error) {
 						return Decision{Reworked: true, Round: 1, Fingerprint: "finding"}, nil
 					},
 				}
@@ -879,7 +1185,7 @@ func TestDriverRunPropagatesHookErrors(t *testing.T) {
 			run: func(want error) error {
 				driver := Driver{
 					Resolve: fixedDriverResolver(actionableDriverDetail(0)),
-					DecideOne: func(context.Context, string, int, int, string, int) (Decision, error) {
+					DecideOne: func(context.Context, string, int, int, string, int, plan.AgentBudgetThresholds) (Decision, error) {
 						return Decision{Reworked: true, Round: 1, Fingerprint: "finding"}, nil
 					},
 				}
@@ -907,7 +1213,7 @@ func TestDriverRunPropagatesHookErrors(t *testing.T) {
 func TestDriverRunRecoveredAttemptsNeverDecrease(t *testing.T) {
 	decisions := 0
 	persistedAttempts := 0
-	driver := Driver{DecideOne: func(context.Context, string, int, int, string, int) (Decision, error) {
+	driver := Driver{DecideOne: func(context.Context, string, int, int, string, int, plan.AgentBudgetThresholds) (Decision, error) {
 		decisions++
 		if decisions == 1 {
 			return Decision{Reworked: true, Round: 11, Fingerprint: "new-finding"}, nil
@@ -1067,6 +1373,23 @@ func fixedDriverResolver(detail *plan.PlanDetail) PlanResolver {
 
 func recurringDriverDetail() (*plan.PlanDetail, string) {
 	detail := actionableDriverDetail(2)
+	line := 40
+	reviewEvent := func(sliceID, message string) plan.Event {
+		line++
+		return plan.Event{
+			Type: plan.EventTypePlanReviewed, SliceID: sliceID,
+			Review: &plan.PlanReview{
+				Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, FindingsCount: 1,
+				Findings: []plan.ReviewFinding{{Severity: "major", File: "store/file.go", Line: line, Message: message}},
+			},
+		}
+	}
+	detail.Events = []plan.Event{
+		reviewEvent("", "initial review"),
+		reviewEvent("r101-finding", "Warp drops the recovered record"),
+		reviewEvent("r201-finding", "Warp leaks the write transaction"),
+		reviewEvent("r301-finding", "Warp corrupts the committed record"),
+	}
 	firstMessage := "Warp drops the recovered record"
 	secondMessage := "Warp leaks the write transaction"
 	for index := range detail.Slices.Slices {

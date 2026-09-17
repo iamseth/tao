@@ -7,6 +7,7 @@ import (
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runstatus"
+	planview "github.com/iamseth/tao/internal/view"
 )
 
 // HeaderSlice is the presentation-safe checklist state for one plan slice.
@@ -19,28 +20,29 @@ type HeaderSlice struct {
 // HeaderState is the in-process state needed to render a live run header. It is
 // presentation state only and is never persisted as lifecycle evidence.
 type HeaderState struct {
-	RepoName          string
-	PlanID            string
-	PlanTitle         string
-	Agent             string
-	ExecutionMode     string
-	Branch            string
-	ReviewEnabled     bool
-	ReworkRound       int
-	MaxReworkAttempts int
-	Slices            []HeaderSlice
-	CompletedCount    int
-	TotalCount        int
-	Phase             runstatus.Phase
-	CurrentSliceID    string
-	CurrentSliceTitle string
-	StartedAt         time.Time
-	AgentSessionCount int
-	TotalTokens       int64
-	Cost              float64
-	CostReported      bool
-	BatchPosition     int
-	BatchTotal        int
+	RepoName             string
+	PlanID               string
+	PlanTitle            string
+	Agent                string
+	ExecutionMode        string
+	Branch               string
+	ReviewEnabled        bool
+	ReworkRound          int
+	MaxReworkAttempts    int
+	RecurringFindingFile string
+	Slices               []HeaderSlice
+	CompletedCount       int
+	TotalCount           int
+	Phase                runstatus.Phase
+	CurrentSliceID       string
+	CurrentSliceTitle    string
+	StartedAt            time.Time
+	AgentSessionCount    int
+	TotalTokens          int64
+	Cost                 float64
+	CostReported         bool
+	BatchPosition        int
+	BatchTotal           int
 }
 
 // HeaderReporter observes live run presentation state. Reporting is strictly
@@ -162,6 +164,7 @@ func reportHeaderPhase(ctx context.Context, phase runstatus.Phase, slice *runsta
 func newHeaderState(detail *plan.PlanDetail, config ExecutionConfig, startedAt time.Time) HeaderState {
 	derived := plan.Derive(detail, time.Time{})
 	metrics := plan.SummarizeAgentTelemetry(detail).Totals
+	rework := planview.ProjectShowRework(detail.Events)
 	slices := make([]HeaderSlice, len(detail.Slices.Slices))
 	for i, slice := range detail.Slices.Slices {
 		slices[i] = HeaderSlice{ID: slice.ID, Title: slice.Title, Status: slice.Status}
@@ -171,27 +174,32 @@ func newHeaderState(detail *plan.PlanDetail, config ExecutionConfig, startedAt t
 		currentTitle = derived.CurrentSlice.Title
 	}
 	agent := agentLabel(config.Agent)
+	recurringFile := ""
+	if len(rework.RecurringFiles) > 0 {
+		recurringFile = rework.RecurringFiles[0]
+	}
 	return HeaderState{
-		RepoName:          detail.State.Repo.Name,
-		PlanID:            detail.State.Plan.ID,
-		PlanTitle:         detail.State.Plan.Title,
-		Agent:             agent,
-		ExecutionMode:     config.ExecutionMode.String(),
-		Branch:            headerBranch(detail),
-		ReviewEnabled:     config.ReviewEnabled,
-		ReworkRound:       plan.SummarizeRework(detail.Events).Rounds,
-		MaxReworkAttempts: config.MaxReworkAttempts,
-		Slices:            slices,
-		CompletedCount:    derived.CompletedCount,
-		TotalCount:        derived.TotalCount,
-		Phase:             PhaseWaitingForOwnership,
-		CurrentSliceID:    currentID,
-		CurrentSliceTitle: currentTitle,
-		StartedAt:         startedAt,
-		AgentSessionCount: metrics.Sessions,
-		TotalTokens:       metrics.TotalTokens,
-		Cost:              metrics.Cost,
-		CostReported:      true,
+		RepoName:             detail.State.Repo.Name,
+		PlanID:               detail.State.Plan.ID,
+		PlanTitle:            detail.State.Plan.Title,
+		Agent:                agent,
+		ExecutionMode:        config.ExecutionMode.String(),
+		Branch:               headerBranch(detail),
+		ReviewEnabled:        config.ReviewEnabled,
+		ReworkRound:          rework.Rounds,
+		MaxReworkAttempts:    config.MaxReworkAttempts,
+		RecurringFindingFile: recurringFile,
+		Slices:               slices,
+		CompletedCount:       derived.CompletedCount,
+		TotalCount:           derived.TotalCount,
+		Phase:                PhaseWaitingForOwnership,
+		CurrentSliceID:       currentID,
+		CurrentSliceTitle:    currentTitle,
+		StartedAt:            startedAt,
+		AgentSessionCount:    metrics.Sessions,
+		TotalTokens:          metrics.TotalTokens,
+		Cost:                 metrics.Cost,
+		CostReported:         true,
 	}
 }
 

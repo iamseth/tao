@@ -109,6 +109,44 @@ func TestFormatAbandonmentTextHandlesMissingAndMalformedReasons(t *testing.T) {
 	}
 }
 
+func TestRenderShowReworkPopulated(t *testing.T) {
+	events := []plan.Event{
+		{Type: plan.EventTypePlanReviewed, Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, Findings: []plan.ReviewFinding{{File: "initial.go", Line: 1}}, FindingsCount: 1}},
+		{Type: plan.EventTypeReworkRound, Round: 1},
+		{Type: plan.EventTypePlanReviewed, Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, Findings: []plan.ReviewFinding{{File: "b.go", Line: 2}, {File: "a.go", Line: 3}}, FindingsCount: 2}},
+		{Type: plan.EventTypeReworkRound, Round: 2},
+		{Type: plan.EventTypePlanReviewed, Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, Findings: []plan.ReviewFinding{{File: "b.go", Line: 4}, {File: "a.go", Line: 5}}, FindingsCount: 2}},
+		{Type: plan.EventTypeReworkRound, Round: 3},
+		{Type: plan.EventTypePlanReviewed, Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, Findings: []plan.ReviewFinding{{File: "b.go", Line: 6}}, FindingsCount: 1}},
+		{Type: plan.EventTypeReworkStopped, Reason: "automatic rework stalled on equivalent consecutive findings"},
+	}
+	projection := ProjectShowRework(events)
+	if projection.Rounds != 3 || projection.CurrentStopClassification != "findings_stalled" || !reflect.DeepEqual(projection.RecurringFiles, []string{"b.go", "a.go"}) {
+		t.Fatalf("rework projection = %+v", projection)
+	}
+
+	var out bytes.Buffer
+	if err := RenderShowRework(&out, projection); err != nil {
+		t.Fatal(err)
+	}
+	want := "\nRework:\nRounds: 3\nCurrent stop: findings_stalled\nRecurring files:\n- b.go\n- a.go\n"
+	if got := out.String(); got != want {
+		t.Fatalf("rework output = %q, want %q", got, want)
+	}
+}
+
+func TestRenderShowReworkEmpty(t *testing.T) {
+	projection := ProjectShowRework(nil)
+	var out bytes.Buffer
+	if err := RenderShowRework(&out, projection); err != nil {
+		t.Fatal(err)
+	}
+	want := "\nRework:\nRounds: 0\nCurrent stop: -\nRecurring files: -\n"
+	if got := out.String(); got != want {
+		t.Fatalf("rework output = %q, want %q", got, want)
+	}
+}
+
 func TestRenderVerificationFindings(t *testing.T) {
 	var out bytes.Buffer
 	err := RenderVerificationFindings(&out, []plan.VerificationFinding{{

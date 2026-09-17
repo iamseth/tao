@@ -992,6 +992,18 @@ func automaticReworkRoundEvent(planID string, evidence AutomaticReworkRound) Eve
 	}
 }
 
+// pullRequestReworkRoundEvent records the round a pull-request reopen created.
+// A pull-request round carries no attempt or fingerprint evidence because it is
+// not an automatic cycle: it opens a fresh automatic-rework window rather than
+// consuming one. Recording it keeps round numbering derivable from durable
+// events on both reopen paths.
+func pullRequestReworkRoundEvent(planID string, round int, now time.Time) Event {
+	return Event{
+		Type: EventTypeReworkRound, Timestamp: now, PlanID: planID, Round: round,
+		Message: fmt.Sprintf("Pull-request rework round %d", round),
+	}
+}
+
 // ReopenForced explicitly bypasses the reopen status gate while still applying
 // the override to the latest settled detail under the mutation lock.
 func (r *PlanRecord) ReopenForced(newSlices []Slice, now time.Time) error {

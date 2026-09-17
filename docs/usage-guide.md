@@ -447,25 +447,43 @@ that the host integrated it.
 
 When a successful review requests changes, `tao run <plan-id>` automatically
 uses the ordinary rework gates, runs the generated fix slices, and reviews again.
-It stops with an error after five rework cycles, when consecutive reviews repeat
-an equivalent finding set, or
-before another reopen when the same normalized primary finding file appears in
-three consecutive `changes_requested` reviews. The fixed three-review boundary
-applies even when each review reports a different issue in that file. Tao leaves
-the latest review intact. Change the cap with `--max-rework-attempts N`; disable
-the loop with `--auto-rework=false` or `TAO_AUTO_REWORK=false`. Disabling review
-with `--no-review` or `TAO_REVIEW=false` also disables automatic rework.
+Before opening another round, Tao can stop for any of these reasons, checked in
+this order:
+
+- **Attempt cap reached:** the run used its bounded rework allowance (five
+  cycles by default). The message tells you to inspect the remaining findings.
+- **Equivalent findings stalled:** consecutive reviews returned the same
+  normalized finding set. The prominent message repeats the current blocking
+  findings.
+- **Finding anchor repeated:** a blocking finding returned at the same file and
+  line in distinct rounds. The message lists the anchor, affected rounds, and
+  finding text; compare those messages and resolve the intended policy direction.
+- **Finding file recurring:** a file contains blocking findings in at least three
+  rounds in the current rework window, whether or not those rounds are
+  consecutive. The message lists each file and its rounds, then repeats the
+  latest findings to address.
+- **Plan agent budget warning:** after multiple rework rounds, a configured
+  plan-level usage threshold was crossed. The message names the metric and its
+  observed and threshold values; inspect both the remaining findings and the
+  resource use.
+
+These stops gate only the automatic loop: Tao leaves the latest review intact
+and does not approve or merge the plan. Read the heading to identify the kind of
+churn, then use the listed rounds, locations, current findings, or budget values
+to decide what needs manual attention. Change the attempt cap with
+`--max-rework-attempts N`; disable the loop with `--auto-rework=false` or
+`TAO_AUTO_REWORK=false`. Disabling review with `--no-review` or
+`TAO_REVIEW=false` also disables automatic rework.
 
 After any stop, a later `tao run` refuses to silently grant the plan a fresh
-automatic-rework budget. It reports the persisted stop reason and repeats the
-loud finding-bearing warning for equivalent-findings and recurring-file stalls.
-Inspect and address the review first. If you deliberately want another bounded
-budget, pass `--rework-restart`; this preserves historical slices but establishes
-the current round as a fresh baseline, so earlier reviews do not count toward
-the new three-review window. Restart is an acknowledgment, not a bypass of
-ordinary rework gates. The refusal never prompts. To intentionally continue,
-rerun that plan directly with `--rework-restart`; Tao then opens the first round
-of a fresh bounded budget.
+automatic-rework budget and displays the persisted reason again. Older plans
+may show the earlier consecutive-recurring-files wording; Tao still reads that
+stop and preserves its evidence. Inspect and address the review first. If you
+deliberately want another bounded budget, rerun that plan directly with
+`tao run --rework-restart <plan-id>`. This preserves historical slices but
+establishes the current round as a fresh baseline, so earlier reviews do not
+count toward the new window. Restart is an explicit acknowledgment, not a bypass
+of the ordinary rework gates, and the refusal never prompts.
 
 The installed `/tao-review` slash command is an agent prompt, while `tao review`
 is the ordinary CLI command that runs or displays Tao's persisted plan review.

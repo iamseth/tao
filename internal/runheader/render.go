@@ -119,7 +119,7 @@ func renderMetrics(state run.HeaderState) string {
 	if state.CostReported {
 		cost = fmt.Sprintf("$%.2f", state.Cost)
 	}
-	return fmt.Sprintf("AGENT  %d %s%s%s tokens%s%s",
+	metrics := fmt.Sprintf("AGENT  %d %s%s%s tokens%s%s",
 		state.AgentSessionCount,
 		plural(state.AgentSessionCount, "session", "sessions"),
 		fieldSeparator,
@@ -127,6 +127,10 @@ func renderMetrics(state run.HeaderState) string {
 		fieldSeparator,
 		cost,
 	)
+	if state.RecurringFindingFile != "" {
+		metrics += fieldSeparator + "recurring " + display(state.RecurringFindingFile)
+	}
+	return metrics
 }
 
 func plural(value int, one, many string) string {

@@ -2,9 +2,12 @@ package view
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/rework"
 )
 
 type Repository interface {
@@ -30,6 +33,7 @@ type ShowPayload struct {
 	Status       string                     `json:"status"`
 	Repository   ShowRepository             `json:"repository"`
 	Progress     ShowProgress               `json:"progress"`
+	Rework       ShowRework                 `json:"rework"`
 	NextAction   plan.PlanNextAction        `json:"next_action"`
 	Finalization *plan.FinalizationRecovery `json:"finalization,omitempty"`
 	Abandonment  *ShowAbandonment           `json:"abandonment,omitempty"`
@@ -47,6 +51,40 @@ type ShowProgress struct {
 	Total          int    `json:"total"`
 	CurrentSliceID string `json:"current_slice_id,omitempty"`
 	NextSliceID    string `json:"next_slice_id,omitempty"`
+}
+
+// ShowRework is the display-safe, read-only rework history shown by plan
+// inspection and the live run header.
+type ShowRework struct {
+	Rounds                    int      `json:"rounds"`
+	CurrentStopClassification string   `json:"current_stop_classification,omitempty"`
+	RecurringFiles            []string `json:"recurring_files"`
+}
+
+// ProjectShowRework derives current rework facts without treating them as
+// lifecycle or recovery evidence. Recurring files are ranked by round count,
+// then path, so the first item is suitable for compact presentation.
+func ProjectShowRework(events []plan.Event) ShowRework {
+	summary := plan.SummarizeRework(events)
+	churn := plan.ProjectReworkChurn(events, 0)
+	files := make([]string, 0)
+	for file, rounds := range churn.FileRounds {
+		if len(rounds) >= 2 {
+			files = append(files, file)
+		}
+	}
+	slices.SortFunc(files, func(a, b string) int {
+		if byRounds := len(churn.FileRounds[b]) - len(churn.FileRounds[a]); byRounds != 0 {
+			return byRounds
+		}
+		return strings.Compare(a, b)
+	})
+
+	projection := ShowRework{Rounds: summary.Rounds, RecurringFiles: files}
+	if plan.HasUnresolvedReworkStop(events) {
+		projection.CurrentStopClassification = string(rework.StopKindForPersistedReason(summary.LatestStoppedReason))
+	}
+	return projection
 }
 
 // ShowAbandonment is an explicit display-safe projection rather than a raw
@@ -79,6 +117,7 @@ func (loaded Plan) ShowPayload() ShowPayload {
 			CurrentSliceID: loaded.Derived.CurrentSliceID,
 			NextSliceID:    loaded.Derived.NextSliceID,
 		},
+		Rework:       ProjectShowRework(detail.Events),
 		NextAction:   loaded.DisplayNextAction(),
 		Finalization: cloneFinalizationRecovery(loaded.Derived.FinalizationRecovery),
 		Abandonment:  abandonment,

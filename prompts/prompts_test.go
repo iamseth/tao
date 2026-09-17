@@ -183,7 +183,12 @@ func TestRenderReviewPromptDefinesReworkConvergenceAndFindingsContract(t *testin
 		t.Fatal(err)
 	}
 	for _, want := range []string{
+		"advisory history, not as steering toward approval or rejection",
 		"only with fresh evidence naming what the current head still fails to do",
+		"contradicts a prior round's requested change",
+		"concrete new evidence at the current head that justifies the reversal",
+		"Treat a decision settled by an earlier round as settled",
+		"without a demonstrated concrete violation at the current head",
 		"identical severity, file, message, and suggestion text; do not rephrase it",
 		"Keep the same line unless the anchored code moved",
 		"exactly one of `blocker`, `major`, or `minor`",
