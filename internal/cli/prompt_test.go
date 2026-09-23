@@ -220,11 +220,11 @@ func TestPromptRendersCanonicalPrompts(t *testing.T) {
 	}
 
 	out.Reset()
-	if err := app.Run(context.Background(), []string{"prompt", "commit", "--arguments", "include staged docs"}); err != nil {
+	if err := app.Run(context.Background(), []string{"prompt", "commit", "--arguments", "--push -- include staged docs"}); err != nil {
 		t.Fatal(err)
 	}
 	text = out.String()
-	if !strings.Contains(text, "Create one local Git commit") || !strings.Contains(text, "include staged docs") {
+	if !strings.Contains(text, "Create one local Git commit") || !strings.Contains(text, "--push -- include staged docs") || !strings.Contains(text, "Otherwise omit `--push` from every call") {
 		t.Fatalf("expected rendered commit prompt with arguments, got %q", text)
 	}
 }
@@ -496,7 +496,7 @@ func TestInstallPromptsAndDoctorUseSelectedClaudeAgent(t *testing.T) {
 			t.Fatalf("expected Claude wrapper %s to contain its managed marker, got %q", path, text)
 		}
 		if name == "commit" {
-			for _, want := range []string{"Use this active agent session", "tao commit --proposal-file"} {
+			for _, want := range []string{"Use this active agent session", "The default is commit-only", "tao commit --context --push", "tao commit --proposal-file <temporary-directory>/proposal.json --push", "tao commit --message <exact-message> --push", "Otherwise omit `--push` from every call", "Do not run Git directly, including `git push`", "the local commit remains", "Do not rerun commit, amend, reset, or automatically retry publication"} {
 				if !strings.Contains(text, want) {
 					t.Fatalf("expected inline Claude commit wrapper %s to contain %q, got %q", path, want, text)
 				}

@@ -135,7 +135,7 @@ _tao() {
       fi
       ;;
     commit)
-      _arguments '--context[print bounded safety-filtered commit context as JSON]' '--message[explicit full canonical commit message]:message:' '--proposal-file[JSON file containing a structured commit proposal]:path:_files' '--repo-root[repository path]:path:_files'
+      _arguments '--context[print bounded safety-filtered commit context as JSON]' '--message[explicit full canonical commit message]:message:' '--proposal-file[JSON file containing a structured commit proposal]:path:_files' '--push[preflight the configured upstream and push the new commit without force on finalization]' '--repo-root[repository path]:path:_files'
       ;;
     repo)
       if (( CURRENT == 3 )); then

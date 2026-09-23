@@ -61,6 +61,138 @@ func TestCommitContextIsReadOnlyAndFinalizesStructuredProposal(t *testing.T) {
 	}
 }
 
+func TestCommitPushModesAndOutput(t *testing.T) {
+	for _, mode := range []string{"commit-only", "context-only-intent", "proposal", "message", "rejected", "no-op"} {
+		t.Run(mode, func(t *testing.T) {
+			root := newCLICommitRepo(t)
+			remote := t.TempDir()
+			runCLICommitGit(t, remote, "init", "--bare")
+			runCLICommitGit(t, root, "remote", "add", "publish", remote)
+			runCLICommitGit(t, root, "push", "publish", "HEAD:refs/heads/target")
+			runCLICommitGit(t, root, "config", "branch.main.remote", "publish")
+			runCLICommitGit(t, root, "config", "branch.main.merge", "refs/heads/target")
+			if mode == "rejected" {
+				runCLICommitGit(t, root, "commit", "--allow-empty", "-m", "remote-only change")
+				runCLICommitGit(t, root, "push", "publish", "HEAD:refs/heads/target")
+				runCLICommitGit(t, root, "reset", "--hard", "HEAD^")
+			}
+			beforeRefs := runCLICommitGit(t, remote, "show-ref")
+			beforeHead := runCLICommitGit(t, root, "rev-parse", "HEAD")
+			if mode != "no-op" {
+				writeCLICommitFile(t, root, "source.go", "package source\n")
+			}
+			beforeIndex := runCLICommitGit(t, root, "diff", "--cached")
+			var out bytes.Buffer
+			app := App{Out: &out, Err: io.Discard}
+			contextArgs := []string{"commit", "--context", "--repo-root", root}
+			if mode != "commit-only" {
+				contextArgs = append(contextArgs, "--push")
+			}
+			if err := app.Run(context.Background(), contextArgs); err != nil {
+				t.Fatal(err)
+			}
+			var contextOutput struct {
+				taocommit.StandaloneContext
+				Push *taocommit.StandalonePush `json:"push"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &contextOutput); err != nil {
+				t.Fatal(err)
+			}
+			if (contextOutput.Push != nil) != (mode != "commit-only") {
+				t.Fatalf("unexpected context push intent: %s", out.String())
+			}
+			if contextOutput.Push != nil && contextOutput.Push.Destination.String() != "publish:refs/heads/target" {
+				t.Fatalf("push context = %+v", contextOutput.Push)
+			}
+			if strings.Contains(out.String(), remote) {
+				t.Fatal("context exposed private push endpoint")
+			}
+			if runCLICommitGit(t, root, "diff", "--cached") != beforeIndex || runCLICommitGit(t, root, "rev-parse", "HEAD") != beforeHead || runCLICommitGit(t, remote, "show-ref") != beforeRefs {
+				t.Fatal("context mode mutated Git")
+			}
+			args := []string{"commit", "--repo-root", root}
+			if mode != "commit-only" && mode != "context-only-intent" {
+				args = append(args, "--push")
+			}
+			if mode == "proposal" || mode == "context-only-intent" {
+				proposal := taocommit.StandaloneProposal{ContextFingerprint: contextOutput.Fingerprint, Proposal: taocommit.Proposal{Type: "feat", Scope: "cli", Summary: "publish standalone commits", What: "Publish the exact new commit.", Why: "Keep publication explicit."}}
+				contents, err := json.Marshal(proposal)
+				if err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(t.TempDir(), "proposal.json")
+				if err := os.WriteFile(path, contents, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				args = append(args, "--proposal-file", path)
+			} else {
+				args = append(args, "--message", "feat(cli): publish standalone commits\n\nWhat:\nPublish the exact new commit.\n\nWhy:\nKeep publication explicit.")
+			}
+			out.Reset()
+			err := app.Run(context.Background(), args)
+			head := strings.TrimSpace(runCLICommitGit(t, root, "rev-parse", "HEAD"))
+			if mode == "rejected" {
+				if err == nil {
+					t.Fatal("expected rejection")
+				}
+				for _, text := range []string{"local commit " + head + " remains", "publish:refs/heads/target", "manually push", "do not rerun commit"} {
+					if !strings.Contains(err.Error(), text) {
+						t.Fatalf("error missing %q: %v", text, err)
+					}
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			switch mode {
+			case "message", "proposal":
+				if !strings.Contains(out.String(), "Pushed commit "+head+" to publish:refs/heads/target.") {
+					t.Fatalf("output = %s", out.String())
+				}
+				if refs := strings.TrimSpace(runCLICommitGit(t, remote, "show-ref")); refs != head+" refs/heads/target" {
+					t.Fatalf("unexpected remote refs: %s", refs)
+				}
+			case "no-op":
+				if out.String() != "Nothing to commit: no allowed changes.\n" || strings.TrimSpace(beforeHead) != head {
+					t.Fatalf("no-op output=%s, HEAD=%s", out.String(), head)
+				}
+			default:
+				if strings.Contains(out.String(), "Pushed") || strings.TrimSpace(beforeHead) == head {
+					t.Fatalf("output=%s, HEAD=%s", out.String(), head)
+				}
+			}
+			if mode != "message" && mode != "proposal" && runCLICommitGit(t, remote, "show-ref") != beforeRefs {
+				t.Fatal("unexpected remote mutation")
+			}
+		})
+	}
+}
+
+func TestCommitPushPreflightErrorsInContextAndMessageModes(t *testing.T) {
+	for _, detached := range []bool{false, true} {
+		root := newCLICommitRepo(t)
+		if detached {
+			runCLICommitGit(t, root, "checkout", "--detach")
+		}
+		writeCLICommitFile(t, root, "source.go", "package source\n")
+		before := runCLICommitGit(t, root, "status", "--porcelain")
+		for _, mode := range [][]string{{"--context"}, {"--message", "feat(cli): test push preflight\n\nWhat:\nCheck prerequisites.\n\nWhy:\nPrevent unsafe mutation."}} {
+			args := append([]string{"commit", "--push", "--repo-root", root}, mode...)
+			var out bytes.Buffer
+			err := (App{Out: &out, Err: io.Discard}).Run(context.Background(), args)
+			want := "configured upstream"
+			if detached {
+				want = "detached"
+			}
+			if err == nil || !strings.Contains(err.Error(), want) || out.Len() != 0 {
+				t.Fatalf("error=%v, output=%s", err, out.String())
+			}
+			if runCLICommitGit(t, root, "status", "--porcelain") != before {
+				t.Fatal("preflight mutated index/worktree")
+			}
+		}
+	}
+}
+
 func TestCommitRefusesManagedWorktreeBeforeContextOrGitMutation(t *testing.T) {
 	control := newCLICommitRepo(t)
 	worktree := filepath.Join(t.TempDir(), "managed")
@@ -94,7 +226,15 @@ func TestCommitRefusesManagedWorktreeBeforeContextOrGitMutation(t *testing.T) {
 		t.Fatalf("index changed: %q", got)
 	}
 
+	err = app.Run(context.Background(), []string{"commit", "--context", "--push", "--repo-root", worktree})
+	if err == nil || !strings.Contains(err.Error(), "active Tao-managed worktree") {
+		t.Fatalf("managed push context error = %v", err)
+	}
 	message := "chore(cli): guard managed commits\n\nWhat:\nRefuse unsafe standalone commits.\n\nWhy:\nKeep workspace metadata synchronized."
+	err = app.Run(context.Background(), []string{"commit", "--message", message, "--push", "--repo-root", worktree})
+	if err == nil || !strings.Contains(err.Error(), "active Tao-managed worktree") {
+		t.Fatalf("managed push finalization error = %v", err)
+	}
 	err = app.Run(context.Background(), []string{"commit", "--message", message, "--repo-root", worktree})
 	if err == nil || !strings.Contains(err.Error(), "active Tao-managed worktree") {
 		t.Fatalf("managed finalization error = %v", err)

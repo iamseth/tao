@@ -101,6 +101,80 @@ func TestActiveOperationAndLinkedWorktreeDirectory(t *testing.T) {
 	}
 }
 
+func TestTrackingDestinationAndExactPush(t *testing.T) {
+	key := func(args ...string) string { return strings.Join(append([]string{"-C", "/repo"}, args...), "\x00") }
+	runner := &fakeRunner{outputs: map[string]string{
+		key("config", "--get-all", "branch.feature.remote"):          "publish\n",
+		key("config", "--get-all", "branch.feature.merge"):           "refs/heads/destination\n",
+		key("remote", "get-url", "--push", "--all", "--", "publish"): "/remote.git\n",
+	}}
+	client := NewClient("/repo", runner.run)
+	destination, err := client.TrackingDestination(context.Background(), "feature")
+	if err != nil || destination != (TrackingDestination{Remote: "publish", Ref: "refs/heads/destination", PushURL: "/remote.git"}) {
+		t.Fatalf("destination = %+v, error = %v", destination, err)
+	}
+	sha := strings.Repeat("a", 40)
+	if err := client.PushExact(context.Background(), destination, sha); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"-C", "/repo", "-c", "remote.publish.mirror=false", "push", "--no-force", "--no-follow-tags", "--recurse-submodules=no", "--", "publish", sha + ":refs/heads/destination"}
+	if got := runner.calls[len(runner.calls)-1].args; !reflect.DeepEqual(got, want) {
+		t.Fatalf("push = %#v, want %#v", got, want)
+	}
+}
+
+func TestExactPushRejectsNonExactSourcesAndUnsafeRefs(t *testing.T) {
+	for _, sha := range []string{"HEAD", "abc123", "+" + strings.Repeat("a", 40), strings.Repeat("g", 40), ""} {
+		runner := &fakeRunner{}
+		err := NewClient("/repo", runner.run).PushExact(context.Background(), TrackingDestination{Remote: "origin", Ref: "refs/heads/main", PushURL: "/remote.git"}, sha)
+		if err == nil || len(runner.calls) != 0 {
+			t.Fatalf("SHA %q: error=%v, calls=%+v", sha, err, runner.calls)
+		}
+	}
+	for _, ref := range []string{"main", "refs/tags/tag", "+refs/heads/main", ""} {
+		runner := &fakeRunner{}
+		err := NewClient("/repo", runner.run).PushExact(context.Background(), TrackingDestination{Remote: "origin", Ref: ref, PushURL: "/remote.git"}, strings.Repeat("a", 40))
+		if err == nil || len(runner.calls) != 0 {
+			t.Fatalf("ref %q: error=%v, calls=%+v", ref, err, runner.calls)
+		}
+	}
+}
+
+func TestTrackingDestinationRequiresUnambiguousConfiguration(t *testing.T) {
+	for _, scenario := range []string{"detached", "missing remote", "missing merge", "multiple remotes", "multiple merges", "multiple endpoints"} {
+		t.Run(scenario, func(t *testing.T) {
+			key := func(args ...string) string { return strings.Join(append([]string{"-C", "/repo"}, args...), "\x00") }
+			remoteKey := key("config", "--get-all", "branch.main.remote")
+			mergeKey := key("config", "--get-all", "branch.main.merge")
+			urlKey := key("remote", "get-url", "--push", "--all", "--", "origin")
+			runner := &fakeRunner{outputs: map[string]string{remoteKey: "origin", mergeKey: "refs/heads/main", urlKey: "/remote.git"}}
+			branch := "main"
+			switch scenario {
+			case "detached":
+				branch = ""
+			case "missing remote":
+				delete(runner.outputs, remoteKey)
+			case "missing merge":
+				delete(runner.outputs, mergeKey)
+			case "multiple remotes":
+				runner.outputs[remoteKey] = "origin\nother"
+			case "multiple merges":
+				runner.outputs[mergeKey] += "\nrefs/heads/other"
+			case "multiple endpoints":
+				runner.outputs[urlKey] += "\n/other.git"
+			}
+			if _, err := NewClient("/repo", runner.run).TrackingDestination(context.Background(), branch); err == nil {
+				t.Fatal("expected unsafe configuration refusal")
+			}
+			for _, call := range runner.calls {
+				if call.args[2] == "push" {
+					t.Fatal("preflight mutated remote")
+				}
+			}
+		})
+	}
+}
+
 func TestClientRootReturnsBinding(t *testing.T) {
 	if got := NewClient("/some/repo", nil).Root(); got != "/some/repo" {
 		t.Fatalf("Root() = %q, want %q", got, "/some/repo")

@@ -19,8 +19,24 @@ Proposal content must not supply `Tao-*` trailers—only Tao may append trusted
 evidence. A content-validation rejection gets one repair through the same
 selected model; stale context, safety failures, or a second rejection stop with
 no deterministic/title fallback. An explicit `/tao-commit --message` is the only
-standalone override and still passes central validation and safety. The command
-never pushes.
+standalone override and still passes central validation and safety. By default,
+the command is commit-only.
+
+Explicit `/tao-commit --push` forwards `--push` to Tao's read-only context call
+and proposal finalization, including the one content repair. It also works with
+`/tao-commit --message '<canonical-message>' --push`. Only a command flag before
+`--` opts in; message text and trailing context do not authorize publication.
+Tao requires the current branch's configured upstream, rechecks it and HEAD,
+and publishes the exact newly created SHA without force. Neither provider
+wrapper runs Git, chooses a remote, creates an upstream, or automatically
+retries a push. A no-op never publishes an older commit.
+
+Success displays both Tao's local-commit and publication results. On push
+failure, the local commit remains; the extension propagates Tao's SHA,
+destination, and recovery guidance without proposal repair or another commit.
+Inspect and resolve the failure, then manually publish that exact commit to the
+reported destination without force. Do not rerun `/tao-commit` to retry a push.
+Claude's managed inline prompt follows this same contract.
 
 Automatic slice completion, review-backed merge, and active merge-resolution
 flows do not call this extension: their already active implementation/review or

@@ -88,13 +88,25 @@ func TestRenderCommitPromptDelegatesProposalAndGitAuthorityToTao(t *testing.T) {
 		"${TMPDIR:-/tmp}/tao-commit.XXXXXX",
 		"Best-effort remove both temporary files",
 		"tao commit --message",
+		"The default is commit-only; remote mutation requires explicit `--push`",
+		"tao commit --context --push",
+		"tao commit --proposal-file <temporary-directory>/proposal.json --push",
+		"tao commit --message <exact-message> --push",
+		"Otherwise omit `--push` from every call",
+		"not inside a `--message` value or contextual prose",
+		"Do not run Git directly, including `git push`",
+		"configured upstream",
+		"exact newly created SHA",
+		"A no-op never pushes an older commit",
+		"the local commit remains",
+		"Do not rerun commit, amend, reset, or automatically retry publication",
 		"prefer the cli scope",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("rendered commit prompt missing %q:\n%s", want, got)
 		}
 	}
-	for _, forbidden := range []string{"git status", "git diff", "git log", "git commit -m"} {
+	for _, forbidden := range []string{"git status", "git diff", "git log", "git commit -m", "git push"} {
 		if strings.Contains(got, "Run `"+forbidden) {
 			t.Fatalf("rendered commit prompt retains provider-owned Git operation %q:\n%s", forbidden, got)
 		}

@@ -11,6 +11,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/iamseth/tao/internal/gitops"
 )
 
 const (
@@ -38,6 +40,61 @@ type StandaloneGit interface {
 	HasStagedChanges(context.Context) (bool, error)
 	Commit(context.Context, string) error
 }
+
+// StandaloneOptions leaves publication disabled unless explicitly requested.
+type StandaloneOptions struct {
+	Push bool
+}
+
+type StandaloneResult struct {
+	Result
+	Pushed *StandalonePush
+}
+
+// StandalonePush records the branch and destination checked before mutation.
+type StandalonePush struct {
+	Branch      string                     `json:"branch"`
+	Destination gitops.TrackingDestination `json:"destination"`
+}
+
+type standalonePushGit interface {
+	CurrentBranch(context.Context) (string, error)
+	TrackingDestination(context.Context, string) (gitops.TrackingDestination, error)
+	PushExact(context.Context, gitops.TrackingDestination, string) error
+}
+
+// PreflightStandalonePush is read-only and shared by context and finalization.
+func PreflightStandalonePush(ctx context.Context, git ContextGit) (StandalonePush, error) {
+	publisher, ok := git.(standalonePushGit)
+	if !ok {
+		return StandalonePush{}, errors.New("standalone push requires publication-capable Git")
+	}
+	branch, err := publisher.CurrentBranch(ctx)
+	if err != nil {
+		return StandalonePush{}, fmt.Errorf("resolve standalone push branch: %w", err)
+	}
+	if branch == "" {
+		return StandalonePush{}, errors.New("standalone push requires an attached branch; HEAD is detached")
+	}
+	destination, err := publisher.TrackingDestination(ctx, branch)
+	if err != nil {
+		return StandalonePush{}, fmt.Errorf("preflight standalone push: %w", err)
+	}
+	return StandalonePush{Branch: branch, Destination: destination}, nil
+}
+
+// StandalonePushError reports partial success without discarding commit identity.
+type StandalonePushError struct {
+	Commit Result
+	Target StandalonePush
+	Err    error
+}
+
+func (e *StandalonePushError) Error() string {
+	return fmt.Sprintf("local commit %s remains; push to %s did not complete: %v; inspect the local branch and upstream, resolve the failure, then manually push this exact commit to that destination without force (do not rerun commit)", e.Commit.SHA, e.Target.Destination, e.Err)
+}
+
+func (e *StandalonePushError) Unwrap() error { return e.Err }
 
 // ReadStandaloneProposal reads exactly one bounded JSON proposal object.
 func ReadStandaloneProposal(path string) (StandaloneProposal, error) {
@@ -93,24 +150,34 @@ func requireJSONEOF(decoder *json.Decoder) error {
 // FinalizeStandaloneProposal rechecks every preflight identity component before
 // staging, then centrally formats and creates the exact prepared commit.
 func FinalizeStandaloneProposal(ctx context.Context, git StandaloneGit, repoRoot string, proposal StandaloneProposal) (Result, error) {
+	result, err := FinalizeStandaloneProposalWithOptions(ctx, git, repoRoot, proposal, StandaloneOptions{})
+	return result.Result, err
+}
+
+func FinalizeStandaloneProposalWithOptions(ctx context.Context, git StandaloneGit, repoRoot string, proposal StandaloneProposal, options StandaloneOptions) (StandaloneResult, error) {
 	if err := ValidateProposal(proposal.Proposal); err != nil {
-		return Result{}, fmt.Errorf("validate standalone commit proposal: %w", err)
+		return StandaloneResult{}, fmt.Errorf("validate standalone commit proposal: %w", err)
 	}
 	message, err := Format(proposal.Proposal)
 	if err != nil {
-		return Result{}, fmt.Errorf("format standalone commit proposal: %w", err)
+		return StandaloneResult{}, fmt.Errorf("format standalone commit proposal: %w", err)
 	}
-	return finalizeStandalone(ctx, git, repoRoot, proposal.ContextFingerprint, message)
+	return finalizeStandalone(ctx, git, repoRoot, proposal.ContextFingerprint, message, options)
 }
 
 // FinalizeStandaloneMessage supports the explicit full-message compatibility
 // override. It has no preflight handoff, but still uses one live safety snapshot
 // and the same central staging and prepared-commit authority.
 func FinalizeStandaloneMessage(ctx context.Context, git StandaloneGit, repoRoot, message string) (Result, error) {
+	result, err := FinalizeStandaloneMessageWithOptions(ctx, git, repoRoot, message, StandaloneOptions{})
+	return result.Result, err
+}
+
+func FinalizeStandaloneMessageWithOptions(ctx context.Context, git StandaloneGit, repoRoot, message string, options StandaloneOptions) (StandaloneResult, error) {
 	if err := validateStandaloneOverride(message); err != nil {
-		return Result{}, fmt.Errorf("validate standalone commit message: %w", err)
+		return StandaloneResult{}, fmt.Errorf("validate standalone commit message: %w", err)
 	}
-	return finalizeStandalone(ctx, git, repoRoot, "", message)
+	return finalizeStandalone(ctx, git, repoRoot, "", message, options)
 }
 
 func validateStandaloneOverride(message string) error {
@@ -125,21 +192,29 @@ func validateStandaloneOverride(message string) error {
 	return nil
 }
 
-func finalizeStandalone(ctx context.Context, git StandaloneGit, repoRoot, expectedFingerprint, message string) (Result, error) {
+func finalizeStandalone(ctx context.Context, git StandaloneGit, repoRoot, expectedFingerprint, message string, options StandaloneOptions) (StandaloneResult, error) {
 	if git == nil {
-		return Result{}, errors.New("standalone commit finalization requires Git")
+		return StandaloneResult{}, errors.New("standalone commit finalization requires Git")
+	}
+	var target StandalonePush
+	if options.Push {
+		var err error
+		target, err = PreflightStandalonePush(ctx, git)
+		if err != nil {
+			return StandaloneResult{}, err
+		}
 	}
 	live, err := BuildStandaloneContext(ctx, git, repoRoot)
 	if err != nil {
-		return Result{}, err
+		return StandaloneResult{}, err
 	}
 	if expectedFingerprint != "" && expectedFingerprint != live.Fingerprint {
-		return Result{}, fmt.Errorf("standalone commit context is stale: expected %s, live %s", expectedFingerprint, live.Fingerprint)
+		return StandaloneResult{}, fmt.Errorf("standalone commit context is stale: expected %s, live %s", expectedFingerprint, live.Fingerprint)
 	}
 	var stagedRejected []string
 	for _, rejected := range live.RejectedPaths {
 		if rejected.Reason == "ambiguous git status entry" {
-			return Result{}, fmt.Errorf("standalone commit cannot safely stage ambiguous status entry %q", rejected.Path)
+			return StandaloneResult{}, fmt.Errorf("standalone commit cannot safely stage ambiguous status entry %q", rejected.Path)
 		}
 		if rejected.Staged {
 			stagedRejected = append(stagedRejected, rejected.Path)
@@ -147,14 +222,41 @@ func finalizeStandalone(ctx context.Context, git StandaloneGit, repoRoot, expect
 	}
 	if len(stagedRejected) > 0 {
 		if err := git.RestoreStaged(ctx, stagedRejected...); err != nil {
-			return Result{}, fmt.Errorf("unstage rejected standalone commit paths: %w", err)
+			return StandaloneResult{}, fmt.Errorf("unstage rejected standalone commit paths: %w", err)
 		}
 	}
 	if len(live.AllowedPaths) == 0 {
-		return Result{}, ErrNoAllowedChanges
+		return StandaloneResult{}, ErrNoAllowedChanges
 	}
 	if err := git.Add(ctx, live.AllowedPaths...); err != nil {
-		return Result{}, fmt.Errorf("stage standalone commit paths: %w", err)
+		return StandaloneResult{}, fmt.Errorf("stage standalone commit paths: %w", err)
 	}
-	return CommitPrepared(ctx, git, message)
+	committed, err := CommitPrepared(ctx, git, message)
+	result := StandaloneResult{Result: committed}
+	if err != nil || !options.Push {
+		return result, err
+	}
+	if err := publishStandalone(ctx, git, target, committed.SHA, live.Head); err != nil {
+		return result, &StandalonePushError{Commit: committed, Target: target, Err: err}
+	}
+	result.Pushed = &target
+	return result, nil
+}
+
+func publishStandalone(ctx context.Context, git StandaloneGit, target StandalonePush, sha, previousHead string) error {
+	current, err := PreflightStandalonePush(ctx, git)
+	if err != nil {
+		return err
+	}
+	if current != target {
+		return errors.New("standalone push branch or upstream changed after commit")
+	}
+	head, err := git.RevParse(ctx, "HEAD")
+	if err != nil {
+		return fmt.Errorf("recheck standalone push HEAD: %w", err)
+	}
+	if sha == previousHead || head != sha {
+		return errors.New("standalone push HEAD does not match the newly created commit")
+	}
+	return git.(standalonePushGit).PushExact(ctx, target.Destination, sha)
 }

@@ -99,6 +99,65 @@ func (c Client) OriginRemoteHead(ctx context.Context, branch string) (string, bo
 	return "", false, nil
 }
 
+// TrackingDestination records a configured upstream branch and its single push
+// endpoint. PushURL is not presentation data: it may contain credentials.
+type TrackingDestination struct {
+	Remote  string `json:"remote"`
+	Ref     string `json:"ref"`
+	PushURL string `json:"-"`
+}
+
+func (d TrackingDestination) String() string { return d.Remote + ":" + d.Ref }
+
+// TrackingDestination resolves only explicit branch tracking configuration,
+// never push.default, pushRemote, or a guessed origin branch.
+func (c Client) TrackingDestination(ctx context.Context, branch string) (TrackingDestination, error) {
+	if branch == "" {
+		return TrackingDestination{}, errors.New("push requires an attached branch")
+	}
+	if err := c.run(ctx, "check-ref-format", "refs/heads/"+branch); err != nil {
+		return TrackingDestination{}, err
+	}
+	remote, err := c.output(ctx, "config", "--get-all", "branch."+branch+".remote")
+	if err != nil || remote == "" || strings.ContainsAny(remote, "\r\n") {
+		return TrackingDestination{}, fmt.Errorf("branch %q requires one configured upstream remote", branch)
+	}
+	ref, err := c.output(ctx, "config", "--get-all", "branch."+branch+".merge")
+	if err != nil || !strings.HasPrefix(ref, "refs/heads/") || strings.ContainsAny(ref, "\r\n") {
+		return TrackingDestination{}, fmt.Errorf("branch %q requires one configured upstream branch", branch)
+	}
+	if err := c.run(ctx, "check-ref-format", ref); err != nil {
+		return TrackingDestination{}, err
+	}
+	endpoint := "."
+	if remote != "." {
+		endpoint, err = c.output(ctx, "remote", "get-url", "--push", "--all", "--", remote)
+		if err != nil {
+			return TrackingDestination{}, fmt.Errorf("resolve upstream remote %q: %w", remote, err)
+		}
+	}
+	if endpoint == "" || strings.ContainsAny(endpoint, "\r\n") {
+		return TrackingDestination{}, fmt.Errorf("upstream remote %q requires exactly one push URL", remote)
+	}
+	return TrackingDestination{Remote: remote, Ref: ref, PushURL: endpoint}, nil
+}
+
+// PushExact publishes one full object ID to the configured upstream. Explicit
+// refspec and options exclude remote mirror/push refspecs, implicit tags, and
+// recursive submodule pushes. It never creates tracking configuration.
+func (c Client) PushExact(ctx context.Context, destination TrackingDestination, sha string) error {
+	if (len(sha) != 40 && len(sha) != 64) || strings.Trim(sha, "0123456789abcdef") != "" {
+		return errors.New("exact push requires a full lowercase commit SHA")
+	}
+	if destination.Remote == "" || destination.PushURL == "" || !strings.HasPrefix(destination.Ref, "refs/heads/") {
+		return errors.New("exact push requires a configured upstream destination")
+	}
+	if err := c.run(ctx, "check-ref-format", destination.Ref); err != nil {
+		return err
+	}
+	return c.run(ctx, "-c", "remote."+destination.Remote+".mirror=false", "push", "--no-force", "--no-follow-tags", "--recurse-submodules=no", "--", destination.Remote, sha+":"+destination.Ref)
+}
+
 // PushUpstream pushes branch to origin and configures its upstream.
 func (c Client) PushUpstream(ctx context.Context, branch string) error {
 	return c.run(ctx, "push", "--set-upstream", "origin", branch)

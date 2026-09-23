@@ -10,6 +10,7 @@ export const COMMIT_COMMAND_NAME = "tao-commit";
 
 export interface CommitCommandArgs {
   message?: string;
+  push?: boolean;
   context?: string;
   repoRoot?: string;
 }
@@ -79,12 +80,13 @@ export async function runCommitWorkflow(args: CommitCommandArgs, dependencies: C
   const repoRoot = path.resolve(args.repoRoot ?? dependencies.repoRoot ?? process.cwd());
   const run = dependencies.run ?? createDefaultRunner(repoRoot);
   const signal = dependencies.signal;
+  const pushArgs = args.push === true ? ["--push"] : [];
 
   if (args.message) {
-    return finalizeCommit(run, ["commit", "--message", args.message, "--repo-root", repoRoot], signal);
+    return finalizeCommit(run, ["commit", "--message", args.message, "--repo-root", repoRoot, ...pushArgs], signal);
   }
 
-  const contextResult = await runTao(run, ["commit", "--context", "--repo-root", repoRoot], signal);
+  const contextResult = await runTao(run, ["commit", "--context", "--repo-root", repoRoot, ...pushArgs], signal);
   const commitContext = parseCommitContext(contextResult.stdout);
   if (commitContext.allowed_paths.length === 0) {
     return { hash: "", summary: "", output: "Nothing to commit: no allowed changes." };
@@ -108,7 +110,8 @@ export async function runCommitWorkflow(args: CommitCommandArgs, dependencies: C
     }
     await writeFile(proposalPath, proposal, { encoding: "utf8", mode: 0o600 });
 
-    let result = await run("tao", ["commit", "--proposal-file", proposalPath, "--repo-root", repoRoot], { signal });
+    const finalizeArgs = ["commit", "--proposal-file", proposalPath, "--repo-root", repoRoot, ...pushArgs];
+    let result = await run("tao", finalizeArgs, { signal });
     if (!commandSucceeded(result) && isInvalidProposalFailure(result)) {
       const reason = commandFailureText(result);
       proposal = (await propose({
@@ -121,7 +124,7 @@ export async function runCommitWorkflow(args: CommitCommandArgs, dependencies: C
         throw new Error("repaired commit proposal unavailable");
       }
       await writeFile(proposalPath, proposal, { encoding: "utf8", mode: 0o600 });
-      result = await run("tao", ["commit", "--proposal-file", proposalPath, "--repo-root", repoRoot], { signal });
+      result = await run("tao", finalizeArgs, { signal });
     }
     if (!commandSucceeded(result)) {
       throw new Error(`tao commit finalization failed: ${commandFailureText(result)}`);
@@ -138,6 +141,10 @@ export function parseCommitArgs(args: string): CommitCommandArgs {
 
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
+    if (token === "--push") {
+      parsed.push = true;
+      continue;
+    }
     if (token === "--message" && tokens[i + 1]) {
       parsed.message = tokens[++i];
       continue;
@@ -158,7 +165,7 @@ export function parseCommitArgs(args: string): CommitCommandArgs {
 export function createCommitCommand(dependencies: CommitCommandDependencies = {}): CommitCommandContract {
   return {
     name: COMMIT_COMMAND_NAME,
-    description: "Prepare a safe local Tao commit",
+    description: "Prepare a safe Tao commit (local unless --push)",
     parseArgs: parseCommitArgs,
     async handler(args, ctx) {
       const parsed = parseCommitArgs(args);
@@ -290,7 +297,7 @@ function parseCommitContext(stdout: string): StandaloneCommitContext {
 
 function parseCommitResult(stdout: string): CreateCommitResult {
   const output = stdout.trim();
-  const match = /^Created local commit ([0-9a-f]+) (.+)\.$/.exec(output);
+  const match = /^Created local commit ([0-9a-f]+) (.+)\.(?:\nPushed commit [0-9a-f]+ to [^\n]+\.)?$/.exec(output);
   if (!match) {
     if (output === "Nothing to commit: no allowed changes.") {
       return { hash: "", summary: "", output };
@@ -310,7 +317,8 @@ function commandFailureText(result: CommandResult): string {
 
 function isInvalidProposalFailure(result: CommandResult): boolean {
   const failure = commandFailureText(result).toLowerCase();
-  return failure.includes("standalone commit proposal") || failure.includes("decode standalone commit proposal");
+  // Match Tao's proposal errors, not text inside a remote push rejection.
+  return /^(?:(?:validate|decode|format) )?standalone commit proposal\b/.test(failure);
 }
 
 function isWithin(repoRoot: string, candidate: string): boolean {

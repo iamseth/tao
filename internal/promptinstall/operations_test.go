@@ -186,7 +186,7 @@ func TestInstallAllPiWritesPromptTemplatesAndTaoExtension(t *testing.T) {
 		t.Fatalf("expected Pi Tao extension package target, got %q: %v", target, err)
 	}
 	commitSource := readPromptInstallText(t, filepath.Join(target, "src", "commit.ts"))
-	for _, want := range []string{`run("tao"`, `os.tmpdir()`, `await rm(tempDir, { recursive: true, force: true })`} {
+	for _, want := range []string{`run("tao"`, `os.tmpdir()`, `await rm(tempDir, { recursive: true, force: true })`, `token === "--push"`, `args.push === true ? ["--push"] : []`, `...pushArgs`} {
 		if !strings.Contains(commitSource, want) {
 			t.Fatalf("expected Pi commit extension to delegate with %q, got %q", want, commitSource)
 		}
@@ -343,6 +343,14 @@ func assertManagedCommitDelegates(t *testing.T, path, providerMarker string) {
 		providerMarker,
 		"tao commit --context",
 		"tao commit --proposal-file",
+		"The default is commit-only; remote mutation requires explicit `--push`",
+		"tao commit --context --push",
+		"tao commit --proposal-file <temporary-directory>/proposal.json --push",
+		"tao commit --message <exact-message> --push",
+		"Otherwise omit `--push` from every call",
+		"Do not run Git directly, including `git push`",
+		"the local commit remains",
+		"Do not rerun commit, amend, reset, or automatically retry publication",
 		"${TMPDIR:-/tmp}/tao-commit.XXXXXX",
 		"Best-effort remove both temporary files",
 		"do not start another agent or model session",

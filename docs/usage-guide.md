@@ -644,14 +644,15 @@ automatically. Use the standalone command when automatic rework is disabled or
 when you want to inspect the generated slices before running them; add `--run`
 to hand the reopened plan back to `tao run`.
 
-### `/tao-commit` — local conventional commit
+### `/tao-commit` — conventional commit, optionally pushed
 
 Creates one local commit through Tao's standalone boundary. Tao first returns
 only filtered allowed context and a fingerprint. The active agent/model proposes
 `<type>(<lowercase-scope>): <lowercase-imperative-summary>` with non-empty
 `What:` and `Why:` sections; Tao then rechecks the live repository, validates the
 proposal, excludes `.tao/`, suspected secrets, and generated output, stages safe
-paths, appends any trusted evidence, and creates the commit. It never pushes.
+paths, appends any trusted evidence, and creates the commit. By default it is
+commit-only: no remote mutation occurs.
 
 **When to use:** for an explicit standalone commit outside a run, or after
 choosing `tao run --commit-policy none`. This command is intentionally fast and
@@ -664,6 +665,24 @@ passes it through the same central validation and safety boundary. This is an
 explicit standalone override, not an automatic-workflow escape hatch. Automatic
 runs never delegate slice commits to this command: `tao slice-complete` owns the
 recoverable transaction and Tao owns Git.
+
+Use `/tao-commit --push` when you also want Tao to publish the new commit; it
+works with generated proposals or an explicit `--message`. Pi's extension and
+Claude's managed prompt forward this explicit flag to Tao, never run Git
+directly, and leave no-flag calls local-only. Put `--push` before any `--` context
+delimiter; mentioning it in context or message text does not opt in.
+
+The current branch must already have a configured upstream. Tao checks that
+upstream before committing, rechecks the branch, destination, and created HEAD,
+then publishes the exact newly created SHA without force. It does not choose a
+remote, create an upstream, or publish older commits on a no-op. Context
+preflight remains read-only even with `--push`.
+
+If publication fails, **the local commit remains**. Tao reports its SHA,
+destination, and recovery guidance. Inspect and resolve the failure, then
+manually publish that exact commit to the reported destination without force.
+Do not rerun `/tao-commit`, amend, or reset to retry publication; neither wrapper
+automatically retries a push or treats its failure as a message-repair request.
 
 Both standalone context generation and finalization refuse an active
 Tao-managed plan worktree before exposing diff context or mutating Git. The
