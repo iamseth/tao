@@ -15,6 +15,7 @@ import (
 
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/note"
+	"github.com/iamseth/tao/internal/noteeditor"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/taodata"
 	"github.com/iamseth/tao/internal/term"
@@ -37,7 +38,7 @@ func TestUICommandRegistrationAndHelp(t *testing.T) {
 	if err := renderCommandHelp(&out, metadata); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"keyboard-driven dashboard", "Notes, Plans, Settings, and Debug tabs", "Plans is the initial tab", "Tab or the right arrow", "Shift+Tab or the left arrow", "gg jumps to the top of the visible list", "G jumps to the bottom", "Repository focus is shared by Plans and Notes", "immediate work under NOW, planned work under NEXT, and terminal plans under DONE", "immediate operational actions such as MONITOR, APPROVE, or MERGE", "Operational urgency always takes precedence", "disposition, valid sequence relationships, categorical priority, and recent activity", "missing, duplicate, or cyclic relationships only warn", "legacy plans remain visible as unranked", "RUN AGE is elapsed time for an observed invocation", "NEXT is a derived advisory label", "Press Enter to inspect the selected plan's full decision and lifecycle context", "Page Up and Page Down move by a viewport", "Tab or Shift+Tab to switch Overview", "left and right open the previous or next visible plan", "e expands or collapses its scope file list", "DONE is always displayed with up to 15 completed or abandoned plans", "m confirms a selected reviewed-plan merge", "M confirms a repository-scoped merge --all", "press Enter for the full read-only slice page", "repository-owned open notes", "grouped by ascending tier", "every non-tier tag", "separate created and updated ages", "Ctrl+G edits the selected note's text and tags in $EDITOR", "falling back to nvim", "c key copies its note ID to the system clipboard", "Keys 0 through 3 replace its tier tag", "Lowercase d asks before deleting", "uppercase D deletes it immediately", "full detail", "per-repository pull-request defaults", "explicit true, explicit false, and inherited", "doctor problems", "resolved runtime defaults from tao status", "Plan actions do not act on Notes, Settings, or Debug", "q and Ctrl-C quit globally", "Esc twice within one second", "--interval", "--completed-window", "tao monitor --once", "Usage:\n  tao ui"} {
+	for _, want := range []string{"keyboard-driven dashboard", "Notes, Plans, Settings, and Debug tabs", "Plans is the initial tab", "Tab or the right arrow", "Shift+Tab or the left arrow", "gg jumps to the top of the visible list", "G jumps to the bottom", "Repository focus is shared by Plans and Notes", "immediate work under NOW, planned work under NEXT, and terminal plans under DONE", "immediate operational actions such as MONITOR, APPROVE, or MERGE", "Operational urgency always takes precedence", "disposition, valid sequence relationships, categorical priority, and recent activity", "missing, duplicate, or cyclic relationships only warn", "legacy plans remain visible as unranked", "RUN AGE is elapsed time for an observed invocation", "NEXT is a derived advisory label", "Press Enter to inspect the selected plan's full decision and lifecycle context", "Page Up and Page Down move by a viewport", "Tab or Shift+Tab to switch Overview", "left and right open the previous or next visible plan", "e expands or collapses its scope file list", "DONE is always displayed with up to 15 completed or abandoned plans", "m confirms a selected reviewed-plan merge", "M confirms a repository-scoped merge --all", "press Enter for the full read-only slice page", "repository-owned open notes", "grouped by ascending tier", "every non-tier tag", "separate created and updated ages", "n creates a note", "otherwise choose explicitly", "blank body cancels", "Ctrl+G edits the selected note's text and tags in $EDITOR", "falling back to nvim", "c key copies its note ID to the system clipboard", "Keys 0 through 3 replace its tier tag", "Lowercase d asks before deleting", "uppercase D deletes it immediately", "full detail", "per-repository pull-request defaults", "explicit true, explicit false, and inherited", "doctor problems", "resolved runtime defaults from tao status", "Plan actions do not act on Notes, Settings, or Debug", "q and Ctrl-C quit globally", "Esc twice within one second", "--interval", "--completed-window", "tao monitor --once", "Usage:\n  tao ui"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("ui help missing %q in %q", want, out.String())
 		}
@@ -205,6 +206,47 @@ func TestUIComposesRepositoryNotesCollector(t *testing.T) {
 	for _, want := range []string{"tao │▸notes  plans  settings  debug", "all repos", "1 open note", "CLI-composed open note"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("ui output missing %q in %q", want, output.String())
+		}
+	}
+}
+
+func TestUIComposesNoteCreationWithMetadataDestinations(t *testing.T) {
+	registry := taodata.NewRegistry(t.TempDir())
+	repo := taodata.Repo{Schema: taodata.RepoSchema, ID: "empty-repo", Name: "No notes or checkout", Root: filepath.Join(t.TempDir(), "missing")}
+	if err := registry.WriteRepo(repo); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	app := App{
+		In: strings.NewReader("\x1b[Zn\rq"), Out: &output, Err: &output,
+		MonitorCollector:  collectingMonitorFunc(func(context.Context) error { return nil }),
+		MonitorIsTerminal: func(io.Writer) bool { return true },
+		MonitorTicker: func(time.Duration) MonitorTicker {
+			return &monitorTickerStub{ch: make(chan time.Time), stopped: make(chan struct{})}
+		},
+		UITerminal: &uiTerminalStub{size: term.Size{Width: 140, Height: 35}},
+		Registry:   func() NoteRegistry { return registry },
+		// Debug may inspect health; the creation inventory is independently
+		// tested to avoid all checkout probes.
+		RepoHealthCheck: func(context.Context, taodata.Repo) taodata.RepoHealth {
+			return taodata.RepoHealth{}
+		},
+	}
+	calls := 0
+	app.UINoteCreator = &uiNoteEditor{app: app, session: noteeditor.Session{TempDir: t.TempDir(), Runner: func(_ context.Context, _ string, args []string, _ io.Reader, _, _ io.Writer) error {
+		calls++
+		return os.WriteFile(args[len(args)-1], []byte("tags:\ntier1\ncreated-in-ui\n---\nNew dashboard note\n"), 0o600)
+	}}}
+	if err := app.ui(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	stored, warnings, err := note.NewRepository(registry.NotesDir(repo), note.RepoReference{ID: repo.ID, Root: repo.Root}).List(context.Background(), note.Filter{})
+	if err != nil || len(warnings) != 0 || len(stored) != 1 || calls != 1 {
+		t.Fatalf("notes=%+v warnings=%v err=%v calls=%d", stored, warnings, err, calls)
+	}
+	for _, want := range []string{"Choose note repository", "No notes or checkout", "Created note " + stored[0].ID, "New dashboard note", "created-in-ui"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("missing %q in dashboard output", want)
 		}
 	}
 }

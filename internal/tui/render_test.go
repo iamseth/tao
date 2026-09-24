@@ -847,11 +847,11 @@ func TestRenderShortcutLegendAsBoundedPopover(t *testing.T) {
 		},
 		{
 			page:        PageNotes,
-			want:        []string{"Keyboard shortcuts", "PgUp / PgDn", "gg / G", "Jump to top / bottom", "Open selected item", "Ctrl+G", "Edit selected note", "c", "Copy selected note ID", "0 / 1 / 2 / 3", "Set selected note tier", "d / D", "Cycle repository filter", "/", "Search plans and notes", "Backspace", "Go back / clear search", "? / Esc"},
+			want:        []string{"Keyboard shortcuts", "PgUp / PgDn", "gg / G", "Jump to top / bottom", "Open selected item", "Create note", "Ctrl+G", "Edit selected note", "c", "Copy selected note ID", "0 / 1 / 2 / 3", "Set selected note tier", "d / D", "Cycle repository filter", "/", "Search plans and notes", "Backspace", "Go back / clear search", "? / Esc"},
 			unavailable: "Run selected plan",
 		},
 	} {
-		frame := Render(Model{Page: test.page, ShowShortcuts: true, Width: 64, Height: 18, Profile: ProfileTrueColor})
+		frame := Render(Model{Page: test.page, ShowShortcuts: true, Width: 64, Height: 19, Profile: ProfileTrueColor})
 		for _, want := range test.want {
 			if !strings.Contains(frame, want) {
 				t.Fatalf("%s shortcut popover missing %q:\n%s", test.page, want, frame)
@@ -861,8 +861,8 @@ func TestRenderShortcutLegendAsBoundedPopover(t *testing.T) {
 			t.Fatalf("%s shortcut popover contains unavailable action %q:\n%s", test.page, test.unavailable, frame)
 		}
 		lines := renderedLines(frame)
-		if len(lines) != 18 {
-			t.Fatalf("%s shortcut popover lines = %d, want 18", test.page, len(lines))
+		if len(lines) != 19 {
+			t.Fatalf("%s shortcut popover lines = %d, want 19", test.page, len(lines))
 		}
 		for _, line := range lines {
 			if width := cells.Width(line); width > 64 {

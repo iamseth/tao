@@ -94,7 +94,7 @@ func renderNotesPage(snapshot note.Snapshot, selected int, focusRepositoryID str
 	selectedLine = -1
 	if len(items) == 0 {
 		sectionWidth := dashboardSectionWidth(model, PageNotes, "OPEN NOTES", 0)
-		lines = append(lines, "", sectionTitleRule(model.Profile, RoleAccent, "OPEN NOTES", sectionWidth), "  Notes page. No open notes.")
+		lines = append(lines, "", sectionTitleRule(model.Profile, RoleAccent, "OPEN NOTES", sectionWidth), "  Notes page. No open notes. Press n to create a note.")
 		metadata.sections = append(metadata.sections, tableViewportSection{headingLines: []int{1}, contentLines: []int{2}})
 	} else {
 		widths := measureNoteTable(items, now)

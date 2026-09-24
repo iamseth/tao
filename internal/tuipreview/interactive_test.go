@@ -1,6 +1,7 @@
 package tuipreview
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"os"
@@ -30,6 +31,9 @@ func TestNewInteractiveAppUsesOnlyFixtureBoundaries(t *testing.T) {
 	ticker := &previewTestTicker{updates: make(chan time.Time)}
 	app := NewInteractiveApp(scenario, strings.NewReader(""), io.Discard, previewTestTerminal{}, ticker)
 
+	if app.NoteCreator != nil || app.NoteRepositories != nil || app.NoteEditor != nil || app.NoteActions != nil {
+		t.Fatal("interactive fixture app has note mutation services")
+	}
 	if app.Actions != nil {
 		t.Fatal("interactive fixture app has production actions")
 	}
@@ -46,6 +50,18 @@ func TestNewInteractiveAppUsesOnlyFixtureBoundaries(t *testing.T) {
 	detail, err := app.Details.ResolvePlan(context.Background(), scenario.Plans[0].PlanDir)
 	if err != nil || detail.State.Plan.ID != scenario.Plans[0].Detail.State.Plan.ID {
 		t.Fatalf("fixture detail = %#v, error = %v", detail, err)
+	}
+}
+
+func TestInteractiveNoteCreationIsUnavailable(t *testing.T) {
+	scenario, _ := Lookup(ScenarioEmpty)
+	var output bytes.Buffer
+	app := NewInteractiveApp(scenario, strings.NewReader("\x1b[Znq"), &output, previewTestTerminal{}, &previewTestTicker{updates: make(chan time.Time)})
+	if err := app.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "Note creation is unavailable.") {
+		t.Fatal("preview did not explain unavailable creation")
 	}
 }
 

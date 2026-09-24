@@ -132,7 +132,14 @@ focus on Plans and Notes. On either list, `gg` jumps to the first visible item
 and `G` jumps to the last. In plan detail, `Tab` and `Shift+Tab` switch detail
 tabs while left and right open the previous or next visible plan. Notes are grouped by numeric tier,
 with lower tiers first and untiered notes last; their rows show all non-tier tags
-plus both creation age and update recency. On the Notes list or detail view,
+plus both creation age and update recency. On the Notes list, press `n` to
+capture a new note, even when the list is empty or filtered. Active repository
+focus chooses the destination; without focus, select a registered repository
+with `Enter` or cancel with `Esc`/`Backspace`. The editor uses `$EDITOR` (or
+`nvim` when unset); write a body and optional tags, then save and quit. A blank
+body cancels without creating a note. Saving preserves filters and selects the
+new note if visible; feedback includes its ID even if hidden or refresh fails.
+On the Notes list or detail view,
 `Ctrl+G` opens the selected note in `$EDITOR` (or `nvim` when unset); edit the
 tag lines and body, then write and quit to persist the changes. Press `c` to
 copy the selected note ID to the system clipboard for a planning session. Keys

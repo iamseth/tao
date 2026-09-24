@@ -39,6 +39,7 @@ func shortcutsForPage(page PageID) []shortcut {
 	}
 	if normalizePage(page) == PageNotes {
 		common = append(common,
+			shortcut{key: "n", action: "Create note (focus or repo picker)"},
 			shortcut{key: "Ctrl+G", action: "Edit selected note"},
 			shortcut{key: "c", action: "Copy selected note ID"},
 			shortcut{key: "0 / 1 / 2 / 3", action: "Set selected note tier"},

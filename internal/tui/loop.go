@@ -72,21 +72,23 @@ type SettingsService interface {
 // App owns one interactive dashboard event loop. Its boundaries are injectable
 // so terminal behavior can be tested without taking over a real terminal.
 type App struct {
-	Input       io.Reader
-	Output      io.Writer
-	Terminal    Terminal
-	Ticker      Ticker
-	Collector   SnapshotCollector
-	Notes       NoteSnapshotCollector
-	NoteEditor  NoteEditor
-	NoteActions NoteActions
-	Clipboard   Clipboard
-	Debug       DebugSnapshotCollector
-	Settings    SettingsService
-	Actions     *Actions
-	Details     DetailRepository
-	Inspector   DetailInspector
-	Now         func() time.Time
+	Input            io.Reader
+	Output           io.Writer
+	Terminal         Terminal
+	Ticker           Ticker
+	Collector        SnapshotCollector
+	Notes            NoteSnapshotCollector
+	NoteEditor       NoteEditor
+	NoteCreator      NoteCreator
+	NoteRepositories NoteRepositoryLister
+	NoteActions      NoteActions
+	Clipboard        Clipboard
+	Debug            DebugSnapshotCollector
+	Settings         SettingsService
+	Actions          *Actions
+	Details          DetailRepository
+	Inspector        DetailInspector
+	Now              func() time.Time
 }
 
 type inputResult struct {
@@ -123,6 +125,7 @@ type loopState struct {
 	noteDetail          *note.CatalogNote
 	noteDetailOffset    int
 	noteEditMessage     string
+	notePicker          *noteRepositoryPicker
 	now                 func() time.Time
 	lastRootEscape      time.Time
 	listTopPending      bool
@@ -213,6 +216,17 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 		case result := <-input:
 			if result.err != nil {
 				return fmt.Errorf("read terminal input: %w", result.err)
+			}
+			if handled, quit, err := a.handleNoteCreation(loopCtx, &state, result.key); err != nil {
+				return err
+			} else if quit {
+				return nil
+			} else if handled {
+				if err := a.writeFrame(state); err != nil {
+					return err
+				}
+				close(result.resume)
+				continue
 			}
 			if result.key.Key == term.KeyCtrlG {
 				handled, err := a.editSelectedNote(loopCtx, &state)
@@ -360,7 +374,7 @@ func (a App) collectNotes(ctx context.Context) (note.Snapshot, error) {
 }
 
 func (a App) editSelectedNote(ctx context.Context, state *loopState) (bool, error) {
-	if state.showShortcuts || state.searchActive || state.confirm != nil || state.detail != nil {
+	if state.showShortcuts || state.searchActive || state.confirm != nil || state.detail != nil || state.notePicker != nil {
 		return false, nil
 	}
 	var item note.CatalogNote
@@ -518,6 +532,8 @@ func (a App) collectSettings(ctx context.Context) SettingsSnapshot {
 func (a App) writeFrame(state loopState) error {
 	var frame bytes.Buffer
 	switch {
+	case state.notePicker != nil:
+		frame.WriteString(clearScreenSequence + strings.Join(state.notePicker.render(state.size, state.profile), "\n"))
 	case state.noteDetail != nil:
 		message := state.noteEditMessage
 		if prompt := state.confirmMessage(); prompt != "" {

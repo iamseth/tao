@@ -40,6 +40,8 @@ type App struct {
 	MonitorIsTerminal        func(io.Writer) bool
 	UITerminal               tui.Terminal
 	UICommandLauncher        tui.CommandLauncher
+	UINoteCreator            tui.NoteCreator
+	UINoteRepositories       tui.NoteRepositoryLister
 	UINoteEditor             tui.NoteEditor
 	UINoteActions            tui.NoteActions
 	UIClipboard              tui.Clipboard

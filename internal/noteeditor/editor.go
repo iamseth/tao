@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/iamseth/tao/internal/note"
 )
@@ -36,6 +37,48 @@ type Session struct {
 // Edit opens current in an external editor and returns validated buffer fields.
 // A byte-for-byte equivalent text and equivalent tag list are reported unchanged.
 func (s Session) Edit(ctx context.Context, current note.Note) (text string, tags []string, changed bool, err error) {
+	content, err := s.run(ctx, formatBuffer(current))
+	if err != nil {
+		return "", nil, false, err
+	}
+	text, tags, err = parseBuffer(content)
+	if err != nil {
+		return "", nil, false, err
+	}
+	return text, tags, text != current.Text || !slices.Equal(tags, current.Tags), nil
+}
+
+// Compose opens a blank new-note buffer. Destination is informational only and
+// never becomes note content. A valid blank body cancels, even when tags exist.
+func (s Session) Compose(ctx context.Context, destination string) (text string, tags []string, ready bool, err error) {
+	header := strings.Map(func(r rune) rune {
+		if !unicode.IsPrint(r) {
+			return ' '
+		}
+		return r
+	}, destination)
+	runes := []rune(header)
+	if len(runes) > 256 {
+		header = string(runes[:256]) + "…"
+	}
+	content, err := s.run(ctx, "# Destination: "+header+"\n"+formatBuffer(note.Note{}))
+	if err != nil {
+		return "", nil, false, err
+	}
+	text, tags, err = parseCompositionBuffer(content)
+	if err != nil {
+		return "", nil, false, err
+	}
+	if strings.TrimSpace(text) == "" {
+		return "", nil, false, nil
+	}
+	return text, tags, true, nil
+}
+
+func (s Session) run(ctx context.Context, buffer string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	command := s.Command
 	if len(command) == 0 {
 		command = strings.Fields(os.Getenv("EDITOR"))
@@ -44,7 +87,7 @@ func (s Session) Edit(ctx context.Context, current note.Note) (text string, tags
 		command = []string{"nvim"}
 	}
 	if strings.TrimSpace(command[0]) == "" {
-		return "", nil, false, errors.New("note editor command is empty")
+		return "", errors.New("note editor command is empty")
 	}
 	runner := s.Runner
 	if runner == nil {
@@ -52,38 +95,38 @@ func (s Session) Edit(ctx context.Context, current note.Note) (text string, tags
 	}
 	file, err := os.CreateTemp(s.TempDir, "tao-note-*.md")
 	if err != nil {
-		return "", nil, false, fmt.Errorf("create note editor buffer: %w", err)
+		return "", fmt.Errorf("create note editor buffer: %w", err)
 	}
 	path := file.Name()
 	defer func() { _ = os.Remove(path) }()
-	if _, err := io.WriteString(file, formatBuffer(current)); err != nil {
+	if _, err := io.WriteString(file, buffer); err != nil {
 		_ = file.Close()
-		return "", nil, false, fmt.Errorf("write note editor buffer: %w", err)
+		return "", fmt.Errorf("write note editor buffer: %w", err)
 	}
 	if err := file.Close(); err != nil {
-		return "", nil, false, fmt.Errorf("close note editor buffer: %w", err)
+		return "", fmt.Errorf("close note editor buffer: %w", err)
 	}
 
 	args := append(append([]string(nil), command[1:]...), path)
 	if err := runner(ctx, command[0], args, s.Input, s.Output, s.Error); err != nil {
-		return "", nil, false, fmt.Errorf("run note editor: %w", err)
+		return "", fmt.Errorf("run note editor: %w", err)
 	}
-	info, err := os.Stat(path)
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	file, err = os.Open(path) // #nosec G304 -- path was allocated above and never exposed except to the editor.
 	if err != nil {
-		return "", nil, false, fmt.Errorf("inspect note editor buffer: %w", err)
+		return "", fmt.Errorf("read note editor buffer: %w", err)
 	}
-	if info.Size() > maxEditorFileBytes {
-		return "", nil, false, fmt.Errorf("note editor buffer exceeds %d bytes", maxEditorFileBytes)
-	}
-	content, err := os.ReadFile(path) // #nosec G304 -- path was allocated above and never exposed except to the editor.
+	defer func() { _ = file.Close() }()
+	content, err := io.ReadAll(io.LimitReader(file, maxEditorFileBytes+1))
 	if err != nil {
-		return "", nil, false, fmt.Errorf("read note editor buffer: %w", err)
+		return "", fmt.Errorf("read note editor buffer: %w", err)
 	}
-	text, tags, err = parseBuffer(string(content))
-	if err != nil {
-		return "", nil, false, err
+	if len(content) > maxEditorFileBytes {
+		return "", fmt.Errorf("note editor buffer exceeds %d bytes", maxEditorFileBytes)
 	}
-	return text, tags, text != current.Text || !slices.Equal(tags, current.Tags), nil
+	return string(content), nil
 }
 
 // DefaultRunner runs an interactive editor in the foreground.
@@ -110,6 +153,17 @@ func formatBuffer(current note.Note) string {
 }
 
 func parseBuffer(content string) (string, []string, error) {
+	text, tags, err := parseCompositionBuffer(content)
+	if err != nil {
+		return "", nil, err
+	}
+	if strings.TrimSpace(text) == "" {
+		return "", nil, errors.New("note text is blank")
+	}
+	return text, tags, nil
+}
+
+func parseCompositionBuffer(content string) (string, []string, error) {
 	lines := strings.Split(content, "\n")
 	tagsLine := -1
 	separatorLine := -1
@@ -134,10 +188,7 @@ func parseBuffer(content string) (string, []string, error) {
 		}
 	}
 	text := strings.Join(lines[separatorLine+1:], "\n")
-	if strings.TrimSpace(text) == "" {
-		return "", nil, errors.New("note text is blank")
-	}
-	if len([]byte(text)) > note.MaxText {
+	if len(text) > note.MaxText {
 		return "", nil, fmt.Errorf("note text exceeds %d bytes", note.MaxText)
 	}
 	return text, tags, nil
