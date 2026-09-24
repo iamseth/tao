@@ -11,6 +11,8 @@ jobs:
   build-test-lint:
     name: Build, test, and lint
     runs-on: ubuntu-latest
+    env:
+      TAO_REQUIRE_CONFINEMENT_TESTS: "1"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -24,6 +26,40 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bubblewrap
+
+      - name: Allow bubblewrap user namespaces on the ephemeral runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          before="$(sysctl kernel.apparmor_restrict_unprivileged_userns kernel.apparmor_restrict_unprivileged_unconfined kernel.unprivileged_userns_clone user.max_user_namespaces)"
+          test "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)" = 1
+          test "$(command -v bwrap)" = /usr/bin/bwrap
+          test "$(readlink -f /usr/bin/bwrap)" = /usr/bin/bwrap
+          test "$(stat -c %u /usr/bin/bwrap)" = 0
+          test ! -u /usr/bin/bwrap
+          test -z "$(find /usr/bin/bwrap -perm /022 -print)"
+          # An executable-scoped userns exception, not an additional sandbox.
+          # Keep global restrictions and Tao's namespace/mount isolation intact.
+          printf '%s\n' \
+            'abi <abi/4.0>,' \
+            'include <tunables/global>' \
+            'profile tao-ci-bwrap /usr/bin/bwrap flags=(unconfined) {' \
+            '  userns,' \
+            '}' > "$RUNNER_TEMP/tao-ci-bwrap"
+          sudo install -o root -g root -m 0644 "$RUNNER_TEMP/tao-ci-bwrap" /etc/apparmor.d/tao-ci-bwrap
+          sudo apparmor_parser -r /etc/apparmor.d/tao-ci-bwrap
+          sudo grep -F 'tao-ci-bwrap ' /sys/kernel/security/apparmor/profiles
+          after="$(sysctl kernel.apparmor_restrict_unprivileged_userns kernel.apparmor_restrict_unprivileged_unconfined kernel.unprivileged_userns_clone user.max_user_namespaces)"
+          printf '%s\n' "$after"
+          test "$before" = "$after"
+
+      - name: Report Linux process sandbox test outcome
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          go test -count=1 -v ./internal/merge -run '^TestSingleMergeProcessSandboxHidesTaoParent$' | tee "$RUNNER_TEMP/tao-confinement-result.log"
+          grep -q '^--- PASS: TestSingleMergeProcessSandboxHidesTaoParent ' "$RUNNER_TEMP/tao-confinement-result.log"
 
       - name: Verify no third-party dependencies
         run: make verify-no-deps

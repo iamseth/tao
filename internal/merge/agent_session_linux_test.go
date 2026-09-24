@@ -1,6 +1,7 @@
 package merge
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 const singleMergePIDConfinementHelper = "TAO_TEST_SINGLE_MERGE_PID_CONFINEMENT_HELPER"
@@ -59,15 +61,9 @@ func TestSingleMergeProcessSandboxHidesTaoParent(t *testing.T) {
 	policy := singleMergeFilesystemConfinement{
 		protectedPaths: []string{protectedRoot}, integrationRoot: integrationRoot, allowEdits: true,
 	}
-	probeName, probeArgs, err := singleMergeFilesystemConfinementCommand(policy, runtimeRoot, "/bin/true", nil)
-	if err != nil {
-		t.Skipf("Linux provider confinement unavailable: %v", err)
-	}
-	probe := exec.Command(probeName, probeArgs...) //nolint:gosec // fixed test executable probes Tao's generated sandbox command.
-	probe.Dir = integrationRoot
-	if output, err := probe.CombinedOutput(); err != nil {
-		t.Skipf("Linux provider confinement cannot start: %v: %s", err, output)
-	}
+	requireSingleMergeSandboxProbe(t, integrationRoot, func() (string, []string, error) {
+		return singleMergeFilesystemConfinementCommand(policy, runtimeRoot, "/bin/true", nil)
+	})
 
 	t.Setenv(singleMergePIDConfinementHelper, "1")
 	t.Setenv("TAO_TEST_HOST_PARENT_PID", strconv.Itoa(os.Getpid()))
@@ -86,6 +82,106 @@ func TestSingleMergeProcessSandboxHidesTaoParent(t *testing.T) {
 	command.Dir = integrationRoot
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("private PID confinement failed: %v:\n%s", err, output)
+	}
+}
+
+// Keep availability policy test-only and separate from the boundary assertions,
+// which must fail regardless of whether local sandbox availability is optional.
+func requireSingleMergeSandboxProbe(t *testing.T, dir string, command func() (string, []string, error)) {
+	t.Helper()
+	unavailable := func(format string, args ...any) {
+		t.Helper()
+		if os.Getenv("TAO_REQUIRE_CONFINEMENT_TESTS") == "1" {
+			t.Fatalf(format, args...)
+		}
+		t.Skipf(format, args...)
+	}
+	name, args, err := command()
+	if err != nil {
+		unavailable("Linux provider confinement unavailable: %v", err)
+	}
+	probe := exec.Command(name, args...) //nolint:gosec // test-only probe of the generated sandbox command, or a fixed regression command.
+	probe.Dir = dir
+	if output, err := probe.CombinedOutput(); err != nil {
+		unavailable("Linux provider confinement cannot start: %v: %s", err, output)
+	}
+}
+
+func TestSingleMergeSandboxAvailability(t *testing.T) {
+	const helper = "TAO_TEST_SINGLE_MERGE_SANDBOX_AVAILABILITY"
+	if mode := os.Getenv(helper); mode != "" {
+		requireSingleMergeSandboxProbe(t, t.TempDir(), func() (string, []string, error) {
+			switch mode {
+			case "construction":
+				return "", nil, errors.New("synthetic command construction failure")
+			case "startup":
+				return "/bin/sh", []string{"-c", "printf 'synthetic startup diagnostic' >&2; exit 23"}, nil
+			default:
+				t.Fatalf("unknown availability helper mode %q", mode)
+				return "", nil, nil
+			}
+		})
+		t.Fatal("unavailable probe unexpectedly returned")
+	}
+
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, site := range []struct {
+		name       string
+		diagnostic string
+	}{
+		{"construction", "Linux provider confinement unavailable: synthetic command construction failure"},
+		{"startup", "Linux provider confinement cannot start: exit status 23: synthetic startup diagnostic"},
+	} {
+		for _, gate := range []struct {
+			name     string
+			value    string
+			required bool
+		}{
+			{name: "unset"},
+			{name: "empty"},
+			{name: "zero", value: "0"},
+			{name: "other", value: "true"},
+			{name: "required", value: "1", required: true},
+		} {
+			t.Run(site.name+"/"+gate.name, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				command := exec.CommandContext(ctx, executable, "-test.run=^TestSingleMergeSandboxAvailability$", "-test.v")
+				// Explicitly remove inherited helper modes and the CI gate so optional
+				// cases really exercise the default even in required-mode CI.
+				for _, entry := range os.Environ() {
+					key, _, _ := strings.Cut(entry, "=")
+					if key != helper && key != singleMergePIDConfinementHelper && key != "TAO_REQUIRE_CONFINEMENT_TESTS" {
+						command.Env = append(command.Env, entry)
+					}
+				}
+				command.Env = append(command.Env, helper+"="+site.name)
+				if gate.name != "unset" {
+					command.Env = append(command.Env, "TAO_REQUIRE_CONFINEMENT_TESTS="+gate.value)
+				}
+				output, err := command.CombinedOutput()
+				if ctx.Err() != nil {
+					t.Fatalf("availability helper timed out: %v\n%s", ctx.Err(), output)
+				}
+				want, unwanted := "--- SKIP: TestSingleMergeSandboxAvailability", "--- FAIL: TestSingleMergeSandboxAvailability"
+				if gate.required {
+					want, unwanted = unwanted, want
+					var exit *exec.ExitError
+					if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+						t.Fatalf("required mode must exit 1, got %v\n%s", err, output)
+					}
+				} else if err != nil {
+					t.Fatalf("optional mode must exit successfully: %v\n%s", err, output)
+				}
+				text := string(output)
+				if !strings.Contains(text, want) || strings.Contains(text, unwanted) || !strings.Contains(text, site.diagnostic) {
+					t.Fatalf("want %q with %q and no %q, got:\n%s", want, site.diagnostic, unwanted, text)
+				}
+			})
+		}
 	}
 }
 
