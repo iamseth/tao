@@ -364,11 +364,20 @@ func TestPlanCleanRefusesProtectedAndUnmergedByDefault(t *testing.T) {
 	if unmerged.CanRemove || unmerged.Status != "unmerged" {
 		t.Fatalf("expected unmerged refusal, got %#v", unmerged)
 	}
-	if _, err := manager.Clean(context.Background(), "plan-unmerged", CleanOptions{}); err == nil {
+	if _, err := manager.Clean(context.Background(), cleanupPlanDetail("plan-unmerged"), CleanOptions{}); err == nil {
 		t.Fatal("expected unmerged workspace clean to require force")
 	}
-	if _, err := manager.Clean(context.Background(), "plan-unmerged", CleanOptions{Force: true}); err != nil {
+	if _, err := manager.Clean(context.Background(), cleanupPlanDetail("plan-unmerged"), CleanOptions{Force: true}); err == nil || !strings.Contains(err.Error(), "--force-dirty") {
+		t.Fatalf("Force-only unmerged clean error = %v", err)
+	}
+	if _, err := os.Stat(metadata.Path); err != nil {
+		t.Fatalf("refused unmerged workspace should remain: %v", err)
+	}
+	if _, err := manager.Clean(context.Background(), cleanupPlanDetail("plan-unmerged"), CleanOptions{Force: true, ForceDirty: true}); err != nil {
 		t.Fatalf("forced unmerged clean failed: %v", err)
+	}
+	if _, err := os.Stat(metadata.Path); !os.IsNotExist(err) {
+		t.Fatalf("expected workspace removal, stat error = %v", err)
 	}
 }
 
@@ -427,7 +436,7 @@ func TestCleanRemovesCleanWorkspaceAndRefusesDirtyWithoutForce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare failed: %v", err)
 	}
-	if _, err := manager.Clean(context.Background(), "plan-a", CleanOptions{}); err != nil {
+	if _, err := manager.Clean(context.Background(), cleanupPlanDetail("plan-a"), CleanOptions{}); err != nil {
 		t.Fatalf("Clean failed: %v", err)
 	}
 	if _, err := os.Stat(metadata.Path); !os.IsNotExist(err) {
@@ -441,11 +450,187 @@ func TestCleanRemovesCleanWorkspaceAndRefusesDirtyWithoutForce(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dirty.Path, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil { //nolint:gosec // G306: test fixture file
 		t.Fatalf("write dirty file: %v", err)
 	}
-	if _, err := manager.Clean(context.Background(), "plan-dirty", CleanOptions{}); err == nil {
+	if _, err := manager.Clean(context.Background(), cleanupPlanDetail("plan-dirty"), CleanOptions{}); err == nil {
 		t.Fatal("expected dirty workspace clean to require force")
 	}
 	if _, err := os.Stat(dirty.Path); err != nil {
 		t.Fatalf("dirty workspace should remain: %v", err)
+	}
+}
+
+func cleanupPlanDetail(id string) *plan.PlanDetail {
+	return &plan.PlanDetail{State: plan.State{Status: plan.StatusCompleted, Plan: plan.PlanState{ID: id}}}
+}
+
+type recordingCleanupMutation struct {
+	calls []string
+	path  string
+	force bool
+}
+
+func (g *recordingCleanupMutation) AddWorktree(context.Context, string, string, string, bool) error {
+	g.calls = append(g.calls, "add")
+	return nil
+}
+
+func (g *recordingCleanupMutation) DeleteBranch(context.Context, string, bool) error {
+	g.calls = append(g.calls, "delete")
+	return nil
+}
+
+func (g *recordingCleanupMutation) RemoveWorktree(_ context.Context, path string, force bool) error {
+	g.calls = append(g.calls, "remove")
+	g.path, g.force = path, force
+	return nil
+}
+
+func TestCleanEnforcesPolicyBeforeGitMutation(t *testing.T) {
+	all := CleanOptions{Force: true, ForceActive: true, ForceDirty: true}
+	for _, tt := range []struct {
+		name      string
+		status    string
+		current   bool
+		dirty     bool
+		unmerged  bool
+		missing   bool
+		protected bool
+		options   CleanOptions
+		wantError string
+	}{
+		{name: "clean"},
+		{name: "clean forced", options: CleanOptions{Force: true}},
+		{name: "active status", status: plan.StatusInProgress, wantError: "--force-active"},
+		{name: "active force only", status: plan.StatusInProgress, options: CleanOptions{Force: true}, wantError: "--force-active"},
+		{name: "active dirty override only", status: plan.StatusInProgress, options: CleanOptions{Force: true, ForceDirty: true}, wantError: "--force-active"},
+		{name: "current slice", current: true, wantError: "--force-active"},
+		{name: "active override", status: plan.StatusInProgress, options: CleanOptions{ForceActive: true}},
+		{name: "current slice override", current: true, options: CleanOptions{ForceActive: true}},
+		{name: "abandoned current slice", status: plan.StatusAbandoned, current: true},
+		{name: "unmerged", unmerged: true, wantError: "--force-dirty"},
+		{name: "unmerged force only", unmerged: true, options: CleanOptions{Force: true}, wantError: "--force-dirty"},
+		{name: "unmerged managed override ignored", unmerged: true, options: CleanOptions{Force: true, AllowNonAncestralBranch: true}, wantError: "--force-dirty"},
+		{name: "unmerged active override only", unmerged: true, options: CleanOptions{ForceActive: true}, wantError: "--force-dirty"},
+		{name: "unmerged override", unmerged: true, options: CleanOptions{ForceDirty: true}},
+		{name: "dirty", dirty: true, wantError: "--force-dirty"},
+		{name: "dirty force only", dirty: true, options: CleanOptions{Force: true}, wantError: "--force-dirty"},
+		{name: "dirty override", dirty: true, options: CleanOptions{ForceDirty: true}},
+		{name: "missing", missing: true, wantError: "missing workspace"},
+		{name: "missing cannot override", missing: true, options: all, wantError: "missing workspace"},
+		{name: "protected", protected: true, wantError: "protected branch"},
+		{name: "protected dirty cannot override", protected: true, dirty: true, options: all, wantError: "protected branch"},
+		{name: "active dirty", status: plan.StatusInProgress, dirty: true, options: CleanOptions{Force: true}, wantError: "--force-active"},
+		{name: "active dirty needs dirty override", status: plan.StatusInProgress, dirty: true, options: CleanOptions{Force: true, ForceActive: true}, wantError: "--force-dirty"},
+		{name: "active unmerged needs dirty override", current: true, unmerged: true, options: CleanOptions{Force: true, ForceActive: true}, wantError: "--force-dirty"},
+		{name: "active dirty unmerged needs active override", current: true, dirty: true, unmerged: true, options: CleanOptions{Force: true, ForceDirty: true}, wantError: "--force-active"},
+		{name: "active dirty unmerged overrides", current: true, dirty: true, unmerged: true, options: all},
+		{name: "abandoned still needs dirty override", status: plan.StatusAbandoned, current: true, dirty: true, options: CleanOptions{Force: true}, wantError: "--force-dirty"},
+		{name: "abandoned still needs unmerged override", status: plan.StatusAbandoned, current: true, unmerged: true, options: CleanOptions{Force: true}, wantError: "--force-dirty"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, ".tao", "workspaces", "plan-a")
+			if !tt.missing {
+				if err := os.MkdirAll(path, 0o750); err != nil {
+					t.Fatal(err)
+				}
+			}
+			branch := "tao/plan-a"
+			if tt.protected {
+				branch = "master"
+			}
+			mutation := &recordingCleanupMutation{}
+			manager := newManager(root, DefaultConfig(), managerGitCapabilities{
+				status:   fixedStatusGit{status: gitops.WorktreeStatus{Branch: branch, Dirty: tt.dirty}},
+				cleanup:  fixedCleanupGit{branchExists: true, branchMerged: !tt.unmerged},
+				mutation: mutation,
+			})
+			detail := cleanupPlanDetail("plan-a")
+			if tt.status != "" {
+				detail.State.Status = tt.status
+			}
+			if tt.current {
+				current := "001-work"
+				detail.State.Plan.CurrentSlice = &current
+			}
+			preview, err := manager.PlanClean(context.Background(), detail.State.Plan.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(mutation.calls) != 0 {
+				t.Fatalf("PlanClean mutated Git: %v", mutation.calls)
+			}
+			options := tt.options
+			options.Force = true
+			previewErr := ValidateClean(detail, preview, options)
+			decision, err := manager.Clean(context.Background(), detail, tt.options)
+			if tt.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+					t.Fatalf("Clean error = %v, want %q", err, tt.wantError)
+				}
+				if previewErr == nil || previewErr.Error() != err.Error() {
+					t.Fatalf("preview/removal validation differs: %v / %v", previewErr, err)
+				}
+				if len(mutation.calls) != 0 {
+					t.Fatalf("refused cleanup mutated Git: %v", mutation.calls)
+				}
+				return
+			}
+			if err != nil || previewErr != nil {
+				t.Fatalf("Clean error = %v; preview error = %v", err, previewErr)
+			}
+			if len(mutation.calls) != 1 || mutation.calls[0] != "remove" || mutation.path != path || mutation.force != tt.dirty || decision.PlanID != detail.State.Plan.ID {
+				t.Fatalf("unexpected cleanup mutation: %+v, decision: %+v", mutation, decision)
+			}
+		})
+	}
+}
+
+func TestCleanRejectsMissingContextBeforeGitAccess(t *testing.T) {
+	for _, detail := range []*plan.PlanDetail{nil, {}, cleanupPlanDetail(" ")} {
+		manager := &Manager{} // No Git capabilities: missing context must fail first.
+		if _, err := manager.Clean(context.Background(), detail, CleanOptions{Force: true, ForceActive: true, ForceDirty: true}); err == nil || !strings.Contains(err.Error(), "explicit plan detail") {
+			t.Fatalf("Clean error = %v, want missing context refusal", err)
+		}
+	}
+}
+
+func TestCleanRecomputesPreviewBeforeRemoval(t *testing.T) {
+	for _, change := range []string{"dirty", "unmerged", "protected", "missing"} {
+		t.Run(change, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, ".tao", "workspaces", "plan-a")
+			if err := os.MkdirAll(path, 0o750); err != nil {
+				t.Fatal(err)
+			}
+			mutation := &recordingCleanupMutation{}
+			manager := newManager(root, DefaultConfig(), managerGitCapabilities{
+				status:   fixedStatusGit{status: gitops.WorktreeStatus{Branch: "tao/plan-a"}},
+				cleanup:  fixedCleanupGit{branchExists: true, branchMerged: true},
+				mutation: mutation,
+			})
+			preview, err := manager.PlanClean(context.Background(), "plan-a")
+			if err != nil || !preview.CanRemove {
+				t.Fatalf("initial preview = %+v, %v", preview, err)
+			}
+			switch change {
+			case "dirty":
+				manager.git.status = fixedStatusGit{status: gitops.WorktreeStatus{Branch: "tao/plan-a", Dirty: true}}
+			case "unmerged":
+				manager.git.cleanup = fixedCleanupGit{branchExists: true}
+			case "protected":
+				manager.git.status = fixedStatusGit{status: gitops.WorktreeStatus{Branch: "master"}}
+			case "missing":
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := manager.Clean(context.Background(), cleanupPlanDetail("plan-a"), CleanOptions{Force: true}); err == nil {
+				t.Fatal("Clean reused stale preview")
+			}
+			if len(mutation.calls) != 0 {
+				t.Fatalf("refused cleanup mutated Git: %v", mutation.calls)
+			}
+		})
 	}
 }
 

@@ -44,10 +44,9 @@ func TestRepoListAndShow(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"repo", "show", "repo"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Repo: repo", "ID: repo-a", "Plans: 1", "Health: ok", "Finding: ok"} {
-		if !strings.Contains(out.String(), want) {
-			t.Fatalf("repo show missing %q: %s", want, out.String())
-		}
+	want := "Repo: repo\nID: repo-a\nRoot: " + root + "\nBranch: main\nRemote: https://example.com/repo.git\nPlans: 1\nHealth: ok\nFinding: ok\n"
+	if out.String() != want {
+		t.Fatalf("repo show = %q, want %q", out.String(), want)
 	}
 }
 
@@ -209,20 +208,101 @@ func TestRepoDoctorReportsErrorsAndReturnsNonZero(t *testing.T) {
 	}
 }
 
-func TestRepoShowRejectsAmbiguousPrefix(t *testing.T) {
+func TestRepoShowUsesSharedSelectorPolicy(t *testing.T) {
 	dataHome := t.TempDir()
 	t.Setenv("TAO_DATA_HOME", dataHome)
 	registry := taodata.Registry{DataHome: dataHome}
-	for _, id := range []string{"repo-a", "repo-b"} {
-		if err := registry.WriteRepo(taodata.Repo{Schema: taodata.RepoSchema, ID: id, Name: id, Root: initTestGitRepo(t)}); err != nil {
+	for _, repo := range []taodata.Repo{
+		{ID: "repo-a", Name: "shared"},
+		{ID: "repo-b", Name: "unique-name"},
+		{ID: "other-alpha", Name: "repo-a"},
+		{ID: "fourth", Name: "other-a"},
+		{ID: "other-b", Name: "shared"},
+		{ID: "third-a", Name: "repo"},
+		{ID: "third-b", Name: "repo-"},
+	} {
+		repo.Schema = taodata.RepoSchema
+		repo.Root = filepath.Join(dataHome, "missing-root")
+		if err := registry.WriteRepo(repo); err != nil {
 			t.Fatal(err)
 		}
 	}
 
+	for _, tt := range []struct {
+		selector string
+		wantID   string
+		wantErr  string
+	}{
+		{selector: "repo-b", wantID: "repo-b"},
+		{selector: "other-a", wantID: "other-alpha"},
+		{selector: "third-a", wantID: "third-a"},
+		{selector: "unique-name", wantID: "repo-b"},
+		{selector: "repo-a", wantID: "repo-a"},
+		{selector: "repo", wantErr: `repository "repo" is ambiguous; use one of these IDs: repo-a, repo-b`},
+		{selector: "repo-", wantErr: `repository "repo-" is ambiguous; use one of these IDs: repo-a, repo-b`},
+		{selector: "shared", wantErr: `repository "shared" is ambiguous; use one of these IDs: other-b, repo-a`},
+		{selector: "unknown", wantErr: `repository "unknown" is not registered; run tao init in that checkout`},
+		{selector: "unique", wantErr: `repository "unique" is not registered; run tao init in that checkout`},
+	} {
+		t.Run(tt.selector, func(t *testing.T) {
+			var out bytes.Buffer
+			err := (App{Out: &out, Err: &out}).Run(context.Background(), []string{"repo", "show", tt.selector})
+			if tt.wantErr != "" {
+				if err == nil || err.Error() != tt.wantErr {
+					t.Fatalf("repo show error = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil || !strings.Contains(out.String(), "ID: "+tt.wantID+"\n") {
+				t.Fatalf("repo show = %q, %v", out.String(), err)
+			}
+		})
+	}
+}
+
+func TestRepoShowPreservesUnhealthyCatalogDetails(t *testing.T) {
+	dataHome := t.TempDir()
+	t.Setenv("TAO_DATA_HOME", dataHome)
+	registry := taodata.Registry{DataHome: dataHome}
+	root := filepath.Join(dataHome, "absent")
+	repo := taodata.Repo{Schema: taodata.RepoSchema, ID: "missing-root", Name: "missing", Root: root, Branch: "main", RemoteURL: "https://example.com/repo.git"}
+	if err := registry.WriteRepo(repo); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(registry.PlansDir(repo), "plan-a"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Malformed entries historically have zero catalog plan count, even if
+	// their data-home plan directories survive.
+	badDir := filepath.Join(dataHome, "repos", "bad-json")
+	if err := os.MkdirAll(filepath.Join(badDir, "plans", "plan-a"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(badDir, "repo.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tt := range []struct {
+		selector string
+		want     string
+	}{
+		{selector: "missing", want: "Repo: missing\nID: missing-root\nRoot: " + root + "\nBranch: main\nRemote: https://example.com/repo.git\nPlans: 1\nHealth: missing_root\nFinding: repo root does not exist\n"},
+		{selector: "bad-json", want: "Repo: -\nID: bad-json\nRoot: -\nBranch: -\nRemote: -\nPlans: 0\nHealth: metadata_error\nFinding: repo metadata cannot be read: read repo metadata: unexpected end of JSON input\n"},
+		{selector: "bad-j", want: "Repo: -\nID: bad-json\nRoot: -\nBranch: -\nRemote: -\nPlans: 0\nHealth: metadata_error\nFinding: repo metadata cannot be read: read repo metadata: unexpected end of JSON input\n"},
+	} {
+		t.Run(tt.selector, func(t *testing.T) {
+			var out bytes.Buffer
+			err := (App{Out: &out, Err: &out}).Run(context.Background(), []string{"repo", "show", tt.selector})
+			if err != nil || out.String() != tt.want {
+				t.Fatalf("repo show = %q, %v; want %q", out.String(), err, tt.want)
+			}
+		})
+	}
+
 	var out bytes.Buffer
-	err := (App{Out: &out, Err: &out}).Run(context.Background(), []string{"repo", "show", "repo"})
-	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
-		t.Fatalf("expected ambiguous prefix error, got %v", err)
+	err := (App{Out: &out, Err: &out}).Run(context.Background(), []string{"repo", "config", "--pull-request=true", "bad-json"})
+	if err == nil || !strings.Contains(err.Error(), "not registered") {
+		t.Fatalf("config accepted malformed metadata: %v", err)
 	}
 }
 

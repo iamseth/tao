@@ -123,4 +123,46 @@ func TestRegistryCatalogIncludesPlanCountsAndMetadataErrors(t *testing.T) {
 	if got := byID["bad-json"]; got.Health.Status != RepoHealthMetadataError || !got.Health.Error || got.MetadataError == nil {
 		t.Fatalf("unexpected bad repo entry: %#v", got)
 	}
+	for id, want := range byID {
+		got, err := ResolveCatalogRepo(context.Background(), registry, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Repo != want.Repo || got.Health != want.Health || got.PlanCount != want.PlanCount || (got.MetadataError == nil) != (want.MetadataError == nil) {
+			t.Fatalf("ResolveCatalogRepo(%q) = %#v, want %#v", id, got, want)
+		}
+	}
+}
+
+func TestResolveCatalogRepoPreservesMissingRootAndInvalidMetadata(t *testing.T) {
+	registry := NewRegistry(t.TempDir())
+	missing := Repo{Schema: RepoSchema, ID: "missing-root", Name: "missing", Root: filepath.Join(registry.DataHome, "absent")}
+	if err := registry.WriteRepo(missing); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(registry.PlansDir(missing), "plan-a"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	entry, err := ResolveCatalogRepo(context.Background(), registry, missing.Name)
+	if err != nil || entry.Repo != missing || entry.PlanCount != 1 || entry.Health.Status != RepoHealthMissingRoot || !entry.Health.Error || entry.MetadataError != nil {
+		t.Fatalf("missing root entry = %#v, %v", entry, err)
+	}
+
+	dir := filepath.Join(registry.DataHome, "repos", "catalog-entry")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte(`{"schema":"tao.repo.v1","id":"other-entry","name":"untrusted-name","root":"/repo"}`)
+	if err := os.WriteFile(filepath.Join(dir, "repo.json"), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	entry, err = ResolveCatalogRepo(context.Background(), registry, "catalog")
+	if err != nil || entry.Repo != (Repo{ID: "catalog-entry"}) || entry.Health.Status != RepoHealthMetadataError || !entry.Health.Error || entry.MetadataError == nil {
+		t.Fatalf("invalid metadata entry = %#v, %v", entry, err)
+	}
+	for _, selector := range []string{"other-entry", "untrusted-name"} {
+		if _, err := ResolveCatalogRepo(context.Background(), registry, selector); err == nil {
+			t.Fatalf("invalid metadata supplied a selectable identity: %q", selector)
+		}
+	}
 }

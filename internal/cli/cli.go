@@ -106,7 +106,7 @@ type WorkspaceManager interface {
 	Status(ctx context.Context, planID string, expectedBranch ...string) (workspace.Metadata, error)
 	List(ctx context.Context) ([]workspace.Metadata, error)
 	PlanClean(ctx context.Context, planID string) (workspace.CleanPlan, error)
-	Clean(ctx context.Context, planID string, options workspace.CleanOptions) (workspace.CleanPlan, error)
+	Clean(ctx context.Context, detail *plan.PlanDetail, options workspace.CleanOptions) (workspace.CleanPlan, error)
 	PlanManagedCleanup(ctx context.Context, ownedBranches ...string) ([]workspace.ManagedCleanup, error)
 	CleanManaged(ctx context.Context, item workspace.ManagedCleanup, options workspace.CleanOptions) error
 }

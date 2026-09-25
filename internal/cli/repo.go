@@ -89,7 +89,7 @@ func (a App) repoList(ctx context.Context, registry taodata.Registry) error {
 }
 
 func (a App) repoShow(ctx context.Context, registry taodata.Registry, input string) error {
-	entry, err := resolveRepo(ctx, registry, input)
+	entry, err := taodata.ResolveCatalogRepo(ctx, registry, input)
 	if err != nil {
 		return err
 	}
@@ -173,38 +173,6 @@ func (a App) repoDoctor(ctx context.Context, registry taodata.Registry) error {
 		return errors.New("repo doctor found unhealthy repositories")
 	}
 	return nil
-}
-
-func resolveRepo(ctx context.Context, registry taodata.Registry, input string) (taodata.RepoCatalogEntry, error) {
-	catalog, err := registry.Catalog(ctx, taodata.RepoHealthChecker{})
-	if err != nil {
-		return taodata.RepoCatalogEntry{}, err
-	}
-	matches := make([]taodata.RepoCatalogEntry, 0, 1)
-	nameMatches := make([]taodata.RepoCatalogEntry, 0, 1)
-	for _, entry := range catalog {
-		if entry.Repo.ID == input || strings.HasPrefix(entry.Repo.ID, input) {
-			matches = append(matches, entry)
-		}
-		if entry.Repo.Name == input {
-			nameMatches = append(nameMatches, entry)
-		}
-	}
-	if len(matches) == 0 {
-		matches = nameMatches
-	}
-	switch len(matches) {
-	case 0:
-		return taodata.RepoCatalogEntry{}, fmt.Errorf("repo %q not found", input)
-	case 1:
-		return matches[0], nil
-	default:
-		ids := make([]string, 0, len(matches))
-		for _, match := range matches {
-			ids = append(ids, match.Repo.ID)
-		}
-		return taodata.RepoCatalogEntry{}, fmt.Errorf("repo %q is ambiguous: %s", input, strings.Join(ids, ", "))
-	}
 }
 
 func emptyDash(value string) string {

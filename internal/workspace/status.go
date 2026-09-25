@@ -41,6 +41,7 @@ type CleanPlan struct {
 // CleanOptions controls workspace and managed branch removal once callers have accepted a plan.
 type CleanOptions struct {
 	Force                   bool
+	ForceActive             bool
 	ForceDirty              bool
 	AllowNonAncestralBranch bool
 }

@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -20,6 +22,7 @@ type fakeWorkspaceManager struct {
 	cleanPlan            workspace.CleanPlan
 	cleanOptions         workspace.CleanOptions
 	cleanCalled          bool
+	cleanDetail          *plan.PlanDetail
 	managedPlans         []workspace.ManagedCleanup
 	managedOwnedBranches []string
 	managedErr           error
@@ -53,11 +56,12 @@ func (f *fakeWorkspaceManager) PlanClean(ctx context.Context, planID string) (wo
 	return plan, ctx.Err()
 }
 
-func (f *fakeWorkspaceManager) Clean(ctx context.Context, planID string, options workspace.CleanOptions) (workspace.CleanPlan, error) {
+func (f *fakeWorkspaceManager) Clean(ctx context.Context, detail *plan.PlanDetail, options workspace.CleanOptions) (workspace.CleanPlan, error) {
 	f.cleanCalled = true
 	f.cleanOptions = options
+	f.cleanDetail = detail
 	plan := f.cleanPlan
-	plan.PlanID = planID
+	plan.PlanID = detail.State.Plan.ID
 	return plan, ctx.Err()
 }
 
@@ -382,6 +386,69 @@ func TestWorkspaceCleanPreviewsDirtyWithoutRemoving(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Status: dirty") || !strings.Contains(out.String(), "git worktree remove --force") {
 		t.Fatalf("expected preview output, got %q", out.String())
+	}
+}
+
+func TestWorkspaceCleanPreviewsUnmergedWithoutRemoving(t *testing.T) {
+	var out bytes.Buffer
+	manager := &fakeWorkspaceManager{cleanPlan: workspace.CleanPlan{Status: "unmerged", Reason: "workspace branch is not merged"}}
+	app := workspaceTestApp(&out, manager)
+	repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": workspacePlanDetail("plan-a", plan.StatusCompleted)}}
+	if err := app.workspace(context.Background(), repo, []string{"clean", "plan-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if manager.cleanCalled || !strings.Contains(out.String(), "Status: unmerged") {
+		t.Fatalf("expected unmerged preview only, called=%v output=%q", manager.cleanCalled, out.String())
+	}
+}
+
+func TestWorkspaceCleanCurrentSliceAndOverrideForwarding(t *testing.T) {
+	for _, status := range []string{plan.StatusPlanned, plan.StatusInProgress} {
+		t.Run(status, func(t *testing.T) {
+			manager := &fakeWorkspaceManager{cleanPlan: workspace.CleanPlan{Dirty: true, Status: "dirty"}}
+			app := workspaceTestApp(&bytes.Buffer{}, manager)
+			detail := workspacePlanDetail("plan-a", status)
+			current := "001-work"
+			detail.State.Plan.CurrentSlice = &current
+			repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
+			if err := app.workspace(context.Background(), repo, []string{"clean", "plan-a"}); err == nil || !strings.Contains(err.Error(), "--force-active") {
+				t.Fatalf("active preview error = %v", err)
+			}
+			if err := app.workspace(context.Background(), repo, []string{"clean", "--force-active", "--force-dirty", "plan-a"}); err != nil {
+				t.Fatal(err)
+			}
+			if manager.cleanCalled {
+				t.Fatal("override flags without --force must remain preview-only")
+			}
+			if err := app.workspace(context.Background(), repo, []string{"clean", "--force", "--force-active", "--force-dirty", "plan-a"}); err != nil {
+				t.Fatal(err)
+			}
+			want := workspace.CleanOptions{Force: true, ForceActive: true, ForceDirty: true}
+			if !manager.cleanCalled || manager.cleanOptions != want || manager.cleanDetail != detail {
+				t.Fatalf("cleanup forwarding: called=%v options=%+v detail=%p; want %+v %p", manager.cleanCalled, manager.cleanOptions, manager.cleanDetail, want, detail)
+			}
+		})
+	}
+}
+
+func TestWorkspaceCleanUsesExplicitPlansDirectoryContext(t *testing.T) {
+	// Any fallback lookup through the default data home would fail.
+	dataHome := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(dataHome, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TAO_DATA_HOME", dataHome)
+	fixture := newRunPlanFixture(t, plan.StatusInProgress, []string{"001-a"}, nil, "001-a", plan.StatusInProgress)
+	manager := &fakeWorkspaceManager{cleanPlan: workspace.CleanPlan{Status: "clean", CanRemove: true}}
+	app := workspaceTestApp(&bytes.Buffer{}, manager)
+	if err := app.Run(context.Background(), []string{"--plans-dir", fixture.root, "workspace", "clean", "--force", "--force-active", fixture.id}); err != nil {
+		t.Fatal(err)
+	}
+	if !manager.cleanCalled || manager.cleanDetail == nil || manager.cleanDetail.Dir != fixture.dir || manager.cleanDetail.State.Plan.ID != fixture.id || manager.cleanDetail.State.Status != plan.StatusInProgress {
+		t.Fatalf("expected resolved explicit-directory context, got %+v", manager.cleanDetail)
+	}
+	if manager.cleanOptions != (workspace.CleanOptions{Force: true, ForceActive: true}) {
+		t.Fatalf("cleanup options = %+v", manager.cleanOptions)
 	}
 }
 

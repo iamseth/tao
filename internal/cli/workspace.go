@@ -159,30 +159,18 @@ func (a App) workspaceClean(ctx context.Context, repo plan.Resolver, args []stri
 	if err != nil {
 		return err
 	}
-	active := detail.State.Status != plan.StatusAbandoned && (detail.State.Status == plan.StatusInProgress || detail.State.Plan.CurrentSlice != nil)
-	if active && !forceActive {
-		return fmt.Errorf("refusing to clean active plan %s; pass --force-active to override", detail.State.Plan.ID)
-	}
 	cleanPlan, err := manager.PlanClean(ctx, detail.State.Plan.ID)
 	if err != nil {
 		return err
 	}
-	if cleanPlan.Missing {
-		return fmt.Errorf("refusing to clean missing workspace %s", detail.State.Plan.ID)
-	}
-	if cleanPlan.ProtectedBranch {
-		return fmt.Errorf("refusing to clean protected branch %s for workspace %s", cleanPlan.Branch, detail.State.Plan.ID)
-	}
-	if force && cleanPlan.Status == "unmerged" && !forceDirty {
-		return fmt.Errorf("refusing to clean unmerged workspace %s; pass --force-dirty to override", detail.State.Plan.ID)
-	}
-	if force && cleanPlan.Dirty && !forceDirty {
-		return fmt.Errorf("refusing to clean dirty workspace %s; pass --force-dirty to override", detail.State.Plan.ID)
+	options := workspace.CleanOptions{Force: force, ForceActive: forceActive, ForceDirty: forceDirty}
+	if err := workspace.ValidateClean(detail, cleanPlan, options); err != nil {
+		return err
 	}
 	if !force {
 		return renderWorkspaceCleanPlan(a.Out, cleanPlan, false)
 	}
-	removed, err := manager.Clean(ctx, detail.State.Plan.ID, workspace.CleanOptions{Force: force, ForceDirty: forceDirty})
+	removed, err := manager.Clean(ctx, detail, options)
 	if err != nil {
 		return err
 	}

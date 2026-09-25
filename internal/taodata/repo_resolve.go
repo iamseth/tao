@@ -63,6 +63,39 @@ func ResolveRepo(ctx context.Context, registry RepoResolver, selector string) (R
 	return Repo{}, fmt.Errorf("repository %q is not registered; run tao init in that checkout", selector)
 }
 
+// ResolveCatalogRepo uses the shared selector policy while retaining unhealthy
+// and malformed catalog entries for inspection. Selection does not establish
+// runtime eligibility; callers receive the entry's health and metadata error.
+func ResolveCatalogRepo(ctx context.Context, registry Registry, selector string) (RepoCatalogEntry, error) {
+	catalog, err := registry.Catalog(ctx, RepoHealthChecker{})
+	if err != nil {
+		return RepoCatalogEntry{}, err
+	}
+	repo, err := ResolveRepo(ctx, catalogRepoResolver{Registry: registry, catalog: catalog}, selector)
+	if err != nil {
+		return RepoCatalogEntry{}, err
+	}
+	for _, entry := range catalog {
+		if entry.Repo.ID == repo.ID {
+			return entry, nil
+		}
+	}
+	return RepoCatalogEntry{}, fmt.Errorf("repository %q is no longer in the catalog", repo.ID)
+}
+
+type catalogRepoResolver struct {
+	Registry
+	catalog []RepoCatalogEntry
+}
+
+func (r catalogRepoResolver) ListRepos() ([]Repo, error) {
+	repos := make([]Repo, 0, len(r.catalog))
+	for _, entry := range r.catalog {
+		repos = append(repos, entry.Repo)
+	}
+	return repos, nil
+}
+
 func ambiguousRepoError(selector string, repos []Repo) error {
 	ids := make([]string, 0, len(repos))
 	for _, repo := range repos {

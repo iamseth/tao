@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/iamseth/tao/internal/gitops"
+	"github.com/iamseth/tao/internal/plan"
 )
 
 // PlanClean returns a cleanup decision without deleting files.
@@ -61,25 +62,61 @@ func (m *Manager) PlanClean(ctx context.Context, planID string) (CleanPlan, erro
 	}
 }
 
-// Clean removes a prepared workspace after callers have accepted PlanClean.
-func (m *Manager) Clean(ctx context.Context, planID string, options CleanOptions) (CleanPlan, error) {
-	plan, err := m.PlanClean(ctx, planID)
+// ValidateClean validates a preview against explicit plan context. Force marks
+// removal rather than preview: dirty and unmerged workspaces may be previewed,
+// but require ForceDirty to remove. Activity, missing and protected guards apply
+// to both previews and removal.
+func ValidateClean(detail *plan.PlanDetail, decision CleanPlan, options CleanOptions) error {
+	if err := requireCleanContext(detail); err != nil {
+		return err
+	}
+	planID := detail.State.Plan.ID
+	active := detail.State.Status != plan.StatusAbandoned && (detail.State.Status == plan.StatusInProgress || detail.State.Plan.CurrentSlice != nil)
+	if active && !options.ForceActive {
+		return fmt.Errorf("refusing to clean active plan %s; pass --force-active to override", planID)
+	}
+	if decision.Missing {
+		return fmt.Errorf("refusing to clean missing workspace %s", planID)
+	}
+	if decision.ProtectedBranch {
+		return fmt.Errorf("refusing to clean protected branch %s for workspace %s", decision.Branch, planID)
+	}
+	if options.Force && decision.Status == "unmerged" && !options.ForceDirty {
+		return fmt.Errorf("refusing to clean unmerged workspace %s; pass --force-dirty to override", planID)
+	}
+	if options.Force && decision.Dirty && !options.ForceDirty {
+		return fmt.Errorf("refusing to clean dirty workspace %s; pass --force-dirty to override", planID)
+	}
+	return nil
+}
+
+func requireCleanContext(detail *plan.PlanDetail) error {
+	if detail == nil || strings.TrimSpace(detail.State.Plan.ID) == "" {
+		return fmt.Errorf("cannot clean workspace: explicit plan detail with a plan ID is required")
+	}
+	return nil
+}
+
+// Clean recomputes and validates the cleanup decision before removing a workspace.
+// Calling Clean requests removal even without Force; Force alone never overrides
+// activity, dirty or unmerged guards. The caller supplies resolved plan context,
+// so cleanup does not look up plans in a potentially different plans directory.
+func (m *Manager) Clean(ctx context.Context, detail *plan.PlanDetail, options CleanOptions) (CleanPlan, error) {
+	if err := requireCleanContext(detail); err != nil {
+		return CleanPlan{}, err
+	}
+	decision, err := m.PlanClean(ctx, detail.State.Plan.ID)
 	if err != nil {
 		return CleanPlan{}, err
 	}
-	if plan.Missing || plan.ProtectedBranch {
-		return plan, fmt.Errorf("cannot clean workspace %s: %s", planID, plan.Reason)
+	options.Force = true // Clean is always destructive, unlike preview validation.
+	if err := ValidateClean(detail, decision, options); err != nil {
+		return decision, err
 	}
-	if plan.Dirty && !options.ForceDirty {
-		return plan, fmt.Errorf("cannot clean workspace %s: %s", planID, plan.Reason)
+	if err := m.git.mutation.RemoveWorktree(ctx, decision.Path, decision.Dirty && options.ForceDirty); err != nil {
+		return decision, err
 	}
-	if !plan.CanRemove && !plan.Dirty && !options.Force {
-		return plan, fmt.Errorf("cannot clean workspace %s: %s", planID, plan.Reason)
-	}
-	if err := m.git.mutation.RemoveWorktree(ctx, plan.Path, plan.Dirty && options.ForceDirty); err != nil {
-		return plan, err
-	}
-	return plan, nil
+	return decision, nil
 }
 
 // Managed cleanup decision statuses.
