@@ -468,7 +468,7 @@ Current well-known event types include:
 | `single_merge_resolution_rearmed` | The exact provisional `requested` resolution was cleared after structured pre-acceptance proof and exact rollback; retains only bounded diagnostic startup capability, acceptance, request, and timestamp evidence and grants no retry authority by itself. |
 | `plan_commit_fallback` | Historical/read-only signal that plan-level commit generation fell back to the selected agent; retained for compatible loading and insights, with no current producer. |
 | `plan_commit_guard` | Historical/read-only signal recording the plan-level leftover commit guard result; retained for compatible loading and insights, with no current producer. |
-| `agent_metrics` | Agent metrics from run attempts when available. |
+| `agent_metrics` | Best-effort plan agent usage and measurement availability, attributed by operation role. |
 
 Legacy planning-session audit events may also appear in older local plans.
 
@@ -524,6 +524,32 @@ A `finalization_failed` event includes `finalization_failure` with the same boun
 A `verification_command_invalid` event should include the original `command`, a concise `reason`, and, when a mechanically equivalent command is used successfully, `corrected_command`.
 
 An `agent_metrics` event includes the usual event fields plus a top-level `agent` and a `metrics` object. The metrics object records the agent name, session ID, provider and model IDs when available, token counts, cost, assistant message count, tool call count, and run result/status so failed attempts can still be represented in telemetry totals. Metrics are generic across built-in runtimes; consumers should not assume runtime-specific fields.
+
+The additive, optional metrics metadata is:
+
+- `role`: `planning`, `execution`, `review`, `rework`, `pull_request`, `merge`, or `unknown`, assigned only from trusted operation context. Readers group absent or unrecognized values as `unknown` without rewriting the recorded value or inferring a role from messages or historical events.
+- `availability`: `reported`, `partial`, or `unavailable`, describing measurement coverage independently of session `status`/`result`. Absent or future values project as `unknown`; a failed attempt can have reported usage, and a successful attempt can have unavailable usage. Availability never synthesizes individual measurements.
+- Token fields (`input_tokens`, `output_tokens`, `reasoning_tokens`, `cache_read_tokens`, `cache_write_tokens`, `total_tokens`) and `cost` retain numeric presence: explicit zero is a recorded measurement and survives JSON round trips; omitted or `null` is not measured zero. Legacy omitted zeros cannot be reconstructed as measured zeros. Existing nonzero values remain readable without new metadata.
+
+Telemetry summaries expose `by_role` groups in lexical key order, including `unknown` when applicable. Overall and grouped totals include `availability` event counts (`reported`, `partial`, `unavailable`, `unknown`), whose sum equals attempts, and token/cost `*_present` flags indicating at least one recorded value, not complete coverage. Totals remain sums of recorded usage, **not estimates of all agent work**: missing telemetry is not zero usage, coverage may be partial, and added collection can increase plan totals. Existing negative-value clamping, failure classification, and overall/by-slice/agent/model/provider numeric behavior are unchanged. Role counters and cost reconcile to overall totals; distinct session counts do not generally add across groups because a session ID can occur in multiple roles. Attempts count events, while non-empty session IDs are deduplicated independently within each group and overall. No lifecycle state, budget policy, historical event, or planning capture is added by this contract.
+
+`tao show --json` adds a safe `telemetry` object to `tao.show.v1`: `totals`, lexical `by_role` entries (`role`, `totals`), and fixed `limitations`. It exposes only bounded roles, session/attempt/failure counts, availability counts, and nullable token/cost sums—not raw events, provider output, or session identities. Numeric zero means measured zero; `null` means no recorded measurement. `partial_recorded_totals` is true when any recorded attempt has partial, unavailable, or unknown availability. It does not claim coverage of unrecorded operations; with no events, attempts are zero and measurements are null. Unknown availability includes legacy coverage. The text view uses the same projection and labels missing measurements `unavailable/unknown`.
+
+Current operation coverage (for both Pi and Claude):
+
+| Tao-controlled operation | Plan role / storage |
+| --- | --- |
+| Direct `tao note run` generation | `planning`, only after a validated plan survives generation checks |
+| Original implementation slices, including transport retry attempts | `execution` |
+| Generated rework slices, including retry attempts | `rework` |
+| Plan review, review-proposal repair/correction, independent single-merge integration review | `review` |
+| PR-feedback classification | `rework` |
+| PR creation and PR-body drafting | `pull_request` |
+| Single-plan merge conflict resolution and exceptional commit-proposal generation | `merge` |
+| Batch candidate resolution, aggregate review/rework, and proposal generation | Separate repository `agent-events.jsonl`, attributed by batch operation; never plan events |
+| Interactive planning | Not collected |
+
+Missing phase events do not prove that a phase did not run. Cached or uninvoked operations and approval-proposal reuse do not create fictitious sessions. Failed note-generation allocations retain normal cleanup; deleted allocations have no durable metrics guarantee. No historical backfill or planning-session capture is performed.
 
 Metrics events are durable plan artifacts, but collection is best-effort. Resolver and independent-reviewer metrics from a single-plan squash conflict use this same generic plan event with operation-specific messages. They are never written as merge-batch events. Repository-scoped `merge --all` telemetry instead lives in the batch store's `agent-events.jsonl` and is never copied into plan events or batch state. Missing metrics or persistence failures in either channel may warn but must not change an operation's outcome; neither telemetry channel authorizes merge, completion, or recovery.
 

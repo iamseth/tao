@@ -6,6 +6,208 @@ import (
 	"testing"
 )
 
+func TestAgentMetricsMeasurementRoundTrip(t *testing.T) {
+	fields := []string{"input_tokens", "output_tokens", "reasoning_tokens", "cache_read_tokens", "cache_write_tokens", "total_tokens", "cost"}
+	presence := func(m AgentMetrics) []bool {
+		return []bool{m.InputTokensPresent, m.OutputTokensPresent, m.ReasoningTokensPresent, m.CacheReadTokensPresent, m.CacheWriteTokensPresent, m.TotalTokensPresent, m.CostPresent}
+	}
+	tests := []struct {
+		name    string
+		input   string
+		present map[string]bool
+	}{
+		{name: "legacy omitted", input: `{"session_id":"legacy"}`},
+		{name: "null is absent", input: `{"total_tokens":null,"cost":null}`},
+		{name: "reported does not invent presence", input: `{"availability":"reported"}`},
+		{name: "reported zeros", input: `{"availability":"reported","input_tokens":0,"output_tokens":0,"reasoning_tokens":0,"cache_read_tokens":0,"cache_write_tokens":0,"total_tokens":0,"cost":0}`, present: map[string]bool{"input_tokens": true, "output_tokens": true, "reasoning_tokens": true, "cache_read_tokens": true, "cache_write_tokens": true, "total_tokens": true, "cost": true}},
+		{name: "partial", input: `{"availability":"partial","output_tokens":12,"cost":0}`, present: map[string]bool{"output_tokens": true, "cost": true}},
+		{name: "unavailable", input: `{"availability":"unavailable","status":"completed"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var m AgentMetrics
+			if err := json.Unmarshal([]byte(tt.input), &m); err != nil {
+				t.Fatal(err)
+			}
+			for round := 0; round < 2; round++ {
+				for i, got := range presence(m) {
+					if got != tt.present[fields[i]] {
+						t.Fatalf("%s presence = %v", fields[i], got)
+					}
+				}
+				encoded, err := json.Marshal(m)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var raw map[string]json.RawMessage
+				if err := json.Unmarshal(encoded, &raw); err != nil {
+					t.Fatal(err)
+				}
+				for _, field := range fields {
+					if _, ok := raw[field]; ok != tt.present[field] {
+						t.Fatalf("%s presence lost in %s", field, encoded)
+					}
+				}
+				var decoded AgentMetrics
+				if err := json.Unmarshal(encoded, &decoded); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(m, decoded) {
+					t.Fatalf("round trip changed metrics: %+v -> %+v", m, decoded)
+				}
+				m = decoded
+			}
+			totals := SummarizeAgentMetrics([]AgentMetricEvent{{Metrics: m}}).Totals
+			gotPresence := []bool{totals.InputTokensPresent, totals.OutputTokensPresent, totals.ReasoningTokensPresent, totals.CacheReadTokensPresent, totals.CacheWriteTokensPresent, totals.TotalTokensPresent, totals.CostPresent}
+			if !reflect.DeepEqual(gotPresence, presence(m)) {
+				t.Fatalf("summary lost presence: %+v", totals)
+			}
+		})
+	}
+}
+
+func TestAgentMetricsGoZeroPresence(t *testing.T) {
+	for _, present := range []bool{false, true} {
+		m := AgentMetrics{InputTokensPresent: present, OutputTokensPresent: present, ReasoningTokensPresent: present, CacheReadTokensPresent: present, CacheWriteTokensPresent: present, TotalTokensPresent: present, CostPresent: present}
+		encoded, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded AgentMetrics
+		if err := json.Unmarshal(encoded, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(m, decoded) {
+			t.Fatalf("Go zero presence changed: %+v -> %s", m, encoded)
+		}
+	}
+	// Existing emitters do not need to set presence flags for nonzero values.
+	m := AgentMetrics{InputTokens: 1, OutputTokens: 2, ReasoningTokens: 3, CacheReadTokens: 4, CacheWriteTokens: 5, TotalTokens: 15, Cost: 0.25}
+	encoded, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded AgentMetrics
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !decoded.InputTokensPresent || !decoded.OutputTokensPresent || !decoded.ReasoningTokensPresent || !decoded.CacheReadTokensPresent || !decoded.CacheWriteTokensPresent || !decoded.TotalTokensPresent || !decoded.CostPresent {
+		t.Fatalf("nonzero measurements lost: %s", encoded)
+	}
+	before := SummarizeAgentMetrics([]AgentMetricEvent{{Metrics: m}}).Totals
+	after := SummarizeAgentMetrics([]AgentMetricEvent{{Metrics: decoded}}).Totals
+	if before != after {
+		t.Fatalf("round trip changed totals: %+v -> %+v", before, after)
+	}
+}
+
+func TestAgentMetricsRoleAndAvailabilityCompatibility(t *testing.T) {
+	for _, role := range []AgentRole{AgentRolePlanning, AgentRoleExecution, AgentRoleReview, AgentRoleRework, AgentRolePullRequest, AgentRoleMerge, AgentRoleUnknown, "", "future-role", " REVIEW "} {
+		for _, availability := range []AgentMetricsAvailability{AgentMetricsReported, AgentMetricsPartial, AgentMetricsUnavailable, "", "future-availability"} {
+			m := AgentMetrics{Role: role, Availability: availability}
+			encoded, err := json.Marshal(m)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded AgentMetrics
+			if err := json.Unmarshal(encoded, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if decoded != m {
+				t.Fatalf("raw metadata changed: %+v -> %+v", m, decoded)
+			}
+			wantRole := role
+			if role == "" || role == "future-role" || role == " REVIEW " {
+				wantRole = AgentRoleUnknown
+			}
+			summary := SummarizeAgentMetrics([]AgentMetricEvent{{Metrics: decoded}})
+			if len(summary.ByRole) != 1 || summary.ByRole[0].Key != string(wantRole) {
+				t.Fatalf("unexpected role grouping: %+v", summary.ByRole)
+			}
+			want := AgentMetricsAvailabilityCounts{}
+			switch availability {
+			case AgentMetricsReported:
+				want.Reported = 1
+			case AgentMetricsPartial:
+				want.Partial = 1
+			case AgentMetricsUnavailable:
+				want.Unavailable = 1
+			default:
+				want.Unknown = 1
+			}
+			if summary.Totals.Availability != want || summary.ByRole[0].Totals.Availability != want {
+				t.Fatalf("unexpected availability: %+v", summary)
+			}
+			if summary.Events[0].Metrics != m {
+				t.Fatal("summary rewrote raw metrics")
+			}
+		}
+	}
+}
+
+func TestSummarizeAgentMetricsRolesReconcile(t *testing.T) {
+	roles := []AgentRole{AgentRoleReview, AgentRoleExecution, AgentRolePlanning, AgentRoleRework, AgentRolePullRequest, AgentRoleMerge, "future-role", "", AgentRoleExecution}
+	availability := []AgentMetricsAvailability{AgentMetricsReported, AgentMetricsPartial, AgentMetricsUnavailable, "future-value", ""}
+	var events []AgentMetricEvent
+	for i, role := range roles {
+		m := AgentMetrics{Role: role, Availability: availability[i%len(availability)], Agent: "pi", SessionID: "shared", ProviderID: "provider", ModelID: "model", Status: StatusCompleted, InputTokens: 1, OutputTokens: 2, ReasoningTokens: 3, CacheReadTokens: 4, CacheWriteTokens: 5, TotalTokens: 15, Cost: 0.25, TotalMessages: 6, UserMessages: 1, AssistantMessages: 5, ErroredMessages: 1, ToolCalls: 7}
+		if i%2 == 0 {
+			m.Status = StatusBlocked
+		}
+		events = append(events, AgentMetricEvent{SliceID: "001-a", Metrics: m})
+	}
+	summary := SummarizeAgentMetrics(events)
+	var keys []string
+	var sum AgentMetricsTotals
+	for _, group := range summary.ByRole {
+		keys = append(keys, group.Key)
+		// Every numeric total except distinct sessions is additive across roles.
+		dst, src := reflect.ValueOf(&sum).Elem(), reflect.ValueOf(group.Totals)
+		for i := 0; i < dst.NumField(); i++ {
+			switch dst.Field(i).Kind() {
+			case reflect.Int, reflect.Int64:
+				dst.Field(i).SetInt(dst.Field(i).Int() + src.Field(i).Int())
+			case reflect.Float64:
+				dst.Field(i).SetFloat(dst.Field(i).Float() + src.Field(i).Float())
+			case reflect.Bool:
+				dst.Field(i).SetBool(dst.Field(i).Bool() || src.Field(i).Bool())
+			}
+		}
+		sum.Availability.Reported += group.Totals.Availability.Reported
+		sum.Availability.Partial += group.Totals.Availability.Partial
+		sum.Availability.Unavailable += group.Totals.Availability.Unavailable
+		sum.Availability.Unknown += group.Totals.Availability.Unknown
+	}
+	if !reflect.DeepEqual(keys, []string{"execution", "merge", "planning", "pull_request", "review", "rework", "unknown"}) {
+		t.Fatalf("role order = %v", keys)
+	}
+	if sum.Sessions != 7 || summary.Totals.Sessions != 1 {
+		t.Fatalf("distinct sessions should not add across roles: %d vs %d", sum.Sessions, summary.Totals.Sessions)
+	}
+	sum.Sessions = summary.Totals.Sessions
+	if sum != summary.Totals {
+		t.Fatalf("role totals do not reconcile: %+v vs %+v", sum, summary.Totals)
+	}
+	if summary.Totals.Attempts != 9 || summary.Totals.FailedAttempts != 5 || summary.Totals.Availability != (AgentMetricsAvailabilityCounts{Reported: 2, Partial: 2, Unavailable: 2, Unknown: 3}) {
+		t.Fatalf("unexpected attempt totals: %+v", summary.Totals)
+	}
+	for _, groups := range [][]AgentMetricsGroup{summary.BySlice, summary.ByAgent, summary.ByModel, summary.ByProvider} {
+		if len(groups) != 1 || groups[0].Totals != summary.Totals {
+			t.Fatalf("existing dimension changed: %+v", groups)
+		}
+	}
+	if !reflect.DeepEqual(events, summary.Events) {
+		t.Fatal("summary changed raw events")
+	}
+	// Input order cannot affect role order or deduplication.
+	for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
+		events[i], events[j] = events[j], events[i]
+	}
+	if got := SummarizeAgentMetrics(events); !reflect.DeepEqual(got.ByRole, summary.ByRole) {
+		t.Fatalf("unstable role summary: %+v", got.ByRole)
+	}
+}
+
 func TestEventDecodesAgentMetrics(t *testing.T) {
 	var event Event
 	if err := json.Unmarshal([]byte(`{

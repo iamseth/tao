@@ -633,7 +633,18 @@ func TestDeterministicPullRequestCreatorLeavesExistingPullRequestMetadataUnchang
 		}
 		return nil
 	})
-	creator := deterministicPullRequestCreator{execution: testRunExecution(ExecutionConfig{}, RunDependencies{CommandRunner: runner})}
+	creator := deterministicPullRequestCreator{
+		execution: testRunExecution(ExecutionConfig{}, RunDependencies{CommandRunner: runner, EventAppender: eventAppenderFunc(func(_ string, event plan.Event) error {
+			if event.Type == plan.EventTypeAgentMetrics {
+				t.Fatal("native PR reuse must not invent model telemetry")
+			}
+			return nil
+		})}),
+		bodyGenerator: pullRequestBodyGeneratorFunc(func(context.Context, PullRequestBodyRun) (string, error) {
+			t.Fatal("existing PR must not invoke body generation")
+			return "", nil
+		}),
+	}
 
 	pr, err := creator.CreatePullRequest(context.Background(), PullRequestRun{Detail: approvedPullRequestDetail(plan.ChangeTypeFeat, "head123"), RepoRoot: "/repo", Branch: "feature/plan-a", HeadSHA: "head123"})
 	if err != nil {

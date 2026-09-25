@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/agent"
+	agentmetrics "github.com/iamseth/tao/internal/agent/metrics"
 )
 
 type runtimeFunc func(context.Context, agent.Session) (agent.SessionResult, error)
@@ -86,6 +87,65 @@ func TestRunnerClassifiesInformationalAndMissingMetricsWarnings(t *testing.T) {
 				t.Fatalf("classification = collected=%t result=%+v", collected, result)
 			}
 		})
+	}
+}
+
+func TestRunnerMeasurementFactsAreIndependentOfWarningsAndOutcome(t *testing.T) {
+	original := errors.New("original provider failure")
+	for _, descriptor := range agent.All() {
+		for _, outcome := range []string{"success", "failure", "timeout"} {
+			for _, tt := range []struct {
+				name         string
+				metrics      *agent.Metrics
+				availability agentmetrics.Availability
+			}{
+				{name: "nil", availability: agentmetrics.Unavailable},
+				{name: "legacy allocated", metrics: &agent.Metrics{}},
+				{name: "unavailable", metrics: &agent.Metrics{Availability: agentmetrics.Unavailable}, availability: agentmetrics.Unavailable},
+				{name: "partial zero", metrics: &agent.Metrics{Availability: agentmetrics.Partial, CostPresent: true}, availability: agentmetrics.Partial},
+				{name: "reported zero", metrics: &agent.Metrics{Availability: agentmetrics.Reported, InputTokensPresent: true, OutputTokensPresent: true, TotalTokensPresent: true, CostPresent: true}, availability: agentmetrics.Reported},
+			} {
+				t.Run(descriptor.Label+"/"+outcome+"/"+tt.name, func(t *testing.T) {
+					calls := 0
+					runtime := runtimeFunc(func(ctx context.Context, session agent.Session) (agent.SessionResult, error) {
+						calls++
+						raw := agent.SessionResult{Output: "original output", Metrics: tt.metrics, MetricsWarning: "unchanged warning"}
+						if outcome == "timeout" {
+							<-ctx.Done()
+							return raw, ctx.Err()
+						}
+						if outcome == "failure" {
+							return raw, original
+						}
+						return raw, nil
+					})
+					timeout := time.Minute
+					if outcome == "timeout" {
+						timeout = time.Millisecond
+					}
+					runner := New(Config{Descriptor: descriptor, Runtime: runtime, Timeout: timeout})
+					got, err := runner.Run(context.Background(), Request{CollectMetrics: true})
+					switch outcome {
+					case "success":
+						if err != nil {
+							t.Fatal(err)
+						}
+					case "failure":
+						if !errors.Is(err, original) {
+							t.Fatalf("original error lost: %v", err)
+						}
+					case "timeout":
+						var timeout *agent.SessionTimeoutError
+						if !errors.As(err, &timeout) || !errors.Is(err, context.DeadlineExceeded) {
+							t.Fatalf("timeout lost: %v", err)
+						}
+					}
+					if calls != 1 || got.Metrics != tt.metrics || got.MetricsAvailability != tt.availability || got.Output != "original output" || got.MetricsWarning != "unchanged warning" || !got.ReportMetricsWarning || got.MetricsUsable != descriptor.MetricsWarningInformational {
+						t.Fatalf("calls=%d result=%+v", calls, got)
+					}
+				})
+			}
+		}
 	}
 }
 

@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/agent"
+	agentmetrics "github.com/iamseth/tao/internal/agent/metrics"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/taodata"
 )
 
@@ -28,6 +30,9 @@ func TestGeneratePlanPropagatesCallerPolicyAndReturnsValidatedDetail(t *testing.
 	stub := &sliceAgentStub{run: func(got agent.Session) (agent.SessionResult, error) {
 		if got.Timeout != timeout || got.PermissionMode != agent.PermissionModeBypassPermissions {
 			t.Fatalf("unexpected runtime policy: timeout=%s permission=%q", got.Timeout, got.PermissionMode)
+		}
+		if !got.CollectMetrics {
+			t.Fatal("generation did not request metrics")
 		}
 		if got.Log != nil || got.Progress == nil {
 			t.Fatalf("note planning log sinks = durable %#v, progress %#v", got.Log, got.Progress)
@@ -242,6 +247,147 @@ func TestGeneratePlanCleansRuntimeAndNoArtifactFailures(t *testing.T) {
 			}
 			if _, statErr := os.Stat(generationErr.Allocation.Dir); !os.IsNotExist(statErr) {
 				t.Fatalf("expected allocation cleanup, stat error=%v", statErr)
+			}
+		})
+	}
+}
+
+type generationEventAppender func(string, plan.Event) error
+
+func (f generationEventAppender) AppendEvent(dir string, event plan.Event) error {
+	return f(dir, event)
+}
+
+func TestGeneratePlanTelemetry(t *testing.T) {
+	for _, kind := range []runtimeconfig.AgentKind{runtimeconfig.AgentPi, runtimeconfig.AgentClaude} {
+		for _, measurement := range []struct {
+			name    string
+			metrics *agent.Metrics
+			want    plan.AgentMetricsAvailability
+		}{
+			{"reported", &agent.Metrics{Availability: agentmetrics.Reported, InputTokens: 5, InputTokensPresent: true, OutputTokens: 7, OutputTokensPresent: true, TotalTokens: 12, TotalTokensPresent: true, CostPresent: true}, plan.AgentMetricsReported},
+			{"partial", &agent.Metrics{Availability: agentmetrics.Partial, OutputTokens: 7, OutputTokensPresent: true}, plan.AgentMetricsPartial},
+			{"unavailable", nil, plan.AgentMetricsUnavailable},
+		} {
+			for _, appendFails := range []bool{false, true} {
+				t.Run(string(kind)+"/"+measurement.name+"/append-fails="+strconv.FormatBool(appendFails), func(t *testing.T) {
+					repoMeta, store := newPlanningServiceTestRepo(t)
+					session, err := NewSession("note-metrics", "Metrics", "work", repoMeta, nil, time.Now())
+					if err != nil {
+						t.Fatal(err)
+					}
+					calls, appends := 0, 0
+					stub := &sliceAgentStub{run: func(got agent.Session) (agent.SessionResult, error) {
+						calls++
+						if !got.CollectMetrics {
+							t.Fatal("metrics not requested")
+						}
+						dir := noteSlicePlanDirFromPrompt(t, got.Prompt)
+						writeGeneratedPlan(t, dir, filepath.Base(dir), repoMeta.Root, false)
+						return agent.SessionResult{Output: "original output", FinalText: "original final", Metrics: measurement.metrics, MetricsWarning: "capture warning must not discard measurements"}, nil
+					}}
+					service := NewService(store, stub, ServiceOptions{Agent: kind, EventAppender: generationEventAppender(func(dir string, event plan.Event) error {
+						appends++
+						if appendFails {
+							return errors.New("append failed")
+						}
+						return plan.AppendEvent(dir, event)
+					})})
+					result, err := service.GeneratePlan(context.Background(), GeneratePlanRequest{Session: session, RejectOpenQuestions: true})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if calls != 1 || appends != 1 || !result.Validation.OK || result.Summary != "original output" || result.Agent != (AgentSummary{Output: "original output", FinalText: "original final"}) {
+						t.Fatalf("generation changed: calls=%d appends=%d result=%#v", calls, appends, result)
+					}
+					persisted, err := plan.NewFileRepository("").ResolvePlan(context.Background(), result.Allocation.Dir)
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, detail := range []*plan.PlanDetail{result.Detail, persisted} {
+						count := 0
+						for _, event := range detail.Events {
+							if event.Type != plan.EventTypeAgentMetrics {
+								continue
+							}
+							count++
+							m := event.Metrics
+							if m == nil || m.Role != plan.AgentRolePlanning || m.Availability != measurement.want || m.Agent != string(kind) || event.Agent != string(kind) || event.PlanID != result.Allocation.ID || event.SliceID != "" || event.Timestamp.IsZero() || m.Status != plan.StatusCompleted || m.Result != plan.StatusCompleted {
+								t.Fatalf("metrics event = %#v, metrics=%#v", event, m)
+							}
+							if measurement.metrics != nil {
+								want := measurement.metrics
+								if m.InputTokens != want.InputTokens || m.InputTokensPresent != want.InputTokensPresent || m.OutputTokens != want.OutputTokens || m.OutputTokensPresent != want.OutputTokensPresent || m.TotalTokens != want.TotalTokens || m.TotalTokensPresent != want.TotalTokensPresent || m.Cost != 0 || m.CostPresent != want.CostPresent {
+									t.Fatalf("lost measurement presence: %#v", m)
+								}
+							} else if m.InputTokensPresent || m.OutputTokensPresent || m.TotalTokensPresent || m.CostPresent {
+								t.Fatalf("invented measurement: %#v", m)
+							}
+						}
+						wantCount := 1
+						if appendFails {
+							wantCount = 0
+						}
+						if count != wantCount {
+							t.Fatalf("metrics events=%d, want %d", count, wantCount)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestGeneratePlanFailuresNeverAppendTelemetry(t *testing.T) {
+	original := errors.New("runtime failed")
+	for _, stage := range []GenerationStage{GenerationStageRuntime, GenerationStageRequiredArtifact, GenerationStageOpenQuestions} {
+		t.Run(string(stage), func(t *testing.T) {
+			repoMeta, store := newPlanningServiceTestRepo(t)
+			session, err := NewSession("note-failure", "Failure", "work", repoMeta, nil, time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			stub := &sliceAgentStub{run: func(got agent.Session) (agent.SessionResult, error) {
+				calls++
+				dir := noteSlicePlanDirFromPrompt(t, got.Prompt)
+				if stage != GenerationStageRequiredArtifact {
+					writeGeneratedPlan(t, dir, filepath.Base(dir), repoMeta.Root, false)
+				}
+				if stage == GenerationStageOpenQuestions {
+					state, err := plan.ReadState(dir)
+					if err != nil {
+						t.Fatal(err)
+					}
+					state.OpenQuestions = []string{"Which API?"}
+					content, err := json.Marshal(state)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(dir, "state.json"), content, 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				result := agent.SessionResult{Metrics: &agent.Metrics{Availability: agentmetrics.Partial, OutputTokens: 7, OutputTokensPresent: true}, MetricsWarning: "capture failed"}
+				if stage == GenerationStageRuntime {
+					return result, original
+				}
+				return result, nil
+			}}
+			service := NewService(store, stub, ServiceOptions{EventAppender: generationEventAppender(func(string, plan.Event) error {
+				t.Fatal("attempted telemetry append for failed generation")
+				return nil
+			})})
+			_, err = service.GeneratePlan(context.Background(), GeneratePlanRequest{Session: session, RejectOpenQuestions: true})
+			var generationErr *GenerationError
+			if !errors.As(err, &generationErr) || generationErr.Stage != stage || generationErr.CleanupErr != nil || calls != 1 {
+				t.Fatalf("calls=%d error=%v", calls, err)
+			}
+			if stage == GenerationStageRuntime && !errors.Is(err, original) {
+				t.Fatalf("lost original failure: %v", err)
+			}
+			if _, err := os.Stat(generationErr.Allocation.Dir); !os.IsNotExist(err) {
+				t.Fatalf("failed allocation survived: %v", err)
 			}
 		})
 	}

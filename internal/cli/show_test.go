@@ -191,6 +191,53 @@ func TestShowPlanningSessionUnavailableStates(t *testing.T) {
 	}
 }
 
+func TestShowTelemetryTextAndJSON(t *testing.T) {
+	detail := &plan.PlanDetail{State: plan.State{Status: plan.StatusPlanned, Plan: plan.PlanState{ID: "plan-a"}}}
+	for _, metrics := range []plan.AgentMetrics{
+		{Role: plan.AgentRoleExecution, Availability: plan.AgentMetricsReported, SessionID: "session-secret", TotalTokensPresent: true, CostPresent: true, Status: plan.StatusCompleted},
+		{Role: plan.AgentRoleReview, Availability: plan.AgentMetricsPartial, SessionID: "session-secret", OutputTokens: 12, TotalTokens: 12, Cost: 0.25, Result: "failed"},
+		{Role: "untrusted-role-secret", Availability: plan.AgentMetricsUnavailable},
+		{TotalTokens: 3, Cost: 0.5},
+	} {
+		detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypeAgentMetrics, Metrics: &metrics})
+	}
+	repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
+	var text, structured bytes.Buffer
+	if err := (App{Out: &text}).show(context.Background(), repo, []string{"plan-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := (App{Out: &structured}).show(context.Background(), repo, []string{"--json", "plan-a"}); err != nil {
+		t.Fatal(err)
+	}
+	var payload planview.ShowPayload
+	if err := json.Unmarshal(structured.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(payload.Telemetry, planview.ProjectShowTelemetry(detail.Events)) {
+		t.Fatalf("JSON does not match safe projection: %s", structured.String())
+	}
+	for _, want := range []string{
+		"Total: partial recorded totals; sessions 1; attempts 4; failed 1",
+		"Tokens: 15; input unavailable/unknown; output 12;",
+		"cost $0.7500", "Availability: reported 1; partial 1; unavailable 1; unknown/legacy 1",
+		"execution: reported; sessions 1; attempts 1; failed 0", "Tokens: 0;", "cost $0.0000",
+		"review: partial recorded totals;", "unknown: partial recorded totals;",
+		"missing phase events do not prove the phase did not run", "Interactive planning is not collected", "Merge-batch usage is separate",
+	} {
+		if !strings.Contains(text.String(), want) {
+			t.Errorf("missing %q in text:\n%s", want, text.String())
+		}
+	}
+	for _, secret := range []string{"session-secret", "untrusted-role-secret"} {
+		if strings.Contains(text.String(), secret) || strings.Contains(structured.String(), secret) {
+			t.Fatalf("telemetry leaked %q", secret)
+		}
+	}
+	if strings.Index(text.String(), "execution: reported") > strings.Index(text.String(), "review: partial") || strings.Index(text.String(), "review: partial") > strings.Index(text.String(), "unknown: partial") {
+		t.Fatal("text roles are not sorted")
+	}
+}
+
 func TestShowPrintsAgentBudgetWarnings(t *testing.T) {
 	started := time.Date(2026, 4, 27, 18, 0, 0, 0, time.UTC)
 	var out bytes.Buffer

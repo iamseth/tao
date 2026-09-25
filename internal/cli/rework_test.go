@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/iamseth/tao/internal/agentsession"
 	"github.com/iamseth/tao/internal/plan"
 	reworkpkg "github.com/iamseth/tao/internal/rework"
 	runpkg "github.com/iamseth/tao/internal/run"
@@ -521,7 +522,7 @@ func stubCLIReworkPRPipeline(t *testing.T, threads []reworkpkg.PRThread, classif
 		}
 		return reworkpkg.PRThreadReadResult{OwnerLogin: "owner", Threads: threads}, nil
 	}
-	classifyReworkPRThreads = func(_ context.Context, _ App, _ string, got []reworkpkg.PRThread) ([]reworkpkg.PRThreadClassification, error) {
+	classifyReworkPRThreads = func(_ context.Context, _ App, _ string, got []reworkpkg.PRThread, _ func(agentsession.Result, error)) ([]reworkpkg.PRThreadClassification, error) {
 		if len(got) != len(threads) {
 			t.Fatalf("classified threads = %d, want %d", len(got), len(threads))
 		}

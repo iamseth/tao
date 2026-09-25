@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/taodata"
@@ -252,6 +253,7 @@ func TestCreateReviewWithAgentSessionPersistsParsedReview(t *testing.T) {
 		t.Fatalf("expected one review request, got %#v", executor.requests)
 	}
 	request := executor.requests[0]
+	assertPlanTelemetryRequest(t, request, plan.AgentRoleReview)
 	if request.LogAction != "reviewing plan plan-a" || request.RepoRoot != repoRoot || !request.CaptureOutput {
 		t.Fatalf("unexpected review request: %#v", request)
 	}
@@ -331,7 +333,9 @@ func TestCreateReviewWithAgentSessionCorrectsTypedApprovalProposalOnce(t *testin
 	if prompt := executor.requests[0].Prompt; !strings.Contains(prompt, "Plan change type: `fix`") || !strings.Contains(prompt, "authoritative plan change type `fix`") {
 		t.Fatalf("typed review prompt missing authoritative type:\n%s", prompt)
 	}
+	assertPlanTelemetryRequest(t, executor.requests[0], plan.AgentRoleReview)
 	correctionRequest := executor.requests[1]
+	assertPlanTelemetryRequest(t, correctionRequest, plan.AgentRoleReview)
 	for _, want := range []string{"correcting review proposal for plan plan-a", "COMMIT PROPOSAL CORRECTION mode", "exact `base123..head123` diff", "Do not include a verdict, summary, findings"} {
 		if !strings.Contains(correctionRequest.LogAction+"\n"+correctionRequest.Prompt, want) {
 			t.Fatalf("correction request missing %q: %#v", want, correctionRequest)
@@ -343,6 +347,61 @@ func TestCreateReviewWithAgentSessionCorrectsTypedApprovalProposalOnce(t *testin
 	}
 	if string(artifact) != wrongTypeReview {
 		t.Fatalf("review artifact changed substantive output: %q", artifact)
+	}
+}
+
+func TestHistoricalProposalTelemetryDoesNotAuthorizeAnotherSession(t *testing.T) {
+	for _, kind := range []AgentKind{AgentPi, AgentClaude} {
+		for _, valid := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/valid=%t", kind, valid), func(t *testing.T) {
+				fixture := newPullRequestOrchestrationFixture(t)
+				repository := plan.NewFileRepository(fixture.plansRoot)
+				detail, err := repository.ResolvePlan(context.Background(), fixture.planDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				output := "not a valid proposal"
+				if valid {
+					output = "```tao-review-proposal-json\n{\"commit_message\":{\"subject\":\"fix(pr): recover exact finalization\",\"body\":\"What:\\nRecover the exact approved head.\\n\\nWhy:\\nFinish pull request handoff safely.\"}}\n```"
+				}
+				executor := testAgentExecutor(kind, agentExecutorOptions{Deps: agent.RuntimeDeps{ProcessStarter: phaseTelemetryStarter(t, kind, output, plan.AgentMetricsReported)}, CommandRunner: defaultCommandRunner}, repository, repository)
+				calls := 0
+				reviewer := struct {
+					ReviewCreator
+					AgentSessionExecutor
+				}{
+					ReviewCreator: reviewCreatorFunc(func(context.Context, ReviewRun) (plan.PlanReview, error) {
+						t.Fatal("historical approval must not rerun substantive review")
+						return plan.PlanReview{}, nil
+					}),
+					AgentSessionExecutor: agentSessionExecutorFunc(func(ctx context.Context, request AgentSessionRequest) (AgentSessionResult, error) {
+						calls++
+						assertPlanTelemetryRequest(t, request, plan.AgentRoleReview)
+						return executor.RunAgentSession(ctx, request)
+					}),
+				}
+				finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{}, RunDependencies{CommandRunner: defaultCommandRunner, PlanRecordFactory: fileReviewRecordFactory(repository), ReviewCreator: reviewer}))
+				for attempt := 0; attempt < 2; attempt++ {
+					err := finalizer.ensureApprovedReviewProposal(context.Background(), detail, fixture.worktreeRoot, fixture.branch, fixture.head)
+					if (err == nil) != valid {
+						t.Fatalf("attempt %d: correction error = %v", attempt, err)
+					}
+					if calls != 1 {
+						t.Fatalf("attempt %d: correction calls = %d, want 1", attempt, calls)
+					}
+					events := readAgentMetricEvents(t, fixture.planDir)
+					if len(events) != 1 || events[0].SliceID != "" || events[0].Metrics.Role != plan.AgentRoleReview || events[0].Metrics.Status != plan.StatusCompleted {
+						t.Fatalf("attempt %d: metrics = %+v", attempt, events)
+					}
+					// Reload durable evidence: successful metrics neither grant a
+					// second correction nor stand in for a validated proposal.
+					detail, err = repository.ResolvePlan(context.Background(), fixture.planDir)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+			})
+		}
 	}
 }
 

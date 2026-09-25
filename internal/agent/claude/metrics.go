@@ -10,17 +10,17 @@ import (
 // stream omits an explicit total.
 func parseSessionMetrics(result Result) agentmetrics.Metrics {
 	metrics := agentmetrics.Metrics{
-		SessionID:    result.SessionID,
-		ProviderID:   "anthropic",
-		ModelID:      result.Model,
-		InputTokens:  jsonmap.FirstInt64(result.Usage, "input_tokens", "inputTokens"),
-		OutputTokens: jsonmap.FirstInt64(result.Usage, "output_tokens", "outputTokens"),
-		TotalTokens:  jsonmap.FirstInt64(result.Usage, "total_tokens", "totalTokens"),
-		Cost:         result.CostUSD,
+		SessionID:   result.SessionID,
+		ProviderID:  "anthropic",
+		ModelID:     result.Model,
+		Cost:        result.CostUSD,
+		CostPresent: result.CostUSDPresent,
 	}
-	if metrics.TotalTokens == 0 {
-		metrics.TotalTokens = metrics.InputTokens + metrics.OutputTokens
-	}
+	metrics.InputTokens, metrics.InputTokensPresent = agentmetrics.TokenValue(result.Usage["input_tokens"], result.Usage["inputTokens"])
+	metrics.OutputTokens, metrics.OutputTokensPresent = agentmetrics.TokenValue(result.Usage["output_tokens"], result.Usage["outputTokens"])
+	metrics.TotalTokens, metrics.TotalTokensPresent = agentmetrics.TokenValue(result.Usage["total_tokens"], result.Usage["totalTokens"])
+	metrics.ComputeTotal()
+	metrics.ClassifyAvailability()
 	return metrics
 }
 

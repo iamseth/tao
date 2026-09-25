@@ -487,6 +487,59 @@ func TestPlanLoadsLegacyPlanWithoutPlanningSessionArtifacts(t *testing.T) {
 	}
 }
 
+func TestRepositoryLoadsCompatibleTelemetryMetadata(t *testing.T) {
+	dir := t.TempDir()
+	writeMinimalPlan(t, dir, "metrics", "Metrics Plan")
+	path := filepath.Join(dir, "metrics", "events.jsonl")
+	contents := `{"type":"agent_metrics","plan_id":"metrics","metrics":{"session_id":"legacy","total_tokens":12}}
+{"type":"agent_metrics","plan_id":"metrics","metrics":{"session_id":"zero","role":"review","availability":"reported","status":"blocked","total_tokens":0,"cost":0}}
+{"type":"agent_metrics","plan_id":"metrics","metrics":{"session_id":"partial","role":"execution","availability":"partial","output_tokens":3}}
+{"type":"agent_metrics","plan_id":"metrics","metrics":{"session_id":"future","role":"future-role","availability":"future-value"}}
+`
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := NewFileRepository(dir).GetPlan(context.Background(), "metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := make(map[string]AgentMetrics)
+	for _, event := range AgentMetricsEvents(detail.Events) {
+		found[event.Metrics.SessionID] = event.Metrics
+	}
+	for _, id := range []string{"legacy", "zero", "partial", "future"} {
+		if _, ok := found[id]; !ok {
+			t.Fatalf("missing telemetry for %s", id)
+		}
+	}
+	if found["legacy"].Role != "" || found["legacy"].CostPresent || !found["legacy"].TotalTokensPresent {
+		t.Fatalf("legacy metrics changed: %+v", found["legacy"])
+	}
+	if !found["zero"].TotalTokensPresent || !found["zero"].CostPresent {
+		t.Fatalf("explicit zeros lost: %+v", found["zero"])
+	}
+	if found["partial"].TotalTokensPresent || found["partial"].CostPresent || !found["partial"].OutputTokensPresent {
+		t.Fatalf("partial presence lost: %+v", found["partial"])
+	}
+	if found["future"].Role != "future-role" || found["future"].Availability != "future-value" {
+		t.Fatalf("future metadata rewritten: %+v", found["future"])
+	}
+	summary := SummarizeAgentTelemetry(detail)
+	if summary.Totals.TotalTokens != 12 || summary.Totals.OutputTokens != 3 || summary.Totals.FailedAttempts != 1 || summary.Totals.Availability != (AgentMetricsAvailabilityCounts{Reported: 1, Partial: 1, Unknown: 2}) {
+		t.Fatalf("unexpected totals: %+v", summary.Totals)
+	}
+	if len(summary.ByRole) != 3 || summary.ByRole[2].Key != "unknown" || summary.ByRole[2].Totals.Attempts != 2 {
+		t.Fatalf("future/legacy role grouping: %+v", summary.ByRole)
+	}
+	after, err := os.ReadFile(path) //nolint:gosec // path is the test-owned events fixture under t.TempDir.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != contents {
+		t.Fatal("loading telemetry rewrote event artifact")
+	}
+}
+
 func TestRepositoryLoadsAgentMetricsEvents(t *testing.T) {
 	dir := t.TempDir()
 	writeMinimalPlan(t, dir, "metrics", "Metrics Plan")

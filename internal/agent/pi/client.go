@@ -127,7 +127,7 @@ func (c Client) RunAgentSession(ctx context.Context, request Request) (Result, e
 		return result, nil
 	}
 	result = session.collectSessionInfoBestEffort(ctx, result)
-	result.Metrics = parseSessionMetrics(result.State, result.Stats)
+	result.Metrics = preferSessionMetrics(parseSessionMetrics(result.State, result.Stats), result.Metrics)
 	if result.Metrics.SessionID == "" {
 		result.Metrics.SessionID = result.SessionID
 	}

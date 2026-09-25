@@ -97,16 +97,43 @@ func TestSharedAgentOperationsSetTransportRequests(t *testing.T) {
 	if len(executor.requests) != 2 {
 		t.Fatalf("expected 2 requests, got %#v", executor.requests)
 	}
-	assertAgentRequest(t, executor.requests[0], "running 001-a", false, "001-a")
+	assertAgentRequest(t, executor.requests[0], "running 001-a", false, "001-a", plan.AgentRoleExecution)
 	if got := strings.Join(executor.requests[0].VerificationCommands, "\n"); got != strings.Join(verificationCommands, "\n") {
 		t.Fatalf("verification commands = %q, want %q", got, strings.Join(verificationCommands, "\n"))
 	}
-	assertAgentRequest(t, executor.requests[1], "creating pull request for plan plan-a", true, "")
+	assertAgentRequest(t, executor.requests[1], "creating pull request for plan plan-a", true, "", plan.AgentRolePullRequest)
 	if executor.requests[1].VerificationCommands != nil {
 		t.Fatalf("pull request verification commands = %#v, want nil", executor.requests[1].VerificationCommands)
 	}
 	if pr.Number != 123 || pr.URL != "https://github.com/iamseth/tao/pull/123" || !pr.CreatedAt.Equal(options.Now().UTC()) {
 		t.Fatalf("unexpected pull request: %#v", pr)
+	}
+}
+
+func TestSliceTelemetryRoleStableAcrossInitialAndResumeRequests(t *testing.T) {
+	for _, tt := range []struct {
+		id   string
+		role plan.AgentRole
+	}{
+		{"001-rework-title-only", plan.AgentRoleExecution},
+		{"r101-finding", plan.AgentRoleRework},
+		{"r201-finding", plan.AgentRoleRework},
+		{"r000-not-generated", plan.AgentRoleExecution},
+	} {
+		t.Run(tt.id, func(t *testing.T) {
+			executor := &recordingAgentSessionExecutor{}
+			for attempt := 0; attempt < 3; attempt++ {
+				if err := runSliceWithAgentSession(context.Background(), executor, agentOperationOptions{}, SliceRun{
+					SliceID: tt.id, Resuming: attempt > 0, ResumeAttempt: attempt, RunPacket: "execution review rework untrusted text",
+				}); err != nil {
+					t.Fatal(err)
+				}
+				request := executor.requests[attempt].Metrics
+				if request == nil || request.Role != tt.role || request.SliceID != tt.id || !request.EnforceSliceCaps {
+					t.Fatalf("attempt %d telemetry = %+v", attempt, request)
+				}
+			}
+		})
 	}
 }
 
@@ -143,19 +170,20 @@ func (e *recordingAgentSessionExecutor) RunAgentSession(ctx context.Context, req
 	return e.result, ctx.Err()
 }
 
-func assertAgentRequest(t *testing.T, request AgentSessionRequest, logAction string, captureOutput bool, metricsSliceID string) {
+func assertAgentRequest(t *testing.T, request AgentSessionRequest, logAction string, captureOutput bool, metricsSliceID string, role plan.AgentRole) {
 	t.Helper()
 	if request.LogAction != logAction || request.CaptureOutput != captureOutput {
 		t.Fatalf("unexpected request action/output: %#v", request)
 	}
-	if metricsSliceID == "" {
-		if request.Metrics != nil {
-			t.Fatalf("expected no metrics request, got %#v", request.Metrics)
-		}
-		return
+	if request.Metrics == nil || request.Metrics.SliceID != metricsSliceID || request.Metrics.Role != role || request.Metrics.EnforceSliceCaps != (metricsSliceID != "") {
+		t.Fatalf("expected metrics slice %q and role %q, got %#v", metricsSliceID, role, request.Metrics)
 	}
-	if request.Metrics == nil || request.Metrics.SliceID != metricsSliceID {
-		t.Fatalf("expected metrics slice %q, got %#v", metricsSliceID, request.Metrics)
+}
+
+func assertPlanTelemetryRequest(t *testing.T, request AgentSessionRequest, role plan.AgentRole) {
+	t.Helper()
+	if request.Metrics == nil || request.Metrics.Role != role || request.Metrics.SliceID != "" || request.Metrics.EnforceSliceCaps {
+		t.Fatalf("expected uncapped plan telemetry role %q, got %+v", role, request.Metrics)
 	}
 }
 

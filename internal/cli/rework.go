@@ -13,6 +13,7 @@ import (
 
 	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/agentsession"
+	"github.com/iamseth/tao/internal/agenttelemetry"
 	"github.com/iamseth/tao/internal/plan"
 	reworkpkg "github.com/iamseth/tao/internal/rework"
 	runpkg "github.com/iamseth/tao/internal/run"
@@ -155,11 +156,14 @@ var readReworkPRThreads = func(ctx context.Context, app App, request reworkpkg.P
 	return (reworkpkg.PRThreadReader{CommandRunner: app.CommandRunner}).Read(ctx, request)
 }
 
-var classifyReworkPRThreads = func(ctx context.Context, app App, repoRoot string, threads []reworkpkg.PRThread) ([]reworkpkg.PRThreadClassification, error) {
-	return (reworkpkg.PRThreadClassifier{Text: reworkTriageTextSession{app: app}}).Classify(ctx, repoRoot, threads)
+var classifyReworkPRThreads = func(ctx context.Context, app App, repoRoot string, threads []reworkpkg.PRThread, observe func(agentsession.Result, error)) ([]reworkpkg.PRThreadClassification, error) {
+	return (reworkpkg.PRThreadClassifier{Text: reworkTriageTextSession{app: app, observe: observe}}).Classify(ctx, repoRoot, threads)
 }
 
-type reworkTriageTextSession struct{ app App }
+type reworkTriageTextSession struct {
+	app     App
+	observe func(agentsession.Result, error)
+}
 
 func (s reworkTriageTextSession) GenerateText(ctx context.Context, repoRoot, prompt string) (string, error) {
 	defaults, err := cliEnvDefaults()
@@ -180,6 +184,11 @@ func (s reworkTriageTextSession) GenerateText(ctx context.Context, repoRoot, pro
 		Progress: s.app.Out, CommandRunner: s.app.CommandRunner,
 	})
 	result, err := runner.Run(ctx, agentsession.Request{RepoRoot: repoRoot, Prompt: prompt, CollectMetrics: true})
+	// Observe actual sessions before either provider errors or downstream
+	// classification validation can discard their measurements.
+	if result.Invoked && s.observe != nil {
+		s.observe(result, err)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -201,7 +210,13 @@ func (a App) reworkFromPullRequest(ctx context.Context, repo planRunRepository, 
 		return err
 	}
 	if !triageMatchesThreads(detail.State.Plan.PRFeedbackTriage, result.Threads) && len(result.Threads) > 0 {
-		classifications, err := classifyReworkPRThreads(ctx, a, request.RepoRoot, result.Threads)
+		classifications, err := classifyReworkPRThreads(ctx, a, request.RepoRoot, result.Threads, func(result agentsession.Result, runErr error) {
+			metrics := agenttelemetry.Project(result, plan.AgentRoleRework, runErr)
+			event := agenttelemetry.Event(detail.State.Plan.ID, "", a.now(), metrics)
+			if err := repo.AppendEvent(record.Dir(), event); err == nil {
+				detail.Events = append(detail.Events, event)
+			}
+		})
 		if err != nil {
 			return err
 		}

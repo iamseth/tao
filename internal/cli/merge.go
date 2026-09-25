@@ -409,9 +409,9 @@ func (a App) newMergeServiceRunner(detail *plan.PlanDetail) (mergeServiceRunner,
 			_ = writef(a.Out, format+"\n", args...)
 		}
 	}
-	generator, err := mergepkg.NewMergeProposalGenerator(mergepkg.MergeProposalGeneratorConfig{
-		ProcessStarter: a.ProcessStarter, Log: a.Out, ControlRoot: repoRoot, CommandRunner: runner,
-	})
+	eventAppender := plan.NewFileRepository("")
+	agentConfig := newSingleMergeAgentConfig(a, detail, repoRoot, runner, eventAppender)
+	generator, err := mergepkg.NewMergeProposalGenerator(agentConfig)
 	if err != nil {
 		return nil, fmt.Errorf("configure exceptional merge proposal generator: %w", err)
 	}
@@ -419,8 +419,7 @@ func (a App) newMergeServiceRunner(detail *plan.PlanDetail) (mergeServiceRunner,
 	if err != nil {
 		return nil, fmt.Errorf("configure single-plan merge record: %w", err)
 	}
-	eventAppender := plan.NewFileRepository("")
-	agentSession := mergepkg.NewFreshSingleMergeAgentSession(newSingleMergeAgentConfig(a, detail, repoRoot, runner, eventAppender))
+	agentSession := mergepkg.NewFreshSingleMergeAgentSession(agentConfig)
 	svc := mergepkg.NewService(repoRoot, runner)
 	git := svc.Git
 	svc.Runner = runner
@@ -437,13 +436,18 @@ func newSingleMergeAgentConfig(a App, detail *plan.PlanDetail, controlRoot strin
 	return mergepkg.SingleMergeAgentSessionConfig{
 		ProcessStarter: a.ProcessStarter, Log: a.Out, ControlRoot: controlRoot, CommandRunner: runner, Now: a.Now,
 		Observe: func(request mergepkg.BatchAgentSessionRequest, result mergepkg.BatchAgentSessionResult, sessionErr error) {
+			request.CandidatePlanID = mergePlanID(detail)
 			event := mergepkg.SingleMergeAgentMetricsEvent(request, result, sessionErr, a.now())
 			if event == nil || appender == nil {
 				return
 			}
-			if err := appender.AppendEvent(detail.Dir, *event); err != nil && a.Out != nil {
-				_ = writef(a.Out, "tao telemetry warning: append %s event: %v\n", event.Type, err)
+			if err := appender.AppendEvent(detail.Dir, *event); err != nil {
+				if a.Out != nil {
+					_ = writef(a.Out, "tao telemetry warning: append %s event: %v\n", event.Type, err)
+				}
+				return
 			}
+			detail.Events = append(detail.Events, *event)
 		},
 	}
 }

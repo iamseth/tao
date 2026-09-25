@@ -251,6 +251,43 @@ func TestProjectFullLegacyCompletedPlanWithFinalizationRecoveryIsNotMerged(t *te
 	}
 }
 
+func TestTelemetryAttributionPreservesReportProjections(t *testing.T) {
+	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	detail := reportFixture(now)
+	planningBefore := ProjectPlanningOnly(detail, now)
+	roles := []plan.AgentRole{plan.AgentRolePlanning, plan.AgentRoleExecution, plan.AgentRoleReview, plan.AgentRoleRework, plan.AgentRolePullRequest, plan.AgentRoleMerge, "private-role-secret"}
+	for range roles {
+		detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypeAgentMetrics, Metrics: &plan.AgentMetrics{SessionID: "private-session", OutputTokens: 5, TotalTokens: 5, Cost: 0.25, Result: "failed"}})
+	}
+	fullBefore := ProjectFull(detail, now)
+	for i, role := range roles {
+		detail.Events[i].Metrics.Role = role
+		detail.Events[i].Metrics.Availability = plan.AgentMetricsPartial
+		detail.Events[i].Metrics.CostPresent = true
+		detail.Events[i].Metrics.TotalTokensPresent = true
+	}
+	fullAfter := ProjectFull(detail, now)
+	if !reflect.DeepEqual(fullBefore, fullAfter) || fullAfter.Execution.Telemetry.OutputTokens.Value != 35 {
+		t.Fatalf("additive attribution changed full report: %+v", fullAfter.Execution.Telemetry)
+	}
+	if !reflect.DeepEqual(planningBefore, ProjectPlanningOnly(detail, now)) {
+		t.Fatal("plan metrics (including planning role) leaked into planning-only report")
+	}
+	markdown, err := RenderFull(fullAfter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(fullAfter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"private-role-secret", "private-session"} {
+		if strings.Contains(string(markdown), secret) || strings.Contains(string(encoded), secret) {
+			t.Fatalf("report leaked %q", secret)
+		}
+	}
+}
+
 func TestProjectFullSummarizesWithoutRawExecutionEvidence(t *testing.T) {
 	now := time.Date(2026, 8, 4, 15, 0, 0, 0, time.UTC)
 	detail := reportFixture(now)

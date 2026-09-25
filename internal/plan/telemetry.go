@@ -37,31 +37,122 @@ func DefaultAgentBudgetThresholds() AgentBudgetThresholds {
 	}
 }
 
-// AgentMetrics is the durable metrics payload stored on agent_metrics events.
-type AgentMetrics struct {
-	Agent              string  `json:"agent,omitempty"`
-	SessionID          string  `json:"session_id"`
-	ProviderID         string  `json:"provider_id,omitempty"`
-	ModelID            string  `json:"model_id,omitempty"`
-	Status             string  `json:"status,omitempty"`
-	Result             string  `json:"result,omitempty"`
-	InputTokens        int64   `json:"input_tokens,omitempty"`
-	OutputTokens       int64   `json:"output_tokens,omitempty"`
-	ReasoningTokens    int64   `json:"reasoning_tokens,omitempty"`
-	CacheReadTokens    int64   `json:"cache_read_tokens,omitempty"`
-	CacheWriteTokens   int64   `json:"cache_write_tokens,omitempty"`
-	TotalTokens        int64   `json:"total_tokens,omitempty"`
-	TotalTokensPresent bool    `json:"-"`
-	Cost               float64 `json:"cost,omitempty"`
-	TotalMessages      int64   `json:"total_messages,omitempty"`
-	UserMessages       int64   `json:"user_messages,omitempty"`
-	AssistantMessages  int64   `json:"assistant_messages,omitempty"`
-	ErroredMessages    int64   `json:"errored_messages,omitempty"`
-	ToolCalls          int64   `json:"tool_calls,omitempty"`
+// AgentRole is assigned by trusted operation context, never inferred from text.
+type AgentRole string
+
+const (
+	AgentRolePlanning    AgentRole = "planning"
+	AgentRoleExecution   AgentRole = "execution"
+	AgentRoleReview      AgentRole = "review"
+	AgentRoleRework      AgentRole = "rework"
+	AgentRolePullRequest AgentRole = "pull_request"
+	AgentRoleMerge       AgentRole = "merge"
+	AgentRoleUnknown     AgentRole = "unknown"
+)
+
+// Normalized bounds summary keys without changing the recorded value.
+func (r AgentRole) Normalized() AgentRole {
+	switch r {
+	case AgentRolePlanning, AgentRoleExecution, AgentRoleReview, AgentRoleRework, AgentRolePullRequest, AgentRoleMerge:
+		return r
+	default:
+		return AgentRoleUnknown
+	}
 }
 
-// UnmarshalJSON retains whether total_tokens was explicitly recorded, since a
-// measured zero and an omitted measurement have the same Go numeric value.
+// AgentMetricsAvailability describes measurement coverage, not session success.
+type AgentMetricsAvailability string
+
+const (
+	AgentMetricsReported    AgentMetricsAvailability = "reported"
+	AgentMetricsPartial     AgentMetricsAvailability = "partial"
+	AgentMetricsUnavailable AgentMetricsAvailability = "unavailable"
+	AgentMetricsUnknown     AgentMetricsAvailability = "unknown"
+)
+
+func (a AgentMetricsAvailability) Normalized() AgentMetricsAvailability {
+	switch a {
+	case AgentMetricsReported, AgentMetricsPartial, AgentMetricsUnavailable:
+		return a
+	default:
+		return AgentMetricsUnknown
+	}
+}
+
+// AgentMetricsAvailabilityCounts counts events, including failed attempts.
+type AgentMetricsAvailabilityCounts struct {
+	Reported    int `json:"reported"`
+	Partial     int `json:"partial"`
+	Unavailable int `json:"unavailable"`
+	Unknown     int `json:"unknown"`
+}
+
+// AgentMetrics is the durable metrics payload stored on agent_metrics events.
+// Presence flags retain explicit zero measurements; nonzero values remain
+// serializable without flags for compatibility with existing emitters.
+type AgentMetrics struct {
+	Role                    AgentRole                `json:"role,omitempty"`
+	Availability            AgentMetricsAvailability `json:"availability,omitempty"`
+	InputTokensPresent      bool                     `json:"-"`
+	OutputTokensPresent     bool                     `json:"-"`
+	ReasoningTokensPresent  bool                     `json:"-"`
+	CacheReadTokensPresent  bool                     `json:"-"`
+	CacheWriteTokensPresent bool                     `json:"-"`
+	CostPresent             bool                     `json:"-"`
+	Agent                   string                   `json:"agent,omitempty"`
+	SessionID               string                   `json:"session_id"`
+	ProviderID              string                   `json:"provider_id,omitempty"`
+	ModelID                 string                   `json:"model_id,omitempty"`
+	Status                  string                   `json:"status,omitempty"`
+	Result                  string                   `json:"result,omitempty"`
+	InputTokens             int64                    `json:"input_tokens,omitempty"`
+	OutputTokens            int64                    `json:"output_tokens,omitempty"`
+	ReasoningTokens         int64                    `json:"reasoning_tokens,omitempty"`
+	CacheReadTokens         int64                    `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens        int64                    `json:"cache_write_tokens,omitempty"`
+	TotalTokens             int64                    `json:"total_tokens,omitempty"`
+	TotalTokensPresent      bool                     `json:"-"`
+	Cost                    float64                  `json:"cost,omitempty"`
+	TotalMessages           int64                    `json:"total_messages,omitempty"`
+	UserMessages            int64                    `json:"user_messages,omitempty"`
+	AssistantMessages       int64                    `json:"assistant_messages,omitempty"`
+	ErroredMessages         int64                    `json:"errored_messages,omitempty"`
+	ToolCalls               int64                    `json:"tool_calls,omitempty"`
+}
+
+// MarshalJSON preserves explicitly measured zeros without turning legacy Go
+// zero values into evidence of measurement.
+func (m AgentMetrics) MarshalJSON() ([]byte, error) {
+	type plain AgentMetrics
+	return json.Marshal(struct {
+		plain
+		InputTokens      *int64   `json:"input_tokens,omitempty"`
+		OutputTokens     *int64   `json:"output_tokens,omitempty"`
+		ReasoningTokens  *int64   `json:"reasoning_tokens,omitempty"`
+		CacheReadTokens  *int64   `json:"cache_read_tokens,omitempty"`
+		CacheWriteTokens *int64   `json:"cache_write_tokens,omitempty"`
+		TotalTokens      *int64   `json:"total_tokens,omitempty"`
+		Cost             *float64 `json:"cost,omitempty"`
+	}{
+		plain:            plain(m),
+		InputTokens:      recordedMeasurement(m.InputTokens, m.InputTokensPresent),
+		OutputTokens:     recordedMeasurement(m.OutputTokens, m.OutputTokensPresent),
+		ReasoningTokens:  recordedMeasurement(m.ReasoningTokens, m.ReasoningTokensPresent),
+		CacheReadTokens:  recordedMeasurement(m.CacheReadTokens, m.CacheReadTokensPresent),
+		CacheWriteTokens: recordedMeasurement(m.CacheWriteTokens, m.CacheWriteTokensPresent),
+		TotalTokens:      recordedMeasurement(m.TotalTokens, m.TotalTokensPresent),
+		Cost:             recordedMeasurement(m.Cost, m.CostPresent),
+	})
+}
+
+func recordedMeasurement[T int64 | float64](value T, present bool) *T {
+	if value != 0 || present {
+		return &value
+	}
+	return nil
+}
+
+// UnmarshalJSON distinguishes measured zero from omitted or null measurements.
 func (m *AgentMetrics) UnmarshalJSON(data []byte) error {
 	type plain AgentMetrics
 	var decoded plain
@@ -73,8 +164,17 @@ func (m *AgentMetrics) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*m = AgentMetrics(decoded)
-	value, exists := fields["total_tokens"]
-	m.TotalTokensPresent = exists && !bytes.Equal(bytes.TrimSpace(value), []byte("null"))
+	present := func(key string) bool {
+		value, exists := fields[key]
+		return exists && !bytes.Equal(bytes.TrimSpace(value), []byte("null"))
+	}
+	m.InputTokensPresent = present("input_tokens")
+	m.OutputTokensPresent = present("output_tokens")
+	m.ReasoningTokensPresent = present("reasoning_tokens")
+	m.CacheReadTokensPresent = present("cache_read_tokens")
+	m.CacheWriteTokensPresent = present("cache_write_tokens")
+	m.TotalTokensPresent = present("total_tokens")
+	m.CostPresent = present("cost")
 	return nil
 }
 
@@ -91,6 +191,7 @@ type AgentTelemetrySummary struct {
 	ByAgent    []AgentMetricsGroup `json:"by_agent"`
 	ByModel    []AgentMetricsGroup `json:"by_model"`
 	ByProvider []AgentMetricsGroup `json:"by_provider"`
+	ByRole     []AgentMetricsGroup `json:"by_role"`
 	Events     []AgentMetricEvent  `json:"events"`
 }
 
@@ -108,21 +209,29 @@ type AgentAuditEntry struct {
 }
 
 type AgentMetricsTotals struct {
-	Sessions          int     `json:"sessions"`
-	Attempts          int     `json:"attempts"`
-	FailedAttempts    int     `json:"failed_attempts"`
-	InputTokens       int64   `json:"input_tokens"`
-	OutputTokens      int64   `json:"output_tokens"`
-	ReasoningTokens   int64   `json:"reasoning_tokens"`
-	CacheReadTokens   int64   `json:"cache_read_tokens"`
-	CacheWriteTokens  int64   `json:"cache_write_tokens"`
-	TotalTokens       int64   `json:"total_tokens"`
-	Cost              float64 `json:"cost"`
-	TotalMessages     int64   `json:"total_messages"`
-	UserMessages      int64   `json:"user_messages"`
-	AssistantMessages int64   `json:"assistant_messages"`
-	ErroredMessages   int64   `json:"errored_messages"`
-	ToolCalls         int64   `json:"tool_calls"`
+	Availability            AgentMetricsAvailabilityCounts `json:"availability"`
+	InputTokensPresent      bool                           `json:"input_tokens_present"`
+	OutputTokensPresent     bool                           `json:"output_tokens_present"`
+	ReasoningTokensPresent  bool                           `json:"reasoning_tokens_present"`
+	CacheReadTokensPresent  bool                           `json:"cache_read_tokens_present"`
+	CacheWriteTokensPresent bool                           `json:"cache_write_tokens_present"`
+	TotalTokensPresent      bool                           `json:"total_tokens_present"`
+	CostPresent             bool                           `json:"cost_present"`
+	Sessions                int                            `json:"sessions"`
+	Attempts                int                            `json:"attempts"`
+	FailedAttempts          int                            `json:"failed_attempts"`
+	InputTokens             int64                          `json:"input_tokens"`
+	OutputTokens            int64                          `json:"output_tokens"`
+	ReasoningTokens         int64                          `json:"reasoning_tokens"`
+	CacheReadTokens         int64                          `json:"cache_read_tokens"`
+	CacheWriteTokens        int64                          `json:"cache_write_tokens"`
+	TotalTokens             int64                          `json:"total_tokens"`
+	Cost                    float64                        `json:"cost"`
+	TotalMessages           int64                          `json:"total_messages"`
+	UserMessages            int64                          `json:"user_messages"`
+	AssistantMessages       int64                          `json:"assistant_messages"`
+	ErroredMessages         int64                          `json:"errored_messages"`
+	ToolCalls               int64                          `json:"tool_calls"`
 }
 
 type AgentMetricsGroup struct {
@@ -368,10 +477,12 @@ func SummarizeAgentMetrics(events []AgentMetricEvent) AgentTelemetrySummary {
 	byAgent := make(map[string]*AgentMetricsTotals)
 	byModel := make(map[string]*AgentMetricsTotals)
 	byProvider := make(map[string]*AgentMetricsTotals)
+	byRole := make(map[string]*AgentMetricsTotals)
 	bySliceSessions := make(map[string]map[string]bool)
 	byAgentSessions := make(map[string]map[string]bool)
 	byModelSessions := make(map[string]map[string]bool)
 	byProviderSessions := make(map[string]map[string]bool)
+	byRoleSessions := make(map[string]map[string]bool)
 
 	for _, event := range events {
 		addMetrics(&summary.Totals, event.Metrics, seenSessions)
@@ -379,12 +490,14 @@ func SummarizeAgentMetrics(events []AgentMetricEvent) AgentTelemetrySummary {
 		addGroupMetrics(byAgent, byAgentSessions, event.Metrics.Agent, event.Metrics)
 		addGroupMetrics(byModel, byModelSessions, event.Metrics.ModelID, event.Metrics)
 		addGroupMetrics(byProvider, byProviderSessions, event.Metrics.ProviderID, event.Metrics)
+		addGroupMetrics(byRole, byRoleSessions, string(event.Metrics.Role.Normalized()), event.Metrics)
 	}
 
 	summary.BySlice = sortedGroups(bySlice)
 	summary.ByAgent = sortedGroups(byAgent)
 	summary.ByModel = sortedGroups(byModel)
 	summary.ByProvider = sortedGroups(byProvider)
+	summary.ByRole = sortedGroups(byRole)
 	return summary
 }
 
@@ -466,6 +579,23 @@ func addGroupMetrics(groups map[string]*AgentMetricsTotals, groupSessions map[st
 
 func addMetrics(totals *AgentMetricsTotals, metrics AgentMetrics, seenSessions map[string]bool) {
 	totals.Attempts++
+	switch metrics.Availability.Normalized() {
+	case AgentMetricsReported:
+		totals.Availability.Reported++
+	case AgentMetricsPartial:
+		totals.Availability.Partial++
+	case AgentMetricsUnavailable:
+		totals.Availability.Unavailable++
+	default:
+		totals.Availability.Unknown++
+	}
+	totals.InputTokensPresent = totals.InputTokensPresent || metrics.InputTokensPresent || metrics.InputTokens != 0
+	totals.OutputTokensPresent = totals.OutputTokensPresent || metrics.OutputTokensPresent || metrics.OutputTokens != 0
+	totals.ReasoningTokensPresent = totals.ReasoningTokensPresent || metrics.ReasoningTokensPresent || metrics.ReasoningTokens != 0
+	totals.CacheReadTokensPresent = totals.CacheReadTokensPresent || metrics.CacheReadTokensPresent || metrics.CacheReadTokens != 0
+	totals.CacheWriteTokensPresent = totals.CacheWriteTokensPresent || metrics.CacheWriteTokensPresent || metrics.CacheWriteTokens != 0
+	totals.TotalTokensPresent = totals.TotalTokensPresent || metrics.TotalTokensPresent || metrics.TotalTokens != 0
+	totals.CostPresent = totals.CostPresent || metrics.CostPresent || metrics.Cost != 0
 	if metrics.SessionID != "" && !seenSessions[metrics.SessionID] {
 		seenSessions[metrics.SessionID] = true
 		totals.Sessions++

@@ -5,12 +5,12 @@ import (
 	"testing"
 
 	"github.com/iamseth/tao/internal/agent"
+	"github.com/iamseth/tao/internal/agentsession"
+	"github.com/iamseth/tao/internal/agenttelemetry"
 	"github.com/iamseth/tao/internal/plan"
 )
 
 func TestCollectAgentMetricsMapsNeutralMetricsAndMarksFailures(t *testing.T) {
-	state := plan.State{}
-	state.Plan.ID = "plan-a"
 	result := agent.Metrics{
 		SessionID:        "stats-session",
 		ProviderID:       "stats-provider",
@@ -24,8 +24,7 @@ func TestCollectAgentMetricsMapsNeutralMetricsAndMarksFailures(t *testing.T) {
 		Cost:             1.25,
 		ErroredMessages:  1,
 	}
-	metrics := collectAgentMetrics(state, "001-a", "pi", "Captured Pi agent metrics", &result, errors.New("boom"))
-	got := metrics.metrics
+	got := agenttelemetry.Project(agentsession.Result{AgentLabel: "pi", Metrics: &result}, plan.AgentRoleExecution, errors.New("boom"))
 	if got.SessionID != "stats-session" || got.ProviderID != "stats-provider" || got.ModelID != "stats-model" {
 		t.Fatalf("unexpected identity mapping: %#v", got)
 	}

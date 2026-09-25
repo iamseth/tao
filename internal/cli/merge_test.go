@@ -52,7 +52,7 @@ func TestNewSingleMergeAgentConfigWiresPlanTelemetryBestEffort(t *testing.T) {
 		t.Fatalf("single merge agent config = %#v", config)
 	}
 	request := mergepkg.BatchAgentSessionRequest{Operation: mergepkg.BatchAgentOperationSinglePlanResolution, CandidatePlanID: "plan-a"}
-	result := mergepkg.BatchAgentSessionResult{Provider: agentsession.Result{AgentLabel: "pi", MetricsUsable: true, Metrics: &agent.Metrics{SessionID: "session-a", OutputTokens: 9}}}
+	result := mergepkg.BatchAgentSessionResult{Provider: agentsession.Result{Invoked: true, AgentLabel: "pi", MetricsUsable: true, Metrics: &agent.Metrics{SessionID: "session-a", OutputTokens: 9}}}
 	config.Observe(request, result, nil)
 	config.Observe(request, mergepkg.BatchAgentSessionResult{}, nil)
 	if len(appender.events) != 1 || appender.events[0].Type != plan.EventTypeAgentMetrics || appender.events[0].PlanID != "plan-a" || appender.events[0].Message != "Captured single-plan conflict resolver agent metrics" {
@@ -123,6 +123,11 @@ func TestMergeCommandApprovedPlanSuccess(t *testing.T) {
 	}
 	if providerCalls != 0 {
 		t.Fatalf("current approved merge started %d provider sessions", providerCalls)
+	}
+	for _, event := range detail.Events {
+		if event.Type == plan.EventTypeAgentMetrics {
+			t.Fatalf("approved proposal reuse fabricated usage: %#v", event)
+		}
 	}
 	if len(manager.cleanedManaged) != 1 || manager.cleanedManaged[0].Branch != "tao/plan-a" {
 		t.Fatalf("expected managed cleanup for tao/plan-a, got %#v", manager.cleanedManaged)

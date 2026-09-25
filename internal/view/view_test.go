@@ -3,7 +3,9 @@ package view
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +23,120 @@ func (f fakeRepository) GetPlan(ctx context.Context, id string) (*plan.PlanDetai
 		return nil, f.err
 	}
 	return f.detail, ctx.Err()
+}
+
+func TestShowTelemetrySafeRolesAndReconciliation(t *testing.T) {
+	roles := []plan.AgentRole{plan.AgentRoleReview, plan.AgentRoleMerge, plan.AgentRolePlanning,
+		plan.AgentRoleExecution, plan.AgentRoleRework, plan.AgentRolePullRequest, "", "untrusted-role\x1b[31m", plan.AgentRoleUnknown}
+	events := make([]plan.Event, 0, len(roles))
+	for i, role := range roles {
+		availability := []plan.AgentMetricsAvailability{plan.AgentMetricsReported, plan.AgentMetricsPartial, plan.AgentMetricsUnavailable, "future-secret"}[i%4]
+		events = append(events, plan.Event{Type: plan.EventTypeAgentMetrics, Message: "provider-output-secret", Metrics: &plan.AgentMetrics{
+			Role: role, Availability: availability, SessionID: "session-secret", Agent: "agent-secret", ModelID: "model-secret", ProviderID: "provider-secret",
+			Result: "failed", InputTokens: 1, OutputTokens: 2, ReasoningTokens: 3, CacheReadTokens: 4, CacheWriteTokens: 5, TotalTokens: 15, Cost: 0.25,
+		}})
+	}
+	detail := &plan.PlanDetail{Events: events}
+	got := (Plan{Detail: detail}).ShowPayload().Telemetry
+	wantRoles := []plan.AgentRole{plan.AgentRoleExecution, plan.AgentRoleMerge, plan.AgentRolePlanning, plan.AgentRolePullRequest, plan.AgentRoleReview, plan.AgentRoleRework, plan.AgentRoleUnknown}
+	var actualRoles []plan.AgentRole
+	var sums ShowTelemetryTotals
+	var tokens [6]int64
+	var cost float64
+	for _, group := range got.ByRole {
+		actualRoles = append(actualRoles, group.Role)
+		totals := group.Totals
+		sums.Attempts += totals.Attempts
+		sums.FailedAttempts += totals.FailedAttempts
+		sums.Sessions += totals.Sessions
+		for i, value := range []*int64{totals.InputTokens, totals.OutputTokens, totals.ReasoningTokens, totals.CacheReadTokens, totals.CacheWriteTokens, totals.TotalTokens} {
+			tokens[i] += *value
+		}
+		cost += *totals.Cost
+		if a := totals.Availability; a.Reported+a.Partial+a.Unavailable+a.Unknown != totals.Attempts {
+			t.Fatalf("availability does not reconcile: %+v", totals)
+		}
+	}
+	if !reflect.DeepEqual(actualRoles, wantRoles) || sums.Attempts != 9 || sums.FailedAttempts != 9 || sums.Sessions != 7 || got.Totals.Sessions != 1 {
+		t.Fatalf("roles/counters: %+v; sums %+v", got, sums)
+	}
+	for i, value := range []*int64{got.Totals.InputTokens, got.Totals.OutputTokens, got.Totals.ReasoningTokens, got.Totals.CacheReadTokens, got.Totals.CacheWriteTokens, got.Totals.TotalTokens} {
+		if *value != tokens[i] {
+			t.Fatalf("token field %d does not reconcile", i)
+		}
+	}
+	if cost != *got.Totals.Cost || !got.Totals.PartialRecordedTotals || got.Totals.Availability != (plan.AgentMetricsAvailabilityCounts{Reported: 3, Partial: 2, Unavailable: 2, Unknown: 2}) {
+		t.Fatalf("totals = %+v", got.Totals)
+	}
+	encoded, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var text bytes.Buffer
+	if err := RenderShowTelemetry(&text, got); err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"untrusted-role", "future-secret", "provider-output-secret", "session-secret", "agent-secret", "model-secret", "provider-secret", "session_id", `"events":`} {
+		if strings.Contains(string(encoded), secret) || strings.Contains(text.String(), secret) {
+			t.Fatalf("raw telemetry escaped projection: %q", secret)
+		}
+	}
+	slices.Reverse(events)
+	reversed := ProjectShowTelemetry(events)
+	otherJSON, err := json.Marshal(reversed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var otherText bytes.Buffer
+	if err := RenderShowTelemetry(&otherText, reversed); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(encoded, otherJSON) || text.String() != otherText.String() {
+		t.Fatal("projection order depends on event order")
+	}
+}
+
+func TestShowTelemetryMeasurementPresence(t *testing.T) {
+	for _, tc := range []struct {
+		name, metrics, wantJSON, wantText string
+		partial                           bool
+	}{
+		{"zero", `{"role":"execution","availability":"reported","total_tokens":0,"cost":0}`, `"total_tokens":0,"cost":0`, "Tokens: 0;", false},
+		{"partial", `{"role":"review","availability":"partial","output_tokens":12}`, `"total_tokens":null,"cost":null`, "Tokens: unavailable/unknown;", true},
+		{"unavailable", `{"availability":"unavailable"}`, `"total_tokens":null,"cost":null`, "cost unavailable/unknown", true},
+		{"legacy", `{"total_tokens":23}`, `"total_tokens":23,"cost":null`, "unknown/legacy 1", true},
+		{"future", `{"availability":"future"}`, `"total_tokens":null,"cost":null`, "unknown/legacy 1", true},
+		{"no events", "", `"total_tokens":null,"cost":null`, "Total: unavailable/unknown; sessions 0; attempts 0; failed 0", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var events []plan.Event
+			if tc.metrics != "" {
+				var metrics plan.AgentMetrics
+				if err := json.Unmarshal([]byte(tc.metrics), &metrics); err != nil {
+					t.Fatal(err)
+				}
+				events = append(events, plan.Event{Type: plan.EventTypeAgentMetrics, Metrics: &metrics})
+			}
+			got := ProjectShowTelemetry(events)
+			encoded, err := json.Marshal(got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var text bytes.Buffer
+			if err := RenderShowTelemetry(&text, got); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(encoded), tc.wantJSON) || !strings.Contains(text.String(), tc.wantText) || got.Totals.PartialRecordedTotals != tc.partial {
+				t.Fatalf("JSON %s\ntext %s", encoded, text.String())
+			}
+			if tc.name == "zero" && !strings.Contains(text.String(), "cost $0.0000") {
+				t.Fatal("measured zero cost lost")
+			}
+			if tc.name == "no events" && !strings.Contains(string(encoded), `"by_role":[]`) {
+				t.Fatal("empty role list must be explicit")
+			}
+		})
+	}
 }
 
 func TestLoadPlanDerivesState(t *testing.T) {

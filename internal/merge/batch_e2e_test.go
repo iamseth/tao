@@ -2,6 +2,7 @@ package merge
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/agent"
+	agentmetrics "github.com/iamseth/tao/internal/agent/metrics"
 	"github.com/iamseth/tao/internal/agentsession"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/workspace"
@@ -21,25 +23,54 @@ func TestBatchAgentTelemetryEndToEndStaysInBatchTransaction(t *testing.T) {
 	root := t.TempDir()
 	store := NewBatchStore(filepath.Join(root, "merge-batches"), filepath.Join(root, "merge-batches", "active.json"))
 	calls := 0
+	availability := agentmetrics.Partial
 	session := BatchAgentSession{
 		run: func(context.Context, agentsession.Request) (agentsession.Result, error) {
 			calls++
-			return agentsession.Result{FinalText: "approved", AgentLabel: "pi", MetricsUsable: true, Metrics: &agent.Metrics{SessionID: "batch-session", OutputTokens: 9}}, nil
+			return agentsession.Result{Invoked: true, FinalText: "approved", AgentLabel: "pi", MetricsAvailability: availability, Metrics: &agent.Metrics{SessionID: "batch-session", OutputTokensPresent: availability == agentmetrics.Partial}}, nil
 		},
 		eventAppender: store, now: func() time.Time { return time.Date(2026, 8, 10, 21, 0, 0, 0, time.UTC) },
 	}
-	if _, err := session.Resolve(context.Background(), BatchAgentSessionRequest{
-		BatchID: "batch-e2e", Operation: BatchAgentOperationAggregateReview, Attempt: 1,
-		IntegrationRoot: filepath.Join(root, "integration"), Prompt: "review aggregate",
-	}); err != nil {
-		t.Fatal(err)
+	operations := []BatchAgentOperation{BatchAgentOperationCandidateResolution, BatchAgentOperationAggregateReview, BatchAgentOperationAggregateRework, BatchAgentOperationProposalGeneration}
+	for i, op := range operations {
+		if i%2 == 0 {
+			availability = agentmetrics.Unavailable
+		} else {
+			availability = agentmetrics.Partial
+		}
+		if _, err := session.Resolve(context.Background(), BatchAgentSessionRequest{
+			BatchID: "batch-e2e", Operation: op, Attempt: 1, CandidatePlanID: "plan-a",
+			IntegrationRoot: filepath.Join(root, "integration"), Prompt: "untrusted provider text",
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	content, err := os.ReadFile(store.agentEventsPath("batch-e2e"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if calls != 1 || !strings.Contains(string(content), `"type":"agent_metrics"`) || !strings.Contains(string(content), `"session_id":"batch-session"`) {
+	if calls != len(operations) || strings.Contains(string(content), "untrusted provider text") {
 		t.Fatalf("calls/event stream = %d / %q", calls, content)
+	}
+	seen := make(map[BatchAgentOperation]int)
+	for _, line := range strings.Split(strings.TrimSpace(string(content)), "\n") {
+		var event BatchAgentEvent
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatal(err)
+		}
+		if event.Type != BatchAgentEventTypeMetrics {
+			continue
+		}
+		seen[event.Operation]++
+		m := event.Metrics
+		if m == nil || m.OutputTokens != 0 || m.OutputTokensPresent != (m.Availability == agentmetrics.Partial) {
+			t.Fatalf("persisted presence = %#v", m)
+		}
+	}
+	for _, op := range operations {
+		if seen[op] != 1 {
+			t.Fatalf("%s metrics count = %d", op, seen[op])
+		}
 	}
 	for _, planID := range []string{"plan-a", "plan-b"} {
 		if _, err := os.Stat(filepath.Join(root, "plans", planID, "events.jsonl")); !os.IsNotExist(err) {

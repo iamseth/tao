@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/agent"
+	agentmetrics "github.com/iamseth/tao/internal/agent/metrics"
 	"github.com/iamseth/tao/internal/agentsession"
 	commitcontract "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/plan"
@@ -52,7 +53,7 @@ func TestBatchAgentSessionPersistsMetricsAndClassifiedTimeoutWithoutRetry(t *tes
 			session := BatchAgentSession{
 				run: func(context.Context, agentsession.Request) (agentsession.Result, error) {
 					calls++
-					return agentsession.Result{Output: " partial ", AgentLabel: "pi", MetricsUsable: true, Metrics: &agent.Metrics{SessionID: "session-a", OutputTokens: 7}}, tt.err
+					return agentsession.Result{Invoked: true, Output: " partial ", AgentLabel: "pi", MetricsUsable: true, Metrics: &agent.Metrics{SessionID: "session-a", OutputTokens: 7}}, tt.err
 				},
 				eventAppender: store, now: func() time.Time { return time.Date(2026, 8, 10, 20, 0, 0, 0, time.UTC) },
 			}
@@ -81,7 +82,7 @@ func TestBatchAgentSessionTelemetryAppendFailureWarnsAndPreservesProviderError(t
 	var progress bytes.Buffer
 	session := BatchAgentSession{
 		run: func(context.Context, agentsession.Request) (agentsession.Result, error) {
-			return agentsession.Result{Output: "partial", AgentLabel: "test-agent", MetricsUsable: true}, providerErr
+			return agentsession.Result{Invoked: true, Output: "partial", AgentLabel: "test-agent", MetricsUsable: true}, providerErr
 		},
 		log: &progress, eventAppender: store, now: time.Now,
 	}
@@ -997,7 +998,7 @@ func TestSingleMergeAgentMetricsEventUsesGenericPlanTelemetry(t *testing.T) {
 	}
 	request := BatchAgentSessionRequest{Operation: BatchAgentOperationSinglePlanReview, CandidatePlanID: "plan-a"}
 	result := BatchAgentSessionResult{Provider: agentsession.Result{
-		AgentLabel: "claude", MetricsUsable: true,
+		Invoked: true, AgentLabel: "claude", MetricsUsable: true,
 		Metrics: &agent.Metrics{SessionID: "session-a", ProviderID: "anthropic", ModelID: "model-a", OutputTokens: 17, ToolCalls: 2},
 	}}
 	event := SingleMergeAgentMetricsEvent(request, result, errors.New("provider failed"), timestamp)
@@ -1087,6 +1088,152 @@ func TestMergeProposalGeneratorUsesOneConfiguredNeutralSession(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(got.args, " "), "--permission-mode bypassPermissions") {
 		t.Fatalf("proposal permission was not propagated: %v", got.args)
+	}
+}
+
+func TestBatchMergeProposalGeneratorUsesTrustedTransactionIdentity(t *testing.T) {
+	t.Setenv("TAO_AGENT", "claude")
+	var got mergeFakeClaudeStart
+	store := &recordingBatchAgentEvents{}
+	planEvents := 0
+	generator, err := NewMergeProposalGenerator(MergeProposalGeneratorConfig{
+		ProcessStarter: mergeFakeProcessStarter(t, &got, `{"type":"result","result":"{\"type\":\"fix\",\"scope\":\"merge\",\"summary\":\"preserve batch identity\",\"what\":\"Generate an exact proposal.\",\"why\":\"Support legacy approvals.\"}"}`),
+		EventAppender:  store,
+		Observe: func(request BatchAgentSessionRequest, result BatchAgentSessionResult, err error) {
+			if event := SingleMergeAgentMetricsEvent(request, result, err, time.Now()); event != nil {
+				planEvents++
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := withBatchProposalSessionIdentity(context.Background(), "batch-a", 3, "plan-a")
+	if _, err := generator.GenerateMergeProposal(ctx, mergeProposalContext()); err != nil {
+		t.Fatal(err)
+	}
+	if planEvents != 0 {
+		t.Fatal("batch proposal leaked into plan channel")
+	}
+	count := 0
+	for _, event := range store.events {
+		if event.Type != BatchAgentEventTypeMetrics {
+			continue
+		}
+		count++
+		if event.Operation != BatchAgentOperationProposalGeneration || event.BatchID != "batch-a" || event.PlanID != "plan-a" || event.Attempt != 3 || event.Metrics.Availability != agentmetrics.Unavailable {
+			t.Fatalf("batch proposal attribution = %#v", event)
+		}
+	}
+	if count != 1 {
+		t.Fatalf("proposal metrics = %d", count)
+	}
+}
+
+func TestMergeSessionTelemetryCoverage(t *testing.T) {
+	operations := []struct {
+		op    BatchAgentOperation
+		batch bool
+		role  plan.AgentRole
+	}{
+		{BatchAgentOperationSinglePlanResolution, false, plan.AgentRoleMerge},
+		{BatchAgentOperationSinglePlanReview, false, plan.AgentRoleReview},
+		{BatchAgentOperationProposalGeneration, false, plan.AgentRoleMerge},
+		{BatchAgentOperationCandidateResolution, true, ""},
+		{BatchAgentOperationAggregateReview, true, ""},
+		{BatchAgentOperationAggregateRework, true, ""},
+		{BatchAgentOperationProposalGeneration, true, ""},
+	}
+	for _, provider := range []string{"pi", "claude"} {
+		for _, operation := range operations {
+			for _, availability := range []agentmetrics.Availability{agentmetrics.Reported, agentmetrics.Partial, agentmetrics.Unavailable} {
+				for _, outcome := range []string{BatchAgentOutcomeCompleted, BatchAgentOutcomeFailed, BatchAgentOutcomeTimedOut} {
+					t.Run(fmt.Sprintf("%s/%s/batch=%t/%s/%s", provider, operation.op, operation.batch, availability, outcome), func(t *testing.T) {
+						var providerErr error
+						if outcome == BatchAgentOutcomeFailed {
+							providerErr = errors.New("provider failure")
+						}
+						if outcome == BatchAgentOutcomeTimedOut {
+							providerErr = &agent.SessionTimeoutError{Timeout: time.Minute}
+						}
+						result := agentsession.Result{Invoked: true, AgentLabel: provider, FinalText: "preserved", MetricsAvailability: availability}
+						if availability != agentmetrics.Unavailable {
+							result.Metrics = &agent.Metrics{InputTokensPresent: true}
+							if availability == agentmetrics.Reported {
+								result.Metrics.OutputTokensPresent = true
+								result.Metrics.TotalTokensPresent = true
+								result.Metrics.CostPresent = true
+							}
+						}
+						store := &recordingBatchAgentEvents{}
+						var planEvents []plan.Event
+						calls := 0
+						session := BatchAgentSession{
+							run: func(context.Context, agentsession.Request) (agentsession.Result, error) {
+								calls++
+								return result, providerErr
+							},
+							eventAppender: store, now: time.Now,
+							observe: func(request BatchAgentSessionRequest, result BatchAgentSessionResult, err error) {
+								if event := SingleMergeAgentMetricsEvent(request, result, err, time.Now()); event != nil {
+									planEvents = append(planEvents, *event)
+								}
+							},
+						}
+						request := BatchAgentSessionRequest{Operation: operation.op, Attempt: 2, CandidatePlanID: "plan-a"}
+						if operation.batch {
+							request.BatchID = "batch-a"
+						}
+						got, err := session.Resolve(context.Background(), request)
+						if calls != 1 || got.Output != "preserved" || !errors.Is(err, providerErr) {
+							t.Fatalf("session changed: %d %#v %v", calls, got, err)
+						}
+						if operation.batch {
+							if len(planEvents) != 0 {
+								t.Fatalf("batch leaked plan events: %#v", planEvents)
+							}
+							count := 0
+							for _, event := range store.events {
+								if err := event.validate(); err != nil {
+									t.Fatal(err)
+								}
+								if event.Type != BatchAgentEventTypeMetrics {
+									continue
+								}
+								count++
+								m := event.Metrics
+								if event.Operation != operation.op || event.Outcome != outcome || event.Attempt != 2 || event.PlanID != "plan-a" || m.Availability != availability || m.InputTokens != 0 || m.InputTokensPresent != (availability != agentmetrics.Unavailable) || m.CostPresent != (availability == agentmetrics.Reported) {
+									t.Fatalf("batch measurement lost: %#v / %#v", event, m)
+								}
+							}
+							if count != 1 {
+								t.Fatalf("metrics count = %d", count)
+							}
+						} else {
+							if len(store.events) != 0 || len(planEvents) != 1 {
+								t.Fatalf("wrong destinations: batch=%#v plan=%#v", store.events, planEvents)
+							}
+							event := planEvents[0] // This collection contains only the owned metrics event.
+							m := event.Metrics
+							if event.PlanID != "plan-a" || event.SliceID != "" || m.Role != operation.role || string(m.Availability) != string(availability) || m.InputTokens != 0 || m.InputTokensPresent != (availability != agentmetrics.Unavailable) || m.CostPresent != (availability == agentmetrics.Reported) || (m.Status == "failed") != (providerErr != nil) {
+								t.Fatalf("plan measurement lost: %#v / %#v", event, m)
+							}
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestMergeTelemetryDoesNotRecordUninvokedSessions(t *testing.T) {
+	store := &recordingBatchAgentEvents{}
+	session := BatchAgentSession{eventAppender: store, now: time.Now}
+	request := BatchAgentSessionRequest{BatchID: "batch-a", Operation: BatchAgentOperationProposalGeneration, CandidatePlanID: "plan-a", Attempt: 1}
+	session.recordTelemetry(request, agentsession.Result{AgentLabel: "pi"}, errors.New("preflight failed"))
+	request.BatchID = ""
+	if event := SingleMergeAgentMetricsEvent(request, BatchAgentSessionResult{}, nil, time.Now()); event != nil || len(store.events) != 0 {
+		t.Fatalf("fabricated usage: %#v / %#v", event, store.events)
 	}
 }
 

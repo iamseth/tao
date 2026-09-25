@@ -14,6 +14,7 @@ import (
 	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/agent/logrecord"
 	"github.com/iamseth/tao/internal/agentsession"
+	"github.com/iamseth/tao/internal/agenttelemetry"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 )
@@ -185,7 +186,7 @@ func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSe
 	defer func() { _ = sessionLog.Close() }()
 	log := sessionLog.writer
 
-	metricsRequested := request.Metrics != nil && request.Metrics.SliceID != ""
+	metricsRequested := request.Metrics != nil
 
 	state, stateErr := plan.ReadState(request.PlanDir)
 	if stateErr != nil {
@@ -231,12 +232,14 @@ func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSe
 	}
 
 	var capErr error
-	if metricsRequested && stateErr == nil && r.eventAppender != nil && result.MetricsUsable {
-		metrics := collectAgentMetrics(state, request.Metrics.SliceID, result.AgentLabel, result.MetricsMessage, result.Metrics, runErr)
-		publishAgentMetrics(ctx, metrics.metrics)
-		if appendErr := r.eventAppender.AppendEvent(request.PlanDir, metrics.event(now(r).UTC())); appendErr != nil {
+	if metricsRequested && result.Invoked && stateErr == nil && r.eventAppender != nil {
+		metrics := agenttelemetry.Project(result, request.Metrics.Role, runErr)
+		publishAgentMetrics(ctx, metrics)
+		if appendErr := r.eventAppender.AppendEvent(request.PlanDir, agenttelemetry.Event(state.Plan.ID, request.Metrics.SliceID, now(r).UTC(), metrics)); appendErr != nil {
 			writeAgentLogDiagnostic(log, fmt.Sprintf("tao telemetry warning: append metrics event: %v", appendErr))
-		} else if result.Metrics != nil {
+		} else if request.Metrics.EnforceSliceCaps && request.Metrics.SliceID != "" &&
+			(request.Metrics.Role == plan.AgentRoleExecution || request.Metrics.Role == plan.AgentRoleRework) &&
+			result.MetricsUsable && result.Metrics != nil && metrics.Availability != plan.AgentMetricsUnavailable {
 			capErr = r.enforceSliceBudgetCaps(context.WithoutCancel(ctx), request.PlanDir, state.Plan.ID, request.Metrics.SliceID, log)
 		}
 	}
@@ -261,7 +264,16 @@ func (r agentSessionRunner) enforceSliceBudgetCaps(ctx context.Context, planDir,
 		writeAgentLogDiagnostic(log, fmt.Sprintf("tao telemetry warning: read metrics for slice cap: %v", err))
 		return nil
 	}
-	summary := plan.SummarizeAgentTelemetry(detail)
+	// Retain legacy unclassified usage, but do not charge newly attributed
+	// non-execution work against implementation caps, even with the same slice ID.
+	var attempts []plan.AgentMetricEvent
+	for _, event := range plan.AgentMetricsEvents(detail.Events) {
+		role := event.Metrics.Role.Normalized()
+		if role == plan.AgentRoleExecution || role == plan.AgentRoleRework || role == plan.AgentRoleUnknown {
+			attempts = append(attempts, event)
+		}
+	}
+	summary := plan.SummarizeAgentMetrics(attempts)
 	var totals *plan.AgentMetricsTotals
 	for i := range summary.BySlice {
 		if summary.BySlice[i].Key == sliceID {
@@ -308,7 +320,11 @@ func runSliceWithAgentSession(ctx context.Context, executor AgentSessionExecutor
 	if err != nil {
 		return err
 	}
-	_, err = executor.RunAgentSession(ctx, AgentSessionRequest{PlanDir: run.PlanDir, RepoRoot: run.RepoRoot, LogAction: "running " + run.SliceID, Prompt: prompt, Metrics: &AgentSessionMetricsRequest{SliceID: run.SliceID}, NoProgressToolLimit: options.NoProgressToolLimit, VerificationCommands: run.VerificationCommands})
+	role := plan.AgentRoleExecution
+	if plan.IsReworkSliceID(run.SliceID) {
+		role = plan.AgentRoleRework
+	}
+	_, err = executor.RunAgentSession(ctx, AgentSessionRequest{PlanDir: run.PlanDir, RepoRoot: run.RepoRoot, LogAction: "running " + run.SliceID, Prompt: prompt, Metrics: &AgentSessionMetricsRequest{SliceID: run.SliceID, Role: role, EnforceSliceCaps: true}, NoProgressToolLimit: options.NoProgressToolLimit, VerificationCommands: run.VerificationCommands})
 	return err
 }
 
@@ -317,7 +333,7 @@ func createPullRequestWithAgentSession(ctx context.Context, executor AgentSessio
 	if err != nil {
 		return plan.PullRequest{}, err
 	}
-	result, err := executor.RunAgentSession(ctx, AgentSessionRequest{PlanDir: run.PlanDir, RepoRoot: run.RepoRoot, LogAction: "creating pull request for plan " + run.PlanID, Prompt: prompt, CaptureOutput: true})
+	result, err := executor.RunAgentSession(ctx, AgentSessionRequest{PlanDir: run.PlanDir, RepoRoot: run.RepoRoot, LogAction: "creating pull request for plan " + run.PlanID, Prompt: prompt, CaptureOutput: true, Metrics: &AgentSessionMetricsRequest{Role: plan.AgentRolePullRequest}})
 	if err != nil {
 		return plan.PullRequest{}, err
 	}
@@ -334,7 +350,7 @@ func generatePullRequestBodyWithAgentSession(ctx context.Context, executor Agent
 		bodyCtx, cancel = context.WithTimeout(ctx, pullRequestBodyAgentTimeout)
 	}
 	defer cancel()
-	result, err := executor.RunAgentSession(bodyCtx, AgentSessionRequest{PlanDir: run.PlanDir, RepoRoot: run.RepoRoot, LogAction: "drafting pull request body for plan " + run.PlanID, Prompt: prompt, CaptureOutput: true})
+	result, err := executor.RunAgentSession(bodyCtx, AgentSessionRequest{PlanDir: run.PlanDir, RepoRoot: run.RepoRoot, LogAction: "drafting pull request body for plan " + run.PlanID, Prompt: prompt, CaptureOutput: true, Metrics: &AgentSessionMetricsRequest{Role: plan.AgentRolePullRequest}})
 	if err != nil {
 		return "", err
 	}

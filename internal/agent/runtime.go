@@ -49,14 +49,24 @@ type Session struct {
 
 // SessionResult is the provider-neutral outcome of a Runtime session. Metrics is
 // nil when the session did not request metric collection. MetricsWarning
-// explains why typed metrics could not be captured, or is empty when Metrics is
-// usable.
+// explains capture issues under the existing provider warning policy. It does
+// not establish coverage; Metrics.Availability and presence flags do that.
 type SessionResult struct {
 	Output           string
 	FinalText        string
 	PromptAcceptance PromptAcceptance
 	Metrics          *Metrics
 	MetricsWarning   string
+}
+
+// MetricsAvailability returns explicit coverage, without inferring it from
+// session success or warning prose. A nil metrics result has no measurements;
+// a legacy nonnil metrics result without metadata retains unknown coverage.
+func (r SessionResult) MetricsAvailability() agentmetrics.Availability {
+	if r.Metrics == nil {
+		return agentmetrics.Unavailable
+	}
+	return r.Metrics.Availability
 }
 
 // PromptAcceptance is the provider-neutral classification of whether an

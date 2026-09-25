@@ -46,7 +46,7 @@ func TestClaudeExecutorRunSliceUsesAutoPermissionAndLogsMetrics(t *testing.T) {
 	if event.Type != plan.EventTypeAgentMetrics || event.Agent != "claude" || event.Metrics == nil {
 		t.Fatalf("unexpected metrics event: %#v", event)
 	}
-	if event.Metrics.Agent != "claude" || event.Metrics.SessionID != "claude-session" || event.Metrics.ModelID != "claude-sonnet" || event.Metrics.InputTokens != 11 || event.Metrics.OutputTokens != 7 || event.Metrics.TotalTokens != 18 {
+	if event.Metrics.Role != plan.AgentRoleExecution || event.Metrics.Availability != plan.AgentMetricsPartial || event.Metrics.Agent != "claude" || event.Metrics.SessionID != "claude-session" || event.Metrics.ModelID != "claude-sonnet" || event.Metrics.InputTokens != 11 || event.Metrics.OutputTokens != 7 || event.Metrics.TotalTokens != 18 {
 		t.Fatalf("unexpected claude metrics: %#v", event.Metrics)
 	}
 }
@@ -69,7 +69,7 @@ func TestClaudeExecutorCreatesPullRequestFromCapturedOutput(t *testing.T) {
 	}
 }
 
-func TestClaudeExecutorMissingMetricsWarnsWithoutEvent(t *testing.T) {
+func TestClaudeExecutorMissingMetricsWarnsAndRecordsUnavailable(t *testing.T) {
 	planDir := writeMetricsPlan(t, "/repo", "plan-a")
 	repo := plan.NewFileRepository(filepath.Dir(planDir))
 	var got fakeClaudeStart
@@ -82,8 +82,13 @@ func TestClaudeExecutorMissingMetricsWarnsWithoutEvent(t *testing.T) {
 	if !strings.Contains(logText, "tao telemetry warning: claude metrics absent from stream output") {
 		t.Fatalf("expected missing metrics warning, got:\n%s", logText)
 	}
-	if strings.Contains(readMetricsText(t, filepath.Join(planDir, "events.jsonl")), `"type":"agent_metrics"`) {
-		t.Fatal("did not expect agent_metrics event for absent Claude metrics")
+	events := readAgentMetricEvents(t, planDir)
+	if len(events) != 1 || events[0].Metrics == nil {
+		t.Fatalf("expected unavailable metrics event: %+v", events)
+	}
+	metrics := events[0].Metrics
+	if metrics.Role != plan.AgentRoleExecution || metrics.Availability != plan.AgentMetricsUnavailable || metrics.OutputTokensPresent || metrics.CostPresent {
+		t.Fatalf("unavailable measurements = %+v", metrics)
 	}
 }
 

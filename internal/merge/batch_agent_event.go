@@ -5,7 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/iamseth/tao/internal/agent"
+	agentmetrics "github.com/iamseth/tao/internal/agent/metrics"
+	"github.com/iamseth/tao/internal/agentsession"
 )
 
 const (
@@ -44,28 +45,41 @@ type BatchAgentEvent struct {
 // BatchAgentMetrics is the bounded provider-neutral numeric payload retained
 // for one batch call. Provider text and transcripts are never stored here.
 type BatchAgentMetrics struct {
-	SessionID         string  `json:"session_id,omitempty"`
-	ProviderID        string  `json:"provider_id,omitempty"`
-	ModelID           string  `json:"model_id,omitempty"`
-	InputTokens       int64   `json:"input_tokens,omitempty"`
-	OutputTokens      int64   `json:"output_tokens,omitempty"`
-	ReasoningTokens   int64   `json:"reasoning_tokens,omitempty"`
-	CacheReadTokens   int64   `json:"cache_read_tokens,omitempty"`
-	CacheWriteTokens  int64   `json:"cache_write_tokens,omitempty"`
-	TotalTokens       int64   `json:"total_tokens,omitempty"`
-	Cost              float64 `json:"cost,omitempty"`
-	TotalMessages     int64   `json:"total_messages,omitempty"`
-	UserMessages      int64   `json:"user_messages,omitempty"`
-	AssistantMessages int64   `json:"assistant_messages,omitempty"`
-	ErroredMessages   int64   `json:"errored_messages,omitempty"`
-	ToolCalls         int64   `json:"tool_calls,omitempty"`
+	Availability            agentmetrics.Availability `json:"availability,omitempty"`
+	InputTokensPresent      bool                      `json:"input_tokens_present,omitempty"`
+	OutputTokensPresent     bool                      `json:"output_tokens_present,omitempty"`
+	ReasoningTokensPresent  bool                      `json:"reasoning_tokens_present,omitempty"`
+	CacheReadTokensPresent  bool                      `json:"cache_read_tokens_present,omitempty"`
+	CacheWriteTokensPresent bool                      `json:"cache_write_tokens_present,omitempty"`
+	TotalTokensPresent      bool                      `json:"total_tokens_present,omitempty"`
+	CostPresent             bool                      `json:"cost_present,omitempty"`
+	SessionID               string                    `json:"session_id,omitempty"`
+	ProviderID              string                    `json:"provider_id,omitempty"`
+	ModelID                 string                    `json:"model_id,omitempty"`
+	InputTokens             int64                     `json:"input_tokens,omitempty"`
+	OutputTokens            int64                     `json:"output_tokens,omitempty"`
+	ReasoningTokens         int64                     `json:"reasoning_tokens,omitempty"`
+	CacheReadTokens         int64                     `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens        int64                     `json:"cache_write_tokens,omitempty"`
+	TotalTokens             int64                     `json:"total_tokens,omitempty"`
+	Cost                    float64                   `json:"cost,omitempty"`
+	TotalMessages           int64                     `json:"total_messages,omitempty"`
+	UserMessages            int64                     `json:"user_messages,omitempty"`
+	AssistantMessages       int64                     `json:"assistant_messages,omitempty"`
+	ErroredMessages         int64                     `json:"errored_messages,omitempty"`
+	ToolCalls               int64                     `json:"tool_calls,omitempty"`
 }
 
-func newBatchAgentMetrics(value *agent.Metrics) *BatchAgentMetrics {
+func newBatchAgentMetrics(result agentsession.Result) *BatchAgentMetrics {
+	value := result.Metrics
 	if value == nil {
-		return &BatchAgentMetrics{}
+		return &BatchAgentMetrics{Availability: result.MetricsAvailability}
 	}
 	return &BatchAgentMetrics{
+		Availability:       result.MetricsAvailability,
+		InputTokensPresent: value.InputTokensPresent, OutputTokensPresent: value.OutputTokensPresent,
+		ReasoningTokensPresent: value.ReasoningTokensPresent, CacheReadTokensPresent: value.CacheReadTokensPresent,
+		CacheWriteTokensPresent: value.CacheWriteTokensPresent, TotalTokensPresent: value.TotalTokensPresent, CostPresent: value.CostPresent,
 		SessionID: value.SessionID, ProviderID: value.ProviderID, ModelID: value.ModelID,
 		InputTokens: value.InputTokens, OutputTokens: value.OutputTokens, ReasoningTokens: value.ReasoningTokens,
 		CacheReadTokens: value.CacheReadTokens, CacheWriteTokens: value.CacheWriteTokens, TotalTokens: value.TotalTokens,

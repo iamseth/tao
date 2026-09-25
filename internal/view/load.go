@@ -34,10 +34,81 @@ type ShowPayload struct {
 	Repository   ShowRepository             `json:"repository"`
 	Progress     ShowProgress               `json:"progress"`
 	Rework       ShowRework                 `json:"rework"`
+	Telemetry    ShowTelemetry              `json:"telemetry"`
 	NextAction   plan.PlanNextAction        `json:"next_action"`
 	Finalization *plan.FinalizationRecovery `json:"finalization,omitempty"`
 	Abandonment  *ShowAbandonment           `json:"abandonment,omitempty"`
 	Warnings     []string                   `json:"warnings"`
+}
+
+// ShowTelemetry exposes only recorded aggregates, never event or provider identity.
+type ShowTelemetry struct {
+	Totals      ShowTelemetryTotals `json:"totals"`
+	ByRole      []ShowRoleTotals    `json:"by_role"`
+	Limitations []string            `json:"limitations"`
+}
+
+type ShowRoleTotals struct {
+	Role   plan.AgentRole      `json:"role"`
+	Totals ShowTelemetryTotals `json:"totals"`
+}
+
+// Nullable measurements distinguish absent observations from measured zero.
+// PartialRecordedTotals concerns recorded attempts, not coverage of all work.
+type ShowTelemetryTotals struct {
+	Sessions              int                                 `json:"sessions"`
+	Attempts              int                                 `json:"attempts"`
+	FailedAttempts        int                                 `json:"failed_attempts"`
+	Availability          plan.AgentMetricsAvailabilityCounts `json:"availability"`
+	PartialRecordedTotals bool                                `json:"partial_recorded_totals"`
+	InputTokens           *int64                              `json:"input_tokens"`
+	OutputTokens          *int64                              `json:"output_tokens"`
+	ReasoningTokens       *int64                              `json:"reasoning_tokens"`
+	CacheReadTokens       *int64                              `json:"cache_read_tokens"`
+	CacheWriteTokens      *int64                              `json:"cache_write_tokens"`
+	TotalTokens           *int64                              `json:"total_tokens"`
+	Cost                  *float64                            `json:"cost"`
+}
+
+func ProjectShowTelemetry(events []plan.Event) ShowTelemetry {
+	summary := plan.SummarizeAgentMetrics(plan.AgentMetricsEvents(events))
+	out := ShowTelemetry{
+		Totals: projectShowTelemetryTotals(summary.Totals),
+		ByRole: make([]ShowRoleTotals, 0, len(summary.ByRole)),
+		Limitations: []string{
+			"Totals sum recorded usage only; missing phase events do not prove the phase did not run.",
+			"Unknown availability includes legacy coverage; null measurements are unavailable/unknown, not zero.",
+			"Interactive planning is not collected; direct note generation is planning work only in surviving validated plans.",
+			"Merge-batch usage is separate repository-scoped telemetry and is not included here.",
+			"Attempts include failures; unique sessions are deduplicated overall and per role and need not add across roles.",
+		},
+	}
+	for _, group := range summary.ByRole {
+		out.ByRole = append(out.ByRole, ShowRoleTotals{Role: plan.AgentRole(group.Key).Normalized(), Totals: projectShowTelemetryTotals(group.Totals)})
+	}
+	return out
+}
+
+func projectShowTelemetryTotals(t plan.AgentMetricsTotals) ShowTelemetryTotals {
+	return ShowTelemetryTotals{
+		Sessions: t.Sessions, Attempts: t.Attempts, FailedAttempts: t.FailedAttempts,
+		Availability:          t.Availability,
+		PartialRecordedTotals: t.Availability.Partial+t.Availability.Unavailable+t.Availability.Unknown > 0,
+		InputTokens:           showMeasurement(t.InputTokens, t.InputTokensPresent),
+		OutputTokens:          showMeasurement(t.OutputTokens, t.OutputTokensPresent),
+		ReasoningTokens:       showMeasurement(t.ReasoningTokens, t.ReasoningTokensPresent),
+		CacheReadTokens:       showMeasurement(t.CacheReadTokens, t.CacheReadTokensPresent),
+		CacheWriteTokens:      showMeasurement(t.CacheWriteTokens, t.CacheWriteTokensPresent),
+		TotalTokens:           showMeasurement(t.TotalTokens, t.TotalTokensPresent),
+		Cost:                  showMeasurement(t.Cost, t.CostPresent),
+	}
+}
+
+func showMeasurement[T int64 | float64](value T, present bool) *T {
+	if !present {
+		return nil
+	}
+	return &value
 }
 
 type ShowRepository struct {
@@ -118,6 +189,7 @@ func (loaded Plan) ShowPayload() ShowPayload {
 			NextSliceID:    loaded.Derived.NextSliceID,
 		},
 		Rework:       ProjectShowRework(detail.Events),
+		Telemetry:    ProjectShowTelemetry(detail.Events),
 		NextAction:   loaded.DisplayNextAction(),
 		Finalization: cloneFinalizationRecovery(loaded.Derived.FinalizationRecovery),
 		Abandonment:  abandonment,

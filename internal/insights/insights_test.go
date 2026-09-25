@@ -161,19 +161,24 @@ func TestAggregateSkipsInvalidSummaryWithReadableTelemetry(t *testing.T) {
 }
 
 func TestAggregateSumsAttemptsWithinSessionUsingPlanTelemetry(t *testing.T) {
-	dir := t.TempDir()
-	events := "" +
-		`{"type":"agent_metrics","metrics":{"session_id":"same","output_tokens":4,"cost":0.25}}` + "\n" +
-		`{"type":"agent_metrics","metrics":{"session_id":"same","output_tokens":6,"cost":0.75}}` + "\n"
-	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(events), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	report, err := Aggregate(context.Background(), fixtureLister{summaries: []plan.PlanSummary{{ID: "one", Dir: dir}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if report.OutputTokens.Sessions != 1 || report.OutputTokens.P95 != 10 || report.Cost.P95 != 1 {
-		t.Fatalf("percentiles = output %#v cost %#v", report.OutputTokens, report.Cost)
+	for _, metadata := range []string{"", `"role":"review","availability":"partial","result":"failed",`, `"role":"future","availability":"future",`} {
+		t.Run(metadata, func(t *testing.T) {
+			dir := t.TempDir()
+			// Mix legacy and attributed attempts sharing one session. Attribution
+			// must not duplicate sessions or drop recorded usage on failures.
+			events := `{"type":"agent_metrics","metrics":{"session_id":"same","output_tokens":4,"cost":0.25}}` + "\n" +
+				`{"type":"agent_metrics","metrics":{` + metadata + `"session_id":"same","output_tokens":6,"cost":0.75}}` + "\n"
+			if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(events), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			report, err := Aggregate(context.Background(), fixtureLister{summaries: []plan.PlanSummary{{ID: "one", Dir: dir}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if report.OutputTokens.Sessions != 1 || report.OutputTokens.P95 != 10 || report.Cost.P95 != 1 {
+				t.Fatalf("percentiles = output %#v cost %#v", report.OutputTokens, report.Cost)
+			}
+		})
 	}
 }
 

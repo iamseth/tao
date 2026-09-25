@@ -136,6 +136,33 @@ func TestPiExecutorAppendsAgentMetricsEvent(t *testing.T) {
 	}
 }
 
+func TestPiAndClaudeCollectPlanScopedMetrics(t *testing.T) {
+	for _, kind := range []AgentKind{AgentPi, AgentClaude} {
+		t.Run(string(kind), func(t *testing.T) {
+			planDir := writeMetricsPlan(t, "/repo", "plan-a")
+			repository := plan.NewFileRepository(filepath.Dir(planDir))
+			promptSeen := false
+			starter := fakePiSessionStarterWithStats(t, "done", &promptSeen, `{"type":"session_stats","session_id":"session-1","total_tokens":12}`)
+			if kind == AgentClaude {
+				starter = fakeProcessStarter(t, &fakeClaudeStart{}, `{"type":"assistant","session_id":"session-1","message":{"usage":{"input_tokens":5,"output_tokens":7},"content":[{"type":"text","text":"done"}]}}`)
+			}
+			executor := testAgentExecutor(kind, agentExecutorOptions{Deps: agent.RuntimeDeps{ProcessStarter: starter}}, repository, repository)
+			_, err := executor.RunAgentSession(context.Background(), AgentSessionRequest{PlanDir: planDir, RepoRoot: "/repo", Prompt: "test", Metrics: &AgentSessionMetricsRequest{Role: plan.AgentRoleReview}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			events := readAgentMetricEvents(t, planDir)
+			if len(events) != 1 || events[0].Metrics == nil {
+				t.Fatalf("events = %+v", events)
+			}
+			event := events[0]
+			if event.SliceID != "" || event.Metrics.Role != plan.AgentRoleReview || event.Metrics.Agent != string(kind) || event.Metrics.TotalTokens != 12 || !event.Metrics.TotalTokensPresent {
+				t.Fatalf("event = %+v, metrics = %+v", event, event.Metrics)
+			}
+		})
+	}
+}
+
 func TestServiceExecuteRecoversStructuredPiTransportFailureThroughFreshRPCProcess(t *testing.T) {
 	root := t.TempDir()
 	detail := interruptedServiceRunDetail(t, root)
@@ -273,6 +300,9 @@ func TestServiceExecuteStructuredPiTransportFailuresStopAfterThirdSession(t *tes
 	failedMetrics := 0
 	for _, event := range events {
 		if event.Type == plan.EventTypeAgentMetrics && event.Metrics != nil && event.Metrics.Status == "failed" {
+			if event.Metrics.Role != plan.AgentRoleExecution {
+				t.Fatalf("retry changed role: %+v", event.Metrics)
+			}
 			failedMetrics++
 		}
 	}

@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/agent"
+	"github.com/iamseth/tao/internal/agentsession"
+	"github.com/iamseth/tao/internal/agenttelemetry"
 	"github.com/iamseth/tao/internal/plan"
 )
 
@@ -106,7 +108,7 @@ func (s *Service) GeneratePlan(ctx context.Context, request GeneratePlanRequest)
 	}
 	result, err := s.runtime().RunSession(ctx, agent.Session{
 		RepoRoot: request.Session.Repo.Root, Prompt: prompt, PermissionMode: mode,
-		Timeout: request.Timeout, Progress: s.Log,
+		Timeout: request.Timeout, Progress: s.Log, CollectMetrics: true,
 	})
 	if err != nil {
 		return fail(GenerationStageRuntime, err)
@@ -121,6 +123,20 @@ func (s *Service) GeneratePlan(ctx context.Context, request GeneratePlanRequest)
 	}
 	if request.RejectOpenQuestions && detail != nil && len(nonEmptyStrings(detail.State.OpenQuestions)) > 0 {
 		return fail(GenerationStageOpenQuestions, fmt.Errorf("generated plan has unresolved open questions: %s", strings.Join(nonEmptyStrings(detail.State.OpenQuestions), "; ")))
+	}
+	// Only a surviving allocation is a durable telemetry destination. This
+	// append never creates a plan directory and cannot change generation success.
+	descriptor, _ := agent.Lookup(s.AgentKind)
+	metrics := agenttelemetry.Project(agentsession.Result{
+		AgentLabel: descriptor.Label, Metrics: result.Metrics, MetricsAvailability: result.MetricsAvailability(),
+	}, plan.AgentRolePlanning, nil)
+	event := agenttelemetry.Event(allocation.ID, "", time.Now(), metrics)
+	appender := s.EventAppender
+	if appender == nil {
+		appender = plan.NewFileRepository("")
+	}
+	if err := appender.AppendEvent(allocation.Dir, event); err == nil && detail != nil {
+		detail.Events = append(detail.Events, event)
 	}
 	summary := result.Output
 	if summary == "" {

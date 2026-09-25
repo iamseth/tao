@@ -68,6 +68,7 @@ func drainStderr(stderr io.Reader, log io.Writer) {
 func (s *session) queuedResult() Result {
 	var result Result
 	for _, event := range s.queuedEvents {
+		collectMessageMetrics(event, &result)
 		if err := s.logAgentEvent(event); err != nil {
 			s.logPiError(err)
 		}
@@ -92,13 +93,14 @@ func (s *session) waitForAgentEnd(ctx context.Context) (Result, error) {
 	for {
 		event, err := s.next(ctx)
 		if err != nil {
-			return Result{}, err
+			return Result{Metrics: result.Metrics}, err
 		}
+		collectMessageMetrics(event, &result)
 		if err := s.handleResponseError(event); err != nil {
-			return Result{}, err
+			return Result{Metrics: result.Metrics}, err
 		}
 		if err := s.handleUIRequest(ctx, event); err != nil {
-			return Result{}, err
+			return Result{Metrics: result.Metrics}, err
 		}
 		if err := agentEventError(event); err != nil {
 			s.logPiError(err)

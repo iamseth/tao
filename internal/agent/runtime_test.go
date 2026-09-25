@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	agentmetrics "github.com/iamseth/tao/internal/agent/metrics"
 	piagent "github.com/iamseth/tao/internal/agent/pi"
 )
 
@@ -102,7 +103,8 @@ func TestClaudeRuntimeNormalizesMetrics(t *testing.T) {
 	if result.MetricsWarning != "" {
 		t.Fatalf("unexpected metrics warning: %q", result.MetricsWarning)
 	}
-	want := Metrics{SessionID: "session-1", ProviderID: "anthropic", ModelID: "claude-sonnet-4", InputTokens: 10, OutputTokens: 4, TotalTokens: 14, Cost: 0.02}
+	want := Metrics{SessionID: "session-1", ProviderID: "anthropic", ModelID: "claude-sonnet-4", InputTokens: 10, OutputTokens: 4, TotalTokens: 14, Cost: 0.02,
+		Availability: agentmetrics.Reported, InputTokensPresent: true, OutputTokensPresent: true, TotalTokensPresent: true, CostPresent: true}
 	if result.Metrics == nil || *result.Metrics != want {
 		t.Fatalf("metrics = %#v, want %#v", result.Metrics, want)
 	}
@@ -194,6 +196,8 @@ func TestPiRuntimeNormalizesMetricsAndPassesNoProgressConfiguration(t *testing.T
 		SessionID: "session-1", ProviderID: "pi-provider", ModelID: "pi-model",
 		InputTokens: 100, OutputTokens: 50, ReasoningTokens: 10, CacheReadTokens: 5, CacheWriteTokens: 3, TotalTokens: 168,
 		Cost: 0.0123, TotalMessages: 6, UserMessages: 2, AssistantMessages: 3, ErroredMessages: 1, ToolCalls: 4,
+		Availability: agentmetrics.Reported, InputTokensPresent: true, OutputTokensPresent: true, TotalTokensPresent: true, CostPresent: true,
+		ReasoningTokensPresent: true, CacheReadTokensPresent: true, CacheWriteTokensPresent: true,
 	}
 	if result.Metrics == nil || *result.Metrics != want {
 		t.Fatalf("metrics = %#v, want %#v", result.Metrics, want)

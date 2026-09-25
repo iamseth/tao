@@ -6,6 +6,7 @@ import (
 
 	claudeagent "github.com/iamseth/tao/internal/agent/claude"
 	"github.com/iamseth/tao/internal/agent/logrecord"
+	agentmetrics "github.com/iamseth/tao/internal/agent/metrics"
 	piagent "github.com/iamseth/tao/internal/agent/pi"
 	"github.com/iamseth/tao/internal/agent/process"
 )
@@ -44,12 +45,21 @@ func (r piRuntime) RunSession(ctx context.Context, session Session) (SessionResu
 	})
 	out := SessionResult{Output: result.Output, FinalText: result.FinalText, PromptAcceptance: result.PromptAcceptance}
 	if session.CollectMetrics {
-		out.Metrics = &result.Metrics
+		out.Metrics = collectedMetrics(result.Metrics)
 		if result.SessionInfoError != nil {
 			out.MetricsWarning = result.SessionInfoError.Error()
 		}
 	}
 	return out, err
+}
+
+// Built-in parsers set coverage whenever measurements are observed. An early
+// return before parsing has no measurements, even though a value was allocated.
+func collectedMetrics(metrics Metrics) *Metrics {
+	if metrics.Availability == "" {
+		metrics.Availability = agentmetrics.Unavailable
+	}
+	return &metrics
 }
 
 // claudeRuntime adapts the leaf claude.Client onto the neutral Runtime contract.
@@ -68,7 +78,7 @@ func (r claudeRuntime) RunSession(ctx context.Context, session Session) (Session
 	})
 	out := SessionResult{Output: result.Output, FinalText: result.FinalText, PromptAcceptance: result.PromptAcceptance}
 	if session.CollectMetrics {
-		out.Metrics = &result.Metrics
+		out.Metrics = collectedMetrics(result.Metrics)
 		out.MetricsWarning = result.MetricsWarning
 	}
 	return out, err

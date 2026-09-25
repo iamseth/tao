@@ -211,8 +211,13 @@ type AgentSessionRequest struct {
 	VerificationCommands []string
 }
 
+// AgentSessionMetricsRequest opts an attributed session into plan telemetry.
+// SliceID is optional and does not itself authorize slice cap enforcement.
 type AgentSessionMetricsRequest struct {
 	SliceID string
+	Role    plan.AgentRole
+	// EnforceSliceCaps is set only by implementation/rework execution.
+	EnforceSliceCaps bool
 }
 
 type AgentSessionResult struct {

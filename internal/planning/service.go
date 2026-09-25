@@ -4,16 +4,19 @@ import (
 	"io"
 
 	"github.com/iamseth/tao/internal/agent"
+	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
 type ServiceOptions struct {
+	EventAppender  plan.EventAppender
 	Agent          runtimeconfig.AgentKind
 	ProcessStarter agent.ProcessStarter
 	Log            io.Writer
 }
 
 type Service struct {
+	EventAppender  plan.EventAppender
 	Repo           SliceRepository
 	Runtime        agent.Runtime
 	AgentKind      runtimeconfig.AgentKind
@@ -22,7 +25,7 @@ type Service struct {
 }
 
 func NewService(repo SliceRepository, runtime agent.Runtime, options ServiceOptions) *Service {
-	return &Service{Repo: repo, Runtime: runtime, AgentKind: options.Agent, ProcessStarter: options.ProcessStarter, Log: options.Log}
+	return &Service{Repo: repo, Runtime: runtime, AgentKind: options.Agent, ProcessStarter: options.ProcessStarter, Log: options.Log, EventAppender: options.EventAppender}
 }
 
 // runtime returns the agent.Runtime used for synchronous plan generation. An

@@ -18,6 +18,7 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/planning"
 	"github.com/iamseth/tao/internal/run"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/taodata"
 )
 
@@ -613,6 +614,143 @@ func TestNoteRunGeneratesLinksThenUsesNormalRun(t *testing.T) {
 	}
 	if generated != 1 || !strings.Contains(out.String(), "Run it with: tao run "+fixture.id) {
 		t.Fatalf("duplicate invocation generated=%d output=%q", generated, out.String())
+	}
+}
+
+func TestNoteRunGenerationTelemetrySurvivesHandoff(t *testing.T) {
+	for _, kind := range []runtimeconfig.AgentKind{runtimeconfig.AgentPi, runtimeconfig.AgentClaude} {
+		t.Run(string(kind), func(t *testing.T) {
+			clearTaoEnv(t)
+			dataHome := t.TempDir()
+			t.Setenv("TAO_DATA_HOME", dataHome)
+			t.Setenv("TAO_AGENT", string(kind))
+			repoMeta := taodata.Repo{ID: "tao-123", Name: "tao", Root: t.TempDir(), Branch: "main"}
+			registry := taodata.NewRegistry(dataHome)
+			if err := registry.WriteRepo(repoMeta); err != nil {
+				t.Fatal(err)
+			}
+			app, out, _ := noteTestApp(t, strings.NewReader(""), repoMeta)
+			app.CommandRunner = func(_ context.Context, _ string, name string, args []string, stdout, _ io.Writer) error {
+				if name == "git" {
+					writeRunGitOutput(stdout, args)
+				}
+				return nil
+			}
+			var fixture runPlanFixture
+			var noteID string
+			calls := 0
+			onPrompt := func(prompt string) {
+				calls++
+				if calls == 1 {
+					marker := "preallocated plan directory: `"
+					_, rest, ok := strings.Cut(prompt, marker)
+					if !ok {
+						t.Fatal("generation prompt missing allocation")
+					}
+					dir, _, ok := strings.Cut(rest, "`")
+					if !ok {
+						t.Fatal("unterminated allocation")
+					}
+					fixture = runPlanFixture{root: filepath.Dir(dir), id: filepath.Base(dir), t: t}
+					fixture.write(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+					state, err := plan.ReadState(dir)
+					if err != nil {
+						t.Fatal(err)
+					}
+					state.Repo.Root = repoMeta.Root
+					state.Plan.ChangeType = plan.ChangeTypeFeat
+					state.Plan.Decision = &plan.Decision{
+						Problem: "Missing feature", WhyNow: "Ready", ExpectedBenefit: "Feature works",
+						Readiness: plan.DecisionReadinessReady, SuccessCriteria: []string{"Tests pass"},
+						Disposition: plan.DecisionDispositionReady, DispositionReason: "Bounded work",
+						Priority: plan.Priority{Level: plan.PriorityOverallLevelShould, Impact: plan.PriorityLevelMedium, Urgency: plan.PriorityLevelLow, Effort: plan.PriorityEffortSmall, Risk: plan.PriorityLevelLow, Confidence: plan.PriorityLevelHigh, Rationale: "Small useful change"},
+					}
+					state.Plan.Sequence = &plan.Sequence{Position: 1, Total: 1}
+					content, err := json.Marshal(state)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(dir, "state.json"), content, 0o600); err != nil {
+						t.Fatal(err)
+					}
+					return
+				}
+				if calls != 2 {
+					t.Fatalf("unexpected provider invocation %d", calls)
+				}
+				stored, err := app.noteRepository(repoMeta).Get(context.Background(), noteID)
+				if err != nil || stored.Promotion == nil || stored.Promotion.Plan == nil || stored.Promotion.Plan.ID != fixture.id {
+					t.Fatalf("handoff before durable promotion: %#v, %v", stored, err)
+				}
+				detail, err := plan.NewFileRepository("").ResolvePlan(context.Background(), fixture.dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				found := false
+				for _, event := range detail.Events {
+					if event.Type == plan.EventTypeAgentMetrics && event.Metrics != nil && event.Metrics.Role == plan.AgentRolePlanning {
+						found = true
+					}
+				}
+				if !found {
+					t.Fatal("handoff missing persisted planning usage")
+				}
+				fixture.write(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
+			}
+			app.ProcessStarter = fakeCLIProcessStarter(t, "generated", onPrompt)
+			if kind == runtimeconfig.AgentClaude {
+				app.ProcessStarter = func(_ context.Context, _ string, name string, _ []string) (run.Process, error) {
+					if name != "claude" {
+						t.Fatalf("unexpected provider %q", name)
+					}
+					proc := newFakeCLIClaudeProcess(t)
+					go func() {
+						defer proc.finish()
+						prompt, err := io.ReadAll(proc.stdinReader)
+						if err != nil {
+							t.Error(err)
+							return
+						}
+						onPrompt(string(prompt))
+						proc.writeEvent(`{"type":"result","result":"generated","usage":{"input_tokens":5,"output_tokens":7},"total_cost_usd":0}`)
+					}()
+					return proc, nil
+				}
+			}
+			if err := app.Run(context.Background(), []string{"note", "create", "implement a small fix"}); err != nil {
+				t.Fatal(err)
+			}
+			noteID = strings.TrimSpace(strings.TrimPrefix(out.String(), "Created note "))
+			if err := app.Run(context.Background(), []string{"note", "run", "--execution-mode", "current", "--commit-policy", "none", "--no-review", noteID}); err != nil {
+				t.Fatal(err)
+			}
+			if calls != 2 {
+				t.Fatalf("provider invocations = %d, want generation plus execution", calls)
+			}
+			detail, err := plan.NewFileRepository("").ResolvePlan(context.Background(), fixture.dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			count := 0
+			for _, event := range detail.Events {
+				if event.Type != plan.EventTypeAgentMetrics || event.Metrics == nil || event.Metrics.Role != plan.AgentRolePlanning {
+					continue
+				}
+				count++
+				if event.SliceID != "" || event.Agent != string(kind) {
+					t.Fatalf("planning event = %#v", event)
+				}
+			}
+			if count != 1 {
+				t.Fatalf("planning metrics events = %d", count)
+			}
+			if detail.PlanningSession.HasExport || detail.PlanningSession.Stats != nil || detail.PlanningSession.Prompt != "" {
+				t.Fatalf("unexpected planning capture: %#v", detail.PlanningSession)
+			}
+			if _, err := os.Stat(filepath.Join(dataHome, "repos", repoMeta.ID, "planning-sessions")); !os.IsNotExist(err) {
+				t.Fatalf("planning sessions unexpectedly persisted: %v", err)
+			}
+		})
 	}
 }
 

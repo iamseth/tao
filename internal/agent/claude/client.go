@@ -24,13 +24,14 @@ type Request struct {
 }
 
 type Result struct {
-	Output    string
-	FinalText string
-	SessionID string
-	Model     string
-	Usage     map[string]any
-	CostUSD   float64
-	Events    map[string]any
+	Output         string
+	FinalText      string
+	SessionID      string
+	Model          string
+	Usage          map[string]any
+	CostUSD        float64
+	CostUSDPresent bool
+	Events         map[string]any
 	// Metrics is the neutral view of session statistics parsed from the stream
 	// output, so the run layer never reaches into Usage with Claude's
 	// stream-json vocabulary.

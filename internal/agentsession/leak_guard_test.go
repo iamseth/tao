@@ -37,7 +37,7 @@ func TestRunnerDetectsControlCheckoutLeak(t *testing.T) {
 	if !errors.As(err, &leak) {
 		t.Fatalf("error = %v, want ControlCheckoutLeakError", err)
 	}
-	if calls != 1 || result.Output != "partial" || len(leak.Paths) != 1 || leak.Paths[0] != "tracked.txt" {
+	if calls != 1 || !result.Invoked || result.Output != "partial" || len(leak.Paths) != 1 || leak.Paths[0] != "tracked.txt" {
 		t.Fatalf("calls/result/leak = %d, %+v, %+v", calls, result, leak)
 	}
 }
@@ -57,6 +57,21 @@ func TestRunnerSkipsLeakFingerprintForControlCheckoutSession(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("provider calls = %d, want 1", calls)
+	}
+}
+
+func TestRunnerDoesNotReportInvocationForPreSessionGuardFailure(t *testing.T) {
+	guardErr := errors.New("fingerprint unavailable")
+	runner := New(Config{
+		Runtime: runtimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
+			t.Fatal("provider invoked despite guard failure")
+			return agent.SessionResult{}, nil
+		}),
+		CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error { return guardErr },
+	})
+	result, err := runner.Run(context.Background(), Request{ControlRoot: t.TempDir(), RepoRoot: t.TempDir(), CollectMetrics: true})
+	if !errors.Is(err, guardErr) || result.Invoked {
+		t.Fatalf("result/error = %+v, %v", result, err)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 
 	"github.com/iamseth/tao/internal/agent/jsonmap"
 	"github.com/iamseth/tao/internal/agent/logrecord"
+	agentmetrics "github.com/iamseth/tao/internal/agent/metrics"
 	"github.com/iamseth/tao/internal/agent/streamjson"
 )
 
@@ -103,6 +104,7 @@ func extractTelemetry(event event, result *Result) {
 	}
 	if cost, ok := numberValue(event, "total_cost_usd", "cost_usd", "cost"); ok {
 		result.CostUSD = cost
+		_, result.CostUSDPresent = agentmetrics.CostValue(cost)
 	}
 	if message, ok := event["message"].(map[string]any); ok {
 		if result.Model == "" {

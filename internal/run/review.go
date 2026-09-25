@@ -266,7 +266,7 @@ func (f Finalizer) ensureApprovedReviewProposal(ctx context.Context, detail *pla
 	result, sessionErr := session.RunAgentSession(ctx, AgentSessionRequest{
 		PlanDir: absolutePlanDir(detail.Dir), RepoRoot: repoRoot,
 		LogAction: "correcting review proposal for plan " + detail.State.Plan.ID,
-		Prompt:    prompt, CaptureOutput: true,
+		Prompt:    prompt, CaptureOutput: true, Metrics: &AgentSessionMetricsRequest{Role: plan.AgentRoleReview},
 	})
 	if category, err := f.reinspectProposalCorrectionWorktree(ctx, detail, repoRoot, branch, headSHA); err != nil {
 		return f.failProposalRepairWithAction(detail, evidenceReview, category, plan.ProposalRepairRecoveryAction(category), err)
@@ -830,7 +830,7 @@ func createReviewWithAgentSession(ctx context.Context, executor AgentSessionExec
 		return plan.PlanReview{}, err
 	}
 	prompt = appendPriorReworkAndBudgetContext(prompt, detail, runtimeconfig.RuntimeAgentBudgetThresholds())
-	result, err := executor.RunAgentSession(ctx, AgentSessionRequest{PlanDir: planDir, RepoRoot: repoRoot, LogAction: "reviewing plan " + planID, Prompt: prompt, CaptureOutput: true})
+	result, err := executor.RunAgentSession(ctx, AgentSessionRequest{PlanDir: planDir, RepoRoot: repoRoot, LogAction: "reviewing plan " + planID, Prompt: prompt, CaptureOutput: true, Metrics: &AgentSessionMetricsRequest{Role: plan.AgentRoleReview}})
 	if err != nil {
 		return plan.PlanReview{}, err
 	}
@@ -876,7 +876,7 @@ func createReviewWithAgentSession(ctx context.Context, executor AgentSessionExec
 
 	correctionResult, correctionErr := executor.RunAgentSession(ctx, AgentSessionRequest{
 		PlanDir: planDir, RepoRoot: repoRoot, LogAction: "correcting review proposal for plan " + planID,
-		Prompt: correctionPrompt, CaptureOutput: true,
+		Prompt: correctionPrompt, CaptureOutput: true, Metrics: &AgentSessionMetricsRequest{Role: plan.AgentRoleReview},
 	})
 	if category, inspectErr := reinspectFreshReviewProposalCorrectionWorktree(ctx, options, detail, repoRoot, git, head); inspectErr != nil {
 		return persistedReview, settleFreshReviewProposalCorrectionFailure(record, consumedAttempt, category, now(options).UTC(), inspectErr)

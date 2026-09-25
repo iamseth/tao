@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/agent"
+	agentmetrics "github.com/iamseth/tao/internal/agent/metrics"
 	"github.com/iamseth/tao/internal/commandrunner"
 )
 
@@ -66,6 +67,8 @@ type Request struct {
 // Result is the neutral provider result plus descriptor-driven telemetry
 // classification. Domain adapters decide whether and where to persist it.
 type Result struct {
+	// Invoked distinguishes a provider attempt from a pre-session guard failure.
+	Invoked               bool
 	Output                string
 	FinalText             string
 	PromptAcceptance      agent.PromptAcceptance
@@ -73,9 +76,11 @@ type Result struct {
 	MetricsWarning        string
 	MetricsWarningMessage string
 	ReportMetricsWarning  bool
-	MetricsUsable         bool
-	AgentLabel            string
-	MetricsMessage        string
+	// MetricsUsable preserves warning policy, not measurement completeness.
+	MetricsUsable       bool
+	MetricsAvailability agentmetrics.Availability
+	AgentLabel          string
+	MetricsMessage      string
 }
 
 // Run invokes the configured provider exactly once unless a pre-session leak
@@ -87,7 +92,9 @@ func (r Runner) Run(ctx context.Context, request Request) (Result, error) {
 	if progress == nil {
 		progress = r.progress
 	}
+	invoked := false
 	run := func() (agent.SessionResult, error) {
+		invoked = true
 		return r.runtime.RunSession(ctx, agent.Session{
 			RepoRoot:             request.RepoRoot,
 			Prompt:               request.Prompt,
@@ -113,10 +120,12 @@ func (r Runner) Run(ctx context.Context, request Request) (Result, error) {
 		warningMessage = r.descriptor.MetricsWarningPrefix + raw.MetricsWarning
 	}
 	return Result{
+		Invoked:               invoked,
 		Output:                raw.Output,
 		FinalText:             raw.FinalText,
 		PromptAcceptance:      raw.PromptAcceptance,
 		Metrics:               raw.Metrics,
+		MetricsAvailability:   raw.MetricsAvailability(),
 		MetricsWarning:        raw.MetricsWarning,
 		MetricsWarningMessage: warningMessage,
 		ReportMetricsWarning:  raw.MetricsWarning != "" && (r.descriptor.MetricsWarningInformational || metricsRequested),

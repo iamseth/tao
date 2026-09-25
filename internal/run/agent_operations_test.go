@@ -3,7 +3,9 @@ package run
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/agent/logrecord"
+	agentmetrics "github.com/iamseth/tao/internal/agent/metrics"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 )
@@ -48,12 +51,182 @@ func TestGeneratePullRequestBodySessionCarriesNativeAcceptanceContract(t *testin
 	if body != "body" || len(executor.requests) != 1 {
 		t.Fatalf("body/session = %q/%d, want body/1", body, len(executor.requests))
 	}
+	assertPlanTelemetryRequest(t, executor.requests[0], plan.AgentRolePullRequest)
 	prompt := executor.requests[0].Prompt
 	for _, want := range []string{"Problem, Fix, Tests, Deploy, Scope", "Use only ## ATX syntax for level-two headings; do not add Setext headings", "Keep Tests exactly as drafted", "legitimate repository paths that contain the word Tao", "complete collapsed Changed files details block containing the exact diff stat", "paths that happen to contain the word Tao", "omits Tao lifecycle verification commands", "Do not include plan IDs", "Tao-specific prose in Problem, Fix, Tests, or Deploy", "merge guidance", "Do not add claims"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("body session prompt missing %q:\n%s", want, prompt)
 		}
 	}
+}
+
+// Exercise the operation requests through both real provider adapters and the
+// durable plan adapter. Errors are injected after provider measurement so the
+// operation must preserve failures/timeouts even when telemetry can be saved.
+func TestReviewAndPullRequestTelemetry(t *testing.T) {
+	const approval = "```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Approved.\",\"findings\":[],\"commit_message\":{\"subject\":\"fix(review): preserve exact approval\",\"body\":\"What:\\nPreserve the exact approval.\\n\\nWhy:\\nAvoid unnecessary sessions.\"}}\n```"
+	const incompleteApproval = "```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Approved.\",\"findings\":[]}\n```"
+	const correction = "```tao-review-proposal-json\n{\"commit_message\":{\"subject\":\"fix(review): preserve exact approval\",\"body\":\"What:\\nPreserve the exact approval.\\n\\nWhy:\\nAvoid unnecessary sessions.\"}}\n```"
+	for _, kind := range []AgentKind{AgentPi, AgentClaude} {
+		for _, operation := range []string{"review", "correction", "pr", "body"} {
+			for _, measurement := range []plan.AgentMetricsAvailability{plan.AgentMetricsReported, plan.AgentMetricsPartial, plan.AgentMetricsUnavailable} {
+				for _, outcome := range []string{"success", "failed", "timeout", "append failure"} {
+					t.Run(fmt.Sprintf("%s/%s/%s/%s", kind, operation, measurement, outcome), func(t *testing.T) {
+						t.Setenv(runtimeconfig.EnvMaxSliceOutputTokens, "1")
+						t.Setenv(runtimeconfig.EnvMaxSliceCost, "1")
+						repoRoot := t.TempDir()
+						detail := runPathSessionDetail(t, repoRoot, plan.StatusInReview, nil, []string{"001-a"}, plan.StatusCompleted)
+						detail.State.Plan.ChangeType = plan.ChangeTypeFix
+						detail.State.Repo.BaseCommit = "base123"
+						persistReviewState(t, detail.Dir, detail)
+						if err := os.WriteFile(filepath.Join(detail.Dir, "events.jsonl"), nil, 0o600); err != nil {
+							t.Fatal(err)
+						}
+						repository := plan.NewFileRepository("")
+						var sessionErr error
+						switch outcome {
+						case "failed":
+							sessionErr = errors.New("private provider failure")
+						case "timeout":
+							sessionErr = &agent.SessionTimeoutError{Timeout: time.Minute}
+						}
+						calls := 0
+						descriptor, _ := agent.Lookup(kind)
+						providerFactory := descriptor.NewRuntime
+						descriptor.NewRuntime = func(agent.RuntimeDeps) agent.Runtime {
+							return agentRuntimeFunc(func(ctx context.Context, session agent.Session) (agent.SessionResult, error) {
+								calls++
+								if !session.CollectMetrics {
+									t.Fatal("operation did not request metrics")
+								}
+								if operation == "body" {
+									deadline, ok := ctx.Deadline()
+									if !ok || time.Until(deadline) > pullRequestBodyAgentTimeout {
+										t.Fatal("PR body lost its bounded timeout")
+									}
+								}
+								output := "created https://github.com/iamseth/tao/pull/123"
+								switch operation {
+								case "review":
+									output = approval
+								case "correction":
+									output = correction
+									if calls == 1 {
+										output = incompleteApproval
+									}
+								}
+								starter := phaseTelemetryStarter(t, kind, output, measurement)
+								result, err := providerFactory(agent.RuntimeDeps{ProcessStarter: starter}).RunSession(ctx, session)
+								if err != nil {
+									t.Fatalf("provider fixture: %v", err)
+								}
+								if operation == "correction" && calls == 1 {
+									return result, nil
+								}
+								return result, sessionErr
+							})
+						}
+						appendCalls := 0
+						appender := eventAppenderFunc(func(dir string, event plan.Event) error {
+							if event.Type == plan.EventTypeAgentMetrics {
+								appendCalls++
+								if outcome == "append failure" {
+									return errors.New("metrics storage unavailable")
+								}
+							}
+							return repository.AppendEvent(dir, event)
+						})
+						runner := newAgentSessionRunner(agentSessionRunnerConfig{descriptor: descriptor, logAppender: repository, eventAppender: appender})
+						role := plan.AgentRolePullRequest
+						var err error
+						switch operation {
+						case "review", "correction":
+							role = plan.AgentRoleReview
+							var review plan.PlanReview
+							review, err = createReviewWithAgentSession(context.Background(), runner, agentOperationOptions{Agent: string(kind), reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123", currentBranch: "feature"})}, ReviewRun{PlanDir: detail.Dir, Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(repository))
+							if sessionErr == nil && (review.Verdict != plan.ReviewVerdictApprove || review.CommitMessage == nil) {
+								t.Fatalf("telemetry changed approval: %+v", review)
+							}
+							if operation == "correction" && sessionErr != nil && (detail.State.Plan.Review.Verdict != plan.ReviewVerdictComment || detail.State.Plan.Review.CommitMessage != nil) {
+								t.Fatalf("failed correction retained approval: %+v", detail.State.Plan.Review)
+							}
+						case "pr":
+							var pr plan.PullRequest
+							pr, err = createPullRequestWithAgentSession(context.Background(), runner, agentOperationOptions{}, PullRequestRun{PlanDir: detail.Dir, PlanID: "plan-a", RepoRoot: repoRoot})
+							if sessionErr == nil && pr.Number != 123 {
+								t.Fatalf("PR changed: %+v", pr)
+							}
+						case "body":
+							var body string
+							body, err = generatePullRequestBodyWithAgentSession(context.Background(), runner, agentOperationOptions{}, PullRequestBodyRun{PlanDir: detail.Dir, PlanID: "plan-a", RepoRoot: repoRoot})
+							if sessionErr == nil && body != "created https://github.com/iamseth/tao/pull/123" {
+								t.Fatalf("body changed: %q", body)
+							}
+						}
+						if !errors.Is(err, sessionErr) {
+							t.Fatalf("error = %v, want %v", err, sessionErr)
+						}
+						wantCalls := 1
+						if operation == "correction" {
+							wantCalls = 2
+						}
+						if calls != wantCalls || appendCalls != wantCalls {
+							t.Fatalf("provider/metrics calls = %d/%d, want %d", calls, appendCalls, wantCalls)
+						}
+						events := readAgentMetricEvents(t, detail.Dir)
+						if outcome == "append failure" {
+							wantCalls = 0
+						}
+						if len(events) != wantCalls {
+							t.Fatalf("metrics events = %d, want %d", len(events), wantCalls)
+						}
+						failed := 0
+						for _, event := range events {
+							m := event.Metrics
+							if event.PlanID != detail.State.Plan.ID || event.SliceID != "" || m.Role != role || m.Agent != string(kind) || m.Availability != measurement {
+								t.Fatalf("event = %+v; metrics = %+v", event, m)
+							}
+							if m.OutputTokensPresent != (measurement != plan.AgentMetricsUnavailable) || m.CostPresent != (measurement == plan.AgentMetricsReported) || m.Cost != 0 {
+								t.Fatalf("measurement presence changed: %+v", m)
+							}
+							if m.Status == "failed" && m.Result == "failed" {
+								failed++
+							}
+						}
+						if (failed == 1) != (sessionErr != nil) {
+							t.Fatalf("failed metrics events = %d; session error = %v", failed, sessionErr)
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+func phaseTelemetryStarter(t *testing.T, kind AgentKind, output string, availability plan.AgentMetricsAvailability) ProcessStarter {
+	t.Helper()
+	encoded, err := json.Marshal(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kind == AgentClaude {
+		usage := ""
+		switch availability {
+		case plan.AgentMetricsReported:
+			usage = `,"usage":{"input_tokens":5,"output_tokens":7},"total_cost_usd":0`
+		case plan.AgentMetricsPartial:
+			usage = `,"usage":{"output_tokens":7}`
+		}
+		return fakeProcessStarter(t, &fakeClaudeStart{}, `{"type":"result","result":`+string(encoded)+usage+`}`)
+	}
+	stats := `{"type":"session_stats","session_id":"session-1"}`
+	switch availability {
+	case plan.AgentMetricsReported:
+		stats = `{"type":"session_stats","session_id":"session-1","input_tokens":5,"output_tokens":7,"total_tokens":12,"cost":0}`
+	case plan.AgentMetricsPartial:
+		stats = `{"type":"session_stats","session_id":"session-1","output_tokens":7}`
+	}
+	return fakePiSessionStarterWithStats(t, output, new(bool), stats)
 }
 
 func TestTimestampedAgentLogWriterAddsRecordTime(t *testing.T) {
@@ -202,10 +375,12 @@ func TestRunAgentSessionAppendsSessionTimeoutEvent(t *testing.T) {
 	if !errors.Is(err, timeoutErr) {
 		t.Fatalf("error = %v, want original timeout error", err)
 	}
-	if len(events) == 0 {
-		t.Fatal("expected session_timeout event")
+	var event plan.Event
+	for _, candidate := range events {
+		if candidate.Type == plan.EventTypeSessionTimeout {
+			event = candidate
+		}
 	}
-	event := events[0]
 	if event.Type != plan.EventTypeSessionTimeout || event.PlanID != "plan-a" || event.SliceID != "001-a" || event.Agent != "test" {
 		t.Fatalf("session timeout event identity = %+v", event)
 	}
@@ -245,7 +420,7 @@ func TestRunAgentSessionSliceBudgetCaps(t *testing.T) {
 			runner, planDir, repoRoot := sessionEventTestRunner(t, runtime, repository, io.Discard, time.Now())
 
 			got, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{
-				PlanDir: planDir, RepoRoot: repoRoot, LogAction: "running 001-a", Metrics: &AgentSessionMetricsRequest{SliceID: "001-a"},
+				PlanDir: planDir, RepoRoot: repoRoot, LogAction: "running 001-a", Metrics: &AgentSessionMetricsRequest{SliceID: "001-a", Role: plan.AgentRoleExecution, EnforceSliceCaps: true},
 			})
 			if got.Output != "partial" {
 				t.Fatalf("output = %q, want partial", got.Output)
@@ -292,7 +467,7 @@ func TestRunAgentSessionSliceBudgetAccumulatesPriorMetrics(t *testing.T) {
 	}
 
 	_, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{
-		PlanDir: planDir, RepoRoot: repoRoot, LogAction: "running 001-a", Metrics: &AgentSessionMetricsRequest{SliceID: "001-a"},
+		PlanDir: planDir, RepoRoot: repoRoot, LogAction: "running 001-a", Metrics: &AgentSessionMetricsRequest{SliceID: "001-a", Role: plan.AgentRoleExecution, EnforceSliceCaps: true},
 	})
 	var budgetErr *budgetExceededError
 	if !errors.As(err, &budgetErr) || budgetErr.observed != 101 {
@@ -481,6 +656,164 @@ func TestRunAgentSessionStateReadErrorSkipsSessionTimeoutEvent(t *testing.T) {
 	}
 	if appendCalls != 0 {
 		t.Fatalf("event append calls = %d, want 0", appendCalls)
+	}
+}
+
+func TestRunAgentSessionPlanTelemetryAndCapIsolation(t *testing.T) {
+	t.Setenv(runtimeconfig.EnvMaxSliceOutputTokens, "1")
+	t.Setenv(runtimeconfig.EnvMaxSliceCost, "1")
+	for _, request := range []AgentSessionMetricsRequest{
+		{Role: plan.AgentRoleReview},
+		{Role: plan.AgentRoleExecution, EnforceSliceCaps: true}, // no invented slice
+		{SliceID: "001-a", Role: plan.AgentRoleExecution},       // collection is not cap authority
+		{SliceID: "001-a", Role: plan.AgentRoleReview, EnforceSliceCaps: true},
+	} {
+		for _, runErr := range []error{nil, &agent.SessionTimeoutError{Timeout: time.Minute}, retryableTransportTestError{error: errors.New("private transport failure")}} {
+			runtime := agentRuntimeFunc(func(_ context.Context, session agent.Session) (agent.SessionResult, error) {
+				if !session.CollectMetrics {
+					t.Fatal("plan-scoped collection not requested")
+				}
+				return agent.SessionResult{Output: "partial output", FinalText: "final", Metrics: &agent.Metrics{OutputTokens: 100, Cost: 5}}, runErr
+			})
+			repository := plan.NewFileRepository("")
+			runner, planDir, repoRoot := sessionEventTestRunner(t, runtime, repository, io.Discard, time.Now())
+			got, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{PlanDir: planDir, RepoRoot: repoRoot, Metrics: &request})
+			if !errors.Is(err, runErr) || got.Output != "partial output" || got.FinalText != "final" {
+				t.Fatalf("result/error changed: %+v, %v; want %v", got, err, runErr)
+			}
+			events := readAgentMetricEvents(t, planDir)
+			if len(events) != 1 || events[0].Metrics == nil {
+				t.Fatalf("metrics events = %+v", events)
+			}
+			event := events[0]
+			if event.SliceID != request.SliceID || event.Metrics.Role != request.Role || event.Metrics.OutputTokens != 100 || (event.Metrics.Status == "failed") != (runErr != nil) {
+				t.Fatalf("metrics = %+v, payload = %+v", event, event.Metrics)
+			}
+			detail, loadErr := plan.NewFileRepository(filepath.Dir(planDir)).GetPlan(context.Background(), filepath.Base(planDir))
+			if loadErr != nil {
+				t.Fatal(loadErr)
+			}
+			for _, event := range detail.Events {
+				if event.Type == plan.EventTypeBudgetExceeded {
+					t.Fatalf("non-execution cap: %+v", event)
+				}
+				if event.Type == plan.EventTypeSessionTimeout && event.SliceID != request.SliceID {
+					t.Fatalf("fabricated timeout slice: %+v", event)
+				}
+			}
+		}
+	}
+}
+
+func TestRunAgentSessionTelemetryFailuresPreserveProviderOutcome(t *testing.T) {
+	for _, failure := range []string{"state", "metrics append", "budget append"} {
+		for _, runErr := range []error{nil, &agent.SessionTimeoutError{Timeout: time.Minute}, retryableTransportTestError{error: errors.New("transport failed")}} {
+			t.Run(fmt.Sprintf("%s/%v", failure, runErr), func(t *testing.T) {
+				t.Setenv(runtimeconfig.EnvMaxSliceOutputTokens, "1")
+				calls := 0
+				runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
+					calls++
+					return agent.SessionResult{Output: "output", Metrics: &agent.Metrics{OutputTokens: 100}}, runErr
+				})
+				repository := plan.NewFileRepository("")
+				appendCalls := 0
+				appender := eventAppenderFunc(func(dir string, event plan.Event) error {
+					appendCalls++
+					if failure == "metrics append" || event.Type == plan.EventTypeBudgetExceeded {
+						return errors.New("append failed")
+					}
+					return repository.AppendEvent(dir, event)
+				})
+				runner, planDir, repoRoot := sessionEventTestRunner(t, runtime, appender, io.Discard, time.Now())
+				if failure == "state" {
+					if err := os.Remove(filepath.Join(planDir, "state.json")); err != nil {
+						t.Fatal(err)
+					}
+				}
+				got, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{PlanDir: planDir, RepoRoot: repoRoot, Metrics: &AgentSessionMetricsRequest{SliceID: "001-a", Role: plan.AgentRoleExecution, EnforceSliceCaps: true}})
+				if !errors.Is(err, runErr) || got.Output != "output" || calls != 1 {
+					t.Fatalf("outcome changed: %+v, %v, calls=%d", got, err, calls)
+				}
+				if failure == "state" && appendCalls != 0 {
+					t.Fatal("appended without plan identity")
+				}
+			})
+		}
+	}
+}
+
+func TestRunAgentSessionPreSessionFailureDoesNotEmitMetrics(t *testing.T) {
+	repoRoot := t.TempDir()
+	detail := runPathSessionDetail(t, repoRoot, plan.StatusPlanned, []string{"001-a"}, nil, plan.StatusPending)
+	guardErr := errors.New("fingerprint failed")
+	runner := newAgentSessionRunner(agentSessionRunnerConfig{
+		descriptor: agent.Descriptor{Label: "test", NewRuntime: func(agent.RuntimeDeps) agent.Runtime {
+			return agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
+				t.Fatal("unexpected provider invocation")
+				return agent.SessionResult{}, nil
+			})
+		}},
+		logAppender:   plan.NewFileRepository(""),
+		eventAppender: eventAppenderFunc(func(string, plan.Event) error { t.Fatal("event for nonexistent session"); return nil }),
+		commandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error { return guardErr },
+	})
+	_, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{PlanDir: detail.Dir, RepoRoot: t.TempDir(), Metrics: &AgentSessionMetricsRequest{Role: plan.AgentRoleReview}})
+	if !errors.Is(err, guardErr) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestRunAgentSessionUnavailableMetricsRemainUnmeasured(t *testing.T) {
+	t.Setenv(runtimeconfig.EnvMaxSliceOutputTokens, "1")
+	for _, missing := range []*agent.Metrics{nil, {Availability: agentmetrics.Unavailable, SessionID: "session"}} {
+		runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
+			return agent.SessionResult{Metrics: missing, MetricsWarning: "private warning"}, nil
+		})
+		repository := plan.NewFileRepository("")
+		runner, planDir, repoRoot := sessionEventTestRunner(t, runtime, repository, io.Discard, time.Now())
+		// Prior usage must not turn this unavailable measurement into a cap check.
+		if err := repository.AppendEvent(planDir, plan.Event{Type: plan.EventTypeAgentMetrics, SliceID: "001-a", Metrics: &plan.AgentMetrics{OutputTokens: 100}}); err != nil {
+			t.Fatal(err)
+		}
+		_, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{PlanDir: planDir, RepoRoot: repoRoot, Metrics: &AgentSessionMetricsRequest{SliceID: "001-a", Role: plan.AgentRoleExecution, EnforceSliceCaps: true}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, event := range readAgentMetricEvents(t, planDir) {
+			if event.Metrics.Role != plan.AgentRoleExecution {
+				continue
+			}
+			found = true
+			if event.Metrics.Availability != plan.AgentMetricsUnavailable || event.Metrics.OutputTokensPresent || event.Metrics.CostPresent || strings.Contains(event.Message, "private") {
+				t.Fatalf("unavailable event = %+v", event)
+			}
+		}
+		if !found {
+			t.Fatal("unavailable event missing")
+		}
+	}
+}
+
+func TestRunAgentSessionCapsExcludeAttributedNonExecutionHistory(t *testing.T) {
+	t.Setenv(runtimeconfig.EnvMaxSliceOutputTokens, "100")
+	repository := plan.NewFileRepository("")
+	runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
+		return agent.SessionResult{Metrics: &agent.Metrics{OutputTokens: 40}}, nil
+	})
+	runner, planDir, repoRoot := sessionEventTestRunner(t, runtime, repository, io.Discard, time.Now())
+	for _, role := range []plan.AgentRole{plan.AgentRoleReview, plan.AgentRolePullRequest, plan.AgentRoleMerge} {
+		if err := repository.AppendEvent(planDir, plan.Event{Type: plan.EventTypeAgentMetrics, PlanID: "plan-a", SliceID: "001-a", Timestamp: time.Now(), Metrics: &plan.AgentMetrics{Role: role, OutputTokens: 1000}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{PlanDir: planDir, RepoRoot: repoRoot, Metrics: &AgentSessionMetricsRequest{SliceID: "001-a", Role: plan.AgentRoleRework, EnforceSliceCaps: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := plan.SummarizeAgentMetrics(plan.AgentMetricsEvents(readAgentMetricEvents(t, planDir)))
+	if summary.Totals.OutputTokens != 3040 {
+		t.Fatalf("plan totals changed: %+v", summary.Totals)
 	}
 }
 

@@ -90,6 +90,16 @@ subordinate options, and administrative alternatives may bypass safeguards, so
 they are not equivalent recommendations. A terminal `No action` distinguishes a
 finished or otherwise non-actionable plan from one that should progress.
 
+The agent telemetry section in `tao show` (also available with `--json`) helps
+identify which roles account for **recorded** token use and cost. Check its
+availability counts before comparing plans: partial totals and unknown/legacy
+coverage are not complete bills, missing measurements are not zero, and failed
+attempts still contribute usage. Missing phase events do not prove a phase never
+ran. Interactive planning is not collected; direct note generation is recorded
+only in surviving validated plans, and merge-batch usage stays separate. Improved
+collection can raise totals without indicating a more expensive workflow. See
+[the telemetry contract](plan-format.md#events) for operation coverage.
+
 Use `tao monitor` while runs are active across more than one registered
 repository. Its urgency-ordered view keeps live and stale runs ahead of blocked
 and quieter plans, while showing lifecycle status, active phase, coarse run

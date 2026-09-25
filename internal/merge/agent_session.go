@@ -19,6 +19,7 @@ import (
 	"github.com/iamseth/tao/internal/agent/logrecord"
 	piagent "github.com/iamseth/tao/internal/agent/pi"
 	"github.com/iamseth/tao/internal/agentsession"
+	"github.com/iamseth/tao/internal/agenttelemetry"
 	"github.com/iamseth/tao/internal/commandrunner"
 	commitcontract "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/plan"
@@ -167,47 +168,29 @@ func singleMergeOperationStart(operation BatchAgentOperation) string {
 	}
 }
 
-// SingleMergeAgentMetricsEvent projects usable provider metrics into the
+// SingleMergeAgentMetricsEvent projects invoked provider measurements into the
 // generic plan event format. The event is telemetry only; callers persist it
 // best-effort and must never use it as merge or recovery authority.
 func SingleMergeAgentMetricsEvent(request BatchAgentSessionRequest, result BatchAgentSessionResult, sessionErr error, timestamp time.Time) *plan.Event {
-	if !result.Provider.MetricsUsable {
+	if !result.Provider.Invoked || request.BatchID != "" || request.CandidatePlanID == "" {
 		return nil
 	}
-	metrics := result.Provider.Metrics
-	projected := plan.AgentMetrics{Agent: result.Provider.AgentLabel, Status: plan.StatusCompleted, Result: plan.StatusCompleted}
-	if metrics != nil {
-		projected.SessionID = metrics.SessionID
-		projected.ProviderID = metrics.ProviderID
-		projected.ModelID = metrics.ModelID
-		projected.InputTokens = metrics.InputTokens
-		projected.OutputTokens = metrics.OutputTokens
-		projected.ReasoningTokens = metrics.ReasoningTokens
-		projected.CacheReadTokens = metrics.CacheReadTokens
-		projected.CacheWriteTokens = metrics.CacheWriteTokens
-		projected.TotalTokens = metrics.TotalTokens
-		projected.Cost = metrics.Cost
-		projected.TotalMessages = metrics.TotalMessages
-		projected.UserMessages = metrics.UserMessages
-		projected.AssistantMessages = metrics.AssistantMessages
-		projected.ErroredMessages = metrics.ErroredMessages
-		projected.ToolCalls = metrics.ToolCalls
-	}
-	if sessionErr != nil {
-		projected.Status = "failed"
-		projected.Result = "failed"
-	}
-	message := "Captured single-plan merge agent metrics"
+	role := plan.AgentRoleMerge
+	var message string
 	switch request.Operation {
 	case BatchAgentOperationSinglePlanResolution:
 		message = "Captured single-plan conflict resolver agent metrics"
 	case BatchAgentOperationSinglePlanReview:
+		role = plan.AgentRoleReview
 		message = "Captured independent integration reviewer agent metrics"
+	case BatchAgentOperationProposalGeneration:
+		message = "Captured single-plan merge proposal agent metrics"
+	default:
+		return nil
 	}
-	return &plan.Event{
-		Type: plan.EventTypeAgentMetrics, Timestamp: timestamp.UTC(), PlanID: request.CandidatePlanID,
-		Agent: projected.Agent, Metrics: &projected, Message: message,
-	}
+	event := agenttelemetry.Event(request.CandidatePlanID, "", timestamp, agenttelemetry.Project(result.Provider, role, sessionErr))
+	event.Message = message
+	return &event
 }
 
 // MergeProposalGeneratorConfig configures the exceptional single-merge
@@ -1114,7 +1097,7 @@ func (s BatchAgentSession) Resolve(ctx context.Context, request BatchAgentSessio
 }
 
 func (s BatchAgentSession) recordTelemetry(request BatchAgentSessionRequest, result agentsession.Result, sessionErr error) {
-	if s.eventAppender == nil || request.BatchID == "" {
+	if s.eventAppender == nil || request.BatchID == "" || !result.Invoked {
 		return
 	}
 	outcome := BatchAgentOutcomeCompleted
@@ -1136,15 +1119,13 @@ func (s BatchAgentSession) recordTelemetry(request BatchAgentSessionRequest, res
 		}
 		s.appendTelemetry(event, "session timeout")
 	}
-	if result.MetricsUsable {
-		event := BatchAgentEvent{
-			Schema: BatchAgentEventSchema, Type: BatchAgentEventTypeMetrics, BatchID: request.BatchID,
-			Timestamp: s.now().UTC(), Operation: request.Operation, Attempt: request.Attempt,
-			Agent: result.AgentLabel, PlanID: request.CandidatePlanID, Outcome: outcome,
-			Metrics: newBatchAgentMetrics(result.Metrics),
-		}
-		s.appendTelemetry(event, "metrics")
+	event := BatchAgentEvent{
+		Schema: BatchAgentEventSchema, Type: BatchAgentEventTypeMetrics, BatchID: request.BatchID,
+		Timestamp: s.now().UTC(), Operation: request.Operation, Attempt: request.Attempt,
+		Agent: result.AgentLabel, PlanID: request.CandidatePlanID, Outcome: outcome,
+		Metrics: newBatchAgentMetrics(result),
 	}
+	s.appendTelemetry(event, "metrics")
 }
 
 func (s BatchAgentSession) appendTelemetry(event BatchAgentEvent, label string) {
