@@ -243,12 +243,10 @@ func TestDriverDecideContinuesForDistinctSameFileFindings(t *testing.T) {
 	}
 }
 
-func TestDriverDecideStopsOnRecurringFilesWithoutMutation(t *testing.T) {
+func TestDriverDecideReopensWithRecurringFileAdvisory(t *testing.T) {
 	detail, previous := recurringDriverDetail()
-	beforeStatus := detail.State.Status
-	beforeSlices := slices.Clone(detail.Slices.Slices)
+	beforeSlices := len(detail.Slices.Slices)
 	recordCalled := false
-	var stoppedEvent *plan.Event
 	driver := Driver{
 		Resolve: fixedDriverResolver(detail),
 		Record: func(detail *plan.PlanDetail) (AutomaticRecord, error) {
@@ -262,60 +260,44 @@ func TestDriverDecideStopsOnRecurringFilesWithoutMutation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decide returned error: %v", err)
 	}
-	wantFiles := []string{"store/file.go"}
-	if got.Reworked || got.StopKind != StopKindFileRecurrence || !slices.Equal(got.RecurringFiles, wantFiles) {
-		t.Fatalf("recurring-file decision = %+v", got)
+	want := []Advisory{{Kind: AdvisoryKindFileRecurrence, Location: "store/file.go", Rounds: []int{1, 2, 3}}}
+	if !got.Reworked || got.Round != 3 || got.StopKind != StopKindNone || got.StopReason != "" || !reflect.DeepEqual(got.Advisories, want) {
+		t.Fatalf("recurring-file decision = %+v, want advisory %#v", got, want)
 	}
-	wantRounds := map[string][]int{"store/file.go": {1, 2, 3}}
-	if got.StopReason != fileRecurrenceStopReason([]recurringFileRounds{{File: "store/file.go", Rounds: []int{1, 2, 3}}}) || !reflect.DeepEqual(got.RecurringFileRounds, wantRounds) {
-		t.Fatalf("stop evidence = (%q, %#v), want rounds %#v", got.StopReason, got.RecurringFileRounds, wantRounds)
+	if got.Fingerprint == previous || len(got.RecurringFiles) != 0 || len(got.RecurringFileRounds) != 0 || len(got.Findings) != 0 {
+		t.Fatalf("advisory leaked into stop evidence: %+v", got)
 	}
-	if got.Fingerprint == previous || !reflect.DeepEqual(got.Findings, ReviewFindings(detail)) {
-		t.Fatalf("recurring-file evidence = %+v, previous fingerprint %q", got, previous)
+	if !recordCalled || detail.State.Status != plan.StatusInProgress || len(detail.Slices.Slices) != beforeSlices+1 {
+		t.Fatalf("advisory did not cross ordinary reopen boundary: status=%q slices=%+v", detail.State.Status, detail.Slices.Slices)
 	}
-	if !recordCalled {
-		t.Fatal("recurring-file stop did not cross the plan mutation boundary")
-	}
-	if detail.State.Status != beforeStatus || !reflect.DeepEqual(detail.Slices.Slices, beforeSlices) {
-		t.Fatalf("recurring-file stop mutated plan detail: status=%q slices=%+v", detail.State.Status, detail.Slices.Slices)
-	}
-	for i := range detail.Events {
-		if detail.Events[i].Type == plan.EventTypeReworkStopped {
-			stoppedEvent = &detail.Events[i]
-		}
-	}
-	if stoppedEvent == nil {
-		t.Fatal("recurring-file stop did not record rework_stopped")
-	}
-	if stoppedEvent.PlanID != "plan" || stoppedEvent.Round != 2 || stoppedEvent.Attempts != 2 || stoppedEvent.Fingerprint != got.Fingerprint || stoppedEvent.Reason != got.StopReason || stoppedEvent.Message != got.StopReason {
-		t.Fatalf("rework_stopped event = %+v", *stoppedEvent)
-	}
+	requireDriverReopenedRound(t, detail, got, 3)
+
 }
 
 func TestDriverDecideUsesWindowWideFileRecurrenceCaseStudies(t *testing.T) {
 	tests := []struct {
-		name      string
-		files     []string
-		wantRound int
-		wantStop  bool
-		wantFile  string
-		wantAt    []int
+		name         string
+		files        []string
+		wantRound    int
+		wantAdvisory bool
+		wantFile     string
+		wantAt       []int
 	}{
 		{
-			name: "workflow recovery stops at round seven",
+			name: "workflow recovery continues at round seven",
 			files: []string{
 				"internal/run/run.go", "internal/workspace/resolve.go", "internal/run/run.go",
 				"internal/workspace/resolve.go", "internal/run/run.go", "internal/run/run.go",
 				"internal/workspace/resolve.go",
 			},
-			wantRound: 7, wantStop: true, wantFile: "internal/workspace/resolve.go", wantAt: []int{2, 4, 7},
+			wantRound: 7, wantAdvisory: true, wantFile: "internal/workspace/resolve.go", wantAt: []int{2, 4, 7},
 		},
 		{
-			name: "verification repair stops at round four after finding moves",
+			name: "verification repair continues at round four after finding moves",
 			files: []string{
 				"internal/plan/derive.go", "internal/plan/derive.go", "internal/plan/derive.go", "internal/run/run.go",
 			},
-			wantRound: 4, wantStop: true, wantFile: "internal/plan/derive.go", wantAt: []int{1, 2, 3},
+			wantRound: 4, wantAdvisory: true, wantFile: "internal/plan/derive.go", wantAt: []int{1, 2, 3},
 		},
 		{
 			name:      "two unrelated rounds do not stop",
@@ -346,13 +328,18 @@ func TestDriverDecideUsesWindowWideFileRecurrenceCaseStudies(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Decide returned error: %v", err)
 			}
-			if test.wantStop {
-				if got.StopKind != StopKindFileRecurrence || got.Round != test.wantRound || !slices.Equal(got.RecurringFileRounds[test.wantFile], test.wantAt) {
-					t.Fatalf("decision = %+v, want recurrence of %s at %v in round %d", got, test.wantFile, test.wantAt, test.wantRound)
-				}
-			} else if !got.Reworked || got.StopKind != StopKindNone {
+			if !got.Reworked || got.Round != test.wantRound+1 || got.StopKind != StopKindNone || got.StopReason != "" {
 				t.Fatalf("decision = %+v, want another rework round", got)
 			}
+			if test.wantAdvisory {
+				want := Advisory{Kind: AdvisoryKindFileRecurrence, Location: test.wantFile, Rounds: test.wantAt}
+				if !slices.ContainsFunc(got.Advisories, func(a Advisory) bool { return reflect.DeepEqual(a, want) }) {
+					t.Fatalf("advisories = %+v, want %+v", got.Advisories, want)
+				}
+			} else if len(got.Advisories) != 0 {
+				t.Fatalf("unexpected advisories: %+v", got.Advisories)
+			}
+			requireDriverReopenedRound(t, detail, got, test.wantRound+1)
 		})
 	}
 }
@@ -410,7 +397,7 @@ func TestDriverDecidePlanBudgetFailsOpenAndRequiresTwoSpentRounds(t *testing.T) 
 	}
 }
 
-func TestDriverDecideConcreteRecurrencePrecedesPlanBudget(t *testing.T) {
+func TestDriverDecidePlanBudgetStopsDespiteFileRecurrence(t *testing.T) {
 	detail, previous := recurringDriverDetail()
 	detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypeAgentMetrics, Metrics: &plan.AgentMetrics{SessionID: "large", ToolCalls: 516}})
 	driver := Driver{Resolve: fixedDriverResolver(detail), Record: fixedAutomaticRecordFactory}
@@ -419,12 +406,12 @@ func TestDriverDecideConcreteRecurrencePrecedesPlanBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decide returned error: %v", err)
 	}
-	if got.StopKind != StopKindFileRecurrence {
-		t.Fatalf("stop kind = %q, want concrete file recurrence before plan budget", got.StopKind)
+	if got.StopKind != StopKindPlanBudget || len(got.Advisories) != 0 || got.Reworked {
+		t.Fatalf("decision = %+v, want plan budget stop without advisories", got)
 	}
 }
 
-func TestDriverDecideStopsOnWorkflowRecoveryAnchorReversalBeforeFileRecurrence(t *testing.T) {
+func TestDriverDecideContinuesWithAnchorAndFileAdvisories(t *testing.T) {
 	detail := actionableDriverDetail(8)
 	detail.Events = []plan.Event{{
 		Type:   plan.EventTypePlanReviewed,
@@ -455,19 +442,17 @@ func TestDriverDecideStopsOnWorkflowRecoveryAnchorReversalBeforeFileRecurrence(t
 	if err != nil {
 		t.Fatalf("Decide returned error: %v", err)
 	}
-	anchor := "internal/plan/verification_repair.go:47"
-	if got.StopKind != StopKindAnchorReversal || !slices.Equal(got.AnchorRounds[anchor], []int{1, 8}) {
-		t.Fatalf("decision = %+v, want anchor reversal at rounds 1 and 8", got)
+	want := []Advisory{
+		{Kind: AdvisoryKindAnchorRecurrence, Location: "internal/plan/verification_repair.go:47", Rounds: []int{1, 8}},
+		{Kind: AdvisoryKindFileRecurrence, Location: "internal/plan/verification_repair.go", Rounds: []int{1, 4, 8}},
 	}
-	if got.StopReason != anchorReversalStopReason([]anchorReversalRounds{{Anchor: anchor, Rounds: []int{1, 8}}}) {
-		t.Fatalf("stop reason = %q", got.StopReason)
+	if !got.Reworked || got.Round != 9 || got.StopKind != StopKindNone || got.StopReason != "" || !reflect.DeepEqual(got.Advisories, want) {
+		t.Fatalf("decision = %+v, want advisories %#v", got, want)
 	}
-	message := FormatStopMessage(got)
-	for _, want := range []string{anchor, "round 1: the check is too strict", "round 8: the counting is never capped"} {
-		if !strings.Contains(message, want) {
-			t.Errorf("stop message %q does not contain %q", message, want)
-		}
+	if len(got.AnchorRounds) != 0 || len(got.AnchorFindings) != 0 || FormatStopMessage(got) != "" {
+		t.Fatalf("advisories leaked into stop evidence: %+v", got)
 	}
+	requireDriverReopenedRound(t, detail, got, 9)
 }
 
 func TestDriverDecideNullLinesDoNotFormSharedAnchor(t *testing.T) {
@@ -489,8 +474,8 @@ func TestDriverDecideNullLinesDoNotFormSharedAnchor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decide returned error: %v", err)
 	}
-	if !got.Reworked || got.StopKind != StopKindNone {
-		t.Fatalf("decision = %+v, want another rework round", got)
+	if !got.Reworked || got.StopKind != StopKindNone || len(got.Advisories) != 0 {
+		t.Fatalf("decision = %+v, want another rework round without advisories", got)
 	}
 }
 
@@ -498,9 +483,9 @@ func TestDriverDecideLegacyReviewWithoutFindingPayloadDoesNotStop(t *testing.T) 
 	detail := actionableDriverDetail(3)
 	detail.Events = []plan.Event{
 		{Type: plan.EventTypePlanReviewed, Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, FindingsCount: 1, Findings: []plan.ReviewFinding{{File: "initial.go", Message: "initial"}}}},
-		{Type: plan.EventTypePlanReviewed, SliceID: "r101-finding", Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, FindingsCount: 1, Findings: []plan.ReviewFinding{{File: "shared.go", Message: "first"}}}},
+		{Type: plan.EventTypePlanReviewed, SliceID: "r101-finding", Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, FindingsCount: 1, Findings: []plan.ReviewFinding{{File: "shared.go", Line: 42, Message: "first"}}}},
 		{Type: plan.EventTypePlanReviewed, SliceID: "r201-finding", Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, FindingsCount: 1}},
-		{Type: plan.EventTypePlanReviewed, SliceID: "r301-finding", Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, FindingsCount: 1, Findings: []plan.ReviewFinding{{File: "shared.go", Message: "third"}}}},
+		{Type: plan.EventTypePlanReviewed, SliceID: "r301-finding", Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, FindingsCount: 1, Findings: []plan.ReviewFinding{{File: "shared.go", Line: 42, Message: "third"}}}},
 	}
 	detail.State.Plan.Review.Findings = []plan.ReviewFinding{{Severity: "major", File: "shared.go", Message: "third"}}
 	driver := Driver{Resolve: fixedDriverResolver(detail), Record: fixedAutomaticRecordFactory}
@@ -509,13 +494,22 @@ func TestDriverDecideLegacyReviewWithoutFindingPayloadDoesNotStop(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Decide returned error: %v", err)
 	}
-	if !got.Reworked || got.StopKind != StopKindNone {
-		t.Fatalf("decision = %+v, want fail-open rework for legacy history", got)
+	if !got.Reworked || got.StopKind != StopKindNone || len(got.Advisories) != 0 {
+		t.Fatalf("decision = %+v, want fail-open rework without partial legacy advisories", got)
 	}
 }
 
-func TestDriverRunUsesPullRequestReopenAsFreshRecurringFilesBaseline(t *testing.T) {
+func TestDriverDecideUsesPullRequestReopenAsFreshLocationAdvisoryBaseline(t *testing.T) {
 	detail, _ := recurringDriverDetail()
+	for _, event := range detail.Events {
+		for index := range event.Review.Findings {
+			event.Review.Findings[index].Line = 42
+		}
+	}
+	if got := locationAdvisories(plan.ProjectReworkChurn(detail.Events, 0)); len(got) != 2 {
+		t.Fatalf("fixture needs anchor and file recurrence: %+v", got)
+	}
+	before := slices.Clone(detail.Events)
 	detail.State.Status = plan.StatusCompleted
 	detail.State.Plan.PullRequest = &plan.PullRequest{Number: 17, HeadSHA: "head123"}
 	detail.State.Plan.Review = &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Head: "head123"}
@@ -545,9 +539,13 @@ func TestDriverRunUsesPullRequestReopenAsFreshRecurringFilesBaseline(t *testing.
 	if err != nil {
 		t.Fatalf("Decide returned error: %v", err)
 	}
-	if !decision.Reworked || decision.BaselineRound != 3 || decision.Round != 4 {
+	if !decision.Reworked || decision.BaselineRound != 3 || decision.Round != 4 || len(decision.Advisories) != 0 {
 		t.Fatalf("post-PR decision=%+v, want baseline 3 and round 4 reopen", decision)
 	}
+	if !reflect.DeepEqual(detail.Events[:len(before)], before) {
+		t.Fatal("PR reset rewrote historical evidence")
+	}
+	requireDriverReopenedRound(t, detail, decision, 1)
 }
 
 func TestDriverLoopPersistsAttemptsFromPullRequestResetBaseline(t *testing.T) {
@@ -599,10 +597,12 @@ func TestDriverDecideStopPrecedenceOverRecurringFiles(t *testing.T) {
 		wantKind    StopKind
 	}{
 		{
-			name:        "custom cap",
+			name:        "custom cap wins over fingerprint and budget",
 			maxAttempts: 2,
-			previous:    func(_ *plan.PlanDetail, previous string) string { return previous },
-			wantKind:    StopKindCapExhausted,
+			previous: func(detail *plan.PlanDetail, _ string) string {
+				return ReworkFindingsFingerprint(ReviewFindings(detail))
+			},
+			wantKind: StopKindCapExhausted,
 		},
 		{
 			name:        "exact fingerprint",
@@ -612,11 +612,17 @@ func TestDriverDecideStopPrecedenceOverRecurringFiles(t *testing.T) {
 			},
 			wantKind: StopKindFindingsStalled,
 		},
+		{
+			name: "plan budget", maxAttempts: 5,
+			previous: func(_ *plan.PlanDetail, previous string) string { return previous },
+			wantKind: StopKindPlanBudget,
+		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			detail, previous := recurringDriverDetail()
+			detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypeAgentMetrics, Metrics: &plan.AgentMetrics{SessionID: "large", ToolCalls: 516}})
 			for _, event := range detail.Events {
 				if event.Review != nil {
 					for index := range event.Review.Findings {
@@ -633,8 +639,20 @@ func TestDriverDecideStopPrecedenceOverRecurringFiles(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Decide returned error: %v", err)
 			}
-			if got.StopKind != test.wantKind || len(got.RecurringFiles) != 0 {
-				t.Fatalf("decision = %+v, want earlier stop kind %q", got, test.wantKind)
+			if got.StopKind != test.wantKind || len(got.Advisories) != 0 || got.Reworked {
+				t.Fatalf("decision = %+v, want retained stop kind %q", got, test.wantKind)
+			}
+			var stopped plan.Event
+			for _, event := range detail.Events {
+				if event.Type == plan.EventTypeReworkStopped {
+					stopped = event
+				}
+			}
+			if stopped.Type != plan.EventTypeReworkStopped || StopKindForPersistedReason(stopped.Reason) != test.wantKind || stopped.Attempts != 2 || stopped.Fingerprint != got.Fingerprint {
+				t.Fatalf("stop evidence = %+v", stopped)
+			}
+			if hasDriverEvent(detail.Events, plan.EventTypeReworkRound) {
+				t.Fatal("stop reopened a round")
 			}
 		})
 	}
@@ -1351,6 +1369,195 @@ func TestDriverLoopAttemptsNeverDecrease(t *testing.T) {
 	}
 	if persistedAttempts != 4 {
 		t.Fatalf("persisted attempts = %d, want 4", persistedAttempts)
+	}
+}
+
+func TestDriverAdvisoryDeliveryIsBestEffortAfterMandatoryProgress(t *testing.T) {
+	for _, entry := range []string{"Run", "Loop"} {
+		for _, failure := range []string{"none", "no callback", "mutation", "persist", "log", "execute", "stop", "decline"} {
+			t.Run(entry+"/"+failure, func(t *testing.T) {
+				detail, _ := recurringDriverDetail()
+				wantErr := errors.New("mandatory " + failure + " failure")
+				var calls []string
+				driver := Driver{
+					Resolve: fixedDriverResolver(detail),
+					Record: func(detail *plan.PlanDetail) (AutomaticRecord, error) {
+						r := &driverRecord{detail: detail}
+						if failure == "mutation" {
+							r.reopenErr = wantErr
+						}
+						return r, nil
+					},
+				}
+				opts := LoopOptions{
+					MaxAttempts: 5, DecideBeforeExecute: true,
+					Execute: func(context.Context) error {
+						calls = append(calls, "execute")
+						if failure == "execute" {
+							return wantErr
+						}
+						detail.State.Status = plan.StatusReviewed
+						return nil
+					},
+					PersistProgress: func(_ context.Context, attempts, round int, fingerprint string) error {
+						calls = append(calls, "persist")
+						if attempts != 3 || round != 3 || fingerprint == "" || !hasDriverEvent(detail.Events, plan.EventTypeReworkRound) {
+							t.Fatalf("progress before settled round: attempts=%d round=%d fingerprint=%q", attempts, round, fingerprint)
+						}
+						if failure == "persist" {
+							return wantErr
+						}
+						return nil
+					},
+					LogProgress: func(int) error {
+						calls = append(calls, "log")
+						if failure == "log" {
+							return wantErr
+						}
+						return nil
+					},
+					LogAdvisories: func(round int, advisories []Advisory) error {
+						calls = append(calls, "advisory")
+						want := []Advisory{{Kind: AdvisoryKindFileRecurrence, Location: "store/file.go", Rounds: []int{1, 2, 3}}}
+						if round != 3 || !reflect.DeepEqual(advisories, want) {
+							t.Fatalf("delivery = %d %+v, want round 3 %+v", round, advisories, want)
+						}
+						return errors.New("best-effort output failed")
+					},
+				}
+				wantCalls := []string{"persist", "log", "advisory", "execute"}
+				switch failure {
+				case "no callback":
+					opts.LogAdvisories = nil
+					wantCalls = []string{"persist", "log", "execute"}
+				case "mutation":
+					wantCalls = nil
+				case "persist":
+					wantCalls = []string{"persist"}
+				case "log":
+					wantCalls = []string{"persist", "log"}
+				case "stop":
+					opts.MaxAttempts = 2
+					wantCalls = nil
+				case "decline":
+					detail.State.Status = plan.StatusReviewed
+					wantCalls = []string{"execute"}
+				}
+				var err error
+				if entry == "Run" {
+					err = driver.Run(context.Background(), "plan", RunOptions{
+						Enabled: true, MaxAttempts: opts.MaxAttempts,
+						Recovered: &ExecutionState{DecideBeforeExecute: true},
+						Execute:   opts.Execute, PersistProgress: opts.PersistProgress,
+						LogProgress: opts.LogProgress, LogAdvisories: opts.LogAdvisories,
+					})
+				} else {
+					err = driver.Loop(context.Background(), "plan", opts)
+				}
+				switch failure {
+				case "mutation", "persist", "log", "execute":
+					if !errors.Is(err, wantErr) {
+						t.Fatalf("error = %v, want %v", err, wantErr)
+					}
+				case "stop":
+					if err == nil || !strings.Contains(err.Error(), "attempt cap reached") {
+						t.Fatalf("error = %v, want cap stop", err)
+					}
+				default:
+					if err != nil {
+						t.Fatalf("advisory delivery blocked execution: %v", err)
+					}
+				}
+				if !reflect.DeepEqual(calls, wantCalls) {
+					t.Fatalf("calls = %v, want %v", calls, wantCalls)
+				}
+				if failure != "stop" && hasDriverEvent(detail.Events, plan.EventTypeReworkStopped) {
+					t.Fatal("advisory wrote stop evidence")
+				}
+			})
+		}
+	}
+}
+
+func TestDriverRunHistoricalLocationStopsRequireExplicitBoundedRestart(t *testing.T) {
+	for _, reason := range []string{
+		anchorReversalStopReason([]anchorReversalRounds{{Anchor: "store/file.go:42", Rounds: []int{1, 2}}}),
+		fileRecurrenceStopReason([]recurringFileRounds{{File: "store/file.go", Rounds: []int{1, 2, 3}}}),
+		recurringFilesStopReason([]string{"store/file.go"}),
+	} {
+		for _, restart := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/restart=%t", StopKindForPersistedReason(reason), restart), func(t *testing.T) {
+				detail, _ := recurringDriverDetail()
+				detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypeReworkStopped, Round: 2, Attempts: 2, Reason: reason})
+				before := slices.Clone(detail.Events)
+				driver := Driver{Resolve: fixedDriverResolver(detail), Record: fixedAutomaticRecordFactory}
+				executions, progress := 0, 0
+				err := driver.Run(context.Background(), "plan", RunOptions{
+					Enabled: true, MaxAttempts: 1, AllowRestart: restart,
+					Execute: func(context.Context) error {
+						executions++
+						if RoundCount(detail) != 3 || detail.State.Status != plan.StatusInProgress {
+							t.Fatalf("execution before reopened round: %+v", detail.State)
+						}
+						detail.State.Status = plan.StatusChangesRequested
+						return nil
+					},
+					PersistProgress: func(_ context.Context, attempts, round int, _ string) error {
+						progress++
+						if attempts != 1 || round != 3 {
+							t.Fatalf("restart budget = %d/%d, want 1/3", attempts, round)
+						}
+						return nil
+					},
+					LogAdvisories: func(int, []Advisory) error {
+						t.Fatal("historical recurrence leaked across restart baseline")
+						return nil
+					},
+				})
+				if !reflect.DeepEqual(detail.Events[:len(before)], before) {
+					t.Fatal("historical events were rewritten")
+				}
+				if !restart {
+					if err == nil || !strings.Contains(err.Error(), "--rework-restart") || !strings.Contains(err.Error(), "store/file.go") || executions != 0 || progress != 0 || !reflect.DeepEqual(detail.Events, before) {
+						t.Fatalf("historical stop not authoritative: error=%v executions=%d progress=%d", err, executions, progress)
+					}
+					return
+				}
+				if err == nil || !strings.Contains(err.Error(), "attempt cap reached") || executions != 1 || progress != 1 {
+					t.Fatalf("restart was not bounded: error=%v executions=%d progress=%d", err, executions, progress)
+				}
+				var round, stop plan.Event
+				for _, event := range detail.Events[len(before):] {
+					switch event.Type {
+					case plan.EventTypeReworkRound:
+						round = event
+					case plan.EventTypeReworkStopped:
+						stop = event
+					}
+				}
+				if round.Round != 3 || round.Attempts != 1 || stop.Round != 3 || stop.Attempts != 1 || StopKindForPersistedReason(stop.Reason) != StopKindCapExhausted {
+					t.Fatalf("restart evidence: round=%+v stop=%+v", round, stop)
+				}
+			})
+		}
+	}
+}
+
+func requireDriverReopenedRound(t *testing.T, detail *plan.PlanDetail, decision Decision, attempts int) {
+	t.Helper()
+	var round plan.Event
+	for _, event := range detail.Events {
+		switch event.Type {
+		case plan.EventTypeReworkStopped:
+			t.Fatalf("location advisory wrote stop evidence: %+v", event)
+		case plan.EventTypeReworkRound:
+			if event.Round == decision.Round {
+				round = event
+			}
+		}
+	}
+	if round.Type != plan.EventTypeReworkRound || round.PlanID != "plan" || round.Round != decision.Round || round.Attempts != attempts || round.Fingerprint != decision.Fingerprint {
+		t.Fatalf("rework_round event = %+v, decision = %+v", round, decision)
 	}
 }
 

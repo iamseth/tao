@@ -238,6 +238,9 @@ func (a App) executeResolvedRun(ctx context.Context, repo planRunRepository, inp
 			LogProgress: func(round int) error {
 				return writef(runOut, "Plan reopened for rework round %d\n", round)
 			},
+			LogAdvisories: func(round int, advisories []reworkpkg.Advisory) error {
+				return writef(runOut, "%s", reworkpkg.FormatAdvisories(round, advisories))
+			},
 		})
 	})
 }

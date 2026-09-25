@@ -462,13 +462,6 @@ this order:
 - **Equivalent findings stalled:** consecutive reviews returned the same
   normalized finding set. The prominent message repeats the current blocking
   findings.
-- **Finding anchor repeated:** a blocking finding returned at the same file and
-  line in distinct rounds. The message lists the anchor, affected rounds, and
-  finding text; compare those messages and resolve the intended policy direction.
-- **Finding file recurring:** a file contains blocking findings in at least three
-  rounds in the current rework window, whether or not those rounds are
-  consecutive. The message lists each file and its rounds, then repeats the
-  latest findings to address.
 - **Plan agent budget warning:** after multiple rework rounds, a configured
   plan-level usage threshold was crossed. The message names the metric and its
   observed and threshold values; inspect both the remaining findings and the
@@ -476,16 +469,26 @@ this order:
 
 These stops gate only the automatic loop: Tao leaves the latest review intact
 and does not approve or merge the plan. Read the heading to identify the kind of
-churn, then use the listed rounds, locations, current findings, or budget values
+stop, then use the current findings or budget values
 to decide what needs manual attention. Change the attempt cap with
 `--max-rework-attempts N`; disable the loop with `--auto-rework=false` or
 `TAO_AUTO_REWORK=false`. Disabling review with `--no-review` or
 `TAO_REVIEW=false` also disables automatic rework.
 
+Repeated locations alone do **not** stop new automatic rework. After a successful
+reopen, Tao may display an advisory listing sorted locations and affected rounds:
+a normalized file-and-line anchor in at least two distinct rounds, or a finding
+file in at least three rounds of the current window, consecutive or not. These
+are location signals, not proof of reversal or stalled progress; rework continues
+under the same bounds and ordinary gates. Advisory output is best-effort and
+creates no durable event.
+
 After any stop, a later `tao run` refuses to silently grant the plan a fresh
-automatic-rework budget and displays the persisted reason again. Older plans
-may show the earlier consecutive-recurring-files wording; Tao still reads that
-stop and preserves its evidence. Inspect and address the review first. If you
+automatic-rework budget and displays the persisted reason again. Historical
+anchor-reversal and file-recurrence stops, including the older
+consecutive-recurring-files wording, still require explicit restart; Tao preserves
+their evidence rather than converting them to advisories. Inspect and address
+the review first. If you
 deliberately want another bounded budget, rerun that plan directly with
 `tao run --rework-restart <plan-id>`. This preserves historical slices but
 establishes the current round as a fresh baseline, so earlier reviews do not

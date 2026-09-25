@@ -17,6 +17,40 @@ const (
 	planBudgetStopReasonPrefix     = "automatic rework stopped after plan agent budget warning: "
 )
 
+// AdvisoryKind identifies a location-only recurrence signal, not a stop reason.
+type AdvisoryKind string
+
+const (
+	AdvisoryKindAnchorRecurrence AdvisoryKind = "anchor_recurrence"
+	AdvisoryKindFileRecurrence   AdvisoryKind = "file_recurrence"
+)
+
+// Advisory is presentation-only evidence from the current rework window.
+// Location is a normalized file:line anchor or file, and Rounds are distinct
+// and ascending. It grants no lifecycle or recovery authority.
+type Advisory struct {
+	Kind     AdvisoryKind
+	Location string
+	Rounds   []int
+}
+
+// locationAdvisories consumes the shared projection without changing its
+// baseline, normalization, or conservative incomplete-history semantics.
+// Anchors precede files; locations are sorted within each kind.
+func locationAdvisories(churn plan.ReworkChurn) []Advisory {
+	var advisories []Advisory
+	for _, item := range anchorReversalsInChurn(churn) {
+		advisories = append(advisories, Advisory{Kind: AdvisoryKindAnchorRecurrence, Location: item.Anchor, Rounds: item.Rounds})
+	}
+	for _, item := range recurringFilesInChurn(churn) {
+		if _, ok := normalizeReviewFindingFile(item.File); !ok {
+			continue
+		}
+		advisories = append(advisories, Advisory{Kind: AdvisoryKindFileRecurrence, Location: item.File, Rounds: item.Rounds})
+	}
+	return advisories
+}
+
 type planBudgetWarning struct {
 	Metric    string  `json:"metric"`
 	Observed  float64 `json:"observed"`

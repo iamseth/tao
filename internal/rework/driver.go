@@ -33,6 +33,11 @@ type DecisionFunc func(context.Context, string, int, int, string, int, plan.Agen
 // ProgressLogger reports a successfully reopened rework round.
 type ProgressLogger func(int) error
 
+// AdvisoryLogger optionally presents location evidence for a successfully
+// reopened round. Delivery is best-effort, after mandatory progress handling;
+// errors never prevent execution and advisories are never persisted by the driver.
+type AdvisoryLogger func(round int, advisories []Advisory) error
+
 // DecisionCheck refreshes dynamic policy and stop state before a decision. The
 // returned maximum applies to that decision; false ends the run without
 // another decision.
@@ -87,10 +92,13 @@ type AnchorFindingEvidence struct {
 
 // Decision describes the outcome of inspecting and possibly reopening a plan.
 type Decision struct {
-	Reworked            bool
-	Round               int
-	BaselineRound       int
-	Fingerprint         string
+	Reworked      bool
+	Round         int
+	BaselineRound int
+	Fingerprint   string
+	// Advisories are present only after successful reopening, ordered by
+	// anchor then file recurrence, with sorted locations within each kind.
+	Advisories          []Advisory
 	StopKind            StopKind
 	StopReason          string
 	RecurringFiles      []string
@@ -143,6 +151,24 @@ func mostRecentAutoReworkStop(detail *plan.PlanDetail) (Decision, bool) {
 
 func autoReworkRestartRefusal(decision Decision) error {
 	return fmt.Errorf("%s\n\nA new automatic-rework budget was not started. To deliberately continue, rerun with --rework-restart", FormatStopMessage(decision))
+}
+
+// FormatAdvisories renders the driver's ordered presentation-only evidence.
+// Unlike stop output, this accompanies an already reopened round.
+func FormatAdvisories(round int, advisories []Advisory) string {
+	if len(advisories) == 0 {
+		return ""
+	}
+	var message strings.Builder
+	fmt.Fprintf(&message, "Automatic rework location advisory only: rework continues with round %d.\n", round)
+	for _, advisory := range advisories {
+		label := "file"
+		if advisory.Kind == AdvisoryKindAnchorRecurrence {
+			label = "anchor"
+		}
+		fmt.Fprintf(&message, "- %s %s (rounds %v)\n", label, advisory.Location, advisory.Rounds)
+	}
+	return message.String()
 }
 
 // FormatStopMessage turns an automatic-rework stop decision into operator-facing output.
@@ -318,6 +344,7 @@ type RunOptions struct {
 	Execute         ExecuteFunc
 	PersistProgress PersistProgressFunc
 	LogProgress     ProgressLogger
+	LogAdvisories   AdvisoryLogger
 	BeforeDecision  DecisionCheck
 }
 
@@ -334,6 +361,7 @@ type LoopOptions struct {
 	Execute             ExecuteFunc
 	PersistProgress     PersistProgressFunc
 	LogProgress         ProgressLogger
+	LogAdvisories       AdvisoryLogger
 	// BeforeDecision may refresh policy and stop state before each decision.
 	// Its returned maximum replaces MaxAttempts for that decision; false ends
 	// the loop without another decision. CheckBeforeDecision is the error-aware
@@ -384,21 +412,13 @@ func (d Driver) Decide(ctx context.Context, planID string, baseline, attempts in
 	if budget.PreviousFindingFingerprint != "" && budget.PreviousFindingFingerprint == fingerprint {
 		return d.stoppedDecision(detail, budget.BaselineRound, budget.Attempts, round, fingerprint, StopKindFindingsStalled, equivalentFindingsStopReason, findings, nil)
 	}
-	churn := plan.ProjectReworkChurn(detail.Events, budget.BaselineRound)
-	if reversals := anchorReversalsInChurn(churn); len(reversals) > 0 {
-		reason := anchorReversalStopReason(reversals)
-		return d.stoppedDecision(detail, budget.BaselineRound, budget.Attempts, round, fingerprint, StopKindAnchorReversal, reason, findings, nil)
-	}
-	if recurring := recurringFilesInChurn(churn); len(recurring) > 0 {
-		reason := fileRecurrenceStopReason(recurring)
-		return d.stoppedDecision(detail, budget.BaselineRound, budget.Attempts, round, fingerprint, StopKindFileRecurrence, reason, findings, recurring)
-	}
 	if budget.Attempts >= 2 {
 		if warning, ok := trippedPlanBudgetWarning(plan.AgentBudgetWarnings(detail, thresholds)); ok {
 			reason := planBudgetStopReason(warning)
 			return d.stoppedDecision(detail, budget.BaselineRound, budget.Attempts, round, fingerprint, StopKindPlanBudget, reason, findings, nil)
 		}
 	}
+	advisories := locationAdvisories(plan.ProjectReworkChurn(detail.Events, budget.BaselineRound))
 	if d.Record == nil {
 		return Decision{}, errors.New("automatic rework record factory is nil")
 	}
@@ -415,7 +435,7 @@ func (d Driver) Decide(ctx context.Context, planID string, baseline, attempts in
 	if _, err := ReopenAutomatic(record, evidence); err != nil {
 		return Decision{}, reworkMutationError(err)
 	}
-	return Decision{Reworked: true, Round: next, BaselineRound: budget.BaselineRound, Fingerprint: fingerprint}, nil
+	return Decision{Reworked: true, Round: next, BaselineRound: budget.BaselineRound, Fingerprint: fingerprint, Advisories: advisories}, nil
 }
 
 func (d Driver) stoppedDecision(detail *plan.PlanDetail, baseline, attempts, round int, fingerprint string, kind StopKind, reason string, findings []plan.ReviewFinding, recurring []recurringFileRounds) (Decision, error) {
@@ -591,6 +611,7 @@ func (d Driver) Run(ctx context.Context, planID string, opts RunOptions) error {
 		Execute:             opts.Execute,
 		PersistProgress:     opts.PersistProgress,
 		LogProgress:         opts.LogProgress,
+		LogAdvisories:       opts.LogAdvisories,
 		MaxAttempts:         opts.MaxAttempts,
 		BudgetThresholds:    resolvedBudgetThresholds(opts.BudgetThresholds),
 		CheckBeforeDecision: opts.BeforeDecision,
@@ -691,6 +712,9 @@ func (d Driver) Loop(ctx context.Context, planID string, opts LoopOptions) error
 			if err := opts.LogProgress(decision.Round); err != nil {
 				return false, err
 			}
+		}
+		if opts.LogAdvisories != nil && len(decision.Advisories) > 0 {
+			_ = opts.LogAdvisories(decision.Round, decision.Advisories)
 		}
 		return true, nil
 	}

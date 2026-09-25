@@ -6,9 +6,11 @@
 // caller choice and cannot substitute for pull-request authority.
 //
 // The automatic driver bounds reopen-and-run cycles by a persisted baseline and
-// attempt cap, and stops on equivalent findings or recurring finding files rather
-// than treating another round as progress. Restarting after a durable stop must
-// be explicitly authorized and establishes a fresh bounded window.
+// attempt cap, equivalent consecutive findings, and plan resource budget stops,
+// in that order. Recurring finding anchors and files are best-effort advisories
+// only; they neither block reopening nor create durable stop evidence. Restarting
+// after any durable stop, including historical location stops, must be explicitly
+// authorized and establishes a fresh bounded window.
 //
 // Rework prepares generated slices and typed round or stop evidence, but does not
 // choose filesystem persistence primitives. Mutations cross the narrow Record

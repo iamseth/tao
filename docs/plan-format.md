@@ -306,7 +306,7 @@ Normal `tao run` rejects blocked plans and blocked selected slices. `tao run --c
 
 `tao slice-complete --plan-dir DIR --slice-id ID --notes-file FILE --verification-results-file FILE [--commit-proposal-file FILE]` owns deterministic completion bookkeeping after verification passes. A new automatic slice intent requires the structured proposal file; Tao validates it and persists the exact trusted final message before staging. Existing intents settle from durable state and do not require or authorize a fresh proposal session. Tao creates or recovers the commit, persists `completion`, then marks the slice completed and moves the queue. Policy `none` skips Git and records `manual_uncommitted`. State, timing, notes, verification results, and at most one `slice_completed` event are written only after the transaction outcome is known.
 
-Recovery is split at `commit_intent`. Before intent, only an exact isolated automatic boundary can return to the implementation agent. Once `commit_intent` or `completion` exists, Tao does not start an agent: the original `tao slice-complete` inputs must settle or recover that transaction. Changed branch/HEAD boundaries, active Git operations, conflicts, ambiguous status, and unrelated dirt without a boundary are refusal states, not alternate baselines. Direct and queued execution apply the same classification under a cross-process plan lock.
+Recovery is split at `commit_intent`. Before intent, only an exact isolated automatic boundary can return to the implementation agent. Once `commit_intent` or `completion` exists, Tao does not start an agent: the original `tao slice-complete` inputs must settle or recover that transaction. Changed branch/HEAD boundaries, active Git operations, conflicts, ambiguous status, and unrelated dirt without a boundary are refusal states, not alternate baselines. Direct execution applies this classification under a cross-process plan lock.
 
 ## ID Resolution
 
@@ -472,26 +472,36 @@ Current well-known event types include:
 
 Legacy planning-session audit events may also appear in older local plans.
 
-A recurring-file `rework_stopped` event is written before another reopen when a
-normalized primary finding file appears in three consecutive
-`changes_requested` reviews after the current rework baseline. Its `reason`
-begins `automatic rework stalled on files recurring across three consecutive reviews: `
-and ends with a sorted JSON string array of the recurring paths. `round` and
-`attempts` describe rounds already created; the stop does not reopen the plan or
-append slices. Attempt-cap and exact-fingerprint stops retain precedence, and
-the plan remains `changes_requested` with its latest review intact.
+Location-only `rework_stopped` encodings are historical, with no current producer.
+The `anchor_reversal` classification reads a `reason` beginning
+`automatic rework stopped on repeated finding anchors across review rounds: `
+followed by JSON objects with `anchor` and `rounds`. The `file_recurrence`
+classification reads `automatic rework stalled on files recurring in three review rounds: `
+followed by JSON objects with `file` and `rounds`. Both payloads are arrays sorted
+by location. The superseded consecutive-file classification reads
+`automatic rework stalled on files recurring across three consecutive reviews: `
+followed by a sorted JSON string array of paths. These persisted stops remain
+authoritative and require explicit `--rework-restart`; they are not migrated to
+advisories.
 
-Direct and queued rework use the same policy. A successful automatic round
+New automatic decisions stop for the attempt cap, equivalent consecutive finding
+fingerprints, then the plan resource budget, in that precedence order. `round`
+and `attempts` describe rounds already created; a stop does not reopen the plan
+or append slices, and leaves it `changes_requested` with its latest review intact.
+Location recurrence is now presentation-only advisory evidence after successful
+reopening, never a `rework_stopped` event or an artifact field.
+
+A successful automatic round
 atomically records `plan_reopened`, `rework_round`, state, and generated slices.
 Once a stop is persisted, retries do not append another observation, and later
 runs require explicit `--rework-restart` to establish a fresh baseline and
 bounded window while retaining historical slices and ordinary gates.
 
-This adds no event type or artifact field. Historical generated rework slices
+Historical generated rework slices
 without matching `rework_round` events remain readable round-count evidence and
 are not migrated.
 Legacy evidence that is missing, unsafe, associated-only, or incomplete never
-authorizes a retroactive recurring-file stop; existing cap and
+authorizes a retroactive location stop; existing cap and
 equivalent-finding records also remain readable. Reconstruction and interrupted
 settlement mechanics live in [Plan Mutation Journal](plan-mutation-journal.md).
 

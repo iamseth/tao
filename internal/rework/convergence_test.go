@@ -9,6 +9,56 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 )
 
+func TestLocationAdvisoriesUseNormalizedSortedDistinctProjectedRounds(t *testing.T) {
+	var events []plan.Event
+	for _, sliceID := range []string{"r301-work", "r101-work", "r301-duplicate", "r501-work"} {
+		findings := []plan.ReviewFinding{
+			{File: ` .\pkg\z.go `, Line: 9, Message: "z finding"},
+			{File: "./pkg//a.go", Line: 7, Message: "a finding"},
+			{File: "pkg/a.go", Line: 7, Message: "another a finding in same round"},
+			{File: "no-line.go", Line: 0, Message: "unanchored"},
+			{File: "no-line.go", Line: -1, Message: "invalid line"},
+			{File: "", Line: 7},
+			{File: ".", Line: 7},
+			{File: "../escape.go", Line: 7},
+			{File: "*.go", Line: 7},
+			{File: "C:/escape.go", Line: 7},
+		}
+		if plan.ReworkRoundFromSliceID(sliceID) == 3 {
+			findings = append(findings, plan.ReviewFinding{File: "one-round.go", Line: 4, Message: "same round repeated"})
+		}
+		events = append(events, plan.Event{
+			Type: plan.EventTypePlanReviewed, SliceID: sliceID,
+			Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, Findings: findings, FindingsCount: len(findings)},
+		})
+	}
+	want := []Advisory{
+		{Kind: AdvisoryKindAnchorRecurrence, Location: "pkg/a.go:7", Rounds: []int{1, 3, 5}},
+		{Kind: AdvisoryKindAnchorRecurrence, Location: "pkg/z.go:9", Rounds: []int{1, 3, 5}},
+		{Kind: AdvisoryKindFileRecurrence, Location: "no-line.go", Rounds: []int{1, 3, 5}},
+		{Kind: AdvisoryKindFileRecurrence, Location: "pkg/a.go", Rounds: []int{1, 3, 5}},
+		{Kind: AdvisoryKindFileRecurrence, Location: "pkg/z.go", Rounds: []int{1, 3, 5}},
+	}
+	churn := plan.ProjectReworkChurn(events, 0)
+	for range 10 {
+		got := locationAdvisories(churn)
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("advisories = %#v, want %#v", got, want)
+		}
+		got[0].Rounds[0] = 99
+		if churn.AnchorRounds["pkg/a.go:7"][0] != 1 {
+			t.Fatal("advisory aliases projection rounds")
+		}
+	}
+	if got := locationAdvisories(plan.ProjectReworkChurn(events, 3)); len(got) != 0 {
+		t.Fatalf("baseline leaked old recurrence: %+v", got)
+	}
+	events = append(events, plan.Event{Type: plan.EventTypePlanReviewed, Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, FindingsCount: 1}})
+	if got := locationAdvisories(plan.ProjectReworkChurn(events, 0)); len(got) != 0 {
+		t.Fatalf("incomplete legacy evidence yielded advisories: %+v", got)
+	}
+}
+
 func TestTrippedPlanBudgetWarningSelectsOnlyValidPlanScopeWarnings(t *testing.T) {
 	warnings := []plan.AgentBudgetWarning{
 		{Scope: "slice", Metric: "tool_calls", Observed: 900, Threshold: 120},
@@ -74,7 +124,7 @@ func TestRecurringFilesInChurnCaseStudies(t *testing.T) {
 		want  []recurringFileRounds
 	}{
 		{
-			name: "workflow recovery stops at round seven despite interleaving",
+			name: "workflow recovery recurs at round seven despite interleaving",
 			files: map[string][]int{
 				"internal/workspace/resolve.go": {2, 4, 7},
 				"internal/run/run.go":           {1, 3, 5, 6},
@@ -85,7 +135,7 @@ func TestRecurringFilesInChurnCaseStudies(t *testing.T) {
 			},
 		},
 		{
-			name: "verification repair stops at round four without current match",
+			name: "verification repair recurs at round four without current match",
 			files: map[string][]int{
 				"internal/plan/derive.go": {1, 2, 3},
 				"internal/run/run.go":     {4},
@@ -93,7 +143,7 @@ func TestRecurringFilesInChurnCaseStudies(t *testing.T) {
 			want: []recurringFileRounds{{File: "internal/plan/derive.go", Rounds: []int{1, 2, 3}}},
 		},
 		{
-			name:  "two unrelated rounds do not stop",
+			name:  "two unrelated rounds do not recur",
 			files: map[string][]int{"first.go": {1}, "second.go": {2}},
 		},
 	}
