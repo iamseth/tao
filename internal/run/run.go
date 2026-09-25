@@ -47,15 +47,16 @@ type SliceBudgetBlockRecorder interface {
 }
 
 // SliceStartRecorder owns complete durable operations for prepared run starts.
+// Torn-start repair re-applies StartSlice with the original StartedAt after the
+// live Git boundary has been validated.
 type SliceStartRecorder interface {
-	StartSliceWithRunCommitPolicy(sliceID string, executionRoot string, commitPolicy string, startingDirtyPaths []string, now time.Time) error
-	StartSliceWithRunBoundary(sliceID string, executionRoot string, commitPolicy string, startingDirtyPaths []string, boundary plan.SliceExecutionStart, now time.Time) error
+	StartSlice(sliceID string, request plan.SliceStartRequest) error
 }
 
-// SliceStartRepairer completes any persisted prefix of an automatic slice
-// start after the live Git boundary has been validated.
+// SliceStartRepairer restores missing event evidence for an otherwise complete
+// start. Torn-start repair instead re-applies StartSlice with the original
+// StartedAt after the live Git boundary has been validated.
 type SliceStartRepairer interface {
-	RepairSliceStartWithRunBoundary(sliceID string, executionRoot string, commitPolicy string, startingDirtyPaths []string, boundary plan.SliceExecutionStart, startedAt time.Time) error
 	RepairMissingSliceStartedEvent(sliceID string, startedAt time.Time) error
 }
 

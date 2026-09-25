@@ -40,13 +40,103 @@ func TestReadEventsWarnsAndSkipsMalformedOrOversizedLines(t *testing.T) {
 	}
 }
 
+func TestStartSliceRequestMutationMatchesStartSlice(t *testing.T) {
+	startedAt := time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)
+	run := &SliceRunStart{CommitPolicy: "slice", StartingDirtyPaths: []string{"z.go", "a.go"}}
+	boundary := &SliceExecutionStart{Branch: "feature/a", Head: "abc123", WorkspaceStrategy: "isolated"}
+	tests := []struct {
+		name    string
+		request SliceStartRequest
+		repair  bool
+	}{
+		{
+			name:    "bare start preserves run metadata",
+			request: SliceStartRequest{StartedAt: startedAt},
+		},
+		{
+			name:    "run metadata without boundary",
+			request: SliceStartRequest{ExecutionRoot: "/workspace", Run: run, StartedAt: startedAt},
+		},
+		{
+			name:    "empty run metadata clears previous values",
+			request: SliceStartRequest{Run: &SliceRunStart{}, StartedAt: startedAt},
+		},
+		{
+			name:    "run metadata with boundary",
+			request: SliceStartRequest{ExecutionRoot: "/workspace", Run: run, Boundary: boundary, StartedAt: startedAt},
+		},
+		{
+			name:    "repair with earlier recorded start emits no event",
+			request: SliceStartRequest{ExecutionRoot: "/workspace", Run: run, Boundary: boundary, StartedAt: startedAt},
+			repair:  true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			detail := startSliceDetail(t.TempDir())
+			detail.State.Plan.LastRunCommitPolicy = "none"
+			detail.State.Plan.LastRunStartingDirty = []string{"keep.go"}
+			if tt.repair {
+				event, _, err := MarkSliceStarted(detail, "001-a", startedAt)
+				if err != nil {
+					t.Fatal(err)
+				}
+				detail.Events = append(detail.Events, event)
+				if _, _, err := MarkSliceStarted(detail, "001-a", startedAt.Add(time.Minute)); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			store := &recordingArtifactMutationStore{}
+			record, err := newPlanRecord(store, detail.Dir, clonePlanDetail(detail))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := record.StartSlice("001-a", tt.request); err != nil {
+				t.Fatal(err)
+			}
+			got, err := startSliceRequestMutation("001-a", tt.request)(clonePlanDetail(detail))
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The journal adds a fresh transaction ID after the lifecycle mutation.
+			for i := range store.events {
+				store.events[i].MutationID = ""
+			}
+			want := lifecycleMutation{State: record.Detail().State, Slices: record.Detail().Slices, Events: store.events}
+			if !reflect.DeepEqual(got.State, want.State) {
+				t.Fatalf("state mismatch: got %#v, want %#v", got.State, want.State)
+			}
+			if !reflect.DeepEqual(got.Slices, want.Slices) {
+				t.Fatalf("slices mismatch: got %#v, want %#v", got.Slices, want.Slices)
+			}
+			// DeepEqual compares every event field and distinguishes nil from empty.
+			if !reflect.DeepEqual(got.Events, want.Events) {
+				t.Fatalf("events mismatch: got %#v, want %#v", got.Events, want.Events)
+			}
+			if tt.repair && got.Events != nil {
+				t.Fatalf("repair emitted events: %#v", got.Events)
+			}
+			if tt.request.Run == nil {
+				if got.State.Plan.LastRunCommitPolicy != "none" || !reflect.DeepEqual(got.State.Plan.LastRunStartingDirty, []string{"keep.go"}) {
+					t.Fatal("bare start changed existing run metadata")
+				}
+			} else if tt.request.Run.CommitPolicy == "" {
+				if got.State.Plan.LastRunCommitPolicy != "" || !reflect.DeepEqual(got.State.Plan.LastRunStartingDirty, []string{}) {
+					t.Fatal("empty run metadata did not clear previous values")
+				}
+			}
+		})
+	}
+}
+
 func TestStartSliceWritesStateSlicesAndEvent(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)
 	detail := startSliceDetail(dir)
 	writeStartSliceArtifacts(t, dir, detail)
 
-	if err := testRecord(dir, detail).StartSlice("001-a", now); err != nil {
+	if err := testRecord(dir, detail).StartSlice("001-a", SliceStartRequest{StartedAt: now}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -86,7 +176,7 @@ func TestStartSliceDoesNotDuplicateStartedEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := testRecord(dir, detail).StartSlice("001-a", second); err != nil {
+	if err := testRecord(dir, detail).StartSlice("001-a", SliceStartRequest{StartedAt: second}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -112,7 +202,7 @@ func TestStartSlicePreservesUnknownJSONFields(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := testRecord(dir, detail).StartSlice("001-a", now); err != nil {
+	if err := testRecord(dir, detail).StartSlice("001-a", SliceStartRequest{StartedAt: now}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -170,7 +260,7 @@ func TestPlanRecordLifecycleWritePreservesDecisionMetadataAndUnknownFields(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := record.StartSlice("001-a", now); err != nil {
+	if err := record.StartSlice("001-a", SliceStartRequest{StartedAt: now}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1058,7 +1148,7 @@ func TestStartSliceAndCompleteSliceUpdateInMemoryDetail(t *testing.T) {
 	detail := startSliceDetail(dir)
 	writeStartSliceArtifacts(t, dir, detail)
 
-	if err := testRecord(dir, detail).StartSlice("001-a", started); err != nil {
+	if err := testRecord(dir, detail).StartSlice("001-a", SliceStartRequest{StartedAt: started}); err != nil {
 		t.Fatal(err)
 	}
 	if detail.State.Status != StatusInProgress || detail.State.Plan.CurrentSlice == nil || *detail.State.Plan.CurrentSlice != "001-a" {
@@ -1354,7 +1444,7 @@ func TestPlanRecordMutationWritesThroughBoundDirectory(t *testing.T) {
 	}
 	now := time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)
 
-	if err := record.StartSlice("001-a", now); err != nil {
+	if err := record.StartSlice("001-a", SliceStartRequest{StartedAt: now}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1630,7 +1720,7 @@ func TestPlanRecordStartSliceFailuresPreserveMemoryAndReplayJournal(t *testing.T
 				t.Fatal(err)
 			}
 
-			err = record.StartSliceWithRunBoundary("001-a", "/worktrees/plan-a", "slice", []string{"README.md"}, boundary, startedAt)
+			err = record.StartSlice("001-a", SliceStartRequest{ExecutionRoot: "/worktrees/plan-a", Run: &SliceRunStart{CommitPolicy: "slice", StartingDirtyPaths: []string{"README.md"}}, Boundary: &boundary, StartedAt: startedAt})
 			if err == nil || !strings.Contains(err.Error(), "injected "+operation+" failure") {
 				t.Fatalf("start error = %v, want injected %s failure", err, operation)
 			}
@@ -1676,7 +1766,7 @@ func TestPlanRecordRetrySettlesBeforeReevaluatingMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := record.StartSlice("001-a", startedAt); err == nil || !strings.Contains(err.Error(), "injected event-1 failure") {
+	if err := record.StartSlice("001-a", SliceStartRequest{StartedAt: startedAt}); err == nil || !strings.Contains(err.Error(), "injected event-1 failure") {
 		t.Fatalf("first start error = %v, want injected event failure", err)
 	}
 	if !reflect.DeepEqual(detail, original) {
@@ -1685,7 +1775,7 @@ func TestPlanRecordRetrySettlesBeforeReevaluatingMutation(t *testing.T) {
 
 	// Retry through the same record and stale detail. The mutation entry point
 	// must replay and publish the first intent before it evaluates this request.
-	if err := record.StartSlice("001-a", startedAt); err != nil {
+	if err := record.StartSlice("001-a", SliceStartRequest{StartedAt: startedAt}); err != nil {
 		t.Fatalf("retry start: %v", err)
 	}
 	if detail.State.Plan.CurrentSlice == nil || *detail.State.Plan.CurrentSlice != "001-a" || detail.Slices.Slices[0].Status != StatusInProgress {
@@ -1723,10 +1813,10 @@ func TestPlanRecordRetryRejectsConflictingRecoveredExecutionBoundary(t *testing.
 		t.Fatal(err)
 	}
 
-	if err := record.StartSliceWithRunBoundary("001-a", "/worktrees/plan-a", "slice", []string{"README.md"}, originalBoundary, startedAt); err == nil || !strings.Contains(err.Error(), "injected event-1 failure") {
+	if err := record.StartSlice("001-a", SliceStartRequest{ExecutionRoot: "/worktrees/plan-a", Run: &SliceRunStart{CommitPolicy: "slice", StartingDirtyPaths: []string{"README.md"}}, Boundary: &originalBoundary, StartedAt: startedAt}); err == nil || !strings.Contains(err.Error(), "injected event-1 failure") {
 		t.Fatalf("first start error = %v, want injected event failure", err)
 	}
-	if err := record.StartSliceWithRunBoundary("001-a", "/worktrees/plan-a", "slice", []string{"README.md"}, conflictingBoundary, startedAt); err == nil || !strings.Contains(err.Error(), "execution boundary is immutable") {
+	if err := record.StartSlice("001-a", SliceStartRequest{ExecutionRoot: "/worktrees/plan-a", Run: &SliceRunStart{CommitPolicy: "slice", StartingDirtyPaths: []string{"README.md"}}, Boundary: &conflictingBoundary, StartedAt: startedAt}); err == nil || !strings.Contains(err.Error(), "execution boundary is immutable") {
 		t.Fatalf("conflicting retry error = %v, want immutable boundary error", err)
 	}
 
@@ -1802,7 +1892,7 @@ func TestPlanRecordPostUnlinkSyncFailurePublishesBeforeSameRecordRetry(t *testin
 		t.Fatal(err)
 	}
 
-	if err := record.StartSlice("001-a", startedAt); err != nil {
+	if err := record.StartSlice("001-a", SliceStartRequest{StartedAt: startedAt}); err != nil {
 		t.Fatalf("start with post-unlink sync failure: %v", err)
 	}
 	if !ioStore.failed {
@@ -1819,7 +1909,7 @@ func TestPlanRecordPostUnlinkSyncFailurePublishesBeforeSameRecordRetry(t *testin
 		t.Fatalf("journal remains after successful unlink: %v", err)
 	}
 
-	if err := record.StartSlice("001-a", startedAt.Add(time.Minute)); err != nil {
+	if err := record.StartSlice("001-a", SliceStartRequest{StartedAt: startedAt.Add(time.Minute)}); err != nil {
 		t.Fatalf("same-record retry: %v", err)
 	}
 	if len(detail.Events) != 1 || detail.Events[0].MutationID != mutationID {
@@ -2107,7 +2197,7 @@ func TestPlanRecordConstructorRecoveryPreservesPreBoundWorkspaceMetadata(t *test
 		t.Fatal(err)
 	}
 	startedAt := time.Date(2026, 7, 20, 18, 1, 0, 0, time.UTC)
-	if err := concurrentRecord.StartSlice("001-a", startedAt); err == nil || !strings.Contains(err.Error(), "injected state failure") {
+	if err := concurrentRecord.StartSlice("001-a", SliceStartRequest{StartedAt: startedAt}); err == nil || !strings.Contains(err.Error(), "injected state failure") {
 		t.Fatalf("concurrent start error = %v, want injected state failure", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, mutationJournalFile)); err != nil {
@@ -2222,7 +2312,7 @@ func TestPlanRecordConstructorRecoveryPreservesPreBoundSliceEdits(t *testing.T) 
 		t.Fatal(err)
 	}
 	startedAt := time.Date(2026, 7, 20, 18, 1, 0, 0, time.UTC)
-	if err := concurrentRecord.StartSlice("001-a", startedAt); err == nil || !strings.Contains(err.Error(), "injected state failure") {
+	if err := concurrentRecord.StartSlice("001-a", SliceStartRequest{StartedAt: startedAt}); err == nil || !strings.Contains(err.Error(), "injected state failure") {
 		t.Fatalf("concurrent start error = %v, want injected state failure", err)
 	}
 
@@ -2272,7 +2362,7 @@ func TestPlanRecordPersistStatePreservesLifecycleSettledAfterDetailLoad(t *testi
 		t.Fatal(err)
 	}
 	startedAt := time.Date(2026, 7, 20, 18, 0, 0, 0, time.UTC)
-	if err := lifecycleRecord.StartSlice("001-a", startedAt); err != nil {
+	if err := lifecycleRecord.StartSlice("001-a", SliceStartRequest{StartedAt: startedAt}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2336,7 +2426,7 @@ func TestPlanRecordPersistStateRetryPreservesIntentAfterRecoveryAndJournalInstal
 		t.Fatal(err)
 	}
 	startedAt := time.Date(2026, 7, 20, 18, 0, 0, 0, time.UTC)
-	if err := concurrentRecord.StartSlice("001-a", startedAt); err == nil || !strings.Contains(err.Error(), "injected state failure") {
+	if err := concurrentRecord.StartSlice("001-a", SliceStartRequest{StartedAt: startedAt}); err == nil || !strings.Contains(err.Error(), "injected state failure") {
 		t.Fatalf("concurrent start error = %v, want injected state failure", err)
 	}
 
@@ -2461,7 +2551,7 @@ func TestPlanRecordPersistArtifactsPreservesLifecycleSettledAfterBinding(t *test
 		t.Fatal(err)
 	}
 	startedAt := time.Date(2026, 7, 20, 18, 1, 0, 0, time.UTC)
-	if err := concurrentRecord.StartSlice("001-a", startedAt); err != nil {
+	if err := concurrentRecord.StartSlice("001-a", SliceStartRequest{StartedAt: startedAt}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, mutationJournalFile)); !errors.Is(err, os.ErrNotExist) {
@@ -2704,7 +2794,7 @@ func TestPlanRecordPersistArtifactsRetryDoesNotRepublishStaleLifecycleState(t *t
 		t.Fatal(err)
 	}
 	startedAt := time.Date(2026, 7, 20, 18, 1, 0, 0, time.UTC)
-	if err := concurrentRecord.StartSlice("001-a", startedAt); err != nil {
+	if err := concurrentRecord.StartSlice("001-a", SliceStartRequest{StartedAt: startedAt}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2861,7 +2951,7 @@ func TestPlanRecordPersistArtifactsRebasesEditsOverJournalCreatedAfterBinding(t 
 		t.Fatal(err)
 	}
 	startedAt := time.Date(2026, 7, 20, 18, 1, 0, 0, time.UTC)
-	if err := concurrentRecord.StartSlice("001-a", startedAt); err == nil || !strings.Contains(err.Error(), "injected state failure") {
+	if err := concurrentRecord.StartSlice("001-a", SliceStartRequest{StartedAt: startedAt}); err == nil || !strings.Contains(err.Error(), "injected state failure") {
 		t.Fatalf("concurrent start error = %v, want injected state failure", err)
 	}
 

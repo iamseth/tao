@@ -25,6 +25,24 @@ type PlanRecord struct {
 	store    artifactMutationStore
 }
 
+// SliceRunStart contains the run metadata to record when starting a slice.
+type SliceRunStart struct {
+	CommitPolicy       string
+	StartingDirtyPaths []string
+}
+
+// SliceStartRequest contains the optional execution and run metadata for a slice
+// start. A nil Run preserves existing run metadata; a nil Boundary leaves the
+// execution boundary unchanged. StartedAt is the recorded start time. Re-applying
+// the same request for a torn start is idempotent for state-advanced,
+// slices-advanced, and missing-event prefixes.
+type SliceStartRequest struct {
+	ExecutionRoot string
+	Run           *SliceRunStart
+	Boundary      *SliceExecutionStart
+	StartedAt     time.Time
+}
+
 // WorkspacePreparingRequest contains the workspace identity and Git boundary
 // established before dependency preparation begins.
 type WorkspacePreparingRequest struct {
@@ -217,29 +235,12 @@ func (r *PlanRecord) Detail() *PlanDetail {
 	return r.detail
 }
 
-func (r *PlanRecord) StartSlice(sliceID string, now time.Time) error {
-	return r.apply(startSliceMutation(sliceID, "", now))
-}
-
-func (r *PlanRecord) StartSliceWithRunCommitPolicy(sliceID string, executionRoot string, commitPolicy string, startingDirtyPaths []string, now time.Time) error {
-	return r.startSliceWithRunBoundary(sliceID, executionRoot, commitPolicy, startingDirtyPaths, nil, now)
-}
-
-// StartSliceWithRunBoundary atomically persists lifecycle start metadata and the
-// Git boundary prepared for automatic slice work.
-func (r *PlanRecord) StartSliceWithRunBoundary(sliceID string, executionRoot string, commitPolicy string, startingDirtyPaths []string, boundary SliceExecutionStart, now time.Time) error {
-	return r.startSliceWithRunBoundary(sliceID, executionRoot, commitPolicy, startingDirtyPaths, &boundary, now)
-}
-
-func (r *PlanRecord) startSliceWithRunBoundary(sliceID string, executionRoot string, commitPolicy string, startingDirtyPaths []string, boundary *SliceExecutionStart, now time.Time) error {
-	return r.apply(startSliceWithRunBoundaryMutation(sliceID, executionRoot, commitPolicy, startingDirtyPaths, boundary, now))
-}
-
-// RepairSliceStartWithRunBoundary completes a torn automatic start using its
-// previously validated execution boundary and original start time. It is
-// idempotent for state-advanced, slices-advanced, and missing-event prefixes.
-func (r *PlanRecord) RepairSliceStartWithRunBoundary(sliceID string, executionRoot string, commitPolicy string, startingDirtyPaths []string, boundary SliceExecutionStart, startedAt time.Time) error {
-	return r.apply(startSliceWithRunBoundaryMutation(sliceID, executionRoot, commitPolicy, startingDirtyPaths, &boundary, startedAt))
+// StartSlice atomically persists lifecycle start metadata and any Git boundary
+// prepared for automatic slice work. Re-applying the request with its previously
+// validated boundary and original StartedAt completes a torn start idempotently
+// for state-advanced, slices-advanced, and missing-event prefixes.
+func (r *PlanRecord) StartSlice(sliceID string, request SliceStartRequest) error {
+	return r.apply(startSliceRequestMutation(sliceID, request))
 }
 
 // RepairMissingSliceStartedEvent restores only missing start-event evidence for

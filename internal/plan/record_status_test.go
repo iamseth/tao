@@ -170,7 +170,7 @@ func TestPlanRecordAbandonRefreshRefusesNonePolicyIntentBeforeCompletion(t *test
 	initial := startSliceDetail(dir)
 	writeStartSliceArtifacts(t, dir, initial)
 	startedAt := time.Date(2026, 9, 1, 16, 0, 0, 0, time.UTC)
-	if err := testRecord(dir, initial).StartSlice("001-a", startedAt); err != nil {
+	if err := testRecord(dir, initial).StartSlice("001-a", SliceStartRequest{StartedAt: startedAt}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -255,7 +255,7 @@ func TestPlanRecordReviewStatusesBeforeMerge(t *testing.T) {
 	started := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)
 	completed := started.Add(time.Minute)
 	record := testRecord(dir, detail)
-	if err := record.StartSlice("001-a", started); err != nil {
+	if err := record.StartSlice("001-a", SliceStartRequest{StartedAt: started}); err != nil {
 		t.Fatal(err)
 	}
 	if err := record.CompleteSlice("001-a", "done", nil, completed); err != nil {
@@ -300,7 +300,7 @@ func TestPlanRecordPullRequestCompletionEvidenceOrders(t *testing.T) {
 			started := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
 			completed := started.Add(time.Minute)
 			seedRecord := testRecord(dir, seed)
-			if err := seedRecord.StartSlice("001-a", started); err != nil {
+			if err := seedRecord.StartSlice("001-a", SliceStartRequest{StartedAt: started}); err != nil {
 				t.Fatal(err)
 			}
 			if err := seedRecord.CompleteSlice("001-a", "done", nil, completed); err != nil {
@@ -462,7 +462,7 @@ func newPullRequestCompletedRecord(t *testing.T) (string, *PlanDetail, *PlanReco
 	record := testRecord(dir, detail)
 	started := time.Date(2026, 8, 8, 13, 0, 0, 0, time.UTC)
 	completed := started.Add(time.Minute)
-	if err := record.StartSlice("001-a", started); err != nil {
+	if err := record.StartSlice("001-a", SliceStartRequest{StartedAt: started}); err != nil {
 		t.Fatal(err)
 	}
 	if err := record.CompleteSlice("001-a", "done", nil, completed); err != nil {
@@ -506,7 +506,7 @@ func TestPlanRecordReviewWritersReplaceKnownFieldsAndPreserveUnknownFields(t *te
 			detail := startSliceDetail(dir)
 			started := time.Date(2026, 8, 5, 1, 0, 0, 0, time.UTC)
 			record := testRecord(dir, detail)
-			if err := record.StartSlice("001-a", started); err != nil {
+			if err := record.StartSlice("001-a", SliceStartRequest{StartedAt: started}); err != nil {
 				t.Fatal(err)
 			}
 			if err := record.CompleteSlice("001-a", "done", nil, started.Add(time.Minute)); err != nil {
@@ -562,7 +562,7 @@ func TestPlanRecordClearsCommitMessageFromNonApprovedReplacement(t *testing.T) {
 	detail := startSliceDetail(dir)
 	now := time.Date(2026, 7, 23, 19, 30, 0, 0, time.UTC)
 	record := testRecord(dir, detail)
-	if err := record.StartSlice("001-a", now); err != nil {
+	if err := record.StartSlice("001-a", SliceStartRequest{StartedAt: now}); err != nil {
 		t.Fatal(err)
 	}
 	if err := record.CompleteSlice("001-a", "done", nil, now.Add(time.Minute)); err != nil {
@@ -649,7 +649,7 @@ func TestRecordReviewProposalCorrectionRejectsChangedConsumedMarker(t *testing.T
 	detail := startSliceDetail(dir)
 	record := testRecord(dir, detail)
 	started := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
-	if err := record.StartSlice("001-a", started); err != nil {
+	if err := record.StartSlice("001-a", SliceStartRequest{StartedAt: started}); err != nil {
 		t.Fatal(err)
 	}
 	if err := record.CompleteSlice("001-a", "done", nil, started.Add(time.Minute)); err != nil {
@@ -697,7 +697,7 @@ func TestPlanRecordMergedStatus(t *testing.T) {
 	reviewed := completed.Add(time.Minute)
 	merged := reviewed.Add(time.Minute)
 	record := testRecord(dir, detail)
-	if err := record.StartSlice("001-a", started); err != nil {
+	if err := record.StartSlice("001-a", SliceStartRequest{StartedAt: started}); err != nil {
 		t.Fatal(err)
 	}
 	if err := record.CompleteSlice("001-a", "done", nil, completed); err != nil {
@@ -767,7 +767,7 @@ func TestRecordMergedPreservesSliceCompletionTime(t *testing.T) {
 	started := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)
 	completed := started.Add(30 * time.Minute)
 	merged := completed.Add(96 * time.Hour)
-	if err := record.StartSlice("001-a", started); err != nil {
+	if err := record.StartSlice("001-a", SliceStartRequest{StartedAt: started}); err != nil {
 		t.Fatal(err)
 	}
 	if err := record.CompleteSlice("001-a", "done", nil, completed); err != nil {

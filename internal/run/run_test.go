@@ -1416,8 +1416,14 @@ func TestServiceExecuteRepairsOnlyCleanTornAutomaticStart(t *testing.T) {
 	runner := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return "" }, "tao/plan-a", "base")
 	err := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
 		CommandRunner: runner, EventAppender: eventAppenderFunc(func(string, plan.Event) error { return nil }),
-		SliceExecutor:     sliceExecutorFunc(func(context.Context, SliceRun) error { agentCalls++; return errors.New("provider stopped") }),
-		PlanRecordFactory: callbackPlanRecordFactory(func(*plan.PlanDetail, string, time.Time) error { started++; return nil }, nil),
+		SliceExecutor: sliceExecutorFunc(func(context.Context, SliceRun) error { agentCalls++; return errors.New("provider stopped") }),
+		PlanRecordFactory: callbackPlanRecordFactory(func(detail *plan.PlanDetail, sliceID string, now time.Time) error {
+			_, appendEvent, err := plan.MarkSliceStarted(detail, sliceID, now)
+			if appendEvent {
+				started++
+			}
+			return err
+		}, nil),
 		WorkspacePreparer: func(context.Context, *plan.PlanDetail, WorkspaceResolverInput) (string, error) {
 			t.Fatal("torn start prepared workspace")
 			return "", nil
@@ -2641,18 +2647,11 @@ type startCallbackRecord struct {
 	onStart func(sliceID string, now time.Time) error
 }
 
-func (r startCallbackRecord) StartSliceWithRunCommitPolicy(sliceID string, executionRoot string, commitPolicy string, startingDirtyPaths []string, now time.Time) error {
+func (r startCallbackRecord) StartSlice(sliceID string, request plan.SliceStartRequest) error {
 	if r.onStart != nil {
-		return r.onStart(sliceID, now)
+		return r.onStart(sliceID, request.StartedAt)
 	}
-	return r.PlanMutationRecord.StartSliceWithRunCommitPolicy(sliceID, executionRoot, commitPolicy, startingDirtyPaths, now)
-}
-
-func (r startCallbackRecord) StartSliceWithRunBoundary(sliceID string, executionRoot string, commitPolicy string, startingDirtyPaths []string, boundary plan.SliceExecutionStart, now time.Time) error {
-	if r.onStart != nil {
-		return r.onStart(sliceID, now)
-	}
-	return r.PlanMutationRecord.StartSliceWithRunBoundary(sliceID, executionRoot, commitPolicy, startingDirtyPaths, boundary, now)
+	return r.PlanMutationRecord.StartSlice(sliceID, request)
 }
 
 type memoryPlanMutationRecord struct {
@@ -2671,49 +2670,28 @@ func callbackPlanRecordFactory(onStart func(*plan.PlanDetail, string, time.Time)
 	}
 }
 
-func (r memoryPlanMutationRecord) StartSlice(sliceID string, now time.Time) error {
+func (r memoryPlanMutationRecord) StartSlice(sliceID string, request plan.SliceStartRequest) error {
+	if request.Run != nil {
+		if err := plan.MarkRunStartMetadata(r.detail, request.Run.CommitPolicy, request.Run.StartingDirtyPaths); err != nil {
+			return err
+		}
+	}
+	if request.Boundary != nil {
+		if err := plan.MarkSliceExecutionStart(r.detail, sliceID, *request.Boundary); err != nil {
+			return err
+		}
+	}
 	if r.onStart != nil {
-		return r.onStart(r.detail, sliceID, now)
-	}
-	_, _, err := plan.MarkSliceStarted(r.detail, sliceID, now)
-	return err
-}
-
-func (r memoryPlanMutationRecord) StartSliceWithExecutionRoot(sliceID string, executionRoot string, now time.Time) error {
-	if err := r.StartSlice(sliceID, now); err != nil {
+		if err := r.onStart(r.detail, sliceID, request.StartedAt); err != nil {
+			return err
+		}
+	} else if _, _, err := plan.MarkSliceStarted(r.detail, sliceID, request.StartedAt); err != nil {
 		return err
 	}
-	return r.recordExecutionRoot(sliceID, executionRoot)
-}
-
-func (r memoryPlanMutationRecord) StartSliceWithRunCommitPolicy(sliceID string, executionRoot string, commitPolicy string, startingDirtyPaths []string, now time.Time) error {
-	if err := plan.MarkRunStartMetadata(r.detail, commitPolicy, startingDirtyPaths); err != nil {
-		return err
+	if request.ExecutionRoot != "" {
+		return r.recordExecutionRoot(sliceID, request.ExecutionRoot)
 	}
-	return r.StartSliceWithExecutionRoot(sliceID, executionRoot, now)
-}
-
-func (r memoryPlanMutationRecord) StartSliceWithRunBoundary(sliceID string, executionRoot string, commitPolicy string, startingDirtyPaths []string, boundary plan.SliceExecutionStart, now time.Time) error {
-	if err := plan.MarkRunStartMetadata(r.detail, commitPolicy, startingDirtyPaths); err != nil {
-		return err
-	}
-	if err := plan.MarkSliceExecutionStart(r.detail, sliceID, boundary); err != nil {
-		return err
-	}
-	return r.StartSliceWithExecutionRoot(sliceID, executionRoot, now)
-}
-
-func (r memoryPlanMutationRecord) RepairSliceStartWithRunBoundary(sliceID string, executionRoot string, commitPolicy string, startingDirtyPaths []string, boundary plan.SliceExecutionStart, startedAt time.Time) error {
-	if err := plan.MarkRunStartMetadata(r.detail, commitPolicy, startingDirtyPaths); err != nil {
-		return err
-	}
-	if err := plan.MarkSliceExecutionStart(r.detail, sliceID, boundary); err != nil {
-		return err
-	}
-	if _, _, err := plan.MarkSliceStarted(r.detail, sliceID, startedAt); err != nil {
-		return err
-	}
-	return r.recordExecutionRoot(sliceID, executionRoot)
+	return nil
 }
 
 func (r memoryPlanMutationRecord) BlockSliceForBudget(sliceID string, reason string, now time.Time) error {

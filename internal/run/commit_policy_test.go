@@ -210,7 +210,7 @@ func TestServiceExecuteExecutionModeCurrentCapturesStartingBranchBeforeSliceStar
 			if state.Workspace == nil || state.Workspace.Branch != "main" {
 				t.Fatalf("expected starting workspace branch written before slice start, got %#v", state.Workspace)
 			}
-			return record.StartSlice(sliceID, now)
+			return record.StartSlice(sliceID, plan.SliceStartRequest{StartedAt: now})
 		}}, nil
 	}, CommandRunner: runner}}).Execute(context.Background(), Request{Input: "plan-a"})
 	if err != nil {

@@ -25,7 +25,7 @@ func TestSliceCompleteCommandCompletesPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := record.StartSlice("001-a", started); err != nil {
+	if err := record.StartSlice("001-a", plan.SliceStartRequest{StartedAt: started}); err != nil {
 		t.Fatal(err)
 	}
 	inputDir := t.TempDir()
@@ -96,7 +96,7 @@ func TestSliceCompleteNormalizesRelativeVerificationCWDsBeforePersisting(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := record.StartSlice("001-a", time.Date(2026, 5, 3, 23, 36, 51, 0, time.UTC)); err != nil {
+	if err := record.StartSlice("001-a", plan.SliceStartRequest{StartedAt: time.Date(2026, 5, 3, 23, 36, 51, 0, time.UTC)}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -158,7 +158,7 @@ func TestSliceCompleteCapsVerificationDetailsBeforePersisting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := record.StartSlice("001-a", time.Date(2026, 5, 3, 23, 36, 51, 0, time.UTC)); err != nil {
+	if err := record.StartSlice("001-a", plan.SliceStartRequest{StartedAt: time.Date(2026, 5, 3, 23, 36, 51, 0, time.UTC)}); err != nil {
 		t.Fatal(err)
 	}
 

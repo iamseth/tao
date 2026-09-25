@@ -14,12 +14,10 @@ import (
 )
 
 type runStartRecorder interface {
-	StartSliceWithRunCommitPolicy(sliceID string, executionRoot string, commitPolicy string, startingDirtyPaths []string, now time.Time) error
-	StartSliceWithRunBoundary(sliceID string, executionRoot string, commitPolicy string, startingDirtyPaths []string, boundary plan.SliceExecutionStart, now time.Time) error
+	StartSlice(sliceID string, request plan.SliceStartRequest) error
 }
 
 type runStartRepairer interface {
-	RepairSliceStartWithRunBoundary(sliceID string, executionRoot string, commitPolicy string, startingDirtyPaths []string, boundary plan.SliceExecutionStart, startedAt time.Time) error
 	RepairMissingSliceStartedEvent(sliceID string, startedAt time.Time) error
 }
 

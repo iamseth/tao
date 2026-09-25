@@ -93,7 +93,7 @@ func TestLifecycleReviewReworkRebase(t *testing.T) {
 			sliceID := current.State.Plan.PendingSlices[0]
 			startHead := lifecycleGitOutput(t, fixture.worktree, "rev-parse", "HEAD")
 			currentRecord := fixture.record(t, current)
-			if err := currentRecord.StartSliceWithRunBoundary(sliceID, fixture.worktree, "slice", nil, plan.SliceExecutionStart{Branch: fixture.branch, Head: startHead, CommitPolicy: "slice", WorkspaceStrategy: plan.WorkspaceStrategyWorktree}, fixture.now.Add(4*time.Minute)); err != nil {
+			if err := currentRecord.StartSlice(sliceID, plan.SliceStartRequest{ExecutionRoot: fixture.worktree, Run: &plan.SliceRunStart{CommitPolicy: "slice"}, Boundary: &plan.SliceExecutionStart{Branch: fixture.branch, Head: startHead, CommitPolicy: "slice", WorkspaceStrategy: plan.WorkspaceStrategyWorktree}, StartedAt: fixture.now.Add(4 * time.Minute)}); err != nil {
 				return err
 			}
 			intent := plan.SliceCommitIntent{Hash: "rework-intent", Policy: "slice", StartingBranch: fixture.branch, StartingHead: startHead, Message: "fix(cli): address review finding", CreatedAt: fixture.now.Add(5 * time.Minute)}
@@ -317,7 +317,7 @@ func (f *lifecycleGitFixture) completeOriginalSlice(t *testing.T) {
 	record := f.record(t, detail)
 	startHead := lifecycleGitOutput(t, f.worktree, "rev-parse", "HEAD")
 	boundary := plan.SliceExecutionStart{Branch: f.branch, Head: startHead, CommitPolicy: "slice", WorkspaceStrategy: plan.WorkspaceStrategyWorktree}
-	if err := record.StartSliceWithRunBoundary("001-original", f.worktree, "slice", nil, boundary, f.now.Add(time.Minute)); err != nil {
+	if err := record.StartSlice("001-original", plan.SliceStartRequest{ExecutionRoot: f.worktree, Run: &plan.SliceRunStart{CommitPolicy: "slice"}, Boundary: &boundary, StartedAt: f.now.Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	intent := plan.SliceCommitIntent{Hash: "original-intent", Policy: "slice", StartingBranch: f.branch, StartingHead: startHead, Message: "test(cli): complete original work", CreatedAt: f.now.Add(2 * time.Minute)}

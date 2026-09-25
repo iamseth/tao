@@ -430,15 +430,25 @@ func (c *ArtifactChangeSet) applyState(state *State) {
 
 type artifactMutationFunc func(*PlanDetail) (lifecycleMutation, error)
 
-func startSliceMutation(sliceID string, executionRoot string, now time.Time) artifactMutationFunc {
+func startSliceRequestMutation(sliceID string, request SliceStartRequest) artifactMutationFunc {
 	return func(detail *PlanDetail) (lifecycleMutation, error) {
+		if request.Run != nil {
+			if err := MarkRunStartMetadata(detail, request.Run.CommitPolicy, request.Run.StartingDirtyPaths); err != nil {
+				return lifecycleMutation{}, err
+			}
+		}
+		if request.Boundary != nil {
+			if err := MarkSliceExecutionStart(detail, sliceID, *request.Boundary); err != nil {
+				return lifecycleMutation{}, err
+			}
+		}
 		return applyLifecycleMutation(detail, func(_ *ArtifactChangeSet) ([]Event, error) {
-			if executionRoot != "" {
-				if err := markSliceExecutionRoot(detail, sliceID, executionRoot); err != nil {
+			if request.ExecutionRoot != "" {
+				if err := markSliceExecutionRoot(detail, sliceID, request.ExecutionRoot); err != nil {
 					return nil, err
 				}
 			}
-			event, appendEvent, err := MarkSliceStarted(detail, sliceID, now)
+			event, appendEvent, err := MarkSliceStarted(detail, sliceID, request.StartedAt)
 			if err != nil {
 				return nil, err
 			}
@@ -447,20 +457,6 @@ func startSliceMutation(sliceID string, executionRoot string, now time.Time) art
 			}
 			return []Event{event}, nil
 		})
-	}
-}
-
-func startSliceWithRunBoundaryMutation(sliceID string, executionRoot string, commitPolicy string, startingDirtyPaths []string, boundary *SliceExecutionStart, now time.Time) artifactMutationFunc {
-	return func(detail *PlanDetail) (lifecycleMutation, error) {
-		if err := MarkRunStartMetadata(detail, commitPolicy, startingDirtyPaths); err != nil {
-			return lifecycleMutation{}, err
-		}
-		if boundary != nil {
-			if err := MarkSliceExecutionStart(detail, sliceID, *boundary); err != nil {
-				return lifecycleMutation{}, err
-			}
-		}
-		return startSliceMutation(sliceID, executionRoot, now)(detail)
 	}
 }
 

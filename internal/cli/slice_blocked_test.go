@@ -224,7 +224,7 @@ func newStartedSliceBlockedFixture(t *testing.T) runPlanFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := record.StartSlice("001-a", time.Date(2026, 7, 19, 16, 0, 0, 0, time.UTC)); err != nil {
+	if err := record.StartSlice("001-a", plan.SliceStartRequest{StartedAt: time.Date(2026, 7, 19, 16, 0, 0, 0, time.UTC)}); err != nil {
 		t.Fatal(err)
 	}
 	return fixture

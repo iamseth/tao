@@ -85,7 +85,7 @@ func TestRestartBlockedSliceSupersedesExactBoundaryWithDurableEvidence(t *testin
 	record := testRecord(dir, detail)
 	started := time.Date(2026, 8, 27, 1, 0, 0, 0, time.UTC)
 	boundary := SliceExecutionStart{Branch: "feature/plan-a", Head: "old-head", CommitPolicy: "slice", WorkspaceStrategy: WorkspaceStrategyWorktree}
-	if err := record.StartSliceWithRunBoundary("001-a", "/worktrees/plan-a", "slice", nil, boundary, started); err != nil {
+	if err := record.StartSlice("001-a", SliceStartRequest{ExecutionRoot: "/worktrees/plan-a", Run: &SliceRunStart{CommitPolicy: "slice"}, Boundary: &boundary, StartedAt: started}); err != nil {
 		t.Fatal(err)
 	}
 	if err := record.BlockSlice("001-a", "waiting for dependency", started.Add(time.Minute)); err != nil {
@@ -131,7 +131,7 @@ func TestRestartBlockedSliceSettlesJournalOnExactRetry(t *testing.T) {
 	boundary := SliceExecutionStart{Branch: "feature/plan-a", Head: "old-head", CommitPolicy: "slice", WorkspaceStrategy: WorkspaceStrategyWorktree}
 	started := time.Date(2026, 8, 27, 2, 0, 0, 0, time.UTC)
 	setup := testRecord(dir, detail)
-	if err := setup.StartSliceWithRunBoundary("001-a", "/worktrees/plan-a", "slice", nil, boundary, started); err != nil {
+	if err := setup.StartSlice("001-a", SliceStartRequest{ExecutionRoot: "/worktrees/plan-a", Run: &SliceRunStart{CommitPolicy: "slice"}, Boundary: &boundary, StartedAt: started}); err != nil {
 		t.Fatal(err)
 	}
 	if err := setup.BlockSlice("001-a", "dependency", started.Add(time.Minute)); err != nil {
@@ -257,7 +257,7 @@ func TestRecordWorkspacePreparingRefreshesStaleDisjointWriter(t *testing.T) {
 	stale := detailFromFiles(files)
 	lifecycleRecord := testRecord(dir, detailFromFiles(files))
 	startedAt := time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC)
-	if err := lifecycleRecord.StartSlice("001-a", startedAt); err != nil {
+	if err := lifecycleRecord.StartSlice("001-a", SliceStartRequest{StartedAt: startedAt}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -656,7 +656,7 @@ func TestReopenFromPullRequestConsumesThreadAcrossCompletedPRCycle(t *testing.T)
 	// Complete the generated work, approve its new head, and refresh the
 	// recorded pull request just as a full pull-request rework cycle does.
 	startedAt := reopenedAt.Add(time.Minute)
-	if err := record.StartSlice("002-pr-fix", startedAt); err != nil {
+	if err := record.StartSlice("002-pr-fix", SliceStartRequest{StartedAt: startedAt}); err != nil {
 		t.Fatal(err)
 	}
 	completedAt := startedAt.Add(time.Minute)

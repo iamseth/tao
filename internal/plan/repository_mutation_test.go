@@ -465,7 +465,7 @@ func TestPlanRecordSingleMergeResolutionClearAndLifecycleInvalidation(t *testing
 	writeStartSliceArtifacts(t, dir, detail)
 	record := testRecord(dir, detail)
 	started := time.Date(2026, 9, 2, 16, 0, 0, 0, time.UTC)
-	if err := record.StartSlice("001-a", started); err != nil {
+	if err := record.StartSlice("001-a", SliceStartRequest{StartedAt: started}); err != nil {
 		t.Fatal(err)
 	}
 	if err := record.CompleteSlice("001-a", "done", nil, started.Add(time.Minute)); err != nil {
@@ -1055,7 +1055,7 @@ func TestRepositoryOwnsPlanMutations(t *testing.T) {
 	}
 	started := time.Date(2026, 5, 3, 23, 0, 0, 0, time.UTC)
 
-	if err := testRepoRecord(repo, detail).StartSlice("001-a", started); err != nil {
+	if err := testRepoRecord(repo, detail).StartSlice("001-a", SliceStartRequest{StartedAt: started}); err != nil {
 		t.Fatal(err)
 	}
 	if detail.State.Status != StatusInProgress || detail.State.Plan.CurrentSlice == nil || *detail.State.Plan.CurrentSlice != "001-a" || len(detail.Events) != 1 {
@@ -1068,7 +1068,7 @@ func TestRepositoryOwnsPlanMutations(t *testing.T) {
 	if state.Status != StatusInProgress || state.Plan.CurrentSlice == nil || *state.Plan.CurrentSlice != "001-a" {
 		t.Fatalf("unexpected started state: %+v", state.Plan)
 	}
-	if err := testRepoRecord(repo, detail).StartSlice("001-a", started.Add(time.Minute)); err != nil {
+	if err := testRepoRecord(repo, detail).StartSlice("001-a", SliceStartRequest{StartedAt: started.Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	if len(detail.Events) != 1 || detail.Events[0].Type != EventTypeSliceStarted {
@@ -1544,7 +1544,7 @@ func TestPlanRecordMergedRetryRejectsDifferentEvidenceAfterRecovery(t *testing.T
 	}
 }
 
-func TestPlanRecordStartSliceWithRunBoundaryPersistsOneMutation(t *testing.T) {
+func TestPlanRecordStartSliceBoundaryPersistsOneMutation(t *testing.T) {
 	detail := startSliceDetail("/plans/plan-a")
 	store := &recordingArtifactMutationStore{}
 	record, err := newPlanRecord(store, detail.Dir, detail)
@@ -1556,7 +1556,7 @@ func TestPlanRecordStartSliceWithRunBoundaryPersistsOneMutation(t *testing.T) {
 		Branch: "tao/plan-a", Head: "base123", CommitPolicy: "slice", WorkspaceStrategy: WorkspaceStrategyWorktree,
 	}
 
-	if err := record.StartSliceWithRunBoundary("001-a", "/worktrees/plan-a", "slice", []string{"README.md"}, boundary, startedAt); err != nil {
+	if err := record.StartSlice("001-a", SliceStartRequest{ExecutionRoot: "/worktrees/plan-a", Run: &SliceRunStart{CommitPolicy: "slice", StartingDirtyPaths: []string{"README.md"}}, Boundary: &boundary, StartedAt: startedAt}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1585,7 +1585,7 @@ func TestPlanRecordStartSliceWithRunBoundaryPersistsOneMutation(t *testing.T) {
 	}
 }
 
-func TestPlanRecordRepairSliceStartWithRunBoundaryCompletesPersistedPrefixes(t *testing.T) {
+func TestPlanRecordStartSliceRepairsPersistedPrefixes(t *testing.T) {
 	startedAt := time.Date(2026, 7, 18, 1, 45, 0, 0, time.UTC)
 	boundary := SliceExecutionStart{
 		Branch: "tao/plan-a", Head: "base123", CommitPolicy: "slice", WorkspaceStrategy: WorkspaceStrategyWorktree,
@@ -1619,7 +1619,7 @@ func TestPlanRecordRepairSliceStartWithRunBoundaryCompletesPersistedPrefixes(t *
 				t.Fatal(err)
 			}
 
-			if err := record.RepairSliceStartWithRunBoundary("001-a", "/worktrees/plan-a", "slice", nil, boundary, startedAt); err != nil {
+			if err := record.StartSlice("001-a", SliceStartRequest{ExecutionRoot: "/worktrees/plan-a", Run: &SliceRunStart{CommitPolicy: "slice"}, Boundary: &boundary, StartedAt: startedAt}); err != nil {
 				t.Fatal(err)
 			}
 

@@ -578,10 +578,12 @@ func startSlice(ctx context.Context, execution runExecution, detail *plan.PlanDe
 		return err
 	}
 	commitPolicy := execution.Config.CommitPolicy.String()
-	if boundary != nil {
-		return record.StartSliceWithRunBoundary(sliceID, executionRoot, commitPolicy, execution.StartingDirtyPaths, *boundary, timestamp)
-	}
-	return record.StartSliceWithRunCommitPolicy(sliceID, executionRoot, commitPolicy, execution.StartingDirtyPaths, timestamp)
+	return record.StartSlice(sliceID, plan.SliceStartRequest{
+		ExecutionRoot: executionRoot,
+		Run:           &plan.SliceRunStart{CommitPolicy: commitPolicy, StartingDirtyPaths: execution.StartingDirtyPaths},
+		Boundary:      boundary,
+		StartedAt:     timestamp,
+	})
 }
 
 func repairMissingSliceStartedEvent(execution runExecution, detail *plan.PlanDetail, sliceID string) error {
@@ -619,7 +621,12 @@ func repairAutomaticSliceStart(execution runExecution, detail *plan.PlanDetail, 
 	} else if detail.State.Plan.Timing.LastActivityAt != nil {
 		startedAt = *detail.State.Plan.Timing.LastActivityAt
 	}
-	return record.RepairSliceStartWithRunBoundary(sliceID, facts.RecordedRoot, facts.CommitPolicy, execution.StartingDirtyPaths, boundary, startedAt)
+	return record.StartSlice(sliceID, plan.SliceStartRequest{
+		ExecutionRoot: facts.RecordedRoot,
+		Run:           &plan.SliceRunStart{CommitPolicy: facts.CommitPolicy, StartingDirtyPaths: execution.StartingDirtyPaths},
+		Boundary:      &boundary,
+		StartedAt:     startedAt,
+	})
 }
 
 func preflightAutomaticSliceStart(ctx context.Context, execution runExecution, executionRoot string) error {

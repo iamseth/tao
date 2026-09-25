@@ -175,7 +175,7 @@ func TestReworkFromPullRequestDoesNotReconvertConsumedThreadAfterCompletedCycle(
 		t.Fatal(err)
 	}
 	sliceID := detail.State.Plan.PendingSlices[0]
-	if err := record.StartSlice(sliceID, firstAt.Add(time.Minute)); err != nil {
+	if err := record.StartSlice(sliceID, plan.SliceStartRequest{StartedAt: firstAt.Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	if err := record.CompleteSlice(sliceID, "fixed", nil, firstAt.Add(2*time.Minute)); err != nil {
