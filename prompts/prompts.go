@@ -19,6 +19,7 @@ const (
 	PromptImproveCodebaseArchitecture = "improve-codebase-architecture"
 	PromptImproveDocumentation        = "improve-documentation"
 	PromptRepoHealth                  = "repo-health"
+	PromptCatchMeUp                   = "catch-me-up"
 	PromptTaoInsightsReview           = "insights-review"
 	PromptPR                          = "pr"
 	PromptReview                      = "review"
@@ -53,6 +54,9 @@ var ImproveDocumentationPromptTemplate string
 
 //go:embed repo-health.md
 var RepoHealthPromptTemplate string
+
+//go:embed catch-me-up.md
+var CatchMeUpPromptTemplate string
 
 //go:embed tao-insights-review.md
 var TaoInsightsReviewPromptTemplate string
@@ -170,6 +174,7 @@ var agentCommandNames = map[string]string{
 	PromptImproveCodebaseArchitecture: "tao-improve-codebase-architecture",
 	PromptImproveDocumentation:        "tao-improve-documentation",
 	PromptRepoHealth:                  "tao-repo-health",
+	PromptCatchMeUp:                   "tao-catch-me-up",
 	PromptTaoInsightsReview:           "tao-insights-review",
 	PromptPR:                          "tao-pr",
 	PromptReview:                      "tao-review",
@@ -186,6 +191,7 @@ var promptRegistry = []promptDefinition{
 	newTemplatedPrompt(PromptImproveCodebaseArchitecture, ImproveCodebaseArchitecturePromptTemplate),
 	newTemplatedPrompt(PromptImproveDocumentation, ImproveDocumentationPromptTemplate),
 	newTemplatedPrompt(PromptRepoHealth, RepoHealthPromptTemplate),
+	newTemplatedPrompt(PromptCatchMeUp, CatchMeUpPromptTemplate),
 	newTemplatedPrompt(PromptTaoInsightsReview, TaoInsightsReviewPromptTemplate),
 	newTemplatedPrompt(PromptPR, PRPromptTemplate),
 	newPrompt(PromptReview, ReviewPromptTemplate, renderReviewPrompt),

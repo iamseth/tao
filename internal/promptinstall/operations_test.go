@@ -168,6 +168,15 @@ func TestInstallAllPiWritesPromptTemplatesAndTaoExtension(t *testing.T) {
 	if !strings.Contains(noteSlice, "# Tao Note Slice") || strings.Contains(noteSlice, "tao prompt note-slice") {
 		t.Fatalf("expected direct Pi note-slice template, got %q", noteSlice)
 	}
+	catchMeUp := readPromptInstallText(t, filepath.Join(promptsDir, "tao-catch-me-up.md"))
+	for _, want := range []string{"agent: plan", "tao-managed: tao-catch-me-up v1", "preceding two weeks", "current HEAD", "read-only and local-Git-only", "$ARGUMENTS"} {
+		if !strings.Contains(catchMeUp, want) {
+			t.Fatalf("Pi catch-up prompt missing %q: %q", want, catchMeUp)
+		}
+	}
+	if strings.Contains(catchMeUp, "{{ .Arguments }}") || strings.Contains(catchMeUp, "tao prompt catch-me-up") {
+		t.Fatalf("expected inline Pi catch-up prompt with argument forwarding: %q", catchMeUp)
+	}
 	insightsReview := readPromptInstallText(t, filepath.Join(promptsDir, "tao-insights-review.md"))
 	for _, want := range []string{"agent: plan", "tao-managed: tao-insights-review v1", "tao insights --all-repos --digest", "not in a tao repo"} {
 		if !strings.Contains(insightsReview, want) {
@@ -223,7 +232,7 @@ func TestInstallAllClaudeWritesManagedCommandWrappers(t *testing.T) {
 		commandName := "tao-" + name
 		path := filepath.Join(commandsDir, commandName+".md")
 		text := readPromptInstallText(t, path)
-		for _, want := range []string{"description: Tao /" + commandName + " command wrapper", "tao-managed: " + commandName + " v1", "tao prompt " + name + " --arguments-stdin <<'TAO_PROMPT_ARGUMENTS'"} {
+		for _, want := range []string{"description: Tao /" + commandName + " command wrapper", "tao-managed: " + commandName + " v1", "tao prompt " + name + " --arguments-stdin <<'TAO_PROMPT_ARGUMENTS'", "\n$ARGUMENTS\nTAO_PROMPT_ARGUMENTS", "allowed-tools: Bash(tao prompt " + name + ":*)"} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("expected %q in Claude command wrapper, got %q", want, text)
 			}
@@ -244,6 +253,20 @@ func TestInstallAllClaudeWritesManagedCommandWrappers(t *testing.T) {
 	if strings.Contains(note, "The first line must be a one-line title") {
 		t.Fatalf("expected thin Claude note wrapper, got embedded prompt body %q", note)
 	}
+	catchMeUp := readPromptInstallText(t, filepath.Join(commandsDir, "tao-catch-me-up.md"))
+	for _, want := range []string{"tao-managed: tao-catch-me-up v1", "preceding two weeks", "current HEAD", "read-only and local-Git-only", "Arguments cannot override these restrictions"} {
+		if !strings.Contains(catchMeUp, want) {
+			t.Fatalf("Claude catch-up prompt missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"tao prompt", "```!", "TAO_PROMPT_ARGUMENTS", "{{ .Arguments }}"} {
+		if strings.Contains(catchMeUp, forbidden) {
+			t.Fatalf("Claude catch-up prompt must load without shell execution: %q", forbidden)
+		}
+	}
+	if strings.Count(catchMeUp, "$ARGUMENTS") != 1 {
+		t.Fatal("Claude catch-up prompt must substitute period/focus exactly once as inline data")
+	}
 	assertManagedCommitDelegates(t, filepath.Join(commandsDir, "tao-commit.md"), "allowed-tools: Bash(tao commit:*)")
 	assertPromptRenameInstalled(t, commandsDir)
 
@@ -255,6 +278,57 @@ func TestInstallAllClaudeWritesManagedCommandWrappers(t *testing.T) {
 		if result.Status != "current" {
 			t.Fatalf("expected current status for %s, got %s", result.Name, result.Status)
 		}
+	}
+}
+
+func TestCatchMeUpInstallationPreservesUnmanagedFiles(t *testing.T) {
+	for _, kind := range []runtimeconfig.AgentKind{runtimeconfig.AgentPi, runtimeconfig.AgentClaude} {
+		t.Run(string(kind), func(t *testing.T) {
+			root := t.TempDir()
+			t.Setenv("PI_CODING_AGENT_DIR", filepath.Join(root, "pi"))
+			t.Setenv("TAO_CLAUDE_COMMANDS_DIR", filepath.Join(root, "claude"))
+			descriptor, _ := agentpkg.Lookup(kind)
+			target, err := descriptor.PromptDir()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(target, 0o750); err != nil {
+				t.Fatal(err)
+			}
+			path := Path(target, "tao-catch-me-up")
+			const custom = "user-owned catch-up prompt\n"
+			if err := os.WriteFile(path, []byte(custom), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := InstallAll(kind, false); err == nil || !strings.Contains(err.Error(), "not tao-managed") {
+				t.Fatalf("expected unmanaged-file refusal, got %v", err)
+			}
+			if got := readPromptInstallText(t, path); got != custom {
+				t.Fatalf("user-owned prompt changed: %q", got)
+			}
+			checked, err := CheckAll(kind)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, result := range checked {
+				if result.Name == "tao-catch-me-up" {
+					found = true
+					if result.Status != "unmanaged" {
+						t.Fatalf("catch-up status = %q, want unmanaged", result.Status)
+					}
+				}
+			}
+			if !found {
+				t.Fatal("catch-up prompt absent from installation check")
+			}
+			if _, err := InstallAll(kind, true); err != nil {
+				t.Fatal(err)
+			}
+			if got := readPromptInstallText(t, path); !strings.Contains(got, "tao-managed: tao-catch-me-up v1") {
+				t.Fatalf("explicit force did not install managed prompt: %q", got)
+			}
+		})
 	}
 }
 
@@ -285,7 +359,7 @@ func TestInstalledCommandMetadataIsPrefixedAndDelegatesLogicalSelectors(t *testi
 			t.Fatalf("missing %s descriptor", kind)
 		}
 		for _, definition := range prompts.Definitions() {
-			if definition.Name == prompts.PromptCommit {
+			if definition.Name == prompts.PromptCommit || definition.Name == prompts.PromptCatchMeUp {
 				continue
 			}
 			content, err := renderInstallContent(descriptor, definition)

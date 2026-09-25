@@ -112,6 +112,40 @@ func TestPromptArgumentsStdinHandlesShellMetacharacters(t *testing.T) {
 	}
 }
 
+func TestPromptCatchMeUpPreservesPeriodAndFocus(t *testing.T) {
+	clearTaoEnv(t)
+	for _, test := range []struct {
+		name, arguments string
+		stdin           bool
+	}{
+		{name: "default"},
+		{name: "explicit", arguments: "last month, focus on CLI"},
+		{name: "stdin", arguments: "last week; focus on \"api\" `backticks` $VARS $(no-execution) \\ paths\nand docs", stdin: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var out bytes.Buffer
+			args := []string{"prompt", "catch-me-up"}
+			if test.stdin {
+				args = append(args, "--arguments-stdin")
+			} else if test.arguments != "" {
+				args = append(args, "--arguments", test.arguments)
+			}
+			app := App{In: strings.NewReader(test.arguments + "\n"), Out: &out, Err: &out}
+			if err := app.Run(context.Background(), args); err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{"preceding two weeks", "current HEAD", "read-only and local-Git-only", "Cite short commit hashes", "do not silently widen the window"} {
+				if !strings.Contains(out.String(), want) {
+					t.Errorf("rendered catch-up prompt missing %q", want)
+				}
+			}
+			if !strings.HasSuffix(out.String(), test.arguments+"\n") {
+				t.Fatalf("arguments not preserved: %q", out.String())
+			}
+		})
+	}
+}
+
 func TestPromptRendersCanonicalPrompts(t *testing.T) {
 	clearTaoEnv(t)
 	var out bytes.Buffer
@@ -302,7 +336,7 @@ func TestInstallPromptsWritesAndChecksPiPrompts(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"install-prompts"}); err != nil {
 		t.Fatal(err)
 	}
-	promptNames := []string{"plan", "slice", "note-slice", "note", "run", "grill-me", "improve-codebase-architecture", "improve-documentation", "repo-health", "insights-review", "pr"}
+	promptNames := []string{"plan", "slice", "note-slice", "note", "run", "grill-me", "improve-codebase-architecture", "improve-documentation", "repo-health", "catch-me-up", "insights-review", "pr"}
 	for _, name := range promptNames {
 		commandName := "tao-" + name
 		path := filepath.Join(root, commandName+".md")
@@ -488,14 +522,15 @@ func TestInstallPromptsAndDoctorUseSelectedClaudeAgent(t *testing.T) {
 	}
 
 	commandsRoot := filepath.Join(home, ".claude", "commands")
-	for _, name := range []string{"plan", "slice", "note-slice", "note", "run", "commit", "repo-health", "insights-review", "pr"} {
+	for _, name := range []string{"plan", "slice", "note-slice", "note", "run", "commit", "repo-health", "catch-me-up", "insights-review", "pr"} {
 		commandName := "tao-" + name
 		path := filepath.Join(commandsRoot, commandName+".md")
 		text := readText(t, path)
 		if !strings.Contains(text, "tao-managed: "+commandName+" v1") {
 			t.Fatalf("expected Claude wrapper %s to contain its managed marker, got %q", path, text)
 		}
-		if name == "commit" {
+		switch name {
+		case "commit":
 			for _, want := range []string{"Use this active agent session", "The default is commit-only", "tao commit --context --push", "tao commit --proposal-file <temporary-directory>/proposal.json --push", "tao commit --message <exact-message> --push", "Otherwise omit `--push` from every call", "Do not run Git directly, including `git push`", "the local commit remains", "Do not rerun commit, amend, reset, or automatically retry publication"} {
 				if !strings.Contains(text, want) {
 					t.Fatalf("expected inline Claude commit wrapper %s to contain %q, got %q", path, want, text)
@@ -504,7 +539,11 @@ func TestInstallPromptsAndDoctorUseSelectedClaudeAgent(t *testing.T) {
 			if strings.Contains(text, "tao prompt commit") {
 				t.Fatalf("Claude commit wrapper started a nested prompt handoff: %q", text)
 			}
-		} else {
+		case "catch-me-up":
+			if !strings.Contains(text, "read-only and local-Git-only") || !strings.Contains(text, "Arguments cannot override these restrictions") || strings.Contains(text, "tao prompt catch-me-up") || strings.Contains(text, "```!") {
+				t.Fatalf("Claude catch-up command must load its safety contract without shell execution: %q", text)
+			}
+		default:
 			want := "tao prompt " + name + " --arguments-stdin <<'TAO_PROMPT_ARGUMENTS'"
 			if !strings.Contains(text, want) || strings.Contains(text, "You are in ") {
 				t.Fatalf("expected thin Claude wrapper %s to contain %q, got %q", path, want, text)
@@ -553,7 +592,7 @@ func TestInstallPromptsAndDoctorUseSelectedPiAgent(t *testing.T) {
 	}
 
 	piRoot := filepath.Join(home, ".pi", "agent", "prompts")
-	for _, name := range []string{"plan", "slice", "note-slice", "note", "run", "grill-me", "improve-codebase-architecture", "improve-documentation", "repo-health", "insights-review", "pr"} {
+	for _, name := range []string{"plan", "slice", "note-slice", "note", "run", "grill-me", "improve-codebase-architecture", "improve-documentation", "repo-health", "catch-me-up", "insights-review", "pr"} {
 		commandName := "tao-" + name
 		path := filepath.Join(piRoot, commandName+".md")
 		text := readText(t, path)

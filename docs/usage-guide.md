@@ -46,7 +46,7 @@ Tao's data home — everything stays local and inspectable on disk.
 A useful mental split:
 
 - **Planning prompts** (`/tao-plan`, `/tao-grill-me`, `/tao-improve-codebase-architecture`,
-  `/tao-improve-documentation`, `/tao-repo-health`, `/tao-insights-review`) are
+  `/tao-improve-documentation`, `/tao-repo-health`, `/tao-catch-me-up`, `/tao-insights-review`) are
   **read-only**. They never edit code or write Tao artifacts.
 - **Build prompts** (`/tao-note`, `/tao-slice`, `/tao-run`, `/tao-commit`, `/tao-pr`) write
   artifacts, code, or git state.
@@ -276,6 +276,31 @@ prioritized action list.
 don't know well. It inspects `git status` first so your in-flight work isn't
 mistaken for debt, and it marks uncertain findings as hypotheses rather than
 overstating certainty. It will not delete, clean, or commit anything on its own.
+
+### `/tao-catch-me-up [period or focus]` — catch up on local changes
+
+Use this in Pi or Claude Code when returning to a repository or before planning
+work that depends on recent changes. By default it summarizes commits reachable
+from **current HEAD over the last two weeks**, using local Git history only and
+excluding uncommitted work. It states the resolved window and branch (or detached
+HEAD), groups user-visible and architectural changes, and calls out noteworthy
+compatibility/workflow implications with commit and path references.
+
+```text
+/tao-catch-me-up
+/tao-catch-me-up last month
+/tao-catch-me-up since 2026-09-01, focus on CLI compatibility
+/tao-catch-me-up focus on storage architecture
+```
+
+Period/focus arguments narrow or adjust the question, not permission to act.
+The catch-up does not edit files, create reports, run tests/builds, fetch, or query
+remotes. It inspects metadata first, then bounded file summaries and targeted
+diffs; it discloses sampling/truncation and shallow or unavailable history rather
+than claiming exhaustive coverage. An empty window stays empty, never silently
+expanding to older work. This is orientation, not a review or evidence of remote
+integration. Refresh the managed prompts with `tao install-prompts` after updating
+Tao.
 
 ### `/tao-insights-review [focus]` — review Tao-wide experience evidence
 

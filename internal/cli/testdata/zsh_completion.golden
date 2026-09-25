@@ -322,7 +322,7 @@ _tao() {
     p|pr|pro|prom|promp|prompt)
       _arguments '--arguments[slash-command arguments to include in the prompt]:text:' '--arguments-stdin[read slash-command arguments from stdin (safe for text containing quotes)]' '--commit=-[include commit instructions in run prompts]:boolean:' '--commit-policy[run prompt commit policy: slice or none]:policy:(slice none)' '--execution-mode[run prompt execution mode: isolated or current]:mode:(isolated current)' '--plan-dir[plan directory for run prompts]:path:_files'
       if _tao_at_positional 3 1 0 ',,' '--arguments' '--commit-policy' '--execution-mode' '--plan-dir'; then
-        compadd -- 'plan' 'slice' 'note-slice' 'note' 'run' 'commit' 'grill-me' 'improve-codebase-architecture' 'improve-documentation' 'repo-health' 'insights-review' 'pr' 'review'
+        compadd -- 'plan' 'slice' 'note-slice' 'note' 'run' 'commit' 'grill-me' 'improve-codebase-architecture' 'improve-documentation' 'repo-health' 'catch-me-up' 'insights-review' 'pr' 'review'
       fi
       ;;
     dr|dra|draf|draft|draft-|draft-p|draft-pr|draft-pro|draft-prom|draft-promp|draft-prompt)

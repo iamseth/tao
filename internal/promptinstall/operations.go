@@ -153,6 +153,13 @@ func installContent(descriptor agentpkg.Descriptor, prompt prompts.Definition) (
 }
 
 func renderInstallContent(descriptor agentpkg.Descriptor, prompt prompts.Definition) (string, error) {
+	if prompt.Name == prompts.PromptCatchMeUp && descriptor.Kind == runtimeconfig.AgentClaude {
+		// Load the read-only contract without a dynamic CLI invocation that
+		// could trigger startup updates before the safety instructions load.
+		// Inline arguments also remain prompt data rather than input to a
+		// shell heredoc.
+		return promptfmt.ManagedInlinePrompt(prompt.CommandName, prompt.Name, prompt.Template)
+	}
 	if prompt.Name == prompts.PromptNote {
 		content, err := descriptor.RenderPrompt(prompt.CommandName, prompt.Name, prompt.Template)
 		if err != nil {
