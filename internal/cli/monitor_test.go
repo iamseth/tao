@@ -89,7 +89,7 @@ func TestMonitorUsesRegistryRepositoryOutputAndClockSeams(t *testing.T) {
 	if requestedDir != plansDir {
 		t.Fatalf("repository dir = %q, want %q", requestedDir, plansDir)
 	}
-	if !strings.Contains(out.String(), "cross-repo Cross Repo") {
+	if !strings.Contains(out.String(), "cross-repo") || strings.Contains(out.String(), "Cross Repo") {
 		t.Fatalf("monitor output did not use registry repository: %q", out.String())
 	}
 }
@@ -139,6 +139,7 @@ func TestMonitorOnceRendersPlainColumnsLivenessAndWarnings(t *testing.T) {
 			{
 				Kind: monitor.RowKindPlan, RepositoryName: "api", PlanID: "stale-plan", Status: plan.StatusBlocked, Liveness: monitor.LivenessStale,
 				Phase: runstatus.Phase("verify"), InvocationDuration: 8 * time.Minute, HeartbeatAge: 25 * time.Second, Left: 2,
+				RunLockPresent: true, RunLockProcessAlive: true,
 				OriginalCompletedCount: 3, OriginalTotalCount: 3, ReworkCompletedCount: 1, ReworkTotalCount: 6, Warnings: []string{"heartbeat record is old"},
 			},
 			{Kind: monitor.RowKindPlan, RepositoryName: "web", PlanID: "quiet", Status: plan.StatusPlanned, Liveness: monitor.LivenessMissing},
@@ -155,7 +156,7 @@ func TestMonitorOnceRendersPlainColumnsLivenessAndWarnings(t *testing.T) {
 	}
 	text := out.String()
 	lines := strings.Split(text, "\n")
-	const wantHeader = "LIVE   STATUS       REPO  PLAN ID/name                  PHASE                 RUN  SLICES  UPDATED"
+	const wantHeader = "LIVE   STATUS       REPO  PLAN ID/name  PHASE                 RUN  SLICES  UPDATED"
 	if got := lines[0]; got != wantHeader {
 		t.Fatalf("monitor header = %q, want %q", got, wantHeader)
 	}
@@ -165,14 +166,14 @@ func TestMonitorOnceRendersPlainColumnsLivenessAndWarnings(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"LIVE", "in_progress", "tao", "20260729-044616-plan-monitor", "r102-compact-monitor", "5m", "1/3", "3m",
-		"STALE", "verify (25s old)", "4/3+6", "warning: api/stale-plan: heartbeat record is old",
+		"LIVE", "in_progress", "tao", "plan-monitor", "r102-compact-monitor", "5m", "1/3", "3m",
+		"STALE", "stalled? (25s old)", "4/3+6", "warning: api/stale-plan: heartbeat record is old",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("monitor output missing %q:\n%s", want, text)
 		}
 	}
-	for _, removed := range []string{"5m04s", "3/4", "1/2"} {
+	for _, removed := range []string{"5m04s", "3/4", "1/2", "20260729-044616-plan-monitor", "verify (25s old)"} {
 		if strings.Contains(text, removed) {
 			t.Fatalf("monitor output retained %q:\n%s", removed, text)
 		}
@@ -186,6 +187,26 @@ func TestMonitorOnceRendersPlainColumnsLivenessAndWarnings(t *testing.T) {
 	}
 }
 
+func TestMonitorPlanLabels(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		row  monitor.Row
+		want string
+	}{
+		{name: "slug first", row: monitor.Row{PlanID: "20260729-044616-plan-monitor", PlanTitle: "Monitor"}, want: "plan-monitor"},
+		{name: "raw id without title", row: monitor.Row{PlanID: "legacy-plan-id", PlanTitle: "Legacy"}, want: "legacy-plan-id"},
+		{name: "trimmed id", row: monitor.Row{PlanID: " legacy "}, want: "legacy"},
+		{name: "title fallback", row: monitor.Row{PlanID: " ", PlanTitle: "Title"}, want: "Title"},
+		{name: "blank fallback", row: monitor.Row{PlanTitle: " "}, want: "-"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := monitorRowValues(test.row, time.Time{}).plan; got != test.want {
+				t.Fatalf("plan = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestMonitorSliceProgressNotation(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -196,8 +217,8 @@ func TestMonitorSliceProgressNotation(t *testing.T) {
 		{name: "with added slices", row: monitor.Row{OriginalCompletedCount: 3, OriginalTotalCount: 3, ReworkCompletedCount: 1, ReworkTotalCount: 6}, want: "4/3+6"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := monitorSlicesLabel(test.row); got != test.want {
-				t.Fatalf("monitorSlicesLabel() = %q, want %q", got, test.want)
+			if got := monitorRowValues(test.row, time.Time{}).slices; got != test.want {
+				t.Fatalf("slices = %q, want %q", got, test.want)
 			}
 		})
 	}
@@ -211,19 +232,46 @@ func TestMonitorPhaseUsesBoundedActiveSliceID(t *testing.T) {
 	}{
 		{name: "short active id", row: monitor.Row{Phase: runstatus.Phase("running_slice"), SliceID: "r102-compact-monitor"}, want: "r102-compact-monitor"},
 		{name: "long active id", row: monitor.Row{Phase: runstatus.Phase("running_slice"), SliceID: "12345678901234567890tail"}, want: "12345678901234567890"},
-		{name: "unicode boundary", row: monitor.Row{Phase: runstatus.Phase("running_slice"), SliceID: strings.Repeat("界", 21)}, want: strings.Repeat("界", 20)},
+		{name: "unicode boundary", row: monitor.Row{Phase: runstatus.Phase("running_slice"), SliceID: strings.Repeat("界", 21)}, want: strings.Repeat("界", 10)},
 		{name: "missing active id", row: monitor.Row{Phase: runstatus.Phase("running_slice")}, want: "running_slice"},
 		{name: "other phase ignores slice", row: monitor.Row{Phase: runstatus.Phase("verify"), SliceID: "001-work"}, want: "verify"},
-		{name: "missing phase", row: monitor.Row{SliceID: "001-work"}, want: "-"},
+		{name: "missing phase uses slice", row: monitor.Row{SliceID: "001-work"}, want: "001-work"},
+		{name: "missing phase and slice", row: monitor.Row{}, want: "-"},
+		{name: "combining characters", row: monitor.Row{SliceID: strings.Repeat("e\u0301", 21)}, want: strings.Repeat("e\u0301", 20)},
 		{
-			name: "stale active slice",
+			name: "stale active slice without lock",
 			row:  monitor.Row{Phase: runstatus.Phase("running_slice"), SliceID: "12345678901234567890tail", Liveness: monitor.LivenessStale, HeartbeatAge: 25 * time.Second},
-			want: "12345678901234567890 (25s old)",
+			want: "12345678901234567890",
+		},
+		{
+			name: "stale with live lock process",
+			row:  monitor.Row{Phase: runstatus.Phase("verify"), Liveness: monitor.LivenessStale, RunLockPresent: true, RunLockProcessAlive: true, HeartbeatAge: 125 * time.Second},
+			want: "stalled? (2m old)",
+		},
+		{
+			name: "stale with dead lock process",
+			row:  monitor.Row{Phase: runstatus.Phase("verify"), Liveness: monitor.LivenessStale, RunLockPresent: true, HeartbeatAge: 25 * time.Second},
+			want: "verify",
+		},
+		{
+			name: "stale with process but no lock",
+			row:  monitor.Row{Phase: runstatus.Phase("verify"), Liveness: monitor.LivenessStale, RunLockProcessAlive: true, HeartbeatAge: 25 * time.Second},
+			want: "verify",
+		},
+		{
+			name: "live lock is not stalled",
+			row:  monitor.Row{Phase: runstatus.Phase("verify"), Liveness: monitor.LivenessLive, RunLockPresent: true, RunLockProcessAlive: true},
+			want: "verify",
+		},
+		{
+			name: "abandoned overrides stalled",
+			row:  monitor.Row{Status: plan.StatusAbandoned, Phase: runstatus.Phase("verify"), Liveness: monitor.LivenessStale, RunLockPresent: true, RunLockProcessAlive: true},
+			want: "-",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := monitorPhaseLabel(test.row); got != test.want {
-				t.Fatalf("monitorPhaseLabel() = %q, want %q", got, test.want)
+			if got := monitorRowValues(test.row, time.Time{}).phase; got != test.want {
+				t.Fatalf("phase = %q, want %q", got, test.want)
 			}
 		})
 	}
@@ -237,6 +285,8 @@ func TestMonitorRuntimeUsesMagnitudePrecision(t *testing.T) {
 		want     string
 	}{
 		{name: "no runtime record", duration: 45 * time.Second, want: "-"},
+		{name: "missing liveness", liveness: monitor.LivenessMissing, duration: time.Minute, want: "-"},
+		{name: "negative duration", liveness: monitor.LivenessLive, duration: -time.Second, want: "0s"},
 		{name: "just started", liveness: monitor.LivenessLive, want: "0s"},
 		{name: "subsecond", liveness: monitor.LivenessLive, duration: 999 * time.Millisecond, want: "0s"},
 		{name: "seconds floor", liveness: monitor.LivenessLive, duration: 59*time.Second + 999*time.Millisecond, want: "59s"},
@@ -247,8 +297,8 @@ func TestMonitorRuntimeUsesMagnitudePrecision(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			row := monitor.Row{Liveness: test.liveness, InvocationDuration: test.duration}
-			if got := formatMonitorRuntime(row); got != test.want {
-				t.Fatalf("formatMonitorRuntime() = %q, want %q", got, test.want)
+			if got := monitorRowValues(row, time.Time{}).run; got != test.want {
+				t.Fatalf("runtime = %q, want %q", got, test.want)
 			}
 		})
 	}
@@ -291,8 +341,8 @@ func TestMonitorUnicodeColumnsMatchExactPlainAndColoredOutput(t *testing.T) {
 		OriginalTotalCount:     2,
 		Warnings:               []string{"this warning is intentionally wider than the table"},
 	}}}
-	const want = "LIVE  STATUS       REPO        PLAN ID/name          PHASE       RUN  SLICES  UPDATED\n" +
-		"LIVE  in_progress  倉庫名前長  unicode 日本語の計画  検証段階中  0s   1/2     -      \n" +
+	const want = "LIVE  STATUS       REPO        PLAN ID/name  PHASE       RUN  SLICES  UPDATED\n" +
+		"LIVE  in_progress  倉庫名前長  unicode       検証段階中  0s   1/2     -      \n" +
 		"warning: 倉庫名前長/unicode: this warning is intentionally wider than the table\n"
 
 	var plain, colored bytes.Buffer
@@ -372,18 +422,26 @@ func TestMonitorInteractiveColorPolicy(t *testing.T) {
 	now := time.Date(2026, 7, 29, 6, 0, 0, 0, time.UTC)
 	snapshot := monitor.Snapshot{CollectedAt: now, Rows: []monitor.Row{{RepositoryName: "tao", PlanID: "plan", Status: plan.StatusInProgress, Liveness: monitor.LivenessLive}}}
 	for _, test := range []struct {
-		name    string
-		noColor string
-		want    bool
+		name     string
+		terminal bool
+		noColor  string
+		cliColor string
+		force    string
+		want     bool
 	}{
-		{name: "color", want: true},
-		{name: "NO_COLOR", noColor: "1", want: false},
+		{name: "color", terminal: true, want: true},
+		{name: "NO_COLOR", terminal: true, noColor: "1", force: "1", want: false},
+		{name: "redirected", want: false},
+		{name: "CLICOLOR zero", terminal: true, cliColor: "0", want: false},
+		{name: "forced redirected", force: "1", cliColor: "0", want: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Setenv("TERM", "xterm-256color")
 			t.Setenv("NO_COLOR", test.noColor)
+			t.Setenv("CLICOLOR", test.cliColor)
+			t.Setenv("CLICOLOR_FORCE", test.force)
 			var out bytes.Buffer
-			if err := renderMonitorSnapshot(&out, snapshot, monitorColorEnabled()); err != nil {
+			if err := renderMonitorSnapshot(&out, snapshot, monitorColorEnabled(test.terminal)); err != nil {
 				t.Fatal(err)
 			}
 			got := strings.Contains(out.String(), "\x1b[")

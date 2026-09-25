@@ -6,6 +6,8 @@ import (
 	"hash/fnv"
 	"strconv"
 	"strings"
+
+	"github.com/iamseth/tao/internal/term"
 )
 
 // Profile describes the color resolution available to the renderer.
@@ -300,17 +302,10 @@ func (p Profile) Convert(hex string) (Color, error) {
 }
 
 func detectProfile(isTerminal bool, getenv func(string) string) Profile {
-	term := strings.ToLower(strings.TrimSpace(getenv("TERM")))
-	if getenv("NO_COLOR") != "" || term == "dumb" {
+	if !term.ColorEnabled(isTerminal, getenv) {
 		return ProfileNone
 	}
-	if value := strings.TrimSpace(getenv("CLICOLOR_FORCE")); value != "" && value != "0" {
-		return profileFromEnvironment(term, getenv("COLORTERM"))
-	}
-	if !isTerminal || strings.TrimSpace(getenv("CLICOLOR")) == "0" {
-		return ProfileNone
-	}
-	return profileFromEnvironment(term, getenv("COLORTERM"))
+	return profileFromEnvironment(getenv("TERM"), getenv("COLORTERM"))
 }
 
 func profileFromEnvironment(term, colorTerm string) Profile {

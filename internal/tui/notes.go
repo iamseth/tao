@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/iamseth/tao/internal/monitor/rowlabel"
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/term/cells"
 )
@@ -126,7 +127,7 @@ func renderNotesPage(snapshot note.Snapshot, selected int, focusRepositoryID str
 			}
 			message := singleLineDetail(warning.Error())
 			section.contentLines = append(section.contentLines, len(lines))
-			lines = append(lines, "  "+repository+": "+displayValue(message))
+			lines = append(lines, "  "+repository+": "+rowlabel.DisplayValue(message))
 		}
 		metadata.sections = append(metadata.sections, section)
 	}

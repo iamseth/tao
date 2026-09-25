@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/monitor"
+	"github.com/iamseth/tao/internal/monitor/rowlabel"
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/term/cells"
@@ -14,7 +15,6 @@ import (
 
 const (
 	clearScreenSequence = "\x1b[H\x1b[2J"
-	maxSliceIDCells     = 20
 	sliceBarCells       = 10
 )
 
@@ -573,7 +573,7 @@ func renderSlicesValue(profile Profile, row monitor.Row) string {
 	}
 	bar := Paint(profile, RoleNeutral5, strings.Repeat("━", filled)) +
 		Paint(profile, RoleNeutral2, strings.Repeat("─", sliceBarCells-filled))
-	return bar + " " + slicesLabel(row)
+	return bar + " " + rowlabel.SlicesLabel(row)
 }
 
 func tableRowValues(row monitor.Row, now time.Time, actionLabel string) rowValues {
@@ -582,57 +582,27 @@ func tableRowValues(row monitor.Row, now time.Time, actionLabel string) rowValue
 		next = actionLabel
 	}
 	return rowValues{
-		repo:   displayValue(row.RepositoryName),
-		next:   " " + displayValue(next) + " ",
-		plan:   planLabel(row),
-		slices: slicesLabel(row),
+		repo:   rowlabel.DisplayValue(row.RepositoryName),
+		next:   " " + rowlabel.DisplayValue(next) + " ",
+		plan:   rowlabel.PlanLabel(row),
+		slices: rowlabel.SlicesLabel(row),
 		run:    combinedRunLabel(row),
 		age:    relativeAge(row.UpdatedAt, now),
 	}
-}
-
-func planLabel(row monitor.Row) string {
-	id := strings.TrimSpace(row.PlanID)
-	if slug, ok := plan.PlanSlug(id); ok {
-		return slug
-	}
-	if id != "" {
-		return id
-	}
-	return displayValue(row.PlanTitle)
-}
-
-func phaseLabel(row monitor.Row) string {
-	if row.Status == plan.StatusAbandoned {
-		return "-"
-	}
-	if isStalled(row) {
-		return fmt.Sprintf("stalled? (%s old)", durationLabel(row.HeartbeatAge))
-	}
-	phase := strings.TrimSpace(string(row.Phase))
-	sliceID := strings.TrimSpace(row.SliceID)
-	if sliceID != "" && (phase == "" || phase == "running_slice") {
-		return cells.Truncate(sliceID, maxSliceIDCells)
-	}
-	return displayValue(phase)
 }
 
 func runAgeLabel(row monitor.Row) string {
 	if row.Status == plan.StatusAbandoned || (row.Liveness != monitor.LivenessLive && row.Liveness != monitor.LivenessStale) {
 		return "-"
 	}
-	return durationLabel(row.InvocationDuration)
-}
-
-func hasVisibleRun(row monitor.Row) bool {
-	return row.Liveness == monitor.LivenessLive || isStalled(row)
+	return rowlabel.DurationLabel(row.InvocationDuration)
 }
 
 func combinedRunLabel(row monitor.Row) string {
 	if !hasVisibleRun(row) {
 		return "-"
 	}
-	phase := phaseLabel(row)
+	phase := rowlabel.PhaseLabel(row)
 	age := runAgeLabel(row)
 	if phase == "-" {
 		return age
@@ -671,42 +641,16 @@ func formatAbandonedAt(value *time.Time) string {
 	return value.UTC().Format(time.RFC3339)
 }
 
-func durationLabel(duration time.Duration) string {
-	duration = max(duration, 0)
-	switch {
-	case duration < time.Minute:
-		return fmt.Sprintf("%ds", duration/time.Second)
-	case duration < time.Hour:
-		return fmt.Sprintf("%dm", duration/time.Minute)
-	default:
-		return fmt.Sprintf("%dh", duration/time.Hour)
-	}
-}
-
-func slicesLabel(row monitor.Row) string {
-	completed := row.OriginalCompletedCount + row.ReworkCompletedCount
-	value := fmt.Sprintf("%d/%d", completed, row.OriginalTotalCount)
-	if row.ReworkTotalCount > 0 {
-		value += fmt.Sprintf("+%d", row.ReworkTotalCount)
-	}
-	return value
-}
-
-func displayValue(value string) string {
-	if strings.TrimSpace(value) == "" {
-		return "-"
-	}
-	return value
-}
-
 func colorStatus(profile Profile, value, status string) string {
 	role := RoleRepo
-	switch status {
-	case plan.StatusCompleted, plan.StatusReviewed:
+	switch rowlabel.StatusRoleFor(status) {
+	case rowlabel.StatusRoleSuccess:
 		role = RoleSuccess
-	case plan.StatusInProgress:
+	case rowlabel.StatusRoleActive:
 		role = RoleAccent
-	case plan.StatusBlocked, plan.StatusPlanned, plan.StatusPending, plan.StatusChangesRequested, plan.StatusVerificationFailed:
+	case rowlabel.StatusRoleReview:
+		role = RoleInfo
+	case rowlabel.StatusRoleWarn:
 		role = RoleWarn
 	}
 	return Paint(profile, role, value)

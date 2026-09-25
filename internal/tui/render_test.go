@@ -107,11 +107,24 @@ func TestNextActionsRenderAsNormalText(t *testing.T) {
 	}
 }
 
-func TestColorStatusRendersVerificationFailureAsWarning(t *testing.T) {
-	got := colorStatus(ProfileTrueColor, plan.StatusVerificationFailed, plan.StatusVerificationFailed)
-	want := Paint(ProfileTrueColor, RoleWarn, plan.StatusVerificationFailed)
-	if got != want {
-		t.Fatalf("verification-failed status color = %q, want %q", got, want)
+func TestColorStatusRoles(t *testing.T) {
+	for _, test := range []struct {
+		status string
+		role   Role
+	}{
+		{plan.StatusCompleted, RoleSuccess},
+		{plan.StatusInProgress, RoleAccent},
+		{plan.StatusVerificationFailed, RoleWarn},
+		{plan.StatusInReview, RoleInfo},
+		{"unknown", RoleRepo},
+	} {
+		t.Run(test.status, func(t *testing.T) {
+			got := colorStatus(ProfileTrueColor, test.status, test.status)
+			want := Paint(ProfileTrueColor, test.role, test.status)
+			if got != want {
+				t.Fatalf("status color = %q, want %q", got, want)
+			}
+		})
 	}
 }
 
@@ -157,9 +170,6 @@ func TestSlicesValueAddsTenCellProgressBarWithoutChangingLabel(t *testing.T) {
 		OriginalTotalCount:     3,
 		ReworkCompletedCount:   1,
 		ReworkTotalCount:       2,
-	}
-	if got := slicesLabel(row); got != "3/3+2" {
-		t.Fatalf("slicesLabel() = %q, want existing combined label", got)
 	}
 	if got := renderSlicesValue(ProfileNone, row); got != "━━━━━━──── 3/3+2" {
 		t.Fatalf("renderSlicesValue() = %q, want ten-cell thin bar followed by label", got)
@@ -227,11 +237,8 @@ func TestSelectedPlanRowUsesTokyoNightSelectionColors(t *testing.T) {
 	}
 }
 
-func TestPlanLabelUsesReadableSlugWithoutFullPlanID(t *testing.T) {
+func TestTableRowValuesUsesReadableSlugWithoutFullPlanID(t *testing.T) {
 	const id = "20260828-181339-tui-plans-rows"
-	if got := planLabel(monitor.Row{PlanID: id, PlanTitle: "TUI Plans tab"}); got != "tui-plans-rows" {
-		t.Fatalf("planLabel() = %q, want readable slug", got)
-	}
 	values := tableRowValues(monitor.Row{PlanID: id, Status: plan.StatusPlanned}, time.Time{}, "")
 	if strings.Contains(values.plan, id) {
 		t.Fatalf("plan list value contains full ID %q", values.plan)
@@ -420,33 +427,6 @@ func columnNames(columns []column) []string {
 		names[index] = column.name
 	}
 	return names
-}
-
-func TestPhaseLabelRequiresLiveRunLockForStalledLabel(t *testing.T) {
-	base := monitor.Row{Liveness: monitor.LivenessStale, HeartbeatAge: 45 * time.Second, Phase: "verify"}
-	tests := []struct {
-		name string
-		row  monitor.Row
-		want string
-	}{
-		{name: "missing lock", row: base, want: "verify"},
-		{name: "dead lock", row: func() monitor.Row { row := base; row.RunLockPresent = true; return row }(), want: "verify"},
-		{name: "live lock", row: func() monitor.Row { row := base; row.RunLockPresent = true; row.RunLockProcessAlive = true; return row }(), want: "stalled? (45s old)"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if got := phaseLabel(test.row); got != test.want {
-				t.Fatalf("phaseLabel() = %q, want %q", got, test.want)
-			}
-		})
-	}
-}
-
-func TestPhaseLabelTruncatesByCells(t *testing.T) {
-	got := phaseLabel(monitor.Row{Phase: "running_slice", SliceID: strings.Repeat("界", 11)})
-	if width := cells.Width(got); width != maxSliceIDCells {
-		t.Fatalf("phaseLabel() width = %d, want %d: %q", width, maxSliceIDCells, got)
-	}
 }
 
 func TestRenderOmitsEmptySectionsAndAlwaysShowsDonePlans(t *testing.T) {

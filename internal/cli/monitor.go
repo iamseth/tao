@@ -8,20 +8,19 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/iamseth/tao/internal/monitor"
+	"github.com/iamseth/tao/internal/monitor/rowlabel"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/taodata"
+	"github.com/iamseth/tao/internal/term"
 	"github.com/iamseth/tao/internal/term/cells"
-	planview "github.com/iamseth/tao/internal/view"
 )
 
 const (
-	defaultMonitorInterval      = 2 * time.Second
-	monitorClearScreen          = "\x1b[H\x1b[2J"
-	monitorSliceIDMaxCharacters = 20
+	defaultMonitorInterval = 2 * time.Second
+	monitorClearScreen     = "\x1b[H\x1b[2J"
 )
 
 var monitorCommand = commandMetadata{
@@ -89,7 +88,7 @@ func (a App) monitor(ctx context.Context, args []string) error {
 
 	ctx, cancel := newCommandSignalContext(ctx)
 	defer cancel()
-	if err := writeMonitorSnapshot(ctx, a.Out, collector, true, monitorColorEnabled()); err != nil {
+	if err := writeMonitorSnapshot(ctx, a.Out, collector, true, monitorColorEnabled(terminal)); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return nil
 		}
@@ -103,7 +102,7 @@ func (a App) monitor(ctx context.Context, args []string) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C():
-			if err := writeMonitorSnapshot(ctx, a.Out, collector, true, monitorColorEnabled()); err != nil {
+			if err := writeMonitorSnapshot(ctx, a.Out, collector, true, monitorColorEnabled(terminal)); err != nil {
 				if errors.Is(err, context.Canceled) {
 					return nil
 				}
@@ -149,8 +148,8 @@ func (a App) monitorOutputIsTerminal(out io.Writer) bool {
 	return outputIsTerminal(out)
 }
 
-func monitorColorEnabled() bool {
-	return os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb"
+func monitorColorEnabled(isTerminal bool) bool {
+	return term.ColorEnabled(isTerminal, os.Getenv)
 }
 
 func flagDurationValue(fs *flag.FlagSet, name string) time.Duration {
@@ -261,39 +260,19 @@ func (v monitorValues) columns() []string {
 }
 
 func monitorRowValues(row monitor.Row, now time.Time) monitorValues {
+	runtime := "-"
+	if row.Liveness == monitor.LivenessLive || row.Liveness == monitor.LivenessStale {
+		runtime = rowlabel.DurationLabel(row.InvocationDuration)
+	}
 	return monitorValues{
 		live:    monitorLivenessLabel(row.Liveness),
-		status:  emptyMonitorValue(row.Status),
-		repo:    emptyMonitorValue(row.RepositoryName),
-		plan:    monitorPlanLabel(row),
-		phase:   monitorPhaseLabel(row),
-		run:     formatMonitorRuntime(row),
-		slices:  monitorSlicesLabel(row),
+		status:  rowlabel.DisplayValue(row.Status),
+		repo:    rowlabel.DisplayValue(row.RepositoryName),
+		plan:    rowlabel.PlanLabel(row),
+		phase:   rowlabel.PhaseLabel(row),
+		run:     runtime,
+		slices:  rowlabel.SlicesLabel(row),
 		updated: plan.FormatHumanTime(row.UpdatedAt, now),
-	}
-}
-
-func monitorSlicesLabel(row monitor.Row) string {
-	completed := row.OriginalCompletedCount + row.ReworkCompletedCount
-	value := fmt.Sprintf("%d/%d", completed, row.OriginalTotalCount)
-	if row.ReworkTotalCount > 0 {
-		value += fmt.Sprintf("+%d", row.ReworkTotalCount)
-	}
-	return value
-}
-
-func formatMonitorRuntime(row monitor.Row) string {
-	if row.Liveness != monitor.LivenessLive && row.Liveness != monitor.LivenessStale {
-		return "-"
-	}
-	duration := max(row.InvocationDuration, 0)
-	switch {
-	case duration < time.Minute:
-		return fmt.Sprintf("%ds", duration/time.Second)
-	case duration < time.Hour:
-		return fmt.Sprintf("%dm", duration/time.Minute)
-	default:
-		return fmt.Sprintf("%dh", duration/time.Hour)
 	}
 }
 
@@ -308,54 +287,12 @@ func monitorLivenessLabel(liveness monitor.Liveness) string {
 	}
 }
 
-func monitorPhaseLabel(row monitor.Row) string {
-	phase := strings.TrimSpace(string(row.Phase))
-	if phase == "" {
-		phase = "-"
-	}
-	if phase == "running_slice" {
-		sliceID := strings.TrimSpace(row.SliceID)
-		if sliceID != "" {
-			runes := []rune(sliceID)
-			if len(runes) > monitorSliceIDMaxCharacters {
-				runes = runes[:monitorSliceIDMaxCharacters]
-			}
-			phase = string(runes)
-		}
-	}
-	if row.Liveness == monitor.LivenessStale {
-		return fmt.Sprintf("%s (%s old)", phase, plan.FormatDuration(row.HeartbeatAge))
-	}
-	return phase
-}
-
-func monitorPlanLabel(row monitor.Row) string {
-	if strings.TrimSpace(row.PlanID) == "" {
-		return emptyMonitorValue(row.PlanTitle)
-	}
-	if _, ok := plan.PlanSlug(row.PlanID); ok {
-		return row.PlanID
-	}
-	name := strings.TrimSpace(row.PlanTitle)
-	if name == "" || name == row.PlanID {
-		return row.PlanID
-	}
-	return planview.ShortPlanID(row.PlanID) + " " + name
-}
-
 func monitorWarningLabel(row monitor.Row) string {
-	repo := emptyMonitorValue(row.RepositoryName)
+	repo := rowlabel.DisplayValue(row.RepositoryName)
 	if row.PlanID == "" {
 		return repo
 	}
 	return repo + "/" + row.PlanID
-}
-
-func emptyMonitorValue(value string) string {
-	if strings.TrimSpace(value) == "" {
-		return "-"
-	}
-	return value
 }
 
 func colorMonitorLiveness(value string, liveness monitor.Liveness) string {

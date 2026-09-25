@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/monitor"
+	"github.com/iamseth/tao/internal/monitor/rowlabel"
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/term/cells"
 )
@@ -51,7 +52,7 @@ func renderDebugPage(model Model) []string {
 	appendDebugValue(&lines, "viewport", fmt.Sprintf("%dx%d", model.Width, model.Height))
 	appendDebugValue(&lines, "color", model.Profile.String())
 	appendDebugValue(&lines, "repository focus", debugFocusLabel(model))
-	appendDebugValue(&lines, "search", displayValue(normalizedSearchQuery(model.SearchQuery)))
+	appendDebugValue(&lines, "search", rowlabel.DisplayValue(normalizedSearchQuery(model.SearchQuery)))
 	appendDebugValue(&lines, "plan rows", fmt.Sprintf("%d", len(model.Snapshot.Rows)))
 	appendDebugValue(&lines, "open notes", fmt.Sprintf("%d", len(model.NoteSnapshot.Notes)))
 	appendDebugValue(&lines, "repositories", fmt.Sprintf("%d active of %d registered", debugRepositoryCount(model.Snapshot, model.NoteSnapshot), len(model.SettingsSnapshot.Repositories)))
@@ -66,9 +67,9 @@ func renderDebugPage(model Model) []string {
 	}
 
 	lines = append(lines, "", debugSectionRule(model, "DOCTOR"))
-	appendDebugValue(&lines, "selected agent", displayValue(singleLineDetail(model.DebugSnapshot.SelectedAgent)))
+	appendDebugValue(&lines, "selected agent", rowlabel.DisplayValue(singleLineDetail(model.DebugSnapshot.SelectedAgent)))
 	agents := strings.Join(model.DebugSnapshot.InstalledAgents, ", ")
-	appendDebugValue(&lines, "installed agents", displayValue(singleLineDetail(agents)))
+	appendDebugValue(&lines, "installed agents", rowlabel.DisplayValue(singleLineDetail(agents)))
 	if model.DebugSnapshot.CollectionError != "" {
 		lines = append(lines, "  ⚠ diagnostics  "+singleLineDetail(model.DebugSnapshot.CollectionError))
 	}
@@ -77,7 +78,7 @@ func renderDebugPage(model Model) []string {
 	} else {
 		for _, problem := range model.DebugSnapshot.DoctorProblems {
 			label := strings.TrimSpace(problem.Category + " " + problem.Name)
-			line := "  ⚠ " + displayValue(singleLineDetail(label))
+			line := "  ⚠ " + rowlabel.DisplayValue(singleLineDetail(label))
 			if problem.Status != "" {
 				line += "  " + singleLineDetail(problem.Status)
 			}
@@ -164,7 +165,7 @@ func debugSectionRule(model Model, title string) string {
 }
 
 func appendDebugValue(lines *[]string, label, value string) {
-	*lines = append(*lines, fmt.Sprintf("  %-20s %s", singleLineDetail(label), displayValue(singleLineDetail(value))))
+	*lines = append(*lines, fmt.Sprintf("  %-20s %s", singleLineDetail(label), rowlabel.DisplayValue(singleLineDetail(value))))
 }
 
 func appendDebugTime(lines []string, label string, value time.Time) []string {
@@ -205,7 +206,7 @@ func debugCollectorWarnings(snapshot monitor.Snapshot, notes note.Snapshot) []st
 	var warnings []string
 	for _, row := range snapshot.Rows {
 		for _, warning := range row.Warnings {
-			warnings = append(warnings, singleLineDetail(displayValue(row.RepositoryName))+": "+singleLineDetail(warning))
+			warnings = append(warnings, singleLineDetail(rowlabel.DisplayValue(row.RepositoryName))+": "+singleLineDetail(warning))
 		}
 	}
 	for _, warning := range notes.Warnings {

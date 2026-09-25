@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/iamseth/tao/internal/monitor/rowlabel"
 	"github.com/iamseth/tao/internal/term/cells"
 )
 
@@ -122,9 +123,9 @@ func renderGlobalContextWidth(model Model, maxWidth int) string {
 		if name == "" {
 			name = singleLineDetail(model.FocusRepositoryID)
 		}
-		repository = "repo " + displayValue(name)
+		repository = "repo " + rowlabel.DisplayValue(name)
 	}
-	agent := displayValue(singleLineDetail(model.DebugSnapshot.SelectedAgent))
+	agent := rowlabel.DisplayValue(singleLineDetail(model.DebugSnapshot.SelectedAgent))
 	suffix := "  agent " + agent + "  "
 	if maxWidth > 0 {
 		repositoryWidth := maxWidth - cells.Width(suffix) - cells.Width("●")

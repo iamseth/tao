@@ -7,7 +7,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/iamseth/tao/internal/monitor/rowlabel"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/term"
 )
 
 func writef(w io.Writer, format string, args ...any) error {
@@ -62,14 +64,14 @@ func wrapText(value string, width int) []string {
 }
 
 func colorStatus(value, status string) string {
-	switch status {
-	case plan.StatusCompleted, plan.StatusReviewed:
+	switch rowlabel.StatusRoleFor(status) {
+	case rowlabel.StatusRoleSuccess:
 		return color(value, "32")
-	case plan.StatusInProgress:
+	case rowlabel.StatusRoleActive:
 		return color(value, "36")
-	case plan.StatusInReview:
+	case rowlabel.StatusRoleReview:
 		return color(value, "34")
-	case plan.StatusBlocked, plan.StatusPlanned, plan.StatusPending, plan.StatusChangesRequested, plan.StatusVerificationFailed:
+	case rowlabel.StatusRoleWarn:
 		return color(value, "33")
 	default:
 		return color(value, "35")
@@ -100,27 +102,12 @@ func colorGreen(value string) string {
 	return color(value, "32")
 }
 
-type terminalWriter interface {
-	IsTerminal() bool
-}
-
 func outputSupportsColor(out io.Writer) bool {
-	if os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
-		return false
-	}
-	return outputIsTerminal(out)
+	return term.ColorEnabled(outputIsTerminal(out), os.Getenv)
 }
 
 func outputIsTerminal(out io.Writer) bool {
-	if terminal, ok := out.(terminalWriter); ok {
-		return terminal.IsTerminal()
-	}
-	file, ok := out.(*os.File)
-	if !ok {
-		return false
-	}
-	info, err := file.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(out)
 }
 
 func color(value, code string) string {

@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/iamseth/tao/internal/monitor"
+	"github.com/iamseth/tao/internal/monitor/rowlabel"
 	"github.com/iamseth/tao/internal/plan"
 )
 
@@ -115,8 +116,8 @@ func sectionKind(row monitor.Row) SectionKind {
 	}
 }
 
-func isStalled(row monitor.Row) bool {
-	return row.Liveness == monitor.LivenessStale && row.RunLockPresent && row.RunLockProcessAlive
+func hasVisibleRun(row monitor.Row) bool {
+	return row.Liveness == monitor.LivenessLive || rowlabel.IsStalled(row)
 }
 
 func visibleRows(rows []monitor.Row, repositoryID string) []monitor.Row {

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/monitor"
+	"github.com/iamseth/tao/internal/monitor/rowlabel"
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/term"
@@ -767,7 +768,7 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 		next := nextPullRequestSetting(repository.PullRequest)
 		currentLabel := pullRequestSetting(repository.PullRequest, state.settingsSnapshot.InheritedPullRequest)
 		nextLabel := pullRequestSetting(next, state.settingsSnapshot.InheritedPullRequest)
-		state.beginConfirm(fmt.Sprintf("Set %s pull_request from %s to %s?", displayValue(repository.Name), currentLabel, nextLabel), func(accepted bool) {
+		state.beginConfirm(fmt.Sprintf("Set %s pull_request from %s to %s?", rowlabel.DisplayValue(repository.Name), currentLabel, nextLabel), func(accepted bool) {
 			if !accepted {
 				return
 			}
@@ -777,7 +778,7 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 			}
 			state.settingsSnapshot = a.collectSettings(ctx)
 			state.restoreSettingsSelection(repository.ID)
-			state.settingsMessage = "Updated " + displayValue(repository.Name) + " pull_request to " + nextLabel + "."
+			state.settingsMessage = "Updated " + rowlabel.DisplayValue(repository.Name) + " pull_request to " + nextLabel + "."
 		})
 		return false
 	}
@@ -1632,19 +1633,8 @@ func (s *loopState) clampDebugOffset() {
 	s.debugOffset = max(0, min(s.debugOffset, s.debugPageMaxOffset()))
 }
 
-type colorTerminalWriter interface {
-	IsTerminal() bool
-}
-
 func outputSupportsColor(output io.Writer) Profile {
-	isTerminal := false
-	if terminal, ok := output.(colorTerminalWriter); ok {
-		isTerminal = terminal.IsTerminal()
-	} else if file, ok := output.(*os.File); ok {
-		info, err := file.Stat()
-		isTerminal = err == nil && info.Mode()&os.ModeCharDevice != 0
-	}
-	return detectProfile(isTerminal, os.Getenv)
+	return detectProfile(term.IsTerminal(output), os.Getenv)
 }
 
 func restoreTerminalState(terminal Terminal, output io.Writer) error {

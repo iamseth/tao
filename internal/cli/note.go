@@ -19,6 +19,7 @@ import (
 	"github.com/iamseth/tao/internal/planning"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/taodata"
+	"github.com/iamseth/tao/internal/term"
 )
 
 const defaultNoteListLimit = 20
@@ -805,15 +806,7 @@ func (a App) noteErrorOutput() io.Writer {
 }
 
 func inputIsTerminal(in io.Reader) bool {
-	if terminal, ok := in.(interface{ IsTerminal() bool }); ok {
-		return terminal.IsTerminal()
-	}
-	file, ok := in.(*os.File)
-	if !ok {
-		return false
-	}
-	info, err := file.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(in)
 }
 
 func noteTags(fs *flag.FlagSet) []string { return noteStringList(fs, "tag") }

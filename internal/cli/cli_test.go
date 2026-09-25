@@ -21,9 +21,23 @@ func TestColorHelpersCoverStatusAndDoneBranches(t *testing.T) {
 	if got := colorStatus(plan.StatusVerificationFailed, plan.StatusVerificationFailed); got != "\x1b[33mverification_failed\x1b[0m" {
 		t.Fatalf("verification-failed status color = %q, want amber", got)
 	}
-	for _, status := range []string{plan.StatusCompleted, plan.StatusInProgress, plan.StatusBlocked, plan.StatusPlanned, plan.StatusPending, "weird"} {
-		if got := colorStatus(status, status); !strings.Contains(got, status) {
-			t.Fatalf("expected colored status to include %q, got %q", status, got)
+	for _, test := range []struct {
+		status string
+		code   string
+	}{
+		{plan.StatusCompleted, "32"},
+		{plan.StatusReviewed, "32"},
+		{plan.StatusInProgress, "36"},
+		{plan.StatusInReview, "34"},
+		{plan.StatusBlocked, "33"},
+		{plan.StatusPlanned, "33"},
+		{plan.StatusPending, "33"},
+		{plan.StatusChangesRequested, "33"},
+		{"weird", "35"},
+	} {
+		want := "\x1b[" + test.code + "m" + test.status + "\x1b[0m"
+		if got := colorStatus(test.status, test.status); got != want {
+			t.Errorf("colorStatus(%q) = %q, want %q", test.status, got, want)
 		}
 	}
 	for _, test := range []struct {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/iamseth/tao/internal/agent/logrecord"
 	"github.com/iamseth/tao/internal/monitor"
+	"github.com/iamseth/tao/internal/monitor/rowlabel"
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/term/cells"
@@ -149,10 +150,10 @@ func noteDetailSections(item note.CatalogNote, width int) (header, body []string
 	}
 	header = []string{
 		"Tao UI | NOTE DETAIL",
-		"Repository: " + displayValue(singleLineNoteValue(item.RepositoryName)),
-		"Note: " + displayValue(singleLineNoteValue(item.ID)),
+		"Repository: " + rowlabel.DisplayValue(singleLineNoteValue(item.RepositoryName)),
+		"Note: " + rowlabel.DisplayValue(singleLineNoteValue(item.ID)),
 		"Status: open",
-		"Tags: " + displayValue(singleLineNoteValue(strings.Join(item.Tags, ", "))),
+		"Tags: " + rowlabel.DisplayValue(singleLineNoteValue(strings.Join(item.Tags, ", "))),
 		"Created: " + created,
 		"Updated: " + updated,
 		"Text:",
@@ -240,10 +241,10 @@ func RenderDetail(model DetailModel) string {
 		return RenderSliceDetail(model)
 	}
 	id, _, repoName, status := detailHeaderValues(model)
-	phase := displayValue(strings.TrimSpace(string(model.Row.Phase)))
+	phase := rowlabel.DisplayValue(strings.TrimSpace(string(model.Row.Phase)))
 	heartbeat := "-"
 	if model.Row.Liveness == monitor.LivenessLive || model.Row.Liveness == monitor.LivenessStale {
-		heartbeat = durationLabel(model.Row.HeartbeatAge) + " ago"
+		heartbeat = rowlabel.DurationLabel(model.Row.HeartbeatAge) + " ago"
 	}
 	profile := model.Profile
 	if profile == ProfileNone {
@@ -920,7 +921,7 @@ func detailHeaderValues(model DetailModel) (id, title, repoName, status string) 
 			status = model.Plan.State.Status
 		}
 	}
-	return displayValue(id), displayValue(title), displayValue(repoName), displayValue(status)
+	return rowlabel.DisplayValue(id), rowlabel.DisplayValue(title), rowlabel.DisplayValue(repoName), rowlabel.DisplayValue(status)
 }
 
 // RenderSlicesPane renders queue-authoritative slice order. The slices.json
@@ -942,8 +943,8 @@ func renderSlicesPane(detail *plan.PlanDetail, selectedID string, width, height 
 	statusWidth := 0
 	idWidth := 0
 	for _, slice := range ordered {
-		statusWidth = max(statusWidth, cells.Width(displayValue(slice.Status)))
-		idWidth = max(idWidth, cells.Width(displayValue(slice.ID)))
+		statusWidth = max(statusWidth, cells.Width(rowlabel.DisplayValue(slice.Status)))
+		idWidth = max(idWidth, cells.Width(rowlabel.DisplayValue(slice.ID)))
 	}
 	if selectedID == "" && detail.State.Plan.CurrentSlice != nil {
 		selectedID = *detail.State.Plan.CurrentSlice
@@ -959,10 +960,10 @@ func renderSlicesPane(detail *plan.PlanDetail, selectedID string, width, height 
 			cursor = "> "
 			selectedLine = len(lines)
 		}
-		status := cells.Pad(displayValue(slice.Status), statusWidth)
+		status := cells.Pad(rowlabel.DisplayValue(slice.Status), statusWidth)
 		status = colorStatus(profileForEnabledColor(useColor), status, slice.Status)
-		id := cells.Pad(displayValue(slice.ID), idWidth)
-		line := cursor + status + "  " + id + "  " + displayValue(slice.Title)
+		id := cells.Pad(rowlabel.DisplayValue(slice.ID), idWidth)
+		line := cursor + status + "  " + id + "  " + rowlabel.DisplayValue(slice.Title)
 		if marker := approvalMarker(slice.Approval); marker != "" {
 			line += "  " + marker
 		}
@@ -986,7 +987,7 @@ func RenderSliceDetail(model DetailModel) string {
 	header := []string{Paint(profile, RoleDetailMuted, "Tao UI | -")}
 	body := []string{Paint(profile, RoleDetailMuted, "Slice details unavailable.")}
 	if ok {
-		id = displayValue(singleLineDetail(selected.ID))
+		id = rowlabel.DisplayValue(singleLineDetail(selected.ID))
 		header = []string{Paint(profile, RoleDetailMuted, "Tao UI | "+id), ""}
 		appendOverviewTitle(&header, selected.Title, model.Width, profile)
 		header = append(header, renderDetailMetadata([]detailGridField{
@@ -1324,7 +1325,7 @@ func sliceDetailMaxOffset(detail *plan.PlanDetail, selectedID string, width, hei
 	if !ok {
 		return 0
 	}
-	header := []string{"Tao UI | " + displayValue(singleLineDetail(selected.ID)), ""}
+	header := []string{"Tao UI | " + rowlabel.DisplayValue(singleLineDetail(selected.ID)), ""}
 	appendOverviewTitle(&header, selected.Title, width, ProfileNone)
 	header = append(header, renderDetailMetadata([]detailGridField{
 		{label: "STATUS", value: selected.Status},

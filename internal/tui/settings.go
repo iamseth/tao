@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/iamseth/tao/internal/monitor/rowlabel"
 	"github.com/iamseth/tao/internal/term/cells"
 )
 
@@ -175,7 +176,7 @@ func renderSettingsOverrides(model Model) ([]string, tableViewportSection) {
 		overrides = append(overrides, settingsOverride{
 			name:       singleLineDetail(row.Name),
 			value:      singleLineDetail(row.Value),
-			source:     "← " + displayValue(singleLineDetail(row.Source)),
+			source:     "← " + rowlabel.DisplayValue(singleLineDetail(row.Source)),
 			sourceRole: RoleNeutral2,
 			warning:    row.Warning,
 		})
@@ -184,9 +185,9 @@ func renderSettingsOverrides(model Model) ([]string, tableViewportSection) {
 		if repository.PullRequest == nil || *repository.PullRequest == model.SettingsSnapshot.InheritedPullRequest {
 			continue
 		}
-		name := displayValue(singleLineDetail(repository.Name))
+		name := rowlabel.DisplayValue(singleLineDetail(repository.Name))
 		if name == "-" {
-			name = displayValue(singleLineDetail(repository.ID))
+			name = rowlabel.DisplayValue(singleLineDetail(repository.ID))
 		}
 		key := strings.TrimSpace(repository.ID)
 		if key == "" {
@@ -363,7 +364,7 @@ func renderSettingsBudgets(model Model) ([]string, tableViewportSection) {
 }
 
 func settingsBudgetValue(row SettingsRuntimeDefault, cost bool) string {
-	value := displayValue(singleLineDetail(row.Value))
+	value := rowlabel.DisplayValue(singleLineDetail(row.Value))
 	if value == "-" || cost {
 		return value
 	}
@@ -554,11 +555,11 @@ func settingsSectionRuleGap(profile Profile, width int, beforeHeader bool) strin
 }
 
 func settingsRepositoryName(repository RepositorySetting) string {
-	name := displayValue(singleLineDetail(repository.Name))
+	name := rowlabel.DisplayValue(singleLineDetail(repository.Name))
 	if name != "-" {
 		return name
 	}
-	return displayValue(singleLineDetail(repository.ID))
+	return rowlabel.DisplayValue(singleLineDetail(repository.ID))
 }
 
 func settingsStyledRepositoryName(profile Profile, repository RepositorySetting) string {
@@ -591,7 +592,7 @@ func settingsRepositoryHealthRole(status string) Role {
 }
 
 func settingsRepositoryRoot(root, displayHome string) string {
-	rawRoot := displayValue(singleLineDetail(root))
+	rawRoot := rowlabel.DisplayValue(singleLineDetail(root))
 	home := strings.TrimSpace(displayHome)
 	if rawRoot == "-" || home == "" || !filepath.IsAbs(rawRoot) || !filepath.IsAbs(home) {
 		return rawRoot

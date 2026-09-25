@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 )
@@ -17,6 +18,33 @@ const (
 	hideCursorSequence           = "\x1b[?25l"
 	showCursorSequence           = "\x1b[?25h"
 )
+
+// IsTerminal honors an explicit IsTerminal method before checking whether value
+// is a file backed by a character device.
+func IsTerminal(value any) bool {
+	if terminal, ok := value.(interface{ IsTerminal() bool }); ok {
+		return terminal.IsTerminal()
+	}
+	file, ok := value.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := file.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
+// ColorEnabled applies color environment preferences to terminal detection.
+// NO_COLOR and TERM=dumb override CLICOLOR_FORCE, which otherwise overrides
+// both redirected output and CLICOLOR=0.
+func ColorEnabled(isTerminal bool, getenv func(string) string) bool {
+	if getenv("NO_COLOR") != "" || strings.ToLower(strings.TrimSpace(getenv("TERM"))) == "dumb" {
+		return false
+	}
+	if value := strings.TrimSpace(getenv("CLICOLOR_FORCE")); value != "" && value != "0" {
+		return true
+	}
+	return isTerminal && strings.TrimSpace(getenv("CLICOLOR")) != "0"
+}
 
 // Size is a terminal's dimensions in character cells.
 type Size struct {
