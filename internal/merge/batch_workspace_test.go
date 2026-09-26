@@ -12,6 +12,81 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 )
 
+func TestBatchWorkspaceResumeParkedVerificationBisection(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name      string
+		mode      string
+		wantDrift bool
+	}{
+		{name: "applied prefix", mode: "prefix"},
+		{name: "default baseline", mode: "baseline"},
+		{name: "different persisted parked head", mode: "mismatch", wantDrift: true},
+		{name: "no longer bisecting", mode: "finished", wantDrift: true},
+		{name: "not applied", mode: "unapplied", wantDrift: true},
+		{name: "unrecorded commit", mode: "unrecorded", wantDrift: true},
+		{name: "legacy state", mode: "legacy", wantDrift: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newRealGitWorktree(t)
+			state := batchWorkspaceState(t, fixture)
+			owner, err := NewBatchWorkspace(fixture.repoRoot, filepath.Join(t.TempDir(), "merge-batches"), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			integration, err := owner.Start(context.Background(), state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runRealGit(t, integration.Path, "commit", "--allow-empty", "-m", "prefix")
+			prefix := realGitOutput(t, integration.Path, "rev-parse", "HEAD")
+			runRealGit(t, integration.Path, "commit", "--allow-empty", "-m", "aggregate rework")
+			state.IntegrationHead = realGitOutput(t, integration.Path, "rev-parse", "HEAD")
+			state.Status = BatchStatusReviewing
+			candidate := state.Candidates[0]
+			state.Integrations = []BatchIntegration{{PlanID: candidate.PlanID, SourceHead: candidate.SourceTip, IntegrationBaseSHA: state.DefaultStartSHA, IntegrationSHA: prefix, Status: batchIntegrationApplied}}
+			state.Review = &BatchReview{HeadSHA: state.IntegrationHead, ResolutionSHAs: []string{state.IntegrationHead}}
+			parked := prefix
+			state.VerificationAttribution = &BatchVerificationAttribution{Status: batchAttributionBisecting, ParkedSHA: parked}
+			switch tc.mode {
+			case "baseline":
+				parked = state.DefaultStartSHA
+				state.VerificationAttribution.ParkedSHA = parked
+			case "mismatch":
+				state.VerificationAttribution.ParkedSHA = state.DefaultStartSHA
+			case "finished":
+				state.VerificationAttribution = &BatchVerificationAttribution{Status: batchAttributionUnattributed}
+			case "unapplied":
+				state.Integrations[0].Status = batchIntegrationDeferred
+			case "unrecorded":
+				runRealGit(t, integration.Path, "commit", "--allow-empty", "-m", "unrecorded")
+				parked = realGitOutput(t, integration.Path, "rev-parse", "HEAD")
+				state.VerificationAttribution.ParkedSHA = parked
+			case "legacy":
+				state.VerificationAttribution = nil
+			}
+			runRealGit(t, integration.Path, "reset", "--hard", parked)
+			err = owner.ValidateResume(context.Background(), state)
+			if !tc.wantDrift {
+				if err != nil {
+					t.Fatalf("persisted bisection head rejected: %v", err)
+				}
+				return
+			}
+			var resumeErr *BatchResumeError
+			if !errors.As(err, &resumeErr) {
+				t.Fatalf("expected head drift, got %v", err)
+			}
+			for _, drift := range resumeErr.Drifts {
+				if drift.Scope == "integration head" {
+					return
+				}
+			}
+			t.Fatalf("missing integration head drift: %v", err)
+		})
+	}
+}
+
 func TestBatchWorkspaceCreatesAndReusesIsolatedIntegrationWorktree(t *testing.T) {
 	t.Parallel()
 	fixture := newRealGitWorktree(t)

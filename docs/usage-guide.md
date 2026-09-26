@@ -982,19 +982,34 @@ reduction heuristic, not a dependency declaration.
 **Staging and agent resolution:** a real run keeps default at its starting SHA
 while it creates exactly one squash commit per source plan, normally from each
 exact approved-review proposal, with Tao-owned `Tao-Plan` and
-`Tao-Source-Head` trailers in a batch-owned integration worktree. A textual
-conflict or candidate verification failure is deferred to a bounded configured
-agent; that same resolver returns the structured message proposal for its edits.
+`Tao-Source-Head` trailers in a batch-owned integration worktree. Clean candidate
+staging runs no verification. A textual conflict is deferred to a bounded
+configured agent; that same resolver returns the structured message proposal
+for its edits. Agent-resolved candidates keep their own verification gate.
 Agents may edit only that integration worktree; Tao validates before intent and
 alone stages and commits. Failed, malformed, empty, unsafe, ref-changing,
 repeated, or attempt-capped resolution stops with source branches and durable
 recovery evidence intact and no fallback message.
 
 **Aggregate gate and atomic landing:** after every candidate is staged, Tao runs
-the full merge verification command and reviews the combined diff. An aggregate
-`changes_requested` verdict can invoke bounded agent rework, producing a
-Tao-owned integration-resolution commit, followed by full verification and a
-fresh aggregate review. `TAO_AGGREGATE_REVIEW_CONVERGENCE_WINDOW` controls how
+the full merge verification command once on the staged aggregate, then reviews
+the combined diff. Only the aggregate is gated for clean candidates: a candidate
+that breaks the gate alone but is repaired by a later candidate can land.
+
+If the gate fails on a freshly staged set, Tao bisects the integration prefixes
+with additional gate runs and reports the attributed plan and the passing and
+failing prefix commits. If the default starting commit already fails, Tao blocks
+without blaming a candidate or invoking rework; fix the default branch and rerun
+`tao merge --all --restart`. An attributed failure enters bounded aggregate
+rework, sharing the existing aggregate rework attempt cap with review-driven
+rework. Exhausting that cap leaves a resumable block naming the attributed plan;
+a rerun rechecks the aggregate without repeating bisection or granting a fresh
+rework budget.
+
+An aggregate `changes_requested` verdict can also invoke bounded agent rework.
+Every rework round produces a Tao-owned integration-resolution commit, followed
+by full verification before a fresh aggregate review.
+`TAO_AGGREGATE_REVIEW_CONVERGENCE_WINDOW` controls how
 many consecutive changes-requested rounds the batch convergence check considers;
 it defaults to `2` and must be an integer of at least `2`. Separately from
 automatic rework's high-confidence finding equality, batch merge uses a
@@ -1038,7 +1053,8 @@ Restart is refused after landing and never removes source plans. Resolve
 reported source/default drift rather than deleting recovery files by hand.
 
 **Strict batch flags:** `--dry-run` and `--auto-eject` require `--all`.
-`--dry-run` is observational but does not bypass an active batch: Tao inspects
+`--dry-run` runs no verification command and is observational, but does not
+bypass an active batch: Tao inspects
 and resume-validates durable progress before producing a fresh candidate
 snapshot. `--restart` works in both forms and means something different in each:
 with a plan argument it clears that plan's stale pre-landing merge intent, and

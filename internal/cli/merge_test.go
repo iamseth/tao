@@ -571,10 +571,64 @@ func TestMergeAllCommandPassesBatchOptionsAndRendersInvariant(t *testing.T) {
 	if batch.calls != 1 || !batch.options.DryRun || batch.options.VerifyCommand != "make verify" {
 		t.Fatalf("batch options = %#v, calls=%d", batch.options, batch.calls)
 	}
-	for _, want := range []string{"Candidate snapshot:", "plan-a", "Order: plan-a -> plan-b", "Deferred plan-b: verification failed", "Dry run:", "Default branch has not moved."} {
+	for _, want := range []string{"Candidate snapshot:", "plan-a", "Order: plan-a -> plan-b", "Deferred plan-b: verification failed", "Dry run:", "No verification command ran; verification happens once on the staged aggregate in a real run.", "Default branch has not moved."} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("expected output to contain %q, got %q", want, out.String())
 		}
+	}
+}
+
+func TestMergeBatchResultVerificationAttribution(t *testing.T) {
+	tests := []struct {
+		name        string
+		attribution *mergepkg.BatchVerificationAttribution
+		want        string
+		notWant     []string
+	}{
+		{
+			name: "attributed",
+			attribution: &mergepkg.BatchVerificationAttribution{
+				Status: "attributed", PlanID: "plan-b", PassingSHA: "passing-head", FailingSHA: "failing-head", GateRuns: 3,
+			},
+			want: "Verification: command=make verify passed=false\nVerification attribution:\n- Status: attributed\n- Plan: plan-b\n- Passing prefix: passing-head\n- Failing prefix: failing-head\n- Gate runs: 3\n",
+		},
+		{
+			name:        "baseline failure",
+			attribution: &mergepkg.BatchVerificationAttribution{Status: "baseline_failed", FailingSHA: "default-head", GateRuns: 1},
+			want:        "Verification attribution:\n- Status: baseline_failed\n- Failing prefix: default-head\n- Gate runs: 1\n",
+			notWant:     []string{"- Plan:", "- Passing prefix:"},
+		},
+		{
+			name:        "unattributed",
+			attribution: &mergepkg.BatchVerificationAttribution{Status: "unattributed"},
+			want:        "Verification attribution:\n- Status: unattributed\n- Gate runs: 0\n",
+			notWant:     []string{"- Plan:", "- Passing prefix:", "- Failing prefix:"},
+		},
+		{
+			name:    "legacy absent attribution",
+			want:    "Verification: command=make verify passed=false\n",
+			notWant: []string{"Verification attribution:"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out bytes.Buffer
+			result := mergeBatchResult{State: mergepkg.BatchState{
+				Verification:            &mergepkg.BatchVerification{Command: "make verify"},
+				VerificationAttribution: tt.attribution,
+			}}
+			if err := renderMergeBatchResult(&out, result); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(out.String(), tt.want) {
+				t.Errorf("expected %q in %q", tt.want, out.String())
+			}
+			for _, notWant := range tt.notWant {
+				if strings.Contains(out.String(), notWant) {
+					t.Errorf("did not expect %q in %q", notWant, out.String())
+				}
+			}
+		})
 	}
 }
 
@@ -893,7 +947,7 @@ func TestMergeCommandHelpDocumentsVerifyCommand(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"merge", "--help"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"--all", "--dry-run", "--restart", "--auto-eject", "eject-and-reland", "--verify-command", "override the post-merge build/test verification command", "one automatic resolver attempt", "independent fresh-session review", "--force cannot bypass these safety and review gates", "--no-verify skips only command verification", "--no-squash rebase conflicts remain manual", "bounded agent resolution", "aggregate approval before one fast-forward", "For one plan, --restart safely discards only an eligible stale pre-landing merge intent", "--all --restart discards only pre-landing batch recovery", "Batch mode rejects --force, --record-only, --no-squash, and --no-verify", "single-plan only", "Usage:\n  tao merge (m) [--force] [--record-only] [--no-squash] [--no-verify] [--verify-command CMD]", "merge (m) --restart <plan-id-or-slug-or-path>", "merge (m) --all [--dry-run] [--restart] [--auto-eject] [--verify-command CMD]"} {
+	for _, want := range []string{"--all", "--dry-run", "preview batch candidates and order without durable changes or verification", "verifies the staged aggregate once", "attributes an aggregate verification failure to one candidate", "--restart", "--auto-eject", "eject-and-reland", "--verify-command", "override the post-merge build/test verification command", "one automatic resolver attempt", "independent fresh-session review", "--force cannot bypass these safety and review gates", "--no-verify skips only command verification", "--no-squash rebase conflicts remain manual", "bounded agent resolution", "aggregate approval before one fast-forward", "For one plan, --restart safely discards only an eligible stale pre-landing merge intent", "--all --restart discards only pre-landing batch recovery", "Batch mode rejects --force, --record-only, --no-squash, and --no-verify", "single-plan only", "Usage:\n  tao merge (m) [--force] [--record-only] [--no-squash] [--no-verify] [--verify-command CMD]", "merge (m) --restart <plan-id-or-slug-or-path>", "merge (m) --all [--dry-run] [--restart] [--auto-eject] [--verify-command CMD]"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("expected help to contain %q, got %q", want, out.String())
 		}

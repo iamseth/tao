@@ -1150,7 +1150,7 @@ func TestAttributeAggregateReviewFilesRequiresExactlyOneCandidate(t *testing.T) 
 	}
 }
 
-func TestBatchReviewAutoEjectResolvesReducedSetDeferralAndApproves(t *testing.T) {
+func TestBatchReviewAutoEjectReworksReducedSetVerificationAndApproves(t *testing.T) {
 	t.Parallel()
 	fixture, state, root := batchEjectTestFixture(t)
 	store := &batchReviewTestStore{dir: t.TempDir()}
@@ -1163,7 +1163,10 @@ func TestBatchReviewAutoEjectResolvesReducedSetDeferralAndApproves(t *testing.T)
 			return batchResolutionJSON("attempted fix"), os.WriteFile(filepath.Join(root, "review-fix.txt"), []byte("fix\n"), 0o600)
 		}
 		if strings.Contains(prompt, "Candidate: plan-b") {
+			// Verification-sourced aggregate rework names the attributed candidate.
 			resolutionCalls++
+			// Ejected refs need not survive reduced-set aggregate rework.
+			runRealGit(t, root, "update-ref", "-d", ejectedRef)
 			return batchResolutionJSON("fixed reduced-set verification"), os.WriteFile(filepath.Join(root, "reduced-fixed.txt"), []byte("fixed\n"), 0o600)
 		}
 		reviewCalls++
@@ -1182,26 +1185,10 @@ func TestBatchReviewAutoEjectResolvesReducedSetDeferralAndApproves(t *testing.T)
 		return output, nil
 	})
 
-	verifyCommand := "test -f plan-a.txt || test -f reduced-fixed.txt"
+	verifyCommand := "test ! -f plan-b.txt || test -f plan-a.txt || test -f reduced-fixed.txt"
 	service := NewService(fixture.repoRoot, nil)
 	reviewer := BatchAggregateReviewer{Store: store, Service: service, Agent: agent}
 	got, err := reviewer.Review(context.Background(), state, root, BatchReviewOptions{VerifyCommand: verifyCommand, MaxAttempts: 3, AutoEject: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.State.Status != BatchStatusResolving || !got.ReenterPhases {
-		t.Fatalf("auto-eject did not request resolver reentry: %+v", got)
-	}
-	runRealGit(t, fixture.repoRoot, "update-ref", "-d", ejectedRef)
-	if _, refErr := service.Git.RevParse(context.Background(), ejectedRef); refErr == nil {
-		t.Fatalf("ejected ref %s still exists before reduced-set resolution", ejectedRef)
-	}
-	resolved, err := (BatchAgentResolver{Store: store, Service: service, Agent: agent}).Resolve(context.Background(), got.State, root, BatchResolveOptions{VerifyCommand: verifyCommand})
-	if err != nil {
-		t.Fatal(err)
-	}
-	runRealGit(t, fixture.repoRoot, "update-ref", ejectedRef, state.Candidates[0].SourceTip)
-	got, err = reviewer.Review(context.Background(), resolved.State, root, BatchReviewOptions{VerifyCommand: verifyCommand, MaxAttempts: 3, AutoEject: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1215,7 +1202,7 @@ func TestBatchReviewAutoEjectResolvesReducedSetDeferralAndApproves(t *testing.T)
 		t.Fatalf("reduced-set resolution calls = %d, want 1", resolutionCalls)
 	}
 	assertRef(t, fixture.repoRoot, fixture.planBranch, state.DefaultStartSHA)
-	if len(got.State.Integrations) != 1 || got.State.Integrations[0].PlanID != "plan-b" || len(got.State.Integrations[0].Resolutions) != 1 || got.State.Review.HeadSHA != got.State.IntegrationHead || !got.State.Verification.Passed {
+	if len(got.State.Integrations) != 1 || got.State.Integrations[0].PlanID != "plan-b" || len(got.State.Review.ResolutionSHAs) != 1 || got.State.Attempts.AggregateRework != 1 || got.State.VerificationAttribution == nil || got.State.VerificationAttribution.PlanID != "plan-b" || got.State.Review.HeadSHA != got.State.IntegrationHead || !got.State.Verification.Passed {
 		t.Fatalf("reduced set lacks resolved exact final evidence: %+v", got.State)
 	}
 	if got.State.AggregateReviewSequence != 3 || got.State.Review.Attempts != 1 || got.State.Review.Artifact != "aggregate-review-003.md" {
@@ -1541,8 +1528,11 @@ func TestBatchReviewVerificationFailureAfterReworkAndReviewTimeout(t *testing.T)
 		})
 		reviewer := BatchAggregateReviewer{Store: store, Service: NewService(fixture.repoRoot, nil), Agent: agent}
 		got, err := reviewer.Review(context.Background(), state, root, BatchReviewOptions{VerifyCommand: "test ! -f fail"})
-		if err == nil || got.State.Status != BatchStatusBlocked || got.State.Verification.Passed {
+		if err == nil || !strings.HasPrefix(err.Error(), "aggregate verification failed: ") || got.State.Status != BatchStatusBlocked || got.State.Verification.Passed {
 			t.Fatalf("expected verification stop: %+v %v", got.State, err)
+		}
+		if got.State.VerificationAttribution != nil || got.State.Review.ReworkSource != "" {
+			t.Fatal("review-sourced rework must not bisect or become verification-sourced")
 		}
 		if got.State.Verification.HeadSHA != got.State.IntegrationHead || got.State.Review.Status != "pending" || got.State.Review.HeadSHA != got.State.IntegrationHead {
 			t.Fatalf("verification failure retained stale post-rework evidence: %+v", got.State)
@@ -1592,6 +1582,413 @@ func TestBatchReviewArtifactPersistenceFailureStopsBeforeRework(t *testing.T) {
 	if err == nil || got.State.Status != BatchStatusBlocked || got.State.Attempts.AggregateRework != 0 {
 		t.Fatalf("expected persistence stop: %+v %v", got.State, err)
 	}
+}
+
+func TestBatchReviewVerificationAttribution(t *testing.T) {
+	t.Parallel()
+	for _, fix := range []bool{true, false} {
+		t.Run(fmt.Sprintf("fix=%t", fix), func(t *testing.T) {
+			fixture, state, root := batchAttributionFixture(t)
+			store := &batchReviewTestStore{dir: t.TempDir()}
+			service := NewService(fixture.repoRoot, nil)
+			runner := service.commandRunner()
+			gateRuns, runsBeforeRework, reworks := 0, 0, 0
+			service.Runner = func(ctx context.Context, root, name string, args []string, stdout, stderr io.Writer) error {
+				gateRuns++
+				return runner(ctx, root, name, args, stdout, stderr)
+			}
+			command := "if test -f broken.txt; then echo broken-candidate; exit 1; fi"
+			agent := batchSessionAgentFunc(func(_ context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+				if request.Operation == BatchAgentOperationAggregateReview {
+					return BatchAgentSessionResult{Output: reviewJSON("approve", "green", "")}, nil
+				}
+				reworks++
+				runsBeforeRework = gateRuns
+				for _, material := range []string{"plan-b", "Plan Two", state.Integrations[0].IntegrationSHA, state.Integrations[1].IntegrationSHA, command, "broken-candidate"} {
+					if !strings.Contains(request.Prompt, material) {
+						t.Fatalf("rework prompt missing %q:\n%s", material, request.Prompt)
+					}
+				}
+				if fix {
+					return BatchAgentSessionResult{Output: batchResolutionJSON("remove broken file")}, os.Remove(filepath.Join(root, "broken.txt"))
+				}
+				return BatchAgentSessionResult{Output: batchResolutionJSON("attempt repair")}, os.WriteFile(filepath.Join(root, "attempt.txt"), []byte("not fixed\n"), 0o600)
+			})
+			reviewer := BatchAggregateReviewer{Store: store, Service: service, Agent: agent}
+			got, err := reviewer.Review(context.Background(), state, root, BatchReviewOptions{VerifyCommand: command, MaxAttempts: 1})
+			if fix {
+				if err != nil || got.State.Status != BatchStatusReadyToLand {
+					t.Fatalf("verification repair failed: state=%+v err=%v", got.State, err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), "aggregate verification failed after 1 verification rework attempts; attributed to plan plan-b") || got.State.BlockKind != BatchBlockKindResumable {
+				t.Fatalf("expected attributed cap stop: state=%+v err=%v", got.State, err)
+			}
+			a := got.State.VerificationAttribution
+			if a == nil || a.Status != batchAttributionAttributed || a.PlanID != "plan-b" || a.PassingSHA != state.Integrations[0].IntegrationSHA || a.FailingSHA != state.Integrations[1].IntegrationSHA || a.ParkedSHA != "" || !strings.Contains(a.Output, "broken-candidate") {
+				t.Fatalf("incorrect attribution: %+v", a)
+			}
+			// The last prefix is already known to fail; search the remaining interval.
+			probes := 0
+			for low, high := 0, len(state.Integrations); high-low > 1; probes++ {
+				mid := (low + high) / 2
+				if mid < 2 {
+					low = mid
+				} else {
+					high = mid
+				}
+			}
+			if reworks != 1 || a.GateRuns != probes || gateRuns != 1+probes+1 || gateRuns-runsBeforeRework != 1 {
+				t.Fatalf("gate budget: runs=%d probes=%d attribution=%+v reworks=%d before=%d", gateRuns, probes, a, reworks, runsBeforeRework)
+			}
+			assertRef(t, root, "HEAD", got.State.IntegrationHead)
+			assertRef(t, fixture.repoRoot, fixture.defaultBranch, state.DefaultStartSHA)
+			for _, candidate := range state.Candidates {
+				assertRef(t, root, candidate.Branch, candidate.SourceTip)
+			}
+			if !fix {
+				resumed, ok := ResumeBlockedBatch(got.State)
+				if !ok {
+					t.Fatal("cap stop not resumable")
+				}
+				before := gateRuns
+				got, err = reviewer.Review(context.Background(), resumed, root, BatchReviewOptions{VerifyCommand: command, MaxAttempts: 1})
+				if err == nil || !strings.Contains(err.Error(), "attributed to plan plan-b") || gateRuns-before != 1 || reworks != 1 {
+					t.Fatalf("cap rerun restarted attribution or rework: %+v %v", got.State, err)
+				}
+			}
+		})
+	}
+}
+
+type attributionRestoreTestGit struct {
+	GitClient
+	head            string
+	failRestore     bool
+	restoreAttempts int
+}
+
+func (g *attributionRestoreTestGit) ResetHard(ctx context.Context, head string) error {
+	if head == g.head {
+		g.restoreAttempts++
+		if g.failRestore {
+			return errors.New("restore interrupted")
+		}
+	}
+	return g.GitClient.ResetHard(ctx, head)
+}
+
+func TestBatchReviewVerificationAttributionPersistenceRecovery(t *testing.T) {
+	t.Parallel()
+	for _, interruptRestore := range []bool{false, true} {
+		t.Run(fmt.Sprintf("interrupt-restore=%t", interruptRestore), func(t *testing.T) {
+			fixture, state, root := batchAttributionFixture(t)
+			service := NewService(fixture.repoRoot, nil)
+			client, err := service.gitClientForRoot(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			git := &attributionRestoreTestGit{GitClient: client, head: state.IntegrationHead}
+			service.NewGit = func(string) GitClient { return git }
+			store := &batchReviewTestStore{dir: t.TempDir()}
+			store.afterTransition = func(saved BatchState) error {
+				if a := saved.VerificationAttribution; a != nil && a.ParkedSHA != "" {
+					// Fail the next write, after the probe has moved HEAD. Also
+					// interrupt cleanup in one arm to model a process dying parked.
+					store.failAt = len(store.states) + 1
+					git.failRestore = interruptRestore
+				}
+				return nil
+			}
+			agent := batchSessionAgentFunc(func(_ context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+				if request.Operation == BatchAgentOperationAggregateRework {
+					return BatchAgentSessionResult{Output: batchResolutionJSON("repair verification")}, os.Remove(filepath.Join(root, "broken.txt"))
+				}
+				return BatchAgentSessionResult{Output: reviewJSON("approve", "green", "")}, nil
+			})
+			reviewer := BatchAggregateReviewer{Store: store, Service: service, Agent: agent}
+			options := BatchReviewOptions{VerifyCommand: "test ! -f broken.txt", MaxAttempts: 1}
+			_, err = reviewer.Review(context.Background(), state, root, options)
+			if err == nil || !strings.Contains(err.Error(), "persist verification probe result") || git.restoreAttempts != 1 {
+				t.Fatalf("expected persistence failure and cleanup attempt: %v attempts=%d", err, git.restoreAttempts)
+			}
+			interrupted := store.states[len(store.states)-1]
+			a := interrupted.VerificationAttribution
+			if a == nil || a.Status != batchAttributionBisecting || a.ParkedSHA == "" {
+				t.Fatalf("lost durable parked intent: %+v", a)
+			}
+			wantHead := state.IntegrationHead
+			if interruptRestore {
+				wantHead = a.ParkedSHA
+			}
+			assertRef(t, root, "HEAD", wantHead)
+			git.failRestore = false
+			resumeStore := &batchReviewTestStore{dir: t.TempDir()}
+			reviewer.Store = resumeStore
+			runner := service.commandRunner()
+			var heads []string
+			reviewer.Service.Runner = func(ctx context.Context, root, name string, args []string, stdout, stderr io.Writer) error {
+				heads = append(heads, strings.TrimSpace(realGitOutput(t, root, "rev-parse", "HEAD")))
+				return runner(ctx, root, name, args, stdout, stderr)
+			}
+			got, err := reviewer.Review(context.Background(), interrupted, root, options)
+			if err != nil || got.State.Status != BatchStatusReadyToLand || got.State.VerificationAttribution.PlanID != "plan-b" {
+				t.Fatalf("attribution recovery failed: %+v %v", got.State, err)
+			}
+			if len(heads) == 0 || heads[0] != state.IntegrationHead || resumeStore.states[0].VerificationAttribution != nil {
+				t.Fatalf("did not restore and clear attribution before re-verifying: heads=%v state=%+v", heads, resumeStore.states[0])
+			}
+			assertRef(t, root, "HEAD", got.State.IntegrationHead)
+		})
+	}
+}
+
+func TestBatchReviewVerificationAttributionRecoveryDetectsAggregateGate(t *testing.T) {
+	unsetMergeVerifyCommandEnv(t)
+	for _, prefixCommand := range []string{"make build && make test", ""} {
+		t.Run("prefix-command="+prefixCommand, func(t *testing.T) {
+			fixture, state, root := batchReviewFixture(t)
+			weakMakefile := "build:\n\t@true\ntest:\n\t@true\n"
+			if prefixCommand != "" {
+				if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte(weakMakefile), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				runRealGit(t, root, "add", "Makefile")
+				runRealGit(t, root, "commit", "-m", "build: add weak gate")
+			}
+			parked := strings.TrimSpace(realGitOutput(t, root, "rev-parse", "HEAD"))
+			if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte(weakMakefile+"verify:\n\t@echo aggregate-gate-failed\n\t@false\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runRealGit(t, root, "add", "Makefile")
+			runRealGit(t, root, "commit", "-m", "build: add full gate")
+			state.IntegrationHead = strings.TrimSpace(realGitOutput(t, root, "rev-parse", "HEAD"))
+			state.Integrations[0].IntegrationSHA = state.IntegrationHead
+			state.VerificationAttribution = &BatchVerificationAttribution{Status: batchAttributionBisecting, ParkedSHA: parked}
+			runRealGit(t, root, "reset", "--hard", parked)
+			if got := resolveMergeVerifyCommandAtRoot(root, Options{}).command; got != prefixCommand {
+				t.Fatalf("prefix command = %q, want %q", got, prefixCommand)
+			}
+
+			store := &batchReviewTestStore{dir: t.TempDir()}
+			service := NewService(fixture.repoRoot, nil)
+			runner := service.commandRunner()
+			var heads, commands []string
+			service.Runner = func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+				heads = append(heads, strings.TrimSpace(realGitOutput(t, cwd, "rev-parse", "HEAD")))
+				commands = append(commands, strings.Join(args, " "))
+				return runner(ctx, cwd, name, args, stdout, stderr)
+			}
+			agentCalls := 0
+			got, err := (BatchAggregateReviewer{
+				Store: store, Service: service,
+				Agent: batchReviewAgentFunc(func(context.Context, string, string) (string, error) {
+					agentCalls++
+					return reviewJSON("approve", "green", ""), nil
+				}),
+			}).Review(context.Background(), state, root, BatchReviewOptions{})
+			if len(commands) == 0 || commands[0] != "-c make verify" || heads[0] != state.IntegrationHead {
+				t.Fatalf("did not detect and run aggregate gate after restoration: commands=%v heads=%v err=%v", commands, heads, err)
+			}
+			if err == nil || got.State.Status != BatchStatusBlocked || agentCalls != 0 {
+				t.Fatalf("failing aggregate gate authorized review: state=%+v agentCalls=%d err=%v", got.State, agentCalls, err)
+			}
+			if v := got.State.Verification; v == nil || v.Command != "make verify" || v.HeadSHA != state.IntegrationHead || v.Passed || !strings.Contains(v.Output, "aggregate-gate-failed") {
+				t.Fatalf("missing full aggregate verification failure: %+v", v)
+			}
+			if len(store.states) == 0 || store.states[0].VerificationAttribution != nil {
+				t.Fatal("interrupted attribution was not cleared before verification")
+			}
+			assertRef(t, root, "HEAD", state.IntegrationHead)
+		})
+	}
+}
+
+func TestBatchReviewVerificationAttributionBetweenProbeRecovery(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fixture, state, _ := batchAttributionFixture(t)
+	for i := range state.Candidates {
+		state.Candidates[i].RepoRoot = state.RepoRoot
+		state.Candidates[i].DefaultBranch = state.DefaultBranch
+		state.Candidates[i].DefaultStartSHA = state.DefaultStartSHA
+	}
+	owner, err := NewBatchWorkspace(fixture.repoRoot, filepath.Join(t.TempDir(), "merge-batches"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	integration, err := owner.Start(ctx, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := integration.Path
+	runRealGit(t, root, "reset", "--hard", state.IntegrationHead)
+	if err := owner.ValidateResume(ctx, state); err != nil {
+		t.Fatal(err)
+	}
+
+	store := &batchReviewTestStore{dir: t.TempDir()}
+	var interrupted BatchState
+	var interruptedHead string
+	store.afterTransition = func(saved BatchState) error {
+		a := saved.VerificationAttribution
+		if a != nil && a.ParkedSHA == state.Integrations[1].IntegrationSHA && a.GateRuns == 1 {
+			// Capture a crash immediately after the second probe intent is durable,
+			// before its reset. Reconstruct this snapshot below without cleanup.
+			interrupted = saved
+			interruptedHead = realGitOutput(t, root, "rev-parse", "HEAD")
+			return errors.New("interrupted after second probe intent")
+		}
+		return nil
+	}
+	service := NewService(fixture.repoRoot, nil)
+	agent := batchSessionAgentFunc(func(_ context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+		if request.Operation == BatchAgentOperationAggregateRework {
+			return BatchAgentSessionResult{Output: batchResolutionJSON("repair verification")}, os.Remove(filepath.Join(root, "broken.txt"))
+		}
+		return BatchAgentSessionResult{Output: reviewJSON("approve", "green", "")}, nil
+	})
+	reviewer := BatchAggregateReviewer{Store: store, Service: service, Agent: agent}
+	options := BatchReviewOptions{VerifyCommand: "test ! -f broken.txt", MaxAttempts: 1}
+	if _, err := reviewer.Review(ctx, state, root, options); err == nil || !strings.Contains(err.Error(), "interrupted after second probe intent") {
+		t.Fatalf("expected second probe interruption, got %v", err)
+	}
+	if interruptedHead == "" {
+		t.Fatal("did not capture the second probe intent")
+	}
+	runRealGit(t, root, "reset", "--hard", interruptedHead)
+	if err := owner.ValidateResume(ctx, interrupted); err != nil {
+		t.Fatalf("second probe intent left a legitimate head unresumable: %v", err)
+	}
+
+	// Other prefixes, including the superseded probe, are not recovery authority.
+	for _, head := range []string{state.DefaultStartSHA, state.Integrations[0].IntegrationSHA} {
+		runRealGit(t, root, "reset", "--hard", head)
+		var resumeErr *BatchResumeError
+		if err := owner.ValidateResume(ctx, interrupted); !errors.As(err, &resumeErr) {
+			t.Fatalf("unrelated head %s accepted: %v", head, err)
+		}
+		if !slices.ContainsFunc(resumeErr.Drifts, func(drift BatchDrift) bool { return drift.Scope == "integration head" }) {
+			t.Fatalf("missing integration head drift: %v", resumeErr)
+		}
+	}
+	runRealGit(t, root, "reset", "--hard", interruptedHead)
+	resumeStore := &batchReviewTestStore{dir: t.TempDir()}
+	reviewer.Store = resumeStore
+	runner := service.commandRunner()
+	var heads []string
+	reviewer.Service.Runner = func(ctx context.Context, root, name string, args []string, stdout, stderr io.Writer) error {
+		heads = append(heads, realGitOutput(t, root, "rev-parse", "HEAD"))
+		return runner(ctx, root, name, args, stdout, stderr)
+	}
+	got, err := reviewer.Review(ctx, interrupted, root, options)
+	if err != nil || got.State.Status != BatchStatusReadyToLand || got.State.VerificationAttribution.PlanID != "plan-b" {
+		t.Fatalf("between-probe recovery failed: %+v %v", got.State, err)
+	}
+	if len(heads) == 0 || heads[0] != state.IntegrationHead || resumeStore.states[0].VerificationAttribution != nil {
+		t.Fatalf("did not restore and clear attribution before re-verifying: heads=%v state=%+v", heads, resumeStore.states[0])
+	}
+	assertRef(t, root, "HEAD", got.State.IntegrationHead)
+	if err := owner.ValidateResume(ctx, got.State); err != nil {
+		t.Fatalf("recovered batch failed workspace validation: %v", err)
+	}
+}
+
+func TestBatchVerificationAttributionRestoresOnCancellationAndRefMutation(t *testing.T) {
+	t.Parallel()
+	for _, cancelProbe := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cancel=%t", cancelProbe), func(t *testing.T) {
+			fixture, state, root := batchAttributionFixture(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			service := NewService(fixture.repoRoot, nil)
+			git, err := service.gitClientForRoot(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			service.Runner = func(_ context.Context, root, _ string, _ []string, _, _ io.Writer) error {
+				if cancelProbe {
+					cancel()
+					return ctx.Err()
+				}
+				runRealGit(t, root, "update-ref", "refs/heads/"+fixture.defaultBranch, state.IntegrationHead)
+				return errors.New("gate failed")
+			}
+			store := &batchReviewTestStore{dir: t.TempDir()}
+			got, err := (BatchAggregateReviewer{Store: store, Service: service}).attributeVerificationFailure(ctx, git, state, root, "gate", "initial failure")
+			if err == nil || (cancelProbe && !errors.Is(err, context.Canceled)) {
+				t.Fatalf("expected canceled or unsafe attribution: %v", err)
+			}
+			if a := got.VerificationAttribution; a == nil || a.Status != batchAttributionBisecting || a.ParkedSHA != "" {
+				t.Fatalf("unsafe attribution or uncleared parked head: %+v", a)
+			}
+			assertRef(t, root, "HEAD", state.IntegrationHead)
+			assertRef(t, root, fixture.defaultBranch, state.DefaultStartSHA)
+		})
+	}
+}
+
+func TestBatchVerificationAttributionSkipsResolutionHead(t *testing.T) {
+	t.Parallel()
+	fixture, state, root := batchAttributionFixture(t)
+	runRealGit(t, root, "commit", "--allow-empty", "-m", "fix: resolution")
+	state.IntegrationHead = strings.TrimSpace(realGitOutput(t, root, "rev-parse", "HEAD"))
+	service := NewService(fixture.repoRoot, nil)
+	git, err := service.gitClientForRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.Runner = func(context.Context, string, string, []string, io.Writer, io.Writer) error {
+		t.Fatal("must not probe a history with resolution commits")
+		return nil
+	}
+	got, err := (BatchAggregateReviewer{Store: &batchReviewTestStore{dir: t.TempDir()}, Service: service}).attributeVerificationFailure(context.Background(), git, state, root, "gate", "failed")
+	if err != nil || got.VerificationAttribution.Status != batchAttributionUnattributed || got.VerificationAttribution.ParkedSHA != "" {
+		t.Fatalf("expected unattributed resolution head: %+v %v", got, err)
+	}
+	assertRef(t, root, "HEAD", state.IntegrationHead)
+}
+
+func TestBatchReviewVerificationBaselineFailure(t *testing.T) {
+	t.Parallel()
+	fixture, state, root := batchAttributionFixture(t)
+	got, err := (BatchAggregateReviewer{
+		Store: &batchReviewTestStore{dir: t.TempDir()}, Service: NewService(fixture.repoRoot, nil),
+		Agent: batchReviewAgentFunc(func(context.Context, string, string) (string, error) {
+			t.Fatal("baseline failure must not call an agent")
+			return "", nil
+		}),
+	}).Review(context.Background(), state, root, BatchReviewOptions{VerifyCommand: "echo baseline-broken; false"})
+	want := "aggregate verification failed: default start " + state.DefaultStartSHA + " fails verification before any candidate; fix the default branch and rerun tao merge --all --restart"
+	if err == nil || err.Error() != want || got.State.BlockKind != BatchBlockKindResumable {
+		t.Fatalf("expected baseline stop: %+v %v", got.State, err)
+	}
+	if a := got.State.VerificationAttribution; a == nil || a.Status != batchAttributionBaselineFailed || a.FailingSHA != state.DefaultStartSHA || a.ParkedSHA != "" {
+		t.Fatalf("baseline evidence: %+v", a)
+	}
+	assertRef(t, root, "HEAD", state.IntegrationHead)
+}
+
+func batchAttributionFixture(t *testing.T) (realGitWorktree, BatchState, string) {
+	t.Helper()
+	fixture, state, root := batchReviewFixture(t)
+	runRealGit(t, root, "checkout", "-b", "tao/attribution-integration")
+	for i, file := range []string{"broken.txt", "third.txt"} {
+		parent := state.IntegrationHead
+		if err := os.WriteFile(filepath.Join(root, file), []byte("candidate\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		runRealGit(t, root, "add", ".")
+		runRealGit(t, root, "commit", "-m", "feat: add candidate")
+		head := strings.TrimSpace(realGitOutput(t, root, "rev-parse", "HEAD"))
+		id := []string{"plan-b", "plan-c"}[i]
+		branch := "tao/" + id
+		runRealGit(t, root, "branch", branch, head)
+		state.Candidates = append(state.Candidates, BatchCandidate{PlanID: id, PlanTitle: []string{"Plan Two", "Plan Three"}[i], Branch: branch, SourceTip: head, ReviewBase: state.DefaultStartSHA, ReviewHead: head})
+		state.ChosenOrder = append(state.ChosenOrder, id)
+		state.Integrations = append(state.Integrations, BatchIntegration{PlanID: id, SourceHead: head, IntegrationBaseSHA: parent, IntegrationSHA: head, Status: batchIntegrationApplied})
+		state.IntegrationHead = head
+	}
+	return fixture, state, root
 }
 
 func batchReviewFixture(t *testing.T) (realGitWorktree, BatchState, string) {

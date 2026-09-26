@@ -211,7 +211,7 @@ func (b *BatchWorkspace) validateResume(ctx context.Context, state BatchState, e
 		if !status.Missing && status.Dirty && !recoverableBatchResolutionWork(state, status.HeadSHA) && !resettableDirt {
 			drifts = append(drifts, BatchDrift{Scope: "integration worktree", Expected: "clean", Actual: "dirty", Reason: "uncommitted or conflicted changes remain"})
 		}
-		if !status.Missing && status.HeadSHA != expectedHead && !ejectReset && !b.matchesApplyingCommitIntent(ctx, state, status.HeadSHA, expectedBranch) {
+		if !status.Missing && status.HeadSHA != expectedHead && !ejectReset && !parkedVerificationBisectionHead(state, status.HeadSHA) && !b.matchesApplyingCommitIntent(ctx, state, status.HeadSHA, expectedBranch) {
 			drifts = append(drifts, BatchDrift{Scope: "integration head", Expected: expectedHead, Actual: status.HeadSHA, Reason: "batch branch does not match persisted progress"})
 		}
 	}
@@ -232,6 +232,22 @@ func (b *BatchWorkspace) classifyRestart(ctx context.Context, state BatchState) 
 		return BatchRestartVerdictUnknown, err.Error()
 	}
 	return BatchRestartVerdictRestartable, ""
+}
+
+func parkedVerificationBisectionHead(state BatchState, head string) bool {
+	attribution := state.VerificationAttribution
+	if attribution == nil || attribution.Status != batchAttributionBisecting || attribution.ParkedSHA == "" || head != attribution.ParkedSHA {
+		return false
+	}
+	if head == state.DefaultStartSHA {
+		return true
+	}
+	for _, integration := range state.Integrations {
+		if integration.Status == batchIntegrationApplied && integration.IntegrationSHA == head {
+			return true
+		}
+	}
+	return false
 }
 
 func resettableBatchEjectionDirt(state BatchState, head, expectedHead string) bool {

@@ -25,7 +25,7 @@ var mergeCommand = commandMetadata{
 		"merge (m) --all [--dry-run] [--restart] [--auto-eject] [--verify-command CMD]",
 	},
 	completionDescription: "Merge approved plans into the default branch",
-	long:                  "Merge one reviewed, approved Tao plan, or atomically stage every reviewed and approved plan with --all. For one plan, --restart safely discards only an eligible stale pre-landing merge intent, then stops so the branch can be rebased and reviewed again; it cannot be combined with --force. An ordinary single-plan squash conflict gets one automatic resolver attempt, exact structural validation, the configured verification gate, and an independent fresh-session review before completion; --force cannot bypass these safety and review gates, while --no-verify skips only command verification. --no-squash rebase conflicts remain manual. Batch mode keeps default unchanged while it orders and stages one squash per source, uses bounded agent resolution, then requires full verification and aggregate approval before one fast-forward. Eligible attributed aggregate-review non-convergence stops and offers to eject that plan on the next rerun; --auto-eject performs the eject-and-reland in the same run. Ejection is offered only when it leaves a non-empty batch and no plan was already ejected. Reruns resume durable progress. When an active durable batch exists, --dry-run inspects and resume-validates it before it can snapshot fresh candidates; use tao merge --all --restart --dry-run as the safe pre-landing recovery preview when restart is offered. --all --restart discards only pre-landing batch recovery. Batch mode rejects --force, --record-only, --no-squash, and --no-verify.",
+	long:                  "Merge one reviewed, approved Tao plan, or atomically stage every reviewed and approved plan with --all. For one plan, --restart safely discards only an eligible stale pre-landing merge intent, then stops so the branch can be rebased and reviewed again; it cannot be combined with --force. An ordinary single-plan squash conflict gets one automatic resolver attempt, exact structural validation, the configured verification gate, and an independent fresh-session review before completion; --force cannot bypass these safety and review gates, while --no-verify skips only command verification. --no-squash rebase conflicts remain manual. Batch mode keeps default unchanged while it orders and stages one squash per source, uses bounded agent resolution, verifies the staged aggregate once, attributes an aggregate verification failure to one candidate, and requires aggregate approval before one fast-forward. Eligible attributed aggregate-review non-convergence stops and offers to eject that plan on the next rerun; --auto-eject performs the eject-and-reland in the same run. Ejection is offered only when it leaves a non-empty batch and no plan was already ejected. Reruns resume durable progress. When an active durable batch exists, --dry-run inspects and resume-validates it before it can snapshot fresh candidates; use tao merge --all --restart --dry-run as the safe pre-landing recovery preview when restart is offered. --all --restart discards only pre-landing batch recovery. Batch mode rejects --force, --record-only, --no-squash, and --no-verify.",
 	examples: "  tao merge my-plan\n" +
 		"  tao merge --restart my-plan\n" +
 		"  tao merge --all\n" +
@@ -49,7 +49,7 @@ var mergeCommand = commandMetadata{
 
 func registerMergeFlags(fs *flag.FlagSet) {
 	fs.Bool("all", false, "merge every reviewed and approved plan in one atomic batch")
-	fs.Bool("dry-run", false, "preview batch candidates and order without durable changes")
+	fs.Bool("dry-run", false, "preview batch candidates and order without durable changes or verification")
 	fs.Bool("restart", false, "discard safe pre-landing recovery state and start again: a stale single-plan merge intent, or batch recovery state with --all")
 	fs.Bool("auto-eject", false, "automatically eject an attributed non-converging plan and reland the rest")
 	fs.Bool("force", false, "bypass pre-merge approval, review-base, and dirty-worktree gates, not conflict-resolution safety or independent review (single-plan only)")
@@ -305,6 +305,29 @@ func renderMergeBatchResult(out io.Writer, result mergeBatchResult) error {
 			return err
 		}
 	}
+	if attribution := result.State.VerificationAttribution; attribution != nil {
+		if err := writef(out, "Verification attribution:\n- Status: %s\n", attribution.Status); err != nil {
+			return err
+		}
+		if attribution.PlanID != "" {
+			if err := writef(out, "- Plan: %s\n", attribution.PlanID); err != nil {
+				return err
+			}
+		}
+		if attribution.PassingSHA != "" {
+			if err := writef(out, "- Passing prefix: %s\n", attribution.PassingSHA); err != nil {
+				return err
+			}
+		}
+		if attribution.FailingSHA != "" {
+			if err := writef(out, "- Failing prefix: %s\n", attribution.FailingSHA); err != nil {
+				return err
+			}
+		}
+		if err := writef(out, "- Gate runs: %d\n", attribution.GateRuns); err != nil {
+			return err
+		}
+	}
 	if result.State.Status == mergepkg.BatchStatusBlocked && result.State.NonConvergence != nil {
 		nonConvergence := result.State.NonConvergence
 		if err := writeln(out, "Aggregate review is not converging:"); err != nil {
@@ -363,7 +386,7 @@ func renderMergeBatchResult(out io.Writer, result mergeBatchResult) error {
 		}
 	}
 	if result.DryRun {
-		if err := writeln(out, "Dry run: no batch state or integration changes were retained."); err != nil {
+		if err := writeln(out, "Dry run: no batch state or integration changes were retained. No verification command ran; verification happens once on the staged aggregate in a real run."); err != nil {
 			return err
 		}
 	}

@@ -321,8 +321,10 @@ func TestMergeBatchEndToEnd(t *testing.T) {
 	if resolutionMessage != expectedResolution {
 		t.Fatalf("aggregate resolution lost exact agent proposal: got %q want %q", resolutionMessage, expectedResolution)
 	}
-	if calls := strings.Count(readBatchE2EFile(t, verifyLog), "verify\n"); calls != 8 {
-		t.Fatalf("full verification calls = %d, want 8", calls)
+	// Four gates: resolver attempt one fails, resolver attempt two passes,
+	// aggregate review round one, and aggregate review round two after rework.
+	if calls := strings.Count(readBatchE2EFile(t, verifyLog), "verify\n"); calls != 4 {
+		t.Fatalf("full verification calls = %d, want 4", calls)
 	}
 
 	events := &fakeEventAppender{}
@@ -368,7 +370,7 @@ func TestMergeBatchEndToEnd(t *testing.T) {
 	}
 }
 
-func TestMergeBatchAutoEjectResolvesAndLandsAttributedReducedSet(t *testing.T) {
+func TestMergeBatchAutoEjectReworksAndLandsAttributedReducedSet(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	fixture, state, integrationRoot := batchEjectTestFixture(t)
@@ -391,6 +393,7 @@ func TestMergeBatchAutoEjectResolvesAndLandsAttributedReducedSet(t *testing.T) {
 			return batchResolutionJSON("attempted fix"), os.WriteFile(filepath.Join(root, "review-fix.txt"), []byte("fix\n"), 0o600)
 		}
 		if strings.Contains(prompt, "Candidate: plan-b") {
+			// Verification-sourced aggregate rework names the attributed candidate.
 			resolutionCalls++
 			return batchResolutionJSON("fixed reduced-set verification"), os.WriteFile(filepath.Join(root, "reduced-fixed.txt"), []byte("fixed\n"), 0o600)
 		}
@@ -407,22 +410,14 @@ func TestMergeBatchAutoEjectResolvesAndLandsAttributedReducedSet(t *testing.T) {
 	})
 	store := &batchReviewTestStore{dir: t.TempDir()}
 	service := NewService(fixture.repoRoot, nil)
-	verifyCommand := "test -f plan-a.txt || test -f reduced-fixed.txt"
+	verifyCommand := "test ! -f plan-b.txt || test -f plan-a.txt || test -f reduced-fixed.txt"
 	reviewer := BatchAggregateReviewer{Store: store, Service: service, Agent: agent}
 	reviewed, err := reviewer.Review(ctx, state, integrationRoot, BatchReviewOptions{VerifyCommand: verifyCommand, MaxAttempts: 3, AutoEject: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reviewed.State.Status != BatchStatusResolving || !reviewed.ReenterPhases {
-		t.Fatalf("auto-eject did not request resolver reentry: %+v", reviewed)
-	}
-	resolved, err := (BatchAgentResolver{Store: store, Service: service, Agent: agent}).Resolve(ctx, reviewed.State, integrationRoot, BatchResolveOptions{VerifyCommand: verifyCommand})
-	if err != nil {
-		t.Fatal(err)
-	}
-	reviewed, err = reviewer.Review(ctx, resolved.State, integrationRoot, BatchReviewOptions{VerifyCommand: verifyCommand, MaxAttempts: 3, AutoEject: true})
-	if err != nil {
-		t.Fatal(err)
+	if reviewed.State.Status != BatchStatusReadyToLand || reviewed.ReenterPhases || reviewed.State.Attempts.AggregateRework != 1 || reviewed.State.VerificationAttribution == nil || reviewed.State.VerificationAttribution.PlanID != "plan-b" {
+		t.Fatalf("auto-eject did not rework reduced-set aggregate verification: %+v", reviewed)
 	}
 	if resolutionCalls != 1 {
 		t.Fatalf("reduced-set resolution calls = %d, want 1", resolutionCalls)

@@ -117,8 +117,29 @@ type BatchVerification struct {
 	Error       string `json:"error,omitempty"`
 }
 
+const (
+	batchAttributionBisecting      = "bisecting"
+	batchAttributionAttributed     = "attributed"
+	batchAttributionBaselineFailed = "baseline_failed"
+	batchAttributionUnattributed   = "unattributed"
+	batchReworkSourceVerification  = "verification"
+)
+
+// BatchVerificationAttribution records aggregate failure attribution and the
+// write-ahead parked head used to resume an interrupted verification bisection.
+type BatchVerificationAttribution struct {
+	Status     string `json:"status"`
+	PlanID     string `json:"plan_id,omitempty"`
+	PassingSHA string `json:"passing_sha,omitempty"`
+	FailingSHA string `json:"failing_sha,omitempty"`
+	ParkedSHA  string `json:"parked_sha,omitempty"`
+	Output     string `json:"output,omitempty"`
+	GateRuns   int    `json:"gate_runs,omitempty"`
+}
+
 // BatchReview is aggregate review evidence for the exact staged head.
 type BatchReview struct {
+	ReworkSource          string               `json:"rework_source,omitempty"`
 	Status                string               `json:"status,omitempty"`
 	Verdict               string               `json:"verdict,omitempty"`
 	Summary               string               `json:"summary,omitempty"`
@@ -177,20 +198,21 @@ type BatchFinalization struct {
 // Candidates and SHAs are copied from preflight and are never rediscovered on
 // resume. LogSequence is the last transition represented by this state.
 type BatchState struct {
-	Schema          string               `json:"schema"`
-	ID              string               `json:"id"`
-	Status          BatchStatus          `json:"status"`
-	RepoRoot        string               `json:"repo_root"`
-	DefaultBranch   string               `json:"default_branch"`
-	DefaultStartSHA string               `json:"default_start_sha"`
-	Candidates      []BatchCandidate     `json:"candidates"`
-	ChosenOrder     []string             `json:"chosen_order"`
-	Integrations    []BatchIntegration   `json:"integrations,omitempty"`
-	Attempts        BatchAttempts        `json:"attempts"`
-	NonConvergence  *BatchNonConvergence `json:"non_convergence"`
-	Ejection        *BatchEjection       `json:"ejection"`
-	Verification    *BatchVerification   `json:"verification,omitempty"`
-	Review          *BatchReview         `json:"review,omitempty"`
+	Schema                  string                        `json:"schema"`
+	ID                      string                        `json:"id"`
+	Status                  BatchStatus                   `json:"status"`
+	RepoRoot                string                        `json:"repo_root"`
+	DefaultBranch           string                        `json:"default_branch"`
+	DefaultStartSHA         string                        `json:"default_start_sha"`
+	Candidates              []BatchCandidate              `json:"candidates"`
+	ChosenOrder             []string                      `json:"chosen_order"`
+	Integrations            []BatchIntegration            `json:"integrations,omitempty"`
+	Attempts                BatchAttempts                 `json:"attempts"`
+	NonConvergence          *BatchNonConvergence          `json:"non_convergence"`
+	Ejection                *BatchEjection                `json:"ejection"`
+	Verification            *BatchVerification            `json:"verification,omitempty"`
+	VerificationAttribution *BatchVerificationAttribution `json:"verification_attribution,omitempty"`
+	Review                  *BatchReview                  `json:"review,omitempty"`
 	// AggregateReviewSequence names immutable artifacts across exact-head review resets.
 	AggregateReviewSequence int                `json:"aggregate_review_sequence"`
 	Landing                 *BatchLanding      `json:"landing,omitempty"`
@@ -246,6 +268,20 @@ func (s BatchState) validate() error {
 	}
 	if s.BlockKind != "" && !s.BlockKind.valid() {
 		return fmt.Errorf("invalid merge batch block kind %q", s.BlockKind)
+	}
+	if attribution := s.VerificationAttribution; attribution != nil {
+		if !slices.Contains([]string{batchAttributionBisecting, batchAttributionAttributed, batchAttributionBaselineFailed, batchAttributionUnattributed}, attribution.Status) {
+			return fmt.Errorf("invalid batch verification attribution status %q", attribution.Status)
+		}
+		if attribution.ParkedSHA != "" && attribution.Status != batchAttributionBisecting {
+			return fmt.Errorf("batch verification parked head requires bisecting attribution")
+		}
+		if attribution.Status == batchAttributionAttributed && (attribution.PlanID == "" || attribution.FailingSHA == "") {
+			return fmt.Errorf("attributed batch verification requires plan id and failing sha")
+		}
+	}
+	if s.Review != nil && s.Review.ReworkSource != "" && s.Review.ReworkSource != batchReworkSourceVerification {
+		return fmt.Errorf("invalid batch review rework source %q", s.Review.ReworkSource)
 	}
 	if s.Ejection != nil {
 		candidate := candidateByID(s.Candidates, s.Ejection.PlanID)

@@ -26,16 +26,18 @@ type BatchTransitionStore interface {
 	Transition(BatchState, string) (BatchState, error)
 }
 
-// BatchIntegrateOptions controls staged integration. DryRun may only be used
-// with a disposable integrationRoot; it performs the same Git simulations but
-// writes no batch or plan state.
+// BatchIntegrateOptions controls staged integration, which stages squashes without
+// running VerifyCommand; the aggregate reviewer owns verification. VerifyCommand
+// is retained for caller compatibility. DryRun may only be used with a disposable
+// integrationRoot; it performs the same Git simulations but writes no batch or plan state.
 type BatchIntegrateOptions struct {
 	VerifyCommand string
 	DryRun        bool
 }
 
-// BatchEjectOptions identifies the attributed candidate and the verification
-// command used while rebuilding the reduced integration.
+// BatchEjectOptions identifies the attributed candidate for rebuilding the reduced
+// integration. Rebuilding stages squashes without running VerifyCommand; the
+// aggregate reviewer owns verification. VerifyCommand is retained for caller compatibility.
 type BatchEjectOptions struct {
 	PlanID        string
 	Reason        string
@@ -118,6 +120,7 @@ func (b BatchIntegrator) Eject(ctx context.Context, state BatchState, integratio
 		}
 		state.Attempts = BatchAttempts{}
 		state.Verification = nil
+		state.VerificationAttribution = nil
 		state.Review = nil
 		state.NonConvergence = nil
 		state.Landing = nil
@@ -150,7 +153,7 @@ func slicesDeleteValue(values []string, remove string) []string {
 	return result
 }
 
-// Integrate creates one squash commit per green candidate. Every durable intent
+// Integrate creates one squash commit per cleanly applied candidate. Every durable intent
 // precedes Git mutation, and every failed attempt restores the exact prior head.
 func (b BatchIntegrator) Integrate(ctx context.Context, state BatchState, integrationRoot string, options BatchIntegrateOptions) (BatchIntegrateResult, error) {
 	result := BatchIntegrateResult{State: state}
@@ -229,15 +232,13 @@ func (b BatchIntegrator) Integrate(ctx context.Context, state BatchState, integr
 		}
 
 		var deferral *batchCandidateDeferral
-		if commitAlreadyApplied {
-			deferral = b.verifyAppliedCandidate(ctx, git, candidate, priorHead, options)
-		} else {
+		if !commitAlreadyApplied {
 			message := state.Integrations[recordIndex].CommitMessage
 			if message == "" {
 				message = batchSquashCommitMessage(candidate)
 				legacyMessage = true
 			}
-			deferral, err = b.applyCandidate(ctx, git, candidate, message, legacyMessage, priorHead, options)
+			deferral, err = b.applyCandidate(ctx, git, candidate, message, legacyMessage, priorHead)
 			if err != nil {
 				return result, err
 			}
@@ -486,7 +487,7 @@ func (g *batchCandidateCommitGit) HasStagedChanges(ctx context.Context) (bool, e
 	return changed, err
 }
 
-func (b BatchIntegrator) applyCandidate(ctx context.Context, git GitClient, candidate BatchCandidate, message string, legacyMessage bool, priorHead string, options BatchIntegrateOptions) (*batchCandidateDeferral, error) {
+func (b BatchIntegrator) applyCandidate(ctx context.Context, git GitClient, candidate BatchCandidate, message string, legacyMessage bool, priorHead string) (*batchCandidateDeferral, error) {
 	deferCandidate := func(reason string, files []string) (*batchCandidateDeferral, error) {
 		return b.deferCandidate(ctx, git, candidate, priorHead, reason, files, ""), nil
 	}
@@ -513,19 +514,7 @@ func (b BatchIntegrator) applyCandidate(ctx context.Context, git GitClient, cand
 	if err != nil {
 		return deferCandidate("create squash commit: "+err.Error(), nil)
 	}
-	return b.verifyAppliedCandidate(ctx, git, candidate, priorHead, options), nil
-}
-
-func (b BatchIntegrator) verifyAppliedCandidate(ctx context.Context, git GitClient, candidate BatchCandidate, priorHead string, options BatchIntegrateOptions) *batchCandidateDeferral {
-	resolution := resolveMergeVerifyCommandAtRoot(git.Root(), Options{VerifyCommand: options.VerifyCommand})
-	if resolution.command == "" {
-		return nil
-	}
-	output, err := b.Service.runMergeVerifyAtRoot(ctx, git.Root(), resolution.command)
-	if err != nil {
-		return b.deferCandidate(ctx, git, candidate, priorHead, "verification failed: "+err.Error(), nil, output)
-	}
-	return nil
+	return nil, nil
 }
 
 func (b BatchIntegrator) persist(state BatchState) (BatchState, error) {

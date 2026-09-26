@@ -91,13 +91,19 @@ func (r BatchAggregateReviewer) Review(ctx context.Context, state BatchState, in
 	if err != nil {
 		return r.block(result, state, BatchBlockKindResumable, err.Error())
 	}
-	verify := resolveMergeVerifyCommandAtRoot(integrationRoot, Options{VerifyCommand: options.VerifyCommand})
-	if strings.TrimSpace(verify.command) == "" {
-		return r.block(result, state, BatchBlockKindResumable, "aggregate review requires a full verification command")
-	}
 	state, err = r.recoverAggregateRework(ctx, git, state, integrationRoot)
 	if err != nil {
 		return result, err
+	}
+	state, err = r.recoverVerificationAttribution(ctx, git, state)
+	if err != nil {
+		result.State = state
+		return result, err
+	}
+	// Detect the gate from the restored aggregate, never a parked probe prefix.
+	verify := resolveMergeVerifyCommandAtRoot(integrationRoot, Options{VerifyCommand: options.VerifyCommand})
+	if strings.TrimSpace(verify.command) == "" {
+		return r.block(result, state, BatchBlockKindResumable, "aggregate review requires a full verification command")
 	}
 
 	for {
@@ -126,136 +132,165 @@ func (r BatchAggregateReviewer) Review(ctx context.Context, state BatchState, in
 				if err != nil {
 					return result, fmt.Errorf("persist aggregate verification failure: %w", err)
 				}
-				return r.block(result, state, BatchBlockKindResumable, "aggregate verification failed: "+verifyErr.Error())
-			}
-			state, err = r.persist(state)
-			if err != nil {
-				return result, fmt.Errorf("persist aggregate verification success: %w", err)
-			}
-
-			prompt, promptErr := r.renderPrompt(ctx, git, state, verify.command, output)
-			if promptErr != nil {
-				return r.block(result, state, BatchBlockKindResumable, promptErr.Error())
-			}
-			reviewAttempt := 1
-			if state.Review != nil {
-				reviewAttempt = state.Review.Attempts + 1
-			}
-			beforeReviewStatus, _ := git.StatusPorcelain(ctx)
-			beforeReviewRefs, refsErr := snapshotBatchProtectedRefs(ctx, git, state)
-			if refsErr != nil {
-				return r.block(result, state, BatchBlockKindResumable, "capture protected refs before aggregate review: "+refsErr.Error())
-			}
-			reviewSession, reviewErr := r.Agent.Resolve(ctx, BatchAgentSessionRequest{
-				BatchID: state.ID, Operation: BatchAgentOperationAggregateReview, Attempt: reviewAttempt,
-				IntegrationRoot: integrationRoot, Prompt: prompt,
-			})
-			reviewOutput := reviewSession.Output
-			afterReviewStatus, statusErr := git.StatusPorcelain(ctx)
-			afterReviewHead, headErr := git.RevParse(ctx, "HEAD")
-			refsErr = compareBatchProtectedRefs(ctx, git, beforeReviewRefs)
-			if statusErr != nil || headErr != nil || refsErr != nil || afterReviewStatus != beforeReviewStatus || strings.TrimSpace(afterReviewHead) != head {
-				return r.blockResumableAfterRestore(ctx, result, state, git, head, "aggregate review agent modified the integration workspace or protected refs")
-			}
-			if reviewErr != nil {
-				state.Review = &BatchReview{Status: "error", BaseSHA: state.DefaultStartSHA, HeadSHA: head, Attempts: reviewAttempt, CompletedAt: batchTimestamp(r.Now)}
-				state, err = r.persist(state)
-				if err != nil {
-					return result, errors.Join(reviewErr, err)
+				if state.Review == nil && state.VerificationAttribution == nil {
+					state, err = r.attributeVerificationFailure(ctx, git, state, integrationRoot, verify.command, output)
+					if err != nil {
+						result.State = state
+						return result, err
+					}
 				}
-				return r.block(result, state, BatchBlockKindResumable, "aggregate review failed: "+reviewErr.Error())
-			}
-			artifactSequence := max(state.AggregateReviewSequence+1, reviewAttempt)
-			artifact, artifactErr := r.Store.WriteAggregateReview(state.ID, artifactSequence, reviewOutput)
-			if artifactErr != nil {
-				return r.block(result, state, BatchBlockKindResumable, "persist aggregate review output: "+artifactErr.Error())
-			}
-			parsed := reviewcontract.Parse(reviewOutput, reviewcontract.CommitProposalOptional)
-			fingerprint := ""
-			if parsed.Verdict == plan.ReviewVerdictChangesRequested {
-				fingerprint = rework.BatchLocationFindingsFingerprint(parsed.Findings)
-			}
-			previousFingerprint := state.Attempts.ReviewFingerprint
-			previousRoundHead := ""
-			if history := state.Attempts.ReviewHistory; len(history) > 0 {
-				previousRoundHead = history[len(history)-1].HeadSHA
-			}
-			resolutionSHAs := []string(nil)
-			commitMessage := ""
-			if state.Review != nil {
-				resolutionSHAs = append(resolutionSHAs, state.Review.ResolutionSHAs...)
-				commitMessage = state.Review.CommitMessage
-			}
-			state.Review = &BatchReview{Status: "completed", Verdict: parsed.Verdict, Summary: parsed.Summary, Findings: parsed.Findings, BaseSHA: state.DefaultStartSHA, HeadSHA: head, Fingerprint: fingerprint, Attempts: reviewAttempt, Artifact: artifact, ResolutionSHAs: resolutionSHAs, CommitMessage: commitMessage, CompletedAt: batchTimestamp(r.Now)}
-			state.AggregateReviewSequence = artifactSequence
-			state.Attempts.ReviewFingerprint = fingerprint
-			convergence := aggregateReviewConvergence{}
-			if parsed.Verdict == plan.ReviewVerdictChangesRequested {
-				state.Attempts.ReviewHistory, convergence = updateAggregateReviewHistory(state.Attempts.ReviewHistory, head, parsed.Findings, convergenceWindow)
-			} else {
-				// These fields are explicitly emitted in JSON so a later merge-write
-				// cannot retain findings from a completed convergence sequence.
-				state.Attempts.ReviewHistory = nil
-			}
-			state, err = r.persist(state)
-			if err != nil {
-				return result, fmt.Errorf("persist aggregate review metadata: %w", err)
-			}
-
-			switch parsed.Verdict {
-			case plan.ReviewVerdictApprove:
-				state.NonConvergence = nil
-				state.Status, state.BlockedReason, state.BlockKind, state.ResumeStatus = BatchStatusReadyToLand, "", "", ""
-				state, err = r.persist(state)
-				result.State = state
-				return result, err
-			case plan.ReviewVerdictComment:
-				return r.block(result, state, BatchBlockKindTerminal, "aggregate review returned comment; explicit approval required")
-			case plan.ReviewVerdictChangesRequested:
-				if len(parsed.Findings) == 0 {
-					return r.block(result, state, BatchBlockKindTerminal, "aggregate review requested changes without actionable findings")
+				a := state.VerificationAttribution
+				if a != nil && a.Status == batchAttributionBaselineFailed {
+					return r.block(result, state, BatchBlockKindResumable, "aggregate verification failed: default start "+state.DefaultStartSHA+" fails verification before any candidate; fix the default branch and rerun tao merge --all --restart")
 				}
-				legacyEquivalentFingerprint := previousRoundHead != head && previousFingerprint != "" && previousFingerprint == fingerprint
-				if legacyEquivalentFingerprint || latestDistinctReviewFingerprintsEquivalent(state.Attempts.ReviewHistory) {
-					return r.block(result, state, BatchBlockKindTerminal, "aggregate review stalled on equivalent findings")
-				}
-				if convergence.NotConverging {
-					planID := ""
-					if convergence.AllFindingsHaveFiles {
-						planID = attributeAggregateReviewFiles(ctx, git, effectiveBatchCandidates(state), convergence.Files)
-					}
-					reason := aggregateReviewNonConvergenceReason(convergence.Files, planID)
-					state.NonConvergence = &BatchNonConvergence{Files: append([]string(nil), convergence.Files...), PlanID: planID, Reason: reason}
-					if !options.AutoEject || state.Ejection != nil || planID == "" || len(effectiveBatchCandidates(state)) <= 1 {
-						return r.block(result, state, BatchBlockKindTerminal, reason)
-					}
-					rebuilt, ejectErr := (BatchIntegrator{Store: r.Store, Service: r.Service, Now: r.Now}).Eject(ctx, state, integrationRoot, BatchEjectOptions{PlanID: planID, Reason: reason, VerifyCommand: options.VerifyCommand})
-					result.State = rebuilt.State
-					if ejectErr != nil {
-						return result, ejectErr
-					}
-					if rebuilt.State.Status == BatchStatusResolving {
-						result.ReenterPhases = true
-						return result, nil
-					}
-					if rebuilt.State.Status != BatchStatusReviewing {
-						return result, fmt.Errorf("reduced batch requires reviewing status, got %s", rebuilt.State.Status)
-					}
-					state = rebuilt.State
-					continue
+				if a == nil || a.Status != batchAttributionAttributed || (state.Review != nil && state.Review.ReworkSource != batchReworkSourceVerification) {
+					return r.block(result, state, BatchBlockKindResumable, "aggregate verification failed: "+verifyErr.Error())
 				}
 				if state.Attempts.AggregateRework >= maxAttempts {
-					return r.block(result, state, BatchBlockKindTerminal, "aggregate rework attempt cap exhausted")
+					return r.block(result, state, BatchBlockKindResumable, fmt.Sprintf("aggregate verification failed after %d verification rework attempts; attributed to plan %s", state.Attempts.AggregateRework, a.PlanID))
 				}
-			default:
-				return r.block(result, state, BatchBlockKindTerminal, "aggregate review returned an unsupported verdict")
+				review := &BatchReview{Status: "reworking", ReworkSource: batchReworkSourceVerification, BaseSHA: state.DefaultStartSHA, HeadSHA: head}
+				if state.Review != nil {
+					review.Attempts = state.Review.Attempts
+					review.ResolutionSHAs = append([]string(nil), state.Review.ResolutionSHAs...)
+				}
+				state.Review = review
+				state.Attempts.AggregateRework++
+				state, err = r.persist(state)
+				if err != nil {
+					return result, fmt.Errorf("persist verification rework intent: %w", err)
+				}
 			}
+			if verifyErr == nil {
+				state, err = r.persist(state)
+				if err != nil {
+					return result, fmt.Errorf("persist aggregate verification success: %w", err)
+				}
 
-			state.Attempts.AggregateRework++
-			state.Review.Status = "reworking"
-			state, err = r.persist(state) // durable intent and exact base precede agent mutation
-			if err != nil {
-				return result, fmt.Errorf("persist aggregate rework intent: %w", err)
+				prompt, promptErr := r.renderPrompt(ctx, git, state, verify.command, output)
+				if promptErr != nil {
+					return r.block(result, state, BatchBlockKindResumable, promptErr.Error())
+				}
+				reviewAttempt := 1
+				if state.Review != nil {
+					reviewAttempt = state.Review.Attempts + 1
+				}
+				beforeReviewStatus, _ := git.StatusPorcelain(ctx)
+				beforeReviewRefs, refsErr := snapshotBatchProtectedRefs(ctx, git, state)
+				if refsErr != nil {
+					return r.block(result, state, BatchBlockKindResumable, "capture protected refs before aggregate review: "+refsErr.Error())
+				}
+				reviewSession, reviewErr := r.Agent.Resolve(ctx, BatchAgentSessionRequest{
+					BatchID: state.ID, Operation: BatchAgentOperationAggregateReview, Attempt: reviewAttempt,
+					IntegrationRoot: integrationRoot, Prompt: prompt,
+				})
+				reviewOutput := reviewSession.Output
+				afterReviewStatus, statusErr := git.StatusPorcelain(ctx)
+				afterReviewHead, headErr := git.RevParse(ctx, "HEAD")
+				refsErr = compareBatchProtectedRefs(ctx, git, beforeReviewRefs)
+				if statusErr != nil || headErr != nil || refsErr != nil || afterReviewStatus != beforeReviewStatus || strings.TrimSpace(afterReviewHead) != head {
+					return r.blockResumableAfterRestore(ctx, result, state, git, head, "aggregate review agent modified the integration workspace or protected refs")
+				}
+				if reviewErr != nil {
+					state.Review = &BatchReview{Status: "error", BaseSHA: state.DefaultStartSHA, HeadSHA: head, Attempts: reviewAttempt, CompletedAt: batchTimestamp(r.Now)}
+					state, err = r.persist(state)
+					if err != nil {
+						return result, errors.Join(reviewErr, err)
+					}
+					return r.block(result, state, BatchBlockKindResumable, "aggregate review failed: "+reviewErr.Error())
+				}
+				artifactSequence := max(state.AggregateReviewSequence+1, reviewAttempt)
+				artifact, artifactErr := r.Store.WriteAggregateReview(state.ID, artifactSequence, reviewOutput)
+				if artifactErr != nil {
+					return r.block(result, state, BatchBlockKindResumable, "persist aggregate review output: "+artifactErr.Error())
+				}
+				parsed := reviewcontract.Parse(reviewOutput, reviewcontract.CommitProposalOptional)
+				fingerprint := ""
+				if parsed.Verdict == plan.ReviewVerdictChangesRequested {
+					fingerprint = rework.BatchLocationFindingsFingerprint(parsed.Findings)
+				}
+				previousFingerprint := state.Attempts.ReviewFingerprint
+				previousRoundHead := ""
+				if history := state.Attempts.ReviewHistory; len(history) > 0 {
+					previousRoundHead = history[len(history)-1].HeadSHA
+				}
+				resolutionSHAs := []string(nil)
+				commitMessage := ""
+				if state.Review != nil {
+					resolutionSHAs = append(resolutionSHAs, state.Review.ResolutionSHAs...)
+					commitMessage = state.Review.CommitMessage
+				}
+				state.Review = &BatchReview{Status: "completed", Verdict: parsed.Verdict, Summary: parsed.Summary, Findings: parsed.Findings, BaseSHA: state.DefaultStartSHA, HeadSHA: head, Fingerprint: fingerprint, Attempts: reviewAttempt, Artifact: artifact, ResolutionSHAs: resolutionSHAs, CommitMessage: commitMessage, CompletedAt: batchTimestamp(r.Now)}
+				state.AggregateReviewSequence = artifactSequence
+				state.Attempts.ReviewFingerprint = fingerprint
+				convergence := aggregateReviewConvergence{}
+				if parsed.Verdict == plan.ReviewVerdictChangesRequested {
+					state.Attempts.ReviewHistory, convergence = updateAggregateReviewHistory(state.Attempts.ReviewHistory, head, parsed.Findings, convergenceWindow)
+				} else {
+					// These fields are explicitly emitted in JSON so a later merge-write
+					// cannot retain findings from a completed convergence sequence.
+					state.Attempts.ReviewHistory = nil
+				}
+				state, err = r.persist(state)
+				if err != nil {
+					return result, fmt.Errorf("persist aggregate review metadata: %w", err)
+				}
+
+				switch parsed.Verdict {
+				case plan.ReviewVerdictApprove:
+					state.NonConvergence = nil
+					state.Status, state.BlockedReason, state.BlockKind, state.ResumeStatus = BatchStatusReadyToLand, "", "", ""
+					state, err = r.persist(state)
+					result.State = state
+					return result, err
+				case plan.ReviewVerdictComment:
+					return r.block(result, state, BatchBlockKindTerminal, "aggregate review returned comment; explicit approval required")
+				case plan.ReviewVerdictChangesRequested:
+					if len(parsed.Findings) == 0 {
+						return r.block(result, state, BatchBlockKindTerminal, "aggregate review requested changes without actionable findings")
+					}
+					legacyEquivalentFingerprint := previousRoundHead != head && previousFingerprint != "" && previousFingerprint == fingerprint
+					if legacyEquivalentFingerprint || latestDistinctReviewFingerprintsEquivalent(state.Attempts.ReviewHistory) {
+						return r.block(result, state, BatchBlockKindTerminal, "aggregate review stalled on equivalent findings")
+					}
+					if convergence.NotConverging {
+						planID := ""
+						if convergence.AllFindingsHaveFiles {
+							planID = attributeAggregateReviewFiles(ctx, git, effectiveBatchCandidates(state), convergence.Files)
+						}
+						reason := aggregateReviewNonConvergenceReason(convergence.Files, planID)
+						state.NonConvergence = &BatchNonConvergence{Files: append([]string(nil), convergence.Files...), PlanID: planID, Reason: reason}
+						if !options.AutoEject || state.Ejection != nil || planID == "" || len(effectiveBatchCandidates(state)) <= 1 {
+							return r.block(result, state, BatchBlockKindTerminal, reason)
+						}
+						rebuilt, ejectErr := (BatchIntegrator{Store: r.Store, Service: r.Service, Now: r.Now}).Eject(ctx, state, integrationRoot, BatchEjectOptions{PlanID: planID, Reason: reason, VerifyCommand: options.VerifyCommand})
+						result.State = rebuilt.State
+						if ejectErr != nil {
+							return result, ejectErr
+						}
+						if rebuilt.State.Status == BatchStatusResolving {
+							result.ReenterPhases = true
+							return result, nil
+						}
+						if rebuilt.State.Status != BatchStatusReviewing {
+							return result, fmt.Errorf("reduced batch requires reviewing status, got %s", rebuilt.State.Status)
+						}
+						state = rebuilt.State
+						continue
+					}
+					if state.Attempts.AggregateRework >= maxAttempts {
+						return r.block(result, state, BatchBlockKindTerminal, "aggregate rework attempt cap exhausted")
+					}
+				default:
+					return r.block(result, state, BatchBlockKindTerminal, "aggregate review returned an unsupported verdict")
+				}
+
+				state.Attempts.AggregateRework++
+				state.Review.Status = "reworking"
+				state, err = r.persist(state) // durable intent and exact base precede agent mutation
+				if err != nil {
+					return result, fmt.Errorf("persist aggregate rework intent: %w", err)
+				}
 			}
 		} else if state.Verification != nil {
 			output = state.Verification.Output
@@ -265,9 +300,14 @@ func (r BatchAggregateReviewer) Review(ctx context.Context, state BatchState, in
 			return r.block(result, state, BatchBlockKindResumable, "capture protected refs before aggregate rework: "+refsErr.Error())
 		}
 		beforeHead := head
+		planID, sourceReview := "aggregate-review", formatFindings(state.Review.Findings)
+		if state.Review.ReworkSource == batchReworkSourceVerification {
+			planID = state.VerificationAttribution.PlanID
+			sourceReview = verificationAttributionReviewMaterial(state)
+		}
 		reworkPrompt, renderErr := prompts.RenderMergeResolve(prompts.MergeResolveData{
-			BatchID: state.ID, PlanID: "aggregate-review", SourceHead: head, IntegrationBase: state.DefaultStartSHA,
-			VerifyCommand: verify.command, SourceReview: formatFindings(state.Review.Findings), Diff: state.DefaultStartSHA + ".." + head,
+			BatchID: state.ID, PlanID: planID, SourceHead: head, IntegrationBase: state.DefaultStartSHA,
+			VerifyCommand: verify.command, SourceReview: sourceReview, Diff: state.DefaultStartSHA + ".." + head,
 			PriorPlans: strings.Join(state.ChosenOrder, "\n"), VerificationOutput: output,
 		})
 		if renderErr != nil {
@@ -339,6 +379,153 @@ func (r BatchAggregateReviewer) Review(ctx context.Context, state BatchState, in
 			return r.block(result, state, BatchBlockKindResumable, err.Error())
 		}
 	}
+}
+
+// attributeVerificationFailure probes only applied prefixes, never resolution
+// commits. The failed aggregate head is already known and is not run again.
+func (r BatchAggregateReviewer) attributeVerificationFailure(ctx context.Context, git GitClient, state BatchState, integrationRoot, command, headOutput string) (updated BatchState, err error) {
+	prefixes := []string{state.DefaultStartSHA}
+	var planIDs []string
+	for _, integration := range state.Integrations {
+		if integration.Status == batchIntegrationApplied {
+			prefixes = append(prefixes, integration.IntegrationSHA)
+			planIDs = append(planIDs, integration.PlanID)
+		}
+	}
+	if len(planIDs) == 0 || prefixes[len(prefixes)-1] != state.IntegrationHead {
+		state.VerificationAttribution = &BatchVerificationAttribution{Status: batchAttributionUnattributed, Output: boundMergeVerifyOutput(headOutput)}
+		return r.persist(state)
+	}
+	refs, err := snapshotBatchProtectedRefs(ctx, git, state)
+	if err != nil {
+		return state, fmt.Errorf("capture protected refs before verification attribution: %w", err)
+	}
+	attribution := BatchVerificationAttribution{Status: batchAttributionBisecting}
+	// Copy each snapshot: neither a store nor an earlier durable intent should
+	// share the mutable probe record.
+	persist := func() error {
+		copy := attribution
+		state.VerificationAttribution = &copy
+		persisted, persistErr := r.persist(state)
+		if persistErr == nil {
+			state = persisted
+		}
+		return persistErr
+	}
+	if err := persist(); err != nil {
+		return state, fmt.Errorf("persist verification attribution intent: %w", err)
+	}
+	defer func() {
+		// Cancellation must not strand the integration branch at a probe head.
+		cleanupCtx, cancel := singleAgentCleanupContext(ctx)
+		defer cancel()
+		restoreErr := restoreBatchIntegration(cleanupCtx, git, state.IntegrationHead)
+		refsErr := compareBatchProtectedRefs(cleanupCtx, git, refs)
+		if restoreErr == nil {
+			attribution.ParkedSHA = ""
+		}
+		err = errors.Join(err, restoreErr, refsErr)
+		if err != nil {
+			attribution.Status = batchAttributionBisecting
+		}
+		err = errors.Join(err, persist())
+		updated = state
+	}()
+	probe := func(index int) (bool, string, error) {
+		if attribution.ParkedSHA != "" {
+			// Keep the previous intent authoritative until HEAD is back at the
+			// integration head. Only then can a new parked intent replace it.
+			if err := restoreBatchIntegration(ctx, git, state.IntegrationHead); err != nil {
+				return false, "", fmt.Errorf("restore integration before next verification probe: %w", err)
+			}
+		}
+		attribution.ParkedSHA = prefixes[index]
+		if err := persist(); err != nil {
+			return false, "", fmt.Errorf("persist verification probe intent: %w", err)
+		}
+		if err := restoreBatchIntegration(ctx, git, prefixes[index]); err != nil {
+			return false, "", fmt.Errorf("restore verification prefix: %w", err)
+		}
+		output, gateErr := r.Service.runMergeVerifyAtRoot(ctx, integrationRoot, command)
+		attribution.GateRuns++
+		if err := persist(); err != nil {
+			return false, output, fmt.Errorf("persist verification probe result: %w", err)
+		}
+		if ctx.Err() != nil {
+			return false, output, ctx.Err()
+		}
+		if errors.Is(gateErr, context.Canceled) || errors.Is(gateErr, context.DeadlineExceeded) {
+			return false, output, gateErr
+		}
+		return gateErr == nil, output, nil
+	}
+	low, high := 0, len(prefixes)-1
+	failingOutput := headOutput
+	for high-low > 1 {
+		mid := (low + high) / 2
+		passed, output, probeErr := probe(mid)
+		if probeErr != nil {
+			return state, probeErr
+		}
+		if passed {
+			low = mid
+		} else {
+			high, failingOutput = mid, output
+		}
+	}
+	if low == 0 {
+		passed, output, probeErr := probe(0)
+		if probeErr != nil {
+			return state, probeErr
+		}
+		if !passed {
+			attribution.Status = batchAttributionBaselineFailed
+			attribution.FailingSHA = state.DefaultStartSHA
+			attribution.Output = boundMergeVerifyOutput(output)
+			return state, nil
+		}
+	}
+	attribution.Status = batchAttributionAttributed
+	attribution.PlanID = planIDs[high-1]
+	attribution.PassingSHA, attribution.FailingSHA = prefixes[low], prefixes[high]
+	attribution.Output = boundMergeVerifyOutput(failingOutput)
+	return state, nil
+}
+
+func (r BatchAggregateReviewer) recoverVerificationAttribution(ctx context.Context, git GitClient, state BatchState) (BatchState, error) {
+	if state.VerificationAttribution == nil || state.VerificationAttribution.Status != batchAttributionBisecting {
+		return state, nil
+	}
+	cleanupCtx, cancel := singleAgentCleanupContext(ctx)
+	defer cancel()
+	if err := restoreBatchIntegration(cleanupCtx, git, state.IntegrationHead); err != nil {
+		return state, fmt.Errorf("restore interrupted verification attribution: %w", err)
+	}
+	state.VerificationAttribution = nil
+	persisted, err := r.persist(state)
+	if err != nil {
+		return state, fmt.Errorf("persist recovered verification attribution: %w", err)
+	}
+	return persisted, nil
+}
+
+func verificationAttributionReviewMaterial(state BatchState) string {
+	a := state.VerificationAttribution
+	if a == nil {
+		return ""
+	}
+	title := ""
+	for _, candidate := range state.Candidates {
+		if candidate.PlanID == a.PlanID {
+			title = candidate.PlanTitle
+			break
+		}
+	}
+	command, output := "", a.Output
+	if state.Verification != nil {
+		command = state.Verification.Command
+	}
+	return fmt.Sprintf("Aggregate verification failure attributed to plan %s (%s)\nPassing SHA: %s\nFailing SHA: %s\nVerification command: %s\nFailing prefix output:\n%s", a.PlanID, title, a.PassingSHA, a.FailingSHA, command, boundMergeVerifyOutput(output))
 }
 
 func (r BatchAggregateReviewer) recoverAggregateRework(ctx context.Context, git GitClient, state BatchState, integrationRoot string) (BatchState, error) {
@@ -511,6 +698,7 @@ func (r BatchAggregateReviewer) settleAggregateRework(state BatchState, head str
 	state.Verification = nil
 	state.Review = &BatchReview{
 		Status:         "pending",
+		ReworkSource:   state.Review.ReworkSource,
 		BaseSHA:        state.DefaultStartSHA,
 		HeadSHA:        head,
 		Attempts:       state.Review.Attempts,

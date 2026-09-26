@@ -2,10 +2,84 @@ package merge
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/iamseth/tao/internal/plan"
 )
+
+func TestBatchVerificationAttributionRoundTrip(t *testing.T) {
+	t.Parallel()
+	for _, status := range []string{batchAttributionBisecting, batchAttributionAttributed, batchAttributionBaselineFailed, batchAttributionUnattributed} {
+		t.Run(status, func(t *testing.T) {
+			state := testBatchState()
+			state.VerificationAttribution = &BatchVerificationAttribution{
+				Status: status, PlanID: "plan-a", PassingSHA: "passing", FailingSHA: "failing", Output: "gate failure", GateRuns: 3,
+			}
+			if status == batchAttributionBisecting {
+				state.VerificationAttribution.ParkedSHA = state.DefaultStartSHA
+			}
+			state.Review = &BatchReview{ReworkSource: batchReworkSourceVerification}
+			store := newTestBatchStore(t)
+			if _, err := store.Transition(state, "2026-09-26T21:00:00Z"); err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := store.Load(state.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if loaded.VerificationAttribution == nil || *loaded.VerificationAttribution != *state.VerificationAttribution || loaded.Review == nil || loaded.Review.ReworkSource != batchReworkSourceVerification {
+				t.Fatalf("attribution did not round-trip: %+v", loaded)
+			}
+		})
+	}
+}
+
+func TestBatchVerificationAttributionValidation(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name        string
+		attribution *BatchVerificationAttribution
+		source      string
+		want        string
+	}{
+		{name: "unknown status", attribution: &BatchVerificationAttribution{Status: "unknown"}, want: "attribution status"},
+		{name: "parked outside bisection", attribution: &BatchVerificationAttribution{Status: batchAttributionUnattributed, ParkedSHA: "parked"}, want: "parked"},
+		{name: "missing attributed plan", attribution: &BatchVerificationAttribution{Status: batchAttributionAttributed, FailingSHA: "failing"}, want: "plan"},
+		{name: "missing attributed head", attribution: &BatchVerificationAttribution{Status: batchAttributionAttributed, PlanID: "plan-a"}, want: "failing"},
+		{name: "unknown rework source", source: "unknown", want: "rework source"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := testBatchState()
+			state.VerificationAttribution = tc.attribution
+			state.Review = &BatchReview{ReworkSource: tc.source}
+			if err := state.validate(); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("validate() = %v, want error containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestBatchStateLegacyVerificationFieldsRemainOptional(t *testing.T) {
+	t.Parallel()
+	var state BatchState
+	if err := json.Unmarshal([]byte(`{"schema":"tao.merge-batch.v1","id":"legacy","status":"reviewing","review":{"status":"completed"}}`), &state); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.validate(); err != nil {
+		t.Fatal(err)
+	}
+	if state.VerificationAttribution != nil || state.Review.ReworkSource != "" {
+		t.Fatalf("legacy state gained attribution: %+v", state)
+	}
+	encoded, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "verification_attribution") || strings.Contains(string(encoded), "rework_source") {
+		t.Fatalf("optional fields were not omitted: %s", encoded)
+	}
+}
 
 func TestBatchAttemptsReviewHistoryPersistsAndClearsExplicitly(t *testing.T) {
 	t.Parallel()

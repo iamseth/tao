@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -80,7 +81,7 @@ func TestBatchIntegratorCreatesOneSquashWithTrailersWithoutMovingSourcesOrDefaul
 	}
 }
 
-func TestBatchIntegratorDefersVerificationFailureAndRestoresCleanHead(t *testing.T) {
+func TestBatchIntegratorAppliesCandidateWithoutVerification(t *testing.T) {
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	writeBatchTestFile(t, fixture.worktreePath)
@@ -90,7 +91,9 @@ func TestBatchIntegratorDefersVerificationFailureAndRestoresCleanHead(t *testing
 	defaultHead := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
 	integrationRoot := filepath.Join(t.TempDir(), "integration")
 	runRealGit(t, fixture.repoRoot, "worktree", "add", "-b", "tao/integration/verify", integrationRoot, defaultHead)
+	calls := 0
 	runner := func(_ context.Context, _ string, _ string, _ []string, stdout io.Writer, _ io.Writer) error {
+		calls++
 		_, _ = stdout.Write([]byte("verification-only conflict\n"))
 		return errors.New("exit 1")
 	}
@@ -105,17 +108,21 @@ func TestBatchIntegratorDefersVerificationFailureAndRestoresCleanHead(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Deferred) != 1 || !strings.Contains(result.Deferred[0].Reason, "verification failed") {
-		t.Fatalf("unexpected deferral: %#v", result.Deferred)
+	if calls != 0 {
+		t.Fatalf("integration ran verification %d times, want none", calls)
 	}
-	if got := realGitOutput(t, integrationRoot, "rev-parse", "HEAD"); got != defaultHead {
-		t.Fatalf("failed candidate left HEAD at %s, want %s", got, defaultHead)
+	if len(result.Applied) != 1 || result.Applied[0] != "plan-a" || len(result.Deferred) != 0 || result.State.Status != BatchStatusReviewing {
+		t.Fatalf("unexpected integration result: %#v", result)
+	}
+	record := result.State.Integrations[0]
+	if got := realGitOutput(t, integrationRoot, "rev-parse", "HEAD"); got == defaultHead || got != record.IntegrationSHA || record.Status != batchIntegrationApplied {
+		t.Fatalf("candidate was not applied: head=%s record=%+v", got, record)
 	}
 	if got := realGitOutput(t, integrationRoot, "status", "--porcelain"); got != "" {
-		t.Fatalf("failed candidate left dirty output: %q", got)
+		t.Fatalf("candidate left dirty output: %q", got)
 	}
-	if output := result.State.Integrations[0].VerificationOutput; !strings.Contains(output, "verification-only conflict") {
-		t.Fatalf("verification output not persisted: %q", output)
+	if record.VerificationOutput != "" {
+		t.Fatalf("unexpected verification output: %q", record.VerificationOutput)
 	}
 }
 
@@ -134,7 +141,11 @@ func TestBatchIntegratorDryRunUsesDisposableHistoryWithoutDurableWrites(t *testi
 	generator := &fakeMergeProposalGenerator{proposal: generatedMergeProposal()}
 	service := NewService(fixture.repoRoot, nil)
 	service.ProposalGenerator = generator
-	result, err := (BatchIntegrator{Service: service}).Integrate(context.Background(), state, integrationRoot, BatchIntegrateOptions{DryRun: true, VerifyCommand: "true"})
+	service.Runner = func(context.Context, string, string, []string, io.Writer, io.Writer) error {
+		t.Error("dry-run integration invoked the verification runner")
+		return errors.New("exit 1")
+	}
+	result, err := (BatchIntegrator{Service: service}).Integrate(context.Background(), state, integrationRoot, BatchIntegrateOptions{DryRun: true, VerifyCommand: "false"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,6 +154,45 @@ func TestBatchIntegratorDryRunUsesDisposableHistoryWithoutDurableWrites(t *testi
 	}
 	if got := realGitOutput(t, integrationRoot, "rev-parse", "HEAD"); got != defaultHead {
 		t.Fatalf("dry run retained simulated history: got %s want %s", got, defaultHead)
+	}
+}
+
+func TestBatchIntegratorResumePreservesLegacyVerificationDeferral(t *testing.T) {
+	t.Parallel()
+	fixture := newRealGitWorktree(t)
+	writeBatchTestFile(t, fixture.worktreePath)
+	runRealGit(t, fixture.worktreePath, "add", "feature.txt")
+	runRealGit(t, fixture.worktreePath, "commit", "-m", "source checkpoint")
+	sourceHead := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch)
+	defaultHead := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
+	integrationRoot := filepath.Join(t.TempDir(), "integration")
+	runRealGit(t, fixture.repoRoot, "worktree", "add", "-b", "tao/integration/legacy-deferred", integrationRoot, defaultHead)
+
+	state := interruptedBatchIntegrateTestState(fixture, sourceHead, defaultHead)
+	state.Status = BatchStatusResolving
+	state.Integrations[0].Status = batchIntegrationDeferred
+	state.Integrations[0].CommitMessage = state.Candidates[0].CommitMessage
+	state.Integrations[0].DeferredReason = "verification failed: exit 1"
+	state.Integrations[0].VerificationOutput = "legacy verification failure output\n"
+	markBatchCandidateDeferred(&state, "plan-a", BatchDeferral{PlanID: "plan-a", Reason: state.Integrations[0].DeferredReason})
+	want := state.Integrations[0]
+	service := NewService(fixture.repoRoot, nil)
+	service.Runner = func(context.Context, string, string, []string, io.Writer, io.Writer) error {
+		t.Error("legacy deferral invoked the verification runner")
+		return errors.New("exit 1")
+	}
+	result, err := (BatchIntegrator{Store: &recordingBatchTransitionStore{}, Service: service}).Integrate(context.Background(), state, integrationRoot, BatchIntegrateOptions{VerifyCommand: "false"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.State.Integrations) != 1 || !reflect.DeepEqual(result.State.Integrations[0], want) {
+		t.Fatalf("legacy deferral changed: got %+v want %+v", result.State.Integrations, want)
+	}
+	if result.State.Status != BatchStatusResolving || len(result.Applied) != 0 {
+		t.Fatalf("legacy deferral no longer owned by resolver: %+v", result)
+	}
+	if got := realGitOutput(t, integrationRoot, "rev-parse", "HEAD"); got != defaultHead {
+		t.Fatalf("legacy deferral moved HEAD: got %s want %s", got, defaultHead)
 	}
 }
 
@@ -487,7 +537,12 @@ func TestBatchIntegratorResumesApplyingIntentAfterTaoCommit(t *testing.T) {
 
 	state := interruptedBatchIntegrateTestState(fixture, sourceHead, defaultHead)
 	state.Integrations[0].CommitMessage = candidate.CommitMessage
-	result, err := (BatchIntegrator{Store: &recordingBatchTransitionStore{}, Service: NewService(fixture.repoRoot, nil)}).Integrate(context.Background(), state, integrationRoot, BatchIntegrateOptions{VerifyCommand: "true"})
+	service := NewService(fixture.repoRoot, nil)
+	service.Runner = func(context.Context, string, string, []string, io.Writer, io.Writer) error {
+		t.Error("resuming an applied commit invoked the verification runner")
+		return errors.New("exit 1")
+	}
+	result, err := (BatchIntegrator{Store: &recordingBatchTransitionStore{}, Service: service}).Integrate(context.Background(), state, integrationRoot, BatchIntegrateOptions{VerifyCommand: "false"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -637,6 +692,7 @@ func TestBatchIntegratorEjectRebuildsReducedOrderedSet(t *testing.T) {
 		ReviewFingerprint: "stale-review",
 		ReviewHistory:     []BatchReviewRound{{FindingFiles: []string{"plan-a.txt"}, FindingCount: 1}},
 	}
+	state.VerificationAttribution = &BatchVerificationAttribution{Status: batchAttributionAttributed, PlanID: "plan-a", FailingSHA: state.IntegrationHead}
 	state.Review = &BatchReview{Status: "completed", Verdict: plan.ReviewVerdictChangesRequested, Attempts: 2}
 	state.NonConvergence = &BatchNonConvergence{Files: []string{"plan-a.txt"}, PlanID: "plan-a", Reason: reason}
 	store := newTestBatchStore(t)
@@ -671,7 +727,7 @@ func TestBatchIntegratorEjectRebuildsReducedOrderedSet(t *testing.T) {
 	if parent := realGitOutput(t, integrationRoot, "rev-parse", "HEAD^"); parent != state.DefaultStartSHA {
 		t.Fatalf("rebuilt integration parent = %s, want %s", parent, state.DefaultStartSHA)
 	}
-	if result.State.Verification != nil || result.State.Review != nil || result.State.NonConvergence != nil {
+	if result.State.Verification != nil || result.State.VerificationAttribution != nil || result.State.Review != nil || result.State.NonConvergence != nil {
 		t.Fatalf("rebuilt state retained stale aggregate evidence: %+v", result.State)
 	}
 	if result.State.AggregateReviewSequence != 2 || result.State.Attempts.AggregateRework != 0 || result.State.Attempts.ReviewFingerprint != "" || result.State.Attempts.ReviewHistory != nil {
@@ -774,17 +830,21 @@ func TestBatchIntegratorEjectResumeKeepsPersistedDeferralResolving(t *testing.T)
 	state.IntegrationHead = state.DefaultStartSHA
 	runRealGit(t, integrationRoot, "reset", "--hard", state.DefaultStartSHA)
 
-	store := &recordingBatchTransitionStore{failAt: 3}
+	// Resume a legacy verification deferral instead of generating one during integration.
+	markBatchCandidateDeferred(&state, "plan-b", BatchDeferral{PlanID: "plan-b", Reason: "verification failed: exit 1"})
+	state.Integrations = []BatchIntegration{{
+		PlanID: "plan-b", SourceHead: state.Candidates[1].SourceTip,
+		IntegrationBaseSHA: state.DefaultStartSHA, CommitMessage: state.Candidates[1].CommitMessage,
+		Status: batchIntegrationDeferred, DeferredReason: "verification failed: exit 1",
+		VerificationOutput: "legacy failure\n", Attempts: 1,
+	}}
+	store := &recordingBatchTransitionStore{failAt: 1}
 	integrator := BatchIntegrator{Store: store, Service: NewService(fixture.repoRoot, nil)}
 	_, err := integrator.Integrate(context.Background(), state, integrationRoot, BatchIntegrateOptions{VerifyCommand: "false"})
 	if err == nil || !strings.Contains(err.Error(), "persist integration result") {
 		t.Fatalf("expected interruption after durable deferral, got %v", err)
 	}
-	if len(store.states) != 2 || len(store.states[1].Integrations) != 1 || store.states[1].Integrations[0].Status != batchIntegrationDeferred {
-		t.Fatalf("missing durable deferral before phase transition: %+v", store.states)
-	}
-
-	resumed, err := (BatchIntegrator{Store: &recordingBatchTransitionStore{}, Service: NewService(fixture.repoRoot, nil)}).Integrate(context.Background(), store.states[1], integrationRoot, BatchIntegrateOptions{VerifyCommand: "true"})
+	resumed, err := (BatchIntegrator{Store: &recordingBatchTransitionStore{}, Service: NewService(fixture.repoRoot, nil)}).Integrate(context.Background(), state, integrationRoot, BatchIntegrateOptions{VerifyCommand: "true"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -804,6 +864,20 @@ func TestBatchIntegratorEjectResumesApplyingResolverIntentThroughResolver(t *tes
 	service := NewService(fixture.repoRoot, nil)
 	integrator := BatchIntegrator{Store: store, Service: service}
 
+	// Model a legacy rebuild stopped with a verification-deferred candidate.
+	runRealGit(t, integrationRoot, "reset", "--hard", state.DefaultStartSHA)
+	markBatchCandidateDeferred(&state, "plan-a", BatchDeferral{PlanID: "plan-a", Reason: reason})
+	markBatchCandidateDeferred(&state, "plan-b", BatchDeferral{PlanID: "plan-b", Reason: "verification failed: exit 1"})
+	state.ChosenOrder = []string{"plan-b"}
+	state.Ejection = &BatchEjection{PlanID: "plan-a", Reason: reason, Status: batchEjectionReintegrating}
+	state.Status = BatchStatusResolving
+	state.IntegrationHead = state.DefaultStartSHA
+	state.Integrations = []BatchIntegration{{
+		PlanID: "plan-b", SourceHead: state.Candidates[1].SourceTip,
+		IntegrationBaseSHA: state.DefaultStartSHA, CommitMessage: state.Candidates[1].CommitMessage,
+		Status: batchIntegrationDeferred, DeferredReason: "verification failed: exit 1",
+		VerificationOutput: "legacy failure\n", Attempts: 1,
+	}}
 	deferred, err := integrator.Eject(context.Background(), state, integrationRoot, BatchEjectOptions{
 		PlanID: "plan-a", Reason: reason, VerifyCommand: "false",
 	})
