@@ -461,7 +461,8 @@ through.
 | The plan records an ordinary blocker and you have resolved its stated cause | `tao run --continue <plan-id>` | `--continue` explicitly clears blocker lifecycle state. Tao does not infer resolution. |
 | A clean isolated automatic slice is blocked on an older execution baseline, and a prerequisite has now produced a strictly newer baseline | `tao run --restart <plan-id>` | `--restart` supersedes that safe blocked boundary and preflights again; it is not a general retry. |
 | An implementation handoff was interrupted before completion | Rerun the same `tao run` command | Tao classifies the recorded workspace, branch, head, policy, intent, and dirt before deciding whether resume is safe. `--continue` and `--restart` do not bypass that check. |
-| Final verification failed with recorded classification `code`, and fewer than two repair slices have ever been generated for the plan | `tao run --repair-verification <plan-id>` | Tao appends and runs one repair slice for the exact failed gate. The fixed lifetime cap is 2. |
+| Final verification fails with recorded classification `code` after slice execution in an ordinary run | Let automatic repair continue in the same invocation | Eligible failures generate and run repair slices, then rerun the gate, within the fixed lifetime cap of 2 and `--max-slices`. |
+| The plan is already stopped in `verification_failed` with classification `code`, and fewer than two repair slices have ever been generated | `tao run --repair-verification <plan-id>` | This explicit path appends and runs one repair slice for the exact failed gate; it never chains automatic attempts. |
 | A code-classified failure remains after two generated repair attempts | Repair and commit the source manually on the same plan branch, then run `tao run --reverify <plan-id>` from a clean worktree | Exhaustion is terminal for generated attempts. Reverification accepts the recorded failed head or a clean same-branch descendant after the manual fix; it does not reset or consult the repair cap. |
 | Final verification is legacy-unclassified, or its recorded external cause (`tool_missing`, `timeout`, `cancelled`, or `invalid_command`) has been resolved | `tao run --reverify <plan-id>` | Tao reruns final verification without a repair slice at the unchanged failed head. |
 
@@ -471,6 +472,8 @@ After exhaustion, Tao records the failed command, head, fingerprint, lifetime
 attempt count, and manual-recovery reason as durable stop evidence. Generated
 verification-repair slices are system-owned; `tao edit skip` and
 `tao edit remove` refuse them so repair history cannot be bypassed or erased.
+`tao insights` shows `verification_repair_stopped` as a signal of exhausted
+repair attempts.
 
 Under `--commit-policy none`, a successful same-head reverification does not by
 itself prove that permitted uncommitted work was committed.
@@ -634,11 +637,22 @@ slice was blocked by a prerequisite and the baseline has since advanced, use
 `tao run --restart` instead; Tao records the superseded boundary and re-runs
 prerequisite and selected-slice preflight before handoff. A failed broad final
 gate is not an interrupted implementation slice: follow its recorded
-classification. Use `tao run --repair-verification` for a code repair while the
-fixed two-attempt lifetime budget remains. After that cap, repair and commit the
-source manually on the same branch, leave the worktree clean, and use
-`tao run --reverify`; Tao accepts a head equal to or descending from the recorded
-failed head. After resolving a non-code cause, reverify the unchanged head.
+classification. An ordinary `tao run` performs automatic repair of eligible
+code-classified failures arising after slice execution in that invocation,
+within the fixed two-attempt lifetime cap. Repair slices count toward
+`--max-slices`: if the budget is already consumed when the gate fails, Tao stops
+without appending a repair and surfaces explicit recovery guidance. `tao note run`
+inherits this policy through the same run path.
+
+For a plan already stopped in `verification_failed`, use
+`tao run --repair-verification` while the lifetime budget remains. It runs one
+generated attempt and reverifies, without chaining automatic repair; plain
+`tao run` does not initiate repair of an already-failed plan. After the cap,
+repair and commit the source manually on the same branch, leave the worktree
+clean, and use `tao run --reverify`; Tao accepts a head equal to or descending
+from the recorded failed head. Non-code and unclassified failures do not trigger
+automatic repair: resolve the cause and reverify the unchanged head.
+`--reverify`, PR recovery, review, and merge paths never schedule automatic repair.
 
 ### Decide between automatic and manual rework
 
@@ -1090,7 +1104,7 @@ flag in sequence:
 tao approve <plan-id>                  # approval gate, then run normally
 tao run --continue <plan-id>           # ordinary blocker whose cause is cleared
 tao run --restart <plan-id>            # safe blocked slice on a newer baseline
-tao run --repair-verification <plan-id> # code failure; at most 2 generated attempts
+tao run --repair-verification <plan-id> # stopped code failure; one attempt if budget remains
 tao run --reverify <plan-id>           # resolved external cause or manual fix after the cap
 ```
 

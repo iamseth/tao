@@ -185,7 +185,9 @@ func (f Finalizer) resumeCompletedRun(ctx context.Context, detail *plan.PlanDeta
 	// restart neither reruns an LLM review nor recreates a recorded PR.
 	f.execution.Config.ReviewEnabled = f.execution.Config.ReviewEnabled && !reviewAttempted
 	f.execution.Config.PullRequest = f.execution.Config.PullRequest && !pullRequestCreated
-	return f.finalizeCompletedRun(ctx, 1, detail)
+	// Recovery has executed no slices in this invocation and must not schedule
+	// automatic verification repair, even when review still needs to run.
+	return f.finalizeCompletedRun(ctx, 0, detail)
 }
 
 // ensureApprovedReviewProposal validates the exact durable approval before any

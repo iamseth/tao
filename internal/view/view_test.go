@@ -4,14 +4,63 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/iamseth/tao/internal/insights"
 	"github.com/iamseth/tao/internal/plan"
 )
+
+type insightsPlanLister []plan.PlanSummary
+
+func (l insightsPlanLister) ListPlans(context.Context, plan.PlanFilter) ([]plan.PlanSummary, error) {
+	return l, nil
+}
+
+func TestRenderInsightsVerificationRepairStopped(t *testing.T) {
+	dir := t.TempDir()
+	events := `{"type":"verification_repair_created"}` + "\n" +
+		`{"type":"verification_repair_stopped","timestamp":"2026-09-26T01:00:00Z"}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(events), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	report, err := insights.Aggregate(context.Background(), insightsPlanLister{{ID: "repair-plan", Dir: dir}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Signals.VerificationRepairStopped != 1 || report.SignalEvidence.VerificationRepairStopped.Plans != 1 {
+		t.Fatalf("repair stop signal = %+v, evidence = %+v", report.Signals, report.SignalEvidence)
+	}
+	for _, scope := range []InsightsScope{InsightsScopeRepository, InsightsScopeAllRepositories} {
+		for _, format := range []InsightsFormat{InsightsFormatReport, InsightsFormatDigest} {
+			t.Run(string(scope)+"/"+string(format), func(t *testing.T) {
+				var out bytes.Buffer
+				if err := RenderInsights(&out, report, InsightsOptions{Scope: scope, Format: format}); err != nil {
+					t.Fatal(err)
+				}
+				want := "verification_repair_stopped: 1 — observed across 1 plan"
+				if scope == InsightsScopeAllRepositories {
+					want += " / 1 repository"
+				}
+				want += "; latest 2026-09-26"
+				if format == InsightsFormatReport {
+					want += "T01:00:00Z"
+				}
+				if !strings.Contains(out.String(), want) {
+					t.Errorf("missing repair stop row %q:\n%s", want, out.String())
+				}
+				if strings.Contains(out.String(), "verification_repair_created") {
+					t.Fatal("repair creation must not be rendered as an insights signal")
+				}
+			})
+		}
+	}
+}
 
 type fakeRepository struct {
 	detail *plan.PlanDetail

@@ -720,6 +720,7 @@ func writeSignalCounts(out io.Writer, heading string, signals insights.SignalCou
 		{"slice_resume_attempted", evidence.SliceResumeAttempted.Count, evidence.SliceResumeAttempted},
 		{"slice_resume_failed", signalCount(evidence.SliceResumeFailed, signals.SliceResumeFailed), evidence.SliceResumeFailed},
 		{"verification_command_invalid", signalCount(evidence.VerificationCommandInvalid, signals.VerificationCommandInvalid), evidence.VerificationCommandInvalid},
+		{"verification_repair_stopped", signalCount(evidence.VerificationRepairStopped, signals.VerificationRepairStopped), evidence.VerificationRepairStopped},
 		{"plan_commit_fallback", signalCount(evidence.PlanCommitFallback, signals.PlanCommitFallback), evidence.PlanCommitFallback},
 		{"plan_commit_guard", signalCount(evidence.PlanCommitGuard, signals.PlanCommitGuard), evidence.PlanCommitGuard},
 	}

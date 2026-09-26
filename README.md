@@ -198,13 +198,15 @@ bounded follow-up slices; `tao rework --run <plan>` immediately hands them back
 to the ordinary run path. Use `tao show <plan>` whenever you need Tao's
 recommended next action.
 
-For final-verification recovery, a code-classified failure permits at most two
-explicit generated repairs per plan. After that fixed cap, repair and commit the
-source manually on the same branch, leave the worktree clean, and explicitly
-reverify; the clean head may be the failed head or its descendant:
+An ordinary `tao run` performs automatic repair of an eligible code-classified
+final-verification failure in the same invocation, within a fixed lifetime cap
+of two generated attempts and any `--max-slices` limit. For a plan already stopped
+in `verification_failed`, use the explicit single-shot command below. After the
+cap, repair and commit the source manually on the same branch, leave the worktree
+clean, and explicitly reverify at the failed head or its descendant:
 
 ```sh
-tao run --repair-verification <plan> # code failure while the budget remains
+tao run --repair-verification <plan> # stopped code failure; one attempt if budget remains
 tao run --reverify <plan>            # resolved external cause or manual fix after the cap
 ```
 

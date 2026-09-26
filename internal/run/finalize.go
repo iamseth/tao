@@ -13,6 +13,8 @@ import (
 	"github.com/iamseth/tao/internal/workspace"
 )
 
+var errVerificationRepairScheduled = errors.New("verification repair scheduled")
+
 type Finalizer struct {
 	out           io.Writer
 	execution     runExecution
@@ -77,7 +79,11 @@ func (f Finalizer) FinalizeIfComplete(ctx context.Context, runCount int, detail 
 		}
 		return true, f.writeAlreadyCompleteRun(detail)
 	}
-	return true, f.finalizeCompletedRun(ctx, runCount, detail)
+	err := f.finalizeCompletedRun(ctx, runCount, detail)
+	if errors.Is(err, errVerificationRepairScheduled) {
+		return false, err
+	}
+	return true, err
 }
 
 func (f Finalizer) pullRequestRecoveryEnabled(detail *plan.PlanDetail) bool {
@@ -133,7 +139,7 @@ func (f Finalizer) finalizeCompletedRun(ctx context.Context, runCount int, detai
 	}
 	ReportPhase(ctx, PhaseFinalVerification, nil)
 	if err := f.verifyCompletedBranch(ctx, detail, executionRoot); err != nil {
-		return fmt.Errorf("finalize completed run: %w", err)
+		return fmt.Errorf("finalize completed run: %w", f.handleFinalVerificationFailure(ctx, runCount, detail, executionRoot, err))
 	}
 	if err := writeSessionSummary(out, detail, now(execution).UTC()); err != nil {
 		return err
@@ -141,7 +147,7 @@ func (f Finalizer) finalizeCompletedRun(ctx context.Context, runCount int, detai
 	if execution.Config.ReviewEnabled {
 		ReportPhase(ctx, PhaseReview, nil)
 	}
-	if err := f.reviewCompletedRun(ctx, runCount, detail, executionRoot); err != nil {
+	if err := f.reviewCompletedRun(ctx, detail, executionRoot); err != nil {
 		return err
 	}
 	if execution.Config.PullRequest {
@@ -184,6 +190,26 @@ func (f Finalizer) finalizeCompletedRun(ctx context.Context, runCount int, detai
 		return fmt.Errorf("checkout default branch %s: %w", defaultBranch, err)
 	}
 	return writef(out, "\nMerge instructions:\n  git merge %s\n", featureBranch)
+}
+
+func (f Finalizer) handleFinalVerificationFailure(ctx context.Context, runCount int, detail *plan.PlanDetail, executionRoot string, verificationErr error) error {
+	var failure *FinalVerificationError
+	config := f.execution.Config
+	if runCount <= 0 || !errors.As(verificationErr, &failure) || config.RepairVerification || config.Reverify ||
+		(config.MaxSlices > 0 && runCount >= config.MaxSlices) ||
+		plan.DeriveVerificationRecovery(detail).Kind != plan.PlanActionRepairVerification {
+		return verificationErr
+	}
+	execution := f.execution
+	execution.ExecutionRoot = executionRoot
+	attempt := plan.VerificationRepairAttemptCount(detail) + 1
+	if err := appendVerificationRepair(ctx, detail, execution); err != nil {
+		return fmt.Errorf("schedule verification repair: %w (verification error: %w)", err, verificationErr)
+	}
+	if err := writef(f.outputWriter(), "Verification repair: scheduled attempt %d of %d for %q\n", attempt, plan.VerificationRepairAttemptCap, failure.Verification.Command); err != nil {
+		return fmt.Errorf("report verification repair: %w (verification error: %w)", err, verificationErr)
+	}
+	return errVerificationRepairScheduled
 }
 
 func (f Finalizer) resumePullRequestFinalization(ctx context.Context, detail *plan.PlanDetail) error {
@@ -462,8 +488,8 @@ func (f Finalizer) outputWriter() io.Writer {
 	return io.Discard
 }
 
-func (f Finalizer) reviewCompletedRun(ctx context.Context, runCount int, detail *plan.PlanDetail, executionRoot string) error {
-	if runCount <= 0 || !f.execution.Config.ReviewEnabled {
+func (f Finalizer) reviewCompletedRun(ctx context.Context, detail *plan.PlanDetail, executionRoot string) error {
+	if !f.execution.Config.ReviewEnabled {
 		return nil
 	}
 	reviewer := f.reviewer()

@@ -61,6 +61,20 @@ func (e *detailExecutor) execute(ctx context.Context, detail *plan.PlanDetail) e
 		derived := plan.Derive(detail, time.Time{})
 		capabilities := derived.Capabilities
 		complete, err := e.finalizer.FinalizeIfComplete(ctx, e.runs, detail, capabilities)
+		if errors.Is(err, errVerificationRepairScheduled) {
+			if e.reload == nil {
+				return fmt.Errorf("reload plan after scheduling verification repair: reload function is unavailable")
+			}
+			reloaded, err := e.reload(ctx, detail)
+			if err != nil {
+				return fmt.Errorf("reload plan after scheduling verification repair: %w", err)
+			}
+			if reloaded == nil {
+				return fmt.Errorf("reload plan after scheduling verification repair: returned nil detail")
+			}
+			detail = reloaded
+			continue
+		}
 		if complete || err != nil {
 			return err
 		}

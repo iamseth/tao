@@ -106,6 +106,7 @@ type SignalCounts struct {
 	SessionTimeout             int `json:"session_timeout"`
 	SliceResumeFailed          int `json:"slice_resume_failed"`
 	VerificationCommandInvalid int `json:"verification_command_invalid"`
+	VerificationRepairStopped  int `json:"verification_repair_stopped"`
 	PlanCommitFallback         int `json:"plan_commit_fallback"`
 	PlanCommitGuard            int `json:"plan_commit_guard"`
 }
@@ -117,6 +118,7 @@ type SignalEvidence struct {
 	SliceResumeAttempted       SignalObservation `json:"slice_resume_attempted"`
 	SliceResumeFailed          SignalObservation `json:"slice_resume_failed"`
 	VerificationCommandInvalid SignalObservation `json:"verification_command_invalid"`
+	VerificationRepairStopped  SignalObservation `json:"verification_repair_stopped"`
 	PlanCommitFallback         SignalObservation `json:"plan_commit_fallback"`
 	PlanCommitGuard            SignalObservation `json:"plan_commit_guard"`
 }
@@ -346,6 +348,7 @@ func consumeEvent(data *planData, event plan.Event, line int) {
 		plan.EventTypeSliceResumeAttempted,
 		plan.EventTypeSliceResumeFailed,
 		plan.EventTypeVerificationCommandInvalid,
+		plan.EventTypeVerificationRepairStopped,
 		plan.EventTypePlanCommitFallback,
 		plan.EventTypePlanCommitGuard:
 		data.signals = append(data.signals, signalEvent{typeName: event.Type, timestamp: event.Timestamp})
@@ -498,6 +501,7 @@ func finalizeSignals(report *Report, signals map[string]*signalAccumulator) {
 		SliceResumeAttempted:       observation(plan.EventTypeSliceResumeAttempted),
 		SliceResumeFailed:          observation(plan.EventTypeSliceResumeFailed),
 		VerificationCommandInvalid: observation(plan.EventTypeVerificationCommandInvalid),
+		VerificationRepairStopped:  observation(plan.EventTypeVerificationRepairStopped),
 		PlanCommitFallback:         observation(plan.EventTypePlanCommitFallback),
 		PlanCommitGuard:            observation(plan.EventTypePlanCommitGuard),
 	}
@@ -505,6 +509,7 @@ func finalizeSignals(report *Report, signals map[string]*signalAccumulator) {
 		SessionTimeout:             report.SignalEvidence.SessionTimeout.Count,
 		SliceResumeFailed:          report.SignalEvidence.SliceResumeFailed.Count,
 		VerificationCommandInvalid: report.SignalEvidence.VerificationCommandInvalid.Count,
+		VerificationRepairStopped:  report.SignalEvidence.VerificationRepairStopped.Count,
 		PlanCommitFallback:         report.SignalEvidence.PlanCommitFallback.Count,
 		PlanCommitGuard:            report.SignalEvidence.PlanCommitGuard.Count,
 	}

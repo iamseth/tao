@@ -33,6 +33,7 @@ Event counters:
   slice_resume_attempted: 2 — observed across 1 plan; latest 2026-08-18T09:15:00Z
   slice_resume_failed: 0
   verification_command_invalid: 2 — observed across 2 plans; latest occurrence unavailable (historical events lack timestamps)
+  verification_repair_stopped: 0
   plan_commit_fallback: 1 — observed across 1 plan; latest 2026-08-16T20:00:00Z
   plan_commit_guard: 4 — observed across 3 plans; latest 2026-08-18T22:05:00Z
 

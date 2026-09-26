@@ -2,6 +2,7 @@ package insights
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -85,6 +86,8 @@ func TestAggregateBuildsSignalEvidenceFromEnclosingPlan(t *testing.T) {
 		`{"type":"slice_resume_attempted"}` + "\n" +
 		`{"type":"slice_resume_failed"}` + "\n" +
 		`{"type":"verification_command_invalid","timestamp":"2026-08-18T21:00:00Z"}` + "\n" +
+		`{"type":"verification_repair_created"}` + "\n" +
+		`{"type":"verification_repair_stopped","timestamp":"2026-08-19T00:00:00Z"}` + "\n" +
 		`{"type":"plan_commit_fallback"}` + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(events), 0o600); err != nil {
 		t.Fatal(err)
@@ -108,9 +111,24 @@ func TestAggregateBuildsSignalEvidenceFromEnclosingPlan(t *testing.T) {
 	if got := report.SignalEvidence.PlanCommitGuard; got != (SignalObservation{}) {
 		t.Fatalf("zero-count commit guard evidence = %#v", got)
 	}
-	wantCounts := SignalCounts{SessionTimeout: 3, SliceResumeFailed: 1, VerificationCommandInvalid: 1, PlanCommitFallback: 1}
+	if got := report.SignalEvidence.VerificationRepairStopped; got.Count != 1 || got.Plans != 1 || got.Repositories != 1 || got.MissingTimestamps != 0 || got.LatestTimestamp == nil || !got.LatestTimestamp.Equal(latest) {
+		t.Fatalf("verification repair stop evidence = %#v", got)
+	}
+	wantCounts := SignalCounts{SessionTimeout: 3, SliceResumeFailed: 1, VerificationCommandInvalid: 1, VerificationRepairStopped: 1, PlanCommitFallback: 1}
 	if report.Signals != wantCounts {
 		t.Fatalf("derived signal counts = %#v, want %#v", report.Signals, wantCounts)
+	}
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"verification_repair_stopped":1`, `"verification_repair_stopped":{"count":1,"plans":1,"repositories":1`} {
+		if !strings.Contains(string(encoded), want) {
+			t.Errorf("JSON missing %s: %s", want, encoded)
+		}
+	}
+	if strings.Contains(string(encoded), "verification_repair_created") {
+		t.Fatal("repair creation must not be exposed as an insights signal")
 	}
 }
 

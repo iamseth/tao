@@ -551,6 +551,16 @@ func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
 
 func TestNoteRunGeneratesLinksThenUsesNormalRun(t *testing.T) {
 	clearTaoEnv(t)
+	executeCalls := 0
+	oldExecutor := executeSinglePlan
+	executeSinglePlan = func(service run.Service, ctx context.Context, request run.Request) error {
+		executeCalls++
+		if request.RepairVerification || request.Reverify {
+			t.Fatalf("note run must use ordinary automatic policy, got recovery request: %+v", request)
+		}
+		return service.Execute(ctx, request)
+	}
+	t.Cleanup(func() { executeSinglePlan = oldExecutor })
 	t.Setenv("TAO_SESSION_TIMEOUT", "37m")
 	repoMeta := taodata.Repo{ID: "tao-123", Name: "tao", Root: "/repo", Branch: "main"}
 	app, out, errOut := noteTestApp(t, strings.NewReader(""), repoMeta)
@@ -614,6 +624,9 @@ func TestNoteRunGeneratesLinksThenUsesNormalRun(t *testing.T) {
 	}
 	if generated != 1 || !strings.Contains(out.String(), "Run it with: tao run "+fixture.id) {
 		t.Fatalf("duplicate invocation generated=%d output=%q", generated, out.String())
+	}
+	if executeCalls != 1 {
+		t.Fatalf("shared run entry calls = %d, want one Service.Execute handoff", executeCalls)
 	}
 }
 
