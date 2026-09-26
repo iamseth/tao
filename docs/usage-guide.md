@@ -1239,7 +1239,17 @@ on an earlier slice's promise that a file should exist.
 
 Cleanup is explicit and preview-first. Use `tao workspace clean <plan>` for one
 workspace and `tao cleanup --dry-run` after integration for repository-wide
-managed cleanup. PR completion alone is not deletion authority: protected,
+managed cleanup, including unreferenced integration namespaces (`tao/integration`
+branches and `.tao/integrations` worktrees), never the active merge batch.
+From linked worktrees, cleanup uses Git's shared common directory to locate the
+control repository's active batch. If that identity cannot be established,
+integration cleanup is skipped, even with `--force`; ordinary plan cleanup
+continues. Integration cleanup holds the control repository's batch ownership
+lock from active-state lookup through removal. If a merge batch (including a
+live `--dry-run`) holds ownership, integration cleanup is skipped even with
+`--force`, while ordinary plan cleanup continues.
+Unregistered integration directories are reported but never removed, even with
+`--force`. PR completion alone is not deletion authority: protected,
 dirty, current, and unmerged state remains safeguarded, while recorded squash
 merge evidence handles the intentional non-ancestry of a squash source branch.
 Plan artifacts are never removed by workspace cleanup. See

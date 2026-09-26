@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -9,7 +10,9 @@ import (
 
 	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/gitops"
+	mergepkg "github.com/iamseth/tao/internal/merge"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/taodata"
 	"github.com/iamseth/tao/internal/workspace"
 )
 
@@ -18,7 +21,7 @@ var cleanupCommand = commandMetadata{
 	minPrefix:             "c",
 	usageLines:            []string{"cleanup (c) [--dry-run] [--force]"},
 	completionDescription: "Remove merged Tao branches and worktrees",
-	long:                  "Remove Tao-managed branches and worktrees in the current repository. Tao previews protected, current, unmerged, and dirty work before removing anything; use --dry-run to inspect and --force to include otherwise unsafe cleanup candidates.",
+	long:                  "Remove Tao-managed branches and worktrees in the current repository, including unreferenced tao/integration branches and .tao/integrations worktrees. The active merge batch is never a candidate, and unregistered integration directories are reported but never removed. Tao previews protected, current, unmerged, and dirty work before removing anything; use --dry-run to inspect and --force to include otherwise unsafe cleanup candidates.",
 	examples: "  tao cleanup --dry-run\n" +
 		"  tao cleanup\n" +
 		"  tao cleanup --force",
@@ -73,10 +76,26 @@ func (a App) cleanup(ctx context.Context, repo cleanupPlanRepository, args []str
 		return err
 	}
 
+	activeBatchID, ownership, err := a.cleanupIntegrationOwnership(ctx, root)
+	// Retain repository ownership through enumeration and every removal. Dry
+	// runs hold this same lock without publishing an active batch identity.
+	defer func() { _ = ownership.Release() }()
+	if err != nil {
+		if err := writef(a.Out, "skipped %s integration namespaces: %s\n", root, err); err != nil {
+			return err
+		}
+	} else {
+		integrations, err := manager.PlanIntegrationCleanup(ctx, activeBatchID)
+		if err != nil {
+			return err
+		}
+		plans = append(plans, integrations...)
+	}
+
 	failures := 0
 	for _, item := range plans {
 		switch {
-		case item.Status == workspace.ManagedStatusProtected || item.Status == workspace.ManagedStatusCurrent:
+		case item.Status == workspace.ManagedStatusProtected || item.Status == workspace.ManagedStatusCurrent || item.Status == workspace.ManagedStatusUnregistered:
 			if err := cleanupItemLine(a.Out, "skipped", root, item, item.Reason); err != nil {
 				return err
 			}
@@ -160,6 +179,58 @@ func cleanupOwnedBranches(ctx context.Context, repo cleanupPlanRepository, manag
 		owned = append(owned, metadata.Branch)
 	}
 	return owned, nil
+}
+
+type cleanupBatchRegistry interface {
+	RepoForRoot(string) (taodata.Repo, error)
+	MergeBatchesDir(taodata.Repo) string
+	ActiveMergeBatchPath(taodata.Repo) string
+}
+
+func (a App) cleanupIntegrationOwnership(ctx context.Context, worktreeRoot string) (string, *mergepkg.BatchOwnership, error) {
+	// Integration namespaces are shared across linked checkouts; their active
+	// batch belongs to the control repository, not the current worktree.
+	commonDir, err := gitops.NewClient(worktreeRoot, a.cleanupRunner()).RevParse(ctx, "--git-common-dir")
+	if err != nil {
+		return "", nil, fmt.Errorf("resolve integration cleanup repository identity: %w", err)
+	}
+	repoRoot, err := workspace.RepositoryRootFromGitCommonDir(worktreeRoot, commonDir)
+	if err != nil {
+		return "", nil, fmt.Errorf("resolve integration cleanup repository identity: %w", err)
+	}
+	var registry cleanupBatchRegistry
+	if a.Registry != nil {
+		var ok bool
+		registry, ok = a.Registry().(cleanupBatchRegistry)
+		if !ok {
+			return "", nil, errors.New("cleanup requires merge-batch registry paths")
+		}
+	} else {
+		defaultRegistry := taodata.NewRegistry("")
+		defaultRegistry.Runner = a.cleanupRunner()
+		registry = defaultRegistry
+	}
+	current, err := registry.RepoForRoot(repoRoot)
+	if err != nil {
+		return "", nil, fmt.Errorf("resolve control repository for integration cleanup: %w", err)
+	}
+	batchesDir := registry.MergeBatchesDir(current)
+	owner, err := mergepkg.NewBatchWorkspace(current.Root, batchesDir, a.cleanupRunner())
+	if err != nil {
+		return "", nil, err
+	}
+	// No candidate plan locks are needed: integration cleanup shares only the
+	// repository batch lock, taken before reading active state.
+	ownership, err := owner.AcquireOwnership(mergepkg.BatchState{}, a.now())
+	if err != nil {
+		return "", nil, err
+	}
+	activeID, err := mergepkg.NewBatchStore(batchesDir, registry.ActiveMergeBatchPath(current)).ActiveID()
+	if err != nil {
+		_ = ownership.Release()
+		return "", nil, err
+	}
+	return activeID, ownership, nil
 }
 
 func (a App) cleanupRunner() commandrunner.Runner {

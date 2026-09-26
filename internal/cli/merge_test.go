@@ -551,6 +551,43 @@ func TestMergeCommandPassesForceNoSquashNoVerifyAndVerifyCommandOptions(t *testi
 	}
 }
 
+func TestMergeCommandPassesSignalContextToBatchAndSinglePlan(t *testing.T) {
+	for _, mode := range []string{"batch", "single-plan"} {
+		t.Run(mode, func(t *testing.T) {
+			type signalContextKey struct{}
+			stopped := false
+			withCLICommandSignalContext(t, func(parent context.Context) (context.Context, context.CancelFunc) {
+				return context.WithValue(parent, signalContextKey{}, "signal-context"), func() { stopped = true }
+			})
+			batch := &fakeCLIMergeBatchRunner{}
+			service := &fakeCLIMergeService{}
+			stubMergeBatchRunner(t, batch)
+			stubMergeServiceRunner(t, service)
+			detail := cliMergeDetail(t)
+			app := App{Out: io.Discard, Err: io.Discard, Repository: func(string) Repository {
+				return fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
+			}}
+			args := []string{"merge", "plan-a"}
+			if mode == "batch" {
+				args = []string{"merge", "--all", "--dry-run"}
+			}
+			if err := app.Run(context.Background(), args); err != nil {
+				t.Fatal(err)
+			}
+			ctx := service.ctx
+			if mode == "batch" {
+				ctx = batch.ctx
+			}
+			if ctx == nil || ctx.Value(signalContextKey{}) != "signal-context" {
+				t.Fatal("merge runner did not receive the signal-aware context")
+			}
+			if !stopped {
+				t.Fatal("signal handler was not stopped")
+			}
+		})
+	}
+}
+
 func TestMergeAllCommandPassesBatchOptionsAndRendersInvariant(t *testing.T) {
 	batch := &fakeCLIMergeBatchRunner{result: mergeBatchResult{
 		DryRun: true,
@@ -789,6 +826,27 @@ func TestMergeAllResumeFailureDoesNotOfferUnsafeRestart(t *testing.T) {
 	}
 }
 
+func TestMergeBatchResultWarnsAboutOrphanedIntegrations(t *testing.T) {
+	t.Parallel()
+	result := mergeBatchResult{
+		Candidates: []mergepkg.BatchCandidate{{PlanID: "plan-a"}},
+		OrphanedIntegrations: []workspace.IntegrationWorkspace{
+			{BatchID: "orphan-a", Path: "/integration/orphan-a", Branch: "tao/integration/orphan-a"},
+			{BatchID: "orphan-b", Path: "/integration/orphan-b", Branch: "tao/integration/orphan-b", Missing: true},
+		},
+	}
+	var out bytes.Buffer
+	if err := renderMergeBatchResult(&out, result); err != nil {
+		t.Fatal(err)
+	}
+	want := "warning: integration worktree /integration/orphan-a (branch tao/integration/orphan-a) is not referenced by any active merge batch; inspect with tao cleanup --dry-run\n" +
+		"warning: branch tao/integration/orphan-b has no worktree and is not referenced by any active merge batch; inspect with tao cleanup --dry-run\n" +
+		"Candidate snapshot:\n"
+	if !strings.HasPrefix(out.String(), want) {
+		t.Fatalf("expected warnings before candidates:\n%s\ngot:\n%s", want, out.String())
+	}
+}
+
 func TestMergeBatchResultCharacterizesBlockersNewBatchAndOrdinaryResume(t *testing.T) {
 	candidate := mergepkg.BatchCandidate{PlanID: "plan-a", Branch: "tao/plan-a", SourceTip: "head-a", ReviewBase: "base", ReviewHead: "head-a"}
 	tests := []struct {
@@ -947,7 +1005,7 @@ func TestMergeCommandHelpDocumentsVerifyCommand(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"merge", "--help"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"--all", "--dry-run", "preview batch candidates and order without durable changes or verification", "verifies the staged aggregate once", "attributes an aggregate verification failure to one candidate", "--restart", "--auto-eject", "eject-and-reland", "--verify-command", "override the post-merge build/test verification command", "one automatic resolver attempt", "independent fresh-session review", "--force cannot bypass these safety and review gates", "--no-verify skips only command verification", "--no-squash rebase conflicts remain manual", "bounded agent resolution", "aggregate approval before one fast-forward", "For one plan, --restart safely discards only an eligible stale pre-landing merge intent", "--all --restart discards only pre-landing batch recovery", "Batch mode rejects --force, --record-only, --no-squash, and --no-verify", "single-plan only", "Usage:\n  tao merge (m) [--force] [--record-only] [--no-squash] [--no-verify] [--verify-command CMD]", "merge (m) --restart <plan-id-or-slug-or-path>", "merge (m) --all [--dry-run] [--restart] [--auto-eject] [--verify-command CMD]"} {
+	for _, want := range []string{"--all", "--dry-run", "an interrupted dry run removes its disposable integration worktree before exiting", "preview batch candidates and order without durable changes or verification", "verifies the staged aggregate once", "attributes an aggregate verification failure to one candidate", "--restart", "--auto-eject", "eject-and-reland", "--verify-command", "override the post-merge build/test verification command", "one automatic resolver attempt", "independent fresh-session review", "--force cannot bypass these safety and review gates", "--no-verify skips only command verification", "--no-squash rebase conflicts remain manual", "bounded agent resolution", "aggregate approval before one fast-forward", "For one plan, --restart safely discards only an eligible stale pre-landing merge intent", "--all --restart discards only pre-landing batch recovery", "Batch mode rejects --force, --record-only, --no-squash, and --no-verify", "single-plan only", "Usage:\n  tao merge (m) [--force] [--record-only] [--no-squash] [--no-verify] [--verify-command CMD]", "merge (m) --restart <plan-id-or-slug-or-path>", "merge (m) --all [--dry-run] [--restart] [--auto-eject] [--verify-command CMD]"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("expected help to contain %q, got %q", want, out.String())
 		}
@@ -955,13 +1013,15 @@ func TestMergeCommandHelpDocumentsVerifyCommand(t *testing.T) {
 }
 
 type fakeCLIMergeBatchRunner struct {
+	ctx     context.Context
 	result  mergeBatchResult
 	err     error
 	calls   int
 	options mergeBatchOptions
 }
 
-func (f *fakeCLIMergeBatchRunner) Run(_ context.Context, options mergeBatchOptions) (mergeBatchResult, error) {
+func (f *fakeCLIMergeBatchRunner) Run(ctx context.Context, options mergeBatchOptions) (mergeBatchResult, error) {
+	f.ctx = ctx
 	f.calls++
 	f.options = options
 	return f.result, f.err
@@ -975,6 +1035,7 @@ func stubMergeBatchRunner(t *testing.T, runner mergeBatchRunner) {
 }
 
 type fakeCLIMergeService struct {
+	ctx           context.Context
 	err           error
 	calls         int
 	detail        *plan.PlanDetail
@@ -986,7 +1047,7 @@ type fakeCLIMergeService struct {
 }
 
 func (f *fakeCLIMergeService) Merge(ctx context.Context, detail *plan.PlanDetail, options mergepkg.Options) error {
-	_ = ctx
+	f.ctx = ctx
 	f.calls++
 	f.detail = detail
 	f.options = options

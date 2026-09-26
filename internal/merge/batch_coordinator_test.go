@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/workspace"
 )
@@ -340,6 +342,81 @@ func TestBatchCoordinatorRestartRefusesDurableLandingIntent(t *testing.T) {
 	}
 }
 
+func TestBatchCoordinatorFreshBatchListsOrphanedIntegrations(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 26, 21, 0, 0, 0, time.UTC)
+	orphans := []workspace.IntegrationWorkspace{
+		{BatchID: "orphan-a", Path: "/integration/orphan-a", Branch: "tao/integration/orphan-a"},
+		{BatchID: "orphan-b", Branch: "tao/integration/orphan-b", Missing: true},
+	}
+	for _, dryRun := range []bool{false, true} {
+		for _, kind := range []string{"orphans", "unsupported", "listing error"} {
+			t.Run(fmt.Sprintf("dry-run=%t/%s", dryRun, kind), func(t *testing.T) {
+				owner := &coordinatorWorkspace{}
+				lister := &coordinatorIntegrationLister{
+					coordinatorWorkspace: owner,
+					integrations: append([]workspace.IntegrationWorkspace{
+						{BatchID: now.Format("20060102-150405.000000000")},
+					}, orphans...),
+				}
+				var boundary BatchCoordinatorWorkspace = lister
+				var want []workspace.IntegrationWorkspace
+				switch kind {
+				case "orphans":
+					want = orphans
+				case "unsupported":
+					boundary = owner
+				case "listing error":
+					lister.err = errors.New("listing failed")
+				}
+				candidate := BatchCandidate{PlanID: "plan-a"}
+				result, err := NewBatchCoordinator(BatchCoordinatorSeams{
+					Store: &coordinatorStore{}, Workspace: boundary,
+					Discovery: coordinatorDiscovery{result: BatchPreflightResult{
+						Candidates: []BatchCandidate{candidate}, RepoRoot: "/repo", DefaultBranch: "main", DefaultStartSHA: "base",
+					}},
+					Planner:    coordinatorPlanner{result: BatchPlanningResult{Ordered: []BatchCandidate{candidate}}},
+					Integrator: &coordinatorIntegrator{},
+					Now:        func() time.Time { return now },
+				}).Run(context.Background(), BatchCoordinatorOptions{DryRun: dryRun})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(result.OrphanedIntegrations, want) {
+					t.Fatalf("orphaned integrations = %#v, want %#v", result.OrphanedIntegrations, want)
+				}
+				if kind != "unsupported" && lister.calls != 1 {
+					t.Fatalf("ListIntegrations calls = %d, want 1", lister.calls)
+				}
+				owner.requireOwnershipReleased(t)
+			})
+		}
+	}
+}
+
+func TestBatchCoordinatorResumeDoesNotListIntegrations(t *testing.T) {
+	t.Parallel()
+	for _, dryRun := range []bool{false, true} {
+		t.Run(fmt.Sprintf("dry-run=%t", dryRun), func(t *testing.T) {
+			state := coordinatorActiveState(BatchStatusIntegrating)
+			lister := &coordinatorIntegrationLister{coordinatorWorkspace: &coordinatorWorkspace{}}
+			result, err := NewBatchCoordinator(BatchCoordinatorSeams{
+				Store: &coordinatorStore{activeID: state.ID, loaded: state}, Workspace: lister,
+				Integrator: &coordinatorIntegrator{},
+			}).Run(context.Background(), BatchCoordinatorOptions{DryRun: dryRun})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !result.Resumed || lister.calls != 0 || len(result.OrphanedIntegrations) != 0 {
+				t.Fatalf("resume result = %#v, listing calls = %d", result, lister.calls)
+			}
+			if !dryRun {
+				lister.requireOwnershipReleased(t)
+			}
+		})
+	}
+}
+
 func TestBatchCoordinatorDryRunCleansWorkspaceAndReleasesOwnership(t *testing.T) {
 	t.Parallel()
 	stateCandidate := BatchCandidate{PlanID: "plan-a"}
@@ -367,6 +444,204 @@ func TestBatchCoordinatorDryRunCleansWorkspaceAndReleasesOwnership(t *testing.T)
 		t.Fatalf("dry run initialized durable state: %#v", store.initialized)
 	}
 	workspaceOwner.requireOwnershipReleased(t)
+}
+
+func TestBatchCoordinatorDryRunRemovesWorkspaceAfterCancellation(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	candidate := BatchCandidate{PlanID: "plan-a"}
+	workspaceOwner := &coordinatorWorkspace{}
+	_, err := NewBatchCoordinator(BatchCoordinatorSeams{
+		Store: &coordinatorStore{}, Workspace: workspaceOwner,
+		Discovery:  coordinatorDiscovery{result: BatchPreflightResult{Candidates: []BatchCandidate{candidate}, RepoRoot: "/repo", DefaultBranch: "main", DefaultStartSHA: "base"}},
+		Planner:    coordinatorPlanner{result: BatchPlanningResult{Ordered: []BatchCandidate{candidate}}},
+		Integrator: &coordinatorIntegrator{cancel: cancel},
+		Now:        func() time.Time { return time.Date(2026, 7, 18, 0, 0, 0, 0, time.UTC) },
+	}).Run(ctx, BatchCoordinatorOptions{DryRun: true})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v, want context cancellation", err)
+	}
+	if workspaceOwner.started == "" || workspaceOwner.removed != workspaceOwner.started {
+		t.Fatalf("disposable workspace not removed: started=%q removed=%q", workspaceOwner.started, workspaceOwner.removed)
+	}
+	if workspaceOwner.removeContextErr != nil {
+		t.Fatalf("cleanup received a canceled context: %v", workspaceOwner.removeContextErr)
+	}
+	workspaceOwner.requireOwnershipReleased(t)
+}
+
+func TestBatchCoordinatorDryRunCancellationDuringCreation(t *testing.T) {
+	t.Parallel()
+	for _, phase := range []string{"initialization-locked", "incomplete", "missing-branch", "missing-head", "missing-path", "branch-only", "before-branch"} {
+		t.Run(phase, func(t *testing.T) {
+			fixture := newRealGitWorktree(t)
+			state := batchWorkspaceState(t, fixture)
+			path := filepath.Join(fixture.repoRoot, ".tao", "integrations", state.ID)
+			branch := "tao/integration/" + state.ID
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			interrupted := false
+			runner := func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+				if name != "git" || !strings.Contains(strings.Join(args, " "), "worktree add ") {
+					return commandrunner.DefaultLocal(ctx, cwd, name, args, stdout, stderr)
+				}
+				interrupted = true
+				// Materialize Git's intermediate states deterministically, then
+				// cancel before the creation command can report success.
+				switch phase {
+				case "before-branch":
+				case "branch-only":
+					runRealGit(t, fixture.repoRoot, "branch", branch, state.DefaultStartSHA)
+				default:
+					runRealGit(t, fixture.repoRoot, "worktree", "add", "--no-checkout", "--lock", "--reason", "initializing", "-b", branch, path, state.DefaultStartSHA)
+					switch phase {
+					case "incomplete":
+						if err := os.Remove(filepath.Join(path, ".git")); err != nil {
+							t.Fatal(err)
+						}
+					case "missing-branch":
+						runRealGit(t, fixture.repoRoot, "update-ref", "-d", "refs/heads/"+branch)
+					case "missing-head":
+						gitDir := realGitOutput(t, path, "rev-parse", "--absolute-git-dir")
+						if err := os.Remove(filepath.Join(gitDir, "HEAD")); err != nil {
+							t.Fatal(err)
+						}
+					case "missing-path":
+						if err := os.RemoveAll(path); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				cancel()
+				return ctx.Err()
+			}
+			owner, err := NewBatchWorkspace(fixture.repoRoot, filepath.Join(t.TempDir(), "merge-batches"), runner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			coordinator := NewBatchCoordinator(BatchCoordinatorSeams{Workspace: owner})
+			_, err = coordinator.dryRunIntegration(ctx, state, "")
+			if !interrupted || !errors.Is(err, context.Canceled) || !strings.HasSuffix(err.Error(), ": context canceled") || strings.Contains(err.Error(), "\n") {
+				t.Fatalf("creation cancellation = %v (interrupted=%t), want cancellation without secondary cleanup error", err, interrupted)
+			}
+			if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("disposable worktree remains: %v", err)
+			}
+			if got := realGitOutput(t, fixture.repoRoot, "branch", "--list", branch); got != "" {
+				t.Fatalf("disposable branch remains: %s", got)
+			}
+			if got := realGitOutput(t, fixture.repoRoot, "worktree", "list", "--porcelain"); strings.Contains(got, path) {
+				t.Fatalf("disposable registration remains: %s", got)
+			}
+			if got := realGitOutput(t, fixture.worktreePath, "branch", "--show-current"); got != fixture.planBranch {
+				t.Fatalf("source worktree changed: %s", got)
+			}
+			if got := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch); got != state.DefaultStartSHA {
+				t.Fatalf("default changed: %s", got)
+			}
+		})
+	}
+}
+
+func TestBatchCoordinatorDryRunPreservesExistingNamespaces(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []string{"locked-worktree", "unregistered-directory", "branch-only", "branch-elsewhere", "unrelated-worktree"} {
+		t.Run(kind, func(t *testing.T) {
+			fixture := newRealGitWorktree(t)
+			state := batchWorkspaceState(t, fixture)
+			path := filepath.Join(fixture.repoRoot, ".tao", "integrations", state.ID)
+			branch := "tao/integration/" + state.ID
+			switch kind {
+			case "unregistered-directory":
+				if err := os.MkdirAll(path, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			case "branch-only":
+				runRealGit(t, fixture.repoRoot, "branch", branch)
+			case "branch-elsewhere":
+				runRealGit(t, fixture.repoRoot, "worktree", "add", "-b", branch, filepath.Join(t.TempDir(), "elsewhere"))
+			case "unrelated-worktree":
+				runRealGit(t, fixture.repoRoot, "worktree", "add", "-b", "unrelated", path)
+			default:
+				runRealGit(t, fixture.repoRoot, "worktree", "add", "--lock", "-b", branch, path)
+			}
+			beforeTrees := realGitOutput(t, fixture.repoRoot, "worktree", "list", "--porcelain")
+			beforeRefs := realGitOutput(t, fixture.repoRoot, "show-ref")
+			owner, err := NewBatchWorkspace(fixture.repoRoot, filepath.Join(t.TempDir(), "merge-batches"), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = NewBatchCoordinator(BatchCoordinatorSeams{Workspace: owner}).dryRunIntegration(context.Background(), state, "")
+			if err == nil {
+				t.Fatal("dry run accepted a preexisting namespace")
+			}
+			if after := realGitOutput(t, fixture.repoRoot, "worktree", "list", "--porcelain"); after != beforeTrees {
+				t.Fatalf("preexisting worktrees changed:\nbefore: %s\nafter: %s", beforeTrees, after)
+			}
+			if after := realGitOutput(t, fixture.repoRoot, "show-ref"); after != beforeRefs {
+				t.Fatalf("preexisting refs changed:\nbefore: %s\nafter: %s", beforeRefs, after)
+			}
+			if kind == "unregistered-directory" {
+				if _, err := os.Stat(path); err != nil {
+					t.Fatalf("unregistered directory removed: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestBatchCoordinatorDryRunPreservesUnexpectedCreationResources(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []string{"unregistered-directory", "unrelated-worktree", "branch-elsewhere"} {
+		t.Run(kind, func(t *testing.T) {
+			fixture := newRealGitWorktree(t)
+			state := batchWorkspaceState(t, fixture)
+			path := filepath.Join(fixture.repoRoot, ".tao", "integrations", state.ID)
+			branch := "tao/integration/" + state.ID
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var beforeTrees, beforeRefs string
+			runner := func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+				if name != "git" || !strings.Contains(strings.Join(args, " "), "worktree add ") {
+					return commandrunner.DefaultLocal(ctx, cwd, name, args, stdout, stderr)
+				}
+				switch kind {
+				case "unregistered-directory":
+					if err := os.MkdirAll(path, 0o700); err != nil {
+						t.Fatal(err)
+					}
+				case "unrelated-worktree":
+					runRealGit(t, fixture.repoRoot, "worktree", "add", "--lock", "-b", "unrelated", path)
+				case "branch-elsewhere":
+					runRealGit(t, fixture.repoRoot, "worktree", "add", "--lock", "-b", branch, filepath.Join(t.TempDir(), "elsewhere"))
+				}
+				beforeTrees = realGitOutput(t, fixture.repoRoot, "worktree", "list", "--porcelain")
+				beforeRefs = realGitOutput(t, fixture.repoRoot, "show-ref")
+				cancel()
+				return ctx.Err()
+			}
+			owner, err := NewBatchWorkspace(fixture.repoRoot, filepath.Join(t.TempDir(), "merge-batches"), runner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = NewBatchCoordinator(BatchCoordinatorSeams{Workspace: owner}).dryRunIntegration(ctx, state, "")
+			if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "refusing to remove") {
+				t.Fatalf("unsafe cleanup was not refused: %v", err)
+			}
+			if after := realGitOutput(t, fixture.repoRoot, "worktree", "list", "--porcelain"); after != beforeTrees {
+				t.Fatalf("unrelated worktrees changed:\nbefore: %s\nafter: %s", beforeTrees, after)
+			}
+			if after := realGitOutput(t, fixture.repoRoot, "show-ref"); after != beforeRefs {
+				t.Fatalf("unrelated refs changed:\nbefore: %s\nafter: %s", beforeRefs, after)
+			}
+			if kind == "unregistered-directory" {
+				if _, err := os.Stat(path); err != nil {
+					t.Fatalf("unregistered directory removed: %v", err)
+				}
+			}
+		})
+	}
 }
 
 func TestBatchCoordinatorResumesBlockedPhaseBeforeDispatch(t *testing.T) {
@@ -640,6 +915,7 @@ func (p coordinatorPlanner) PlanBatchCandidatesWithGit(context.Context, []BatchC
 }
 
 type coordinatorIntegrator struct {
+	cancel       context.CancelFunc
 	result       BatchIntegrateResult
 	err          error
 	ejectResult  BatchIntegrateResult
@@ -650,11 +926,15 @@ type coordinatorIntegrator struct {
 	ejected      int
 }
 
-func (i *coordinatorIntegrator) Integrate(_ context.Context, state BatchState, _ string, options BatchIntegrateOptions) (BatchIntegrateResult, error) {
+func (i *coordinatorIntegrator) Integrate(ctx context.Context, state BatchState, _ string, options BatchIntegrateOptions) (BatchIntegrateResult, error) {
 	i.integrated++
 	i.options = options
 	if i.result.State.ID == "" {
 		i.result.State = state
+	}
+	if i.cancel != nil {
+		i.cancel()
+		return i.result, ctx.Err()
 	}
 	return i.result, i.err
 }
@@ -743,14 +1023,27 @@ func (s *coordinatorSettler) Settle(_ context.Context, state BatchState) (BatchS
 	return s.result, s.err
 }
 
+type coordinatorIntegrationLister struct {
+	*coordinatorWorkspace
+	integrations []workspace.IntegrationWorkspace
+	err          error
+	calls        int
+}
+
+func (w *coordinatorIntegrationLister) ListIntegrations(context.Context) ([]workspace.IntegrationWorkspace, error) {
+	w.calls++
+	return w.integrations, w.err
+}
+
 type coordinatorWorkspace struct {
-	landingIntent bool
-	validated     string
-	started       string
-	statused      string
-	removed       string
-	restarted     bool
-	ownershipFile *os.File
+	removeContextErr error
+	landingIntent    bool
+	validated        string
+	started          string
+	statused         string
+	removed          string
+	restarted        bool
+	ownershipFile    *os.File
 }
 
 func (w *coordinatorWorkspace) DefaultReachedLandingIntent(context.Context, BatchState) (bool, error) {
@@ -784,9 +1077,10 @@ func (w *coordinatorWorkspace) Start(_ context.Context, state BatchState) (works
 	w.started = state.ID
 	return workspace.IntegrationWorkspace{BatchID: state.ID, Path: "/integration/" + state.ID}, nil
 }
-func (w *coordinatorWorkspace) RemoveIntegration(_ context.Context, batchID string) error {
+func (w *coordinatorWorkspace) RemoveIntegration(ctx context.Context, batchID string) error {
+	w.removeContextErr = ctx.Err()
 	w.removed = batchID
-	return nil
+	return w.removeContextErr
 }
 func (w *coordinatorWorkspace) requireOwnershipReleased(t *testing.T) {
 	t.Helper()

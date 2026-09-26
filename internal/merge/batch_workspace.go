@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -58,6 +59,7 @@ type BatchWorkspace struct {
 	repoRoot   string
 	batchesDir string
 	git        gitops.Client
+	runner     commandrunner.Runner
 	workspaces *workspace.Manager
 	store      *BatchStore
 }
@@ -75,6 +77,9 @@ func NewBatchWorkspace(repoRoot, batchesDir string, runner commandrunner.Runner)
 	if err != nil {
 		return nil, err
 	}
+	if runner == nil {
+		runner = commandrunner.DefaultLocal
+	}
 	manager, err := workspace.NewManager(workspace.Options{RepoRoot: repoRootAbs, Runner: runner})
 	if err != nil {
 		return nil, err
@@ -83,9 +88,15 @@ func NewBatchWorkspace(repoRoot, batchesDir string, runner commandrunner.Runner)
 		repoRoot:   filepath.Clean(repoRootAbs),
 		batchesDir: batchesDir,
 		git:        gitops.NewClient(repoRoot, runner),
+		runner:     runner,
 		workspaces: manager,
 		store:      NewBatchStore(batchesDir, filepath.Join(batchesDir, "active.json")),
 	}, nil
+}
+
+// ListIntegrations enumerates integration namespaces for advisory orphan warnings.
+func (b *BatchWorkspace) ListIntegrations(ctx context.Context) ([]workspace.IntegrationWorkspace, error) {
+	return b.workspaces.ListIntegrations(ctx)
 }
 
 // BatchOwnership holds the repository batch lock followed by all candidate plan
@@ -159,6 +170,101 @@ func (b *BatchWorkspace) Start(ctx context.Context, state BatchState) (workspace
 		return workspace.IntegrationWorkspace{}, &BatchResumeError{Drifts: drifts}
 	}
 	return b.workspaces.CreateIntegration(ctx, state.ID, state.DefaultStartSHA)
+}
+
+// PrepareDisposableIntegration proves the dry-run namespace is absent before
+// Start can mutate it. Only the returned invocation-local cleanup may tolerate
+// interrupted initialization; ordinary removal and durable batches stay strict.
+// The coordinator must hold repository batch ownership through cleanup.
+func (b *BatchWorkspace) PrepareDisposableIntegration(ctx context.Context, batchID string) (func(context.Context) error, error) {
+	identity, err := b.workspaces.IntegrationStatus(ctx, batchID)
+	if err != nil {
+		return nil, err
+	}
+	root, err := filepath.EvalSymlinks(b.repoRoot)
+	if err != nil {
+		return nil, err
+	}
+	identity.Path = filepath.Join(root, ".tao", "integrations", identity.BatchID)
+	if _, err := os.Lstat(identity.Path); !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("disposable integration path must be absent: %s", identity.Path)
+	}
+	worktrees, err := b.git.Worktrees(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, worktree := range worktrees {
+		if filepath.Clean(worktree.Path) == identity.Path || worktree.Branch == identity.Branch {
+			return nil, fmt.Errorf("disposable integration namespace is already registered: %s", worktree.Path)
+		}
+	}
+	exists, err := b.git.LocalBranchExists(ctx, identity.Branch)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return nil, fmt.Errorf("disposable integration branch already exists: %s", identity.Branch)
+	}
+	return func(ctx context.Context) error { return b.removeDisposableIntegration(ctx, identity) }, nil
+}
+
+func (b *BatchWorkspace) removeDisposableIntegration(ctx context.Context, identity workspace.IntegrationWorkspace) error {
+	worktrees, err := b.git.Worktrees(ctx)
+	if err != nil {
+		return err
+	}
+	registered := false
+	incomplete := false
+	for _, worktree := range worktrees {
+		if filepath.Clean(worktree.Path) == identity.Path {
+			// HEAD may not have been written yet, or its branch may not exist.
+			// The absent-before-Start proof, not readable status, owns this path.
+			if worktree.Branch != "" && worktree.Branch != identity.Branch {
+				return fmt.Errorf("refusing to remove unexpected integration branch %q", worktree.Branch)
+			}
+			registered = true
+			incomplete = strings.Trim(worktree.HEAD, "0") == ""
+		} else if worktree.Branch == identity.Branch {
+			return fmt.Errorf("refusing to remove integration branch checked out at %s", worktree.Path)
+		}
+	}
+	if registered {
+		info, pathErr := os.Lstat(identity.Path)
+		if pathErr != nil && !errors.Is(pathErr, os.ErrNotExist) {
+			return pathErr
+		}
+		if pathErr == nil && !info.IsDir() {
+			return fmt.Errorf("refusing to remove non-directory integration path %s", identity.Path)
+		}
+		_, gitFileErr := os.Lstat(filepath.Join(identity.Path, ".git"))
+		if gitFileErr != nil && !errors.Is(gitFileErr, os.ErrNotExist) {
+			return gitFileErr
+		}
+		if pathErr == nil && (incomplete || errors.Is(gitFileErr, os.ErrNotExist)) {
+			// Git refuses even double-force removal when initialization has
+			// not written HEAD or the .git backlink. Remove only this proven
+			// disposable, registered directory; Git then removes its own entry.
+			if err := os.RemoveAll(identity.Path); err != nil {
+				return fmt.Errorf("remove incomplete disposable worktree: %w", err)
+			}
+		}
+		// Git leaves an initialization lock when worktree add is killed. Two
+		// force flags remove that lock and incomplete checkout, but only here.
+		var stderr strings.Builder
+		if err := b.runner(ctx, "", "git", []string{"-C", b.repoRoot, "worktree", "remove", "--force", "--force", "--", identity.Path}, io.Discard, &stderr); err != nil {
+			return fmt.Errorf("remove disposable integration worktree: %w: %s", err, strings.TrimSpace(stderr.String()))
+		}
+	} else if _, err := os.Lstat(identity.Path); !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("refusing to remove unregistered integration directory %s", identity.Path)
+	}
+	exists, err := b.git.LocalBranchExists(ctx, identity.Branch)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return b.git.DeleteBranch(ctx, identity.Branch, true)
+	}
+	return nil
 }
 
 // Status returns the typed integration workspace state.

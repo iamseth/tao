@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -116,6 +117,58 @@ type IntegrationWorkspace struct {
 }
 
 const integrationBranchPrefix = "tao/integration/"
+
+// ListIntegrations enumerates registered integration worktrees and branch-only
+// namespaces. Filesystem directories alone are not evidence of a worktree.
+func (m *Manager) ListIntegrations(ctx context.Context) ([]IntegrationWorkspace, error) {
+	worktrees, err := m.git.status.Worktrees(ctx)
+	if err != nil {
+		return nil, err
+	}
+	branches, err := m.git.cleanup.ListBranches(ctx, integrationBranchPrefix+"*")
+	if err != nil {
+		return nil, err
+	}
+	paths := make(map[string]string)
+	for _, branch := range branches {
+		paths[strings.TrimPrefix(branch, integrationBranchPrefix)] = ""
+	}
+	root := filepath.Join(m.repoRoot, ".tao", "integrations")
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	for _, worktree := range worktrees {
+		if batchID, ok := strings.CutPrefix(worktree.Branch, integrationBranchPrefix); ok {
+			// Branch identity takes precedence, including manually moved worktrees.
+			paths[batchID] = worktree.Path
+			continue
+		}
+		rel, err := filepath.Rel(root, worktree.Path)
+		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		batchID, _, _ := strings.Cut(rel, string(filepath.Separator))
+		if paths[batchID] == "" {
+			paths[batchID] = worktree.Path
+		}
+	}
+	integrations := make([]IntegrationWorkspace, 0, len(paths))
+	for batchID, path := range paths {
+		identity := m.integrationIdentity(batchID)
+		identity.Missing = path == ""
+		if path != "" {
+			identity.Path = path
+			status, err := m.git.status.WorktreeStatus(ctx, path)
+			if err != nil {
+				return nil, err
+			}
+			identity.HeadSHA, identity.Dirty = status.HEAD, status.Dirty
+		}
+		integrations = append(integrations, identity)
+	}
+	sort.Slice(integrations, func(i, j int) bool { return integrations[i].BatchID < integrations[j].BatchID })
+	return integrations, nil
+}
 
 // IntegrationStatus inspects a batch integration worktree without creating it.
 func (m *Manager) IntegrationStatus(ctx context.Context, batchID string) (IntegrationWorkspace, error) {

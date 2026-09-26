@@ -42,6 +42,227 @@ func TestPlanManagedCleanupExcludesIntegrationWorktrees(t *testing.T) {
 	}
 }
 
+func TestPlanIntegrationCleanupDecidesByGitState(t *testing.T) {
+	repo := newTestRepo(t)
+	physicalRoot, err := filepath.EvalSymlinks(repo.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.path = physicalRoot
+	manager := newTestManager(t, repo.path)
+	ctx := context.Background()
+	start := strings.TrimSpace(runGit(t, repo.path, "rev-parse", "master"))
+	create := func(id string) IntegrationWorkspace {
+		t.Helper()
+		item, err := manager.CreateIntegration(ctx, id, start)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return item
+	}
+	commit := func(item IntegrationWorkspace, file string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(item.Path, file), []byte(file+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		runGit(t, item.Path, "add", file)
+		runGit(t, item.Path, "commit", "-m", "integration work")
+	}
+
+	active := create("active")
+	unmerged := create("unmerged")
+	commit(unmerged, "wip.txt")
+	squashed := create("squashed")
+	commit(squashed, "squash.txt")
+	runGit(t, repo.path, "merge", "--squash", squashed.Branch)
+	runGit(t, repo.path, "commit", "-m", "apply integration squash")
+	branchOnly := create("branch-only")
+	runGit(t, repo.path, "worktree", "remove", branchOnly.Path)
+	dirty := create("dirty")
+	if err := os.WriteFile(filepath.Join(dirty.Path, "dirty.txt"), []byte("dirty\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outside := create("outside")
+	outsidePath := filepath.Join(t.TempDir(), "moved")
+	runGit(t, repo.path, "worktree", "move", outside.Path, outsidePath)
+	outsidePath, err = filepath.EvalSymlinks(outsidePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside.Path = outsidePath
+	commit(outside, "outside.txt")
+	unregisteredPath := filepath.Join(repo.path, ".tao", "integrations", "unregistered")
+	if err := os.MkdirAll(unregisteredPath, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	// A directory left behind for a branch-only namespace is not a worktree.
+	if err := os.MkdirAll(branchOnly.Path, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	integrations, err := manager.ListIntegrations(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantIDs := []string{"active", "branch-only", "dirty", "outside", "squashed", "unmerged"}
+	if len(integrations) != len(wantIDs) {
+		t.Fatalf("integrations = %#v", integrations)
+	}
+	for i, item := range integrations {
+		if item.BatchID != wantIDs[i] || item.Branch != integrationBranchPrefix+item.BatchID {
+			t.Fatalf("integration %d = %#v, want %s", i, item, wantIDs[i])
+		}
+		if item.BatchID == branchOnly.BatchID {
+			if !item.Missing || item.HeadSHA != "" || item.Dirty {
+				t.Fatalf("branch-only integration = %#v", item)
+			}
+			continue
+		}
+		if item.Missing || item.HeadSHA == "" || item.Dirty != (item.BatchID == dirty.BatchID) {
+			t.Fatalf("registered integration = %#v", item)
+		}
+		if item.BatchID == outside.BatchID && item.Path != outsidePath {
+			t.Fatalf("moved integration path = %q, want %q", item.Path, outsidePath)
+		}
+	}
+
+	items, err := manager.PlanIntegrationCleanup(ctx, "  "+active.BatchID+" \n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byBranch := make(map[string]ManagedCleanup)
+	var unregistered ManagedCleanup
+	for _, item := range items {
+		if !strings.HasPrefix(item.Reason, "unreferenced integration namespace: ") {
+			t.Errorf("missing integration reason: %#v", item)
+		}
+		if item.Status == ManagedStatusUnregistered {
+			unregistered = item
+			continue
+		}
+		byBranch[item.Branch] = item
+	}
+	if len(items) != 6 {
+		t.Fatalf("cleanup items = %#v", items)
+	}
+	if _, ok := byBranch[active.Branch]; ok {
+		t.Fatal("active batch must be excluded")
+	}
+	for _, want := range []struct {
+		integration IntegrationWorkspace
+		status      string
+		path        string
+	}{
+		{unmerged, ManagedStatusUnmerged, unmerged.Path},
+		{squashed, ManagedStatusClean, squashed.Path},
+		{branchOnly, ManagedStatusClean, ""},
+		{dirty, ManagedStatusDirty, dirty.Path},
+		{outside, ManagedStatusUnmerged, outsidePath},
+	} {
+		got, ok := byBranch[want.integration.Branch]
+		if !ok || got.Status != want.status || got.WorktreePath != want.path || got.CanRemove != (want.status == ManagedStatusClean) {
+			t.Errorf("%s cleanup = %#v, want %s path=%q", want.integration.BatchID, got, want.status, want.path)
+		}
+	}
+	if !byBranch[squashed.Branch].MergedNonAncestral {
+		t.Fatal("squash cleanup must retain non-ancestral merge evidence")
+	}
+	if unregistered.WorktreePath != unregisteredPath || unregistered.CanRemove {
+		t.Fatalf("unregistered directory = %#v", unregistered)
+	}
+	for _, options := range []CleanOptions{{}, {Force: true}, {AllowNonAncestralBranch: true}} {
+		if err := manager.CleanManaged(ctx, unregistered, options); err == nil || !strings.Contains(err.Error(), "unregistered") {
+			t.Fatalf("unregistered cleanup should be refused: %v", err)
+		}
+	}
+	if _, err := os.Stat(unregisteredPath); err != nil {
+		t.Fatalf("unregistered directory must remain: %v", err)
+	}
+	for _, item := range []IntegrationWorkspace{dirty, unmerged} {
+		if err := manager.CleanManaged(ctx, byBranch[item.Branch], CleanOptions{}); err == nil {
+			t.Fatalf("unsafe cleanup accepted: %s", item.Branch)
+		}
+	}
+	if err := manager.CleanManaged(ctx, byBranch[squashed.Branch], CleanOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(squashed.Path); !os.IsNotExist(err) {
+		t.Fatalf("clean integration worktree should be removed: %v", err)
+	}
+	if exists, err := manager.git.branches.LocalBranchExists(ctx, squashed.Branch); err != nil || exists {
+		t.Fatalf("clean integration branch should be removed: exists=%t err=%v", exists, err)
+	}
+}
+
+func TestListIntegrationsDiscoversRegisteredNamespacePath(t *testing.T) {
+	repo := newTestRepo(t)
+	manager := newTestManager(t, repo.path)
+	ctx := context.Background()
+	path := filepath.Join(repo.path, ".tao", "integrations", "detached")
+	runGit(t, repo.path, "worktree", "add", "--detach", path, "master")
+	items, err := manager.ListIntegrations(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	physicalPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].BatchID != "detached" || items[0].Path != physicalPath || items[0].Missing || items[0].HeadSHA == "" {
+		t.Fatalf("path-only integration = %#v", items)
+	}
+}
+
+func TestPlanIntegrationCleanupPreservesCurrentBranch(t *testing.T) {
+	repo := newTestRepo(t)
+	manager := newTestManager(t, repo.path)
+	ctx := context.Background()
+	start := strings.TrimSpace(runGit(t, repo.path, "rev-parse", "master"))
+	integration, err := manager.CreateIntegration(ctx, "current", start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager = newTestManager(t, integration.Path)
+	items, err := manager.PlanIntegrationCleanup(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Status != ManagedStatusCurrent || items[0].CanRemove {
+		t.Fatalf("current integration cleanup = %#v", items)
+	}
+	if err := manager.CleanManaged(ctx, items[0], CleanOptions{Force: true}); err == nil {
+		t.Fatal("force must not remove the current integration branch")
+	}
+}
+
+func TestPlanIntegrationCleanupRefusesMismatchedWorktreeBranch(t *testing.T) {
+	repo := newTestRepo(t)
+	manager := newTestManager(t, repo.path)
+	ctx := context.Background()
+	start := strings.TrimSpace(runGit(t, repo.path, "rev-parse", "master"))
+	integration, err := manager.CreateIntegration(ctx, "mismatch", start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, integration.Path, "checkout", "-b", "main")
+	if _, err := manager.PlanIntegrationCleanup(ctx, ""); err == nil {
+		t.Fatal("must not authorize removal of a protected worktree using a stale integration branch")
+	}
+}
+
+func TestPlanIntegrationCleanupExcludesActiveUnregisteredDirectory(t *testing.T) {
+	repo := newTestRepo(t)
+	manager := newTestManager(t, repo.path)
+	path := filepath.Join(repo.path, ".tao", "integrations", "active")
+	if err := os.MkdirAll(path, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	items, err := manager.PlanIntegrationCleanup(context.Background(), " active ")
+	if err != nil || len(items) != 0 {
+		t.Fatalf("active directory must be excluded: items=%#v err=%v", items, err)
+	}
+}
+
 func TestPlanManagedCleanupIncludesOnlyExactOwnedAndLegacyBranches(t *testing.T) {
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)

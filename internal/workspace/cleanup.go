@@ -3,6 +3,8 @@ package workspace
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/iamseth/tao/internal/gitops"
@@ -121,11 +123,12 @@ func (m *Manager) Clean(ctx context.Context, detail *plan.PlanDetail, options Cl
 
 // Managed cleanup decision statuses.
 const (
-	ManagedStatusClean     = "clean"
-	ManagedStatusDirty     = "dirty"
-	ManagedStatusUnmerged  = "unmerged"
-	ManagedStatusCurrent   = "current"
-	ManagedStatusProtected = "protected"
+	ManagedStatusClean        = "clean"
+	ManagedStatusDirty        = "dirty"
+	ManagedStatusUnmerged     = "unmerged"
+	ManagedStatusCurrent      = "current"
+	ManagedStatusProtected    = "protected"
+	ManagedStatusUnregistered = "unregistered"
 )
 
 // ManagedCleanup describes the cleanup decision for one Tao-managed branch and its
@@ -200,6 +203,76 @@ func (m *Manager) PlanManagedCleanup(ctx context.Context, ownedBranches ...strin
 		plans = append(plans, decision)
 	}
 	return plans, nil
+}
+
+// PlanIntegrationCleanup explicitly classifies integration namespaces not owned
+// by the active batch. Unregistered directories are report-only, never removable.
+func (m *Manager) PlanIntegrationCleanup(ctx context.Context, activeBatchID string) ([]ManagedCleanup, error) {
+	integrations, err := m.ListIntegrations(ctx)
+	if err != nil {
+		return nil, err
+	}
+	current, err := m.git.branches.CurrentBranch(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defaultBranch, err := m.git.branches.DefaultBranch(ctx)
+	if err != nil {
+		return nil, err
+	}
+	activeBatchID = strings.TrimSpace(activeBatchID)
+	const reasonPrefix = "unreferenced integration namespace: "
+	root := filepath.Join(m.repoRoot, ".tao", "integrations")
+	knownIDs := make(map[string]bool, len(integrations))
+	registeredDirs := make(map[string]bool, len(integrations))
+	worktrees, err := m.git.status.Worktrees(ctx)
+	if err != nil {
+		return nil, err
+	}
+	branchesByPath := make(map[string]string, len(worktrees))
+	for _, worktree := range worktrees {
+		branchesByPath[worktree.Path] = worktree.Branch
+		if name, ok := directChild(root, worktree.Path); ok {
+			registeredDirs[name] = true
+		}
+	}
+	var items []ManagedCleanup
+	for _, integration := range integrations {
+		knownIDs[integration.BatchID] = true
+		path := ""
+		if !integration.Missing {
+			path = integration.Path
+		}
+		if integration.BatchID == activeBatchID {
+			continue
+		}
+		// A path alone must not authorize removing a different branch's worktree.
+		if path != "" && branchesByPath[path] != integration.Branch {
+			return nil, fmt.Errorf("integration worktree %s is checked out on %q, want %q", path, branchesByPath[path], integration.Branch)
+		}
+		item, err := m.decideManagedCleanup(ctx, integration.Branch, current, defaultBranch, path)
+		if err != nil {
+			return nil, err
+		}
+		item.Reason = reasonPrefix + item.Reason
+		items = append(items, item)
+	}
+
+	entries, err := os.ReadDir(root)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	for _, entry := range entries {
+		path := filepath.Join(root, entry.Name())
+		if !entry.IsDir() || entry.Name() == activeBatchID || knownIDs[entry.Name()] || registeredDirs[entry.Name()] {
+			continue
+		}
+		items = append(items, ManagedCleanup{
+			Status: ManagedStatusUnregistered, WorktreePath: path,
+			Reason: reasonPrefix + "directory has no registered worktree or matching branch",
+		})
+	}
+	return items, nil
 }
 
 func (m *Manager) managedCleanupCandidates(ctx context.Context, ownedBranches []string) ([]string, error) {
@@ -289,14 +362,18 @@ func (m *Manager) decideManagedCleanup(ctx context.Context, branch string, curre
 
 // CleanManaged removes a Tao-managed branch and its worktree. It removes the
 // worktree first because Git refuses to delete a branch checked out in a worktree.
-// Protected and current branches are never removed. Unless explicitly allowed by
-// the options, only items that PlanManagedCleanup marked removable are acted on.
+// Protected and current branches and unregistered directories are never removed.
+// Unless explicitly allowed by the options, only items marked removable by
+// managed or integration cleanup planning are acted on.
 func (m *Manager) CleanManaged(ctx context.Context, item ManagedCleanup, options CleanOptions) error {
 	if item.Status == ManagedStatusProtected || gitops.ProtectedBranch(item.Branch) {
 		return fmt.Errorf("refusing to remove protected branch %s", item.Branch)
 	}
 	if item.Status == ManagedStatusCurrent {
 		return fmt.Errorf("refusing to remove current branch %s", item.Branch)
+	}
+	if item.Status == ManagedStatusUnregistered {
+		return fmt.Errorf("refusing to remove unregistered integration directory %s", item.WorktreePath)
 	}
 	if !item.CanRemove && !options.Force && !options.AllowNonAncestralBranch {
 		return fmt.Errorf("refusing to remove %s: %s", item.Branch, item.Reason)

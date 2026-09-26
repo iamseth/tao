@@ -23,14 +23,15 @@ type BatchCoordinatorOptions struct {
 // BatchCoordinatorResult contains all batch information rendered by callers,
 // including partial progress returned with an error.
 type BatchCoordinatorResult struct {
-	State        BatchState
-	Candidates   []BatchCandidate
-	Blockers     []BatchBlocker
-	Deferred     []BatchDeferral
-	Resumed      bool
-	DryRun       bool
-	Restarted    *BatchRestartPlan
-	DefaultMoved bool
+	State                BatchState
+	Candidates           []BatchCandidate
+	Blockers             []BatchBlocker
+	Deferred             []BatchDeferral
+	Resumed              bool
+	DryRun               bool
+	Restarted            *BatchRestartPlan
+	DefaultMoved         bool
+	OrphanedIntegrations []workspace.IntegrationWorkspace
 }
 
 // BatchCoordinatorStore is the durable state needed by the coordinator. Phase
@@ -53,6 +54,12 @@ type BatchCoordinatorWorkspace interface {
 	Status(context.Context, string) (workspace.IntegrationWorkspace, error)
 	Start(context.Context, BatchState) (workspace.IntegrationWorkspace, error)
 	RemoveIntegration(context.Context, string) error
+}
+
+// BatchIntegrationLister is an optional workspace capability for advisory
+// orphan warnings when starting a fresh batch.
+type BatchIntegrationLister interface {
+	ListIntegrations(context.Context) ([]workspace.IntegrationWorkspace, error)
 }
 
 // BatchCoordinatorDiscovery snapshots reviewed and approved candidates.
@@ -220,6 +227,17 @@ func (c *BatchCoordinator) Run(ctx context.Context, options BatchCoordinatorOpti
 			RepoRoot: preflight.RepoRoot, DefaultBranch: preflight.DefaultBranch, DefaultStartSHA: preflight.DefaultStartSHA,
 			Candidates: preflight.Candidates, ChosenOrder: order, CreatedAt: at, UpdatedAt: at,
 		}
+		if lister, ok := c.seams.Workspace.(BatchIntegrationLister); ok {
+			// Orphan discovery is advisory; a listing failure must not block a
+			// batch or turn partial results into misleading cleanup warnings.
+			if integrations, listErr := lister.ListIntegrations(ctx); listErr == nil {
+				for _, integration := range integrations {
+					if integration.BatchID != state.ID {
+						result.OrphanedIntegrations = append(result.OrphanedIntegrations, integration)
+					}
+				}
+			}
+		}
 		result.State = state
 		ownership, err = c.seams.Workspace.AcquireOwnership(state, now)
 		if err != nil {
@@ -371,8 +389,17 @@ func (c *BatchCoordinator) validateCandidateSnapshot(ctx context.Context, state 
 
 func (c *BatchCoordinator) dryRunIntegration(ctx context.Context, state BatchState, verifyCommand string) (result BatchIntegrateResult, err error) {
 	result.State = state
+	remove := func(ctx context.Context) error { return c.seams.Workspace.RemoveIntegration(ctx, state.ID) }
+	if disposable, ok := c.seams.Workspace.(interface {
+		PrepareDisposableIntegration(context.Context, string) (func(context.Context) error, error)
+	}); ok {
+		remove, err = disposable.PrepareDisposableIntegration(ctx, state.ID)
+		if err != nil {
+			return result, err
+		}
+	}
 	defer func() {
-		err = errors.Join(err, c.seams.Workspace.RemoveIntegration(context.WithoutCancel(ctx), state.ID))
+		err = errors.Join(err, remove(context.WithoutCancel(ctx)))
 	}()
 	created, err := c.seams.Workspace.Start(ctx, state)
 	if err != nil {

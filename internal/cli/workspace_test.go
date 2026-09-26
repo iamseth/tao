@@ -26,6 +26,10 @@ type fakeWorkspaceManager struct {
 	managedPlans         []workspace.ManagedCleanup
 	managedOwnedBranches []string
 	managedErr           error
+	integrationPlans     []workspace.ManagedCleanup
+	integrationErr       error
+	integrationCalled    bool
+	activeBatchID        string
 	cleanedManaged       []workspace.ManagedCleanup
 	cleanManagedOptions  []workspace.CleanOptions
 	cleanManagedErr      map[string]error
@@ -71,6 +75,15 @@ func (f *fakeWorkspaceManager) PlanManagedCleanup(ctx context.Context, ownedBran
 		return nil, f.managedErr
 	}
 	return f.managedPlans, ctx.Err()
+}
+
+func (f *fakeWorkspaceManager) PlanIntegrationCleanup(ctx context.Context, activeBatchID string) ([]workspace.ManagedCleanup, error) {
+	f.integrationCalled = true
+	f.activeBatchID = activeBatchID
+	if f.integrationErr != nil {
+		return nil, f.integrationErr
+	}
+	return f.integrationPlans, ctx.Err()
 }
 
 func (f *fakeWorkspaceManager) CleanManaged(ctx context.Context, item workspace.ManagedCleanup, options workspace.CleanOptions) error {

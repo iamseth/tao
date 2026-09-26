@@ -108,6 +108,7 @@ type WorkspaceManager interface {
 	PlanClean(ctx context.Context, planID string) (workspace.CleanPlan, error)
 	Clean(ctx context.Context, detail *plan.PlanDetail, options workspace.CleanOptions) (workspace.CleanPlan, error)
 	PlanManagedCleanup(ctx context.Context, ownedBranches ...string) ([]workspace.ManagedCleanup, error)
+	PlanIntegrationCleanup(ctx context.Context, activeBatchID string) ([]workspace.ManagedCleanup, error)
 	CleanManaged(ctx context.Context, item workspace.ManagedCleanup, options workspace.CleanOptions) error
 }
 
