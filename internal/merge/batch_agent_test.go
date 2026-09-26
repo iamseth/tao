@@ -166,6 +166,60 @@ func TestBatchAgentResolvesTextConflictAndTaoOwnsCommit(t *testing.T) {
 	}
 }
 
+func TestBatchAgentStagesResolutionAlongsideStagedDeletion(t *testing.T) {
+	fixture := newRealGitWorktree(t)
+	if err := os.WriteFile(filepath.Join(fixture.repoRoot, "removed.txt"), []byte("obsolete\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runRealGit(t, fixture.repoRoot, "add", "removed.txt")
+	runRealGit(t, fixture.repoRoot, "commit", "-m", "add removed")
+	runRealGit(t, fixture.worktreePath, "checkout", "--detach", fixture.defaultBranch)
+	runRealGit(t, fixture.worktreePath, "checkout", "-B", fixture.planBranch)
+	runRealGit(t, fixture.worktreePath, "rm", "-q", "removed.txt")
+	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "README.md"), []byte("source\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runRealGit(t, fixture.worktreePath, "add", "README.md")
+	runRealGit(t, fixture.worktreePath, "commit", "-m", "source deletes and edits")
+	sourceHead := strings.TrimSpace(realGitOutput(t, fixture.worktreePath, "rev-parse", "HEAD"))
+	if err := os.WriteFile(filepath.Join(fixture.repoRoot, "README.md"), []byte("default\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runRealGit(t, fixture.repoRoot, "add", "README.md")
+	runRealGit(t, fixture.repoRoot, "commit", "-m", "default")
+	defaultHead := strings.TrimSpace(realGitOutput(t, fixture.repoRoot, "rev-parse", "HEAD"))
+	integrationRoot := filepath.Join(filepath.Dir(fixture.repoRoot), "integration")
+	runRealGit(t, fixture.repoRoot, "worktree", "add", "-b", "tao/integration/test", integrationRoot, defaultHead)
+
+	state := batchAgentDeferredState(fixture, sourceHead, defaultHead)
+	store := &recordingBatchTransitionStore{}
+	agent := batchSessionAgentFunc(func(_ context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+		status := realGitOutput(t, request.IntegrationRoot, "status", "--porcelain")
+		if !strings.Contains(status, "D  removed.txt") || !strings.Contains(status, "UU README.md") {
+			t.Fatalf("squash did not leave a staged deletion beside the conflict:\n%s", status)
+		}
+		return BatchAgentSessionResult{Output: batchResolutionJSON("resolved README")}, os.WriteFile(filepath.Join(request.IntegrationRoot, "README.md"), []byte("combined\n"), 0o600)
+	})
+	got, err := (BatchAgentResolver{Store: store, Service: NewService(fixture.repoRoot, nil), Agent: agent}).Resolve(context.Background(), state, integrationRoot, BatchResolveOptions{})
+	if err != nil {
+		t.Fatalf("resolution with a staged deletion failed: %v", err)
+	}
+	if len(got.Resolved) != 1 || got.State.Integrations[0].Status != batchIntegrationApplied {
+		t.Fatalf("unexpected resolution result: %#v", got)
+	}
+	resolution := latestBatchResolution(&got.State.Integrations[0])
+	if resolution == nil || !slices.Equal(resolution.ChangedPaths, []string{"README.md", "removed.txt"}) {
+		t.Fatalf("durable intent omitted the staged deletion: %+v", resolution)
+	}
+	committed := realGitOutput(t, integrationRoot, "show", "--name-status", "--format=", "HEAD")
+	if !strings.Contains(committed, "D\tremoved.txt") || !strings.Contains(committed, "M\tREADME.md") {
+		t.Fatalf("resolved commit lost the deletion or the resolution:\n%s", committed)
+	}
+	if status := strings.TrimSpace(realGitOutput(t, integrationRoot, "status", "--porcelain")); status != "" {
+		t.Fatalf("integration worktree left dirty after commit:\n%s", status)
+	}
+}
+
 func TestBatchAgentSessionFailuresStopWithoutAnotherResolveCall(t *testing.T) {
 	for _, tc := range []struct {
 		name string

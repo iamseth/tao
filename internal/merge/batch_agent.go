@@ -474,13 +474,16 @@ func (r BatchAgentResolver) finishResolvedCandidate(ctx context.Context, state B
 		return state, false, false, fmt.Errorf("resolved candidate %s commit proposal is invalid: %w", planID, err)
 	}
 
-	var changed []string
+	var changed, stagePaths []string
 	if resolution.ContentFingerprint != "" {
 		changes, err := concretePorcelainChanges(ctx, git)
 		if err != nil {
 			return state, false, false, fmt.Errorf("%w for %s: inspect edit set: %w", errResolvedCandidateContentDrift, planID, err)
 		}
-		changed = changes.changedPaths
+		// The drift check and fingerprint cover every changed path, including
+		// staged deletions. Staging must use the narrower set: a staged deletion
+		// is already gone from the index and worktree, so git add rejects it.
+		changed, stagePaths = changes.changedPaths, changes.stagePaths
 		if !slices.Equal(changed, resolution.ChangedPaths) {
 			return state, false, false, fmt.Errorf("%w for %s: edit set changed", errResolvedCandidateContentDrift, planID)
 		}
@@ -499,6 +502,7 @@ func (r BatchAgentResolver) finishResolvedCandidate(ctx context.Context, state B
 			return state, false, false, fmt.Errorf("inspect agent edits for %s: %w", planID, err)
 		}
 		changed = porcelainPaths(status)
+		stagePaths = []string{"."}
 	}
 	markerScanPaths := presentMarkerScanPaths(git.Root(), integration.ConflictFiles)
 	validation := validateAgentEdits(ctx, git.Root(), changed, markerScanPaths)
@@ -507,10 +511,6 @@ func (r BatchAgentResolver) finishResolvedCandidate(ctx context.Context, state B
 		return state, false, false, fmt.Errorf("agent made unsafe metadata edits while resolving %s", planID)
 	case agentEditIssueNoChanges, agentEditIssueConflictMarkers, agentEditIssueUnscannablePaths:
 		return state, false, false, fmt.Errorf("agent left unresolved conflicts for %s", planID)
-	}
-	stagePaths := changed
-	if resolution.ContentFingerprint == "" {
-		stagePaths = []string{"."}
 	}
 	if err := git.Add(ctx, stagePaths...); err != nil {
 		return state, false, false, fmt.Errorf("stage agent resolution: %w", err)
