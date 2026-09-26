@@ -236,6 +236,25 @@ func TestRenderRunPromptDefinesReworkSliceGuidance(t *testing.T) {
 	}
 }
 
+func TestRenderRunPromptDefinesTestFirstAndFailureReportingGuidance(t *testing.T) {
+	got, err := Render(PromptRun, Data{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"For behavior changes, write or extend the failing test first",
+		"run it before implementing",
+		"record in the notes file that it failed for the expected reason",
+		"For any failure seen in a verification run that is outside the slice's scope",
+		"record it by test or command name in the notes file",
+		"The Verification section still governs whether the slice completes",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("rendered run prompt missing test-first or failure-reporting guidance %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestRenderTemplatedPromptSubstitutesData(t *testing.T) {
 	got, err := Render(PromptPlan, Data{Arguments: "build a dashboard"})
 	if err != nil {

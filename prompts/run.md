@@ -87,6 +87,8 @@ Tao marks the selected slice in progress and appends `slice_started` before invo
 - Do not invent new requirements.
 - Prefer minimal, reviewable changes.
 - Keep the repo in a working state.
+- For behavior changes, write or extend the failing test first, run it before implementing, and record in the notes file that it failed for the expected reason.
+- For any failure seen in a verification run that is outside the slice's scope, record it by test or command name in the notes file rather than leaving it unmentioned. The Verification section still governs whether the slice completes.
 - For validation-only or no-edit slices, run the listed verification commands and avoid broad code review unless a command fails or the slice explicitly asks for review.
 - If the slice is ambiguous or blocked, write a clear blocker reason to a temporary file outside the repository, run `tao slice-blocked --plan-dir "{{ .PlanDir }}" --slice-id "<selected slice id>" --reason-file "<reason file>"`, and stop.
 
