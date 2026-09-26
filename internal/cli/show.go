@@ -96,7 +96,7 @@ func renderPlanDetailWithThresholds(out io.Writer, loaded planview.Plan, thresho
 		if abandonment.AbandonedAt != nil {
 			abandonedAt = abandonment.AbandonedAt.Format(time.RFC3339)
 		}
-		if err := writef(out, "Abandoned: %s\nAbandonment reason: %s\n", abandonedAt, abandonment.Reason); err != nil {
+		if err := writef(out, "Abandoned: %s\nAbandonment reason: %s\n", abandonedAt, planview.FormatAbandonmentText(abandonment.Reason)); err != nil {
 			return err
 		}
 	}

@@ -21,6 +21,7 @@ const (
 	PromptRepoHealth                  = "repo-health"
 	PromptCatchMeUp                   = "catch-me-up"
 	PromptTaoInsightsReview           = "insights-review"
+	PromptGroomNotes                  = "groom-notes"
 	PromptPR                          = "pr"
 	PromptReview                      = "review"
 )
@@ -60,6 +61,9 @@ var CatchMeUpPromptTemplate string
 
 //go:embed tao-insights-review.md
 var TaoInsightsReviewPromptTemplate string
+
+//go:embed groom-notes.md
+var GroomNotesPromptTemplate string
 
 //go:embed pr.md
 var PRPromptTemplate string
@@ -176,6 +180,7 @@ var agentCommandNames = map[string]string{
 	PromptRepoHealth:                  "tao-repo-health",
 	PromptCatchMeUp:                   "tao-catch-me-up",
 	PromptTaoInsightsReview:           "tao-insights-review",
+	PromptGroomNotes:                  "tao-groom-notes",
 	PromptPR:                          "tao-pr",
 	PromptReview:                      "tao-review",
 }
@@ -193,6 +198,7 @@ var promptRegistry = []promptDefinition{
 	newTemplatedPrompt(PromptRepoHealth, RepoHealthPromptTemplate),
 	newTemplatedPrompt(PromptCatchMeUp, CatchMeUpPromptTemplate),
 	newTemplatedPrompt(PromptTaoInsightsReview, TaoInsightsReviewPromptTemplate),
+	newTemplatedPrompt(PromptGroomNotes, GroomNotesPromptTemplate),
 	newTemplatedPrompt(PromptPR, PRPromptTemplate),
 	newPrompt(PromptReview, ReviewPromptTemplate, renderReviewPrompt),
 }

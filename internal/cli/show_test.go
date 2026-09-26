@@ -314,7 +314,9 @@ func TestShowProjectsSafeAbandonmentEvidenceInTextAndJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := stripANSI(textOut.String())
-	for _, want := range []string{"Status: abandoned", "Abandoned: 2026-09-01T16:00:00Z", "Abandonment reason: superseded by a safer path [31m", "Next: No action", "Reason: the plan was abandoned"} {
+	// The pre-existing terminal excerpt is 95 runes followed by an ellipsis.
+	wantExcerpt := "superseded by a safer path [31m " + strings.Repeat("界", 63) + "…"
+	for _, want := range []string{"Status: abandoned", "Abandoned: 2026-09-01T16:00:00Z", "Abandonment reason: " + wantExcerpt + "\n", "Next: No action", "Reason: the plan was abandoned"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("show output missing %q:\n%s", want, text)
 		}
@@ -331,26 +333,60 @@ func TestShowProjectsSafeAbandonmentEvidenceInTextAndJSON(t *testing.T) {
 	if err := json.Unmarshal(jsonOut.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Abandonment == nil || payload.Abandonment.AbandonedAt == nil || payload.Abandonment.AbandonedAt.Format(time.RFC3339) != "2026-09-01T16:00:00Z" || strings.Contains(payload.Abandonment.Reason, "\n") {
+	wantReason := "superseded by a safer path [31m " + strings.Repeat("界", 120)
+	if payload.Schema != "tao.show.v1" || payload.Abandonment == nil || payload.Abandonment.AbandonedAt == nil || payload.Abandonment.AbandonedAt.Format(time.RFC3339) != "2026-09-01T16:00:00Z" || payload.Abandonment.Reason != wantReason {
 		t.Fatalf("show JSON abandonment = %+v", payload.Abandonment)
 	}
-	if strings.Contains(payload.NextAction.Primary.Reason, reason) {
+	if payload.NextAction.Primary.Reason != "the plan was abandoned" {
 		t.Fatalf("show JSON duplicated raw abandonment reason: %+v", payload.NextAction)
 	}
 }
 
-func TestShowHandlesAbandonedStatusWithoutEvidence(t *testing.T) {
-	detail := &plan.PlanDetail{State: plan.State{Status: plan.StatusAbandoned, Plan: plan.PlanState{ID: "plan-a", Title: "Plan A"}}}
-	var out bytes.Buffer
-	if err := (App{Out: &out, Err: &out}).show(context.Background(), fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}, []string{"plan-a", "--json"}); err != nil {
-		t.Fatal(err)
-	}
-	var payload planview.ShowPayload
-	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload.Status != plan.StatusAbandoned || payload.Abandonment != nil {
-		t.Fatalf("missing-evidence abandonment payload = %+v", payload)
+func TestShowHandlesAbandonedStatusWithMissingOrEmptyEvidence(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		events []plan.Event
+	}{
+		{name: "missing evidence"},
+		{name: "empty reason and zero timestamp", events: []plan.Event{{Type: plan.EventTypePlanAbandoned, Reason: " \n\t\x00\u2003 "}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			detail := &plan.PlanDetail{
+				State:  plan.State{Status: plan.StatusAbandoned, Plan: plan.PlanState{ID: "plan-a", Title: "Plan A"}},
+				Events: tt.events,
+			}
+			repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
+			var out bytes.Buffer
+			app := App{Out: &out, Err: &out}
+			if err := app.show(context.Background(), repo, []string{"plan-a", "--json"}); err != nil {
+				t.Fatal(err)
+			}
+			var payload planview.ShowPayload
+			if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.Schema != "tao.show.v1" || payload.Status != plan.StatusAbandoned || payload.NextAction.Primary.Reason != "the plan was abandoned" {
+				t.Fatalf("abandoned payload = %+v", payload)
+			}
+			if tt.events == nil {
+				if payload.Abandonment != nil || strings.Contains(out.String(), `"abandonment"`) {
+					t.Fatalf("missing evidence should be omitted: %s", out.String())
+				}
+			} else if payload.Abandonment == nil || payload.Abandonment.Reason != "No abandonment reason was recorded." || payload.Abandonment.AbandonedAt != nil || strings.Contains(out.String(), `"abandoned_at"`) {
+				t.Fatalf("empty evidence projection = %s", out.String())
+			}
+			out.Reset()
+			if err := app.show(context.Background(), repo, []string{"plan-a"}); err != nil {
+				t.Fatal(err)
+			}
+			if tt.events == nil {
+				if strings.Contains(out.String(), "Abandoned:") || strings.Contains(out.String(), "Abandonment reason:") {
+					t.Fatalf("missing evidence rendered: %s", out.String())
+				}
+			} else if !strings.Contains(out.String(), "Abandoned: -\nAbandonment reason: No abandonment reason was recorded.\n") {
+				t.Fatalf("empty evidence output = %s", out.String())
+			}
+		})
 	}
 }
 

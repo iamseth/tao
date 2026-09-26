@@ -48,13 +48,17 @@ func FormatBlockedRunGuidance(sliceID, reason, continueCommand string) string {
 // abandonment evidence. Legacy malformed values cannot inject terminal
 // controls or force unbounded table and detail output.
 func FormatAbandonmentText(reason string) string {
+	return boundDisplayText(normalizeAbandonmentReason(reason), abandonmentReasonExcerptRunes)
+}
+
+func normalizeAbandonmentReason(reason string) string {
 	normalized := strings.Join(strings.FieldsFunc(reason, func(r rune) bool {
 		return unicode.IsSpace(r) || unicode.IsControl(r)
 	}), " ")
 	if normalized == "" {
 		normalized = abandonmentReasonFallback
 	}
-	return boundDisplayText(normalized, abandonmentReasonExcerptRunes)
+	return normalized
 }
 
 func boundBlockerText(value string, limit int) string {

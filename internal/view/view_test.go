@@ -188,9 +188,12 @@ func TestShowPayloadCarriesLoadedRecommendation(t *testing.T) {
 	}
 }
 
-func TestShowPayloadProjectsBoundedAbandonmentWithoutAliasingRawReason(t *testing.T) {
+func TestShowPayloadProjectsCompleteAbandonmentWithoutAliasingRawReason(t *testing.T) {
 	at := time.Date(2026, 9, 1, 17, 0, 0, 0, time.FixedZone("offset", 3600))
 	raw := "superseded\nby\ta safer path\x1b[31m " + strings.Repeat("界", 120)
+	if len(raw) > plan.MaxAbandonmentReasonBytes {
+		t.Fatal("fixture exceeds durable reason cap")
+	}
 	detail := &plan.PlanDetail{
 		State:  plan.State{Status: plan.StatusAbandoned, Plan: plan.PlanState{ID: "plan", Title: "Plan"}},
 		Events: []plan.Event{{Type: plan.EventTypePlanAbandoned, Timestamp: at, Reason: raw}},
@@ -200,11 +203,11 @@ func TestShowPayloadProjectsBoundedAbandonmentWithoutAliasingRawReason(t *testin
 		t.Fatal(err)
 	}
 	payload := loaded.ShowPayload()
-	if payload.Abandonment == nil || payload.Abandonment.AbandonedAt == nil || payload.Abandonment.AbandonedAt.Location() != time.UTC {
+	if payload.Schema != "tao.show.v1" || payload.Abandonment == nil || payload.Abandonment.AbandonedAt == nil || payload.Abandonment.AbandonedAt.Location() != time.UTC || !payload.Abandonment.AbandonedAt.Equal(at) {
 		t.Fatalf("abandonment payload = %+v", payload.Abandonment)
 	}
-	if got := payload.Abandonment.Reason; strings.ContainsAny(got, "\n\t\x1b") || len([]rune(got)) > abandonmentReasonExcerptRunes || !strings.HasSuffix(got, "…") {
-		t.Fatalf("unsafe or unbounded reason = %q", got)
+	if got, want := payload.Abandonment.Reason, "superseded by a safer path [31m "+strings.Repeat("界", 120); got != want {
+		t.Fatalf("normalized reason = %q, want %q", got, want)
 	}
 	if payload.NextAction.Primary.Reason != "the plan was abandoned" || strings.Contains(payload.NextAction.Primary.Reason, raw) {
 		t.Fatalf("unsafe next action = %+v", payload.NextAction.Primary)
@@ -215,13 +218,33 @@ func TestShowPayloadProjectsBoundedAbandonmentWithoutAliasingRawReason(t *testin
 	}
 }
 
-func TestFormatAbandonmentTextHandlesMissingAndMalformedReasons(t *testing.T) {
-	if got := FormatAbandonmentText(" \n\t "); got != abandonmentReasonFallback {
-		t.Fatalf("missing reason = %q", got)
+func TestAbandonmentProjectionAndTerminalFormatting(t *testing.T) {
+	for _, tt := range []struct {
+		name, raw, normalized, excerpt string
+	}{
+		{name: "empty", normalized: abandonmentReasonFallback, excerpt: abandonmentReasonFallback},
+		{name: "only whitespace and controls", raw: " \n\t\x00\x1b\u0085\u2003 ", normalized: abandonmentReasonFallback, excerpt: abandonmentReasonFallback},
+		{name: "whitespace and controls", raw: " stop\nnow\x00\x1b\u2003 please\t ", normalized: "stop now please", excerpt: "stop now please"},
+		{name: "at terminal bound", raw: strings.Repeat("界", 96), normalized: strings.Repeat("界", 96), excerpt: strings.Repeat("界", 96)},
+		{name: "past terminal bound", raw: strings.Repeat("界", 97), normalized: strings.Repeat("界", 97), excerpt: strings.Repeat("界", 95) + "…"},
+		{name: "trim excerpt boundary", raw: strings.Repeat("x", 94) + " more", normalized: strings.Repeat("x", 94) + " more", excerpt: strings.Repeat("x", 94) + "…"},
+		{name: "long unicode", raw: " stop\nnow\x00 " + strings.Repeat("界", 120), normalized: "stop now " + strings.Repeat("界", 120), excerpt: "stop now " + strings.Repeat("界", 86) + "…"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			projection := projectShowAbandonment(&plan.AbandonmentEvidence{Reason: tt.raw})
+			if projection.Reason != tt.normalized || projection.AbandonedAt != nil {
+				t.Fatalf("projection = %+v, want reason %q and absent timestamp", projection, tt.normalized)
+			}
+			if got := FormatAbandonmentText(tt.raw); got != tt.excerpt {
+				t.Fatalf("raw excerpt = %q, want %q", got, tt.excerpt)
+			}
+			if got := FormatAbandonmentText(projection.Reason); got != tt.excerpt {
+				t.Fatalf("projected excerpt = %q, want %q", got, tt.excerpt)
+			}
+		})
 	}
-	got := FormatAbandonmentText(" stop\nnow\x00 " + strings.Repeat("界", 120))
-	if strings.ContainsAny(got, "\n\x00") || len([]rune(got)) != abandonmentReasonExcerptRunes || !strings.HasSuffix(got, "…") {
-		t.Fatalf("malformed reason = %q", got)
+	if got := projectShowAbandonment(nil); got != nil {
+		t.Fatalf("missing evidence projection = %+v", got)
 	}
 }
 

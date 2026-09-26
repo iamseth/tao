@@ -183,6 +183,15 @@ func TestInstallAllPiWritesPromptTemplatesAndTaoExtension(t *testing.T) {
 			t.Fatalf("expected %q in Pi Tao insights review prompt, got %q", want, insightsReview)
 		}
 	}
+	groomNotes := readPromptInstallText(t, filepath.Join(promptsDir, "tao-groom-notes.md"))
+	for _, want := range []string{"agent: plan", "tao-managed: tao-groom-notes v1", "tao repo config", "tao repo show", "--status open --limit 0", "Arguments are optional focus only", "No invocation-time writes", "fresh full-note read"} {
+		if !strings.Contains(groomNotes, want) {
+			t.Fatalf("Pi grooming prompt missing %q", want)
+		}
+	}
+	if strings.Count(groomNotes, "$ARGUMENTS") != 1 || strings.Contains(groomNotes, "{{ .Arguments }}") {
+		t.Fatal("Pi grooming prompt must substitute focus exactly once")
+	}
 	if _, err := os.Stat(filepath.Join(promptsDir, "tao-commit.md")); !os.IsNotExist(err) {
 		t.Fatalf("expected Pi tao-commit prompt template not to be installed, got %v", err)
 	}
@@ -266,6 +275,20 @@ func TestInstallAllClaudeWritesManagedCommandWrappers(t *testing.T) {
 	}
 	if strings.Count(catchMeUp, "$ARGUMENTS") != 1 {
 		t.Fatal("Claude catch-up prompt must substitute period/focus exactly once as inline data")
+	}
+	groomNotes := readPromptInstallText(t, filepath.Join(commandsDir, "tao-groom-notes.md"))
+	for _, want := range []string{"You are in PLAN mode", "tao-managed: tao-groom-notes v1", "Arguments are optional focus only", "No invocation-time writes", "TAO_UPDATE=off", "fresh full-note read"} {
+		if !strings.Contains(groomNotes, want) {
+			t.Fatalf("Claude grooming prompt missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"tao prompt groom-notes", "```!", "TAO_PROMPT_ARGUMENTS", "{{ .Arguments }}"} {
+		if strings.Contains(groomNotes, forbidden) {
+			t.Fatalf("Claude grooming prompt must load without shell execution: %q", forbidden)
+		}
+	}
+	if strings.Count(groomNotes, "$ARGUMENTS") != 1 {
+		t.Fatal("Claude grooming prompt must substitute focus exactly once as inline data")
 	}
 	assertManagedCommitDelegates(t, filepath.Join(commandsDir, "tao-commit.md"), "allowed-tools: Bash(tao commit:*)")
 	assertPromptRenameInstalled(t, commandsDir)
@@ -359,7 +382,7 @@ func TestInstalledCommandMetadataIsPrefixedAndDelegatesLogicalSelectors(t *testi
 			t.Fatalf("missing %s descriptor", kind)
 		}
 		for _, definition := range prompts.Definitions() {
-			if definition.Name == prompts.PromptCommit || definition.Name == prompts.PromptCatchMeUp {
+			if definition.Name == prompts.PromptCommit || definition.Name == prompts.PromptCatchMeUp || definition.Name == prompts.PromptGroomNotes {
 				continue
 			}
 			content, err := renderInstallContent(descriptor, definition)

@@ -46,7 +46,8 @@ Tao's data home — everything stays local and inspectable on disk.
 A useful mental split:
 
 - **Planning prompts** (`/tao-plan`, `/tao-grill-me`, `/tao-improve-codebase-architecture`,
-  `/tao-improve-documentation`, `/tao-repo-health`, `/tao-catch-me-up`, `/tao-insights-review`) are
+  `/tao-improve-documentation`, `/tao-repo-health`, `/tao-catch-me-up`, `/tao-insights-review`,
+  `/tao-groom-notes`) are
   **read-only**. They never edit code or write Tao artifacts.
 - **Build prompts** (`/tao-note`, `/tao-slice`, `/tao-run`, `/tao-commit`, `/tao-pr`) write
   artifacts, code, or git state.
@@ -80,6 +81,28 @@ Choose the handoff based on ambiguity, not size alone:
 Historical notes promoted to planning sessions remain readable and are accepted by note-aware planning. Their planning-session provenance is preserved when validation links and archives them; Tao does not create new planning-session records. If linked archival fails after validation, retain the normal plan and use the exact recovery command reported by `/tao-slice`. Once direct generation produced and linked a valid plan, any approval stop, blocked slice, failed verification, review result, or later recovery belongs to that plan; resume it with the normal plan commands.
 
 Direct note execution is not a bypass. Generated slices still honor dependencies and approvals; execution still honors agent, permission, timeout, workspace, commit, and pull-request settings; and completed work still follows the normal review and merge safeguards. When in doubt, use `/tao-plan note:<id>`.
+
+### `/tao-groom-notes [focus]` — review the local backlog
+
+Use this read-only prompt in Pi or Claude Code before choosing work from an aging
+backlog. It works in any registered repository: it confirms the current checkout
+against Tao's catalog, inventories all open notes, then checks full note text,
+local linked plans and current code. Optional focus narrows evaluation, not
+repository scope or write permissions. Failed registration stops the pass; a
+confirmed empty backlog simply needs no action.
+
+The report separates delivered/obsolete requests (ARCHIVE), remaining or blocked
+work (RESCOPE), unsupported tiers (RE-TIER), moved references (STALE COORDINATES)
+and still-valid requests (VALID), with tier counts and explicit coverage gaps.
+An abandoned prerequisite is a broken dependency, not a reason to close its
+dependent; a completed plan alone does not prove delivery in this checkout.
+
+Nothing is applied, installed, fetched or planned. Review the proposed literal
+commands before separately authorizing changes. Edits replace the whole body,
+and `--tag` replaces the entire tag set (omitting it preserves tags). Any later
+application must reread the full current note and preserve unrelated text/tags;
+do not blindly apply a stale proposal. Refresh managed prompts through the normal
+`tao install-prompts` setup outside the grooming session.
 
 ## Monitoring plans
 

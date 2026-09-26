@@ -159,8 +159,9 @@ func ProjectShowRework(events []plan.Event) ShowRework {
 }
 
 // ShowAbandonment is an explicit display-safe projection rather than a raw
-// event. Reason is normalized and bounded; malformed zero timestamps remain
-// absent instead of being presented as evidence.
+// event. Reason is complete and normalized; terminal consumers must apply
+// FormatAbandonmentText for an excerpt. Malformed zero timestamps remain absent
+// instead of being presented as evidence.
 type ShowAbandonment struct {
 	Reason      string     `json:"reason"`
 	AbandonedAt *time.Time `json:"abandoned_at,omitempty"`
@@ -198,7 +199,7 @@ func (loaded Plan) ShowPayload() ShowPayload {
 }
 
 // DisplayNextAction removes duplicated untrusted abandonment prose from the
-// generic lifecycle recommendation. The bounded evidence is projected in its
+// generic lifecycle recommendation. The normalized evidence is projected in its
 // dedicated field and rendered separately by text views.
 func (loaded Plan) DisplayNextAction() plan.PlanNextAction {
 	next := loaded.Derived.NextAction
@@ -213,7 +214,7 @@ func projectShowAbandonment(source *plan.AbandonmentEvidence) *ShowAbandonment {
 	if source == nil {
 		return nil
 	}
-	out := &ShowAbandonment{Reason: FormatAbandonmentText(source.Reason)}
+	out := &ShowAbandonment{Reason: normalizeAbandonmentReason(source.Reason)}
 	if !source.AbandonedAt.IsZero() {
 		at := source.AbandonedAt.UTC()
 		out.AbandonedAt = &at

@@ -153,7 +153,7 @@ func installContent(descriptor agentpkg.Descriptor, prompt prompts.Definition) (
 }
 
 func renderInstallContent(descriptor agentpkg.Descriptor, prompt prompts.Definition) (string, error) {
-	if prompt.Name == prompts.PromptCatchMeUp && descriptor.Kind == runtimeconfig.AgentClaude {
+	if (prompt.Name == prompts.PromptCatchMeUp || prompt.Name == prompts.PromptGroomNotes) && descriptor.Kind == runtimeconfig.AgentClaude {
 		// Load the read-only contract without a dynamic CLI invocation that
 		// could trigger startup updates before the safety instructions load.
 		// Inline arguments also remain prompt data rather than input to a
