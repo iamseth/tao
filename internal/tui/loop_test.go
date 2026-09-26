@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -169,6 +170,215 @@ func (w *recordingWriter) Write(value []byte) (int, error) {
 	copyValue := string(append([]byte(nil), value...))
 	w.writes <- copyValue
 	return len(value), nil
+}
+
+type fakeFilterStore struct {
+	filter           Filter
+	loadErr, saveErr error
+	loads            int
+	saves            []Filter
+}
+
+func (s *fakeFilterStore) Load(context.Context) (Filter, error) {
+	s.loads++
+	return s.filter, s.loadErr
+}
+
+func (s *fakeFilterStore) Save(_ context.Context, filter Filter) error {
+	filter.Repositories = slices.Clone(filter.Repositories)
+	filter.Statuses = slices.Clone(filter.Statuses)
+	filter.Tags = slices.Clone(filter.Tags)
+	s.saves = append(s.saves, filter)
+	return s.saveErr
+}
+
+func TestRunLoadsFilterBestEffort(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		filter Filter
+		err    error
+		want   string
+	}{
+		{"enabled", repositoryFilter("repo-b"), nil, "1 plan"},
+		{"disabled", Filter{Repositories: []string{"repo-b"}}, nil, "filter off"},
+		{"empty", Filter{}, nil, "all repos"},
+		{"corrupt", repositoryFilter("repo-b"), errors.New("invalid JSON"), "Load filters: invalid JSON"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeFilterStore{filter: tc.filter, loadErr: tc.err}
+			var output bytes.Buffer
+			app := App{
+				Input: strings.NewReader("q"), Output: &output,
+				Terminal: &fakeTerminal{size: term.Size{Width: 120, Height: 30}, resizes: make(chan struct{})},
+				Ticker:   &fakeTicker{channel: make(chan time.Time)},
+				Collector: &fakeCollector{snapshots: []monitor.Snapshot{{Rows: []monitor.Row{
+					{RepositoryID: "repo-a", PlanID: "one", Status: "planned"},
+					{RepositoryID: "repo-b", PlanID: "two", Status: "planned"},
+				}}}},
+				FilterStore: store,
+			}
+			if err := app.Run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if store.loads != 1 || len(store.saves) != 0 || !strings.Contains(output.String(), tc.want) {
+				t.Fatalf("loads=%d saves=%+v output=%s", store.loads, store.saves, output.String())
+			}
+			if !tc.filter.Enabled || tc.err != nil {
+				if !strings.Contains(output.String(), "2 plans") {
+					t.Fatalf("default/disabled filter hid plans: %s", output.String())
+				}
+			}
+		})
+	}
+}
+
+func TestFilterMenuLoopSavesAndPreservesSelections(t *testing.T) {
+	ctx := context.Background()
+	for _, closeKey := range []term.KeyEvent{{Key: term.KeyEsc}, {Key: term.KeyRune, Rune: 'f'}} {
+		store := &fakeFilterStore{}
+		app := App{FilterStore: store}
+		state := loopState{
+			size:     term.Size{Width: 120, Height: 35},
+			selected: 1, pageSelections: map[PageID]int{PageNotes: 1},
+			snapshot: monitor.Snapshot{Rows: []monitor.Row{
+				{RepositoryID: "repo-a", PlanID: "other", Status: "planned"},
+				{RepositoryID: "repo-b", PlanID: "target", Status: "planned"},
+			}},
+			noteSnapshot: note.Snapshot{Notes: []note.CatalogNote{
+				{RepositoryID: "repo-a", ID: "other"}, {RepositoryID: "repo-b", ID: "target"},
+			}},
+		}
+		for _, r := range "Ftjj " {
+			if app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyRune, Rune: r}) {
+				t.Fatalf("menu key %q quit", r)
+			}
+		}
+		if state.filterMenu == nil || len(store.saves) != 1 || !store.saves[0].Enabled || !state.filter.IsEmpty() {
+			t.Fatalf("toggle must save immediately, criteria wait for close: filter=%+v saves=%+v", state.filter, store.saves)
+		}
+		if app.handleKey(ctx, &state, closeKey) || state.filterMenu != nil {
+			t.Fatal("menu did not close without quitting")
+		}
+		if len(store.saves) != 2 || !reflect.DeepEqual(store.saves[1], repositoryFilter("repo-b")) {
+			t.Fatalf("close saves=%+v", store.saves)
+		}
+		if row, ok := state.selectedRow(); !ok || row.PlanID != "target" || state.selected != 0 || state.noteSelection() != 0 {
+			t.Fatalf("selection not preserved: row=%+v plans=%d notes=%d", row, state.selected, state.noteSelection())
+		}
+		state.switchPage(-1)
+		for _, r := range "ft" {
+			app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyRune, Rune: r})
+		}
+		if state.filter.Enabled || !slices.Equal(state.filter.Repositories, []string{"repo-b"}) || len(store.saves) != 3 {
+			t.Fatalf("disabled filter lost criteria or save: %+v %+v", state.filter, store.saves)
+		}
+		// Ordinary edits after an immediate save must not mutate the applied filter.
+		state.filterMenu.selected = 2
+		app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyRune, Rune: ' '})
+		if !slices.Equal(state.filter.Repositories, []string{"repo-b"}) {
+			t.Fatalf("menu aliases applied filter: %+v", state.filter)
+		}
+		app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyRune, Rune: 'c'})
+		if !state.filter.IsEmpty() || state.filter.Enabled || len(store.saves) != 4 || !store.saves[3].IsEmpty() {
+			t.Fatalf("clear did not save immediately: %+v %+v", state.filter, store.saves)
+		}
+	}
+}
+
+func TestFilterMenuLoopIsModalAndOverlaysDashboard(t *testing.T) {
+	ctx := context.Background()
+	for _, page := range []PageID{PagePlans, PageNotes, PageSettings, PageDebug} {
+		t.Run(string(page), func(t *testing.T) {
+			var output bytes.Buffer
+			app := App{Output: &output}
+			state := loopState{page: page, size: term.Size{Width: 120, Height: 40}}
+			app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyRune, Rune: 'f'})
+			if page == PageSettings || page == PageDebug {
+				if state.filterMenu != nil {
+					t.Fatal("filter menu opened outside lists")
+				}
+				return
+			}
+			if state.filterMenu == nil {
+				t.Fatal("filter menu did not open")
+			}
+			for _, key := range []term.KeyEvent{
+				{Key: term.KeyTab}, {Key: term.KeyRune, Rune: '?'},
+				{Key: term.KeyRune, Rune: '/'}, {Key: term.KeyRune, Rune: 'M'},
+				{Key: term.KeyRune, Rune: 'n'}, {Key: term.KeyCtrlG},
+			} {
+				if handled, _, err := app.handleNoteCreation(ctx, &state, key); handled || err != nil {
+					t.Fatal("menu allowed note creation")
+				}
+				if handled, err := app.editSelectedNote(ctx, &state); handled || err != nil {
+					t.Fatal("menu allowed note editing")
+				}
+				app.handleKey(ctx, &state, key)
+			}
+			if state.activePage() != page || state.showShortcuts || state.searchActive || state.confirm != nil || state.selected != 0 {
+				t.Fatalf("menu leaked key: %+v", state)
+			}
+			if err := app.writeFrame(state); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(output.String(), "tao │") || !strings.Contains(output.String(), "Filters") || !strings.Contains(output.String(), "all repos") {
+				t.Fatalf("menu replaced dashboard: %s", output.String())
+			}
+			for _, key := range []term.KeyEvent{{Key: term.KeyRune, Rune: 'q'}, {Key: term.KeyRune, Rune: 'Q'}, {Key: term.KeyCtrlC}} {
+				if !app.handleKey(ctx, &state, key) {
+					t.Fatalf("menu swallowed quit %+v", key)
+				}
+			}
+		})
+	}
+}
+
+func TestFilterMenuSaveFailureKeepsMemoryAndShowsMessage(t *testing.T) {
+	store := &fakeFilterStore{saveErr: errors.New("disk full")}
+	var output bytes.Buffer
+	app := App{FilterStore: store, Output: &output}
+	state := loopState{filter: repositoryFilter("saved"), size: term.Size{Width: 100, Height: 30}}
+	for _, r := range "ftf" {
+		app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: r})
+	}
+	if state.filter.Enabled || !slices.Equal(state.filter.Repositories, []string{"saved"}) || len(store.saves) != 2 {
+		t.Fatalf("save failure lost in-memory state: %+v saves=%+v", state.filter, store.saves)
+	}
+	if err := app.writeFrame(state); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "Save filters: disk full") {
+		t.Fatalf("missing save warning: %s", output.String())
+	}
+}
+
+func TestMergeRepositoryRowRequiresSingleEnabledRepository(t *testing.T) {
+	row := monitor.Row{Kind: monitor.RowKindPlan, RepositoryID: "repo-a", RepositoryName: "alpha", RepositoryRoot: "/alpha", PlanID: "plan", Status: "planned"}
+	for _, tc := range []struct {
+		name   string
+		filter Filter
+		wantID string
+		wantOK bool
+	}{
+		{"none selected", Filter{}, "plan", true},
+		{"disabled selected", Filter{Repositories: []string{"missing"}}, "plan", true},
+		{"multi selected", Filter{Enabled: true, Repositories: []string{"repo-a", "repo-b"}}, "plan", true},
+		{"single hidden", Filter{Enabled: true, Repositories: []string{"repo-a"}, Statuses: []string{"reviewed"}}, "repository batch", true},
+		{"multi hidden", Filter{Enabled: true, Repositories: []string{"repo-a", "repo-b"}, Statuses: []string{"reviewed"}}, "", false},
+		{"missing single", repositoryFilter("missing"), "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := loopState{snapshot: monitor.Snapshot{Rows: []monitor.Row{row}}, filter: tc.filter}
+			got, ok := state.mergeRepositoryRow()
+			if ok != tc.wantOK || got.PlanID != tc.wantID || ok && (got.RepositoryID != row.RepositoryID || got.RepositoryRoot != row.RepositoryRoot) {
+				t.Fatalf("row=%+v ok=%t", got, ok)
+			}
+			state.replaceSnapshot(monitor.Snapshot{})
+			if got, ok := state.mergeRepositoryRow(); ok {
+				t.Fatalf("stale snapshot retained batch authority: %+v", got)
+			}
+		})
+	}
 }
 
 func TestRunMovesSelectionAndRestoresTerminal(t *testing.T) {
@@ -466,7 +676,7 @@ func TestLoopStateMovesAcrossSectionsAndKeepsHistoryVisible(t *testing.T) {
 	if quit := state.handleKey(term.KeyEvent{Key: term.KeyRune, Rune: 'h'}); quit {
 		t.Fatal("disabled history key unexpectedly quit")
 	}
-	if rows := visibleRows(state.snapshot.Rows, state.focusRepositoryID); len(rows) != 5 || state.selected != 4 {
+	if rows := state.visibleRows(); len(rows) != 5 || state.selected != 4 {
 		t.Fatalf("history key changed visible rows or selection: rows=%d selected=%d", len(rows), state.selected)
 	}
 }
@@ -523,7 +733,7 @@ func TestPlanAndNoteListsSupportVimStyleTopAndBottomJumps(t *testing.T) {
 	}
 }
 
-func TestRepositoryFocusComposesWithWarningsHistoryAndRefresh(t *testing.T) {
+func TestFilterComposesWithWarningsHistoryAndRefresh(t *testing.T) {
 	state := loopState{
 		snapshot: monitor.Snapshot{Rows: []monitor.Row{
 			{Kind: monitor.RowKindRepositoryWarning, RepositoryID: "repo-a", RepositoryName: "alpha", Status: "invalid"},
@@ -534,10 +744,10 @@ func TestRepositoryFocusComposesWithWarningsHistoryAndRefresh(t *testing.T) {
 		selected: 2,
 	}
 
-	state.handleKey(term.KeyEvent{Key: term.KeyRune, Rune: 'f'})
+	state.applyFilter(repositoryFilter("repo-a"))
 	row, ok := state.selectedRow()
-	if !ok || row.PlanID != "target" || state.focusRepositoryID != "repo-a" || state.selected != 1 {
-		t.Fatalf("focused selection index=%d row=%+v ok=%t focus=%q", state.selected, row, ok, state.focusRepositoryID)
+	if !ok || row.PlanID != "target" || state.selected != 1 {
+		t.Fatalf("filtered selection index=%d row=%+v ok=%t", state.selected, row, ok)
 	}
 	rows := state.visibleRows()
 	if len(rows) != 3 || rows[0].Kind != monitor.RowKindRepositoryWarning || rows[1].PlanID != "target" || rows[2].PlanID != "done" {
@@ -547,23 +757,23 @@ func TestRepositoryFocusComposesWithWarningsHistoryAndRefresh(t *testing.T) {
 	state.replaceSnapshot(monitor.Snapshot{Rows: []monitor.Row{
 		{Kind: monitor.RowKindPlan, RepositoryID: "repo-b", RepositoryName: "beta", PlanID: "other", Status: "planned"},
 	}})
-	if len(state.visibleRows()) != 0 || state.selected != 0 || state.focusRepositoryName != "alpha" {
-		t.Fatalf("empty focused refresh rows=%+v selected=%d name=%q", state.visibleRows(), state.selected, state.focusRepositoryName)
+	if len(state.visibleRows()) != 0 || state.selected != 0 || !slices.Equal(state.filter.Repositories, []string{"repo-a"}) {
+		t.Fatalf("empty filtered refresh rows=%+v selected=%d filter=%+v", state.visibleRows(), state.selected, state.filter)
 	}
 
-	state.handleKey(term.KeyEvent{Key: term.KeyRune, Rune: 'f'})
-	if state.focusRepositoryID != "" || len(state.visibleRows()) != 1 || state.visibleRows()[0].PlanID != "other" {
-		t.Fatalf("restored all-repository rows=%+v focus=%q", state.visibleRows(), state.focusRepositoryID)
+	state.applyFilter(Filter{})
+	if len(state.visibleRows()) != 1 || state.visibleRows()[0].PlanID != "other" {
+		t.Fatalf("restored all-repository rows=%+v", state.visibleRows())
 	}
 }
 
-func TestRepositoryFocusIgnoresWarningRows(t *testing.T) {
+func TestFilterMenuOpensOnWarningRows(t *testing.T) {
 	state := loopState{snapshot: monitor.Snapshot{Rows: []monitor.Row{{
 		Kind: monitor.RowKindRepositoryWarning, RepositoryID: "repo-a", RepositoryName: "alpha", Status: "invalid",
 	}}}}
 	state.handleKey(term.KeyEvent{Key: term.KeyRune, Rune: 'f'})
-	if state.focusRepositoryID != "" {
-		t.Fatalf("warning row established repository focus %q", state.focusRepositoryID)
+	if state.filterMenu == nil || !state.filter.IsEmpty() || len(state.filterMenu.repositories) != 1 {
+		t.Fatalf("warning row filter menu=%+v filter=%+v", state.filterMenu, state.filter)
 	}
 }
 
@@ -639,9 +849,9 @@ func TestNoteSelectionRefreshFocusDetailAndPlanActionIsolation(t *testing.T) {
 		t.Fatalf("plan keys requests=%+v confirm=%#v", requests, state.confirm)
 	}
 
-	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'f'})
-	if state.focusRepositoryID != "repo-b" || len(state.visibleNotes()) != 1 {
-		t.Fatalf("note focus=%q visible=%+v", state.focusRepositoryID, state.visibleNotes())
+	state.applyFilter(repositoryFilter("repo-b"))
+	if len(state.visibleNotes()) != 1 {
+		t.Fatalf("filtered notes=%+v", state.visibleNotes())
 	}
 	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyEnter})
 	if state.noteDetail == nil || state.noteDetail.ID != "target" || state.noteDetail.Text != "updated" {
@@ -902,10 +1112,10 @@ func TestNotesTabKeepsSharedFocusAndRejectsPlanOnlyKeys(t *testing.T) {
 		}}},
 	}
 	app := App{Actions: actions}
-	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'f'})
+	state.applyFilter(repositoryFilter("repo-a"))
 	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyShiftTab})
-	if state.activePage() != PageNotes || state.focusRepositoryID != "repo-a" {
-		t.Fatalf("notes page=%q focus=%q, want shared repo-a focus", state.activePage(), state.focusRepositoryID)
+	if state.activePage() != PageNotes || !slices.Equal(state.filter.Repositories, []string{"repo-a"}) {
+		t.Fatalf("notes page=%q filter=%+v, want shared repo-a filter", state.activePage(), state.filter)
 	}
 
 	for _, key := range []term.KeyEvent{
@@ -924,9 +1134,11 @@ func TestNotesTabKeepsSharedFocusAndRejectsPlanOnlyKeys(t *testing.T) {
 		t.Fatalf("notes plan isolation requests=%+v detail=%#v", requests, state.detail)
 	}
 
-	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'f'})
-	if state.focusRepositoryID != "" {
-		t.Fatalf("shared repository focus was not cleared from Notes: %q", state.focusRepositoryID)
+	for _, r := range "fcf" {
+		app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: r})
+	}
+	if !state.filter.IsEmpty() {
+		t.Fatalf("shared filter was not cleared from Notes: %+v", state.filter)
 	}
 	if quit := app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'q'}); !quit {
 		t.Fatal("q did not quit from Notes")
@@ -1217,7 +1429,7 @@ func TestRootQuitKeysAndHistoryDefault(t *testing.T) {
 		}},
 		now: func() time.Time { return now },
 	}
-	if rows := visibleRows(state.snapshot.Rows, state.focusRepositoryID); len(rows) != 3 || rows[0].PlanID != "active" || rows[1].PlanID != "done" || rows[2].PlanID != "abandoned" {
+	if rows := state.visibleRows(); len(rows) != 3 || rows[0].PlanID != "active" || rows[1].PlanID != "done" || rows[2].PlanID != "abandoned" {
 		t.Fatalf("initial visible rows = %+v, want active and history plans", rows)
 	}
 	if quit := state.handleKey(term.KeyEvent{Key: term.KeyBackspace}); quit {

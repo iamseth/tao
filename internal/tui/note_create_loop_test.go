@@ -30,6 +30,25 @@ type noteCollectorFunc func(context.Context) (note.Snapshot, error)
 
 func (f noteCollectorFunc) Collect(ctx context.Context) (note.Snapshot, error) { return f(ctx) }
 
+func TestNoteCreationFilterRepositoryRouting(t *testing.T) {
+	items := []NoteRepository{{ID: "repo-a"}, {ID: "repo-b"}}
+	for _, tc := range []struct {
+		filter Filter
+		want   string
+	}{
+		{Filter{}, ""},
+		{Filter{Repositories: []string{"repo-b"}}, ""},
+		{Filter{Enabled: true, Repositories: []string{"repo-a", "repo-b"}}, ""},
+		{Filter{Enabled: true, Statuses: []string{"planned"}, Tags: []string{"tag"}}, ""},
+		{Filter{Enabled: true, Repositories: []string{"repo-b"}, Tags: []string{"tag"}}, "repo-b"},
+	} {
+		target, picker, err := noteCreationTarget(tc.filter, items, nil)
+		if err != nil || target.ID != tc.want || (picker != nil) != (tc.want == "") {
+			t.Fatalf("filter=%+v target=%+v picker=%+v err=%v", tc.filter, target, picker, err)
+		}
+	}
+}
+
 func TestRunNoteCreationDispatchAndExclusiveEditorInput(t *testing.T) {
 	for _, tc := range []struct {
 		name, keys, target string
@@ -38,8 +57,8 @@ func TestRunNoteCreationDispatchAndExclusiveEditorInput(t *testing.T) {
 	}{
 		{"empty picker", "\x1b[Zn\rXq", "repo-a", 1, "Created note created."},
 		{"choose other repo", "\x1b[Znj\rXq", "repo-b", 1, "Created note created."},
-		{"focused", "\x1b[ZfnXq", "repo-a", 1, "Created note created."},
-		{"focused filtered empty", "\x1b[Zf/absent\rnXq", "repo-a", 1, "Not visible under current filters"},
+		{"focused", "\x1b[Zftj fnXq", "repo-a", 1, "Created note created."},
+		{"focused filtered empty", "\x1b[Zftj f/absent\rnXq", "repo-a", 1, "Not visible under current filters"},
 		{"filtered empty picker", "\x1b[Z/absent\rnj\rXq", "repo-b", 1, "Not visible under current filters"},
 		{"picker isolates actions", "\x1b[Zn\x07ndDcf03?\t/\rXq", "repo-a", 1, "Created note created."},
 		{"cancel picker", "\x1b[Zn\x7fq", "", 0, "Note creation cancelled."},
@@ -194,7 +213,7 @@ func TestNoteCreationUnavailableCatalog(t *testing.T) {
 		{name: "no lister", noLister: true, want: "unavailable"},
 		{name: "empty", want: "tao init"},
 		{name: "error", err: errors.New(strings.Repeat("private\x1b", 500)), want: "tao repo list"},
-		{name: "stale focus", focus: "missing", items: []NoteRepository{{ID: "repo"}}, want: "clear repository focus"},
+		{name: "stale focus", focus: "missing", items: []NoteRepository{{ID: "repo"}}, want: "clear repository filters"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			app := App{NoteCreator: noteCreatorFunc(func(context.Context, string) (note.CatalogNote, bool, error) {
@@ -207,7 +226,7 @@ func TestNoteCreationUnavailableCatalog(t *testing.T) {
 			if tc.noLister {
 				app.NoteRepositories = nil
 			}
-			state := loopState{page: PageNotes, focusRepositoryID: tc.focus}
+			state := loopState{page: PageNotes, filter: repositoryFilter(tc.focus)}
 			handled, quit, err := app.handleNoteCreation(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'n'})
 			if !handled || quit || err != nil || state.notePicker != nil || !strings.Contains(state.noteEditMessage, tc.want) || len(state.noteEditMessage) > 250 {
 				t.Fatalf("handled=%v quit=%v err=%v state=%+v", handled, quit, err, state)

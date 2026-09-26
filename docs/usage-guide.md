@@ -137,15 +137,21 @@ or pasteable output.
 The dashboard opens on **Plans**. Use `Tab` or the horizontal arrows to move
 among **Plans**, **Notes**, **Settings**, and **Debug**; use `j`/`k` or the
 vertical arrows to select rows. `Page Up` and `Page Down` move by a viewport on
-long pages. `Enter` opens details, `Esc` returns, and `f` toggles repository
-focus on Plans and Notes. On either list, `gg` jumps to the first visible item
-and `G` jumps to the last. In plan detail, `Tab` and `Shift+Tab` switch detail
+long pages. `Enter` opens details and `Esc` returns. On Plans and Notes, `f`
+opens the filter menu for repositories, plan statuses, and note tags (tags apply
+only to notes). Use `Space`/`Enter` to toggle a selection, `t` to enable or disable
+the whole filter without losing its configuration, `c` to clear all criteria,
+and `Esc` to close the menu. The shared filter and its enabled state persist
+across sessions in `<DataHome>/ui-filters.json` under the Tao data home and
+combine with `/` search, which remains session-only. On either list, `gg` jumps
+to the first visible item and `G` jumps to the last. In plan detail, `Tab` and `Shift+Tab` switch detail
 tabs while left and right open the previous or next visible plan. Notes are grouped by numeric tier,
 with lower tiers first and untiered notes last; their rows show all non-tier tags
 plus both creation age and update recency. On the Notes list, press `n` to
-capture a new note, even when the list is empty or filtered. Active repository
-focus chooses the destination; without focus, select a registered repository
-with `Enter` or cancel with `Esc`/`Backspace`. The editor uses `$EDITOR` (or
+capture a new note, even when the list is empty or filtered. When the filter is
+enabled with exactly one repository selected, that repository is the destination;
+otherwise, use the repository picker to select a registered repository with
+`Enter` or cancel with `Esc`/`Backspace`. The editor uses `$EDITOR` (or
 `nvim` when unset); write a body and optional tags, then save and quit. A blank
 body cancels without creating a note. Saving preserves filters and selects the
 new note if visible; feedback includes its ID even if hidden or refresh fails.
@@ -160,8 +166,10 @@ displayed with up to 15 completed or abandoned plans. **Now** contains
 in-progress, blocked, reviewed, and other plans with an immediate action
 such as monitor, approve, or merge. **Next** contains planned work. On Plans, the
 principal actions are run (`r`), approve (`a`), merge one (`m`), and merge the
-repository's approved set (`M`); confirmations and the underlying commands still
-enforce every normal gate. Settings can change a repository's pull-request
+repository's approved set (`M`). Batch merge uses the filtered repository only
+when the filter is enabled with exactly one repository selected; otherwise it
+uses the selected row's repository. Confirmations and the underlying commands
+still enforce every normal gate. Settings can change a repository's pull-request
 default, while Debug remains read-only.
 
 Treat **NEXT**, ordering, heartbeats, and `stalled?`/`crashed?` labels as advice

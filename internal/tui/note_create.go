@@ -45,7 +45,7 @@ func (a App) handleNoteCreation(ctx context.Context, state *loopState, key term.
 		}
 	} else {
 		if key.Key != term.KeyRune || key.Rune != 'n' || state.activePage() != PageNotes ||
-			state.showShortcuts || state.searchActive || state.confirm != nil || state.detail != nil || state.noteDetail != nil {
+			state.showShortcuts || state.searchActive || state.confirm != nil || state.detail != nil || state.noteDetail != nil || state.filterMenu != nil {
 			return false, false, nil
 		}
 		state.interruptEscape()
@@ -56,7 +56,7 @@ func (a App) handleNoteCreation(ctx context.Context, state *loopState, key term.
 		}
 		repositories, inventoryErr := a.NoteRepositories.ListNoteRepositories(ctx)
 		var picker *noteRepositoryPicker
-		target, picker, err = noteCreationTarget(state.focusRepositoryID, repositories, inventoryErr)
+		target, picker, err = noteCreationTarget(state.filter, repositories, inventoryErr)
 		if err != nil {
 			state.setNoteEditMessage("Note creation unavailable: " + err.Error())
 			return true, false, nil //nolint:nilerr // Routing failures are nonfatal dashboard feedback.
@@ -103,7 +103,7 @@ func (a App) createNote(ctx context.Context, state *loopState, target NoteReposi
 			return nil
 		}
 	}
-	state.setNoteEditMessage(message + " Not visible under current filters; clear search or repository focus.")
+	state.setNoteEditMessage(message + " Not visible under current filters; clear search or filters.")
 	return nil
 }
 
@@ -115,18 +115,18 @@ type NoteRepository struct {
 }
 
 // noteCreationTarget never infers a destination from CWD or a selected note.
-// Even a singleton inventory requires a picker when repository focus is unset.
-func noteCreationTarget(focusID string, repositories []NoteRepository, inventoryErr error) (NoteRepository, *noteRepositoryPicker, error) {
+// Even a singleton inventory requires a picker without one enabled repository.
+func noteCreationTarget(filter Filter, repositories []NoteRepository, inventoryErr error) (NoteRepository, *noteRepositoryPicker, error) {
 	if inventoryErr != nil {
 		return NoteRepository{}, nil, errors.New("repository inventory unavailable; retry or inspect tao repo list")
 	}
-	if focusID != "" {
+	if filter.Enabled && len(filter.Repositories) == 1 {
 		for _, repository := range repositories {
-			if repository.ID == focusID {
+			if repository.ID == filter.Repositories[0] {
 				return repository, nil, nil
 			}
 		}
-		return NoteRepository{}, nil, errors.New("focused repository is no longer available; clear repository focus and try again")
+		return NoteRepository{}, nil, errors.New("filtered repository is no longer available; clear repository filters and try again")
 	}
 	if len(repositories) == 0 {
 		return NoteRepository{}, nil, errors.New("no registered repositories; register a repository with tao init before creating a note")

@@ -48,9 +48,13 @@ type noteTierBucket struct {
 }
 
 func visibleNotes(snapshot note.Snapshot, focusRepositoryID string) []note.CatalogNote {
+	return visibleFilteredNotes(snapshot, repositoryFilter(focusRepositoryID))
+}
+
+func visibleFilteredNotes(snapshot note.Snapshot, filter Filter) []note.CatalogNote {
 	visible := make([]note.CatalogNote, 0, len(snapshot.Notes))
 	for _, item := range snapshot.Notes {
-		if focusRepositoryID == "" || item.RepositoryID == focusRepositoryID {
+		if filter.MatchesNote(item) {
 			visible = append(visible, item)
 		}
 	}
@@ -76,22 +80,22 @@ func noteTierRank(item note.CatalogNote) int {
 	return rank
 }
 
-func visibleNoteWarnings(snapshot note.Snapshot, focusRepositoryID string) []note.CatalogWarning {
-	if focusRepositoryID == "" {
+func visibleNoteWarnings(snapshot note.Snapshot, filter Filter) []note.CatalogWarning {
+	if !filter.Enabled || len(filter.Repositories) == 0 {
 		return snapshot.Warnings
 	}
 	visible := make([]note.CatalogWarning, 0, len(snapshot.Warnings))
 	for _, warning := range snapshot.Warnings {
-		if warning.RepositoryID == focusRepositoryID {
+		if matchesFilterValue(filter.Repositories, warning.RepositoryID) {
 			visible = append(visible, warning)
 		}
 	}
 	return visible
 }
 
-func renderNotesPage(snapshot note.Snapshot, selected int, focusRepositoryID string, now time.Time, model Model) (lines []string, selectedLine int, metadata tableViewportMetadata) {
-	items := visibleNotes(snapshot, focusRepositoryID)
-	warnings := visibleNoteWarnings(snapshot, focusRepositoryID)
+func renderNotesPage(snapshot note.Snapshot, selected int, now time.Time, model Model) (lines []string, selectedLine int, metadata tableViewportMetadata) {
+	items := visibleFilteredNotes(snapshot, model.Filter)
+	warnings := visibleNoteWarnings(snapshot, model.Filter)
 	selectedLine = -1
 	if len(items) == 0 {
 		sectionWidth := dashboardSectionWidth(model, PageNotes, "OPEN NOTES", 0)

@@ -13,10 +13,34 @@ import (
 	"github.com/iamseth/tao/internal/term/cells"
 )
 
+func TestFilterContextAndDebugLabels(t *testing.T) {
+	for _, tc := range []struct {
+		filter Filter
+		want   string
+	}{
+		{Filter{}, "all repos"},
+		{Filter{Enabled: true, Statuses: []string{"planned"}}, "all repos"},
+		{repositoryFilter("repo"), "repo alpha"},
+		{repositoryFilter("missing"), "repo missing"},
+		{Filter{Enabled: true, Repositories: []string{"repo", "other"}}, "2 repos"},
+		{Filter{Repositories: []string{"repo"}}, "filter off"},
+		{Filter{Tags: []string{"tag"}}, "filter off"},
+	} {
+		model := Model{Filter: tc.filter, NoteSnapshot: note.Snapshot{Notes: []note.CatalogNote{{RepositoryID: "repo", RepositoryName: "alpha"}}}}
+		if got := renderGlobalContext(model); !strings.HasPrefix(got, tc.want+"  agent ") {
+			t.Fatalf("filter=%+v context=%q want=%q", tc.filter, got, tc.want)
+		}
+		if got := debugFocusLabel(model); !strings.Contains(got, tc.want) || !strings.Contains(got, fmt.Sprintf("%d tags", len(tc.filter.Tags))) {
+			t.Fatalf("debug label=%q filter=%+v", got, tc.filter)
+		}
+	}
+}
+
 func TestRenderFrameStylesTabsSummaryAndContextWithoutRule(t *testing.T) {
 	model := Model{
 		Page: PageNotes, Width: 70, Profile: ProfileANSI16,
-		FocusRepositoryID: "repo", FocusRepositoryName: "alpha",
+		Filter:        repositoryFilter("repo"),
+		Snapshot:      monitor.Snapshot{Rows: []monitor.Row{{RepositoryID: "repo", RepositoryName: "alpha"}}},
 		DebugSnapshot: DebugSnapshot{SelectedAgent: "pi"},
 	}
 	summary := &frameSummary{primary: "4 open notes", attentionCount: 2, attentionNoun: "warnings"}
@@ -47,9 +71,9 @@ func TestRenderFrameStylesTabsSummaryAndContextWithoutRule(t *testing.T) {
 func TestRenderFrameCompactsLongFocusedRepositoryAtSeventyColumns(t *testing.T) {
 	model := Model{
 		Page: PagePlans, Width: 70,
-		FocusRepositoryID:   "repo",
-		FocusRepositoryName: "a-very-long-focused-repository-name-that-cannot-fit",
-		DebugSnapshot:       DebugSnapshot{SelectedAgent: "pi"},
+		Filter:        repositoryFilter("repo"),
+		Snapshot:      monitor.Snapshot{Rows: []monitor.Row{{RepositoryID: "repo", RepositoryName: "a-very-long-focused-repository-name-that-cannot-fit"}}},
+		DebugSnapshot: DebugSnapshot{SelectedAgent: "pi"},
 	}
 
 	lines := renderFrame(model, PagePlans)
@@ -62,7 +86,7 @@ func TestRenderFrameCompactsLongFocusedRepositoryAtSeventyColumns(t *testing.T) 
 	if !strings.HasSuffix(lines[0], "  agent pi  ●") {
 		t.Fatalf("compacted context lost agent or health marker: %q", lines[0])
 	}
-	if strings.Contains(lines[0], model.FocusRepositoryName) {
+	if strings.Contains(lines[0], model.Snapshot.Rows[0].RepositoryName) {
 		t.Fatalf("focused repository name was not truncated: %q", lines[0])
 	}
 }

@@ -29,13 +29,13 @@ func TestNoteCreationTarget(t *testing.T) {
 		{name: "one still requires choice", items: repositories[:1], wantCount: 1},
 		{name: "multiple", items: repositories, wantCount: 2},
 		{name: "exact focus", focus: "repo-b", items: repositories, wantID: "repo-b"},
-		{name: "prefix not focus", focus: "repo", items: repositories, wantError: "clear repository focus"},
-		{name: "name not focus", focus: "Alpha", items: repositories, wantError: "clear repository focus"},
-		{name: "stale focus", focus: "removed", items: repositories, wantError: "clear repository focus"},
-		{name: "stale focus empty inventory", focus: "removed", wantError: "clear repository focus"},
+		{name: "prefix not focus", focus: "repo", items: repositories, wantError: "clear repository filters"},
+		{name: "name not focus", focus: "Alpha", items: repositories, wantError: "clear repository filters"},
+		{name: "stale focus", focus: "removed", items: repositories, wantError: "clear repository filters"},
+		{name: "stale focus empty inventory", focus: "removed", wantError: "clear repository filters"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			target, picker, err := noteCreationTarget(tc.focus, tc.items, tc.err)
+			target, picker, err := noteCreationTarget(repositoryFilter(tc.focus), tc.items, tc.err)
 			if tc.wantError != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantError) || strings.Contains(err.Error(), "private") {
 					t.Fatalf("error = %v, want actionable %q", err, tc.wantError)
@@ -67,7 +67,7 @@ func TestNoteRepositoryPickerInventoryIndependentAndDeterministic(t *testing.T) 
 		{ID: "duplicate-a", Name: "Same"},
 	}
 	original := append([]NoteRepository(nil), items...)
-	_, picker, err := noteCreationTarget("", items, nil)
+	_, picker, err := noteCreationTarget(Filter{}, items, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestNoteRepositoryPickerInventoryIndependentAndDeterministic(t *testing.T) 
 	if !reflect.DeepEqual(picker.items, want) || !reflect.DeepEqual(items, original) {
 		t.Fatalf("sorted items = %+v; input = %+v", picker.items, items)
 	}
-	_, reversed, _ := noteCreationTarget("", []NoteRepository{items[2], items[0], items[1]}, nil)
+	_, reversed, _ := noteCreationTarget(Filter{}, []NoteRepository{items[2], items[0], items[1]}, nil)
 	if !reflect.DeepEqual(picker.items, reversed.items) {
 		t.Fatal("inventory order changed picker order")
 	}

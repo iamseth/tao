@@ -17,6 +17,7 @@ import (
 	"github.com/iamseth/tao/internal/taodata"
 	"github.com/iamseth/tao/internal/term"
 	"github.com/iamseth/tao/internal/tui"
+	"github.com/iamseth/tao/internal/uistate"
 )
 
 const defaultUICompletedWindow = 168 * time.Hour
@@ -138,10 +139,48 @@ func (a App) ui(ctx context.Context, args []string) error {
 		Clipboard:        clipboard,
 		Debug:            newUIDebugCollector(a, executable),
 		Settings:         newUISettingsService(a),
+		FilterStore:      newUIFilterStore(),
 		Actions:          actions,
 		Inspector:        newUIDetailInspector(a.uiCommandRunner()),
 		Now:              a.now,
 	}).Run(signalCtx)
+}
+
+type uiFilterStore struct {
+	store uistate.Store
+}
+
+func newUIFilterStore() tui.FilterStore {
+	return uiFilterStore{store: uistate.Store{DataHome: taodata.DataHome()}}
+}
+
+func (s uiFilterStore) Load(ctx context.Context) (tui.Filter, error) {
+	if err := ctx.Err(); err != nil {
+		return tui.Filter{}, err
+	}
+	filters, err := s.store.Load()
+	if err != nil {
+		return tui.Filter{}, err
+	}
+	return tui.Filter{
+		Enabled:      filters.Enabled,
+		Repositories: filters.Repositories,
+		Statuses:     filters.Statuses,
+		Tags:         filters.Tags,
+	}, nil
+}
+
+func (s uiFilterStore) Save(ctx context.Context, filter tui.Filter) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.store.Save(uistate.Filters{
+		Version:      1,
+		Enabled:      filter.Enabled,
+		Repositories: filter.Repositories,
+		Statuses:     filter.Statuses,
+		Tags:         filter.Tags,
+	})
 }
 
 func (a App) newUINoteCollector() (tui.NoteSnapshotCollector, error) {

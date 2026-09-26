@@ -51,7 +51,7 @@ func renderDebugPage(model Model) []string {
 	lines = append(lines, "", debugSectionRule(model, "UI"))
 	appendDebugValue(&lines, "viewport", fmt.Sprintf("%dx%d", model.Width, model.Height))
 	appendDebugValue(&lines, "color", model.Profile.String())
-	appendDebugValue(&lines, "repository focus", debugFocusLabel(model))
+	appendDebugValue(&lines, "filter", debugFocusLabel(model))
 	appendDebugValue(&lines, "search", rowlabel.DisplayValue(normalizedSearchQuery(model.SearchQuery)))
 	appendDebugValue(&lines, "plan rows", fmt.Sprintf("%d", len(model.Snapshot.Rows)))
 	appendDebugValue(&lines, "open notes", fmt.Sprintf("%d", len(model.NoteSnapshot.Notes)))
@@ -178,13 +178,8 @@ func appendDebugTime(lines []string, label string, value time.Time) []string {
 }
 
 func debugFocusLabel(model Model) string {
-	if model.FocusRepositoryID == "" {
-		return "all"
-	}
-	if strings.TrimSpace(model.FocusRepositoryName) != "" {
-		return model.FocusRepositoryName + " (" + model.FocusRepositoryID + ")"
-	}
-	return model.FocusRepositoryID
+	return fmt.Sprintf("%s; %d repositories, %d statuses, %d tags", filterRepositoryLabel(model),
+		len(model.Filter.Repositories), len(model.Filter.Statuses), len(model.Filter.Tags))
 }
 
 func debugRepositoryCount(snapshot monitor.Snapshot, notes note.Snapshot) int {

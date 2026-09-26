@@ -137,7 +137,7 @@ func TestDebugPageScrollAndShortcuts(t *testing.T) {
 			t.Fatalf("debug shortcuts missing %q:\n%s", want, frame)
 		}
 	}
-	for _, unavailable := range []string{"Run selected plan", "Search plans and notes", "Cycle repository filter"} {
+	for _, unavailable := range []string{"Run selected plan", "Search plans and notes", "Open filter menu"} {
 		if strings.Contains(frame, unavailable) {
 			t.Fatalf("debug shortcuts contain unavailable action %q:\n%s", unavailable, frame)
 		}

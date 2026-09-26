@@ -86,6 +86,7 @@ type App struct {
 	Clipboard        Clipboard
 	Debug            DebugSnapshotCollector
 	Settings         SettingsService
+	FilterStore      FilterStore // Nil means in-memory only.
 	Actions          *Actions
 	Details          DetailRepository
 	Inspector        DetailInspector
@@ -104,32 +105,32 @@ type confirmPrompt struct {
 }
 
 type loopState struct {
-	snapshot            monitor.Snapshot
-	noteSnapshot        note.Snapshot
-	debugSnapshot       DebugSnapshot
-	settingsSnapshot    SettingsSnapshot
-	page                PageID
-	selected            int
-	pageSelections      map[PageID]int
-	size                term.Size
-	focusRepositoryID   string
-	focusRepositoryName string
-	focusRepositoryRoot string
-	profile             Profile
-	showShortcuts       bool
-	searchQuery         string
-	searchActive        bool
-	debugOffset         int
-	settingsMessage     string
-	confirm             *confirmPrompt
-	detail              *detailState
-	noteDetail          *note.CatalogNote
-	noteDetailOffset    int
-	noteEditMessage     string
-	notePicker          *noteRepositoryPicker
-	now                 func() time.Time
-	lastRootEscape      time.Time
-	listTopPending      bool
+	snapshot         monitor.Snapshot
+	noteSnapshot     note.Snapshot
+	debugSnapshot    DebugSnapshot
+	settingsSnapshot SettingsSnapshot
+	page             PageID
+	selected         int
+	pageSelections   map[PageID]int
+	size             term.Size
+	filter           Filter
+	filterMenu       *filterMenu
+	filterMessage    string
+	profile          Profile
+	showShortcuts    bool
+	searchQuery      string
+	searchActive     bool
+	debugOffset      int
+	settingsMessage  string
+	confirm          *confirmPrompt
+	detail           *detailState
+	noteDetail       *note.CatalogNote
+	noteDetailOffset int
+	noteEditMessage  string
+	notePicker       *noteRepositoryPicker
+	now              func() time.Time
+	lastRootEscape   time.Time
+	listTopPending   bool
 }
 
 // Run enters terminal mode and processes input, refresh, resize, and
@@ -198,6 +199,14 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 		size:             size,
 		profile:          outputSupportsColor(a.Output),
 		now:              a.Now,
+	}
+	if a.FilterStore != nil {
+		filter, err := a.FilterStore.Load(ctx)
+		if err != nil {
+			state.filterMessage = "Load filters: " + err.Error()
+		} else {
+			state.filter = filter
+		}
 	}
 	state.clampSelection()
 	if err := a.writeFrame(state); err != nil {
@@ -375,7 +384,7 @@ func (a App) collectNotes(ctx context.Context) (note.Snapshot, error) {
 }
 
 func (a App) editSelectedNote(ctx context.Context, state *loopState) (bool, error) {
-	if state.showShortcuts || state.searchActive || state.confirm != nil || state.detail != nil || state.notePicker != nil {
+	if state.showShortcuts || state.searchActive || state.confirm != nil || state.detail != nil || state.notePicker != nil || state.filterMenu != nil {
 		return false, nil
 	}
 	var item note.CatalogNote
@@ -564,29 +573,35 @@ func (a App) writeFrame(state loopState) error {
 			Inspection:      state.detail.inspection,
 		}))
 	default:
-		frame.WriteString(Render(Model{
-			Snapshot:            state.snapshot,
-			NoteSnapshot:        state.noteSnapshot,
-			DebugSnapshot:       state.debugSnapshot,
-			SettingsSnapshot:    state.settingsSnapshot,
-			Page:                state.activePage(),
-			Selected:            state.selected,
-			Width:               state.size.Width,
-			Height:              state.size.Height,
-			Now:                 state.currentTime(),
-			FocusRepositoryID:   state.focusRepositoryID,
-			FocusRepositoryName: state.focusRepositoryName,
-			Profile:             state.profile,
-			ShowShortcuts:       state.showShortcuts,
-			SearchQuery:         state.searchQuery,
-			SearchActive:        state.searchActive,
-			DebugOffset:         state.debugOffset,
-			ConfirmMessage:      state.confirmMessage(),
-			ActionLabels:        a.Actions.labels(),
-			ActionMessage:       a.Actions.statusMessage(),
-			NoteMessage:         state.noteEditMessage,
-			SettingsMessage:     state.settingsMessage,
-		}))
+		rendered := Render(Model{
+			Snapshot:         state.snapshot,
+			NoteSnapshot:     state.noteSnapshot,
+			DebugSnapshot:    state.debugSnapshot,
+			SettingsSnapshot: state.settingsSnapshot,
+			Page:             state.activePage(),
+			Selected:         state.selected,
+			Width:            state.size.Width,
+			Height:           state.size.Height,
+			Now:              state.currentTime(),
+			Filter:           state.filter,
+			FilterMessage:    state.filterMessage,
+			Profile:          state.profile,
+			ShowShortcuts:    state.showShortcuts,
+			SearchQuery:      state.searchQuery,
+			SearchActive:     state.searchActive,
+			DebugOffset:      state.debugOffset,
+			ConfirmMessage:   state.confirmMessage(),
+			ActionLabels:     a.Actions.labels(),
+			ActionMessage:    a.Actions.statusMessage(),
+			NoteMessage:      state.noteEditMessage,
+			SettingsMessage:  state.settingsMessage,
+		})
+		if state.filterMenu != nil {
+			lines := strings.Split(strings.TrimPrefix(rendered, clearScreenSequence), "\n")
+			lines = overlayBox(lines, state.filterMenu.render(state.size, state.profile), state.size.Width, state.size.Height)
+			rendered = clearScreenSequence + strings.Join(lines, "\n")
+		}
+		frame.WriteString(rendered)
 	}
 	contents := frame.Bytes()
 	n, err := a.Output.Write(contents)
@@ -621,6 +636,24 @@ func readInput(ctx context.Context, input io.Reader, results chan<- inputResult)
 }
 
 func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent) bool {
+	if state.filterMenu != nil {
+		action, change := state.filterMenu.handleKey(key, state.size)
+		if action == filterMenuClosed || change.EnabledChanged || change.Cleared {
+			state.applyFilter(state.filterMenu.filter)
+			if a.FilterStore != nil {
+				if err := a.FilterStore.Save(ctx, state.filter); err != nil {
+					state.filterMessage = "Save filters: " + err.Error()
+				} else {
+					state.filterMessage = ""
+				}
+			}
+		}
+		if action == filterMenuClosed {
+			state.filterMenu = nil
+		}
+		state.interruptEscape()
+		return action == filterMenuQuit
+	}
 	if key.Key == term.KeyCtrlC {
 		return true
 	}
@@ -1203,7 +1236,8 @@ func (s *loopState) handleKey(key term.KeyEvent) bool {
 			s.selected++
 		}
 	case (s.activePage() == PagePlans || s.activePage() == PageNotes) && key.Key == term.KeyRune && (key.Rune == 'f' || key.Rune == 'F'):
-		s.toggleRepositoryFocus()
+		s.filterMenu = newFilterMenu(s.filter, s.snapshot, s.noteSnapshot)
+		s.listTopPending = false
 	}
 	return false
 }
@@ -1336,7 +1370,7 @@ func (s *loopState) restoreSettingsSelection(repositoryID string) {
 
 func (s loopState) visibleRows() []monitor.Row {
 	rows := FilterPlanRows(s.snapshot.Rows, s.searchQuery)
-	return visibleRows(rows, s.focusRepositoryID)
+	return visibleRows(rows, s.filter)
 }
 
 func (s loopState) planSelection() int {
@@ -1355,7 +1389,7 @@ func (s loopState) noteSelection() int {
 
 func (s loopState) visibleNotes() []note.CatalogNote {
 	snapshot := FilterNoteSnapshot(s.noteSnapshot, s.searchQuery)
-	return visibleNotes(snapshot, s.focusRepositoryID)
+	return visibleFilteredNotes(snapshot, s.filter)
 }
 
 func (s loopState) noteAt(index int) (note.CatalogNote, bool) {
@@ -1410,88 +1444,46 @@ func (s loopState) confirmMessage() string {
 func (s *loopState) replaceSnapshot(snapshot monitor.Snapshot) {
 	selected, preserve := s.planRowAt(s.planSelection())
 	s.snapshot = snapshot
-	if s.focusRepositoryID != "" {
-		for _, row := range snapshot.Rows {
-			if row.RepositoryID == s.focusRepositoryID {
-				s.updateFocusMetadata(row.RepositoryName, row.RepositoryRoot)
-				break
-			}
-		}
-	}
 	s.restorePlanSelection(selected, preserve)
 }
 
 func (s *loopState) replaceNoteSnapshot(snapshot note.Snapshot) {
 	selected, preserve := s.noteAt(s.noteSelection())
 	s.noteSnapshot = snapshot
-	if s.focusRepositoryID != "" {
-		for _, item := range snapshot.Notes {
-			if item.RepositoryID == s.focusRepositoryID {
-				s.updateFocusMetadata(item.RepositoryName, item.RepositoryRoot)
-				break
-			}
-		}
-	}
 	s.restoreNoteSelection(selected, preserve)
 }
 
-func (s *loopState) updateFocusMetadata(name, root string) {
-	if name != "" {
-		s.focusRepositoryName = name
-	}
-	if root != "" {
-		s.focusRepositoryRoot = root
-	}
-}
-
-func (s *loopState) toggleRepositoryFocus() {
+func (s *loopState) applyFilter(filter Filter) {
 	planSelected, preservePlan := s.planRowAt(s.planSelection())
 	noteSelected, preserveNote := s.noteAt(s.noteSelection())
-	if s.focusRepositoryID != "" {
-		s.focusRepositoryID = ""
-		s.focusRepositoryName = ""
-		s.focusRepositoryRoot = ""
-		s.restorePlanSelection(planSelected, preservePlan)
-		s.restoreNoteSelection(noteSelected, preserveNote)
-		return
-	}
-	if s.activePage() == PageNotes {
-		if !preserveNote || noteSelected.RepositoryID == "" || noteSelected.ID == "" {
-			return
-		}
-		s.focusRepositoryID = noteSelected.RepositoryID
-		s.focusRepositoryName = noteSelected.RepositoryName
-		s.focusRepositoryRoot = noteSelected.RepositoryRoot
-	} else {
-		if !preservePlan || planSelected.Kind == monitor.RowKindRepositoryWarning || planSelected.RepositoryID == "" || planSelected.PlanID == "" {
-			return
-		}
-		s.focusRepositoryID = planSelected.RepositoryID
-		s.focusRepositoryName = planSelected.RepositoryName
-		s.focusRepositoryRoot = planSelected.RepositoryRoot
-	}
+	// The menu continues editing its own slices after immediate saves.
+	filter.Repositories = append([]string(nil), filter.Repositories...)
+	filter.Statuses = append([]string(nil), filter.Statuses...)
+	filter.Tags = append([]string(nil), filter.Tags...)
+	s.filter = filter
 	s.restorePlanSelection(planSelected, preservePlan)
 	s.restoreNoteSelection(noteSelected, preserveNote)
 }
 
 func (s loopState) mergeRepositoryRow() (monitor.Row, bool) {
 	selected, ok := s.selectedRow()
-	if s.focusRepositoryID == "" || (ok && selected.Status == plan.StatusAbandoned) {
+	if !s.filter.Enabled || len(s.filter.Repositories) != 1 || (ok && selected.Status == plan.StatusAbandoned) {
 		return selected, ok
 	}
-	if ok && selected.RepositoryID == s.focusRepositoryID && actionableRow(selected) {
+	id := s.filter.Repositories[0]
+	if ok && selected.RepositoryID == id && actionableRow(selected) {
 		return selected, true
 	}
-	if s.focusRepositoryRoot == "" {
-		return monitor.Row{}, false
+	for _, row := range s.snapshot.Rows {
+		if row.RepositoryID == id && row.RepositoryRoot != "" {
+			return monitor.Row{
+				Kind: monitor.RowKindPlan, RepositoryID: id,
+				RepositoryName: row.RepositoryName, RepositoryRoot: row.RepositoryRoot,
+				PlanID: "repository batch",
+			}, true
+		}
 	}
-	return monitor.Row{
-		Kind:           monitor.RowKindPlan,
-		RepositoryID:   s.focusRepositoryID,
-		RepositoryName: s.focusRepositoryName,
-		RepositoryRoot: s.focusRepositoryRoot,
-		PlanID:         "repository batch",
-	}, true
+	return monitor.Row{}, false
 }
 
 func (s *loopState) restoreNoteSelection(selected note.CatalogNote, preserve bool) {
@@ -1616,16 +1608,15 @@ func (s *loopState) clampSelection() {
 
 func (s loopState) debugPageMaxOffset() int {
 	return debugMaxOffset(Model{
-		Snapshot:            s.snapshot,
-		NoteSnapshot:        s.noteSnapshot,
-		DebugSnapshot:       s.debugSnapshot,
-		Width:               s.size.Width,
-		Height:              s.size.Height,
-		Profile:             s.profile,
-		SearchQuery:         s.searchQuery,
-		SearchActive:        s.searchActive,
-		FocusRepositoryID:   s.focusRepositoryID,
-		FocusRepositoryName: s.focusRepositoryName,
+		Snapshot:      s.snapshot,
+		NoteSnapshot:  s.noteSnapshot,
+		DebugSnapshot: s.debugSnapshot,
+		Width:         s.size.Width,
+		Height:        s.size.Height,
+		Profile:       s.profile,
+		SearchQuery:   s.searchQuery,
+		SearchActive:  s.searchActive,
+		Filter:        s.filter,
 	})
 }
 

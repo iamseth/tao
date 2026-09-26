@@ -20,27 +20,27 @@ const (
 
 // Model contains the render-neutral state for one UI frame.
 type Model struct {
-	Snapshot            monitor.Snapshot
-	NoteSnapshot        note.Snapshot
-	DebugSnapshot       DebugSnapshot
-	SettingsSnapshot    SettingsSnapshot
-	Page                PageID
-	Selected            int
-	Width               int
-	Height              int
-	Now                 time.Time
-	FocusRepositoryID   string
-	FocusRepositoryName string
-	Profile             Profile
-	ShowShortcuts       bool
-	SearchQuery         string
-	SearchActive        bool
-	DebugOffset         int
-	ConfirmMessage      string
-	ActionLabels        map[string]string
-	ActionMessage       string
-	NoteMessage         string
-	SettingsMessage     string
+	Snapshot         monitor.Snapshot
+	NoteSnapshot     note.Snapshot
+	DebugSnapshot    DebugSnapshot
+	SettingsSnapshot SettingsSnapshot
+	Page             PageID
+	Selected         int
+	Width            int
+	Height           int
+	Now              time.Time
+	Filter           Filter
+	FilterMessage    string
+	Profile          Profile
+	ShowShortcuts    bool
+	SearchQuery      string
+	SearchActive     bool
+	DebugOffset      int
+	ConfirmMessage   string
+	ActionLabels     map[string]string
+	ActionMessage    string
+	NoteMessage      string
+	SettingsMessage  string
 }
 
 type rowValues struct {
@@ -93,7 +93,7 @@ func Render(model Model) string {
 	page := normalizePage(model.Page)
 	planRows := FilterPlanRows(model.Snapshot.Rows, model.SearchQuery)
 	noteSnapshot := FilterNoteSnapshot(model.NoteSnapshot, model.SearchQuery)
-	sections := BuildRepositorySections(planRows, model.FocusRepositoryID)
+	sections := BuildFilteredSections(planRows, model.Filter)
 	visibleCount := 0
 	for _, section := range sections {
 		visibleCount += len(section.Rows)
@@ -115,7 +115,7 @@ func Render(model Model) string {
 		}
 		summary = &frameSummary{primary: planCountLabel(visibleCount), attentionCount: attentionCount, extra: searchSummary}
 	case PageNotes:
-		items := visibleNotes(noteSnapshot, model.FocusRepositoryID)
+		items := visibleFilteredNotes(noteSnapshot, model.Filter)
 		extra := searchSummary
 		if breakdown := noteRepositoryBreakdown(items); breakdown != "" {
 			if extra != "" {
@@ -125,7 +125,7 @@ func Render(model Model) string {
 		}
 		summary = &frameSummary{
 			primary:        noteCountLabel(len(items)),
-			attentionCount: len(visibleNoteWarnings(noteSnapshot, model.FocusRepositoryID)),
+			attentionCount: len(visibleNoteWarnings(noteSnapshot, model.Filter)),
 			attentionNoun:  "warnings",
 			extra:          extra,
 		}
@@ -164,7 +164,7 @@ func Render(model Model) string {
 		if now.IsZero() {
 			now = time.Now()
 		}
-		noteLines, noteSelectedLine, noteMetadata := renderNotesPage(noteSnapshot, model.Selected, model.FocusRepositoryID, now, model)
+		noteLines, noteSelectedLine, noteMetadata := renderNotesPage(noteSnapshot, model.Selected, now, model)
 		selectedLine = len(lines) + noteSelectedLine
 		viewportMetadata = noteMetadata.offset(len(lines))
 		if noteSelectedLine < 0 {
@@ -197,6 +197,9 @@ func Render(model Model) string {
 		}
 	}
 	footerStart := len(lines)
+	if strings.TrimSpace(model.FilterMessage) != "" {
+		lines = append(lines, "", singleLineDetail(model.FilterMessage))
+	}
 	if page == PagePlans && strings.TrimSpace(model.ActionMessage) != "" {
 		lines = append(lines, "", model.ActionMessage)
 	}

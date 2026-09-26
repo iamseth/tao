@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"syscall"
@@ -20,7 +21,44 @@ import (
 	"github.com/iamseth/tao/internal/taodata"
 	"github.com/iamseth/tao/internal/term"
 	"github.com/iamseth/tao/internal/tui"
+	"github.com/iamseth/tao/internal/uistate"
 )
+
+func TestUIFilterStoreRoundTrip(t *testing.T) {
+	dataHome := t.TempDir()
+	t.Setenv("TAO_DATA_HOME", dataHome)
+	ctx := context.Background()
+	store := newUIFilterStore()
+	if got, err := store.Load(ctx); err != nil || !reflect.DeepEqual(got, tui.Filter{}) {
+		t.Fatalf("missing filters = %+v, %v, want defaults", got, err)
+	}
+	want := tui.Filter{
+		Enabled:      true,
+		Repositories: []string{"repo-b", "repo-a"},
+		Statuses:     []string{"planned", "in_progress"},
+		Tags:         []string{"tier1", "bug"},
+	}
+	for _, enabled := range []bool{true, false} {
+		want.Enabled = enabled
+		if err := store.Save(ctx, want); err != nil {
+			t.Fatal(err)
+		}
+		got, err := newUIFilterStore().Load(ctx)
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("round-trip = %+v, %v, want %+v", got, err, want)
+		}
+		persisted, err := (uistate.Store{DataHome: dataHome}).Load()
+		if err != nil || persisted.Version != 1 || persisted.Enabled != enabled {
+			t.Fatalf("persisted filters = %+v, %v, want version 1 and enabled %t", persisted, err, enabled)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dataHome, "ui-filters.json"), []byte(`{`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.Load(ctx); err == nil || !reflect.DeepEqual(got, tui.Filter{}) {
+		t.Fatalf("corrupt filters = %+v, %v, want defaults and warning error", got, err)
+	}
+}
 
 func TestUICommandRegistrationAndHelp(t *testing.T) {
 	metadata := commandByName("ui")

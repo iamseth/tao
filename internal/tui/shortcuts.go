@@ -35,11 +35,11 @@ func shortcutsForPage(page PageID) []shortcut {
 		{key: "gg / G", action: "Jump to top / bottom"},
 		{key: "Tab / Shift+Tab / ← / →", action: "Switch tabs"},
 		{key: "Enter", action: "Open selected item"},
-		{key: "f", action: "Cycle repository filter"},
+		{key: "f", action: "Open filter menu"},
 	}
 	if normalizePage(page) == PageNotes {
 		common = append(common,
-			shortcut{key: "n", action: "Create note (focus or repo picker)"},
+			shortcut{key: "n", action: "Create note (filter or repo picker)"},
 			shortcut{key: "Ctrl+G", action: "Edit selected note"},
 			shortcut{key: "c", action: "Copy selected note ID"},
 			shortcut{key: "0 / 1 / 2 / 3", action: "Set selected note tier"},
@@ -105,6 +105,11 @@ func profileForEnabledColor(enabled bool) Profile {
 }
 
 func overlayShortcutTable(background []string, entries []shortcut, width, height int, profile Profile) []string {
+	width, height = overlayDimensions(background, width, height)
+	return overlayBox(background, renderShortcutLegend(entries, width, height, profile), width, height)
+}
+
+func overlayDimensions(background []string, width, height int) (int, int) {
 	canvasWidth := width
 	if canvasWidth <= 0 {
 		for _, line := range background {
@@ -116,9 +121,14 @@ func overlayShortcutTable(background []string, entries []shortcut, width, height
 	if canvasHeight <= 0 {
 		canvasHeight = max(len(background), 20)
 	}
+	return canvasWidth, canvasHeight
+}
 
-	legend := renderShortcutLegend(entries, canvasWidth, canvasHeight, profile)
-	if len(legend) == 0 || canvasHeight <= 0 {
+// overlayBox centers a bounded box using the shortcut overlay's row replacement
+// behavior, leaving background rows above and below it intact.
+func overlayBox(background []string, box []string, width, height int) []string {
+	canvasWidth, canvasHeight := overlayDimensions(background, width, height)
+	if len(box) == 0 || canvasHeight <= 0 {
 		return background
 	}
 	if len(background) > canvasHeight {
@@ -127,8 +137,8 @@ func overlayShortcutTable(background []string, entries []shortcut, width, height
 	for len(background) < canvasHeight {
 		background = append(background, " ")
 	}
-	start := max(0, (canvasHeight-len(legend))/2)
-	for index, line := range legend {
+	start := max(0, (canvasHeight-len(box))/2)
+	for index, line := range box {
 		if start+index >= len(background) {
 			break
 		}

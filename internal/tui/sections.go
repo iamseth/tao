@@ -35,13 +35,19 @@ func BuildSections(rows []monitor.Row) []Section {
 // BuildRepositorySections groups rows after optionally restricting them to one
 // repository. Filtering never mutates or reorders the collector snapshot.
 func BuildRepositorySections(rows []monitor.Row, repositoryID string) []Section {
+	return BuildFilteredSections(rows, repositoryFilter(repositoryID))
+}
+
+// BuildFilteredSections filters before grouping, preserving section ordering and
+// the DONE cap without mutating the collector snapshot.
+func BuildFilteredSections(rows []monitor.Row, filter Filter) []Section {
 	sections := []Section{
 		{Kind: SectionNow, Title: "NOW"},
 		{Kind: SectionNext, Title: "NEXT"},
 		{Kind: SectionHistory, Title: "DONE"},
 	}
 	for _, row := range rows {
-		if repositoryID != "" && row.RepositoryID != repositoryID {
+		if !filter.MatchesRow(row) {
 			continue
 		}
 		kind := sectionKind(row)
@@ -120,9 +126,9 @@ func hasVisibleRun(row monitor.Row) bool {
 	return row.Liveness == monitor.LivenessLive || rowlabel.IsStalled(row)
 }
 
-func visibleRows(rows []monitor.Row, repositoryID string) []monitor.Row {
+func visibleRows(rows []monitor.Row, filter Filter) []monitor.Row {
 	var visible []monitor.Row
-	for _, section := range BuildRepositorySections(rows, repositoryID) {
+	for _, section := range BuildFilteredSections(rows, filter) {
 		visible = append(visible, section.Rows...)
 	}
 	return visible

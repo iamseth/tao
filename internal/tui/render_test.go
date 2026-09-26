@@ -450,14 +450,55 @@ func TestRenderOmitsEmptySectionsAndAlwaysShowsDonePlans(t *testing.T) {
 	}
 }
 
+func TestRenderAndLoopComposeSharedFilterWithSearch(t *testing.T) {
+	state := loopState{
+		filter:      Filter{Enabled: true, Repositories: []string{"a", "b"}, Statuses: []string{"planned"}, Tags: []string{"keep"}},
+		searchQuery: "needle",
+		snapshot: monitor.Snapshot{Rows: []monitor.Row{
+			{RepositoryID: "a", PlanID: "needle-plan", Status: "planned"},
+			{RepositoryID: "b", PlanID: "needle-done", Status: "completed"},
+			{RepositoryID: "c", PlanID: "needle-outside", Status: "planned"},
+			{RepositoryID: "a", PlanID: "unmatched-plan", Status: "planned"},
+		}},
+		noteSnapshot: note.Snapshot{
+			Notes: []note.CatalogNote{
+				{RepositoryID: "b", ID: "keep", Text: "needle-note", Tags: []string{"keep"}},
+				{RepositoryID: "a", ID: "drop", Text: "needle-untagged"},
+				{RepositoryID: "c", ID: "outside", Text: "needle-outside", Tags: []string{"keep"}},
+			},
+			Warnings: []note.CatalogWarning{{RepositoryID: "a"}, {RepositoryID: "b"}, {RepositoryID: "c"}},
+		},
+	}
+	if rows := state.visibleRows(); len(rows) != 1 || rows[0].PlanID != "needle-plan" {
+		t.Fatalf("rows=%+v", rows)
+	}
+	if notes := state.visibleNotes(); len(notes) != 1 || notes[0].ID != "keep" {
+		t.Fatalf("notes=%+v", notes)
+	}
+	model := Model{Snapshot: state.snapshot, NoteSnapshot: state.noteSnapshot, Filter: state.filter, SearchQuery: state.searchQuery}
+	plans := Render(model)
+	model.Page = PageNotes
+	notes := Render(model)
+	if !strings.Contains(plans, "1 plan") || !strings.Contains(plans, "needle-plan") || !strings.Contains(notes, "1 open note") || !strings.Contains(notes, "needle-note") {
+		t.Fatalf("render disagrees with loop:\n%s\n%s", plans, notes)
+	}
+	for _, excluded := range []string{"needle-done", "needle-outside", "unmatched-plan", "needle-untagged"} {
+		if strings.Contains(plans+notes, excluded) {
+			t.Fatalf("render included %q", excluded)
+		}
+	}
+	if warnings := visibleNoteWarnings(state.noteSnapshot, state.filter); len(warnings) != 2 {
+		t.Fatalf("warnings=%+v", warnings)
+	}
+}
+
 func TestRenderShowsRepositoryFocusAndFiltersRows(t *testing.T) {
 	got := Render(Model{
 		Snapshot: monitor.Snapshot{Rows: []monitor.Row{
 			{RepositoryID: "repo-a", RepositoryName: "alpha", PlanID: "one", Status: plan.StatusPlanned},
 			{RepositoryID: "repo-b", RepositoryName: "beta", PlanID: "two", Status: plan.StatusPlanned},
 		}},
-		FocusRepositoryID:   "repo-b",
-		FocusRepositoryName: "beta",
+		Filter: repositoryFilter("repo-b"),
 	})
 	if !strings.Contains(got, "repo beta") || !strings.Contains(got, "1 plan") || !strings.Contains(got, "  beta   RUN   two") {
 		t.Fatalf("focused render missing header or row:\n%s", got)
@@ -466,8 +507,8 @@ func TestRenderShowsRepositoryFocusAndFiltersRows(t *testing.T) {
 		t.Fatalf("focused render included another repository:\n%s", got)
 	}
 
-	empty := Render(Model{FocusRepositoryID: "repo-b", FocusRepositoryName: "beta"})
-	if !strings.Contains(empty, "repo beta") || !strings.Contains(empty, "0 plans") || !strings.Contains(empty, "No plans.") {
+	empty := Render(Model{Filter: repositoryFilter("repo-b")})
+	if !strings.Contains(empty, "repo repo-b") || !strings.Contains(empty, "0 plans") || !strings.Contains(empty, "No plans.") {
 		t.Fatalf("empty focused render is ambiguous:\n%s", empty)
 	}
 }
@@ -524,7 +565,7 @@ func TestRenderNotesSummaryCountsRepositoriesStablyAndRespectsFocus(t *testing.T
 
 	focused := Render(Model{
 		Page: PageNotes, NoteSnapshot: snapshot,
-		FocusRepositoryID: "repo-b", FocusRepositoryName: "beta",
+		Filter: repositoryFilter("repo-b"),
 	})
 	if !strings.Contains(focused, "1 open note  ·  beta 1") || strings.Contains(focused, "alpha") {
 		t.Fatalf("focused Notes summary or rows ignored repository focus:\n%s", focused)
@@ -827,7 +868,7 @@ func TestRenderShortcutLegendAsBoundedPopover(t *testing.T) {
 		},
 		{
 			page:        PageNotes,
-			want:        []string{"Keyboard shortcuts", "PgUp / PgDn", "gg / G", "Jump to top / bottom", "Open selected item", "Create note", "Ctrl+G", "Edit selected note", "c", "Copy selected note ID", "0 / 1 / 2 / 3", "Set selected note tier", "d / D", "Cycle repository filter", "/", "Search plans and notes", "Backspace", "Go back / clear search", "? / Esc"},
+			want:        []string{"Keyboard shortcuts", "PgUp / PgDn", "gg / G", "Jump to top / bottom", "Open selected item", "Create note", "Ctrl+G", "Edit selected note", "c", "Copy selected note ID", "0 / 1 / 2 / 3", "Set selected note tier", "d / D", "Open filter menu", "/", "Search plans and notes", "Backspace", "Go back / clear search", "? / Esc"},
 			unavailable: "Run selected plan",
 		},
 	} {

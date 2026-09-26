@@ -92,10 +92,8 @@ func TestAbandonedPlanSuppressesEveryPlanAction(t *testing.T) {
 	}
 
 	state := loopState{
-		snapshot:            monitor.Snapshot{Rows: []monitor.Row{row}},
-		focusRepositoryID:   row.RepositoryID,
-		focusRepositoryName: row.RepositoryName,
-		focusRepositoryRoot: row.RepositoryRoot,
+		snapshot: monitor.Snapshot{Rows: []monitor.Row{row}},
+		filter:   repositoryFilter(row.RepositoryID),
 	}
 	app := App{Actions: actions}
 	for _, key := range []rune{'r', 'a', 'm', 'M'} {
@@ -291,14 +289,15 @@ func TestMergeKeysDeclineAndIgnoreIneligibleRows(t *testing.T) {
 	}
 }
 
-func TestFocusedBatchMergeUsesOnlyFocusedRepositoryRoot(t *testing.T) {
+func TestFilteredBatchMergeUsesSnapshotRepositoryRoot(t *testing.T) {
 	launcher := &recordingActionLauncher{}
 	actions := newTestActions(t, launcher, nil, nil)
 	state := loopState{
-		snapshot:            monitor.Snapshot{Rows: []monitor.Row{{Kind: monitor.RowKindPlan, RepositoryID: "repo-other", RepositoryName: "other", RepositoryRoot: "/repos/other", PlanID: "other"}}},
-		focusRepositoryID:   "repo-alpha",
-		focusRepositoryName: "alpha",
-		focusRepositoryRoot: "/repos/alpha",
+		snapshot: monitor.Snapshot{Rows: []monitor.Row{
+			{Kind: monitor.RowKindPlan, RepositoryID: "repo-other", RepositoryName: "other", RepositoryRoot: "/repos/other", PlanID: "other"},
+			{Kind: monitor.RowKindPlan, RepositoryID: "repo-alpha", RepositoryName: "alpha", RepositoryRoot: "/repos/alpha", PlanID: "hidden", Status: "planned"},
+		}},
+		filter: Filter{Enabled: true, Repositories: []string{"repo-alpha"}, Statuses: []string{"reviewed"}},
 	}
 	app := App{Actions: actions}
 
@@ -313,7 +312,7 @@ func TestFocusedBatchMergeUsesOnlyFocusedRepositoryRoot(t *testing.T) {
 	assertActionRequest(t, launcher.calls[0], "/repos/alpha", []string{"merge", "--all"})
 }
 
-func TestFocusedBatchMergeUsesStoredRootWhenWarningSelected(t *testing.T) {
+func TestFilteredBatchMergeUsesSnapshotRootWhenWarningSelected(t *testing.T) {
 	launcher := &recordingActionLauncher{}
 	actions := newTestActions(t, launcher, nil, nil)
 	state := loopState{
@@ -321,11 +320,10 @@ func TestFocusedBatchMergeUsesStoredRootWhenWarningSelected(t *testing.T) {
 			Kind:           monitor.RowKindRepositoryWarning,
 			RepositoryID:   "repo-alpha",
 			RepositoryName: "alpha",
+			RepositoryRoot: "/repos/alpha",
 			Status:         "invalid",
 		}}},
-		focusRepositoryID:   "repo-alpha",
-		focusRepositoryName: "alpha",
-		focusRepositoryRoot: "/repos/alpha",
+		filter: repositoryFilter("repo-alpha"),
 	}
 	app := App{Actions: actions}
 

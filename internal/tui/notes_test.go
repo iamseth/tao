@@ -25,7 +25,7 @@ func TestRenderNotesRowsWarningsFocusAndSanitization(t *testing.T) {
 		},
 	}
 
-	frame := Render(Model{Page: PageNotes, NoteSnapshot: snapshot, Now: now, FocusRepositoryID: "repo-a", FocusRepositoryName: "alpha\x1b]0;title\a"})
+	frame := Render(Model{Page: PageNotes, NoteSnapshot: snapshot, Now: now, Filter: repositoryFilter("repo-a")})
 	body := strings.TrimPrefix(frame, clearScreenSequence)
 	for _, want := range []string{"repo alpha", "1 open note", "alpha 1", "UNTIERED", "REPO", "PREVIEW", "TAGS", "CREATED", "UPDATED", "alpha", "one, tag", "1w", "2h", "first line", "Warnings", "damaged store"} {
 		if !strings.Contains(body, want) {

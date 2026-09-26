@@ -117,14 +117,7 @@ func renderGlobalContext(model Model) string {
 }
 
 func renderGlobalContextWidth(model Model, maxWidth int) string {
-	repository := "all repos"
-	if model.FocusRepositoryID != "" {
-		name := singleLineDetail(model.FocusRepositoryName)
-		if name == "" {
-			name = singleLineDetail(model.FocusRepositoryID)
-		}
-		repository = "repo " + rowlabel.DisplayValue(name)
-	}
+	repository := filterRepositoryLabel(model)
 	agent := rowlabel.DisplayValue(singleLineDetail(model.DebugSnapshot.SelectedAgent))
 	suffix := "  agent " + agent + "  "
 	if maxWidth > 0 {
@@ -139,6 +132,28 @@ func renderGlobalContextWidth(model Model, maxWidth int) string {
 		healthRole = RoleWarn
 	}
 	return Paint(model.Profile, RoleNeutral2, repository+suffix) + Paint(model.Profile, healthRole, "●")
+}
+
+func filterRepositoryLabel(model Model) string {
+	filter := model.Filter
+	if !filter.Enabled && !filter.IsEmpty() {
+		return "filter off"
+	}
+	if !filter.Enabled || len(filter.Repositories) == 0 {
+		return "all repos"
+	}
+	if len(filter.Repositories) > 1 {
+		return fmt.Sprintf("%d repos", len(filter.Repositories))
+	}
+	id := filter.Repositories[0]
+	name := id
+	for _, option := range DiscoverRepositories(model.Snapshot, model.NoteSnapshot, filter.Repositories) {
+		if option.ID == id {
+			name = option.Name
+			break
+		}
+	}
+	return "repo " + rowlabel.DisplayValue(singleLineDetail(name))
 }
 
 func truncateFrameRepository(repository string, width int) string {
