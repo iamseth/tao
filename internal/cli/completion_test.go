@@ -6,7 +6,6 @@ import (
 	"errors"
 	"flag"
 	"io"
-	"os"
 	"os/exec"
 	"reflect"
 	"slices"
@@ -109,14 +108,7 @@ func TestZshCommandCasesFollowRegistryOrder(t *testing.T) {
 }
 
 func TestZshCompletionScriptMatchesGolden(t *testing.T) {
-	want, err := os.ReadFile("testdata/zsh_completion.golden")
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := []byte(buildZshCompletionScript())
-	if !bytes.Equal(got, want) {
-		t.Fatalf("generated zsh completion differs from golden: got %d bytes, want %d; regenerate testdata/zsh_completion.golden", len(got), len(want))
-	}
+	assertGolden(t, "testdata/zsh_completion.golden", []byte(buildZshCompletionScript()))
 }
 
 func TestCommandAliasPatternCompletionSpecialCases(t *testing.T) {

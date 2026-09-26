@@ -4,6 +4,7 @@
 - `make verify` is the canonical repository-wide gate; it runs build, test, lint, verify-no-deps, and build-targets. `make build-targets` cross-builds and vets all four GoReleaser targets (darwin and linux on amd64 and arm64).
 - `make build` builds `bin/tao` from `./cmd/tao`.
 - `make test` runs `go test -coverprofile=coverage.out ./...` and prints coverage with `go tool cover -func`.
+- `make update-golden` regenerates the five golden fixtures under `internal/cli/testdata` by running the golden tests with `-update`; it is scoped to `./internal/cli` because the flag is defined only there, and it is never part of `make verify`.
 - Run focused tests with `go test ./internal/<package> -run TestName` for ordinary implementation slices; examples: `go test ./internal/plan -run TestFormatDuration`, `go test ./internal/cli -run TestRunHandlesNoArgsAndGlobalFlagErrors`.
 - `make install` copies `./bin/tao` to `~/.bin/tao`; do not assume this path exists.
 
@@ -65,7 +66,7 @@
 
 ## Editing Guidance
 - In event tests, assert on the event(s) the test owns by finding or requiring the specific type and checking its fields; do not assert total event-slice length or positional indices unless the test explicitly verifies the ordered sequence.
-- Prefer focused package tests for changed code; use `make test` when changes cross packages or core behavior. Slices that change source or test code must also include `golangci-lint run --allow-parallel-runners ./<package>/...`, this repository's package-scoped lint form, for each touched package. Slices changing insights or other rendered output (including events, counters, or fields it includes) own the matching golden fixtures under `internal/cli/testdata`: list affected fixtures in `expected_files`, update them, and run each comparing test with no narrower filter, retaining whole-package verification for shared-seam work.
+- Prefer focused package tests for changed code; use `make test` when changes cross packages or core behavior. Slices that change source or test code must also include `golangci-lint run --allow-parallel-runners ./<package>/...`, this repository's package-scoped lint form, for each touched package. Slices changing insights or other rendered output (including events, counters, or fields it includes) own the matching golden fixtures under `internal/cli/testdata`: list affected fixtures in `expected_files`, update them with `make update-golden`, and run each comparing test with no narrower filter, retaining whole-package verification for shared-seam work.
 - Do not update local plan artifacts unless the task is specifically about Tao plan state or prompt behavior.
 - When generating reusable planning prompts for `/tao-plan` or fresh agent planning sessions, save drafts with `tao draft-prompt <name>` (or another local-only path) so they remain local-only and are easy to pass to Pi or Claude.
 - Keep prompt changes narrow because they directly shape future agent behavior.

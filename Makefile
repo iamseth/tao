@@ -1,4 +1,4 @@
-.PHONY: help build build-targets clean test coverage-html lint lint-darwin install release-check tui-preview verify verify-no-deps
+.PHONY: help build build-targets clean test update-golden coverage-html lint lint-darwin install release-check tui-preview verify verify-no-deps
 
 COVERAGE_FILE := coverage.out
 TUI_PREVIEW_ARGS ?=
@@ -12,6 +12,7 @@ help:
 	@printf "  %-14s %s\n" "build-targets" "Cross-build and vet all release targets (adds roughly 15 to 30 seconds to verify)."
 	@printf "  %-14s %s\n" "clean" "Remove build and coverage artifacts."
 	@printf "  %-14s %s\n" "test" "Run all Go tests with coverage output."
+	@printf "  update-golden  Rewrite the golden fixtures under internal/cli/testdata from current renderers.\n"
 	@printf "  %-14s %s\n" "coverage-html" "Open an HTML coverage report in the browser."
 	@printf "  %-14s %s\n" "lint" "Run golangci-lint."
 	@printf "  %-14s %s\n" "lint-darwin" "Lint darwin-gated files (intended for Linux hosts)."
@@ -47,6 +48,9 @@ test:
 	} \
 	END { for(k in stmts) printf "%6.1f%%  %s\n", 100*cov[k]/stmts[k], k }' \
 		$(COVERAGE_FILE) | sort -k2
+
+update-golden:
+	@go test -count=1 ./internal/cli -run 'Golden' -update
 
 coverage-html: test
 	@go tool cover -html=$(COVERAGE_FILE)

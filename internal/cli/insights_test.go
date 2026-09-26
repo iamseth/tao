@@ -102,14 +102,7 @@ func TestInsightsRenderersGolden(t *testing.T) {
 			if err := test.render(&out, report); err != nil {
 				t.Fatal(err)
 			}
-			path := filepath.Join("testdata", "insights", test.fixture)
-			want, err := os.ReadFile(path) //nolint:gosec // G304: path is confined to checked-in test fixtures.
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !bytes.Equal(out.Bytes(), want) {
-				t.Errorf("output differs from %s:\n--- got ---\n%s\n--- want ---\n%s", path, out.Bytes(), want)
-			}
+			assertGolden(t, filepath.Join("testdata", "insights", test.fixture), out.Bytes())
 		})
 	}
 }
