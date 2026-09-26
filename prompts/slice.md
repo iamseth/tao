@@ -237,6 +237,12 @@ Copy the Planning Packet's strict four-field Source Note block, or write `None` 
 
 - Repository-owned commands or validation approach used to choose slice verification commands.
 
+## Review Focus
+
+List up to five input classes or failure modes the Planning Packet implies but no slice's `verification.commands` exercise, one line each naming the input and the behavior a reasonable user of the software expects, ordered most likely to bite a user first. After an explicit check, write the single line `None` if no gaps remain.
+
+Where a Review Focus line is cheap to cover with a test the owning slice can add, add that covering test to the owning slice's tasks in `slices.json` and omit the line from the brief. Review Focus lists remaining gaps for the reviewer, not test plans; keep it short and do not duplicate executable artifacts.
+
 ## Open Questions
 
 - Unresolved questions, or `None` when there are no known open questions.

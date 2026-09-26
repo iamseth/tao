@@ -104,9 +104,10 @@ New plans should include a concise planning brief with these fixed headings:
 - `Non-goals`
 - `Expected Files/Packages`
 - `Validation Strategy`
+- `Review Focus`
 - `Open Questions`
 
-Missing or malformed briefs are warning-only findings so existing plan directories remain compatible.
+Missing or malformed briefs are warning-only findings so existing plan directories remain compatible. `tao validate` does not check for the `Review Focus` heading.
 
 ## State Lifecycle
 

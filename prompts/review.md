@@ -49,6 +49,8 @@ Treat the Prior Rework and Budget Context block as advisory history, not as stee
 ## Scope
 
 - Read the plan intent from `planning-brief.md` and/or `plan.md` in the plan directory when present.
+- When `planning-brief.md` has a `## Review Focus` section, read every line and check each named input class or failure mode against the scoped diff and the tests in the diff.
+  Confirm lines already covered by verification rather than skipping them.
 - Read `slices.json` in the plan directory to understand the intended slice work and verification.
 - Review only changes in the diff from the provided base to the provided head:
 
@@ -84,6 +86,8 @@ For behavior the plan does not name, judge by what a reasonable user of the soft
 ## Output format
 
 Write a concise human-readable review first. Include any important context, strengths, and risks.
+State which Review Focus lines were checked and what was found for each, or state that the brief had no Review Focus section or it read `None`.
+Missing coverage for a line becomes a finding only when it meets the existing severity rules; otherwise keep it in the prose without changing the verdict.
 End the prose with a `### Declined to judge` subsection before the JSON block.
 List every behavior considered and set aside, one line each with the reason, or a single line `none`.
 Set-aside items are not findings, never appear in the JSON block, and do not change the verdict or the rule that under `changes_requested` the `findings` array contains only completion-blocking issues.

@@ -165,6 +165,26 @@ func TestRenderReviewPromptUsesInjectedPlanAndDiff(t *testing.T) {
 	}
 }
 
+func TestRenderReviewPromptChecksReviewFocusLines(t *testing.T) {
+	got, err := Render(PromptReview, Data{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"`planning-brief.md` has a `## Review Focus` section",
+		"read every line and check each named input class or failure mode against the scoped diff and the tests in the diff",
+		"Confirm lines already covered by verification rather than skipping them",
+		"State which Review Focus lines were checked and what was found for each",
+		"state that the brief had no Review Focus section or it read `None`",
+		"Missing coverage for a line becomes a finding only when it meets the existing severity rules",
+		"otherwise keep it in the prose without changing the verdict",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("rendered review prompt missing Review Focus guidance %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestRenderReviewProposalCorrectionCannotChangeSubstantiveReview(t *testing.T) {
 	got, err := Render(PromptReview, Data{PlanID: "plan-a", Base: "base123", Head: "head456", ChangeType: "fix", ProposalOnly: true})
 	if err != nil {
@@ -182,7 +202,7 @@ func TestRenderReviewProposalCorrectionCannotChangeSubstantiveReview(t *testing.
 			t.Fatalf("rendered correction prompt missing %q:\n%s", want, got)
 		}
 	}
-	for _, forbidden := range []string{"Assess the scoped diff", "Review criteria", "reasonable user", "Declined to judge", "tao-review-json\n{\n  \"verdict\""} {
+	for _, forbidden := range []string{"Assess the scoped diff", "Review criteria", "reasonable user", "Declined to judge", "Review Focus", "tao-review-json\n{\n  \"verdict\""} {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("rendered correction prompt retained substantive review instruction %q:\n%s", forbidden, got)
 		}
@@ -298,6 +318,39 @@ func TestPlanPromptDefinesStrictNoteSourceContract(t *testing.T) {
 	}
 	if strings.Index(got, "## Open Questions") > strings.Index(got, "## Source Note") || strings.Index(got, "## Source Note") > strings.Index(got, "## Slice Guidance") {
 		t.Fatalf("Source Note section is outside the strict Planning Packet order:\n%s", got)
+	}
+}
+
+func TestSlicePromptRequiresReviewFocusInPlanningBrief(t *testing.T) {
+	_, brief, ok := strings.Cut(SlicePromptTemplate, "\n## planning-brief.md\n")
+	if !ok {
+		t.Fatal("slice prompt missing planning brief template")
+	}
+	brief, _, ok = strings.Cut(brief, "\n## state.json\n")
+	if !ok {
+		t.Fatal("slice prompt missing planning brief template boundary")
+	}
+	for _, want := range []string{
+		"## Review Focus",
+		"List up to five input classes or failure modes",
+		"the Planning Packet implies but no slice's `verification.commands` exercise",
+		"one line each naming the input and the behavior a reasonable user of the software expects",
+		"ordered most likely to bite a user first",
+		"After an explicit check, write the single line `None` if no gaps remain",
+		"cheap to cover with a test the owning slice can add",
+		"add that covering test to the owning slice's tasks in `slices.json` and omit the line from the brief",
+		"remaining gaps for the reviewer, not test plans",
+		"keep it short and do not duplicate executable artifacts",
+	} {
+		if !strings.Contains(brief, want) {
+			t.Fatalf("slice prompt planning brief missing Review Focus guidance %q", want)
+		}
+	}
+	validationAt := strings.Index(brief, "\n## Validation Strategy\n")
+	focusAt := strings.Index(brief, "\n## Review Focus\n")
+	questionsAt := strings.Index(brief, "\n## Open Questions\n")
+	if validationAt < 0 || focusAt <= validationAt || questionsAt <= focusAt {
+		t.Fatalf("Review Focus must follow Validation Strategy and precede Open Questions: validation=%d focus=%d questions=%d", validationAt, focusAt, questionsAt)
 	}
 }
 
