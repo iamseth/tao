@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/iamseth/tao/internal/forge"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/verifydetect"
 	"github.com/iamseth/tao/internal/workspace"
@@ -168,7 +169,7 @@ func ReopenAutomatic(record AutomaticRecord, evidence plan.AutomaticReworkRound)
 // thread prose is retained only in bounded untrusted packets on generated
 // slices. A fresh Driver.Run started for the reopened plan records its baseline
 // at the new current round, outside prior automatic-rework history.
-func ReopenFromPullRequest(record PullRequestRecord, threads []PRThread, now time.Time) ([]plan.Slice, error) {
+func ReopenFromPullRequest(record PullRequestRecord, threads []forge.ReviewThread, now time.Time) ([]plan.Slice, error) {
 	if record == nil {
 		return nil, fmt.Errorf("plan record is nil")
 	}
@@ -214,7 +215,7 @@ type pullRequestChange struct {
 	packet   string
 }
 
-func pullRequestChanges(detail *plan.PlanDetail, threads []PRThread) ([]pullRequestChange, error) {
+func pullRequestChanges(detail *plan.PlanDetail, threads []forge.ReviewThread) ([]pullRequestChange, error) {
 	id := planID(detail)
 	if detail == nil {
 		return nil, refuse("rework refused: plan detail is nil")

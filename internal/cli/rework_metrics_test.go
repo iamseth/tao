@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/agent"
+	"github.com/iamseth/tao/internal/forge"
 	"github.com/iamseth/tao/internal/plan"
-	reworkpkg "github.com/iamseth/tao/internal/rework"
 	runpkg "github.com/iamseth/tao/internal/run"
 )
 
@@ -50,10 +50,10 @@ func TestReworkPRClassifierMetrics(t *testing.T) {
 					const id = "20260628-1200-pr-metrics"
 					dir := writeCLIReworkPlan(t, root, id, plan.StatusCompleted, reworkReview(plan.ReviewVerdictApprove, nil))
 					addCLIReworkPullRequest(t, dir)
-					threads := []reworkpkg.PRThread{{NodeID: "PRRT_change", Path: "internal/cli/rework.go", Comments: []reworkpkg.PRThreadComment{{AuthorLogin: "owner", Body: "Please fix this."}}}}
+					threads := []forge.ReviewThread{{NodeID: "PRRT_change", Path: "internal/cli/rework.go", Comments: []forge.ReviewThreadComment{{AuthorLogin: "owner", Body: "Please fix this."}}}}
 					oldRead := readReworkPRThreads
-					readReworkPRThreads = func(context.Context, App, reworkpkg.PRThreadReadRequest) (reworkpkg.PRThreadReadResult, error) {
-						return reworkpkg.PRThreadReadResult{Threads: threads}, nil
+					readReworkPRThreads = func(context.Context, App, forge.ReviewThreadReadRequest) (forge.ReviewThreadReadResult, error) {
+						return forge.ReviewThreadReadResult{Threads: threads}, nil
 					}
 					t.Cleanup(func() { readReworkPRThreads = oldRead })
 					repo := &reworkMetricsRepository{planRunRepository: plan.NewFileRepository(root)}

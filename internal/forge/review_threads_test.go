@@ -1,4 +1,4 @@
-package rework
+package forge
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestPRThreadReaderNormalizesFixture(t *testing.T) {
+func TestGitHubReadReviewThreadsNormalizesFixture(t *testing.T) {
 	fixture, err := os.ReadFile("testdata/pr_threads.json")
 	if err != nil {
 		t.Fatal(err)
@@ -18,7 +18,7 @@ func TestPRThreadReaderNormalizesFixture(t *testing.T) {
 
 	tests := []struct {
 		name      string
-		scope     PRThreadAuthorScope
+		scope     ReviewThreadAuthorScope
 		wantIDs   []string
 		wantOwner string
 	}{
@@ -29,7 +29,7 @@ func TestPRThreadReaderNormalizesFixture(t *testing.T) {
 		},
 		{
 			name:      "all includes non-owner threads",
-			scope:     PRThreadAuthorsAll,
+			scope:     ReviewThreadAuthorsAll,
 			wantIDs:   []string{"PRRT_owner", "PRRT_outdated", "PRRT_non_owner", "PRRT_fileless"},
 			wantOwner: "tao-owner",
 		},
@@ -37,15 +37,8 @@ func TestPRThreadReaderNormalizesFixture(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			calls := 0
-			runner := func(ctx context.Context, cwd string, name string, args []string, stdout, _ io.Writer) error {
-				calls++
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				if cwd != "/repo" || name != "gh" {
-					t.Fatalf("unexpected command location: cwd=%q name=%q", cwd, name)
-				}
+			var calls []string
+			runner := forgeRunner(t, &calls, func(args []string, stdout, _ io.Writer) error {
 				joined := strings.Join(args, " ")
 				for _, want := range []string{"api graphql", "--paginate", "viewer { login }", "reviewThreads(first: 100", "pullRequestReview { state }", "owner=iamseth", "name=tao", "number=123"} {
 					if !strings.Contains(joined, want) {
@@ -54,9 +47,9 @@ func TestPRThreadReaderNormalizesFixture(t *testing.T) {
 				}
 				_, err := stdout.Write(fixture)
 				return err
-			}
+			})
 
-			result, err := (PRThreadReader{CommandRunner: runner}).Read(context.Background(), PRThreadReadRequest{
+			result, err := NewGitHub(runner).ReadReviewThreads(context.Background(), ReviewThreadReadRequest{
 				RepoRoot:          "/repo",
 				RepositoryOwner:   "iamseth",
 				RepositoryName:    "tao",
@@ -66,8 +59,8 @@ func TestPRThreadReaderNormalizesFixture(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if calls != 1 {
-				t.Fatalf("gh calls = %d, want 1", calls)
+			if len(calls) != 1 {
+				t.Fatalf("gh calls = %d, want 1", len(calls))
 			}
 			if result.OwnerLogin != tt.wantOwner {
 				t.Fatalf("owner login = %q, want %q", result.OwnerLogin, tt.wantOwner)
@@ -111,46 +104,53 @@ func TestPRThreadReaderNormalizesFixture(t *testing.T) {
 	}
 }
 
-func TestPRThreadReaderReportsCommandAndGraphQLErrors(t *testing.T) {
+func TestGitHubReadReviewThreadsReportsCommandAndGraphQLErrors(t *testing.T) {
 	tests := []struct {
 		name      string
-		runner    func(context.Context, string, string, []string, io.Writer, io.Writer) error
+		runner    func([]string, io.Writer, io.Writer) error
 		wantError string
 	}{
 		{
 			name: "command failure includes stderr",
-			runner: func(_ context.Context, _ string, _ string, _ []string, _, stderr io.Writer) error {
+			runner: func(_ []string, _, stderr io.Writer) error {
 				_, _ = io.WriteString(stderr, "authentication required")
 				return errors.New("exit status 1")
 			},
-			wantError: "authentication required",
+			wantError: "gh api graphql: exit status 1: authentication required",
+		},
+		{
+			name: "command failure without stderr",
+			runner: func(_ []string, _, _ io.Writer) error {
+				return errors.New("exit status 1")
+			},
+			wantError: "gh api graphql: exit status 1",
 		},
 		{
 			name: "GraphQL errors are rejected",
-			runner: func(_ context.Context, _ string, _ string, _ []string, stdout, _ io.Writer) error {
+			runner: func(_ []string, stdout, _ io.Writer) error {
 				_, _ = io.WriteString(stdout, `{"errors":[{"message":"pull request not found"}]}`)
 				return nil
 			},
-			wantError: "pull request not found",
+			wantError: "read pull-request threads: pull request not found",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := (PRThreadReader{CommandRunner: tt.runner}).Read(context.Background(), PRThreadReadRequest{
+			_, err := NewGitHub(forgeRunner(t, nil, tt.runner)).ReadReviewThreads(context.Background(), ReviewThreadReadRequest{
 				RepoRoot:          "/repo",
 				RepositoryOwner:   "iamseth",
 				RepositoryName:    "tao",
 				PullRequestNumber: 123,
 			})
-			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
-				t.Fatalf("error = %v, want containing %q", err, tt.wantError)
+			if err == nil || err.Error() != tt.wantError {
+				t.Fatalf("error = %v, want %q", err, tt.wantError)
 			}
 		})
 	}
 }
 
-func findPRThread(t *testing.T, threads []PRThread, id string) PRThread {
+func findPRThread(t *testing.T, threads []ReviewThread, id string) ReviewThread {
 	t.Helper()
 	for _, thread := range threads {
 		if thread.NodeID == id {
@@ -158,5 +158,5 @@ func findPRThread(t *testing.T, threads []PRThread, id string) PRThread {
 		}
 	}
 	t.Fatalf("thread %s not found", id)
-	return PRThread{}
+	return ReviewThread{}
 }

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/iamseth/tao/internal/forge"
 	"github.com/iamseth/tao/prompts"
 )
 
@@ -58,7 +59,7 @@ type PRThreadClassifier struct {
 
 // Classify invokes one agent session and returns classifications in the same
 // order as the requested threads. It has no retry or fallback behavior.
-func (c PRThreadClassifier) Classify(ctx context.Context, repoRoot string, threads []PRThread) ([]PRThreadClassification, error) {
+func (c PRThreadClassifier) Classify(ctx context.Context, repoRoot string, threads []forge.ReviewThread) ([]PRThreadClassification, error) {
 	if c.Text == nil {
 		return nil, errors.New("pull-request thread classifier is not configured")
 	}
@@ -174,7 +175,7 @@ func DecodePRTriageResult(data []byte, requestedThreadIDs []string) ([]PRThreadC
 	return result, nil
 }
 
-func requestedPRThreadIDs(threads []PRThread) ([]string, error) {
+func requestedPRThreadIDs(threads []forge.ReviewThread) ([]string, error) {
 	if len(threads) > maxPRTriageClassifications {
 		return nil, fmt.Errorf("pull-request threads exceed %d item limit", maxPRTriageClassifications)
 	}
@@ -218,7 +219,7 @@ func validPRThreadKind(kind PRThreadKind) bool {
 	}
 }
 
-func threadPacket(thread PRThread) any {
+func threadPacket(thread forge.ReviewThread) any {
 	type packetComment struct {
 		CommentNodeID string `json:"comment_node_id"`
 		AuthorLogin   string `json:"author_login"`

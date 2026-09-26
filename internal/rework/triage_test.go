@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/iamseth/tao/internal/forge"
 )
 
 func TestDecodePRTriageResultAcceptsEachKind(t *testing.T) {
@@ -95,9 +97,9 @@ func TestPRThreadClassifierUsesBoundedUntrustedPromptAndValidatesResult(t *testi
 		return `{"classifications":[{"thread_node_id":"PRRT_1","kind":"change","rationale":"Requests a concrete fix."}]}`, nil
 	})}
 
-	got, err := classifier.Classify(context.Background(), "/repo", []PRThread{{
+	got, err := classifier.Classify(context.Background(), "/repo", []forge.ReviewThread{{
 		NodeID: "PRRT_1", Path: "internal/rework/triage.go", Line: &line,
-		Comments: []PRThreadComment{{NodeID: "PRRC_1", AuthorLogin: "reviewer", Body: injection}},
+		Comments: []forge.ReviewThreadComment{{NodeID: "PRRC_1", AuthorLogin: "reviewer", Body: injection}},
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -126,7 +128,7 @@ func TestPRThreadClassifierRefusesMalformedAgentResult(t *testing.T) {
 	classifier := PRThreadClassifier{Text: PRTriageTextGeneratorFunc(func(context.Context, string, string) (string, error) {
 		return `{"classifications":`, nil
 	})}
-	_, err := classifier.Classify(context.Background(), "/repo", []PRThread{{NodeID: "PRRT_1"}})
+	_, err := classifier.Classify(context.Background(), "/repo", []forge.ReviewThread{{NodeID: "PRRT_1"}})
 	if err == nil || !strings.Contains(err.Error(), "decode pull-request thread triage result") {
 		t.Fatalf("error = %v, want malformed result refusal", err)
 	}
@@ -136,7 +138,7 @@ func TestPRThreadClassifierPropagatesAgentFailure(t *testing.T) {
 	classifier := PRThreadClassifier{Text: PRTriageTextGeneratorFunc(func(context.Context, string, string) (string, error) {
 		return "", fmt.Errorf("provider unavailable")
 	})}
-	_, err := classifier.Classify(context.Background(), "/repo", []PRThread{{NodeID: "PRRT_1"}})
+	_, err := classifier.Classify(context.Background(), "/repo", []forge.ReviewThread{{NodeID: "PRRT_1"}})
 	if err == nil || !strings.Contains(err.Error(), "classify pull-request threads: provider unavailable") {
 		t.Fatalf("error = %v, want provider failure", err)
 	}

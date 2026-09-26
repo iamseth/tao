@@ -14,6 +14,7 @@ import (
 	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/agentsession"
 	"github.com/iamseth/tao/internal/agenttelemetry"
+	"github.com/iamseth/tao/internal/forge"
 	"github.com/iamseth/tao/internal/plan"
 	reworkpkg "github.com/iamseth/tao/internal/rework"
 	runpkg "github.com/iamseth/tao/internal/run"
@@ -44,7 +45,7 @@ func registerReworkFlags(fs *flag.FlagSet) {
 	fs.Bool("force", false, "reopen even when the review gate would refuse")
 	fs.Bool("run", false, "run the plan after reopening")
 	fs.Bool("from-pr", false, "reopen from unresolved threads on the recorded pull request")
-	fs.String("from-authors", string(reworkpkg.PRThreadAuthorsOwner), "pull-request thread authors: owner or all")
+	fs.String("from-authors", string(forge.ReviewThreadAuthorsOwner), "pull-request thread authors: owner or all")
 	fs.Bool("dry-run", false, "classify, persist, and print pull-request triage without reopening")
 }
 
@@ -64,7 +65,7 @@ func (a App) rework(ctx context.Context, repo planRunRepository, args []string) 
 	runAfter := flagBoolValue(fs, "run")
 	fromPR := flagBoolValue(fs, "from-pr")
 	dryRun := flagBoolValue(fs, "dry-run")
-	authorScope := reworkpkg.PRThreadAuthorScope(strings.TrimSpace(flagStringValue(fs, "from-authors")))
+	authorScope := forge.ReviewThreadAuthorScope(strings.TrimSpace(flagStringValue(fs, "from-authors")))
 	if err := validateReworkFlagCombination(fs, fromPR, force, runAfter, dryRun, authorScope); err != nil {
 		return err
 	}
@@ -130,7 +131,7 @@ func (a App) rework(ctx context.Context, repo planRunRepository, args []string) 
 	})
 }
 
-func validateReworkFlagCombination(fs *flag.FlagSet, fromPR, force, runAfter, dryRun bool, scope reworkpkg.PRThreadAuthorScope) error {
+func validateReworkFlagCombination(fs *flag.FlagSet, fromPR, force, runAfter, dryRun bool, scope forge.ReviewThreadAuthorScope) error {
 	if !fromPR {
 		if flagWasProvided(fs, "from-authors") {
 			return fmt.Errorf("--from-authors requires --from-pr")
@@ -146,60 +147,48 @@ func validateReworkFlagCombination(fs *flag.FlagSet, fromPR, force, runAfter, dr
 	if dryRun && runAfter {
 		return fmt.Errorf("--dry-run cannot be combined with --run; rerun without --dry-run to reopen and run the plan")
 	}
-	if scope != reworkpkg.PRThreadAuthorsOwner && scope != reworkpkg.PRThreadAuthorsAll {
+	if scope != forge.ReviewThreadAuthorsOwner && scope != forge.ReviewThreadAuthorsAll {
 		return fmt.Errorf("invalid --from-authors value %q (want owner or all)", scope)
 	}
 	return nil
 }
 
-var readReworkPRThreads = func(ctx context.Context, app App, request reworkpkg.PRThreadReadRequest) (reworkpkg.PRThreadReadResult, error) {
-	return (reworkpkg.PRThreadReader{CommandRunner: app.CommandRunner}).Read(ctx, request)
+var readReworkPRThreads = func(ctx context.Context, app App, request forge.ReviewThreadReadRequest) (forge.ReviewThreadReadResult, error) {
+	return forge.NewGitHub(app.CommandRunner).ReadReviewThreads(ctx, request)
 }
 
-var classifyReworkPRThreads = func(ctx context.Context, app App, repoRoot string, threads []reworkpkg.PRThread, observe func(agentsession.Result, error)) ([]reworkpkg.PRThreadClassification, error) {
-	return (reworkpkg.PRThreadClassifier{Text: reworkTriageTextSession{app: app, observe: observe}}).Classify(ctx, repoRoot, threads)
+var classifyReworkPRThreads = func(ctx context.Context, app App, repoRoot string, threads []forge.ReviewThread, observe func(agentsession.Result, error)) ([]reworkpkg.PRThreadClassification, error) {
+	text := reworkpkg.PRTriageTextGeneratorFunc(func(ctx context.Context, repoRoot, prompt string) (string, error) {
+		generator, err := newReworkTriageTextGenerator(app, observe)
+		if err != nil {
+			return "", err
+		}
+		return generator.GenerateText(ctx, repoRoot, prompt)
+	})
+	return (reworkpkg.PRThreadClassifier{Text: text}).Classify(ctx, repoRoot, threads)
 }
 
-type reworkTriageTextSession struct {
-	app     App
-	observe func(agentsession.Result, error)
-}
-
-func (s reworkTriageTextSession) GenerateText(ctx context.Context, repoRoot, prompt string) (string, error) {
+func newReworkTriageTextGenerator(app App, observe func(agentsession.Result, error)) (agentsession.TextGenerator, error) {
 	defaults, err := cliEnvDefaults()
 	if err != nil {
-		return "", err
+		return agentsession.TextGenerator{}, err
 	}
 	descriptor, ok := agent.Lookup(defaults.Agent)
 	if !ok {
-		return "", fmt.Errorf("unsupported agent %q", defaults.Agent)
+		return agentsession.TextGenerator{}, fmt.Errorf("unsupported agent %q", defaults.Agent)
 	}
-	starter := s.app.ProcessStarter
+	starter := app.ProcessStarter
 	if starter == nil {
 		starter = agent.DefaultProcessStarter
 	}
-	runner := agentsession.New(agentsession.Config{
+	return agentsession.NewTextGenerator(agentsession.Config{
 		Descriptor: descriptor, Deps: agent.RuntimeDeps{ProcessStarter: starter},
 		SkipPermissions: defaults.SkipPermissions, Timeout: defaults.SessionTimeoutValue(),
-		Progress: s.app.Out, CommandRunner: s.app.CommandRunner,
-	})
-	result, err := runner.Run(ctx, agentsession.Request{RepoRoot: repoRoot, Prompt: prompt, CollectMetrics: true})
-	// Observe actual sessions before either provider errors or downstream
-	// classification validation can discard their measurements.
-	if result.Invoked && s.observe != nil {
-		s.observe(result, err)
-	}
-	if err != nil {
-		return "", err
-	}
-	text := strings.TrimSpace(result.FinalText)
-	if text == "" {
-		text = strings.TrimSpace(result.Output)
-	}
-	return text, nil
+		Progress: app.Out, CommandRunner: app.CommandRunner,
+	}, observe), nil
 }
 
-func (a App) reworkFromPullRequest(ctx context.Context, repo planRunRepository, record *plan.PlanRecord, now time.Time, scope reworkpkg.PRThreadAuthorScope, dryRun, runAfter bool) error {
+func (a App) reworkFromPullRequest(ctx context.Context, repo planRunRepository, record *plan.PlanRecord, now time.Time, scope forge.ReviewThreadAuthorScope, dryRun, runAfter bool) error {
 	detail := record.Detail()
 	request, err := pullRequestThreadReadRequest(detail, scope)
 	if err != nil {
@@ -252,20 +241,20 @@ func (a App) reworkFromPullRequest(ctx context.Context, repo planRunRepository, 
 	return nil
 }
 
-func pullRequestThreadReadRequest(detail *plan.PlanDetail, scope reworkpkg.PRThreadAuthorScope) (reworkpkg.PRThreadReadRequest, error) {
+func pullRequestThreadReadRequest(detail *plan.PlanDetail, scope forge.ReviewThreadAuthorScope) (forge.ReviewThreadReadRequest, error) {
 	id := reworkPlanID(detail)
 	if detail == nil || detail.State.Plan.PullRequest == nil || detail.State.Plan.PullRequest.Number <= 0 {
-		return reworkpkg.PRThreadReadRequest{}, fmt.Errorf("rework --from-pr requires plan %s to have a recorded pull request; create one with `tao run --pull-request %s`", id, id)
+		return forge.ReviewThreadReadRequest{}, fmt.Errorf("rework --from-pr requires plan %s to have a recorded pull request; create one with `tao run --pull-request %s`", id, id)
 	}
 	pr := detail.State.Plan.PullRequest
 	owner, name, number, err := parseRecordedPullRequestURL(pr.URL)
 	if err != nil {
-		return reworkpkg.PRThreadReadRequest{}, fmt.Errorf("rework --from-pr cannot resolve plan %s recorded pull request: %w", id, err)
+		return forge.ReviewThreadReadRequest{}, fmt.Errorf("rework --from-pr cannot resolve plan %s recorded pull request: %w", id, err)
 	}
 	if number != pr.Number {
-		return reworkpkg.PRThreadReadRequest{}, fmt.Errorf("rework --from-pr cannot resolve plan %s recorded pull request: URL number %d does not match recorded number %d", id, number, pr.Number)
+		return forge.ReviewThreadReadRequest{}, fmt.Errorf("rework --from-pr cannot resolve plan %s recorded pull request: URL number %d does not match recorded number %d", id, number, pr.Number)
 	}
-	return reworkpkg.PRThreadReadRequest{
+	return forge.ReviewThreadReadRequest{
 		RepoRoot: detail.State.Repo.Root, RepositoryOwner: owner, RepositoryName: name,
 		PullRequestNumber: pr.Number, AuthorScope: scope,
 	}, nil
@@ -287,7 +276,7 @@ func parseRecordedPullRequestURL(raw string) (string, string, int, error) {
 	return parts[0], parts[1], number, nil
 }
 
-func triageMatchesThreads(triage plan.PRFeedbackTriageResult, threads []reworkpkg.PRThread) bool {
+func triageMatchesThreads(triage plan.PRFeedbackTriageResult, threads []forge.ReviewThread) bool {
 	if len(triage) == 0 || len(triage) != len(threads) {
 		return false
 	}
@@ -299,7 +288,7 @@ func triageMatchesThreads(triage plan.PRFeedbackTriageResult, threads []reworkpk
 	return true
 }
 
-func writePullRequestTriage(out io.Writer, threads []reworkpkg.PRThread, triage plan.PRFeedbackTriageResult) error {
+func writePullRequestTriage(out io.Writer, threads []forge.ReviewThread, triage plan.PRFeedbackTriageResult) error {
 	if err := writeln(out, "Pull-request feedback triage:"); err != nil {
 		return err
 	}
@@ -327,7 +316,7 @@ func displayPRThreadPath(path string) string {
 	return "-"
 }
 
-func prThreadAuthor(thread reworkpkg.PRThread) string {
+func prThreadAuthor(thread forge.ReviewThread) string {
 	if len(thread.Comments) > 0 {
 		if author := strings.TrimSpace(thread.Comments[0].AuthorLogin); author != "" {
 			return author

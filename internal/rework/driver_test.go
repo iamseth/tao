@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/iamseth/tao/internal/forge"
 	"github.com/iamseth/tao/internal/plan"
 )
 
@@ -516,7 +517,7 @@ func TestDriverDecideUsesPullRequestReopenAsFreshLocationAdvisoryBaseline(t *tes
 	detail.State.Plan.PRFeedbackTriage = plan.PRFeedbackTriageResult{
 		"PRRT_change": {Kind: string(PRThreadKindChange), Rationale: "Requests a distinct fix in the recurring file."},
 	}
-	if _, err := ReopenFromPullRequest(&driverRecord{detail: detail}, []PRThread{{NodeID: "PRRT_change", Path: "store/file.go", Comments: []PRThreadComment{{Body: "Address the latest transaction bug."}}}}, time.Now()); err != nil {
+	if _, err := ReopenFromPullRequest(&driverRecord{detail: detail}, []forge.ReviewThread{{NodeID: "PRRT_change", Path: "store/file.go", Comments: []forge.ReviewThreadComment{{Body: "Address the latest transaction bug."}}}}, time.Now()); err != nil {
 		t.Fatalf("pull-request reopen failed: %v", err)
 	}
 	if got := RoundCount(detail); got != 3 {

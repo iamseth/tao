@@ -1,4 +1,4 @@
-package rework
+package forge
 
 import (
 	"bytes"
@@ -13,76 +13,79 @@ import (
 	"github.com/iamseth/tao/internal/commandrunner"
 )
 
-// PRThreadAuthorScope controls whose pull-request threads are returned.
-type PRThreadAuthorScope string
+// ReviewThreadAuthorScope controls whose pull-request threads are returned.
+type ReviewThreadAuthorScope string
 
 const (
-	// PRThreadAuthorsOwner returns threads started by the authenticated GitHub user.
-	PRThreadAuthorsOwner PRThreadAuthorScope = "owner"
-	// PRThreadAuthorsAll returns threads started by any GitHub user.
-	PRThreadAuthorsAll PRThreadAuthorScope = "all"
+	// ReviewThreadAuthorsOwner returns threads started by the authenticated GitHub user.
+	ReviewThreadAuthorsOwner ReviewThreadAuthorScope = "owner"
+	// ReviewThreadAuthorsAll returns threads started by any GitHub user.
+	ReviewThreadAuthorsAll ReviewThreadAuthorScope = "all"
 )
 
-// PRThreadComment is one comment in a pull-request review thread.
-type PRThreadComment struct {
+// ReviewThreadComment is one comment in a pull-request review thread.
+type ReviewThreadComment struct {
 	NodeID      string
 	Body        string
 	AuthorLogin string
 }
 
-// PRThread is a normalized pull-request review thread. A nil Line is retained
+// ReviewThread is a normalized pull-request review thread. A nil Line is retained
 // for outdated comments because downstream finding normalization does not rely
 // on line numbers.
-type PRThread struct {
+type ReviewThread struct {
 	NodeID     string
 	Path       string
 	Line       *int
 	IsResolved bool
 	IsOutdated bool
-	Comments   []PRThreadComment
+	Comments   []ReviewThreadComment
 }
 
-// PRThreadReadRequest identifies one GitHub pull request and the desired author scope.
-type PRThreadReadRequest struct {
+// ReviewThreadReadRequest identifies one GitHub pull request and the desired author scope.
+type ReviewThreadReadRequest struct {
 	RepoRoot          string
 	RepositoryOwner   string
 	RepositoryName    string
 	PullRequestNumber int
-	AuthorScope       PRThreadAuthorScope
+	AuthorScope       ReviewThreadAuthorScope
 }
 
-// PRThreadReadResult contains the authenticated owner and normalized threads.
-type PRThreadReadResult struct {
+// ReviewThreadReadResult contains the authenticated owner and normalized threads.
+type ReviewThreadReadResult struct {
 	OwnerLogin string
-	Threads    []PRThread
+	Threads    []ReviewThread
 }
 
-// PRThreadReader reads pull-request review threads through an injectable gh runner.
-type PRThreadReader struct {
-	CommandRunner commandrunner.Runner
+// ReviewThreads is the hosting-service boundary for reading review threads,
+// separate from pull-request lifecycle operations.
+type ReviewThreads interface {
+	ReadReviewThreads(context.Context, ReviewThreadReadRequest) (ReviewThreadReadResult, error)
 }
 
-// Read fetches the viewer and review threads in one GraphQL document, then
-// removes resolved and out-of-scope threads.
-func (r PRThreadReader) Read(ctx context.Context, request PRThreadReadRequest) (PRThreadReadResult, error) {
+var _ ReviewThreads = GitHub{}
+
+// ReadReviewThreads fetches the viewer and review threads in one GraphQL
+// document, then removes resolved and out-of-scope threads.
+func (g GitHub) ReadReviewThreads(ctx context.Context, request ReviewThreadReadRequest) (ReviewThreadReadResult, error) {
 	if strings.TrimSpace(request.RepoRoot) == "" {
-		return PRThreadReadResult{}, fmt.Errorf("read pull-request threads: repo root is empty")
+		return ReviewThreadReadResult{}, fmt.Errorf("read pull-request threads: repo root is empty")
 	}
 	if strings.TrimSpace(request.RepositoryOwner) == "" {
-		return PRThreadReadResult{}, fmt.Errorf("read pull-request threads: repository owner is empty")
+		return ReviewThreadReadResult{}, fmt.Errorf("read pull-request threads: repository owner is empty")
 	}
 	if strings.TrimSpace(request.RepositoryName) == "" {
-		return PRThreadReadResult{}, fmt.Errorf("read pull-request threads: repository name is empty")
+		return ReviewThreadReadResult{}, fmt.Errorf("read pull-request threads: repository name is empty")
 	}
 	if request.PullRequestNumber <= 0 {
-		return PRThreadReadResult{}, fmt.Errorf("read pull-request threads: pull-request number must be positive")
+		return ReviewThreadReadResult{}, fmt.Errorf("read pull-request threads: pull-request number must be positive")
 	}
 	scope := request.AuthorScope
 	if scope == "" {
-		scope = PRThreadAuthorsOwner
+		scope = ReviewThreadAuthorsOwner
 	}
-	if scope != PRThreadAuthorsOwner && scope != PRThreadAuthorsAll {
-		return PRThreadReadResult{}, fmt.Errorf("read pull-request threads: unsupported author scope %q", scope)
+	if scope != ReviewThreadAuthorsOwner && scope != ReviewThreadAuthorsAll {
+		return ReviewThreadReadResult{}, fmt.Errorf("read pull-request threads: unsupported author scope %q", scope)
 	}
 
 	args := []string{
@@ -92,7 +95,7 @@ func (r PRThreadReader) Read(ctx context.Context, request PRThreadReadRequest) (
 		"-f", "name=" + request.RepositoryName,
 		"-F", "number=" + strconv.Itoa(request.PullRequestNumber),
 	}
-	runner := r.CommandRunner
+	runner := g.runner
 	if runner == nil {
 		runner = commandrunner.DefaultLocal
 	}
@@ -100,9 +103,9 @@ func (r PRThreadReader) Read(ctx context.Context, request PRThreadReadRequest) (
 	var stderr bytes.Buffer
 	if err := runner(ctx, request.RepoRoot, "gh", args, &stdout, &stderr); err != nil {
 		if detail := strings.TrimSpace(stderr.String()); detail != "" {
-			return PRThreadReadResult{}, fmt.Errorf("gh api graphql: %w: %s", err, detail)
+			return ReviewThreadReadResult{}, fmt.Errorf("gh api graphql: %w: %s", err, detail)
 		}
-		return PRThreadReadResult{}, fmt.Errorf("gh api graphql: %w", err)
+		return ReviewThreadReadResult{}, fmt.Errorf("gh api graphql: %w", err)
 	}
 
 	return normalizePRThreadResponse(stdout.Bytes(), scope)
@@ -174,10 +177,10 @@ type prThreadGraphQLResponse struct {
 	} `json:"errors"`
 }
 
-func normalizePRThreadResponse(data []byte, scope PRThreadAuthorScope) (PRThreadReadResult, error) {
+func normalizePRThreadResponse(data []byte, scope ReviewThreadAuthorScope) (ReviewThreadReadResult, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	ownerLogin := ""
-	threads := make([]PRThread, 0)
+	threads := make([]ReviewThread, 0)
 	threadIndexes := make(map[string]int)
 	commentIDs := make(map[string]map[string]struct{})
 	hasSubmittedRoot := make(map[string]bool)
@@ -188,7 +191,7 @@ func normalizePRThreadResponse(data []byte, scope PRThreadAuthorScope) (PRThread
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return PRThreadReadResult{}, fmt.Errorf("parse gh pull-request threads: %w", err)
+			return ReviewThreadReadResult{}, fmt.Errorf("parse gh pull-request threads: %w", err)
 		}
 		pages++
 		if len(response.Errors) > 0 {
@@ -201,19 +204,19 @@ func normalizePRThreadResponse(data []byte, scope PRThreadAuthorScope) (PRThread
 			if len(messages) == 0 {
 				messages = append(messages, "unknown GraphQL error")
 			}
-			return PRThreadReadResult{}, fmt.Errorf("read pull-request threads: %s", strings.Join(messages, "; "))
+			return ReviewThreadReadResult{}, fmt.Errorf("read pull-request threads: %s", strings.Join(messages, "; "))
 		}
 		pageOwner := strings.TrimSpace(response.Data.Viewer.Login)
 		if pageOwner == "" {
-			return PRThreadReadResult{}, fmt.Errorf("read pull-request threads: GraphQL response is missing viewer login")
+			return ReviewThreadReadResult{}, fmt.Errorf("read pull-request threads: GraphQL response is missing viewer login")
 		}
 		if ownerLogin == "" {
 			ownerLogin = pageOwner
 		} else if !strings.EqualFold(ownerLogin, pageOwner) {
-			return PRThreadReadResult{}, fmt.Errorf("read pull-request threads: GraphQL response viewer changed during pagination")
+			return ReviewThreadReadResult{}, fmt.Errorf("read pull-request threads: GraphQL response viewer changed during pagination")
 		}
 		if response.Data.Repository == nil || response.Data.Repository.PullRequest == nil {
-			return PRThreadReadResult{}, fmt.Errorf("read pull-request threads: GraphQL response is missing pull request")
+			return ReviewThreadReadResult{}, fmt.Errorf("read pull-request threads: GraphQL response is missing pull request")
 		}
 
 		for _, node := range response.Data.Repository.PullRequest.ReviewThreads.Nodes {
@@ -225,7 +228,7 @@ func normalizePRThreadResponse(data []byte, scope PRThreadAuthorScope) (PRThread
 			if !exists {
 				index = len(threads)
 				threadIndexes[nodeID] = index
-				threads = append(threads, PRThread{
+				threads = append(threads, ReviewThread{
 					NodeID:     nodeID,
 					Path:       node.Path,
 					Line:       cloneInt(node.Line),
@@ -268,7 +271,7 @@ func normalizePRThreadResponse(data []byte, scope PRThreadAuthorScope) (PRThread
 				if commentNode.Author != nil {
 					authorLogin = strings.TrimSpace(commentNode.Author.Login)
 				}
-				thread.Comments = append(thread.Comments, PRThreadComment{
+				thread.Comments = append(thread.Comments, ReviewThreadComment{
 					NodeID:      commentID,
 					Body:        commentNode.Body,
 					AuthorLogin: authorLogin,
@@ -277,7 +280,7 @@ func normalizePRThreadResponse(data []byte, scope PRThreadAuthorScope) (PRThread
 		}
 	}
 	if pages == 0 {
-		return PRThreadReadResult{}, fmt.Errorf("parse gh pull-request threads: empty response")
+		return ReviewThreadReadResult{}, fmt.Errorf("parse gh pull-request threads: empty response")
 	}
 
 	filtered := threads[:0]
@@ -285,12 +288,12 @@ func normalizePRThreadResponse(data []byte, scope PRThreadAuthorScope) (PRThread
 		if thread.IsResolved || !hasSubmittedRoot[thread.NodeID] {
 			continue
 		}
-		if scope == PRThreadAuthorsOwner && (len(thread.Comments) == 0 || !strings.EqualFold(thread.Comments[0].AuthorLogin, ownerLogin)) {
+		if scope == ReviewThreadAuthorsOwner && (len(thread.Comments) == 0 || !strings.EqualFold(thread.Comments[0].AuthorLogin, ownerLogin)) {
 			continue
 		}
 		filtered = append(filtered, thread)
 	}
-	return PRThreadReadResult{OwnerLogin: ownerLogin, Threads: filtered}, nil
+	return ReviewThreadReadResult{OwnerLogin: ownerLogin, Threads: filtered}, nil
 }
 
 func cloneInt(value *int) *int {
