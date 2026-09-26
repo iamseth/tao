@@ -225,6 +225,7 @@ Each slice should include:
 - `depends_on` for serial dependencies.
 - Optional `tags`.
 - `expected_files` to describe the intended scope for planning and commit warnings.
+  For symbol-level contracts, when a later slice calls or references a function, type, method, flag, or subcommand an earlier slice creates, the producer names the exact identifier and signature in one line in its `tasks` and the consumer names the same identifier in its `context` or `tasks`; `depends_on` and `expected_files` remain file-level contracts and Tao does not validate identifiers.
 - Optional `required_inputs` for concrete repository artifacts that must exist before implementation begins; legacy slices and slices with no prerequisites omit it.
 - Optional `execution_root`, recorded by `tao run` at slice start as the absolute checkout or worktree root used for that run; legacy slices may omit it.
 - Optional `execution_start`, recording the immutable prepared boundary for an automatic slice. `branch` and `head` identify the original Git boundary; `commit_policy` and `workspace_strategy` preserve the effective execution choices (`slice` plus `worktree` for a resumable isolated run). Legacy records may omit the latter fields, which Tao infers only from durable plan/workspace metadata.

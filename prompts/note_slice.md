@@ -37,6 +37,7 @@ Artifact contract details:
 - Keep `state.updated_at` consistent with the plan lifecycle timestamps you write.
 - If you write `events.jsonl`, every event entry must use the Tao event field `timestamp`; do not use `at`.
 - Each slice object in `slices.json` must contain `id`, `title`, `status`, `depends_on`, `timing`, `goal`, `context`, `tasks`, `expected_files`, and `verification`.
+- When a later slice will call or reference a function, type, method, flag, or subcommand that an earlier slice creates, the producer slice's `tasks` must name the exact identifier and its signature in one line, and the consumer slice's `context` or `tasks` must name that same identifier. Serial order, shared file paths, `depends_on`, and `expected_files` are not an interface contract.
 - `verification` must contain `commands`, `source`, and `manual_checks`.
 - `required_inputs` and `approval` are optional; omit them when they do not apply. Do not add other per-slice fields from the fuller `tao-slice` contract.
 

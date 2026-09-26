@@ -367,6 +367,21 @@ func TestPlanningPromptsRequireSharedSeamVerificationBreadth(t *testing.T) {
 	}
 }
 
+func TestSlicePromptsRequireExactSymbolContracts(t *testing.T) {
+	for _, want := range []string{
+		"exact identifier and its signature in one line",
+		"consumer slice's `context` or `tasks` must name that same identifier",
+		"not an interface contract",
+	} {
+		if !strings.Contains(SlicePromptTemplate, want) {
+			t.Fatalf("slice prompt missing symbol contract %q", want)
+		}
+		if !strings.Contains(NoteSlicePromptTemplate, want) {
+			t.Fatalf("note slice prompt missing symbol contract %q", want)
+		}
+	}
+}
+
 func TestSlicePromptRequiresResolvedPlanChangeType(t *testing.T) {
 	for _, want := range []string{
 		"plan-level `change_type`",

@@ -125,6 +125,8 @@ Do not infer prerequisites from verification commands. `required_inputs` is only
 
 When an input will be created by an earlier slice, make the producer contract explicit in both directions: the consumer's `depends_on` must name that direct producer slice, and the producer's `expected_files` must contain the exact same concrete path. Serial order, transitive dependencies, directory prefixes, wildcards, and near matches are not producer contracts. Do not declare a future artifact as an input unless that exact direct dependency contract exists.
 
+When a later slice will call or reference a function, type, method, flag, or subcommand that an earlier slice creates, the producer slice's `tasks` must name the exact identifier and its signature in one line, and the consumer slice's `context` or `tasks` must name that same identifier. Serial order, shared file paths, `depends_on`, and `expected_files` are not an interface contract.
+
 ## Verification command selection
 
 Before writing `slices.json`, inspect repository guidance for canonical validation commands.
