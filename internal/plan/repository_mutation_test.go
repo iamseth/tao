@@ -296,7 +296,7 @@ func TestPlanRecordRearmsExactRequestedResolutionWithBoundedDiagnostic(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	warnings := ValidateDetail(reloaded)
+	warnings := validateDetail(reloaded)
 	if reloaded.State.Plan.MergeCommitIntent == nil || reloaded.State.Plan.MergeCommitIntent.Resolution != nil {
 		t.Fatalf("reloaded rearm state = %#v", reloaded.State.Plan.MergeCommitIntent)
 	}
@@ -667,7 +667,7 @@ func TestSingleMergeResolutionValidationAndLegacyCompatibility(t *testing.T) {
 	unknownIntent := validSingleMergeResolutionIntent("plan-a")
 	unknownIntent.Resolution = &unknown
 	detail := &PlanDetail{State: State{Plan: PlanState{ID: "plan-a", MergeCommitIntent: &unknownIntent}}}
-	warnings := ValidateDetail(detail)
+	warnings := validateDetail(detail)
 	if !slices.ContainsFunc(warnings, func(warning string) bool { return strings.Contains(warning, "merge_commit_intent is invalid") }) {
 		t.Fatalf("unknown resolution shape did not fail closed during validation: %v", warnings)
 	}
@@ -1602,7 +1602,7 @@ func TestPlanRecordStartSliceRepairsPersistedPrefixes(t *testing.T) {
 			detail.State.Plan.Timing.LastActivityAt = new(startedAt)
 		}},
 		{name: "slices advanced and event missing", mutate: func(detail *PlanDetail) {
-			if _, _, err := MarkSliceStarted(detail, "001-a", startedAt); err != nil {
+			if _, _, err := markSliceStarted(detail, "001-a", startedAt); err != nil {
 				t.Fatal(err)
 			}
 			detail.Events = nil
@@ -1905,7 +1905,7 @@ func TestReopenRejectsDuplicateSliceIDs(t *testing.T) {
 func TestEditRemoveSliceRejectsPendingDependents(t *testing.T) {
 	detail := editPlanDetail()
 
-	_, err := MarkSliceRemoved(detail, "001-a", editTime())
+	_, err := markSliceRemoved(detail, "001-a", editTime())
 	if err == nil || !strings.Contains(err.Error(), "pending slices depend on it: 002-b") {
 		t.Fatalf("expected dependency error, got %v", err)
 	}
@@ -1915,7 +1915,7 @@ func TestEditRemoveSliceDeletesPendingSlice(t *testing.T) {
 	detail := editPlanDetail()
 	detail.Slices.Slices[1].DependsOn = nil
 
-	event, err := MarkSliceRemoved(detail, "001-a", editTime())
+	event, err := markSliceRemoved(detail, "001-a", editTime())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1934,7 +1934,7 @@ func TestEditSkipSlicePreservesAuditableRecord(t *testing.T) {
 	detail := editPlanDetail()
 	detail.Slices.Slices[1].DependsOn = nil
 
-	event, err := MarkSliceSkipped(detail, "001-a", editTime())
+	event, err := markSliceSkipped(detail, "001-a", editTime())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1957,10 +1957,10 @@ func TestEditRejectsGeneratedVerificationRepairBeforeMutation(t *testing.T) {
 		edit   func(*PlanDetail) (Event, error)
 	}{
 		{name: "remove", action: "remove", edit: func(detail *PlanDetail) (Event, error) {
-			return MarkSliceRemoved(detail, "003-c", editTime())
+			return markSliceRemoved(detail, "003-c", editTime())
 		}},
 		{name: "skip", action: "skip", edit: func(detail *PlanDetail) (Event, error) {
-			return MarkSliceSkipped(detail, "003-c", editTime())
+			return markSliceSkipped(detail, "003-c", editTime())
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -1988,7 +1988,7 @@ func TestEditRejectsCompletedOrInProgressSlices(t *testing.T) {
 			detail := editPlanDetail()
 			detail.Slices.Slices[0].Status = status
 
-			_, err := MarkSliceSkipped(detail, "001-a", editTime())
+			_, err := markSliceSkipped(detail, "001-a", editTime())
 			if err == nil || !strings.Contains(err.Error(), "only pending slices can be edited") {
 				t.Fatalf("expected pending-only error, got %v", err)
 			}
@@ -1999,7 +1999,7 @@ func TestEditRejectsCompletedOrInProgressSlices(t *testing.T) {
 func TestEditReorderRejectsDependencyInvalidOrder(t *testing.T) {
 	detail := editPlanDetail()
 
-	_, err := MarkPendingSlicesReordered(detail, []string{"002-b", "001-a", "003-c"}, editTime())
+	_, err := markPendingSlicesReordered(detail, []string{"002-b", "001-a", "003-c"}, editTime())
 	if err == nil || !strings.Contains(err.Error(), "before pending dependency 001-a") {
 		t.Fatalf("expected dependency order error, got %v", err)
 	}
@@ -2008,7 +2008,7 @@ func TestEditReorderRejectsDependencyInvalidOrder(t *testing.T) {
 func TestEditReorderPendingSlices(t *testing.T) {
 	detail := editPlanDetail()
 
-	event, err := MarkPendingSlicesReordered(detail, []string{"001-a", "003-c", "002-b"}, editTime())
+	event, err := markPendingSlicesReordered(detail, []string{"001-a", "003-c", "002-b"}, editTime())
 	if err != nil {
 		t.Fatal(err)
 	}

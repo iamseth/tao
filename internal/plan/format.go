@@ -25,13 +25,6 @@ func FormatDuration(d time.Duration) string {
 	return fmt.Sprintf("%ds", seconds)
 }
 
-func FormatTime(t *time.Time) string {
-	if t == nil {
-		return "-"
-	}
-	return t.Local().Format("2006-01-02 15:04:05 MST")
-}
-
 func FormatHumanTime(t *time.Time, now time.Time) string {
 	if t == nil {
 		return "-"

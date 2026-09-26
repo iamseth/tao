@@ -75,7 +75,11 @@ func TestApproveCommandApprovesCurrentGatedSlice(t *testing.T) {
 	}
 
 	// Confirm the approved blocked slice is now continuable.
-	if err := plan.MarkBlockedContinued(updated, time.Now().UTC()); err != nil {
+	record, err := repo.PlanRecord(updated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := record.ContinueBlocked(time.Now().UTC()); err != nil {
 		t.Fatalf("expected approved blocked slice to be continuable, got %v", err)
 	}
 }

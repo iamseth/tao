@@ -13,6 +13,7 @@ import (
 
 	commitcontract "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/plantest"
 )
 
 type sliceCompletionStore struct {
@@ -423,11 +424,26 @@ func TestSliceCompletionRetryConsumesSettledJournalState(t *testing.T) {
 	settled := cloneRunRestartDetail(t, base)
 	settled.Slices.Slices[0].CommitIntent = &plan.SliceCommitIntent{Hash: hash, Policy: CommitPolicyNone.String(), StartingBranch: "tao/test", StartingHead: "base", CreatedAt: now}
 	outcome := plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionManualUncommitted}
-	event, appendEvent, err := plan.MarkSliceCompletedWithOutcome(settled, "001-a", notes, results, &outcome, now)
-	if err != nil || !appendEvent {
-		t.Fatalf("prepare settled completion: append=%t err=%v", appendEvent, err)
+	repository := plantest.NewRepository()
+	repository.AddDetail(settled)
+	settledRecord, err := repository.PlanRecord(settled)
+	if err != nil {
+		t.Fatal(err)
 	}
-	writeRunRestartJournal(t, planDir, "restart-completion", &settled.State, &settled.Slices, []plan.Event{event})
+	if err := settledRecord.CompleteSliceWithOutcome("001-a", notes, results, outcome, now); err != nil {
+		t.Fatalf("prepare settled completion: %v", err)
+	}
+	var completionEvent *plan.Event
+	for _, event := range settled.Events {
+		if event.Type == plan.EventTypeSliceCompleted && event.SliceID == "001-a" {
+			completionEvent = &event
+			break
+		}
+	}
+	if completionEvent == nil {
+		t.Fatal("missing slice_completed event")
+	}
+	writeRunRestartJournal(t, planDir, "restart-completion", &settled.State, &settled.Slices, []plan.Event{*completionEvent})
 
 	reloaded, err := plan.NewFileRepository(plansDir).ResolvePlan(context.Background(), planDir)
 	if err != nil {

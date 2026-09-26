@@ -77,12 +77,12 @@ func TestStartSliceRequestMutationMatchesStartSlice(t *testing.T) {
 			detail.State.Plan.LastRunCommitPolicy = "none"
 			detail.State.Plan.LastRunStartingDirty = []string{"keep.go"}
 			if tt.repair {
-				event, _, err := MarkSliceStarted(detail, "001-a", startedAt)
+				event, _, err := markSliceStarted(detail, "001-a", startedAt)
 				if err != nil {
 					t.Fatal(err)
 				}
 				detail.Events = append(detail.Events, event)
-				if _, _, err := MarkSliceStarted(detail, "001-a", startedAt.Add(time.Minute)); err != nil {
+				if _, _, err := markSliceStarted(detail, "001-a", startedAt.Add(time.Minute)); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -435,55 +435,6 @@ func TestWriteStateAndSlicesUseSameDirectoryAtomicReplacement(t *testing.T) {
 	}
 }
 
-func TestReviewArtifactRoundTrip(t *testing.T) {
-	dir := t.TempDir()
-	content := "# Plan Review\n\nVerdict: pass\n\nNo findings.\n"
-
-	if err := WriteReviewArtifact(dir, content); err != nil {
-		t.Fatal(err)
-	}
-
-	artifact, warnings := readReviewArtifact(dir)
-	if len(warnings) != 0 {
-		t.Fatalf("unexpected review warnings: %v", warnings)
-	}
-	if artifact.Path != filepath.Join(dir, ReviewFile) || artifact.Content != content {
-		t.Fatalf("unexpected review artifact: %+v", artifact)
-	}
-	info, err := os.Stat(filepath.Join(dir, ReviewFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("expected review artifact permissions 0600, got %o", info.Mode().Perm())
-	}
-	matches, err := filepath.Glob(filepath.Join(dir, "."+ReviewFile+".tmp-*"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(matches) != 0 {
-		t.Fatalf("expected no temporary review artifacts, got %v", matches)
-	}
-
-	writeStartSliceArtifacts(t, dir, startSliceDetail(dir))
-	files, err := loadPlanFiles(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if files.review.Path != filepath.Join(dir, ReviewFile) || files.review.Content != content {
-		t.Fatalf("loadPlanFiles did not populate review artifact: %+v", files.review)
-	}
-	detail := detailFromFiles(files)
-	if detail.Review.Path != filepath.Join(dir, ReviewFile) || detail.Review.Content != content {
-		t.Fatalf("detailFromFiles did not populate review artifact: %+v", detail.Review)
-	}
-
-	missing, missingWarnings := readReviewArtifact(t.TempDir())
-	if len(missingWarnings) != 0 || missing.Path != "" || missing.Content != "" {
-		t.Fatalf("missing review artifact should be tolerated, got artifact=%+v warnings=%v", missing, missingWarnings)
-	}
-}
-
 func TestPlanReviewStatePersistence(t *testing.T) {
 	dir := t.TempDir()
 	reviewedAt := time.Date(2026, 6, 28, 7, 1, 2, 0, time.UTC)
@@ -575,7 +526,7 @@ func TestArtifactChangeSetLowersDeclaredIntentAndPreservesUnknownFields(t *testi
 
 	detail := startSliceDetail(dir)
 	detail.State.Plan.Review = nil
-	preserved, err := prepareJSON(path, detail.State, stateJSONChanges(NewArtifactChangeSet(detail)))
+	preserved, err := prepareJSON(path, detail.State, stateJSONChanges(newArtifactChangeSet(detail)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -588,7 +539,7 @@ func TestArtifactChangeSetLowersDeclaredIntentAndPreservesUnknownFields(t *testi
 		t.Fatalf("undeclared review or unknown siblings were not preserved: %#v", preservedRoot)
 	}
 
-	clearChanges := NewArtifactChangeSet(detail)
+	clearChanges := newArtifactChangeSet(detail)
 	clearChanges.ClearPlanReview()
 	cleared, err := prepareJSON(path, detail.State, stateJSONChanges(clearChanges))
 	if err != nil {
@@ -607,7 +558,7 @@ func TestArtifactChangeSetLowersDeclaredIntentAndPreservesUnknownFields(t *testi
 	}
 
 	replacement := PlanReview{ReviewedAt: time.Date(2026, 5, 4, 0, 0, 0, 0, time.UTC)}
-	replaceChanges := NewArtifactChangeSet(detail)
+	replaceChanges := newArtifactChangeSet(detail)
 	if err := replaceChanges.ReplacePlanReview(replacement); err != nil {
 		t.Fatal(err)
 	}
@@ -669,11 +620,11 @@ func TestPersistStateChangesRebasesReviewReplacementAndPreservesUnknownFields(t 
 	}
 
 	replacement := PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictComment}
-	changes := NewArtifactChangeSet(detail)
+	changes := newArtifactChangeSet(detail)
 	if err := changes.ReplacePlanReview(replacement); err != nil {
 		t.Fatal(err)
 	}
-	if err := record.PersistStateChanges(changes); err != nil {
+	if err := record.persistStateChanges(changes); err != nil {
 		t.Fatal(err)
 	}
 
@@ -709,7 +660,7 @@ func TestArtifactChangeSetThreadsThroughArtifactMutation(t *testing.T) {
 	}
 
 	err := applyArtifactMutation(fileArtifactStore{}, dir, detail, func(working *PlanDetail) (lifecycleMutation, error) {
-		return applyLifecycleMutation(working, func(changes *ArtifactChangeSet) ([]Event, error) {
+		return applyLifecycleMutation(working, func(changes *artifactChangeSet) ([]Event, error) {
 			changes.ClearPlanReview()
 			return nil, changes.ClearSliceBlockerNote("001-a")
 		})
@@ -748,7 +699,7 @@ func TestArtifactChangeSetThreadsThroughSlicesUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := applySlicesArtifactUpdate(fileArtifactStore{}, dir, detail, func(_ *PlanDetail, changes *ArtifactChangeSet) error {
+	if err := applySlicesArtifactUpdate(fileArtifactStore{}, dir, detail, func(_ *PlanDetail, changes *artifactChangeSet) error {
 		return changes.ClearSliceBlockerNote("001-a")
 	}); err != nil {
 		t.Fatal(err)
@@ -789,8 +740,8 @@ func TestSliceBlockerClearAppliesAfterArtifactSliceRebase(t *testing.T) {
 
 	now := time.Date(2026, 5, 3, 23, 45, 0, 0, time.UTC)
 	if err := applyArtifactMutationPreservingDetail(fileArtifactStore{}, dir, stale, baseline, func(working *PlanDetail) (lifecycleMutation, error) {
-		return applyLifecycleMutation(working, func(changes *ArtifactChangeSet) ([]Event, error) {
-			return nil, markBlockedContinued(working, changes, now)
+		return applyLifecycleMutation(working, func(changes *artifactChangeSet) ([]Event, error) {
+			return nil, markBlockedContinuedWithChanges(working, changes, now)
 		})
 	}); err != nil {
 		t.Fatal(err)
@@ -833,9 +784,9 @@ func TestArtifactChangeSetPreparedBytesMatchAdapterStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fileChanges := NewArtifactChangeSet(fileDetail)
+	fileChanges := newArtifactChangeSet(fileDetail)
 	fileChanges.ClearPlanReview()
-	if err := fileRecord.PersistStateChanges(fileChanges); err != nil {
+	if err := fileRecord.persistStateChanges(fileChanges); err != nil {
 		t.Fatal(err)
 	}
 	filePayload, err := os.ReadFile(filepath.Join(fileDir, "state.json")) //nolint:gosec // Test path is rooted in t.TempDir.
@@ -850,9 +801,9 @@ func TestArtifactChangeSetPreparedBytesMatchAdapterStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapterChanges := NewArtifactChangeSet(adapterDetail)
+	adapterChanges := newArtifactChangeSet(adapterDetail)
 	adapterChanges.ClearPlanReview()
-	if err := adapterRecord.PersistStateChanges(adapterChanges); err != nil {
+	if err := adapterRecord.persistStateChanges(adapterChanges); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(adapter.statePayload, filePayload) {
@@ -1410,8 +1361,8 @@ func TestApplyLifecycleMutationReturnsExplicitArtifacts(t *testing.T) {
 	now := time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)
 	detail := startSliceDetail("")
 
-	mutation, err := applyLifecycleMutation(detail, func(_ *ArtifactChangeSet) ([]Event, error) {
-		event, appendEvent, err := MarkSliceStarted(detail, "001-a", now)
+	mutation, err := applyLifecycleMutation(detail, func(_ *artifactChangeSet) ([]Event, error) {
+		event, appendEvent, err := markSliceStarted(detail, "001-a", now)
 		if err != nil {
 			return nil, err
 		}
@@ -1565,7 +1516,7 @@ func TestApplyArtifactMutationLeavesDetailUnchangedOnFailures(t *testing.T) {
 			original := clonePlanDetail(detail)
 
 			err := applyArtifactMutation(tt.store, detail.Dir, detail, func(mutated *PlanDetail) (lifecycleMutation, error) {
-				if _, _, err := MarkSliceStarted(mutated, "001-a", time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)); err != nil {
+				if _, _, err := markSliceStarted(mutated, "001-a", time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)); err != nil {
 					return lifecycleMutation{}, err
 				}
 				return lifecycleMutation{State: mutated.State, Slices: mutated.Slices, Events: []Event{event}}, nil
@@ -3109,7 +3060,7 @@ func TestMarkBlockedContinuedRestartsBlockedSlice(t *testing.T) {
 	detail := startSliceDetail("")
 	detail.Slices.Slices[0].Status = StatusBlocked
 
-	if err := MarkBlockedContinued(detail, now); err != nil {
+	if err := markBlockedContinued(detail, now); err != nil {
 		t.Fatal(err)
 	}
 	if detail.State.Status != StatusInProgress || detail.Slices.Slices[0].Status != StatusInProgress {
@@ -3124,7 +3075,7 @@ func TestMarkBlockedContinuedFallsBackToFirstPending(t *testing.T) {
 	detail.State.Plan.PendingSlices = []string{"002-b"}
 	detail.Slices.Slices = append(detail.Slices.Slices, Slice{ID: "002-b", Status: StatusPending})
 
-	if err := MarkBlockedContinued(detail, now); err != nil {
+	if err := markBlockedContinued(detail, now); err != nil {
 		t.Fatal(err)
 	}
 	if detail.State.Plan.CurrentSlice == nil || *detail.State.Plan.CurrentSlice != "002-b" || detail.Slices.Slices[1].Status != StatusInProgress {
@@ -3158,7 +3109,7 @@ func TestMarkBlockedContinuedRejectsSafeguards(t *testing.T) {
 				tt.mutate(detail)
 			}
 
-			err := MarkBlockedContinued(detail, time.Date(2026, 5, 3, 23, 45, 0, 0, time.UTC))
+			err := markBlockedContinued(detail, time.Date(2026, 5, 3, 23, 45, 0, 0, time.UTC))
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("expected %q error, got %v", tt.want, err)
 			}

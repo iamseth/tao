@@ -56,6 +56,9 @@ func (p ExecutionPreparer) Prepare(ctx context.Context, detail *plan.PlanDetail,
 	if detail.State.Repo.Root == "" {
 		return "", fmt.Errorf("plan %s does not record a repo root", detail.State.Plan.ID)
 	}
+	if p.PlanRecordFactory == nil {
+		return "", fmt.Errorf("plan record factory is nil")
+	}
 	strategy := plan.WorkspaceStrategyWorktree
 	root := ""
 	if detail.State.Workspace != nil {
@@ -103,19 +106,16 @@ func (p ExecutionPreparer) Prepare(ctx context.Context, detail *plan.PlanDetail,
 		}
 		recordedBaseSHA = detail.State.Workspace.BaseSHA
 	}
-	var record PlanRecord
+	record, err := p.PlanRecordFactory(detail)
+	if err != nil {
+		return "", err
+	}
+	if record == nil {
+		return "", fmt.Errorf("plan record is nil")
+	}
 	var rebaseRecorder RebaseRecorder
-	if p.PlanRecordFactory != nil {
-		record, err = p.PlanRecordFactory(detail)
-		if err != nil {
-			return "", err
-		}
-		if record == nil {
-			return "", fmt.Errorf("plan record is nil")
-		}
-		if rebaseRecord, ok := record.(rebasePlanRecord); ok {
-			rebaseRecorder = executionRebaseRecorder{detail: detail, record: rebaseRecord}
-		}
+	if rebaseRecord, ok := record.(rebasePlanRecord); ok {
+		rebaseRecorder = executionRebaseRecorder{detail: detail, record: rebaseRecord}
 	}
 	metadata, err := manager.Prepare(ctx, PrepareOptions{PlanID: detail.State.Plan.ID, BaseBranch: recordedBaseBranch, BaseSHA: recordedBaseSHA, Branch: branchIdentity.Name, RequireNewBranch: branchIdentity.RequireNew, PreferDefaultBranch: true, RebaseStale: true, RebaseRecorder: rebaseRecorder, Now: p.Now})
 	if err != nil {
@@ -127,7 +127,7 @@ func (p ExecutionPreparer) Prepare(ctx context.Context, detail *plan.PlanDetail,
 		BaseStatus: metadata.BaseStatus, HeadSHA: metadata.HeadSHA, RefreshStatus: metadata.RefreshStatus,
 		RebaseStatus: metadata.RebaseStatus, Created: metadata.Created, RecordedAt: p.now(),
 	}
-	if err := recordWorkspacePreparing(detail, record, preparing); err != nil {
+	if err := recordWorkspacePreparing(record, preparing); err != nil {
 		return "", fmt.Errorf("record workspace metadata: %w", err)
 	}
 	priorFingerprint := detail.State.Workspace.DependencyFingerprint
@@ -148,7 +148,7 @@ func (p ExecutionPreparer) Prepare(ctx context.Context, detail *plan.PlanDetail,
 		if dependencyErr != nil {
 			if !metadata.Reused || priorFingerprint == "" {
 				failure := workspaceDependencyFailureRequest(dependency)
-				if writeErr := recordWorkspaceDependencyFailure(detail, record, failure); writeErr != nil {
+				if writeErr := recordWorkspaceDependencyFailure(record, failure); writeErr != nil {
 					return "", fmt.Errorf("record dependency failure: %w", writeErr)
 				}
 				return "", dependencyErr
@@ -174,7 +174,7 @@ func (p ExecutionPreparer) Prepare(ctx context.Context, detail *plan.PlanDetail,
 			ready.DependencyFingerprint = fingerprint
 		}
 	}
-	if err := recordWorkspaceReady(detail, record, ready); err != nil {
+	if err := recordWorkspaceReady(record, ready); err != nil {
 		return "", fmt.Errorf("record workspace ready metadata: %w", err)
 	}
 	return metadata.Path, nil
@@ -241,25 +241,16 @@ func (p ExecutionPreparer) now() time.Time {
 	return time.Now()
 }
 
-func recordWorkspacePreparing(detail *plan.PlanDetail, record PlanRecord, request plan.WorkspacePreparingRequest) error {
-	if record != nil {
-		return record.RecordWorkspacePreparing(request)
-	}
-	return plan.MarkWorkspacePreparing(detail, request)
+func recordWorkspacePreparing(record PlanRecord, request plan.WorkspacePreparingRequest) error {
+	return record.RecordWorkspacePreparing(request)
 }
 
-func recordWorkspaceDependencyFailure(detail *plan.PlanDetail, record PlanRecord, request plan.WorkspaceDependencyFailureRequest) error {
-	if record != nil {
-		return record.RecordWorkspaceDependencyFailure(request)
-	}
-	return plan.MarkWorkspaceDependencyFailure(detail, request)
+func recordWorkspaceDependencyFailure(record PlanRecord, request plan.WorkspaceDependencyFailureRequest) error {
+	return record.RecordWorkspaceDependencyFailure(request)
 }
 
-func recordWorkspaceReady(detail *plan.PlanDetail, record PlanRecord, request plan.WorkspaceReadyRequest) error {
-	if record != nil {
-		return record.RecordWorkspaceReady(request)
-	}
-	return plan.MarkWorkspaceReady(detail, request)
+func recordWorkspaceReady(record PlanRecord, request plan.WorkspaceReadyRequest) error {
+	return record.RecordWorkspaceReady(request)
 }
 
 func workspaceDependencyFailureRequest(metadata DependencyMetadata) plan.WorkspaceDependencyFailureRequest {

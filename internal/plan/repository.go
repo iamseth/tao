@@ -75,27 +75,17 @@ type EventAppender interface {
 	AppendEvent(planDir string, event Event) error
 }
 
-// SliceRunStore is the run package's artifact boundary: it exposes telemetry
-// writes plus a record factory for plan lifecycle mutations.
-type SliceRunStore interface {
+type SliceRunRepository interface {
+	Resolver
 	LogAppender
 	EventAppender
 	PlanRecordStore
 }
 
-type SliceRunRepository interface {
-	Resolver
-	SliceRunStore
-}
-
-// repositoryArtifactOperations inventories artifact methods promoted from the
-// shared helper to both repository implementations.
+// repositoryArtifactOperations inventories artifact and log methods promoted
+// from the shared helper.
 type repositoryArtifactOperations interface {
-	AppendEvent(planDir string, event Event) error
-}
-
-// repositoryLogOperations inventories log methods promoted from the shared helper.
-type repositoryLogOperations interface {
+	EventAppender
 	LogAppender
 	LogReader
 	LogTailReader
@@ -110,7 +100,6 @@ var (
 	_ PlanRecordResolver           = (*FileRepository)(nil)
 	_ PlanDeleter                  = (*FileRepository)(nil)
 	_ repositoryArtifactOperations = (*FileRepository)(nil)
-	_ repositoryLogOperations      = (*FileRepository)(nil)
 )
 
 // FileRepository is the package boundary between callers and on-disk plan
@@ -153,8 +142,8 @@ type planDirEntry struct {
 
 type fileArtifactStore struct{}
 
-// DefaultDir resolves to the centralized plans directory for the current source repository.
-func DefaultDir() string {
+// defaultDir resolves to the centralized plans directory for the current source repository.
+func defaultDir() string {
 	registry := taodata.NewRegistry("")
 	if repo, err := registry.Current(context.Background()); err == nil && repo.ID != "" {
 		return registry.PlansDir(repo)
@@ -169,7 +158,7 @@ func DefaultDir() string {
 
 func NewFileRepository(dir string) *FileRepository {
 	if dir == "" {
-		dir = DefaultDir()
+		dir = defaultDir()
 	}
 	repo := &FileRepository{Dir: dir, Now: time.Now, store: fileArtifactStore{}}
 	repo.artifactOperations = artifactOperations{store: &repo.store}
@@ -381,7 +370,7 @@ func detailFromFiles(files planFiles) *PlanDetail {
 	slicesBaseline := cloneSlicesFile(detail.Slices)
 	detail.loadedStateBaseline = &stateBaseline
 	detail.loadedSlicesBaseline = &slicesBaseline
-	detail.Warnings = append(detail.Warnings, ValidateDetail(detail)...)
+	detail.Warnings = append(detail.Warnings, validateDetail(detail)...)
 	return detail
 }
 

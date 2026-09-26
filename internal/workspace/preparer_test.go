@@ -12,7 +12,29 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/plantest"
 )
+
+func TestExecutionPreparerRequiresPlanRecordFactory(t *testing.T) {
+	for _, mode := range []string{"isolated", "current"} {
+		t.Run(mode, func(t *testing.T) {
+			detail := executionPreparerPlanDetail(t.TempDir())
+			preparer := ExecutionPreparer{
+				managerFactory: func(Options) (executionWorkspaceManager, error) {
+					t.Fatal("manager must not be created without a plan record factory")
+					return nil, nil
+				},
+			}
+			root, err := preparer.Prepare(context.Background(), detail, ExecutionPrepareOptions{ExecutionMode: mode})
+			if err == nil || !strings.Contains(err.Error(), "plan record factory is nil") {
+				t.Fatalf("Prepare error = %v, want missing plan record factory", err)
+			}
+			if root != "" || detail.State.Workspace != nil {
+				t.Fatalf("missing factory returned root %q or mutated workspace: %#v", root, detail.State.Workspace)
+			}
+		})
+	}
+}
 
 func TestExecutionPreparerDefaultsToWorktree(t *testing.T) {
 	repoRoot := t.TempDir()
@@ -24,7 +46,7 @@ func TestExecutionPreparerDefaultsToWorktree(t *testing.T) {
 		BaseBranch: "feature", BaseSHA: "base123", BaseCurrentSHA: "base123", HeadSHA: "head123", Created: true,
 	}, &prepareCalls)
 
-	root, err := (ExecutionPreparer{managerFactory: managerFactory}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
+	root, err := (ExecutionPreparer{managerFactory: managerFactory, PlanRecordFactory: memoryWorkspacePlanRecordFactory}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
 	if err != nil {
 		t.Fatalf("prepare execution workspace: %v", err)
 	}
@@ -50,7 +72,7 @@ func TestExecutionPreparerCreatesTypedPlanBranch(t *testing.T) {
 	config := DefaultConfig()
 	config.DependencyInstallBehavior = DependencyInstallNever
 
-	root, err := (ExecutionPreparer{Config: config}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
+	root, err := (ExecutionPreparer{Config: config, PlanRecordFactory: memoryWorkspacePlanRecordFactory}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +99,11 @@ func TestExecutionPreparerRecoversTypedWorktreeAfterMetadataPersistenceFailure(t
 	failing := ExecutionPreparer{
 		Config: config,
 		PlanRecordFactory: func(detail *plan.PlanDetail) (PlanRecord, error) {
-			return workspacePlanRecord{detail: detail, persist: func() error { return persistErr }}, nil
+			record, err := memoryWorkspacePlanRecordFactory(detail)
+			if err != nil {
+				return nil, err
+			}
+			return workspacePlanRecord{PlanRecord: record, persist: func() error { return persistErr }}, nil
 		},
 	}
 
@@ -87,7 +113,7 @@ func TestExecutionPreparerRecoversTypedWorktreeAfterMetadataPersistenceFailure(t
 	}
 
 	recovered := newDetail()
-	root, err := (ExecutionPreparer{Config: config}).Prepare(context.Background(), recovered, ExecutionPrepareOptions{})
+	root, err := (ExecutionPreparer{Config: config, PlanRecordFactory: memoryWorkspacePlanRecordFactory}).Prepare(context.Background(), recovered, ExecutionPrepareOptions{})
 	if err != nil {
 		t.Fatalf("recover unrecorded typed worktree: %v", err)
 	}
@@ -110,7 +136,7 @@ func TestExecutionPreparerPreservesRecordedPlanBranch(t *testing.T) {
 	config := DefaultConfig()
 	config.DependencyInstallBehavior = DependencyInstallNever
 
-	_, err := (ExecutionPreparer{Config: config}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
+	_, err := (ExecutionPreparer{Config: config, PlanRecordFactory: memoryWorkspacePlanRecordFactory}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +155,7 @@ func TestExecutionPreparerRejectsTypedBranchCollision(t *testing.T) {
 	config := DefaultConfig()
 	config.DependencyInstallBehavior = DependencyInstallNever
 
-	_, err := (ExecutionPreparer{Config: config}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
+	_, err := (ExecutionPreparer{Config: config, PlanRecordFactory: memoryWorkspacePlanRecordFactory}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
 	if err == nil || !strings.Contains(err.Error(), "without durable ownership") {
 		t.Fatalf("typed collision error = %v", err)
 	}
@@ -150,7 +176,7 @@ func TestExecutionPreparerWorktreeRunOptionOverridesPlanCurrent(t *testing.T) {
 		BaseBranch: "feature", BaseSHA: "base123", BaseCurrentSHA: "base123", HeadSHA: "head123", Created: true,
 	}, nil)
 
-	root, err := (ExecutionPreparer{managerFactory: managerFactory}).Prepare(context.Background(), detail, ExecutionPrepareOptions{ExecutionMode: "isolated"})
+	root, err := (ExecutionPreparer{managerFactory: managerFactory, PlanRecordFactory: memoryWorkspacePlanRecordFactory}).Prepare(context.Background(), detail, ExecutionPrepareOptions{ExecutionMode: "isolated"})
 	if err != nil {
 		t.Fatalf("prepare execution workspace: %v", err)
 	}
@@ -180,7 +206,7 @@ func TestExecutionPreparerBlocksWorktreeAfterCurrentCheckoutVerification(t *test
 	}}
 	prepareCalls := 0
 
-	_, err := (ExecutionPreparer{managerFactory: executionPreparerManagerFactory(Metadata{}, &prepareCalls)}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
+	_, err := (ExecutionPreparer{managerFactory: executionPreparerManagerFactory(Metadata{}, &prepareCalls), PlanRecordFactory: memoryWorkspacePlanRecordFactory}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
 	if err == nil {
 		t.Fatal("expected execution context drift error")
 	}
@@ -212,7 +238,7 @@ func TestExecutionPreparerBlocksCurrentAfterWorktreeVerification(t *testing.T) {
 	}}
 	prepareCalls := 0
 
-	_, err := (ExecutionPreparer{managerFactory: executionPreparerManagerFactory(Metadata{}, &prepareCalls)}).Prepare(context.Background(), detail, ExecutionPrepareOptions{ExecutionMode: "current"})
+	_, err := (ExecutionPreparer{managerFactory: executionPreparerManagerFactory(Metadata{}, &prepareCalls), PlanRecordFactory: memoryWorkspacePlanRecordFactory}).Prepare(context.Background(), detail, ExecutionPrepareOptions{ExecutionMode: "current"})
 	if err == nil {
 		t.Fatal("expected execution context drift error")
 	}
@@ -248,7 +274,7 @@ func TestExecutionPreparerAllowsWorktreeResumeWithRelativeVerificationCWD(t *tes
 		BaseCurrentSHA: "base123", HeadSHA: "head123", Reused: true,
 	}, nil)
 
-	root, err := (ExecutionPreparer{managerFactory: managerFactory}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
+	root, err := (ExecutionPreparer{managerFactory: managerFactory, PlanRecordFactory: memoryWorkspacePlanRecordFactory}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
 	if err != nil {
 		t.Fatalf("prepare execution workspace: %v", err)
 	}
@@ -416,7 +442,7 @@ func TestExecutionPreparerBlocksMixedVerificationWorkspaces(t *testing.T) {
 	}}
 	prepareCalls := 0
 
-	_, err := (ExecutionPreparer{managerFactory: executionPreparerManagerFactory(Metadata{}, &prepareCalls)}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
+	_, err := (ExecutionPreparer{managerFactory: executionPreparerManagerFactory(Metadata{}, &prepareCalls), PlanRecordFactory: memoryWorkspacePlanRecordFactory}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
 	if err == nil {
 		t.Fatal("expected mixed execution context drift error")
 	}
@@ -448,7 +474,11 @@ func TestExecutionPreparerWritesPreparingThenReadyMetadata(t *testing.T) {
 	recordFactoryCalls := 0
 	recordFactory := func(detail *plan.PlanDetail) (PlanRecord, error) {
 		recordFactoryCalls++
-		return workspacePlanRecord{detail: detail, persist: func() error {
+		record, err := memoryWorkspacePlanRecordFactory(detail)
+		if err != nil {
+			return nil, err
+		}
+		return workspacePlanRecord{PlanRecord: record, persist: func() error {
 			statuses = append(statuses, detail.State.Workspace.LifecycleStatus)
 			return nil
 		}}, nil
@@ -489,7 +519,7 @@ func TestPrepareRebasesStaleWorktreeBeforeRun(t *testing.T) {
 	detail.State.Repo.Branch = "master"
 	detail.State.Repo.BaseCommit = initialBase
 
-	root, err := (ExecutionPreparer{}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
+	root, err := (ExecutionPreparer{PlanRecordFactory: memoryWorkspacePlanRecordFactory}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
 	if err != nil {
 		t.Fatalf("initial prepare: %v", err)
 	}
@@ -498,7 +528,7 @@ func TestPrepareRebasesStaleWorktreeBeforeRun(t *testing.T) {
 	commitTestFile(t, repo.path, "default.txt", "default work\n", "advance default")
 	defaultHead := gitHead(t, repo.path)
 
-	root, err = (ExecutionPreparer{}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
+	root, err = (ExecutionPreparer{PlanRecordFactory: memoryWorkspacePlanRecordFactory}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
 	if err != nil {
 		t.Fatalf("prepare stale worktree: %v", err)
 	}
@@ -918,7 +948,7 @@ func TestPrepareUsesDefaultBranchForWorkspaceBase(t *testing.T) {
 	detail := executionPreparerPlanDetail(repo.path)
 	detail.State.Repo.Branch = "feature"
 
-	root, err := (ExecutionPreparer{}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
+	root, err := (ExecutionPreparer{PlanRecordFactory: memoryWorkspacePlanRecordFactory}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
@@ -938,7 +968,7 @@ func TestPrepareUsesDefaultBranchForWorkspaceBaseFallbackWhenRemoteDefaultMissin
 	detail := executionPreparerPlanDetail(repo.path)
 	detail.State.Repo.Branch = "master"
 
-	_, err := (ExecutionPreparer{}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
+	_, err := (ExecutionPreparer{PlanRecordFactory: memoryWorkspacePlanRecordFactory}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
@@ -957,7 +987,7 @@ func TestPrepareUsesDefaultBranchForWorkspaceBaseFallbackWhenRemoteDefaultIsOnly
 	detail := executionPreparerPlanDetail(repo.path)
 	detail.State.Repo.Branch = "master"
 
-	root, err := (ExecutionPreparer{}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
+	root, err := (ExecutionPreparer{PlanRecordFactory: memoryWorkspacePlanRecordFactory}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
@@ -1036,7 +1066,7 @@ func TestExecutionPreparerFreshDependencyFailureIsHard(t *testing.T) {
 		BaseCurrentSHA: "base123", HeadSHA: "head123", Created: true,
 	}, nil)
 
-	_, err := (ExecutionPreparer{Runner: runner, Config: config, managerFactory: managerFactory}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
+	_, err := (ExecutionPreparer{Runner: runner, Config: config, managerFactory: managerFactory, PlanRecordFactory: memoryWorkspacePlanRecordFactory}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
 	if err == nil {
 		t.Fatal("expected fresh workspace dependency failure")
 	}
@@ -1109,7 +1139,7 @@ func dependencyPreparerFixture(t *testing.T, config Config, install func(io.Writ
 			}, nil
 		}), nil
 	}
-	preparer := ExecutionPreparer{Runner: dependencyPreparerRunner(install, installCalls), Config: config, managerFactory: managerFactory}
+	preparer := ExecutionPreparer{Runner: dependencyPreparerRunner(install, installCalls), Config: config, managerFactory: managerFactory, PlanRecordFactory: memoryWorkspacePlanRecordFactory}
 	workspacePath, err := preparer.Prepare(context.Background(), detail, ExecutionPrepareOptions{})
 	if err != nil {
 		t.Fatalf("prepare initial workspace: %v", err)
@@ -1269,27 +1299,33 @@ func executionPreparerPlanDetail(repoRoot string) *plan.PlanDetail {
 	}
 }
 
+func memoryWorkspacePlanRecordFactory(detail *plan.PlanDetail) (PlanRecord, error) {
+	repository := plantest.NewRepository()
+	repository.AddDetail(detail)
+	return repository.PlanRecord(detail)
+}
+
 type workspacePlanRecord struct {
-	detail  *plan.PlanDetail
+	PlanRecord
 	persist func() error
 }
 
 func (r workspacePlanRecord) RecordWorkspacePreparing(request plan.WorkspacePreparingRequest) error {
-	if err := plan.MarkWorkspacePreparing(r.detail, request); err != nil {
+	if err := r.PlanRecord.RecordWorkspacePreparing(request); err != nil {
 		return err
 	}
 	return r.persist()
 }
 
 func (r workspacePlanRecord) RecordWorkspaceDependencyFailure(request plan.WorkspaceDependencyFailureRequest) error {
-	if err := plan.MarkWorkspaceDependencyFailure(r.detail, request); err != nil {
+	if err := r.PlanRecord.RecordWorkspaceDependencyFailure(request); err != nil {
 		return err
 	}
 	return r.persist()
 }
 
 func (r workspacePlanRecord) RecordWorkspaceReady(request plan.WorkspaceReadyRequest) error {
-	if err := plan.MarkWorkspaceReady(r.detail, request); err != nil {
+	if err := r.PlanRecord.RecordWorkspaceReady(request); err != nil {
 		return err
 	}
 	return r.persist()

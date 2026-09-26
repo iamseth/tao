@@ -25,8 +25,8 @@ const (
 	maxRuntimePrerequisiteReason    = 1000
 )
 
-// ValidateDetail reports artifact consistency warnings without rejecting loadable plans.
-func ValidateDetail(detail *PlanDetail) []string {
+// validateDetail reports artifact consistency warnings without rejecting loadable plans.
+func validateDetail(detail *PlanDetail) []string {
 	var warnings []string
 	if detail.State.Plan.ID == "" {
 		warnings = append(warnings, "state.json missing plan.id")

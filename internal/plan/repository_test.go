@@ -155,7 +155,7 @@ func TestNextRunnableSlice(t *testing.T) {
 	}
 	detail.State.Status = StatusBlocked
 	detail.Slices.Slices[1].Status = StatusBlocked
-	if err := MarkBlockedContinued(detail, time.Time{}); err != nil {
+	if err := markBlockedContinued(detail, time.Time{}); err != nil {
 		t.Fatalf("expected approved slice to enable continue checks, got %v", err)
 	}
 	detail.State.Status = StatusPlanned

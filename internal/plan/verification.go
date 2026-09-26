@@ -44,11 +44,6 @@ func ValidatePlanVerification(detail *PlanDetail) VerificationValidationResult {
 	return result
 }
 
-// ValidateSelectedSliceVerification is stricter for the runnable slice because it gates a run.
-func ValidateSelectedSliceVerification(detail *PlanDetail) VerificationValidationResult {
-	return ValidateSelectedSliceVerificationAtRoot(detail, "")
-}
-
 // ValidateSelectedSliceVerificationAtRoot validates the runnable slice as it will
 // execute from repoRoot. When repoRoot is empty, the plan's recorded repository
 // root is used.

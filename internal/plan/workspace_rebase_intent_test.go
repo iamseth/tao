@@ -182,9 +182,9 @@ func TestWorkspaceRebaseIntentClearRequiresDeclarationAndPreservesUnknownFields(
 	if err := record.PersistState(); err == nil || !strings.Contains(err.Error(), "RebaseIntent") {
 		t.Fatalf("undeclared clear error = %v", err)
 	}
-	changes := NewArtifactChangeSet(detail)
+	changes := newArtifactChangeSet(detail)
 	changes.ClearWorkspaceRebaseIntent()
-	if err := record.PersistStateChanges(changes); err != nil {
+	if err := record.persistStateChanges(changes); err != nil {
 		t.Fatal(err)
 	}
 	readJSONFile(t, filepath.Join(dir, "state.json"), &raw)

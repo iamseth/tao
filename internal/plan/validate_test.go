@@ -56,7 +56,7 @@ func TestValidateSelectedSliceVerificationAllowsSameSliceFutureFile(t *testing.T
 		}}},
 	}
 
-	result := ValidateSelectedSliceVerification(detail)
+	result := ValidateSelectedSliceVerificationAtRoot(detail, "")
 	if result.HasErrors() {
 		t.Fatalf("expected same-slice future file to stay warning-only, got %+v", result.Findings)
 	}
@@ -77,7 +77,7 @@ func TestValidateSelectedSliceVerificationAllowsDependencyFutureFile(t *testing.
 		}},
 	}
 
-	result := ValidateSelectedSliceVerification(detail)
+	result := ValidateSelectedSliceVerificationAtRoot(detail, "")
 	if result.HasErrors() {
 		t.Fatalf("expected dependency future file to stay warning-only, got %+v", result.Findings)
 	}
@@ -97,7 +97,7 @@ func TestValidateSelectedSliceVerificationLeavesExistingFutureFileUnchanged(t *t
 		}}},
 	}
 
-	result := ValidateSelectedSliceVerification(detail)
+	result := ValidateSelectedSliceVerificationAtRoot(detail, "")
 	if len(result.Findings) != 0 {
 		t.Fatalf("expected existing file behavior to be unchanged, got %+v", result.Findings)
 	}
@@ -132,7 +132,7 @@ func TestValidateSelectedSliceVerificationRequiresExactFutureFile(t *testing.T) 
 		}}},
 	}
 
-	result := ValidateSelectedSliceVerification(detail)
+	result := ValidateSelectedSliceVerificationAtRoot(detail, "")
 	if result.HasErrors() {
 		t.Fatalf("expected command-derived missing path to remain advisory, got %+v", result.Findings)
 	}
@@ -168,7 +168,7 @@ func TestValidateSelectedSliceVerificationKeepsMissingCommandPathAdvisory(t *tes
 		Slices: SlicesFile{Slices: []Slice{{ID: "001-a", Status: StatusPending, Verification: Verification{Commands: []string{"pnpm exec vitest missing.test.ts"}}}}},
 	}
 
-	result := ValidateSelectedSliceVerification(detail)
+	result := ValidateSelectedSliceVerificationAtRoot(detail, "")
 	if result.HasErrors() {
 		t.Fatalf("expected selected missing command path to remain advisory, got %+v", result.Findings)
 	}
@@ -199,7 +199,7 @@ func TestValidateSelectedSliceVerificationKeepsShellHazardsAdvisory(t *testing.T
 		Slices: SlicesFile{Slices: []Slice{{ID: "001-a", Status: StatusPending, Verification: Verification{Commands: []string{"go test ./internal/plan -run Test.*Verification"}}}}},
 	}
 
-	result := ValidateSelectedSliceVerification(detail)
+	result := ValidateSelectedSliceVerificationAtRoot(detail, "")
 	if result.HasErrors() {
 		t.Fatalf("expected selected shell hazard to remain advisory, got %+v", result.Findings)
 	}
@@ -218,7 +218,7 @@ func TestValidateSelectedSliceVerificationSuggestsPackageRelativePath(t *testing
 		Slices: SlicesFile{Slices: []Slice{{ID: "001-a", Status: StatusPending, Verification: Verification{Commands: []string{"pnpm --filter @repo/api exec vitest services/api/index.test.ts"}}}}},
 	}
 
-	result := ValidateSelectedSliceVerification(detail)
+	result := ValidateSelectedSliceVerificationAtRoot(detail, "")
 	if result.HasErrors() {
 		t.Fatalf("expected selected package-cwd path mismatch to remain advisory, got %+v", result.Findings)
 	}
@@ -234,7 +234,7 @@ func TestValidateSelectedSliceVerificationReportsRunnableError(t *testing.T) {
 		Slices: SlicesFile{Slices: []Slice{{ID: "002-b", Status: StatusPending, DependsOn: []string{"001-a"}}}},
 	}
 
-	result := ValidateSelectedSliceVerification(detail)
+	result := ValidateSelectedSliceVerificationAtRoot(detail, "")
 	if !result.HasErrors() {
 		t.Fatalf("expected dependency to block selected validation, got %+v", result.Findings)
 	}
@@ -308,7 +308,7 @@ func TestValidateSelectedSliceVerificationWarnsForSelectedGuardrailsOnly(t *test
 		}},
 	}
 
-	result := ValidateSelectedSliceVerification(detail)
+	result := ValidateSelectedSliceVerificationAtRoot(detail, "")
 	if result.HasErrors() {
 		t.Fatalf("expected selected guardrails to be warning-only, got %+v", result.Findings)
 	}
@@ -323,7 +323,7 @@ func TestValidateSelectedSliceVerificationBlocksMissingVerificationCommands(t *t
 		Slices: SlicesFile{Slices: []Slice{{ID: "001-a", Status: StatusPending}}},
 	}
 
-	result := ValidateSelectedSliceVerification(detail)
+	result := ValidateSelectedSliceVerificationAtRoot(detail, "")
 	if !result.HasErrors() {
 		t.Fatalf("expected selected missing verification to block, got %+v", result.Findings)
 	}
@@ -503,7 +503,7 @@ func TestValidateSelectedSliceVerificationBlocksBlankCommandLists(t *testing.T) 
 			State:  State{Status: StatusPlanned, Repo: Repo{Root: t.TempDir()}, Plan: PlanState{ID: "plan", PendingSlices: []string{"001-a"}}},
 			Slices: SlicesFile{Slices: []Slice{{ID: "001-a", Status: StatusPending, Verification: Verification{Commands: commands}}}},
 		}
-		result := ValidateSelectedSliceVerification(detail)
+		result := ValidateSelectedSliceVerificationAtRoot(detail, "")
 		if !result.HasErrors() || findFindingByCode(result.Findings, "slice_verification_missing") == nil {
 			t.Fatalf("expected blank verification structure to block, commands=%q findings=%+v", commands, result.Findings)
 		}
@@ -522,7 +522,7 @@ func TestValidateDetailAcceptsAbandonedOverrideWithUnfinishedSlices(t *testing.T
 		}},
 		Events: []Event{{Type: EventTypePlanAbandoned, Timestamp: at, Reason: "No longer needed"}},
 	}
-	warnings := ValidateDetail(detail)
+	warnings := validateDetail(detail)
 	for _, unwanted := range []string{"active lifecycle metadata", "current_slice references", "pending_slices references", "plan_abandoned"} {
 		if containsWarning(warnings, unwanted) {
 			t.Fatalf("abandoned unfinished state warning containing %q: %v", unwanted, warnings)
@@ -539,7 +539,7 @@ func TestValidateDetailReportsInvalidAbandonmentEvidence(t *testing.T) {
 			{Type: EventTypePlanAbandoned, Timestamp: time.Date(2026, 9, 1, 17, 0, 0, 0, time.UTC), Reason: "duplicate"},
 		},
 	}
-	warnings := ValidateDetail(detail)
+	warnings := validateDetail(detail)
 	for _, want := range []string{"reason is invalid", "timestamp is required", "multiple plan_abandoned events"} {
 		if !containsWarning(warnings, want) {
 			t.Fatalf("warnings missing %q: %v", want, warnings)
@@ -547,7 +547,7 @@ func TestValidateDetailReportsInvalidAbandonmentEvidence(t *testing.T) {
 	}
 
 	detail.Events = nil
-	warnings = ValidateDetail(detail)
+	warnings = validateDetail(detail)
 	if !containsWarning(warnings, "no plan_abandoned evidence") {
 		t.Fatalf("missing-event warnings = %v", warnings)
 	}
@@ -561,7 +561,7 @@ func TestValidateDetailConstrainsFinalVerificationFailureKind(t *testing.T) {
 			Slices:        SlicesFile{PlanID: "plan"},
 			PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
 		}
-		if warnings := ValidateDetail(detail); containsWarning(warnings, "final_verification.failure_kind") {
+		if warnings := validateDetail(detail); containsWarning(warnings, "final_verification.failure_kind") {
 			t.Fatalf("valid failure kind %q produced warnings: %v", kind, warnings)
 		}
 	}
@@ -572,7 +572,7 @@ func TestValidateDetailConstrainsFinalVerificationFailureKind(t *testing.T) {
 		Events:        []Event{{FailureKind: "environment"}},
 		PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
 	}
-	warnings := ValidateDetail(detail)
+	warnings := validateDetail(detail)
 	if !containsWarning(warnings, "final_verification.failure_kind is invalid") || !containsWarning(warnings, "event 1 failure_kind is invalid") {
 		t.Fatalf("invalid failure kinds were not reported: %v", warnings)
 	}
@@ -588,7 +588,7 @@ func TestValidateDetailAllowsCanonicalCurrentSliceStatuses(t *testing.T) {
 				PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
 			}
 
-			if warnings := ValidateDetail(detail); len(warnings) != 0 {
+			if warnings := validateDetail(detail); len(warnings) != 0 {
 				t.Fatalf("expected canonical current %s slice to have no warnings, got %v", status, warnings)
 			}
 		})
@@ -606,7 +606,7 @@ func TestValidateDetailWarnsForBlockedCurrentSliceMissingFromPendingQueue(t *tes
 		PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
 	}
 
-	warnings := ValidateDetail(detail)
+	warnings := validateDetail(detail)
 	if !containsWarning(warnings, "current_slice references blocked slice 001-a missing from pending_slices") {
 		t.Fatalf("expected missing blocked current slice warning, got %v", warnings)
 	}
@@ -625,7 +625,7 @@ func TestValidateDetailWarnsForNonCurrentActivePendingEntries(t *testing.T) {
 				PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
 			}
 
-			warnings := ValidateDetail(detail)
+			warnings := validateDetail(detail)
 			want := "pending_slices references " + status + " slice 002-b"
 			if !containsWarning(warnings, want) {
 				t.Fatalf("expected warning %q, got %v", want, warnings)
@@ -645,7 +645,7 @@ func TestValidateDetailStillWarnsForMalformedQueueWithCurrentBlockedSlice(t *tes
 		PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
 	}
 
-	warnings := ValidateDetail(detail)
+	warnings := validateDetail(detail)
 	for _, want := range []string{
 		"pending_slices contains duplicate slice 002-b",
 		"pending_slices orders slice 001-a before dependency 002-b",
@@ -667,7 +667,7 @@ func TestValidateDetailWarnsForStaleCompletedCurrentSliceRecovery(t *testing.T) 
 		PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
 	}
 
-	warnings := ValidateDetail(detail)
+	warnings := validateDetail(detail)
 	if !containsWarning(warnings, "current_slice references a completed slice") {
 		t.Fatalf("expected stale current_slice warning, got %v", warnings)
 	}
@@ -681,7 +681,7 @@ func TestValidateDetailWarnsForActiveEmptyPendingPlan(t *testing.T) {
 		PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
 	}
 
-	warnings := ValidateDetail(detail)
+	warnings := validateDetail(detail)
 	if !containsWarning(warnings, "pending_slices is empty") {
 		t.Fatalf("expected active empty-pending warning, got %v", warnings)
 	}
@@ -704,7 +704,7 @@ func TestValidateDetailWarnsForEditedQueueInconsistencies(t *testing.T) {
 		PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
 	}
 
-	warnings := ValidateDetail(detail)
+	warnings := validateDetail(detail)
 	for _, want := range []string{
 		"current_slice references skipped slice 003-c",
 		"completed_slices references skipped slice 003-c",
@@ -726,7 +726,7 @@ func TestSliceTagsRemainOptionalForExistingPlans(t *testing.T) {
 	if slices.Slices[0].Tags != nil {
 		t.Fatalf("expected omitted tags to remain nil, got %#v", slices.Slices[0].Tags)
 	}
-	warnings := ValidateDetail(&PlanDetail{
+	warnings := validateDetail(&PlanDetail{
 		State:         State{Plan: PlanState{ID: "plan", PendingSlices: []string{"001-a"}}},
 		Slices:        slices,
 		PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
@@ -752,7 +752,7 @@ func TestValidateDetailAllowsValidDecisionAndSequenceMetadata(t *testing.T) {
 		PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
 	}
 
-	if warnings := ValidateDetail(detail); len(warnings) != 0 {
+	if warnings := validateDetail(detail); len(warnings) != 0 {
 		t.Fatalf("valid decision metadata produced warnings: %v", warnings)
 	}
 }
@@ -775,7 +775,7 @@ func TestValidateDetailWarnsForMalformedPresentDecisionAndSequence(t *testing.T)
 		PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
 	}
 
-	warnings := ValidateDetail(detail)
+	warnings := validateDetail(detail)
 	for _, want := range []string{
 		"plan.decision.problem is required",
 		"plan.decision.why_now is required",
@@ -858,7 +858,7 @@ func TestValidateDetailAllowsSupportedAndLegacyPlanChangeTypes(t *testing.T) {
 				Slices:        SlicesFile{PlanID: "plan", Slices: []Slice{{ID: "001-a", Status: StatusPending}}},
 				PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
 			}
-			if warnings := ValidateDetail(detail); len(warnings) != 0 {
+			if warnings := validateDetail(detail); len(warnings) != 0 {
 				t.Fatalf("change type %q produced warnings: %v", changeType, warnings)
 			}
 		})
@@ -872,7 +872,7 @@ func TestValidateDetailWarnsForInvalidPlanChangeType(t *testing.T) {
 		PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
 	}
 
-	warnings := ValidateDetail(detail)
+	warnings := validateDetail(detail)
 	if !containsWarning(warnings, `plan.change_type is invalid: unsupported plan change type "feature"`) || !containsWarning(warnings, "feat, fix, docs") {
 		t.Fatalf("expected useful invalid change type warning, got %v", warnings)
 	}
@@ -890,19 +890,19 @@ func TestValidateDetailWarnsForTypedApprovedProposalMismatch(t *testing.T) {
 		Slices:        SlicesFile{PlanID: "plan", Slices: []Slice{{ID: "001-a", Status: StatusPending}}},
 		PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
 	}
-	warnings := ValidateDetail(&base)
+	warnings := validateDetail(&base)
 	if !containsWarning(warnings, `commit_message type mismatch: expected "fix", observed "feat"`) {
 		t.Fatalf("expected typed proposal mismatch warning, got %v", warnings)
 	}
 
 	legacy := clonePlanDetail(&base)
 	legacy.State.Plan.ChangeType = ""
-	if warnings := ValidateDetail(legacy); containsWarning(warnings, "commit_message type mismatch") {
+	if warnings := validateDetail(legacy); containsWarning(warnings, "commit_message type mismatch") {
 		t.Fatalf("legacy untyped proposal produced mismatch warning: %v", warnings)
 	}
 	incomplete := clonePlanDetail(&base)
 	incomplete.State.Plan.Review.CommitMessage = nil
-	if warnings := ValidateDetail(incomplete); containsWarning(warnings, "commit_message type mismatch") {
+	if warnings := validateDetail(incomplete); containsWarning(warnings, "commit_message type mismatch") {
 		t.Fatalf("incomplete proposal produced mismatch warning: %v", warnings)
 	}
 }
@@ -916,7 +916,7 @@ func TestValidateDetailWarnsForMalformedHistoricalFinalizationFailure(t *testing
 		Slices:        SlicesFile{PlanID: "plan", Slices: []Slice{{ID: "001-a", Status: StatusPending}}},
 		PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
 	}
-	warnings := ValidateDetail(detail)
+	warnings := validateDetail(detail)
 	if !containsWarning(warnings, "plan.finalization_failure is invalid") {
 		t.Fatalf("expected historical failure warning, got %v", warnings)
 	}
@@ -929,7 +929,7 @@ func TestValidateDetailAllowsMissingWorkspaceMetadata(t *testing.T) {
 		PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
 	}
 
-	warnings := ValidateDetail(detail)
+	warnings := validateDetail(detail)
 	if len(warnings) != 0 {
 		t.Fatalf("expected no warnings for missing workspace metadata, got %v", warnings)
 	}
@@ -950,7 +950,7 @@ func TestValidateDetailWarnsForInvalidWorkspaceMetadata(t *testing.T) {
 		PlanningBrief: PlanningBriefArtifact{Content: completePlanningBriefMarkdown()},
 	}
 
-	warnings := ValidateDetail(detail)
+	warnings := validateDetail(detail)
 	for _, want := range []string{"workspace.strategy", "workspace.lifecycle_status", "workspace.dependency_preparation_status", "workspace.cleanup_status"} {
 		if !containsWarning(warnings, want) {
 			t.Fatalf("expected warning %q, got %v", want, warnings)

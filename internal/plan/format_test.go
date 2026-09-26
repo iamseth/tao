@@ -6,28 +6,6 @@ import (
 	"time"
 )
 
-func TestFormatTimeUsesLocalTimezone(t *testing.T) {
-	originalTZ := os.Getenv("TZ")
-	originalLocal := time.Local
-	t.Cleanup(func() {
-		time.Local = originalLocal
-		if originalTZ == "" {
-			_ = os.Unsetenv("TZ")
-			return
-		}
-		_ = os.Setenv("TZ", originalTZ)
-	})
-	if err := os.Setenv("TZ", "America/Chicago"); err != nil {
-		t.Fatal(err)
-	}
-	time.Local = time.FixedZone("CDT", -5*60*60)
-
-	utc := time.Date(2026, 4, 27, 21, 32, 40, 0, time.UTC)
-	if got := FormatTime(&utc); got != "2026-04-27 16:32:40 CDT" {
-		t.Fatalf("expected local CDT output, got %q", got)
-	}
-}
-
 func TestFormatDuration(t *testing.T) {
 	tests := []struct {
 		name string

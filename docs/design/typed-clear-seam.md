@@ -4,29 +4,29 @@
 
 Tao will use an **explicit typed change set** at the artifact-persistence seam. A writer that wants to preserve an existing value does nothing; a writer that wants to clear or fully replace one of the migrated fields must use a field-specific change-set method. JSON tags no longer decide writer intent.
 
-The change set is bound to one `*PlanDetail` and its methods perform the in-memory mutation and record the corresponding persistence intent together:
+The change set is an internal seam of `internal/plan`, reached by other packages only through `PlanRecord` methods. It is bound to one `*PlanDetail` and its methods perform the in-memory mutation and record the corresponding persistence intent together:
 
 ```go
-type ArtifactChangeSet struct {
+type artifactChangeSet struct {
     detail *PlanDetail
     // Private, typed state/review/slice intents; no caller-supplied JSON paths.
 }
 
-func NewArtifactChangeSet(detail *PlanDetail) *ArtifactChangeSet
+func newArtifactChangeSet(detail *PlanDetail) *artifactChangeSet
 
-func (*ArtifactChangeSet) ClearWorkspaceDependencyFailure()
-func (*ArtifactChangeSet) ClearWorkspaceDependencyFingerprint()
-func (*ArtifactChangeSet) ClearWorkspaceRebaseIntent()
-func (*ArtifactChangeSet) ClearSliceBlockerNote(sliceID string) error
-func (*ArtifactChangeSet) ClearSliceExecutionBoundary(sliceID string) error
-func (*ArtifactChangeSet) ClearPlanCurrentSlice()
-func (*ArtifactChangeSet) ReplacePlanReview(review PlanReview) error
-func (*ArtifactChangeSet) ClearPlanReview()
+func (*artifactChangeSet) ClearWorkspaceDependencyFailure()
+func (*artifactChangeSet) ClearWorkspaceDependencyFingerprint()
+func (*artifactChangeSet) ClearWorkspaceRebaseIntent()
+func (*artifactChangeSet) ClearSliceBlockerNote(sliceID string) error
+func (*artifactChangeSet) ClearSliceExecutionBoundary(sliceID string) error
+func (*artifactChangeSet) ClearPlanCurrentSlice()
+func (*artifactChangeSet) ReplacePlanReview(review PlanReview) error
+func (*artifactChangeSet) ClearPlanReview()
 ```
 
 `ReplacePlanReview` means replacement of every known field in the review block, not a merge of only its non-zero fields. It sets `State.Plan.Review` and records explicit values for all known review keys. Thus an approval replaced by a non-approval cannot retain findings, a commit proposal, base/head/agent data, or any other known value omitted by the replacement. `ClearPlanReview` emits a null for the whole block. Both operations continue to preserve unknown keys when the block remains an object; clearing the whole block intentionally replaces that block with null.
 
-Ordinary non-zero assignments may remain direct assignments. The clear methods are deliberately verbs: an empty Go value by itself means preserve, while calling `Clear...` means erase the stored value. Internal lifecycle and state-event callbacks receive a change set. Callers that edit state before persistence use `PlanRecord.PersistStateChanges(*ArtifactChangeSet)`; the existing `PersistState()` remains the preserve-only path.
+Ordinary non-zero assignments may remain direct assignments. The clear methods are deliberately verbs: an empty Go value by itself means preserve, while calling `Clear...` means erase the stored value. Internal lifecycle and state-event callbacks receive a change set. In-package callers that edit state before persistence use `PlanRecord.persistStateChanges(*artifactChangeSet)`; the existing `PersistState()` remains the preserve-only path.
 
 ### Rejected alternatives
 
@@ -50,7 +50,7 @@ Those final bytes are prepared once, put in the mutation journal, and installed 
 ### Apply paths
 
 - **`applyArtifactMutationLocked`:** the lifecycle mutation returns state, slices, events, and its change set. For preserving-detail calls, the caller supplies the change set beside `baseline` and `intended`. After any three-way rebase, the typed intent is applied to the rebased values, then state and slices each call `prepareJSON` with their projection of the same change set. The resulting bytes are journaled as one mutation.
-- **`applyStateArtifactUpdate` (`PersistState` rebase):** `PersistStateChanges` passes the record baseline, intended state, and state intents. The ordinary field rebase runs first; declared replacement/clear intent is then applied to the rebased state so a concurrently settled non-zero value cannot override an explicit clear. `prepareJSON` receives the state projection. Preserve-only `PersistState` passes an empty change set.
+- **`applyStateArtifactUpdate` (`PersistState` rebase):** `persistStateChanges` passes the record baseline, intended state, and state intents. The ordinary field rebase runs first; declared replacement/clear intent is then applied to the rebased state so a concurrently settled non-zero value cannot override an explicit clear. `prepareJSON` receives the state projection. Preserve-only `PersistState` passes an empty change set.
 - **`applySlicesArtifactUpdate`:** the callback receives a change set bound to the refreshed working detail. Slice clears are keyed by stable slice ID, not array index. After the semantic callback, the code verifies that each target ID still exists and passes the slices projection to `prepareJSON`.
 - **State-plus-event updates:** `applyStateEventMutationLocked`, used by review writers, follows the same state projection and lowering rule as `applyStateArtifactUpdate`; events remain ordinary append-only values.
 
@@ -101,19 +101,19 @@ The writer regression seeds a real `state.json` with a prior failure, fingerprin
 
 ### 2. Workspace rebase intent
 
-`PlanRecord.SettleWorkspaceRebase` and `PlanRecord.ClearWorkspaceRebaseIntent` require the exact recorded intent and declare `ArtifactChangeSet.ClearWorkspaceRebaseIntent`; ordinary nil state preserves it. Settlement writes the new base, HEAD, and lifecycle values in the same state mutation as `rebase_intent: null`. Regression coverage seeds unknown workspace keys and verifies preserve-only writes, exact-match clear/settlement, idempotent retries, and rejection of undeclared or mismatched clears.
+`PlanRecord.SettleWorkspaceRebase` and `PlanRecord.ClearWorkspaceRebaseIntent` require the exact recorded intent and declare `artifactChangeSet.ClearWorkspaceRebaseIntent`; ordinary nil state preserves it. Settlement writes the new base, HEAD, and lifecycle values in the same state mutation as `rebase_intent: null`. Regression coverage seeds unknown workspace keys and verifies preserve-only writes, exact-match clear/settlement, idempotent retries, and rejection of undeclared or mismatched clears.
 
 ### 3. Blocker note
 
 Writer:
 
-- `PlanRecord.ContinueBlocked` / `continueBlockedMutation` / `MarkBlockedContinued` clears `Slice.BlockerNote` through `applyArtifactMutationLocked`.
+- `PlanRecord.ContinueBlocked` / `continueBlockedMutation` / `markBlockedContinuedWithChanges` clears `Slice.BlockerNote` through `applyArtifactMutationLocked`.
 
 The regression seeds a blocked slice plus an unknown key on that slice, calls `ContinueBlocked`, and asserts `blocker_note: ""`, the lifecycle transition, and the unknown key unchanged. It also exercises recovered-mutation matching so retry does not append or journal duplicate work.
 
 ### 4. Slice execution boundary
 
-`PlanRecord.RestartBlockedSlice` / `markBlockedSliceRestarted` declares `ArtifactChangeSet.ClearSliceExecutionBoundary` when an exact isolated pre-intent boundary is superseded on a newer baseline. The typed clear targets the slice by stable ID and emits `execution_root: ""` together with `execution_start: null`; ordinary empty/nil values omit those keys and preserve the stored boundary. The same artifact mutation retains the prior root, branch, and head in the `slice_restarted` event and preserves unknown per-slice keys.
+`PlanRecord.RestartBlockedSlice` / `markBlockedSliceRestarted` declares `artifactChangeSet.ClearSliceExecutionBoundary` when an exact isolated pre-intent boundary is superseded on a newer baseline. The typed clear targets the slice by stable ID and emits `execution_root: ""` together with `execution_start: null`; ordinary empty/nil values omit those keys and preserve the stored boundary. The same artifact mutation retains the prior root, branch, and head in the `slice_restarted` event and preserves unknown per-slice keys.
 
 Regression coverage performs an exact blocked restart from a slice with both boundary fields and verifies that the persisted boundary is cleared, the slice returns to pending, and the event retains the prior boundary. Recovered-mutation coverage verifies that an exact retry settles without duplicate work while a changed boundary is rejected. This coverage exercises the typed writer and lowering path; it does not claim an undeclared-clear validator or an execution-boundary-specific unknown-field fixture.
 
@@ -121,7 +121,7 @@ Regression coverage performs an exact blocked restart from a slice with both bou
 
 Writers:
 
-- `PlanRecord.CompleteSlice` and `CompleteSliceWithOutcome` through `MarkSliceCompletedWithOutcome`.
+- `PlanRecord.CompleteSlice` and `CompleteSliceWithOutcome` through `markSliceCompletedWithOutcomeWithChanges`.
 - `PlanRecord.RemoveSlice` and `SkipSlice` through `markPlanEdited` when editing removes the current selection.
 - `PlanRecord.Reopen` and `ReopenForced` through `Reopen` when establishing a no-current-slice rework queue.
 

@@ -823,7 +823,7 @@ func PersistedReview(detail *PlanDetail) *PlanReview {
 }
 
 // SetPersistedReview publishes already-persisted review metadata in memory.
-// It applies the same canonical replacement shape as ArtifactChangeSet without
+// It applies the same canonical replacement shape as artifactChangeSet without
 // creating persistence intent or writing an artifact. It is a no-op for nil
 // detail.
 func SetPersistedReview(detail *PlanDetail, review PlanReview) {

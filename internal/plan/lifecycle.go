@@ -22,7 +22,7 @@ type lifecycleMutation struct {
 	State   State
 	Slices  SlicesFile
 	Events  []Event
-	Changes *ArtifactChangeSet
+	Changes *artifactChangeSet
 }
 
 const (
@@ -110,8 +110,8 @@ func singleMergeResolutionFromEvent(event *SingleMergeResolutionEvent) *SingleMe
 	}
 }
 
-func applyLifecycleMutation(detail *PlanDetail, mutate func(*ArtifactChangeSet) ([]Event, error)) (lifecycleMutation, error) {
-	changes := NewArtifactChangeSet(detail)
+func applyLifecycleMutation(detail *PlanDetail, mutate func(*artifactChangeSet) ([]Event, error)) (lifecycleMutation, error) {
+	changes := newArtifactChangeSet(detail)
 	events, err := mutate(changes)
 	if err != nil {
 		return lifecycleMutation{}, err
@@ -187,9 +187,9 @@ func safeAbandonmentErrorReason(value string) string {
 	return value
 }
 
-// RequireAbandonable refuses outcomes whose current completion or durable
+// requireAbandonable refuses outcomes whose current completion or durable
 // transaction evidence must retain authority over lifecycle mutation.
-func RequireAbandonable(detail *PlanDetail) error {
+func requireAbandonable(detail *PlanDetail) error {
 	if detail == nil {
 		return fmt.Errorf("cannot abandon a nil plan")
 	}
@@ -450,7 +450,7 @@ func missingDependencies(slice *Slice, index detailIndex) []string {
 	return missing
 }
 
-// MarkSliceStarted and the following Mark* helpers mutate only the in-memory plan
+// markSliceStarted and the following mark* helpers mutate only the in-memory plan
 // detail, applying deterministic metadata and returning events for artifact_io.go to persist.
 func markSliceExecutionRoot(detail *PlanDetail, sliceID string, executionRoot string) error {
 	if detail == nil {
@@ -464,11 +464,11 @@ func markSliceExecutionRoot(detail *PlanDetail, sliceID string, executionRoot st
 	return nil
 }
 
-// MarkSliceExecutionStart records the prepared branch boundary immediately
+// markSliceExecutionStart records the prepared branch boundary immediately
 // before automatic agent work begins. The workspace mirror is part of the
 // state.json write that precedes slices.json, so a torn later-slice start can
 // still validate the newly captured boundary after reload.
-func MarkSliceExecutionStart(detail *PlanDetail, sliceID string, start SliceExecutionStart) error {
+func markSliceExecutionStart(detail *PlanDetail, sliceID string, start SliceExecutionStart) error {
 	if detail == nil {
 		return fmt.Errorf("plan detail is nil")
 	}
@@ -500,10 +500,10 @@ func MarkSliceExecutionStart(detail *PlanDetail, sliceID string, start SliceExec
 	return nil
 }
 
-// MarkRunStartMetadata records metadata captured at run start. LastRunStartingDirty
+// markRunStartMetadata records metadata captured at run start. LastRunStartingDirty
 // is intentionally normalized to an empty slice, not nil, when clean so state
 // writes clear stale path tolerances with a persisted [].
-func MarkRunStartMetadata(detail *PlanDetail, commitPolicy string, startingDirtyPaths []string) error {
+func markRunStartMetadata(detail *PlanDetail, commitPolicy string, startingDirtyPaths []string) error {
 	if detail == nil {
 		return fmt.Errorf("plan detail is nil")
 	}
@@ -521,9 +521,9 @@ func cloneRunStartPaths(paths []string) []string {
 	return cloned
 }
 
-// MarkFinalVerification records the repository-wide verification result and
+// markFinalVerification records the repository-wide verification result and
 // its activity timestamps without coupling callers to the State layout.
-func MarkFinalVerification(detail *PlanDetail, verification FinalVerification) error {
+func markFinalVerification(detail *PlanDetail, verification FinalVerification) error {
 	if detail == nil {
 		return fmt.Errorf("plan detail is nil")
 	}
@@ -537,7 +537,7 @@ func MarkFinalVerification(detail *PlanDetail, verification FinalVerification) e
 	return nil
 }
 
-func MarkSliceStarted(detail *PlanDetail, sliceID string, now time.Time) (Event, bool, error) {
+func markSliceStarted(detail *PlanDetail, sliceID string, now time.Time) (Event, bool, error) {
 	if detail == nil {
 		return Event{}, false, fmt.Errorf("plan detail is nil")
 	}
@@ -564,8 +564,8 @@ func MarkSliceStarted(detail *PlanDetail, sliceID string, now time.Time) (Event,
 	return event, !hasSliceStartedEvent(detail.Events, sliceID), nil
 }
 
-// MarkSliceCommitIntent records the immutable intent that precedes Git mutation.
-func MarkSliceCommitIntent(detail *PlanDetail, sliceID string, intent SliceCommitIntent) error {
+// markSliceCommitIntent records the immutable intent that precedes Git mutation.
+func markSliceCommitIntent(detail *PlanDetail, sliceID string, intent SliceCommitIntent) error {
 	if detail == nil {
 		return fmt.Errorf("plan detail is nil")
 	}
@@ -589,17 +589,17 @@ func MarkSliceCommitIntent(detail *PlanDetail, sliceID string, intent SliceCommi
 	return nil
 }
 
-// MarkSliceCompleted applies deterministic completion metadata to an in-memory plan detail.
-func MarkSliceCompleted(detail *PlanDetail, sliceID string, notes string, verificationResults []VerificationRun, now time.Time) (Event, bool, error) {
-	return markSliceCompletedWithOutcome(detail, NewArtifactChangeSet(detail), sliceID, notes, verificationResults, nil, now)
+// markSliceCompleted applies deterministic completion metadata to an in-memory plan detail.
+func markSliceCompleted(detail *PlanDetail, sliceID string, notes string, verificationResults []VerificationRun, now time.Time) (Event, bool, error) {
+	return markSliceCompletedWithOutcome(detail, sliceID, notes, verificationResults, nil, now)
 }
 
-// MarkSliceCompletedWithOutcome applies completion metadata and its Git outcome.
-func MarkSliceCompletedWithOutcome(detail *PlanDetail, sliceID string, notes string, verificationResults []VerificationRun, outcome *SliceCompletionOutcome, now time.Time) (Event, bool, error) {
-	return markSliceCompletedWithOutcome(detail, NewArtifactChangeSet(detail), sliceID, notes, verificationResults, outcome, now)
+// markSliceCompletedWithOutcome applies completion metadata and its Git outcome.
+func markSliceCompletedWithOutcome(detail *PlanDetail, sliceID string, notes string, verificationResults []VerificationRun, outcome *SliceCompletionOutcome, now time.Time) (Event, bool, error) {
+	return markSliceCompletedWithOutcomeWithChanges(detail, newArtifactChangeSet(detail), sliceID, notes, verificationResults, outcome, now)
 }
 
-func markSliceCompletedWithOutcome(detail *PlanDetail, changes *ArtifactChangeSet, sliceID string, notes string, verificationResults []VerificationRun, outcome *SliceCompletionOutcome, now time.Time) (Event, bool, error) {
+func markSliceCompletedWithOutcomeWithChanges(detail *PlanDetail, changes *artifactChangeSet, sliceID string, notes string, verificationResults []VerificationRun, outcome *SliceCompletionOutcome, now time.Time) (Event, bool, error) {
 	if detail == nil {
 		return Event{}, false, fmt.Errorf("plan detail is nil")
 	}
@@ -668,8 +668,8 @@ func refreshCompletedWorkspaceBoundary(detail *PlanDetail, slice *Slice, outcome
 	detail.State.Workspace.HeadSHA = outcome.CommitSHA
 }
 
-// MarkSliceApproved records human approval for an approval-gated slice.
-func MarkSliceApproved(detail *PlanDetail, sliceID string, approvedBy string, now time.Time) (Event, bool, error) {
+// markSliceApproved records human approval for an approval-gated slice.
+func markSliceApproved(detail *PlanDetail, sliceID string, approvedBy string, now time.Time) (Event, bool, error) {
 	if detail == nil {
 		return Event{}, false, fmt.Errorf("plan detail is nil")
 	}
@@ -705,9 +705,9 @@ func MarkSliceApproved(detail *PlanDetail, sliceID string, approvedBy string, no
 
 const maxBlockerNoteRunes = 16 * 1024
 
-// MarkSliceBlocked records a canonical exceptional stop while retaining all
+// markSliceBlocked records a canonical exceptional stop while retaining all
 // execution and queue metadata needed to continue or recover the slice.
-func MarkSliceBlocked(detail *PlanDetail, sliceID string, reason string, now time.Time) (Event, bool, error) {
+func markSliceBlocked(detail *PlanDetail, sliceID string, reason string, now time.Time) (Event, bool, error) {
 	if detail == nil {
 		return Event{}, false, fmt.Errorf("plan detail is nil")
 	}
@@ -773,11 +773,11 @@ func conflictingBlockedSliceID(detail *PlanDetail, sliceID string) string {
 	return ""
 }
 
-// MarkSliceBudgetBlocked records an enforced telemetry stop. Unlike an ordinary
+// markSliceBudgetBlocked records an enforced telemetry stop. Unlike an ordinary
 // exceptional stop, it may supersede completion recorded by the active agent:
 // the completion evidence stays intact so continuation enters the standard
 // guarded completion-recovery path instead of running the agent again.
-func MarkSliceBudgetBlocked(detail *PlanDetail, sliceID string, reason string, now time.Time) (Event, bool, error) {
+func markSliceBudgetBlocked(detail *PlanDetail, sliceID string, reason string, now time.Time) (Event, bool, error) {
 	if detail == nil {
 		return Event{}, false, fmt.Errorf("plan detail is nil")
 	}
@@ -795,15 +795,15 @@ func MarkSliceBudgetBlocked(detail *PlanDetail, sliceID string, reason string, n
 		slice.Timing.CompletedAt = nil
 		slice.Timing.DurationSeconds = nil
 	}
-	return MarkSliceBlocked(detail, sliceID, reason, now)
+	return markSliceBlocked(detail, sliceID, reason, now)
 }
 
-// MarkBlockedContinued selects the blocked/current slice and marks plan-owned lifecycle back in progress.
-func MarkBlockedContinued(detail *PlanDetail, now time.Time) error {
-	return markBlockedContinued(detail, NewArtifactChangeSet(detail), now)
+// markBlockedContinued selects the blocked/current slice and marks plan-owned lifecycle back in progress.
+func markBlockedContinued(detail *PlanDetail, now time.Time) error {
+	return markBlockedContinuedWithChanges(detail, newArtifactChangeSet(detail), now)
 }
 
-func markBlockedContinued(detail *PlanDetail, changes *ArtifactChangeSet, now time.Time) error {
+func markBlockedContinuedWithChanges(detail *PlanDetail, changes *artifactChangeSet, now time.Time) error {
 	if detail == nil {
 		return fmt.Errorf("plan detail is nil")
 	}
@@ -835,7 +835,7 @@ func markBlockedContinued(detail *PlanDetail, changes *ArtifactChangeSet, now ti
 	return nil
 }
 
-func markBlockedSliceRestarted(detail *PlanDetail, changes *ArtifactChangeSet, request BlockedSliceRestartRequest) (Event, error) {
+func markBlockedSliceRestarted(detail *PlanDetail, changes *artifactChangeSet, request BlockedSliceRestartRequest) (Event, error) {
 	if detail == nil || changes == nil || changes.detail != detail {
 		return Event{}, fmt.Errorf("artifact change set must be bound to plan detail")
 	}
@@ -899,10 +899,10 @@ func markBlockedSliceRestarted(detail *PlanDetail, changes *ArtifactChangeSet, r
 
 // Reopen transitions a reviewed plan back to runnable state by appending new pending slices.
 func Reopen(detail *PlanDetail, newSlices []Slice, now time.Time) (Event, error) {
-	return reopen(detail, NewArtifactChangeSet(detail), newSlices, now)
+	return reopen(detail, newArtifactChangeSet(detail), newSlices, now)
 }
 
-func reopen(detail *PlanDetail, changes *ArtifactChangeSet, newSlices []Slice, now time.Time) (Event, error) {
+func reopen(detail *PlanDetail, changes *artifactChangeSet, newSlices []Slice, now time.Time) (Event, error) {
 	if detail == nil {
 		return Event{}, fmt.Errorf("plan detail is nil")
 	}
@@ -970,7 +970,7 @@ func automaticReopenMutation(newSlices []Slice, evidence AutomaticReworkRound) a
 		if semanticEventsWereRecorded(detail.Events, []Event{reopened, round}) && reopenPostconditionMatches(detail, newSlices) {
 			return unchangedLifecycleMutation(detail), nil
 		}
-		return applyLifecycleMutation(detail, func(changes *ArtifactChangeSet) ([]Event, error) {
+		return applyLifecycleMutation(detail, func(changes *artifactChangeSet) ([]Event, error) {
 			event, err := reopen(detail, changes, newSlices, evidence.ReopenedAt)
 			if err != nil {
 				return nil, err
@@ -1019,7 +1019,7 @@ func reopenMutation(newSlices []Slice, now time.Time, force bool) artifactMutati
 		if semanticEventsWereRecorded(detail.Events, []Event{expected}) && reopenPostconditionMatches(detail, newSlices) {
 			return unchangedLifecycleMutation(detail), nil
 		}
-		return applyLifecycleMutation(detail, func(changes *ArtifactChangeSet) ([]Event, error) {
+		return applyLifecycleMutation(detail, func(changes *artifactChangeSet) ([]Event, error) {
 			if force && !ReopenableStatus(detail.State.Status) {
 				detail.State.Status = StatusChangesRequested
 			}
@@ -1081,12 +1081,12 @@ func validateReopenSlices(detail *PlanDetail, newSlices []Slice) error {
 	return nil
 }
 
-// MarkSliceRemoved removes one pending slice from the executable plan queue.
-func MarkSliceRemoved(detail *PlanDetail, sliceID string, now time.Time) (Event, error) {
-	return markSliceRemoved(detail, NewArtifactChangeSet(detail), sliceID, now)
+// markSliceRemoved removes one pending slice from the executable plan queue.
+func markSliceRemoved(detail *PlanDetail, sliceID string, now time.Time) (Event, error) {
+	return markSliceRemovedWithChanges(detail, newArtifactChangeSet(detail), sliceID, now)
 }
 
-func markSliceRemoved(detail *PlanDetail, changes *ArtifactChangeSet, sliceID string, now time.Time) (Event, error) {
+func markSliceRemovedWithChanges(detail *PlanDetail, changes *artifactChangeSet, sliceID string, now time.Time) (Event, error) {
 	if detail == nil {
 		return Event{}, fmt.Errorf("plan detail is nil")
 	}
@@ -1115,12 +1115,12 @@ func markSliceRemoved(detail *PlanDetail, changes *ArtifactChangeSet, sliceID st
 	return event, nil
 }
 
-// MarkSliceSkipped marks one pending slice skipped while preserving its audit record.
-func MarkSliceSkipped(detail *PlanDetail, sliceID string, now time.Time) (Event, error) {
-	return markSliceSkipped(detail, NewArtifactChangeSet(detail), sliceID, now)
+// markSliceSkipped marks one pending slice skipped while preserving its audit record.
+func markSliceSkipped(detail *PlanDetail, sliceID string, now time.Time) (Event, error) {
+	return markSliceSkippedWithChanges(detail, newArtifactChangeSet(detail), sliceID, now)
 }
 
-func markSliceSkipped(detail *PlanDetail, changes *ArtifactChangeSet, sliceID string, now time.Time) (Event, error) {
+func markSliceSkippedWithChanges(detail *PlanDetail, changes *artifactChangeSet, sliceID string, now time.Time) (Event, error) {
 	if detail == nil {
 		return Event{}, fmt.Errorf("plan detail is nil")
 	}
@@ -1155,12 +1155,12 @@ func generatedVerificationRepairEditError(detail *PlanDetail, sliceID string, ac
 	return fmt.Errorf("cannot %s generated verification-repair slice %s; run `tao run %s` to complete it, or use `tao abandon --reason TEXT %s` before recovering manually", action, sliceID, planID, planID)
 }
 
-// MarkPendingSlicesReordered replaces the pending queue after dependency validation.
-func MarkPendingSlicesReordered(detail *PlanDetail, pendingOrder []string, now time.Time) (Event, error) {
-	return markPendingSlicesReordered(detail, NewArtifactChangeSet(detail), pendingOrder, now)
+// markPendingSlicesReordered replaces the pending queue after dependency validation.
+func markPendingSlicesReordered(detail *PlanDetail, pendingOrder []string, now time.Time) (Event, error) {
+	return markPendingSlicesReorderedWithChanges(detail, newArtifactChangeSet(detail), pendingOrder, now)
 }
 
-func markPendingSlicesReordered(detail *PlanDetail, changes *ArtifactChangeSet, pendingOrder []string, now time.Time) (Event, error) {
+func markPendingSlicesReorderedWithChanges(detail *PlanDetail, changes *artifactChangeSet, pendingOrder []string, now time.Time) (Event, error) {
 	if detail == nil {
 		return Event{}, fmt.Errorf("plan detail is nil")
 	}
@@ -1248,7 +1248,7 @@ func validatePendingReorder(detail *PlanDetail, pendingOrder []string) error {
 	return nil
 }
 
-func markPlanEdited(detail *PlanDetail, changes *ArtifactChangeSet, now time.Time) {
+func markPlanEdited(detail *PlanDetail, changes *artifactChangeSet, now time.Time) {
 	detail.State.UpdatedAt = now
 	detail.State.Plan.Timing.LastActivityAt = new(now)
 	if detail.State.Plan.CurrentSlice != nil && !slices.Contains(detail.State.Plan.PendingSlices, *detail.State.Plan.CurrentSlice) {

@@ -471,7 +471,11 @@ func TestVerifyCompletedBranchPreservesPersistedTimestampAndUsesCompletionForEve
 		reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "live-head"}),
 		Now:              advancingFinalVerificationClock(initial, 3*time.Second),
 		PlanRecordFactory: func(detail *plan.PlanDetail) (PlanMutationRecord, error) {
-			return captureReviewRecord{detail: detail, wrote: &persisted}, nil
+			record, err := memoryPlanRecordFactory(detail)
+			if err != nil {
+				return nil, err
+			}
+			return captureReviewRecord{PlanMutationRecord: record, detail: detail, wrote: &persisted}, nil
 		},
 		EventAppender: eventAppenderFunc(func(_ string, appended plan.Event) error {
 			event = appended
@@ -512,7 +516,11 @@ func TestVerifyCompletedBranchStateWriteFailureStillEmitsOutcomeEvent(t *testing
 		reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "live-head"}),
 		Now:              advancingFinalVerificationClock(verifiedAt, 3*time.Second),
 		PlanRecordFactory: func(detail *plan.PlanDetail) (PlanMutationRecord, error) {
-			return failingFinalVerificationRecord{detail: detail, err: persistErr}, nil
+			record, err := memoryPlanRecordFactory(detail)
+			if err != nil {
+				return nil, err
+			}
+			return failingFinalVerificationRecord{PlanMutationRecord: record, err: persistErr}, nil
 		},
 		EventAppender: eventAppenderFunc(func(_ string, event plan.Event) error {
 			appended = event
@@ -617,7 +625,11 @@ func TestVerifyCompletedBranchEventAppendFailureIsBestEffort(t *testing.T) {
 		},
 		reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "live-head"}),
 		PlanRecordFactory: func(detail *plan.PlanDetail) (PlanMutationRecord, error) {
-			return captureReviewRecord{detail: detail, wrote: &persisted}, nil
+			record, err := memoryPlanRecordFactory(detail)
+			if err != nil {
+				return nil, err
+			}
+			return captureReviewRecord{PlanMutationRecord: record, detail: detail, wrote: &persisted}, nil
 		},
 		EventAppender: eventAppenderFunc(func(string, plan.Event) error {
 			return errors.New("journal unavailable")
@@ -642,12 +654,11 @@ func TestVerifyCompletedBranchEventAppendFailureIsBestEffort(t *testing.T) {
 
 type failingFinalVerificationRecord struct {
 	PlanMutationRecord
-	detail *plan.PlanDetail
-	err    error
+	err error
 }
 
 func (r failingFinalVerificationRecord) RecordFinalVerification(verification plan.FinalVerification) error {
-	if err := plan.MarkFinalVerification(r.detail, verification); err != nil {
+	if err := r.PlanMutationRecord.RecordFinalVerification(verification); err != nil {
 		return err
 	}
 	return r.err

@@ -346,10 +346,10 @@ func TestDefaultDirAndNewRepositoryFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := filepath.Join(dataHome, "repos", taodata.RepoID(root), "plans")
-	if got := DefaultDir(); got != want {
+	if got := defaultDir(); got != want {
 		t.Fatalf("unexpected default dir %q", got)
 	}
-	if repo := NewFileRepository(""); repo.Dir != DefaultDir() {
+	if repo := NewFileRepository(""); repo.Dir != defaultDir() {
 		t.Fatalf("expected default repo dir, got %q", repo.Dir)
 	}
 }

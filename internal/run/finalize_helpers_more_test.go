@@ -426,7 +426,7 @@ type captureReviewRecord struct {
 }
 
 func (r captureReviewRecord) RecordFinalVerification(verification plan.FinalVerification) error {
-	if err := plan.MarkFinalVerification(r.detail, verification); err != nil {
+	if err := r.PlanMutationRecord.RecordFinalVerification(verification); err != nil {
 		return err
 	}
 	*r.wrote = r.detail.State
@@ -454,7 +454,11 @@ func TestFinalizerReviewErrorIsBestEffort(t *testing.T) {
 		RootResolver:     staticRootResolver(),
 		SessionLogWriter: &log,
 		PlanRecordFactory: func(detail *plan.PlanDetail) (PlanMutationRecord, error) {
-			return captureReviewRecord{detail: detail, wrote: &wroteState}, nil
+			record, err := memoryPlanRecordFactory(detail)
+			if err != nil {
+				return nil, err
+			}
+			return captureReviewRecord{PlanMutationRecord: record, detail: detail, wrote: &wroteState}, nil
 		},
 	}))
 

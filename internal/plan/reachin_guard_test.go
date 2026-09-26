@@ -60,41 +60,6 @@ func TestNoPlanReviewReachInsOutsidePlanPackage(t *testing.T) {
 	}
 }
 
-func TestRunDoesNotUseRawPlanLifecycleMutators(t *testing.T) {
-	_, filename, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	repoRoot, err := reachInGuardRepoRoot(filename)
-	if err != nil {
-		t.Fatal(err)
-	}
-	runRoot := filepath.Join(repoRoot, "internal", "run")
-	forbidden := regexp.MustCompile(`\bplan\.Mark[A-Z][A-Za-z0-9_]*\b`)
-
-	var offenders []string
-	if err := filepath.WalkDir(runRoot, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() || filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		matches, err := planReviewReachIns(path, repoRoot, forbidden)
-		if err != nil {
-			return err
-		}
-		offenders = append(offenders, matches...)
-		return nil
-	}); err != nil {
-		t.Fatalf("scan internal/run for raw plan lifecycle mutators: %v", err)
-	}
-
-	if len(offenders) > 0 {
-		t.Fatalf("raw plan lifecycle mutations in production run code are forbidden; use a complete PlanRecord operation instead:\n%s", strings.Join(offenders, "\n"))
-	}
-}
-
 func reachInGuardRepoRoot(filename string) (string, error) {
 	if filepath.IsAbs(filename) {
 		return filepath.Clean(filepath.Join(filepath.Dir(filename), "..", "..")), nil

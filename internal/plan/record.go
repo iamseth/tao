@@ -259,11 +259,11 @@ func (r *PlanRecord) RecordSliceCommitIntent(sliceID string, intent SliceCommitI
 	if err != nil {
 		return err
 	}
-	if err := MarkSliceCommitIntent(r.detail, sliceID, intent); err != nil {
+	if err := markSliceCommitIntent(r.detail, sliceID, intent); err != nil {
 		return err
 	}
-	return r.applySlicesUpdate(store, func(detail *PlanDetail, _ *ArtifactChangeSet) error {
-		return MarkSliceCommitIntent(detail, sliceID, intent)
+	return r.applySlicesUpdate(store, func(detail *PlanDetail, _ *artifactChangeSet) error {
+		return markSliceCommitIntent(detail, sliceID, intent)
 	})
 }
 
@@ -324,11 +324,11 @@ func (r *PlanRecord) Abandon(reason string, abandonedAt time.Time) error {
 		return err
 	}
 	abandonedAt = abandonedAt.UTC()
-	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
+	return r.applyStateEvent(store, func(detail *PlanDetail, _ *artifactChangeSet) ([]Event, error) {
 		if detail.State.Status == StatusAbandoned && ProjectAbandonment(detail.Events) != nil {
 			return nil, nil
 		}
-		if err := RequireAbandonable(detail); err != nil {
+		if err := requireAbandonable(detail); err != nil {
 			return nil, err
 		}
 
@@ -374,10 +374,10 @@ func (r *PlanRecord) PersistState() error {
 	return r.applyStateUpdate(store, r.stateBaseline(), r.detail.State, nil)
 }
 
-// PersistStateChanges persists state edits made through changes. Reapplying the
+// persistStateChanges persists state edits made through changes. Reapplying the
 // typed intent after a stale-record rebase prevents a concurrent settled value
 // from overriding an explicit clear or replacement.
-func (r *PlanRecord) PersistStateChanges(changes *ArtifactChangeSet) error {
+func (r *PlanRecord) persistStateChanges(changes *artifactChangeSet) error {
 	store, err := r.storeOrDefault()
 	if err != nil {
 		return err
@@ -396,8 +396,8 @@ func (r *PlanRecord) RecordFinalVerification(verification FinalVerification) err
 	if err != nil {
 		return err
 	}
-	err = r.applyStateEvent(store, func(detail *PlanDetail, changes *ArtifactChangeSet) ([]Event, error) {
-		if err := MarkFinalVerification(detail, verification); err != nil {
+	err = r.applyStateEvent(store, func(detail *PlanDetail, changes *artifactChangeSet) ([]Event, error) {
+		if err := markFinalVerification(detail, verification); err != nil {
 			return nil, err
 		}
 		if err := changes.replaceFinalVerification(*detail.State.Plan.FinalVerification); err != nil {
@@ -406,7 +406,7 @@ func (r *PlanRecord) RecordFinalVerification(verification FinalVerification) err
 		return nil, nil
 	})
 	if err != nil {
-		_ = MarkFinalVerification(r.detail, verification)
+		_ = markFinalVerification(r.detail, verification)
 	}
 	return err
 }
@@ -446,9 +446,9 @@ func (r *PlanRecord) RecordStartingBranch(branch string) error {
 	return r.applyStateUpdate(store, baseline, r.detail.State, nil)
 }
 
-// MarkWorkspacePreparing applies the in-memory preparing milestone without
+// markWorkspacePreparing applies the in-memory preparing milestone without
 // changing dependency or rebase transaction evidence.
-func MarkWorkspacePreparing(detail *PlanDetail, request WorkspacePreparingRequest) error {
+func markWorkspacePreparing(detail *PlanDetail, request WorkspacePreparingRequest) error {
 	if detail == nil {
 		return fmt.Errorf("plan detail is nil")
 	}
@@ -476,9 +476,9 @@ func MarkWorkspacePreparing(detail *PlanDetail, request WorkspacePreparingReques
 	return nil
 }
 
-// MarkWorkspaceDependencyFailure applies a failed dependency attempt while
+// markWorkspaceDependencyFailure applies a failed dependency attempt while
 // preserving the fingerprint from the last successful installation.
-func MarkWorkspaceDependencyFailure(detail *PlanDetail, request WorkspaceDependencyFailureRequest) error {
+func markWorkspaceDependencyFailure(detail *PlanDetail, request WorkspaceDependencyFailureRequest) error {
 	if detail == nil {
 		return fmt.Errorf("plan detail is nil")
 	}
@@ -497,8 +497,8 @@ func MarkWorkspaceDependencyFailure(detail *PlanDetail, request WorkspaceDepende
 	return nil
 }
 
-// MarkWorkspaceReady applies dependency evidence and the ready milestone.
-func MarkWorkspaceReady(detail *PlanDetail, request WorkspaceReadyRequest) error {
+// markWorkspaceReady applies dependency evidence and the ready milestone.
+func markWorkspaceReady(detail *PlanDetail, request WorkspaceReadyRequest) error {
 	if detail == nil {
 		return fmt.Errorf("plan detail is nil")
 	}
@@ -550,8 +550,8 @@ func (r *PlanRecord) RecordWorkspacePreparing(request WorkspacePreparingRequest)
 	if err != nil {
 		return err
 	}
-	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
-		return nil, MarkWorkspacePreparing(detail, request)
+	return r.applyStateEvent(store, func(detail *PlanDetail, _ *artifactChangeSet) ([]Event, error) {
+		return nil, markWorkspacePreparing(detail, request)
 	})
 }
 
@@ -562,8 +562,8 @@ func (r *PlanRecord) RecordWorkspaceDependencyFailure(request WorkspaceDependenc
 	if err != nil {
 		return err
 	}
-	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
-		return nil, MarkWorkspaceDependencyFailure(detail, request)
+	return r.applyStateEvent(store, func(detail *PlanDetail, _ *artifactChangeSet) ([]Event, error) {
+		return nil, markWorkspaceDependencyFailure(detail, request)
 	})
 }
 
@@ -574,14 +574,14 @@ func (r *PlanRecord) RecordWorkspaceReady(request WorkspaceReadyRequest) error {
 	if err != nil {
 		return err
 	}
-	return r.applyStateEvent(store, func(detail *PlanDetail, changes *ArtifactChangeSet) ([]Event, error) {
+	return r.applyStateEvent(store, func(detail *PlanDetail, changes *artifactChangeSet) ([]Event, error) {
 		if request.ClearDependencyFailure {
 			changes.ClearWorkspaceDependencyFailure()
 		}
 		if request.ClearDependencyFingerprint {
 			changes.ClearWorkspaceDependencyFingerprint()
 		}
-		return nil, MarkWorkspaceReady(detail, request)
+		return nil, markWorkspaceReady(detail, request)
 	})
 }
 
@@ -605,7 +605,7 @@ func (r *PlanRecord) AdvanceWorkspaceHead(expectedBranch, expectedHead, newHead 
 	if err != nil {
 		return err
 	}
-	return r.applyStateEvent(store, func(detail *PlanDetail, changes *ArtifactChangeSet) ([]Event, error) {
+	return r.applyStateEvent(store, func(detail *PlanDetail, changes *artifactChangeSet) ([]Event, error) {
 		workspace := detail.State.Workspace
 		if workspace == nil {
 			return nil, fmt.Errorf("plan %s has no workspace head to advance", detail.State.Plan.ID)
@@ -639,7 +639,7 @@ func (r *PlanRecord) RecordWorkspaceRebaseIntent(intent WorkspaceRebaseIntent) e
 	if err != nil {
 		return err
 	}
-	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
+	return r.applyStateEvent(store, func(detail *PlanDetail, _ *artifactChangeSet) ([]Event, error) {
 		if detail.State.Workspace == nil {
 			detail.State.Workspace = &Workspace{}
 		}
@@ -668,7 +668,7 @@ func (r *PlanRecord) SettleWorkspaceRebase(expected WorkspaceRebaseIntent, settl
 	if err != nil {
 		return err
 	}
-	return r.applyStateEvent(store, func(detail *PlanDetail, changes *ArtifactChangeSet) ([]Event, error) {
+	return r.applyStateEvent(store, func(detail *PlanDetail, changes *artifactChangeSet) ([]Event, error) {
 		if detail.State.Workspace == nil || detail.State.Workspace.RebaseIntent == nil {
 			return nil, fmt.Errorf("plan %s has no workspace rebase intent to settle", detail.State.Plan.ID)
 		}
@@ -717,7 +717,7 @@ func (r *PlanRecord) ClearWorkspaceRebaseIntent(expected WorkspaceRebaseIntent) 
 	if err != nil {
 		return err
 	}
-	return r.applyStateEvent(store, func(detail *PlanDetail, changes *ArtifactChangeSet) ([]Event, error) {
+	return r.applyStateEvent(store, func(detail *PlanDetail, changes *artifactChangeSet) ([]Event, error) {
 		if detail.State.Workspace == nil || detail.State.Workspace.RebaseIntent == nil {
 			return nil, nil
 		}
@@ -800,7 +800,7 @@ func (r *PlanRecord) RecordPRFeedbackTriage(result PRFeedbackTriageResult, triag
 	if err != nil {
 		return err
 	}
-	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
+	return r.applyStateEvent(store, func(detail *PlanDetail, _ *artifactChangeSet) ([]Event, error) {
 		if samePRFeedbackThreadSet(detail.State.Plan.PRFeedbackTriage, result) {
 			return nil, nil
 		}
@@ -828,7 +828,7 @@ func (r *PlanRecord) RecordAutomaticReworkStop(evidence AutomaticReworkStop) err
 	if err != nil {
 		return err
 	}
-	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
+	return r.applyStateEvent(store, func(detail *PlanDetail, _ *artifactChangeSet) ([]Event, error) {
 		event := automaticReworkStopEvent(detail.State.Plan.ID, evidence)
 		if semanticEventsWereRecorded(detail.Events, []Event{event}) {
 			return nil, nil
@@ -875,7 +875,7 @@ func (r *PlanRecord) ReopenFromPullRequest(newSlices []Slice, consumedThreadIDs 
 		if semanticEventsWereRecorded(detail.Events, expected) && reopenPostconditionMatches(detail, newSlices) && prFeedbackThreadsConsumed(detail.State.Plan.PRFeedbackConsumedThreadIDs, threadIDs) {
 			return unchangedLifecycleMutation(detail), nil
 		}
-		return applyLifecycleMutation(detail, func(changes *ArtifactChangeSet) ([]Event, error) {
+		return applyLifecycleMutation(detail, func(changes *artifactChangeSet) ([]Event, error) {
 			for _, threadID := range threadIDs {
 				entry, ok := detail.State.Plan.PRFeedbackTriage[threadID]
 				if !ok {
@@ -947,7 +947,7 @@ func (r *PlanRecord) RecordFinalizationFailure(failure FinalizationFailure) erro
 	if err != nil {
 		return err
 	}
-	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
+	return r.applyStateEvent(store, func(detail *PlanDetail, _ *artifactChangeSet) ([]Event, error) {
 		if existing := detail.State.Plan.FinalizationFailure; existing != nil {
 			if *existing == failure {
 				return nil, nil
@@ -984,7 +984,7 @@ func (r *PlanRecord) ReplaceFinalizationFailure(expected, replacement Finalizati
 	if err != nil {
 		return err
 	}
-	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
+	return r.applyStateEvent(store, func(detail *PlanDetail, _ *artifactChangeSet) ([]Event, error) {
 		existing := detail.State.Plan.FinalizationFailure
 		if existing != nil && *existing == replacement {
 			return nil, nil
@@ -1030,7 +1030,7 @@ func (r *PlanRecord) ClearFinalizationFailure(expected FinalizationFailure, clea
 	if err != nil {
 		return err
 	}
-	return r.applyStateEvent(store, func(detail *PlanDetail, changes *ArtifactChangeSet) ([]Event, error) {
+	return r.applyStateEvent(store, func(detail *PlanDetail, changes *artifactChangeSet) ([]Event, error) {
 		existing := detail.State.Plan.FinalizationFailure
 		if existing == nil {
 			return nil, nil
@@ -1064,7 +1064,7 @@ func (r *PlanRecord) RecordPullRequestIntent(pr PullRequest, branch, headSHA str
 	if err != nil {
 		return err
 	}
-	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
+	return r.applyStateEvent(store, func(detail *PlanDetail, _ *artifactChangeSet) ([]Event, error) {
 		if existing := detail.State.Plan.PullRequestIntent; existing != nil {
 			if *existing == pr {
 				return nil, nil
@@ -1097,7 +1097,7 @@ func (r *PlanRecord) RecordPullRequest(pr PullRequest, branch, headSHA string) e
 	if err != nil {
 		return err
 	}
-	return r.applyStateEvent(store, func(detail *PlanDetail, changes *ArtifactChangeSet) ([]Event, error) {
+	return r.applyStateEvent(store, func(detail *PlanDetail, changes *artifactChangeSet) ([]Event, error) {
 		pr.Branch = branch
 		pr.HeadSHA = headSHA
 		if intent := detail.State.Plan.PullRequestIntent; intent != nil {
@@ -1144,7 +1144,7 @@ func (r *PlanRecord) RecordSingleMergeCommitIntent(intent SingleMergeCommitInten
 	if err != nil {
 		return err
 	}
-	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
+	return r.applyStateEvent(store, func(detail *PlanDetail, _ *artifactChangeSet) ([]Event, error) {
 		existing := detail.State.Plan.MergeCommitIntent
 		if existing != nil {
 			if reflect.DeepEqual(*existing, intent) {
@@ -1237,7 +1237,7 @@ func (r *PlanRecord) RearmSingleMergeResolution(expected SingleMergeCommitIntent
 	if err != nil {
 		return err
 	}
-	return r.applyStateEvent(store, func(detail *PlanDetail, changes *ArtifactChangeSet) ([]Event, error) {
+	return r.applyStateEvent(store, func(detail *PlanDetail, changes *artifactChangeSet) ([]Event, error) {
 		existing := detail.State.Plan.MergeCommitIntent
 		if existing == nil {
 			return nil, fmt.Errorf("plan %s has no single-merge commit intent", detail.State.Plan.ID)
@@ -1291,7 +1291,7 @@ func (r *PlanRecord) mutateSingleMergeResolution(expected SingleMergeCommitInten
 	if err != nil {
 		return err
 	}
-	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
+	return r.applyStateEvent(store, func(detail *PlanDetail, _ *artifactChangeSet) ([]Event, error) {
 		existing := detail.State.Plan.MergeCommitIntent
 		if existing == nil {
 			return nil, fmt.Errorf("plan %s has no single-merge commit intent", detail.State.Plan.ID)
@@ -1347,7 +1347,7 @@ func (r *PlanRecord) clearSingleMergeCommitIntent(expected SingleMergeCommitInte
 	if err != nil {
 		return err
 	}
-	return r.applyStateEvent(store, func(detail *PlanDetail, _ *ArtifactChangeSet) ([]Event, error) {
+	return r.applyStateEvent(store, func(detail *PlanDetail, _ *artifactChangeSet) ([]Event, error) {
 		existing := detail.State.Plan.MergeCommitIntent
 		if existing == nil {
 			return nil, nil
@@ -1638,7 +1638,7 @@ func (r *PlanRecord) RecordReviewError(review PlanReview, agent string) error {
 	if err != nil {
 		return err
 	}
-	return r.applyStateEvent(store, func(detail *PlanDetail, changes *ArtifactChangeSet) ([]Event, error) {
+	return r.applyStateEvent(store, func(detail *PlanDetail, changes *artifactChangeSet) ([]Event, error) {
 		if err := automaticSliceCompletionError(detail); err != nil {
 			return nil, fmt.Errorf("record plan review: %w", err)
 		}
@@ -1709,7 +1709,7 @@ func (r *PlanRecord) ConsumeReviewProposalCorrection(repairedWorkspace *Finaliza
 	if err != nil {
 		return err
 	}
-	return r.applyStateEvent(store, func(detail *PlanDetail, changes *ArtifactChangeSet) ([]Event, error) {
+	return r.applyStateEvent(store, func(detail *PlanDetail, changes *artifactChangeSet) ([]Event, error) {
 		currentReview := CurrentReview(detail)
 		if currentReview == nil || currentReview.Status != ReviewStatusCompleted {
 			return nil, fmt.Errorf("plan %s completed review changed; reload and retry", detail.State.Plan.ID)
@@ -1777,7 +1777,7 @@ func (r *PlanRecord) recordReviewCompleted(review PlanReview, agent string, cont
 	if err != nil {
 		return err
 	}
-	mutate := func(detail *PlanDetail, changes *ArtifactChangeSet) ([]Event, error) {
+	mutate := func(detail *PlanDetail, changes *artifactChangeSet) ([]Event, error) {
 		if err := automaticSliceCompletionError(detail); err != nil {
 			return nil, fmt.Errorf("record plan review: %w", err)
 		}
@@ -1880,7 +1880,7 @@ func (r *PlanRecord) RecordMerged(branch string, mergedDefaultSHA string, merged
 	branch = strings.TrimSpace(branch)
 	mergedDefaultSHA = strings.TrimSpace(mergedDefaultSHA)
 	mergedAt = mergedAt.UTC()
-	return r.applyStateEvent(store, func(detail *PlanDetail, changes *ArtifactChangeSet) ([]Event, error) {
+	return r.applyStateEvent(store, func(detail *PlanDetail, changes *artifactChangeSet) ([]Event, error) {
 		if err := RequireNotAbandoned(detail); err != nil {
 			return nil, err
 		}
@@ -1961,7 +1961,7 @@ func (r *PlanRecord) applyWithRecoveredMatch(mutate artifactMutationFunc, recove
 	return err
 }
 
-func (r *PlanRecord) applyStateEvent(store artifactMutationStore, mutate func(*PlanDetail, *ArtifactChangeSet) ([]Event, error)) error {
+func (r *PlanRecord) applyStateEvent(store artifactMutationStore, mutate func(*PlanDetail, *artifactChangeSet) ([]Event, error)) error {
 	err := applyStateEventMutationWithRefresh(store, r.dir, r.detail, true, mutate)
 	if err == nil {
 		r.advanceBaseline()
@@ -1969,7 +1969,7 @@ func (r *PlanRecord) applyStateEvent(store artifactMutationStore, mutate func(*P
 	return err
 }
 
-func (r *PlanRecord) applyStateUpdate(store artifactMutationStore, baseline, intended State, changes *ArtifactChangeSet) error {
+func (r *PlanRecord) applyStateUpdate(store artifactMutationStore, baseline, intended State, changes *artifactChangeSet) error {
 	recoveredBaseline, err := applyStateArtifactUpdate(store, r.dir, r.detail, baseline, intended, changes)
 	if err == nil {
 		r.advanceBaseline()
@@ -1983,7 +1983,7 @@ func (r *PlanRecord) applyStateUpdate(store artifactMutationStore, baseline, int
 	return err
 }
 
-func (r *PlanRecord) applySlicesUpdate(store artifactMutationStore, mutate func(*PlanDetail, *ArtifactChangeSet) error) error {
+func (r *PlanRecord) applySlicesUpdate(store artifactMutationStore, mutate func(*PlanDetail, *artifactChangeSet) error) error {
 	err := applySlicesArtifactUpdate(store, r.dir, r.detail, mutate)
 	if err == nil {
 		r.advanceBaseline()

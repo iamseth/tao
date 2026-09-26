@@ -65,7 +65,7 @@ func (r *FileRepository) safeDeletePlanDir(dir string) (string, error) {
 	}
 	root := r.Dir
 	if root == "" {
-		root = DefaultDir()
+		root = defaultDir()
 	}
 	rootAbs, err := filepath.Abs(root)
 	if err != nil {

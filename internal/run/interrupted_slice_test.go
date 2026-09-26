@@ -421,7 +421,11 @@ func TestServiceExecuteContinuesBlockedAutomaticSliceWithBoundary(t *testing.T) 
 		},
 		PlanRecordFactory: callbackPlanRecordFactory(nil, func(detail *plan.PlanDetail, now time.Time) error {
 			continued = true
-			return plan.MarkBlockedContinued(detail, now)
+			record, err := memoryPlanRecordFactory(detail)
+			if err != nil {
+				return err
+			}
+			return record.ContinueBlocked(now)
 		}),
 		SliceExecutor: sliceExecutorFunc(func(_ context.Context, run SliceRun) error {
 			gotRun = run

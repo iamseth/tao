@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/plantest"
 )
 
 func TestRunFinalizesPlanCompletedByCurrentInvocation(t *testing.T) {
@@ -581,7 +582,7 @@ func TestPrepareExecutionWorkspaceDefaultsToWorktree(t *testing.T) {
 	detail.State.Workspace = nil
 	var calls []string
 
-	root, err := prepareExecutionWorkspace(context.Background(), detail, WorkspaceResolverInput{CommandRunner: runWorkspaceGitFake(&calls)})
+	root, err := prepareExecutionWorkspace(context.Background(), detail, WorkspaceResolverInput{CommandRunner: runWorkspaceGitFake(&calls), PlanRecordFactory: memoryPlanRecordFactory})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -604,7 +605,7 @@ func TestPrepareExecutionWorkspaceWorktreeRunOptionOverridesPlanCurrent(t *testi
 	detail.State.Workspace = &plan.Workspace{Strategy: plan.WorkspaceStrategyCurrent}
 	var calls []string
 
-	root, err := prepareExecutionWorkspace(context.Background(), detail, WorkspaceResolverInput{Config: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated}}, CommandRunner: runWorkspaceGitFake(&calls)})
+	root, err := prepareExecutionWorkspace(context.Background(), detail, WorkspaceResolverInput{Config: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated}}, CommandRunner: runWorkspaceGitFake(&calls), PlanRecordFactory: memoryPlanRecordFactory})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1411,19 +1412,13 @@ func TestServiceExecuteRepairsOnlyCleanTornAutomaticStart(t *testing.T) {
 	root := t.TempDir()
 	detail := interruptedServiceRunDetail(t, root)
 	detail.Slices.Slices[0].ExecutionStart = nil
-	started := 0
+	started := countPlanEvents(detail.Events, plan.EventTypeSliceStarted)
 	agentCalls := 0
 	runner := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return "" }, "tao/plan-a", "base")
 	err := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
 		CommandRunner: runner, EventAppender: eventAppenderFunc(func(string, plan.Event) error { return nil }),
-		SliceExecutor: sliceExecutorFunc(func(context.Context, SliceRun) error { agentCalls++; return errors.New("provider stopped") }),
-		PlanRecordFactory: callbackPlanRecordFactory(func(detail *plan.PlanDetail, sliceID string, now time.Time) error {
-			_, appendEvent, err := plan.MarkSliceStarted(detail, sliceID, now)
-			if appendEvent {
-				started++
-			}
-			return err
-		}, nil),
+		SliceExecutor:     sliceExecutorFunc(func(context.Context, SliceRun) error { agentCalls++; return errors.New("provider stopped") }),
+		PlanRecordFactory: memoryPlanRecordFactory,
 		WorkspacePreparer: func(context.Context, *plan.PlanDetail, WorkspaceResolverInput) (string, error) {
 			t.Fatal("torn start prepared workspace")
 			return "", nil
@@ -1432,8 +1427,8 @@ func TestServiceExecuteRepairsOnlyCleanTornAutomaticStart(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "provider stopped") {
 		t.Fatalf("error = %v, want provider error after repair", err)
 	}
-	if agentCalls != 1 || started != 0 || detail.Slices.Slices[0].ExecutionStart == nil {
-		t.Fatalf("agent=%d started=%d boundary=%#v", agentCalls, started, detail.Slices.Slices[0].ExecutionStart)
+	if got := countPlanEvents(detail.Events, plan.EventTypeSliceStarted); agentCalls != 1 || got != started || detail.Slices.Slices[0].ExecutionStart == nil {
+		t.Fatalf("agent=%d started=%d (was %d) boundary=%#v", agentCalls, got, started, detail.Slices.Slices[0].ExecutionStart)
 	}
 
 	dirty := interruptedServiceRunDetail(t, root)
@@ -1927,7 +1922,11 @@ func TestRunContinueRestartsBlockedPlanBeforeCapabilityGate(t *testing.T) {
 		if !now.Equal(fixedNow.UTC()) || now.Location() != time.UTC {
 			t.Fatalf("expected deterministic UTC continue timestamp, got %s (%s)", now, now.Location())
 		}
-		return plan.MarkBlockedContinued(detail, now)
+		record, err := memoryPlanRecordFactory(detail)
+		if err != nil {
+			return err
+		}
+		return record.ContinueBlocked(now)
 	}), Now: func() time.Time { return fixedNow }, CommandRunner: runGitFake(&[]string{}, nil)}})
 	if err != nil {
 		t.Fatal(err)
@@ -2101,8 +2100,11 @@ func TestRunStartsSliceBeforeExecutor(t *testing.T) {
 		if !now.Equal(fixedNow.UTC()) || now.Location() != time.UTC {
 			t.Fatalf("expected deterministic UTC slice start timestamp, got %s (%s)", now, now.Location())
 		}
-		_, _, err := plan.MarkSliceStarted(detail, sliceID, now)
-		return err
+		record, err := memoryPlanRecordFactory(detail)
+		if err != nil {
+			return err
+		}
+		return record.StartSlice(sliceID, plan.SliceStartRequest{StartedAt: now})
 	}, nil), Now: func() time.Time { return fixedNow }, CommandRunner: runGitFake(&[]string{}, nil)}})
 	if err != nil {
 		t.Fatal(err)
@@ -2474,7 +2476,11 @@ func TestExecutionRootResolverPreparesWorktreeStrategyMetadata(t *testing.T) {
 		if recordDetail.Dir != detail.Dir {
 			t.Fatalf("expected plan dir %q, got %q", detail.Dir, recordDetail.Dir)
 		}
-		return persistOnlyRecord{detail: recordDetail, persist: func() error {
+		record, err := memoryPlanRecordFactory(recordDetail)
+		if err != nil {
+			return nil, err
+		}
+		return persistOnlyRecord{PlanMutationRecord: record, persist: func() error {
 			statuses = append(statuses, recordDetail.State.Workspace.LifecycleStatus)
 			return nil
 		}}, nil
@@ -2617,26 +2623,25 @@ func (f sliceExecutorFunc) RunSlice(ctx context.Context, run SliceRun) error {
 
 type persistOnlyRecord struct {
 	PlanMutationRecord
-	detail  *plan.PlanDetail
 	persist func() error
 }
 
 func (r persistOnlyRecord) RecordWorkspacePreparing(request plan.WorkspacePreparingRequest) error {
-	if err := plan.MarkWorkspacePreparing(r.detail, request); err != nil {
+	if err := r.PlanMutationRecord.RecordWorkspacePreparing(request); err != nil {
 		return err
 	}
 	return r.persist()
 }
 
 func (r persistOnlyRecord) RecordWorkspaceDependencyFailure(request plan.WorkspaceDependencyFailureRequest) error {
-	if err := plan.MarkWorkspaceDependencyFailure(r.detail, request); err != nil {
+	if err := r.PlanMutationRecord.RecordWorkspaceDependencyFailure(request); err != nil {
 		return err
 	}
 	return r.persist()
 }
 
 func (r persistOnlyRecord) RecordWorkspaceReady(request plan.WorkspaceReadyRequest) error {
-	if err := plan.MarkWorkspaceReady(r.detail, request); err != nil {
+	if err := r.PlanMutationRecord.RecordWorkspaceReady(request); err != nil {
 		return err
 	}
 	return r.persist()
@@ -2655,247 +2660,42 @@ func (r startCallbackRecord) StartSlice(sliceID string, request plan.SliceStartR
 }
 
 type memoryPlanMutationRecord struct {
+	*plan.PlanRecord
 	detail     *plan.PlanDetail
 	onStart    func(*plan.PlanDetail, string, time.Time) error
 	onContinue func(*plan.PlanDetail, time.Time) error
 }
 
 func memoryPlanRecordFactory(detail *plan.PlanDetail) (PlanMutationRecord, error) {
-	return memoryPlanMutationRecord{detail: detail}, nil
+	repository := plantest.NewRepository()
+	repository.AddDetail(detail)
+	return repository.PlanRecord(detail)
 }
 
 func callbackPlanRecordFactory(onStart func(*plan.PlanDetail, string, time.Time) error, onContinue func(*plan.PlanDetail, time.Time) error) PlanRecordFactory {
 	return func(detail *plan.PlanDetail) (PlanMutationRecord, error) {
-		return memoryPlanMutationRecord{detail: detail, onStart: onStart, onContinue: onContinue}, nil
+		repository := plantest.NewRepository()
+		repository.AddDetail(detail)
+		record, err := repository.PlanRecord(detail)
+		if err != nil {
+			return nil, err
+		}
+		return memoryPlanMutationRecord{PlanRecord: record, detail: detail, onStart: onStart, onContinue: onContinue}, nil
 	}
 }
 
 func (r memoryPlanMutationRecord) StartSlice(sliceID string, request plan.SliceStartRequest) error {
-	if request.Run != nil {
-		if err := plan.MarkRunStartMetadata(r.detail, request.Run.CommitPolicy, request.Run.StartingDirtyPaths); err != nil {
-			return err
-		}
-	}
-	if request.Boundary != nil {
-		if err := plan.MarkSliceExecutionStart(r.detail, sliceID, *request.Boundary); err != nil {
-			return err
-		}
-	}
 	if r.onStart != nil {
-		if err := r.onStart(r.detail, sliceID, request.StartedAt); err != nil {
-			return err
-		}
-	} else if _, _, err := plan.MarkSliceStarted(r.detail, sliceID, request.StartedAt); err != nil {
-		return err
+		return r.onStart(r.detail, sliceID, request.StartedAt)
 	}
-	if request.ExecutionRoot != "" {
-		return r.recordExecutionRoot(sliceID, request.ExecutionRoot)
-	}
-	return nil
-}
-
-func (r memoryPlanMutationRecord) BlockSliceForBudget(sliceID string, reason string, now time.Time) error {
-	_, _, err := plan.MarkSliceBudgetBlocked(r.detail, sliceID, reason, now)
-	return err
-}
-
-func (r memoryPlanMutationRecord) RepairMissingSliceStartedEvent(sliceID string, startedAt time.Time) error {
-	for _, event := range r.detail.Events {
-		if event.Type == plan.EventTypeSliceStarted && event.SliceID == sliceID {
-			return nil
-		}
-	}
-	r.detail.Events = append(r.detail.Events, plan.Event{
-		Type: plan.EventTypeSliceStarted, Timestamp: startedAt.UTC(), PlanID: r.detail.State.Plan.ID,
-		SliceID: sliceID, Message: "Work started on slice",
-	})
-	return nil
-}
-
-func (r memoryPlanMutationRecord) recordExecutionRoot(sliceID string, executionRoot string) error {
-	for i := range r.detail.Slices.Slices {
-		if r.detail.Slices.Slices[i].ID == sliceID {
-			r.detail.Slices.Slices[i].ExecutionRoot = executionRoot
-			return nil
-		}
-	}
-	return nil
+	return r.PlanRecord.StartSlice(sliceID, request)
 }
 
 func (r memoryPlanMutationRecord) ContinueBlocked(now time.Time) error {
 	if r.onContinue != nil {
 		return r.onContinue(r.detail, now)
 	}
-	return plan.MarkBlockedContinued(r.detail, now)
-}
-
-func (r memoryPlanMutationRecord) AdvanceWorkspaceHead(expectedBranch, expectedHead, newHead string) error {
-	workspace := r.detail.State.Workspace
-	if workspace == nil {
-		return errors.New("workspace is missing")
-	}
-	if workspace.Branch != expectedBranch {
-		return errors.New("workspace branch changed")
-	}
-	if workspace.HeadSHA == newHead {
-		return nil
-	}
-	if workspace.HeadSHA != expectedHead {
-		return errors.New("workspace head changed")
-	}
-	workspace.HeadSHA = newHead
-	return nil
-}
-
-func (r memoryPlanMutationRecord) RecordWorkspacePreparing(request plan.WorkspacePreparingRequest) error {
-	return plan.MarkWorkspacePreparing(r.detail, request)
-}
-
-func (r memoryPlanMutationRecord) RecordWorkspaceDependencyFailure(request plan.WorkspaceDependencyFailureRequest) error {
-	return plan.MarkWorkspaceDependencyFailure(r.detail, request)
-}
-
-func (r memoryPlanMutationRecord) RecordWorkspaceReady(request plan.WorkspaceReadyRequest) error {
-	return plan.MarkWorkspaceReady(r.detail, request)
-}
-
-func (r memoryPlanMutationRecord) RecordFinalVerification(verification plan.FinalVerification) error {
-	return plan.MarkFinalVerification(r.detail, verification)
-}
-
-func (r memoryPlanMutationRecord) RecordStartingBranch(branch string) error {
-	r.detail.State.Repo.Branch = branch
-	if r.detail.State.Workspace == nil {
-		r.detail.State.Workspace = &plan.Workspace{}
-	}
-	r.detail.State.Workspace.Branch = branch
-	return nil
-}
-
-func (r memoryPlanMutationRecord) RecordPullRequestIntent(pr plan.PullRequest, branch, headSHA string) error {
-	pr.Branch = branch
-	pr.HeadSHA = headSHA
-	if existing := r.detail.State.Plan.PullRequestIntent; existing != nil && *existing != pr {
-		sameRun := existing.Branch == branch && existing.HeadSHA == headSHA
-		refinesIdentity := existing.Number == 0 && existing.URL == "" && pr.Number > 0 && pr.URL != ""
-		if !sameRun || !refinesIdentity {
-			return errors.New("conflicting pull request intent")
-		}
-	}
-	r.detail.State.Plan.PullRequestIntent = &pr
-	return nil
-}
-
-func (r memoryPlanMutationRecord) RecordPullRequest(pr plan.PullRequest, branch, headSHA string) error {
-	pr.Branch = branch
-	pr.HeadSHA = headSHA
-	if intent := r.detail.State.Plan.PullRequestIntent; intent != nil {
-		matches := intent.Branch == branch && intent.HeadSHA == headSHA
-		if intent.Number > 0 || intent.URL != "" {
-			matches = *intent == pr
-		}
-		if !matches {
-			return errors.New("pull request does not match recorded intent")
-		}
-	}
-	r.detail.State.Plan.PullRequest = &pr
-	r.detail.State.Plan.PullRequestIntent = nil
-	r.detail.State.Plan.FinalizationFailure = nil
-	if r.detail.State.Workspace == nil {
-		r.detail.State.Workspace = &plan.Workspace{}
-	}
-	r.detail.State.Workspace.Branch = branch
-	r.detail.State.Workspace.HeadSHA = headSHA
-	r.detail.State.Workspace.PushedSHA = headSHA
-	r.detail.State.UpdatedAt = pr.CreatedAt
-	r.detail.State.Plan.Timing.LastActivityAt = &pr.CreatedAt
-	return nil
-}
-
-func (r memoryPlanMutationRecord) RecordReviewError(review plan.PlanReview, _ string) error {
-	reviewedAt := review.ReviewedAt
-	r.detail.State.Plan.Review = &review
-	r.detail.State.Plan.FinalizationFailure = nil
-	r.detail.State.UpdatedAt = reviewedAt
-	r.detail.State.Plan.Timing.LastActivityAt = &reviewedAt
-	return nil
-}
-
-func (r memoryPlanMutationRecord) RecordReviewCompleted(review plan.PlanReview, agent string) error {
-	return r.RecordReviewError(review, agent)
-}
-
-func (r memoryPlanMutationRecord) RecordReviewCompletedWithArtifact(review plan.PlanReview, agent, _ string) error {
-	return r.RecordReviewCompleted(review, agent)
-}
-
-func (r memoryPlanMutationRecord) ConsumeReviewProposalCorrection(repaired *plan.FinalizationFailure, attempt plan.FinalizationFailure) error {
-	review := plan.CurrentReview(r.detail)
-	if review == nil || !review.IsApproved() {
-		return errors.New("approved review changed")
-	}
-	base := review.Base
-	if base == "" {
-		base = r.detail.State.Repo.BaseCommit
-		if r.detail.State.Workspace != nil && r.detail.State.Workspace.BaseSHA != "" {
-			base = r.detail.State.Workspace.BaseSHA
-		}
-	}
-	if base != attempt.ReviewBase || review.Head != attempt.ReviewHead {
-		return errors.New("approved review range changed")
-	}
-	if existing := r.detail.State.Plan.FinalizationFailure; existing != nil && *existing == attempt {
-		return nil
-	}
-	if repaired != nil {
-		if existing := r.detail.State.Plan.FinalizationFailure; existing == nil || *existing != *repaired {
-			return errors.New("finalization failure changed")
-		}
-		r.detail.State.Plan.FinalizationFailure = nil
-	}
-	return r.RecordFinalizationFailure(attempt)
-}
-
-func (r memoryPlanMutationRecord) RecordReviewProposalCorrection(expected plan.FinalizationFailure, review plan.PlanReview, agent string) error {
-	if existing := r.detail.State.Plan.FinalizationFailure; existing == nil || *existing != expected {
-		return errors.New("proposal correction marker changed")
-	}
-	return r.RecordReviewCompleted(review, agent)
-}
-
-func (r memoryPlanMutationRecord) RecordFinalizationFailure(failure plan.FinalizationFailure) error {
-	if err := failure.Validate(); err != nil {
-		return err
-	}
-	if existing := r.detail.State.Plan.FinalizationFailure; existing != nil {
-		if *existing == failure {
-			return nil
-		}
-		return errors.New("conflicting finalization failure")
-	}
-	r.detail.State.Plan.FinalizationFailure = &failure
-	return nil
-}
-
-func (r memoryPlanMutationRecord) ReplaceFinalizationFailure(expected, replacement plan.FinalizationFailure) error {
-	if err := replacement.Validate(); err != nil {
-		return err
-	}
-	if existing := r.detail.State.Plan.FinalizationFailure; existing != nil && *existing == replacement {
-		return nil
-	} else if existing == nil || *existing != expected {
-		return errors.New("finalization failure changed")
-	}
-	r.detail.State.Plan.FinalizationFailure = &replacement
-	return nil
-}
-
-func (r memoryPlanMutationRecord) ClearFinalizationFailure(expected plan.FinalizationFailure, _ time.Time) error {
-	if existing := r.detail.State.Plan.FinalizationFailure; existing != nil && *existing != expected {
-		return errors.New("finalization failure changed")
-	}
-	r.detail.State.Plan.FinalizationFailure = nil
-	return nil
+	return r.PlanRecord.ContinueBlocked(now)
 }
 
 func testRunExecution(config ExecutionConfig, dependencies RunDependencies) runExecution {

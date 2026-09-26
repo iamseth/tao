@@ -87,17 +87,17 @@ func TestLifecycleSelectedSliceEdges(t *testing.T) {
 func TestMarkSliceExecutionStartIsIdempotentAndImmutable(t *testing.T) {
 	detail := startSliceDetail("")
 	boundary := SliceExecutionStart{Branch: "tao/plan", Head: "abc123", CommitPolicy: "slice", WorkspaceStrategy: WorkspaceStrategyWorktree}
-	if err := MarkSliceExecutionStart(detail, "001-a", boundary); err != nil {
+	if err := markSliceExecutionStart(detail, "001-a", boundary); err != nil {
 		t.Fatalf("record boundary: %v", err)
 	}
-	if err := MarkSliceExecutionStart(detail, "001-a", boundary); err != nil {
+	if err := markSliceExecutionStart(detail, "001-a", boundary); err != nil {
 		t.Fatalf("repeat identical boundary: %v", err)
 	}
 	for _, changed := range []SliceExecutionStart{
 		{Branch: "other", Head: "abc123", CommitPolicy: "slice", WorkspaceStrategy: WorkspaceStrategyWorktree},
 		{Branch: "tao/plan", Head: "def456", CommitPolicy: "slice", WorkspaceStrategy: WorkspaceStrategyWorktree},
 	} {
-		if err := MarkSliceExecutionStart(detail, "001-a", changed); err == nil || !strings.Contains(err.Error(), "refusing to overwrite branch or head") {
+		if err := markSliceExecutionStart(detail, "001-a", changed); err == nil || !strings.Contains(err.Error(), "refusing to overwrite branch or head") {
 			t.Fatalf("boundary overwrite error = %v", err)
 		}
 	}
@@ -115,7 +115,7 @@ func TestMarkSliceExecutionStartRefreshesWorkspaceBoundaryForLaterSlice(t *testi
 	detail.Slices.Slices = append(detail.Slices.Slices, Slice{ID: "002-b", Status: StatusPending})
 	boundary := SliceExecutionStart{Branch: "tao/plan", Head: "first-commit", CommitPolicy: "slice", WorkspaceStrategy: WorkspaceStrategyWorktree}
 
-	if err := MarkSliceExecutionStart(detail, "002-b", boundary); err != nil {
+	if err := markSliceExecutionStart(detail, "002-b", boundary); err != nil {
 		t.Fatalf("record later boundary: %v", err)
 	}
 	if detail.State.Workspace.Branch != boundary.Branch || detail.State.Workspace.HeadSHA != boundary.Head {
@@ -159,7 +159,7 @@ func TestLifecycleMutationHelpersRejectInvalidMutations(t *testing.T) {
 		{
 			name: "start nil detail",
 			mutate: func() error {
-				_, _, err := MarkSliceStarted(nil, "001-a", editTime())
+				_, _, err := markSliceStarted(nil, "001-a", editTime())
 				return err
 			},
 			want: "plan detail is nil",
@@ -167,7 +167,7 @@ func TestLifecycleMutationHelpersRejectInvalidMutations(t *testing.T) {
 		{
 			name: "start missing slice",
 			mutate: func() error {
-				_, _, err := MarkSliceStarted(startSliceDetail(""), "missing", editTime())
+				_, _, err := markSliceStarted(startSliceDetail(""), "missing", editTime())
 				return err
 			},
 			want: "slice missing not found",
@@ -175,7 +175,7 @@ func TestLifecycleMutationHelpersRejectInvalidMutations(t *testing.T) {
 		{
 			name: "complete without start",
 			mutate: func() error {
-				_, _, err := MarkSliceCompleted(startSliceDetail(""), "001-a", "done", nil, editTime())
+				_, _, err := markSliceCompleted(startSliceDetail(""), "001-a", "done", nil, editTime())
 				return err
 			},
 			want: "has no started_at",
@@ -183,7 +183,7 @@ func TestLifecycleMutationHelpersRejectInvalidMutations(t *testing.T) {
 		{
 			name: "approve not required",
 			mutate: func() error {
-				_, _, err := MarkSliceApproved(startSliceDetail(""), "001-a", "Seth", editTime())
+				_, _, err := markSliceApproved(startSliceDetail(""), "001-a", "Seth", editTime())
 				return err
 			},
 			want: "does not require approval",
@@ -193,7 +193,7 @@ func TestLifecycleMutationHelpersRejectInvalidMutations(t *testing.T) {
 			mutate: func() error {
 				detail := startSliceDetail("")
 				detail.Slices.Slices[0].Approval = &Approval{Required: true, Reason: "approval"}
-				_, _, err := MarkSliceApproved(detail, "001-a", "  ", editTime())
+				_, _, err := markSliceApproved(detail, "001-a", "  ", editTime())
 				return err
 			},
 			want: "approved_by is required",
@@ -201,14 +201,14 @@ func TestLifecycleMutationHelpersRejectInvalidMutations(t *testing.T) {
 		{
 			name: "continue not blocked",
 			mutate: func() error {
-				return MarkBlockedContinued(startSliceDetail(""), editTime())
+				return markBlockedContinued(startSliceDetail(""), editTime())
 			},
 			want: "continue is not meaningful",
 		},
 		{
 			name: "remove dependent slice",
 			mutate: func() error {
-				_, err := MarkSliceRemoved(editPlanDetail(), "001-a", editTime())
+				_, err := markSliceRemoved(editPlanDetail(), "001-a", editTime())
 				return err
 			},
 			want: "pending slices depend on it",
@@ -218,7 +218,7 @@ func TestLifecycleMutationHelpersRejectInvalidMutations(t *testing.T) {
 			mutate: func() error {
 				detail := editPlanDetail()
 				detail.State.Plan.PendingSlices = []string{"002-b", "003-c"}
-				_, err := MarkSliceSkipped(detail, "001-a", editTime())
+				_, err := markSliceSkipped(detail, "001-a", editTime())
 				return err
 			},
 			want: "not in pending_slices",
@@ -226,7 +226,7 @@ func TestLifecycleMutationHelpersRejectInvalidMutations(t *testing.T) {
 		{
 			name: "reorder omits pending slice",
 			mutate: func() error {
-				_, err := MarkPendingSlicesReordered(editPlanDetail(), []string{"001-a", "002-b"}, editTime())
+				_, err := markPendingSlicesReordered(editPlanDetail(), []string{"001-a", "002-b"}, editTime())
 				return err
 			},
 			want: "must include every pending slice",
@@ -234,7 +234,7 @@ func TestLifecycleMutationHelpersRejectInvalidMutations(t *testing.T) {
 		{
 			name: "reorder duplicate pending slice",
 			mutate: func() error {
-				_, err := MarkPendingSlicesReordered(editPlanDetail(), []string{"001-a", "001-a", "003-c"}, editTime())
+				_, err := markPendingSlicesReordered(editPlanDetail(), []string{"001-a", "001-a", "003-c"}, editTime())
 				return err
 			},
 			want: "duplicate slice 001-a",
@@ -260,7 +260,7 @@ func TestAbandonedLifecycleMutatorsPreserveStatusSlicesQueueAndEvents(t *testing
 		{
 			name: "block slice",
 			mutate: func(detail *PlanDetail) error {
-				_, _, err := MarkSliceBlocked(detail, "001-a", "cannot continue", editTime())
+				_, _, err := markSliceBlocked(detail, "001-a", "cannot continue", editTime())
 				return err
 			},
 		},
@@ -272,7 +272,7 @@ func TestAbandonedLifecycleMutatorsPreserveStatusSlicesQueueAndEvents(t *testing
 				detail.Slices.Slices[0].Status = StatusCompleted
 			},
 			mutate: func(detail *PlanDetail) error {
-				_, _, err := MarkSliceBudgetBlocked(detail, "001-a", "budget exceeded", editTime())
+				_, _, err := markSliceBudgetBlocked(detail, "001-a", "budget exceeded", editTime())
 				return err
 			},
 		},
@@ -282,7 +282,7 @@ func TestAbandonedLifecycleMutatorsPreserveStatusSlicesQueueAndEvents(t *testing
 				detail.Slices.Slices[1].DependsOn = nil
 			},
 			mutate: func(detail *PlanDetail) error {
-				_, err := MarkSliceRemoved(detail, "001-a", editTime())
+				_, err := markSliceRemoved(detail, "001-a", editTime())
 				return err
 			},
 		},
@@ -292,14 +292,14 @@ func TestAbandonedLifecycleMutatorsPreserveStatusSlicesQueueAndEvents(t *testing
 				detail.Slices.Slices[1].DependsOn = nil
 			},
 			mutate: func(detail *PlanDetail) error {
-				_, err := MarkSliceSkipped(detail, "001-a", editTime())
+				_, err := markSliceSkipped(detail, "001-a", editTime())
 				return err
 			},
 		},
 		{
 			name: "reorder pending slices",
 			mutate: func(detail *PlanDetail) error {
-				_, err := MarkPendingSlicesReordered(detail, []string{"001-a", "003-c", "002-b"}, editTime())
+				_, err := markPendingSlicesReordered(detail, []string{"001-a", "003-c", "002-b"}, editTime())
 				return err
 			},
 		},
@@ -334,7 +334,7 @@ func TestLifecycleMutationEventIdempotencyDecisions(t *testing.T) {
 		detail := startSliceDetail("")
 		detail.Events = []Event{{Type: EventTypeSliceStarted, Timestamp: first, PlanID: "plan-a", SliceID: "001-a"}}
 
-		_, appendEvent, err := MarkSliceStarted(detail, "001-a", second)
+		_, appendEvent, err := markSliceStarted(detail, "001-a", second)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -351,7 +351,7 @@ func TestLifecycleMutationEventIdempotencyDecisions(t *testing.T) {
 		detail.Slices.Slices[0].Timing.StartedAt = &first
 		detail.Events = []Event{{Type: EventTypeSliceCompleted, Timestamp: first, PlanID: "plan-a", SliceID: "001-a"}}
 
-		_, appendEvent, err := MarkSliceCompleted(detail, "001-a", "done", nil, second)
+		_, appendEvent, err := markSliceCompleted(detail, "001-a", "done", nil, second)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -368,7 +368,7 @@ func TestLifecycleMutationEventIdempotencyDecisions(t *testing.T) {
 		detail.Slices.Slices[0].Approval = &Approval{Required: true, Reason: "approval"}
 		detail.Events = []Event{{Type: EventTypeSliceApproved, Timestamp: first, PlanID: "plan-a", SliceID: "001-a"}}
 
-		_, appendEvent, err := MarkSliceApproved(detail, "001-a", "Seth", second)
+		_, appendEvent, err := markSliceApproved(detail, "001-a", "Seth", second)
 		if err != nil {
 			t.Fatal(err)
 		}

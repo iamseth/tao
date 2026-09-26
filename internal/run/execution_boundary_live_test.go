@@ -108,8 +108,12 @@ func TestInspectRecordedWorkspaceAdvancesProvenStaleHeadWithCompareAndSet(t *tes
 			detail, workspaceRoot := staleWorkspaceBoundaryDetail(t)
 			var calls []string
 			runner := interruptedServiceGitRunner(t, workspaceRoot, &calls, func() string { return "" }, "tao/plan-a", "after-001-a")
+			baseRecord, err := memoryPlanRecordFactory(detail)
+			if err != nil {
+				t.Fatal(err)
+			}
 			record := &workspaceBoundaryAdvanceRecord{
-				PlanMutationRecord: memoryPlanMutationRecord{detail: detail}, detail: detail,
+				PlanMutationRecord: baseRecord, detail: detail,
 				currentBranch: tt.currentBranch, currentHead: tt.currentHead, advanceErr: tt.advanceErr,
 			}
 			execution := runExecution{
@@ -117,7 +121,7 @@ func TestInspectRecordedWorkspaceAdvancesProvenStaleHeadWithCompareAndSet(t *tes
 				Dependencies: RunDependencies{CommandRunner: runner, PlanRecordFactory: func(*plan.PlanDetail) (PlanMutationRecord, error) { return record, nil }},
 			}
 
-			err := inspectRecordedWorkspaceBeforeAutomaticStart(context.Background(), detail, execution)
+			err = inspectRecordedWorkspaceBeforeAutomaticStart(context.Background(), detail, execution)
 			if tt.wantErr == "" && err != nil {
 				t.Fatal(err)
 			}
@@ -159,7 +163,7 @@ func TestInspectRecordedWorkspaceDoesNotAdvanceUnsafeOrUnprovenBoundary(t *testi
 				Config: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated, CommitPolicy: CommitPolicySlice}},
 				Dependencies: RunDependencies{CommandRunner: runner, PlanRecordFactory: func(*plan.PlanDetail) (PlanMutationRecord, error) {
 					factoryCalls++
-					return memoryPlanMutationRecord{detail: detail}, nil
+					return memoryPlanRecordFactory(detail)
 				}},
 			}
 
@@ -227,7 +231,7 @@ func (r *rebaseRecoveryRecord) SettleWorkspaceRebase(expected plan.WorkspaceReba
 func TestInspectRecordedWorkspaceRecoversIntentPersistedBeforeGitMutation(t *testing.T) {
 	repo, oldBase, oldHead, newBase := newRebaseRecoveryRepo(t, false)
 	intent := rebaseRecoveryIntent(t, repo, oldBase, oldHead, newBase)
-	detail, record := rebaseRecoveryDetail(intent)
+	detail, record := rebaseRecoveryDetail(t, intent)
 
 	err := recoverWorkspaceRebaseIntent(context.Background(), detail, runExecution{Dependencies: RunDependencies{
 		PlanRecordFactory: func(*plan.PlanDetail) (PlanMutationRecord, error) { return record, nil },
@@ -253,7 +257,7 @@ func TestInspectRecordedWorkspaceRecoversIntentAfterConflictAbort(t *testing.T) 
 	if got := rebaseRecoveryGitOutput(t, repo, "rev-parse", "HEAD"); got != oldHead {
 		t.Fatalf("rebase abort restored HEAD %s, want %s", got, oldHead)
 	}
-	detail, record := rebaseRecoveryDetail(intent)
+	detail, record := rebaseRecoveryDetail(t, intent)
 
 	err := recoverWorkspaceRebaseIntent(context.Background(), detail, runExecution{Dependencies: RunDependencies{
 		PlanRecordFactory: func(*plan.PlanDetail) (PlanMutationRecord, error) { return record, nil },
@@ -279,7 +283,7 @@ func TestInspectRecordedWorkspaceRecoversRebaseIntentForNonePolicy(t *testing.T)
 		t.Run(tt.name, func(t *testing.T) {
 			repoRoot, workspaceRoot, oldBase, oldHead, newBase := newLinkedRebaseRecoveryRepo(t)
 			intent := rebaseRecoveryIntent(t, workspaceRoot, oldBase, oldHead, newBase)
-			detail, record := rebaseRecoveryDetail(intent)
+			detail, record := rebaseRecoveryDetail(t, intent)
 			detail.State.Repo.Root = repoRoot
 			detail.State.Workspace.Root = filepath.Dir(workspaceRoot)
 			detail.State.Workspace.Path = workspaceRoot
@@ -383,12 +387,17 @@ func rebaseRecoveryIntent(t *testing.T, repo, oldBase, oldHead, newBase string) 
 	}
 }
 
-func rebaseRecoveryDetail(intent plan.WorkspaceRebaseIntent) (*plan.PlanDetail, *rebaseRecoveryRecord) {
+func rebaseRecoveryDetail(t *testing.T, intent plan.WorkspaceRebaseIntent) (*plan.PlanDetail, *rebaseRecoveryRecord) {
+	t.Helper()
 	detail := &plan.PlanDetail{State: plan.State{Plan: plan.PlanState{ID: "plan-a"}, Workspace: &plan.Workspace{
 		Strategy: plan.WorkspaceStrategyWorktree, LifecycleStatus: plan.WorkspaceStatusReady,
 		Branch: intent.Branch, HeadSHA: intent.OldHeadSHA, BaseSHA: intent.OldBaseSHA, RebaseIntent: &intent,
 	}}}
-	record := &rebaseRecoveryRecord{PlanMutationRecord: memoryPlanMutationRecord{detail: detail}, detail: detail}
+	baseRecord, err := memoryPlanRecordFactory(detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := &rebaseRecoveryRecord{PlanMutationRecord: baseRecord, detail: detail}
 	return detail, record
 }
 

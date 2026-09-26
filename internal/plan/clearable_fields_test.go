@@ -6,7 +6,7 @@
 // Unmigrated clearable fields are declared WITHOUT omitempty so marshaling an
 // explicit zero/nil/empty value produces a JSON key that writeJSON merges over
 // the prior value. Migrated fields use omitempty to preserve by default and are
-// cleared only by a typed ArtifactChangeSet declaration.
+// cleared only by a typed artifactChangeSet declaration.
 //
 // Tag-driven clearable fields (removing omitempty from an existing field is a
 // schema-aware decision that must also add a test case below):
@@ -35,25 +35,25 @@
 //
 //   - State.Workspace (*Workspace, "workspace,omitempty") — the whole block
 //   - State.Plan.CurrentSlice preserves by default but is explicitly clearable
-//     through ArtifactChangeSet.
+//     through artifactChangeSet.
 //   - Workspace sub-fields: Branch, BaseSHA, HeadSHA, etc.
 //   - Workspace.DependencyFailure, DependencyFingerprint, and RebaseIntent
-//     preserve by default but are explicitly clearable through ArtifactChangeSet.
+//     preserve by default but are explicitly clearable through artifactChangeSet.
 //   - Repo.BaseCommit ("base_commit,omitempty")
 //   - PlanState.ChangeType (ChangeType, "change_type,omitempty")
 //   - PlanState.Decision (*Decision, "decision,omitempty") and Sequence
 //     (*Sequence, "sequence,omitempty") preserve optional planning metadata.
 //   - PlanState.PullRequest (*PullRequest, "pull_request,omitempty")
 //   - PlanState.FinalizationFailure preserves by default and is explicitly
-//     clearable through ArtifactChangeSet.
+//     clearable through artifactChangeSet.
 //   - PlanState.Review and all PlanReview fields preserve by default but the
-//     block is explicitly replaceable or clearable through ArtifactChangeSet.
+//     block is explicitly replaceable or clearable through artifactChangeSet.
 //
 // Known merge-only fields in slices.json:
 //
 //   - Slice.ExecutionRoot, Tags, Approval, Notes, VerificationResults (all omitempty)
 //   - Slice.BlockerNote preserves by default but is explicitly clearable through
-//     ArtifactChangeSet.
+//     artifactChangeSet.
 //   - ReviewFinding sub-fields: Severity, File, Message, Suggestion (all omitempty)
 package plan
 
@@ -308,7 +308,7 @@ func TestMigratedSliceBlockerNoteRequiresDeclaredClear(t *testing.T) {
 	if err := record.PersistArtifacts(); err == nil || !strings.Contains(err.Error(), "Slice.BlockerNote") {
 		t.Fatalf("undeclared clear error = %v, want field-specific rejection", err)
 	}
-	if err := applySlicesArtifactUpdate(fileArtifactStore{}, dir, detail, func(_ *PlanDetail, changes *ArtifactChangeSet) error {
+	if err := applySlicesArtifactUpdate(fileArtifactStore{}, dir, detail, func(_ *PlanDetail, changes *artifactChangeSet) error {
 		return changes.ClearSliceBlockerNote("001-a")
 	}); err != nil {
 		t.Fatal(err)
@@ -356,9 +356,9 @@ func TestMigratedCurrentSliceRequiresDeclaredClear(t *testing.T) {
 		t.Fatalf("undeclared clear error = %v, want field-specific rejection", err)
 	}
 
-	changes := NewArtifactChangeSet(detail)
+	changes := newArtifactChangeSet(detail)
 	changes.ClearPlanCurrentSlice()
-	if err := record.PersistStateChanges(changes); err != nil {
+	if err := record.persistStateChanges(changes); err != nil {
 		t.Fatal(err)
 	}
 	var raw map[string]any
@@ -403,9 +403,9 @@ func TestMigratedFinalizationFailureRequiresDeclaredClear(t *testing.T) {
 	if err := record.PersistState(); err == nil || !strings.Contains(err.Error(), "FinalizationFailure") {
 		t.Fatalf("undeclared clear error = %v, want field-specific rejection", err)
 	}
-	changes := NewArtifactChangeSet(detail)
+	changes := newArtifactChangeSet(detail)
 	changes.ClearPlanFinalizationFailure()
-	if err := record.PersistStateChanges(changes); err != nil {
+	if err := record.persistStateChanges(changes); err != nil {
 		t.Fatal(err)
 	}
 	var raw map[string]any
@@ -458,11 +458,11 @@ func TestMigratedPlanReviewRequiresDeclaredReplacement(t *testing.T) {
 		t.Fatalf("undeclared review replacement error = %v, want field-specific rejection", err)
 	}
 
-	changes := NewArtifactChangeSet(detail)
+	changes := newArtifactChangeSet(detail)
 	if err := changes.ReplacePlanReview(*intended.Plan.Review); err != nil {
 		t.Fatal(err)
 	}
-	if err := record.PersistStateChanges(changes); err != nil {
+	if err := record.persistStateChanges(changes); err != nil {
 		t.Fatal(err)
 	}
 	var raw map[string]any
@@ -524,21 +524,21 @@ func TestMigratedWorkspaceFieldsRequireDeclaredClear(t *testing.T) {
 		jsonKey   string
 		seed      func(*Workspace)
 		zero      func(*Workspace)
-		declare   func(*ArtifactChangeSet)
+		declare   func(*artifactChangeSet)
 	}{
 		{
 			fieldName: "DependencyFailure",
 			jsonKey:   "dependency_preparation_failure",
 			seed:      func(workspace *Workspace) { workspace.DependencyFailure = "npm install failed" },
 			zero:      func(workspace *Workspace) { workspace.DependencyFailure = "" },
-			declare:   (*ArtifactChangeSet).ClearWorkspaceDependencyFailure,
+			declare:   (*artifactChangeSet).ClearWorkspaceDependencyFailure,
 		},
 		{
 			fieldName: "DependencyFingerprint",
 			jsonKey:   "dependency_fingerprint",
 			seed:      func(workspace *Workspace) { workspace.DependencyFingerprint = "old-fingerprint" },
 			zero:      func(workspace *Workspace) { workspace.DependencyFingerprint = "" },
-			declare:   (*ArtifactChangeSet).ClearWorkspaceDependencyFingerprint,
+			declare:   (*artifactChangeSet).ClearWorkspaceDependencyFingerprint,
 		},
 	}
 
@@ -583,9 +583,9 @@ func TestMigratedWorkspaceFieldsRequireDeclaredClear(t *testing.T) {
 				t.Fatalf("undeclared clear error = %v, want field-specific rejection", err)
 			}
 
-			changes := NewArtifactChangeSet(detail)
+			changes := newArtifactChangeSet(detail)
 			tt.declare(changes)
-			if err := record.PersistStateChanges(changes); err != nil {
+			if err := record.persistStateChanges(changes); err != nil {
 				t.Fatal(err)
 			}
 			readJSONFile(t, filepath.Join(dir, "state.json"), &raw)
