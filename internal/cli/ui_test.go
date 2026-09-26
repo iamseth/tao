@@ -395,14 +395,16 @@ func waitForDetachedUIPID(t *testing.T, path string) int {
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		contents, err := os.ReadFile(path) //nolint:gosec // G304: path is a test-owned temporary file.
-		if err == nil {
+		// The helper creates the file before it writes the PID, so an empty
+		// read means the publish is still in progress; keep polling.
+		if err == nil && len(contents) > 0 {
 			pid, err := strconv.Atoi(string(contents))
 			if err != nil {
 				t.Fatalf("parse detached command PID: %v", err)
 			}
 			return pid
 		}
-		if !os.IsNotExist(err) {
+		if err != nil && !os.IsNotExist(err) {
 			t.Fatal(err)
 		}
 		if time.Now().After(deadline) {
