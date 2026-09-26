@@ -18,10 +18,11 @@ Use the [Makefile](Makefile) — run `make help` to list the targets. The common
 ones are:
 
 - `make build` — compile the binary.
+- `make build-targets` — cross-build and vet all four release targets.
 - `make test` — run the test suite.
 - `make lint` — run the linters.
 
-Run `make build`, `make lint`, and `make test` before opening a pull request.
+Run `make build`, `make build-targets`, `make lint`, and `make test` before opening a pull request.
 
 ## TUI preview workflow
 

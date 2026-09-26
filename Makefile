@@ -1,4 +1,4 @@
-.PHONY: help build clean test coverage-html lint install release-check tui-preview verify verify-no-deps
+.PHONY: help build build-targets clean test coverage-html lint lint-darwin install release-check tui-preview verify verify-no-deps
 
 COVERAGE_FILE := coverage.out
 TUI_PREVIEW_ARGS ?=
@@ -9,10 +9,12 @@ help:
 	@printf "Available targets:\n"
 	@printf "  %-14s %s\n" "help" "Show this help text."
 	@printf "  %-14s %s\n" "build" "Build the tao binary into the bin directory."
+	@printf "  %-14s %s\n" "build-targets" "Cross-build and vet all release targets (adds roughly 15 to 30 seconds to verify)."
 	@printf "  %-14s %s\n" "clean" "Remove build and coverage artifacts."
 	@printf "  %-14s %s\n" "test" "Run all Go tests with coverage output."
 	@printf "  %-14s %s\n" "coverage-html" "Open an HTML coverage report in the browser."
 	@printf "  %-14s %s\n" "lint" "Run golangci-lint."
+	@printf "  %-14s %s\n" "lint-darwin" "Lint darwin-gated files (intended for Linux hosts)."
 	@printf "  %-14s %s\n" "install" "Build and install the tao binary into ~/.bin."
 	@printf "  %-14s %s\n" "release-check" "Validate the GoReleaser config (requires goreleaser)."
 	@printf "  %-14s %s\n" "tui-preview" "Run the developer-only fixture TUI."
@@ -22,6 +24,16 @@ help:
 build:
 	@mkdir -p bin
 	@go build -o bin/tao ./cmd/tao
+
+# This list mirrors the goos/goarch matrix in .goreleaser.yml; update it by hand.
+build-targets:
+	@set -e; \
+	for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do \
+		os=$${target%/*}; arch=$${target#*/}; \
+		echo "Building and vetting $$target"; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build ./...; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go vet ./...; \
+	done
 
 clean:
 	@rm -rvf bin $(COVERAGE_FILE)
@@ -42,6 +54,10 @@ coverage-html: test
 lint:
 	@GOLANGCI_LINT_CACHE="$(GOLANGCI_LINT_CACHE)" golangci-lint run --allow-parallel-runners
 
+# For the Linux CI job; native lint already covers darwin on macOS hosts.
+lint-darwin:
+	@GOOS=darwin GOARCH=arm64 GOLANGCI_LINT_CACHE="$(GOLANGCI_LINT_CACHE)" golangci-lint run --allow-parallel-runners
+
 install: build
 	@rm -f ~/.bin/tao; cp ./bin/tao ~/.bin/tao
 
@@ -51,7 +67,7 @@ release-check:
 tui-preview:
 	@go run ./cmd/tui-preview $(TUI_PREVIEW_ARGS)
 
-verify: build test lint verify-no-deps
+verify: build test lint verify-no-deps build-targets
 
 verify-no-deps:
 	@count=$$(go list -m all | wc -l); \

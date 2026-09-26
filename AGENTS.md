@@ -1,7 +1,7 @@
 # AGENTS.md
 
 ## Commands
-- `make verify` is the canonical repository-wide gate; it runs build, test, lint, and verify-no-deps.
+- `make verify` is the canonical repository-wide gate; it runs build, test, lint, verify-no-deps, and build-targets. `make build-targets` cross-builds and vets all four GoReleaser targets (darwin and linux on amd64 and arm64).
 - `make build` builds `bin/tao` from `./cmd/tao`.
 - `make test` runs `go test -coverprofile=coverage.out ./...` and prints coverage with `go tool cover -func`.
 - Run focused tests with `go test ./internal/<package> -run TestName` for ordinary implementation slices; examples: `go test ./internal/plan -run TestFormatDuration`, `go test ./internal/cli -run TestRunHandlesNoArgsAndGlobalFlagErrors`.
@@ -16,7 +16,7 @@
 - Reusable run, lifecycle, workspace, and repository behavior belongs in domain packages; CLI handlers should remain thin orchestration layers.
 - Shared bounds for agent-written input files and text live in `internal/agentinput`; strict commit-proposal decoding lives in `internal/commit`; slice-completion evidence loading lives in `internal/run`; plan base-commit drift detection lives in `internal/staleness`; repository-selector resolution lives in `internal/taodata`.
 - Repository-scoped note models, persistence, lifecycle, and promotion locking live in `internal/note`; bounded external-editor note buffers and sessions live in `internal/noteeditor`; platform clipboard helpers live in `internal/clipboard`; note command and TUI edit orchestration live in `internal/cli`.
-- Checked-in CI uses `.github/workflows/ci.yml` to execute the gates in `make verify` and `.github/workflows/release.yml` to build tagged releases.
+- Checked-in CI uses `.github/workflows/ci.yml` to execute the gates in `make verify`, including `make build-targets` in the Linux build job, and `.github/workflows/release.yml` to build tagged releases. The Linux lint job also runs `make lint-darwin` because native lint on macOS covers darwin, while Linux would otherwise never lint darwin-gated files; lint-darwin stays separate from lint and verify.
 
 ## Tao Plan Data
 - Runtime commands accept `--plans-dir DIR`; otherwise current-repo plans under Tao data home (`TAO_DATA_HOME`, `$XDG_DATA_HOME/tao`, or `~/.local/share/tao`) are used.

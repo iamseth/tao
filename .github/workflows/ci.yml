@@ -70,6 +70,9 @@ jobs:
       - name: Build
         run: make build
 
+      - name: Cross-build release targets
+        run: make build-targets
+
       - name: Test
         run: make test
 
@@ -90,6 +93,10 @@ jobs:
 
       - name: Lint
         run: make lint
+
+      # Native lint on macOS already covers darwin; this pass lints darwin-gated files from Linux.
+      - name: Lint darwin-gated files
+        run: make lint-darwin
 
   macos-test:
     name: Build and test on macOS

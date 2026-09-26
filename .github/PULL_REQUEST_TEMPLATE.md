@@ -12,6 +12,7 @@ What does this change do, and why?
 Run these before opening the PR (see [CONTRIBUTING.md](../CONTRIBUTING.md)):
 
 - [ ] `make build`
+- [ ] `make build-targets`
 - [ ] `make lint`
 - [ ] `make test`
 
