@@ -497,6 +497,21 @@ const (
 	FinalizationFailurePhasePullRequest    FinalizationFailurePhase = "pull_request_finalization"
 )
 
+// Finalization categories are persisted evidence; keep their wire values stable.
+const (
+	FinalizationCategoryProposalCorrectionStarted     = "proposal_correction_started"
+	FinalizationCategoryProposalCorrectionUnavailable = "proposal_correction_unavailable"
+	FinalizationCategoryProposalPromptFailed          = "proposal_prompt_failed"
+	FinalizationCategoryProposalCorrectionFailed      = "proposal_correction_failed"
+	FinalizationCategoryProposalInvalid               = "proposal_invalid"
+	FinalizationCategoryProposalRecordingFailed       = "proposal_recording_failed"
+	FinalizationCategoryHeadDrift                     = "head_drift"
+	FinalizationCategoryWorkspaceMismatch             = "workspace_mismatch"
+	FinalizationCategoryWorkspacePreflightFailed      = "workspace_preflight_failed"
+	FinalizationCategoryWorkspaceDirty                = "workspace_dirty"
+	FinalizationCategoryIntentMismatch                = "intent_mismatch"
+)
+
 const (
 	FinalizationRecoveryResumePullRequest = "resume_pull_request"
 	FinalizationRecoveryRestoreBoundary   = "restore_workspace_boundary"
@@ -526,9 +541,9 @@ type FinalizationFailure struct {
 // failures must be repaired before a replacement review can safely run.
 func ProposalRepairRecoveryAction(category string) string {
 	switch strings.TrimSpace(category) {
-	case "head_drift", "workspace_mismatch", "workspace_preflight_failed", "workspace_dirty":
+	case FinalizationCategoryHeadDrift, FinalizationCategoryWorkspaceMismatch, FinalizationCategoryWorkspacePreflightFailed, FinalizationCategoryWorkspaceDirty:
 		return FinalizationRecoveryRestoreBoundary
-	case "intent_mismatch":
+	case FinalizationCategoryIntentMismatch:
 		return FinalizationRecoveryRepairIntent
 	default:
 		return FinalizationRecoveryRerunReview

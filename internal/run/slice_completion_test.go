@@ -53,6 +53,38 @@ func (s *sliceCompletionStore) AppendEvent(_ string, event plan.Event) error {
 	return nil
 }
 
+func TestExpectedPlanCommitPathsIncludesOnlyCompletedAndSelectedSlices(t *testing.T) {
+	detail := &plan.PlanDetail{
+		State: plan.State{Plan: plan.PlanState{CompletedSlices: []string{"completed"}}},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{
+			{ID: "completed", ExpectedFiles: []string{"./README.md", "internal/run/*.go"}},
+			{ID: "selected", ExpectedFiles: []string{"README.md", "./docs/**/*.md"}},
+			{ID: "pending", ExpectedFiles: []string{"pending.go"}},
+		}},
+	}
+	expected := expectedPlanCommitPaths(detail, "selected")
+	for _, test := range []struct {
+		path string
+		want bool
+	}{
+		{"README.md", true},
+		{"./README.md", true},
+		{"internal/run/run.go", true},
+		{"internal/run/sub/run.go", false},
+		{"docs/guide.md", true},
+		{"docs/sub/guide.md", true},
+		{"pending.go", false},
+		{"unrelated.go", false},
+	} {
+		if got := expected.Allows(test.path); got != test.want {
+			t.Errorf("Allows(%q) = %v, want %v", test.path, got, test.want)
+		}
+	}
+	if expectedPlanCommitPaths(detail).Allows("docs/guide.md") {
+		t.Fatal("selected slice should require explicit inclusion before completion")
+	}
+}
+
 func TestSliceCompletionRejectsAbandonedBeforeGitOrArtifactMutation(t *testing.T) {
 	root := initSliceCompletionRepo(t)
 	store := &sliceCompletionStore{}

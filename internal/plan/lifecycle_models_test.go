@@ -97,6 +97,31 @@ func TestAbandonedStatusAndEventLegacyJSONParsing(t *testing.T) {
 	}
 }
 
+func TestProposalRepairCategoryWireValues(t *testing.T) {
+	for _, test := range []struct {
+		got  string
+		want string
+	}{
+		{FinalizationCategoryProposalCorrectionStarted, "proposal_correction_started"},
+		{FinalizationCategoryProposalCorrectionUnavailable, "proposal_correction_unavailable"},
+		{FinalizationCategoryProposalPromptFailed, "proposal_prompt_failed"},
+		{FinalizationCategoryProposalCorrectionFailed, "proposal_correction_failed"},
+		{FinalizationCategoryProposalInvalid, "proposal_invalid"},
+		{FinalizationCategoryProposalRecordingFailed, "proposal_recording_failed"},
+		{FinalizationCategoryHeadDrift, "head_drift"},
+		{FinalizationCategoryWorkspaceMismatch, "workspace_mismatch"},
+		{FinalizationCategoryWorkspacePreflightFailed, "workspace_preflight_failed"},
+		{FinalizationCategoryWorkspaceDirty, "workspace_dirty"},
+		{FinalizationCategoryIntentMismatch, "intent_mismatch"},
+	} {
+		t.Run(test.want, func(t *testing.T) {
+			if test.got != test.want {
+				t.Errorf("category = %q, want %q", test.got, test.want)
+			}
+		})
+	}
+}
+
 func TestFinalizationFailureValidation(t *testing.T) {
 	validProposal := FinalizationFailure{
 		Phase: FinalizationFailurePhaseProposalRepair, Category: "proposal_invalid", ReviewBase: "base123", ReviewHead: "head123",

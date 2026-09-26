@@ -61,7 +61,7 @@ Each boundary separates **Current mitigation** from **Residual risk** and **Futu
 ## Slice-commit scope warnings derived from `expected_files`
 
 - **Agent-authored input:** The current and completed slices' `expected_files` entries.
-- **Consumed by:** `internal/run/commit_safety.go` builds the expected-path comparison set, and `internal/run/slice_completion.go` warns when actual slice-commit paths fall outside it.
+- **Consumed by:** `internal/run/slice_completion.go` builds the expected-path comparison set and warns when actual slice-commit paths fall outside it.
 - **Current mitigation:** Expected files describe intended implementation scope but are advisory only. `internal/plan/validate.go` warns on broad or vague patterns and on absolute or parent-traversing paths. Slice completion safety-screens and stages all non-`.tao`, unambiguous changed paths; a safe undeclared path is still committed and produces a warning.
 - **Residual risk:** A warned but accepted broad or misleading declaration can still make advisory scope comparisons less useful and hide intent drift in noise. It cannot expand staging because candidates come from Git status and every candidate is screened independently of `expected_files`.
 - **Severity:** Medium.

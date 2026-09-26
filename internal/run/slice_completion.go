@@ -176,7 +176,7 @@ func (s SliceCompletionService) Complete(ctx context.Context, request SliceCompl
 		return fmt.Errorf("slice commit refused: ambiguous git status entry %q", classification.AmbiguousLines[0])
 	}
 	paths := commitcontract.UniquePaths(classification.CommitCandidates)
-	unexpected := unexpectedPlanCommitPaths(paths, expectedPlanCommitPaths(detail, request.SliceID))
+	unexpected := commitcontract.UnexpectedPaths(paths, expectedPlanCommitPaths(detail, request.SliceID))
 	if err := commitcontract.SafetyError(paths, nil); err != nil {
 		return fmt.Errorf("slice commit refused: %w", err)
 	}
@@ -218,6 +218,35 @@ func (s SliceCompletionService) Complete(ctx context.Context, request SliceCompl
 	}
 	outcome := plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionCommitted, CommitSHA: commitSHA}
 	return persistSliceCompletion(request, &outcome, request.Now)
+}
+
+func expectedPlanCommitPaths(detail *plan.PlanDetail, additionallyCompleted ...string) commitcontract.ExpectedPaths {
+	exact := map[string]bool{}
+	var patterns []string
+	completed := map[string]bool{}
+	for _, id := range detail.State.Plan.CompletedSlices {
+		completed[id] = true
+	}
+	for _, id := range additionallyCompleted {
+		completed[id] = true
+	}
+	for _, slice := range detail.Slices.Slices {
+		if !completed[slice.ID] {
+			continue
+		}
+		for _, path := range slice.ExpectedFiles {
+			path = commitcontract.NormalizePath(path)
+			if commitcontract.HasPathGlobMeta(path) {
+				patterns = append(patterns, path)
+				continue
+			}
+			exact[path] = true
+		}
+	}
+	for path := range exact {
+		patterns = append(patterns, path)
+	}
+	return commitcontract.NewExpectedPaths(patterns...)
 }
 
 func persistSliceCommitIntent(request SliceCompletionRequest, intent plan.SliceCommitIntent) error {

@@ -1293,7 +1293,7 @@ func TestRequireCleanReviewWorktreeMatchesStatusClassificationTolerance(t *testi
 
 // TestRequireCleanReviewWorktreeToleratesTaoMetadataPaths guards the review
 // gate against aborting on .tao metadata. Automatic slice commits exclude .tao
-// entries (classifyGitStatus identifies staged metadata for unstaging), so .tao
+// entries (commit.ClassifyStatus identifies staged metadata for unstaging), so .tao
 // dirt produced during the run must not read as unreviewed plan work.
 func TestRequireCleanReviewWorktreeToleratesTaoMetadataPaths(t *testing.T) {
 	t.Run("only tao metadata remains", func(t *testing.T) {

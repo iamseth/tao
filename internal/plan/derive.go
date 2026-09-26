@@ -209,13 +209,13 @@ func deriveNextAction(detail *PlanDetail, derived DerivedPlan) PlanNextAction {
 		case FinalizationFailurePhaseProposalRepair:
 			switch recovery.RecoveryAction {
 			case FinalizationRecoveryRestoreBoundary:
-				if recovery.Category == "workspace_mismatch" {
+				if recovery.Category == FinalizationCategoryWorkspaceMismatch {
 					return instruction("Repair or restore the plan's recorded linked worktree at its recorded path, branch, and HEAD before recording a fresh review", "review proposal repair failed ("+category+"); a fresh review cannot restore the durable linked-worktree boundary")
 				}
-				if recovery.Category == "workspace_dirty" {
+				if recovery.Category == FinalizationCategoryWorkspaceDirty {
 					return instruction("Restore a clean plan worktree at its recorded branch and HEAD before recording a fresh review", "review proposal repair failed ("+category+"); a fresh review cannot repair a dirty worktree")
 				}
-				if recovery.Category == "workspace_preflight_failed" {
+				if recovery.Category == FinalizationCategoryWorkspacePreflightFailed {
 					return instruction("Restore a clean plan worktree at its recorded branch and HEAD before recording a fresh review", "review proposal repair failed ("+category+"); a fresh review cannot repair an uninspectable worktree")
 				}
 				return instruction("Restore the plan worktree to its recorded branch and HEAD before recording a fresh review", "review proposal repair failed ("+category+"); a fresh review cannot restore the durable workspace boundary")

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/plan"
 )
 
@@ -46,7 +47,7 @@ func TestCommitLeftoversExcludesTaoAndStartingDirtyPaths(t *testing.T) {
 	})
 	status := "?? .tao/state.json\n M ./.tao/workspaces/plan/file.go\n M README.md\n M internal/run/unrelated.go\n"
 
-	got, err := commitLeftovers(detail, status, startingDirtyPredicate([]string{"./README.md"}))
+	got, err := commitLeftovers(detail, status, commit.StartingDirtyPredicate([]string{"./README.md"}))
 	if err != nil {
 		t.Fatalf("commitLeftovers returned error: %v", err)
 	}

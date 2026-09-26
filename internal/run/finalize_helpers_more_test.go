@@ -15,7 +15,7 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 )
 
-func TestFinalizerHelperDefaultsAndPathUtilities(t *testing.T) {
+func TestFinalizerHelperDefaults(t *testing.T) {
 	var out bytes.Buffer
 	execution := testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone}}, RunDependencies{OutputWriter: &out, CommandRunner: runGitFake(&[]string{}, nil)})
 	finalizer := newFinalizer(nil, execution)
@@ -25,15 +25,6 @@ func TestFinalizerHelperDefaultsAndPathUtilities(t *testing.T) {
 	finalizer = newFinalizer(io.Discard, execution)
 	if finalizer.outputWriter() != io.Discard {
 		t.Fatal("expected explicit output writer")
-	}
-	if !suspectedSecretPath("config/credentials.json") || !suspectedSecretPath(".env.local") || !generatedPath("bin/tao") || !generatedPath("coverage.out") {
-		t.Fatal("expected secret/generated path detection")
-	}
-	if suspectedSecretPath("internal/run/run.go") || generatedPath("internal/run/run.go") {
-		t.Fatal("ordinary source file should be safe")
-	}
-	if planCommitGlobRegexp("[bad") != `^\[bad$` {
-		t.Fatalf("unexpected malformed glob regexp %q", planCommitGlobRegexp("[bad"))
 	}
 }
 

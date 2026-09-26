@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/plan"
 )
 
@@ -26,7 +27,7 @@ func commitLeftovers(detail *plan.PlanDetail, status string, isStartingDirty fun
 	if detail == nil {
 		return nil, nil
 	}
-	cls := classifyGitStatus(status, isStartingDirty)
+	cls := commit.ClassifyStatus(status, isStartingDirty)
 	if len(cls.AmbiguousLines) > 0 {
 		return nil, &commitLeftoverAmbiguousStatusError{Lines: cls.AmbiguousLines}
 	}
