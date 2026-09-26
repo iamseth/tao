@@ -88,8 +88,7 @@ func (s BatchSettler) Settle(ctx context.Context, state BatchState) (BatchSettle
 
 	state = initializeBatchSettlement(state)
 	if state.Status == BatchStatusLanded {
-		state.Status = BatchStatusSettling
-		state.BlockedReason, state.BlockKind, state.ResumeStatus = "", "", ""
+		UnblockBatch(&state, BatchStatusSettling)
 		state, err = s.persist(state)
 		if err != nil {
 			return result, fmt.Errorf("persist batch settlement start: %w", err)
@@ -175,8 +174,7 @@ func (s BatchSettler) Settle(ctx context.Context, state BatchState) (BatchSettle
 	}
 
 	if state.Status != BatchStatusCompleted {
-		state.Status = BatchStatusCompleted
-		state.BlockedReason, state.BlockKind, state.ResumeStatus = "", "", ""
+		UnblockBatch(&state, BatchStatusCompleted)
 		state, err = s.persist(state)
 		if err != nil {
 			return BatchSettleResult{State: state}, fmt.Errorf("persist completed batch settlement: %w", err)
@@ -208,12 +206,7 @@ func (s BatchSettler) Settle(ctx context.Context, state BatchState) (BatchSettle
 }
 
 func (s BatchSettler) persist(state BatchState) (BatchState, error) {
-	now := time.Now().UTC()
-	if s.Now != nil {
-		now = s.Now().UTC()
-	}
-	state.UpdatedAt = now.Format(time.RFC3339Nano)
-	return s.Store.Transition(state, state.UpdatedAt)
+	return persistBatchState(s.Store, s.Now, state)
 }
 
 func hasExactMergedEvidence(detail *plan.PlanDetail, squashSHA string) bool {

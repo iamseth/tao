@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/iamseth/tao/internal/plan"
 )
@@ -218,6 +219,18 @@ type BatchTransition struct {
 	State    BatchState  `json:"state"`
 }
 
+func batchTimestamp(now func() time.Time) string {
+	if now == nil {
+		now = time.Now
+	}
+	return now().UTC().Format(time.RFC3339Nano)
+}
+
+func persistBatchState(store BatchTransitionStore, now func() time.Time, state BatchState) (BatchState, error) {
+	state.UpdatedAt = batchTimestamp(now)
+	return store.Transition(state, state.UpdatedAt)
+}
+
 func (s BatchState) validate() error {
 	if s.Schema != BatchStateSchema {
 		return fmt.Errorf("unsupported merge batch schema %q", s.Schema)
@@ -296,6 +309,11 @@ func BlockBatch(state *BatchState, kind BatchBlockKind, reason string) {
 	}
 }
 
+// UnblockBatch is BlockBatch's inverse: it sets the phase and clears block metadata.
+func UnblockBatch(state *BatchState, phase BatchStatus) {
+	state.Status, state.BlockedReason, state.BlockKind, state.ResumeStatus = phase, "", "", ""
+}
+
 // ResumeBlockedBatch returns an eligible blocked batch to its recorded phase.
 // The inference supports recovery files written before resume_status existed.
 func ResumeBlockedBatch(state BatchState) (BatchState, bool) {
@@ -316,7 +334,7 @@ func ResumeBlockedBatch(state BatchState) (BatchState, bool) {
 	if phase == "" || phase == BatchStatusBlocked || phase == BatchStatusCompleted || !phase.valid() {
 		return state, false
 	}
-	state.Status, state.BlockedReason, state.BlockKind, state.ResumeStatus = phase, "", "", ""
+	UnblockBatch(&state, phase)
 	return state, true
 }
 

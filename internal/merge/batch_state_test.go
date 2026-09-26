@@ -251,6 +251,17 @@ func TestBatchStateBlockKindPersistsAndLegacyRecordRemainsValid(t *testing.T) {
 	}
 }
 
+func TestUnblockBatchClearsBlockMetadata(t *testing.T) {
+	state := BatchState{Status: BatchStatusReviewing}
+	BlockBatch(&state, BatchBlockKindResumable, "aggregate review failed: timeout")
+
+	UnblockBatch(&state, BatchStatusReviewing)
+
+	if state.Status != BatchStatusReviewing || state.BlockedReason != "" || state.BlockKind != "" || state.ResumeStatus != "" {
+		t.Fatalf("unblocked state = %#v", state)
+	}
+}
+
 func TestBlockBatchRecordsExplicitClassification(t *testing.T) {
 	transient := BatchState{Status: BatchStatusReviewing}
 	BlockBatch(&transient, BatchBlockKindResumable, "aggregate review failed: timeout")

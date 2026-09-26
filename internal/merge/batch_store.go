@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+
+	"github.com/iamseth/tao/internal/atomicfile"
 )
 
 const activeBatchSchema = "tao.active-merge-batch.v1"
@@ -67,7 +69,7 @@ func (s *BatchStore) AppendAgentEvent(event BatchAgentEvent) error {
 // directory, separate from every source plan's review artifact.
 func (s *BatchStore) WriteAggregateReview(id string, attempt int, output string) (string, error) {
 	name := fmt.Sprintf("aggregate-review-%03d.md", attempt)
-	if err := atomicWriteBatchFile(filepath.Join(s.batchesDir, id, name), []byte(output)); err != nil {
+	if err := writeBatchFile(filepath.Join(s.batchesDir, id, name), []byte(output)); err != nil {
 		return "", err
 	}
 	return name, nil
@@ -135,7 +137,7 @@ func (s *BatchStore) SaveSnapshot(state BatchState) error {
 	if err != nil {
 		return err
 	}
-	return atomicWriteBatchFile(s.snapshotPath(state.ID), append(encoded, '\n'))
+	return writeBatchFile(s.snapshotPath(state.ID), append(encoded, '\n'))
 }
 
 // AppendTransition appends and fsyncs one complete transition record.
@@ -305,7 +307,7 @@ func (s *BatchStore) writeActiveLocked(id string) error {
 	if err != nil {
 		return err
 	}
-	return atomicWriteBatchFile(s.activePath, append(encoded, '\n'))
+	return writeBatchFile(s.activePath, append(encoded, '\n'))
 }
 
 // ClearActive removes the identity only when it still names id.
@@ -329,7 +331,7 @@ func (s *BatchStore) ClearActive(id string) error {
 	if err := os.Remove(s.activePath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return syncBatchDirBestEffort(filepath.Dir(s.activePath))
+	return atomicfile.SyncDir(filepath.Dir(s.activePath))
 }
 
 func (s *BatchStore) readActiveLocked() (activeBatchIdentity, error) {
@@ -424,46 +426,9 @@ func appendBatchLogLine(path string, data []byte) error {
 	return file.Close()
 }
 
-func atomicWriteBatchFile(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+func writeBatchFile(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*") // #nosec G304 -- path is rooted in Tao's repository data directory.
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	defer func() { _ = os.Remove(tmpPath) }()
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return err
-	}
-	return syncBatchDirBestEffort(dir)
-}
-
-func syncBatchDirBestEffort(dir string) error {
-	file, err := os.Open(dir) // #nosec G304 -- path is rooted in Tao's repository data directory.
-	if err != nil {
-		return err
-	}
-	defer func() { _ = file.Close() }()
-	if err := file.Sync(); err != nil && !errors.Is(err, syscall.EINVAL) && !errors.Is(err, syscall.ENOTSUP) && !errors.Is(err, syscall.ENOSYS) {
-		return err
-	}
-	return nil
+	return atomicfile.Write(path, data, atomicfile.Options{Perm: 0o600})
 }

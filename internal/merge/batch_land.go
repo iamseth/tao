@@ -78,8 +78,7 @@ func (l BatchLander) Land(ctx context.Context, state BatchState, integrationRoot
 		}
 		if state.Landing == nil {
 			state.Landing = intent
-			state.BlockedReason, state.BlockKind, state.ResumeStatus = "", "", ""
-			state.Status = BatchStatusReadyToLand
+			UnblockBatch(&state, BatchStatusReadyToLand)
 			persisted, persistErr := l.persist(state)
 			if persistErr != nil {
 				return resultWithState(state), fmt.Errorf("persist batch landing intent: %w", persistErr)
@@ -112,10 +111,9 @@ func (l BatchLander) Land(ctx context.Context, state BatchState, integrationRoot
 		return result, fmt.Errorf("landed default %s does not match intended integration head", landed)
 	}
 	if state.Status != BatchStatusLanded || state.LandedSHA == "" || state.Landing.LandedDefaultSHA == "" {
-		state.Status = BatchStatusLanded
+		UnblockBatch(&state, BatchStatusLanded)
 		state.LandedSHA = landed
 		state.Landing.LandedDefaultSHA = landed
-		state.BlockedReason, state.BlockKind, state.ResumeStatus = "", "", ""
 		persisted, persistErr := l.persist(state)
 		if persistErr != nil {
 			return resultWithState(state), fmt.Errorf("persist landed default: %w", persistErr)
@@ -246,12 +244,7 @@ func (l BatchLander) finalGate(ctx context.Context, state BatchState, rootGit, i
 }
 
 func (l BatchLander) persist(state BatchState) (BatchState, error) {
-	now := time.Now().UTC()
-	if l.Now != nil {
-		now = l.Now().UTC()
-	}
-	state.UpdatedAt = now.Format(time.RFC3339Nano)
-	return l.Store.Transition(state, state.UpdatedAt)
+	return persistBatchState(l.Store, l.Now, state)
 }
 
 func (l BatchLander) block(result BatchLandResult, state BatchState, reason string) (BatchLandResult, error) {

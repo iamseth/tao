@@ -109,7 +109,7 @@ func (r BatchAggregateReviewer) Review(ctx context.Context, state BatchState, in
 		state.IntegrationHead = head
 		output := ""
 		if state.Review == nil || state.Review.Status != "reworking" {
-			started := r.timestamp()
+			started := batchTimestamp(r.Now)
 			state.Verification = &BatchVerification{Command: verify.command, HeadSHA: head, StartedAt: started}
 			state, err = r.persist(state)
 			if err != nil {
@@ -117,7 +117,7 @@ func (r BatchAggregateReviewer) Review(ctx context.Context, state BatchState, in
 			}
 			var verifyErr error
 			output, verifyErr = r.Service.runMergeVerifyAtRoot(ctx, integrationRoot, verify.command)
-			state.Verification.CompletedAt = r.timestamp()
+			state.Verification.CompletedAt = batchTimestamp(r.Now)
 			state.Verification.Output = output
 			state.Verification.Passed = verifyErr == nil
 			if verifyErr != nil {
@@ -158,7 +158,7 @@ func (r BatchAggregateReviewer) Review(ctx context.Context, state BatchState, in
 				return r.blockResumableAfterRestore(ctx, result, state, git, head, "aggregate review agent modified the integration workspace or protected refs")
 			}
 			if reviewErr != nil {
-				state.Review = &BatchReview{Status: "error", BaseSHA: state.DefaultStartSHA, HeadSHA: head, Attempts: reviewAttempt, CompletedAt: r.timestamp()}
+				state.Review = &BatchReview{Status: "error", BaseSHA: state.DefaultStartSHA, HeadSHA: head, Attempts: reviewAttempt, CompletedAt: batchTimestamp(r.Now)}
 				state, err = r.persist(state)
 				if err != nil {
 					return result, errors.Join(reviewErr, err)
@@ -186,7 +186,7 @@ func (r BatchAggregateReviewer) Review(ctx context.Context, state BatchState, in
 				resolutionSHAs = append(resolutionSHAs, state.Review.ResolutionSHAs...)
 				commitMessage = state.Review.CommitMessage
 			}
-			state.Review = &BatchReview{Status: "completed", Verdict: parsed.Verdict, Summary: parsed.Summary, Findings: parsed.Findings, BaseSHA: state.DefaultStartSHA, HeadSHA: head, Fingerprint: fingerprint, Attempts: reviewAttempt, Artifact: artifact, ResolutionSHAs: resolutionSHAs, CommitMessage: commitMessage, CompletedAt: r.timestamp()}
+			state.Review = &BatchReview{Status: "completed", Verdict: parsed.Verdict, Summary: parsed.Summary, Findings: parsed.Findings, BaseSHA: state.DefaultStartSHA, HeadSHA: head, Fingerprint: fingerprint, Attempts: reviewAttempt, Artifact: artifact, ResolutionSHAs: resolutionSHAs, CommitMessage: commitMessage, CompletedAt: batchTimestamp(r.Now)}
 			state.AggregateReviewSequence = artifactSequence
 			state.Attempts.ReviewFingerprint = fingerprint
 			convergence := aggregateReviewConvergence{}
@@ -566,8 +566,7 @@ func (r BatchAggregateReviewer) renderPrompt(ctx context.Context, git GitClient,
 }
 
 func (r BatchAggregateReviewer) persist(state BatchState) (BatchState, error) {
-	state.UpdatedAt = r.timestamp()
-	return r.Store.Transition(state, state.UpdatedAt)
+	return persistBatchState(r.Store, r.Now, state)
 }
 
 func (r BatchAggregateReviewer) blockResumableAfterRestore(ctx context.Context, result BatchReviewResult, state BatchState, git GitClient, head, reason string) (BatchReviewResult, error) {
@@ -585,14 +584,6 @@ func (r BatchAggregateReviewer) block(result BatchReviewResult, state BatchState
 		return result, errors.Join(errors.New(reason), err)
 	}
 	return result, errors.New(reason)
-}
-
-func (r BatchAggregateReviewer) timestamp() string {
-	now := time.Now()
-	if r.Now != nil {
-		now = r.Now()
-	}
-	return now.UTC().Format(time.RFC3339Nano)
 }
 
 type aggregateReviewConvergence struct {

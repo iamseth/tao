@@ -152,7 +152,7 @@ func (r BatchAgentResolver) Resolve(ctx context.Context, state BatchState, integ
 			if err := restoreBatchIntegration(ctx, git, interruptedResolution.BaseSHA); err != nil {
 				return result, fmt.Errorf("restore interrupted agent resolution for %s: %w", candidate.PlanID, err)
 			}
-			interruptedResolution.CompletedAt = r.timestamp()
+			interruptedResolution.CompletedAt = batchTimestamp(r.Now)
 			interruptedResolution.Outcome = "interrupted"
 			state, err = r.persist(state)
 			if err != nil {
@@ -178,7 +178,7 @@ func (r BatchAgentResolver) Resolve(ctx context.Context, state BatchState, integ
 			integration = &state.Integrations[integrationIndex]
 			integration.Attempts++
 			state.Attempts.ConflictResolution++
-			record := BatchResolution{Attempt: integration.Attempts, Kind: resolutionKind(*integration), BaseSHA: beforeHead, RequestedAt: r.timestamp()}
+			record := BatchResolution{Attempt: integration.Attempts, Kind: resolutionKind(*integration), BaseSHA: beforeHead, RequestedAt: batchTimestamp(r.Now)}
 			integration.Resolutions = append(integration.Resolutions, record)
 			state, err = r.persist(state)
 			if err != nil {
@@ -208,7 +208,7 @@ func (r BatchAgentResolver) Resolve(ctx context.Context, state BatchState, integ
 			refsErr = compareBatchProtectedRefs(ctx, git, beforeRefs)
 			changed := changes.changedPaths
 			last := &integration.Resolutions[len(integration.Resolutions)-1]
-			last.CompletedAt, last.Outcome, last.Summary, last.ChangedPaths = r.timestamp(), "agent_returned", boundResolutionSummary(output), changed
+			last.CompletedAt, last.Outcome, last.Summary, last.ChangedPaths = batchTimestamp(r.Now), "agent_returned", boundResolutionSummary(output), changed
 			if agentErr != nil {
 				last.Outcome = "agent_error"
 			}
@@ -305,11 +305,10 @@ func (r BatchAgentResolver) Resolve(ctx context.Context, state BatchState, integ
 			return r.block(ctx, result, state, git, BatchBlockKindTerminal, fmt.Sprintf("resolution attempt cap exhausted for %s", planID))
 		}
 	}
-	state.Status = BatchStatusReviewing
+	UnblockBatch(&state, BatchStatusReviewing)
 	if state.Ejection != nil && state.Ejection.Status == batchEjectionReintegrating {
 		state.Ejection.Status = batchEjectionCompleted
 	}
-	state.BlockedReason, state.BlockKind, state.ResumeStatus = "", "", ""
 	state, err = r.persist(state)
 	result.State = state
 	return result, err
@@ -610,15 +609,7 @@ func (r BatchAgentResolver) block(ctx context.Context, result BatchResolveResult
 }
 
 func (r BatchAgentResolver) persist(state BatchState) (BatchState, error) {
-	state.UpdatedAt = r.timestamp()
-	return r.Store.Transition(state, state.UpdatedAt)
-}
-func (r BatchAgentResolver) timestamp() string {
-	now := time.Now()
-	if r.Now != nil {
-		now = r.Now()
-	}
-	return now.UTC().Format(time.RFC3339Nano)
+	return persistBatchState(r.Store, r.Now, state)
 }
 func batchIntegrationIndex(state BatchState, id string) int {
 	for i := range state.Integrations {

@@ -110,7 +110,7 @@ func (b BatchIntegrator) Eject(ctx context.Context, state BatchState, integratio
 		if err := restoreBatchIntegration(ctx, git, state.DefaultStartSHA); err != nil {
 			return result, fmt.Errorf("restore integration for batch eject: %w", err)
 		}
-		state.Status = BatchStatusIntegrating
+		UnblockBatch(&state, BatchStatusIntegrating)
 		state.Integrations = nil
 		state.IntegrationHead = state.DefaultStartSHA
 		if state.Review != nil {
@@ -124,7 +124,6 @@ func (b BatchIntegrator) Eject(ctx context.Context, state BatchState, integratio
 		state.Settlement = nil
 		state.Finalization = nil
 		state.LandedSHA = ""
-		state.BlockedReason, state.BlockKind, state.ResumeStatus = "", "", ""
 		state.Ejection = &BatchEjection{PlanID: planID, Reason: reason, Status: batchEjectionReintegrating}
 		state, err = b.persist(state)
 		if err != nil {
@@ -530,12 +529,7 @@ func (b BatchIntegrator) verifyAppliedCandidate(ctx context.Context, git GitClie
 }
 
 func (b BatchIntegrator) persist(state BatchState) (BatchState, error) {
-	now := time.Now().UTC()
-	if b.Now != nil {
-		now = b.Now().UTC()
-	}
-	state.UpdatedAt = now.Format(time.RFC3339Nano)
-	return b.Store.Transition(state, state.UpdatedAt)
+	return persistBatchState(b.Store, b.Now, state)
 }
 
 func orderBatchIntegrationsForResolution(state *BatchState, nextPlanID, pendingBase string) int {
