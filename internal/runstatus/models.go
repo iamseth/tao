@@ -26,6 +26,15 @@ var (
 // Phase describes the active operation without changing durable plan state.
 type Phase string
 
+const (
+	PhaseWaitingForOwnership Phase = "waiting_for_ownership"
+	PhasePreparingExecution  Phase = "preparing_execution"
+	PhaseRunningSlice        Phase = "running_slice"
+	PhaseFinalVerification   Phase = "final_verification"
+	PhaseReview              Phase = "review"
+	PhaseAutomaticRework     Phase = "automatic_rework"
+)
+
 // SliceDetail optionally identifies the slice involved in the active phase.
 type SliceDetail struct {
 	ID    string `json:"id"`

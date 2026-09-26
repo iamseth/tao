@@ -42,12 +42,12 @@ type InvocationStatusReporter interface {
 }
 
 const (
-	PhaseWaitingForOwnership runstatus.Phase = "waiting_for_ownership"
-	PhasePreparingExecution  runstatus.Phase = "preparing_execution"
-	PhaseRunningSlice        runstatus.Phase = "running_slice"
-	PhaseFinalVerification   runstatus.Phase = "final_verification"
-	PhaseReview              runstatus.Phase = "review"
-	PhaseAutomaticRework     runstatus.Phase = "automatic_rework"
+	PhaseWaitingForOwnership = runstatus.PhaseWaitingForOwnership
+	PhasePreparingExecution  = runstatus.PhasePreparingExecution
+	PhaseRunningSlice        = runstatus.PhaseRunningSlice
+	PhaseFinalVerification   = runstatus.PhaseFinalVerification
+	PhaseReview              = runstatus.PhaseReview
+	PhaseAutomaticRework     = runstatus.PhaseAutomaticRework
 )
 
 type statusInvocationContext struct {

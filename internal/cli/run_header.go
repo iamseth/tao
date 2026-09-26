@@ -29,7 +29,7 @@ type runHeaderOutput struct {
 
 	outputMu sync.Mutex
 	stateMu  sync.RWMutex
-	state    run.HeaderState
+	state    runheader.State
 	size     term.Size
 	cancel   context.CancelFunc
 	pinned   bool
@@ -128,8 +128,8 @@ func (w *runHeaderOutput) Write(p []byte) (int, error) {
 // ReportHeader stores state without waiting for terminal output. The run path
 // publishes best-effort snapshots and the writer repaints the newest snapshot
 // on the next write or timer tick.
-func (w *runHeaderOutput) ReportHeader(state run.HeaderState) {
-	state.Slices = append([]run.HeaderSlice(nil), state.Slices...)
+func (w *runHeaderOutput) ReportHeader(state runheader.State) {
+	state = state.Clone()
 	w.stateMu.Lock()
 	w.state = state
 	w.stateMu.Unlock()
@@ -189,8 +189,7 @@ func (w *runHeaderOutput) paintLocked(preserveCursor bool) error {
 	}
 
 	w.stateMu.RLock()
-	state := w.state
-	state.Slices = append([]run.HeaderSlice(nil), state.Slices...)
+	state := w.state.Clone()
 	w.stateMu.RUnlock()
 	for row, line := range runheader.Render(state, w.size.Width, w.useColor) {
 		if err := term.PositionCursor(w.out, row+1, 1); err != nil {
@@ -231,8 +230,7 @@ func (w *runHeaderOutput) Close() {
 	_, _ = io.WriteString(w.out, "\n")
 
 	w.stateMu.RLock()
-	state := w.state
-	state.Slices = append([]run.HeaderSlice(nil), state.Slices...)
+	state := w.state.Clone()
 	w.stateMu.RUnlock()
 	_, _ = io.WriteString(w.out, strings.Join(runheader.Render(state, w.size.Width, w.useColor), "\n")+"\n")
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runheader"
 )
 
 func TestNilHeaderReporterLeavesRunBehaviorUnchanged(t *testing.T) {
@@ -92,17 +93,17 @@ func TestHeaderReporterPublishesSliceProgressionAndMetricTotals(t *testing.T) {
 		t.Fatalf("initial progression = %+v", initial)
 	}
 
-	if !hasHeaderState(reporter.states, func(state HeaderState) bool {
+	if !hasHeaderState(reporter.states, func(state runheader.State) bool {
 		return state.Phase == PhaseRunningSlice && state.CurrentSliceID == "001-a" && state.CurrentSliceTitle == "Add observer seam" && state.Slices[0].Status == plan.StatusInProgress
 	}) {
 		t.Fatalf("running slice state not published: %+v", reporter.states)
 	}
-	if !hasHeaderState(reporter.states, func(state HeaderState) bool {
+	if !hasHeaderState(reporter.states, func(state runheader.State) bool {
 		return state.AgentSessionCount == 1 && state.TotalTokens == 77 && state.Cost == 0.25 && state.CompletedCount == 0
 	}) {
 		t.Fatalf("running metric totals not published: %+v", reporter.states)
 	}
-	if !hasHeaderState(reporter.states, func(state HeaderState) bool {
+	if !hasHeaderState(reporter.states, func(state runheader.State) bool {
 		return state.CompletedCount == 1 && state.TotalCount == 1 && state.Slices[0].Status == plan.StatusCompleted && state.AgentSessionCount == 1 && state.TotalTokens == 77 && state.Cost == 0.25 && state.ReworkRound == 2 && state.MaxReworkAttempts == 7
 	}) {
 		t.Fatalf("completed progression not published: %+v", reporter.states)
@@ -129,17 +130,17 @@ func TestNewHeaderStateProjectsPrimaryRecurringFindingFile(t *testing.T) {
 
 type panickingHeaderReporter struct{}
 
-func (panickingHeaderReporter) ReportHeader(HeaderState) { panic("presentation failed") }
+func (panickingHeaderReporter) ReportHeader(runheader.State) { panic("presentation failed") }
 
 type recordingHeaderReporter struct {
-	states []HeaderState
+	states []runheader.State
 }
 
-func (r *recordingHeaderReporter) ReportHeader(state HeaderState) {
+func (r *recordingHeaderReporter) ReportHeader(state runheader.State) {
 	r.states = append(r.states, state)
 }
 
-func hasHeaderState(states []HeaderState, match func(HeaderState) bool) bool {
+func hasHeaderState(states []runheader.State, match func(runheader.State) bool) bool {
 	for _, state := range states {
 		if match(state) {
 			return true

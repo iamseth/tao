@@ -13,7 +13,7 @@ import (
 
 	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/gitops"
-	"github.com/iamseth/tao/internal/run"
+	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/workspace"
 )
 
@@ -92,15 +92,15 @@ func NewBatchWorkspace(repoRoot, batchesDir string, runner commandrunner.Runner)
 // locks. Release is safe to call more than once.
 type BatchOwnership struct {
 	file      *os.File
-	planLocks *run.PlanLocks
+	planLocks *plan.RunLocks
 }
 
 // AcquireOwnership excludes another batch process and ordinary runners for all
-// candidates. Plan locks are acquired in stable plan-ID order by run.
+// candidates. Plan locks are acquired in stable plan-ID order by plan.
 func (b *BatchWorkspace) AcquireOwnership(state BatchState, timestamp time.Time) (*BatchOwnership, error) {
-	requests := make([]run.PlanLockRequest, 0, len(state.Candidates))
+	requests := make([]plan.RunLockRequest, 0, len(state.Candidates))
 	for _, candidate := range state.Candidates {
-		requests = append(requests, run.PlanLockRequest{PlanID: candidate.PlanID, PlanDir: candidate.PlanDir})
+		requests = append(requests, plan.RunLockRequest{PlanID: candidate.PlanID, PlanDir: candidate.PlanDir})
 	}
 	return b.acquireOwnership(requests, timestamp)
 }
@@ -109,10 +109,10 @@ func (b *BatchWorkspace) AcquireOwnership(state BatchState, timestamp time.Time)
 // used by non-batch lifecycle mutations that must inspect active batch state
 // without reversing the batch-to-plan lock order.
 func (b *BatchWorkspace) AcquirePlanOwnership(planID, planDir string, timestamp time.Time) (*BatchOwnership, error) {
-	return b.acquireOwnership([]run.PlanLockRequest{{PlanID: planID, PlanDir: planDir}}, timestamp)
+	return b.acquireOwnership([]plan.RunLockRequest{{PlanID: planID, PlanDir: planDir}}, timestamp)
 }
 
-func (b *BatchWorkspace) acquireOwnership(requests []run.PlanLockRequest, timestamp time.Time) (*BatchOwnership, error) {
+func (b *BatchWorkspace) acquireOwnership(requests []plan.RunLockRequest, timestamp time.Time) (*BatchOwnership, error) {
 	if err := os.MkdirAll(b.batchesDir, 0o700); err != nil {
 		return nil, err
 	}
@@ -124,7 +124,7 @@ func (b *BatchWorkspace) acquireOwnership(requests []run.PlanLockRequest, timest
 		_ = file.Close()
 		return nil, fmt.Errorf("merge batch ownership is held by another process: %w", err)
 	}
-	locks, err := run.AcquirePlanLocks(requests, timestamp)
+	locks, err := plan.AcquireRunLocks(requests, timestamp)
 	if err != nil {
 		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
 		_ = file.Close()

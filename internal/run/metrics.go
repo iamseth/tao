@@ -23,7 +23,7 @@ func publishAgentMetrics(ctx context.Context, metrics plan.AgentMetrics) {
 		active.state.Cost += metrics.Cost
 	}
 	reporter := active.reporter
-	state := cloneHeaderState(active.state)
+	state := active.state.Clone()
 	active.mu.Unlock()
 	ReportHeader(reporter, state)
 }

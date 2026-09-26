@@ -284,7 +284,7 @@ func (s Service) WithPlanRunLock(ctx context.Context, request Request, operation
 	}
 	return trackRunHeader(ctx, s.dependencies.HeaderReporter, detail, headerConfig, startedAt, func(headerCtx context.Context) error {
 		return trackRunStatus(headerCtx, s.dependencies.StatusReporter, detail, startedAt, func(statusCtx context.Context) error {
-			return withPlanRunLock(statusCtx, detail, startedAt, operation)
+			return WithPlanRunLock(statusCtx, detail, startedAt, operation)
 		})
 	})
 }
@@ -343,7 +343,7 @@ func (s Service) Execute(ctx context.Context, request Request) error {
 	startedAt := now(s.dependencies).UTC()
 	return trackRunHeader(ctx, s.dependencies.HeaderReporter, lockDetail, config, startedAt, func(headerCtx context.Context) error {
 		return trackRunStatus(headerCtx, s.dependencies.StatusReporter, lockDetail, startedAt, func(statusCtx context.Context) error {
-			return withPlanRunLock(statusCtx, lockDetail, startedAt, func(ownedCtx context.Context) error {
+			return WithPlanRunLock(statusCtx, lockDetail, startedAt, func(ownedCtx context.Context) error {
 				// The pre-lock detail identifies ownership only. Another lifecycle
 				// driver may have changed the plan before this lock was acquired.
 				detail, err := s.repo.ResolvePlan(ownedCtx, planDir)

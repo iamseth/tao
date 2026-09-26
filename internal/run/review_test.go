@@ -962,9 +962,9 @@ func TestServiceReviewReportsStandalonePhasesInOrderAndStopsOnFailure(t *testing
 }
 
 func TestServiceReviewPublishesWaitingPhaseBeforeContendedLock(t *testing.T) {
-	withPlanRunLockSettings(t, time.Hour, func(pid int) bool { return true })
+	t.Cleanup(plan.SetRunLockSettingsForTest(time.Hour, func(pid int) bool { return true }))
 	planDir := t.TempDir()
-	held, err := acquirePlanRunLock(planDir, "plan-a", time.Date(2026, 8, 8, 18, 50, 0, 0, time.UTC))
+	held, err := plan.AcquireRunLock(planDir, "plan-a", time.Date(2026, 8, 8, 18, 50, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -980,7 +980,7 @@ func TestServiceReviewPublishesWaitingPhaseBeforeContendedLock(t *testing.T) {
 	})
 
 	_, err = service.Review(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi}})
-	if err == nil || !errors.Is(err, errPlanRunLocked) {
+	if err == nil || !errors.Is(err, plan.ErrRunLocked) {
 		t.Fatalf("Review error = %v, want contended plan lock", err)
 	}
 	if reporter.invocationCalls != 1 || len(reporter.phases) != 1 || reporter.phases[0].phase != PhaseWaitingForOwnership {

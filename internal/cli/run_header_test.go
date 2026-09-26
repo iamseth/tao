@@ -84,10 +84,10 @@ func TestRunHeaderWriterPinsHeaderAroundLogOutput(t *testing.T) {
 	if reporter == nil || out == io.Writer(terminal) {
 		t.Fatal("fake terminal did not activate the run header")
 	}
-	reporter.ReportHeader(run.HeaderState{
+	reporter.ReportHeader(runheader.State{
 		RepoName: "tao", PlanID: "20260812-185523-run-header", PlanTitle: "Pinned header",
 		Agent: "pi", ExecutionMode: "isolated", Branch: "feature", TotalCount: 1,
-		Slices:         []run.HeaderSlice{{ID: "005-cli-run-header-writer", Status: plan.StatusPending}},
+		Slices:         []runheader.Slice{{ID: "005-cli-run-header-writer", Status: plan.StatusPending}},
 		CurrentSliceID: "005-cli-run-header-writer", CurrentSliceTitle: "Wire header",
 	})
 	if _, err := io.WriteString(out, "ordinary log output\n"); err != nil {
@@ -116,7 +116,7 @@ func TestRunHeaderResizeReappliesMinimumSizePolicy(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			terminal := newFakeRunHeaderTerminalWriter(term.Size{Width: 80, Height: 24})
 			header := &runHeaderOutput{out: terminal, terminal: terminal, size: term.Size{Width: 80, Height: 24}}
-			header.ReportHeader(run.HeaderState{RepoName: "tao", PlanTitle: "Pinned header"})
+			header.ReportHeader(runheader.State{RepoName: "tao", PlanTitle: "Pinned header"})
 			if err := header.install(); err != nil {
 				t.Fatal(err)
 			}
@@ -160,7 +160,7 @@ func TestRunHeaderResizeReappliesMinimumSizePolicy(t *testing.T) {
 func TestRunHeaderResizePositionsLogsBelowHeaderAfterRegrow(t *testing.T) {
 	terminal := newFakeRunHeaderTerminalWriter(term.Size{Width: 80, Height: 24})
 	header := &runHeaderOutput{out: terminal, terminal: terminal, size: term.Size{Width: 80, Height: 24}}
-	header.ReportHeader(run.HeaderState{RepoName: "tao", PlanTitle: "Pinned header"})
+	header.ReportHeader(runheader.State{RepoName: "tao", PlanTitle: "Pinned header"})
 	if err := header.install(); err != nil {
 		t.Fatal(err)
 	}

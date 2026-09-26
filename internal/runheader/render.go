@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
-	"github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/term/cells"
 )
 
@@ -22,7 +21,7 @@ const (
 
 // Render turns state into a fixed-height, borderless terminal header. Width is
 // measured in terminal cells; ANSI color sequences do not consume visible width.
-func Render(state run.HeaderState, width int, useColor bool) []string {
+func Render(state State, width int, useColor bool) []string {
 	width = max(width, 0)
 
 	identity := renderIdentity(state, width)
@@ -49,7 +48,7 @@ func Render(state run.HeaderState, width int, useColor bool) []string {
 	return lines
 }
 
-func renderIdentity(state run.HeaderState, width int) string {
+func renderIdentity(state State, width int) string {
 	slug, ok := plan.PlanSlug(state.PlanID)
 	if !ok {
 		slug = state.PlanID
@@ -84,7 +83,7 @@ func renderIdentity(state run.HeaderState, width int) string {
 	return strings.Join(parts, fieldSeparator)
 }
 
-func renderActive(state run.HeaderState) string {
+func renderActive(state State) string {
 	current := phaseLabel(state)
 	if state.CurrentSliceTitle != "" || state.CurrentSliceID != "" {
 		current = strings.TrimSpace(strings.Join([]string{slicePrefix(state.CurrentSliceID), display(state.CurrentSliceTitle)}, " "))
@@ -95,7 +94,7 @@ func renderActive(state run.HeaderState) string {
 	return current + fieldSeparator + "elapsed " + elapsed(state.StartedAt)
 }
 
-func renderProgress(state run.HeaderState, width int) string {
+func renderProgress(state State, width int) string {
 	total := max(state.TotalCount, 0)
 	completed := max(state.CompletedCount, 0)
 	percent := 0
@@ -114,7 +113,7 @@ func renderProgress(state run.HeaderState, width int) string {
 	return "[" + strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled) + "] " + stats
 }
 
-func renderMetrics(state run.HeaderState) string {
+func renderMetrics(state State) string {
 	cost := "cost —"
 	if state.CostReported {
 		cost = fmt.Sprintf("$%.2f", state.Cost)
@@ -155,7 +154,7 @@ func compactCount(value int64) string {
 	return strconv.FormatInt(value, 10)
 }
 
-func phaseLabel(state run.HeaderState) string {
+func phaseLabel(state State) string {
 	phase := strings.TrimSpace(string(state.Phase))
 	if phase == "" {
 		return "-"
@@ -170,7 +169,7 @@ func elapsed(startedAt time.Time) string {
 	return plan.FormatDuration(max(time.Since(startedAt), 0))
 }
 
-func renderChecklist(state run.HeaderState, width int) string {
+func renderChecklist(state State, width int) string {
 	if width <= 0 {
 		return ""
 	}

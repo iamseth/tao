@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/iamseth/tao/internal/plan"
-	"github.com/iamseth/tao/internal/run"
+	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/term/cells"
 )
 
@@ -125,7 +125,7 @@ func TestRenderCompactsTokenCounts(t *testing.T) {
 
 func TestRenderChecklistCentersCurrentAndUsesNumericPrefixes(t *testing.T) {
 	state := testHeaderState()
-	state.Slices = []run.HeaderSlice{
+	state.Slices = []Slice{
 		{ID: "000-before", Title: "Before", Status: plan.StatusCompleted},
 		{ID: "001-seam", Title: "Seam", Status: plan.StatusCompleted},
 		{ID: "002-render", Title: "A deliberately long current title", Status: plan.StatusInProgress},
@@ -239,7 +239,7 @@ func TestRenderColorPreservesPlainVisibleText(t *testing.T) {
 
 func TestRenderAlwaysReturnsFixedLineCount(t *testing.T) {
 	for _, width := range []int{-1, 0, 1, 2, 3, 20, 60} {
-		got := Render(run.HeaderState{}, width, false)
+		got := Render(State{}, width, false)
 		if len(got) != LineCount {
 			t.Fatalf("Render(width %d) returned %d lines, want %d", width, len(got), LineCount)
 		}
@@ -251,8 +251,8 @@ func TestRenderAlwaysReturnsFixedLineCount(t *testing.T) {
 	}
 }
 
-func testHeaderState() run.HeaderState {
-	return run.HeaderState{
+func testHeaderState() State {
+	return State{
 		RepoName:      "tao",
 		PlanID:        "20260812-185523-run-header",
 		PlanTitle:     "Pinned run header",
@@ -260,7 +260,7 @@ func testHeaderState() run.HeaderState {
 		ExecutionMode: "isolated",
 		Branch:        "tao/20260812",
 		ReviewEnabled: true,
-		Slices: []run.HeaderSlice{
+		Slices: []Slice{
 			{ID: "001-seam", Title: "Terminal seam", Status: plan.StatusCompleted},
 			{ID: "002-render", Title: "Render header", Status: plan.StatusInProgress},
 			{ID: "003-wire", Title: "Wire output", Status: plan.StatusPending},
@@ -268,7 +268,7 @@ func testHeaderState() run.HeaderState {
 		},
 		CompletedCount:    1,
 		TotalCount:        4,
-		Phase:             run.PhaseRunningSlice,
+		Phase:             runstatus.PhaseRunningSlice,
 		CurrentSliceID:    "002-render",
 		CurrentSliceTitle: "Render header",
 		AgentSessionCount: 2,

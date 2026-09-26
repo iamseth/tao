@@ -147,7 +147,7 @@ func (s Service) ResumeReview(ctx context.Context, request Request) error {
 		return fmt.Errorf("plan %q not found", request.Input)
 	}
 	planDir := lockDetail.Dir
-	return withPlanRunLock(ctx, lockDetail, now(s.dependencies).UTC(), func(ownedCtx context.Context) error {
+	return WithPlanRunLock(ctx, lockDetail, now(s.dependencies).UTC(), func(ownedCtx context.Context) error {
 		detail, err := s.repo.ResolvePlan(ownedCtx, planDir)
 		if err != nil {
 			return err
