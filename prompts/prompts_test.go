@@ -59,6 +59,41 @@ func TestRenderRunPromptDelegatesExceptionalStopsToSliceBlocked(t *testing.T) {
 	}
 }
 
+func TestRenderRunPromptDefinesBoundedRulings(t *testing.T) {
+	got, err := Render(PromptRun, Data{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"## Rulings",
+		"only in these two situations",
+		"slice text is internally inconsistent",
+		"slice is silent on a detail",
+		"planning-brief.md",
+		"plan.md",
+		"smallest change consistent with `planning-brief.md`",
+		"Ruling: <what was decided>; why: <reason>; cost if wrong: <cost>",
+		"exact case-sensitive prefix `Ruling:`",
+		"Only that single line is captured downstream",
+		"continuation lines are ordinary notes",
+		"Rulings never authorize scope expansion, new requirements, changing or dropping declared verification commands, skipping verification, commits, or passing an approval gate",
+		"missing or contradictory symbol contract is a blocker",
+		"Genuinely missing information, approval gates, and failing verification still use `tao slice-blocked`",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered run prompt missing bounded rulings guidance %q", want)
+		}
+	}
+	if strings.Contains(got, "If the slice is ambiguous or blocked") {
+		t.Error("rendered run prompt retains unconditional ambiguity blocker")
+	}
+	_, implementation, found := strings.Cut(got, "## Implementation rules\n")
+	_, nextSection, hasNext := strings.Cut(implementation, "\n## ")
+	if !found || !hasNext || !strings.HasPrefix(nextSection, "Rulings\n") {
+		t.Error("rulings must immediately follow the implementation rules section")
+	}
+}
+
 func TestRenderRunPromptDerivesSliceCommitPolicyFromLegacyFlag(t *testing.T) {
 	got, err := Render(PromptRun, Data{PlanDir: "/tmp/plan", CommitEnable: true})
 	if err != nil {
@@ -161,6 +196,25 @@ func TestRenderReviewPromptUsesInjectedPlanAndDiff(t *testing.T) {
 	for _, want := range []string{"Plan ID: `plan-a`", "Plan directory: `/tmp/tao/plans/plan-a`", "Base: `base123`", "Head: `head456`", "Plan change type: `fix`", "git diff --stat base123..head456", "\"verdict\"", "\"findings\"", "\"commit_message\"", "complete exact `Base..Head` diff", "authoritative plan change type `fix`", "Do not include verification output or any `Tao-*` trailers"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("rendered review prompt missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestRenderReviewPromptWeighsImplementerRulings(t *testing.T) {
+	got, err := Render(PromptReview, Data{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"## Implementer Rulings",
+		"on the user's behalf",
+		"check it against the plan intent",
+		"A ruling that expands scope, adds a requirement, or contradicts `planning-brief.md` is a finding under the existing severity rules",
+		"An acceptable ruling is not a finding but must be named in the prose review so the user sees it",
+		"List which rulings were accepted in the prose review",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("rendered review prompt missing rulings guidance %q:\n%s", want, got)
 		}
 	}
 }

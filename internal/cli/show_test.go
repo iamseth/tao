@@ -80,6 +80,62 @@ func TestShowPrintsElapsedAndSliceRows(t *testing.T) {
 	}
 }
 
+func TestRenderShowSliceRulings(t *testing.T) {
+	now := time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)
+	started := now.Add(-2 * time.Minute)
+	completed := now.Add(-time.Minute)
+	slice := plan.Slice{
+		ID: "001-example", Title: "Example slice", Status: plan.StatusCompleted,
+		Goal: "Render slice details.",
+		Notes: "Ordinary implementation notes.\n" +
+			"Ruling: Use the existing helper to preserve the established slice rendering contract without adding a new API.\n" +
+			"More ordinary notes.\nRuling: Keep the existing symbol name.\n",
+		Timing: plan.SliceTiming{StartedAt: &started, CompletedAt: &completed},
+	}
+	var out bytes.Buffer
+	if err := renderShowSlice(&out, slice, now, false); err != nil {
+		t.Fatal(err)
+	}
+	want := "completed  001-example  Example slice\n" +
+		"  Duration:  1m00s\n" +
+		"  Started:   2m\n" +
+		"  Completed: 1m\n" +
+		"  Summary:   Render slice details.\n" +
+		"  Rulings:\n" +
+		"           Use the existing helper to preserve the established slice rendering\n" +
+		"           contract without adding a new API.\n" +
+		"           Keep the existing symbol name.\n"
+	if got := out.String(); got != want {
+		t.Fatalf("slice output = %q, want %q", got, want)
+	}
+}
+
+func TestRenderShowSliceWithoutRulingsUnchanged(t *testing.T) {
+	now := time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)
+	started := now.Add(-2 * time.Minute)
+	completed := now.Add(-time.Minute)
+	slice := plan.Slice{
+		ID: "001-example", Title: "Example slice", Status: plan.StatusCompleted,
+		Goal:   "Render the planned slice work in show output while keeping long summary text aligned under a stable summary indentation for terminal readability.",
+		Notes:  "Ordinary implementation notes.\nVerification passed.",
+		Timing: plan.SliceTiming{StartedAt: &started, CompletedAt: &completed},
+	}
+	var out bytes.Buffer
+	if err := renderShowSlice(&out, slice, now, false); err != nil {
+		t.Fatal(err)
+	}
+	want := "completed  001-example  Example slice\n" +
+		"  Duration:  1m00s\n" +
+		"  Started:   2m\n" +
+		"  Completed: 1m\n" +
+		"  Summary:   Render the planned slice work in show output while keeping long summary\n" +
+		"             text aligned under a stable summary indentation for terminal\n" +
+		"             readability.\n"
+	if got := out.String(); got != want || strings.Contains(got, "Rulings:") {
+		t.Fatalf("legacy slice output = %q, want %q", got, want)
+	}
+}
+
 func TestRenderPlanDetailUsesLifecycleStatusProjection(t *testing.T) {
 	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
 	detail := &plan.PlanDetail{

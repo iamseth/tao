@@ -10,6 +10,71 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 )
 
+func TestProjectFullSanitizesSliceRulings(t *testing.T) {
+	now := time.Date(2026, 8, 4, 15, 0, 0, 0, time.UTC)
+	detail := reportFixture(now)
+	const token = "ghp_abcdefghijklmnopqrstuvwxyz123456"
+	detail.Slices.Slices[0].Status = plan.StatusCompleted
+	detail.Slices.Slices[0].Notes = "Implementation complete.\nRuling: Reuse the helper for " + token + ".\nUnrelated completion notes."
+	detail.Slices.Slices[1].Notes = "No decisions needed."
+
+	got := ProjectFull(detail, now)
+	rulings := got.Slices[0].Rulings
+	if len(rulings) != 1 || rulings[0].text != `Ruling: Reuse the helper for \[credential redacted\].` {
+		t.Fatalf("sanitized rulings = %+v", rulings)
+	}
+	if strings.Contains(collectSafeText(got), token) {
+		t.Fatal("projection retained credential")
+	}
+	if len(got.Slices[1].Rulings) != 0 {
+		t.Fatalf("slice without rulings = %+v", got.Slices[1].Rulings)
+	}
+}
+
+func TestProjectFullOmitsRulingsAtExtractionLimit(t *testing.T) {
+	now := time.Date(2026, 8, 4, 15, 0, 0, 0, time.UTC)
+	const password = "orchid-velvet-cobalt"
+	const prefix = "Ruling: "
+	const credentialPrefix = "https://alice:" + password
+	for _, padding := range []string{"x", "界"} {
+		t.Run(padding, func(t *testing.T) {
+			detail := reportFixture(now)
+			crossing := prefix + strings.Repeat(padding, plan.MaxSliceRulingRunes-len(prefix)-len(credentialPrefix)-1) + " " + credentialPrefix + "@example.com"
+			short := prefix + strings.Repeat(padding, plan.MaxSliceRulingRunes-len(prefix)-1)
+			exact := short + padding
+			detail.Slices.Slices[0].Notes = crossing + "\n" + exact + "\n" + short
+			extracted := plan.SliceRulings(crossing)
+			if len(extracted) != 1 || !strings.HasSuffix(extracted[0], credentialPrefix) {
+				t.Fatalf("fixture did not cut credential URL at password: %q", extracted)
+			}
+
+			got := ProjectFull(detail, now)
+			if strings.Contains(collectSafeText(got), password) {
+				t.Error("projection retained password from truncated credential URL")
+			}
+			rendered, err := RenderFull(got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(rendered), password) {
+				t.Error("rendered report retained password from truncated credential URL")
+			}
+			if rulings := got.Slices[0].Rulings; len(rulings) != 1 || rulings[0].text != short {
+				t.Errorf("expected only ruling below extraction limit, got %+v", rulings)
+			}
+			found := false
+			for _, disclosure := range got.Disclosures {
+				if disclosure.Section == sectionSlices && disclosure.Category == DisclosureOmitted && disclosure.Count == 2 {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("missing ruling omission disclosure: %+v", got.Disclosures)
+			}
+		})
+	}
+}
+
 func TestProjectFullAcrossLifecyclePhases(t *testing.T) {
 	now := time.Date(2026, 8, 4, 16, 0, 0, 0, time.FixedZone("offset", 3600))
 	cases := []struct {

@@ -25,6 +25,7 @@ var reportHeadings = map[string]struct{}{
 	"#### Goal":                   {},
 	"#### Rationale":              {},
 	"#### Dependencies":           {},
+	"#### Rulings":                {},
 	"## Redactions and Omissions": {},
 }
 
@@ -69,6 +70,8 @@ func RenderFull(report FullReport) ([]byte, error) {
 		b.optionalParagraph(slice.Rationale)
 		b.heading("#### Dependencies")
 		b.safeNumberedList(slice.Dependencies)
+		b.heading("#### Rulings")
+		b.safeNumberedList(slice.Rulings)
 	}
 
 	b.heading("## Implementation Summary")
@@ -455,7 +458,7 @@ func allowsBullets(heading string) bool {
 
 func allowsNumberedValues(heading string) bool {
 	switch heading {
-	case "### Constraints", "### Non-goals", "### Decisions", "### Risks", "### Open Questions", "#### Dependencies":
+	case "### Constraints", "### Non-goals", "### Decisions", "### Risks", "### Open Questions", "#### Dependencies", "#### Rulings":
 		return true
 	default:
 		return false
@@ -467,7 +470,7 @@ func allowsParagraph(heading string) bool {
 		return true
 	}
 	switch heading {
-	case "### Goal", "#### Goal", "#### Rationale", "#### Dependencies", "## Implementation", "## Implementation Summary", "## Planned Slices", "## Review and Outcome", "### Safety transformations", "### Constraints", "### Non-goals", "### Decisions", "### Risks", "### Open Questions":
+	case "### Goal", "#### Goal", "#### Rationale", "#### Dependencies", "#### Rulings", "## Implementation", "## Implementation Summary", "## Planned Slices", "## Review and Outcome", "### Safety transformations", "### Constraints", "### Non-goals", "### Decisions", "### Risks", "### Open Questions":
 		return true
 	default:
 		return false

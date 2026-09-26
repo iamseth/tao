@@ -86,7 +86,9 @@ None
 
 func TestRenderFullGolden(t *testing.T) {
 	now := time.Date(2026, 8, 4, 15, 0, 0, 0, time.UTC)
-	report := ProjectFull(reportFixture(now), now)
+	detail := reportFixture(now)
+	detail.Slices.Slices[0].Notes = "Ruling: Use the existing projection helper."
+	report := ProjectFull(detail, now)
 	got, err := RenderFull(report)
 	if err != nil {
 		t.Fatal(err)
@@ -146,6 +148,10 @@ Renderers need an allowlist
 
 None recorded.
 
+#### Rulings
+
+1. Ruling: Use the existing projection helper.
+
 ### Slice 2: Ship report
 
 ~pending~ ~planned~ ~tokens not recorded~ ~Not recorded~ ~Not recorded~
@@ -161,6 +167,10 @@ Leaders need snapshots
 #### Dependencies
 
 1. Build projection
+
+#### Rulings
+
+None recorded.
 
 ## Implementation Summary
 
@@ -438,7 +448,7 @@ func TestRenderLongSlicesRemainConverterSafe(t *testing.T) {
 func TestRenderPlanningOnlyStructurallyExcludesImplementationData(t *testing.T) {
 	now := time.Date(2026, 8, 4, 15, 0, 0, 0, time.UTC)
 	detail := reportFixture(now)
-	detail.Slices.Slices[0].Notes = "execution-only-secret"
+	detail.Slices.Slices[0].Notes = "Ruling: execution-only-secret"
 	detail.Slices.Slices[0].Completion = &plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionCommitted, CommitSHA: "abcdef1234567890"}
 	detail.Slices.Slices[0].VerificationResults = []plan.VerificationRun{{Result: "failed", Details: "execution-only-secret"}}
 	detail.Slices.Slices = append(detail.Slices.Slices, plan.Slice{ID: "r101-fix", Title: "generated rework"})
@@ -447,7 +457,7 @@ func TestRenderPlanningOnlyStructurallyExcludesImplementationData(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, forbidden := range []string{"Implementation Summary", "Review and Outcome", "verification", "commit", "duration: 0", "execution-only-secret", "generated rework", "- Status:", "- Kind:", "### Slice"} {
+	for _, forbidden := range []string{"Implementation Summary", "Review and Outcome", "Rulings", "verification", "commit", "duration: 0", "execution-only-secret", "generated rework", "- Status:", "- Kind:", "### Slice"} {
 		if bytes.Contains(bytes.ToLower(got), bytes.ToLower([]byte(forbidden))) {
 			t.Fatalf("planning-only output contains %q:\n%s", forbidden, got)
 		}

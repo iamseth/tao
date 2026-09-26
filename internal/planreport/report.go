@@ -3,6 +3,7 @@ package planreport
 import (
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/iamseth/tao/internal/plan"
 )
@@ -86,6 +87,7 @@ type SliceReport struct {
 	Goal         OptionalText
 	Rationale    OptionalText
 	Dependencies []SafeText
+	Rulings      []SafeText
 	Status       string
 	Rework       bool
 	Duration     DurationSummary
@@ -308,11 +310,21 @@ func projectPlannedSlice(s *Sanitizer, source plan.Slice, all []plan.Slice) Plan
 
 func projectFullSlice(s *Sanitizer, source plan.Slice, all []plan.Slice, events []plan.Event, now time.Time) SliceReport {
 	planned := projectPlannedSlice(s, source, all)
+	var rulings []SafeText
+	for _, value := range plan.SliceRulings(source.Notes) {
+		// Extraction may have cut off syntax needed to recognize a secret.
+		// Without truncation metadata, omit even exactly-at-limit rulings.
+		if utf8.RuneCountInString(value) >= plan.MaxSliceRulingRunes {
+			s.disclose(sectionSlices, DisclosureOmitted, 1)
+			continue
+		}
+		rulings = append(rulings, s.Sanitize(sectionSlices, value))
+	}
 	return SliceReport{
 		Title: planned.Title, Goal: planned.Goal, Rationale: planned.Rationale, Dependencies: planned.Dependencies,
 		Status: knownStatus(source.Status), Rework: plan.IsReworkSliceID(source.ID), Duration: sliceDuration(source, now),
 		Verification: verificationCount(source.VerificationResults), TotalTokens: sliceTotalTokens(source.ID, events),
-		Commit: projectSliceCommit(s, source),
+		Commit: projectSliceCommit(s, source), Rulings: rulings,
 	}
 }
 

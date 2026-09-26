@@ -282,6 +282,20 @@ func renderShowSlice(out io.Writer, slice plan.Slice, now time.Time, useColor bo
 			return err
 		}
 	}
+	if rulings := plan.SliceRulings(slice.Notes); len(rulings) > 0 {
+		if err := writef(out, "  Rulings:\n"); err != nil {
+			return err
+		}
+		rulingIndent := strings.Repeat(" ", len("  Rulings: "))
+		for _, ruling := range rulings {
+			text := strings.TrimSpace(strings.TrimPrefix(ruling, "Ruling:"))
+			for _, line := range wrapText(text, summaryWidth) {
+				if err := writef(out, "%s%s\n", rulingIndent, line); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	if slice.Status == plan.StatusBlocked {
 		blockerLines := wrapText(planview.FormatBlockerText(slice.BlockerNote).Detailed, summaryWidth)
 		if err := writef(out, "  Blocker Reason: %s\n", blockerLines[0]); err != nil {

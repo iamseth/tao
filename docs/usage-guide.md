@@ -112,6 +112,7 @@ the reason explains why it takes precedence. Any indented alternatives are
 subordinate options, and administrative alternatives may bypass safeguards, so
 they are not equivalent recommendations. A terminal `No action` distinguishes a
 finished or otherwise non-actionable plan from one that should progress.
+`tao show` also lists recorded rulings under the slice that made them.
 
 The agent telemetry section in `tao show` (also available with `--json`) helps
 identify which roles account for **recorded** token use and cost. Check its
@@ -443,7 +444,9 @@ slice at a time: select the next slice, honor `depends_on` and approval gates,
 implement only that slice, run its verification commands, and complete it via
 `tao slice-complete` (which Tao uses to update state, pending-slice ordering,
 and events). It stops on blockers and failed verification rather than pushing
-through.
+through. Run agents may record single-line `Ruling:` notes instead of blocking
+on small ambiguities already settled by plan intent; genuinely missing or
+contradictory contracts remain blockers.
 
 **Choose the run size:**
 
@@ -1079,6 +1082,8 @@ should see planning context without execution-derived data:
 tao report --output plan-report.md <plan-id>
 tao report --planning-only --output prompts/my-plan.md <plan-id>
 ```
+
+`tao report` renders rulings per slice in full mode only, not in planning-only output.
 
 Planning-only output is synthesized rather than copied from raw artifacts. It
 omits prompt capture and execution, verification, review, telemetry, and outcome
