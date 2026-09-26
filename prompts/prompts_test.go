@@ -182,7 +182,7 @@ func TestRenderReviewProposalCorrectionCannotChangeSubstantiveReview(t *testing.
 			t.Fatalf("rendered correction prompt missing %q:\n%s", want, got)
 		}
 	}
-	for _, forbidden := range []string{"Assess the scoped diff", "Review criteria", "tao-review-json\n{\n  \"verdict\""} {
+	for _, forbidden := range []string{"Assess the scoped diff", "Review criteria", "reasonable user", "Declined to judge", "tao-review-json\n{\n  \"verdict\""} {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("rendered correction prompt retained substantive review instruction %q:\n%s", forbidden, got)
 		}
@@ -203,6 +203,11 @@ func TestRenderReviewPromptDefinesReworkConvergenceAndFindingsContract(t *testin
 		"without a demonstrated concrete violation at the current head",
 		"identical severity, file, message, and suggestion text; do not rephrase it",
 		"Keep the same line unless the anchored code moved",
+		"For behavior the plan does not name, judge by what a reasonable user of the software would expect.",
+		"Grade each issue by its effect on that user, not by whether the plan mentions the trigger.",
+		"End the prose with a `### Declined to judge` subsection before the JSON block.",
+		"List every behavior considered and set aside, one line each with the reason, or a single line `none`.",
+		"Set-aside items are not findings, never appear in the JSON block, and do not change the verdict or the rule that under `changes_requested` the `findings` array contains only completion-blocking issues.",
 		"exactly one of `blocker`, `major`, or `minor`",
 		"the `findings` array must contain only completion-blocking issues",
 		"Write suggestions as imperative fix steps",

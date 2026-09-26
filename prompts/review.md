@@ -79,9 +79,14 @@ Assess the scoped diff for:
 - Test coverage: verification is meaningful for the changed behavior and important edge cases.
 - Simplicity: solution is understandable, maintainable, and avoids unnecessary complexity.
 
+For behavior the plan does not name, judge by what a reasonable user of the software would expect. Grade each issue by its effect on that user, not by whether the plan mentions the trigger.
+
 ## Output format
 
 Write a concise human-readable review first. Include any important context, strengths, and risks.
+End the prose with a `### Declined to judge` subsection before the JSON block.
+List every behavior considered and set aside, one line each with the reason, or a single line `none`.
+Set-aside items are not findings, never appear in the JSON block, and do not change the verdict or the rule that under `changes_requested` the `findings` array contains only completion-blocking issues.
 
 Then end with exactly one fenced `tao-review-json` block containing valid JSON with this shape:
 
