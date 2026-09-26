@@ -918,7 +918,11 @@ recorded evidence lets cleanup safely remove the now non-ancestral source branch
 Repository owners who use this convention should make `verify` the comprehensive
 gate for an integrated change, composing the project's relevant build, test,
 lint, static-analysis, and dependency-policy checks. Keep narrower commands for
-ordinary implementation feedback. Repositories using another build system can
+ordinary implementation feedback. For gate parity with that declared gate, each
+slice that changes source or test code should carry the lint or static-analysis
+check for its touched packages (when narrowing is supported), alongside applicable
+build and test checks, so the comprehensive gate is not first exercised by the
+last slice. Repositories using another build system can
 keep their native workflow and set an explicit merge verification override;
 Tao does not infer package-manager or other build-system commands.
 

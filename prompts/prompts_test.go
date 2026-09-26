@@ -439,6 +439,43 @@ func TestPlanningPromptsRequireSharedSeamVerificationBreadth(t *testing.T) {
 	}
 }
 
+func TestPlanningPromptsRequireGateParity(t *testing.T) {
+	for _, want := range []string{
+		"Gate parity:",
+		"narrowed to the touched packages when the tool supports narrowing",
+		"Package tests alone are not enough",
+		"never be the first place the repository gate runs",
+	} {
+		if !strings.Contains(SlicePromptTemplate, want) {
+			t.Errorf("slice prompt missing gate parity guidance %q", want)
+		}
+	}
+	const scope = "lint or static-analysis command scope and any golden or snapshot fixture files"
+	for name, prompt := range map[string]string{"plan": PlanPromptTemplate, "slice": SlicePromptTemplate} {
+		if !strings.Contains(prompt, scope) {
+			t.Errorf("%s prompt missing validation strategy guidance %q", name, scope)
+		}
+	}
+	if !strings.Contains(NoteSlicePromptTemplate, "lint or static-analysis command") {
+		t.Error("note slice prompt missing lint or static-analysis command guidance")
+	}
+}
+
+func TestPlanningPromptsRequireFixtureOwnership(t *testing.T) {
+	for _, want := range []string{
+		"golden or snapshot fixture",
+		"list every affected fixture file in `expected_files`",
+		"no `-run` filter narrower than that test",
+	} {
+		if !strings.Contains(SlicePromptTemplate, want) {
+			t.Errorf("slice prompt missing fixture ownership guidance %q", want)
+		}
+	}
+	if !strings.Contains(NoteSlicePromptTemplate, "golden or snapshot fixture") {
+		t.Error("note slice prompt missing golden or snapshot fixture guidance")
+	}
+}
+
 func TestSlicePromptsRequireExactSymbolContracts(t *testing.T) {
 	for _, want := range []string{
 		"exact identifier and its signature in one line",

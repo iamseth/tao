@@ -46,6 +46,8 @@ Verification command contract:
 - Prefer repository-documented commands.
 - Prove the command working directory and every relative path from it.
 - Set `verification.source` to the justifying file or repository convention.
+- When the repository declares a comprehensive build, test, and lint or static-analysis gate, slices that change source or test code must include its lint or static-analysis command, narrowed to touched packages when supported, alongside applicable build and test checks; package tests alone are not enough.
+- Slices that change rendered output or add an event, counter, or field it includes must list every affected golden or snapshot fixture file in `expected_files`, include a task to update those fixtures, and run each test that compares them with no filter narrower than that test; use whole affected packages for shared-seam work.
 - When no build or test command applies, use the narrowest deterministic fallback, such as `grep -q`, `test -f`, or `git diff --stat`.
 - Keep `manual_checks` additive; every slice still needs a deterministic command.
 

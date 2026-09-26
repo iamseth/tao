@@ -149,9 +149,13 @@ For each slice, use the narrowest documented verification command that validates
 
 If a slice modifies a shared interface, gate or guard, or call sequence whose consumers extend beyond the tests a focused filter would select, verification must run at least the whole affected package or packages with no `-run` filter. Reserve focused filters for slices whose blast radius the selected tests fully cover.
 
+Gate parity: When the repository declares a comprehensive gate composed of build, test, and lint or static-analysis checks, every slice that changes source or test code must include the repository's lint or static-analysis command, narrowed to the touched packages when the tool supports narrowing. Package tests alone are not enough to satisfy that gate; retain the applicable build and test checks as well.
+
+Fixture ownership: If a slice changes rendered output or adds an event, counter, or field that rendered output includes, identify every affected golden or snapshot fixture, list every affected fixture file in `expected_files`, and include a task to update those fixtures. Verification must run each test that compares the affected fixtures, with no `-run` filter narrower than that test, and must still satisfy the whole-package floor above when applicable.
+
 Keep each slice's goal, tasks, expected files, and verification source concise enough for `tao run` to render a compact run packet without requiring agents to reread full plan artifacts during normal execution.
 
-Avoid standalone final-validation slices unless they add clear value beyond the verification commands already attached to implementation slices. When a final-validation slice is useful, make it no-edit by default, give it narrow commands and explicit success criteria, and broaden to project-wide checks only when prior changes crossed package, module, or application boundaries.
+Avoid standalone final-validation slices unless they add clear value beyond the verification commands already attached to implementation slices. When a final-validation slice is useful, make it no-edit by default, give it narrow commands and explicit success criteria, and broaden to project-wide checks only when prior changes crossed package, module, or application boundaries. A final-validation slice must never be the first place the repository gate runs: per-slice gate parity keeps the gate green, and Tao's final verification is the only repository-wide run a plan should rely on.
 
 Before writing a command, prove its execution context:
 
@@ -235,7 +239,7 @@ Copy the Planning Packet's strict four-field Source Note block, or write `None` 
 
 ## Validation Strategy
 
-- Repository-owned commands or validation approach used to choose slice verification commands.
+- Repository-owned commands or validation approach used to choose slice verification commands, including the lint or static-analysis command scope and any golden or snapshot fixture files each area's slices must own under the rules above.
 
 ## Review Focus
 

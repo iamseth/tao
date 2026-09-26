@@ -86,7 +86,7 @@ When planning is complete, respond only with this fixed Planning Packet format:
 
 ## Validation Strategy
 
-- <repository-owned commands or validation approach to use when slicing; record the intended verification breadth for each area, with a whole-package floor for shared-seam work; every slice must include at least one deterministic verification command. When no build/test command applies, specify a fallback such as `grep -q`, `test -f`, or `git diff --stat`.>
+- <repository-owned commands or validation approach to use when slicing; record the intended verification breadth for each area, with a whole-package floor for shared-seam work; record the lint or static-analysis command scope and any golden or snapshot fixture files each area's slices must own. When the repository declares a comprehensive build, test, and lint or static-analysis gate, source- or test-changing slices must include its lint or static-analysis check, narrowed to touched packages when supported; rendered-output changes must own fixture updates and the tests that compare them; every slice must include at least one deterministic verification command. When no build/test command applies, specify a fallback such as `grep -q`, `test -f`, or `git diff --stat`.>
 
 ## Risks
 
