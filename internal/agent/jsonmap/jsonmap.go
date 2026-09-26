@@ -49,6 +49,14 @@ func String(values map[string]any, key string) string {
 	return text
 }
 
+// EventType returns the non-empty type of an event, falling back to event.
+func EventType(event map[string]any) string {
+	if typ := String(event, "type"); typ != "" {
+		return typ
+	}
+	return String(event, "event")
+}
+
 // FirstString returns the first non-empty String among keys, or "" when none.
 func FirstString(values map[string]any, keys ...string) string {
 	for _, key := range keys {

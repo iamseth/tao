@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/iamseth/tao/internal/commandrunner"
+	"github.com/iamseth/tao/internal/filelock"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/workspace"
@@ -120,13 +120,13 @@ func (b *BatchWorkspace) acquireOwnership(requests []plan.RunLockRequest, timest
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := filelock.TryLock(file); err != nil {
 		_ = file.Close()
 		return nil, fmt.Errorf("merge batch ownership is held by another process: %w", err)
 	}
 	locks, err := plan.AcquireRunLocks(requests, timestamp)
 	if err != nil {
-		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+		_ = filelock.Unlock(file)
 		_ = file.Close()
 		return nil, fmt.Errorf("acquire merge batch plan ownership: %w", err)
 	}
@@ -145,7 +145,7 @@ func (o *BatchOwnership) Release() error {
 	}
 	file := o.file
 	o.file = nil
-	return errors.Join(planErr, syscall.Flock(int(file.Fd()), syscall.LOCK_UN), file.Close())
+	return errors.Join(planErr, filelock.Unlock(file), file.Close())
 }
 
 // Start validates immutable inputs before creating the isolated integration

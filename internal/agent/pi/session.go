@@ -79,7 +79,7 @@ func (s *session) queuedResult() Result {
 			result.Output += text
 			result.FinalText = text
 		}
-		if eventType(event) == "agent_end" {
+		if jsonmap.EventType(event) == "agent_end" {
 			result.SessionID = jsonmap.String(event, "session_id")
 			result.State = event
 		}
@@ -117,7 +117,7 @@ func (s *session) waitForAgentEnd(ctx context.Context) (Result, error) {
 			result.Output += text
 			result.FinalText = text
 		}
-		if eventType(event) == "agent_end" {
+		if jsonmap.EventType(event) == "agent_end" {
 			result.SessionID = jsonmap.String(event, "session_id")
 			result.State = event
 			return result, nil
@@ -403,11 +403,11 @@ func toolCalls(value any) []toolCall {
 }
 
 func agentEventError(event event) error {
-	if err := agentMapError(event, eventType(event)); err != nil {
+	if err := agentMapError(event, jsonmap.EventType(event)); err != nil {
 		return err
 	}
 	if message, ok := event["message"].(map[string]any); ok {
-		return agentMapError(message, eventType(event))
+		return agentMapError(message, jsonmap.EventType(event))
 	}
 	return nil
 }
@@ -493,13 +493,6 @@ func diagnosticSummary(value any) string {
 	return strings.Join(parts, "; ")
 }
 
-func eventType(event event) string {
-	if typ := jsonmap.String(event, "type"); typ != "" {
-		return typ
-	}
-	return jsonmap.String(event, "event")
-}
-
 func assistantText(event event) string {
 	if role := jsonmap.String(event, "role"); role != "" && role != "assistant" {
 		return ""
@@ -509,7 +502,7 @@ func assistantText(event event) string {
 			return text
 		}
 	}
-	if eventType(event) != "" && eventType(event) != "message_end" && eventType(event) != "message" {
+	if jsonmap.EventType(event) != "" && jsonmap.EventType(event) != "message_end" && jsonmap.EventType(event) != "message" {
 		return ""
 	}
 	if message, ok := event["message"].(map[string]any); ok && jsonmap.String(message, "role") == "assistant" {

@@ -1,7 +1,6 @@
 package pi
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +10,7 @@ import (
 	"github.com/iamseth/tao/internal/agent/jsonmap"
 	"github.com/iamseth/tao/internal/agent/lifecycle"
 	"github.com/iamseth/tao/internal/agent/logrecord"
+	"github.com/iamseth/tao/internal/agent/streamjson"
 )
 
 type command struct {
@@ -31,39 +31,22 @@ type readResult struct {
 
 func (s *session) readStdout(stdout io.Reader) {
 	defer close(s.events)
-	reader := bufio.NewReader(stdout)
-	line := 0
-	for {
-		raw, err := reader.ReadBytes('\n')
-		if len(raw) > 0 {
-			line++
-			raw = trimJSONLLineEnding(raw)
-			var event event
-			if err := json.Unmarshal(raw, &event); err != nil {
-				s.events <- readResult{err: fmt.Errorf("parse pi rpc jsonl line %d: %w", line, err)}
-				return
-			}
-			s.events <- readResult{event: event}
+	var parseErr error
+	err := streamjson.ReadLines(stdout, func(line int, raw []byte) error {
+		var event event
+		if err := json.Unmarshal(raw, &event); err != nil {
+			parseErr = fmt.Errorf("parse pi rpc jsonl line %d: %w", line, err)
+			return parseErr
 		}
-		if err == nil {
-			continue
+		s.events <- readResult{event: event}
+		return nil
+	})
+	if err != nil {
+		if parseErr == nil {
+			err = fmt.Errorf("read pi rpc stdout: %w", err)
 		}
-		if errors.Is(err, io.EOF) {
-			return
-		}
-		s.events <- readResult{err: fmt.Errorf("read pi rpc stdout: %w", err)}
-		return
+		s.events <- readResult{err: err}
 	}
-}
-
-func trimJSONLLineEnding(raw []byte) []byte {
-	if len(raw) > 0 && raw[len(raw)-1] == '\n' {
-		raw = raw[:len(raw)-1]
-	}
-	if len(raw) > 0 && raw[len(raw)-1] == '\r' {
-		raw = raw[:len(raw)-1]
-	}
-	return raw
 }
 
 func (s *session) send(ctx context.Context, command command) error {
@@ -109,10 +92,10 @@ func (s *session) requestMap(ctx context.Context, command command, wantType stri
 			s.logPiError(err)
 			return nil, err
 		}
-		if eventType(event) == wantType {
+		if jsonmap.EventType(event) == wantType {
 			return event, nil
 		}
-		if eventType(event) != "response" || jsonmap.String(event, "id") != command.ID {
+		if jsonmap.EventType(event) != "response" || jsonmap.String(event, "id") != command.ID {
 			continue
 		}
 		success, ok := event["success"].(bool)
@@ -170,10 +153,10 @@ func (s *session) waitForPromptResponse(ctx context.Context, id string) (lifecyc
 		if err := s.handleUIRequest(ctx, event); err != nil {
 			return lifecycle.PromptAcceptanceUnknown, err
 		}
-		if eventType(event) == "extension_ui_request" {
+		if jsonmap.EventType(event) == "extension_ui_request" {
 			continue
 		}
-		if eventType(event) != "response" || jsonmap.String(event, "id") != id {
+		if jsonmap.EventType(event) != "response" || jsonmap.String(event, "id") != id {
 			s.queuedEvents = append(s.queuedEvents, event)
 			continue
 		}
@@ -216,7 +199,7 @@ func (s *session) nextTransport(ctx context.Context) (event, error) {
 }
 
 func (s *session) handleResponseError(event event) error {
-	if eventType(event) != "response" {
+	if jsonmap.EventType(event) != "response" {
 		return nil
 	}
 	if success, ok := event["success"].(bool); !ok || success {
@@ -237,7 +220,7 @@ func (s *session) responseError(event event) error {
 }
 
 func (s *session) handleUIRequest(ctx context.Context, event event) error {
-	if eventType(event) != "extension_ui_request" {
+	if jsonmap.EventType(event) != "extension_ui_request" {
 		return nil
 	}
 	requestID := jsonmap.String(event, "request_id")

@@ -11,6 +11,14 @@ import (
 	"time"
 )
 
+func TestRepositorySuffixFormat(t *testing.T) {
+	r := &Repository{}
+	suffix := r.suffix()
+	if len(suffix) != 8 || strings.Trim(suffix, "0123456789abcdef") != "" {
+		t.Fatalf("suffix = %q, want 8 lowercase hexadecimal characters", suffix)
+	}
+}
+
 func TestRepositoryCreateResolveListAndFilter(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "repos", "repo-a", "notes")
 	times := []time.Time{time.Date(2026, 7, 13, 10, 0, 0, 0, time.UTC), time.Date(2026, 7, 13, 11, 0, 0, 0, time.UTC)}

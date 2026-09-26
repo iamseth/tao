@@ -20,6 +20,7 @@ import (
 
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/workspace"
 	"github.com/iamseth/tao/prompts"
 )
 
@@ -880,7 +881,7 @@ func snapshotGitSessionBoundary(ctx context.Context, root string) (snapshot gitS
 		return snapshot, err
 	}
 	for _, checkoutRoot := range checkoutRoots {
-		if checkoutRoot != canonicalRoot && pathWithinConfinementRoot(checkoutRoot, canonicalRoot) {
+		if checkoutRoot != canonicalRoot && workspace.PathWithinRoot(canonicalRoot, checkoutRoot) {
 			snapshot.nestedControlExclusions = append(snapshot.nestedControlExclusions, checkoutRoot)
 		}
 	}

@@ -2,8 +2,6 @@ package note
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +15,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/atomicfile"
+	"github.com/iamseth/tao/internal/randtoken"
 )
 
 var safeID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
@@ -411,9 +410,9 @@ func (r *Repository) suffix() string {
 	if r.IDSuffix != nil {
 		return strings.TrimSpace(r.IDSuffix())
 	}
-	var value [4]byte
-	if _, err := rand.Read(value[:]); err == nil {
-		return hex.EncodeToString(value[:])
+	if token, err := randtoken.New(); err == nil {
+		// Preserve the existing four-byte note ID suffix format.
+		return token[:8]
 	}
 	return fmt.Sprintf("%x", time.Now().UnixNano())
 }

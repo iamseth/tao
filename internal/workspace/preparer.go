@@ -433,11 +433,11 @@ func executionWorkspaceStrategy(detail *plan.PlanDetail, value string, config Co
 	}
 	cleanValue := cleanPlanPath("", value)
 	for _, root := range candidateWorktreeRoots(detail, config) {
-		if pathWithinRoot(cleanPlanPath(detail.State.Repo.Root, root), cleanValue) {
+		if PathWithinRoot(cleanPlanPath(detail.State.Repo.Root, root), cleanValue) {
 			return plan.WorkspaceStrategyWorktree
 		}
 	}
-	if pathWithinRoot(cleanPlanPath("", detail.State.Repo.Root), cleanValue) {
+	if PathWithinRoot(cleanPlanPath("", detail.State.Repo.Root), cleanValue) {
 		return plan.WorkspaceStrategyCurrent
 	}
 	return ""
@@ -476,7 +476,9 @@ func cleanPlanPath(base string, value string) string {
 	return filepath.Clean(value)
 }
 
-func pathWithinRoot(root string, value string) bool {
+// PathWithinRoot reports lexical containment of absolute filesystem paths,
+// treating root as within itself. It rejects empty inputs and does not resolve symlinks.
+func PathWithinRoot(root string, value string) bool {
 	if root == "" || value == "" {
 		return false
 	}

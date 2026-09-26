@@ -5,6 +5,28 @@ import (
 	"testing"
 )
 
+func TestEventType(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		event map[string]any
+		want  string
+	}{
+		{name: "nil"},
+		{name: "missing", event: map[string]any{}},
+		{name: "type wins", event: map[string]any{"type": "message", "event": "fallback"}, want: "message"},
+		{name: "event fallback", event: map[string]any{"event": "message"}, want: "message"},
+		{name: "empty type", event: map[string]any{"type": "", "event": "message"}, want: "message"},
+		{name: "nonstring type", event: map[string]any{"type": 1, "event": "message"}, want: "message"},
+		{name: "nonstring event", event: map[string]any{"event": true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := EventType(tc.event); got != tc.want {
+				t.Fatalf("EventType = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestInt64Coercions(t *testing.T) {
 	values := map[string]any{
 		"float":  float64(3),

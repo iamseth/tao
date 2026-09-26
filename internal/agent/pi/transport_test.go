@@ -114,6 +114,22 @@ func TestReadStdoutReportsMidstreamReaderError(t *testing.T) {
 	}
 }
 
+func TestReadStdoutRejectsBlankLines(t *testing.T) {
+	for _, blank := range []string{"\n", "\r\n", "\r"} {
+		t.Run(strings.ReplaceAll(blank, "\n", "LF"), func(t *testing.T) {
+			results := collectReadResults(strings.NewReader("{\"type\":\"message\"}\n" + blank))
+			// Assert the ordered stream: one event, then the blank-line error.
+			if len(results) != 2 || results[0].err != nil || results[0].event["type"] != "message" {
+				t.Fatalf("unexpected stream: %#v", results)
+			}
+			want := "parse pi rpc jsonl line 2: unexpected end of JSON input"
+			if results[1].err == nil || results[1].err.Error() != want {
+				t.Fatalf("got %v, want %s", results[1].err, want)
+			}
+		})
+	}
+}
+
 func collectReadResults(stdout io.Reader) []readResult {
 	s := &session{events: make(chan readResult)}
 	go s.readStdout(stdout)

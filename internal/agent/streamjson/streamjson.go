@@ -153,30 +153,49 @@ func (r *Runner[R]) SendPrompt(ctx context.Context, prompt string) error {
 
 func (r *Runner[R]) readStdout(stdout io.Reader) {
 	defer close(r.events)
-	reader := bufio.NewReader(stdout)
+	var parseErr error
+	err := ReadLines(stdout, func(line int, raw []byte) error {
+		if len(raw) == 0 {
+			return nil
+		}
+		var ev Event
+		if err := json.Unmarshal(raw, &ev); err != nil {
+			parseErr = fmt.Errorf("parse %s %s line %d: %w", r.name, r.streamKind, line, err)
+			return parseErr
+		}
+		r.events <- readResult{event: ev}
+		return nil
+	})
+	if err != nil {
+		if parseErr == nil {
+			err = fmt.Errorf("read %s stdout: %w", r.name, err)
+		}
+		r.events <- readResult{err: err}
+	}
+}
+
+// ReadLines calls fn for every non-empty read, including blank lines, with a
+// 1-based line number and the trailing LF and CR removed. A final unterminated
+// line is delivered before any read error. EOF ends the stream successfully;
+// other read errors and callback errors are returned unchanged. A callback error
+// stops reading immediately and takes precedence over a simultaneous read error.
+func ReadLines(r io.Reader, fn func(line int, raw []byte) error) error {
+	reader := bufio.NewReader(r)
 	line := 0
 	for {
 		raw, err := reader.ReadBytes('\n')
 		if len(raw) > 0 {
 			line++
-			raw = trimJSONLLineEnding(raw)
-			if len(raw) != 0 {
-				var ev Event
-				if err := json.Unmarshal(raw, &ev); err != nil {
-					r.events <- readResult{err: fmt.Errorf("parse %s %s line %d: %w", r.name, r.streamKind, line, err)}
-					return
-				}
-				r.events <- readResult{event: ev}
+			if err := fn(line, trimJSONLLineEnding(raw)); err != nil {
+				return err
 			}
 		}
-		if err == nil {
-			continue
-		}
 		if errors.Is(err, io.EOF) {
-			return
+			return nil
 		}
-		r.events <- readResult{err: fmt.Errorf("read %s stdout: %w", r.name, err)}
-		return
+		if err != nil {
+			return err
+		}
 	}
 }
 

@@ -11,9 +11,9 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 
 	"github.com/iamseth/tao/internal/atomicfile"
+	"github.com/iamseth/tao/internal/filelock"
 )
 
 const activeBatchSchema = "tao.active-merge-batch.v1"
@@ -367,7 +367,7 @@ func acquireActiveBatchLock(activePath string) (*activeBatchLock, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+	if err := filelock.Lock(file); err != nil {
 		_ = file.Close()
 		return nil, fmt.Errorf("lock active merge batch: %w", err)
 	}
@@ -378,7 +378,7 @@ func (l *activeBatchLock) release() error {
 	if l == nil || l.file == nil {
 		return nil
 	}
-	return errors.Join(syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN), l.file.Close())
+	return errors.Join(filelock.Unlock(l.file), l.file.Close())
 }
 
 func readBatchSnapshot(path string) (BatchState, bool) {

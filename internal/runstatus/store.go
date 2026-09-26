@@ -1,8 +1,6 @@
 package runstatus
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,10 +9,11 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/iamseth/tao/internal/atomicfile"
+	"github.com/iamseth/tao/internal/filelock"
+	"github.com/iamseth/tao/internal/randtoken"
 )
 
 var planIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -179,10 +178,10 @@ func (s *Store) withMutationLock(planID string, operation func(path string) erro
 		return fmt.Errorf("open runtime status lock for %q: %w", planID, err)
 	}
 	defer func() { _ = lock.Close() }()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+	if err := filelock.Lock(lock); err != nil {
 		return fmt.Errorf("lock runtime status for %q: %w", planID, err)
 	}
-	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) }()
+	defer func() { _ = filelock.Unlock(lock) }()
 	return operation(path)
 }
 
@@ -332,9 +331,8 @@ func (p *Publisher) Remove() error {
 }
 
 func newInvocationID() string {
-	var id [16]byte
-	if _, err := rand.Read(id[:]); err == nil {
-		return hex.EncodeToString(id[:])
+	if token, err := randtoken.New(); err == nil {
+		return token
 	}
 	return fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
 }

@@ -11,10 +11,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/iamseth/tao/internal/atomicfile"
+	"github.com/iamseth/tao/internal/filelock"
 )
 
 const (
@@ -310,11 +310,11 @@ func withMutationPersistenceReadBoundary[T any](planDir string, operation func(r
 }
 
 func withOpenMutationPersistenceLock[T any](file *os.File, operation func() (T, error)) (result T, err error) {
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+	if err := filelock.Lock(file); err != nil {
 		return result, errors.Join(fmt.Errorf("lock %s: %w", mutationPersistenceLock, err), file.Close())
 	}
 	defer func() {
-		releaseErr := errors.Join(syscall.Flock(int(file.Fd()), syscall.LOCK_UN), file.Close())
+		releaseErr := errors.Join(filelock.Unlock(file), file.Close())
 		if releaseErr != nil {
 			err = errors.Join(err, fmt.Errorf("unlock %s: %w", mutationPersistenceLock, releaseErr))
 		}

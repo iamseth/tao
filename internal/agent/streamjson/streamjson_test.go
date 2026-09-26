@@ -12,6 +12,96 @@ import (
 	"github.com/iamseth/tao/internal/agent/process"
 )
 
+func TestReadLines(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		input string
+		want  []string
+	}{
+		{name: "empty"},
+		{name: "endings", input: "a\r\n\n\r\nb\nc\r", want: []string{"a", "", "", "b", "c"}},
+		{name: "unterminated", input: "a\nb", want: []string{"a", "b"}},
+		{name: "only trim one CR", input: "a\r\r\n", want: []string{"a\r"}},
+		{name: "preserve whitespace", input: " a \t\n", want: []string{" a \t"}},
+		{name: "large", input: strings.Repeat("x", 2*1024*1024), want: []string{strings.Repeat("x", 2*1024*1024)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			count := 0
+			err := ReadLines(strings.NewReader(tc.input), func(line int, raw []byte) error {
+				count++
+				if line != count || count > len(tc.want) {
+					t.Fatalf("unexpected line %d (callback %d)", line, count)
+				}
+				if string(raw) != tc.want[count-1] {
+					t.Errorf("line %d differs: got %d bytes, want %d", line, len(raw), len(tc.want[count-1]))
+				}
+				return nil
+			})
+			if err != nil || count != len(tc.want) {
+				t.Fatalf("ReadLines = %v, %d lines; want nil, %d", err, count, len(tc.want))
+			}
+		})
+	}
+}
+
+func TestReadLinesErrorPrecedence(t *testing.T) {
+	boom := errors.New("read failed")
+	stop := errors.New("callback failed")
+	for _, tc := range []struct {
+		name     string
+		data     string
+		readErr  error
+		callback error
+		want     error
+	}{
+		{name: "read without data", readErr: boom, want: boom},
+		{name: "data before read error", data: "partial", readErr: boom, want: boom},
+		{name: "data before EOF", data: "partial", readErr: io.EOF},
+		{name: "callback before read error", data: "partial", readErr: boom, callback: stop, want: stop},
+		{name: "callback EOF is not swallowed", data: "partial", readErr: io.EOF, callback: io.EOF, want: io.EOF},
+		{name: "callback stops remaining lines", data: "first\nsecond\n", readErr: io.EOF, callback: stop, want: stop},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			err := ReadLines(&dataErrorReader{data: tc.data, err: tc.readErr}, func(line int, raw []byte) error {
+				calls++
+				if line != 1 || string(raw) != strings.TrimSuffix(strings.Split(tc.data, "\n")[0], "\r") {
+					t.Fatalf("unexpected callback: line %d, raw %q", line, raw)
+				}
+				return tc.callback
+			})
+			wantCalls := 0
+			if tc.data != "" {
+				wantCalls = 1
+			}
+			if err != tc.want || calls != wantCalls { //nolint:errorlint // ReadLines must return errors unchanged, not wrapped.
+				t.Fatalf("got error %v and %d callbacks; want %v and %d", err, calls, tc.want, wantCalls)
+			}
+		})
+	}
+}
+
+type dataErrorReader struct {
+	data string
+	err  error
+}
+
+func (r *dataErrorReader) Read(p []byte) (int, error) {
+	n := copy(p, r.data)
+	r.data = r.data[n:]
+	return n, r.err
+}
+
+func TestRunnerParseErrorCountsSkippedLines(t *testing.T) {
+	r := &Runner[struct{}]{name: "test", streamKind: "json", events: make(chan readResult, 1)}
+	r.readStdout(strings.NewReader("\n\r\nnot-json\n"))
+	item := <-r.events
+	want := "parse test json line 3: invalid character 'o' in literal null (expecting 'u')"
+	if item.err == nil || item.err.Error() != want {
+		t.Fatalf("got %v, want %s", item.err, want)
+	}
+}
+
 // fakeProcess is an in-memory process.Process: the test drives stdout via a pipe
 // and signals exit through finish.
 type fakeProcess struct {

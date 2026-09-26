@@ -2,6 +2,7 @@ package insights
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -224,11 +225,8 @@ func AggregateSources(ctx context.Context, lister SourceLister) (Report, error) 
 		return Report{}, err
 	}
 	sources = slices.Clone(sources)
-	sort.Slice(sources, func(i, j int) bool {
-		if sources[i].ID != sources[j].ID {
-			return sources[i].ID < sources[j].ID
-		}
-		return sources[i].Name < sources[j].Name
+	slices.SortFunc(sources, func(a, b RepositorySource) int {
+		return cmp.Or(cmp.Compare(a.ID, b.ID), cmp.Compare(a.Name, b.Name))
 	})
 
 	report := Report{}
@@ -275,11 +273,8 @@ func aggregateSource(ctx context.Context, report *Report, acc *accumulator, repo
 		return err
 	}
 	summaries = slices.Clone(summaries)
-	sort.Slice(summaries, func(i, j int) bool {
-		if summaries[i].ID != summaries[j].ID {
-			return summaries[i].ID < summaries[j].ID
-		}
-		return summaries[i].Dir < summaries[j].Dir
+	slices.SortFunc(summaries, func(a, b plan.PlanSummary) int {
+		return cmp.Or(cmp.Compare(a.ID, b.ID), cmp.Compare(a.Dir, b.Dir))
 	})
 	for _, summary := range summaries {
 		if err := ctx.Err(); err != nil {
@@ -519,25 +514,16 @@ func finalize(report *Report, acc *accumulator) {
 	finalizeSignals(report, acc.signals)
 	finalizeLogSignals(report, acc.logs)
 	for _, bucket := range acc.buckets {
-		sort.Slice(bucket.Repositories, func(i, j int) bool {
-			if bucket.Repositories[i].RepositoryID != bucket.Repositories[j].RepositoryID {
-				return bucket.Repositories[i].RepositoryID < bucket.Repositories[j].RepositoryID
-			}
-			return bucket.Repositories[i].RepositoryName < bucket.Repositories[j].RepositoryName
+		slices.SortFunc(bucket.Repositories, func(a, b ReasonRepository) int {
+			return cmp.Or(cmp.Compare(a.RepositoryID, b.RepositoryID), cmp.Compare(a.RepositoryName, b.RepositoryName))
 		})
 		report.BlockedReasons = append(report.BlockedReasons, *bucket)
 	}
-	sort.Slice(report.BlockedReasons, func(i, j int) bool {
-		if report.BlockedReasons[i].Count != report.BlockedReasons[j].Count {
-			return report.BlockedReasons[i].Count > report.BlockedReasons[j].Count
-		}
-		return report.BlockedReasons[i].Reason < report.BlockedReasons[j].Reason
+	slices.SortFunc(report.BlockedReasons, func(a, b ReasonBucket) int {
+		return cmp.Or(cmp.Compare(b.Count, a.Count), cmp.Compare(a.Reason, b.Reason))
 	})
-	sort.Slice(report.ReworkPlans, func(i, j int) bool {
-		if report.ReworkPlans[i].RepositoryID != report.ReworkPlans[j].RepositoryID {
-			return report.ReworkPlans[i].RepositoryID < report.ReworkPlans[j].RepositoryID
-		}
-		return report.ReworkPlans[i].PlanID < report.ReworkPlans[j].PlanID
+	slices.SortFunc(report.ReworkPlans, func(a, b ReworkPlan) int {
+		return cmp.Or(cmp.Compare(a.RepositoryID, b.RepositoryID), cmp.Compare(a.PlanID, b.PlanID))
 	})
 
 	outputs := make([]float64, 0, len(acc.sessions))
@@ -570,11 +556,8 @@ func finalize(report *Report, acc *accumulator) {
 	for _, outlier := range outliers {
 		report.OutlierPlans = append(report.OutlierPlans, *outlier)
 	}
-	sort.Slice(report.OutlierPlans, func(i, j int) bool {
-		if report.OutlierPlans[i].RepositoryID != report.OutlierPlans[j].RepositoryID {
-			return report.OutlierPlans[i].RepositoryID < report.OutlierPlans[j].RepositoryID
-		}
-		return report.OutlierPlans[i].PlanID < report.OutlierPlans[j].PlanID
+	slices.SortFunc(report.OutlierPlans, func(a, b PlanOutlier) int {
+		return cmp.Or(cmp.Compare(a.RepositoryID, b.RepositoryID), cmp.Compare(a.PlanID, b.PlanID))
 	})
 }
 

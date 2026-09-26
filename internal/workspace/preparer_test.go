@@ -15,6 +15,38 @@ import (
 	"github.com/iamseth/tao/internal/plantest"
 )
 
+func TestPathWithinRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "root")
+	sep := string(filepath.Separator)
+	for _, tt := range []struct {
+		name  string
+		root  string
+		value string
+		want  bool
+	}{
+		{name: "root itself", root: root, value: root, want: true},
+		{name: "child", root: root, value: filepath.Join(root, "child"), want: true},
+		{name: "nested child", root: root, value: filepath.Join(root, "child", "nested"), want: true},
+		{name: "parent", root: root, value: filepath.Dir(root)},
+		{name: "sibling", root: root, value: filepath.Join(filepath.Dir(root), "sibling")},
+		{name: "shared prefix", root: root, value: root + "-other"},
+		{name: "clean root", root: root + sep + ".", value: root, want: true},
+		{name: "clean value", root: root, value: root + sep + "child" + sep + "..", want: true},
+		{name: "parent traversal", root: root, value: root + sep + ".." + sep + "outside"},
+		{name: "dot prefix child", root: root, value: filepath.Join(root, "..child"), want: true},
+		{name: "empty root", value: root},
+		{name: "empty value", root: root},
+		{name: "both empty"},
+		{name: "relative value", root: root, value: "child"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := PathWithinRoot(tt.root, tt.value); got != tt.want {
+				t.Errorf("PathWithinRoot(%q, %q) = %v, want %v", tt.root, tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestExecutionPreparerRequiresPlanRecordFactory(t *testing.T) {
 	for _, mode := range []string{"isolated", "current"} {
 		t.Run(mode, func(t *testing.T) {

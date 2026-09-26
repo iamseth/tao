@@ -2,6 +2,7 @@ package insights
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -187,14 +188,12 @@ func balancedLogRounds(candidates []logCandidate) [][]logCandidate {
 	}
 	keys := make([]string, 0, len(groups))
 	for key, group := range groups {
-		sort.SliceStable(group, func(i, j int) bool {
-			if !group[i].lastActivity.Equal(group[j].lastActivity) {
-				return group[i].lastActivity.After(group[j].lastActivity)
-			}
-			if group[i].planID != group[j].planID {
-				return group[i].planID < group[j].planID
-			}
-			return group[i].dir < group[j].dir
+		slices.SortStableFunc(group, func(a, b logCandidate) int {
+			return cmp.Or(
+				b.lastActivity.Compare(a.lastActivity),
+				cmp.Compare(a.planID, b.planID),
+				cmp.Compare(a.dir, b.dir),
+			)
 		})
 		groups[key] = group
 		keys = append(keys, key)
@@ -212,20 +211,14 @@ func balancedLogRounds(candidates []logCandidate) [][]logCandidate {
 		if len(round) == 0 {
 			return rounds
 		}
-		sort.SliceStable(round, func(i, j int) bool {
-			if !round[i].lastActivity.Equal(round[j].lastActivity) {
-				return round[i].lastActivity.After(round[j].lastActivity)
-			}
-			if round[i].repository.id != round[j].repository.id {
-				return round[i].repository.id < round[j].repository.id
-			}
-			if round[i].repository.name != round[j].repository.name {
-				return round[i].repository.name < round[j].repository.name
-			}
-			if round[i].planID != round[j].planID {
-				return round[i].planID < round[j].planID
-			}
-			return round[i].dir < round[j].dir
+		slices.SortStableFunc(round, func(a, b logCandidate) int {
+			return cmp.Or(
+				b.lastActivity.Compare(a.lastActivity),
+				cmp.Compare(a.repository.id, b.repository.id),
+				cmp.Compare(a.repository.name, b.repository.name),
+				cmp.Compare(a.planID, b.planID),
+				cmp.Compare(a.dir, b.dir),
+			)
 		})
 		rounds = append(rounds, round)
 	}
@@ -789,11 +782,8 @@ func finalizeLogSignals(report *Report, acc *logAccumulator) {
 	for _, coverage := range acc.repositoryCoverage {
 		report.RecentLogs.Repositories = append(report.RecentLogs.Repositories, *coverage)
 	}
-	sort.Slice(report.RecentLogs.Repositories, func(i, j int) bool {
-		if report.RecentLogs.Repositories[i].RepositoryID != report.RecentLogs.Repositories[j].RepositoryID {
-			return report.RecentLogs.Repositories[i].RepositoryID < report.RecentLogs.Repositories[j].RepositoryID
-		}
-		return report.RecentLogs.Repositories[i].RepositoryName < report.RecentLogs.Repositories[j].RepositoryName
+	slices.SortFunc(report.RecentLogs.Repositories, func(a, b RepositoryLogCoverage) int {
+		return cmp.Or(cmp.Compare(a.RepositoryID, b.RepositoryID), cmp.Compare(a.RepositoryName, b.RepositoryName))
 	})
 	report.RecentLogs.MissingExecutables = flattenLogSignals(acc.missing)
 	report.RecentLogs.ToolUses = flattenLogSignals(acc.tools)
@@ -805,11 +795,8 @@ func flattenLogSignals(values map[string]*logSignalAccumulator) []LogSignal {
 	for name, value := range values {
 		result = append(result, LogSignal{Name: name, Count: value.count, PlanCount: len(value.plans), RepositoryCount: len(value.repositories), Exemplars: value.exemplars})
 	}
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].Count != result[j].Count {
-			return result[i].Count > result[j].Count
-		}
-		return result[i].Name < result[j].Name
+	slices.SortFunc(result, func(a, b LogSignal) int {
+		return cmp.Or(cmp.Compare(b.Count, a.Count), cmp.Compare(a.Name, b.Name))
 	})
 	return result
 }

@@ -3,8 +3,6 @@ package note
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +11,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/iamseth/tao/internal/filelock"
+	"github.com/iamseth/tao/internal/randtoken"
 )
 
 const (
@@ -81,33 +82,21 @@ func acquireMutationLock(ctx context.Context, dir, noteID string) (*mutationLock
 	if err != nil {
 		return nil, err
 	}
-	for {
-		err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
-		if err == nil {
-			return &mutationLock{file: file}, nil
+	if err := filelock.LockPoll(ctx, file, mutationLockPoll); err != nil {
+		_ = file.Close()
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
 		}
-		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
-			_ = file.Close()
-			return nil, fmt.Errorf("lock note mutation: %w", err)
-		}
-		timer := time.NewTimer(mutationLockPoll)
-		select {
-		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
-			_ = file.Close()
-			return nil, ctx.Err()
-		case <-timer.C:
-		}
+		return nil, fmt.Errorf("lock note mutation: %w", err)
 	}
+	return &mutationLock{file: file}, nil
 }
 
 func (l *mutationLock) release() error {
 	if l == nil || l.file == nil {
 		return nil
 	}
-	unlockErr := syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN)
+	unlockErr := filelock.Unlock(l.file)
 	closeErr := l.file.Close()
 	return errors.Join(unlockErr, closeErr)
 }
@@ -243,9 +232,8 @@ func (l *PromotionLocker) token() string {
 	if l.Token != nil {
 		return l.Token()
 	}
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err == nil {
-		return hex.EncodeToString(b[:])
+	if token, err := randtoken.New(); err == nil {
+		return token
 	}
 	return fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
 }

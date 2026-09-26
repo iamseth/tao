@@ -78,7 +78,7 @@ func (c Client) logClaudeError(err error) {
 }
 
 func eventError(event event) error {
-	typ := eventType(event)
+	typ := jsonmap.EventType(event)
 	if typ == "error" || typ == "agent_error" || boolValue(event, "is_error") || jsonmap.String(event, "subtype") == "error" {
 		message := jsonmap.FirstString(event, "error", "message", "error_message")
 		if nested, ok := event["error"].(map[string]any); ok {
@@ -116,18 +116,11 @@ func extractTelemetry(event event, result *Result) {
 	}
 }
 
-func eventType(event event) string {
-	if typ := jsonmap.String(event, "type"); typ != "" {
-		return typ
-	}
-	return jsonmap.String(event, "event")
-}
-
 func assistantText(event event) string {
 	if role := jsonmap.String(event, "role"); role != "" && role != "assistant" {
 		return ""
 	}
-	if eventType(event) == "result" {
+	if jsonmap.EventType(event) == "result" {
 		return ""
 	}
 	for _, key := range []string{"final_text", "text", "content"} {
@@ -145,7 +138,7 @@ func assistantText(event event) string {
 }
 
 func resultText(event event) string {
-	if eventType(event) != "result" {
+	if jsonmap.EventType(event) != "result" {
 		return ""
 	}
 	return jsonmap.FirstString(event, "result", "text", "content")

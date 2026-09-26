@@ -3,8 +3,6 @@ package plan
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/iamseth/tao/internal/randtoken"
 )
 
 const (
@@ -385,9 +385,8 @@ func parsePlanRunLockMetadata(content []byte) planRunLockMetadata {
 }
 
 func newPlanRunLockToken() string {
-	var token [16]byte
-	if _, err := rand.Read(token[:]); err == nil {
-		return hex.EncodeToString(token[:])
+	if token, err := randtoken.New(); err == nil {
+		return token
 	}
 	return fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
 }

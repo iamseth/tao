@@ -1,8 +1,6 @@
 package plan
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +9,8 @@ import (
 	"reflect"
 	"slices"
 	"time"
+
+	"github.com/iamseth/tao/internal/randtoken"
 )
 
 type artifactMutationFunc func(*PlanDetail) (lifecycleMutation, error)
@@ -764,11 +764,11 @@ func eventsWereRecordedBy(recorded []Event, requested []Event, normalize func(*E
 }
 
 func newArtifactMutationID() (string, error) {
-	var id [16]byte
-	if _, err := rand.Read(id[:]); err != nil {
+	id, err := randtoken.New()
+	if err != nil {
 		return "", fmt.Errorf("generate mutation id: %w", err)
 	}
-	return hex.EncodeToString(id[:]), nil
+	return id, nil
 }
 
 func loadFileMutationBaseline(planDir, expectedPlanID string) (*PlanDetail, bool, error) {

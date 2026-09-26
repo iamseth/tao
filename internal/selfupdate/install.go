@@ -14,10 +14,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/iamseth/tao/internal/atomicfile"
+	"github.com/iamseth/tao/internal/filelock"
 )
 
 const (
@@ -501,26 +501,15 @@ func acquireFileLock(ctx context.Context, path string) (func() error, error) {
 	if err != nil {
 		return nil, err
 	}
-	for {
-		err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
-		if err == nil {
-			return func() error {
-				unlockErr := syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
-				closeErr := file.Close()
-				return errors.Join(unlockErr, closeErr)
-			}, nil
-		}
-		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
-			_ = file.Close()
-			return nil, err
-		}
-		select {
-		case <-ctx.Done():
-			_ = file.Close()
-			return nil, ctx.Err()
-		case <-time.After(lockRetryInterval):
-		}
+	if err := filelock.LockPoll(ctx, file, lockRetryInterval); err != nil {
+		_ = file.Close()
+		return nil, err
 	}
+	return func() error {
+		unlockErr := filelock.Unlock(file)
+		closeErr := file.Close()
+		return errors.Join(unlockErr, closeErr)
+	}, nil
 }
 
 func (installer *Installer) chmod(path string, mode os.FileMode) error {

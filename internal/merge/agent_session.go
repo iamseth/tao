@@ -24,6 +24,7 @@ import (
 	commitcontract "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+	"github.com/iamseth/tao/internal/workspace"
 )
 
 // BatchAgentSessionConfig configures a merge-owned agent operation. Zero-value
@@ -600,7 +601,7 @@ func singleMergeFilesystemConfinementCommandForProvider(policy singleMergeFilesy
 	if err != nil {
 		return "", nil, err
 	}
-	if !policy.allowEdits && pathWithinConfinementRoot(runtimeRoot, integrationRoot) {
+	if !policy.allowEdits && workspace.PathWithinRoot(integrationRoot, runtimeRoot) {
 		return "", nil, errors.New("protect provider filesystem boundary: reviewer runtime overlaps integration worktree")
 	}
 	writable := []string{runtimeRoot}
@@ -690,14 +691,6 @@ func singleMergeFilesystemConfinementExecutable() (string, error) {
 	}
 }
 
-func pathWithinConfinementRoot(path, root string) bool {
-	if path == root {
-		return true
-	}
-	rel, err := filepath.Rel(root, path)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-}
-
 // rejectMultiplyLinkedWorktreeFiles closes the existing-hard-link side of the
 // writable-bind boundary. Protected submounts are excluded because the provider
 // cannot write through them. Symlinks are not followed.
@@ -710,7 +703,7 @@ func rejectMultiplyLinkedWorktreeFiles(ctx context.Context, root string, protect
 			return fmt.Errorf("protect provider filesystem boundary: inspect writable integration worktree: %w", walkErr)
 		}
 		for _, protectedPath := range protected {
-			if pathWithinConfinementRoot(path, protectedPath) {
+			if workspace.PathWithinRoot(protectedPath, path) {
 				if entry.IsDir() {
 					return filepath.SkipDir
 				}

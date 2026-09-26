@@ -44,7 +44,7 @@ func parseSessionMetrics(state, stats map[string]any) agentmetrics.Metrics {
 // messages. It never requests more RPC work, and stream-only coverage is partial:
 // only get_session_stats can establish complete session coverage.
 func collectMessageMetrics(ev event, result *Result) {
-	if eventType(ev) != "message_end" {
+	if jsonmap.EventType(ev) != "message_end" {
 		return
 	}
 	message, _ := ev["message"].(map[string]any)
