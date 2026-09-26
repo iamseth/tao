@@ -838,9 +838,9 @@ func TestRenderCatchMeUpDefinesBoundedReadOnlyHistory(t *testing.T) {
 				"window has no commits", "do not silently widen the window",
 				"focus has no supported matches", "shallow or incomplete history",
 				"label conclusions partial even if the visible window is empty",
-				"no more than 10 substantive bullets", "Omit empty sections other than Scope",
-				"**Scope:**", "**User-visible changes:**", "**Architectural changes:**", "**Compatibility/workflow implications:**",
-				"Cite short commit hashes and relevant repository paths", "Distinguish evidence from inference",
+				"about 12 bullets total", "Omit empty sections other than Scope",
+				"New features", "Bug fixes", "Other notable changes",
+				"Cite short commit hashes at the end of each bullet in parentheses, listing every contributing commit for that change on one bullet, for example (e18531e, a8d025c).", "Distinguish evidence from inference",
 				"commit subjects alone describe intent, not proven behavior", "Do not imply tests passed",
 			} {
 				if !strings.Contains(got, want) {

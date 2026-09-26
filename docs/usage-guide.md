@@ -313,9 +313,11 @@ overstating certainty. It will not delete, clean, or commit anything on its own.
 Use this in Pi or Claude Code when returning to a repository or before planning
 work that depends on recent changes. By default it summarizes commits reachable
 from **current HEAD over the last two weeks**, using local Git history only and
-excluding uncommitted work. It states the resolved window and branch (or detached
-HEAD), groups user-visible and architectural changes, and calls out noteworthy
-compatibility/workflow implications with commit and path references.
+excluding uncommitted work. It opens with a compact scope line stating the resolved
+window and timezone, branch (or detached HEAD), pinned short hash, and coverage
+caveats. Plain-language highlights follow as bullets grouped under **New features**,
+**Bug fixes**, and optionally **Other notable changes**. Each bullet ends with the
+short commit hash(es) in parentheses for manual follow-up.
 
 ```text
 /tao-catch-me-up

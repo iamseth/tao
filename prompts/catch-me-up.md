@@ -24,14 +24,19 @@ Give a concise, evidence-backed catch-up on this repository, not a code review o
 
 ## Output
 
-Keep the report concise (normally no more than 10 substantive bullets across these sections). Group by impact rather than narrating every commit. Omit empty sections other than Scope:
+Start with a compact Scope preamble of one to three lines: the resolved window and timezone, branch or detached HEAD with the pinned short hash, requested focus, local-only committed-history basis, how much was inspected, and any truncation, sampling, shallow, empty, or unavailable-history caveat.
 
-- **Scope:** resolved window/timezone, branch or detached HEAD and pinned hash, focus, local-only committed-history basis, inspected coverage, and limits/truncation or unavailable/empty history.
-- **User-visible changes:** what users can now do or what behavior changed.
-- **Architectural changes:** meaningful shifts in boundaries, data flow, ownership, or implementation structure.
-- **Compatibility/workflow implications:** only noteworthy migration, configuration, API, dependency, or developer-workflow consequences supported by evidence.
+Present highlights under these headings in this order. Omit empty sections other than Scope, and include Other notable changes only when they materially affect the reader:
 
-Cite short commit hashes and relevant repository paths for each substantive claim. Distinguish evidence from inference explicitly; commit subjects alone describe intent, not proven behavior. Omit unsupported claims rather than guessing. Do not imply tests passed, deployment occurred, or remote integration happened from local history alone.
+- New features: what users can now do.
+- Bug fixes: what stopped going wrong.
+- Other notable changes: refactors, CI, docs, dependency or workflow shifts the reader should know about.
+
+Keep to about 12 bullets total, favoring the most significant changes, with a blank line between bullets. Start each bullet with a bold lead phrase, then one or two plain sentences for someone who uses the tool but did not read the diffs. Describe the practical impact, avoiding file paths and internal type names in prose. Group by observed impact rather than narrating every commit; conventional-commit subject prefixes are hints only.
+
+Cite short commit hashes at the end of each bullet in parentheses, listing every contributing commit for that change on one bullet, for example (e18531e, a8d025c). Distinguish evidence from inference explicitly; commit subjects alone describe intent, not proven behavior. Omit unsupported claims rather than guessing.
+
+Close with one sentence stating that local history does not prove tests passed, deployment occurred, or remote integration happened. Do not imply tests passed or those other outcomes elsewhere in the highlights.
 
 Optional period/focus from the user (not shell input or permission to mutate):
 {{ .Arguments }}

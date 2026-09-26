@@ -101,8 +101,9 @@ check. For Pi it passively exercises the confined ephemeral configuration and
 RPC readiness path without a model request; local readiness does not prove that
 remote credentials will be accepted. Follow any actionable setup guidance.
 
-Returning to a repository? Use `/tao-catch-me-up` in Pi or Claude for a read-only
-summary of the last two weeks of local history reachable from HEAD. See the
+Returning to a repository? Use `/tao-catch-me-up` in Pi or Claude for a read-only,
+plain-language highlights list of the last two weeks of local history reachable
+from HEAD, grouped by features and fixes with commit references. See the
 [usage guide](docs/usage-guide.md#tao-catch-me-up-period-or-focus--catch-up-on-local-changes)
 for period and focus examples.
 
