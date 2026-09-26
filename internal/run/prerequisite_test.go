@@ -3,7 +3,6 @@ package run
 import (
 	"context"
 	"errors"
-	"io"
 	"strings"
 	"testing"
 
@@ -40,15 +39,19 @@ func mergedPrerequisite(id, sha string) *plan.PlanDetail {
 	return detail
 }
 
+// prerequisiteGitRunner is an ancestry preset, not a separate command dispatcher.
 func prerequisiteGitRunner(ancestors map[string]bool, calls *[]string) CommandRunner {
-	return func(_ context.Context, _ string, name string, args []string, _ io.Writer, _ io.Writer) error {
-		key := name + " " + strings.Join(args, " ")
-		*calls = append(*calls, key)
-		if name == "git" && len(args) >= 6 && args[2] == "merge-base" && args[3] == "--is-ancestor" && ancestors[args[4]+" "+args[5]] {
-			return nil
-		}
-		return errors.New("exit status 1")
+	runner := &scriptedGitRunner{
+		CommandLog:   calls,
+		DefaultError: errors.New("exit status 1"),
+		Errors:       make(map[string]error),
 	}
+	for pair, ancestor := range ancestors {
+		if ancestor {
+			runner.Errors["merge-base --is-ancestor "+pair] = nil
+		}
+	}
+	return runner.Run
 }
 
 func TestCheckRuntimePrerequisitesClassifiesBlockingEvidence(t *testing.T) {

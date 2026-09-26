@@ -8,6 +8,7 @@ import (
 )
 
 func TestBatchAttemptsReviewHistoryPersistsAndClearsExplicitly(t *testing.T) {
+	t.Parallel()
 	store := newTestBatchStore(t)
 	state := testBatchState()
 	state.AggregateReviewSequence = 7
@@ -68,6 +69,7 @@ func TestBatchAttemptsReviewHistoryPersistsAndClearsExplicitly(t *testing.T) {
 }
 
 func TestBatchCandidateProposalAndExactIntegrationMessageRoundTrip(t *testing.T) {
+	t.Parallel()
 	store := newTestBatchStore(t)
 	state := testBatchState()
 	proposal := &plan.ReviewCommitMessage{Subject: "feat(batch): integrate reviewed candidate", Body: "What:\nIntegrate approved work.\n\nWhy:\nReuse review context."}
@@ -93,6 +95,7 @@ func TestBatchCandidateProposalAndExactIntegrationMessageRoundTrip(t *testing.T)
 }
 
 func TestBatchEjectionStatePersistsAndResettablePointersAreExplicit(t *testing.T) {
+	t.Parallel()
 	store := newTestBatchStore(t)
 	state := testBatchState()
 	reason := "aggregate review not converging on a.go (plan plan-a)"
@@ -128,6 +131,7 @@ func TestBatchEjectionStatePersistsAndResettablePointersAreExplicit(t *testing.T
 }
 
 func TestResumeBlockedBatch(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		state BatchState
@@ -185,6 +189,7 @@ func TestResumeBlockedBatch(t *testing.T) {
 }
 
 func TestResumeBlockedBatchLegacyTerminalReasons(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		reason string
@@ -208,6 +213,7 @@ func TestResumeBlockedBatchLegacyTerminalReasons(t *testing.T) {
 }
 
 func TestBatchStateBlockKindPersistsAndLegacyRecordRemainsValid(t *testing.T) {
+	t.Parallel()
 	store := newTestBatchStore(t)
 	legacy := testBatchState()
 	legacy.Status = BatchStatusBlocked
@@ -252,6 +258,7 @@ func TestBatchStateBlockKindPersistsAndLegacyRecordRemainsValid(t *testing.T) {
 }
 
 func TestUnblockBatchClearsBlockMetadata(t *testing.T) {
+	t.Parallel()
 	state := BatchState{Status: BatchStatusReviewing}
 	BlockBatch(&state, BatchBlockKindResumable, "aggregate review failed: timeout")
 
@@ -263,6 +270,7 @@ func TestUnblockBatchClearsBlockMetadata(t *testing.T) {
 }
 
 func TestBlockBatchRecordsExplicitClassification(t *testing.T) {
+	t.Parallel()
 	transient := BatchState{Status: BatchStatusReviewing}
 	BlockBatch(&transient, BatchBlockKindResumable, "aggregate review failed: timeout")
 	if transient.Status != BatchStatusBlocked || transient.BlockKind != BatchBlockKindResumable || transient.ResumeStatus != BatchStatusReviewing {

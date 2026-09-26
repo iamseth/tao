@@ -12,6 +12,7 @@ import (
 )
 
 func TestBatchAgentEventValidatesBoundedVersionedRecords(t *testing.T) {
+	t.Parallel()
 	duration := int64(30)
 	event := BatchAgentEvent{
 		Schema: BatchAgentEventSchema, Type: BatchAgentEventTypeTimeout, BatchID: "batch-a",
@@ -28,6 +29,7 @@ func TestBatchAgentEventValidatesBoundedVersionedRecords(t *testing.T) {
 }
 
 func TestBatchAgentMetricsRoundTripPresence(t *testing.T) {
+	t.Parallel()
 	for _, availability := range []agentmetrics.Availability{"", agentmetrics.Reported, agentmetrics.Partial, agentmetrics.Unavailable} {
 		t.Run(string(availability), func(t *testing.T) {
 			result := agentsession.Result{MetricsAvailability: availability}
@@ -58,6 +60,7 @@ func TestBatchAgentMetricsRoundTripPresence(t *testing.T) {
 }
 
 func TestNewBatchAgentMetricsCopiesProviderNeutralValues(t *testing.T) {
+	t.Parallel()
 	got := newBatchAgentMetrics(agentsession.Result{Metrics: &agent.Metrics{SessionID: "session-a", OutputTokens: 42, Cost: 0.5, ToolCalls: 3}})
 	if got.SessionID != "session-a" || got.OutputTokens != 42 || got.Cost != 0.5 || got.ToolCalls != 3 {
 		t.Fatalf("metrics = %#v", got)

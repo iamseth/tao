@@ -15,6 +15,7 @@ import (
 )
 
 func TestClassifySingleMergeIntentRecoveryDecisionTable(t *testing.T) {
+	t.Parallel()
 	baseIntent := plan.SingleMergeCommitIntent{
 		PlanID: "plan-a", DefaultBranch: "main", DefaultParent: "parent", SourceHead: "source",
 	}
@@ -121,6 +122,7 @@ func resolvedExactEditsFixture(t *testing.T) (realGitWorktree, *plan.PlanDetail,
 // while the separate plan worktree carries changes the durable resolution
 // never authorized.
 func TestInspectSingleMergeIntentRecoveryRefusesUnrelatedPlanWorktreeDirt(t *testing.T) {
+	t.Parallel()
 	fixture, detail, service := resolvedExactEditsFixture(t)
 	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "unrelated.txt"), []byte("scratch\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -152,6 +154,7 @@ func TestInspectSingleMergeIntentRecoveryRefusesUnrelatedPlanWorktreeDirt(t *tes
 }
 
 func TestInspectSingleMergeIntentRecoveryRecognizesExactResolvedEdits(t *testing.T) {
+	t.Parallel()
 	fixture, detail, service := resolvedExactEditsFixture(t)
 	recovery, err := service.InspectSingleMergeIntentRecovery(context.Background(), detail)
 	if err != nil {
@@ -179,6 +182,7 @@ func TestInspectSingleMergeIntentRecoveryRecognizesExactResolvedEdits(t *testing
 }
 
 func TestRestartSingleMergeClearsOnlyObservedStaleIntent(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	parent := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
 	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "source.txt"), []byte("source\n"), 0o600); err != nil {
@@ -225,6 +229,7 @@ func TestRestartSingleMergeClearsOnlyObservedStaleIntent(t *testing.T) {
 }
 
 func TestRestartSingleMergeIsIdempotentAfterSuccessfulClear(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	parent := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
 	runRealGit(t, fixture.worktreePath, "commit", "--allow-empty", "-m", "source work")
@@ -246,6 +251,7 @@ func TestRestartSingleMergeIsIdempotentAfterSuccessfulClear(t *testing.T) {
 }
 
 func TestRestartSingleMergeInterruptedSettlementCannotRecommendOrPerformOrdinaryMerge(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	parent := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
 	runRealGit(t, fixture.worktreePath, "commit", "--allow-empty", "-m", "source work")
@@ -290,6 +296,7 @@ func TestRestartSingleMergeInterruptedSettlementCannotRecommendOrPerformOrdinary
 }
 
 func TestMergeAfterRestartRejectsChangedReviewedHeadStillBasedOnStaleParent(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	parent := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
 	runRealGit(t, fixture.worktreePath, "commit", "--allow-empty", "-m", "source work")
@@ -331,6 +338,7 @@ func TestMergeAfterRestartRejectsChangedReviewedHeadStillBasedOnStaleParent(t *t
 }
 
 func TestRestartSingleMergeRecoversLegacyIntentWithoutResolution(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	parent := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
 	runRealGit(t, fixture.worktreePath, "commit", "--allow-empty", "-m", "legacy source work")
@@ -371,6 +379,7 @@ func TestRestartSingleMergeRecoversLegacyIntentWithoutResolution(t *testing.T) {
 }
 
 func TestRestartSingleMergeConflictStillRequiresRebaseAndReview(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	parent := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
 	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "README.md"), []byte("source\n"), 0o600); err != nil {
@@ -397,6 +406,7 @@ func TestRestartSingleMergeConflictStillRequiresRebaseAndReview(t *testing.T) {
 }
 
 func TestRestartSingleMergeRecordsExactIntendedSquashInsteadOfClearing(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	parent := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
 	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "landed.txt"), []byte("landed\n"), 0o600); err != nil {
@@ -519,6 +529,7 @@ func requireSingleMergeRestartEvent(t *testing.T, events []plan.Event) plan.Even
 }
 
 func TestSingleMergeIntentDriftErrorSupportsIsAndAs(t *testing.T) {
+	t.Parallel()
 	err := error(&SingleMergeIntentDriftError{
 		PlanID: "plan-a", DefaultBranch: "main", DefaultParent: "parent", LiveDefault: "advanced",
 		SourceHead: "source", Phase: SingleMergeIntentPhaseUnresolved,

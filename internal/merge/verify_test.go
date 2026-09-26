@@ -24,6 +24,7 @@ type verifyRunnerCall struct {
 }
 
 func TestBoundMergeVerifyOutputRepairsSplitRuneAtTailBoundary(t *testing.T) {
+	t.Parallel()
 	const suffix = "original trailing bytes"
 	trailing := strings.Repeat("z", mergeVerifyOutputLimit-2-len(suffix)) + suffix
 	output := "x€" + trailing
@@ -47,6 +48,7 @@ func TestBoundMergeVerifyOutputRepairsSplitRuneAtTailBoundary(t *testing.T) {
 }
 
 func TestMergeRunsPassingVerifyAfterSquash(t *testing.T) {
+	t.Parallel()
 	git := mergeVerifyGit()
 	detail := mergeVerifyDetail()
 	var calls []verifyRunnerCall
@@ -139,6 +141,7 @@ func TestMergeDetectsDefaultVerifyCommand(t *testing.T) {
 }
 
 func TestMergeVerifyUsesExplicitIntegrationRoot(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@true\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -204,6 +207,7 @@ func TestMergeSkipsVerifyAndLogsWhenNoBuildSystemDetected(t *testing.T) {
 }
 
 func TestMergeVerifyFailureRollsBackDefault(t *testing.T) {
+	t.Parallel()
 	git := mergeVerifyGit()
 	detail := mergeVerifyDetail()
 	runnerErr := errors.New("tests failed")

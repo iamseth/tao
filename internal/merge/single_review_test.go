@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -272,9 +271,8 @@ func TestSingleIntegrationReviewerPreservesConcurrentSourceRef(t *testing.T) {
 	reviewer := GuardedSingleIntegrationReviewer{Git: git, Recorder: store, Agent: batchSessionAgentFunc(func(context.Context, BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
 		done := make(chan error, 1)
 		go func() {
-			cmd := exec.Command("git", "update-ref", "refs/heads/"+fixture.planBranch, request.Intent.DefaultParent) //nolint:gosec // fixture-owned concurrent ref update.
-			cmd.Dir = fixture.repoRoot
-			done <- cmd.Run()
+			_, err := realGitOutputAllowFailure(t, fixture.repoRoot, "update-ref", "refs/heads/"+fixture.planBranch, request.Intent.DefaultParent)
+			done <- err
 		}()
 		if err := <-done; err != nil {
 			return BatchAgentSessionResult{}, err

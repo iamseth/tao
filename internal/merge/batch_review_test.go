@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -42,6 +41,7 @@ func (s *batchReviewTestStore) WriteAggregateReview(_ string, attempt int, outpu
 }
 
 func TestBatchReviewPromptUsesConfiguredDiffStat(t *testing.T) {
+	t.Parallel()
 	state := BatchState{ID: "batch-1", DefaultStartSHA: "base", IntegrationHead: "head"}
 	git := &fakeGitClient{diffStat: " feature.go | 4 +++-"}
 
@@ -58,6 +58,7 @@ func TestBatchReviewPromptUsesConfiguredDiffStat(t *testing.T) {
 }
 
 func TestBatchReviewDiffStatFailureBlocksResumably(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	state := BatchState{ID: "batch-1", Status: BatchStatusReviewing, RepoRoot: root, DefaultStartSHA: "base", IntegrationHead: "head"}
 	git := &fakeGitClient{
@@ -87,6 +88,7 @@ func TestBatchReviewDiffStatFailureBlocksResumably(t *testing.T) {
 }
 
 func TestFinishAggregateReworkStagesDotBeforePreparedCommit(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "reworked.txt"), []byte("fixed\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -124,6 +126,7 @@ func TestFinishAggregateReworkStagesDotBeforePreparedCommit(t *testing.T) {
 }
 
 func TestFinishAggregateReworkRefusesEmptyStaging(t *testing.T) {
+	t.Parallel()
 	fixture, state, root := batchReviewFixture(t)
 	if err := os.WriteFile(filepath.Join(root, "reworked.txt"), []byte("fixed\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -157,6 +160,7 @@ func TestFinishAggregateReworkRefusesEmptyStaging(t *testing.T) {
 }
 
 func TestBatchReviewApprovePersistsExactEvidenceAndLeavesDefaultAndSourcesAlone(t *testing.T) {
+	t.Parallel()
 	fixture, state, root := batchReviewFixture(t)
 	sourceReview := filepath.Join(t.TempDir(), "review.md")
 	if err := os.WriteFile(sourceReview, []byte("source review"), 0o600); err != nil {
@@ -187,6 +191,7 @@ func TestBatchReviewApprovePersistsExactEvidenceAndLeavesDefaultAndSourcesAlone(
 }
 
 func TestBatchReviewAttributesReviewAndReworkAttemptsFromDurableCounters(t *testing.T) {
+	t.Parallel()
 	fixture, state, root := batchReviewFixture(t)
 	var requests []BatchAgentSessionRequest
 	agent := batchSessionAgentFunc(func(_ context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
@@ -217,6 +222,7 @@ func TestBatchReviewAttributesReviewAndReworkAttemptsFromDurableCounters(t *test
 }
 
 func TestBatchReviewRejectsCandidateSourceRefChangesByEveryAgentSession(t *testing.T) {
+	t.Parallel()
 	addProtectedCandidate := func(t *testing.T, fixture realGitWorktree, state *BatchState) string {
 		t.Helper()
 		branch := "tao/protected-candidate"
@@ -268,6 +274,7 @@ func TestBatchReviewRejectsCandidateSourceRefChangesByEveryAgentSession(t *testi
 }
 
 func TestBatchReviewRejectedAgentsRestoreCleanResumableWorkspace(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		agent func(*testing.T) BatchResolutionAgent
@@ -322,7 +329,7 @@ func TestBatchReviewRejectedAgentsRestoreCleanResumableWorkspace(t *testing.T) {
 			}
 			runRealGit(t, integration.Path, "add", ".")
 			runRealGit(t, integration.Path, "commit", "-m", "feat: combined")
-			head := strings.TrimSpace(batchReviewGitOutput(t, integration.Path, "rev-parse", "HEAD"))
+			head := strings.TrimSpace(realGitOutput(t, integration.Path, "rev-parse", "HEAD"))
 			state.Status = BatchStatusReviewing
 			state.IntegrationHead = head
 			state.Integrations = []BatchIntegration{{PlanID: "plan-a", SourceHead: state.Candidates[0].SourceTip, IntegrationBaseSHA: state.DefaultStartSHA, IntegrationSHA: head, Status: batchIntegrationApplied}}
@@ -332,10 +339,14 @@ func TestBatchReviewRejectedAgentsRestoreCleanResumableWorkspace(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tt.want) || got.State.Status != BatchStatusBlocked {
 				t.Fatalf("expected rejected agent to block: state=%+v err=%v", got.State, err)
 			}
-			if status := batchReviewGitOutput(t, integration.Path, "status", "--porcelain"); status != "" {
+			status, statusErr := realGitOutputAllowFailure(t, integration.Path, "status", "--porcelain")
+			if statusErr != nil {
+				t.Fatal(statusErr)
+			}
+			if status != "" {
 				t.Fatalf("rejected agent left integration workspace dirty: %q", status)
 			}
-			if current := strings.TrimSpace(batchReviewGitOutput(t, integration.Path, "rev-parse", "HEAD")); current != head {
+			if current := strings.TrimSpace(realGitOutput(t, integration.Path, "rev-parse", "HEAD")); current != head {
 				t.Fatalf("rejected agent left integration at %s, want %s", current, head)
 			}
 			if err := owner.ValidateResume(context.Background(), got.State); err != nil {
@@ -363,6 +374,7 @@ func TestBatchReviewRejectedAgentsRestoreCleanResumableWorkspace(t *testing.T) {
 }
 
 func TestBatchReviewMalformedOrCommentStopsSafely(t *testing.T) {
+	t.Parallel()
 	for _, output := range []string{"malformed output", reviewJSON("comment", "risk", "")} {
 		t.Run(output[:4], func(t *testing.T) {
 			fixture, state, root := batchReviewFixture(t)
@@ -377,6 +389,7 @@ func TestBatchReviewMalformedOrCommentStopsSafely(t *testing.T) {
 }
 
 func TestBatchReviewMalformedAggregateProposalRestoresWithoutIntentOrStaging(t *testing.T) {
+	t.Parallel()
 	valid := plan.ReviewCommitMessage{
 		Subject: "fix(batch): resolve aggregate findings",
 		Body:    "What:\nResolve the aggregate review findings.\n\nWhy:\nKeep the combined batch correct.",
@@ -408,7 +421,11 @@ func TestBatchReviewMalformedAggregateProposalRestoresWithoutIntentOrStaging(t *
 			if got.State.Review == nil || got.State.Review.Status == "applying" || got.State.Review.CommitMessage != "" || len(got.State.Review.ResolutionPaths) != 0 {
 				t.Fatalf("malformed proposal created commit intent: %+v", got.State.Review)
 			}
-			if status := batchReviewGitOutput(t, root, "status", "--porcelain"); status != "" {
+			status, statusErr := realGitOutputAllowFailure(t, root, "status", "--porcelain")
+			if statusErr != nil {
+				t.Fatal(statusErr)
+			}
+			if status != "" {
 				t.Fatalf("malformed proposal left workspace dirty or staged: %q", status)
 			}
 			for _, persisted := range store.states {
@@ -421,6 +438,7 @@ func TestBatchReviewMalformedAggregateProposalRestoresWithoutIntentOrStaging(t *
 }
 
 func TestBatchReviewReworkPersistsInterruptionStateAndCreatesResolutionCommit(t *testing.T) {
+	t.Parallel()
 	fixture, state, root := batchReviewFixture(t)
 	store := &batchReviewTestStore{dir: t.TempDir()}
 	calls := 0
@@ -462,7 +480,7 @@ func TestBatchReviewReworkPersistsInterruptionStateAndCreatesResolutionCommit(t 
 	if drifts := validatePersistedProgress(*pending); len(drifts) != 0 {
 		t.Fatalf("interrupted post-rework state cannot resume: %+v", drifts)
 	}
-	message := strings.TrimSpace(batchReviewGitOutput(t, root, "log", "-1", "--format=%B"))
+	message := strings.TrimSpace(realGitOutput(t, root, "log", "-1", "--format=%B"))
 	expected, messageErr := aggregateProposedResolutionCommitMessage(plan.ReviewCommitMessage{
 		Subject: "fix(batch): resolve candidate integration",
 		Body:    "What:\nResolve the candidate changes in the integration worktree.\n\nWhy:\nPreserve the candidate intent in the combined batch.",
@@ -487,6 +505,7 @@ func TestBatchReviewReworkPersistsInterruptionStateAndCreatesResolutionCommit(t 
 }
 
 func TestAggregateReworkContentFingerprintFramesRegularFileDigest(t *testing.T) {
+	t.Parallel()
 	paths := []string{"first.txt", "next.txt"}
 	var nextFileEncoding strings.Builder
 	nextFileEncoding.WriteByte(0)
@@ -525,6 +544,7 @@ func TestAggregateReworkContentFingerprintFramesRegularFileDigest(t *testing.T) 
 }
 
 func TestBatchReviewBlocksWhenAggregateReworkContentDriftsAfterIntent(t *testing.T) {
+	t.Parallel()
 	fixture, state, root := batchReviewFixture(t)
 	store := &batchReviewTestStore{dir: t.TempDir()}
 	persistedFingerprint := ""
@@ -555,15 +575,20 @@ func TestBatchReviewBlocksWhenAggregateReworkContentDriftsAfterIntent(t *testing
 	if calls != 2 || got.State.Review == nil || got.State.Review.Status != "reworking" || got.State.Review.CommitMessage != "" || len(got.State.Review.ResolutionPaths) != 0 || got.State.Review.ResolutionFingerprint != "" {
 		t.Fatalf("drifted intent was not reset for a fresh proposal: calls=%d review=%+v", calls, got.State.Review)
 	}
-	if status := batchReviewGitOutput(t, root, "status", "--porcelain"); status != "" {
+	status, statusErr := realGitOutputAllowFailure(t, root, "status", "--porcelain")
+	if statusErr != nil {
+		t.Fatal(statusErr)
+	}
+	if status != "" {
 		t.Fatalf("drifted aggregate edits were not restored: %q", status)
 	}
-	if head := strings.TrimSpace(batchReviewGitOutput(t, root, "rev-parse", "HEAD")); head != state.IntegrationHead {
+	if head := strings.TrimSpace(realGitOutput(t, root, "rev-parse", "HEAD")); head != state.IntegrationHead {
 		t.Fatalf("drifted content was committed under stale intent: head=%s want=%s", head, state.IntegrationHead)
 	}
 }
 
 func TestBatchReviewRecoveryReproposesSamePathAfterAggregateContentDrift(t *testing.T) {
+	t.Parallel()
 	fixture, state, root := batchReviewFixture(t)
 	state.Attempts.AggregateRework = 1
 	oldProposal := plan.ReviewCommitMessage{
@@ -603,7 +628,11 @@ func TestBatchReviewRecoveryReproposesSamePathAfterAggregateContentDrift(t *test
 			if !strings.Contains(prompt, "Candidate: aggregate-review") {
 				t.Fatalf("recovery did not request a fresh aggregate proposal:\n%s", prompt)
 			}
-			if status := batchReviewGitOutput(t, agentRoot, "status", "--porcelain"); status != "" {
+			status, statusErr := realGitOutputAllowFailure(t, agentRoot, "status", "--porcelain")
+			if statusErr != nil {
+				t.Fatal(statusErr)
+			}
+			if status != "" {
 				t.Fatalf("recovery did not restore drifted edits before reproposal: %q", status)
 			}
 			return batchResolutionJSONWithProposal("fresh fix", freshProposal), os.WriteFile(filepath.Join(agentRoot, path), []byte("fresh proposal\n"), 0o600)
@@ -614,7 +643,7 @@ func TestBatchReviewRecoveryReproposesSamePathAfterAggregateContentDrift(t *test
 	if err != nil || got.State.Status != BatchStatusReadyToLand || calls != 2 {
 		t.Fatalf("drift recovery did not finish with a fresh proposal: calls=%d state=%+v err=%v", calls, got.State, err)
 	}
-	message := strings.TrimSpace(batchReviewGitOutput(t, root, "log", "-1", "--format=%B"))
+	message := strings.TrimSpace(realGitOutput(t, root, "log", "-1", "--format=%B"))
 	if !strings.HasPrefix(message, freshProposal.Subject+"\n\n") || strings.Contains(message, oldProposal.Subject) {
 		t.Fatalf("recovery reused stale proposal instead of fresh proposal: %q", message)
 	}
@@ -625,6 +654,7 @@ func TestBatchReviewRecoveryReproposesSamePathAfterAggregateContentDrift(t *test
 }
 
 func TestBatchReviewAggregateReworkConflictMarkerConfinement(t *testing.T) {
+	t.Parallel()
 	markerContent := []byte("before\n" + strings.Repeat("<", 7) + " HEAD\nours\n=======\ntheirs\n" + strings.Repeat(">", 7) + " branch\nafter\n")
 
 	t.Run("changed file blocks", func(t *testing.T) {
@@ -655,10 +685,14 @@ func TestBatchReviewAggregateReworkConflictMarkerConfinement(t *testing.T) {
 				t.Fatalf("block reason %q does not name %q", got.State.BlockedReason, want)
 			}
 		}
-		if status := batchReviewGitOutput(t, root, "status", "--porcelain"); status != "" {
+		status, statusErr := realGitOutputAllowFailure(t, root, "status", "--porcelain")
+		if statusErr != nil {
+			t.Fatal(statusErr)
+		}
+		if status != "" {
 			t.Fatalf("blocked marker edit was not restored: %q", status)
 		}
-		if head := strings.TrimSpace(batchReviewGitOutput(t, root, "rev-parse", "HEAD")); head != originalHead {
+		if head := strings.TrimSpace(realGitOutput(t, root, "rev-parse", "HEAD")); head != originalHead {
 			t.Fatalf("blocked marker edit moved HEAD to %s, want %s", head, originalHead)
 		}
 	})
@@ -694,10 +728,14 @@ func TestBatchReviewAggregateReworkConflictMarkerConfinement(t *testing.T) {
 				t.Fatalf("block reason %q does not name %q", got.State.BlockedReason, want)
 			}
 		}
-		if status := batchReviewGitOutput(t, root, "status", "--porcelain"); status != "" {
+		status, statusErr := realGitOutputAllowFailure(t, root, "status", "--porcelain")
+		if statusErr != nil {
+			t.Fatal(statusErr)
+		}
+		if status != "" {
 			t.Fatalf("blocked nested marker edit was not restored: %q", status)
 		}
-		if head := strings.TrimSpace(batchReviewGitOutput(t, root, "rev-parse", "HEAD")); head != originalHead {
+		if head := strings.TrimSpace(realGitOutput(t, root, "rev-parse", "HEAD")); head != originalHead {
 			t.Fatalf("blocked nested marker edit moved HEAD to %s, want %s", head, originalHead)
 		}
 	})
@@ -710,7 +748,7 @@ func TestBatchReviewAggregateReworkConflictMarkerConfinement(t *testing.T) {
 		}
 		runRealGit(t, root, "add", "unchanged-marker.txt")
 		runRealGit(t, root, "commit", "-m", "test: add unchanged marker fixture")
-		fixtureHead := strings.TrimSpace(batchReviewGitOutput(t, root, "rev-parse", "HEAD"))
+		fixtureHead := strings.TrimSpace(realGitOutput(t, root, "rev-parse", "HEAD"))
 		state.IntegrationHead = fixtureHead
 		state.Candidates[0].SourceTip = fixtureHead
 		state.Candidates[0].ReviewHead = fixtureHead
@@ -743,6 +781,7 @@ func TestBatchReviewAggregateReworkConflictMarkerConfinement(t *testing.T) {
 }
 
 func TestBatchReviewResumeDoesNotCountInterruptedMetadataAsAnotherConvergenceRound(t *testing.T) {
+	t.Parallel()
 	fixture, state, root := batchEjectTestFixture(t)
 	artifactDir := t.TempDir()
 	interruptedStore := &batchReviewTestStore{dir: artifactDir}
@@ -799,6 +838,7 @@ func TestBatchReviewResumeDoesNotCountInterruptedMetadataAsAnotherConvergenceRou
 }
 
 func TestBatchReviewResumeAfterEquivalentFingerprintMetadataRemainsStalled(t *testing.T) {
+	t.Parallel()
 	fixture, state, root := batchEjectTestFixture(t)
 	store := &batchReviewTestStore{dir: t.TempDir()}
 	interruption := errors.New("interrupted after equivalent review metadata")
@@ -840,6 +880,7 @@ func TestBatchReviewResumeAfterEquivalentFingerprintMetadataRemainsStalled(t *te
 }
 
 func TestBatchReviewResumesAggregateReworkAfterCommitTransitionFailure(t *testing.T) {
+	t.Parallel()
 	fixture, state, root := batchReviewFixture(t)
 	store := &batchReviewTestStore{dir: t.TempDir()}
 	store.failAt = 6
@@ -860,7 +901,7 @@ func TestBatchReviewResumesAggregateReworkAfterCommitTransitionFailure(t *testin
 		t.Fatalf("expected post-commit transition failure, got %v", err)
 	}
 	intent := store.states[len(store.states)-1]
-	if intent.Review == nil || intent.Review.Status != "applying" || intent.IntegrationHead == strings.TrimSpace(batchReviewGitOutput(t, root, "rev-parse", "HEAD")) {
+	if intent.Review == nil || intent.Review.Status != "applying" || intent.IntegrationHead == strings.TrimSpace(realGitOutput(t, root, "rev-parse", "HEAD")) {
 		t.Fatalf("missing durable aggregate commit intent: %+v", intent)
 	}
 
@@ -873,12 +914,13 @@ func TestBatchReviewResumesAggregateReworkAfterCommitTransitionFailure(t *testin
 	if calls != 3 || got.State.Status != BatchStatusReadyToLand || len(got.State.Review.ResolutionSHAs) != 1 {
 		t.Fatalf("resume did not settle before review: calls=%d state=%+v", calls, got.State)
 	}
-	if first := resumeStore.states[0]; first.Review == nil || first.Review.Status != "pending" || first.IntegrationHead != strings.TrimSpace(batchReviewGitOutput(t, root, "rev-parse", "HEAD")) {
+	if first := resumeStore.states[0]; first.Review == nil || first.Review.Status != "pending" || first.IntegrationHead != strings.TrimSpace(realGitOutput(t, root, "rev-parse", "HEAD")) {
 		t.Fatalf("first resume transition did not settle commit: %+v", first)
 	}
 }
 
 func TestBatchReviewRecoversPersistedAggregateCommitIntent(t *testing.T) {
+	t.Parallel()
 	fixture, state, root := batchReviewFixture(t)
 	parent := state.IntegrationHead
 	state.Attempts.AggregateRework = 1
@@ -888,7 +930,7 @@ func TestBatchReviewRecoversPersistedAggregateCommitIntent(t *testing.T) {
 	}
 	runRealGit(t, root, "add", ".")
 	runRealGit(t, root, "commit", "-m", aggregateResolutionCommitMessage(state.ID, 1))
-	committedHead := strings.TrimSpace(batchReviewGitOutput(t, root, "rev-parse", "HEAD"))
+	committedHead := strings.TrimSpace(realGitOutput(t, root, "rev-parse", "HEAD"))
 
 	store := &batchReviewTestStore{dir: t.TempDir()}
 	got, err := (BatchAggregateReviewer{
@@ -909,6 +951,7 @@ func TestBatchReviewRecoversPersistedAggregateCommitIntent(t *testing.T) {
 }
 
 func TestBatchReviewRecoversInterruptedAggregateReworkBeforeRetry(t *testing.T) {
+	t.Parallel()
 	for _, status := range []string{"reworking", "applying"} {
 		t.Run(status, func(t *testing.T) {
 			_, state, root := batchReviewFixture(t)
@@ -928,10 +971,14 @@ func TestBatchReviewRecoversInterruptedAggregateReworkBeforeRetry(t *testing.T) 
 			agent := batchReviewAgentFunc(func(_ context.Context, agentRoot, prompt string) (string, error) {
 				calls++
 				if calls == 1 {
-					if got := batchReviewGitOutput(t, agentRoot, "status", "--porcelain"); got != "" {
+					got, statusErr := realGitOutputAllowFailure(t, agentRoot, "status", "--porcelain")
+					if statusErr != nil {
+						t.Fatal(statusErr)
+					}
+					if got != "" {
 						t.Fatalf("interrupted edits were not removed before retry: %q", got)
 					}
-					if got := strings.TrimSpace(batchReviewGitOutput(t, agentRoot, "rev-parse", "HEAD")); got != state.IntegrationHead {
+					if got := strings.TrimSpace(realGitOutput(t, agentRoot, "rev-parse", "HEAD")); got != state.IntegrationHead {
 						t.Fatalf("retry head = %s, want recorded %s", got, state.IntegrationHead)
 					}
 					if !strings.Contains(prompt, "Candidate: aggregate-review") {
@@ -950,6 +997,7 @@ func TestBatchReviewRecoversInterruptedAggregateReworkBeforeRetry(t *testing.T) 
 }
 
 func TestBatchReviewRecoversAggregateReworkCommitFailure(t *testing.T) {
+	t.Parallel()
 	_, state, root := batchReviewFixture(t)
 	hooks := t.TempDir()
 	hook := filepath.Join(hooks, "pre-commit")
@@ -970,7 +1018,11 @@ func TestBatchReviewRecoversAggregateReworkCommitFailure(t *testing.T) {
 			return batchResolutionJSON("first fix"), os.WriteFile(filepath.Join(agentRoot, "failed.txt"), []byte("failed\n"), 0o600)
 		}
 		if calls == 3 {
-			if got := batchReviewGitOutput(t, agentRoot, "status", "--porcelain"); got != "" {
+			got, statusErr := realGitOutputAllowFailure(t, agentRoot, "status", "--porcelain")
+			if statusErr != nil {
+				t.Fatal(statusErr)
+			}
+			if got != "" {
 				t.Fatalf("recovered commit left workspace dirty before review: %q", got)
 			}
 			return reviewJSON("approve", "green", ""), nil
@@ -996,6 +1048,7 @@ func TestBatchReviewRecoversAggregateReworkCommitFailure(t *testing.T) {
 }
 
 func TestAggregateReviewConvergenceSequences(t *testing.T) {
+	t.Parallel()
 	finding := func(files ...string) []plan.ReviewFinding {
 		result := make([]plan.ReviewFinding, len(files))
 		for i, file := range files {
@@ -1075,6 +1128,7 @@ func (g aggregateReviewFilesGit) ChangedFiles(_ context.Context, revspec string)
 }
 
 func TestAttributeAggregateReviewFilesRequiresExactlyOneCandidate(t *testing.T) {
+	t.Parallel()
 	candidates := []BatchCandidate{
 		{PlanID: "plan-a", ReviewBase: "base-a", SourceTip: "tip-a"},
 		{PlanID: "plan-b", ReviewBase: "base-b", SourceTip: "tip-b"},
@@ -1097,6 +1151,7 @@ func TestAttributeAggregateReviewFilesRequiresExactlyOneCandidate(t *testing.T) 
 }
 
 func TestBatchReviewAutoEjectResolvesReducedSetDeferralAndApproves(t *testing.T) {
+	t.Parallel()
 	fixture, state, root := batchEjectTestFixture(t)
 	store := &batchReviewTestStore{dir: t.TempDir()}
 	ejectedRef := "refs/heads/" + fixture.planBranch
@@ -1176,6 +1231,7 @@ func TestBatchReviewAutoEjectResolvesReducedSetDeferralAndApproves(t *testing.T)
 }
 
 func TestBatchReviewAutoEjectBlocksAttributedNonConvergenceForOnlyCandidate(t *testing.T) {
+	t.Parallel()
 	fixture, state, root := batchReviewFixture(t)
 	store := &batchReviewTestStore{dir: t.TempDir()}
 	reviewCalls := 0
@@ -1207,6 +1263,7 @@ func TestBatchReviewAutoEjectBlocksAttributedNonConvergenceForOnlyCandidate(t *t
 }
 
 func TestBatchReviewAutoEjectBlocksAttributedNonConvergenceAfterCompletedEjection(t *testing.T) {
+	t.Parallel()
 	fixture, state, root := batchEjectTestFixture(t)
 	store := &batchReviewTestStore{dir: t.TempDir()}
 	planCBranch := "tao/plan-c"
@@ -1266,6 +1323,7 @@ func TestBatchReviewAutoEjectBlocksAttributedNonConvergenceAfterCompletedEjectio
 }
 
 func TestBatchReviewResumesPendingEjectBeforeReviewing(t *testing.T) {
+	t.Parallel()
 	fixture, state, root := batchEjectTestFixture(t)
 	reason := "aggregate review not converging on plan-a.txt (plan plan-a)"
 	interruptedStore := &recordingBatchTransitionStore{failAt: 2}
@@ -1290,6 +1348,7 @@ func TestBatchReviewResumesPendingEjectBeforeReviewing(t *testing.T) {
 }
 
 func TestBatchReviewAutoEjectDoesNotEjectNonAttributableNonConvergence(t *testing.T) {
+	t.Parallel()
 	fixture, state, root := batchEjectTestFixture(t)
 	store := &batchReviewTestStore{dir: t.TempDir()}
 	reviewCalls := 0
@@ -1316,6 +1375,7 @@ func TestBatchReviewAutoEjectDoesNotEjectNonAttributableNonConvergence(t *testin
 }
 
 func TestBatchReviewAutoEjectDoesNotAttributeCountStallAcrossCandidates(t *testing.T) {
+	t.Parallel()
 	fixture, state, root := batchEjectTestFixture(t)
 	store := &batchReviewTestStore{dir: t.TempDir()}
 	reviewCalls := 0
@@ -1345,6 +1405,7 @@ func TestBatchReviewAutoEjectDoesNotAttributeCountStallAcrossCandidates(t *testi
 }
 
 func TestBatchReviewAutoEjectDoesNotAttributeCountStallWithMissingFile(t *testing.T) {
+	t.Parallel()
 	fixture, state, root := batchEjectTestFixture(t)
 	store := &batchReviewTestStore{dir: t.TempDir()}
 	reviewCalls := 0
@@ -1430,6 +1491,7 @@ func TestBatchReviewEquivalentFindingsAndCapExhaustionStop(t *testing.T) {
 }
 
 func TestBatchReviewNonConvergencePrecedesAttemptCapAndAutoEjects(t *testing.T) {
+	t.Parallel()
 	fixture, state, root := batchEjectTestFixture(t)
 	store := &batchReviewTestStore{dir: t.TempDir()}
 	reviewCalls := 0
@@ -1462,6 +1524,7 @@ func TestBatchReviewNonConvergencePrecedesAttemptCapAndAutoEjects(t *testing.T) 
 }
 
 func TestBatchReviewVerificationFailureAfterReworkAndReviewTimeout(t *testing.T) {
+	t.Parallel()
 	t.Run("verification after rework", func(t *testing.T) {
 		fixture, state, root := batchReviewFixture(t)
 		store := &batchReviewTestStore{dir: t.TempDir()}
@@ -1520,6 +1583,7 @@ func TestBatchReviewVerificationFailureAfterReworkAndReviewTimeout(t *testing.T)
 }
 
 func TestBatchReviewArtifactPersistenceFailureStopsBeforeRework(t *testing.T) {
+	t.Parallel()
 	fixture, state, root := batchReviewFixture(t)
 	store := &batchReviewTestStore{dir: t.TempDir(), artifactFail: true}
 	got, err := (BatchAggregateReviewer{Store: store, Service: NewService(fixture.repoRoot, nil), Agent: batchReviewAgentFunc(func(context.Context, string, string) (string, error) {
@@ -1538,8 +1602,8 @@ func batchReviewFixture(t *testing.T) (realGitWorktree, BatchState, string) {
 	}
 	runRealGit(t, fixture.worktreePath, "add", ".")
 	runRealGit(t, fixture.worktreePath, "commit", "-m", "feat: combined")
-	base := strings.TrimSpace(batchReviewGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch))
-	head := strings.TrimSpace(batchReviewGitOutput(t, fixture.worktreePath, "rev-parse", "HEAD"))
+	base := strings.TrimSpace(realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch))
+	head := strings.TrimSpace(realGitOutput(t, fixture.worktreePath, "rev-parse", "HEAD"))
 	state := BatchState{Schema: BatchStateSchema, ID: "batch-review", Status: BatchStatusReviewing, RepoRoot: fixture.repoRoot, DefaultBranch: fixture.defaultBranch, DefaultStartSHA: base, IntegrationHead: head, ChosenOrder: []string{"plan-a"}, Candidates: []BatchCandidate{{PlanID: "plan-a", Branch: fixture.planBranch, SourceTip: head, ReviewBase: base, ReviewHead: head, ReviewSummary: "approved source"}}, Integrations: []BatchIntegration{{PlanID: "plan-a", SourceHead: head, IntegrationBaseSHA: base, IntegrationSHA: head, Status: batchIntegrationApplied}}}
 	return fixture, state, fixture.worktreePath
 }
@@ -1552,20 +1616,9 @@ func reviewJSON(verdict, summary, message string) string {
 	return "review\n```tao-review-json\n{\"verdict\":\"" + verdict + "\",\"summary\":\"" + summary + "\",\"findings\":" + findings + "}\n```"
 }
 
-func batchReviewGitOutput(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	cmd := exec.Command("git", args...) //nolint:gosec // test invokes Git with test-controlled arguments.
-	cmd.Dir = dir
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, output)
-	}
-	return string(output)
-}
-
 func assertRef(t *testing.T, dir, ref, want string) {
 	t.Helper()
-	if got := strings.TrimSpace(batchReviewGitOutput(t, dir, "rev-parse", ref)); got != want {
+	if got := strings.TrimSpace(realGitOutput(t, dir, "rev-parse", ref)); got != want {
 		t.Fatalf("%s moved: got %s want %s", ref, got, want)
 	}
 }

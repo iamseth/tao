@@ -1005,10 +1005,13 @@ func TestReviewLockReloadsAuthoritativePlanDetail(t *testing.T) {
 		reviewedDetail = run.Detail
 		return plan.PlanReview{Verdict: plan.ReviewVerdictComment}, nil
 	})
-	service := NewService(repo, io.Discard, Options{
-		ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi}},
-		RunDependencies: RunDependencies{ReviewCreator: creator, CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error { return nil }},
-	})
+	service := NewService(repo, io.Discard, testOptions(
+		RunDependencies{ReviewCreator: creator, CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error { return nil }},
+		func(options *Options) {
+			options.ExecutionMode = ExecutionModeCurrent
+			options.Agent = AgentPi
+		},
+	))
 
 	if _, err := service.Review(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi}}); err != nil {
 		t.Fatal(err)
@@ -1031,9 +1034,8 @@ func TestReviewAndResumeRejectAbandonedPlanBeforeVerificationOrAgent(t *testing.
 			commandCalled := false
 			creatorCalled := false
 			var out bytes.Buffer
-			service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail, detail}}, &out, Options{
-				ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi}},
-				RunDependencies: RunDependencies{
+			service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail, detail}}, &out, testOptions(
+				RunDependencies{
 					CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error {
 						commandCalled = true
 						return nil
@@ -1043,7 +1045,11 @@ func TestReviewAndResumeRejectAbandonedPlanBeforeVerificationOrAgent(t *testing.
 						return plan.PlanReview{}, nil
 					}),
 				},
-			})
+				func(options *Options) {
+					options.ExecutionMode = ExecutionModeCurrent
+					options.Agent = AgentPi
+				},
+			))
 			request := Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi}}
 			var err error
 			if operation == "review" {
@@ -1100,9 +1106,8 @@ func TestReviewRejectsPendingSliceWorkBeforeVerificationOrAgent(t *testing.T) {
 			commandCalled := false
 			creatorCalled := false
 			repo := &memoryRunRepository{details: []*plan.PlanDetail{tt.detail, tt.detail}}
-			service := NewService(repo, &out, Options{
-				ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi}},
-				RunDependencies: RunDependencies{
+			service := NewService(repo, &out, testOptions(
+				RunDependencies{
 					CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error {
 						commandCalled = true
 						return nil
@@ -1112,7 +1117,11 @@ func TestReviewRejectsPendingSliceWorkBeforeVerificationOrAgent(t *testing.T) {
 						return plan.PlanReview{}, nil
 					}),
 				},
-			})
+				func(options *Options) {
+					options.ExecutionMode = ExecutionModeCurrent
+					options.Agent = AgentPi
+				},
+			))
 
 			_, err := service.Review(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi}})
 			if err == nil || !strings.Contains(err.Error(), tt.wantSlice) || !strings.Contains(err.Error(), "tao run plan-a") {
@@ -1139,9 +1148,8 @@ func TestReviewSettledWorkRunsVerificationAndAgent(t *testing.T) {
 	commandCalled := false
 	creatorCalled := false
 	repo := &memoryRunRepository{details: []*plan.PlanDetail{detail, detail}}
-	service := NewService(repo, io.Discard, Options{
-		ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi}},
-		RunDependencies: RunDependencies{
+	service := NewService(repo, io.Discard, testOptions(
+		RunDependencies{
 			CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error {
 				commandCalled = true
 				return nil
@@ -1151,7 +1159,11 @@ func TestReviewSettledWorkRunsVerificationAndAgent(t *testing.T) {
 				return plan.PlanReview{Verdict: plan.ReviewVerdictApprove}, nil
 			}),
 		},
-	})
+		func(options *Options) {
+			options.ExecutionMode = ExecutionModeCurrent
+			options.Agent = AgentPi
+		},
+	))
 
 	if _, err := service.Review(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi}}); err != nil {
 		t.Fatal(err)

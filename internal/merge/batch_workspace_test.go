@@ -13,6 +13,7 @@ import (
 )
 
 func TestBatchWorkspaceCreatesAndReusesIsolatedIntegrationWorktree(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	state := batchWorkspaceState(t, fixture)
 	batchesDir := filepath.Join(t.TempDir(), "merge-batches")
@@ -46,6 +47,7 @@ func TestBatchWorkspaceCreatesAndReusesIsolatedIntegrationWorktree(t *testing.T)
 }
 
 func TestBatchWorkspaceResumeAcceptsRecoverableDirtyResolutionPhases(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name      string
 		status    string
@@ -84,6 +86,7 @@ func TestBatchWorkspaceResumeAcceptsRecoverableDirtyResolutionPhases(t *testing.
 }
 
 func TestBatchWorkspaceResumeAcceptsRecoverableDirtyAggregateReworkPhases(t *testing.T) {
+	t.Parallel()
 	for _, reviewStatus := range []string{"reworking", "applying"} {
 		t.Run(reviewStatus, func(t *testing.T) {
 			fixture := newRealGitWorktree(t)
@@ -116,6 +119,7 @@ func TestBatchWorkspaceResumeAcceptsRecoverableDirtyAggregateReworkPhases(t *tes
 }
 
 func TestBatchWorkspaceResumeAcceptsExactApplyingTaoCommit(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "feature.txt"), []byte("feature\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -144,6 +148,7 @@ func TestBatchWorkspaceResumeAcceptsExactApplyingTaoCommit(t *testing.T) {
 }
 
 func TestBatchWorkspaceResumeRequiresExactPersistedApplyingMessage(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "feature.txt"), []byte("feature\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -177,6 +182,7 @@ func TestBatchWorkspaceResumeRequiresExactPersistedApplyingMessage(t *testing.T)
 }
 
 func TestBatchWorkspaceResumeAcceptsExactApplyingAggregateReworkCommit(t *testing.T) {
+	t.Parallel()
 	for _, legacy := range []bool{false, true} {
 		name := "proposed"
 		if legacy {
@@ -228,6 +234,7 @@ func TestBatchWorkspaceResumeAcceptsExactApplyingAggregateReworkCommit(t *testin
 }
 
 func TestBatchWorkspaceOwnershipContendsAcrossInstances(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	state := batchWorkspaceState(t, fixture)
 	batchesDir := filepath.Join(t.TempDir(), "merge-batches")
@@ -244,6 +251,7 @@ func TestBatchWorkspaceOwnershipContendsAcrossInstances(t *testing.T) {
 }
 
 func TestBatchWorkspaceResumeReportsAllDefaultSourceAndCleanlinessDrift(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	state := batchWorkspaceState(t, fixture)
 	owner, err := NewBatchWorkspace(fixture.repoRoot, filepath.Join(t.TempDir(), "merge-batches"), nil)
@@ -290,6 +298,7 @@ func TestBatchWorkspaceResumeReportsAllDefaultSourceAndCleanlinessDrift(t *testi
 }
 
 func TestBatchWorkspaceResumeClassifiesDriftedPreLandingBatchAsRestartable(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	state := batchWorkspaceState(t, fixture)
 	owner, err := NewBatchWorkspace(fixture.repoRoot, filepath.Join(t.TempDir(), "merge-batches"), nil)
@@ -329,6 +338,7 @@ func TestBatchWorkspaceResumeClassifiesDriftedPreLandingBatchAsRestartable(t *te
 }
 
 func TestBatchWorkspaceResumeDoesNotClassifyLandedBatchAsRestartable(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		mutate func(*BatchState)
@@ -360,6 +370,7 @@ func TestBatchWorkspaceResumeDoesNotClassifyLandedBatchAsRestartable(t *testing.
 }
 
 func TestBatchWorkspaceResumeRecordsUnknownRestartVerdictOnProbeFailure(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	state := batchWorkspaceState(t, fixture)
 	state.DefaultBranch = "missing-default"
@@ -380,6 +391,7 @@ func TestBatchWorkspaceResumeRecordsUnknownRestartVerdictOnProbeFailure(t *testi
 }
 
 func TestBatchWorkspaceRestartRemovesOnlyBatchResources(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	state := batchWorkspaceState(t, fixture)
 	batchesDir := filepath.Join(t.TempDir(), "merge-batches")
@@ -425,6 +437,7 @@ func TestBatchWorkspaceRestartRemovesOnlyBatchResources(t *testing.T) {
 }
 
 func TestBatchWorkspaceRestartRefusesAfterLanding(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	state := batchWorkspaceState(t, fixture)
 	state.Status = BatchStatusLanded
@@ -435,6 +448,7 @@ func TestBatchWorkspaceRestartRefusesAfterLanding(t *testing.T) {
 }
 
 func TestBatchWorkspaceRestartRefusesWhenDefaultReachedLandingIntentBeforeLandedState(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	state := batchWorkspaceState(t, fixture)
 	owner, err := NewBatchWorkspace(fixture.repoRoot, filepath.Join(t.TempDir(), "merge-batches"), nil)

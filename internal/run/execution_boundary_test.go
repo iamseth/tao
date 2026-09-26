@@ -238,10 +238,7 @@ func TestExecutionBoundarySetupSkipsPreparationEffectsForTerminalActions(t *test
 			mutate: func(*plan.PlanDetail) {},
 			runner: func(t *testing.T, root string, gitCalls *int) CommandRunner {
 				base := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return "" }, "other", "base")
-				return func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
-					*gitCalls++
-					return base(ctx, cwd, name, args, stdout, stderr)
-				}
+				return (&scriptedGitRunner{CallCount: gitCalls, Fallback: base}).Run
 			},
 		},
 		{
@@ -257,10 +254,7 @@ func TestExecutionBoundarySetupSkipsPreparationEffectsForTerminalActions(t *test
 			},
 			runner: func(t *testing.T, root string, gitCalls *int) CommandRunner {
 				base := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return " M manual.go\n" }, "tao/plan-a", "base")
-				return func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
-					*gitCalls++
-					return base(ctx, cwd, name, args, stdout, stderr)
-				}
+				return (&scriptedGitRunner{CallCount: gitCalls, Fallback: base}).Run
 			},
 		},
 		{
@@ -272,10 +266,10 @@ func TestExecutionBoundarySetupSkipsPreparationEffectsForTerminalActions(t *test
 				detail.Slices.Slices[0].CommitIntent = &plan.SliceCommitIntent{Policy: CommitPolicySlice.String()}
 			},
 			runner: func(_ *testing.T, _ string, gitCalls *int) CommandRunner {
-				return func(context.Context, string, string, []string, io.Writer, io.Writer) error {
-					*gitCalls++
-					return errors.New("post-intent recovery must not inspect Git")
-				}
+				return (&scriptedGitRunner{
+					CallCount:    gitCalls,
+					DefaultError: errors.New("post-intent recovery must not inspect Git"),
+				}).Run
 			},
 		},
 	}

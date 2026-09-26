@@ -12,6 +12,7 @@ import (
 )
 
 func TestBatchStoreAppendsAgentEventsOutsideStateAndTransitions(t *testing.T) {
+	t.Parallel()
 	store := newTestBatchStore(t)
 	at := time.Date(2026, 8, 10, 20, 0, 0, 0, time.UTC)
 	for attempt := 1; attempt <= 2; attempt++ {
@@ -54,6 +55,7 @@ func TestBatchStoreAppendsAgentEventsOutsideStateAndTransitions(t *testing.T) {
 }
 
 func TestBatchStoreSynchronizesConcurrentAgentEventAppends(t *testing.T) {
+	t.Parallel()
 	store := newTestBatchStore(t)
 	const count = 20
 	var wg sync.WaitGroup
@@ -82,6 +84,7 @@ func TestBatchStoreSynchronizesConcurrentAgentEventAppends(t *testing.T) {
 }
 
 func TestBatchStoreRoundTripPreservesDurableState(t *testing.T) {
+	t.Parallel()
 	store := newTestBatchStore(t)
 	want := testBatchState()
 	want.LogSequence = 1
@@ -112,6 +115,7 @@ func TestBatchStoreRoundTripPreservesDurableState(t *testing.T) {
 }
 
 func TestBatchStoreReplaysTransitionAfterStaleSnapshot(t *testing.T) {
+	t.Parallel()
 	store := newTestBatchStore(t)
 	planned, err := store.Transition(testBatchState(), "2026-07-15T20:00:00Z")
 	if err != nil {
@@ -138,6 +142,7 @@ func TestBatchStoreReplaysTransitionAfterStaleSnapshot(t *testing.T) {
 }
 
 func TestBatchStoreToleratesPartialAndCorruptFilesWithoutInventingProgress(t *testing.T) {
+	t.Parallel()
 	t.Run("partial snapshot recovers from log", func(t *testing.T) {
 		store := newTestBatchStore(t)
 		state, err := store.Transition(testBatchState(), "now")
@@ -206,6 +211,7 @@ func TestBatchStoreToleratesPartialAndCorruptFilesWithoutInventingProgress(t *te
 }
 
 func TestBatchStoreIgnoresUnknownForwardCompatibleFields(t *testing.T) {
+	t.Parallel()
 	store := newTestBatchStore(t)
 	state := testBatchState()
 	content, err := json.Marshal(state)
@@ -239,6 +245,7 @@ func TestBatchStoreIgnoresUnknownForwardCompatibleFields(t *testing.T) {
 }
 
 func TestBatchStoreInitializePersistsStateBeforeActiveIdentity(t *testing.T) {
+	t.Parallel()
 	store := newTestBatchStore(t)
 	state, err := store.Initialize(testBatchState(), "2026-07-15T20:00:00Z")
 	if err != nil {
@@ -258,6 +265,7 @@ func TestBatchStoreInitializePersistsStateBeforeActiveIdentity(t *testing.T) {
 }
 
 func TestBatchStoreInitializeRecoversStatePersistedBeforeIdentity(t *testing.T) {
+	t.Parallel()
 	store := newTestBatchStore(t)
 	state, err := store.Transition(testBatchState(), "2026-07-15T20:00:00Z")
 	if err != nil {
@@ -280,6 +288,7 @@ func TestBatchStoreInitializeRecoversStatePersistedBeforeIdentity(t *testing.T) 
 }
 
 func TestBatchStoreInitializeDoesNotPublishInvalidState(t *testing.T) {
+	t.Parallel()
 	store := newTestBatchStore(t)
 	state := testBatchState()
 	state.Status = BatchStatus("invalid")
@@ -292,6 +301,7 @@ func TestBatchStoreInitializeDoesNotPublishInvalidState(t *testing.T) {
 }
 
 func TestBatchStoreInitializeSelectsExactlyOneActiveBatch(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	batchesDir := filepath.Join(root, "merge-batches")
 	activePath := filepath.Join(batchesDir, "active.json")
@@ -337,6 +347,7 @@ func TestBatchStoreInitializeSelectsExactlyOneActiveBatch(t *testing.T) {
 }
 
 func TestBatchStoreSelectsExactlyOneActiveBatch(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	batchesDir := filepath.Join(root, "merge-batches")
 	activePath := filepath.Join(batchesDir, "active.json")
@@ -380,6 +391,7 @@ func TestBatchStoreSelectsExactlyOneActiveBatch(t *testing.T) {
 }
 
 func TestBatchStoreRejectsNonContiguousTransition(t *testing.T) {
+	t.Parallel()
 	store := newTestBatchStore(t)
 	state := testBatchState()
 	state.Status = BatchStatusIntegrating

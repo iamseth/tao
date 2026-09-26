@@ -28,6 +28,7 @@ func (r *batchLandResolver) ResolvePlan(_ context.Context, input string) (*plan.
 }
 
 func TestBatchLandPersistsIntentMovesDefaultOnceAndRecordsSquashEvidence(t *testing.T) {
+	t.Parallel()
 	fixture, state, integrationRoot, detail := batchLandFixture(t)
 	store := &recordingBatchTransitionStore{}
 	events := &fakeEventAppender{}
@@ -45,7 +46,7 @@ func TestBatchLandPersistsIntentMovesDefaultOnceAndRecordsSquashEvidence(t *test
 	if len(store.states) < 3 || store.states[0].Landing == nil || store.states[0].LandedSHA != "" || store.states[1].LandedSHA != state.IntegrationHead {
 		t.Fatalf("intent must precede landed settlement: %#v", store.states)
 	}
-	if got := strings.TrimSpace(batchReviewGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)); got != state.IntegrationHead {
+	if got := strings.TrimSpace(realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)); got != state.IntegrationHead {
 		t.Fatalf("default = %s, want %s", got, state.IntegrationHead)
 	}
 	event := events.requireSingle(t, plan.EventTypePlanMerged)
@@ -68,6 +69,7 @@ func TestBatchLandPersistsIntentMovesDefaultOnceAndRecordsSquashEvidence(t *test
 }
 
 func TestBatchLandAcceptsVerifiedReducedSetAfterEject(t *testing.T) {
+	t.Parallel()
 	fixture, state, integrationRoot, detail := batchLandFixture(t)
 	reason := "aggregate review not converging on deferred.txt (plan plan-b)"
 	state.Candidates = append(state.Candidates, BatchCandidate{PlanID: "plan-b", Deferred: &BatchDeferral{PlanID: "plan-b", Reason: reason}})
@@ -89,6 +91,7 @@ func TestBatchLandAcceptsVerifiedReducedSetAfterEject(t *testing.T) {
 }
 
 func TestBatchLandRejectsIncompleteEjectRebuild(t *testing.T) {
+	t.Parallel()
 	fixture, state, integrationRoot, detail := batchLandFixture(t)
 	reason := "aggregate review not converging on deferred.txt (plan plan-b)"
 	state.Candidates = append(state.Candidates, BatchCandidate{PlanID: "plan-b", Deferred: &BatchDeferral{PlanID: "plan-b", Reason: reason}})
@@ -104,13 +107,14 @@ func TestBatchLandRejectsIncompleteEjectRebuild(t *testing.T) {
 }
 
 func TestBatchLandAcceptsVerifiedAggregateResolutionHead(t *testing.T) {
+	t.Parallel()
 	fixture, state, integrationRoot, detail := batchLandFixture(t)
 	if err := os.WriteFile(filepath.Join(integrationRoot, "aggregate-fix.txt"), []byte("fix\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	runRealGit(t, integrationRoot, "add", "aggregate-fix.txt")
 	runRealGit(t, integrationRoot, "commit", "-m", "fix: aggregate review")
-	resolutionHead := strings.TrimSpace(batchReviewGitOutput(t, integrationRoot, "rev-parse", "HEAD"))
+	resolutionHead := strings.TrimSpace(realGitOutput(t, integrationRoot, "rev-parse", "HEAD"))
 	state.IntegrationHead = resolutionHead
 	state.Verification.HeadSHA = resolutionHead
 	state.Review.HeadSHA = resolutionHead
@@ -127,6 +131,7 @@ func TestBatchLandAcceptsVerifiedAggregateResolutionHead(t *testing.T) {
 }
 
 func TestBatchLandGateAndIntentFailuresLeaveRefsExact(t *testing.T) {
+	t.Parallel()
 	t.Run("drift gate", func(t *testing.T) {
 		fixture, state, integrationRoot, detail := batchLandFixture(t)
 		beforeDefault := state.DefaultStartSHA
@@ -156,6 +161,7 @@ func TestBatchLandGateAndIntentFailuresLeaveRefsExact(t *testing.T) {
 }
 
 func TestBatchLandRecoversAfterFastForwardAndPartialPlanRecording(t *testing.T) {
+	t.Parallel()
 	fixture, state, integrationRoot, detail := batchLandFixture(t)
 	store := &recordingBatchTransitionStore{failAt: 3}
 	events := &fakeEventAppender{}
@@ -188,13 +194,13 @@ func batchLandFixture(t *testing.T) (realGitWorktree, BatchState, string, *plan.
 	}
 	runRealGit(t, fixture.worktreePath, "add", "feature.txt")
 	runRealGit(t, fixture.worktreePath, "commit", "-m", "source")
-	base := strings.TrimSpace(batchReviewGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch))
-	source := strings.TrimSpace(batchReviewGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch))
+	base := strings.TrimSpace(realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch))
+	source := strings.TrimSpace(realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch))
 	integrationRoot := filepath.Join(filepath.Dir(fixture.repoRoot), "integration")
 	runRealGit(t, fixture.repoRoot, "worktree", "add", "-b", "tao/integration/batch-land", integrationRoot, base)
 	runRealGit(t, integrationRoot, "merge", "--squash", source)
 	runRealGit(t, integrationRoot, "commit", "-m", "source\n\nTao-Plan: plan-a\nTao-Source-Head: "+source)
-	head := strings.TrimSpace(batchReviewGitOutput(t, integrationRoot, "rev-parse", "HEAD"))
+	head := strings.TrimSpace(realGitOutput(t, integrationRoot, "rev-parse", "HEAD"))
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	detail := mergeReadyDetail(base)
 	detail.Dir = "plan-a-dir"

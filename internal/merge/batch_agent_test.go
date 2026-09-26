@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -54,6 +53,7 @@ func batchResolutionJSONWithProposal(summary string, proposal plan.ReviewCommitM
 }
 
 func TestBoundResolutionSummaryRepairsSplitRuneAtHeadBoundary(t *testing.T) {
+	t.Parallel()
 	const marker = " [TRUNCATED]"
 	prefix := strings.Repeat("a", 4094)
 	input := prefix + "€tail"
@@ -145,6 +145,7 @@ func (g *batchPreparedCommitTestGit) RevParse(ctx context.Context, rev string) (
 }
 
 func TestFinishResolvedCandidatePreparedCommitPhases(t *testing.T) {
+	t.Parallel()
 	commitErr := errors.New("commit failed")
 	headErr := errors.New("HEAD unavailable")
 	for _, tc := range []struct {
@@ -211,6 +212,7 @@ func TestFinishResolvedCandidatePreparedCommitPhases(t *testing.T) {
 }
 
 func TestBatchAgentResolvesTextConflictAndTaoOwnsCommit(t *testing.T) {
+	t.Parallel()
 	fixture, sourceHead, defaultHead, integrationRoot := batchAgentConflictFixture(t)
 	state := batchAgentDeferredState(fixture, sourceHead, defaultHead)
 	reviewProposal := plan.ReviewCommitMessage{
@@ -269,6 +271,7 @@ func TestBatchAgentResolvesTextConflictAndTaoOwnsCommit(t *testing.T) {
 }
 
 func TestBatchAgentStagesResolutionAlongsideStagedDeletion(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	if err := os.WriteFile(filepath.Join(fixture.repoRoot, "removed.txt"), []byte("obsolete\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -323,6 +326,7 @@ func TestBatchAgentStagesResolutionAlongsideStagedDeletion(t *testing.T) {
 }
 
 func TestBatchAgentSessionFailuresStopWithoutAnotherResolveCall(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		err  error
@@ -348,6 +352,7 @@ func TestBatchAgentSessionFailuresStopWithoutAnotherResolveCall(t *testing.T) {
 }
 
 func TestBatchAgentKeepsDirectReviewMessageWhenResolutionDescriptionIsUnchanged(t *testing.T) {
+	t.Parallel()
 	fixture, sourceHead, defaultHead, integrationRoot := batchAgentConflictFixture(t)
 	state := batchAgentDeferredState(fixture, sourceHead, defaultHead)
 	proposal := plan.ReviewCommitMessage{
@@ -379,6 +384,7 @@ func TestBatchAgentKeepsDirectReviewMessageWhenResolutionDescriptionIsUnchanged(
 }
 
 func TestBatchAgentResumesResolvedCandidateAfterCommitBeforeTransition(t *testing.T) {
+	t.Parallel()
 	fixture, sourceHead, defaultHead, integrationRoot := batchAgentConflictFixture(t)
 	state := batchAgentDeferredState(fixture, sourceHead, defaultHead)
 	store := &durableFailingBatchTransitionStore{failAt: 4}
@@ -416,6 +422,7 @@ func TestBatchAgentResumesResolvedCandidateAfterCommitBeforeTransition(t *testin
 }
 
 func TestBatchAgentResumesResolvedIntentBeforeCommitWithoutAnotherSession(t *testing.T) {
+	t.Parallel()
 	fixture, sourceHead, defaultHead, integrationRoot := batchAgentConflictFixture(t)
 	state := batchAgentDeferredState(fixture, sourceHead, defaultHead)
 	store := &recordingBatchTransitionStore{}
@@ -469,6 +476,7 @@ func TestBatchAgentResumesResolvedIntentBeforeCommitWithoutAnotherSession(t *tes
 }
 
 func TestBatchAgentRecoveryRequiresFreshProposalWhenResolvedContentDrifts(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		drift func(*testing.T, string)
@@ -574,6 +582,7 @@ func TestBatchAgentRecoveryRequiresFreshProposalWhenResolvedContentDrifts(t *tes
 }
 
 func TestBatchAgentResumesInterruptedResolutionWork(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		edit bool
@@ -629,6 +638,7 @@ func TestBatchAgentResumesInterruptedResolutionWork(t *testing.T) {
 }
 
 func TestBatchAgentResumesCrashImmediatelyAfterPreparation(t *testing.T) {
+	t.Parallel()
 	fixture, sourceHead, defaultHead, integrationRoot := batchAgentConflictFixture(t)
 	state := batchAgentDeferredState(fixture, sourceHead, defaultHead)
 	store := &durableFailingBatchTransitionStore{}
@@ -679,6 +689,7 @@ func TestBatchAgentResumesCrashImmediatelyAfterPreparation(t *testing.T) {
 }
 
 func TestBatchAgentResumesLegacyApplyingIntentBeforeCommit(t *testing.T) {
+	t.Parallel()
 	fixture, sourceHead, defaultHead, integrationRoot := batchAgentConflictFixture(t)
 	state := batchAgentDeferredState(fixture, sourceHead, defaultHead)
 	git, err := NewService(fixture.repoRoot, nil).gitClientForRoot(integrationRoot)
@@ -720,6 +731,7 @@ func TestBatchAgentResumesLegacyApplyingIntentBeforeCommit(t *testing.T) {
 }
 
 func TestBatchAgentRejectsChangesToAnotherCandidateSourceRef(t *testing.T) {
+	t.Parallel()
 	fixture, sourceHead, defaultHead, integrationRoot := batchAgentConflictFixture(t)
 	state := batchAgentDeferredState(fixture, sourceHead, defaultHead)
 	protectedBranch := "tao/protected-candidate"
@@ -742,6 +754,7 @@ func TestBatchAgentRejectsChangesToAnotherCandidateSourceRef(t *testing.T) {
 }
 
 func TestBatchAgentRecordsEarlyDeferralAfterLaterAppliedCandidate(t *testing.T) {
+	t.Parallel()
 	fixture, sourceA, defaultHead, integrationRoot := batchAgentConflictFixture(t)
 	planBRoot := filepath.Join(filepath.Dir(fixture.repoRoot), "plan-b")
 	runRealGit(t, fixture.repoRoot, "worktree", "add", "-b", "tao/plan-b", planBRoot, defaultHead)
@@ -797,6 +810,7 @@ func TestBatchAgentRecordsEarlyDeferralAfterLaterAppliedCandidate(t *testing.T) 
 }
 
 func TestBatchAgentRepairsVerificationFailureBeforeTaoCommit(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "value.txt"), []byte("bad\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -823,6 +837,7 @@ func TestBatchAgentRepairsVerificationFailureBeforeTaoCommit(t *testing.T) {
 }
 
 func TestBatchAgentRejectsMalformedOrUnsafeCommitProposalBeforeIntent(t *testing.T) {
+	t.Parallel()
 	valid := plan.ReviewCommitMessage{
 		Subject: "fix(batch): resolve candidate integration",
 		Body:    "What:\nResolve the candidate.\n\nWhy:\nPreserve the batch.",
@@ -872,6 +887,7 @@ func TestBatchAgentRejectsMalformedOrUnsafeCommitProposalBeforeIntent(t *testing
 }
 
 func TestBatchAgentNoProgressBlocksAndRestoresIntegration(t *testing.T) {
+	t.Parallel()
 	fixture, sourceHead, defaultHead, integrationRoot := batchAgentConflictFixture(t)
 	state := batchAgentDeferredState(fixture, sourceHead, defaultHead)
 	got, err := (BatchAgentResolver{Store: &recordingBatchTransitionStore{}, Service: NewService(fixture.repoRoot, nil), Agent: batchResolutionAgentFunc(func(context.Context, string, string) (string, error) {
@@ -914,6 +930,7 @@ func batchAgentDeferredState(fixture realGitWorktree, sourceHead, defaultHead st
 }
 
 func TestConflictMarkersRemainIgnoresMarkerLikeSource(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runRealGit(t, root, "init")
 	source := "package scan\n\n" +
@@ -992,6 +1009,7 @@ func TestConflictMarkersRemainIgnoresMarkerLikeSource(t *testing.T) {
 }
 
 func TestValidateAgentEditsScansOnlyRequestedFiles(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runRealGit(t, root, "init")
 	if err := os.WriteFile(filepath.Join(root, "changed.txt"), []byte("safe edit\n"), 0o600); err != nil {
@@ -1017,6 +1035,7 @@ func TestValidateAgentEditsScansOnlyRequestedFiles(t *testing.T) {
 }
 
 func TestValidateAgentEditsRejectsOversizedAndCancelledMarkerScans(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runRealGit(t, root, "init")
 	oversized := filepath.Join(root, "oversized.txt")
@@ -1049,6 +1068,7 @@ func TestValidateAgentEditsRejectsOversizedAndCancelledMarkerScans(t *testing.T)
 }
 
 func TestConflictMarkerPathsEnforcesAggregateByteLimit(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runRealGit(t, root, "init")
 	paths := make([]string, 0, maxConflictMarkerScanAggregateBytes/maxConflictMarkerScanFileBytes+1)
@@ -1075,6 +1095,7 @@ func TestConflictMarkerPathsEnforcesAggregateByteLimit(t *testing.T) {
 }
 
 func TestParseConcretePorcelainChangesDecodesQuotedPaths(t *testing.T) {
+	t.Parallel()
 	status := " M \"quoted\\tname.txt\"\n D deleted.txt\n?? nested/file.txt\n"
 	got, err := parseConcretePorcelainV1(status)
 	if err != nil {
@@ -1089,6 +1110,7 @@ func TestParseConcretePorcelainChangesDecodesQuotedPaths(t *testing.T) {
 }
 
 func TestParsePorcelainV1ZPreservesConcreteUntrackedAndRenamePaths(t *testing.T) {
+	t.Parallel()
 	status := "R  renamed name.txt\x00old name.txt\x00?? new dir/deeper/marker\nfile.txt\x00D  deleted.txt\x00"
 	got, err := parsePorcelainV1Z(status)
 	if err != nil {
@@ -1103,6 +1125,7 @@ func TestParsePorcelainV1ZPreservesConcreteUntrackedAndRenamePaths(t *testing.T)
 }
 
 func TestConcretePorcelainChangesRejectsCollapsedFallbackStatus(t *testing.T) {
+	t.Parallel()
 	_, err := concretePorcelainChanges(context.Background(), &fakeGitClient{status: "?? nested/\n"})
 	if err == nil || !strings.Contains(err.Error(), "collapsed untracked directory") {
 		t.Fatalf("collapsed fallback status did not fail closed: %v", err)
@@ -1110,6 +1133,7 @@ func TestConcretePorcelainChangesRejectsCollapsedFallbackStatus(t *testing.T) {
 }
 
 func TestCollectConflictFilesOnlyUnmergedPaths(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "README.md"), []byte("plan\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -1124,9 +1148,7 @@ func TestCollectConflictFilesOnlyUnmergedPaths(t *testing.T) {
 	}
 	runRealGit(t, fixture.repoRoot, "add", "README.md")
 	runRealGit(t, fixture.repoRoot, "commit", "-m", "default")
-	squash := exec.Command("git", "merge", "--squash", fixture.planBranch) //nolint:gosec // G204: test invokes fixed git command with test-controlled args.
-	squash.Dir = fixture.repoRoot
-	if err := squash.Run(); err == nil {
+	if _, err := realGitOutputAllowFailure(t, fixture.repoRoot, "merge", "--squash", fixture.planBranch); err == nil {
 		t.Fatal("expected squash conflict")
 	}
 	files := collectConflictFiles(context.Background(), gitops.NewClient(fixture.repoRoot, nil))

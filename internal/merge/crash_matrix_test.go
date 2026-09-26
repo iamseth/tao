@@ -3,7 +3,6 @@ package merge
 import (
 	"context"
 	"errors"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -34,6 +33,7 @@ func defaultTargetCrashPoints() []defaultTargetCrashPoint {
 }
 
 func TestInspectSingleMergeIntentCrashMatrix(t *testing.T) {
+	t.Parallel()
 	for _, test := range defaultTargetCrashPoints() {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := crashfixture.New(t)
@@ -52,6 +52,7 @@ func TestInspectSingleMergeIntentCrashMatrix(t *testing.T) {
 }
 
 func TestRestartSingleMergeInterruptedRestartMatrix(t *testing.T) {
+	t.Parallel()
 	for _, point := range []string{"after safety checks", "after clear before render"} {
 		t.Run(point, func(t *testing.T) {
 			fixture := newRealGitWorktree(t)
@@ -114,6 +115,7 @@ func TestRestartSingleMergeInterruptedRestartMatrix(t *testing.T) {
 }
 
 func TestInspectSingleMergeIntentRefusesLiveDefaultDrift(t *testing.T) {
+	t.Parallel()
 	fixture := crashfixture.New(t)
 	fixture.AfterGitMutation(t, crashfixture.DefaultTarget)
 	detail, intent := singleMergeCrashIntent(fixture)
@@ -129,12 +131,13 @@ func TestInspectSingleMergeIntentRefusesLiveDefaultDrift(t *testing.T) {
 }
 
 func TestMergeRecoversInterruptedSingleResolutionRollbackSettlement(t *testing.T) {
+	t.Parallel()
 	fixture := crashfixture.New(t)
 	state := fixture.AfterGitMutation(t, crashfixture.DefaultTarget)
 	message := "fix(merge): recover interrupted rollback\n\nWhat:\nSettle the exact restored integration boundary.\n\nWhy:\nAllow safe source rework without manual state edits.\n\nTao-Plan: plan-crash\nTao-Source-Head: " + fixture.SourceSHA
 	amendCrashCommitMessage(t, fixture, message)
 	integrationHead := crashRev(t, fixture, "HEAD")
-	runCrashGit(t, fixture, "reset", "--hard", fixture.BaseSHA)
+	runRealGit(t, fixture.RepoRoot, "reset", "--hard", fixture.BaseSHA)
 
 	createdAt := time.Date(2026, 9, 2, 18, 0, 0, 0, time.UTC)
 	resolution := plan.SingleMergeResolution{
@@ -173,6 +176,7 @@ func TestMergeRecoversInterruptedSingleResolutionRollbackSettlement(t *testing.T
 }
 
 func TestMergeNoSquashRefusesActiveSingleResolutionBeforeRefMutation(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		phase       plan.SingleMergeResolutionPhase
@@ -234,6 +238,7 @@ func TestMergeNoSquashRefusesActiveSingleResolutionBeforeRefMutation(t *testing.
 }
 
 func TestRecoverApplyingBatchIntegrationCrashMatrix(t *testing.T) {
+	t.Parallel()
 	messageBranches := []struct {
 		name          string
 		commitMessage func(*crashfixture.Fixture) string
@@ -282,6 +287,7 @@ func TestRecoverApplyingBatchIntegrationCrashMatrix(t *testing.T) {
 }
 
 func TestRecoverApplyingBatchIntegrationRefusesLiveGitDrift(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		override bool
@@ -354,21 +360,12 @@ func batchCrashMessage(planID, sourceHead string) string {
 
 func amendCrashCommitMessage(t *testing.T, fixture *crashfixture.Fixture, message string) {
 	t.Helper()
-	runCrashGit(t, fixture, "commit", "--amend", "-m", message)
+	runRealGit(t, fixture.RepoRoot, "commit", "--amend", "-m", message)
 }
 
 func commitCrashDrift(t *testing.T, fixture *crashfixture.Fixture, message string) {
 	t.Helper()
-	runCrashGit(t, fixture, "commit", "--allow-empty", "-m", message)
-}
-
-func runCrashGit(t *testing.T, fixture *crashfixture.Fixture, args ...string) {
-	t.Helper()
-	cmd := exec.Command("git", args...) //nolint:gosec // Test invokes fixed git with test-owned arguments.
-	cmd.Dir = fixture.RepoRoot
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, output)
-	}
+	runRealGit(t, fixture.RepoRoot, "commit", "--allow-empty", "-m", message)
 }
 
 func crashRev(t *testing.T, fixture *crashfixture.Fixture, revision string) string {

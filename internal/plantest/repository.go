@@ -2,9 +2,11 @@ package plantest
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -36,15 +38,33 @@ var (
 // in maps; PlanRecord supplies the same operation capabilities used by run and
 // CLI tests, and no filesystem access occurs during lifecycle mutations.
 //
-// The zero value is not ready for use; call NewRepository.
+// Writes are no-ops by default. NewPersistingRepository opts into payload
+// persistence and detached read snapshots.
+// The zero value is not ready for use; call a constructor.
 type Repository struct {
-	mu      sync.Mutex
-	details map[string]*plan.PlanDetail // key: plan ID
+	mu        sync.Mutex
+	details   map[string]*plan.PlanDetail   // key: plan ID
+	persisted map[string]persistedArtifacts // key: cleaned plan directory; nil disables persistence
+}
+
+type persistedArtifacts struct {
+	state  *plan.State
+	slices *plan.SlicesFile
+	events []plan.Event
 }
 
 // NewRepository returns an empty in-memory repository.
 func NewRepository() *Repository {
 	return &Repository{details: make(map[string]*plan.PlanDetail)}
+}
+
+// NewPersistingRepository returns an in-memory repository whose artifact writes
+// survive reloads. Reads and records use detached snapshots, so mutations must
+// be persisted through the artifact store to be visible to subsequent readers.
+func NewPersistingRepository() *Repository {
+	r := NewRepository()
+	r.persisted = make(map[string]persistedArtifacts)
+	return r
 }
 
 // AddDetail registers detail in the repository.  If detail.Dir is empty a
@@ -56,23 +76,98 @@ func (r *Repository) AddDetail(detail *plan.PlanDetail) {
 	if detail.Dir == "" {
 		detail.Dir = "/plantest/" + detail.State.Plan.ID
 	}
+	if previous := r.details[detail.State.Plan.ID]; previous != nil {
+		delete(r.persisted, filepath.Clean(previous.Dir))
+	}
 	r.details[detail.State.Plan.ID] = detail
 }
 
-// WriteState implements plan.ArtifactStore. PlanRecord publishes settled state
-// to its bound PlanDetail after this adapter succeeds; Repository retains that
-// same pointer, so no separate payload write is needed.
-func (r *Repository) WriteState(_ string, _ []byte) error { return nil }
+// WriteState implements plan.ArtifactStore; only persisting repositories decode
+// and retain the payload. Invalid payloads leave the previous state intact.
+func (r *Repository) WriteState(dir string, payload []byte) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.persisted == nil {
+		return nil
+	}
+	var state plan.State
+	if err := json.Unmarshal(payload, &state); err != nil {
+		return err
+	}
+	key := filepath.Clean(dir)
+	artifacts := r.persisted[key]
+	artifacts.state = &state
+	r.persisted[key] = artifacts
+	return nil
+}
 
-// WriteSlices implements plan.ArtifactStore. PlanRecord publishes settled slices
-// to its bound PlanDetail after this adapter succeeds; Repository retains that
-// same pointer, so no separate payload write is needed.
-func (r *Repository) WriteSlices(_ string, _ []byte) error { return nil }
+// WriteSlices implements plan.ArtifactStore, retaining decoded slices only in
+// persisting mode.
+func (r *Repository) WriteSlices(dir string, payload []byte) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.persisted == nil {
+		return nil
+	}
+	var slices plan.SlicesFile
+	if err := json.Unmarshal(payload, &slices); err != nil {
+		return err
+	}
+	key := filepath.Clean(dir)
+	artifacts := r.persisted[key]
+	artifacts.slices = &slices
+	r.persisted[key] = artifacts
+	return nil
+}
 
-// AppendEvent implements plan.ArtifactStore. PlanRecord publishes settled events
-// to its bound PlanDetail after this adapter succeeds; Repository retains that
-// same pointer, so no separate append is needed.
-func (r *Repository) AppendEvent(_ string, _ plan.Event) error { return nil }
+// AppendEvent implements plan.ArtifactStore, retaining an event snapshot only
+// in persisting mode.
+func (r *Repository) AppendEvent(dir string, event plan.Event) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.persisted == nil {
+		return nil
+	}
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	var snapshot plan.Event
+	if err := json.Unmarshal(payload, &snapshot); err != nil {
+		return err
+	}
+	key := filepath.Clean(dir)
+	artifacts := r.persisted[key]
+	artifacts.events = append(artifacts.events, snapshot)
+	r.persisted[key] = artifacts
+	return nil
+}
+
+// reloadLocked overlays persisted artifacts on the fixture, then detaches the
+// result so editing a loaded detail cannot silently mutate stored artifacts.
+func (r *Repository) reloadLocked(detail *plan.PlanDetail) (*plan.PlanDetail, error) {
+	if r.persisted == nil || detail == nil {
+		return detail, nil
+	}
+	loaded := *detail
+	artifacts := r.persisted[filepath.Clean(detail.Dir)]
+	if artifacts.state != nil {
+		loaded.State = *artifacts.state
+	}
+	if artifacts.slices != nil {
+		loaded.Slices = *artifacts.slices
+	}
+	loaded.Events = append(append([]plan.Event(nil), detail.Events...), artifacts.events...)
+	payload, err := json.Marshal(loaded)
+	if err != nil {
+		return nil, err
+	}
+	var snapshot plan.PlanDetail
+	if err := json.Unmarshal(payload, &snapshot); err != nil {
+		return nil, err
+	}
+	return &snapshot, nil
+}
 
 // ListPlans implements plan.Repository.  It summarizes all registered details
 // and applies the same sort order as FileRepository (most-recently-active
@@ -86,7 +181,11 @@ func (r *Repository) ListPlans(ctx context.Context, filter plan.PlanFilter) ([]p
 	now := time.Now()
 	summaries := make([]plan.PlanSummary, 0, len(r.details))
 	for _, detail := range r.details {
-		s := plan.Summarize(detail, now)
+		loaded, err := r.reloadLocked(detail)
+		if err != nil {
+			return nil, err
+		}
+		s := plan.Summarize(loaded, now)
 		if filter.ActiveOnly && !s.Active() {
 			continue
 		}
@@ -120,7 +219,13 @@ func (r *Repository) GetPlan(ctx context.Context, id string) (*plan.PlanDetail, 
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.details[id], nil
+	return r.reloadLocked(r.details[id])
+}
+
+// GetPlanExact performs the same exact-ID lookup as GetPlan; it never resolves
+// prefixes, slugs, or paths.
+func (r *Repository) GetPlanExact(ctx context.Context, id string) (*plan.PlanDetail, error) {
+	return r.GetPlan(ctx, id)
 }
 
 // ResolvePlan implements plan.Resolver.  Resolution order: exact ID, ID
@@ -134,7 +239,7 @@ func (r *Repository) ResolvePlan(ctx context.Context, input string) (*plan.PlanD
 
 	// Exact match.
 	if d, ok := r.details[input]; ok {
-		return d, nil
+		return r.reloadLocked(d)
 	}
 
 	// ID prefix.
@@ -145,7 +250,7 @@ func (r *Repository) ResolvePlan(ctx context.Context, input string) (*plan.PlanD
 		}
 	}
 	if len(matches) == 1 {
-		return matches[0], nil
+		return r.reloadLocked(matches[0])
 	}
 	if len(matches) > 1 {
 		return nil, fmt.Errorf("plan id %q is ambiguous", input)
@@ -158,7 +263,7 @@ func (r *Repository) ResolvePlan(ctx context.Context, input string) (*plan.PlanD
 		}
 	}
 	if len(matches) == 1 {
-		return matches[0], nil
+		return r.reloadLocked(matches[0])
 	}
 	if len(matches) > 1 {
 		return nil, fmt.Errorf("plan slug %q is ambiguous", input)
@@ -170,6 +275,18 @@ func (r *Repository) ResolvePlan(ctx context.Context, input string) (*plan.PlanD
 // PlanRecord implements plan.PlanRecordStore.  The record is backed by this
 // repository so mutations go to the in-memory store.
 func (r *Repository) PlanRecord(detail *plan.PlanDetail) (*plan.PlanRecord, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.persisted != nil {
+		if stored := r.details[detail.State.Plan.ID]; stored != nil {
+			detail = stored
+		}
+		var err error
+		detail, err = r.reloadLocked(detail)
+		if err != nil {
+			return nil, err
+		}
+	}
 	dir := detail.Dir
 	if dir == "" {
 		dir = "/plantest/" + detail.State.Plan.ID
@@ -201,6 +318,7 @@ func (r *Repository) DeletePlan(ctx context.Context, input string, _ plan.Delete
 	id := detail.State.Plan.ID
 	dir := detail.Dir
 	delete(r.details, id)
+	delete(r.persisted, filepath.Clean(dir))
 	return &plan.DeletePlanResult{ID: id, Dir: dir}, nil
 }
 

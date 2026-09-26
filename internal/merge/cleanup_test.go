@@ -122,6 +122,7 @@ func (c *realManagedCleaner) CleanManaged(ctx context.Context, item workspace.Ma
 }
 
 func TestCleanupRefusesAbandonedPlanEvenWithForce(t *testing.T) {
+	t.Parallel()
 	detail := mergeReadyDetail("base123")
 	detail.State.Status = plan.StatusAbandoned
 	cleaner := successfulCleanup()
@@ -136,6 +137,7 @@ func TestCleanupRefusesAbandonedPlanEvenWithForce(t *testing.T) {
 }
 
 func TestAppendPlanMergedEventRefusesAbandonedSettlement(t *testing.T) {
+	t.Parallel()
 	detail := mergeReadyDetail("base123")
 	detail.Dir = "/plans/plan-a"
 	detail.State.Status = plan.StatusAbandoned
@@ -237,6 +239,7 @@ func (f *fakeEventAppender) WriteSlices(_ string, _ []byte) error {
 }
 
 func TestMergeCleanupRunsOnlyAfterSuccessfulVerify(t *testing.T) {
+	t.Parallel()
 	reg := newFakeGitRegistry()
 	reg.seed(mergeVerifyRoot, &fakeGitClient{
 		defaultBranch:    "main",
@@ -282,6 +285,7 @@ func TestMergeCleanupRunsOnlyAfterSuccessfulVerify(t *testing.T) {
 }
 
 func TestCleanupProvidesExactRecordedTypedBranchOwnership(t *testing.T) {
+	t.Parallel()
 	cleaner := &fakeWorkspaceCleaner{
 		cleanPlan: workspace.CleanPlan{PlanID: "plan-a", Branch: "feature/native-pr-format", Status: "clean", CanRemove: true},
 		managed:   []workspace.ManagedCleanup{{Branch: "feature/native-pr-format", Status: workspace.ManagedStatusClean, CanRemove: true, Reason: "merged into main"}},
@@ -299,6 +303,7 @@ func TestCleanupProvidesExactRecordedTypedBranchOwnership(t *testing.T) {
 }
 
 func TestCleanupRemovesTypedBranchAfterWorktreeWasRemoved(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	const typedBranch = "feature/native-pr-format"
 	runRealGit(t, fixture.worktreePath, "branch", "-m", typedBranch)
@@ -322,6 +327,7 @@ func TestCleanupRemovesTypedBranchAfterWorktreeWasRemoved(t *testing.T) {
 }
 
 func TestCleanupRemovesRecordedSquashThroughEvidenceGate(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	commitRealPlanChange(t, fixture)
 	runRealGit(t, fixture.repoRoot, "merge", "--squash", fixture.planBranch)
@@ -347,6 +353,7 @@ func TestCleanupRemovesRecordedSquashThroughEvidenceGate(t *testing.T) {
 }
 
 func TestCleanupDeclinesUnmergedBranchWithoutEvidenceOrForce(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	commitRealPlanChange(t, fixture)
 	cleaner := newRealManagedCleaner(t, fixture)
@@ -366,6 +373,7 @@ func TestCleanupDeclinesUnmergedBranchWithoutEvidenceOrForce(t *testing.T) {
 }
 
 func TestCleanupRespectsUnmergedAndDirtyDecisionsWithoutForce(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		status string
@@ -395,6 +403,7 @@ func TestCleanupRespectsUnmergedAndDirtyDecisionsWithoutForce(t *testing.T) {
 }
 
 func TestMergeRecordsAlreadyMergedPlanWithoutIntegrating(t *testing.T) {
+	t.Parallel()
 	reg := newFakeGitRegistry()
 	reg.seed(mergeVerifyRoot, &fakeGitClient{
 		defaultBranch: "main",
@@ -431,6 +440,7 @@ func TestMergeRecordsAlreadyMergedPlanWithoutIntegrating(t *testing.T) {
 // recorded as merged, which would otherwise complete the plan and delete its
 // branch.
 func TestMergeDoesNotRecordAncestorRefWithoutPlanWork(t *testing.T) {
+	t.Parallel()
 	git := &fakeGitClient{
 		defaultBranch: "main",
 		revParse:      map[string]string{"main": "main123"},
@@ -449,6 +459,7 @@ func TestMergeDoesNotRecordAncestorRefWithoutPlanWork(t *testing.T) {
 }
 
 func TestMergeRecordOnlyForceRecordsWithoutAncestryProof(t *testing.T) {
+	t.Parallel()
 	git := &fakeGitClient{
 		defaultBranch: "main",
 		revParse:      map[string]string{"main": "squash456"},
@@ -468,6 +479,7 @@ func TestMergeRecordOnlyForceRecordsWithoutAncestryProof(t *testing.T) {
 }
 
 func TestMergeRecordOnlyRefusesWhenNotMergedWithoutForce(t *testing.T) {
+	t.Parallel()
 	git := &fakeGitClient{
 		defaultBranch: "main",
 		revParse:      map[string]string{"main": "main123"},
@@ -480,6 +492,7 @@ func TestMergeRecordOnlyRefusesWhenNotMergedWithoutForce(t *testing.T) {
 }
 
 func TestMergeAppendsPlanMergedEvent(t *testing.T) {
+	t.Parallel()
 	reg := newFakeGitRegistry()
 	reg.seed(mergeVerifyRoot, &fakeGitClient{
 		defaultBranch:    "main",
@@ -521,6 +534,7 @@ func TestMergeAppendsPlanMergedEvent(t *testing.T) {
 // a fully successful merge, which makes unattended queues mark the completed
 // plan as failed.
 func TestMergeRecordsExternalMergeWhenNothingLeftToClean(t *testing.T) {
+	t.Parallel()
 	git := &fakeGitClient{
 		defaultBranch: "main",
 		revParse:      map[string]string{"main": "merged789"},
@@ -542,6 +556,7 @@ func TestMergeRecordsExternalMergeWhenNothingLeftToClean(t *testing.T) {
 // source head may authorize non-ancestral deletion; other unmerged branches
 // still require --force.
 func TestRecordedMergeCleanupRetrySaysForceForUnmergedBranch(t *testing.T) {
+	t.Parallel()
 	const (
 		mergedSHA  = "squash456"
 		sourceHead = "reviewed-head"
@@ -628,6 +643,7 @@ func TestRecordedMergeCleanupRetrySaysForceForUnmergedBranch(t *testing.T) {
 // while its actual work may sit uncommitted or stashed; the explicit
 // --record-only --force override remains the escape hatch.
 func TestDetectExternalMergeSkipsPlanOnDefaultBranch(t *testing.T) {
+	t.Parallel()
 	newGit := func() *fakeGitClient {
 		return &fakeGitClient{
 			defaultBranch: "main",
@@ -672,6 +688,7 @@ func TestDetectExternalMergeSkipsPlanOnDefaultBranch(t *testing.T) {
 // already settled. Without the fallback an actually-merged plan errors on
 // every `tao merge` retry and never reaches completed.
 func TestMergeRecordsExternalMergeWhenWorktreeDirectoryGone(t *testing.T) {
+	t.Parallel()
 	git := &fakeGitClient{
 		defaultBranch: "main",
 		revParse:      map[string]string{"main": "merged789"},
@@ -705,6 +722,7 @@ func TestMergeRecordsExternalMergeWhenWorktreeDirectoryGone(t *testing.T) {
 // survive the merge write instead of silently reverting to the stale
 // in-memory copy.
 func TestAppendPlanMergedEventRefreshesStateFromDisk(t *testing.T) {
+	t.Parallel()
 	planDir := t.TempDir()
 	detail := mergeVerifyDetail()
 	detail.Dir = planDir

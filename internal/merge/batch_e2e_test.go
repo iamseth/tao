@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -20,6 +19,7 @@ import (
 )
 
 func TestBatchAgentTelemetryEndToEndStaysInBatchTransaction(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	store := NewBatchStore(filepath.Join(root, "merge-batches"), filepath.Join(root, "merge-batches", "active.json"))
 	calls := 0
@@ -184,8 +184,8 @@ func (c *batchE2ECleaner) CleanManaged(_ context.Context, item workspace.Managed
 	if !options.Force && !options.AllowNonAncestralBranch {
 		return errors.New("squash cleanup was not guarded")
 	}
-	runBatchE2EGit(c.t, c.repoRoot, "worktree", "remove", item.WorktreePath)
-	runBatchE2EGit(c.t, c.repoRoot, "branch", "-D", item.Branch)
+	runRealGit(c.t, c.repoRoot, "worktree", "remove", item.WorktreePath)
+	runRealGit(c.t, c.repoRoot, "branch", "-D", item.Branch)
 	c.cleaned = append(c.cleaned, item.Branch)
 	return nil
 }
@@ -199,8 +199,8 @@ type batchE2ESettlementWorkspace struct {
 }
 
 func (w *batchE2ESettlementWorkspace) RemoveIntegration(_ context.Context, batchID string) error {
-	runBatchE2EGit(w.t, w.repoRoot, "worktree", "remove", w.integrationRoot)
-	runBatchE2EGit(w.t, w.repoRoot, "branch", "-D", "tao/integration/"+batchID)
+	runRealGit(w.t, w.repoRoot, "worktree", "remove", w.integrationRoot)
+	runRealGit(w.t, w.repoRoot, "branch", "-D", "tao/integration/"+batchID)
 	w.removed++
 	return nil
 }
@@ -211,25 +211,26 @@ func (w *batchE2ESettlementWorkspace) ClearActive(string) error { w.cleared++; r
 // bounded agent resolution, aggregate rework, interrupted landing recovery,
 // evidence recording, and guarded cleanup.
 func TestMergeBatchEndToEnd(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	root := filepath.Join(t.TempDir(), "repo")
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	runBatchE2EGit(t, root, "init", "-b", "main")
-	runBatchE2EGit(t, root, "config", "user.name", "Tao E2E")
-	runBatchE2EGit(t, root, "config", "user.email", "tao-e2e@example.invalid")
+	runRealGit(t, root, "init", "-b", "main")
+	runRealGit(t, root, "config", "user.name", "Tao E2E")
+	runRealGit(t, root, "config", "user.email", "tao-e2e@example.invalid")
 	writeBatchE2EFile(t, root, "shared.txt", "base\n")
-	runBatchE2EGit(t, root, "add", ".")
-	runBatchE2EGit(t, root, "commit", "-m", "initial")
-	base := batchE2EGitOutput(t, root, "rev-parse", "main")
+	runRealGit(t, root, "add", ".")
+	runRealGit(t, root, "commit", "-m", "initial")
+	base := realGitOutput(t, root, "rev-parse", "main")
 
 	ids := []string{"plan-a", "plan-b", "plan-c", "plan-d", "plan-e"}
 	branches, worktrees, sourceHeads := map[string]string{}, map[string]string{}, map[string]string{}
 	for _, id := range ids {
 		branch := "tao/" + id
 		worktreeRoot := filepath.Join(filepath.Dir(root), id)
-		runBatchE2EGit(t, root, "worktree", "add", "-b", branch, worktreeRoot, base)
+		runRealGit(t, root, "worktree", "add", "-b", branch, worktreeRoot, base)
 		branches[id], worktrees[id] = branch, worktreeRoot
 		switch id {
 		case "plan-a":
@@ -240,9 +241,9 @@ func TestMergeBatchEndToEnd(t *testing.T) {
 		default:
 			writeBatchE2EFile(t, worktreeRoot, id+".txt", id+"\n")
 		}
-		runBatchE2EGit(t, worktreeRoot, "add", ".")
-		runBatchE2EGit(t, worktreeRoot, "commit", "-m", "feat: "+id)
-		sourceHeads[id] = batchE2EGitOutput(t, root, "rev-parse", branch)
+		runRealGit(t, worktreeRoot, "add", ".")
+		runRealGit(t, worktreeRoot, "commit", "-m", "feat: "+id)
+		sourceHeads[id] = realGitOutput(t, root, "rev-parse", branch)
 	}
 
 	planRoot := filepath.Join(filepath.Dir(root), "plans")
@@ -270,7 +271,7 @@ func TestMergeBatchEndToEnd(t *testing.T) {
 
 	batchID := "e2e"
 	integrationRoot := filepath.Join(filepath.Dir(root), "integration")
-	runBatchE2EGit(t, root, "worktree", "add", "-b", "tao/integration/"+batchID, integrationRoot, base)
+	runRealGit(t, root, "worktree", "add", "-b", "tao/integration/"+batchID, integrationRoot, base)
 	store := &batchE2EStore{dir: t.TempDir()}
 	state := BatchState{Schema: BatchStateSchema, ID: batchID, Status: BatchStatusPlanned, RepoRoot: root, DefaultBranch: "main", DefaultStartSHA: base, Candidates: candidates, ChosenOrder: order, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 	verifyLog := filepath.Join(t.TempDir(), "verify.log")
@@ -282,7 +283,7 @@ func TestMergeBatchEndToEnd(t *testing.T) {
 	if len(integrated.Deferred) != 1 || integrated.Deferred[0].PlanID != "plan-e" || !strings.Contains(integrated.Deferred[0].Reason, "squash conflict") {
 		t.Fatalf("expected inferred high-overlap deferral, got %#v", integrated.Deferred)
 	}
-	if got := batchE2EGitOutput(t, root, "rev-parse", "main"); got != base {
+	if got := realGitOutput(t, root, "rev-parse", "main"); got != base {
 		t.Fatalf("default moved during staging: %s", got)
 	}
 
@@ -295,7 +296,7 @@ func TestMergeBatchEndToEnd(t *testing.T) {
 		t.Fatalf("text/verification retries not exercised: agent=%+v state=%+v", agent, resolved.State.Attempts)
 	}
 	for _, item := range resolved.State.Integrations {
-		message := batchE2EGitOutput(t, integrationRoot, "show", "-s", "--format=%B", item.IntegrationSHA)
+		message := realGitOutput(t, integrationRoot, "show", "-s", "--format=%B", item.IntegrationSHA)
 		if strings.Count(message, "Tao-Plan: "+item.PlanID) != 1 || !strings.Contains(message, "Tao-Source-Head: "+sourceHeads[item.PlanID]) {
 			t.Fatalf("invalid squash evidence for %s: %s", item.PlanID, message)
 		}
@@ -309,7 +310,7 @@ func TestMergeBatchEndToEnd(t *testing.T) {
 	if agent.reviewCalls != 2 || agent.reworkCalls != 1 || state.Review.Attempts != 2 || state.Attempts.AggregateRework != 1 || len(state.Review.ResolutionSHAs) != 1 {
 		t.Fatalf("aggregate changes-requested/approve cycle missing: agent=%+v review=%+v", agent, state.Review)
 	}
-	resolutionMessage := batchE2EGitOutput(t, integrationRoot, "show", "-s", "--format=%B", state.Review.ResolutionSHAs[0])
+	resolutionMessage := realGitOutput(t, integrationRoot, "show", "-s", "--format=%B", state.Review.ResolutionSHAs[0])
 	expectedResolution, messageErr := aggregateProposedResolutionCommitMessage(plan.ReviewCommitMessage{
 		Subject: "fix(batch): resolve candidate integration",
 		Body:    "What:\nResolve the candidate changes in the integration worktree.\n\nWhy:\nPreserve the candidate intent in the combined batch.",
@@ -333,11 +334,11 @@ func TestMergeBatchEndToEnd(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "injected stop") {
 		t.Fatalf("expected interrupted landing, got %v", err)
 	}
-	if got := batchE2EGitOutput(t, root, "rev-parse", "main"); got != state.IntegrationHead {
+	if got := realGitOutput(t, root, "rev-parse", "main"); got != state.IntegrationHead {
 		t.Fatalf("interrupted fast-forward lost default: got %s want %s", got, state.IntegrationHead)
 	}
 	for _, id := range ids {
-		if got := batchE2EGitOutput(t, root, "rev-parse", branches[id]); got != sourceHeads[id] {
+		if got := realGitOutput(t, root, "rev-parse", branches[id]); got != sourceHeads[id] {
 			t.Fatalf("interrupted landing lost %s: got %s want %s", id, got, sourceHeads[id])
 		}
 	}
@@ -358,16 +359,17 @@ func TestMergeBatchEndToEnd(t *testing.T) {
 		t.Fatalf("settlement incomplete: state=%s cleaned=%v integration=%d active=%d", settled.State.Status, cleaner.cleaned, settlementWorkspace.removed, settlementWorkspace.cleared)
 	}
 	for _, id := range ids {
-		if out := batchE2EGitOutputAllowFailure(t, root, "branch", "--list", branches[id]); strings.TrimSpace(out) != "" {
+		if out, _ := realGitOutputAllowFailure(t, root, "branch", "--list", branches[id]); strings.TrimSpace(out) != "" {
 			t.Fatalf("source branch %s survived safe cleanup: %s", branches[id], out)
 		}
 	}
-	if got := batchE2EGitOutput(t, root, "rev-list", "--count", base+"..main"); got != "6" {
+	if got := realGitOutput(t, root, "rev-list", "--count", base+"..main"); got != "6" {
 		t.Fatalf("atomic history has %s commits, want five squashes plus one aggregate resolution", got)
 	}
 }
 
 func TestMergeBatchAutoEjectResolvesAndLandsAttributedReducedSet(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	fixture, state, integrationRoot := batchEjectTestFixture(t)
 	base := state.DefaultStartSHA
@@ -442,10 +444,10 @@ func TestMergeBatchAutoEjectResolvesAndLandsAttributedReducedSet(t *testing.T) {
 	if len(events.events) != 1 || landed.State.Candidates[0].Deferred == nil || !strings.Contains(landed.State.Candidates[0].Deferred.Reason, "not converging") {
 		t.Fatalf("ejected plan attribution was not retained: events=%d candidate=%+v", len(events.events), landed.State.Candidates[0])
 	}
-	if got := batchE2EGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch); got != landed.State.IntegrationHead {
+	if got := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch); got != landed.State.IntegrationHead {
 		t.Fatalf("default = %s, want reduced integration %s", got, landed.State.IntegrationHead)
 	}
-	if got := batchE2EGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch); got != planAHead {
+	if got := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch); got != planAHead {
 		t.Fatalf("ejected source moved: got %s want %s", got, planAHead)
 	}
 	if _, err := os.Stat(filepath.Join(fixture.repoRoot, "plan-a.txt")); !errors.Is(err, os.ErrNotExist) {
@@ -476,29 +478,4 @@ func readBatchE2EFile(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(content)
-}
-func runBatchE2EGit(t *testing.T, dir string, args ...string) {
-	t.Helper()
-	cmd := exec.Command("git", args...) //nolint:gosec // fixed binary and test-controlled arguments.
-	cmd.Dir = dir
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
-	}
-}
-func batchE2EGitOutput(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	cmd := exec.Command("git", args...) //nolint:gosec // fixed binary and test-controlled arguments.
-	cmd.Dir = dir
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
-	}
-	return strings.TrimSpace(string(output))
-}
-func batchE2EGitOutputAllowFailure(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	cmd := exec.Command("git", args...) //nolint:gosec // fixed binary and test-controlled arguments.
-	cmd.Dir = dir
-	output, _ := cmd.CombinedOutput()
-	return string(output)
 }

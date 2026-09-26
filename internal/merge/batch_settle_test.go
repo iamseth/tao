@@ -29,6 +29,7 @@ func (f *fakeBatchSettlementWorkspace) ClearActive(id string) error {
 }
 
 func TestBatchSettleRealGitRemovesSquashSourceOnlyAfterRecording(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	// Move the fixture into Tao's managed workspace namespace so the real
 	// workspace manager can classify and remove it.
@@ -40,11 +41,11 @@ func TestBatchSettleRealGitRemovesSquashSourceOnlyAfterRecording(t *testing.T) {
 	}
 	runRealGit(t, managedPath, "add", "feature.txt")
 	runRealGit(t, managedPath, "commit", "-m", "source")
-	source := strings.TrimSpace(batchReviewGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch))
+	source := strings.TrimSpace(realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch))
 	runRealGit(t, fixture.repoRoot, "merge", "--squash", fixture.planBranch)
 	runRealGit(t, fixture.repoRoot, "commit", "-m", "source\n\nTao-Plan: plan-a\nTao-Source-Head: "+source)
-	landed := strings.TrimSpace(batchReviewGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch))
-	detail := mergeReadyDetail(strings.TrimSpace(batchReviewGitOutput(t, fixture.repoRoot, "rev-parse", landed+"^")))
+	landed := strings.TrimSpace(realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch))
+	detail := mergeReadyDetail(strings.TrimSpace(realGitOutput(t, fixture.repoRoot, "rev-parse", landed+"^")))
 	detail.Dir = "plan-a-dir"
 	detail.State.Repo = plan.Repo{Root: fixture.repoRoot, Branch: fixture.defaultBranch}
 	detail.State.Plan.Review.Head = source
@@ -70,12 +71,17 @@ func TestBatchSettleRealGitRemovesSquashSourceOnlyAfterRecording(t *testing.T) {
 	if _, err := os.Stat(managedPath); !os.IsNotExist(err) {
 		t.Fatalf("managed source worktree remains: %v", err)
 	}
-	if out := batchReviewGitOutput(t, fixture.repoRoot, "branch", "--list", fixture.planBranch); strings.TrimSpace(out) != "" {
+	out, outputErr := realGitOutputAllowFailure(t, fixture.repoRoot, "branch", "--list", fixture.planBranch)
+	if outputErr != nil {
+		t.Fatal(outputErr)
+	}
+	if strings.TrimSpace(out) != "" {
 		t.Fatalf("managed source branch remains: %s", out)
 	}
 }
 
 func TestBatchSettleRecordsBeforeCleanupAndRemovesBatchRefsLast(t *testing.T) {
+	t.Parallel()
 	state, detail, service, cleaner, events := batchSettleFixture()
 	store := &recordingBatchTransitionStore{}
 	batchWorkspace := &fakeBatchSettlementWorkspace{}
@@ -107,6 +113,7 @@ func TestBatchSettleRecordsBeforeCleanupAndRemovesBatchRefsLast(t *testing.T) {
 }
 
 func TestBatchSettleRequiresExactPersistedCandidateMessageEvidence(t *testing.T) {
+	t.Parallel()
 	state, detail, service, _, _ := batchSettleFixture()
 	message := testBatchCommitMessage("plan-a", state.Candidates[0].SourceTip)
 	service.Git.(*fakeGitClient).commitMessages["squash"] = message
@@ -118,6 +125,7 @@ func TestBatchSettleRequiresExactPersistedCandidateMessageEvidence(t *testing.T)
 }
 
 func TestBatchSettleRejectsStaleSquashEvidenceWithoutMutation(t *testing.T) {
+	t.Parallel()
 	state, detail, service, cleaner, events := batchSettleFixture()
 	service.Git.(*fakeGitClient).commitMessages["squash"] = "not a Tao squash"
 	batchWorkspace := &fakeBatchSettlementWorkspace{}
@@ -131,6 +139,7 @@ func TestBatchSettleRejectsStaleSquashEvidenceWithoutMutation(t *testing.T) {
 }
 
 func TestBatchSettlePreservesSourcesWhenRecordingFails(t *testing.T) {
+	t.Parallel()
 	state, detail, service, cleaner, events := batchSettleFixture()
 	events.err = errors.New("store unavailable")
 	batchWorkspace := &fakeBatchSettlementWorkspace{}
@@ -144,6 +153,7 @@ func TestBatchSettlePreservesSourcesWhenRecordingFails(t *testing.T) {
 }
 
 func TestBatchSettleClassifiesDirtySourceAsRequiringAttention(t *testing.T) {
+	t.Parallel()
 	state, detail, service, cleaner, _ := batchSettleFixture()
 	cleaner.managed = []workspace.ManagedCleanup{{Branch: "tao/plan-a", WorktreePath: "/worktree", Status: workspace.ManagedStatusDirty, Reason: "worktree has uncommitted changes"}}
 	batchWorkspace := &fakeBatchSettlementWorkspace{}
@@ -161,6 +171,7 @@ func TestBatchSettleClassifiesDirtySourceAsRequiringAttention(t *testing.T) {
 }
 
 func TestBatchSettleBatchCleanupFailuresRetainRetryEvidence(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name      string
 		removeErr error
@@ -196,6 +207,7 @@ func TestBatchSettleBatchCleanupFailuresRetainRetryEvidence(t *testing.T) {
 }
 
 func TestBatchSettleCleanupFailureRetriesWithoutDuplicateEvent(t *testing.T) {
+	t.Parallel()
 	state, detail, service, cleaner, events := batchSettleFixture()
 	cleaner.cleanErr = errors.New("remove failed")
 	store := &recordingBatchTransitionStore{}

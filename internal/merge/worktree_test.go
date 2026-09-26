@@ -52,7 +52,28 @@ func runRealGit(t *testing.T, dir string, args ...string) {
 	}
 }
 
+func realGitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...) //nolint:gosec // G204: test invokes fixed git command with test-controlled args.
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// realGitOutputAllowFailure returns untrimmed output and leaves error handling to the caller.
+func realGitOutputAllowFailure(t *testing.T, dir string, args ...string) (string, error) {
+	t.Helper()
+	cmd := exec.Command("git", args...) //nolint:gosec // G204: test invokes fixed git command with test-controlled args.
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
 func TestWorktreeGitUsesPlanWorktreeBoundGitClientAndFallback(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	ctx := context.Background()
 

@@ -32,6 +32,7 @@ func (r *batchRepository) ResolvePlan(_ context.Context, id string) (*plan.PlanD
 }
 
 func TestBatchCandidateDiscoveryEmpty(t *testing.T) {
+	t.Parallel()
 	repo := &batchRepository{}
 	got, err := (BatchCandidateDiscovery{Repository: repo}).Discover(context.Background())
 	if err != nil {
@@ -43,6 +44,7 @@ func TestBatchCandidateDiscoveryEmpty(t *testing.T) {
 }
 
 func TestBatchCandidateDiscoveryExcludesAbandonedPlansWithStaleApproval(t *testing.T) {
+	t.Parallel()
 	abandoned := batchReadyDetail("plan-a", "tao/plan-a")
 	abandoned.State.Status = plan.StatusAbandoned
 	repo := &batchRepository{
@@ -66,6 +68,7 @@ func TestBatchCandidateDiscoveryExcludesAbandonedPlansWithStaleApproval(t *testi
 }
 
 func TestBatchCandidateSnapshotValidationRejectsAbandonment(t *testing.T) {
+	t.Parallel()
 	detail := batchReadyDetail("plan-a", "tao/plan-a")
 	detail.State.Status = plan.StatusAbandoned
 	detail.Events = []plan.Event{{Type: plan.EventTypePlanAbandoned, Reason: "superseded"}}
@@ -79,6 +82,7 @@ func TestBatchCandidateSnapshotValidationRejectsAbandonment(t *testing.T) {
 }
 
 func TestBatchCandidateDiscoveryExcludesLegacyCompletedApprovedPlans(t *testing.T) {
+	t.Parallel()
 	legacy := batchReadyDetail("legacy", "tao/legacy")
 	repo := &batchRepository{
 		summaries: []plan.PlanSummary{{
@@ -99,6 +103,7 @@ func TestBatchCandidateDiscoveryExcludesLegacyCompletedApprovedPlans(t *testing.
 }
 
 func TestBatchCandidateDiscoveryIncludesPRCompletePlanWithoutMergeEvidence(t *testing.T) {
+	t.Parallel()
 	unmerged := batchReadyDetail("plan-a", "tao/plan-a")
 	unmerged.State.Plan.PullRequest = &plan.PullRequest{HeadSHA: "tip-a"}
 	merged := batchReadyDetail("plan-b", "tao/plan-b")
@@ -134,6 +139,7 @@ func TestBatchCandidateDiscoveryIncludesPRCompletePlanWithoutMergeEvidence(t *te
 }
 
 func TestBatchPreflightMixedEligibleAndIneligibleReportsAllBlockers(t *testing.T) {
+	t.Parallel()
 	good := batchReadyDetail("plan-a", "tao/plan-a")
 	bad := batchReadyDetail("plan-b", "tao/plan-b")
 	bad.State.Status = plan.StatusInProgress
@@ -195,6 +201,7 @@ func TestBatchPreflightMixedEligibleAndIneligibleReportsAllBlockers(t *testing.T
 }
 
 func TestBatchCandidateDiscoveryBlocksInvalidApprovedProposalAndKeepsLegacyEligible(t *testing.T) {
+	t.Parallel()
 	invalid := batchReadyDetail("plan-a", "tao/plan-a")
 	invalid.State.Plan.Review.CommitMessage.Body += "\n\nTao-Plan: forged"
 	legacy := batchReadyDetail("plan-b", "tao/plan-b")
@@ -220,6 +227,7 @@ func TestBatchCandidateDiscoveryBlocksInvalidApprovedProposalAndKeepsLegacyEligi
 }
 
 func TestBatchOrderStableOverlapAndAncestry(t *testing.T) {
+	t.Parallel()
 	candidates := []BatchCandidate{
 		{PlanID: "plan-c", SourceTip: "tip-c"},
 		{PlanID: "plan-a", SourceTip: "tip-a"},
@@ -258,6 +266,7 @@ func TestBatchOrderStableOverlapAndAncestry(t *testing.T) {
 }
 
 func TestBatchOrderDefersPredictedConflictWithoutMutation(t *testing.T) {
+	t.Parallel()
 	mutations := 0
 	candidates := []BatchCandidate{{PlanID: "safe", SourceTip: "safe-tip"}, {PlanID: "conflict", SourceTip: "conflict-tip"}}
 	got := PlanBatchCandidates(context.Background(), candidates, BatchPlanningSeams{

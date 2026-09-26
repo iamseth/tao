@@ -586,9 +586,7 @@ func TestGuardedSingleConflictResolverResolvesAndSettlesExactCommit(t *testing.T
 	calls := 0
 	store.onAdvance = func(resolution plan.SingleMergeResolution) error {
 		if resolution.Phase == plan.SingleMergeResolutionPhaseResolved {
-			unmerged := exec.Command("git", "ls-files", "-u")
-			unmerged.Dir = fixture.repoRoot
-			output, err := unmerged.Output()
+			output, err := realGitOutputAllowFailure(t, fixture.repoRoot, "ls-files", "-u")
 			if err != nil || len(output) == 0 {
 				t.Fatal("resolved intent was not persisted before Tao staged conflict paths")
 			}
@@ -1002,10 +1000,8 @@ func TestSingleResolutionSettlementDisablesPostCommitHookSideEffects(t *testing.
 			t.Fatalf("disabled post-commit hook left side effect %s: %v", path, statErr)
 		}
 	}
-	showRef := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/hook-side-effect")
-	showRef.Dir = fixture.repoRoot
 	var exitErr *exec.ExitError
-	if err := showRef.Run(); err == nil || !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+	if _, err := realGitOutputAllowFailure(t, fixture.repoRoot, "show-ref", "--verify", "--quiet", "refs/heads/hook-side-effect"); err == nil || !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
 		t.Fatalf("disabled post-commit hook ref lookup = %v, want absent", err)
 	}
 	if status := strings.TrimSpace(realGitOutput(t, fixture.repoRoot, "status", "--porcelain")); status != "" {
@@ -1573,9 +1569,7 @@ func TestGuardedSingleConflictResolverPreservesConcurrentProtectedSourceRef(t *t
 	resolver := GuardedSingleConflictResolver{Git: git, Recorder: store, Agent: batchResolutionAgentFunc(func(_ context.Context, root, _ string) (string, error) {
 		done := make(chan error, 1)
 		go func() {
-			cmd := exec.Command("git", "update-ref", "refs/heads/"+fixture.planBranch, request.Intent.DefaultParent) //nolint:gosec // fixed git command with fixture-owned values.
-			cmd.Dir = root
-			output, err := cmd.CombinedOutput()
+			output, err := realGitOutputAllowFailure(t, root, "update-ref", "refs/heads/"+fixture.planBranch, request.Intent.DefaultParent)
 			if err != nil {
 				err = fmt.Errorf("advance concurrent source ref: %w: %s", err, output)
 			}
@@ -1597,9 +1591,8 @@ func TestGuardedSingleConflictResolverPreservesConcurrentDefaultRef(t *testing.T
 	resolver := GuardedSingleConflictResolver{Git: git, Recorder: store, Agent: batchResolutionAgentFunc(func(_ context.Context, root, _ string) (string, error) {
 		done := make(chan error, 1)
 		go func() {
-			cmd := exec.Command("git", "update-ref", "refs/heads/"+fixture.defaultBranch, request.Intent.SourceHead, request.Intent.DefaultParent) //nolint:gosec // fixed Git command with fixture-owned values.
-			cmd.Dir = root
-			done <- cmd.Run()
+			_, err := realGitOutputAllowFailure(t, root, "update-ref", "refs/heads/"+fixture.defaultBranch, request.Intent.SourceHead, request.Intent.DefaultParent)
+			done <- err
 		}()
 		return batchResolutionJSON("observed concurrent default movement"), <-done
 	})}
@@ -1640,9 +1633,7 @@ func TestGuardedSingleConflictResolverRejectsAndPreservesGitMetadataAndUnlistedR
 			name: "created unlisted ref",
 			setup: func(_ *testing.T, fixture realGitWorktree, _ SingleResolutionRequest) func(*testing.T) {
 				return func(t *testing.T) {
-					cmd := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/tags/session-created")
-					cmd.Dir = fixture.repoRoot
-					if err := cmd.Run(); err != nil {
+					if _, err := realGitOutputAllowFailure(t, fixture.repoRoot, "show-ref", "--verify", "--quiet", "refs/tags/session-created"); err != nil {
 						t.Fatalf("concurrent unlisted ref was overwritten: %v", err)
 					}
 				}
@@ -2455,9 +2446,7 @@ func preparedSingleResolutionFixtureWithSetup(t *testing.T, setup func(realGitWo
 	}
 	sourceHead := strings.TrimSpace(realGitOutput(t, fixture.repoRoot, "rev-parse", "refs/heads/"+fixture.planBranch))
 	defaultHead := strings.TrimSpace(realGitOutput(t, fixture.repoRoot, "rev-parse", "HEAD"))
-	merge := exec.Command("git", "merge", "--squash", fixture.planBranch) //nolint:gosec // fixed git command with fixture-owned branch.
-	merge.Dir = fixture.repoRoot
-	if err := merge.Run(); err == nil {
+	if _, err := realGitOutputAllowFailure(t, fixture.repoRoot, "merge", "--squash", fixture.planBranch); err == nil {
 		t.Fatal("expected prepared squash conflict")
 	}
 	message, err := singleMergeCommitMessage(plan.ReviewCommitMessage{

@@ -456,7 +456,7 @@ func TestSliceCompletionRetryConsumesSettledJournalState(t *testing.T) {
 	settled := cloneRunRestartDetail(t, base)
 	settled.Slices.Slices[0].CommitIntent = &plan.SliceCommitIntent{Hash: hash, Policy: CommitPolicyNone.String(), StartingBranch: "tao/test", StartingHead: "base", CreatedAt: now}
 	outcome := plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionManualUncommitted}
-	repository := plantest.NewRepository()
+	repository := plantest.NewPersistingRepository()
 	repository.AddDetail(settled)
 	settledRecord, err := repository.PlanRecord(settled)
 	if err != nil {
@@ -464,6 +464,10 @@ func TestSliceCompletionRetryConsumesSettledJournalState(t *testing.T) {
 	}
 	if err := settledRecord.CompleteSliceWithOutcome("001-a", notes, results, outcome, now); err != nil {
 		t.Fatalf("prepare settled completion: %v", err)
+	}
+	settled, err = repository.GetPlan(context.Background(), settled.State.Plan.ID)
+	if err != nil {
+		t.Fatal(err)
 	}
 	var completionEvent *plan.Event
 	for _, event := range settled.Events {

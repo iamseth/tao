@@ -198,7 +198,7 @@ func TestServiceExecuteExecutionModeCurrentCapturesStartingBranchBeforeSliceStar
 		if err != nil {
 			return nil, err
 		}
-		return startCallbackRecord{PlanMutationRecord: record, onStart: func(sliceID string, now time.Time) error {
+		return callbackPlanRecord{PlanMutationRecord: record, detail: detail, onStart: func(detail *plan.PlanDetail, sliceID string, now time.Time) error {
 			started = true
 			state, err := plan.ReadState(detail.Dir)
 			if err != nil {

@@ -17,6 +17,39 @@ import (
 	"github.com/iamseth/tao/internal/plantest"
 )
 
+func TestRunTestBuilders(t *testing.T) {
+	dependencies := testDependencies(nil, nil)
+	options := testOptions(dependencies)
+	if options.ExecutionConfig != (ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone}}) {
+		t.Fatalf("unexpected default config: %+v", options.ExecutionConfig)
+	}
+	if options.PlanRecordFactory == nil || options.SliceExecutor != nil || options.CommandRunner != nil {
+		t.Fatal("expected memory record factory and unchanged nil collaborators")
+	}
+
+	executor := &countingSliceExecutor{}
+	fixedNow := time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)
+	custom := testOptions(testDependencies(executor, nil,
+		func(dependencies *RunDependencies) { dependencies.Now = func() time.Time { return fixedNow } },
+		func(dependencies *RunDependencies) {
+			now := dependencies.Now().Add(time.Minute)
+			dependencies.Now = func() time.Time { return now }
+		},
+	),
+		func(options *Options) { options.MaxSlices = 1 },
+		func(options *Options) { options.MaxSlices++ },
+	)
+	if custom.CommitPolicy != CommitPolicyNone || custom.MaxSlices != 2 || custom.SliceExecutor != executor || custom.PlanRecordFactory == nil {
+		t.Fatalf("unexpected mutated options: %+v", custom)
+	}
+	if got := custom.Now(); !got.Equal(fixedNow.Add(time.Minute)) {
+		t.Fatalf("mutated clock = %v, want %v", got, fixedNow.Add(time.Minute))
+	}
+	if options.MaxSlices != 0 || options.Now != nil {
+		t.Fatal("mutations leaked between builder calls")
+	}
+}
+
 func TestRunFinalizesPlanCompletedByCurrentInvocation(t *testing.T) {
 	started := time.Now().UTC().Add(-2 * time.Minute)
 	completed := time.Now().UTC()
@@ -28,7 +61,7 @@ func TestRunFinalizesPlanCompletedByCurrentInvocation(t *testing.T) {
 
 	err := executeDetail(context.Background(), detail, func(ctx context.Context, detail *plan.PlanDetail) (*plan.PlanDetail, error) {
 		return completedDetail, nil
-	}, &out, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone}}, RunDependencies: RunDependencies{SliceExecutor: fakeSliceExecutor{}, PlanRecordFactory: memoryPlanRecordFactory, CommandRunner: runGitFake(&calls, nil)}})
+	}, &out, testOptions(testDependencies(fakeSliceExecutor{}, runGitFake(&calls, nil))))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +81,7 @@ func TestRunDoesNotFinalizeAlreadyCompletePlan(t *testing.T) {
 	var out bytes.Buffer
 	var calls []string
 
-	if err := executeDetail(context.Background(), detail, nil, &out, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone}}, RunDependencies: RunDependencies{CommandRunner: runGitFake(&calls, nil)}}); err != nil {
+	if err := executeDetail(context.Background(), detail, nil, &out, testOptions(RunDependencies{CommandRunner: runGitFake(&calls, nil)})); err != nil {
 		t.Fatal(err)
 	}
 	if got := out.String(); got != "Plan slices complete: plan-a\n" {
@@ -63,7 +96,7 @@ func TestRunPrintsFreshReviewHintForAlreadyInReviewPlan(t *testing.T) {
 	detail := runPlanDetail(plan.StatusInReview, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
 	var out bytes.Buffer
 
-	if err := executeDetail(context.Background(), detail, nil, &out, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone}}}); err != nil {
+	if err := executeDetail(context.Background(), detail, nil, &out, testOptions(RunDependencies{})); err != nil {
 		t.Fatal(err)
 	}
 	want := "Plan slices complete: plan-a\nNext: run `tao review --run plan-a` to request a fresh review.\n"
@@ -119,7 +152,9 @@ func TestRunDoesNotFinalizeWhenMaxSlicesStopsBeforeCompletion(t *testing.T) {
 
 	err := executeDetail(context.Background(), detail, func(ctx context.Context, detail *plan.PlanDetail) (*plan.PlanDetail, error) {
 		return reloaded, nil
-	}, &out, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{MaxSlices: 1, CommitPolicy: CommitPolicyNone}}, RunDependencies: RunDependencies{SliceExecutor: fakeSliceExecutor{}, PlanRecordFactory: memoryPlanRecordFactory, CommandRunner: runGitFake(&calls, nil)}})
+	}, &out, testOptions(testDependencies(fakeSliceExecutor{}, runGitFake(&calls, nil)), func(options *Options) {
+		options.MaxSlices = 1
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,12 +167,7 @@ func TestRunDoesNotFinalizeWhenMaxSlicesStopsBeforeCompletion(t *testing.T) {
 }
 
 func TestAutomaticSliceRequiresCleanBoundaryWhileNoneIsExempt(t *testing.T) {
-	runner := func(_ context.Context, _ string, name string, args []string, stdout io.Writer, _ io.Writer) error {
-		if name == "git" && runGitKey(args) == "status --porcelain" {
-			_, _ = io.WriteString(stdout, " M README.md\n")
-		}
-		return nil
-	}
+	runner := (&scriptedGitRunner{Outputs: map[string]string{"status --porcelain": " M README.md\n"}}).Run
 	execution := testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeCurrent}}, RunDependencies{CommandRunner: runner})
 	if err := requireCleanAutomaticSliceStart(context.Background(), execution, "."); err == nil || !strings.Contains(err.Error(), "commit or stash") || !strings.Contains(err.Error(), "commit policy none") {
 		t.Fatalf("expected actionable dirty-start refusal, got %v", err)
@@ -153,12 +183,7 @@ func TestCurrentModeAutomaticSliceRejectsProtectedBranchBeforeAgentWork(t *testi
 	detail.State.Repo.Root = t.TempDir()
 	started := false
 	executor := &countingSliceExecutor{}
-	runner := func(_ context.Context, _ string, name string, args []string, stdout io.Writer, _ io.Writer) error {
-		if name == "git" && runGitKey(args) == "branch --show-current" {
-			_, _ = io.WriteString(stdout, "master\n")
-		}
-		return nil
-	}
+	runner := (&scriptedGitRunner{Branch: "master"}).Run
 
 	err := executeDetail(context.Background(), detail, nil, io.Discard, Options{
 		ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeCurrent}},
@@ -184,19 +209,8 @@ func TestCurrentModeAutomaticSliceRejectsProtectedBranchBeforeAgentWork(t *testi
 
 func TestAutomaticSliceBoundaryUsesPreparedBranchAndHead(t *testing.T) {
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
-	runner := func(_ context.Context, _ string, name string, args []string, stdout io.Writer, _ io.Writer) error {
-		if name != "git" {
-			return nil
-		}
-		switch runGitKey(args) {
-		case "branch --show-current":
-			_, _ = io.WriteString(stdout, "prepared-feature\n")
-		case "rev-parse HEAD":
-			_, _ = io.WriteString(stdout, "prepared-head\n")
-		}
-		return nil
-	}
-	execution := testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice}}, RunDependencies{CommandRunner: runner, PlanRecordFactory: memoryPlanRecordFactory})
+	runner := (&scriptedGitRunner{Branch: "prepared-feature", Head: "prepared-head"}).Run
+	execution := testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice}}, testDependencies(nil, runner))
 	execution.StartingBranch = "stale-branch"
 	if err := startSlice(context.Background(), execution, detail, "001-a", time.Now().UTC(), "."); err != nil {
 		t.Fatal(err)
@@ -229,20 +243,11 @@ func TestAutomaticSliceCompletionBoundaryGuardsTransaction(t *testing.T) {
 			if tt.mutate != nil {
 				tt.mutate(detail)
 			}
-			runner := func(_ context.Context, _ string, name string, args []string, stdout io.Writer, _ io.Writer) error {
-				if name != "git" {
-					return nil
-				}
-				switch runGitKey(args) {
-				case "branch --show-current":
-					_, _ = io.WriteString(stdout, tt.branch)
-				case "rev-parse HEAD":
-					_, _ = io.WriteString(stdout, tt.head)
-				case "status --porcelain":
-					_, _ = io.WriteString(stdout, tt.status)
-				}
-				return nil
-			}
+			runner := (&scriptedGitRunner{Outputs: map[string]string{
+				"branch --show-current": tt.branch,
+				"rev-parse HEAD":        tt.head,
+				"status --porcelain":    tt.status,
+			}}).Run
 			execution := testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice}}, RunDependencies{CommandRunner: runner})
 			err := (SelectedSliceRunner{execution: execution}).validateAutomaticSliceBoundary(context.Background(), detail, "001-a", ".")
 			if tt.wantErr == "" && err != nil {
@@ -309,7 +314,7 @@ func TestRunPreflightUsesExecutionRootForPathChecks(t *testing.T) {
 	var out bytes.Buffer
 	var calls []string
 	executor := &countingSliceExecutor{}
-	execution := testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone}}, RunDependencies{SliceExecutor: executor, PlanRecordFactory: memoryPlanRecordFactory, CommandRunner: runGitFake(&calls, nil)})
+	execution := testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone}}, testDependencies(executor, runGitFake(&calls, nil)))
 	execution.ExecutionRoot = workspace
 
 	err := executeDetailWithExecution(context.Background(), detail, func(ctx context.Context, detail *plan.PlanDetail) (*plan.PlanDetail, error) {
@@ -414,7 +419,7 @@ func TestRunPreflightAllowsExpectedFutureFileWarningBeforeRunning(t *testing.T) 
 
 	err := executeDetail(context.Background(), detail, func(ctx context.Context, detail *plan.PlanDetail) (*plan.PlanDetail, error) {
 		return completedDetail, nil
-	}, &out, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone}}, RunDependencies: RunDependencies{SliceExecutor: executor, PlanRecordFactory: memoryPlanRecordFactory, CommandRunner: runGitFake(&calls, nil)}})
+	}, &out, testOptions(testDependencies(executor, runGitFake(&calls, nil))))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -448,7 +453,7 @@ func TestRunPreflightPrintsWarningsAndContinues(t *testing.T) {
 
 	err := executeDetail(context.Background(), detail, func(ctx context.Context, detail *plan.PlanDetail) (*plan.PlanDetail, error) {
 		return completedDetail, nil
-	}, &out, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone}}, RunDependencies: RunDependencies{SliceExecutor: executor, PlanRecordFactory: memoryPlanRecordFactory, CommandRunner: runGitFake(&calls, nil)}})
+	}, &out, testOptions(testDependencies(executor, runGitFake(&calls, nil))))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -474,7 +479,7 @@ func TestRunPreflightPrintsGuardrailWarningsBeforeRunning(t *testing.T) {
 
 	err := executeDetail(context.Background(), detail, func(ctx context.Context, detail *plan.PlanDetail) (*plan.PlanDetail, error) {
 		return completedDetail, nil
-	}, &out, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone}}, RunDependencies: RunDependencies{SliceExecutor: executor, PlanRecordFactory: memoryPlanRecordFactory, CommandRunner: runGitFake(&[]string{}, nil)}})
+	}, &out, testOptions(testDependencies(executor, runGitFake(&[]string{}, nil))))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -507,7 +512,7 @@ func TestRunPreflightPrintsBudgetWarningsBeforeRunning(t *testing.T) {
 
 	err := executeDetail(context.Background(), detail, func(ctx context.Context, detail *plan.PlanDetail) (*plan.PlanDetail, error) {
 		return completedDetail, nil
-	}, &out, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone}}, RunDependencies: RunDependencies{SliceExecutor: &countingSliceExecutor{}, PlanRecordFactory: memoryPlanRecordFactory, CommandRunner: runGitFake(&[]string{}, nil)}})
+	}, &out, testOptions(testDependencies(&countingSliceExecutor{}, runGitFake(&[]string{}, nil))))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -530,7 +535,9 @@ func TestRunPassesSelectedSlicePacketToExecutor(t *testing.T) {
 
 	err := executeDetail(context.Background(), detail, func(ctx context.Context, detail *plan.PlanDetail) (*plan.PlanDetail, error) {
 		return completedDetail, nil
-	}, &out, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent}}, RunDependencies: RunDependencies{SliceExecutor: executor, PlanRecordFactory: memoryPlanRecordFactory, CommandRunner: runGitFake(&[]string{}, nil)}})
+	}, &out, testOptions(testDependencies(executor, runGitFake(&[]string{}, nil)), func(options *Options) {
+		options.ExecutionMode = ExecutionModeCurrent
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -634,7 +641,7 @@ func TestServiceExecuteWorkspaceStrategyWorktreeOverridesPlanCurrent(t *testing.
 	executor := &packetCapturingExecutor{}
 	var calls []string
 
-	err := NewService(repo, io.Discard, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone}}, RunDependencies: RunDependencies{SliceExecutor: executor, PlanRecordFactory: memoryPlanRecordFactory, CommandRunner: runWorkspaceGitFake(&calls)}}).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated}})
+	err := NewService(repo, io.Discard, testOptions(testDependencies(executor, runWorkspaceGitFake(&calls)))).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -837,13 +844,10 @@ func TestServiceExecuteStartsNextAutomaticSliceAfterMaxSlicesStop(t *testing.T) 
 
 	liveHead := "base"
 	baseRunner := interruptedServiceGitRunner(t, workspaceRoot, &[]string{}, func() string { return "" }, "tao/plan-a", "")
-	runner := func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
-		if name == "git" && runGitKey(args) == "rev-parse HEAD" {
-			_, _ = io.WriteString(stdout, liveHead+"\n")
-			return nil
-		}
-		return baseRunner(ctx, cwd, name, args, stdout, stderr)
-	}
+	runner := (&scriptedGitRunner{
+		Responses: map[string]func() string{"rev-parse HEAD": func() string { return liveHead + "\n" }},
+		Fallback:  baseRunner,
+	}).Run
 	repo := plan.NewFileRepository(plansDir)
 	var runs []string
 	executor := sliceExecutorFunc(func(ctx context.Context, run SliceRun) error {
@@ -1102,18 +1106,16 @@ func TestServiceExecuteResumeRevalidatesExactBoundaryBeforeAgentHandoff(t *testi
 			runner: func(t *testing.T, root string) CommandRunner {
 				calls := 0
 				base := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return " M partial.go\n" }, "tao/plan-a", "base")
-				return func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
-					if runGitKey(args) == "branch --show-current" {
+				return (&scriptedGitRunner{
+					Responses: map[string]func() string{"branch --show-current": func() string {
 						calls++
-						branch := "tao/plan-a"
 						if calls > 1 {
-							branch = "other"
+							return "other\n"
 						}
-						_, _ = io.WriteString(stdout, branch+"\n")
-						return nil
-					}
-					return base(ctx, cwd, name, args, stdout, stderr)
-				}
+						return "tao/plan-a\n"
+					}},
+					Fallback: base,
+				}).Run
 			},
 		},
 		{
@@ -1121,18 +1123,16 @@ func TestServiceExecuteResumeRevalidatesExactBoundaryBeforeAgentHandoff(t *testi
 			runner: func(t *testing.T, root string) CommandRunner {
 				calls := 0
 				base := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return " M partial.go\n" }, "tao/plan-a", "base")
-				return func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
-					if runGitKey(args) == "rev-parse HEAD" {
+				return (&scriptedGitRunner{
+					Responses: map[string]func() string{"rev-parse HEAD": func() string {
 						calls++
-						head := "base"
 						if calls > 1 {
-							head = "advanced"
+							return "advanced\n"
 						}
-						_, _ = io.WriteString(stdout, head+"\n")
-						return nil
-					}
-					return base(ctx, cwd, name, args, stdout, stderr)
-				}
+						return "base\n"
+					}},
+					Fallback: base,
+				}).Run
 			},
 		},
 		{
@@ -1269,22 +1269,19 @@ func TestServiceExecuteResumesInterruptedAutomaticSliceThenRunsNextSlice(t *test
 		}
 		return ""
 	}, "tao/plan-a", "")
-	runner = func(base CommandRunner) CommandRunner {
-		return func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
-			if runGitKey(args) == "rev-parse HEAD" {
-				switch len(runs) {
-				case 0:
-					_, _ = io.WriteString(stdout, "base\n")
-				case 1:
-					_, _ = io.WriteString(stdout, "after-1\n")
-				default:
-					_, _ = io.WriteString(stdout, "after-2\n")
-				}
-				return nil
+	runner = (&scriptedGitRunner{
+		Responses: map[string]func() string{"rev-parse HEAD": func() string {
+			switch len(runs) {
+			case 0:
+				return "base\n"
+			case 1:
+				return "after-1\n"
+			default:
+				return "after-2\n"
 			}
-			return base(ctx, cwd, name, args, stdout, stderr)
-		}
-	}(runner)
+		}},
+		Fallback: runner,
+	}).Run
 
 	repo := &memoryRunRepository{details: []*plan.PlanDetail{initial, initial, afterFirst, completed}}
 	err := NewService(repo, io.Discard, Options{RunDependencies: RunDependencies{
@@ -1397,7 +1394,7 @@ func TestServiceExecuteRoutesCommitIntentWithoutAgent(t *testing.T) {
 	agentCalls := 0
 	gitCalls := 0
 	err := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
-		CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error { gitCalls++; return nil },
+		CommandRunner: (&scriptedGitRunner{CallCount: &gitCalls}).Run,
 		SliceExecutor: sliceExecutorFunc(func(context.Context, SliceRun) error { agentCalls++; return nil }),
 	}}).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated, CommitPolicy: CommitPolicySlice}})
 	if err == nil || !strings.Contains(err.Error(), "interrupted post-intent completion transaction") || !strings.Contains(err.Error(), "rerun tao slice-complete") || !strings.Contains(err.Error(), "do not rerun the implementation agent") {
@@ -1774,7 +1771,7 @@ func TestServiceExecuteDoesNotRebaseCurrentMode(t *testing.T) {
 		return ctx.Err()
 	})
 
-	err := NewService(repo, io.Discard, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone}}, RunDependencies: RunDependencies{SliceExecutor: executor, PlanRecordFactory: memoryPlanRecordFactory, CommandRunner: runner}}).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeCurrent, MaxSlices: 1}})
+	err := NewService(repo, io.Discard, testOptions(testDependencies(executor, runner))).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeCurrent, MaxSlices: 1}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1800,7 +1797,7 @@ func TestServiceExecuteWorkspaceStrategyCurrentOverridesPlanWorktree(t *testing.
 	executor := &packetCapturingExecutor{}
 	var calls []string
 
-	err := NewService(repo, io.Discard, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone}}, RunDependencies: RunDependencies{SliceExecutor: executor, PlanRecordFactory: memoryPlanRecordFactory, CommandRunner: runGitFake(&calls, nil)}}).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeCurrent}})
+	err := NewService(repo, io.Discard, testOptions(testDependencies(executor, runGitFake(&calls, nil)))).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeCurrent}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2472,18 +2469,23 @@ func TestExecutionRootResolverPreparesWorktreeStrategyMetadata(t *testing.T) {
 		return ctx.Err()
 	}
 	var statuses []string
+	repository := plantest.NewPersistingRepository()
+	if _, err := persistingPlanRecord(repository, detail); err != nil {
+		t.Fatal(err)
+	}
+	store := workspaceStatusStore{Repository: repository, onStateWrite: func() error {
+		persisted, err := repository.GetPlan(context.Background(), detail.State.Plan.ID)
+		if err != nil {
+			return err
+		}
+		statuses = append(statuses, persisted.State.Workspace.LifecycleStatus)
+		return nil
+	}}
 	recordFactory := func(recordDetail *plan.PlanDetail) (PlanMutationRecord, error) {
 		if recordDetail.Dir != detail.Dir {
 			t.Fatalf("expected plan dir %q, got %q", detail.Dir, recordDetail.Dir)
 		}
-		record, err := memoryPlanRecordFactory(recordDetail)
-		if err != nil {
-			return nil, err
-		}
-		return persistOnlyRecord{PlanMutationRecord: record, persist: func() error {
-			statuses = append(statuses, recordDetail.State.Workspace.LifecycleStatus)
-			return nil
-		}}, nil
+		return plan.NewPlanRecordWithStore(store, recordDetail.Dir, recordDetail)
 	}
 	resolver := executionRootResolver(runExecution{Dependencies: RunDependencies{CommandRunner: runner, PlanRecordFactory: recordFactory, Now: runClock(createdAt, readyAt)}})
 
@@ -2493,6 +2495,10 @@ func TestExecutionRootResolverPreparesWorktreeStrategyMetadata(t *testing.T) {
 	}
 	if root != workspacePath {
 		t.Fatalf("expected worktree path %q, got %q", workspacePath, root)
+	}
+	detail, err = repository.GetPlan(context.Background(), detail.State.Plan.ID)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if strings.Join(statuses, ",") != strings.Join([]string{plan.WorkspaceStatusPreparing, plan.WorkspaceStatusReady}, ",") {
 		t.Fatalf("expected preparing and ready metadata writes, got %#v", statuses)
@@ -2509,6 +2515,57 @@ func TestExecutionRootResolverPreparesWorktreeStrategyMetadata(t *testing.T) {
 	if !runCallBefore(calls, "worktree add -b tao/plan-a "+workspacePath+" main", "branch --show-current") {
 		t.Fatalf("expected worktree add before status calls, got %#v", calls)
 	}
+}
+
+func TestPersistingRunPlanRecordReloadsLifecycleWithoutAliasing(t *testing.T) {
+	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
+	repository := plantest.NewPersistingRepository()
+	record, err := persistingPlanRecord(repository, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 26, 14, 0, 0, 0, time.UTC)
+	if err := record.StartSlice("001-a", plan.SliceStartRequest{StartedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	detail.State.Plan.Title = "unpersisted edit"
+	loaded, err := repository.GetPlan(context.Background(), "plan-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.State.Status != plan.StatusInProgress || loaded.Slices.Slices[0].Status != plan.StatusInProgress {
+		t.Fatalf("start not persisted: state=%s slice=%s", loaded.State.Status, loaded.Slices.Slices[0].Status)
+	}
+	if loaded.State.Plan.Title != "Plan A" {
+		t.Fatalf("unpersisted edit leaked into repository: %q", loaded.State.Plan.Title)
+	}
+	if got := countPlanEvents(loaded.Events, plan.EventTypeSliceStarted); got != 1 {
+		t.Fatalf("slice_started events = %d, want one persisted event", got)
+	}
+	requireOwnedEvent(t, loaded.Events, plan.EventTypeSliceStarted, func(event plan.Event) bool {
+		return event.PlanID == "plan-a" && event.SliceID == "001-a" && event.Timestamp.Equal(now)
+	})
+
+	reloadedRecord, err := repository.PlanRecord(loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reloadedRecord.BlockSlice("001-a", "provider stopped", now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	blocked, err := repository.GetPlan(context.Background(), "plan-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blocked.State.Status != plan.StatusBlocked || blocked.Slices.Slices[0].BlockerNote != "provider stopped" {
+		t.Fatalf("fresh record did not persist blocking: %#v", blocked)
+	}
+	if loaded.State.Status != plan.StatusInProgress || loaded.Slices.Slices[0].Status != plan.StatusInProgress {
+		t.Fatal("fresh record mutated an earlier read snapshot")
+	}
+	requireOwnedEvent(t, blocked.Events, plan.EventTypeSliceBlocked, func(event plan.Event) bool {
+		return event.PlanID == "plan-a" && event.SliceID == "001-a"
+	})
 }
 
 func TestRunDoesNotStartSliceBeforePreflightPasses(t *testing.T) {
@@ -2546,379 +2603,4 @@ func TestRunDoesNotStartSliceBeforePreflightPasses(t *testing.T) {
 	if executor.calls != 0 {
 		t.Fatalf("expected executor not to run, got %d calls", executor.calls)
 	}
-}
-
-func (r *memoryRunRepository) ResolvePlan(ctx context.Context, input string) (*plan.PlanDetail, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if r.calls >= len(r.details) {
-		return r.details[len(r.details)-1], nil
-	}
-	detail := r.details[r.calls]
-	r.calls++
-	return detail, nil
-}
-
-func (r *memoryRunRepository) GetPlanExact(ctx context.Context, id string) (*plan.PlanDetail, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	for _, detail := range r.details {
-		if detail != nil && detail.State.Plan.ID == id {
-			return detail, nil
-		}
-	}
-	return nil, nil
-}
-
-func (r *memoryRunRepository) PlanRecord(detail *plan.PlanDetail) (*plan.PlanRecord, error) {
-	return plan.NewPlanRecord("", detail)
-}
-
-func (r *memoryRunRepository) OpenLogAppend(planDir string) (*os.File, error) { return nil, nil }
-
-func (r *memoryRunRepository) AppendEvent(planDir string, event plan.Event) error {
-	return plan.NewFileRepository("").AppendEvent(planDir, event)
-}
-
-func persistRunArtifacts(t *testing.T, planDir string, detail *plan.PlanDetail) {
-	t.Helper()
-	record, err := plan.NewPlanRecord(planDir, detail)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := record.PersistArtifacts(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-type sliceExecutorFunc func(ctx context.Context, run SliceRun) error
-
-type stateOnlyStartStore struct {
-	writeSlicesErr error
-	appendEventErr error
-	appended       int
-}
-
-func (s *stateOnlyStartStore) WriteState(planDir string, payload []byte) error {
-	return os.WriteFile(filepath.Join(planDir, "state.json"), payload, 0o600)
-}
-
-func (s *stateOnlyStartStore) WriteSlices(planDir string, payload []byte) error {
-	if s.writeSlicesErr != nil {
-		return s.writeSlicesErr
-	}
-	return os.WriteFile(filepath.Join(planDir, "slices.json"), payload, 0o600)
-}
-
-func (s *stateOnlyStartStore) AppendEvent(string, plan.Event) error {
-	s.appended++
-	return s.appendEventErr
-}
-
-func (f sliceExecutorFunc) RunSlice(ctx context.Context, run SliceRun) error {
-	return f(ctx, run)
-}
-
-type persistOnlyRecord struct {
-	PlanMutationRecord
-	persist func() error
-}
-
-func (r persistOnlyRecord) RecordWorkspacePreparing(request plan.WorkspacePreparingRequest) error {
-	if err := r.PlanMutationRecord.RecordWorkspacePreparing(request); err != nil {
-		return err
-	}
-	return r.persist()
-}
-
-func (r persistOnlyRecord) RecordWorkspaceDependencyFailure(request plan.WorkspaceDependencyFailureRequest) error {
-	if err := r.PlanMutationRecord.RecordWorkspaceDependencyFailure(request); err != nil {
-		return err
-	}
-	return r.persist()
-}
-
-func (r persistOnlyRecord) RecordWorkspaceReady(request plan.WorkspaceReadyRequest) error {
-	if err := r.PlanMutationRecord.RecordWorkspaceReady(request); err != nil {
-		return err
-	}
-	return r.persist()
-}
-
-type startCallbackRecord struct {
-	PlanMutationRecord
-	onStart func(sliceID string, now time.Time) error
-}
-
-func (r startCallbackRecord) StartSlice(sliceID string, request plan.SliceStartRequest) error {
-	if r.onStart != nil {
-		return r.onStart(sliceID, request.StartedAt)
-	}
-	return r.PlanMutationRecord.StartSlice(sliceID, request)
-}
-
-type memoryPlanMutationRecord struct {
-	*plan.PlanRecord
-	detail     *plan.PlanDetail
-	onStart    func(*plan.PlanDetail, string, time.Time) error
-	onContinue func(*plan.PlanDetail, time.Time) error
-}
-
-func memoryPlanRecordFactory(detail *plan.PlanDetail) (PlanMutationRecord, error) {
-	repository := plantest.NewRepository()
-	repository.AddDetail(detail)
-	return repository.PlanRecord(detail)
-}
-
-func callbackPlanRecordFactory(onStart func(*plan.PlanDetail, string, time.Time) error, onContinue func(*plan.PlanDetail, time.Time) error) PlanRecordFactory {
-	return func(detail *plan.PlanDetail) (PlanMutationRecord, error) {
-		repository := plantest.NewRepository()
-		repository.AddDetail(detail)
-		record, err := repository.PlanRecord(detail)
-		if err != nil {
-			return nil, err
-		}
-		return memoryPlanMutationRecord{PlanRecord: record, detail: detail, onStart: onStart, onContinue: onContinue}, nil
-	}
-}
-
-func (r memoryPlanMutationRecord) StartSlice(sliceID string, request plan.SliceStartRequest) error {
-	if r.onStart != nil {
-		return r.onStart(r.detail, sliceID, request.StartedAt)
-	}
-	return r.PlanRecord.StartSlice(sliceID, request)
-}
-
-func (r memoryPlanMutationRecord) ContinueBlocked(now time.Time) error {
-	if r.onContinue != nil {
-		return r.onContinue(r.detail, now)
-	}
-	return r.PlanRecord.ContinueBlocked(now)
-}
-
-func testRunExecution(config ExecutionConfig, dependencies RunDependencies) runExecution {
-	return newRunExecution(config, dependencies)
-}
-
-func testRunExecutionWithOptions(options Options) runExecution {
-	return runExecutionFromOptions(options)
-}
-
-func settleRunTestSlice(detail *plan.PlanDetail) {
-	const sliceID = "001-a"
-	for i := range detail.Slices.Slices {
-		if detail.Slices.Slices[i].ID == sliceID {
-			detail.Slices.Slices[i].ExecutionStart = &plan.SliceExecutionStart{Branch: "feature", Head: "head123"}
-			detail.Slices.Slices[i].Completion = &plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionNoChanges, CommitSHA: "head123"}
-			return
-		}
-	}
-}
-
-func runPlanDetail(status string, pending []string, completed []string, sliceID string, sliceStatus string, startedAt *time.Time, completedAt *time.Time) *plan.PlanDetail {
-	return &plan.PlanDetail{
-		Dir: "/plans/plan-a",
-		State: plan.State{
-			Status:    status,
-			Repo:      plan.Repo{Root: ".", Branch: "feature"},
-			Workspace: &plan.Workspace{Strategy: plan.WorkspaceStrategyCurrent},
-			Plan:      plan.PlanState{ID: "plan-a", Title: "Plan A", CompletedSlices: completed, PendingSlices: pending, Timing: plan.PlanTiming{StartedAt: startedAt, CompletedAt: completedAt}},
-		},
-		Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: sliceID, Status: sliceStatus, Verification: plan.Verification{Commands: []string{"go test ."}}}}},
-	}
-}
-
-func runGitFake(calls *[]string, failures map[string]error) CommandRunner {
-	return func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if name != "git" {
-			return nil
-		}
-		key := runGitKey(args)
-		*calls = append(*calls, key)
-		if err := failures[key]; err != nil {
-			_, _ = io.WriteString(stderr, "checkout failed")
-			return err
-		}
-		switch key {
-		case "branch --show-current":
-			_, _ = io.WriteString(stdout, "feature\n")
-		case "rev-parse HEAD":
-			_, _ = io.WriteString(stdout, "head123\n")
-		case "symbolic-ref --quiet --short refs/remotes/origin/HEAD":
-			_, _ = io.WriteString(stdout, "origin/main\n")
-		}
-		return nil
-	}
-}
-
-func runWorkspaceGitFake(calls *[]string) CommandRunner {
-	return func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if name != "git" {
-			return nil
-		}
-		key := runGitKey(args)
-		*calls = append(*calls, key)
-		switch {
-		case key == "symbolic-ref --quiet --short refs/remotes/origin/HEAD":
-			_, _ = io.WriteString(stdout, "origin/main\n")
-		case key == "branch --format=%(refname:short) --list main":
-			_, _ = io.WriteString(stdout, "main\n")
-		case key == "rev-parse main", key == "rev-parse feature":
-			_, _ = io.WriteString(stdout, "base123\n")
-		case key == "worktree list --porcelain":
-		case strings.HasPrefix(key, "worktree add "):
-		case key == "branch --show-current":
-			_, _ = io.WriteString(stdout, "tao/plan-a\n")
-		case key == "rev-parse HEAD":
-			_, _ = io.WriteString(stdout, "head123\n")
-		case key == "status --porcelain":
-		}
-		return nil
-	}
-}
-
-func interruptedServiceRunDetail(t *testing.T, root string) *plan.PlanDetail {
-	t.Helper()
-	current := "001-a"
-	started := time.Date(2026, 7, 16, 17, 0, 0, 0, time.UTC)
-	return &plan.PlanDetail{
-		Dir: t.TempDir(),
-		State: plan.State{
-			Status: plan.StatusInProgress,
-			Repo:   plan.Repo{Root: t.TempDir(), Branch: "master"},
-			Workspace: &plan.Workspace{
-				Strategy: plan.WorkspaceStrategyWorktree, Root: filepath.Dir(root), Path: root,
-				Branch: "tao/plan-a", HeadSHA: "base", LifecycleStatus: plan.WorkspaceStatusReady,
-			},
-			Plan: plan.PlanState{
-				ID: "plan-a", CurrentSlice: &current, PendingSlices: []string{current},
-				LastRunCommitPolicy: CommitPolicySlice.String(), LastRunStartingDirty: []string{},
-				Timing: plan.PlanTiming{StartedAt: &started},
-			},
-		},
-		Slices: plan.SlicesFile{Slices: []plan.Slice{{
-			ID: current, Status: plan.StatusInProgress, ExecutionRoot: root,
-			ExecutionStart: &plan.SliceExecutionStart{Branch: "tao/plan-a", Head: "base", CommitPolicy: CommitPolicySlice.String(), WorkspaceStrategy: plan.WorkspaceStrategyWorktree},
-			Timing:         plan.SliceTiming{StartedAt: &started}, Verification: plan.Verification{Commands: []string{"go test ."}},
-		}}},
-		Events: []plan.Event{{Type: plan.EventTypeSliceStarted, Timestamp: started, PlanID: "plan-a", SliceID: current, Message: "Work started on slice"}},
-	}
-}
-
-func writeLinkedWorktreeSequencer(t *testing.T, root string) {
-	t.Helper()
-	gitDir := filepath.Join(t.TempDir(), "repo.git", "worktrees", "plan-a")
-	if err := os.MkdirAll(filepath.Join(gitDir, "sequencer"), 0o750); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, ".git"), []byte("gitdir: "+gitDir+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func interruptedServiceGitRunner(t *testing.T, root string, calls *[]string, status func() string, branch string, head string) CommandRunner {
-	t.Helper()
-	commonDir := filepath.Join(t.TempDir(), "repo.git")
-	gitDir := filepath.Join(commonDir, "worktrees", "plan-a")
-	if err := os.MkdirAll(gitDir, 0o750); err != nil {
-		t.Fatal(err)
-	}
-	return func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if name != "git" {
-			t.Fatalf("unexpected dependency command %s", name)
-		}
-		actualCWD := cwd
-		if len(args) >= 2 && args[0] == "-C" {
-			actualCWD = args[1]
-		}
-		key := runGitKey(args)
-		*calls = append(*calls, key)
-		switch key {
-		case "rev-parse --show-toplevel":
-			_, _ = io.WriteString(stdout, actualCWD+"\n")
-		case "rev-parse --git-common-dir":
-			_, _ = io.WriteString(stdout, commonDir+"\n")
-		case "rev-parse --git-dir":
-			if actualCWD != root {
-				t.Fatalf("git-dir cwd = %q, want immutable root %q", actualCWD, root)
-			}
-			_, _ = io.WriteString(stdout, gitDir+"\n")
-		case "branch --show-current":
-			if actualCWD != root {
-				t.Fatalf("branch cwd = %q, want immutable root %q", actualCWD, root)
-			}
-			_, _ = io.WriteString(stdout, branch+"\n")
-		case "rev-parse HEAD":
-			if actualCWD != root {
-				t.Fatalf("HEAD cwd = %q, want immutable root %q", actualCWD, root)
-			}
-			_, _ = io.WriteString(stdout, head+"\n")
-		case "status --porcelain":
-			if actualCWD != root {
-				t.Fatalf("status cwd = %q, want immutable root %q", actualCWD, root)
-			}
-			_, _ = io.WriteString(stdout, status())
-		case "ls-files --stage -z", "ls-files --others --exclude-standard -z":
-		default:
-			t.Fatalf("unexpected git command %q", key)
-		}
-		return nil
-	}
-}
-
-func runClock(times ...time.Time) func() time.Time {
-	index := 0
-	return func() time.Time {
-		if index >= len(times) {
-			return times[len(times)-1]
-		}
-		now := times[index]
-		index++
-		return now
-	}
-}
-
-func runGitKey(args []string) string {
-	if len(args) >= 2 && args[0] == "-C" {
-		args = args[2:]
-	}
-	return strings.Join(args, " ")
-}
-
-func runHasGitCall(calls []string, want string) bool {
-	return slices.Contains(calls, want)
-}
-
-func runHasGitCallPrefix(calls []string, prefix string) bool {
-	for _, call := range calls {
-		if strings.HasPrefix(call, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-func runCallBefore(calls []string, before string, after string) bool {
-	beforeIndex := -1
-	afterIndex := -1
-	for i, call := range calls {
-		if call == before {
-			beforeIndex = i
-		}
-		if call == after {
-			afterIndex = i
-		}
-	}
-	return beforeIndex >= 0 && afterIndex >= 0 && beforeIndex < afterIndex
 }

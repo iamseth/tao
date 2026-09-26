@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -16,6 +15,7 @@ import (
 )
 
 func TestMergeSquashesPlanBranchByDefault(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	ctx := context.Background()
 
@@ -64,6 +64,7 @@ func TestMergeSquashesPlanBranchByDefault(t *testing.T) {
 }
 
 func TestIntegrateSquashRecoversExactOwnedCommitAtIntentParent(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	ctx := context.Background()
 	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "recovered.txt"), []byte("done\n"), 0o600); err != nil {
@@ -91,6 +92,7 @@ func TestIntegrateSquashRecoversExactOwnedCommitAtIntentParent(t *testing.T) {
 }
 
 func TestIntegrateSquashRefusesMismatchedPartialCommitWithoutMutation(t *testing.T) {
+	t.Parallel()
 	detail := mergeReadyDetail("base123")
 	setSingleMergeIntent(t, detail, "source456", "pre123")
 	git := &fakeGitClient{
@@ -119,6 +121,7 @@ func TestIntegrateSquashRefusesMismatchedPartialCommitWithoutMutation(t *testing
 }
 
 func TestIntegrateSquashCommitFailureRestoresDefault(t *testing.T) {
+	t.Parallel()
 	git := &fakeGitClient{
 		defaultBranch: "main",
 		stagedChanges: true,
@@ -141,6 +144,7 @@ func TestIntegrateSquashCommitFailureRestoresDefault(t *testing.T) {
 }
 
 func TestIntegrateSquashEmptyStagingRestoresDefaultWithoutCommit(t *testing.T) {
+	t.Parallel()
 	git := &fakeGitClient{
 		defaultBranch: "main",
 		revParse:      map[string]string{"main": "pre123", "tao/plan-a": "source456"},
@@ -164,6 +168,7 @@ func TestIntegrateSquashEmptyStagingRestoresDefaultWithoutCommit(t *testing.T) {
 }
 
 func TestIntegrateSquashHEADFailurePreservesCreatedCommit(t *testing.T) {
+	t.Parallel()
 	resolveErr := errors.New("HEAD unavailable")
 	git := &fakeGitClient{
 		defaultBranch:  "main",
@@ -189,6 +194,7 @@ func TestIntegrateSquashHEADFailurePreservesCreatedCommit(t *testing.T) {
 }
 
 func TestIntegrateSquashConflictRestoresCleanDefault(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	ctx := context.Background()
 
@@ -231,6 +237,7 @@ func TestIntegrateSquashConflictRestoresCleanDefault(t *testing.T) {
 }
 
 func TestMergeRebasesPlanWorktreeWhenDefaultAdvanced(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	ctx := context.Background()
 	baseSHA := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
@@ -301,6 +308,7 @@ func TestMergeRebasesPlanWorktreeWhenDefaultAdvanced(t *testing.T) {
 // strategy plan, every rebase call lands on the worktree-bound client and none
 // land on the repo-root client.
 func TestIntegrateWorktreePlanMutatesOnlyWorktreeRoot(t *testing.T) {
+	t.Parallel()
 	// Real directories: hasSeparatePlanWorktree only trusts a worktree that
 	// exists on disk.
 	repoRoot := t.TempDir()
@@ -356,15 +364,4 @@ func setSingleMergeIntent(t *testing.T, detail *plan.PlanDetail, sourceHead, def
 		Message: message, PlanID: detail.State.Plan.ID, SourceHead: sourceHead,
 		DefaultBranch: "main", DefaultParent: defaultParent,
 	}
-}
-
-func realGitOutput(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	cmd := exec.Command("git", args...) //nolint:gosec // G204: test invokes fixed git command with test-controlled args.
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, out)
-	}
-	return strings.TrimSpace(string(out))
 }

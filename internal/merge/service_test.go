@@ -306,6 +306,7 @@ func (r *fakeGitRegistry) newGit(dir string) GitClient {
 }
 
 func TestCheckPreMergeGateSkipsWorktreeCheckWhenWorktreePathEqualsRepoRoot(t *testing.T) {
+	t.Parallel()
 	// When the workspace path is the same filesystem path as the repo root the
 	// plan is not running in a separate worktree. CheckPreMergeGate must not
 	// call NewGit for the plan worktree in that case.
@@ -333,6 +334,7 @@ func TestCheckPreMergeGateSkipsWorktreeCheckWhenWorktreePathEqualsRepoRoot(t *te
 }
 
 func TestCheckPreMergeGateAllowsApprovedMatchingReviewBase(t *testing.T) {
+	t.Parallel()
 	git := &fakeGitClient{defaultBranch: "main", mergeBase: "base123"}
 	detail := mergeReadyDetail("base123")
 
@@ -347,6 +349,7 @@ func TestCheckPreMergeGateAllowsApprovedMatchingReviewBase(t *testing.T) {
 }
 
 func TestMergeRefusesAbandonedPlanBeforeEverySideEffect(t *testing.T) {
+	t.Parallel()
 	for _, options := range []Options{
 		{},
 		{Force: true},
@@ -379,6 +382,7 @@ func TestMergeRefusesAbandonedPlanBeforeEverySideEffect(t *testing.T) {
 }
 
 func TestCheckPreMergeGateRefusesAbandonedPlanEvenWithForce(t *testing.T) {
+	t.Parallel()
 	detail := mergeReadyDetail("base123")
 	detail.State.Status = plan.StatusAbandoned
 	git := &fakeGitClient{}
@@ -391,6 +395,7 @@ func TestCheckPreMergeGateRefusesAbandonedPlanEvenWithForce(t *testing.T) {
 }
 
 func TestCheckPreMergeGateRefusesNotApproved(t *testing.T) {
+	t.Parallel()
 	git := &fakeGitClient{defaultBranch: "main", mergeBase: "base123"}
 	detail := mergeReadyDetail("base123")
 	detail.State.Plan.Review.Verdict = plan.ReviewVerdictChangesRequested
@@ -412,6 +417,7 @@ func TestCheckPreMergeGateRefusesNotApproved(t *testing.T) {
 }
 
 func TestCheckPreMergeGateRefusesReviewBaseMismatch(t *testing.T) {
+	t.Parallel()
 	git := &fakeGitClient{defaultBranch: "main", mergeBase: "merge-base-sha"}
 	detail := mergeReadyDetail("review-base-sha")
 
@@ -432,6 +438,7 @@ func TestCheckPreMergeGateRefusesReviewBaseMismatch(t *testing.T) {
 }
 
 func TestCheckPreMergeGateRefusesDirtyWorktree(t *testing.T) {
+	t.Parallel()
 	git := &fakeGitClient{defaultBranch: "main", mergeBase: "base123", status: " M internal/merge/service.go\n"}
 	detail := mergeReadyDetail("base123")
 
@@ -453,6 +460,7 @@ func TestCheckPreMergeGateRefusesDirtyWorktree(t *testing.T) {
 }
 
 func TestCheckPreMergeGateRefusesDirtyPlanWorktree(t *testing.T) {
+	t.Parallel()
 	// Real directories: hasSeparatePlanWorktree only trusts a worktree that
 	// exists on disk.
 	repoRoot := t.TempDir()
@@ -489,6 +497,7 @@ func TestCheckPreMergeGateRefusesDirtyPlanWorktree(t *testing.T) {
 }
 
 func TestWorktreeGitRejectsRootMismatch(t *testing.T) {
+	t.Parallel()
 	worktreePath := t.TempDir()
 	// NewGit returns a client whose Root() does not match the requested dir.
 	badClient := &fakeGitClient{root: "/some/other/path"}
@@ -515,6 +524,7 @@ func TestWorktreeGitRejectsRootMismatch(t *testing.T) {
 }
 
 func TestWorktreeGitUsesConfigDerivedPathWhenWorkspacePathIsEmpty(t *testing.T) {
+	t.Parallel()
 	// When Workspace.Strategy=worktree but Workspace.Path is empty, worktreeGit
 	// must derive the path from workspace.ResolvePlanWorktree (which falls back to
 	// the config-derived path) rather than passing "" to NewGit.
@@ -559,6 +569,7 @@ func TestWorktreeGitUsesConfigDerivedPathWhenWorkspacePathIsEmpty(t *testing.T) 
 }
 
 func TestMergeRefusesDirtyPlanWorktreeBeforeDefaultMutation(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	ctx := context.Background()
 	repoGit := gitops.NewClient(fixture.repoRoot, nil)
@@ -612,6 +623,7 @@ func TestMergeRefusesDirtyPlanWorktreeBeforeDefaultMutation(t *testing.T) {
 }
 
 func TestCheckPreMergeGateForceBypassesReviewAndScopeGate(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		detail *plan.PlanDetail
@@ -640,6 +652,7 @@ func TestCheckPreMergeGateForceBypassesReviewAndScopeGate(t *testing.T) {
 }
 
 func TestCheckPreMergeGateFallsBackToWorkspaceBaseBranch(t *testing.T) {
+	t.Parallel()
 	git := &fakeGitClient{defaultErr: errors.New("origin HEAD missing"), mergeBase: "base123"}
 	detail := mergeReadyDetail("base123")
 	detail.State.Workspace.BaseBranch = "master"
@@ -655,6 +668,7 @@ func TestCheckPreMergeGateFallsBackToWorkspaceBaseBranch(t *testing.T) {
 }
 
 func TestIntegrateFastForwardsDescendantPlanBranch(t *testing.T) {
+	t.Parallel()
 	git := &fakeGitClient{
 		defaultBranch: "main",
 		revParse:      map[string]string{"main": "pre123"},
@@ -672,6 +686,7 @@ func TestIntegrateFastForwardsDescendantPlanBranch(t *testing.T) {
 }
 
 func TestIntegrateRebasesThenFastForwardsWhenDefaultAdvanced(t *testing.T) {
+	t.Parallel()
 	git := &fakeGitClient{
 		defaultBranch: "main",
 		revParse:      map[string]string{"main": "pre123"},
@@ -690,6 +705,7 @@ func TestIntegrateRebasesThenFastForwardsWhenDefaultAdvanced(t *testing.T) {
 }
 
 func TestIntegrateRebaseConflictAbortsAndRestoresDefault(t *testing.T) {
+	t.Parallel()
 	git := &fakeGitClient{
 		defaultBranch: "main",
 		revParse:      map[string]string{"main": "pre123"},
@@ -735,6 +751,7 @@ func TestIntegrateRebaseConflictAbortsAndRestoresDefault(t *testing.T) {
 // snapshots (review/PR/workspace) as external-merge candidates. Detecting the
 // stale merge would delete the branch holding the unmerged rework commits.
 func TestExternalMergeRefsDropsStaleSnapshotsAfterReopen(t *testing.T) {
+	t.Parallel()
 	newDetail := func() *plan.PlanDetail {
 		detail := mergeReadyDetail("base123")
 		detail.State.Plan.Review.Head = "stale-review-head"
@@ -786,6 +803,7 @@ func TestExternalMergeRefsDropsStaleSnapshotsAfterReopen(t *testing.T) {
 // gate-free full merge) would mark the reopened plan completed and cleanup
 // would delete the worktree and branch carrying the pending rework slices.
 func TestMergeRefusesReopenedPlanWithoutReworkCommits(t *testing.T) {
+	t.Parallel()
 	newGit := func() *fakeGitClient {
 		return &fakeGitClient{
 			defaultBranch: "main",
@@ -860,6 +878,7 @@ func TestMergeRefusesReopenedPlanWithoutReworkCommits(t *testing.T) {
 // fresh work) must invalidate the approval rather than merging unreviewed on
 // the strength of the old verdict.
 func TestCheckPreMergeGateRefusesReviewHeadMismatch(t *testing.T) {
+	t.Parallel()
 	newGit := func(tip string) *fakeGitClient {
 		return &fakeGitClient{
 			defaultBranch: "main",
@@ -895,6 +914,7 @@ func TestCheckPreMergeGateRefusesReviewHeadMismatch(t *testing.T) {
 // worktree) could never be cleaned via tao merge again: the already-recorded
 // short-circuit reported success without retrying cleanup.
 func TestMergeRetriesCleanupWhenMergeAlreadyRecorded(t *testing.T) {
+	t.Parallel()
 	newDetail := func() *plan.PlanDetail {
 		detail := mergeVerifyDetail()
 		detail.Events = []plan.Event{{Type: plan.EventTypePlanMerged}}
@@ -934,6 +954,7 @@ func TestMergeRetriesCleanupWhenMergeAlreadyRecorded(t *testing.T) {
 // logged, so the command reported success while the branch and worktree
 // remained. The failure must surface (the recorded merge stays recorded).
 func TestMergeSurfacesCleanupFailureAfterRecordingExternalMerge(t *testing.T) {
+	t.Parallel()
 	git := &fakeGitClient{
 		defaultBranch: "main",
 		revParse:      map[string]string{"main": "merged789"},
@@ -957,6 +978,7 @@ func TestMergeSurfacesCleanupFailureAfterRecordingExternalMerge(t *testing.T) {
 // never reached the default branch, and cleanup could delete the branch
 // carrying them.
 func TestDetectExternalMergeSkipsSnapshotBehindAdvancedBranchTip(t *testing.T) {
+	t.Parallel()
 	newGit := func() *fakeGitClient {
 		return &fakeGitClient{
 			defaultBranch: "main",
@@ -1015,6 +1037,7 @@ func TestDetectExternalMergeSkipsSnapshotBehindAdvancedBranchTip(t *testing.T) {
 }
 
 func TestPrepareSingleMergeIntentSupersedesUnmutatedPriorSource(t *testing.T) {
+	t.Parallel()
 	detail := mergeReadyDetail("base123")
 	detail.Dir = t.TempDir()
 	detail.State.Plan.Review.Head = "source-new"
@@ -1041,6 +1064,7 @@ func TestPrepareSingleMergeIntentSupersedesUnmutatedPriorSource(t *testing.T) {
 }
 
 func TestMergeRejectsInvalidReviewProposalBeforeIntentOrGitMutation(t *testing.T) {
+	t.Parallel()
 	git := &fakeGitClient{
 		defaultBranch: "main", mergeBase: "base123",
 		ancestors: map[string]bool{"main..tao/plan-a": true},
@@ -1095,6 +1119,7 @@ func generatedMergeProposal() commitcontract.Proposal {
 }
 
 func TestMergeResolvesSquashConflictVerifiesAndRequiresIndependentApproval(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		verdict     string
@@ -1186,6 +1211,7 @@ func TestMergeResolvesSquashConflictVerifiesAndRequiresIndependentApproval(t *te
 }
 
 func TestMergeResolutionFailureRollsBackAfterCallerCancellation(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		cancelAt   string
@@ -1285,6 +1311,7 @@ func TestMergeResolutionFailureRollsBackAfterCallerCancellation(t *testing.T) {
 }
 
 func TestMergeRecoversExactResolutionCommitBeforeSettlementPersistence(t *testing.T) {
+	t.Parallel()
 	fixture, request, git := preparedSingleResolutionFixture(t)
 	detail := mergeReadyDetail(request.Intent.DefaultParent)
 	detail.Dir = t.TempDir()
@@ -1347,6 +1374,7 @@ func TestMergeRecoversExactResolutionCommitBeforeSettlementPersistence(t *testin
 }
 
 func TestMergeAutomaticallyResolvesConflictsWithExactFilenames(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		path string
@@ -1418,6 +1446,7 @@ func TestMergeAutomaticallyResolvesConflictsWithExactFilenames(t *testing.T) {
 }
 
 func TestMergeAutomaticallyResolvesConflictWithExactSourcePathScope(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		configure func(*testing.T, realGitWorktree) string
@@ -1512,6 +1541,7 @@ func TestMergeAutomaticallyResolvesConflictWithExactSourcePathScope(t *testing.T
 }
 
 func TestMergeConflictResolutionRejectsDefaultOnlyPathEdits(t *testing.T) {
+	t.Parallel()
 	fixture, sourceHead, _, _ := batchAgentConflictFixture(t)
 	const defaultOnlyPath = "default-only.txt"
 	if err := os.WriteFile(filepath.Join(fixture.repoRoot, defaultOnlyPath), []byte("default-owned\n"), 0o600); err != nil {
@@ -1578,6 +1608,7 @@ func TestMergeConflictResolutionRejectsDefaultOnlyPathEdits(t *testing.T) {
 }
 
 func TestMergeResolutionFailureSettlesRollbackAndAllowsReworkedRerun(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		failVerify bool
@@ -1701,6 +1732,7 @@ func TestMergeResolutionFailureSettlesRollbackAndAllowsReworkedRerun(t *testing.
 }
 
 func TestPrepareSingleMergeIntentGeneratesLegacyProposalOnceBeforeMutation(t *testing.T) {
+	t.Parallel()
 	detail := mergeReadyDetail("base123")
 	detail.Dir = t.TempDir()
 	detail.State.Repo.Root = "/repo"
@@ -1739,6 +1771,7 @@ func TestPrepareSingleMergeIntentGeneratesLegacyProposalOnceBeforeMutation(t *te
 }
 
 func TestMergeForceGeneratesExceptionalIntentBeforeSquash(t *testing.T) {
+	t.Parallel()
 	detail := mergeReadyDetail("base123")
 	detail.Dir = t.TempDir()
 	detail.State.Repo.Root = "/repo"
@@ -1778,6 +1811,7 @@ func TestMergeForceGeneratesExceptionalIntentBeforeSquash(t *testing.T) {
 }
 
 func TestMergeForceGeneratesFromLiveDiffWhenApprovedReviewBaseIsStale(t *testing.T) {
+	t.Parallel()
 	detail := mergeReadyDetail("reviewed-base")
 	detail.Dir = t.TempDir()
 	detail.State.Repo.Root = "/repo"
@@ -1811,6 +1845,7 @@ func TestMergeForceGeneratesFromLiveDiffWhenApprovedReviewBaseIsStale(t *testing
 }
 
 func TestMergeNonSquashAndPreGateFailuresNeverGenerateProposal(t *testing.T) {
+	t.Parallel()
 	t.Run("no squash", func(t *testing.T) {
 		detail := mergeVerifyDetail()
 		git := mergeVerifyGit()
@@ -1878,6 +1913,7 @@ func TestMergeNonSquashAndPreGateFailuresNeverGenerateProposal(t *testing.T) {
 }
 
 func TestPrepareSingleMergeIntentReusesExceptionalIntentWithoutGeneratorAndRefusesDrift(t *testing.T) {
+	t.Parallel()
 	newDetail := func() *plan.PlanDetail {
 		detail := mergeReadyDetail("base123")
 		detail.State.Plan.Review = nil
@@ -1908,6 +1944,7 @@ func TestPrepareSingleMergeIntentReusesExceptionalIntentWithoutGeneratorAndRefus
 }
 
 func TestPrepareSingleMergeIntentRejectsProviderAndGitMutationBeforeIntent(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		generatorErr error
@@ -1940,6 +1977,7 @@ func TestPrepareSingleMergeIntentRejectsProviderAndGitMutationBeforeIntent(t *te
 }
 
 func TestGenerateSingleMergeMessageDetectsInPlaceUntrackedMutation(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	ctx := context.Background()
 	untrackedPath := filepath.Join(fixture.repoRoot, "scratch.txt")
@@ -1969,6 +2007,7 @@ func TestGenerateSingleMergeMessageDetectsInPlaceUntrackedMutation(t *testing.T)
 }
 
 func TestPrepareSingleMergeIntentCurrentReviewIsZeroCall(t *testing.T) {
+	t.Parallel()
 	detail := mergeReadyDetail("base123")
 	detail.Dir = t.TempDir()
 	detail.State.Plan.Review.Head = "tip-sha"
@@ -1988,6 +2027,7 @@ func TestPrepareSingleMergeIntentCurrentReviewIsZeroCall(t *testing.T) {
 }
 
 func TestMergeRollsBackWhenMergedSHACaptureFails(t *testing.T) {
+	t.Parallel()
 	captureErr := errors.New("rev-parse unavailable")
 	git := &fakeGitClient{
 		defaultBranch:    "main",
@@ -2019,6 +2059,7 @@ func TestMergeRollsBackWhenMergedSHACaptureFails(t *testing.T) {
 }
 
 func TestMergeRecordRetryConsumesSettledJournalEvidence(t *testing.T) {
+	t.Parallel()
 	plansDir := t.TempDir()
 	planDir := filepath.Join(plansDir, "plan-a")
 	if err := os.Mkdir(planDir, 0o700); err != nil {
@@ -2119,6 +2160,7 @@ func writeMergeRestartJSON(t *testing.T, path string, value any) {
 }
 
 func TestMergeRetainsDurableIntentWhenPlanMergedEventFails(t *testing.T) {
+	t.Parallel()
 	recordErr := errors.New("event store unavailable")
 	git := &fakeGitClient{
 		defaultBranch:    "main",
@@ -2155,6 +2197,7 @@ func TestMergeRetainsDurableIntentWhenPlanMergedEventFails(t *testing.T) {
 }
 
 func TestMergeDirtyInCleanupGapPreservesRecordedStateAndRetries(t *testing.T) {
+	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	commitRealPlanChange(t, fixture)
 	cleaner := newRealManagedCleaner(t, fixture)
@@ -2222,6 +2265,7 @@ func TestMergeDirtyInCleanupGapPreservesRecordedStateAndRetries(t *testing.T) {
 // event and no surviving refs to retry from. The merge must be recorded first,
 // and a cleanup failure after recording must surface without unrecording.
 func TestMergeRecordsMergeBeforeCleanup(t *testing.T) {
+	t.Parallel()
 	git := &fakeGitClient{
 		defaultBranch:    "main",
 		mergeBase:        "base123",
@@ -2261,6 +2305,7 @@ func TestMergeRecordsMergeBeforeCleanup(t *testing.T) {
 // plan whose separate worktree still held uncommitted work could be recorded as
 // merged/completed and have its branch deleted.
 func TestTryRecordExternalMergeRefusesDirtyPlanWorktree(t *testing.T) {
+	t.Parallel()
 	// Real directories: hasSeparatePlanWorktree only trusts a worktree that
 	// exists on disk.
 	repoRoot := t.TempDir()

@@ -26,6 +26,7 @@ var (
 )
 
 func TestBatchCoordinatorResultPreservesInvocationOutcomes(t *testing.T) {
+	t.Parallel()
 	restart := &BatchRestartPlan{BatchID: "batch-a", RemoveWorktree: true, RemoveBranch: true, RemoveRecovery: true}
 	result := BatchCoordinatorResult{
 		State:        BatchState{ID: "batch-a", Status: BatchStatusPlanned},
@@ -51,6 +52,7 @@ func TestBatchCoordinatorResultPreservesInvocationOutcomes(t *testing.T) {
 }
 
 func TestBatchEjectionResumeTarget(t *testing.T) {
+	t.Parallel()
 	nonConvergence := &BatchNonConvergence{PlanID: "plan-a", Reason: "not converging"}
 	tests := []struct {
 		name   string
@@ -106,6 +108,7 @@ func TestBatchEjectionResumeTarget(t *testing.T) {
 }
 
 func TestBatchCoordinatorPlansInitializesAndStartsNewBatch(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 7, 18, 1, 2, 3, 4, time.FixedZone("offset", 2*60*60))
 	candidateA := BatchCandidate{PlanID: "plan-a"}
 	candidateB := BatchCandidate{PlanID: "plan-b"}
@@ -144,6 +147,7 @@ func TestBatchCoordinatorPlansInitializesAndStartsNewBatch(t *testing.T) {
 }
 
 func TestBatchCoordinatorRevalidatesConcurrentAbandonmentBeforeInitialization(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	planDir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.MkdirAll(planDir, 0o700); err != nil {
@@ -213,6 +217,7 @@ func TestBatchCoordinatorRevalidatesConcurrentAbandonmentBeforeInitialization(t 
 }
 
 func TestBatchCoordinatorReportsDiscoveryAndPlanningBlockersWithoutDurableState(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		preflight BatchPreflightResult
@@ -249,6 +254,7 @@ func TestBatchCoordinatorReportsDiscoveryAndPlanningBlockersWithoutDurableState(
 }
 
 func TestBatchCoordinatorResumesWithOrdinaryEjectionAndPostLandingValidation(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name          string
 		state         BatchState
@@ -293,6 +299,7 @@ func TestBatchCoordinatorResumesWithOrdinaryEjectionAndPostLandingValidation(t *
 }
 
 func TestBatchCoordinatorRefusesAbandonedSnapshotBeforeResumeOrRestart(t *testing.T) {
+	t.Parallel()
 	for _, restart := range []bool{false, true} {
 		t.Run(fmt.Sprintf("restart=%t", restart), func(t *testing.T) {
 			state := coordinatorActiveState(BatchStatusIntegrating)
@@ -318,6 +325,7 @@ func TestBatchCoordinatorRefusesAbandonedSnapshotBeforeResumeOrRestart(t *testin
 }
 
 func TestBatchCoordinatorRestartRefusesDurableLandingIntent(t *testing.T) {
+	t.Parallel()
 	state := coordinatorActiveState(BatchStatusReadyToLand)
 	state.Landing = &BatchLanding{IntegrationHead: "integrated"}
 	workspaceOwner := &coordinatorWorkspace{landingIntent: true}
@@ -333,6 +341,7 @@ func TestBatchCoordinatorRestartRefusesDurableLandingIntent(t *testing.T) {
 }
 
 func TestBatchCoordinatorDryRunCleansWorkspaceAndReleasesOwnership(t *testing.T) {
+	t.Parallel()
 	stateCandidate := BatchCandidate{PlanID: "plan-a"}
 	workspaceOwner := &coordinatorWorkspace{}
 	store := &coordinatorStore{}
@@ -361,6 +370,7 @@ func TestBatchCoordinatorDryRunCleansWorkspaceAndReleasesOwnership(t *testing.T)
 }
 
 func TestBatchCoordinatorResumesBlockedPhaseBeforeDispatch(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 7, 18, 2, 0, 0, 0, time.UTC)
 	state := coordinatorActiveState(BatchStatusBlocked)
 	state.BlockedReason = "agent session interrupted"
@@ -384,6 +394,7 @@ func TestBatchCoordinatorResumesBlockedPhaseBeforeDispatch(t *testing.T) {
 }
 
 func TestBatchCoordinatorRefusesExplicitTerminalBlockRegardlessOfReason(t *testing.T) {
+	t.Parallel()
 	state := coordinatorActiveState(BatchStatusBlocked)
 	state.BlockedReason = "operator decision needed before continuing"
 	state.BlockKind = BatchBlockKindTerminal
@@ -405,6 +416,7 @@ func TestBatchCoordinatorRefusesExplicitTerminalBlockRegardlessOfReason(t *testi
 }
 
 func TestBatchCoordinatorPreservesInterruptedEjectionIntent(t *testing.T) {
+	t.Parallel()
 	state := coordinatorActiveState(BatchStatusBlocked)
 	state.NonConvergence = &BatchNonConvergence{PlanID: "plan-a", Reason: "not converging in shared.go"}
 	interrupted := state
@@ -427,6 +439,7 @@ func TestBatchCoordinatorPreservesInterruptedEjectionIntent(t *testing.T) {
 }
 
 func TestBatchCoordinatorPreservesResolvingAndReviewingInterruptions(t *testing.T) {
+	t.Parallel()
 	interruptErr := errors.New("agent interrupted")
 	tests := []struct {
 		name     string
@@ -457,6 +470,7 @@ func TestBatchCoordinatorPreservesResolvingAndReviewingInterruptions(t *testing.
 }
 
 func TestBatchCoordinatorReentersResolvingAndReviewing(t *testing.T) {
+	t.Parallel()
 	calls := []string{}
 	state := coordinatorActiveState(BatchStatusReviewing)
 	resolving := state
@@ -485,6 +499,7 @@ func TestBatchCoordinatorReentersResolvingAndReviewing(t *testing.T) {
 }
 
 func TestBatchCoordinatorResumesApprovedBlockedStateIntoLanding(t *testing.T) {
+	t.Parallel()
 	state := coordinatorActiveState(BatchStatusBlocked)
 	state.BlockedReason = "default branch temporarily unavailable"
 	state.Review = &BatchReview{Verdict: "approve"}
@@ -506,6 +521,7 @@ func TestBatchCoordinatorResumesApprovedBlockedStateIntoLanding(t *testing.T) {
 }
 
 func TestBatchCoordinatorReturnsDurableLandingIntentBeforeSettlement(t *testing.T) {
+	t.Parallel()
 	state := coordinatorActiveState(BatchStatusReadyToLand)
 	intent := state
 	intent.Landing = &BatchLanding{DefaultParentSHA: "base", IntegrationHead: "integrated"}
@@ -524,6 +540,7 @@ func TestBatchCoordinatorReturnsDurableLandingIntentBeforeSettlement(t *testing.
 }
 
 func TestBatchCoordinatorRecoversLandedEvidenceBeforeSettlement(t *testing.T) {
+	t.Parallel()
 	state := coordinatorActiveState(BatchStatusLanded)
 	state.IntegrationHead = "integrated"
 	state.LandedSHA = "integrated"
@@ -545,6 +562,7 @@ func TestBatchCoordinatorRecoversLandedEvidenceBeforeSettlement(t *testing.T) {
 }
 
 func TestBatchCoordinatorRetriesSettlementWithoutLandingAgain(t *testing.T) {
+	t.Parallel()
 	state := coordinatorActiveState(BatchStatusSettling)
 	state.LandedSHA = "integrated"
 	state.Landing = &BatchLanding{IntegrationHead: "integrated", LandedDefaultSHA: "integrated"}
@@ -789,6 +807,7 @@ func coordinatorActiveState(status BatchStatus) BatchState {
 }
 
 func TestBatchOperatorEjectAvailable(t *testing.T) {
+	t.Parallel()
 	nonConvergence := &BatchNonConvergence{PlanID: "plan-a", Reason: "not converging"}
 	tests := []struct {
 		name      string
