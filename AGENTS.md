@@ -72,6 +72,7 @@
 - Keep prompt changes narrow because they directly shape future agent behavior.
 
 ## Repo-Local Agent Commands
+- `tao steal fetch` is the only network operation for scouting; it uses a protocol allowlist, `--depth 1`, `--no-checkout` then checkout, symlink stripping, and a 200 MiB cap into `<data-home>/steal`; `prompts/steal.md` must never contain clone flags, and tests must never reach the network.
 - Keep `/tao-pr` reviewer-facing title, body, category-label, and assignment conventions synchronized with the automated pull-request path unless an intentional divergence is documented.
 - `prompts/run.md` implements exactly one pending slice and asks that same active agent for the structured commit proposal, then delegates validation, trusted trailers, intent, staging, recovery, and completion to `tao slice-complete`; it must not ask the agent to commit automatic slice work or start a nested message session.
 - `prompts/slice.md` allocates plan artifacts with `tao init --slug <short-slug> --json` and must not edit application files.

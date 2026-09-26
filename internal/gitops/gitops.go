@@ -42,6 +42,28 @@ func (c Client) Root() string {
 	return c.repoRoot
 }
 
+// CloneShallowHardened clones one shallow branch without checking out files,
+// allowing only HTTPS and SSH transports and disabling symlinks, hooks, and
+// submodule recursion in the cloned repository.
+func (c Client) CloneShallowHardened(ctx context.Context, url string, dir string) error {
+	if url == "" || strings.HasPrefix(url, "-") {
+		return errors.New("clone URL must be non-empty and must not start with '-'")
+	}
+	args := []string{
+		"-c", "protocol.allow=never",
+		"-c", "protocol.https.allow=always",
+		"-c", "protocol.ssh.allow=always",
+		"-c", "protocol.file.allow=never",
+		"-c", "protocol.ext.allow=never",
+		"clone", "--quiet", "--depth", "1", "--single-branch", "--no-checkout",
+		"--config", "core.symlinks=false",
+		"--config", "core.hooksPath=" + os.DevNull,
+		"--config", "submodule.recurse=false",
+		"--", url, dir,
+	}
+	return c.runner(ctx, c.Root(), "git", args, io.Discard, io.Discard)
+}
+
 // CurrentBranch returns the current branch name.
 func (c Client) CurrentBranch(ctx context.Context) (string, error) {
 	return c.output(ctx, "branch", "--show-current")

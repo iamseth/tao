@@ -176,7 +176,7 @@ commands also accept the short unambiguous prefixes shown by help.
 | Plan | `list`, `show`, `report`, `note`, `validate`, `staleness`, `edit`, `abandon`, `delete` | Capture backlog items and inspect, validate, share, or maintain local plans. |
 | Execution | `run`, `commit`, `approve`, `review`, `rework` | Execute slices, satisfy gates, inspect exact-diff reviews, and address findings. |
 | Workspace and cleanup | `workspace`, `cleanup`, `merge` | Inspect managed worktrees, clean eligible Git state, and integrate approved plans. |
-| Repository | `init`, `repo` | Register checkouts and inspect repository configuration and health. |
+| Repository | `init`, `repo`, `steal` | Register checkouts, inspect repository configuration and health, and fetch a read-only scouting snapshot. |
 | Monitoring | `ui`, `monitor`, `status`, `insights`, `log` | See cross-repository work, resolved settings, telemetry, and run logs. |
 | Prompts and agents | `prompt`, `draft-prompt`, `install-prompts` | Render, save, and install Tao's agent prompts. |
 | Settings | `completion`, `doctor`, `update` | Configure shell support, diagnose setup, and update release binaries. |

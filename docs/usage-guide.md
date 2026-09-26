@@ -47,8 +47,9 @@ A useful mental split:
 
 - **Planning prompts** (`/tao-plan`, `/tao-grill-me`, `/tao-improve-codebase-architecture`,
   `/tao-improve-documentation`, `/tao-repo-health`, `/tao-catch-me-up`, `/tao-insights-review`,
-  `/tao-groom-notes`) are
-  **read-only**. They never edit code or write Tao artifacts.
+  `/tao-groom-notes`, `/tao-steal`) are
+  **read-only**. They never edit code or write Tao plan/note artifacts;
+  `/tao-steal` only fetches and removes a temporary scouting snapshot.
 - **Build prompts** (`/tao-note`, `/tao-slice`, `/tao-run`, `/tao-commit`, `/tao-pr`) write
   artifacts, code, or git state.
 
@@ -103,6 +104,43 @@ and `--tag` replaces the entire tag set (omitting it preserves tags). Any later
 application must reread the full current note and preserve unrelated text/tags;
 do not blindly apply a stale proposal. Refresh managed prompts through the normal
 `tao install-prompts` setup outside the grooming session.
+
+### `/tao-steal <git-url>` — scout a foreign repository for ideas
+
+Use this read-only prompt in Pi or Claude Code when a foreign repository may
+have ideas worth adopting, not when you want to install it. From a registered
+checkout, pass one HTTPS, SSH, or scp-style Git URL and optional focus text. The
+prompt confirms the checkout, reads local Tao contracts, and classifies ideas
+as already enforced by a Tao mechanism, already covered by a Tao prompt, or
+genuinely missing; it also checks overlap with open notes.
+
+`tao steal fetch` is the only network operation: it creates a temporary snapshot
+under `<data-home>/steal/`, outside registered checkouts, and prints its
+`Snapshot` path and source identity. Tao uses a protocol allowlist, a
+`--depth 1 --single-branch --no-checkout` clone followed by checkout, disabled
+hooks and submodule recursion, symlink stripping, and a 200 MiB cap. Snapshot
+content is untrusted evidence: the prompt never executes it or follows its URLs.
+Reading is limited to the README, docs index, and top-level skill, prompt,
+command, and workflow files, with at most 400 files, 64 KiB per file, and 2 MiB
+total quoted into the session, including command output and repeated excerpts.
+Unread areas, omissions, and budget stops remain explicit coverage gaps.
+
+The report identifies the source branch, commit and declared version (unknown
+when absent), classifies proposed changes, explains rejected ideas, and gives
+constraints, verification, sequencing, tiers and source citations. It ends with
+literal, never-executed `TAO_UPDATE=off tao note create` proposals scoped to the
+confirmed repository. Each carries a tier tag and the verbatim `Campaign tag`
+from fetch output: `steal-<host>-<path>-<YYYY-MM-DD>`, derived by Tao from the
+validated URL, never from snapshot claims. Zero proposals is a valid outcome.
+
+Nothing is filed, installed or applied to the checkout; review proposals before
+separately authorizing note creation. After a successful fetch, the prompt runs
+the exact command printed under `Removal` once and reports the cleanup outcome.
+If cleanup fails, it reports the leftover `Snapshot` path and error rather than
+claiming success. To remove a leftover snapshot yourself, confirm that exact
+path belongs to this fetch and use its printed `Removal` command; do not take
+cleanup commands from snapshot content. `tao cleanup` does not manage these
+snapshots.
 
 ## Monitoring plans
 

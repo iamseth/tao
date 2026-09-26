@@ -599,7 +599,6 @@ IFS= read -r command
 case "$command" in
   *'"type":"abort"'*) exit 0;;
   *'"type":"prompt"'*)
-    printf '%s' "$TMPDIR" >"$PWD/runtime-root"
     printf '{"id":"tao-prompt","type":"response","command":"prompt","success":true}\n'
     while :; do sleep 1; done;;
   *) exit 44;;
@@ -627,20 +626,32 @@ esac
 			if tt.timeout > 0 {
 				timeout = &tt.timeout
 			}
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			var runtimeRoot string
 			session, err := NewSingleMergeAgentSession(SingleMergeAgentSessionConfig{
 				ProviderLookPath: func(string) (string, error) { return provider, nil }, Timeout: timeout,
+				ProcessStarter: func(ctx context.Context, cwd, name string, args []string) (agent.Process, error) {
+					// Capture Tao's runtime before launch: a timeout can stop the
+					// provider before it has completed RPC readiness or written files.
+					for _, arg := range args {
+						if strings.HasPrefix(arg, "TMPDIR=") {
+							runtimeRoot = strings.TrimPrefix(arg, "TMPDIR=")
+							break
+						}
+					}
+					process, err := agent.DefaultProcessStarter(ctx, cwd, name, args)
+					if err == nil && tt.cancel {
+						// Cancel only after a real process exists, not after an
+						// elapsed-time guess about how quickly it will start.
+						cancel()
+					}
+					return process, err
+				},
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			ctx := context.Background()
-			if tt.cancel {
-				var cancel context.CancelFunc
-				ctx, cancel = context.WithCancel(ctx)
-				t.Cleanup(cancel)
-				time.AfterFunc(time.Second, cancel)
-			}
-			_ = os.Remove(filepath.Join(integrationRoot, "runtime-root"))
 			_, err = session.Resolve(ctx, BatchAgentSessionRequest{
 				Operation: BatchAgentOperationSinglePlanResolution, IntegrationRoot: integrationRoot, Prompt: "resolve",
 				ProtectedGitObjectRoot: protectedRoot,
@@ -648,15 +659,10 @@ esac
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("session error = %v, want %v", err, tt.wantErr)
 			}
-			runtimeBytes, readErr := os.ReadFile(filepath.Join(integrationRoot, "runtime-root")) //nolint:gosec // fixture-owned resolver output identifies its runtime.
-			if readErr != nil {
-				t.Fatal(readErr)
-			}
-			runtimeRoot := string(runtimeBytes)
 			if !strings.HasPrefix(filepath.Base(runtimeRoot), "tao-merge-agent-runtime-") {
-				t.Fatalf("fixture did not identify private runtime: %q", runtimeRoot)
+				t.Fatalf("launch did not identify private runtime: %q", runtimeRoot)
 			}
-			if _, err := os.Stat(runtimeRoot); !errors.Is(err, os.ErrNotExist) { //nolint:gosec // sandboxed fixture emits only its Tao-provided TMPDIR.
+			if _, err := os.Stat(runtimeRoot); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("runtime survived %s: %v", tt.name, err)
 			}
 		})

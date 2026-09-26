@@ -525,7 +525,7 @@ func TestInstallPromptsWritesAndChecksPiPrompts(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"install-prompts"}); err != nil {
 		t.Fatal(err)
 	}
-	promptNames := []string{"plan", "slice", "note-slice", "note", "run", "grill-me", "improve-codebase-architecture", "improve-documentation", "repo-health", "catch-me-up", "insights-review", "groom-notes", "pr"}
+	promptNames := []string{"plan", "slice", "note-slice", "note", "run", "grill-me", "improve-codebase-architecture", "improve-documentation", "repo-health", "catch-me-up", "insights-review", "groom-notes", "steal", "pr"}
 	for _, name := range promptNames {
 		commandName := "tao-" + name
 		path := filepath.Join(root, commandName+".md")
@@ -711,7 +711,7 @@ func TestInstallPromptsAndDoctorUseSelectedClaudeAgent(t *testing.T) {
 	}
 
 	commandsRoot := filepath.Join(home, ".claude", "commands")
-	for _, name := range []string{"plan", "slice", "note-slice", "note", "run", "commit", "repo-health", "catch-me-up", "insights-review", "groom-notes", "pr"} {
+	for _, name := range []string{"plan", "slice", "note-slice", "note", "run", "commit", "repo-health", "catch-me-up", "insights-review", "groom-notes", "steal", "pr"} {
 		commandName := "tao-" + name
 		path := filepath.Join(commandsRoot, commandName+".md")
 		text := readText(t, path)
@@ -735,6 +735,10 @@ func TestInstallPromptsAndDoctorUseSelectedClaudeAgent(t *testing.T) {
 		case "groom-notes":
 			if !strings.Contains(text, "No invocation-time writes") || !strings.Contains(text, "TAO_UPDATE=off") || strings.Contains(text, "tao prompt groom-notes") || strings.Contains(text, "```!") {
 				t.Fatalf("Claude grooming command must load its safety contract without shell execution: %q", text)
+			}
+		case "steal":
+			if !strings.Contains(text, "No invocation-time writes") || !strings.Contains(text, "TAO_UPDATE=off") || strings.Contains(text, "tao prompt steal") || strings.Contains(text, "```!") {
+				t.Fatalf("Claude steal command must load its safety contract without shell execution: %q", text)
 			}
 		default:
 			want := "tao prompt " + name + " --arguments-stdin <<'TAO_PROMPT_ARGUMENTS'"
@@ -765,6 +769,7 @@ func TestInstallPromptsAndDoctorUseSelectedClaudeAgent(t *testing.T) {
 		"prompts (claude):",
 		"Claude Markdown slash commands that render tao prompts dynamically",
 		"tao-commit                        ✓ current",
+		"tao-steal                         ✓ current",
 		"✓ ok      claude (claude)",
 	} {
 		if !strings.Contains(text, want) {
@@ -785,7 +790,7 @@ func TestInstallPromptsAndDoctorUseSelectedPiAgent(t *testing.T) {
 	}
 
 	piRoot := filepath.Join(home, ".pi", "agent", "prompts")
-	for _, name := range []string{"plan", "slice", "note-slice", "note", "run", "grill-me", "improve-codebase-architecture", "improve-documentation", "repo-health", "catch-me-up", "insights-review", "groom-notes", "pr"} {
+	for _, name := range []string{"plan", "slice", "note-slice", "note", "run", "grill-me", "improve-codebase-architecture", "improve-documentation", "repo-health", "catch-me-up", "insights-review", "groom-notes", "steal", "pr"} {
 		commandName := "tao-" + name
 		path := filepath.Join(piRoot, commandName+".md")
 		text := readText(t, path)
@@ -827,6 +832,7 @@ func TestInstallPromptsAndDoctorUseSelectedPiAgent(t *testing.T) {
 		"Pi prompt templates plus Tao /tao-commit extension command",
 		"tao-plan                          ✓ current",
 		"tao-commit                        ✓ current",
+		"tao-steal                         ✓ current",
 		"extensions/tao",
 		"✓ ok      pi (pi)",
 	} {

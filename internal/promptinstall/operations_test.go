@@ -192,6 +192,15 @@ func TestInstallAllPiWritesPromptTemplatesAndTaoExtension(t *testing.T) {
 	if strings.Count(groomNotes, "$ARGUMENTS") != 1 || strings.Contains(groomNotes, "{{ .Arguments }}") {
 		t.Fatal("Pi grooming prompt must substitute focus exactly once")
 	}
+	steal := readPromptInstallText(t, filepath.Join(promptsDir, "tao-steal.md"))
+	for _, want := range []string{"agent: plan", "tao-managed: tao-steal v1", "tao steal fetch", "No invocation-time writes"} {
+		if !strings.Contains(steal, want) {
+			t.Fatalf("Pi steal prompt missing %q", want)
+		}
+	}
+	if strings.Count(steal, "$ARGUMENTS") != 1 || strings.Contains(steal, "{{ .Arguments }}") || strings.Contains(steal, "tao prompt steal") {
+		t.Fatal("Pi steal prompt must inline its contract and substitute arguments exactly once")
+	}
 	if _, err := os.Stat(filepath.Join(promptsDir, "tao-commit.md")); !os.IsNotExist(err) {
 		t.Fatalf("expected Pi tao-commit prompt template not to be installed, got %v", err)
 	}
@@ -290,6 +299,20 @@ func TestInstallAllClaudeWritesManagedCommandWrappers(t *testing.T) {
 	if strings.Count(groomNotes, "$ARGUMENTS") != 1 {
 		t.Fatal("Claude grooming prompt must substitute focus exactly once as inline data")
 	}
+	steal := readPromptInstallText(t, filepath.Join(commandsDir, "tao-steal.md"))
+	for _, want := range []string{"You are in PLAN mode", "tao-managed: tao-steal v1", "tao steal fetch", "No invocation-time writes"} {
+		if !strings.Contains(steal, want) {
+			t.Fatalf("Claude steal prompt missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"tao prompt steal", "```!", "TAO_PROMPT_ARGUMENTS", "{{ .Arguments }}"} {
+		if strings.Contains(steal, forbidden) {
+			t.Fatalf("Claude steal prompt must load without shell execution: %q", forbidden)
+		}
+	}
+	if strings.Count(steal, "$ARGUMENTS") != 1 {
+		t.Fatal("Claude steal prompt must substitute arguments exactly once as inline data")
+	}
 	assertManagedCommitDelegates(t, filepath.Join(commandsDir, "tao-commit.md"), "allowed-tools: Bash(tao commit:*)")
 	assertPromptRenameInstalled(t, commandsDir)
 
@@ -382,7 +405,7 @@ func TestInstalledCommandMetadataIsPrefixedAndDelegatesLogicalSelectors(t *testi
 			t.Fatalf("missing %s descriptor", kind)
 		}
 		for _, definition := range prompts.Definitions() {
-			if definition.Name == prompts.PromptCommit || definition.Name == prompts.PromptCatchMeUp || definition.Name == prompts.PromptGroomNotes {
+			if definition.Name == prompts.PromptCommit || definition.Name == prompts.PromptCatchMeUp || definition.Name == prompts.PromptGroomNotes || definition.Name == prompts.PromptSteal {
 				continue
 			}
 			content, err := renderInstallContent(descriptor, definition)

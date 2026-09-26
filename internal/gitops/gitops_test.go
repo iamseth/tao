@@ -37,6 +37,58 @@ func (r *fakeRunner) run(ctx context.Context, cwd string, name string, args []st
 	return nil
 }
 
+func TestCloneShallowHardened(t *testing.T) {
+	const url = "https://example.com/owner/repo.git"
+	const dir = "/scratch/repo snapshot"
+	wantArgs := []string{
+		"-c", "protocol.allow=never",
+		"-c", "protocol.https.allow=always",
+		"-c", "protocol.ssh.allow=always",
+		"-c", "protocol.file.allow=never",
+		"-c", "protocol.ext.allow=never",
+		"clone", "--quiet", "--depth", "1", "--single-branch", "--no-checkout",
+		"--config", "core.symlinks=false",
+		"--config", "core.hooksPath=" + os.DevNull,
+		"--config", "submodule.recurse=false",
+		"--", url, dir,
+	}
+	runnerErr := errors.New("clone failed")
+	for _, tt := range []struct {
+		name string
+		err  error
+	}{
+		{name: "success"},
+		{name: "runner error", err: runnerErr},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := &fakeRunner{failures: map[string]error{strings.Join(wantArgs, "\x00"): tt.err}}
+			client := NewClient("/repo", runner.run)
+			if err := client.CloneShallowHardened(context.Background(), url, dir); err != tt.err { //nolint:errorlint // Require the original runner error, not a wrapper.
+				t.Fatalf("CloneShallowHardened() error = %v, want unchanged %v", err, tt.err)
+			}
+			want := []call{{cwd: client.Root(), name: "git", args: wantArgs}}
+			if !reflect.DeepEqual(runner.calls, want) {
+				t.Fatalf("calls mismatch\nwant: %#v\n got: %#v", want, runner.calls)
+			}
+		})
+	}
+}
+
+func TestCloneShallowHardenedRejectsInvalidURL(t *testing.T) {
+	for _, url := range []string{"", "-", "--upload-pack=malicious"} {
+		t.Run(url, func(t *testing.T) {
+			runner := &fakeRunner{}
+			client := NewClient("/repo", runner.run)
+			if err := client.CloneShallowHardened(context.Background(), url, "/scratch/repo"); err == nil {
+				t.Fatal("expected invalid URL error")
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("invalid URL invoked runner: %#v", runner.calls)
+			}
+		})
+	}
+}
+
 func TestDiffBoundedDrainsOversizedOutput(t *testing.T) {
 	const (
 		chunkCount = 32
