@@ -634,7 +634,7 @@ func singleMergeFilesystemConfinementCommandForProvider(policy singleMergeFilesy
 	command = append(command, environment...)
 	command = append(command, name)
 	command = append(command, args...)
-	confiner, err := singleMergeFilesystemConfinementExecutable()
+	confiner, err := singleMergeConfinementExecutable()
 	if err != nil {
 		return "", nil, err
 	}
@@ -664,6 +664,11 @@ func singleMergeFilesystemConfinementCommandForProvider(policy singleMergeFilesy
 		return "", nil, fmt.Errorf("protect provider filesystem boundary: confinement is unsupported on %s", runtime.GOOS)
 	}
 }
+
+// singleMergeConfinementExecutable is a test-only discovery seam, package-private
+// by design so callers cannot conjure the sandbox away. It affects both the probe
+// launch spec and the attributed launch through their shared command constructor.
+var singleMergeConfinementExecutable = singleMergeFilesystemConfinementExecutable
 
 func singleMergeFilesystemConfinementExecutable() (string, error) {
 	switch runtime.GOOS {

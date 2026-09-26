@@ -26,6 +26,21 @@ import (
 func testProviderLookPath(name string) (string, error) { return name, nil }
 func successfulConfinementProbe() error                { return nil }
 
+// fakeConfinementExecutable supplies a plausible path that tests must never execute.
+// Tests using this package-level seam must not call t.Parallel().
+func fakeConfinementExecutable(t *testing.T) {
+	t.Helper()
+	setConfinementExecutable(t, func() (string, error) { return "/usr/bin/fake-confiner", nil })
+}
+
+// Tests using setConfinementExecutable must not call t.Parallel().
+func setConfinementExecutable(t *testing.T, lookup func() (string, error)) {
+	t.Helper()
+	original := singleMergeConfinementExecutable
+	singleMergeConfinementExecutable = lookup
+	t.Cleanup(func() { singleMergeConfinementExecutable = original })
+}
+
 type recordingBatchAgentEvents struct {
 	events []BatchAgentEvent
 	err    error
@@ -135,6 +150,7 @@ func TestBatchAgentSessionHonorsConfiguredProviderPermissionsAndRoot(t *testing.
 }
 
 func TestSingleMergeAgentSessionExposesMetricsWithoutBatchPersistence(t *testing.T) {
+	fakeConfinementExecutable(t)
 	t.Setenv("TAO_AGENT", "claude")
 	var got mergeFakeClaudeStart
 	batchEvents := &recordingBatchAgentEvents{}
@@ -307,6 +323,7 @@ func TestSingleMergePiRuntimeProjectionUsesPrivateModesAndAllowlist(t *testing.T
 }
 
 func TestSingleMergeConfiningStarterCleansRuntimeOnStartupError(t *testing.T) {
+	fakeConfinementExecutable(t)
 	integrationRoot, protectedRoot := singleMergeAgentTestBoundary(t)
 	policy := singleMergeFilesystemConfinement{
 		protectedPaths: []string{protectedRoot}, integrationRoot: integrationRoot, allowEdits: true,
@@ -694,6 +711,59 @@ printf ':fixture-readiness-tail"}\n'
 	}
 }
 
+func TestSingleMergeAgentSessionMissingConfinerDoesNotStartProvider(t *testing.T) {
+	t.Setenv("TAO_AGENT", "claude")
+	const unavailable = "protect provider filesystem boundary: bubblewrap is unavailable; install bwrap and run tao doctor"
+	setConfinementExecutable(t, func() (string, error) { return "", errors.New(unavailable) })
+	starts := 0
+	session, err := NewSingleMergeAgentSession(SingleMergeAgentSessionConfig{
+		ProviderLookPath: testProviderLookPath, ConfinementProbe: successfulConfinementProbe,
+		ProcessStarter: func(context.Context, string, string, []string) (agent.Process, error) {
+			starts++
+			t.Error("missing confiner must not start the provider")
+			return nil, errors.New("unexpected provider start")
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	integrationRoot, protectedRoot := singleMergeAgentTestBoundary(t)
+	_, err = session.Resolve(context.Background(), BatchAgentSessionRequest{
+		Operation: BatchAgentOperationSinglePlanResolution, IntegrationRoot: integrationRoot,
+		ProtectedGitObjectRoot: protectedRoot,
+	})
+	if err == nil || !strings.Contains(err.Error(), unavailable) {
+		t.Fatalf("missing-confiner resolve error = %v, want %q", err, unavailable)
+	}
+	if starts != 0 {
+		t.Fatalf("missing confiner started %d provider processes", starts)
+	}
+}
+
+func TestSingleMergeFilesystemConfinementExecutableDefaultDiscovery(t *testing.T) {
+	path, err := singleMergeFilesystemConfinementExecutable()
+	switch runtime.GOOS {
+	case "darwin":
+		if err != nil || path != "/usr/bin/sandbox-exec" {
+			t.Fatalf("default discovery = %q, %v; want /usr/bin/sandbox-exec", path, err)
+		}
+	case "linux":
+		if err != nil {
+			const unavailable = "protect provider filesystem boundary: bubblewrap is unavailable; install bwrap and run tao doctor"
+			if path != "" || err.Error() != unavailable {
+				t.Fatalf("default discovery = %q, %v; want %q", path, err, unavailable)
+			}
+		} else if path != "/usr/bin/bwrap" && path != "/bin/bwrap" {
+			t.Fatalf("default discovery = %q; want /usr/bin/bwrap or /bin/bwrap", path)
+		}
+	default:
+		want := "protect provider filesystem boundary: confinement is unsupported on " + runtime.GOOS
+		if path != "" || err == nil || err.Error() != want {
+			t.Fatalf("default discovery = %q, %v; want %q", path, err, want)
+		}
+	}
+}
+
 func TestSingleMergeAgentSessionUnavailableConfinementDoesNotStartProvider(t *testing.T) {
 	t.Setenv("TAO_AGENT", "claude")
 	probeErr := errors.New("bubblewrap unavailable")
@@ -923,6 +993,7 @@ printf runtime >"$TMPDIR/reviewer-scratch" || exit 24`
 }
 
 func TestSingleMergeAgentSessionStartsFreshProviderForResolverAndReviewer(t *testing.T) {
+	fakeConfinementExecutable(t)
 	t.Setenv("TAO_AGENT", "claude")
 	starts := 0
 	var got mergeFakeClaudeStart
@@ -953,6 +1024,7 @@ func TestSingleMergeAgentSessionStartsFreshProviderForResolverAndReviewer(t *tes
 }
 
 func TestFreshSingleMergeAgentSessionDefersConfigurationAndStartsEachOperationOnce(t *testing.T) {
+	fakeConfinementExecutable(t)
 	t.Setenv("TAO_AGENT", "invalid")
 	deferred := NewFreshSingleMergeAgentSession(SingleMergeAgentSessionConfig{})
 	if _, err := deferred.Resolve(context.Background(), BatchAgentSessionRequest{Operation: BatchAgentOperationSinglePlanResolution}); err == nil || !strings.Contains(err.Error(), "unsupported agent") {

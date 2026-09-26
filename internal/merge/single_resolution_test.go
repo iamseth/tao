@@ -19,6 +19,7 @@ import (
 
 	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/agentsession"
+	"github.com/iamseth/tao/internal/atomicfile"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
 )
@@ -1927,12 +1928,17 @@ func TestGitSessionBoundaryLeavesObjectModesUnchangedAfterInterruption(t *testin
 	if root := os.Getenv(interruptedGitBoundaryRootEnv); root != "" {
 		ready := os.Getenv(interruptedGitBoundaryReadyEnv)
 		boundary, err := snapshotGitSessionBoundary(context.Background(), root)
+		// Publish complete messages so the parent cannot observe an empty file
+		// between creation and writing and mistake it for a helper failure.
+		message := "ready"
 		if err != nil {
-			_ = os.WriteFile(ready, []byte(err.Error()), 0o600) //nolint:gosec // parent test supplies the private synchronization path.
-			return
+			message = err.Error()
 		}
-		if err := os.WriteFile(ready, []byte("ready"), 0o600); err != nil { //nolint:gosec // parent test supplies the private synchronization path.
-			t.Fatal(err)
+		if writeErr := atomicfile.Write(ready, []byte(message), atomicfile.Options{Perm: 0o600}); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+		if err != nil {
+			return
 		}
 		_ = boundary
 		for {
