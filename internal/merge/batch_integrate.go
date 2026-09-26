@@ -201,6 +201,7 @@ func (b BatchIntegrator) Integrate(ctx context.Context, state BatchState, integr
 		priorHead := currentHead
 		recordIndex := applyingBatchIntegrationIndex(state, candidate.PlanID)
 		commitAlreadyApplied := false
+		legacyMessage := false
 		if recordIndex >= 0 {
 			priorHead, commitAlreadyApplied, err = recoverApplyingBatchIntegration(ctx, git, candidate, state.Integrations[recordIndex], currentHead)
 			if err != nil {
@@ -215,6 +216,7 @@ func (b BatchIntegrator) Integrate(ctx context.Context, state BatchState, integr
 			message := candidate.CommitMessage
 			if options.DryRun && message == "" {
 				message = batchSquashCommitMessage(candidate)
+				legacyMessage = true
 			}
 			record := BatchIntegration{PlanID: candidate.PlanID, SourceHead: candidate.SourceTip, IntegrationBaseSHA: priorHead, CommitMessage: message, Status: batchIntegrationApplying, Attempts: 1}
 			state.Integrations = append(state.Integrations, record)
@@ -234,8 +236,12 @@ func (b BatchIntegrator) Integrate(ctx context.Context, state BatchState, integr
 			message := state.Integrations[recordIndex].CommitMessage
 			if message == "" {
 				message = batchSquashCommitMessage(candidate)
+				legacyMessage = true
 			}
-			deferral = b.applyCandidate(ctx, git, candidate, message, priorHead, options)
+			deferral, err = b.applyCandidate(ctx, git, candidate, message, legacyMessage, priorHead, options)
+			if err != nil {
+				return result, err
+			}
 		}
 		if deferral != nil {
 			state.Integrations[recordIndex].Status = batchIntegrationDeferred
@@ -468,25 +474,47 @@ func (b BatchIntegrator) deferCandidate(ctx context.Context, git GitClient, cand
 	return &batchCandidateDeferral{BatchDeferral: BatchDeferral{PlanID: candidate.PlanID, Reason: reason}, files: files, output: boundMergeVerifyOutput(output)}
 }
 
-func (b BatchIntegrator) applyCandidate(ctx context.Context, git GitClient, candidate BatchCandidate, message, priorHead string, options BatchIntegrateOptions) *batchCandidateDeferral {
-	deferCandidate := func(reason string, files []string) *batchCandidateDeferral {
-		return b.deferCandidate(ctx, git, candidate, priorHead, reason, files, "")
+// batchCandidateCommitGit retains inspection failures for the historical deferral
+// reason without depending on the shared helper's error text.
+type batchCandidateCommitGit struct {
+	commitpkg.PreparedGit
+	inspectErr error
+}
+
+func (g *batchCandidateCommitGit) HasStagedChanges(ctx context.Context) (bool, error) {
+	changed, err := g.PreparedGit.HasStagedChanges(ctx)
+	g.inspectErr = err
+	return changed, err
+}
+
+func (b BatchIntegrator) applyCandidate(ctx context.Context, git GitClient, candidate BatchCandidate, message string, legacyMessage bool, priorHead string, options BatchIntegrateOptions) (*batchCandidateDeferral, error) {
+	deferCandidate := func(reason string, files []string) (*batchCandidateDeferral, error) {
+		return b.deferCandidate(ctx, git, candidate, priorHead, reason, files, ""), nil
 	}
 	if err := git.MergeSquash(ctx, candidate.SourceTip); err != nil {
 		files := collectConflictFiles(ctx, git)
 		return deferCandidate("squash conflict: "+err.Error(), files)
 	}
-	changed, err := git.HasStagedChanges(ctx)
-	if err != nil {
-		return deferCandidate("inspect squash result: "+err.Error(), nil)
+	commitGit := &batchCandidateCommitGit{PreparedGit: git}
+	var err error
+	if legacyMessage {
+		_, err = commitpkg.CommitStaged(ctx, commitGit, message)
+	} else {
+		_, err = commitpkg.CommitPrepared(ctx, commitGit, message)
 	}
-	if !changed {
+	if errors.Is(err, commitpkg.ErrCommitCreated) {
+		return nil, err
+	}
+	if errors.Is(err, commitpkg.ErrNoStagedChanges) {
 		return deferCandidate("candidate produces no changes", nil)
 	}
-	if err := git.Commit(ctx, message); err != nil {
+	if commitGit.inspectErr != nil {
+		return deferCandidate("inspect squash result: "+commitGit.inspectErr.Error(), nil)
+	}
+	if err != nil {
 		return deferCandidate("create squash commit: "+err.Error(), nil)
 	}
-	return b.verifyAppliedCandidate(ctx, git, candidate, priorHead, options)
+	return b.verifyAppliedCandidate(ctx, git, candidate, priorHead, options), nil
 }
 
 func (b BatchIntegrator) verifyAppliedCandidate(ctx context.Context, git GitClient, candidate BatchCandidate, priorHead string, options BatchIntegrateOptions) *batchCandidateDeferral {

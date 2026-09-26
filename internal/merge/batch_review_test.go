@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	commitpkg "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/reviewcontract"
 	"github.com/iamseth/tao/internal/runtimeconfig"
@@ -85,7 +86,7 @@ func TestBatchReviewDiffStatFailureBlocksResumably(t *testing.T) {
 	}
 }
 
-func TestFinishAggregateReworkStagesDotImmediatelyBeforeExactCommit(t *testing.T) {
+func TestFinishAggregateReworkStagesDotBeforePreparedCommit(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "reworked.txt"), []byte("fixed\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -102,9 +103,10 @@ func TestFinishAggregateReworkStagesDotImmediatelyBeforeExactCommit(t *testing.T
 		Review: &BatchReview{Status: "applying", CommitMessage: message, ResolutionPaths: []string{"reworked.txt"}},
 	}
 	git := &fakeGitClient{
-		root:     root,
-		status:   "?? reworked.txt\n",
-		revParse: map[string]string{"HEAD": "committed-head"},
+		root:          root,
+		status:        "?? reworked.txt\n",
+		stagedChanges: true,
+		revParse:      map[string]string{"HEAD": "committed-head"},
 	}
 
 	got, err := (BatchAggregateReviewer{Store: &batchReviewTestStore{dir: t.TempDir()}}).finishAggregateRework(context.Background(), git, state, root)
@@ -115,9 +117,43 @@ func TestFinishAggregateReworkStagesDotImmediatelyBeforeExactCommit(t *testing.T
 		t.Fatalf("integration head = %q, want committed-head", got.IntegrationHead)
 	}
 	addIndex := slices.Index(git.calls, "add .")
-	if addIndex < 0 || addIndex+1 >= len(git.calls) || git.calls[addIndex+1] != "commit "+message {
-		t.Fatalf("Add(.) was not immediately followed by the exact durable commit: %#v", git.calls)
+	want := []string{"add .", "has-staged-changes", "commit " + message, "rev-parse HEAD"}
+	if addIndex < 0 || !slices.Equal(git.calls[addIndex:], want) {
+		t.Fatalf("Add(.) was not followed by the prepared commit sequence: %#v", git.calls)
 	}
+}
+
+func TestFinishAggregateReworkRefusesEmptyStaging(t *testing.T) {
+	fixture, state, root := batchReviewFixture(t)
+	if err := os.WriteFile(filepath.Join(root, "reworked.txt"), []byte("fixed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	message, err := aggregateProposedResolutionCommitMessage(plan.ReviewCommitMessage{
+		Subject: "fix(batch): resolve aggregate findings",
+		Body:    "What:\nResolve aggregate findings.\n\nWhy:\nKeep the combined batch correct.",
+	}, state.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprint, err := aggregateReworkContentFingerprint(root, []string{"reworked.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Attempts.AggregateRework = 1
+	state.Review = &BatchReview{Status: "applying", CommitMessage: message, ResolutionPaths: []string{"reworked.txt"}, ResolutionFingerprint: fingerprint}
+	client, err := NewService(fixture.repoRoot, nil).gitClientForRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	git := &batchPreparedCommitTestGit{GitClient: client, skipAdd: true}
+	got, err := (BatchAggregateReviewer{}).finishAggregateRework(context.Background(), git, state, root)
+	if !errors.Is(err, commitpkg.ErrNoStagedChanges) || !strings.Contains(err.Error(), "commit aggregate rework") {
+		t.Fatalf("expected contextual empty-staging refusal, got %v", err)
+	}
+	if git.commitCalled || got.Review.Status != "applying" || got.IntegrationHead != state.IntegrationHead {
+		t.Fatalf("empty staging committed or settled intent: called=%t state=%+v", git.commitCalled, got)
+	}
+	assertRef(t, root, "HEAD", state.IntegrationHead)
 }
 
 func TestBatchReviewApprovePersistsExactEvidenceAndLeavesDefaultAndSourcesAlone(t *testing.T) {

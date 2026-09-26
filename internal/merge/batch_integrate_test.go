@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	commitpkg "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
 )
@@ -158,6 +159,51 @@ func TestBatchIntegratorDefersNoChangeCandidate(t *testing.T) {
 	}
 }
 
+func TestBatchIntegratorNoChangeApplyingIntentRemainsRestartable(t *testing.T) {
+	fixture := newRealGitWorktree(t)
+	sourceHead := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch)
+	defaultHead := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
+	integrationRoot := filepath.Join(t.TempDir(), "integration")
+	runRealGit(t, fixture.repoRoot, "worktree", "add", "-b", "tao/integration/no-change-resume", integrationRoot, defaultHead)
+
+	newIntent := func() BatchState {
+		state := interruptedBatchIntegrateTestState(fixture, sourceHead, defaultHead)
+		state.Integrations[0].CommitMessage = state.Candidates[0].CommitMessage
+		return state
+	}
+	store := &recordingBatchTransitionStore{failAt: 1}
+	integrator := BatchIntegrator{Store: store, Service: NewService(fixture.repoRoot, nil)}
+	options := BatchIntegrateOptions{VerifyCommand: "true"}
+	result, err := integrator.Integrate(context.Background(), newIntent(), integrationRoot, options)
+	if err == nil || !strings.Contains(err.Error(), "persist deferral") {
+		t.Fatalf("expected interrupted deferral persistence, got %v", err)
+	}
+	if len(result.Deferred) != 1 || result.Deferred[0].Reason != "candidate produces no changes" {
+		t.Fatalf("no-change result = %#v", result)
+	}
+	for _, target := range []struct{ root, rev string }{{integrationRoot, "HEAD"}, {fixture.repoRoot, fixture.defaultBranch}} {
+		if got := realGitOutput(t, target.root, "rev-parse", target.rev); got != defaultHead {
+			t.Fatalf("empty squash moved %s to %s, want %s", target.rev, got, defaultHead)
+		}
+	}
+	if got := realGitOutput(t, integrationRoot, "status", "--porcelain"); got != "" {
+		t.Fatalf("empty squash left dirty output: %q", got)
+	}
+
+	// The last durable record is still applying when deferral persistence fails.
+	store.failAt = 0
+	result, err = integrator.Integrate(context.Background(), newIntent(), integrationRoot, options)
+	if err != nil {
+		t.Fatalf("restart applying intent: %v", err)
+	}
+	if len(result.Deferred) != 1 || result.Deferred[0].Reason != "candidate produces no changes" || result.State.Integrations[0].Status != batchIntegrationDeferred {
+		t.Fatalf("restarted no-change result = %#v", result)
+	}
+	if got := realGitOutput(t, integrationRoot, "rev-parse", "HEAD"); got != defaultHead {
+		t.Fatalf("restart created a commit: got %s want %s", got, defaultHead)
+	}
+}
+
 func TestBatchIntegratorTurnsPlannedConflictIntoActionableDeferral(t *testing.T) {
 	fixture, sourceHead, defaultHead, integrationRoot := batchAgentConflictFixture(t)
 	candidate := BatchCandidate{
@@ -291,7 +337,7 @@ func TestBatchAgentSecondPlannedDeferralRequestRemainsResumable(t *testing.T) {
 	}
 }
 
-func TestBatchIntegratorResumesApplyingIntentBeforeGitMutation(t *testing.T) {
+func TestBatchIntegratorResumesLegacyApplyingIntentBeforeGitMutation(t *testing.T) {
 	fixture := newRealGitWorktree(t)
 	writeBatchTestFile(t, fixture.worktreePath)
 	runRealGit(t, fixture.worktreePath, "add", "feature.txt")
@@ -311,6 +357,107 @@ func TestBatchIntegratorResumesApplyingIntentBeforeGitMutation(t *testing.T) {
 	}
 	if len(result.Applied) != 1 || result.Applied[0] != "plan-a" {
 		t.Fatalf("resumed result = %#v", result)
+	}
+	if result.State.Integrations[0].CommitMessage != "" {
+		t.Fatal("legacy empty-message intent was rewritten")
+	}
+	want := batchSquashCommitMessage(state.Candidates[0])
+	if err := commitpkg.ValidateMessage(want); err == nil {
+		t.Fatal("legacy fixture should require the unvalidated commit path")
+	}
+	if got := realGitOutput(t, integrationRoot, "show", "-s", "--format=%B", "HEAD"); got != want {
+		t.Fatalf("legacy commit message changed: got %q want %q", got, want)
+	}
+}
+
+type batchCommitFailureGit struct {
+	GitClient
+	phase     string
+	cause     error
+	committed bool
+}
+
+func (g *batchCommitFailureGit) HasStagedChanges(ctx context.Context) (bool, error) {
+	if g.phase == "inspect" {
+		return false, g.cause
+	}
+	return g.GitClient.HasStagedChanges(ctx)
+}
+
+func (g *batchCommitFailureGit) Commit(ctx context.Context, message string) error {
+	if g.phase == "commit" {
+		return g.cause
+	}
+	err := g.GitClient.Commit(ctx, message)
+	g.committed = err == nil
+	return err
+}
+
+func (g *batchCommitFailureGit) RevParse(ctx context.Context, rev string) (string, error) {
+	if g.committed && rev == "HEAD" {
+		switch g.phase {
+		case "resolve":
+			return "", g.cause
+		case "empty-head":
+			return "", nil
+		}
+	}
+	return g.GitClient.RevParse(ctx, rev)
+}
+
+func TestBatchIntegratorPreparedCommitFailures(t *testing.T) {
+	for _, phase := range []string{"inspect", "commit", "resolve", "empty-head"} {
+		t.Run(phase, func(t *testing.T) {
+			fixture := newRealGitWorktree(t)
+			writeBatchTestFile(t, fixture.worktreePath)
+			runRealGit(t, fixture.worktreePath, "add", "feature.txt")
+			runRealGit(t, fixture.worktreePath, "commit", "-m", "source checkpoint")
+			sourceHead := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch)
+			defaultHead := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
+			integrationRoot := filepath.Join(t.TempDir(), "integration")
+			runRealGit(t, fixture.repoRoot, "worktree", "add", "-b", "tao/integration/commit-failure", integrationRoot, defaultHead)
+			cause := errors.New("injected Git failure")
+			git := &batchCommitFailureGit{GitClient: gitops.NewClient(integrationRoot, nil), phase: phase, cause: cause}
+			service := NewService(fixture.repoRoot, nil)
+			service.NewGit = func(string) GitClient { return git }
+			state := interruptedBatchIntegrateTestState(fixture, sourceHead, defaultHead)
+			state.Integrations[0].CommitMessage = state.Candidates[0].CommitMessage
+			store := &recordingBatchTransitionStore{}
+			integrator := BatchIntegrator{Store: store, Service: service}
+			options := BatchIntegrateOptions{VerifyCommand: "true"}
+			result, err := integrator.Integrate(context.Background(), state, integrationRoot, options)
+			head := realGitOutput(t, integrationRoot, "rev-parse", "HEAD")
+			if phase == "inspect" || phase == "commit" {
+				if err != nil || len(result.Deferred) != 1 {
+					t.Fatalf("expected deferral, got %+v, err=%v", result, err)
+				}
+				reason := result.Deferred[0].Reason
+				if phase == "inspect" && reason != "inspect squash result: "+cause.Error() {
+					t.Fatalf("inspection deferral = %q", reason)
+				}
+				if phase == "commit" && (!strings.HasPrefix(reason, "create squash commit: ") || !strings.Contains(reason, cause.Error())) {
+					t.Fatalf("commit deferral = %q", reason)
+				}
+				if head != defaultHead {
+					t.Fatalf("failed commit moved HEAD: %s", head)
+				}
+				return
+			}
+			if !errors.Is(err, commitpkg.ErrCommitCreated) || (phase == "resolve" && !errors.Is(err, cause)) {
+				t.Fatalf("resolve failure lost phase or cause: %v", err)
+			}
+			if head == defaultHead || len(result.Deferred) != 0 || result.State.Integrations[0].Status != batchIntegrationApplying || len(store.states) != 0 {
+				t.Fatalf("landed commit was restored or deferred: head=%s result=%+v", head, result)
+			}
+			git.phase = ""
+			resumed, err := integrator.Integrate(context.Background(), result.State, integrationRoot, options)
+			if err != nil {
+				t.Fatalf("recover landed commit: %v", err)
+			}
+			if resumed.State.Integrations[0].IntegrationSHA != head || realGitOutput(t, integrationRoot, "rev-parse", "HEAD") != head {
+				t.Fatal("recovery failed to reuse the exact landed commit")
+			}
+		})
 	}
 }
 

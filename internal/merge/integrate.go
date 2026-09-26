@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	commitpkg "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
 )
@@ -137,7 +138,10 @@ func (s Service) integrateSquash(ctx context.Context, detail *plan.PlanDetail, p
 		}
 		return recoverIntegrationFailure(ctx, git, git, failure)
 	}
-	if err := git.Commit(ctx, intent.Message); err != nil {
+	if _, err := commitpkg.CommitPrepared(ctx, git, intent.Message); err != nil {
+		if errors.Is(err, commitpkg.ErrCommitCreated) {
+			return fmt.Errorf("squash commit: %w", err)
+		}
 		failure.phase = "squash commit"
 		failure.cause = err
 		return recoverIntegrationFailure(ctx, git, git, failure)

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	commitpkg "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
 )
@@ -106,6 +107,107 @@ func (s *durableFailingBatchTransitionStore) Transition(state BatchState, _ stri
 	}
 	returned.LogSequence = persisted.LogSequence
 	return returned, nil
+}
+
+// batchPreparedCommitTestGit injects staging and commit-phase failures while
+// retaining real Git state for HEAD and edit-validation assertions.
+type batchPreparedCommitTestGit struct {
+	GitClient
+	skipAdd      bool
+	commitErr    error
+	headErr      error
+	commitCalled bool
+	created      bool
+}
+
+func (g *batchPreparedCommitTestGit) Add(ctx context.Context, paths ...string) error {
+	if g.skipAdd {
+		return nil
+	}
+	return g.GitClient.Add(ctx, paths...)
+}
+
+func (g *batchPreparedCommitTestGit) Commit(ctx context.Context, message string) error {
+	g.commitCalled = true
+	if g.commitErr != nil {
+		return g.commitErr
+	}
+	err := g.GitClient.Commit(ctx, message)
+	g.created = err == nil
+	return err
+}
+
+func (g *batchPreparedCommitTestGit) RevParse(ctx context.Context, rev string) (string, error) {
+	if g.created && rev == "HEAD" && g.headErr != nil {
+		return "", g.headErr
+	}
+	return g.GitClient.RevParse(ctx, rev)
+}
+
+func TestFinishResolvedCandidatePreparedCommitPhases(t *testing.T) {
+	commitErr := errors.New("commit failed")
+	headErr := errors.New("HEAD unavailable")
+	for _, tc := range []struct {
+		name      string
+		skipAdd   bool
+		commitErr error
+		headErr   error
+		wantErr   error
+		committed bool
+	}{
+		{name: "empty staging", skipAdd: true, wantErr: commitpkg.ErrNoStagedChanges},
+		{name: "commit failure", commitErr: commitErr, wantErr: commitErr},
+		{name: "HEAD failure after commit", headErr: headErr, wantErr: commitpkg.ErrCommitCreated, committed: true},
+		{name: "success", committed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture, sourceHead, parent, root := batchAgentConflictFixture(t)
+			state := batchAgentDeferredState(fixture, sourceHead, parent)
+			if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("combined\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			paths := []string{"README.md"}
+			fingerprint, err := resolvedCandidateContentFingerprint(root, paths)
+			if err != nil {
+				t.Fatal(err)
+			}
+			message := testBatchCommitMessage("plan-a", sourceHead)
+			state.Candidates[0].CommitMessage = message
+			state.Integrations[0].Status = batchIntegrationApplying
+			state.Integrations[0].CommitMessage = message
+			state.Integrations[0].Resolutions = []BatchResolution{{CommitMessage: message, ChangedPaths: paths, ContentFingerprint: fingerprint}}
+			client, err := NewService(fixture.repoRoot, nil).gitClientForRoot(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			git := &batchPreparedCommitTestGit{GitClient: client, skipAdd: tc.skipAdd, commitErr: tc.commitErr, headErr: tc.headErr}
+			resolver := BatchAgentResolver{Store: &recordingBatchTransitionStore{}, Service: NewService(fixture.repoRoot, nil)}
+			got, resolved, committed, err := resolver.finishResolvedCandidate(context.Background(), state, git, "plan-a", "true")
+			if !errors.Is(err, tc.wantErr) || committed != tc.committed || resolved != (tc.wantErr == nil) {
+				t.Fatalf("resolved=%t committed=%t err=%v; want committed=%t err=%v", resolved, committed, err, tc.committed, tc.wantErr)
+			}
+			if err != nil && !committed && !strings.Contains(err.Error(), "commit resolved candidate") {
+				t.Fatalf("commit-phase error lost context: %v", err)
+			}
+			if tc.headErr != nil && !errors.Is(err, tc.headErr) {
+				t.Fatalf("resolve-phase error lost cause: %v", err)
+			}
+			if tc.skipAdd && git.commitCalled {
+				t.Fatal("empty staging attempted a commit")
+			}
+			head := strings.TrimSpace(realGitOutput(t, root, "rev-parse", "HEAD"))
+			if (head != parent) != tc.committed {
+				t.Fatalf("HEAD=%s parent=%s committed=%t", head, parent, tc.committed)
+			}
+			if err != nil {
+				if got.IntegrationHead != parent || got.Integrations[0].Status != batchIntegrationApplying {
+					t.Fatalf("failed commit transaction settled intent: %+v", got)
+				}
+			} else if got.IntegrationHead != head || got.Integrations[0].IntegrationSHA != head {
+				t.Fatalf("settlement omitted exact commit SHA: %+v", got)
+			}
+		})
+	}
 }
 
 func TestBatchAgentResolvesTextConflictAndTaoOwnsCommit(t *testing.T) {

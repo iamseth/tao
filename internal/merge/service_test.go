@@ -1745,8 +1745,9 @@ func TestMergeForceGeneratesExceptionalIntentBeforeSquash(t *testing.T) {
 	detail.State.Plan.Review = nil
 	git := &fakeGitClient{
 		root: "/repo", defaultBranch: "main", mergeBase: "base123", diff: "diff --git a/a.go b/a.go\n+change\n",
-		revParse:  map[string]string{"main": "pre123", "tao/plan-a": "tip-sha"},
-		ancestors: map[string]bool{"tao/plan-a..main": false}, dirtyFingerprints: []gitops.DirtyFingerprint{{Hash: "clean"}, {Hash: "clean"}},
+		stagedChanges: true,
+		revParse:      map[string]string{"main": "pre123", "tao/plan-a": "tip-sha", "HEAD": "merged456"},
+		ancestors:     map[string]bool{"tao/plan-a..main": false}, dirtyFingerprints: []gitops.DirtyFingerprint{{Hash: "clean"}, {Hash: "clean"}},
 	}
 	generator := &fakeMergeProposalGenerator{proposal: generatedMergeProposal()}
 	events := &fakeEventAppender{}
@@ -1783,8 +1784,9 @@ func TestMergeForceGeneratesFromLiveDiffWhenApprovedReviewBaseIsStale(t *testing
 	detail.State.Plan.Review.Head = "tip-sha"
 	git := &fakeGitClient{
 		root: "/repo", defaultBranch: "main", mergeBase: "live-base", diff: "diff --git a/a.go b/a.go\n+live change\n",
-		revParse:  map[string]string{"main": "pre123", "tao/plan-a": "tip-sha"},
-		ancestors: map[string]bool{"tao/plan-a..main": false}, dirtyFingerprints: []gitops.DirtyFingerprint{{Hash: "clean"}, {Hash: "clean"}},
+		stagedChanges: true,
+		revParse:      map[string]string{"main": "pre123", "tao/plan-a": "tip-sha", "HEAD": "merged456"},
+		ancestors:     map[string]bool{"tao/plan-a..main": false}, dirtyFingerprints: []gitops.DirtyFingerprint{{Hash: "clean"}, {Hash: "clean"}},
 	}
 	generator := &fakeMergeProposalGenerator{proposal: generatedMergeProposal()}
 	service := Service{Git: git, Cleaner: successfulCleanup(), Events: &fakeEventAppender{}, ProposalGenerator: generator}
@@ -1991,7 +1993,8 @@ func TestMergeRollsBackWhenMergedSHACaptureFails(t *testing.T) {
 		defaultBranch:    "main",
 		mergeBase:        "base123",
 		ancestors:        map[string]bool{"main..tao/plan-a": true},
-		revParse:         map[string]string{"tao/plan-a": "tip-sha"},
+		stagedChanges:    true,
+		revParse:         map[string]string{"tao/plan-a": "tip-sha", "HEAD": "merged456"},
 		revParseSequence: map[string][]string{"main": {"pre123", "pre123"}},
 		revParseErrors:   map[string][]error{"main": {nil, nil, captureErr}},
 	}
@@ -2121,7 +2124,8 @@ func TestMergeRetainsDurableIntentWhenPlanMergedEventFails(t *testing.T) {
 		defaultBranch:    "main",
 		mergeBase:        "base123",
 		ancestors:        map[string]bool{"main..tao/plan-a": true},
-		revParse:         map[string]string{"tao/plan-a": "tip-sha"},
+		stagedChanges:    true,
+		revParse:         map[string]string{"tao/plan-a": "tip-sha", "HEAD": "merged456"},
 		revParseSequence: map[string][]string{"main": {"pre123", "pre123", "merged456"}},
 	}
 	events := &fakeEventAppender{err: recordErr}
@@ -2170,7 +2174,8 @@ func TestMergeDirtyInCleanupGapPreservesRecordedStateAndRetries(t *testing.T) {
 		defaultBranch:    "main",
 		mergeBase:        "base123",
 		ancestors:        map[string]bool{"main..tao/plan-a": true},
-		revParse:         map[string]string{"tao/plan-a": "tip-sha"},
+		stagedChanges:    true,
+		revParse:         map[string]string{"tao/plan-a": "tip-sha", "HEAD": "merged456"},
 		revParseSequence: map[string][]string{"main": {"pre123", "pre123", "merged456"}},
 	}
 	detail := mergeReadyDetail("base123")
@@ -2221,7 +2226,8 @@ func TestMergeRecordsMergeBeforeCleanup(t *testing.T) {
 		defaultBranch:    "main",
 		mergeBase:        "base123",
 		ancestors:        map[string]bool{"main..tao/plan-a": true},
-		revParse:         map[string]string{"tao/plan-a": "tip-sha"},
+		stagedChanges:    true,
+		revParse:         map[string]string{"tao/plan-a": "tip-sha", "HEAD": "merged456"},
 		revParseSequence: map[string][]string{"main": {"pre123", "pre123", "merged456"}},
 	}
 	detail := mergeReadyDetail("base123")

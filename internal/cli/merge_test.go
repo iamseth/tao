@@ -997,6 +997,11 @@ func cliMergeDetail(t *testing.T) *plan.PlanDetail {
 	}
 }
 
+type cliMergeStagedDiffError struct{}
+
+func (cliMergeStagedDiffError) Error() string { return "staged changes" }
+func (cliMergeStagedDiffError) ExitCode() int { return 1 }
+
 func newCLIMergeGitRunner(t *testing.T, repoRoot string) CommandRunner {
 	t.Helper()
 	var revParseMainCalls int
@@ -1041,6 +1046,11 @@ func newCLIMergeGitRunner(t *testing.T, repoRoot string) CommandRunner {
 		// recorded head snapshot to discard snapshots the branch moved past.
 		case "rev-parse tao/plan-a", "rev-parse head123":
 			_, _ = io.WriteString(stdout, "head123\n")
+			return nil
+		case "diff --cached --quiet":
+			return cliMergeStagedDiffError{}
+		case "rev-parse HEAD":
+			_, _ = io.WriteString(stdout, "merged123\n")
 			return nil
 		case "rev-parse main":
 			revParseMainCalls++

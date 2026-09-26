@@ -538,14 +538,14 @@ func (r BatchAgentResolver) finishResolvedCandidate(ctx context.Context, state B
 			return state, false, false, nil
 		}
 	}
-	if err := git.Commit(ctx, integration.CommitMessage); err != nil {
+	result, err := commitpkg.CommitPrepared(ctx, git, integration.CommitMessage)
+	if err != nil {
+		if errors.Is(err, commitpkg.ErrCommitCreated) {
+			return state, false, true, err
+		}
 		return state, false, false, fmt.Errorf("commit resolved candidate: %w", err)
 	}
-	head, err := git.RevParse(ctx, "HEAD")
-	if err != nil {
-		return state, false, true, err
-	}
-	state, err = r.settleResolvedCandidate(state, integrationIndex, candidateIndex, strings.TrimSpace(head))
+	state, err = r.settleResolvedCandidate(state, integrationIndex, candidateIndex, strings.TrimSpace(result.SHA))
 	return state, err == nil, true, err
 }
 

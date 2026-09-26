@@ -56,6 +56,88 @@ func TestCommitPreparedUsesInjectedGitAndExactMessage(t *testing.T) {
 	}
 }
 
+func TestCommitStagedPreservesTrailerOnlyMessage(t *testing.T) {
+	message := "Integrate legacy plan\n\nTao-Plan: legacy-plan\nTao-Source-Head: abc123"
+	if err := ValidateMessage(message); err == nil {
+		t.Fatal("trailer-only message unexpectedly passed validation")
+	}
+	git := &preparedGitStub{staged: true, sha: "def456"}
+	result, err := CommitStaged(context.Background(), git, message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (Result{SHA: "def456", Subject: "Integrate legacy plan"}); result != want {
+		t.Fatalf("CommitStaged() = %#v, want %#v", result, want)
+	}
+	if git.message != message {
+		t.Fatalf("committed message = %q, want %q", git.message, message)
+	}
+	if want := []string{"staged", "commit", "rev-parse HEAD"}; !reflect.DeepEqual(git.calls, want) {
+		t.Fatalf("Git calls = %q, want %q", git.calls, want)
+	}
+}
+
+func TestCommitPhaseErrors(t *testing.T) {
+	message, err := Format(validProposal())
+	if err != nil {
+		t.Fatal(err)
+	}
+	underlying := errors.New("git failed")
+	for _, helper := range []struct {
+		name string
+		call func(context.Context, PreparedGit, string) (Result, error)
+	}{
+		{name: "CommitPrepared", call: CommitPrepared},
+		{name: "CommitStaged", call: CommitStaged},
+	} {
+		t.Run(helper.name, func(t *testing.T) {
+			for _, test := range []struct {
+				name       string
+				git        *preparedGitStub
+				want       string
+				calls      []string
+				noStaged   bool
+				created    bool
+				underlying bool
+			}{
+				{name: "status failure", git: &preparedGitStub{stagedErr: underlying}, want: "inspect prepared commit: git failed", calls: []string{"staged"}, underlying: true},
+				{name: "empty staging", git: &preparedGitStub{}, want: "prepared commit requires staged changes", calls: []string{"staged"}, noStaged: true},
+				{name: "commit failure", git: &preparedGitStub{staged: true, commitErr: underlying}, want: "create prepared commit: git failed", calls: []string{"staged", "commit"}, underlying: true},
+				{name: "resolve failure", git: &preparedGitStub{staged: true, revParseErr: underlying}, want: "resolve prepared commit: git failed", calls: []string{"staged", "commit", "rev-parse HEAD"}, created: true, underlying: true},
+				{name: "empty HEAD", git: &preparedGitStub{staged: true}, want: "resolve prepared commit: empty HEAD", calls: []string{"staged", "commit", "rev-parse HEAD"}, created: true},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					result, err := helper.call(context.Background(), test.git, message)
+					if err == nil || err.Error() != test.want {
+						t.Fatalf("error = %v, want %q", err, test.want)
+					}
+					if result != (Result{}) {
+						t.Fatalf("result = %#v, want zero result", result)
+					}
+					if errors.Is(err, ErrNoStagedChanges) != test.noStaged || errors.Is(err, ErrCommitCreated) != test.created {
+						t.Fatalf("error = %v, want no-staged=%v, created=%v", err, test.noStaged, test.created)
+					}
+					if errors.Is(err, underlying) != test.underlying {
+						t.Fatalf("error = %v, want underlying Git error=%v", err, test.underlying)
+					}
+					if !reflect.DeepEqual(test.git.calls, test.calls) {
+						t.Fatalf("Git calls = %q, want %q", test.git.calls, test.calls)
+					}
+				})
+			}
+			t.Run("nil Git", func(t *testing.T) {
+				_, err := helper.call(context.Background(), nil, message)
+				if err == nil || err.Error() != "prepared commit requires Git" {
+					t.Fatalf("error = %v, want nil Git refusal", err)
+				}
+				if errors.Is(err, ErrCommitCreated) || errors.Is(err, ErrNoStagedChanges) {
+					t.Fatalf("nil Git refusal matched a phase sentinel: %v", err)
+				}
+			})
+		})
+	}
+}
+
 func TestCommitPreparedStopsBeforeMutation(t *testing.T) {
 	validMessage, err := Format(validProposal())
 	if err != nil {

@@ -241,7 +241,8 @@ func TestMergeCleanupRunsOnlyAfterSuccessfulVerify(t *testing.T) {
 	reg.seed(mergeVerifyRoot, &fakeGitClient{
 		defaultBranch:    "main",
 		mergeBase:        "base123",
-		revParse:         map[string]string{"main": "pre123", "tao/plan-a": "head123"},
+		stagedChanges:    true,
+		revParse:         map[string]string{"main": "pre123", "tao/plan-a": "head123", "HEAD": "merged456"},
 		ancestors:        map[string]bool{"main..tao/plan-a": true},
 		revParseSequence: map[string][]string{"main": {"pre123", "pre123", "merged456"}},
 	})
@@ -483,7 +484,8 @@ func TestMergeAppendsPlanMergedEvent(t *testing.T) {
 	reg.seed(mergeVerifyRoot, &fakeGitClient{
 		defaultBranch:    "main",
 		mergeBase:        "base123",
-		revParse:         map[string]string{"main": "pre123", "tao/plan-a": "head123"},
+		stagedChanges:    true,
+		revParse:         map[string]string{"main": "pre123", "tao/plan-a": "head123", "HEAD": "merged456"},
 		ancestors:        map[string]bool{"main..tao/plan-a": true},
 		revParseSequence: map[string][]string{"main": {"pre123", "pre123", "merged456"}},
 	})

@@ -495,14 +495,11 @@ func (r BatchAggregateReviewer) finishAggregateRework(ctx context.Context, git G
 	if err := git.Add(ctx, "."); err != nil {
 		return state, fmt.Errorf("stage aggregate rework: %w", err)
 	}
-	if err := git.Commit(ctx, state.Review.CommitMessage); err != nil {
+	result, err := commitpkg.CommitPrepared(ctx, git, state.Review.CommitMessage)
+	if err != nil {
 		return state, fmt.Errorf("commit aggregate rework: %w", err)
 	}
-	newHead, revErr := git.RevParse(ctx, "HEAD")
-	if revErr != nil {
-		return state, fmt.Errorf("capture aggregate rework commit: %w", revErr)
-	}
-	return r.settleAggregateRework(state, strings.TrimSpace(newHead))
+	return r.settleAggregateRework(state, strings.TrimSpace(result.SHA))
 }
 
 func (r BatchAggregateReviewer) settleAggregateRework(state BatchState, head string) (BatchState, error) {

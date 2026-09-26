@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	commitpkg "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
 )
@@ -120,6 +121,7 @@ func TestIntegrateSquashRefusesMismatchedPartialCommitWithoutMutation(t *testing
 func TestIntegrateSquashCommitFailureRestoresDefault(t *testing.T) {
 	git := &fakeGitClient{
 		defaultBranch: "main",
+		stagedChanges: true,
 		revParse:      map[string]string{"main": "pre123", "tao/plan-a": "source456"},
 		changedFiles:  []string{"feature.txt"},
 		commitErr:     errors.New("identity missing"),
@@ -128,12 +130,61 @@ func TestIntegrateSquashCommitFailureRestoresDefault(t *testing.T) {
 	detail := mergeReadyDetail("base123")
 	setSingleMergeIntent(t, detail, "source456", "pre123")
 	err := (Service{Git: git}).IntegrateSquash(context.Background(), detail)
-	if !errors.Is(err, ErrMergeConflict) {
-		t.Fatalf("expected typed integration failure, got %v", err)
+	var conflict *MergeConflictError
+	if !errors.Is(err, ErrMergeConflict) || !errors.Is(err, git.commitErr) || !errors.As(err, &conflict) || conflict.Phase != "squash commit" {
+		t.Fatalf("expected typed commit failure, got %v", err)
 	}
 	wantSuffix := []string{"status", "reset-hard pre123", "checkout main"}
 	if got := git.calls[len(git.calls)-len(wantSuffix):]; !reflect.DeepEqual(got, wantSuffix) {
 		t.Fatalf("rollback calls mismatch\nwant: %#v\n got: %#v", wantSuffix, git.calls)
+	}
+}
+
+func TestIntegrateSquashEmptyStagingRestoresDefaultWithoutCommit(t *testing.T) {
+	git := &fakeGitClient{
+		defaultBranch: "main",
+		revParse:      map[string]string{"main": "pre123", "tao/plan-a": "source456"},
+	}
+	detail := mergeReadyDetail("base123")
+	setSingleMergeIntent(t, detail, "source456", "pre123")
+
+	err := (Service{Git: git}).IntegrateSquash(context.Background(), detail)
+	var conflict *MergeConflictError
+	if !errors.Is(err, commitpkg.ErrNoStagedChanges) || !errors.As(err, &conflict) || conflict.Phase != "squash commit" {
+		t.Fatalf("expected empty-staging squash commit failure, got %v", err)
+	}
+	for _, call := range git.calls {
+		if strings.HasPrefix(call, "commit ") {
+			t.Fatalf("empty staging created a commit: %#v", git.calls)
+		}
+	}
+	if !hasGitCall(git.calls, "merge-squash tao/plan-a") || !hasGitCall(git.calls, "reset-hard pre123") {
+		t.Fatalf("expected squash followed by recovery reset: %#v", git.calls)
+	}
+}
+
+func TestIntegrateSquashHEADFailurePreservesCreatedCommit(t *testing.T) {
+	resolveErr := errors.New("HEAD unavailable")
+	git := &fakeGitClient{
+		defaultBranch:  "main",
+		stagedChanges:  true,
+		revParse:       map[string]string{"main": "pre123", "tao/plan-a": "source456"},
+		revParseErrors: map[string][]error{"HEAD": {resolveErr}},
+	}
+	detail := mergeReadyDetail("base123")
+	setSingleMergeIntent(t, detail, "source456", "pre123")
+
+	err := (Service{Git: git}).IntegrateSquash(context.Background(), detail)
+	if !errors.Is(err, commitpkg.ErrCommitCreated) || !errors.Is(err, resolveErr) {
+		t.Fatalf("expected created-commit HEAD failure, got %v", err)
+	}
+	if !hasGitCall(git.calls, "commit "+detail.State.Plan.MergeCommitIntent.Message) || !hasGitCall(git.calls, "rev-parse HEAD") {
+		t.Fatalf("expected commit and HEAD resolution: %#v", git.calls)
+	}
+	for _, call := range git.calls {
+		if strings.HasPrefix(call, "reset-hard ") {
+			t.Fatalf("landed squash was rolled back: %#v", git.calls)
+		}
 	}
 }
 
