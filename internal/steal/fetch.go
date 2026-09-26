@@ -210,6 +210,9 @@ func Fetch(ctx context.Context, opts Options) (result Result, retErr error) {
 		}
 		return strings.TrimSpace(stdout.String()), nil
 	}
+	if err := checkCheckoutSize(ctx, scratch, opts.Runner, opts.MaxBytes); err != nil {
+		return Result{}, err
+	}
 	if _, err := run("checkout", "--quiet"); err != nil {
 		return Result{}, err
 	}

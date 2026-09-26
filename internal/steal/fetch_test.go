@@ -67,7 +67,7 @@ func fixtureRunner(t *testing.T, fixture, scratch string, fail string) gitops.Ru
 		if strings.Join(args, " ") == fail {
 			return errors.New("injected runner failure")
 		}
-		if !slices.Equal(args, []string{"checkout", "--quiet"}) && !slices.Equal(args, []string{"rev-parse", "--abbrev-ref", "HEAD"}) && !slices.Equal(args, []string{"rev-parse", "HEAD"}) {
+		if !slices.Equal(args, []string{"ls-tree", "-r", "-z", "--format=%(objecttype) %(objectsize)", "HEAD"}) && !slices.Equal(args, []string{"checkout", "--quiet"}) && !slices.Equal(args, []string{"rev-parse", "--abbrev-ref", "HEAD"}) && !slices.Equal(args, []string{"rev-parse", "HEAD"}) {
 			t.Fatalf("unexpected argv: %v", args)
 		}
 		return defaultRunner(ctx, cwd, name, args, stdout, stderr)
@@ -178,7 +178,7 @@ func TestFetchFailureCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)
-	for _, fail := range []string{"clone", "checkout --quiet", "rev-parse --abbrev-ref HEAD", "rev-parse HEAD", "object-cap", "snapshot-cap"} {
+	for _, fail := range []string{"clone", "ls-tree -r -z --format=%(objecttype) %(objectsize) HEAD", "checkout --quiet", "rev-parse --abbrev-ref HEAD", "rev-parse HEAD", "object-cap", "snapshot-cap"} {
 		t.Run(fail, func(t *testing.T) {
 			home := t.TempDir()
 			scratch := ScratchDir(home, source, now)
