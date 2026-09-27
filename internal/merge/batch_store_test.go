@@ -1,7 +1,11 @@
 package merge
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -399,6 +403,121 @@ func TestBatchStoreRejectsNonContiguousTransition(t *testing.T) {
 	err := store.AppendTransition(BatchTransition{Schema: BatchTransitionSchema, Sequence: 2, From: BatchStatusPlanned, To: BatchStatusIntegrating, State: state})
 	if err == nil || !strings.Contains(err.Error(), "does not continue") {
 		t.Fatalf("AppendTransition() error = %v", err)
+	}
+}
+
+func TestBatchStoreRenderTransitions(t *testing.T) {
+	store := newTestBatchStore(t)
+	state := testBatchState()
+	at := "2026-09-26T21:00:00Z"
+	first, err := store.Initialize(state, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Status = BatchStatusIntegrating
+	second, err := store.Transition(state, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := FormatBatchTransitionLine(BatchTransition{At: at, Sequence: 1, To: first.Status, State: first}) + "\n" +
+		FormatBatchTransitionLine(BatchTransition{At: at, Sequence: 2, From: first.Status, To: second.Status, State: second}) + "\n"
+	before, err := os.ReadFile(store.logPath(state.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := store.RenderTransitions(context.Background(), state.ID, &out, false); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != want {
+		t.Fatalf("output = %q, want %q", out.String(), want)
+	}
+	after, err := os.ReadFile(store.logPath(state.ID))
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("render changed transition log: %v", err)
+	}
+	if err := store.RenderTransitions(context.Background(), "missing", io.Discard, false); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing log error = %v", err)
+	}
+	if err := store.RenderTransitions(context.Background(), state.ID, nil, false); err != nil {
+		t.Fatalf("nil output error = %v", err)
+	}
+}
+
+type batchTransitionLineWriter chan string
+
+func (w batchTransitionLineWriter) Write(p []byte) (int, error) {
+	w <- string(p)
+	return len(p), nil
+}
+
+func TestBatchStoreRenderTransitionsFollow(t *testing.T) {
+	for _, complete := range []bool{false, true} {
+		name := "cancel"
+		if complete {
+			name = "complete"
+		}
+		t.Run(name, func(t *testing.T) {
+			store := newTestBatchStore(t)
+			state := testBatchState()
+			state.Status = BatchStatusSettling
+			state, err := store.Initialize(state, "2026-09-26T21:00:00Z")
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			out := make(batchTransitionLineWriter, 10)
+			done := make(chan error, 1)
+			go func() { done <- store.RenderTransitions(ctx, state.ID, out, true) }()
+			select {
+			case <-out:
+			case <-ctx.Done():
+				t.Fatal("initial transition not rendered")
+			}
+			next := state
+			next.LogSequence++
+			if complete {
+				next.Status = BatchStatusCompleted
+			}
+			transition := BatchTransition{Schema: BatchTransitionSchema, Sequence: next.LogSequence,
+				At: "2026-09-26T21:00:01Z", From: state.Status, To: next.Status, State: next}
+			encoded, err := json.Marshal(transition)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Even valid JSON must not render until its trailing newline arrives.
+			if err := appendBatchLogLine(store.logPath(state.ID), encoded); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case line := <-out:
+				t.Fatalf("rendered partial record: %q", line)
+			case <-time.After(350 * time.Millisecond):
+			}
+			if err := appendBatchLogLine(store.logPath(state.ID), []byte("\n")); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case line := <-out:
+				if want := FormatBatchTransitionLine(transition) + "\n"; line != want {
+					t.Fatalf("appended output = %q, want %q", line, want)
+				}
+			case <-ctx.Done():
+				t.Fatal("appended transition not rendered")
+			}
+			if !complete {
+				cancel()
+			}
+			select {
+			case err := <-done:
+				if complete && err != nil || !complete && !errors.Is(err, context.Canceled) {
+					t.Fatalf("follow error = %v", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("follow did not stop")
+			}
+		})
 	}
 }
 

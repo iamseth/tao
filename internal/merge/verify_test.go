@@ -1,6 +1,7 @@
 package merge
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/iamseth/tao/internal/plan"
@@ -21,6 +23,72 @@ type verifyRunnerCall struct {
 	cwd  string
 	name string
 	args []string
+}
+
+func TestMergeVerifyProgress(t *testing.T) {
+	t.Parallel()
+	failure := errors.New("command failed")
+	for _, outcome := range []string{"passed", "failed", "cancelled"} {
+		for _, mode := range []string{"buffer", "nil", "write error"} {
+			t.Run(outcome+"/"+mode, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				var wantErr error
+				switch outcome {
+				case "failed":
+					wantErr = failure
+				case "cancelled":
+					cancel()
+					wantErr = context.Canceled
+				}
+				var progress bytes.Buffer
+				var out io.Writer
+				switch mode {
+				case "buffer":
+					out = &progress
+				case "write error":
+					out = progressErrorWriter{}
+				}
+				clock := time.Date(2026, 9, 26, 23, 0, 0, 0, time.FixedZone("test", 2*60*60))
+				const start = "2026-09-26T21:00:00Z verify start: make verify (cwd /integration)\n"
+				called := false
+				service := Service{
+					Progress: out,
+					Now:      func() time.Time { return clock },
+					Runner: func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+						called = true
+						if mode == "buffer" && progress.String() != start {
+							t.Fatalf("start not emitted before runner: %q", progress.String())
+						}
+						if cwd != "/integration" || name != "sh" || !reflect.DeepEqual(args, []string{"-c", "make verify"}) {
+							t.Fatalf("unexpected runner arguments: %s %s %v", cwd, name, args)
+						}
+						clock = clock.Add(1500 * time.Millisecond)
+						_, _ = io.WriteString(stdout, "buffered output\n")
+						if ctx.Err() != nil {
+							return ctx.Err()
+						}
+						return wantErr
+					},
+				}
+				output, err := service.runMergeVerifyAtRoot(ctx, "/integration", "make verify")
+				if !called || !errors.Is(err, wantErr) || output != "buffered output\n" {
+					t.Fatalf("verify = %q, %v; called=%v", output, err, called)
+				}
+				want := ""
+				if mode == "buffer" {
+					status := "passed"
+					if wantErr != nil {
+						status = "failed"
+					}
+					want = start + "2026-09-26T21:00:01Z verify " + status + " in 1.5s: make verify\n"
+				}
+				if progress.String() != want {
+					t.Fatalf("progress = %q, want %q", progress.String(), want)
+				}
+			})
+		}
+	}
 }
 
 func TestBoundMergeVerifyOutputRepairsSplitRuneAtTailBoundary(t *testing.T) {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/agent"
+	"github.com/iamseth/tao/internal/agent/logrecord"
 	"github.com/iamseth/tao/internal/agentsession"
 	mergepkg "github.com/iamseth/tao/internal/merge"
 	"github.com/iamseth/tao/internal/plan"
@@ -21,14 +22,122 @@ import (
 	"github.com/iamseth/tao/internal/workspace"
 )
 
+func TestMergeLogf(t *testing.T) {
+	if logf := (App{}).mergeLogf(); logf != nil {
+		t.Fatal("nil output should disable merge logging")
+	}
+	var out bytes.Buffer
+	logf := (App{Out: &out}).mergeLogf()
+	logf("Skipped %s: %d", "plan-a", 2)
+	if got, want := out.String(), "Skipped plan-a: 2\n"; got != want {
+		t.Fatalf("merge log = %q, want %q", got, want)
+	}
+}
+
+func TestNewMergeBatchCoordinatorSeamsWiresProgressStore(t *testing.T) {
+	for _, withOutput := range []bool{false, true} {
+		t.Run(fmt.Sprintf("output=%t", withOutput), func(t *testing.T) {
+			root := t.TempDir()
+			store := mergepkg.NewBatchStore(root, filepath.Join(root, "active.json"))
+			var out io.Writer
+			if withOutput {
+				out = &bytes.Buffer{}
+			}
+			seams := newMergeBatchCoordinatorSeams(App{Out: out}, store, mergepkg.Service{}, &mergepkg.BatchWorkspace{}, nil, mergepkg.BatchAgentSession{})
+			progressStore, ok := seams.Store.(*mergepkg.BatchProgressStore)
+			if !ok || progressStore.BatchStore != store {
+				t.Fatalf("coordinator store = %#v, want progress wrapper around %p", seams.Store, store)
+			}
+			if seams.Progress != out {
+				t.Fatalf("coordinator progress = %v, want %v", seams.Progress, out)
+			}
+			for name, phaseStore := range map[string]any{
+				"integrator": seams.Integrator.(mergepkg.BatchIntegrator).Store,
+				"resolver":   seams.Resolver.(mergepkg.BatchAgentResolver).Store,
+				"reviewer":   seams.Reviewer.(mergepkg.BatchAggregateReviewer).Store,
+				"lander":     seams.Lander.(mergepkg.BatchLander).Store,
+				"settler":    seams.Settler.(mergepkg.BatchSettler).Store,
+			} {
+				if phaseStore != progressStore {
+					t.Errorf("%s store = %#v, want shared progress store %p", name, phaseStore, progressStore)
+				}
+			}
+		})
+	}
+}
+
 func TestNewMergeBatchAgentConfigWiresRepositoryTelemetryStoreAndClock(t *testing.T) {
 	root := t.TempDir()
 	store := mergepkg.NewBatchStore(filepath.Join(root, "merge-batches"), filepath.Join(root, "merge-batches", "active.json"))
 	fixed := time.Date(2026, 8, 10, 21, 0, 0, 0, time.UTC)
-	config := newMergeBatchAgentConfig(App{Out: io.Discard, Now: func() time.Time { return fixed }}, "/control", nil, store, runtimeconfig.ModelSelection{})
-	if config.EventAppender != store || config.ControlRoot != "/control" || config.Now == nil || !config.Now().Equal(fixed) {
+	transcript := mergepkg.NewBatchTranscriptWriter(store, io.Discard, nil)
+	defer func() { _ = transcript.Close() }()
+	config := newMergeBatchAgentConfig(App{Out: io.Discard, Now: func() time.Time { return fixed }}, "/control", nil, store, runtimeconfig.ModelSelection{}, transcript)
+	if config.Log != transcript || !config.FramedLog || config.EventAppender != store || config.ControlRoot != "/control" || config.Now == nil || !config.Now().Equal(fixed) {
 		t.Fatalf("batch agent config = %#v", config)
 	}
+}
+
+func TestMergeBatchTranscriptReceivesProviderRecords(t *testing.T) {
+	for _, provider := range []string{"pi", "claude"} {
+		t.Run(provider, func(t *testing.T) {
+			t.Setenv("TAO_AGENT", provider)
+			root := t.TempDir()
+			store := mergepkg.NewBatchStore(root, filepath.Join(root, "active.json"))
+			if _, err := store.Initialize(mergepkg.BatchState{ID: "batch-a", Status: mergepkg.BatchStatusPlanned}, "now"); err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			transcript := mergepkg.NewBatchTranscriptWriter(store, &out, nil)
+			defer func() { _ = transcript.Close() }()
+			calls := 0
+			config := newMergeBatchAgentConfig(App{Out: &out, ProcessStarter: mergeMetricsStarter(t, provider, "transcript", nil, &calls)}, "", nil, store, runtimeconfig.ModelSelection{}, transcript)
+			session, err := mergepkg.NewBatchAgentSession(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = session.Resolve(context.Background(), mergepkg.BatchAgentSessionRequest{BatchID: "batch-a", Operation: mergepkg.BatchAgentOperationAggregateReview, Attempt: 1, IntegrationRoot: root, Prompt: "review"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(store.TranscriptPath("batch-a"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, line := range strings.Split(string(data), "\n") {
+				record, ok := logrecord.Parse(line)
+				if ok && record.Type == logrecord.TypeToolResult {
+					found = true
+					if record.Timestamp == "" || record.Content == "" {
+						t.Fatalf("record = %#v", record)
+					}
+				}
+			}
+			if !found || strings.Count(out.String(), "streamed output") != 1 || strings.Contains(out.String(), logrecord.Prefix) {
+				t.Fatalf("transcript=%s output=%q", data, out.String())
+			}
+		})
+	}
+}
+
+func TestClosingMergeBatchRunnerClosesAfterSuccessAndFailure(t *testing.T) {
+	for _, runErr := range []error{nil, errors.New("run failed")} {
+		closer := &mergeBatchTestCloser{}
+		inner := &fakeCLIMergeBatchRunner{err: runErr}
+		runner := closingMergeBatchRunner{runner: inner, closer: closer}
+		_, err := runner.Run(context.Background(), mergeBatchOptions{DryRun: true})
+		if !errors.Is(err, runErr) || !closer.closed || inner.calls != 1 || !inner.options.DryRun {
+			t.Fatalf("run=%v closed=%t inner=%#v", err, closer.closed, inner)
+		}
+	}
+}
+
+type mergeBatchTestCloser struct{ closed bool }
+
+func (c *mergeBatchTestCloser) Close() error {
+	c.closed = true
+	return errors.New("ignored transcript failure")
 }
 
 type recordingMergeMetricsAppender struct {
@@ -79,7 +188,7 @@ func TestNewMergeServiceRunnerWiresDeferredGuardedSinglePlanSessions(t *testing.
 		t.Fatalf("non-conflicting merge configured provider eagerly: %v", err)
 	}
 	service, ok := runner.(mergepkg.Service)
-	if !ok || service.SingleResolver == nil || service.SingleReviewer == nil || service.ProposalGenerator == nil || service.Cleaner != manager {
+	if !ok || service.SingleResolver == nil || service.SingleReviewer == nil || service.ProposalGenerator == nil || service.Cleaner != manager || service.Progress != app.Out || service.Logf == nil {
 		t.Fatalf("single-plan merge service wiring = %#v", runner)
 	}
 }

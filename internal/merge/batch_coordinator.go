@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -107,6 +108,7 @@ type BatchCoordinatorSeams struct {
 	Lander     BatchCoordinatorLander
 	Settler    BatchCoordinatorSettler
 	Now        func() time.Time
+	Progress   io.Writer
 }
 
 // BatchCoordinator owns the complete batch state machine, including setup,
@@ -121,13 +123,34 @@ func NewBatchCoordinator(seams BatchCoordinatorSeams) *BatchCoordinator {
 	return &BatchCoordinator{seams: seams}
 }
 
+func (c *BatchCoordinator) progressf(format string, args ...any) {
+	if c == nil || c.seams.Progress == nil {
+		return
+	}
+	now := time.Now()
+	if c.seams.Now != nil {
+		now = c.seams.Now()
+	}
+	_, _ = fmt.Fprintf(c.seams.Progress, "%s merge-batch %s\n", now.UTC().Format(time.RFC3339), fmt.Sprintf(format, args...))
+}
+
 // Run prepares one new or resumed batch and coordinates it through every
 // active phase that can make progress in this invocation.
 func (c *BatchCoordinator) Run(ctx context.Context, options BatchCoordinatorOptions) (result BatchCoordinatorResult, err error) {
 	result.DryRun = options.DryRun
+	defer func() {
+		status := result.State.Status
+		if status == "" {
+			status = "none"
+		}
+		c.progressf("coordinator finished status=%s", status)
+	}()
 	now := time.Now().UTC()
 	if c != nil && c.seams.Now != nil {
 		now = c.seams.Now().UTC()
+	}
+	if options.Restart {
+		c.progressf("restart requested")
 	}
 	if c == nil || c.seams.Store == nil {
 		return result, errors.New("batch coordinator store is required")
@@ -178,6 +201,7 @@ func (c *BatchCoordinator) Run(ctx context.Context, options BatchCoordinatorOpti
 				}
 			}
 			result.Resumed = true
+			c.progressf("resumed active batch id=%s status=%s", state.ID, state.Status)
 			if options.DryRun {
 				return result, nil
 			}
@@ -196,6 +220,7 @@ func (c *BatchCoordinator) Run(ctx context.Context, options BatchCoordinatorOpti
 		if discoverErr != nil {
 			return result, discoverErr
 		}
+		c.progressf("discovery complete candidates=%d blockers=%d", len(preflight.Candidates), len(preflight.Blockers))
 		if len(preflight.Candidates) == 0 {
 			return result, nil
 		}
@@ -221,6 +246,7 @@ func (c *BatchCoordinator) Run(ctx context.Context, options BatchCoordinatorOpti
 		for _, candidate := range planning.Ordered {
 			order = append(order, candidate.PlanID)
 		}
+		c.progressf("order chosen plans=%s deferred=%d", strings.Join(order, ","), len(planning.Deferred))
 		at := now.Format(time.RFC3339Nano)
 		state := BatchState{
 			Schema: BatchStateSchema, ID: now.Format("20060102-150405.000000000"), Status: BatchStatusPlanned,
@@ -252,6 +278,7 @@ func (c *BatchCoordinator) Run(ctx context.Context, options BatchCoordinatorOpti
 			return result, err
 		}
 		if options.DryRun {
+			c.progressf("dry-run integration starting")
 			integrated, integrateErr := c.dryRunIntegration(ctx, state, options.VerifyCommand)
 			result.State = integrated.State
 			result.Deferred = integrated.Deferred
@@ -283,12 +310,14 @@ func (c *BatchCoordinator) Run(ctx context.Context, options BatchCoordinatorOpti
 			return result, statusErr
 		}
 		integrationRoot = status.Path
+		c.progressf("integration workspace reused path=%s", integrationRoot)
 	} else {
 		created, startErr := c.seams.Workspace.Start(ctx, result.State)
 		if startErr != nil {
 			return result, startErr
 		}
 		integrationRoot = created.Path
+		c.progressf("integration workspace started path=%s", integrationRoot)
 	}
 
 	resumeEjection := result.Resumed && BatchEjectionInProgress(result.State)
@@ -316,6 +345,7 @@ func (c *BatchCoordinator) Run(ctx context.Context, options BatchCoordinatorOpti
 		if c.seams.Integrator == nil {
 			return result, errors.New("batch coordinator integrator is required")
 		}
+		c.progressf("dispatching integrate")
 		integrated, integrateErr := c.seams.Integrator.Integrate(ctx, result.State, integrationRoot, BatchIntegrateOptions{VerifyCommand: options.VerifyCommand})
 		result.State = integrated.State
 		result.Deferred = integrated.Deferred
@@ -324,6 +354,7 @@ func (c *BatchCoordinator) Run(ctx context.Context, options BatchCoordinatorOpti
 		}
 	}
 
+	c.progressf("dispatching resolve-and-review")
 	result.State, err = c.resolveAndReview(ctx, result.State, integrationRoot, options)
 	if err != nil {
 		return result, err
@@ -333,6 +364,7 @@ func (c *BatchCoordinator) Run(ctx context.Context, options BatchCoordinatorOpti
 		if c.seams.Lander == nil {
 			return result, errors.New("batch coordinator lander is required")
 		}
+		c.progressf("dispatching land")
 		landed, landErr := c.seams.Lander.Land(ctx, result.State, integrationRoot)
 		result.State = landed.State
 		result.DefaultMoved = result.State.LandedSHA != ""
@@ -344,6 +376,7 @@ func (c *BatchCoordinator) Run(ctx context.Context, options BatchCoordinatorOpti
 		if c.seams.Settler == nil {
 			return result, errors.New("batch coordinator settler is required")
 		}
+		c.progressf("dispatching settle")
 		settled, settleErr := c.seams.Settler.Settle(ctx, result.State)
 		result.State = settled.State
 		result.DefaultMoved = result.State.LandedSHA != ""
@@ -405,9 +438,11 @@ func (c *BatchCoordinator) dryRunIntegration(ctx context.Context, state BatchSta
 	if err != nil {
 		return result, err
 	}
+	c.progressf("dry-run integration workspace started path=%s", created.Path)
 	if c.seams.Integrator == nil {
 		return result, errors.New("batch coordinator integrator is required")
 	}
+	c.progressf("dry-run dispatching integrate")
 	return c.seams.Integrator.Integrate(ctx, state, created.Path, BatchIntegrateOptions{DryRun: true, VerifyCommand: verifyCommand})
 }
 

@@ -44,6 +44,10 @@ type BatchAgentSessionConfig struct {
 	EventAppender   BatchAgentEventAppender
 	Now             func() time.Time
 
+	// FramedLog sends raw records to Log instead of pre-rendered progress.
+	// Such writers own terminal presentation as well as transcript persistence.
+	FramedLog bool
+
 	// ProviderLookPath and ConfinementProbe override preflight capability
 	// checks. They are intended for tests; production callers leave them nil.
 	ProviderLookPath agent.LookPath
@@ -98,6 +102,7 @@ type BatchAgentSession struct {
 	run                func(context.Context, agentsession.Request) (agentsession.Result, error)
 	confinesFilesystem bool
 	log                io.Writer
+	framedLog          io.Writer
 	controlRoot        string
 	metrics            func(agent.Metrics, string)
 	observe            func(BatchAgentSessionRequest, BatchAgentSessionResult, error)
@@ -279,12 +284,17 @@ func newBatchAgentSession(config BatchAgentSessionConfig, confineFilesystem bool
 	if confineFilesystem {
 		starter = singleMergeFilesystemConfiningProcessStarter(starter, providerLookPath)
 	}
+	progress := config.Log
+	var framedLog io.Writer
+	if config.FramedLog {
+		progress, framedLog = nil, config.Log
+	}
 	runner := agentsession.New(agentsession.Config{
 		Descriptor:      descriptor,
 		Deps:            agent.RuntimeDeps{ProcessStarter: starter},
 		SkipPermissions: skip,
 		Timeout:         timeout,
-		Progress:        config.Log,
+		Progress:        progress,
 		CommandRunner:   config.CommandRunner,
 	})
 	clock := config.Now
@@ -293,7 +303,7 @@ func newBatchAgentSession(config BatchAgentSessionConfig, confineFilesystem bool
 	}
 	return BatchAgentSession{
 		runner: runner, run: runner.Run, confinesFilesystem: confineFilesystem, models: config.Models,
-		log: config.Log, controlRoot: config.ControlRoot, metrics: config.Metrics,
+		log: config.Log, framedLog: framedLog, controlRoot: config.ControlRoot, metrics: config.Metrics,
 		observe: config.Observe, eventAppender: config.EventAppender, now: clock,
 		providerToolName: descriptor.ToolName, providerLookPath: providerLookPath,
 		confinementProbe: config.ConfinementProbe,
@@ -1102,7 +1112,7 @@ func (s BatchAgentSession) Resolve(ctx context.Context, request BatchAgentSessio
 	}
 	result, err := run(ctx, agentsession.Request{
 		Model:    s.models.For(role),
-		RepoRoot: request.IntegrationRoot, ControlRoot: s.controlRoot, Prompt: request.Prompt, CollectMetrics: true,
+		RepoRoot: request.IntegrationRoot, ControlRoot: s.controlRoot, Prompt: request.Prompt, CollectMetrics: true, Log: s.framedLog,
 	})
 	summary := agentsession.Summarize(result, err)
 	if s.metrics != nil {
@@ -1112,7 +1122,7 @@ func (s BatchAgentSession) Resolve(ctx context.Context, request BatchAgentSessio
 		}
 		s.metrics(metrics, result.MetricsWarning)
 	} else if summary.ReportWarning && s.log != nil {
-		_ = logrecord.Render(s.log, logrecord.Record{Type: logrecord.TypeDiagnostic, Content: "tao telemetry warning: " + summary.WarningMessage})
+		s.writeLogDiagnostic("tao telemetry warning: " + summary.WarningMessage)
 	}
 	sessionResult := BatchAgentSessionResult{Output: agentsession.ResultText(result), Provider: result}
 	s.recordTelemetry(request, result, err)
@@ -1151,8 +1161,17 @@ func (s BatchAgentSession) recordTelemetry(request BatchAgentSessionRequest, res
 	s.appendTelemetry(event, "metrics")
 }
 
+func (s BatchAgentSession) writeLogDiagnostic(message string) {
+	record := logrecord.Record{Type: logrecord.TypeDiagnostic, Content: message}
+	if s.framedLog != nil {
+		_ = logrecord.Write(s.framedLog, record)
+	} else if s.log != nil {
+		_ = logrecord.Render(s.log, record)
+	}
+}
+
 func (s BatchAgentSession) appendTelemetry(event BatchAgentEvent, label string) {
 	if err := s.eventAppender.AppendAgentEvent(event); err != nil && s.log != nil {
-		_ = logrecord.Render(s.log, logrecord.Record{Type: logrecord.TypeDiagnostic, Content: fmt.Sprintf("tao telemetry warning: append merge-batch %s event: %v", label, err)})
+		s.writeLogDiagnostic(fmt.Sprintf("tao telemetry warning: append merge-batch %s event: %v", label, err))
 	}
 }

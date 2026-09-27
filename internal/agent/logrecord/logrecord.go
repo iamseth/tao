@@ -6,10 +6,12 @@
 package logrecord
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
+	"time"
 )
 
 const Prefix = "@tao-agent-log-v1 "
@@ -41,6 +43,73 @@ func Write(w io.Writer, record Record) error {
 	}
 	_, err = w.Write(append(append([]byte(Prefix), encoded...), '\n'))
 	return err
+}
+
+// TeeWriter preserves raw log bytes and renders framed records to out. A nil
+// out disables presentation without disabling the log.
+func TeeWriter(log io.Writer, out io.Writer) io.Writer {
+	return teeWriter{log: log, out: out}
+}
+
+type teeWriter struct {
+	log io.Writer
+	out io.Writer
+}
+
+func (w teeWriter) Write(p []byte) (int, error) {
+	n, err := w.log.Write(p)
+	if err != nil {
+		return n, err
+	}
+	if n != len(p) {
+		return n, io.ErrShortWrite
+	}
+	if w.out == nil {
+		return len(p), nil
+	}
+	record, ok := Parse(strings.TrimSuffix(string(p), "\n"))
+	if !ok {
+		return len(p), nil
+	}
+	if err := Render(w.out, record); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+// TimestampWriter adds a UTC timestamp to framed records that lack one.
+// A nil clock uses time.Now; existing timestamps and unframed bytes are preserved.
+func TimestampWriter(w io.Writer, clock func() time.Time) io.Writer {
+	return timestampWriter{writer: w, clock: clock}
+}
+
+type timestampWriter struct {
+	writer io.Writer
+	clock  func() time.Time
+}
+
+func (w timestampWriter) Write(p []byte) (int, error) {
+	record, ok := Parse(strings.TrimSuffix(string(p), "\n"))
+	if !ok || record.Timestamp != "" {
+		return w.writer.Write(p)
+	}
+	clock := w.clock
+	if clock == nil {
+		clock = time.Now
+	}
+	record.Timestamp = clock().UTC().Format(time.RFC3339Nano)
+	var framed bytes.Buffer
+	if err := Write(&framed, record); err != nil {
+		return 0, err
+	}
+	n, err := w.writer.Write(framed.Bytes())
+	if err != nil {
+		return 0, err
+	}
+	if n != framed.Len() {
+		return 0, io.ErrShortWrite
+	}
+	return len(p), nil
 }
 
 // PresentationWriter converts framed records into human-readable progress.

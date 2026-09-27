@@ -124,7 +124,7 @@ _tao() {
       _arguments '--json[write JSON]' '--slug[allocate a plan directory with this slug]:value:'
       ;;
     lo|log)
-      _arguments '-f[follow appended agent log output]' '--follow[follow appended agent log output]'
+      _arguments '--batch[show active or named merge-batch transitions]' '-f[follow appended output]' '--follow[follow appended output]'
       if _tao_at_positional 3 1 0 ',,'; then
         plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
         compadd -a plan_ids

@@ -1172,6 +1172,36 @@ tao merge --all --restart --dry-run
 Restart is refused after landing and never removes source plans. Resolve
 reported source/default drift rather than deleting recovery files by hand.
 
+#### Live progress and batch logs
+
+Batch runs print timestamped transition lines with the batch ID, sequence,
+status change, and candidate/deferred/ejected counts. Verification prints a
+start line and a finish line with elapsed time and pass/fail status, using UTC
+RFC3339 timestamps. Verification command output remains buffered and
+tail-bounded, not live-streamed. Skip and recording messages also appear;
+the structured batch summary remains the final output. Progress is display-only
+and does not change batch state or authorize recovery.
+
+Batch agent output is also appended to
+`<data-home>/repos/<repo-id>/merge-batches/<batch-id>/agent-transcript.log`.
+This best-effort transcript is created when agent output is written; batches
+with no agent output need not have one. `--restart` retains the old batch's
+transcript.
+
+From another terminal, use `tao log --batch [--follow] [batch-id]` to show
+recorded transitions or follow newly appended ones. Without a batch ID it
+selects the current repository's active batch; provide an ID to inspect a
+previous batch. This reads `transitions.jsonl`, not `agent-transcript.log`,
+and does not replay verification output.
+
+```sh
+tao log --batch
+tao log --batch --follow
+tao log --batch <batch-id>
+```
+
+#### Batch flags
+
 **Strict batch flags:** `--dry-run` and `--auto-eject` require `--all`.
 `--dry-run` runs no verification command and is observational, but does not
 bypass an active batch: Tao inspects

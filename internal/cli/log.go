@@ -10,18 +10,21 @@ import (
 	"os"
 
 	"github.com/iamseth/tao/internal/agent/logrecord"
+	mergepkg "github.com/iamseth/tao/internal/merge"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/taodata"
 )
 
 var logCommand = commandMetadata{
 	name:                  "log",
 	minPrefix:             "lo",
-	usageLines:            []string{"log (lo) [--follow] <plan-id-or-slug>"},
+	usageLines:            []string{"log (lo) [--follow] <plan-id-or-slug>", "log (lo) --batch [--follow] [batch-id]"},
 	completionDescription: "Show or follow agent run log",
-	long:                  "Show the captured agent run log for a Tao plan. Pass --follow (or -f) to stream appended output while a run is still active.",
+	long:                  "Show the captured agent run log for a Tao plan, or use --batch to show transitions for the active or named merge batch. Pass --follow (or -f) to stream appended output.",
 	examples: "  tao log my-plan\n" +
 		"  tao log --follow my-plan\n" +
-		"  tao log -f 20260628-1618-kubectl-style-help",
+		"  tao log -f 20260628-1618-kubectl-style-help\n" +
+		"  tao log --batch --follow",
 	registerFlags: registerLogFlags,
 	completion: completionContext{
 		positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs},
@@ -34,8 +37,9 @@ var logCommand = commandMetadata{
 
 func registerLogFlags(fs *flag.FlagSet) {
 	var follow bool
-	fs.BoolVar(&follow, "follow", false, "follow appended agent log output")
-	fs.BoolVar(&follow, "f", false, "follow appended agent log output")
+	fs.Bool("batch", false, "show active or named merge-batch transitions")
+	fs.BoolVar(&follow, "follow", false, "follow appended output")
+	fs.BoolVar(&follow, "f", false, "follow appended output")
 }
 
 func (a App) log(ctx context.Context, repo interface {
@@ -46,6 +50,16 @@ func (a App) log(ctx context.Context, repo interface {
 	fs, positional, err := a.parseArgs("log", args, registerLogFlags)
 	if err != nil {
 		return err
+	}
+	if flagBoolValue(fs, "batch") {
+		if len(positional) > 1 {
+			return errors.New("usage: tao log --batch [--follow] [batch-id]")
+		}
+		id := ""
+		if len(positional) == 1 {
+			id = positional[0]
+		}
+		return a.logBatch(ctx, id, flagBoolValue(fs, "follow"))
 	}
 	if err := requirePositionals(positional, 1, "usage: tao log [--follow] <plan-id-or-slug>"); err != nil {
 		return err
@@ -72,6 +86,39 @@ func (a App) log(ctx context.Context, repo interface {
 		return fmt.Errorf("read agent log: %w", err)
 	}
 	return renderPlanLog(a.Out, text)
+}
+
+func (a App) logBatch(ctx context.Context, id string, follow bool) error {
+	var registry mergeBatchRegistry
+	if a.Registry != nil {
+		var ok bool
+		registry, ok = a.Registry().(mergeBatchRegistry)
+		if !ok {
+			return errors.New("log --batch requires merge-batch registry paths")
+		}
+	} else {
+		defaultRegistry := taodata.NewRegistry("")
+		defaultRegistry.Runner = a.mergeRunner()
+		registry = defaultRegistry
+	}
+	current, err := registry.Current(ctx)
+	if err != nil {
+		return fmt.Errorf("resolve current repository for merge batch: %w", err)
+	}
+	store := mergepkg.NewBatchStore(registry.MergeBatchesDir(current), registry.ActiveMergeBatchPath(current))
+	if id == "" {
+		id, err = store.ActiveID()
+		if err != nil {
+			return err
+		}
+	}
+	if id == "" {
+		return errors.New("no active merge batch; provide a batch-id to view a previous batch")
+	}
+	if err := store.RenderTransitions(ctx, id, a.Out, follow); err != nil {
+		return fmt.Errorf("read merge batch %s transitions: %w", id, err)
+	}
+	return nil
 }
 
 func followPlanLog(ctx context.Context, repo plan.LogFollower, dir string, out io.Writer) error {

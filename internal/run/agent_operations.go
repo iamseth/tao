@@ -1,14 +1,12 @@
 package run
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/iamseth/tao/internal/agent"
@@ -42,7 +40,7 @@ func openAgentSessionLog(appender plan.LogAppender, planDir string, out io.Write
 	if err != nil {
 		return agentSessionLog{}, err
 	}
-	log := timestampedAgentLogWriter{writer: sessionLogWriter(logFile, out), clock: clock}
+	log := logrecord.TimestampWriter(logrecord.TeeWriter(logFile, out), clock)
 	if err := logrecord.Write(log, logrecord.Record{Type: logrecord.TypeSession, Content: action, Timestamp: timestamp.Format(time.RFC3339)}); err != nil {
 		_ = logFile.Close()
 		return agentSessionLog{}, err
@@ -55,65 +53,6 @@ func (l agentSessionLog) Close() error {
 		return nil
 	}
 	return l.file.Close()
-}
-
-func sessionLogWriter(logFile io.Writer, out io.Writer) io.Writer {
-	if out == nil {
-		return logFile
-	}
-	return framedSessionLogWriter{log: logFile, out: out}
-}
-
-type timestampedAgentLogWriter struct {
-	writer io.Writer
-	clock  func() time.Time
-}
-
-func (w timestampedAgentLogWriter) Write(p []byte) (int, error) {
-	record, ok := logrecord.Parse(strings.TrimSuffix(string(p), "\n"))
-	if !ok || record.Timestamp != "" {
-		return w.writer.Write(p)
-	}
-	clock := w.clock
-	if clock == nil {
-		clock = time.Now
-	}
-	record.Timestamp = clock().UTC().Format(time.RFC3339Nano)
-	var framed bytes.Buffer
-	if err := logrecord.Write(&framed, record); err != nil {
-		return 0, err
-	}
-	n, err := w.writer.Write(framed.Bytes())
-	if err != nil {
-		return 0, err
-	}
-	if n != framed.Len() {
-		return 0, io.ErrShortWrite
-	}
-	return len(p), nil
-}
-
-type framedSessionLogWriter struct {
-	log io.Writer
-	out io.Writer
-}
-
-func (w framedSessionLogWriter) Write(p []byte) (int, error) {
-	n, err := w.log.Write(p)
-	if err != nil {
-		return n, err
-	}
-	if n != len(p) {
-		return n, io.ErrShortWrite
-	}
-	record, ok := logrecord.Parse(strings.TrimSuffix(string(p), "\n"))
-	if !ok {
-		return len(p), nil
-	}
-	if err := logrecord.Render(w.out, record); err != nil {
-		return 0, err
-	}
-	return len(p), nil
 }
 
 func writeAgentLogDiagnostic(log io.Writer, message string) {

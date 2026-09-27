@@ -1,6 +1,7 @@
 package merge
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -112,40 +113,172 @@ func TestBatchEjectionResumeTarget(t *testing.T) {
 func TestBatchCoordinatorPlansInitializesAndStartsNewBatch(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 18, 1, 2, 3, 4, time.FixedZone("offset", 2*60*60))
-	candidateA := BatchCandidate{PlanID: "plan-a"}
-	candidateB := BatchCandidate{PlanID: "plan-b"}
-	store := &coordinatorStore{}
-	workspaceOwner := &coordinatorWorkspace{}
-	coordinator := NewBatchCoordinator(BatchCoordinatorSeams{
-		Store: store, Workspace: workspaceOwner,
-		Discovery: coordinatorDiscovery{result: BatchPreflightResult{
-			Candidates: []BatchCandidate{candidateB, candidateA}, RepoRoot: "/repo", DefaultBranch: "main", DefaultStartSHA: "base",
-		}},
-		Planner: coordinatorPlanner{result: BatchPlanningResult{
-			Ordered:  []BatchCandidate{candidateA},
-			Deferred: []BatchDeferral{{PlanID: "plan-b", Reason: "overlap", OverlapCount: 2}},
-		}},
-		Integrator: &coordinatorIntegrator{},
-		Now:        func() time.Time { return now },
-	})
+	var baseline BatchCoordinatorResult
+	for _, mode := range []string{"nil", "buffer", "failing"} {
+		t.Run(mode, func(t *testing.T) {
+			var output bytes.Buffer
+			var progress io.Writer
+			switch mode {
+			case "buffer":
+				progress = &output
+			case "failing":
+				progress = coordinatorFailingWriter{}
+			}
+			candidateA := BatchCandidate{PlanID: "plan-a"}
+			candidateB := BatchCandidate{PlanID: "plan-b"}
+			store := &coordinatorStore{}
+			workspaceOwner := &coordinatorWorkspace{}
+			coordinator := NewBatchCoordinator(BatchCoordinatorSeams{
+				Store: store, Workspace: workspaceOwner,
+				Discovery: coordinatorDiscovery{result: BatchPreflightResult{
+					Candidates: []BatchCandidate{candidateB, candidateA}, RepoRoot: "/repo", DefaultBranch: "main", DefaultStartSHA: "base",
+				}},
+				Planner: coordinatorPlanner{result: BatchPlanningResult{
+					Ordered:  []BatchCandidate{candidateA},
+					Deferred: []BatchDeferral{{PlanID: "plan-b", Reason: "overlap", OverlapCount: 2}},
+				}},
+				Integrator: &coordinatorIntegrator{},
+				Now:        func() time.Time { return now },
+				Progress:   progress,
+			})
 
-	result, err := coordinator.Run(context.Background(), BatchCoordinatorOptions{})
+			result, err := coordinator.Run(context.Background(), BatchCoordinatorOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.State.ID != "20260717-230203.000000004" || result.State.CreatedAt != "2026-07-17T23:02:03.000000004Z" || result.State.UpdatedAt != result.State.CreatedAt {
+				t.Fatalf("batch identity or timestamps changed: %#v", result.State)
+			}
+			if !reflect.DeepEqual(result.State.ChosenOrder, []string{"plan-a"}) || result.State.LogSequence != 1 {
+				t.Fatalf("initialized state = %#v", result.State)
+			}
+			if result.State.Candidates[0].Deferred == nil || result.State.Candidates[0].Deferred.PlanID != "plan-b" {
+				t.Fatalf("planning deferral was not copied to candidate: %#v", result.State.Candidates)
+			}
+			if store.initialized.ID != result.State.ID || workspaceOwner.started != result.State.ID || workspaceOwner.statused != "" {
+				t.Fatalf("setup calls: initialized=%q started=%q statused=%q", store.initialized.ID, workspaceOwner.started, workspaceOwner.statused)
+			}
+			workspaceOwner.requireOwnershipReleased(t)
+			if mode == "nil" {
+				baseline = result
+			} else if !reflect.DeepEqual(result, baseline) {
+				t.Fatalf("progress changed result: got %#v, want %#v", result, baseline)
+			}
+			if mode == "buffer" {
+				want := "2026-07-17T23:02:03Z merge-batch discovery complete candidates=2 blockers=0\n" +
+					"2026-07-17T23:02:03Z merge-batch order chosen plans=plan-a deferred=1\n" +
+					"2026-07-17T23:02:03Z merge-batch integration workspace started path=/integration/20260717-230203.000000004\n" +
+					"2026-07-17T23:02:03Z merge-batch dispatching integrate\n" +
+					"2026-07-17T23:02:03Z merge-batch dispatching resolve-and-review\n" +
+					"2026-07-17T23:02:03Z merge-batch coordinator finished status=planned\n"
+				if output.String() != want {
+					t.Fatalf("progress = %q, want %q", output.String(), want)
+				}
+			}
+		})
+	}
+}
+
+type coordinatorFailingWriter struct{}
+
+func (coordinatorFailingWriter) Write([]byte) (int, error) {
+	return 0, errors.New("progress unavailable")
+}
+
+func TestBatchCoordinatorResumeProgress(t *testing.T) {
+	t.Parallel()
+	var output bytes.Buffer
+	state := coordinatorActiveState(BatchStatusReadyToLand)
+	landed := coordinatorActiveState(BatchStatusLanded)
+	landed.LandedSHA = "landed"
+	completed := landed
+	completed.Status = BatchStatusCompleted
+	workspaceOwner := &coordinatorWorkspace{}
+	result, err := NewBatchCoordinator(BatchCoordinatorSeams{
+		Store: &coordinatorStore{activeID: state.ID, loaded: state}, Workspace: workspaceOwner,
+		Lander:   &coordinatorLander{result: BatchLandResult{State: landed}},
+		Settler:  &coordinatorSettler{result: BatchSettleResult{State: completed}},
+		Progress: &output,
+		Now:      func() time.Time { return time.Date(2026, 7, 18, 1, 2, 3, 4, time.FixedZone("offset", 2*60*60)) },
+	}).Run(context.Background(), BatchCoordinatorOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.State.ID != "20260717-230203.000000004" || result.State.CreatedAt != "2026-07-17T23:02:03.000000004Z" || result.State.UpdatedAt != result.State.CreatedAt {
-		t.Fatalf("batch identity or timestamps changed: %#v", result.State)
-	}
-	if !reflect.DeepEqual(result.State.ChosenOrder, []string{"plan-a"}) || result.State.LogSequence != 1 {
-		t.Fatalf("initialized state = %#v", result.State)
-	}
-	if result.State.Candidates[0].Deferred == nil || result.State.Candidates[0].Deferred.PlanID != "plan-b" {
-		t.Fatalf("planning deferral was not copied to candidate: %#v", result.State.Candidates)
-	}
-	if store.initialized.ID != result.State.ID || workspaceOwner.started != result.State.ID || workspaceOwner.statused != "" {
-		t.Fatalf("setup calls: initialized=%q started=%q statused=%q", store.initialized.ID, workspaceOwner.started, workspaceOwner.statused)
+	if !result.Resumed || !result.DefaultMoved || !reflect.DeepEqual(result.State, completed) {
+		t.Fatalf("resume result = %#v", result)
 	}
 	workspaceOwner.requireOwnershipReleased(t)
+	want := "2026-07-17T23:02:03Z merge-batch resumed active batch id=batch-active status=ready_to_land\n" +
+		"2026-07-17T23:02:03Z merge-batch integration workspace reused path=/integration/batch-active\n" +
+		"2026-07-17T23:02:03Z merge-batch dispatching resolve-and-review\n" +
+		"2026-07-17T23:02:03Z merge-batch dispatching land\n" +
+		"2026-07-17T23:02:03Z merge-batch dispatching settle\n" +
+		"2026-07-17T23:02:03Z merge-batch coordinator finished status=completed\n"
+	if output.String() != want {
+		t.Fatalf("progress = %q, want %q", output.String(), want)
+	}
+}
+
+func TestBatchCoordinatorProgressDryRunRestartAndFailure(t *testing.T) {
+	t.Parallel()
+	integrationErr := errors.New("integration failed")
+	for _, tt := range []struct {
+		name    string
+		dryRun  bool
+		restart bool
+		err     error
+	}{
+		{name: "dry run", dryRun: true},
+		{name: "restart dry run", dryRun: true, restart: true},
+		{name: "integration failure", err: integrationErr},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			store := &coordinatorStore{}
+			if tt.restart {
+				store.loaded = coordinatorActiveState(BatchStatusIntegrating)
+				store.activeID = store.loaded.ID
+			}
+			candidates := []BatchCandidate{{PlanID: "plan-b"}, {PlanID: "plan-a"}}
+			workspaceOwner := &coordinatorWorkspace{}
+			integrator := &coordinatorIntegrator{err: tt.err}
+			result, err := NewBatchCoordinator(BatchCoordinatorSeams{
+				Store: store, Workspace: workspaceOwner,
+				Discovery:  coordinatorDiscovery{result: BatchPreflightResult{Candidates: candidates}},
+				Planner:    coordinatorPlanner{result: BatchPlanningResult{Ordered: candidates}},
+				Integrator: integrator, Progress: &output,
+				Now: func() time.Time { return time.Date(2026, 7, 18, 1, 2, 3, 0, time.UTC) },
+			}).Run(context.Background(), BatchCoordinatorOptions{DryRun: tt.dryRun, Restart: tt.restart})
+			if !errors.Is(err, tt.err) {
+				t.Fatalf("Run error = %v, want %v", err, tt.err)
+			}
+			workspaceOwner.requireOwnershipReleased(t)
+			if result.DryRun != tt.dryRun || workspaceOwner.restarted != tt.restart || integrator.options.DryRun != tt.dryRun {
+				t.Fatalf("invocation controls changed: result=%+v workspace=%+v integrator=%+v", result, workspaceOwner, integrator)
+			}
+			if tt.dryRun && (store.initialized.ID != "" || workspaceOwner.removed != result.State.ID) {
+				t.Fatal("dry run persisted state or failed to remove workspace")
+			}
+			var lines []string
+			if tt.restart {
+				lines = append(lines, "restart requested")
+			}
+			lines = append(lines, "discovery complete candidates=2 blockers=0", "order chosen plans=plan-b,plan-a deferred=0")
+			prefix := ""
+			if tt.dryRun {
+				lines = append(lines, "dry-run integration starting")
+				prefix = "dry-run "
+			}
+			lines = append(lines,
+				prefix+"integration workspace started path=/integration/20260718-010203.000000000",
+				prefix+"dispatching integrate",
+				"coordinator finished status=planned")
+			want := "2026-07-18T01:02:03Z merge-batch " + strings.Join(lines, "\n2026-07-18T01:02:03Z merge-batch ") + "\n"
+			if output.String() != want {
+				t.Fatalf("progress = %q, want %q", output.String(), want)
+			}
+		})
+	}
 }
 
 func TestBatchCoordinatorRevalidatesConcurrentAbandonmentBeforeInitialization(t *testing.T) {

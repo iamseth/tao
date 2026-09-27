@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/plan"
@@ -143,9 +144,21 @@ const mergeVerifyOutputLimit = 32 * 1024
 // runMergeVerifyAtRoot executes verification in an explicit worktree without
 // applying single-plan rollback semantics. Batch integration owns its rollback.
 func (s Service) runMergeVerifyAtRoot(ctx context.Context, repoRoot, command string) (string, error) {
+	now := s.Now
+	if now == nil {
+		now = time.Now
+	}
+	started := now()
+	s.progressf("%s verify start: %s (cwd %s)\n", started.UTC().Format(time.RFC3339), command, repoRoot)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	err := s.commandRunner()(ctx, repoRoot, "sh", []string{"-c", command}, &stdout, &stderr)
+	finished := now()
+	status := "passed"
+	if err != nil {
+		status = "failed"
+	}
+	s.progressf("%s verify %s in %s: %s\n", finished.UTC().Format(time.RFC3339), status, finished.Sub(started), command)
 	return boundMergeVerifyOutput(combineVerifyOutput(stdout.String(), stderr.String())), err
 }
 

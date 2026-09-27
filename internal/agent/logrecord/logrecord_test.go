@@ -2,9 +2,85 @@ package logrecord
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestTeeWriter(t *testing.T) {
+	var input bytes.Buffer
+	if err := Write(&input, Record{Type: TypeAssistant, Content: "working"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, withOutput := range []bool{false, true} {
+		var log, out bytes.Buffer
+		var terminal io.Writer
+		if withOutput {
+			terminal = &out
+		}
+		writer := TeeWriter(&log, terminal)
+		for _, p := range [][]byte{input.Bytes(), []byte("unframed\n")} {
+			if n, err := writer.Write(p); n != len(p) || err != nil {
+				t.Fatalf("write = %d, %v", n, err)
+			}
+		}
+		if log.String() != input.String()+"unframed\n" {
+			t.Fatalf("log = %q", log.String())
+		}
+		want := ""
+		if withOutput {
+			want = "assistant: working\n"
+		}
+		if out.String() != want {
+			t.Fatalf("out = %q, want %q", out.String(), want)
+		}
+	}
+	for _, terminal := range []io.Writer{nil, io.Discard} {
+		if _, err := TeeWriter(shortWriter{}, terminal).Write(input.Bytes()); !errors.Is(err, io.ErrShortWrite) {
+			t.Fatalf("short write error = %v", err)
+		}
+	}
+}
+
+type shortWriter struct{}
+
+func (shortWriter) Write(p []byte) (int, error) { return len(p) / 2, nil }
+
+func TestTimestampWriter(t *testing.T) {
+	at := time.Date(2026, 8, 22, 12, 34, 56, 789, time.FixedZone("offset", 3600))
+	var output bytes.Buffer
+	writer := TimestampWriter(&output, func() time.Time { return at })
+	var input bytes.Buffer
+	if err := Write(&input, Record{Type: TypeAssistant, Content: "working"}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := writer.Write(input.Bytes()); err != nil || n != input.Len() {
+		t.Fatalf("timestamped write bytes=%d error=%v", n, err)
+	}
+	record, ok := Parse(strings.TrimSuffix(output.String(), "\n"))
+	if !ok || record.Timestamp != at.UTC().Format(time.RFC3339Nano) || record.Content != "working" {
+		t.Fatalf("timestamped record = %#v, parsed=%t", record, ok)
+	}
+	for _, p := range [][]byte{output.Bytes(), []byte("unframed\n")} {
+		var preserved bytes.Buffer
+		if _, err := TimestampWriter(&preserved, nil).Write(p); err != nil || !bytes.Equal(preserved.Bytes(), p) {
+			t.Fatalf("passthrough = %q, %v", preserved.String(), err)
+		}
+	}
+	if _, err := TimestampWriter(shortWriter{}, nil).Write(input.Bytes()); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("short write error = %v", err)
+	}
+	output.Reset()
+	if _, err := TimestampWriter(&output, nil).Write(input.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	record, ok = Parse(strings.TrimSuffix(output.String(), "\n"))
+	if _, err := time.Parse(time.RFC3339Nano, record.Timestamp); !ok || err != nil {
+		t.Fatalf("default timestamp = %#v, %v", record, err)
+	}
+}
 
 func TestWriteFramesMultilineUntrustedContentOnOneLine(t *testing.T) {
 	input := Record{

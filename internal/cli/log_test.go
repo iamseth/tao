@@ -6,12 +6,15 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/iamseth/tao/internal/agent/logrecord"
+	mergepkg "github.com/iamseth/tao/internal/merge"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/taodata"
 )
 
 func TestLogRendersFramedAgentRunLog(t *testing.T) {
@@ -108,6 +111,68 @@ func TestLogFollowsAppendedOutput(t *testing.T) {
 	}
 	if strings.Contains(out.String(), logrecord.Prefix) {
 		t.Fatalf("followed log exposed framing: %q", out.String())
+	}
+}
+
+type logBatchRegistry struct {
+	*fakeNoteRegistry
+}
+
+func (r logBatchRegistry) MergeBatchesDir(repo taodata.Repo) string {
+	return filepath.Join(r.dir, repo.ID, "merge-batches")
+}
+
+func (r logBatchRegistry) ActiveMergeBatchPath(repo taodata.Repo) string {
+	return filepath.Join(r.MergeBatchesDir(repo), "active.json")
+}
+
+func TestLogBatch(t *testing.T) {
+	registry := logBatchRegistry{&fakeNoteRegistry{dir: t.TempDir(), current: taodata.Repo{ID: "repo"}}}
+	store := mergepkg.NewBatchStore(registry.MergeBatchesDir(registry.current), registry.ActiveMergeBatchPath(registry.current))
+	var out bytes.Buffer
+	app := App{Out: &out, Err: &out, Registry: func() NoteRegistry { return registry }}
+	ctx := context.Background()
+	if err := app.log(ctx, fakeRepository{}, []string{"--batch"}); err == nil || !strings.Contains(err.Error(), "no active merge batch") {
+		t.Fatalf("missing active batch error = %v", err)
+	}
+	state, err := store.Initialize(mergepkg.BatchState{ID: "batch-a", Status: mergepkg.BatchStatusCompleted}, "2026-09-26T21:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := mergepkg.FormatBatchTransitionLine(mergepkg.BatchTransition{At: "2026-09-26T21:00:00Z", Sequence: 1, To: state.Status, State: state}) + "\n"
+	for _, args := range [][]string{{"--batch"}, {"--batch", "batch-a"}, {"--batch", "--follow"}, {"--batch", "-f", "batch-a"}} {
+		out.Reset()
+		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		err := app.Run(ctx, append([]string{"--plans-dir", t.TempDir(), "log"}, args...))
+		cancel()
+		if err != nil || out.String() != want {
+			t.Fatalf("log %v = %q, %v; want %q", args, out.String(), err, want)
+		}
+	}
+	if err := store.ClearActive(state.ID); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := app.log(ctx, fakeRepository{}, []string{"--batch", state.ID}); err != nil || out.String() != want {
+		t.Fatalf("named historical batch = %q, %v", out.String(), err)
+	}
+	if err := app.log(ctx, fakeRepository{}, []string{"--batch", "missing"}); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing named batch error = %v", err)
+	}
+	if err := app.log(ctx, fakeRepository{}, []string{"--batch", "one", "two"}); err == nil || !strings.Contains(err.Error(), "usage:") {
+		t.Fatalf("extra arguments error = %v", err)
+	}
+}
+
+func TestLogBatchUsage(t *testing.T) {
+	var out bytes.Buffer
+	if err := (App{Out: &out, Err: &out}).Run(context.Background(), []string{"log", "--help"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, usage := range []string{"log (lo) [--follow] <plan-id-or-slug>", "log (lo) --batch [--follow] [batch-id]"} {
+		if !strings.Contains(out.String(), usage) {
+			t.Fatalf("help missing %q: %s", usage, out.String())
+		}
 	}
 }
 

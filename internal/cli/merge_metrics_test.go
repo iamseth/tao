@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/iamseth/tao/internal/agent"
+	"github.com/iamseth/tao/internal/agent/logrecord"
 	"github.com/iamseth/tao/internal/agentsession"
 	commitcontract "github.com/iamseth/tao/internal/commit"
 	mergepkg "github.com/iamseth/tao/internal/merge"
@@ -38,7 +39,7 @@ func TestMergeModelSelection(t *testing.T) {
 					}
 					var config mergepkg.BatchAgentSessionConfig
 					if batch {
-						config = newMergeBatchAgentConfig(a, "", nil, nil, models)
+						config = newMergeBatchAgentConfig(a, "", nil, nil, models, io.Discard)
 					} else {
 						config = newSingleMergeAgentConfig(a, detail, "", nil, nil, models)
 					}
@@ -224,7 +225,7 @@ func TestBatchMergeTelemetryProviders(t *testing.T) {
 							appender.err = errors.New("disk full")
 						}
 						var out bytes.Buffer
-						config := newMergeBatchAgentConfig(App{Out: &out, ProcessStarter: mergeMetricsStarter(t, provider, outcome, providerErr, &calls)}, "", nil, nil, runtimeconfig.ModelSelection{})
+						config := newMergeBatchAgentConfig(App{Out: &out, ProcessStarter: mergeMetricsStarter(t, provider, outcome, providerErr, &calls)}, "", nil, nil, runtimeconfig.ModelSelection{}, logrecord.TeeWriter(io.Discard, &out))
 						if config.Observe != nil {
 							t.Fatal("batch wired plan observer")
 						}
@@ -353,6 +354,9 @@ func mergeMetricsStarter(t *testing.T, provider, outcome string, providerErr err
 				if !partial && outcome != "unavailable" {
 					cost = `,"total_cost_usd":0`
 				}
+				if outcome == "transcript" {
+					proc.writeEvent(`{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"streamed output"}]}}`)
+				}
 				proc.writeEvent(`{"type":"result","result":` + strconv.Quote(text) + `,"usage":{` + usage + `}` + cost + `}`)
 				if outcome == "timeout" {
 					<-ctx.Done()
@@ -384,6 +388,9 @@ func mergeMetricsStarter(t *testing.T, provider, outcome string, providerErr err
 					proc.writeEvent(`{"type":"message","message":{"role":"assistant","stopReason":"error","errorMessage":"provider failed"}}`)
 				}
 				return
+			}
+			if outcome == "transcript" {
+				proc.writeEvent(`{"type":"message_end","message":{"role":"toolResult","toolName":"tool","content":[{"type":"text","text":"streamed output"}]}}`)
 			}
 			proc.writeEvent(`{"type":"message","role":"assistant","text":` + strconv.Quote(text) + `}`)
 			proc.writeEvent(`{"type":"agent_end","session_id":"merge-session"}`)

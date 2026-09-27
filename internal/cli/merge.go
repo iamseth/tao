@@ -220,12 +220,16 @@ func (a App) newMergeBatchRunner(ctx context.Context, repository mergepkg.BatchP
 	}
 	service := mergepkg.NewService(current.Root, runner)
 	service.Runner = runner
+	service.Logf = a.mergeLogf()
+	service.Progress = a.Out
+	service.Now = a.Now
 	store := mergepkg.NewBatchStore(batchesDir, registry.ActiveMergeBatchPath(current))
 	models, err := a.mergeModels(ctx, model)
 	if err != nil {
 		return nil, err
 	}
-	agentConfig := newMergeBatchAgentConfig(a, current.Root, runner, store, models)
+	transcript := mergepkg.NewBatchTranscriptWriter(store, a.Out, a.Now)
+	agentConfig := newMergeBatchAgentConfig(a, current.Root, runner, store, models, transcript)
 	session, err := mergepkg.NewBatchAgentSession(agentConfig)
 	if err != nil {
 		return nil, fmt.Errorf("configure merge-batch agent: %w", err)
@@ -235,18 +239,27 @@ func (a App) newMergeBatchRunner(ctx context.Context, repository mergepkg.BatchP
 		return nil, fmt.Errorf("configure exceptional merge-batch proposal generator: %w", err)
 	}
 	service.ProposalGenerator = generator
-	return mergepkg.NewBatchCoordinator(mergepkg.BatchCoordinatorSeams{
-		Store:      store,
-		Workspace:  workspaceOwner,
+	return closingMergeBatchRunner{
+		runner: mergepkg.NewBatchCoordinator(newMergeBatchCoordinatorSeams(a, store, service, workspaceOwner, repository, session)),
+		closer: transcript,
+	}, nil
+}
+
+func newMergeBatchCoordinatorSeams(a App, store *mergepkg.BatchStore, service mergepkg.Service, workspace *mergepkg.BatchWorkspace, repository mergepkg.BatchPlanRepository, session mergepkg.BatchAgentSession) mergepkg.BatchCoordinatorSeams {
+	progressStore := mergepkg.NewBatchProgressStore(store, a.Out)
+	return mergepkg.BatchCoordinatorSeams{
+		Store:      progressStore,
+		Workspace:  workspace,
 		Discovery:  mergepkg.BatchCandidateDiscovery{Repository: repository, Merge: service},
 		Planner:    service,
-		Integrator: mergepkg.BatchIntegrator{Store: store, Service: service, Now: a.Now},
-		Resolver:   mergepkg.BatchAgentResolver{Store: store, Service: service, Agent: session, Now: a.Now},
-		Reviewer:   mergepkg.BatchAggregateReviewer{Store: store, Service: service, Agent: session, Now: a.Now},
-		Lander:     mergepkg.BatchLander{Store: store, Service: service, Repository: repository, Now: a.Now},
-		Settler:    mergepkg.BatchSettler{Store: store, Service: service, Repository: repository, Workspace: workspaceOwner, Now: a.Now},
+		Integrator: mergepkg.BatchIntegrator{Store: progressStore, Service: service, Now: a.Now},
+		Resolver:   mergepkg.BatchAgentResolver{Store: progressStore, Service: service, Agent: session, Now: a.Now},
+		Reviewer:   mergepkg.BatchAggregateReviewer{Store: progressStore, Service: service, Agent: session, Now: a.Now},
+		Lander:     mergepkg.BatchLander{Store: progressStore, Service: service, Repository: repository, Now: a.Now},
+		Settler:    mergepkg.BatchSettler{Store: progressStore, Service: service, Repository: repository, Workspace: workspace, Now: a.Now},
 		Now:        a.Now,
-	}), nil
+		Progress:   a.Out,
+	}
 }
 
 func (a App) mergeModels(ctx context.Context, model string) (runtimeconfig.ModelSelection, error) {
@@ -266,10 +279,20 @@ func (a App) mergeModels(ctx context.Context, model string) (runtimeconfig.Model
 	return resolved.Models, err
 }
 
-func newMergeBatchAgentConfig(a App, controlRoot string, runner commandrunner.Runner, store *mergepkg.BatchStore, models runtimeconfig.ModelSelection) mergepkg.BatchAgentSessionConfig {
+type closingMergeBatchRunner struct {
+	runner mergeBatchRunner
+	closer io.Closer
+}
+
+func (r closingMergeBatchRunner) Run(ctx context.Context, options mergeBatchOptions) (mergeBatchResult, error) {
+	defer func() { _ = r.closer.Close() }()
+	return r.runner.Run(ctx, options)
+}
+
+func newMergeBatchAgentConfig(a App, controlRoot string, runner commandrunner.Runner, store *mergepkg.BatchStore, models runtimeconfig.ModelSelection, log io.Writer) mergepkg.BatchAgentSessionConfig {
 	return mergepkg.BatchAgentSessionConfig{
 		Models:         models,
-		ProcessStarter: a.ProcessStarter, Log: a.Out, ControlRoot: controlRoot, CommandRunner: runner,
+		ProcessStarter: a.ProcessStarter, Log: log, FramedLog: true, ControlRoot: controlRoot, CommandRunner: runner,
 		EventAppender: store, Now: a.Now,
 	}
 }
@@ -466,12 +489,6 @@ func (a App) newMergeServiceRunner(ctx context.Context, detail *plan.PlanDetail,
 	if err != nil {
 		return nil, err
 	}
-	var logf func(format string, args ...any)
-	if a.Out != nil {
-		logf = func(format string, args ...any) {
-			_ = writef(a.Out, format+"\n", args...)
-		}
-	}
 	eventAppender := plan.NewFileRepository("")
 	models, err := a.mergeModels(ctx, model)
 	if err != nil {
@@ -491,7 +508,8 @@ func (a App) newMergeServiceRunner(ctx context.Context, detail *plan.PlanDetail,
 	git := svc.Git
 	svc.Runner = runner
 	svc.Cleaner = manager
-	svc.Logf = logf
+	svc.Logf = a.mergeLogf()
+	svc.Progress = a.Out
 	svc.Now = a.Now
 	svc.ProposalGenerator = generator
 	svc.SingleResolver = mergepkg.GuardedSingleConflictResolver{Git: git, Recorder: record, Agent: agentSession, Now: a.Now}
@@ -517,6 +535,15 @@ func newSingleMergeAgentConfig(a App, detail *plan.PlanDetail, controlRoot strin
 			}
 			detail.Events = append(detail.Events, *event)
 		},
+	}
+}
+
+func (a App) mergeLogf() func(format string, args ...any) {
+	if a.Out == nil {
+		return nil
+	}
+	return func(format string, args ...any) {
+		_ = writef(a.Out, format+"\n", args...)
 	}
 }
 

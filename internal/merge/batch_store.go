@@ -3,6 +3,7 @@ package merge
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/iamseth/tao/internal/atomicfile"
 	"github.com/iamseth/tao/internal/filelock"
@@ -35,12 +37,73 @@ func NewBatchStore(batchesDir, activePath string) *BatchStore {
 	return &BatchStore{batchesDir: batchesDir, activePath: activePath}
 }
 
+// TranscriptPath is the append-only agent transcript for a batch.
+func (s *BatchStore) TranscriptPath(id string) string {
+	return filepath.Join(s.batchesDir, id, "agent-transcript.log")
+}
+
 func (s *BatchStore) snapshotPath(id string) string {
 	return filepath.Join(s.batchesDir, id, "state.json")
 }
 
 func (s *BatchStore) logPath(id string) string {
 	return filepath.Join(s.batchesDir, id, "transitions.jsonl")
+}
+
+// RenderTransitions displays complete durable records without acquiring the
+// batch owner's lock. Follow mode retains torn trailing records until completed.
+func (s *BatchStore) RenderTransitions(ctx context.Context, id string, out io.Writer, follow bool) error {
+	if strings.TrimSpace(id) == "" || id == "." || id == ".." || strings.ContainsAny(id, `/\`) {
+		return errors.New("invalid merge batch id")
+	}
+	file, err := os.Open(s.logPath(id)) // #nosec G304 -- batch id is a single component under the repository data directory.
+	if err != nil {
+		return err
+	}
+	defer func() { _ = file.Close() }()
+	if out == nil {
+		out = io.Discard
+	}
+	var ticks <-chan time.Time
+	if follow {
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
+		ticks = ticker.C
+	}
+	reader := bufio.NewReader(file)
+	var pending []byte
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		line, readErr := reader.ReadBytes('\n')
+		pending = append(pending, line...)
+		if readErr == nil {
+			transition, ok := decodeBatchTransition(pending)
+			if !ok || transition.State.ID != id {
+				return errors.New("invalid merge batch transition record")
+			}
+			if _, err := fmt.Fprintln(out, FormatBatchTransitionLine(transition)); err != nil {
+				return err
+			}
+			pending = pending[:0]
+			if follow && transition.To == BatchStatusCompleted {
+				return nil
+			}
+			continue
+		}
+		if !errors.Is(readErr, io.EOF) {
+			return fmt.Errorf("read merge batch transition log: %w", readErr)
+		}
+		if !follow {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticks:
+		}
+	}
 }
 
 func (s *BatchStore) agentEventsPath(id string) string {

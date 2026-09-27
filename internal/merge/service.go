@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -20,7 +21,7 @@ import (
 
 // NewService constructs a Service with both the repo-root git client and the
 // worktree client factory derived from repoRoot and runner. Optional
-// collaborators (Cleaner, Events, Logf, Now) may be set on the returned
+// collaborators (Cleaner, Events, Logf, Progress, Now) may be set on the returned
 // Service before use.
 func NewService(repoRoot string, runner commandrunner.Runner) Service {
 	return Service{
@@ -91,6 +92,7 @@ type Service struct {
 	Cleaner           WorkspaceCleaner
 	Events            plan.ArtifactStore
 	Logf              func(format string, args ...any)
+	Progress          io.Writer
 	Now               func() time.Time
 	ProposalGenerator commitpkg.MergeProposalGenerator
 	SingleResolver    SingleConflictResolutionService
@@ -1521,6 +1523,12 @@ func (s Service) appendMergeVerificationEvent(detail *plan.PlanDetail, event pla
 func (s Service) logf(format string, args ...any) {
 	if s.Logf != nil {
 		s.Logf(format, args...)
+	}
+}
+
+func (s Service) progressf(format string, args ...any) {
+	if s.Progress != nil {
+		_, _ = fmt.Fprintf(s.Progress, format, args...)
 	}
 }
 

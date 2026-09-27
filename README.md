@@ -230,6 +230,7 @@ running it:
 tao merge --all --dry-run
 tao merge --all
 tao merge --all --auto-eject
+tao log --batch --follow # follow active batch transitions from another terminal
 ```
 
 Batch merge keeps the default branch unchanged until the combined result passes

@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/agent"
-	"github.com/iamseth/tao/internal/agent/logrecord"
 	agentmetrics "github.com/iamseth/tao/internal/agent/metrics"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
@@ -360,23 +359,6 @@ func phaseTelemetryStarter(t *testing.T, kind AgentKind, output string, availabi
 		stats = `{"type":"session_stats","session_id":"session-1","output_tokens":7}`
 	}
 	return fakePiSessionStarterWithStats(t, output, new(bool), stats)
-}
-
-func TestTimestampedAgentLogWriterAddsRecordTime(t *testing.T) {
-	at := time.Date(2026, 8, 22, 12, 34, 56, 789, time.UTC)
-	var output bytes.Buffer
-	writer := timestampedAgentLogWriter{writer: &output, clock: func() time.Time { return at }}
-	var input bytes.Buffer
-	if err := logrecord.Write(&input, logrecord.Record{Type: logrecord.TypeAssistant, Content: "working"}); err != nil {
-		t.Fatal(err)
-	}
-	if n, err := writer.Write(input.Bytes()); err != nil || n != input.Len() {
-		t.Fatalf("timestamped write bytes=%d error=%v", n, err)
-	}
-	record, ok := logrecord.Parse(strings.TrimSuffix(output.String(), "\n"))
-	if !ok || record.Timestamp != at.Format(time.RFC3339Nano) || record.Content != "working" {
-		t.Fatalf("timestamped record = %#v, parsed=%t", record, ok)
-	}
 }
 
 func TestRunAgentSessionInvokesProviderExactlyOnce(t *testing.T) {
