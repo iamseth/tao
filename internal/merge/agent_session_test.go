@@ -1182,6 +1182,75 @@ printf runtime >"$TMPDIR/reviewer-scratch" || exit 24`
 	}
 }
 
+func TestSingleMergeProcessSandboxPermitsReadOnlyGitAndDeviceWrites(t *testing.T) {
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Skipf("git unavailable: %v", err)
+	}
+	root := t.TempDir()
+	integration := filepath.Join(root, "integration")
+	metadata := filepath.Join(integration, ".git")
+	runtimeRoot := filepath.Join(root, "provider-runtime")
+	for _, path := range []string{integration, runtimeRoot, filepath.Join(runtimeRoot, "cache"), filepath.Join(runtimeRoot, "state")} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(integration, "README.md"), []byte("original\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"add", "README.md"},
+		{"-c", "user.name=Tao Test", "-c", "user.email=tao@example.com", "commit", "-q", "-m", "seed"},
+	} {
+		command := exec.Command(gitPath, args...) //nolint:gosec // fixed git fixture setup.
+		command.Dir = integration
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v: %s", args, err, output)
+		}
+	}
+	before, err := os.ReadDir(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The reviewer boundary is the strictest projection: no integration writes
+	// at all. Read-only Git and pseudo-device redirects must still work there,
+	// because the independent integration reviewer cannot inspect the exact
+	// diff without them.
+	const reviewerScript = `set -u
+cd "$1" || exit 31
+git --version >/dev/null || exit 32
+[ "$(git rev-parse --git-dir)" = .git ] || exit 33
+git --no-pager diff --no-ext-diff --stat HEAD >/dev/null || exit 34
+git --no-pager log --oneline -1 HEAD >/dev/null || exit 35
+: >/dev/null || exit 36
+echo probe >/dev/stderr || exit 37
+if printf created >"$2/new-ref" 2>/dev/null; then exit 38; fi
+if printf edited >"$1/README.md" 2>/dev/null; then exit 39; fi`
+	policy := singleMergeFilesystemConfinement{protectedPaths: []string{metadata}, integrationRoot: integration}
+	name, args, err := singleMergeFilesystemConfinementCommand(policy, runtimeRoot, "/bin/sh", []string{"-c", reviewerScript, "sh", integration, metadata})
+	if err != nil {
+		t.Skipf("OS-enforced provider filesystem confinement unavailable: %v", err)
+	}
+	command := exec.Command(name, args...) //nolint:gosec // fixed test shell probes the generated confinement boundary.
+	command.Stdin = nil
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("read-only git inside provider confinement failed: %v: %s", err, output)
+	}
+	if contents, err := os.ReadFile(filepath.Join(integration, "README.md")); err != nil || string(contents) != "original\n" { //nolint:gosec // fixture-owned denied path.
+		t.Fatalf("reviewer mutated integration worktree: %q, %v", contents, err)
+	}
+	after, err := os.ReadDir(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("protected git metadata changed: before %d entries, after %d", len(before), len(after))
+	}
+}
+
 func TestSingleMergeAgentSessionStartsFreshProviderForResolverAndReviewer(t *testing.T) {
 	fakeConfinementExecutable(t)
 	t.Setenv("TAO_AGENT", "claude")

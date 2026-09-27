@@ -956,11 +956,27 @@ func requireConfinementExecutable(path string) error {
 func darwinFilesystemConfinementProfile(protected, writable []string) string {
 	var profile strings.Builder
 	profile.WriteString(`(version 1)(allow default)(deny file-write*)`)
+	profile.WriteString(darwinDeviceWriteAllowRules())
 	for _, path := range writable {
 		profile.WriteString(`(allow file-write* (literal "` + sandboxProfileEscape(path) + `"))`)
 		profile.WriteString(`(allow file-write* (subpath "` + sandboxProfileEscape(path) + `"))`)
 	}
 	profile.WriteString(darwinGitWriteDenyRules(protected))
+	return profile.String()
+}
+
+// darwinDeviceWriteAllowRules restores the pseudo-device writes that a blanket
+// file-write denial removes. Git opens /dev/null read-write on every startup
+// and shells redirect to /dev/null, /dev/stderr, and /dev/fd/N constantly, so
+// without these a confined resolver or reviewer cannot run a single Git
+// command. The set mirrors the private /dev that bubblewrap provides on Linux
+// and grants nothing on the host filesystem.
+func darwinDeviceWriteAllowRules() string {
+	var profile strings.Builder
+	for _, device := range []string{"/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom", "/dev/tty"} {
+		profile.WriteString(`(allow file-write* (literal "` + device + `"))`)
+	}
+	profile.WriteString(`(allow file-write* (regex #"^/dev/fd/[0-9]+$"))`)
 	return profile.String()
 }
 
