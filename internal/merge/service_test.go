@@ -19,6 +19,7 @@ import (
 	commitcontract "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runstatus"
 )
 
 type fakeGitClient struct {
@@ -345,6 +346,42 @@ func TestCheckPreMergeGateAllowsApprovedMatchingReviewBase(t *testing.T) {
 	wantCalls := []string{"status", "default-branch", "merge-base main tao/plan-a"}
 	if !reflect.DeepEqual(git.calls, wantCalls) {
 		t.Fatalf("calls mismatch\nwant: %#v\n got: %#v", wantCalls, git.calls)
+	}
+}
+
+func TestMergeReportsPhases(t *testing.T) {
+	for _, failVerification := range []bool{false, true} {
+		t.Run(fmt.Sprintf("verification failure=%t", failVerification), func(t *testing.T) {
+			var phases []runstatus.Phase
+			service := Service{
+				Git: mergeVerifyGit(), Cleaner: successfulCleanup(), Events: &fakeEventAppender{},
+				ReportPhase: func(phase runstatus.Phase) { phases = append(phases, phase) },
+				Runner: func(context.Context, string, string, []string, io.Writer, io.Writer) error {
+					if !slices.Equal(phases, []runstatus.Phase{"merge_integrating", "merge_verifying"}) {
+						t.Fatalf("phases during verification = %v", phases)
+					}
+					if failVerification {
+						return errors.New("tests failed")
+					}
+					return nil
+				},
+			}
+			err := service.Merge(context.Background(), mergeVerifyDetail(), Options{VerifyCommand: "test gate"})
+			want := []runstatus.Phase{"merge_integrating", "merge_verifying"}
+			if failVerification {
+				if !errors.Is(err, ErrVerifyFailed) {
+					t.Fatalf("merge error = %v, want verification failure", err)
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				want = append(want, "merge_recording", "merge_cleanup")
+			}
+			if !slices.Equal(phases, want) {
+				t.Fatalf("phases = %v, want %v", phases, want)
+			}
+		})
 	}
 }
 

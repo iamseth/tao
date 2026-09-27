@@ -89,6 +89,10 @@ func TestPhaseLabelRequiresLiveRunLockForStalledLabel(t *testing.T) {
 		{name: "running slice", row: monitor.Row{Phase: " running_slice ", SliceID: " 002-render "}, want: "002-render"},
 		{name: "slice without phase", row: monitor.Row{SliceID: "002-render"}, want: "002-render"},
 		{name: "other phase", row: monitor.Row{Phase: " verify ", SliceID: "002-render"}, want: "verify"},
+		{name: "merge integrating", row: monitor.Row{Phase: "merge_integrating"}, want: "merge: integrating"},
+		{name: "merge verifying", row: monitor.Row{Phase: "merge_verifying"}, want: "merge: verifying"},
+		{name: "merge recording", row: monitor.Row{Phase: "merge_recording"}, want: "merge: recording"},
+		{name: "merge cleanup", row: monitor.Row{Phase: "merge_cleanup"}, want: "merge: cleanup"},
 		{name: "blank", want: "-"},
 	}
 	for _, test := range tests {

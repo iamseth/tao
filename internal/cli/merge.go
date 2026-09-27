@@ -12,6 +12,7 @@ import (
 	mergepkg "github.com/iamseth/tao/internal/merge"
 	"github.com/iamseth/tao/internal/plan"
 	runpkg "github.com/iamseth/tao/internal/run"
+	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/taodata"
 	"github.com/iamseth/tao/internal/workspace"
@@ -62,8 +63,19 @@ func registerMergeFlags(fs *flag.FlagSet) {
 }
 
 type mergeServiceRunner interface {
-	Merge(ctx context.Context, detail *plan.PlanDetail, options mergepkg.Options) error
+	Merge(ctx context.Context, detail *plan.PlanDetail, options mergepkg.Options, phases runpkg.PhaseReporter) error
 	RestartSingleMerge(ctx context.Context, planDir string) (mergepkg.SingleMergeRestartResult, error)
+}
+
+type phaseReportingMergeService struct {
+	mergepkg.Service
+}
+
+func (s phaseReportingMergeService) Merge(ctx context.Context, detail *plan.PlanDetail, options mergepkg.Options, phases runpkg.PhaseReporter) error {
+	if phases != nil {
+		s.ReportPhase = func(phase runstatus.Phase) { phases.ReportPhase(phase, nil) }
+	}
+	return s.Service.Merge(ctx, detail, options)
 }
 
 type mergeBatchOptions = mergepkg.BatchCoordinatorOptions
@@ -179,7 +191,21 @@ func (a App) merge(ctx context.Context, repo plan.Resolver, args []string) error
 			}
 			return renderSingleMergeRestartResult(a.Out, result)
 		}
-		if err := service.Merge(ownedCtx, refreshed, options); err != nil {
+		a = a.withDefaultStatusReporter()
+		invocation := runpkg.StatusInvocation{
+			RepoID: taodata.RepoID(refreshed.State.Repo.Root), RepoName: refreshed.State.Repo.Name,
+			PlanID: refreshed.State.Plan.ID, PlanTitle: refreshed.State.Plan.Title, StartedAt: a.now().UTC(),
+		}
+		operation := func(phases runpkg.PhaseReporter) error {
+			return service.Merge(ownedCtx, refreshed, options, phases)
+		}
+		status := "merge " + invocation.PlanID
+		if reporter, ok := a.StatusReporter.(runpkg.InvocationStatusReporter); ok {
+			err = reporter.TrackInvocation(status, invocation, operation)
+		} else {
+			err = a.StatusReporter.Track(status, func() error { return operation(nil) })
+		}
+		if err != nil {
 			if renderErr := renderMergeFailure(a.Out, refreshed, err); renderErr != nil {
 				return renderErr
 			}
@@ -514,7 +540,7 @@ func (a App) newMergeServiceRunner(ctx context.Context, detail *plan.PlanDetail,
 	svc.ProposalGenerator = generator
 	svc.SingleResolver = mergepkg.GuardedSingleConflictResolver{Git: git, Recorder: record, Agent: agentSession, Now: a.Now}
 	svc.SingleReviewer = mergepkg.GuardedSingleIntegrationReviewer{Git: git, Recorder: record, Agent: agentSession, Now: a.Now}
-	return svc, nil
+	return phaseReportingMergeService{Service: svc}, nil
 }
 
 func newSingleMergeAgentConfig(a App, detail *plan.PlanDetail, controlRoot string, runner commandrunner.Runner, appender plan.EventAppender, models runtimeconfig.ModelSelection) mergepkg.SingleMergeAgentSessionConfig {

@@ -7,6 +7,7 @@ import (
 
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/term/cells"
 )
 
@@ -61,6 +62,16 @@ func PhaseLabel(row monitor.Row) string {
 		return fmt.Sprintf("stalled? (%s old)", DurationLabel(row.HeartbeatAge))
 	}
 	phase := strings.TrimSpace(string(row.Phase))
+	switch runstatus.Phase(phase) {
+	case runstatus.PhaseMergeIntegrating:
+		return "merge: integrating"
+	case runstatus.PhaseMergeVerifying:
+		return "merge: verifying"
+	case runstatus.PhaseMergeRecording:
+		return "merge: recording"
+	case runstatus.PhaseMergeCleanup:
+		return "merge: cleanup"
+	}
 	sliceID := strings.TrimSpace(row.SliceID)
 	if sliceID != "" && (phase == "" || phase == "running_slice") {
 		return cells.Truncate(sliceID, MaxSliceIDCells)

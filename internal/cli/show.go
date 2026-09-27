@@ -9,8 +9,11 @@ import (
 	"time"
 
 	mergepkg "github.com/iamseth/tao/internal/merge"
+	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+	"github.com/iamseth/tao/internal/taodata"
 	planview "github.com/iamseth/tao/internal/view"
 )
 
@@ -49,7 +52,17 @@ func (a App) show(ctx context.Context, repo plan.Repository, args []string) erro
 		return err
 	}
 	root := strings.TrimSpace(loaded.Detail.State.Repo.Root)
-	if root != "" {
+	var merging *showMergeInProgress
+	switch loaded.Derived.NextAction.Primary.Kind {
+	case plan.PlanActionRecoverMerge, plan.PlanActionRestartMerge, plan.PlanActionRebaseAndReview:
+		registry := taodata.NewRegistry("")
+		repoID := taodata.RepoID(root)
+		store := runstatus.NewStore(registry.RuntimeStatusDir(taodata.Repo{ID: repoID}), nil)
+		if owner, ok := monitor.LiveMergeOwnerFor(loaded.Detail.Dir, loaded.Detail.State.Plan.ID, repoID, plan.ReadRunLock, store, loaded.Now); ok {
+			merging = &showMergeInProgress{PID: owner.PID, Phase: owner.Phase}
+		}
+	}
+	if root != "" && merging == nil {
 		observation, inspectErr := mergepkg.NewService(root, a.mergeRunner()).InspectSingleMergeIntentRecovery(ctx, loaded.Detail)
 		if inspectErr == nil {
 			loaded.Detail.SingleMergeIntentRecovery = &observation
@@ -59,9 +72,25 @@ func (a App) show(ctx context.Context, repo plan.Repository, args []string) erro
 	if flagBoolValue(fs, "json") {
 		encoder := json.NewEncoder(a.Out)
 		encoder.SetIndent("", "  ")
-		return encoder.Encode(loaded.ShowPayload())
+		payload := loaded.ShowPayload()
+		if merging != nil {
+			payload.NextAction = plan.PlanNextAction{Primary: plan.PlanAction{
+				Kind: plan.PlanActionNone, Class: plan.PlanActionClassProgress,
+				Instruction: "Wait for the active merge to finish.", Reason: "merge is in progress",
+			}, Alternatives: []plan.PlanAction{}}
+		}
+		return encoder.Encode(struct {
+			planview.ShowPayload
+			MergeInProgress *showMergeInProgress `json:"merge_in_progress,omitempty"`
+		}{payload, merging})
 	}
-	return renderPlanDetailWithThresholds(a.Out, loaded, runtimeconfig.RuntimeAgentBudgetThresholds())
+	return renderPlanDetailWithMerge(a.Out, loaded, runtimeconfig.RuntimeAgentBudgetThresholds(), merging)
+}
+
+// showMergeInProgress is transient presentation, not lifecycle evidence.
+type showMergeInProgress struct {
+	PID   int             `json:"pid"`
+	Phase runstatus.Phase `json:"phase"`
 }
 
 func renderPlanDetail(out io.Writer, loaded planview.Plan) error {
@@ -69,6 +98,10 @@ func renderPlanDetail(out io.Writer, loaded planview.Plan) error {
 }
 
 func renderPlanDetailWithThresholds(out io.Writer, loaded planview.Plan, thresholds plan.AgentBudgetThresholds) error {
+	return renderPlanDetailWithMerge(out, loaded, thresholds, nil)
+}
+
+func renderPlanDetailWithMerge(out io.Writer, loaded planview.Plan, thresholds plan.AgentBudgetThresholds, merging *showMergeInProgress) error {
 	detail := loaded.Detail
 	derived := loaded.Derived
 	now := loaded.Now
@@ -100,7 +133,15 @@ func renderPlanDetailWithThresholds(out io.Writer, loaded planview.Plan, thresho
 			return err
 		}
 	}
-	if err := renderNextAction(out, loaded.DisplayNextAction()); err != nil {
+	if merging != nil {
+		phase := string(merging.Phase)
+		if phase == "" {
+			phase = "-"
+		}
+		if err := writef(out, "Merge in progress: pid %d, phase %s\n", merging.PID, phase); err != nil {
+			return err
+		}
+	} else if err := renderNextAction(out, loaded.DisplayNextAction()); err != nil {
 		return err
 	}
 	if recovery := derived.FinalizationRecovery; recovery != nil {

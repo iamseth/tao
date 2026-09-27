@@ -42,6 +42,32 @@ type RuntimeStatusReaderFactory func(taodata.RepoInventoryEntry) RuntimeStatusRe
 // RunLockReader reads the operational ownership lock for one plan directory.
 type RunLockReader func(string) (plan.RunLock, error)
 
+// LiveMergeOwner is an operational liveness observation, never recovery authority.
+type LiveMergeOwner struct {
+	PID   int
+	Phase runstatus.Phase
+}
+
+// LiveMergeOwnerFor accepts a live lock owner or a fresh repository-matched
+// runtime record. Missing readers and read failures are absent signals.
+func LiveMergeOwnerFor(planDir string, planID string, repoID string, readRunLock RunLockReader, status RuntimeStatusReader, now time.Time) (LiveMergeOwner, bool) {
+	var owner LiveMergeOwner
+	live := false
+	if readRunLock != nil {
+		if lock, err := readRunLock(planDir); err == nil && lock.ProcessAlive {
+			owner.PID = lock.PID
+			live = true
+		}
+	}
+	if status != nil {
+		if record, err := status.Read(planID); err == nil && record.RepoID == repoID && runstatus.DeriveFreshness(record, now) == runstatus.FreshnessFresh {
+			owner.Phase = record.Phase
+			live = true
+		}
+	}
+	return owner, live
+}
+
 // Liveness describes the presence and freshness of an operational run record.
 type Liveness string
 
@@ -116,6 +142,7 @@ type Row struct {
 	HeartbeatAge        time.Duration
 	RunLockPresent      bool
 	RunLockProcessAlive bool
+	MergeInProgress     bool
 
 	Left                   int
 	UpdatedAt              *time.Time
@@ -210,8 +237,16 @@ func (c Collector) Collect(ctx context.Context) (Snapshot, error) {
 			if err := ctx.Err(); err != nil {
 				return Snapshot{}, err
 			}
-			summary = observeSingleMergeRecovery(ctx, entry, lister, summary, now)
+			merging := false
+			switch summary.NextAction.Primary.Kind {
+			case plan.PlanActionRecoverMerge, plan.PlanActionRebaseAndReview, plan.PlanActionRestartMerge:
+				_, merging = LiveMergeOwnerFor(planDir(entry, summary), summary.ID, entry.Repo.ID, c.runLockReader(), reader, now)
+			}
+			if !merging {
+				summary = observeSingleMergeRecovery(ctx, entry, lister, summary, now)
+			}
 			row := planRow(entry, summary)
+			row.MergeInProgress = merging
 			relationshipCatalog = append(relationshipCatalog, row)
 			if !c.includeSummary(summary, now) || (summary.Status == plan.StatusInvalid && !c.ShowInvalid) {
 				continue
@@ -474,8 +509,11 @@ func DeriveNextAction(row Row) string {
 	if row.Status == plan.StatusAbandoned {
 		return "ABANDONED"
 	}
-	if row.Liveness == LivenessLive || (row.Liveness == LivenessStale && row.RunLockPresent && row.RunLockProcessAlive) {
+	if !row.MergeInProgress && (row.Liveness == LivenessLive || (row.Liveness == LivenessStale && row.RunLockPresent && row.RunLockProcessAlive)) {
 		return "MONITOR"
+	}
+	if row.MergeInProgress {
+		return "MERGING"
 	}
 	for _, reason := range row.AttentionReasons {
 		if reason != AttentionVerificationFailed {

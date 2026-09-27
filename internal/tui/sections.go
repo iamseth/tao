@@ -72,6 +72,9 @@ func BuildFilteredSections(rows []monitor.Row, filter Filter) []Section {
 }
 
 func planNextAction(row monitor.Row) string {
+	if row.MergeInProgress {
+		return "MERGING"
+	}
 	switch row.RecommendedAction.Kind {
 	case plan.PlanActionRestartMerge:
 		return "RESTART MERGE"
@@ -90,6 +93,12 @@ func planNextAction(row monitor.Row) string {
 }
 
 func planNextActionDisplay(row monitor.Row) string {
+	if row.MergeInProgress {
+		if phase := rowlabel.PhaseLabel(row); phase != "-" {
+			return "MERGING · " + phase
+		}
+		return "MERGING"
+	}
 	action := row.RecommendedAction
 	if action.Kind != plan.PlanActionRestartMerge && action.Kind != plan.PlanActionRecoverMerge && action.Kind != plan.PlanActionRebaseAndReview {
 		return planNextAction(row)

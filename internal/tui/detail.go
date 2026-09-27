@@ -702,10 +702,14 @@ func detailAttentionLines(detail *plan.PlanDetail, row monitor.Row, inspection d
 		}{text: line, role: RoleDetailError})
 	}
 	for _, reason := range row.AttentionReasons {
+		text := strings.ReplaceAll(string(reason), "_", " ")
+		if reason == monitor.AttentionRunCrashed && detail != nil && detail.State.Plan.MergeCommitIntent != nil {
+			text = "merge crashed"
+		}
 		items = append(items, struct {
 			text string
 			role Role
-		}{text: strings.ReplaceAll(string(reason), "_", " "), role: RoleDetailWarning})
+		}{text: text, role: RoleDetailWarning})
 	}
 	for _, warning := range append(append([]string(nil), row.Warnings...), row.RelationshipWarnings...) {
 		items = append(items, struct {

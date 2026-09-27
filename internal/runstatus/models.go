@@ -33,6 +33,10 @@ const (
 	PhaseFinalVerification   Phase = "final_verification"
 	PhaseReview              Phase = "review"
 	PhaseAutomaticRework     Phase = "automatic_rework"
+	PhaseMergeIntegrating    Phase = "merge_integrating"
+	PhaseMergeVerifying      Phase = "merge_verifying"
+	PhaseMergeRecording      Phase = "merge_recording"
+	PhaseMergeCleanup        Phase = "merge_cleanup"
 )
 
 // SliceDetail optionally identifies the slice involved in the active phase.

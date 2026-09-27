@@ -250,7 +250,7 @@ func (a *Actions) observed(feedback actionFeedback, row monitor.Row) bool {
 	case actionApprove:
 		return row.ApprovalSliceID == "" || row.ApprovalSliceID != feedback.approvalSliceID
 	case actionMerge:
-		return row.Status != feedback.initialStatus
+		return row.MergeInProgress || row.Status != feedback.initialStatus
 	default:
 		return row.Liveness == monitor.LivenessLive || a.liveRunLock(row.PlanDir)
 	}

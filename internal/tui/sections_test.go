@@ -10,6 +10,32 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 )
 
+func TestLiveMergeNextAction(t *testing.T) {
+	row := monitor.Row{PlanID: "plan-a", Status: plan.StatusReviewed, MergeInProgress: true,
+		RecommendedAction: plan.PlanAction{Kind: plan.PlanActionRecoverMerge, Command: "tao merge plan-a", Reason: "the exact intended squash is already present"}}
+	if got := planNextAction(row); got != "MERGING" {
+		t.Fatalf("next = %q", got)
+	}
+	if got := planNextActionDisplay(row); got != "MERGING" {
+		t.Fatalf("display without phase = %q", got)
+	}
+	row.Phase = "merge_verifying"
+	if got := planNextActionDisplay(row); got != "MERGING · merge: verifying" {
+		t.Fatalf("display = %q", got)
+	}
+	sections := BuildSections([]monitor.Row{row})
+	if len(sections[0].Rows) != 1 || sections[0].Kind != SectionNow {
+		t.Fatalf("live reviewed merge not in NOW: %+v", sections)
+	}
+	row.MergeInProgress = false
+	if got := planNextAction(row); got != "SETTLE MERGE" {
+		t.Fatalf("inactive merge next = %q", got)
+	}
+	if got := planNextActionDisplay(row); got != "tao merge plan-a — the exact intended squash is already present" {
+		t.Fatalf("inactive merge display = %q", got)
+	}
+}
+
 func TestBuildSectionsGroupsEveryRowAndPreservesOrder(t *testing.T) {
 	rows := []monitor.Row{
 		{PlanID: "running-first", Liveness: monitor.LivenessLive},

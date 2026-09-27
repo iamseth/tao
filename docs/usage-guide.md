@@ -214,6 +214,14 @@ heartbeat age; it can mean an interrupted, paused, overloaded, or merely delayed
 process and does not mean the plan failed. Lifecycle STATUS and UPDATED durable
 activity remain the sources for semantic state.
 
+Single-plan merges publish `merge_integrating`, `merge_verifying`,
+`merge_recording`, and `merge_cleanup` runtime phases. A live `tao merge` shows
+`MERGING` in `tao ui`/`tao monitor`, with readable phase labels such as
+`merge: verifying`; `tao show` prints a merge-in-progress line with its PID and
+phase (also available as `merge_in_progress` in `--json`). These are best-effort
+liveness hints, not merge evidence. Once the owner is gone and its heartbeat is
+stale or absent, the existing merge recovery guidance returns.
+
 ## Interactive dashboard: `tao ui`
 
 Use `tao ui` when you want one terminal view for plans and open notes across

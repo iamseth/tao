@@ -15,6 +15,7 @@ import (
 	commitpkg "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/workspace"
 )
@@ -97,6 +98,13 @@ type Service struct {
 	ProposalGenerator commitpkg.MergeProposalGenerator
 	SingleResolver    SingleConflictResolutionService
 	SingleReviewer    SingleIntegrationReviewer
+	ReportPhase       func(runstatus.Phase)
+}
+
+func (s Service) reportPhase(phase runstatus.Phase) {
+	if s.ReportPhase != nil {
+		s.ReportPhase(phase)
+	}
 }
 
 // InspectSingleMergeIntentRecovery classifies an active intent or the recovery
@@ -389,6 +397,7 @@ func (s Service) Merge(ctx context.Context, detail *plan.PlanDetail, options Opt
 	// committed/reviewed phases own one exact Tao commit. Never mistake either
 	// for unrelated user dirt on an interrupted rerun.
 	if activeResolution {
+		s.reportPhase(runstatus.PhaseMergeIntegrating)
 		return s.resumeSingleResolutionMerge(ctx, git, detail, options)
 	}
 	if recorded, err := s.tryRecordExternalMerge(ctx, git, detail, options); recorded || err != nil {
@@ -422,6 +431,7 @@ func (s Service) Merge(ctx context.Context, detail *plan.PlanDetail, options Opt
 	if err != nil {
 		return err
 	}
+	s.reportPhase(runstatus.PhaseMergeIntegrating)
 	if options.NoSquash {
 		if err = s.Integrate(ctx, detail); err != nil {
 			return err
@@ -533,6 +543,7 @@ func (s Service) resolveAndFinishSingleMerge(ctx context.Context, git GitClient,
 }
 
 func (s Service) finishResolvedSingleMerge(ctx context.Context, git GitClient, detail *plan.PlanDetail, planBranch string, intent plan.SingleMergeCommitIntent, verify mergeVerifyCommandResolution, options Options) error {
+	s.reportPhase(runstatus.PhaseMergeVerifying)
 	snapshot := mergeVerifySnapshot{defaultBranch: intent.DefaultBranch, preMergeSHA: intent.DefaultParent}
 	verificationEvidence, err := s.verifyIntegratedMerge(ctx, detail, snapshot, verify)
 	if err != nil {
@@ -576,6 +587,7 @@ func (s Service) finishIntegratedMerge(ctx context.Context, git GitClient, detai
 // restart recovery only observes an already-landed commit and must leave it in
 // place when verification or recording fails.
 func (s Service) settleIntegratedMerge(ctx context.Context, git GitClient, detail *plan.PlanDetail, planBranch string, snapshot mergeVerifySnapshot, options Options, rollbackOnFailure bool) error {
+	s.reportPhase(runstatus.PhaseMergeVerifying)
 	verify, err := resolveMergeVerifyCommandForDetail(detail, options)
 	if err != nil {
 		if rollbackOnFailure {
@@ -638,6 +650,7 @@ func (s Service) verifyRecoveredIntegratedMerge(ctx context.Context, detail *pla
 }
 
 func (s Service) recordIntegratedMerge(ctx context.Context, git GitClient, detail *plan.PlanDetail, planBranch string, snapshot mergeVerifySnapshot, options Options) (bool, error) {
+	s.reportPhase(runstatus.PhaseMergeRecording)
 	mergedDefaultSHA, err := captureMergedDefaultSHA(ctx, git, snapshot.defaultBranch)
 	if err != nil {
 		return false, err
@@ -646,6 +659,7 @@ func (s Service) recordIntegratedMerge(ctx context.Context, git GitClient, detai
 		return false, err
 	}
 	options.allowNonAncestralCleanup = !options.NoSquash
+	s.reportPhase(runstatus.PhaseMergeCleanup)
 	if _, err := s.Cleanup(ctx, detail, options); err != nil && !cleanupAlreadySettled(err) {
 		return true, fmt.Errorf("plan %s merged and recorded, but cleanup failed: %w", detail.State.Plan.ID, err)
 	}

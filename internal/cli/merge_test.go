@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -18,7 +19,9 @@ import (
 	mergepkg "github.com/iamseth/tao/internal/merge"
 	"github.com/iamseth/tao/internal/plan"
 	runpkg "github.com/iamseth/tao/internal/run"
+	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+	"github.com/iamseth/tao/internal/taodata"
 	"github.com/iamseth/tao/internal/workspace"
 )
 
@@ -187,9 +190,134 @@ func TestNewMergeServiceRunnerWiresDeferredGuardedSinglePlanSessions(t *testing.
 	if err != nil {
 		t.Fatalf("non-conflicting merge configured provider eagerly: %v", err)
 	}
-	service, ok := runner.(mergepkg.Service)
+	service, ok := runner.(phaseReportingMergeService)
 	if !ok || service.SingleResolver == nil || service.SingleReviewer == nil || service.ProposalGenerator == nil || service.Cleaner != manager || service.Progress != app.Out || service.Logf == nil {
 		t.Fatalf("single-plan merge service wiring = %#v", runner)
+	}
+}
+
+func TestMergeCommandRuntimeStatusLifetime(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		err     error
+		restart bool
+	}{
+		{name: "success"},
+		{name: "verification failure", err: mergepkg.ErrVerifyFailed},
+		{name: "pre-merge refusal", err: mergepkg.ErrNotApproved},
+		{name: "restart", restart: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			detail := cliMergeDetail(t)
+			publisher := newRecordingRuntimePublisher()
+			ticker := &recordingRuntimeTicker{ticks: make(chan time.Time, 1)}
+			startedAt := time.Date(2026, 9, 27, 22, 0, 0, 0, time.UTC)
+			var invocation runpkg.StatusInvocation
+			service := &fakeCLIMergeService{err: test.err, onMerge: func() {
+				publisher.mu.Lock()
+				published, removed := len(publisher.phases), publisher.removes
+				publisher.mu.Unlock()
+				if published == 0 || removed != 0 {
+					t.Fatalf("status before Merge: publications=%d removals=%d", published, removed)
+				}
+				ticker.ticks <- startedAt
+				select {
+				case <-publisher.heartbeatCalled:
+				case <-time.After(time.Second):
+					t.Fatal("merge was not heartbeated")
+				}
+			}}
+			stubMergeServiceRunner(t, service)
+			app := App{Out: io.Discard, Now: func() time.Time { return startedAt }, StatusReporter: runtimeStatusReporter{
+				newPublisher: func(got runpkg.StatusInvocation) runtimeStatusPublisher {
+					invocation = got
+					return publisher
+				},
+				newTicker: func(time.Duration) runtimeStatusTicker { return ticker },
+			}}
+			args := []string{"plan-a"}
+			if test.restart {
+				args = append([]string{"--restart"}, args...)
+			}
+			err := app.merge(context.Background(), fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}, args)
+			if !errors.Is(err, test.err) {
+				t.Fatalf("merge error = %v, want %v", err, test.err)
+			}
+			publisher.mu.Lock()
+			defer publisher.mu.Unlock()
+			if test.restart {
+				if invocation.PlanID != "" || len(publisher.phases) != 0 || publisher.removes != 0 || service.restartCalls != 1 {
+					t.Fatalf("restart published status: invocation=%+v phases=%v removes=%d", invocation, publisher.phases, publisher.removes)
+				}
+				return
+			}
+			want := runpkg.StatusInvocation{RepoID: taodata.RepoID(detail.State.Repo.Root), RepoName: "tao", PlanID: "plan-a", PlanTitle: "Plan A", StartedAt: startedAt}
+			if invocation != want || publisher.removes != 1 || !ticker.isStopped() || service.calls != 1 {
+				t.Fatalf("invocation=%+v removes=%d ticker stopped=%t merge calls=%d", invocation, publisher.removes, ticker.isStopped(), service.calls)
+			}
+		})
+	}
+}
+
+func TestMergeCommandPublishesServicePhases(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		verifyErr  error
+		publishErr error
+	}{
+		{name: "success"},
+		{name: "verification failure", verifyErr: errors.New("tests failed")},
+		{name: "publication failure", publishErr: errors.New("status store unavailable")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			detail := cliMergeDetail(t)
+			publisher := newRecordingRuntimePublisher()
+			publisher.err = test.publishErr
+			ticker := &recordingRuntimeTicker{ticks: make(chan time.Time)}
+			manager := &fakeWorkspaceManager{
+				cleanPlan:    workspace.CleanPlan{Branch: "tao/plan-a", Status: workspace.ManagedStatusClean, CanRemove: true},
+				managedPlans: []workspace.ManagedCleanup{{Branch: "tao/plan-a", WorktreePath: detail.State.Workspace.Path, Status: workspace.ManagedStatusClean, CanRemove: true}},
+			}
+			gitRunner := newCLIMergeGitRunner(t, detail.State.Repo.Root)
+			verified := false
+			app := App{
+				Out:              io.Discard,
+				WorkspaceManager: func(string) (WorkspaceManager, error) { return manager, nil },
+				StatusReporter: runtimeStatusReporter{
+					newPublisher: func(runpkg.StatusInvocation) runtimeStatusPublisher { return publisher },
+					newTicker:    func(time.Duration) runtimeStatusTicker { return ticker },
+				},
+				CommandRunner: func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+					if name != "sh" {
+						return gitRunner(ctx, cwd, name, args, stdout, stderr)
+					}
+					verified = true
+					publisher.mu.Lock()
+					defer publisher.mu.Unlock()
+					if len(publisher.phases) == 0 || publisher.phases[len(publisher.phases)-1] != runstatus.PhaseMergeVerifying || publisher.removes != 0 {
+						t.Fatalf("verification status: phases=%v removals=%d", publisher.phases, publisher.removes)
+					}
+					return test.verifyErr
+				},
+			}
+			err := app.merge(context.Background(), fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}, []string{"--verify-command", "test gate", "plan-a"})
+			want := []runstatus.Phase{runstatus.PhaseWaitingForOwnership, runstatus.PhaseMergeIntegrating, runstatus.PhaseMergeVerifying}
+			if test.verifyErr != nil {
+				if !errors.Is(err, mergepkg.ErrVerifyFailed) {
+					t.Fatalf("merge error = %v, want verification failure", err)
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				want = append(want, runstatus.PhaseMergeRecording, runstatus.PhaseMergeCleanup)
+			}
+			publisher.mu.Lock()
+			defer publisher.mu.Unlock()
+			if !verified || !slices.Equal(publisher.phases, want) || publisher.removes != 1 {
+				t.Fatalf("verified=%t phases=%v removals=%d", verified, publisher.phases, publisher.removes)
+			}
+		})
 	}
 }
 
@@ -1146,6 +1274,7 @@ func stubMergeBatchRunner(t *testing.T, runner mergeBatchRunner) {
 }
 
 type fakeCLIMergeService struct {
+	onMerge       func()
 	ctx           context.Context
 	err           error
 	calls         int
@@ -1157,7 +1286,10 @@ type fakeCLIMergeService struct {
 	restartDir    string
 }
 
-func (f *fakeCLIMergeService) Merge(ctx context.Context, detail *plan.PlanDetail, options mergepkg.Options) error {
+func (f *fakeCLIMergeService) Merge(ctx context.Context, detail *plan.PlanDetail, options mergepkg.Options, _ runpkg.PhaseReporter) error {
+	if f.onMerge != nil {
+		f.onMerge()
+	}
 	f.ctx = ctx
 	f.calls++
 	f.detail = detail
@@ -1286,7 +1418,7 @@ func newCLIMergeGitRunner(t *testing.T, repoRoot string) CommandRunner {
 				_, _ = io.WriteString(stdout, "merged123\n")
 			}
 			return nil
-		case "merge-base --is-ancestor main tao/plan-a", "checkout main", "merge --squash tao/plan-a":
+		case "merge-base --is-ancestor main tao/plan-a", "checkout main", "merge --squash tao/plan-a", "reset --hard pre123", "clean -fd":
 			return nil
 		default:
 			if strings.HasPrefix(command, "commit -m feat(merge): use approved review message\n\nWhat:\nCreate the reviewed squash.\n\nWhy:\nAvoid another model session.\n\nTao-Plan: plan-a\nTao-Source-Head: head123") {

@@ -92,6 +92,38 @@ func TestPlanRowsUseSectionBackgroundsAndNeutralHistoryText(t *testing.T) {
 	}
 }
 
+func TestRenderLiveAndKilledMerge(t *testing.T) {
+	row := monitor.Row{RepositoryName: "repo", PlanID: "plan-a", Status: plan.StatusReviewed,
+		MergeInProgress: true, Phase: "merge_verifying",
+		RecommendedAction: plan.PlanAction{Kind: plan.PlanActionRecoverMerge, Command: "tao merge plan-a", Reason: "the exact intended squash is already present"}}
+	render := func() string { return Render(Model{Snapshot: monitor.Snapshot{Rows: []monitor.Row{row}}, Width: 200}) }
+	t.Run("live", func(t *testing.T) {
+		got := render()
+		if !strings.Contains(got, "MERGING · merge: verifying") || !strings.Contains(got, "NOW") || strings.Contains(got, row.RecommendedAction.Reason) {
+			t.Fatalf("live merge frame:\n%s", got)
+		}
+	})
+	row.MergeInProgress = false
+	row.RunLockPresent = true
+	row.RunLockProcessAlive = false
+	row.Liveness = monitor.LivenessStale
+	row.AttentionReasons = []monitor.AttentionReason{monitor.AttentionRunCrashed}
+	got := render()
+	if !strings.Contains(got, "tao merge plan-a — "+row.RecommendedAction.Reason) || strings.Contains(got, "MERGING") {
+		t.Fatalf("killed merge frame:\n%s", got)
+	}
+	detail := &plan.PlanDetail{State: plan.State{Plan: plan.PlanState{MergeCommitIntent: &plan.SingleMergeCommitIntent{PlanID: "plan-a"}}}}
+	attention := strings.Join(detailAttentionLines(detail, row, detailInspectionView{}, 200, ProfileNone), "\n")
+	if !strings.Contains(attention, "merge crashed") || strings.Contains(attention, "run crashed") {
+		t.Fatalf("killed merge attention = %q", attention)
+	}
+	detail.State.Plan.MergeCommitIntent = nil
+	attention = strings.Join(detailAttentionLines(detail, row, detailInspectionView{}, 200, ProfileNone), "\n")
+	if !strings.Contains(attention, "run crashed") {
+		t.Fatalf("ordinary killed run attention = %q", attention)
+	}
+}
+
 func TestNextActionsRenderAsNormalText(t *testing.T) {
 	row := monitor.Row{RepositoryID: "planned", PlanID: "planned", Status: plan.StatusPlanned}
 	got := Render(Model{

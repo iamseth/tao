@@ -299,7 +299,7 @@ func TestMergeServiceProposalUsesPlanObserver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := runner.(mergepkg.Service)
+	service := runner.(phaseReportingMergeService)
 	_, err = service.ProposalGenerator.GenerateMergeProposal(context.Background(), commitcontract.MergeProposalContext{
 		RepoRoot: detail.State.Repo.Root, PlanID: mergePlanID(detail), DefaultBranch: "main", DefaultParent: "parent", MergeBase: "base", SourceBranch: "feature/test", SourceHead: "head", Diff: "diff --git a/a.go b/a.go\n+change\n",
 	})

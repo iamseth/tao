@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -15,6 +17,8 @@ import (
 	mergepkg "github.com/iamseth/tao/internal/merge"
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runstatus"
+	"github.com/iamseth/tao/internal/taodata"
 	"github.com/iamseth/tao/internal/tui"
 	planview "github.com/iamseth/tao/internal/view"
 )
@@ -644,7 +648,49 @@ func TestShowProjectsFailedProposalCorrectionForLegacyEmptyReviewBase(t *testing
 	}
 }
 
+func TestShowLiveMergeOwnerAvoidsGitInspection(t *testing.T) {
+	for _, signal := range []string{"lock", "heartbeat"} {
+		t.Run(signal, func(t *testing.T) {
+			t.Setenv("TAO_DATA_HOME", t.TempDir())
+			root, planDir := t.TempDir(), t.TempDir()
+			detail := &plan.PlanDetail{Dir: planDir, State: plan.State{
+				Status: plan.StatusReviewed, Repo: plan.Repo{Root: root},
+				Plan: plan.PlanState{ID: "plan-a", MergeCommitIntent: &plan.SingleMergeCommitIntent{PlanID: "plan-a"}},
+			}}
+			want := fmt.Sprintf("Merge in progress: pid %d, phase -", os.Getpid())
+			if signal == "lock" {
+				lock, err := plan.AcquireRunLock(planDir, "plan-a", time.Now())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() { _ = lock.Release() }()
+			} else {
+				registry := taodata.NewRegistry("")
+				repoID := taodata.RepoID(root)
+				store := runstatus.NewStore(registry.RuntimeStatusDir(taodata.Repo{ID: repoID}), nil)
+				if err := store.Write(runstatus.Record{Schema: runstatus.Schema, RepoID: repoID, PlanID: "plan-a", InvocationID: "merge-test",
+					Phase: runstatus.PhaseMergeCleanup, InvocationStartedAt: time.Now(), HeartbeatAt: time.Now()}); err != nil {
+					t.Fatal(err)
+				}
+				want = "Merge in progress: pid 0, phase merge_cleanup"
+			}
+			var out bytes.Buffer
+			app := App{Out: &out, CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error {
+				t.Fatal("live merge must not inspect Git recovery boundaries")
+				return nil
+			}}
+			if err := app.show(context.Background(), fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}, []string{"plan-a"}); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(out.String(), want) || strings.Contains(out.String(), "Next:") {
+				t.Fatalf("show = %s, want %s", out.String(), want)
+			}
+		})
+	}
+}
+
 func TestShowUsesLiveGitToResumeExactBoundaryAndRestartStaleIntent(t *testing.T) {
+	t.Setenv("TAO_DATA_HOME", t.TempDir())
 	root := t.TempDir()
 	runCLICommitGit(t, root, "init", "-b", "main")
 	runCLICommitGit(t, root, "config", "user.name", "Tao Test")
@@ -674,6 +720,63 @@ func TestShowUsesLiveGitToResumeExactBoundaryAndRestartStaleIntent(t *testing.T)
 			t.Fatal(err)
 		}
 		return stripANSI(out.String())
+	}
+
+	detail.Dir = t.TempDir()
+	registry := taodata.NewRegistry("")
+	registered := taodata.Repo{ID: taodata.RepoID(root), Name: "repo", Root: root}
+	if err := registry.WriteRepo(registered); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := plan.AcquireRunLock(detail.Dir, "plan-a", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lock.Release() }()
+	store := runstatus.NewStore(registry.RuntimeStatusDir(registered), nil)
+	record := runstatus.Record{Schema: runstatus.Schema, RepoID: registered.ID, PlanID: "plan-a", InvocationID: "merge-test",
+		Phase: runstatus.PhaseMergeVerifying, InvocationStartedAt: time.Now(), HeartbeatAt: time.Now()}
+	if err := store.Write(record); err != nil {
+		t.Fatal(err)
+	}
+	live := render()
+	if !strings.Contains(live, fmt.Sprintf("Merge in progress: pid %d, phase merge_verifying", os.Getpid())) || strings.Contains(live, "Next:") || strings.Contains(live, "recorded source and default boundary") {
+		t.Fatalf("live merge text:\n%s", live)
+	}
+	var structured bytes.Buffer
+	if err := (App{Out: &structured}).show(context.Background(), repo, []string{"--json", "plan-a"}); err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		MergeInProgress *struct {
+			PID   int    `json:"pid"`
+			Phase string `json:"phase"`
+		} `json:"merge_in_progress"`
+		NextAction plan.PlanNextAction `json:"next_action"`
+	}
+	if err := json.Unmarshal(structured.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.MergeInProgress == nil || payload.MergeInProgress.PID != os.Getpid() || payload.MergeInProgress.Phase != "merge_verifying" || payload.NextAction.Primary.Kind == plan.PlanActionRecoverMerge {
+		t.Fatalf("live merge JSON = %s", structured.String())
+	}
+	if err := lock.Release(); err != nil {
+		t.Fatal(err)
+	}
+	record.HeartbeatAt = time.Now().Add(-2 * runstatus.StaleThreshold)
+	if err := store.Write(record); err != nil {
+		t.Fatal(err)
+	}
+	structured.Reset()
+	if err := (App{Out: &structured}).show(context.Background(), repo, []string{"--json", "plan-a"}); err != nil {
+		t.Fatal(err)
+	}
+	payload.MergeInProgress = nil
+	if err := json.Unmarshal(structured.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.MergeInProgress != nil || payload.NextAction.Primary.Kind != plan.PlanActionRecoverMerge {
+		t.Fatalf("inactive merge JSON = %s", structured.String())
 	}
 
 	exact := render()

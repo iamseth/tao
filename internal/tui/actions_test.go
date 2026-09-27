@@ -226,6 +226,22 @@ func TestApprovalActionUsesConfirmationFlowAndExactCommand(t *testing.T) {
 	}
 }
 
+func TestMergeFeedbackObservedOnLiveMerge(t *testing.T) {
+	actions := newTestActions(t, &recordingActionLauncher{}, nil, nil)
+	row := testActionRow()
+	row.Status = plan.StatusReviewed
+	actions.MergePlan(context.Background(), row)
+	actions.Reconcile(monitor.Snapshot{Rows: []monitor.Row{row}})
+	if actions.labels()[actionRowKey(row)] != "merging…" {
+		t.Fatal("merge feedback cleared before observation")
+	}
+	row.MergeInProgress = true
+	actions.Reconcile(monitor.Snapshot{Rows: []monitor.Row{row}})
+	if actions.labels()[actionRowKey(row)] != "" || actions.statusMessage() != "" {
+		t.Fatalf("live merge feedback not cleared: %v, %q", actions.labels(), actions.statusMessage())
+	}
+}
+
 func TestMergeActionsRequireConfirmationAndLaunchExactDetachedCommands(t *testing.T) {
 	launcher := &recordingActionLauncher{}
 	actions := newTestActions(t, launcher, nil, nil)

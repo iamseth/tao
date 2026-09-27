@@ -37,6 +37,16 @@ func (f *fakePlanLister) ListPlans(context.Context, plan.PlanFilter) ([]plan.Pla
 	return f.summaries, f.err
 }
 
+type countingMergePlanLister struct {
+	*plan.FileRepository
+	getCalls int
+}
+
+func (f *countingMergePlanLister) GetPlan(ctx context.Context, id string) (*plan.PlanDetail, error) {
+	f.getCalls++
+	return f.FileRepository.GetPlan(ctx, id)
+}
+
 type fakeStatusReader struct {
 	records map[string]runstatus.Record
 	errors  map[string]error
@@ -193,18 +203,173 @@ func TestCollectorWithFileRepositoryRecommendsMergeForExactSingleMergeIntentBoun
 	writeMonitorJSON(t, filepath.Join(planDir, "slices.json"), slicesFile)
 
 	entry := taodata.RepoInventoryEntry{Repo: taodata.Repo{ID: "repo-id", Name: "repo", Root: root}, PlansDir: plansDir}
-	collector := NewCollector(fakeInventory{entries: []taodata.RepoInventoryEntry{entry}})
-	collector.Now = func() time.Time { return now }
-	snapshot, err := collector.Collect(context.Background())
-	if err != nil {
-		t.Fatal(err)
+	for _, test := range []struct {
+		name        string
+		lock        *plan.RunLock
+		record      *runstatus.Record
+		wantAction  string
+		wantLoads   int
+		wantWarning bool
+	}{
+		{name: "missing signals", wantAction: "SETTLE MERGE", wantLoads: 1},
+		{name: "live lock", lock: &plan.RunLock{PID: 123, ProcessAlive: true}, wantAction: "MERGING"},
+		{name: "dead lock", lock: &plan.RunLock{PID: 123}, wantAction: "SETTLE MERGE", wantLoads: 1},
+		{name: "fresh status", record: new(runtimeRecord(entry.Repo.ID, "plan-a", now, now, runstatus.PhaseFinalVerification, nil)), wantAction: "MERGING"},
+		{name: "mismatched repository", record: new(runtimeRecord("other", "plan-a", now, now, runstatus.PhaseFinalVerification, nil)), wantAction: "SETTLE MERGE", wantLoads: 1, wantWarning: true},
+		{name: "dead lock stale status", lock: &plan.RunLock{PID: 123}, record: new(runtimeRecord(entry.Repo.ID, "plan-a", now, now.Add(-runstatus.StaleThreshold), runstatus.PhaseFinalVerification, nil)), wantAction: "SETTLE MERGE", wantLoads: 1},
+		{name: "live lock stale status", lock: &plan.RunLock{PID: 123, ProcessAlive: true}, record: new(runtimeRecord(entry.Repo.ID, "plan-a", now, now.Add(-runstatus.StaleThreshold), runstatus.PhaseFinalVerification, nil)), wantAction: "MERGING"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			lister := &countingMergePlanLister{FileRepository: plan.NewFileRepository(plansDir)}
+			reader := &fakeStatusReader{records: map[string]runstatus.Record{}}
+			if test.record != nil {
+				reader.records["plan-a"] = *test.record
+			}
+			collector := Collector{
+				Inventory:       fakeInventory{entries: []taodata.RepoInventoryEntry{entry}},
+				NewPlanLister:   func(taodata.RepoInventoryEntry) PlanLister { return lister },
+				NewStatusReader: func(taodata.RepoInventoryEntry) RuntimeStatusReader { return reader },
+				ReadRunLock: func(dir string) (plan.RunLock, error) {
+					if dir != planDir {
+						t.Fatalf("lock directory = %q, want %q", dir, planDir)
+					}
+					if test.lock == nil {
+						return plan.RunLock{}, os.ErrNotExist
+					}
+					return *test.lock, nil
+				},
+				Now: func() time.Time { return now },
+			}
+			snapshot, err := collector.Collect(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(snapshot.Rows) != 1 {
+				t.Fatalf("rows = %+v, want one plan", snapshot.Rows)
+			}
+			row := snapshot.Rows[0]
+			if row.MergeInProgress != (test.wantAction == "MERGING") {
+				t.Errorf("MergeInProgress = %t, want %t", row.MergeInProgress, test.wantAction == "MERGING")
+			}
+			if row.NextAction != test.wantAction {
+				t.Errorf("next action = %q, want %q", row.NextAction, test.wantAction)
+			}
+			if lister.getCalls != test.wantLoads {
+				t.Errorf("GetPlan calls = %d, want %d", lister.getCalls, test.wantLoads)
+			}
+			if test.wantLoads > 0 {
+				action := row.RecommendedAction
+				if action.Kind != plan.PlanActionRecoverMerge || action.Command != "tao merge plan-a" || !strings.Contains(action.Reason, "recorded source and default boundary") {
+					t.Errorf("recommended action = %#v, want classifier-derived merge resume", action)
+				}
+			}
+			if test.wantWarning && !strings.Contains(strings.Join(row.Warnings, "\n"), "runtime status repository id") {
+				t.Errorf("missing repository-id warning: %v", row.Warnings)
+			}
+		})
 	}
-	if len(snapshot.Rows) != 1 {
-		t.Fatalf("rows = %+v, want one plan", snapshot.Rows)
+}
+
+func TestLiveMergeOwnerFor(t *testing.T) {
+	now := time.Date(2026, 9, 27, 22, 0, 0, 0, time.UTC)
+	fresh := runtimeRecord("repo", "plan-a", now, now, runstatus.PhaseFinalVerification, nil)
+	stale := fresh
+	stale.HeartbeatAt = now.Add(-runstatus.StaleThreshold)
+	mismatch := fresh
+	mismatch.RepoID = "other"
+	for _, test := range []struct {
+		name   string
+		lock   *plan.RunLock
+		record *runstatus.Record
+		err    error
+		want   LiveMergeOwner
+		live   bool
+	}{
+		{name: "nil readers"},
+		{name: "live lock", lock: &plan.RunLock{PID: 123, ProcessAlive: true}, want: LiveMergeOwner{PID: 123}, live: true},
+		{name: "dead lock", lock: &plan.RunLock{PID: 123}},
+		{name: "fresh record", record: &fresh, want: LiveMergeOwner{Phase: fresh.Phase}, live: true},
+		{name: "both signals", lock: &plan.RunLock{PID: 123, ProcessAlive: true}, record: &fresh, want: LiveMergeOwner{PID: 123, Phase: fresh.Phase}, live: true},
+		{name: "fresh record dead lock", lock: &plan.RunLock{PID: 123}, record: &fresh, want: LiveMergeOwner{Phase: fresh.Phase}, live: true},
+		{name: "dead lock stale record", lock: &plan.RunLock{PID: 123}, record: &stale},
+		{name: "stale record", record: &stale},
+		{name: "wrong repository", record: &mismatch},
+		{name: "live lock wrong repository", lock: &plan.RunLock{PID: 123, ProcessAlive: true}, record: &mismatch, want: LiveMergeOwner{PID: 123}, live: true},
+		{name: "missing signals", err: os.ErrNotExist},
+		{name: "unreadable signals", err: errors.New("unreadable")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var lockReader RunLockReader
+			if test.lock != nil || test.err != nil {
+				lockReader = func(dir string) (plan.RunLock, error) {
+					if dir != "plan-dir" {
+						t.Fatalf("lock directory = %q", dir)
+					}
+					if test.lock != nil {
+						return *test.lock, nil
+					}
+					return plan.RunLock{}, test.err
+				}
+			}
+			var reader RuntimeStatusReader
+			if test.record != nil || test.err != nil {
+				status := &fakeStatusReader{records: map[string]runstatus.Record{}, errors: map[string]error{"plan-a": test.err}}
+				if test.record != nil {
+					status.records["plan-a"] = *test.record
+				}
+				reader = status
+			}
+			owner, live := LiveMergeOwnerFor("plan-dir", "plan-a", "repo", lockReader, reader, now)
+			if owner != test.want || live != test.live {
+				t.Fatalf("owner/live = %+v/%t, want %+v/%t", owner, live, test.want, test.live)
+			}
+		})
 	}
-	action := snapshot.Rows[0].RecommendedAction
-	if action.Kind != plan.PlanActionRecoverMerge || action.Command != "tao merge plan-a" || !strings.Contains(action.Reason, "recorded source and default boundary") {
-		t.Fatalf("recommended action = %#v, want classifier-derived merge resume", action)
+}
+
+func TestCollectorLiveMergeActionKinds(t *testing.T) {
+	now := time.Date(2026, 9, 27, 22, 0, 0, 0, time.UTC)
+	entry := taodata.RepoInventoryEntry{Repo: taodata.Repo{ID: "repo"}, PlansDir: "/data/repo/plans"}
+	for _, test := range []struct {
+		name    string
+		kind    plan.PlanActionKind
+		merging bool
+	}{
+		{name: "recover merge", kind: plan.PlanActionRecoverMerge, merging: true},
+		{name: "rebase and review", kind: plan.PlanActionRebaseAndReview, merging: true},
+		{name: "restart merge", kind: plan.PlanActionRestartMerge, merging: true},
+		{name: "ordinary run", kind: plan.PlanActionRun},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			summary := plan.PlanSummary{ID: "plan-a", Status: plan.StatusInProgress}
+			summary.NextAction.Primary = plan.PlanAction{Kind: test.kind}
+			collector := Collector{
+				Inventory: fakeInventory{entries: []taodata.RepoInventoryEntry{entry}},
+				NewPlanLister: func(taodata.RepoInventoryEntry) PlanLister {
+					return &fakePlanLister{summaries: []plan.PlanSummary{summary}}
+				},
+				NewStatusReader: func(taodata.RepoInventoryEntry) RuntimeStatusReader {
+					return &fakeStatusReader{records: map[string]runstatus.Record{"plan-a": runtimeRecord("repo", "plan-a", now, now, runstatus.PhaseFinalVerification, nil)}}
+				},
+				ReadRunLock: func(string) (plan.RunLock, error) { return plan.RunLock{}, os.ErrNotExist },
+				Now:         func() time.Time { return now },
+			}
+			snapshot, err := collector.Collect(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(snapshot.Rows) != 1 {
+				t.Fatalf("rows = %+v, want one plan", snapshot.Rows)
+			}
+			row := snapshot.Rows[0]
+			wantAction := "MONITOR"
+			if test.merging {
+				wantAction = "MERGING"
+			}
+			if row.MergeInProgress != test.merging || row.NextAction != wantAction {
+				t.Fatalf("row = %+v, want merging=%t action=%s", row, test.merging, wantAction)
+			}
+		})
 	}
 }
 
@@ -654,6 +819,9 @@ func TestDeriveNextActionIsPureAndExhaustive(t *testing.T) {
 		{name: "abandoned overrides stale action state", row: Row{Status: plan.StatusAbandoned, Liveness: LivenessLive, AttentionReasons: []AttentionReason{AttentionFinalizationFailed}, RecommendedAction: plan.PlanAction{Kind: plan.PlanActionRecoverPullRequest}}, want: "ABANDONED"},
 		{name: "completed with PR recovery", row: Row{Status: plan.StatusCompleted, AttentionReasons: []AttentionReason{AttentionFinalizationFailed}, FinalizationPhase: plan.FinalizationFailurePhasePullRequest}, want: "FINALIZE PR"},
 		{name: "live", row: Row{Liveness: LivenessLive}, want: "MONITOR"},
+		{name: "merging overrides attention", row: Row{MergeInProgress: true, AttentionReasons: []AttentionReason{AttentionVerificationFailed, AttentionFinalizationFailed}}, want: "MERGING"},
+		{name: "merging fresh status", row: Row{MergeInProgress: true, Liveness: LivenessLive}, want: "MERGING"},
+		{name: "merging stale status live lock", row: Row{MergeInProgress: true, Liveness: LivenessStale, RunLockPresent: true, RunLockProcessAlive: true}, want: "MERGING"},
 		{name: "stalled owned", row: Row{Liveness: LivenessStale, RunLockPresent: true, RunLockProcessAlive: true}, want: "MONITOR"},
 		{name: "approval", row: Row{AttentionReasons: []AttentionReason{AttentionApprovalRequired}}, want: "APPROVE"},
 		{name: "blocked", row: Row{Status: plan.StatusBlocked}, want: "CONTINUE"},
