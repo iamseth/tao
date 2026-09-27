@@ -126,6 +126,7 @@ func (a App) ui(ctx context.Context, args []string) error {
 	signalCtx, cancel := newCommandSignalContext(ctx)
 	defer cancel()
 	return (tui.App{
+		Theme:            a.outputTheme(),
 		Input:            input,
 		Output:           a.Out,
 		Terminal:         terminal,

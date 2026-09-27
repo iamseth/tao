@@ -11,6 +11,7 @@ import (
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/term/cells"
+	"github.com/iamseth/tao/internal/theme"
 )
 
 func TestFilterContextAndDebugLabels(t *testing.T) {
@@ -38,22 +39,22 @@ func TestFilterContextAndDebugLabels(t *testing.T) {
 
 func TestRenderFrameStylesTabsSummaryAndContextWithoutRule(t *testing.T) {
 	model := Model{
-		Page: PageNotes, Width: 70, Profile: ProfileANSI16,
+		Page: PageNotes, Width: 70, Profile: theme.ProfileANSI16,
 		Filter:        repositoryFilter("repo"),
 		Snapshot:      monitor.Snapshot{Rows: []monitor.Row{{RepositoryID: "repo", RepositoryName: "alpha"}}},
 		DebugSnapshot: DebugSnapshot{SelectedAgent: "pi"},
 	}
 	summary := &frameSummary{primary: "4 open notes", attentionCount: 2, attentionNoun: "warnings"}
-	lines := append(renderFrame(model, PageNotes), renderFrameSummary(model.Profile, *summary))
+	lines := append(renderFrame(model, PageNotes), renderFrameSummary(model.Palette(), *summary))
 	if len(lines) != 2 {
 		t.Fatalf("frame lines = %d, want 2: %q", len(lines), lines)
 	}
 	for _, want := range []string{
-		Paint(ProfileANSI16, RoleNeutral5, "tao"),
-		Paint(ProfileANSI16, RoleNeutral1, "│"),
-		Paint(ProfileANSI16, RoleAccent, "notes"),
-		Paint(ProfileANSI16, RoleNeutral2, "plans"),
-		Paint(ProfileANSI16, RoleWarn, "2 warnings"),
+		theme.Default().Palette(theme.ProfileANSI16).Paint(theme.RoleNeutral5, "tao"),
+		theme.Default().Palette(theme.ProfileANSI16).Paint(theme.RoleNeutral1, "│"),
+		theme.Default().Palette(theme.ProfileANSI16).Paint(theme.RoleAccent, "notes"),
+		theme.Default().Palette(theme.ProfileANSI16).Paint(theme.RoleNeutral2, "plans"),
+		theme.Default().Palette(theme.ProfileANSI16).Paint(theme.RoleWarn, "2 warnings"),
 	} {
 		if !strings.Contains(strings.Join(lines, "\n"), want) {
 			t.Fatalf("styled frame missing %q: %q", want, lines)
@@ -100,7 +101,7 @@ func TestRenderTabStripMarksEveryActivePageWithoutColor(t *testing.T) {
 	}
 	for _, tab := range dashboardTabs {
 		t.Run(string(tab.ID), func(t *testing.T) {
-			strip, activeEnd := renderTabStrip(ProfileNone, tab.ID)
+			strip, activeEnd := renderTabStrip(theme.Default().Palette(theme.ProfileNone), tab.ID)
 			if strip != wantStrips[tab.ID] {
 				t.Fatalf("tab strip = %q, want %q", strip, wantStrips[tab.ID])
 			}
@@ -136,7 +137,7 @@ func TestRenderFrameSkeletonAndContentAtSupportedSizes(t *testing.T) {
 				if len(lines) > model.Height {
 					t.Fatalf("frame has %d lines, want at most %d", len(lines), model.Height)
 				}
-				wantStrip, _ := renderTabStrip(ProfileNone, test.page)
+				wantStrip, _ := renderTabStrip(theme.Default().Palette(theme.ProfileNone), test.page)
 				if !strings.HasPrefix(lines[0], wantStrip) {
 					t.Fatalf("tab strip is not first: %q", lines)
 				}
@@ -209,7 +210,7 @@ func TestRenderStressPlanRowsKeepCompleteResponsiveColumns(t *testing.T) {
 		case "PLAN":
 			return values.plan
 		case "SLICES":
-			return renderSlicesValue(ProfileNone, row)
+			return renderSlicesValue(theme.Default().Palette(theme.ProfileNone), row)
 		case "RUN":
 			return values.run
 		case "AGE":
@@ -282,13 +283,13 @@ func TestRenderStressPlanRowsKeepCompleteResponsiveColumns(t *testing.T) {
 func TestDashboardPagesRenderSharedSectionRules(t *testing.T) {
 	tests := []struct {
 		page PageID
-		role Role
+		role theme.Role
 		want []string
 	}{
-		{page: PagePlans, role: RolePlanNext, want: []string{"▌ NEXT ", "REPO", "NEXT", "PLAN", "SLICES", "AGE"}},
-		{page: PageNotes, role: RoleAccent, want: []string{"▌ UNTIERED ", "REPO", "PREVIEW", "TAGS", "CREATED", "UPDATED"}},
-		{page: PageSettings, role: RoleSettingsSection, want: []string{"▌ EXECUTION · all default ", "Agent", "▌ REPOSITORY DEFAULTS ", "PR", "ROOT"}},
-		{page: PageDebug, role: RoleDebugSection, want: []string{"▌ UI ", "▌ DOCTOR "}},
+		{page: PagePlans, role: theme.RolePlanNext, want: []string{"▌ NEXT ", "REPO", "NEXT", "PLAN", "SLICES", "AGE"}},
+		{page: PageNotes, role: theme.RoleAccent, want: []string{"▌ UNTIERED ", "REPO", "PREVIEW", "TAGS", "CREATED", "UPDATED"}},
+		{page: PageSettings, role: theme.RoleSettingsSection, want: []string{"▌ EXECUTION · all default ", "Agent", "▌ REPOSITORY DEFAULTS ", "PR", "ROOT"}},
+		{page: PageDebug, role: theme.RoleDebugSection, want: []string{"▌ UI ", "▌ DOCTOR "}},
 	}
 	for _, test := range tests {
 		t.Run(string(test.page), func(t *testing.T) {
@@ -300,9 +301,9 @@ func TestDashboardPagesRenderSharedSectionRules(t *testing.T) {
 				}
 			}
 
-			model.Profile = ProfileANSI16
+			model.Profile = theme.ProfileANSI16
 			styled := Render(model)
-			if !strings.Contains(styled, Paint(ProfileANSI16, test.role, test.want[0])) {
+			if !strings.Contains(styled, theme.Default().Palette(theme.ProfileANSI16).Paint(test.role, test.want[0])) {
 				t.Fatalf("%s frame does not apply the section's semantic role: %q", test.page, styled)
 			}
 		})

@@ -14,8 +14,8 @@ import (
 	"github.com/iamseth/tao/internal/monitor/rowlabel"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/taodata"
-	"github.com/iamseth/tao/internal/term"
 	"github.com/iamseth/tao/internal/term/cells"
+	"github.com/iamseth/tao/internal/theme"
 )
 
 const (
@@ -83,12 +83,13 @@ func (a App) monitor(ctx context.Context, args []string) error {
 		return err
 	}
 	if !interactive {
-		return writeMonitorSnapshot(ctx, a.Out, collector, false, false)
+		return writeMonitorSnapshot(ctx, a.Out, collector, false, a.outputTheme().Palette(theme.ProfileNone))
 	}
 
+	palette := a.outputTheme().Palette(theme.DetectProfile(terminal, os.Getenv))
 	ctx, cancel := newCommandSignalContext(ctx)
 	defer cancel()
-	if err := writeMonitorSnapshot(ctx, a.Out, collector, true, monitorColorEnabled(terminal)); err != nil {
+	if err := writeMonitorSnapshot(ctx, a.Out, collector, true, palette); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return nil
 		}
@@ -102,7 +103,7 @@ func (a App) monitor(ctx context.Context, args []string) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C():
-			if err := writeMonitorSnapshot(ctx, a.Out, collector, true, monitorColorEnabled(terminal)); err != nil {
+			if err := writeMonitorSnapshot(ctx, a.Out, collector, true, palette); err != nil {
 				if errors.Is(err, context.Canceled) {
 					return nil
 				}
@@ -148,10 +149,6 @@ func (a App) monitorOutputIsTerminal(out io.Writer) bool {
 	return outputIsTerminal(out)
 }
 
-func monitorColorEnabled(isTerminal bool) bool {
-	return term.ColorEnabled(isTerminal, os.Getenv)
-}
-
 func flagDurationValue(fs *flag.FlagSet, name string) time.Duration {
 	fl := fs.Lookup(name)
 	if fl == nil {
@@ -166,13 +163,13 @@ func flagDurationValue(fs *flag.FlagSet, name string) time.Duration {
 	return value
 }
 
-func writeMonitorSnapshot(ctx context.Context, out io.Writer, collector MonitorSnapshotCollector, redraw, useColor bool) error {
+func writeMonitorSnapshot(ctx context.Context, out io.Writer, collector MonitorSnapshotCollector, redraw bool, palette theme.Palette) error {
 	snapshot, err := collector.Collect(ctx)
 	if err != nil {
 		return fmt.Errorf("refresh monitor: %w", err)
 	}
 	var rendered bytes.Buffer
-	if err := renderMonitorSnapshot(&rendered, snapshot, useColor); err != nil {
+	if err := renderMonitorSnapshot(&rendered, snapshot, palette); err != nil {
 		return err
 	}
 	if redraw {
@@ -184,7 +181,7 @@ func writeMonitorSnapshot(ctx context.Context, out io.Writer, collector MonitorS
 	return err
 }
 
-func renderMonitorSnapshot(out io.Writer, snapshot monitor.Snapshot, useColor bool) error {
+func renderMonitorSnapshot(out io.Writer, snapshot monitor.Snapshot, palette theme.Palette) error {
 	if len(snapshot.Rows) == 0 {
 		return writeln(out, "No non-completed plans.")
 	}
@@ -212,11 +209,11 @@ func renderMonitorSnapshot(out io.Writer, snapshot monitor.Snapshot, useColor bo
 		live := cells.Pad(values[0], widths[0])
 		status := cells.Pad(values[1], widths[1])
 		slices := cells.Pad(values[6], widths[6])
-		if useColor {
-			live = colorMonitorLiveness(live, row.Liveness)
-			status = colorStatus(status, row.Status)
+		if palette.Enabled() {
+			live = colorMonitorLiveness(palette, live, row.Liveness)
+			status = colorStatus(palette, status, row.Status)
 			slices = colorDone(
-				slices,
+				palette, slices,
 				row.OriginalCompletedCount+row.ReworkCompletedCount,
 				row.OriginalTotalCount+row.ReworkTotalCount,
 			)
@@ -295,12 +292,12 @@ func monitorWarningLabel(row monitor.Row) string {
 	return repo + "/" + row.PlanID
 }
 
-func colorMonitorLiveness(value string, liveness monitor.Liveness) string {
+func colorMonitorLiveness(palette theme.Palette, value string, liveness monitor.Liveness) string {
 	switch liveness {
 	case monitor.LivenessLive:
-		return color(value, "36")
+		return palette.Paint(theme.RoleAccent, value)
 	case monitor.LivenessStale:
-		return color(value, "33")
+		return palette.Paint(theme.RoleWarn, value)
 	default:
 		return value
 	}

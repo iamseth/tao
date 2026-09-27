@@ -17,6 +17,7 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/term"
 	"github.com/iamseth/tao/internal/term/cells"
+	"github.com/iamseth/tao/internal/theme"
 )
 
 // Terminal is the terminal-state and resize boundary used by the event loop.
@@ -73,6 +74,7 @@ type SettingsService interface {
 // App owns one interactive dashboard event loop. Its boundaries are injectable
 // so terminal behavior can be tested without taking over a real terminal.
 type App struct {
+	Theme            theme.Theme
 	Input            io.Reader
 	Output           io.Writer
 	Terminal         Terminal
@@ -116,7 +118,8 @@ type loopState struct {
 	filter           Filter
 	filterMenu       *filterMenu
 	filterMessage    string
-	profile          Profile
+	profile          theme.Profile
+	theme            theme.Theme
 	showShortcuts    bool
 	searchQuery      string
 	searchActive     bool
@@ -198,6 +201,7 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 		settingsSnapshot: settingsSnapshot,
 		size:             size,
 		profile:          outputSupportsColor(a.Output),
+		theme:            a.Theme,
 		now:              a.Now,
 	}
 	if a.FilterStore != nil {
@@ -543,7 +547,7 @@ func (a App) writeFrame(state loopState) error {
 	var frame bytes.Buffer
 	switch {
 	case state.notePicker != nil:
-		frame.WriteString(clearScreenSequence + strings.Join(state.notePicker.render(state.size, state.profile), "\n"))
+		frame.WriteString(clearScreenSequence + strings.Join(state.notePicker.render(state.size, state.theme.Palette(state.profile)), "\n"))
 	case state.noteDetail != nil:
 		message := state.noteEditMessage
 		if prompt := state.confirmMessage(); prompt != "" {
@@ -564,8 +568,9 @@ func (a App) writeFrame(state loopState) error {
 			SliceOffset:     state.detail.sliceOffset,
 			Width:           state.size.Width,
 			Height:          state.size.Height,
-			UseColor:        state.profile.supportsColor(),
+			UseColor:        state.profile.Enabled(),
 			Profile:         state.profile,
+			Theme:           state.theme,
 			ShowShortcuts:   state.showShortcuts,
 			ScopeExpanded:   state.detail.scopeExpanded,
 			LoadError:       state.detail.loadError,
@@ -586,6 +591,7 @@ func (a App) writeFrame(state loopState) error {
 			Filter:           state.filter,
 			FilterMessage:    state.filterMessage,
 			Profile:          state.profile,
+			Theme:            state.theme,
 			ShowShortcuts:    state.showShortcuts,
 			SearchQuery:      state.searchQuery,
 			SearchActive:     state.searchActive,
@@ -598,7 +604,7 @@ func (a App) writeFrame(state loopState) error {
 		})
 		if state.filterMenu != nil {
 			lines := strings.Split(strings.TrimPrefix(rendered, clearScreenSequence), "\n")
-			lines = overlayBox(lines, state.filterMenu.render(state.size, state.profile), state.size.Width, state.size.Height)
+			lines = overlayBox(lines, state.filterMenu.render(state.size, state.theme.Palette(state.profile)), state.size.Width, state.size.Height)
 			rendered = clearScreenSequence + strings.Join(lines, "\n")
 		}
 		frame.WriteString(rendered)
@@ -1146,7 +1152,7 @@ func (d *detailState) maxOffset(tab detailTab, size term.Size) int {
 	if tab == detailTabActivity {
 		lines = renderActivityPane(d.log, d.followError, size.Width, int(^uint(0)>>1), 0)
 	} else {
-		lines = renderOverviewPane(d.plan, d.row, size.Width, int(^uint(0)>>1), 0, d.inspection, ProfileNone, d.scopeExpanded)
+		lines = renderOverviewPane(d.plan, d.row, size.Width, int(^uint(0)>>1), 0, d.inspection, theme.Palette{}, d.scopeExpanded)
 	}
 	return max(len(lines)-height, 0)
 }
@@ -1614,6 +1620,7 @@ func (s loopState) debugPageMaxOffset() int {
 		Width:         s.size.Width,
 		Height:        s.size.Height,
 		Profile:       s.profile,
+		Theme:         s.theme,
 		SearchQuery:   s.searchQuery,
 		SearchActive:  s.searchActive,
 		Filter:        s.filter,
@@ -1624,8 +1631,8 @@ func (s *loopState) clampDebugOffset() {
 	s.debugOffset = max(0, min(s.debugOffset, s.debugPageMaxOffset()))
 }
 
-func outputSupportsColor(output io.Writer) Profile {
-	return detectProfile(term.IsTerminal(output), os.Getenv)
+func outputSupportsColor(output io.Writer) theme.Profile {
+	return theme.DetectProfile(term.IsTerminal(output), os.Getenv)
 }
 
 func restoreTerminalState(terminal Terminal, output io.Writer) error {

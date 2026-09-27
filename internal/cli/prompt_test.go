@@ -19,6 +19,7 @@ import (
 	"github.com/iamseth/tao/internal/promptinstall"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/taodata"
+	"github.com/iamseth/tao/internal/theme"
 )
 
 func TestRunWarnsOnceForStaleManagedPromptsAndExecutesCommand(t *testing.T) {
@@ -607,7 +608,7 @@ func TestDoctorVerboseReportsWrapperStatus(t *testing.T) {
 			t.Fatalf("expected %q in doctor output, got %q", want, out.String())
 		}
 	}
-	if !strings.Contains(out.String(), colorGreen("✓ current  ")) {
+	if !strings.Contains(out.String(), (App{}).outputPalette(&out).Paint(theme.RoleSuccess, "✓ current  ")) {
 		t.Fatalf("expected current wrappers, got %q", text)
 	}
 	verboseOutput := out.String()
@@ -1019,7 +1020,7 @@ func TestDoctorReportsPresentToolsAndFdfindAlias(t *testing.T) {
 			t.Fatalf("expected %q in doctor output, got %q", want, text)
 		}
 	}
-	if !strings.Contains(out.String(), colorGreen("✓ ok     ")+" pi (pi)") {
+	if !strings.Contains(out.String(), (App{}).outputPalette(&out).Paint(theme.RoleSuccess, "✓ ok     ")+" pi (pi)") {
 		t.Fatalf("expected green ok tool status, got %q", out.String())
 	}
 
@@ -1050,7 +1051,7 @@ func setPathExecutables(t *testing.T, names ...string) {
 }
 
 func stripANSIGreen(value string) string {
-	return strings.NewReplacer("\x1b[32m", "", "\x1b[0m", "").Replace(value)
+	return stripANSI(value)
 }
 
 func TestPromptUsesEnvPolicyDefaults(t *testing.T) {

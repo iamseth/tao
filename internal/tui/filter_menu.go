@@ -8,6 +8,7 @@ import (
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/term"
 	"github.com/iamseth/tao/internal/term/cells"
+	"github.com/iamseth/tao/internal/theme"
 )
 
 // filterMenu owns a working copy; closing and persistence are the caller's job.
@@ -181,7 +182,7 @@ func (m filterMenu) rows() []filterMenuRow {
 
 // render is pure: resizing adjusts a local viewport, not the working filter or
 // cursor. The caller can place these lines over the current list with overlayBox.
-func (m filterMenu) render(size term.Size, profile Profile) []string {
+func (m filterMenu) render(size term.Size, palette theme.Palette) []string {
 	if size.Width <= 0 || size.Height <= 0 {
 		return nil
 	}
@@ -196,7 +197,7 @@ func (m filterMenu) render(size term.Size, profile Profile) []string {
 	horizontal := strings.Repeat("─", width-2)
 	lines := []string{
 		"┌" + horizontal + "┐",
-		row(Paint(profile, RoleNeutral5, "Filters")),
+		row(palette.Paint(theme.RoleNeutral5, "Filters")),
 		"├" + horizontal + "┤",
 	}
 	rows := m.rows()
@@ -207,7 +208,7 @@ func (m filterMenu) render(size term.Size, profile Profile) []string {
 		}
 		line := row(cursor + item.text)
 		if item.selection == m.selected {
-			line = SelectRow(profile, line)
+			line = palette.SelectRow(line)
 		}
 		lines = append(lines, line)
 	}

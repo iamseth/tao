@@ -9,6 +9,7 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/term/cells"
+	"github.com/iamseth/tao/internal/theme"
 )
 
 func TestRenderWideHeaderExact(t *testing.T) {
@@ -22,7 +23,7 @@ func TestRenderWideHeaderExact(t *testing.T) {
 		strings.Repeat("─", 100),
 		"LIVE OUTPUT",
 	)
-	assertLines(t, Render(state, 100, false), want, 100)
+	assertLines(t, Render(state, 100, theme.Palette{}), want, 100)
 }
 
 func TestRenderNarrowHeaderExact(t *testing.T) {
@@ -36,14 +37,14 @@ func TestRenderNarrowHeaderExact(t *testing.T) {
 		strings.Repeat("─", 60),
 		"LIVE OUTPUT",
 	)
-	assertLines(t, Render(state, 60, false), want, 60)
+	assertLines(t, Render(state, 60, theme.Palette{}), want, 60)
 }
 
 func TestRenderProgressCompletedAndZeroTotals(t *testing.T) {
 	state := testHeaderState()
 	state.CompletedCount = 4
 	state.TotalCount = 4
-	lines := Render(state, 60, false)
+	lines := Render(state, 60, theme.Palette{})
 	if !strings.Contains(lines[2], "[████████████████████] 4/4 · 100%") {
 		t.Fatalf("completed progress = %q", lines[2])
 	}
@@ -54,7 +55,7 @@ func TestRenderProgressCompletedAndZeroTotals(t *testing.T) {
 	state.CurrentSliceID = ""
 	state.CurrentSliceTitle = ""
 	state.Phase = "reviewing"
-	lines = Render(state, 60, false)
+	lines = Render(state, 60, theme.Palette{})
 	for line, want := range map[int]string{
 		1: "PHASE  reviewing · elapsed -",
 		2: "[░░░░░░░░░░░░░░░░░░░░] 0/0 · 0%",
@@ -75,7 +76,7 @@ func TestRenderOptionalBatchReworkAndUnavailableCost(t *testing.T) {
 	state.MaxReworkAttempts = 5
 	state.RecurringFindingFile = "internal/run/recovery.go"
 	state.CostReported = false
-	text := strings.Join(Render(state, 140, false), "\n")
+	text := strings.Join(Render(state, 140, theme.Palette{}), "\n")
 	for _, want := range []string{"batch 2/7", "rework 2/5", "agent", "cost —", "recurring internal/run/recovery.go"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("Render() missing %q in %q", want, text)
@@ -84,7 +85,7 @@ func TestRenderOptionalBatchReworkAndUnavailableCost(t *testing.T) {
 }
 
 func TestRenderOmitsRecurringFindingFileWhenEmpty(t *testing.T) {
-	text := strings.Join(Render(testHeaderState(), 100, false), "\n")
+	text := strings.Join(Render(testHeaderState(), 100, theme.Palette{}), "\n")
 	if strings.Contains(text, "recurring") {
 		t.Fatalf("empty recurring finding file rendered in %q", text)
 	}
@@ -103,7 +104,7 @@ func TestRenderLongTitlePreservesRunContextAtSixtyColumns(t *testing.T) {
 	state.ReworkRound = 2
 	state.MaxReworkAttempts = 5
 
-	line := strings.TrimSpace(Render(state, 60, false)[0])
+	line := strings.TrimSpace(Render(state, 60, theme.Palette{})[0])
 	want := "t / p · batch 2/7 · rework 2/5 · p · i · b · review on"
 	if line != want {
 		t.Fatalf("identity line = %q, want %q", line, want)
@@ -117,7 +118,7 @@ func TestRenderCompactsTokenCounts(t *testing.T) {
 		want   string
 	}{{999, "999 tokens"}, {1_000, "1k tokens"}, {12_345, "12.3k tokens"}, {1_250_000, "1.2m tokens"}} {
 		state.TotalTokens = test.tokens
-		if got := Render(state, 100, false)[4]; !strings.Contains(got, test.want) {
+		if got := Render(state, 100, theme.Palette{})[4]; !strings.Contains(got, test.want) {
 			t.Errorf("tokens %d: metrics = %q, want %q", test.tokens, got, test.want)
 		}
 	}
@@ -133,7 +134,7 @@ func TestRenderChecklistCentersCurrentAndUsesNumericPrefixes(t *testing.T) {
 		{ID: "004-after", Title: "After", Status: plan.StatusPending},
 	}
 	state.CurrentSliceID = "002-render"
-	line := Render(state, 60, false)[3]
+	line := Render(state, 60, theme.Palette{})[3]
 	if !strings.Contains(line, "▶ 002") || strings.Contains(line, "002-render") {
 		t.Fatalf("checklist did not use the numeric slice prefix: %q", line)
 	}
@@ -155,7 +156,7 @@ func TestRenderSanitizesMetadataControls(t *testing.T) {
 	state.Slices[1].ID = state.CurrentSliceID
 	state.Slices[1].Title = "Render\nheader"
 
-	lines := Render(state, 180, false)
+	lines := Render(state, 180, theme.Palette{})
 	text := strings.Join(lines, "\n")
 	for _, want := range []string{
 		"tao�repo / run�[2Jheader", "Pinned��header", "p�i", "iso�lated",
@@ -179,7 +180,7 @@ func TestRenderUsesTerminalCellWidthForUnicode(t *testing.T) {
 	state.PlanTitle = "界界 cafe\u0301"
 	state.Slices[1].Title = "界面"
 	const width = 60
-	for i, line := range Render(state, width, false) {
+	for i, line := range Render(state, width, theme.Palette{}) {
 		if got := cells.Width(line); got != width {
 			t.Fatalf("line %d occupies %d cells, want %d: %q", i, got, width, line)
 		}
@@ -206,7 +207,7 @@ func TestRenderCellWidthMatchesSharedCellsForEmojiAndCJK(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			state := testHeaderState()
 			state.PlanTitle = test.title
-			lines := Render(state, width, false)
+			lines := Render(state, width, theme.Palette{})
 			if !strings.Contains(lines[0], test.title) {
 				t.Fatalf("identity line does not contain sample title %q: %q", test.title, lines[0])
 			}
@@ -221,8 +222,9 @@ func TestRenderCellWidthMatchesSharedCellsForEmojiAndCJK(t *testing.T) {
 
 func TestRenderColorPreservesPlainVisibleText(t *testing.T) {
 	state := testHeaderState()
-	plain := Render(state, 80, false)
-	colored := Render(state, 80, true)
+	palette := theme.Default().Palette(theme.ProfileTrueColor)
+	plain := Render(state, 100, theme.Palette{})
+	colored := Render(state, 100, palette)
 	ansi := regexp.MustCompile(`\x1b\[[0-9;]*m`)
 	for i := range plain {
 		if strings.Contains(plain[i], "\x1b[") {
@@ -232,14 +234,27 @@ func TestRenderColorPreservesPlainVisibleText(t *testing.T) {
 			t.Fatalf("colored line %d changed visible text\n got: %q\nwant: %q", i, got, plain[i])
 		}
 	}
-	if !strings.Contains(strings.Join(colored, ""), "\x1b[") {
-		t.Fatal("colored render contains no ANSI sequences")
+	for _, test := range []struct {
+		row  int
+		role theme.Role
+		text string
+	}{
+		{1, theme.RoleAccent, "▶"},
+		{3, theme.RoleSuccess, "✓"},
+		{3, theme.RoleAccent, "▶"},
+		{3, theme.RoleNeutral2, "○"},
+		{5, theme.RoleNeutral2, plain[5]},
+		{6, theme.RoleAccent, "LIVE OUTPUT"},
+	} {
+		if want := palette.Paint(test.role, test.text); !strings.Contains(colored[test.row], want) {
+			t.Errorf("row %d = %q, missing shared theme %q", test.row, colored[test.row], want)
+		}
 	}
 }
 
 func TestRenderAlwaysReturnsFixedLineCount(t *testing.T) {
 	for _, width := range []int{-1, 0, 1, 2, 3, 20, 60} {
-		got := Render(State{}, width, false)
+		got := Render(State{}, width, theme.Palette{})
 		if len(got) != LineCount {
 			t.Fatalf("Render(width %d) returned %d lines, want %d", width, len(got), LineCount)
 		}

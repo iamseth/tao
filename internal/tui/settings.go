@@ -9,6 +9,7 @@ import (
 
 	"github.com/iamseth/tao/internal/monitor/rowlabel"
 	"github.com/iamseth/tao/internal/term/cells"
+	"github.com/iamseth/tao/internal/theme"
 )
 
 // SettingsSnapshot is the read-only projection rendered by the Settings tab.
@@ -43,7 +44,7 @@ type settingsOverride struct {
 	name       string
 	value      string
 	source     string
-	sourceRole Role
+	sourceRole theme.Role
 	warning    string
 }
 
@@ -78,7 +79,7 @@ func renderSettingsPage(model Model) ([]string, int, tableViewportMetadata) {
 	if len(model.SettingsSnapshot.RuntimeDefaults) == 0 {
 		offset := len(lines)
 		sectionWidth := dashboardSectionWidth(model, PageSettings, "RUNTIME DEFAULTS", 1)
-		lines = append(lines, "", sectionRule(model.Profile, RoleSettingsSection, "RUNTIME DEFAULTS", 0, sectionWidth), "  Runtime defaults unavailable.")
+		lines = append(lines, "", sectionRule(model.Palette(), theme.RoleSettingsSection, "RUNTIME DEFAULTS", 0, sectionWidth), "  Runtime defaults unavailable.")
 		metadata.sections = append(metadata.sections, tableViewportSection{headingLines: []int{offset + 1}, contentLines: []int{offset + 2}})
 	} else {
 		defaultLines, defaultSections := renderSettingsDefaultGroups(model)
@@ -112,14 +113,14 @@ func renderSettingsPage(model Model) ([]string, int, tableViewportMetadata) {
 	rootWidth := cells.Width("ROOT")
 	for _, repository := range model.SettingsSnapshot.Repositories {
 		nameWidth = max(nameWidth, cells.Width(settingsRepositoryName(repository)))
-		healthWidth = max(healthWidth, cells.Width(settingsRepositoryHealth(model.Profile, repository.Health)))
+		healthWidth = max(healthWidth, cells.Width(settingsRepositoryHealth(model.Palette(), repository.Health)))
 		pullRequestWidth = max(pullRequestWidth, cells.Width(pullRequestSetting(repository.PullRequest, model.SettingsSnapshot.InheritedPullRequest)))
 		rootWidth = max(rootWidth, cells.Width(settingsRepositoryRoot(repository.Root, model.SettingsSnapshot.DisplayHome)))
 	}
 	repositoryColumns := settingsRepositoryColumns(nameWidth, healthWidth, pullRequestWidth, rootWidth)
 	sectionWidth := dashboardSectionWidth(model, PageSettings, "REPOSITORY DEFAULTS", columnsWidth(repositoryColumns))
 	repositoryColumns = fitSettingsSectionColumns("REPOSITORY DEFAULTS", repositoryColumns, sectionWidth)
-	lines = append(lines, "", settingsSectionRuleColumns(model.Profile, RoleSettingsSection, "REPOSITORY DEFAULTS", repositoryColumns, sectionWidth))
+	lines = append(lines, "", settingsSectionRuleColumns(model.Palette(), theme.RoleSettingsSection, "REPOSITORY DEFAULTS", repositoryColumns, sectionWidth))
 	repositorySection := tableViewportSection{headingLines: []int{len(lines) - 1}}
 	if model.SettingsSnapshot.CollectionError != "" {
 		repositorySection.contentLines = append(repositorySection.contentLines, len(lines))
@@ -142,17 +143,17 @@ func renderSettingsPage(model Model) ([]string, int, tableViewportMetadata) {
 		for _, item := range repositoryColumns {
 			switch item.name {
 			case "REPOSITORY":
-				cells = append(cells, settingsStyledRepositoryName(model.Profile, repository))
+				cells = append(cells, settingsStyledRepositoryName(model.Palette(), repository))
 			case "HEALTH":
-				health := settingsRepositoryHealth(model.Profile, repository.Health)
+				health := settingsRepositoryHealth(model.Palette(), repository.Health)
 				if item.width < healthWidth {
-					health = settingsRepositoryHealthIndicator(model.Profile, repository.Health)
+					health = settingsRepositoryHealthIndicator(model.Palette(), repository.Health)
 				}
 				cells = append(cells, health)
 			case "PR":
 				cells = append(cells, pullRequestSetting(repository.PullRequest, model.SettingsSnapshot.InheritedPullRequest))
 			case "ROOT":
-				cells = append(cells, Paint(model.Profile, RoleNeutral2, settingsRepositoryRoot(repository.Root, model.SettingsSnapshot.DisplayHome)))
+				cells = append(cells, model.Palette().Paint(theme.RoleNeutral2, settingsRepositoryRoot(repository.Root, model.SettingsSnapshot.DisplayHome)))
 			}
 		}
 		repositorySection.contentLines = append(repositorySection.contentLines, len(lines))
@@ -177,7 +178,7 @@ func renderSettingsOverrides(model Model) ([]string, tableViewportSection) {
 			name:       singleLineDetail(row.Name),
 			value:      singleLineDetail(row.Value),
 			source:     "← " + rowlabel.DisplayValue(singleLineDetail(row.Source)),
-			sourceRole: RoleNeutral2,
+			sourceRole: theme.RoleNeutral2,
 			warning:    row.Warning,
 		})
 	}
@@ -197,7 +198,7 @@ func renderSettingsOverrides(model Model) ([]string, tableViewportSection) {
 			name:       "TAO_PULL_REQUEST",
 			value:      fmt.Sprintf("%t", *repository.PullRequest),
 			source:     "← " + name,
-			sourceRole: RepoColor(key),
+			sourceRole: theme.RepoColor(key),
 		})
 	}
 	if len(overrides) == 0 {
@@ -215,18 +216,18 @@ func renderSettingsOverrides(model Model) ([]string, tableViewportSection) {
 	columns := settingsRuntimeColumnsWithSource(nameWidth, valueWidth, sourceWidth)
 	sectionWidth := dashboardSectionWidth(model, PageSettings, "OVERRIDES", columnsWidth(columns))
 	columns = fitSettingsSectionColumns("OVERRIDES", columns, sectionWidth)
-	lines := []string{"", settingsSectionRuleColumns(model.Profile, RoleSettingsSection, "OVERRIDES", columns, sectionWidth)}
+	lines := []string{"", settingsSectionRuleColumns(model.Palette(), theme.RoleSettingsSection, "OVERRIDES", columns, sectionWidth)}
 	section := tableViewportSection{headingLines: []int{1}}
 	for _, row := range overrides {
 		section.contentLines = append(section.contentLines, len(lines))
-		source := Paint(model.Profile, row.sourceRole, row.source)
+		source := model.Palette().Paint(row.sourceRole, row.source)
 		cells := make([]string, 0, len(columns))
 		for _, item := range columns {
 			switch item.name {
 			case "NAME":
 				cells = append(cells, row.name)
 			case "VALUE":
-				cells = append(cells, Paint(model.Profile, RoleNeutral5, row.value))
+				cells = append(cells, model.Palette().Paint(theme.RoleNeutral5, row.value))
 			case "SOURCE":
 				cells = append(cells, source)
 			}
@@ -234,7 +235,7 @@ func renderSettingsOverrides(model Model) ([]string, tableViewportSection) {
 		lines = append(lines, "  "+joinRow(columns, cells, columnsWidth(columns)))
 		if row.warning != "" {
 			section.contentLines = append(section.contentLines, len(lines))
-			lines = append(lines, "    "+Paint(model.Profile, RoleWarn, "warning: "+singleLineDetail(row.warning)))
+			lines = append(lines, "    "+model.Palette().Paint(theme.RoleWarn, "warning: "+singleLineDetail(row.warning)))
 		}
 	}
 	return lines, section
@@ -264,7 +265,7 @@ func renderSettingsDefaultGroups(model Model) ([]string, []tableViewportSection)
 		if contentWidth >= pairWidth*2+4 {
 			columns = 2
 		}
-		lines = append(lines, "", settingsDefaultGroupRule(model.Profile, title, sectionWidth))
+		lines = append(lines, "", settingsDefaultGroupRule(model.Palette(), title, sectionWidth))
 		section := tableViewportSection{headingLines: []int{len(lines) - 1}}
 		for index := 0; index < len(group.rows); index += columns {
 			rowEnd := min(index+columns, len(group.rows))
@@ -274,7 +275,7 @@ func renderSettingsDefaultGroups(model Model) ([]string, []tableViewportSection)
 			}
 			rowCells := make([]string, 0, columns)
 			for _, row := range group.rows[index:rowEnd] {
-				rowCells = append(rowCells, settingsDefaultPair(model.Profile, row, labelWidth, true))
+				rowCells = append(rowCells, settingsDefaultPair(model.Palette(), row, labelWidth, true))
 			}
 			for len(rowCells) < columns {
 				rowCells = append(rowCells, "")
@@ -286,9 +287,9 @@ func renderSettingsDefaultGroups(model Model) ([]string, []tableViewportSection)
 			lines = append(lines, "  "+strings.Join(rowCells, "    "))
 
 			if columns == 1 && rowEnd == index+1 && group.rows[index].Warning != "" && settingsDefaultPairWidth(group.rows[index], labelWidth) > cellWidth {
-				lines[len(lines)-1] = "  " + cells.Pad(cells.Truncate(settingsDefaultPair(model.Profile, group.rows[index], labelWidth, false), cellWidth), cellWidth)
+				lines[len(lines)-1] = "  " + cells.Pad(cells.Truncate(settingsDefaultPair(model.Palette(), group.rows[index], labelWidth, false), cellWidth), cellWidth)
 				section.contentLines = append(section.contentLines, len(lines))
-				lines = append(lines, "    "+Paint(model.Profile, RoleWarn, "warning: "+singleLineDetail(group.rows[index].Warning)))
+				lines = append(lines, "    "+model.Palette().Paint(theme.RoleWarn, "warning: "+singleLineDetail(group.rows[index].Warning)))
 			}
 		}
 		sections = append(sections, section)
@@ -335,7 +336,7 @@ func renderSettingsBudgets(model Model) ([]string, tableViewportSection) {
 	if len(columns) > 2 {
 		planWidth = columns[2].width
 	}
-	lines := []string{"", settingsSectionRuleColumns(model.Profile, RoleSettingsSection, "BUDGET WARNINGS", columns, sectionWidth)}
+	lines := []string{"", settingsSectionRuleColumns(model.Palette(), theme.RoleSettingsSection, "BUDGET WARNINGS", columns, sectionWidth)}
 	section := tableViewportSection{headingLines: []int{1}}
 	for _, metric := range metrics {
 		sliceRow, sliceOK := byName[metric.sliceName]
@@ -344,8 +345,8 @@ func renderSettingsBudgets(model Model) ([]string, tableViewportSection) {
 		planValue := settingsBudgetValue(planRow, metric.cost)
 		cells := []string{
 			metric.label,
-			settingsRightAlignedValue(model.Profile, sliceValue, sliceWidth),
-			settingsRightAlignedValue(model.Profile, planValue, planWidth),
+			settingsRightAlignedValue(model.Palette(), sliceValue, sliceWidth),
+			settingsRightAlignedValue(model.Palette(), planValue, planWidth),
 		}
 		section.contentLines = append(section.contentLines, len(lines))
 		lines = append(lines, "  "+joinRow(columns, cells, columnsWidth(columns)))
@@ -356,7 +357,7 @@ func renderSettingsBudgets(model Model) ([]string, tableViewportSection) {
 		}{{"slice", sliceRow, sliceOK}, {"plan", planRow, planOK}} {
 			if warning.ok && warning.row.Warning != "" {
 				section.contentLines = append(section.contentLines, len(lines))
-				lines = append(lines, "    "+Paint(model.Profile, RoleWarn, warning.scope+" warning: "+singleLineDetail(warning.row.Warning)))
+				lines = append(lines, "    "+model.Palette().Paint(theme.RoleWarn, warning.scope+" warning: "+singleLineDetail(warning.row.Warning)))
 			}
 		}
 	}
@@ -383,20 +384,20 @@ func settingsBudgetValue(row SettingsRuntimeDefault, cost bool) string {
 	return sign + digits
 }
 
-func settingsRightAlignedValue(profile Profile, value string, width int) string {
+func settingsRightAlignedValue(palette theme.Palette, value string, width int) string {
 	value = singleLineDetail(value)
-	return Paint(profile, RoleNeutral4, strings.Repeat(" ", max(width-cells.Width(value), 0))+value)
+	return palette.Paint(theme.RoleNeutral4, strings.Repeat(" ", max(width-cells.Width(value), 0))+value)
 }
 
-func settingsDefaultGroupRule(profile Profile, title string, width int) string {
+func settingsDefaultGroupRule(palette theme.Palette, title string, width int) string {
 	if width <= 0 {
 		return ""
 	}
 	lead := "▌ " + title + " "
 	if cells.Width(lead) >= width {
-		return cells.Truncate(Paint(profile, RoleSettingsSection, lead), width)
+		return cells.Truncate(palette.Paint(theme.RoleSettingsSection, lead), width)
 	}
-	return Paint(profile, RoleSettingsSection, lead) + Paint(profile, RoleNeutral0, strings.Repeat("─", width-cells.Width(lead)))
+	return palette.Paint(theme.RoleSettingsSection, lead) + palette.Paint(theme.RoleNeutral0, strings.Repeat("─", width-cells.Width(lead)))
 }
 
 func settingsDefaultGroups(rows []SettingsRuntimeDefault) []settingsDefaultGroup {
@@ -446,7 +447,7 @@ func settingsDefaultGroupForName(name string) (string, bool) {
 		return settingsGroupWorkflow, true
 	case "TAO_UPDATE", "TAO_DANGEROUSLY_SKIP_PERMISSIONS", "TAO_MAX_SLICE_OUTPUT_TOKENS", "TAO_MAX_SLICE_COST":
 		return settingsGroupSafety, true
-	case "TAO_MERGE_VERIFY_COMMAND", "TAO_AGGREGATE_REVIEW_CONVERGENCE_WINDOW", "TAO_APPROVED_BY", "TAO_RUN_HEADER":
+	case "TAO_MERGE_VERIFY_COMMAND", "TAO_AGGREGATE_REVIEW_CONVERGENCE_WINDOW", "TAO_APPROVED_BY", "TAO_RUN_HEADER", "TAO_THEME":
 		return settingsGroupOther, true
 	default:
 		return settingsGroupOther, false
@@ -484,19 +485,19 @@ func settingsDefaultPairWidth(row SettingsRuntimeDefault, labelWidth int) int {
 	return width
 }
 
-func settingsDefaultPair(profile Profile, row SettingsRuntimeDefault, labelWidth int, includeWarning bool) string {
-	label := Paint(profile, RoleNeutral2, cells.Pad(humanizeSettingsName(row.Name), labelWidth))
+func settingsDefaultPair(palette theme.Palette, row SettingsRuntimeDefault, labelWidth int, includeWarning bool) string {
+	label := palette.Paint(theme.RoleNeutral2, cells.Pad(humanizeSettingsName(row.Name), labelWidth))
 	value := singleLineDetail(row.Value)
-	role := RoleNeutral4
+	role := theme.RoleNeutral4
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "true", "on":
-		role = RoleSuccess
+		role = theme.RoleSuccess
 	case "false", "off", "none":
-		role = RoleNeutral2
+		role = theme.RoleNeutral2
 	}
-	pair := label + " " + Paint(profile, role, value)
+	pair := label + " " + palette.Paint(role, value)
 	if includeWarning && row.Warning != "" {
-		pair += "  " + Paint(profile, RoleWarn, "warning: "+singleLineDetail(row.Warning))
+		pair += "  " + palette.Paint(theme.RoleWarn, "warning: "+singleLineDetail(row.Warning))
 	}
 	return pair
 }
@@ -529,33 +530,33 @@ func fitSettingsSectionColumns(title string, columns []column, width int) []colu
 	return fitColumns(columns, width-2) // The rule marker and row cursor occupy two cells.
 }
 
-func settingsSectionRuleColumns(profile Profile, role Role, title string, columns []column, width int) string {
+func settingsSectionRuleColumns(palette theme.Palette, role theme.Role, title string, columns []column, width int) string {
 	if width <= 0 || len(columns) == 0 {
 		return ""
 	}
-	line := Paint(profile, role, "▌ "+title+" ")
+	line := palette.Paint(role, "▌ "+title+" ")
 	position := cells.Width("▌ " + title + " ")
 	for index := 1; index < len(columns); index++ {
 		target := 2 + columnsWidth(columns[:index]) + columnGapWidth
-		line += settingsSectionRuleGap(profile, target-position, true)
-		line += Paint(profile, role, columns[index].name)
+		line += settingsSectionRuleGap(palette, target-position, true)
+		line += palette.Paint(role, columns[index].name)
 		position = target + cells.Width(columns[index].name)
 	}
-	line += settingsSectionRuleGap(profile, width-position, false)
+	line += settingsSectionRuleGap(palette, width-position, false)
 	return line
 }
 
-func settingsSectionRuleGap(profile Profile, width int, beforeHeader bool) string {
+func settingsSectionRuleGap(palette theme.Palette, width int, beforeHeader bool) string {
 	if width <= 0 {
 		return ""
 	}
 	if width == 1 {
-		return Paint(profile, RoleNeutral0, " ")
+		return palette.Paint(theme.RoleNeutral0, " ")
 	}
 	if beforeHeader {
 		return strings.Repeat(" ", width)
 	}
-	return Paint(profile, RoleNeutral0, " "+strings.Repeat("─", width-1))
+	return palette.Paint(theme.RoleNeutral0, " "+strings.Repeat("─", width-1))
 }
 
 func settingsRepositoryName(repository RepositorySetting) string {
@@ -566,33 +567,33 @@ func settingsRepositoryName(repository RepositorySetting) string {
 	return rowlabel.DisplayValue(singleLineDetail(repository.ID))
 }
 
-func settingsStyledRepositoryName(profile Profile, repository RepositorySetting) string {
+func settingsStyledRepositoryName(palette theme.Palette, repository RepositorySetting) string {
 	key := strings.TrimSpace(repository.ID)
 	if key == "" {
 		key = strings.TrimSpace(repository.Name)
 	}
-	return Paint(profile, RepoColor(key), settingsRepositoryName(repository))
+	return palette.Paint(theme.RepoColor(key), settingsRepositoryName(repository))
 }
 
-func settingsRepositoryHealth(profile Profile, health string) string {
+func settingsRepositoryHealth(palette theme.Palette, health string) string {
 	status := strings.TrimSpace(singleLineDetail(health))
 	role := settingsRepositoryHealthRole(status)
 	if status == "" {
 		status = "unknown"
 	}
 	text := strings.ReplaceAll(status, "_", " ")
-	return Paint(profile, role, "●") + " " + text
+	return palette.Paint(role, "●") + " " + text
 }
 
-func settingsRepositoryHealthIndicator(profile Profile, health string) string {
-	return Paint(profile, settingsRepositoryHealthRole(strings.TrimSpace(singleLineDetail(health))), "●")
+func settingsRepositoryHealthIndicator(palette theme.Palette, health string) string {
+	return palette.Paint(settingsRepositoryHealthRole(strings.TrimSpace(singleLineDetail(health))), "●")
 }
 
-func settingsRepositoryHealthRole(status string) Role {
+func settingsRepositoryHealthRole(status string) theme.Role {
 	if status == "ok" {
-		return RoleSuccess
+		return theme.RoleSuccess
 	}
-	return RoleWarn
+	return theme.RoleWarn
 }
 
 func settingsRepositoryRoot(root, displayHome string) string {

@@ -6,6 +6,7 @@ import (
 
 	"github.com/iamseth/tao/internal/monitor/rowlabel"
 	"github.com/iamseth/tao/internal/term/cells"
+	"github.com/iamseth/tao/internal/theme"
 )
 
 type frameSummary struct {
@@ -16,7 +17,7 @@ type frameSummary struct {
 }
 
 func renderFrame(model Model, page PageID) []string {
-	strip, _ := renderTabStrip(model.Profile, page)
+	strip, _ := renderTabStrip(model.Palette(), page)
 	width := dashboardFrameWidth(model, page)
 	contextWidth := width - cells.Width(strip) - 2
 	context := renderGlobalContextWidth(model, contextWidth)
@@ -37,7 +38,7 @@ func dashboardFrameWidth(model Model, page PageID) int {
 	if model.Width > 0 {
 		return model.Width
 	}
-	strip, _ := renderTabStrip(model.Profile, page)
+	strip, _ := renderTabStrip(model.Palette(), page)
 	context := renderGlobalContext(model)
 	return cells.Width(strip) + 2 + cells.Width(context)
 }
@@ -52,8 +53,8 @@ func dashboardSectionWidth(model Model, page PageID, title string, tailWidth int
 	return max(dashboardFrameWidth(model, page), minimum)
 }
 
-func dashboardSectionRuleColumns(profile Profile, role Role, title string, columns []column, width int) string {
-	return sectionRuleColumns(profile, role, title, fitDashboardSectionColumns(title, columns, width), width)
+func dashboardSectionRuleColumns(palette theme.Palette, role theme.Role, title string, columns []column, width int) string {
+	return sectionRuleColumns(palette, role, title, fitDashboardSectionColumns(title, columns, width), width)
 }
 
 func fitDashboardSectionColumns(title string, columns []column, width int) []column {
@@ -86,25 +87,25 @@ func fitDashboardSectionColumns(title string, columns []column, width int) []col
 	return fitted
 }
 
-func renderTabStrip(profile Profile, page PageID) (string, int) {
+func renderTabStrip(palette theme.Palette, page PageID) (string, int) {
 	page = normalizePage(page)
 	var strip strings.Builder
-	strip.WriteString(Paint(profile, RoleNeutral5, "tao"))
+	strip.WriteString(palette.Paint(theme.RoleNeutral5, "tao"))
 	strip.WriteString(" ")
-	strip.WriteString(Paint(profile, RoleNeutral1, "│"))
+	strip.WriteString(palette.Paint(theme.RoleNeutral1, "│"))
 	activeEnd := cells.Width(strip.String())
 	for index, tab := range dashboardTabs {
 		if index > 0 {
 			strip.WriteString(" ")
 		}
-		role := RoleNeutral2
+		role := theme.RoleNeutral2
 		if tab.ID == page {
-			role = RoleAccent
-			strip.WriteString(Paint(profile, RoleAccent, "▸"))
+			role = theme.RoleAccent
+			strip.WriteString(palette.Paint(theme.RoleAccent, "▸"))
 		} else {
 			strip.WriteString(" ")
 		}
-		strip.WriteString(Paint(profile, role, tab.Label))
+		strip.WriteString(palette.Paint(role, tab.Label))
 		if tab.ID == page {
 			activeEnd = cells.Width(strip.String())
 		}
@@ -127,11 +128,11 @@ func renderGlobalContextWidth(model Model, maxWidth int) string {
 		}
 		repository = truncateFrameRepository(repository, repositoryWidth)
 	}
-	healthRole := RoleSuccess
+	healthRole := theme.RoleSuccess
 	if frameNeedsAttention(model) {
-		healthRole = RoleWarn
+		healthRole = theme.RoleWarn
 	}
-	return Paint(model.Profile, RoleNeutral2, repository+suffix) + Paint(model.Profile, healthRole, "●")
+	return model.Palette().Paint(theme.RoleNeutral2, repository+suffix) + model.Palette().Paint(healthRole, "●")
 }
 
 func filterRepositoryLabel(model Model) string {
@@ -178,8 +179,8 @@ func frameNeedsAttention(model Model) bool {
 	return false
 }
 
-func renderFrameSummary(profile Profile, summary frameSummary) string {
-	line := Paint(profile, RoleNeutral2, summary.primary)
+func renderFrameSummary(palette theme.Palette, summary frameSummary) string {
+	line := palette.Paint(theme.RoleNeutral2, summary.primary)
 	if summary.attentionCount > 0 {
 		noun := summary.attentionNoun
 		if noun == "" {
@@ -187,10 +188,10 @@ func renderFrameSummary(profile Profile, summary frameSummary) string {
 		} else if summary.attentionCount == 1 {
 			noun = strings.TrimSuffix(noun, "s")
 		}
-		line += Paint(profile, RoleNeutral2, "  ·  ") + Paint(profile, RoleWarn, fmt.Sprintf("%d %s", summary.attentionCount, noun))
+		line += palette.Paint(theme.RoleNeutral2, "  ·  ") + palette.Paint(theme.RoleWarn, fmt.Sprintf("%d %s", summary.attentionCount, noun))
 	}
 	if summary.extra != "" {
-		line += Paint(profile, RoleNeutral2, "  ·  "+summary.extra)
+		line += palette.Paint(theme.RoleNeutral2, "  ·  "+summary.extra)
 	}
 	return line
 }

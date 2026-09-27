@@ -265,6 +265,7 @@ data location or execution policy:
 
 ```sh
 TAO_AGENT=pi|claude
+TAO_THEME=tokyonight|gruvbox            # shared CLI/TUI palette; default: tokyonight
 TAO_MODEL=provider/model                # optional shared base
 TAO_RUN_MODEL=provider/model            # implementation and rework slices
 TAO_REVIEW_MODEL=provider/model         # plan review and proposal correction
@@ -276,6 +277,8 @@ TAO_DATA_HOME=/path/to/tao-data
 TAO_COMMIT_POLICY=slice|none
 TAO_EXECUTION_MODE=isolated|current
 ```
+
+Unknown `TAO_THEME` values fall back to `tokyonight` with a warning in `tao status`.
 
 Pi is the built-in default agent, `slice` is the default commit policy, and
 `isolated` is the default execution mode. Historical `plan` commit-policy

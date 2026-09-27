@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/iamseth/tao/internal/term/cells"
+	"github.com/iamseth/tao/internal/theme"
 )
 
 type shortcut struct {
@@ -85,28 +86,28 @@ func sliceDetailShortcuts() []shortcut {
 	}
 }
 
-func overlayShortcutLegend(background []string, page PageID, width, height int, profile Profile) []string {
-	return overlayShortcutTable(background, shortcutsForPage(page), width, height, profile)
+func overlayShortcutLegend(background []string, page PageID, width, height int, palette theme.Palette) []string {
+	return overlayShortcutTable(background, shortcutsForPage(page), width, height, palette)
 }
 
-func overlayPlanDetailShortcuts(background []string, width, height int, useColor bool) []string {
-	return overlayShortcutTable(background, planDetailShortcuts(), width, height, profileForEnabledColor(useColor))
+func overlayPlanDetailShortcuts(background []string, width, height int, palette theme.Palette) []string {
+	return overlayShortcutTable(background, planDetailShortcuts(), width, height, palette)
 }
 
-func overlaySliceDetailShortcuts(background []string, width, height int, useColor bool) []string {
-	return overlayShortcutTable(background, sliceDetailShortcuts(), width, height, profileForEnabledColor(useColor))
+func overlaySliceDetailShortcuts(background []string, width, height int, palette theme.Palette) []string {
+	return overlayShortcutTable(background, sliceDetailShortcuts(), width, height, palette)
 }
 
-func profileForEnabledColor(enabled bool) Profile {
+func profileForEnabledColor(enabled bool) theme.Profile {
 	if enabled {
-		return ProfileANSI16
+		return theme.ProfileANSI16
 	}
-	return ProfileNone
+	return theme.ProfileNone
 }
 
-func overlayShortcutTable(background []string, entries []shortcut, width, height int, profile Profile) []string {
+func overlayShortcutTable(background []string, entries []shortcut, width, height int, palette theme.Palette) []string {
 	width, height = overlayDimensions(background, width, height)
-	return overlayBox(background, renderShortcutLegend(entries, width, height, profile), width, height)
+	return overlayBox(background, renderShortcutLegend(entries, width, height, palette), width, height)
 }
 
 func overlayDimensions(background []string, width, height int) (int, int) {
@@ -149,7 +150,7 @@ func overlayBox(background []string, box []string, width, height int) []string {
 	return background
 }
 
-func renderShortcutLegend(entries []shortcut, maxWidth, maxHeight int, profile Profile) []string {
+func renderShortcutLegend(entries []shortcut, maxWidth, maxHeight int, palette theme.Palette) []string {
 	if maxWidth <= 0 || maxHeight <= 0 {
 		return nil
 	}
@@ -182,25 +183,25 @@ func renderShortcutLegend(entries []shortcut, maxWidth, maxHeight int, profile P
 
 	horizontal := strings.Repeat("─", tableWidth-2)
 	title := cells.Truncate("Keyboard shortcuts", tableWidth-4)
-	title = Paint(profile, RoleNeutral5, cells.Pad(title, tableWidth-4))
+	title = palette.Paint(theme.RoleNeutral5, cells.Pad(title, tableWidth-4))
 	lines := []string{
 		"┌" + horizontal + "┐",
 		"│ " + title + " │",
 		"├" + strings.Repeat("─", keyWidth+2) + "┬" + strings.Repeat("─", actionWidth+2) + "┤",
-		shortcutTableRow("KEY", "ACTION", keyWidth, actionWidth, profile),
+		shortcutTableRow("KEY", "ACTION", keyWidth, actionWidth, palette),
 		"├" + strings.Repeat("─", keyWidth+2) + "┼" + strings.Repeat("─", actionWidth+2) + "┤",
 	}
 	for _, entry := range entries {
-		lines = append(lines, shortcutTableRow(entry.key, entry.action, keyWidth, actionWidth, ProfileNone))
+		lines = append(lines, shortcutTableRow(entry.key, entry.action, keyWidth, actionWidth, theme.Palette{}))
 	}
 	lines = append(lines, "└"+strings.Repeat("─", keyWidth+2)+"┴"+strings.Repeat("─", actionWidth+2)+"┘")
 	return lines
 }
 
-func shortcutTableRow(key, action string, keyWidth, actionWidth int, profile Profile) string {
+func shortcutTableRow(key, action string, keyWidth, actionWidth int, palette theme.Palette) string {
 	key = cells.Truncate(key, keyWidth)
 	action = cells.Truncate(action, actionWidth)
-	key = Paint(profile, RoleNeutral5, cells.Pad(key, keyWidth))
-	action = Paint(profile, RoleNeutral5, cells.Pad(action, actionWidth))
+	key = palette.Paint(theme.RoleNeutral5, cells.Pad(key, keyWidth))
+	action = palette.Paint(theme.RoleNeutral5, cells.Pad(action, actionWidth))
 	return "│ " + key + " │ " + action + " │"
 }

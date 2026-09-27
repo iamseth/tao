@@ -51,10 +51,11 @@ func (a App) list(ctx context.Context, repo planLister, args []string) error {
 		summaries = summaries[:limit]
 	}
 
-	return renderPlanList(a.Out, summaries, a.now())
+	return a.renderPlanList(a.Out, summaries, a.now())
 }
 
-func renderPlanList(out io.Writer, summaries []plan.PlanSummary, now time.Time) error {
+func (a App) renderPlanList(out io.Writer, summaries []plan.PlanSummary, now time.Time) error {
+	palette := a.outputPalette(out)
 	headers := []string{"STATUS", "PLAN ID", "PLAN", "DONE", "UPDATED", "ABANDONED", "REASON"}
 	rows := make([][]string, 0, len(summaries))
 	for _, summary := range summaries {
@@ -75,10 +76,10 @@ func renderPlanList(out io.Writer, summaries []plan.PlanSummary, now time.Time) 
 	for _, summary := range summaries {
 		row := planListRow(summary, now)
 		if err := writef(out, "%s  %s  %s  %s  %s  %s  %s\n",
-			colorStatus(cells.Pad(row[0], widths[0]), summary.Status),
+			colorStatus(palette, cells.Pad(row[0], widths[0]), summary.Status),
 			cells.Pad(row[1], widths[1]),
 			cells.Pad(row[2], widths[2]),
-			colorDone(cells.Pad(row[3], widths[3]), summary.CompletedCount, summary.TotalCount),
+			colorDone(palette, cells.Pad(row[3], widths[3]), summary.CompletedCount, summary.TotalCount),
 			cells.Pad(row[4], widths[4]),
 			cells.Pad(row[5], widths[5]),
 			cells.Pad(row[6], widths[6]),

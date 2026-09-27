@@ -11,6 +11,7 @@ import (
 	"github.com/iamseth/tao/internal/monitor/rowlabel"
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/term/cells"
+	"github.com/iamseth/tao/internal/theme"
 )
 
 const (
@@ -99,7 +100,7 @@ func renderNotesPage(snapshot note.Snapshot, selected int, now time.Time, model 
 	selectedLine = -1
 	if len(items) == 0 {
 		sectionWidth := dashboardSectionWidth(model, PageNotes, "OPEN NOTES", 0)
-		lines = append(lines, "", sectionTitleRule(model.Profile, RoleAccent, "OPEN NOTES", sectionWidth), "  Notes page. No open notes. Press n to create a note.")
+		lines = append(lines, "", sectionTitleRule(model.Palette(), theme.RoleAccent, "OPEN NOTES", sectionWidth), "  Notes page. No open notes. Press n to create a note.")
 		metadata.sections = append(metadata.sections, tableViewportSection{headingLines: []int{1}, contentLines: []int{2}})
 	} else {
 		widths := measureNoteTable(items, now)
@@ -107,7 +108,7 @@ func renderNotesPage(snapshot note.Snapshot, selected int, now time.Time, model 
 		paneWidth := noteTablePaneWidth(model.Width, columns)
 		for _, bucket := range noteTierBuckets(items) {
 			sectionWidth := dashboardSectionWidth(model, PageNotes, bucket.title, 0)
-			lines = append(lines, "", sectionTitleRule(model.Profile, RoleAccent, bucket.title, sectionWidth), renderNoteHeader(columns, paneWidth))
+			lines = append(lines, "", sectionTitleRule(model.Palette(), theme.RoleAccent, bucket.title, sectionWidth), renderNoteHeader(columns, paneWidth))
 			section := tableViewportSection{headingLines: []int{len(lines) - 2, len(lines) - 1}}
 			for _, indexed := range bucket.items {
 				isSelected := indexed.index == selected
@@ -115,14 +116,14 @@ func renderNotesPage(snapshot note.Snapshot, selected int, now time.Time, model 
 					selectedLine = len(lines)
 				}
 				section.contentLines = append(section.contentLines, len(lines))
-				lines = append(lines, renderNoteRow(indexed.item, now, columns, paneWidth, isSelected, model.Profile))
+				lines = append(lines, renderNoteRow(indexed.item, now, columns, paneWidth, isSelected, model.Palette()))
 			}
 			metadata.sections = append(metadata.sections, section)
 		}
 	}
 	if len(warnings) > 0 {
 		sectionWidth := dashboardSectionWidth(model, PageNotes, "Warnings", 0)
-		lines = append(lines, "", sectionTitleRule(model.Profile, RoleWarn, "Warnings", sectionWidth))
+		lines = append(lines, "", sectionTitleRule(model.Palette(), theme.RoleWarn, "Warnings", sectionWidth))
 		section := tableViewportSection{headingLines: []int{len(lines) - 1}}
 		for _, warning := range warnings {
 			repository := boundedNoteValue(warning.RepositoryName, maxNoteRepositoryCells)
@@ -240,7 +241,7 @@ func renderNoteHeader(columns []column, paneWidth int) string {
 	return "  " + joinRow(columns, headers, paneWidth)
 }
 
-func renderNoteRow(item note.CatalogNote, now time.Time, columns []column, paneWidth int, selected bool, profile Profile) string {
+func renderNoteRow(item note.CatalogNote, now time.Time, columns []column, paneWidth int, selected bool, palette theme.Palette) string {
 	values := noteValues(item, now)
 	rowCells := make([]string, 0, len(columns))
 	for _, item := range columns {
@@ -248,9 +249,9 @@ func renderNoteRow(item note.CatalogNote, now time.Time, columns []column, paneW
 		case "REPO":
 			rowCells = append(rowCells, values.repository)
 		case "PREVIEW":
-			rowCells = append(rowCells, Paint(profile, RoleNeutral4, values.preview))
+			rowCells = append(rowCells, palette.Paint(theme.RoleNeutral4, values.preview))
 		case "TAGS":
-			rowCells = append(rowCells, Paint(profile, RoleAccent, values.tags))
+			rowCells = append(rowCells, palette.Paint(theme.RoleAccent, values.tags))
 		case "CREATED":
 			rowCells = append(rowCells, values.created)
 		case "UPDATED":
@@ -262,7 +263,7 @@ func renderNoteRow(item note.CatalogNote, now time.Time, columns []column, paneW
 		line = cells.Pad(line, paneWidth+cells.Width("  "))
 	}
 	if selected {
-		line = SelectRow(profile, line)
+		line = palette.SelectRow(line)
 	}
 	return line
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/taodata"
+	"github.com/iamseth/tao/internal/theme"
 )
 
 type monitorCollectorStub struct {
@@ -311,21 +313,22 @@ func TestMonitorCombinedSliceColorPreservesPlainAlignment(t *testing.T) {
 		{PlanID: "partial", OriginalCompletedCount: 3, OriginalTotalCount: 3, ReworkCompletedCount: 1, ReworkTotalCount: 2},
 	}}
 	var plain, colored bytes.Buffer
-	if err := renderMonitorSnapshot(&plain, snapshot, false); err != nil {
+	palette := theme.Default().Palette(theme.ProfileANSI16)
+	if err := renderMonitorSnapshot(&plain, snapshot, theme.Palette{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := renderMonitorSnapshot(&colored, snapshot, true); err != nil {
+	if err := renderMonitorSnapshot(&colored, snapshot, palette); err != nil {
 		t.Fatal(err)
 	}
 	if got := stripANSI(colored.String()); got != plain.String() {
 		t.Fatalf("ANSI changed monitor alignment\ncolored stripped:\n%s\nplain:\n%s", got, plain.String())
 	}
 	completeLine := lineContaining(colored.String(), "complete")
-	if !strings.Contains(completeLine, "\x1b[32m5/3+2") {
+	if !strings.Contains(completeLine, palette.Paint(theme.RoleSuccess, "5/3+2 ")) {
 		t.Fatalf("combined complete progress was not green: %q", completeLine)
 	}
 	partialLine := lineContaining(colored.String(), "partial")
-	if !strings.Contains(partialLine, "\x1b[36m4/3+2") {
+	if !strings.Contains(partialLine, palette.Paint(theme.RoleAccent, "4/3+2 ")) {
 		t.Fatalf("combined partial progress was not cyan: %q", partialLine)
 	}
 }
@@ -347,10 +350,10 @@ func TestMonitorUnicodeColumnsMatchExactPlainAndColoredOutput(t *testing.T) {
 		"warning: 倉庫名前長/unicode: this warning is intentionally wider than the table\n"
 
 	var plain, colored bytes.Buffer
-	if err := renderMonitorSnapshot(&plain, snapshot, false); err != nil {
+	if err := renderMonitorSnapshot(&plain, snapshot, theme.Palette{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := renderMonitorSnapshot(&colored, snapshot, true); err != nil {
+	if err := renderMonitorSnapshot(&colored, snapshot, theme.Default().Palette(theme.ProfileTrueColor)); err != nil {
 		t.Fatal(err)
 	}
 	if got := plain.String(); got != want {
@@ -419,6 +422,40 @@ func TestMonitorInteractiveRefreshUsesIntervalRedrawsAndCancels(t *testing.T) {
 	}
 }
 
+func TestMonitorFollowKeepsInvocationPalette(t *testing.T) {
+	t.Setenv("TERM", "xterm")
+	t.Setenv("COLORTERM", "")
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("CLICOLOR", "")
+	t.Setenv("CLICOLOR_FORCE", "")
+	snapshot := monitor.Snapshot{Rows: []monitor.Row{{PlanID: "plan", Status: plan.StatusInProgress, Liveness: monitor.LivenessLive}}}
+	collector := &monitorCollectorStub{snapshots: []monitor.Snapshot{snapshot, snapshot}, called: make(chan int, 2)}
+	ticker := &monitorTickerStub{ch: make(chan time.Time), stopped: make(chan struct{})}
+	var out testTerminalBuffer
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	app := App{
+		Out: &out, Err: &out, MonitorCollector: collector,
+		MonitorTicker: func(time.Duration) MonitorTicker { return ticker },
+	}
+	done := make(chan error, 1)
+	go func() { done <- app.Run(ctx, []string{"monitor"}) }()
+	<-collector.called
+	t.Setenv("NO_COLOR", "1")
+	ticker.ch <- time.Now()
+	<-collector.called
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	palette := theme.Default().Palette(theme.ProfileANSI16)
+	for _, text := range []string{"LIVE", plan.StatusInProgress} {
+		if count := strings.Count(out.String(), palette.Paint(theme.RoleAccent, text)); count != 2 {
+			t.Fatalf("%q painted %d times, want both snapshots to keep initial palette: %q", text, count, out.String())
+		}
+	}
+}
+
 func TestMonitorInteractiveColorPolicy(t *testing.T) {
 	now := time.Date(2026, 7, 29, 6, 0, 0, 0, time.UTC)
 	snapshot := monitor.Snapshot{CollectedAt: now, Rows: []monitor.Row{{RepositoryName: "tao", PlanID: "plan", Status: plan.StatusInProgress, Liveness: monitor.LivenessLive}}}
@@ -442,7 +479,7 @@ func TestMonitorInteractiveColorPolicy(t *testing.T) {
 			t.Setenv("CLICOLOR", test.cliColor)
 			t.Setenv("CLICOLOR_FORCE", test.force)
 			var out bytes.Buffer
-			if err := renderMonitorSnapshot(&out, snapshot, monitorColorEnabled(test.terminal)); err != nil {
+			if err := renderMonitorSnapshot(&out, snapshot, theme.Default().Palette(theme.DetectProfile(test.terminal, os.Getenv))); err != nil {
 				t.Fatal(err)
 			}
 			got := strings.Contains(out.String(), "\x1b[")

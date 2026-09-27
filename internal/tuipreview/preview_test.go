@@ -16,6 +16,7 @@ import (
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+	"github.com/iamseth/tao/internal/theme"
 )
 
 func TestScenarioCatalogIsStableDiscoverableAndTyped(t *testing.T) {
@@ -491,6 +492,35 @@ func TestDetailRepositoryLookupLogsAndCancellation(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("FollowLog did not stop after cancellation")
+	}
+}
+
+func TestPlansPreviewUsesSelectedTheme(t *testing.T) {
+	scenario, _ := Lookup(ScenarioMixed)
+	gruvbox, ok := theme.Lookup("gruvbox")
+	if !ok {
+		t.Fatal("gruvbox is not available")
+	}
+	for _, color := range []bool{true, false} {
+		options := RenderOptions{View: ViewPlans, Width: 120, Height: 30, Plain: true, Color: color, Theme: theme.Default()}
+		defaultFrame, err := Render(scenario, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		options.Theme = gruvbox
+		gruvboxFrame, err := Render(scenario, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if color && defaultFrame == gruvboxFrame {
+			t.Fatal("colored plans frames are identical under different themes")
+		}
+		if stripCSI(defaultFrame) != stripCSI(gruvboxFrame) {
+			t.Fatal("theme selection changed visible text")
+		}
+		if !color && defaultFrame != gruvboxFrame {
+			t.Fatal("theme selection changed non-color output")
+		}
 	}
 }
 

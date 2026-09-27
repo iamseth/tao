@@ -230,7 +230,7 @@ func (a App) executeResolvedRun(ctx context.Context, repo planRunRepository, inp
 	runCtx, stopSignals := newCommandSignalContext(ctx)
 	defer stopSignals()
 
-	runOut, headerReporter, closeHeader := installRunHeader(runCtx, a.Out, noRunHeader)
+	runOut, headerReporter, closeHeader := a.installRunHeader(runCtx, a.Out, noRunHeader)
 	defer closeHeader()
 	service := run.NewService(repo, runOut, run.Options{
 		ExecutionConfig: run.ExecutionConfig{

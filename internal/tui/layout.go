@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/iamseth/tao/internal/term/cells"
+	"github.com/iamseth/tao/internal/theme"
 )
 
 const (
@@ -165,29 +166,29 @@ func resolveColumns(columns []column, paneWidth int) []column {
 }
 
 // sectionRule renders a section title and count into a full-width rule.
-func sectionRule(profile Profile, role Role, title string, count, width int) string {
-	return sectionRuleTail(profile, role, title, fmt.Sprintf("%d", count), width)
+func sectionRule(palette theme.Palette, role theme.Role, title string, count, width int) string {
+	return sectionRuleTail(palette, role, title, fmt.Sprintf("%d", count), width)
 }
 
 // sectionTitleRule renders a section title without a trailing count or label.
-func sectionTitleRule(profile Profile, role Role, title string, width int) string {
+func sectionTitleRule(palette theme.Palette, role theme.Role, title string, width int) string {
 	if width <= 0 {
 		return ""
 	}
 	lead := "▌ " + title + " "
-	return Paint(profile, role, lead) + Paint(profile, RoleNeutral0, strings.Repeat("─", max(width-cells.Width(lead), 0)))
+	return palette.Paint(role, lead) + palette.Paint(theme.RoleNeutral0, strings.Repeat("─", max(width-cells.Width(lead), 0)))
 }
 
 // sectionRuleColumns replaces the section count with aligned column headers.
-func sectionRuleColumns(profile Profile, role Role, title string, columns []column, width int) string {
+func sectionRuleColumns(palette theme.Palette, role theme.Role, title string, columns []column, width int) string {
 	headers := make([]string, len(columns))
 	for index, item := range columns {
 		headers[index] = item.name
 	}
-	return sectionRuleTail(profile, role, title, joinRow(columns, headers, columnsWidth(columns)), width)
+	return sectionRuleTail(palette, role, title, joinRow(columns, headers, columnsWidth(columns)), width)
 }
 
-func sectionRuleTail(profile Profile, role Role, title, tail string, width int) string {
+func sectionRuleTail(palette theme.Palette, role theme.Role, title, tail string, width int) string {
 	if width <= 0 {
 		return ""
 	}
@@ -195,13 +196,13 @@ func sectionRuleTail(profile Profile, role Role, title, tail string, width int) 
 	trailing := " " + tail + " "
 	fixedWidth := cells.Width(lead) + cells.Width(trailing) + 1
 	if fixedWidth > width {
-		return cells.Truncate(Paint(profile, role, lead+tail), width)
+		return cells.Truncate(palette.Paint(role, lead+tail), width)
 	}
 	middle := strings.Repeat("─", width-fixedWidth)
-	return Paint(profile, role, lead) +
-		Paint(profile, RoleNeutral0, middle) +
-		Paint(profile, role, trailing) +
-		Paint(profile, RoleNeutral0, "─")
+	return palette.Paint(role, lead) +
+		palette.Paint(theme.RoleNeutral0, middle) +
+		palette.Paint(role, trailing) +
+		palette.Paint(theme.RoleNeutral0, "─")
 }
 
 func columnsWidth(columns []column) int {
@@ -212,6 +213,6 @@ func columnsWidth(columns []column) int {
 	return width
 }
 
-func moreIndicator(profile Profile, count int) string {
-	return Paint(profile, RoleNeutral2, fmt.Sprintf("+ %d more  ↓", max(count, 0)))
+func moreIndicator(palette theme.Palette, count int) string {
+	return palette.Paint(theme.RoleNeutral2, fmt.Sprintf("+ %d more  ↓", max(count, 0)))
 }

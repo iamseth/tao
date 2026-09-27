@@ -228,6 +228,8 @@ Use `tao ui` when you want one terminal view for plans and open notes across
 registered repositories, or want to launch a common plan action without first
 copying an ID. It requires a terminal; use `tao monitor --once` for redirected
 or pasteable output.
+The dashboard and CLI share a palette selected by `TAO_THEME=tokyonight|gruvbox`
+(default: `tokyonight`; invalid names warn in status and use the default).
 
 The dashboard opens on **Plans**. Use `Tab` or the horizontal arrows to move
 among **Plans**, **Notes**, **Settings**, and **Debug**; use `j`/`k` or the

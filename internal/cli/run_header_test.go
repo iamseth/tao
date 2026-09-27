@@ -61,7 +61,7 @@ func (w *fakeRunHeaderTerminalWriter) String() string {
 func TestInstallRunHeaderLeavesNonTerminalOutputByteIdentical(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	var got bytes.Buffer
-	out, reporter, closeHeader := installRunHeader(context.Background(), &got, false)
+	out, reporter, closeHeader := (App{}).installRunHeader(context.Background(), &got, false)
 	if reporter != nil || out != io.Writer(&got) {
 		t.Fatal("non-terminal output activated the run header")
 	}
@@ -80,7 +80,7 @@ func TestRunHeaderWriterPinsHeaderAroundLogOutput(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("NO_COLOR", "1")
 	terminal := newFakeRunHeaderTerminalWriter(term.Size{Width: 80, Height: 24})
-	out, reporter, closeHeader := installRunHeader(context.Background(), terminal, false)
+	out, reporter, closeHeader := (App{}).installRunHeader(context.Background(), terminal, false)
 	if reporter == nil || out == io.Writer(terminal) {
 		t.Fatal("fake terminal did not activate the run header")
 	}

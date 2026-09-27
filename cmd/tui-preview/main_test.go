@@ -90,12 +90,35 @@ func TestPlainColorCanBeForced(t *testing.T) {
 	}
 }
 
+func TestPlainThemeSelection(t *testing.T) {
+	render := func(extra ...string) string {
+		t.Helper()
+		var output bytes.Buffer
+		args := append([]string{"--plain", "--color", "--view", "plans"}, extra...)
+		if err := execute(context.Background(), args, &bytes.Buffer{}, &output, &bytes.Buffer{}); err != nil {
+			t.Fatal(err)
+		}
+		return output.String()
+	}
+	defaultFrame := render()
+	if defaultFrame != render("--theme", "tokyonight") || defaultFrame != render("--theme", "default") {
+		t.Fatal("default theme output changed")
+	}
+	if defaultFrame == render("--theme", " GruvBox ") {
+		t.Fatal("--theme did not change colored output")
+	}
+}
+
 func TestInvalidFlagsAndDimensionsHaveDeterministicFailureExit(t *testing.T) {
 	tests := []struct {
 		name string
 		args []string
 		want string
 	}{
+		{name: "unknown theme", args: []string{"--plain", "--theme", "bogus"}, want: "unknown theme \"bogus\"; available themes: tokyonight, gruvbox"},
+		{name: "theme with list views", args: []string{"--list-views", "--theme", "tokyonight"}, want: "cannot be combined"},
+		{name: "theme with list scenarios", args: []string{"--list-scenarios", "--theme", "gruvbox"}, want: "cannot be combined"},
+		{name: "plain-only theme", args: []string{"--theme", "gruvbox"}, want: "require --plain"},
 		{name: "unknown scenario", args: []string{"--plain", "--scenario", "missing"}, want: "--list-scenarios"},
 		{name: "unknown view", args: []string{"--plain", "--view", "missing"}, want: "--list-views"},
 		{name: "missing separator", args: []string{"--plain", "--size", "80"}, want: "WIDTHxHEIGHT"},
@@ -135,7 +158,7 @@ func TestNonTerminalInteractivePathIsActionableAndHelpExitsZero(t *testing.T) {
 	if code := run(context.Background(), []string{"--help"}, &bytes.Buffer{}, &bytes.Buffer{}, &errOutput); code != 0 {
 		t.Fatalf("help exit = %d, want 0", code)
 	}
-	for _, flagName := range []string{"-list-scenarios", "-list-views", "-scenario", "-plain", "-view", "-size", "-color", "-shortcuts", "-search"} {
+	for _, flagName := range []string{"-list-scenarios", "-list-views", "-scenario", "-plain", "-view", "-size", "-color", "-shortcuts", "-search", "-theme"} {
 		if !strings.Contains(errOutput.String(), flagName) {
 			t.Fatalf("help missing %s:\n%s", flagName, errOutput.String())
 		}

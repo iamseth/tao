@@ -10,6 +10,7 @@ import (
 
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/term/cells"
+	"github.com/iamseth/tao/internal/theme"
 )
 
 func TestRenderNotesRowsWarningsFocusAndSanitization(t *testing.T) {
@@ -98,8 +99,8 @@ func TestRenderNotesSelectsRowInLaterTierBucket(t *testing.T) {
 		{RepositoryID: "repo", RepositoryName: "repo", ID: "yesterday", Text: "yesterday", UpdatedAt: now.AddDate(0, 0, -1)},
 		{RepositoryID: "repo", RepositoryName: "repo", ID: "older", Text: "older", UpdatedAt: now.AddDate(0, 0, -10)},
 	}
-	frame := Render(Model{Page: PageNotes, NoteSnapshot: note.Snapshot{Notes: items}, Selected: 2, Now: now, Width: 70, Height: 8, Profile: ProfileANSI16})
-	for _, want := range []string{"▌ UNTIERED ", boldSequence + colorSequence(SelectionBackground(ProfileANSI16), true) + "  repo", "older"} {
+	frame := Render(Model{Page: PageNotes, NoteSnapshot: note.Snapshot{Notes: items}, Selected: 2, Now: now, Width: 70, Height: 8, Profile: theme.ProfileANSI16})
+	for _, want := range []string{"▌ UNTIERED ", theme.Bold + theme.Sequence(theme.Default().Palette(theme.ProfileANSI16).MustColor(theme.RoleSelectionBackground), true) + "  repo", "older"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("later-bucket selection missing %q:\n%s", want, frame)
 		}
@@ -157,7 +158,7 @@ func TestRenderNotesColumnsAlignAtSupportedWidths(t *testing.T) {
 			columns := noteTableColumns(widths, width)
 			paneWidth := noteTablePaneWidth(width, columns)
 			header := renderNoteHeader(columns, paneWidth)
-			row := renderNoteRow(item, now, columns, paneWidth, false, ProfileNone)
+			row := renderNoteRow(item, now, columns, paneWidth, false, theme.Default().Palette(theme.ProfileNone))
 			if strings.Contains(header, "NOTE") || strings.Contains(header, "STATUS") {
 				t.Fatalf("legacy columns remain at width %d: %q", width, header)
 			}
@@ -191,7 +192,7 @@ func TestNoteColumnsKeepPreviewTagsAndAgesThroughDeclaredDegradation(t *testing.
 	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
 	item := note.CatalogNote{RepositoryName: strings.Repeat("repository", 3), Text: "recognizable preview", Tags: []string{"one", "two"}, CreatedAt: now.Add(-10 * 24 * time.Hour), UpdatedAt: now.Add(-2 * time.Hour)}
 	columns := noteTableColumns(measureNoteTable([]note.CatalogNote{item}, now), 44)
-	row := renderNoteRow(item, now, columns, noteTablePaneWidth(44, columns), false, ProfileNone)
+	row := renderNoteRow(item, now, columns, noteTablePaneWidth(44, columns), false, theme.Default().Palette(theme.ProfileNone))
 	if !strings.Contains(row, "recognizable") || !strings.Contains(row, "one") || !strings.Contains(row, "1w") || !strings.Contains(row, "2h") || strings.Contains(row, "repository") {
 		t.Fatalf("44-cell note row did not preserve preview, tags, and both ages while shedding repository metadata: %q", row)
 	}
@@ -203,12 +204,12 @@ func TestRenderNoteRowUsesSemanticPaintSelectionAndEmptyTagCell(t *testing.T) {
 	widths := measureNoteTable([]note.CatalogNote{item}, now)
 	columns := noteTableColumns(widths, 80)
 	paneWidth := noteTablePaneWidth(80, columns)
-	styled := renderNoteRow(item, now, columns, paneWidth, false, ProfileTrueColor)
-	if !strings.Contains(styled, Paint(ProfileTrueColor, RoleNeutral4, "preview")) {
+	styled := renderNoteRow(item, now, columns, paneWidth, false, theme.Default().Palette(theme.ProfileTrueColor))
+	if !strings.Contains(styled, theme.Default().Palette(theme.ProfileTrueColor).Paint(theme.RoleNeutral4, "preview")) {
 		t.Fatalf("preview lacks neutral semantic paint: %q", styled)
 	}
 
-	plain := renderNoteRow(item, now, columns, paneWidth, false, ProfileNone)
+	plain := renderNoteRow(item, now, columns, paneWidth, false, theme.Default().Palette(theme.ProfileNone))
 	resolved := resolveColumns(columns, paneWidth)
 	offset := cells.Width("  ")
 	for _, resolvedColumn := range resolved {
@@ -221,16 +222,16 @@ func TestRenderNoteRowUsesSemanticPaintSelectionAndEmptyTagCell(t *testing.T) {
 		}
 		offset += resolvedColumn.width + columnGapWidth
 	}
-	if selected := renderNoteRow(item, now, columns, paneWidth, true, ProfileTrueColor); selected != SelectRow(ProfileTrueColor, styled) {
-		t.Fatalf("selected note row does not use shared full-row selection:\n got %q\nwant %q", selected, SelectRow(ProfileTrueColor, styled))
+	if selected := renderNoteRow(item, now, columns, paneWidth, true, theme.Default().Palette(theme.ProfileTrueColor)); selected != theme.Default().Palette(theme.ProfileTrueColor).SelectRow(styled) {
+		t.Fatalf("selected note row does not use shared full-row selection:\n got %q\nwant %q", selected, theme.Default().Palette(theme.ProfileTrueColor).SelectRow(styled))
 	}
 
 	tagged := item
 	tagged.Tags = []string{"primary", "secondary"}
 	taggedWidths := measureNoteTable([]note.CatalogNote{tagged}, now)
 	taggedColumns := noteTableColumns(taggedWidths, 80)
-	taggedRow := renderNoteRow(tagged, now, taggedColumns, noteTablePaneWidth(80, taggedColumns), false, ProfileTrueColor)
-	if !strings.Contains(taggedRow, Paint(ProfileTrueColor, RoleAccent, "primary, secondary")) {
+	taggedRow := renderNoteRow(tagged, now, taggedColumns, noteTablePaneWidth(80, taggedColumns), false, theme.Default().Palette(theme.ProfileTrueColor))
+	if !strings.Contains(taggedRow, theme.Default().Palette(theme.ProfileTrueColor).Paint(theme.RoleAccent, "primary, secondary")) {
 		t.Fatalf("note row does not paint all tags: %q", taggedRow)
 	}
 }
@@ -245,11 +246,11 @@ func TestNoteTierSectionsReplaceTierColumn(t *testing.T) {
 		t.Fatalf("note columns = %q, want tier-free columns", got)
 	}
 	paneWidth := noteTablePaneWidth(100, columns)
-	row := renderNoteRow(tiered, now, columns, paneWidth, false, ProfileTrueColor)
+	row := renderNoteRow(tiered, now, columns, paneWidth, false, theme.Default().Palette(theme.ProfileTrueColor))
 	if strings.Contains(row, "tier1") {
 		t.Fatalf("tiered row redundantly displays its section tag: %q", row)
 	}
-	if !strings.Contains(row, Paint(ProfileTrueColor, RoleAccent, "arch-2026-09, workflow")) {
+	if !strings.Contains(row, theme.Default().Palette(theme.ProfileTrueColor).Paint(theme.RoleAccent, "arch-2026-09, workflow")) {
 		t.Fatalf("tag cell should show all non-tier tags: %q", row)
 	}
 	frame := Render(Model{Page: PageNotes, NoteSnapshot: note.Snapshot{Notes: items}, Now: now, Width: 100, Height: 20})

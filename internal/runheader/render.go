@@ -9,6 +9,7 @@ import (
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/term/cells"
+	"github.com/iamseth/tao/internal/theme"
 )
 
 // LineCount is the fixed number of terminal rows occupied by the header.
@@ -21,7 +22,7 @@ const (
 
 // Render turns state into a fixed-height, borderless terminal header. Width is
 // measured in terminal cells; ANSI color sequences do not consume visible width.
-func Render(state State, width int, useColor bool) []string {
+func Render(state State, width int, palette theme.Palette) []string {
 	width = max(width, 0)
 
 	identity := renderIdentity(state, width)
@@ -39,11 +40,11 @@ func Render(state State, width int, useColor bool) []string {
 		strings.Repeat("─", width),
 		line("LIVE OUTPUT", width),
 	}
-	if useColor {
-		lines[1] = colorFirst(lines[1], "▶", "36")
-		lines[3] = colorChecklist(lines[3])
-		lines[5] = color(lines[5], "90")
-		lines[6] = colorFirst(lines[6], "LIVE OUTPUT", "36")
+	if palette.Enabled() {
+		lines[1] = colorFirst(palette, lines[1], "▶", theme.RoleAccent)
+		lines[3] = colorChecklist(palette, lines[3])
+		lines[5] = palette.Paint(theme.RoleNeutral2, lines[5])
+		lines[6] = colorFirst(palette, lines[6], "LIVE OUTPUT", theme.RoleAccent)
 	}
 	return lines
 }
@@ -273,18 +274,14 @@ func line(content string, width int) string {
 	return content + strings.Repeat(" ", max(width-cells.Width(content), 0))
 }
 
-func colorChecklist(value string) string {
-	value = strings.ReplaceAll(value, "✓", color("✓", "32"))
-	value = strings.ReplaceAll(value, "▶", color("▶", "36"))
-	return strings.ReplaceAll(value, "○", color("○", "90"))
+func colorChecklist(palette theme.Palette, value string) string {
+	value = strings.ReplaceAll(value, "✓", palette.Paint(theme.RoleSuccess, "✓"))
+	value = strings.ReplaceAll(value, "▶", palette.Paint(theme.RoleAccent, "▶"))
+	return strings.ReplaceAll(value, "○", palette.Paint(theme.RoleNeutral2, "○"))
 }
 
-func colorFirst(value, target, code string) string {
-	return strings.Replace(value, target, color(target, code), 1)
-}
-
-func color(value, code string) string {
-	return "\x1b[" + code + "m" + value + "\x1b[0m"
+func colorFirst(palette theme.Palette, value, target string, role theme.Role) string {
+	return strings.Replace(value, target, palette.Paint(role, target), 1)
 }
 
 func display(value string) string {

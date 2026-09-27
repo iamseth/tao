@@ -10,6 +10,7 @@ import (
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/term"
 	"github.com/iamseth/tao/internal/term/cells"
+	"github.com/iamseth/tao/internal/theme"
 )
 
 // NoteCreator composes and persists a new note for one exact repository ID.
@@ -222,7 +223,7 @@ func noteRepositoryLabel(repository NoteRepository, width int) string {
 
 // render is a pure, bounded modal body. Resizes keep the selected destination
 // visible without changing it; the live loop can center these lines as an overlay.
-func (p noteRepositoryPicker) render(size term.Size, profile Profile) []string {
+func (p noteRepositoryPicker) render(size term.Size, palette theme.Palette) []string {
 	if size.Width <= 0 || size.Height <= 0 {
 		return nil
 	}
@@ -256,7 +257,7 @@ func (p noteRepositoryPicker) render(size term.Size, profile Profile) []string {
 		}
 		line := row(cursor + noteRepositoryLabel(p.items[index], max(0, width-2)))
 		if index == p.selected {
-			line = SelectRow(profile, line)
+			line = palette.SelectRow(line)
 		}
 		lines = append(lines, line)
 	}

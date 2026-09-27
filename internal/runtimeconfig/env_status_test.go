@@ -9,7 +9,58 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/selfupdate"
+	"github.com/iamseth/tao/internal/theme"
 )
+
+func TestRuntimeTheme(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw, want string
+		warning         bool
+	}{
+		{name: "unset", want: theme.Default().Name()},
+		{name: "empty", want: theme.Default().Name()},
+		{name: "gruvbox", raw: "gruvbox", want: "gruvbox"},
+		{name: "normalized", raw: "Gruvbox ", want: "gruvbox"},
+		{name: "alias", raw: "default", want: theme.Default().Name()},
+		{name: "invalid", raw: "nope", want: theme.Default().Name(), warning: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, key := range RuntimeEnvKeys() {
+				unsetEnv(t, key)
+			}
+			if tc.name != "unset" {
+				t.Setenv(EnvTheme, tc.raw)
+			}
+			got, warning := RuntimeTheme(os.Getenv)
+			if got.Name() != tc.want || (warning != "") != tc.warning {
+				t.Fatalf("RuntimeTheme() = %s, %q; want %s, warning=%v", got.Name(), warning, tc.want, tc.warning)
+			}
+			defaults, err := RuntimeEnvDefaults()
+			if err != nil || defaults.Theme.Name() != tc.want {
+				t.Fatalf("defaults = %+v, %v", defaults, err)
+			}
+			rows, err := RuntimeEnvStatus()
+			if err != nil {
+				t.Fatal(err)
+			}
+			i := slices.IndexFunc(rows, func(row EnvVarStatus) bool { return row.Name == EnvTheme })
+			if i < 0 {
+				t.Fatal("missing TAO_THEME status row")
+			}
+			row := rows[i]
+			source := "env"
+			if tc.raw == "" || tc.warning {
+				source = "default"
+			}
+			if row.Value != tc.want || row.Source != source || (row.Warning != "") != tc.warning {
+				t.Fatalf("theme status = %+v", row)
+			}
+			if tc.warning && !strings.HasSuffix(row.Warning, "using default") {
+				t.Fatalf("warning = %q", row.Warning)
+			}
+		})
+	}
+}
 
 func TestRuntimeModelAndSessionDefaultsAreIndependent(t *testing.T) {
 	t.Setenv(EnvAgent, "invalid-unused-provider")
@@ -344,6 +395,7 @@ func TestRuntimeEnvStatusDefaultRowsDeriveFromRunOptionsPatch(t *testing.T) {
 		{Name: EnvPlannerRoutingFloor, Value: "not set (default: 0.1)", Source: "default"},
 		{Name: EnvMaxSliceOutputTokens, Value: "disabled", Source: "default"},
 		{Name: EnvMaxSliceCost, Value: "disabled", Source: "default"},
+		{Name: EnvTheme, Value: theme.Default().Name(), Source: "default"},
 		{Name: EnvBudgetSliceOutputTokens, Value: "40000", Source: "default"},
 		{Name: EnvBudgetSliceCost, Value: "5", Source: "default"},
 		{Name: EnvBudgetSliceToolCalls, Value: "120", Source: "default"},

@@ -9,6 +9,7 @@ import (
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/selfupdate"
+	"github.com/iamseth/tao/internal/theme"
 )
 
 const (
@@ -35,6 +36,7 @@ const (
 	EnvAggregateReviewConvergenceWindow = "TAO_AGGREGATE_REVIEW_CONVERGENCE_WINDOW"
 	EnvApprovedBy                       = "TAO_APPROVED_BY"
 	EnvRunHeader                        = "TAO_RUN_HEADER"
+	EnvTheme                            = "TAO_THEME"
 
 	EnvPlannerRouting      = "TAO_PLANNER_ROUTING"
 	EnvPlannerRoutingArms  = "TAO_PLANNER_ROUTING_ARMS"
@@ -61,6 +63,7 @@ type EnvDefaults struct {
 	MaxReworkAttempts           *int
 	ReworkEscalationFromAttempt *int
 	UpdateMode                  selfupdate.Mode
+	Theme                       theme.Theme
 	SkipPermissions             bool
 	SliceBudgetCaps             SliceBudgetCaps
 	AgentBudgetThresholds       plan.AgentBudgetThresholds
@@ -390,6 +393,18 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 			return strconv.FormatFloat(parsed, 'f', -1, 64), nil
 		},
 	},
+	{
+		name: EnvTheme, fallbackOnInvalid: true,
+		defaultValue: func(RunOptionsPatch) string { return theme.Default().Name() },
+		apply: func(defaults *EnvDefaults, value string) (string, error) {
+			selected, ok := theme.Lookup(value)
+			if !ok {
+				return "", fmt.Errorf("unknown theme; choose %s", strings.Join(theme.Names(), " or "))
+			}
+			defaults.Theme = selected
+			return selected.Name(), nil
+		},
+	},
 }, agentBudgetRuntimeEnvVars()...)
 
 func agentBudgetRuntimeEnvVars() []runtimeEnvVar {
@@ -484,6 +499,28 @@ func RuntimeAggregateReviewConvergenceWindow() (int, error) {
 		return 0, fmt.Errorf("%s must be an integer of at least 2", EnvAggregateReviewConvergenceWindow)
 	}
 	return parsed, nil
+}
+
+// RuntimeTheme resolves presentation independently of other runtime settings.
+// Invalid selections warn and retain the default; they never fail a command.
+func RuntimeTheme(getenv func(string) string) (theme.Theme, string) {
+	var defaults EnvDefaults
+	if getenv == nil {
+		return theme.Default(), ""
+	}
+	value := getenv(EnvTheme)
+	if value == "" {
+		return theme.Default(), ""
+	}
+	for _, v := range runtimeEnvVars {
+		if v.name == EnvTheme {
+			if _, err := v.apply(&defaults, value); err != nil {
+				return theme.Default(), fmt.Sprintf("%s: invalid env value %q: %v; using default", EnvTheme, value, err)
+			}
+			return defaults.Theme, ""
+		}
+	}
+	return theme.Default(), ""
 }
 
 // RuntimeModelEnvDefaults resolves model choices without eagerly validating an

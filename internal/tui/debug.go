@@ -10,6 +10,7 @@ import (
 	"github.com/iamseth/tao/internal/monitor/rowlabel"
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/term/cells"
+	"github.com/iamseth/tao/internal/theme"
 )
 
 // DebugSnapshot is a share-safe projection of runtime configuration and local
@@ -108,7 +109,7 @@ func renderDebugPage(model Model) []string {
 			{name: "SOURCE", width: sourceWidth},
 		}
 		sectionWidth := dashboardSectionWidth(model, PageDebug, "RUNTIME ANOMALIES", columnsWidth(columns))
-		lines = append(lines, "", dashboardSectionRuleColumns(model.Profile, RoleDebugSection, "RUNTIME ANOMALIES", columns, sectionWidth))
+		lines = append(lines, "", dashboardSectionRuleColumns(model.Palette(), theme.RoleDebugSection, "RUNTIME ANOMALIES", columns, sectionWidth))
 		for _, anomaly := range anomalies {
 			cells := []string{
 				singleLineDetail(anomaly.row.Name),
@@ -161,7 +162,7 @@ func debugRuntimeAnomalies(rows []DebugRuntimeDefault, globalRows []SettingsRunt
 
 func debugSectionRule(model Model, title string) string {
 	width := dashboardSectionWidth(model, PageDebug, title, 0)
-	return sectionTitleRule(model.Profile, RoleDebugSection, title, width)
+	return sectionTitleRule(model.Palette(), theme.RoleDebugSection, title, width)
 }
 
 func appendDebugValue(lines *[]string, label, value string) {

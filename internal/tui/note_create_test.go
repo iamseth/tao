@@ -10,6 +10,7 @@ import (
 
 	"github.com/iamseth/tao/internal/term"
 	"github.com/iamseth/tao/internal/term/cells"
+	"github.com/iamseth/tao/internal/theme"
 )
 
 func TestNoteCreationTarget(t *testing.T) {
@@ -83,7 +84,7 @@ func TestNoteRepositoryPickerInventoryIndependentAndDeterministic(t *testing.T) 
 	if picker.items[2].ID != "empty-repo" {
 		t.Fatal("picker retained mutable inventory backing array")
 	}
-	text := strings.Join(picker.render(term.Size{Width: 80, Height: 12}, ProfileNone), "\n")
+	text := strings.Join(picker.render(term.Size{Width: 80, Height: 12}, theme.Default().Palette(theme.ProfileNone)), "\n")
 	for _, label := range []string{"Same [duplicate-a]", "Same [duplicate-b]", "Zulu [empty-repo]"} {
 		if !strings.Contains(text, label) {
 			t.Fatalf("missing %q in picker:\n%s", label, text)
@@ -170,11 +171,11 @@ func TestNoteRepositoryPickerRenderingBoundsAndResize(t *testing.T) {
 		picker := testNotePicker(count)
 		picker.selected = max(0, count-1)
 		before := picker
-		for _, profile := range []Profile{ProfileNone, ProfileANSI16, ProfileTrueColor} {
+		for _, profile := range []theme.Profile{theme.ProfileNone, theme.ProfileANSI16, theme.ProfileTrueColor} {
 			for _, width := range []int{-1, 0, 1, 8, 15, 16, 40, 80} {
 				for _, height := range []int{-1, 0, 1, 2, 3, 4, 5, 8, 30} {
 					size := term.Size{Width: width, Height: height}
-					lines := picker.render(size, profile)
+					lines := picker.render(size, theme.Default().Palette(profile))
 					if len(lines) > max(0, height) || (width <= 0 && len(lines) != 0) {
 						t.Fatalf("size %+v: %d lines", size, len(lines))
 					}
@@ -217,7 +218,7 @@ func TestNoteRepositoryPickerSanitizedLabels(t *testing.T) {
 		t.Fatalf("unbounded name: %q", name)
 	}
 	picker := noteRepositoryPicker{items: []NoteRepository{item}}
-	for _, line := range picker.render(term.Size{Width: 80, Height: 8}, ProfileNone) {
+	for _, line := range picker.render(term.Size{Width: 80, Height: 8}, theme.Default().Palette(theme.ProfileNone)) {
 		if strings.Contains(line, "secret") {
 			t.Fatalf("OSC payload leaked: %q", line)
 		}

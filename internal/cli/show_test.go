@@ -19,6 +19,7 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/taodata"
+	"github.com/iamseth/tao/internal/theme"
 	"github.com/iamseth/tao/internal/tui"
 	planview "github.com/iamseth/tao/internal/view"
 )
@@ -97,7 +98,7 @@ func TestRenderShowSliceRulings(t *testing.T) {
 		Timing: plan.SliceTiming{StartedAt: &started, CompletedAt: &completed},
 	}
 	var out bytes.Buffer
-	if err := renderShowSlice(&out, slice, now, false); err != nil {
+	if err := renderShowSlice(&out, slice, now, theme.Palette{}); err != nil {
 		t.Fatal(err)
 	}
 	want := "completed  001-example  Example slice\n" +
@@ -125,7 +126,7 @@ func TestRenderShowSliceWithoutRulingsUnchanged(t *testing.T) {
 		Timing: plan.SliceTiming{StartedAt: &started, CompletedAt: &completed},
 	}
 	var out bytes.Buffer
-	if err := renderShowSlice(&out, slice, now, false); err != nil {
+	if err := renderShowSlice(&out, slice, now, theme.Palette{}); err != nil {
 		t.Fatal(err)
 	}
 	want := "completed  001-example  Example slice\n" +
@@ -156,7 +157,7 @@ func TestRenderPlanDetailUsesLifecycleStatusProjection(t *testing.T) {
 	plan.SetPersistedReview(detail, plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Head: "head123"})
 
 	var out bytes.Buffer
-	if err := renderPlanDetail(&out, planview.Plan{Detail: detail, Derived: plan.Derive(detail, now), Now: now}); err != nil {
+	if err := (App{}).renderPlanDetail(&out, planview.Plan{Detail: detail, Derived: plan.Derive(detail, now), Now: now}); err != nil {
 		t.Fatal(err)
 	}
 	text := stripANSI(out.String())
@@ -197,7 +198,7 @@ func TestRenderPlanDetailUsesHumanTimestamps(t *testing.T) {
 		}}},
 	}
 
-	if err := renderPlanDetail(&out, planview.Plan{Detail: detail, Derived: plan.DerivedPlan{Elapsed: 90 * time.Minute}, Now: now}); err != nil {
+	if err := (App{}).renderPlanDetail(&out, planview.Plan{Detail: detail, Derived: plan.DerivedPlan{Elapsed: 90 * time.Minute}, Now: now}); err != nil {
 		t.Fatal(err)
 	}
 	text := out.String()
@@ -830,7 +831,7 @@ func TestStaleSingleMergeIntentPrimaryActionMatchesShowMergeAndTUI(t *testing.T)
 	}
 
 	var showOut bytes.Buffer
-	if err := renderPlanDetail(&showOut, planview.Plan{Detail: detail, Derived: plan.Derive(detail, time.Time{}), Now: time.Now()}); err != nil {
+	if err := (App{}).renderPlanDetail(&showOut, planview.Plan{Detail: detail, Derived: plan.Derive(detail, time.Time{}), Now: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -865,7 +866,7 @@ func TestRenderPlanDetailProminentlyShowsReasonAndSubordinateAlternatives(t *tes
 	}
 	loaded := planview.Plan{Detail: detail, Derived: plan.Derive(detail, time.Time{}), Now: time.Now()}
 	var out bytes.Buffer
-	if err := renderPlanDetail(&out, loaded); err != nil {
+	if err := (App{}).renderPlanDetail(&out, loaded); err != nil {
 		t.Fatal(err)
 	}
 	text := stripANSI(out.String())
@@ -891,7 +892,7 @@ func TestShowCommentReviewWithFindingsRecommendsRework(t *testing.T) {
 	}
 	loaded := planview.Plan{Detail: detail, Derived: plan.Derive(detail, time.Time{}), Now: time.Now()}
 	var out bytes.Buffer
-	if err := renderPlanDetail(&out, loaded); err != nil {
+	if err := (App{}).renderPlanDetail(&out, loaded); err != nil {
 		t.Fatal(err)
 	}
 	text := stripANSI(out.String())
@@ -921,7 +922,7 @@ func TestRenderPlanDetailShowsTerminalNoActionGuidance(t *testing.T) {
 	detail := &plan.PlanDetail{State: plan.State{Status: plan.StatusCompleted, Plan: plan.PlanState{ID: "done", Title: "Done"}}}
 	loaded := planview.Plan{Detail: detail, Derived: plan.Derive(detail, time.Time{}), Now: time.Now()}
 	var out bytes.Buffer
-	if err := renderPlanDetail(&out, loaded); err != nil {
+	if err := (App{}).renderPlanDetail(&out, loaded); err != nil {
 		t.Fatal(err)
 	}
 	text := stripANSI(out.String())

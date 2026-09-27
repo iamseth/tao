@@ -9,6 +9,11 @@ stable release.
 
 ## [Unreleased]
 
+### Week of 2026-09-21
+
+#### Changed
+- CLI and TUI colors now share one palette; select `tokyonight` (default) or `gruvbox` with `TAO_THEME`. Unknown names fall back to the default with a status warning.
+
 ### Week of 2026-08-24
 
 #### Added

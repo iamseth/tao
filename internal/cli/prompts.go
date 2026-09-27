@@ -20,6 +20,7 @@ import (
 	"github.com/iamseth/tao/internal/promptinstall"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/term/cells"
+	"github.com/iamseth/tao/internal/theme"
 	"github.com/iamseth/tao/prompts"
 )
 
@@ -228,9 +229,9 @@ func (a App) doctor(args []string) error {
 		return err
 	}
 	if flagBoolValue(fs, "verbose") || flagBoolValue(fs, "v") {
-		return renderVerboseDoctor(a.Out, report)
+		return renderVerboseDoctor(a.Out, report, a.outputPalette(a.Out))
 	}
-	return renderCompactDoctor(a.Out, report)
+	return renderCompactDoctor(a.Out, report, a.outputPalette(a.Out))
 }
 
 type doctorReport struct {
@@ -333,7 +334,7 @@ func collectDoctorTool(tool doctorTool) doctorToolResult {
 	return doctorToolResult{tool: tool, status: status, found: found}
 }
 
-func renderCompactDoctor(out io.Writer, report doctorReport) error {
+func renderCompactDoctor(out io.Writer, report doctorReport, palette theme.Palette) error {
 	agents := make([]string, 0, len(report.agents))
 	for _, descriptor := range report.agents {
 		agents = append(agents, descriptor.Label)
@@ -359,7 +360,7 @@ func renderCompactDoctor(out io.Writer, report doctorReport) error {
 		}
 		nameWidth := doctorPromptNameWidth(problems)
 		for _, result := range problems {
-			if err := writef(out, "  %-*s %s %s\n", nameWidth, result.Name, doctorStatusLabel(result.Status, 11), result.Path); err != nil {
+			if err := writef(out, "  %-*s %s %s\n", nameWidth, result.Name, doctorStatusLabel(palette, result.Status, 11), result.Path); err != nil {
 				return err
 			}
 		}
@@ -378,7 +379,7 @@ func renderCompactDoctor(out io.Writer, report doctorReport) error {
 			return err
 		}
 		for _, result := range missing {
-			if err := writeDoctorToolResult(out, result); err != nil {
+			if err := writeDoctorToolResult(out, result, palette); err != nil {
 				return err
 			}
 		}
@@ -394,7 +395,7 @@ func renderCompactDoctor(out io.Writer, report doctorReport) error {
 			return err
 		}
 		for _, result := range readinessProblems {
-			if err := writef(out, "  %s %s\n", doctorStatusLabel(result.status, 9), strings.ReplaceAll(result.capability, "_", " ")); err != nil {
+			if err := writef(out, "  %s %s\n", doctorStatusLabel(palette, result.status, 9), strings.ReplaceAll(result.capability, "_", " ")); err != nil {
 				return err
 			}
 		}
@@ -403,7 +404,7 @@ func renderCompactDoctor(out io.Writer, report doctorReport) error {
 	return nil
 }
 
-func renderVerboseDoctor(out io.Writer, report doctorReport) error {
+func renderVerboseDoctor(out io.Writer, report doctorReport, palette theme.Palette) error {
 	if err := writef(out, "selected runtime agent: %s\n", report.selectedAgent); err != nil {
 		return err
 	}
@@ -422,7 +423,7 @@ func renderVerboseDoctor(out io.Writer, report doctorReport) error {
 		agentResults := promptResultsForAgent(report.prompts, descriptor.Kind)
 		nameWidth := doctorPromptNameWidth(agentResults)
 		for _, result := range agentResults {
-			if err := writef(out, "  %-*s %s %s\n", nameWidth, result.Name, doctorStatusLabel(result.Status, 11), result.Path); err != nil {
+			if err := writef(out, "  %-*s %s %s\n", nameWidth, result.Name, doctorStatusLabel(palette, result.Status, 11), result.Path); err != nil {
 				return err
 			}
 		}
@@ -437,7 +438,7 @@ func renderVerboseDoctor(out io.Writer, report doctorReport) error {
 			}
 		}
 		for _, result := range category.results {
-			if err := writeDoctorToolResult(out, result); err != nil {
+			if err := writeDoctorToolResult(out, result, palette); err != nil {
 				return err
 			}
 		}
@@ -447,7 +448,7 @@ func renderVerboseDoctor(out io.Writer, report doctorReport) error {
 			return err
 		}
 		for _, result := range report.piReadiness {
-			if err := writef(out, "  %s %s\n", doctorStatusLabel(result.status, 9), strings.ReplaceAll(result.capability, "_", " ")); err != nil {
+			if err := writef(out, "  %s %s\n", doctorStatusLabel(palette, result.status, 9), strings.ReplaceAll(result.capability, "_", " ")); err != nil {
 				return err
 			}
 		}
@@ -468,10 +469,10 @@ func doctorPromptNameWidth(results []promptinstall.Result) int {
 	return width
 }
 
-func doctorStatusLabel(status string, width int) string {
+func doctorStatusLabel(palette theme.Palette, status string, width int) string {
 	label := cells.Pad(doctorStatusSymbol(status)+" "+status, width)
 	if status == "current" || status == "ok" {
-		return colorGreen(label)
+		return colorGreen(palette, label)
 	}
 	return label
 }
@@ -540,12 +541,12 @@ func promptResultsForAgent(results []promptinstall.Result, agent runtimeconfig.A
 	return matched
 }
 
-func writeDoctorToolResult(out io.Writer, result doctorToolResult) error {
+func writeDoctorToolResult(out io.Writer, result doctorToolResult, palette theme.Palette) error {
 	found := result.found
 	if found != "" {
 		found = " (" + found + ")"
 	}
-	return writef(out, "  %s %s%s\n", doctorStatusLabel(result.status, 9), result.tool.name, found)
+	return writef(out, "  %s %s%s\n", doctorStatusLabel(palette, result.status, 9), result.tool.name, found)
 }
 
 func doctorAgentTool(agent runtimeconfig.AgentKind) doctorTool {

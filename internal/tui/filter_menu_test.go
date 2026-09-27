@@ -10,6 +10,7 @@ import (
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/term"
 	"github.com/iamseth/tao/internal/term/cells"
+	"github.com/iamseth/tao/internal/theme"
 )
 
 func testFilterMenu() *filterMenu {
@@ -179,14 +180,14 @@ func TestFilterMenuCloseAndQuit(t *testing.T) {
 func TestFilterMenuRender(t *testing.T) {
 	menu := testFilterMenu()
 	menu.filter = Filter{Enabled: true, Repositories: []string{"a", "missing"}, Tags: []string{"bug"}}
-	text := strings.Join(menu.render(term.Size{Width: 100, Height: 24}, ProfileNone), "\n")
+	text := strings.Join(menu.render(term.Size{Width: 100, Height: 24}, theme.Default().Palette(theme.ProfileNone)), "\n")
 	for _, want := range []string{"Filters", "> Filter on/off: on", "Repositories", "[x] Alpha [a]", "[x] missing (unavailable)", "Statuses", "[ ] planned", "Tags", "[x] bug", "Clear all", "PgUp/PgDn", "Space/Enter", "t on/off", "c clear", "Esc/f close", "q quit"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q:\n%s", want, text)
 		}
 	}
 	menu.filter.Enabled = false
-	if text := strings.Join(menu.render(term.Size{Width: 80, Height: 24}, ProfileNone), "\n"); !strings.Contains(text, "Filter on/off: off") || !strings.Contains(text, "[x] bug") {
+	if text := strings.Join(menu.render(term.Size{Width: 80, Height: 24}, theme.Default().Palette(theme.ProfileNone)), "\n"); !strings.Contains(text, "Filter on/off: off") || !strings.Contains(text, "[x] bug") {
 		t.Fatalf("disabled render lost configuration: %s", text)
 	}
 }
@@ -195,11 +196,11 @@ func TestFilterMenuNarrowRenderingAndResize(t *testing.T) {
 	for _, menu := range []*filterMenu{{}, testFilterMenu()} {
 		menu.selected = menu.optionCount() + 1
 		before := *menu
-		for _, profile := range []Profile{ProfileNone, ProfileANSI16, ProfileTrueColor} {
+		for _, profile := range []theme.Profile{theme.ProfileNone, theme.ProfileANSI16, theme.ProfileTrueColor} {
 			for _, width := range []int{-1, 0, 1, 8, 11, 12, 20, 40, 80, 100} {
 				for _, height := range []int{-1, 0, 1, 3, 6, 7, 9, 30} {
 					size := term.Size{Width: width, Height: height}
-					lines := menu.render(size, profile)
+					lines := menu.render(size, theme.Default().Palette(profile))
 					if len(lines) > max(0, height) || width <= 0 && len(lines) != 0 {
 						t.Fatalf("size %+v: %d lines", size, len(lines))
 					}
@@ -222,7 +223,7 @@ func TestFilterMenuNarrowRenderingAndResize(t *testing.T) {
 
 func TestFilterMenuSanitizesLabels(t *testing.T) {
 	menu := &filterMenu{repositories: []FilterOption{{ID: "bad\nID", Name: "\x1b]52;c;secret\a界\n\t\u202ename"}}}
-	text := strings.Join(menu.render(term.Size{Width: 80, Height: 24}, ProfileNone), "")
+	text := strings.Join(menu.render(term.Size{Width: 80, Height: 24}, theme.Default().Palette(theme.ProfileNone)), "")
 	for _, forbidden := range []string{"\x1b", "\a", "\n", "\t", "\u202e", "secret"} {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("unsafe label %q in %q", forbidden, text)

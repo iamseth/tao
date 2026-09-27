@@ -11,6 +11,7 @@ import (
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/term/cells"
+	"github.com/iamseth/tao/internal/theme"
 )
 
 const (
@@ -31,7 +32,8 @@ type Model struct {
 	Now              time.Time
 	Filter           Filter
 	FilterMessage    string
-	Profile          Profile
+	Profile          theme.Profile
+	Theme            theme.Theme
 	ShowShortcuts    bool
 	SearchQuery      string
 	SearchActive     bool
@@ -42,6 +44,9 @@ type Model struct {
 	NoteMessage      string
 	SettingsMessage  string
 }
+
+// Palette binds this frame's theme to its terminal profile.
+func (m Model) Palette() theme.Palette { return m.Theme.Palette(m.Profile) }
 
 type rowValues struct {
 	repo   string
@@ -154,7 +159,7 @@ func Render(model Model) string {
 			visibleHeight := max(bodyHeight-1, 0)
 			end := min(start+visibleHeight, len(body))
 			lines = append(lines, body[start:end]...)
-			lines = append(lines, moreIndicator(model.Profile, len(body)-(end-start)))
+			lines = append(lines, moreIndicator(model.Palette(), len(body)-(end-start)))
 		} else {
 			end := min(start+bodyHeight, len(body))
 			lines = append(lines, body[start:end]...)
@@ -183,14 +188,14 @@ func Render(model Model) string {
 				continue
 			}
 			sectionWidth := dashboardSectionWidth(model, PagePlans, section.Title, 0)
-			lines = append(lines, "", sectionTitleRule(model.Profile, planSectionRole(section.Kind), section.Title, sectionWidth), renderHeader(columns, paneWidth))
+			lines = append(lines, "", sectionTitleRule(model.Palette(), planSectionRole(section.Kind), section.Title, sectionWidth), renderHeader(columns, paneWidth))
 			viewportSection := tableViewportSection{headingLines: []int{len(lines) - 2, len(lines) - 1}}
 			for _, row := range section.Rows {
 				if selected == model.Selected {
 					selectedLine = len(lines)
 				}
 				viewportSection.contentLines = append(viewportSection.contentLines, len(lines))
-				lines = append(lines, renderTableRow(row, section.Kind, model.Snapshot.CollectedAt, columns, paneWidth, selected == model.Selected, model.Profile, model.ActionLabels[actionRowKey(row)]))
+				lines = append(lines, renderTableRow(row, section.Kind, model.Snapshot.CollectedAt, columns, paneWidth, selected == model.Selected, model.Palette(), model.ActionLabels[actionRowKey(row)]))
 				selected++
 			}
 			viewportMetadata.sections = append(viewportMetadata.sections, viewportSection)
@@ -213,16 +218,16 @@ func Render(model Model) string {
 		lines = append(lines, "", model.ConfirmMessage+" [y/n]")
 	}
 	if summary != nil {
-		lines = append(lines, renderFrameSummary(model.Profile, *summary))
+		lines = append(lines, renderFrameSummary(model.Palette(), *summary))
 	}
-	lines = tableViewport(lines, selectedLine, footerStart, frameLineCount, model.Height, model.Profile, viewportMetadata)
+	lines = tableViewport(lines, selectedLine, footerStart, frameLineCount, model.Height, model.Palette(), viewportMetadata)
 	if summary != nil && model.Height > len(lines) {
 		bottom := lines[len(lines)-1]
 		lines = append(lines[:len(lines)-1], make([]string, model.Height-len(lines))...)
 		lines = append(lines, bottom)
 	}
 	if model.ShowShortcuts {
-		lines = overlayShortcutLegend(lines, page, model.Width, model.Height, model.Profile)
+		lines = overlayShortcutLegend(lines, page, model.Width, model.Height, model.Palette())
 	}
 	if model.Width > 0 {
 		for index := range lines {
@@ -256,7 +261,7 @@ func compactFooter(lines []string) []string {
 	return footer
 }
 
-func tableViewport(lines []string, selectedLine, footerStart, headerCount, height int, profile Profile, metadata tableViewportMetadata) []string {
+func tableViewport(lines []string, selectedLine, footerStart, headerCount, height int, palette theme.Palette, metadata tableViewportMetadata) []string {
 	if height <= 0 || len(lines) <= height {
 		return lines
 	}
@@ -270,7 +275,7 @@ func tableViewport(lines []string, selectedLine, footerStart, headerCount, heigh
 		contentCount += len(section.contentLines)
 	}
 	if contentCount == 0 {
-		return legacyTableViewport(lines, selectedLine, footerStart, headerCount, height, profile)
+		return legacyTableViewport(lines, selectedLine, footerStart, headerCount, height, palette)
 	}
 
 	footer := compactFooter(lines[footerStart:])
@@ -294,7 +299,7 @@ func tableViewport(lines []string, selectedLine, footerStart, headerCount, heigh
 		viewport = append(viewport, lines[line])
 	}
 	if hiddenContent > 0 && len(viewport) < height-len(footer) {
-		viewport = append(viewport, moreIndicator(profile, hiddenContent))
+		viewport = append(viewport, moreIndicator(palette, hiddenContent))
 	}
 	return append(viewport, footer...)
 }
@@ -402,7 +407,7 @@ func (metadata tableViewportMetadata) viewportLines(selectedLine, capacity, body
 	return visibleLines, visibleContent
 }
 
-func legacyTableViewport(lines []string, selectedLine, footerStart, headerCount, height int, profile Profile) []string {
+func legacyTableViewport(lines []string, selectedLine, footerStart, headerCount, height int, palette theme.Palette) []string {
 	body := lines[headerCount:footerStart]
 	footer := compactFooter(lines[footerStart:])
 	available := height - headerCount
@@ -435,7 +440,7 @@ func legacyTableViewport(lines []string, selectedLine, footerStart, headerCount,
 	viewport = append(viewport, lines[:headerCount]...)
 	viewport = append(viewport, body[start:start+bodyHeight]...)
 	if showMore {
-		viewport = append(viewport, moreIndicator(profile, len(body)-bodyHeight))
+		viewport = append(viewport, moreIndicator(palette, len(body)-bodyHeight))
 	}
 	return append(viewport, footer...)
 }
@@ -504,44 +509,44 @@ func renderHeader(columns []column, paneWidth int) string {
 	return "  " + joinRow(columns, headers, paneWidth)
 }
 
-func planSectionRole(kind SectionKind) Role {
+func planSectionRole(kind SectionKind) theme.Role {
 	switch kind {
 	case SectionNow:
-		return RolePlanNow
+		return theme.RolePlanNow
 	case SectionNext:
-		return RolePlanNext
+		return theme.RolePlanNext
 	case SectionHistory:
-		return RolePlanHistory
+		return theme.RolePlanHistory
 	default:
-		return RoleNeutral5
+		return theme.RoleNeutral5
 	}
 }
 
-func renderTableRow(row monitor.Row, section SectionKind, now time.Time, columns []column, paneWidth int, selected bool, profile Profile, actionLabel string) string {
+func renderTableRow(row monitor.Row, section SectionKind, now time.Time, columns []column, paneWidth int, selected bool, palette theme.Palette, actionLabel string) string {
 	values := tableRowValues(row, now, actionLabel)
-	cellProfile := profile
+	cellPalette := palette
 	if selected || section == SectionHistory {
-		cellProfile = ProfileNone
+		cellPalette.Profile = theme.ProfileNone
 	}
 	repositoryKey := strings.TrimSpace(row.RepositoryID)
 	if repositoryKey == "" {
 		repositoryKey = strings.TrimSpace(row.RepositoryName)
 	}
-	repositoryRole := RepoColor(repositoryKey)
+	repositoryRole := theme.RepoColor(repositoryKey)
 	if selected {
-		repositoryRole = RoleRepoSelected
+		repositoryRole = theme.RoleRepoSelected
 	}
 	rowCells := make([]string, 0, len(columns))
 	for _, item := range columns {
 		switch item.name {
 		case "REPO":
-			rowCells = append(rowCells, Paint(cellProfile, repositoryRole, values.repo))
+			rowCells = append(rowCells, cellPalette.Paint(repositoryRole, values.repo))
 		case "NEXT":
 			rowCells = append(rowCells, values.next)
 		case "PLAN":
 			rowCells = append(rowCells, values.plan)
 		case "SLICES":
-			rowCells = append(rowCells, renderSlicesValue(cellProfile, row))
+			rowCells = append(rowCells, renderSlicesValue(cellPalette, row))
 		case "RUN":
 			rowCells = append(rowCells, values.run)
 		case "AGE":
@@ -553,29 +558,29 @@ func renderTableRow(row monitor.Row, section SectionKind, now time.Time, columns
 		line = cells.Pad(line, paneWidth+cells.Width("  "))
 	}
 	if selected {
-		return fillRowWithText(profile, RolePlanSelectionText, RolePlanSelectionBackground, true, line)
+		return palette.FillRowWithText(theme.RolePlanSelectionText, theme.RolePlanSelectionBackground, true, line)
 	}
 	switch section {
 	case SectionNow:
-		return fillRow(profile, RolePlanNowBackground, line)
+		return palette.FillRow(theme.RolePlanNowBackground, line)
 	case SectionNext:
-		return fillRow(profile, RolePlanNextBackground, line)
+		return palette.FillRow(theme.RolePlanNextBackground, line)
 	case SectionHistory:
-		return fillRowWithText(profile, RolePlanHistoryText, RolePlanHistoryBackground, false, line)
+		return palette.FillRowWithText(theme.RolePlanHistoryText, theme.RolePlanHistoryBackground, false, line)
 	default:
 		return line
 	}
 }
 
-func renderSlicesValue(profile Profile, row monitor.Row) string {
+func renderSlicesValue(palette theme.Palette, row monitor.Row) string {
 	completed := max(row.OriginalCompletedCount+row.ReworkCompletedCount, 0)
 	total := max(row.OriginalTotalCount+row.ReworkTotalCount, 0)
 	filled := 0
 	if total > 0 {
 		filled = min(completed*sliceBarCells/total, sliceBarCells)
 	}
-	bar := Paint(profile, RoleNeutral5, strings.Repeat("━", filled)) +
-		Paint(profile, RoleNeutral2, strings.Repeat("─", sliceBarCells-filled))
+	bar := palette.Paint(theme.RoleNeutral5, strings.Repeat("━", filled)) +
+		palette.Paint(theme.RoleNeutral2, strings.Repeat("─", sliceBarCells-filled))
 	return bar + " " + rowlabel.SlicesLabel(row)
 }
 
@@ -644,17 +649,17 @@ func formatAbandonedAt(value *time.Time) string {
 	return value.UTC().Format(time.RFC3339)
 }
 
-func colorStatus(profile Profile, value, status string) string {
-	role := RoleRepo
+func colorStatus(palette theme.Palette, value, status string) string {
+	role := theme.RoleRepo
 	switch rowlabel.StatusRoleFor(status) {
 	case rowlabel.StatusRoleSuccess:
-		role = RoleSuccess
+		role = theme.RoleSuccess
 	case rowlabel.StatusRoleActive:
-		role = RoleAccent
+		role = theme.RoleAccent
 	case rowlabel.StatusRoleReview:
-		role = RoleInfo
+		role = theme.RoleInfo
 	case rowlabel.StatusRoleWarn:
-		role = RoleWarn
+		role = theme.RoleWarn
 	}
-	return Paint(profile, role, value)
+	return palette.Paint(role, value)
 }

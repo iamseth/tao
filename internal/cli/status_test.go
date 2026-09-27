@@ -13,6 +13,21 @@ import (
 	"github.com/iamseth/tao/internal/taodata"
 )
 
+func TestStatusInvalidThemeWarnsWithoutFailing(t *testing.T) {
+	clearTaoEnv(t)
+	t.Setenv("TAO_THEME", "nope")
+	var out bytes.Buffer
+	app := App{Out: &out, Repository: func(string) Repository { return fakeRepository{} }}
+	if err := app.Run(context.Background(), []string{"status"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"TAO_THEME", "tokyonight", "nope", "using default"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("status missing %q: %s", want, out.String())
+		}
+	}
+}
+
 func TestStatusRepositoryModelDefaults(t *testing.T) {
 	modelKeys := []string{runtimeconfig.EnvModel, runtimeconfig.EnvRunModel, runtimeconfig.EnvReviewModel, runtimeconfig.EnvMergeReviewModel, runtimeconfig.EnvResolverModel, runtimeconfig.EnvReworkEscalationModel}
 	for _, mode := range []string{"repository", "default", "env"} {
@@ -105,7 +120,7 @@ func TestStatusShowsRuntimeEnvAndPlanRollup(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"status"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Runtime defaults:", "TAO_COMMIT_POLICY", "slice", "TAO_PULL_REQUEST", "true", "TAO_PLANNER_ROUTING", "Plans:", "total      1", "verdicts   approve=1"} {
+	for _, want := range []string{"Runtime defaults:", "TAO_COMMIT_POLICY", "slice", "TAO_PULL_REQUEST", "true", "TAO_PLANNER_ROUTING", "TAO_THEME", "Plans:", "total      1", "verdicts   approve=1"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("expected %q in status output, got %q", want, out.String())
 		}

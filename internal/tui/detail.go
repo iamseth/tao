@@ -18,6 +18,7 @@ import (
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/term/cells"
+	"github.com/iamseth/tao/internal/theme"
 	planview "github.com/iamseth/tao/internal/view"
 )
 
@@ -72,12 +73,22 @@ type DetailModel struct {
 	Width           int
 	Height          int
 	UseColor        bool
-	Profile         Profile
+	Profile         theme.Profile
+	Theme           theme.Theme
 	ShowShortcuts   bool
 	ScopeExpanded   bool
 	LoadError       string
 	FollowError     string
 	Inspection      detailInspectionView
+}
+
+// Palette preserves the legacy UseColor fallback when no profile is supplied.
+func (m DetailModel) Palette() theme.Palette {
+	profile := m.Profile
+	if profile == theme.ProfileNone {
+		profile = profileForEnabledColor(m.UseColor)
+	}
+	return m.Theme.Palette(profile)
 }
 
 type detailState struct {
@@ -246,10 +257,7 @@ func RenderDetail(model DetailModel) string {
 	if model.Row.Liveness == monitor.LivenessLive || model.Row.Liveness == monitor.LivenessStale {
 		heartbeat = rowlabel.DurationLabel(model.Row.HeartbeatAge) + " ago"
 	}
-	profile := model.Profile
-	if profile == ProfileNone {
-		profile = profileForEnabledColor(model.UseColor)
-	}
+	palette := model.Palette()
 	tab := model.ActiveTab
 	if tab < detailTabOverview || tab >= detailTabCount {
 		tab = detailTabOverview
@@ -260,10 +268,10 @@ func RenderDetail(model DetailModel) string {
 	} else if phase != "-" || heartbeat != "-" {
 		header += " | " + singleLineDetail(phase) + " | " + singleLineDetail(heartbeat)
 	}
-	if profile != ProfileNone {
-		header = Paint(profile, RoleDetailSecondary, header)
+	if palette.Enabled() {
+		header = palette.Paint(theme.RoleDetailSecondary, header)
 	}
-	tabs := renderDetailTabs(tab, profile)
+	tabs := renderDetailTabs(tab, palette)
 	paneHeight := 24
 	if model.Height > 0 {
 		paneHeight = max(model.Height-planOverviewFixedLines, 0)
@@ -281,11 +289,11 @@ func RenderDetail(model DetailModel) string {
 	default:
 		switch tab {
 		case detailTabSlices:
-			content = renderSlicesPane(model.Plan, model.SelectedSliceID, model.Width, bodyHeight, model.UseColor)
+			content = renderSlicesPane(model.Plan, model.SelectedSliceID, model.Width, bodyHeight, model.Theme.Palette(profileForEnabledColor(model.UseColor)))
 		case detailTabActivity:
 			content = renderActivityPane(model.Log, model.FollowError, model.Width, bodyHeight, model.ActivityOffset)
 		default:
-			content = renderOverviewPane(model.Plan, model.Row, model.Width, bodyHeight, model.OverviewOffset, model.Inspection, profile, model.ScopeExpanded)
+			content = renderOverviewPane(model.Plan, model.Row, model.Width, bodyHeight, model.OverviewOffset, model.Inspection, palette, model.ScopeExpanded)
 		}
 	}
 
@@ -313,9 +321,9 @@ func RenderDetail(model DetailModel) string {
 		}
 	}
 	if model.ShowShortcuts {
-		lines = overlayPlanDetailShortcuts(lines, model.Width, model.Height, model.UseColor)
+		lines = overlayPlanDetailShortcuts(lines, model.Width, model.Height, model.Theme.Palette(profileForEnabledColor(model.UseColor)))
 	}
-	if profile != ProfileNone {
+	if palette.Enabled() {
 		for index, line := range lines {
 			if model.Width > 0 {
 				line = cells.Pad(line, model.Width)
@@ -323,7 +331,7 @@ func RenderDetail(model DetailModel) string {
 			if line == "" {
 				line = " "
 			}
-			lines[index] = fillRow(profile, RoleDetailBackground, line)
+			lines[index] = palette.FillRow(theme.RoleDetailBackground, line)
 		}
 	}
 	frame := clearScreenSequence + strings.Join(lines, "\n")
@@ -333,21 +341,21 @@ func RenderDetail(model DetailModel) string {
 	return frame
 }
 
-func renderDetailTabs(active detailTab, profile Profile) string {
+func renderDetailTabs(active detailTab, palette theme.Palette) string {
 	parts := make([]string, 0, detailTabCount)
 	for tab := detailTabOverview; tab < detailTabCount; tab++ {
 		label := tab.label()
-		role := RoleDetailMuted
+		role := theme.RoleDetailMuted
 		if tab == active {
 			label = "[" + label + "]"
-			role = RoleDetailInfo
+			role = theme.RoleDetailInfo
 		}
-		parts = append(parts, Paint(profile, role, label))
+		parts = append(parts, palette.Paint(role, label))
 	}
 	return strings.Join(parts, "  ")
 }
 
-func renderOverviewPane(detail *plan.PlanDetail, row monitor.Row, width, height, offset int, inspection detailInspectionView, profile Profile, scopeExpanded bool) []string {
+func renderOverviewPane(detail *plan.PlanDetail, row monitor.Row, width, height, offset int, inspection detailInspectionView, palette theme.Palette, scopeExpanded bool) []string {
 	if detail == nil {
 		return nil
 	}
@@ -362,69 +370,69 @@ func renderOverviewPane(detail *plan.PlanDetail, row monitor.Row, width, height,
 	}
 
 	var lines []string
-	appendOverviewTitle(&lines, detail.State.Plan.Title, width, profile)
+	appendOverviewTitle(&lines, detail.State.Plan.Title, width, palette)
 	lines = append(lines, renderDetailMetadata([]detailGridField{
-		{label: "TYPE", value: overviewDisplay(string(detail.State.Plan.ChangeType)), role: RoleDetailInfo},
+		{label: "TYPE", value: overviewDisplay(string(detail.State.Plan.ChangeType)), role: theme.RoleDetailInfo},
 		{label: "STATUS", value: overviewDisplay(status), role: detailStateRole(status)},
 		{label: "READINESS", value: overviewDisplay(string(overview.Readiness)), role: detailStateRole(string(overview.Readiness))},
 		{label: "PRIORITY", value: priorityLevel, role: detailPriorityRole(priorityLevel)},
-	}, width, profile)...)
+	}, width, palette)...)
 
-	attention := detailAttentionLines(detail, row, inspection, width, profile)
+	attention := detailAttentionLines(detail, row, inspection, width, palette)
 	if len(attention) > 0 {
-		lines = append(lines, Paint(profile, RoleDetailWarning, "! ATTENTION"))
+		lines = append(lines, palette.Paint(theme.RoleDetailWarning, "! ATTENTION"))
 		lines = append(lines, attention...)
 	} else if inspection.status == detailInspectionLoading || inspection.status == detailInspectionUnavailable {
-		lines = append(lines, Paint(profile, RoleDetailMuted, "INSPECTION  ")+Paint(profile, detailStalenessRole(inspection), detailStalenessSummary(inspection)))
+		lines = append(lines, palette.Paint(theme.RoleDetailMuted, "INSPECTION  ")+palette.Paint(detailStalenessRole(inspection), detailStalenessSummary(inspection)))
 	}
 
-	lines = append(lines, "", detailSectionHeading("CONTEXT", width, profile))
-	appendOverviewLabeledText(&lines, "Problem", overview.Problem, width, profile)
+	lines = append(lines, "", detailSectionHeading("CONTEXT", width, palette))
+	appendOverviewLabeledText(&lines, "Problem", overview.Problem, width, palette)
 	lines = append(lines, "")
-	appendOverviewLabeledText(&lines, "Why now", overview.WhyNow, width, profile)
+	appendOverviewLabeledText(&lines, "Why now", overview.WhyNow, width, palette)
 	lines = append(lines, "")
-	appendOverviewLabeledText(&lines, "Expected benefit", overview.ExpectedBenefit, width, profile)
+	appendOverviewLabeledText(&lines, "Expected benefit", overview.ExpectedBenefit, width, palette)
 	questions := boundedOverviewValues(detail.State.OpenQuestions, detailOverviewMaxQuestions)
 	if len(questions) > 0 {
-		lines = append(lines, "", Paint(profile, RoleDetailMuted, "Open questions"))
+		lines = append(lines, "", palette.Paint(theme.RoleDetailMuted, "Open questions"))
 		for _, question := range questions {
-			appendOverviewBullet(&lines, question, width, profile, RoleDetailBody, "?")
+			appendOverviewBullet(&lines, question, width, palette, theme.RoleDetailBody, "?")
 		}
 	}
 
-	lines = append(lines, "", detailSectionHeading("SUCCESS CRITERIA", width, profile))
+	lines = append(lines, "", detailSectionHeading("SUCCESS CRITERIA", width, palette))
 	if len(overview.SuccessCriteria) == 0 {
-		appendOverviewChecklistItem(&lines, "-", width, profile, RoleDetailMuted)
+		appendOverviewChecklistItem(&lines, "-", width, palette, theme.RoleDetailMuted)
 	} else {
 		for _, criterion := range overview.SuccessCriteria {
-			appendOverviewChecklistItem(&lines, criterion, width, profile, RoleDetailSecondary)
+			appendOverviewChecklistItem(&lines, criterion, width, palette, theme.RoleDetailSecondary)
 		}
 	}
 
 	if overview.Priority != nil {
 		priority := overview.Priority
-		lines = append(lines, "", detailSectionHeading("PRIORITY", width, profile))
-		lines = append(lines, renderPriorityGrid(priority, width, profile)...)
-		appendOverviewMutedParagraph(&lines, "Rationale", priority.Rationale, width, profile)
+		lines = append(lines, "", detailSectionHeading("PRIORITY", width, palette))
+		lines = append(lines, renderPriorityGrid(priority, width, palette)...)
+		appendOverviewMutedParagraph(&lines, "Rationale", priority.Rationale, width, palette)
 	}
 
-	lines = append(lines, "", detailSectionHeading("SCOPE", width, profile))
+	lines = append(lines, "", detailSectionHeading("SCOPE", width, palette))
 	scope := detailScope(detail)
 	visibleScope := scope
 	if !scopeExpanded && len(visibleScope) > detailOverviewScopePreview {
 		visibleScope = visibleScope[:detailOverviewScopePreview]
 	}
 	if len(visibleScope) == 0 {
-		appendOverviewBullet(&lines, "-", width, profile, RoleDetailMuted, "•")
+		appendOverviewBullet(&lines, "-", width, palette, theme.RoleDetailMuted, "•")
 	} else {
 		for _, file := range visibleScope {
-			appendOverviewBullet(&lines, file, width, profile, RoleDetailSecondary, "•")
+			appendOverviewBullet(&lines, file, width, palette, theme.RoleDetailSecondary, "•")
 		}
 	}
 	if remaining := len(scope) - len(visibleScope); remaining > 0 {
-		appendOverviewBullet(&lines, fmt.Sprintf("+%d more — press e to expand", remaining), width, profile, RoleDetailInfo, "")
+		appendOverviewBullet(&lines, fmt.Sprintf("+%d more — press e to expand", remaining), width, palette, theme.RoleDetailInfo, "")
 	} else if scopeExpanded && len(scope) > detailOverviewScopePreview {
-		appendOverviewBullet(&lines, "press e to collapse", width, profile, RoleDetailInfo, "↥")
+		appendOverviewBullet(&lines, "press e to collapse", width, palette, theme.RoleDetailInfo, "↥")
 	}
 
 	return fitDetailPaneAt(lines, width, height, offset)
@@ -462,29 +470,29 @@ func overviewDisplay(value string) string {
 type detailGridField struct {
 	label string
 	value string
-	role  Role
+	role  theme.Role
 }
 
-func appendOverviewTitle(lines *[]string, title string, width int, profile Profile) {
+func appendOverviewTitle(lines *[]string, title string, width int, palette theme.Palette) {
 	wrapped := wrapDetailWords(overviewDisplay(title), detailContentWidth(width, 0))
 	for _, line := range wrapped {
-		if profile == ProfileNone {
+		if !palette.Enabled() {
 			*lines = append(*lines, line)
 		} else {
-			*lines = append(*lines, boldSequence+Paint(profile, RoleDetailPrimary, line))
+			*lines = append(*lines, theme.Bold+palette.Paint(theme.RoleDetailPrimary, line))
 		}
 	}
 }
 
-func renderDetailMetadata(fields []detailGridField, width int, profile Profile) []string {
+func renderDetailMetadata(fields []detailGridField, width int, palette theme.Palette) []string {
 	var lines []string
 	var line strings.Builder
 	lineWidth := 0
-	separator := Paint(profile, RoleDetailMuted, "  ·  ")
+	separator := palette.Paint(theme.RoleDetailMuted, "  ·  ")
 	for _, field := range fields {
 		value := overviewDisplay(field.value)
 		plainWidth := cells.Width(field.label) + 2 + cells.Width(value)
-		styled := Paint(profile, RoleDetailMuted, field.label) + "  " + Paint(profile, field.role, value)
+		styled := palette.Paint(theme.RoleDetailMuted, field.label) + "  " + palette.Paint(field.role, value)
 		separatorWidth := 0
 		if lineWidth > 0 {
 			separatorWidth = 5
@@ -507,12 +515,12 @@ func renderDetailMetadata(fields []detailGridField, width int, profile Profile) 
 	return lines
 }
 
-func appendOverviewLabeledText(lines *[]string, label, value string, width int, profile Profile) {
-	*lines = append(*lines, Paint(profile, RoleDetailSecondary, label))
-	appendOverviewText(lines, overviewDisplay(value), width, profile, RoleDetailBody, "  ")
+func appendOverviewLabeledText(lines *[]string, label, value string, width int, palette theme.Palette) {
+	*lines = append(*lines, palette.Paint(theme.RoleDetailSecondary, label))
+	appendOverviewText(lines, overviewDisplay(value), width, palette, theme.RoleDetailBody, "  ")
 }
 
-func renderPriorityGrid(priority *plan.Priority, width int, profile Profile) []string {
+func renderPriorityGrid(priority *plan.Priority, width int, palette theme.Palette) []string {
 	rows := [][]detailGridField{
 		{
 			{label: "Impact", value: string(priority.Impact), role: detailPriorityRole(string(priority.Impact))},
@@ -520,7 +528,7 @@ func renderPriorityGrid(priority *plan.Priority, width int, profile Profile) []s
 			{label: "Risk", value: string(priority.Risk), role: detailRiskRole(string(priority.Risk))},
 		},
 		{
-			{label: "Effort", value: string(priority.Effort), role: RoleDetailSecondary},
+			{label: "Effort", value: string(priority.Effort), role: theme.RoleDetailSecondary},
 			{label: "Confidence", value: string(priority.Confidence), role: detailPriorityRole(string(priority.Confidence))},
 		},
 	}
@@ -532,7 +540,7 @@ func renderPriorityGrid(priority *plan.Priority, width int, profile Profile) []s
 		fields := append(append([]detailGridField(nil), rows[0]...), rows[1]...)
 		lines := make([]string, 0, len(fields))
 		for _, field := range fields {
-			line := Paint(profile, RoleDetailMuted, cells.Pad(field.label, 10)) + " " + Paint(profile, field.role, overviewDisplay(field.value))
+			line := palette.Paint(theme.RoleDetailMuted, cells.Pad(field.label, 10)) + " " + palette.Paint(field.role, overviewDisplay(field.value))
 			lines = append(lines, cells.TruncateEllipsis(line, width))
 		}
 		return lines
@@ -541,7 +549,7 @@ func renderPriorityGrid(priority *plan.Priority, width int, profile Profile) []s
 	for _, fields := range rows {
 		var line strings.Builder
 		for column, field := range fields {
-			cell := Paint(profile, RoleDetailMuted, field.label) + " " + Paint(profile, field.role, overviewDisplay(field.value))
+			cell := palette.Paint(theme.RoleDetailMuted, field.label) + " " + palette.Paint(field.role, overviewDisplay(field.value))
 			if column < len(fields)-1 {
 				cell = cells.Pad(cell, columnWidths[column]) + strings.Repeat(" ", gutter)
 			}
@@ -552,7 +560,7 @@ func renderPriorityGrid(priority *plan.Priority, width int, profile Profile) []s
 	return lines
 }
 
-func appendOverviewMutedParagraph(lines *[]string, label, value string, width int, profile Profile) {
+func appendOverviewMutedParagraph(lines *[]string, label, value string, width int, palette theme.Palette) {
 	if value = singleLineDetail(value); value == "" {
 		return
 	}
@@ -560,20 +568,20 @@ func appendOverviewMutedParagraph(lines *[]string, label, value string, width in
 	wrapped := wrapDetailWords(value, detailContentWidth(width, cells.Width(prefix)))
 	for index, line := range wrapped {
 		if index == 0 {
-			*lines = append(*lines, Paint(profile, RoleDetailMuted, prefix+line))
+			*lines = append(*lines, palette.Paint(theme.RoleDetailMuted, prefix+line))
 		} else {
-			*lines = append(*lines, Paint(profile, RoleDetailMuted, strings.Repeat(" ", cells.Width(prefix))+line))
+			*lines = append(*lines, palette.Paint(theme.RoleDetailMuted, strings.Repeat(" ", cells.Width(prefix))+line))
 		}
 	}
 }
 
-func appendOverviewText(lines *[]string, value string, width int, profile Profile, role Role, indent string) {
+func appendOverviewText(lines *[]string, value string, width int, palette theme.Palette, role theme.Role, indent string) {
 	for _, line := range wrapDetailWords(singleLineDetail(value), detailContentWidth(width, cells.Width(indent))) {
-		*lines = append(*lines, indent+Paint(profile, role, line))
+		*lines = append(*lines, indent+palette.Paint(role, line))
 	}
 }
 
-func appendOverviewBullet(lines *[]string, value string, width int, profile Profile, role Role, marker string) {
+func appendOverviewBullet(lines *[]string, value string, width int, palette theme.Palette, role theme.Role, marker string) {
 	value = singleLineDetail(value)
 	if value == "" {
 		return
@@ -582,14 +590,14 @@ func appendOverviewBullet(lines *[]string, value string, width int, profile Prof
 	wrapped := wrapDetailWords(value, detailContentWidth(width, cells.Width(prefix)))
 	for index, line := range wrapped {
 		if index == 0 {
-			*lines = append(*lines, Paint(profile, RoleDetailMuted, prefix)+Paint(profile, role, line))
+			*lines = append(*lines, palette.Paint(theme.RoleDetailMuted, prefix)+palette.Paint(role, line))
 		} else {
-			*lines = append(*lines, strings.Repeat(" ", cells.Width(prefix))+Paint(profile, role, line))
+			*lines = append(*lines, strings.Repeat(" ", cells.Width(prefix))+palette.Paint(role, line))
 		}
 	}
 }
 
-func appendOverviewChecklistItem(lines *[]string, value string, width int, profile Profile, role Role) {
+func appendOverviewChecklistItem(lines *[]string, value string, width int, palette theme.Palette, role theme.Role) {
 	value = singleLineDetail(value)
 	if value == "" {
 		return
@@ -599,9 +607,9 @@ func appendOverviewChecklistItem(lines *[]string, value string, width int, profi
 	wrapped := wrapDetailWords(value, detailContentWidth(width, cells.Width(prefix)))
 	for index, line := range wrapped {
 		if index == 0 {
-			*lines = append(*lines, Paint(profile, RoleDetailMuted, prefix)+Paint(profile, role, line))
+			*lines = append(*lines, palette.Paint(theme.RoleDetailMuted, prefix)+palette.Paint(role, line))
 		} else {
-			*lines = append(*lines, continuation+Paint(profile, role, line))
+			*lines = append(*lines, continuation+palette.Paint(role, line))
 		}
 	}
 }
@@ -613,45 +621,45 @@ func detailContentWidth(width, prefix int) int {
 	return max(width-prefix, 1)
 }
 
-func detailSectionHeading(title string, width int, profile Profile) string {
+func detailSectionHeading(title string, width int, palette theme.Palette) string {
 	plainTitle := strings.ToUpper(singleLineDetail(title))
 	if width <= 0 {
 		width = 72
 	}
 	dividerWidth := max(min(width-cells.Width(plainTitle)-1, 20), 1)
-	return Paint(profile, RoleDetailSecondary, plainTitle) + " " + Paint(profile, RoleDetailDivider, strings.Repeat("─", dividerWidth))
+	return palette.Paint(theme.RoleDetailSecondary, plainTitle) + " " + palette.Paint(theme.RoleDetailDivider, strings.Repeat("─", dividerWidth))
 }
 
-func detailStateRole(value string) Role {
+func detailStateRole(value string) theme.Role {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "ready", "completed", "approved", "current", "done", "pass", "passed", "success", "succeeded", "committed":
-		return RoleDetailSuccess
+		return theme.RoleDetailSuccess
 	case "blocked", "invalid", "fail", "failed", "failure", "error", "abandoned", "obsolete":
-		return RoleDetailError
+		return theme.RoleDetailError
 	case "needs_refinement", "conditional", "deferred", "changes_requested", "stale":
-		return RoleDetailWarning
+		return theme.RoleDetailWarning
 	default:
-		return RoleDetailInfo
+		return theme.RoleDetailInfo
 	}
 }
 
-func detailPriorityRole(value string) Role {
+func detailPriorityRole(value string) theme.Role {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "must", "high":
-		return RoleDetailInfo
+		return theme.RoleDetailInfo
 	default:
-		return RoleDetailSecondary
+		return theme.RoleDetailSecondary
 	}
 }
 
-func detailRiskRole(value string) Role {
+func detailRiskRole(value string) theme.Role {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "high":
-		return RoleDetailError
+		return theme.RoleDetailError
 	case "medium":
-		return RoleDetailWarning
+		return theme.RoleDetailWarning
 	default:
-		return RoleDetailSecondary
+		return theme.RoleDetailSecondary
 	}
 }
 
@@ -674,32 +682,32 @@ func detailStalenessSummary(inspection detailInspectionView) string {
 	}
 }
 
-func detailStalenessRole(inspection detailInspectionView) Role {
+func detailStalenessRole(inspection detailInspectionView) theme.Role {
 	switch inspection.status {
 	case detailInspectionReady:
 		if len(inspection.findings) == 0 {
-			return RoleDetailSuccess
+			return theme.RoleDetailSuccess
 		}
-		return RoleDetailWarning
+		return theme.RoleDetailWarning
 	case detailInspectionFailed:
-		return RoleDetailError
+		return theme.RoleDetailError
 	case detailInspectionLoading:
-		return RoleDetailInfo
+		return theme.RoleDetailInfo
 	default:
-		return RoleDetailMuted
+		return theme.RoleDetailMuted
 	}
 }
 
-func detailAttentionLines(detail *plan.PlanDetail, row monitor.Row, inspection detailInspectionView, width int, profile Profile) []string {
+func detailAttentionLines(detail *plan.PlanDetail, row monitor.Row, inspection detailInspectionView, width int, palette theme.Palette) []string {
 	var items []struct {
 		text string
-		role Role
+		role theme.Role
 	}
 	for _, line := range detailAbandonmentLines(detail, row) {
 		items = append(items, struct {
 			text string
-			role Role
-		}{text: line, role: RoleDetailError})
+			role theme.Role
+		}{text: line, role: theme.RoleDetailError})
 	}
 	for _, reason := range row.AttentionReasons {
 		text := strings.ReplaceAll(string(reason), "_", " ")
@@ -708,35 +716,35 @@ func detailAttentionLines(detail *plan.PlanDetail, row monitor.Row, inspection d
 		}
 		items = append(items, struct {
 			text string
-			role Role
-		}{text: text, role: RoleDetailWarning})
+			role theme.Role
+		}{text: text, role: theme.RoleDetailWarning})
 	}
 	for _, warning := range append(append([]string(nil), row.Warnings...), row.RelationshipWarnings...) {
 		items = append(items, struct {
 			text string
-			role Role
-		}{text: warning, role: RoleDetailWarning})
+			role theme.Role
+		}{text: warning, role: theme.RoleDetailWarning})
 	}
 	switch inspection.status {
 	case detailInspectionReady:
 		for _, finding := range inspection.findings {
-			role := RoleDetailWarning
+			role := theme.RoleDetailWarning
 			switch {
 			case strings.EqualFold(finding.Severity, "error"):
-				role = RoleDetailError
+				role = theme.RoleDetailError
 			case strings.EqualFold(finding.Severity, "info"):
-				role = RoleDetailInfo
+				role = theme.RoleDetailInfo
 			}
 			items = append(items, struct {
 				text string
-				role Role
+				role theme.Role
 			}{text: overviewDisplay(finding.Message), role: role})
 		}
 	case detailInspectionFailed:
 		items = append(items, struct {
 			text string
-			role Role
-		}{text: "Inspection failed: " + overviewDisplay(inspection.err), role: RoleDetailError})
+			role theme.Role
+		}{text: "Inspection failed: " + overviewDisplay(inspection.err), role: theme.RoleDetailError})
 	}
 	var lines []string
 	seen := make(map[string]struct{})
@@ -749,7 +757,7 @@ func detailAttentionLines(detail *plan.PlanDetail, row monitor.Row, inspection d
 			continue
 		}
 		seen[item.text] = struct{}{}
-		appendOverviewBullet(&lines, item.text, width, profile, item.role, "•")
+		appendOverviewBullet(&lines, item.text, width, palette, item.role, "•")
 	}
 	return lines
 }
@@ -932,10 +940,10 @@ func detailHeaderValues(model DetailModel) (id, title, repoName, status string) 
 // array is only an ID lookup; completed_slices followed by pending_slices owns
 // presentation order.
 func RenderSlicesPane(detail *plan.PlanDetail, width, height int, useColor bool) []string {
-	return renderSlicesPane(detail, "", width, height, useColor)
+	return renderSlicesPane(detail, "", width, height, theme.Default().Palette(profileForEnabledColor(useColor)))
 }
 
-func renderSlicesPane(detail *plan.PlanDetail, selectedID string, width, height int, useColor bool) []string {
+func renderSlicesPane(detail *plan.PlanDetail, selectedID string, width, height int, palette theme.Palette) []string {
 	if detail == nil {
 		return nil
 	}
@@ -965,7 +973,7 @@ func renderSlicesPane(detail *plan.PlanDetail, selectedID string, width, height 
 			selectedLine = len(lines)
 		}
 		status := cells.Pad(rowlabel.DisplayValue(slice.Status), statusWidth)
-		status = colorStatus(profileForEnabledColor(useColor), status, slice.Status)
+		status = colorStatus(palette, status, slice.Status)
 		id := cells.Pad(rowlabel.DisplayValue(slice.ID), idWidth)
 		line := cursor + status + "  " + id + "  " + rowlabel.DisplayValue(slice.Title)
 		if marker := approvalMarker(slice.Approval); marker != "" {
@@ -982,26 +990,23 @@ func renderSlicesPane(detail *plan.PlanDetail, selectedID string, width, height 
 
 // RenderSliceDetail renders the selected slice as a bounded read-only frame.
 func RenderSliceDetail(model DetailModel) string {
-	profile := model.Profile
-	if profile == ProfileNone {
-		profile = profileForEnabledColor(model.UseColor)
-	}
+	palette := model.Palette()
 	selected, ok := findDetailSlice(model.Plan, model.SelectedSliceID)
 	id := "-"
-	header := []string{Paint(profile, RoleDetailMuted, "Tao UI | -")}
-	body := []string{Paint(profile, RoleDetailMuted, "Slice details unavailable.")}
+	header := []string{palette.Paint(theme.RoleDetailMuted, "Tao UI | -")}
+	body := []string{palette.Paint(theme.RoleDetailMuted, "Slice details unavailable.")}
 	if ok {
 		id = rowlabel.DisplayValue(singleLineDetail(selected.ID))
-		header = []string{Paint(profile, RoleDetailMuted, "Tao UI | "+id), ""}
-		appendOverviewTitle(&header, selected.Title, model.Width, profile)
+		header = []string{palette.Paint(theme.RoleDetailMuted, "Tao UI | "+id), ""}
+		appendOverviewTitle(&header, selected.Title, model.Width, palette)
 		header = append(header, renderDetailMetadata([]detailGridField{
 			{label: "STATUS", value: selected.Status, role: detailStateRole(selected.Status)},
 			{label: "APPROVAL", value: sliceApprovalStatus(selected.Approval), role: sliceApprovalRole(selected.Approval)},
-		}, model.Width, profile)...)
+		}, model.Width, palette)...)
 		if selected.Approval != nil {
-			appendOverviewMutedParagraph(&header, "Approval rationale", selected.Approval.Reason, model.Width, profile)
+			appendOverviewMutedParagraph(&header, "Approval rationale", selected.Approval.Reason, model.Width, palette)
 		}
-		body = renderSlicePlan(selected, model.Width, profile)
+		body = renderSlicePlan(selected, model.Width, palette)
 	}
 
 	filteredLog := model.SliceLog
@@ -1012,7 +1017,7 @@ func RenderSliceDetail(model DetailModel) string {
 	if len(document) > 0 {
 		document = append(document, "")
 	}
-	document = append(document, renderSliceLogSection(filteredLog, model.Width, profile)...)
+	document = append(document, renderSliceLogSection(filteredLog, model.Width, palette)...)
 	bodyHeight := len(document)
 	if model.Height > 0 {
 		bodyHeight = max(model.Height-len(header)-1, 0)
@@ -1032,9 +1037,9 @@ func RenderSliceDetail(model DetailModel) string {
 		lines = lines[:model.Height]
 	}
 	if model.ShowShortcuts {
-		lines = overlaySliceDetailShortcuts(lines, model.Width, model.Height, model.UseColor)
+		lines = overlaySliceDetailShortcuts(lines, model.Width, model.Height, model.Theme.Palette(profileForEnabledColor(model.UseColor)))
 	}
-	if profile != ProfileNone {
+	if palette.Enabled() {
 		for index, line := range lines {
 			if model.Width > 0 {
 				line = cells.Pad(line, model.Width)
@@ -1042,7 +1047,7 @@ func RenderSliceDetail(model DetailModel) string {
 			if line == "" {
 				line = " "
 			}
-			lines[index] = fillRow(profile, RoleDetailBackground, line)
+			lines[index] = palette.FillRow(theme.RoleDetailBackground, line)
 		}
 	}
 	frame := clearScreenSequence + strings.Join(lines, "\n")
@@ -1052,15 +1057,15 @@ func RenderSliceDetail(model DetailModel) string {
 	return frame
 }
 
-func renderSlicePlan(selected plan.Slice, width int, profile Profile) []string {
+func renderSlicePlan(selected plan.Slice, width int, palette theme.Palette) []string {
 	var lines []string
-	appendSliceSection(&lines, "GOAL", width, profile)
-	appendSliceParagraph(&lines, selected.Goal, width, profile, RoleNeutral3)
+	appendSliceSection(&lines, "GOAL", width, palette)
+	appendSliceParagraph(&lines, selected.Goal, width, palette, theme.RoleNeutral3)
 
-	appendSliceSection(&lines, "CONTEXT", width, profile)
-	appendSliceParagraph(&lines, selected.Context, width, profile, RoleNeutral3)
+	appendSliceSection(&lines, "CONTEXT", width, palette)
+	appendSliceParagraph(&lines, selected.Context, width, palette, theme.RoleNeutral3)
 
-	appendSliceSection(&lines, "DEPENDENCY", width, profile)
+	appendSliceSection(&lines, "DEPENDENCY", width, palette)
 	dependencies := make([]sliceDependencyItem, 0, len(selected.DependsOn))
 	for _, dependency := range selected.DependsOn {
 		if dependency = singleLineDetail(dependency); dependency != "" {
@@ -1079,39 +1084,39 @@ func renderSlicePlan(selected plan.Slice, width int, profile Profile) []string {
 		inputs = append(inputs, sliceDependencyItem{value: path, reason: singleLineDetail(input.Reason)})
 	}
 	if len(dependencies) == 0 && len(inputs) == 0 {
-		appendSliceEmpty(&lines, profile)
+		appendSliceEmpty(&lines, palette)
 	} else {
-		appendSliceDependencyGroup(&lines, "Slices", dependencies, width, profile)
-		appendSliceDependencyGroup(&lines, "Inputs", inputs, width, profile)
+		appendSliceDependencyGroup(&lines, "Slices", dependencies, width, palette)
+		appendSliceDependencyGroup(&lines, "Inputs", inputs, width, palette)
 	}
 
 	if blocker := singleLineDetail(selected.BlockerNote); blocker != "" {
-		appendSliceSection(&lines, "BLOCKER", width, profile)
-		appendSliceParagraph(&lines, blocker, width, profile, RoleDetailWarning)
+		appendSliceSection(&lines, "BLOCKER", width, palette)
+		appendSliceParagraph(&lines, blocker, width, palette, theme.RoleDetailWarning)
 	}
 
-	appendSliceSection(&lines, "TASKS", width, profile)
-	appendSliceTasks(&lines, selected.Tasks, width, profile)
+	appendSliceSection(&lines, "TASKS", width, palette)
+	appendSliceTasks(&lines, selected.Tasks, width, palette)
 
-	appendSliceSection(&lines, "EXPECTED FILES", width, profile)
-	if !appendSliceValues(&lines, selected.ExpectedFiles, width, profile, RoleDetailPrimary, "•") {
-		appendSliceEmpty(&lines, profile)
+	appendSliceSection(&lines, "EXPECTED FILES", width, palette)
+	if !appendSliceValues(&lines, selected.ExpectedFiles, width, palette, theme.RoleDetailPrimary, "•") {
+		appendSliceEmpty(&lines, palette)
 	}
 
-	appendSliceSection(&lines, "VERIFICATION", width, profile)
-	lines = append(lines, Paint(profile, RoleDetailMuted, "Source / rationale"))
-	appendSliceParagraph(&lines, selected.Verification.Source, width, profile, RoleDetailBody)
-	lines = append(lines, "", Paint(profile, RoleDetailMuted, "Commands"))
-	if !appendSliceValues(&lines, selected.Verification.Commands, width, profile, RoleDetailInfo, "›") {
-		appendSliceEmpty(&lines, profile)
+	appendSliceSection(&lines, "VERIFICATION", width, palette)
+	lines = append(lines, palette.Paint(theme.RoleDetailMuted, "Source / rationale"))
+	appendSliceParagraph(&lines, selected.Verification.Source, width, palette, theme.RoleDetailBody)
+	lines = append(lines, "", palette.Paint(theme.RoleDetailMuted, "Commands"))
+	if !appendSliceValues(&lines, selected.Verification.Commands, width, palette, theme.RoleDetailInfo, "›") {
+		appendSliceEmpty(&lines, palette)
 	}
-	lines = append(lines, "", Paint(profile, RoleDetailMuted, "Manual checks"))
-	appendSliceChecklist(&lines, selected.Verification.ManualChecks, width, profile, RoleDetailSecondary)
+	lines = append(lines, "", palette.Paint(theme.RoleDetailMuted, "Manual checks"))
+	appendSliceChecklist(&lines, selected.Verification.ManualChecks, width, palette, theme.RoleDetailSecondary)
 	if len(selected.VerificationResults) > 0 {
-		lines = append(lines, "", Paint(profile, RoleDetailMuted, "Results"))
+		lines = append(lines, "", palette.Paint(theme.RoleDetailMuted, "Results"))
 		for _, result := range selected.VerificationResults {
 			if command := singleLineDetail(result.Command); command != "" {
-				appendSliceBullet(&lines, command, width, profile, RoleDetailPrimary, "›")
+				appendSliceBullet(&lines, command, width, palette, theme.RoleDetailPrimary, "›")
 			}
 			resultText := singleLineDetail(result.Result)
 			if details := singleLineDetail(result.Details); details != "" {
@@ -1121,37 +1126,37 @@ func renderSlicePlan(selected plan.Slice, width int, profile Profile) []string {
 				resultText += details
 			}
 			if resultText != "" {
-				appendSliceIndentedText(&lines, resultText, width, profile, detailStateRole(result.Result), "    ")
+				appendSliceIndentedText(&lines, resultText, width, palette, detailStateRole(result.Result), "    ")
 			}
 		}
 	}
 
 	if notes := singleLineDetail(selected.Notes); notes != "" {
-		appendSliceSection(&lines, "NOTES", width, profile)
-		appendSliceParagraph(&lines, notes, width, profile, RoleDetailBody)
+		appendSliceSection(&lines, "NOTES", width, palette)
+		appendSliceParagraph(&lines, notes, width, palette, theme.RoleDetailBody)
 	}
 	if selected.Completion != nil {
-		appendSliceSection(&lines, "COMPLETION", width, profile)
-		appendSliceLabeledValue(&lines, "Outcome", selected.Completion.Outcome, width, profile, detailStateRole(selected.Completion.Outcome))
-		appendSliceLabeledValue(&lines, "Commit", selected.Completion.CommitSHA, width, profile, RoleDetailPrimary)
+		appendSliceSection(&lines, "COMPLETION", width, palette)
+		appendSliceLabeledValue(&lines, "Outcome", selected.Completion.Outcome, width, palette, detailStateRole(selected.Completion.Outcome))
+		appendSliceLabeledValue(&lines, "Commit", selected.Completion.CommitSHA, width, palette, theme.RoleDetailPrimary)
 	}
 	return lines
 }
 
-func appendSliceSection(lines *[]string, title string, width int, profile Profile) {
+func appendSliceSection(lines *[]string, title string, width int, palette theme.Palette) {
 	if len(*lines) > 0 {
 		*lines = append(*lines, "")
 	}
-	*lines = append(*lines, detailSectionHeading(title, width, profile))
+	*lines = append(*lines, detailSectionHeading(title, width, palette))
 }
 
-func appendSliceParagraph(lines *[]string, value string, width int, profile Profile, role Role) {
+func appendSliceParagraph(lines *[]string, value string, width int, palette theme.Palette, role theme.Role) {
 	value = singleLineDetail(value)
 	if value == "" {
-		appendSliceEmpty(lines, profile)
+		appendSliceEmpty(lines, palette)
 		return
 	}
-	appendSliceIndentedText(lines, value, width, profile, role, "  ")
+	appendSliceIndentedText(lines, value, width, palette, role, "  ")
 }
 
 type sliceDependencyItem struct {
@@ -1159,14 +1164,14 @@ type sliceDependencyItem struct {
 	reason string
 }
 
-func appendSliceDependencyGroup(lines *[]string, label string, items []sliceDependencyItem, width int, profile Profile) {
+func appendSliceDependencyGroup(lines *[]string, label string, items []sliceDependencyItem, width int, palette theme.Palette) {
 	if len(items) == 0 {
 		return
 	}
 	const labelWidth = 6
 	compact := width <= 0 || width >= 24
 	if !compact {
-		*lines = append(*lines, "  "+Paint(profile, RoleDetailMuted, label))
+		*lines = append(*lines, "  "+palette.Paint(theme.RoleDetailMuted, label))
 	}
 	for index, item := range items {
 		prefix := "    • "
@@ -1180,77 +1185,77 @@ func appendSliceDependencyGroup(lines *[]string, label string, items []sliceDepe
 		wrapped := wrapDetailWords(item.value, sliceDetailContentWidth(width, cells.Width(prefix)))
 		for lineIndex, line := range wrapped {
 			if lineIndex == 0 {
-				*lines = append(*lines, Paint(profile, RoleDetailMuted, prefix)+Paint(profile, RoleDetailPrimary, line))
+				*lines = append(*lines, palette.Paint(theme.RoleDetailMuted, prefix)+palette.Paint(theme.RoleDetailPrimary, line))
 			} else {
-				*lines = append(*lines, strings.Repeat(" ", cells.Width(prefix))+Paint(profile, RoleDetailPrimary, line))
+				*lines = append(*lines, strings.Repeat(" ", cells.Width(prefix))+palette.Paint(theme.RoleDetailPrimary, line))
 			}
 		}
 		if item.reason != "" {
 			indent := strings.Repeat(" ", cells.Width(prefix))
-			appendSliceIndentedText(lines, item.reason, width, profile, RoleDetailBody, indent)
+			appendSliceIndentedText(lines, item.reason, width, palette, theme.RoleDetailBody, indent)
 		}
 	}
 }
 
-func appendSliceTasks(lines *[]string, values []string, width int, profile Profile) {
+func appendSliceTasks(lines *[]string, values []string, width int, palette theme.Palette) {
 	added := false
 	for _, value := range values {
 		if value = singleLineDetail(value); value != "" {
 			if added {
 				*lines = append(*lines, "")
 			}
-			appendSliceBullet(lines, value, width, profile, RoleDetailSecondary, "☐")
+			appendSliceBullet(lines, value, width, palette, theme.RoleDetailSecondary, "☐")
 			added = true
 		}
 	}
 	if !added {
-		appendSliceEmpty(lines, profile)
+		appendSliceEmpty(lines, palette)
 	}
 }
 
-func appendSliceChecklist(lines *[]string, values []string, width int, profile Profile, role Role) {
+func appendSliceChecklist(lines *[]string, values []string, width int, palette theme.Palette, role theme.Role) {
 	added := false
 	for _, value := range values {
 		if value = singleLineDetail(value); value != "" {
-			appendSliceBullet(lines, value, width, profile, role, "☐")
+			appendSliceBullet(lines, value, width, palette, role, "☐")
 			added = true
 		}
 	}
 	if !added {
-		appendSliceEmpty(lines, profile)
+		appendSliceEmpty(lines, palette)
 	}
 }
 
-func appendSliceValues(lines *[]string, values []string, width int, profile Profile, role Role, marker string) bool {
+func appendSliceValues(lines *[]string, values []string, width int, palette theme.Palette, role theme.Role, marker string) bool {
 	added := false
 	for _, value := range values {
 		if value = singleLineDetail(value); value != "" {
-			appendSliceBullet(lines, value, width, profile, role, marker)
+			appendSliceBullet(lines, value, width, palette, role, marker)
 			added = true
 		}
 	}
 	return added
 }
 
-func appendSliceBullet(lines *[]string, value string, width int, profile Profile, role Role, marker string) {
+func appendSliceBullet(lines *[]string, value string, width int, palette theme.Palette, role theme.Role, marker string) {
 	prefix := "  " + marker + " "
 	wrapped := wrapDetailWords(value, sliceDetailContentWidth(width, cells.Width(prefix)))
 	for index, line := range wrapped {
 		if index == 0 {
-			*lines = append(*lines, Paint(profile, RoleDetailMuted, prefix)+Paint(profile, role, line))
+			*lines = append(*lines, palette.Paint(theme.RoleDetailMuted, prefix)+palette.Paint(role, line))
 		} else {
-			*lines = append(*lines, strings.Repeat(" ", cells.Width(prefix))+Paint(profile, role, line))
+			*lines = append(*lines, strings.Repeat(" ", cells.Width(prefix))+palette.Paint(role, line))
 		}
 	}
 }
 
-func appendSliceIndentedText(lines *[]string, value string, width int, profile Profile, role Role, indent string) {
+func appendSliceIndentedText(lines *[]string, value string, width int, palette theme.Palette, role theme.Role, indent string) {
 	for _, line := range wrapDetailWords(value, sliceDetailContentWidth(width, cells.Width(indent))) {
-		*lines = append(*lines, indent+Paint(profile, role, line))
+		*lines = append(*lines, indent+palette.Paint(role, line))
 	}
 }
 
-func appendSliceLabeledValue(lines *[]string, label, value string, width int, profile Profile, role Role) {
+func appendSliceLabeledValue(lines *[]string, label, value string, width int, palette theme.Palette, role theme.Role) {
 	value = singleLineDetail(value)
 	if value == "" {
 		return
@@ -1259,15 +1264,15 @@ func appendSliceLabeledValue(lines *[]string, label, value string, width int, pr
 	wrapped := wrapDetailWords(value, sliceDetailContentWidth(width, cells.Width(prefix)))
 	for index, line := range wrapped {
 		if index == 0 {
-			*lines = append(*lines, Paint(profile, RoleDetailMuted, prefix)+Paint(profile, role, line))
+			*lines = append(*lines, palette.Paint(theme.RoleDetailMuted, prefix)+palette.Paint(role, line))
 		} else {
-			*lines = append(*lines, strings.Repeat(" ", cells.Width(prefix))+Paint(profile, role, line))
+			*lines = append(*lines, strings.Repeat(" ", cells.Width(prefix))+palette.Paint(role, line))
 		}
 	}
 }
 
-func appendSliceEmpty(lines *[]string, profile Profile) {
-	*lines = append(*lines, "  "+Paint(profile, RoleDetailMuted, "None."))
+func appendSliceEmpty(lines *[]string, palette theme.Palette) {
+	*lines = append(*lines, "  "+palette.Paint(theme.RoleDetailMuted, "None."))
 }
 
 func sliceDetailContentWidth(width, prefix int) int {
@@ -1278,36 +1283,36 @@ func sliceDetailContentWidth(width, prefix int) int {
 	return max(min(width, proseWidth)-prefix, 1)
 }
 
-func sliceApprovalRole(approval *plan.Approval) Role {
+func sliceApprovalRole(approval *plan.Approval) theme.Role {
 	if approval == nil || !approval.Required || approval.Approved {
-		return RoleDetailSuccess
+		return theme.RoleDetailSuccess
 	}
-	return RoleDetailWarning
+	return theme.RoleDetailWarning
 }
 
-func renderSliceLogSection(log string, width int, profile Profile) []string {
-	lines := []string{detailSectionHeading("LOG", width, profile)}
+func renderSliceLogSection(log string, width int, palette theme.Palette) []string {
+	lines := []string{detailSectionHeading("LOG", width, palette)}
 	entries := RenderLogPane(log, 0, int(^uint(0)>>1))
 	if len(entries) == 0 {
-		return append(lines, "  "+Paint(profile, RoleDetailMuted, "No log output."))
+		return append(lines, "  "+palette.Paint(theme.RoleDetailMuted, "No log output."))
 	}
 	for _, entry := range entries {
-		lines = append(lines, Paint(profile, sliceLogRole(entry), entry))
+		lines = append(lines, palette.Paint(sliceLogRole(entry), entry))
 	}
 	return lines
 }
 
-func sliceLogRole(line string) Role {
+func sliceLogRole(line string) theme.Role {
 	lower := strings.ToLower(line)
 	switch {
 	case strings.Contains(lower, "error"), strings.Contains(lower, "failed"), strings.Contains(lower, "failure"):
-		return RoleDetailError
+		return theme.RoleDetailError
 	case strings.Contains(lower, "warning"), strings.Contains(lower, "warn:"):
-		return RoleDetailWarning
+		return theme.RoleDetailWarning
 	case strings.Contains(lower, "passed"), strings.Contains(lower, "success"), strings.Contains(lower, "completed"), strings.Contains(line, "✓"):
-		return RoleDetailSuccess
+		return theme.RoleDetailSuccess
 	default:
-		return RoleDetailMuted
+		return theme.RoleDetailMuted
 	}
 }
 
@@ -1330,21 +1335,21 @@ func sliceDetailMaxOffset(detail *plan.PlanDetail, selectedID string, width, hei
 		return 0
 	}
 	header := []string{"Tao UI | " + rowlabel.DisplayValue(singleLineDetail(selected.ID)), ""}
-	appendOverviewTitle(&header, selected.Title, width, ProfileNone)
+	appendOverviewTitle(&header, selected.Title, width, theme.Palette{})
 	header = append(header, renderDetailMetadata([]detailGridField{
 		{label: "STATUS", value: selected.Status},
 		{label: "APPROVAL", value: sliceApprovalStatus(selected.Approval)},
-	}, width, ProfileNone)...)
+	}, width, theme.Palette{})...)
 	if selected.Approval != nil {
-		appendOverviewMutedParagraph(&header, "Approval rationale", selected.Approval.Reason, width, ProfileNone)
+		appendOverviewMutedParagraph(&header, "Approval rationale", selected.Approval.Reason, width, theme.Palette{})
 	}
-	document := renderSlicePlan(selected, width, ProfileNone)
+	document := renderSlicePlan(selected, width, theme.Palette{})
 	document = append(document, "")
 	log := ""
 	if len(logs) > 0 {
 		log = logs[0]
 	}
-	document = append(document, renderSliceLogSection(log, width, ProfileNone)...)
+	document = append(document, renderSliceLogSection(log, width, theme.Palette{})...)
 	bodyHeight := max(height-len(header)-1, 0)
 	return max(len(document)-bodyHeight, 0)
 }

@@ -9,7 +9,9 @@ import (
 
 	"github.com/iamseth/tao/internal/monitor/rowlabel"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/term"
+	"github.com/iamseth/tao/internal/theme"
 )
 
 func writef(w io.Writer, format string, args ...any) error {
@@ -63,53 +65,64 @@ func wrapText(value string, width int) []string {
 	return append(lines, line)
 }
 
-func colorStatus(value, status string) string {
+func colorStatus(palette theme.Palette, value, status string) string {
 	switch rowlabel.StatusRoleFor(status) {
 	case rowlabel.StatusRoleSuccess:
-		return color(value, "32")
+		return palette.Paint(theme.RoleSuccess, value)
 	case rowlabel.StatusRoleActive:
-		return color(value, "36")
+		return palette.Paint(theme.RoleAccent, value)
 	case rowlabel.StatusRoleReview:
-		return color(value, "34")
+		return palette.Paint(theme.RolePlanNext, value)
 	case rowlabel.StatusRoleWarn:
-		return color(value, "33")
+		return palette.Paint(theme.RoleWarn, value)
 	default:
-		return color(value, "35")
+		return palette.Paint(theme.RoleRepo, value)
 	}
 }
 
-func colorDuration(value, status string) string {
+func colorDuration(palette theme.Palette, value, status string) string {
 	if strings.TrimSpace(value) == "-" {
-		return color(value, "90")
+		return palette.Paint(theme.RoleNeutral2, value)
 	}
-	return colorStatus(value, status)
+	return colorStatus(palette, value, status)
 }
 
-func colorDone(value string, completed, total int) string {
+func colorDone(palette theme.Palette, value string, completed, total int) string {
 	switch {
 	case total > 0 && completed == total:
-		return colorGreen(value)
+		return colorGreen(palette, value)
 	case completed > 0:
-		return color(value, "36")
+		return palette.Paint(theme.RoleAccent, value)
 	case total == 0:
-		return color(value, "90")
+		return palette.Paint(theme.RoleNeutral2, value)
 	default:
-		return color(value, "33")
+		return palette.Paint(theme.RoleWarn, value)
 	}
 }
 
-func colorGreen(value string) string {
-	return color(value, "32")
+func colorGreen(palette theme.Palette, value string) string {
+	return palette.Paint(theme.RoleSuccess, value)
 }
 
-func outputSupportsColor(out io.Writer) bool {
-	return term.ColorEnabled(outputIsTerminal(out), os.Getenv)
+func (a App) withRuntimeTheme() App {
+	if a.Theme == nil {
+		selected, _ := runtimeconfig.RuntimeTheme(os.Getenv) // Warnings surface in status, Settings, and Debug.
+		a.Theme = &selected
+	}
+	return a
+}
+
+func (a App) outputTheme() theme.Theme {
+	if a.Theme != nil {
+		return *a.Theme
+	}
+	return theme.Default()
+}
+
+func (a App) outputPalette(out io.Writer) theme.Palette {
+	return a.outputTheme().Palette(theme.DetectProfile(outputIsTerminal(out), os.Getenv))
 }
 
 func outputIsTerminal(out io.Writer) bool {
 	return term.IsTerminal(out)
-}
-
-func color(value, code string) string {
-	return "\x1b[" + code + "m" + value + "\x1b[0m"
 }

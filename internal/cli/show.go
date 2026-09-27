@@ -14,6 +14,7 @@ import (
 	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/taodata"
+	"github.com/iamseth/tao/internal/theme"
 	planview "github.com/iamseth/tao/internal/view"
 )
 
@@ -84,7 +85,7 @@ func (a App) show(ctx context.Context, repo plan.Repository, args []string) erro
 			MergeInProgress *showMergeInProgress `json:"merge_in_progress,omitempty"`
 		}{payload, merging})
 	}
-	return renderPlanDetailWithMerge(a.Out, loaded, runtimeconfig.RuntimeAgentBudgetThresholds(), merging)
+	return a.renderPlanDetailWithMerge(a.Out, loaded, runtimeconfig.RuntimeAgentBudgetThresholds(), merging)
 }
 
 // showMergeInProgress is transient presentation, not lifecycle evidence.
@@ -93,21 +94,21 @@ type showMergeInProgress struct {
 	Phase runstatus.Phase `json:"phase"`
 }
 
-func renderPlanDetail(out io.Writer, loaded planview.Plan) error {
-	return renderPlanDetailWithThresholds(out, loaded, plan.DefaultAgentBudgetThresholds())
+func (a App) renderPlanDetail(out io.Writer, loaded planview.Plan) error {
+	return a.renderPlanDetailWithThresholds(out, loaded, plan.DefaultAgentBudgetThresholds())
 }
 
-func renderPlanDetailWithThresholds(out io.Writer, loaded planview.Plan, thresholds plan.AgentBudgetThresholds) error {
-	return renderPlanDetailWithMerge(out, loaded, thresholds, nil)
+func (a App) renderPlanDetailWithThresholds(out io.Writer, loaded planview.Plan, thresholds plan.AgentBudgetThresholds) error {
+	return a.renderPlanDetailWithMerge(out, loaded, thresholds, nil)
 }
 
-func renderPlanDetailWithMerge(out io.Writer, loaded planview.Plan, thresholds plan.AgentBudgetThresholds, merging *showMergeInProgress) error {
+func (a App) renderPlanDetailWithMerge(out io.Writer, loaded planview.Plan, thresholds plan.AgentBudgetThresholds, merging *showMergeInProgress) error {
 	detail := loaded.Detail
 	derived := loaded.Derived
 	now := loaded.Now
 	state := detail.State
 	lifecycleStatus := plan.PlanLifecycleStatus(detail)
-	useColor := outputSupportsColor(out)
+	palette := a.outputPalette(out)
 	if err := writef(out, "%s\n", state.Plan.Title); err != nil {
 		return err
 	}
@@ -118,9 +119,7 @@ func renderPlanDetailWithMerge(out io.Writer, loaded planview.Plan, thresholds p
 	if lifecycleStatus == plan.StatusBlocked {
 		statusText += " (waiting for outside action)"
 	}
-	if useColor {
-		statusText = colorStatus(statusText, lifecycleStatus)
-	}
+	statusText = colorStatus(palette, statusText, lifecycleStatus)
 	if err := writef(out, "Status: %s\n", statusText); err != nil {
 		return err
 	}
@@ -230,7 +229,7 @@ func renderPlanDetailWithMerge(out io.Writer, loaded planview.Plan, thresholds p
 				return err
 			}
 		}
-		if err := renderShowSlice(out, slice, now, useColor); err != nil {
+		if err := renderShowSlice(out, slice, now, palette); err != nil {
 			return err
 		}
 		if err := renderShowBlockerEvidence(out, detail, slice); err != nil {
@@ -310,14 +309,11 @@ func renderShowBlockerEvidence(out io.Writer, detail *plan.PlanDetail, slice pla
 	return nil
 }
 
-func renderShowSlice(out io.Writer, slice plan.Slice, now time.Time, useColor bool) error {
+func renderShowSlice(out io.Writer, slice plan.Slice, now time.Time, palette theme.Palette) error {
 	const labelWidth = len("Completed:")
 	const summaryWidth = 72
 
-	statusText := slice.Status
-	if useColor {
-		statusText = colorStatus(statusText, slice.Status)
-	}
+	statusText := colorStatus(palette, slice.Status, slice.Status)
 	if err := writef(out, "%s  %s  %s\n", statusText, slice.ID, planview.Empty(slice.Title)); err != nil {
 		return err
 	}

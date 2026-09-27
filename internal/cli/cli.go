@@ -16,6 +16,7 @@ import (
 	"github.com/iamseth/tao/internal/planning"
 	"github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/taodata"
+	"github.com/iamseth/tao/internal/theme"
 	"github.com/iamseth/tao/internal/tui"
 	"github.com/iamseth/tao/internal/workspace"
 )
@@ -46,6 +47,8 @@ type App struct {
 	UINoteActions            tui.NoteActions
 	UIClipboard              tui.Clipboard
 	SelfUpdater              SelfUpdater
+	// Theme overrides runtime selection. Nil resolves TAO_THEME once per Run.
+	Theme *theme.Theme
 	// Now supplies the wall clock for timestamps recorded by commands. Tests
 	// inject a fixed clock; when nil it defaults to time.Now.
 	Now func() time.Time
@@ -115,6 +118,7 @@ type WorkspaceManager interface {
 type WorkspaceManagerFactory func(repoRoot string) (WorkspaceManager, error)
 
 func (a App) Run(ctx context.Context, args []string) error {
+	a = a.withRuntimeTheme()
 	a = a.withDefaultStatusReporter()
 	if len(args) == 0 {
 		return a.usage()

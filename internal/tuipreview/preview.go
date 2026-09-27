@@ -12,6 +12,7 @@ import (
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/theme"
 	"github.com/iamseth/tao/internal/tui"
 )
 
@@ -32,6 +33,7 @@ const (
 // SliceID optionally select a specific detail fixture; otherwise the first plan
 // fixture and Selection-indexed slice are used.
 type RenderOptions struct {
+	Theme         theme.Theme
 	View          View
 	Width         int
 	Height        int
@@ -254,9 +256,9 @@ func Render(scenario Scenario, options RenderOptions) (string, error) {
 		return "", errors.New("preview selection must not be negative")
 	}
 
-	profile := tui.ProfileNone
+	profile := theme.ProfileNone
 	if options.Color {
-		profile = tui.ProfileTrueColor
+		profile = theme.ProfileTrueColor
 	}
 
 	var frame string
@@ -269,7 +271,7 @@ func Render(scenario Scenario, options RenderOptions) (string, error) {
 		frame = tui.Render(tui.Model{
 			Snapshot: scenario.Snapshot, NoteSnapshot: scenario.Notes, DebugSnapshot: scenario.Debug, SettingsSnapshot: scenario.Settings,
 			Page: tui.PagePlans, Selected: options.Selection, Width: options.Width, Height: options.Height, Now: scenario.Now,
-			Profile: profile, ShowShortcuts: options.ShowShortcuts, SearchQuery: options.SearchQuery,
+			Profile: profile, Theme: options.Theme, ShowShortcuts: options.ShowShortcuts, SearchQuery: options.SearchQuery,
 		})
 	case ViewNotes:
 		filteredNotes := tui.FilterNoteSnapshot(scenario.Notes, options.SearchQuery)
@@ -279,7 +281,7 @@ func Render(scenario Scenario, options RenderOptions) (string, error) {
 		frame = tui.Render(tui.Model{
 			Snapshot: scenario.Snapshot, NoteSnapshot: scenario.Notes, DebugSnapshot: scenario.Debug, SettingsSnapshot: scenario.Settings,
 			Page: tui.PageNotes, Selected: options.Selection, Width: options.Width, Height: options.Height,
-			Now: scenario.Now, Profile: profile, ShowShortcuts: options.ShowShortcuts, SearchQuery: options.SearchQuery,
+			Now: scenario.Now, Profile: profile, Theme: options.Theme, ShowShortcuts: options.ShowShortcuts, SearchQuery: options.SearchQuery,
 		})
 	case ViewSettings:
 		if options.SearchQuery != "" {
@@ -291,7 +293,7 @@ func Render(scenario Scenario, options RenderOptions) (string, error) {
 		frame = tui.Render(tui.Model{
 			Snapshot: scenario.Snapshot, NoteSnapshot: scenario.Notes, DebugSnapshot: scenario.Debug, SettingsSnapshot: scenario.Settings,
 			Page: tui.PageSettings, Selected: options.Selection, Width: options.Width, Height: options.Height,
-			Now: scenario.Now, Profile: profile, ShowShortcuts: options.ShowShortcuts,
+			Now: scenario.Now, Profile: profile, Theme: options.Theme, ShowShortcuts: options.ShowShortcuts,
 		})
 	case ViewDebug:
 		if options.SearchQuery != "" {
@@ -299,7 +301,7 @@ func Render(scenario Scenario, options RenderOptions) (string, error) {
 		}
 		frame = tui.Render(tui.Model{
 			Snapshot: scenario.Snapshot, NoteSnapshot: scenario.Notes, DebugSnapshot: scenario.Debug, SettingsSnapshot: scenario.Settings,
-			Page: tui.PageDebug, Width: options.Width, Height: options.Height, Now: scenario.Now, Profile: profile, ShowShortcuts: options.ShowShortcuts,
+			Page: tui.PageDebug, Width: options.Width, Height: options.Height, Now: scenario.Now, Profile: profile, Theme: options.Theme, ShowShortcuts: options.ShowShortcuts,
 		})
 	case ViewPlanDetail:
 		if options.SearchQuery != "" {
@@ -316,7 +318,7 @@ func Render(scenario Scenario, options RenderOptions) (string, error) {
 		}
 		frame = tui.RenderDetail(tui.DetailModel{
 			Plan: &fixture.Detail, Row: detailRow(scenario.Snapshot, fixture), Log: fixture.Log,
-			SelectedSliceID: selected, Width: options.Width, Height: options.Height, UseColor: options.Color, Profile: profile,
+			SelectedSliceID: selected, Width: options.Width, Height: options.Height, UseColor: options.Color, Profile: profile, Theme: options.Theme,
 			ShowShortcuts: options.ShowShortcuts,
 		})
 	case ViewNoteDetail:
@@ -348,7 +350,7 @@ func Render(scenario Scenario, options RenderOptions) (string, error) {
 		}
 		frame = tui.RenderSliceDetail(tui.DetailModel{
 			Plan: &fixture.Detail, Log: fixture.Log, SelectedSliceID: selected,
-			Width: options.Width, Height: options.Height, UseColor: options.Color, ShowShortcuts: options.ShowShortcuts,
+			Width: options.Width, Height: options.Height, UseColor: options.Color, Theme: options.Theme, ShowShortcuts: options.ShowShortcuts,
 		})
 	default:
 		return "", fmt.Errorf("unknown preview view %q", options.View)

@@ -11,6 +11,7 @@ import (
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/term/cells"
+	"github.com/iamseth/tao/internal/theme"
 )
 
 func TestRenderGoldenColorModes(t *testing.T) {
@@ -32,10 +33,13 @@ func TestRenderGoldenColorModes(t *testing.T) {
 		t.Fatalf("plain frame contains color styling: %q", plain)
 	}
 
-	colored := Render(Model{Snapshot: snapshot, Profile: ProfileTrueColor})
+	colored := Render(Model{Snapshot: snapshot, Profile: theme.ProfileTrueColor})
+	if explicit := Render(Model{Snapshot: snapshot, Profile: theme.ProfileTrueColor, Theme: theme.Default()}); explicit != colored {
+		t.Fatal("zero theme and explicit default produced different frames")
+	}
 	for _, want := range []string{
-		Paint(ProfileTrueColor, RoleAccent, "plans"),
-		Paint(ProfileTrueColor, RoleNeutral2, "notes"),
+		theme.Default().Palette(theme.ProfileTrueColor).Paint(theme.RoleAccent, "plans"),
+		theme.Default().Palette(theme.ProfileTrueColor).Paint(theme.RoleNeutral2, "notes"),
 	} {
 		if !strings.Contains(colored, want) {
 			t.Fatalf("colored frame missing %q:\n%q", want, colored)
@@ -44,10 +48,10 @@ func TestRenderGoldenColorModes(t *testing.T) {
 }
 
 func TestPlanSectionsUseDedicatedColors(t *testing.T) {
-	for kind, want := range map[SectionKind]Role{
-		SectionNow:     RolePlanNow,
-		SectionNext:    RolePlanNext,
-		SectionHistory: RolePlanHistory,
+	for kind, want := range map[SectionKind]theme.Role{
+		SectionNow:     theme.RolePlanNow,
+		SectionNext:    theme.RolePlanNext,
+		SectionHistory: theme.RolePlanHistory,
 	} {
 		if got := planSectionRole(kind); got != want {
 			t.Errorf("planSectionRole(%q) = %d, want %d", kind, got, want)
@@ -64,13 +68,13 @@ func TestPlanRowsUseSectionBackgroundsAndNeutralHistoryText(t *testing.T) {
 		}},
 		Selected: 99,
 		Width:    120,
-		Profile:  ProfileTrueColor,
+		Profile:  theme.ProfileTrueColor,
 	})
 
-	backgrounds := map[string]Role{
-		"now-row":     RolePlanNowBackground,
-		"next-row":    RolePlanNextBackground,
-		"history-row": RolePlanHistoryBackground,
+	backgrounds := map[string]theme.Role{
+		"now-row":     theme.RolePlanNowBackground,
+		"next-row":    theme.RolePlanNextBackground,
+		"history-row": theme.RolePlanHistoryBackground,
 	}
 	for planID, role := range backgrounds {
 		var rowLine string
@@ -80,13 +84,13 @@ func TestPlanRowsUseSectionBackgroundsAndNeutralHistoryText(t *testing.T) {
 				break
 			}
 		}
-		prefix := colorSequence(mustRoleColor(ProfileTrueColor, role), true)
+		prefix := theme.Sequence(theme.Default().Palette(theme.ProfileTrueColor).MustColor(role), true)
 		if rowLine == "" || !strings.HasPrefix(rowLine, prefix) {
 			t.Errorf("%s row does not use background role %d: %q", planID, role, rowLine)
 		}
 	}
 	for _, line := range renderedLines(frame) {
-		if strings.Contains(line, "history-row") && !strings.Contains(line, colorSequence(mustRoleColor(ProfileTrueColor, RolePlanHistoryText), false)) {
+		if strings.Contains(line, "history-row") && !strings.Contains(line, theme.Sequence(theme.Default().Palette(theme.ProfileTrueColor).MustColor(theme.RolePlanHistoryText), false)) {
 			t.Errorf("history row does not use dim neutral text: %q", line)
 		}
 	}
@@ -113,12 +117,12 @@ func TestRenderLiveAndKilledMerge(t *testing.T) {
 		t.Fatalf("killed merge frame:\n%s", got)
 	}
 	detail := &plan.PlanDetail{State: plan.State{Plan: plan.PlanState{MergeCommitIntent: &plan.SingleMergeCommitIntent{PlanID: "plan-a"}}}}
-	attention := strings.Join(detailAttentionLines(detail, row, detailInspectionView{}, 200, ProfileNone), "\n")
+	attention := strings.Join(detailAttentionLines(detail, row, detailInspectionView{}, 200, theme.Default().Palette(theme.ProfileNone)), "\n")
 	if !strings.Contains(attention, "merge crashed") || strings.Contains(attention, "run crashed") {
 		t.Fatalf("killed merge attention = %q", attention)
 	}
 	detail.State.Plan.MergeCommitIntent = nil
-	attention = strings.Join(detailAttentionLines(detail, row, detailInspectionView{}, 200, ProfileNone), "\n")
+	attention = strings.Join(detailAttentionLines(detail, row, detailInspectionView{}, 200, theme.Default().Palette(theme.ProfileNone)), "\n")
 	if !strings.Contains(attention, "run crashed") {
 		t.Fatalf("ordinary killed run attention = %q", attention)
 	}
@@ -128,13 +132,13 @@ func TestNextActionsRenderAsNormalText(t *testing.T) {
 	row := monitor.Row{RepositoryID: "planned", PlanID: "planned", Status: plan.StatusPlanned}
 	got := Render(Model{
 		Snapshot:     monitor.Snapshot{Rows: []monitor.Row{row}},
-		Profile:      ProfileTrueColor,
+		Profile:      theme.ProfileTrueColor,
 		ActionLabels: map[string]string{actionRowKey(row): "custom-action"},
 	})
 	if !strings.Contains(got, " custom-action ") {
 		t.Fatalf("rendered frame missing NEXT action text: %q", got)
 	}
-	if strings.Contains(got, colorSequence(Accent(ProfileTrueColor), true)) {
+	if strings.Contains(got, theme.Sequence(theme.Default().Palette(theme.ProfileTrueColor).MustColor(theme.RoleAccent), true)) {
 		t.Fatalf("NEXT action has a highlighted background: %q", got)
 	}
 }
@@ -142,17 +146,17 @@ func TestNextActionsRenderAsNormalText(t *testing.T) {
 func TestColorStatusRoles(t *testing.T) {
 	for _, test := range []struct {
 		status string
-		role   Role
+		role   theme.Role
 	}{
-		{plan.StatusCompleted, RoleSuccess},
-		{plan.StatusInProgress, RoleAccent},
-		{plan.StatusVerificationFailed, RoleWarn},
-		{plan.StatusInReview, RoleInfo},
-		{"unknown", RoleRepo},
+		{plan.StatusCompleted, theme.RoleSuccess},
+		{plan.StatusInProgress, theme.RoleAccent},
+		{plan.StatusVerificationFailed, theme.RoleWarn},
+		{plan.StatusInReview, theme.RoleInfo},
+		{"unknown", theme.RoleRepo},
 	} {
 		t.Run(test.status, func(t *testing.T) {
-			got := colorStatus(ProfileTrueColor, test.status, test.status)
-			want := Paint(ProfileTrueColor, test.role, test.status)
+			got := colorStatus(theme.Default().Palette(theme.ProfileTrueColor), test.status, test.status)
+			want := theme.Default().Palette(theme.ProfileTrueColor).Paint(test.role, test.status)
 			if got != want {
 				t.Fatalf("status color = %q, want %q", got, want)
 			}
@@ -203,7 +207,7 @@ func TestSlicesValueAddsTenCellProgressBarWithoutChangingLabel(t *testing.T) {
 		ReworkCompletedCount:   1,
 		ReworkTotalCount:       2,
 	}
-	if got := renderSlicesValue(ProfileNone, row); got != "━━━━━━──── 3/3+2" {
+	if got := renderSlicesValue(theme.Default().Palette(theme.ProfileNone), row); got != "━━━━━━──── 3/3+2" {
 		t.Fatalf("renderSlicesValue() = %q, want ten-cell thin bar followed by label", got)
 	}
 
@@ -213,7 +217,7 @@ func TestSlicesValueAddsTenCellProgressBarWithoutChangingLabel(t *testing.T) {
 		ReworkCompletedCount:   5,
 		ReworkTotalCount:       5,
 	}
-	if got := renderSlicesValue(ProfileNone, complete); got != "━━━━━━━━━━ 8/3+5" {
+	if got := renderSlicesValue(theme.Default().Palette(theme.ProfileNone), complete); got != "━━━━━━━━━━ 8/3+5" {
 		t.Fatalf("complete renderSlicesValue() = %q", got)
 	}
 }
@@ -231,7 +235,7 @@ func TestSelectedPlanRowUsesTokyoNightSelectionColors(t *testing.T) {
 	frame := Render(Model{
 		Snapshot: monitor.Snapshot{Rows: []monitor.Row{row}},
 		Width:    width,
-		Profile:  ProfileTrueColor,
+		Profile:  theme.ProfileTrueColor,
 	})
 	var selectedLine string
 	for _, line := range renderedLines(frame) {
@@ -243,21 +247,21 @@ func TestSelectedPlanRowUsesTokyoNightSelectionColors(t *testing.T) {
 	if selectedLine == "" {
 		t.Fatalf("selected row not found in frame: %q", frame)
 	}
-	selectionPrefix := boldSequence +
-		colorSequence(mustRoleColor(ProfileTrueColor, RolePlanSelectionBackground), true) +
-		colorSequence(mustRoleColor(ProfileTrueColor, RolePlanSelectionText), false)
-	if !strings.HasPrefix(selectedLine, selectionPrefix) || !strings.HasSuffix(selectedLine, resetSequence) {
+	selectionPrefix := theme.Bold +
+		theme.Sequence(theme.Default().Palette(theme.ProfileTrueColor).MustColor(theme.RolePlanSelectionBackground), true) +
+		theme.Sequence(theme.Default().Palette(theme.ProfileTrueColor).MustColor(theme.RolePlanSelectionText), false)
+	if !strings.HasPrefix(selectedLine, selectionPrefix) || !strings.HasSuffix(selectedLine, theme.Reset) {
 		t.Fatalf("selected row does not wrap the full rendered line: %q", selectedLine)
 	}
 	if got := cells.Width(selectedLine); got != width {
 		t.Fatalf("selected row width = %d, want pane width %d: %q", got, width, selectedLine)
 	}
-	if !strings.HasSuffix(strings.TrimSuffix(selectedLine, resetSequence), " ") {
+	if !strings.HasSuffix(strings.TrimSuffix(selectedLine, theme.Reset), " ") {
 		t.Fatalf("selection background was applied before full-width padding: %q", selectedLine)
 	}
-	for _, role := range []Role{RoleRepoSelected, RoleNeutral5, RoleNeutral2} {
-		color, _ := RoleColor(ProfileTrueColor, role)
-		if strings.Contains(selectedLine, colorSequence(color, false)) {
+	for _, role := range []theme.Role{theme.RoleRepoSelected, theme.RoleNeutral5, theme.RoleNeutral2} {
+		color, _ := theme.Default().Palette(theme.ProfileTrueColor).Color(role)
+		if strings.Contains(selectedLine, theme.Sequence(color, false)) {
 			t.Errorf("selected row retained foreground role %d instead of the selection text color: %q", role, selectedLine)
 		}
 	}
@@ -576,8 +580,8 @@ func TestRenderHeaderTracksActivePage(t *testing.T) {
 		{page: PageSettings, want: "settings"},
 		{page: PageDebug, want: "debug"},
 	} {
-		got := Render(Model{Snapshot: snapshot, Page: test.page, Profile: ProfileTrueColor})
-		if !strings.Contains(got, Paint(ProfileTrueColor, RoleAccent, test.want)) {
+		got := Render(Model{Snapshot: snapshot, Page: test.page, Profile: theme.ProfileTrueColor})
+		if !strings.Contains(got, theme.Default().Palette(theme.ProfileTrueColor).Paint(theme.RoleAccent, test.want)) {
 			t.Fatalf("colored tab strip for %s does not accent the active tab:\n%q", test.page, got)
 		}
 	}
@@ -871,7 +875,7 @@ func TestRenderNarrowWidthTruncatesRunesAndPreservesColor(t *testing.T) {
 	got := Render(Model{
 		Snapshot: monitor.Snapshot{Rows: []monitor.Row{{RepositoryName: "répo", PlanID: "plan", Status: plan.StatusPlanned}}},
 		Width:    width,
-		Profile:  ProfileTrueColor,
+		Profile:  theme.ProfileTrueColor,
 	})
 	body := strings.TrimPrefix(got, clearScreenSequence)
 	for _, line := range strings.Split(strings.TrimSuffix(body, "\n"), "\n") {
@@ -904,7 +908,7 @@ func TestRenderShortcutLegendAsBoundedPopover(t *testing.T) {
 			unavailable: "Run selected plan",
 		},
 	} {
-		frame := Render(Model{Page: test.page, ShowShortcuts: true, Width: 64, Height: 19, Profile: ProfileTrueColor})
+		frame := Render(Model{Page: test.page, ShowShortcuts: true, Width: 64, Height: 19, Profile: theme.ProfileTrueColor})
 		for _, want := range test.want {
 			if !strings.Contains(frame, want) {
 				t.Fatalf("%s shortcut popover missing %q:\n%s", test.page, want, frame)

@@ -276,6 +276,7 @@ func settingsFixture(now time.Time) tui.SettingsSnapshot {
 			{Name: "TAO_AGGREGATE_REVIEW_CONVERGENCE_WINDOW", Value: "2", Source: "default"},
 			{Name: "TAO_APPROVED_BY", Value: "", Source: "default"},
 			{Name: "TAO_RUN_HEADER", Value: "true", Source: "default"},
+			{Name: "TAO_THEME", Value: "tokyonight", Source: "default"},
 			{Name: "TAO_PLANNER_ROUTING", Value: "not set (default: off)", Source: "default"},
 			{Name: "TAO_PLANNER_ROUTING_ARMS", Value: "not set (comma list, e.g. pi=0.5,claude=0.5)", Source: "default"},
 			{Name: "TAO_PLANNER_ROUTING_FLOOR", Value: "not set (default: 0.1)", Source: "default"},

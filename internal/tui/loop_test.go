@@ -18,6 +18,7 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/term"
 	"github.com/iamseth/tao/internal/term/cells"
+	"github.com/iamseth/tao/internal/theme"
 )
 
 type fakeTerminal struct {
@@ -1295,7 +1296,7 @@ func TestPlanDetailOverviewPromotesInspectionFindingsAndKeepsBottomReachable(t *
 		size:   term.Size{Width: 32, Height: 10},
 	}
 
-	all := strings.Join(renderOverviewPane(detail, monitor.Row{}, 32, 1_000, 0, inspection, ProfileNone, false), "\n")
+	all := strings.Join(renderOverviewPane(detail, monitor.Row{}, 32, 1_000, 0, inspection, theme.Default().Palette(theme.ProfileNone), false), "\n")
 	if !strings.Contains(all, "! ATTENTION\n  • first wrapped") || !strings.Contains(all, "last-finding") || strings.Index(all, "! ATTENTION") > strings.Index(all, "CONTEXT") {
 		t.Fatalf("inspection findings were not rendered as a compact warning block above Context:\n%s", all)
 	}
@@ -1489,20 +1490,20 @@ func TestOutputSupportsColorResolvesProfileFromEnvironmentAndTerminal(t *testing
 	t.Setenv("CLICOLOR", "")
 	t.Setenv("CLICOLOR_FORCE", "")
 	t.Setenv("NO_COLOR", "")
-	if got := outputSupportsColor(writer); got != ProfileANSI256 {
-		t.Fatalf("terminal profile = %s, want %s", got, ProfileANSI256)
+	if got := outputSupportsColor(writer); got != theme.ProfileANSI256 {
+		t.Fatalf("terminal profile = %s, want %s", got, theme.ProfileANSI256)
 	}
 	t.Setenv("NO_COLOR", "1")
-	if got := outputSupportsColor(writer); got != ProfileNone {
+	if got := outputSupportsColor(writer); got != theme.ProfileNone {
 		t.Fatalf("NO_COLOR profile = %s, want none", got)
 	}
 	t.Setenv("NO_COLOR", "")
 	t.Setenv("TERM", "dumb")
-	if got := outputSupportsColor(writer); got != ProfileNone {
+	if got := outputSupportsColor(writer); got != theme.ProfileNone {
 		t.Fatalf("dumb terminal profile = %s, want none", got)
 	}
 	t.Setenv("TERM", "xterm-256color")
-	if got := outputSupportsColor(&recordingWriter{writes: make(chan string, 1)}); got != ProfileNone {
+	if got := outputSupportsColor(&recordingWriter{writes: make(chan string, 1)}); got != theme.ProfileNone {
 		t.Fatalf("non-terminal profile = %s, want none", got)
 	}
 }

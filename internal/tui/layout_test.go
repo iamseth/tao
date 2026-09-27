@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/iamseth/tao/internal/term/cells"
+	"github.com/iamseth/tao/internal/theme"
 )
 
 func TestJoinRowFlexArithmeticAtFrameWidths(t *testing.T) {
@@ -62,7 +63,7 @@ func TestResolveColumnsClampsFlexWidth(t *testing.T) {
 func TestSectionRuleAtFrameWidths(t *testing.T) {
 	for _, width := range []int{199, 120, 100, 80, 70} {
 		t.Run(strconv.Itoa(width), func(t *testing.T) {
-			got := sectionRule(ProfileNone, RolePlanNow, "NOW", 12, width)
+			got := sectionRule(theme.Default().Palette(theme.ProfileNone), theme.RolePlanNow, "NOW", 12, width)
 			if visible := cells.Width(got); visible != width {
 				t.Fatalf("section rule width = %d, want %d: %q", visible, width, got)
 			}
@@ -77,9 +78,9 @@ func TestSectionRuleAtFrameWidths(t *testing.T) {
 }
 
 func TestSectionRuleUsesSemanticRoles(t *testing.T) {
-	got := sectionRule(ProfileANSI16, RoleWarn, "RUNNING", 3, 70)
-	warnSequence := colorSequence(Warn(ProfileANSI16), false)
-	neutralSequence := colorSequence(N0(ProfileANSI16), false)
+	got := sectionRule(theme.Default().Palette(theme.ProfileANSI16), theme.RoleWarn, "RUNNING", 3, 70)
+	warnSequence := theme.Sequence(theme.Default().Palette(theme.ProfileANSI16).MustColor(theme.RoleWarn), false)
+	neutralSequence := theme.Sequence(theme.Default().Palette(theme.ProfileANSI16).MustColor(theme.RoleNeutral0), false)
 	if strings.Count(got, warnSequence) != 2 {
 		t.Fatalf("section rule does not paint title and count with caller role: %q", got)
 	}
@@ -96,7 +97,7 @@ func TestSectionRuleColumnsReplaceCount(t *testing.T) {
 		{name: "USED", width: 6},
 		{name: "LIMIT", width: 6},
 	}
-	got := sectionRuleColumns(ProfileNone, RoleAccent, "BUDGETS", columns, 70)
+	got := sectionRuleColumns(theme.Default().Palette(theme.ProfileNone), theme.RoleAccent, "BUDGETS", columns, 70)
 	if !strings.HasSuffix(got, " USED    LIMIT  ─") {
 		t.Fatalf("column section rule suffix = %q", got)
 	}
@@ -106,11 +107,11 @@ func TestSectionRuleColumnsReplaceCount(t *testing.T) {
 }
 
 func TestMoreIndicatorIsDim(t *testing.T) {
-	got := moreIndicator(ProfileANSI16, 4)
+	got := moreIndicator(theme.Default().Palette(theme.ProfileANSI16), 4)
 	if visible := cells.Width(got); visible != cells.Width("+ 4 more  ↓") {
 		t.Fatalf("indicator width = %d: %q", visible, got)
 	}
-	if !strings.Contains(got, colorSequence(N2(ProfileANSI16), false)) {
+	if !strings.Contains(got, theme.Sequence(theme.Default().Palette(theme.ProfileANSI16).MustColor(theme.RoleNeutral2), false)) {
 		t.Fatalf("indicator does not use dim neutral role: %q", got)
 	}
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/term"
 	"github.com/iamseth/tao/internal/term/cells"
+	"github.com/iamseth/tao/internal/theme"
 )
 
 func TestRenderNoteDetailShowsFullSanitizedMultilineText(t *testing.T) {
@@ -91,7 +92,7 @@ func TestRenderSlicesPaneUsesStateQueueOrderAndShowsCurrentMetadata(t *testing.T
 	if setup < 0 || build < setup || release < build {
 		t.Fatalf("slice order does not follow completed/pending queues:\n%s", text)
 	}
-	if !strings.Contains(text, "> ") || !strings.Contains(text, colorSequence(Accent(ProfileANSI16), false)) {
+	if !strings.Contains(text, "> ") || !strings.Contains(text, theme.Sequence(theme.Default().Palette(theme.ProfileANSI16).MustColor(theme.RoleAccent), false)) {
 		t.Fatalf("current colored slice is not highlighted:\n%q", text)
 	}
 	if !strings.Contains(text, "[approval required]") || !strings.Contains(text, "blocker: waiting on credentials") {
@@ -378,7 +379,7 @@ func TestRenderOverviewUsesScannableSectionsChecklistPriorityGridAndExpandableSc
 
 func TestAppendOverviewChecklistItemUsesHangingIndent(t *testing.T) {
 	var lines []string
-	appendOverviewChecklistItem(&lines, "A long success criterion wraps beneath its text instead of its checkbox", 28, ProfileNone, RoleDetailSecondary)
+	appendOverviewChecklistItem(&lines, "A long success criterion wraps beneath its text instead of its checkbox", 28, theme.Default().Palette(theme.ProfileNone), theme.RoleDetailSecondary)
 	if len(lines) < 2 {
 		t.Fatalf("checklist item did not wrap: %q", lines)
 	}
@@ -398,15 +399,15 @@ func TestRenderOverviewUsesTokyoNightStatePalette(t *testing.T) {
 	frame := RenderDetail(DetailModel{
 		Plan: detail, Row: monitor.Row{AttentionReasons: []monitor.AttentionReason{monitor.AttentionBlocked}},
 		Inspection: detailInspectionView{status: detailInspectionReady}, Width: 80, Height: 24,
-		UseColor: true, Profile: ProfileTrueColor,
+		UseColor: true, Profile: theme.ProfileTrueColor,
 	})
 	for _, sequence := range []string{
-		colorSequence(mustRoleColor(ProfileTrueColor, RoleDetailBackground), true),
-		colorSequence(mustRoleColor(ProfileTrueColor, RoleDetailPrimary), false),
-		colorSequence(mustRoleColor(ProfileTrueColor, RoleDetailBody), false),
-		colorSequence(mustRoleColor(ProfileTrueColor, RoleDetailSuccess), false),
-		colorSequence(mustRoleColor(ProfileTrueColor, RoleDetailError), false),
-		colorSequence(mustRoleColor(ProfileTrueColor, RoleDetailDivider), false),
+		theme.Sequence(theme.Default().Palette(theme.ProfileTrueColor).MustColor(theme.RoleDetailBackground), true),
+		theme.Sequence(theme.Default().Palette(theme.ProfileTrueColor).MustColor(theme.RoleDetailPrimary), false),
+		theme.Sequence(theme.Default().Palette(theme.ProfileTrueColor).MustColor(theme.RoleDetailBody), false),
+		theme.Sequence(theme.Default().Palette(theme.ProfileTrueColor).MustColor(theme.RoleDetailSuccess), false),
+		theme.Sequence(theme.Default().Palette(theme.ProfileTrueColor).MustColor(theme.RoleDetailError), false),
+		theme.Sequence(theme.Default().Palette(theme.ProfileTrueColor).MustColor(theme.RoleDetailDivider), false),
 	} {
 		if !strings.Contains(frame, sequence) {
 			t.Fatalf("colored overview missing sequence %q: %q", sequence, frame)
@@ -589,15 +590,15 @@ func TestRenderSliceDetailUsesSemanticTokyoNightRoles(t *testing.T) {
 			Completion:          &plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionCommitted},
 		}}},
 	}
-	profile := ProfileTrueColor
+	profile := theme.ProfileTrueColor
 	frame := RenderSliceDetail(DetailModel{Plan: detail, SelectedSliceID: "001-work", Width: 100, Profile: profile})
 	for _, want := range []string{
-		Paint(profile, RoleNeutral3, "muted prose"),
-		Paint(profile, RoleDetailWarning, "blocked now"),
-		Paint(profile, RoleDetailPrimary, "internal/tui/detail.go"),
-		Paint(profile, RoleDetailInfo, "go test ./internal/tui"),
-		Paint(profile, RoleDetailError, "failed — bad output"),
-		Paint(profile, RoleDetailSuccess, "committed"),
+		theme.Default().Palette(profile).Paint(theme.RoleNeutral3, "muted prose"),
+		theme.Default().Palette(profile).Paint(theme.RoleDetailWarning, "blocked now"),
+		theme.Default().Palette(profile).Paint(theme.RoleDetailPrimary, "internal/tui/detail.go"),
+		theme.Default().Palette(profile).Paint(theme.RoleDetailInfo, "go test ./internal/tui"),
+		theme.Default().Palette(profile).Paint(theme.RoleDetailError, "failed — bad output"),
+		theme.Default().Palette(profile).Paint(theme.RoleDetailSuccess, "committed"),
 	} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("slice detail missing semantic color sequence %q:\n%q", want, frame)

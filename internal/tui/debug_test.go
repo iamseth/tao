@@ -9,6 +9,7 @@ import (
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/term"
+	"github.com/iamseth/tao/internal/theme"
 )
 
 func TestRenderDebugShowsRuntimeDoctorAndUIInformation(t *testing.T) {
@@ -61,10 +62,10 @@ func TestRenderDebugShowsRuntimeDoctorAndUIInformation(t *testing.T) {
 		t.Fatalf("debug frame retained table-page header metadata:\n%s", frame)
 	}
 
-	model.Profile = ProfileTrueColor
+	model.Profile = theme.ProfileTrueColor
 	styled := Render(model)
 	for _, title := range []string{"UI", "SYSTEM", "DOCTOR", "RUNTIME ANOMALIES", "COLLECTOR WARNINGS"} {
-		want := Paint(ProfileTrueColor, RoleDebugSection, "▌ "+title+" ")
+		want := theme.Default().Palette(theme.ProfileTrueColor).Paint(theme.RoleDebugSection, "▌ "+title+" ")
 		if !strings.Contains(styled, want) {
 			t.Errorf("debug section %q does not use the debug section color: %q", title, styled)
 		}

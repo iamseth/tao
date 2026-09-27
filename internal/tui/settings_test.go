@@ -9,6 +9,7 @@ import (
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/term"
 	"github.com/iamseth/tao/internal/term/cells"
+	"github.com/iamseth/tao/internal/theme"
 )
 
 func TestRenderSettingsShowsGlobalAndRepositoryDefaults(t *testing.T) {
@@ -43,7 +44,7 @@ func TestRenderSettingsShowsGlobalAndRepositoryDefaults(t *testing.T) {
 func TestSettingsSectionsUseMutedHeadingColor(t *testing.T) {
 	explicit := true
 	model := Model{
-		Page: PageSettings, Width: 120, Height: 60, Profile: ProfileTrueColor,
+		Page: PageSettings, Width: 120, Height: 60, Profile: theme.ProfileTrueColor,
 		SettingsSnapshot: SettingsSnapshot{
 			InheritedPullRequest: false,
 			RuntimeDefaults: []SettingsRuntimeDefault{
@@ -56,12 +57,12 @@ func TestSettingsSectionsUseMutedHeadingColor(t *testing.T) {
 	}
 	frame := Render(model)
 	for _, title := range []string{"OVERRIDES", "EXECUTION · all default", "BUDGET WARNINGS", "REPOSITORY DEFAULTS"} {
-		want := Paint(ProfileTrueColor, RoleSettingsSection, "▌ "+title+" ")
+		want := theme.Default().Palette(theme.ProfileTrueColor).Paint(theme.RoleSettingsSection, "▌ "+title+" ")
 		if !strings.Contains(frame, want) {
 			t.Errorf("settings section %q does not use the settings section color: %q", title, frame)
 		}
 	}
-	if !strings.Contains(frame, Paint(ProfileTrueColor, RoleWarn, "●")) {
+	if !strings.Contains(frame, theme.Default().Palette(theme.ProfileTrueColor).Paint(theme.RoleWarn, "●")) {
 		t.Errorf("settings warning content lost its warning color: %q", frame)
 	}
 }
@@ -319,10 +320,10 @@ func TestSettingsRepositoryRootAbbreviationIsBoundarySafe(t *testing.T) {
 
 func TestSettingsRepositoryRowsUseSemanticStyles(t *testing.T) {
 	repository := RepositorySetting{ID: "beta", Name: "βeta", Health: "ok"}
-	if got := settingsStyledRepositoryName(ProfileANSI16, repository); got != Paint(ProfileANSI16, RepoColor("beta"), "βeta") {
+	if got := settingsStyledRepositoryName(theme.Default().Palette(theme.ProfileANSI16), repository); got != theme.Default().Palette(theme.ProfileANSI16).Paint(theme.RepoColor("beta"), "βeta") {
 		t.Fatalf("styled repository name = %q", got)
 	}
-	if got := settingsRepositoryHealth(ProfileANSI16, "missing_root"); !strings.Contains(got, Paint(ProfileANSI16, RoleWarn, "●")) || !strings.Contains(got, "missing root") {
+	if got := settingsRepositoryHealth(theme.Default().Palette(theme.ProfileANSI16), "missing_root"); !strings.Contains(got, theme.Default().Palette(theme.ProfileANSI16).Paint(theme.RoleWarn, "●")) || !strings.Contains(got, "missing root") {
 		t.Fatalf("styled unhealthy status = %q", got)
 	}
 }
@@ -331,14 +332,14 @@ func TestSettingsDefaultPairsUseSemanticStyles(t *testing.T) {
 	labelWidth := cells.Width("Pull request")
 	for _, test := range []struct {
 		row  SettingsRuntimeDefault
-		role Role
+		role theme.Role
 	}{
-		{row: SettingsRuntimeDefault{Name: "TAO_PULL_REQUEST", Value: "true"}, role: RoleSuccess},
-		{row: SettingsRuntimeDefault{Name: "TAO_PULL_REQUEST", Value: "false"}, role: RoleNeutral2},
-		{row: SettingsRuntimeDefault{Name: "TAO_PULL_REQUEST", Value: "none"}, role: RoleNeutral2},
+		{row: SettingsRuntimeDefault{Name: "TAO_PULL_REQUEST", Value: "true"}, role: theme.RoleSuccess},
+		{row: SettingsRuntimeDefault{Name: "TAO_PULL_REQUEST", Value: "false"}, role: theme.RoleNeutral2},
+		{row: SettingsRuntimeDefault{Name: "TAO_PULL_REQUEST", Value: "none"}, role: theme.RoleNeutral2},
 	} {
-		got := settingsDefaultPair(ProfileANSI16, test.row, labelWidth, false)
-		if !strings.Contains(got, Paint(ProfileANSI16, RoleNeutral2, "Pull request")) || !strings.Contains(got, Paint(ProfileANSI16, test.role, test.row.Value)) {
+		got := settingsDefaultPair(theme.Default().Palette(theme.ProfileANSI16), test.row, labelWidth, false)
+		if !strings.Contains(got, theme.Default().Palette(theme.ProfileANSI16).Paint(theme.RoleNeutral2, "Pull request")) || !strings.Contains(got, theme.Default().Palette(theme.ProfileANSI16).Paint(test.role, test.row.Value)) {
 			t.Errorf("styled default pair = %q", got)
 		}
 	}
@@ -413,7 +414,7 @@ func TestRenderSettingsOverridesIncludesOnlyTruthfulOverridesAndWarnings(t *test
 func TestRenderSettingsOverridesUsesSemanticStyles(t *testing.T) {
 	explicitTrue := true
 	model := Model{
-		Page: PageSettings, Width: 120, Profile: ProfileANSI16,
+		Page: PageSettings, Width: 120, Profile: theme.ProfileANSI16,
 		SettingsSnapshot: SettingsSnapshot{
 			InheritedPullRequest: false,
 			RuntimeDefaults: []SettingsRuntimeDefault{
@@ -425,9 +426,9 @@ func TestRenderSettingsOverridesUsesSemanticStyles(t *testing.T) {
 	lines, _ := renderSettingsOverrides(model)
 	got := strings.Join(lines, "\n")
 	for _, want := range []string{
-		Paint(ProfileANSI16, RoleNeutral5, "claude"),
-		Paint(ProfileANSI16, RoleWarn, "warning: fallback warning"),
-		Paint(ProfileANSI16, RepoColor("beta"), "← βeta"),
+		theme.Default().Palette(theme.ProfileANSI16).Paint(theme.RoleNeutral5, "claude"),
+		theme.Default().Palette(theme.ProfileANSI16).Paint(theme.RoleWarn, "warning: fallback warning"),
+		theme.Default().Palette(theme.ProfileANSI16).Paint(theme.RepoColor("beta"), "← βeta"),
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("styled overrides missing %q: %q", want, got)

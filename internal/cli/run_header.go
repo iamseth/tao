@@ -11,6 +11,7 @@ import (
 	"github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/runheader"
 	"github.com/iamseth/tao/internal/term"
+	"github.com/iamseth/tao/internal/theme"
 )
 
 const runHeaderRefreshInterval = time.Second
@@ -25,7 +26,7 @@ type runHeaderTerminal interface {
 type runHeaderOutput struct {
 	out      io.Writer
 	terminal runHeaderTerminal
-	useColor bool
+	palette  theme.Palette
 
 	outputMu sync.Mutex
 	stateMu  sync.RWMutex
@@ -39,7 +40,7 @@ type runHeaderOutput struct {
 // installRunHeader applies the pure activation gate and returns the writer and
 // reporter used by one interactive run. Failure is presentation-only: callers
 // retain the original writer and continue the run unchanged.
-func installRunHeader(ctx context.Context, out io.Writer, noRunHeader bool) (io.Writer, run.HeaderReporter, func()) {
+func (a App) installRunHeader(ctx context.Context, out io.Writer, noRunHeader bool) (io.Writer, run.HeaderReporter, func()) {
 	terminal, ok := runHeaderTerminalForOutput(out)
 	if !ok {
 		return out, nil, func() {}
@@ -49,7 +50,7 @@ func installRunHeader(ctx context.Context, out io.Writer, noRunHeader bool) (io.
 		return out, nil, func() {}
 	}
 
-	header := &runHeaderOutput{out: out, terminal: terminal, useColor: outputSupportsColor(out), size: size}
+	header := &runHeaderOutput{out: out, terminal: terminal, palette: a.outputPalette(out), size: size}
 	if err := header.install(); err != nil {
 		_ = term.ResetScrollRegion(out)
 		return out, nil, func() {}
@@ -191,7 +192,7 @@ func (w *runHeaderOutput) paintLocked(preserveCursor bool) error {
 	w.stateMu.RLock()
 	state := w.state.Clone()
 	w.stateMu.RUnlock()
-	for row, line := range runheader.Render(state, w.size.Width, w.useColor) {
+	for row, line := range runheader.Render(state, w.size.Width, w.palette) {
 		if err := term.PositionCursor(w.out, row+1, 1); err != nil {
 			return err
 		}
@@ -232,5 +233,5 @@ func (w *runHeaderOutput) Close() {
 	w.stateMu.RLock()
 	state := w.state.Clone()
 	w.stateMu.RUnlock()
-	_, _ = io.WriteString(w.out, strings.Join(runheader.Render(state, w.size.Width, w.useColor), "\n")+"\n")
+	_, _ = io.WriteString(w.out, strings.Join(runheader.Render(state, w.size.Width, w.palette), "\n")+"\n")
 }
