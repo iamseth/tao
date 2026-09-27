@@ -467,47 +467,93 @@ func TestBatchWorkspaceResumeRecordsUnknownRestartVerdictOnProbeFailure(t *testi
 
 func TestBatchWorkspaceRestartRemovesOnlyBatchResources(t *testing.T) {
 	t.Parallel()
-	fixture := newRealGitWorktree(t)
-	state := batchWorkspaceState(t, fixture)
-	batchesDir := filepath.Join(t.TempDir(), "merge-batches")
-	owner, err := NewBatchWorkspace(fixture.repoRoot, batchesDir, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	integration, err := owner.Start(context.Background(), state)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := owner.store.SetActive(state.ID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := owner.store.Transition(state, "now"); err != nil {
-		t.Fatal(err)
-	}
-	defaultBefore := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
-	sourceBefore := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch)
+	for _, transcript := range []string{"populated", "absent", "empty"} {
+		t.Run(transcript, func(t *testing.T) {
+			fixture := newRealGitWorktree(t)
+			state := batchWorkspaceState(t, fixture)
+			batchesDir := filepath.Join(t.TempDir(), "merge-batches")
+			owner, err := NewBatchWorkspace(fixture.repoRoot, batchesDir, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			integration, err := owner.Start(context.Background(), state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := owner.store.SetActive(state.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := owner.store.Transition(state, "now"); err != nil {
+				t.Fatal(err)
+			}
+			transcriptPath := owner.store.TranscriptPath(state.ID)
+			var wantTranscript []byte
+			switch transcript {
+			case "populated":
+				writer := NewBatchTranscriptWriter(owner.store, nil, nil)
+				_, writeErr := writer.Write([]byte("agent output before restart\n"))
+				closeErr := writer.Close()
+				if writeErr != nil || closeErr != nil {
+					t.Fatalf("write transcript: %v; close: %v", writeErr, closeErr)
+				}
+				wantTranscript, err = os.ReadFile(transcriptPath) //nolint:gosec // Test-owned path beneath t.TempDir.
+				if err != nil || !strings.Contains(string(wantTranscript), "agent output before restart\n") {
+					t.Fatalf("transcript before restart = %q, err = %v", wantTranscript, err)
+				}
+			case "empty":
+				if err := os.WriteFile(transcriptPath, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			batchDir := filepath.Join(batchesDir, state.ID)
+			nestedDir := filepath.Join(batchDir, "nested-recovery")
+			if err := os.Mkdir(nestedDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(nestedDir, "artifact"), []byte("recovery"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			defaultBefore := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
+			sourceBefore := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch)
 
-	preview, err := owner.Restart(context.Background(), state)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if preview.Branch != integration.Branch || !preview.RemoveBranch || !preview.RemoveWorktree || !preview.RemoveRecovery {
-		t.Fatalf("unexpected restart preview: %#v", preview)
-	}
-	if _, err := os.Stat(integration.Path); !os.IsNotExist(err) {
-		t.Fatalf("integration worktree remains: %v", err)
-	}
-	if realGitOutput(t, fixture.repoRoot, "branch", "--list", integration.Branch) != "" {
-		t.Fatal("integration branch remains")
-	}
-	if got := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch); got != defaultBefore {
-		t.Fatalf("restart changed default: %s -> %s", defaultBefore, got)
-	}
-	if got := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch); got != sourceBefore {
-		t.Fatalf("restart changed source: %s -> %s", sourceBefore, got)
-	}
-	if active, err := owner.store.ActiveID(); err != nil || active != "" {
-		t.Fatalf("active recovery remains: active=%q err=%v", active, err)
+			preview, err := owner.Restart(context.Background(), state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if preview.Branch != integration.Branch || !preview.RemoveBranch || !preview.RemoveWorktree || !preview.RemoveRecovery {
+				t.Fatalf("unexpected restart preview: %#v", preview)
+			}
+			if _, err := os.Stat(integration.Path); !os.IsNotExist(err) {
+				t.Fatalf("integration worktree remains: %v", err)
+			}
+			if realGitOutput(t, fixture.repoRoot, "branch", "--list", integration.Branch) != "" {
+				t.Fatal("integration branch remains")
+			}
+			if got := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch); got != defaultBefore {
+				t.Fatalf("restart changed default: %s -> %s", defaultBefore, got)
+			}
+			if got := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch); got != sourceBefore {
+				t.Fatalf("restart changed source: %s -> %s", sourceBefore, got)
+			}
+			if active, err := owner.store.ActiveID(); err != nil || active != "" {
+				t.Fatalf("active recovery remains: active=%q err=%v", active, err)
+			}
+			for _, name := range []string{"state.json", "transitions.jsonl", "nested-recovery"} {
+				if _, err := os.Stat(filepath.Join(batchDir, name)); !os.IsNotExist(err) {
+					t.Errorf("recovery entry %s remains: %v", name, err)
+				}
+			}
+			if transcript == "absent" {
+				if _, err := os.Stat(batchDir); !os.IsNotExist(err) {
+					t.Fatalf("batch directory without transcript remains: %v", err)
+				}
+			} else {
+				got, err := os.ReadFile(transcriptPath) //nolint:gosec // Test-owned path beneath t.TempDir.
+				if err != nil || string(got) != string(wantTranscript) {
+					t.Fatalf("transcript after restart = %q, err = %v; want %q", got, err, wantTranscript)
+				}
+			}
+		})
 	}
 }
 

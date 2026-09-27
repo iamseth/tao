@@ -617,5 +617,26 @@ func (b *BatchWorkspace) removeRecovery(batchID string) error {
 			return err
 		}
 	}
-	return os.RemoveAll(filepath.Join(b.batchesDir, batchID))
+	batchDir := filepath.Join(b.batchesDir, batchID)
+	entries, err := os.ReadDir(batchDir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	retained := false
+	for _, entry := range entries {
+		if entry.Name() == "agent-transcript.log" {
+			retained = true
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(batchDir, entry.Name())); err != nil {
+			return err
+		}
+	}
+	if !retained {
+		return os.Remove(batchDir)
+	}
+	return nil
 }
