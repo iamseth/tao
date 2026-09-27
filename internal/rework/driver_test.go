@@ -16,9 +16,10 @@ import (
 )
 
 type driverRecord struct {
-	detail    *plan.PlanDetail
-	stopErr   error
-	reopenErr error
+	detail        *plan.PlanDetail
+	stopErr       error
+	reopenErr     error
+	roundEvidence plan.AutomaticReworkRound
 }
 
 func (r *driverRecord) Detail() *plan.PlanDetail { return r.detail }
@@ -47,6 +48,7 @@ func (r *driverRecord) ReopenAutomatic(newSlices []plan.Slice, evidence plan.Aut
 	if r.reopenErr != nil {
 		return r.reopenErr
 	}
+	r.roundEvidence = evidence
 	if err := r.Reopen(newSlices, evidence.ReopenedAt); err != nil {
 		return err
 	}
@@ -69,6 +71,61 @@ func (r *driverRecord) ReopenFromPullRequest(newSlices []plan.Slice, consumedThr
 	}
 	r.detail.State.Plan.PRFeedbackConsumedThreadIDs = append(r.detail.State.Plan.PRFeedbackConsumedThreadIDs, consumedThreadIDs...)
 	return nil
+}
+
+func TestEscalationPolicyModelForAttempt(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		policy  EscalationPolicy
+		attempt int
+		want    string
+	}{
+		{name: "unset", attempt: 4},
+		{name: "empty model", policy: EscalationPolicy{FromAttempt: 4}, attempt: 4},
+		{name: "zero threshold", policy: EscalationPolicy{Model: "m"}, attempt: 4},
+		{name: "negative threshold", policy: EscalationPolicy{Model: "m", FromAttempt: -1}, attempt: 4},
+		{name: "before threshold", policy: EscalationPolicy{Model: "m", FromAttempt: 4}, attempt: 3},
+		{name: "at threshold", policy: EscalationPolicy{Model: "m", FromAttempt: 4}, attempt: 4, want: "m"},
+		{name: "after threshold", policy: EscalationPolicy{Model: "m", FromAttempt: 4}, attempt: 5, want: "m"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.policy.ModelForAttempt(tt.attempt); got != tt.want {
+				t.Fatalf("ModelForAttempt = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDriverDecideEscalationUsesWindowAttempt(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		round    int
+		baseline int
+		policy   EscalationPolicy
+		want     string
+	}{
+		{name: "fourth attempt", round: 3, policy: EscalationPolicy{Model: "m", FromAttempt: 4}, want: "m"},
+		{name: "third attempt", round: 2, policy: EscalationPolicy{Model: "m", FromAttempt: 4}},
+		{name: "unset", round: 3},
+		{name: "fresh window", round: 6, baseline: 6, policy: EscalationPolicy{Model: "m", FromAttempt: 4}},
+		{name: "fourth attempt after restart", round: 9, baseline: 6, policy: EscalationPolicy{Model: "m", FromAttempt: 4}, want: "m"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			detail := actionableDriverDetail(tt.round)
+			record := &driverRecord{detail: detail}
+			driver := Driver{
+				Resolve: fixedDriverResolver(detail), Escalation: tt.policy,
+				Record: func(*plan.PlanDetail) (AutomaticRecord, error) { return record, nil },
+			}
+			got, err := driver.Decide(context.Background(), "plan", tt.baseline, 0, "", 5, plan.AgentBudgetThresholds{})
+			if err != nil || !got.Reworked {
+				t.Fatalf("Decide = %+v, %v", got, err)
+			}
+			if evidence := record.roundEvidence; evidence.Model != tt.want || evidence.Attempts != tt.round-tt.baseline+1 {
+				t.Fatalf("round evidence = %+v, want model %q", evidence, tt.want)
+			}
+		})
+	}
 }
 
 func TestDriverRunRejectsAbandonedPlanBeforeRestartDecisionOrExecution(t *testing.T) {

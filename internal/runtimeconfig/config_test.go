@@ -67,7 +67,10 @@ func TestModelSelectionFor(t *testing.T) {
 		if got := (ModelSelection{}).For(role); got != "" {
 			t.Fatalf("unset For(%q) = %q", role, got)
 		}
-		if got := (ModelSelection{Base: "base"}).For(role); got != "base" {
+		if got := (ModelSelection{ReworkEscalation: "strong"}).For(role); got != "" {
+			t.Fatalf("escalation leaked into For(%q) = %q", role, got)
+		}
+		if got := (ModelSelection{Base: "base", ReworkEscalation: "strong"}).For(role); got != "base" {
 			t.Fatalf("base For(%q) = %q", role, got)
 		}
 	}
@@ -127,10 +130,36 @@ func TestResolveRunOptionsModelPrecedence(t *testing.T) {
 	}
 }
 
+func TestResolveRunOptionsReworkEscalationPrecedence(t *testing.T) {
+	for _, tt := range []struct {
+		name, baseline, repository, override, want string
+	}{
+		{name: "unset"},
+		{name: "environment", baseline: "env-strong", want: "env-strong"},
+		{name: "repository", baseline: "env-strong", repository: " repo-strong ", want: "repo-strong"},
+		{name: "override", baseline: "env-strong", repository: "repo-strong", override: " request-strong ", want: "request-strong"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resolved, err := ResolveRunOptionsWithRepositoryDefaults(
+				RunOptionsPatch{ReworkEscalationModel: tt.baseline},
+				RunOptionsPatch{ReworkEscalationModel: tt.repository},
+				RunOptionsPatch{ReworkEscalationModel: tt.override},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resolved.Models.ReworkEscalation != tt.want {
+				t.Fatalf("escalation = %q, want %q", resolved.Models.ReworkEscalation, tt.want)
+			}
+		})
+	}
+}
+
 func TestResolveRunOptionsRejectsInvalidModelsInEveryStage(t *testing.T) {
 	for _, patch := range []RunOptionsPatch{
 		{Model: " "}, {RunModel: "two models"}, {ReviewModel: "two\tmodels"},
 		{MergeReviewModel: "two\u2003models"}, {ResolverModel: "two\nmodels"},
+		{ReworkEscalationModel: "two models"}, {ReworkEscalationModel: " \t"},
 	} {
 		for stage := range 3 {
 			stages := [3]RunOptionsPatch{}
@@ -147,12 +176,12 @@ func TestRunOptionsPatchModelJSON(t *testing.T) {
 	if err != nil || string(data) != "{}" {
 		t.Fatalf("empty patch JSON = %s, %v", data, err)
 	}
-	patch := RunOptionsPatch{Model: "base", RunModel: "run", ReviewModel: "review", MergeReviewModel: "merge", ResolverModel: "resolver"}
+	patch := RunOptionsPatch{Model: "base", RunModel: "run", ReviewModel: "review", MergeReviewModel: "merge", ResolverModel: "resolver", ReworkEscalationModel: "strong"}
 	data, err = json.Marshal(patch)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := `{"model":"base","run_model":"run","review_model":"review","merge_review_model":"merge","resolver_model":"resolver"}`; string(data) != want {
+	if want := `{"model":"base","run_model":"run","review_model":"review","merge_review_model":"merge","resolver_model":"resolver","rework_escalation_model":"strong"}`; string(data) != want {
 		t.Fatalf("patch JSON = %s, want %s", data, want)
 	}
 	var decoded RunOptionsPatch
@@ -562,15 +591,16 @@ func TestRunOptionsPatchHelpersPreserveOptionalValues(t *testing.T) {
 // service uses to re-apply a resolved request over its own defaults.
 func TestResolvedRunOptionsRunOptionsPatchReappliesOnDefaults(t *testing.T) {
 	resolved, err := ResolveRunOptions(DefaultRunOptionsPatch(), RunOptionsPatch{
-		Mode:             ModeStep,
-		CommitPolicy:     CommitPolicySlice,
-		ExecutionMode:    ExecutionModeCurrent,
-		Agent:            AgentClaude,
-		Model:            "base",
-		RunModel:         "run",
-		ReviewModel:      "review",
-		MergeReviewModel: "merge-review",
-		ResolverModel:    "resolver",
+		Mode:                  ModeStep,
+		CommitPolicy:          CommitPolicySlice,
+		ExecutionMode:         ExecutionModeCurrent,
+		Agent:                 AgentClaude,
+		Model:                 "base",
+		RunModel:              "run",
+		ReviewModel:           "review",
+		MergeReviewModel:      "merge-review",
+		ResolverModel:         "resolver",
+		ReworkEscalationModel: "strong",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -609,13 +639,13 @@ func TestResolvedRunOptionsRunOptionsPatchProjectsExecutionMode(t *testing.T) {
 func TestResolvedRunOptionsRunOptionsPatchRoundTrip(t *testing.T) {
 	resolved, err := ResolveRunOptions(DefaultRunOptionsPatch().WithMaxSlices(3), RunOptionsPatch{
 		ExecutionMode: ExecutionModeCurrent,
-		Model:         "base", RunModel: "run", ReviewModel: "review", MergeReviewModel: "merge", ResolverModel: "resolver",
+		Model:         "base", RunModel: "run", ReviewModel: "review", MergeReviewModel: "merge", ResolverModel: "resolver", ReworkEscalationModel: "strong",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defaults := resolved.RunOptionsPatch()
-	if defaults.Model != "base" || defaults.RunModel != "run" || defaults.ReviewModel != "review" || defaults.MergeReviewModel != "merge" || defaults.ResolverModel != "resolver" {
+	if defaults.Model != "base" || defaults.RunModel != "run" || defaults.ReviewModel != "review" || defaults.MergeReviewModel != "merge" || defaults.ResolverModel != "resolver" || defaults.ReworkEscalationModel != "strong" {
 		t.Fatalf("model projection = %#v", defaults)
 	}
 	if defaults.MaxSlices == nil || *defaults.MaxSlices != 3 || defaults.ExecutionMode != ExecutionModeCurrent || defaults.ReviewEnabled == nil || !*defaults.ReviewEnabled || defaults.SessionTimeout == nil || *defaults.SessionTimeout != DefaultSessionTimeout {

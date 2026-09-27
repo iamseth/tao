@@ -413,6 +413,7 @@ type AutomaticReworkRound struct {
 	Attempts    int
 	MaxAttempts int
 	Fingerprint string
+	Model       string
 	ReopenedAt  time.Time
 }
 
@@ -980,6 +981,7 @@ type Event struct {
 	BaselineHead          string                       `json:"baseline_head,omitempty"`
 	MergedDefaultSHA      string                       `json:"merged_default_sha,omitempty"`
 	Agent                 string                       `json:"agent,omitempty"`
+	Model                 string                       `json:"model,omitempty"`
 	DurationSeconds       *int64                       `json:"duration_seconds,omitempty"`
 	Metrics               *AgentMetrics                `json:"metrics,omitempty"`
 	PullRequest           *PullRequest                 `json:"pull_request,omitempty"`

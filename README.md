@@ -270,6 +270,8 @@ TAO_RUN_MODEL=provider/model            # implementation and rework slices
 TAO_REVIEW_MODEL=provider/model         # plan review and proposal correction
 TAO_MERGE_REVIEW_MODEL=provider/model    # aggregate merge review
 TAO_RESOLVER_MODEL=provider/model        # merge conflict and rework resolution
+TAO_REWORK_ESCALATION_MODEL=provider/stronger-model # optional late automatic rework
+TAO_REWORK_ESCALATION_FROM_ATTEMPT=4     # first eligible attempt in each window
 TAO_DATA_HOME=/path/to/tao-data
 TAO_COMMIT_POLICY=slice|none
 TAO_EXECUTION_MODE=isolated|current
@@ -291,6 +293,7 @@ tao repo config --pull-request unset
 tao repo config --model provider/model
 tao repo config --run-model provider/implementation-model
 tao repo config --run-model unset # remove this default and restore inheritance
+tao repo config --rework-escalation-model provider/stronger-model
 ```
 
 Planner routing applies only to `tao note run`:
@@ -307,12 +310,21 @@ model, and reasoning effort remain inherited. See the
 randomized routing.
 
 Repository model flags are `--model`, `--run-model`, `--review-model`,
-`--merge-review-model`, and `--resolver-model`; each accepts a name or `unset`.
+`--merge-review-model`, `--resolver-model`, and `--rework-escalation-model`;
+each accepts a name or `unset`.
 For a one-invocation override of every role, use `tao run --model NAME <plan>`,
 `tao review --run --model NAME <plan>`, or `tao merge --model NAME <plan>`
 (including `tao merge --all --model NAME`). See the
 [model selection guide](docs/usage-guide.md#choose-models-for-agent-sessions)
 for precedence and runtime rejection behavior.
+
+Escalation is opt-in and separate from role selection: use
+`tao run --rework-escalation-model NAME <plan>` for a one-run policy override.
+The attempt threshold is environment-only (default 4); without an effective
+escalation model, rework is unchanged. A model already recorded for a round
+still wins at execution time. See the
+[rework guide](docs/usage-guide.md#escalate-late-automatic-rework)
+for attempt counting and durable selection.
 
 Run `tao status` to see the resolved `TAO_*` runtime values and repository plan
 rollups (`tao status --json` for automation). Use `tao run --help` and

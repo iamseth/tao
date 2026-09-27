@@ -266,7 +266,11 @@ func runSliceWithAgentSession(ctx context.Context, executor AgentSessionExecutor
 	if plan.IsReworkSliceID(run.SliceID) {
 		role = plan.AgentRoleRework
 	}
-	_, err = executor.RunAgentSession(ctx, AgentSessionRequest{Model: options.Models.For(runtimeconfig.ModelRoleRun), PlanDir: run.PlanDir, RepoRoot: run.RepoRoot, LogAction: "running " + run.SliceID, Prompt: prompt, Metrics: &AgentSessionMetricsRequest{SliceID: run.SliceID, Role: role, EnforceSliceCaps: true}, NoProgressToolLimit: options.NoProgressToolLimit, VerificationCommands: run.VerificationCommands})
+	model := run.Model
+	if model == "" {
+		model = options.Models.For(runtimeconfig.ModelRoleRun)
+	}
+	_, err = executor.RunAgentSession(ctx, AgentSessionRequest{Model: model, PlanDir: run.PlanDir, RepoRoot: run.RepoRoot, LogAction: "running " + run.SliceID, Prompt: prompt, Metrics: &AgentSessionMetricsRequest{SliceID: run.SliceID, Role: role, EnforceSliceCaps: true}, NoProgressToolLimit: options.NoProgressToolLimit, VerificationCommands: run.VerificationCommands})
 	return err
 }
 

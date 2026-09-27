@@ -3,6 +3,7 @@ package runtimeconfig
 import (
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +33,88 @@ func TestRuntimeModelAndSessionDefaultsAreIndependent(t *testing.T) {
 	t.Setenv(EnvSessionTimeout, "invalid")
 	if _, err := RuntimeAgentSessionEnvDefaults(); err == nil || !strings.Contains(err.Error(), EnvSessionTimeout) {
 		t.Fatalf("invalid timeout: %v", err)
+	}
+}
+
+func TestRuntimeEnvReworkEscalationDefaultsAndOverrides(t *testing.T) {
+	for _, name := range RuntimeEnvKeys() {
+		unsetEnv(t, name)
+	}
+	defaults, err := RuntimeEnvDefaults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaults.ReworkEscalationModel != "" || defaults.ReworkEscalationFromAttempt != nil || defaults.ReworkEscalationFromAttemptValue() != 4 || DefaultReworkEscalationFromAttempt != 4 {
+		t.Fatalf("unexpected escalation defaults: %#v", defaults)
+	}
+	for _, tt := range []struct {
+		threshold string
+		want      int
+	}{
+		{threshold: " 06 ", want: 6},
+		{threshold: "1", want: 1},
+		{threshold: "", want: 4},
+	} {
+		t.Run(tt.threshold, func(t *testing.T) {
+			t.Setenv(EnvReworkEscalationModel, " provider/strong ")
+			t.Setenv(EnvReworkEscalationFromAttempt, tt.threshold)
+			got, err := RuntimeEnvDefaults()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.ReworkEscalationModel != "provider/strong" || got.ReworkEscalationFromAttemptValue() != tt.want {
+				t.Fatalf("unexpected escalation settings: %#v", got)
+			}
+			if tt.threshold != "" && (got.ReworkEscalationFromAttempt == nil || *got.ReworkEscalationFromAttempt != tt.want) {
+				t.Fatalf("explicit threshold not stored: %#v", got)
+			}
+			models, err := RuntimeModelEnvDefaults()
+			if err != nil || models.ReworkEscalationModel != "provider/strong" {
+				t.Fatalf("model defaults = %#v, %v", models, err)
+			}
+			rows, err := RuntimeEnvStatus()
+			if err != nil {
+				t.Fatal(err)
+			}
+			source := "env"
+			if tt.threshold == "" {
+				source = "default"
+			}
+			for _, want := range []EnvVarStatus{
+				{Name: EnvReworkEscalationModel, Value: "provider/strong", Source: "env"},
+				{Name: EnvReworkEscalationFromAttempt, Value: strconv.Itoa(tt.want), Source: source},
+			} {
+				if !slices.Contains(rows, want) {
+					t.Errorf("missing status row %#v", want)
+				}
+			}
+		})
+	}
+}
+
+func TestRuntimeEnvReworkEscalationRejectsInvalidValues(t *testing.T) {
+	for _, name := range RuntimeEnvKeys() {
+		unsetEnv(t, name)
+	}
+	for _, tt := range []struct{ name, value string }{
+		{EnvReworkEscalationFromAttempt, "0"},
+		{EnvReworkEscalationFromAttempt, "-1"},
+		{EnvReworkEscalationFromAttempt, "four"},
+		{EnvReworkEscalationFromAttempt, "1.5"},
+		{EnvReworkEscalationModel, "two models"},
+		{EnvReworkEscalationModel, " \t"},
+		{EnvReworkEscalationModel, ""},
+	} {
+		t.Run(tt.name+"="+tt.value, func(t *testing.T) {
+			t.Setenv(tt.name, tt.value)
+			_, defaultsErr := RuntimeEnvDefaults()
+			_, statusErr := RuntimeEnvStatus()
+			for _, err := range []error{defaultsErr, statusErr} {
+				if err == nil || !strings.HasPrefix(err.Error(), tt.name+":") {
+					t.Errorf("error = %v, want variable name %s", err, tt.name)
+				}
+			}
+		})
 	}
 }
 
@@ -244,11 +327,13 @@ func TestRuntimeEnvStatusDefaultRowsDeriveFromRunOptionsPatch(t *testing.T) {
 		{Name: EnvReviewModel, Value: "", Source: "default"},
 		{Name: EnvMergeReviewModel, Value: "", Source: "default"},
 		{Name: EnvResolverModel, Value: "", Source: "default"},
+		{Name: EnvReworkEscalationModel, Value: "", Source: "default"},
 		{Name: EnvUpdate, Value: "warn", Source: "default"},
 		{Name: EnvPullRequest, Value: "false", Source: "default"},
 		{Name: EnvReview, Value: "true", Source: "default"},
 		{Name: EnvAutoRework, Value: "true", Source: "default"},
 		{Name: EnvMaxReworkAttempts, Value: "5", Source: "default"},
+		{Name: EnvReworkEscalationFromAttempt, Value: "4", Source: "default"},
 		{Name: EnvSkipPermissions, Value: "false", Source: "default"},
 		{Name: EnvMergeVerifyCommand, Value: "auto-detect", Source: "default"},
 		{Name: EnvAggregateReviewConvergenceWindow, Value: "2", Source: "default"},

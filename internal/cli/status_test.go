@@ -14,13 +14,13 @@ import (
 )
 
 func TestStatusRepositoryModelDefaults(t *testing.T) {
-	modelKeys := []string{runtimeconfig.EnvModel, runtimeconfig.EnvRunModel, runtimeconfig.EnvReviewModel, runtimeconfig.EnvMergeReviewModel, runtimeconfig.EnvResolverModel}
+	modelKeys := []string{runtimeconfig.EnvModel, runtimeconfig.EnvRunModel, runtimeconfig.EnvReviewModel, runtimeconfig.EnvMergeReviewModel, runtimeconfig.EnvResolverModel, runtimeconfig.EnvReworkEscalationModel}
 	for _, mode := range []string{"repository", "default", "env"} {
 		t.Run(mode, func(t *testing.T) {
 			clearTaoEnv(t)
 			var registered taodata.Repo
 			if mode == "repository" {
-				if err := json.Unmarshal([]byte(`{"id":"repo-a","run_defaults":{"models":{"model":"base","run_model":"run","review_model":"review","merge_review_model":"merge","resolver_model":"resolver"}}}`), &registered); err != nil {
+				if err := json.Unmarshal([]byte(`{"id":"repo-a","run_defaults":{"models":{"model":"base","run_model":"run","review_model":"review","merge_review_model":"merge","resolver_model":"resolver","rework_escalation_model":"escalation"}}}`), &registered); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -28,6 +28,7 @@ func TestStatusRepositoryModelDefaults(t *testing.T) {
 				for _, key := range modelKeys {
 					t.Setenv(key, "environment")
 				}
+				t.Setenv(runtimeconfig.EnvReworkEscalationFromAttempt, "3")
 			}
 			registry := &fakeNoteRegistry{current: registered, repos: []taodata.Repo{registered}}
 			var out bytes.Buffer
@@ -43,21 +44,30 @@ func TestStatusRepositoryModelDefaults(t *testing.T) {
 			if err := app.Run(context.Background(), []string{"status"}); err != nil {
 				t.Fatal(err)
 			}
-			values := []string{"base", "run", "review", "merge", "resolver"}
-			for i, key := range modelKeys {
-				want := ""
-				switch mode {
-				case "repository":
-					want = values[i]
-				case "env":
-					want = "environment"
+			values := []string{"base", "run", "review", "merge", "resolver", "escalation"}
+			keys := append(append([]string(nil), modelKeys...), runtimeconfig.EnvReworkEscalationFromAttempt)
+			for i, key := range keys {
+				want, source := "", mode
+				switch key {
+				case runtimeconfig.EnvReworkEscalationFromAttempt:
+					want, source = "4", "default"
+					if mode != "default" {
+						want, source = "3", "env"
+					}
+				default:
+					switch mode {
+					case "repository":
+						want = values[i]
+					case "env":
+						want = "environment"
+					}
 				}
 				found := false
 				for _, row := range payload.RuntimeEnv {
 					if row.Name == key {
 						found = true
-						if row.Value != want || row.Source != mode {
-							t.Errorf("%s JSON row = %+v, want value %q source %s", key, row, want, mode)
+						if row.Value != want || row.Source != source {
+							t.Errorf("%s JSON row = %+v, want value %q source %s", key, row, want, source)
 						}
 					}
 				}
@@ -72,8 +82,8 @@ func TestStatusRepositoryModelDefaults(t *testing.T) {
 					fields := strings.Fields(line)
 					if len(fields) > 0 && fields[0] == key {
 						found = true
-						if strings.Join(fields, " ") != key+" "+want+" "+mode {
-							t.Errorf("status line = %q, want %s %s %s", line, key, want, mode)
+						if strings.Join(fields, " ") != key+" "+want+" "+source {
+							t.Errorf("status line = %q, want %s %s %s", line, key, want, source)
 						}
 					}
 				}

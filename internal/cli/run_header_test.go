@@ -207,7 +207,7 @@ func TestExecuteResolvedRunHeaderShowsResolvedReworkLimit(t *testing.T) {
 
 	request := run.Request{Input: planID, ResolvedRunOptions: runtimeconfig.ResolvedRunOptions{Agent: run.AgentPi, ExecutionMode: run.ExecutionModeIsolated, CommitPolicy: run.CommitPolicySlice, ReviewEnabled: true}}
 	policy := runtimeconfig.AutoReworkPolicy{Enabled: true, MaxAttempts: 7}
-	if err := (App{Out: terminal}).executeResolvedRun(context.Background(), repo, planID, request, false, policy, false, false); err != nil {
+	if err := (App{Out: terminal}).executeResolvedRun(context.Background(), repo, planID, request, false, policy, runtimeconfig.DefaultReworkEscalationFromAttempt, false, false); err != nil {
 		t.Fatal(err)
 	}
 	if text := terminal.String(); !strings.Contains(text, "rework 2/7") {
@@ -232,7 +232,7 @@ func TestExecuteResolvedRunRestoresRegionWhenRunErrors(t *testing.T) {
 	t.Cleanup(func() { executeSinglePlan = oldExecutor })
 
 	request := run.Request{Input: planID, ResolvedRunOptions: runtimeconfig.ResolvedRunOptions{Agent: run.AgentPi, ExecutionMode: run.ExecutionModeIsolated, CommitPolicy: run.CommitPolicySlice, ReviewEnabled: true}}
-	err := (App{Out: terminal}).executeResolvedRun(context.Background(), repo, planID, request, false, runtimeconfig.AutoReworkPolicy{}, false, false)
+	err := (App{Out: terminal}).executeResolvedRun(context.Background(), repo, planID, request, false, runtimeconfig.AutoReworkPolicy{}, runtimeconfig.DefaultReworkEscalationFromAttempt, false, false)
 	if !errors.Is(err, failure) {
 		t.Fatalf("executeResolvedRun() error = %v, want %v", err, failure)
 	}

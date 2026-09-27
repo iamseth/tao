@@ -280,6 +280,9 @@ func (r SelectedSliceRunner) Run(ctx context.Context, detail *plan.PlanDetail, d
 		}
 	}
 	run := SliceRun{PlanDir: absolutePlanDir(detail.Dir), SliceID: slice.ID, LogPath: logPath, RunPacket: runPacket, RepoRoot: executionRoot, VerificationCommands: slice.Verification.Commands, Resuming: resuming, ResumeAttempt: resumeAttempt}
+	if plan.IsReworkSliceID(slice.ID) {
+		run.Model = plan.ReworkRoundModel(detail.Events, plan.ReworkRoundFromSliceID(slice.ID))
+	}
 	transportRetries := 0
 	for {
 		ReportPhase(ctx, PhaseRunningSlice, &runstatus.SliceDetail{ID: slice.ID, Title: slice.Title})
@@ -348,6 +351,9 @@ func (r SelectedSliceRunner) Run(ctx context.Context, detail *plan.PlanDetail, d
 		detail = reloaded
 		transportRetries++
 		run = SliceRun{PlanDir: absolutePlanDir(detail.Dir), SliceID: slice.ID, LogPath: logPath, RunPacket: runPacket, RepoRoot: executionRoot, VerificationCommands: slice.Verification.Commands, Resuming: true, ResumeAttempt: resumeAttempt}
+		if plan.IsReworkSliceID(slice.ID) {
+			run.Model = plan.ReworkRoundModel(detail.Events, plan.ReworkRoundFromSliceID(slice.ID))
+		}
 	}
 }
 

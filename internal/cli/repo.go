@@ -12,7 +12,7 @@ import (
 	"github.com/iamseth/tao/internal/taodata"
 )
 
-const repoConfigUsage = "repo config [--pull-request true|false|unset] [--model NAME|unset] [--run-model NAME|unset] [--review-model NAME|unset] [--merge-review-model NAME|unset] [--resolver-model NAME|unset] [<repo-id>]"
+const repoConfigUsage = "repo config [--pull-request true|false|unset] [--model NAME|unset] [--run-model NAME|unset] [--review-model NAME|unset] [--merge-review-model NAME|unset] [--resolver-model NAME|unset] [--rework-escalation-model NAME|unset] [<repo-id>]"
 
 var repoCommand = commandMetadata{
 	name:                  "repo",
@@ -113,7 +113,7 @@ func (a App) repoShow(ctx context.Context, registry taodata.Registry, input stri
 
 func registerRepoConfigFlags(fs *flag.FlagSet) {
 	fs.String("pull-request", "", "set the repository pull_request run default to true, false, or unset")
-	for _, name := range []string{"model", "run-model", "review-model", "merge-review-model", "resolver-model"} {
+	for _, name := range []string{"model", "run-model", "review-model", "merge-review-model", "resolver-model", "rework-escalation-model"} {
 		fs.String(name, "", "set the repository "+strings.ReplaceAll(name, "-", "_")+" default to a model name or unset")
 	}
 }
@@ -157,6 +157,7 @@ func (a App) repoConfig(ctx context.Context, registry taodata.Registry, args []s
 		{"review-model", &models.ReviewModel},
 		{"merge-review-model", &models.MergeReviewModel},
 		{"resolver-model", &models.ResolverModel},
+		{"rework-escalation-model", &models.ReworkEscalationModel},
 	}
 	for _, model := range modelFlags {
 		if !flagWasProvided(fs, model.name) {

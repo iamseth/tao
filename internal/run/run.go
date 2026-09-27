@@ -156,6 +156,7 @@ type runExecution struct {
 }
 
 type SliceRun struct {
+	Model                string
 	PlanDir              string
 	SliceID              string
 	LogPath              string

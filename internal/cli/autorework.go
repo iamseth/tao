@@ -11,13 +11,14 @@ import (
 	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
-func newReworkDriver(repo planRunRepository, now func() time.Time) reworkpkg.Driver {
+func newReworkDriver(repo planRunRepository, now func() time.Time, escalation reworkpkg.EscalationPolicy) reworkpkg.Driver {
 	return reworkpkg.Driver{
 		Resolve: repo.ResolvePlan,
 		Record: func(detail *plan.PlanDetail) (reworkpkg.AutomaticRecord, error) {
 			return repo.PlanRecord(detail)
 		},
-		Now: now,
+		Now:        now,
+		Escalation: escalation,
 	}
 }
 

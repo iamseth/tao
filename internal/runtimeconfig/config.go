@@ -64,6 +64,8 @@ const (
 // Empty names leave model selection to the agent runtime.
 type ModelSelection struct {
 	Base, Run, Review, MergeReview, Resolver string
+	// ReworkEscalation is opt-in rework policy, not a role fallback for For.
+	ReworkEscalation string
 }
 
 func (m ModelSelection) For(role ModelRole) string {
@@ -108,20 +110,21 @@ type SliceBudgetCaps struct {
 // model fields mean unset. Pointer fields mean the caller supplied the value,
 // including explicit false or zero.
 type RunOptionsPatch struct {
-	Mode             Mode           `json:"mode,omitempty"`
-	MaxSlices        *int           `json:"max_slices,omitempty"`
-	Continue         *bool          `json:"continue,omitempty"`
-	CommitPolicy     CommitPolicy   `json:"commit_policy,omitempty"`
-	ExecutionMode    ExecutionMode  `json:"execution_mode,omitempty"`
-	Agent            AgentKind      `json:"agent,omitempty"`
-	PullRequest      *bool          `json:"pull_request,omitempty"`
-	ReviewEnabled    *bool          `json:"review_enabled,omitempty"`
-	SessionTimeout   *time.Duration `json:"session_timeout,omitempty"`
-	Model            string         `json:"model,omitempty"`
-	RunModel         string         `json:"run_model,omitempty"`
-	ReviewModel      string         `json:"review_model,omitempty"`
-	MergeReviewModel string         `json:"merge_review_model,omitempty"`
-	ResolverModel    string         `json:"resolver_model,omitempty"`
+	Mode                  Mode           `json:"mode,omitempty"`
+	MaxSlices             *int           `json:"max_slices,omitempty"`
+	Continue              *bool          `json:"continue,omitempty"`
+	CommitPolicy          CommitPolicy   `json:"commit_policy,omitempty"`
+	ExecutionMode         ExecutionMode  `json:"execution_mode,omitempty"`
+	Agent                 AgentKind      `json:"agent,omitempty"`
+	PullRequest           *bool          `json:"pull_request,omitempty"`
+	ReviewEnabled         *bool          `json:"review_enabled,omitempty"`
+	SessionTimeout        *time.Duration `json:"session_timeout,omitempty"`
+	Model                 string         `json:"model,omitempty"`
+	RunModel              string         `json:"run_model,omitempty"`
+	ReviewModel           string         `json:"review_model,omitempty"`
+	MergeReviewModel      string         `json:"merge_review_model,omitempty"`
+	ResolverModel         string         `json:"resolver_model,omitempty"`
+	ReworkEscalationModel string         `json:"rework_escalation_model,omitempty"`
 }
 
 // ResolvedRunOptions is the validated execution model after defaults and
@@ -144,6 +147,9 @@ const (
 	// DefaultMaxReworkAttempts is the number of automatic rework cycles allowed
 	// after the initial direct run.
 	DefaultMaxReworkAttempts = 5
+	// DefaultReworkEscalationFromAttempt is the first attempt eligible for a
+	// configured escalation model within an automatic-rework window.
+	DefaultReworkEscalationFromAttempt = 4
 	// DefaultAggregateReviewConvergenceWindow is the number of consecutive
 	// changes-requested rounds used to detect aggregate review non-convergence.
 	DefaultAggregateReviewConvergenceWindow = 2
@@ -441,20 +447,21 @@ func (o ResolvedRunOptions) RunOptionsPatch() RunOptionsPatch {
 	reviewEnabled := o.ReviewEnabled
 	sessionTimeout := o.SessionTimeout
 	return RunOptionsPatch{
-		Mode:             o.Mode,
-		MaxSlices:        &maxSlices,
-		Continue:         &continueRun,
-		CommitPolicy:     o.CommitPolicy,
-		ExecutionMode:    o.ExecutionMode,
-		Agent:            o.Agent,
-		PullRequest:      &pullRequest,
-		ReviewEnabled:    &reviewEnabled,
-		SessionTimeout:   &sessionTimeout,
-		Model:            o.Models.Base,
-		RunModel:         o.Models.Run,
-		ReviewModel:      o.Models.Review,
-		MergeReviewModel: o.Models.MergeReview,
-		ResolverModel:    o.Models.Resolver,
+		Mode:                  o.Mode,
+		MaxSlices:             &maxSlices,
+		Continue:              &continueRun,
+		CommitPolicy:          o.CommitPolicy,
+		ExecutionMode:         o.ExecutionMode,
+		Agent:                 o.Agent,
+		PullRequest:           &pullRequest,
+		ReviewEnabled:         &reviewEnabled,
+		SessionTimeout:        &sessionTimeout,
+		Model:                 o.Models.Base,
+		RunModel:              o.Models.Run,
+		ReviewModel:           o.Models.Review,
+		MergeReviewModel:      o.Models.MergeReview,
+		ResolverModel:         o.Models.Resolver,
+		ReworkEscalationModel: o.Models.ReworkEscalation,
 	}
 }
 
@@ -552,6 +559,7 @@ func mergeRunOptions(options ResolvedRunOptions, patch RunOptionsPatch) (Resolve
 		{"review_model", patch.ReviewModel, &options.Models.Review},
 		{"merge_review_model", patch.MergeReviewModel, &options.Models.MergeReview},
 		{"resolver_model", patch.ResolverModel, &options.Models.Resolver},
+		{"rework_escalation_model", patch.ReworkEscalationModel, &options.Models.ReworkEscalation},
 	} {
 		if model.value == "" {
 			continue

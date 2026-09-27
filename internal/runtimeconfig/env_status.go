@@ -19,12 +19,14 @@ const (
 	EnvReview                           = "TAO_REVIEW"
 	EnvAutoRework                       = "TAO_AUTO_REWORK"
 	EnvMaxReworkAttempts                = "TAO_MAX_REWORK_ATTEMPTS"
+	EnvReworkEscalationFromAttempt      = "TAO_REWORK_ESCALATION_FROM_ATTEMPT"
 	EnvSessionTimeout                   = "TAO_SESSION_TIMEOUT"
 	EnvModel                            = "TAO_MODEL"
 	EnvRunModel                         = "TAO_RUN_MODEL"
 	EnvReviewModel                      = "TAO_REVIEW_MODEL"
 	EnvMergeReviewModel                 = "TAO_MERGE_REVIEW_MODEL"
 	EnvResolverModel                    = "TAO_RESOLVER_MODEL"
+	EnvReworkEscalationModel            = "TAO_REWORK_ESCALATION_MODEL"
 	EnvUpdate                           = "TAO_UPDATE"
 	EnvSkipPermissions                  = "TAO_DANGEROUSLY_SKIP_PERMISSIONS"
 	EnvMaxSliceOutputTokens             = "TAO_MAX_SLICE_OUTPUT_TOKENS" // #nosec G101 -- environment key, not a credential.
@@ -55,12 +57,20 @@ const (
 // environment variables.
 type EnvDefaults struct {
 	RunOptionsPatch
-	AutoRework            *bool
-	MaxReworkAttempts     *int
-	UpdateMode            selfupdate.Mode
-	SkipPermissions       bool
-	SliceBudgetCaps       SliceBudgetCaps
-	AgentBudgetThresholds plan.AgentBudgetThresholds
+	AutoRework                  *bool
+	MaxReworkAttempts           *int
+	ReworkEscalationFromAttempt *int
+	UpdateMode                  selfupdate.Mode
+	SkipPermissions             bool
+	SliceBudgetCaps             SliceBudgetCaps
+	AgentBudgetThresholds       plan.AgentBudgetThresholds
+}
+
+func (d EnvDefaults) ReworkEscalationFromAttemptValue() int {
+	if d.ReworkEscalationFromAttempt != nil {
+		return *d.ReworkEscalationFromAttempt
+	}
+	return DefaultReworkEscalationFromAttempt
 }
 
 type EnvVarStatus struct {
@@ -203,6 +213,18 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 		},
 	},
 	{
+		name: EnvReworkEscalationModel, applyWhenEmpty: true, model: true,
+		defaultValue: func(RunOptionsPatch) string { return "" },
+		apply: func(defaults *EnvDefaults, value string) (string, error) {
+			parsed, err := ParseModelName(value)
+			if err != nil {
+				return "", err
+			}
+			defaults.ReworkEscalationModel = parsed
+			return parsed, nil
+		},
+	},
+	{
 		name:         EnvUpdate,
 		defaultValue: func(RunOptionsPatch) string { return string(selfupdate.ModeWarn) },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
@@ -261,6 +283,18 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 				return "", err
 			}
 			defaults.MaxReworkAttempts = &parsed
+			return strconv.Itoa(parsed), nil
+		},
+	},
+	{
+		name:         EnvReworkEscalationFromAttempt,
+		defaultValue: func(RunOptionsPatch) string { return strconv.Itoa(DefaultReworkEscalationFromAttempt) },
+		apply: func(defaults *EnvDefaults, value string) (string, error) {
+			parsed, err := strconv.Atoi(strings.TrimSpace(value))
+			if err != nil || parsed < 1 {
+				return "", fmt.Errorf("must be an integer at least 1")
+			}
+			defaults.ReworkEscalationFromAttempt = &parsed
 			return strconv.Itoa(parsed), nil
 		},
 	},

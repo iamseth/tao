@@ -21,6 +21,7 @@ import (
 	"github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+	"github.com/iamseth/tao/internal/taodata"
 )
 
 func TestRunInvokesPiUntilPlanCompletedAndLogsOutput(t *testing.T) {
@@ -320,6 +321,63 @@ func TestRunModelFlagOverridesEveryRole(t *testing.T) {
 			if got := request.Models.For(role); got != want {
 				t.Fatalf("args %v role %s = %q, want %q", args, role, got, want)
 			}
+		}
+	}
+}
+
+func TestRunReworkEscalationModelPrecedence(t *testing.T) {
+	for _, tt := range []struct {
+		name, env, repository, flag, want string
+	}{
+		{name: "unset"},
+		{name: "environment", env: "env-escalation", want: "env-escalation"},
+		{name: "repository", env: "env-escalation", repository: "repo-escalation", want: "repo-escalation"},
+		{name: "flag", env: "env-escalation", repository: "repo-escalation", flag: "provider/escalation", want: "provider/escalation"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			clearTaoEnv(t)
+			if tt.env != "" {
+				t.Setenv(runtimeconfig.EnvReworkEscalationModel, tt.env)
+			}
+			registered := (taodata.Repo{}).WithModelDefaults(taodata.RepoModelDefaults{ReworkEscalationModel: tt.repository})
+			args := []string{"--model", "ordinary-model", "plan-a"}
+			if tt.flag != "" {
+				args = append(args, "--rework-escalation-model", tt.flag)
+			}
+			fs, positional, err := (App{Err: io.Discard}).parseArgs("run", args, registerRunFlags)
+			if err != nil {
+				t.Fatal(err)
+			}
+			inputs, err := resolveRunRequestFlags(fs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := inputs.overrides.ReworkEscalationModel; got != tt.flag {
+				t.Fatalf("escalation override = %q, want %q", got, tt.flag)
+			}
+			request, err := inputs.defaults.newRunRequestWithRepository(positional[0], repositoryRunOptions(registered), inputs.overrides)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := request.Models.ReworkEscalation; got != tt.want {
+				t.Errorf("escalation model = %q, want %q", got, tt.want)
+			}
+			for _, role := range []runtimeconfig.ModelRole{runtimeconfig.ModelRoleDefault, runtimeconfig.ModelRoleRun, runtimeconfig.ModelRoleReview, runtimeconfig.ModelRoleMergeReview, runtimeconfig.ModelRoleResolver} {
+				if got := request.Models.For(role); got != "ordinary-model" {
+					t.Errorf("role %s = %q, want ordinary-model", role, got)
+				}
+			}
+		})
+	}
+}
+
+func TestRunReworkEscalationModelRejectsInvalidNames(t *testing.T) {
+	clearTaoEnv(t)
+	app := App{Out: io.Discard, Err: io.Discard}
+	for _, value := range []string{"", "two models", " \t", "model\nname"} {
+		err := app.run(context.Background(), nil, []string{"--rework-escalation-model=" + value, "plan-a"})
+		if err == nil || !strings.Contains(err.Error(), "--rework-escalation-model") || !strings.Contains(err.Error(), "model name") {
+			t.Errorf("--rework-escalation-model=%q error = %v, want flag-specific validation", value, err)
 		}
 	}
 }

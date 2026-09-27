@@ -694,7 +694,9 @@ an inherited environment role setting; remove that role setting to use the
 base. Repository `unset` removes only that stored default, restoring inheritance.
 With no effective model setting, launch arguments remain unchanged and the
 runtime chooses. Defaults are resolved for each invocation, not pinned to a
-plan, so a later invocation can use a different model. See the
+plan, so a later invocation can use a different model. The exception is a
+[recorded rework escalation model](#escalate-late-automatic-rework), which stays
+in force for that round's slices. See the
 [README configuration reference](../README.md#configuration) for flags.
 
 Names are opaque to Tao and passed to `pi --model` or `claude --model`; supplied
@@ -806,6 +808,34 @@ available. Each generated slice carries a deterministic verification command
 scoped to the touched package rather than a narrow test-name filter. Tao appends
 those slices, flips the same plan back to runnable, records the reopen event, and
 keeps completed slices and history intact.
+
+#### Escalate late automatic rework
+
+Choose a stronger model for late automatic attempts when ordinary rework is
+still eligible but would benefit from different model capability. Set
+`TAO_REWORK_ESCALATION_MODEL` to opt in; without an effective escalation model,
+round events and sessions are unchanged. See the
+[configuration reference](../README.md#configuration) for repository and
+per-run overrides.
+
+`TAO_REWORK_ESCALATION_FROM_ATTEMPT` defaults to 4: under the default cap of
+five attempts, attempts 4 and 5 are eligible. Counting is one-based within the
+current automatic-rework window, not the absolute round number or slice count.
+`--rework-restart` and a successful pull-request reopen establish fresh
+baselines, so the next automatic attempt counts as 1. Manual `tao rework` and
+pull-request reopen rounds never escalate; subsequent automatic rounds can.
+
+When Tao opens an eligible automatic round, it records the chosen `model` on
+the `rework_round` event. That model stays in force for the round's slices even
+if the setting is later changed or unset, or a later run supplies `--model`.
+Settings changes affect future reopen decisions, not already recorded rounds;
+legacy events without a model use the ordinary resolved run model. Escalation
+does not change review or other agent roles.
+
+Escalation neither adds attempts nor bypasses a stop: cap exhaustion, equivalent
+findings, and plan budget remain checked in that order. Location advisories,
+explicit restart requirements, and ordinary rework gates are unchanged. Model
+selection never authorizes recovery, approval, commit, PR, or merge.
 
 #### Follow up on pull-request threads
 

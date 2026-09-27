@@ -994,11 +994,26 @@ func planReopenedEvent(planID string, now time.Time) Event {
 }
 
 func automaticReworkRoundEvent(planID string, evidence AutomaticReworkRound) Event {
+	message := fmt.Sprintf("Automatic rework round %d (attempt %d of %d)", evidence.Round, evidence.Attempts, evidence.MaxAttempts)
+	if evidence.Model != "" {
+		message += " on model " + evidence.Model
+	}
 	return Event{
 		Type: EventTypeReworkRound, Timestamp: evidence.ReopenedAt, PlanID: planID,
 		Round: evidence.Round, Attempts: evidence.Attempts, Fingerprint: evidence.Fingerprint,
-		Message: fmt.Sprintf("Automatic rework round %d (attempt %d of %d)", evidence.Round, evidence.Attempts, evidence.MaxAttempts),
+		Model: evidence.Model, Message: message,
 	}
+}
+
+// ReworkRoundModel returns the model recorded by the latest rework_round event
+// for round. Legacy rounds without a model retain ordinary model selection.
+func ReworkRoundModel(events []Event, round int) string {
+	for _, event := range slices.Backward(events) {
+		if event.Type == EventTypeReworkRound && event.Round == round {
+			return event.Model
+		}
+	}
+	return ""
 }
 
 // pullRequestReworkRoundEvent records the round a pull-request reopen created.

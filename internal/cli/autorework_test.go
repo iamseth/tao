@@ -13,6 +13,7 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/rework"
 	"github.com/iamseth/tao/internal/run"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
 type recordingAutoReworkRepository struct {
@@ -50,13 +51,138 @@ func (s recordingAutoReworkStore) AppendEvent(dir string, event plan.Event) erro
 	return s.repo.AppendEvent(dir, event)
 }
 
+func TestRunRecordsResolvedEscalationPolicy(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		model       string
+		threshold   string
+		args        []string
+		wantModel   string
+		wantAttempt int
+	}{
+		{name: "default threshold", model: "env-model", wantModel: "env-model", wantAttempt: 4},
+		{name: "environment threshold", model: "env-model", threshold: "2", wantModel: "env-model", wantAttempt: 2},
+		{name: "explicit model", model: "env-model", args: []string{"--rework-escalation-model", "flag-model"}, wantModel: "flag-model", wantAttempt: 4},
+		{name: "unset model", threshold: "2", wantAttempt: 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			clearTaoEnv(t)
+			t.Setenv("TAO_DATA_HOME", t.TempDir())
+			if tt.model != "" {
+				t.Setenv(runtimeconfig.EnvReworkEscalationModel, tt.model)
+			}
+			if tt.threshold != "" {
+				t.Setenv(runtimeconfig.EnvReworkEscalationFromAttempt, tt.threshold)
+			}
+			now := time.Date(2026, 9, 26, 21, 32, 0, 0, time.UTC)
+			const planID = "20260926-2132-escalation"
+			detail, _ := autoReworkTestDetail(planID, now)
+			detail.Dir = t.TempDir()
+			repo := newRecordingAutoReworkRepository(planID, detail)
+			calls := 0
+			oldExecutor := executeSinglePlan
+			t.Cleanup(func() { executeSinglePlan = oldExecutor })
+			executeSinglePlan = func(run.Service, context.Context, run.Request) error {
+				calls++
+				for i := range detail.Slices.Slices {
+					detail.Slices.Slices[i].Status = plan.StatusCompleted
+				}
+				detail.State.Plan.CompletedSlices = append(detail.State.Plan.CompletedSlices, detail.State.Plan.PendingSlices...)
+				detail.State.Plan.PendingSlices = nil
+				detail.State.Plan.CurrentSlice = nil
+				if calls == 5 {
+					detail.State.Status = plan.StatusReviewed
+					detail.State.Plan.Review = reworkReview(plan.ReviewVerdictApprove, nil)
+				} else {
+					detail.State.Status = plan.StatusChangesRequested
+					detail.State.Plan.Review = reworkReview(plan.ReviewVerdictChangesRequested, []plan.ReviewFinding{{
+						Severity: "major", File: fmt.Sprintf("internal/cli/round%d.go", calls), Message: fmt.Sprintf("fix round %d", calls),
+					}})
+				}
+				return nil
+			}
+			var out bytes.Buffer
+			args := append([]string{"--no-run-header"}, tt.args...)
+			args = append(args, planID)
+			if err := (App{Out: &out, Now: func() time.Time { return now }}).run(context.Background(), repo, args); err != nil {
+				t.Fatal(err)
+			}
+			if calls != 5 {
+				t.Fatalf("executions = %d, want 5", calls)
+			}
+			for round := 1; round <= 4; round++ {
+				var event plan.Event
+				for _, candidate := range repo.events {
+					if candidate.Type == plan.EventTypeReworkRound && candidate.Round == round {
+						event = candidate
+					}
+				}
+				want := ""
+				if round >= tt.wantAttempt {
+					want = tt.wantModel
+				}
+				if event.Type != plan.EventTypeReworkRound || event.Model != want {
+					t.Fatalf("round %d event = %+v, want model %q", round, event, want)
+				}
+			}
+		})
+	}
+}
+
+func TestReworkDriverRecordsEscalationModel(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		round  int
+		policy rework.EscalationPolicy
+		want   string
+	}{
+		{name: "fourth attempt", round: 3, policy: rework.EscalationPolicy{Model: "m", FromAttempt: 4}, want: "m"},
+		{name: "third attempt", round: 2, policy: rework.EscalationPolicy{Model: "m", FromAttempt: 4}},
+		{name: "unset", round: 3},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			now := time.Date(2026, 7, 14, 2, 30, 0, 0, time.UTC)
+			planID := "20260714-0230-escalation"
+			detail, _ := autoReworkTestDetail(planID, now)
+			for round := 1; round <= tt.round; round++ {
+				id := fmt.Sprintf("r%d01-fix", round)
+				detail.Slices.Slices = append(detail.Slices.Slices, plan.Slice{ID: id, Status: plan.StatusCompleted})
+				detail.State.Plan.CompletedSlices = append(detail.State.Plan.CompletedSlices, id)
+				detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypeReworkRound, Round: round})
+			}
+			repo := newRecordingAutoReworkRepository(planID, detail)
+			driver := newReworkDriver(repo, func() time.Time { return now }, tt.policy)
+			result, err := driver.Decide(context.Background(), planID, 0, 0, "", 5, plan.AgentBudgetThresholds{})
+			if err != nil || !result.Reworked || result.Round != tt.round+1 {
+				t.Fatalf("Decide = %+v, %v", result, err)
+			}
+			var event plan.Event
+			for _, candidate := range repo.events {
+				if candidate.Type == plan.EventTypeReworkRound && candidate.Round == tt.round+1 {
+					event = candidate
+				}
+			}
+			message := fmt.Sprintf("Automatic rework round %d (attempt %d of 5)", tt.round+1, tt.round+1)
+			if tt.want != "" {
+				message += " on model " + tt.want
+			}
+			if event.Type != plan.EventTypeReworkRound || event.Model != tt.want || event.Message != message || event.Attempts != tt.round+1 {
+				t.Fatalf("rework_round event = %+v", event)
+			}
+			if got := plan.ReworkRoundModel(repo.events, tt.round+1); got != tt.want {
+				t.Fatalf("recorded model = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestReworkDriverAtomicallyRecordsReworkRound(t *testing.T) {
 	now := time.Date(2026, 7, 14, 2, 30, 0, 0, time.UTC)
 	planID := "20260714-0230-rework-round"
 	detail, fingerprint := autoReworkTestDetail(planID, now)
 	repo := newRecordingAutoReworkRepository(planID, detail)
 
-	result, err := newReworkDriver(repo, func() time.Time { return now }).Decide(context.Background(), planID, 0, 0, "", 3, plan.AgentBudgetThresholds{})
+	result, err := newReworkDriver(repo, func() time.Time { return now }, rework.EscalationPolicy{}).Decide(context.Background(), planID, 0, 0, "", 3, plan.AgentBudgetThresholds{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +248,7 @@ func TestReworkDriverRecordsReworkStopped(t *testing.T) {
 			detail, fingerprint := autoReworkTestDetail(planID, now)
 			repo := newRecordingAutoReworkRepository(planID, detail)
 
-			result, err := newReworkDriver(repo, func() time.Time { return now }).Decide(context.Background(), planID, 0, test.attempts, test.previous(fingerprint), test.maxAttempts, plan.AgentBudgetThresholds{})
+			result, err := newReworkDriver(repo, func() time.Time { return now }, rework.EscalationPolicy{}).Decide(context.Background(), planID, 0, test.attempts, test.previous(fingerprint), test.maxAttempts, plan.AgentBudgetThresholds{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -162,7 +288,7 @@ func TestReworkDriverRoundSettlementFailureFailsClosed(t *testing.T) {
 	repo := newRecordingAutoReworkRepository(planID, detail)
 	repo.appendErr = errors.New("event journal unavailable")
 
-	result, err := newReworkDriver(repo, func() time.Time { return now }).Decide(context.Background(), planID, 0, 0, "", 3, plan.AgentBudgetThresholds{})
+	result, err := newReworkDriver(repo, func() time.Time { return now }, rework.EscalationPolicy{}).Decide(context.Background(), planID, 0, 0, "", 3, plan.AgentBudgetThresholds{})
 	if err == nil {
 		t.Fatal("automatic rework unexpectedly published an unsettled round")
 	}
@@ -201,7 +327,7 @@ func TestReworkDriverReopensOnThirdRecurringFileReworkReview(t *testing.T) {
 	}
 	repo := newRecordingAutoReworkRepository(planID, detail)
 
-	result, err := newReworkDriver(repo, func() time.Time { return now }).Decide(context.Background(), planID, 0, 1, "different-fingerprint", 5, plan.AgentBudgetThresholds{})
+	result, err := newReworkDriver(repo, func() time.Time { return now }, rework.EscalationPolicy{}).Decide(context.Background(), planID, 0, 1, "different-fingerprint", 5, plan.AgentBudgetThresholds{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +367,7 @@ func TestReworkDriverStopSettlementFailureFailsClosed(t *testing.T) {
 	repo := newRecordingAutoReworkRepository(planID, detail)
 	repo.appendErr = errors.New("event journal unavailable")
 
-	result, err := newReworkDriver(repo, func() time.Time { return now }).Decide(context.Background(), planID, 0, 3, "", 3, plan.AgentBudgetThresholds{})
+	result, err := newReworkDriver(repo, func() time.Time { return now }, rework.EscalationPolicy{}).Decide(context.Background(), planID, 0, 3, "", 3, plan.AgentBudgetThresholds{})
 	if err == nil {
 		t.Fatal("automatic rework unexpectedly published an unsettled stop")
 	}
@@ -272,7 +398,7 @@ func TestReworkDriverSilentDeclinesAppendNothing(t *testing.T) {
 			test.mutate(detail)
 			repo := newRecordingAutoReworkRepository(planID, detail)
 
-			result, err := newReworkDriver(repo, func() time.Time { return now }).Decide(context.Background(), planID, 0, 0, "", 3, plan.AgentBudgetThresholds{})
+			result, err := newReworkDriver(repo, func() time.Time { return now }, rework.EscalationPolicy{}).Decide(context.Background(), planID, 0, 0, "", 3, plan.AgentBudgetThresholds{})
 			if err != nil {
 				t.Fatal(err)
 			}

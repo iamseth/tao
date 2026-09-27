@@ -131,8 +131,8 @@ func TestRepoConfigModelDefaults(t *testing.T) {
 	}
 	var out bytes.Buffer
 	app := App{Out: &out, Err: &out}
-	flags := []string{"model", "run-model", "review-model", "merge-review-model", "resolver-model"}
-	keys := []string{"model", "run_model", "review_model", "merge_review_model", "resolver_model"}
+	flags := []string{"model", "run-model", "review-model", "merge-review-model", "resolver-model", "rework-escalation-model"}
+	keys := []string{"model", "run_model", "review_model", "merge_review_model", "resolver_model", "rework_escalation_model"}
 	if err := app.Run(context.Background(), []string{"repo", "config"}); err != nil {
 		t.Fatal(err)
 	}
@@ -152,6 +152,15 @@ func TestRepoConfigModelDefaults(t *testing.T) {
 	for i, key := range keys {
 		if !strings.Contains(out.String(), key+": provider/"+flags[i]+"\n") {
 			t.Errorf("missing set %s in %q", key, out.String())
+		}
+	}
+	out.Reset()
+	if err := app.Run(context.Background(), []string{"repo", "config", repo.ID}); err != nil {
+		t.Fatal(err)
+	}
+	for i, key := range keys {
+		if !strings.Contains(out.String(), key+": provider/"+flags[i]+"\n") {
+			t.Errorf("missing persisted %s in %q", key, out.String())
 		}
 	}
 	// Unsetting one key must preserve all siblings and pull_request.

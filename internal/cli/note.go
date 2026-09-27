@@ -699,7 +699,7 @@ func (a App) noteRun(ctx context.Context, registered taodata.Repo, repo NoteRepo
 	}
 	request.Input = generated.Allocation.ID
 	planRepo := a.repository(filepath.Dir(generated.Allocation.Dir))
-	return a.executeResolvedRun(ctx, planRepo, generated.Allocation.ID, request, skipPermissions, runtimeconfig.AutoReworkPolicy{}, false, true)
+	return a.executeResolvedRun(ctx, planRepo, generated.Allocation.ID, request, skipPermissions, runtimeconfig.AutoReworkPolicy{}, inputs.defaults.ReworkEscalationFromAttemptValue(), false, true)
 }
 
 func (a App) planGenerator(options runtimeconfig.ResolvedRunOptions) PlanGenerator {

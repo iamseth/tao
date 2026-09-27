@@ -1,12 +1,74 @@
 package plan
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestAutomaticReworkRoundModel(t *testing.T) {
+	for _, model := range []string{"", "provider/strong"} {
+		t.Run(model, func(t *testing.T) {
+			event := automaticReworkRoundEvent("plan", AutomaticReworkRound{
+				Round: 4, Attempts: 4, MaxAttempts: 5, Model: model,
+				Fingerprint: "findings", ReopenedAt: editTime(),
+			})
+			wantMessage := "Automatic rework round 4 (attempt 4 of 5)"
+			if model != "" {
+				wantMessage += " on model " + model
+			}
+			if event.Type != EventTypeReworkRound || event.Model != model || event.Message != wantMessage {
+				t.Fatalf("rework round event = %+v", event)
+			}
+			data, err := json.Marshal(event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(data), `"model":`) != (model != "") {
+				t.Fatalf("unexpected model serialization: %s", data)
+			}
+			var decoded Event
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if got := ReworkRoundModel([]Event{decoded}, 4); got != model {
+				t.Fatalf("round-trip model = %q, want %q", got, model)
+			}
+		})
+	}
+}
+
+func TestReworkRoundModel(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		events []Event
+		round  int
+		want   string
+	}{
+		{name: "absent", round: 4},
+		{name: "legacy", events: []Event{{Type: EventTypeReworkRound, Round: 4}}, round: 4},
+		{name: "latest matching round", events: []Event{
+			{Type: EventTypeReworkRound, Round: 4, Model: "old"},
+			{Type: EventTypeReworkRound, Round: 4, Model: "new"},
+			{Type: EventTypeReworkRound, Round: 5, Model: "other-round"},
+			{Type: EventTypeReworkStopped, Round: 4, Model: "not-a-round"},
+		}, round: 4, want: "new"},
+		{name: "latest empty wins", events: []Event{
+			{Type: EventTypeReworkRound, Round: 4, Model: "old"},
+			{Type: EventTypeReworkRound, Round: 4},
+		}, round: 4},
+		{name: "missing round", events: []Event{{Type: EventTypeReworkRound, Round: 4, Model: "m"}}, round: 3},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ReworkRoundModel(tt.events, tt.round); got != tt.want {
+				t.Fatalf("ReworkRoundModel = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
 
 func TestMarkSliceBlockedEvidence(t *testing.T) {
 	for _, tt := range []struct {

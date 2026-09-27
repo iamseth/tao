@@ -37,14 +37,15 @@ type RepoRunDefaults struct {
 	Models      *RepoModelDefaults `json:"models,omitempty"`
 }
 
-// RepoModelDefaults records optional base and per-role model selections.
+// RepoModelDefaults records optional base, per-role, and rework escalation model selections.
 // Empty fields inherit the environment and built-in defaults.
 type RepoModelDefaults struct {
-	Model            string `json:"model,omitempty"`
-	RunModel         string `json:"run_model,omitempty"`
-	ReviewModel      string `json:"review_model,omitempty"`
-	MergeReviewModel string `json:"merge_review_model,omitempty"`
-	ResolverModel    string `json:"resolver_model,omitempty"`
+	Model                 string `json:"model,omitempty"`
+	RunModel              string `json:"run_model,omitempty"`
+	ReviewModel           string `json:"review_model,omitempty"`
+	MergeReviewModel      string `json:"merge_review_model,omitempty"`
+	ResolverModel         string `json:"resolver_model,omitempty"`
+	ReworkEscalationModel string `json:"rework_escalation_model,omitempty"`
 }
 
 // ModelDefaults returns the repository's model selections and whether they exist.

@@ -77,6 +77,7 @@ func repositoryRunOptions(repo taodata.Repo) runtimeconfig.RunOptionsPatch {
 		options.ReviewModel = models.ReviewModel
 		options.MergeReviewModel = models.MergeReviewModel
 		options.ResolverModel = models.ResolverModel
+		options.ReworkEscalationModel = models.ReworkEscalationModel
 	}
 	return options
 }

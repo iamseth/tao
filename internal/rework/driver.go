@@ -313,11 +313,25 @@ func formatBlockingFinding(finding plan.ReviewFinding) string {
 	return result
 }
 
+// EscalationPolicy selects a model by attempt within the current rework window.
+type EscalationPolicy struct {
+	Model       string
+	FromAttempt int
+}
+
+func (p EscalationPolicy) ModelForAttempt(attempt int) string {
+	if p.Model != "" && p.FromAttempt >= 1 && attempt >= p.FromAttempt {
+		return p.Model
+	}
+	return ""
+}
+
 // Driver owns automatic-rework decisions and the bounded execution loop.
 type Driver struct {
-	Resolve PlanResolver
-	Record  AutomaticRecordFactory
-	Now     Clock
+	Resolve    PlanResolver
+	Record     AutomaticRecordFactory
+	Now        Clock
+	Escalation EscalationPolicy
 
 	// DecideOne lets owners retain an existing decision seam while delegating
 	// round driving to Loop.
@@ -431,6 +445,7 @@ func (d Driver) Decide(ctx context.Context, planID string, baseline, attempts in
 	evidence := plan.AutomaticReworkRound{
 		Round: next, Attempts: budget.Attempts + 1, MaxAttempts: maxAttempts,
 		Fingerprint: fingerprint, ReopenedAt: reopenedAt,
+		Model: d.Escalation.ModelForAttempt(budget.Attempts + 1),
 	}
 	if _, err := ReopenAutomatic(record, evidence); err != nil {
 		return Decision{}, reworkMutationError(err)
