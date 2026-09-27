@@ -15,12 +15,14 @@ import (
 var insightsCommand = commandMetadata{
 	name:                  "insights",
 	minPrefix:             "insi",
-	usageLines:            []string{"insights (insi) [--digest] [--all-repos]"},
+	usageLines:            []string{"insights (insi) [--digest|--scorecard] [--all-repos]"},
 	completionDescription: "Show repository failure and telemetry insights",
-	long:                  "Summarize failure patterns, rework loops, operational events, and agent usage across plan history. Use --all-repos to read every registered repository's data-home history, including repositories whose source root is missing. Use --digest for compact deterministic Markdown suitable for planning prompts.",
+	long:                  "Summarize failure patterns, rework loops, operational events, and agent usage across plan history. Use --all-repos to read every registered repository's data-home history, including repositories whose source root is missing. Use --digest for compact deterministic Markdown suitable for planning prompts, or --scorecard for planner cohorts, coverage, and downstream outcomes (not a causal ranking).",
 	examples: "  tao insights\n" +
 		"  tao insights --digest\n" +
-		"  tao insights --all-repos --digest",
+		"  tao insights --all-repos --digest\n" +
+		"  tao insights --scorecard\n" +
+		"  tao insights --all-repos --scorecard",
 	registerFlags: registerInsightsFlags,
 	repository:    repositoryDefault,
 	execute: func(c commandContext) error {
@@ -30,6 +32,7 @@ var insightsCommand = commandMetadata{
 
 func registerInsightsFlags(fs *flag.FlagSet) {
 	fs.Bool("digest", false, "write compact deterministic Markdown")
+	fs.Bool("scorecard", false, "write the planner scorecard")
 	fs.Bool("all-repos", false, "include plan history from all registered repositories")
 }
 
@@ -38,8 +41,11 @@ func (a App) insights(ctx context.Context, repo insights.PlanLister, plansDir st
 	if err != nil {
 		return err
 	}
-	if err := requireNoArgs(positional, "usage: tao insights [--digest] [--all-repos]"); err != nil {
+	if err := requireNoArgs(positional, "usage: tao insights [--digest|--scorecard] [--all-repos]"); err != nil {
 		return err
+	}
+	if flagBoolValue(fs, "scorecard") && flagBoolValue(fs, "digest") {
+		return errors.New("--scorecard cannot be combined with --digest")
 	}
 	allRepos := flagBoolValue(fs, "all-repos")
 	if allRepos && plansDir != "" {
@@ -73,6 +79,9 @@ func (a App) insights(ctx context.Context, repo insights.PlanLister, plansDir st
 	format := view.InsightsFormatReport
 	if flagBoolValue(fs, "digest") {
 		format = view.InsightsFormatDigest
+	}
+	if flagBoolValue(fs, "scorecard") {
+		format = view.InsightsFormatScorecard
 	}
 	return view.RenderInsights(a.Out, report, view.InsightsOptions{Scope: scope, Format: format})
 }

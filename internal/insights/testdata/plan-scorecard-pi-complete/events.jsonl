@@ -1,0 +1,7 @@
+{"type":"plan_created","timestamp":"2026-09-01T00:00:00Z","agent":"pi"}
+{"type":"slice_started","timestamp":"2026-09-01T01:00:00Z"}
+{"type":"agent_metrics","metrics":{"session_id":"exec","role":"execution","output_tokens":10,"total_tokens":30,"tool_calls":1,"cost":0.1}}
+{"type":"agent_metrics","metrics":{"session_id":"exec","role":"execution","output_tokens":20,"total_tokens":40,"tool_calls":2,"cost":0.2}}
+{"type":"plan_reviewed","timestamp":"2026-09-02T00:00:00Z","review":{"status":"completed","verdict":"changes_requested","findings":[{"severity":"HIGH"}]}}
+{"type":"plan_reviewed","timestamp":"2026-09-03T00:00:00Z","review":{"status":"completed","verdict":"approve","base":"base","head":"head"}}
+{"type":"plan_merged","timestamp":"2026-09-03T01:00:00Z"}

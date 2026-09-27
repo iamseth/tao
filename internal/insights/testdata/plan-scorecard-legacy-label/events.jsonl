@@ -1,0 +1,3 @@
+{"type":"plan_created","timestamp":"2026-08-01T00:00:00Z","agent":"claude-code/fable-5"}
+{"type":"agent_metrics","metrics":{"session_id":"legacy","output_tokens":12}}
+{"type":"agent_metrics","metrics":{"session_id":"legacy","output_tokens":13}}

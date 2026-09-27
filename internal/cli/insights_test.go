@@ -45,6 +45,29 @@ func renderAllInsightsDigest(out *bytes.Buffer, report insights.Report) error {
 	return view.RenderInsights(out, report, view.InsightsOptions{Scope: view.InsightsScopeAllRepositories, Format: view.InsightsFormatDigest})
 }
 
+func renderInsightsScorecard(out *bytes.Buffer, report insights.Report) error {
+	return view.RenderInsights(out, report, view.InsightsOptions{Scope: view.InsightsScopeRepository, Format: view.InsightsFormatScorecard})
+}
+
+func renderAllInsightsScorecard(out *bytes.Buffer, report insights.Report) error {
+	return view.RenderInsights(out, report, view.InsightsOptions{Scope: view.InsightsScopeAllRepositories, Format: view.InsightsFormatScorecard})
+}
+
+func TestInsightsScorecardFlags(t *testing.T) {
+	var out bytes.Buffer
+	app := App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }}
+	if err := app.Run(context.Background(), []string{"insi", "--scorecard", "--digest"}); err == nil || err.Error() != "--scorecard cannot be combined with --digest" {
+		t.Fatalf("conflicting flags error = %v", err)
+	}
+	out.Reset()
+	if err := app.Run(context.Background(), []string{"insi", "--scorecard"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "No plan history.\n") || !strings.Contains(out.String(), "# Tao Planner Scorecard") {
+		t.Fatalf("empty scorecard = %q", out.String())
+	}
+}
+
 func limitDigestText(value string) string {
 	value = strings.Join(strings.Fields(value), " ")
 	if len(value) <= digestMaxTextBytes {
@@ -132,6 +155,8 @@ func TestInsightsRenderersGolden(t *testing.T) {
 		fixture string
 		render  func(*bytes.Buffer, insights.Report) error
 	}{
+		{name: "repository scorecard", fixture: "repository-scorecard.golden", render: renderInsightsScorecard},
+		{name: "all-repositories scorecard", fixture: "all-repositories-scorecard.golden", render: renderAllInsightsScorecard},
 		{name: "repository report", fixture: "repository-report.golden", render: renderInsightsReport},
 		{name: "repository digest", fixture: "repository-digest.golden", render: renderInsightsDigest},
 		{name: "all-repositories report", fixture: "all-repositories-report.golden", render: renderAllInsightsReport},
@@ -155,6 +180,7 @@ func representativeInsightsReport() insights.Report {
 	latestFallback := time.Date(2026, 8, 16, 20, 0, 0, 0, time.UTC)
 	latestGuard := time.Date(2026, 8, 18, 22, 5, 0, 0, time.UTC)
 	report := insights.Report{
+		Scorecard:    representativeScorecard(),
 		PlansScanned: 9,
 		PlansSkipped: 2,
 		PlannerRouting: insights.PlannerRoutingReport{
@@ -224,6 +250,66 @@ func representativeInsightsReport() insights.Report {
 		})
 	}
 	return report
+}
+
+func representativeScorecard() insights.Scorecard {
+	rate := func(k, n int) insights.RateEstimate { return insights.EstimateRate(k, n, 5) }
+	median := func(value float64, n int) insights.MedianEstimate {
+		return insights.MedianEstimate{Median: value, Samples: n, Sparse: n < 5}
+	}
+	cohort := func(key, runtime, model string, n int) insights.TreatmentCohort {
+		efficiency := insights.EfficiencyMedians{
+			Plans: n, Sessions: median(3, n), OutputTokens: median(1200, n), TotalTokens: median(6000, n),
+			Cost: median(0.75, n), ToolCalls: median(18, n), CostPerOriginalSlice: median(0.25, n),
+			OutputTokensPerOriginalSlice: median(400, n), HoursToApproval: median(2.5, n),
+			PlanningCost: median(0, 0), PlanningOutputTokens: median(0, 0),
+		}
+		return insights.TreatmentCohort{
+			Key: key, Runtime: runtime, Model: model, Confidence: insights.TreatmentConfidenceLow,
+			Outcomes: insights.CohortOutcomes{
+				Plans: n + 1, Matured: n, Censored: 1, NeverStarted: 1,
+				Quality: insights.QualityOutcomes{
+					Started: rate(n, n+1), FirstReviewApproved: rate(n-1, n), ExactApproval: rate(n, n),
+					Completed: rate(n, n), Merged: rate(n-1, n), PullRequestCompleted: rate(1, n),
+					Abandoned: rate(0, n), ReworkStopped: rate(0, n), AnyRework: rate(1, n), AnyVerificationRepair: rate(1, n),
+					ReviewRounds: median(1, n), OriginalSlices: median(3, n), ValidationWarningPlans: 1,
+					FindingSeverities: []insights.LabelCount{{Label: "warning", Count: 2}, {Label: "error", Count: 1}},
+				},
+				Efficiency: insights.EfficiencyOutcomes{
+					MaturedCompleted: efficiency, MaturedAll: efficiency, RoleAttributedRatio: 0.75,
+					ByRole: []insights.RoleTotals{
+						{Role: "implementation", Sessions: 3, OutputTokens: 1200, TotalTokens: 6000, Cost: 0.75, ToolCalls: 18},
+						{Role: "unattributed", Sessions: 1, OutputTokens: 400, TotalTokens: 2000, Cost: 0.25, ToolCalls: 6},
+					},
+				},
+				Reliability: insights.ReliabilityOutcomes{
+					Infrastructure: []insights.LabelCount{{Label: "session_timeout", Count: 1}},
+					Quality:        []insights.LabelCount{{Label: "verification_failed", Count: 1}},
+				},
+			},
+		}
+	}
+	claude := cohort("claude/claude-opus-5", "claude", "claude-opus-5", 1)
+	pi := cohort("pi", "pi", "", 5)
+	pi.Confidence = insights.TreatmentConfidenceHigh
+	return insights.Scorecard{
+		Coverage: insights.ScorecardCoverage{
+			Plans: 10, NeverStarted: 2, Active: 2, Terminal: 6, Matured: 6, Censored: 4,
+			TreatmentHigh: 6, TreatmentLow: 2, TreatmentAmbiguous: 1, TreatmentMissing: 1,
+			RoleAttributedSessions: 6, UnattributedSessions: 2, MaturityWindowDays: 14, MinimumSamples: 5,
+		},
+		Cohorts: []insights.TreatmentCohort{claude, pi},
+		Strata: []insights.StratumBreakdown{
+			{Stratum: "effort", Key: "small", Cohorts: []insights.TreatmentCohort{pi}},
+			{Stratum: "repository", Key: "repo-a", Cohorts: []insights.TreatmentCohort{claude, pi}},
+			{Stratum: "repository", Key: "repo-b", Cohorts: []insights.TreatmentCohort{claude}},
+		},
+		Inversions: []insights.Inversion{{Metric: "completed_rate", CohortA: "claude/claude-opus-5", CohortB: "pi", Stratum: "repository", Key: "repo-a", GlobalDelta: 0.2, StratumDelta: -0.1}},
+		ExcludedLabels: []insights.ExcludedLabel{
+			{Label: "build", Plans: 1, Reason: "ambiguous treatment"},
+			{Label: strings.Repeat("界", 200), Plans: 1, Reason: "unknown runtime"},
+		},
+	}
 }
 
 func TestInsightsReportRendering(t *testing.T) {
@@ -477,6 +563,21 @@ func TestInsightsAllReposCatalogCoverageSignalsAndOrdering(t *testing.T) {
 	}
 	if strings.Contains(text, "Repository coverage limits:") {
 		t.Errorf("complete recent-log coverage should not render repository limit rows:\n%s", text)
+	}
+
+	out.Reset()
+	if err := app.Run(context.Background(), []string{"insi", "--all-repos", "--scorecard"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"# Tao Planner Scorecard (all repositories)",
+		"repositories: 3 registered; 1 scanned; 1 empty; 1 unreadable; 0 skipped",
+		"alpha [repo-a]: scanned", "middle [repo-m]: empty", "zeta [repo-z]: unreadable",
+		"planning-metrics coverage: 0/1 plans", "reasoning effort: not recorded",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("all-repository scorecard missing %q:\n%s", want, out.String())
+		}
 	}
 }
 

@@ -1,0 +1,296 @@
+# Tao Planner Scorecard
+
+## Coverage
+- plans: 10; never started: 2; active: 2; terminal: 6
+- matured: 6; censored: 4
+- treatment confidence: high=6; low=2; ambiguous=1; missing=1
+- planning-metrics coverage: 0/10 plans
+- role attribution: 6 attributed; 2 unattributed sessions
+- reasoning effort: not recorded
+- maturity window: 14 days; minimum samples: 5
+- plan scan: 9 scanned; 2 skipped
+
+Observational evidence, not a causal ranking. Runtime-only labels do not establish provider or model.
+Outcome rates use matured plans; active plans inside the maturity window are censored, not failures. Started is coverage across all plans. Rate intervals are Wilson 95%.
+
+## Cohorts
+
+### Cohort: claude/claude-opus-5
+- runtime: claude; provider: not recorded; model: claude-opus-5; confidence: low
+- n plans=2; matured=1; censored=1; never started=1
+- quality rates:
+  - started (all plans): 0.500 [0.095, 0.905] n=2 sparse
+  - first review approved: 0.000 [0.000, 0.793] n=1 sparse
+  - exact approval: 1.000 [0.207, 1.000] n=1 sparse
+  - completed: 1.000 [0.207, 1.000] n=1 sparse
+  - merged: 0.000 [0.000, 0.793] n=1 sparse
+  - pull-request completed: 1.000 [0.207, 1.000] n=1 sparse
+  - abandoned: 0.000 [0.000, 0.793] n=1 sparse
+  - rework stopped: 0.000 [0.000, 0.793] n=1 sparse
+  - any rework: 1.000 [0.207, 1.000] n=1 sparse
+  - any verification repair: 1.000 [0.207, 1.000] n=1 sparse
+  - review rounds: 1.00 n=1 sparse
+  - original slices: 3.00 n=1 sparse
+- validation-warning plans: 1
+- efficiency medians (matured-completed):
+  - n plans=1
+  - sessions: 3.00 n=1 sparse
+  - output tokens: 1200.00 n=1 sparse
+  - total tokens: 6000.00 n=1 sparse
+  - cost ($): 0.75 n=1 sparse
+  - tool calls: 18.00 n=1 sparse
+  - cost per original slice ($): 0.25 n=1 sparse
+  - output tokens per original slice: 400.00 n=1 sparse
+  - hours to approval: 2.50 n=1 sparse
+  - planning cost ($): not recorded n=0 sparse
+  - planning output tokens: not recorded n=0 sparse
+- efficiency medians (matured-all):
+  - n plans=1
+  - sessions: 3.00 n=1 sparse
+  - output tokens: 1200.00 n=1 sparse
+  - total tokens: 6000.00 n=1 sparse
+  - cost ($): 0.75 n=1 sparse
+  - tool calls: 18.00 n=1 sparse
+  - cost per original slice ($): 0.25 n=1 sparse
+  - output tokens per original slice: 400.00 n=1 sparse
+  - hours to approval: 2.50 n=1 sparse
+  - planning cost ($): not recorded n=0 sparse
+  - planning output tokens: not recorded n=0 sparse
+- per-role totals (all observed sessions):
+  - implementation: sessions=3; output tokens=1200; total tokens=6000; cost=$0.75; tool calls=18
+  - unattributed: sessions=1; output tokens=400; total tokens=2000; cost=$0.25; tool calls=6
+- role-attribution ratio: 0.750
+- finding severity histogram:
+  - warning: 2
+  - error: 1
+- infrastructure reliability histogram:
+  - session_timeout: 1
+- quality reliability histogram:
+  - verification_failed: 1
+
+### Cohort: pi
+- runtime: pi; provider: not recorded; model: not recorded; confidence: high
+- n plans=6; matured=5; censored=1; never started=1
+- quality rates:
+  - started (all plans): 0.833 [0.436, 0.970] n=6
+  - first review approved: 0.800 [0.376, 0.964] n=5
+  - exact approval: 1.000 [0.566, 1.000] n=5
+  - completed: 1.000 [0.566, 1.000] n=5
+  - merged: 0.800 [0.376, 0.964] n=5
+  - pull-request completed: 0.200 [0.036, 0.624] n=5
+  - abandoned: 0.000 [0.000, 0.434] n=5
+  - rework stopped: 0.000 [0.000, 0.434] n=5
+  - any rework: 0.200 [0.036, 0.624] n=5
+  - any verification repair: 0.200 [0.036, 0.624] n=5
+  - review rounds: 1.00 n=5
+  - original slices: 3.00 n=5
+- validation-warning plans: 1
+- efficiency medians (matured-completed):
+  - n plans=5
+  - sessions: 3.00 n=5
+  - output tokens: 1200.00 n=5
+  - total tokens: 6000.00 n=5
+  - cost ($): 0.75 n=5
+  - tool calls: 18.00 n=5
+  - cost per original slice ($): 0.25 n=5
+  - output tokens per original slice: 400.00 n=5
+  - hours to approval: 2.50 n=5
+  - planning cost ($): not recorded n=0 sparse
+  - planning output tokens: not recorded n=0 sparse
+- efficiency medians (matured-all):
+  - n plans=5
+  - sessions: 3.00 n=5
+  - output tokens: 1200.00 n=5
+  - total tokens: 6000.00 n=5
+  - cost ($): 0.75 n=5
+  - tool calls: 18.00 n=5
+  - cost per original slice ($): 0.25 n=5
+  - output tokens per original slice: 400.00 n=5
+  - hours to approval: 2.50 n=5
+  - planning cost ($): not recorded n=0 sparse
+  - planning output tokens: not recorded n=0 sparse
+- per-role totals (all observed sessions):
+  - implementation: sessions=3; output tokens=1200; total tokens=6000; cost=$0.75; tool calls=18
+  - unattributed: sessions=1; output tokens=400; total tokens=2000; cost=$0.25; tool calls=6
+- role-attribution ratio: 0.750
+- finding severity histogram:
+  - warning: 2
+  - error: 1
+- infrastructure reliability histogram:
+  - session_timeout: 1
+- quality reliability histogram:
+  - verification_failed: 1
+
+## Strata
+
+### Stratum: effort / small
+
+### Cohort: pi
+- runtime: pi; provider: not recorded; model: not recorded; confidence: high
+- n plans=6; matured=5; censored=1; never started=1
+- quality rates:
+  - started (all plans): 0.833 [0.436, 0.970] n=6
+  - first review approved: 0.800 [0.376, 0.964] n=5
+  - exact approval: 1.000 [0.566, 1.000] n=5
+  - completed: 1.000 [0.566, 1.000] n=5
+  - merged: 0.800 [0.376, 0.964] n=5
+  - pull-request completed: 0.200 [0.036, 0.624] n=5
+  - abandoned: 0.000 [0.000, 0.434] n=5
+  - rework stopped: 0.000 [0.000, 0.434] n=5
+  - any rework: 0.200 [0.036, 0.624] n=5
+  - any verification repair: 0.200 [0.036, 0.624] n=5
+  - review rounds: 1.00 n=5
+  - original slices: 3.00 n=5
+- validation-warning plans: 1
+- efficiency medians (matured-completed):
+  - n plans=5
+  - sessions: 3.00 n=5
+  - output tokens: 1200.00 n=5
+  - total tokens: 6000.00 n=5
+  - cost ($): 0.75 n=5
+  - tool calls: 18.00 n=5
+  - cost per original slice ($): 0.25 n=5
+  - output tokens per original slice: 400.00 n=5
+  - hours to approval: 2.50 n=5
+  - planning cost ($): not recorded n=0 sparse
+  - planning output tokens: not recorded n=0 sparse
+- efficiency medians (matured-all):
+  - n plans=5
+  - sessions: 3.00 n=5
+  - output tokens: 1200.00 n=5
+  - total tokens: 6000.00 n=5
+  - cost ($): 0.75 n=5
+  - tool calls: 18.00 n=5
+  - cost per original slice ($): 0.25 n=5
+  - output tokens per original slice: 400.00 n=5
+  - hours to approval: 2.50 n=5
+  - planning cost ($): not recorded n=0 sparse
+  - planning output tokens: not recorded n=0 sparse
+- per-role totals (all observed sessions):
+  - implementation: sessions=3; output tokens=1200; total tokens=6000; cost=$0.75; tool calls=18
+  - unattributed: sessions=1; output tokens=400; total tokens=2000; cost=$0.25; tool calls=6
+- role-attribution ratio: 0.750
+- finding severity histogram:
+  - warning: 2
+  - error: 1
+- infrastructure reliability histogram:
+  - session_timeout: 1
+- quality reliability histogram:
+  - verification_failed: 1
+
+### Stratum: repository / repo-a
+
+### Cohort: claude/claude-opus-5
+- runtime: claude; provider: not recorded; model: claude-opus-5; confidence: low
+- n plans=2; matured=1; censored=1; never started=1
+- quality rates:
+  - started (all plans): 0.500 [0.095, 0.905] n=2 sparse
+  - first review approved: 0.000 [0.000, 0.793] n=1 sparse
+  - exact approval: 1.000 [0.207, 1.000] n=1 sparse
+  - completed: 1.000 [0.207, 1.000] n=1 sparse
+  - merged: 0.000 [0.000, 0.793] n=1 sparse
+  - pull-request completed: 1.000 [0.207, 1.000] n=1 sparse
+  - abandoned: 0.000 [0.000, 0.793] n=1 sparse
+  - rework stopped: 0.000 [0.000, 0.793] n=1 sparse
+  - any rework: 1.000 [0.207, 1.000] n=1 sparse
+  - any verification repair: 1.000 [0.207, 1.000] n=1 sparse
+  - review rounds: 1.00 n=1 sparse
+  - original slices: 3.00 n=1 sparse
+- validation-warning plans: 1
+- efficiency medians (matured-completed):
+  - n plans=1
+  - sessions: 3.00 n=1 sparse
+  - output tokens: 1200.00 n=1 sparse
+  - total tokens: 6000.00 n=1 sparse
+  - cost ($): 0.75 n=1 sparse
+  - tool calls: 18.00 n=1 sparse
+  - cost per original slice ($): 0.25 n=1 sparse
+  - output tokens per original slice: 400.00 n=1 sparse
+  - hours to approval: 2.50 n=1 sparse
+  - planning cost ($): not recorded n=0 sparse
+  - planning output tokens: not recorded n=0 sparse
+- efficiency medians (matured-all):
+  - n plans=1
+  - sessions: 3.00 n=1 sparse
+  - output tokens: 1200.00 n=1 sparse
+  - total tokens: 6000.00 n=1 sparse
+  - cost ($): 0.75 n=1 sparse
+  - tool calls: 18.00 n=1 sparse
+  - cost per original slice ($): 0.25 n=1 sparse
+  - output tokens per original slice: 400.00 n=1 sparse
+  - hours to approval: 2.50 n=1 sparse
+  - planning cost ($): not recorded n=0 sparse
+  - planning output tokens: not recorded n=0 sparse
+- per-role totals (all observed sessions):
+  - implementation: sessions=3; output tokens=1200; total tokens=6000; cost=$0.75; tool calls=18
+  - unattributed: sessions=1; output tokens=400; total tokens=2000; cost=$0.25; tool calls=6
+- role-attribution ratio: 0.750
+- finding severity histogram:
+  - warning: 2
+  - error: 1
+- infrastructure reliability histogram:
+  - session_timeout: 1
+- quality reliability histogram:
+  - verification_failed: 1
+
+### Cohort: pi
+- runtime: pi; provider: not recorded; model: not recorded; confidence: high
+- n plans=6; matured=5; censored=1; never started=1
+- quality rates:
+  - started (all plans): 0.833 [0.436, 0.970] n=6
+  - first review approved: 0.800 [0.376, 0.964] n=5
+  - exact approval: 1.000 [0.566, 1.000] n=5
+  - completed: 1.000 [0.566, 1.000] n=5
+  - merged: 0.800 [0.376, 0.964] n=5
+  - pull-request completed: 0.200 [0.036, 0.624] n=5
+  - abandoned: 0.000 [0.000, 0.434] n=5
+  - rework stopped: 0.000 [0.000, 0.434] n=5
+  - any rework: 0.200 [0.036, 0.624] n=5
+  - any verification repair: 0.200 [0.036, 0.624] n=5
+  - review rounds: 1.00 n=5
+  - original slices: 3.00 n=5
+- validation-warning plans: 1
+- efficiency medians (matured-completed):
+  - n plans=5
+  - sessions: 3.00 n=5
+  - output tokens: 1200.00 n=5
+  - total tokens: 6000.00 n=5
+  - cost ($): 0.75 n=5
+  - tool calls: 18.00 n=5
+  - cost per original slice ($): 0.25 n=5
+  - output tokens per original slice: 400.00 n=5
+  - hours to approval: 2.50 n=5
+  - planning cost ($): not recorded n=0 sparse
+  - planning output tokens: not recorded n=0 sparse
+- efficiency medians (matured-all):
+  - n plans=5
+  - sessions: 3.00 n=5
+  - output tokens: 1200.00 n=5
+  - total tokens: 6000.00 n=5
+  - cost ($): 0.75 n=5
+  - tool calls: 18.00 n=5
+  - cost per original slice ($): 0.25 n=5
+  - output tokens per original slice: 400.00 n=5
+  - hours to approval: 2.50 n=5
+  - planning cost ($): not recorded n=0 sparse
+  - planning output tokens: not recorded n=0 sparse
+- per-role totals (all observed sessions):
+  - implementation: sessions=3; output tokens=1200; total tokens=6000; cost=$0.75; tool calls=18
+  - unattributed: sessions=1; output tokens=400; total tokens=2000; cost=$0.25; tool calls=6
+- role-attribution ratio: 0.750
+- finding severity histogram:
+  - warning: 2
+  - error: 1
+- infrastructure reliability histogram:
+  - session_timeout: 1
+- quality reliability histogram:
+  - verification_failed: 1
+
+Omitted stratum keys (no non-sparse cohort): 1
+
+## Inversions
+- completed_rate: claude/claude-opus-5 minus pi; repository / repo-a; global delta=+0.200; stratum delta=-0.100
+
+## Excluded labels
+- build: 1 plans; reason: ambiguous treatment
+- 界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界…: 1 plans; reason: unknown runtime

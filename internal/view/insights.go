@@ -34,12 +34,13 @@ const (
 	InsightsScopeAllRepositories InsightsScope = "all-repositories"
 )
 
-// InsightsFormat selects the full text report or bounded Markdown digest.
+// InsightsFormat selects the full report, bounded digest, or planner scorecard.
 type InsightsFormat string
 
 const (
-	InsightsFormatReport InsightsFormat = "report"
-	InsightsFormatDigest InsightsFormat = "digest"
+	InsightsFormatReport    InsightsFormat = "report"
+	InsightsFormatDigest    InsightsFormat = "digest"
+	InsightsFormatScorecard InsightsFormat = "scorecard"
 )
 
 // InsightsOptions defines the presentation variant for an insights report.
@@ -56,7 +57,7 @@ func RenderInsights(out io.Writer, report insights.Report, options InsightsOptio
 	if options.Scope != InsightsScopeRepository && options.Scope != InsightsScopeAllRepositories {
 		return fmt.Errorf("invalid insights scope %q", options.Scope)
 	}
-	if options.Format != InsightsFormatReport && options.Format != InsightsFormatDigest {
+	if options.Format != InsightsFormatReport && options.Format != InsightsFormatDigest && options.Format != InsightsFormatScorecard {
 		return fmt.Errorf("invalid insights format %q", options.Format)
 	}
 
@@ -106,6 +107,9 @@ func projectInsights(report insights.Report, options InsightsOptions) insightsPr
 }
 
 func (p insightsProjection) render(out io.Writer) error {
+	if p.options.Format == InsightsFormatScorecard {
+		return p.renderScorecard(out)
+	}
 	target := out
 	var digest strings.Builder
 	if p.options.Format == InsightsFormatDigest {
@@ -130,6 +134,174 @@ func (p insightsProjection) render(out io.Writer) error {
 		_, err = io.WriteString(out, limitDigest(digest.String()))
 	}
 	return err
+}
+
+func (p insightsProjection) renderScorecard(out io.Writer) error {
+	var b strings.Builder
+	b.WriteString("# Tao Planner Scorecard")
+	all := p.options.Scope == InsightsScopeAllRepositories
+	if all {
+		b.WriteString(" (all repositories)")
+	}
+	b.WriteString("\n")
+	s := p.report.Scorecard
+	c := s.Coverage
+	if c.Plans == 0 && p.report.PlansScanned == 0 && p.report.PlansSkipped == 0 {
+		b.WriteString("\nNo plan history.\n")
+	}
+	b.WriteString("\n## Coverage\n")
+	fmt.Fprintf(&b, "- plans: %d; never started: %d; active: %d; terminal: %d\n", c.Plans, c.NeverStarted, c.Active, c.Terminal)
+	fmt.Fprintf(&b, "- matured: %d; censored: %d\n", c.Matured, c.Censored)
+	fmt.Fprintf(&b, "- treatment confidence: high=%d; low=%d; ambiguous=%d; missing=%d\n", c.TreatmentHigh, c.TreatmentLow, c.TreatmentAmbiguous, c.TreatmentMissing)
+	fmt.Fprintf(&b, "- planning-metrics coverage: %d/%d plans\n", c.PlanningMetricsPlans, c.Plans)
+	fmt.Fprintf(&b, "- role attribution: %d attributed; %d unattributed sessions\n", c.RoleAttributedSessions, c.UnattributedSessions)
+	b.WriteString("- reasoning effort: not recorded\n")
+	fmt.Fprintf(&b, "- maturity window: %d days; minimum samples: %d\n", c.MaturityWindowDays, c.MinimumSamples)
+	fmt.Fprintf(&b, "- plan scan: %d scanned; %d skipped\n", p.report.PlansScanned, p.report.PlansSkipped)
+	if all {
+		r := p.report.RepositoryCoverage
+		fmt.Fprintf(&b, "- repositories: %d registered; %d scanned; %d empty; %d unreadable; %d skipped\n", len(r.Repositories), r.Scanned, r.Empty, r.Unreadable, r.Skipped)
+		for _, source := range r.Repositories {
+			fmt.Fprintf(&b, "  - %s: %s\n", scorecardText(repositoryLabel(source.RepositoryName, source.RepositoryID)), scorecardText(source.Status))
+		}
+	}
+	b.WriteString("\nObservational evidence, not a causal ranking. Runtime-only labels do not establish provider or model.\n")
+	b.WriteString("Outcome rates use matured plans; active plans inside the maturity window are censored, not failures. Started is coverage across all plans. Rate intervals are Wilson 95%.\n")
+	b.WriteString("\n## Cohorts\n")
+	if len(s.Cohorts) == 0 {
+		b.WriteString("none\n")
+	}
+	for _, cohort := range s.Cohorts {
+		renderScorecardCohort(&b, cohort)
+	}
+	b.WriteString("\n## Strata\n")
+	omitted := 0
+	for _, stratum := range s.Strata {
+		if !slices.ContainsFunc(stratum.Cohorts, func(cohort insights.TreatmentCohort) bool {
+			return cohort.Outcomes.Matured > 0 && cohort.Outcomes.Matured >= c.MinimumSamples
+		}) {
+			omitted++
+			continue
+		}
+		fmt.Fprintf(&b, "\n### Stratum: %s / %s\n", scorecardText(stratum.Stratum), scorecardText(stratum.Key))
+		for _, cohort := range stratum.Cohorts {
+			renderScorecardCohort(&b, cohort)
+		}
+	}
+	fmt.Fprintf(&b, "\nOmitted stratum keys (no non-sparse cohort): %d\n", omitted)
+	b.WriteString("\n## Inversions\n")
+	if len(s.Inversions) == 0 {
+		b.WriteString("none detected\n")
+	}
+	for _, inversion := range s.Inversions {
+		fmt.Fprintf(&b, "- %s: %s minus %s; %s / %s; global delta=%+.3f; stratum delta=%+.3f\n",
+			scorecardText(inversion.Metric), scorecardText(inversion.CohortA), scorecardText(inversion.CohortB),
+			scorecardText(inversion.Stratum), scorecardText(inversion.Key), inversion.GlobalDelta, inversion.StratumDelta)
+	}
+	b.WriteString("\n## Excluded labels\n")
+	if len(s.ExcludedLabels) == 0 {
+		b.WriteString("none\n")
+	}
+	for _, label := range s.ExcludedLabels {
+		fmt.Fprintf(&b, "- %s: %d plans; reason: %s\n", scorecardText(label.Label), label.Plans, scorecardText(label.Reason))
+	}
+	_, err := io.WriteString(out, b.String())
+	return err
+}
+
+// Every report-backed label crosses this bound, including labels already bounded
+// by aggregation. Empty identity fields are missing evidence, not inferred values.
+func scorecardText(value string) string {
+	value = limitDigestText(value)
+	if value == "" {
+		return "not recorded"
+	}
+	return value
+}
+
+func renderScorecardCohort(b *strings.Builder, cohort insights.TreatmentCohort) {
+	o := cohort.Outcomes
+	fmt.Fprintf(b, "\n### Cohort: %s\n", scorecardText(cohort.Key))
+	fmt.Fprintf(b, "- runtime: %s; provider: %s; model: %s; confidence: %s\n", scorecardText(cohort.Runtime), scorecardText(cohort.Provider), scorecardText(cohort.Model), scorecardText(string(cohort.Confidence)))
+	fmt.Fprintf(b, "- n plans=%d; matured=%d; censored=%d; never started=%d\n", o.Plans, o.Matured, o.Censored, o.NeverStarted)
+	b.WriteString("- quality rates:\n")
+	q := o.Quality
+	for _, metric := range []struct {
+		name string
+		rate insights.RateEstimate
+	}{
+		{"started (all plans)", q.Started},
+		{"first review approved", q.FirstReviewApproved},
+		{"exact approval", q.ExactApproval},
+		{"completed", q.Completed},
+		{"merged", q.Merged},
+		{"pull-request completed", q.PullRequestCompleted},
+		{"abandoned", q.Abandoned},
+		{"rework stopped", q.ReworkStopped},
+		{"any rework", q.AnyRework},
+		{"any verification repair", q.AnyVerificationRepair},
+	} {
+		r := metric.rate
+		fmt.Fprintf(b, "  - %s: %.3f [%.3f, %.3f] n=%d%s\n", metric.name, r.Rate, r.Lower, r.Upper, r.Denominator, scorecardSparse(r.Sparse))
+	}
+	renderScorecardMedian(b, "review rounds", q.ReviewRounds)
+	renderScorecardMedian(b, "original slices", q.OriginalSlices)
+	fmt.Fprintf(b, "- validation-warning plans: %d\n", q.ValidationWarningPlans)
+	b.WriteString("- efficiency medians (matured-completed):\n")
+	renderScorecardEfficiency(b, o.Efficiency.MaturedCompleted)
+	b.WriteString("- efficiency medians (matured-all):\n")
+	renderScorecardEfficiency(b, o.Efficiency.MaturedAll)
+	b.WriteString("- per-role totals (all observed sessions):\n")
+	if len(o.Efficiency.ByRole) == 0 {
+		b.WriteString("  - none recorded\n")
+	}
+	for _, role := range o.Efficiency.ByRole {
+		fmt.Fprintf(b, "  - %s: sessions=%d; output tokens=%d; total tokens=%d; cost=$%.2f; tool calls=%d\n", scorecardText(role.Role), role.Sessions, role.OutputTokens, role.TotalTokens, role.Cost, role.ToolCalls)
+	}
+	fmt.Fprintf(b, "- role-attribution ratio: %.3f\n", o.Efficiency.RoleAttributedRatio)
+	renderScorecardHistogram(b, "finding severity", q.FindingSeverities)
+	renderScorecardHistogram(b, "infrastructure reliability", o.Reliability.Infrastructure)
+	renderScorecardHistogram(b, "quality reliability", o.Reliability.Quality)
+}
+
+func scorecardSparse(sparse bool) string {
+	if sparse {
+		return " sparse"
+	}
+	return ""
+}
+
+func renderScorecardMedian(b *strings.Builder, name string, estimate insights.MedianEstimate) {
+	if estimate.Samples == 0 {
+		fmt.Fprintf(b, "  - %s: not recorded n=0%s\n", name, scorecardSparse(estimate.Sparse))
+		return
+	}
+	fmt.Fprintf(b, "  - %s: %.2f n=%d%s\n", name, estimate.Median, estimate.Samples, scorecardSparse(estimate.Sparse))
+}
+
+func renderScorecardEfficiency(b *strings.Builder, e insights.EfficiencyMedians) {
+	fmt.Fprintf(b, "  - n plans=%d\n", e.Plans)
+	for _, metric := range []struct {
+		name   string
+		median insights.MedianEstimate
+	}{
+		{"sessions", e.Sessions}, {"output tokens", e.OutputTokens}, {"total tokens", e.TotalTokens},
+		{"cost ($)", e.Cost}, {"tool calls", e.ToolCalls}, {"cost per original slice ($)", e.CostPerOriginalSlice},
+		{"output tokens per original slice", e.OutputTokensPerOriginalSlice}, {"hours to approval", e.HoursToApproval},
+		{"planning cost ($)", e.PlanningCost}, {"planning output tokens", e.PlanningOutputTokens},
+	} {
+		renderScorecardMedian(b, metric.name, metric.median)
+	}
+}
+
+func renderScorecardHistogram(b *strings.Builder, name string, counts []insights.LabelCount) {
+	fmt.Fprintf(b, "- %s histogram:\n", name)
+	if len(counts) == 0 {
+		b.WriteString("  - none\n")
+	}
+	for _, count := range counts {
+		fmt.Fprintf(b, "  - %s: %d\n", scorecardText(count.Label), count.Count)
+	}
 }
 
 func (p insightsProjection) renderHeader(out io.Writer) (bool, error) {

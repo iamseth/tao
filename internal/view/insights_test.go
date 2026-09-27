@@ -14,6 +14,8 @@ import (
 func TestRenderInsightsValidatesOptions(t *testing.T) {
 	report := insights.Report{}
 	valid := []InsightsOptions{
+		{Scope: InsightsScopeRepository, Format: InsightsFormatScorecard},
+		{Scope: InsightsScopeAllRepositories, Format: InsightsFormatScorecard},
 		{Scope: InsightsScopeRepository, Format: InsightsFormatReport},
 		{Scope: InsightsScopeRepository, Format: InsightsFormatDigest},
 		{Scope: InsightsScopeAllRepositories, Format: InsightsFormatReport},
@@ -45,6 +47,106 @@ func TestRenderInsightsValidatesOptions(t *testing.T) {
 				t.Fatalf("error = %v, want containing %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestRenderInsightsScorecard(t *testing.T) {
+	options := InsightsOptions{Scope: InsightsScopeRepository, Format: InsightsFormatScorecard}
+	var out bytes.Buffer
+	if err := RenderInsights(&out, insights.Report{}, options); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"# Tao Planner Scorecard", "No plan history.", "## Coverage", "plans: 0", "matured: 0; censored: 0", "reasoning effort: not recorded", "## Inversions\nnone detected"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q in:\n%s", want, out.String())
+		}
+	}
+	label := strings.Repeat("界", 200)
+	report := insights.Report{Scorecard: insights.Scorecard{Cohorts: []insights.TreatmentCohort{{Key: label}}}}
+	out.Reset()
+	if err := RenderInsights(&out, report, options); err != nil {
+		t.Fatal(err)
+	}
+	if !utf8.Valid(out.Bytes()) || strings.Contains(out.String(), label) || !strings.Contains(out.String(), "### Cohort: "+limitDigestText(label)+"\n") {
+		t.Fatalf("cohort label was not bounded on a rune boundary:\n%s", out.String())
+	}
+	if err := RenderInsights(failingWriter{}, report, options); err == nil {
+		t.Fatal("writer error was lost")
+	}
+}
+
+func TestScorecardEfficiencyMissingVersusZero(t *testing.T) {
+	for _, values := range [][]float64{nil, {0}} {
+		estimate := insights.EstimateMedian(values, 5)
+		efficiency := insights.EfficiencyMedians{
+			Plans: 5, Sessions: estimate, OutputTokens: estimate, TotalTokens: estimate,
+			Cost: estimate, ToolCalls: estimate, CostPerOriginalSlice: estimate,
+			OutputTokensPerOriginalSlice: estimate, PlanningCost: estimate, PlanningOutputTokens: estimate,
+		}
+		var out strings.Builder
+		renderScorecardEfficiency(&out, efficiency)
+		for _, metric := range []string{"sessions", "output tokens", "total tokens", "cost ($)", "tool calls", "cost per original slice ($)", "output tokens per original slice", "planning cost ($)", "planning output tokens"} {
+			want := metric + ": not recorded n=0 sparse"
+			if len(values) > 0 {
+				want = metric + ": 0.00 n=1 sparse"
+			}
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("missing %q in:\n%s", want, out.String())
+			}
+		}
+	}
+}
+
+func TestScorecardBoundsLabelsWithoutDigestCap(t *testing.T) {
+	label := strings.Repeat("界", 200)
+	cohort := insights.TreatmentCohort{
+		Key: label, Runtime: label, Provider: label, Model: label, Confidence: insights.TreatmentConfidence(label),
+		Outcomes: insights.CohortOutcomes{
+			Matured:    5,
+			Quality:    insights.QualityOutcomes{FindingSeverities: []insights.LabelCount{{Label: label, Count: 1}}},
+			Efficiency: insights.EfficiencyOutcomes{ByRole: []insights.RoleTotals{{Role: label}}},
+			Reliability: insights.ReliabilityOutcomes{
+				Infrastructure: []insights.LabelCount{{Label: label, Count: 1}},
+				Quality:        []insights.LabelCount{{Label: label, Count: 2}},
+			},
+		},
+	}
+	sparse := cohort
+	sparse.Outcomes.Matured = 4
+	report := insights.Report{
+		RepositoryCoverage: insights.RepositoryCoverage{Repositories: []insights.RepositoryScanResult{{RepositoryName: label, Status: label}}},
+		Scorecard: insights.Scorecard{
+			Coverage: insights.ScorecardCoverage{MinimumSamples: 5},
+			Cohorts:  []insights.TreatmentCohort{cohort},
+			Strata: []insights.StratumBreakdown{
+				{Stratum: label, Key: label, Cohorts: []insights.TreatmentCohort{cohort, sparse}},
+				{Stratum: "omitted", Key: "sparse-only", Cohorts: []insights.TreatmentCohort{sparse}},
+			},
+			Inversions:     []insights.Inversion{{Metric: label, CohortA: label, CohortB: label, Stratum: label, Key: label}},
+			ExcludedLabels: []insights.ExcludedLabel{{Label: label, Reason: label, Plans: 1}},
+		},
+	}
+	options := InsightsOptions{Scope: InsightsScopeAllRepositories, Format: InsightsFormatScorecard}
+	var first, second bytes.Buffer
+	for _, out := range []*bytes.Buffer{&first, &second} {
+		if err := RenderInsights(out, report, options); err != nil {
+			t.Fatal(err)
+		}
+	}
+	text := first.String()
+	if text != second.String() || !utf8.Valid(first.Bytes()) || strings.Contains(text, label) {
+		t.Fatal("scorecard must be deterministic, UTF-8 safe, and bound every label")
+	}
+	if first.Len() <= digestMaxBytes || strings.Contains(text, "digest truncated") || !strings.HasSuffix(text, "reason: "+limitDigestText(label)+"\n") {
+		t.Fatal("scorecard must render completely beyond the digest cap")
+	}
+	if strings.Contains(text, "sparse-only") || !strings.Contains(text, "Omitted stratum keys (no non-sparse cohort): 1") {
+		t.Fatal("scorecard must omit keys with only sparse cohorts")
+	}
+	for _, unwanted := range []string{"Failure patterns", "Structured event counters", "Global session telemetry", "Recent agent logs"} {
+		if strings.Contains(text, unwanted) {
+			t.Errorf("scorecard contains report section %q", unwanted)
+		}
 	}
 }
 

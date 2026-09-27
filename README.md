@@ -178,7 +178,7 @@ commands also accept the short unambiguous prefixes shown by help.
 | Execution | `run`, `commit`, `approve`, `review`, `rework` | Execute slices, satisfy gates, inspect exact-diff reviews, and address findings. |
 | Workspace and cleanup | `workspace`, `cleanup`, `merge` | Inspect managed worktrees, clean eligible Git state, and integrate approved plans. |
 | Repository | `init`, `repo`, `steal` | Register checkouts, inspect repository configuration and health, and fetch a read-only scouting snapshot. |
-| Monitoring | `ui`, `monitor`, `status`, `insights`, `log` | See cross-repository work, resolved settings, telemetry, and run logs. |
+| Monitoring | `ui`, `monitor`, `status`, `insights`, `log` | See cross-repository work, resolved settings, telemetry, and run logs; `insights` offers `--digest` or `--scorecard`, optionally with `--all-repos`. |
 | Prompts and agents | `prompt`, `draft-prompt`, `install-prompts` | Render, save, and install Tao's agent prompts. |
 | Settings | `completion`, `doctor`, `update` | Configure shell support, diagnose setup, and update release binaries. |
 | Other | `version`, `slice-complete`, `slice-blocked`, `capture-planning-session` | Inspect the build or support Tao-managed agent lifecycle handoffs and compatibility. |

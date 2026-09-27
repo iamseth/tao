@@ -460,6 +460,19 @@ rather than silently generalized.
   now, capture its concise note topic with `tao note create ...` (or `tao n c
   ...`).
 
+### Planner scorecard — compare downstream outcomes
+
+Run `tao insights --scorecard` when comparing planner runtime/model cohorts on
+downstream quality, efficiency, and reliability outcomes. Add `--all-repos` for
+cross-repository evidence; use `--scorecard` instead of, not together with, `--digest`.
+
+The read-only scorecard reports evidence coverage, censoring, sparse cells, and
+inversions where overall and stratified comparisons disagree. Ambiguous
+historical planner labels are excluded by default. Rates use matured plans
+only; active plans are censored, not counted as failures. Read these limits
+before interpreting differences: the scorecard never declares a winner, makes
+causal claims, or drives routing.
+
 ---
 
 ## Build commands

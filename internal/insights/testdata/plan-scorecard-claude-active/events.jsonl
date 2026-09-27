@@ -1,0 +1,3 @@
+{"type":"plan_created","timestamp":"2026-09-20T00:00:00Z","agent":"claude"}
+{"type":"agent_metrics","timestamp":"2026-09-20T00:01:00Z","metrics":{"session_id":"planning","role":"planning","agent":"claude","provider_id":"anthropic","model_id":"claude-fable-5"}}
+{"type":"slice_started","timestamp":"2026-09-25T00:00:00Z"}

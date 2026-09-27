@@ -60,6 +60,7 @@ type Report struct {
 	OutlierPlans       []PlanOutlier        `json:"outlier_plans"`
 	RecentLogs         RecentLogReport      `json:"recent_logs"`
 	PlannerRouting     PlannerRoutingReport `json:"planner_routing"`
+	Scorecard          Scorecard            `json:"scorecard"`
 }
 
 // PlannerRoutingReport joins advisory assignments to current summary status.
@@ -205,19 +206,26 @@ type PlanOutlier struct {
 }
 
 type accumulator struct {
-	buckets  map[string]*ReasonBucket
-	sessions []session
-	signals  map[string]*signalAccumulator
-	logs     *logAccumulator
-	routes   map[routingCohortKey]*routingAccumulator
+	observations []planObservation
+	buckets      map[string]*ReasonBucket
+	sessions     []session
+	signals      map[string]*signalAccumulator
+	logs         *logAccumulator
+	routes       map[routingCohortKey]*routingAccumulator
 }
 
 type planData struct {
-	reworkEvents   []plan.Event
-	stopReasons    []string
-	blockedReasons []string
-	sessions       map[string][]plan.AgentMetricEvent
-	signals        []signalEvent
+	createdAgent     string
+	createdAt        time.Time
+	earliestAt       time.Time
+	lifecycle        []plan.Event
+	planningMetrics  []plan.AgentMetrics
+	reworkEvents     []plan.Event
+	stopReasons      []string
+	blockedReasons   []string
+	sessions         map[string][]plan.AgentMetricEvent
+	toolCallsPresent map[string]bool
+	signals          []signalEvent
 }
 
 type signalEvent struct {
@@ -255,15 +263,36 @@ type sourceIdentity struct {
 // Individual unreadable plan logs are counted and skipped so historical damage
 // cannot suppress the report.
 func Aggregate(ctx context.Context, repository PlanLister) (Report, error) {
-	return AggregateWithRoutes(ctx, repository, nil)
+	return AggregateWithOptions(ctx, repository, Options{})
 }
 
 // AggregateWithRoutes adds optional, non-authoritative routing evidence.
 func AggregateWithRoutes(ctx context.Context, repository PlanLister, routes RouteLister) (Report, error) {
+	return AggregateWithOptions(ctx, repository, Options{Routes: routes})
+}
+
+// Options supplies read-time aggregation context.
+type Options struct {
+	// Now defaults to time.Now when zero.
+	Now time.Time
+	// Routes supplies optional advisory evidence for single-repository aggregation.
+	// Multi-repository aggregation uses each RepositorySource's Routes instead.
+	Routes RouteLister
+}
+
+func (o Options) now() time.Time {
+	if o.Now.IsZero() {
+		return time.Now()
+	}
+	return o.Now
+}
+
+// AggregateWithOptions aggregates one repository with an injectable clock.
+func AggregateWithOptions(ctx context.Context, repository PlanLister, options Options) (Report, error) {
 	report := Report{}
 	acc := newAccumulator()
-	now := time.Now()
-	if err := aggregateSource(ctx, &report, &acc, sourceIdentity{}, repository, routes, now); err != nil {
+	now := options.now()
+	if err := aggregateSource(ctx, &report, &acc, sourceIdentity{}, repository, options.Routes, now); err != nil {
 		return Report{}, err
 	}
 	if err := scanRecentLogs(ctx, &report, acc.logs, now); err != nil {
@@ -276,6 +305,11 @@ func AggregateWithRoutes(ctx context.Context, repository PlanLister, routes Rout
 // AggregateSources combines raw event and session evidence from every source.
 // A damaged source is reported and skipped without suppressing readable stores.
 func AggregateSources(ctx context.Context, lister SourceLister) (Report, error) {
+	return AggregateSourcesWithOptions(ctx, lister, Options{})
+}
+
+// AggregateSourcesWithOptions aggregates registered sources with an injectable clock.
+func AggregateSourcesWithOptions(ctx context.Context, lister SourceLister, options Options) (Report, error) {
 	sources, err := lister.ListInsightSources(ctx)
 	if err != nil {
 		return Report{}, err
@@ -287,7 +321,7 @@ func AggregateSources(ctx context.Context, lister SourceLister) (Report, error) 
 
 	report := Report{}
 	acc := newAccumulator()
-	now := time.Now()
+	now := options.now()
 	for _, source := range sources {
 		if err := ctx.Err(); err != nil {
 			return Report{}, err
@@ -359,7 +393,7 @@ func aggregateSource(ctx context.Context, report *Report, acc *accumulator, repo
 			continue
 		}
 		report.PlansScanned++
-		mergePlan(report, acc, repository, summary.ID, data)
+		mergePlan(report, acc, repository, summary, data, now)
 	}
 	return nil
 }
@@ -535,6 +569,21 @@ func readPlanEvents(ctx context.Context, dir string) (planData, error) {
 			continue
 		}
 		consumeEvent(&data, event, line)
+		if event.Type == plan.EventTypeAgentMetrics && event.Metrics != nil {
+			// AgentMetrics retains token/cost presence, but not tool-call presence.
+			// Keep this read-time evidence without changing the durable schema.
+			var presence struct {
+				Metrics struct {
+					ToolCalls *int64 `json:"tool_calls"`
+				} `json:"metrics"`
+			}
+			if json.Unmarshal(scanner.Bytes(), &presence) == nil && presence.Metrics.ToolCalls != nil {
+				if data.toolCallsPresent == nil {
+					data.toolCallsPresent = make(map[string]bool)
+				}
+				data.toolCallsPresent[scorecardMetricRole(event.Metrics.Role)] = true
+			}
+		}
 	}
 	if err := scanner.Err(); err != nil {
 		return planData{}, err
@@ -543,6 +592,24 @@ func readPlanEvents(ctx context.Context, dir string) (planData, error) {
 }
 
 func consumeEvent(data *planData, event plan.Event, line int) {
+	if !event.Timestamp.IsZero() && (data.earliestAt.IsZero() || event.Timestamp.Before(data.earliestAt)) {
+		data.earliestAt = event.Timestamp
+	}
+	switch event.Type {
+	case "plan_created":
+		if data.createdAt.IsZero() && !event.Timestamp.IsZero() {
+			data.createdAgent, data.createdAt = event.Agent, event.Timestamp
+		}
+		data.lifecycle = append(data.lifecycle, event)
+	case plan.EventTypeSliceStarted, plan.EventTypePlanReviewed,
+		plan.EventTypePlanReopened, plan.EventTypePlanMerged,
+		plan.EventTypePullRequestCreated, plan.EventTypePlanAbandoned,
+		plan.EventTypeReworkStopped, plan.EventTypeReworkRound,
+		plan.EventTypeVerificationRepairCreated, plan.EventTypeFinalVerification,
+		plan.EventTypeFinalizationFailed, plan.EventTypeBudgetExceeded,
+		plan.EventTypeSessionTimeout:
+		data.lifecycle = append(data.lifecycle, event)
+	}
 	switch event.Type {
 	case plan.EventTypeSliceBlocked:
 		data.blockedReasons = append(data.blockedReasons, eventReason(event))
@@ -563,6 +630,9 @@ func consumeEvent(data *planData, event plan.Event, line int) {
 		if event.Metrics == nil {
 			return
 		}
+		if event.Metrics.Role.Normalized() == plan.AgentRolePlanning {
+			data.planningMetrics = append(data.planningMetrics, *event.Metrics)
+		}
 		key := event.Metrics.SessionID
 		if key == "" {
 			key = fmt.Sprintf("line:%d", line)
@@ -571,7 +641,9 @@ func consumeEvent(data *planData, event plan.Event, line int) {
 	}
 }
 
-func mergePlan(report *Report, acc *accumulator, repository sourceIdentity, planID string, data planData) {
+func mergePlan(report *Report, acc *accumulator, repository sourceIdentity, summary plan.PlanSummary, data planData, now time.Time) {
+	planID := summary.ID
+	acc.observations = append(acc.observations, observePlan(repository, summary, data, now))
 	for _, event := range data.signals {
 		addSignal(acc.signals, repository, planID, event)
 	}
@@ -725,6 +797,7 @@ func finalizeSignals(report *Report, signals map[string]*signalAccumulator) {
 
 func finalize(report *Report, acc *accumulator) {
 	finalizeRoutes(&report.PlannerRouting, acc.routes)
+	report.Scorecard = buildScorecard(acc.observations)
 	finalizeSignals(report, acc.signals)
 	finalizeLogSignals(report, acc.logs)
 	for _, bucket := range acc.buckets {
