@@ -265,6 +265,119 @@ func TestValidatePlanVerificationWarnsForOversizedSliceGuardrails(t *testing.T) 
 	}
 }
 
+func TestValidatePlanVerificationGateParity(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		files       []string
+		lint        string
+		gate        string
+		makefile    string
+		missingRoot bool
+		wantWarning bool
+	}{
+		{name: "dedupe helpers", gate: "make verify", wantWarning: true},
+		{name: "golangci lint", gate: "make verify", lint: "golangci-lint run --allow-parallel-runners ./internal/a/..."},
+		{name: "make lint", gate: "make verify", lint: "make lint"},
+		{name: "go vet", gate: "make verify", lint: "go vet ./internal/a/..."},
+		{name: "no gate", gate: "go test ./internal/a"},
+		{name: "non Go", files: []string{"README.md", "web/app.ts"}, gate: "make verify"},
+		{name: "no expected files", files: []string{}, gate: "make verify"},
+		{name: "lint gate", gate: "make lint", wantWarning: true},
+		{name: "compound gate", gate: "go version && make verify", wantWarning: true},
+		{name: "literal tokens", gate: "make verify-extra"},
+		{name: "detected gate", gate: "make build && make test", makefile: "build:\n\ntest:\n", wantWarning: true},
+		{name: "unavailable root", gate: "make verify", missingRoot: true, wantWarning: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			if tt.makefile != "" {
+				writeFile(t, filepath.Join(root, "Makefile"), tt.makefile)
+			}
+			if tt.missingRoot {
+				root = filepath.Join(root, "missing")
+			}
+			files := tt.files
+			if files == nil {
+				files = []string{"internal/z/helper.go", "internal/a/helper_test.go", "internal/a/helper.go"}
+			}
+			commands := []string{"go test ./internal/a"}
+			if tt.lint != "" {
+				commands = append(commands, tt.lint)
+			}
+			detail := &PlanDetail{
+				State: State{Repo: Repo{Root: root}, Plan: PlanState{PendingSlices: []string{"001-helpers", "002-gate"}}},
+				Slices: SlicesFile{Slices: []Slice{
+					{ID: "001-helpers", ExpectedFiles: files, Verification: Verification{Commands: commands}},
+					{ID: "002-gate", Verification: Verification{Commands: []string{tt.gate}}},
+				}},
+			}
+			result := ValidatePlanVerification(detail)
+			if result.HasErrors() {
+				t.Fatalf("gate parity must remain advisory: %+v", result.Findings)
+			}
+			var parity []VerificationFinding
+			for _, finding := range result.Findings {
+				if finding.Code == "gate_parity" {
+					parity = append(parity, finding)
+				}
+			}
+			if !tt.wantWarning {
+				if len(parity) != 0 {
+					t.Fatalf("unexpected gate parity findings: %+v", parity)
+				}
+				return
+			}
+			want := "slice 001-helpers changes Go files in internal/a, internal/z without a lint command while slice 002-gate declares the repository gate " + tt.gate
+			if len(parity) != 1 || parity[0].Severity != VerificationFindingWarning || parity[0].SliceID != "001-helpers" || parity[0].Message != want {
+				t.Fatalf("expected one advisory %q, got %+v", want, parity)
+			}
+		})
+	}
+}
+
+func TestValidatePlanVerificationGateParityOrder(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		pending []string
+		want    []string
+		gate    string
+	}{
+		{name: "pending order", pending: []string{"004-work", "003-work", "002-gate", "001-gate"}, want: []string{"004-work", "003-work"}, gate: "002-gate"},
+		{name: "ID fallback", want: []string{"003-work", "004-work"}, gate: "005-gate"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			detail := &PlanDetail{
+				State: State{Repo: Repo{Root: t.TempDir()}, Plan: PlanState{PendingSlices: tt.pending}},
+				Slices: SlicesFile{Slices: []Slice{
+					{ID: "006-work", ExpectedFiles: []string{"later.go"}, Verification: Verification{Commands: []string{"go version"}}},
+					{ID: "005-gate", ExpectedFiles: []string{"gate.go"}, Verification: Verification{Commands: []string{"make verify"}}},
+					{ID: "004-work", ExpectedFiles: []string{"root_test.go"}, Verification: Verification{Commands: []string{"go version"}}},
+					{ID: "003-work", ExpectedFiles: []string{"root.go"}, Verification: Verification{Commands: []string{"go version"}}},
+				}},
+			}
+			if len(tt.pending) > 0 {
+				for _, id := range []string{"001-gate", "002-gate"} {
+					detail.Slices.Slices = append(detail.Slices.Slices, Slice{ID: id, Verification: Verification{Commands: []string{"make verify"}}})
+				}
+			}
+			var got []string
+			for _, finding := range ValidatePlanVerification(detail).Findings {
+				if finding.Code != "gate_parity" {
+					continue
+				}
+				got = append(got, finding.SliceID)
+				want := "slice " + finding.SliceID + " changes Go files in . without a lint command while slice " + tt.gate + " declares the repository gate make verify"
+				if finding.Message != want {
+					t.Fatalf("expected %q, got %q", want, finding.Message)
+				}
+			}
+			if strings.Join(got, ",") != strings.Join(tt.want, ",") {
+				t.Fatalf("expected findings in order %v, got %v", tt.want, got)
+			}
+		})
+	}
+}
+
 func TestValidatePlanVerificationWarnsForUnsafeExpectedFiles(t *testing.T) {
 	detail := &PlanDetail{
 		State: State{Repo: Repo{Root: t.TempDir()}},

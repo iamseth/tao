@@ -278,7 +278,12 @@ func (r *PlanRecord) ApproveSlice(sliceID string, approvedBy string, now time.Ti
 
 // BlockSlice records an exceptional stop without discarding execution-boundary metadata.
 func (r *PlanRecord) BlockSlice(sliceID string, reason string, now time.Time) error {
-	return r.apply(blockSliceMutation(sliceID, reason, now))
+	return r.BlockSliceWithEvidence(sliceID, reason, nil, now)
+}
+
+// BlockSliceWithEvidence records an exceptional stop with structured verification evidence.
+func (r *PlanRecord) BlockSliceWithEvidence(sliceID string, reason string, evidence *SliceBlockedEvidence, now time.Time) error {
+	return r.apply(blockSliceMutation(sliceID, reason, evidence, now))
 }
 
 // BlockSliceForBudget records an enforced telemetry stop, including when the

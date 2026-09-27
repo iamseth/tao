@@ -1,9 +1,13 @@
 package plan
 
 import (
+	"cmp"
 	"fmt"
+	"path"
 	"slices"
 	"strings"
+
+	"github.com/iamseth/tao/internal/verifydetect"
 )
 
 // requiredPlanningBriefSections names only navigation-level sections; detailed plan
@@ -451,7 +455,85 @@ func validatePlanGuardrails(detail *PlanDetail) []VerificationFinding {
 	for _, slice := range detail.Slices.Slices {
 		findings = append(findings, validateSliceGuardrails(slice, false)...)
 	}
+	return append(findings, validateGateParity(detail)...)
+}
+
+func validateGateParity(detail *PlanDetail) []VerificationFinding {
+	gate := verifydetect.DetectCommand(detail.State.Repo.Root)
+	gates := make(map[string]string)
+	for _, slice := range detail.Slices.Slices {
+		for _, command := range slice.Verification.Commands {
+			if containsVerificationTokens(command, "make verify", "make lint", gate) {
+				gates[slice.ID] = command
+				break
+			}
+		}
+	}
+	if len(gates) == 0 {
+		return nil
+	}
+
+	positions := make(map[string]int)
+	for i, id := range detail.State.Plan.PendingSlices {
+		if _, exists := positions[id]; !exists {
+			positions[id] = i
+		}
+	}
+	position := func(id string) int {
+		if i, ok := positions[id]; ok {
+			return i
+		}
+		return len(detail.State.Plan.PendingSlices)
+	}
+	ordered := slices.Clone(detail.Slices.Slices)
+	slices.SortFunc(ordered, func(a, b Slice) int {
+		if order := cmp.Compare(position(a.ID), position(b.ID)); order != 0 {
+			return order
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
+	gateIndex := slices.IndexFunc(ordered, func(slice Slice) bool { return gates[slice.ID] != "" })
+	gateSlice := ordered[gateIndex]
+	var findings []VerificationFinding
+	for _, slice := range ordered[:gateIndex] {
+		if slices.ContainsFunc(slice.Verification.Commands, func(command string) bool {
+			return containsVerificationTokens(command, "golangci-lint", "make lint", "go vet")
+		}) {
+			continue
+		}
+		var dirs []string
+		for _, file := range slice.ExpectedFiles {
+			file = strings.TrimSpace(strings.ReplaceAll(file, "\\", "/"))
+			if strings.HasSuffix(file, ".go") {
+				dirs = append(dirs, path.Dir(file))
+			}
+		}
+		if len(dirs) == 0 {
+			continue
+		}
+		slices.Sort(dirs)
+		dirs = slices.Compact(dirs)
+		findings = append(findings, guardrailFinding(slice.ID, "gate_parity", fmt.Sprintf(
+			"slice %s changes Go files in %s without a lint command while slice %s declares the repository gate %s",
+			slice.ID, strings.Join(dirs, ", "), gateSlice.ID, gates[gateSlice.ID])))
+	}
 	return findings
+}
+
+func containsVerificationTokens(command string, declarations ...string) bool {
+	fields := verificationCommandFields(command)
+	for _, declaration := range declarations {
+		tokens := verificationCommandFields(declaration)
+		if len(tokens) == 0 {
+			continue
+		}
+		for i := 0; i+len(tokens) <= len(fields); i++ {
+			if slices.Equal(fields[i:i+len(tokens)], tokens) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func validateSelectedSliceGuardrails(detail *PlanDetail) []VerificationFinding {

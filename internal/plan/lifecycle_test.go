@@ -1,11 +1,82 @@
 package plan
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestMarkSliceBlockedEvidence(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		evidence  *SliceBlockedEvidence
+		wantOwned bool
+	}{
+		{name: "legacy"},
+		{name: "owned", evidence: &SliceBlockedEvidence{PlanOwned: true, HeadSHA: "head", WorktreeFingerprint: "fingerprint"}, wantOwned: true},
+		{name: "not owned", evidence: &SliceBlockedEvidence{HeadSHA: "head", WorktreeFingerprint: "fingerprint"}},
+		{name: "no head", evidence: &SliceBlockedEvidence{PlanOwned: true, WorktreeFingerprint: "fingerprint"}},
+		{name: "no fingerprint", evidence: &SliceBlockedEvidence{PlanOwned: true, HeadSHA: "head"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			detail := startSliceDetail("")
+			if tt.evidence != nil {
+				tt.evidence.GateCommand = "go test ./internal/plan"
+				tt.evidence.FailingPaths = []string{` ./internal\plan/b.go `, "internal/plan/a.go", "internal/plan/./a.go"}
+			}
+			event, appendEvent, err := markSliceBlocked(detail, "001-a", "  lint failed  ", tt.evidence, editTime())
+			if err != nil || !appendEvent {
+				t.Fatalf("block: append=%v, err=%v", appendEvent, err)
+			}
+			if detail.Slices.Slices[0].BlockerNote != "lint failed" || event.Reason != "lint failed" {
+				t.Fatalf("blocker note changed: %+v", event)
+			}
+			wantClassification := ""
+			if tt.wantOwned {
+				wantClassification = BlockerClassificationPlanOwned
+			}
+			if event.BlockerClassification != wantClassification {
+				t.Fatalf("classification = %q, want %q", event.BlockerClassification, wantClassification)
+			}
+			if tt.evidence == nil {
+				if event.Paths != nil || event.Command != "" || event.HeadSHA != "" || event.Fingerprint != "" {
+					t.Fatalf("legacy block gained evidence: %+v", event)
+				}
+				return
+			}
+			if event.Command != tt.evidence.GateCommand || event.HeadSHA != tt.evidence.HeadSHA || event.Fingerprint != tt.evidence.WorktreeFingerprint || !reflect.DeepEqual(event.Paths, []string{"internal/plan/a.go", "internal/plan/b.go"}) {
+				t.Fatalf("incorrect evidence: %+v", event)
+			}
+			if tt.evidence.FailingPaths[0] != ` ./internal\plan/b.go ` {
+				t.Fatal("caller paths mutated")
+			}
+			tt.evidence.FailingPaths[0] = "changed.go"
+			if event.Paths[0] != "internal/plan/a.go" {
+				t.Fatal("event aliases caller paths")
+			}
+		})
+	}
+}
+
+func TestMarkSliceBlockedEvidencePathBound(t *testing.T) {
+	paths := []string{"", " ", "../outside.go", "/absolute.go", `C:\absolute.go`, "."}
+	for i := 69; i >= 0; i-- {
+		paths = append(paths, fmt.Sprintf(" ./dir\\%02d.go ", i), fmt.Sprintf("dir/%02d.go", i))
+	}
+	event, _, err := markSliceBlocked(startSliceDetail(""), "001-a", "lint", &SliceBlockedEvidence{FailingPaths: paths}, editTime())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := make([]string, 64)
+	for i := range want {
+		want[i] = fmt.Sprintf("dir/%02d.go", i)
+	}
+	if !reflect.DeepEqual(event.Paths, want) {
+		t.Fatalf("bounded paths = %q, want %q", event.Paths, want)
+	}
+}
 
 func TestLifecycleSelectedSliceEdges(t *testing.T) {
 	tests := []struct {
@@ -260,7 +331,7 @@ func TestAbandonedLifecycleMutatorsPreserveStatusSlicesQueueAndEvents(t *testing
 		{
 			name: "block slice",
 			mutate: func(detail *PlanDetail) error {
-				_, _, err := markSliceBlocked(detail, "001-a", "cannot continue", editTime())
+				_, _, err := markSliceBlocked(detail, "001-a", "cannot continue", nil, editTime())
 				return err
 			},
 		},

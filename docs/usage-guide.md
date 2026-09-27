@@ -511,6 +511,10 @@ through. Run agents may record single-line `Ruling:` notes instead of blocking
 on small ambiguities already settled by plan intent; genuinely missing or
 contradictory contracts remain blockers.
 
+The run packet lists **Plan-Owned Files** derived by Tao from Git. When a
+declared verification gate fails only in those files, agents make the minimal
+fix in-session and rerun the gate, even if an earlier slice changed the files.
+
 **Choose the run size:**
 
 - `tao run <plan-id>` — normal execution of all pending slices. Choose this when
@@ -525,6 +529,7 @@ contradictory contracts remain blockers.
 | --- | --- | --- |
 | An approval-gated pending slice is not approved | `tao approve [--slice ID] <plan-id>`, then `tao run <plan-id>` | Approval satisfies the gate; it is not blocker recovery. |
 | The plan records an ordinary blocker and you have resolved its stated cause | `tao run --continue <plan-id>` | `--continue` explicitly clears blocker lifecycle state. Tao does not infer resolution. |
+| A `plan_owned` blocker has an unchanged worktree | Fix the named paths in the plan worktree, then rerun `tao run --continue <plan-id>` | Tao refuses with `blocker unchanged since <timestamp>; fix required in <paths>` only when structured plan-owned evidence and the recorded head/worktree fingerprint still match. |
 | A clean isolated automatic slice is blocked on an older execution baseline, and a prerequisite has now produced a strictly newer baseline | `tao run --restart <plan-id>` | `--restart` supersedes that safe blocked boundary and preflights again; it is not a general retry. |
 | An implementation handoff was interrupted before completion | Rerun the same `tao run` command | Tao classifies the recorded workspace, branch, head, policy, intent, and dirt before deciding whether resume is safe. `--continue` and `--restart` do not bypass that check. |
 | Final verification fails with recorded classification `code` after slice execution in an ordinary run | Let automatic repair continue in the same invocation | Eligible failures generate and run repair slices, then rerun the gate, within the fixed lifetime cap of 2 and `--max-slices`. |
@@ -697,8 +702,11 @@ another direct driver from racing that recovery:
 
 `tao run --continue` has a different purpose: it explicitly clears lifecycle
 blocker state after you resolve a recorded blocker. Tao does not infer that
-resolution from Git state, blocker prose, or external conditions, and continue
-does not override any interrupted-slice boundary check. When a clean automatic
+resolution from Git state, blocker prose, or external conditions. For a
+structured plan-owned blocker with a recorded fingerprint, an unchanged head
+and worktree cause refusal before agent handoff; changing the fingerprint lifts
+only that guard, not the other safety checks. Prose-only blockers are unaffected,
+and continue does not override any interrupted-slice boundary check. When a clean automatic
 slice was blocked by a prerequisite and the baseline has since advanced, use
 `tao run --restart` instead; Tao records the superseded boundary and re-runs
 prerequisite and selected-slice preflight before handoff. The `--continue`,

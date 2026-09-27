@@ -102,10 +102,10 @@ func approveSliceMutation(sliceID string, approvedBy string, now time.Time) arti
 	}
 }
 
-func blockSliceMutation(sliceID string, reason string, now time.Time) artifactMutationFunc {
+func blockSliceMutation(sliceID string, reason string, evidence *SliceBlockedEvidence, now time.Time) artifactMutationFunc {
 	return func(detail *PlanDetail) (lifecycleMutation, error) {
 		return applyLifecycleMutation(detail, func(_ *artifactChangeSet) ([]Event, error) {
-			event, appendEvent, err := markSliceBlocked(detail, sliceID, reason, now)
+			event, appendEvent, err := markSliceBlocked(detail, sliceID, reason, evidence, now)
 			if err != nil {
 				return nil, err
 			}

@@ -66,6 +66,18 @@ func TestRenderRunPromptAppliesDefaultsAndData(t *testing.T) {
 	}
 }
 
+func TestRenderRunPromptAuthorizesPlanOwnedGateRepair(t *testing.T) {
+	got, err := Render(PromptRun, Data{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Plan-Owned Files", "treat the fix as in scope", "make the minimal change", "rerun", "do not block for that reason", `--gate-command "<failed command>"`, "--failing-path <path>"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered run prompt missing plan-owned gate repair guidance %q", want)
+		}
+	}
+}
+
 func TestRenderRunPromptDelegatesExceptionalStopsToSliceBlocked(t *testing.T) {
 	got, err := Render(PromptRun, Data{PlanDir: "/tmp/plan"})
 	if err != nil {

@@ -17,6 +17,106 @@ import (
 	"github.com/iamseth/tao/internal/plantest"
 )
 
+func TestPlanOwnedFiles(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		base   string
+		gitErr error
+		want   []string
+	}{
+		{name: "empty base"},
+		{name: "git error", base: "base123", gitErr: errors.New("base unavailable\nfatal: bad revision")},
+		{name: "sorted", base: "base123", want: []string{"a.go", "z.go"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			calls := 0
+			execution := testRunExecution(ExecutionConfig{}, RunDependencies{
+				OutputWriter: &out,
+				CommandRunner: func(_ context.Context, dir, name string, args []string, stdout, _ io.Writer) error {
+					calls++
+					if dir != "" || name != "git" || !slices.Equal(args, []string{"-C", "/execution", "diff", "--name-only", "--no-renames", "-z", "base123..HEAD"}) {
+						t.Fatalf("unexpected command: %s: %s %v", dir, name, args)
+					}
+					if tc.gitErr != nil {
+						return tc.gitErr
+					}
+					_, err := io.WriteString(stdout, "z.go\x00a.go\x00")
+					return err
+				},
+			})
+			detail := &plan.PlanDetail{State: plan.State{Repo: plan.Repo{Root: "/control", BaseCommit: tc.base}}}
+			got := planOwnedFiles(context.Background(), execution, detail, "/execution")
+			if !slices.Equal(got, tc.want) || (tc.want == nil && got != nil) {
+				t.Fatalf("files = %v, want %v", got, tc.want)
+			}
+			if (tc.base == "" && calls != 0) || (tc.base != "" && calls != 1) {
+				t.Fatalf("unexpected Git calls: %d", calls)
+			}
+			if tc.gitErr != nil {
+				if !strings.HasPrefix(out.String(), "Warning:") || !strings.Contains(out.String(), "base unavailable") || strings.Count(out.String(), "\n") != 1 {
+					t.Fatalf("expected one warning line, got %q", out.String())
+				}
+			} else if out.Len() != 0 {
+				t.Fatalf("unexpected output: %q", out.String())
+			}
+		})
+	}
+}
+
+func TestRenderRunPacketIncludesPlanOwnedFilesOnHandoff(t *testing.T) {
+	for _, resuming := range []bool{false, true} {
+		detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
+		detail.State.Repo.BaseCommit = "base123"
+		runner := newScriptedGitRunner()
+		runner.Outputs = map[string]string{"diff --name-only --no-renames -z base123..HEAD": "earlier.go\x00"}
+		r := SelectedSliceRunner{execution: testRunExecution(ExecutionConfig{}, RunDependencies{CommandRunner: runner.Run})}
+		packet, err := r.renderRunPacket(context.Background(), detail, "/execution", resuming, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(packet, "## Plan-Owned Files\n- earlier.go\n") {
+			t.Fatalf("resuming=%v: missing ownership list:\n%s", resuming, packet)
+		}
+	}
+}
+
+func TestRenderRunPacketIncludesExactPlanOwnedPaths(t *testing.T) {
+	root := t.TempDir()
+	runRebaseRecoveryGit(t, root, "init", "-b", "feature/test")
+	runRebaseRecoveryGit(t, root, "config", "user.email", "tao@example.com")
+	runRebaseRecoveryGit(t, root, "config", "user.name", "Tao Test")
+	runRebaseRecoveryGit(t, root, "config", "core.quotePath", "true")
+	runRebaseRecoveryGit(t, root, "commit", "--allow-empty", "-m", "base")
+	execution := testRunExecution(ExecutionConfig{}, RunDependencies{CommandRunner: defaultCommandRunner})
+	ctx := context.Background()
+	base, err := gitClient(execution, root).RevParse(ctx, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const path = "café.go"
+	if err := os.WriteFile(filepath.Join(root, path), []byte("package cafe\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runRebaseRecoveryGit(t, root, "add", ".")
+	runRebaseRecoveryGit(t, root, "commit", "-m", "plan work")
+	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
+	detail.State.Repo.BaseCommit = base
+	if got := planOwnedFiles(ctx, execution, detail, root); !slices.Equal(got, []string{path}) {
+		t.Errorf("plan-owned files = %q, want %q", got, []string{path})
+	}
+	runner := SelectedSliceRunner{execution: execution}
+	for _, resuming := range []bool{false, true} {
+		packet, err := runner.renderRunPacket(ctx, detail, root, resuming, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(packet, "## Plan-Owned Files\n- "+path+"\n") {
+			t.Errorf("resuming=%v: missing readable ownership path:\n%s", resuming, packet)
+		}
+	}
+}
+
 func TestRunTestBuilders(t *testing.T) {
 	dependencies := testDependencies(nil, nil)
 	options := testOptions(dependencies)
@@ -1901,6 +2001,134 @@ func TestRunPostAgentBlockShowsBoundedPersistedReason(t *testing.T) {
 				t.Fatalf("expected one agent handoff before blocker, got %d", executor.calls)
 			}
 		})
+	}
+}
+
+func TestContinuePlanOwnedBlocker(t *testing.T) {
+	for _, name := range []string{"unchanged", "pending fallback", "tracked changed", "untracked changed", "deleted", "head advanced", "prose only", "no fingerprint", "new prose block", "new block without fingerprint", "empty root", "missing root", "git error"} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			runRebaseRecoveryGit(t, root, "init", "-b", "feature/test")
+			runRebaseRecoveryGit(t, root, "config", "user.email", "tao@example.com")
+			runRebaseRecoveryGit(t, root, "config", "user.name", "Tao Test")
+			writeFile := func(name, text string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(root, name), []byte(text), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			writeFile("tracked.go", "before\n")
+			runRebaseRecoveryGit(t, root, "add", "tracked.go")
+			runRebaseRecoveryGit(t, root, "commit", "-m", "base")
+			writeFile("untracked.go", "before\n")
+			var out bytes.Buffer
+			execution := testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Continue: true}}, RunDependencies{CommandRunner: defaultCommandRunner, OutputWriter: &out, PlanRecordFactory: memoryPlanRecordFactory})
+			head, parts, err := gitClient(execution, root).WorktreeFingerprintParts(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			detail := runPlanDetail(plan.StatusBlocked, []string{"001-a"}, nil, "001-a", plan.StatusBlocked, nil, nil)
+			slice := &detail.Slices.Slices[0]
+			detail.State.Plan.CurrentSlice = &slice.ID
+			slice.ExecutionRoot, slice.BlockerNote = root, "lint failed"
+			detail.Events = []plan.Event{{Type: plan.EventTypeSliceBlocked, SliceID: slice.ID, Timestamp: time.Date(2026, 9, 26, 22, 0, 0, 0, time.UTC), BlockerClassification: plan.BlockerClassificationPlanOwned, HeadSHA: head, Fingerprint: plan.WorktreeFingerprint(append([]string{head}, parts...)...), Paths: []string{"tracked.go"}}}
+			switch name {
+			case "pending fallback":
+				detail.State.Plan.CurrentSlice = nil
+				slice.Status = plan.StatusPending
+			case "tracked changed":
+				writeFile("tracked.go", "after\n")
+			case "untracked changed":
+				writeFile("untracked.go", "after\n")
+			case "deleted":
+				if err := os.Remove(filepath.Join(root, "tracked.go")); err != nil {
+					t.Fatal(err)
+				}
+			case "head advanced":
+				runRebaseRecoveryGit(t, root, "commit", "--allow-empty", "-m", "advanced")
+			case "prose only":
+				detail.Events[0].BlockerClassification = ""
+			case "no fingerprint":
+				detail.Events[0].Fingerprint = ""
+			case "new prose block":
+				detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypeSliceBlocked, SliceID: slice.ID, Reason: "external dependency"})
+			case "new block without fingerprint":
+				latest := detail.Events[0]
+				latest.Fingerprint = ""
+				detail.Events = append(detail.Events, latest)
+			case "empty root":
+				slice.ExecutionRoot = ""
+			case "missing root":
+				slice.ExecutionRoot = filepath.Join(root, "missing")
+			case "git error":
+				execution.Dependencies.CommandRunner = func(context.Context, string, string, []string, io.Writer, io.Writer) error {
+					return errors.New("inspection failed\nsecond line")
+				}
+			}
+			continued := false
+			execution.Dependencies.PlanRecordFactory = callbackPlanRecordFactory(nil, func(detail *plan.PlanDetail, now time.Time) error {
+				continued = true
+				record, err := memoryPlanRecordFactory(detail)
+				if err != nil {
+					return err
+				}
+				return record.ContinueBlocked(now)
+			})
+			executor := detailExecutor{execution: execution}
+			err = executor.continueBlocked(context.Background(), detail)
+			refused := name == "unchanged" || name == "pending fallback"
+			if refused {
+				if !errors.Is(err, ErrCannotStart) || !strings.Contains(err.Error(), "blocker unchanged since 2026-09-26T22:00:00Z; fix required in tracked.go") {
+					t.Fatalf("expected unchanged blocker refusal, got %v", err)
+				}
+				if continued || executor.continued || detail.State.Status != plan.StatusBlocked || slice.BlockerNote != "lint failed" {
+					t.Fatalf("refusal mutated blocker: continued=%v detail=%+v", continued, detail)
+				}
+			} else if err != nil || !continued || !executor.continued {
+				t.Fatalf("continue failed: continued=%v err=%v", continued, err)
+			}
+			if countPlanEvents(detail.Events, plan.EventTypeSliceResumeAttempted) != 0 {
+				t.Fatal("guard recorded a resume attempt")
+			}
+			if name == "git error" && (!strings.HasPrefix(out.String(), "Warning:") || strings.Count(out.String(), "\n") != 1) {
+				t.Fatalf("expected one warning line, got %q", out.String())
+			}
+		})
+	}
+}
+
+func TestServiceExecuteRefusesUnchangedPlanOwnedBlocker(t *testing.T) {
+	root := t.TempDir()
+	detail := interruptedServiceRunDetail(t, root)
+	detail.State.Status = plan.StatusBlocked
+	detail.Slices.Slices[0].Status = plan.StatusBlocked
+	detail.Slices.Slices[0].BlockerNote = "lint failed"
+	runner := newScriptedGitRunner(" M partial.go\n")
+	runner.Fallback = interruptedServiceGitRunner(t, root, &[]string{}, func() string { return " M partial.go\n" }, "tao/plan-a", "base")
+	runner.Outputs = map[string]string{"status --porcelain=v1 -z --untracked-files=all": " M partial.go\x00", "diff HEAD": "partial change"}
+	execution := testRunExecution(ExecutionConfig{}, RunDependencies{CommandRunner: runner.Run})
+	head, parts, err := gitClient(execution, root).WorktreeFingerprintParts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypeSliceBlocked, SliceID: "001-a", BlockerClassification: plan.BlockerClassificationPlanOwned, HeadSHA: head, Fingerprint: plan.WorktreeFingerprint(append([]string{head}, parts...)...), Paths: []string{"partial.go"}})
+	executor := &countingSliceExecutor{}
+	continued := false
+	var events []plan.Event
+	err = NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
+		CommandRunner:     runner.Run,
+		SliceExecutor:     executor,
+		PlanRecordFactory: callbackPlanRecordFactory(nil, func(*plan.PlanDetail, time.Time) error { continued = true; return nil }),
+		EventAppender:     eventAppenderFunc(func(_ string, event plan.Event) error { events = append(events, event); return nil }),
+	}}).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{Continue: true, ExecutionMode: ExecutionModeIsolated, CommitPolicy: CommitPolicySlice}})
+	if !errors.Is(err, ErrCannotStart) || !strings.Contains(err.Error(), "blocker unchanged") {
+		t.Fatalf("expected cannot-start unchanged blocker refusal, got %v", err)
+	}
+	if continued || executor.calls != 0 || detail.State.Status != plan.StatusBlocked || detail.Slices.Slices[0].BlockerNote != "lint failed" {
+		t.Fatal("refusal mutated blocker or handed off to agent")
+	}
+	if countPlanEvents(events, plan.EventTypeSliceResumeAttempted) != 0 || countPlanEvents(detail.Events, plan.EventTypeSliceResumeAttempted) != 0 {
+		t.Fatal("refusal recorded slice_resume_attempted")
 	}
 }
 

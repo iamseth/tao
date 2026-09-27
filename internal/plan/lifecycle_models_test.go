@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -202,6 +203,37 @@ func TestFinalVerificationLegacyJSONLoadsWithoutFailureEvidence(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), "failure_kind") || strings.Contains(string(encoded), "exit_code") {
 		t.Fatalf("legacy evidence gained optional fields: %s", encoded)
+	}
+}
+
+func TestEventBlockerEvidenceJSONCompatibility(t *testing.T) {
+	for _, event := range []Event{
+		{Type: EventTypeSliceBlocked, Reason: "legacy prose"},
+		{Type: EventTypeSliceBlocked, Command: "go test ./...", Paths: []string{"a.go", "b.go"}, BlockerClassification: BlockerClassificationPlanOwned, HeadSHA: "head", Fingerprint: "fingerprint"},
+	} {
+		data, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got Event
+		if err := json.Unmarshal(data, &got); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, event) {
+			t.Fatalf("round trip = %+v, want %+v", got, event)
+		}
+		for _, field := range []string{`"paths"`, `"blocker_classification"`} {
+			if strings.Contains(string(data), field) != (event.BlockerClassification != "") {
+				t.Fatalf("unexpected field %s presence in %s", field, data)
+			}
+		}
+	}
+	var legacy Event
+	if err := json.Unmarshal([]byte(`{"type":"slice_blocked","reason":"old blocker"}`), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if legacy.Paths != nil || legacy.BlockerClassification != "" {
+		t.Fatalf("legacy event gained evidence: %+v", legacy)
 	}
 }
 

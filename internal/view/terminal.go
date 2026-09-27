@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/iamseth/tao/internal/plan"
@@ -42,6 +43,13 @@ func FormatBlockerText(reason string) BlockerText {
 // followed by the explicit command to use after resolving it.
 func FormatBlockedRunGuidance(sliceID, reason, continueCommand string) string {
 	return fmt.Sprintf("Blocked slice %s: %s\nResolve this blocker before continuing, then run:\n  %s", sliceID, FormatBlockerText(reason).Detailed, continueCommand)
+}
+
+// FormatUnchangedBlockerGuidance explains why repeating a blocked run without
+// changing its worktree cannot help. Persisted paths are bounded display text.
+func FormatUnchangedBlockerGuidance(sliceID string, blockedAt time.Time, paths []string) string {
+	return fmt.Sprintf("Blocked slice %s: blocker unchanged since %s; fix required in %s\nEdit those files in the plan worktree and rerun the same tao run --continue command.",
+		sliceID, blockedAt.UTC().Format(time.RFC3339), FormatBlockerText(strings.Join(paths, ", ")).Detailed)
 }
 
 // FormatAbandonmentText returns a compact display-only form of durable

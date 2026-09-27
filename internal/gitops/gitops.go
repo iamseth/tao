@@ -4,11 +4,13 @@ package gitops
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/iamseth/tao/internal/commandrunner"
@@ -306,6 +308,85 @@ func IsLinkedWorktreeDirectory(commonDir string, gitDir string) (bool, error) {
 // every untracked file instead of collapsing wholly untracked directories.
 func (c Client) StatusPorcelainV1Z(ctx context.Context) (string, error) {
 	return c.rawOutput(ctx, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+}
+
+// WorktreeFingerprintParts returns HEAD separately from the raw status and diff,
+// followed by sorted path-NUL-content-digest entries for untracked files. Files
+// larger than 1 MiB contribute their size instead; symlinks contribute their
+// target text without following them outside the worktree.
+func (c Client) WorktreeFingerprintParts(ctx context.Context) (head string, parts []string, err error) {
+	head, err = c.RevParse(ctx, "HEAD")
+	if err != nil {
+		return "", nil, err
+	}
+	status, err := c.StatusPorcelainV1Z(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+	diff, err := c.Diff(ctx, "HEAD")
+	if err != nil {
+		return "", nil, err
+	}
+	var untracked []string
+	entries := strings.Split(status, "\x00")
+	for i := 0; i < len(entries); i++ {
+		entry := entries[i]
+		if len(entry) < 3 {
+			continue
+		}
+		if strings.ContainsAny(entry[:2], "RC") {
+			i++ // Porcelain -z renames/copies include a second, source-path entry.
+		}
+		if !strings.HasPrefix(entry, "?? ") {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return "", nil, err
+		}
+		path := entry[3:]
+		digest, err := c.untrackedFingerprint(path)
+		if err != nil {
+			return "", nil, fmt.Errorf("fingerprint untracked path %q: %w", path, err)
+		}
+		untracked = append(untracked, path+"\x00"+digest)
+	}
+	slices.Sort(untracked)
+	return head, append([]string{status, diff}, untracked...), nil
+}
+
+func (c Client) untrackedFingerprint(path string) (string, error) {
+	const maxBytes = 1 << 20
+	fullPath := filepath.Join(c.Root(), path)
+	info, err := os.Lstat(fullPath)
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(fullPath)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%x", sha256.Sum256([]byte(target))), nil
+	}
+	if !info.Mode().IsRegular() {
+		return "", errors.New("not a regular file or symlink")
+	}
+	if info.Size() > maxBytes {
+		return fmt.Sprintf("size:%d", info.Size()), nil
+	}
+	file, err := os.Open(fullPath) // #nosec G304 -- path supplied by Git status in this worktree.
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = file.Close() }()
+	content, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
+	if err != nil {
+		return "", err
+	}
+	if len(content) > maxBytes {
+		return "", errors.New("untracked file grew beyond fingerprint limit")
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(content)), nil
 }
 
 // Diff returns raw diff output for revspec.

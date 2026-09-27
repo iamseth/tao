@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -55,7 +57,7 @@ func executeDetailWithExecution(ctx context.Context, detail *plan.PlanDetail, re
 
 func (e *detailExecutor) execute(ctx context.Context, detail *plan.PlanDetail) error {
 	for {
-		if err := e.continueBlocked(detail); err != nil {
+		if err := e.continueBlocked(ctx, detail); err != nil {
 			return err
 		}
 		derived := plan.Derive(detail, time.Time{})
@@ -95,15 +97,62 @@ func (e *detailExecutor) execute(ctx context.Context, detail *plan.PlanDetail) e
 	}
 }
 
-func (e *detailExecutor) continueBlocked(detail *plan.PlanDetail) error {
+func (e *detailExecutor) continueBlocked(ctx context.Context, detail *plan.PlanDetail) error {
 	if !e.execution.Config.Continue || e.continued {
 		return nil
+	}
+	if err := refuseUnchangedPlanOwnedBlocker(ctx, e.execution, detail); err != nil {
+		return err
 	}
 	if err := continueBlockedPlan(e.execution, detail, now(e.execution).UTC()); err != nil {
 		return err
 	}
 	e.continued = true
 	return nil
+}
+
+func refuseUnchangedPlanOwnedBlocker(ctx context.Context, execution runExecution, detail *plan.PlanDetail) error {
+	lifecycle := plan.AnalyzeLifecycle(detail)
+	sliceID := lifecycle.CurrentSliceID
+	if sliceID == "" && detail.State.Status == plan.StatusBlocked && len(detail.State.Plan.PendingSlices) > 0 {
+		sliceID = detail.State.Plan.PendingSlices[0]
+	}
+	event := plan.LatestPlanOwnedBlocker(detail, sliceID)
+	if event == nil {
+		return nil
+	}
+	// Historical ownership must not override a newer prose-only or incomplete block.
+	for i := len(detail.Events) - 1; i >= 0; i-- {
+		latest := &detail.Events[i]
+		if latest.Type == plan.EventTypeSliceBlocked && latest.SliceID == sliceID {
+			if latest != event {
+				return nil
+			}
+			break
+		}
+	}
+	index := slices.IndexFunc(detail.Slices.Slices, func(slice plan.Slice) bool { return slice.ID == sliceID })
+	if index < 0 || detail.Slices.Slices[index].ExecutionRoot == "" {
+		return nil
+	}
+	if detail.State.Status != plan.StatusBlocked && detail.Slices.Slices[index].Status != plan.StatusBlocked {
+		return nil
+	}
+	root := detail.Slices.Slices[index].ExecutionRoot
+	if info, err := os.Stat(root); err != nil || !info.IsDir() {
+		return nil //nolint:nilerr // This advisory guard requires an inspectable execution root.
+	}
+	head, parts, err := gitClient(execution, root).WorktreeFingerprintParts(ctx)
+	if err != nil {
+		if out := execution.Dependencies.OutputWriter; out != nil {
+			_ = writef(out, "Warning: inspect plan-owned blocker worktree: %s\n", view.FormatBlockerText(err.Error()).Detailed)
+		}
+		return nil
+	}
+	if head != event.HeadSHA || plan.WorktreeFingerprint(append([]string{head}, parts...)...) != event.Fingerprint {
+		return nil
+	}
+	return cannotStartf("%s", view.FormatUnchangedBlockerGuidance(sliceID, event.Timestamp, event.Paths))
 }
 
 func (e *detailExecutor) stopIfMaxSlicesReached(derived plan.DerivedPlan) (bool, error) {
@@ -218,7 +267,7 @@ func (r SelectedSliceRunner) Run(ctx context.Context, detail *plan.PlanDetail, d
 		return nil, err
 	}
 
-	runPacket, err := r.renderRunPacket(detail, executionRoot, resuming, resumeAttempt)
+	runPacket, err := r.renderRunPacket(ctx, detail, executionRoot, resuming, resumeAttempt)
 	if err != nil {
 		return nil, err
 	}
@@ -286,7 +335,7 @@ func (r SelectedSliceRunner) Run(ctx context.Context, detail *plan.PlanDetail, d
 		if err := writef(r.out, "Resuming slice %s at recorded %s@%s (%s)...\n", slice.ID, recoveryAction.Diagnostics.Facts.Branch, recoveryAction.Diagnostics.Facts.Head, preserved); err != nil {
 			return nil, transportRecoveryError(providerErr, err)
 		}
-		runPacket, packetErr := r.renderRunPacket(reloaded, executionRoot, true, resumeAttempt)
+		runPacket, packetErr := r.renderRunPacket(ctx, reloaded, executionRoot, true, resumeAttempt)
 		if packetErr != nil {
 			return nil, transportRecoveryError(providerErr, packetErr)
 		}
@@ -407,12 +456,29 @@ func (r SelectedSliceRunner) reinspectRecoveryAction(ctx context.Context, detail
 	return *actual, nil
 }
 
-func (r SelectedSliceRunner) renderRunPacket(detail *plan.PlanDetail, workingRoot string, resuming bool, resumeAttempt int) (string, error) {
+func planOwnedFiles(ctx context.Context, execution runExecution, detail *plan.PlanDetail, executionRoot string) []string {
+	base := plan.PlanOwnershipBase(detail)
+	if base == "" {
+		return nil
+	}
+	files, err := gitClient(execution, executionRoot).ChangedFilesExact(ctx, base+"..HEAD")
+	if err != nil {
+		if out := execution.Dependencies.OutputWriter; out != nil {
+			_ = writef(out, "Warning: determine plan-owned files: %s\n", strings.Join(strings.Fields(err.Error()), " "))
+		}
+		return nil
+	}
+	slices.Sort(files)
+	return files
+}
+
+func (r SelectedSliceRunner) renderRunPacket(ctx context.Context, detail *plan.PlanDetail, workingRoot string, resuming bool, resumeAttempt int) (string, error) {
 	budgetThresholds := runtimeconfig.RuntimeAgentBudgetThresholds()
 	return plan.RenderRunPacket(detail, plan.RunPacketOptions{
 		CommitPolicy:     r.execution.Config.CommitPolicy.String(),
 		ExecutionMode:    r.execution.Config.ExecutionMode.String(),
 		WorkingRoot:      workingRoot,
+		PlanOwnedFiles:   planOwnedFiles(ctx, r.execution, detail, workingRoot),
 		Resuming:         resuming,
 		ResumeAttempt:    resumeAttempt,
 		BudgetThresholds: &budgetThresholds,

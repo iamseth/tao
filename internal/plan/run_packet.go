@@ -20,6 +20,7 @@ type RunPacketOptions struct {
 	CommitPolicy     string
 	ExecutionMode    string
 	WorkingRoot      string
+	PlanOwnedFiles   []string
 	RecentEvents     int
 	Resuming         bool
 	ResumeAttempt    int
@@ -90,6 +91,10 @@ func RenderRunPacket(detail *PlanDetail, options RunPacketOptions) (string, erro
 	writeRunPacketList(&b, "Tasks", slice.Tasks)
 	writeRequiredInputs(&b, slice.RequiredInputs)
 	writeRunPacketList(&b, "Expected Files", slice.ExpectedFiles)
+	if len(options.PlanOwnedFiles) > 0 {
+		writeRunPacketList(&b, "Plan-Owned Files", options.PlanOwnedFiles)
+		b.WriteString("These files were changed on the plan branch by earlier slices; a declared verification command failing only in them is in scope to fix minimally.\n")
+	}
 	writeDependencyStatus(&b, detail, slice)
 	writeRunPacketList(&b, "Global Invariants", detail.State.GlobalInvariants)
 	writeRunPacketList(&b, "Open Questions", detail.State.OpenQuestions)
@@ -358,7 +363,15 @@ func runPacketFailureSignal(event Event) (string, bool) {
 	case EventTypeSessionTimeout:
 		return firstNonemptyLine(event.Message, event.Reason, "agent session timed out"), true
 	case EventTypeSliceBlocked:
-		return firstNonemptyLine(event.Reason, event.Message, "slice blocked"), true
+		message := firstNonemptyLine(event.Reason, event.Message, "slice blocked")
+		if event.BlockerClassification == BlockerClassificationPlanOwned {
+			paths := strings.Join(event.Paths[:min(len(event.Paths), 8)], ", ")
+			if len(event.Paths) > 8 {
+				paths += ", …"
+			}
+			message += fmt.Sprintf(" [plan_owned: %s; paths: %s]", event.Command, paths)
+		}
+		return message, true
 	case EventTypeVerificationCommandInvalid:
 		return firstNonemptyLine(event.Reason, event.Message, event.Command, "verification command invalid"), true
 	case EventTypeSliceResumeFailed:

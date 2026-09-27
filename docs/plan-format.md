@@ -344,7 +344,7 @@ Plan loading should validate consistency without making list views brittle:
 
 Input-readiness errors are limited to malformed plan structure and explicit `required_inputs` facts. Whole-plan validation checks every declaration and permits only the exact direct-producer warning described above. Run preflight checks only the selected runnable slice against its prepared execution worktree; missing, unavailable, or wrong-kind declared inputs block before lifecycle mutation or agent handoff.
 
-Verification-command semantic analysis is additive and advisory. A missing or entirely blank `verification.commands` list is malformed slice structure and blocks, but findings about command working directories, arguments, package context, or referenced files remain warnings. Tao does not execute verification commands during readiness and does not treat supported analyzer patterns as proof that it understands arbitrary command semantics.
+Verification-command semantic analysis is additive and advisory. A missing or entirely blank `verification.commands` list is malformed slice structure and blocks, but findings about command working directories, arguments, package context, or referenced files remain warnings. Tao does not execute verification commands during readiness and does not treat supported analyzer patterns as proof that it understands arbitrary command semantics. The advisory `gate_parity` warning identifies earlier slices declaring Go files without a lint command when a later slice declares a repository-wide gate; it neither blocks execution nor rewrites verification commands.
 
 Queued runs must pass repository health checks against the plan's recorded `state.repo.root`. Missing roots, non-Git roots, and metadata errors block execution while remaining visible in CLI repository views.
 
@@ -453,7 +453,7 @@ Current well-known event types include:
 | `plan_abandoned` | First authoritative abandonment timestamp and bounded reason recorded by `tao abandon`; it does not prove completion or integration. |
 | `slice_started` | Selected slice attempt started. |
 | `slice_completed` | Slice completion transaction settled successfully; detailed intent, outcome, and SHA live in `slices.json`. |
-| `slice_blocked` | The selected slice and plan were marked blocked with the persisted reason. |
+| `slice_blocked` | The selected slice and plan were marked blocked with the persisted reason. Optional `command` and `paths` record the supplied gate command and failing paths; `blocker_classification` (`plan_owned`), `head_sha`, and `fingerprint` carry Tao-verified evidence. Ownership is Tao-derived from `state.repo.base_commit..HEAD` in the slice's recorded execution root, never agent prose. Empty fields are omitted; unavailable ownership evidence leaves the blocker unclassified. |
 | `slice_resume_attempted` | Agent handoff for an interrupted automatic slice was attempted. |
 | `slice_resume_failed` | Agent handoff for an interrupted automatic slice failed. |
 | `slice_restarted` | A blocked pre-intent slice was reset to pending after its baseline advanced; records the slice ID, prior execution root/branch/head, fresh baseline branch/head, and restart reason. |

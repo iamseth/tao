@@ -22,6 +22,19 @@ func (l insightsPlanLister) ListPlans(context.Context, plan.PlanFilter) ([]plan.
 	return l, nil
 }
 
+func TestFormatUnchangedBlockerGuidance(t *testing.T) {
+	blockedAt := time.Date(2026, 9, 26, 17, 0, 0, 0, time.FixedZone("test", -5*60*60))
+	got := FormatUnchangedBlockerGuidance("004-guard", blockedAt, []string{"a.go", "b.go"})
+	want := "Blocked slice 004-guard: blocker unchanged since 2026-09-26T22:00:00Z; fix required in a.go, b.go\nEdit those files in the plan worktree and rerun the same tao run --continue command."
+	if got != want {
+		t.Fatalf("guidance = %q, want %q", got, want)
+	}
+	got = FormatUnchangedBlockerGuidance("004-guard", blockedAt, []string{"a.go\n\x1b", strings.Repeat("界", 500)})
+	if strings.Contains(got, "\x1b") || strings.Count(got, "\n") != 1 || !strings.Contains(got, "…") || len([]rune(got)) > 600 {
+		t.Fatalf("unbounded or unsafe guidance: %q", got)
+	}
+}
+
 func TestRenderInsightsVerificationRepairStopped(t *testing.T) {
 	dir := t.TempDir()
 	events := `{"type":"verification_repair_created"}` + "\n" +

@@ -10,6 +10,30 @@ import (
 	planview "github.com/iamseth/tao/internal/view"
 )
 
+func TestShowPlanOwnedBlocker(t *testing.T) {
+	for _, latestOwned := range []bool{true, false} {
+		detail := &plan.PlanDetail{
+			State:  plan.State{Status: plan.StatusBlocked, Plan: plan.PlanState{ID: "plan-a"}},
+			Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "001-a", Status: plan.StatusBlocked, BlockerNote: "lint failed"}}},
+			Events: []plan.Event{{Type: plan.EventTypeSliceBlocked, SliceID: "001-a", BlockerClassification: plan.BlockerClassificationPlanOwned, Command: "go vet ./internal/run", Paths: []string{"internal/run/a.go", "internal/run/b.go"}}},
+		}
+		if !latestOwned {
+			detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypeSliceBlocked, SliceID: "001-a", Reason: "external blocker"})
+		}
+		// Another slice's block must not hide this slice's evidence.
+		detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypeSliceBlocked, SliceID: "002-b"})
+		var out bytes.Buffer
+		if err := renderPlanDetail(&out, planview.Plan{Detail: detail, Derived: plan.Derive(detail, time.Time{})}); err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{"Classification: plan_owned (go vet ./internal/run)", "Paths: internal/run/a.go, internal/run/b.go"} {
+			if strings.Contains(out.String(), want) != latestOwned {
+				t.Fatalf("latestOwned=%v: unexpected rendering for %q:\n%s", latestOwned, want, out.String())
+			}
+		}
+	}
+}
+
 func TestRenderPlanDetailExplainsBlockedSlicesAndEvents(t *testing.T) {
 	now := time.Date(2026, 8, 14, 3, 30, 0, 0, time.UTC)
 	reason := "Waiting for the infrastructure team\n to restore " + strings.Repeat("service ", 30)

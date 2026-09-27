@@ -2,14 +2,126 @@ package gitops
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
+
+func TestChangedFilesExactPreservesQuotedPaths(t *testing.T) {
+	root := t.TempDir()
+	runGitCommand(t, root, "init", "-b", "main")
+	runGitCommand(t, root, "config", "user.name", "Test")
+	runGitCommand(t, root, "config", "user.email", "test@example.com")
+	runGitCommand(t, root, "config", "core.quotePath", "true")
+	writeRepoFile(t, root, "old café.go", "package cafe\n")
+	runGitCommand(t, root, "add", ".")
+	runGitCommand(t, root, "commit", "-m", "base")
+	client := NewClient(root, nil)
+	ctx := context.Background()
+	base, err := client.RevParse(ctx, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, root, "mv", "old café.go", "café.go")
+	paths := []string{" leading space.go", "line\nbreak.go", "quote\".go", "tab\t.go", "trailing space "}
+	for _, path := range paths {
+		writeRepoFile(t, root, path, "package example\n")
+	}
+	runGitCommand(t, root, "add", ".")
+	runGitCommand(t, root, "commit", "-m", "plan work")
+	got, err := client.ChangedFilesExact(ctx, base+"..HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := append(slices.Clone(paths), "old café.go", "café.go")
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("exact changed files = %q, want %q", got, want)
+	}
+}
+
+func TestWorktreeFingerprintParts(t *testing.T) {
+	root := t.TempDir()
+	runGitCommand(t, root, "init", "-b", "main")
+	runGitCommand(t, root, "config", "user.name", "Test")
+	runGitCommand(t, root, "config", "user.email", "test@example.com")
+	writeRepoFile(t, root, "tracked", "original\n")
+	writeRepoFile(t, root, "?? source", "rename me\n")
+	runGitCommand(t, root, "add", ".")
+	runGitCommand(t, root, "commit", "-m", "initial")
+	client := NewClient(root, nil)
+	ctx := context.Background()
+	head, clean, err := client.WorktreeFingerprintParts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantHead, err := client.RevParse(ctx, "HEAD")
+	if err != nil || head != wantHead {
+		t.Fatalf("head = %q, want %q, error = %v", head, wantHead, err)
+	}
+	writeRepoFile(t, root, "tracked", "edited\n")
+	writeRepoFile(t, root, "z untracked\nfile", "one")
+	writeRepoFile(t, root, "a-large", strings.Repeat("x", (1<<20)+1))
+	_, parts, err := client.WorktreeFingerprintParts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := client.StatusPorcelainV1Z(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	diff, err := client.Diff(ctx, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{status, diff, "a-large\x00size:1048577", fmt.Sprintf("z untracked\nfile\x00%x", sha256.Sum256([]byte("one")))}
+	if !reflect.DeepEqual(parts, want) || reflect.DeepEqual(parts, clean) {
+		t.Fatalf("parts = %q, want %q", parts, want)
+	}
+	writeRepoFile(t, root, "z untracked\nfile", "two")
+	_, changed, err := client.WorktreeFingerprintParts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed[0] != parts[0] || changed[1] != parts[1] || slices.Equal(changed, parts) {
+		t.Fatalf("untracked content-only change not captured: %q -> %q", parts, changed)
+	}
+	_, repeated, err := client.WorktreeFingerprintParts(ctx)
+	if err != nil || !slices.Equal(changed, repeated) {
+		t.Fatalf("unstable fingerprint parts: %q, %v", repeated, err)
+	}
+	runGitCommand(t, root, "mv", "?? source", "renamed")
+	if err := os.Symlink("missing-target", filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+	_, parts, err = client.WorktreeFingerprintParts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(parts, fmt.Sprintf("link\x00%x", sha256.Sum256([]byte("missing-target")))) {
+		t.Fatalf("symlink target not fingerprinted: %q", parts)
+	}
+}
+
+func TestWorktreeFingerprintPartsGitErrors(t *testing.T) {
+	for _, args := range [][]string{{"rev-parse", "HEAD"}, {"status", "--porcelain=v1", "-z", "--untracked-files=all"}, {"diff", "HEAD"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			failure := errors.New("git unavailable")
+			runner := &fakeRunner{failures: map[string]error{strings.Join(append([]string{"-C", "/repo"}, args...), "\x00"): failure}}
+			head, parts, err := NewClient("/repo", runner.run).WorktreeFingerprintParts(context.Background())
+			if !errors.Is(err, failure) || head != "" || parts != nil {
+				t.Fatalf("failed fingerprint = (%q, %q, %v)", head, parts, err)
+			}
+		})
+	}
+}
 
 type call struct {
 	cwd  string

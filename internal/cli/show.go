@@ -192,6 +192,9 @@ func renderPlanDetailWithThresholds(out io.Writer, loaded planview.Plan, thresho
 		if err := renderShowSlice(out, slice, now, useColor); err != nil {
 			return err
 		}
+		if err := renderShowBlockerEvidence(out, detail, slice); err != nil {
+			return err
+		}
 	}
 
 	if len(detail.Events) > 0 {
@@ -245,6 +248,25 @@ func renderPrimaryNextAction(out io.Writer, next plan.PlanNextAction) error {
 		return err
 	}
 	return writef(out, "Reason: %s\n", next.Primary.Reason)
+}
+
+func renderShowBlockerEvidence(out io.Writer, detail *plan.PlanDetail, slice plan.Slice) error {
+	if slice.Status != plan.StatusBlocked {
+		return nil
+	}
+	for i := len(detail.Events) - 1; i >= 0; i-- {
+		event := detail.Events[i]
+		if event.Type != plan.EventTypeSliceBlocked || event.SliceID != slice.ID {
+			continue
+		}
+		if event.BlockerClassification == plan.BlockerClassificationPlanOwned {
+			return writef(out, "  Classification: plan_owned (%s)\n  Paths: %s\n",
+				planview.FormatBlockerText(event.Command).Detailed,
+				planview.FormatBlockerText(strings.Join(event.Paths, ", ")).Detailed)
+		}
+		break
+	}
+	return nil
 }
 
 func renderShowSlice(out io.Writer, slice plan.Slice, now time.Time, useColor bool) error {

@@ -45,6 +45,62 @@ func TestRunPacketIncludesSelectedSliceContext(t *testing.T) {
 	}
 }
 
+func TestRunPacketPlanOwnedFiles(t *testing.T) {
+	for _, files := range [][]string{nil, {}, {"earlier/a.go", "earlier/b.go"}} {
+		packet, err := RenderRunPacket(runPacketDetail(), RunPacketOptions{PlanOwnedFiles: files})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(files) == 0 {
+			if strings.Contains(packet, "## Plan-Owned Files") {
+				t.Fatal("empty ownership must omit the section")
+			}
+			continue
+		}
+		_, afterExpected, _ := strings.Cut(packet, "## Expected Files\n")
+		_, next, _ := strings.Cut(afterExpected, "\n## ")
+		if !strings.HasPrefix(next, "Plan-Owned Files\n- earlier/a.go\n- earlier/b.go\n") {
+			t.Fatalf("ownership section must immediately follow expected files:\n%s", packet)
+		}
+		for _, want := range []string{"changed on the plan branch by earlier slices", "declared verification command failing only in them", "in scope to fix minimally"} {
+			if !strings.Contains(next, want) {
+				t.Errorf("missing ownership guidance %q", want)
+			}
+		}
+	}
+}
+
+func TestRunPacketPlanOwnedFailureSignal(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		classification string
+		paths          []string
+		want           string
+	}{
+		{"legacy", "", []string{"a", "b"}, "blocked"},
+		{"unknown", "unknown", []string{"a", "b"}, "blocked"},
+		{"owned", BlockerClassificationPlanOwned, []string{"a", "b"}, "blocked [plan_owned: go test ./...; paths: a, b]"},
+		{"bounded", BlockerClassificationPlanOwned, []string{"a", "b", "c", "d", "e", "f", "g", "h", "i"}, "blocked [plan_owned: go test ./...; paths: a, b, c, d, e, f, g, h, …]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			event := Event{Type: EventTypeSliceBlocked, Reason: "blocked", Command: "go test ./...", Paths: tc.paths, BlockerClassification: tc.classification}
+			got, ok := runPacketFailureSignal(event)
+			if !ok || got != tc.want {
+				t.Fatalf("signal = %q, %v; want %q", got, ok, tc.want)
+			}
+			detail := runPacketDetail()
+			detail.Events = []Event{event}
+			packet, err := RenderRunPacket(detail, RunPacketOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(runPacketTelemetryFeedbackSection(packet), tc.want) {
+				t.Fatalf("packet missing failure signal:\n%s", packet)
+			}
+		})
+	}
+}
+
 func TestRunPacketRendersWorkingRootWhenProvided(t *testing.T) {
 	packet, err := RenderRunPacket(runPacketDetail(), RunPacketOptions{WorkingRoot: "/repo/.tao/worktrees/plan"})
 	if err != nil {

@@ -75,13 +75,19 @@ func TestValidatePrintsAgentBudgetWarningsWithoutFailing(t *testing.T) {
 func TestValidatePrintsGuardrailWarningsWithoutFailing(t *testing.T) {
 	var out bytes.Buffer
 	detail := validatePlanDetail(t.TempDir(), []string{"go test ./..."}, nil)
-	detail.Slices.Slices[0].ExpectedFiles = []string{"internal/..."}
-	err := App{Out: &out, Err: &out}.validate(context.Background(), fakeRepository{details: map[string]*plan.PlanDetail{"example": detail}}, []string{"example"})
+	detail.Slices.Slices[0].ExpectedFiles = []string{"internal/...", "internal/plan/validate.go"}
+	detail.State.Plan.PendingSlices = append(detail.State.Plan.PendingSlices, "002-gate")
+	detail.Slices.Slices = append(detail.Slices.Slices, plan.Slice{
+		ID: "002-gate", Status: plan.StatusPending,
+		Verification: plan.Verification{Commands: []string{"make verify"}},
+	})
+	repo := fakeRepository{details: map[string]*plan.PlanDetail{"example": detail}}
+	err := (App{Out: &out, Err: &out, Repository: func(string) Repository { return repo }}).Run(context.Background(), []string{"validate", "example"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := out.String()
-	for _, want := range []string{"Verification Findings:", "warning 001-a", "slice expected file", "verification command is broad"} {
+	for _, want := range []string{"Verification Findings:", "warning 001-a", "slice expected file", "verification command is broad", "slice 001-a changes Go files in internal/plan without a lint command while slice 002-gate declares the repository gate make verify"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected %q in output:\n%s", want, text)
 		}

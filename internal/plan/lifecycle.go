@@ -707,7 +707,7 @@ const maxBlockerNoteRunes = 16 * 1024
 
 // markSliceBlocked records a canonical exceptional stop while retaining all
 // execution and queue metadata needed to continue or recover the slice.
-func markSliceBlocked(detail *PlanDetail, sliceID string, reason string, now time.Time) (Event, bool, error) {
+func markSliceBlocked(detail *PlanDetail, sliceID string, reason string, evidence *SliceBlockedEvidence, now time.Time) (Event, bool, error) {
 	if detail == nil {
 		return Event{}, false, fmt.Errorf("plan detail is nil")
 	}
@@ -754,6 +754,15 @@ func markSliceBlocked(detail *PlanDetail, sliceID string, reason string, now tim
 	slice.Timing.LastActivityAt = new(now)
 
 	event := Event{Type: EventTypeSliceBlocked, Timestamp: now, PlanID: detail.State.Plan.ID, SliceID: sliceID, Reason: note, Message: "Slice blocked"}
+	if evidence != nil {
+		event.Command = evidence.GateCommand
+		event.Paths = normalizeBlockerPaths(evidence.FailingPaths)
+		event.HeadSHA = evidence.HeadSHA
+		event.Fingerprint = evidence.WorktreeFingerprint
+		if evidence.PlanOwned && event.HeadSHA != "" && event.Fingerprint != "" {
+			event.BlockerClassification = BlockerClassificationPlanOwned
+		}
+	}
 	return event, appendEvent, nil
 }
 
@@ -795,7 +804,7 @@ func markSliceBudgetBlocked(detail *PlanDetail, sliceID string, reason string, n
 		slice.Timing.CompletedAt = nil
 		slice.Timing.DurationSeconds = nil
 	}
-	return markSliceBlocked(detail, sliceID, reason, now)
+	return markSliceBlocked(detail, sliceID, reason, nil, now)
 }
 
 // markBlockedContinued selects the blocked/current slice and marks plan-owned lifecycle back in progress.

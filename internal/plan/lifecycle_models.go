@@ -953,6 +953,18 @@ type PlanNextAction struct {
 	Alternatives []PlanAction `json:"alternatives"`
 }
 
+const BlockerClassificationPlanOwned = "plan_owned"
+
+// SliceBlockedEvidence carries caller-collected verification evidence. Git-based
+// ownership must be established by the caller, not inferred from blocker prose.
+type SliceBlockedEvidence struct {
+	GateCommand         string
+	FailingPaths        []string
+	PlanOwned           bool
+	HeadSHA             string
+	WorktreeFingerprint string
+}
+
 // Event is one append-only lifecycle entry from events.jsonl.
 type Event struct {
 	Type                  string                       `json:"type"`
@@ -977,6 +989,8 @@ type Event struct {
 	SingleMergeStartup    *SingleMergeStartupFailure   `json:"single_merge_startup,omitempty"`
 	FinalizationFailure   *FinalizationFailure         `json:"finalization_failure,omitempty"`
 	Command               string                       `json:"command,omitempty"`
+	Paths                 []string                     `json:"paths,omitempty"`
+	BlockerClassification string                       `json:"blocker_classification,omitempty"`
 	HeadSHA               string                       `json:"head_sha,omitempty"`
 	CorrectedCommand      string                       `json:"corrected_command,omitempty"`
 	Result                string                       `json:"result,omitempty"`

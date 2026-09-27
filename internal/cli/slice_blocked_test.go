@@ -3,6 +3,11 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,8 +16,222 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/agentinput"
+	"github.com/iamseth/tao/internal/commandrunner"
+	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/run"
 )
+
+func TestSliceBlockedGateEvidence(t *testing.T) {
+	for _, mode := range []string{"owned", "outside path", "empty root", "missing root", "file root", "empty base", "bad base", "not git", "fingerprint error", "both groups"} {
+		t.Run(mode, func(t *testing.T) {
+			root := initTestGitRepo(t)
+			runCLICommitGit(t, root, "config", "user.name", "Test")
+			runCLICommitGit(t, root, "config", "user.email", "test@example.com")
+			runCLICommitGit(t, root, "commit", "--allow-empty", "-m", "base")
+			base := runCLICommitGit(t, root, "rev-parse", "HEAD")
+			if err := os.WriteFile(filepath.Join(root, "owned.go"), []byte("owned\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runCLICommitGit(t, root, "add", ".")
+			runCLICommitGit(t, root, "commit", "-m", "plan work")
+			fixture := newStartedSliceBlockedFixture(t)
+			detail := resolveSliceBlockedDetail(t, fixture.dir)
+			detail.State.Repo.BaseCommit = base
+			detail.Slices.Slices[0].ExecutionRoot = root
+			verified := mode == "owned" || mode == "outside path" || mode == "both groups"
+			switch mode {
+			case "empty root":
+				detail.Slices.Slices[0].ExecutionRoot = ""
+			case "missing root":
+				detail.Slices.Slices[0].ExecutionRoot = filepath.Join(root, "missing")
+			case "file root":
+				detail.Slices.Slices[0].ExecutionRoot = filepath.Join(root, "owned.go")
+			case "empty base":
+				detail.State.Repo.BaseCommit = ""
+			case "bad base":
+				detail.State.Repo.BaseCommit = "nonexistent-base"
+			case "not git":
+				detail.Slices.Slices[0].ExecutionRoot = t.TempDir()
+			}
+			for name, value := range map[string]any{"state.json": detail.State, "slices.json": detail.Slices} {
+				data, err := json.Marshal(value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(fixture.dir, name), data, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			args := []string{"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--reason-file", writeSliceBlockedReason(t, "lint failed"), "--gate-command", " go test ./... ", "--failing-path", ` .\owned.go `}
+			wantPaths := []string{"owned.go"}
+			if mode == "outside path" {
+				args = append(args, "--failing-path", "outside.go")
+				wantPaths = []string{"outside.go", "owned.go"}
+			}
+			if mode == "both groups" {
+				args = append(args, "--invalid-command", "go test ./missing", "--invalid-reason", "missing package")
+			}
+			var out, warnings bytes.Buffer
+			app := App{Out: &out, Err: &warnings}
+			if mode == "fingerprint error" {
+				app.CommandRunner = func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+					if strings.HasSuffix(strings.Join(args, " "), "diff HEAD") {
+						return errors.New("diff failed")
+					}
+					return commandrunner.DefaultLocal(ctx, cwd, name, args, stdout, stderr)
+				}
+			}
+			if err := app.Run(context.Background(), args); err != nil {
+				t.Fatal(err)
+			}
+			detail = resolveSliceBlockedDetail(t, fixture.dir)
+			event := requireSliceBlockedEvent(t, detail.Events, "001-a")
+			if event.Command != "go test ./..." || !reflect.DeepEqual(event.Paths, wantPaths) {
+				t.Fatalf("gate evidence = %#v", event)
+			}
+			wantOwned := verified && mode != "outside path"
+			if (event.BlockerClassification == plan.BlockerClassificationPlanOwned) != wantOwned {
+				t.Fatalf("classification = %q, want owned %t", event.BlockerClassification, wantOwned)
+			}
+			if verified {
+				head, parts, err := gitops.NewClient(root, nil).WorktreeFingerprintParts(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if event.HeadSHA != head || event.Fingerprint != plan.WorktreeFingerprint(append([]string{head}, parts...)...) || warnings.Len() != 0 {
+					t.Fatalf("fingerprint evidence = %#v, warnings = %q", event, warnings.String())
+				}
+			} else if event.HeadSHA != "" || event.Fingerprint != "" || !strings.Contains(warnings.String(), "ownership could not be verified") {
+				t.Fatalf("unverified evidence = %#v, warnings = %q", event, warnings.String())
+			}
+			if mode == "both groups" && countSliceBlockedEvents(detail.Events, plan.EventTypeVerificationCommandInvalid, "001-a") != 1 {
+				t.Fatal("invalid-command evidence missing")
+			}
+		})
+	}
+}
+
+func TestSliceBlockedNonASCIIPathRefusesUnchangedContinue(t *testing.T) {
+	clearTaoEnv(t)
+	ctx := context.Background()
+	root := initTestGitRepo(t)
+	runCLICommitGit(t, root, "config", "user.name", "Test")
+	runCLICommitGit(t, root, "config", "user.email", "test@example.com")
+	runCLICommitGit(t, root, "config", "core.quotePath", "true")
+	runCLICommitGit(t, root, "commit", "--allow-empty", "-m", "base")
+	base := strings.TrimSpace(runCLICommitGit(t, root, "rev-parse", "HEAD"))
+	repoRoot := root
+	root = filepath.Join(t.TempDir(), "worktree")
+	const branch = "feature/non-ascii"
+	runCLICommitGit(t, repoRoot, "worktree", "add", "-b", branch, root)
+	const path = "café.go"
+	if err := os.WriteFile(filepath.Join(root, path), []byte("package cafe\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runCLICommitGit(t, root, "add", ".")
+	runCLICommitGit(t, root, "commit", "-m", "plan work")
+	fixture := newStartedSliceBlockedFixture(t)
+	detail := resolveSliceBlockedDetail(t, fixture.dir)
+	head := strings.TrimSpace(runCLICommitGit(t, root, "rev-parse", "HEAD"))
+	detail.State.Repo.Root, detail.State.Repo.BaseCommit = repoRoot, base
+	detail.State.Workspace = &plan.Workspace{
+		Strategy: plan.WorkspaceStrategyWorktree, Root: filepath.Dir(root), Path: root,
+		Branch: branch, HeadSHA: head, LifecycleStatus: plan.WorkspaceStatusReady,
+	}
+	detail.Slices.Slices[0].ExecutionRoot = root
+	detail.Slices.Slices[0].ExecutionStart = &plan.SliceExecutionStart{
+		Branch: branch, Head: head, CommitPolicy: "slice", WorkspaceStrategy: plan.WorkspaceStrategyWorktree,
+	}
+	for name, value := range map[string]any{"state.json": detail.State, "slices.json": detail.Slices} {
+		data, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(fixture.dir, name), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out bytes.Buffer
+	app := App{Out: &out, Err: &out, ProcessStarter: func(context.Context, string, string, []string) (run.Process, error) {
+		t.Error("unchanged blocker must not start an agent")
+		return nil, errors.New("unexpected agent handoff")
+	}}
+	if err := app.Run(ctx, []string{"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--reason-file", writeSliceBlockedReason(t, "lint failed"), "--gate-command", "go test ./...", "--failing-path", path}); err != nil {
+		t.Fatal(err)
+	}
+	blocked := resolveSliceBlockedDetail(t, fixture.dir)
+	event := requireSliceBlockedEvent(t, blocked.Events, "001-a")
+	if event.BlockerClassification != plan.BlockerClassificationPlanOwned || !reflect.DeepEqual(event.Paths, []string{path}) || event.Fingerprint == "" {
+		t.Errorf("non-ASCII ownership evidence = %#v", event)
+	}
+	err := app.run(ctx, plan.NewFileRepository(fixture.root), []string{"--continue", "--execution-mode", "isolated", "--commit-policy", "slice", "--no-review", fixture.id})
+	if !errors.Is(err, run.ErrCannotStart) || !strings.Contains(err.Error(), "blocker unchanged") || !strings.Contains(err.Error(), "fix required in "+path) {
+		t.Fatalf("expected unchanged non-ASCII blocker refusal, got %v", err)
+	}
+	after := resolveSliceBlockedDetail(t, fixture.dir)
+	if !reflect.DeepEqual(blocked.State, after.State) || !reflect.DeepEqual(blocked.Slices, after.Slices) || !reflect.DeepEqual(blocked.Events, after.Events) {
+		t.Fatal("unchanged blocker refusal mutated plan")
+	}
+}
+
+func TestSliceBlockedGateEvidenceValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"gate alone", []string{"--gate-command", "lint"}, "--gate-command and --failing-path are required together"},
+		{"path alone", []string{"--failing-path", "a.go"}, "--gate-command and --failing-path are required together"},
+		{"empty gate", []string{"--gate-command", " ", "--failing-path", "a.go"}, "--gate-command and --failing-path are required together"},
+		{"empty path", []string{"--gate-command", "lint", "--failing-path", " "}, "failing path must not be empty"},
+		{"gate bound", []string{"--gate-command", strings.Repeat("x", agentinput.MaxTextRunes+1), "--failing-path", "a.go"}, "gate command exceeds"},
+		{"path bound", []string{"--gate-command", "lint", "--failing-path", strings.Repeat("x", agentinput.MaxTextRunes+1)}, "failing path exceeds"},
+	}
+	many := []string{"--gate-command", "lint"}
+	for i := range 65 {
+		many = append(many, "--failing-path", fmt.Sprintf("file%d.go", i))
+	}
+	tests = append(tests, struct {
+		name string
+		args []string
+		want string
+	}{"path count", many, "at most 64 failing paths"})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newStartedSliceBlockedFixture(t)
+			before := resolveSliceBlockedDetail(t, fixture.dir)
+			args := append([]string{"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--reason-file", writeSliceBlockedReason(t, "blocked")}, tt.args...)
+			app := App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}
+			if err := app.Run(context.Background(), args); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want %q", err, tt.want)
+			}
+			after := resolveSliceBlockedDetail(t, fixture.dir)
+			if !reflect.DeepEqual(before.State, after.State) || !reflect.DeepEqual(before.Slices, after.Slices) || !reflect.DeepEqual(before.Events, after.Events) {
+				t.Fatal("invalid gate evidence mutated plan")
+			}
+		})
+	}
+}
+
+func TestSliceBlockedGateEvidenceAcceptsPathLimit(t *testing.T) {
+	fs := flag.NewFlagSet("slice-blocked", flag.ContinueOnError)
+	registerSliceBlockedFlags(fs)
+	args := []string{"--gate-command", " lint "}
+	for i := range 64 {
+		args = append(args, "--failing-path", fmt.Sprintf(" file%d.go ", i))
+	}
+	if err := fs.Parse(args); err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := parseSliceBlockedGateEvidence(fs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence.GateCommand != "lint" || len(evidence.FailingPaths) != 64 || evidence.FailingPaths[63] != "file63.go" {
+		t.Fatalf("parsed evidence = %#v", evidence)
+	}
+}
 
 func TestSliceBlockedCommandBlocksCurrentSlice(t *testing.T) {
 	fixture := newStartedSliceBlockedFixture(t)
@@ -208,6 +427,8 @@ func TestSliceBlockedCommandHelpAndMetadataDerivedCompletion(t *testing.T) {
 	for _, want := range []string{
 		"slice-blocked:Block a slice after an exceptional stop",
 		"--reason-file[file containing the blocker reason]",
+		"--gate-command[failing verification gate command]",
+		"*--failing-path[repository-relative failing path (repeatable)]",
 		"--corrected-command[mechanically equivalent corrected verification command]",
 	} {
 		if !strings.Contains(out.String(), want) {

@@ -138,6 +138,8 @@ Use `slices[].verification.source`, when present, to understand why commands wer
 
 for the selected slice.
 
+If a declared verification command fails only in files listed under Plan-Owned Files in the run packet, treat the fix as in scope, make the minimal change, rerun the command, and continue; do not block for that reason.
+
 If a verification command fails:
 
 1. Attempt to fix the issue if it is clearly within scope.
@@ -146,7 +148,7 @@ If a verification command fails:
 4. If you can infer a mechanically equivalent corrected command, run it once. Record both the original invalid command result and the corrected command result in `verification_results`.
 5. If the corrected command passes, continue to successful completion using the corrected result.
 6. If still failing, write a clear blocker reason to a temporary file outside the repository.
-7. Run `tao slice-blocked --plan-dir "{{ .PlanDir }}" --slice-id "<selected slice id>" --reason-file "<reason file>"`. If the original verification command was invalid, add `--invalid-command "<original command>" --invalid-reason "<why it was invalid>"` and, when applicable, `--corrected-command "<corrected command>"` to that same invocation.
+7. Run `tao slice-blocked --plan-dir "{{ .PlanDir }}" --slice-id "<selected slice id>" --reason-file "<reason file>"`. If the original verification command was invalid, add `--invalid-command "<original command>" --invalid-reason "<why it was invalid>"` and, when applicable, `--corrected-command "<corrected command>"` to that same invocation. A verification failure confined to specific files must add `--gate-command "<failed command>"` and one `--failing-path <path>` per file so Tao can verify ownership.
 8. Stop. Do not commit broken work unless the user explicitly asked for a WIP commit.
 
 ## After successful implementation
