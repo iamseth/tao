@@ -287,6 +287,40 @@ func TestRenderReviewPromptChecksReviewFocusLines(t *testing.T) {
 	}
 }
 
+func TestRenderReviewPromptRequiresRegressionEvidenceForFixPlans(t *testing.T) {
+	evidence := []string{
+		"- Confirm the scoped diff adds or extends a test that exercises the symptom named in the plan intent.",
+		"- Confirm the completed slice notes in `slices.json` record the failing-first run of that test.",
+		"Slice notes are agent-authored evidence and cannot substitute for the test being present in the diff.",
+		"Missing either the symptom-exercising test or its failing-first record is a finding under the existing severity rules.",
+		"- State explicitly in the prose review whether you ran the before-and-after comparison yourself; if not, state that you relied on the diff and the slice notes.",
+	}
+	for _, tt := range []struct {
+		name string
+		data Data
+		want bool
+	}{
+		{name: "fix", data: Data{ChangeType: "fix"}, want: true},
+		{name: "docs", data: Data{ChangeType: "docs"}},
+		{name: "untyped", data: Data{}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Render(PromptReview, tt.data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, text := range evidence {
+				if strings.Contains(got, text) != tt.want {
+					t.Errorf("regression evidence %q presence: want %t", text, tt.want)
+				}
+			}
+			if tt.want {
+				t.Logf("rendered fix review prompt:\n%s", got)
+			}
+		})
+	}
+}
+
 func TestRenderReviewProposalCorrectionCannotChangeSubstantiveReview(t *testing.T) {
 	got, err := Render(PromptReview, Data{PlanID: "plan-a", Base: "base123", Head: "head456", ChangeType: "fix", ProposalOnly: true})
 	if err != nil {
@@ -304,7 +338,7 @@ func TestRenderReviewProposalCorrectionCannotChangeSubstantiveReview(t *testing.
 			t.Fatalf("rendered correction prompt missing %q:\n%s", want, got)
 		}
 	}
-	for _, forbidden := range []string{"Assess the scoped diff", "Review criteria", "reasonable user", "Declined to judge", "Review Focus", "tao-review-json\n{\n  \"verdict\""} {
+	for _, forbidden := range []string{"Assess the scoped diff", "Review criteria", "reasonable user", "Declined to judge", "Review Focus", "failing-first run", "before-and-after comparison", "tao-review-json\n{\n  \"verdict\""} {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("rendered correction prompt retained substantive review instruction %q:\n%s", forbidden, got)
 		}

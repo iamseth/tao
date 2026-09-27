@@ -85,6 +85,13 @@ Assess the scoped diff for:
 - Test coverage: verification is meaningful for the changed behavior and important edge cases.
 - Simplicity: solution is understandable, maintainable, and avoids unnecessary complexity.
 
+{{ if eq .ChangeType "fix" }}
+- Confirm the scoped diff adds or extends a test that exercises the symptom named in the plan intent.
+- Confirm the completed slice notes in `slices.json` record the failing-first run of that test.
+  Slice notes are agent-authored evidence and cannot substitute for the test being present in the diff.
+  Missing either the symptom-exercising test or its failing-first record is a finding under the existing severity rules.
+- State explicitly in the prose review whether you ran the before-and-after comparison yourself; if not, state that you relied on the diff and the slice notes.
+{{ end }}
 For behavior the plan does not name, judge by what a reasonable user of the software would expect. Grade each issue by its effect on that user, not by whether the plan mentions the trigger.
 
 ## Output format
