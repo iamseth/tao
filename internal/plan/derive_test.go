@@ -2,6 +2,7 @@ package plan
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -997,11 +998,12 @@ func TestDeriveNextActionLifecyclePrecedence(t *testing.T) {
 	}
 
 	tests := []struct {
-		name       string
-		makeDetail func() *PlanDetail
-		wantKind   PlanActionKind
-		wantClass  PlanActionClass
-		wantReason string
+		name             string
+		makeDetail       func() *PlanDetail
+		wantKind         PlanActionKind
+		wantClass        PlanActionClass
+		wantReason       string
+		wantAlternatives []PlanAction
 	}{
 		{
 			name: "unsettled post-intent outranks approval and merge evidence",
@@ -1070,6 +1072,39 @@ func TestDeriveNextActionLifecyclePrecedence(t *testing.T) {
 			wantKind:   PlanActionRework, wantClass: PlanActionClassProgress, wantReason: "actionable changes",
 		},
 		{
+			name: "comment with findings",
+			makeDetail: func() *PlanDetail {
+				d := complete()
+				d.State.Plan.Review = &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictComment, Findings: []ReviewFinding{{Message: "clarify the boundary"}, {Message: "add coverage"}}}
+				return d
+			},
+			wantKind: PlanActionRework, wantClass: PlanActionClassProgress,
+			wantReason: "the current review is a comment verdict with 2 findings; automatic rework does not consume comment findings, so reopen with tao rework",
+			wantAlternatives: []PlanAction{
+				{Kind: PlanActionReview, Class: PlanActionClassProgress, Command: "tao review --run plan", Reason: "refresh the review when the plan head has changed"},
+				{Kind: PlanActionMerge, Class: PlanActionClassAdministrative, Command: "tao merge --force plan", Reason: "administrative exception that bypasses review and merge safeguards"},
+			},
+		},
+		{
+			name: "comment without findings",
+			makeDetail: func() *PlanDetail {
+				d := complete()
+				d.State.Plan.Review = &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictComment}
+				return d
+			},
+			wantKind: PlanActionReview, wantClass: PlanActionClassProgress, wantReason: "completed slice work needs a current approved review",
+		},
+		{
+			name: "known edge unresolved rework stop still outranks fresh comment with findings",
+			makeDetail: func() *PlanDetail {
+				d := complete()
+				d.State.Plan.Review = &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictComment, Findings: []ReviewFinding{{Message: "clarify the boundary"}}}
+				d.Events = []Event{{Type: EventTypeReworkStopped}, {Type: EventTypePlanReviewed}}
+				return d
+			},
+			wantKind: PlanActionRestartRework, wantClass: PlanActionClassRecovery, wantReason: "explicit bounded restart",
+		},
+		{
 			name:       "reviewed and approved",
 			makeDetail: func() *PlanDetail { d := complete(); d.State.Plan.Review = approve(); return d },
 			wantKind:   PlanActionMerge, wantClass: PlanActionClassProgress, wantReason: "approves",
@@ -1104,6 +1139,9 @@ func TestDeriveNextActionLifecyclePrecedence(t *testing.T) {
 			}
 			if action.Primary.Reason == "" {
 				t.Fatal("primary recommendation must always carry one concise reason")
+			}
+			if tt.wantAlternatives != nil && !reflect.DeepEqual(action.Alternatives, tt.wantAlternatives) {
+				t.Fatalf("alternatives = %+v, want %+v", action.Alternatives, tt.wantAlternatives)
 			}
 		})
 	}
@@ -1181,6 +1219,7 @@ func TestDeriveNextActionUsesCurrentReviewForPendingPullRequestIntent(t *testing
 	}{
 		{name: "missing review", wantKind: PlanActionReview, wantCommand: "tao review --run plan"},
 		{name: "comment review", review: &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictComment}, wantKind: PlanActionReview, wantCommand: "tao review --run plan"},
+		{name: "comment with findings", review: &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictComment, Findings: []ReviewFinding{{Message: "clarify the boundary"}}}, wantKind: PlanActionRework, wantCommand: "tao rework plan"},
 		{name: "error review", review: &PlanReview{Status: ReviewStatusError}, wantKind: PlanActionReview, wantCommand: "tao review --run plan"},
 		{name: "changes requested", review: &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictChangesRequested}, wantKind: PlanActionRework, wantCommand: "tao rework plan"},
 		{name: "changes requested after rework stop", review: &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictChangesRequested}, events: []Event{{Type: EventTypeReworkStopped}}, wantKind: PlanActionRestartRework, wantCommand: "tao run --rework-restart plan"},
@@ -1196,6 +1235,9 @@ func TestDeriveNextActionUsesCurrentReviewForPendingPullRequestIntent(t *testing
 			action := DeriveNextAction(detail).Primary
 			if action.Kind != test.wantKind || action.Class != PlanActionClassRecovery || action.Command != test.wantCommand {
 				t.Fatalf("pending-intent action = %#v, want kind %q recovery command %q", action, test.wantKind, test.wantCommand)
+			}
+			if test.name == "comment with findings" && action.Reason != "an interrupted pull-request handoff no longer has a current approval; the current review is a comment verdict with 1 findings" {
+				t.Fatalf("pending-intent comment reason = %q", action.Reason)
 			}
 		})
 	}

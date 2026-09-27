@@ -1,6 +1,7 @@
 package rework
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,6 +13,79 @@ import (
 	"github.com/iamseth/tao/internal/forge"
 	"github.com/iamseth/tao/internal/plan"
 )
+
+func TestGateAcceptsCommentReviewWithFindings(t *testing.T) {
+	detail := actionableDriverDetail(0)
+	detail.State.Status = plan.StatusReviewed
+	detail.State.Plan.Review.Verdict = plan.ReviewVerdictComment
+
+	if err := Gate(detail, ReviewFindings(detail)); err != nil {
+		t.Fatalf("Gate refused comment review with findings: %v", err)
+	}
+}
+
+func TestGateRefusesCommentReviewWithoutFindings(t *testing.T) {
+	detail := actionableDriverDetail(0)
+	detail.State.Status = plan.StatusReviewed
+	detail.State.Plan.Review.Verdict = plan.ReviewVerdictComment
+	detail.State.Plan.Review.Findings = nil
+
+	err := Gate(detail, ReviewFindings(detail))
+	var refusal *RefusalError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("Gate error = %v, want RefusalError", err)
+	}
+	for _, want := range []string{"comment", "tao review --run plan", "changed head"} {
+		if !strings.Contains(refusal.Message, want) {
+			t.Errorf("Gate refusal %q does not contain %q", refusal.Message, want)
+		}
+	}
+}
+
+func TestGateRefusesApprovedReviewWithFindings(t *testing.T) {
+	detail := actionableDriverDetail(0)
+	detail.State.Status = plan.StatusReviewed
+	detail.State.Plan.Review.Verdict = plan.ReviewVerdictApprove
+
+	err := Gate(detail, ReviewFindings(detail))
+	var refusal *RefusalError
+	if !errors.As(err, &refusal) || !strings.Contains(refusal.Message, "expected changes_requested") {
+		t.Fatalf("Gate error = %v, want approved-review refusal", err)
+	}
+}
+
+func TestReopenCommentReviewGeneratesSameSlicesAsChangesRequested(t *testing.T) {
+	now := time.Date(2026, 9, 27, 21, 0, 0, 0, time.UTC)
+	var want []plan.Slice
+	for _, verdict := range []string{plan.ReviewVerdictChangesRequested, plan.ReviewVerdictComment} {
+		detail := actionableDriverDetail(0)
+		detail.State.Plan.Review.Verdict = verdict
+		if verdict == plan.ReviewVerdictComment {
+			detail.State.Status = plan.StatusReviewed
+		}
+		detail.Slices.Slices = []plan.Slice{{ID: "001-original", Status: plan.StatusCompleted}}
+		record := &driverRecord{detail: detail}
+
+		got, err := Reopen(record, now)
+		if err != nil {
+			t.Fatalf("Reopen(%s): %v", verdict, err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("Reopen(%s) generated %d slices, want 1", verdict, len(got))
+		}
+		if got[0].ID != "r101-internal-rework-driver-round-0-go" || !strings.HasPrefix(got[0].Context, "Generated from a persisted plan review finding.") {
+			t.Fatalf("Reopen(%s) slice shape = %+v", verdict, got[0])
+		}
+		if detail.State.Status != plan.StatusInProgress || !reflect.DeepEqual(detail.Slices.Slices[1:], got) {
+			t.Fatalf("Reopen(%s) did not persist generated slices: %+v", verdict, detail)
+		}
+		if verdict == plan.ReviewVerdictChangesRequested {
+			want = got
+		} else if !reflect.DeepEqual(got, want) {
+			t.Fatalf("comment slices = %+v, want changes_requested slices %+v", got, want)
+		}
+	}
+}
 
 func TestRoundFromSliceID(t *testing.T) {
 	tests := []struct {

@@ -27,6 +27,8 @@ type RefusalError struct{ Message string }
 func (e *RefusalError) Error() string { return e.Message }
 
 // Gate checks whether a plan may be reopened through the ordinary, non-forced path.
+// Completed changes_requested and comment reviews with non-empty findings are
+// reworkable; approved reviews remain force-only.
 func Gate(detail *plan.PlanDetail, findings []plan.ReviewFinding) error {
 	id := planID(detail)
 	if detail == nil {
@@ -45,7 +47,9 @@ func Gate(detail *plan.PlanDetail, findings []plan.ReviewFinding) error {
 	if review.Status != "" && review.Status != plan.ReviewStatusCompleted {
 		return refuse(fmt.Sprintf("rework refused: plan %s review status is %s; expected %s", id, review.Status, plan.ReviewStatusCompleted))
 	}
-	if review.Verdict != plan.ReviewVerdictChangesRequested {
+	if review.Verdict == plan.ReviewVerdictComment && len(findings) == 0 {
+		return refuse(fmt.Sprintf("rework refused: plan %s review verdict is comment with no findings to convert; run `tao review --run %s` on a changed head", id, id))
+	} else if review.Verdict != plan.ReviewVerdictChangesRequested && review.Verdict != plan.ReviewVerdictComment {
 		return refuse(fmt.Sprintf("rework refused: plan %s review verdict is %s; expected %s", id, displayField(review.Verdict), plan.ReviewVerdictChangesRequested))
 	}
 	if len(findings) == 0 {

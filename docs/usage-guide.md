@@ -667,9 +667,11 @@ proposal before opening a PR or merging. The reviewer already inspecting the
 exact base/head diff supplies that proposal; Tao validates and binds it to the
 review instead of opening a merge-time message session. An approval with a
 missing, malformed, oversized, or reserved-trailer proposal is safely downgraded
-to a non-approving `comment`, so it cannot authorize merge. If you make follow-up
-commits, amend the branch, or otherwise change the diff after the recorded
-review, run `tao review --run <plan-id>` to refresh both review and proposal
+to a non-approving `comment`, so it cannot authorize merge. Such a downgraded
+review keeps its findings and can be reopened with `tao rework` when findings
+remain, or refreshed with `tao review --run` after the head changes. If you make
+follow-up commits, amend the branch, or otherwise change the diff after the
+recorded review, run `tao review --run <plan-id>` to refresh both review and proposal
 against current `HEAD`. Use `tao staleness <plan-id>` for the separate base-commit
 drift check on pending work.
 
@@ -801,14 +803,22 @@ plan for the fixes.
   unresolved threads on the recorded Tao-created pull request, not for findings
   in Tao's persisted review.
 
+A `comment` verdict never authorizes merge. When a completed comment review
+carries findings, `tao show` recommends `tao rework <plan-id>`, which converts
+them into rework slices without `--force`;
+automatic rework does not consume comment findings.
+A comment without findings (for example, a parser fallback or an approval whose
+proposal was unusable) needs `tao review --run <plan-id>` after the head changes.
+
 Without `--from-pr`, `tao rework <plan-id>` is the manual form for a persisted
-`changes_requested` review with actionable findings.
+`changes_requested` or `comment` review with actionable findings.
 
 Without `--from-pr`, `tao rework` is gated and non-mutating on refusal. It
-refuses unless the plan is reviewed, the persisted review requested changes,
-and Tao can find actionable findings; approved reviews, reviews with no
-findings, and unfinished plans are left untouched. Use `--force` only when you
-intentionally want to bypass those ordinary review gates.
+refuses unless the plan is reviewed, the persisted review is completed with a
+`changes_requested` or `comment` verdict, and Tao can find actionable findings;
+approved reviews, reviews with no findings, and unfinished plans are left
+untouched. Use `--force` only when you intentionally want to bypass those
+ordinary review gates.
 
 **What it does:** Tao deterministically maps each structured finding to one new
 pending rework slice, preserving the finding's goal, files, and tasks when
@@ -1323,6 +1333,7 @@ chose manual control, inspect the review and reopen explicitly:
 
 ```sh
 tao review <plan-id>
+# The same tao rework command applies to a comment review with findings.
 tao rework <plan-id>        # inspect generated slices before running
 # or: tao rework --run <plan-id>
 ```

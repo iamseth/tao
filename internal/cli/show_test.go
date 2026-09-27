@@ -878,6 +878,28 @@ func TestRenderPlanDetailProminentlyShowsReasonAndSubordinateAlternatives(t *tes
 	}
 }
 
+func TestShowCommentReviewWithFindingsRecommendsRework(t *testing.T) {
+	detail := &plan.PlanDetail{
+		State: plan.State{Status: plan.StatusReviewed, Plan: plan.PlanState{
+			ID: "plan-a", Title: "Plan A", CompletedSlices: []string{"001-a"},
+			Review: &plan.PlanReview{
+				Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictComment,
+				Findings: []plan.ReviewFinding{{Message: "clarify the boundary"}},
+			},
+		}},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "001-a", Status: plan.StatusCompleted}}},
+	}
+	loaded := planview.Plan{Detail: detail, Derived: plan.Derive(detail, time.Time{}), Now: time.Now()}
+	var out bytes.Buffer
+	if err := renderPlanDetail(&out, loaded); err != nil {
+		t.Fatal(err)
+	}
+	text := stripANSI(out.String())
+	if !strings.Contains(text, "Next: tao rework plan-a\nReason: the current review is a comment verdict with 1 findings;") {
+		t.Fatalf("expected comment verdict to explain the rework recommendation:\n%s", text)
+	}
+}
+
 func TestRenderPrimaryNextActionShowsRecoveryInstruction(t *testing.T) {
 	var out bytes.Buffer
 	next := plan.PlanNextAction{Primary: plan.PlanAction{

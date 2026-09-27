@@ -108,7 +108,7 @@ func deriveNextAction(detail *PlanDetail, derived DerivedPlan) PlanNextAction {
 		id = "<plan>"
 	}
 	command := func(name string) string { return name + " " + id }
-	primary := func(kind PlanActionKind, class PlanActionClass, cmd, reason string, alternatives ...PlanAction) PlanNextAction {
+	primary := func(kind PlanActionKind, class PlanActionClass, cmd, reason string, alternatives ...PlanAction) PlanNextAction { //nolint:unparam // Nested recovery calls obscure the progress and terminal callers below.
 		if alternatives == nil {
 			alternatives = []PlanAction{}
 		}
@@ -135,6 +135,9 @@ func deriveNextAction(detail *PlanDetail, derived DerivedPlan) PlanNextAction {
 				return primary(PlanActionRestartRework, PlanActionClassRecovery, command("tao run --rework-restart"), reason+"; the actionable review is behind a stopped automatic rework cycle")
 			}
 			return primary(PlanActionRework, PlanActionClassRecovery, command("tao rework"), reason+"; the current review has actionable changes")
+		}
+		if review != nil && review.Status == ReviewStatusCompleted && review.Verdict == ReviewVerdictComment && len(review.Findings) > 0 {
+			return primary(PlanActionRework, PlanActionClassRecovery, command("tao rework"), reason+"; the current review is a comment verdict with "+strconv.Itoa(len(review.Findings))+" findings")
 		}
 		return primary(PlanActionReview, PlanActionClassRecovery, command("tao review --run"), reason+"; record a fresh current review before any pull-request mutation")
 	}
@@ -316,6 +319,9 @@ func deriveNextAction(detail *PlanDetail, derived DerivedPlan) PlanNextAction {
 		return primary(PlanActionRework, PlanActionClassProgress, command("tao rework"), "the current review has actionable changes", administrativeMerge)
 	case review != nil && review.IsApproved():
 		return primary(PlanActionMerge, PlanActionClassProgress, command("tao merge"), "the current review approves the completed plan", administrativeMerge)
+	case review != nil && review.Status == ReviewStatusCompleted && review.Verdict == ReviewVerdictComment && len(review.Findings) > 0:
+		return primary(PlanActionRework, PlanActionClassProgress, command("tao rework"), "the current review is a comment verdict with "+strconv.Itoa(len(review.Findings))+" findings; automatic rework does not consume comment findings, so reopen with tao rework",
+			PlanAction{Kind: PlanActionReview, Class: PlanActionClassProgress, Command: command("tao review --run"), Reason: "refresh the review when the plan head has changed"}, administrativeMerge)
 	case derived.Complete || status == StatusInReview || status == StatusReviewed:
 		return primary(PlanActionReview, PlanActionClassProgress, command("tao review --run"), "completed slice work needs a current approved review", administrativeMerge)
 	default:

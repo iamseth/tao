@@ -172,6 +172,25 @@ func TestDriverDecideReturnsZeroForNonActionablePlan(t *testing.T) {
 	}
 }
 
+func TestDecideIgnoresCommentReviewWithFindings(t *testing.T) {
+	detail := actionableDriverDetail(0)
+	detail.State.Status = plan.StatusReviewed
+	detail.State.Plan.Review.Verdict = plan.ReviewVerdictComment
+	detail.Slices.Slices = []plan.Slice{{ID: "001-original", Status: plan.StatusCompleted}}
+	driver := Driver{Resolve: fixedDriverResolver(detail), Record: fixedAutomaticRecordFactory}
+
+	got, err := driver.Decide(context.Background(), "plan", 0, 0, "", 3, plan.AgentBudgetThresholds{})
+	if err != nil {
+		t.Fatalf("Decide returned error: %v", err)
+	}
+	if !reflect.DeepEqual(got, Decision{}) {
+		t.Fatalf("Decide = %+v, want zero decision", got)
+	}
+	if hasDriverEvent(detail.Events, plan.EventTypeReworkStopped) {
+		t.Fatal("comment review recorded an automatic rework stop")
+	}
+}
+
 func TestDriverDecideStopsAtCapUsingRoundBaseline(t *testing.T) {
 	detail := actionableDriverDetail(5)
 	driver := Driver{Resolve: fixedDriverResolver(detail), Record: fixedAutomaticRecordFactory}
