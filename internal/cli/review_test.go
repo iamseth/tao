@@ -356,10 +356,11 @@ func TestAuxiliaryGeneratorsInheritBaseModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := App{Out: io.Discard, Err: io.Discard, CommandRunner: reviewFakeRunner(nil, nil)}
-	generator, err := app.planGenerator(defaults)
+	config, err := defaults.runConfig(runtimeconfig.RunOptionsPatch{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	generator := app.planGenerator(config.ResolvedOptions())
 	if got := generator.(*planning.Service).Model; got != "provider/base" {
 		t.Fatalf("planning model = %q", got)
 	}

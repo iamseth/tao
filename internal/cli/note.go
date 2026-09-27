@@ -625,10 +625,7 @@ func (a App) noteRun(ctx context.Context, registered taodata.Repo, repo NoteRepo
 	if err != nil {
 		return err
 	}
-	generator, err := a.planGenerator(inputs.defaults)
-	if err != nil {
-		return err
-	}
+	generator := a.planGenerator(request.ResolvedRunOptions)
 	skipPermissions := inputs.skipPermissions
 	if err := a.requireHealthyNoteRepository(ctx, registered); err != nil {
 		return err
@@ -705,18 +702,14 @@ func (a App) noteRun(ctx context.Context, registered taodata.Repo, repo NoteRepo
 	return a.executeResolvedRun(ctx, planRepo, generated.Allocation.ID, request, skipPermissions, runtimeconfig.AutoReworkPolicy{}, false, true)
 }
 
-func (a App) planGenerator(defaults envDefaults) (PlanGenerator, error) {
+func (a App) planGenerator(options runtimeconfig.ResolvedRunOptions) PlanGenerator {
 	if a.PlanGenerator != nil {
-		return a.PlanGenerator, nil
-	}
-	config, err := defaults.runConfig(runtimeconfig.RunOptionsPatch{})
-	if err != nil {
-		return nil, err
+		return a.PlanGenerator
 	}
 	return planning.NewService(planning.NewFileRepository(""), nil, planning.ServiceOptions{
-		Agent: defaults.Agent, Model: config.ResolvedOptions().Models.For(runtimeconfig.ModelRoleDefault),
+		Agent: options.Agent, Model: options.Models.For(runtimeconfig.ModelRoleDefault),
 		ProcessStarter: a.ProcessStarter, Log: a.Out,
-	}), nil
+	})
 }
 
 func (a App) printValidationWarnings(validation planning.ValidationResult) error {

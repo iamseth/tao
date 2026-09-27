@@ -983,6 +983,61 @@ func noteRoutingRecords(t *testing.T, app App, meta taodata.Repo) []plannerroute
 	return records
 }
 
+func TestNoteRunGenerationUsesRepositoryBaseModel(t *testing.T) {
+	for _, tc := range []struct{ mode, arm, provider string }{
+		{"off", "", "claude"},
+		{"shadow", "", "claude"},
+		{"randomized", "pi", "pi"},
+		{"randomized", "claude", "claude"},
+	} {
+		t.Run(tc.mode+tc.arm, func(t *testing.T) {
+			app, meta, id, _, _ := noteRoutingTestApp(t)
+			dataHome := t.TempDir()
+			t.Setenv("TAO_DATA_HOME", dataHome)
+			t.Setenv(runtimeconfig.EnvModel, "env-base")
+			t.Setenv(runtimeconfig.EnvRunModel, "env-run")
+			t.Setenv(runtimeconfig.EnvReviewModel, "env-review")
+			meta.RunDefaults = &taodata.RepoRunDefaults{Models: &taodata.RepoModelDefaults{
+				Model: "repo-base", RunModel: "repo-run", ReviewModel: "repo-review",
+			}}
+			registry := app.registry().(*fakeNoteRegistry)
+			registry.current = meta
+			registry.repos = []taodata.Repo{meta}
+			if err := taodata.NewRegistry(dataHome).WriteRepo(meta); err != nil {
+				t.Fatal(err)
+			}
+			failure := errors.New("stop after inspecting planning launch")
+			calls := 0
+			app.ProcessStarter = func(_ context.Context, _ string, name string, args []string) (run.Process, error) {
+				calls++
+				if name != tc.provider {
+					t.Fatalf("planning provider = %q, want %q", name, tc.provider)
+				}
+				found := false
+				for i, arg := range args {
+					if arg == "--model" && i+1 < len(args) {
+						found = true
+						if args[i+1] != "repo-base" {
+							t.Fatalf("planning model = %q, want repository base", args[i+1])
+						}
+					}
+				}
+				if !found {
+					t.Fatalf("planning launch missing model: %v", args)
+				}
+				return nil, failure
+			}
+			args := []string{"note", "run", "--planner-routing", tc.mode, id}
+			if tc.arm != "" {
+				args = append(args, "--planner-arm", tc.arm)
+			}
+			if err := app.Run(context.Background(), args); !errors.Is(err, failure) || calls != 1 {
+				t.Fatalf("planning launches = %d, err = %v", calls, err)
+			}
+		})
+	}
+}
+
 func TestNoteRunPlannerRouting(t *testing.T) {
 	for _, tc := range []struct{ mode, override, label string }{
 		{"shadow", "", "shadow recommendation"},
