@@ -39,7 +39,7 @@ func ClaudeDir() (string, error) {
 	return filepath.Join(home, ".claude", "commands"), nil
 }
 
-func ManagedPiTemplate(commandName, _ string, content string) (string, error) {
+func ManagedPiTemplate(commandName, _ string, content string, _ []string) (string, error) {
 	marker := "<!-- tao-managed: " + commandName + " v1 -->\n\n"
 	content = piTemplateContent(content)
 	if !strings.HasPrefix(content, "---\n") {
@@ -67,7 +67,13 @@ func piTemplateContent(content string) string {
 	return replacer.Replace(content)
 }
 
-func ManagedClaudeCommand(commandName, promptName, _ string) (string, error) {
+// ManagedPiInlinePrompt preserves Pi template frontmatter and ignores the
+// Claude-only tool permissions and argument hint.
+func ManagedPiInlinePrompt(commandName, promptName, template string, _ []string, _ bool) (string, error) {
+	return ManagedPiTemplate(commandName, promptName, template, nil)
+}
+
+func ManagedClaudeCommand(commandName, promptName, _ string, allowedTools []string) (string, error) {
 	// Claude Code substitutes $ARGUMENTS as literal text into the command source
 	// before the shell runs, so any quote, backtick, $, or backslash the user
 	// types would corrupt an inline `tao ... "$ARGUMENTS"` command. Pass the raw
@@ -75,18 +81,27 @@ func ManagedClaudeCommand(commandName, promptName, _ string) (string, error) {
 	// expansion, no quote parsing) and tao consumes it from stdin via
 	// --arguments-stdin. A quoted-heredoc body requires the fenced ```! form;
 	// the inline !`...` form is single-line only.
-	return fmt.Sprintf("---\ndescription: Tao /%[1]s command wrapper\nallowed-tools: Bash(tao prompt %[2]s:*)\nargument-hint: [arguments]\n---\n\n<!-- tao-managed: %[1]s v1 -->\n\n```!\ntao prompt %[2]s --arguments-stdin <<'TAO_PROMPT_ARGUMENTS'\n$ARGUMENTS\nTAO_PROMPT_ARGUMENTS\n```\n", commandName, promptName), nil
+	tools := append([]string{fmt.Sprintf("Bash(tao prompt %s:*)", promptName)}, allowedTools...)
+	return fmt.Sprintf("---\ndescription: Tao /%[1]s command wrapper\nallowed-tools: %[3]s\nargument-hint: [arguments]\n---\n\n<!-- tao-managed: %[1]s v1 -->\n\n```!\ntao prompt %[2]s --arguments-stdin <<'TAO_PROMPT_ARGUMENTS'\n$ARGUMENTS\nTAO_PROMPT_ARGUMENTS\n```\n", commandName, promptName, strings.Join(tools, ", ")), nil
 }
 
 // ManagedInlinePrompt renders a Tao-managed prompt with its template body
-// inline while preserving the template's description frontmatter.
-func ManagedInlinePrompt(commandName, _ string, template string) (string, error) {
+// inline while preserving the template's description frontmatter and adding
+// optional Claude tool permissions and argument hint before the description.
+func ManagedInlinePrompt(commandName, _ string, template string, allowedTools []string, argumentHint bool) (string, error) {
 	description := templateDescription(template)
 	if description == "" {
 		description = fmt.Sprintf("Tao /%s command wrapper", commandName)
 	}
+	frontmatter := ""
+	if len(allowedTools) > 0 {
+		frontmatter += "allowed-tools: " + strings.Join(allowedTools, ", ") + "\n"
+	}
+	if argumentHint {
+		frontmatter += "argument-hint: [arguments]\n"
+	}
 	body := piTemplateContent(templateBody(template))
-	return fmt.Sprintf("---\ndescription: %[2]s\n---\n\n<!-- tao-managed: %[1]s v1 -->\n\n%[3]s", commandName, description, body), nil
+	return fmt.Sprintf("---\n%[4]sdescription: %[2]s\n---\n\n<!-- tao-managed: %[1]s v1 -->\n\n%[3]s", commandName, description, body, frontmatter), nil
 }
 
 func templateBody(template string) string {

@@ -56,6 +56,28 @@ func TestRunnerInvokesOneProviderWithBoundedDescriptorPolicy(t *testing.T) {
 	}
 }
 
+func TestRunnerSkipPermissionsWithoutDescriptorSupportUsesAutoMode(t *testing.T) {
+	var got agent.Session
+	runner := New(Config{
+		Descriptor: agent.Descriptor{
+			SupportsBypassPermissions: false,
+			NewRuntime: func(agent.RuntimeDeps) agent.Runtime {
+				return runtimeFunc(func(_ context.Context, session agent.Session) (agent.SessionResult, error) {
+					got = session
+					return agent.SessionResult{}, nil
+				})
+			},
+		},
+		SkipPermissions: true,
+	})
+	if _, err := runner.Run(context.Background(), Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if got.PermissionMode != agent.PermissionModeAuto {
+		t.Fatalf("permission mode = %q, want %q", got.PermissionMode, agent.PermissionModeAuto)
+	}
+}
+
 func TestRunnerClassifiesInformationalAndMissingMetricsWarnings(t *testing.T) {
 	for _, tt := range []struct {
 		name          string

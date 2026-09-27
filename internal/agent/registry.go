@@ -47,8 +47,12 @@ type Descriptor struct {
 	PromptDir func() (string, error)
 	// RenderPrompt renders one managed prompt-install file for this runtime.
 	// commandName is the provider-facing name; promptName is Tao's stable
-	// logical selector.
-	RenderPrompt func(commandName, promptName, template string) (string, error)
+	// logical selector. allowedTools adds runtime-supported tool permissions.
+	RenderPrompt func(commandName, promptName, template string, allowedTools []string) (string, error)
+	// RenderInlinePrompt renders a managed prompt with its template body inline.
+	// Names follow RenderPrompt; allowedTools and argumentHint supply optional
+	// frontmatter for runtimes that support tool permissions and argument hints.
+	RenderInlinePrompt func(commandName, promptName, template string, allowedTools []string, argumentHint bool) (string, error)
 	// SupportsBypassPermissions reports whether this runtime honors Tao's
 	// --dangerously-skip-permissions request by switching to bypass mode.
 	// Runtimes that always run with Tao-managed auto permissions (Pi) leave this
@@ -84,6 +88,7 @@ var descriptors = []Descriptor{
 		UsesExtensionPrompts:        true,
 		PromptDir:                   promptfmt.PiDir,
 		RenderPrompt:                promptfmt.ManagedPiTemplate,
+		RenderInlinePrompt:          promptfmt.ManagedPiInlinePrompt,
 		DefaultNoProgressToolLimit:  DefaultPiNoProgressToolLimit,
 		AlwaysCollectMetrics:        true,
 		MetricsWarningPrefix:        "collect pi session info: ",
@@ -102,6 +107,7 @@ var descriptors = []Descriptor{
 		UsesExtensionPrompts:      false,
 		PromptDir:                 promptfmt.ClaudeDir,
 		RenderPrompt:              promptfmt.ManagedClaudeCommand,
+		RenderInlinePrompt:        promptfmt.ManagedInlinePrompt,
 		SupportsBypassPermissions: true,
 		MetricsMessage:            "Captured Claude agent metrics",
 		NewRuntime: func(deps RuntimeDeps) Runtime {

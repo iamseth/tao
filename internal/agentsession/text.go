@@ -1,9 +1,6 @@
 package agentsession
 
-import (
-	"context"
-	"strings"
-)
+import "context"
 
 // TextGenerator adapts a bounded session to provider-neutral text generation.
 type TextGenerator struct {
@@ -27,9 +24,5 @@ func (g TextGenerator) GenerateText(ctx context.Context, repoRoot, prompt string
 	if err != nil {
 		return "", err
 	}
-	text := strings.TrimSpace(result.FinalText)
-	if text == "" {
-		text = strings.TrimSpace(result.Output)
-	}
-	return text, nil
+	return ResultText(result), nil
 }

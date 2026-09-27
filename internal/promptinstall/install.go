@@ -11,6 +11,29 @@ import (
 	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
+type Result struct {
+	Agent  runtimeconfig.AgentKind
+	Name   string
+	Path   string
+	Status string
+}
+
+func InstallAll(agent runtimeconfig.AgentKind, force bool) ([]Result, error) {
+	descriptor, ok := descriptorForAgent(agent)
+	if !ok {
+		return nil, unsupportedAgentError(agent)
+	}
+	return installDescriptor(descriptor, force)
+}
+
+func CheckAll(agent runtimeconfig.AgentKind) ([]Result, error) {
+	descriptor, ok := descriptorForAgent(agent)
+	if !ok {
+		return nil, unsupportedAgentError(agent)
+	}
+	return checkDescriptor(descriptor)
+}
+
 func Dir(agent runtimeconfig.AgentKind) (string, error) {
 	descriptor, ok := descriptorForAgent(agent)
 	if !ok {

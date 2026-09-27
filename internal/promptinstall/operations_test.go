@@ -420,7 +420,7 @@ func TestInstalledCommandMetadataIsPrefixedAndDelegatesLogicalSelectors(t *testi
 }
 
 func TestManagedInlinePromptFallsBackWithoutFrontmatter(t *testing.T) {
-	content, err := promptfmt.ManagedInlinePrompt("tao-widget", "widget", "Body {{ .Arguments }}\n")
+	content, err := promptfmt.ManagedInlinePrompt("tao-widget", "widget", "Body {{ .Arguments }}\n", nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,6 +428,74 @@ func TestManagedInlinePromptFallsBackWithoutFrontmatter(t *testing.T) {
 		if !strings.Contains(content, want) {
 			t.Fatalf("expected %q in fallback inline prompt, got %q", want, content)
 		}
+	}
+}
+
+func TestRenderInstallContentUsesDescriptorPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		inline bool
+		tools  string
+		hint   bool
+	}{
+		{prompts.PromptCatchMeUp, true, "", false},
+		{prompts.PromptGroomNotes, true, "", false},
+		{prompts.PromptSteal, true, "", false},
+		{prompts.PromptNote, false, "Bash(tao note:*)", false},
+		{prompts.PromptCommit, true, "Bash(tao commit:*), Bash(mktemp:*), Bash(rm:*), Bash(rmdir:*), Read, Write", true},
+		{"ordinary", false, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			check := func(inline bool, command, name, template string, tools []string, hint bool) {
+				if command != "tao-"+tc.name || name != tc.name || template != "Body" || inline != tc.inline || strings.Join(tools, ", ") != tc.tools || hint != tc.hint {
+					t.Fatalf("unexpected rendering request: %q %q %q inline=%v tools=%v hint=%v", command, name, template, inline, tools, hint)
+				}
+			}
+			descriptor := agentpkg.Descriptor{
+				RenderPrompt: func(command, name, template string, tools []string) (string, error) {
+					check(false, command, name, template, tools, false)
+					return "rendered", nil
+				},
+				RenderInlinePrompt: func(command, name, template string, tools []string, hint bool) (string, error) {
+					check(true, command, name, template, tools, hint)
+					return "rendered", nil
+				},
+			}
+			got, err := renderInstallContent(descriptor, prompts.Definition{Name: tc.name, CommandName: "tao-" + tc.name, Template: "Body"})
+			if err != nil || got != "rendered" {
+				t.Fatalf("render = %q, %v", got, err)
+			}
+		})
+	}
+}
+
+func TestRenderInstallContentExtensionCommitSkipsInlineHook(t *testing.T) {
+	descriptor, _ := agentpkg.Lookup(runtimeconfig.AgentPi)
+	descriptor.RenderInlinePrompt = nil
+	prompt := prompts.Definition{Name: prompts.PromptCommit, CommandName: "tao-commit", Template: "Body {{ .Arguments }}\n"}
+	got, err := renderInstallContent(descriptor, prompt)
+	const want = "<!-- tao-managed: tao-commit v1 -->\n\nBody $ARGUMENTS\n"
+	if err != nil || got != want {
+		t.Fatalf("extension commit render = %q, %v; want %q", got, err, want)
+	}
+}
+
+func TestRenderInstallContentRejectsMissingHooks(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		promptName string
+		hook       string
+	}{
+		{"inline", prompts.PromptCatchMeUp, "RenderInlinePrompt"},
+		{"wrapper", prompts.PromptNote, "RenderPrompt"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			descriptor := agentpkg.Descriptor{Label: "test runtime"}
+			_, err := renderInstallContent(descriptor, prompts.Definition{Name: tc.promptName, Template: "Body"})
+			if err == nil || !strings.Contains(err.Error(), tc.hook) || !strings.Contains(err.Error(), descriptor.Label) {
+				t.Fatalf("expected descriptive missing %s error, got %v", tc.hook, err)
+			}
+		})
 	}
 }
 

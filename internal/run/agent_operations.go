@@ -131,7 +131,7 @@ func (o agentOperationOptions) commandRunner() CommandRunner { return o.CommandR
 type agentSessionRunnerConfig struct {
 	descriptor       agent.Descriptor
 	deps             agent.RuntimeDeps
-	permissionMode   agent.PermissionMode
+	skipPermissions  bool
 	sessionTimeout   time.Duration
 	logAppender      plan.LogAppender
 	eventAppender    plan.EventAppender
@@ -164,7 +164,7 @@ func newAgentSessionRunner(config agentSessionRunnerConfig) agentSessionRunner {
 		session: agentsession.New(agentsession.Config{
 			Descriptor:      config.descriptor,
 			Deps:            config.deps,
-			SkipPermissions: config.permissionMode == agent.PermissionModeBypassPermissions,
+			SkipPermissions: config.skipPermissions,
 			Timeout:         config.sessionTimeout,
 			CommandRunner:   config.commandRunner,
 		}),
@@ -206,13 +206,15 @@ func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSe
 		VerificationCommands: request.VerificationCommands, Log: log,
 	})
 
-	var timeoutErr *agent.SessionTimeoutError
-	if errors.As(runErr, &timeoutErr) && stateErr == nil && r.eventAppender != nil {
+	outcome := agentsession.Summarize(result, runErr)
+	if outcome.TimedOut && stateErr == nil && r.eventAppender != nil {
+		var timeoutErr *agent.SessionTimeoutError
+		errors.As(runErr, &timeoutErr)
 		sliceID := ""
 		if request.Metrics != nil {
 			sliceID = request.Metrics.SliceID
 		}
-		durationSeconds := int64(timeoutErr.Timeout / time.Second)
+		durationSeconds := outcome.TimeoutSeconds
 		event := plan.Event{
 			Type:            plan.EventTypeSessionTimeout,
 			Timestamp:       now(r).UTC(),
@@ -227,8 +229,8 @@ func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSe
 		}
 	}
 
-	if result.ReportMetricsWarning && (stateErr == nil || result.MetricsUsable) {
-		writeAgentLogDiagnostic(log, "tao telemetry warning: "+result.MetricsWarningMessage)
+	if outcome.ReportWarning && (stateErr == nil || outcome.MetricsUsable) {
+		writeAgentLogDiagnostic(log, "tao telemetry warning: "+outcome.WarningMessage)
 	}
 
 	var capErr error
@@ -354,10 +356,7 @@ func generatePullRequestBodyWithAgentSession(ctx context.Context, executor Agent
 	if err != nil {
 		return "", err
 	}
-	body := strings.TrimSpace(result.FinalText)
-	if body == "" {
-		body = strings.TrimSpace(result.Output)
-	}
+	body := agentsession.ResultText(agentsession.Result{FinalText: result.FinalText, Output: result.Output})
 	if body == "" {
 		return "", fmt.Errorf("agent returned empty pull request body")
 	}

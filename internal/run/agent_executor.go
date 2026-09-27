@@ -82,17 +82,6 @@ func (e agentExecutor) operationOptions() agentOperationOptions {
 	}
 }
 
-// permissionMode resolves the agent permission mode from descriptor data. Only
-// runtimes that support bypass honor a SkipPermissions request; every other
-// runtime stays on Tao-managed auto permissions, preserving Pi's always-Auto
-// behavior and Claude's --dangerously-skip-permissions -> bypass mapping.
-func (e agentExecutor) permissionMode() agent.PermissionMode {
-	if e.descriptor.SupportsBypassPermissions && e.options.SkipPermissions {
-		return agent.PermissionModeBypassPermissions
-	}
-	return agent.PermissionModeAuto
-}
-
 func (e agentExecutor) RunSlice(ctx context.Context, run SliceRun) error {
 	return runSliceWithAgentSession(ctx, e, e.operationOptions(), run)
 }
@@ -117,7 +106,7 @@ func (e agentExecutor) sessionRunner() agentSessionRunner {
 	return newAgentSessionRunner(agentSessionRunnerConfig{
 		descriptor:       e.descriptor,
 		deps:             e.options.Deps,
-		permissionMode:   e.permissionMode(),
+		skipPermissions:  e.options.SkipPermissions,
 		sessionTimeout:   e.options.SessionTimeout,
 		logAppender:      e.logAppender,
 		eventAppender:    e.eventAppender,

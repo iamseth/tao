@@ -1073,20 +1073,17 @@ func (s BatchAgentSession) Resolve(ctx context.Context, request BatchAgentSessio
 	result, err := run(ctx, agentsession.Request{
 		RepoRoot: request.IntegrationRoot, ControlRoot: s.controlRoot, Prompt: request.Prompt, CollectMetrics: true,
 	})
+	summary := agentsession.Summarize(result, err)
 	if s.metrics != nil {
 		metrics := agent.Metrics{}
 		if result.Metrics != nil {
 			metrics = *result.Metrics
 		}
 		s.metrics(metrics, result.MetricsWarning)
-	} else if result.ReportMetricsWarning && s.log != nil {
-		_ = logrecord.Render(s.log, logrecord.Record{Type: logrecord.TypeDiagnostic, Content: "tao telemetry warning: " + result.MetricsWarningMessage})
+	} else if summary.ReportWarning && s.log != nil {
+		_ = logrecord.Render(s.log, logrecord.Record{Type: logrecord.TypeDiagnostic, Content: "tao telemetry warning: " + summary.WarningMessage})
 	}
-	text := strings.TrimSpace(result.FinalText)
-	if text == "" {
-		text = strings.TrimSpace(result.Output)
-	}
-	sessionResult := BatchAgentSessionResult{Output: text, Provider: result}
+	sessionResult := BatchAgentSessionResult{Output: agentsession.ResultText(result), Provider: result}
 	s.recordTelemetry(request, result, err)
 	if s.observe != nil {
 		s.observe(request, sessionResult, err)
@@ -1102,13 +1099,10 @@ func (s BatchAgentSession) recordTelemetry(request BatchAgentSessionRequest, res
 	if sessionErr != nil {
 		outcome = BatchAgentOutcomeFailed
 	}
-	var timeoutErr *agent.SessionTimeoutError
-	if errors.As(sessionErr, &timeoutErr) {
+	summary := agentsession.Summarize(result, sessionErr)
+	if summary.TimedOut {
 		outcome = BatchAgentOutcomeTimedOut
-		durationSeconds := int64(timeoutErr.Timeout / time.Second)
-		if durationSeconds < 1 {
-			durationSeconds = 1
-		}
+		durationSeconds := summary.TimeoutSeconds
 		event := BatchAgentEvent{
 			Schema: BatchAgentEventSchema, Type: BatchAgentEventTypeTimeout, BatchID: request.BatchID,
 			Timestamp: s.now().UTC(), Operation: request.Operation, Attempt: request.Attempt,

@@ -9,24 +9,8 @@ import (
 
 	agentpkg "github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/agent/promptfmt"
-	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/prompts"
 )
-
-type Result struct {
-	Agent  runtimeconfig.AgentKind
-	Name   string
-	Path   string
-	Status string
-}
-
-func InstallAll(agent runtimeconfig.AgentKind, force bool) ([]Result, error) {
-	descriptor, ok := descriptorForAgent(agent)
-	if !ok {
-		return nil, unsupportedAgentError(agent)
-	}
-	return installDescriptor(descriptor, force)
-}
 
 // InstallDiscovered installs prompts for each discovered agent in the supplied
 // order. The descriptor list is normally produced by agent.DiscoverInstalled.
@@ -77,14 +61,6 @@ func removeRetiredManagedPrompts(target string) error {
 		}
 	}
 	return nil
-}
-
-func CheckAll(agent runtimeconfig.AgentKind) ([]Result, error) {
-	descriptor, ok := descriptorForAgent(agent)
-	if !ok {
-		return nil, unsupportedAgentError(agent)
-	}
-	return checkDescriptor(descriptor)
 }
 
 // CheckDiscovered checks prompts for each discovered agent in the supplied
@@ -152,40 +128,43 @@ func installContent(descriptor agentpkg.Descriptor, prompt prompts.Definition) (
 	return content, nil
 }
 
+type installPolicy struct {
+	inline       bool
+	allowedTools []string
+	argumentHint bool
+}
+
+var promptInstallPolicies = map[string]installPolicy{
+	// Load safety contracts without a dynamic CLI invocation; arguments remain
+	// prompt data rather than shell heredoc input.
+	prompts.PromptCatchMeUp:  {inline: true},
+	prompts.PromptGroomNotes: {inline: true},
+	prompts.PromptSteal:      {inline: true},
+	prompts.PromptNote:       {allowedTools: []string{"Bash(tao note:*)"}},
+	// Commit runs the Tao boundary in the current session, exposing its binary
+	// permissions and handoff contract instead of dynamically invoking tao prompt.
+	prompts.PromptCommit: {
+		inline:       true,
+		allowedTools: []string{"Bash(tao commit:*)", "Bash(mktemp:*)", "Bash(rm:*)", "Bash(rmdir:*)", "Read", "Write"},
+		argumentHint: true,
+	},
+}
+
 func renderInstallContent(descriptor agentpkg.Descriptor, prompt prompts.Definition) (string, error) {
-	if (prompt.Name == prompts.PromptCatchMeUp || prompt.Name == prompts.PromptGroomNotes || prompt.Name == prompts.PromptSteal) && descriptor.Kind == runtimeconfig.AgentClaude {
-		// Load the read-only contract without a dynamic CLI invocation that
-		// could trigger startup updates before the safety instructions load.
-		// Inline arguments also remain prompt data rather than input to a
-		// shell heredoc.
-		return promptfmt.ManagedInlinePrompt(prompt.CommandName, prompt.Name, prompt.Template)
+	policy := promptInstallPolicies[prompt.Name]
+	if prompt.Name == prompts.PromptCommit && descriptor.UsesExtensionPrompts {
+		policy = installPolicy{}
 	}
-	if prompt.Name == prompts.PromptNote {
-		content, err := descriptor.RenderPrompt(prompt.CommandName, prompt.Name, prompt.Template)
-		if err != nil {
-			return "", err
+	if policy.inline {
+		if descriptor.RenderInlinePrompt == nil {
+			return "", fmt.Errorf("%s prompt %q: missing RenderInlinePrompt hook", descriptor.Label, prompt.Name)
 		}
-		if descriptor.Kind == runtimeconfig.AgentClaude {
-			content = strings.Replace(content, "allowed-tools: Bash(tao prompt note:*)", "allowed-tools: Bash(tao prompt note:*), Bash(tao note:*)", 1)
-		}
-		return content, nil
+		return descriptor.RenderInlinePrompt(prompt.CommandName, prompt.Name, prompt.Template, policy.allowedTools, policy.argumentHint)
 	}
-	if prompt.Name != prompts.PromptCommit || descriptor.UsesExtensionPrompts {
-		return descriptor.RenderPrompt(prompt.CommandName, prompt.Name, prompt.Template)
+	if descriptor.RenderPrompt == nil {
+		return "", fmt.Errorf("%s prompt %q: missing RenderPrompt hook", descriptor.Label, prompt.Name)
 	}
-	// Commit commands must run the Tao boundary from the provider's current
-	// session. Inline this one prompt instead of dynamically invoking `tao
-	// prompt`, which would hide the binary permissions and handoff contract.
-	content, err := promptfmt.ManagedInlinePrompt(prompt.CommandName, prompt.Name, prompt.Template)
-	if err != nil {
-		return "", err
-	}
-	switch descriptor.Kind {
-	case runtimeconfig.AgentClaude:
-		return strings.Replace(content, "---\n", "---\nallowed-tools: Bash(tao commit:*), Bash(mktemp:*), Bash(rm:*), Bash(rmdir:*), Read, Write\nargument-hint: [arguments]\n", 1), nil
-	default:
-		return content, nil
-	}
+	return descriptor.RenderPrompt(prompt.CommandName, prompt.Name, prompt.Template, policy.allowedTools)
 }
 
 func isPiExtensionPrompt(name string) bool {
