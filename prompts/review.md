@@ -94,9 +94,19 @@ Assess the scoped diff for:
 {{ end }}
 For behavior the plan does not name, judge by what a reasonable user of the software would expect. Grade each issue by its effect on that user, not by whether the plan mentions the trigger.
 
+## Completeness
+
+- Read `plan.decision.success_criteria` from `state.json` in the plan directory and inventory each criterion plus the `goal` from `slices.json` of every slice listed in `plan.completed_slices`.
+- For each item, write exactly one of `met`, `partial`, or `missing` with concrete evidence at the reviewed head (file, test, or diff hunk). Completion claims in slice notes are not evidence.
+- Make `partial` or `missing` items findings under the existing severity rules, with a concrete repository-relative `file` (the owning slice's `expected_files` entry or the diff file the criterion targets), `line: null` when no line applies, and an imperative `suggestion`.
+- Keep unrequested work under scope adherence, not completeness.
+- List criteria not judgeable from code (post-launch or business metrics) under `### Declined to judge`, never as findings.
+- When `state.json` has no `plan.decision`, state that no success criteria are recorded and inventory only completed slice goals.
+
 ## Output format
 
 Write a concise human-readable review first. Include any important context, strengths, and risks.
+Include the completeness inventory in the prose review before the `### Declined to judge` subsection.
 List which rulings were accepted in the prose review.
 State which Review Focus lines were checked and what was found for each, or state that the brief had no Review Focus section or it read `None`.
 Missing coverage for a line becomes a finding only when it meets the existing severity rules; otherwise keep it in the prose without changing the verdict.

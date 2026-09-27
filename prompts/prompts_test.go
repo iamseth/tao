@@ -321,6 +321,46 @@ func TestRenderReviewPromptRequiresRegressionEvidenceForFixPlans(t *testing.T) {
 	}
 }
 
+func TestRenderReviewPromptInventoriesCompleteness(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		data Data
+	}{
+		{name: "untyped", data: Data{}},
+		{name: "fix", data: Data{ChangeType: "fix"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Render(PromptReview, tt.data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{
+				"## Completeness",
+				"plan.decision.success_criteria",
+				"plan.completed_slices",
+				"exactly one of `met`, `partial`, or `missing`",
+				"concrete evidence at the reviewed head",
+				"Completion claims in slice notes are not evidence",
+				"concrete repository-relative `file`",
+				"`expected_files`",
+				"`line: null`",
+				"imperative `suggestion`",
+				"Declined to judge",
+				"no `plan.decision`, state that no success criteria are recorded and inventory only completed slice goals",
+				"Include the completeness inventory in the prose review before the `### Declined to judge` subsection.",
+			} {
+				if !strings.Contains(got, want) {
+					t.Fatalf("rendered review prompt missing completeness guidance %q:\n%s", want, got)
+				}
+			}
+			if strings.Index(got, "## Review criteria") >= strings.Index(got, "## Completeness") ||
+				strings.Index(got, "## Completeness") >= strings.Index(got, "## Output format") {
+				t.Fatal("completeness section must sit between review criteria and output format")
+			}
+		})
+	}
+}
+
 func TestRenderReviewProposalCorrectionCannotChangeSubstantiveReview(t *testing.T) {
 	got, err := Render(PromptReview, Data{PlanID: "plan-a", Base: "base123", Head: "head456", ChangeType: "fix", ProposalOnly: true})
 	if err != nil {
@@ -338,7 +378,7 @@ func TestRenderReviewProposalCorrectionCannotChangeSubstantiveReview(t *testing.
 			t.Fatalf("rendered correction prompt missing %q:\n%s", want, got)
 		}
 	}
-	for _, forbidden := range []string{"Assess the scoped diff", "Review criteria", "reasonable user", "Declined to judge", "Review Focus", "failing-first run", "before-and-after comparison", "tao-review-json\n{\n  \"verdict\""} {
+	for _, forbidden := range []string{"Assess the scoped diff", "Review criteria", "reasonable user", "Declined to judge", "Review Focus", "Completeness", "success_criteria", "failing-first run", "before-and-after comparison", "tao-review-json\n{\n  \"verdict\""} {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("rendered correction prompt retained substantive review instruction %q:\n%s", forbidden, got)
 		}
