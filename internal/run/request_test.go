@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
@@ -21,6 +22,38 @@ func newTestRequest(input string, overrides runtimeconfig.RunOptionsPatch) (Requ
 		return Request{}, err
 	}
 	return Request{Input: input, ResolvedRunOptions: config.ResolvedOptions()}, nil
+}
+
+func TestRequestForNextRoundClearsSingleShotRecoveryModes(t *testing.T) {
+	request := Request{
+		Input:              "plan-a",
+		RestartBlocked:     true,
+		RepairVerification: true,
+		Reverify:           true,
+		ResolvedRunOptions: ResolvedRunOptions{
+			Mode:           ModeRun,
+			MaxSlices:      3,
+			Continue:       true,
+			CommitPolicy:   CommitPolicyNone,
+			ExecutionMode:  ExecutionModeCurrent,
+			Agent:          AgentClaude,
+			PullRequest:    true,
+			ReviewEnabled:  true,
+			SessionTimeout: 5 * time.Minute,
+		},
+	}
+	original := request
+	want := request
+	want.Continue = false
+	want.RestartBlocked = false
+	want.RepairVerification = false
+
+	if got := request.ForNextRound(); got != want {
+		t.Fatalf("ForNextRound() = %#v, want %#v", got, want)
+	}
+	if request != original {
+		t.Fatalf("ForNextRound modified receiver: %#v, want %#v", request, original)
+	}
 }
 
 func TestRunReturnsCapabilityDisabledReasonsBeforeExecutor(t *testing.T) {

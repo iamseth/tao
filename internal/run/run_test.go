@@ -1933,6 +1933,60 @@ func TestRunContinueRestartsBlockedPlanBeforeCapabilityGate(t *testing.T) {
 	}
 }
 
+func TestExecuteDetailAfterContinueRunsReopenedReworkSlice(t *testing.T) {
+	for _, spent := range []bool{true, false} {
+		name := "unspent continue rejects reopened plan"
+		if spent {
+			name = "spent continue runs rework"
+		}
+		t.Run(name, func(t *testing.T) {
+			request := Request{ResolvedRunOptions: ResolvedRunOptions{Continue: true, CommitPolicy: CommitPolicyNone}}
+			executor := &countingSliceExecutor{}
+			options := Options{
+				ExecutionConfig: ExecutionConfig{ResolvedRunOptions: request.ResolvedRunOptions},
+				RunDependencies: RunDependencies{
+					SliceExecutor:     executor,
+					PlanRecordFactory: memoryPlanRecordFactory,
+					CommandRunner:     runGitFake(&[]string{}, nil),
+				},
+			}
+			blocked := runPlanDetail(plan.StatusBlocked, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
+			completed := runPlanDetail(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
+			reload := func(context.Context, *plan.PlanDetail) (*plan.PlanDetail, error) {
+				return completed, nil
+			}
+			if err := executeDetail(context.Background(), blocked, reload, io.Discard, options); err != nil {
+				t.Fatal(err)
+			}
+			if executor.calls != 1 {
+				t.Fatalf("continued executor calls = %d, want 1", executor.calls)
+			}
+
+			reopened := runPlanDetail(plan.StatusInProgress, []string{"r101-rework"}, []string{"001-a"}, "r101-rework", plan.StatusPending, nil, nil)
+			completed = runPlanDetail(plan.StatusCompleted, nil, []string{"001-a", "r101-rework"}, "r101-rework", plan.StatusCompleted, nil, nil)
+			if spent {
+				options.ResolvedRunOptions = request.ForNextRound().ResolvedRunOptions
+			}
+			err := executeDetail(context.Background(), reopened, reload, io.Discard, options)
+			if spent {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if executor.calls != 2 {
+					t.Fatalf("rework executor calls = %d, want 2", executor.calls)
+				}
+			} else {
+				if err == nil || !strings.Contains(err.Error(), "continue is not meaningful") {
+					t.Fatalf("unspent continue error = %v, want continue is not meaningful", err)
+				}
+				if executor.calls != 1 {
+					t.Fatalf("unspent continue invoked executor: calls = %d, want 1", executor.calls)
+				}
+			}
+		})
+	}
+}
+
 func TestServiceExecuteRestartRetriesAfterDurableRestartBeforeWorkspacePreparation(t *testing.T) {
 	repoRoot := t.TempDir()
 	runRebaseRecoveryGit(t, repoRoot, "init", "-b", "main")

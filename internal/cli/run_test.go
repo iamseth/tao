@@ -745,6 +745,67 @@ func TestRunReverifyBypassesAutomaticReworkForChangesRequestedPlan(t *testing.T)
 	}
 }
 
+func TestRunContinueChainsIntoAutoRework(t *testing.T) {
+	clearTaoEnv(t)
+	t.Setenv("TAO_DATA_HOME", t.TempDir())
+	now := time.Date(2026, 9, 26, 21, 0, 0, 0, time.UTC)
+	const planID = "20260926-2100-continue-rework"
+	detail := singleRunReworkDetail(planID, plan.StatusBlocked, nil, now)
+	detail.Dir = t.TempDir()
+	detail.State.Plan.CompletedSlices = nil
+	detail.State.Plan.PendingSlices = []string{"001-work"}
+	detail.State.Plan.CurrentSlice = &detail.State.Plan.PendingSlices[0]
+	detail.State.Plan.Timing.CompletedAt = nil
+	detail.Slices.Slices[0].Status = plan.StatusBlocked
+	repo := fakeRepository{details: map[string]*plan.PlanDetail{planID: detail}}
+	findings := []plan.ReviewFinding{{Severity: "major", File: "internal/cli/run.go", Line: 232, Message: "spend recovery modes before rework"}}
+
+	var requests []run.Request
+	oldExecutor := executeSinglePlan
+	t.Cleanup(func() { executeSinglePlan = oldExecutor })
+	executeSinglePlan = func(_ run.Service, _ context.Context, request run.Request) error {
+		requests = append(requests, request)
+		if len(requests) > 2 {
+			t.Fatal("unexpected execution after approval")
+		}
+		if len(requests) == 2 && (detail.State.Status != plan.StatusInProgress || len(detail.State.Plan.PendingSlices) == 0) {
+			t.Fatalf("execution without successful reopening: %+v", detail.State.Plan)
+		}
+		for i := range detail.Slices.Slices {
+			detail.Slices.Slices[i].Status = plan.StatusCompleted
+		}
+		detail.State.Plan.CompletedSlices = append(detail.State.Plan.CompletedSlices, detail.State.Plan.PendingSlices...)
+		detail.State.Plan.PendingSlices = nil
+		detail.State.Plan.CurrentSlice = nil
+		if len(requests) == 1 {
+			detail.State.Status = plan.StatusChangesRequested
+			detail.State.Plan.Review = reworkReview(plan.ReviewVerdictChangesRequested, findings)
+			detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypePlanReviewed, PlanID: planID, SliceID: "001-work", Review: detail.State.Plan.Review})
+		} else {
+			detail.State.Status = plan.StatusReviewed
+			detail.State.Plan.Review = reworkReview(plan.ReviewVerdictApprove, nil)
+		}
+		return nil
+	}
+
+	var out bytes.Buffer
+	if err := (App{Out: &out, Now: func() time.Time { return now }}).run(context.Background(), repo, []string{"--no-run-header", "--continue", planID}); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("executions = %d, want 2", len(requests))
+	}
+	if !requests[0].Continue {
+		t.Fatal("first execution lost continue mode")
+	}
+	if requests[1].Continue || requests[1].RestartBlocked || requests[1].RepairVerification {
+		t.Fatalf("rework execution retained recovery mode: %+v", requests[1])
+	}
+	if !strings.Contains(out.String(), "Plan reopened for rework round 1") {
+		t.Fatalf("missing rework progress: %s", out.String())
+	}
+}
+
 func TestRunSinglePlanAutoReworkLoop(t *testing.T) {
 	now := time.Date(2026, 7, 13, 20, 0, 0, 0, time.UTC)
 	finding := plan.ReviewFinding{Severity: "major", File: "internal/cli/run.go", Line: 150, Message: "fix the run loop", Suggestion: "rerun after reopening"}

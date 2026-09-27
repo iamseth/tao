@@ -23,6 +23,15 @@ type Request struct {
 	ResolvedRunOptions
 }
 
+// ForNextRound returns a copy with recovery entry modes cleared: they are
+// single-shot and spent after the first execution of an automatic-rework loop.
+func (r Request) ForNextRound() Request {
+	r.Continue = false
+	r.RestartBlocked = false
+	r.RepairVerification = false
+	return r
+}
+
 const (
 	ModeRun  = runtimeconfig.ModeRun
 	ModeStep = runtimeconfig.ModeStep

@@ -676,7 +676,10 @@ resolution from Git state, blocker prose, or external conditions, and continue
 does not override any interrupted-slice boundary check. When a clean automatic
 slice was blocked by a prerequisite and the baseline has since advanced, use
 `tao run --restart` instead; Tao records the superseded boundary and re-runs
-prerequisite and selected-slice preflight before handoff. A failed broad final
+prerequisite and selected-slice preflight before handoff. The `--continue`,
+`--restart`, and `--repair-verification` dispositions are spent once the first
+execution completes, so automatic rework rounds in the same invocation run as
+an ordinary `tao run`. A failed broad final
 gate is not an interrupted implementation slice: follow its recorded
 classification. An ordinary `tao run` performs automatic repair of eligible
 code-classified failures arising after slice execution in that invocation,

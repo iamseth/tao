@@ -231,6 +231,7 @@ func (a App) executeResolvedRun(ctx context.Context, repo planRunRepository, inp
 				err := executeSinglePlan(service, executeCtx, request)
 				if firstExecution {
 					firstExecution = false
+					request = request.ForNextRound()
 					return decorateRunCannotStartError(executeCtx, repo, input, err)
 				}
 				return err
