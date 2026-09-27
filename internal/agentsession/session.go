@@ -12,6 +12,7 @@ import (
 
 // Config describes the stable policy and dependencies for bounded sessions.
 type Config struct {
+	Model           string
 	Descriptor      agent.Descriptor
 	Runtime         agent.Runtime
 	Deps            agent.RuntimeDeps
@@ -23,6 +24,7 @@ type Config struct {
 
 // Runner invokes exactly one provider session for each Run call.
 type Runner struct {
+	model          string
 	runtime        agent.Runtime
 	descriptor     agent.Descriptor
 	permissionMode agent.PermissionMode
@@ -42,6 +44,7 @@ func New(config Config) Runner {
 		permissionMode = agent.PermissionModeBypassPermissions
 	}
 	return Runner{
+		model:          config.Model,
 		runtime:        agent.WithSessionTimeout(runtime),
 		descriptor:     config.Descriptor,
 		permissionMode: permissionMode,
@@ -54,6 +57,7 @@ func New(config Config) Runner {
 // Request describes one provider call. ControlRoot enables leak detection when
 // it differs from RepoRoot.
 type Request struct {
+	Model                string
 	RepoRoot             string
 	ControlRoot          string
 	Prompt               string
@@ -92,10 +96,15 @@ func (r Runner) Run(ctx context.Context, request Request) (Result, error) {
 	if progress == nil {
 		progress = r.progress
 	}
+	model := request.Model
+	if model == "" {
+		model = r.model
+	}
 	invoked := false
 	run := func() (agent.SessionResult, error) {
 		invoked = true
 		return r.runtime.RunSession(ctx, agent.Session{
+			Model:                model,
 			RepoRoot:             request.RepoRoot,
 			Prompt:               request.Prompt,
 			PermissionMode:       r.permissionMode,

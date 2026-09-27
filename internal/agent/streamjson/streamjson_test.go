@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/iamseth/tao/internal/agent/process"
 )
@@ -455,6 +456,32 @@ func TestRunnerHandlerErrorAbortsAndLogs(t *testing.T) {
 	}
 	if !proc.wasKilled() {
 		t.Fatal("expected process killed on handler error")
+	}
+}
+
+func TestRunnerCloseJoinsBlockedEventDelivery(t *testing.T) {
+	proc := newFakeProcess()
+	wrote := make(chan struct{})
+	go func() {
+		proc.writeLine(`{"text":"unconsumed"}`)
+		close(wrote)
+	}()
+	runner := New("test", "json", proc, nil, collect)
+	<-wrote
+	closed := make(chan struct{})
+	go func() {
+		runner.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("Close blocked on unread event")
+	}
+	select {
+	case <-runner.stdoutDone:
+	default:
+		t.Fatal("Close returned without joining stdout reader")
 	}
 }
 

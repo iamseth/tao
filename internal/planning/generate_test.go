@@ -31,6 +31,9 @@ func TestGeneratePlanPropagatesCallerPolicyAndReturnsValidatedDetail(t *testing.
 		if got.Timeout != timeout || got.PermissionMode != agent.PermissionModeBypassPermissions {
 			t.Fatalf("unexpected runtime policy: timeout=%s permission=%q", got.Timeout, got.PermissionMode)
 		}
+		if got.Model != "provider/planning-model" {
+			t.Fatalf("generation model = %q", got.Model)
+		}
 		if !got.CollectMetrics {
 			t.Fatal("generation did not request metrics")
 		}
@@ -56,7 +59,7 @@ func TestGeneratePlanPropagatesCallerPolicyAndReturnsValidatedDetail(t *testing.
 		writeGeneratedPlan(t, planDir, filepath.Base(planDir), repoMeta.Root, false)
 		return agent.SessionResult{FinalText: "generated"}, nil
 	}}
-	service := NewService(store, stub, ServiceOptions{Log: &progress})
+	service := NewService(store, stub, ServiceOptions{Log: &progress, Model: "provider/planning-model"})
 	result, err := service.GeneratePlan(context.Background(), GeneratePlanRequest{
 		Session: session, Slug: "explicit-slug", Extra: "small slices", PermissionMode: agent.PermissionModeBypassPermissions,
 		Timeout: timeout, RejectOpenQuestions: true,

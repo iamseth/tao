@@ -167,7 +167,15 @@ func TestSettingsDefaultsClassifyAndRenderEveryRuntimeStatusOnce(t *testing.T) {
 		if counts[status.Name] != 1 {
 			t.Errorf("runtime setting %s grouped %d times, want once", status.Name, counts[status.Name])
 		}
-		if got := strings.Count(rendered, humanizeSettingsName(status.Name)); got != 1 {
+		label := humanizeSettingsName(status.Name)
+		got := strings.Count(rendered, label)
+		for _, other := range statuses {
+			otherLabel := humanizeSettingsName(other.Name)
+			if otherLabel != label && strings.Contains(otherLabel, label) {
+				got -= strings.Count(rendered, otherLabel)
+			}
+		}
+		if got != 1 {
 			t.Errorf("runtime setting %s rendered %d times, want once:\n%s", status.Name, got, rendered)
 		}
 	}

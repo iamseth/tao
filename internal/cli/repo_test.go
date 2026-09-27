@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -116,6 +117,90 @@ func TestRepoConfigShowsUnsetAndSetsPullRequest(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "pull_request: unset") {
 		t.Fatalf("unset config output = %q", out.String())
+	}
+}
+
+func TestRepoConfigModelDefaults(t *testing.T) {
+	t.Setenv("TAO_DATA_HOME", t.TempDir())
+	root := initTestGitRepo(t)
+	t.Chdir(root)
+	registry := taodata.NewRegistry("")
+	repo, err := registry.RegisterCurrent(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	app := App{Out: &out, Err: &out}
+	flags := []string{"model", "run-model", "review-model", "merge-review-model", "resolver-model"}
+	keys := []string{"model", "run_model", "review_model", "merge_review_model", "resolver_model"}
+	if err := app.Run(context.Background(), []string{"repo", "config"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range keys {
+		if !strings.Contains(out.String(), key+": unset\n") {
+			t.Errorf("missing unset %s in %q", key, out.String())
+		}
+	}
+	args := []string{"repo", "config", "--pull-request=true"}
+	for _, flag := range flags {
+		args = append(args, "--"+flag+"=provider/"+flag)
+	}
+	out.Reset()
+	if err := app.Run(context.Background(), args); err != nil {
+		t.Fatal(err)
+	}
+	for i, key := range keys {
+		if !strings.Contains(out.String(), key+": provider/"+flags[i]+"\n") {
+			t.Errorf("missing set %s in %q", key, out.String())
+		}
+	}
+	// Unsetting one key must preserve all siblings and pull_request.
+	for i, flag := range flags {
+		if err := app.Run(context.Background(), []string{"repo", "config", "--" + flag + "=unset"}); err != nil {
+			t.Fatal(err)
+		}
+		stored, err := registry.ReadRepo(repo.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		content, err := json.Marshal(stored.RunDefaults)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var defaults struct {
+			PullRequest bool              `json:"pull_request"`
+			Models      map[string]string `json:"models"`
+		}
+		if err := json.Unmarshal(content, &defaults); err != nil {
+			t.Fatal(err)
+		}
+		if !defaults.PullRequest {
+			t.Fatal("unsetting model removed pull_request")
+		}
+		for j, key := range keys {
+			want := ""
+			if j > i {
+				want = "provider/" + flags[j]
+			}
+			if got := defaults.Models[key]; got != want {
+				t.Errorf("after unsetting %s, %s = %q, want %q", flag, key, got, want)
+			}
+		}
+	}
+	for _, flag := range flags {
+		for _, invalid := range []string{"", "bad model", "   ", "tab\tmodel", "line\nmodel"} {
+			err := app.Run(context.Background(), []string{"repo", "config", "--pull-request=false", "--" + flag + "=" + invalid})
+			if err == nil || !strings.Contains(err.Error(), "--"+flag) {
+				t.Errorf("%s=%q error = %v, want flag-specific rejection", flag, invalid, err)
+			}
+		}
+	}
+	stored, err := registry.ReadRepo(repo.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, ok := stored.PullRequestDefault(); !ok || !value {
+		t.Fatal("invalid model partially persisted pull_request change")
 	}
 }
 

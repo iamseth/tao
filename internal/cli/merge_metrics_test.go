@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strconv"
 	"strings"
@@ -15,7 +16,84 @@ import (
 	mergepkg "github.com/iamseth/tao/internal/merge"
 	"github.com/iamseth/tao/internal/plan"
 	runpkg "github.com/iamseth/tao/internal/run"
+	"github.com/iamseth/tao/internal/runtimeconfig"
+	"github.com/iamseth/tao/internal/taodata"
 )
+
+func TestMergeModelSelection(t *testing.T) {
+	for _, batch := range []bool{false, true} {
+		for _, override := range []string{"", "chosen"} {
+			t.Run(fmt.Sprintf("batch=%t/override=%s", batch, override), func(t *testing.T) {
+				t.Setenv("TAO_MODEL", "env-base")
+				t.Setenv("TAO_RESOLVER_MODEL", "env-resolver")
+				t.Setenv("TAO_MERGE_REVIEW_MODEL", "env-review")
+				detail := cliMergeDetail(t)
+				registry := &fakeNoteRegistry{current: taodata.Repo{RunDefaults: &taodata.RepoRunDefaults{Models: &taodata.RepoModelDefaults{Model: "repo-base", ResolverModel: "repo-resolver"}}}}
+				app := App{Out: io.Discard, Err: io.Discard, Registry: func() NoteRegistry { return registry }, Repository: func(string) Repository { return fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}} }}
+				check := func(a App, model string) {
+					t.Helper()
+					models, err := a.mergeModels(context.Background(), model)
+					if err != nil {
+						t.Fatal(err)
+					}
+					var config mergepkg.BatchAgentSessionConfig
+					if batch {
+						config = newMergeBatchAgentConfig(a, "", nil, nil, models)
+					} else {
+						config = newSingleMergeAgentConfig(a, detail, "", nil, nil, models)
+					}
+					want := runtimeconfig.ModelSelection{Base: "repo-base", Resolver: "repo-resolver", MergeReview: "env-review"}
+					if override != "" {
+						want = runtimeconfig.ModelSelection{Base: override, Run: override, Review: override, Resolver: override, MergeReview: override}
+					}
+					if config.Models != want {
+						t.Fatalf("models=%#v, want %#v", config.Models, want)
+					}
+				}
+				calls := 0
+				oldBatch, oldSingle := newMergeBatchRunner, newMergeServiceRunner
+				t.Cleanup(func() { newMergeBatchRunner, newMergeServiceRunner = oldBatch, oldSingle })
+				newMergeBatchRunner = func(_ context.Context, a App, _ mergepkg.BatchPlanRepository, model string) (mergeBatchRunner, error) {
+					calls++
+					check(a, model)
+					return &fakeCLIMergeBatchRunner{}, nil
+				}
+				newMergeServiceRunner = func(_ context.Context, a App, _ *plan.PlanDetail, model string) (mergeServiceRunner, error) {
+					calls++
+					check(a, model)
+					return &fakeCLIMergeService{}, nil
+				}
+				args := []string{"merge"}
+				if override != "" {
+					args = append(args, "--model", override)
+				}
+				if batch {
+					args = append(args, "--all")
+				} else {
+					args = append(args, "plan-a")
+				}
+				if err := app.Run(context.Background(), args); err != nil {
+					t.Fatal(err)
+				}
+				if calls != 1 {
+					t.Fatalf("factory calls=%d", calls)
+				}
+			})
+		}
+	}
+}
+
+func TestMergeModelFlagRejectsInvalidValue(t *testing.T) {
+	for _, value := range []string{" \t", "two models", "model\tname"} {
+		for _, mode := range []string{"--all", "plan-a"} {
+			app := App{Out: io.Discard, Err: io.Discard, Repository: func(string) Repository { return fakeRepository{} }}
+			err := app.Run(context.Background(), []string{"merge", "--model=" + value, mode})
+			if err == nil || !strings.Contains(err.Error(), "--model") {
+				t.Fatalf("value %q: %v", value, err)
+			}
+		}
+	}
+}
 
 func TestSingleMergeProposalTelemetryProviders(t *testing.T) {
 	for _, provider := range []string{"pi", "claude"} {
@@ -41,7 +119,7 @@ func TestSingleMergeProposalTelemetryProviders(t *testing.T) {
 					providerErr := errors.New("provider failed")
 					var out bytes.Buffer
 					app := App{Out: &out, ProcessStarter: mergeMetricsStarter(t, provider, outcome, providerErr, &calls)}
-					config := newSingleMergeAgentConfig(app, detail, "", nil, appender)
+					config := newSingleMergeAgentConfig(app, detail, "", nil, appender, runtimeconfig.ModelSelection{})
 					if config.EventAppender != nil {
 						t.Fatal("single proposal wired batch persistence")
 					}
@@ -146,7 +224,7 @@ func TestBatchMergeTelemetryProviders(t *testing.T) {
 							appender.err = errors.New("disk full")
 						}
 						var out bytes.Buffer
-						config := newMergeBatchAgentConfig(App{Out: &out, ProcessStarter: mergeMetricsStarter(t, provider, outcome, providerErr, &calls)}, "", nil, nil)
+						config := newMergeBatchAgentConfig(App{Out: &out, ProcessStarter: mergeMetricsStarter(t, provider, outcome, providerErr, &calls)}, "", nil, nil, runtimeconfig.ModelSelection{})
 						if config.Observe != nil {
 							t.Fatal("batch wired plan observer")
 						}
@@ -209,8 +287,14 @@ func TestMergeServiceProposalUsesPlanObserver(t *testing.T) {
 	t.Setenv("TAO_AGENT", "claude")
 	detail := cliMergeDetail(t)
 	calls := 0
-	app := App{Out: io.Discard, CommandRunner: newCLIMergeGitRunner(t, detail.State.Repo.Root), WorkspaceManager: func(string) (WorkspaceManager, error) { return &fakeWorkspaceManager{}, nil }, ProcessStarter: mergeMetricsStarter(t, "claude", "reported", nil, &calls)}
-	runner, err := app.newMergeServiceRunner(detail)
+	starter := mergeMetricsStarter(t, "claude", "reported", nil, &calls)
+	app := App{Out: io.Discard, CommandRunner: newCLIMergeGitRunner(t, detail.State.Repo.Root), WorkspaceManager: func(string) (WorkspaceManager, error) { return &fakeWorkspaceManager{}, nil }, ProcessStarter: func(ctx context.Context, cwd, name string, args []string) (agent.Process, error) {
+		if !strings.Contains(strings.Join(args, " "), "--model chosen") {
+			t.Fatalf("proposal args = %v", args)
+		}
+		return starter(ctx, cwd, name, args)
+	}}
+	runner, err := app.newMergeServiceRunner(context.Background(), detail, "chosen")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,7 +412,7 @@ func mergeMetricsStarter(t *testing.T, provider, outcome string, providerErr err
 func TestSingleMergeObserverIgnoresBatchAndUninvokedResults(t *testing.T) {
 	detail := cliMergeDetail(t)
 	appender := &recordingMergeMetricsAppender{}
-	config := newSingleMergeAgentConfig(App{}, detail, "", nil, appender)
+	config := newSingleMergeAgentConfig(App{}, detail, "", nil, appender, runtimeconfig.ModelSelection{})
 	config.Observe(mergepkg.BatchAgentSessionRequest{BatchID: "batch-a", Operation: mergepkg.BatchAgentOperationProposalGeneration}, mergepkg.BatchAgentSessionResult{Provider: agentsession.Result{Invoked: true, AgentLabel: "pi"}}, nil)
 	config.Observe(mergepkg.BatchAgentSessionRequest{Operation: mergepkg.BatchAgentOperationProposalGeneration}, mergepkg.BatchAgentSessionResult{}, nil)
 	if len(appender.events) != 0 {

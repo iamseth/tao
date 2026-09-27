@@ -10,6 +10,31 @@ import (
 	"github.com/iamseth/tao/internal/selfupdate"
 )
 
+func TestRuntimeModelAndSessionDefaultsAreIndependent(t *testing.T) {
+	t.Setenv(EnvAgent, "invalid-unused-provider")
+	t.Setenv(EnvModel, "base")
+	t.Setenv(EnvResolverModel, "resolver")
+	models, err := RuntimeModelEnvDefaults()
+	if err != nil || models.Model != "base" || models.ResolverModel != "resolver" {
+		t.Fatalf("models=%#v error=%v", models, err)
+	}
+	t.Setenv(EnvModel, "")
+	if _, err := RuntimeModelEnvDefaults(); err == nil || !strings.Contains(err.Error(), EnvModel) {
+		t.Fatalf("invalid model: %v", err)
+	}
+	t.Setenv(EnvAgent, "claude")
+	t.Setenv(EnvSessionTimeout, "1m")
+	t.Setenv(EnvSkipPermissions, "true")
+	session, err := RuntimeAgentSessionEnvDefaults()
+	if err != nil || session.Agent != AgentClaude || session.SessionTimeoutValue() != time.Minute || !session.SkipPermissions || session.Model != "" || session.ResolverModel != "" {
+		t.Fatalf("session=%#v error=%v", session, err)
+	}
+	t.Setenv(EnvSessionTimeout, "invalid")
+	if _, err := RuntimeAgentSessionEnvDefaults(); err == nil || !strings.Contains(err.Error(), EnvSessionTimeout) {
+		t.Fatalf("invalid timeout: %v", err)
+	}
+}
+
 func TestRuntimeEnvDefaultsAppliesAllSupportedValues(t *testing.T) {
 	t.Setenv(EnvCommitPolicy, "slice")
 	t.Setenv(EnvExecutionMode, "current")
@@ -19,6 +44,11 @@ func TestRuntimeEnvDefaultsAppliesAllSupportedValues(t *testing.T) {
 	t.Setenv(EnvAutoRework, "false")
 	t.Setenv(EnvMaxReworkAttempts, "7")
 	t.Setenv(EnvSessionTimeout, "30m")
+	t.Setenv(EnvModel, " base ")
+	t.Setenv(EnvRunModel, " run ")
+	t.Setenv(EnvReviewModel, " review ")
+	t.Setenv(EnvMergeReviewModel, " merge ")
+	t.Setenv(EnvResolverModel, " resolver ")
 	t.Setenv(EnvUpdate, "auto")
 	t.Setenv(EnvSkipPermissions, "true")
 
@@ -29,11 +59,14 @@ func TestRuntimeEnvDefaultsAppliesAllSupportedValues(t *testing.T) {
 	if got.CommitPolicy != CommitPolicySlice || got.ExecutionMode != ExecutionModeCurrent || got.Agent != AgentClaude || got.PullRequest == nil || !*got.PullRequest || got.ReviewEnabled == nil || *got.ReviewEnabled || got.AutoRework == nil || *got.AutoRework || got.MaxReworkAttempts == nil || *got.MaxReworkAttempts != 7 || got.SessionTimeout == nil || *got.SessionTimeout != 30*time.Minute || got.UpdateMode != selfupdate.ModeAuto || !got.SkipPermissions {
 		t.Fatalf("unexpected env defaults: %#v", got)
 	}
+	if got.Model != "base" || got.RunModel != "run" || got.ReviewModel != "review" || got.MergeReviewModel != "merge" || got.ResolverModel != "resolver" {
+		t.Fatalf("unexpected model env defaults: %#v", got.RunOptionsPatch)
+	}
 }
 
 func TestRuntimeEnvDefaultsApplyInDefaultsRole(t *testing.T) {
 	for _, name := range runtimeEnvKeys() {
-		t.Setenv(name, "")
+		unsetEnv(t, name)
 	}
 	t.Setenv(EnvAgent, "pi")
 
@@ -87,8 +120,11 @@ func TestRuntimeEnvDefaultsReportsInvalidSessionTimeoutWithName(t *testing.T) {
 }
 
 func TestRuntimeEnvDefaultsIgnoresEmptyEnvOverrides(t *testing.T) {
-	for _, name := range runtimeEnvKeys() {
-		t.Setenv(name, "")
+	for _, v := range runtimeEnvVars {
+		unsetEnv(t, v.name)
+		if !v.applyWhenEmpty {
+			t.Setenv(v.name, "")
+		}
 	}
 
 	got, err := RuntimeEnvDefaults()
@@ -102,7 +138,7 @@ func TestRuntimeEnvDefaultsIgnoresEmptyEnvOverrides(t *testing.T) {
 
 func TestRuntimeEnvDefaultsRecordsExplicitFalsePullRequestAndPiAgent(t *testing.T) {
 	for _, name := range runtimeEnvKeys() {
-		t.Setenv(name, "")
+		unsetEnv(t, name)
 	}
 	t.Setenv(EnvAgent, "pi")
 	t.Setenv(EnvPullRequest, "false")
@@ -121,7 +157,7 @@ func TestRuntimeEnvStatusPlannerRouting(t *testing.T) {
 	for _, raw := range []string{"", " shadow ", "not-valid"} {
 		t.Run(raw, func(t *testing.T) {
 			for _, name := range runtimeEnvKeys() {
-				t.Setenv(name, "")
+				unsetEnv(t, name)
 			}
 			names := []string{EnvPlannerRouting, EnvPlannerRoutingArms, EnvPlannerRoutingFloor}
 			for _, name := range names {
@@ -189,9 +225,8 @@ func TestRuntimeEnvStatusReportsDefaultsAndOverrides(t *testing.T) {
 
 func TestRuntimeEnvStatusDefaultRowsDeriveFromRunOptionsPatch(t *testing.T) {
 	for _, name := range runtimeEnvKeys() {
-		t.Setenv(name, "")
+		unsetEnv(t, name)
 	}
-	unsetEnv(t, EnvMergeVerifyCommand)
 
 	rows, err := RuntimeEnvStatus()
 	if err != nil {
@@ -204,6 +239,11 @@ func TestRuntimeEnvStatusDefaultRowsDeriveFromRunOptionsPatch(t *testing.T) {
 		{Name: EnvExecutionMode, Value: defaults.ExecutionModeValue().String(), Source: "default"},
 		{Name: EnvAgent, Value: defaults.Agent.String(), Source: "default"},
 		{Name: EnvSessionTimeout, Value: defaults.SessionTimeoutValue().String(), Source: "default"},
+		{Name: EnvModel, Value: "", Source: "default"},
+		{Name: EnvRunModel, Value: "", Source: "default"},
+		{Name: EnvReviewModel, Value: "", Source: "default"},
+		{Name: EnvMergeReviewModel, Value: "", Source: "default"},
+		{Name: EnvResolverModel, Value: "", Source: "default"},
 		{Name: EnvUpdate, Value: "warn", Source: "default"},
 		{Name: EnvPullRequest, Value: "false", Source: "default"},
 		{Name: EnvReview, Value: "true", Source: "default"},
@@ -242,7 +282,7 @@ func TestRuntimeEnvStatusDefaultRowsDeriveFromRunOptionsPatch(t *testing.T) {
 
 func TestRuntimeEnvStatusReportsNewOverrides(t *testing.T) {
 	for _, name := range runtimeEnvKeys() {
-		t.Setenv(name, "")
+		unsetEnv(t, name)
 	}
 	t.Setenv(EnvMergeVerifyCommand, "go test ./...")
 	t.Setenv(EnvAggregateReviewConvergenceWindow, "4")
@@ -369,7 +409,7 @@ func TestRuntimeRunHeaderUsesEnabledUnlessExactlyZeroSemantics(t *testing.T) {
 
 func TestRuntimeAgentBudgetThresholdsAppliesOverrides(t *testing.T) {
 	for _, name := range runtimeEnvKeys() {
-		t.Setenv(name, "")
+		unsetEnv(t, name)
 	}
 	t.Setenv(EnvBudgetSliceOutputTokens, "42000")
 	t.Setenv(EnvBudgetSliceCost, "6.25")
@@ -386,7 +426,7 @@ func TestRuntimeAgentBudgetThresholdsAppliesOverrides(t *testing.T) {
 
 func TestInvalidBudgetOverridesFallBackAndWarnInStatus(t *testing.T) {
 	for _, name := range runtimeEnvKeys() {
-		t.Setenv(name, "")
+		unsetEnv(t, name)
 	}
 	t.Setenv(EnvBudgetSliceCost, "expensive")
 	t.Setenv(EnvBudgetPlanToolCalls, "-1")
@@ -415,7 +455,7 @@ func TestInvalidBudgetOverridesFallBackAndWarnInStatus(t *testing.T) {
 
 func TestRuntimeEnvDefaultsAppliesExecutionMode(t *testing.T) {
 	for _, name := range runtimeEnvKeys() {
-		t.Setenv(name, "")
+		unsetEnv(t, name)
 	}
 	t.Setenv(EnvExecutionMode, "current")
 
@@ -466,7 +506,7 @@ func TestRuntimeUpdateModeParsingStatusAndKeyCoverage(t *testing.T) {
 	for _, mode := range []selfupdate.Mode{selfupdate.ModeWarn, selfupdate.ModeAuto, selfupdate.ModeOff} {
 		t.Run(string(mode), func(t *testing.T) {
 			for _, name := range runtimeEnvKeys() {
-				t.Setenv(name, "")
+				unsetEnv(t, name)
 			}
 			t.Setenv(EnvUpdate, string(mode))
 
@@ -513,7 +553,7 @@ func TestRuntimeUpdateModeRejectsInvalidValue(t *testing.T) {
 
 func TestRuntimeEnvStatusReportsExecutionModeOverride(t *testing.T) {
 	for _, name := range runtimeEnvKeys() {
-		t.Setenv(name, "")
+		unsetEnv(t, name)
 	}
 	t.Setenv(EnvExecutionMode, "current")
 
@@ -566,7 +606,7 @@ func TestRuntimeEnvStatusReportsAgentAndExplicitFalsePullRequest(t *testing.T) {
 	for _, agent := range []AgentKind{AgentPi, AgentClaude} {
 		t.Run(agent.String(), func(t *testing.T) {
 			for _, name := range runtimeEnvKeys() {
-				t.Setenv(name, "")
+				unsetEnv(t, name)
 			}
 			t.Setenv(EnvAgent, agent.String())
 			t.Setenv(EnvPullRequest, "false")
@@ -586,6 +626,55 @@ func TestRuntimeEnvStatusReportsAgentAndExplicitFalsePullRequest(t *testing.T) {
 				t.Fatalf("unexpected pull request row: %#v", byName[EnvPullRequest])
 			}
 		})
+	}
+}
+
+func TestRuntimeModelEnvStatusAndKeys(t *testing.T) {
+	for _, name := range RuntimeEnvKeys() {
+		unsetEnv(t, name)
+	}
+	models := map[string]string{
+		EnvModel: "provider/base", EnvRunModel: "provider/run", EnvReviewModel: "provider/review",
+		EnvMergeReviewModel: "provider/merge", EnvResolverModel: "provider/resolver",
+	}
+	for name, value := range models {
+		if !slices.Contains(RuntimeEnvKeys(), name) {
+			t.Fatalf("missing model key %s", name)
+		}
+		t.Setenv(name, "\u2003"+value+"\t ")
+	}
+	rows, err := RuntimeEnvStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := make(map[string]EnvVarStatus)
+	for _, row := range rows {
+		byName[row.Name] = row
+	}
+	for name, value := range models {
+		if got := byName[name]; got != (EnvVarStatus{Name: name, Value: value, Source: "env"}) {
+			t.Fatalf("model status = %#v", got)
+		}
+	}
+}
+
+func TestRuntimeModelEnvRejectsInvalidValuesWithName(t *testing.T) {
+	for _, name := range RuntimeEnvKeys() {
+		unsetEnv(t, name)
+	}
+	for _, name := range []string{EnvModel, EnvRunModel, EnvReviewModel, EnvMergeReviewModel, EnvResolverModel} {
+		for _, value := range []string{"", " \t\u2003", "two models", "two\tmodels", "two\nmodels", "two\u00a0models"} {
+			t.Run(name+"/"+value, func(t *testing.T) {
+				t.Setenv(name, value)
+				_, defaultsErr := RuntimeEnvDefaults()
+				_, statusErr := RuntimeEnvStatus()
+				for _, err := range []error{defaultsErr, statusErr} {
+					if err == nil || !strings.HasPrefix(err.Error(), name+":") {
+						t.Fatalf("expected %s error for %q, got %v", name, value, err)
+					}
+				}
+			})
+		}
 	}
 }
 

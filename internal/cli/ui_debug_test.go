@@ -11,9 +11,7 @@ import (
 )
 
 func TestUIDebugCollectorIncludesRepositoryRuntimeDefaultsAndDoctorProblems(t *testing.T) {
-	for _, name := range runtimeconfig.RuntimeEnvKeys() {
-		t.Setenv(name, "")
-	}
+	clearTaoEnv(t)
 	t.Setenv("PATH", "")
 	t.Setenv("TAO_DATA_HOME", t.TempDir())
 	pullRequest := true

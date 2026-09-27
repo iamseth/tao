@@ -33,7 +33,43 @@ type Repo struct {
 
 // RepoRunDefaults records optional defaults for runs in one repository.
 type RepoRunDefaults struct {
-	PullRequest *bool `json:"pull_request,omitempty"`
+	PullRequest *bool              `json:"pull_request,omitempty"`
+	Models      *RepoModelDefaults `json:"models,omitempty"`
+}
+
+// RepoModelDefaults records optional base and per-role model selections.
+// Empty fields inherit the environment and built-in defaults.
+type RepoModelDefaults struct {
+	Model            string `json:"model,omitempty"`
+	RunModel         string `json:"run_model,omitempty"`
+	ReviewModel      string `json:"review_model,omitempty"`
+	MergeReviewModel string `json:"merge_review_model,omitempty"`
+	ResolverModel    string `json:"resolver_model,omitempty"`
+}
+
+// ModelDefaults returns the repository's model selections and whether they exist.
+func (r Repo) ModelDefaults() (RepoModelDefaults, bool) {
+	if r.RunDefaults == nil || r.RunDefaults.Models == nil {
+		return RepoModelDefaults{}, false
+	}
+	return *r.RunDefaults.Models, true
+}
+
+// WithModelDefaults returns a copy, removing model defaults when all fields are empty.
+func (r Repo) WithModelDefaults(values RepoModelDefaults) Repo {
+	var defaults RepoRunDefaults
+	if r.RunDefaults != nil {
+		defaults = *r.RunDefaults
+	}
+	defaults.Models = nil
+	if values != (RepoModelDefaults{}) {
+		defaults.Models = &values
+	}
+	r.RunDefaults = &defaults
+	if defaults.PullRequest == nil && defaults.Models == nil {
+		r.RunDefaults = nil
+	}
+	return r
 }
 
 // PullRequestDefault returns the repository's pull-request preference and
@@ -48,15 +84,19 @@ func (r Repo) PullRequestDefault() (bool, bool) {
 // WithPullRequestDefault returns a copy with an explicit repository default,
 // or with the default removed when value is nil.
 func (r Repo) WithPullRequestDefault(value *bool) Repo {
-	if value == nil {
+	var defaults RepoRunDefaults
+	if r.RunDefaults != nil {
+		defaults = *r.RunDefaults
+	}
+	defaults.PullRequest = nil
+	if value != nil {
+		copyValue := *value
+		defaults.PullRequest = &copyValue
+	}
+	r.RunDefaults = &defaults
+	if defaults.PullRequest == nil && defaults.Models == nil {
 		r.RunDefaults = nil
-		return r
 	}
-	copyValue := *value
-	if r.RunDefaults == nil {
-		r.RunDefaults = &RepoRunDefaults{}
-	}
-	r.RunDefaults.PullRequest = &copyValue
 	return r
 }
 

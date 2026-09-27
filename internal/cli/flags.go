@@ -3,8 +3,11 @@ package cli
 import (
 	"errors"
 	"flag"
+	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
 func (a App) flagSet(name string) *flag.FlagSet {
@@ -91,6 +94,18 @@ func flagStringValue(fs *flag.FlagSet, name string) string {
 		}
 	}
 	return fl.Value.String()
+}
+
+func modelFlagValue(fs *flag.FlagSet) (string, error) {
+	value := flagStringValue(fs, "model")
+	if value == "" {
+		return "", nil
+	}
+	model, err := runtimeconfig.ParseModelName(value)
+	if err != nil {
+		return "", fmt.Errorf("--model: %w", err)
+	}
+	return model, nil
 }
 
 func flagBoolValue(fs *flag.FlagSet, name string) bool {

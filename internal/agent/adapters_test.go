@@ -4,13 +4,204 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	agentmetrics "github.com/iamseth/tao/internal/agent/metrics"
 	"github.com/iamseth/tao/internal/agent/process"
 )
+
+// Provider exit must complete the session even with timeouts disabled and a
+// surviving child holding both output pipes open.
+func TestClaudeInheritedStdoutExit(t *testing.T) {
+	for _, outcome := range []string{"success", "failure"} {
+		t.Run(outcome, func(t *testing.T) {
+			ready := filepath.Join(t.TempDir(), "ready")
+			starter := func(ctx context.Context, cwd, _ string, _ []string) (process.Process, error) {
+				return process.DefaultProcessStarter(ctx, cwd, "sh", []string{"-c", `
+ cat >/dev/null
+ sleep 30 </dev/null &
+ echo $! > "$1"
+ printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}'
+ printf '%s\n' '{"type":"result","subtype":"success","session_id":"terminal"}'
+ echo provider-diagnostic >&2
+ if [ "$2" = failure ]; then exit 7; fi
+`, "sh", ready, outcome})
+			}
+			type completion struct {
+				result SessionResult
+				err    error
+			}
+			done := make(chan completion, 1)
+			go func() {
+				result, err := (claudeRuntime{starter: starter}).RunSession(context.Background(), Session{Prompt: "work", CollectMetrics: true})
+				done <- completion{result, err}
+			}()
+			var pid int
+			for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+				data, _ := os.ReadFile(ready) // #nosec G304 -- test-owned PID file under t.TempDir.
+				pid, _ = strconv.Atoi(strings.TrimSpace(string(data)))
+				if pid > 0 {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if pid <= 0 {
+				t.Fatal("provider did not publish child PID")
+			}
+			child, err := os.FindProcess(pid)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = child.Kill(); _ = child.Release() }()
+			select {
+			case got := <-done:
+				if got.result.Output != "done" || got.result.FinalText != "done" || got.result.Metrics == nil || got.result.Metrics.SessionID != "terminal" {
+					t.Fatalf("terminal output lost: %#v", got.result)
+				}
+				if outcome == "success" && got.err != nil {
+					t.Fatalf("successful provider exit: %v", got.err)
+				}
+				if outcome == "failure" && (got.err == nil || !strings.Contains(got.err.Error(), "exit status 7") || !strings.Contains(got.err.Error(), "provider-diagnostic")) {
+					t.Fatalf("exit status or diagnostic lost: %v", got.err)
+				}
+			case <-time.After(2 * time.Second):
+				_ = child.Kill()
+				select {
+				case <-done:
+				case <-time.After(2 * time.Second):
+					t.Fatal("session did not stop even after child cleanup")
+				}
+				t.Fatal("session waited for surviving stdout writer without a context timeout")
+			}
+			if err := child.Signal(syscall.Signal(0)); err != nil {
+				t.Fatalf("child must still be alive when session returns: %v", err)
+			}
+		})
+	}
+}
+
+// The provider exits or is killed while its child retains stderr. Cleanup must
+// not depend on that child exiting, and must preserve the provider diagnostic.
+func TestAdaptersInheritedStderrShutdown(t *testing.T) {
+	for _, provider := range []string{"pi", "claude"} {
+		for _, outcome := range []string{"cancel", "timeout", "exit"} {
+			t.Run(provider+"/"+outcome, func(t *testing.T) {
+				ready := filepath.Join(t.TempDir(), "ready")
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				starter := func(ctx context.Context, cwd, _ string, _ []string) (process.Process, error) {
+					return process.DefaultProcessStarter(ctx, cwd, "sh", []string{"-c", `
+ sleep 30 </dev/null >/dev/null &
+ echo provider-diagnostic >&2
+ echo $! > "$1"
+ if [ "$2" = exit ]; then exit 1; fi
+ exec sleep 30
+`, "sh", ready, outcome})
+				}
+				var runtime Runtime = piRuntime{starter: starter}
+				if provider == "claude" {
+					runtime = claudeRuntime{starter: starter}
+				}
+				session := Session{Prompt: "work"}
+				if outcome == "timeout" {
+					session.Timeout = time.Second
+				}
+				done := make(chan error, 1)
+				go func() {
+					_, err := WithSessionTimeout(runtime).RunSession(ctx, session)
+					done <- err
+				}()
+				var pid int
+				for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+					data, _ := os.ReadFile(ready) // #nosec G304 -- test-owned PID file under t.TempDir.
+					pid, _ = strconv.Atoi(strings.TrimSpace(string(data)))
+					if pid > 0 {
+						break
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				if pid <= 0 {
+					t.Fatal("provider did not publish child PID")
+				}
+				child, err := os.FindProcess(pid)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() { _ = child.Kill(); _ = child.Release() }()
+				if outcome == "cancel" {
+					cancel()
+				}
+				select {
+				case err = <-done:
+				case <-time.After(2 * time.Second):
+					cancel()
+					_ = child.Kill()
+					select {
+					case <-done:
+					case <-time.After(2 * time.Second):
+						t.Fatal("session did not stop even after child cleanup")
+					}
+					t.Fatal("session shutdown waited for the surviving stderr writer")
+				}
+				// SessionTimeoutError intentionally replaces the provider error;
+				// direct cancellation and exit must retain stderr annotation.
+				if err == nil || (outcome != "timeout" && !strings.Contains(err.Error(), "provider-diagnostic")) {
+					t.Fatalf("provider diagnostic lost: %v", err)
+				}
+				if outcome == "cancel" && !errors.Is(err, context.Canceled) {
+					t.Fatalf("cancellation lost: %v", err)
+				}
+				if outcome == "timeout" {
+					var timeout *SessionTimeoutError
+					if !errors.As(err, &timeout) || !errors.Is(err, context.DeadlineExceeded) {
+						t.Fatalf("session timeout lost: %v", err)
+					}
+				}
+				if err := child.Signal(syscall.Signal(0)); err != nil {
+					t.Fatalf("child must still be alive when session returns: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestAdaptersPassOpaqueModel(t *testing.T) {
+	for _, provider := range []string{"pi", "claude"} {
+		for _, model := range []string{"", "provider/opaque-model"} {
+			t.Run(provider+"/model="+model, func(t *testing.T) {
+				startErr := errors.New("stop after argv capture")
+				starter := func(_ context.Context, cwd, name string, args []string) (process.Process, error) {
+					want := []string{"--mode", "rpc", "--no-session"}
+					if provider == "claude" {
+						want = []string{"--print", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--permission-mode", "auto"}
+					}
+					if model != "" {
+						want = append(want, "--model", model)
+					}
+					if cwd != "/repo" || name != provider || !slices.Equal(args, want) {
+						t.Fatalf("launch = %q %q %q, want %q", cwd, name, args, want)
+					}
+					return nil, startErr
+				}
+				var runtime Runtime = piRuntime{starter: starter}
+				if provider == "claude" {
+					runtime = claudeRuntime{starter: starter}
+				}
+				_, err := runtime.RunSession(context.Background(), Session{RepoRoot: "/repo", Model: model})
+				if !errors.Is(err, startErr) {
+					t.Fatalf("error = %v, want starter error", err)
+				}
+			})
+		}
+	}
+}
 
 func TestAdaptersMeasurementPresence(t *testing.T) {
 	for _, provider := range []string{"pi", "claude"} {

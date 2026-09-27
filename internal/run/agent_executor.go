@@ -7,6 +7,7 @@ import (
 
 	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
 // Process aliases and defaults are re-exported here so the run package's
@@ -30,6 +31,7 @@ type agentExecutor struct {
 }
 
 type agentExecutorOptions struct {
+	Models             runtimeconfig.ModelSelection
 	Deps               agent.RuntimeDeps
 	CommitPolicy       CommitPolicy
 	ExecutionMode      ExecutionMode
@@ -50,6 +52,7 @@ func newAgentExecutor(descriptor agent.Descriptor, config ExecutionConfig, depen
 	return agentExecutor{
 		descriptor: descriptor,
 		options: agentExecutorOptions{
+			Models:             config.Models,
 			Deps:               agent.RuntimeDeps{ProcessStarter: dependencies.ProcessStarter},
 			CommitPolicy:       config.CommitPolicy,
 			ExecutionMode:      config.ExecutionMode,
@@ -70,6 +73,7 @@ func newAgentExecutor(descriptor agent.Descriptor, config ExecutionConfig, depen
 
 func (e agentExecutor) operationOptions() agentOperationOptions {
 	return agentOperationOptions{
+		Models:              e.options.Models,
 		CommitPolicy:        e.options.CommitPolicy,
 		ExecutionMode:       e.options.ExecutionMode,
 		StartingBranch:      e.options.StartingBranch,

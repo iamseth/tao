@@ -19,7 +19,7 @@ var runCommand = commandMetadata{
 	name:      "run",
 	minPrefix: "r",
 	usageLines: []string{
-		"run (r) [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue|--restart|--repair-verification|--reverify] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>",
+		"run (r) [--model NAME] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue|--restart|--repair-verification|--reverify] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>",
 	},
 	completionDescription: "Run pending slices with the selected agent",
 	long:                  "Run pending slices for a Tao plan with the selected agent. Tao prepares the requested workspace, executes pending work, automatically reworks review findings by default, records verification metadata, and follows the configured commit policy. In a sufficiently large terminal, Tao displays a pinned run header unless --no-run-header disables it.",
@@ -57,6 +57,7 @@ func registerRunRequestFlags(fs *flag.FlagSet) {
 
 func registerRunFlags(fs *flag.FlagSet) {
 	registerRunRequestFlags(fs)
+	fs.String("model", "", "override the agent model for every role in this run")
 	autoRework, maxReworkAttempts, _ := runReworkEnvDefaults()
 	fs.Bool("continue", false, "continue a blocked slice at its preserved execution boundary")
 	fs.Bool("restart", false, "restart a safe blocked automatic slice on a newer baseline")
@@ -69,6 +70,7 @@ func registerRunFlags(fs *flag.FlagSet) {
 }
 
 type runFlagValues struct {
+	Model         string
 	MaxSlices     int
 	CommitPolicy  runtimeconfig.CommitPolicy
 	ExecutionMode runtimeconfig.ExecutionMode
@@ -79,6 +81,9 @@ type runFlagValues struct {
 
 func runRequestOverridesFromFlags(fs *flag.FlagSet, values runFlagValues) runtimeconfig.RunOptionsPatch {
 	var overrides runtimeconfig.RunOptionsPatch
+	if flagWasProvided(fs, "model") && values.Model != "" {
+		overrides = overrides.WithModelForAllRoles(values.Model)
+	}
 	if flagWasProvided(fs, "max-slices") {
 		overrides = overrides.WithMaxSlices(values.MaxSlices)
 	}
@@ -117,7 +122,12 @@ func resolveRunRequestFlags(fs *flag.FlagSet) (runRequestInputs, error) {
 	if err != nil {
 		return runRequestInputs{}, err
 	}
+	model, err := modelFlagValue(fs)
+	if err != nil {
+		return runRequestInputs{}, err
+	}
 	overrides := runRequestOverridesFromFlags(fs, runFlagValues{
+		Model:         model,
 		MaxSlices:     flagIntValue(fs, "max-slices"),
 		CommitPolicy:  runtimeconfig.CommitPolicy(flagStringValue(fs, "commit-policy")),
 		ExecutionMode: runtimeconfig.ExecutionMode(flagStringValue(fs, "execution-mode")),
@@ -176,7 +186,7 @@ func (a App) run(ctx context.Context, repo planRunRepository, args []string) err
 	if err != nil {
 		return err
 	}
-	if err := requirePositionals(positional, 1, "usage: tao run [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue|--restart|--repair-verification|--reverify] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>"); err != nil {
+	if err := requirePositionals(positional, 1, "usage: tao run [--model NAME] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue|--restart|--repair-verification|--reverify] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>"); err != nil {
 		return err
 	}
 	input := positional[0]

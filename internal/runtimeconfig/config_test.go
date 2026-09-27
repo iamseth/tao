@@ -1,6 +1,8 @@
 package runtimeconfig
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -36,6 +38,126 @@ func TestLoadPlannerRoutingEnv(t *testing.T) {
 				t.Fatalf("LoadPlannerRoutingEnv() = %#v, want %#v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestParseModelName(t *testing.T) {
+	for _, value := range []string{"provider/model-v1:latest", "model*", "模型", " \tprovider/model-v1:latest\u2003"} {
+		got, err := ParseModelName(value)
+		if err != nil || got != strings.TrimSpace(value) {
+			t.Fatalf("ParseModelName(%q) = %q, %v", value, got, err)
+		}
+	}
+	for _, tt := range []struct{ value, problem string }{
+		{"", "empty"}, {" \t\u2003", "empty"},
+		{"two models", "whitespace"}, {"two\tmodels", "whitespace"},
+		{"two\nmodels", "whitespace"}, {"two\u00a0models", "whitespace"},
+		{"two\u2003models", "whitespace"},
+	} {
+		got, err := ParseModelName(tt.value)
+		if err == nil || !strings.Contains(err.Error(), tt.problem) || got != "" {
+			t.Fatalf("ParseModelName(%q) = %q, %v; want %s error", tt.value, got, err, tt.problem)
+		}
+	}
+}
+
+func TestModelSelectionFor(t *testing.T) {
+	roles := []ModelRole{ModelRoleDefault, ModelRoleRun, ModelRoleReview, ModelRoleMergeReview, ModelRoleResolver, "unknown"}
+	for _, role := range roles {
+		if got := (ModelSelection{}).For(role); got != "" {
+			t.Fatalf("unset For(%q) = %q", role, got)
+		}
+		if got := (ModelSelection{Base: "base"}).For(role); got != "base" {
+			t.Fatalf("base For(%q) = %q", role, got)
+		}
+	}
+	models := ModelSelection{Base: "base", Run: "run", Review: "review", MergeReview: "merge-review", Resolver: "resolver"}
+	for role, want := range map[ModelRole]string{
+		ModelRoleDefault: "base", ModelRoleRun: "run", ModelRoleReview: "review",
+		ModelRoleMergeReview: "merge-review", ModelRoleResolver: "resolver", "unknown": "base",
+	} {
+		if got := models.For(role); got != want {
+			t.Fatalf("For(%q) = %q, want %q", role, got, want)
+		}
+	}
+	models.Base = ""
+	if got := models.For(ModelRoleReview); got != "review" {
+		t.Fatalf("role override without base = %q", got)
+	}
+}
+
+func TestResolveRunOptionsModelPrecedence(t *testing.T) {
+	for _, name := range RuntimeEnvKeys() {
+		unsetEnv(t, name)
+	}
+	t.Setenv(EnvModel, " env-base ")
+	t.Setenv(EnvReviewModel, "env-review")
+	defaults, err := RuntimeEnvDefaults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := RunOptionsPatch{RunModel: " repo-run ", ReviewModel: "repo-review", MergeReviewModel: "repo-merge", ResolverModel: "repo-resolver"}
+	resolved, err := ResolveRunOptionsWithRepositoryDefaults(defaults.RunOptionsPatch, repository, RunOptionsPatch{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := ModelSelection{Base: "env-base", Run: "repo-run", Review: "repo-review", MergeReview: "repo-merge", Resolver: "repo-resolver"}
+	if resolved.Models != want {
+		t.Fatalf("Models = %#v, want %#v", resolved.Models, want)
+	}
+	baseOnly, err := ResolveRunOptionsWithRepositoryDefaults(defaults.RunOptionsPatch, repository, RunOptionsPatch{Model: "request-base"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want.Base = "request-base"
+	if baseOnly.Models != want {
+		t.Fatalf("base override changed role overrides: %#v", baseOnly.Models)
+	}
+	overrides := RunOptionsPatch{Agent: AgentClaude}.WithModelForAllRoles(" request-model ")
+	if overrides.Agent != AgentClaude {
+		t.Fatal("model helper lost unrelated fields")
+	}
+	resolved, err = ResolveRunOptionsWithRepositoryDefaults(defaults.RunOptionsPatch, repository, overrides)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = ModelSelection{Base: "request-model", Run: "request-model", Review: "request-model", MergeReview: "request-model", Resolver: "request-model"}
+	if resolved.Models != want {
+		t.Fatalf("request Models = %#v, want %#v", resolved.Models, want)
+	}
+}
+
+func TestResolveRunOptionsRejectsInvalidModelsInEveryStage(t *testing.T) {
+	for _, patch := range []RunOptionsPatch{
+		{Model: " "}, {RunModel: "two models"}, {ReviewModel: "two\tmodels"},
+		{MergeReviewModel: "two\u2003models"}, {ResolverModel: "two\nmodels"},
+	} {
+		for stage := range 3 {
+			stages := [3]RunOptionsPatch{}
+			stages[stage] = patch
+			if _, err := ResolveRunOptionsWithRepositoryDefaults(stages[0], stages[1], stages[2]); err == nil {
+				t.Fatalf("stage %d accepted invalid patch %#v", stage, patch)
+			}
+		}
+	}
+}
+
+func TestRunOptionsPatchModelJSON(t *testing.T) {
+	data, err := json.Marshal(RunOptionsPatch{})
+	if err != nil || string(data) != "{}" {
+		t.Fatalf("empty patch JSON = %s, %v", data, err)
+	}
+	patch := RunOptionsPatch{Model: "base", RunModel: "run", ReviewModel: "review", MergeReviewModel: "merge", ResolverModel: "resolver"}
+	data, err = json.Marshal(patch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"model":"base","run_model":"run","review_model":"review","merge_review_model":"merge","resolver_model":"resolver"}`; string(data) != want {
+		t.Fatalf("patch JSON = %s, want %s", data, want)
+	}
+	var decoded RunOptionsPatch
+	if err := json.Unmarshal(data, &decoded); err != nil || decoded != patch {
+		t.Fatalf("decoded patch = %#v, %v", decoded, err)
 	}
 }
 
@@ -226,7 +348,7 @@ func TestResolveRunOptionsAppliesBuiltInDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if options.Mode != ModeRun || options.MaxSlices != 0 || options.Continue || options.CommitPolicy != CommitPolicySlice || options.ExecutionMode != ExecutionModeIsolated || options.Agent != AgentPi || options.PullRequest || !options.ReviewEnabled || options.SessionTimeout != DefaultSessionTimeout {
+	if options.Mode != ModeRun || options.MaxSlices != 0 || options.Continue || options.CommitPolicy != CommitPolicySlice || options.ExecutionMode != ExecutionModeIsolated || options.Agent != AgentPi || options.PullRequest || !options.ReviewEnabled || options.SessionTimeout != DefaultSessionTimeout || options.Models != (ModelSelection{}) {
 		t.Fatalf("unexpected built-in defaults: %#v", options)
 	}
 }
@@ -440,16 +562,21 @@ func TestRunOptionsPatchHelpersPreserveOptionalValues(t *testing.T) {
 // service uses to re-apply a resolved request over its own defaults.
 func TestResolvedRunOptionsRunOptionsPatchReappliesOnDefaults(t *testing.T) {
 	resolved, err := ResolveRunOptions(DefaultRunOptionsPatch(), RunOptionsPatch{
-		Mode:          ModeStep,
-		CommitPolicy:  CommitPolicySlice,
-		ExecutionMode: ExecutionModeCurrent,
-		Agent:         AgentClaude,
+		Mode:             ModeStep,
+		CommitPolicy:     CommitPolicySlice,
+		ExecutionMode:    ExecutionModeCurrent,
+		Agent:            AgentClaude,
+		Model:            "base",
+		RunModel:         "run",
+		ReviewModel:      "review",
+		MergeReviewModel: "merge-review",
+		ResolverModel:    "resolver",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	reapplied, err := ResolveRunOptions(RunOptionsPatch{Agent: AgentPi}, resolved.RunOptionsPatch())
+	reapplied, err := ResolveRunOptions(RunOptionsPatch{Agent: AgentPi}.WithModelForAllRoles("service-model"), resolved.RunOptionsPatch())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -480,11 +607,17 @@ func TestResolvedRunOptionsRunOptionsPatchProjectsExecutionMode(t *testing.T) {
 }
 
 func TestResolvedRunOptionsRunOptionsPatchRoundTrip(t *testing.T) {
-	resolved, err := ResolveRunOptions(DefaultRunOptionsPatch().WithMaxSlices(3), RunOptionsPatch{ExecutionMode: ExecutionModeCurrent})
+	resolved, err := ResolveRunOptions(DefaultRunOptionsPatch().WithMaxSlices(3), RunOptionsPatch{
+		ExecutionMode: ExecutionModeCurrent,
+		Model:         "base", RunModel: "run", ReviewModel: "review", MergeReviewModel: "merge", ResolverModel: "resolver",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defaults := resolved.RunOptionsPatch()
+	if defaults.Model != "base" || defaults.RunModel != "run" || defaults.ReviewModel != "review" || defaults.MergeReviewModel != "merge" || defaults.ResolverModel != "resolver" {
+		t.Fatalf("model projection = %#v", defaults)
+	}
 	if defaults.MaxSlices == nil || *defaults.MaxSlices != 3 || defaults.ExecutionMode != ExecutionModeCurrent || defaults.ReviewEnabled == nil || !*defaults.ReviewEnabled || defaults.SessionTimeout == nil || *defaults.SessionTimeout != DefaultSessionTimeout {
 		t.Fatalf("expected resolved values to project back into defaults, got %#v", defaults)
 	}

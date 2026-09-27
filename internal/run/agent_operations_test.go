@@ -21,6 +21,139 @@ import (
 	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
+func TestAgentOperationModels(t *testing.T) {
+	const approval = "```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Approved.\",\"findings\":[]}\n```"
+	const correction = "```tao-review-proposal-json\n{\"commit_message\":{\"subject\":\"fix(review): preserve exact approval\",\"body\":\"What:\\nPreserve the exact approval.\\n\\nWhy:\\nAvoid unnecessary sessions.\"}}\n```"
+	for _, selection := range []struct {
+		name              string
+		models            runtimeconfig.ModelSelection
+		run, review, base string
+	}{
+		{name: "unset"},
+		{name: "roles", models: runtimeconfig.ModelSelection{Base: "b", Run: "r", Review: "v"}, run: "r", review: "v", base: "b"},
+		{name: "base fallback", models: runtimeconfig.ModelSelection{Base: "b"}, run: "b", review: "b", base: "b"},
+	} {
+		for _, kind := range []AgentKind{AgentPi, AgentClaude} {
+			for _, operation := range []string{"execution", "rework", "review and correction", "pr", "body"} {
+				t.Run(selection.name+"/"+string(kind)+"/"+operation, func(t *testing.T) {
+					repoRoot := t.TempDir()
+					detail := runPathSessionDetail(t, repoRoot, plan.StatusInReview, nil, []string{"001-a"}, plan.StatusCompleted)
+					detail.State.Plan.ChangeType = plan.ChangeTypeFix
+					detail.State.Repo.BaseCommit = "base123"
+					persistReviewState(t, detail.Dir, detail)
+					repository := plan.NewFileRepository("")
+					want := selection.base
+					switch operation {
+					case "execution", "rework":
+						want = selection.run
+					case "review and correction":
+						want = selection.review
+					}
+					calls := 0
+					descriptor, _ := agent.Lookup(kind)
+					providerFactory := descriptor.NewRuntime
+					descriptor.NewRuntime = func(agent.RuntimeDeps) agent.Runtime {
+						return agentRuntimeFunc(func(ctx context.Context, session agent.Session) (agent.SessionResult, error) {
+							calls++
+							if session.Model != want {
+								t.Fatalf("session %d model = %q, want %q", calls, session.Model, want)
+							}
+							output := "created https://github.com/iamseth/tao/pull/123"
+							if operation == "review and correction" {
+								output = approval
+								if calls == 2 {
+									output = correction
+								}
+							}
+							starter := phaseTelemetryStarter(t, kind, output, plan.AgentMetricsUnavailable)
+							return providerFactory(agent.RuntimeDeps{ProcessStarter: func(ctx context.Context, cwd, name string, args []string) (Process, error) {
+								index := slices.Index(args, "--model")
+								if want == "" {
+									if index != -1 {
+										t.Fatalf("unset model changed launch arguments: %v", args)
+									}
+								} else {
+									if index != len(args)-2 || args[index+1] != want {
+										t.Fatalf("launch arguments = %v, want appended --model %s", args, want)
+									}
+									// The legacy fake also checks the unchanged launch prefix.
+									args = args[:index]
+								}
+								return starter(ctx, cwd, name, args)
+							}}).RunSession(ctx, session)
+						})
+					}
+					executor := newAgentExecutor(descriptor, ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Models: selection.models}}, RunDependencies{
+						LogAppender: repository, EventAppender: repository, PlanRecordFactory: fileReviewRecordFactory(repository),
+						reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123", currentBranch: "feature"}),
+					}, "", nil)
+					var err error
+					wantCalls := 1
+					switch operation {
+					case "execution", "rework":
+						sliceID := "001-a"
+						if operation == "rework" {
+							sliceID = "r101-fix"
+						}
+						err = executor.RunSlice(context.Background(), SliceRun{PlanDir: detail.Dir, RepoRoot: repoRoot, SliceID: sliceID})
+					case "review and correction":
+						wantCalls = 2
+						var review plan.PlanReview
+						review, err = executor.CreateReview(context.Background(), ReviewRun{PlanDir: detail.Dir, Detail: detail, RepoRoot: repoRoot})
+						if err == nil && (review.Verdict != plan.ReviewVerdictApprove || review.CommitMessage == nil) {
+							t.Fatalf("review = %+v", review)
+						}
+					case "pr":
+						_, err = executor.CreatePullRequest(context.Background(), PullRequestRun{PlanDir: detail.Dir, PlanID: "plan-a", RepoRoot: repoRoot})
+					case "body":
+						_, err = executor.GeneratePullRequestBody(context.Background(), PullRequestBodyRun{PlanDir: detail.Dir, PlanID: "plan-a", RepoRoot: repoRoot})
+					}
+					if err != nil || calls != wantCalls {
+						t.Fatalf("error=%v provider calls=%d, want %d", err, calls, wantCalls)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestHistoricalProposalCorrectionModel(t *testing.T) {
+	for _, model := range []string{"", "v"} {
+		t.Run("model="+model, func(t *testing.T) {
+			fixture := newPullRequestOrchestrationFixture(t)
+			repository := plan.NewFileRepository(fixture.plansRoot)
+			detail, err := repository.ResolvePlan(context.Background(), fixture.planDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			reviewer := struct {
+				ReviewCreator
+				AgentSessionExecutor
+			}{AgentSessionExecutor: agentSessionExecutorFunc(func(_ context.Context, request AgentSessionRequest) (AgentSessionResult, error) {
+				calls++
+				if request.Model != model {
+					t.Fatalf("correction model = %q, want %q", request.Model, model)
+				}
+				return AgentSessionResult{Output: "```tao-review-proposal-json\n{\"commit_message\":{\"subject\":\"fix(pr): recover exact finalization\",\"body\":\"What:\\nRecover the exact approved head.\\n\\nWhy:\\nFinish pull request handoff safely.\"}}\n```"}, nil
+			})}
+			models := runtimeconfig.ModelSelection{}
+			if model != "" {
+				models = runtimeconfig.ModelSelection{Base: "b", Run: "r", Review: model}
+			}
+			finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Models: models}}, RunDependencies{
+				CommandRunner: defaultCommandRunner, PlanRecordFactory: fileReviewRecordFactory(repository), ReviewCreator: reviewer,
+			}))
+			if err := finalizer.ensureApprovedReviewProposal(context.Background(), detail, fixture.worktreeRoot, fixture.branch, fixture.head); err != nil {
+				t.Fatal(err)
+			}
+			if calls != 1 {
+				t.Fatalf("correction calls = %d, want 1", calls)
+			}
+		})
+	}
+}
+
 func TestRunSliceWithAgentSessionCarriesInterruptedResumePrompt(t *testing.T) {
 	executor := &recordingAgentSessionExecutor{}
 	err := runSliceWithAgentSession(context.Background(), executor, agentOperationOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeIsolated}, SliceRun{

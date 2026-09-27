@@ -38,6 +38,9 @@ type Session struct {
 	CollectMetrics       bool
 	NoProgressToolLimit  int
 	VerificationCommands []string
+	// Model is an opaque provider model selector passed to the runtime's
+	// --model flag when non-empty.
+	Model string
 	// Timeout caps a single Runtime session's wall-clock duration. A zero value
 	// means no timeout.
 	Timeout time.Duration

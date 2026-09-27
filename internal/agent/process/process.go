@@ -20,6 +20,9 @@ import (
 type ProcessStarter func(ctx context.Context, cwd string, name string, args []string) (Process, error)
 
 // Process is the subset of a running subprocess the runtimes depend on.
+// Wait may run concurrently with output readers. Implementations must observe
+// provider exit independently of output EOF, allow bounded draining, and release
+// their output readers before returning even if descendants retain the pipes.
 type Process interface {
 	Stdin() io.WriteCloser
 	Stdout() io.Reader
@@ -33,6 +36,7 @@ type execProcess struct {
 	stdin  io.WriteCloser
 	stdout io.Reader
 	stderr io.Reader
+	output []*outputPipe
 }
 
 // DefaultProcessStarter starts name with args under cwd, wiring stdin/stdout/
@@ -51,24 +55,39 @@ func DefaultProcessStarter(ctx context.Context, cwd string, name string, args []
 	if err != nil {
 		return nil, err
 	}
-	stdout, err := cmd.StdoutPipe()
+	stdout, stdoutWriter, err := newOutputPipe()
 	if err != nil {
+		_ = stdin.Close()
 		return nil, err
 	}
-	stderr, err := cmd.StderrPipe()
+	defer func() { _ = stdoutWriter.Close() }()
+	stderr, stderrWriter, err := newOutputPipe()
 	if err != nil {
+		_ = stdin.Close()
+		_ = stdout.file.Close()
 		return nil, err
 	}
+	defer func() { _ = stderrWriter.Close() }()
+	// Caller-owned pipes let Wait observe provider exit without prematurely
+	// closing unread output, unlike Cmd.StdoutPipe and Cmd.StderrPipe.
+	cmd.Stdout, cmd.Stderr = stdoutWriter, stderrWriter
 	if err := cmd.Start(); err != nil {
+		_ = stdin.Close()
+		_ = stdout.file.Close()
+		_ = stderr.file.Close()
 		return nil, err
 	}
-	return &execProcess{cmd: cmd, stdin: stdin, stdout: stdout, stderr: stderr}, nil
+	return &execProcess{cmd: cmd, stdin: stdin, stdout: stdout, stderr: stderr, output: []*outputPipe{stdout, stderr}}, nil
 }
 
 func (p *execProcess) Stdin() io.WriteCloser { return p.stdin }
 func (p *execProcess) Stdout() io.Reader     { return p.stdout }
 func (p *execProcess) Stderr() io.Reader     { return p.stderr }
-func (p *execProcess) Wait() error           { return p.cmd.Wait() }
+func (p *execProcess) Wait() error {
+	err := p.cmd.Wait()
+	drainOutput(p.output)
+	return err
+}
 func (p *execProcess) Kill() error {
 	if p.cmd.Process == nil {
 		return nil

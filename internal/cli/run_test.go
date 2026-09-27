@@ -287,6 +287,61 @@ func TestRunNoReviewFlagOverridesRunRequest(t *testing.T) {
 	}
 }
 
+func TestRunModelFlagOverridesEveryRole(t *testing.T) {
+	clearTaoEnv(t)
+	t.Setenv(runtimeconfig.EnvModel, "env-base")
+	t.Setenv(runtimeconfig.EnvReviewModel, "env-review")
+	for _, args := range [][]string{{"plan-a"}, {"--model=", "plan-a"}, {"--model", "provider/override", "plan-a"}} {
+		fs, positional, err := (App{Err: io.Discard}).parseArgs("run", args, registerRunFlags)
+		if err != nil {
+			t.Fatal(err)
+		}
+		inputs, err := resolveRunRequestFlags(fs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "repo-model"
+		if flagStringValue(fs, "model") != "" {
+			want = "provider/override"
+			patch := inputs.overrides
+			for _, got := range []string{patch.Model, patch.RunModel, patch.ReviewModel, patch.MergeReviewModel, patch.ResolverModel} {
+				if got != want {
+					t.Fatalf("model override patch = %#v", patch)
+				}
+			}
+		} else if inputs.overrides.Model != "" || inputs.overrides.ReviewModel != "" {
+			t.Fatalf("empty/absent model should not override: %#v", inputs.overrides)
+		}
+		request, err := inputs.defaults.newRunRequestWithRepository(positional[0], (runtimeconfig.RunOptionsPatch{}).WithModelForAllRoles("repo-model"), inputs.overrides)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, role := range []runtimeconfig.ModelRole{runtimeconfig.ModelRoleDefault, runtimeconfig.ModelRoleRun, runtimeconfig.ModelRoleReview, runtimeconfig.ModelRoleMergeReview, runtimeconfig.ModelRoleResolver} {
+			if got := request.Models.For(role); got != want {
+				t.Fatalf("args %v role %s = %q, want %q", args, role, got, want)
+			}
+		}
+	}
+}
+
+func TestModelFlagsRejectInvalidNames(t *testing.T) {
+	clearTaoEnv(t)
+	app := App{Out: io.Discard, Err: io.Discard}
+	for _, model := range []string{"two models", " \t", "model\nname"} {
+		for _, command := range []string{"run", "review"} {
+			var err error
+			if command == "run" {
+				err = app.run(context.Background(), nil, []string{"--model", model, "plan-a"})
+			} else {
+				err = app.review(context.Background(), nil, []string{"--run", "--model", model, "plan-a"})
+			}
+			if err == nil || !strings.Contains(err.Error(), "--model") || !strings.Contains(err.Error(), "model name") {
+				t.Fatalf("%s --model %q error = %v, want flag-specific validation", command, model, err)
+			}
+		}
+	}
+}
+
 func TestRunAgentFlagIsRejected(t *testing.T) {
 	clearTaoEnv(t)
 	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)

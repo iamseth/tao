@@ -676,6 +676,36 @@ not stall forever on one stuck agent process. The default is 20 minutes; set
 the ceiling. Interactive planning sessions (`/tao-plan` and `/tao-slice`) are not
 subject to this timeout.
 
+#### Choose models for agent sessions
+
+Use `TAO_MODEL` as a shared base and role settings when implementation, review,
+or merge work benefits from a different model. `TAO_RUN_MODEL` covers
+implementation and rework slices; `TAO_REVIEW_MODEL` covers plan review and its
+proposal correction; `TAO_MERGE_REVIEW_MODEL` covers aggregate merge review;
+`TAO_RESOLVER_MODEL` covers merge conflict and rework resolution. Planning
+generation, pull-request work, and standalone merge-message generation use the
+base model, not a role override.
+
+Resolution has three stages: environment settings establish the baseline,
+repository defaults override the corresponding fields, and an explicit
+per-invocation `--model` overrides the base and every role. After resolution,
+each unset role falls back to the base. Thus a repository base does not erase
+an inherited environment role setting; remove that role setting to use the
+base. Repository `unset` removes only that stored default, restoring inheritance.
+With no effective model setting, launch arguments remain unchanged and the
+runtime chooses. Defaults are resolved for each invocation, not pinned to a
+plan, so a later invocation can use a different model. See the
+[README configuration reference](../README.md#configuration) for flags.
+
+Names are opaque to Tao and passed to `pi --model` or `claude --model`; supplied
+values must be non-empty and whitespace-free. Unset an environment variable
+rather than assigning an empty string. Pi model patterns are fuzzy: prefer an
+exact `provider/id` from `pi --list-models` rather than a short name that may
+match another catalog entry. An unknown model fails the session with the
+runtime's message; Tao does not retry or fall back to another model. Correct the
+setting before trying again under the ordinary recovery rules. Model selection
+never authorizes recovery, approval, commit, PR, or merge.
+
 #### Recover an interrupted slice
 
 Tao may retry an implementation handoff after at most two explicitly structured

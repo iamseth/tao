@@ -21,7 +21,191 @@ import (
 	"github.com/iamseth/tao/internal/agentsession"
 	commitcontract "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 )
+
+func TestMergeSessionModels(t *testing.T) {
+	for _, tt := range []struct {
+		op   BatchAgentOperation
+		want string
+	}{
+		{BatchAgentOperationCandidateResolution, "r"},
+		{BatchAgentOperationSinglePlanResolution, "r"},
+		{BatchAgentOperationAggregateRework, "r"},
+		{BatchAgentOperationAggregateReview, "v"},
+		{BatchAgentOperationSinglePlanReview, "v"},
+		{BatchAgentOperationProposalGeneration, "base"},
+	} {
+		t.Run(string(tt.op), func(t *testing.T) {
+			t.Setenv("TAO_MODEL", "ignored-env-model")
+			session, err := NewBatchAgentSession(BatchAgentSessionConfig{
+				Models: runtimeconfig.ModelSelection{Base: "base", Resolver: "r", MergeReview: "v"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			session.run = func(_ context.Context, request agentsession.Request) (agentsession.Result, error) {
+				if request.Model != tt.want {
+					t.Fatalf("model = %q, want %q", request.Model, tt.want)
+				}
+				return agentsession.Result{}, nil
+			}
+			if _, err := session.Resolve(context.Background(), BatchAgentSessionRequest{Operation: tt.op}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestMergeSessionDoesNotLoadModelEnvironment(t *testing.T) {
+	t.Setenv("TAO_MODEL", "invalid model")
+	session, err := NewBatchAgentSession(BatchAgentSessionConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.run = func(_ context.Context, request agentsession.Request) (agentsession.Result, error) {
+		if request.Model != "" {
+			t.Fatalf("unset model = %q", request.Model)
+		}
+		return agentsession.Result{}, nil
+	}
+	if _, err := session.Resolve(context.Background(), BatchAgentSessionRequest{Operation: BatchAgentOperationCandidateResolution}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSingleMergePreflightUsesResolverModel(t *testing.T) {
+	fakeConfinementExecutable(t)
+	t.Setenv("PI_CODING_AGENT_DIR", t.TempDir())
+	original := agent.DefaultProcessStarter
+	t.Cleanup(func() { agent.DefaultProcessStarter = original })
+	stopped := errors.New("stop readiness fixture")
+	calls := 0
+	agent.DefaultProcessStarter = func(_ context.Context, _, _ string, args []string) (agent.Process, error) {
+		calls++
+		if !strings.Contains(strings.Join(args, " "), "--model r") {
+			t.Fatalf("readiness args = %v", args)
+		}
+		return nil, stopped
+	}
+	session, err := NewSingleMergeAgentSession(SingleMergeAgentSessionConfig{
+		Agent: runtimeconfig.AgentPi, Models: runtimeconfig.ModelSelection{Resolver: "r", MergeReview: "v"}, ProviderLookPath: testProviderLookPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, protected := singleMergeAgentTestBoundary(t)
+	err = session.Preflight(context.Background(), BatchAgentSessionRequest{Operation: BatchAgentOperationSinglePlanResolution, IntegrationRoot: root, ProtectedGitObjectRoot: protected})
+	if calls != 1 || err == nil || !strings.Contains(err.Error(), stopped.Error()) {
+		t.Fatalf("calls=%d error=%v", calls, err)
+	}
+}
+
+func TestSingleMergePreflightProbesDistinctEffectiveModels(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		models runtimeconfig.ModelSelection
+		want   []string
+	}{
+		{"distinct roles", runtimeconfig.ModelSelection{Resolver: "r", MergeReview: "v"}, []string{"r", "v"}},
+		{"identical roles", runtimeconfig.ModelSelection{Resolver: "r", MergeReview: "r"}, []string{"r"}},
+		{"base fallback", runtimeconfig.ModelSelection{Base: "base", Resolver: "r"}, []string{"r", "base"}},
+		{"identical effective roles", runtimeconfig.ModelSelection{Base: "base", Resolver: "base"}, []string{"base"}},
+		{"unset", runtimeconfig.ModelSelection{}, []string{""}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var models []string
+			installSingleMergeReadinessFixture(t, &models, "rejected")
+			session, err := NewSingleMergeAgentSession(SingleMergeAgentSessionConfig{
+				Agent: runtimeconfig.AgentPi, Models: tt.models, ProviderLookPath: testProviderLookPath,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			root, protected := singleMergeAgentTestBoundary(t)
+			if err := session.Preflight(context.Background(), BatchAgentSessionRequest{
+				Operation: BatchAgentOperationSinglePlanResolution, IntegrationRoot: root, ProtectedGitObjectRoot: protected,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(models, tt.want) {
+				t.Fatalf("probed models = %q, want %q", models, tt.want)
+			}
+		})
+	}
+}
+
+func TestSingleMergeRejectedReviewerPreservesResolutionAuthority(t *testing.T) {
+	var models []string
+	installSingleMergeReadinessFixture(t, &models, "rejected")
+	fixture, request, git := preparedSingleResolutionFixture(t)
+	starts := 0
+	session, err := NewSingleMergeAgentSession(SingleMergeAgentSessionConfig{
+		Agent: runtimeconfig.AgentPi, Models: runtimeconfig.ModelSelection{Resolver: "r", MergeReview: "rejected"},
+		ProviderLookPath: testProviderLookPath,
+		ProcessStarter: func(context.Context, string, string, []string) (agent.Process, error) {
+			starts++
+			return nil, errors.New("unexpected resolver invocation")
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &recordingSingleResolutionStore{current: request.Intent}
+	resolver := GuardedSingleConflictResolver{Git: git, Recorder: store, Agent: session}
+	_, err = resolver.ResolveConflict(context.Background(), request)
+	if !errors.Is(err, ErrSingleResolutionPreflight) || !strings.Contains(err.Error(), "unknown model: rejected") {
+		t.Fatalf("reviewer rejection = %v, want model readiness preflight failure", err)
+	}
+	if !slices.Equal(models, []string{"r", "rejected"}) {
+		t.Fatalf("probed models = %q", models)
+	}
+	if starts != 0 || store.records != 0 || store.advances != 0 || store.current.Resolution != nil {
+		t.Fatalf("reviewer rejection consumed resolution authority: starts=%d store=%+v", starts, store)
+	}
+	if head := strings.TrimSpace(realGitOutput(t, fixture.repoRoot, "rev-parse", "HEAD")); head != request.Intent.DefaultParent {
+		t.Fatalf("reviewer rejection created an integration commit: HEAD=%s", head)
+	}
+}
+
+// Exercise the production RPC readiness path without launching a provider or confiner.
+func installSingleMergeReadinessFixture(t *testing.T, models *[]string, rejected string) {
+	t.Helper()
+	fakeConfinementExecutable(t)
+	t.Setenv("PI_CODING_AGENT_DIR", t.TempDir())
+	original := agent.DefaultProcessStarter
+	t.Cleanup(func() { agent.DefaultProcessStarter = original })
+	agent.DefaultProcessStarter = func(_ context.Context, _, _ string, args []string) (agent.Process, error) {
+		model := ""
+		if i := slices.Index(args, "--model"); i >= 0 && i+1 < len(args) {
+			model = args[i+1]
+		}
+		*models = append(*models, model)
+		output := `{"id":"tao-readiness-state","type":"response","command":"get_state","success":true,"data":{"model":{"provider":"fixture","id":"valid"}}}` + "\n" +
+			`{"id":"tao-readiness-models","type":"response","command":"get_available_models","success":true,"data":{"models":[{"provider":"fixture","id":"valid"}]}}` + "\n"
+		if model == rejected {
+			output = `{"id":"tao-readiness-state","type":"response","command":"get_state","success":false,"error":"unknown model: ` + rejected + `"}` + "\n"
+		}
+		proc := &singleMergeReadinessProcess{cleanupTestProcess: newCleanupTestProcess(nil), output: output}
+		t.Cleanup(func() {
+			if strings.Contains(proc.input.String(), `"type":"prompt"`) {
+				t.Error("readiness sent a model prompt")
+			}
+		})
+		return proc, nil
+	}
+}
+
+type singleMergeReadinessProcess struct {
+	*cleanupTestProcess
+	input  bytes.Buffer
+	output string
+}
+
+func (p *singleMergeReadinessProcess) Stdin() io.WriteCloser {
+	return cleanupTestWriteCloser{Writer: &p.input}
+}
+func (p *singleMergeReadinessProcess) Stdout() io.Reader { return strings.NewReader(p.output) }
 
 func testProviderLookPath(name string) (string, error) { return name, nil }
 func successfulConfinementProbe() error                { return nil }

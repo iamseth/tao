@@ -125,7 +125,7 @@ func (s *Service) GeneratePlan(ctx context.Context, request GeneratePlanRequest)
 	descriptor, _ := agent.Lookup(kind)
 	result, err := s.runtimeFor(kind).RunSession(ctx, agent.Session{
 		RepoRoot: request.Session.Repo.Root, Prompt: prompt, PermissionMode: mode,
-		Timeout: request.Timeout, Progress: s.Log, CollectMetrics: true,
+		Timeout: request.Timeout, Model: s.Model, Progress: s.Log, CollectMetrics: true,
 	})
 	treatment = &Treatment{
 		RuntimeLabel: descriptor.Label, ProviderID: "unknown", ModelID: "unknown",

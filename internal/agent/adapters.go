@@ -39,6 +39,7 @@ func (r piRuntime) RunSession(ctx context.Context, session Session) (SessionResu
 	result, err := client.RunAgentSession(ctx, piagent.Request{
 		RepoRoot:             session.RepoRoot,
 		Prompt:               session.Prompt,
+		Model:                session.Model,
 		NoProgressToolLimit:  session.NoProgressToolLimit,
 		VerificationCommands: session.VerificationCommands,
 		SessionInfoMode:      mode,
@@ -74,6 +75,7 @@ func (r claudeRuntime) RunSession(ctx context.Context, session Session) (Session
 	result, err := client.RunAgentSession(ctx, claudeagent.Request{
 		RepoRoot:       session.RepoRoot,
 		Prompt:         session.Prompt,
+		Model:          session.Model,
 		PermissionMode: session.PermissionMode,
 	})
 	out := SessionResult{Output: result.Output, FinalText: result.FinalText, PromptAcceptance: result.PromptAcceptance}

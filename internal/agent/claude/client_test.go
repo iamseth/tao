@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -173,6 +174,52 @@ func TestClientReturnsAgentErrorAndLogs(t *testing.T) {
 	}
 }
 
+func TestClientModelLaunchArguments(t *testing.T) {
+	for _, model := range []string{"", "opaque-model"} {
+		t.Run("model="+model, func(t *testing.T) {
+			startErr := errors.New("stop after argv capture")
+			client := Client{ProcessStarter: func(_ context.Context, cwd, name string, args []string) (process.Process, error) {
+				want := []string{"--print", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--permission-mode", "auto"}
+				if model != "" {
+					want = append(want, "--model", model)
+				}
+				if cwd != "/repo" || name != "claude" || !slices.Equal(args, want) {
+					t.Fatalf("launch = %q %q %q, want %q", cwd, name, args, want)
+				}
+				return nil, startErr
+			}}
+			_, err := client.RunAgentSession(context.Background(), Request{RepoRoot: "/repo", Model: model})
+			if !errors.Is(err, startErr) {
+				t.Fatalf("error = %v, want starter error", err)
+			}
+		})
+	}
+}
+
+func TestClientErrorResultIncludesLastStderrLine(t *testing.T) {
+	const diagnostic = "[claude-code:unrecognized_model] unknown model missing"
+	proc := newFakeProcess(t)
+	stderrReader, stderrWriter := io.Pipe()
+	proc.stderr = stderrReader
+	go func() {
+		defer proc.finish(nil)
+		defer func() { _ = stderrWriter.Close() }()
+		_, _ = proc.readPrompt()
+		proc.writeEvent(`{"type":"result","subtype":"success","is_error":true,"terminal_reason":"api_error","usage":{"input_tokens":0,"output_tokens":0}}`)
+		// Deliver stderr after the result to exercise drain synchronization.
+		_, _ = io.WriteString(stderrWriter, "earlier warning\n"+diagnostic+"\n \n")
+	}()
+	client := Client{ProcessStarter: func(context.Context, string, string, []string) (process.Process, error) { return proc, nil }}
+	result, err := client.RunAgentSession(context.Background(), Request{Prompt: "work", Model: "missing"})
+	if err == nil || !strings.Contains(err.Error(), "claude stderr: "+diagnostic) || strings.Contains(err.Error(), "earlier warning") {
+		t.Fatalf("result error = %v", err)
+	}
+	if result.PromptAcceptance == lifecycle.PromptAcceptanceAccepted {
+		t.Fatal("error result must not imply acceptance")
+	}
+	_ = stderrReader.Close()
+}
+
 func TestClientContextCancellationKillsProcess(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	proc := newFakeProcess(t)
@@ -227,6 +274,7 @@ type fakeProcess struct {
 	waitErr       error
 	killed        bool
 	stdinOverride io.WriteCloser
+	stderr        io.Reader
 }
 
 func newFakeProcess(t *testing.T) *fakeProcess {
@@ -243,7 +291,7 @@ func (p *fakeProcess) Stdin() io.WriteCloser {
 	return p.stdinWriter
 }
 func (p *fakeProcess) Stdout() io.Reader { return p.stdoutReader }
-func (p *fakeProcess) Stderr() io.Reader { return strings.NewReader("") }
+func (p *fakeProcess) Stderr() io.Reader { return p.stderr }
 func (p *fakeProcess) Wait() error {
 	<-p.done
 	return p.waitErr

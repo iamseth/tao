@@ -244,7 +244,11 @@ func (f fakeRepository) AppendEvent(_ string, _ plan.Event) error { return nil }
 func clearTaoEnv(t *testing.T) {
 	t.Helper()
 	for _, key := range testTaoEnvKeys() {
+		// Register restoration before unsetting: empty model values are invalid.
 		t.Setenv(key, "")
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

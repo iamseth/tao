@@ -204,6 +204,7 @@ func (f Finalizer) ensureApprovedReviewProposal(ctx context.Context, detail *pla
 		LogAction: "correcting review proposal for plan " + detail.State.Plan.ID,
 	}, evidenceReview, reviewProposalCorrectionStrategy{
 		session: session,
+		models:  f.execution.Config.Models,
 		recorder: func() (ReviewProposalCorrectionRecorder, error) {
 			record, err := planMutationRecord(f.execution, detail)
 			if err != nil {
@@ -814,7 +815,7 @@ func createReviewWithAgentSession(ctx context.Context, executor AgentSessionExec
 	}
 	prompt = appendPriorReworkAndBudgetContext(prompt, detail, runtimeconfig.RuntimeAgentBudgetThresholds())
 	prompt = appendImplementerRulingsContext(prompt, detail)
-	result, err := executor.RunAgentSession(ctx, AgentSessionRequest{PlanDir: planDir, RepoRoot: repoRoot, LogAction: "reviewing plan " + planID, Prompt: prompt, CaptureOutput: true, Metrics: &AgentSessionMetricsRequest{Role: plan.AgentRoleReview}})
+	result, err := executor.RunAgentSession(ctx, AgentSessionRequest{Model: options.Models.For(runtimeconfig.ModelRoleReview), PlanDir: planDir, RepoRoot: repoRoot, LogAction: "reviewing plan " + planID, Prompt: prompt, CaptureOutput: true, Metrics: &AgentSessionMetricsRequest{Role: plan.AgentRoleReview}})
 	if err != nil {
 		return plan.PlanReview{}, err
 	}
@@ -845,6 +846,7 @@ func createReviewWithAgentSession(ctx context.Context, executor AgentSessionExec
 		PlanDir: planDir, RepoRoot: repoRoot, LogAction: "correcting review proposal for plan " + planID,
 	}, review, reviewProposalCorrectionStrategy{
 		session: executor,
+		models:  options.Models,
 		recorder: func() (ReviewProposalCorrectionRecorder, error) {
 			recorder, ok := record.(ReviewProposalCorrectionRecorder)
 			if !ok {

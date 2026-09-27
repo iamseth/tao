@@ -8,18 +8,23 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/taodata"
 )
+
+const repoConfigUsage = "repo config [--pull-request true|false|unset] [--model NAME|unset] [--run-model NAME|unset] [--review-model NAME|unset] [--merge-review-model NAME|unset] [--resolver-model NAME|unset] [<repo-id>]"
 
 var repoCommand = commandMetadata{
 	name:                  "repo",
 	minPrefix:             "repo",
-	usageLines:            []string{"repo list", "repo show <repo-id>", "repo config [--pull-request true|false|unset] [<repo-id>]", "repo doctor"},
+	usageLines:            []string{"repo list", "repo show <repo-id>", repoConfigUsage, "repo doctor"},
 	completionDescription: "Inspect registered repositories",
 	long:                  "Inspect and configure repositories registered in Tao's centralized catalog. Use repo commands to list known checkouts, show catalog details, set repository run defaults, and diagnose repository health before running plans.",
 	examples: "  tao repo list\n" +
 		"  tao repo show tao-146d10c48b68\n" +
 		"  tao repo config --pull-request true\n" +
+		"  tao repo config --model provider/model --review-model provider/reviewer\n" +
+		"  tao repo config --run-model unset\n" +
 		"  tao repo doctor",
 	subcommands: []commandSubcommand{
 		{name: "list", description: "List registered repositories and health summaries"},
@@ -35,7 +40,7 @@ var repoCommand = commandMetadata{
 
 func (a App) repo(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: tao repo list|show <repo-id>|config [--pull-request true|false|unset] [<repo-id>]|doctor")
+		return errors.New("usage: tao repo list|show <repo-id>|doctor; tao " + repoConfigUsage)
 	}
 	registry := taodata.NewRegistry("")
 	switch args[0] {
@@ -108,6 +113,9 @@ func (a App) repoShow(ctx context.Context, registry taodata.Registry, input stri
 
 func registerRepoConfigFlags(fs *flag.FlagSet) {
 	fs.String("pull-request", "", "set the repository pull_request run default to true, false, or unset")
+	for _, name := range []string{"model", "run-model", "review-model", "merge-review-model", "resolver-model"} {
+		fs.String(name, "", "set the repository "+strings.ReplaceAll(name, "-", "_")+" default to a model name or unset")
+	}
 }
 
 func (a App) repoConfig(ctx context.Context, registry taodata.Registry, args []string) error {
@@ -116,7 +124,7 @@ func (a App) repoConfig(ctx context.Context, registry taodata.Registry, args []s
 		return err
 	}
 	if len(positional) > 1 {
-		return errors.New("usage: tao repo config [--pull-request true|false|unset] [<repo-id>]")
+		return errors.New("usage: tao " + repoConfigUsage)
 	}
 	selector := ""
 	if len(positional) == 1 {
@@ -126,6 +134,7 @@ func (a App) repoConfig(ctx context.Context, registry taodata.Registry, args []s
 	if err != nil {
 		return err
 	}
+	changed := false
 	if flagWasProvided(fs, "pull-request") {
 		var value *bool
 		if raw := strings.TrimSpace(flagStringValue(fs, "pull-request")); !strings.EqualFold(raw, "unset") {
@@ -136,6 +145,37 @@ func (a App) repoConfig(ctx context.Context, registry taodata.Registry, args []s
 			value = &parsed
 		}
 		repo = repo.WithPullRequestDefault(value)
+		changed = true
+	}
+	models, _ := repo.ModelDefaults()
+	modelFlags := []struct {
+		name  string
+		value *string
+	}{
+		{"model", &models.Model},
+		{"run-model", &models.RunModel},
+		{"review-model", &models.ReviewModel},
+		{"merge-review-model", &models.MergeReviewModel},
+		{"resolver-model", &models.ResolverModel},
+	}
+	for _, model := range modelFlags {
+		if !flagWasProvided(fs, model.name) {
+			continue
+		}
+		raw := flagStringValue(fs, model.name)
+		value := ""
+		if raw != "unset" {
+			parsed, err := runtimeconfig.ParseModelName(raw)
+			if err != nil {
+				return fmt.Errorf("--%s: %w (use unset to inherit)", model.name, err)
+			}
+			value = parsed
+		}
+		*model.value = value
+		changed = true
+	}
+	if changed {
+		repo = repo.WithModelDefaults(models)
 		repo.UpdatedAt = a.now().UTC().Format("2006-01-02T15:04:05Z07:00")
 		if err := registry.WriteRepo(repo); err != nil {
 			return err
@@ -145,11 +185,19 @@ func (a App) repoConfig(ctx context.Context, registry taodata.Registry, args []s
 	if value, ok := repo.PullRequestDefault(); ok {
 		pullRequest = strconv.FormatBool(value)
 	}
-	return writeLines(a.Out,
-		"Repo: "+emptyDash(repo.Name),
-		"ID: "+emptyDash(repo.ID),
-		"pull_request: "+pullRequest,
-	)
+	lines := []string{
+		"Repo: " + emptyDash(repo.Name),
+		"ID: " + emptyDash(repo.ID),
+		"pull_request: " + pullRequest,
+	}
+	for _, model := range modelFlags {
+		value := *model.value
+		if value == "" {
+			value = "unset"
+		}
+		lines = append(lines, strings.ReplaceAll(model.name, "-", "_")+": "+value)
+	}
+	return writeLines(a.Out, lines...)
 }
 
 func (a App) repoDoctor(ctx context.Context, registry taodata.Registry) error {

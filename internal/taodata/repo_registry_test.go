@@ -111,6 +111,64 @@ func TestRepoWithPullRequestDefaultSetsAndClearsExplicitValue(t *testing.T) {
 	}
 }
 
+func TestRepoModelDefaultsRoundTripAndRemoval(t *testing.T) {
+	registry := Registry{DataHome: t.TempDir()}
+	models := RepoModelDefaults{Model: "provider/base", RunModel: "run", ReviewModel: "review", MergeReviewModel: "merge", ResolverModel: "resolver"}
+	value := false
+	repo := (Repo{Schema: RepoSchema, ID: "repo-models", Root: "/repo"}).WithPullRequestDefault(&value).WithModelDefaults(models)
+	if err := registry.WriteRepo(repo); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := registry.ReadRepo(repo.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := stored.ModelDefaults(); !ok || got != models {
+		t.Fatalf("model round trip = (%+v, %t), want %+v", got, ok, models)
+	}
+	clearedPR := stored.WithPullRequestDefault(nil)
+	if got, ok := clearedPR.ModelDefaults(); !ok || got != models {
+		t.Fatalf("clearing pull_request lost models: (%+v, %t)", got, ok)
+	}
+	if _, ok := stored.PullRequestDefault(); !ok {
+		t.Fatal("clearing the copy mutated the original pull_request")
+	}
+	clearedModels := stored.WithModelDefaults(RepoModelDefaults{})
+	if _, ok := clearedModels.ModelDefaults(); ok {
+		t.Fatal("empty models did not remove Models")
+	}
+	if got, ok := clearedModels.PullRequestDefault(); !ok || got {
+		t.Fatal("clearing models lost explicit false pull_request")
+	}
+	if got, ok := stored.ModelDefaults(); !ok || got != models {
+		t.Fatal("clearing the copy mutated the original models")
+	}
+	if got := clearedPR.WithModelDefaults(RepoModelDefaults{}); got.RunDefaults != nil {
+		t.Fatalf("empty defaults retained: %+v", got.RunDefaults)
+	}
+}
+
+func TestRegistryLegacyPullRequestWithoutModels(t *testing.T) {
+	registry := Registry{DataHome: t.TempDir()}
+	var repo Repo
+	if err := json.Unmarshal([]byte(`{"schema":"tao.repo.v1","id":"legacy","root":"/repo","run_defaults":{"pull_request":false}}`), &repo); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.WriteRepo(repo); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := registry.ReadRepo(repo.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := stored.PullRequestDefault(); !ok || got {
+		t.Fatal("legacy explicit false default lost")
+	}
+	if got, ok := stored.ModelDefaults(); ok || got != (RepoModelDefaults{}) {
+		t.Fatalf("legacy model defaults = (%+v, %t)", got, ok)
+	}
+}
+
 func TestRepoRunDefaultsSerialization(t *testing.T) {
 	trueValue := true
 	falseValue := false
@@ -120,6 +178,8 @@ func TestRepoRunDefaultsSerialization(t *testing.T) {
 		want     string
 	}{
 		{name: "absent", defaults: RepoRunDefaults{}, want: `{}`},
+		{name: "models", defaults: RepoRunDefaults{Models: &RepoModelDefaults{Model: "base", RunModel: "run", ReviewModel: "review", MergeReviewModel: "merge", ResolverModel: "resolver"}}, want: `{"models":{"model":"base","run_model":"run","review_model":"review","merge_review_model":"merge","resolver_model":"resolver"}}`},
+		{name: "one model", defaults: RepoRunDefaults{Models: &RepoModelDefaults{RunModel: "run"}}, want: `{"models":{"run_model":"run"}}`},
 		{name: "true", defaults: RepoRunDefaults{PullRequest: &trueValue}, want: `{"pull_request":true}`},
 		{name: "false", defaults: RepoRunDefaults{PullRequest: &falseValue}, want: `{"pull_request":false}`},
 	}

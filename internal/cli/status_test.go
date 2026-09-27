@@ -9,7 +9,81 @@ import (
 	"testing"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runtimeconfig"
+	"github.com/iamseth/tao/internal/taodata"
 )
+
+func TestStatusRepositoryModelDefaults(t *testing.T) {
+	modelKeys := []string{runtimeconfig.EnvModel, runtimeconfig.EnvRunModel, runtimeconfig.EnvReviewModel, runtimeconfig.EnvMergeReviewModel, runtimeconfig.EnvResolverModel}
+	for _, mode := range []string{"repository", "default", "env"} {
+		t.Run(mode, func(t *testing.T) {
+			clearTaoEnv(t)
+			var registered taodata.Repo
+			if mode == "repository" {
+				if err := json.Unmarshal([]byte(`{"id":"repo-a","run_defaults":{"models":{"model":"base","run_model":"run","review_model":"review","merge_review_model":"merge","resolver_model":"resolver"}}}`), &registered); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode != "default" {
+				for _, key := range modelKeys {
+					t.Setenv(key, "environment")
+				}
+			}
+			registry := &fakeNoteRegistry{current: registered, repos: []taodata.Repo{registered}}
+			var out bytes.Buffer
+			app := App{Out: &out, Registry: func() NoteRegistry { return registry }, Repository: func(string) Repository { return fakeRepository{} }}
+			if err := app.Run(context.Background(), []string{"status", "--json"}); err != nil {
+				t.Fatal(err)
+			}
+			var payload statusPayload
+			if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+				t.Fatal(err)
+			}
+			out.Reset()
+			if err := app.Run(context.Background(), []string{"status"}); err != nil {
+				t.Fatal(err)
+			}
+			values := []string{"base", "run", "review", "merge", "resolver"}
+			for i, key := range modelKeys {
+				want := ""
+				switch mode {
+				case "repository":
+					want = values[i]
+				case "env":
+					want = "environment"
+				}
+				found := false
+				for _, row := range payload.RuntimeEnv {
+					if row.Name == key {
+						found = true
+						if row.Value != want || row.Source != mode {
+							t.Errorf("%s JSON row = %+v, want value %q source %s", key, row, want, mode)
+						}
+					}
+				}
+				if !found {
+					t.Errorf("missing JSON row %s", key)
+				}
+				if want == "" {
+					want = "-"
+				}
+				found = false
+				for _, line := range strings.Split(out.String(), "\n") {
+					fields := strings.Fields(line)
+					if len(fields) > 0 && fields[0] == key {
+						found = true
+						if strings.Join(fields, " ") != key+" "+want+" "+mode {
+							t.Errorf("status line = %q, want %s %s %s", line, key, want, mode)
+						}
+					}
+				}
+				if !found {
+					t.Errorf("missing text row %s", key)
+				}
+			}
+		})
+	}
+}
 
 func TestStatusShowsRuntimeEnvAndPlanRollup(t *testing.T) {
 	clearTaoEnv(t)

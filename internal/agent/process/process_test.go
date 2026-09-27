@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -36,6 +37,53 @@ func TestDefaultProcessStarterCanRunAndWait(t *testing.T) {
 	if err := proc.Wait(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestDefaultProcessStarterConcurrentWaitDrainsOutput(t *testing.T) {
+	t.Setenv("TAO_PROCESS_OUTPUT_HELPER", "1")
+	proc, err := DefaultProcessStarter(context.Background(), "", os.Args[0], []string{"-test.run=^TestProcessOutputHelper$", "--"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = proc.Kill() }()
+	_ = proc.Stdin().Close()
+	type output struct {
+		data []byte
+		err  error
+	}
+	stdout, stderr := make(chan output, 1), make(chan output, 1)
+	for reader, done := range map[io.Reader]chan output{proc.Stdout(): stdout, proc.Stderr(): stderr} {
+		go func() {
+			data, err := io.ReadAll(reader)
+			done <- output{data, err}
+		}()
+	}
+	if err := waitForProcess(t, proc, 3*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	for label, done := range map[string]chan output{"stdout": stdout, "stderr": stderr} {
+		select {
+		case got := <-done:
+			want := strings.Repeat(label+"\n", 64*1024)
+			if got.err != nil || string(got.data) != want {
+				t.Fatalf("%s truncated: got %d bytes, want %d, error %v", label, len(got.data), len(want), got.err)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s reader did not finish after Wait", label)
+		}
+	}
+}
+
+func TestProcessOutputHelper(t *testing.T) {
+	if os.Getenv("TAO_PROCESS_OUTPUT_HELPER") != "1" {
+		return
+	}
+	for label, writer := range map[string]*os.File{"stdout": os.Stdout, "stderr": os.Stderr} {
+		if _, err := io.WriteString(writer, strings.Repeat(label+"\n", 64*1024)); err != nil {
+			os.Exit(1)
+		}
+	}
+	os.Exit(0)
 }
 
 func TestDefaultProcessStarterTerminatesOnContextCancel(t *testing.T) {

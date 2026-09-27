@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -155,7 +156,7 @@ func TestClientCheckReadinessUsesDisposableNoSessionRPCWithoutPrompt(t *testing.
 		gotCwd, gotName, gotArgs = cwd, name, append([]string(nil), args...)
 		return proc, nil
 	}}
-	if err := client.CheckReadiness(context.Background(), "/repo"); err != nil {
+	if err := client.CheckReadiness(context.Background(), "/repo", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-serverErr; err != nil {
@@ -166,6 +167,72 @@ func TestClientCheckReadinessUsesDisposableNoSessionRPCWithoutPrompt(t *testing.
 	}
 	if !proc.killed {
 		t.Fatal("disposable readiness process was not stopped")
+	}
+}
+
+func TestClientModelLaunchArguments(t *testing.T) {
+	for _, model := range []string{"", "provider/opaque-model"} {
+		for _, readiness := range []bool{false, true} {
+			t.Run(fmt.Sprintf("model=%s/readiness=%t", model, readiness), func(t *testing.T) {
+				startErr := errors.New("stop after argv capture")
+				client := Client{ProcessStarter: func(_ context.Context, cwd, name string, args []string) (Process, error) {
+					want := []string{"--mode", "rpc", "--no-session"}
+					if model != "" {
+						want = append(want, "--model", model)
+					}
+					if cwd != "/repo" || name != "pi" || !slices.Equal(args, want) {
+						t.Fatalf("launch = %q %q %q, want %q", cwd, name, args, want)
+					}
+					return nil, startErr
+				}}
+				var err error
+				if readiness {
+					err = client.CheckReadiness(context.Background(), "/repo", model)
+				} else {
+					_, err = client.RunAgentSession(context.Background(), Request{RepoRoot: "/repo", Model: model})
+				}
+				if !errors.Is(err, startErr) {
+					t.Fatalf("error = %v, want starter error", err)
+				}
+			})
+		}
+	}
+}
+
+func TestClientStartupFailureIncludesLastStderrLine(t *testing.T) {
+	const diagnostic = `Model "missing" not found. Use --list-models to see available models.`
+	for _, scenario := range []string{"session-write", "session-eof", "readiness-write", "readiness-eof"} {
+		t.Run(scenario, func(t *testing.T) {
+			proc := newFakeProcess(t)
+			proc.stderr = strings.NewReader("earlier warning\n" + diagnostic + "\n \n")
+			if strings.HasSuffix(scenario, "eof") {
+				proc.disableAutoReadiness = true
+				go func() {
+					defer proc.finish()
+					_, _ = proc.readCommand()
+				}()
+			} else {
+				proc.finish()
+			}
+			client := Client{ProcessStarter: func(context.Context, string, string, []string) (Process, error) { return proc, nil }}
+			var err error
+			if strings.HasPrefix(scenario, "readiness") {
+				err = client.CheckReadiness(context.Background(), "/repo", "missing")
+			} else {
+				var result Result
+				result, err = client.RunAgentSession(context.Background(), Request{Prompt: "work", Model: "missing"})
+				if result.PromptAcceptance != lifecycle.PromptAcceptanceNotTransmitted {
+					t.Fatalf("prompt acceptance = %q", result.PromptAcceptance)
+				}
+			}
+			if err == nil || !strings.Contains(err.Error(), "pi rpc readiness:") || !strings.Contains(err.Error(), "pi stderr: "+diagnostic) || strings.Contains(err.Error(), "earlier warning") {
+				t.Fatalf("startup error = %v", err)
+			}
+			var retryable interface{ RetryableTransportFailure() }
+			if errors.As(err, &retryable) {
+				t.Fatal("stderr must not authorize transport retries")
+			}
+		})
 	}
 }
 

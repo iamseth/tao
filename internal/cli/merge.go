@@ -12,6 +12,7 @@ import (
 	mergepkg "github.com/iamseth/tao/internal/merge"
 	"github.com/iamseth/tao/internal/plan"
 	runpkg "github.com/iamseth/tao/internal/run"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/taodata"
 	"github.com/iamseth/tao/internal/workspace"
 )
@@ -57,6 +58,7 @@ func registerMergeFlags(fs *flag.FlagSet) {
 	fs.Bool("no-squash", false, "preserve plan commits with rebase-plus-fast-forward; conflicts remain manual (single-plan only)")
 	fs.Bool("no-verify", false, "skip post-merge command verification, not structural validation or independent review (single-plan only)")
 	fs.String("verify-command", "", "override the post-merge build/test verification command")
+	fs.String("model", "", "override the agent model for all merge roles")
 }
 
 type mergeServiceRunner interface {
@@ -72,12 +74,12 @@ type mergeBatchRunner interface {
 	Run(context.Context, mergeBatchOptions) (mergeBatchResult, error)
 }
 
-var newMergeBatchRunner = func(ctx context.Context, a App, repo mergepkg.BatchPlanRepository) (mergeBatchRunner, error) {
-	return a.newMergeBatchRunner(ctx, repo)
+var newMergeBatchRunner = func(ctx context.Context, a App, repo mergepkg.BatchPlanRepository, model string) (mergeBatchRunner, error) {
+	return a.newMergeBatchRunner(ctx, repo, model)
 }
 
-var newMergeServiceRunner = func(a App, detail *plan.PlanDetail) (mergeServiceRunner, error) {
-	return a.newMergeServiceRunner(detail)
+var newMergeServiceRunner = func(ctx context.Context, a App, detail *plan.PlanDetail, model string) (mergeServiceRunner, error) {
+	return a.newMergeServiceRunner(ctx, detail, model)
 }
 
 func (a App) merge(ctx context.Context, repo plan.Resolver, args []string) error {
@@ -85,6 +87,10 @@ func (a App) merge(ctx context.Context, repo plan.Resolver, args []string) error
 		return errors.New("merge requires a plan repository")
 	}
 	fs, positional, err := a.parseArgs("merge", args, registerMergeFlags)
+	if err != nil {
+		return err
+	}
+	model, err := modelFlagValue(fs)
 	if err != nil {
 		return err
 	}
@@ -105,7 +111,7 @@ func (a App) merge(ctx context.Context, repo plan.Resolver, args []string) error
 		if !ok {
 			return errors.New("merge --all requires a repository that can list and resolve plans")
 		}
-		runner, err := newMergeBatchRunner(ctx, a, batchRepo)
+		runner, err := newMergeBatchRunner(ctx, a, batchRepo, model)
 		if err != nil {
 			return err
 		}
@@ -162,7 +168,7 @@ func (a App) merge(ctx context.Context, repo plan.Resolver, args []string) error
 		if err := plan.RequireNotAbandoned(refreshed); err != nil {
 			return err
 		}
-		service, err := newMergeServiceRunner(a, refreshed)
+		service, err := newMergeServiceRunner(ownedCtx, a, refreshed, model)
 		if err != nil {
 			return err
 		}
@@ -189,7 +195,7 @@ type mergeBatchRegistry interface {
 	ActiveMergeBatchPath(taodata.Repo) string
 }
 
-func (a App) newMergeBatchRunner(ctx context.Context, repository mergepkg.BatchPlanRepository) (mergeBatchRunner, error) {
+func (a App) newMergeBatchRunner(ctx context.Context, repository mergepkg.BatchPlanRepository, model string) (mergeBatchRunner, error) {
 	runner := a.mergeRunner()
 	var registry mergeBatchRegistry
 	if a.Registry != nil {
@@ -215,7 +221,11 @@ func (a App) newMergeBatchRunner(ctx context.Context, repository mergepkg.BatchP
 	service := mergepkg.NewService(current.Root, runner)
 	service.Runner = runner
 	store := mergepkg.NewBatchStore(batchesDir, registry.ActiveMergeBatchPath(current))
-	agentConfig := newMergeBatchAgentConfig(a, current.Root, runner, store)
+	models, err := a.mergeModels(ctx, model)
+	if err != nil {
+		return nil, err
+	}
+	agentConfig := newMergeBatchAgentConfig(a, current.Root, runner, store, models)
 	session, err := mergepkg.NewBatchAgentSession(agentConfig)
 	if err != nil {
 		return nil, fmt.Errorf("configure merge-batch agent: %w", err)
@@ -239,8 +249,26 @@ func (a App) newMergeBatchRunner(ctx context.Context, repository mergepkg.BatchP
 	}), nil
 }
 
-func newMergeBatchAgentConfig(a App, controlRoot string, runner commandrunner.Runner, store *mergepkg.BatchStore) mergepkg.BatchAgentSessionConfig {
+func (a App) mergeModels(ctx context.Context, model string) (runtimeconfig.ModelSelection, error) {
+	defaults, err := runtimeconfig.RuntimeModelEnvDefaults()
+	if err != nil {
+		return runtimeconfig.ModelSelection{}, err
+	}
+	repository, err := a.currentRepositoryRunOptions(ctx)
+	if err != nil {
+		return runtimeconfig.ModelSelection{}, err
+	}
+	var overrides runtimeconfig.RunOptionsPatch
+	if model != "" {
+		overrides = overrides.WithModelForAllRoles(model)
+	}
+	resolved, err := runtimeconfig.ResolveRunOptionsWithRepositoryDefaults(defaults, repository, overrides)
+	return resolved.Models, err
+}
+
+func newMergeBatchAgentConfig(a App, controlRoot string, runner commandrunner.Runner, store *mergepkg.BatchStore, models runtimeconfig.ModelSelection) mergepkg.BatchAgentSessionConfig {
 	return mergepkg.BatchAgentSessionConfig{
+		Models:         models,
 		ProcessStarter: a.ProcessStarter, Log: a.Out, ControlRoot: controlRoot, CommandRunner: runner,
 		EventAppender: store, Now: a.Now,
 	}
@@ -425,7 +453,7 @@ func renderMergeBatchFailure(out io.Writer, err error) error {
 	return writeln(out, "Next: `tao merge --all --restart --dry-run`")
 }
 
-func (a App) newMergeServiceRunner(detail *plan.PlanDetail) (mergeServiceRunner, error) {
+func (a App) newMergeServiceRunner(ctx context.Context, detail *plan.PlanDetail, model string) (mergeServiceRunner, error) {
 	if detail == nil {
 		return nil, fmt.Errorf("plan detail is nil")
 	}
@@ -445,7 +473,11 @@ func (a App) newMergeServiceRunner(detail *plan.PlanDetail) (mergeServiceRunner,
 		}
 	}
 	eventAppender := plan.NewFileRepository("")
-	agentConfig := newSingleMergeAgentConfig(a, detail, repoRoot, runner, eventAppender)
+	models, err := a.mergeModels(ctx, model)
+	if err != nil {
+		return nil, err
+	}
+	agentConfig := newSingleMergeAgentConfig(a, detail, repoRoot, runner, eventAppender, models)
 	generator, err := mergepkg.NewMergeProposalGenerator(agentConfig)
 	if err != nil {
 		return nil, fmt.Errorf("configure exceptional merge proposal generator: %w", err)
@@ -467,8 +499,9 @@ func (a App) newMergeServiceRunner(detail *plan.PlanDetail) (mergeServiceRunner,
 	return svc, nil
 }
 
-func newSingleMergeAgentConfig(a App, detail *plan.PlanDetail, controlRoot string, runner commandrunner.Runner, appender plan.EventAppender) mergepkg.SingleMergeAgentSessionConfig {
+func newSingleMergeAgentConfig(a App, detail *plan.PlanDetail, controlRoot string, runner commandrunner.Runner, appender plan.EventAppender, models runtimeconfig.ModelSelection) mergepkg.SingleMergeAgentSessionConfig {
 	return mergepkg.SingleMergeAgentSessionConfig{
+		Models:         models,
 		ProcessStarter: a.ProcessStarter, Log: a.Out, ControlRoot: controlRoot, CommandRunner: runner, Now: a.Now,
 		Observe: func(request mergepkg.BatchAgentSessionRequest, result mergepkg.BatchAgentSessionResult, sessionErr error) {
 			request.CandidatePlanID = mergePlanID(detail)

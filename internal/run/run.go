@@ -202,6 +202,7 @@ type PullRequestBodyGenerator interface {
 }
 
 type AgentSessionRequest struct {
+	Model                string
 	PlanDir              string
 	RepoRoot             string
 	LogAction            string

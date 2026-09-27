@@ -18,6 +18,7 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	reworkpkg "github.com/iamseth/tao/internal/rework"
 	runpkg "github.com/iamseth/tao/internal/run"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
 var reworkCommand = commandMetadata{
@@ -173,6 +174,10 @@ func newReworkTriageTextGenerator(app App, observe func(agentsession.Result, err
 	if err != nil {
 		return agentsession.TextGenerator{}, err
 	}
+	config, err := defaults.runConfig(runtimeconfig.RunOptionsPatch{})
+	if err != nil {
+		return agentsession.TextGenerator{}, err
+	}
 	descriptor, ok := agent.Lookup(defaults.Agent)
 	if !ok {
 		return agentsession.TextGenerator{}, fmt.Errorf("unsupported agent %q", defaults.Agent)
@@ -185,6 +190,7 @@ func newReworkTriageTextGenerator(app App, observe func(agentsession.Result, err
 		Descriptor: descriptor, Deps: agent.RuntimeDeps{ProcessStarter: starter},
 		SkipPermissions: defaults.SkipPermissions, Timeout: defaults.SessionTimeoutValue(),
 		Progress: app.Out, CommandRunner: app.CommandRunner,
+		Model: config.ResolvedOptions().Models.For(runtimeconfig.ModelRoleDefault),
 	}, observe), nil
 }
 

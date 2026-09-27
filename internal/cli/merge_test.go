@@ -25,7 +25,7 @@ func TestNewMergeBatchAgentConfigWiresRepositoryTelemetryStoreAndClock(t *testin
 	root := t.TempDir()
 	store := mergepkg.NewBatchStore(filepath.Join(root, "merge-batches"), filepath.Join(root, "merge-batches", "active.json"))
 	fixed := time.Date(2026, 8, 10, 21, 0, 0, 0, time.UTC)
-	config := newMergeBatchAgentConfig(App{Out: io.Discard, Now: func() time.Time { return fixed }}, "/control", nil, store)
+	config := newMergeBatchAgentConfig(App{Out: io.Discard, Now: func() time.Time { return fixed }}, "/control", nil, store, runtimeconfig.ModelSelection{})
 	if config.EventAppender != store || config.ControlRoot != "/control" || config.Now == nil || !config.Now().Equal(fixed) {
 		t.Fatalf("batch agent config = %#v", config)
 	}
@@ -47,7 +47,7 @@ func TestNewSingleMergeAgentConfigWiresPlanTelemetryBestEffort(t *testing.T) {
 	appender := &recordingMergeMetricsAppender{}
 	var out bytes.Buffer
 	runner := newCLIMergeGitRunner(t, detail.State.Repo.Root)
-	config := newSingleMergeAgentConfig(App{Out: &out, Now: func() time.Time { return fixed }}, detail, detail.State.Repo.Root, runner, appender)
+	config := newSingleMergeAgentConfig(App{Out: &out, Now: func() time.Time { return fixed }}, detail, detail.State.Repo.Root, runner, appender, runtimeconfig.ModelSelection{})
 	if config.ControlRoot != detail.State.Repo.Root || config.CommandRunner == nil || config.Now == nil || !config.Now().Equal(fixed) || config.Observe == nil {
 		t.Fatalf("single merge agent config = %#v", config)
 	}
@@ -74,7 +74,7 @@ func TestNewMergeServiceRunnerWiresDeferredGuardedSinglePlanSessions(t *testing.
 		Out:              io.Discard,
 		WorkspaceManager: func(string) (WorkspaceManager, error) { return manager, nil },
 	}
-	runner, err := app.newMergeServiceRunner(detail)
+	runner, err := app.newMergeServiceRunner(context.Background(), detail, "")
 	if err != nil {
 		t.Fatalf("non-conflicting merge configured provider eagerly: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestMergeCommandRefusesAbandonedPlanBeforeServiceConstruction(t *testing.T)
 	detail.Events = []plan.Event{{Type: plan.EventTypePlanAbandoned, Reason: "superseded"}}
 	constructed := false
 	original := newMergeServiceRunner
-	newMergeServiceRunner = func(App, *plan.PlanDetail) (mergeServiceRunner, error) {
+	newMergeServiceRunner = func(context.Context, App, *plan.PlanDetail, string) (mergeServiceRunner, error) {
 		constructed = true
 		return &fakeCLIMergeService{}, nil
 	}
@@ -446,7 +446,7 @@ func TestMergeBatchRestartDoesNotConstructSinglePlanService(t *testing.T) {
 	stubMergeBatchRunner(t, batch)
 	constructed := false
 	original := newMergeServiceRunner
-	newMergeServiceRunner = func(App, *plan.PlanDetail) (mergeServiceRunner, error) {
+	newMergeServiceRunner = func(context.Context, App, *plan.PlanDetail, string) (mergeServiceRunner, error) {
 		constructed = true
 		return &fakeCLIMergeService{}, nil
 	}
@@ -1030,7 +1030,9 @@ func (f *fakeCLIMergeBatchRunner) Run(ctx context.Context, options mergeBatchOpt
 func stubMergeBatchRunner(t *testing.T, runner mergeBatchRunner) {
 	t.Helper()
 	original := newMergeBatchRunner
-	newMergeBatchRunner = func(context.Context, App, mergepkg.BatchPlanRepository) (mergeBatchRunner, error) { return runner, nil }
+	newMergeBatchRunner = func(context.Context, App, mergepkg.BatchPlanRepository, string) (mergeBatchRunner, error) {
+		return runner, nil
+	}
 	t.Cleanup(func() { newMergeBatchRunner = original })
 }
 
@@ -1063,7 +1065,7 @@ func (f *fakeCLIMergeService) RestartSingleMerge(_ context.Context, planDir stri
 func stubMergeServiceRunner(t *testing.T, service mergeServiceRunner) {
 	t.Helper()
 	original := newMergeServiceRunner
-	newMergeServiceRunner = func(a App, detail *plan.PlanDetail) (mergeServiceRunner, error) {
+	newMergeServiceRunner = func(_ context.Context, a App, detail *plan.PlanDetail, _ string) (mergeServiceRunner, error) {
 		return service, nil
 	}
 	t.Cleanup(func() { newMergeServiceRunner = original })

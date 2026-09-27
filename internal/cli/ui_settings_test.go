@@ -11,9 +11,7 @@ import (
 )
 
 func TestUISettingsServiceCollectsAndUpdatesRepositoryDefaults(t *testing.T) {
-	for _, name := range runtimeconfig.RuntimeEnvKeys() {
-		t.Setenv(name, "")
-	}
+	clearTaoEnv(t)
 	t.Setenv(runtimeconfig.EnvPullRequest, "true")
 	registry := taodata.Registry{DataHome: t.TempDir()}
 	explicitFalse := false
@@ -60,9 +58,7 @@ func TestUISettingsServiceCollectsAndUpdatesRepositoryDefaults(t *testing.T) {
 }
 
 func TestUISettingsServiceLeavesDisplayHomeEmptyWhenLookupFails(t *testing.T) {
-	for _, name := range runtimeconfig.RuntimeEnvKeys() {
-		t.Setenv(name, "")
-	}
+	clearTaoEnv(t)
 	service := uiSettingsService{
 		app:         App{},
 		registry:    taodata.Registry{DataHome: t.TempDir()},

@@ -29,9 +29,10 @@ import (
 
 // BatchAgentSessionConfig configures a merge-owned agent operation. Zero-value
 // provider, permission, and timeout settings use the ordinary TAO_* runtime
-// environment defaults.
+// environment defaults. Models must already be resolved by the caller.
 type BatchAgentSessionConfig struct {
 	Agent           runtimeconfig.AgentKind
+	Models          runtimeconfig.ModelSelection
 	ProcessStarter  agent.ProcessStarter
 	SkipPermissions *bool
 	Timeout         *time.Duration
@@ -93,6 +94,7 @@ type BatchAgentSessionResult struct {
 // BatchAgentSession is the provider-neutral session seam used by merge batches.
 type BatchAgentSession struct {
 	runner             agentsession.Runner
+	models             runtimeconfig.ModelSelection
 	run                func(context.Context, agentsession.Request) (agentsession.Result, error)
 	confinesFilesystem bool
 	log                io.Writer
@@ -246,7 +248,7 @@ func NewBatchAgentSession(config BatchAgentSessionConfig) (BatchAgentSession, er
 }
 
 func newBatchAgentSession(config BatchAgentSessionConfig, confineFilesystem bool) (BatchAgentSession, error) {
-	defaults, err := runtimeconfig.RuntimeEnvDefaults()
+	defaults, err := runtimeconfig.RuntimeAgentSessionEnvDefaults()
 	if err != nil {
 		return BatchAgentSession{}, err
 	}
@@ -290,7 +292,7 @@ func newBatchAgentSession(config BatchAgentSessionConfig, confineFilesystem bool
 		clock = time.Now
 	}
 	return BatchAgentSession{
-		runner: runner, run: runner.Run, confinesFilesystem: confineFilesystem,
+		runner: runner, run: runner.Run, confinesFilesystem: confineFilesystem, models: config.Models,
 		log: config.Log, controlRoot: config.ControlRoot, metrics: config.Metrics,
 		observe: config.Observe, eventAppender: config.EventAppender, now: clock,
 		providerToolName: descriptor.ToolName, providerLookPath: providerLookPath,
@@ -880,7 +882,7 @@ func ProbeSingleMergePiReadiness(ctx context.Context, providerExecutable string)
 	defer func() { _ = os.RemoveAll(protectedRoot) }()
 	return probeSingleMergePiRPCReadiness(ctx, singleMergeFilesystemConfinement{
 		protectedPaths: []string{protectedRoot}, integrationRoot: integrationRoot,
-	}, providerExecutable)
+	}, providerExecutable, "")
 }
 
 // SingleMergeStartupCapabilityForError maps a bounded launch diagnostic to its
@@ -892,7 +894,7 @@ func SingleMergeStartupCapabilityForError(err error) plan.SingleMergeStartupCapa
 	return startupCapability(err)
 }
 
-func probeSingleMergePiRPCReadiness(ctx context.Context, policy singleMergeFilesystemConfinement, providerExecutable string) error {
+func probeSingleMergePiRPCReadiness(ctx context.Context, policy singleMergeFilesystemConfinement, providerExecutable, model string) error {
 	// Readiness gets the same fresh projection and generated sandbox as the
 	// attributed process, but never receives integration-worktree write access.
 	probePolicy := policy
@@ -903,7 +905,7 @@ func probeSingleMergePiRPCReadiness(ctx context.Context, policy singleMergeFiles
 	probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	probeCtx = context.WithValue(probeCtx, singleMergeFilesystemConfinementContextKey{}, probePolicy)
-	if err := (piagent.Client{ProcessStarter: starter}).CheckReadiness(probeCtx, policy.integrationRoot); err != nil {
+	if err := (piagent.Client{ProcessStarter: starter}).CheckReadiness(probeCtx, policy.integrationRoot, model); err != nil {
 		return boundedSingleMergeProbeError{cause: err}
 	}
 	return nil
@@ -992,8 +994,8 @@ func sandboxProfileEscape(path string) string {
 	return strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(path)
 }
 
-// Preflight validates the single-plan filesystem boundary and its platform
-// prerequisite without starting a provider process.
+// Preflight validates the single-plan filesystem boundary and provider readiness
+// without sending a model prompt or consuming resolution authority.
 func (s BatchAgentSession) Preflight(ctx context.Context, request BatchAgentSessionRequest) error {
 	_, err := s.confinementPolicy(ctx, request, true)
 	return err
@@ -1041,8 +1043,13 @@ func (s BatchAgentSession) confinementPolicy(ctx context.Context, request BatchA
 				return nil, err
 			}
 		} else if s.providerToolName == "pi" {
-			if err := probeSingleMergePiRPCReadiness(ctx, *policy, providerExecutable); err != nil {
-				return nil, err
+			// Resolution requires a subsequent integration review. Check both
+			// effective selectors before consuming the one-shot resolution authority.
+			models := []string{s.models.For(runtimeconfig.ModelRoleResolver), s.models.For(runtimeconfig.ModelRoleMergeReview)}
+			for _, model := range slices.Compact(models) {
+				if err := probeSingleMergePiRPCReadiness(ctx, *policy, providerExecutable, model); err != nil {
+					return nil, err
+				}
 			}
 		} else if err := probeSingleMergeFilesystemConfinement(ctx, *policy, providerExecutable); err != nil {
 			return nil, err
@@ -1070,7 +1077,15 @@ func (s BatchAgentSession) Resolve(ctx context.Context, request BatchAgentSessio
 	if run == nil {
 		run = s.runner.Run
 	}
+	role := runtimeconfig.ModelRoleResolver
+	switch request.Operation {
+	case BatchAgentOperationAggregateReview, BatchAgentOperationSinglePlanReview:
+		role = runtimeconfig.ModelRoleMergeReview
+	case BatchAgentOperationProposalGeneration:
+		role = runtimeconfig.ModelRoleDefault
+	}
 	result, err := run(ctx, agentsession.Request{
+		Model:    s.models.For(role),
 		RepoRoot: request.IntegrationRoot, ControlRoot: s.controlRoot, Prompt: request.Prompt, CollectMetrics: true,
 	})
 	summary := agentsession.Summarize(result, err)

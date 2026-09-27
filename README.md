@@ -264,6 +264,11 @@ data location or execution policy:
 
 ```sh
 TAO_AGENT=pi|claude
+TAO_MODEL=provider/model                # optional shared base
+TAO_RUN_MODEL=provider/model            # implementation and rework slices
+TAO_REVIEW_MODEL=provider/model         # plan review and proposal correction
+TAO_MERGE_REVIEW_MODEL=provider/model    # aggregate merge review
+TAO_RESOLVER_MODEL=provider/model        # merge conflict and rework resolution
 TAO_DATA_HOME=/path/to/tao-data
 TAO_COMMIT_POLICY=slice|none
 TAO_EXECUTION_MODE=isolated|current
@@ -274,13 +279,17 @@ Pi is the built-in default agent, `slice` is the default commit policy, and
 metadata remains readable, but new runs accept only `slice` or `none`. Tao does
 not load `.env` files. Repository settings override environment and built-in
 defaults, and explicit per-run flags override repository settings, including
-explicit `false` values. The current repository's pull-request default can be
-managed independently:
+explicit `false` values. Model settings are optional; unset roles inherit the
+base model, and with no model settings Tao leaves the runtime's selection
+unchanged. Manage the current repository's defaults independently:
 
 ```sh
 tao repo config --pull-request true
 tao repo config --pull-request false
 tao repo config --pull-request unset
+tao repo config --model provider/model
+tao repo config --run-model provider/implementation-model
+tao repo config --run-model unset # remove this default and restore inheritance
 ```
 
 Planner routing applies only to `tao note run`:
@@ -295,6 +304,14 @@ when routing is enabled (shadow still leaves the planner unchanged). Provider,
 model, and reasoning effort remain inherited. See the
 [usage guide](docs/usage-guide.md#planner-routing-for-tao-note-run) before enabling
 randomized routing.
+
+Repository model flags are `--model`, `--run-model`, `--review-model`,
+`--merge-review-model`, and `--resolver-model`; each accepts a name or `unset`.
+For a one-invocation override of every role, use `tao run --model NAME <plan>`,
+`tao review --run --model NAME <plan>`, or `tao merge --model NAME <plan>`
+(including `tao merge --all --model NAME`). See the
+[model selection guide](docs/usage-guide.md#choose-models-for-agent-sessions)
+for precedence and runtime rejection behavior.
 
 Run `tao status` to see the resolved `TAO_*` runtime values and repository plan
 rollups (`tao status --json` for automation). Use `tao run --help` and

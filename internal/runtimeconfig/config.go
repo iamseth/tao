@@ -4,8 +4,8 @@
 // The model is staged: RunOptionsPatch carries partial values as environment or
 // service defaults, repository defaults, and one request's overrides, while
 // ResolvedRunOptions is the validated execution model after the applicable
-// stages are merged. Optional fields are pointers so an unset value is distinct
-// from an explicit zero, false, or the default worktree strategy.
+// stages are merged. Optional scalar fields are pointers so an unset value is
+// distinct from an explicit zero or false; empty enum and model fields are unset.
 package runtimeconfig
 
 import (
@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/iamseth/tao/internal/plan"
 )
@@ -49,6 +50,52 @@ func LoadPlannerRoutingEnv(getenv func(string) string) PlannerRoutingEnv {
 	}
 }
 
+type ModelRole string
+
+const (
+	ModelRoleDefault     ModelRole = "default"
+	ModelRoleRun         ModelRole = "run"
+	ModelRoleReview      ModelRole = "review"
+	ModelRoleMergeReview ModelRole = "merge_review"
+	ModelRoleResolver    ModelRole = "resolver"
+)
+
+// ModelSelection keeps role overrides separate from their shared fallback.
+// Empty names leave model selection to the agent runtime.
+type ModelSelection struct {
+	Base, Run, Review, MergeReview, Resolver string
+}
+
+func (m ModelSelection) For(role ModelRole) string {
+	var override string
+	switch role {
+	case ModelRoleRun:
+		override = m.Run
+	case ModelRoleReview:
+		override = m.Review
+	case ModelRoleMergeReview:
+		override = m.MergeReview
+	case ModelRoleResolver:
+		override = m.Resolver
+	}
+	if override != "" {
+		return override
+	}
+	return m.Base
+}
+
+// ParseModelName treats model names as opaque runtime-specific identifiers.
+func ParseModelName(value string) (string, error) {
+	name := strings.TrimSpace(value)
+	if name == "" {
+		return "", fmt.Errorf("model name must not be empty")
+	}
+	if strings.ContainsFunc(name, unicode.IsSpace) {
+		return "", fmt.Errorf("model name must not contain whitespace")
+	}
+	return name, nil
+}
+
 // SliceBudgetCaps contains optional hard limits for cumulative slice telemetry.
 // Nil fields are disabled so enforcement remains opt-in.
 type SliceBudgetCaps struct {
@@ -57,19 +104,24 @@ type SliceBudgetCaps struct {
 }
 
 // RunOptionsPatch models partial values supplied as environment or service
-// defaults, repository defaults, or one run request's overrides. Empty enum
-// fields mean unset. Pointer fields mean the caller supplied the value,
+// defaults, repository defaults, or one run request's overrides. Empty enum and
+// model fields mean unset. Pointer fields mean the caller supplied the value,
 // including explicit false or zero.
 type RunOptionsPatch struct {
-	Mode           Mode           `json:"mode,omitempty"`
-	MaxSlices      *int           `json:"max_slices,omitempty"`
-	Continue       *bool          `json:"continue,omitempty"`
-	CommitPolicy   CommitPolicy   `json:"commit_policy,omitempty"`
-	ExecutionMode  ExecutionMode  `json:"execution_mode,omitempty"`
-	Agent          AgentKind      `json:"agent,omitempty"`
-	PullRequest    *bool          `json:"pull_request,omitempty"`
-	ReviewEnabled  *bool          `json:"review_enabled,omitempty"`
-	SessionTimeout *time.Duration `json:"session_timeout,omitempty"`
+	Mode             Mode           `json:"mode,omitempty"`
+	MaxSlices        *int           `json:"max_slices,omitempty"`
+	Continue         *bool          `json:"continue,omitempty"`
+	CommitPolicy     CommitPolicy   `json:"commit_policy,omitempty"`
+	ExecutionMode    ExecutionMode  `json:"execution_mode,omitempty"`
+	Agent            AgentKind      `json:"agent,omitempty"`
+	PullRequest      *bool          `json:"pull_request,omitempty"`
+	ReviewEnabled    *bool          `json:"review_enabled,omitempty"`
+	SessionTimeout   *time.Duration `json:"session_timeout,omitempty"`
+	Model            string         `json:"model,omitempty"`
+	RunModel         string         `json:"run_model,omitempty"`
+	ReviewModel      string         `json:"review_model,omitempty"`
+	MergeReviewModel string         `json:"merge_review_model,omitempty"`
+	ResolverModel    string         `json:"resolver_model,omitempty"`
 }
 
 // ResolvedRunOptions is the validated execution model after defaults and
@@ -85,6 +137,7 @@ type ResolvedRunOptions struct {
 	PullRequest    bool
 	ReviewEnabled  bool
 	SessionTimeout time.Duration
+	Models         ModelSelection
 }
 
 const (
@@ -238,6 +291,16 @@ func (d RunOptionsPatch) SessionTimeoutValue() time.Duration {
 	return DefaultSessionTimeout
 }
 
+// WithModelForAllRoles overrides both the base and any inherited role choices.
+func (p RunOptionsPatch) WithModelForAllRoles(name string) RunOptionsPatch {
+	p.Model = name
+	p.RunModel = name
+	p.ReviewModel = name
+	p.MergeReviewModel = name
+	p.ResolverModel = name
+	return p
+}
+
 func (p RunOptionsPatch) WithMaxSlices(maxSlices int) RunOptionsPatch {
 	p.MaxSlices = &maxSlices
 	return p
@@ -370,7 +433,7 @@ func (c Config) ResolvedOptions() ResolvedRunOptions {
 }
 
 // RunOptionsPatch projects resolved options to a patch so they can be re-applied
-// in either role. Every concrete scalar field becomes explicit.
+// in either role. Scalar fields become explicit; empty model fields stay unset.
 func (o ResolvedRunOptions) RunOptionsPatch() RunOptionsPatch {
 	maxSlices := o.MaxSlices
 	continueRun := o.Continue
@@ -378,15 +441,20 @@ func (o ResolvedRunOptions) RunOptionsPatch() RunOptionsPatch {
 	reviewEnabled := o.ReviewEnabled
 	sessionTimeout := o.SessionTimeout
 	return RunOptionsPatch{
-		Mode:           o.Mode,
-		MaxSlices:      &maxSlices,
-		Continue:       &continueRun,
-		CommitPolicy:   o.CommitPolicy,
-		ExecutionMode:  o.ExecutionMode,
-		Agent:          o.Agent,
-		PullRequest:    &pullRequest,
-		ReviewEnabled:  &reviewEnabled,
-		SessionTimeout: &sessionTimeout,
+		Mode:             o.Mode,
+		MaxSlices:        &maxSlices,
+		Continue:         &continueRun,
+		CommitPolicy:     o.CommitPolicy,
+		ExecutionMode:    o.ExecutionMode,
+		Agent:            o.Agent,
+		PullRequest:      &pullRequest,
+		ReviewEnabled:    &reviewEnabled,
+		SessionTimeout:   &sessionTimeout,
+		Model:            o.Models.Base,
+		RunModel:         o.Models.Run,
+		ReviewModel:      o.Models.Review,
+		MergeReviewModel: o.Models.MergeReview,
+		ResolverModel:    o.Models.Resolver,
 	}
 }
 
@@ -473,6 +541,26 @@ func mergeRunOptions(options ResolvedRunOptions, patch RunOptionsPatch) (Resolve
 	}
 	if patch.SessionTimeout != nil {
 		options.SessionTimeout = *patch.SessionTimeout
+	}
+	for _, model := range []struct {
+		field  string
+		value  string
+		target *string
+	}{
+		{"model", patch.Model, &options.Models.Base},
+		{"run_model", patch.RunModel, &options.Models.Run},
+		{"review_model", patch.ReviewModel, &options.Models.Review},
+		{"merge_review_model", patch.MergeReviewModel, &options.Models.MergeReview},
+		{"resolver_model", patch.ResolverModel, &options.Models.Resolver},
+	} {
+		if model.value == "" {
+			continue
+		}
+		parsed, err := ParseModelName(model.value)
+		if err != nil {
+			return ResolvedRunOptions{}, fmt.Errorf("%s: %w", model.field, err)
+		}
+		*model.target = parsed
 	}
 	return options, nil
 }

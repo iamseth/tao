@@ -63,14 +63,20 @@ func (a App) status(ctx context.Context, repo planLister, args []string) error {
 }
 
 func applyRepositoryRunDefaultsToStatus(rows []runtimeconfig.EnvVarStatus, repository runtimeconfig.RunOptionsPatch) []runtimeconfig.EnvVarStatus {
-	if repository.PullRequest == nil {
-		return rows
+	values := map[string]string{
+		runtimeconfig.EnvModel:            repository.Model,
+		runtimeconfig.EnvRunModel:         repository.RunModel,
+		runtimeconfig.EnvReviewModel:      repository.ReviewModel,
+		runtimeconfig.EnvMergeReviewModel: repository.MergeReviewModel,
+		runtimeconfig.EnvResolverModel:    repository.ResolverModel,
+	}
+	if repository.PullRequest != nil {
+		values[runtimeconfig.EnvPullRequest] = fmt.Sprintf("%t", *repository.PullRequest)
 	}
 	for i := range rows {
-		if rows[i].Name == runtimeconfig.EnvPullRequest {
-			rows[i].Value = fmt.Sprintf("%t", *repository.PullRequest)
+		if value := values[rows[i].Name]; value != "" {
+			rows[i].Value = value
 			rows[i].Source = "repository"
-			break
 		}
 	}
 	return rows
@@ -96,7 +102,7 @@ func (a App) writeStatus(payload statusPayload) error {
 		if len(row.Name) > width {
 			width = len(row.Name)
 		}
-		if err := writef(a.Out, "  %-*s  %-8s  %s\n", width, row.Name, row.Value, row.Source); err != nil {
+		if err := writef(a.Out, "  %-*s  %-8s  %s\n", width, row.Name, emptyDash(row.Value), row.Source); err != nil {
 			return err
 		}
 		if row.Warning != "" {

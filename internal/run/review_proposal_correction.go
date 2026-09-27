@@ -8,12 +8,14 @@ import (
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/reviewcontract"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
 // Each caller retains its own durable consumption and failure-settlement
 // authority. In particular, fresh reviews settle by compare-and-swap, while
 // historical approvals may supersede an exact pre-correction workspace failure.
 type reviewProposalCorrectionStrategy struct {
+	models     runtimeconfig.ModelSelection
 	session    AgentSessionExecutor
 	recorder   func() (ReviewProposalCorrectionRecorder, error)
 	consume    func(ReviewProposalCorrectionRecorder, plan.FinalizationFailure) error
@@ -41,6 +43,7 @@ func correctReviewProposal(ctx context.Context, request AgentSessionRequest, rev
 	if err := strategy.consume(recorder, consumed); err != nil {
 		return plan.PlanReview{}, fmt.Errorf("record consumed proposal correction attempt: %w", err)
 	}
+	request.Model = strategy.models.For(runtimeconfig.ModelRoleReview)
 	request.Prompt = prompt
 	request.CaptureOutput = true
 	request.Metrics = &AgentSessionMetricsRequest{Role: plan.AgentRoleReview}

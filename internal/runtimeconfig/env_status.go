@@ -20,6 +20,11 @@ const (
 	EnvAutoRework                       = "TAO_AUTO_REWORK"
 	EnvMaxReworkAttempts                = "TAO_MAX_REWORK_ATTEMPTS"
 	EnvSessionTimeout                   = "TAO_SESSION_TIMEOUT"
+	EnvModel                            = "TAO_MODEL"
+	EnvRunModel                         = "TAO_RUN_MODEL"
+	EnvReviewModel                      = "TAO_REVIEW_MODEL"
+	EnvMergeReviewModel                 = "TAO_MERGE_REVIEW_MODEL"
+	EnvResolverModel                    = "TAO_RESOLVER_MODEL"
 	EnvUpdate                           = "TAO_UPDATE"
 	EnvSkipPermissions                  = "TAO_DANGEROUSLY_SKIP_PERMISSIONS"
 	EnvMaxSliceOutputTokens             = "TAO_MAX_SLICE_OUTPUT_TOKENS" // #nosec G101 -- environment key, not a credential.
@@ -81,6 +86,7 @@ type runtimeEnvVar struct {
 	// the status reporter uses the canonical string, neither duplicates parsing.
 	apply             func(defaults *EnvDefaults, value string) (string, error)
 	applyWhenEmpty    bool
+	model             bool
 	budget            bool
 	fallbackOnInvalid bool
 }
@@ -134,6 +140,66 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 			}
 			defaults.SessionTimeout = &parsed
 			return parsed.String(), nil
+		},
+	},
+	{
+		name: EnvModel, applyWhenEmpty: true, model: true,
+		defaultValue: func(RunOptionsPatch) string { return "" },
+		apply: func(defaults *EnvDefaults, value string) (string, error) {
+			parsed, err := ParseModelName(value)
+			if err != nil {
+				return "", err
+			}
+			defaults.Model = parsed
+			return parsed, nil
+		},
+	},
+	{
+		name: EnvRunModel, applyWhenEmpty: true, model: true,
+		defaultValue: func(RunOptionsPatch) string { return "" },
+		apply: func(defaults *EnvDefaults, value string) (string, error) {
+			parsed, err := ParseModelName(value)
+			if err != nil {
+				return "", err
+			}
+			defaults.RunModel = parsed
+			return parsed, nil
+		},
+	},
+	{
+		name: EnvReviewModel, applyWhenEmpty: true, model: true,
+		defaultValue: func(RunOptionsPatch) string { return "" },
+		apply: func(defaults *EnvDefaults, value string) (string, error) {
+			parsed, err := ParseModelName(value)
+			if err != nil {
+				return "", err
+			}
+			defaults.ReviewModel = parsed
+			return parsed, nil
+		},
+	},
+	{
+		name: EnvMergeReviewModel, applyWhenEmpty: true, model: true,
+		defaultValue: func(RunOptionsPatch) string { return "" },
+		apply: func(defaults *EnvDefaults, value string) (string, error) {
+			parsed, err := ParseModelName(value)
+			if err != nil {
+				return "", err
+			}
+			defaults.MergeReviewModel = parsed
+			return parsed, nil
+		},
+	},
+	{
+		name: EnvResolverModel, applyWhenEmpty: true, model: true,
+		defaultValue: func(RunOptionsPatch) string { return "" },
+		apply: func(defaults *EnvDefaults, value string) (string, error) {
+			parsed, err := ParseModelName(value)
+			if err != nil {
+				return "", err
+			}
+			defaults.ResolverModel = parsed
+			return parsed, nil
 		},
 	},
 	{
@@ -386,13 +452,35 @@ func RuntimeAggregateReviewConvergenceWindow() (int, error) {
 	return parsed, nil
 }
 
+// RuntimeModelEnvDefaults resolves model choices without eagerly validating an
+// unused provider (for example, a conflict-free single-plan merge).
+func RuntimeModelEnvDefaults() (RunOptionsPatch, error) {
+	defaults, err := runtimeEnvDefaultsMatching(func(v runtimeEnvVar) bool { return v.model })
+	return defaults.RunOptionsPatch, err
+}
+
+// RuntimeAgentSessionEnvDefaults resolves only provider launch policy. Model
+// selection belongs to the caller's environment/repository/override stages.
+func RuntimeAgentSessionEnvDefaults() (EnvDefaults, error) {
+	return runtimeEnvDefaultsMatching(func(v runtimeEnvVar) bool {
+		return v.name == EnvAgent || v.name == EnvSessionTimeout || v.name == EnvSkipPermissions
+	})
+}
+
 func RuntimeEnvDefaults() (EnvDefaults, error) {
+	return runtimeEnvDefaultsMatching(func(runtimeEnvVar) bool { return true })
+}
+
+func runtimeEnvDefaultsMatching(include func(runtimeEnvVar) bool) (EnvDefaults, error) {
 	defaults := EnvDefaults{
 		RunOptionsPatch:       DefaultRunOptionsPatch(),
 		UpdateMode:            selfupdate.ModeWarn,
 		AgentBudgetThresholds: defaultAgentBudgetThresholds(),
 	}
 	for _, v := range runtimeEnvVars {
+		if !include(v) {
+			continue
+		}
 		value, ok := os.LookupEnv(v.name)
 		if !ok || (value == "" && !v.applyWhenEmpty) {
 			continue

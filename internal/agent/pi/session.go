@@ -21,12 +21,14 @@ type session struct {
 	queuedEvents           []event
 	log                    io.Writer
 	stderrDone             chan struct{}
+	lastStderr             string // Read only after stderrDone closes.
 	mu                     sync.Mutex
 	pendingToolCalls       map[string]toolCall
 	pendingToolCallsByName map[string]toolCall
 	loggedToolResults      map[string]bool
 	watchdog               noProgressWatchdog
 	abortOnce              sync.Once
+	waitOnce               sync.Once
 }
 
 func newSession(proc Process, log io.Writer, noProgressToolLimit int, verificationCommands []string) *session {
@@ -45,24 +47,32 @@ func newSession(proc Process, log io.Writer, noProgressToolLimit int, verificati
 		s.stderrDone = make(chan struct{})
 		go func() {
 			defer close(s.stderrDone)
-			drainStderr(stderr, log)
+			s.lastStderr = drainStderr(stderr, log)
 		}()
 	}
 	return s
 }
 
-func drainStderr(stderr io.Reader, log io.Writer) {
-	if log == nil {
-		_, _ = io.Copy(io.Discard, stderr)
-		return
-	}
+func drainStderr(stderr io.Reader, log io.Writer) string {
+	var last string
 	scanner := bufio.NewScanner(stderr)
 	for scanner.Scan() {
-		_ = logrecord.Write(log, logrecord.Record{Type: logrecord.TypeDiagnostic, Content: fmt.Sprintf("tao pi stderr: %s", scanner.Text())})
+		line := scanner.Text()
+		if strings.TrimSpace(line) != "" {
+			last = line
+		}
+		if log != nil {
+			_ = logrecord.Write(log, logrecord.Record{Type: logrecord.TypeDiagnostic, Content: fmt.Sprintf("tao pi stderr: %s", line)})
+		}
 	}
 	if err := scanner.Err(); err != nil {
-		_ = logrecord.Write(log, logrecord.Record{Type: logrecord.TypeDiagnostic, Content: fmt.Sprintf("tao pi stderr: %v", err)})
+		if log != nil {
+			_ = logrecord.Write(log, logrecord.Record{Type: logrecord.TypeDiagnostic, Content: fmt.Sprintf("tao pi stderr: %v", err)})
+		}
+		// Keep draining if a line exceeds the scanner's bounded buffer.
+		_, _ = io.Copy(io.Discard, stderr)
 	}
+	return last
 }
 
 func (s *session) queuedResult() Result {

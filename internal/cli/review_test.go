@@ -10,7 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/planning"
+	"github.com/iamseth/tao/internal/runtimeconfig"
+	"github.com/iamseth/tao/internal/taodata"
 )
 
 func TestStalenessReportsChangedExpectedFilesSinceBaseCommit(t *testing.T) {
@@ -259,61 +263,119 @@ func TestReviewPrintsClearMessageWhenNoReviewExists(t *testing.T) {
 }
 
 func TestReviewRunTriggersFreshReview(t *testing.T) {
-	clearTaoEnv(t)
-	fixture := newRunPlanFixture(t, plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
-	reviewOutput := "Fresh review\n```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"ready\",\"commit_message\":{\"subject\":\"feat(review): persist approved commit proposals\",\"body\":\"What:\\nPersist the proposal for the exact reviewed diff.\\n\\nWhy:\\nReuse review context during merge.\"},\"findings\":[]}\n```"
-	var out bytes.Buffer
-	var prompt string
-	reporter := newRecordingCLIStatusReporter()
-	app := App{Out: &out, Err: &out, StatusReporter: reporter, CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
-		if name != "git" {
-			t.Fatalf("unexpected command %s %v", name, args)
-			return nil
-		}
-		switch reviewCommandKey(args) {
-		case "status --porcelain":
-			return nil
-		case "rev-parse HEAD":
-			_, _ = io.WriteString(stdout, "head123\n")
-		default:
-			t.Fatalf("unexpected git command %v", args)
-		}
-		return nil
-	}, ProcessStarter: fakeCLIProcessStarter(t, reviewOutput, func(value string) {
-		prompt = value
-	})}
+	for _, tt := range []struct {
+		name      string
+		modelFlag []string
+		wantModel string
+	}{
+		{name: "repository default", wantModel: "repo-review"},
+		{name: "explicit override", modelFlag: []string{"--model", "provider/override"}, wantModel: "provider/override"},
+		{name: "empty inherits", modelFlag: []string{"--model="}, wantModel: "repo-review"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			clearTaoEnv(t)
+			t.Setenv(runtimeconfig.EnvReviewModel, "env-review")
+			registered := taodata.Repo{ID: "repo-a", RunDefaults: &taodata.RepoRunDefaults{Models: &taodata.RepoModelDefaults{Model: "repo-base", ReviewModel: "repo-review"}}}
+			registry := &fakeNoteRegistry{current: registered}
 
-	if err := app.review(context.Background(), plan.NewFileRepository(fixture.root), []string{"--run", fixture.id}); err != nil {
-		t.Fatal(err)
+			fixture := newRunPlanFixture(t, plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
+			reviewOutput := "Fresh review\n```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"ready\",\"commit_message\":{\"subject\":\"feat(review): persist approved commit proposals\",\"body\":\"What:\\nPersist the proposal for the exact reviewed diff.\\n\\nWhy:\\nReuse review context during merge.\"},\"findings\":[]}\n```"
+			var out bytes.Buffer
+			var prompt string
+			reporter := newRecordingCLIStatusReporter()
+			app := App{Out: &out, Err: &out, StatusReporter: reporter, CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
+				if name != "git" {
+					t.Fatalf("unexpected command %s %v", name, args)
+					return nil
+				}
+				switch reviewCommandKey(args) {
+				case "status --porcelain":
+					return nil
+				case "rev-parse HEAD":
+					_, _ = io.WriteString(stdout, "head123\n")
+				default:
+					t.Fatalf("unexpected git command %v", args)
+				}
+				return nil
+			}, ProcessStarter: fakeCLIProcessStarter(t, reviewOutput, func(value string) {
+				prompt = value
+			})}
+
+			app.Registry = func() NoteRegistry { return registry }
+			starter := app.ProcessStarter
+			app.ProcessStarter = func(ctx context.Context, cwd, name string, args []string) (agent.Process, error) {
+				if len(args) < 2 || args[len(args)-2] != "--model" || args[len(args)-1] != tt.wantModel {
+					t.Fatalf("review process args = %v, want model %q", args, tt.wantModel)
+				}
+				return starter(ctx, cwd, name, args[:len(args)-2])
+			}
+			args := append([]string{"--run", fixture.id}, tt.modelFlag...)
+			if err := app.review(context.Background(), plan.NewFileRepository(fixture.root), args); err != nil {
+				t.Fatal(err)
+			}
+			reporter.requireCall(t, "run run-plan", "idle")
+			state, err := plan.ReadState(fixture.dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state.Plan.Review == nil || state.Plan.Review.Verdict != "approve" || state.Plan.Review.Summary != "ready" || state.Plan.Review.Head != "head123" || state.Plan.Review.CommitMessage == nil || state.Plan.Review.CommitMessage.Subject != "feat(review): persist approved commit proposals" {
+				t.Fatalf("unexpected persisted review: %#v", state.Plan.Review)
+			}
+			if artifact := readText(t, filepath.Join(fixture.dir, plan.ReviewFile)); !strings.Contains(artifact, "Fresh review") {
+				t.Fatalf("expected review artifact, got %q", artifact)
+			}
+			if !strings.Contains(prompt, "Plan directory: `"+fixture.dir+"`") || !strings.Contains(prompt, "Head: `head123`") {
+				t.Fatalf("expected review prompt with plan dir and head, got %q", prompt)
+			}
+			text := out.String()
+			if !strings.Contains(text, "Review completed: "+fixture.id) || !strings.Contains(text, "Review Status: completed") || !strings.Contains(text, "Verdict: approve") || !strings.Contains(text, "Next: tao merge "+fixture.id) {
+				t.Fatalf("expected refreshed review completion and merge guidance, got %q", text)
+			}
+			previous := -1
+			for _, phase := range []string{"Preparing review: " + fixture.id, "Verifying completed branch: ", "Running agent review: pi", "Review completed: " + fixture.id} {
+				index := strings.Index(text, phase)
+				if index < 0 || index <= previous {
+					t.Fatalf("review phase %q missing or out of order in %q", phase, text)
+				}
+				previous = index
+			}
+			if strings.Contains(text, "\x1b[") {
+				t.Fatalf("review progress contains terminal control sequence: %q", text)
+			}
+		})
 	}
-	reporter.requireCall(t, "run run-plan", "idle")
-	state, err := plan.ReadState(fixture.dir)
+}
+
+func TestAuxiliaryGeneratorsInheritBaseModel(t *testing.T) {
+	clearTaoEnv(t)
+	t.Setenv(runtimeconfig.EnvModel, "provider/base")
+	t.Setenv(runtimeconfig.EnvRunModel, "provider/run")
+	t.Setenv(runtimeconfig.EnvReviewModel, "provider/review")
+	defaults, err := cliEnvDefaults()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Plan.Review == nil || state.Plan.Review.Verdict != "approve" || state.Plan.Review.Summary != "ready" || state.Plan.Review.Head != "head123" || state.Plan.Review.CommitMessage == nil || state.Plan.Review.CommitMessage.Subject != "feat(review): persist approved commit proposals" {
-		t.Fatalf("unexpected persisted review: %#v", state.Plan.Review)
+	app := App{Out: io.Discard, Err: io.Discard, CommandRunner: reviewFakeRunner(nil, nil)}
+	generator, err := app.planGenerator(defaults)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if artifact := readText(t, filepath.Join(fixture.dir, plan.ReviewFile)); !strings.Contains(artifact, "Fresh review") {
-		t.Fatalf("expected review artifact, got %q", artifact)
+	if got := generator.(*planning.Service).Model; got != "provider/base" {
+		t.Fatalf("planning model = %q", got)
 	}
-	if !strings.Contains(prompt, "Plan directory: `"+fixture.dir+"`") || !strings.Contains(prompt, "Head: `head123`") {
-		t.Fatalf("expected review prompt with plan dir and head, got %q", prompt)
-	}
-	text := out.String()
-	if !strings.Contains(text, "Review completed: "+fixture.id) || !strings.Contains(text, "Review Status: completed") || !strings.Contains(text, "Verdict: approve") || !strings.Contains(text, "Next: tao merge "+fixture.id) {
-		t.Fatalf("expected refreshed review completion and merge guidance, got %q", text)
-	}
-	previous := -1
-	for _, phase := range []string{"Preparing review: " + fixture.id, "Verifying completed branch: ", "Running agent review: pi", "Review completed: " + fixture.id} {
-		index := strings.Index(text, phase)
-		if index < 0 || index <= previous {
-			t.Fatalf("review phase %q missing or out of order in %q", phase, text)
+	starter := fakeCLIProcessStarter(t, "triaged", nil)
+	app.ProcessStarter = func(ctx context.Context, cwd, name string, args []string) (agent.Process, error) {
+		if len(args) < 2 || args[len(args)-2] != "--model" || args[len(args)-1] != "provider/base" {
+			t.Fatalf("triage process args = %v", args)
 		}
-		previous = index
+		return starter(ctx, cwd, name, args[:len(args)-2])
 	}
-	if strings.Contains(text, "\x1b[") {
-		t.Fatalf("review progress contains terminal control sequence: %q", text)
+	triage, err := newReworkTriageTextGenerator(app, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := triage.GenerateText(context.Background(), t.TempDir(), "classify threads"); err != nil {
+		t.Fatal(err)
 	}
 }
 

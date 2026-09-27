@@ -237,10 +237,23 @@ func (s *session) abort(cause error) error {
 	s.abortOnce.Do(func() {
 		_ = s.sendWithoutContext(command{Type: "abort"})
 		_ = s.proc.Kill()
-		_ = s.proc.Wait()
+		s.wait()
 	})
+	var annotated stderrError
+	if cause != nil && s.lastStderr != "" && !errors.As(cause, &annotated) {
+		return stderrError{cause: cause, line: s.lastStderr}
+	}
 	return cause
 }
+
+// Preserve the original error classification and annotate nested aborts once.
+type stderrError struct {
+	cause error
+	line  string
+}
+
+func (e stderrError) Error() string { return fmt.Sprintf("%v; pi stderr: %s", e.cause, e.line) }
+func (e stderrError) Unwrap() error { return e.cause }
 
 func (s *session) sendWithoutContext(command command) error {
 	data, err := json.Marshal(command)
@@ -255,8 +268,15 @@ func (s *session) sendWithoutContext(command command) error {
 
 func (s *session) close() {
 	_ = s.stdin.Close()
-	_ = s.proc.Wait()
-	if s.stderrDone != nil {
-		<-s.stderrDone
-	}
+	s.wait()
+}
+
+func (s *session) wait() {
+	s.waitOnce.Do(func() {
+		streamjson.WaitForStderr(s.stderrDone)
+		_ = s.proc.Wait()
+		if s.stderrDone != nil {
+			<-s.stderrDone
+		}
+	})
 }

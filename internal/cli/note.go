@@ -625,6 +625,10 @@ func (a App) noteRun(ctx context.Context, registered taodata.Repo, repo NoteRepo
 	if err != nil {
 		return err
 	}
+	generator, err := a.planGenerator(inputs.defaults)
+	if err != nil {
+		return err
+	}
 	skipPermissions := inputs.skipPermissions
 	if err := a.requireHealthyNoteRepository(ctx, registered); err != nil {
 		return err
@@ -664,7 +668,7 @@ func (a App) noteRun(ctx context.Context, registered taodata.Repo, repo NoteRepo
 				return note.Note{}, "", "", err
 			}
 			generationCtx, stopSignals := newCommandSignalContext(ctx)
-			generated, err = a.planGenerator(inputs.defaults.Agent).GeneratePlan(generationCtx, planning.GeneratePlanRequest{
+			generated, err = generator.GeneratePlan(generationCtx, planning.GeneratePlanRequest{
 				Session: session, AgentKind: routing.agentKind(inputs.defaults.Agent), PermissionMode: mode, Timeout: request.SessionTimeout, RejectOpenQuestions: true,
 			})
 			interrupted := generationCtx.Err() != nil || errors.Is(err, context.Canceled)
@@ -701,13 +705,18 @@ func (a App) noteRun(ctx context.Context, registered taodata.Repo, repo NoteRepo
 	return a.executeResolvedRun(ctx, planRepo, generated.Allocation.ID, request, skipPermissions, runtimeconfig.AutoReworkPolicy{}, false, true)
 }
 
-func (a App) planGenerator(agentKind runtimeconfig.AgentKind) PlanGenerator {
+func (a App) planGenerator(defaults envDefaults) (PlanGenerator, error) {
 	if a.PlanGenerator != nil {
-		return a.PlanGenerator
+		return a.PlanGenerator, nil
+	}
+	config, err := defaults.runConfig(runtimeconfig.RunOptionsPatch{})
+	if err != nil {
+		return nil, err
 	}
 	return planning.NewService(planning.NewFileRepository(""), nil, planning.ServiceOptions{
-		Agent: agentKind, ProcessStarter: a.ProcessStarter, Log: a.Out,
-	})
+		Agent: defaults.Agent, Model: config.ResolvedOptions().Models.For(runtimeconfig.ModelRoleDefault),
+		ProcessStarter: a.ProcessStarter, Log: a.Out,
+	}), nil
 }
 
 func (a App) printValidationWarnings(validation planning.ValidationResult) error {

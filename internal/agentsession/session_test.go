@@ -17,6 +17,52 @@ func (f runtimeFunc) RunSession(ctx context.Context, session agent.Session) (age
 	return f(ctx, session)
 }
 
+func TestRunnerModelSelection(t *testing.T) {
+	for _, tt := range []struct {
+		name, configured, override, want string
+	}{
+		{name: "unset"},
+		{name: "config default", configured: "base", want: "base"},
+		{name: "request override", configured: "base", override: "review", want: "review"},
+		{name: "request only", override: "run", want: "run"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			calls := 0
+			runner := New(Config{Model: tt.configured, Runtime: runtimeFunc(func(_ context.Context, session agent.Session) (agent.SessionResult, error) {
+				calls++
+				if session.Model != tt.want {
+					t.Fatalf("model = %q, want %q", session.Model, tt.want)
+				}
+				return agent.SessionResult{}, nil
+			})})
+			if _, err := runner.Run(context.Background(), Request{Model: tt.override}); err != nil {
+				t.Fatal(err)
+			}
+			if calls != 1 {
+				t.Fatalf("provider calls = %d, want 1", calls)
+			}
+		})
+	}
+}
+
+func TestTextGeneratorUsesConfiguredModel(t *testing.T) {
+	for _, model := range []string{"", "base"} {
+		t.Run("model="+model, func(t *testing.T) {
+			calls := 0
+			generator := NewTextGenerator(Config{Model: model, Runtime: runtimeFunc(func(_ context.Context, session agent.Session) (agent.SessionResult, error) {
+				calls++
+				if session.Model != model {
+					t.Fatalf("model = %q, want %q", session.Model, model)
+				}
+				return agent.SessionResult{FinalText: "done"}, nil
+			})}, nil)
+			if text, err := generator.GenerateText(context.Background(), "/repo", "prompt"); err != nil || text != "done" || calls != 1 {
+				t.Fatalf("text=%q error=%v calls=%d", text, err, calls)
+			}
+		})
+	}
+}
+
 func TestRunnerInvokesOneProviderWithBoundedDescriptorPolicy(t *testing.T) {
 	calls := 0
 	var got agent.Session
