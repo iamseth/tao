@@ -117,6 +117,42 @@ func TestRuntimeEnvDefaultsRecordsExplicitFalsePullRequestAndPiAgent(t *testing.
 	}
 }
 
+func TestRuntimeEnvStatusPlannerRouting(t *testing.T) {
+	for _, raw := range []string{"", " shadow ", "not-valid"} {
+		t.Run(raw, func(t *testing.T) {
+			for _, name := range runtimeEnvKeys() {
+				t.Setenv(name, "")
+			}
+			names := []string{EnvPlannerRouting, EnvPlannerRoutingArms, EnvPlannerRoutingFloor}
+			for _, name := range names {
+				if raw == "" {
+					unsetEnv(t, name)
+				} else {
+					t.Setenv(name, raw)
+				}
+			}
+			rows, err := RuntimeEnvStatus()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range names {
+				i := slices.IndexFunc(rows, func(row EnvVarStatus) bool { return row.Name == name })
+				if i < 0 {
+					t.Fatalf("missing %s row", name)
+				}
+				row := rows[i]
+				if raw == "" {
+					if row.Source != "default" || !strings.Contains(row.Value, "not set") {
+						t.Errorf("unset %s row = %#v", name, row)
+					}
+				} else if row.Source != "env" || row.Value != raw || row.Warning != "" {
+					t.Errorf("raw %s row = %#v, want %q without validation", name, row, raw)
+				}
+			}
+		})
+	}
+}
+
 func TestRuntimeEnvStatusReportsDefaultsAndOverrides(t *testing.T) {
 	t.Setenv(EnvExecutionMode, "")
 	t.Setenv(EnvAgent, "")
@@ -178,6 +214,9 @@ func TestRuntimeEnvStatusDefaultRowsDeriveFromRunOptionsPatch(t *testing.T) {
 		{Name: EnvAggregateReviewConvergenceWindow, Value: "2", Source: "default"},
 		{Name: EnvApprovedBy, Value: "", Source: "default"},
 		{Name: EnvRunHeader, Value: "true", Source: "default"},
+		{Name: EnvPlannerRouting, Value: "not set (default: off)", Source: "default"},
+		{Name: EnvPlannerRoutingArms, Value: "not set (comma list, e.g. pi=0.5,claude=0.5)", Source: "default"},
+		{Name: EnvPlannerRoutingFloor, Value: "not set (default: 0.1)", Source: "default"},
 		{Name: EnvMaxSliceOutputTokens, Value: "disabled", Source: "default"},
 		{Name: EnvMaxSliceCost, Value: "disabled", Source: "default"},
 		{Name: EnvBudgetSliceOutputTokens, Value: "40000", Source: "default"},

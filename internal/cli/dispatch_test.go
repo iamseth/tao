@@ -27,6 +27,7 @@ func TestCommandRegistryOrder(t *testing.T) {
 		{name: "repo", minPrefix: "repo"},
 		{name: "steal", minPrefix: "ste"},
 		{name: "note", minPrefix: "n"},
+		{name: "route"},
 		{name: "approve", minPrefix: "a"},
 		{name: "abandon"},
 		{name: "slice-complete"},

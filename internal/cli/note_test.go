@@ -16,6 +16,7 @@ import (
 	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/plannerroute"
 	"github.com/iamseth/tao/internal/planning"
 	"github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/runtimeconfig"
@@ -45,6 +46,10 @@ func (r *fakeNoteRegistry) NotesDir(repo taodata.Repo) string {
 }
 func (r *fakeNoteRegistry) PlansDir(repo taodata.Repo) string {
 	return filepath.Join(r.dir, repo.ID, "plans")
+}
+
+func (r *fakeNoteRegistry) PlannerRoutesDir(repo taodata.Repo) string {
+	return filepath.Join(r.dir, repo.ID, "planner-routes")
 }
 
 type terminalInput struct{ *strings.Reader }
@@ -942,5 +947,306 @@ func TestNoteRunRejectsContinueAndBatchFlags(t *testing.T) {
 		if err == nil {
 			t.Fatalf("%s unexpectedly accepted", flag)
 		}
+	}
+}
+
+// Routing tests use executable markers, never real provider sessions.
+func noteRoutingTestApp(t *testing.T) (App, taodata.Repo, string, *bytes.Buffer, *bytes.Buffer) {
+	t.Helper()
+	clearTaoEnv(t)
+	bin := t.TempDir()
+	for _, name := range []string{"pi", "claude"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil { //nolint:gosec // G306: executable discovery marker needs exec bit
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin)
+	t.Setenv("TAO_AGENT", "claude")
+	t.Setenv("TAO_PLANNER_ROUTING_ARMS", "pi=0.5,claude=0.5")
+	meta := taodata.Repo{ID: "tao-123", Name: "tao", Root: "/repo", Branch: "main"}
+	app, out, errOut := noteTestApp(t, strings.NewReader(""), meta)
+	if err := app.Run(context.Background(), []string{"note", "create", "--tag", "testing", "implement a small fix"}); err != nil {
+		t.Fatal(err)
+	}
+	id := strings.TrimSpace(strings.TrimPrefix(out.String(), "Created note "))
+	out.Reset()
+	return app, meta, id, out, errOut
+}
+
+func noteRoutingRecords(t *testing.T, app App, meta taodata.Repo) []plannerroute.Record {
+	t.Helper()
+	dir := app.registry().(*fakeNoteRegistry).PlannerRoutesDir(meta)
+	records, warnings, err := plannerroute.NewStore(dir).List(context.Background())
+	if err != nil || len(warnings) != 0 {
+		t.Fatalf("routes: %v, %v", err, warnings)
+	}
+	return records
+}
+
+func TestNoteRunPlannerRouting(t *testing.T) {
+	for _, tc := range []struct{ mode, override, label string }{
+		{"shadow", "", "shadow recommendation"},
+		{"randomized", "", "assigned"},
+		{"randomized", "pi", "manual override"},
+	} {
+		t.Run(tc.mode+tc.override, func(t *testing.T) {
+			app, meta, id, out, _ := noteRoutingTestApp(t)
+			t.Setenv("TAO_PLANNER_ROUTING", tc.mode)
+			fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+			app.Repository = func(string) Repository { return plan.NewFileRepository(filepath.Dir(fixture.dir)) }
+			var planningKind runtimeconfig.AgentKind
+			app.PlanGenerator = planGeneratorFunc(func(_ context.Context, req planning.GeneratePlanRequest) (*planning.GeneratePlanResult, error) {
+				planningKind = req.AgentKind
+				records := noteRoutingRecords(t, app, meta)
+				if len(records) != 1 || len(records[0].Entries) != 1 || records[0].Entries[0].Kind != plannerroute.EntryAssigned {
+					t.Fatalf("assignment must precede planning: %#v", records)
+				}
+				if !strings.Contains(out.String(), "Planner route "+records[0].ID) {
+					t.Fatalf("route not announced before planning: %s", out)
+				}
+				return &planning.GeneratePlanResult{Allocation: planning.PlanAllocation{ID: fixture.id, Dir: fixture.dir},
+					Treatment: planning.Treatment{RuntimeLabel: string(req.AgentKind), ProviderID: "provider", ModelID: "model", MetricsAvailability: "reported"}}, nil
+			})
+			executions := 0
+			old := executeSinglePlan
+			executeSinglePlan = func(_ run.Service, _ context.Context, req run.Request) error {
+				executions++
+				if req.Agent != runtimeconfig.AgentClaude {
+					t.Fatalf("execution agent changed: %s", req.Agent)
+				}
+				return nil
+			}
+			t.Cleanup(func() { executeSinglePlan = old })
+			args := []string{"note", "run", "--no-review", id}
+			if tc.override != "" {
+				args = append(args, "--planner-arm", tc.override)
+			}
+			if err := app.Run(context.Background(), args); err != nil {
+				t.Fatal(err)
+			}
+			records := noteRoutingRecords(t, app, meta)
+			if len(records) != 1 {
+				t.Fatalf("routes = %#v", records)
+			}
+			r := records[0]
+			// This test owns the complete assignment/treatment/attempt/link sequence.
+			if len(r.Entries) != 4 || r.Entries[0].Kind != plannerroute.EntryAssigned || r.Entries[1].Kind != plannerroute.EntryTreated || r.Entries[2].Kind != plannerroute.EntryAttempt || r.Entries[3].Kind != plannerroute.EntryLinked {
+				t.Fatalf("entry sequence = %#v", r.Entries)
+			}
+			wantKind := r.Assignment.Selected.Runtime
+			if tc.mode == "shadow" {
+				wantKind = runtimeconfig.AgentClaude
+			}
+			if planningKind != wantKind || r.Entries[1].Treatment.RuntimeLabel != string(wantKind) || r.Entries[1].Treatment.ProviderID != "provider" || r.Entries[2].Attempt.Outcome != "plan_created" || r.LinkedPlanID() != fixture.id || executions != 1 {
+				t.Fatalf("planning=%s executions=%d record=%#v", planningKind, executions, r)
+			}
+			if r.Assignment.ManualOverride != (tc.override != "") || tc.override != "" && r.Assignment.Selected.Runtime != runtimeconfig.AgentPi {
+				t.Fatalf("override = %#v", r.Assignment)
+			}
+			if !strings.Contains(out.String(), "("+tc.label+")") || r.Context.BaselineRuntime != runtimeconfig.AgentClaude || r.Context.NoteTextBucket != "short" || len(r.Context.NoteTags) != 1 {
+				t.Fatalf("context=%#v output=%s", r.Context, out)
+			}
+			stored, err := app.noteRepository(meta).Get(context.Background(), id)
+			if err != nil || stored.Status != note.StatusPromoted {
+				t.Fatalf("note=%#v err=%v", stored, err)
+			}
+		})
+	}
+}
+
+func TestNoteRunPlannerRoutingFailures(t *testing.T) {
+	for _, mode := range []string{"shadow", "randomized"} {
+		t.Run(mode+" ledger unavailable", func(t *testing.T) {
+			app, meta, id, _, errOut := noteRoutingTestApp(t)
+			dir := app.registry().(*fakeNoteRegistry).PlannerRoutesDir(meta)
+			if err := os.MkdirAll(dir, 0o500); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(dir, 0o700) }) //nolint:gosec // G302: restore private directory traversal for cleanup
+			if os.Geteuid() == 0 {
+				t.Skip("root bypasses directory permissions")
+			}
+			calls := 0
+			app.PlanGenerator = planGeneratorFunc(func(context.Context, planning.GeneratePlanRequest) (*planning.GeneratePlanResult, error) {
+				calls++
+				return nil, errors.New("planner failed")
+			})
+			err := app.Run(context.Background(), []string{"note", "run", "--planner-routing", mode, id})
+			if err == nil {
+				t.Fatal("expected failure")
+			}
+			if mode == "randomized" && (calls != 0 || !strings.Contains(err.Error(), dir)) {
+				t.Fatalf("calls=%d err=%v", calls, err)
+			}
+			if mode == "shadow" && (calls != 1 || !strings.Contains(errOut.String(), "warning: planner routing ledger unavailable:")) {
+				t.Fatalf("calls=%d warnings=%s", calls, errOut)
+			}
+			if _, err := os.Stat(app.registry().PlansDir(meta)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("plan directory allocated: %v", err)
+			}
+		})
+	}
+	for _, interrupted := range []bool{false, true} {
+		t.Run(fmt.Sprintf("failed attempts interrupted=%v", interrupted), func(t *testing.T) {
+			app, meta, id, _, _ := noteRoutingTestApp(t)
+			var cancel context.CancelFunc
+			withCLICommandSignalContext(t, func(parent context.Context) (context.Context, context.CancelFunc) {
+				ctx, stop := context.WithCancel(parent)
+				cancel = stop
+				return ctx, stop
+			})
+			failure := errors.New("planner failed")
+			app.PlanGenerator = planGeneratorFunc(func(context.Context, planning.GeneratePlanRequest) (*planning.GeneratePlanResult, error) {
+				if interrupted {
+					cancel()
+					return nil, &planning.GenerationError{Stage: planning.GenerationStageRuntime, Err: context.Canceled}
+				}
+				return nil, &planning.GenerationError{Stage: planning.GenerationStageRuntime, Err: failure, Treatment: &planning.Treatment{RuntimeLabel: "pi", ProviderID: "observed", ModelID: "model", MetricsAvailability: "partial"}}
+			})
+			for range 2 {
+				err := app.Run(context.Background(), []string{"note", "run", "--planner-routing=randomized", id})
+				if interrupted && !errors.Is(err, context.Canceled) || !interrupted && !errors.Is(err, failure) {
+					t.Fatalf("error = %v", err)
+				}
+			}
+			records := noteRoutingRecords(t, app, meta)
+			if len(records) != 2 || records[0].Assignment.Draw != records[1].Assignment.Draw || records[0].Assignment.Selected != records[1].Assignment.Selected {
+				t.Fatalf("unstable assignments: %#v", records)
+			}
+			for _, r := range records {
+				if r.LinkedPlanID() != "" {
+					t.Fatal("failed attempt linked")
+				}
+				var attempt *plannerroute.Attempt
+				var treatment *plannerroute.Treatment
+				for _, entry := range r.Entries {
+					if entry.Kind == plannerroute.EntryAttempt {
+						attempt = entry.Attempt
+					}
+					if entry.Kind == plannerroute.EntryTreated {
+						treatment = entry.Treatment
+					}
+				}
+				wantOutcome, wantProvider := "failed", "observed"
+				if interrupted {
+					wantOutcome, wantProvider = "interrupted", "unknown"
+				}
+				if attempt == nil || attempt.Outcome != wantOutcome || attempt.Stage != string(planning.GenerationStageRuntime) || treatment == nil || treatment.ProviderID != wantProvider {
+					t.Fatalf("attempt=%#v treatment=%#v", attempt, treatment)
+				}
+			}
+		})
+	}
+}
+
+func TestNotePlannerRoutingFlagsOnlyRun(t *testing.T) {
+	app, _, id, _, _ := noteRoutingTestApp(t)
+	for _, sub := range []string{"create", "list", "show", "edit", "archive", "reopen"} {
+		for _, flag := range []string{"--planner-routing=shadow", "--planner-arm=pi"} {
+			err := app.Run(context.Background(), []string{"note", sub, flag, id})
+			if err == nil || !strings.Contains(err.Error(), "not valid for tao note "+sub) {
+				t.Fatalf("%s %s: %v", sub, flag, err)
+			}
+		}
+	}
+}
+
+func TestNoteRunPlannerRoutingPostPlanFailure(t *testing.T) {
+	for _, mode := range []string{"randomized", "shadow"} {
+		for _, failure := range []string{"append", "link", "held lock"} {
+			t.Run(mode+"/"+failure, func(t *testing.T) {
+				app, meta, id, _, errOut := noteRoutingTestApp(t)
+				fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+				app.Repository = func(string) Repository { return plan.NewFileRepository(filepath.Dir(fixture.dir)) }
+				var routeID string
+				app.PlanGenerator = planGeneratorFunc(func(context.Context, planning.GeneratePlanRequest) (*planning.GeneratePlanResult, error) {
+					routes := noteRoutingRecords(t, app, meta)
+					if len(routes) != 1 {
+						t.Fatalf("routes=%#v", routes)
+					}
+					routeID = routes[0].ID
+					dir := app.registry().PlannerRoutesDir(meta)
+					switch failure {
+					case "append":
+						// Removing only the ledger document makes Append and Link fail,
+						// independently of host privileges or filesystem permissions.
+						if err := os.Remove(filepath.Join(dir, routeID+".json")); err != nil {
+							t.Fatal(err)
+						}
+					case "held lock":
+						holdPlannerRouteLock(t, dir)
+					default:
+						// A corrupt neighbor allows Append but prevents proving link uniqueness.
+						if err := os.WriteFile(filepath.Join(dir, "broken.json"), []byte("{"), 0o600); err != nil {
+							t.Fatal(err)
+						}
+					}
+					return &planning.GeneratePlanResult{Allocation: planning.PlanAllocation{ID: fixture.id, Dir: fixture.dir}}, nil
+				})
+				executions := 0
+				old := executeSinglePlan
+				executeSinglePlan = func(run.Service, context.Context, run.Request) error { executions++; return nil }
+				t.Cleanup(func() { executeSinglePlan = old })
+				err := app.Run(context.Background(), []string{"note", "run", "--planner-routing", mode, "--no-review", id})
+				if mode == "randomized" {
+					if err == nil || !strings.Contains(err.Error(), "recover with tao route link "+routeID+" "+fixture.id) || !strings.Contains(err.Error(), fixture.dir) || executions != 0 {
+						t.Fatalf("error=%v executions=%d", err, executions)
+					}
+				} else if err != nil || executions != 1 || !strings.Contains(errOut.String(), "warning: planner routing ledger unavailable:") {
+					t.Fatalf("error=%v executions=%d warnings=%s", err, executions, errOut)
+				}
+				if failure == "held lock" {
+					message := errOut.String()
+					if err != nil {
+						message += err.Error()
+					}
+					if !strings.Contains(message, filepath.Join(app.registry().PlannerRoutesDir(meta), ".routes.lock")) {
+						t.Fatalf("missing lock path: %s", message)
+					}
+				}
+				stored, err := app.noteRepository(meta).Get(context.Background(), id)
+				if err != nil || stored.Status != note.StatusPromoted || stored.Promotion.Plan.ID != fixture.id {
+					t.Fatalf("promotion changed: %#v, %v", stored, err)
+				}
+				if _, err := os.Stat(filepath.Join(fixture.dir, "state.json")); err != nil {
+					t.Fatalf("plan lost: %v", err)
+				}
+				if failure == "link" {
+					route, err := plannerroute.NewStore(app.registry().PlannerRoutesDir(meta)).Load(context.Background(), routeID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					found := false
+					for _, entry := range route.Entries {
+						if entry.Kind == plannerroute.EntryAttempt && entry.Attempt.Outcome == "plan_created" {
+							found = true
+						}
+					}
+					if !found || route.LinkedPlanID() != "" {
+						t.Fatalf("link failure record=%#v", route)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestNoteRunPlannerRoutingOffOverridesEnvironment(t *testing.T) {
+	app, meta, id, _, _ := noteRoutingTestApp(t)
+	t.Setenv("TAO_PLANNER_ROUTING", "randomized")
+	t.Setenv("TAO_PLANNER_ROUTING_ARMS", "invalid")
+	calls := 0
+	app.PlanGenerator = planGeneratorFunc(func(_ context.Context, req planning.GeneratePlanRequest) (*planning.GeneratePlanResult, error) {
+		calls++
+		if req.AgentKind != runtimeconfig.AgentClaude {
+			t.Fatalf("baseline changed: %s", req.AgentKind)
+		}
+		return nil, errors.New("planner failed")
+	})
+	if err := app.Run(context.Background(), []string{"note", "run", "--planner-routing=off", id}); err == nil || !strings.Contains(err.Error(), "planner failed") || calls != 1 {
+		t.Fatalf("calls=%d err=%v", calls, err)
+	}
+	if routes := noteRoutingRecords(t, app, meta); len(routes) != 0 {
+		t.Fatalf("off wrote routes: %#v", routes)
 	}
 }

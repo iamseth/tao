@@ -174,6 +174,7 @@ commands also accept the short unambiguous prefixes shown by help.
 | Command group | Commands | Use |
 | --- | --- | --- |
 | Plan | `list`, `show`, `report`, `note`, `validate`, `staleness`, `edit`, `abandon`, `delete` | Capture backlog items and inspect, validate, share, or maintain local plans. |
+| Planner routing | `tao route show <route-id>`, `tao route list`, `tao route link <route-id> <plan-id>` | Inspect the local routing ledger or repair a same-repository plan link; all accept `--repo REPO` and `--json`. |
 | Execution | `run`, `commit`, `approve`, `review`, `rework` | Execute slices, satisfy gates, inspect exact-diff reviews, and address findings. |
 | Workspace and cleanup | `workspace`, `cleanup`, `merge` | Inspect managed worktrees, clean eligible Git state, and integrate approved plans. |
 | Repository | `init`, `repo`, `steal` | Register checkouts, inspect repository configuration and health, and fetch a read-only scouting snapshot. |
@@ -281,6 +282,19 @@ tao repo config --pull-request true
 tao repo config --pull-request false
 tao repo config --pull-request unset
 ```
+
+Planner routing applies only to `tao note run`:
+
+- `TAO_PLANNER_ROUTING=off|shadow|randomized`: `off` is the default; shadow records assignments without changing the planner, randomized selects its runtime.
+- `TAO_PLANNER_ROUTING_ARMS=pi,claude`: default equal-weight runtimes; alternatively use explicit probabilities summing to 1, such as `pi=0.7,claude=0.3`.
+- `TAO_PLANNER_ROUTING_FLOOR=0.1`: default minimum configured arm probability in randomized mode; accepts a finite value from 0 to 0.5.
+
+`tao note run --planner-routing MODE` overrides the mode for one invocation;
+`--planner-arm pi|claude` records a manual override to an installed eligible arm
+when routing is enabled (shadow still leaves the planner unchanged). Provider,
+model, and reasoning effort remain inherited. See the
+[usage guide](docs/usage-guide.md#planner-routing-for-tao-note-run) before enabling
+randomized routing.
 
 Run `tao status` to see the resolved `TAO_*` runtime values and repository plan
 rollups (`tao status --json` for automation). Use `tao run --help` and

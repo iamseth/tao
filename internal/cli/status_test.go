@@ -21,7 +21,7 @@ func TestStatusShowsRuntimeEnvAndPlanRollup(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"status"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Runtime defaults:", "TAO_COMMIT_POLICY", "slice", "TAO_PULL_REQUEST", "true", "Plans:", "total      1", "verdicts   approve=1"} {
+	for _, want := range []string{"Runtime defaults:", "TAO_COMMIT_POLICY", "slice", "TAO_PULL_REQUEST", "true", "TAO_PLANNER_ROUTING", "Plans:", "total      1", "verdicts   approve=1"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("expected %q in status output, got %q", want, out.String())
 		}

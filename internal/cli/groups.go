@@ -20,7 +20,7 @@ var topLevelCommandGroups = []commandGroup{
 	},
 	{
 		heading:  "Repository Commands",
-		commands: []string{"init", "repo", "steal"},
+		commands: []string{"init", "repo", "steal", "route"},
 	},
 	{
 		heading:  "Monitoring Commands",

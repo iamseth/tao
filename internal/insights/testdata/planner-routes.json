@@ -1,0 +1,9 @@
+[
+  {"id":"completed", "assignment":{"policy_version":"v1","mode":"randomized","selected":{"runtime":"pi"},"eligible":[{"arm":{"runtime":"pi"},"probability":0.25}]},"entries":[{"kind":"linked","link":{"plan_id":"done","plan_dir":"/never/read/this"}}]},
+  {"id":"abandoned", "assignment":{"policy_version":"v1","mode":"randomized","selected":{"runtime":"pi"},"eligible":[{"arm":{"runtime":"pi"},"probability":0.5}]},"entries":[{"kind":"linked","link":{"plan_id":"abandoned"}}]},
+  {"id":"censored", "assignment":{"policy_version":"v1","mode":"randomized","selected":{"runtime":"pi"},"eligible":[{"arm":{"runtime":"pi"},"probability":0.5}]},"entries":[{"kind":"linked","link":{"plan_id":"active"}}]},
+  {"id":"shadow", "assignment":{"policy_version":"v1","mode":"shadow","selected":{"runtime":"pi"}},"entries":[{"kind":"linked","link":{"plan_id":"done"}}]},
+  {"id":"override", "assignment":{"policy_version":"v1","mode":"randomized","manual_override":true,"selected":{"runtime":"pi"},"override_arm":{"runtime":"pi"},"eligible":[{"arm":{"runtime":"pi"},"probability":0.25}]},"entries":[{"kind":"linked","link":{"plan_id":"done"}}]},
+  {"id":"no-plan", "assignment":{"policy_version":"v2","mode":"randomized","selected":{"runtime":"claude"},"eligible":[{"arm":{"runtime":"claude"},"probability":0.5}]},"entries":[{"kind":"attempt","attempt":{"stage":"planning","outcome":"failed"}}]},
+  {"id":"missing", "assignment":{"policy_version":"v2","mode":"randomized","selected":{"runtime":"pi"},"eligible":[{"arm":{"runtime":"pi"},"probability":0.5}]},"entries":[{"kind":"linked","link":{"plan_id":"missing"}}]}
+]

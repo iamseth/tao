@@ -236,9 +236,10 @@ func validateInventoryRepo(directoryID string, repo Repo) error {
 // RepoPlanSource identifies a registered repository's data-home plan store.
 // The store remains usable when its source checkout is missing or unhealthy.
 type RepoPlanSource struct {
-	ID       string
-	Name     string
-	PlansDir string
+	ID               string
+	Name             string
+	PlansDir         string
+	PlannerRoutesDir string
 }
 
 // ListRepoPlanSources returns every registered data-home plan store in stable
@@ -257,9 +258,10 @@ func (r Registry) ListRepoPlanSources() ([]RepoPlanSource, error) {
 			repo = Repo{ID: id}
 		}
 		sources = append(sources, RepoPlanSource{
-			ID:       id,
-			Name:     repo.Name,
-			PlansDir: r.PlansDir(Repo{ID: id}),
+			ID:               id,
+			Name:             repo.Name,
+			PlansDir:         r.PlansDir(Repo{ID: id}),
+			PlannerRoutesDir: r.PlannerRoutesDir(Repo{ID: id}),
 		})
 	}
 	return sources, nil
@@ -331,6 +333,12 @@ func (r Registry) planCount(repo Repo) int {
 
 func (r Registry) PlansDir(repo Repo) string {
 	return filepath.Join(r.DataHome, "repos", repo.ID, "plans")
+}
+
+// PlannerRoutesDir returns the repository-scoped routing ledger directory. It
+// is a sibling of plans and never a plan artifact.
+func (r Registry) PlannerRoutesDir(repo Repo) string {
+	return filepath.Join(r.DataHome, "repos", repo.ID, "planner-routes")
 }
 
 // RuntimeStatusDir returns the repository-owned operational status store. It is

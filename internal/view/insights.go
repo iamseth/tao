@@ -72,6 +72,7 @@ const (
 	insightsSectionRework
 	insightsSectionSignals
 	insightsSectionTelemetry
+	insightsSectionPlannerRouting
 	insightsSectionOutliers
 	insightsSectionRecentLogs
 )
@@ -91,6 +92,7 @@ func projectInsights(report insights.Report, options InsightsOptions) insightsPr
 		insightsSectionRework,
 		insightsSectionSignals,
 		insightsSectionTelemetry,
+		insightsSectionPlannerRouting,
 		insightsSectionOutliers,
 	}
 	if options.Scope == InsightsScopeAllRepositories {
@@ -113,7 +115,11 @@ func (p insightsProjection) render(out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if !stop {
+	if stop {
+		if err := p.renderPlannerRouting(target); err != nil {
+			return err
+		}
+	} else {
 		for _, section := range p.sections {
 			if err := p.renderSection(target, section); err != nil {
 				return err
@@ -138,7 +144,7 @@ func (p insightsProjection) renderHeader(out io.Writer) (bool, error) {
 			return false, err
 		}
 	}
-	if !all && p.report.PlansScanned == 0 && p.report.PlansSkipped == 0 {
+	if !all && p.report.PlansScanned == 0 && p.report.PlansSkipped == 0 && p.report.PlannerRouting.Records == 0 {
 		prefix := ""
 		if digest {
 			prefix = "\n"
@@ -173,6 +179,8 @@ func (p insightsProjection) renderSection(out io.Writer, section insightsSection
 		return p.renderSignals(out)
 	case insightsSectionTelemetry:
 		return p.renderTelemetry(out)
+	case insightsSectionPlannerRouting:
+		return p.renderPlannerRouting(out)
 	case insightsSectionOutliers:
 		return p.renderOutliers(out)
 	case insightsSectionRecentLogs:
@@ -365,6 +373,43 @@ func (p insightsProjection) renderTelemetry(out io.Writer) error {
 		return err
 	}
 	return writePercentiles(out, costLabel, p.report.Cost, true)
+}
+
+func (p insightsProjection) renderPlannerRouting(out io.Writer) error {
+	heading := "\nPlanner routing:"
+	if p.options.Format == InsightsFormatDigest {
+		heading = "\n## Planner routing"
+	}
+	if err := writeln(out, heading); err != nil {
+		return err
+	}
+	r := p.report.PlannerRouting
+	if r.Records == 0 {
+		if err := writeln(out, "- No planner routing records."); err != nil {
+			return err
+		}
+	} else {
+		if err := writef(out, "- %d records; shadow=%d randomized=%d overrides=%d attempts without plan=%d linked=%d missing linked=%d matured=%d censored=%d\n", r.Records, r.Shadow, r.Randomized, r.Overrides, r.AttemptsWithoutPlan, r.LinkedPlans, r.MissingLinkedPlans, r.Matured, r.Censored); err != nil {
+			return err
+		}
+		for _, policy := range r.Policies {
+			for _, arm := range policy.Arms {
+				rate := "n/a"
+				if arm.Matured > 0 && arm.WeightedCompletionRate != nil {
+					rate = fmt.Sprintf("%.1f%%", *arm.WeightedCompletionRate*100)
+				}
+				if err := writef(out, "- %s/%s %s: assigned=%d overrides=%d linked=%d matured=%d censored=%d weight sum=%.2f weighted completion=%s\n", limitDigestText(policy.PolicyVersion), limitDigestText(policy.Mode), limitDigestText(arm.ArmKey), arm.Assigned, arm.Overrides, arm.Linked, arm.Matured, arm.Linked-arm.Matured, arm.WeightSum, rate); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	for _, warning := range r.Warnings {
+		if err := writef(out, "- Warning: %s\n", limitDigestText(warning)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (p insightsProjection) renderOutliers(out io.Writer) error {

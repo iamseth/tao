@@ -226,6 +226,18 @@ func TestListRepoPlanSourcesRetainsCatalogStoresWithoutRootsOrMetadata(t *testin
 	if sources[1].Name != "zeta" || sources[1].PlansDir != registry.PlansDir(Repo{ID: "repo-z"}) {
 		t.Fatalf("missing-root source = %#v", sources[1])
 	}
+	for _, source := range sources {
+		want := filepath.Join(dataHome, "repos", source.ID, "planner-routes")
+		if got := registry.PlannerRoutesDir(Repo{ID: source.ID}); got != want {
+			t.Fatalf("PlannerRoutesDir = %q, want %q", got, want)
+		}
+		if source.PlannerRoutesDir != want {
+			t.Fatalf("source planner routes = %q, want %q", source.PlannerRoutesDir, want)
+		}
+		if _, err := os.Stat(want); !os.IsNotExist(err) {
+			t.Fatalf("listing created planner route directory: %v", err)
+		}
+	}
 }
 
 func TestRegisterCurrentDiscoversGitRepo(t *testing.T) {

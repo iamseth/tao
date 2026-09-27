@@ -40,12 +40,20 @@ If none of those environment values is available, the final fallback is the rela
 
 ```text
 <data-home>/
-└── repos/<repo-id>/plans/<plan-id>/
+└── repos/<repo-id>/
+    ├── plans/<plan-id>/
+    └── planner-routes/<route-id>.json
 ```
 
 Normal CLI commands default to the current repository's plan scope. `tao repo list`, `tao repo show <repo-id>`, and `tao repo doctor` inspect the centralized repository registry without mutating repositories. Runtime commands can still read plans from `--plans-dir DIR` or from an explicit plan path when a caller intentionally opts out of the default scope.
 
 Plan loaders validate plan-directory artifacts and must not depend on unrelated data-home sidecars for plan validity.
+
+`planner-routes/` is a repository-scoped, local, bounded, non-plan sidecar ledger
+(schema `tao.planner.route.v1`). It records planner assignments, observed treatment,
+attempts, and exact plan links separately from plan artifacts. It is
+non-authoritative: never lifecycle or recovery evidence, never copied into plan
+state, plan events, or merge-batch telemetry. Plan loaders never read it.
 
 ## File Contract
 

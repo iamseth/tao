@@ -593,7 +593,7 @@ func aggregateLogsAt(t *testing.T, now time.Time, summaries []plan.PlanSummary) 
 	t.Helper()
 	report := Report{}
 	acc := newAccumulator()
-	if err := aggregateSource(context.Background(), &report, &acc, sourceIdentity{id: "repo-a", name: "Alpha"}, fixtureLister{summaries: summaries}, now); err != nil {
+	if err := aggregateSource(context.Background(), &report, &acc, sourceIdentity{id: "repo-a", name: "Alpha"}, fixtureLister{summaries: summaries}, nil, now); err != nil {
 		t.Fatal(err)
 	}
 	if err := scanRecentLogs(context.Background(), &report, acc.logs, now); err != nil {

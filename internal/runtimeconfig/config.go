@@ -32,6 +32,23 @@ type ExecutionMode string
 
 type AgentKind string
 
+// PlannerRoutingEnv holds raw routing settings; plannerroute owns validation.
+// Empty or whitespace-only values are treated as unset.
+type PlannerRoutingEnv struct {
+	Mode, Arms, Floor          string
+	ModeSet, ArmsSet, FloorSet bool
+}
+
+func LoadPlannerRoutingEnv(getenv func(string) string) PlannerRoutingEnv {
+	mode := strings.TrimSpace(getenv(EnvPlannerRouting))
+	arms := strings.TrimSpace(getenv(EnvPlannerRoutingArms))
+	floor := strings.TrimSpace(getenv(EnvPlannerRoutingFloor))
+	return PlannerRoutingEnv{
+		Mode: mode, Arms: arms, Floor: floor,
+		ModeSet: mode != "", ArmsSet: arms != "", FloorSet: floor != "",
+	}
+}
+
 // SliceBudgetCaps contains optional hard limits for cumulative slice telemetry.
 // Nil fields are disabled so enforcement remains opt-in.
 type SliceBudgetCaps struct {

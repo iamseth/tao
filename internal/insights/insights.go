@@ -17,6 +17,7 @@ import (
 	"unicode"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/plannerroute"
 )
 
 const maxExemplars = 2
@@ -24,6 +25,11 @@ const maxExemplars = 2
 // PlanLister is the repository boundary needed for cross-plan aggregation.
 type PlanLister interface {
 	ListPlans(context.Context, plan.PlanFilter) ([]plan.PlanSummary, error)
+}
+
+// RouteLister supplies advisory repository-scoped planner assignments.
+type RouteLister interface {
+	ListRoutes(context.Context) ([]plannerroute.Record, []string, error)
 }
 
 // SourceLister supplies registered repository data stores. Sources deliberately
@@ -34,24 +40,68 @@ type SourceLister interface {
 
 // RepositorySource identifies one repository and its data-home plan store.
 type RepositorySource struct {
-	ID    string
-	Name  string
-	Plans PlanLister
+	ID     string
+	Name   string
+	Plans  PlanLister
+	Routes RouteLister
 }
 
 // Report contains advisory telemetry derived from plan history.
 type Report struct {
-	PlansScanned       int                `json:"plans_scanned"`
-	PlansSkipped       int                `json:"plans_skipped"`
-	RepositoryCoverage RepositoryCoverage `json:"repository_coverage"`
-	BlockedReasons     []ReasonBucket     `json:"blocked_reasons"`
-	ReworkPlans        []ReworkPlan       `json:"rework_plans"`
-	Signals            SignalCounts       `json:"signals"`
-	SignalEvidence     SignalEvidence     `json:"signal_evidence"`
-	OutputTokens       Percentiles        `json:"output_tokens"`
-	Cost               Percentiles        `json:"cost"`
-	OutlierPlans       []PlanOutlier      `json:"outlier_plans"`
-	RecentLogs         RecentLogReport    `json:"recent_logs"`
+	PlansScanned       int                  `json:"plans_scanned"`
+	PlansSkipped       int                  `json:"plans_skipped"`
+	RepositoryCoverage RepositoryCoverage   `json:"repository_coverage"`
+	BlockedReasons     []ReasonBucket       `json:"blocked_reasons"`
+	ReworkPlans        []ReworkPlan         `json:"rework_plans"`
+	Signals            SignalCounts         `json:"signals"`
+	SignalEvidence     SignalEvidence       `json:"signal_evidence"`
+	OutputTokens       Percentiles          `json:"output_tokens"`
+	Cost               Percentiles          `json:"cost"`
+	OutlierPlans       []PlanOutlier        `json:"outlier_plans"`
+	RecentLogs         RecentLogReport      `json:"recent_logs"`
+	PlannerRouting     PlannerRoutingReport `json:"planner_routing"`
+}
+
+// PlannerRoutingReport joins advisory assignments to current summary status.
+// LinkedPlans counts resolvable links; missing links are reported separately.
+type PlannerRoutingReport struct {
+	Records             int                   `json:"records"`
+	Shadow              int                   `json:"shadow"`
+	Randomized          int                   `json:"randomized"`
+	Overrides           int                   `json:"overrides"`
+	AttemptsWithoutPlan int                   `json:"attempts_without_plan"`
+	LinkedPlans         int                   `json:"linked_plans"`
+	MissingLinkedPlans  int                   `json:"missing_linked_plans"`
+	Censored            int                   `json:"censored"`
+	Matured             int                   `json:"matured"`
+	Policies            []RoutingPolicyCohort `json:"policies"`
+	Warnings            []string              `json:"warnings,omitempty"`
+}
+
+type RoutingPolicyCohort struct {
+	PolicyVersion string             `json:"policy_version"`
+	Mode          string             `json:"mode"`
+	Arms          []RoutingArmCohort `json:"arms"`
+}
+
+// WeightSum includes every weighted assignment. WeightedCompletionRate uses
+// only matured, randomized, non-override assignments in its denominator.
+type RoutingArmCohort struct {
+	ArmKey                 string   `json:"arm_key"`
+	Assigned               int      `json:"assigned"`
+	Overrides              int      `json:"overrides"`
+	Linked                 int      `json:"linked"`
+	Matured                int      `json:"matured"`
+	Completed              int      `json:"completed"`
+	Abandoned              int      `json:"abandoned"`
+	WeightSum              float64  `json:"weight_sum"`
+	WeightedCompletionRate *float64 `json:"weighted_completion_rate,omitempty"`
+}
+
+type routingCohortKey struct{ policy, mode, arm string }
+type routingAccumulator struct {
+	cohort                         RoutingArmCohort
+	maturedWeight, completedWeight float64
 }
 
 // RepositoryCoverage records which registered stores contributed to a report.
@@ -159,6 +209,7 @@ type accumulator struct {
 	sessions []session
 	signals  map[string]*signalAccumulator
 	logs     *logAccumulator
+	routes   map[routingCohortKey]*routingAccumulator
 }
 
 type planData struct {
@@ -204,10 +255,15 @@ type sourceIdentity struct {
 // Individual unreadable plan logs are counted and skipped so historical damage
 // cannot suppress the report.
 func Aggregate(ctx context.Context, repository PlanLister) (Report, error) {
+	return AggregateWithRoutes(ctx, repository, nil)
+}
+
+// AggregateWithRoutes adds optional, non-authoritative routing evidence.
+func AggregateWithRoutes(ctx context.Context, repository PlanLister, routes RouteLister) (Report, error) {
 	report := Report{}
 	acc := newAccumulator()
 	now := time.Now()
-	if err := aggregateSource(ctx, &report, &acc, sourceIdentity{}, repository, now); err != nil {
+	if err := aggregateSource(ctx, &report, &acc, sourceIdentity{}, repository, routes, now); err != nil {
 		return Report{}, err
 	}
 	if err := scanRecentLogs(ctx, &report, acc.logs, now); err != nil {
@@ -243,7 +299,7 @@ func AggregateSources(ctx context.Context, lister SourceLister) (Report, error) 
 			report.RepositoryCoverage.Skipped++
 		default:
 			before := report.PlansScanned + report.PlansSkipped
-			err := aggregateSource(ctx, &report, &acc, sourceIdentity{id: source.ID, name: source.Name}, source.Plans, now)
+			err := aggregateSource(ctx, &report, &acc, sourceIdentity{id: source.ID, name: source.Name}, source.Plans, source.Routes, now)
 			switch {
 			case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
 				return Report{}, err
@@ -267,8 +323,17 @@ func AggregateSources(ctx context.Context, lister SourceLister) (Report, error) 
 	return report, nil
 }
 
-func aggregateSource(ctx context.Context, report *Report, acc *accumulator, repository sourceIdentity, plans PlanLister, now time.Time) error {
+func aggregateSource(ctx context.Context, report *Report, acc *accumulator, repository sourceIdentity, plans PlanLister, routes RouteLister, now time.Time) error {
 	summaries, err := plans.ListPlans(ctx, plan.PlanFilter{})
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	if err != nil {
+		summaries = nil
+	}
+	if routeErr := aggregateRoutes(ctx, &report.PlannerRouting, acc.routes, routes, summaries); routeErr != nil {
+		return routeErr
+	}
 	if err != nil {
 		return err
 	}
@@ -297,6 +362,153 @@ func aggregateSource(ctx context.Context, report *Report, acc *accumulator, repo
 		mergePlan(report, acc, repository, summary.ID, data)
 	}
 	return nil
+}
+
+func aggregateRoutes(ctx context.Context, report *PlannerRoutingReport, cohorts map[routingCohortKey]*routingAccumulator, routes RouteLister, summaries []plan.PlanSummary) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if routes == nil {
+		return nil
+	}
+	records, warnings, err := routes.ListRoutes(ctx)
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	if err != nil {
+		warnings = append(warnings, "planner routing unavailable: "+err.Error())
+	}
+	warnings = slices.Clone(warnings)
+	slices.Sort(warnings)
+	for _, warning := range warnings {
+		addRoutingWarning(report, warning)
+	}
+	statuses := make(map[string]string, len(summaries))
+	for _, summary := range summaries {
+		if summary.Status != plan.StatusInvalid {
+			statuses[summary.ID] = summary.Status
+		}
+	}
+	records = slices.Clone(records)
+	slices.SortFunc(records, func(a, b plannerroute.Record) int { return cmp.Compare(a.ID, b.ID) })
+	for _, record := range records {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		a := record.Assignment
+		report.Records++
+		switch a.Mode {
+		case plannerroute.ModeShadow:
+			report.Shadow++
+		case plannerroute.ModeRandomized:
+			report.Randomized++
+		}
+		key := routingCohortKey{a.PolicyVersion, string(a.Mode), a.Selected.Key()}
+		bucket := cohorts[key]
+		if bucket == nil {
+			bucket = &routingAccumulator{cohort: RoutingArmCohort{ArmKey: routingText(key.arm)}}
+			cohorts[key] = bucket
+		}
+		arm := &bucket.cohort
+		arm.Assigned++
+		if a.ManualOverride {
+			report.Overrides++
+			arm.Overrides++
+		}
+		weight := routingWeight(a)
+		if a.Mode == plannerroute.ModeRandomized && !a.ManualOverride && weight == 0 {
+			addRoutingWarning(report, "planner route "+record.ID+": invalid selected-arm probability; weight omitted")
+		}
+		arm.WeightSum += weight
+		id := record.LinkedPlanID()
+		if id == "" {
+			for _, entry := range record.Entries {
+				if entry.Kind == plannerroute.EntryAttempt {
+					report.AttemptsWithoutPlan++
+					break
+				}
+			}
+			continue
+		}
+		status, found := statuses[id]
+		if !found {
+			report.MissingLinkedPlans++
+			continue
+		}
+		report.LinkedPlans++
+		arm.Linked++
+		switch status {
+		case plan.StatusCompleted:
+			arm.Completed++
+			bucket.completedWeight += weight
+		case plan.StatusAbandoned:
+			arm.Abandoned++
+		default:
+			report.Censored++
+			continue
+		}
+		report.Matured++
+		arm.Matured++
+		bucket.maturedWeight += weight
+	}
+	return ctx.Err()
+}
+
+func routingWeight(a plannerroute.Assignment) float64 {
+	if a.Mode != plannerroute.ModeRandomized || a.ManualOverride {
+		return 0
+	}
+	for _, eligible := range a.Eligible {
+		if eligible.Arm != a.Selected {
+			continue
+		}
+		p := eligible.Probability
+		if p <= 0 || p > 1 || math.IsNaN(p) || math.IsInf(1/p, 0) {
+			return 0
+		}
+		return 1 / p
+	}
+	return 0
+}
+
+func routingText(value string) string {
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, value)
+	return strings.ToValidUTF8(sanitizeExcerpt(value), "")
+}
+
+func addRoutingWarning(report *PlannerRoutingReport, warning string) {
+	if len(report.Warnings) < maxExemplars {
+		report.Warnings = append(report.Warnings, routingText(warning))
+	}
+}
+
+func finalizeRoutes(report *PlannerRoutingReport, cohorts map[routingCohortKey]*routingAccumulator) {
+	keys := make([]routingCohortKey, 0, len(cohorts))
+	for key := range cohorts {
+		keys = append(keys, key)
+	}
+	slices.SortFunc(keys, func(a, b routingCohortKey) int {
+		return cmp.Or(cmp.Compare(a.policy, b.policy), cmp.Compare(a.mode, b.mode), cmp.Compare(a.arm, b.arm))
+	})
+	var previous routingCohortKey
+	for i, key := range keys {
+		if i == 0 || key.policy != previous.policy || key.mode != previous.mode {
+			report.Policies = append(report.Policies, RoutingPolicyCohort{PolicyVersion: routingText(key.policy), Mode: routingText(key.mode)})
+		}
+		bucket := cohorts[key]
+		if bucket.maturedWeight > 0 {
+			rate := bucket.completedWeight / bucket.maturedWeight
+			bucket.cohort.WeightedCompletionRate = &rate
+		}
+		policy := &report.Policies[len(report.Policies)-1]
+		policy.Arms = append(policy.Arms, bucket.cohort)
+		previous = key
+	}
 }
 
 func readPlanEvents(ctx context.Context, dir string) (planData, error) {
@@ -382,6 +594,7 @@ func newAccumulator() accumulator {
 		buckets: make(map[string]*ReasonBucket),
 		signals: make(map[string]*signalAccumulator),
 		logs:    newLogAccumulator(),
+		routes:  make(map[routingCohortKey]*routingAccumulator),
 	}
 }
 
@@ -511,6 +724,7 @@ func finalizeSignals(report *Report, signals map[string]*signalAccumulator) {
 }
 
 func finalize(report *Report, acc *accumulator) {
+	finalizeRoutes(&report.PlannerRouting, acc.routes)
 	finalizeSignals(report, acc.signals)
 	finalizeLogSignals(report, acc.logs)
 	for _, bucket := range acc.buckets {

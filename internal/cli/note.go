@@ -42,15 +42,17 @@ var noteCommand = commandMetadata{
 	},
 	registerFlags: registerNoteFlags,
 	completion: completionContext{flagValues: map[string]completionFlagValue{
-		"commit-policy":  {kind: completionValueEnum, label: "policy", values: []string{"slice", "none"}},
-		"execution-mode": {kind: completionValueEnum, label: "mode", values: []string{"isolated", "current"}},
-		"limit":          {kind: completionValueCount, label: "count"},
-		"max-slices":     {kind: completionValueCount, label: "count"},
-		"plan":           {kind: completionValueText, label: "plan"},
-		"reason":         {kind: completionValueText, label: "text"},
-		"repo":           {kind: completionValueText, label: "repository"},
-		"status":         {kind: completionValueEnum, label: "status", values: []string{"open", "promoted", "archived"}},
-		"tag":            {kind: completionValueText, label: "tag"},
+		"commit-policy":   {kind: completionValueEnum, label: "policy", values: []string{"slice", "none"}},
+		"execution-mode":  {kind: completionValueEnum, label: "mode", values: []string{"isolated", "current"}},
+		"limit":           {kind: completionValueCount, label: "count"},
+		"max-slices":      {kind: completionValueCount, label: "count"},
+		"plan":            {kind: completionValueText, label: "plan"},
+		"planner-routing": {kind: completionValueEnum, label: "mode", values: []string{"off", "shadow", "randomized"}},
+		"planner-arm":     {kind: completionValueEnum, label: "runtime", values: []string{"pi", "claude"}},
+		"reason":          {kind: completionValueText, label: "text"},
+		"repo":            {kind: completionValueText, label: "repository"},
+		"status":          {kind: completionValueEnum, label: "status", values: []string{"open", "promoted", "archived"}},
+		"tag":             {kind: completionValueText, label: "tag"},
 	}},
 	execute: func(c commandContext) error { return c.app.note(c.ctx, c.args) },
 }
@@ -61,6 +63,7 @@ type NoteRegistry interface {
 	ListRepos() ([]taodata.Repo, error)
 	NotesDir(taodata.Repo) string
 	PlansDir(taodata.Repo) string
+	PlannerRoutesDir(taodata.Repo) string
 }
 
 type RegistryFactory func() NoteRegistry
@@ -81,6 +84,8 @@ func registerNoteFlags(fs *flag.FlagSet) {
 	fs.Int("limit", defaultNoteListLimit, "maximum notes to list (0 means unlimited)")
 	fs.String("reason", "", "archive reason")
 	fs.String("plan", "", "validated normal plan destination")
+	fs.String("planner-routing", "", "planner routing mode for this run: off, shadow, or randomized")
+	fs.String("planner-arm", "", "force this planner runtime and record a manual override")
 	registerRunRequestFlags(fs)
 }
 
@@ -133,6 +138,7 @@ func boundNoteTextArgs(args []string) []string {
 		"repo": true, "tag": true, "status": true, "limit": true,
 		"reason": true, "plan": true, "max-slices": true,
 		"commit-policy": true, "execution-mode": true,
+		"planner-routing": true, "planner-arm": true,
 	}
 	knownFlags := map[string]bool{
 		"all": true, "pull-request": true,
@@ -217,7 +223,7 @@ func validateNoteFlags(fs *flag.FlagSet, subcommand string) error {
 		"edit":    {"repo": true, "tag": true},
 		"archive": {"repo": true, "reason": true, "plan": true},
 		"reopen":  {"repo": true},
-		"run":     {"repo": true, "max-slices": true, "commit-policy": true, "execution-mode": true, "pull-request": true, "dangerously-skip-permissions": true, "no-review": true},
+		"run":     {"repo": true, "max-slices": true, "commit-policy": true, "execution-mode": true, "pull-request": true, "dangerously-skip-permissions": true, "no-review": true, "planner-routing": true, "planner-arm": true},
 	}
 	var invalid string
 	fs.Visit(func(fl *flag.Flag) {
@@ -649,21 +655,34 @@ func (a App) noteRun(ctx context.Context, registered taodata.Repo, repo NoteRepo
 			if skipPermissions {
 				mode = agent.PermissionModeBypassPermissions
 			}
+			routing, err := a.resolvePlannerRouting(fs, registered, item, inputs.defaults.Agent, mode)
+			if err != nil {
+				return note.Note{}, "", "", err
+			}
+			routing, err = a.startPlannerRouting(ctx, registered, routing)
+			if err != nil {
+				return note.Note{}, "", "", err
+			}
 			generationCtx, stopSignals := newCommandSignalContext(ctx)
 			generated, err = a.planGenerator(inputs.defaults.Agent).GeneratePlan(generationCtx, planning.GeneratePlanRequest{
-				Session: session, PermissionMode: mode, Timeout: request.SessionTimeout, RejectOpenQuestions: true,
+				Session: session, AgentKind: routing.agentKind(inputs.defaults.Agent), PermissionMode: mode, Timeout: request.SessionTimeout, RejectOpenQuestions: true,
 			})
+			interrupted := generationCtx.Err() != nil || errors.Is(err, context.Canceled)
 			stopSignals()
+			routeErr := a.finishPlannerRouting(context.WithoutCancel(ctx), routing, generated, err, interrupted)
 			if err != nil {
 				a.printGenerationWarnings(err)
-				return note.Note{}, "", "", fmt.Errorf("could not generate a runnable plan for note %s: %w\nUse /tao-plan note:%s for supervised clarification", item.ID, err, item.ID)
+				return note.Note{}, "", "", errors.Join(fmt.Errorf("could not generate a runnable plan for note %s: %w\nUse /tao-plan note:%s for supervised clarification", item.ID, err, item.ID), routeErr)
 			}
 			if generated == nil {
-				return note.Note{}, "", "", fmt.Errorf("could not generate a runnable plan for note %s: generator returned no plan\nUse /tao-plan note:%s for supervised clarification", item.ID, item.ID)
+				return note.Note{}, "", "", errors.Join(fmt.Errorf("could not generate a runnable plan for note %s: generator returned no plan\nUse /tao-plan note:%s for supervised clarification", item.ID, item.ID), routeErr)
 			}
 			promoted, err := repo.PromoteToPlan(ctx, item.ID, note.PlanLink{ID: generated.Allocation.ID, Dir: generated.Allocation.Dir, Mode: "run"})
 			if err != nil {
-				return note.Note{}, "", "", fmt.Errorf("plan %s was created at %s, but note %s could not be linked: %w; recover with tao run %s", generated.Allocation.ID, generated.Allocation.Dir, item.ID, err, generated.Allocation.ID)
+				return note.Note{}, "", "", errors.Join(fmt.Errorf("plan %s was created at %s, but note %s could not be linked: %w; recover with tao run %s", generated.Allocation.ID, generated.Allocation.Dir, item.ID, err, generated.Allocation.ID), routeErr)
+			}
+			if routeErr != nil {
+				return note.Note{}, "", "", routeErr
 			}
 			if err := a.printValidationWarnings(generated.Validation); err != nil {
 				return note.Note{}, "", "", err

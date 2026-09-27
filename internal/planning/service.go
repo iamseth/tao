@@ -28,13 +28,15 @@ func NewService(repo SliceRepository, runtime agent.Runtime, options ServiceOpti
 	return &Service{Repo: repo, Runtime: runtime, AgentKind: options.Agent, ProcessStarter: options.ProcessStarter, Log: options.Log, EventAppender: options.EventAppender}
 }
 
-// runtime returns the agent.Runtime used for synchronous plan generation. An
-// injected Runtime takes precedence; otherwise the registry builds the runtime
-// for the configured agent kind (empty resolves to Pi).
-func (s *Service) runtime() agent.Runtime {
+// runtimeFor prefers an injected Runtime, then the requested kind, then the
+// service kind (empty resolves to Pi).
+func (s *Service) runtimeFor(kind runtimeconfig.AgentKind) agent.Runtime {
 	if s.Runtime != nil {
 		return s.Runtime
 	}
-	descriptor, _ := agent.Lookup(s.AgentKind)
+	if kind == "" {
+		kind = s.AgentKind
+	}
+	descriptor, _ := agent.Lookup(kind)
 	return descriptor.NewRuntime(agent.RuntimeDeps{ProcessStarter: s.ProcessStarter})
 }

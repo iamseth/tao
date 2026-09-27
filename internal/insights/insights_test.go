@@ -7,11 +7,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/plannerroute"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
 type fixtureLister struct {
@@ -30,6 +34,160 @@ type fixtureSourceLister struct {
 
 func (l fixtureSourceLister) ListInsightSources(context.Context) ([]RepositorySource, error) {
 	return l.sources, l.err
+}
+
+type fixtureRouteLister struct {
+	records  []plannerroute.Record
+	warnings []string
+	err      error
+}
+
+func (l fixtureRouteLister) ListRoutes(context.Context) ([]plannerroute.Record, []string, error) {
+	return l.records, l.warnings, l.err
+}
+
+func routingFixture(t *testing.T) []plannerroute.Record {
+	t.Helper()
+	data, err := os.ReadFile("testdata/planner-routes.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var records []plannerroute.Record
+	if err := json.Unmarshal(data, &records); err != nil {
+		t.Fatal(err)
+	}
+	return records
+}
+
+func TestAggregatePlannerRouting(t *testing.T) {
+	plans := fixtureLister{summaries: []plan.PlanSummary{
+		{ID: "done", Status: plan.StatusCompleted, Dir: t.TempDir()},
+		{ID: "abandoned", Status: plan.StatusAbandoned, Dir: t.TempDir()},
+		{ID: "active", Status: plan.StatusInProgress, Dir: t.TempDir()},
+	}}
+	report, err := AggregateWithRoutes(context.Background(), plans, fixtureRouteLister{records: routingFixture(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := report.PlannerRouting
+	if r.Records != 7 || r.Randomized != 6 || r.Shadow != 1 || r.Overrides != 1 || r.AttemptsWithoutPlan != 1 || r.LinkedPlans != 5 || r.MissingLinkedPlans != 1 || r.Matured != 4 || r.Censored != 1 {
+		t.Fatalf("routing counts = %+v", r)
+	}
+	if len(r.Policies) != 3 || r.Policies[0].PolicyVersion != "v1" || r.Policies[0].Mode != "randomized" || r.Policies[1].Mode != "shadow" || r.Policies[2].PolicyVersion != "v2" {
+		t.Fatalf("policies = %+v", r.Policies)
+	}
+	arm := r.Policies[0].Arms[0]
+	if arm.Assigned != 4 || arm.Overrides != 1 || arm.Linked != 4 || arm.Matured != 3 || arm.Completed != 2 || arm.Abandoned != 1 || arm.WeightSum != 8 || arm.WeightedCompletionRate == nil || *arm.WeightedCompletionRate != 4.0/6.0 {
+		t.Fatalf("randomized cohort = %+v", arm)
+	}
+	shadow := r.Policies[1].Arms[0]
+	if shadow.WeightSum != 0 || shadow.WeightedCompletionRate != nil {
+		t.Fatalf("shadow cohort = %+v", shadow)
+	}
+	arms := r.Policies[2].Arms
+	if len(arms) != 2 || arms[0].ArmKey != "claude|||||" || arms[1].ArmKey != "pi|||||" || arms[0].WeightedCompletionRate != nil {
+		t.Fatalf("arms = %+v", arms)
+	}
+}
+
+func TestAggregatePlannerRoutingDifferentEligibleSets(t *testing.T) {
+	arms, err := plannerroute.ParseArms("pi=0.5,claude=0.5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := plannerroute.NewPolicy(plannerroute.ModeRandomized, arms, 0.1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var records []plannerroute.Record
+	var plans []plan.PlanSummary
+	for i, installed := range [][]runtimeconfig.AgentKind{
+		{runtimeconfig.AgentPi}, {runtimeconfig.AgentPi, runtimeconfig.AgentClaude},
+	} {
+		eligible, err := plannerroute.Eligible(policy, installed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Use a genuine non-override Pi assignment in each installation.
+		var assignment plannerroute.Assignment
+		for n := range 1000 {
+			assignment, err = plannerroute.Assign(policy, eligible, plannerroute.UnitKey{ID: fmt.Sprint(n)}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if assignment.Selected.Runtime == runtimeconfig.AgentPi {
+				break
+			}
+		}
+		if assignment.Selected.Runtime != runtimeconfig.AgentPi {
+			t.Fatal("no Pi assignment found")
+		}
+		id := fmt.Sprint(i)
+		records = append(records, plannerroute.Record{ID: id, Assignment: assignment, Entries: []plannerroute.Entry{{
+			Kind: plannerroute.EntryLinked, Link: &plannerroute.Link{PlanID: id},
+		}}})
+		status := plan.StatusCompleted
+		if i == 1 {
+			status = plan.StatusAbandoned
+		}
+		plans = append(plans, plan.PlanSummary{ID: id, Status: status, Dir: t.TempDir()})
+	}
+	report, err := AggregateWithRoutes(context.Background(), fixtureLister{summaries: plans}, fixtureRouteLister{records: records})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.PlannerRouting.Policies) != 1 || len(report.PlannerRouting.Policies[0].Arms) != 1 {
+		t.Fatalf("cohorts = %+v", report.PlannerRouting)
+	}
+	cohort := report.PlannerRouting.Policies[0].Arms[0]
+	if cohort.WeightSum != 3 || cohort.WeightedCompletionRate == nil || *cohort.WeightedCompletionRate != 1.0/3.0 {
+		t.Fatalf("want weights 1 + 2 and completion rate 1/3, got %+v", cohort)
+	}
+}
+
+func TestAggregatePlannerRoutingSourcesAreDeterministicAndRepositoryScoped(t *testing.T) {
+	records := routingFixture(t)[:1]
+	sources := []RepositorySource{
+		{ID: "b", Plans: fixtureLister{summaries: []plan.PlanSummary{{ID: "done", Status: plan.StatusInProgress, Dir: t.TempDir()}}}, Routes: fixtureRouteLister{records: records}},
+		{ID: "a", Plans: fixtureLister{summaries: []plan.PlanSummary{{ID: "done", Status: plan.StatusCompleted, Dir: t.TempDir()}}}, Routes: fixtureRouteLister{records: records}},
+		{ID: "legacy", Plans: fixtureLister{}},
+	}
+	first, err := AggregateSources(context.Background(), fixtureSourceLister{sources: sources})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Reverse(sources)
+	second, err := AggregateSources(context.Background(), fixtureSourceLister{sources: sources})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(first.PlannerRouting, second.PlannerRouting) {
+		t.Fatal("source order changed routing report")
+	}
+	r := first.PlannerRouting
+	if r.Records != 2 || r.LinkedPlans != 2 || r.Matured != 1 || r.Censored != 1 || r.Policies[0].Arms[0].WeightSum != 8 {
+		t.Fatalf("routing = %+v", r)
+	}
+}
+
+func TestAggregatePlannerRoutingWarningsAndCancellation(t *testing.T) {
+	lister := fixtureRouteLister{warnings: []string{"password=secret", "second", "third"}, err: errors.New("unreadable ledger")}
+	report, err := AggregateWithRoutes(context.Background(), fixtureLister{}, lister)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.PlannerRouting.Warnings) != maxExemplars || strings.Contains(strings.Join(report.PlannerRouting.Warnings, " "), "password=secret") {
+		t.Fatalf("warnings = %v", report.PlannerRouting.Warnings)
+	}
+	lister.err = context.Canceled
+	if _, err := AggregateWithRoutes(context.Background(), fixtureLister{}, lister); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := AggregateWithRoutes(ctx, fixtureLister{}, fixtureRouteLister{records: routingFixture(t)}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v", err)
+	}
 }
 
 func TestAggregateStreamsPlanHistoriesLeniently(t *testing.T) {

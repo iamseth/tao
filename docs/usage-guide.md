@@ -83,6 +83,31 @@ Historical notes promoted to planning sessions remain readable and are accepted 
 
 Direct note execution is not a bypass. Generated slices still honor dependencies and approvals; execution still honors agent, permission, timeout, workspace, commit, and pull-request settings; and completed work still follows the normal review and merge safeguards. When in doubt, use `/tao-plan note:<id>`.
 
+### Planner routing for `tao note run`
+
+Leave routing off for ordinary use. Enable **shadow** first when you want to
+check assignment coverage and ledger health without changing which planner runs.
+Choose **randomized** only when you deliberately want reproducible assignment
+among installed eligible planning runtimes. It changes only the planning runtime:
+execution, review, and merge keep their existing agent settings, including
+`TAO_AGENT`. Interactive `/tao-plan` and `/tao-slice` are not routed. See
+[Configuration](../README.md#configuration) for settings and one-run overrides.
+Manual overrides are recorded separately and excluded from randomized comparisons.
+
+Shadow ledger failures warn and continue. Randomized routing refuses to allocate
+a plan if its initial ledger write fails; a ledger failure after plan creation
+stops before execution. Keep the created plan, resolve the reported ledger
+problem, and use the exact `tao route link <route-id> <plan-id>` recovery command
+printed by Tao (select the same repository). Linking repairs only the ledger,
+not plan state or execution authority; resume the existing plan through normal
+plan commands rather than generating another one.
+
+The **Planner routing** section of `tao insights` shows policy/arm cohorts,
+overrides, attempts without plans, missing links, and matured versus censored
+coverage, with inverse-probability weights for randomized comparisons. Check
+coverage before interpreting weighted completion: shadow records and overrides
+are not randomized evidence, and the ledger never authorizes lifecycle recovery.
+
 ### `/tao-groom-notes [focus]` — review the local backlog
 
 Use this read-only prompt in Pi or Claude Code before choosing work from an aging

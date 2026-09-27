@@ -51,6 +51,10 @@ Global session telemetry:
   output tokens (7 sessions): p50=1200 p90=3400 p95=5600
   cost (0 sessions): p50=$0.00 p90=$0.00 p95=$0.00
 
+Planner routing:
+- 3 records; shadow=0 randomized=3 overrides=0 attempts without plan=1 linked=2 missing linked=0 matured=1 censored=1
+- policy-v1/randomized pi|inherited|inherited|inherited|prompt-v1|default: assigned=3 overrides=0 linked=2 matured=1 censored=1 weight sum=6.00 weighted completion=100.0%
+
 Repository-qualified outlier plans:
   alpha [repo-a]/outlier-1: output_tokens=6000 cost=$0.50
   alpha [repo-a]/outlier-2: output_tokens=6100 cost=$1.50

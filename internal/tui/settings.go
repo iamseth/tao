@@ -440,7 +440,8 @@ func settingsDefaultGroupForName(name string) (string, bool) {
 	switch name {
 	case "TAO_COMMIT_POLICY", "TAO_EXECUTION_MODE", "TAO_AGENT", "TAO_SESSION_TIMEOUT":
 		return settingsGroupExecution, true
-	case "TAO_PULL_REQUEST", "TAO_REVIEW", "TAO_AUTO_REWORK", "TAO_MAX_REWORK_ATTEMPTS":
+	case "TAO_PULL_REQUEST", "TAO_REVIEW", "TAO_AUTO_REWORK", "TAO_MAX_REWORK_ATTEMPTS",
+		"TAO_PLANNER_ROUTING", "TAO_PLANNER_ROUTING_ARMS", "TAO_PLANNER_ROUTING_FLOOR":
 		return settingsGroupWorkflow, true
 	case "TAO_UPDATE", "TAO_DANGEROUSLY_SKIP_PERMISSIONS", "TAO_MAX_SLICE_OUTPUT_TOKENS", "TAO_MAX_SLICE_COST":
 		return settingsGroupSafety, true
@@ -453,6 +454,8 @@ func settingsDefaultGroupForName(name string) (string, bool) {
 
 func humanizeSettingsName(name string) string {
 	switch name {
+	case "TAO_PLANNER_ROUTING":
+		return "Planner routing mode"
 	case "TAO_DANGEROUSLY_SKIP_PERMISSIONS":
 		return "Skip permissions"
 	case "TAO_MAX_SLICE_OUTPUT_TOKENS":

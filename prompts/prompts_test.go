@@ -1,7 +1,9 @@
 package prompts
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,6 +14,40 @@ import (
 )
 
 var unprefixedSlashCommand = regexp.MustCompile(`(^|[^[:alnum:]_-])/(plan|slice|note-slice|note|run|commit|grill-me|improve-codebase-architecture|improve-documentation|repo-health|steal|pr|review)([^[:alnum:]_-]|$)`)
+
+func TestTemplateVersion(t *testing.T) {
+	first, err := TemplateVersion(PromptNoteSlice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := TemplateVersion(PromptNoteSlice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second {
+		t.Fatalf("note-slice version changed between calls: %q != %q", first, second)
+	}
+	slice, err := TemplateVersion(PromptSlice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == slice {
+		t.Fatal("note-slice and slice versions must differ")
+	}
+	for _, definition := range Definitions() {
+		got, err := TemplateVersion(definition.Name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := fmt.Sprintf("%x", sha256.Sum256([]byte(definition.Template)))
+		if got != want {
+			t.Errorf("TemplateVersion(%q) = %q, want %q", definition.Name, got, want)
+		}
+	}
+	if got, err := TemplateVersion("unknown"); err == nil || got != "" {
+		t.Fatalf("unknown prompt returned %q, %v", got, err)
+	}
+}
 
 func TestRenderRunPromptAppliesDefaultsAndData(t *testing.T) {
 	got, err := Render(PromptRun, Data{RunPacket: "packet-body"})

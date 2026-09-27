@@ -1,6 +1,7 @@
 package prompts
 
 import (
+	"crypto/sha256"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -226,6 +227,16 @@ func Render(name string, data Data) (string, error) {
 		return "", fmt.Errorf("unknown prompt %q", name)
 	}
 	return prompt.render(prompt.template, data)
+}
+
+// TemplateVersion returns the lowercase SHA-256 digest of the embedded template
+// selected by the same name as Render, independent of rendering data.
+func TemplateVersion(name string) (string, error) {
+	prompt, ok := promptByName(name)
+	if !ok {
+		return "", fmt.Errorf("unknown prompt %q", name)
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(prompt.template))), nil
 }
 
 func renderTemplate(source string, data Data) (string, error) {

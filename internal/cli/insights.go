@@ -7,6 +7,7 @@ import (
 
 	"github.com/iamseth/tao/internal/insights"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/plannerroute"
 	"github.com/iamseth/tao/internal/taodata"
 	"github.com/iamseth/tao/internal/view"
 )
@@ -53,7 +54,18 @@ func (a App) insights(ctx context.Context, repo insights.PlanLister, plansDir st
 		})
 		scope = view.InsightsScopeAllRepositories
 	} else {
-		report, err = insights.Aggregate(ctx, repo)
+		var routes insights.RouteLister
+		// Explicit plan stores need not belong to the current repository.
+		if plansDir == "" {
+			registry := a.registry()
+			registered, lookupErr := registry.Current(ctx)
+			if lookupErr == nil {
+				routes = insightRoutes{plannerroute.NewStore(registry.PlannerRoutesDir(registered))}
+			} else if errors.Is(lookupErr, context.Canceled) || errors.Is(lookupErr, context.DeadlineExceeded) {
+				return lookupErr
+			}
+		}
+		report, err = insights.AggregateWithRoutes(ctx, repo, routes)
 	}
 	if err != nil {
 		return err
@@ -63,6 +75,12 @@ func (a App) insights(ctx context.Context, repo insights.PlanLister, plansDir st
 		format = view.InsightsFormatDigest
 	}
 	return view.RenderInsights(a.Out, report, view.InsightsOptions{Scope: scope, Format: format})
+}
+
+type insightRoutes struct{ store *plannerroute.Store }
+
+func (r insightRoutes) ListRoutes(ctx context.Context) ([]plannerroute.Record, []string, error) {
+	return r.store.List(ctx)
 }
 
 type catalogInsightSources struct {
@@ -84,7 +102,7 @@ func (s catalogInsightSources) ListInsightSources(ctx context.Context) ([]insigh
 		if s.repository != nil {
 			plans = s.repository(store.PlansDir)
 		}
-		sources = append(sources, insights.RepositorySource{ID: store.ID, Name: store.Name, Plans: plans})
+		sources = append(sources, insights.RepositorySource{ID: store.ID, Name: store.Name, Plans: plans, Routes: insightRoutes{plannerroute.NewStore(store.PlannerRoutesDir)}})
 	}
 	return sources, nil
 }

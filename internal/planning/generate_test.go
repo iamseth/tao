@@ -67,6 +67,9 @@ func TestGeneratePlanPropagatesCallerPolicyAndReturnsValidatedDetail(t *testing.
 	if result.Detail == nil || result.Detail.State.Plan.ChangeType != plan.ChangeTypeFeat || !result.Validation.OK || result.Summary != "generated" || !strings.Contains(result.Allocation.ID, "explicit-slug") {
 		t.Fatalf("unexpected generation result: %#v", result)
 	}
+	if want := (Treatment{RuntimeLabel: "pi", ProviderID: "unknown", ModelID: "unknown", MetricsAvailability: "unavailable"}); result.Treatment != want {
+		t.Fatalf("treatment = %#v, want %#v", result.Treatment, want)
+	}
 	if strings.Contains(progress.String(), "@tao-agent-log-v1") || progress.String() != "assistant: planning\n" {
 		t.Fatalf("note-planning progress was not human-readable: %q", progress.String())
 	}
@@ -245,6 +248,10 @@ func TestGeneratePlanCleansRuntimeAndNoArtifactFailures(t *testing.T) {
 			if !errors.As(err, &generationErr) || generationErr.Stage != tc.stage {
 				t.Fatalf("expected stage %q, got %v", tc.stage, err)
 			}
+			want := Treatment{RuntimeLabel: "pi", ProviderID: "unknown", ModelID: "unknown", MetricsAvailability: "unavailable"}
+			if generationErr.Treatment == nil || *generationErr.Treatment != want {
+				t.Fatalf("treatment = %#v, want %#v", generationErr.Treatment, want)
+			}
 			if _, statErr := os.Stat(generationErr.Allocation.Dir); !os.IsNotExist(statErr) {
 				t.Fatalf("expected allocation cleanup, stat error=%v", statErr)
 			}
@@ -265,8 +272,8 @@ func TestGeneratePlanTelemetry(t *testing.T) {
 			metrics *agent.Metrics
 			want    plan.AgentMetricsAvailability
 		}{
-			{"reported", &agent.Metrics{Availability: agentmetrics.Reported, InputTokens: 5, InputTokensPresent: true, OutputTokens: 7, OutputTokensPresent: true, TotalTokens: 12, TotalTokensPresent: true, CostPresent: true}, plan.AgentMetricsReported},
-			{"partial", &agent.Metrics{Availability: agentmetrics.Partial, OutputTokens: 7, OutputTokensPresent: true}, plan.AgentMetricsPartial},
+			{"reported", &agent.Metrics{ProviderID: "provider", ModelID: "model", Availability: agentmetrics.Reported, InputTokens: 5, InputTokensPresent: true, OutputTokens: 7, OutputTokensPresent: true, TotalTokens: 12, TotalTokensPresent: true, CostPresent: true}, plan.AgentMetricsReported},
+			{"partial", &agent.Metrics{ProviderID: "provider", Availability: agentmetrics.Partial, OutputTokens: 7, OutputTokensPresent: true}, plan.AgentMetricsPartial},
 			{"unavailable", nil, plan.AgentMetricsUnavailable},
 		} {
 			for _, appendFails := range []bool{false, true} {
@@ -286,19 +293,33 @@ func TestGeneratePlanTelemetry(t *testing.T) {
 						writeGeneratedPlan(t, dir, filepath.Base(dir), repoMeta.Root, false)
 						return agent.SessionResult{Output: "original output", FinalText: "original final", Metrics: measurement.metrics, MetricsWarning: "capture warning must not discard measurements"}, nil
 					}}
-					service := NewService(store, stub, ServiceOptions{Agent: kind, EventAppender: generationEventAppender(func(dir string, event plan.Event) error {
+					serviceKind := runtimeconfig.AgentPi
+					if kind == runtimeconfig.AgentPi {
+						serviceKind = runtimeconfig.AgentClaude
+					}
+					service := NewService(store, stub, ServiceOptions{Agent: serviceKind, EventAppender: generationEventAppender(func(dir string, event plan.Event) error {
 						appends++
 						if appendFails {
 							return errors.New("append failed")
 						}
 						return plan.AppendEvent(dir, event)
 					})})
-					result, err := service.GeneratePlan(context.Background(), GeneratePlanRequest{Session: session, RejectOpenQuestions: true})
+					result, err := service.GeneratePlan(context.Background(), GeneratePlanRequest{Session: session, AgentKind: kind, RejectOpenQuestions: true})
 					if err != nil {
 						t.Fatal(err)
 					}
 					if calls != 1 || appends != 1 || !result.Validation.OK || result.Summary != "original output" || result.Agent != (AgentSummary{Output: "original output", FinalText: "original final"}) {
 						t.Fatalf("generation changed: calls=%d appends=%d result=%#v", calls, appends, result)
+					}
+					wantTreatment := Treatment{RuntimeLabel: string(kind), ProviderID: "unknown", ModelID: "unknown", MetricsAvailability: string(measurement.want)}
+					if measurement.metrics != nil {
+						wantTreatment.ProviderID = measurement.metrics.ProviderID
+						if measurement.metrics.ModelID != "" {
+							wantTreatment.ModelID = measurement.metrics.ModelID
+						}
+					}
+					if result.Treatment != wantTreatment {
+						t.Fatalf("treatment = %#v, want %#v", result.Treatment, wantTreatment)
 					}
 					persisted, err := plan.NewFileRepository("").ResolvePlan(context.Background(), result.Allocation.Dir)
 					if err != nil {
@@ -368,7 +389,7 @@ func TestGeneratePlanFailuresNeverAppendTelemetry(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				result := agent.SessionResult{Metrics: &agent.Metrics{Availability: agentmetrics.Partial, OutputTokens: 7, OutputTokensPresent: true}, MetricsWarning: "capture failed"}
+				result := agent.SessionResult{Metrics: &agent.Metrics{ProviderID: "provider", ModelID: "model", Availability: agentmetrics.Partial, OutputTokens: 7, OutputTokensPresent: true}, MetricsWarning: "capture failed"}
 				if stage == GenerationStageRuntime {
 					return result, original
 				}
@@ -383,6 +404,10 @@ func TestGeneratePlanFailuresNeverAppendTelemetry(t *testing.T) {
 			if !errors.As(err, &generationErr) || generationErr.Stage != stage || generationErr.CleanupErr != nil || calls != 1 {
 				t.Fatalf("calls=%d error=%v", calls, err)
 			}
+			want := Treatment{RuntimeLabel: "pi", ProviderID: "provider", ModelID: "model", MetricsAvailability: "partial"}
+			if generationErr.Treatment == nil || *generationErr.Treatment != want {
+				t.Fatalf("treatment = %#v, want %#v", generationErr.Treatment, want)
+			}
 			if stage == GenerationStageRuntime && !errors.Is(err, original) {
 				t.Fatalf("lost original failure: %v", err)
 			}
@@ -390,6 +415,54 @@ func TestGeneratePlanFailuresNeverAppendTelemetry(t *testing.T) {
 				t.Fatalf("failed allocation survived: %v", err)
 			}
 		})
+	}
+}
+
+func TestGeneratePlanRuntimeSelection(t *testing.T) {
+	for _, tc := range []struct {
+		name                     string
+		serviceKind, requestKind runtimeconfig.AgentKind
+		want                     string
+	}{
+		{"default", "", "", "pi"},
+		{"service", runtimeconfig.AgentClaude, "", "claude"},
+		{"override-pi", runtimeconfig.AgentClaude, runtimeconfig.AgentPi, "pi"},
+		{"override-claude", runtimeconfig.AgentPi, runtimeconfig.AgentClaude, "claude"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repoMeta, store := newPlanningServiceTestRepo(t)
+			session, err := NewSession("note-runtime", "Runtime", "work", repoMeta, nil, time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			original := errors.New("cannot start runtime")
+			var executable string
+			service := NewService(store, nil, ServiceOptions{Agent: tc.serviceKind, ProcessStarter: func(_ context.Context, _ string, name string, _ []string) (agent.Process, error) {
+				executable = name
+				return nil, original
+			}})
+			_, err = service.GeneratePlan(context.Background(), GeneratePlanRequest{Session: session, AgentKind: tc.requestKind})
+			var generationErr *GenerationError
+			if !errors.As(err, &generationErr) || generationErr.Stage != GenerationStageRuntime || !errors.Is(err, original) {
+				t.Fatalf("expected runtime failure, got %v", err)
+			}
+			if executable != tc.want || generationErr.Treatment == nil || generationErr.Treatment.RuntimeLabel != tc.want {
+				t.Fatalf("executable=%q treatment=%#v, want %q", executable, generationErr.Treatment, tc.want)
+			}
+		})
+	}
+}
+
+func TestGeneratePlanAllocationFailureHasNoTreatment(t *testing.T) {
+	_, store := newPlanningServiceTestRepo(t)
+	stub := &sliceAgentStub{run: func(agent.Session) (agent.SessionResult, error) {
+		t.Fatal("runtime called before allocation")
+		return agent.SessionResult{}, nil
+	}}
+	_, err := NewService(store, stub, ServiceOptions{}).GeneratePlan(context.Background(), GeneratePlanRequest{})
+	var generationErr *GenerationError
+	if !errors.As(err, &generationErr) || generationErr.Stage != GenerationStageAllocation || generationErr.Treatment != nil {
+		t.Fatalf("expected allocation failure without treatment, got %#v", err)
 	}
 }
 

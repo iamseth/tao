@@ -10,6 +10,7 @@ import (
 	"github.com/iamseth/tao/internal/agentsession"
 	"github.com/iamseth/tao/internal/agenttelemetry"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
 // GenerationStage identifies the deterministic step at which plan generation failed.
@@ -34,6 +35,7 @@ type GenerationError struct {
 	CleanupErr error
 	Allocation PlanAllocation
 	Validation *ValidationResult
+	Treatment  *Treatment
 }
 
 func (e *GenerationError) Error() string {
@@ -51,6 +53,7 @@ func (e *GenerationError) Unwrap() error { return e.Err }
 // GeneratePlanRequest describes one synchronous, provider-neutral planning run.
 type GeneratePlanRequest struct {
 	Session             *Session
+	AgentKind           runtimeconfig.AgentKind // Empty inherits the service kind.
 	Slug                string
 	Extra               string
 	PermissionMode      agent.PermissionMode
@@ -64,12 +67,20 @@ type AgentSummary struct {
 	FinalText string
 }
 
+// Treatment reports the selected runtime and observed session measurements,
+// including sessions that failed without producing a plan.
+type Treatment struct {
+	RuntimeLabel, ProviderID, ModelID string
+	MetricsAvailability               string
+}
+
 // GeneratePlanResult contains the surviving validated allocation.
 type GeneratePlanResult struct {
 	Allocation PlanAllocation
 	Detail     *plan.PlanDetail
 	Validation ValidationResult
 	Agent      AgentSummary
+	Treatment  Treatment
 	Summary    string
 }
 
@@ -92,10 +103,11 @@ func (s *Service) GeneratePlan(ctx context.Context, request GeneratePlanRequest)
 		return nil, &GenerationError{Stage: GenerationStageAllocation, Err: err}
 	}
 	var failedValidation *ValidationResult
+	var treatment *Treatment
 	fail := func(stage GenerationStage, cause error) (*GeneratePlanResult, error) {
 		return nil, &GenerationError{
 			Stage: stage, Err: cause, CleanupErr: repo.DeleteAllocatedPlan(context.Background(), allocation),
-			Allocation: allocation, Validation: failedValidation,
+			Allocation: allocation, Validation: failedValidation, Treatment: treatment,
 		}
 	}
 	prompt, err := renderNoteSlicePrompt(request.Session, request.Extra, allocation, request.RejectOpenQuestions)
@@ -106,10 +118,27 @@ func (s *Service) GeneratePlan(ctx context.Context, request GeneratePlanRequest)
 	if mode == "" {
 		mode = agent.PermissionModeAuto
 	}
-	result, err := s.runtime().RunSession(ctx, agent.Session{
+	kind := request.AgentKind
+	if kind == "" {
+		kind = s.AgentKind
+	}
+	descriptor, _ := agent.Lookup(kind)
+	result, err := s.runtimeFor(kind).RunSession(ctx, agent.Session{
 		RepoRoot: request.Session.Repo.Root, Prompt: prompt, PermissionMode: mode,
 		Timeout: request.Timeout, Progress: s.Log, CollectMetrics: true,
 	})
+	treatment = &Treatment{
+		RuntimeLabel: descriptor.Label, ProviderID: "unknown", ModelID: "unknown",
+		MetricsAvailability: string(result.MetricsAvailability()),
+	}
+	if result.Metrics != nil {
+		if result.Metrics.ProviderID != "" {
+			treatment.ProviderID = result.Metrics.ProviderID
+		}
+		if result.Metrics.ModelID != "" {
+			treatment.ModelID = result.Metrics.ModelID
+		}
+	}
 	if err != nil {
 		return fail(GenerationStageRuntime, err)
 	}
@@ -126,7 +155,6 @@ func (s *Service) GeneratePlan(ctx context.Context, request GeneratePlanRequest)
 	}
 	// Only a surviving allocation is a durable telemetry destination. This
 	// append never creates a plan directory and cannot change generation success.
-	descriptor, _ := agent.Lookup(s.AgentKind)
 	metrics := agenttelemetry.Project(agentsession.Result{
 		AgentLabel: descriptor.Label, Metrics: result.Metrics, MetricsAvailability: result.MetricsAvailability(),
 	}, plan.AgentRolePlanning, nil)
@@ -146,7 +174,7 @@ func (s *Service) GeneratePlan(ctx context.Context, request GeneratePlanRequest)
 		summary = fmt.Sprintf("Created Tao plan %s at %s.", allocation.ID, allocation.Dir)
 	}
 	return &GeneratePlanResult{
-		Allocation: allocation, Detail: detail, Validation: validation,
+		Allocation: allocation, Detail: detail, Validation: validation, Treatment: *treatment,
 		Agent: AgentSummary{Output: result.Output, FinalText: result.FinalText}, Summary: summary,
 	}, nil
 }

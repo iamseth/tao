@@ -78,8 +78,50 @@ func TestInsightsCommandRegistrationAndPlansDir(t *testing.T) {
 	if gotPlansDir != "/tmp/insights-plans" {
 		t.Fatalf("plans dir = %q", gotPlansDir)
 	}
-	if out.String() != "No plan history.\n" {
+	if out.String() != "No plan history.\n\nPlanner routing:\n- No planner routing records.\n" {
 		t.Fatalf("output = %q", out.String())
+	}
+}
+
+func TestInsightsCurrentRepositoryRoutes(t *testing.T) {
+	repo := taodata.Repo{ID: "route-repo", Name: "routing", Root: t.TempDir()}
+	app, out, _ := noteTestApp(t, nil, repo)
+	createTestRoute(t, app, repo, testRouteID)
+	if err := app.insights(context.Background(), fakeRepository{}, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "1 records; shadow=1") {
+		t.Fatalf("routing missing: %s", out)
+	}
+	out.Reset()
+	if err := app.insights(context.Background(), fakeRepository{}, t.TempDir(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "No planner routing records.") {
+		t.Fatalf("explicit plans dir joined unrelated ledger: %s", out)
+	}
+}
+
+func TestInsightsCatalogRoutes(t *testing.T) {
+	registry := taodata.NewRegistry(t.TempDir())
+	repo := taodata.Repo{Schema: taodata.RepoSchema, ID: "route-repo", Name: "routing", Root: filepath.Join(t.TempDir(), "missing")}
+	if err := registry.WriteRepo(repo); err != nil {
+		t.Fatal(err)
+	}
+	legacy := taodata.Repo{Schema: taodata.RepoSchema, ID: "legacy-repo", Root: filepath.Join(t.TempDir(), "missing")}
+	if err := registry.WriteRepo(legacy); err != nil {
+		t.Fatal(err)
+	}
+	createTestRoute(t, App{Registry: func() NoteRegistry { return registry }}, repo, testRouteID)
+	report, err := insights.AggregateSources(context.Background(), catalogInsightSources{registry: registry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.PlannerRouting.Records != 1 || report.RepositoryCoverage.Empty != 2 || len(report.PlannerRouting.Warnings) != 0 {
+		t.Fatalf("report = %+v", report)
+	}
+	if _, err := os.Stat(registry.PlannerRoutesDir(legacy)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("read created legacy ledger: %v", err)
 	}
 }
 
@@ -115,6 +157,12 @@ func representativeInsightsReport() insights.Report {
 	report := insights.Report{
 		PlansScanned: 9,
 		PlansSkipped: 2,
+		PlannerRouting: insights.PlannerRoutingReport{
+			Records: 3, Randomized: 3, LinkedPlans: 2, Matured: 1, Censored: 1, AttemptsWithoutPlan: 1,
+			Policies: []insights.RoutingPolicyCohort{{PolicyVersion: "policy-v1", Mode: "randomized", Arms: []insights.RoutingArmCohort{
+				{ArmKey: "pi|inherited|inherited|inherited|prompt-v1|default", Assigned: 3, Linked: 2, Matured: 1, Completed: 1, WeightSum: 6, WeightedCompletionRate: new(float64(1))},
+			}}},
+		},
 		RepositoryCoverage: insights.RepositoryCoverage{
 			Scanned: 6, Empty: 1, Unreadable: 1, Skipped: 1,
 			Repositories: []insights.RepositoryScanResult{
@@ -520,7 +568,7 @@ func TestInsightsCommandAggregatesHistoryAndDigestHandlesEmptyHistory(t *testing
 	if err := empty.Run(context.Background(), []string{"insights", "--digest"}); err != nil {
 		t.Fatal(err)
 	}
-	if out.String() != "# Tao Insights Digest\n\nNo plan history.\n" {
+	if out.String() != "# Tao Insights Digest\n\nNo plan history.\n\n## Planner routing\n- No planner routing records.\n" {
 		t.Fatalf("empty digest = %q", out.String())
 	}
 }

@@ -29,6 +29,10 @@ const (
 	EnvApprovedBy                       = "TAO_APPROVED_BY"
 	EnvRunHeader                        = "TAO_RUN_HEADER"
 
+	EnvPlannerRouting      = "TAO_PLANNER_ROUTING"
+	EnvPlannerRoutingArms  = "TAO_PLANNER_ROUTING_ARMS"
+	EnvPlannerRoutingFloor = "TAO_PLANNER_ROUTING_FLOOR"
+
 	EnvBudgetSliceOutputTokens      = "TAO_BUDGET_SLICE_OUTPUT_TOKENS" // #nosec G101 -- environment key, not a credential.
 	EnvBudgetSliceCost              = "TAO_BUDGET_SLICE_COST"
 	EnvBudgetSliceToolCalls         = "TAO_BUDGET_SLICE_TOOL_CALLS"
@@ -239,6 +243,27 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 		defaultValue: func(RunOptionsPatch) string { return strconv.FormatBool(true) },
 		apply: func(_ *EnvDefaults, value string) (string, error) {
 			return strconv.FormatBool(value != "0"), nil
+		},
+	},
+	{
+		name:         EnvPlannerRouting,
+		defaultValue: func(RunOptionsPatch) string { return "not set (default: off)" },
+		apply: func(_ *EnvDefaults, value string) (string, error) {
+			return value, nil
+		},
+	},
+	{
+		name:         EnvPlannerRoutingArms,
+		defaultValue: func(RunOptionsPatch) string { return "not set (comma list, e.g. pi=0.5,claude=0.5)" },
+		apply: func(_ *EnvDefaults, value string) (string, error) {
+			return value, nil
+		},
+	},
+	{
+		name:         EnvPlannerRoutingFloor,
+		defaultValue: func(RunOptionsPatch) string { return "not set (default: 0.1)" },
+		apply: func(_ *EnvDefaults, value string) (string, error) {
+			return value, nil
 		},
 	},
 	{
