@@ -11,8 +11,35 @@ stable release.
 
 ### Week of 2026-09-21
 
+#### Added
+- Capture repository-owned backlog notes from the dashboard, using the focused repository or a repository picker.
+- Filter dashboard plans, notes, and sessions by repository, status, and tag; filters persist across refreshes.
+- Catch up on recent local changes with `/tao-catch-me-up`, or use the new read-only note-grooming prompt to review a backlog.
+- Scout a remote repository with `tao steal fetch` and a read-only prompt, without executing repository contents or automatically creating notes.
+- Run reproducible note-planning experiments with shadow or randomized routing, then inspect routing cohorts and planner scorecards.
+- Choose separate models for implementation, review, and resolution; configure late automatic rework attempts to escalate to a stronger model.
+- Inspect recorded agent usage by operation role, with missing measurements distinguished from recorded zero usage.
+- Follow active or named batch merges with `tao log --batch`; batch progress and best-effort agent transcripts are also retained for inspection.
+- See live progress during single-plan merges in the monitor, plan details, and dashboard.
+
 #### Changed
 - CLI and TUI colors now share one palette; select `tokyonight` (default) or `gruvbox` with `TAO_THEME`. Unknown names fall back to the default with a status warning.
+- Publish a standalone commit with `tao commit --push` when you choose: Tao validates the configured upstream and pushes the exact commit without force. A failed push leaves the local commit intact and does not trigger an automatic retry.
+- Eligible runs now attempt bounded repair of code-classified final-verification failures automatically.
+- Clean batch integrations defer verification to the aggregate gate, reducing repeated checks while retaining failure attribution and bounded repair.
+- Repeated findings at the same file or location are now advisories rather than automatic stops; existing attempt, budget, and equivalent-finding safeguards remain. Comment reviews with findings also offer a manual rework path.
+- Planning and review guidance now makes interface contracts, validation plans, review focus, and evidence for fixes and completed work more explicit.
+
+#### Fixed
+- Batch conflict resolution no longer fails when a candidate deletes a tracked file.
+- Confined macOS merge sessions can use common pseudo-devices such as `/dev/null`, allowing Git and shell checks to run.
+- Repository model defaults now apply during note planning as well as execution.
+- Oversized repository trees are rejected before checkout, protecting disk space during remote scouting.
+
+#### Reliability
+- Unchanged verification blockers now include ownership and worktree evidence, helping prevent repeated blocked sessions while guiding repair.
+- Workspace and integration cleanup rechecks safeguards before removal and warns about orphaned resources; active work remains protected.
+- Recovery modes are used only for the initial execution round, so subsequent automatic rework rounds can proceed with ordinary run behavior.
 
 ### Week of 2026-08-24
 
