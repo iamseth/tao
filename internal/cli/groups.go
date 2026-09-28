@@ -36,6 +36,6 @@ var topLevelCommandGroups = []commandGroup{
 	},
 	{
 		heading:  "Other Commands",
-		commands: []string{"version", "slice-complete", "slice-blocked", "capture-planning-session"},
+		commands: []string{"version", "slice-complete", "slice-blocked"},
 	},
 }

@@ -131,16 +131,13 @@ func (p ExecutionPreparer) Prepare(ctx context.Context, detail *plan.PlanDetail,
 		return "", fmt.Errorf("record workspace metadata: %w", err)
 	}
 	priorFingerprint := detail.State.Workspace.DependencyFingerprint
-	fingerprint := ""
-	if autoDependencyInstall(config.DependencyInstallBehavior) {
-		fingerprint, err = dependencyLockfileFingerprint(metadata.Path)
-		if err != nil {
-			return "", err
-		}
+	fingerprint, err := dependencyLockfileFingerprint(metadata.Path)
+	if err != nil {
+		return "", err
 	}
 	var dependency DependencyMetadata
 	dependencySucceeded := false
-	if metadata.Reused && autoDependencyInstall(config.DependencyInstallBehavior) && fingerprint != "" && fingerprint == priorFingerprint {
+	if metadata.Reused && fingerprint != "" && fingerprint == priorFingerprint {
 		dependency = DependencyMetadata{Status: "skipped", FailureReason: "lockfile unchanged since last successful install"}
 	} else {
 		var dependencyErr error
@@ -155,11 +152,9 @@ func (p ExecutionPreparer) Prepare(ctx context.Context, detail *plan.PlanDetail,
 			}
 		} else {
 			dependencySucceeded = true
-			if config.DependencyInstallBehavior != DependencyInstallNever {
-				fingerprint, err = dependencyLockfileFingerprint(metadata.Path)
-				if err != nil {
-					return "", err
-				}
+			fingerprint, err = dependencyLockfileFingerprint(metadata.Path)
+			if err != nil {
+				return "", err
 			}
 		}
 	}
@@ -214,10 +209,6 @@ func (r executionRebaseRecorder) SettleWorkspaceRebase(intent plan.WorkspaceReba
 		HeadSHA: metadata.HeadSHA, BaseStatus: metadata.BaseStatus, RefreshStatus: metadata.RefreshStatus,
 		RebaseStatus: metadata.RebaseStatus, LifecycleStatus: status,
 	})
-}
-
-func autoDependencyInstall(behavior string) bool {
-	return behavior == "" || behavior == DependencyInstallAuto || behavior == DependencyInstallAutoIfLockfilePresent
 }
 
 func (p ExecutionPreparer) newManager(options Options) (executionWorkspaceManager, error) {

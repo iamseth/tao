@@ -62,7 +62,6 @@ func TestRunPassesWorkspaceRootCwdToPi(t *testing.T) {
 
 func TestDefaultCommandRunnerKeepsGenericEnvUnchanged(t *testing.T) {
 	setTestEnv(t, "TAO_HELPER_PROCESS", "1")
-	setTestEnv(t, "FORCE_COLOR", "0")
 	setTestEnv(t, "CLICOLOR_FORCE", "0")
 	setTestEnv(t, "TERM", "dumb")
 	var out bytes.Buffer
@@ -72,7 +71,7 @@ func TestDefaultCommandRunnerKeepsGenericEnvUnchanged(t *testing.T) {
 	}
 
 	got := strings.Split(strings.TrimSpace(out.String()), "\n")
-	want := []string{"0", "0", "dumb"}
+	want := []string{"0", "dumb"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("expected generic env %#v, got %#v", want, got)
 	}
@@ -141,7 +140,7 @@ func TestHelperProcessGenericEnv(t *testing.T) {
 	if os.Getenv("TAO_HELPER_PROCESS") != "1" {
 		return
 	}
-	_, _ = io.WriteString(os.Stdout, os.Getenv("FORCE_COLOR")+"\n"+os.Getenv("CLICOLOR_FORCE")+"\n"+os.Getenv("TERM")+"\n")
+	_, _ = io.WriteString(os.Stdout, os.Getenv("CLICOLOR_FORCE")+"\n"+os.Getenv("TERM")+"\n")
 	os.Exit(0)
 }
 

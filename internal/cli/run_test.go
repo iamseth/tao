@@ -787,10 +787,10 @@ func TestRunAutoReworkPolicyResolution(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			clearTaoEnv(t)
 			if tt.envEnabled != "" {
-				t.Setenv(envAutoRework, tt.envEnabled)
+				t.Setenv(runtimeconfig.EnvAutoRework, tt.envEnabled)
 			}
 			if tt.envAttempts != "" {
-				t.Setenv(envMaxReworkAttempts, tt.envAttempts)
+				t.Setenv(runtimeconfig.EnvMaxReworkAttempts, tt.envAttempts)
 			}
 			if tt.envReview != "" {
 				t.Setenv(runtimeconfig.EnvReview, tt.envReview)

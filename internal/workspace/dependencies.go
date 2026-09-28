@@ -21,25 +21,22 @@ type DependencyMetadata struct {
 	FailureReason string
 }
 
-// PrepareDependencies installs workspace-local dependencies according to config.
-func PrepareDependencies(ctx context.Context, workspaceRoot string, config Config, runner CommandRunner, now func() time.Time) (DependencyMetadata, error) {
+// PrepareDependencies installs workspace-local dependencies when a supported lockfile is present.
+func PrepareDependencies(ctx context.Context, workspaceRoot string, _ Config, runner CommandRunner, now func() time.Time) (DependencyMetadata, error) {
 	if runner == nil {
 		runner = defaultCommandRunner
 	}
 	if now == nil {
 		now = time.Now
 	}
-	command, args, skipReason, err := dependencyInstallCommand(workspaceRoot, config)
-	if err != nil {
-		return DependencyMetadata{Status: "failed", FailureReason: err.Error()}, err
-	}
+	command, args, skipReason := dependencyInstallCommand(workspaceRoot)
 	if command == "" {
 		return DependencyMetadata{Status: "skipped", FailureReason: skipReason}, nil
 	}
 	started := now().UTC()
 	metadata := DependencyMetadata{Status: "running", Command: strings.Join(append([]string{command}, args...), " "), StartedAt: &started}
 	var stderr bytes.Buffer
-	err = runner(ctx, workspaceRoot, command, args, io.Discard, &stderr)
+	err := runner(ctx, workspaceRoot, command, args, io.Discard, &stderr)
 	completed := now().UTC()
 	metadata.CompletedAt = &completed
 	if err != nil {
@@ -54,27 +51,12 @@ func PrepareDependencies(ctx context.Context, workspaceRoot string, config Confi
 	return metadata, nil
 }
 
-func dependencyInstallCommand(workspaceRoot string, config Config) (string, []string, string, error) {
-	switch config.DependencyInstallBehavior {
-	case DependencyInstallNever:
-		return "", nil, "dependency install behavior is never", nil
-	case DependencyInstallCommand:
-		return splitDependencyCommand(config.DependencyInstallCommand)
-	case DependencyInstallAlways:
-		command, args, _, ok := detectPackageManager(workspaceRoot)
-		if !ok {
-			return "", nil, "", fmt.Errorf("dependency install behavior is always but no supported lockfile was found")
-		}
-		return command, args, "", nil
-	case DependencyInstallAuto, DependencyInstallAutoIfLockfilePresent, "":
-		command, args, _, ok := detectPackageManager(workspaceRoot)
-		if !ok {
-			return "", nil, "no supported lockfile found", nil
-		}
-		return command, args, "", nil
-	default:
-		return "", nil, "", fmt.Errorf("unsupported dependency install behavior %q", config.DependencyInstallBehavior)
+func dependencyInstallCommand(workspaceRoot string) (string, []string, string) {
+	command, args, _, ok := detectPackageManager(workspaceRoot)
+	if !ok {
+		return "", nil, "no supported lockfile found"
 	}
+	return command, args, ""
 }
 
 func detectPackageManager(root string) (string, []string, string, bool) {
@@ -109,12 +91,4 @@ func dependencyLockfileFingerprint(root string) (string, error) {
 		return "", fmt.Errorf("read dependency lockfile %s: %w", path, err)
 	}
 	return fmt.Sprintf("%x", sha256.Sum256(contents)), nil
-}
-
-func splitDependencyCommand(command string) (string, []string, string, error) {
-	parts := strings.Fields(command)
-	if len(parts) == 0 {
-		return "", nil, "", fmt.Errorf("dependency install command is empty")
-	}
-	return parts[0], parts[1:], "", nil
 }

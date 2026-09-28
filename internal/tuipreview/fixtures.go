@@ -323,7 +323,7 @@ func debugWithoutAnomaliesFixture(now time.Time) tui.DebugSnapshot {
 	snapshot := debugFixture(now)
 	rows := snapshot.RuntimeDefaults[:0]
 	for _, row := range snapshot.RuntimeDefaults {
-		if row.Name == "TAO_REPOSITORY_ONLY" {
+		if row.Name == "TAO_RESOLVER_MODEL" {
 			continue
 		}
 		if row.Name == "TAO_PULL_REQUEST" {
@@ -363,7 +363,7 @@ func debugFixture(now time.Time) tui.DebugSnapshot {
 			{Name: "TAO_REVIEW", Value: "true", Source: "default"},
 			{Name: "TAO_SESSION_TIMEOUT", Value: "20m", Source: "default"},
 			{Name: "TAO_UPDATE", Value: "warn", Source: "env", Warning: "fixture warning"},
-			{Name: "TAO_REPOSITORY_ONLY", Value: "enabled", Source: "repository"},
+			{Name: "TAO_RESOLVER_MODEL", Value: "enabled", Source: "repository"},
 		},
 	}
 }

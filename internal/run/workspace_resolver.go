@@ -73,7 +73,7 @@ func prepareExecutionWorkspace(ctx context.Context, detail *plan.PlanDetail, inp
 		Runner:            input.CommandRunner,
 		PlanRecordFactory: workspacePlanRecordFactory(input.PlanRecordFactory),
 		Now:               input.Now,
-		Config:            input.Config.WorkspaceConfig,
+		Config:            workspace.DefaultConfig(),
 	}
 	return preparer.Prepare(ctx, detail, workspace.ExecutionPrepareOptions{
 		ExecutionMode: input.Config.ExecutionMode.String(),

@@ -131,7 +131,6 @@ func TestPromptSettingsAndOtherHelpIncludesOptions(t *testing.T) {
 		"latest stable Tao release", "TAO_UPDATE=off", "Usage:\n  tao update")
 	assertCommandOutputContains(t, "prompt help", []string{"prompt", "--help"}, "Render one of Tao's built-in prompt templates", "Options:", "--execution-mode", "Usage:\n  tao prompt (p)")
 	assertCommandOutputContains(t, "doctor help", []string{"doctor", "--help"}, "actionable prompt and tool problems", "Options:", "--verbose", "-v", "tao doctor --verbose")
-	assertCommandOutputContains(t, "capture help", []string{"capture-planning-session", "--help"}, "no longer supported", "Options:", "--plan-dir")
 }
 
 func TestEveryRegisteredCommandRendersPerCommandHelp(t *testing.T) {

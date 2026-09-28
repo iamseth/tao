@@ -11,7 +11,6 @@ import (
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
-	"github.com/iamseth/tao/internal/workspace"
 )
 
 // newTestRequest builds a resolved run.Request by merging built-in defaults with
@@ -31,7 +30,6 @@ func TestRequestForNextRoundClearsSingleShotRecoveryModes(t *testing.T) {
 		RepairVerification: true,
 		Reverify:           true,
 		ResolvedRunOptions: ResolvedRunOptions{
-			Mode:           ModeRun,
 			MaxSlices:      3,
 			Continue:       true,
 			CommitPolicy:   CommitPolicyNone,
@@ -143,7 +141,7 @@ func TestCheckRequestCanStartRejectsEveryAbandonedRunModeWithSafeReason(t *testi
 
 func TestPrepareRequestConfigMapsRunRequestToExecutionConfig(t *testing.T) {
 	request, err := newTestRequest("plan-a", runtimeconfig.RunOptionsPatch{
-		Mode:          ModeStep,
+		MaxSlices:     new(1),
 		CommitPolicy:  CommitPolicySlice,
 		ExecutionMode: ExecutionModeCurrent,
 		Agent:         AgentPi,
@@ -169,27 +167,6 @@ func TestPrepareRequestConfigMapsRunRequestToExecutionConfig(t *testing.T) {
 	}
 	if got.MaxSlices != 1 || got.Continue || !got.SkipPermissions || got.MaxReworkAttempts != 7 || got.CommitPolicy != CommitPolicySlice || got.ExecutionMode != ExecutionModeCurrent || got.Agent != AgentPi || got.PullRequest || !got.Reverify {
 		t.Fatalf("unexpected execution config: %#v", got)
-	}
-}
-
-func TestPrepareRequestConfigPreservesWorkspaceConfig(t *testing.T) {
-	want := workspace.Config{
-		Root:            "/tmp/tao-workspaces",
-		Strategy:        workspace.StrategyCurrent,
-		MaxParallelRuns: 4,
-	}
-	got, err := prepareRequestConfig(ExecutionConfig{WorkspaceConfig: want}, Request{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.WorkspaceConfig.Root != want.Root {
-		t.Fatalf("WorkspaceConfig.Root = %q, want %q", got.WorkspaceConfig.Root, want.Root)
-	}
-	if got.WorkspaceConfig.Strategy != want.Strategy {
-		t.Fatalf("WorkspaceConfig.Strategy = %q, want %q", got.WorkspaceConfig.Strategy, want.Strategy)
-	}
-	if got.WorkspaceConfig.MaxParallelRuns != want.MaxParallelRuns {
-		t.Fatalf("WorkspaceConfig.MaxParallelRuns = %d, want %d", got.WorkspaceConfig.MaxParallelRuns, want.MaxParallelRuns)
 	}
 }
 

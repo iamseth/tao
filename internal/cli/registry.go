@@ -150,7 +150,6 @@ var commandRegistry = []commandMetadata{
 	mergeCommand,
 	deleteCommand,
 	editCommand,
-	capturePlanningSessionCommand,
 	promptCommand,
 	draftPromptCommand,
 	installPromptsCommand,

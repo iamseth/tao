@@ -190,37 +190,6 @@ func TestRunOptionsPatchModelJSON(t *testing.T) {
 	}
 }
 
-func TestParseMode(t *testing.T) {
-	tests := []struct {
-		name  string
-		value string
-		want  Mode
-	}{
-		{name: "default", want: ModeRun},
-		{name: "run", value: "run", want: ModeRun},
-		{name: "step", value: "step", want: ModeStep},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := ParseMode(tt.value)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if got != tt.want {
-				t.Fatalf("ParseMode(%q) = %q, want %q", tt.value, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestParseModeRejectsUnsupportedValue(t *testing.T) {
-	_, err := ParseMode("other")
-	if err == nil {
-		t.Fatal("expected unsupported mode error")
-	}
-}
-
 func TestParseCommitPolicy(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -377,7 +346,7 @@ func TestResolveRunOptionsAppliesBuiltInDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if options.Mode != ModeRun || options.MaxSlices != 0 || options.Continue || options.CommitPolicy != CommitPolicySlice || options.ExecutionMode != ExecutionModeIsolated || options.Agent != AgentPi || options.PullRequest || !options.ReviewEnabled || options.SessionTimeout != DefaultSessionTimeout || options.Models != (ModelSelection{}) {
+	if options.MaxSlices != 0 || options.Continue || options.CommitPolicy != CommitPolicySlice || options.ExecutionMode != ExecutionModeIsolated || options.Agent != AgentPi || options.PullRequest || !options.ReviewEnabled || options.SessionTimeout != DefaultSessionTimeout || options.Models != (ModelSelection{}) {
 		t.Fatalf("unexpected built-in defaults: %#v", options)
 	}
 }
@@ -492,7 +461,6 @@ func TestResolveRunOptionsSessionTimeoutDefaultAndOverrides(t *testing.T) {
 
 func TestResolveRunOptionsAppliesStagedDefaultsAndOverrides(t *testing.T) {
 	options, err := ResolveRunOptions(RunOptionsPatch{
-		Mode:          ModeRun,
 		MaxSlices:     new(6),
 		Continue:      new(true),
 		CommitPolicy:  CommitPolicySlice,
@@ -501,7 +469,7 @@ func TestResolveRunOptionsAppliesStagedDefaultsAndOverrides(t *testing.T) {
 		PullRequest:   new(true),
 		ReviewEnabled: new(true),
 	}, RunOptionsPatch{
-		Mode:          ModeStep,
+		MaxSlices:     new(1),
 		Continue:      new(false),
 		CommitPolicy:  CommitPolicySlice,
 		ExecutionMode: ExecutionModeCurrent,
@@ -512,29 +480,41 @@ func TestResolveRunOptionsAppliesStagedDefaultsAndOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if options.Mode != ModeStep || options.MaxSlices != 1 || options.Continue || options.PullRequest || options.ReviewEnabled {
-		t.Fatalf("expected mode-derived max slices and explicit false overrides, got %#v", options)
+	if options.MaxSlices != 1 || options.Continue || options.PullRequest || options.ReviewEnabled {
+		t.Fatalf("expected explicit max slices and false overrides, got %#v", options)
 	}
 	if options.CommitPolicy != CommitPolicySlice || options.ExecutionMode != ExecutionModeCurrent || options.Agent != AgentPi {
 		t.Fatalf("expected request overrides to win, got %#v", options)
 	}
 }
 
-func TestResolveRunOptionsModeAndMaxSlicesPrecedence(t *testing.T) {
-	options, err := ResolveRunOptions(RunOptionsPatch{MaxSlices: new(4)}, RunOptionsPatch{Mode: ModeStep})
-	if err != nil {
-		t.Fatal(err)
+func TestResolveRunOptionsMaxSlicesPrecedence(t *testing.T) {
+	tests := []struct {
+		name       string
+		repository *int
+		override   *int
+		want       int
+	}{
+		{name: "inherit default", want: 4},
+		{name: "repository override", repository: new(2), want: 2},
+		{name: "explicit single slice", repository: new(2), override: new(1), want: 1},
+		{name: "explicit multiple slices", override: new(3), want: 3},
+		{name: "explicit unlimited", repository: new(2), override: new(0), want: 0},
 	}
-	if options.Mode != ModeStep || options.MaxSlices != 1 {
-		t.Fatalf("expected step mode to derive one slice, got %#v", options)
-	}
-
-	options, err = ResolveRunOptions(DefaultRunOptionsPatch(), RunOptionsPatch{Mode: ModeStep}.WithMaxSlices(3))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if options.Mode != ModeStep || options.MaxSlices != 3 {
-		t.Fatalf("expected explicit max-slices override to win, got %#v", options)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			options, err := ResolveRunOptionsWithRepositoryDefaults(
+				RunOptionsPatch{MaxSlices: new(4)},
+				RunOptionsPatch{MaxSlices: tt.repository},
+				RunOptionsPatch{MaxSlices: tt.override},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if options.MaxSlices != tt.want {
+				t.Fatalf("MaxSlices = %d, want %d", options.MaxSlices, tt.want)
+			}
+		})
 	}
 }
 
@@ -548,8 +528,7 @@ func TestResolveRunOptionsRejectsInvalidStagedValues(t *testing.T) {
 		{name: "default agent", defaults: RunOptionsPatch{Agent: "other"}, want: "unsupported agent \"other\" (want pi or claude)"},
 		{name: "override execution mode", overrides: RunOptionsPatch{ExecutionMode: ExecutionMode("sandbox")}, want: "unsupported execution mode \"sandbox\" (want isolated or current)"},
 		{name: "negative max slices", overrides: RunOptionsPatch{}.WithMaxSlices(-1), want: "--max-slices must be 0 or greater"},
-		{name: "pull request step", overrides: RunOptionsPatch{Mode: ModeStep, CommitPolicy: CommitPolicySlice, PullRequest: new(true)}, want: "--pull-request requires full run mode"},
-		{name: "pull request commit none", overrides: RunOptionsPatch{Mode: ModeRun, CommitPolicy: CommitPolicyNone, PullRequest: new(true)}, want: "--pull-request requires commit policy slice"},
+		{name: "pull request commit none", overrides: RunOptionsPatch{CommitPolicy: CommitPolicyNone, PullRequest: new(true)}, want: "--pull-request requires commit policy slice"},
 	}
 
 	for _, tt := range tests {
@@ -591,7 +570,7 @@ func TestRunOptionsPatchHelpersPreserveOptionalValues(t *testing.T) {
 // service uses to re-apply a resolved request over its own defaults.
 func TestResolvedRunOptionsRunOptionsPatchReappliesOnDefaults(t *testing.T) {
 	resolved, err := ResolveRunOptions(DefaultRunOptionsPatch(), RunOptionsPatch{
-		Mode:                  ModeStep,
+		MaxSlices:             new(1),
 		CommitPolicy:          CommitPolicySlice,
 		ExecutionMode:         ExecutionModeCurrent,
 		Agent:                 AgentClaude,

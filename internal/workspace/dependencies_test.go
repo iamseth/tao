@@ -50,7 +50,7 @@ func TestPrepareDependenciesSkipsWhenAutoAndNoLockfile(t *testing.T) {
 	if called {
 		t.Fatal("runner should not be called")
 	}
-	if metadata.Status != "skipped" || metadata.FailureReason == "" {
+	if metadata.Status != "skipped" || metadata.FailureReason != "no supported lockfile found" {
 		t.Fatalf("unexpected metadata: %#v", metadata)
 	}
 }
@@ -68,25 +68,6 @@ func TestPrepareDependenciesRecordsFailure(t *testing.T) {
 	}
 	if metadata.Status != "failed" || metadata.Command != "npm ci" || metadata.FailureReason != "install failed" || metadata.CompletedAt == nil {
 		t.Fatalf("unexpected metadata: %#v", metadata)
-	}
-}
-
-func TestPrepareDependenciesSupportsExplicitCommand(t *testing.T) {
-	config := DefaultConfig()
-	config.DependencyInstallBehavior = DependencyInstallCommand
-	config.DependencyInstallCommand = "make deps"
-	var gotName string
-	var gotArgs []string
-	_, err := PrepareDependencies(context.Background(), t.TempDir(), config, func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
-		gotName = name
-		gotArgs = append([]string(nil), args...)
-		return nil
-	}, fixedDependencyClock())
-	if err != nil {
-		t.Fatalf("PrepareDependencies failed: %v", err)
-	}
-	if gotName != "make" || !reflect.DeepEqual(gotArgs, []string{"deps"}) {
-		t.Fatalf("unexpected command: %s %v", gotName, gotArgs)
 	}
 }
 

@@ -112,7 +112,7 @@ func (controller ExecutionBoundaryController) InspectSelected(ctx context.Contex
 	live.PorcelainStatus = status
 	live.ActiveGitOperation = active
 	if durable.RestartBlocked && slice.ExecutionStart != nil {
-		baselineBranch, baselineErr := resolvePreparationBaseBranch(ctx, detail, execution.Config, execution.Dependencies.CommandRunner)
+		baselineBranch, baselineErr := resolvePreparationBaseBranch(ctx, detail, execution.Dependencies.CommandRunner)
 		if baselineErr != nil {
 			return nil, fmt.Errorf("inspect blocked restart baseline: %w", baselineErr)
 		}

@@ -458,7 +458,7 @@ func TestRecoveryFinalVerificationDoesNotScheduleRepair(t *testing.T) {
 
 			gateErr := errors.New("repository tests failed")
 			gateCalls, handoffs, reviews, pullRequests := 0, 0, 0, 0
-			options := ResolvedRunOptions{Mode: ModeRun, CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeIsolated, Agent: AgentPi, ReviewEnabled: true, PullRequest: true}
+			options := ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeIsolated, Agent: AgentPi, ReviewEnabled: true, PullRequest: true}
 			service := NewService(repo, io.Discard, Options{
 				ExecutionConfig: ExecutionConfig{ResolvedRunOptions: options},
 				RunDependencies: RunDependencies{

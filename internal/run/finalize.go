@@ -88,7 +88,7 @@ func (f Finalizer) FinalizeIfComplete(ctx context.Context, runCount int, detail 
 
 func (f Finalizer) pullRequestRecoveryEnabled(detail *plan.PlanDetail) bool {
 	config := f.execution.Config
-	if !config.PullRequest || (config.Mode != "" && config.Mode != ModeRun) || config.CommitPolicy != CommitPolicySlice || (config.ExecutionMode != "" && config.ExecutionMode != ExecutionModeIsolated) {
+	if !config.PullRequest || config.CommitPolicy != CommitPolicySlice || (config.ExecutionMode != "" && config.ExecutionMode != ExecutionModeIsolated) {
 		return false
 	}
 	return detail != nil && !plan.PlanIsMerged(detail.Events)

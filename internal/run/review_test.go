@@ -925,7 +925,7 @@ func TestServiceReviewReportsStandalonePhasesInOrderAndStopsOnFailure(t *testing
 			t.Fatal(err)
 		}
 
-		options := ResolvedRunOptions{Mode: ModeRun, CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi}
+		options := ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi}
 		service := NewService(plan.NewFileRepository(plansRoot), out, Options{
 			ExecutionConfig: ExecutionConfig{ResolvedRunOptions: options},
 			RunDependencies: RunDependencies{CommandRunner: runner, reviewGitFactory: fixedReviewGit(git), ReviewCreator: creator},
@@ -1743,7 +1743,7 @@ func TestResumeReviewHonorsExistingPlanOwnershipAndPreservesBestEffortReviewFail
 
 	var warnings bytes.Buffer
 	repo := plan.NewFileRepository(plansRoot)
-	options := ResolvedRunOptions{Mode: ModeRun, CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi, ReviewEnabled: true}
+	options := ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi, ReviewEnabled: true}
 	service := NewService(repo, &warnings, Options{
 		ExecutionConfig: ExecutionConfig{ResolvedRunOptions: options},
 		RunDependencies: RunDependencies{

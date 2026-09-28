@@ -2,7 +2,6 @@ package workspace
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -103,7 +102,6 @@ func TestExecutionPreparerCreatesTypedPlanBranch(t *testing.T) {
 	detail.State.Plan.ID = "20260812-183359-native-pr-format"
 	detail.State.Plan.ChangeType = plan.ChangeTypeFeat
 	config := DefaultConfig()
-	config.DependencyInstallBehavior = DependencyInstallNever
 
 	root, err := (ExecutionPreparer{Config: config, PlanRecordFactory: memoryWorkspacePlanRecordFactory}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
 	if err != nil {
@@ -127,7 +125,6 @@ func TestExecutionPreparerRecoversTypedWorktreeAfterMetadataPersistenceFailure(t
 		return detail
 	}
 	config := DefaultConfig()
-	config.DependencyInstallBehavior = DependencyInstallNever
 	persistErr := errors.New("injected workspace metadata persistence failure")
 	failing := ExecutionPreparer{
 		Config: config,
@@ -167,7 +164,6 @@ func TestExecutionPreparerPreservesRecordedPlanBranch(t *testing.T) {
 	detail.State.Workspace = &plan.Workspace{Strategy: plan.WorkspaceStrategyWorktree, Branch: "tao/original-plan-branch"}
 	runGit(t, repo.path, "branch", "tao/original-plan-branch", "master")
 	config := DefaultConfig()
-	config.DependencyInstallBehavior = DependencyInstallNever
 
 	_, err := (ExecutionPreparer{Config: config, PlanRecordFactory: memoryWorkspacePlanRecordFactory}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
 	if err != nil {
@@ -186,7 +182,6 @@ func TestExecutionPreparerRejectsTypedBranchCollision(t *testing.T) {
 	detail.State.Plan.ChangeType = plan.ChangeTypeFeat
 	runGit(t, repo.path, "branch", "feature/native-pr-format", "master")
 	config := DefaultConfig()
-	config.DependencyInstallBehavior = DependencyInstallNever
 
 	_, err := (ExecutionPreparer{Config: config, PlanRecordFactory: memoryWorkspacePlanRecordFactory}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
 	if err == nil || !strings.Contains(err.Error(), "without durable ownership") {
@@ -1282,37 +1277,23 @@ func TestExecutionPreparerRecordsSuccessfulDependencyFingerprint(t *testing.T) {
 	}
 }
 
-func TestExecutionPreparerNeverInstallClearsPriorDependencyFingerprint(t *testing.T) {
-	config := DefaultConfig()
-	config.DependencyInstallBehavior = DependencyInstallNever
-	preparer, detail, _, installCalls := dependencyPreparerFixture(t, config, nil)
-	detail.State.Workspace.DependencyFingerprint = "stale-fingerprint"
+func TestExecutionPreparerRemovedLockfileClearsPriorDependencyFingerprint(t *testing.T) {
+	preparer, detail, workspacePath, installCalls := dependencyPreparerFixture(t, DefaultConfig(), nil)
+	if err := os.Remove(filepath.Join(workspacePath, "package-lock.json")); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, err := preparer.Prepare(context.Background(), detail, ExecutionPrepareOptions{}); err != nil {
 		t.Fatalf("prepare reused workspace: %v", err)
 	}
-	if *installCalls != 0 {
-		t.Fatalf("never behavior attempted dependency installation %d times", *installCalls)
+	if *installCalls != 1 {
+		t.Fatalf("expected no install after lockfile removal, got %d calls", *installCalls)
+	}
+	if detail.State.Workspace.DependencyPreparation != "skipped" || detail.State.Workspace.DependencyFailure != "no supported lockfile found" {
+		t.Fatalf("unexpected missing-lockfile metadata: %#v", detail.State.Workspace)
 	}
 	if detail.State.Workspace.DependencyFingerprint != "" {
 		t.Fatalf("dependency fingerprint = %q, want cleared", detail.State.Workspace.DependencyFingerprint)
-	}
-}
-
-func TestExecutionPreparerAlwaysInstallsWithMatchingFingerprint(t *testing.T) {
-	config := DefaultConfig()
-	config.DependencyInstallBehavior = DependencyInstallAlways
-	preparer, detail, _, installCalls := dependencyPreparerFixture(t, config, nil)
-	fingerprint := detail.State.Workspace.DependencyFingerprint
-
-	if _, err := preparer.Prepare(context.Background(), detail, ExecutionPrepareOptions{}); err != nil {
-		t.Fatalf("prepare reused workspace: %v", err)
-	}
-	if *installCalls != 2 {
-		t.Fatalf("expected always behavior to install twice, got %d calls", *installCalls)
-	}
-	if detail.State.Workspace.DependencyFingerprint != fingerprint {
-		t.Fatalf("fingerprint changed for unchanged lockfile: got %q want %q", detail.State.Workspace.DependencyFingerprint, fingerprint)
 	}
 }
 
@@ -1350,138 +1331,6 @@ func dependencyPreparerRunner(install func(io.Writer) error, installCalls *int) 
 			return install(stderr)
 		}
 		return nil
-	}
-}
-
-// TestExecutionPreparerClearsDependencyFailureOnRetrySuccess verifies that a
-// successful retry declares both writer-owned dependency clears while the
-// merge-preserving state write retains unknown workspace metadata.
-func TestExecutionPreparerClearsDependencyFailureOnRetrySuccess(t *testing.T) {
-	planDir := t.TempDir()
-	repoRoot := t.TempDir()
-	workspaceRoot := t.TempDir()
-	workspacePath := filepath.Join(workspaceRoot, "plan-a")
-
-	// A custom command runs without a supported lockfile, making successful
-	// install fingerprint evidence explicitly unknown.
-	if err := os.MkdirAll(workspacePath, 0o755); err != nil { //nolint:gosec // G301: test workspace dir
-		t.Fatal(err)
-	}
-
-	// Write an initial state.json so the real PlanRecord mutator can deep-merge into it.
-	detail := executionPreparerPlanDetail(repoRoot)
-	detail.Dir = planDir
-	detail.State.Workspace = &plan.Workspace{Strategy: plan.WorkspaceStrategyWorktree, Root: workspaceRoot}
-	record, err := plan.NewPlanRecord(planDir, detail)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := record.PersistState(); err != nil {
-		t.Fatal(err)
-	}
-
-	// Build a dependency runner that fails the first call and succeeds the second.
-	npmCallCount := 0
-	runner := func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
-		npmCallCount++
-		if npmCallCount == 1 {
-			_, _ = io.WriteString(stderr, "npm install: network error")
-			return errors.New("exit status 1")
-		}
-		return nil
-	}
-
-	// Use the real PlanRecord mutator so persistence is exercised.
-	realRecordFactory := func(detail *plan.PlanDetail) (PlanRecord, error) {
-		return plan.NewPlanRecord(planDir, detail)
-	}
-
-	config := DefaultConfig()
-	config.DependencyInstallBehavior = DependencyInstallCommand
-	config.DependencyInstallCommand = "custom install"
-	prepareCalls := 0
-	managerFactory := func(Options) (executionWorkspaceManager, error) {
-		return executionWorkspaceManagerFunc(func(context.Context, PrepareOptions) (Metadata, error) {
-			prepareCalls++
-			return Metadata{
-				Path: workspacePath, Branch: "tao/plan-a", BaseBranch: "feature", BaseSHA: "base123",
-				BaseCurrentSHA: "base123", HeadSHA: "head123", Created: prepareCalls == 1, Reused: prepareCalls > 1,
-			}, nil
-		}), nil
-	}
-	preparer := ExecutionPreparer{Runner: runner, PlanRecordFactory: realRecordFactory, Config: config, managerFactory: managerFactory}
-
-	// First prepare: fails due to dependency error.
-	_, err = preparer.Prepare(context.Background(), detail, ExecutionPrepareOptions{})
-	if err == nil {
-		t.Fatal("expected first prepare to fail due to dependency error")
-	}
-
-	// Confirm the failure is persisted in state.json.
-	state1, err := plan.ReadState(planDir)
-	if err != nil {
-		t.Fatalf("ReadState after failed prepare: %v", err)
-	}
-	if state1.Workspace == nil || state1.Workspace.DependencyFailure == "" {
-		t.Fatalf("expected DependencyFailure set in state.json after failed prepare, got workspace=%#v", state1.Workspace)
-	}
-
-	// Seed prior fingerprint evidence and an unknown sibling in the persisted
-	// workspace object before retrying.
-	statePath := filepath.Join(planDir, "state.json")
-	payload, err := os.ReadFile(statePath) //nolint:gosec // Test path is rooted in t.TempDir.
-	if err != nil {
-		t.Fatal(err)
-	}
-	var raw map[string]any
-	if err := json.Unmarshal(payload, &raw); err != nil {
-		t.Fatal(err)
-	}
-	workspaceObject := raw["workspace"].(map[string]any)
-	workspaceObject["dependency_fingerprint"] = "stale-fingerprint"
-	workspaceObject["unknown_workspace"] = "keep"
-	payload, err = json.Marshal(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(statePath, payload, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	detail.State.Workspace.DependencyFingerprint = "stale-fingerprint"
-
-	// Second prepare: retry succeeds (custom command call count == 2 now).
-	_, err = preparer.Prepare(context.Background(), detail, ExecutionPrepareOptions{})
-	if err != nil {
-		t.Fatalf("expected second prepare to succeed: %v", err)
-	}
-
-	// Confirm the failure is cleared in state.json.
-	state2, err := plan.ReadState(planDir)
-	if err != nil {
-		t.Fatalf("ReadState after successful prepare: %v", err)
-	}
-	if state2.Workspace == nil {
-		t.Fatal("expected State.Workspace non-nil after successful prepare")
-	}
-	if state2.Workspace.DependencyFailure != "" {
-		t.Errorf("expected DependencyFailure cleared in state.json after retry success, got %q", state2.Workspace.DependencyFailure)
-	}
-	if state2.Workspace.DependencyFingerprint != "" {
-		t.Errorf("expected DependencyFingerprint cleared when evidence is unknown, got %q", state2.Workspace.DependencyFingerprint)
-	}
-	payload, err = os.ReadFile(statePath) //nolint:gosec // Test path is rooted in t.TempDir.
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(payload, &raw); err != nil {
-		t.Fatal(err)
-	}
-	workspaceObject = raw["workspace"].(map[string]any)
-	if workspaceObject["dependency_preparation_failure"] != "" || workspaceObject["dependency_fingerprint"] != "" {
-		t.Fatalf("expected explicit dependency clears in state.json, got %#v", workspaceObject)
-	}
-	if workspaceObject["unknown_workspace"] != "keep" {
-		t.Fatalf("unknown workspace sibling was not preserved: %#v", workspaceObject)
 	}
 }
 

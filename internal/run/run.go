@@ -10,7 +10,6 @@ import (
 	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/plan"
-	"github.com/iamseth/tao/internal/workspace"
 )
 
 type CommandRunner = commandrunner.Runner
@@ -138,7 +137,6 @@ type Options struct {
 // runtimeconfig.
 type ExecutionConfig struct {
 	ResolvedRunOptions
-	WorkspaceConfig    workspace.Config
 	SkipPermissions    bool
 	MaxReworkAttempts  int
 	RestartBlocked     bool

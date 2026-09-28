@@ -20,8 +20,6 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 )
 
-type Mode string
-
 type CommitPolicy string
 
 // ExecutionMode is the single user-facing run knob that drives both workspace
@@ -110,7 +108,6 @@ type SliceBudgetCaps struct {
 // model fields mean unset. Pointer fields mean the caller supplied the value,
 // including explicit false or zero.
 type RunOptionsPatch struct {
-	Mode                  Mode           `json:"mode,omitempty"`
 	MaxSlices             *int           `json:"max_slices,omitempty"`
 	Continue              *bool          `json:"continue,omitempty"`
 	CommitPolicy          CommitPolicy   `json:"commit_policy,omitempty"`
@@ -131,7 +128,6 @@ type RunOptionsPatch struct {
 // overrides have been merged. ExecutionMode is the single knob the run and
 // workspace layers read; they derive physical worktree/current placement from it.
 type ResolvedRunOptions struct {
-	Mode           Mode
 	MaxSlices      int
 	Continue       bool
 	CommitPolicy   CommitPolicy
@@ -153,9 +149,6 @@ const (
 	// DefaultAggregateReviewConvergenceWindow is the number of consecutive
 	// changes-requested rounds used to detect aggregate review non-convergence.
 	DefaultAggregateReviewConvergenceWindow = 2
-
-	ModeRun  Mode = "run"
-	ModeStep Mode = "step"
 
 	CommitPolicyPlan  CommitPolicy = "plan"
 	CommitPolicySlice CommitPolicy = "slice"
@@ -190,29 +183,6 @@ func SupportedAgentKindsText() string {
 	default:
 		return strings.Join(names[:len(names)-1], ", ") + ", or " + names[len(names)-1]
 	}
-}
-
-func ParseMode(value string) (Mode, error) {
-	if value == "" {
-		return ModeRun, nil
-	}
-	switch Mode(value) {
-	case ModeRun, ModeStep:
-		return Mode(value), nil
-	default:
-		return "", fmt.Errorf("unsupported run mode %q", value)
-	}
-}
-
-func (m Mode) String() string {
-	return string(m)
-}
-
-func (m Mode) MaxSlices() int {
-	if m == ModeStep {
-		return 1
-	}
-	return 0
 }
 
 func ParseCommitPolicy(value string) (CommitPolicy, error) {
@@ -269,7 +239,7 @@ func (a AgentKind) String() string {
 // worktree behavior.
 func DefaultRunOptionsPatch() RunOptionsPatch {
 	sessionTimeout := DefaultSessionTimeout
-	return RunOptionsPatch{Mode: ModeRun, CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeIsolated, Agent: AgentPi, SessionTimeout: &sessionTimeout}
+	return RunOptionsPatch{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeIsolated, Agent: AgentPi, SessionTimeout: &sessionTimeout}
 }
 
 func (d RunOptionsPatch) ExecutionModeValue() ExecutionMode {
@@ -447,7 +417,6 @@ func (o ResolvedRunOptions) RunOptionsPatch() RunOptionsPatch {
 	reviewEnabled := o.ReviewEnabled
 	sessionTimeout := o.SessionTimeout
 	return RunOptionsPatch{
-		Mode:                  o.Mode,
 		MaxSlices:             &maxSlices,
 		Continue:              &continueRun,
 		CommitPolicy:          o.CommitPolicy,
@@ -495,23 +464,14 @@ func resolveRunOptionsStages(stages ...RunOptionsPatch) (ResolvedRunOptions, err
 }
 
 func mergeRunOptions(options ResolvedRunOptions, patch RunOptionsPatch) (ResolvedRunOptions, error) {
-	if options.Mode == "" {
+	if options.CommitPolicy == "" {
 		options = ResolvedRunOptions{
-			Mode:           ModeRun,
 			CommitPolicy:   CommitPolicySlice,
 			ExecutionMode:  ExecutionModeIsolated,
 			Agent:          AgentPi,
 			ReviewEnabled:  true,
 			SessionTimeout: DefaultSessionTimeout,
 		}
-	}
-	if patch.Mode != "" {
-		mode, err := ParseMode(patch.Mode.String())
-		if err != nil {
-			return ResolvedRunOptions{}, err
-		}
-		options.Mode = mode
-		options.MaxSlices = mode.MaxSlices()
 	}
 	if patch.MaxSlices != nil {
 		options.MaxSlices = *patch.MaxSlices
@@ -576,9 +536,6 @@ func mergeRunOptions(options ResolvedRunOptions, patch RunOptionsPatch) (Resolve
 func validateResolvedRunOptions(options ResolvedRunOptions) error {
 	if options.MaxSlices < 0 {
 		return fmt.Errorf("--max-slices must be 0 or greater")
-	}
-	if options.PullRequest && options.Mode != ModeRun {
-		return fmt.Errorf("--pull-request requires full run mode")
 	}
 	if options.PullRequest && options.CommitPolicy == CommitPolicyNone {
 		return fmt.Errorf("--pull-request requires commit policy slice")

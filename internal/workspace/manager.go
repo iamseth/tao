@@ -316,7 +316,7 @@ func (m *Manager) Prepare(ctx context.Context, options PrepareOptions) (Metadata
 	}
 	branch := options.Branch
 	if branch == "" {
-		branch = strings.ReplaceAll(m.config.BranchNameTemplate, "{plan_id}", planID)
+		branch = strings.ReplaceAll(planBranchTemplate, "{plan_id}", planID)
 	}
 	baseBranch, err := m.ResolveBaseBranch(ctx, options)
 	if err != nil {
@@ -397,10 +397,10 @@ func (m *Manager) Prepare(ctx context.Context, options PrepareOptions) (Metadata
 	return metadata, nil
 }
 
-// ResolveBaseBranch applies the same automatic-versus-manual branch policy
-// used by Prepare without mutating a workspace.
+// ResolveBaseBranch applies the same automatic branch detection used by Prepare
+// without mutating a workspace.
 func (m *Manager) ResolveBaseBranch(ctx context.Context, options PrepareOptions) (string, error) {
-	if options.PreferDefaultBranch && m.config.BaseBranchDetection != BaseBranchDetectManual {
+	if options.PreferDefaultBranch {
 		if branch, err := m.git.branches.DefaultBranch(ctx); err == nil && branch != "" {
 			if exists, err := m.git.branches.LocalBranchExists(ctx, branch); err == nil && exists {
 				return branch, nil
@@ -512,7 +512,7 @@ func (m *Manager) Status(ctx context.Context, planID string, expectedBranch ...s
 	if err != nil {
 		return Metadata{}, err
 	}
-	branch := strings.ReplaceAll(m.config.BranchNameTemplate, "{plan_id}", planID)
+	branch := strings.ReplaceAll(planBranchTemplate, "{plan_id}", planID)
 	if len(expectedBranch) > 0 && strings.TrimSpace(expectedBranch[0]) != "" {
 		branch = strings.TrimSpace(expectedBranch[0])
 	}

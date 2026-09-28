@@ -32,11 +32,6 @@ func automaticReworkPhaseHook(maxAttempts int, enabled bool) reworkpkg.DecisionC
 	}
 }
 
-const (
-	envAutoRework        = runtimeconfig.EnvAutoRework
-	envMaxReworkAttempts = runtimeconfig.EnvMaxReworkAttempts
-)
-
 func runReworkEnvDefaults() (bool, int, error) {
 	return runtimeconfig.ParseAutoReworkEnv(
 		true,

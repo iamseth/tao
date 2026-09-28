@@ -219,7 +219,6 @@ func (f *lifecycleGitFixture) prepare(t *testing.T, factory workspace.PlanRecord
 		}
 	}
 	config := workspace.DefaultConfig()
-	config.DependencyInstallBehavior = workspace.DependencyInstallNever
 	root, err := (workspace.ExecutionPreparer{PlanRecordFactory: factory, Config: config, Now: func() time.Time { return f.now }}).Prepare(context.Background(), f.reload(t), workspace.ExecutionPrepareOptions{ExecutionMode: "isolated"})
 	if root != "" {
 		f.worktree = root

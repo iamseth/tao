@@ -169,7 +169,7 @@ func resolvePrerequisiteBaseline(ctx context.Context, detail *plan.PlanDetail, c
 	if config.ExecutionMode == ExecutionModeCurrent {
 		return resolvePrerequisiteRevision(ctx, detail, runner, "HEAD")
 	}
-	branch, err := resolvePreparationBaseBranch(ctx, detail, config, runner)
+	branch, err := resolvePreparationBaseBranch(ctx, detail, runner)
 	if err != nil {
 		return "", err
 	}
@@ -179,7 +179,7 @@ func resolvePrerequisiteBaseline(ctx context.Context, detail *plan.PlanDetail, c
 // resolvePreparationBaseBranch delegates to the workspace manager so
 // prerequisite gates and blocked-restart authority select the same branch that
 // workspace preparation will use.
-func resolvePreparationBaseBranch(ctx context.Context, detail *plan.PlanDetail, config ExecutionConfig, runner CommandRunner) (string, error) {
+func resolvePreparationBaseBranch(ctx context.Context, detail *plan.PlanDetail, runner CommandRunner) (string, error) {
 	if detail == nil {
 		return "", fmt.Errorf("resolve prerequisite baseline branch: plan detail is nil")
 	}
@@ -187,7 +187,7 @@ func resolvePreparationBaseBranch(ctx context.Context, detail *plan.PlanDetail, 
 	if detail.State.Workspace != nil && strings.TrimSpace(detail.State.Workspace.BaseBranch) != "" {
 		recorded = strings.TrimSpace(detail.State.Workspace.BaseBranch)
 	}
-	manager, err := workspace.NewManager(workspace.Options{RepoRoot: detail.State.Repo.Root, Config: config.WorkspaceConfig, Runner: runner})
+	manager, err := workspace.NewManager(workspace.Options{RepoRoot: detail.State.Repo.Root, Config: workspace.DefaultConfig(), Runner: runner})
 	if err != nil {
 		return "", fmt.Errorf("resolve prerequisite baseline branch: %w", err)
 	}

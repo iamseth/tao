@@ -189,7 +189,7 @@ func TestDebugPreviewShowsOnlyRepositoryRuntimeAnomalies(t *testing.T) {
 	}
 	for _, want := range []string{
 		"RUNTIME ANOMALIES", "TAO_PULL_REQUEST", "true", "false", "repository",
-		"TAO_UPDATE", "warning: fixture warning", "TAO_REPOSITORY_ONLY", "(missing)",
+		"TAO_UPDATE", "warning: fixture warning", "TAO_RESOLVER_MODEL", "enabled",
 		"3 active of 3 registered",
 	} {
 		if !strings.Contains(frame, want) {

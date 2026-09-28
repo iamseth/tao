@@ -469,7 +469,7 @@ func reviewExecutionRoot(detail *plan.PlanDetail) (string, error) {
 	if detail == nil {
 		return "", fmt.Errorf("plan detail is nil")
 	}
-	identity, err := workspace.ResolveExecutionRoot(detail, reviewWorkspaceConfig(detail))
+	identity, err := workspace.ResolveExecutionRoot(detail, workspaceConfigForReview(detail))
 	if err == nil {
 		return absoluteReviewPath(identity.Root)
 	}
@@ -480,7 +480,7 @@ func reviewExecutionRoot(detail *plan.PlanDetail) (string, error) {
 	return absoluteReviewPath(repoRoot)
 }
 
-func reviewWorkspaceConfig(detail *plan.PlanDetail) workspace.Config {
+func workspaceConfigForReview(detail *plan.PlanDetail) workspace.Config {
 	config := workspaceConfigForExecutionMode(ExecutionModeCurrent)
 	if detail != nil && detail.State.Workspace != nil && strings.TrimSpace(detail.State.Workspace.Strategy) == "" && strings.TrimSpace(detail.State.Workspace.Path) != "" {
 		config.Strategy = plan.WorkspaceStrategyWorktree

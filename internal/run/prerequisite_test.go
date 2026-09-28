@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/iamseth/tao/internal/plan"
-	"github.com/iamseth/tao/internal/workspace"
 )
 
 type prerequisiteResolverFake struct {
@@ -115,7 +114,7 @@ func TestCheckRuntimePrerequisitesDetectsCyclesAndSatisfiedAncestry(t *testing.T
 	}
 }
 
-func TestResolvePrerequisiteBaselineMatchesAutomaticAndManualPreparation(t *testing.T) {
+func TestResolvePrerequisiteBaselineMatchesAutomaticPreparation(t *testing.T) {
 	repoRoot := t.TempDir()
 	runRebaseRecoveryGit(t, repoRoot, "init", "-b", "main")
 	runRebaseRecoveryGit(t, repoRoot, "config", "user.email", "tao@example.com")
@@ -124,7 +123,6 @@ func TestResolvePrerequisiteBaselineMatchesAutomaticAndManualPreparation(t *test
 	runRebaseRecoveryGit(t, repoRoot, "branch", "release")
 	runRebaseRecoveryGit(t, repoRoot, "commit", "--allow-empty", "-m", "prerequisite integrated")
 	mainHead := rebaseRecoveryGitOutput(t, repoRoot, "rev-parse", "main")
-	releaseHead := rebaseRecoveryGitOutput(t, repoRoot, "rev-parse", "release")
 
 	dependent := prerequisiteDetail("dependent", "required")
 	dependent.State.Repo = plan.Repo{Root: repoRoot, Branch: "release"}
@@ -139,18 +137,6 @@ func TestResolvePrerequisiteBaselineMatchesAutomaticAndManualPreparation(t *test
 	results, err := checkRuntimePrerequisites(context.Background(), resolver, dependent, baseline, nil)
 	if err != nil || len(results) != 1 || results[0].Status != PrerequisiteSatisfied {
 		t.Fatalf("automatic prerequisite result = %#v, err = %v, want satisfied against main", results, err)
-	}
-
-	manualConfig := workspace.DefaultConfig()
-	manualConfig.BaseBranchDetection = workspace.BaseBranchDetectManual
-	manual := ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated}, WorkspaceConfig: manualConfig}
-	baseline, err = resolvePrerequisiteBaseline(context.Background(), dependent, manual, nil, false)
-	if err != nil || baseline != releaseHead {
-		t.Fatalf("manual baseline = %q, err = %v, want recorded release head %q", baseline, err, releaseHead)
-	}
-	results, err = checkRuntimePrerequisites(context.Background(), resolver, dependent, baseline, nil)
-	if err == nil || len(results) != 1 || results[0].Status != PrerequisiteNonAncestor {
-		t.Fatalf("manual prerequisite result = %#v, err = %v, want non-ancestor against release", results, err)
 	}
 }
 

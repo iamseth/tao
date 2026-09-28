@@ -560,14 +560,4 @@ func TestManagedBranchPrefix(t *testing.T) {
 	if got := manager.ManagedBranchPrefix(); got != "tao/" {
 		t.Fatalf("expected default prefix tao/, got %q", got)
 	}
-
-	config := DefaultConfig()
-	config.BranchNameTemplate = "{plan_id}"
-	bare, err := NewManager(Options{RepoRoot: t.TempDir(), Config: config})
-	if err != nil {
-		t.Fatalf("NewManager failed: %v", err)
-	}
-	if _, err := bare.PlanManagedCleanup(context.Background()); err == nil {
-		t.Fatal("expected cleanup to refuse a template without a static prefix")
-	}
 }

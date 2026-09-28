@@ -146,9 +146,9 @@ type ManagedCleanup struct {
 // from the branch name template (the text before "{plan_id}"). It returns the whole
 // template when there is no placeholder, so callers can detect a missing prefix.
 func (m *Manager) ManagedBranchPrefix() string {
-	prefix, _, found := strings.Cut(m.config.BranchNameTemplate, "{plan_id}")
+	prefix, _, found := strings.Cut(planBranchTemplate, "{plan_id}")
 	if !found {
-		return m.config.BranchNameTemplate
+		return planBranchTemplate
 	}
 	return prefix
 }
@@ -278,7 +278,7 @@ func (m *Manager) PlanIntegrationCleanup(ctx context.Context, activeBatchID stri
 func (m *Manager) managedCleanupCandidates(ctx context.Context, ownedBranches []string) ([]string, error) {
 	prefix := m.ManagedBranchPrefix()
 	if strings.TrimSpace(prefix) == "" {
-		return nil, fmt.Errorf("branch name template %q has no static prefix; cannot scope cleanup safely", m.config.BranchNameTemplate)
+		return nil, fmt.Errorf("branch name template %q has no static prefix; cannot scope cleanup safely", planBranchTemplate)
 	}
 
 	branches, err := m.git.cleanup.ListBranches(ctx, prefix+"*")

@@ -6,10 +6,13 @@ import (
 	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
-func TestModeAliasesMatchRuntimeConfigTypes(t *testing.T) {
-	var mode = runtimeconfig.ModeStep
-	request := Request{Input: "plan-a", ResolvedRunOptions: runtimeconfig.ResolvedRunOptions{Mode: runtimeconfig.ModeRun, Agent: runtimeconfig.AgentPi}}
-	if mode != ModeStep || request.Agent != AgentPi || request.Mode != ModeRun {
-		t.Fatalf("unexpected alias values: mode=%q request=%#v", mode, request)
+func TestRunOptionAliasesMatchRuntimeConfigTypes(t *testing.T) {
+	request := Request{Input: "plan-a", ResolvedRunOptions: runtimeconfig.ResolvedRunOptions{
+		CommitPolicy:  runtimeconfig.CommitPolicySlice,
+		ExecutionMode: runtimeconfig.ExecutionModeIsolated,
+		Agent:         runtimeconfig.AgentPi,
+	}}
+	if request.CommitPolicy != CommitPolicySlice || request.ExecutionMode != ExecutionModeIsolated || request.Agent != AgentPi {
+		t.Fatalf("unexpected alias values: request=%#v", request)
 	}
 }
