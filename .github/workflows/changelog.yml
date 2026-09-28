@@ -136,13 +136,27 @@ jobs:
               )
             }' > request.json
 
+          curl_status=0
           curl --fail-with-body --silent --show-error \
             --retry 3 \
             --max-time 180 \
             --header "Authorization: Bearer $OPENAI_API_KEY" \
             --header "Content-Type: application/json" \
             --data @request.json \
-            https://api.openai.com/v1/responses > response.json
+            https://api.openai.com/v1/responses > response.json || curl_status=$?
+
+          if [ "$curl_status" -ne 0 ]; then
+            echo "OpenAI request failed (curl exit ${curl_status}); API error identifiers:" >&2
+            # Log only bounded identifiers, never the raw response or error message.
+            jq -c '
+              def safe_identifier:
+                if type == "string" then
+                  if test("^[A-Za-z0-9_-]{1,80}$") then . else "unknown" end
+                else "unknown" end;
+              {type: (.error.type | safe_identifier), code: (.error.code | safe_identifier)}
+            ' response.json >&2 2>/dev/null || echo "API error identifiers unavailable." >&2
+            exit "$curl_status"
+          fi
 
           jq -er '[
             .output[]?
