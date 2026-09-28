@@ -123,7 +123,28 @@ func (t *Terminal) EnterRaw() error {
 func (t *Terminal) Restore() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	return t.restoreLocked()
+}
 
+// PreserveBaseline retains the active EnterRaw baseline across Restore calls.
+// Invoke the returned function after a foreground child returns, before entering
+// raw mode again. If restoration fails, Restore can retry the retained baseline.
+func (t *Terminal) PreserveBaseline() func() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.original == nil {
+		return func() error { return nil }
+	}
+	baseline := *t.original
+	return func() error {
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		t.original = &baseline
+		return t.restoreLocked()
+	}
+}
+
+func (t *Terminal) restoreLocked() error {
 	if t.original == nil {
 		return nil
 	}

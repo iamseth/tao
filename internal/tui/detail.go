@@ -31,8 +31,8 @@ const (
 	detailOverviewScopePreview = 6
 	detailOverviewMaxQuestions = 12
 	noteDetailHeaderLines      = 8
-	noteDetailFooter           = "↑/↓ PgUp/PgDn  ^G edit  Esc back"
-	noteDetailFooterWide       = "↑/↓ PgUp/PgDn  ^G edit  c copy  d/D del  0-3 tier  Esc back"
+	noteDetailFooter           = "↑/↓ PgUp/PgDn p plan ^G edit Esc back"
+	noteDetailFooterWide       = "↑/↓ PgUp/PgDn  p plan  ^G edit  c copy  d/D del  0-3 tier  Esc back"
 )
 
 // detailTab identifies the independently navigable plan-detail views.

@@ -105,6 +105,56 @@ func TestTerminalEnterRawAndRestore(t *testing.T) {
 	}
 }
 
+func TestTerminalPreserveBaseline(t *testing.T) {
+	for _, failRestore := range []bool{false, true} {
+		t.Run(map[bool]string{false: "restore", true: "retry"}[failRestore], func(t *testing.T) {
+			original := syscall.Termios{Iflag: syscall.ICRNL, Lflag: syscall.ECHO | syscall.ICANON | syscall.ISIG}
+			current := original
+			var setErr error
+			terminal := &Terminal{operations: terminalOperations{
+				getAttributes: func(uintptr) (syscall.Termios, error) { return current, nil },
+				setAttributes: func(_ uintptr, attributes syscall.Termios) error {
+					if setErr != nil {
+						return setErr
+					}
+					current = attributes
+					return nil
+				},
+			}}
+			if err := terminal.EnterRaw(); err != nil {
+				t.Fatal(err)
+			}
+			restore := terminal.PreserveBaseline()
+			if err := terminal.Restore(); err != nil {
+				t.Fatal(err)
+			}
+			current = syscall.Termios{} // The child left unrelated terminal attributes.
+			if failRestore {
+				setErr = errors.New("restore failed")
+			}
+			if err := restore(); !errors.Is(err, setErr) {
+				t.Fatalf("restore error=%v, want %v", err, setErr)
+			}
+			setErr = nil
+			if err := terminal.Restore(); err != nil {
+				t.Fatal(err)
+			}
+			if current != original {
+				t.Fatalf("restored=%+v, want %+v", current, original)
+			}
+			if err := terminal.EnterRaw(); err != nil {
+				t.Fatal(err)
+			}
+			if current == original {
+				t.Fatal("dashboard did not re-enter raw mode")
+			}
+			if err := terminal.Restore(); err != nil || current != original {
+				t.Fatalf("shutdown restore=%+v err=%v", current, err)
+			}
+		})
+	}
+}
+
 func TestTerminalSize(t *testing.T) {
 	t.Parallel()
 

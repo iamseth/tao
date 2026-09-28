@@ -34,7 +34,7 @@ func TestRenderNoteDetailShowsFullSanitizedMultilineText(t *testing.T) {
 		Text:           "first line\n第二行\x1b]52;c;payload\a\nthird\tline",
 	}, 80, 30)
 	body := strings.TrimPrefix(frame, clearScreenSequence)
-	for _, want := range []string{"NOTE DETAIL", "Repository: répo", "Note: note-完整", "Status: open", "Tags: one, two", created.Format(time.RFC3339), updated.Format(time.RFC3339), "  first line", "  第二行", "  third line", "PgUp/PgDn", "c copy", "d/D del", "0-3 tier", "Esc back"} {
+	for _, want := range []string{"NOTE DETAIL", "Repository: répo", "Note: note-完整", "Status: open", "Tags: one, two", created.Format(time.RFC3339), updated.Format(time.RFC3339), "  first line", "  第二行", "  third line", "PgUp/PgDn", "p plan", "c copy", "d/D del", "0-3 tier", "Esc back"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("note detail missing %q:\n%s", want, frame)
 		}

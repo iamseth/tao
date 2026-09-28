@@ -111,7 +111,7 @@ func mixedScenario() Scenario {
 		Notes: []note.CatalogNote{
 			{RepositoryID: "alpha", RepositoryName: "alpha", RepositoryRoot: "/preview/alpha", ID: "note-api", Text: "Consider a smaller public API before release.\nKeep the first version read-only.", Tags: []string{"api", "follow-up"}, CreatedAt: created, UpdatedAt: now.Add(-35 * time.Minute)},
 			{RepositoryID: "beta", RepositoryName: "βeta", RepositoryRoot: "/preview/beta", ID: "note-unicode", Text: "Verify resize behavior with 日本語, emoji 🧭, and combining é characters.", Tags: []string{"tui", "unicode"}, CreatedAt: created.Add(time.Hour), UpdatedAt: now.Add(-2 * time.Hour)},
-			{RepositoryID: "alpha", RepositoryName: "alpha", RepositoryRoot: "/preview/alpha", ID: "note-empty-tags", Text: "A short untagged note.", CreatedAt: created.Add(2 * time.Hour), UpdatedAt: now.Add(-26 * time.Hour)},
+			{RepositoryID: "alpha", RepositoryName: "alpha", RepositoryRoot: "/preview/alpha", ID: "note-empty-tags", Text: "Press p to plan in a foreground agent; c copies the note ID. Preview planning is unavailable.", CreatedAt: created.Add(2 * time.Hour), UpdatedAt: now.Add(-26 * time.Hour)},
 		},
 		Warnings: []note.CatalogWarning{{Kind: note.CatalogWarningRecord, RepositoryID: "damaged", RepositoryName: "damaged-repo", Path: "fixture://mixed/broken-note", Err: errors.New("invalid fixture note record")}},
 	}

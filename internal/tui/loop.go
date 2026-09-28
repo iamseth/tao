@@ -24,6 +24,9 @@ import (
 type Terminal interface {
 	EnterRaw() error
 	Restore() error
+	// PreserveBaseline retains the pre-raw attributes across a child handoff;
+	// a failed callback must leave Restore able to retry those attributes.
+	PreserveBaseline() func() error
 	Size() (term.Size, error)
 	ResizeEvents(context.Context) <-chan struct{}
 }
@@ -74,25 +77,26 @@ type SettingsService interface {
 // App owns one interactive dashboard event loop. Its boundaries are injectable
 // so terminal behavior can be tested without taking over a real terminal.
 type App struct {
-	Theme            theme.Theme
-	Input            io.Reader
-	Output           io.Writer
-	Terminal         Terminal
-	Ticker           Ticker
-	Collector        SnapshotCollector
-	Notes            NoteSnapshotCollector
-	NoteEditor       NoteEditor
-	NoteCreator      NoteCreator
-	NoteRepositories NoteRepositoryLister
-	NoteActions      NoteActions
-	Clipboard        Clipboard
-	Debug            DebugSnapshotCollector
-	Settings         SettingsService
-	FilterStore      FilterStore // Nil means in-memory only.
-	Actions          *Actions
-	Details          DetailRepository
-	Inspector        DetailInspector
-	Now              func() time.Time
+	Theme                theme.Theme
+	Input                io.Reader
+	Output               io.Writer
+	Terminal             Terminal
+	Ticker               Ticker
+	Collector            SnapshotCollector
+	Notes                NoteSnapshotCollector
+	NoteEditor           NoteEditor
+	NotePlanningLauncher NotePlanningLauncher
+	NoteCreator          NoteCreator
+	NoteRepositories     NoteRepositoryLister
+	NoteActions          NoteActions
+	Clipboard            Clipboard
+	Debug                DebugSnapshotCollector
+	Settings             SettingsService
+	FilterStore          FilterStore // Nil means in-memory only.
+	Actions              *Actions
+	Details              DetailRepository
+	Inspector            DetailInspector
+	Now                  func() time.Time
 }
 
 type inputResult struct {
@@ -236,6 +240,18 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 			} else if quit {
 				return nil
 			} else if handled {
+				if err := a.writeFrame(state); err != nil {
+					return err
+				}
+				close(result.resume)
+				continue
+			}
+			if handled, err := a.planSelectedNote(loopCtx, &state, result.key); err != nil {
+				return err
+			} else if handled {
+				if ctx.Err() != nil {
+					return nil
+				}
 				if err := a.writeFrame(state); err != nil {
 					return err
 				}

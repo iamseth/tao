@@ -44,6 +44,7 @@ type App struct {
 	UINoteCreator            tui.NoteCreator
 	UINoteRepositories       tui.NoteRepositoryLister
 	UINoteEditor             tui.NoteEditor
+	UINotePlanningLauncher   tui.NotePlanningLauncher
 	UINoteActions            tui.NoteActions
 	UIClipboard              tui.Clipboard
 	SelfUpdater              SelfUpdater

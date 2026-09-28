@@ -42,6 +42,7 @@ func shortcutsForPage(page PageID) []shortcut {
 		common = append(common,
 			shortcut{key: "n", action: "Create note (filter or repo picker)"},
 			shortcut{key: "Ctrl+G", action: "Edit selected note"},
+			shortcut{key: "p", action: "Plan note in foreground agent"},
 			shortcut{key: "c", action: "Copy selected note ID"},
 			shortcut{key: "0 / 1 / 2 / 3", action: "Set selected note tier"},
 			shortcut{key: "d / D", action: "Delete with / without confirmation"},

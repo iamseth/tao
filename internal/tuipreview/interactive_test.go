@@ -16,6 +16,7 @@ type previewTestTerminal struct{}
 
 func (previewTestTerminal) EnterRaw() error                              { return nil }
 func (previewTestTerminal) Restore() error                               { return nil }
+func (previewTestTerminal) PreserveBaseline() func() error               { return func() error { return nil } }
 func (previewTestTerminal) Size() (term.Size, error)                     { return term.Size{Width: 80, Height: 24}, nil }
 func (previewTestTerminal) ResizeEvents(context.Context) <-chan struct{} { return nil }
 
@@ -31,7 +32,7 @@ func TestNewInteractiveAppUsesOnlyFixtureBoundaries(t *testing.T) {
 	ticker := &previewTestTicker{updates: make(chan time.Time)}
 	app := NewInteractiveApp(scenario, strings.NewReader(""), io.Discard, previewTestTerminal{}, ticker)
 
-	if app.NoteCreator != nil || app.NoteRepositories != nil || app.NoteEditor != nil || app.NoteActions != nil {
+	if app.NoteCreator != nil || app.NoteRepositories != nil || app.NoteEditor != nil || app.NoteActions != nil || app.NotePlanningLauncher != nil {
 		t.Fatal("interactive fixture app has note mutation services")
 	}
 	if app.Actions != nil {
@@ -62,6 +63,23 @@ func TestInteractiveNoteCreationIsUnavailable(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "Note creation is unavailable.") {
 		t.Fatal("preview did not explain unavailable creation")
+	}
+}
+
+func TestInteractiveNotePlanningIsUnavailable(t *testing.T) {
+	scenario, _ := Lookup(ScenarioMixed)
+	for _, keys := range []string{"\x1b[Zpq", "\x1b[Z\rpq"} {
+		var output bytes.Buffer
+		app := NewInteractiveApp(scenario, strings.NewReader(keys), &output, previewTestTerminal{}, &previewTestTicker{})
+		if app.NotePlanningLauncher != nil {
+			t.Fatal("preview must never launch a process")
+		}
+		if err := app.Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(output.String(), "Note planning is unavailable.") {
+			t.Fatal("missing unavailable feedback")
+		}
 	}
 }
 

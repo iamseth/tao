@@ -39,6 +39,8 @@ func (t *fakeTerminal) EnterRaw() error {
 	return nil
 }
 
+func (*fakeTerminal) PreserveBaseline() func() error { return func() error { return nil } }
+
 func (t *fakeTerminal) Restore() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -1544,6 +1546,90 @@ func TestConfirmPromptHandlesYesNoAndEscape(t *testing.T) {
 				t.Fatalf("confirm resolution called=%t prompt=%#v", called, state.confirm)
 			}
 		})
+	}
+}
+
+func TestNotePlanningParksInputAndDiscoversSnapshotsOnExistingTick(t *testing.T) {
+	terminal := &fakeTerminal{size: term.Size{Width: 100, Height: 24}}
+	ticker := &fakeTicker{channel: make(chan time.Time, 1)}
+	notes := &fakeNoteCollector{snapshots: []note.Snapshot{
+		{Notes: []note.CatalogNote{{RepositoryID: "repo", ID: "selected", Text: "selected body"}, {RepositoryID: "repo", ID: "remaining", Text: "remaining body"}}},
+		{Notes: []note.CatalogNote{{RepositoryID: "repo", ID: "remaining", Text: "remaining body"}}},
+	}}
+	plans := &fakeCollector{snapshots: []monitor.Snapshot{{}, {Rows: []monitor.Row{{RepositoryID: "repo", PlanID: "new-plan", PlanTitle: "Discovered plan", Status: plan.StatusPlanned}}}}}
+	output := &recordingWriter{writes: make(chan string, 64)}
+	reader, writer := io.Pipe()
+	defer func() { _ = reader.Close(); _ = writer.Close() }()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	launched := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- (App{Input: reader, Output: output, Terminal: terminal, Ticker: ticker, Collector: plans, Notes: notes, NotePlanningLauncher: notePlanningFunc(func(context.Context, note.CatalogNote) error {
+			close(launched)
+			input := make([]byte, 5)
+			if _, err := io.ReadFull(reader, input); err != nil {
+				return err
+			}
+			if string(input) != "child" {
+				return fmt.Errorf("child input stolen: %q", input)
+			}
+			terminal.setSize(term.Size{Width: 45, Height: 14})
+			return nil
+		})}).Run(ctx)
+	}()
+	_ = waitForFrame(t, output.writes)
+	for _, key := range []string{"\x1b[Z", "\r"} {
+		if _, err := io.WriteString(writer, key); err != nil {
+			t.Fatal(err)
+		}
+		_ = waitForFrame(t, output.writes)
+	}
+	if _, err := io.WriteString(writer, "p"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-launched:
+	case <-ctx.Done():
+		t.Fatal("child not launched")
+	}
+	if _, err := io.WriteString(writer, "child"); err != nil {
+		t.Fatal(err)
+	}
+	returned := waitForFrame(t, output.writes)
+	if !strings.Contains(returned, "NOTE DETAIL") || strings.Contains(returned, "failed") || strings.Count(returned, "\n")+1 > 14 || notes.callCount() != 1 {
+		t.Fatalf("return frame=%q collects=%d", returned, notes.callCount())
+	}
+	ticker.channel <- time.Now()
+	refreshed := waitForFrame(t, output.writes)
+	if strings.Contains(refreshed, "NOTE DETAIL") || !strings.Contains(refreshed, "remaining body") || notes.callCount() != 2 {
+		t.Fatalf("stale detail not safely closed: %q", refreshed)
+	}
+	if _, err := io.WriteString(writer, "\r"); err != nil {
+		t.Fatal(err)
+	}
+	if frame := waitForFrame(t, output.writes); !strings.Contains(frame, "Note: remaining") {
+		t.Fatalf("unsafe selection: %q", frame)
+	}
+	for _, key := range []string{"\x7f", "\t"} {
+		if _, err := io.WriteString(writer, key); err != nil {
+			t.Fatal(err)
+		}
+		frame := waitForFrame(t, output.writes)
+		if key == "\t" && !strings.Contains(frame, "new-plan") {
+			t.Fatalf("plan not discovered: %q", frame)
+		}
+	}
+	if _, err := io.WriteString(writer, "q"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal("dashboard did not quit")
 	}
 }
 

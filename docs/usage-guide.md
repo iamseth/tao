@@ -254,8 +254,16 @@ body cancels without creating a note. Saving preserves filters and selects the
 new note if visible; feedback includes its ID even if hidden or refresh fails.
 On the Notes list or detail view,
 `Ctrl+G` opens the selected note in `$EDITOR` (or `nvim` when unset); edit the
-tag lines and body, then write and quit to persist the changes. Press `c` to
-copy the selected note ID to the system clipboard for a planning session. Keys
+tag lines and body, then write and quit to persist the changes. Press `p` to
+plan the selected note in a native foreground agent in the same terminal:
+`TAO_AGENT` selects Pi (the default) or Claude (`claude`). Interact normally,
+including native trust/authentication dialogs; Ctrl+C belongs to the agent
+while it runs. Exiting returns to the dashboard with its filters and selection
+preserved. Use the normal later `/tao-slice` workflow to create a plan; existing
+refreshes discover new plans and remove archived notes. Launching or exiting
+alone does not change the note. Unlike detached plan actions, this foreground
+child does not survive dashboard shutdown. Press `c` as the clipboard alternative
+to copy the selected note ID for a separate planning session. Keys
 `0` through `3` replace the selected note's tier tag. Lowercase `d` asks before deleting the
 note; uppercase `D` deletes it immediately. Deletion archives the note and
 removes it from the open Notes list. **Done** is always

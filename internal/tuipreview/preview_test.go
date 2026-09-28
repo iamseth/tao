@@ -19,6 +19,32 @@ import (
 	"github.com/iamseth/tao/internal/theme"
 )
 
+func TestNotePlanningPreviewHelpAndDetail(t *testing.T) {
+	scenario, _ := Lookup(ScenarioMixed)
+	if !strings.Contains(scenario.Notes.Notes[2].Text, "Press p to plan") {
+		t.Fatal("missing planning fixture")
+	}
+	for _, width := range []int{40, 120} {
+		for _, view := range []View{ViewNotes, ViewNoteDetail} {
+			help := view == ViewNotes
+			frame, err := Render(scenario, RenderOptions{View: view, Width: width, Height: 40, Plain: true, ShowShortcuts: help})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "p plan"
+			if help {
+				want = "Plan note in foreground agent"
+				if width == 40 {
+					want = "│ p                           │ Plan n"
+				}
+			}
+			if !strings.Contains(frame, want) {
+				t.Fatalf("width=%d view=%s missing %q:\n%s", width, view, want, frame)
+			}
+		}
+	}
+}
+
 func TestScenarioCatalogIsStableDiscoverableAndTyped(t *testing.T) {
 	catalog := Scenarios()
 	var names []string
