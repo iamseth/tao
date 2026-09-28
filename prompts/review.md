@@ -121,16 +121,16 @@ Then end with exactly one fenced `tao-review-json` block containing valid JSON w
   "verdict": "approve",
   "summary": "One or two sentences summarizing the review result.",
   "commit_message": {
-    "subject": "feat(scope): summarize the exact reviewed change",
+    "subject": "{{ if .ChangeType }}{{ .ChangeType }}{{ else }}feat{{ end }}(scope): summarize the exact reviewed change",
     "body": "What:\nDescribe what the exact scoped diff changes.\n\nWhy:\nExplain why the change is needed."
   },
   "findings": [
     {
-      "severity": "major",
+      "severity": "minor",
       "file": "path/to/file.go",
       "line": 123,
-      "message": "What is wrong and why it matters.",
-      "suggestion": "Concrete next step, or empty string if none."
+      "message": "Non-blocking improvement and its user benefit.",
+      "suggestion": "Clarify the helper name for readability."
     }
   ]
 }
@@ -140,9 +140,13 @@ Rules for the JSON block:
 
 - `verdict` must be exactly one of `approve`, `changes_requested`, or `comment`.
 - Every finding's `severity` must be exactly one of `blocker`, `major`, or `minor`.
-- Use `changes_requested` for correctness, regression, scope, or missing-test issues that should be fixed before considering the plan done. Under `changes_requested`, the `findings` array must contain only completion-blocking issues; put non-blocking risks in the prose review or under a `comment` verdict.
-- Use `comment` for non-blocking risks or observations.
-- Use `approve` only when there are no requested changes; use an empty `findings` array when there are no findings.
+- Grade severity by completion requirements and concrete user impact, not by how forcefully a suggestion is worded.
+- Use `changes_requested` when any `blocker` or `major` finding must be fixed before completion. This includes completion-blocking correctness, regression, scope, or missing-test issues.
+- Under `changes_requested`, the `findings` array must contain only completion-blocking issues (`blocker` or `major`); keep mixed-in `minor` observations in the prose review, not in JSON.
+- Use `approve` for minor-only findings and retain those findings in the JSON array. Imperative suggestions on `minor` findings are advisory, not completion requirements.
+- Use `approve` with `findings: []` when the review is conclusive and has no findings.
+- Use `comment` with `findings: []` when the review is inconclusive and has no findings; explain the limitation in the summary and prose.
+- Do not use `comment` to hide known blocking findings or downgrade their severity to obtain approval.
 - An `approve` verdict must include `commit_message`; omit `commit_message` for `changes_requested` and `comment`.
 - Derive `commit_message` from the complete exact `Base..Head` diff already reviewed. The subject must be a scoped Conventional Commit in the form `<type>(<lowercase-scope>): <lowercase-imperative-summary>`, and the summary must be at most 72 characters with no ending punctuation.{{ if .ChangeType }} The subject type must be exactly the authoritative plan change type `{{ .ChangeType }}`.{{ end }}
 - The commit body must be non-empty canonical `What:` and `Why:` sections that explain the change and its motivation. Do not include verification output or any `Tao-*` trailers; Tao adds trusted evidence later.

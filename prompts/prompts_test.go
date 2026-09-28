@@ -248,6 +248,106 @@ func TestRenderReviewPromptUsesInjectedPlanAndDiff(t *testing.T) {
 	}
 }
 
+func TestRenderedReviewSeverityVerdictContract(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		render func() (string, error)
+		plan   bool
+	}{
+		{name: "typed plan", plan: true, render: func() (string, error) {
+			return Render(PromptReview, Data{ChangeType: "fix"})
+		}},
+		{name: "legacy plan", plan: true, render: func() (string, error) {
+			return Render(PromptReview, Data{})
+		}},
+		{name: "aggregate merge", render: func() (string, error) {
+			return RenderMergeReview(MergeReviewData{})
+		}},
+		{name: "single merge", render: func() (string, error) {
+			return RenderSingleMergeReview(SingleMergeReviewData{})
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.render()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{
+				"Grade severity by completion requirements and concrete user impact, not by how forcefully a suggestion is worded.",
+				"Use `changes_requested` when any `blocker` or `major` finding must be fixed before completion.",
+				"Under `changes_requested`, the `findings` array must contain only completion-blocking issues (`blocker` or `major`); keep mixed-in `minor` observations in the prose review, not in JSON.",
+				"Use `approve` for minor-only findings and retain those findings in the JSON array.",
+				"Imperative suggestions on `minor` findings are advisory, not completion requirements.",
+				"Use `approve` with `findings: []` when the review is conclusive and has no findings.",
+				"Use `comment` with `findings: []` when the review is inconclusive and has no findings; explain the limitation in the summary and prose.",
+				"Do not use `comment` to hide known blocking findings or downgrade their severity to obtain approval.",
+				"Every finding's `severity` must be exactly one of `blocker`, `major`, or `minor`",
+			} {
+				if !strings.Contains(got, want) {
+					t.Errorf("rendered review missing %q", want)
+				}
+			}
+			for _, obsolete := range []string{
+				"Use `comment` for non-blocking risks or observations",
+				"Use `approve` only when there are no requested changes",
+				"Approve only with no requested changes",
+				"put non-blocking risks in the prose review or under a `comment` verdict",
+			} {
+				if strings.Contains(got, obsolete) {
+					t.Errorf("rendered review retains obsolete guidance %q", obsolete)
+				}
+			}
+			if tt.plan {
+				for _, want := range []string{
+					"An `approve` verdict must include `commit_message`; omit `commit_message` for `changes_requested` and `comment`.",
+					"complete exact `Base..Head` diff already reviewed",
+					"non-empty canonical `What:` and `Why:` sections",
+					"Do not include verification output or any `Tao-*` trailers",
+				} {
+					if !strings.Contains(got, want) {
+						t.Errorf("plan review missing proposal guidance %q", want)
+					}
+				}
+			} else if strings.Contains(got, "commit_message") {
+				t.Error("merge review must not require a commit proposal")
+			}
+
+			blocks := regexp.MustCompile("(?s)```tao-review-json\\n(.*?)\\n```").FindAllStringSubmatch(got, -1)
+			if len(blocks) != 1 {
+				t.Fatalf("want one JSON example, got %d", len(blocks))
+			}
+			var example struct {
+				Verdict       string         `json:"verdict"`
+				Summary       string         `json:"summary"`
+				CommitMessage map[string]any `json:"commit_message"`
+				Findings      []struct {
+					Severity string `json:"severity"`
+				} `json:"findings"`
+			}
+			if err := json.Unmarshal([]byte(blocks[0][1]), &example); err != nil {
+				t.Fatal(err)
+			}
+			if example.Verdict != "approve" || example.Summary == "" || example.Findings == nil {
+				t.Fatalf("want complete approval example, got %+v", example)
+			}
+			if tt.plan {
+				if len(example.Findings) != 1 || example.Findings[0].Severity != "minor" {
+					t.Errorf("plan approval example must illustrate a retained minor finding: %+v", example.Findings)
+				}
+				wantType := "feat"
+				if tt.name == "typed plan" {
+					wantType = "fix"
+				}
+				if example.CommitMessage["subject"] != wantType+"(scope): summarize the exact reviewed change" || example.CommitMessage["body"] != "What:\nDescribe what the exact scoped diff changes.\n\nWhy:\nExplain why the change is needed." {
+					t.Errorf("inconsistent proposal example: %+v", example.CommitMessage)
+				}
+			} else if len(example.Findings) != 0 || example.CommitMessage != nil {
+				t.Errorf("merge approval example must retain empty findings and no proposal: %+v", example)
+			}
+		})
+	}
+}
+
 func TestRenderReviewPromptWeighsImplementerRulings(t *testing.T) {
 	got, err := Render(PromptReview, Data{})
 	if err != nil {
@@ -378,7 +478,7 @@ func TestRenderReviewProposalCorrectionCannotChangeSubstantiveReview(t *testing.
 			t.Fatalf("rendered correction prompt missing %q:\n%s", want, got)
 		}
 	}
-	for _, forbidden := range []string{"Assess the scoped diff", "Review criteria", "reasonable user", "Declined to judge", "Review Focus", "Completeness", "success_criteria", "failing-first run", "before-and-after comparison", "tao-review-json\n{\n  \"verdict\""} {
+	for _, forbidden := range []string{"Assess the scoped diff", "Review criteria", "reasonable user", "Declined to judge", "Review Focus", "Completeness", "success_criteria", "failing-first run", "before-and-after comparison", "Grade severity", "Use `changes_requested`", "Use `approve`", "Use `comment`", "tao-review-json\n{\n  \"verdict\""} {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("rendered correction prompt retained substantive review instruction %q:\n%s", forbidden, got)
 		}

@@ -685,6 +685,16 @@ recorded review, run `tao review --run <plan-id>` to refresh both review and pro
 against current `HEAD`. Use `tao staleness <plan-id>` for the separate base-commit
 drift check on pending work.
 
+Plan and merge reviewers are instructed to grade findings by completion needs
+and user impact: blocker/major findings request changes, while minor-only
+findings approve with the findings retained. Imperative minor suggestions are
+advisory, not completion requirements. For mixed severities, only blockers/majors
+go into the changes-requested findings array; minor observations stay in prose.
+A conclusive review with no findings approves; an inconclusive review with no
+findings comments and explains the limitation, never hiding known blockers.
+This is prompt guidance, not parser enforcement or new retry authority. Plan
+approval still requires the validated exact-diff proposal described above.
+
 When Tao records who approved an approval gate, it prefers the OS user's display
 name and then login name. `TAO_APPROVED_BY` is only a fallback (ahead of `USER`
 and `USERNAME`), so a status row showing it as an environment override may not
@@ -813,12 +823,15 @@ plan for the fixes.
   unresolved threads on the recorded Tao-created pull request, not for findings
   in Tao's persisted review.
 
-A `comment` verdict never authorizes merge. When a completed comment review
-carries findings, `tao show` recommends `tao rework <plan-id>`, which converts
-them into rework slices without `--force`;
-automatic rework does not consume comment findings.
-A comment without findings (for example, a parser fallback or an approval whose
-proposal was unusable) needs `tao review --run <plan-id>` after the head changes.
+A `comment` verdict never authorizes merge. Historical or runtime-degraded
+comments can retain findings even though new review guidance uses approval for
+minor-only findings. When a completed comment review carries actionable
+findings, `tao show` recommends `tao rework <plan-id>`, which converts them into
+rework slices under the ordinary gates without `--force`; automatic rework does
+not consume comment findings.
+A comment without findings (for example, an inconclusive review, a parser
+fallback, or an approval whose proposal was unusable) is not reworkable; use
+`tao review --run <plan-id>` after the head changes.
 
 Without `--from-pr`, `tao rework <plan-id>` is the manual form for a persisted
 `changes_requested` or `comment` review with actionable findings.
