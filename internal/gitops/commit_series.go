@@ -294,7 +294,7 @@ func (c Client) canonicalCommitDelta(ctx context.Context, parent, commit string,
 	var canonical bytes.Buffer
 	writeBufferPart(&canonical, []byte("tao.commit-delta.v5"))
 	for _, change := range changes {
-		delta, err := c.rawOutput(ctx, "diff-tree", "-r", "--no-commit-id", "--no-renames", "--patch", "--unified=2147483647", parent, commit, "--", change.path)
+		delta, err := c.rawOutput(ctx, "diff-tree", "-r", "--no-commit-id", "--no-renames", "--patch", "--full-index", "--unified=2147483647", parent, commit, "--", change.path)
 		if err != nil {
 			return nil, fmt.Errorf("read content delta for path %q: %w", change.path, err)
 		}
@@ -348,10 +348,31 @@ func parseCommitPathChanges(raw string) ([]commitPathChange, error) {
 }
 
 func canonicalCommitDelta(delta string) ([]byte, error) {
-	if strings.Contains(delta, "GIT binary patch") || strings.Contains(delta, "Binary files ") {
-		return nil, fmt.Errorf("unsupported commit series: binary content change")
-	}
 	lines := strings.Split(delta, "\n")
+	binaryMarker, hasHunk := -1, false
+	for i := 0; i < len(lines); i++ {
+		if strings.HasPrefix(lines[i], "@@ ") {
+			hasHunk = true
+			for i+1 < len(lines) && isHunkPayloadLine(lines[i+1]) {
+				i++
+			}
+			continue
+		}
+		if lines[i] == "GIT binary patch" || strings.HasPrefix(lines[i], "Binary files ") {
+			if binaryMarker >= 0 {
+				return nil, fmt.Errorf("unsupported commit series: multiple binary markers")
+			}
+			binaryMarker = i
+		}
+	}
+	if binaryMarker >= 0 {
+		if hasHunk {
+			return nil, fmt.Errorf("unsupported commit series: mixed binary and text patch")
+		}
+		return canonicalBinaryCommitDelta(lines, binaryMarker)
+	}
+	// Keep the text v5 representation unchanged, including its whitespace and
+	// deliberate omission of blob IDs (unrelated upstream text may change them).
 	var canonical strings.Builder
 	inHunk := false
 	for i := 0; i < len(lines); i++ {
@@ -383,6 +404,107 @@ func canonicalCommitDelta(delta string) ([]byte, error) {
 		canonical.WriteByte('\n')
 	}
 	return []byte(canonical.String()), nil
+}
+
+// Binary payload encodings are not stable evidence. Full blob IDs bind the
+// exact transition instead, while the caller frames status and canonical path.
+func canonicalBinaryCommitDelta(lines []string, marker int) ([]byte, error) {
+	var canonical strings.Builder
+	var oldID, newID, indexMode string
+	modes := make(map[string]string)
+	seenDiff := false
+	for _, line := range lines[:marker] {
+		switch {
+		case strings.HasPrefix(line, "diff --git ") && !seenDiff:
+			seenDiff = true
+		case strings.HasPrefix(line, "index "):
+			if oldID != "" {
+				return nil, fmt.Errorf("unsupported commit series: ambiguous binary index")
+			}
+			fields := strings.Fields(line)
+			if len(fields) < 2 || len(fields) > 3 {
+				return nil, fmt.Errorf("unsupported commit series: malformed binary index")
+			}
+			var found bool
+			oldID, newID, found = strings.Cut(fields[1], "..")
+			if !found || !fullBinaryObjectID(oldID) || !fullBinaryObjectID(newID) || len(oldID) != len(newID) {
+				return nil, fmt.Errorf("unsupported commit series: binary index requires matching full object IDs")
+			}
+			oldID, newID = strings.ToLower(oldID), strings.ToLower(newID)
+			if len(fields) == 3 {
+				indexMode = fields[2]
+				if !validBinaryMode(indexMode) {
+					return nil, fmt.Errorf("unsupported commit series: malformed binary index mode")
+				}
+			}
+		default:
+			prefix, mode, found := strings.Cut(line, "mode ")
+			if !found || (prefix != "old " && prefix != "new " && prefix != "new file " && prefix != "deleted file ") || !validBinaryMode(mode) || modes[prefix] != "" {
+				return nil, fmt.Errorf("unsupported commit series: malformed binary mode metadata")
+			}
+			modes[prefix] = mode
+			canonical.WriteString(line)
+			canonical.WriteByte('\n')
+		}
+	}
+	if oldID == "" {
+		return nil, fmt.Errorf("unsupported commit series: missing binary index")
+	}
+	zero := strings.Repeat("0", len(oldID))
+	added, deleted := modes["new file "] != "", modes["deleted file "] != ""
+	changedMode := modes["old "] != "" || modes["new "] != ""
+	if (added && deleted) || (added || deleted) && changedMode ||
+		(modes["old "] == "") != (modes["new "] == "") ||
+		(oldID == zero) != added || (newID == zero) != deleted {
+		return nil, fmt.Errorf("unsupported commit series: inconsistent binary mode or zero object IDs")
+	}
+	if indexMode != "" {
+		for _, mode := range modes {
+			if mode != indexMode {
+				return nil, fmt.Errorf("unsupported commit series: conflicting binary index mode")
+			}
+		}
+	}
+	payload := lines[marker] == "GIT binary patch"
+	if !payload && !strings.HasSuffix(lines[marker], " differ") {
+		return nil, fmt.Errorf("unsupported commit series: malformed binary marker")
+	}
+	for _, line := range lines[marker+1:] {
+		if line == "" {
+			continue
+		}
+		// Do not interpret payload encoding, but never let a second patch or
+		// conflicting metadata hide behind the first binary marker.
+		if !payload || strings.HasPrefix(line, "index ") || strings.HasPrefix(line, "diff --git ") || strings.Contains(line, "mode ") {
+			return nil, fmt.Errorf("unsupported commit series: trailing binary patch metadata")
+		}
+	}
+	canonical.WriteString("@@ tao-binary " + oldID + ".." + newID)
+	if indexMode != "" {
+		canonical.WriteString(" " + indexMode)
+	}
+	canonical.WriteString(" @@\n")
+	return []byte(canonical.String()), nil
+}
+
+func fullBinaryObjectID(id string) bool {
+	if len(id) != 40 && len(id) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(id)
+	return err == nil
+}
+
+func validBinaryMode(mode string) bool {
+	if len(mode) != 6 {
+		return false
+	}
+	for _, digit := range mode {
+		if digit < '0' || digit > '7' {
+			return false
+		}
+	}
+	return true
 }
 
 type canonicalEdit struct {

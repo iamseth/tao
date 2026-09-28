@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/plantest"
 )
@@ -634,6 +635,169 @@ func TestPrepareRebaseRecordsBeforeMutationAndSettlesImmediately(t *testing.T) {
 	}
 	if !refreshed.Rebased {
 		t.Fatal("expected rebase")
+	}
+}
+
+func TestPrepareRebaseBinarySeriesRecordsBeforeMutationAndSettlesExactProof(t *testing.T) {
+	ctx := context.Background()
+	repo := newTestRepo(t)
+	commitTestFile(t, repo.path, "modified.bin", "\x00original\xff", "add binary to modify")
+	commitTestFile(t, repo.path, "deleted.bin", "\x00obsolete\xfe", "add binary to delete")
+	manager := newTestManager(t, repo.path)
+	metadata, err := manager.Prepare(ctx, PrepareOptions{PlanID: "plan-a", BaseBranch: "master"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const added = "\x00added\x01\xff"
+	const modified = "\x00modified\x02\xfe"
+	commitTestFile(t, metadata.Path, "added.bin", added, "add feature binary")
+	commitTestFile(t, metadata.Path, "modified.bin", modified, "modify feature binary")
+	runGit(t, metadata.Path, "rm", "deleted.bin")
+	runGit(t, metadata.Path, "commit", "-m", "delete feature binary")
+	oldHead := gitHead(t, metadata.Path)
+	commitTestFile(t, repo.path, "default.txt", "unrelated base advance\n", "advance default")
+	newBase := gitHead(t, repo.path)
+	client := gitops.NewClient(repo.path, nil)
+	proof, err := client.CommitSeriesRebaseProof(ctx, metadata.BaseSHA, newBase, metadata.BaseSHA, oldHead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proof.Count != 3 || !strings.HasPrefix(proof.Fingerprint, gitops.CommitSeriesFingerprintVersion) {
+		t.Fatalf("unexpected binary series proof: %#v", proof)
+	}
+	assertBinaryState := func() {
+		t.Helper()
+		for name, want := range map[string]string{"added.bin": added, "modified.bin": modified} {
+			got, err := os.ReadFile(filepath.Join(metadata.Path, name)) // #nosec G304 -- fixed fixture names in a test-owned worktree.
+			if err != nil || string(got) != want {
+				t.Fatalf("%s bytes = %q, error = %v, want %q", name, got, err, want)
+			}
+		}
+		if _, err := os.Stat(filepath.Join(metadata.Path, "deleted.bin")); !os.IsNotExist(err) {
+			t.Fatalf("deleted binary still present or unreadable: %v", err)
+		}
+		if status := strings.TrimSpace(runGit(t, metadata.Path, "status", "--porcelain")); status != "" {
+			t.Fatalf("binary worktree is dirty: %q", status)
+		}
+		if active, err := gitops.ActiveOperation(metadata.Path); err != nil || active != "" {
+			t.Fatalf("active Git operation = %q, error = %v", active, err)
+		}
+	}
+	now := time.Date(2026, 8, 5, 1, 2, 3, 0, time.UTC)
+	wantIntent := plan.WorkspaceRebaseIntent{
+		Branch: metadata.Branch, BaseBranch: "master", OldHeadSHA: oldHead,
+		OldBaseSHA: metadata.BaseSHA, NewBaseSHA: newBase, CommitCount: 3,
+		CommitSeriesFingerprint: proof.Fingerprint, CreatedAt: now,
+	}
+	var recorded *plan.WorkspaceRebaseIntent
+	var settledHead string
+	recorder := rebaseRecorderFunc{
+		record: func(intent plan.WorkspaceRebaseIntent) error {
+			if recorded != nil || intent != wantIntent {
+				t.Fatalf("intent = %#v, want %#v exactly once", intent, wantIntent)
+			}
+			if got := gitHead(t, metadata.Path); got != oldHead {
+				t.Fatalf("intent recorded after HEAD mutation: got %s want %s", got, oldHead)
+			}
+			if got := strings.TrimSpace(runGit(t, metadata.Path, "merge-base", "HEAD", newBase)); got != metadata.BaseSHA {
+				t.Fatalf("base changed before intent: got %s want %s", got, metadata.BaseSHA)
+			}
+			assertBinaryState()
+			recorded = &intent
+			return nil
+		},
+		settle: func(intent plan.WorkspaceRebaseIntent, settled Metadata) error {
+			if recorded == nil || intent != *recorded || settledHead != "" {
+				t.Fatalf("settlement did not consume the recorded intent exactly once: %#v", intent)
+			}
+			liveHead := gitHead(t, metadata.Path)
+			liveBase := strings.TrimSpace(runGit(t, metadata.Path, "merge-base", "HEAD", newBase))
+			if liveHead == oldHead || settled.HeadSHA != liveHead || liveBase != newBase || settled.BaseSHA != liveBase || settled.BaseCurrentSHA != newBase {
+				t.Fatalf("settlement differs from live rewritten head/base %s/%s: %#v", liveHead, liveBase, settled)
+			}
+			if settled.Branch != intent.Branch || settled.Dirty || !settled.Rebased || settled.BaseStatus != "current" || settled.RebaseStatus != "not_needed" {
+				t.Fatalf("unexpected settlement metadata: %#v", settled)
+			}
+			replayed, err := client.CommitSeriesRebaseProof(ctx, intent.OldBaseSHA, intent.NewBaseSHA, settled.BaseSHA, settled.HeadSHA)
+			if err != nil || replayed != proof {
+				t.Fatalf("settled binary proof = %#v, error = %v, want %#v", replayed, err, proof)
+			}
+			assertBinaryState()
+			settledHead = liveHead
+			return nil
+		},
+	}
+
+	refreshed, err := manager.Prepare(ctx, PrepareOptions{
+		PlanID: "plan-a", BaseBranch: "master", BaseSHA: metadata.BaseSHA,
+		RebaseStale: true, RebaseRecorder: recorder, Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recorded == nil || settledHead == "" || refreshed.HeadSHA != settledHead || refreshed.HeadSHA != gitHead(t, metadata.Path) || refreshed.BaseSHA != newBase || refreshed.BaseCurrentSHA != newBase || !refreshed.Rebased || refreshed.Dirty {
+		t.Fatalf("preparation did not return the settled binary workspace: %#v", refreshed)
+	}
+	assertBinaryState()
+}
+
+func TestPrepareRebaseBinaryConflictRefusesIsolatedReplayBeforeMutation(t *testing.T) {
+	ctx := context.Background()
+	repo := newTestRepo(t)
+	commitTestFile(t, repo.path, "shared.bin", "\x00original\xff", "add shared binary")
+	manager := newTestManager(t, repo.path)
+	metadata, err := manager.Prepare(ctx, PrepareOptions{PlanID: "plan-a", BaseBranch: "master"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const featureBytes = "\x00feature\x01\xfe"
+	commitTestFile(t, metadata.Path, "shared.bin", featureBytes, "change feature binary")
+	oldHead := gitHead(t, metadata.Path)
+	oldReflog := runGit(t, metadata.Path, "reflog", "show", "--format=%H %gs", "HEAD")
+	commitTestFile(t, repo.path, "shared.bin", "\x00upstream\x02\xfd", "change upstream binary")
+	newBase := gitHead(t, repo.path)
+	client := gitops.NewClient(repo.path, nil)
+	proof, err := client.CommitSeriesRebaseProof(ctx, metadata.BaseSHA, newBase, metadata.BaseSHA, oldHead)
+	if err != nil {
+		t.Fatalf("binary evidence must be accepted before replay: %v", err)
+	}
+	recorder := rebaseRecorderFunc{
+		record: func(plan.WorkspaceRebaseIntent) error {
+			t.Fatal("binary conflict recorded intent before isolated replay succeeded")
+			return nil
+		},
+		settle: func(plan.WorkspaceRebaseIntent, Metadata) error {
+			t.Fatal("binary conflict unexpectedly settled")
+			return nil
+		},
+	}
+
+	_, err = manager.Prepare(ctx, PrepareOptions{
+		PlanID: "plan-a", BaseBranch: "master", BaseSHA: metadata.BaseSHA,
+		RebaseStale: true, RebaseRecorder: recorder,
+	})
+	if err == nil || !strings.Contains(err.Error(), "prove exact workspace commit replay before rebase") || !strings.Contains(err.Error(), "planned exact commit replay does not complete without intervention") {
+		t.Fatalf("expected isolated binary replay conflict, got %v", err)
+	}
+	if got := gitHead(t, metadata.Path); got != oldHead {
+		t.Fatalf("conflict changed live HEAD: got %s want %s", got, oldHead)
+	}
+	if got := runGit(t, metadata.Path, "reflog", "show", "--format=%H %gs", "HEAD"); got != oldReflog {
+		t.Fatalf("conflict touched live HEAD reflog: got %q want %q", got, oldReflog)
+	}
+	content, err := os.ReadFile(filepath.Join(metadata.Path, "shared.bin"))
+	if err != nil || string(content) != featureBytes {
+		t.Fatalf("conflict changed binary bytes: got %q, error = %v, want %q", content, err, featureBytes)
+	}
+	if status := strings.TrimSpace(runGit(t, metadata.Path, "status", "--porcelain")); status != "" {
+		t.Fatalf("conflict dirtied live worktree: %q", status)
+	}
+	if active, err := gitops.ActiveOperation(metadata.Path); err != nil || active != "" {
+		t.Fatalf("conflict left active Git operation %q, error = %v", active, err)
+	}
+	unchanged, err := client.CommitSeriesRebaseProof(ctx, metadata.BaseSHA, newBase, metadata.BaseSHA, oldHead)
+	if err != nil || unchanged != proof {
+		t.Fatalf("conflict changed binary proof: got %#v, error = %v, want %#v", unchanged, err, proof)
 	}
 }
 
