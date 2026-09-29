@@ -787,3 +787,9 @@ func TestSliceCompletionLifetimeExpiredCheck(t *testing.T) {
 		t.Fatalf("expired bind = %v", err)
 	}
 }
+
+func TestSliceCompletionOwnerEnvMatchesRunner(t *testing.T) {
+	if sliceCompletionOwnerEnv != commandrunner.SliceCompletionOwnerEnv {
+		t.Fatalf("owner env %q diverged from the runner's stripped key %q", sliceCompletionOwnerEnv, commandrunner.SliceCompletionOwnerEnv)
+	}
+}

@@ -13,12 +13,15 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/agent/process"
-	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/filelock"
 	"github.com/iamseth/tao/internal/plan"
 )
 
-const sliceCompletionOwnerEnv = commandrunner.SliceCompletionOwnerEnv
+// Kept as a package-local literal: the runtimeconfig architecture test resolves
+// only literal and runtimeconfig keys, so a cross-package constant reads as an
+// unresolved environment key. TestSliceCompletionOwnerEnvMatchesRunner pins it
+// to commandrunner.SliceCompletionOwnerEnv, which strips it from spawned commands.
+const sliceCompletionOwnerEnv = "TAO_SLICE_COMPLETION_OWNER"
 const completionOwnerName = ".slice-completion-owner.json"
 const completionPollInterval = 25 * time.Millisecond
 
