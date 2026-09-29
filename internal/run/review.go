@@ -69,7 +69,7 @@ func newReviewGitFactory(runner CommandRunner) reviewGitFactory {
 // Review runs a fresh persisted plan review without executing pending slices.
 func (s Service) Review(ctx context.Context, request Request) (review plan.PlanReview, err error) {
 	lockErr := s.withResolvedPlan(ctx, request, resolvedPlanOptions{status: true}, func(ownedCtx context.Context, detail *plan.PlanDetail, config ExecutionConfig) error {
-		if _, err := runtimeEnv(config.RuntimeEnv).BudgetThresholds(); err != nil {
+		if _, err := runtimeEnv(config.RuntimeEnv).Budget(); err != nil {
 			return err
 		}
 		if err := plan.RequireNotAbandoned(detail); err != nil {
@@ -774,10 +774,11 @@ func boundedReviewContextText(value string, maxBytes int) string {
 }
 
 func createReviewWithAgentSession(ctx context.Context, executor AgentSessionExecutor, options agentOperationOptions, run ReviewRun, recordFactory PlanRecordFactory) (plan.PlanReview, error) {
-	thresholds, err := runtimeEnv(options.RuntimeEnv).BudgetThresholds()
+	budget, err := runtimeEnv(options.RuntimeEnv).Budget()
 	if err != nil {
 		return plan.PlanReview{}, err
 	}
+	thresholds := budget.Warn()
 	planDir := reviewPlanDir(run)
 	state, err := reviewState(planDir, run.Detail)
 	if err != nil {

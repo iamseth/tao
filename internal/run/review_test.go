@@ -138,7 +138,7 @@ func TestAppendImplementerRulingsContextBounds(t *testing.T) {
 }
 
 func TestAppendPriorReworkAndBudgetContext(t *testing.T) {
-	thresholds := plan.DefaultAgentBudgetThresholds()
+	thresholds := plan.DefaultAgentBudget().Warn()
 	tests := []struct {
 		name       string
 		detail     *plan.PlanDetail

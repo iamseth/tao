@@ -36,12 +36,12 @@ func (a App) validate(ctx context.Context, repo plan.Resolver, args []string) er
 	if err != nil {
 		return err
 	}
-	thresholds, err := a.envSnapshot().BudgetThresholds()
+	budget, err := a.envSnapshot().Budget()
 	if err != nil {
 		return err
 	}
 	result := plan.ValidatePlanVerification(detail)
-	if err := renderPlanValidationWithThresholds(a.Out, detail, result, thresholds); err != nil {
+	if err := renderPlanValidationWithThresholds(a.Out, detail, result, budget.Warn()); err != nil {
 		return err
 	}
 	if result.HasErrors() {

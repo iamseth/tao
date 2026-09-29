@@ -486,10 +486,11 @@ func planOwnedFiles(ctx context.Context, execution runExecution, detail *plan.Pl
 }
 
 func (r SelectedSliceRunner) renderRunPacket(ctx context.Context, detail *plan.PlanDetail, workingRoot string, resuming bool, resumeAttempt int) (string, error) {
-	budgetThresholds, err := runtimeEnv(r.execution.Config.RuntimeEnv).BudgetThresholds()
+	budget, err := runtimeEnv(r.execution.Config.RuntimeEnv).Budget()
 	if err != nil {
 		return "", err
 	}
+	budgetThresholds := budget.Warn()
 	return plan.RenderRunPacket(detail, plan.RunPacketOptions{
 		CommitPolicy:     r.execution.Config.CommitPolicy.String(),
 		ExecutionMode:    r.execution.Config.ExecutionMode.String(),
@@ -576,10 +577,11 @@ func (r SelectedSliceRunner) recordRunCompleted() {
 }
 
 func (r SelectedSliceRunner) validateSelectedSlice(detail *plan.PlanDetail, sliceID string, executionRoot string) (plan.VerificationValidationResult, error) {
-	thresholds, err := runtimeEnv(r.execution.Config.RuntimeEnv).BudgetThresholds()
+	budget, err := runtimeEnv(r.execution.Config.RuntimeEnv).Budget()
 	if err != nil {
 		return plan.VerificationValidationResult{}, err
 	}
+	thresholds := budget.Warn()
 	validation := plan.ValidateSelectedSliceVerificationAtRoot(detail, executionRoot)
 	if len(validation.Findings) > 0 {
 		if err := view.RenderVerificationFindings(r.out, validation.Findings); err != nil {

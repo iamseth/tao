@@ -16,8 +16,6 @@ import (
 	"strings"
 	"time"
 	"unicode"
-
-	"github.com/iamseth/tao/internal/plan"
 )
 
 type CommitPolicy string
@@ -77,13 +75,6 @@ func ParseModelName(value string) (string, error) {
 		return "", fmt.Errorf("model name must not contain whitespace")
 	}
 	return name, nil
-}
-
-// SliceBudgetCaps contains optional hard limits for cumulative slice telemetry.
-// Nil fields are disabled so enforcement remains opt-in.
-type SliceBudgetCaps struct {
-	OutputTokens *int64
-	Cost         *float64
 }
 
 // RunOptionsPatch models partial values supplied as environment or service
@@ -307,10 +298,6 @@ func parseBudgetCost(value string) (float64, error) {
 		return 0, fmt.Errorf("must be a non-negative decimal number")
 	}
 	return parsed, nil
-}
-
-func defaultAgentBudgetThresholds() plan.AgentBudgetThresholds {
-	return plan.DefaultAgentBudgetThresholds()
 }
 
 // AutoReworkPolicy is the validated policy used by automatic rework loops.

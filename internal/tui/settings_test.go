@@ -17,7 +17,7 @@ func TestSettingsRejectedDiagnosticsStayVisibleAtNarrowWidths(t *testing.T) {
 		model := Model{Page: PageSettings, Width: width, Height: 80, SettingsSnapshot: SettingsSnapshot{RuntimeDefaults: []SettingsRuntimeDefault{
 			{Name: "TAO_AGENT", Value: "pi", Source: "invalid", Warning: "invalid provider\n\t\x1b[31mconfiguration; rejected"},
 			{Name: "TAO_THEME", Value: "tokyonight", Source: "default", Warning: "invalid theme; using default"},
-			{Name: "TAO_BUDGET_PLAN_COST", Value: "20", Source: "invalid", Warning: "invalid budget; rejected"},
+			{Name: "TAO_BUDGET_PLAN_COST_WARN", Value: "20", Source: "invalid", Warning: "invalid budget; rejected"},
 		}}}
 		frame := strings.TrimPrefix(Render(model), "\x1b[H\x1b[2J")
 		for _, want := range []string{"TAO_AGENT", "(rejected)", "rejected on consumption:", "using default", "invalid budget"} {
@@ -84,13 +84,13 @@ func TestSettingsSectionsUseMutedHeadingColor(t *testing.T) {
 			RuntimeDefaults: []SettingsRuntimeDefault{
 				{Name: "TAO_AGENT", Value: "pi", Source: "default"},
 				{Name: "TAO_PULL_REQUEST", Value: "true", Source: "env"},
-				{Name: "TAO_BUDGET_PLAN_COST", Value: "20"},
+				{Name: "TAO_BUDGET_PLAN_COST_WARN", Value: "20"},
 			},
 			Repositories: []RepositorySetting{{ID: "repo", Name: "repo", Health: "missing_root", PullRequest: &explicit}},
 		},
 	}
 	frame := Render(model)
-	for _, title := range []string{"OVERRIDES", "EXECUTION · all default", "BUDGET WARNINGS", "REPOSITORY DEFAULTS"} {
+	for _, title := range []string{"OVERRIDES", "EXECUTION · all default", "BUDGET", "REPOSITORY DEFAULTS"} {
 		want := theme.Default().Palette(theme.ProfileTrueColor).Paint(theme.RoleSettingsSection, "▌ "+title+" ")
 		if !strings.Contains(frame, want) {
 			t.Errorf("settings section %q does not use the settings section color: %q", title, frame)
@@ -187,9 +187,9 @@ func TestSettingsDefaultsClassifyAndRenderEveryRuntimeStatusOnce(t *testing.T) {
 	renderedLines, _ := renderSettingsDefaultGroups(Model{Page: PageSettings, Width: 200, SettingsSnapshot: SettingsSnapshot{RuntimeDefaults: rows}})
 	rendered := strings.Join(renderedLines, "\n")
 	for _, status := range statuses {
-		if strings.HasPrefix(status.Name, "TAO_BUDGET_") {
+		if strings.HasPrefix(status.Name, "TAO_BUDGET_") || strings.HasPrefix(status.Name, "TAO_MAX_SLICE_") {
 			if counts[status.Name] != 0 {
-				t.Errorf("advisory budget %s rendered in defaults", status.Name)
+				t.Errorf("budget %s rendered in defaults", status.Name)
 			}
 			continue
 		}
@@ -241,34 +241,194 @@ func TestRenderSettingsShowsRuntimeOverridesExactlyOnce(t *testing.T) {
 	}
 }
 
-func TestRenderSettingsBudgetsPairsScopesAndKeepsZeroTruthful(t *testing.T) {
-	rows := []SettingsRuntimeDefault{
-		{Name: "TAO_BUDGET_PLAN_TOOL_CALLS", Value: "400"},
-		{Name: "TAO_BUDGET_SLICE_ERRORED_MESSAGES", Value: "0"},
-		{Name: "TAO_BUDGET_PLAN_OUTPUT_TOKENS", Value: "150000"},
-		{Name: "TAO_BUDGET_SLICE_COST", Value: "5.00"},
-		{Name: "TAO_BUDGET_PLAN_ASSISTANT_MESSAGES", Value: "300"},
-		{Name: "TAO_BUDGET_SLICE_OUTPUT_TOKENS", Value: "40000"},
-		{Name: "TAO_BUDGET_PLAN_ERRORED_MESSAGES", Value: "2"},
-		{Name: "TAO_BUDGET_SLICE_TOOL_CALLS", Value: "120"},
-		{Name: "TAO_BUDGET_PLAN_COST", Value: "20.000"},
-		{Name: "TAO_BUDGET_SLICE_ASSISTANT_MESSAGES", Value: "80"},
+func settingsBudgetWarnRows() []SettingsRuntimeDefault {
+	return []SettingsRuntimeDefault{
+		{Name: "TAO_BUDGET_PLAN_TOOL_CALLS_WARN", Value: "400", Source: "default"},
+		{Name: "TAO_BUDGET_SLICE_ERRORED_MESSAGES_WARN", Value: "0", Source: "default"},
+		{Name: "TAO_BUDGET_PLAN_OUTPUT_TOKENS_WARN", Value: "150000", Source: "default"},
+		{Name: "TAO_BUDGET_SLICE_COST_WARN", Value: "5.00", Source: "default"},
+		{Name: "TAO_BUDGET_PLAN_ASSISTANT_MESSAGES_WARN", Value: "300", Source: "default"},
+		{Name: "TAO_BUDGET_SLICE_OUTPUT_TOKENS_WARN", Value: "40000", Source: "default"},
+		{Name: "TAO_BUDGET_PLAN_ERRORED_MESSAGES_WARN", Value: "2", Source: "default"},
+		{Name: "TAO_BUDGET_SLICE_TOOL_CALLS_WARN", Value: "120", Source: "default"},
+		{Name: "TAO_BUDGET_PLAN_COST_WARN", Value: "20.000", Source: "default"},
+		{Name: "TAO_BUDGET_SLICE_ASSISTANT_MESSAGES_WARN", Value: "80", Source: "default"},
 	}
-	lines, _ := renderSettingsBudgets(Model{Page: PageSettings, Width: 120, SettingsSnapshot: SettingsSnapshot{RuntimeDefaults: rows}})
-	for _, want := range [][]string{
-		{"Output tokens", "40 000", "150 000"},
-		{"Cost", "5.00", "20.000"},
-		{"Tool calls", "120", "400"},
-		{"Assistant messages", "80", "300"},
-		{"Errored messages", "0", "2"},
+}
+
+func settingsBudgetRows() []SettingsRuntimeDefault {
+	return append(settingsBudgetWarnRows(),
+		SettingsRuntimeDefault{Name: "TAO_BUDGET_SLICE_OUTPUT_TOKENS_STOP", Value: "60000", Source: "env"},
+		SettingsRuntimeDefault{Name: "TAO_BUDGET_SLICE_COST_STOP", Value: "disabled", Source: "default"},
+	)
+}
+
+func settingsBudgetLineIndex(lines []string, label string) int {
+	for index, line := range lines {
+		if strings.Contains(line, label) {
+			return index
+		}
+	}
+	return -1
+}
+
+func TestRenderSettingsBudgetsPairsScopesAndKeepsZeroTruthful(t *testing.T) {
+	lines, _ := renderSettingsBudgets(Model{Page: PageSettings, Width: 120, SettingsSnapshot: SettingsSnapshot{RuntimeDefaults: settingsBudgetRows()}})
+	if len(lines) < 2 {
+		t.Fatalf("budget section missing heading:\n%s", strings.Join(lines, "\n"))
+	}
+	heading := lines[1]
+	position := 0
+	for _, header := range []string{"BUDGET", "SLICE WARN", "SLICE STOP", "PLAN WARN", "PLAN STOP"} {
+		next := strings.Index(heading[position:], header)
+		if next < 0 {
+			t.Fatalf("budget heading missing %q in order:\n%s", header, heading)
+		}
+		position += next + len(header)
+	}
+	if strings.Contains(strings.Join(lines, "\n"), "BUDGET WARNINGS") {
+		t.Fatalf("budget section kept the old title:\n%s", strings.Join(lines, "\n"))
+	}
+	for _, want := range []string{
+		"Output tokens 40 000 60 000 150 000 -",
+		"Cost 5.00 disabled 20.000 -",
+		"Tool calls 120 - 400 -",
+		"Assistant messages 80 - 300 -",
+		"Errored messages 0 - 2 -",
 	} {
-		if !lineContainsAll(lines, want...) {
-			t.Errorf("budget row missing exact slice/plan pair %q:\n%s", want, strings.Join(lines, "\n"))
+		if !lineContainsAll(collapseSpaces(lines), want) {
+			t.Errorf("budget row missing exact cells %q:\n%s", want, strings.Join(lines, "\n"))
 		}
 	}
 	joined := strings.ToLower(strings.Join(lines, "\n"))
 	if strings.Contains(joined, "unlimited") || strings.Contains(joined, "none") {
 		t.Fatalf("zero budget rendered as a sentinel:\n%s", joined)
+	}
+}
+
+// collapseSpaces joins each line's fields with one space so cell expectations
+// stay independent of column padding.
+func collapseSpaces(lines []string) []string {
+	collapsed := make([]string, 0, len(lines))
+	for _, line := range lines {
+		collapsed = append(collapsed, strings.Join(strings.Fields(line), " "))
+	}
+	return collapsed
+}
+
+func TestRenderSettingsBudgetsRendersDisabledForUnsetSliceStop(t *testing.T) {
+	lines, _ := renderSettingsBudgets(Model{Page: PageSettings, Width: 120, SettingsSnapshot: SettingsSnapshot{RuntimeDefaults: settingsBudgetWarnRows()}})
+	for _, want := range []string{
+		"Output tokens 40 000 disabled 150 000 -",
+		"Cost 5.00 disabled 20.000 -",
+		"Tool calls 120 - 400 -",
+	} {
+		if !lineContainsAll(collapseSpaces(lines), want) {
+			t.Errorf("unset slice STOP not rendered as disabled %q:\n%s", want, strings.Join(lines, "\n"))
+		}
+	}
+}
+
+func TestRenderSettingsBudgetsShowsSetAliasAsDeprecatedDiagnostic(t *testing.T) {
+	rows := append(settingsBudgetWarnRows(),
+		SettingsRuntimeDefault{Name: "TAO_BUDGET_SLICE_COST", Value: "7", Source: "env", Warning: "deprecated; use TAO_BUDGET_SLICE_COST_WARN"},
+		SettingsRuntimeDefault{Name: "TAO_MAX_SLICE_COST", Value: "10", Source: "env", Warning: "deprecated; use TAO_BUDGET_SLICE_COST_STOP"},
+		SettingsRuntimeDefault{Name: "TAO_BUDGET_PLAN_COST_WARN", Value: "bad", Source: "invalid", Warning: "invalid budget; rejected"},
+	)
+	lines, _ := renderSettingsBudgets(Model{Page: PageSettings, Width: 160, SettingsSnapshot: SettingsSnapshot{RuntimeDefaults: rows}})
+	costIndex := settingsBudgetLineIndex(lines, "Cost")
+	if costIndex < 0 {
+		t.Fatalf("cost row missing:\n%s", strings.Join(lines, "\n"))
+	}
+	toolIndex := settingsBudgetLineIndex(lines, "Tool calls")
+	if toolIndex < 0 {
+		t.Fatalf("tool calls row missing:\n%s", strings.Join(lines, "\n"))
+	}
+	between := strings.Join(lines[costIndex+1:toolIndex], "\n")
+	for _, want := range []string{
+		"plan warn rejected on consumption: invalid budget; rejected",
+		"deprecated TAO_BUDGET_SLICE_COST: deprecated; use TAO_BUDGET_SLICE_COST_WARN",
+		"deprecated TAO_MAX_SLICE_COST: deprecated; use TAO_BUDGET_SLICE_COST_STOP",
+	} {
+		if !strings.Contains(between, want) {
+			t.Errorf("cost diagnostics missing %q:\n%s", want, strings.Join(lines, "\n"))
+		}
+	}
+	if got := strings.Count(strings.Join(lines, "\n"), "Cost"); got != 1 {
+		t.Errorf("alias rows produced %d Cost rows, want 1:\n%s", got, strings.Join(lines, "\n"))
+	}
+}
+
+func TestSettingsDefaultGroupsExcludeBudgetRows(t *testing.T) {
+	rows := []SettingsRuntimeDefault{
+		{Name: "TAO_UPDATE", Value: "warn", Source: "default"},
+		{Name: "TAO_DANGEROUSLY_SKIP_PERMISSIONS", Value: "false", Source: "default"},
+		{Name: "TAO_MAX_SLICE_COST", Value: "10", Source: "env", Warning: "deprecated; use TAO_BUDGET_SLICE_COST_STOP"},
+		{Name: "TAO_MAX_SLICE_OUTPUT_TOKENS", Value: "70000", Source: "env", Warning: "deprecated; use TAO_BUDGET_SLICE_OUTPUT_TOKENS_STOP"},
+		{Name: "TAO_BUDGET_SLICE_COST_STOP", Value: "10", Source: "env"},
+		{Name: "TAO_BUDGET_SLICE_COST_WARN", Value: "5", Source: "default"},
+	}
+	for _, group := range settingsDefaultGroups(rows) {
+		if group.key == settingsGroupSafety && group.hasOverride {
+			t.Errorf("budget alias marked the Safety group as overridden")
+		}
+		for _, row := range group.rows {
+			if strings.HasPrefix(row.Name, "TAO_MAX_SLICE_") || strings.HasPrefix(row.Name, "TAO_BUDGET_") {
+				t.Errorf("budget row %s grouped under %s", row.Name, group.key)
+			}
+		}
+	}
+	for _, name := range []string{"TAO_MAX_SLICE_COST", "TAO_MAX_SLICE_OUTPUT_TOKENS"} {
+		if _, known := settingsDefaultGroupForName(name); known {
+			t.Errorf("%s still classified as a default group setting", name)
+		}
+	}
+	lines, _ := renderSettingsDefaultGroups(Model{Page: PageSettings, Width: 120, SettingsSnapshot: SettingsSnapshot{RuntimeDefaults: rows}})
+	rendered := strings.Join(lines, "\n")
+	for _, absent := range []string{"Slice cost cap", "Slice output cap", "Max slice cost", "TAO_MAX_SLICE_COST"} {
+		if strings.Contains(rendered, absent) {
+			t.Errorf("Safety group still renders %q:\n%s", absent, rendered)
+		}
+	}
+	if !strings.Contains(rendered, "SAFETY / UPDATE · all default") {
+		t.Errorf("Safety group lost its all-default heading:\n%s", rendered)
+	}
+}
+
+func TestRenderSettingsBudgetsDropsStopColumnsBeforeWrapping(t *testing.T) {
+	tests := []struct {
+		width   int
+		present []string
+		absent  []string
+	}{
+		{width: 120, present: []string{"SLICE WARN", "SLICE STOP", "PLAN WARN", "PLAN STOP"}},
+		{width: 60, present: []string{"SLICE WARN", "SLICE STOP", "PLAN WARN"}, absent: []string{"PLAN STOP"}},
+		{width: 40, present: []string{"SLICE WARN", "PLAN WARN"}, absent: []string{"SLICE STOP", "PLAN STOP"}},
+	}
+	for _, test := range tests {
+		lines, section := renderSettingsBudgets(Model{Page: PageSettings, Width: test.width, SettingsSnapshot: SettingsSnapshot{RuntimeDefaults: settingsBudgetRows()}})
+		heading := lines[1]
+		for _, want := range test.present {
+			if !strings.Contains(heading, want) {
+				t.Errorf("width %d heading missing %q:\n%s", test.width, want, heading)
+			}
+		}
+		for _, absent := range test.absent {
+			if strings.Contains(heading, absent) {
+				t.Errorf("width %d heading kept %q instead of dropping it:\n%s", test.width, absent, heading)
+			}
+		}
+		if len(section.contentLines) != 5 {
+			t.Errorf("width %d wrapped budget rows: %d content lines, want 5:\n%s", test.width, len(section.contentLines), strings.Join(lines, "\n"))
+		}
+		for _, line := range lines {
+			if cells.Width(line) > test.width {
+				t.Errorf("width %d line overflows: %q", test.width, line)
+			}
+		}
+		if test.width == 60 && !lineContainsAll(collapseSpaces(lines), "Output tokens 40 000 60 000 150 000") {
+			t.Errorf("width 60 lost the slice STOP value:\n%s", strings.Join(lines, "\n"))
+		}
 	}
 }
 

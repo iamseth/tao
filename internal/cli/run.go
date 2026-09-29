@@ -236,21 +236,18 @@ func (a App) executeResolvedRun(ctx context.Context, repo planRunRepository, inp
 		policy.Enabled = false
 	}
 	snapshot := a.envSnapshot()
-	thresholds := snapshot.Defaults().AgentBudgetThresholds
+	thresholds := snapshot.Defaults().Budget.Warn()
 	if policy.Enabled {
-		var err error
-		thresholds, err = snapshot.BudgetThresholds()
+		// Budget() validates warn thresholds and stop caps together. An enabled
+		// restart can reopen slices before Service.Execute reaches slice-budget
+		// admission, so this single error path also rejects captured hard-cap
+		// errors before that mutation; other paths retain their lazy
+		// service-level validation.
+		budget, err := snapshot.Budget()
 		if err != nil {
 			return err
 		}
-		// An enabled restart can reopen slices before Service.Execute reaches
-		// slice-budget admission. Reject captured hard-cap errors before that
-		// mutation; other paths retain their lazy service-level validation.
-		if reworkRestart && policy.MaxAttempts > 0 {
-			if _, err := snapshot.BudgetCaps(); err != nil {
-				return err
-			}
-		}
+		thresholds = budget.Warn()
 	}
 	runCtx, stopSignals := newCommandSignalContext(ctx)
 	defer stopSignals()

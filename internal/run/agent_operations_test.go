@@ -204,8 +204,8 @@ func TestReviewAndPullRequestTelemetry(t *testing.T) {
 			for _, measurement := range []plan.AgentMetricsAvailability{plan.AgentMetricsReported, plan.AgentMetricsPartial, plan.AgentMetricsUnavailable} {
 				for _, outcome := range []string{"success", "failed", "timeout", "append failure"} {
 					t.Run(fmt.Sprintf("%s/%s/%s/%s", kind, operation, measurement, outcome), func(t *testing.T) {
-						t.Setenv(runtimeconfig.EnvMaxSliceOutputTokens, "1")
-						t.Setenv(runtimeconfig.EnvMaxSliceCost, "1")
+						t.Setenv(runtimeconfig.EnvMaxSliceOutputTokensDeprecated, "1")
+						t.Setenv(runtimeconfig.EnvMaxSliceCostDeprecated, "1")
 						repoRoot := t.TempDir()
 						detail := runPathSessionDetail(t, repoRoot, plan.StatusInReview, nil, []string{"001-a"}, plan.StatusCompleted)
 						detail.State.Plan.ChangeType = plan.ChangeTypeFix
@@ -525,8 +525,12 @@ func TestRunAgentSessionSliceBudgetCaps(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv(runtimeconfig.EnvMaxSliceOutputTokens, tt.outputCap)
-			t.Setenv(runtimeconfig.EnvMaxSliceCost, tt.costCap)
+			// Deprecated aliases still feed the unified budget; STOP may not sit
+			// below WARN, so lower the warn thresholds to the cap under test.
+			t.Setenv(runtimeconfig.EnvMaxSliceOutputTokensDeprecated, tt.outputCap)
+			t.Setenv(runtimeconfig.EnvBudgetSliceOutputTokensWarn, tt.outputCap)
+			t.Setenv(runtimeconfig.EnvMaxSliceCostDeprecated, tt.costCap)
+			t.Setenv(runtimeconfig.EnvBudgetSliceCostWarn, tt.costCap)
 			runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
 				metrics := tt.metrics
 				return agent.SessionResult{Output: "partial", Metrics: &metrics}, nil
@@ -568,9 +572,53 @@ func TestRunAgentSessionSliceBudgetCaps(t *testing.T) {
 	}
 }
 
+func TestRunAgentSessionCanonicalStopCaps(t *testing.T) {
+	t.Run("explicit zero stop still blocks", func(t *testing.T) {
+		runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
+			return agent.SessionResult{Output: "partial", Metrics: &agent.Metrics{Cost: 0.25}}, nil
+		})
+		runner, planDir, repoRoot := sessionEventTestRunner(t, runtime, plan.NewFileRepository(""), io.Discard, time.Now())
+		runner.runtimeEnv = *runEnvSnapshot(map[string]string{runtimeconfig.EnvBudgetSliceCostStop: "0", runtimeconfig.EnvBudgetSliceCostWarn: "0"})
+
+		got, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{
+			PlanDir: planDir, RepoRoot: repoRoot, LogAction: "running 001-a", Metrics: &AgentSessionMetricsRequest{SliceID: "001-a", Role: plan.AgentRoleExecution, EnforceSliceCaps: true},
+		})
+		var budgetErr *budgetExceededError
+		if got.Output != "partial" || !errors.As(err, &budgetErr) || budgetErr.metric != "cost" || budgetErr.threshold != 0 || budgetErr.observed != 0.25 {
+			t.Fatalf("zero stop cap: output=%q err=%#v", got.Output, err)
+		}
+		detail, loadErr := plan.NewFileRepository(filepath.Dir(planDir)).GetPlan(context.Background(), filepath.Base(planDir))
+		if loadErr != nil {
+			t.Fatal(loadErr)
+		}
+		if !slices.ContainsFunc(detail.Events, func(event plan.Event) bool {
+			return event.Type == plan.EventTypeBudgetExceeded && event.Metric == "cost"
+		}) {
+			t.Fatalf("budget_exceeded event missing: %+v", detail.Events)
+		}
+	})
+	t.Run("stop below warn rejects the session naming both keys", func(t *testing.T) {
+		calls := 0
+		runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
+			calls++
+			return agent.SessionResult{Metrics: &agent.Metrics{Cost: 0.25}}, nil
+		})
+		runner, planDir, repoRoot := sessionEventTestRunner(t, runtime, plan.NewFileRepository(""), io.Discard, time.Now())
+		runner.runtimeEnv = *runEnvSnapshot(map[string]string{runtimeconfig.EnvBudgetSliceCostStop: "1", runtimeconfig.EnvBudgetSliceCostWarn: "2"})
+
+		_, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{
+			PlanDir: planDir, RepoRoot: repoRoot, LogAction: "running 001-a", Metrics: &AgentSessionMetricsRequest{SliceID: "001-a", Role: plan.AgentRoleExecution, EnforceSliceCaps: true},
+		})
+		if err == nil || calls != 0 || !strings.Contains(err.Error(), runtimeconfig.EnvBudgetSliceCostStop) || !strings.Contains(err.Error(), runtimeconfig.EnvBudgetSliceCostWarn) {
+			t.Fatalf("stop below warn: calls=%d err=%v", calls, err)
+		}
+	})
+}
+
 func TestRunAgentSessionSliceBudgetAccumulatesPriorMetrics(t *testing.T) {
-	t.Setenv(runtimeconfig.EnvMaxSliceOutputTokens, "100")
-	t.Setenv(runtimeconfig.EnvMaxSliceCost, "")
+	t.Setenv(runtimeconfig.EnvMaxSliceOutputTokensDeprecated, "100")
+	t.Setenv(runtimeconfig.EnvBudgetSliceOutputTokensWarn, "100")
+	t.Setenv(runtimeconfig.EnvMaxSliceCostDeprecated, "")
 	repository := plan.NewFileRepository("")
 	current := agent.Metrics{SessionID: "current", OutputTokens: 41}
 	runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
@@ -777,8 +825,8 @@ func TestRunAgentSessionStateReadErrorSkipsSessionTimeoutEvent(t *testing.T) {
 }
 
 func TestRunAgentSessionPlanTelemetryAndCapIsolation(t *testing.T) {
-	t.Setenv(runtimeconfig.EnvMaxSliceOutputTokens, "1")
-	t.Setenv(runtimeconfig.EnvMaxSliceCost, "1")
+	t.Setenv(runtimeconfig.EnvMaxSliceOutputTokensDeprecated, "1")
+	t.Setenv(runtimeconfig.EnvMaxSliceCostDeprecated, "1")
 	for _, request := range []AgentSessionMetricsRequest{
 		{Role: plan.AgentRoleReview},
 		{Role: plan.AgentRoleExecution, EnforceSliceCaps: true}, // no invented slice
@@ -827,7 +875,8 @@ func TestRunAgentSessionTelemetryFailuresPreserveProviderOutcome(t *testing.T) {
 	for _, failure := range []string{"state", "metrics append", "budget append"} {
 		for _, runErr := range []error{nil, &agent.SessionTimeoutError{Timeout: time.Minute}, retryableTransportTestError{error: errors.New("transport failed")}} {
 			t.Run(fmt.Sprintf("%s/%v", failure, runErr), func(t *testing.T) {
-				t.Setenv(runtimeconfig.EnvMaxSliceOutputTokens, "1")
+				t.Setenv(runtimeconfig.EnvMaxSliceOutputTokensDeprecated, "1")
+				t.Setenv(runtimeconfig.EnvBudgetSliceOutputTokensWarn, "1")
 				calls := 0
 				runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
 					calls++
@@ -883,7 +932,8 @@ func TestRunAgentSessionPreSessionFailureDoesNotEmitMetrics(t *testing.T) {
 }
 
 func TestRunAgentSessionUnavailableMetricsRemainUnmeasured(t *testing.T) {
-	t.Setenv(runtimeconfig.EnvMaxSliceOutputTokens, "1")
+	t.Setenv(runtimeconfig.EnvMaxSliceOutputTokensDeprecated, "1")
+	t.Setenv(runtimeconfig.EnvBudgetSliceOutputTokensWarn, "1")
 	for _, missing := range []*agent.Metrics{nil, {Availability: agentmetrics.Unavailable, SessionID: "session"}} {
 		runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
 			return agent.SessionResult{Metrics: missing, MetricsWarning: "private warning"}, nil
@@ -916,7 +966,8 @@ func TestRunAgentSessionUnavailableMetricsRemainUnmeasured(t *testing.T) {
 }
 
 func TestRunAgentSessionCapsExcludeAttributedNonExecutionHistory(t *testing.T) {
-	t.Setenv(runtimeconfig.EnvMaxSliceOutputTokens, "100")
+	t.Setenv(runtimeconfig.EnvMaxSliceOutputTokensDeprecated, "100")
+	t.Setenv(runtimeconfig.EnvBudgetSliceOutputTokensWarn, "100")
 	repository := plan.NewFileRepository("")
 	runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
 		return agent.SessionResult{Metrics: &agent.Metrics{OutputTokens: 40}}, nil

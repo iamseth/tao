@@ -3,6 +3,7 @@ package plan
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path"
 	"sort"
@@ -23,7 +24,7 @@ type AgentBudgetScopeThresholds struct {
 	ErroredMessages   int64
 }
 
-// AgentBudgetThresholds defines separate advisory limits for slices and plans.
+// AgentBudgetThresholds is the warn projection of AgentBudget, not a configuration type.
 type AgentBudgetThresholds struct {
 	Slice AgentBudgetScopeThresholds
 	Plan  AgentBudgetScopeThresholds
@@ -31,10 +32,111 @@ type AgentBudgetThresholds struct {
 
 // DefaultAgentBudgetThresholds returns the built-in telemetry warning limits.
 func DefaultAgentBudgetThresholds() AgentBudgetThresholds {
-	return AgentBudgetThresholds{
-		Slice: AgentBudgetScopeThresholds{OutputTokens: 40000, Cost: 5, ToolCalls: 120, AssistantMessages: 80},
-		Plan:  AgentBudgetScopeThresholds{OutputTokens: 150000, Cost: 20, ToolCalls: 400, AssistantMessages: 300},
+	return DefaultAgentBudget().Warn()
+}
+
+// BudgetLimit pairs an advisory threshold with an optional cap. A nil Stop is
+// disabled; an explicit zero is a real cap.
+type BudgetLimit[T int64 | float64] struct {
+	Warn T  `json:"warn"`
+	Stop *T `json:"stop,omitempty"`
+}
+
+// AgentScopeBudget holds the limits for one telemetry scope.
+type AgentScopeBudget struct {
+	OutputTokens      BudgetLimit[int64]   `json:"output_tokens"`
+	Cost              BudgetLimit[float64] `json:"cost"`
+	ToolCalls         BudgetLimit[int64]   `json:"tool_calls"`
+	AssistantMessages BudgetLimit[int64]   `json:"assistant_messages"`
+	ErroredMessages   BudgetLimit[int64]   `json:"errored_messages"`
+}
+
+// AgentBudget holds slice and plan warning thresholds and optional stop caps.
+type AgentBudget struct {
+	Slice AgentScopeBudget `json:"slice"`
+	Plan  AgentScopeBudget `json:"plan"`
+}
+
+// DefaultAgentBudget returns the built-in warning limits with all stops disabled.
+func DefaultAgentBudget() AgentBudget {
+	return AgentBudget{
+		Slice: AgentScopeBudget{
+			OutputTokens: BudgetLimit[int64]{Warn: 40000}, Cost: BudgetLimit[float64]{Warn: 5},
+			ToolCalls: BudgetLimit[int64]{Warn: 120}, AssistantMessages: BudgetLimit[int64]{Warn: 80},
+		},
+		Plan: AgentScopeBudget{
+			OutputTokens: BudgetLimit[int64]{Warn: 150000}, Cost: BudgetLimit[float64]{Warn: 20},
+			ToolCalls: BudgetLimit[int64]{Warn: 400}, AssistantMessages: BudgetLimit[int64]{Warn: 300},
+		},
 	}
+}
+
+// Warn projects advisory thresholds without changing warning semantics.
+func (b AgentBudget) Warn() AgentBudgetThresholds {
+	project := func(s AgentScopeBudget) AgentBudgetScopeThresholds {
+		return AgentBudgetScopeThresholds{
+			OutputTokens: s.OutputTokens.Warn, Cost: s.Cost.Warn,
+			ToolCalls: s.ToolCalls.Warn, AssistantMessages: s.AssistantMessages.Warn,
+			ErroredMessages: s.ErroredMessages.Warn,
+		}
+	}
+	return AgentBudgetThresholds{Slice: project(b.Slice), Plan: project(b.Plan)}
+}
+
+// BudgetLimitError identifies a stop cap below its warning threshold.
+type BudgetLimitError struct {
+	Scope, Metric string
+	Warn, Stop    float64
+}
+
+func (e *BudgetLimitError) Error() string {
+	return fmt.Sprintf("%s %s stop %g is below warn %g", e.Scope, e.Metric, e.Stop, e.Warn)
+}
+
+// Validate reports every stop cap below its warning threshold.
+func (b AgentBudget) Validate() error {
+	var errs []error
+	for _, entry := range []struct {
+		name   string
+		budget AgentScopeBudget
+	}{{"slice", b.Slice}, {"plan", b.Plan}} {
+		s := entry.budget
+		errs = append(errs,
+			validateBudgetLimit(entry.name, "output_tokens", s.OutputTokens),
+			validateBudgetLimit(entry.name, "cost", s.Cost),
+			validateBudgetLimit(entry.name, "tool_calls", s.ToolCalls),
+			validateBudgetLimit(entry.name, "assistant_messages", s.AssistantMessages),
+			validateBudgetLimit(entry.name, "errored_messages", s.ErroredMessages),
+		)
+	}
+	return errors.Join(errs...)
+}
+
+func validateBudgetLimit[T int64 | float64](scope, metric string, limit BudgetLimit[T]) error {
+	if limit.Stop != nil && *limit.Stop < limit.Warn {
+		return &BudgetLimitError{Scope: scope, Metric: metric, Warn: float64(limit.Warn), Stop: float64(*limit.Stop)}
+	}
+	return nil
+}
+
+// Clone returns a defensive copy with independent stop pointers.
+func (b AgentBudget) Clone() AgentBudget {
+	clone := func(s AgentScopeBudget) AgentScopeBudget {
+		return AgentScopeBudget{
+			OutputTokens: cloneBudgetLimit(s.OutputTokens), Cost: cloneBudgetLimit(s.Cost),
+			ToolCalls: cloneBudgetLimit(s.ToolCalls), AssistantMessages: cloneBudgetLimit(s.AssistantMessages),
+			ErroredMessages: cloneBudgetLimit(s.ErroredMessages),
+		}
+	}
+	return AgentBudget{Slice: clone(b.Slice), Plan: clone(b.Plan)}
+}
+
+func cloneBudgetLimit[T int64 | float64](limit BudgetLimit[T]) BudgetLimit[T] {
+	if limit.Stop != nil {
+		stop := *limit.Stop
+		limit.Stop = &stop
+	}
+	return limit
 }
 
 // AgentRole is assigned by trusted operation context, never inferred from text.

@@ -351,6 +351,34 @@ rollups (`tao status --json` for automation). Use `tao run --help` and
 requests, permissions, and integration. Configure the agent session timeout with
 `TAO_SESSION_TIMEOUT`; set it to `0` to disable the timeout.
 
+### Budgets
+
+Agent budgets use one `TAO_BUDGET_<SCOPE>_<METRIC>_WARN` scheme, where `<SCOPE>`
+is `SLICE` or `PLAN` and `<METRIC>` is `OUTPUT_TOKENS`, `COST`, `TOOL_CALLS`,
+`ASSISTANT_MESSAGES`, or `ERRORED_MESSAGES`. Crossing a `WARN` value only records
+an advisory warning. The two `STOP` caps are enforced: crossing one records
+`budget_exceeded` and blocks the slice. Each `STOP` value must be at least its
+`WARN` value. The built-in defaults are:
+
+```sh
+TAO_BUDGET_SLICE_OUTPUT_TOKENS_WARN=40000
+TAO_BUDGET_SLICE_COST_WARN=5
+TAO_BUDGET_SLICE_TOOL_CALLS_WARN=120
+TAO_BUDGET_SLICE_ASSISTANT_MESSAGES_WARN=80
+TAO_BUDGET_SLICE_ERRORED_MESSAGES_WARN=0   # warn on any
+TAO_BUDGET_PLAN_OUTPUT_TOKENS_WARN=150000
+TAO_BUDGET_PLAN_COST_WARN=20
+TAO_BUDGET_PLAN_TOOL_CALLS_WARN=400
+TAO_BUDGET_PLAN_ASSISTANT_MESSAGES_WARN=300
+TAO_BUDGET_PLAN_ERRORED_MESSAGES_WARN=0    # warn on any
+TAO_BUDGET_SLICE_OUTPUT_TOKENS_STOP=       # disabled by default; explicit 0 is a hard cap
+TAO_BUDGET_SLICE_COST_STOP=                # disabled by default; explicit 0 is a hard cap
+```
+
+The former `TAO_BUDGET_<SCOPE>_<METRIC>` and `TAO_MAX_SLICE_*` names are
+accepted as deprecated aliases for one release, yield to a set canonical key,
+and appear in `tao status` only when set.
+
 ---
 
 ## Development

@@ -17,39 +17,221 @@ func snapshotFrom(values map[string]string) EnvSnapshot {
 }
 
 func TestSnapshotBudgetProjectionsRequireOnlyConsumedKeys(t *testing.T) {
+	budgetKeys := BudgetEnvKeys()
+	if len(budgetKeys) != 24 || !slices.Equal(budgetKeys[:12], []string{
+		EnvBudgetSliceOutputTokensWarn, EnvBudgetSliceCostWarn, EnvBudgetSliceToolCallsWarn, EnvBudgetSliceAssistantMessagesWarn, EnvBudgetSliceErroredMessagesWarn,
+		EnvBudgetPlanOutputTokensWarn, EnvBudgetPlanCostWarn, EnvBudgetPlanToolCallsWarn, EnvBudgetPlanAssistantMessagesWarn, EnvBudgetPlanErroredMessagesWarn,
+		EnvBudgetSliceOutputTokensStop, EnvBudgetSliceCostStop,
+	}) || !slices.Equal(budgetKeys[12:], []string{
+		EnvBudgetSliceOutputTokensDeprecated, EnvBudgetSliceCostDeprecated, EnvBudgetSliceToolCallsDeprecated, EnvBudgetSliceAssistantMessagesDeprecated, EnvBudgetSliceErroredMessagesDeprecated,
+		EnvBudgetPlanOutputTokensDeprecated, EnvBudgetPlanCostDeprecated, EnvBudgetPlanToolCallsDeprecated, EnvBudgetPlanAssistantMessagesDeprecated, EnvBudgetPlanErroredMessagesDeprecated,
+		EnvMaxSliceOutputTokensDeprecated, EnvMaxSliceCostDeprecated,
+	}) {
+		t.Fatalf("budget keys: %v", budgetKeys)
+	}
 	for _, key := range RuntimeEnvKeys() {
 		t.Run(key, func(t *testing.T) {
 			// Use each row's retained failure to distinguish presentation fallback
 			// and opaque string settings from genuinely rejected configuration.
 			snapshot := snapshotFrom(map[string]string{key: "invalid value"})
-			_, thresholdErr := snapshot.BudgetThresholds()
-			_, capErr := snapshot.BudgetCaps()
+			_, budgetErr := snapshot.Budget()
 			invalid := snapshot.Require(key) != nil
-			if (thresholdErr != nil) != (invalid && strings.HasPrefix(key, "TAO_BUDGET_")) {
-				t.Fatalf("threshold admission for %s: %v", key, thresholdErr)
-			}
-			if (capErr != nil) != (invalid && (key == EnvMaxSliceCost || key == EnvMaxSliceOutputTokens)) {
-				t.Fatalf("cap admission for %s: %v", key, capErr)
+			budget := slices.Contains(budgetKeys, key)
+			if (budgetErr != nil) != (invalid && budget) {
+				t.Fatalf("budget admission for %s: %v", key, budgetErr)
 			}
 		})
 	}
-	snapshot := snapshotFrom(map[string]string{EnvMaxSliceCost: "0", EnvMaxSliceOutputTokens: "0", EnvBudgetPlanCost: "0"})
-	caps, err := snapshot.BudgetCaps()
-	if err != nil || caps.Cost == nil || *caps.Cost != 0 || caps.OutputTokens == nil || *caps.OutputTokens != 0 {
-		t.Fatalf("zero caps lost: %+v, %v", caps, err)
+	snapshot := snapshotFrom(map[string]string{EnvBudgetSliceCostStop: "0", EnvBudgetSliceOutputTokensStop: "0", EnvBudgetPlanCostWarn: "0", EnvBudgetSliceCostWarn: "0", EnvBudgetSliceOutputTokensWarn: "0"})
+	budget, err := snapshot.Budget()
+	if err != nil || budget.Slice.Cost.Stop == nil || *budget.Slice.Cost.Stop != 0 || budget.Slice.OutputTokens.Stop == nil || *budget.Slice.OutputTokens.Stop != 0 || budget.Plan.Cost.Warn != 0 {
+		t.Fatalf("zero budget lost: %+v, %v", budget, err)
 	}
-	*caps.Cost = 100
-	captured, err := snapshot.BudgetCaps()
-	if err != nil || *captured.Cost != 0 {
+	*budget.Slice.Cost.Stop = 100
+	captured, err := snapshot.Budget()
+	if err != nil || *captured.Slice.Cost.Stop != 0 || *snapshot.Defaults().Budget.Slice.Cost.Stop != 0 {
 		t.Fatalf("projection mutated snapshot: %+v, %v", captured, err)
 	}
-	thresholds, err := snapshot.BudgetThresholds()
-	if err != nil || thresholds.Plan.Cost != 0 {
-		t.Fatalf("zero threshold lost: %+v, %v", thresholds, err)
+	if thresholds := budget.Warn(); thresholds.Plan.Cost != 0 || thresholds.Slice.Cost != 0 || thresholds.Slice.OutputTokens != 0 {
+		t.Fatalf("warn projection disagrees: %+v", thresholds)
 	}
-	defaults, err := (EnvSnapshot{}).BudgetCaps()
-	if err != nil || defaults.Cost != nil || defaults.OutputTokens != nil {
-		t.Fatalf("built-in caps enabled: %+v, %v", defaults, err)
+	defaults, err := (EnvSnapshot{}).Budget()
+	if err != nil || !reflect.DeepEqual(defaults, plan.DefaultAgentBudget()) {
+		t.Fatalf("built-in budget: %+v, %v", defaults, err)
+	}
+}
+
+func TestEnvSnapshotBudgetCanonicalValues(t *testing.T) {
+	s := snapshotFrom(map[string]string{
+		EnvBudgetSliceOutputTokensWarn: "101", EnvBudgetSliceCostWarn: "2.5", EnvBudgetSliceToolCallsWarn: "102", EnvBudgetSliceAssistantMessagesWarn: "103", EnvBudgetSliceErroredMessagesWarn: "104",
+		EnvBudgetPlanOutputTokensWarn: "201", EnvBudgetPlanCostWarn: "3.5", EnvBudgetPlanToolCallsWarn: "202", EnvBudgetPlanAssistantMessagesWarn: "203", EnvBudgetPlanErroredMessagesWarn: "204",
+		EnvBudgetSliceOutputTokensStop: "1000", EnvBudgetSliceCostStop: "9.5",
+	})
+	budget, err := s.Budget()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokens, cost := int64(1000), 9.5
+	want := plan.AgentBudget{
+		Slice: plan.AgentScopeBudget{
+			OutputTokens: plan.BudgetLimit[int64]{Warn: 101, Stop: &tokens}, Cost: plan.BudgetLimit[float64]{Warn: 2.5, Stop: &cost},
+			ToolCalls: plan.BudgetLimit[int64]{Warn: 102}, AssistantMessages: plan.BudgetLimit[int64]{Warn: 103}, ErroredMessages: plan.BudgetLimit[int64]{Warn: 104},
+		},
+		Plan: plan.AgentScopeBudget{
+			OutputTokens: plan.BudgetLimit[int64]{Warn: 201}, Cost: plan.BudgetLimit[float64]{Warn: 3.5},
+			ToolCalls: plan.BudgetLimit[int64]{Warn: 202}, AssistantMessages: plan.BudgetLimit[int64]{Warn: 203}, ErroredMessages: plan.BudgetLimit[int64]{Warn: 204},
+		},
+	}
+	if !reflect.DeepEqual(budget, want) {
+		t.Fatalf("budget = %+v, want %+v", budget, want)
+	}
+	for _, row := range s.Status() {
+		if slices.Contains(BudgetEnvKeys()[12:], row.Name) {
+			t.Fatalf("unset alias surfaced: %+v", row)
+		}
+		if slices.Contains(BudgetEnvKeys()[:12], row.Name) && (row.Source != "env" || row.Warning != "") {
+			t.Fatalf("canonical row: %+v", row)
+		}
+	}
+	for _, key := range []string{EnvBudgetSliceOutputTokensStop, EnvBudgetSliceCostStop} {
+		row := snapshotFrom(nil).Status()[slices.Index(RuntimeEnvKeys(), key)]
+		if row.Name != key || row.Value != "disabled" || row.Source != "default" {
+			t.Fatalf("stop default row: %+v", row)
+		}
+	}
+	first, second := s.Defaults(), s.Defaults()
+	if first.Budget.Slice.Cost.Stop == second.Budget.Slice.Cost.Stop || first.Budget.Slice.OutputTokens.Stop == second.Budget.Slice.OutputTokens.Stop {
+		t.Fatal("Defaults clones share stop pointers")
+	}
+	*first.Budget.Slice.Cost.Stop = 1
+	if *s.Defaults().Budget.Slice.Cost.Stop != 9.5 {
+		t.Fatal("clone mutation reached snapshot")
+	}
+}
+
+func TestEnvSnapshotBudgetAliases(t *testing.T) {
+	aliases := map[string]string{
+		EnvBudgetSliceOutputTokensDeprecated: EnvBudgetSliceOutputTokensWarn, EnvBudgetSliceCostDeprecated: EnvBudgetSliceCostWarn,
+		EnvBudgetSliceToolCallsDeprecated: EnvBudgetSliceToolCallsWarn, EnvBudgetSliceAssistantMessagesDeprecated: EnvBudgetSliceAssistantMessagesWarn,
+		EnvBudgetSliceErroredMessagesDeprecated: EnvBudgetSliceErroredMessagesWarn, EnvBudgetPlanOutputTokensDeprecated: EnvBudgetPlanOutputTokensWarn,
+		EnvBudgetPlanCostDeprecated: EnvBudgetPlanCostWarn, EnvBudgetPlanToolCallsDeprecated: EnvBudgetPlanToolCallsWarn,
+		EnvBudgetPlanAssistantMessagesDeprecated: EnvBudgetPlanAssistantMessagesWarn, EnvBudgetPlanErroredMessagesDeprecated: EnvBudgetPlanErroredMessagesWarn,
+		EnvMaxSliceOutputTokensDeprecated: EnvBudgetSliceOutputTokensStop, EnvMaxSliceCostDeprecated: EnvBudgetSliceCostStop,
+	}
+	rowByName := func(rows []EnvVarStatus, name string) (EnvVarStatus, bool) {
+		for _, row := range rows {
+			if row.Name == name {
+				return row, true
+			}
+		}
+		return EnvVarStatus{}, false
+	}
+	for alias, canonical := range aliases {
+		t.Run(alias, func(t *testing.T) {
+			// Alias only: the value lands under the canonical key with a warning.
+			// The value exceeds every built-in warn so STOP aliases stay valid.
+			s := snapshotFrom(map[string]string{alias: "70000"})
+			if err := s.Require(alias, canonical); err != nil {
+				t.Fatal(err)
+			}
+			rows := s.Status()
+			if len(rows) != len(RuntimeEnvKeys())-11 {
+				t.Fatalf("rows=%d; unset aliases must be absent", len(rows))
+			}
+			aliasRow, ok := rowByName(rows, alias)
+			if !ok || aliasRow.Value != "70000" || aliasRow.Source != "env" || aliasRow.Warning != "deprecated; use "+canonical {
+				t.Fatalf("alias row: %+v", aliasRow)
+			}
+			canonicalRow, _ := rowByName(rows, canonical)
+			if canonicalRow.Value != "70000" || canonicalRow.Source != "env" || canonicalRow.Warning != "" {
+				t.Fatalf("canonical row: %+v", canonicalRow)
+			}
+			if !reflect.DeepEqual(s.Defaults().Budget, snapshotFrom(map[string]string{canonical: "70000"}).Defaults().Budget) {
+				t.Fatalf("alias value not applied: %+v", s.Defaults().Budget)
+			}
+			// Alias plus canonical: the canonical value wins and the alias row warns.
+			s = snapshotFrom(map[string]string{alias: "bad", canonical: "90000"})
+			if err := s.Require(alias, canonical); err != nil {
+				t.Fatal(err)
+			}
+			rows = s.Status()
+			aliasRow, _ = rowByName(rows, alias)
+			if aliasRow.Value != "bad" || aliasRow.Source != "env" || aliasRow.Warning != "deprecated alias of "+canonical+"; ignored because "+canonical+" is set" {
+				t.Fatalf("ignored alias row: %+v", aliasRow)
+			}
+			canonicalRow, _ = rowByName(rows, canonical)
+			if canonicalRow.Value != "90000" || canonicalRow.Source != "env" || canonicalRow.Warning != "" {
+				t.Fatalf("canonical row with alias: %+v", canonicalRow)
+			}
+			if !reflect.DeepEqual(s.Defaults().Budget, snapshotFrom(map[string]string{canonical: "90000"}).Defaults().Budget) {
+				t.Fatalf("alias overrode canonical: %+v", s.Defaults().Budget)
+			}
+			// Invalid alias is rejected on consumption under its own name.
+			s = snapshotFrom(map[string]string{alias: "bad"})
+			if _, err := s.Budget(); err == nil || !strings.Contains(err.Error(), alias) {
+				t.Fatalf("invalid alias admitted: %v", err)
+			}
+			aliasRow, _ = rowByName(s.Status(), alias)
+			if aliasRow.Source != "invalid" || aliasRow.Warning == "" {
+				t.Fatalf("invalid alias row: %+v", aliasRow)
+			}
+			if !reflect.DeepEqual(s.Defaults().Budget, plan.DefaultAgentBudget()) {
+				t.Fatal("invalid alias mutated defaults")
+			}
+		})
+	}
+	// Unset aliases are looked up but never appear in Status.
+	rows := snapshotFrom(nil).Status()
+	for alias := range aliases {
+		if _, ok := rowByName(rows, alias); ok {
+			t.Fatalf("unset alias %s present in status", alias)
+		}
+	}
+	if len(rows) != len(RuntimeEnvKeys())-len(aliases) {
+		t.Fatalf("rows=%d keys=%d aliases=%d", len(rows), len(RuntimeEnvKeys()), len(aliases))
+	}
+}
+
+func TestEnvSnapshotBudgetStopBelowWarn(t *testing.T) {
+	for _, tc := range []struct{ stop, warn, stopValue, warnValue string }{
+		{EnvBudgetSliceCostStop, EnvBudgetSliceCostWarn, "1", "2.5"},
+		{EnvBudgetSliceOutputTokensStop, EnvBudgetSliceOutputTokensWarn, "10", "20"},
+		{EnvMaxSliceCostDeprecated, EnvBudgetSliceCostWarn, "1", "2.5"},
+		{EnvBudgetSliceCostStop, EnvBudgetSliceCostDeprecated, "1", "2.5"},
+	} {
+		t.Run(tc.stop+"<"+tc.warn, func(t *testing.T) {
+			s := snapshotFrom(map[string]string{tc.stop: tc.stopValue, tc.warn: tc.warnValue, EnvTheme: "gruvbox"})
+			canonicalStop, canonicalWarn := tc.stop, tc.warn
+			for _, v := range runtimeEnvVars {
+				if v.name == tc.stop && v.aliasOf != "" {
+					canonicalStop = v.aliasOf
+				}
+				if v.name == tc.warn && v.aliasOf != "" {
+					canonicalWarn = v.aliasOf
+				}
+			}
+			_, err := s.Budget()
+			if err == nil || !strings.Contains(err.Error(), canonicalStop) || !strings.Contains(err.Error(), canonicalWarn) || !strings.Contains(err.Error(), tc.stopValue) || !strings.Contains(err.Error(), tc.warnValue) {
+				t.Fatalf("stop below warn admitted: %v", err)
+			}
+			if s.Require(canonicalStop) == nil || s.Require(canonicalWarn) != nil || s.Require(EnvTheme) != nil {
+				t.Fatalf("failure scope: stop=%v warn=%v theme=%v", s.Require(canonicalStop), s.Require(canonicalWarn), s.Require(EnvTheme))
+			}
+			if s.Defaults().Theme.Name() != "gruvbox" {
+				t.Fatal("unrelated setting lost")
+			}
+			row := s.Status()[slices.Index(RuntimeEnvKeys(), canonicalStop)]
+			if row.Name != canonicalStop || row.Source != "invalid" || row.Warning != s.Require(canonicalStop).Error() {
+				t.Fatalf("stop row: %+v", row)
+			}
+		})
+	}
+	s := snapshotFrom(map[string]string{EnvBudgetSliceCostStop: "2.5", EnvBudgetSliceCostWarn: "2.5", EnvBudgetSliceOutputTokensStop: "20", EnvBudgetSliceOutputTokensWarn: "20"})
+	if _, err := s.Budget(); err != nil {
+		t.Fatalf("stop equal to warn rejected: %v", err)
+	}
+	if s.Require(RuntimeEnvKeys()...) != nil {
+		t.Fatal("stop equal to warn recorded a failure")
 	}
 }
 
@@ -60,46 +242,51 @@ func TestEnvSnapshotCompleteTableWrites(t *testing.T) {
 		EnvUpdate: "off", EnvPullRequest: "true", EnvReview: "false", EnvAutoRework: "false", EnvMaxReworkAttempts: "7", EnvReworkEscalationFromAttempt: "6", EnvSkipPermissions: "true",
 		EnvMergeVerifyCommand: "go test ./...", EnvAggregateReviewConvergenceWindow: "5", EnvApprovedBy: "bot", EnvRunHeader: "false", EnvTheme: "gruvbox",
 		EnvPlannerRouting: "shadow", EnvPlannerRoutingArms: "pi=0.5,claude=0.5", EnvPlannerRoutingFloor: "0.2",
-		EnvMaxSliceOutputTokens: "100", EnvMaxSliceCost: "1.5",
-		EnvBudgetSliceOutputTokens: "101", EnvBudgetSliceCost: "2.5", EnvBudgetSliceToolCalls: "102", EnvBudgetSliceAssistantMessages: "103", EnvBudgetSliceErroredMessages: "104",
-		EnvBudgetPlanOutputTokens: "201", EnvBudgetPlanCost: "3.5", EnvBudgetPlanToolCalls: "202", EnvBudgetPlanAssistantMessages: "203", EnvBudgetPlanErroredMessages: "204",
+		EnvBudgetSliceOutputTokensWarn: "101", EnvBudgetSliceCostWarn: "2.5", EnvBudgetSliceToolCallsWarn: "102", EnvBudgetSliceAssistantMessagesWarn: "103", EnvBudgetSliceErroredMessagesWarn: "104",
+		EnvBudgetPlanOutputTokensWarn: "201", EnvBudgetPlanCostWarn: "3.5", EnvBudgetPlanToolCallsWarn: "202", EnvBudgetPlanAssistantMessagesWarn: "203", EnvBudgetPlanErroredMessagesWarn: "204",
+		EnvBudgetSliceOutputTokensStop: "1000", EnvBudgetSliceCostStop: "9.5",
+	}
+	// Every alias is set too; each is ignored in favor of its canonical key.
+	aliases := BudgetEnvKeys()[12:]
+	for _, alias := range aliases {
+		values[alias] = "1"
 	}
 	s := snapshotFrom(values)
 	if err := s.Require(RuntimeEnvKeys()...); err != nil {
 		t.Fatal(err)
 	}
 	rows := s.Status()
-	if len(rows) != len(values) {
+	if len(rows) != len(values) || len(rows) != len(RuntimeEnvKeys()) {
 		t.Fatalf("rows=%d values=%d; update complete-table coverage", len(rows), len(values))
 	}
 	seen := map[string]bool{}
 	for _, row := range rows {
 		value, ok := values[row.Name]
-		if !ok || seen[row.Name] || row.Value != value || row.Source != "env" || row.Warning != "" {
+		alias := slices.Contains(aliases, row.Name)
+		if !ok || seen[row.Name] || row.Value != value || row.Source != "env" || (row.Warning != "") != alias || (alias && !strings.Contains(row.Warning, "ignored because")) {
 			t.Errorf("unexpected row: %+v", row)
 		}
 		seen[row.Name] = true
 	}
 	yes, no, attempts, escalation, timeout := true, false, 7, 6, 3*time.Minute
-	tokens, cost := int64(100), 1.5
+	tokens, cost := int64(1000), 9.5
 	selected, _ := theme.Lookup("gruvbox")
 	want := EnvDefaults{
 		RunOptionsPatch: RunOptionsPatch{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentClaude, PullRequest: &yes, ReviewEnabled: &no, SessionTimeout: &timeout, Model: "base", RunModel: "run", ReviewModel: "review", MergeReviewModel: "merge", ResolverModel: "resolve", ReworkEscalationModel: "strong"},
 		AutoRework:      &no, MaxReworkAttempts: &attempts, ReworkEscalationFromAttempt: &escalation, UpdateMode: selfupdate.ModeOff, Theme: selected, SkipPermissions: true,
 		MergeVerifyCommand: "go test ./...", MergeVerifyCommandSet: true, AggregateReviewConvergenceWindow: 5, ApprovedBy: "bot", RunHeader: false,
-		PlannerRouting:  PlannerRoutingConfig{Mode: "shadow", Arms: []PlannerRoutingArm{{AgentPi, 0.5}, {AgentClaude, 0.5}}, Floor: 0.2, ModeSet: true, ArmsSet: true, FloorSet: true},
-		SliceBudgetCaps: SliceBudgetCaps{OutputTokens: &tokens, Cost: &cost},
+		PlannerRouting: PlannerRoutingConfig{Mode: "shadow", Arms: []PlannerRoutingArm{{AgentPi, 0.5}, {AgentClaude, 0.5}}, Floor: 0.2, ModeSet: true, ArmsSet: true, FloorSet: true},
+		Budget: plan.AgentBudget{
+			Slice: plan.AgentScopeBudget{
+				OutputTokens: plan.BudgetLimit[int64]{Warn: 101, Stop: &tokens}, Cost: plan.BudgetLimit[float64]{Warn: 2.5, Stop: &cost},
+				ToolCalls: plan.BudgetLimit[int64]{Warn: 102}, AssistantMessages: plan.BudgetLimit[int64]{Warn: 103}, ErroredMessages: plan.BudgetLimit[int64]{Warn: 104},
+			},
+			Plan: plan.AgentScopeBudget{
+				OutputTokens: plan.BudgetLimit[int64]{Warn: 201}, Cost: plan.BudgetLimit[float64]{Warn: 3.5},
+				ToolCalls: plan.BudgetLimit[int64]{Warn: 202}, AssistantMessages: plan.BudgetLimit[int64]{Warn: 203}, ErroredMessages: plan.BudgetLimit[int64]{Warn: 204},
+			},
+		},
 	}
-	want.AgentBudgetThresholds.Slice.OutputTokens = 101
-	want.AgentBudgetThresholds.Slice.Cost = 2.5
-	want.AgentBudgetThresholds.Slice.ToolCalls = 102
-	want.AgentBudgetThresholds.Slice.AssistantMessages = 103
-	want.AgentBudgetThresholds.Slice.ErroredMessages = 104
-	want.AgentBudgetThresholds.Plan.OutputTokens = 201
-	want.AgentBudgetThresholds.Plan.Cost = 3.5
-	want.AgentBudgetThresholds.Plan.ToolCalls = 202
-	want.AgentBudgetThresholds.Plan.AssistantMessages = 203
-	want.AgentBudgetThresholds.Plan.ErroredMessages = 204
 	if got := s.Defaults(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("defaults = %+v, want %+v", got, want)
 	}
@@ -115,7 +302,7 @@ func TestEnvSnapshotBuiltinsAndEmptyRules(t *testing.T) {
 		t.Fatal("zero snapshot does not project built-ins")
 	}
 	d := s.Defaults()
-	if d.CommitPolicy != CommitPolicySlice || d.ExecutionMode != ExecutionModeIsolated || d.Agent != AgentPi || d.SessionTimeoutValue() != 20*time.Minute || d.PullRequestValue() || !d.ReviewEnabledValue() || d.AutoRework == nil || !*d.AutoRework || d.MaxReworkAttempts == nil || *d.MaxReworkAttempts != 5 || d.ReworkEscalationFromAttemptValue() != 4 || d.UpdateMode != selfupdate.ModeWarn || d.Theme != theme.Default() || !d.RunHeader || d.AggregateReviewConvergenceWindow != 2 || d.SkipPermissions || d.MergeVerifyCommandSet || d.MergeVerifyCommand != "" || d.ApprovedBy != "" || d.SliceBudgetCaps != (SliceBudgetCaps{}) || d.AgentBudgetThresholds != plan.DefaultAgentBudgetThresholds() {
+	if d.CommitPolicy != CommitPolicySlice || d.ExecutionMode != ExecutionModeIsolated || d.Agent != AgentPi || d.SessionTimeoutValue() != 20*time.Minute || d.PullRequestValue() || !d.ReviewEnabledValue() || d.AutoRework == nil || !*d.AutoRework || d.MaxReworkAttempts == nil || *d.MaxReworkAttempts != 5 || d.ReworkEscalationFromAttemptValue() != 4 || d.UpdateMode != selfupdate.ModeWarn || d.Theme != theme.Default() || !d.RunHeader || d.AggregateReviewConvergenceWindow != 2 || d.SkipPermissions || d.MergeVerifyCommandSet || d.MergeVerifyCommand != "" || d.ApprovedBy != "" || !reflect.DeepEqual(d.Budget, plan.DefaultAgentBudget()) {
 		t.Fatalf("built-ins = %+v", d)
 	}
 	for _, v := range runtimeEnvVars {
@@ -191,7 +378,7 @@ func TestEnvSnapshotFailuresAreConsumptionScoped(t *testing.T) {
 		EnvCommitPolicy: "plan", EnvExecutionMode: "sandbox", EnvAgent: "robot", EnvSessionTimeout: "soon",
 		EnvModel: "", EnvRunModel: "two models", EnvReviewModel: "\t", EnvMergeReviewModel: "a\nb", EnvResolverModel: "a\u00a0b", EnvReworkEscalationModel: "a\tb",
 		EnvUpdate: "sometimes", EnvPullRequest: "maybe", EnvReview: "maybe", EnvAutoRework: "maybe", EnvSkipPermissions: "maybe",
-		EnvMaxReworkAttempts: "-1", EnvReworkEscalationFromAttempt: "0", EnvAggregateReviewConvergenceWindow: "1", EnvMaxSliceOutputTokens: "-1", EnvMaxSliceCost: "NaN",
+		EnvMaxReworkAttempts: "-1", EnvReworkEscalationFromAttempt: "0", EnvAggregateReviewConvergenceWindow: "1", EnvMaxSliceOutputTokensDeprecated: "-1", EnvMaxSliceCostDeprecated: "NaN",
 		EnvTheme: "unknown", EnvRunHeader: "unknown",
 	}
 	for _, v := range runtimeEnvVars {
@@ -199,6 +386,7 @@ func TestEnvSnapshotFailuresAreConsumptionScoped(t *testing.T) {
 			invalid[v.name] = "-1"
 		}
 	}
+	// Every alias is set (invalidly), so every table row is present.
 	s := snapshotFrom(invalid)
 	if !reflect.DeepEqual(s.Defaults(), LoadEnv(nil).Defaults()) {
 		t.Fatalf("invalid fields mutated defaults: %+v", s.Defaults())
@@ -222,6 +410,13 @@ func TestEnvSnapshotFailuresAreConsumptionScoped(t *testing.T) {
 		if row.Warning == "" {
 			t.Errorf("missing warning: %+v", row)
 		}
+		if slices.Contains(BudgetEnvKeys()[12:], row.Name) {
+			// A set alias yields to its set canonical key: warned, never rejected.
+			if err != nil || row.Source != "env" || !strings.Contains(row.Warning, "ignored because") {
+				t.Errorf("ignored alias: %+v, %v", row, err)
+			}
+			continue
+		}
 		if presentation {
 			if err != nil || row.Source != "default" || !strings.Contains(row.Warning, "using default") {
 				t.Errorf("presentation: %+v, %v", row, err)
@@ -230,8 +425,8 @@ func TestEnvSnapshotFailuresAreConsumptionScoped(t *testing.T) {
 			t.Errorf("rejection: %+v, %v", row, err)
 		}
 	}
-	err := s.Require(EnvAgent, EnvMaxSliceCost)
-	if err == nil || !strings.Contains(err.Error(), EnvAgent) || !strings.Contains(err.Error(), EnvMaxSliceCost) || strings.Contains(err.Error(), EnvUpdate) {
+	err := s.Require(EnvAgent, EnvBudgetSliceCostStop)
+	if err == nil || !strings.Contains(err.Error(), EnvAgent) || !strings.Contains(err.Error(), EnvBudgetSliceCostStop) || strings.Contains(err.Error(), EnvUpdate) {
 		t.Fatalf("mixed requirements: %v", err)
 	}
 	for _, v := range runtimeEnvVars {
@@ -246,7 +441,7 @@ func TestEnvSnapshotDiagnosticsDescribeAcceptedValues(t *testing.T) {
 		{EnvCommitPolicy, "bad", "slice or none"}, {EnvExecutionMode, "bad", "isolated or current"}, {EnvAgent, "bad", "pi or claude"},
 		{EnvSessionTimeout, "soon", "positive duration"}, {EnvSessionTimeout, "-1s", "positive duration"}, {EnvModel, "", "not be empty"}, {EnvModel, "two models", "whitespace"},
 		{EnvPullRequest, "bad", "true/false, 1/0, yes/no, on/off, t/f, y/n"}, {EnvMaxReworkAttempts, "-1", "non-negative integer"}, {EnvReworkEscalationFromAttempt, "0", "at least 1"}, {EnvAggregateReviewConvergenceWindow, "1", "at least 2"},
-		{EnvMaxSliceCost, "Inf", "non-negative decimal"}, {EnvBudgetPlanCost, "NaN", "non-negative decimal"}, {EnvBudgetSliceToolCalls, "1.5", "non-negative integer"}, {EnvUpdate, "bad", "warn, auto, or off"},
+		{EnvBudgetSliceCostStop, "Inf", "non-negative decimal"}, {EnvMaxSliceCostDeprecated, "Inf", "non-negative decimal"}, {EnvBudgetPlanCostWarn, "NaN", "non-negative decimal"}, {EnvBudgetPlanCostDeprecated, "NaN", "non-negative decimal"}, {EnvBudgetSliceToolCallsWarn, "1.5", "non-negative integer"}, {EnvUpdate, "bad", "warn, auto, or off"},
 	} {
 		err := snapshotFrom(map[string]string{tc.key: tc.raw}).Require(tc.key)
 		if err == nil || !strings.Contains(err.Error(), tc.key) || !strings.Contains(err.Error(), tc.want) {
@@ -315,18 +510,19 @@ func TestEnvSnapshotRoutingFailuresAreConsumptionScoped(t *testing.T) {
 }
 
 func TestEnvSnapshotZeroAndRoutingPresence(t *testing.T) {
-	values := map[string]string{EnvSessionTimeout: "0", EnvMaxReworkAttempts: "0", EnvMaxSliceOutputTokens: "0", EnvMaxSliceCost: "0", EnvPlannerRouting: " \t", EnvPlannerRoutingArms: " pi=1 ", EnvPlannerRoutingFloor: " 0.2 "}
-	for _, v := range runtimeEnvVars {
-		if strings.HasPrefix(v.name, "TAO_BUDGET_") {
-			values[v.name] = "0"
-		}
+	values := map[string]string{EnvSessionTimeout: "0", EnvMaxReworkAttempts: "0", EnvPlannerRouting: " \t", EnvPlannerRoutingArms: " pi=1 ", EnvPlannerRoutingFloor: " 0.2 "}
+	for _, key := range BudgetEnvKeys()[:12] {
+		values[key] = "0"
 	}
 	s := snapshotFrom(values)
 	if err := s.Require(RuntimeEnvKeys()...); err != nil {
 		t.Fatal(err)
 	}
 	d := s.Defaults()
-	if d.SessionTimeout == nil || *d.SessionTimeout != 0 || d.MaxReworkAttempts == nil || *d.MaxReworkAttempts != 0 || d.SliceBudgetCaps.OutputTokens == nil || *d.SliceBudgetCaps.OutputTokens != 0 || d.SliceBudgetCaps.Cost == nil || *d.SliceBudgetCaps.Cost != 0 || d.AgentBudgetThresholds != (plan.AgentBudgetThresholds{}) {
+	zero := int64(0)
+	zeroCost := 0.0
+	wantBudget := plan.AgentBudget{Slice: plan.AgentScopeBudget{OutputTokens: plan.BudgetLimit[int64]{Stop: &zero}, Cost: plan.BudgetLimit[float64]{Stop: &zeroCost}}}
+	if d.SessionTimeout == nil || *d.SessionTimeout != 0 || d.MaxReworkAttempts == nil || *d.MaxReworkAttempts != 0 || !reflect.DeepEqual(d.Budget, wantBudget) {
 		t.Fatalf("lost explicit zero: %+v", d)
 	}
 	wantRouting := PlannerRoutingConfig{Mode: "off", Arms: []PlannerRoutingArm{{AgentPi, 1}}, Floor: 0.2, ArmsSet: true, FloorSet: true}
@@ -336,7 +532,7 @@ func TestEnvSnapshotZeroAndRoutingPresence(t *testing.T) {
 }
 
 func TestEnvSnapshotLookupOnceAndDefensiveCopies(t *testing.T) {
-	values := map[string]string{EnvPullRequest: "true", EnvReview: "false", EnvAutoRework: "false", EnvMaxReworkAttempts: "7", EnvReworkEscalationFromAttempt: "6", EnvMaxSliceOutputTokens: "100", EnvMaxSliceCost: "1.5", EnvAgent: "bad"}
+	values := map[string]string{EnvPullRequest: "true", EnvReview: "false", EnvAutoRework: "false", EnvMaxReworkAttempts: "7", EnvReworkEscalationFromAttempt: "6", EnvBudgetSliceOutputTokensStop: "100000", EnvBudgetSliceCostStop: "10.5", EnvAgent: "bad"}
 	counts := map[string]int{}
 	s := LoadEnv(func(key string) (string, bool) { counts[key]++; value, ok := values[key]; return value, ok })
 	before, rows, failure := s.Defaults(), s.Status(), s.Require(EnvAgent).Error()
@@ -350,8 +546,8 @@ func TestEnvSnapshotLookupOnceAndDefensiveCopies(t *testing.T) {
 		*d.MaxReworkAttempts = 999
 		*d.ReworkEscalationFromAttempt = 999
 		*d.SessionTimeout = 0
-		*d.SliceBudgetCaps.OutputTokens = 999
-		*d.SliceBudgetCaps.Cost = 999
+		*d.Budget.Slice.OutputTokens.Stop = 999
+		*d.Budget.Slice.Cost.Stop = 999
 		d.PlannerRouting.Arms[0].Probability = 999
 		changed := s.Status()
 		changed[0].Value = "changed"
@@ -375,13 +571,13 @@ func TestEnvSnapshotLookupOnceAndDefensiveCopies(t *testing.T) {
 func TestEnvSnapshotMixedSuccessAndFailure(t *testing.T) {
 	s := snapshotFrom(map[string]string{
 		EnvAgent: "invalid", EnvUpdate: "invalid", EnvTheme: "invalid",
-		EnvRunModel: " provider/run ", EnvApprovedBy: "bot", EnvBudgetPlanCost: "0",
+		EnvRunModel: " provider/run ", EnvApprovedBy: "bot", EnvBudgetPlanCostWarn: "0",
 	})
 	d := s.Defaults()
-	if d.Agent != AgentPi || d.UpdateMode != selfupdate.ModeWarn || d.Theme != theme.Default() || d.RunModel != "provider/run" || d.ApprovedBy != "bot" || d.AgentBudgetThresholds.Plan.Cost != 0 {
+	if d.Agent != AgentPi || d.UpdateMode != selfupdate.ModeWarn || d.Theme != theme.Default() || d.RunModel != "provider/run" || d.ApprovedBy != "bot" || d.Budget.Plan.Cost.Warn != 0 {
 		t.Fatalf("mixed defaults: %+v", d)
 	}
-	if s.Require(EnvRunModel, EnvApprovedBy, EnvBudgetPlanCost, EnvTheme) != nil || s.Require(EnvAgent, EnvUpdate) == nil {
+	if s.Require(EnvRunModel, EnvApprovedBy, EnvBudgetPlanCostWarn, EnvTheme) != nil || s.Require(EnvAgent, EnvUpdate) == nil {
 		t.Fatal("failures escaped their consumption scope")
 	}
 }

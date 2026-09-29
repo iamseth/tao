@@ -84,11 +84,11 @@ func (a App) show(ctx context.Context, repo plan.Repository, args []string) erro
 			MergeInProgress *showMergeInProgress `json:"merge_in_progress,omitempty"`
 		}{payload, merging})
 	}
-	thresholds, err := a.envSnapshot().BudgetThresholds()
+	budget, err := a.envSnapshot().Budget()
 	if err != nil {
 		return err
 	}
-	return a.renderPlanDetailWithMerge(a.Out, loaded, thresholds, merging)
+	return a.renderPlanDetailWithMerge(a.Out, loaded, budget.Warn(), merging)
 }
 
 // showMergeInProgress is transient presentation, not lifecycle evidence.

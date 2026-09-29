@@ -22,7 +22,7 @@ func runEnvSnapshot(values map[string]string) *runtimeconfig.EnvSnapshot {
 }
 
 func TestInvalidSessionCapsRejectBeforeLaunch(t *testing.T) {
-	for _, key := range []string{runtimeconfig.EnvMaxSliceOutputTokens, runtimeconfig.EnvMaxSliceCost} {
+	for _, key := range []string{runtimeconfig.EnvMaxSliceOutputTokensDeprecated, runtimeconfig.EnvMaxSliceCostDeprecated} {
 		t.Run(key, func(t *testing.T) {
 			runner := agentSessionRunner{runtimeEnv: *runEnvSnapshot(map[string]string{key: "invalid"})}
 			// No collaborators are available: rejection must precede log, provider, and event work.
@@ -48,7 +48,7 @@ func TestSessionsIgnoreUnusedInvalidBudgets(t *testing.T) {
 			return agent.SessionResult{Metrics: &agent.Metrics{OutputTokens: 100}}, nil
 		})
 		runner, dir, root := sessionEventTestRunner(t, runtime, plan.NewFileRepository(""), io.Discard, time.Now())
-		runner.runtimeEnv = *runEnvSnapshot(map[string]string{runtimeconfig.EnvMaxSliceCost: "invalid", runtimeconfig.EnvMaxSliceOutputTokens: "invalid", runtimeconfig.EnvBudgetPlanCost: "invalid"})
+		runner.runtimeEnv = *runEnvSnapshot(map[string]string{runtimeconfig.EnvMaxSliceCostDeprecated: "invalid", runtimeconfig.EnvMaxSliceOutputTokensDeprecated: "invalid", runtimeconfig.EnvBudgetPlanCostDeprecated: "invalid"})
 		_, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{PlanDir: dir, RepoRoot: root, Metrics: metrics})
 		if err != nil || calls != 1 {
 			t.Fatalf("unused budgets blocked session: calls=%d err=%v", calls, err)
@@ -58,15 +58,18 @@ func TestSessionsIgnoreUnusedInvalidBudgets(t *testing.T) {
 
 func TestInjectedSessionCapsStableAcrossHandoffs(t *testing.T) {
 	for _, tc := range []struct {
-		key, value, metric string
-		metrics            agent.Metrics
-		threshold          float64
+		key, warnKey, value, metric string
+		metrics                     agent.Metrics
+		threshold                   float64
 	}{
-		{runtimeconfig.EnvMaxSliceOutputTokens, "0", "output_tokens", agent.Metrics{OutputTokens: 1}, 0},
-		{runtimeconfig.EnvMaxSliceCost, "2.5", "cost", agent.Metrics{Cost: 3}, 2.5},
+		{runtimeconfig.EnvMaxSliceOutputTokensDeprecated, runtimeconfig.EnvBudgetSliceOutputTokensWarn, "0", "output_tokens", agent.Metrics{OutputTokens: 1}, 0},
+		{runtimeconfig.EnvMaxSliceCostDeprecated, runtimeconfig.EnvBudgetSliceCostWarn, "2.5", "cost", agent.Metrics{Cost: 3}, 2.5},
 	} {
 		t.Run(tc.metric, func(t *testing.T) {
-			snapshot := runEnvSnapshot(map[string]string{tc.key: tc.value, runtimeconfig.EnvAgent: "invalid", runtimeconfig.EnvPlannerRoutingArms: "invalid", runtimeconfig.EnvBudgetPlanCost: "invalid"})
+			// The stop cap may not sit below its warn threshold, so the warn key
+			// follows the cap; Budget() admits every budget key together, so only
+			// non-budget settings may be invalid here.
+			snapshot := runEnvSnapshot(map[string]string{tc.key: tc.value, tc.warnKey: tc.value, runtimeconfig.EnvAgent: "invalid", runtimeconfig.EnvPlannerRoutingArms: "invalid"})
 			t.Setenv(tc.key, "99999")
 			calls, sessions := 0, 0
 			descriptor := agent.Descriptor{Label: "test", NewRuntime: func(agent.RuntimeDeps) agent.Runtime {
@@ -106,7 +109,7 @@ func TestInjectedSessionCapsStableAcrossHandoffs(t *testing.T) {
 }
 
 func TestInvalidSliceBudgetsRejectBeforeWorkspace(t *testing.T) {
-	for _, key := range []string{runtimeconfig.EnvMaxSliceCost, runtimeconfig.EnvBudgetSliceToolCalls, runtimeconfig.EnvBudgetPlanCost} {
+	for _, key := range []string{runtimeconfig.EnvMaxSliceCostDeprecated, runtimeconfig.EnvBudgetSliceToolCallsDeprecated, runtimeconfig.EnvBudgetPlanCostDeprecated} {
 		t.Run(key, func(t *testing.T) {
 			snapshot := runEnvSnapshot(map[string]string{key: "invalid"})
 			detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
@@ -115,8 +118,8 @@ func TestInvalidSliceBudgetsRejectBeforeWorkspace(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), key) {
 				t.Fatalf("budget reached workspace dependencies: %v", err)
 			}
-			_, err = createReviewWithAgentSession(context.Background(), nil, agentOperationOptions{RuntimeEnv: runEnvSnapshot(map[string]string{runtimeconfig.EnvBudgetPlanCost: "invalid"})}, ReviewRun{}, nil)
-			if err == nil || !strings.Contains(err.Error(), runtimeconfig.EnvBudgetPlanCost) {
+			_, err = createReviewWithAgentSession(context.Background(), nil, agentOperationOptions{RuntimeEnv: runEnvSnapshot(map[string]string{runtimeconfig.EnvBudgetPlanCostDeprecated: "invalid"})}, ReviewRun{}, nil)
+			if err == nil || !strings.Contains(err.Error(), runtimeconfig.EnvBudgetPlanCostDeprecated) {
 				t.Fatalf("review threshold reached session: %v", err)
 			}
 		})
@@ -125,12 +128,12 @@ func TestInvalidSliceBudgetsRejectBeforeWorkspace(t *testing.T) {
 
 func TestServiceExecuteInvalidBudgetsPreserveVerificationRepair(t *testing.T) {
 	for _, key := range []string{
-		runtimeconfig.EnvMaxSliceOutputTokens, runtimeconfig.EnvMaxSliceCost,
-		runtimeconfig.EnvBudgetSliceOutputTokens, runtimeconfig.EnvBudgetSliceCost,
-		runtimeconfig.EnvBudgetSliceToolCalls, runtimeconfig.EnvBudgetSliceAssistantMessages,
-		runtimeconfig.EnvBudgetSliceErroredMessages, runtimeconfig.EnvBudgetPlanOutputTokens,
-		runtimeconfig.EnvBudgetPlanCost, runtimeconfig.EnvBudgetPlanToolCalls,
-		runtimeconfig.EnvBudgetPlanAssistantMessages, runtimeconfig.EnvBudgetPlanErroredMessages,
+		runtimeconfig.EnvMaxSliceOutputTokensDeprecated, runtimeconfig.EnvMaxSliceCostDeprecated,
+		runtimeconfig.EnvBudgetSliceOutputTokensDeprecated, runtimeconfig.EnvBudgetSliceCostDeprecated,
+		runtimeconfig.EnvBudgetSliceToolCallsDeprecated, runtimeconfig.EnvBudgetSliceAssistantMessagesDeprecated,
+		runtimeconfig.EnvBudgetSliceErroredMessagesDeprecated, runtimeconfig.EnvBudgetPlanOutputTokensDeprecated,
+		runtimeconfig.EnvBudgetPlanCostDeprecated, runtimeconfig.EnvBudgetPlanToolCallsDeprecated,
+		runtimeconfig.EnvBudgetPlanAssistantMessagesDeprecated, runtimeconfig.EnvBudgetPlanErroredMessagesDeprecated,
 	} {
 		t.Run(key, func(t *testing.T) {
 			root, planDir := t.TempDir(), t.TempDir()
@@ -221,8 +224,8 @@ func TestNonSlicePreparationIgnoresInvalidBudgets(t *testing.T) {
 			detail.State.Workspace = &plan.Workspace{Strategy: plan.WorkspaceStrategyWorktree, Path: detail.State.Repo.Root, Branch: "feature", HeadSHA: "head123"}
 			config := ExecutionConfig{
 				RuntimeEnv: runEnvSnapshot(map[string]string{
-					runtimeconfig.EnvMaxSliceCost: "invalid", runtimeconfig.EnvMaxSliceOutputTokens: "invalid",
-					runtimeconfig.EnvBudgetSliceToolCalls: "invalid", runtimeconfig.EnvBudgetPlanCost: "invalid",
+					runtimeconfig.EnvMaxSliceCostDeprecated: "invalid", runtimeconfig.EnvMaxSliceOutputTokensDeprecated: "invalid",
+					runtimeconfig.EnvBudgetSliceToolCallsDeprecated: "invalid", runtimeconfig.EnvBudgetPlanCostDeprecated: "invalid",
 				}),
 				ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated, PullRequest: true},
 				Reverify:           reverify,
@@ -236,8 +239,9 @@ func TestNonSlicePreparationIgnoresInvalidBudgets(t *testing.T) {
 }
 
 func TestSnapshotThresholdsReachPacketWarningsAndReview(t *testing.T) {
-	snapshot := runEnvSnapshot(map[string]string{runtimeconfig.EnvBudgetSliceOutputTokens: "7", runtimeconfig.EnvMaxSliceCost: "invalid", runtimeconfig.EnvAgent: "invalid"})
-	t.Setenv(runtimeconfig.EnvBudgetSliceOutputTokens, "99999")
+	// Budget() admits every budget key together, so only non-budget settings may be invalid here.
+	snapshot := runEnvSnapshot(map[string]string{runtimeconfig.EnvBudgetSliceOutputTokensDeprecated: "7", runtimeconfig.EnvPlannerRoutingArms: "invalid", runtimeconfig.EnvAgent: "invalid"})
+	t.Setenv(runtimeconfig.EnvBudgetSliceOutputTokensDeprecated, "99999")
 	detail := runPathSessionDetail(t, t.TempDir(), plan.StatusPlanned, []string{"001-a"}, nil, plan.StatusPending)
 	detail.Events = []plan.Event{{Type: plan.EventTypeAgentMetrics, SliceID: "001-a", Metrics: &plan.AgentMetrics{OutputTokens: 8}}}
 	detail.Slices.Slices[0].Verification.Commands = []string{"go version"}
@@ -267,14 +271,14 @@ func TestSnapshotThresholdsReachPacketWarningsAndReview(t *testing.T) {
 		}
 	}
 	// Direct callers do not inherit the live process threshold.
-	defaults, err := runtimeEnv(nil).BudgetThresholds()
-	if err != nil || defaults != plan.DefaultAgentBudgetThresholds() {
+	defaults, err := runtimeEnv(nil).Budget()
+	if err != nil || defaults.Warn() != plan.DefaultAgentBudgetThresholds() {
 		t.Fatalf("direct defaults: %+v, %v", defaults, err)
 	}
 }
 
 func TestDirectSessionUsesBuiltinBudgets(t *testing.T) {
-	t.Setenv(runtimeconfig.EnvMaxSliceOutputTokens, "0")
+	t.Setenv(runtimeconfig.EnvMaxSliceOutputTokensDeprecated, "0")
 	runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
 		return agent.SessionResult{Metrics: &agent.Metrics{OutputTokens: 1}}, nil
 	})

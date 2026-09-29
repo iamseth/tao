@@ -49,11 +49,7 @@ func (a App) runEnvDefaults() (envDefaults, error) {
 // requireRunHandoffBudgets admits execution budgets before a handoff creates
 // pending work. Ordinary run retains its operation-specific budget admission.
 func (a App) requireRunHandoffBudgets() error {
-	snapshot := a.envSnapshot()
-	if _, err := snapshot.BudgetCaps(); err != nil {
-		return err
-	}
-	_, err := snapshot.BudgetThresholds()
+	_, err := a.envSnapshot().Budget()
 	return err
 }
 

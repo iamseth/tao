@@ -522,9 +522,9 @@ Agent budget warnings are informational summaries derived from `agent_metrics` e
 | Assistant messages | `80` | `300` |
 | Errored messages | `0` (warn on any) | `0` (warn on any) |
 
-These thresholds apply to output tokens, not total tokens. Corresponding `TAO_BUDGET_SLICE_<METRIC>` and `TAO_BUDGET_PLAN_<METRIC>` variables can override each advisory value, where `<METRIC>` is `OUTPUT_TOKENS`, `COST`, `TOOL_CALLS`, `ASSISTANT_MESSAGES`, or `ERRORED_MESSAGES`. Invalid advisory overrides are rejected by commands that consume them; see the [runtime configuration contract](../README.md#configuration).
+These thresholds apply to output tokens, not total tokens. Corresponding `TAO_BUDGET_SLICE_<METRIC>_WARN` and `TAO_BUDGET_PLAN_<METRIC>_WARN` variables (for example `TAO_BUDGET_SLICE_OUTPUT_TOKENS_WARN`) can override each advisory value, where `<METRIC>` is `OUTPUT_TOKENS`, `COST`, `TOOL_CALLS`, `ASSISTANT_MESSAGES`, or `ERRORED_MESSAGES`. Invalid advisory overrides are rejected by commands that consume them; see the [README budgets section](../README.md#budgets) for defaults, the deprecated alias names, and the [runtime configuration contract](../README.md#configuration).
 
-The opt-in hard caps `TAO_MAX_SLICE_OUTPUT_TOKENS` and `TAO_MAX_SLICE_COST` are separate and disabled by default. A crossed hard cap can stop a slice and emit `budget_exceeded`; advisory threshold warnings never change plan lifecycle state or block execution. Renderers should show the metric, threshold, observed value, and slice ID when applicable.
+The opt-in hard caps `TAO_BUDGET_SLICE_OUTPUT_TOKENS_STOP` and `TAO_BUDGET_SLICE_COST_STOP` are separate, disabled by default, and may not be set below their `WARN` values. A crossed hard cap can stop a slice and emit `budget_exceeded`; advisory threshold warnings never change plan lifecycle state or block execution. Renderers should show the metric, threshold, observed value, and slice ID when applicable.
 
 Run-context telemetry is recorded as `run_context` events before each agent slice attempt. It records whether a compact run packet was rendered and how many warning-level selected-slice guardrail findings were present. This supports prompt-efficiency analysis, but missing telemetry must not invalidate plans or block runs.
 

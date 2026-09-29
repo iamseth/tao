@@ -2,9 +2,112 @@ package plan
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"testing"
 )
+
+func TestAgentBudgetDefaults(t *testing.T) {
+	b := DefaultAgentBudget()
+	want := AgentBudgetThresholds{
+		Slice: AgentBudgetScopeThresholds{OutputTokens: 40000, Cost: 5, ToolCalls: 120, AssistantMessages: 80},
+		Plan:  AgentBudgetScopeThresholds{OutputTokens: 150000, Cost: 20, ToolCalls: 400, AssistantMessages: 300},
+	}
+	if b.Warn() != want || DefaultAgentBudgetThresholds() != want {
+		t.Fatalf("unexpected warning defaults: %+v", b.Warn())
+	}
+	for _, scope := range []AgentScopeBudget{b.Slice, b.Plan} {
+		if scope.OutputTokens.Stop != nil || scope.Cost.Stop != nil || scope.ToolCalls.Stop != nil || scope.AssistantMessages.Stop != nil || scope.ErroredMessages.Stop != nil {
+			t.Fatal("default stop must be disabled")
+		}
+	}
+	if err := b.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAgentBudgetValidate(t *testing.T) {
+	b := DefaultAgentBudget()
+	tokens, cost := int64(39999), 19.5
+	b.Slice.OutputTokens.Stop = &tokens
+	b.Plan.Cost.Stop = &cost
+	err := b.Validate()
+	if err == nil {
+		t.Fatal("expected two invalid limits")
+	}
+	joined, ok := err.(interface{ Unwrap() []error })
+	if !ok || len(joined.Unwrap()) != 2 {
+		t.Fatalf("expected two joined errors: %v", err)
+	}
+	want := []BudgetLimitError{
+		{Scope: "slice", Metric: "output_tokens", Warn: 40000, Stop: 39999},
+		{Scope: "plan", Metric: "cost", Warn: 20, Stop: 19.5},
+	}
+	messages := []string{"slice output_tokens stop 39999 is below warn 40000", "plan cost stop 19.5 is below warn 20"}
+	for i, child := range joined.Unwrap() {
+		var limit *BudgetLimitError
+		if !errors.As(child, &limit) || *limit != want[i] || child.Error() != messages[i] {
+			t.Fatalf("unexpected limit error: %v", child)
+		}
+	}
+	tokens, cost = 40000, 20
+	if err := b.Validate(); err != nil {
+		t.Fatalf("equal limits: %v", err)
+	}
+	tokens, cost = 40001, 21
+	if err := b.Validate(); err != nil {
+		t.Fatalf("higher limits: %v", err)
+	}
+	zero := int64(0)
+	b.Slice.ErroredMessages.Stop = &zero
+	if err := b.Validate(); err != nil {
+		t.Fatalf("explicit zero cap: %v", err)
+	}
+}
+
+func TestAgentBudgetClone(t *testing.T) {
+	b := DefaultAgentBudget()
+	if !reflect.DeepEqual(b.Clone(), b) {
+		t.Fatal("clone changed nil stops")
+	}
+	// Exercise every stop pointer in both scopes, including explicit zero caps.
+	original := reflect.ValueOf(&b).Elem()
+	for i := 0; i < original.NumField(); i++ {
+		scope := original.Field(i)
+		for j := 0; j < scope.NumField(); j++ {
+			stop := scope.Field(j).FieldByName("Stop")
+			stop.Set(reflect.New(stop.Type().Elem()))
+		}
+	}
+	clone := b.Clone()
+	if !reflect.DeepEqual(clone, b) {
+		t.Fatal("clone changed values")
+	}
+	copied := reflect.ValueOf(clone)
+	for i := 0; i < original.NumField(); i++ {
+		for j := 0; j < original.Field(i).NumField(); j++ {
+			a := original.Field(i).Field(j).FieldByName("Stop")
+			c := copied.Field(i).Field(j).FieldByName("Stop")
+			if a.Pointer() == c.Pointer() {
+				t.Fatalf("aliased stop at scope %d metric %d", i, j)
+			}
+		}
+	}
+}
+
+func TestAgentBudgetJSON(t *testing.T) {
+	b := AgentBudget{}
+	zero := int64(0)
+	b.Slice.OutputTokens.Stop = &zero
+	data, err := json.Marshal(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"slice":{"output_tokens":{"warn":0,"stop":0},"cost":{"warn":0},"tool_calls":{"warn":0},"assistant_messages":{"warn":0},"errored_messages":{"warn":0}},"plan":{"output_tokens":{"warn":0},"cost":{"warn":0},"tool_calls":{"warn":0},"assistant_messages":{"warn":0},"errored_messages":{"warn":0}}}`
+	if string(data) != want {
+		t.Fatalf("unexpected JSON: %s", data)
+	}
+}
 
 func TestAgentMetricsMeasurementRoundTrip(t *testing.T) {
 	fields := []string{"input_tokens", "output_tokens", "reasoning_tokens", "cache_read_tokens", "cache_write_tokens", "total_tokens", "cost"}

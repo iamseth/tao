@@ -25,7 +25,7 @@ func TestDiagnosticCollectorsShareSnapshotAcrossRefreshes(t *testing.T) {
 	t.Setenv("PATH", "")
 	values := map[string]string{
 		runtimeconfig.EnvAgent: "invalid", runtimeconfig.EnvUpdate: "invalid",
-		runtimeconfig.EnvBudgetSliceCost: "invalid", runtimeconfig.EnvTheme: "invalid",
+		runtimeconfig.EnvBudgetSliceCostDeprecated: "invalid", runtimeconfig.EnvTheme: "invalid",
 		runtimeconfig.EnvRunHeader: "invalid", runtimeconfig.EnvPullRequest: " YES ",
 		runtimeconfig.EnvModel: "bad model",
 	}
@@ -351,7 +351,7 @@ func TestOperationSnapshotAdmission(t *testing.T) {
 
 func TestPromptAndTriageIgnoreUnrelatedEnvironment(t *testing.T) {
 	clearTaoEnv(t)
-	for _, key := range []string{runtimeconfig.EnvUpdate, runtimeconfig.EnvAutoRework, runtimeconfig.EnvMergeReviewModel, runtimeconfig.EnvAggregateReviewConvergenceWindow, runtimeconfig.EnvPlannerRoutingArms, runtimeconfig.EnvMaxSliceCost} {
+	for _, key := range []string{runtimeconfig.EnvUpdate, runtimeconfig.EnvAutoRework, runtimeconfig.EnvMergeReviewModel, runtimeconfig.EnvAggregateReviewConvergenceWindow, runtimeconfig.EnvPlannerRoutingArms, runtimeconfig.EnvMaxSliceCostDeprecated} {
 		t.Run(key, func(t *testing.T) {
 			t.Setenv(key, "invalid value")
 			app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{key: "invalid value"})}
@@ -391,7 +391,7 @@ func TestAppRunRejectsConsumedSettingsBeforeExecution(t *testing.T) {
 
 func TestRunIgnoresSettingsOwnedByOtherConsumers(t *testing.T) {
 	clearTaoEnv(t)
-	for _, key := range []string{runtimeconfig.EnvUpdate, runtimeconfig.EnvPlannerRoutingArms, runtimeconfig.EnvAggregateReviewConvergenceWindow, runtimeconfig.EnvMergeReviewModel, runtimeconfig.EnvMaxSliceCost} {
+	for _, key := range []string{runtimeconfig.EnvUpdate, runtimeconfig.EnvPlannerRoutingArms, runtimeconfig.EnvAggregateReviewConvergenceWindow, runtimeconfig.EnvMergeReviewModel, runtimeconfig.EnvMaxSliceCostDeprecated} {
 		t.Run(key, func(t *testing.T) {
 			fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
 			calls := 0
@@ -418,13 +418,15 @@ func TestRunIgnoresSettingsOwnedByOtherConsumers(t *testing.T) {
 
 func TestBudgetRenderConsumersUseCapturedValuesAndIgnoreUnusedSettings(t *testing.T) {
 	clearTaoEnv(t)
+	// Stop caps are part of the single budget admission now, so only settings
+	// outside the budget block are left invalid here.
 	snapshot := snapshotWith(map[string]string{
-		runtimeconfig.EnvBudgetSliceOutputTokens: "7", runtimeconfig.EnvBudgetPlanCost: "0",
+		runtimeconfig.EnvBudgetSliceOutputTokensDeprecated: "7", runtimeconfig.EnvBudgetPlanCostDeprecated: "0",
 		runtimeconfig.EnvAgent: "invalid", runtimeconfig.EnvPlannerRoutingArms: "invalid",
-		runtimeconfig.EnvAggregateReviewConvergenceWindow: "invalid", runtimeconfig.EnvMaxSliceCost: "invalid",
+		runtimeconfig.EnvAggregateReviewConvergenceWindow: "invalid",
 	})
-	t.Setenv(runtimeconfig.EnvBudgetSliceOutputTokens, "99999")
-	t.Setenv(runtimeconfig.EnvBudgetPlanCost, "99999")
+	t.Setenv(runtimeconfig.EnvBudgetSliceOutputTokensDeprecated, "99999")
+	t.Setenv(runtimeconfig.EnvBudgetPlanCostDeprecated, "99999")
 	detail := validatePlanDetail(t.TempDir(), []string{"go version"}, nil)
 	detail.Events = []plan.Event{{Type: plan.EventTypeAgentMetrics, SliceID: "001-a", Metrics: &plan.AgentMetrics{OutputTokens: 8, Cost: 1}}}
 	repo := fakeRepository{details: map[string]*plan.PlanDetail{"example": detail}}
@@ -448,7 +450,7 @@ func TestBudgetRenderConsumersUseCapturedValuesAndIgnoreUnusedSettings(t *testin
 			}
 		})
 	}
-	app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvBudgetSliceCost: "invalid"})}
+	app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvBudgetSliceCostDeprecated: "invalid"})}
 	if err := app.show(context.Background(), repo, []string{"--json", "example"}); err != nil {
 		t.Fatalf("JSON show consumed unused budgets: %v", err)
 	}
@@ -460,7 +462,7 @@ func TestBudgetConsumersRejectInvalidThresholds(t *testing.T) {
 		t.Run(command, func(t *testing.T) {
 			fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
 			app := App{Out: io.Discard, Err: io.Discard,
-				RuntimeEnv:     snapshotWith(map[string]string{runtimeconfig.EnvBudgetPlanCost: "invalid"}),
+				RuntimeEnv:     snapshotWith(map[string]string{runtimeconfig.EnvBudgetPlanCostDeprecated: "invalid"}),
 				Repository:     func(string) Repository { return plan.NewFileRepository(fixture.root) },
 				Registry:       func() NoteRegistry { return &fakeNoteRegistry{} },
 				ProcessStarter: fakeCLIProcessStarter(t, "", func(string) { t.Error("provider called after rejected budget") }),
@@ -471,7 +473,7 @@ func TestBudgetConsumersRejectInvalidThresholds(t *testing.T) {
 				args = []string{command, "--run", fixture.id}
 			}
 			err := app.Run(context.Background(), args)
-			if err == nil || !strings.Contains(err.Error(), runtimeconfig.EnvBudgetPlanCost) {
+			if err == nil || !strings.Contains(err.Error(), runtimeconfig.EnvBudgetPlanCostDeprecated) {
 				t.Fatalf("consumed threshold not rejected: %v", err)
 			}
 		})
@@ -479,7 +481,7 @@ func TestBudgetConsumersRejectInvalidThresholds(t *testing.T) {
 }
 
 func TestRunReworkRestartRejectsInvalidHardCapsBeforeReopening(t *testing.T) {
-	for _, key := range []string{runtimeconfig.EnvMaxSliceCost, runtimeconfig.EnvMaxSliceOutputTokens} {
+	for _, key := range []string{runtimeconfig.EnvMaxSliceCostDeprecated, runtimeconfig.EnvMaxSliceOutputTokensDeprecated} {
 		t.Run(key, func(t *testing.T) {
 			clearTaoEnv(t)
 			now := time.Date(2026, 9, 28, 23, 0, 0, 0, time.UTC)
@@ -532,8 +534,15 @@ func TestRunReworkRestartRejectsInvalidHardCapsBeforeReopening(t *testing.T) {
 }
 
 func TestRunNonSlicePathsIgnoreInvalidHardCaps(t *testing.T) {
-	for _, key := range []string{runtimeconfig.EnvMaxSliceCost, runtimeconfig.EnvMaxSliceOutputTokens} {
-		for _, args := range [][]string{nil, {"--reverify", "--rework-restart"}, {"--no-review", "--rework-restart"}, {"--max-rework-attempts=0", "--rework-restart"}} {
+	for _, key := range []string{runtimeconfig.EnvMaxSliceCostDeprecated, runtimeconfig.EnvMaxSliceOutputTokensDeprecated} {
+		// Stop caps share the single budget admission with the warn thresholds,
+		// so the plain run path that consumes thresholds rejects them; paths that
+		// consume no budget policy still ignore them.
+		for _, tc := range []struct {
+			args     []string
+			rejected bool
+		}{{nil, true}, {[]string{"--reverify", "--rework-restart"}, false}, {[]string{"--no-review", "--rework-restart"}, false}, {[]string{"--max-rework-attempts=0", "--rework-restart"}, false}} {
+			args := tc.args
 			t.Run(key+"/"+strings.Join(args, " "), func(t *testing.T) {
 				clearTaoEnv(t)
 				const planID = "20260928-2300-unused-cap"
@@ -553,7 +562,14 @@ func TestRunNonSlicePathsIgnoreInvalidHardCaps(t *testing.T) {
 					RuntimeEnv: snapshotWith(map[string]string{key: "invalid"}),
 					Registry:   func() NoteRegistry { return &fakeNoteRegistry{} },
 				}
-				if err := app.run(context.Background(), repo, append(args, planID)); err != nil || calls != 1 {
+				err := app.run(context.Background(), repo, append(args, planID))
+				if tc.rejected {
+					if err == nil || !strings.Contains(err.Error(), key) || calls != 0 {
+						t.Fatalf("consumed hard cap admitted: calls=%d, error=%v", calls, err)
+					}
+					return
+				}
+				if err != nil || calls != 1 {
 					t.Fatalf("unused hard cap rejected: calls=%d, error=%v", calls, err)
 				}
 			})

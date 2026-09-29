@@ -1095,15 +1095,15 @@ func TestDriverRunExecutesThenDecidesWithFreshBudget(t *testing.T) {
 }
 
 func TestDriverRunSuppliesBudgetThresholdsToDecision(t *testing.T) {
-	custom := plan.DefaultAgentBudgetThresholds()
-	custom.Plan.Cost++
+	custom := plan.DefaultAgentBudget()
+	custom.Plan.Cost.Warn++
 	tests := []struct {
 		name       string
 		configured plan.AgentBudgetThresholds
 		want       plan.AgentBudgetThresholds
 	}{
 		{name: "defaults when unset", want: plan.DefaultAgentBudgetThresholds()},
-		{name: "preserves configured thresholds", configured: custom, want: custom},
+		{name: "preserves configured thresholds", configured: custom.Warn(), want: custom.Warn()},
 	}
 
 	for _, test := range tests {

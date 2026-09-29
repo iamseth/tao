@@ -651,8 +651,8 @@ func TestNoteRunRejectsConsumedSnapshotBeforePromotion(t *testing.T) {
 	clearTaoEnv(t)
 	for _, key := range []string{
 		runtimeconfig.EnvAgent, runtimeconfig.EnvSessionTimeout, runtimeconfig.EnvModel, runtimeconfig.EnvExecutionMode, runtimeconfig.EnvReworkEscalationFromAttempt,
-		runtimeconfig.EnvMaxSliceCost, runtimeconfig.EnvMaxSliceOutputTokens,
-		runtimeconfig.EnvBudgetPlanCost, runtimeconfig.EnvBudgetSliceToolCalls,
+		runtimeconfig.EnvMaxSliceCostDeprecated, runtimeconfig.EnvMaxSliceOutputTokensDeprecated,
+		runtimeconfig.EnvBudgetPlanCostDeprecated, runtimeconfig.EnvBudgetSliceToolCallsDeprecated,
 	} {
 		t.Run(key, func(t *testing.T) {
 			meta := taodata.Repo{ID: "tao-123", Name: "tao", Root: "/repo", Branch: "main"}

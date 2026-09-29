@@ -10,11 +10,7 @@ func runtimeEnv(snapshot *runtimeconfig.EnvSnapshot) runtimeconfig.EnvSnapshot {
 }
 
 func (c ExecutionConfig) requireSliceBudgets() error {
-	snapshot := runtimeEnv(c.RuntimeEnv)
-	if _, err := snapshot.BudgetCaps(); err != nil {
-		return err
-	}
-	_, err := snapshot.BudgetThresholds()
+	_, err := runtimeEnv(c.RuntimeEnv).Budget()
 	return err
 }
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -17,9 +18,9 @@ func TestStatusMixedInvalidConfigurationKeepsCompleteRows(t *testing.T) {
 	clearTaoEnv(t)
 	values := map[string]string{
 		runtimeconfig.EnvAgent: "bad-agent", runtimeconfig.EnvUpdate: "bad-update",
-		runtimeconfig.EnvBudgetPlanCost: "bad-budget", runtimeconfig.EnvTheme: "bad-theme",
+		runtimeconfig.EnvBudgetPlanCostWarn: "bad-budget", runtimeconfig.EnvTheme: "bad-theme",
 		runtimeconfig.EnvRunHeader: "bad-header", runtimeconfig.EnvPullRequest: "bad-bool",
-		runtimeconfig.EnvModel: "bad model",
+		runtimeconfig.EnvModel: "bad model", runtimeconfig.EnvMaxSliceCostDeprecated: "10",
 	}
 	for key, value := range values {
 		t.Setenv(key, value)
@@ -69,10 +70,36 @@ func TestStatusMixedInvalidConfigurationKeepsCompleteRows(t *testing.T) {
 			t.Fatalf("text row %d = %s, want %s", i, names[i], row.Name)
 		}
 	}
-	for _, text := range []string{"rejected", "using default", "repo-model", "bad-bool", "bad-budget"} {
+	for _, text := range []string{"rejected", "using default", "repo-model", "bad-bool", "bad-budget", "deprecated; use " + runtimeconfig.EnvBudgetSliceCostStop} {
 		if !strings.Contains(out.String(), text) {
 			t.Errorf("missing %q: %s", text, out.String())
 		}
+	}
+	// A set alias appears with its warning; unset aliases are absent from both outputs.
+	if !slices.Contains(names, runtimeconfig.EnvMaxSliceCostDeprecated) || slices.Contains(names, runtimeconfig.EnvMaxSliceOutputTokensDeprecated) || slices.Contains(names, runtimeconfig.EnvBudgetPlanCostDeprecated) {
+		t.Fatalf("alias rows in text output: %v", names)
+	}
+	if strings.Contains(out.String(), runtimeconfig.EnvMaxSliceOutputTokensDeprecated) || strings.Contains(out.String(), runtimeconfig.EnvBudgetPlanCostDeprecated+" ") {
+		t.Fatalf("unset alias named in text output: %s", out.String())
+	}
+	var aliasSeen bool
+	for _, row := range payload.RuntimeEnv {
+		switch row.Name {
+		case runtimeconfig.EnvMaxSliceCostDeprecated:
+			aliasSeen = true
+			if row.Value != "10" || row.Source != "env" || row.Warning != "deprecated; use "+runtimeconfig.EnvBudgetSliceCostStop {
+				t.Errorf("alias JSON row: %+v", row)
+			}
+		case runtimeconfig.EnvBudgetSliceCostStop:
+			if row.Value != "10" || row.Source != "env" {
+				t.Errorf("canonical JSON row: %+v", row)
+			}
+		case runtimeconfig.EnvMaxSliceOutputTokensDeprecated, runtimeconfig.EnvBudgetPlanCostDeprecated:
+			t.Errorf("unset alias in JSON output: %+v", row)
+		}
+	}
+	if !aliasSeen {
+		t.Fatal("set alias missing from JSON output")
 	}
 }
 
@@ -232,7 +259,7 @@ func TestStatusJSONContainsOnlyLocalStatus(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if len(payload.RuntimeEnv) != len(taoEnvKeys()) || payload.Plans.Total != 1 || payload.Plans.Statuses.InProgress != 1 {
+	if len(payload.RuntimeEnv) != len(runtimeconfig.LoadEnv(nil).Status()) || payload.Plans.Total != 1 || payload.Plans.Statuses.InProgress != 1 {
 		t.Fatalf("unexpected status payload: %+v", payload)
 	}
 }
@@ -262,7 +289,7 @@ func TestStatusJSONWithPlanListErrorIsValidAndEmpty(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
 		t.Fatalf("invalid JSON: %v\n%s", err, out.String())
 	}
-	if payload.Plans.Total != 0 || len(payload.RuntimeEnv) != len(taoEnvKeys()) {
+	if payload.Plans.Total != 0 || len(payload.RuntimeEnv) != len(runtimeconfig.LoadEnv(nil).Status()) {
 		t.Fatalf("unexpected status payload: %+v", payload)
 	}
 }

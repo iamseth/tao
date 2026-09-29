@@ -57,12 +57,27 @@ type settingsDefaultGroup struct {
 	hasOverride bool
 }
 
+// settingsBudgetMetric names one BUDGET row. key is the METRIC part of the
+// canonical TAO_BUDGET_<SCOPE>_<METRIC>_WARN/_STOP names; only metrics with an
+// enforced slice cap register a STOP key, and plan scope never does.
 type settingsBudgetMetric struct {
 	label     string
-	sliceName string
-	planName  string
+	key       string
 	cost      bool
+	sliceStop bool
 }
+
+// settingsBudgetRow holds the rendered cells and diagnostics for one metric.
+type settingsBudgetRow struct {
+	label       string
+	sliceWarn   string
+	sliceStop   string
+	planWarn    string
+	planStop    string
+	diagnostics []string
+}
+
+const settingsBudgetTitle = "BUDGET"
 
 const (
 	settingsGroupExecution = "execution"
@@ -301,15 +316,15 @@ func renderSettingsDefaultGroups(model Model) ([]string, []tableViewportSection)
 
 func renderSettingsBudgets(model Model) ([]string, tableViewportSection) {
 	metrics := []settingsBudgetMetric{
-		{label: "Output tokens", sliceName: "TAO_BUDGET_SLICE_OUTPUT_TOKENS", planName: "TAO_BUDGET_PLAN_OUTPUT_TOKENS"},
-		{label: "Cost", sliceName: "TAO_BUDGET_SLICE_COST", planName: "TAO_BUDGET_PLAN_COST", cost: true},
-		{label: "Tool calls", sliceName: "TAO_BUDGET_SLICE_TOOL_CALLS", planName: "TAO_BUDGET_PLAN_TOOL_CALLS"},
-		{label: "Assistant messages", sliceName: "TAO_BUDGET_SLICE_ASSISTANT_MESSAGES", planName: "TAO_BUDGET_PLAN_ASSISTANT_MESSAGES"},
-		{label: "Errored messages", sliceName: "TAO_BUDGET_SLICE_ERRORED_MESSAGES", planName: "TAO_BUDGET_PLAN_ERRORED_MESSAGES"},
+		{label: "Output tokens", key: "OUTPUT_TOKENS", sliceStop: true},
+		{label: "Cost", key: "COST", cost: true, sliceStop: true},
+		{label: "Tool calls", key: "TOOL_CALLS"},
+		{label: "Assistant messages", key: "ASSISTANT_MESSAGES"},
+		{label: "Errored messages", key: "ERRORED_MESSAGES"},
 	}
 	byName := make(map[string]SettingsRuntimeDefault)
 	for _, row := range model.SettingsSnapshot.RuntimeDefaults {
-		if strings.HasPrefix(row.Name, "TAO_BUDGET_") {
+		if settingsIsBudgetName(row.Name) {
 			byName[row.Name] = row
 		}
 	}
@@ -317,55 +332,104 @@ func renderSettingsBudgets(model Model) ([]string, tableViewportSection) {
 		return nil, tableViewportSection{}
 	}
 
-	labelWidth := cells.Width("METRIC")
-	sliceWidth := cells.Width("SLICE")
-	planWidth := cells.Width("PLAN")
+	rows := make([]settingsBudgetRow, 0, len(metrics))
 	for _, metric := range metrics {
-		labelWidth = max(labelWidth, cells.Width(metric.label))
-		sliceWidth = max(sliceWidth, cells.Width(settingsBudgetValue(byName[metric.sliceName], metric.cost)))
-		planWidth = max(planWidth, cells.Width(settingsBudgetValue(byName[metric.planName], metric.cost)))
+		rows = append(rows, settingsBudgetRowFor(metric, byName))
 	}
 	columns := []column{
-		{name: "METRIC", width: labelWidth, required: true, priority: 30},
-		{name: "SLICE", width: sliceWidth, required: true, priority: 40},
-		{name: "PLAN", width: planWidth, required: true, priority: 40},
+		{name: "METRIC", width: cells.Width("METRIC"), required: true, priority: 30},
+		{name: "SLICE WARN", width: cells.Width("SLICE WARN"), required: true, priority: 40},
+		{name: "SLICE STOP", width: cells.Width("SLICE STOP"), priority: 20},
+		{name: "PLAN WARN", width: cells.Width("PLAN WARN"), required: true, priority: 40},
+		{name: "PLAN STOP", width: cells.Width("PLAN STOP"), priority: 10},
 	}
-	sectionWidth := dashboardSectionWidth(model, PageSettings, "BUDGET WARNINGS", columnsWidth(columns))
-	columns = fitSettingsSectionColumns("BUDGET WARNINGS", columns, sectionWidth)
-	if len(columns) > 1 {
-		sliceWidth = columns[1].width
+	for _, row := range rows {
+		for index, value := range row.cells() {
+			columns[index].width = max(columns[index].width, cells.Width(value))
+		}
 	}
-	if len(columns) > 2 {
-		planWidth = columns[2].width
-	}
-	lines := []string{"", settingsSectionRuleColumns(model.Palette(), theme.RoleSettingsSection, "BUDGET WARNINGS", columns, sectionWidth)}
+	sectionWidth := dashboardSectionWidth(model, PageSettings, settingsBudgetTitle, columnsWidth(columns))
+	columns = fitSettingsSectionColumns(settingsBudgetTitle, columns, sectionWidth)
+	lines := []string{"", settingsSectionRuleColumns(model.Palette(), theme.RoleSettingsSection, settingsBudgetTitle, columns, sectionWidth)}
 	section := tableViewportSection{headingLines: []int{1}}
-	for _, metric := range metrics {
-		sliceRow, sliceOK := byName[metric.sliceName]
-		planRow, planOK := byName[metric.planName]
-		sliceValue := settingsBudgetValue(sliceRow, metric.cost)
-		planValue := settingsBudgetValue(planRow, metric.cost)
-		cells := []string{
-			metric.label,
-			settingsRightAlignedValue(model.Palette(), sliceValue, sliceWidth),
-			settingsRightAlignedValue(model.Palette(), planValue, planWidth),
+	for _, row := range rows {
+		values := make([]string, 0, len(columns))
+		for _, item := range columns {
+			switch item.name {
+			case "METRIC":
+				values = append(values, row.label)
+			case "SLICE WARN":
+				values = append(values, settingsRightAlignedValue(model.Palette(), row.sliceWarn, item.width))
+			case "SLICE STOP":
+				values = append(values, settingsRightAlignedValue(model.Palette(), row.sliceStop, item.width))
+			case "PLAN WARN":
+				values = append(values, settingsRightAlignedValue(model.Palette(), row.planWarn, item.width))
+			case "PLAN STOP":
+				values = append(values, settingsRightAlignedValue(model.Palette(), row.planStop, item.width))
+			}
 		}
 		section.contentLines = append(section.contentLines, len(lines))
-		lines = append(lines, "  "+joinRow(columns, cells, columnsWidth(columns)))
-		for _, warning := range []struct {
-			scope string
-			row   SettingsRuntimeDefault
-			ok    bool
-		}{{"slice", sliceRow, sliceOK}, {"plan", planRow, planOK}} {
-			if diagnostic := runtimeDiagnosticText(warning.row.Source, warning.row.Warning); warning.ok && diagnostic != "" {
-				for _, line := range runtimeDiagnosticLines(model.Palette(), sectionWidth, warning.scope+" "+diagnostic) {
-					section.contentLines = append(section.contentLines, len(lines))
-					lines = append(lines, line)
-				}
+		lines = append(lines, "  "+joinRow(columns, values, columnsWidth(columns)))
+		for _, diagnostic := range row.diagnostics {
+			for _, line := range runtimeDiagnosticLines(model.Palette(), sectionWidth, diagnostic) {
+				section.contentLines = append(section.contentLines, len(lines))
+				lines = append(lines, line)
 			}
 		}
 	}
 	return lines, section
+}
+
+// settingsIsBudgetName reports whether a runtime status row belongs to the
+// BUDGET section: a canonical WARN/STOP key or one of its deprecated aliases.
+func settingsIsBudgetName(name string) bool {
+	return strings.HasPrefix(name, "TAO_BUDGET_") || strings.HasPrefix(name, "TAO_MAX_SLICE_")
+}
+
+func (row settingsBudgetRow) cells() []string {
+	return []string{row.label, row.sliceWarn, row.sliceStop, row.planWarn, row.planStop}
+}
+
+// settingsBudgetRowFor resolves one metric's cells from the canonical status
+// rows. A missing slice STOP row is disabled where a cap exists; plan STOP and
+// unenforced slice STOP cells stay "-". Set aliases surface as diagnostics
+// under the metric instead of as rows of their own.
+func settingsBudgetRowFor(metric settingsBudgetMetric, byName map[string]SettingsRuntimeDefault) settingsBudgetRow {
+	sliceWarnName := "TAO_BUDGET_SLICE_" + metric.key + "_WARN"
+	sliceStopName := "TAO_BUDGET_SLICE_" + metric.key + "_STOP"
+	planWarnName := "TAO_BUDGET_PLAN_" + metric.key + "_WARN"
+	row := settingsBudgetRow{
+		label:     metric.label,
+		sliceWarn: settingsBudgetValue(byName[sliceWarnName], metric.cost),
+		sliceStop: "-",
+		planWarn:  settingsBudgetValue(byName[planWarnName], metric.cost),
+		planStop:  "-",
+	}
+	if metric.sliceStop {
+		row.sliceStop = "disabled"
+		if stop, ok := byName[sliceStopName]; ok && strings.TrimSpace(stop.Value) != "" {
+			row.sliceStop = settingsBudgetValue(stop, metric.cost)
+		}
+	}
+	for _, scoped := range []struct {
+		scope string
+		name  string
+	}{{"slice warn", sliceWarnName}, {"slice stop", sliceStopName}, {"plan warn", planWarnName}} {
+		status, ok := byName[scoped.name]
+		if diagnostic := runtimeDiagnosticText(status.Source, status.Warning); ok && diagnostic != "" {
+			row.diagnostics = append(row.diagnostics, scoped.scope+" "+diagnostic)
+		}
+	}
+	aliases := []string{"TAO_BUDGET_SLICE_" + metric.key, "TAO_BUDGET_PLAN_" + metric.key}
+	if metric.sliceStop {
+		aliases = append(aliases, "TAO_MAX_SLICE_"+metric.key)
+	}
+	for _, alias := range aliases {
+		if status, ok := byName[alias]; ok {
+			row.diagnostics = append(row.diagnostics, "deprecated "+alias+": "+singleLineDetail(status.Warning))
+		}
+	}
+	return row
 }
 
 func settingsBudgetValue(row SettingsRuntimeDefault, cost bool) string {
@@ -439,7 +503,7 @@ func settingsDefaultGroups(rows []SettingsRuntimeDefault) []settingsDefaultGroup
 		{key: settingsGroupOther, title: "Other"},
 	}
 	for _, row := range rows {
-		if strings.HasPrefix(row.Name, "TAO_BUDGET_") {
+		if settingsIsBudgetName(row.Name) {
 			continue
 		}
 		key, _ := settingsDefaultGroupForName(row.Name)
@@ -476,7 +540,7 @@ func settingsDefaultGroupForName(name string) (string, bool) {
 	case "TAO_PULL_REQUEST", "TAO_REVIEW", "TAO_AUTO_REWORK", "TAO_MAX_REWORK_ATTEMPTS", "TAO_REWORK_ESCALATION_FROM_ATTEMPT",
 		"TAO_PLANNER_ROUTING", "TAO_PLANNER_ROUTING_ARMS", "TAO_PLANNER_ROUTING_FLOOR":
 		return settingsGroupWorkflow, true
-	case "TAO_UPDATE", "TAO_DANGEROUSLY_SKIP_PERMISSIONS", "TAO_MAX_SLICE_OUTPUT_TOKENS", "TAO_MAX_SLICE_COST":
+	case "TAO_UPDATE", "TAO_DANGEROUSLY_SKIP_PERMISSIONS":
 		return settingsGroupSafety, true
 	case "TAO_MERGE_VERIFY_COMMAND", "TAO_AGGREGATE_REVIEW_CONVERGENCE_WINDOW", "TAO_APPROVED_BY", "TAO_RUN_HEADER", "TAO_THEME":
 		return settingsGroupOther, true
@@ -491,10 +555,6 @@ func humanizeSettingsName(name string) string {
 		return "Planner routing mode"
 	case "TAO_DANGEROUSLY_SKIP_PERMISSIONS":
 		return "Skip permissions"
-	case "TAO_MAX_SLICE_OUTPUT_TOKENS":
-		return "Slice output cap"
-	case "TAO_MAX_SLICE_COST":
-		return "Slice cost cap"
 	}
 	words := strings.Fields(strings.ReplaceAll(strings.TrimPrefix(name, "TAO_"), "_", " "))
 	label := strings.ToLower(strings.Join(words, " "))

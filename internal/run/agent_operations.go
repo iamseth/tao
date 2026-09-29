@@ -125,7 +125,7 @@ func (r agentSessionRunner) clock() func() time.Time { return r.nowFn }
 func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSessionRequest) (AgentSessionResult, error) {
 	if request.Metrics != nil && request.Metrics.EnforceSliceCaps && request.Metrics.SliceID != "" &&
 		(request.Metrics.Role == plan.AgentRoleExecution || request.Metrics.Role == plan.AgentRoleRework) {
-		if _, err := r.runtimeEnv.BudgetCaps(); err != nil {
+		if _, err := r.runtimeEnv.Budget(); err != nil {
 			return AgentSessionResult{}, err
 		}
 	}
@@ -211,11 +211,12 @@ func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSe
 }
 
 func (r agentSessionRunner) enforceSliceBudgetCaps(ctx context.Context, planDir, planID, sliceID string, log io.Writer) error {
-	caps, err := r.runtimeEnv.BudgetCaps()
+	budget, err := r.runtimeEnv.Budget()
 	if err != nil {
 		return err
 	}
-	if caps.OutputTokens == nil && caps.Cost == nil {
+	outputTokensStop, costStop := budget.Slice.OutputTokens.Stop, budget.Slice.Cost.Stop
+	if outputTokensStop == nil && costStop == nil {
 		return nil
 	}
 
@@ -248,10 +249,10 @@ func (r agentSessionRunner) enforceSliceBudgetCaps(ctx context.Context, planDir,
 	metric := ""
 	threshold := 0.0
 	observed := 0.0
-	if caps.OutputTokens != nil && totals.OutputTokens > *caps.OutputTokens {
-		metric, threshold, observed = "output_tokens", float64(*caps.OutputTokens), float64(totals.OutputTokens)
-	} else if caps.Cost != nil && totals.Cost > *caps.Cost {
-		metric, threshold, observed = "cost", *caps.Cost, totals.Cost
+	if outputTokensStop != nil && totals.OutputTokens > *outputTokensStop {
+		metric, threshold, observed = "output_tokens", float64(*outputTokensStop), float64(totals.OutputTokens)
+	} else if costStop != nil && totals.Cost > *costStop {
+		metric, threshold, observed = "cost", *costStop, totals.Cost
 	}
 	if metric == "" {
 		return nil

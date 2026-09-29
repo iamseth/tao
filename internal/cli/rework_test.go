@@ -405,8 +405,8 @@ func hasPendingReworkSlice(detail *plan.PlanDetail) bool {
 func TestReworkRunRejectsConsumedSnapshotBeforeReopening(t *testing.T) {
 	for _, key := range []string{
 		runtimeconfig.EnvSessionTimeout, runtimeconfig.EnvAutoRework, runtimeconfig.EnvReworkEscalationFromAttempt,
-		runtimeconfig.EnvMaxSliceCost, runtimeconfig.EnvMaxSliceOutputTokens,
-		runtimeconfig.EnvBudgetPlanCost, runtimeconfig.EnvBudgetSliceToolCalls,
+		runtimeconfig.EnvMaxSliceCostDeprecated, runtimeconfig.EnvMaxSliceOutputTokensDeprecated,
+		runtimeconfig.EnvBudgetPlanCostDeprecated, runtimeconfig.EnvBudgetSliceToolCallsDeprecated,
 	} {
 		t.Run(key, func(t *testing.T) {
 			root := t.TempDir()
@@ -436,8 +436,8 @@ func TestReworkWithoutRunIgnoresInvalidExecutionBudgets(t *testing.T) {
 	dir := writeCLIReworkPlan(t, root, id, plan.StatusCompleted, reworkReview(plan.ReviewVerdictChangesRequested, []plan.ReviewFinding{{File: "file.go", Message: "fix this"}}))
 	before := readReworkArtifacts(t, dir)
 	app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{
-		runtimeconfig.EnvMaxSliceCost: "invalid", runtimeconfig.EnvMaxSliceOutputTokens: "invalid",
-		runtimeconfig.EnvBudgetPlanCost: "invalid", runtimeconfig.EnvBudgetSliceToolCalls: "invalid",
+		runtimeconfig.EnvMaxSliceCostDeprecated: "invalid", runtimeconfig.EnvMaxSliceOutputTokensDeprecated: "invalid",
+		runtimeconfig.EnvBudgetPlanCostDeprecated: "invalid", runtimeconfig.EnvBudgetSliceToolCallsDeprecated: "invalid",
 	}), ProcessStarter: func(context.Context, string, string, []string) (runpkg.Process, error) {
 		t.Fatal("ordinary rework invoked a provider")
 		return nil, nil

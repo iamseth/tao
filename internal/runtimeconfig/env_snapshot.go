@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/selfupdate"
@@ -23,7 +24,10 @@ type EnvSnapshot struct {
 
 // LoadEnv looks up and parses each runtime key once, retaining every status row
 // and failure. A nil lookup selects built-ins. Invalid fields cannot partially
-// mutate defaults; only theme/header failures are warning-only.
+// mutate defaults; only theme/header failures are warning-only. Deprecated
+// budget aliases follow their canonical rows in table order: a set alias is
+// ignored when its canonical key is also set, otherwise it is applied and the
+// canonical row reflects the value. Unset aliases produce no row.
 func LoadEnv(lookup func(string) (string, bool)) EnvSnapshot {
 	s := EnvSnapshot{
 		defaults: builtinEnvDefaults(),
@@ -31,6 +35,8 @@ func LoadEnv(lookup func(string) (string, bool)) EnvSnapshot {
 		failures: make(map[string]error),
 	}
 	builtins := s.defaults.RunOptionsPatch
+	rowIndex := map[string]int{}
+	overridden := map[string]bool{}
 	for _, v := range runtimeEnvVars {
 		row := EnvVarStatus{Name: v.name, Value: v.defaultValue(builtins), Source: "default"}
 		var raw string
@@ -38,25 +44,91 @@ func LoadEnv(lookup func(string) (string, bool)) EnvSnapshot {
 		if lookup != nil {
 			raw, set = lookup(v.name)
 		}
-		if v.hasOverride(raw, set) {
-			candidate := cloneEnvDefaults(s.defaults)
-			value, err := v.apply(&candidate, raw)
-			switch {
-			case err == nil:
-				s.defaults = candidate
-				row.Value, row.Source = value, "env"
-			case v.fallbackOnInvalid:
-				row.Warning = fmt.Sprintf("invalid env value %q: %v; using default", raw, err)
-			default:
-				failure := fmt.Errorf("%s: %w", v.name, err)
-				s.failures[v.name] = failure
-				row.Source = "invalid"
-				row.Warning = fmt.Sprintf("invalid env value %q: %v; rejected", raw, failure)
+		if !v.hasOverride(raw, set) {
+			if v.aliasOf != "" {
+				continue
 			}
+			rowIndex[v.name] = len(s.rows)
+			s.rows = append(s.rows, row)
+			continue
 		}
+		overridden[v.name] = true
+		if v.aliasOf != "" && overridden[v.aliasOf] {
+			row.Value, row.Source = raw, "env"
+			row.Warning = fmt.Sprintf("deprecated alias of %s; ignored because %s is set", v.aliasOf, v.aliasOf)
+			rowIndex[v.name] = len(s.rows)
+			s.rows = append(s.rows, row)
+			continue
+		}
+		candidate := cloneEnvDefaults(s.defaults)
+		value, err := v.apply(&candidate, raw)
+		switch {
+		case err == nil:
+			s.defaults = candidate
+			row.Value, row.Source = value, "env"
+			if v.aliasOf != "" {
+				row.Warning = fmt.Sprintf("deprecated; use %s", v.aliasOf)
+				canonical := &s.rows[rowIndex[v.aliasOf]]
+				canonical.Value, canonical.Source = value, "env"
+			}
+		case v.fallbackOnInvalid:
+			row.Warning = fmt.Sprintf("invalid env value %q: %v; using default", raw, err)
+		default:
+			failure := fmt.Errorf("%s: %w", v.name, err)
+			s.failures[v.name] = failure
+			row.Source = "invalid"
+			row.Warning = fmt.Sprintf("invalid env value %q: %v; rejected", raw, failure)
+		}
+		rowIndex[v.name] = len(s.rows)
 		s.rows = append(s.rows, row)
 	}
+	s.rejectBudgetStopBelowWarn(rowIndex)
 	return s
+}
+
+// rejectBudgetStopBelowWarn records the cross-field budget rule as a failure
+// under the STOP key so it is rejected on consumption, never at load.
+func (s *EnvSnapshot) rejectBudgetStopBelowWarn(rowIndex map[string]int) {
+	err := s.defaults.Budget.Validate()
+	if err == nil {
+		return
+	}
+	errs := []error{err}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		errs = joined.Unwrap()
+	}
+	for _, err := range errs {
+		var limit *plan.BudgetLimitError
+		if !errors.As(err, &limit) {
+			continue
+		}
+		stopKey, warnKey, ok := budgetLimitEnvKeys(limit.Scope, limit.Metric)
+		if !ok {
+			continue
+		}
+		failure := fmt.Errorf("%s: stop %s is below %s warn %s; stop must be at least warn", stopKey, formatBudgetNumber(limit.Stop), warnKey, formatBudgetNumber(limit.Warn))
+		s.failures[stopKey] = failure
+		if index, ok := rowIndex[stopKey]; ok {
+			s.rows[index].Source = "invalid"
+			s.rows[index].Warning = failure.Error()
+		}
+	}
+}
+
+// budgetLimitEnvKeys maps a validated scope and metric to its STOP and WARN
+// keys. Only slice output tokens and cost register STOP rows.
+func budgetLimitEnvKeys(scope, metric string) (stopKey, warnKey string, ok bool) {
+	switch scope + "/" + metric {
+	case "slice/output_tokens":
+		return EnvBudgetSliceOutputTokensStop, EnvBudgetSliceOutputTokensWarn, true
+	case "slice/cost":
+		return EnvBudgetSliceCostStop, EnvBudgetSliceCostWarn, true
+	}
+	return "", "", false
+}
+
+func formatBudgetNumber(value float64) string {
+	return strconv.FormatFloat(value, 'f', -1, 64)
 }
 
 // RuntimeEnv is the production binding. It deliberately does not cache across
@@ -84,32 +156,21 @@ func (s EnvSnapshot) Require(keys ...string) error {
 	return errors.Join(failures...)
 }
 
-// BudgetThresholds validates the advisory settings before projecting their
-// typed values. Provider, routing, merge, and hard-cap settings are unrelated.
-func (s EnvSnapshot) BudgetThresholds() (plan.AgentBudgetThresholds, error) {
-	if err := s.Require(
-		EnvBudgetSliceOutputTokens, EnvBudgetSliceCost, EnvBudgetSliceToolCalls,
-		EnvBudgetSliceAssistantMessages, EnvBudgetSliceErroredMessages,
-		EnvBudgetPlanOutputTokens, EnvBudgetPlanCost, EnvBudgetPlanToolCalls,
-		EnvBudgetPlanAssistantMessages, EnvBudgetPlanErroredMessages,
-	); err != nil {
-		return plan.AgentBudgetThresholds{}, err
+// Budget validates every budget key, canonical and alias, including the
+// stop-not-below-warn rule, before projecting the typed budget. Provider,
+// routing, and merge settings are unrelated.
+func (s EnvSnapshot) Budget() (plan.AgentBudget, error) {
+	if err := s.Require(BudgetEnvKeys()...); err != nil {
+		return plan.AgentBudget{}, err
 	}
-	return s.Defaults().AgentBudgetThresholds, nil
-}
-
-// BudgetCaps validates opt-in implementation limits independently of advisory
-// thresholds. Missing caps stay disabled; explicit zero remains a hard limit.
-func (s EnvSnapshot) BudgetCaps() (SliceBudgetCaps, error) {
-	if err := s.Require(EnvMaxSliceOutputTokens, EnvMaxSliceCost); err != nil {
-		return SliceBudgetCaps{}, err
-	}
-	return s.Defaults().SliceBudgetCaps, nil
+	return s.Defaults().Budget, nil
 }
 
 // Status returns every captured row in table order. Source "invalid" denotes a
 // rejected override, distinct from an accepted "default" or "env" value. A
-// warning with source "default" is a presentation-only fallback.
+// warning with source "default" is a presentation-only fallback. The single
+// exception to complete-table output is deprecated budget aliases: an alias
+// row appears only when the alias is set, and then always carries a warning.
 func (s EnvSnapshot) Status() []EnvVarStatus {
 	if s.rows == nil {
 		return LoadEnv(nil).Status()
@@ -128,7 +189,7 @@ func builtinEnvDefaults() EnvDefaults {
 		Theme:                            theme.Default(),
 		RunHeader:                        true,
 		AggregateReviewConvergenceWindow: DefaultAggregateReviewConvergenceWindow,
-		AgentBudgetThresholds:            defaultAgentBudgetThresholds(),
+		Budget:                           plan.DefaultAgentBudget(),
 		PlannerRouting: PlannerRoutingConfig{
 			Mode: "off", Arms: []PlannerRoutingArm{{Runtime: AgentPi, Probability: 0.5}, {Runtime: AgentClaude, Probability: 0.5}}, Floor: 0.1,
 		},
@@ -144,8 +205,7 @@ func cloneEnvDefaults(d EnvDefaults) EnvDefaults {
 	d.AutoRework = cloneEnvPointer(d.AutoRework)
 	d.MaxReworkAttempts = cloneEnvPointer(d.MaxReworkAttempts)
 	d.ReworkEscalationFromAttempt = cloneEnvPointer(d.ReworkEscalationFromAttempt)
-	d.SliceBudgetCaps.OutputTokens = cloneEnvPointer(d.SliceBudgetCaps.OutputTokens)
-	d.SliceBudgetCaps.Cost = cloneEnvPointer(d.SliceBudgetCaps.Cost)
+	d.Budget = d.Budget.Clone()
 	d.PlannerRouting.Arms = slices.Clone(d.PlannerRouting.Arms)
 	return d
 }

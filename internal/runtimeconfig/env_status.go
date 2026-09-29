@@ -29,8 +29,6 @@ const (
 	EnvReworkEscalationModel            = "TAO_REWORK_ESCALATION_MODEL"
 	EnvUpdate                           = "TAO_UPDATE"
 	EnvSkipPermissions                  = "TAO_DANGEROUSLY_SKIP_PERMISSIONS"
-	EnvMaxSliceOutputTokens             = "TAO_MAX_SLICE_OUTPUT_TOKENS" // #nosec G101 -- environment key, not a credential.
-	EnvMaxSliceCost                     = "TAO_MAX_SLICE_COST"
 	EnvMergeVerifyCommand               = "TAO_MERGE_VERIFY_COMMAND"
 	EnvAggregateReviewConvergenceWindow = "TAO_AGGREGATE_REVIEW_CONVERGENCE_WINDOW"
 	EnvApprovedBy                       = "TAO_APPROVED_BY"
@@ -41,16 +39,36 @@ const (
 	EnvPlannerRoutingArms  = "TAO_PLANNER_ROUTING_ARMS"
 	EnvPlannerRoutingFloor = "TAO_PLANNER_ROUTING_FLOOR"
 
-	EnvBudgetSliceOutputTokens      = "TAO_BUDGET_SLICE_OUTPUT_TOKENS" // #nosec G101 -- environment key, not a credential.
-	EnvBudgetSliceCost              = "TAO_BUDGET_SLICE_COST"
-	EnvBudgetSliceToolCalls         = "TAO_BUDGET_SLICE_TOOL_CALLS"
-	EnvBudgetSliceAssistantMessages = "TAO_BUDGET_SLICE_ASSISTANT_MESSAGES"
-	EnvBudgetSliceErroredMessages   = "TAO_BUDGET_SLICE_ERRORED_MESSAGES"
-	EnvBudgetPlanOutputTokens       = "TAO_BUDGET_PLAN_OUTPUT_TOKENS" // #nosec G101 -- environment key, not a credential.
-	EnvBudgetPlanCost               = "TAO_BUDGET_PLAN_COST"
-	EnvBudgetPlanToolCalls          = "TAO_BUDGET_PLAN_TOOL_CALLS"
-	EnvBudgetPlanAssistantMessages  = "TAO_BUDGET_PLAN_ASSISTANT_MESSAGES"
-	EnvBudgetPlanErroredMessages    = "TAO_BUDGET_PLAN_ERRORED_MESSAGES"
+	// Agent budget keys follow TAO_BUDGET_<SCOPE>_<METRIC>_WARN for advisory
+	// thresholds and TAO_BUDGET_SLICE_<METRIC>_STOP for the enforced slice caps.
+	EnvBudgetSliceOutputTokensWarn      = "TAO_BUDGET_SLICE_OUTPUT_TOKENS_WARN" // #nosec G101 -- environment key, not a credential.
+	EnvBudgetSliceCostWarn              = "TAO_BUDGET_SLICE_COST_WARN"
+	EnvBudgetSliceToolCallsWarn         = "TAO_BUDGET_SLICE_TOOL_CALLS_WARN"
+	EnvBudgetSliceAssistantMessagesWarn = "TAO_BUDGET_SLICE_ASSISTANT_MESSAGES_WARN"
+	EnvBudgetSliceErroredMessagesWarn   = "TAO_BUDGET_SLICE_ERRORED_MESSAGES_WARN"
+	EnvBudgetPlanOutputTokensWarn       = "TAO_BUDGET_PLAN_OUTPUT_TOKENS_WARN" // #nosec G101 -- environment key, not a credential.
+	EnvBudgetPlanCostWarn               = "TAO_BUDGET_PLAN_COST_WARN"
+	EnvBudgetPlanToolCallsWarn          = "TAO_BUDGET_PLAN_TOOL_CALLS_WARN"
+	EnvBudgetPlanAssistantMessagesWarn  = "TAO_BUDGET_PLAN_ASSISTANT_MESSAGES_WARN"
+	EnvBudgetPlanErroredMessagesWarn    = "TAO_BUDGET_PLAN_ERRORED_MESSAGES_WARN"
+	EnvBudgetSliceOutputTokensStop      = "TAO_BUDGET_SLICE_OUTPUT_TOKENS_STOP" // #nosec G101 -- environment key, not a credential.
+	EnvBudgetSliceCostStop              = "TAO_BUDGET_SLICE_COST_STOP"
+
+	// Deprecated budget aliases remain accepted for one release. Each maps to
+	// the canonical key of the same metric; the canonical key wins when both are
+	// set, and an accepted alias carries a deprecation warning in status.
+	EnvBudgetSliceOutputTokensDeprecated      = "TAO_BUDGET_SLICE_OUTPUT_TOKENS" // #nosec G101 -- environment key, not a credential.
+	EnvBudgetSliceCostDeprecated              = "TAO_BUDGET_SLICE_COST"
+	EnvBudgetSliceToolCallsDeprecated         = "TAO_BUDGET_SLICE_TOOL_CALLS"
+	EnvBudgetSliceAssistantMessagesDeprecated = "TAO_BUDGET_SLICE_ASSISTANT_MESSAGES"
+	EnvBudgetSliceErroredMessagesDeprecated   = "TAO_BUDGET_SLICE_ERRORED_MESSAGES"
+	EnvBudgetPlanOutputTokensDeprecated       = "TAO_BUDGET_PLAN_OUTPUT_TOKENS" // #nosec G101 -- environment key, not a credential.
+	EnvBudgetPlanCostDeprecated               = "TAO_BUDGET_PLAN_COST"
+	EnvBudgetPlanToolCallsDeprecated          = "TAO_BUDGET_PLAN_TOOL_CALLS"
+	EnvBudgetPlanAssistantMessagesDeprecated  = "TAO_BUDGET_PLAN_ASSISTANT_MESSAGES"
+	EnvBudgetPlanErroredMessagesDeprecated    = "TAO_BUDGET_PLAN_ERRORED_MESSAGES"
+	EnvMaxSliceOutputTokensDeprecated         = "TAO_MAX_SLICE_OUTPUT_TOKENS" // #nosec G101 -- environment key, not a credential.
+	EnvMaxSliceCostDeprecated                 = "TAO_MAX_SLICE_COST"
 )
 
 // EnvDefaults is the environment default layer shared by CLI and prompt
@@ -58,14 +76,15 @@ const (
 // environment variables.
 type EnvDefaults struct {
 	RunOptionsPatch
-	AutoRework                       *bool
-	MaxReworkAttempts                *int
-	ReworkEscalationFromAttempt      *int
-	UpdateMode                       selfupdate.Mode
-	Theme                            theme.Theme
-	SkipPermissions                  bool
-	SliceBudgetCaps                  SliceBudgetCaps
-	AgentBudgetThresholds            plan.AgentBudgetThresholds
+	AutoRework                  *bool
+	MaxReworkAttempts           *int
+	ReworkEscalationFromAttempt *int
+	UpdateMode                  selfupdate.Mode
+	Theme                       theme.Theme
+	SkipPermissions             bool
+	// Budget holds every agent budget threshold and cap loaded from the
+	// TAO_BUDGET_* table rows; read it through EnvSnapshot.Budget.
+	Budget                           plan.AgentBudget
 	MergeVerifyCommand               string
 	MergeVerifyCommandSet            bool
 	AggregateReviewConvergenceWindow int
@@ -95,6 +114,10 @@ type EnvVarStatus struct {
 type runtimeEnvVar struct {
 	// name is the environment variable key.
 	name string
+	// aliasOf names the canonical key this deprecated row feeds. Alias rows
+	// share the canonical apply function, yield to a set canonical key, and
+	// are omitted from status while unset.
+	aliasOf string
 	// defaultValue renders the built-in default for a status row. Run defaults
 	// come from DefaultRunOptionsPatch; command-specific settings use their owning
 	// policy defaults.
@@ -413,30 +436,6 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 		},
 	},
 	{
-		name:         EnvMaxSliceOutputTokens,
-		defaultValue: func(RunOptionsPatch) string { return "disabled" },
-		apply: func(defaults *EnvDefaults, value string) (string, error) {
-			parsed, err := parseBudgetInteger(value)
-			if err != nil {
-				return "", err
-			}
-			defaults.SliceBudgetCaps.OutputTokens = &parsed
-			return strconv.FormatInt(parsed, 10), nil
-		},
-	},
-	{
-		name:         EnvMaxSliceCost,
-		defaultValue: func(RunOptionsPatch) string { return "disabled" },
-		apply: func(defaults *EnvDefaults, value string) (string, error) {
-			parsed, err := parseBudgetCost(value)
-			if err != nil {
-				return "", err
-			}
-			defaults.SliceBudgetCaps.Cost = &parsed
-			return strconv.FormatFloat(parsed, 'f', -1, 64), nil
-		},
-	},
-	{
 		name: EnvTheme, fallbackOnInvalid: true,
 		defaultValue: func(RunOptionsPatch) string { return theme.Default().Name() },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
@@ -448,50 +447,100 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 			return selected.Name(), nil
 		},
 	},
-}, agentBudgetRuntimeEnvVars()...)
+}, budgetEnvVars...)
+
+// budgetEnvVars is the budget block of the table: twelve canonical rows
+// followed by their twelve deprecated aliases.
+var budgetEnvVars = agentBudgetRuntimeEnvVars()
 
 func agentBudgetRuntimeEnvVars() []runtimeEnvVar {
-	defaults := defaultAgentBudgetThresholds()
-	integer := func(name string, defaultValue int64, set func(*plan.AgentBudgetThresholds, int64)) runtimeEnvVar {
-		return runtimeEnvVar{
-			name:         name,
-			defaultValue: func(RunOptionsPatch) string { return strconv.FormatInt(defaultValue, 10) },
-			apply: func(env *EnvDefaults, value string) (string, error) {
-				parsed, err := parseBudgetInteger(value)
-				if err != nil {
-					return "", err
-				}
-				set(&env.AgentBudgetThresholds, parsed)
-				return strconv.FormatInt(parsed, 10), nil
-			},
+	defaults := plan.DefaultAgentBudget()
+	warnInteger := func(name string, defaultValue int64, set func(*plan.AgentBudget, int64)) runtimeEnvVar {
+		return budgetIntegerEnvVar(name, strconv.FormatInt(defaultValue, 10), set)
+	}
+	warnCost := func(name string, defaultValue float64, set func(*plan.AgentBudget, float64)) runtimeEnvVar {
+		return budgetCostEnvVar(name, strconv.FormatFloat(defaultValue, 'f', -1, 64), set)
+	}
+	canonical := []runtimeEnvVar{
+		warnInteger(EnvBudgetSliceOutputTokensWarn, defaults.Slice.OutputTokens.Warn, func(b *plan.AgentBudget, n int64) { b.Slice.OutputTokens.Warn = n }),
+		warnCost(EnvBudgetSliceCostWarn, defaults.Slice.Cost.Warn, func(b *plan.AgentBudget, n float64) { b.Slice.Cost.Warn = n }),
+		warnInteger(EnvBudgetSliceToolCallsWarn, defaults.Slice.ToolCalls.Warn, func(b *plan.AgentBudget, n int64) { b.Slice.ToolCalls.Warn = n }),
+		warnInteger(EnvBudgetSliceAssistantMessagesWarn, defaults.Slice.AssistantMessages.Warn, func(b *plan.AgentBudget, n int64) { b.Slice.AssistantMessages.Warn = n }),
+		warnInteger(EnvBudgetSliceErroredMessagesWarn, defaults.Slice.ErroredMessages.Warn, func(b *plan.AgentBudget, n int64) { b.Slice.ErroredMessages.Warn = n }),
+		warnInteger(EnvBudgetPlanOutputTokensWarn, defaults.Plan.OutputTokens.Warn, func(b *plan.AgentBudget, n int64) { b.Plan.OutputTokens.Warn = n }),
+		warnCost(EnvBudgetPlanCostWarn, defaults.Plan.Cost.Warn, func(b *plan.AgentBudget, n float64) { b.Plan.Cost.Warn = n }),
+		warnInteger(EnvBudgetPlanToolCallsWarn, defaults.Plan.ToolCalls.Warn, func(b *plan.AgentBudget, n int64) { b.Plan.ToolCalls.Warn = n }),
+		warnInteger(EnvBudgetPlanAssistantMessagesWarn, defaults.Plan.AssistantMessages.Warn, func(b *plan.AgentBudget, n int64) { b.Plan.AssistantMessages.Warn = n }),
+		warnInteger(EnvBudgetPlanErroredMessagesWarn, defaults.Plan.ErroredMessages.Warn, func(b *plan.AgentBudget, n int64) { b.Plan.ErroredMessages.Warn = n }),
+		// Stop caps are opt-in: unset stays disabled and an explicit zero is a hard limit.
+		budgetIntegerEnvVar(EnvBudgetSliceOutputTokensStop, "disabled", func(b *plan.AgentBudget, n int64) { b.Slice.OutputTokens.Stop = &n }),
+		budgetCostEnvVar(EnvBudgetSliceCostStop, "disabled", func(b *plan.AgentBudget, n float64) { b.Slice.Cost.Stop = &n }),
+	}
+	aliases := []struct{ name, canonical string }{
+		{EnvBudgetSliceOutputTokensDeprecated, EnvBudgetSliceOutputTokensWarn},
+		{EnvBudgetSliceCostDeprecated, EnvBudgetSliceCostWarn},
+		{EnvBudgetSliceToolCallsDeprecated, EnvBudgetSliceToolCallsWarn},
+		{EnvBudgetSliceAssistantMessagesDeprecated, EnvBudgetSliceAssistantMessagesWarn},
+		{EnvBudgetSliceErroredMessagesDeprecated, EnvBudgetSliceErroredMessagesWarn},
+		{EnvBudgetPlanOutputTokensDeprecated, EnvBudgetPlanOutputTokensWarn},
+		{EnvBudgetPlanCostDeprecated, EnvBudgetPlanCostWarn},
+		{EnvBudgetPlanToolCallsDeprecated, EnvBudgetPlanToolCallsWarn},
+		{EnvBudgetPlanAssistantMessagesDeprecated, EnvBudgetPlanAssistantMessagesWarn},
+		{EnvBudgetPlanErroredMessagesDeprecated, EnvBudgetPlanErroredMessagesWarn},
+		{EnvMaxSliceOutputTokensDeprecated, EnvBudgetSliceOutputTokensStop},
+		{EnvMaxSliceCostDeprecated, EnvBudgetSliceCostStop},
+	}
+	rows := make([]runtimeEnvVar, 0, len(canonical)+len(aliases))
+	rows = append(rows, canonical...)
+	for _, alias := range aliases {
+		for _, row := range canonical {
+			if row.name == alias.canonical {
+				row.name, row.aliasOf = alias.name, alias.canonical
+				rows = append(rows, row)
+			}
 		}
 	}
-	cost := func(name string, defaultValue float64, set func(*plan.AgentBudgetThresholds, float64)) runtimeEnvVar {
-		return runtimeEnvVar{
-			name:         name,
-			defaultValue: func(RunOptionsPatch) string { return strconv.FormatFloat(defaultValue, 'f', -1, 64) },
-			apply: func(env *EnvDefaults, value string) (string, error) {
-				parsed, err := parseBudgetCost(value)
-				if err != nil {
-					return "", err
-				}
-				set(&env.AgentBudgetThresholds, parsed)
-				return strconv.FormatFloat(parsed, 'f', -1, 64), nil
-			},
-		}
+	return rows
+}
+
+func budgetIntegerEnvVar(name, defaultValue string, set func(*plan.AgentBudget, int64)) runtimeEnvVar {
+	return runtimeEnvVar{
+		name:         name,
+		defaultValue: func(RunOptionsPatch) string { return defaultValue },
+		apply: func(env *EnvDefaults, value string) (string, error) {
+			parsed, err := parseBudgetInteger(value)
+			if err != nil {
+				return "", err
+			}
+			set(&env.Budget, parsed)
+			return strconv.FormatInt(parsed, 10), nil
+		},
 	}
-	return []runtimeEnvVar{
-		integer(EnvBudgetSliceOutputTokens, defaults.Slice.OutputTokens, func(v *plan.AgentBudgetThresholds, n int64) { v.Slice.OutputTokens = n }),
-		cost(EnvBudgetSliceCost, defaults.Slice.Cost, func(v *plan.AgentBudgetThresholds, n float64) { v.Slice.Cost = n }),
-		integer(EnvBudgetSliceToolCalls, defaults.Slice.ToolCalls, func(v *plan.AgentBudgetThresholds, n int64) { v.Slice.ToolCalls = n }),
-		integer(EnvBudgetSliceAssistantMessages, defaults.Slice.AssistantMessages, func(v *plan.AgentBudgetThresholds, n int64) { v.Slice.AssistantMessages = n }),
-		integer(EnvBudgetSliceErroredMessages, defaults.Slice.ErroredMessages, func(v *plan.AgentBudgetThresholds, n int64) { v.Slice.ErroredMessages = n }),
-		integer(EnvBudgetPlanOutputTokens, defaults.Plan.OutputTokens, func(v *plan.AgentBudgetThresholds, n int64) { v.Plan.OutputTokens = n }),
-		cost(EnvBudgetPlanCost, defaults.Plan.Cost, func(v *plan.AgentBudgetThresholds, n float64) { v.Plan.Cost = n }),
-		integer(EnvBudgetPlanToolCalls, defaults.Plan.ToolCalls, func(v *plan.AgentBudgetThresholds, n int64) { v.Plan.ToolCalls = n }),
-		integer(EnvBudgetPlanAssistantMessages, defaults.Plan.AssistantMessages, func(v *plan.AgentBudgetThresholds, n int64) { v.Plan.AssistantMessages = n }),
-		integer(EnvBudgetPlanErroredMessages, defaults.Plan.ErroredMessages, func(v *plan.AgentBudgetThresholds, n int64) { v.Plan.ErroredMessages = n }),
+}
+
+func budgetCostEnvVar(name, defaultValue string, set func(*plan.AgentBudget, float64)) runtimeEnvVar {
+	return runtimeEnvVar{
+		name:         name,
+		defaultValue: func(RunOptionsPatch) string { return defaultValue },
+		apply: func(env *EnvDefaults, value string) (string, error) {
+			parsed, err := parseBudgetCost(value)
+			if err != nil {
+				return "", err
+			}
+			set(&env.Budget, parsed)
+			return strconv.FormatFloat(parsed, 'f', -1, 64), nil
+		},
 	}
+}
+
+// BudgetEnvKeys returns the budget block of the runtime table in order: the
+// twelve canonical WARN/STOP keys followed by their twelve deprecated aliases.
+func BudgetEnvKeys() []string {
+	keys := make([]string, len(budgetEnvVars))
+	for i, v := range budgetEnvVars {
+		keys[i] = v.name
+	}
+	return keys
 }
 
 func parseSessionTimeout(value string) (time.Duration, error) {

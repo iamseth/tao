@@ -326,11 +326,11 @@ func TestSettingsPreviewExercisesFinalizedGroupsAcrossWidths(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, want := range []string{
-			"OVERRIDES", "EXECUTION · all default", "WORKFLOW", "SAFETY / UPDATE", "BUDGET WARNINGS",
+			"OVERRIDES", "EXECUTION · all default", "WORKFLOW", "SAFETY / UPDATE", "BUDGET",
 			"Commit policy", "Execution mode", "Agent", "Session timeout",
 			"TAO_PULL_REQUEST", "Review", "Auto rework", "Max rework attempts",
-			"TAO_UPDATE", "Skip permissions", "Slice output cap", "Slice cost cap",
-			"Output tokens", "40 000", "150 000", "5.00", "20.000", "Errored messages", "0",
+			"TAO_UPDATE", "Skip permissions",
+			"SLICE WARN", "SLICE STOP", "PLAN WARN", "Output tokens", "40 000", "150 000", "disabled", "Errored messages", "0",
 		} {
 			if !strings.Contains(frame, want) {
 				t.Errorf("width %d Settings preview missing %q:\n%s", width, want, frame)

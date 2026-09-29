@@ -468,14 +468,14 @@ func TestRunLocationAdvisoriesContinueThroughDirectExecution(t *testing.T) {
 			repo := newRecordingAutoReworkRepository(planID, detail)
 			outputErr := errors.New("output unavailable")
 			out := &reworkSelectiveWriter{failOn: test.failOn, failure: outputErr}
-			snapshot := snapshotWith(map[string]string{runtimeconfig.EnvBudgetPlanToolCalls: "7"})
+			snapshot := snapshotWith(map[string]string{runtimeconfig.EnvBudgetPlanToolCallsWarn: "7"})
 			calls := 0
 			oldExecutor := executeSinglePlan
 			t.Cleanup(func() { executeSinglePlan = oldExecutor })
 			executeSinglePlan = func(run.Service, context.Context, run.Request) error {
 				calls++
 				// Later rounds must retain the invocation's typed thresholds.
-				t.Setenv(runtimeconfig.EnvBudgetPlanToolCalls, "99999")
+				t.Setenv(runtimeconfig.EnvBudgetPlanToolCallsWarn, "99999")
 				if test.execFail && calls == 4 {
 					return errors.New("execution failed")
 				}
