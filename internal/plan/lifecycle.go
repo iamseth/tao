@@ -1179,6 +1179,110 @@ func markSliceSkippedWithChanges(detail *PlanDetail, changes *artifactChangeSet,
 	return event, nil
 }
 
+// sliceAmendmentMessage is the fixed slice_amended event message.
+const sliceAmendmentMessage = "Slice contract amended by plan edit"
+
+// markSliceAmendedWithChanges appends operator-supplied goal, tasks, expected
+// files, and manual checks to one pending or blocked slice without touching
+// its status, blocker note, or execution boundary.
+func markSliceAmendedWithChanges(detail *PlanDetail, changes *artifactChangeSet, sliceID string, request SliceAmendmentRequest, now time.Time) (Event, error) {
+	if detail == nil {
+		return Event{}, fmt.Errorf("plan detail is nil")
+	}
+	if err := RequireNotAbandoned(detail); err != nil {
+		return Event{}, err
+	}
+	if changes == nil || changes.detail != detail {
+		return Event{}, fmt.Errorf("artifact change set must be bound to plan detail")
+	}
+	slice, err := amendableSlice(detail, sliceID)
+	if err != nil {
+		return Event{}, err
+	}
+	normalized, err := request.normalize()
+	if err != nil {
+		return Event{}, err
+	}
+
+	var fields []string
+	goal := slice.Goal
+	if normalized.Goal != "" && normalized.Goal != slice.Goal {
+		goal = normalized.Goal
+		fields = append(fields, "goal")
+	}
+	tasks, tasksChanged := appendMissingStrings(slice.Tasks, normalized.AddTasks)
+	if tasksChanged {
+		fields = append(fields, "tasks")
+	}
+	expectedFiles, filesChanged := appendMissingStrings(slice.ExpectedFiles, normalized.AllowFiles)
+	if filesChanged {
+		fields = append(fields, "expected_files")
+	}
+	manualChecks, checksChanged := appendMissingStrings(slice.Verification.ManualChecks, normalized.AddManualChecks)
+	if checksChanged {
+		fields = append(fields, "manual_checks")
+	}
+	if len(fields) == 0 {
+		return Event{}, fmt.Errorf("amendment does not change slice %s; every requested value is already present", sliceID)
+	}
+
+	slice.Goal = goal
+	slice.Tasks = tasks
+	slice.ExpectedFiles = expectedFiles
+	slice.Verification.ManualChecks = manualChecks
+	slice.Amendments = append(slice.Amendments, SliceAmendment{AmendedAt: now, Reason: normalized.Reason, Fields: fields})
+	slice.Timing.UpdatedAt = now
+	slice.Timing.LastActivityAt = new(now)
+	markPlanEdited(detail, changes, now)
+	event := Event{
+		Type:          EventTypeSliceAmended,
+		Timestamp:     now,
+		PlanID:        detail.State.Plan.ID,
+		SliceID:       sliceID,
+		Reason:        normalized.Reason,
+		AmendedFields: slices.Clone(fields),
+		Message:       sliceAmendmentMessage,
+	}
+	return event, nil
+}
+
+// amendableSlice returns the slice an operator may amend: a pending or
+// blocked slice that is not a generated verification-repair slice. It is
+// deliberately separate from editablePendingSlice, which stays pending-only
+// for remove, skip, and move.
+func amendableSlice(detail *PlanDetail, sliceID string) (*Slice, error) {
+	slice := findSlice(detail, sliceID)
+	if slice == nil {
+		return nil, classify(ErrNotFound, "slice %s not found", sliceID)
+	}
+	if slice.Status != StatusPending && slice.Status != StatusBlocked {
+		return nil, fmt.Errorf("slice %s is %s; only pending or blocked slices can be amended", sliceID, slice.Status)
+	}
+	if slice.VerificationRepair != nil {
+		return nil, generatedVerificationRepairEditError(detail, sliceID, "amend")
+	}
+	return slice, nil
+}
+
+// appendMissingStrings appends each addition not already present in existing,
+// reporting whether anything was appended. Existing entries are never removed
+// or reordered.
+func appendMissingStrings(existing []string, additions []string) ([]string, bool) {
+	result := existing
+	changed := false
+	for _, value := range additions {
+		if slices.Contains(result, value) {
+			continue
+		}
+		if !changed {
+			result = slices.Clone(existing)
+			changed = true
+		}
+		result = append(result, value)
+	}
+	return result, changed
+}
+
 func generatedVerificationRepairEditError(detail *PlanDetail, sliceID string, action string) error {
 	planID := detail.State.Plan.ID
 	return fmt.Errorf("cannot %s generated verification-repair slice %s; run `tao run %s` to complete it, or use `tao abandon --reason TEXT %s` before recovering manually", action, sliceID, planID, planID)

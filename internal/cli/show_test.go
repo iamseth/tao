@@ -136,8 +136,51 @@ func TestRenderShowSliceWithoutRulingsUnchanged(t *testing.T) {
 		"  Summary:   Render the planned slice work in show output while keeping long summary\n" +
 		"             text aligned under a stable summary indentation for terminal\n" +
 		"             readability.\n"
-	if got := out.String(); got != want || strings.Contains(got, "Rulings:") {
+	if got := out.String(); got != want || strings.Contains(got, "Rulings:") || strings.Contains(got, "Amendments:") {
 		t.Fatalf("legacy slice output = %q, want %q", got, want)
+	}
+}
+
+func TestRenderShowSliceAmendments(t *testing.T) {
+	now := time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)
+	started := now.Add(-2 * time.Minute)
+	slice := plan.Slice{
+		ID: "001-example", Title: "Example slice", Status: plan.StatusBlocked,
+		Goal:        "Render slice details.",
+		Notes:       "Ruling: Keep the existing symbol name.\n",
+		BlockerNote: "Missing expected file.",
+		Amendments: []plan.SliceAmendment{
+			{
+				AmendedAt: now.Add(-90 * time.Second),
+				Fields:    []string{"expected_files", "tasks"},
+				Reason:    "Allow the theme helper file so the blocked slice can continue without hand-editing slices.json.",
+			},
+			{
+				AmendedAt: now.Add(-30 * time.Second),
+				Fields:    []string{"goal"},
+				Reason:    "Narrow the goal.",
+			},
+		},
+		Timing: plan.SliceTiming{StartedAt: &started},
+	}
+	var out bytes.Buffer
+	if err := renderShowSlice(&out, slice, now, theme.Palette{}); err != nil {
+		t.Fatal(err)
+	}
+	want := "blocked  001-example  Example slice\n" +
+		"  Duration:  2m00s\n" +
+		"  Started:   2m\n" +
+		"  Completed: -\n" +
+		"  Summary:   Render slice details.\n" +
+		"  Rulings:\n" +
+		"           Keep the existing symbol name.\n" +
+		"  Amendments:\n" +
+		"              2026-09-26T11:58:30Z [expected_files, tasks]: Allow the theme helper\n" +
+		"              file so the blocked slice can continue without hand-editing slices.json.\n" +
+		"              2026-09-26T11:59:30Z [goal]: Narrow the goal.\n" +
+		"  Blocker Reason: Missing expected file.\n"
+	if got := out.String(); got != want {
+		t.Fatalf("slice output = %q, want %q", got, want)
 	}
 }
 

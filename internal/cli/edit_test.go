@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -264,4 +266,238 @@ func eventTypes(events []plan.Event) []string {
 		types[i] = e.Type
 	}
 	return types
+}
+
+// amendPlanRepo builds a plantest.Repository whose plan directory is a real
+// temporary directory so tao edit amend can take the plan run lock. Slice
+// 002-b is blocked with an existing goal, task, expected file, and manual
+// check; 001-a is pending; 003-c is in progress; 005-e is completed.
+func amendPlanRepo(t *testing.T) (*plantest.Repository, *plan.PlanDetail) {
+	t.Helper()
+	detail := plantest.NewPlanDetail("20260526-1200-amend").
+		WithStatus(plan.StatusInProgress).
+		WithCurrentSlice("003-c").
+		WithPendingSlices("001-a", "002-b").
+		WithCompletedSlices("005-e").
+		WithRepoRoot(t.TempDir()).
+		AddSlice(plantest.NewSlice("001-a").WithTitle("A").WithVerificationCommands("go test ./...").Build()).
+		AddSlice(plantest.NewSlice("002-b").WithTitle("B").
+			WithGoal("Original goal").
+			WithTasks("Existing task").
+			WithExpectedFiles("internal/cli/existing.go").
+			WithManualChecks("Existing check").
+			WithVerificationCommands("go test ./internal/cli").
+			WithBlockerNote("expected_files does not allow internal/cli/new.go").Build()).
+		AddSlice(plantest.NewSlice("003-c").WithTitle("C").WithStatus(plan.StatusInProgress).WithVerificationCommands("go test ./...").Build()).
+		AddSlice(plantest.NewSlice("005-e").WithTitle("E").WithStatus(plan.StatusCompleted).
+			WithCompletedAt(time.Date(2026, 5, 26, 12, 30, 0, 0, time.UTC)).Build()).
+		Build()
+	detail.Dir = t.TempDir()
+	repo := plantest.NewRepository()
+	repo.AddDetail(detail)
+	return repo, detail
+}
+
+func writeAmendInput(t *testing.T, name string, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestEditAmendAppendsContractChangesToBlockedSlice(t *testing.T) {
+	const planID = "20260526-1200-amend"
+	repo, _ := amendPlanRepo(t)
+	reasonFile := writeAmendInput(t, "reason.txt", "  blocker fix needs a new helper file and a check\n")
+	goalFile := writeAmendInput(t, "goal.txt", "Amended goal\n")
+	now := time.Date(2026, 9, 29, 20, 0, 0, 0, time.UTC)
+	var out, errOut bytes.Buffer
+	app := App{Out: &out, Err: &errOut, Now: func() time.Time { return now }, Repository: func(_ string) Repository { return repo }}
+
+	err := app.Run(context.Background(), []string{"edit", "amend", planID, "002-b",
+		"--reason-file", reasonFile,
+		"--goal-file", goalFile,
+		"--add-task", "Add the helper",
+		"--allow-file", "internal/cli/new.go",
+		"--allow-file", "internal/cli/existing.go",
+		"--add-manual-check", "Run the helper once",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Amended slice 002-b: goal, tasks, expected_files, manual_checks", "Operator Amendments", "Next: tao run"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("amend output %q does not contain %q", out.String(), want)
+		}
+	}
+
+	updated, err := repo.GetPlan(context.Background(), planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	amended := sliceByID(updated, "002-b")
+	if amended == nil {
+		t.Fatal("slice 002-b missing after amend")
+	}
+	if amended.Status != plan.StatusBlocked || amended.BlockerNote != "expected_files does not allow internal/cli/new.go" {
+		t.Fatalf("amend changed status or blocker note: %+v", amended)
+	}
+	if amended.Goal != "Amended goal" {
+		t.Fatalf("goal = %q", amended.Goal)
+	}
+	if !slices.Equal(amended.Tasks, []string{"Existing task", "Add the helper"}) {
+		t.Fatalf("tasks = %v", amended.Tasks)
+	}
+	if !slices.Equal(amended.ExpectedFiles, []string{"internal/cli/existing.go", "internal/cli/new.go"}) {
+		t.Fatalf("expected files = %v", amended.ExpectedFiles)
+	}
+	if !slices.Equal(amended.Verification.ManualChecks, []string{"Existing check", "Run the helper once"}) {
+		t.Fatalf("manual checks = %v", amended.Verification.ManualChecks)
+	}
+	if len(amended.Amendments) != 1 {
+		t.Fatalf("amendments = %+v", amended.Amendments)
+	}
+	entry := amended.Amendments[0]
+	if entry.Reason != "blocker fix needs a new helper file and a check" || !entry.AmendedAt.Equal(now) || !slices.Equal(entry.Fields, []string{"goal", "tasks", "expected_files", "manual_checks"}) {
+		t.Fatalf("amendment entry = %+v", entry)
+	}
+	found := false
+	for _, event := range updated.Events {
+		if event.Type != plan.EventTypeSliceAmended || event.SliceID != "002-b" {
+			continue
+		}
+		found = true
+		if event.Reason != entry.Reason || !slices.Equal(event.AmendedFields, entry.Fields) {
+			t.Fatalf("slice_amended event = %+v", event)
+		}
+	}
+	if !found {
+		t.Fatalf("no slice_amended event for 002-b in %v", eventTypes(updated.Events))
+	}
+}
+
+func TestEditAmendRefusesWithoutPersisting(t *testing.T) {
+	const planID = "20260526-1200-amend"
+	for _, test := range []struct {
+		name    string
+		args    func(t *testing.T) []string
+		prepare func(t *testing.T, detail *plan.PlanDetail)
+		want    string
+	}{
+		{
+			name: "missing reason flag",
+			args: func(*testing.T) []string { return []string{"edit", "amend", planID, "002-b", "--add-task", "x"} },
+			want: "requires --reason-file",
+		},
+		{
+			name: "missing reason file",
+			args: func(t *testing.T) []string {
+				return []string{"edit", "amend", planID, "002-b", "--reason-file", filepath.Join(t.TempDir(), "absent.txt"), "--add-task", "x"}
+			},
+			want: "read amendment reason file",
+		},
+		{
+			name: "empty reason file",
+			args: func(t *testing.T) []string {
+				return []string{"edit", "amend", planID, "002-b", "--reason-file", writeAmendInput(t, "reason.txt", " \n"), "--add-task", "x"}
+			},
+			want: "amendment reason file is empty",
+		},
+		{
+			name: "no change flags",
+			args: func(t *testing.T) []string {
+				return []string{"edit", "amend", planID, "002-b", "--reason-file", writeAmendInput(t, "reason.txt", "why")}
+			},
+			want: "requires at least one contract change",
+		},
+		{
+			name: "blank change values",
+			args: func(t *testing.T) []string {
+				return []string{"edit", "amend", planID, "002-b", "--reason-file", writeAmendInput(t, "reason.txt", "why"), "--add-task", " ", "--allow-file", ""}
+			},
+			want: "requires at least one contract change",
+		},
+		{
+			name: "unknown flag",
+			args: func(t *testing.T) []string {
+				return []string{"edit", "amend", planID, "002-b", "--reason-file", writeAmendInput(t, "reason.txt", "why"), "--force"}
+			},
+			want: "flag provided but not defined",
+		},
+		{
+			name: "in progress slice",
+			args: func(t *testing.T) []string {
+				return []string{"edit", "amend", planID, "003-c", "--reason-file", writeAmendInput(t, "reason.txt", "why"), "--add-task", "x"}
+			},
+			want: "slice 003-c is in_progress; only pending or blocked slices can be amended",
+		},
+		{
+			name: "verification repair slice",
+			args: func(t *testing.T) []string {
+				return []string{"edit", "amend", planID, "001-a", "--reason-file", writeAmendInput(t, "reason.txt", "why"), "--add-task", "x"}
+			},
+			prepare: func(_ *testing.T, detail *plan.PlanDetail) {
+				sliceByID(detail, "001-a").VerificationRepair = &plan.VerificationRepairBinding{Command: "make verify", HeadSHA: "failed-head", Fingerprint: "failure"}
+			},
+			want: "cannot amend generated verification-repair slice 001-a; run `tao run " + planID + "` to complete it",
+		},
+		{
+			name: "run lock held",
+			args: func(t *testing.T) []string {
+				return []string{"edit", "amend", planID, "002-b", "--reason-file", writeAmendInput(t, "reason.txt", "why"), "--add-task", "x"}
+			},
+			prepare: func(t *testing.T, detail *plan.PlanDetail) {
+				lock, err := plan.AcquireRunLock(detail.Dir, planID, time.Now())
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = lock.Release() })
+			},
+			want: "plan " + planID + " is already running",
+		},
+		{
+			name: "amended plan fails verification",
+			args: func(t *testing.T) []string {
+				return []string{"edit", "amend", planID, "002-b", "--reason-file", writeAmendInput(t, "reason.txt", "why"), "--allow-file", "internal/cli/new.go"}
+			},
+			prepare: func(_ *testing.T, detail *plan.PlanDetail) {
+				sliceByID(detail, "002-b").RequiredInputs = []plan.RequiredInput{{Path: "fixtures/missing.json", Kind: plan.RequiredInputFile, Reason: "seed data"}}
+			},
+			want: "amended plan verification is invalid: required file input \"fixtures/missing.json\" does not exist",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo, detail := amendPlanRepo(t)
+			if test.prepare != nil {
+				test.prepare(t, detail)
+			}
+			before, err := json.Marshal(detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			app := App{Out: &out, Err: io.Discard, Repository: func(_ string) Repository { return repo }}
+
+			err = app.Run(context.Background(), test.args(t))
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("edit amend error = %v, want %q", err, test.want)
+			}
+			afterDetail, err := repo.GetPlan(context.Background(), planID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			after, err := json.Marshal(afterDetail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(after, before) {
+				t.Fatalf("refused amend persisted artifact mutation:\n got: %s\nwant: %s", after, before)
+			}
+			if out.Len() != 0 {
+				t.Fatalf("edit amend emitted success output: %q", out.String())
+			}
+		})
+	}
 }

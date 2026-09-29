@@ -572,6 +572,7 @@ verification remains unchanged. See [the evidence contract](plan-format.md#obser
 | --- | --- | --- |
 | An approval-gated pending slice is not approved | `tao approve [--slice ID] <plan-id>`, then `tao run <plan-id>` | Approval satisfies the gate; it is not blocker recovery. |
 | The plan records an ordinary blocker and you have resolved its stated cause | `tao run --continue <plan-id>` | `--continue` explicitly clears blocker lifecycle state. Tao does not infer resolution. |
+| A blocker's fix is a contract change, such as a missing expected file, task, or manual check | `tao edit amend <plan-id> <slice-id> --reason-file FILE [--allow-file PATH] [--add-task TEXT] [--add-manual-check TEXT] [--goal-file FILE]`, then `tao run --continue <plan-id>` | The amendment is journaled with its reason and shown as Operator Amendments; it never changes slice status, clears the blocker note, or bypasses approval, so `--continue` still decides whether the blocker is resolved. |
 | A `plan_owned` blocker has an unchanged worktree | Fix the named paths in the plan worktree, then rerun `tao run --continue <plan-id>` | Tao refuses with `blocker unchanged since <timestamp>; fix required in <paths>` only when structured plan-owned evidence and the recorded head/worktree fingerprint still match. |
 | A clean isolated automatic slice is blocked on an older execution baseline, and a prerequisite has now produced a strictly newer baseline | `tao run --restart <plan-id>` | `--restart` supersedes that safe blocked boundary and preflights again; it is not a general retry. |
 | An implementation handoff was interrupted before completion | Rerun the same `tao run` command | Tao classifies the recorded workspace, branch, head, policy, intent, and dirt before deciding whether resume is safe. `--continue` and `--restart` do not bypass that check. |
@@ -584,8 +585,15 @@ The repair-attempt count includes every slice with a verification-repair binding
 including completed attempts, and never resets when failure evidence changes.
 After exhaustion, Tao records the failed command, head, fingerprint, lifetime
 attempt count, and manual-recovery reason as durable stop evidence. Generated
-verification-repair slices are system-owned; `tao edit skip` and
-`tao edit remove` refuse them so repair history cannot be bypassed or erased.
+verification-repair slices are system-owned; `tao edit skip`,
+`tao edit remove`, and `tao edit amend` refuse them so repair history cannot be
+bypassed or erased. `tao edit amend` relaxes or corrects a pending or blocked
+slice's contract without hand-editing `slices.json`: `--allow-file`,
+`--add-task`, and `--add-manual-check` append entries that are not already
+present, `--goal-file` replaces the goal, and the required `--reason-file`
+records why. Tao validates the amended plan in memory before persisting,
+refuses while a run holds the plan lock, and records the amendment on the
+slice and in the event journal.
 `tao insights` shows `verification_repair_stopped` as a signal of exhausted
 repair attempts.
 

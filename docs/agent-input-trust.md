@@ -32,6 +32,15 @@ Each boundary separates **Current mitigation** from **Residual risk** and **Futu
 - **Severity:** High for correctness of completed-slice evidence; low to medium for bounded bloat/availability.
 - **Future recommendation:** Make completion evidence Tao-owned by executing and recording verification outside the agent. Preserve the current input bounds as defense in depth and retain tolerant reads for historical artifacts.
 
+## Operator amendments through `tao edit amend`
+
+- **Operator-authored input:** `tao edit amend` accepts a required `--reason-file`, an optional `--goal-file`, and repeatable `--add-task`, `--allow-file`, and `--add-manual-check` values from the operator. Files are read with `agentinput.ReadBoundedFile` and every value passes through `agentinput.BoundedText`, so oversized or empty input is refused before any plan mutation rather than truncated silently.
+- **Consumed by:** `internal/cli/edit.go` builds a `plan.SliceAmendmentRequest`; `PlanRecord.AmendSlice` in `internal/plan` validates the request, refuses while a run holds the plan lock or the slice is not pending or blocked, and journals the change to `slices.json` together with a `slice_amended` event. Amendments render under the label "Operator Amendments" in `tao show`, the run packet, and the reviewer's prompt context, where they are byte- and count-capped with an explicit omission marker.
+- **Current mitigation:** This is operator authority over the slice contract, not agent-authored advisory text: an amendment changes the goal, tasks, expected files, or manual checks the implementer and reviewer judge against. It is stored as structured `Slice.Amendments`, never as `Ruling:` notes, and it never changes slice status, clears `blocker_note`, bypasses approval, or lifts the plan-owned blocker fingerprint guard.
+- **Residual risk:** Tao cannot distinguish a human operator from a local process invoking the command, so a non-conforming agent with shell access could relax its own contract; the recorded reason and event give an audit trail but not authenticity. Expected-file additions remain advisory scope evidence and do not authorize staging.
+- **Severity:** Medium; bounded by the pending-or-blocked guard, the lock refusal, and the journaled event.
+- **Future recommendation:** Keep amendment mutations inside `internal/plan`, keep the rendered label distinct from implementer rulings, and treat operator provenance as part of any future ownership or authentication boundary.
+
 ## Tao-owned blocked-path input and residual direct artifact writes
 
 - **Agent-authored input:** `prompts/run.md` instructs agents to pass a temporary blocker-reason file and optional invalid/corrected verification-command flags to `tao slice-blocked`; non-conforming agents can still write plan artifacts directly.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"strings"
 	"time"
@@ -344,19 +345,22 @@ func renderShowSlice(out io.Writer, slice plan.Slice, now time.Time, palette the
 			return err
 		}
 	}
-	if rulings := plan.SliceRulings(slice.Notes); len(rulings) > 0 {
-		if err := writef(out, "  Rulings:\n"); err != nil {
-			return err
-		}
-		rulingIndent := strings.Repeat(" ", len("  Rulings: "))
-		for _, ruling := range rulings {
-			text := strings.TrimSpace(strings.TrimPrefix(ruling, "Ruling:"))
-			for _, line := range wrapText(text, summaryWidth) {
-				if err := writef(out, "%s%s\n", rulingIndent, line); err != nil {
-					return err
-				}
-			}
-		}
+	rulings := plan.SliceRulings(slice.Notes)
+	for i, ruling := range rulings {
+		rulings[i] = strings.TrimSpace(strings.TrimPrefix(ruling, "Ruling:"))
+	}
+	if err := renderShowSliceBlock(out, "Rulings", rulings, summaryWidth); err != nil {
+		return err
+	}
+	amendments := make([]string, 0, len(slice.Amendments))
+	for _, amendment := range slice.Amendments {
+		amendments = append(amendments, fmt.Sprintf("%s [%s]: %s",
+			amendment.AmendedAt.UTC().Format(time.RFC3339),
+			strings.Join(amendment.Fields, ", "),
+			amendment.Reason))
+	}
+	if err := renderShowSliceBlock(out, "Amendments", amendments, summaryWidth); err != nil {
+		return err
 	}
 	if slice.Status == plan.StatusBlocked {
 		blockerLines := wrapText(planview.FormatBlockerText(slice.BlockerNote).Detailed, summaryWidth)
@@ -366,6 +370,27 @@ func renderShowSlice(out io.Writer, slice plan.Slice, now time.Time, palette the
 		blockerIndent := strings.Repeat(" ", len("  Blocker Reason: "))
 		for _, line := range blockerLines[1:] {
 			if err := writef(out, "%s%s\n", blockerIndent, line); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// renderShowSliceBlock prints a labeled block of wrapped entries beneath a
+// slice, such as agent Rulings or operator Amendments, and prints nothing
+// when there are no entries.
+func renderShowSliceBlock(out io.Writer, label string, entries []string, width int) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	if err := writef(out, "  %s:\n", label); err != nil {
+		return err
+	}
+	indent := strings.Repeat(" ", len("  "+label+": "))
+	for _, entry := range entries {
+		for _, line := range wrapText(entry, width) {
+			if err := writef(out, "%s%s\n", indent, line); err != nil {
 				return err
 			}
 		}

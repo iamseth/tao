@@ -171,6 +171,54 @@ func removeSliceMutation(sliceID string, now time.Time) artifactMutationFunc {
 	}
 }
 
+func amendSliceMutation(sliceID string, request SliceAmendmentRequest, now time.Time) artifactMutationFunc {
+	return func(detail *PlanDetail) (lifecycleMutation, error) {
+		if err := RequireNotAbandoned(detail); err != nil {
+			return lifecycleMutation{}, err
+		}
+		if slice := findSlice(detail, sliceID); slice != nil && sliceAmendmentWasRecorded(detail, slice, request, now) {
+			return unchangedLifecycleMutation(detail), nil
+		}
+		return applyLifecycleMutation(detail, func(changes *artifactChangeSet) ([]Event, error) {
+			event, err := markSliceAmendedWithChanges(detail, changes, sliceID, request, now)
+			if err != nil {
+				return nil, err
+			}
+			return []Event{event}, nil
+		})
+	}
+}
+
+// sliceAmendmentWasRecorded reports whether an identical amendment already
+// landed: its slice_amended event is journaled and every requested value is
+// present on the slice, so a retry after a partial persist is a no-op.
+func sliceAmendmentWasRecorded(detail *PlanDetail, slice *Slice, request SliceAmendmentRequest, now time.Time) bool {
+	normalized, err := request.normalize()
+	if err != nil {
+		return false
+	}
+	if normalized.Goal != "" && slice.Goal != normalized.Goal {
+		return false
+	}
+	for _, group := range [][2][]string{{slice.Tasks, normalized.AddTasks}, {slice.ExpectedFiles, normalized.AllowFiles}, {slice.Verification.ManualChecks, normalized.AddManualChecks}} {
+		for _, value := range group[1] {
+			if !slices.Contains(group[0], value) {
+				return false
+			}
+		}
+	}
+	for _, amendment := range slice.Amendments {
+		if amendment.Reason != normalized.Reason {
+			continue
+		}
+		expected := Event{Type: EventTypeSliceAmended, Timestamp: now, PlanID: detail.State.Plan.ID, SliceID: slice.ID, Reason: normalized.Reason, AmendedFields: amendment.Fields, Message: sliceAmendmentMessage}
+		if semanticEventsWereRecorded(detail.Events, []Event{expected}) {
+			return true
+		}
+	}
+	return false
+}
+
 func skipSliceMutation(sliceID string, now time.Time) artifactMutationFunc {
 	return func(detail *PlanDetail) (lifecycleMutation, error) {
 		if err := RequireNotAbandoned(detail); err != nil {

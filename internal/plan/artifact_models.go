@@ -44,12 +44,22 @@ type Slice struct {
 	Verification        Verification               `json:"verification"`
 	Approval            *Approval                  `json:"approval,omitempty"`
 	Notes               string                     `json:"notes,omitempty"`
+	Amendments          []SliceAmendment           `json:"amendments,omitempty"`
 	VerificationResults []VerificationRun          `json:"verification_results,omitempty"`
 	VerificationAttempt *SliceVerificationSnapshot `json:"verification_attempt,omitempty"`
 	CommitIntent        *SliceCommitIntent         `json:"commit_intent,omitempty"`
 	Completion          *SliceCompletionOutcome    `json:"completion,omitempty"`
 	VerificationRepair  *VerificationRepairBinding `json:"verification_repair,omitempty"`
 	Extra               map[string]any             `json:"-"`
+}
+
+// SliceAmendment records one operator amendment of a pending or blocked
+// slice's contract made through `tao edit amend`. Amendments are structured
+// operator evidence, distinct from agent-authored Ruling: notes.
+type SliceAmendment struct {
+	AmendedAt time.Time `json:"amended_at"`
+	Reason    string    `json:"reason"`
+	Fields    []string  `json:"fields"`
 }
 
 // SliceExecutionStart protects the branch and HEAD prepared for automatic work.

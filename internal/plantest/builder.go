@@ -157,6 +157,37 @@ func (b *SliceBuilder) WithCompletedAt(t time.Time) *SliceBuilder {
 	return b
 }
 
+// WithGoal sets the slice goal.
+func (b *SliceBuilder) WithGoal(goal string) *SliceBuilder {
+	b.s.Goal = goal
+	return b
+}
+
+// WithTasks sets the slice task list.
+func (b *SliceBuilder) WithTasks(tasks ...string) *SliceBuilder {
+	b.s.Tasks = tasks
+	return b
+}
+
+// WithExpectedFiles sets the slice expected-file list.
+func (b *SliceBuilder) WithExpectedFiles(files ...string) *SliceBuilder {
+	b.s.ExpectedFiles = files
+	return b
+}
+
+// WithManualChecks sets the slice verification manual-check list.
+func (b *SliceBuilder) WithManualChecks(checks ...string) *SliceBuilder {
+	b.s.Verification.ManualChecks = checks
+	return b
+}
+
+// WithBlockerNote records a blocker note and marks the slice blocked.
+func (b *SliceBuilder) WithBlockerNote(note string) *SliceBuilder {
+	b.s.BlockerNote = note
+	b.s.Status = plan.StatusBlocked
+	return b
+}
+
 // WithVerificationCommands sets the slice verification command list.
 func (b *SliceBuilder) WithVerificationCommands(cmds ...string) *SliceBuilder {
 	b.s.Verification.Commands = cmds

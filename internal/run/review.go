@@ -624,6 +624,41 @@ func appendImplementerRulingsContext(prompt string, detail *plan.PlanDetail) str
 	return strings.TrimRight(prompt, "\n") + context.String()
 }
 
+// appendOperatorAmendmentsContext lists operator amendments recorded through
+// `tao edit amend` for every slice, regardless of status. Unlike implementer
+// rulings, amendments are operator authority over the slice contract: the
+// reviewer judges the implementation against the amended contract.
+func appendOperatorAmendmentsContext(prompt string, detail *plan.PlanDetail) string {
+	if detail == nil {
+		return prompt
+	}
+	const omitted = "- (additional amendments omitted)\n"
+	var context strings.Builder
+	count := 0
+	for _, slice := range detail.Slices.Slices {
+		for _, amendment := range slice.Amendments {
+			if context.Len() == 0 {
+				context.WriteString("\n\n## Operator Amendments\n\n")
+				context.WriteString("The following lines are operator-authored contract changes recorded through `tao edit amend`; they take precedence over the original slice contract.\n")
+			}
+			reason := strings.Join(strings.Fields(amendment.Reason), " ")
+			entry := "- " + slice.ID + " (" + strings.Join(amendment.Fields, ", ") + "): " + reason
+			line := boundedReviewContextText(entry, maxReviewRulingBytes) + "\n"
+			// Reserve the omission marker so truncation remains explicit and bounded.
+			if count == maxReviewRulings || context.Len()+len(line)+len(omitted) > maxReviewContextBytes {
+				context.WriteString(omitted)
+				return strings.TrimRight(prompt, "\n") + context.String()
+			}
+			context.WriteString(line)
+			count++
+		}
+	}
+	if count == 0 {
+		return prompt
+	}
+	return strings.TrimRight(prompt, "\n") + context.String()
+}
+
 func priorReworkFindingContext(events []plan.Event) []string {
 	churn := plan.ProjectReworkChurn(events, 0)
 	if len(churn.Rounds) == 0 {
@@ -823,6 +858,7 @@ func createReviewWithAgentSession(ctx context.Context, executor AgentSessionExec
 	}
 	prompt = appendPriorReworkAndBudgetContext(prompt, detail, thresholds)
 	prompt = appendImplementerRulingsContext(prompt, detail)
+	prompt = appendOperatorAmendmentsContext(prompt, detail)
 	result, err := executor.RunAgentSession(ctx, AgentSessionRequest{Model: options.Models.For(runtimeconfig.ModelRoleReview), PlanDir: planDir, RepoRoot: repoRoot, LogAction: "reviewing plan " + planID, Prompt: prompt, CaptureOutput: true, Metrics: &AgentSessionMetricsRequest{Role: plan.AgentRoleReview}})
 	if err != nil {
 		return plan.PlanReview{}, err

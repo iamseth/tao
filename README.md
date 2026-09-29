@@ -217,9 +217,20 @@ tao run --repair-verification <plan> # stopped code failure; one attempt if budg
 tao run --reverify <plan>            # resolved external cause or manual fix after the cap
 ```
 
-Generated verification-repair slices are system-owned: `tao edit skip` and
-`tao edit remove` refuse them. If unfinished work is intentionally no longer
-needed, record that terminal outcome without deleting its history:
+When a blocker's fix is a contract change rather than code, amend the pending
+or blocked slice with a recorded reason instead of editing `slices.json`:
+
+```sh
+tao edit amend <plan> <slice> --reason-file /tmp/reason.txt --allow-file internal/cli/helper.go --add-task 'Add the helper'
+tao run --continue <plan>
+```
+
+Amendments append tasks, expected files, and manual checks or replace the goal;
+they never change slice status, blocker notes, or approval, and Tao refuses
+them while a run holds the plan lock. Generated verification-repair slices are
+system-owned: `tao edit skip`, `tao edit remove`, and `tao edit amend` refuse
+them. If unfinished work is intentionally no longer needed, record that
+terminal outcome without deleting its history:
 
 ```sh
 tao abandon --reason "superseded by a different approach" <plan>

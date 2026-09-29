@@ -328,6 +328,59 @@ func (r *PlanRecord) RemoveSlice(sliceID string, now time.Time) error {
 	return r.apply(removeSliceMutation(sliceID, now))
 }
 
+// SliceAmendmentRequest carries one operator amendment of a pending or
+// blocked slice's contract. Goal replaces the slice goal when non-empty; the
+// list fields append entries that are not already present.
+type SliceAmendmentRequest struct {
+	Reason          string
+	Goal            string
+	AddTasks        []string
+	AllowFiles      []string
+	AddManualChecks []string
+}
+
+// normalize trims and bounds the request, dropping blank list entries and
+// refusing unsafe expected-file paths, empty reasons, and empty requests.
+func (request SliceAmendmentRequest) normalize() (SliceAmendmentRequest, error) {
+	reason := strings.TrimSpace(request.Reason)
+	if reason == "" {
+		return SliceAmendmentRequest{}, fmt.Errorf("amendment reason is required")
+	}
+	normalized := SliceAmendmentRequest{
+		Reason:          agentinput.CapRunes(reason, maxBlockerNoteRunes),
+		Goal:            strings.TrimSpace(request.Goal),
+		AddTasks:        trimmedNonEmpty(request.AddTasks),
+		AllowFiles:      trimmedNonEmpty(request.AllowFiles),
+		AddManualChecks: trimmedNonEmpty(request.AddManualChecks),
+	}
+	for _, path := range normalized.AllowFiles {
+		if problem := unsafeExpectedFile(path); problem != "" {
+			return SliceAmendmentRequest{}, fmt.Errorf("cannot allow expected file %q: %s", path, problem)
+		}
+	}
+	if normalized.Goal == "" && len(normalized.AddTasks) == 0 && len(normalized.AllowFiles) == 0 && len(normalized.AddManualChecks) == 0 {
+		return SliceAmendmentRequest{}, fmt.Errorf("amendment must supply a goal, task, allowed file, or manual check")
+	}
+	return normalized, nil
+}
+
+func trimmedNonEmpty(values []string) []string {
+	var result []string
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
+}
+
+// AmendSlice records one operator amendment of a pending or blocked slice's
+// contract through the mutation journal. It never changes slice status,
+// blocker notes, approval, or execution boundaries.
+func (r *PlanRecord) AmendSlice(sliceID string, request SliceAmendmentRequest, now time.Time) error {
+	return r.apply(amendSliceMutation(sliceID, request, now))
+}
+
 func (r *PlanRecord) SkipSlice(sliceID string, now time.Time) error {
 	return r.apply(skipSliceMutation(sliceID, now))
 }

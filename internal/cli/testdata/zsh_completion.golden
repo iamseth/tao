@@ -325,7 +325,7 @@ _tao() {
       ;;
     e|ed|edi|edit)
       if (( CURRENT == 3 )); then
-        subcommands=('remove:Remove a pending slice from the plan' 'skip:Mark a pending slice skipped' 'move:Move a pending slice before or after another pending slice')
+        subcommands=('remove:Remove a pending slice from the plan' 'skip:Mark a pending slice skipped' 'move:Move a pending slice before or after another pending slice' 'amend:Amend a pending or blocked slice'\''s contract with a recorded reason')
         _describe -t commands 'edit command' subcommands
         return
       fi
@@ -345,6 +345,13 @@ _tao() {
         move)
           _arguments '--after[move after slice id]:value:' '--before[move before slice id]:value:'
           if _tao_at_positional 4 1 0 ',,' '--after' '--before'; then
+            plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
+            compadd -a plan_ids
+          fi
+          ;;
+        amend)
+          _arguments '*--add-manual-check[manual check to append to the slice (repeatable)]:check:' '*--add-task[task to append to the slice (repeatable)]:task:' '*--allow-file[repository-relative expected file to append (repeatable)]:path:_files' '--goal-file[file containing the replacement slice goal]:path:_files' '--reason-file[file containing the amendment reason (required)]:path:_files'
+          if _tao_at_positional 4 1 0 ',,' '--add-manual-check' '--add-task' '--allow-file' '--goal-file' '--reason-file'; then
             plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
             compadd -a plan_ids
           fi

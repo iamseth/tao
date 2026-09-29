@@ -45,6 +45,46 @@ func TestRunPacketIncludesSelectedSliceContext(t *testing.T) {
 	}
 }
 
+func TestRunPacketOperatorAmendments(t *testing.T) {
+	detail := runPacketDetail()
+	detail.Slices.Slices[1].Amendments = []SliceAmendment{
+		{
+			AmendedAt: time.Date(2026, 9, 27, 22, 8, 53, 0, time.UTC),
+			Fields:    []string{"expected_files", "tasks"},
+			Reason:    "Allow the theme helper file.\nSecond line is omitted.",
+		},
+		{
+			AmendedAt: time.Date(2026, 9, 27, 22, 30, 0, 0, time.UTC),
+			Fields:    []string{"goal"},
+			Reason:    "Narrow the goal.",
+		},
+	}
+
+	packet, err := RenderRunPacket(detail, RunPacketOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "- Context: Avoid full artifact reads.\n\n" +
+		"## Operator Amendments\n" +
+		"- 2026-09-27T22:08:53Z [expected_files, tasks]: Allow the theme helper file.\n" +
+		"- 2026-09-27T22:30:00Z [goal]: Narrow the goal.\n\n" +
+		"## Tasks\n"
+	if !strings.Contains(packet, want) {
+		t.Fatalf("expected packet to contain %q:\n%s", want, packet)
+	}
+	if strings.Contains(packet, "Second line is omitted") {
+		t.Fatalf("expected amendment reason to be limited to its first line:\n%s", packet)
+	}
+
+	packet, err = RenderRunPacket(runPacketDetail(), RunPacketOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(packet, "Operator Amendments") {
+		t.Fatalf("expected no Operator Amendments section without amendments:\n%s", packet)
+	}
+}
+
 func TestRunPacketPlanOwnedFiles(t *testing.T) {
 	for _, files := range [][]string{nil, {}, {"earlier/a.go", "earlier/b.go"}} {
 		packet, err := RenderRunPacket(runPacketDetail(), RunPacketOptions{PlanOwnedFiles: files})

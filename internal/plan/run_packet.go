@@ -88,6 +88,7 @@ func RenderRunPacket(detail *PlanDetail, options RunPacketOptions) (string, erro
 	writeRunPacketLine(&b, "Goal", slice.Goal)
 	writeRunPacketLine(&b, "Context", slice.Context)
 
+	writeOperatorAmendments(&b, slice.Amendments)
 	writeRunPacketList(&b, "Tasks", slice.Tasks)
 	writeRequiredInputs(&b, slice.RequiredInputs)
 	writeRunPacketList(&b, "Expected Files", slice.ExpectedFiles)
@@ -169,6 +170,29 @@ func writeRunPacketList(b *strings.Builder, title string, values []string) {
 		b.WriteString(value)
 		b.WriteString("\n")
 	}
+}
+
+// writeOperatorAmendments lists operator amendments recorded through
+// `tao edit amend` so the implementing agent knows the contract was relaxed
+// deliberately. The section is omitted entirely when there are none.
+func writeOperatorAmendments(b *strings.Builder, amendments []SliceAmendment) {
+	if len(amendments) == 0 {
+		return
+	}
+	entries := make([]string, 0, len(amendments))
+	for _, amendment := range amendments {
+		entries = append(entries, boundedRunPacketFeedbackText(formatSliceAmendment(amendment), maxRunPacketFeedbackBytes))
+	}
+	writeRunPacketList(b, "Operator Amendments", entries)
+}
+
+// formatSliceAmendment renders one operator amendment as a single line:
+// `<RFC3339 amended_at> [<fields joined by ", ">]: <first line of reason>`.
+func formatSliceAmendment(amendment SliceAmendment) string {
+	return fmt.Sprintf("%s [%s]: %s",
+		amendment.AmendedAt.UTC().Format(time.RFC3339),
+		strings.Join(amendment.Fields, ", "),
+		firstLine(amendment.Reason))
 }
 
 func writeRequiredInputs(b *strings.Builder, inputs []RequiredInput) {

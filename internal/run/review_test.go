@@ -137,6 +137,85 @@ func TestAppendImplementerRulingsContextBounds(t *testing.T) {
 	}
 }
 
+func TestAppendOperatorAmendmentsContext(t *testing.T) {
+	detail := &plan.PlanDetail{}
+	detail.Slices.Slices = []plan.Slice{
+		{ID: "001-a", Status: plan.StatusCompleted, Amendments: []plan.SliceAmendment{
+			{Reason: "Allow the helper file.", Fields: []string{"expected_files"}},
+			{Reason: "Add the manual check.\nSecond line.", Fields: []string{"manual_checks", "tasks"}},
+		}},
+		{ID: "002-b", Status: plan.StatusPending, Notes: "Ruling: Not an amendment."},
+		{ID: "003-c", Status: plan.StatusBlocked, Amendments: []plan.SliceAmendment{
+			{Reason: "Relax the goal.", Fields: []string{"goal"}},
+		}},
+	}
+	got := appendOperatorAmendmentsContext("review prompt\n", detail)
+	want := "review prompt\n\n## Operator Amendments\n\n" +
+		"The following lines are operator-authored contract changes recorded through `tao edit amend`; they take precedence over the original slice contract.\n" +
+		"- 001-a (expected_files): Allow the helper file.\n" +
+		"- 001-a (manual_checks, tasks): Add the manual check. Second line.\n" +
+		"- 003-c (goal): Relax the goal.\n"
+	if got != want {
+		t.Fatalf("amendments context = %q, want %q", got, want)
+	}
+}
+
+func TestAppendOperatorAmendmentsContextNoAmendments(t *testing.T) {
+	for _, detail := range []*plan.PlanDetail{nil, {}} {
+		if detail != nil {
+			detail.Slices.Slices = []plan.Slice{
+				{ID: "001-a", Status: plan.StatusCompleted, Notes: "Ruling: Use the alias."},
+				{ID: "002-b", Status: plan.StatusPending},
+			}
+		}
+		const prompt = "review prompt\n\n"
+		if got := appendOperatorAmendmentsContext(prompt, detail); got != prompt {
+			t.Fatalf("prompt changed without amendments: %q", got)
+		}
+	}
+}
+
+func TestAppendOperatorAmendmentsContextBounds(t *testing.T) {
+	for _, count := range []int{maxReviewRulings, maxReviewRulings + 5} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			detail := &plan.PlanDetail{}
+			for i := range count {
+				detail.Slices.Slices = append(detail.Slices.Slices, plan.Slice{
+					ID: fmt.Sprintf("%03d-slice", i), Status: plan.StatusPending,
+					Amendments: []plan.SliceAmendment{{Reason: strings.Repeat("界", 400), Fields: []string{"goal"}}},
+				})
+			}
+			const prompt = "review prompt\n"
+			got := appendOperatorAmendmentsContext(prompt, detail)
+			if !utf8.ValidString(got) {
+				t.Fatal("amendment truncation broke UTF-8")
+			}
+			if contextBytes := len(got) - len(strings.TrimRight(prompt, "\n")); contextBytes > maxReviewContextBytes {
+				t.Fatalf("context bytes = %d, want at most %d", contextBytes, maxReviewContextBytes)
+			}
+			var amendmentCount int
+			for line := range strings.SplitSeq(got, "\n") {
+				if strings.Contains(line, "-slice (goal): ") {
+					amendmentCount++
+					if len(line) > maxReviewRulingBytes || !strings.HasSuffix(line, "…") {
+						t.Fatalf("amendment line not bounded: %q (%d bytes)", line, len(line))
+					}
+				}
+			}
+			if amendmentCount != maxReviewRulings {
+				t.Fatalf("amendment count = %d, want %d", amendmentCount, maxReviewRulings)
+			}
+			wantOmitted := 0
+			if count > maxReviewRulings {
+				wantOmitted = 1
+			}
+			if omitted := strings.Count(got, "- (additional amendments omitted)"); omitted != wantOmitted {
+				t.Fatalf("omitted markers = %d, want %d", omitted, wantOmitted)
+			}
+		})
+	}
+}
+
 func TestAppendPriorReworkAndBudgetContext(t *testing.T) {
 	thresholds := plan.DefaultAgentBudget().Warn()
 	tests := []struct {
@@ -303,6 +382,7 @@ func TestCreateReviewWithAgentSessionPersistsParsedReview(t *testing.T) {
 	detail.State.Repo.Root = repoRoot
 	detail.State.Repo.BaseCommit = "base123"
 	detail.Slices.Slices[0].Notes = "Ruling: Preserve the existing alias."
+	detail.Slices.Slices[0].Amendments = []plan.SliceAmendment{{AmendedAt: reviewedAt, Reason: "Allow the helper file.", Fields: []string{"expected_files"}}}
 	detail.Events = []plan.Event{{Type: plan.EventTypeReworkRound, Round: 1, Fingerprint: "first"}}
 	persistReviewState(t, planDir, detail)
 
@@ -344,6 +424,10 @@ func TestCreateReviewWithAgentSessionPersistsParsedReview(t *testing.T) {
 	rulingsIndex := strings.Index(request.Prompt, "\n\n## Implementer Rulings\n")
 	if reworkIndex < 0 || rulingsIndex <= reworkIndex || !strings.Contains(request.Prompt, "- 001-a: Ruling: Preserve the existing alias.") {
 		t.Fatalf("review prompt must include rework history before rulings:\n%s", request.Prompt)
+	}
+	amendmentsIndex := strings.Index(request.Prompt, "\n\n## Operator Amendments\n")
+	if amendmentsIndex <= rulingsIndex || !strings.Contains(request.Prompt, "- 001-a (expected_files): Allow the helper file.") {
+		t.Fatalf("review prompt must include operator amendments after rulings:\n%s", request.Prompt)
 	}
 
 	reviewArtifact, err := os.ReadFile(filepath.Join(planDir, plan.ReviewFile)) //nolint:gosec // test reads a t.TempDir-derived artifact.

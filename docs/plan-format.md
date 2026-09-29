@@ -202,8 +202,11 @@ First-class plan edits mutate only pending work:
 - `tao edit remove PLAN SLICE` removes a pending slice from `slices.json` and `plan.pending_slices`.
 - `tao edit skip PLAN SLICE` removes a pending slice from `plan.pending_slices` and keeps its slice record with status `skipped`.
 - `tao edit move PLAN SLICE --before ID` and `--after ID` reorder only `plan.pending_slices`.
+- `tao edit amend PLAN SLICE --reason-file FILE [--goal-file FILE] [--add-task TEXT ...] [--allow-file PATH ...] [--add-manual-check TEXT ...]` replaces `goal` and appends to `tasks`, `expected_files`, and `verification.manual_checks` on a pending or blocked slice, recording the reason in `slice.amendments` and a `slice_amended` event. Amend never changes slice status, clears `blocker_note`, bypasses approval, or removes list entries.
 
-Edit mutations must reject completed, in-progress, blocked, missing, or dependency-invalid slices and keep `state.json` and `slices.json` consistent. Generated final-verification repair slices are system-owned: a slice with a non-null `verification_repair` binding must refuse both `tao edit skip` and `tao edit remove` rather than weakening or deleting repair history.
+Remove, skip, and move remain pending-only: they must reject completed, in-progress, blocked, missing, or dependency-invalid slices. Amend applies to pending or blocked non-repair slices and rejects every other status. All edit mutations keep `state.json` and `slices.json` consistent. Generated final-verification repair slices are system-owned: a slice with a non-null `verification_repair` binding must refuse `tao edit skip`, `tao edit remove`, and `tao edit amend` rather than weakening or deleting repair history.
+
+Operator amendments are structured evidence in `slice.amendments`, each entry carrying `amended_at`, the bounded `reason`, and the changed `fields` in fixed order `goal`, `tasks`, `expected_files`, `manual_checks`. They are labeled "Operator Amendments" wherever rendered and are never stored as agent-authored `Ruling:` notes, which remain advisory.
 
 ### Final-verification repair evidence
 
@@ -485,8 +488,9 @@ infer a clear from a field being absent in an update.
 
 Other preserve-by-default fields include the `State.Workspace` pointer and its
 non-clearable sub-fields, `Repo.BaseCommit`, `PlanState.ChangeType`,
-`PlanState.PullRequest`, and slice `Tags`, `Approval`, `Notes`, and
-`VerificationResults`. Their zero values do not clear previously stored values.
+`PlanState.PullRequest`, and slice `Tags`, `Approval`, `Notes`,
+`Slice.Amendments`, and `VerificationResults`. Their zero values do not clear
+previously stored values.
 Historical artifacts using the explicit representations above remain
 schema-compatible and readable.
 
@@ -547,6 +551,7 @@ Current well-known event types include:
 | `slice_removed` | Pending slice removed by `tao edit remove`. |
 | `slice_skipped` | Pending slice skipped by `tao edit skip`. |
 | `slices_reordered` | Pending queue reordered by `tao edit move`. |
+| `slice_amended` | Pending or blocked slice contract amended by `tao edit amend`; carries `slice_id`, the bounded `reason`, and `amended_fields`. The amended content lives in `slices.json`. |
 | `slice_approved` | Approval-gated slice was approved. |
 | `pull_request_created` | Pull request created or discovered and its exact source head recorded after run finalization. |
 | `finalization_failed` | Bounded proposal-repair or pull-request-finalization failure evidence was recorded for an exact boundary. |
@@ -617,7 +622,7 @@ lifecycle mutation settle. There is no separate commit-intent event: retry state
 must be read from the slice artifact, while the event remains the append-only
 completion boundary.
 
-Edit events record first-class `tao edit` mutations. Detailed historical slice content belongs in `slices.json`, not duplicated in event payloads.
+Edit events record first-class `tao edit` mutations. Detailed historical slice content belongs in `slices.json`, not duplicated in event payloads. A `slice_amended` event names only the changed fields; the appended values and the per-amendment audit entry live in `slice.amendments`, and the event never marks the slice unblocked.
 
 A `pull_request_created` event includes the usual event fields plus `pull_request` with the same `number`, `url`, `created_at`, `branch`, and `head_sha` fields recorded in `state.json`.
 

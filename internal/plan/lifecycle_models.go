@@ -32,6 +32,7 @@ const (
 	EventTypeSliceRemoved               = "slice_removed"
 	EventTypeSliceSkipped               = "slice_skipped"
 	EventTypeSlicesReordered            = "slices_reordered"
+	EventTypeSliceAmended               = "slice_amended"
 	EventTypeSliceApproved              = "slice_approved"
 	EventTypePullRequestCreated         = "pull_request_created"
 	EventTypeFinalizationFailed         = "finalization_failed"
@@ -1005,6 +1006,7 @@ type Event struct {
 	Attempts              int                          `json:"attempts,omitempty"`
 	Fingerprint           string                       `json:"fingerprint,omitempty"`
 	Reason                string                       `json:"reason,omitempty"`
+	AmendedFields         []string                     `json:"amended_fields,omitempty"`
 	CommitPolicy          string                       `json:"commit_policy,omitempty"`
 	RunPacketProvided     bool                         `json:"run_packet_provided,omitempty"`
 	GuardrailWarnings     int                          `json:"guardrail_warnings,omitempty"`

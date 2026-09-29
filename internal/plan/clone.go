@@ -236,10 +236,23 @@ func cloneSlice(slice Slice) Slice {
 		binding := *slice.VerificationRepair
 		clone.VerificationRepair = &binding
 	}
+	clone.Amendments = cloneSliceAmendments(slice.Amendments)
 	clone.VerificationResults = cloneVerificationRuns(slice.VerificationResults)
 	clone.VerificationAttempt = cloneSliceVerificationSnapshot(slice.VerificationAttempt)
 	clone.CommitIntent = cloneSliceCommitIntent(slice.CommitIntent)
 	clone.Extra = cloneMap(slice.Extra)
+	return clone
+}
+
+func cloneSliceAmendments(amendments []SliceAmendment) []SliceAmendment {
+	if amendments == nil {
+		return nil
+	}
+	clone := make([]SliceAmendment, len(amendments))
+	for i, amendment := range amendments {
+		clone[i] = amendment
+		clone[i].Fields = cloneStringSlice(amendment.Fields)
+	}
 	return clone
 }
 
