@@ -1265,6 +1265,48 @@ func TestPageKeysMoveLongDetailsByViewport(t *testing.T) {
 	}
 }
 
+func TestPlanDetailRunAfterNavigationAndRefresh(t *testing.T) {
+	one := testActionRow()
+	two := one
+	two.PlanID, two.PlanDir, two.RepositoryID, two.RepositoryRoot = "plan-b", "/data/b", "repo-b", "/repos/b"
+	rows := []monitor.Row{one, two}
+	launcher := &recordingActionLauncher{}
+	actions := newTestActions(t, launcher, nil, nil)
+	repository := &fakeDetailRepository{detail: &plan.PlanDetail{}}
+	app := App{Actions: actions, Details: repository}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	state := loopState{snapshot: monitor.Snapshot{Rows: rows}, size: term.Size{Width: 80, Height: 20}}
+	app.openDetail(ctx, &state, one)
+	defer state.closeDetail()
+	state.detail.activeTab = detailTabActivity
+	app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyArrowRight})
+	app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyRune, Rune: 'r'})
+	if len(launcher.calls) != 1 {
+		t.Fatalf("calls = %+v", launcher.calls)
+	}
+	assertActionRequest(t, launcher.calls[0], two.RepositoryRoot, []string{"run", two.PlanID})
+	rows[1].Status = plan.StatusBlocked
+	state.refreshDetailRow()
+	app.reloadDetail(ctx, &state)
+	state.selected = 0 // Display identity remains authoritative even if list selection changes.
+	app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyRune, Rune: 'R'})
+	if len(launcher.calls) != 2 {
+		t.Fatalf("calls = %+v", launcher.calls)
+	}
+	assertActionRequest(t, launcher.calls[1], two.RepositoryRoot, []string{"run", "--continue", two.PlanID})
+	if state.detail.activeTab != detailTabActivity {
+		t.Fatal("run changed active tab")
+	}
+	// Refresh moved the blocked plan ahead of the planned row.
+	app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyArrowRight})
+	app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyRune, Rune: 'r'})
+	if len(launcher.calls) != 3 {
+		t.Fatalf("calls = %+v", launcher.calls)
+	}
+	assertActionRequest(t, launcher.calls[2], one.RepositoryRoot, []string{"run", one.PlanID})
+}
+
 func TestPlanDetailArrowKeysMoveBetweenPlansAndPreserveTab(t *testing.T) {
 	rows := []monitor.Row{
 		{RepositoryID: "repo", PlanID: "one", PlanDir: "/one", Status: plan.StatusPlanned},

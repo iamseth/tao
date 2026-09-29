@@ -278,6 +278,11 @@ uses the selected row's repository. Confirmations and the underlying commands
 still enforce every normal gate. Settings can change a repository's pull-request
 default, while Debug remains read-only.
 
+From a plan's Overview, Slices, or Activity tab, press `r` or `R` to run the
+**displayed plan** while keeping the detail page open. Launch feedback appears
+below its header; normal run safeguards still apply. Individual slice pages
+remain read-only: return to the plan detail before running it.
+
 Treat **NEXT**, ordering, heartbeats, and `stalled?`/`crashed?` labels as advice
 or liveness hints, never as approval, failure, or merge evidence. TUI-launched
 run, approval, and merge processes are detached and survive dashboard exit, so

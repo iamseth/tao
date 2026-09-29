@@ -574,6 +574,7 @@ func (a App) writeFrame(state loopState) error {
 		frame.WriteString(RenderDetail(DetailModel{
 			Plan:            state.detail.plan,
 			Row:             state.detail.row,
+			ActionMessage:   a.Actions.messageForRow(state.detail.row),
 			Log:             state.detail.log,
 			SliceLog:        state.detail.sliceLogs[state.detail.selectedSliceID],
 			SelectedSliceID: state.detail.selectedSliceID,
@@ -751,6 +752,8 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 			state.detail.sliceOffset = 0
 		case key.Key == term.KeyEsc || key.Key == term.KeyBackspace:
 			state.closeDetail()
+		case !state.detail.sliceOpen && a.Actions != nil && key.Key == term.KeyRune && (key.Rune == 'r' || key.Rune == 'R'):
+			a.Actions.RunPlan(ctx, state.detail.row)
 		case !state.detail.sliceOpen && key.Key == term.KeyTab:
 			state.detail.moveTab(1, state.size)
 		case !state.detail.sliceOpen && key.Key == term.KeyShiftTab:

@@ -66,6 +66,7 @@ func shortcutsForPage(page PageID) []shortcut {
 
 func planDetailShortcuts() []shortcut {
 	return []shortcut{
+		{key: "r", action: "Run displayed plan"},
 		{key: "Tab / Shift+Tab", action: "Switch detail tabs"},
 		{key: "← / →", action: "Previous / next plan"},
 		{key: "↑ / ↓ / j / k / PgUp / PgDn", action: "Scroll/select line or page"},

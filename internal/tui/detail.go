@@ -79,6 +79,7 @@ type DetailModel struct {
 	ScopeExpanded   bool
 	LoadError       string
 	FollowError     string
+	ActionMessage   string
 	Inspection      detailInspectionView
 }
 
@@ -297,7 +298,9 @@ func RenderDetail(model DetailModel) string {
 		}
 	}
 
-	lines := []string{header, "", tabs}
+	// Reuse the header spacer so feedback never changes scroll geometry.
+	feedback := cells.Truncate(singleLineDetail(model.ActionMessage), 240)
+	lines := []string{header, feedback, tabs}
 	if tab == detailTabOverview {
 		lines = append(lines, "")
 		lines = append(lines, content...)

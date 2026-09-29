@@ -454,6 +454,153 @@ func TestActionLaunchFailureImmediatelyShowsLogGuidance(t *testing.T) {
 	}
 }
 
+func TestDetailRunKeysTargetDisplayedPlanAndPreserveContext(t *testing.T) {
+	for tab := detailTabOverview; tab < detailTabCount; tab++ {
+		for _, key := range "rR" {
+			t.Run(tab.label()+string(key), func(t *testing.T) {
+				launcher := &recordingActionLauncher{}
+				actions := newTestActions(t, launcher, nil, nil)
+				row := testActionRow()
+				other := row
+				other.PlanID = "not-displayed"
+				state := loopState{snapshot: monitor.Snapshot{Rows: []monitor.Row{other}}, detail: &detailState{
+					row: row, activeTab: tab, overviewOffset: 3, activityOffset: 4, sliceOffset: 5, selectedSliceID: "slice-a",
+				}}
+				before := *state.detail
+				app := App{Actions: actions}
+				if app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: key}) {
+					t.Fatal("run quit dashboard")
+				}
+				if len(launcher.calls) != 1 {
+					t.Fatalf("launches = %v, want one", launcher.calls)
+				}
+				assertActionRequest(t, launcher.calls[0], row.RepositoryRoot, []string{"run", row.PlanID})
+				if actionRowKey(state.detail.row) != actionRowKey(before.row) || state.detail.activeTab != tab || state.detail.overviewOffset != 3 || state.detail.activityOffset != 4 || state.detail.sliceOffset != 5 || state.detail.selectedSliceID != "slice-a" {
+					t.Fatalf("run changed detail context: %+v", state.detail)
+				}
+			})
+		}
+	}
+}
+
+func TestDetailRunSafeguardsMatchList(t *testing.T) {
+	for _, mode := range []string{"planned", "blocked", "live", "repair", "reverify", "manual", "failure", "slice", "nil"} {
+		t.Run(mode, func(t *testing.T) {
+			row := testActionRow()
+			want := []string{"run", row.PlanID}
+			calls := 2 // Pending feedback does not introduce a new admission policy.
+			launcher := &recordingActionLauncher{}
+			actions := newTestActions(t, launcher, nil, nil)
+			state := loopState{detail: &detailState{row: row}}
+			switch mode {
+			case "blocked":
+				row.Status = plan.StatusBlocked
+				want = []string{"run", "--continue", row.PlanID}
+			case "live":
+				row.Liveness = monitor.LivenessLive
+				calls = 0
+			case "repair", "reverify":
+				row.Status = plan.StatusVerificationFailed
+				flag := "--reverify"
+				if mode == "repair" {
+					flag = "--repair-verification"
+				}
+				row.VerificationRecoveryAction = plan.PlanAction{Command: "tao run " + flag + " " + row.PlanID}
+				want = []string{"run", flag, row.PlanID}
+			case "manual":
+				row.Status = plan.StatusVerificationFailed
+				row.VerificationRecoveryAction = plan.PlanAction{Instruction: "restore tool"}
+				calls = 0
+			case "failure":
+				launcher.failAt = 2
+			case "slice":
+				state.detail.sliceOpen = true
+				calls = 0
+			case "nil":
+				actions = nil
+				calls = 0
+			}
+			state.detail.row = row
+			app := App{Actions: actions}
+			for _, key := range "rR" {
+				app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: key})
+			}
+			if len(launcher.calls) != calls {
+				t.Fatalf("calls = %+v, want %d", launcher.calls, calls)
+			}
+			for _, call := range launcher.calls {
+				assertActionRequest(t, call, row.RepositoryRoot, want)
+			}
+			message := actions.messageForRow(row)
+			if mode == "failure" && !strings.Contains(message, "spawn unavailable") {
+				t.Fatalf("failure feedback = %q", message)
+			}
+			if mode == "manual" && !strings.Contains(message, "restore tool") {
+				t.Fatalf("recovery feedback = %q", message)
+			}
+			if calls > 0 && mode != "failure" && message != "starting…" {
+				t.Fatalf("pending feedback = %q", message)
+			}
+		})
+	}
+}
+
+func TestRunKeyPageIsolationAndListParity(t *testing.T) {
+	for _, page := range []PageID{PagePlans, PageNotes, PageSettings, PageDebug} {
+		t.Run(string(page), func(t *testing.T) {
+			launcher := &recordingActionLauncher{}
+			app := App{Actions: newTestActions(t, launcher, nil, nil)}
+			row := testActionRow()
+			state := loopState{page: page, snapshot: monitor.Snapshot{Rows: []monitor.Row{row}}}
+			for _, key := range "rR" {
+				app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: key})
+			}
+			want := 0
+			if page == PagePlans {
+				want = 2
+			}
+			if len(launcher.calls) != want {
+				t.Fatalf("page %s launches = %+v", page, launcher.calls)
+			}
+			for _, call := range launcher.calls {
+				assertActionRequest(t, call, row.RepositoryRoot, []string{"run", row.PlanID})
+			}
+		})
+	}
+}
+
+func TestDetailFeedbackIdentityAndLockReconciliation(t *testing.T) {
+	launcher := &recordingActionLauncher{failAt: 1}
+	locked := false
+	actions := newTestActions(t, launcher, func(string) (plan.RunLock, error) { return plan.RunLock{ProcessAlive: locked}, nil }, nil)
+	row := testActionRow()
+	state := loopState{detail: &detailState{row: row}}
+	app := App{Actions: actions}
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'r'})
+	if !strings.Contains(actions.messageForRow(row), "spawn unavailable") {
+		t.Fatal("missing launch failure")
+	}
+	other := row
+	other.RepositoryID = "different-repo"
+	if actions.messageForRow(other) != "" {
+		t.Fatal("feedback leaked across repositories")
+	}
+	other = row
+	other.PlanID = "different-plan"
+	if actions.messageForRow(other) != "" {
+		t.Fatal("feedback leaked across plans")
+	}
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'R'})
+	if actions.messageForRow(row) != "starting…" {
+		t.Fatal("retry did not replace failure")
+	}
+	locked = true
+	actions.Reconcile(monitor.Snapshot{Rows: []monitor.Row{row}})
+	if actions.messageForRow(row) != "" {
+		t.Fatal("live lock did not clear pending feedback")
+	}
+}
+
 func newTestActions(t *testing.T, launcher *recordingActionLauncher, readLock func(string) (plan.RunLock, error), now func() time.Time) *Actions {
 	t.Helper()
 	if readLock == nil {

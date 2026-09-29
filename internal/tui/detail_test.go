@@ -22,6 +22,88 @@ import (
 	"github.com/iamseth/tao/internal/theme"
 )
 
+func TestDetailRunFeedbackRendering(t *testing.T) {
+	for tab := detailTabOverview; tab < detailTabCount; tab++ {
+		for _, width := range []int{1, 12, 32, 80} {
+			for _, height := range []int{1, 2, 4, 10, 24} {
+				model := DetailModel{Plan: &plan.PlanDetail{}, ActiveTab: tab, Width: width, Height: height}
+				baseline := strings.Split(strings.TrimPrefix(RenderDetail(model), clearScreenSequence), "\n")
+				model.ActionMessage = "failed to start\n\x1b[31munsafe\x1b[0m\t" + strings.Repeat("long ", 100)
+				frame := strings.TrimPrefix(RenderDetail(model), clearScreenSequence)
+				lines := strings.Split(frame, "\n")
+				if len(lines) != height || strings.ContainsAny(frame, "\x1b\t\r") {
+					t.Fatalf("unbounded or unsafe feedback %dx%d: %q", width, height, frame)
+				}
+				for i, line := range lines {
+					if cells.Width(line) > width {
+						t.Fatalf("line too wide: %q", line)
+					}
+					if i != 1 && line != baseline[i] {
+						t.Fatalf("feedback changed viewport row %d: %q != %q", i, line, baseline[i])
+					}
+				}
+				if height > 1 && !strings.HasPrefix(lines[1], "f") && width > 1 {
+					t.Fatalf("missing feedback: %q", frame)
+				}
+				model.ShowShortcuts = true
+				legend := strings.TrimPrefix(RenderDetail(model), clearScreenSequence)
+				for _, line := range strings.Split(legend, "\n") {
+					if cells.Width(line) > width {
+						t.Fatalf("shortcut exceeds width: %q", line)
+					}
+				}
+			}
+		}
+	}
+	bounded := strings.Split(strings.TrimPrefix(RenderDetail(DetailModel{ActionMessage: strings.Repeat("x", 1000)}), clearScreenSequence), "\n")
+	if cells.Width(bounded[1]) > 240 {
+		t.Fatal("feedback is unbounded without terminal dimensions")
+	}
+	short := RenderDetail(DetailModel{Width: 32, Height: 8, ShowShortcuts: true})
+	if !strings.Contains(short, "Run displayed plan") {
+		t.Fatalf("short shortcut popup omitted run: %s", short)
+	}
+	model := DetailModel{Width: 80, Height: 24, ShowShortcuts: true}
+	if !strings.Contains(RenderDetail(model), "Run displayed plan") {
+		t.Fatal("detail shortcuts omit run")
+	}
+	model.SliceOpen = true
+	model.ActionMessage = "starting…"
+	frame := RenderDetail(model)
+	if strings.Contains(frame, "Run displayed plan") || strings.Contains(frame, "starting…") {
+		t.Fatal("slice page exposes run feedback or shortcut")
+	}
+}
+
+func TestDetailFrameScopesActionFeedback(t *testing.T) {
+	launcher := &recordingActionLauncher{}
+	actions := newTestActions(t, launcher, nil, nil)
+	row := testActionRow()
+	actions.RunPlan(context.Background(), row)
+	var output bytes.Buffer
+	app := App{Actions: actions, Output: &output}
+	state := loopState{detail: &detailState{row: row}, size: term.Size{Width: 80, Height: 10}}
+	if err := app.writeFrame(state); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "starting…") {
+		t.Fatal("detail frame omitted pending feedback")
+	}
+	state.detail.row.RepositoryID = "other"
+	output.Reset()
+	if err := app.writeFrame(state); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(output.String(), "starting…") {
+		t.Fatal("detail frame leaked feedback")
+	}
+	app.Actions = nil
+	output.Reset()
+	if err := app.writeFrame(state); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRenderNoteDetailShowsFullSanitizedMultilineText(t *testing.T) {
 	created := time.Date(2026, 8, 18, 10, 30, 0, 0, time.UTC)
 	updated := created.Add(2 * time.Hour)
@@ -459,8 +541,8 @@ func TestRenderDetailVerticalResizeKeepsFrameInsideTerminal(t *testing.T) {
 }
 
 func TestRenderDetailShortcutPopoverIsContextAware(t *testing.T) {
-	frame := RenderDetail(DetailModel{ShowShortcuts: true, Width: 64, Height: 14})
-	for _, want := range []string{"Keyboard shortcuts", "Shift+Tab", "Switch detail tabs", "Previous / next plan", "PgUp / PgDn", "Scroll/select line or page", "Expand scope on Overview", "Open slice on Slices tab", "Return to plans", "Close shortcuts"} {
+	frame := RenderDetail(DetailModel{ShowShortcuts: true, Width: 64, Height: 15})
+	for _, want := range []string{"Run displayed plan", "Keyboard shortcuts", "Shift+Tab", "Switch detail tabs", "Previous / next plan", "PgUp / PgDn", "Scroll/select line or page", "Expand scope on Overview", "Open slice on Slices tab", "Return to plans", "Close shortcuts"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("plan detail shortcuts missing %q:\n%s", want, frame)
 		}

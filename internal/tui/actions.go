@@ -228,6 +228,18 @@ func (a *Actions) labels() map[string]string {
 	return labels
 }
 
+// messageForRow keeps detail feedback scoped to the displayed repository and plan.
+func (a *Actions) messageForRow(row monitor.Row) string {
+	if a == nil {
+		return ""
+	}
+	key := actionRowKey(row)
+	if a.messageKey == key && a.message != "" {
+		return a.message
+	}
+	return a.feedback[key].label
+}
+
 func (a *Actions) statusMessage() string {
 	if a == nil {
 		return ""
