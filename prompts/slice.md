@@ -127,6 +127,8 @@ When an input will be created by an earlier slice, make the producer contract ex
 
 When a later slice will call or reference a function, type, method, flag, or subcommand that an earlier slice creates, the producer slice's `tasks` must name the exact identifier and its signature in one line, and the consumer slice's `context` or `tasks` must name that same identifier. Serial order, shared file paths, `depends_on`, and `expected_files` are not an interface contract.
 
+When a task renames, moves, re-exports, aliases, or changes the visibility or receiver of an existing identifier, search the repository for its current references and either (a) list every file that must change in `expected_files` and name the call-site edits in `tasks`, or (b) keep the old identifier callable through a compatibility shim in the same package and say so explicitly. A slice must never pair such a change with a clause like "no other file under X changes" unless option (b) is chosen. For Go, a type alias to a type from another package cannot carry methods, so the shim must be a package-level function or the callers must move into the slice.
+
 ## Verification command selection
 
 Before writing `slices.json`, inspect repository guidance for canonical validation commands.
@@ -235,7 +237,7 @@ Copy the Planning Packet's strict four-field Source Note block, or write `None` 
 
 ## Expected Files/Packages
 
-- Likely files, packages, or subsystems future slices may touch.
+- Likely files, packages, or subsystems future slices may touch. Enumerate the current references of any identifier a slice will rename, move, alias, or change the visibility or receiver of, or record that a same-package compatibility shim keeps the old identifier callable.
 
 ## Validation Strategy
 

@@ -82,7 +82,7 @@ When planning is complete, respond only with this fixed Planning Packet format:
 
 ## Expected Files/Packages
 
-- <likely files, packages, commands, or subsystems future slices may touch>
+- <likely files, packages, commands, or subsystems future slices may touch. Enumerate the current references of any identifier a slice will rename, move, alias, or change the visibility or receiver of, or record that a same-package compatibility shim keeps the old identifier callable.>
 
 ## Validation Strategy
 

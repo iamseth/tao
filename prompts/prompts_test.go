@@ -756,6 +756,25 @@ func TestPlanningPromptsRequireGateParity(t *testing.T) {
 	}
 }
 
+func TestPlanningPromptsRequireExistingSymbolOwnership(t *testing.T) {
+	for name, prompt := range map[string]string{"slice": SlicePromptTemplate, "note slice": NoteSlicePromptTemplate} {
+		for _, want := range []string{"compatibility shim", "renames, moves", "cannot carry methods"} {
+			if !strings.Contains(prompt, want) {
+				t.Errorf("%s prompt missing existing-symbol ownership guidance %q", name, want)
+			}
+		}
+	}
+	const scope = "Enumerate the current references of any identifier a slice will rename, move, alias, or change the visibility or receiver of, or record that a same-package compatibility shim keeps the old identifier callable."
+	for name, prompt := range map[string]string{"plan": PlanPromptTemplate, "slice": SlicePromptTemplate} {
+		if !strings.Contains(prompt, scope) {
+			t.Errorf("%s prompt missing Expected Files/Packages guidance %q", name, scope)
+		}
+	}
+	if !strings.Contains(SlicePromptTemplate, "are not an interface contract") {
+		t.Error("slice prompt missing producer/consumer interface contract guidance")
+	}
+}
+
 func TestPlanningPromptsRequireFixtureOwnership(t *testing.T) {
 	for _, want := range []string{
 		"golden or snapshot fixture",
