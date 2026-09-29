@@ -12,6 +12,30 @@ import (
 	"github.com/iamseth/tao/internal/theme"
 )
 
+func TestDebugRejectedDiagnosticsStayVisibleAtNarrowWidths(t *testing.T) {
+	for _, width := range []int{40, 70, 120} {
+		model := Model{Page: PageDebug, Width: width, Height: 80,
+			DebugSnapshot: DebugSnapshot{RuntimeDefaults: []DebugRuntimeDefault{
+				{Name: "TAO_AGENT", Value: "pi", Source: "invalid", Warning: "invalid provider\n\t\x1b[31mconfiguration; rejected"},
+				{Name: "TAO_THEME", Value: "tokyonight", Source: "default", Warning: "invalid theme; using default"},
+			}},
+			SettingsSnapshot: SettingsSnapshot{RuntimeDefaults: []SettingsRuntimeDefault{
+				{Name: "TAO_AGENT", Value: "pi", Source: "invalid"},
+				{Name: "TAO_THEME", Value: "tokyonight", Source: "default"},
+			}},
+		}
+		frame := strings.TrimPrefix(Render(model), "\x1b[H\x1b[2J")
+		for _, want := range []string{"TAO_AGENT", "(rejected)", "rejected on consumption:", "using default"} {
+			if !strings.Contains(strings.Join(strings.Fields(frame), " "), want) {
+				t.Errorf("width %d missing %q:\n%s", width, want, frame)
+			}
+		}
+		if strings.Contains(frame, "\x1b") || strings.Contains(frame, "\t") {
+			t.Fatalf("unsanitized diagnostic: %q", frame)
+		}
+	}
+}
+
 func TestRenderDebugShowsRuntimeDoctorAndUIInformation(t *testing.T) {
 	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
 	model := Model{

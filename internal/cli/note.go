@@ -40,7 +40,8 @@ var noteCommand = commandMetadata{
 		{name: "reopen", description: "Reopen an archived note", completion: completionContext{positional: completionPositional{index: 1, label: "note", completer: completeNoteIDs}}},
 		{name: "run", aliases: []commandSubcommandAlias{"r"}, description: "Generate and run a plan for a clear note", completion: completionContext{positional: completionPositional{index: 1, label: "note", completer: completeNoteIDs}}},
 	},
-	registerFlags: registerNoteFlags,
+	registerFlags:        registerNoteFlags,
+	registerRuntimeFlags: App.registerNoteFlags,
 	completion: completionContext{flagValues: map[string]completionFlagValue{
 		"commit-policy":   {kind: completionValueEnum, label: "policy", values: []string{"slice", "none"}},
 		"execution-mode":  {kind: completionValueEnum, label: "mode", values: []string{"isolated", "current"}},
@@ -76,7 +77,9 @@ func (v *stringListFlag) Set(value string) error {
 	return nil
 }
 
-func registerNoteFlags(fs *flag.FlagSet) {
+func registerNoteFlags(fs *flag.FlagSet) { (App{}).registerNoteFlags(fs) }
+
+func (a App) registerNoteFlags(fs *flag.FlagSet) {
 	fs.String("repo", "", "registered repository ID prefix or exact name")
 	fs.Var(new(stringListFlag), "tag", "tag to apply or require (repeatable)")
 	fs.Var(new(stringListFlag), "status", "status to list: open, promoted, or archived (repeatable)")
@@ -86,11 +89,11 @@ func registerNoteFlags(fs *flag.FlagSet) {
 	fs.String("plan", "", "validated normal plan destination")
 	fs.String("planner-routing", "", "planner routing mode for this run: off, shadow, or randomized")
 	fs.String("planner-arm", "", "force this planner runtime and record a manual override")
-	registerRunRequestFlags(fs)
+	a.registerRunRequestFlags(fs)
 }
 
 func (a App) note(ctx context.Context, args []string) error {
-	fs, positional, err := a.parseArgs("note", boundNoteTextArgs(args), registerNoteFlags)
+	fs, positional, err := a.parseArgs("note", boundNoteTextArgs(args), a.registerNoteFlags)
 	if err != nil {
 		return err
 	}
@@ -616,8 +619,11 @@ func (a App) noteRun(ctx context.Context, registered taodata.Repo, repo NoteRepo
 	if len(args) != 1 {
 		return errors.New("usage: tao note run <note-id> [--repo REPO] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--no-review] [--dangerously-skip-permissions]")
 	}
-	inputs, err := resolveRunRequestFlags(fs)
+	inputs, err := a.resolveRunRequestFlags(fs)
 	if err != nil {
+		return err
+	}
+	if err := a.requireRunHandoffBudgets(); err != nil {
 		return err
 	}
 	// Resolve every run option before allocating a plan or invoking the planner.

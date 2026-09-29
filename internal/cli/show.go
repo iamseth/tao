@@ -12,7 +12,6 @@ import (
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runstatus"
-	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/taodata"
 	"github.com/iamseth/tao/internal/theme"
 	planview "github.com/iamseth/tao/internal/view"
@@ -85,7 +84,11 @@ func (a App) show(ctx context.Context, repo plan.Repository, args []string) erro
 			MergeInProgress *showMergeInProgress `json:"merge_in_progress,omitempty"`
 		}{payload, merging})
 	}
-	return a.renderPlanDetailWithMerge(a.Out, loaded, runtimeconfig.RuntimeAgentBudgetThresholds(), merging)
+	thresholds, err := a.envSnapshot().BudgetThresholds()
+	if err != nil {
+		return err
+	}
+	return a.renderPlanDetailWithMerge(a.Out, loaded, thresholds, merging)
 }
 
 // showMergeInProgress is transient presentation, not lifecycle evidence.

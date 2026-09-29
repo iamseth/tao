@@ -518,7 +518,7 @@ func (r BatchAgentResolver) finishResolvedCandidate(ctx context.Context, state B
 	if err != nil || hasUnmergedStatus(status) {
 		return state, false, false, fmt.Errorf("agent made no progress resolving %s", planID)
 	}
-	verification := resolveMergeVerifyCommandAtRoot(git.Root(), Options{VerifyCommand: verifyCommand})
+	verification := r.Service.resolveMergeVerifyCommandAtRoot(git.Root(), Options{VerifyCommand: verifyCommand})
 	if verification.command != "" {
 		output, verifyErr := r.Service.runMergeVerifyAtRoot(ctx, git.Root(), verification.command)
 		if verifyErr != nil {

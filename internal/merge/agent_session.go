@@ -28,9 +28,10 @@ import (
 )
 
 // BatchAgentSessionConfig configures a merge-owned agent operation. Zero-value
-// provider, permission, and timeout settings use the ordinary TAO_* runtime
-// environment defaults. Models must already be resolved by the caller.
+// provider, permission, and timeout settings use RuntimeEnv (built-ins when
+// omitted). Models must already be resolved by the caller.
 type BatchAgentSessionConfig struct {
+	RuntimeEnv      *runtimeconfig.EnvSnapshot
 	Agent           runtimeconfig.AgentKind
 	Models          runtimeconfig.ModelSelection
 	ProcessStarter  agent.ProcessStarter
@@ -97,6 +98,7 @@ type BatchAgentSessionResult struct {
 
 // BatchAgentSession is the provider-neutral session seam used by merge batches.
 type BatchAgentSession struct {
+	deferred           *BatchAgentSessionConfig
 	runner             agentsession.Runner
 	models             runtimeconfig.ModelSelection
 	run                func(context.Context, agentsession.Request) (agentsession.Result, error)
@@ -252,11 +254,21 @@ func NewBatchAgentSession(config BatchAgentSessionConfig) (BatchAgentSession, er
 	return newBatchAgentSession(config, false)
 }
 
+// NewDeferredBatchAgentSession keeps unused provider settings from blocking
+// batch discovery or settlement. Resolve validates before starting a provider.
+func NewDeferredBatchAgentSession(config BatchAgentSessionConfig) BatchAgentSession {
+	return BatchAgentSession{deferred: &config}
+}
+
 func newBatchAgentSession(config BatchAgentSessionConfig, confineFilesystem bool) (BatchAgentSession, error) {
-	defaults, err := runtimeconfig.RuntimeAgentSessionEnvDefaults()
-	if err != nil {
+	var snapshot runtimeconfig.EnvSnapshot
+	if config.RuntimeEnv != nil {
+		snapshot = *config.RuntimeEnv
+	}
+	if err := snapshot.Require(runtimeconfig.EnvAgent, runtimeconfig.EnvSessionTimeout, runtimeconfig.EnvSkipPermissions); err != nil {
 		return BatchAgentSession{}, err
 	}
+	defaults := snapshot.Defaults()
 	kind := config.Agent
 	if kind == "" {
 		kind = defaults.Agent
@@ -1023,6 +1035,13 @@ func sandboxProfileEscape(path string) string {
 // Preflight validates the single-plan filesystem boundary and provider readiness
 // without sending a model prompt or consuming resolution authority.
 func (s BatchAgentSession) Preflight(ctx context.Context, request BatchAgentSessionRequest) error {
+	if s.deferred != nil {
+		session, err := NewBatchAgentSession(*s.deferred)
+		if err != nil {
+			return err
+		}
+		return session.Preflight(ctx, request)
+	}
 	_, err := s.confinementPolicy(ctx, request, true)
 	return err
 }
@@ -1087,6 +1106,13 @@ func (s BatchAgentSession) confinementPolicy(ctx context.Context, request BatchA
 // Resolve runs exactly one attributed session. Metrics parse failures are
 // warnings and never replace the provider result or error.
 func (s BatchAgentSession) Resolve(ctx context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+	if s.deferred != nil {
+		session, err := NewBatchAgentSession(*s.deferred)
+		if err != nil {
+			return BatchAgentSessionResult{}, err
+		}
+		return session.Resolve(ctx, request)
+	}
 	// Guarded single-plan callers run the disposable readiness preflight before
 	// recording request authority. The attributed process performs its own RPC
 	// readiness handshake before prompt transmission, so probing again here

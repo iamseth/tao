@@ -2,7 +2,6 @@ package runtimeconfig
 
 import (
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -59,14 +58,20 @@ const (
 // environment variables.
 type EnvDefaults struct {
 	RunOptionsPatch
-	AutoRework                  *bool
-	MaxReworkAttempts           *int
-	ReworkEscalationFromAttempt *int
-	UpdateMode                  selfupdate.Mode
-	Theme                       theme.Theme
-	SkipPermissions             bool
-	SliceBudgetCaps             SliceBudgetCaps
-	AgentBudgetThresholds       plan.AgentBudgetThresholds
+	AutoRework                       *bool
+	MaxReworkAttempts                *int
+	ReworkEscalationFromAttempt      *int
+	UpdateMode                       selfupdate.Mode
+	Theme                            theme.Theme
+	SkipPermissions                  bool
+	SliceBudgetCaps                  SliceBudgetCaps
+	AgentBudgetThresholds            plan.AgentBudgetThresholds
+	MergeVerifyCommand               string
+	MergeVerifyCommandSet            bool
+	AggregateReviewConvergenceWindow int
+	ApprovedBy                       string
+	RunHeader                        bool
+	PlannerRouting                   PlannerRoutingConfig
 }
 
 func (d EnvDefaults) ReworkEscalationFromAttemptValue() int {
@@ -97,15 +102,22 @@ type runtimeEnvVar struct {
 	// apply validates value, writes it into defaults, and returns its canonical
 	// string form. It is the only per-var logic: the loader uses the mutation,
 	// the status reporter uses the canonical string, neither duplicates parsing.
-	apply             func(defaults *EnvDefaults, value string) (string, error)
-	applyWhenEmpty    bool
-	model             bool
-	budget            bool
+	apply          func(defaults *EnvDefaults, value string) (string, error)
+	applyWhenEmpty bool
+	blankIsEmpty   bool
+	// Only presentation settings may warn and default in a snapshot.
 	fallbackOnInvalid bool
 }
 
+func (v runtimeEnvVar) hasOverride(value string, present bool) bool {
+	if v.blankIsEmpty {
+		value = strings.TrimSpace(value)
+	}
+	return present && (value != "" || v.applyWhenEmpty)
+}
+
 // runtimeEnvVars is the ordered table every runtime env-var site is derived
-// from. Order is preserved for the RuntimeEnvStatus row list.
+// from. Order is preserved for the snapshot's status row list.
 var runtimeEnvVars = append([]runtimeEnvVar{
 	{
 		name:         EnvCommitPolicy,
@@ -156,7 +168,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 		},
 	},
 	{
-		name: EnvModel, applyWhenEmpty: true, model: true,
+		name: EnvModel, applyWhenEmpty: true,
 		defaultValue: func(RunOptionsPatch) string { return "" },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			parsed, err := ParseModelName(value)
@@ -168,7 +180,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 		},
 	},
 	{
-		name: EnvRunModel, applyWhenEmpty: true, model: true,
+		name: EnvRunModel, applyWhenEmpty: true,
 		defaultValue: func(RunOptionsPatch) string { return "" },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			parsed, err := ParseModelName(value)
@@ -180,7 +192,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 		},
 	},
 	{
-		name: EnvReviewModel, applyWhenEmpty: true, model: true,
+		name: EnvReviewModel, applyWhenEmpty: true,
 		defaultValue: func(RunOptionsPatch) string { return "" },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			parsed, err := ParseModelName(value)
@@ -192,7 +204,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 		},
 	},
 	{
-		name: EnvMergeReviewModel, applyWhenEmpty: true, model: true,
+		name: EnvMergeReviewModel, applyWhenEmpty: true,
 		defaultValue: func(RunOptionsPatch) string { return "" },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			parsed, err := ParseModelName(value)
@@ -204,7 +216,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 		},
 	},
 	{
-		name: EnvResolverModel, applyWhenEmpty: true, model: true,
+		name: EnvResolverModel, applyWhenEmpty: true,
 		defaultValue: func(RunOptionsPatch) string { return "" },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			parsed, err := ParseModelName(value)
@@ -216,7 +228,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 		},
 	},
 	{
-		name: EnvReworkEscalationModel, applyWhenEmpty: true, model: true,
+		name: EnvReworkEscalationModel, applyWhenEmpty: true,
 		defaultValue: func(RunOptionsPatch) string { return "" },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			parsed, err := ParseModelName(value)
@@ -243,7 +255,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 		name:         EnvPullRequest,
 		defaultValue: func(d RunOptionsPatch) string { return strconv.FormatBool(d.PullRequestValue()) },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
-			parsed, err := strconv.ParseBool(value)
+			parsed, err := ParseEnvBool(value)
 			if err != nil {
 				return "", err
 			}
@@ -255,7 +267,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 		name:         EnvReview,
 		defaultValue: func(d RunOptionsPatch) string { return strconv.FormatBool(d.ReviewEnabledValue()) },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
-			parsed, err := parseReviewEnabled(value)
+			parsed, err := ParseEnvBool(value)
 			if err != nil {
 				return "", err
 			}
@@ -268,7 +280,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 		name:         EnvAutoRework,
 		defaultValue: func(RunOptionsPatch) string { return strconv.FormatBool(true) },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
-			parsed, err := parseAutoReworkEnabled(value)
+			parsed, err := ParseEnvBool(value)
 			if err != nil {
 				return "", err
 			}
@@ -305,7 +317,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 		name:         EnvSkipPermissions,
 		defaultValue: func(RunOptionsPatch) string { return strconv.FormatBool(false) },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
-			parsed, err := strconv.ParseBool(value)
+			parsed, err := ParseEnvBool(value)
 			if err != nil {
 				return "", err
 			}
@@ -318,59 +330,90 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 		// variable allows command auto-detection.
 		name: EnvMergeVerifyCommand, applyWhenEmpty: true,
 		defaultValue: func(RunOptionsPatch) string { return "auto-detect" },
-		apply: func(_ *EnvDefaults, value string) (string, error) {
+		apply: func(defaults *EnvDefaults, value string) (string, error) {
+			defaults.MergeVerifyCommand = value
+			defaults.MergeVerifyCommandSet = true
 			return value, nil
 		},
 	},
 	{
-		name:              EnvAggregateReviewConvergenceWindow,
-		fallbackOnInvalid: true,
-		defaultValue:      func(RunOptionsPatch) string { return strconv.Itoa(DefaultAggregateReviewConvergenceWindow) },
-		apply: func(_ *EnvDefaults, value string) (string, error) {
+		name:         EnvAggregateReviewConvergenceWindow,
+		blankIsEmpty: true,
+		defaultValue: func(RunOptionsPatch) string { return strconv.Itoa(DefaultAggregateReviewConvergenceWindow) },
+		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			parsed, err := parseAggregateReviewConvergenceWindow(value)
 			if err != nil {
 				return "", err
 			}
+			defaults.AggregateReviewConvergenceWindow = parsed
 			return strconv.Itoa(parsed), nil
 		},
 	},
 	{
 		name:         EnvApprovedBy,
 		defaultValue: func(RunOptionsPatch) string { return "" },
-		apply: func(_ *EnvDefaults, value string) (string, error) {
+		apply: func(defaults *EnvDefaults, value string) (string, error) {
+			defaults.ApprovedBy = value
 			return value, nil
 		},
 	},
 	{
-		name:         EnvRunHeader,
-		defaultValue: func(RunOptionsPatch) string { return strconv.FormatBool(true) },
-		apply: func(_ *EnvDefaults, value string) (string, error) {
-			return strconv.FormatBool(value != "0"), nil
+		name:              EnvRunHeader,
+		fallbackOnInvalid: true,
+		defaultValue:      func(RunOptionsPatch) string { return strconv.FormatBool(true) },
+		apply: func(defaults *EnvDefaults, value string) (string, error) {
+			parsed, err := ParseEnvBool(value)
+			if err != nil {
+				return "", err
+			}
+			defaults.RunHeader = parsed
+			return strconv.FormatBool(parsed), nil
 		},
 	},
 	{
 		name:         EnvPlannerRouting,
+		blankIsEmpty: true,
 		defaultValue: func(RunOptionsPatch) string { return "not set (default: off)" },
-		apply: func(_ *EnvDefaults, value string) (string, error) {
-			return value, nil
+		apply: func(defaults *EnvDefaults, value string) (string, error) {
+			parsed, err := ParsePlannerRoutingMode(strings.TrimSpace(value))
+			if err != nil {
+				return "", err
+			}
+			defaults.PlannerRouting.Mode = parsed
+			defaults.PlannerRouting.ModeSet = true
+			return string(parsed), nil
 		},
 	},
 	{
 		name:         EnvPlannerRoutingArms,
+		blankIsEmpty: true,
 		defaultValue: func(RunOptionsPatch) string { return "not set (comma list, e.g. pi=0.5,claude=0.5)" },
-		apply: func(_ *EnvDefaults, value string) (string, error) {
-			return value, nil
+		apply: func(defaults *EnvDefaults, value string) (string, error) {
+			parsed, err := ParsePlannerRoutingArms(strings.TrimSpace(value))
+			if err != nil {
+				return "", err
+			}
+			defaults.PlannerRouting.Arms = parsed
+			defaults.PlannerRouting.ArmsSet = true
+			return strings.TrimSpace(value), nil
 		},
 	},
 	{
 		name:         EnvPlannerRoutingFloor,
+		blankIsEmpty: true,
 		defaultValue: func(RunOptionsPatch) string { return "not set (default: 0.1)" },
-		apply: func(_ *EnvDefaults, value string) (string, error) {
-			return value, nil
+		apply: func(defaults *EnvDefaults, value string) (string, error) {
+			parsed, err := ParsePlannerRoutingFloor(strings.TrimSpace(value))
+			if err != nil {
+				return "", err
+			}
+			defaults.PlannerRouting.Floor = parsed
+			defaults.PlannerRouting.FloorSet = true
+			return strconv.FormatFloat(parsed, 'f', -1, 64), nil
 		},
 	},
 	{
-		name: EnvMaxSliceOutputTokens, fallbackOnInvalid: true,
+		name:         EnvMaxSliceOutputTokens,
 		defaultValue: func(RunOptionsPatch) string { return "disabled" },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			parsed, err := parseBudgetInteger(value)
@@ -382,7 +425,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 		},
 	},
 	{
-		name: EnvMaxSliceCost, fallbackOnInvalid: true,
+		name:         EnvMaxSliceCost,
 		defaultValue: func(RunOptionsPatch) string { return "disabled" },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			parsed, err := parseBudgetCost(value)
@@ -411,7 +454,7 @@ func agentBudgetRuntimeEnvVars() []runtimeEnvVar {
 	defaults := defaultAgentBudgetThresholds()
 	integer := func(name string, defaultValue int64, set func(*plan.AgentBudgetThresholds, int64)) runtimeEnvVar {
 		return runtimeEnvVar{
-			name: name, budget: true, fallbackOnInvalid: true,
+			name:         name,
 			defaultValue: func(RunOptionsPatch) string { return strconv.FormatInt(defaultValue, 10) },
 			apply: func(env *EnvDefaults, value string) (string, error) {
 				parsed, err := parseBudgetInteger(value)
@@ -425,7 +468,7 @@ func agentBudgetRuntimeEnvVars() []runtimeEnvVar {
 	}
 	cost := func(name string, defaultValue float64, set func(*plan.AgentBudgetThresholds, float64)) runtimeEnvVar {
 		return runtimeEnvVar{
-			name: name, budget: true, fallbackOnInvalid: true,
+			name:         name,
 			defaultValue: func(RunOptionsPatch) string { return strconv.FormatFloat(defaultValue, 'f', -1, 64) },
 			apply: func(env *EnvDefaults, value string) (string, error) {
 				parsed, err := parseBudgetCost(value)
@@ -454,7 +497,7 @@ func agentBudgetRuntimeEnvVars() []runtimeEnvVar {
 func parseSessionTimeout(value string) (time.Duration, error) {
 	parsed, err := time.ParseDuration(value)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("must be 0 or a positive duration (e.g. 20m): %w", err)
 	}
 	if parsed < 0 {
 		return 0, fmt.Errorf("must be 0 or a positive duration")
@@ -462,14 +505,16 @@ func parseSessionTimeout(value string) (time.Duration, error) {
 	return parsed, nil
 }
 
-func parseReviewEnabled(value string) (bool, error) {
+// ParseEnvBool accepts the shared, case-insensitive runtime boolean grammar.
+// Empty handling belongs to each setting, not this parser.
+func ParseEnvBool(value string) (bool, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "1", "t", "true", "y", "yes", "on":
 		return true, nil
 	case "0", "f", "false", "n", "no", "off":
 		return false, nil
 	default:
-		return false, fmt.Errorf("must be truthy or falsey (true/false, 1/0, yes/no, on/off)")
+		return false, fmt.Errorf("must be a boolean (true/false, 1/0, yes/no, on/off, t/f, y/n)")
 	}
 }
 
@@ -481,156 +526,6 @@ func parseAggregateReviewConvergenceWindow(value string) (int, error) {
 	return parsed, nil
 }
 
-// RuntimeMergeVerifyCommand returns the configured merge verification command
-// and whether the environment variable is set. An empty, set value is retained.
-func RuntimeMergeVerifyCommand() (string, bool) {
-	return os.LookupEnv(EnvMergeVerifyCommand)
-}
-
-// RuntimeAggregateReviewConvergenceWindow returns the validated aggregate
-// review convergence window.
-func RuntimeAggregateReviewConvergenceWindow() (int, error) {
-	raw, ok := os.LookupEnv(EnvAggregateReviewConvergenceWindow)
-	if !ok || strings.TrimSpace(raw) == "" {
-		return DefaultAggregateReviewConvergenceWindow, nil
-	}
-	parsed, err := parseAggregateReviewConvergenceWindow(raw)
-	if err != nil {
-		return 0, fmt.Errorf("%s must be an integer of at least 2", EnvAggregateReviewConvergenceWindow)
-	}
-	return parsed, nil
-}
-
-// RuntimeTheme resolves presentation independently of other runtime settings.
-// Invalid selections warn and retain the default; they never fail a command.
-func RuntimeTheme(getenv func(string) string) (theme.Theme, string) {
-	var defaults EnvDefaults
-	if getenv == nil {
-		return theme.Default(), ""
-	}
-	value := getenv(EnvTheme)
-	if value == "" {
-		return theme.Default(), ""
-	}
-	for _, v := range runtimeEnvVars {
-		if v.name == EnvTheme {
-			if _, err := v.apply(&defaults, value); err != nil {
-				return theme.Default(), fmt.Sprintf("%s: invalid env value %q: %v; using default", EnvTheme, value, err)
-			}
-			return defaults.Theme, ""
-		}
-	}
-	return theme.Default(), ""
-}
-
-// RuntimeModelEnvDefaults resolves model choices without eagerly validating an
-// unused provider (for example, a conflict-free single-plan merge).
-func RuntimeModelEnvDefaults() (RunOptionsPatch, error) {
-	defaults, err := runtimeEnvDefaultsMatching(func(v runtimeEnvVar) bool { return v.model })
-	return defaults.RunOptionsPatch, err
-}
-
-// RuntimeAgentSessionEnvDefaults resolves only provider launch policy. Model
-// selection belongs to the caller's environment/repository/override stages.
-func RuntimeAgentSessionEnvDefaults() (EnvDefaults, error) {
-	return runtimeEnvDefaultsMatching(func(v runtimeEnvVar) bool {
-		return v.name == EnvAgent || v.name == EnvSessionTimeout || v.name == EnvSkipPermissions
-	})
-}
-
-func RuntimeEnvDefaults() (EnvDefaults, error) {
-	return runtimeEnvDefaultsMatching(func(runtimeEnvVar) bool { return true })
-}
-
-func runtimeEnvDefaultsMatching(include func(runtimeEnvVar) bool) (EnvDefaults, error) {
-	defaults := EnvDefaults{
-		RunOptionsPatch:       DefaultRunOptionsPatch(),
-		UpdateMode:            selfupdate.ModeWarn,
-		AgentBudgetThresholds: defaultAgentBudgetThresholds(),
-	}
-	for _, v := range runtimeEnvVars {
-		if !include(v) {
-			continue
-		}
-		value, ok := os.LookupEnv(v.name)
-		if !ok || (value == "" && !v.applyWhenEmpty) {
-			continue
-		}
-		if _, err := v.apply(&defaults, value); err != nil {
-			if v.fallbackOnInvalid {
-				continue
-			}
-			return defaults, fmt.Errorf("%s: %w", v.name, err)
-		}
-	}
-	return defaults, nil
-}
-
-// RuntimeAgentBudgetThresholds resolves budget overrides without coupling
-// advisory warnings to unrelated runtime configuration errors.
-func RuntimeAgentBudgetThresholds() plan.AgentBudgetThresholds {
-	defaults := EnvDefaults{AgentBudgetThresholds: defaultAgentBudgetThresholds()}
-	for _, v := range runtimeEnvVars {
-		if !v.budget {
-			continue
-		}
-		value, ok := os.LookupEnv(v.name)
-		if !ok || value == "" {
-			continue
-		}
-		_, _ = v.apply(&defaults, value)
-	}
-	return defaults.AgentBudgetThresholds
-}
-
-// RuntimeSliceBudgetCaps resolves opt-in hard caps independently from other
-// runtime settings. Invalid values are reported and leave that cap disabled.
-func RuntimeSliceBudgetCaps() (SliceBudgetCaps, []string) {
-	var defaults EnvDefaults
-	var warnings []string
-	for _, v := range runtimeEnvVars {
-		if v.name != EnvMaxSliceOutputTokens && v.name != EnvMaxSliceCost {
-			continue
-		}
-		value, ok := os.LookupEnv(v.name)
-		if !ok || value == "" {
-			continue
-		}
-		if _, err := v.apply(&defaults, value); err != nil {
-			warnings = append(warnings, fmt.Sprintf("%s=%q is invalid (%v); cap disabled", v.name, value, err))
-		}
-	}
-	return defaults.SliceBudgetCaps, warnings
-}
-
-func RuntimeEnvStatus() ([]EnvVarStatus, error) {
-	defaults := DefaultRunOptionsPatch()
-	rows := make([]EnvVarStatus, len(runtimeEnvVars))
-	for i, v := range runtimeEnvVars {
-		rows[i] = EnvVarStatus{Name: v.name, Value: v.defaultValue(defaults), Source: "default"}
-		value, ok := os.LookupEnv(v.name)
-		if !ok || (value == "" && !v.applyWhenEmpty) {
-			continue
-		}
-		scratch := EnvDefaults{AgentBudgetThresholds: defaultAgentBudgetThresholds()}
-		parsed, err := v.apply(&scratch, value)
-		if err != nil {
-			if !v.fallbackOnInvalid {
-				return nil, fmt.Errorf("%s: %w", v.name, err)
-			}
-			fallback := "using default"
-			if v.name == EnvMaxSliceOutputTokens || v.name == EnvMaxSliceCost {
-				fallback = "cap disabled"
-			}
-			rows[i].Warning = fmt.Sprintf("invalid env value %q: %v; %s", value, err, fallback)
-			continue
-		}
-		rows[i].Value = parsed
-		rows[i].Source = "env"
-	}
-	return rows, nil
-}
-
 // RuntimeEnvKeys returns the canonical ordered runtime environment key list.
 func RuntimeEnvKeys() []string {
 	keys := make([]string, len(runtimeEnvVars))
@@ -638,8 +533,4 @@ func RuntimeEnvKeys() []string {
 		keys[i] = v.name
 	}
 	return keys
-}
-
-func runtimeEnvKeys() []string {
-	return RuntimeEnvKeys()
 }

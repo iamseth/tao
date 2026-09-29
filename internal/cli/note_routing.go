@@ -5,7 +5,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"os"
 	"strings"
 	"unicode/utf8"
 
@@ -28,28 +27,25 @@ type plannerRouting struct {
 }
 
 func (a App) resolvePlannerRouting(fs *flag.FlagSet, registered taodata.Repo, item note.Note, baseline runtimeconfig.AgentKind, permission agentpkg.PermissionMode) (plannerRouting, error) {
-	env := runtimeconfig.LoadPlannerRoutingEnv(os.Getenv)
+	snapshot := a.envSnapshot()
+	config := snapshot.Defaults().PlannerRouting
+	mode := plannerroute.Mode(config.Mode)
 	if flagWasProvided(fs, "planner-routing") {
-		env.Mode = strings.TrimSpace(flagStringValue(fs, "planner-routing"))
-	}
-	mode, err := plannerroute.ParseMode(env.Mode)
-	if err != nil {
+		var err error
+		mode, err = plannerroute.ParseMode(strings.TrimSpace(flagStringValue(fs, "planner-routing")))
+		if err != nil {
+			return plannerRouting{}, err
+		}
+	} else if err := snapshot.Require(runtimeconfig.EnvPlannerRouting); err != nil {
 		return plannerRouting{}, err
 	}
 	if mode == plannerroute.ModeOff {
 		return plannerRouting{}, nil
 	}
-	if !env.ArmsSet {
-		env.Arms = "pi,claude"
-	}
-	arms, err := plannerroute.ParseArms(env.Arms)
-	if err != nil {
+	if err := snapshot.Require(runtimeconfig.EnvPlannerRoutingArms, runtimeconfig.EnvPlannerRoutingFloor); err != nil {
 		return plannerRouting{}, err
 	}
-	floor, err := plannerroute.ParseFloor(env.Floor)
-	if err != nil {
-		return plannerRouting{}, err
-	}
+	arms := plannerroute.ArmsFromConfig(config.Arms)
 	version, err := prompts.TemplateVersion("note-slice")
 	if err != nil {
 		return plannerRouting{}, err
@@ -58,7 +54,7 @@ func (a App) resolvePlannerRouting(fs *flag.FlagSet, registered taodata.Repo, it
 		arms[i].Arm.PromptVersion = version
 		arms[i].Arm.PermissionMode = string(permission)
 	}
-	policy, err := plannerroute.NewPolicy(mode, arms, floor)
+	policy, err := plannerroute.NewPolicy(mode, arms, config.Floor)
 	if err != nil {
 		return plannerRouting{}, err
 	}

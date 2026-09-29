@@ -15,6 +15,7 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/planning"
 	"github.com/iamseth/tao/internal/run"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/taodata"
 	"github.com/iamseth/tao/internal/theme"
 	"github.com/iamseth/tao/internal/tui"
@@ -48,7 +49,10 @@ type App struct {
 	UINoteActions            tui.NoteActions
 	UIClipboard              tui.Clipboard
 	SelfUpdater              SelfUpdater
-	// Theme overrides runtime selection. Nil resolves TAO_THEME once per Run.
+	// RuntimeEnv is the immutable invocation snapshot. Nil captures fresh process
+	// settings on each Run; lower-level consumers without injection use built-ins.
+	RuntimeEnv *runtimeconfig.EnvSnapshot
+	// Theme overrides runtime selection. Nil uses the invocation snapshot.
 	Theme *theme.Theme
 	// Now supplies the wall clock for timestamps recorded by commands. Tests
 	// inject a fixed clock; when nil it defaults to time.Now.
@@ -119,6 +123,10 @@ type WorkspaceManager interface {
 type WorkspaceManagerFactory func(repoRoot string) (WorkspaceManager, error)
 
 func (a App) Run(ctx context.Context, args []string) error {
+	if a.RuntimeEnv == nil {
+		snapshot := runtimeconfig.RuntimeEnv()
+		a.RuntimeEnv = &snapshot
+	}
 	a = a.withRuntimeTheme()
 	a = a.withDefaultStatusReporter()
 	if len(args) == 0 {
@@ -148,7 +156,7 @@ func (a App) Run(ctx context.Context, args []string) error {
 		return a.version()
 	}
 	if command == "help" || command == "-h" || command == "--help" {
-		if err := a.runStartupUpdate(ctx); err != nil {
+		if err := a.runDiagnosticStartupUpdate(ctx); err != nil {
 			return err
 		}
 		return a.usage()
@@ -157,13 +165,18 @@ func (a App) Run(ctx context.Context, args []string) error {
 	if metadata == nil {
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+	help := containsHelpFlag(args[1:])
 	if metadata.name != updateCommand.name {
-		if err := a.runStartupUpdate(ctx); err != nil {
+		startup := a.runStartupUpdate
+		if help || metadata.name == "status" || metadata.name == "ui" {
+			startup = a.runDiagnosticStartupUpdate
+		}
+		if err := startup(ctx); err != nil {
 			return err
 		}
 	}
-	if containsHelpFlag(args[1:]) {
-		return renderCommandHelp(a.Out, metadata)
+	if help {
+		return renderCommandHelp(a.Out, a.bindRuntimeFlags(metadata))
 	}
 	if metadata.execute == nil {
 		return fmt.Errorf("command %q is not executable", metadata.name)

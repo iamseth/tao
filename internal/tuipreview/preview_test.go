@@ -54,7 +54,7 @@ func TestScenarioCatalogIsStableDiscoverableAndTyped(t *testing.T) {
 			t.Fatalf("scenario %q has a live or missing clock value", scenario.Name)
 		}
 	}
-	if want := []string{ScenarioMixed, ScenarioEmpty, ScenarioStress}; !reflect.DeepEqual(names, want) {
+	if want := []string{ScenarioMixed, ScenarioEmpty, ScenarioStress, ScenarioMixedInvalid}; !reflect.DeepEqual(names, want) {
 		t.Fatalf("scenario names = %v, want %v", names, want)
 	}
 	mixed, ok := Lookup(ScenarioMixed)
@@ -215,6 +215,41 @@ func TestDebugPreviewShowsOnlyRepositoryRuntimeAnomalies(t *testing.T) {
 	}
 }
 
+func TestMixedInvalidPreviewKeepsDiagnosticsAcrossWidths(t *testing.T) {
+	scenario, ok := Lookup(ScenarioMixedInvalid)
+	if !ok {
+		t.Fatal("missing mixed-invalid fixture")
+	}
+	for _, width := range []int{40, 70, 120} {
+		for _, view := range []View{ViewSettings, ViewDebug} {
+			options := RenderOptions{View: view, Width: width, Height: 200, Plain: true}
+			frame, err := Render(scenario, options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			again, err := Render(scenario, options)
+			if err != nil || again != frame {
+				t.Fatalf("non-deterministic %s diagnostics: %v", view, err)
+			}
+			assertBoundedFrame(t, frame, width, 200)
+			text := strings.Join(strings.Fields(frame), " ")
+			for _, want := range []string{"TAO_AGENT", "TAO_UPDATE", "bad-provider", "bad-update", "bad-budget", "bad-theme", "bad-header", "bad-bool", "rejected on consumption:", "using default"} {
+				if !strings.Contains(text, want) {
+					t.Errorf("%s width %d missing %q:\n%s", view, width, want, frame)
+				}
+			}
+		}
+	}
+	if len(scenario.Settings.RuntimeDefaults) != len(runtimeconfig.LoadEnv(nil).Status()) || len(scenario.Debug.RuntimeDefaults) != len(scenario.Settings.RuntimeDefaults) {
+		t.Fatal("mixed-invalid scenario lost runtime rows")
+	}
+	for i, row := range scenario.Settings.RuntimeDefaults {
+		if scenario.Debug.RuntimeDefaults[i].Name != row.Name || scenario.Debug.RuntimeDefaults[i].Warning != row.Warning {
+			t.Fatalf("debug lost captured diagnostic: %+v", row)
+		}
+	}
+}
+
 func TestSettingsPreviewLeadsWithTruthfulOverrides(t *testing.T) {
 	scenario, _ := Lookup(ScenarioMixed)
 	frame, err := Render(scenario, RenderOptions{View: ViewSettings, Width: 70, Height: 20, Plain: true})
@@ -252,10 +287,7 @@ func TestSettingsPreviewLeadsWithTruthfulOverrides(t *testing.T) {
 }
 
 func TestSettingsFixtureCoversEveryRuntimeStatus(t *testing.T) {
-	statuses, err := runtimeconfig.RuntimeEnvStatus()
-	if err != nil {
-		t.Fatal(err)
-	}
+	statuses := runtimeconfig.LoadEnv(nil).Status()
 	scenario, _ := Lookup(ScenarioMixed)
 	counts := make(map[string]int)
 	for _, row := range scenario.Settings.RuntimeDefaults {

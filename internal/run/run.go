@@ -10,6 +10,7 @@ import (
 	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
 type CommandRunner = commandrunner.Runner
@@ -137,6 +138,8 @@ type Options struct {
 // runtimeconfig.
 type ExecutionConfig struct {
 	ResolvedRunOptions
+	// RuntimeEnv is the invocation snapshot. Nil selects built-ins, never process state.
+	RuntimeEnv         *runtimeconfig.EnvSnapshot
 	SkipPermissions    bool
 	MaxReworkAttempts  int
 	RestartBlocked     bool
@@ -345,6 +348,11 @@ func (s Service) Execute(ctx context.Context, request Request) error {
 			}
 		}
 		if config.RepairVerification {
+			// Admit the future slice before journaling a repair or spending its
+			// lifetime attempt; ordinary preparation happens after the append.
+			if err := config.requireSliceBudgets(); err != nil {
+				return err
+			}
 			repairExecution := newRunExecution(config, s.dependencies)
 			s.resolveServiceDependencies(&repairExecution)
 			if detail.State.Workspace == nil || strings.TrimSpace(detail.State.Workspace.Path) == "" {

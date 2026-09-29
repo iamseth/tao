@@ -119,7 +119,8 @@ func TestSingleMergeProposalTelemetryProviders(t *testing.T) {
 					calls := 0
 					providerErr := errors.New("provider failed")
 					var out bytes.Buffer
-					app := App{Out: &out, ProcessStarter: mergeMetricsStarter(t, provider, outcome, providerErr, &calls)}
+					snapshot := runtimeconfig.RuntimeEnv()
+					app := App{RuntimeEnv: &snapshot, Out: &out, ProcessStarter: mergeMetricsStarter(t, provider, outcome, providerErr, &calls)}
 					config := newSingleMergeAgentConfig(app, detail, "", nil, appender, runtimeconfig.ModelSelection{})
 					if config.EventAppender != nil {
 						t.Fatal("single proposal wired batch persistence")
@@ -225,7 +226,8 @@ func TestBatchMergeTelemetryProviders(t *testing.T) {
 							appender.err = errors.New("disk full")
 						}
 						var out bytes.Buffer
-						config := newMergeBatchAgentConfig(App{Out: &out, ProcessStarter: mergeMetricsStarter(t, provider, outcome, providerErr, &calls)}, "", nil, nil, runtimeconfig.ModelSelection{}, logrecord.TeeWriter(io.Discard, &out))
+						snapshot := runtimeconfig.RuntimeEnv()
+						config := newMergeBatchAgentConfig(App{RuntimeEnv: &snapshot, Out: &out, ProcessStarter: mergeMetricsStarter(t, provider, outcome, providerErr, &calls)}, "", nil, nil, runtimeconfig.ModelSelection{}, logrecord.TeeWriter(io.Discard, &out))
 						if config.Observe != nil {
 							t.Fatal("batch wired plan observer")
 						}
@@ -289,7 +291,8 @@ func TestMergeServiceProposalUsesPlanObserver(t *testing.T) {
 	detail := cliMergeDetail(t)
 	calls := 0
 	starter := mergeMetricsStarter(t, "claude", "reported", nil, &calls)
-	app := App{Out: io.Discard, CommandRunner: newCLIMergeGitRunner(t, detail.State.Repo.Root), WorkspaceManager: func(string) (WorkspaceManager, error) { return &fakeWorkspaceManager{}, nil }, ProcessStarter: func(ctx context.Context, cwd, name string, args []string) (agent.Process, error) {
+	snapshot := runtimeconfig.RuntimeEnv()
+	app := App{RuntimeEnv: &snapshot, Out: io.Discard, CommandRunner: newCLIMergeGitRunner(t, detail.State.Repo.Root), WorkspaceManager: func(string) (WorkspaceManager, error) { return &fakeWorkspaceManager{}, nil }, ProcessStarter: func(ctx context.Context, cwd, name string, args []string) (agent.Process, error) {
 		if !strings.Contains(strings.Join(args, " "), "--model chosen") {
 			t.Fatalf("proposal args = %v", args)
 		}

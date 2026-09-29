@@ -296,6 +296,11 @@ func TestBatchAgentSessionTelemetryAppendFailureWarnsAndPreservesProviderError(t
 	}
 }
 
+func mergeTestRuntimeEnv() *runtimeconfig.EnvSnapshot {
+	snapshot := runtimeconfig.RuntimeEnv()
+	return &snapshot
+}
+
 func TestBatchAgentSessionHonorsConfiguredProviderPermissionsAndRoot(t *testing.T) {
 	t.Setenv("TAO_AGENT", "claude")
 	t.Setenv("TAO_DANGEROUSLY_SKIP_PERMISSIONS", "true")
@@ -304,6 +309,7 @@ func TestBatchAgentSessionHonorsConfiguredProviderPermissionsAndRoot(t *testing.
 	var metricsCalled bool
 	var progress bytes.Buffer
 	session, err := NewBatchAgentSession(BatchAgentSessionConfig{
+		RuntimeEnv: mergeTestRuntimeEnv(),
 		ProcessStarter: mergeFakeProcessStarter(t, &got,
 			`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"repairing"}]}}`,
 			`{"type":"result","result":"resolved"}`),
@@ -340,6 +346,7 @@ func TestSingleMergeAgentSessionExposesMetricsWithoutBatchPersistence(t *testing
 	batchEvents := &recordingBatchAgentEvents{}
 	var metrics agent.Metrics
 	session, err := NewSingleMergeAgentSession(SingleMergeAgentSessionConfig{
+		RuntimeEnv:       mergeTestRuntimeEnv(),
 		ProviderLookPath: testProviderLookPath, ConfinementProbe: successfulConfinementProbe,
 		ProcessStarter: mergeFakeProcessStarter(t, &got, `{"type":"result","result":"resolved"}`),
 		EventAppender:  batchEvents,
@@ -377,6 +384,7 @@ func TestSingleMergeAgentSessionMissingProviderDoesNotProbeOrStart(t *testing.T)
 	starts := 0
 	probes := 0
 	session, err := NewSingleMergeAgentSession(SingleMergeAgentSessionConfig{
+		RuntimeEnv: mergeTestRuntimeEnv(),
 		ProviderLookPath: func(name string) (string, error) {
 			return "", fmt.Errorf("%s missing: %w", name, exec.ErrNotFound)
 		},
@@ -907,6 +915,7 @@ func TestSingleMergeAgentSessionMissingConfinerDoesNotStartProvider(t *testing.T
 	setConfinementExecutable(t, func() (string, error) { return "", errors.New(unavailable) })
 	starts := 0
 	session, err := NewSingleMergeAgentSession(SingleMergeAgentSessionConfig{
+		RuntimeEnv:       mergeTestRuntimeEnv(),
 		ProviderLookPath: testProviderLookPath, ConfinementProbe: successfulConfinementProbe,
 		ProcessStarter: func(context.Context, string, string, []string) (agent.Process, error) {
 			starts++
@@ -959,6 +968,7 @@ func TestSingleMergeAgentSessionUnavailableConfinementDoesNotStartProvider(t *te
 	probeErr := errors.New("bubblewrap unavailable")
 	starts := 0
 	session, err := NewSingleMergeAgentSession(SingleMergeAgentSessionConfig{
+		RuntimeEnv:       mergeTestRuntimeEnv(),
 		ProviderLookPath: func(name string) (string, error) { return "/installed/" + name, nil },
 		ConfinementProbe: func() error { return probeErr },
 		ProcessStarter: func(context.Context, string, string, []string) (agent.Process, error) {
@@ -989,6 +999,7 @@ func TestSingleMergeAgentSessionFailsClosedWithoutProtectedFilesystemBoundary(t 
 	t.Setenv("TAO_AGENT", "claude")
 	starts := 0
 	session, err := NewSingleMergeAgentSession(SingleMergeAgentSessionConfig{
+		RuntimeEnv: mergeTestRuntimeEnv(),
 		ProcessStarter: func(context.Context, string, string, []string) (agent.Process, error) {
 			starts++
 			return nil, errors.New("unexpected provider start")
@@ -1020,6 +1031,7 @@ func TestSingleMergeAgentSessionConfinesProtectedObjectRootAtProcessBoundary(t *
 	}
 	var got mergeFakeClaudeStart
 	session, err := NewSingleMergeAgentSession(SingleMergeAgentSessionConfig{
+		RuntimeEnv:       mergeTestRuntimeEnv(),
 		ProviderLookPath: testProviderLookPath, ConfinementProbe: successfulConfinementProbe,
 		ProcessStarter: mergeFakeProcessStarter(t, &got, `{"type":"result","result":"done"}`),
 	})
@@ -1258,6 +1270,7 @@ func TestSingleMergeAgentSessionStartsFreshProviderForResolverAndReviewer(t *tes
 	var got mergeFakeClaudeStart
 	starter := mergeFakeProcessStarter(t, &got, `{"type":"result","result":"done"}`)
 	session, err := NewSingleMergeAgentSession(SingleMergeAgentSessionConfig{
+		RuntimeEnv:       mergeTestRuntimeEnv(),
 		ProviderLookPath: testProviderLookPath, ConfinementProbe: successfulConfinementProbe,
 		ProcessStarter: func(ctx context.Context, cwd, name string, args []string) (agent.Process, error) {
 			starts++
@@ -1285,7 +1298,7 @@ func TestSingleMergeAgentSessionStartsFreshProviderForResolverAndReviewer(t *tes
 func TestFreshSingleMergeAgentSessionDefersConfigurationAndStartsEachOperationOnce(t *testing.T) {
 	fakeConfinementExecutable(t)
 	t.Setenv("TAO_AGENT", "invalid")
-	deferred := NewFreshSingleMergeAgentSession(SingleMergeAgentSessionConfig{})
+	deferred := NewFreshSingleMergeAgentSession(SingleMergeAgentSessionConfig{RuntimeEnv: mergeTestRuntimeEnv()})
 	if _, err := deferred.Resolve(context.Background(), BatchAgentSessionRequest{Operation: BatchAgentOperationSinglePlanResolution}); err == nil || !strings.Contains(err.Error(), "unsupported agent") {
 		t.Fatalf("deferred runtime error = %v", err)
 	}
@@ -1296,7 +1309,8 @@ func TestFreshSingleMergeAgentSessionDefersConfigurationAndStartsEachOperationOn
 	var got mergeFakeClaudeStart
 	starter := mergeFakeProcessStarter(t, &got, `{"type":"result","result":"done"}`)
 	fresh := NewFreshSingleMergeAgentSession(SingleMergeAgentSessionConfig{
-		Log: &progress, ProviderLookPath: testProviderLookPath, ConfinementProbe: successfulConfinementProbe,
+		RuntimeEnv: mergeTestRuntimeEnv(),
+		Log:        &progress, ProviderLookPath: testProviderLookPath, ConfinementProbe: successfulConfinementProbe,
 		ProcessStarter: func(ctx context.Context, cwd, name string, args []string) (agent.Process, error) {
 			starts++
 			return starter(ctx, cwd, name, args)
@@ -1346,6 +1360,7 @@ func TestBatchAgentSessionRendersMetricsWarningAsReadableProgress(t *testing.T) 
 	var progress bytes.Buffer
 	var got mergeFakeClaudeStart
 	session, err := NewBatchAgentSession(BatchAgentSessionConfig{
+		RuntimeEnv:     mergeTestRuntimeEnv(),
 		ProcessStarter: mergeFakeProcessStarter(t, &got, `{"type":"result","result":"resolved"}`),
 		Log:            &progress,
 	})
@@ -1363,10 +1378,78 @@ func TestBatchAgentSessionRendersMetricsWarningAsReadableProgress(t *testing.T) 
 	}
 }
 
+func TestDeferredMergeSessionsRequireCapturedSettingsBeforeLaunch(t *testing.T) {
+	for _, key := range []string{runtimeconfig.EnvAgent, runtimeconfig.EnvSessionTimeout, runtimeconfig.EnvSkipPermissions} {
+		t.Run(key, func(t *testing.T) {
+			starts := 0
+			config := BatchAgentSessionConfig{
+				RuntimeEnv: mergeSnapshotWith(map[string]string{key: "invalid"}),
+				ProcessStarter: func(context.Context, string, string, []string) (agent.Process, error) {
+					starts++
+					return nil, errors.New("unexpected launch")
+				},
+			}
+			single := NewFreshSingleMergeAgentSession(config)
+			batch := NewDeferredBatchAgentSession(config)
+			proposal, err := NewMergeProposalGenerator(config)
+			if err != nil {
+				t.Fatalf("eager proposal validation: %v", err)
+			}
+			request := BatchAgentSessionRequest{Operation: BatchAgentOperationSinglePlanResolution}
+			for _, check := range []func() error{
+				func() error { return single.Preflight(context.Background(), request) },
+				func() error { _, err := single.Resolve(context.Background(), request); return err },
+				func() error { _, err := batch.Resolve(context.Background(), request); return err },
+				func() error {
+					_, err := proposal.GenerateMergeProposal(context.Background(), mergeProposalContext())
+					return err
+				},
+			} {
+				if err := check(); err == nil || !strings.Contains(err.Error(), key) {
+					t.Fatalf("required setting %s: %v", key, err)
+				}
+			}
+			if starts != 0 {
+				t.Fatalf("invalid configuration launched %d providers", starts)
+			}
+		})
+	}
+}
+
+func TestDeferredBatchSessionUsesStableSnapshot(t *testing.T) {
+	var got mergeFakeClaudeStart
+	session := NewDeferredBatchAgentSession(BatchAgentSessionConfig{
+		RuntimeEnv: mergeSnapshotWith(map[string]string{
+			runtimeconfig.EnvAgent: "claude", runtimeconfig.EnvSkipPermissions: "true", runtimeconfig.EnvSessionTimeout: "0",
+		}),
+		ProcessStarter: mergeFakeProcessStarter(t, &got, `{"type":"result","result":"resolved"}`),
+	})
+	for _, key := range []string{runtimeconfig.EnvAgent, runtimeconfig.EnvSessionTimeout, runtimeconfig.EnvSkipPermissions} {
+		t.Setenv(key, "invalid")
+	}
+	result, err := session.Resolve(context.Background(), BatchAgentSessionRequest{IntegrationRoot: "/integration", Prompt: "review"})
+	if err != nil || result.Output != "resolved" || got.name != "claude" || !strings.Contains(strings.Join(got.args, " "), "bypassPermissions") {
+		t.Fatalf("captured session: result=%#v start=%#v err=%v", result, got, err)
+	}
+}
+
+func TestMergeAgentOmittedSnapshotUsesBuiltins(t *testing.T) {
+	t.Setenv(runtimeconfig.EnvAgent, "invalid")
+	t.Setenv(runtimeconfig.EnvSessionTimeout, "invalid")
+	session, err := NewBatchAgentSession(BatchAgentSessionConfig{})
+	if err != nil {
+		t.Fatalf("omitted snapshot read ambient settings: %v", err)
+	}
+	if session.providerToolName != "pi" {
+		t.Fatalf("provider = %q, want built-in pi", session.providerToolName)
+	}
+}
+
 func TestMergeProposalGeneratorDefersRuntimeConfigurationUntilGeneration(t *testing.T) {
 	t.Setenv("TAO_AGENT", "invalid")
 	starts := 0
 	generator, err := NewMergeProposalGenerator(MergeProposalGeneratorConfig{
+		RuntimeEnv: mergeTestRuntimeEnv(),
 		ProcessStarter: func(context.Context, string, string, []string) (agent.Process, error) {
 			starts++
 			return nil, errors.New("unexpected process start")
@@ -1394,6 +1477,7 @@ func TestMergeProposalGeneratorUsesOneConfiguredNeutralSession(t *testing.T) {
 	metricsCalls := 0
 	var observed BatchAgentSessionRequest
 	generator, err := NewMergeProposalGenerator(MergeProposalGeneratorConfig{
+		RuntimeEnv: mergeTestRuntimeEnv(),
 		ProcessStarter: func(ctx context.Context, cwd, name string, args []string) (agent.Process, error) {
 			starts++
 			return starter(ctx, cwd, name, args)
@@ -1428,6 +1512,7 @@ func TestBatchMergeProposalGeneratorUsesTrustedTransactionIdentity(t *testing.T)
 	store := &recordingBatchAgentEvents{}
 	planEvents := 0
 	generator, err := NewMergeProposalGenerator(MergeProposalGeneratorConfig{
+		RuntimeEnv:     mergeTestRuntimeEnv(),
 		ProcessStarter: mergeFakeProcessStarter(t, &got, `{"type":"result","result":"{\"type\":\"fix\",\"scope\":\"merge\",\"summary\":\"preserve batch identity\",\"what\":\"Generate an exact proposal.\",\"why\":\"Support legacy approvals.\"}"}`),
 		EventAppender:  store,
 		Observe: func(request BatchAgentSessionRequest, result BatchAgentSessionResult, err error) {

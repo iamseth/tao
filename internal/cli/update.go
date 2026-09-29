@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 
+	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/selfupdate"
 	"github.com/iamseth/tao/internal/taodata"
 )
@@ -71,11 +71,21 @@ func (a App) selfUpdater() SelfUpdater {
 	}
 }
 
-func (a App) runStartupUpdate(ctx context.Context) error {
-	mode, err := selfupdate.ParseMode(os.Getenv("TAO_UPDATE"))
-	if err != nil {
-		return fmt.Errorf("TAO_UPDATE: %w", err)
+// Diagnostic entry points must remain available to explain invalid settings.
+// Do not pass the rejected mode's built-in fallback to the updater.
+func (a App) runDiagnosticStartupUpdate(ctx context.Context) error {
+	if a.envSnapshot().Require(runtimeconfig.EnvUpdate) != nil {
+		return nil //nolint:nilerr // Skip startup updates so diagnostics remain accessible.
 	}
+	return a.runStartupUpdate(ctx)
+}
+
+func (a App) runStartupUpdate(ctx context.Context) error {
+	defaults, err := a.envDefaultsFor(runtimeconfig.EnvUpdate)
+	if err != nil {
+		return err
+	}
+	mode := defaults.UpdateMode
 	if mode == selfupdate.ModeOff || (a.SelfUpdater == nil && buildVersion() == "dev") {
 		return nil
 	}

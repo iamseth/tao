@@ -71,6 +71,39 @@ func TestParseFloor(t *testing.T) {
 	}
 }
 
+func TestPolicyFromTypedRoutingConfig(t *testing.T) {
+	values := map[string]string{
+		runtimeconfig.EnvPlannerRouting:      "randomized",
+		runtimeconfig.EnvPlannerRoutingArms:  "pi=0.25,claude=0.75",
+		runtimeconfig.EnvPlannerRoutingFloor: "0.1",
+	}
+	snapshot := runtimeconfig.LoadEnv(func(key string) (string, bool) { value, ok := values[key]; return value, ok })
+	if err := snapshot.Require(runtimeconfig.EnvPlannerRouting, runtimeconfig.EnvPlannerRoutingArms, runtimeconfig.EnvPlannerRoutingFloor); err != nil {
+		t.Fatal(err)
+	}
+	config := snapshot.Defaults().PlannerRouting
+	arms := ArmsFromConfig(config.Arms)
+	p, err := NewPolicy(Mode(config.Mode), arms, config.Floor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyArms, err := ParseArms(values[runtimeconfig.EnvPlannerRoutingArms])
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := NewPolicy(ModeRandomized, legacyArms, 0.1)
+	if err != nil || !reflect.DeepEqual(p, legacy) {
+		t.Fatalf("typed policy changed: %+v, want %+v; %v", p, legacy, err)
+	}
+	if _, err := NewPolicy(Mode(config.Mode), arms, 0.5); err == nil {
+		t.Fatal("typed conversion bypassed floor policy")
+	}
+	arms[0].Probability = 0.5
+	if _, err := NewPolicy(Mode(config.Mode), arms, config.Floor); err == nil {
+		t.Fatal("typed conversion bypassed weight policy")
+	}
+}
+
 func TestPolicyValidate(t *testing.T) {
 	for _, mode := range []Mode{ModeOff, ModeShadow, ModeRandomized} {
 		p := Policy{Mode: mode, Arms: policyTestArms(), Floor: 0.1}

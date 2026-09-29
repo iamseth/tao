@@ -26,7 +26,8 @@ var runCommand = commandMetadata{
 	examples: "  tao run 20260628-1618-kubectl-style-help\n" +
 		"  tao run --max-slices 1 --commit-policy slice my-plan\n" +
 		"  tao run --auto-rework=false my-plan",
-	registerFlags: registerRunFlags,
+	registerFlags:        registerRunFlags,
+	registerRuntimeFlags: App.registerRunFlags,
 	completion: completionContext{
 		flagValues: map[string]completionFlagValue{
 			"auto-rework":         {kind: completionValueBoolean, label: "boolean", values: []string{"true", "false"}},
@@ -45,8 +46,8 @@ var runCommand = commandMetadata{
 
 // registerRunRequestFlags registers the run-request flags shared by every
 // handler that executes plans, currently tao run and tao note run.
-func registerRunRequestFlags(fs *flag.FlagSet) {
-	defaults := runtimeFlagDefaults()
+func (a App) registerRunRequestFlags(fs *flag.FlagSet) {
+	defaults := a.flagDefaults()
 	fs.Int("max-slices", 0, "maximum slices to run; use 0 for all")
 	fs.String("commit-policy", defaults.CommitPolicy.String(), "automatic commit policy: slice or none")
 	fs.String("execution-mode", defaults.ExecutionModeValue().String(), "execution mode: isolated or current")
@@ -55,18 +56,20 @@ func registerRunRequestFlags(fs *flag.FlagSet) {
 	fs.Bool("no-review", !defaults.ReviewEnabledValue(), "disable automatic plan review for this run")
 }
 
-func registerRunFlags(fs *flag.FlagSet) {
-	registerRunRequestFlags(fs)
+func registerRunFlags(fs *flag.FlagSet) { (App{}).registerRunFlags(fs) }
+
+func (a App) registerRunFlags(fs *flag.FlagSet) {
+	a.registerRunRequestFlags(fs)
+	defaults := a.flagDefaults()
 	fs.String("model", "", "override the agent model for every role in this run")
 	fs.String("rework-escalation-model", "", "override the model for late automatic rework attempts")
-	autoRework, maxReworkAttempts, _ := runReworkEnvDefaults()
 	fs.Bool("continue", false, "continue a blocked slice at its preserved execution boundary")
 	fs.Bool("restart", false, "restart a safe blocked automatic slice on a newer baseline")
 	fs.Bool("repair-verification", false, "append and run one bounded repair for current failed final verification")
 	fs.Bool("reverify", false, "rerun final verification at the exact recorded failed head")
-	fs.Bool("no-run-header", !runHeaderEnvDefault(), "disable the pinned run header")
-	fs.Bool("auto-rework", autoRework, "automatically rework plans with requested changes")
-	fs.Int("max-rework-attempts", maxReworkAttempts, "maximum automatic rework cycles (0 disables)")
+	fs.Bool("no-run-header", !defaults.RunHeader, "disable the pinned run header")
+	fs.Bool("auto-rework", *defaults.AutoRework, "automatically rework plans with requested changes")
+	fs.Int("max-rework-attempts", *defaults.MaxReworkAttempts, "maximum automatic rework cycles (0 disables)")
 	fs.Bool("rework-restart", false, "start a new automatic-rework budget after a previous stop")
 }
 
@@ -122,8 +125,8 @@ type runRequestInputs struct {
 // resolveRunRequestFlags resolves the shared run-request preamble from parsed
 // flags. Flags the calling handler did not register resolve to zero values and
 // never count as provided overrides.
-func resolveRunRequestFlags(fs *flag.FlagSet) (runRequestInputs, error) {
-	defaults, err := cliEnvDefaults()
+func (a App) resolveRunRequestFlags(fs *flag.FlagSet) (runRequestInputs, error) {
+	defaults, err := a.runEnvDefaults()
 	if err != nil {
 		return runRequestInputs{}, err
 	}
@@ -155,17 +158,22 @@ func resolveRunRequestFlags(fs *flag.FlagSet) (runRequestInputs, error) {
 	}, nil
 }
 
-func resolveRunAutoReworkPolicy(fs *flag.FlagSet, reviewEnabled bool) (runtimeconfig.AutoReworkPolicy, error) {
-	if _, _, err := runReworkEnvDefaults(); err != nil {
+func (a App) resolveRunAutoReworkPolicy(fs *flag.FlagSet, reviewEnabled bool) (runtimeconfig.AutoReworkPolicy, error) {
+	defaults, err := a.envDefaultsFor(runtimeconfig.EnvAutoRework, runtimeconfig.EnvMaxReworkAttempts)
+	if err != nil {
 		return runtimeconfig.AutoReworkPolicy{}, err
 	}
-	enabled := flagBoolValue(fs, "auto-rework")
+	enabled := effectiveBoolFlagValue(fs, "auto-rework", *defaults.AutoRework)
+	attempts := *defaults.MaxReworkAttempts
+	if flagWasProvided(fs, "max-rework-attempts") {
+		attempts = flagIntValue(fs, "max-rework-attempts")
+	}
 	explicitConflict := enabled && flagWasProvided(fs, "auto-rework") &&
 		flagWasProvided(fs, "no-review") && flagBoolValue(fs, "no-review")
 	if !reviewEnabled && !explicitConflict {
 		enabled = false
 	}
-	return runtimeconfig.ResolveAutoReworkPolicy(enabled, flagIntValue(fs, "max-rework-attempts"), reviewEnabled)
+	return runtimeconfig.ResolveAutoReworkPolicy(enabled, attempts, reviewEnabled)
 }
 
 type planRunRepository interface {
@@ -173,11 +181,11 @@ type planRunRepository interface {
 }
 
 func (a App) run(ctx context.Context, repo planRunRepository, args []string) error {
-	fs, positional, err := a.parseArgsFor(&commandMetadata{name: "run", registerFlags: registerRunFlags}, args)
+	fs, positional, err := a.parseArgs("run", args, a.registerRunFlags)
 	if err != nil {
 		return err
 	}
-	inputs, err := resolveRunRequestFlags(fs)
+	inputs, err := a.resolveRunRequestFlags(fs)
 	if err != nil {
 		return err
 	}
@@ -210,7 +218,7 @@ func (a App) run(ctx context.Context, repo planRunRepository, args []string) err
 	request.RestartBlocked = blockedRestart
 	request.RepairVerification = repairVerification
 	request.Reverify = reverify
-	policy, err := resolveRunAutoReworkPolicy(fs, request.ReviewEnabled)
+	policy, err := a.resolveRunAutoReworkPolicy(fs, request.ReviewEnabled)
 	if err != nil {
 		return err
 	}
@@ -227,6 +235,23 @@ func (a App) executeResolvedRun(ctx context.Context, repo planRunRepository, inp
 	if request.Reverify {
 		policy.Enabled = false
 	}
+	snapshot := a.envSnapshot()
+	thresholds := snapshot.Defaults().AgentBudgetThresholds
+	if policy.Enabled {
+		var err error
+		thresholds, err = snapshot.BudgetThresholds()
+		if err != nil {
+			return err
+		}
+		// An enabled restart can reopen slices before Service.Execute reaches
+		// slice-budget admission. Reject captured hard-cap errors before that
+		// mutation; other paths retain their lazy service-level validation.
+		if reworkRestart && policy.MaxAttempts > 0 {
+			if _, err := snapshot.BudgetCaps(); err != nil {
+				return err
+			}
+		}
+	}
 	runCtx, stopSignals := newCommandSignalContext(ctx)
 	defer stopSignals()
 
@@ -234,6 +259,7 @@ func (a App) executeResolvedRun(ctx context.Context, repo planRunRepository, inp
 	defer closeHeader()
 	service := run.NewService(repo, runOut, run.Options{
 		ExecutionConfig: run.ExecutionConfig{
+			RuntimeEnv:         &snapshot,
 			ResolvedRunOptions: runtimeconfig.ResolvedRunOptions{Agent: request.Agent},
 			SkipPermissions:    skipPermissions,
 			MaxReworkAttempts:  policy.MaxAttempts,
@@ -249,7 +275,7 @@ func (a App) executeResolvedRun(ctx context.Context, repo planRunRepository, inp
 		return driver.Run(ownedCtx, request.Input, reworkpkg.RunOptions{
 			Enabled:          policy.Enabled,
 			MaxAttempts:      policy.MaxAttempts,
-			BudgetThresholds: runtimeconfig.RuntimeAgentBudgetThresholds(),
+			BudgetThresholds: thresholds,
 			AllowRestart:     reworkRestart,
 			BeforeDecision:   automaticReworkPhaseHook(policy.MaxAttempts, policy.Enabled),
 			Execute: func(executeCtx context.Context) error {

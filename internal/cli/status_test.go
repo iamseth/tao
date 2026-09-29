@@ -13,6 +13,69 @@ import (
 	"github.com/iamseth/tao/internal/taodata"
 )
 
+func TestStatusMixedInvalidConfigurationKeepsCompleteRows(t *testing.T) {
+	clearTaoEnv(t)
+	values := map[string]string{
+		runtimeconfig.EnvAgent: "bad-agent", runtimeconfig.EnvUpdate: "bad-update",
+		runtimeconfig.EnvBudgetPlanCost: "bad-budget", runtimeconfig.EnvTheme: "bad-theme",
+		runtimeconfig.EnvRunHeader: "bad-header", runtimeconfig.EnvPullRequest: "bad-bool",
+		runtimeconfig.EnvModel: "bad model",
+	}
+	for key, value := range values {
+		t.Setenv(key, value)
+	}
+	registered := taodata.Repo{RunDefaults: &taodata.RepoRunDefaults{PullRequest: new(true), Models: &taodata.RepoModelDefaults{Model: "repo-model"}}}
+	var out bytes.Buffer
+	app := App{Out: &out, Registry: func() NoteRegistry { return &fakeNoteRegistry{current: registered} }, Repository: func(string) Repository { return nil }}
+	if err := app.Run(context.Background(), []string{"status", "--json"}); err != nil {
+		t.Fatal(err)
+	}
+	var payload statusPayload
+	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	want := snapshotWith(values).Status()
+	if len(payload.RuntimeEnv) != len(want) {
+		t.Fatalf("got %d rows, want %d", len(payload.RuntimeEnv), len(want))
+	}
+	for i, row := range payload.RuntimeEnv {
+		if row.Name != want[i].Name || row.Warning != want[i].Warning {
+			t.Errorf("lost order/diagnostic: %+v, want %+v", row, want[i])
+		}
+		source := want[i].Source
+		if row.Name == runtimeconfig.EnvPullRequest || row.Name == runtimeconfig.EnvModel {
+			source = "repository"
+		}
+		if row.Source != source {
+			t.Errorf("source = %q, want %q for %s", row.Source, source, row.Name)
+		}
+	}
+	out.Reset()
+	if err := app.Run(context.Background(), []string{"status"}); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, line := range strings.Split(out.String(), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 0 && strings.HasPrefix(fields[0], "TAO_") {
+			names = append(names, fields[0])
+		}
+	}
+	if len(names) != len(want) {
+		t.Fatalf("got %d text rows, want %d", len(names), len(want))
+	}
+	for i, row := range want {
+		if names[i] != row.Name {
+			t.Fatalf("text row %d = %s, want %s", i, names[i], row.Name)
+		}
+	}
+	for _, text := range []string{"rejected", "using default", "repo-model", "bad-bool", "bad-budget"} {
+		if !strings.Contains(out.String(), text) {
+			t.Errorf("missing %q: %s", text, out.String())
+		}
+	}
+}
+
 func TestStatusInvalidThemeWarnsWithoutFailing(t *testing.T) {
 	clearTaoEnv(t)
 	t.Setenv("TAO_THEME", "nope")

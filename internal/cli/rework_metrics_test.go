@@ -14,6 +14,7 @@ import (
 	"github.com/iamseth/tao/internal/forge"
 	"github.com/iamseth/tao/internal/plan"
 	runpkg "github.com/iamseth/tao/internal/run"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
 // Only telemetry appends are injected; triage and lifecycle persistence keep
@@ -63,7 +64,8 @@ func TestReworkPRClassifierMetrics(t *testing.T) {
 					calls := 0
 					providerErr := errors.New("provider failed")
 					fixed := time.Date(2026, 6, 28, 13, 0, 0, 0, time.UTC)
-					app := App{Out: &bytes.Buffer{}, Now: func() time.Time { return fixed }, ProcessStarter: reworkMetricsProcessStarter(t, provider, outcome, providerErr, &calls)}
+					snapshot := runtimeconfig.RuntimeEnv()
+					app := App{RuntimeEnv: &snapshot, Out: &bytes.Buffer{}, Now: func() time.Time { return fixed }, ProcessStarter: reworkMetricsProcessStarter(t, provider, outcome, providerErr, &calls)}
 					args := []string{"--from-pr", "--dry-run", id}
 					if outcome == "reopen" {
 						args = []string{"--from-pr", id}

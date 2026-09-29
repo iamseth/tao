@@ -87,6 +87,8 @@ type GitClient interface {
 var _ GitClient = gitops.Client{}
 
 type Service struct {
+	// RuntimeEnv is the invocation snapshot; nil uses built-ins, never ambient state.
+	RuntimeEnv        *runtimeconfig.EnvSnapshot
 	Git               GitClient
 	NewGit            func(dir string) GitClient
 	Runner            commandrunner.Runner
@@ -353,16 +355,23 @@ func samePhysicalPath(a, b string) bool {
 	return left != "" && left == right
 }
 
-func mergeVerifyMayNeedSnapshot(options Options) bool {
+func (s Service) runtimeEnv() runtimeconfig.EnvSnapshot {
+	if s.RuntimeEnv != nil {
+		return *s.RuntimeEnv
+	}
+	return runtimeconfig.EnvSnapshot{}
+}
+
+func (s Service) mergeVerifyMayNeedSnapshot(options Options) bool {
 	if options.NoVerify {
 		return false
 	}
 	if options.VerifyCommand != "" {
 		return strings.TrimSpace(options.VerifyCommand) != ""
 	}
-	envCommand, envSet := runtimeconfig.RuntimeMergeVerifyCommand()
-	if envSet {
-		return strings.TrimSpace(envCommand) != ""
+	defaults := s.runtimeEnv().Defaults()
+	if defaults.MergeVerifyCommandSet {
+		return strings.TrimSpace(defaults.MergeVerifyCommand) != ""
 	}
 	return true
 }
@@ -413,7 +422,7 @@ func (s Service) Merge(ctx context.Context, detail *plan.PlanDetail, options Opt
 	if err != nil {
 		return err
 	}
-	if mergeVerifyMayNeedSnapshot(options) {
+	if s.mergeVerifyMayNeedSnapshot(options) {
 		if _, err := mergeVerifyRepoRoot(detail); err != nil {
 			return err
 		}
@@ -489,7 +498,7 @@ func (s Service) resolveAndFinishSingleMerge(ctx context.Context, git GitClient,
 			return err
 		}
 	}
-	verify, err := resolveMergeVerifyCommandForDetail(detail, options)
+	verify, err := s.resolveMergeVerifyCommandForDetail(detail, options)
 	if err != nil {
 		return rollbackPreparedSingleMerge(ctx, git, *intent, err)
 	}
@@ -588,7 +597,7 @@ func (s Service) finishIntegratedMerge(ctx context.Context, git GitClient, detai
 // place when verification or recording fails.
 func (s Service) settleIntegratedMerge(ctx context.Context, git GitClient, detail *plan.PlanDetail, planBranch string, snapshot mergeVerifySnapshot, options Options, rollbackOnFailure bool) error {
 	s.reportPhase(runstatus.PhaseMergeVerifying)
-	verify, err := resolveMergeVerifyCommandForDetail(detail, options)
+	verify, err := s.resolveMergeVerifyCommandForDetail(detail, options)
 	if err != nil {
 		if rollbackOnFailure {
 			return rollbackIntegratedMerge(ctx, git, snapshot, err)

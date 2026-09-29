@@ -283,6 +283,7 @@ exit 23
 
 			starts := 0
 			session, err := NewSingleMergeAgentSession(SingleMergeAgentSessionConfig{
+				RuntimeEnv:       mergeTestRuntimeEnv(),
 				ProviderLookPath: func(string) (string, error) { return provider, nil },
 				ProcessStarter: func(context.Context, string, string, []string) (agent.Process, error) {
 					starts++
@@ -336,6 +337,7 @@ func TestGuardedSingleConflictResolverRejectsCleanTrackedExternalHardLink(t *tes
 	store := &recordingSingleResolutionStore{current: request.Intent}
 	starts := 0
 	agentSession, err := NewSingleMergeAgentSession(SingleMergeAgentSessionConfig{
+		RuntimeEnv:       mergeTestRuntimeEnv(),
 		ConfinementProbe: func() error { return nil },
 		ProcessStarter: func(context.Context, string, string, []string) (agent.Process, error) {
 			starts++
@@ -469,6 +471,7 @@ func TestMergeCapabilityPreflightFailureRestoresRetryableBoundary(t *testing.T) 
 
 			starts := 0
 			agentSession := NewFreshSingleMergeAgentSession(SingleMergeAgentSessionConfig{
+				RuntimeEnv:       mergeTestRuntimeEnv(),
 				ProviderLookPath: providerLookPath, ConfinementProbe: tc.confinementProbe,
 				ProcessStarter: func(context.Context, string, string, []string) (agent.Process, error) {
 					starts++

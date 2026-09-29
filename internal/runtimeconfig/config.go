@@ -31,23 +31,6 @@ type ExecutionMode string
 
 type AgentKind string
 
-// PlannerRoutingEnv holds raw routing settings; plannerroute owns validation.
-// Empty or whitespace-only values are treated as unset.
-type PlannerRoutingEnv struct {
-	Mode, Arms, Floor          string
-	ModeSet, ArmsSet, FloorSet bool
-}
-
-func LoadPlannerRoutingEnv(getenv func(string) string) PlannerRoutingEnv {
-	mode := strings.TrimSpace(getenv(EnvPlannerRouting))
-	arms := strings.TrimSpace(getenv(EnvPlannerRoutingArms))
-	floor := strings.TrimSpace(getenv(EnvPlannerRoutingFloor))
-	return PlannerRoutingEnv{
-		Mode: mode, Arms: arms, Floor: floor,
-		ModeSet: mode != "", ArmsSet: arms != "", FloorSet: floor != "",
-	}
-}
-
 type ModelRole string
 
 const (
@@ -300,37 +283,6 @@ func (p RunOptionsPatch) WithReviewEnabled(reviewEnabled bool) RunOptionsPatch {
 func (p RunOptionsPatch) WithSessionTimeout(sessionTimeout time.Duration) RunOptionsPatch {
 	p.SessionTimeout = &sessionTimeout
 	return p
-}
-
-// ParseAutoReworkEnv applies raw environment values to caller-supplied
-// defaults. Empty values leave the defaults unchanged; non-empty values are
-// trimmed before parsing.
-func ParseAutoReworkEnv(defaultEnabled bool, defaultMaxAttempts int, enabledValue, maxAttemptsValue string) (bool, int, error) {
-	enabled := defaultEnabled
-	maxAttempts := defaultMaxAttempts
-	if enabledValue != "" {
-		parsed, err := parseAutoReworkEnabled(enabledValue)
-		if err != nil {
-			return false, 0, fmt.Errorf("%s: %w", EnvAutoRework, err)
-		}
-		enabled = parsed
-	}
-	if maxAttemptsValue != "" {
-		parsed, err := parseMaxReworkAttempts(maxAttemptsValue)
-		if err != nil {
-			return false, 0, fmt.Errorf("%s: %w", EnvMaxReworkAttempts, err)
-		}
-		maxAttempts = parsed
-	}
-	return enabled, maxAttempts, nil
-}
-
-func parseAutoReworkEnabled(value string) (bool, error) {
-	parsed, err := strconv.ParseBool(strings.TrimSpace(value))
-	if err != nil {
-		return false, fmt.Errorf("must be a boolean (true/false, 1/0, or t/f)")
-	}
-	return parsed, nil
 }
 
 func parseMaxReworkAttempts(value string) (int, error) {

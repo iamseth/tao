@@ -21,52 +21,15 @@ type Policy struct {
 // ParseArms accepts either all weighted selectors or all bare selectors.
 // Prompt and permission facts are supplied by the caller before NewPolicy.
 func ParseArms(value string) ([]WeightedArm, error) {
-	parts := strings.Split(value, ",")
-	weighted := strings.Contains(parts[0], "=")
-	arms := make([]WeightedArm, 0, len(parts))
-	for _, part := range parts {
-		selector, weight, hasWeight := strings.Cut(strings.TrimSpace(part), "=")
-		if hasWeight != weighted {
-			return nil, fmt.Errorf("planner routing arms must be all weighted or all bare selectors")
-		}
-		selector = strings.TrimSpace(selector)
-		if selector == "" {
-			return nil, fmt.Errorf("planner routing arm selector is required")
-		}
-		kind, err := runtimeconfig.ParseAgentKind(selector)
-		if err != nil {
-			return nil, err
-		}
-		probability := 1 / float64(len(parts))
-		if weighted {
-			probability, err = strconv.ParseFloat(strings.TrimSpace(weight), 64)
-			if err != nil {
-				return nil, fmt.Errorf("planner routing arm %q probability: %w", selector, err)
-			}
-		}
-		arms = append(arms, WeightedArm{
-			Arm:         Arm{Runtime: kind, Provider: Inherited, Model: Inherited, ReasoningEffort: Inherited},
-			Probability: probability,
-		})
-	}
-	if err := validateArms(arms, true); err != nil {
+	configured, err := runtimeconfig.ParsePlannerRoutingArms(value)
+	if err != nil {
 		return nil, err
 	}
-	return arms, nil
+	return ArmsFromConfig(configured), nil
 }
 
 func ParseFloor(value string) (float64, error) {
-	if value == "" {
-		return 0.1, nil
-	}
-	floor, err := strconv.ParseFloat(value, 64)
-	if err != nil {
-		return 0, fmt.Errorf("planner routing floor: %w", err)
-	}
-	if err := validateFloor(floor); err != nil {
-		return 0, err
-	}
-	return floor, nil
+	return runtimeconfig.ParsePlannerRoutingFloor(value)
 }
 
 func (p Policy) Validate() error {

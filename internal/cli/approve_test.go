@@ -7,22 +7,24 @@ import (
 	"testing"
 	"time"
 
+	"github.com/iamseth/tao/internal/identity"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/plantest"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
 // blockedApproveRepo builds a plantest.Repository with a single blocked plan
 // that has slice sliceID gated by approval.
-func blockedApproveRepo(planID, sliceID, planStatus, sliceStatus string, approved bool) *plantest.Repository {
+func blockedApproveRepo(planID, sliceID, planStatus string) *plantest.Repository {
 	detail := plantest.NewPlanDetail(planID).
 		WithStatus(planStatus).
 		WithCurrentSlice(sliceID).
 		WithPendingSlices(sliceID).
 		WithRepoRoot("/repo").
 		AddSlice(plantest.NewSlice(sliceID).
-			WithStatus(sliceStatus).
+			WithStatus(plan.StatusBlocked).
 			WithVerificationCommands("go test ./internal/cli").
-			WithApproval(plantest.Approval(true, "human approval", approved)).
+			WithApproval(plantest.Approval(true, "human approval", false)).
 			Build()).
 		Build()
 	repo := plantest.NewRepository()
@@ -33,7 +35,7 @@ func blockedApproveRepo(planID, sliceID, planStatus, sliceStatus string, approve
 func TestApproveCommandApprovesCurrentGatedSlice(t *testing.T) {
 	const planID = "20260430-1200-run-plan"
 	const sliceID = "001-a"
-	repo := blockedApproveRepo(planID, sliceID, plan.StatusBlocked, plan.StatusBlocked, false)
+	repo := blockedApproveRepo(planID, sliceID, plan.StatusBlocked)
 
 	var out bytes.Buffer
 	app := App{Out: &out, Err: &out, Repository: func(_ string) Repository { return repo }}
@@ -84,10 +86,43 @@ func TestApproveCommandApprovesCurrentGatedSlice(t *testing.T) {
 	}
 }
 
+func TestApproveCommandSnapshotIdentity(t *testing.T) {
+	for _, explicit := range []string{"", " Explicit Approver "} {
+		t.Run("by="+explicit, func(t *testing.T) {
+			const planID, sliceID = "20260430-1200-run-plan", "002-identity-approval"
+			repo := blockedApproveRepo(planID, sliceID, plan.StatusBlocked)
+			var out bytes.Buffer
+			app := App{Out: &out, Err: &out, RuntimeEnv: snapshotWith(map[string]string{
+				runtimeconfig.EnvApprovedBy: " Captured Approver ",
+				runtimeconfig.EnvAgent:      "invalid", runtimeconfig.EnvPlannerRouting: "invalid",
+				runtimeconfig.EnvSessionTimeout: "invalid",
+			}), Repository: func(string) Repository { return repo }}
+			t.Setenv(runtimeconfig.EnvApprovedBy, "Changed Approver")
+			want := identity.Approver(" Captured Approver ")
+			args := []string{"approve", planID}
+			if explicit != "" {
+				args = append(args, "--by", explicit)
+				want = strings.TrimSpace(explicit)
+			}
+			if err := app.Run(context.Background(), args); err != nil {
+				t.Fatal(err)
+			}
+			updated, err := repo.GetPlan(context.Background(), planID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			slice := findSlice(updated, sliceID)
+			if slice == nil || slice.Approval == nil || slice.Approval.ApprovedBy == nil || *slice.Approval.ApprovedBy != want {
+				t.Fatalf("approval = %+v, want approver %q", slice, want)
+			}
+		})
+	}
+}
+
 func TestApproveCommandStampsInjectedClock(t *testing.T) {
 	const planID = "20260430-1200-run-plan"
 	const sliceID = "001-a"
-	repo := blockedApproveRepo(planID, sliceID, plan.StatusBlocked, plan.StatusBlocked, false)
+	repo := blockedApproveRepo(planID, sliceID, plan.StatusBlocked)
 
 	fixed := time.Date(2031, 2, 3, 4, 5, 6, 0, time.UTC)
 	var out bytes.Buffer
@@ -112,7 +147,7 @@ func TestApproveCommandStampsInjectedClock(t *testing.T) {
 func TestApproveCommandRejectsAbandonedPlanWithoutMutation(t *testing.T) {
 	const planID = "20260430-1200-abandoned"
 	const sliceID = "001-a"
-	repo := blockedApproveRepo(planID, sliceID, plan.StatusAbandoned, plan.StatusBlocked, false)
+	repo := blockedApproveRepo(planID, sliceID, plan.StatusAbandoned)
 	detail, err := repo.GetPlan(context.Background(), planID)
 	if err != nil {
 		t.Fatal(err)

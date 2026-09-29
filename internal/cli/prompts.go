@@ -33,7 +33,8 @@ var promptCommand = commandMetadata{
 	examples: "  tao prompt plan --arguments \"add queue metrics\"\n" +
 		"  tao prompt run --plan-dir /path/to/plan --execution-mode current\n" +
 		"  tao prompt commit --arguments \"include staged docs\"",
-	registerFlags: registerPromptFlags,
+	registerFlags:        registerPromptFlags,
+	registerRuntimeFlags: App.registerPromptFlags,
 	completion: completionContext{
 		flagValues: map[string]completionFlagValue{
 			"arguments":      {kind: completionValueText, label: "text"},
@@ -80,12 +81,10 @@ var doctorCommand = commandMetadata{
 	},
 }
 
-func registerPromptFlags(fs *flag.FlagSet) {
-	registerPromptFlagsWithDefaults(fs, runtimeFlagDefaults().RunOptionsPatch)
-}
+func registerPromptFlags(fs *flag.FlagSet) { (App{}).registerPromptFlags(fs) }
 
-func (d envDefaults) registerPromptFlags(fs *flag.FlagSet) {
-	registerPromptFlagsWithDefaults(fs, d.RunOptionsPatch)
+func (a App) registerPromptFlags(fs *flag.FlagSet) {
+	registerPromptFlagsWithDefaults(fs, a.flagDefaults().RunOptionsPatch)
 }
 
 func registerPromptFlagsWithDefaults(fs *flag.FlagSet, defaults runtimeconfig.RunOptionsPatch) {
@@ -108,11 +107,10 @@ func registerDoctorFlags(fs *flag.FlagSet) {
 }
 
 func (a App) prompt(ctx context.Context, repo plan.Resolver, args []string) error {
-	defaults, err := cliEnvDefaults()
-	if err != nil {
+	if _, err := a.envDefaultsFor(runtimeconfig.EnvCommitPolicy, runtimeconfig.EnvExecutionMode); err != nil {
 		return err
 	}
-	fs, positional, err := a.parseArgs("prompt", args, defaults.registerPromptFlags)
+	fs, positional, err := a.parseArgs("prompt", args, a.registerPromptFlags)
 	if err != nil {
 		return err
 	}
@@ -183,10 +181,6 @@ func (a App) requireTaoRepo(ctx context.Context) error {
 }
 
 func (a App) installPrompts(args []string) error {
-	defaults, err := cliEnvDefaults()
-	if err != nil {
-		return err
-	}
 	fs, positional, err := a.parseArgs("install-prompts", args, registerInstallPromptsFlags)
 	if err != nil {
 		return err
@@ -194,7 +188,7 @@ func (a App) installPrompts(args []string) error {
 	if err := requirePositionals(positional, 0, "usage: tao install-prompts [--force] [--check]"); err != nil {
 		return err
 	}
-	_ = defaults // Prompt management intentionally does not use the selected runtime.
+	// Prompt management discovers all installed agents, independent of runtime selection.
 	installed := agentpkg.Installed()
 	if len(installed) == 0 {
 		return writeln(a.Out, "no supported agents found in PATH; no prompts installed or checked")
@@ -224,7 +218,7 @@ func (a App) doctor(args []string) error {
 	if err := requirePositionals(positional, 0, "usage: tao doctor [--verbose|-v]"); err != nil {
 		return err
 	}
-	report, err := collectDoctorReport()
+	report, err := a.collectDoctorReport()
 	if err != nil {
 		return err
 	}
@@ -258,8 +252,8 @@ type doctorToolResult struct {
 	found  string
 }
 
-func collectDoctorReport() (doctorReport, error) {
-	defaults, err := cliEnvDefaults()
+func (a App) collectDoctorReport() (doctorReport, error) {
+	defaults, err := a.envDefaultsFor(runtimeconfig.EnvAgent)
 	if err != nil {
 		return doctorReport{}, err
 	}

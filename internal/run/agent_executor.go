@@ -31,6 +31,7 @@ type agentExecutor struct {
 }
 
 type agentExecutorOptions struct {
+	RuntimeEnv         *runtimeconfig.EnvSnapshot
 	Models             runtimeconfig.ModelSelection
 	Deps               agent.RuntimeDeps
 	CommitPolicy       CommitPolicy
@@ -52,6 +53,7 @@ func newAgentExecutor(descriptor agent.Descriptor, config ExecutionConfig, depen
 	return agentExecutor{
 		descriptor: descriptor,
 		options: agentExecutorOptions{
+			RuntimeEnv:         config.RuntimeEnv,
 			Models:             config.Models,
 			Deps:               agent.RuntimeDeps{ProcessStarter: dependencies.ProcessStarter},
 			CommitPolicy:       config.CommitPolicy,
@@ -73,6 +75,7 @@ func newAgentExecutor(descriptor agent.Descriptor, config ExecutionConfig, depen
 
 func (e agentExecutor) operationOptions() agentOperationOptions {
 	return agentOperationOptions{
+		RuntimeEnv:          e.options.RuntimeEnv,
 		Models:              e.options.Models,
 		CommitPolicy:        e.options.CommitPolicy,
 		ExecutionMode:       e.options.ExecutionMode,
@@ -108,6 +111,7 @@ func (e agentExecutor) RunAgentSession(ctx context.Context, request AgentSession
 
 func (e agentExecutor) sessionRunner() agentSessionRunner {
 	return newAgentSessionRunner(agentSessionRunnerConfig{
+		runtimeEnv:       e.options.RuntimeEnv,
 		descriptor:       e.descriptor,
 		deps:             e.options.Deps,
 		skipPermissions:  e.options.SkipPermissions,

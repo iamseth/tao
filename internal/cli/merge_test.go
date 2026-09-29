@@ -94,7 +94,8 @@ func TestMergeBatchTranscriptReceivesProviderRecords(t *testing.T) {
 			transcript := mergepkg.NewBatchTranscriptWriter(store, &out, nil)
 			defer func() { _ = transcript.Close() }()
 			calls := 0
-			config := newMergeBatchAgentConfig(App{Out: &out, ProcessStarter: mergeMetricsStarter(t, provider, "transcript", nil, &calls)}, "", nil, store, runtimeconfig.ModelSelection{}, transcript)
+			snapshot := runtimeconfig.RuntimeEnv()
+			config := newMergeBatchAgentConfig(App{RuntimeEnv: &snapshot, Out: &out, ProcessStarter: mergeMetricsStarter(t, provider, "transcript", nil, &calls)}, "", nil, store, runtimeconfig.ModelSelection{}, transcript)
 			session, err := mergepkg.NewBatchAgentSession(config)
 			if err != nil {
 				t.Fatal(err)
@@ -180,9 +181,13 @@ func TestNewSingleMergeAgentConfigWiresPlanTelemetryBestEffort(t *testing.T) {
 
 func TestNewMergeServiceRunnerWiresDeferredGuardedSinglePlanSessions(t *testing.T) {
 	t.Setenv("TAO_AGENT", "invalid-unused-provider")
+	t.Setenv("TAO_SESSION_TIMEOUT", "invalid-unused-timeout")
+	t.Setenv("TAO_DANGEROUSLY_SKIP_PERMISSIONS", "invalid-unused-permissions")
+	snapshot := runtimeconfig.RuntimeEnv()
 	detail := cliMergeDetail(t)
 	manager := &fakeWorkspaceManager{}
 	app := App{
+		RuntimeEnv:       &snapshot,
 		Out:              io.Discard,
 		WorkspaceManager: func(string) (WorkspaceManager, error) { return manager, nil },
 	}
@@ -324,6 +329,9 @@ func TestMergeCommandPublishesServicePhases(t *testing.T) {
 func TestMergeCommandApprovedPlanSuccess(t *testing.T) {
 	unsetEnvForTest(t, runtimeconfig.EnvMergeVerifyCommand)
 	t.Setenv("TAO_AGENT", "invalid-unused-provider")
+	t.Setenv(runtimeconfig.EnvSessionTimeout, "invalid-unused-timeout")
+	t.Setenv(runtimeconfig.EnvSkipPermissions, "invalid-unused-permissions")
+	t.Setenv(runtimeconfig.EnvAggregateReviewConvergenceWindow, "invalid-unused-convergence")
 	detail := cliMergeDetail(t)
 	manager := &fakeWorkspaceManager{
 		cleanPlan: workspace.CleanPlan{Branch: "tao/plan-a", Status: workspace.ManagedStatusClean, CanRemove: true, Reason: "workspace is clean"},

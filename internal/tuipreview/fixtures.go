@@ -13,13 +13,15 @@ import (
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runstatus"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/tui"
 )
 
 const (
-	ScenarioMixed  = "mixed"
-	ScenarioEmpty  = "empty"
-	ScenarioStress = "stress"
+	ScenarioMixed        = "mixed"
+	ScenarioEmpty        = "empty"
+	ScenarioStress       = "stress"
+	ScenarioMixedInvalid = "mixed-invalid"
 )
 
 var fixtureNow = time.Date(2026, 8, 21, 23, 0, 0, 0, time.UTC)
@@ -47,7 +49,7 @@ type Scenario struct {
 // Scenarios returns a fresh, stable catalog in display order. Callers may
 // modify returned values without changing a later catalog lookup.
 func Scenarios() []Scenario {
-	return []Scenario{mixedScenario(), emptyScenario(), stressScenario()}
+	return []Scenario{mixedScenario(), emptyScenario(), stressScenario(), mixedInvalidScenario()}
 }
 
 // Lookup finds a scenario by its stable name.
@@ -253,6 +255,38 @@ func stressPlanFixture(now time.Time) PlanFixture {
 	fixture.Detail.Slices.Slices[1].Context += " " + "日本語とemoji 🧭 remain visible in narrow frames."
 	fixture.Log += fixtureLog(now.Add(6*time.Second), logrecord.Record{Type: logrecord.TypeAssistant, Content: "long unicode line 日本語日本語日本語 🧭🧭🧭 ééé"})
 	return fixture
+}
+
+func mixedInvalidScenario() Scenario {
+	scenario := emptyScenario()
+	scenario.Name = ScenarioMixedInvalid
+	scenario.Description = "complete runtime diagnostics with rejected settings and presentation fallbacks"
+	values := map[string]string{
+		runtimeconfig.EnvAgent: "bad-provider", runtimeconfig.EnvUpdate: "bad-update",
+		runtimeconfig.EnvBudgetPlanCost: "bad-budget", runtimeconfig.EnvTheme: "bad-theme",
+		runtimeconfig.EnvRunHeader: "bad-header", runtimeconfig.EnvPullRequest: "bad-bool",
+	}
+	env := runtimeconfig.LoadEnv(func(key string) (string, bool) {
+		value, ok := values[key]
+		return value, ok
+	})
+	scenario.Settings.RuntimeDefaults = nil
+	if baseline := env.Defaults().PullRequest; baseline != nil {
+		scenario.Settings.InheritedPullRequest = *baseline
+	}
+	scenario.Settings.InheritedPullRequestInvalid = true
+	scenario.Settings.Repositories[0].PullRequest = new(true)
+	scenario.Debug.RuntimeDefaults = nil
+	scenario.Debug.SelectedAgent = ""
+	scenario.Debug.DoctorProblems = []tui.DebugProblem{{Category: "doctor", Name: "checks", Status: "failed", Detail: env.Require(runtimeconfig.EnvAgent).Error()}}
+	for _, row := range env.Status() {
+		scenario.Settings.RuntimeDefaults = append(scenario.Settings.RuntimeDefaults, tui.SettingsRuntimeDefault{Name: row.Name, Value: row.Value, Source: row.Source, Warning: row.Warning})
+		if row.Name == runtimeconfig.EnvPullRequest {
+			row.Value, row.Source = "true", "repository"
+		}
+		scenario.Debug.RuntimeDefaults = append(scenario.Debug.RuntimeDefaults, tui.DebugRuntimeDefault{Name: row.Name, Value: row.Value, Source: row.Source, Warning: row.Warning})
+	}
+	return scenario
 }
 
 func settingsFixture(now time.Time) tui.SettingsSnapshot {

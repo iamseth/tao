@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/iamseth/tao/internal/build"
-	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/taodata"
 	"github.com/iamseth/tao/internal/tui"
 )
@@ -37,21 +36,17 @@ func (c uiDebugCollector) Collect(ctx context.Context) (tui.DebugSnapshot, error
 		snapshot.DoctorProblems = append(snapshot.DoctorProblems, tui.DebugProblem{Category: "system", Name: "working directory", Status: "unavailable", Detail: err.Error()})
 	}
 
-	rows, err := runtimeconfig.RuntimeEnvStatus()
-	if err != nil {
-		snapshot.DoctorProblems = append(snapshot.DoctorProblems, tui.DebugProblem{Category: "runtime", Name: "defaults", Status: "invalid", Detail: err.Error()})
+	rows := c.app.envSnapshot().Status()
+	if repositoryDefaults, repoErr := c.app.currentRepositoryRunOptions(ctx); repoErr == nil {
+		rows = applyRepositoryRunDefaultsToStatus(rows, repositoryDefaults)
 	} else {
-		if repositoryDefaults, repoErr := c.app.currentRepositoryRunOptions(ctx); repoErr == nil {
-			rows = applyRepositoryRunDefaultsToStatus(rows, repositoryDefaults)
-		} else {
-			snapshot.DoctorProblems = append(snapshot.DoctorProblems, tui.DebugProblem{Category: "repository", Name: "run defaults", Status: "unavailable", Detail: repoErr.Error()})
-		}
-		for _, row := range rows {
-			snapshot.RuntimeDefaults = append(snapshot.RuntimeDefaults, tui.DebugRuntimeDefault{Name: row.Name, Value: row.Value, Source: row.Source, Warning: row.Warning})
-		}
+		snapshot.DoctorProblems = append(snapshot.DoctorProblems, tui.DebugProblem{Category: "repository", Name: "run defaults", Status: "unavailable", Detail: repoErr.Error()})
+	}
+	for _, row := range rows {
+		snapshot.RuntimeDefaults = append(snapshot.RuntimeDefaults, tui.DebugRuntimeDefault{Name: row.Name, Value: row.Value, Source: row.Source, Warning: row.Warning})
 	}
 
-	report, reportErr := collectDoctorReport()
+	report, reportErr := c.app.collectDoctorReport()
 	appendUIDoctorReport(&snapshot, report, reportErr)
 	return snapshot, nil
 }

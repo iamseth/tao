@@ -7,40 +7,6 @@ import (
 	"time"
 )
 
-func TestLoadPlannerRoutingEnv(t *testing.T) {
-	for _, tt := range []struct {
-		name string
-		env  map[string]string
-		want PlannerRoutingEnv
-	}{
-		{name: "unset"},
-		{name: "empty", env: map[string]string{EnvPlannerRouting: "", EnvPlannerRoutingArms: "", EnvPlannerRoutingFloor: ""}},
-		{name: "whitespace", env: map[string]string{EnvPlannerRouting: " \t", EnvPlannerRoutingArms: "\n", EnvPlannerRoutingFloor: " "}},
-		{
-			name: "trimmed",
-			env:  map[string]string{EnvPlannerRouting: " shadow ", EnvPlannerRoutingArms: " pi=0.5,claude=0.5\n", EnvPlannerRoutingFloor: " 0.1 "},
-			want: PlannerRoutingEnv{Mode: "shadow", Arms: "pi=0.5,claude=0.5", Floor: "0.1", ModeSet: true, ArmsSet: true, FloorSet: true},
-		},
-		{
-			name: "unvalidated",
-			env:  map[string]string{EnvPlannerRouting: " UNKNOWN ", EnvPlannerRoutingArms: "invalid", EnvPlannerRoutingFloor: "-1"},
-			want: PlannerRoutingEnv{Mode: "UNKNOWN", Arms: "invalid", Floor: "-1", ModeSet: true, ArmsSet: true, FloorSet: true},
-		},
-		{
-			name: "independent presence",
-			env:  map[string]string{EnvPlannerRoutingArms: "pi=1"},
-			want: PlannerRoutingEnv{Arms: "pi=1", ArmsSet: true},
-		},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			got := LoadPlannerRoutingEnv(func(key string) string { return tt.env[key] })
-			if got != tt.want {
-				t.Fatalf("LoadPlannerRoutingEnv() = %#v, want %#v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestParseModelName(t *testing.T) {
 	for _, value := range []string{"provider/model-v1:latest", "model*", "模型", " \tprovider/model-v1:latest\u2003"} {
 		got, err := ParseModelName(value)
@@ -95,10 +61,11 @@ func TestResolveRunOptionsModelPrecedence(t *testing.T) {
 	}
 	t.Setenv(EnvModel, " env-base ")
 	t.Setenv(EnvReviewModel, "env-review")
-	defaults, err := RuntimeEnvDefaults()
-	if err != nil {
+	snapshot := RuntimeEnv()
+	if err := snapshot.Require(EnvModel, EnvReviewModel); err != nil {
 		t.Fatal(err)
 	}
+	defaults := snapshot.Defaults()
 	repository := RunOptionsPatch{RunModel: " repo-run ", ReviewModel: "repo-review", MergeReviewModel: "repo-merge", ResolverModel: "repo-resolver"}
 	resolved, err := ResolveRunOptionsWithRepositoryDefaults(defaults.RunOptionsPatch, repository, RunOptionsPatch{})
 	if err != nil {

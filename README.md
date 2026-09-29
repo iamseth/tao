@@ -278,7 +278,17 @@ TAO_COMMIT_POLICY=slice|none
 TAO_EXECUTION_MODE=isolated|current
 ```
 
-Unknown `TAO_THEME` values fall back to `tokyonight` with a warning in `tao status`.
+Runtime-table settings are captured once per invocation. Boolean settings accept
+trimmed, case-insensitive `true/false`, `1/0`, `yes/no`, `on/off`, `t/f`, and `y/n`.
+For example, `TAO_RUN_HEADER=false` disables the TTY-only run header.
+
+Invalid settings are rejected by name only when an operation consumes them,
+including invalid advisory-budget overrides and hard caps; unused settings do
+not block unrelated commands. Invalid `TAO_THEME` and `TAO_RUN_HEADER` values
+instead warn and retain their defaults (`tokyonight` and enabled).
+Help, `tao status` (`--json` for automation), and the TUI Settings/Debug views
+remain available to diagnose invalid configuration, including `TAO_UPDATE`.
+Diagnostics retain every runtime-table setting, even when another is invalid.
 
 Pi is the built-in default agent, `slice` is the default commit policy, and
 `isolated` is the default execution mode. Historical `plan` commit-policy

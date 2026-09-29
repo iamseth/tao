@@ -245,6 +245,8 @@ func (a App) newMergeBatchRunner(ctx context.Context, repository mergepkg.BatchP
 		return nil, err
 	}
 	service := mergepkg.NewService(current.Root, runner)
+	snapshot := a.envSnapshot()
+	service.RuntimeEnv = &snapshot
 	service.Runner = runner
 	service.Logf = a.mergeLogf()
 	service.Progress = a.Out
@@ -256,10 +258,7 @@ func (a App) newMergeBatchRunner(ctx context.Context, repository mergepkg.BatchP
 	}
 	transcript := mergepkg.NewBatchTranscriptWriter(store, a.Out, a.Now)
 	agentConfig := newMergeBatchAgentConfig(a, current.Root, runner, store, models, transcript)
-	session, err := mergepkg.NewBatchAgentSession(agentConfig)
-	if err != nil {
-		return nil, fmt.Errorf("configure merge-batch agent: %w", err)
-	}
+	session := mergepkg.NewDeferredBatchAgentSession(agentConfig)
 	generator, err := mergepkg.NewMergeProposalGenerator(agentConfig)
 	if err != nil {
 		return nil, fmt.Errorf("configure exceptional merge-batch proposal generator: %w", err)
@@ -289,7 +288,10 @@ func newMergeBatchCoordinatorSeams(a App, store *mergepkg.BatchStore, service me
 }
 
 func (a App) mergeModels(ctx context.Context, model string) (runtimeconfig.ModelSelection, error) {
-	defaults, err := runtimeconfig.RuntimeModelEnvDefaults()
+	defaults, err := a.envDefaultsFor(
+		runtimeconfig.EnvModel, runtimeconfig.EnvRunModel, runtimeconfig.EnvReviewModel,
+		runtimeconfig.EnvMergeReviewModel, runtimeconfig.EnvResolverModel, runtimeconfig.EnvReworkEscalationModel,
+	)
 	if err != nil {
 		return runtimeconfig.ModelSelection{}, err
 	}
@@ -301,7 +303,12 @@ func (a App) mergeModels(ctx context.Context, model string) (runtimeconfig.Model
 	if model != "" {
 		overrides = overrides.WithModelForAllRoles(model)
 	}
-	resolved, err := runtimeconfig.ResolveRunOptionsWithRepositoryDefaults(defaults, repository, overrides)
+	modelDefaults := runtimeconfig.RunOptionsPatch{
+		Model: defaults.Model, RunModel: defaults.RunModel, ReviewModel: defaults.ReviewModel,
+		MergeReviewModel: defaults.MergeReviewModel, ResolverModel: defaults.ResolverModel,
+		ReworkEscalationModel: defaults.ReworkEscalationModel,
+	}
+	resolved, err := runtimeconfig.ResolveRunOptionsWithRepositoryDefaults(modelDefaults, repository, overrides)
 	return resolved.Models, err
 }
 
@@ -316,7 +323,9 @@ func (r closingMergeBatchRunner) Run(ctx context.Context, options mergeBatchOpti
 }
 
 func newMergeBatchAgentConfig(a App, controlRoot string, runner commandrunner.Runner, store *mergepkg.BatchStore, models runtimeconfig.ModelSelection, log io.Writer) mergepkg.BatchAgentSessionConfig {
+	snapshot := a.envSnapshot()
 	return mergepkg.BatchAgentSessionConfig{
+		RuntimeEnv:     &snapshot,
 		Models:         models,
 		ProcessStarter: a.ProcessStarter, Log: log, FramedLog: true, ControlRoot: controlRoot, CommandRunner: runner,
 		EventAppender: store, Now: a.Now,
@@ -531,6 +540,8 @@ func (a App) newMergeServiceRunner(ctx context.Context, detail *plan.PlanDetail,
 	}
 	agentSession := mergepkg.NewFreshSingleMergeAgentSession(agentConfig)
 	svc := mergepkg.NewService(repoRoot, runner)
+	snapshot := a.envSnapshot()
+	svc.RuntimeEnv = &snapshot
 	git := svc.Git
 	svc.Runner = runner
 	svc.Cleaner = manager
@@ -544,7 +555,9 @@ func (a App) newMergeServiceRunner(ctx context.Context, detail *plan.PlanDetail,
 }
 
 func newSingleMergeAgentConfig(a App, detail *plan.PlanDetail, controlRoot string, runner commandrunner.Runner, appender plan.EventAppender, models runtimeconfig.ModelSelection) mergepkg.SingleMergeAgentSessionConfig {
+	snapshot := a.envSnapshot()
 	return mergepkg.SingleMergeAgentSessionConfig{
+		RuntimeEnv:     &snapshot,
 		Models:         models,
 		ProcessStarter: a.ProcessStarter, Log: a.Out, ControlRoot: controlRoot, CommandRunner: runner, Now: a.Now,
 		Observe: func(request mergepkg.BatchAgentSessionRequest, result mergepkg.BatchAgentSessionResult, sessionErr error) {

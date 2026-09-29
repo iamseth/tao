@@ -70,6 +70,19 @@ func (a App) rework(ctx context.Context, repo planRunRepository, args []string) 
 	if err := validateReworkFlagCombination(fs, fromPR, force, runAfter, dryRun, authorScope); err != nil {
 		return err
 	}
+	if runAfter {
+		// Reject the handoff's consumed settings before reopening durable state.
+		defaults, err := a.runEnvDefaults()
+		if err != nil {
+			return err
+		}
+		if _, err := a.resolveRunAutoReworkPolicy(fs, defaults.ReviewEnabledValue()); err != nil {
+			return err
+		}
+		if err := a.requireRunHandoffBudgets(); err != nil {
+			return err
+		}
+	}
 
 	detail, err := repo.ResolvePlan(ctx, input)
 	if err != nil {
@@ -170,7 +183,10 @@ var classifyReworkPRThreads = func(ctx context.Context, app App, repoRoot string
 }
 
 func newReworkTriageTextGenerator(app App, observe func(agentsession.Result, error)) (agentsession.TextGenerator, error) {
-	defaults, err := cliEnvDefaults()
+	defaults, err := app.envDefaultsFor(
+		runtimeconfig.EnvAgent, runtimeconfig.EnvSessionTimeout, runtimeconfig.EnvSkipPermissions,
+		runtimeconfig.EnvModel,
+	)
 	if err != nil {
 		return agentsession.TextGenerator{}, err
 	}

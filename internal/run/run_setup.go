@@ -71,6 +71,11 @@ func (s Service) prepareRunExecution(ctx context.Context, detail *plan.PlanDetai
 		}
 		return execution, nil
 	}
+	if !complete {
+		if err := config.requireSliceBudgets(); err != nil {
+			return execution, err
+		}
+	}
 	boundary, err := (ExecutionBoundaryController{}).InspectSelected(ctx, ExecutionBoundaryDurableFacts{
 		Detail: detail, ContinueBlocked: execution.Config.Continue, RestartBlocked: execution.Config.RestartBlocked,
 	}, execution)

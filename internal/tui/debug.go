@@ -98,29 +98,32 @@ func renderDebugPage(model Model) []string {
 		sourceWidth := cells.Width("SOURCE")
 		for _, anomaly := range anomalies {
 			nameWidth = max(nameWidth, cells.Width(anomaly.row.Name))
-			repositoryWidth = max(repositoryWidth, cells.Width(anomaly.row.Value))
+			repositoryWidth = max(repositoryWidth, cells.Width(runtimeDisplayValue(anomaly.row.Value, anomaly.row.Source)))
 			globalWidth = max(globalWidth, cells.Width(anomaly.globalValue))
 			sourceWidth = max(sourceWidth, cells.Width(anomaly.row.Source))
 		}
 		columns := []column{
-			{name: "NAME", width: nameWidth},
-			{name: "REPOSITORY", width: repositoryWidth},
-			{name: "GLOBAL", width: globalWidth},
-			{name: "SOURCE", width: sourceWidth},
+			{name: "NAME", width: nameWidth, required: true, priority: 30},
+			{name: "REPOSITORY", width: repositoryWidth, required: true, priority: 40},
+			{name: "GLOBAL", width: globalWidth, priority: 20},
+			{name: "SOURCE", width: sourceWidth, priority: 10},
 		}
 		sectionWidth := dashboardSectionWidth(model, PageDebug, "RUNTIME ANOMALIES", columnsWidth(columns))
+		columns = fitColumns(columns, max(sectionWidth-2, 1))
 		lines = append(lines, "", dashboardSectionRuleColumns(model.Palette(), theme.RoleDebugSection, "RUNTIME ANOMALIES", columns, sectionWidth))
 		for _, anomaly := range anomalies {
-			cells := []string{
-				singleLineDetail(anomaly.row.Name),
-				singleLineDetail(anomaly.row.Value),
-				singleLineDetail(anomaly.globalValue),
-				singleLineDetail(anomaly.row.Source),
+			values := map[string]string{
+				"NAME":       singleLineDetail(anomaly.row.Name),
+				"REPOSITORY": runtimeDisplayValue(anomaly.row.Value, anomaly.row.Source),
+				"GLOBAL":     singleLineDetail(anomaly.globalValue),
+				"SOURCE":     singleLineDetail(anomaly.row.Source),
+			}
+			var cells []string
+			for _, column := range columns {
+				cells = append(cells, values[column.name])
 			}
 			lines = append(lines, "  "+joinRow(columns, cells, columnsWidth(columns)))
-			if anomaly.row.Warning != "" {
-				lines = append(lines, "    warning: "+singleLineDetail(anomaly.row.Warning))
-			}
+			lines = append(lines, runtimeDiagnosticLines(model.Palette(), sectionWidth, runtimeDiagnosticText(anomaly.row.Source, anomaly.row.Warning))...)
 		}
 	}
 
@@ -148,12 +151,12 @@ func debugRuntimeAnomalies(rows []DebugRuntimeDefault, globalRows []SettingsRunt
 	var anomalies []debugRuntimeAnomaly
 	for _, row := range rows {
 		global, found := globalByName[row.Name]
-		if found && row.Value == global.Value && row.Warning == "" {
+		if found && row.Value == global.Value && row.Warning == "" && row.Source != "invalid" && global.Source != "invalid" {
 			continue
 		}
 		globalValue := "(missing)"
 		if found {
-			globalValue = global.Value
+			globalValue = runtimeDisplayValue(global.Value, global.Source)
 		}
 		anomalies = append(anomalies, debugRuntimeAnomaly{row: row, globalValue: globalValue})
 	}

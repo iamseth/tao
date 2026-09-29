@@ -31,6 +31,26 @@ func TestParseMode(t *testing.T) {
 	}
 }
 
+func TestArmsFromConfig(t *testing.T) {
+	configured := []runtimeconfig.PlannerRoutingArm{{Runtime: runtimeconfig.AgentClaude, Probability: 0.75}, {Runtime: runtimeconfig.AgentPi, Probability: 0.25}}
+	got := ArmsFromConfig(configured)
+	want := []WeightedArm{
+		{Arm: Arm{Runtime: runtimeconfig.AgentClaude, Provider: Inherited, Model: Inherited, ReasoningEffort: Inherited}, Probability: 0.75},
+		{Arm: Arm{Runtime: runtimeconfig.AgentPi, Provider: Inherited, Model: Inherited, ReasoningEffort: Inherited}, Probability: 0.25},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("conversion = %+v, want %+v", got, want)
+	}
+	got[0].Probability = 1
+	got[0].Arm.PromptVersion = "caller-owned"
+	if configured[0].Probability != 0.75 || !reflect.DeepEqual(ArmsFromConfig(configured), want) {
+		t.Fatal("conversion mutated configured arms")
+	}
+	if len(ArmsFromConfig(nil)) != 0 {
+		t.Fatal("empty configuration gained arms")
+	}
+}
+
 func TestArmKey(t *testing.T) {
 	arm := testArm()
 	want := "pi|inherited|inherited|inherited|prompt-v1|default"

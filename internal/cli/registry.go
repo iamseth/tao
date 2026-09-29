@@ -88,12 +88,25 @@ type commandMetadata struct {
 	examples              string
 	subcommands           []commandSubcommand
 	registerFlags         func(*flag.FlagSet)
-	completion            completionContext
+	// registerRuntimeFlags binds invocation defaults without changing the static
+	// registration used by completion generation.
+	registerRuntimeFlags func(App, *flag.FlagSet)
+	completion           completionContext
 	// repository declares which plan repository, if any, the command needs. The
 	// dispatcher resolves it once and hands the result to execute via
 	// commandContext, so handlers no longer rebuild it from plansDir.
 	repository repositoryKind
 	execute    commandExecutor
+}
+
+// bindRuntimeFlags returns invocation-owned metadata; the registry stays static.
+func (a App) bindRuntimeFlags(metadata *commandMetadata) *commandMetadata {
+	if metadata == nil || metadata.registerRuntimeFlags == nil {
+		return metadata
+	}
+	bound := *metadata
+	bound.registerFlags = func(fs *flag.FlagSet) { metadata.registerRuntimeFlags(a, fs) }
+	return &bound
 }
 
 // repositoryKind selects how the dispatcher resolves a command's plan

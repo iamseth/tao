@@ -40,7 +40,7 @@ func (a App) parseArgsFor(metadata *commandMetadata, args []string) (*flag.FlagS
 	var register func(*flag.FlagSet)
 	if metadata != nil {
 		name = metadata.name
-		register = metadata.registerFlags
+		register = a.bindRuntimeFlags(metadata).registerFlags
 	}
 	return a.parseArgs(name, args, register)
 }

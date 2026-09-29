@@ -25,6 +25,45 @@ type verifyRunnerCall struct {
 	args []string
 }
 
+func mergeSnapshotWith(values map[string]string) *runtimeconfig.EnvSnapshot {
+	snapshot := runtimeconfig.LoadEnv(func(key string) (string, bool) {
+		value, set := values[key]
+		return value, set
+	})
+	return &snapshot
+}
+
+func TestMergeVerificationSnapshotPrecedenceAndStability(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name    string
+		values  map[string]string
+		options Options
+		want    string
+	}{
+		{name: "unset autodetects", want: "make verify"},
+		{name: "empty disables", values: map[string]string{runtimeconfig.EnvMergeVerifyCommand: ""}},
+		{name: "captured command", values: map[string]string{runtimeconfig.EnvMergeVerifyCommand: "captured"}, want: "captured"},
+		{name: "explicit override", values: map[string]string{runtimeconfig.EnvMergeVerifyCommand: "captured"}, options: Options{VerifyCommand: "explicit"}, want: "explicit"},
+		{name: "no verify", values: map[string]string{runtimeconfig.EnvMergeVerifyCommand: "captured"}, options: Options{NoVerify: true, VerifyCommand: "explicit"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			service := Service{RuntimeEnv: mergeSnapshotWith(tt.values)}
+			t.Setenv(runtimeconfig.EnvMergeVerifyCommand, "later ambient command")
+			if got := service.resolveMergeVerifyCommandAtRoot(root, tt.options).command; got != tt.want {
+				t.Fatalf("command = %q, want %q", got, tt.want)
+			}
+		})
+	}
+	t.Setenv(runtimeconfig.EnvMergeVerifyCommand, "ignored ambient command")
+	if got := (Service{}).resolveMergeVerifyCommandAtRoot(root, Options{}).command; got != "make verify" {
+		t.Fatalf("nil snapshot read ambient command: %q", got)
+	}
+}
+
 func TestMergeVerifyProgress(t *testing.T) {
 	t.Parallel()
 	failure := errors.New("command failed")
@@ -214,7 +253,7 @@ func TestMergeVerifyUsesExplicitIntegrationRoot(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@true\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	resolution := resolveMergeVerifyCommandAtRoot(root, Options{})
+	resolution := (Service{}).resolveMergeVerifyCommandAtRoot(root, Options{})
 	if resolution.command != "make verify" || resolution.repoRoot != root {
 		t.Fatalf("unexpected resolution: %#v", resolution)
 	}
@@ -430,7 +469,8 @@ func TestMergeIntentionalVerifySkipsEmitEventsWithoutLogging(t *testing.T) {
 			events := &fakeEventAppender{}
 
 			err := (Service{
-				Git: git, Runner: runner, Cleaner: successfulCleanup(), Events: events,
+				RuntimeEnv: mergeTestRuntimeEnv(),
+				Git:        git, Runner: runner, Cleaner: successfulCleanup(), Events: events,
 				Logf: func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) },
 			}).Merge(context.Background(), mergeVerifyDetail(), tt.options)
 			if err != nil {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/iamseth/tao/internal/herdr"
 	"github.com/iamseth/tao/internal/note"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/taodata"
 )
 
@@ -45,6 +46,13 @@ func TestUINotePlanningCommand(t *testing.T) {
 			t.Setenv("HERDR", "1")
 			t.Setenv("HERDR_PANE_ID", "private")
 			app, registered, item := planningFixture(t)
+			app.RuntimeEnv = snapshotWith(map[string]string{
+				runtimeconfig.EnvAgent:          kind,
+				runtimeconfig.EnvSessionTimeout: "invalid",
+				runtimeconfig.EnvModel:          "invalid model",
+				runtimeconfig.EnvPlannerRouting: "invalid",
+			})
+			t.Setenv("TAO_AGENT", "invalid-after-capture")
 			before := planningFiles(t, app.registry().(*fakeNoteRegistry).dir)
 			launcher := newUINotePlanningLauncher(app, app.In, app.Out)
 			calls := 0
@@ -122,7 +130,7 @@ func TestUINotePlanningRejectsIneligibleSelection(t *testing.T) {
 			defer cancel()
 			switch damage {
 			case "agent":
-				t.Setenv("TAO_AGENT", "unknown")
+				app.RuntimeEnv = snapshotWith(map[string]string{runtimeconfig.EnvAgent: "unknown"})
 			case "missing-repo":
 				registry.repos = nil
 			case "repo-prefix":
@@ -178,6 +186,8 @@ func TestUINotePlanningRejectsIneligibleSelection(t *testing.T) {
 			launcher.run = func(*exec.Cmd) error { t.Fatal("ineligible selection started a process"); return nil }
 			if err := launcher.Launch(ctx, item); err == nil {
 				t.Fatal("expected rejection")
+			} else if damage == "agent" && !strings.Contains(err.Error(), runtimeconfig.EnvAgent) {
+				t.Fatalf("missing consumed-key diagnostic: %v", err)
 			}
 			if after := planningFiles(t, registry.dir); !reflect.DeepEqual(before, after) {
 				t.Fatal("rejection wrote metadata")

@@ -18,8 +18,10 @@ type SettingsSnapshot struct {
 	RuntimeDefaults      []SettingsRuntimeDefault
 	Repositories         []RepositorySetting
 	InheritedPullRequest bool
-	DisplayHome          string
-	CollectionError      string
+	// Invalid baselines are diagnostic placeholders, not accepted defaults.
+	InheritedPullRequestInvalid bool
+	DisplayHome                 string
+	CollectionError             string
 }
 
 // SettingsRuntimeDefault is one environment/built-in runtime baseline.
@@ -176,14 +178,14 @@ func renderSettingsOverrides(model Model) ([]string, tableViewportSection) {
 		}
 		overrides = append(overrides, settingsOverride{
 			name:       singleLineDetail(row.Name),
-			value:      singleLineDetail(row.Value),
+			value:      runtimeDisplayValue(row.Value, row.Source),
 			source:     "← " + rowlabel.DisplayValue(singleLineDetail(row.Source)),
 			sourceRole: theme.RoleNeutral2,
-			warning:    row.Warning,
+			warning:    runtimeDiagnosticText(row.Source, row.Warning),
 		})
 	}
 	for _, repository := range model.SettingsSnapshot.Repositories {
-		if repository.PullRequest == nil || *repository.PullRequest == model.SettingsSnapshot.InheritedPullRequest {
+		if repository.PullRequest == nil || (!model.SettingsSnapshot.InheritedPullRequestInvalid && *repository.PullRequest == model.SettingsSnapshot.InheritedPullRequest) {
 			continue
 		}
 		name := rowlabel.DisplayValue(singleLineDetail(repository.Name))
@@ -233,9 +235,9 @@ func renderSettingsOverrides(model Model) ([]string, tableViewportSection) {
 			}
 		}
 		lines = append(lines, "  "+joinRow(columns, cells, columnsWidth(columns)))
-		if row.warning != "" {
+		for _, line := range runtimeDiagnosticLines(model.Palette(), sectionWidth, row.warning) {
 			section.contentLines = append(section.contentLines, len(lines))
-			lines = append(lines, "    "+model.Palette().Paint(theme.RoleWarn, "warning: "+singleLineDetail(row.warning)))
+			lines = append(lines, line)
 		}
 	}
 	return lines, section
@@ -355,9 +357,11 @@ func renderSettingsBudgets(model Model) ([]string, tableViewportSection) {
 			row   SettingsRuntimeDefault
 			ok    bool
 		}{{"slice", sliceRow, sliceOK}, {"plan", planRow, planOK}} {
-			if warning.ok && warning.row.Warning != "" {
-				section.contentLines = append(section.contentLines, len(lines))
-				lines = append(lines, "    "+model.Palette().Paint(theme.RoleWarn, warning.scope+" warning: "+singleLineDetail(warning.row.Warning)))
+			if diagnostic := runtimeDiagnosticText(warning.row.Source, warning.row.Warning); warning.ok && diagnostic != "" {
+				for _, line := range runtimeDiagnosticLines(model.Palette(), sectionWidth, warning.scope+" "+diagnostic) {
+					section.contentLines = append(section.contentLines, len(lines))
+					lines = append(lines, line)
+				}
 			}
 		}
 	}
@@ -365,7 +369,7 @@ func renderSettingsBudgets(model Model) ([]string, tableViewportSection) {
 }
 
 func settingsBudgetValue(row SettingsRuntimeDefault, cost bool) string {
-	value := rowlabel.DisplayValue(singleLineDetail(row.Value))
+	value := rowlabel.DisplayValue(runtimeDisplayValue(row.Value, row.Source))
 	if value == "-" || cost {
 		return value
 	}
@@ -382,6 +386,33 @@ func settingsBudgetValue(row SettingsRuntimeDefault, cost bool) string {
 		digits = digits[:index] + " " + digits[index:]
 	}
 	return sign + digits
+}
+
+// Runtime diagnostics are presentation only: rejected rows carry built-in
+// placeholders, while warning-only rows carry usable presentation fallbacks.
+func runtimeDisplayValue(value, source string) string {
+	if source == "invalid" {
+		return "(rejected)"
+	}
+	return singleLineDetail(value)
+}
+
+func runtimeDiagnosticText(source, warning string) string {
+	if source == "invalid" {
+		return "rejected on consumption: " + singleLineDetail(warning)
+	}
+	if warning != "" {
+		return "warning: " + singleLineDetail(warning)
+	}
+	return ""
+}
+
+func runtimeDiagnosticLines(palette theme.Palette, width int, diagnostic string) []string {
+	var lines []string
+	for _, line := range wrapDetailWords(singleLineDetail(diagnostic), max(width-4, 1)) {
+		lines = append(lines, "    "+palette.Paint(theme.RoleWarn, line))
+	}
+	return lines
 }
 
 func settingsRightAlignedValue(palette theme.Palette, value string, width int) string {

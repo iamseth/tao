@@ -2,13 +2,11 @@ package cli
 
 import (
 	"context"
-	"os"
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
 	reworkpkg "github.com/iamseth/tao/internal/rework"
 	"github.com/iamseth/tao/internal/run"
-	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
 func newReworkDriver(repo planRunRepository, now func() time.Time, escalation reworkpkg.EscalationPolicy) reworkpkg.Driver {
@@ -30,13 +28,4 @@ func automaticReworkPhaseHook(maxAttempts int, enabled bool) reworkpkg.DecisionC
 		run.ReportPhase(ctx, run.PhaseAutomaticRework, nil)
 		return maxAttempts, true, nil
 	}
-}
-
-func runReworkEnvDefaults() (bool, int, error) {
-	return runtimeconfig.ParseAutoReworkEnv(
-		true,
-		runtimeconfig.DefaultMaxReworkAttempts,
-		os.Getenv(runtimeconfig.EnvAutoRework),
-		os.Getenv(runtimeconfig.EnvMaxReworkAttempts),
-	)
 }

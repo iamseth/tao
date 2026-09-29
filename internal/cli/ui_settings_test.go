@@ -25,7 +25,8 @@ func TestUISettingsServiceCollectsAndUpdatesRepositoryDefaults(t *testing.T) {
 	}
 	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
 	app := App{
-		Now: func() time.Time { return now },
+		RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvPullRequest: "true"}),
+		Now:        func() time.Time { return now },
 		RepoHealthCheck: func(context.Context, taodata.Repo) taodata.RepoHealth {
 			return taodata.RepoHealth{Status: taodata.RepoHealthOK, Message: "ok"}
 		},
@@ -54,6 +55,35 @@ func TestUISettingsServiceCollectsAndUpdatesRepositoryDefaults(t *testing.T) {
 	}
 	if _, ok := stored.PullRequestDefault(); ok || stored.UpdatedAt != now.Format(time.RFC3339) {
 		t.Fatalf("stored unset repository = %+v", stored)
+	}
+}
+
+func TestUISettingsDiagnosticBaselineDoesNotChangeRepositorySettings(t *testing.T) {
+	clearTaoEnv(t)
+	t.Setenv(runtimeconfig.EnvPullRequest, "true")
+	for _, value := range []string{" YES ", "off", "invalid", ""} {
+		t.Run(value, func(t *testing.T) {
+			registry := taodata.Registry{DataHome: t.TempDir()}
+			repository := taodata.Repo{Schema: taodata.RepoSchema, ID: "repo-a", Root: "/alpha", UpdatedAt: "old", RunDefaults: &taodata.RepoRunDefaults{PullRequest: new(false)}}
+			if err := registry.WriteRepo(repository); err != nil {
+				t.Fatal(err)
+			}
+			app := App{RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvPullRequest: value, runtimeconfig.EnvUpdate: "invalid"}), RepoHealthCheck: func(context.Context, taodata.Repo) taodata.RepoHealth { return taodata.RepoHealth{Status: "ok"} }}
+			service := uiSettingsService{app: app, registry: registry}
+			for range 2 {
+				snapshot, err := service.Collect(context.Background())
+				if err != nil || snapshot.CollectionError != "" || snapshot.InheritedPullRequest != (value == " YES ") || snapshot.InheritedPullRequestInvalid != (value == "invalid") {
+					t.Fatalf("incorrect typed diagnostic baseline: %+v, %v", snapshot, err)
+				}
+			}
+			stored, err := registry.ReadRepo(repository.ID)
+			if err != nil || stored.UpdatedAt != "old" {
+				t.Fatalf("diagnostics mutated stored repository: %+v, %v", stored, err)
+			}
+			if pr, set := stored.PullRequestDefault(); !set || pr {
+				t.Fatalf("diagnostics changed explicit false: %+v", stored)
+			}
+		})
 	}
 }
 

@@ -1,0 +1,633 @@
+package cli
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/run"
+	"github.com/iamseth/tao/internal/runtimeconfig"
+	"github.com/iamseth/tao/internal/selfupdate"
+	"github.com/iamseth/tao/internal/taodata"
+	"github.com/iamseth/tao/internal/term"
+	"github.com/iamseth/tao/internal/theme"
+)
+
+func TestDiagnosticCollectorsShareSnapshotAcrossRefreshes(t *testing.T) {
+	clearTaoEnv(t)
+	t.Setenv("PATH", "")
+	values := map[string]string{
+		runtimeconfig.EnvAgent: "invalid", runtimeconfig.EnvUpdate: "invalid",
+		runtimeconfig.EnvBudgetSliceCost: "invalid", runtimeconfig.EnvTheme: "invalid",
+		runtimeconfig.EnvRunHeader: "invalid", runtimeconfig.EnvPullRequest: " YES ",
+		runtimeconfig.EnvModel: "bad model",
+	}
+	lookups := map[string]int{}
+	snapshot := runtimeconfig.LoadEnv(func(key string) (string, bool) {
+		lookups[key]++
+		value, ok := values[key]
+		return value, ok
+	})
+	before := snapshot.Status()
+	registered := taodata.Repo{ID: "repo-a", RunDefaults: &taodata.RepoRunDefaults{PullRequest: new(false), Models: &taodata.RepoModelDefaults{Model: "repo-model"}}}
+	registry := &fakeNoteRegistry{current: registered, repos: []taodata.Repo{registered}}
+	app := App{RuntimeEnv: &snapshot, Registry: func() NoteRegistry { return registry }, RepoHealthCheck: func(context.Context, taodata.Repo) taodata.RepoHealth { return taodata.RepoHealth{Status: "ok"} }}
+	settings := newUISettingsService(app)
+	debug := newUIDebugCollector(app, "tao")
+	for range 3 {
+		s, err := settings.Collect(context.Background())
+		if err != nil || s.CollectionError != "" || !s.InheritedPullRequest {
+			t.Fatalf("settings lost typed baseline: %+v, %v", s, err)
+		}
+		d, err := debug.Collect(context.Background())
+		if err != nil || len(s.RuntimeDefaults) != len(before) || len(d.RuntimeDefaults) != len(before) {
+			t.Fatalf("incomplete diagnostics: settings=%d debug=%d error=%v", len(s.RuntimeDefaults), len(d.RuntimeDefaults), err)
+		}
+		for i, row := range before {
+			if s.RuntimeDefaults[i].Name != row.Name || s.RuntimeDefaults[i].Value != row.Value || s.RuntimeDefaults[i].Source != row.Source || s.RuntimeDefaults[i].Warning != row.Warning || d.RuntimeDefaults[i].Name != row.Name || d.RuntimeDefaults[i].Warning != row.Warning {
+				t.Fatalf("lost captured diagnostic for %s: %+v, %+v", row.Name, s.RuntimeDefaults[i], d.RuntimeDefaults[i])
+			}
+			if row.Name == runtimeconfig.EnvModel && (d.RuntimeDefaults[i].Value != "repo-model" || d.RuntimeDefaults[i].Source != "repository") {
+				t.Fatalf("lost repository precedence: %+v", d.RuntimeDefaults[i])
+			}
+		}
+		// Neither ambient changes nor mutation of a returned projection may leak.
+		s.RuntimeDefaults[0].Value = "mutated"
+		d.RuntimeDefaults[0].Warning = "mutated"
+		t.Setenv(runtimeconfig.EnvPullRequest, "false")
+		t.Setenv(runtimeconfig.EnvUpdate, "invalid later value")
+	}
+	if !reflect.DeepEqual(snapshot.Status(), before) || !reflect.DeepEqual(registry.current, registered) || !reflect.DeepEqual(registry.repos, []taodata.Repo{registered}) {
+		t.Fatal("diagnostics mutated snapshot or repository defaults")
+	}
+	for key, count := range lookups {
+		if count != 1 {
+			t.Errorf("%s looked up %d times", key, count)
+		}
+	}
+}
+
+func TestMergeModelsAndConstructorsUseInvocationSnapshot(t *testing.T) {
+	snapshot := snapshotWith(map[string]string{
+		runtimeconfig.EnvModel: "captured-base", runtimeconfig.EnvMergeReviewModel: "captured-review",
+		runtimeconfig.EnvResolverModel: "captured-resolver", runtimeconfig.EnvAgent: "invalid-unused",
+		runtimeconfig.EnvMergeVerifyCommand: "captured-gate",
+	})
+	registry := &fakeNoteRegistry{current: taodata.Repo{RunDefaults: &taodata.RepoRunDefaults{Models: &taodata.RepoModelDefaults{ResolverModel: "repo-resolver"}}}}
+	app := App{RuntimeEnv: snapshot, Registry: func() NoteRegistry { return registry }}
+	t.Setenv(runtimeconfig.EnvModel, "invalid later model")
+	t.Setenv(runtimeconfig.EnvMergeVerifyCommand, "later-gate")
+	for _, override := range []string{"", "explicit"} {
+		models, err := app.mergeModels(context.Background(), override)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantBase, wantReview, wantResolver := "captured-base", "captured-review", "repo-resolver"
+		if override != "" {
+			wantBase, wantReview, wantResolver = override, override, override
+		}
+		if models.Base != wantBase || models.For(runtimeconfig.ModelRoleMergeReview) != wantReview || models.For(runtimeconfig.ModelRoleResolver) != wantResolver {
+			t.Fatalf("models = %#v", models)
+		}
+		batch := newMergeBatchAgentConfig(app, "", nil, nil, models, nil)
+		single := newSingleMergeAgentConfig(app, nil, "", nil, nil, models)
+		for _, captured := range []*runtimeconfig.EnvSnapshot{batch.RuntimeEnv, single.RuntimeEnv} {
+			if captured == nil || captured.Defaults().MergeVerifyCommand != "captured-gate" || captured.Require(runtimeconfig.EnvAgent) == nil {
+				t.Fatalf("constructor lost captured values or deferred failures: %#v", captured)
+			}
+		}
+	}
+	app.RuntimeEnv = nil
+	if models, err := app.mergeModels(context.Background(), ""); err != nil || models.Base != "" {
+		t.Fatalf("direct app read ambient models: %#v, %v", models, err)
+	}
+	app.RuntimeEnv = snapshotWith(map[string]string{runtimeconfig.EnvModel: "invalid model"})
+	if _, err := app.mergeModels(context.Background(), "explicit"); err == nil || !strings.Contains(err.Error(), runtimeconfig.EnvModel) {
+		t.Fatalf("model validation boundary changed: %v", err)
+	}
+}
+
+// Changing the process environment during startup must not change flags later
+// in dispatch, but a second independent Run on the same App must see it.
+func TestInvocationSnapshotFreezesDefaultsUntilNextRun(t *testing.T) {
+	clearTaoEnv(t)
+	t.Setenv(runtimeconfig.EnvExecutionMode, "current")
+	var out bytes.Buffer
+	updater := &snapshotMutatingUpdater{mutate: func() {
+		t.Setenv(runtimeconfig.EnvExecutionMode, "isolated")
+	}}
+	app := App{Out: &out, Err: io.Discard, SelfUpdater: updater}
+	for _, want := range []string{"current", "isolated"} {
+		out.Reset()
+		if err := app.Run(context.Background(), []string{"run", "--help"}); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out.String(), "execution mode: isolated or current (default "+want+")") {
+			t.Fatalf("want captured %s default: %s", want, out.String())
+		}
+	}
+}
+
+type snapshotMutatingUpdater struct {
+	fakeSelfUpdater
+	mutate func()
+}
+
+func (u *snapshotMutatingUpdater) Startup(ctx context.Context, mode selfupdate.Mode) selfupdate.StartupOutcome {
+	u.mutate()
+	return u.fakeSelfUpdater.Startup(ctx, mode)
+}
+
+func TestSnapshotHelpRetainsValidDefaultsBesideInvalidFields(t *testing.T) {
+	clearTaoEnv(t)
+	t.Setenv(runtimeconfig.EnvExecutionMode, "current")
+	t.Setenv(runtimeconfig.EnvPullRequest, "yes")
+	t.Setenv(runtimeconfig.EnvCommitPolicy, "invalid")
+	t.Setenv(runtimeconfig.EnvAutoRework, "off")
+	t.Setenv(runtimeconfig.EnvMaxReworkAttempts, "invalid")
+	t.Setenv(runtimeconfig.EnvRunHeader, "false")
+	for _, command := range []string{"run", "prompt", "note"} {
+		t.Run(command, func(t *testing.T) {
+			var out bytes.Buffer
+			if err := (App{Out: &out, Err: io.Discard}).Run(context.Background(), []string{command, "--help"}); err != nil {
+				t.Fatal(err)
+			}
+			wants := []string{"execution mode: isolated or current (default current)", "commit policy: slice or none (default slice)"}
+			if command != "prompt" {
+				wants = append(wants, "pull request after a completed full run (default true)")
+			}
+			if command == "run" {
+				wants = append(wants, "disable the pinned run header (default true)", "automatically rework plans with requested changes (default false)")
+			}
+			for _, want := range wants {
+				if !strings.Contains(out.String(), want) {
+					t.Errorf("missing %q: %s", want, out.String())
+				}
+			}
+		})
+	}
+}
+
+func TestInjectedSnapshotIsSharedWithoutReloading(t *testing.T) {
+	clearTaoEnv(t)
+	values := map[string]string{
+		runtimeconfig.EnvExecutionMode: "current",
+		runtimeconfig.EnvTheme:         "gruvbox",
+		runtimeconfig.EnvUpdate:        "auto",
+	}
+	lookups := map[string]int{}
+	snapshot := runtimeconfig.LoadEnv(func(key string) (string, bool) {
+		lookups[key]++
+		value, ok := values[key]
+		return value, ok
+	})
+	t.Setenv(runtimeconfig.EnvExecutionMode, "isolated")
+	t.Setenv(runtimeconfig.EnvTheme, "invalid")
+	t.Setenv(runtimeconfig.EnvUpdate, "invalid")
+	var out bytes.Buffer
+	updater := &fakeSelfUpdater{}
+	app := App{Out: &out, Err: io.Discard, RuntimeEnv: &snapshot, SelfUpdater: updater}
+	for _, command := range []string{"run", "prompt", "note"} {
+		out.Reset()
+		if err := app.Run(context.Background(), []string{command, "--help"}); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out.String(), "execution mode: isolated or current (default current)") {
+			t.Fatalf("injected defaults lost: %s", out.String())
+		}
+	}
+	if !reflect.DeepEqual(updater.startupModes, []selfupdate.Mode{selfupdate.ModeAuto, selfupdate.ModeAuto, selfupdate.ModeAuto}) {
+		t.Fatalf("injected update modes lost: %v", updater.startupModes)
+	}
+	selected, _ := theme.Lookup("gruvbox")
+	if got := app.withRuntimeTheme().outputTheme(); !reflect.DeepEqual(got, selected) {
+		t.Fatal("theme did not use injected snapshot")
+	}
+	explicit := theme.Default()
+	app.Theme = &explicit
+	if app.withRuntimeTheme().Theme != &explicit {
+		t.Fatal("explicit theme injection replaced")
+	}
+	for _, row := range snapshot.Status() {
+		if lookups[row.Name] != 1 {
+			t.Errorf("lookups[%s] = %d, want one", row.Name, lookups[row.Name])
+		}
+	}
+	// Binding help must not mutate metadata shared with completion/other Runs.
+	out.Reset()
+	if err := renderCommandHelp(&out, commandByName("run")); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "execution mode: isolated or current (default isolated)") {
+		t.Fatal("invocation mutated static command metadata")
+	}
+}
+
+func TestInvocationLookupCountsAcrossHelpExecutionAndDiagnostics(t *testing.T) {
+	clearTaoEnv(t)
+	for _, args := range [][]string{{"run", "--help"}, {"prompt", "plan"}, {"status", "--json"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			var prior *runtimeconfig.EnvSnapshot
+			for _, model := range []string{"first-model", "second-model"} {
+				counts := map[string]int{}
+				snapshot := runtimeconfig.LoadEnv(func(key string) (string, bool) {
+					counts[key]++
+					return model, key == runtimeconfig.EnvModel
+				})
+				app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: &snapshot,
+					SelfUpdater: &fakeSelfUpdater{},
+					Repository:  func(string) Repository { return fakeRepository{} },
+					Registry:    func() NoteRegistry { return &fakeNoteRegistry{} },
+				}
+				// Ambient mutation cannot trigger hidden reloads in any path.
+				t.Setenv(runtimeconfig.EnvModel, "invalid later model")
+				if err := app.Run(context.Background(), args); err != nil {
+					t.Fatal(err)
+				}
+				if snapshot.Defaults().Model != model || (prior != nil && prior.Defaults().Model != "first-model") {
+					t.Fatal("independent invocation snapshots shared state")
+				}
+				if len(counts) != len(runtimeconfig.RuntimeEnvKeys()) {
+					t.Fatalf("incomplete lookup table: %v", counts)
+				}
+				for _, key := range runtimeconfig.RuntimeEnvKeys() {
+					if counts[key] != 1 {
+						t.Errorf("%s looked up %d times", key, counts[key])
+					}
+				}
+				prior = &snapshot
+			}
+		})
+	}
+}
+
+func TestLowerLevelSnapshotDefaultsAndConsumption(t *testing.T) {
+	clearTaoEnv(t)
+	t.Setenv(runtimeconfig.EnvExecutionMode, "current")
+	t.Setenv(runtimeconfig.EnvTheme, "gruvbox")
+	t.Setenv(runtimeconfig.EnvUpdate, "invalid")
+	app := App{}
+	if !reflect.DeepEqual(app.flagDefaults(), runtimeconfig.LoadEnv(nil).Defaults()) {
+		t.Fatal("lower-level defaults loaded process environment")
+	}
+	if err := app.envSnapshot().Require(runtimeconfig.EnvUpdate); err != nil {
+		t.Fatalf("lower-level snapshot loaded process environment: %v", err)
+	}
+	snapshot := runtimeconfig.RuntimeEnv()
+	app.RuntimeEnv = &snapshot
+	if _, err := app.envDefaultsFor(runtimeconfig.EnvExecutionMode); err != nil {
+		t.Fatalf("unused invalid setting rejected: %v", err)
+	}
+	if _, err := app.envDefaultsFor(runtimeconfig.EnvUpdate); err == nil || !strings.Contains(err.Error(), runtimeconfig.EnvUpdate) {
+		t.Fatalf("consumed invalid setting admitted: %v", err)
+	}
+	updater := &fakeSelfUpdater{}
+	app.SelfUpdater = updater
+	if err := app.runStartupUpdate(context.Background()); err == nil || !strings.Contains(err.Error(), runtimeconfig.EnvUpdate) {
+		t.Fatalf("invalid mode admitted to startup: %v", err)
+	}
+	if len(updater.startupModes) != 0 {
+		t.Fatal("updater received rejected mode")
+	}
+}
+
+func TestPresentationDiagnosticsDoNotRejectExecutionDefaults(t *testing.T) {
+	snapshot := runtimeconfig.LoadEnv(func(key string) (string, bool) {
+		return "invalid", key == runtimeconfig.EnvTheme || key == runtimeconfig.EnvRunHeader
+	})
+	app := App{RuntimeEnv: &snapshot}
+	defaults, err := app.envDefaultsFor(runtimeconfig.EnvTheme, runtimeconfig.EnvRunHeader)
+	if err != nil || !defaults.RunHeader || !reflect.DeepEqual(defaults.Theme, theme.Default()) {
+		t.Fatalf("presentation failures did not retain built-ins: %+v, %v", defaults, err)
+	}
+	for _, row := range snapshot.Status() {
+		if (row.Name == runtimeconfig.EnvTheme || row.Name == runtimeconfig.EnvRunHeader) && (row.Warning == "" || row.Source != "default") {
+			t.Errorf("lost presentation warning: %+v", row)
+		}
+	}
+}
+
+func snapshotWith(values map[string]string) *runtimeconfig.EnvSnapshot {
+	snapshot := runtimeconfig.LoadEnv(func(key string) (string, bool) {
+		value, ok := values[key]
+		return value, ok
+	})
+	return &snapshot
+}
+
+func TestOperationSnapshotAdmission(t *testing.T) {
+	clearTaoEnv(t)
+	for _, command := range []string{"run", "review", "triage", "prompt"} {
+		t.Run(command, func(t *testing.T) {
+			key := runtimeconfig.EnvSessionTimeout
+			if command == "prompt" {
+				key = runtimeconfig.EnvExecutionMode
+			}
+			app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{key: "invalid"})}
+			var err error
+			switch command {
+			case "run":
+				err = app.run(context.Background(), fakeRepository{}, []string{"--reverify", "plan-a"})
+			case "review":
+				err = app.runPlanReview(context.Background(), fakeRepository{}, "plan-a", runtimeconfig.RunOptionsPatch{})
+			case "triage":
+				_, err = newReworkTriageTextGenerator(app, nil)
+			case "prompt":
+				err = app.prompt(context.Background(), nil, []string{"plan", "--execution-mode=current"})
+			}
+			if err == nil || !strings.Contains(err.Error(), key) {
+				t.Fatalf("consumed snapshot %s not rejected: %v", key, err)
+			}
+		})
+	}
+}
+
+func TestPromptAndTriageIgnoreUnrelatedEnvironment(t *testing.T) {
+	clearTaoEnv(t)
+	for _, key := range []string{runtimeconfig.EnvUpdate, runtimeconfig.EnvAutoRework, runtimeconfig.EnvMergeReviewModel, runtimeconfig.EnvAggregateReviewConvergenceWindow, runtimeconfig.EnvPlannerRoutingArms, runtimeconfig.EnvMaxSliceCost} {
+		t.Run(key, func(t *testing.T) {
+			t.Setenv(key, "invalid value")
+			app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{key: "invalid value"})}
+			if err := app.prompt(context.Background(), nil, []string{"plan"}); err != nil {
+				t.Fatalf("prompt rejected unused setting: %v", err)
+			}
+			if _, err := newReworkTriageTextGenerator(app, nil); err != nil {
+				t.Fatalf("triage rejected unused setting: %v", err)
+			}
+		})
+	}
+}
+
+func TestAppRunRejectsConsumedSettingsBeforeExecution(t *testing.T) {
+	clearTaoEnv(t)
+	for _, args := range [][]string{{"run"}, {"run", "--continue"}, {"run", "--restart"}, {"run", "--repair-verification"}, {"run", "--reverify"}, {"review", "--run"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+			before := readText(t, filepath.Join(fixture.dir, "state.json"))
+			slicesBefore := readText(t, filepath.Join(fixture.dir, "slices.json"))
+			app := App{
+				Out: io.Discard, Err: io.Discard,
+				RuntimeEnv:     snapshotWith(map[string]string{runtimeconfig.EnvSessionTimeout: "invalid"}),
+				Repository:     func(string) Repository { return plan.NewFileRepository(fixture.root) },
+				ProcessStarter: fakeCLIProcessStarter(t, "", func(string) { t.Fatal("provider called after rejected admission") }),
+			}
+			err := app.Run(context.Background(), append(args, fixture.id))
+			if err == nil || !strings.Contains(err.Error(), runtimeconfig.EnvSessionTimeout) {
+				t.Fatalf("consumed setting not rejected: %v", err)
+			}
+			if readText(t, filepath.Join(fixture.dir, "state.json")) != before || readText(t, filepath.Join(fixture.dir, "slices.json")) != slicesBefore {
+				t.Fatal("failed admission mutated the plan")
+			}
+		})
+	}
+}
+
+func TestRunIgnoresSettingsOwnedByOtherConsumers(t *testing.T) {
+	clearTaoEnv(t)
+	for _, key := range []string{runtimeconfig.EnvUpdate, runtimeconfig.EnvPlannerRoutingArms, runtimeconfig.EnvAggregateReviewConvergenceWindow, runtimeconfig.EnvMergeReviewModel, runtimeconfig.EnvMaxSliceCost} {
+		t.Run(key, func(t *testing.T) {
+			fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+			calls := 0
+			old := executeSinglePlan
+			executeSinglePlan = func(_ run.Service, _ context.Context, request run.Request) error {
+				calls++
+				if request.ReviewEnabled || request.PullRequest || request.MaxSlices != 0 || request.SessionTimeout != 0 {
+					t.Fatalf("explicit false/zero lost: %+v", request)
+				}
+				return nil
+			}
+			t.Cleanup(func() { executeSinglePlan = old })
+			app := App{Out: io.Discard, Err: io.Discard, Registry: func() NoteRegistry { return &fakeNoteRegistry{} }, RuntimeEnv: snapshotWith(map[string]string{
+				key: "invalid value", runtimeconfig.EnvPullRequest: "yes", runtimeconfig.EnvSessionTimeout: "0",
+			})}
+			// Direct admission excludes startup update and lower-level budget policy.
+			err := app.run(context.Background(), plan.NewFileRepository(fixture.root), []string{"--no-review", "--pull-request=false", "--max-slices=0", fixture.id})
+			if err != nil || calls != 1 {
+				t.Fatalf("unused %s rejected: calls=%d, err=%v", key, calls, err)
+			}
+		})
+	}
+}
+
+func TestBudgetRenderConsumersUseCapturedValuesAndIgnoreUnusedSettings(t *testing.T) {
+	clearTaoEnv(t)
+	snapshot := snapshotWith(map[string]string{
+		runtimeconfig.EnvBudgetSliceOutputTokens: "7", runtimeconfig.EnvBudgetPlanCost: "0",
+		runtimeconfig.EnvAgent: "invalid", runtimeconfig.EnvPlannerRoutingArms: "invalid",
+		runtimeconfig.EnvAggregateReviewConvergenceWindow: "invalid", runtimeconfig.EnvMaxSliceCost: "invalid",
+	})
+	t.Setenv(runtimeconfig.EnvBudgetSliceOutputTokens, "99999")
+	t.Setenv(runtimeconfig.EnvBudgetPlanCost, "99999")
+	detail := validatePlanDetail(t.TempDir(), []string{"go version"}, nil)
+	detail.Events = []plan.Event{{Type: plan.EventTypeAgentMetrics, SliceID: "001-a", Metrics: &plan.AgentMetrics{OutputTokens: 8, Cost: 1}}}
+	repo := fakeRepository{details: map[string]*plan.PlanDetail{"example": detail}}
+	for _, command := range []string{"show", "validate"} {
+		t.Run(command, func(t *testing.T) {
+			var out bytes.Buffer
+			app := App{Out: &out, Err: io.Discard, RuntimeEnv: snapshot}
+			var err error
+			if command == "show" {
+				err = app.show(context.Background(), repo, []string{"example"})
+			} else {
+				err = app.validate(context.Background(), repo, []string{"example"})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{"observed 8 > threshold 7", "observed 1 > threshold 0"} {
+				if !strings.Contains(out.String(), want) {
+					t.Fatalf("missing %q: %s", want, out.String())
+				}
+			}
+		})
+	}
+	app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvBudgetSliceCost: "invalid"})}
+	if err := app.show(context.Background(), repo, []string{"--json", "example"}); err != nil {
+		t.Fatalf("JSON show consumed unused budgets: %v", err)
+	}
+}
+
+func TestBudgetConsumersRejectInvalidThresholds(t *testing.T) {
+	clearTaoEnv(t)
+	for _, command := range []string{"show", "validate", "run", "review"} {
+		t.Run(command, func(t *testing.T) {
+			fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+			app := App{Out: io.Discard, Err: io.Discard,
+				RuntimeEnv:     snapshotWith(map[string]string{runtimeconfig.EnvBudgetPlanCost: "invalid"}),
+				Repository:     func(string) Repository { return plan.NewFileRepository(fixture.root) },
+				Registry:       func() NoteRegistry { return &fakeNoteRegistry{} },
+				ProcessStarter: fakeCLIProcessStarter(t, "", func(string) { t.Error("provider called after rejected budget") }),
+				CommandRunner:  func(context.Context, string, string, []string, io.Writer, io.Writer) error { return context.Canceled },
+			}
+			args := []string{command, fixture.id}
+			if command == "review" {
+				args = []string{command, "--run", fixture.id}
+			}
+			err := app.Run(context.Background(), args)
+			if err == nil || !strings.Contains(err.Error(), runtimeconfig.EnvBudgetPlanCost) {
+				t.Fatalf("consumed threshold not rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestRunReworkRestartRejectsInvalidHardCapsBeforeReopening(t *testing.T) {
+	for _, key := range []string{runtimeconfig.EnvMaxSliceCost, runtimeconfig.EnvMaxSliceOutputTokens} {
+		t.Run(key, func(t *testing.T) {
+			clearTaoEnv(t)
+			now := time.Date(2026, 9, 28, 23, 0, 0, 0, time.UTC)
+			const planID = "20260928-2300-invalid-restart-cap"
+			detail, _ := autoReworkTestDetail(planID, now)
+			detail.Dir = t.TempDir()
+			detail.Slices.Slices = append(detail.Slices.Slices, plan.Slice{ID: "r101-fix", Status: plan.StatusCompleted})
+			detail.State.Plan.CompletedSlices = append(detail.State.Plan.CompletedSlices, "r101-fix")
+			detail.Events = []plan.Event{
+				{Type: plan.EventTypeReworkRound, PlanID: planID, Round: 1, Attempts: 1},
+				{Type: plan.EventTypeReworkStopped, PlanID: planID, Round: 1, Attempts: 1, Reason: "automatic rework cap exhausted after 1 cycles"},
+			}
+			before, err := json.Marshal(detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			repo := newRecordingAutoReworkRepository(planID, detail)
+			providerCalls := 0
+			app := App{
+				Out: io.Discard, Err: io.Discard, Now: func() time.Time { return now },
+				RuntimeEnv: snapshotWith(map[string]string{key: "invalid"}),
+				Registry:   func() NoteRegistry { return &fakeNoteRegistry{} },
+				ProcessStarter: fakeCLIProcessStarter(t, "", func(string) {
+					providerCalls++
+				}),
+			}
+			// The captured error must win even if the live environment is repaired.
+			t.Setenv(key, "0")
+			err = app.run(context.Background(), repo, []string{"--rework-restart", planID})
+			if err == nil || !strings.Contains(err.Error(), key) {
+				t.Fatalf("invalid hard cap not rejected: %v", err)
+			}
+			after, err := json.Marshal(detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(before, after) {
+				t.Errorf("rejected restart changed state, slices, or historical events (including attempts):\nbefore: %s\nafter: %s", before, after)
+			}
+			for _, event := range repo.events {
+				if event.Type == plan.EventTypePlanReopened || event.Type == plan.EventTypeReworkRound || event.Type == plan.EventTypeReworkStopped {
+					t.Errorf("rejected restart appended rework evidence: %+v", event)
+				}
+			}
+			if providerCalls != 0 {
+				t.Errorf("provider calls = %d, want 0", providerCalls)
+			}
+		})
+	}
+}
+
+func TestRunNonSlicePathsIgnoreInvalidHardCaps(t *testing.T) {
+	for _, key := range []string{runtimeconfig.EnvMaxSliceCost, runtimeconfig.EnvMaxSliceOutputTokens} {
+		for _, args := range [][]string{nil, {"--reverify", "--rework-restart"}, {"--no-review", "--rework-restart"}, {"--max-rework-attempts=0", "--rework-restart"}} {
+			t.Run(key+"/"+strings.Join(args, " "), func(t *testing.T) {
+				clearTaoEnv(t)
+				const planID = "20260928-2300-unused-cap"
+				detail, _ := autoReworkTestDetail(planID, time.Now())
+				detail.Dir = t.TempDir()
+				detail.State.Status = plan.StatusReviewed
+				detail.State.Plan.Review = reworkReview(plan.ReviewVerdictApprove, nil)
+				repo := newRecordingAutoReworkRepository(planID, detail)
+				calls := 0
+				old := executeSinglePlan
+				executeSinglePlan = func(run.Service, context.Context, run.Request) error {
+					calls++
+					return nil
+				}
+				t.Cleanup(func() { executeSinglePlan = old })
+				app := App{Out: io.Discard, Err: io.Discard,
+					RuntimeEnv: snapshotWith(map[string]string{key: "invalid"}),
+					Registry:   func() NoteRegistry { return &fakeNoteRegistry{} },
+				}
+				if err := app.run(context.Background(), repo, append(args, planID)); err != nil || calls != 1 {
+					t.Fatalf("unused hard cap rejected: calls=%d, error=%v", calls, err)
+				}
+			})
+		}
+	}
+}
+
+func TestPromptManagementConsumesOnlySelectedAgent(t *testing.T) {
+	clearTaoEnv(t)
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv(runtimeconfig.EnvAgent, "invalid")
+	app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{
+		runtimeconfig.EnvAgent: "claude", runtimeconfig.EnvSessionTimeout: "invalid",
+	})}
+	report, err := app.collectDoctorReport()
+	if err != nil || report.selectedAgent != runtimeconfig.AgentClaude {
+		t.Fatalf("doctor did not use captured agent independently of session settings: %+v, %v", report, err)
+	}
+	app.RuntimeEnv = snapshotWith(map[string]string{runtimeconfig.EnvAgent: "invalid"})
+	if _, err := app.collectDoctorReport(); err == nil || !strings.Contains(err.Error(), runtimeconfig.EnvAgent) {
+		t.Fatalf("doctor admitted invalid selected agent: %v", err)
+	}
+	if err := app.installPrompts([]string{"--check"}); err != nil {
+		t.Fatalf("all-agent prompt discovery consumed selected runtime: %v", err)
+	}
+}
+
+func TestAutoReworkUsesTypedSnapshotNotRegisteredDisplayDefaults(t *testing.T) {
+	app := App{Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{
+		runtimeconfig.EnvAutoRework: "off", runtimeconfig.EnvMaxReworkAttempts: "0",
+	})}
+	fs, _, err := app.parseArgs("run", nil, registerRunFlags)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := app.resolveRunAutoReworkPolicy(fs, true)
+	if err != nil || policy.Enabled || policy.MaxAttempts != 0 {
+		t.Fatalf("typed snapshot lost: %+v, %v", policy, err)
+	}
+}
+
+func TestInvalidUpdateAllowsDiagnosticEntryWithoutUpdater(t *testing.T) {
+	for _, args := range [][]string{{"help"}, {"--help"}, {"run", "--help"}, {"status", "--json"}, {"ui"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			clearTaoEnv(t)
+			t.Setenv(runtimeconfig.EnvUpdate, "invalid")
+			t.Setenv("TAO_DATA_HOME", t.TempDir())
+			var out testTerminalBuffer
+			updater := &fakeSelfUpdater{}
+			registry := taodata.NewRegistry(t.TempDir())
+			repositoryCalls := 0
+			app := App{
+				In: strings.NewReader("q"), Out: &out, Err: io.Discard,
+				SelfUpdater: updater,
+				Repository: func(string) Repository {
+					repositoryCalls++
+					return fakeRepository{}
+				},
+				Registry: func() NoteRegistry { return registry },
+				MonitorTicker: func(time.Duration) MonitorTicker {
+					return &monitorTickerStub{ch: make(chan time.Time), stopped: make(chan struct{})}
+				},
+				UITerminal: &uiTerminalStub{size: term.Size{Width: 160, Height: 60}},
+			}
+			err := app.Run(context.Background(), args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if args[0] == "status" && (repositoryCalls != 1 || !strings.Contains(out.String(), `"source": "invalid"`)) {
+				t.Fatalf("status did not collect invalid update diagnostic: repositories=%d, output=%s", repositoryCalls, out.String())
+			}
+			if len(updater.startupModes) != 0 || updater.calls != 0 {
+				t.Fatalf("rejected update mode reached updater: %+v", updater)
+			}
+		})
+	}
+}

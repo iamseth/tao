@@ -18,6 +18,7 @@ import (
 )
 
 type agentOperationOptions struct {
+	RuntimeEnv          *runtimeconfig.EnvSnapshot
 	Models              runtimeconfig.ModelSelection
 	CommitPolicy        CommitPolicy
 	ExecutionMode       ExecutionMode
@@ -69,6 +70,7 @@ func (o agentOperationOptions) commandRunner() CommandRunner { return o.CommandR
 // enforcement; internal/agentsession owns the single provider call and
 // descriptor-driven warning classification.
 type agentSessionRunnerConfig struct {
+	runtimeEnv       *runtimeconfig.EnvSnapshot
 	descriptor       agent.Descriptor
 	deps             agent.RuntimeDeps
 	skipPermissions  bool
@@ -91,6 +93,7 @@ func (e *budgetExceededError) Error() string {
 }
 
 type agentSessionRunner struct {
+	runtimeEnv       runtimeconfig.EnvSnapshot
 	session          agentsession.Runner
 	agentLabel       string
 	logAppender      plan.LogAppender
@@ -101,6 +104,7 @@ type agentSessionRunner struct {
 
 func newAgentSessionRunner(config agentSessionRunnerConfig) agentSessionRunner {
 	return agentSessionRunner{
+		runtimeEnv: runtimeEnv(config.runtimeEnv),
 		session: agentsession.New(agentsession.Config{
 			Descriptor:      config.descriptor,
 			Deps:            config.deps,
@@ -119,6 +123,12 @@ func newAgentSessionRunner(config agentSessionRunnerConfig) agentSessionRunner {
 func (r agentSessionRunner) clock() func() time.Time { return r.nowFn }
 
 func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSessionRequest) (AgentSessionResult, error) {
+	if request.Metrics != nil && request.Metrics.EnforceSliceCaps && request.Metrics.SliceID != "" &&
+		(request.Metrics.Role == plan.AgentRoleExecution || request.Metrics.Role == plan.AgentRoleRework) {
+		if _, err := r.runtimeEnv.BudgetCaps(); err != nil {
+			return AgentSessionResult{}, err
+		}
+	}
 	sessionLog, err := openAgentSessionLog(r.logAppender, request.PlanDir, r.sessionLogWriter, request.LogAction, now(r), r.clock())
 	if err != nil {
 		return AgentSessionResult{}, err
@@ -193,9 +203,9 @@ func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSe
 }
 
 func (r agentSessionRunner) enforceSliceBudgetCaps(ctx context.Context, planDir, planID, sliceID string, log io.Writer) error {
-	caps, warnings := runtimeconfig.RuntimeSliceBudgetCaps()
-	for _, warning := range warnings {
-		writeAgentLogDiagnostic(log, "tao telemetry warning: "+warning)
+	caps, err := r.runtimeEnv.BudgetCaps()
+	if err != nil {
+		return err
 	}
 	if caps.OutputTokens == nil && caps.Cost == nil {
 		return nil

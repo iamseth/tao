@@ -15,7 +15,6 @@ import (
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runstatus"
-	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/view"
 )
 
@@ -57,6 +56,11 @@ func executeDetailWithExecution(ctx context.Context, detail *plan.PlanDetail, re
 
 func (e *detailExecutor) execute(ctx context.Context, detail *plan.PlanDetail) error {
 	for {
+		if !plan.AnalyzeRunCapabilities(detail).Complete {
+			if err := e.execution.Config.requireSliceBudgets(); err != nil {
+				return err
+			}
+		}
 		if err := e.continueBlocked(ctx, detail); err != nil {
 			return err
 		}
@@ -185,6 +189,9 @@ type SelectedSliceRunner struct {
 }
 
 func (r SelectedSliceRunner) Run(ctx context.Context, detail *plan.PlanDetail, derived plan.DerivedPlan) (*plan.PlanDetail, error) {
+	if err := r.execution.Config.requireSliceBudgets(); err != nil {
+		return nil, err
+	}
 	slice := derived.NextSlice
 	action, err := r.selectedBoundaryAction(slice.ID)
 	if err != nil {
@@ -479,7 +486,10 @@ func planOwnedFiles(ctx context.Context, execution runExecution, detail *plan.Pl
 }
 
 func (r SelectedSliceRunner) renderRunPacket(ctx context.Context, detail *plan.PlanDetail, workingRoot string, resuming bool, resumeAttempt int) (string, error) {
-	budgetThresholds := runtimeconfig.RuntimeAgentBudgetThresholds()
+	budgetThresholds, err := runtimeEnv(r.execution.Config.RuntimeEnv).BudgetThresholds()
+	if err != nil {
+		return "", err
+	}
 	return plan.RenderRunPacket(detail, plan.RunPacketOptions{
 		CommitPolicy:     r.execution.Config.CommitPolicy.String(),
 		ExecutionMode:    r.execution.Config.ExecutionMode.String(),
@@ -566,13 +576,17 @@ func (r SelectedSliceRunner) recordRunCompleted() {
 }
 
 func (r SelectedSliceRunner) validateSelectedSlice(detail *plan.PlanDetail, sliceID string, executionRoot string) (plan.VerificationValidationResult, error) {
+	thresholds, err := runtimeEnv(r.execution.Config.RuntimeEnv).BudgetThresholds()
+	if err != nil {
+		return plan.VerificationValidationResult{}, err
+	}
 	validation := plan.ValidateSelectedSliceVerificationAtRoot(detail, executionRoot)
 	if len(validation.Findings) > 0 {
 		if err := view.RenderVerificationFindings(r.out, validation.Findings); err != nil {
 			return validation, err
 		}
 	}
-	if err := view.RenderAgentBudgetWarnings(r.out, plan.AgentBudgetWarnings(detail, runtimeconfig.RuntimeAgentBudgetThresholds())); err != nil {
+	if err := view.RenderAgentBudgetWarnings(r.out, plan.AgentBudgetWarnings(detail, thresholds)); err != nil {
 		return validation, err
 	}
 	if validation.HasErrors() {

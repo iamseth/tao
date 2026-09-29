@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"os"
 
 	"github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/runtimeconfig"
@@ -13,25 +12,49 @@ type envDefaults struct {
 	runtimeconfig.EnvDefaults
 }
 
-func runHeaderEnvDefault() bool {
-	return os.Getenv(runtimeconfig.EnvRunHeader) != "0"
-}
-
-func cliEnvDefaults() (envDefaults, error) {
-	defaults, err := runtimeconfig.RuntimeEnvDefaults()
-	return envDefaults{EnvDefaults: defaults}, err
-}
-
-// runtimeFlagDefaults resolves environment-aware defaults for flag
-// registration so command help reflects the same defaults execution applies
-// under TAO_* overrides. Invalid env values fall back to the built-in defaults;
-// the command path re-resolves them and surfaces the error before running.
-func runtimeFlagDefaults() runtimeconfig.EnvDefaults {
-	defaults, err := runtimeconfig.RuntimeEnvDefaults()
-	if err != nil {
-		return runtimeconfig.EnvDefaults{RunOptionsPatch: runtimeconfig.DefaultRunOptionsPatch()}
+// envSnapshot never loads process state below the invocation boundary.
+func (a App) envSnapshot() runtimeconfig.EnvSnapshot {
+	if a.RuntimeEnv != nil {
+		return *a.RuntimeEnv
 	}
-	return defaults
+	return runtimeconfig.LoadEnv(nil)
+}
+
+func (a App) envDefaultsFor(keys ...string) (envDefaults, error) {
+	snapshot := a.envSnapshot()
+	if err := snapshot.Require(keys...); err != nil {
+		return envDefaults{}, err
+	}
+	return envDefaults{EnvDefaults: snapshot.Defaults()}, nil
+}
+
+// flagDefaults is a display/registration projection, not execution admission.
+// Valid fields remain visible even when unrelated fields have diagnostics.
+func (a App) flagDefaults() runtimeconfig.EnvDefaults {
+	return a.envSnapshot().Defaults()
+}
+
+// runEnvDefaults admits the shared run/note-run request, not independent
+// routing, update, merge, or budget policy. Those have their own consumers.
+func (a App) runEnvDefaults() (envDefaults, error) {
+	return a.envDefaultsFor(
+		runtimeconfig.EnvCommitPolicy, runtimeconfig.EnvExecutionMode,
+		runtimeconfig.EnvAgent, runtimeconfig.EnvPullRequest, runtimeconfig.EnvReview,
+		runtimeconfig.EnvSessionTimeout, runtimeconfig.EnvSkipPermissions,
+		runtimeconfig.EnvModel, runtimeconfig.EnvRunModel, runtimeconfig.EnvReviewModel,
+		runtimeconfig.EnvReworkEscalationModel, runtimeconfig.EnvReworkEscalationFromAttempt,
+	)
+}
+
+// requireRunHandoffBudgets admits execution budgets before a handoff creates
+// pending work. Ordinary run retains its operation-specific budget admission.
+func (a App) requireRunHandoffBudgets() error {
+	snapshot := a.envSnapshot()
+	if _, err := snapshot.BudgetCaps(); err != nil {
+		return err
+	}
+	_, err := snapshot.BudgetThresholds()
+	return err
 }
 
 func (d envDefaults) runConfig(overrides runtimeconfig.RunOptionsPatch) (runtimeconfig.Config, error) {
@@ -40,14 +63,6 @@ func (d envDefaults) runConfig(overrides runtimeconfig.RunOptionsPatch) (runtime
 
 func (d envDefaults) resolveRunOptionsWithRepository(repository, overrides runtimeconfig.RunOptionsPatch) (runtimeconfig.ResolvedRunOptions, error) {
 	return runtimeconfig.ResolveRunOptionsWithRepositoryDefaults(d.RunOptionsPatch, repository, overrides)
-}
-
-func (d envDefaults) newRunRequest(input string, overrides runtimeconfig.RunOptionsPatch) (run.Request, error) {
-	config, err := d.runConfig(overrides)
-	if err != nil {
-		return run.Request{}, err
-	}
-	return run.Request{Input: input, ResolvedRunOptions: config.ResolvedOptions()}, nil
 }
 
 func (d envDefaults) newRunRequestWithRepository(input string, repository, overrides runtimeconfig.RunOptionsPatch) (run.Request, error) {

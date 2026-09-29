@@ -48,14 +48,27 @@ func TestRunHeaderEnabledByDefaultWhenEnvUnset(t *testing.T) {
 	}
 }
 
-func TestRunHeaderEnvZeroDisablesDefault(t *testing.T) {
-	t.Setenv(runtimeconfig.EnvRunHeader, "0")
-
-	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	registerRunFlags(fs)
-
-	if !flagBoolValue(fs, "no-run-header") {
-		t.Fatal("TAO_RUN_HEADER=0 did not disable the run header")
+func TestRunHeaderSnapshotDefaults(t *testing.T) {
+	for _, value := range []string{"0", "false", "off", "invalid"} {
+		t.Run(value, func(t *testing.T) {
+			snapshot := runtimeconfig.LoadEnv(func(key string) (string, bool) {
+				return value, key == runtimeconfig.EnvRunHeader
+			})
+			app := App{Err: io.Discard, RuntimeEnv: &snapshot}
+			fs, _, err := app.parseArgsFor(&runCommand, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := flagBoolValue(fs, "no-run-header"), value != "invalid"; got != want {
+				t.Fatalf("header %q: disabled = %v, want %v", value, got, want)
+			}
+			if flagWasProvided(fs, "no-run-header") {
+				t.Fatal("environment default counted as an explicit flag")
+			}
+			fs, _, err = app.parseArgsFor(&runCommand, []string{"--no-run-header=false"})
+			if err != nil || flagBoolValue(fs, "no-run-header") || !flagWasProvided(fs, "no-run-header") {
+				t.Fatalf("explicit false did not override default: %v", err)
+			}
+		})
 	}
 }

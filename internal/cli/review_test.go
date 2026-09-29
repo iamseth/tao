@@ -301,6 +301,8 @@ func TestReviewRunTriggersFreshReview(t *testing.T) {
 				prompt = value
 			})}
 
+			snapshot := runtimeconfig.RuntimeEnv()
+			app.RuntimeEnv = &snapshot
 			app.Registry = func() NoteRegistry { return registry }
 			starter := app.ProcessStarter
 			app.ProcessStarter = func(ctx context.Context, cwd, name string, args []string) (agent.Process, error) {
@@ -351,11 +353,12 @@ func TestAuxiliaryGeneratorsInheritBaseModel(t *testing.T) {
 	t.Setenv(runtimeconfig.EnvModel, "provider/base")
 	t.Setenv(runtimeconfig.EnvRunModel, "provider/run")
 	t.Setenv(runtimeconfig.EnvReviewModel, "provider/review")
-	defaults, err := cliEnvDefaults()
+	snapshot := runtimeconfig.RuntimeEnv()
+	defaults, err := (App{RuntimeEnv: &snapshot}).runEnvDefaults()
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := App{Out: io.Discard, Err: io.Discard, CommandRunner: reviewFakeRunner(nil, nil)}
+	app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: &snapshot, CommandRunner: reviewFakeRunner(nil, nil)}
 	config, err := defaults.runConfig(runtimeconfig.RunOptionsPatch{})
 	if err != nil {
 		t.Fatal(err)

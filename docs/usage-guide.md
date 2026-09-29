@@ -597,8 +597,10 @@ nearby slices centered on the current one, and compact session/token/cost
 metrics. A divider and `LIVE OUTPUT` label separate the header from provider
 output. It is TTY-only and requires enough terminal rows; redirected and other
 non-interactive output remains plain. Disable it for one invocation with
-`--no-run-header`, or set `TAO_RUN_HEADER=0` to opt out by default. The header is
-enabled when `TAO_RUN_HEADER` is unset or has any value other than exactly `0`.
+`--no-run-header`, or set `TAO_RUN_HEADER=false` to opt out by default. Unset
+values enable it; invalid values warn and retain that default. See the
+[configuration contract](../README.md#configuration) for the shared boolean
+grammar and diagnostic access.
 
 The pinned region still uses terminal scroll margins rather than an alternate
 screen. Lines that scroll out of that region are therefore dropped from
@@ -1446,6 +1448,12 @@ during readiness or claim to understand arbitrary tool semantics, so command and
 agent-budget findings remain review signals. `tao validate` checks the whole
 plan; `tao run` preflights only the selected runnable slice. See the
 [plan-format contract](plan-format.md#validation) for exact validation rules.
+
+An invalid budget *configuration* is different from exceeding a valid advisory
+threshold: commands that consume it reject the override by name instead of
+silently retaining defaults or disabling a hard cap. Use `tao status` or TUI
+Settings/Debug to inspect it, then correct or unset it. Help and diagnostics
+remain usable; see the [configuration contract](../README.md#configuration).
 
 ### Data and privacy
 

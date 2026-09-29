@@ -1421,13 +1421,49 @@ func TestBatchReviewAutoEjectDoesNotAttributeCountStallWithMissingFile(t *testin
 	}
 }
 
+func TestBatchReviewSnapshotLimits(t *testing.T) {
+	for _, tt := range []struct {
+		name, captured string
+		explicit, want int
+		wantError      bool
+	}{
+		{name: "default", want: defaultBatchReviewMaxAttempts},
+		{name: "captured", captured: "3", want: 3},
+		{name: "zero", captured: "0", want: 0},
+		{name: "explicit", captured: "3", explicit: 2, want: 2},
+		{name: "invalid", captured: "bad", wantError: true},
+		{name: "explicit short circuit", captured: "bad", explicit: 2, want: 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			service := Service{RuntimeEnv: mergeSnapshotWith(map[string]string{runtimeconfig.EnvMaxReworkAttempts: tt.captured})}
+			t.Setenv(runtimeconfig.EnvMaxReworkAttempts, "99")
+			got, err := service.batchReviewMaxAttempts(tt.explicit)
+			if (err != nil) != tt.wantError || got != tt.want {
+				t.Fatalf("attempts = %d, %v; want %d, error=%t", got, err, tt.want, tt.wantError)
+			}
+		})
+	}
+	t.Setenv(runtimeconfig.EnvMaxReworkAttempts, "invalid")
+	t.Setenv(runtimeconfig.EnvAggregateReviewConvergenceWindow, "invalid")
+	if got, err := (Service{}).batchReviewMaxAttempts(0); err != nil || got != defaultBatchReviewMaxAttempts {
+		t.Fatalf("nil snapshot attempts = %d, %v", got, err)
+	}
+	service := Service{RuntimeEnv: mergeSnapshotWith(map[string]string{runtimeconfig.EnvAggregateReviewConvergenceWindow: "4"})}
+	if got, err := service.batchReviewConvergenceWindow(); err != nil || got != 4 {
+		t.Fatalf("captured convergence = %d, %v", got, err)
+	}
+	if got, err := (Service{}).batchReviewConvergenceWindow(); err != nil || got != runtimeconfig.DefaultAggregateReviewConvergenceWindow {
+		t.Fatalf("nil snapshot convergence = %d, %v", got, err)
+	}
+}
+
 func TestBatchReviewConvergenceWindowEnvironment(t *testing.T) {
 	t.Setenv(runtimeconfig.EnvAggregateReviewConvergenceWindow, "4")
-	if got, err := batchReviewConvergenceWindow(); err != nil || got != 4 {
+	if got, err := (Service{RuntimeEnv: mergeTestRuntimeEnv()}).batchReviewConvergenceWindow(); err != nil || got != 4 {
 		t.Fatalf("batchReviewConvergenceWindow() = %d, %v", got, err)
 	}
 	t.Setenv(runtimeconfig.EnvAggregateReviewConvergenceWindow, "1")
-	if _, err := batchReviewConvergenceWindow(); err == nil {
+	if _, err := (Service{RuntimeEnv: mergeTestRuntimeEnv()}).batchReviewConvergenceWindow(); err == nil {
 		t.Fatal("expected unsafe convergence window to fail")
 	}
 }
@@ -1469,7 +1505,9 @@ func TestBatchReviewEquivalentFindingsAndCapExhaustionStop(t *testing.T) {
 				}
 				return review, nil
 			})
-			got, err := (BatchAggregateReviewer{Store: store, Service: NewService(fixture.repoRoot, nil), Agent: agent}).Review(context.Background(), state, root, BatchReviewOptions{VerifyCommand: "true", MaxAttempts: tt.max})
+			service := NewService(fixture.repoRoot, nil)
+			service.RuntimeEnv = mergeTestRuntimeEnv()
+			got, err := (BatchAggregateReviewer{Store: store, Service: service, Agent: agent}).Review(context.Background(), state, root, BatchReviewOptions{VerifyCommand: "true", MaxAttempts: tt.max})
 			if err == nil || !strings.Contains(err.Error(), tt.want) || got.State.Status != BatchStatusBlocked || got.State.Attempts.AggregateRework != 1 {
 				t.Fatalf("unexpected bounded stop: %+v %v", got.State, err)
 			}
@@ -1765,7 +1803,7 @@ func TestBatchReviewVerificationAttributionRecoveryDetectsAggregateGate(t *testi
 			state.Integrations[0].IntegrationSHA = state.IntegrationHead
 			state.VerificationAttribution = &BatchVerificationAttribution{Status: batchAttributionBisecting, ParkedSHA: parked}
 			runRealGit(t, root, "reset", "--hard", parked)
-			if got := resolveMergeVerifyCommandAtRoot(root, Options{}).command; got != prefixCommand {
+			if got := (Service{}).resolveMergeVerifyCommandAtRoot(root, Options{}).command; got != prefixCommand {
 				t.Fatalf("prefix command = %q, want %q", got, prefixCommand)
 			}
 

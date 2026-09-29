@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -563,6 +564,9 @@ func TestNoteRunGeneratesLinksThenUsesNormalRun(t *testing.T) {
 		if request.RepairVerification || request.Reverify {
 			t.Fatalf("note run must use ordinary automatic policy, got recovery request: %+v", request)
 		}
+		if request.SessionTimeout != 37*time.Minute || request.Models.Base != "" {
+			t.Fatalf("note-to-run handoff reloaded settings: %+v", request)
+		}
 		return service.Execute(ctx, request)
 	}
 	t.Cleanup(func() { executeSinglePlan = oldExecutor })
@@ -582,6 +586,9 @@ func TestNoteRunGeneratesLinksThenUsesNormalRun(t *testing.T) {
 	generated := 0
 	app.PlanGenerator = planGeneratorFunc(func(_ context.Context, request planning.GeneratePlanRequest) (*planning.GeneratePlanResult, error) {
 		generated++
+		// A planner cannot change the invocation's captured execution settings.
+		t.Setenv(runtimeconfig.EnvSessionTimeout, "1s")
+		t.Setenv(runtimeconfig.EnvModel, "changed-model")
 		if request.Timeout != 37*time.Minute || request.PermissionMode != agent.PermissionModeBypassPermissions || !request.RejectOpenQuestions {
 			t.Fatalf("generation policy = timeout %s, permission %q, reject=%v", request.Timeout, request.PermissionMode, request.RejectOpenQuestions)
 		}
@@ -632,6 +639,53 @@ func TestNoteRunGeneratesLinksThenUsesNormalRun(t *testing.T) {
 	}
 	if executeCalls != 1 {
 		t.Fatalf("shared run entry calls = %d, want one Service.Execute handoff", executeCalls)
+	}
+}
+
+func TestNoteRunRejectsConsumedSnapshotBeforePromotion(t *testing.T) {
+	clearTaoEnv(t)
+	for _, key := range []string{
+		runtimeconfig.EnvAgent, runtimeconfig.EnvSessionTimeout, runtimeconfig.EnvModel, runtimeconfig.EnvExecutionMode, runtimeconfig.EnvReworkEscalationFromAttempt,
+		runtimeconfig.EnvMaxSliceCost, runtimeconfig.EnvMaxSliceOutputTokens,
+		runtimeconfig.EnvBudgetPlanCost, runtimeconfig.EnvBudgetSliceToolCalls,
+	} {
+		t.Run(key, func(t *testing.T) {
+			meta := taodata.Repo{ID: "tao-123", Name: "tao", Root: "/repo", Branch: "main"}
+			app, _, _ := noteTestApp(t, strings.NewReader(""), meta)
+			app.RuntimeEnv = snapshotWith(map[string]string{key: "invalid value"})
+			app.ProcessStarter = func(context.Context, string, string, []string) (run.Process, error) {
+				t.Fatal("provider called after rejected admission")
+				return nil, nil
+			}
+			app.PlanGenerator = planGeneratorFunc(func(context.Context, planning.GeneratePlanRequest) (*planning.GeneratePlanResult, error) {
+				t.Fatal("generator called after rejected admission")
+				return nil, nil
+			})
+			app.AcquireNotePromotionLock = func(context.Context, string, string, string) (func() error, error) {
+				t.Fatal("promotion lock acquired after rejected admission")
+				return nil, nil
+			}
+			item, err := app.noteRepository(meta).Create(context.Background(), "implement a fix", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			notePath := filepath.Join(app.registry().NotesDir(meta), item.ID+".json")
+			before := readText(t, notePath)
+			err = app.Run(context.Background(), []string{"note", "run", item.ID})
+			if readText(t, notePath) != before {
+				t.Fatal("failed admission changed note artifact")
+			}
+			if err == nil || !strings.Contains(err.Error(), key) {
+				t.Fatalf("consumed %s not rejected: %v", key, err)
+			}
+			stored, err := app.noteRepository(meta).Get(context.Background(), item.ID)
+			if err != nil || stored.Status != note.StatusOpen || stored.Promotion != nil {
+				t.Fatalf("failed admission mutated note: %+v, %v", stored, err)
+			}
+			if _, err := os.Stat(app.registry().PlansDir(meta)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("failed admission allocated plans: %v", err)
+			}
+		})
 	}
 }
 
@@ -1283,6 +1337,82 @@ func TestNoteRunPlannerRoutingPostPlanFailure(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestNoteRunPlannerRoutingSnapshotAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode, arms, floor, override, wantKey string
+		wantRouting                                bool
+	}{
+		{name: "off ignores unused", mode: "off", arms: "invalid", floor: "invalid"},
+		{name: "off override", mode: "invalid", arms: "invalid", floor: "invalid", override: "off"},
+		{name: "empty flag disables", mode: "randomized", arms: "invalid", floor: "invalid", override: " "},
+		{name: "invalid mode", mode: "invalid", wantKey: runtimeconfig.EnvPlannerRouting},
+		{name: "invalid mode flag", mode: "off", override: "invalid", wantKey: "unsupported planner routing mode"},
+		{name: "enabled arms", mode: "shadow", arms: "invalid", wantKey: runtimeconfig.EnvPlannerRoutingArms},
+		{name: "enabled floor", mode: "randomized", floor: "invalid", wantKey: runtimeconfig.EnvPlannerRoutingFloor},
+		{name: "override enables validation", mode: "off", arms: "invalid", override: "shadow", wantKey: runtimeconfig.EnvPlannerRoutingArms},
+		{name: "override replaces invalid mode", mode: "invalid", override: "shadow", wantRouting: true},
+		{name: "captured randomized", mode: "randomized", wantRouting: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app, meta, id, _, _ := noteRoutingTestApp(t)
+			values := map[string]string{
+				runtimeconfig.EnvAgent: "claude", runtimeconfig.EnvPlannerRouting: tc.mode,
+				runtimeconfig.EnvMergeReviewModel: "invalid model",
+			}
+			if tc.arms != "" {
+				values[runtimeconfig.EnvPlannerRoutingArms] = tc.arms
+			}
+			if tc.floor != "" {
+				values[runtimeconfig.EnvPlannerRoutingFloor] = tc.floor
+			}
+			app.RuntimeEnv = snapshotWith(values)
+			t.Setenv(runtimeconfig.EnvPlannerRouting, "off")
+			t.Setenv(runtimeconfig.EnvPlannerRoutingArms, "pi")
+			t.Setenv(runtimeconfig.EnvPlannerRoutingFloor, "0")
+			before, err := app.noteRepository(meta).Get(context.Background(), id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			failure := errors.New("stop at generator")
+			app.PlanGenerator = planGeneratorFunc(func(context.Context, planning.GeneratePlanRequest) (*planning.GeneratePlanResult, error) {
+				calls++
+				return nil, failure
+			})
+			args := []string{"note", "run", id}
+			if tc.override != "" {
+				args = append(args, "--planner-routing="+tc.override)
+			}
+			err = app.Run(context.Background(), args)
+			if tc.wantKey != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantKey) || calls != 0 {
+					t.Fatalf("calls=%d error=%v; want rejection naming %s", calls, err, tc.wantKey)
+				}
+			} else if !errors.Is(err, failure) || calls != 1 {
+				t.Fatalf("calls=%d error=%v; want generator", calls, err)
+			}
+			routes := noteRoutingRecords(t, app, meta)
+			if (len(routes) == 1) != tc.wantRouting || len(routes) > 1 {
+				t.Fatalf("routes = %+v", routes)
+			}
+			if !tc.wantRouting {
+				if _, err := os.Stat(app.registry().PlannerRoutesDir(meta)); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("unused/rejected routing created ledger: %v", err)
+				}
+			}
+			if tc.wantKey != "" {
+				after, err := app.noteRepository(meta).Get(context.Background(), id)
+				if err != nil || !reflect.DeepEqual(before, after) {
+					t.Fatalf("invalid routing mutated note: before=%+v after=%+v error=%v", before, after, err)
+				}
+			}
+			if _, err := os.Stat(app.registry().PlansDir(meta)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("plan directory allocated: %v", err)
+			}
+		})
 	}
 }
 

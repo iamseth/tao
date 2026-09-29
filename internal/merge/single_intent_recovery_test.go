@@ -471,7 +471,7 @@ func TestRestartSingleMergeExactLandingVerificationFailureDoesNotRecordMerge(t *
 	}
 	events := &fakeEventAppender{}
 	cleaner := successfulCleanup()
-	service := Service{Git: gitops.NewClient(fixture.repoRoot, nil), NewGit: func(dir string) GitClient { return gitops.NewClient(dir, nil) }, Runner: runner, Events: events, Cleaner: cleaner}
+	service := Service{RuntimeEnv: mergeTestRuntimeEnv(), Git: gitops.NewClient(fixture.repoRoot, nil), NewGit: func(dir string) GitClient { return gitops.NewClient(dir, nil) }, Runner: runner, Events: events, Cleaner: cleaner}
 	result, err := service.RestartSingleMerge(context.Background(), planDir)
 	if !errors.Is(err, verifyErr) || !errors.Is(err, ErrVerifyFailed) {
 		t.Fatalf("restart verification error = %v, want verification failure", err)

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/iamseth/tao/internal/runtimeconfig"
@@ -31,16 +30,13 @@ func (s uiSettingsService) Collect(ctx context.Context) (tui.SettingsSnapshot, e
 	if home, err := userHomeDir(); err == nil {
 		snapshot.DisplayHome = home
 	}
-	rows, err := runtimeconfig.RuntimeEnvStatus()
-	if err != nil {
-		snapshot.CollectionError = "runtime defaults: " + err.Error()
-	} else {
-		for _, row := range rows {
-			snapshot.RuntimeDefaults = append(snapshot.RuntimeDefaults, tui.SettingsRuntimeDefault{Name: row.Name, Value: row.Value, Source: row.Source, Warning: row.Warning})
-			if row.Name == runtimeconfig.EnvPullRequest {
-				snapshot.InheritedPullRequest, _ = strconv.ParseBool(row.Value)
-			}
-		}
+	env := s.app.envSnapshot()
+	if baseline := env.Defaults().PullRequest; baseline != nil {
+		snapshot.InheritedPullRequest = *baseline
+	}
+	snapshot.InheritedPullRequestInvalid = env.Require(runtimeconfig.EnvPullRequest) != nil
+	for _, row := range env.Status() {
+		snapshot.RuntimeDefaults = append(snapshot.RuntimeDefaults, tui.SettingsRuntimeDefault{Name: row.Name, Value: row.Value, Source: row.Source, Warning: row.Warning})
 	}
 	repositories, err := s.registry.ListRepos()
 	if err != nil {

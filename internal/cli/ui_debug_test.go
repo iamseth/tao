@@ -10,6 +10,23 @@ import (
 	"github.com/iamseth/tao/internal/taodata"
 )
 
+func TestUIDebugInvalidProviderKeepsRuntimeRowsAndDoctorFailure(t *testing.T) {
+	app := App{RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvAgent: "invalid", runtimeconfig.EnvUpdate: "invalid"}), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }}
+	snapshot, err := (uiDebugCollector{app: app}).Collect(context.Background())
+	if err != nil || len(snapshot.RuntimeDefaults) != len(app.envSnapshot().Status()) {
+		t.Fatalf("invalid provider discarded runtime diagnostics: %+v, %v", snapshot, err)
+	}
+	if snapshot.SelectedAgent != "" {
+		t.Fatalf("invalid provider placeholder presented as selected: %q", snapshot.SelectedAgent)
+	}
+	for _, problem := range snapshot.DoctorProblems {
+		if problem.Category == "doctor" && problem.Status == "failed" && strings.Contains(problem.Detail, runtimeconfig.EnvAgent) {
+			return
+		}
+	}
+	t.Fatalf("missing doctor failure: %+v", snapshot.DoctorProblems)
+}
+
 func TestUIDebugCollectorIncludesRepositoryRuntimeDefaultsAndDoctorProblems(t *testing.T) {
 	clearTaoEnv(t)
 	t.Setenv("PATH", "")

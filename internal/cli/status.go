@@ -44,10 +44,7 @@ func (a App) status(ctx context.Context, repo planLister, args []string) error {
 	if err := requireNoArgs(positional, "usage: tao status [--json]"); err != nil {
 		return err
 	}
-	env, err := runtimeconfig.RuntimeEnvStatus()
-	if err != nil {
-		return err
-	}
+	env := a.envSnapshot().Status()
 	repositoryDefaults, err := a.currentRepositoryRunOptions(ctx)
 	if err != nil {
 		return err
@@ -103,7 +100,11 @@ func (a App) writeStatus(payload statusPayload) error {
 		if len(row.Name) > width {
 			width = len(row.Name)
 		}
-		if err := writef(a.Out, "  %-*s  %-8s  %s\n", width, row.Name, emptyDash(row.Value), row.Source); err != nil {
+		value := emptyDash(row.Value)
+		if row.Source == "invalid" {
+			value = "(rejected on consumption)"
+		}
+		if err := writef(a.Out, "  %-*s  %-8s  %s\n", width, row.Name, value, row.Source); err != nil {
 			return err
 		}
 		if row.Warning != "" {

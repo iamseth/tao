@@ -83,11 +83,11 @@ func (r BatchAggregateReviewer) Review(ctx context.Context, state BatchState, in
 	if err != nil {
 		return result, err
 	}
-	maxAttempts, err := batchReviewMaxAttempts(options.MaxAttempts)
+	maxAttempts, err := r.Service.batchReviewMaxAttempts(options.MaxAttempts)
 	if err != nil {
 		return r.block(result, state, BatchBlockKindResumable, err.Error())
 	}
-	convergenceWindow, err := batchReviewConvergenceWindow()
+	convergenceWindow, err := r.Service.batchReviewConvergenceWindow()
 	if err != nil {
 		return r.block(result, state, BatchBlockKindResumable, err.Error())
 	}
@@ -101,7 +101,7 @@ func (r BatchAggregateReviewer) Review(ctx context.Context, state BatchState, in
 		return result, err
 	}
 	// Detect the gate from the restored aggregate, never a parked probe prefix.
-	verify := resolveMergeVerifyCommandAtRoot(integrationRoot, Options{VerifyCommand: options.VerifyCommand})
+	verify := r.Service.resolveMergeVerifyCommandAtRoot(integrationRoot, Options{VerifyCommand: options.VerifyCommand})
 	if strings.TrimSpace(verify.command) == "" {
 		return r.block(result, state, BatchBlockKindResumable, "aggregate review requires a full verification command")
 	}
@@ -925,21 +925,26 @@ func aggregateReviewNonConvergenceReason(files []string, planID string) string {
 	return reason
 }
 
-func batchReviewConvergenceWindow() (int, error) {
-	return runtimeconfig.RuntimeAggregateReviewConvergenceWindow()
+func (s Service) batchReviewConvergenceWindow() (int, error) {
+	snapshot := s.runtimeEnv()
+	if err := snapshot.Require(runtimeconfig.EnvAggregateReviewConvergenceWindow); err != nil {
+		return 0, err
+	}
+	return snapshot.Defaults().AggregateReviewConvergenceWindow, nil
 }
 
-func batchReviewMaxAttempts(value int) (int, error) {
+func (s Service) batchReviewMaxAttempts(value int) (int, error) {
 	if value > 0 {
 		return value, nil
 	}
-	_, maxAttempts, err := runtimeconfig.ParseAutoReworkEnv(
-		false,
-		defaultBatchReviewMaxAttempts,
-		"",
-		os.Getenv(runtimeconfig.EnvMaxReworkAttempts),
-	)
-	return maxAttempts, err
+	snapshot := s.runtimeEnv()
+	if err := snapshot.Require(runtimeconfig.EnvMaxReworkAttempts); err != nil {
+		return 0, err
+	}
+	if attempts := snapshot.Defaults().MaxReworkAttempts; attempts != nil {
+		return *attempts, nil
+	}
+	return defaultBatchReviewMaxAttempts, nil
 }
 
 func formatFindings(findings []plan.ReviewFinding) string {

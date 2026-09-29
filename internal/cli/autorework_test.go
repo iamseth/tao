@@ -82,8 +82,16 @@ func TestRunRecordsResolvedEscalationPolicy(t *testing.T) {
 			calls := 0
 			oldExecutor := executeSinglePlan
 			t.Cleanup(func() { executeSinglePlan = oldExecutor })
-			executeSinglePlan = func(run.Service, context.Context, run.Request) error {
+			executeSinglePlan = func(_ run.Service, _ context.Context, request run.Request) error {
 				calls++
+				if request.SessionTimeout != 20*time.Minute {
+					t.Fatalf("automatic rework reloaded timeout: %s", request.SessionTimeout)
+				}
+				t.Setenv(runtimeconfig.EnvSessionTimeout, "1s")
+				t.Setenv(runtimeconfig.EnvAutoRework, "false")
+				t.Setenv(runtimeconfig.EnvMaxReworkAttempts, "0")
+				t.Setenv(runtimeconfig.EnvReworkEscalationModel, "changed-model")
+				t.Setenv(runtimeconfig.EnvReworkEscalationFromAttempt, "1")
 				for i := range detail.Slices.Slices {
 					detail.Slices.Slices[i].Status = plan.StatusCompleted
 				}
@@ -104,7 +112,8 @@ func TestRunRecordsResolvedEscalationPolicy(t *testing.T) {
 			var out bytes.Buffer
 			args := append([]string{"--no-run-header"}, tt.args...)
 			args = append(args, planID)
-			if err := (App{Out: &out, Now: func() time.Time { return now }}).run(context.Background(), repo, args); err != nil {
+			snapshot := runtimeconfig.RuntimeEnv()
+			if err := (App{RuntimeEnv: &snapshot, Out: &out, Now: func() time.Time { return now }}).run(context.Background(), repo, args); err != nil {
 				t.Fatal(err)
 			}
 			if calls != 5 {
@@ -459,11 +468,14 @@ func TestRunLocationAdvisoriesContinueThroughDirectExecution(t *testing.T) {
 			repo := newRecordingAutoReworkRepository(planID, detail)
 			outputErr := errors.New("output unavailable")
 			out := &reworkSelectiveWriter{failOn: test.failOn, failure: outputErr}
+			snapshot := snapshotWith(map[string]string{runtimeconfig.EnvBudgetPlanToolCalls: "7"})
 			calls := 0
 			oldExecutor := executeSinglePlan
 			t.Cleanup(func() { executeSinglePlan = oldExecutor })
 			executeSinglePlan = func(run.Service, context.Context, run.Request) error {
 				calls++
+				// Later rounds must retain the invocation's typed thresholds.
+				t.Setenv(runtimeconfig.EnvBudgetPlanToolCalls, "99999")
 				if test.execFail && calls == 4 {
 					return errors.New("execution failed")
 				}
@@ -500,7 +512,7 @@ func TestRunLocationAdvisoriesContinueThroughDirectExecution(t *testing.T) {
 				detail.State.Plan.Review = reworkReview(plan.ReviewVerdictChangesRequested, findings)
 				detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypePlanReviewed, PlanID: planID, SliceID: sliceID, Review: detail.State.Plan.Review})
 				if test.budget && calls == 3 {
-					detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypeAgentMetrics, PlanID: planID, Metrics: &plan.AgentMetrics{SessionID: "budget", ToolCalls: 1000}})
+					detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypeAgentMetrics, PlanID: planID, Metrics: &plan.AgentMetrics{SessionID: "budget", ToolCalls: 8}})
 				}
 				return nil
 			}
@@ -509,7 +521,7 @@ func TestRunLocationAdvisoriesContinueThroughDirectExecution(t *testing.T) {
 				args = append(args, "--max-rework-attempts", "2")
 			}
 			args = append(args, planID)
-			err := (App{Out: out, Now: func() time.Time { return now }}).run(context.Background(), repo, args)
+			err := (App{Out: out, RuntimeEnv: snapshot, Now: func() time.Time { return now }}).run(context.Background(), repo, args)
 			if test.wantError == "" {
 				if err != nil {
 					t.Fatal(err)

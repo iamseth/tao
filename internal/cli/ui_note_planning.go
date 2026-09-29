@@ -62,13 +62,13 @@ func (launcher *uiNotePlanningLauncher) Launch(ctx context.Context, item note.Ca
 		(current.Promotion != nil && current.Promotion.Plan != nil) {
 		return fmt.Errorf("planning note is no longer open or is already linked to a plan")
 	}
-	kind, err := runtimeconfig.ParseAgentKind(os.Getenv(runtimeconfig.EnvAgent))
+	defaults, err := launcher.app.envDefaultsFor(runtimeconfig.EnvAgent)
 	if err != nil {
 		return err
 	}
-	descriptor, ok := agent.Lookup(kind)
+	descriptor, ok := agent.Lookup(defaults.Agent)
 	if !ok {
-		return fmt.Errorf("unsupported planning agent %q", kind)
+		return fmt.Errorf("unsupported planning agent %q", defaults.Agent)
 	}
 	if err := ctx.Err(); err != nil {
 		return err

@@ -8,6 +8,7 @@ import (
 
 	"github.com/iamseth/tao/internal/identity"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
 var approveCommand = commandMetadata{
@@ -61,7 +62,11 @@ func (a App) approve(ctx context.Context, repo approvalRepository, args []string
 	}
 	approver := strings.TrimSpace(flagStringValue(fs, "by"))
 	if approver == "" {
-		approver = identity.Approver()
+		defaults, err := a.envDefaultsFor(runtimeconfig.EnvApprovedBy)
+		if err != nil {
+			return err
+		}
+		approver = identity.Approver(defaults.ApprovedBy)
 	}
 	if approver == "" {
 		return fmt.Errorf("approver is required; pass --by NAME")

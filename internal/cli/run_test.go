@@ -87,10 +87,8 @@ func TestRunInvokesPiUntilPlanCompletedAndLogsOutput(t *testing.T) {
 	}
 }
 
-func TestCLIEnvDefaultsPreserveBuiltInsWhenUnset(t *testing.T) {
-	clearTaoEnv(t)
-
-	defaults, err := cliEnvDefaults()
+func TestSnapshotRunDefaultsPreserveBuiltInsWhenUnset(t *testing.T) {
+	defaults, err := (App{}).runEnvDefaults()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,15 +97,13 @@ func TestCLIEnvDefaultsPreserveBuiltInsWhenUnset(t *testing.T) {
 	}
 }
 
-func TestCLIEnvDefaultsAcceptValidValues(t *testing.T) {
-	clearTaoEnv(t)
-	t.Setenv("TAO_COMMIT_POLICY", "slice")
-	t.Setenv("TAO_EXECUTION_MODE", "current")
-	t.Setenv("TAO_AGENT", "pi")
-	t.Setenv("TAO_PULL_REQUEST", "true")
-	t.Setenv("TAO_DANGEROUSLY_SKIP_PERMISSIONS", "true")
-
-	defaults, err := cliEnvDefaults()
+func TestSnapshotRunDefaultsAcceptValidValues(t *testing.T) {
+	app := App{RuntimeEnv: snapshotWith(map[string]string{
+		runtimeconfig.EnvCommitPolicy: "slice", runtimeconfig.EnvExecutionMode: "current",
+		runtimeconfig.EnvAgent: "pi", runtimeconfig.EnvPullRequest: "yes",
+		runtimeconfig.EnvSkipPermissions: "on",
+	})}
+	defaults, err := app.runEnvDefaults()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +112,7 @@ func TestCLIEnvDefaultsAcceptValidValues(t *testing.T) {
 	}
 }
 
-func TestCLIEnvDefaultsRejectInvalidValues(t *testing.T) {
+func TestSnapshotRunDefaultsRejectInvalidValues(t *testing.T) {
 	for _, test := range []struct {
 		name  string
 		key   string
@@ -129,10 +125,8 @@ func TestCLIEnvDefaultsRejectInvalidValues(t *testing.T) {
 		{name: "skip permissions", key: "TAO_DANGEROUSLY_SKIP_PERMISSIONS", value: "maybe"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			clearTaoEnv(t)
-			t.Setenv(test.key, test.value)
-
-			_, err := cliEnvDefaults()
+			app := App{RuntimeEnv: snapshotWith(map[string]string{test.key: test.value})}
+			_, err := app.runEnvDefaults()
 			if err == nil || !strings.Contains(err.Error(), test.key) {
 				t.Fatalf("expected error naming %s, got %v", test.key, err)
 			}
@@ -140,15 +134,13 @@ func TestCLIEnvDefaultsRejectInvalidValues(t *testing.T) {
 	}
 }
 
-func TestCLIEnvExecutionModeDefaultsNormalizeRunRequest(t *testing.T) {
-	clearTaoEnv(t)
-	t.Setenv("TAO_EXECUTION_MODE", "current")
-
-	defaults, err := cliEnvDefaults()
+func TestSnapshotExecutionModeDefaultsNormalizeRunRequest(t *testing.T) {
+	app := App{RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvExecutionMode: "current"})}
+	defaults, err := app.runEnvDefaults()
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := defaults.newRunRequest("plan-a", runtimeconfig.RunOptionsPatch{})
+	request, err := defaults.newRunRequestWithRepository("plan-a", runtimeconfig.RunOptionsPatch{}, runtimeconfig.RunOptionsPatch{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +152,8 @@ func TestCLIEnvExecutionModeDefaultsNormalizeRunRequest(t *testing.T) {
 func TestRunExecutionModeFlagReachesRunRequest(t *testing.T) {
 	buildRequest := func(t *testing.T, args []string) run.Request {
 		t.Helper()
-		defaults, err := cliEnvDefaults()
+		snapshot := runtimeconfig.RuntimeEnv()
+		defaults, err := (App{RuntimeEnv: &snapshot}).runEnvDefaults()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -174,7 +167,7 @@ func TestRunExecutionModeFlagReachesRunRequest(t *testing.T) {
 			t.Fatalf("expected one plan positional, got %#v", positional)
 		}
 		requestOptions := runRequestOverridesFromFlags(fs, runFlagValues{ExecutionMode: runtimeconfig.ExecutionMode(*executionMode)})
-		request, err := defaults.newRunRequest(positional[0], requestOptions)
+		request, err := defaults.newRunRequestWithRepository(positional[0], runtimeconfig.RunOptionsPatch{}, requestOptions)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -213,7 +206,8 @@ func TestCLIRunRequestBuilderPreservesEnvDefaultsAndFlagOverrides(t *testing.T) 
 	t.Setenv("TAO_AGENT", "pi")
 	t.Setenv("TAO_PULL_REQUEST", "true")
 
-	defaults, err := cliEnvDefaults()
+	snapshot := runtimeconfig.RuntimeEnv()
+	defaults, err := (App{RuntimeEnv: &snapshot}).runEnvDefaults()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +228,7 @@ func TestCLIRunRequestBuilderPreservesEnvDefaultsAndFlagOverrides(t *testing.T) 
 		PullRequest:   *pullRequest,
 		Continue:      *continueBlocked,
 	})
-	request, err := defaults.newRunRequest("plan-a", requestOptions)
+	request, err := defaults.newRunRequestWithRepository("plan-a", runtimeconfig.RunOptionsPatch{}, requestOptions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,8 +261,7 @@ func TestRunRejectsMutuallyExclusiveRecoveryModes(t *testing.T) {
 }
 
 func TestRunNoReviewFlagOverridesRunRequest(t *testing.T) {
-	clearTaoEnv(t)
-	defaults, err := cliEnvDefaults()
+	defaults, err := (App{}).runEnvDefaults()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +272,7 @@ func TestRunNoReviewFlagOverridesRunRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	requestOptions := runRequestOverridesFromFlags(fs, runFlagValues{NoReview: *noReview})
-	request, err := defaults.newRunRequest("plan-a", requestOptions)
+	request, err := defaults.newRunRequestWithRepository("plan-a", runtimeconfig.RunOptionsPatch{}, requestOptions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +290,8 @@ func TestRunModelFlagOverridesEveryRole(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		inputs, err := resolveRunRequestFlags(fs)
+		snapshot := runtimeconfig.RuntimeEnv()
+		inputs, err := (App{RuntimeEnv: &snapshot}).resolveRunRequestFlags(fs)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -348,7 +342,8 @@ func TestRunReworkEscalationModelPrecedence(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			inputs, err := resolveRunRequestFlags(fs)
+			snapshot := runtimeconfig.RuntimeEnv()
+			inputs, err := (App{RuntimeEnv: &snapshot}).resolveRunRequestFlags(fs)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -640,7 +635,8 @@ func TestRunAgentPiEnvRoutesSliceRunToPi(t *testing.T) {
 	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
 	var out bytes.Buffer
 	piCalls := 0
-	app := App{Out: &out, Err: &out, CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
+	snapshot := runtimeconfig.RuntimeEnv()
+	app := App{RuntimeEnv: &snapshot, Out: &out, Err: &out, CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
 		if name != "git" {
 			t.Fatalf("unexpected command %s %v", name, args)
 			return nil
@@ -667,7 +663,8 @@ func TestRunAgentClaudeEnvRoutesSliceRunToClaude(t *testing.T) {
 	var out bytes.Buffer
 	claudeCalls := 0
 	var gotArgs []string
-	app := App{Out: &out, Err: &out, CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
+	snapshot := runtimeconfig.RuntimeEnv()
+	app := App{RuntimeEnv: &snapshot, Out: &out, Err: &out, CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
 		if name != "git" {
 			t.Fatalf("unexpected command %s %v", name, args)
 			return nil
@@ -778,6 +775,10 @@ func TestRunAutoReworkPolicyResolution(t *testing.T) {
 	}{
 		{name: "default on", reviewEnabled: true, want: runtimeconfig.AutoReworkPolicy{Enabled: true, MaxAttempts: runtimeconfig.DefaultMaxReworkAttempts}},
 		{name: "environment disables", envEnabled: "false", reviewEnabled: true, want: runtimeconfig.AutoReworkPolicy{MaxAttempts: runtimeconfig.DefaultMaxReworkAttempts}},
+		{name: "explicit false and zero", args: []string{"--auto-rework=false", "--max-rework-attempts=0"}, reviewEnabled: true, want: runtimeconfig.AutoReworkPolicy{}},
+		{name: "environment zero", envAttempts: "0", reviewEnabled: true, want: runtimeconfig.AutoReworkPolicy{}},
+		{name: "invalid enabled not rescued", envEnabled: "invalid", args: []string{"--auto-rework=false"}, reviewEnabled: true, wantError: runtimeconfig.EnvAutoRework},
+		{name: "invalid attempts not rescued", envAttempts: "invalid", args: []string{"--max-rework-attempts=0"}, reviewEnabled: true, wantError: runtimeconfig.EnvMaxReworkAttempts},
 		{name: "explicit flag beats environment", envEnabled: "false", envAttempts: "3", args: []string{"--auto-rework", "--max-rework-attempts=2"}, reviewEnabled: true, want: runtimeconfig.AutoReworkPolicy{Enabled: true, MaxAttempts: 2}},
 		{name: "review disabled silently disables default", reviewEnabled: false, want: runtimeconfig.AutoReworkPolicy{MaxAttempts: runtimeconfig.DefaultMaxReworkAttempts}},
 		{name: "review environment disabled silently overrides explicit auto rework", envReview: "false", args: []string{"--auto-rework"}, reviewEnabled: false, want: runtimeconfig.AutoReworkPolicy{MaxAttempts: runtimeconfig.DefaultMaxReworkAttempts}},
@@ -795,11 +796,13 @@ func TestRunAutoReworkPolicyResolution(t *testing.T) {
 			if tt.envReview != "" {
 				t.Setenv(runtimeconfig.EnvReview, tt.envReview)
 			}
-			fs, _, err := (App{Err: io.Discard}).parseArgsFor(&runCommand, tt.args)
+			snapshot := runtimeconfig.RuntimeEnv()
+			app := App{Err: io.Discard, RuntimeEnv: &snapshot}
+			fs, _, err := app.parseArgsFor(&runCommand, tt.args)
 			if err != nil {
 				t.Fatal(err)
 			}
-			policy, err := resolveRunAutoReworkPolicy(fs, tt.reviewEnabled)
+			policy, err := app.resolveRunAutoReworkPolicy(fs, tt.reviewEnabled)
 			if tt.wantError != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
 					t.Fatalf("expected error containing %q, got %v", tt.wantError, err)

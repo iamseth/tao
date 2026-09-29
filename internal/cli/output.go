@@ -9,7 +9,6 @@ import (
 
 	"github.com/iamseth/tao/internal/monitor/rowlabel"
 	"github.com/iamseth/tao/internal/plan"
-	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/term"
 	"github.com/iamseth/tao/internal/theme"
 )
@@ -106,7 +105,7 @@ func colorGreen(palette theme.Palette, value string) string {
 
 func (a App) withRuntimeTheme() App {
 	if a.Theme == nil {
-		selected, _ := runtimeconfig.RuntimeTheme(os.Getenv) // Warnings surface in status, Settings, and Debug.
+		selected := a.envSnapshot().Defaults().Theme // Warnings remain in snapshot status.
 		a.Theme = &selected
 	}
 	return a

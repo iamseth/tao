@@ -23,15 +23,8 @@ const (
 )
 
 func ParseMode(value string) (Mode, error) {
-	if value == "" {
-		return ModeOff, nil
-	}
-	switch Mode(value) {
-	case ModeOff, ModeShadow, ModeRandomized:
-		return Mode(value), nil
-	default:
-		return "", fmt.Errorf("unsupported planner routing mode %q (want off, shadow, or randomized)", value)
-	}
+	mode, err := runtimeconfig.ParsePlannerRoutingMode(value)
+	return Mode(mode), err
 }
 
 // Arm is an exact treatment tuple. Provider, Model, and ReasoningEffort are
@@ -54,6 +47,19 @@ func (a Arm) Key() string {
 type WeightedArm struct {
 	Arm         Arm     `json:"arm"`
 	Probability float64 `json:"probability"`
+}
+
+// ArmsFromConfig creates independent treatment tuples. Prompt and permission
+// metadata are supplied by the caller before policy construction.
+func ArmsFromConfig(configured []runtimeconfig.PlannerRoutingArm) []WeightedArm {
+	arms := make([]WeightedArm, len(configured))
+	for i, arm := range configured {
+		arms[i] = WeightedArm{
+			Arm:         Arm{Runtime: arm.Runtime, Provider: Inherited, Model: Inherited, ReasoningEffort: Inherited},
+			Probability: arm.Probability,
+		}
+	}
+	return arms
 }
 
 type UnitKey struct {

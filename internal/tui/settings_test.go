@@ -12,6 +12,40 @@ import (
 	"github.com/iamseth/tao/internal/theme"
 )
 
+func TestSettingsRejectedDiagnosticsStayVisibleAtNarrowWidths(t *testing.T) {
+	for _, width := range []int{40, 70, 120} {
+		model := Model{Page: PageSettings, Width: width, Height: 80, SettingsSnapshot: SettingsSnapshot{RuntimeDefaults: []SettingsRuntimeDefault{
+			{Name: "TAO_AGENT", Value: "pi", Source: "invalid", Warning: "invalid provider\n\t\x1b[31mconfiguration; rejected"},
+			{Name: "TAO_THEME", Value: "tokyonight", Source: "default", Warning: "invalid theme; using default"},
+			{Name: "TAO_BUDGET_PLAN_COST", Value: "20", Source: "invalid", Warning: "invalid budget; rejected"},
+		}}}
+		frame := strings.TrimPrefix(Render(model), "\x1b[H\x1b[2J")
+		for _, want := range []string{"TAO_AGENT", "(rejected)", "rejected on consumption:", "using default", "invalid budget"} {
+			if !strings.Contains(strings.Join(strings.Fields(frame), " "), want) {
+				t.Errorf("width %d missing %q:\n%s", width, want, frame)
+			}
+		}
+		if strings.Contains(frame, "\x1b") || strings.Contains(frame, "\t") {
+			t.Fatalf("unsanitized diagnostic: %q", frame)
+		}
+		if got := settingsBudgetValue(model.SettingsSnapshot.RuntimeDefaults[2], true); got != "(rejected)" {
+			t.Fatalf("rejected budget displayed as accepted placeholder: %s", got)
+		}
+	}
+}
+
+func TestSettingsInvalidBaselineDoesNotHideExplicitRepositoryDefault(t *testing.T) {
+	model := Model{Page: PageSettings, Width: 100, SettingsSnapshot: SettingsSnapshot{
+		InheritedPullRequest: false, InheritedPullRequestInvalid: true,
+		RuntimeDefaults: []SettingsRuntimeDefault{{Name: "TAO_PULL_REQUEST", Value: "false", Source: "invalid", Warning: "invalid boolean; rejected"}},
+		Repositories:    []RepositorySetting{{ID: "repo-a", Name: "alpha", PullRequest: new(false)}},
+	}}
+	lines, _ := renderSettingsOverrides(model)
+	if !lineContainsAll(lines, "TAO_PULL_REQUEST", "false", "← alpha") || !lineContainsAll(lines, "TAO_PULL_REQUEST", "(rejected)") {
+		t.Fatalf("invalid placeholder suppressed accepted repository default: %s", strings.Join(lines, "\n"))
+	}
+}
+
 func TestRenderSettingsShowsGlobalAndRepositoryDefaults(t *testing.T) {
 	explicit := true
 	frame := Render(Model{
@@ -138,10 +172,7 @@ func lineContainsAll(lines []string, values ...string) bool {
 }
 
 func TestSettingsDefaultsClassifyAndRenderEveryRuntimeStatusOnce(t *testing.T) {
-	statuses, err := runtimeconfig.RuntimeEnvStatus()
-	if err != nil {
-		t.Fatal(err)
-	}
+	statuses := runtimeconfig.LoadEnv(nil).Status()
 	rows := make([]SettingsRuntimeDefault, 0, len(statuses))
 	for _, status := range statuses {
 		rows = append(rows, SettingsRuntimeDefault{Name: status.Name, Value: status.Value, Source: "default"})

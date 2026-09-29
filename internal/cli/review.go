@@ -66,7 +66,10 @@ func (a App) review(ctx context.Context, repo runpkg.Repository, args []string) 
 }
 
 func (a App) runPlanReview(ctx context.Context, repo runpkg.Repository, input string, overrides runtimeconfig.RunOptionsPatch) error {
-	defaults, err := cliEnvDefaults()
+	defaults, err := a.envDefaultsFor(
+		runtimeconfig.EnvAgent, runtimeconfig.EnvSessionTimeout, runtimeconfig.EnvSkipPermissions,
+		runtimeconfig.EnvModel, runtimeconfig.EnvReviewModel,
+	)
 	if err != nil {
 		return err
 	}
@@ -78,8 +81,9 @@ func (a App) runPlanReview(ctx context.Context, repo runpkg.Repository, input st
 	if err != nil {
 		return err
 	}
+	snapshot := a.envSnapshot()
 	runner := runpkg.NewService(repo, a.Out, runpkg.Options{
-		ExecutionConfig: runpkg.ExecutionConfig{ResolvedRunOptions: request.ResolvedRunOptions, SkipPermissions: defaults.SkipPermissions},
+		ExecutionConfig: runpkg.ExecutionConfig{RuntimeEnv: &snapshot, ResolvedRunOptions: request.ResolvedRunOptions, SkipPermissions: defaults.SkipPermissions},
 		RunDependencies: runpkg.RunDependencies{CommandRunner: a.CommandRunner, ProcessStarter: a.ProcessStarter, StatusReporter: a.StatusReporter, SessionLogWriter: a.Out, Now: a.Now},
 	})
 	review, err := runner.Review(ctx, request)

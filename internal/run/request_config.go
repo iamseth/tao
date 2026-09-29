@@ -2,6 +2,22 @@ package run
 
 import "github.com/iamseth/tao/internal/runtimeconfig"
 
+func runtimeEnv(snapshot *runtimeconfig.EnvSnapshot) runtimeconfig.EnvSnapshot {
+	if snapshot != nil {
+		return *snapshot
+	}
+	return runtimeconfig.EnvSnapshot{}
+}
+
+func (c ExecutionConfig) requireSliceBudgets() error {
+	snapshot := runtimeEnv(c.RuntimeEnv)
+	if _, err := snapshot.BudgetCaps(); err != nil {
+		return err
+	}
+	_, err := snapshot.BudgetThresholds()
+	return err
+}
+
 // executionConfig returns the executor's view of the configuration composed in
 // Options.
 func (o Options) executionConfig() ExecutionConfig {

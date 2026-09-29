@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -17,6 +18,7 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	reworkpkg "github.com/iamseth/tao/internal/rework"
 	runpkg "github.com/iamseth/tao/internal/run"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
 func TestReworkCommandReopensChangesRequestedPlanWithGeneratedSlices(t *testing.T) {
@@ -398,6 +400,54 @@ func TestReworkCommandForceBypassesReviewAndFindingGate(t *testing.T) {
 
 func hasPendingReworkSlice(detail *plan.PlanDetail) bool {
 	return slices.Contains(detail.State.Plan.PendingSlices, "r101-internal-cli-rework-go")
+}
+
+func TestReworkRunRejectsConsumedSnapshotBeforeReopening(t *testing.T) {
+	for _, key := range []string{
+		runtimeconfig.EnvSessionTimeout, runtimeconfig.EnvAutoRework, runtimeconfig.EnvReworkEscalationFromAttempt,
+		runtimeconfig.EnvMaxSliceCost, runtimeconfig.EnvMaxSliceOutputTokens,
+		runtimeconfig.EnvBudgetPlanCost, runtimeconfig.EnvBudgetSliceToolCalls,
+	} {
+		t.Run(key, func(t *testing.T) {
+			root := t.TempDir()
+			const id = "20260628-1200-admission"
+			dir := writeCLIReworkPlan(t, root, id, plan.StatusCompleted, reworkReview(plan.ReviewVerdictChangesRequested, []plan.ReviewFinding{{File: "file.go", Message: "fix this"}}))
+			before := readReworkArtifacts(t, dir)
+			app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{key: "invalid"}),
+				ProcessStarter: func(context.Context, string, string, []string) (runpkg.Process, error) {
+					t.Fatal("provider called after rejected admission")
+					return nil, nil
+				},
+			}
+			err := app.rework(context.Background(), plan.NewFileRepository(root), []string{"--run", id})
+			if err == nil || !strings.Contains(err.Error(), key) {
+				t.Fatalf("consumed value not rejected: %v", err)
+			}
+			if readReworkArtifacts(t, dir) != before {
+				t.Fatal("rejected run configuration reopened the plan")
+			}
+		})
+	}
+}
+
+func TestReworkWithoutRunIgnoresInvalidExecutionBudgets(t *testing.T) {
+	root := t.TempDir()
+	const id = "20260628-1200-unused-budgets"
+	dir := writeCLIReworkPlan(t, root, id, plan.StatusCompleted, reworkReview(plan.ReviewVerdictChangesRequested, []plan.ReviewFinding{{File: "file.go", Message: "fix this"}}))
+	before := readReworkArtifacts(t, dir)
+	app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{
+		runtimeconfig.EnvMaxSliceCost: "invalid", runtimeconfig.EnvMaxSliceOutputTokens: "invalid",
+		runtimeconfig.EnvBudgetPlanCost: "invalid", runtimeconfig.EnvBudgetSliceToolCalls: "invalid",
+	}), ProcessStarter: func(context.Context, string, string, []string) (runpkg.Process, error) {
+		t.Fatal("ordinary rework invoked a provider")
+		return nil, nil
+	}}
+	if err := app.rework(context.Background(), plan.NewFileRepository(root), []string{id}); err != nil {
+		t.Fatalf("unused budgets rejected: %v", err)
+	}
+	if readReworkArtifacts(t, dir) == before {
+		t.Fatal("ordinary rework did not reopen the plan")
+	}
 }
 
 func reworkReview(verdict string, findings []plan.ReviewFinding) *plan.PlanReview {

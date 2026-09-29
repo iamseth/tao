@@ -533,6 +533,7 @@ func TestRunAgentSessionSliceBudgetCaps(t *testing.T) {
 			})
 			repository := plan.NewFileRepository("")
 			runner, planDir, repoRoot := sessionEventTestRunner(t, runtime, repository, io.Discard, time.Now())
+			runner.runtimeEnv = runtimeconfig.RuntimeEnv()
 
 			got, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{
 				PlanDir: planDir, RepoRoot: repoRoot, LogAction: "running 001-a", Metrics: &AgentSessionMetricsRequest{SliceID: "001-a", Role: plan.AgentRoleExecution, EnforceSliceCaps: true},
@@ -576,6 +577,7 @@ func TestRunAgentSessionSliceBudgetAccumulatesPriorMetrics(t *testing.T) {
 		return agent.SessionResult{Metrics: &current}, nil
 	})
 	runner, planDir, repoRoot := sessionEventTestRunner(t, runtime, repository, io.Discard, time.Now())
+	runner.runtimeEnv = runtimeconfig.RuntimeEnv()
 	prior := plan.AgentMetrics{SessionID: "prior", OutputTokens: 60}
 	if err := repository.AppendEvent(planDir, plan.Event{Type: plan.EventTypeAgentMetrics, Timestamp: time.Now().UTC(), PlanID: "plan-a", SliceID: "001-a", Metrics: &prior, Message: "prior"}); err != nil {
 		t.Fatal(err)
@@ -792,6 +794,7 @@ func TestRunAgentSessionPlanTelemetryAndCapIsolation(t *testing.T) {
 			})
 			repository := plan.NewFileRepository("")
 			runner, planDir, repoRoot := sessionEventTestRunner(t, runtime, repository, io.Discard, time.Now())
+			runner.runtimeEnv = runtimeconfig.RuntimeEnv()
 			got, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{PlanDir: planDir, RepoRoot: repoRoot, Metrics: &request})
 			if !errors.Is(err, runErr) || got.Output != "partial output" || got.FinalText != "final" {
 				t.Fatalf("result/error changed: %+v, %v; want %v", got, err, runErr)
@@ -840,6 +843,7 @@ func TestRunAgentSessionTelemetryFailuresPreserveProviderOutcome(t *testing.T) {
 					return repository.AppendEvent(dir, event)
 				})
 				runner, planDir, repoRoot := sessionEventTestRunner(t, runtime, appender, io.Discard, time.Now())
+				runner.runtimeEnv = runtimeconfig.RuntimeEnv()
 				if failure == "state" {
 					if err := os.Remove(filepath.Join(planDir, "state.json")); err != nil {
 						t.Fatal(err)
@@ -886,6 +890,7 @@ func TestRunAgentSessionUnavailableMetricsRemainUnmeasured(t *testing.T) {
 		})
 		repository := plan.NewFileRepository("")
 		runner, planDir, repoRoot := sessionEventTestRunner(t, runtime, repository, io.Discard, time.Now())
+		runner.runtimeEnv = runtimeconfig.RuntimeEnv()
 		// Prior usage must not turn this unavailable measurement into a cap check.
 		if err := repository.AppendEvent(planDir, plan.Event{Type: plan.EventTypeAgentMetrics, SliceID: "001-a", Metrics: &plan.AgentMetrics{OutputTokens: 100}}); err != nil {
 			t.Fatal(err)
@@ -917,6 +922,7 @@ func TestRunAgentSessionCapsExcludeAttributedNonExecutionHistory(t *testing.T) {
 		return agent.SessionResult{Metrics: &agent.Metrics{OutputTokens: 40}}, nil
 	})
 	runner, planDir, repoRoot := sessionEventTestRunner(t, runtime, repository, io.Discard, time.Now())
+	runner.runtimeEnv = runtimeconfig.RuntimeEnv()
 	for _, role := range []plan.AgentRole{plan.AgentRoleReview, plan.AgentRolePullRequest, plan.AgentRoleMerge} {
 		if err := repository.AppendEvent(planDir, plan.Event{Type: plan.EventTypeAgentMetrics, PlanID: "plan-a", SliceID: "001-a", Timestamp: time.Now(), Metrics: &plan.AgentMetrics{Role: role, OutputTokens: 1000}}); err != nil {
 			t.Fatal(err)

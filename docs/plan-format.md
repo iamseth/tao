@@ -435,7 +435,7 @@ Agent budget warnings are informational summaries derived from `agent_metrics` e
 | Assistant messages | `80` | `300` |
 | Errored messages | `0` (warn on any) | `0` (warn on any) |
 
-These thresholds apply to output tokens, not total tokens. Corresponding `TAO_BUDGET_SLICE_<METRIC>` and `TAO_BUDGET_PLAN_<METRIC>` variables can override each advisory value, where `<METRIC>` is `OUTPUT_TOKENS`, `COST`, `TOOL_CALLS`, `ASSISTANT_MESSAGES`, or `ERRORED_MESSAGES`. Invalid advisory overrides retain the built-in value.
+These thresholds apply to output tokens, not total tokens. Corresponding `TAO_BUDGET_SLICE_<METRIC>` and `TAO_BUDGET_PLAN_<METRIC>` variables can override each advisory value, where `<METRIC>` is `OUTPUT_TOKENS`, `COST`, `TOOL_CALLS`, `ASSISTANT_MESSAGES`, or `ERRORED_MESSAGES`. Invalid advisory overrides are rejected by commands that consume them; see the [runtime configuration contract](../README.md#configuration).
 
 The opt-in hard caps `TAO_MAX_SLICE_OUTPUT_TOKENS` and `TAO_MAX_SLICE_COST` are separate and disabled by default. A crossed hard cap can stop a slice and emit `budget_exceeded`; advisory threshold warnings never change plan lifecycle state or block execution. Renderers should show the metric, threshold, observed value, and slice ID when applicable.
 

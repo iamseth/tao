@@ -9,7 +9,6 @@ import (
 
 	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/plan"
-	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/textbound"
 	"github.com/iamseth/tao/internal/verifydetect"
 )
@@ -85,7 +84,7 @@ func (e *VerifyFailedError) Unwrap() error {
 }
 
 func (s Service) Verify(ctx context.Context, detail *plan.PlanDetail, defaultBranch string, preMergeSHA string, options Options) error {
-	resolution, err := resolveMergeVerifyCommandForDetail(detail, options)
+	resolution, err := s.resolveMergeVerifyCommandForDetail(detail, options)
 	if err != nil {
 		return err
 	}
@@ -180,8 +179,9 @@ func (s Service) verifyFailed(ctx context.Context, git GitClient, snapshot merge
 	return &VerifyFailedError{Command: command, RepoRoot: repoRoot, Output: output, Cause: cause, CleanupErrors: cleanupErrs}
 }
 
-func resolveMergeVerifyCommandForDetail(detail *plan.PlanDetail, options Options) (mergeVerifyCommandResolution, error) {
-	envCommand, envSet := runtimeconfig.RuntimeMergeVerifyCommand()
+func (s Service) resolveMergeVerifyCommandForDetail(detail *plan.PlanDetail, options Options) (mergeVerifyCommandResolution, error) {
+	defaults := s.runtimeEnv().Defaults()
+	envCommand, envSet := defaults.MergeVerifyCommand, defaults.MergeVerifyCommandSet
 	if !mergeVerifyNeedsDetection(options, envSet) {
 		return resolveMergeVerifyCommand(options, mergeVerifyCommandInputs{envCommand: envCommand, envSet: envSet}), nil
 	}
@@ -189,11 +189,12 @@ func resolveMergeVerifyCommandForDetail(detail *plan.PlanDetail, options Options
 	if err != nil {
 		return mergeVerifyCommandResolution{}, err
 	}
-	return resolveMergeVerifyCommandAtRoot(repoRoot, options), nil
+	return s.resolveMergeVerifyCommandAtRoot(repoRoot, options), nil
 }
 
-func resolveMergeVerifyCommandAtRoot(repoRoot string, options Options) mergeVerifyCommandResolution {
-	envCommand, envSet := runtimeconfig.RuntimeMergeVerifyCommand()
+func (s Service) resolveMergeVerifyCommandAtRoot(repoRoot string, options Options) mergeVerifyCommandResolution {
+	defaults := s.runtimeEnv().Defaults()
+	envCommand, envSet := defaults.MergeVerifyCommand, defaults.MergeVerifyCommandSet
 	inputs := mergeVerifyCommandInputs{envCommand: envCommand, envSet: envSet}
 	if mergeVerifyNeedsDetection(options, envSet) {
 		if command := verifydetect.DetectCommand(repoRoot); command != "" {
