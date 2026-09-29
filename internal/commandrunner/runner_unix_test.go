@@ -119,3 +119,16 @@ func TestDefaultLocalTimeoutKillsDescendants(t *testing.T) {
 	}
 	assertCommandDescendantGone(t, pidPath)
 }
+
+func TestDefaultLocalStripsSliceCompletionOwnerToken(t *testing.T) {
+	t.Setenv(SliceCompletionOwnerEnv, "leaked-owner")
+	t.Setenv("TAO_RUNNER_KEEP", "kept")
+	var stdout bytes.Buffer
+	err := DefaultLocal(context.Background(), "", "sh", []string{"-c", `test -z "${TAO_SLICE_COMPLETION_OWNER+x}" && printf '%s' "$TAO_RUNNER_KEEP"`}, &stdout, io.Discard)
+	if err != nil {
+		t.Fatalf("spawned command still saw %s: %v", SliceCompletionOwnerEnv, err)
+	}
+	if stdout.String() != "kept" {
+		t.Fatalf("unrelated environment was not passed through: %q", stdout.String())
+	}
+}

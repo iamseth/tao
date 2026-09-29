@@ -13,11 +13,12 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/agent/process"
+	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/filelock"
 	"github.com/iamseth/tao/internal/plan"
 )
 
-const sliceCompletionOwnerEnv = "TAO_SLICE_COMPLETION_OWNER"
+const sliceCompletionOwnerEnv = commandrunner.SliceCompletionOwnerEnv
 const completionOwnerName = ".slice-completion-owner.json"
 const completionPollInterval = 25 * time.Millisecond
 
