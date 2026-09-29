@@ -3,7 +3,11 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,260 +15,309 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/agentinput"
+	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/plan"
 )
 
-func TestSliceCompleteCommandCompletesPlan(t *testing.T) {
+func newVerifiedCLICompletion(t *testing.T, policy string, commands ...string) (*plan.PlanRecord, []string) {
+	t.Helper()
+	repo := newCLICommitRepo(t)
+	root := filepath.Join(t.TempDir(), "worktree")
+	runCLICommitGit(t, repo, "worktree", "add", "-b", "tao/complete", root)
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	fixture := newRunPlanFixture(t, plan.StatusInProgress, []string{"001-a"}, nil, "001-a", plan.StatusInProgress)
-	detail, err := plan.NewFileRepository("").ResolvePlan(context.Background(), fixture.dir)
+	record, err := plan.NewFileRepository("").ResolvePlanRecord(context.Background(), fixture.dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	started := time.Date(2026, 5, 3, 23, 36, 51, 0, time.UTC)
-	record, err := plan.NewPlanRecord(fixture.dir, detail)
-	if err != nil {
+	d := record.Detail()
+	head := strings.TrimSpace(runCLICommitGit(t, root, "rev-parse", "HEAD"))
+	d.State.Repo.Root = repo
+	d.State.Plan.LastRunCommitPolicy = policy
+	d.State.Plan.CurrentSlice = new("001-a")
+	d.State.Workspace = &plan.Workspace{Strategy: plan.WorkspaceStrategyWorktree, Root: root, Path: root, Branch: "tao/complete", HeadSHA: head, LifecycleStatus: plan.WorkspaceStatusReady}
+	slice := &d.Slices.Slices[0]
+	slice.Timing.StartedAt = new(time.Now().UTC().Add(-time.Minute))
+	slice.ExecutionRoot = root
+	slice.ExecutionStart = &plan.SliceExecutionStart{Branch: "tao/complete", Head: head, CommitPolicy: policy, WorkspaceStrategy: plan.WorkspaceStrategyWorktree}
+	slice.Verification = plan.Verification{Commands: commands}
+	if err := record.PersistArtifacts(); err != nil {
 		t.Fatal(err)
 	}
-	if err := record.StartSlice("001-a", plan.SliceStartRequest{StartedAt: started}); err != nil {
-		t.Fatal(err)
+	inputs := t.TempDir()
+	writeCLICommitFile(t, inputs, "notes", "implemented slice completion")
+	writeCLICommitFile(t, inputs, "proposal", `{"type":"feat","scope":"cli","summary":"observe slice gates","what":"Execute declared gates.","why":"Do not trust claims."}`)
+	args := []string{"slice-complete", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--notes-file", filepath.Join(inputs, "notes")}
+	if policy == "slice" {
+		args = append(args, "--commit-proposal-file", filepath.Join(inputs, "proposal"))
 	}
-	inputDir := t.TempDir()
-	notesFile := filepath.Join(inputDir, "notes.md")
-	resultsFile := filepath.Join(inputDir, "results.json")
-	proposalFile := filepath.Join(inputDir, "proposal.json")
-	if err := os.WriteFile(notesFile, []byte("implemented slice completion"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(resultsFile, []byte(`[{"command":"go test ./internal/cli","cwd":"/repo","result":"passed","details":"ok"}]`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(proposalFile, []byte(`{"type":"feat","scope":"cli","summary":"accept slice proposals","what":"Read a structured proposal at completion.","why":"Reuse the active implementation agent."}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
-	if err := app.Run(context.Background(), []string{"slice-complete", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--notes-file", notesFile, "--verification-results-file", resultsFile, "--commit-proposal-file", proposalFile}); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(out.String(), "Slice completed: 001-a") {
-		t.Fatalf("expected completion output, got %q", out.String())
-	}
-	state := readText(t, filepath.Join(fixture.dir, "state.json"))
-	for _, want := range []string{`"status": "in_review"`, `"current_slice": null`, `"pending_slices": []`, `"completed_slices": [`, `"001-a"`} {
-		if !strings.Contains(state, want) {
-			t.Fatalf("expected %q in state:\n%s", want, state)
-		}
-	}
-	slices := readText(t, filepath.Join(fixture.dir, "slices.json"))
-	for _, want := range []string{`"status": "completed"`, `"notes": "implemented slice completion"`, `"verification_results": [`} {
-		if !strings.Contains(slices, want) {
-			t.Fatalf("expected %q in slices:\n%s", want, slices)
-		}
-	}
-	if events := readText(t, filepath.Join(fixture.dir, "events.jsonl")); !strings.Contains(events, `"type":"slice_completed"`) {
-		t.Fatalf("expected completion event, got %q", events)
-	}
-	// The throwaway bookkeeping inputs must be removed after a successful
-	// completion so they cannot be staged or committed.
-	if _, err := os.Stat(notesFile); !os.IsNotExist(err) {
-		t.Fatalf("expected notes file removed, stat err = %v", err)
-	}
-	if _, err := os.Stat(resultsFile); !os.IsNotExist(err) {
-		t.Fatalf("expected verification results file removed, stat err = %v", err)
-	}
-	if _, err := os.Stat(proposalFile); !os.IsNotExist(err) {
-		t.Fatalf("expected commit proposal file removed, stat err = %v", err)
-	}
+	return record, args
 }
 
-func TestSliceCompleteNormalizesRelativeVerificationCWDsBeforePersisting(t *testing.T) {
-	workDir := t.TempDir()
-	relativeCWD := filepath.Join("services", "CourseAssignment")
-	relativeDir := filepath.Join(workDir, relativeCWD)
-	if err := os.MkdirAll(relativeDir, 0o750); err != nil {
-		t.Fatal(err)
-	}
-	t.Chdir(workDir)
-
-	fixture := newRunPlanFixture(t, plan.StatusInProgress, []string{"001-a"}, nil, "001-a", plan.StatusInProgress)
-	detail, err := plan.NewFileRepository("").ResolvePlan(context.Background(), fixture.dir)
+func reloadCLICompletion(t *testing.T, record *plan.PlanRecord) *plan.PlanDetail {
+	t.Helper()
+	d, err := plan.NewFileRepository("").ResolvePlan(context.Background(), record.Dir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err := plan.NewPlanRecord(fixture.dir, detail)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := record.StartSlice("001-a", plan.SliceStartRequest{StartedAt: time.Date(2026, 5, 3, 23, 36, 51, 0, time.UTC)}); err != nil {
-		t.Fatal(err)
-	}
-
-	notesFile := filepath.Join(t.TempDir(), "notes.md")
-	resultsFile := filepath.Join(t.TempDir(), "results.json")
-	if err := os.WriteFile(notesFile, []byte("normalized cwd"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	absoluteCWD := workDir + string(os.PathSeparator) + "absolute" + string(os.PathSeparator) + ".." + string(os.PathSeparator) + "absolute"
-	resultBytes, err := json.Marshal([]plan.VerificationRun{
-		{Command: "go test ./...", CWD: relativeCWD, Result: "passed", Details: "relative"},
-		{Command: "go test ./internal/cli", CWD: absoluteCWD, Result: "passed", Details: "absolute"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(resultsFile, resultBytes, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
-	if err := app.Run(context.Background(), []string{"slice-complete", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--notes-file", notesFile, "--verification-results-file", resultsFile}); err != nil {
-		t.Fatal(err)
-	}
-
-	persisted, err := plan.NewFileRepository("").ResolvePlan(context.Background(), fixture.dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	runs := persisted.Slices.Slices[0].VerificationResults
-	if len(runs) != 2 {
-		t.Fatalf("expected 2 verification results, got %#v", runs)
-	}
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	joined := filepath.Join(wd, relativeCWD)
-	expectedRelativeCWD, err := filepath.EvalSymlinks(joined)
-	if err != nil {
-		expectedRelativeCWD = joined
-	}
-	if runs[0].CWD != expectedRelativeCWD {
-		t.Fatalf("relative cwd persisted as %q, want %q", runs[0].CWD, expectedRelativeCWD)
-	}
-	if runs[1].CWD != absoluteCWD {
-		t.Fatalf("absolute cwd persisted as %q, want verbatim %q", runs[1].CWD, absoluteCWD)
-	}
+	return d
 }
 
-func TestSliceCompleteCapsVerificationDetailsBeforePersisting(t *testing.T) {
-	fixture := newRunPlanFixture(t, plan.StatusInProgress, []string{"001-a"}, nil, "001-a", plan.StatusInProgress)
-	detail, err := plan.NewFileRepository("").ResolvePlan(context.Background(), fixture.dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	record, err := plan.NewPlanRecord(fixture.dir, detail)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := record.StartSlice("001-a", plan.SliceStartRequest{StartedAt: time.Date(2026, 5, 3, 23, 36, 51, 0, time.UTC)}); err != nil {
-		t.Fatal(err)
-	}
-
-	notesFile := filepath.Join(t.TempDir(), "notes.md")
-	resultsFile := filepath.Join(t.TempDir(), "results.json")
-	if err := os.WriteFile(notesFile, []byte("capped details"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	longDetails := strings.Repeat("x", agentinput.MaxTextRunes+10)
-	resultBytes, err := json.Marshal([]plan.VerificationRun{{Command: " go test ./internal/cli ", CWD: "/repo", Result: " passed ", Details: longDetails}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(resultsFile, resultBytes, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
-	if err := app.Run(context.Background(), []string{"slice-complete", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--notes-file", notesFile, "--verification-results-file", resultsFile}); err != nil {
-		t.Fatal(err)
-	}
-
-	persisted, err := plan.NewFileRepository("").ResolvePlan(context.Background(), fixture.dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	run := persisted.Slices.Slices[0].VerificationResults[0]
-	if run.Command != "go test ./internal/cli" || run.Result != "passed" {
-		t.Fatalf("expected command/result trimmed, got %#v", run)
-	}
-	if got := len([]rune(run.Details)); got != agentinput.MaxTextRunes {
-		t.Fatalf("details length = %d, want %d", got, agentinput.MaxTextRunes)
-	}
-}
-
-func TestSliceCompleteRejectsOversizedInputsAndInvalidResults(t *testing.T) {
-	writeInputs := func(t *testing.T, notes string, results string) (string, string) {
-		t.Helper()
-		dir := t.TempDir()
-		notesFile := filepath.Join(dir, "notes.md")
-		resultsFile := filepath.Join(dir, "results.json")
-		if err := os.WriteFile(notesFile, []byte(notes), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(resultsFile, []byte(results), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		return notesFile, resultsFile
-	}
-
-	// Bound-specific rejection cases are unit-tested against
-	// run.LoadSliceCompletionInputs; this covers command wiring for one
-	// oversized input and one invalid-shape input.
-	tests := []struct {
-		name    string
-		notes   string
-		results string
-		want    string
-	}{
-		{
-			name:    "oversized notes",
-			notes:   strings.Repeat("n", int(agentinput.MaxFileBytes)+1),
-			results: `[]`,
-			want:    "notes file exceeds",
-		},
-		{
-			name:    "missing fields",
-			notes:   "ok",
-			results: `[{"command":"go test ./internal/cli","cwd":"/repo"}]`,
-			want:    "must include command, cwd, and result",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			notesFile, resultsFile := writeInputs(t, tc.notes, tc.results)
+func TestSliceCompleteObservedGatesAndOptionalClaims(t *testing.T) {
+	for _, mode := range []string{"no edits", "commit", "manual", "claims"} {
+		t.Run(mode, func(t *testing.T) {
+			policy := "slice"
+			if mode == "manual" {
+				policy = "none"
+			}
+			record, args := newVerifiedCLICompletion(t, policy, "printf observed")
+			root := record.Detail().Slices.Slices[0].ExecutionRoot
+			if mode == "commit" || mode == "manual" {
+				writeCLICommitFile(t, root, "work.go", "package work\n")
+			}
+			if mode == "claims" {
+				claims := filepath.Join(t.TempDir(), "claims.json")
+				writeCLICommitFile(t, filepath.Dir(claims), "claims.json", `[{"command":"printf observed","cwd":".","result":"failed","details":"claim-secret"}]`)
+				args = append(args, "--verification-results-file", claims)
+			}
 			var out bytes.Buffer
-			app := App{Out: &out, Err: &out}
-			err := app.Run(context.Background(), []string{"slice-complete", "--plan-dir", t.TempDir(), "--slice-id", "001-a", "--notes-file", notesFile, "--verification-results-file", resultsFile})
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("expected error containing %q, got %v", tc.want, err)
+			if err := (App{Out: &out, Err: &out}).Run(context.Background(), args); err != nil {
+				t.Fatal(err)
+			}
+			d := reloadCLICompletion(t, record)
+			s := d.Slices.Slices[0]
+			if s.Status != plan.StatusCompleted || s.CommitIntent == nil || s.CommitIntent.Verification == nil {
+				t.Fatalf("incomplete: %+v", s)
+			}
+			if len(s.VerificationResults) != 1 || s.VerificationResults[0].Source != plan.VerificationSourceTao || !strings.Contains(s.VerificationResults[0].Details, "stdout (tail):\nobserved") {
+				t.Fatalf("not observed: %+v", s.VerificationResults)
+			}
+			if strings.Contains(out.String(), "claim-secret") || !strings.Contains(out.String(), "Gate 1: passed") {
+				t.Fatal(out.String())
+			}
+			if _, err := os.Stat(args[6]); !os.IsNotExist(err) {
+				t.Fatalf("notes retained: %v", err)
+			}
+			if mode == "manual" && s.Completion.Outcome != plan.SliceCompletionManualUncommitted {
+				t.Fatal(s.Completion)
+			}
+			if mode == "claims" {
+				found := false
+				for _, e := range d.Events {
+					if e.Type == plan.EventTypeVerificationClaimMismatch {
+						found = true
+					}
+				}
+				if !found {
+					t.Fatal("missing mismatch diagnostic")
+				}
 			}
 		})
+	}
+}
+
+func TestSliceCompleteRejectsInputsBeforeGates(t *testing.T) {
+	for _, tc := range []struct{ name, claims, want string }{
+		{"forged source", `[{"command":"true","cwd":".","result":"passed","source":"tao"}]`, "unknown field"},
+		{"missing result", `[{"command":"true","cwd":"."}]`, "requires bounded"},
+		{"null", `null`, "must be an array"},
+		{"oversized notes", `[]`, "notes file exceeds"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			record, args := newVerifiedCLICompletion(t, "slice", "true")
+			if tc.name == "oversized notes" {
+				if err := os.WriteFile(args[6], []byte(strings.Repeat("n", int(agentinput.MaxFileBytes)+1)), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			claims := filepath.Join(t.TempDir(), "claims")
+			writeCLICommitFile(t, filepath.Dir(claims), "claims", tc.claims)
+			args = append(args, "--verification-results-file", claims)
+			var out bytes.Buffer
+			err := (App{Out: &out, Err: &out}).Run(context.Background(), args)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v, want %s", err, tc.want)
+			}
+			if _, err := os.Stat(args[6]); err != nil {
+				t.Fatal("lost repair inputs")
+			}
+			if s := reloadCLICompletion(t, record).Slices.Slices[0]; s.CommitIntent != nil || s.VerificationAttempt != nil {
+				t.Fatal("advanced rejected input")
+			}
+		})
+	}
+}
+
+func TestSliceCompleteFailureRepairAndRecovery(t *testing.T) {
+	record, args := newVerifiedCLICompletion(t, "slice", "test -f repaired.go")
+	root := record.Detail().Slices.Slices[0].ExecutionRoot
+	var out bytes.Buffer
+	app := App{Out: &out, Err: &out}
+	err := app.Run(context.Background(), args)
+	for _, want := range []string{"No intent recorded", "Plan-Owned Files", "--gate-command", "--failing-path", "--invalid-command", "--corrected-command"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("missing %q: %v", want, err)
+		}
+	}
+	if s := reloadCLICompletion(t, record).Slices.Slices[0]; s.CommitIntent != nil || s.VerificationAttempt == nil {
+		t.Fatal("failure authorized intent")
+	}
+	writeCLICommitFile(t, root, "repaired.go", "package repaired\n")
+	// Keep identical inputs for post-intent recovery after successful cleanup.
+	notes, proposal := readText(t, args[6]), readText(t, args[8])
+	if err := app.Run(context.Background(), args); err != nil {
+		t.Fatal(err)
+	}
+	writeCLICommitFile(t, filepath.Dir(args[6]), filepath.Base(args[6]), notes)
+	writeCLICommitFile(t, filepath.Dir(args[8]), filepath.Base(args[8]), proposal)
+	head := runCLICommitGit(t, root, "rev-parse", "HEAD")
+	app.CommandRunner = func(ctx context.Context, cwd, name string, argv []string, stdout, stderr io.Writer) error {
+		if name == "sh" {
+			t.Fatal("recovery reran gates")
+		}
+		return commandrunner.DefaultLocal(ctx, cwd, name, argv, stdout, stderr)
+	}
+	if err := app.Run(context.Background(), args); err != nil {
+		t.Fatal(err)
+	}
+	if got := runCLICommitGit(t, root, "rev-parse", "HEAD"); got != head {
+		t.Fatal("recovery committed twice")
+	}
+}
+
+func TestSliceCompleteMechanicalCorrection(t *testing.T) {
+	record, args := newVerifiedCLICompletion(t, "none", "go test pkg/example_test.go")
+	root := record.Detail().Slices.Slices[0].ExecutionRoot
+	writeCLICommitFile(t, root, "pkg/example_test.go", "package example\n")
+	record.Detail().Slices.Slices[0].Verification.Steps = []plan.VerificationStep{{Command: "go test pkg/example_test.go", CWD: "pkg"}}
+	if err := record.PersistArtifacts(); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	calls := 0
+	app := App{Out: &out, Err: &out, CommandRunner: func(ctx context.Context, cwd, name string, argv []string, stdout, stderr io.Writer) error {
+		if name != "sh" {
+			return commandrunner.DefaultLocal(ctx, cwd, name, argv, stdout, stderr)
+		}
+		calls++
+		if calls == 1 {
+			_, _ = io.WriteString(stderr, "No test files found")
+			return errors.New("invalid command")
+		}
+		if argv[1] != "go test example_test.go" {
+			t.Fatalf("unsafe correction %v", argv)
+		}
+		return nil
+	}}
+	if err := app.Run(context.Background(), args); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 || !strings.Contains(out.String(), "corrected from:") {
+		t.Fatal(out.String())
+	}
+}
+
+func TestSliceCompleteCommandSignalCancelsGate(t *testing.T) {
+	record, args := newVerifiedCLICompletion(t, "none", "sleep 30")
+	var cancel context.CancelFunc
+	old := newCommandSignalContext
+	newCommandSignalContext = func(ctx context.Context) (context.Context, context.CancelFunc) {
+		var bound context.Context
+		bound, cancel = context.WithCancel(ctx)
+		return bound, cancel
+	}
+	t.Cleanup(func() { newCommandSignalContext = old })
+	var out bytes.Buffer
+	app := App{Out: &out, Err: &out, CommandRunner: func(ctx context.Context, cwd, name string, argv []string, stdout, stderr io.Writer) error {
+		if name != "sh" {
+			return commandrunner.DefaultLocal(ctx, cwd, name, argv, stdout, stderr)
+		}
+		cancel()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+			t.Fatal("gate ignored signal")
+			return nil
+		}
+	}}
+	if err := app.Run(context.Background(), args); !errors.Is(err, context.Canceled) {
+		t.Fatalf("signal: %v", err)
+	}
+	if s := reloadCLICompletion(t, record).Slices.Slices[0]; s.CommitIntent != nil || s.VerificationAttempt == nil {
+		t.Fatal("signal lost diagnostic or created intent")
+	}
+	if _, err := os.Stat(args[6]); err != nil {
+		t.Fatal("signal removed inputs")
+	}
+}
+
+func TestSliceCompleteHistoricalInputsRecoverVerbatim(t *testing.T) {
+	record, args := newVerifiedCLICompletion(t, "slice", "exit 99")
+	d := record.Detail()
+	s := &d.Slices.Slices[0]
+	message := "historical message\n\nVerification: old claim"
+	results := []plan.VerificationRun{{Command: "old gate", CWD: s.ExecutionRoot, Result: "passed", Details: "legacy"}}
+	payload, err := json.Marshal(struct {
+		PlanID  string                 `json:"plan_id"`
+		SliceID string                 `json:"slice_id"`
+		Policy  string                 `json:"policy"`
+		Notes   string                 `json:"notes"`
+		Results []plan.VerificationRun `json:"results"`
+	}{d.State.Plan.ID, "001-a", "slice", readText(t, args[6]), results})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.CommitIntent = &plan.SliceCommitIntent{Hash: fmt.Sprintf("%x", sha256.Sum256(payload)), Policy: "slice", StartingBranch: s.ExecutionStart.Branch, StartingHead: s.ExecutionStart.Head, Message: message, CreatedAt: time.Now().UTC()}
+	if err := record.PersistArtifacts(); err != nil {
+		t.Fatal(err)
+	}
+	args = args[:7] // Historical intent, not a fresh proposal.
+	var out bytes.Buffer
+	app := App{Out: &out, Err: &out}
+	if err := app.Run(context.Background(), args); err == nil || !strings.Contains(err.Error(), "original --verification-results-file") {
+		t.Fatalf("missing historical input: %v", err)
+	}
+	file := filepath.Join(t.TempDir(), "results")
+	data, err := json.Marshal(results)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeCLICommitFile(t, filepath.Dir(file), "results", string(data))
+	args = append(args, "--verification-results-file", file)
+	writeCLICommitFile(t, s.ExecutionRoot, "historical.go", "package historical\n")
+	if err := app.Run(context.Background(), args); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(runCLICommitGit(t, s.ExecutionRoot, "log", "-1", "--format=%B")); got != message {
+		t.Fatalf("historical message changed: %q", got)
+	}
+	if slice := reloadCLICompletion(t, record).Slices.Slices[0]; slice.VerificationAttempt != nil || slice.Status != plan.StatusCompleted {
+		t.Fatal("historical recovery reran failing gates")
 	}
 }
 
 func TestSliceCompleteHelpAndCompletion(t *testing.T) {
 	var out bytes.Buffer
 	app := App{Out: &out, Err: &out}
-	if err := app.Run(context.Background(), []string{"help"}); err != nil {
+	if err := app.Run(context.Background(), []string{"slice-complete", "--help"}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), topLevelHelpRow(t, "slice-complete")) {
-		t.Fatalf("expected slice-complete usage, got %q", out.String())
-	}
-	if !strings.Contains(out.String(), topLevelHelpRow(t, "approve")) {
-		t.Fatalf("expected approve usage, got %q", out.String())
+	for _, want := range []string{"[--verification-results-file FILE]", "ten-minute", "unchanged remaining agent-session", "not sandboxed", "Final repository verification is unchanged"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("help missing %q", want)
+		}
 	}
 	out.Reset()
-	if err := app.completion([]string{"zsh"}); err != nil {
+	if err := app.Run(context.Background(), []string{"completion", "zsh"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"slice-complete:Complete a slice from notes, verification, and a commit proposal", "--commit-proposal-file[JSON file containing a structured commit proposal", "--verification-results-file[JSON file containing verification results]"} {
+	for _, want := range []string{"slice-complete:Verify declared gates and complete a slice", "--verification-results-file[optional JSON advisory claims"} {
 		if !strings.Contains(out.String(), want) {
-			t.Fatalf("expected completion to contain %q, got %q", want, out.String())
+			t.Fatalf("completion missing %q", want)
 		}
 	}
 }

@@ -237,6 +237,8 @@ func cloneSlice(slice Slice) Slice {
 		clone.VerificationRepair = &binding
 	}
 	clone.VerificationResults = cloneVerificationRuns(slice.VerificationResults)
+	clone.VerificationAttempt = cloneSliceVerificationSnapshot(slice.VerificationAttempt)
+	clone.CommitIntent = cloneSliceCommitIntent(slice.CommitIntent)
 	clone.Extra = cloneMap(slice.Extra)
 	return clone
 }
@@ -282,8 +284,30 @@ func cloneVerificationRuns(runs []VerificationRun) []VerificationRun {
 		return nil
 	}
 	clone := make([]VerificationRun, len(runs))
-	copy(clone, runs)
+	for i, run := range runs {
+		clone[i] = run
+		clone[i].ExitCode = cloneIntPtr(run.ExitCode)
+		clone[i].DurationMilliseconds = cloneInt64Ptr(run.DurationMilliseconds)
+	}
 	return clone
+}
+
+func cloneSliceVerificationSnapshot(snapshot *SliceVerificationSnapshot) *SliceVerificationSnapshot {
+	if snapshot == nil {
+		return nil
+	}
+	clone := *snapshot
+	clone.Runs = cloneVerificationRuns(snapshot.Runs)
+	return &clone
+}
+
+func cloneSliceCommitIntent(intent *SliceCommitIntent) *SliceCommitIntent {
+	if intent == nil {
+		return nil
+	}
+	clone := *intent
+	clone.Verification = cloneSliceVerificationSnapshot(intent.Verification)
+	return &clone
 }
 
 func cloneEvents(events []Event) []Event {

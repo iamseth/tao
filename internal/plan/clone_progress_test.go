@@ -103,6 +103,28 @@ func TestClonePlanDetailDeepCopiesMutableFields(t *testing.T) {
 	}
 }
 
+func TestCloneSliceVerificationEvidence(t *testing.T) {
+	snapshot := testSliceVerificationSnapshot()
+	original := Slice{VerificationAttempt: &snapshot, CommitIntent: &SliceCommitIntent{Hash: "hash", Verification: &snapshot}, VerificationResults: snapshot.Runs}
+	clone := cloneSlice(original)
+	clone.CommitIntent.Hash = "changed"
+	for _, runs := range [][]VerificationRun{clone.VerificationAttempt.Runs, clone.CommitIntent.Verification.Runs, clone.VerificationResults} {
+		runs[0].Command = "changed"
+		*runs[0].ExitCode = 127
+		*runs[0].DurationMilliseconds = 100
+	}
+	if original.CommitIntent.Hash != "hash" || snapshot.Runs[0].Command != "go test ./..." || *snapshot.Runs[0].ExitCode != 1 || *snapshot.Runs[0].DurationMilliseconds != 0 {
+		t.Fatal("clone aliases original verification evidence")
+	}
+	*clone.VerificationAttempt.Runs[0].ExitCode = 2
+	if *clone.CommitIntent.Verification.Runs[0].ExitCode != 127 {
+		t.Fatal("cloned attempt aliases frozen intent")
+	}
+	if cloneSliceVerificationSnapshot(nil) != nil || cloneSliceCommitIntent(nil) != nil {
+		t.Fatal("nil legacy fields must remain nil")
+	}
+}
+
 func TestProgressSnapshotDetectsProgress(t *testing.T) {
 	detail := &PlanDetail{State: State{Status: StatusPlanned, Plan: PlanState{ID: "plan", PendingSlices: []string{"001-a"}}}, Slices: SlicesFile{Slices: []Slice{{ID: "001-a", Status: StatusPending}}}}
 	before := SnapshotProgress(detail)

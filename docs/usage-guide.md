@@ -535,16 +535,27 @@ context — it slices from the conversation, not from a file you pass it.
 Day to day you run **`tao run <plan-id>`** from the CLI. Under the hood the
 `/tao-run` prompt puts the agent in **WORK mode** to implement exactly **one** pending
 slice at a time: select the next slice, honor `depends_on` and approval gates,
-implement only that slice, run its verification commands, and complete it via
-`tao slice-complete` (which Tao uses to update state, pending-slice ordering,
-and events). It stops on blockers and failed verification rather than pushing
+implement only that slice with test-first targeted checks, then call
+`tao slice-complete` for Tao-owned declared gates before intent, commit, and
+completion bookkeeping. No duplicate full gate sequence or results file is
+required. Optional agent results are advisory, not evidence. It stops on blockers and failed verification rather than pushing
 through. Run agents may record single-line `Ruling:` notes instead of blocking
 on small ambiguities already settled by plan intent; genuinely missing or
 contradictory contracts remain blockers.
 
 The run packet lists **Plan-Owned Files** derived by Tao from Git. When a
 declared verification gate fails only in those files, agents make the minimal
-fix in-session and rerun the gate, even if an earlier slice changed the files.
+fix in-session and retry `tao slice-complete` before intent, even if an earlier
+slice changed the files. Outside-owned or unresolved failures use `slice-blocked`
+with command/path evidence; they do not grant another repair session. Once intent
+exists, preserve original inputs and recover the exact transaction without edits
+or rerunning gates.
+
+Gates run locally, not sandboxed or cryptographically attested. Each command has
+a fixed ten-minute bound within the unchanged remaining agent-session budget;
+turning off session timeout does not turn off this bound. Tao reports observed
+failures and supported mechanical corrections for diagnosis. Final repository
+verification remains unchanged. See [the evidence contract](plan-format.md#observed-slice-verification).
 
 **Choose the run size:**
 

@@ -23,6 +23,7 @@ type SliceCompletionRequest struct {
 	SliceID             string
 	Notes               string
 	VerificationResults []plan.VerificationRun
+	VerificationClaims  []VerificationClaim
 	CommitProposal      *commitcontract.Proposal
 	Now                 time.Time
 }
@@ -33,10 +34,23 @@ type SliceCompletionService struct {
 	Output        io.Writer
 }
 
-// Complete creates or recovers a slice-policy commit, then persists completion.
-// Historical plan policy keeps its legacy metadata-only behavior until that
-// policy is retired; none records explicit manual ownership without mutating Git.
+// Complete observes declared gates before any new intent. Only a recorded
+// historical intent can enter claim-based historical settlement.
 func (s SliceCompletionService) Complete(ctx context.Context, request SliceCompletionRequest) error {
+	return s.CompleteVerified(ctx, request)
+}
+
+// UsesHistoricalCompletionInputs selects the original decoder only for a
+// pre-verification intent. The transaction rechecks this after locked reload.
+func UsesHistoricalCompletionInputs(detail *plan.PlanDetail, sliceID string) bool {
+	if detail == nil {
+		return false
+	}
+	slice := completionSlice(detail, sliceID)
+	return slice != nil && slice.CommitIntent != nil && slice.CommitIntent.Verification == nil && !strings.HasPrefix(slice.CommitIntent.Hash, verifiedCompletionHashPrefix)
+}
+
+func (s SliceCompletionService) settleHistoricalCompletion(ctx context.Context, request SliceCompletionRequest) error {
 	if request.Record == nil || request.Record.Detail() == nil {
 		return fmt.Errorf("slice completion requires a plan record")
 	}
@@ -49,31 +63,22 @@ func (s SliceCompletionService) Complete(ctx context.Context, request SliceCompl
 		return fmt.Errorf("slice %s not found", request.SliceID)
 	}
 	policy := strings.TrimSpace(detail.State.Plan.LastRunCommitPolicy)
-	if policy == "" || policy == CommitPolicyPlan.String() {
-		return persistSliceCompletion(request, nil, request.Now)
-	}
 	if policy != CommitPolicySlice.String() && policy != CommitPolicyNone.String() {
 		return fmt.Errorf("slice %s has unsupported commit policy %q", request.SliceID, policy)
 	}
 
+	if !UsesHistoricalCompletionInputs(detail, request.SliceID) {
+		return fmt.Errorf("historical settlement requires a recorded historical intent")
+	}
 	intent := slice.CommitIntent
+	if intent.Policy != policy {
+		return fmt.Errorf("historical intent policy differs from recorded run policy")
+	}
 	message := ""
-	var err error
 	legacyIntent := false
 	if policy == CommitPolicySlice.String() {
-		if intent == nil {
-			if request.CommitProposal == nil {
-				return fmt.Errorf("slice %s requires a commit proposal before recording intent", request.SliceID)
-			}
-			message, err = formatSliceCommitMessage(detail.State.Plan.ID, request.SliceID, *request.CommitProposal)
-			if err != nil {
-				return err
-			}
-		} else {
-			// Persisted intent is the recovery authority. Do not reinterpret or
-			// centrally validate historical messages.
-			message = intent.Message
-		}
+		// Persisted intent is the recovery authority, verbatim.
+		message = intent.Message
 	}
 	hash, err := sliceCompletionHash(detail.State.Plan.ID, request.SliceID, policy, request.Notes, request.VerificationResults, message)
 	if err != nil {
@@ -120,32 +125,41 @@ func (s SliceCompletionService) Complete(ctx context.Context, request SliceCompl
 		root = detail.State.Repo.Root
 	}
 	git := gitops.NewClient(root, s.CommandRunner)
-	if intent == nil {
-		branch, err := git.CurrentBranch(ctx)
-		if err != nil {
-			return fmt.Errorf("capture slice completion branch: %w", err)
-		}
-		head, err := git.RevParse(ctx, "HEAD")
-		if err != nil {
-			return fmt.Errorf("capture slice completion head: %w", err)
-		}
-		if policy == CommitPolicySlice.String() {
-			if slice.ExecutionStart != nil {
-				if slice.ExecutionStart.Branch != "" {
-					branch = slice.ExecutionStart.Branch
-				}
-				if slice.ExecutionStart.Head != "" {
-					head = slice.ExecutionStart.Head
-				}
+
+	return s.finishSliceCompletion(ctx, git, request, *intent, legacyIntent, func() error { return nil })
+}
+
+// Shared Git policy for historical and verified transactions. The verified caller
+// supplies a synchronous lifetime/boundary check before every mutation.
+func (s SliceCompletionService) finishSliceCompletion(ctx context.Context, git gitops.Client, request SliceCompletionRequest, intent plan.SliceCommitIntent, legacyIntent bool, check func() error) error {
+	if err := check(); err != nil {
+		return err
+	}
+	if intent.Policy == CommitPolicyNone.String() {
+		// Historical manual intents retain their original settlement semantics.
+		// A verified fingerprint alone cannot detect a different clean tree.
+		if intent.Verification != nil {
+			branch, err := git.CurrentBranch(ctx)
+			if err != nil {
+				return fmt.Errorf("inspect slice completion branch: %w", err)
+			}
+			if branch != intent.StartingBranch {
+				return fmt.Errorf("slice completion refused: execution branch changed from %q to %q", intent.StartingBranch, branch)
+			}
+			head, err := git.RevParse(ctx, "HEAD")
+			if err != nil {
+				return fmt.Errorf("inspect slice completion head: %w", err)
+			}
+			if head != intent.StartingHead {
+				return fmt.Errorf("slice completion refused: execution HEAD changed from %q to %q", intent.StartingHead, head)
 			}
 		}
-		intent = &plan.SliceCommitIntent{Hash: hash, Policy: policy, StartingBranch: branch, StartingHead: head, Message: message, CreatedAt: request.Now}
-		if err := persistSliceCommitIntent(request, *intent); err != nil {
-			return fmt.Errorf("record slice commit intent: %w", err)
+		if err := checkFrozenVerificationWorktree(ctx, git, intent); err != nil {
+			return err
 		}
-	}
-
-	if policy == CommitPolicyNone.String() {
+		if err := check(); err != nil {
+			return err
+		}
 		outcome := plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionManualUncommitted}
 		return persistSliceCompletion(request, &outcome, request.Now)
 	}
@@ -164,7 +178,7 @@ func (s SliceCompletionService) Complete(ctx context.Context, request SliceCompl
 		return fmt.Errorf("inspect slice completion head: %w", err)
 	}
 	if head != intent.StartingHead {
-		return s.recoverCommit(ctx, git, request, *intent, head)
+		return s.recoverCommit(ctx, git, request, intent, head)
 	}
 
 	status, err := git.StatusPorcelain(ctx)
@@ -176,9 +190,15 @@ func (s SliceCompletionService) Complete(ctx context.Context, request SliceCompl
 		return fmt.Errorf("slice commit refused: ambiguous git status entry %q", classification.AmbiguousLines[0])
 	}
 	paths := commitcontract.UniquePaths(classification.CommitCandidates)
-	unexpected := commitcontract.UnexpectedPaths(paths, expectedPlanCommitPaths(detail, request.SliceID))
+	unexpected := commitcontract.UnexpectedPaths(paths, expectedPlanCommitPaths(request.Record.Detail(), request.SliceID))
 	if err := commitcontract.SafetyError(paths, nil); err != nil {
 		return fmt.Errorf("slice commit refused: %w", err)
+	}
+	if err := checkFrozenVerificationWorktree(ctx, git, intent); err != nil {
+		return err
+	}
+	if err := check(); err != nil {
+		return err
 	}
 	if len(paths) == 0 {
 		outcome := plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionNoChanges, CommitSHA: head}
@@ -189,8 +209,17 @@ func (s SliceCompletionService) Complete(ctx context.Context, request SliceCompl
 			return fmt.Errorf("unstage Tao metadata: %w", err)
 		}
 	}
+	if err := check(); err != nil {
+		return err
+	}
 	if err := git.Add(ctx, paths...); err != nil {
 		return fmt.Errorf("stage slice completion paths: %w", err)
+	}
+	if err := checkFrozenVerificationWorktree(ctx, git, intent); err != nil {
+		return err
+	}
+	if err := check(); err != nil {
+		return err
 	}
 	commitSHA := ""
 	if legacyIntent {

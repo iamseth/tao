@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"os/exec"
+	"time"
 )
 
 // Runner runs a local command with optional stdout and stderr writers.
@@ -18,6 +19,11 @@ func DefaultLocal(ctx context.Context, cwd string, name string, args []string, s
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
+	// A shell can exit while descendants retain its output pipes. Bound Wait's
+	// pipe drain too: context cancellation alone does not interrupt that wait
+	// after the shell exits. ErrWaitDelay reports incomplete output, and deferred
+	// process-group cleanup terminates the remaining descendants on Unix.
+	cmd.WaitDelay = 100 * time.Millisecond
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	return cmd.Run()

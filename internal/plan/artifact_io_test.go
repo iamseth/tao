@@ -832,6 +832,56 @@ func (s *payloadArtifactStore) AppendEvent(_ string, event Event) error {
 	return nil
 }
 
+func TestVerificationEvidenceRoundTripAndLegacyShape(t *testing.T) {
+	const legacyRun = `{"command":"go test ./...","cwd":"/repo","result":"passed","details":"ok"}`
+	const legacyIntent = `{"hash":"intent-hash","policy":"slice","starting_branch":"tao/plan-a","starting_head":"base123","message":"feat: preserve work","created_at":"2026-07-19T15:44:35Z"}`
+	var run VerificationRun
+	var intent SliceCommitIntent
+	if err := json.Unmarshal([]byte(legacyRun), &run); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(legacyIntent), &intent); err != nil {
+		t.Fatal(err)
+	}
+	if run.Source != "" || run.ExitCode != nil || run.DurationMilliseconds != nil || intent.Verification != nil {
+		t.Fatal("legacy evidence was upgraded")
+	}
+	for _, test := range []struct {
+		value any
+		want  string
+	}{{run, legacyRun}, {intent, legacyIntent}} {
+		encoded, err := json.Marshal(test.value)
+		if err != nil || string(encoded) != test.want {
+			t.Fatalf("legacy hash/message payload changed: %s, %v", encoded, err)
+		}
+	}
+	var legacySlice Slice
+	if err := json.Unmarshal([]byte(`{"id":"001-a","commit_intent":`+legacyIntent+`}`), &legacySlice); err != nil {
+		t.Fatal(err)
+	}
+	if legacySlice.VerificationAttempt != nil || legacySlice.CommitIntent.Verification != nil {
+		t.Fatal("legacy slice acquired evidence")
+	}
+
+	snapshot := testSliceVerificationSnapshot()
+	snapshot.Runs[0].ExitCode = new(0)
+	snapshot.Runs[0].DurationMilliseconds = new(int64(0))
+	snapshot.Runs[0].Result = "passed"
+	snapshot.Runs[0].FailureKind = ""
+	snapshot.Runs[0].OriginalCommand = "go test ./missing/..."
+	snapshot.Runs[0].OutputTruncated = true
+	intent.Verification = &snapshot
+	file := SlicesFile{PlanID: "plan-a", Slices: []Slice{{ID: "001-a", VerificationAttempt: &snapshot, CommitIntent: &intent, VerificationResults: snapshot.Runs}}}
+	dir := t.TempDir()
+	if err := writeSlices(dir, file); err != nil {
+		t.Fatal(err)
+	}
+	got := readSlicesFile(t, dir).Slices[0]
+	if !reflect.DeepEqual(got.VerificationAttempt, &snapshot) || !reflect.DeepEqual(got.CommitIntent, &intent) || !reflect.DeepEqual(got.VerificationResults, snapshot.Runs) {
+		t.Fatalf("verification round-trip = %#v", got)
+	}
+}
+
 func TestCompleteSliceWritesStateSlicesAndEvent(t *testing.T) {
 	dir := t.TempDir()
 	started := time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)

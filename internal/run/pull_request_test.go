@@ -6,11 +6,13 @@ import (
 	"errors"
 	"io"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/prbody"
 )
 
 func TestRunPullRequestFailureSkipsCheckout(t *testing.T) {
@@ -985,6 +987,49 @@ func approvedPullRequestDetail(changeType plan.ChangeType, head string) *plan.Pl
 	}
 	detail.Slices.Slices[0].VerificationResults = []plan.VerificationRun{{Command: "go test ./internal/run", Result: "passed"}}
 	return detail
+}
+
+func TestPullRequestVerificationProjectionExcludesDiagnosticEvidence(t *testing.T) {
+	for _, source := range []string{"", plan.VerificationSourceTao} {
+		t.Run("source="+source, func(t *testing.T) {
+			detail := approvedPullRequestDetail(plan.ChangeTypeFeat, "head123")
+			detail.Slices.Slices[0].VerificationResults = []plan.VerificationRun{
+				{Command: "go test pkg/example_test.go", Result: "failed", Source: source, FailureKind: plan.FinalVerificationFailureKindInvalidCommand, CommandIndex: 1},
+				{Command: "go test example_test.go", Result: "passed", OriginalCommand: "go test pkg/example_test.go", Source: source, CommandIndex: 1},
+			}
+			baseline := projectPullRequestBodyInput(detail, "changed.txt | 1 +")
+			for i := range detail.Slices.Slices[0].VerificationResults {
+				run := &detail.Slices.Slices[0].VerificationResults[i]
+				run.Details = "password=secret-output"
+				run.CWD = "/private/execution-root"
+				run.OutputDigest = strings.Repeat("a", 64)
+				run.DurationMilliseconds = new(int64(123))
+			}
+			detail.Slices.Slices = append(detail.Slices.Slices, plan.Slice{ID: "pending", Status: plan.StatusInProgress, VerificationAttempt: &plan.SliceVerificationSnapshot{
+				Runs: []plan.VerificationRun{{Command: "latest-only-command", Result: "failed", Details: "password=secret-output"}},
+			}})
+			detail.Events = append(detail.Events,
+				plan.Event{Type: plan.EventTypeVerificationClaimMismatch, Command: "claim-only-command", Result: "failed", ClaimedResult: "passed", Message: "password=secret-claim"},
+				plan.Event{Type: plan.EventTypeVerificationCommandInvalid, Command: "go test pkg/example_test.go", CorrectedCommand: "go test example_test.go", Result: "passed"},
+			)
+			got := projectPullRequestBodyInput(detail, "changed.txt | 1 +")
+			if !reflect.DeepEqual(got, baseline) {
+				t.Fatalf("diagnostic evidence changed PR projection: %+v", got)
+			}
+			if len(got.VerificationResults) != 2 || got.VerificationResults[0].Result != "failed" || got.VerificationResults[1].Command != "go test example_test.go" {
+				t.Fatalf("lost original/corrected results: %+v", got.VerificationResults)
+			}
+			body := prbody.Build(got)
+			if body != prbody.Build(baseline) {
+				t.Fatal("diagnostics changed reviewer-facing format")
+			}
+			for _, forbidden := range []string{"secret-output", "secret-claim", "latest-only-command", "claim-only-command", "/private/execution-root", strings.Repeat("a", 64)} {
+				if strings.Contains(body, forbidden) {
+					t.Fatalf("PR body leaked %q", forbidden)
+				}
+			}
+		})
+	}
 }
 
 func requireNativePullRequestBody(t *testing.T, body, diffStat string) {

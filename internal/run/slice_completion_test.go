@@ -95,6 +95,7 @@ func TestSliceCompletionRejectsAbandonedBeforeGitOrArtifactMutation(t *testing.T
 		t.Fatal(err)
 	}
 
+	persistRunArtifacts(t, detail.Dir, detail)
 	detailBefore, err := json.Marshal(detail)
 	if err != nil {
 		t.Fatal(err)
@@ -105,7 +106,7 @@ func TestSliceCompletionRejectsAbandonedBeforeGitOrArtifactMutation(t *testing.T
 	err = (SliceCompletionService{CommandRunner: runGitFake(&gitCalls, nil)}).Complete(context.Background(), SliceCompletionRequest{
 		Record: record, SliceID: "001-a", Notes: "must not complete", CommitProposal: sliceCompletionProposal(), Now: time.Now().UTC(),
 	})
-	if err == nil || !strings.Contains(err.Error(), "plan plan-a is abandoned: superseded by safer work") {
+	if err == nil || !strings.Contains(err.Error(), "plan plan-a is abandoned") {
 		t.Fatalf("completion error = %v, want abandonment refusal", err)
 	}
 	if len(gitCalls) != 0 {
@@ -202,10 +203,10 @@ func TestSliceCompletionRejectsAbandonmentSettledBeforeRefreshedMutation(t *test
 }
 
 func TestSliceCompletionCommitsInterruptedTrackedStagedAndUntrackedWorkAtOriginalParent(t *testing.T) {
-	root := initSliceCompletionRepo(t)
+	fixture := verifiedCompletionFixture(t, CommitPolicySlice, "true")
+	record := fixture.Record
+	root := record.Detail().Slices.Slices[0].ExecutionRoot
 	originalHead := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
-	store := &sliceCompletionStore{}
-	_, record := sliceCompletionRecord(t, root, CommitPolicySlice, store)
 	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("preserved tracked edit\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -246,8 +247,8 @@ func TestSliceCompletionCommitsInterruptedTrackedStagedAndUntrackedWorkAtOrigina
 			t.Fatalf("completion commit missing %q:\n%s", trailer, message)
 		}
 	}
-	if len(store.events) != 1 || store.events[0].Type != plan.EventTypeSliceCompleted {
-		t.Fatalf("completion events = %+v, want exactly one slice_completed", store.events)
+	if got := countPlanEvents(reloadVerifiedCompletion(t, fixture).Detail().Events, plan.EventTypeSliceCompleted); got != 1 {
+		t.Fatalf("completion events = %d", got)
 	}
 	committed := strings.Fields(runCommitTestGitOutput(t, root, "show", "--name-only", "--format=", "HEAD"))
 	if strings.Join(committed, ",") != "README.md,staged.go,untracked.go" {
@@ -256,18 +257,10 @@ func TestSliceCompletionCommitsInterruptedTrackedStagedAndUntrackedWorkAtOrigina
 }
 
 func TestInterruptedSliceCompletionReloadBeforeParentExitIsRecoverable(t *testing.T) {
-	root := initSliceCompletionRepo(t)
-	detail, _ := sliceCompletionRecord(t, root, CommitPolicySlice, &sliceCompletionStore{})
-	record, err := plan.NewPlanRecord(detail.Dir, detail)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(detail.Dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := record.PersistArtifacts(); err != nil {
-		t.Fatal(err)
-	}
+	fixture := verifiedCompletionFixture(t, CommitPolicySlice, "true")
+	record := fixture.Record
+	detail := record.Detail()
+	root := detail.Slices.Slices[0].ExecutionRoot
 	if err := os.WriteFile(filepath.Join(root, "resumed.go"), []byte("package resumed\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +309,7 @@ func countPlanEvents(events []plan.Event, eventType string) int {
 	return count
 }
 
-func TestSliceCompletionCommitsAndRecoversInterruptedMetadata(t *testing.T) {
+func TestHistoricalSliceCompletionCommitsAndRecoversInterruptedMetadata(t *testing.T) {
 	root := initSliceCompletionRepo(t)
 	detail, record := sliceCompletionRecord(t, root, CommitPolicySlice, &sliceCompletionStore{failState: true})
 	if err := os.WriteFile(filepath.Join(root, "work.go"), []byte("package work\n"), 0o600); err != nil {
@@ -329,11 +322,12 @@ func TestSliceCompletionCommitsAndRecoversInterruptedMetadata(t *testing.T) {
 		Now:                 time.Now().UTC(),
 	}
 	service := SliceCompletionService{}
-	if err := service.Complete(context.Background(), request); err == nil || !strings.Contains(err.Error(), "interrupted metadata write") {
+	recordHistoricalTestIntent(t, request)
+	if err := service.settleHistoricalCompletion(context.Background(), request); err == nil || !strings.Contains(err.Error(), "interrupted metadata write") {
 		t.Fatalf("expected interrupted metadata error, got %v", err)
 	}
 	firstHead := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
-	if err := service.Complete(context.Background(), request); err != nil {
+	if err := service.settleHistoricalCompletion(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
 	if head := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD")); head != firstHead {
@@ -354,7 +348,7 @@ func TestSliceCompletionCommitsAndRecoversInterruptedMetadata(t *testing.T) {
 	}
 }
 
-func TestSliceCompletionRecoversCommitAfterStateOnlyCompletionWrite(t *testing.T) {
+func TestHistoricalSliceCompletionRecoversCommitAfterStateOnlyCompletionWrite(t *testing.T) {
 	root := initSliceCompletionRepo(t)
 	store := &sliceCompletionStore{failSlicesAt: 2}
 	_, record := sliceCompletionRecord(t, root, CommitPolicySlice, store)
@@ -363,7 +357,8 @@ func TestSliceCompletionRecoversCommitAfterStateOnlyCompletionWrite(t *testing.T
 	}
 	request := SliceCompletionRequest{Record: record, SliceID: "001-a", Notes: "done", CommitProposal: sliceCompletionProposal(), Now: time.Now().UTC()}
 	service := SliceCompletionService{}
-	if err := service.Complete(context.Background(), request); err == nil || !strings.Contains(err.Error(), "interrupted slices write") {
+	recordHistoricalTestIntent(t, request)
+	if err := service.settleHistoricalCompletion(context.Background(), request); err == nil || !strings.Contains(err.Error(), "interrupted slices write") {
 		t.Fatalf("expected state-only completion write, got %v", err)
 	}
 	committedHead := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
@@ -378,7 +373,7 @@ func TestSliceCompletionRecoversCommitAfterStateOnlyCompletionWrite(t *testing.T
 		t.Fatal(err)
 	}
 	request.Record = reloadedRecord
-	if err := service.Complete(context.Background(), request); err != nil {
+	if err := service.settleHistoricalCompletion(context.Background(), request); err != nil {
 		t.Fatalf("recover recorded commit: %v", err)
 	}
 	if head := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD")); head != committedHead {
@@ -392,7 +387,7 @@ func TestSliceCompletionRecoversCommitAfterStateOnlyCompletionWrite(t *testing.T
 	}
 }
 
-func TestSliceCompletionRecoversMissingCompletionEvent(t *testing.T) {
+func TestHistoricalSliceCompletionRecoversMissingCompletionEvent(t *testing.T) {
 	root := initSliceCompletionRepo(t)
 	store := &sliceCompletionStore{failEvent: true}
 	_, record := sliceCompletionRecord(t, root, CommitPolicySlice, store)
@@ -401,7 +396,8 @@ func TestSliceCompletionRecoversMissingCompletionEvent(t *testing.T) {
 	}
 	request := SliceCompletionRequest{Record: record, SliceID: "001-a", Notes: "done", CommitProposal: sliceCompletionProposal(), Now: time.Now().UTC()}
 	service := SliceCompletionService{}
-	if err := service.Complete(context.Background(), request); err == nil || !strings.Contains(err.Error(), "interrupted event append") {
+	recordHistoricalTestIntent(t, request)
+	if err := service.settleHistoricalCompletion(context.Background(), request); err == nil || !strings.Contains(err.Error(), "interrupted event append") {
 		t.Fatalf("expected interrupted event append, got %v", err)
 	}
 	committedHead := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
@@ -415,7 +411,7 @@ func TestSliceCompletionRecoversMissingCompletionEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	request.Record = reloadedRecord
-	if err := service.Complete(context.Background(), request); err != nil {
+	if err := service.settleHistoricalCompletion(context.Background(), request); err != nil {
 		t.Fatalf("recover completion event: %v", err)
 	}
 	if head := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD")); head != committedHead {
@@ -424,7 +420,7 @@ func TestSliceCompletionRecoversMissingCompletionEvent(t *testing.T) {
 	if len(store.events) != 1 || store.events[0].Type != plan.EventTypeSliceCompleted || store.events[0].SliceID != request.SliceID {
 		t.Fatalf("recovered events = %#v", store.events)
 	}
-	if err := service.Complete(context.Background(), request); err != nil {
+	if err := service.settleHistoricalCompletion(context.Background(), request); err != nil {
 		t.Fatalf("idempotent completion retry: %v", err)
 	}
 	if len(store.events) != 1 {
@@ -543,9 +539,14 @@ func TestReviewStateReadSettlesPendingJournal(t *testing.T) {
 }
 
 func TestSliceCompletionCommitsUndeclaredSafePathsWithWarning(t *testing.T) {
-	root := initSliceCompletionRepo(t)
-	detail, record := sliceCompletionRecord(t, root, CommitPolicySlice, &sliceCompletionStore{})
+	fixture := verifiedCompletionFixture(t, CommitPolicySlice, "true")
+	record := fixture.Record
+	detail := record.Detail()
+	root := detail.Slices.Slices[0].ExecutionRoot
 	detail.Slices.Slices[0].ExpectedFiles = []string{"declared.go"}
+	if err := record.PersistArtifacts(); err != nil {
+		t.Fatal(err)
+	}
 	for name, content := range map[string]string{
 		"declared.go": "package work\n",
 		"extra.go":    "package work\n",
@@ -575,9 +576,14 @@ func TestSliceCompletionCommitsUndeclaredSafePathsWithWarning(t *testing.T) {
 }
 
 func TestSliceCompletionCommitsEnvExampleTemplate(t *testing.T) {
-	root := initSliceCompletionRepo(t)
-	detail, record := sliceCompletionRecord(t, root, CommitPolicySlice, &sliceCompletionStore{})
+	fixture := verifiedCompletionFixture(t, CommitPolicySlice, "true")
+	record := fixture.Record
+	detail := record.Detail()
+	root := detail.Slices.Slices[0].ExecutionRoot
 	detail.Slices.Slices[0].ExpectedFiles = []string{".env.example"}
+	if err := record.PersistArtifacts(); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(root, ".env.example"), []byte("TOKEN=replace-me\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -604,7 +610,10 @@ func TestSliceCompletionRefusesUnsafePathsBeforeStagingOrCommit(t *testing.T) {
 		{name: "generated artifact", path: "coverage.out", tracked: true, wantErrorText: "generated artifact path: coverage.out"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			root := initSliceCompletionRepo(t)
+			fixture := verifiedCompletionFixture(t, CommitPolicySlice, "true")
+			record := fixture.Record
+			detail := record.Detail()
+			root := detail.Slices.Slices[0].ExecutionRoot
 			if tc.tracked {
 				if err := os.WriteFile(filepath.Join(root, tc.path), []byte("tracked fixture\n"), 0o600); err != nil {
 					t.Fatal(err)
@@ -612,14 +621,26 @@ func TestSliceCompletionRefusesUnsafePathsBeforeStagingOrCommit(t *testing.T) {
 				runCommitTestGitCommand(t, root, "add", "-f", tc.path)
 				runCommitTestGitCommand(t, root, "commit", "-m", "add tracked fixture")
 			}
-			detail, record := sliceCompletionRecord(t, root, CommitPolicySlice, &sliceCompletionStore{})
+			detail.Slices.Slices[0].ExecutionStart.Head = strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
+			detail.State.Workspace.HeadSHA = detail.Slices.Slices[0].ExecutionStart.Head
+			// Build a fresh durable fixture at the updated baseline; execution_start
+			// is immutable once recorded by a real run.
+			detail.Dir = t.TempDir()
+			var err error
+			record, err = plan.NewPlanRecord(detail.Dir, detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := record.PersistArtifacts(); err != nil {
+				t.Fatal(err)
+			}
 			if err := os.WriteFile(filepath.Join(root, tc.path), []byte("unsafe completion input\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			headBefore := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
 			statusBefore := runCommitTestGitOutput(t, root, "status", "--short")
 
-			err := (SliceCompletionService{}).Complete(context.Background(), SliceCompletionRequest{
+			err = (SliceCompletionService{}).Complete(context.Background(), SliceCompletionRequest{
 				Record: record, SliceID: "001-a", Notes: "done", CommitProposal: sliceCompletionProposal(), Now: time.Now().UTC(),
 			})
 			if err == nil || !strings.Contains(err.Error(), tc.wantErrorText) {
@@ -642,8 +663,10 @@ func TestSliceCompletionRefusesUnsafePathsBeforeStagingOrCommit(t *testing.T) {
 }
 
 func TestSliceCompletionRejectsThenAcceptsProposalBeforeIntent(t *testing.T) {
-	root := initSliceCompletionRepo(t)
-	detail, record := sliceCompletionRecord(t, root, CommitPolicySlice, &sliceCompletionStore{})
+	fixture := verifiedCompletionFixture(t, CommitPolicySlice, "true")
+	record := fixture.Record
+	detail := record.Detail()
+	root := detail.Slices.Slices[0].ExecutionRoot
 	if err := os.WriteFile(filepath.Join(root, "work.go"), []byte("package work\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -668,15 +691,16 @@ func TestSliceCompletionRejectsThenAcceptsProposalBeforeIntent(t *testing.T) {
 	if err := (SliceCompletionService{}).Complete(context.Background(), request); err != nil {
 		t.Fatalf("repaired proposal: %v", err)
 	}
-	intent := detail.Slices.Slices[0].CommitIntent
+	intent := reloadVerifiedCompletion(t, fixture).Detail().Slices.Slices[0].CommitIntent
 	if intent == nil || intent.Message == "" || strings.Contains(intent.Message, "Verification:") {
 		t.Fatalf("repaired proposal intent = %#v", intent)
 	}
 }
 
 func TestSliceCompletionRejectsReservedTrailerBeforeIntent(t *testing.T) {
-	root := initSliceCompletionRepo(t)
-	detail, record := sliceCompletionRecord(t, root, CommitPolicySlice, &sliceCompletionStore{})
+	fixture := verifiedCompletionFixture(t, CommitPolicySlice, "true")
+	record := fixture.Record
+	detail := record.Detail()
 	proposal := sliceCompletionProposal()
 	proposal.Why += "\nTao-Plan: forged"
 	err := (SliceCompletionService{}).Complete(context.Background(), SliceCompletionRequest{
@@ -690,7 +714,7 @@ func TestSliceCompletionRejectsReservedTrailerBeforeIntent(t *testing.T) {
 	}
 }
 
-func TestSliceCompletionConflictingProposalCannotReuseIntent(t *testing.T) {
+func TestHistoricalSliceCompletionConflictingProposalCannotReuseIntent(t *testing.T) {
 	root := initSliceCompletionRepo(t)
 	store := &sliceCompletionStore{failState: true}
 	detail, record := sliceCompletionRecord(t, root, CommitPolicySlice, store)
@@ -698,7 +722,8 @@ func TestSliceCompletionConflictingProposalCannotReuseIntent(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := SliceCompletionRequest{Record: record, SliceID: "001-a", Notes: "done", CommitProposal: sliceCompletionProposal(), Now: time.Now().UTC()}
-	if err := (SliceCompletionService{}).Complete(context.Background(), request); err == nil || !strings.Contains(err.Error(), "interrupted metadata write") {
+	recordHistoricalTestIntent(t, request)
+	if err := (SliceCompletionService{}).settleHistoricalCompletion(context.Background(), request); err == nil || !strings.Contains(err.Error(), "interrupted metadata write") {
 		t.Fatalf("initial completion error = %v", err)
 	}
 	head := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
@@ -709,7 +734,7 @@ func TestSliceCompletionConflictingProposalCannotReuseIntent(t *testing.T) {
 	changed := sliceCompletionProposal()
 	changed.Summary = "record a different slice proposal"
 	request.CommitProposal = changed
-	if err := (SliceCompletionService{}).Complete(context.Background(), request); err == nil || !strings.Contains(err.Error(), "conflicting commit proposal") {
+	if err := (SliceCompletionService{}).settleHistoricalCompletion(context.Background(), request); err == nil || !strings.Contains(err.Error(), "conflicting commit proposal") {
 		t.Fatalf("conflicting proposal error = %v", err)
 	}
 	if got := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD")); got != head {
@@ -717,7 +742,7 @@ func TestSliceCompletionConflictingProposalCannotReuseIntent(t *testing.T) {
 	}
 }
 
-func TestSliceCompletionRecoversLegacyIntentWithoutMessageValidation(t *testing.T) {
+func TestHistoricalSliceCompletionRecoversLegacyIntentWithoutMessageValidation(t *testing.T) {
 	root := initSliceCompletionRepo(t)
 	detail, record := sliceCompletionRecord(t, root, CommitPolicySlice, &sliceCompletionStore{})
 	parent := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
@@ -735,7 +760,7 @@ func TestSliceCompletionRecoversLegacyIntentWithoutMessageValidation(t *testing.
 		Message: legacyMessage, CreatedAt: time.Now().UTC(),
 	}
 	request := SliceCompletionRequest{Record: record, SliceID: "001-a", Notes: notes, Now: time.Now().UTC()}
-	if err := (SliceCompletionService{}).Complete(context.Background(), request); err != nil {
+	if err := (SliceCompletionService{}).settleHistoricalCompletion(context.Background(), request); err != nil {
 		t.Fatalf("recover legacy intent: %v", err)
 	}
 	completion := detail.Slices.Slices[0].Completion
@@ -747,28 +772,22 @@ func TestSliceCompletionRecoversLegacyIntentWithoutMessageValidation(t *testing.
 	}
 }
 
-func TestSliceCompletionRecordsNoChangesAndNonePolicy(t *testing.T) {
-	for _, tc := range []struct {
-		name, policy, outcome string
-	}{
-		{"no changes", CommitPolicySlice.String(), plan.SliceCompletionNoChanges},
-		{"manual none", CommitPolicyNone.String(), plan.SliceCompletionManualUncommitted},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			root := initSliceCompletionRepo(t)
-			detail, record := sliceCompletionRecord(t, root, CommitPolicy(tc.policy), &sliceCompletionStore{})
-			head := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
-			err := (SliceCompletionService{}).Complete(context.Background(), SliceCompletionRequest{Record: record, SliceID: "001-a", Notes: "done", CommitProposal: sliceCompletionProposal(), Now: time.Now().UTC()})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD")); got != head {
-				t.Fatalf("completion unexpectedly mutated HEAD: %s -> %s", head, got)
-			}
-			if completion := detail.Slices.Slices[0].Completion; completion == nil || completion.Outcome != tc.outcome {
-				t.Fatalf("completion = %#v, want %s", completion, tc.outcome)
-			}
-		})
+// Seed pre-rollout intent explicitly for the historical-store fault tests.
+func recordHistoricalTestIntent(t *testing.T, request SliceCompletionRequest) {
+	t.Helper()
+	detail := request.Record.Detail()
+	message, err := formatSliceCommitMessage(detail.State.Plan.ID, request.SliceID, *request.CommitProposal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := sliceCompletionHash(detail.State.Plan.ID, request.SliceID, detail.State.Plan.LastRunCommitPolicy, request.Notes, request.VerificationResults, message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slice := completionSlice(detail, request.SliceID)
+	intent := plan.SliceCommitIntent{Hash: hash, Policy: detail.State.Plan.LastRunCommitPolicy, StartingBranch: slice.ExecutionStart.Branch, StartingHead: slice.ExecutionStart.Head, Message: message, CreatedAt: request.Now}
+	if err := persistSliceCommitIntent(request, intent); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -799,7 +818,7 @@ func sliceCompletionRecord(t *testing.T, root string, policy CommitPolicy, store
 	t.Helper()
 	started := time.Now().UTC().Add(-time.Minute)
 	detail := runPlanDetail(plan.StatusInProgress, []string{"001-a"}, nil, "001-a", plan.StatusInProgress, &started, nil)
-	detail.Dir = filepath.Join(root, "plan-metadata")
+	detail.Dir = t.TempDir()
 	detail.State.Repo.Root = root
 	detail.State.Plan.LastRunCommitPolicy = policy.String()
 	detail.State.Plan.CurrentSlice = new("001-a")

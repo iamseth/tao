@@ -1937,7 +1937,7 @@ func TestRenderWorkPromptIncludesInterruptedResumeInstructions(t *testing.T) {
 		"This is resume attempt 3",
 		"inspect all staged, unstaged, and untracked work",
 		"Continue or correct that work rather than discarding it or restarting",
-		"Rerun every verification command declared for the slice",
+		"to rerun every declared gate",
 		"call `tao slice-complete`",
 		"Never run `git commit` manually",
 	} {
@@ -1959,7 +1959,7 @@ func TestRunWorkPromptInstructsSliceComplete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"write local files", "verification results JSON file", "Tao updates `state.json`, `slices.json`, duration", "tao slice-complete --plan-dir \"/plans/plan-a\""} {
+	for _, want := range []string{"write local files", "No verification results file is required for a new transaction", "Tao updates `state.json`, `slices.json`, duration", "tao slice-complete --plan-dir \"/plans/plan-a\""} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("expected %q in prompt:\n%s", want, prompt)
 		}

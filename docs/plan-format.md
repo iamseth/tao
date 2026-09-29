@@ -242,6 +242,93 @@ Each slice should include:
 - Optional `completion` with `outcome` and optional `commit_sha`. Outcomes are `committed`, `no_changes`, and `manual_uncommitted`.
 - `verification.commands`: every slice must include at least one deterministic verification command; select commands from repository-owned guidance where possible. When the repository declares a comprehensive build, test, and lint or static-analysis gate, each slice that changes source or test code must include the repository's lint or static-analysis command for its touched packages (when narrowing is supported), alongside applicable build and test checks. Slices that change rendered output or add an event, counter, or field it includes must list every affected golden or snapshot fixture file in `expected_files`, include a task to update those fixtures, and run each test that compares them with no filter narrower than that test, retaining the whole-package floor for shared-seam work. For docs/config/asset-only slices where no build/test command applies, use a deterministic fallback such as `grep -q`, `test -f`, or `git diff --stat`.
 
+### Observed slice verification
+
+`verification_results` retains its historical `command`, `cwd`, `result`, and
+`details` fields. Optional additions are `source`, one-based `command_index`,
+`original_command`, nullable `exit_code` and `duration_milliseconds`,
+`output_digest`, `output_truncated`, and `failure_kind` (the final-verification
+classification). Absent source stays absent; unknown exits/durations stay absent,
+while measured zero values are emitted. Legacy result JSON, intent hashes, and
+exact messages are not upgraded or reformatted.
+
+Optional slice `verification_attempt` records the latest Tao-observed attempt,
+including failures, without completing a slice or changing lifecycle queues or
+timing. Optional `commit_intent.verification` holds a frozen snapshot for later
+verified completion. Both use `SliceVerificationSnapshot` version 1 with keys
+`version`, `attempt_id`, `execution_root`, `starting_branch`, `starting_head`,
+`worktree_fingerprint`, `declaration_digest`, `runs`, and `recorded_at`. All keys
+inside a present snapshot are emitted. Digests are 64 lowercase, unprefixed
+SHA-256 hex characters; roots and run working directories are absolute.
+
+New snapshot runs require `source: "tao"`, a positive command index, and a
+`passed` or `failed` result. A pass requires an observed zero exit and no failure
+kind. Producer bounds are 128 bytes for whitespace-free attempt IDs, 4096 bytes
+for each command/path/branch field, 16 KiB for per-run details, and 1024 runs.
+An empty run list can record an interrupted attempt, never prove successful
+coverage. Recording requires the selected in-progress slice, satisfied approval
+and dependencies, and no intent/completion; identical retries are accepted,
+conflicting identities and stale replacements are refused. The completion
+transaction remains responsible for declaration coverage and live Git checks.
+
+`verification_claim_mismatch` is a diagnostic event with optional
+`claimed_result` and `verification_attempt_id`, each bounded to 128 bytes without
+whitespace/control characters. Source strings and events alone never authorize
+completion, Git mutation, or recovery. Existing `verification_command_invalid`
+fields and rendering are unchanged.
+
+For new `slice` and `none` completions, Tao executes `verification.commands` in
+order (including duplicates). `verification.steps` supplies cwd mappings only:
+commands must match exactly, conflicting mappings and extra commands are rejected.
+Unmapped commands run at the recorded canonical execution root; mapped directories
+must exist and resolve inside that root, including through symlinks. Agent claims
+never choose commands or cwd. An optional results input is a strict array of
+`command`, `cwd`, `result`, and `details` only; provenance fields are rejected.
+
+Each shell command, including a correction, has a fixed ten-minute timeout and
+shares the implementation session's remaining wall-clock budget. The budget is
+never paused, extended, or replaced. Session timeout `0` leaves the command bound
+active. Signals, owner exit/replacement, and cancellation prevent new intent and
+Git mutation. Completion writers serialize; admission and the execution boundary
+are reloaded and rechecked before mutation. Gates execute **locally, not in a
+sandbox**, and evidence is **not cryptographic attestation** against an agent able
+to edit local artifacts. Final repository verification and its repair cap are
+unchanged.
+
+A failed invalid-command attempt may receive one Tao-validated mechanical
+correction: simple ASCII-space-tokenized `go test`, optionally prefixed by
+`cd PATH &&`, in a canonical in-root subdirectory. Exactly one missing target
+must redundantly include that cwd's repository-relative prefix and resolve after
+removing it to an existing in-root Go file or explicit `./` directory target
+(optionally `/...`). No quoting, expansion, shell operators beyond that prefix,
+traversal, ambiguous targets, unknown flags, or test-binary passthrough is accepted.
+Allowed boolean flags are `-race`, `-short`, `-v`, `-failfast`, `-cover`, `-fullpath`,
+`-json`, `-x`, `-work`; value flags are `-run`, `-skip`, `-bench`, `-benchtime`,
+`-count`, `-cpu`, `-parallel`, `-timeout`, `-shuffle`, `-tags`. Both original and
+corrected attempts are recorded, with a shared declaration index and
+`original_command` on the correction. Tool-missing and ordinary code failures
+are not mechanically corrected. Unresolved failures stay pre-intent for
+permitted same-session repair or `slice-blocked`; they grant no new repair budget.
+
+Successful coverage is frozen in `commit_intent.verification`. The versioned
+`verified-v1:sha256:` hash binds notes, exact final message, and the entire snapshot.
+It includes the declaration/identity digest and content fingerprint; Tao checks
+branch, parent HEAD, worktree/index, declarations, and admission again after gates.
+A post-intent retry uses only that frozen snapshot and exact parent/message,
+not mutable latest-attempt evidence or new claims, and never reruns gates.
+Historical intent hashes keep their original input decoding and exact messages;
+new transactions cannot enter historical claim-only settlement.
+
+Output retains at most 8 KiB per stdout/stderr stream and 16 KiB of sanitized
+local details per run. `output_digest` hashes the raw bounded tails, each prefixed
+by its unsigned 64-bit big-endian byte length (stdout then stderr), not the entire
+output. Do not publish raw output via reports. Trusted `Tao-Verify-Command`,
+`Tao-Verify-Exit`, and `Tao-Verify-Digest` trailer triples use ordered attempt
+indices, including corrections. Command values are single-line ASCII-escaped,
+bounded to 1024 bytes including index and full-command SHA-256; cwd/output are
+excluded. Unknown exits render `unknown`, never zero. Agent proposals cannot add
+`Tao-*` trailers.
+
 ### Required inputs
 
 `required_inputs` is an optional array of filesystem prerequisites. Each entry has:
@@ -298,7 +385,7 @@ sequenceDiagram
     Tao->>Plan: validate selected slice preflight
     Tao->>Plan: mark slice in_progress + append slice_started
     Tao->>Agent: send compact run packet
-    Agent->>Plan: write notes + verification results through tao slice-complete
+    Agent->>Plan: submit notes + proposal through tao slice-complete (Tao runs gates)
     Tao->>Plan: mark slice completed + update queue
 ```
 
@@ -316,7 +403,7 @@ The supported runtimes are `pi` and `claude`. Of those, only Pi currently expose
 
 Normal `tao run` rejects blocked plans and blocked selected slices. `tao run --continue` is only for cases where the blocker has already been cleared manually; it clears Tao's blocked lifecycle state and restarts `plan.current_slice`, or falls back to the first pending slice only when the plan or that slice is blocked. Continue mode must not bypass approval gates, dependencies, completed-plan checks, missing-slice checks, branch or commit safeguards, or selected-slice verification preflight.
 
-`tao slice-complete --plan-dir DIR --slice-id ID --notes-file FILE --verification-results-file FILE [--commit-proposal-file FILE]` owns deterministic completion bookkeeping after verification passes. A new automatic slice intent requires the structured proposal file; Tao validates it and persists the exact trusted final message before staging. Existing intents settle from durable state and do not require or authorize a fresh proposal session. Tao creates or recovers the commit, persists `completion`, then marks the slice completed and moves the queue. Policy `none` skips Git and records `manual_uncommitted`. State, timing, notes, verification results, and at most one `slice_completed` event are written only after the transaction outcome is known.
+`tao slice-complete --plan-dir DIR --slice-id ID --notes-file FILE [--verification-results-file FILE] [--commit-proposal-file FILE]` executes declared gates before new intent and owns deterministic completion bookkeeping. The results file is optional advisory input for new transactions, but required verbatim for historical intent recovery; failed attempts retain temporary inputs. A new automatic slice intent requires the structured proposal file; Tao validates it and persists the exact trusted final message before staging. Existing intents settle from durable state and do not require or authorize a fresh proposal session. Tao creates or recovers the commit, persists `completion`, then marks the slice completed and moves the queue. Policy `none` skips Git and records `manual_uncommitted`. State, timing, notes, verification results, and at most one `slice_completed` event are written only after the transaction outcome is known.
 
 Completion notes may contain single lines beginning with the case-sensitive prefix `Ruling:` to record small decisions already settled by plan intent. Tao stores them verbatim in the slice `notes` field and derives rulings through `plan.SliceRulings`, a bounded parser extracting at most 20 rulings, each capped at 512 runes including the prefix. Only the single line is captured; continuation lines remain ordinary notes. Rulings never authorize scope expansion, new requirements, changing or skipping declared verification, commits, or bypassing approval gates; missing or contradictory contracts remain blockers.
 
@@ -469,6 +556,7 @@ Current well-known event types include:
 | `plan_reopened` | Plan reopened for rework. |
 | `plan_merged` | Plan merged into the default branch. |
 | `verification_command_invalid` | Verification command failed before tests loaded. |
+| `verification_claim_mismatch` | Reserved diagnostic comparison of an agent claim with a Tao-observed attempt; not completion authority. |
 | `run_context` | Pre-attempt run-packet and guardrail telemetry. |
 | `session_timeout` | Agent session exceeded its wall-clock timeout. |
 | `budget_exceeded` | An opt-in hard slice output-token or cost cap was crossed; records the metric, threshold, and observed value. |

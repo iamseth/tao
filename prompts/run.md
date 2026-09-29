@@ -39,7 +39,7 @@ No packet was rendered. Read `planning-brief.md` when present, then `plan.md`, `
 
 This is resume attempt {{ .ResumeAttempt }} for work preserved from an interrupted automatic slice. Before editing, inspect all staged, unstaged, and untracked work (for example with `git status --short`, `git diff`, and `git diff --cached`). Continue or correct that work rather than discarding it or restarting the implementation.
 
-Rerun every verification command declared for the slice, even if the preserved work appears complete. After verification passes, call `tao slice-complete` as instructed below. Never run `git commit` manually: `tao slice-complete` owns the automatic-policy commit transaction.
+Call `tao slice-complete` as instructed below to rerun every declared gate, even if the preserved work appears complete. Retry implementation only before intent; never repair or reinterpret a recorded intent. Never run `git commit` manually: `tao slice-complete` owns the automatic-policy commit transaction.
 
 {{ end -}}
 ## Branch rules
@@ -89,7 +89,7 @@ Tao marks the selected slice in progress and appends `slice_started` before invo
 - Keep the repo in a working state.
 - For behavior changes, write or extend the failing test first, run it before implementing, and record in the notes file that it failed for the expected reason.
 - For any failure seen in a verification run that is outside the slice's scope, record it by test or command name in the notes file rather than leaving it unmentioned. The Verification section still governs whether the slice completes.
-- For validation-only or no-edit slices, run the listed verification commands and avoid broad code review unless a command fails or the slice explicitly asks for review.
+- For validation-only or no-edit slices, delegate declared gates to `tao slice-complete` and avoid broad code review unless a gate fails or the slice explicitly asks for review.
 - Small inconsistencies settled by plan intent are rulings (see ## Rulings). If the slice is missing information the plan intent does not settle, or is otherwise blocked, write a clear blocker reason to a temporary file outside the repository, run `tao slice-blocked --plan-dir "{{ .PlanDir }}" --slice-id "<selected slice id>" --reason-file "<reason file>"`, and stop.
 
 ## Rulings
@@ -128,35 +128,29 @@ When the selected slice ID matches `r<round><NN>-`, the slice derives from a rev
 
 ## Verification
 
-Run every command listed in:
+Keep test-first development and targeted diagnosis. Do not routinely run a duplicate full declared-gate sequence or manufacture a results file: call `tao slice-complete` below for authoritative verification. Tao executes every selected slice `verification.commands` entry in order before intent; `verification.steps` supplies cwd context only. Use `verification.source` to understand why gates were selected.
 
-```text
-slices[].verification.commands
-```
-
-Use `slices[].verification.source`, when present, to understand why commands were selected. The executable source of truth remains `verification.commands`.
-
-for the selected slice.
+Gates execute locally, not in a sandbox or with cryptographic attestation. Each command has a fixed ten-minute timeout within the unchanged remaining agent-session wall-clock budget; disabling the session timeout does not disable the command bound. Final repository verification is unchanged.
 
 If a declared verification command fails only in files listed under Plan-Owned Files in the run packet, treat the fix as in scope, make the minimal change, rerun the command, and continue; do not block for that reason.
 
 If a verification command fails:
 
-1. Attempt to fix the issue if it is clearly within scope.
-2. Re-run verification.
-3. If the original command fails before tests load because of an invalid verification command, such as a missing cwd, missing config path, command not found, `No test files found`, or a package-cwd path mismatch, classify it as a verification-command failure rather than a code failure.
-4. If you can infer a mechanically equivalent corrected command, run it once. Record both the original invalid command result and the corrected command result in `verification_results`.
-5. If the corrected command passes, continue to successful completion using the corrected result.
-6. If still failing, write a clear blocker reason to a temporary file outside the repository.
+1. Read Tao's bounded observed diagnostics; never treat advisory claims as a passing gate.
+2. Before intent only, repair permitted failures in the same active implementation session, confined to this slice and the packet's Plan-Owned Files. Use targeted tests to diagnose; retry `tao slice-complete` to execute all authoritative gates again. Do not acquire a new repair budget or start another session.
+3. Failures before tests load (missing cwd/config/tool, `No test files found`, package-cwd mismatch) are verification-command failures, not code failures.
+4. Tao alone validates and executes a supported mechanical correction once and records both attempts. Do not substitute a weaker gate, edit declarations to bypass a failure, or claim your own corrected result as authority.
+5. Successful Tao-observed correction permits completion. After recorded intent, preserve original inputs and settle exact recovery without rerunning gates or changing code, notes, or proposal.
+6. If unresolved, outside Plan-Owned Files, or no longer in the active session, write a clear blocker reason to a temporary file outside the repository.
 7. Run `tao slice-blocked --plan-dir "{{ .PlanDir }}" --slice-id "<selected slice id>" --reason-file "<reason file>"`. If the original verification command was invalid, add `--invalid-command "<original command>" --invalid-reason "<why it was invalid>"` and, when applicable, `--corrected-command "<corrected command>"` to that same invocation. A verification failure confined to specific files must add `--gate-command "<failed command>"` and one `--failing-path <path>` per file so Tao can verify ownership.
 8. Stop. Do not commit broken work unless the user explicitly asked for a WIP commit.
 
 ## After successful implementation
 
-After verification passes, write local files for Tao-owned completion bookkeeping to one private temporary directory outside the repository working tree:
+When implementation and targeted checks are ready, write local files for Tao-owned completion bookkeeping to one private temporary directory outside the repository working tree:
 
 - A notes file containing the slice implementation summary.
-- A verification results JSON file containing an array of objects with `command`, `cwd` (the absolute path of the directory the command was executed from), `result`, and `details` fields.
+- No verification results file is required for a new transaction. Optional `--verification-results-file` input is advisory only: an array of `command`, `cwd`, `result`, and `details` fields, with no observed provenance fields. Historical intent recovery still requires the original results file.
 {{ if eq .CommitPolicy "slice" -}}
 - A commit proposal JSON file containing exactly one object with `type`, `scope`, `summary`, `what`, and `why` string fields. Use the supported Conventional Commit type and narrow lowercase scope that best describe this slice, a lowercase imperative summary of at most 72 characters, and useful non-empty what/why text. Do not add `Tao-*` fields or trailers; Tao alone appends trusted evidence and creates the commit.
 {{ end }}
@@ -165,10 +159,10 @@ These are throwaway inputs consumed by Tao, not project files: never write them 
 Then call Tao to complete the slice:
 
 ```sh
-tao slice-complete --plan-dir "{{ .PlanDir }}" --slice-id "<selected slice id>" --notes-file "<notes file>" --verification-results-file "<verification results file>"{{ if eq .CommitPolicy "slice" }} --commit-proposal-file "<commit proposal file>"{{ end }}
+tao slice-complete --plan-dir "{{ .PlanDir }}" --slice-id "<selected slice id>" --notes-file "<notes file>"{{ if eq .CommitPolicy "slice" }} --commit-proposal-file "<commit proposal file>"{{ end }}
 ```
 {{ if eq .CommitPolicy "slice" -}}
-If Tao rejects proposal content, repair the same temporary proposal file in this active implementation session and retry `tao slice-complete`. Do not start another agent or model session and do not use a deterministic fallback. A rejected attempt leaves all temporary inputs available for repair and must not authorize staging or a commit.
+If Tao rejects proposal content before intent, repair the same temporary proposal file in this active implementation session and retry `tao slice-complete`. Do not start another agent or model session and do not use a deterministic fallback. A rejected attempt leaves all temporary inputs available for repair and must not authorize staging or a commit.
 {{ end }}
 
 Tao updates `state.json`, `slices.json`, duration, queue movement, plan completion state, and the `slice_completed` event. Do not patch completion metadata directly unless the command is unavailable or fails for a reason unrelated to your implementation; if that happens, stop and report the blocker.
@@ -191,7 +185,7 @@ Respond with an executive summary:
 
 - One short paragraph describing the work completed.
 - Bullet list of changed areas.
-- Verification commands and result.
+- Final Tao-observed verification commands and results, including corrections; distinguish any targeted checks from authoritative gates.
 {{ if eq .CommitPolicy "slice" -}}
 - Commit hash.
 {{ else -}}

@@ -49,6 +49,24 @@ func TestClassifyFailureSuggestsPathCWDMismatchCorrection(t *testing.T) {
 	}
 }
 
+func TestAdvisoryCorrectionDoesNotAuthorizeShellExecution(t *testing.T) {
+	repo := t.TempDir()
+	writeFile(t, filepath.Join(repo, "packages", "api", "internal", "api_test.go"), "package api")
+	run := Run{
+		Command: "cd packages/api && go test packages/api/internal/api_test.go; true",
+		Details: "No test files found",
+	}
+	// Retain the historical advisory suggestion, including its permissive shell
+	// analysis, without silently promoting it into an executable correction.
+	advisory := ClassifyRun(repo, run)
+	if !advisory.Invalid || advisory.Code != "verification_path_cwd_mismatch" || advisory.CorrectedCommand == "" {
+		t.Fatalf("advisory behavior changed: %#v", advisory)
+	}
+	if got, ok := MechanicalCorrection(repo, run); ok || got != (Run{}) {
+		t.Fatalf("advisory suggestion authorized unsafe command: %#v, %v", got, ok)
+	}
+}
+
 func TestClassifyFailureLeavesTestFailuresValid(t *testing.T) {
 	got := ClassifyFailure(t.TempDir(), "go test ./...", "--- FAIL: TestExample")
 	if got.Invalid || got.Code != "" {

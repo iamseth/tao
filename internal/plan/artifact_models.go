@@ -45,6 +45,7 @@ type Slice struct {
 	Approval            *Approval                  `json:"approval,omitempty"`
 	Notes               string                     `json:"notes,omitempty"`
 	VerificationResults []VerificationRun          `json:"verification_results,omitempty"`
+	VerificationAttempt *SliceVerificationSnapshot `json:"verification_attempt,omitempty"`
 	CommitIntent        *SliceCommitIntent         `json:"commit_intent,omitempty"`
 	Completion          *SliceCompletionOutcome    `json:"completion,omitempty"`
 	VerificationRepair  *VerificationRepairBinding `json:"verification_repair,omitempty"`
@@ -64,12 +65,13 @@ type SliceExecutionStart struct {
 // intents to both that message and the completion report. Legacy hashes remain
 // readable by the completion service.
 type SliceCommitIntent struct {
-	Hash           string    `json:"hash"`
-	Policy         string    `json:"policy"`
-	StartingBranch string    `json:"starting_branch,omitempty"`
-	StartingHead   string    `json:"starting_head,omitempty"`
-	Message        string    `json:"message,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
+	Hash           string                     `json:"hash"`
+	Policy         string                     `json:"policy"`
+	StartingBranch string                     `json:"starting_branch,omitempty"`
+	StartingHead   string                     `json:"starting_head,omitempty"`
+	Message        string                     `json:"message,omitempty"`
+	CreatedAt      time.Time                  `json:"created_at"`
+	Verification   *SliceVerificationSnapshot `json:"verification,omitempty"`
 }
 
 // SliceCompletionOutcome records how work was settled at slice completion.
@@ -133,10 +135,18 @@ type Approval struct {
 
 // VerificationRun records the result of a completed verification command.
 type VerificationRun struct {
-	Command string `json:"command"`
-	CWD     string `json:"cwd"`
-	Result  string `json:"result"`
-	Details string `json:"details"`
+	Command              string                       `json:"command"`
+	CWD                  string                       `json:"cwd"`
+	Result               string                       `json:"result"`
+	Details              string                       `json:"details"`
+	Source               string                       `json:"source,omitempty"`
+	CommandIndex         int                          `json:"command_index,omitempty"`
+	OriginalCommand      string                       `json:"original_command,omitempty"`
+	ExitCode             *int                         `json:"exit_code,omitempty"`
+	DurationMilliseconds *int64                       `json:"duration_milliseconds,omitempty"`
+	OutputDigest         string                       `json:"output_digest,omitempty"`
+	OutputTruncated      bool                         `json:"output_truncated,omitempty"`
+	FailureKind          FinalVerificationFailureKind `json:"failure_kind,omitempty"`
 }
 
 // PlanDetail is the loaded representation of one plan directory.

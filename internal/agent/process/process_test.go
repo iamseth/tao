@@ -7,10 +7,76 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestSessionLifetimeObservesExitWithoutWait(t *testing.T) {
+	dir := t.TempDir()
+	ended := make(chan struct{})
+	ctx := WithSessionLifetime(context.Background(), nil, func() { close(ended) })
+	// Runtime readers may wait for EOF before calling Wait. A descendant holding
+	// the pipes must not keep the dead provider's nested completion alive.
+	proc, err := DefaultProcessStarter(ctx, dir, "sh", []string{"-c", `(while [ ! -f release ]; do sleep 0.02; done) & exit 0`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.WriteFile(filepath.Join(dir, "release"), nil, 0o600); err != nil {
+			t.Error(err)
+		}
+		_ = proc.Kill()
+		_ = waitForProcess(t, proc, 3*time.Second)
+	})
+	select {
+	case <-ended:
+	case <-time.After(3 * time.Second):
+		t.Fatal("provider exit observation depends on caller Wait or inherited-pipe EOF")
+	}
+}
+
+func TestSessionLifetimePropagationAndExitBeforePipeDrain(t *testing.T) {
+	t.Setenv("TAO_PROCESS_GENERIC_ENV", "old")
+	readerDone := make(chan struct{})
+	observed := make(chan bool, 1)
+	env := []string{"TAO_PROCESS_GENERIC_ENV=invocation"}
+	ctx := WithSessionLifetime(context.Background(), env, func() {
+		select {
+		case <-readerDone:
+			observed <- false
+		default:
+			observed <- true
+		}
+	})
+	env[0] = "TAO_PROCESS_GENERIC_ENV=mutated"
+	// The descendant retains stdout after its parent exits. Observing process
+	// death must precede bounded pipe draining, not depend on EOF from descendants.
+	proc, err := DefaultProcessStarter(ctx, "", "sh", []string{"-c", `printf '%s\n' "$TAO_PROCESS_GENERIC_ENV"; sleep 1 & exit 0`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = proc.Kill() }()
+	output := make(chan string, 1)
+	go func() {
+		data, _ := io.ReadAll(proc.Stdout())
+		close(readerDone)
+		output <- string(data)
+	}()
+	if err := waitForProcess(t, proc, 3*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if !<-observed {
+		t.Fatal("lifetime ended only after inherited pipes drained")
+	}
+	if got := <-output; got != "invocation\n" {
+		t.Fatalf("private environment = %q", got)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("provider exit changed runtime context semantics")
+	}
+}
 
 func TestDefaultProcessStarterErrors(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

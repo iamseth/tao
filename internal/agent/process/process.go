@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/iamseth/tao/internal/herdr"
 )
@@ -31,12 +32,27 @@ type Process interface {
 	Kill() error
 }
 
+// WithSessionLifetime propagates private session coordination to a provider
+// process and observes its exit before bounded output draining. It does not
+// alter provider arguments or process cancellation policy.
+func WithSessionLifetime(ctx context.Context, env []string, ended func()) context.Context {
+	return context.WithValue(ctx, sessionLifetimeKey{}, sessionLifetime{env: append([]string(nil), env...), ended: ended})
+}
+
+type sessionLifetimeKey struct{}
+type sessionLifetime struct {
+	env   []string
+	ended func()
+}
+
 type execProcess struct {
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout io.Reader
-	stderr io.Reader
-	output []*outputPipe
+	waitDone chan struct{}
+	waitErr  error
+	cmd      *exec.Cmd
+	stdin    io.WriteCloser
+	stdout   io.Reader
+	stderr   io.Reader
+	output   []*outputPipe
 }
 
 // DefaultProcessStarter starts name with args under cwd, wiring stdin/stdout/
@@ -51,6 +67,18 @@ func DefaultProcessStarter(ctx context.Context, cwd string, name string, args []
 		cmd.Dir = cwd
 	}
 	cmd.Env = herdr.StripInjectedEnv(cmd.Environ())
+	lifetime, _ := ctx.Value(sessionLifetimeKey{}).(sessionLifetime)
+	for _, entry := range lifetime.env {
+		key, _, _ := strings.Cut(entry, "=")
+		filtered := cmd.Env[:0]
+		for _, existing := range cmd.Env {
+			if !strings.HasPrefix(existing, key+"=") {
+				filtered = append(filtered, existing)
+			}
+		}
+		filtered = append(filtered, entry)
+		cmd.Env = filtered
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -77,14 +105,32 @@ func DefaultProcessStarter(ctx context.Context, cwd string, name string, args []
 		_ = stderr.file.Close()
 		return nil, err
 	}
-	return &execProcess{cmd: cmd, stdin: stdin, stdout: stdout, stderr: stderr, output: []*outputPipe{stdout, stderr}}, nil
+	p := &execProcess{cmd: cmd, stdin: stdin, stdout: stdout, stderr: stderr, output: []*outputPipe{stdout, stderr}}
+	if lifetime.ended != nil {
+		// Observe death even when the runtime is still reading inherited pipes
+		// and has not called Wait. Only lifetime-bound sessions use this watcher;
+		// draining and runtime result collection retain their existing ordering.
+		p.waitDone = make(chan struct{})
+		go func() {
+			p.waitErr = cmd.Wait()
+			lifetime.ended()
+			close(p.waitDone)
+		}()
+	}
+	return p, nil
 }
 
 func (p *execProcess) Stdin() io.WriteCloser { return p.stdin }
 func (p *execProcess) Stdout() io.Reader     { return p.stdout }
 func (p *execProcess) Stderr() io.Reader     { return p.stderr }
 func (p *execProcess) Wait() error {
-	err := p.cmd.Wait()
+	var err error
+	if p.waitDone != nil {
+		<-p.waitDone
+		err = p.waitErr
+	} else {
+		err = p.cmd.Wait()
+	}
 	drainOutput(p.output)
 	return err
 }

@@ -174,6 +174,56 @@ func TestInsightsRenderersGolden(t *testing.T) {
 	}
 }
 
+func TestInsightsCorrectedVerificationEventsRetainExistingGoldenProjection(t *testing.T) {
+	// Successful corrections still count as invalid-command observations;
+	// mismatch diagnostics must not introduce a new counter or rendered view.
+	fixture := newRunPlanFixture(t, plan.StatusInProgress, []string{"slice-a"}, nil, "slice-a", plan.StatusInProgress)
+	for _, event := range []plan.Event{
+		{Type: plan.EventTypeVerificationCommandInvalid, SliceID: "slice-a", VerificationAttemptID: "attempt-one", Command: "go test pkg/example_test.go", CorrectedCommand: "go test example_test.go", Result: "passed", Reason: "No test files found"},
+		{Type: plan.EventTypeVerificationCommandInvalid, SliceID: "slice-a", VerificationAttemptID: "attempt-two", Command: "go test pkg/example_test.go", CorrectedCommand: "go test example_test.go", Result: "passed", Reason: "No test files found"},
+		{Type: plan.EventTypeVerificationClaimMismatch, SliceID: "slice-a", VerificationAttemptID: "attempt-two", Command: "go test pkg/example_test.go", ClaimedResult: "passed", Result: "failed", Message: "password=private-claim"},
+	} {
+		if err := plan.AppendEvent(fixture.dir, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	collected, err := insights.Aggregate(context.Background(), plan.NewFileRepository(fixture.root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if collected.Signals.VerificationCommandInvalid != 2 {
+		t.Fatalf("successful correction count = %d", collected.Signals.VerificationCommandInvalid)
+	}
+	report := representativeInsightsReport()
+	report.Signals.VerificationCommandInvalid = collected.Signals.VerificationCommandInvalid
+	for _, test := range []struct {
+		fixture string
+		render  func(*bytes.Buffer, insights.Report) error
+	}{
+		{"repository-report.golden", renderInsightsReport},
+		{"repository-digest.golden", renderInsightsDigest},
+		{"all-repositories-report.golden", renderAllInsightsReport},
+		{"all-repositories-digest.golden", renderAllInsightsDigest},
+	} {
+		t.Run(test.fixture, func(t *testing.T) {
+			var out bytes.Buffer
+			if err := test.render(&out, report); err != nil {
+				t.Fatal(err)
+			}
+			assertGolden(t, filepath.Join("testdata", "insights", test.fixture), out.Bytes())
+			out.Reset()
+			if err := test.render(&out, collected); err != nil {
+				t.Fatal(err)
+			}
+			for _, forbidden := range []string{plan.EventTypeVerificationClaimMismatch, "private-claim", "attempt-two"} {
+				if strings.Contains(out.String(), forbidden) {
+					t.Fatalf("diagnostic became a rendered insight: %q", forbidden)
+				}
+			}
+		})
+	}
+}
+
 func representativeInsightsReport() insights.Report {
 	latestTimeout := time.Date(2026, 8, 17, 14, 30, 0, 0, time.FixedZone("fixture", -7*60*60))
 	latestResume := time.Date(2026, 8, 18, 9, 15, 0, 0, time.UTC)

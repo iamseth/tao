@@ -253,13 +253,35 @@ func (r *PlanRecord) CompleteSlice(sliceID string, notes string, verificationRes
 	return r.apply(completeSliceMutation(sliceID, notes, verificationResults, now))
 }
 
+// RecordSliceVerification persists the latest observed attempt without completing
+// the slice or advancing lifecycle clocks. A stale writer must reload before
+// replacing evidence; an exact replay of an already settled attempt is harmless.
+func (r *PlanRecord) RecordSliceVerification(sliceID string, snapshot SliceVerificationSnapshot) error {
+	store, err := r.storeOrDefault()
+	if err != nil {
+		return err
+	}
+	if err := snapshot.Validate(); err != nil {
+		return err
+	}
+	slice := findSlice(r.detail, sliceID)
+	if slice == nil {
+		return classify(ErrNotFound, "slice %s not found", sliceID)
+	}
+	expected := cloneSliceVerificationSnapshot(slice.VerificationAttempt)
+	stored := cloneSliceVerificationSnapshot(&snapshot)
+	return r.applySlicesUpdate(store, func(detail *PlanDetail, _ *artifactChangeSet) error {
+		return markSliceVerification(detail, sliceID, expected, *stored)
+	})
+}
+
 // RecordSliceCommitIntent durably records completion intent before Git mutation.
 func (r *PlanRecord) RecordSliceCommitIntent(sliceID string, intent SliceCommitIntent) error {
 	store, err := r.storeOrDefault()
 	if err != nil {
 		return err
 	}
-	if err := markSliceCommitIntent(r.detail, sliceID, intent); err != nil {
+	if err := markSliceCommitIntent(clonePlanDetail(r.detail), sliceID, intent); err != nil {
 		return err
 	}
 	return r.applySlicesUpdate(store, func(detail *PlanDetail, _ *artifactChangeSet) error {

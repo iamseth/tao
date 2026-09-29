@@ -157,6 +157,25 @@ func TestRenderRunPromptDerivesSliceCommitPolicyFromLegacyFlag(t *testing.T) {
 	}
 }
 
+func TestRunDelegatesAuthoritativeGatesWithoutDuplicateSequence(t *testing.T) {
+	for _, policy := range []string{"slice", "none"} {
+		got, err := Render(PromptRun, Data{PlanDir: "/tmp/plan", CommitPolicy: policy, Resuming: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{"test-first development and targeted diagnosis", "Do not routinely run a duplicate full declared-gate sequence", "No verification results file is required", "Tao alone validates and executes", "Before intent only", "same active implementation session", "outside Plan-Owned Files", "--gate-command", "--failing-path", "never repair or reinterpret a recorded intent", "Final Tao-observed", "ten-minute timeout"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("%s prompt missing %q", policy, want)
+			}
+		}
+		for _, forbidden := range []string{"--notes-file \"<notes file>\" --verification-results-file", "Rerun every verification command", "After verification passes, write"} {
+			if strings.Contains(got, forbidden) {
+				t.Errorf("%s prompt retains %q", policy, forbidden)
+			}
+		}
+	}
+}
+
 func TestRenderCommitPromptDelegatesProposalAndGitAuthorityToTao(t *testing.T) {
 	got, err := Render(PromptCommit, Data{Arguments: "prefer the cli scope"})
 	if err != nil {

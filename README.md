@@ -148,6 +148,12 @@ For a solo local workflow, integrate an approved exact-base/head review with:
 tao merge "$PLAN_ID"
 ```
 
+Tao executes declared slice gates before commit intent; optional agent claims
+cannot authorize completion. Gates run locally (not sandboxed or cryptographically
+attested), with a ten-minute command bound within the remaining agent-session
+budget. Final repository verification is unchanged. See the
+[evidence contract](docs/plan-format.md#observed-slice-verification).
+
 Tao creates isolated execution worktrees, runs repository verification, and
 keeps plans, reviews, execution evidence, and recovery state under its local
 data home. That data and workspace-local `.tao/` metadata are local-only; do not

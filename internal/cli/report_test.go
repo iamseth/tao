@@ -76,6 +76,47 @@ func TestReportStdoutIsPureMarkdownInBothModesAndReadablePhases(t *testing.T) {
 	}
 }
 
+func TestReportLatestVerificationAttemptDoesNotBecomeCompletionEvidence(t *testing.T) {
+	fixture := newRunPlanFixture(t, plan.StatusInProgress, []string{"slice-a"}, nil, "slice-a", plan.StatusInProgress)
+	record, err := plan.NewFileRepository(fixture.root).ResolvePlanRecord(context.Background(), fixture.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Detail().Slices.Slices[0].VerificationResults = []plan.VerificationRun{{Command: "historical", Result: "passed"}}
+	record.Detail().Slices.Slices[0].VerificationAttempt = &plan.SliceVerificationSnapshot{
+		AttemptID: "private-attempt", ExecutionRoot: "/private/root",
+		Runs: []plan.VerificationRun{{Command: "latest-command", Result: "failed", Source: plan.VerificationSourceTao, Details: "password=output-secret"}},
+	}
+	if err := record.PersistArtifacts(); err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.AppendEvent(fixture.dir, plan.Event{Type: plan.EventTypeVerificationClaimMismatch, SliceID: "slice-a", Command: "claim-command", ClaimedResult: "passed", Result: "failed", Message: "password=claim-secret"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, planningOnly := range []bool{false, true} {
+		var out, errOut bytes.Buffer
+		args := []string{"report", "--output", "-", fixture.id}
+		if planningOnly {
+			args = append(args, "--planning-only")
+		}
+		if err := reportTestApp(fixture.root, &out, &errOut).Run(context.Background(), args); err != nil {
+			t.Fatal(err)
+		}
+		for _, forbidden := range []string{"private-attempt", "/private/root", "latest-command", "claim-command", "output-secret", "claim-secret"} {
+			if strings.Contains(out.String(), forbidden) {
+				t.Fatalf("report leaked %q", forbidden)
+			}
+		}
+		if planningOnly {
+			if strings.Contains(out.String(), "**Verification**") {
+				t.Fatal("planning report includes execution evidence")
+			}
+		} else if !strings.Contains(out.String(), "1/1 passed") {
+			t.Fatalf("latest attempt inflated completed verification totals: %s", out.String())
+		}
+	}
+}
+
 func TestReportFileIsExclusiveOwnerOnlyAndForceReplaces(t *testing.T) {
 	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"slice-a"}, nil, "slice-a", plan.StatusPending)
 	output := filepath.Join(fixture.root, "exports", "report.md")

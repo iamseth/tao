@@ -577,7 +577,7 @@ func markSliceCommitIntent(detail *PlanDetail, sliceID string, intent SliceCommi
 		return classify(ErrNotFound, "slice %s not found", sliceID)
 	}
 	if slice.CommitIntent != nil {
-		if *slice.CommitIntent == intent {
+		if reflect.DeepEqual(*slice.CommitIntent, intent) {
 			return nil
 		}
 		return fmt.Errorf("slice %s has a conflicting commit intent", sliceID)
@@ -585,7 +585,12 @@ func markSliceCommitIntent(detail *PlanDetail, sliceID string, intent SliceCommi
 	if slice.Completion != nil {
 		return fmt.Errorf("slice %s already has a completion outcome", sliceID)
 	}
-	slice.CommitIntent = &intent
+	if intent.Verification != nil {
+		if err := intent.Verification.Validate(); err != nil {
+			return err
+		}
+	}
+	slice.CommitIntent = cloneSliceCommitIntent(&intent)
 	return nil
 }
 

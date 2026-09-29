@@ -607,7 +607,12 @@ func TestNoteRunGeneratesLinksThenUsesNormalRun(t *testing.T) {
 		return nil
 	}
 	var id string
-	app.ProcessStarter = fakeCLIProcessStarter(t, "done", func(string) {
+	app.ProcessStarter = fakeCLIProcessStarter(t, "done", func(prompt string) {
+		for _, want := range []string{"No verification results file is required", "Tao alone validates and executes", "Before intent only"} {
+			if !strings.Contains(prompt, want) {
+				t.Fatalf("note-run provider missing %q", want)
+			}
+		}
 		stored, err := app.noteRepository(repoMeta).Get(context.Background(), id)
 		if err != nil || stored.Status != note.StatusPromoted || stored.Promotion == nil || stored.Promotion.Plan == nil {
 			t.Fatalf("agent started before durable promotion: note=%#v err=%v", stored, err)

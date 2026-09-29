@@ -45,6 +45,11 @@ func TestRunInvokesPiUntilPlanCompletedAndLogsOutput(t *testing.T) {
 		gotName = "pi"
 		gotCwd, _ = os.Getwd()
 		prompts = append(prompts, prompt)
+		for _, want := range []string{"No verification results file is required", "Tao alone validates and executes", "Before intent only"} {
+			if !strings.Contains(prompt, want) {
+				t.Fatalf("direct-run provider missing %q", want)
+			}
+		}
 		if calls == 1 {
 			fixture.write(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
 		}

@@ -17,6 +17,30 @@ func (f runtimeFunc) RunSession(ctx context.Context, session agent.Session) (age
 	return f(ctx, session)
 }
 
+func TestRunnerPropagatesLifetimeWithoutMetrics(t *testing.T) {
+	var bound context.Context
+	closed := false
+	runner := New(Config{Timeout: time.Minute, Runtime: runtimeFunc(func(ctx context.Context, session agent.Session) (agent.SessionResult, error) {
+		if ctx != bound || session.CollectMetrics {
+			t.Fatal("lifetime propagation depends on metrics or lost context")
+		}
+		return agent.SessionResult{Output: "done"}, nil
+	})})
+	result, err := runner.Run(context.Background(), Request{
+		BindLifetime: func(ctx context.Context) (context.Context, func() error, error) {
+			if _, ok := ctx.Deadline(); !ok {
+				t.Fatal("binding ran before session timeout")
+			}
+			var cancel context.CancelFunc
+			bound, cancel = context.WithCancel(ctx)
+			return bound, func() error { closed = true; cancel(); return nil }, nil
+		},
+	})
+	if err != nil || result.Output != "done" || !closed || bound.Err() == nil {
+		t.Fatalf("result=%+v err=%v closed=%t", result, err, closed)
+	}
+}
+
 func TestRunnerModelSelection(t *testing.T) {
 	for _, tt := range []struct {
 		name, configured, override, want string

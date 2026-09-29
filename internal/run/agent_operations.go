@@ -150,8 +150,16 @@ func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSe
 	if stateErr == nil {
 		controlRoot = state.Repo.Root
 	}
+	var bindLifetime func(context.Context) (context.Context, func() error, error)
+	if request.Metrics != nil && request.Metrics.SliceID != "" &&
+		(request.Metrics.Role == plan.AgentRoleExecution || request.Metrics.Role == plan.AgentRoleRework) {
+		bindLifetime = func(sessionCtx context.Context) (context.Context, func() error, error) {
+			return startSliceCompletionLifetime(sessionCtx, request.PlanDir, request.Metrics.SliceID)
+		}
+	}
 	result, runErr := r.session.Run(ctx, agentsession.Request{
-		RepoRoot: request.RepoRoot, ControlRoot: controlRoot, Prompt: request.Prompt, Model: request.Model,
+		BindLifetime: bindLifetime,
+		RepoRoot:     request.RepoRoot, ControlRoot: controlRoot, Prompt: request.Prompt, Model: request.Model,
 		CollectMetrics: metricsRequested, NoProgressToolLimit: request.NoProgressToolLimit,
 		VerificationCommands: request.VerificationCommands, Log: log,
 	})

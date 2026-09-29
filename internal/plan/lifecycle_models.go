@@ -42,6 +42,7 @@ const (
 	EventTypePlanMerged                 = "plan_merged"
 	EventTypePlanAbandoned              = "plan_abandoned"
 	EventTypeVerificationCommandInvalid = "verification_command_invalid"
+	EventTypeVerificationClaimMismatch  = "verification_claim_mismatch"
 	EventTypeRunContext                 = "run_context"
 	EventTypeSessionTimeout             = "session_timeout"
 	EventTypeBudgetExceeded             = "budget_exceeded"
@@ -994,6 +995,8 @@ type Event struct {
 	Paths                 []string                     `json:"paths,omitempty"`
 	BlockerClassification string                       `json:"blocker_classification,omitempty"`
 	HeadSHA               string                       `json:"head_sha,omitempty"`
+	ClaimedResult         string                       `json:"claimed_result,omitempty"`
+	VerificationAttemptID string                       `json:"verification_attempt_id,omitempty"`
 	CorrectedCommand      string                       `json:"corrected_command,omitempty"`
 	Result                string                       `json:"result,omitempty"`
 	FailureKind           FinalVerificationFailureKind `json:"failure_kind,omitempty"`

@@ -34,6 +34,7 @@ type SliceCompletionInputFiles struct {
 type SliceCompletionInputs struct {
 	Notes               string
 	VerificationResults []plan.VerificationRun
+	VerificationClaims  []VerificationClaim
 	CommitProposal      *commitcontract.Proposal
 }
 
@@ -42,9 +43,9 @@ type SliceCompletionInputs struct {
 // against the calling process's current working directory, matching where the
 // implementing agent invoked completion.
 func LoadSliceCompletionInputs(files SliceCompletionInputFiles) (SliceCompletionInputs, error) {
-	notesBytes, err := agentinput.ReadBoundedFile(files.NotesFile, "notes file", maxCompletionNotesBytes)
+	inputs, err := loadCompletionNotesAndProposal(files)
 	if err != nil {
-		return SliceCompletionInputs{}, fmt.Errorf("read notes file: %w", err)
+		return SliceCompletionInputs{}, err
 	}
 	resultsBytes, err := agentinput.ReadBoundedFile(files.VerificationResultsFile, "verification results file", maxCompletionVerificationResultsBytes)
 	if err != nil {
@@ -60,7 +61,27 @@ func LoadSliceCompletionInputs(files SliceCompletionInputFiles) (SliceCompletion
 	if err := normalizeVerificationRunCWDs(results); err != nil {
 		return SliceCompletionInputs{}, err
 	}
-	inputs := SliceCompletionInputs{Notes: strings.TrimSpace(string(notesBytes)), VerificationResults: results}
+	inputs.VerificationResults = results
+	return inputs, nil
+}
+
+// LoadVerifiedCompletionInputs accepts optional advisory claims, never observed
+// fields. Historical hashes alone use LoadSliceCompletionInputs.
+func LoadVerifiedCompletionInputs(files SliceCompletionInputFiles) (SliceCompletionInputs, error) {
+	inputs, err := loadCompletionNotesAndProposal(files)
+	if err != nil {
+		return SliceCompletionInputs{}, err
+	}
+	inputs.VerificationClaims, err = LoadVerificationClaims(files.VerificationResultsFile)
+	return inputs, err
+}
+
+func loadCompletionNotesAndProposal(files SliceCompletionInputFiles) (SliceCompletionInputs, error) {
+	notesBytes, err := agentinput.ReadBoundedFile(files.NotesFile, "notes file", maxCompletionNotesBytes)
+	if err != nil {
+		return SliceCompletionInputs{}, fmt.Errorf("read notes file: %w", err)
+	}
+	inputs := SliceCompletionInputs{Notes: strings.TrimSpace(string(notesBytes))}
 	if strings.TrimSpace(files.CommitProposalFile) != "" {
 		proposalBytes, err := agentinput.ReadBoundedFile(files.CommitProposalFile, "commit proposal file", commitcontract.MaxProposalFileBytes)
 		if err != nil {

@@ -44,6 +44,9 @@ type Session struct {
 	// Timeout caps a single Runtime session's wall-clock duration. A zero value
 	// means no timeout.
 	Timeout time.Duration
+	// BindLifetime is optional transient coordination for nested work. The
+	// decorator supplies the actual timeout context and closes it on return.
+	BindLifetime func(context.Context) (context.Context, func() error, error)
 	// Log receives framed records suitable for durable agent-log storage.
 	Log io.Writer
 	// Progress receives a human-readable rendering of the same records.

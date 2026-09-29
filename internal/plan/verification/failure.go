@@ -2,7 +2,8 @@ package verification
 
 import "strings"
 
-// Run is the narrow subset of a recorded verification run needed for classification.
+// Run is the narrow command/cwd/diagnostic view used by verification analysis.
+// A correction candidate contains only Command and CWD; Details remains empty.
 type Run struct {
 	Command string
 	CWD     string
@@ -10,6 +11,7 @@ type Run struct {
 }
 
 // ClassifyRun identifies invalid-command failures from a recorded verification run.
+// Its classification and any suggested command are advisory, not execution authority.
 func ClassifyRun(repoRoot string, run Run) FailureClassification {
 	lookup := newLookup(repoRoot)
 	if run.CWD != "" && !lookup.dirExists(run.CWD) {
@@ -24,6 +26,7 @@ func ClassifyRun(repoRoot string, run Run) FailureClassification {
 }
 
 // ClassifyFailure identifies output patterns caused by invalid verification commands.
+// Its classification and any suggested command are advisory, not execution authority.
 func ClassifyFailure(repoRoot string, command string, output string) FailureClassification {
 	details := strings.ToLower(output)
 	classification := FailureClassification{Command: command}

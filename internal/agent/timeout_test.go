@@ -15,6 +15,58 @@ func (r fakeSlowRuntime) RunSession(ctx context.Context, session Session) (Sessi
 	return r.run(ctx, session)
 }
 
+func TestTimeoutRuntimeLifetimeUsesActualDeadlineAndCloses(t *testing.T) {
+	for _, timeout := range []time.Duration{0, time.Minute} {
+		t.Run(timeout.String(), func(t *testing.T) {
+			var bound context.Context
+			closed := 0
+			wantErr := errors.New("provider failed")
+			runtime := WithSessionTimeout(fakeSlowRuntime{run: func(ctx context.Context, _ Session) (SessionResult, error) {
+				if ctx != bound {
+					t.Fatal("provider did not receive lifetime context")
+				}
+				_, hasDeadline := ctx.Deadline()
+				if hasDeadline != (timeout > 0) {
+					t.Fatal("lifetime changed timeout-disabled semantics")
+				}
+				return SessionResult{Output: "partial"}, wantErr
+			}})
+			result, err := runtime.RunSession(context.Background(), Session{
+				Timeout: timeout,
+				BindLifetime: func(ctx context.Context) (context.Context, func() error, error) {
+					var cancel context.CancelFunc
+					bound, cancel = context.WithCancel(ctx)
+					deadline, ok := ctx.Deadline()
+					boundDeadline, boundOK := bound.Deadline()
+					if ok != boundOK || !deadline.Equal(boundDeadline) {
+						t.Fatal("binding restarted session budget")
+					}
+					return bound, func() error { closed++; cancel(); return nil }, nil
+				},
+			})
+			if !errors.Is(err, wantErr) || result.Output != "partial" || closed != 1 || bound.Err() == nil {
+				t.Fatalf("result=%+v err=%v closed=%d context=%v", result, err, closed, bound.Err())
+			}
+		})
+	}
+}
+
+func TestTimeoutRuntimeLifetimeBindFailureStopsProvider(t *testing.T) {
+	wantErr := errors.New("lifetime unavailable")
+	runtime := WithSessionTimeout(fakeSlowRuntime{run: func(context.Context, Session) (SessionResult, error) {
+		t.Fatal("provider invoked without lifetime")
+		return SessionResult{}, nil
+	}})
+	_, err := runtime.RunSession(context.Background(), Session{
+		BindLifetime: func(ctx context.Context) (context.Context, func() error, error) {
+			return ctx, nil, wantErr
+		},
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("bind failure = %v", err)
+	}
+}
+
 func TestTimeoutRuntimeReturnsTypedTimeoutError(t *testing.T) {
 	const timeout = time.Millisecond
 	parentCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)

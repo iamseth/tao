@@ -35,15 +35,24 @@ type timeoutRuntime struct {
 }
 
 func (r timeoutRuntime) RunSession(ctx context.Context, session Session) (SessionResult, error) {
-	if session.Timeout <= 0 {
-		return r.inner.RunSession(ctx, session)
+	timeoutCtx := ctx
+	if session.Timeout > 0 {
+		var cancel context.CancelFunc
+		timeoutCtx, cancel = context.WithTimeout(ctx, session.Timeout)
+		defer cancel()
 	}
-
-	timeoutCtx, cancel := context.WithTimeout(ctx, session.Timeout)
-	defer cancel()
-
-	result, err := r.inner.RunSession(timeoutCtx, session)
-	if errors.Is(timeoutCtx.Err(), context.DeadlineExceeded) {
+	liveCtx := timeoutCtx
+	if session.BindLifetime != nil {
+		var closeLifetime func() error
+		var err error
+		liveCtx, closeLifetime, err = session.BindLifetime(timeoutCtx)
+		if err != nil {
+			return SessionResult{}, err
+		}
+		defer func() { _ = closeLifetime() }()
+	}
+	result, err := r.inner.RunSession(liveCtx, session)
+	if session.Timeout > 0 && errors.Is(timeoutCtx.Err(), context.DeadlineExceeded) {
 		return result, &SessionTimeoutError{Timeout: session.Timeout}
 	}
 	return result, err

@@ -464,6 +464,62 @@ func TestRenderPlanningOnlyStructurallyExcludesImplementationData(t *testing.T) 
 	}
 }
 
+func TestVerificationEvidenceProjectionRemainsShareSafe(t *testing.T) {
+	for _, source := range []string{"", plan.VerificationSourceTao} {
+		t.Run("source="+source, func(t *testing.T) {
+			now := time.Date(2026, 8, 4, 15, 0, 0, 0, time.UTC)
+			detail := reportFixture(now)
+			detail.Slices.Slices[0].Status = plan.StatusCompleted
+			detail.Slices.Slices[0].VerificationResults = []plan.VerificationRun{
+				{Command: "go test pkg/example_test.go", Result: "failed", Source: source, CommandIndex: 1, FailureKind: plan.FinalVerificationFailureKindInvalidCommand},
+				{Command: "go test example_test.go", OriginalCommand: "go test pkg/example_test.go", Result: "passed", Source: source, CommandIndex: 1},
+				{Command: "go test ./...", Result: "passed", Source: source, CommandIndex: 2},
+			}
+			baseline, err := RenderFull(ProjectFull(detail, now))
+			if err != nil {
+				t.Fatal(err)
+			}
+			planning, err := RenderPlanningOnly(ProjectPlanningOnly(detail, now))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := range detail.Slices.Slices[0].VerificationResults {
+				run := &detail.Slices.Slices[0].VerificationResults[i]
+				run.Details = "password=raw-output-secret"
+				run.CWD = "/private/execution-root"
+				run.OutputDigest = strings.Repeat("a", 64)
+				run.DurationMilliseconds = new(int64(123))
+			}
+			// Neither a later failed diagnostic snapshot nor an event constitutes
+			// another completed verification row, even when the latest run passed.
+			detail.Slices.Slices[1].VerificationAttempt = &plan.SliceVerificationSnapshot{
+				AttemptID: "private-attempt-id", ExecutionRoot: "/private/execution-root",
+				Runs: []plan.VerificationRun{{Command: "latest-only-command", Result: "failed", Details: "password=raw-output-secret"}, {Command: "latest-passed-command", Result: "passed"}},
+			}
+			detail.Events = append(detail.Events,
+				plan.Event{Type: plan.EventTypeVerificationClaimMismatch, Command: "claim-only-command", ClaimedResult: "passed", Result: "failed", Message: "password=claim-secret"},
+				plan.Event{Type: plan.EventTypeVerificationCommandInvalid, Command: "go test pkg/example_test.go", CorrectedCommand: "go test example_test.go", Result: "passed"},
+			)
+			projected := ProjectFull(detail, now)
+			want := CountSummary{Total: 3, Passed: 2, Failed: 1}
+			if projected.Execution.Verification != want || projected.Slices[0].Verification != want || projected.Slices[1].Verification != (CountSummary{}) {
+				t.Fatalf("diagnostics inflated totals: %+v", projected.Execution.Verification)
+			}
+			got, err := RenderFull(projected)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, baseline) {
+				t.Fatalf("local evidence changed safe rendering:\n%s", got)
+			}
+			gotPlanning, err := RenderPlanningOnly(ProjectPlanningOnly(detail, now))
+			if err != nil || !bytes.Equal(planning, gotPlanning) {
+				t.Fatalf("execution evidence entered planning report: %v\n%s", err, gotPlanning)
+			}
+		})
+	}
+}
+
 func TestRenderedDocumentValidationRejectsNonSchemaStructure(t *testing.T) {
 	s := NewSanitizer(0)
 	report := PlanningOnlyReport{Title: s.Sanitize(sectionIdentity, "Safe title")}

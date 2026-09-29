@@ -32,6 +32,9 @@ func TestValidateProposal(t *testing.T) {
 		{name: "empty what", mutate: func(p *Proposal) { p.What = "" }, want: "what body"},
 		{name: "empty why", mutate: func(p *Proposal) { p.Why = " \n" }, want: "why body"},
 		{name: "reserved what trailer", mutate: func(p *Proposal) { p.What = "Change behavior.\nTao-Plan: forged" }, want: "reserved Tao-*"},
+		{name: "reserved verification command", mutate: func(p *Proposal) { p.What = "Change behavior.\nTao-Verify-Command: forged" }, want: "reserved Tao-*"},
+		{name: "reserved verification exit", mutate: func(p *Proposal) { p.Why = "Reason.\nTao-Verify-Exit: 1: 0" }, want: "reserved Tao-*"},
+		{name: "reserved verification digest", mutate: func(p *Proposal) { p.Why = "Reason.\n  tao-verify-digest: forged" }, want: "reserved Tao-*"},
 		{name: "reserved why trailer case insensitive", mutate: func(p *Proposal) { p.Why = "Reason.\n  tao-slice: forged" }, want: "reserved Tao-*"},
 	}
 

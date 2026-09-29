@@ -52,6 +52,9 @@
 // Known merge-only fields in slices.json:
 //
 //   - Slice.ExecutionRoot, Tags, Approval, Notes, VerificationResults (all omitempty)
+//   - Slice.VerificationAttempt and SliceCommitIntent.Verification preserve absent
+//     legacy shape. Present snapshots emit all fields; Runs replaces the whole
+//     array, so omitted per-run values cannot retain a prior attempt's evidence.
 //   - Slice.BlockerNote preserves by default but is explicitly clearable through
 //     artifactChangeSet.
 //   - ReviewFinding sub-fields: Severity, File, Message, Suggestion (all omitempty)
@@ -207,6 +210,53 @@ func TestClearableFieldsRoundTrip(t *testing.T) {
 		})
 	}
 
+}
+
+func TestSliceVerificationReplacementDoesNotRetainPriorRunFields(t *testing.T) {
+	record := sliceVerificationRecord(t)
+	first := testSliceVerificationSnapshot()
+	first.Runs[0].OriginalCommand = "go test ./missing/..."
+	first.Runs[0].OutputTruncated = true
+	if err := record.RecordSliceVerification("001-a", first); err != nil {
+		t.Fatal(err)
+	}
+	second := testSliceVerificationSnapshot()
+	second.AttemptID = "attempt-2"
+	second.RecordedAt = second.RecordedAt.Add(time.Second)
+	second.Runs[0].ExitCode = nil
+	second.Runs[0].DurationMilliseconds = nil
+	second.Runs[0].FailureKind = ""
+	if err := record.RecordSliceVerification("001-a", second); err != nil {
+		t.Fatal(err)
+	}
+	got := readSlicesFile(t, record.Dir()).Slices[0].VerificationAttempt
+	if !reflect.DeepEqual(got, &second) {
+		t.Fatalf("stale optional run fields survived replacement: %#v", got)
+	}
+	third := second
+	third.AttemptID = "attempt-3"
+	third.RecordedAt = third.RecordedAt.Add(time.Second)
+	third.Runs = nil
+	if err := record.RecordSliceVerification("001-a", third); err != nil {
+		t.Fatal(err)
+	}
+	if got := readSlicesFile(t, record.Dir()).Slices[0].VerificationAttempt; got.Runs != nil {
+		t.Fatal("empty diagnostic attempt retained earlier runs")
+	}
+	for _, test := range []struct {
+		typ   reflect.Type
+		field string
+	}{
+		{reflect.TypeOf(Slice{}), "VerificationAttempt"},
+		{reflect.TypeOf(SliceCommitIntent{}), "Verification"},
+		{reflect.TypeOf(VerificationRun{}), "ExitCode"},
+		{reflect.TypeOf(VerificationRun{}), "DurationMilliseconds"},
+	} {
+		field, ok := test.typ.FieldByName(test.field)
+		if !ok || !strings.Contains(field.Tag.Get("json"), "omitempty") {
+			t.Fatalf("%s must preserve absent legacy shape", test.field)
+		}
+	}
 }
 
 func TestSingleMergeResolutionOptionalLegacyShapeEmitsExactPresentState(t *testing.T) {

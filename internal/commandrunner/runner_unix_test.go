@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -21,6 +22,11 @@ func TestDefaultLocalCompletionKillsDetachedDescendants(t *testing.T) {
 	if err := DefaultLocal(context.Background(), "", "sh", []string{"-c", `sleep 30 >/dev/null 2>&1 & echo $! > "$1"`, "sh", pidPath}, io.Discard, io.Discard); err != nil {
 		t.Fatalf("DefaultLocal failed: %v", err)
 	}
+	assertCommandDescendantGone(t, pidPath)
+}
+
+func assertCommandDescendantGone(t *testing.T, pidPath string) {
+	t.Helper()
 	pidText, err := os.ReadFile(pidPath) //nolint:gosec // G304: path is a test-owned temporary file.
 	if err != nil {
 		t.Fatalf("read child pid: %v", err)
@@ -42,6 +48,27 @@ func TestDefaultLocalCompletionKillsDetachedDescendants(t *testing.T) {
 			t.Fatalf("detached child %d survived command completion", pid)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestDefaultLocalCompletionBoundsInheritedPipes(t *testing.T) {
+	pidPath := filepath.Join(t.TempDir(), "child.pid")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		result <- DefaultLocal(ctx, "", "sh", []string{"-c", `sleep 30 & echo $! > "$1"`, "sh", pidPath}, io.Discard, io.Discard)
+	}()
+	select {
+	case err := <-result:
+		if !errors.Is(err, exec.ErrWaitDelay) {
+			t.Fatalf("incomplete output error = %v, want ErrWaitDelay", err)
+		}
+		assertCommandDescendantGone(t, pidPath)
+	case <-time.After(2 * time.Second):
+		cancel()
+		<-result
+		t.Fatal("command completion hung on inherited output pipes")
 	}
 }
 
@@ -78,4 +105,17 @@ func TestDefaultLocalCancellationKillsDescendants(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("DefaultLocal did not terminate after cancellation")
 	}
+	assertCommandDescendantGone(t, pidPath)
+}
+
+func TestDefaultLocalTimeoutKillsDescendants(t *testing.T) {
+	pidPath := filepath.Join(t.TempDir(), "child.pid")
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err := DefaultLocal(ctx, "", "sh", []string{"-c", `sleep 30 & echo $! > "$1"; wait`, "sh", pidPath}, io.Discard, io.Discard)
+	if err == nil || !errors.Is(ctx.Err(), context.DeadlineExceeded) || time.Since(started) > 2*time.Second {
+		t.Fatalf("timeout failed: %v, %v", err, ctx.Err())
+	}
+	assertCommandDescendantGone(t, pidPath)
 }
