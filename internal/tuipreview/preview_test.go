@@ -19,6 +19,24 @@ import (
 	"github.com/iamseth/tao/internal/theme"
 )
 
+func TestMixedPriorityColumn(t *testing.T) {
+	scenario, _ := Lookup(ScenarioMixed)
+	for _, width := range []int{120, 64, 60} {
+		frame, err := Render(scenario, RenderOptions{View: ViewPlans, Width: width, Height: 30, Plain: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, value := range []string{"I/R/E", "H/L/S"} {
+			if strings.Contains(frame, value) != (width == 120) {
+				t.Errorf("width %d: unexpected priority visibility for %q", width, value)
+			}
+		}
+		if width >= 64 && !strings.Contains(frame, "SLICES") {
+			t.Errorf("width %d: missing SLICES", width)
+		}
+	}
+}
+
 func TestNotePlanningPreviewHelpAndDetail(t *testing.T) {
 	scenario, _ := Lookup(ScenarioMixed)
 	if !strings.Contains(scenario.Notes.Notes[2].Text, "Press p to plan") {

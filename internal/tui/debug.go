@@ -182,8 +182,8 @@ func appendDebugTime(lines []string, label string, value time.Time) []string {
 }
 
 func debugFocusLabel(model Model) string {
-	return fmt.Sprintf("%s; %d repositories, %d statuses, %d tags", filterRepositoryLabel(model),
-		len(model.Filter.Repositories), len(model.Filter.Statuses), len(model.Filter.Tags))
+	return fmt.Sprintf("%s; %d repositories, %d statuses", filterLabel(model),
+		len(model.Filter.Repositories), len(model.Filter.Statuses))
 }
 
 func debugRepositoryCount(snapshot monitor.Snapshot, notes note.Snapshot) int {

@@ -386,6 +386,13 @@ func renderOverviewPane(detail *plan.PlanDetail, row monitor.Row, width, height,
 		lines = append(lines, palette.Paint(theme.RoleDetailMuted, "INSPECTION  ")+palette.Paint(detailStalenessRole(inspection), detailStalenessSummary(inspection)))
 	}
 
+	if overview.Priority != nil {
+		priority := overview.Priority
+		lines = append(lines, "", detailSectionHeading("PRIORITY", width, palette))
+		lines = append(lines, renderPriorityGrid(priority, width, palette)...)
+		appendOverviewMutedParagraph(&lines, "Rationale", priority.Rationale, width, palette)
+	}
+
 	lines = append(lines, "", detailSectionHeading("CONTEXT", width, palette))
 	appendOverviewLabeledText(&lines, "Problem", overview.Problem, width, palette)
 	lines = append(lines, "")
@@ -407,13 +414,6 @@ func renderOverviewPane(detail *plan.PlanDetail, row monitor.Row, width, height,
 		for _, criterion := range overview.SuccessCriteria {
 			appendOverviewChecklistItem(&lines, criterion, width, palette, theme.RoleDetailSecondary)
 		}
-	}
-
-	if overview.Priority != nil {
-		priority := overview.Priority
-		lines = append(lines, "", detailSectionHeading("PRIORITY", width, palette))
-		lines = append(lines, renderPriorityGrid(priority, width, palette)...)
-		appendOverviewMutedParagraph(&lines, "Rationale", priority.Rationale, width, palette)
 	}
 
 	lines = append(lines, "", detailSectionHeading("SCOPE", width, palette))

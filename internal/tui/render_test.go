@@ -14,6 +14,56 @@ import (
 	"github.com/iamseth/tao/internal/theme"
 )
 
+func TestPriorityColumn(t *testing.T) {
+	plain := theme.Default().Palette(theme.ProfileNone)
+	colored := theme.Default().Palette(theme.ProfileTrueColor)
+	for _, test := range []struct {
+		priority *plan.Priority
+		want     string
+	}{
+		{nil, "-"},
+		{&plan.Priority{Impact: "high", Risk: "low", Effort: "small"}, "H/L/S"},
+		{&plan.Priority{Impact: "high", Effort: "small"}, "H/-/S"},
+		{&plan.Priority{Impact: "medium", Risk: "high", Effort: "large"}, "M/H/L"},
+		{&plan.Priority{Impact: "low", Risk: "medium", Effort: "medium"}, "L/M/M"},
+		{&plan.Priority{Impact: "unknown", Risk: "unknown", Effort: "unknown"}, "-/-/-"},
+	} {
+		if got := renderPriorityCell(plain, test.priority); got != test.want {
+			t.Errorf("priority cell = %q, want %q", got, test.want)
+		}
+	}
+	priority := &plan.Priority{Impact: "high", Risk: "low", Effort: "small"}
+	want := colored.Paint(theme.RoleSuccess, "H") + "/" + colored.Paint(theme.RoleNeutral2, "L") + "/" + colored.Paint(theme.RoleSuccess, "S")
+	if got := renderPriorityCell(colored, priority); got != want || cells.Width(got) != 5 {
+		t.Fatalf("colored cell = %q, want %q", got, want)
+	}
+	row := monitor.Row{PlanID: "priority", RepositoryName: "repo"}
+	row.Overview.Priority = priority
+	columns := []column{{name: "I/R/E", width: 5}}
+	for _, test := range []struct {
+		section  SectionKind
+		selected bool
+	}{{SectionNext, true}, {SectionHistory, false}} {
+		got := renderTableRow(row, test.section, time.Time{}, columns, 5, test.selected, colored, "")
+		if !strings.Contains(got, "H/L/S") || strings.Contains(got, colored.Paint(theme.RoleSuccess, "H")) {
+			t.Fatalf("selected/history priority must have no cell colors: %q", got)
+		}
+	}
+	widths := tableWidths{repo: 8, next: 14, plan: 30, slices: 14, age: 3}
+	for _, test := range []struct {
+		width int
+		want  string
+	}{{120, "REPO,NEXT,PLAN,I/R/E,SLICES,AGE"}, {60, "REPO,NEXT,PLAN,SLICES"}} {
+		var names []string
+		for _, col := range planTableColumns(widths, test.width) {
+			names = append(names, col.name)
+		}
+		if got := strings.Join(names, ","); got != test.want {
+			t.Errorf("width %d: %s, want %s", test.width, got, test.want)
+		}
+	}
+}
+
 func TestRenderGoldenColorModes(t *testing.T) {
 	snapshot := monitor.Snapshot{Rows: []monitor.Row{{
 		RepositoryName: "repo",
@@ -488,7 +538,7 @@ func TestRenderOmitsEmptySectionsAndAlwaysShowsDonePlans(t *testing.T) {
 
 func TestRenderAndLoopComposeSharedFilterWithSearch(t *testing.T) {
 	state := loopState{
-		filter:      Filter{Enabled: true, Repositories: []string{"a", "b"}, Statuses: []string{"planned"}, Tags: []string{"keep"}},
+		filter:      Filter{Enabled: true, Repositories: []string{"a", "b"}, Statuses: []string{"planned"}},
 		searchQuery: "needle",
 		snapshot: monitor.Snapshot{Rows: []monitor.Row{
 			{RepositoryID: "a", PlanID: "needle-plan", Status: "planned"},
@@ -508,17 +558,17 @@ func TestRenderAndLoopComposeSharedFilterWithSearch(t *testing.T) {
 	if rows := state.visibleRows(); len(rows) != 1 || rows[0].PlanID != "needle-plan" {
 		t.Fatalf("rows=%+v", rows)
 	}
-	if notes := state.visibleNotes(); len(notes) != 1 || notes[0].ID != "keep" {
+	if notes := state.visibleNotes(); len(notes) != 2 || notes[0].ID != "keep" || notes[1].ID != "drop" {
 		t.Fatalf("notes=%+v", notes)
 	}
 	model := Model{Snapshot: state.snapshot, NoteSnapshot: state.noteSnapshot, Filter: state.filter, SearchQuery: state.searchQuery}
 	plans := Render(model)
 	model.Page = PageNotes
 	notes := Render(model)
-	if !strings.Contains(plans, "1 plan") || !strings.Contains(plans, "needle-plan") || !strings.Contains(notes, "1 open note") || !strings.Contains(notes, "needle-note") {
+	if !strings.Contains(plans, "1 plan") || !strings.Contains(plans, "needle-plan") || !strings.Contains(notes, "2 open notes") || !strings.Contains(notes, "needle-note") || !strings.Contains(notes, "needle-untagged") {
 		t.Fatalf("render disagrees with loop:\n%s\n%s", plans, notes)
 	}
-	for _, excluded := range []string{"needle-done", "needle-outside", "unmatched-plan", "needle-untagged"} {
+	for _, excluded := range []string{"needle-done", "needle-outside", "unmatched-plan"} {
 		if strings.Contains(plans+notes, excluded) {
 			t.Fatalf("render included %q", excluded)
 		}
@@ -536,7 +586,7 @@ func TestRenderShowsRepositoryFocusAndFiltersRows(t *testing.T) {
 		}},
 		Filter: repositoryFilter("repo-b"),
 	})
-	if !strings.Contains(got, "repo beta") || !strings.Contains(got, "1 plan") || !strings.Contains(got, "  beta   RUN   two") {
+	if !strings.Contains(got, "filter on · repo beta") || !strings.Contains(got, "1 plan") || !strings.Contains(got, "  beta   RUN   two") {
 		t.Fatalf("focused render missing header or row:\n%s", got)
 	}
 	if strings.Contains(got, "alpha") {
@@ -544,7 +594,7 @@ func TestRenderShowsRepositoryFocusAndFiltersRows(t *testing.T) {
 	}
 
 	empty := Render(Model{Filter: repositoryFilter("repo-b")})
-	if !strings.Contains(empty, "repo repo-b") || !strings.Contains(empty, "0 plans") || !strings.Contains(empty, "No plans.") {
+	if !strings.Contains(empty, "filter on · repo repo-b") || !strings.Contains(empty, "0 plans") || !strings.Contains(empty, "No plans.") {
 		t.Fatalf("empty focused render is ambiguous:\n%s", empty)
 	}
 }

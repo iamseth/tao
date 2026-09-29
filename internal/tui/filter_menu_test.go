@@ -17,31 +17,37 @@ func testFilterMenu() *filterMenu {
 	return &filterMenu{
 		repositories: []FilterOption{{ID: "a", Name: "Alpha", Available: true}, {ID: "missing", Name: "missing"}},
 		statuses:     []FilterOption{{ID: "planned", Name: "planned", Available: true}},
-		tags:         []FilterOption{{ID: "bug", Name: "bug", Available: true}},
 	}
 }
 
 func TestFilterMenuDiscoveryAndWorkingCopy(t *testing.T) {
-	original := Filter{Enabled: true, Repositories: []string{"a", "missing"}, Statuses: []string{"old", "planned"}, Tags: []string{"bug", "old"}}
+	original := Filter{Enabled: true, Repositories: []string{"a", "missing"}, Statuses: []string{"old", "planned"}}
 	plans := monitor.Snapshot{Rows: []monitor.Row{{RepositoryID: "a", RepositoryName: "Alpha", Status: "planned"}}}
 	notes := note.Snapshot{Notes: []note.CatalogNote{{RepositoryID: "b", RepositoryName: "Beta", Tags: []string{"bug"}}}}
 	menu := newFilterMenu(original, plans, notes)
 	if !reflect.DeepEqual(menu.repositories, DiscoverRepositories(plans, notes, original.Repositories)) ||
-		!reflect.DeepEqual(menu.statuses, DiscoverStatuses(plans, original.Statuses)) ||
-		!reflect.DeepEqual(menu.tags, DiscoverTags(notes, original.Tags)) {
+		!reflect.DeepEqual(menu.statuses, DiscoverStatuses(plans, original.Statuses)) {
 		t.Fatal("menu did not discover snapshot and saved options")
 	}
 	// Removing the first value shifts the underlying array, exposing shallow copies.
-	for _, values := range []*[]string{&menu.filter.Repositories, &menu.filter.Statuses, &menu.filter.Tags} {
+	for _, values := range []*[]string{&menu.filter.Repositories, &menu.filter.Statuses} {
 		toggleFilterValue(values, (*values)[0])
 	}
 	if !slices.Equal(original.Repositories, []string{"a", "missing"}) ||
-		!slices.Equal(original.Statuses, []string{"old", "planned"}) ||
-		!slices.Equal(original.Tags, []string{"bug", "old"}) {
+		!slices.Equal(original.Statuses, []string{"old", "planned"}) {
 		t.Fatalf("working copy changed original: %+v", original)
 	}
 	if plans.Rows[0].RepositoryID != "a" || !slices.Equal(notes.Notes[0].Tags, []string{"bug"}) {
 		t.Fatal("menu changed snapshot")
+	}
+}
+
+func TestFilterMenuHasNoTagCriteria(t *testing.T) {
+	menu := newFilterMenu(Filter{}, monitor.Snapshot{}, note.Snapshot{Notes: []note.CatalogNote{{Tags: []string{"bug", "tier1"}}}})
+	for _, row := range menu.rows() {
+		if strings.Contains(row.text, "Tags") || strings.Contains(row.text, "bug") || strings.Contains(row.text, "tier1") {
+			t.Fatalf("tag criterion remains: %q", row.text)
+		}
 	}
 }
 
@@ -58,9 +64,9 @@ func TestFilterMenuNavigation(t *testing.T) {
 		{term.KeyEvent{Key: term.KeyRune, Rune: 'j'}, 2, 1},
 		{term.KeyEvent{Key: term.KeyRune, Rune: 'j'}, 3, 3},
 		{term.KeyEvent{Key: term.KeyRune, Rune: 'k'}, 2, 3},
-		{term.KeyEvent{Key: term.KeyPageDown}, 5, 6},
-		{term.KeyEvent{Key: term.KeyArrowDown}, 5, 6},
-		{term.KeyEvent{Key: term.KeyPageUp}, 2, 3},
+		{term.KeyEvent{Key: term.KeyPageDown}, 4, 4},
+		{term.KeyEvent{Key: term.KeyArrowDown}, 4, 4},
+		{term.KeyEvent{Key: term.KeyPageUp}, 1, 2},
 		{term.KeyEvent{Key: term.KeyPageUp}, 0, 0},
 		{term.KeyEvent{Key: term.KeyPageUp}, 0, 0},
 		{term.KeyEvent{Key: term.KeyRune, Rune: '/'}, 0, 0},
@@ -102,7 +108,6 @@ func TestFilterMenuToggleCriteria(t *testing.T) {
 			{1, &menu.filter.Repositories, "a"},
 			{2, &menu.filter.Repositories, "missing"},
 			{3, &menu.filter.Statuses, "planned"},
-			{4, &menu.filter.Tags, "bug"},
 		} {
 			menu.selected = tc.selected
 			for _, want := range []bool{true, false} {
@@ -118,7 +123,7 @@ func TestFilterMenuToggleCriteria(t *testing.T) {
 func TestFilterMenuEnabledAndClearReporting(t *testing.T) {
 	size := term.Size{Width: 80, Height: 24}
 	menu := testFilterMenu()
-	menu.filter = Filter{Repositories: []string{"a"}, Statuses: []string{"planned"}, Tags: []string{"bug"}}
+	menu.filter = Filter{Repositories: []string{"a"}, Statuses: []string{"planned"}}
 	for _, key := range []term.KeyEvent{{Key: term.KeyEnter}, {Key: term.KeyRune, Rune: ' '}, {Key: term.KeyRune, Rune: 't'}} {
 		before := menu.filter
 		action, change := menu.handleKey(key, size)
@@ -137,7 +142,7 @@ func TestFilterMenuEnabledAndClearReporting(t *testing.T) {
 	}
 	for _, enabled := range []bool{false, true} {
 		for _, key := range []term.KeyEvent{{Key: term.KeyEnter}, {Key: term.KeyRune, Rune: ' '}, {Key: term.KeyRune, Rune: 'c'}} {
-			menu.filter = Filter{Enabled: enabled, Repositories: []string{"missing"}, Statuses: []string{"planned"}, Tags: []string{"bug"}}
+			menu.filter = Filter{Enabled: enabled, Repositories: []string{"missing"}, Statuses: []string{"planned"}}
 			menu.selected = menu.optionCount() + 1
 			if key.Rune == 'c' {
 				menu.selected = 1 // Clear from anywhere.
@@ -179,15 +184,15 @@ func TestFilterMenuCloseAndQuit(t *testing.T) {
 
 func TestFilterMenuRender(t *testing.T) {
 	menu := testFilterMenu()
-	menu.filter = Filter{Enabled: true, Repositories: []string{"a", "missing"}, Tags: []string{"bug"}}
+	menu.filter = Filter{Enabled: true, Repositories: []string{"a", "missing"}}
 	text := strings.Join(menu.render(term.Size{Width: 100, Height: 24}, theme.Default().Palette(theme.ProfileNone)), "\n")
-	for _, want := range []string{"Filters", "> Filter on/off: on", "Repositories", "[x] Alpha [a]", "[x] missing (unavailable)", "Statuses", "[ ] planned", "Tags", "[x] bug", "Clear all", "PgUp/PgDn", "Space/Enter", "t on/off", "c clear", "Esc/f close", "q quit"} {
+	for _, want := range []string{"Filters", "> Filter on/off: on", "Repositories", "[x] Alpha [a]", "[x] missing (unavailable)", "Statuses", "[ ] planned", "Clear all", "PgUp/PgDn", "Space/Enter", "t on/off", "c clear", "Esc/f close", "q quit"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q:\n%s", want, text)
 		}
 	}
 	menu.filter.Enabled = false
-	if text := strings.Join(menu.render(term.Size{Width: 80, Height: 24}, theme.Default().Palette(theme.ProfileNone)), "\n"); !strings.Contains(text, "Filter on/off: off") || !strings.Contains(text, "[x] bug") {
+	if text := strings.Join(menu.render(term.Size{Width: 80, Height: 24}, theme.Default().Palette(theme.ProfileNone)), "\n"); !strings.Contains(text, "Filter on/off: off") || !strings.Contains(text, "[x] Alpha [a]") {
 		t.Fatalf("disabled render lost configuration: %s", text)
 	}
 }

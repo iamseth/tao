@@ -118,7 +118,7 @@ func renderGlobalContext(model Model) string {
 }
 
 func renderGlobalContextWidth(model Model, maxWidth int) string {
-	repository := filterRepositoryLabel(model)
+	repository := filterLabel(model)
 	agent := rowlabel.DisplayValue(singleLineDetail(model.DebugSnapshot.SelectedAgent))
 	suffix := "  agent " + agent + "  "
 	if maxWidth > 0 {
@@ -135,26 +135,34 @@ func renderGlobalContextWidth(model Model, maxWidth int) string {
 	return model.Palette().Paint(theme.RoleNeutral2, repository+suffix) + model.Palette().Paint(healthRole, "●")
 }
 
-func filterRepositoryLabel(model Model) string {
+func filterLabel(model Model) string {
 	filter := model.Filter
 	if !filter.Enabled && !filter.IsEmpty() {
 		return "filter off"
 	}
-	if !filter.Enabled || len(filter.Repositories) == 0 {
+	if filter.IsEmpty() {
 		return "all repos"
 	}
+	criteria := []string{"filter on"}
 	if len(filter.Repositories) > 1 {
-		return fmt.Sprintf("%d repos", len(filter.Repositories))
-	}
-	id := filter.Repositories[0]
-	name := id
-	for _, option := range DiscoverRepositories(model.Snapshot, model.NoteSnapshot, filter.Repositories) {
-		if option.ID == id {
-			name = option.Name
-			break
+		criteria = append(criteria, fmt.Sprintf("%d repos", len(filter.Repositories)))
+	} else if len(filter.Repositories) == 1 {
+		id := filter.Repositories[0]
+		name := id
+		for _, option := range DiscoverRepositories(model.Snapshot, model.NoteSnapshot, filter.Repositories) {
+			if option.ID == id {
+				name = option.Name
+				break
+			}
 		}
+		criteria = append(criteria, "repo "+rowlabel.DisplayValue(singleLineDetail(name)))
 	}
-	return "repo " + rowlabel.DisplayValue(singleLineDetail(name))
+	if len(filter.Statuses) == 1 {
+		criteria = append(criteria, "1 status")
+	} else if len(filter.Statuses) > 1 {
+		criteria = append(criteria, fmt.Sprintf("%d statuses", len(filter.Statuses)))
+	}
+	return strings.Join(criteria, " · ")
 }
 
 func truncateFrameRepository(repository string, width int) string {

@@ -34,17 +34,14 @@ func TestFilterMatching(t *testing.T) {
 		notes  []int
 	}{
 		{"zero", Filter{}, []int{0, 1, 2, 3, 4, 5, 6}, []int{0, 1, 2, 3}},
-		{"disabled", Filter{Repositories: []string{"missing"}, Statuses: []string{"missing"}, Tags: []string{"missing"}}, []int{0, 1, 2, 3, 4, 5, 6}, []int{0, 1, 2, 3}},
+		{"disabled", Filter{Repositories: []string{"missing"}, Statuses: []string{"missing"}}, []int{0, 1, 2, 3, 4, 5, 6}, []int{0, 1, 2, 3}},
 		{"empty enabled", Filter{Enabled: true}, []int{0, 1, 2, 3, 4, 5, 6}, []int{0, 1, 2, 3}},
 		{"multi repository", Filter{Enabled: true, Repositories: []string{"a", "b"}}, []int{0, 1, 3, 5, 6}, []int{0, 1, 3}},
 		{"statuses", Filter{Enabled: true, Statuses: []string{plan.StatusPlanned, plan.StatusCompleted}}, []int{0, 1, 3, 4, 6}, []int{0, 1, 2, 3}},
 		{"invalid plans", Filter{Enabled: true, Statuses: []string{plan.StatusInvalid}}, []int{3, 4, 5}, []int{0, 1, 2, 3}},
-		{"tags", Filter{Enabled: true, Tags: []string{"bug", "feature"}}, []int{0, 1, 2, 3, 4, 5, 6}, []int{0, 1, 2}},
-		{"tier tag", Filter{Enabled: true, Tags: []string{"tier1"}}, []int{0, 1, 2, 3, 4, 5, 6}, []int{0}},
-		{"combined", Filter{Enabled: true, Repositories: []string{"a", "b"}, Statuses: []string{plan.StatusCompleted}, Tags: []string{"feature"}}, []int{1, 3}, []int{1}},
+		{"combined", Filter{Enabled: true, Repositories: []string{"a", "b"}, Statuses: []string{plan.StatusCompleted}}, []int{1, 3}, []int{0, 1, 3}},
 		{"unavailable repository", Filter{Enabled: true, Repositories: []string{"missing"}}, nil, nil},
 		{"unavailable status", Filter{Enabled: true, Statuses: []string{"missing"}}, []int{3, 4}, []int{0, 1, 2, 3}},
-		{"exact tag", Filter{Enabled: true, Tags: []string{"BUG"}}, []int{0, 1, 2, 3, 4, 5, 6}, nil},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var matchedRows, matchedNotes []int
@@ -68,8 +65,8 @@ func TestFilterMatching(t *testing.T) {
 func TestFilterActiveAndClear(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		for _, configured := range []Filter{
-			{Repositories: []string{"a"}}, {Statuses: []string{plan.StatusPlanned}}, {Tags: []string{"bug"}},
-			{Repositories: []string{"a"}, Statuses: []string{plan.StatusPlanned}, Tags: []string{"bug"}},
+			{Repositories: []string{"a"}}, {Statuses: []string{plan.StatusPlanned}},
+			{Repositories: []string{"a"}, Statuses: []string{plan.StatusPlanned}},
 		} {
 			configured.Enabled = enabled
 			if configured.IsEmpty() || configured.Active() != enabled {
@@ -114,15 +111,6 @@ func TestDiscoverFilterOptions(t *testing.T) {
 	if got := DiscoverRepositories(plans, notes, persisted); !reflect.DeepEqual(got, wantRepos) {
 		t.Fatalf("repositories = %+v, want %+v", got, wantRepos)
 	}
-	wantTags := []FilterOption{
-		{ID: "a", Name: "a", Available: true},
-		{ID: "missing", Name: "missing"},
-		{ID: "tier1", Name: "tier1", Available: true},
-		{ID: "z", Name: "z", Available: true},
-	}
-	if got := DiscoverTags(notes, persisted); !reflect.DeepEqual(got, wantTags) {
-		t.Fatalf("tags = %+v, want %+v", got, wantTags)
-	}
 	statuses := DiscoverStatuses(plans, []string{"missing", "custom", "missing"})
 	wantIDs := []string{"abandoned", "blocked", "changes_requested", "completed", "custom", "in_progress", "in_review", "invalid", "missing", "pending", "planned", "reviewed", "skipped", "verification_failed", "warning"}
 	var gotIDs []string
@@ -140,9 +128,6 @@ func TestDiscoverFilterOptions(t *testing.T) {
 	}
 	if got := DiscoverRepositories(monitor.Snapshot{}, note.Snapshot{}, persisted); !reflect.DeepEqual(got, []FilterOption{{ID: "a", Name: "a"}, {ID: "missing", Name: "missing"}}) {
 		t.Fatalf("empty repository discovery = %+v", got)
-	}
-	if got := DiscoverTags(note.Snapshot{}, []string{"old"}); !reflect.DeepEqual(got, []FilterOption{{ID: "old", Name: "old"}}) {
-		t.Fatalf("empty tag discovery = %+v", got)
 	}
 	if plans.Rows[0].RepositoryID != "b" || !slices.Equal(notes.Notes[0].Tags, []string{"z", "tier1", "z"}) || !slices.Equal(persisted, []string{"missing", "a", "missing", ""}) {
 		t.Fatal("discovery mutated inputs")
@@ -194,15 +179,15 @@ func TestVisibleFilteredNotesPreservesTierOrderAndSnapshot(t *testing.T) {
 		{RepositoryID: "c", ID: "excluded", Tags: []string{"tier1", "bug"}},
 		{RepositoryID: "b", ID: "tier1-first", Tags: []string{"tier1", "bug"}},
 		{RepositoryID: "a", ID: "tier1-second", Tags: []string{"tier1", "bug"}},
-		{RepositoryID: "a", ID: "wrong-tag", Tags: []string{"tier0"}},
+		{RepositoryID: "a", ID: "tier0", Tags: []string{"tier0"}},
 	}}
 	before := slices.Clone(snapshot.Notes)
-	items := visibleFilteredNotes(snapshot, Filter{Enabled: true, Repositories: []string{"a", "b"}, Tags: []string{"bug"}})
+	items := visibleFilteredNotes(snapshot, Filter{Enabled: true, Repositories: []string{"a", "b"}})
 	var ids []string
 	for _, item := range items {
 		ids = append(ids, item.ID)
 	}
-	if !slices.Equal(ids, []string{"tier1-first", "tier1-second", "tier2", "untiered"}) {
+	if !slices.Equal(ids, []string{"tier0", "tier1-first", "tier1-second", "tier2", "untiered"}) {
 		t.Fatalf("visible notes = %v", ids)
 	}
 	for _, repo := range []string{"", "a", "missing"} {

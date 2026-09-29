@@ -21,6 +21,8 @@ import (
 
 func newVerifiedCLICompletion(t *testing.T, policy string, commands ...string) (*plan.PlanRecord, []string) {
 	t.Helper()
+	// These standalone fixtures do not belong to an enclosing managed run.
+	unsetEnvForTest(t, "TAO_SLICE_COMPLETION_OWNER")
 	repo := newCLICommitRepo(t)
 	root := filepath.Join(t.TempDir(), "worktree")
 	runCLICommitGit(t, repo, "worktree", "add", "-b", "tao/complete", root)

@@ -49,18 +49,20 @@ type Model struct {
 func (m Model) Palette() theme.Palette { return m.Theme.Palette(m.Profile) }
 
 type rowValues struct {
-	repo   string
-	next   string
-	plan   string
-	slices string
-	run    string
-	age    string
+	repo     string
+	next     string
+	plan     string
+	priority string
+	slices   string
+	run      string
+	age      string
 }
 
 type tableWidths struct {
 	repo       int
 	next       int
 	plan       int
+	priority   int
 	slices     int
 	run        int
 	age        int
@@ -463,6 +465,7 @@ func measureTable(sections []Section, now time.Time, actionLabels map[string]str
 			widths.repo = max(widths.repo, cells.Width(values.repo))
 			widths.next = max(widths.next, cells.Width(values.next))
 			widths.plan = max(widths.plan, cells.Width(values.plan))
+			widths.priority = max(widths.priority, cells.Width(values.priority))
 			widths.slices = max(widths.slices, sliceBarCells+1+cells.Width(values.slices))
 			widths.run = max(widths.run, cells.Width(values.run))
 			widths.age = max(widths.age, cells.Width(values.age))
@@ -482,6 +485,7 @@ func planTableColumns(widths tableWidths, frameWidth int) []column {
 		{name: "REPO", width: max(widths.repo, cells.Width("REPO")), priority: 40},
 		{name: "NEXT", width: max(widths.next, cells.Width("NEXT")), required: true, priority: 60, minimum: minimumNextColumnWidth},
 		{name: "PLAN", width: widths.plan, flex: true, required: true, priority: 60, minimum: minimumPlanColumnWidth},
+		{name: "I/R/E", width: max(widths.priority, 5), priority: 25},
 		{name: "SLICES", width: max(widths.slices, cells.Width("SLICES")), priority: 30},
 	}
 	if widths.hasRunning {
@@ -545,6 +549,8 @@ func renderTableRow(row monitor.Row, section SectionKind, now time.Time, columns
 			rowCells = append(rowCells, values.next)
 		case "PLAN":
 			rowCells = append(rowCells, values.plan)
+		case "I/R/E":
+			rowCells = append(rowCells, renderPriorityCell(cellPalette, row.Overview.Priority))
 		case "SLICES":
 			rowCells = append(rowCells, renderSlicesValue(cellPalette, row))
 		case "RUN":
@@ -572,6 +578,50 @@ func renderTableRow(row monitor.Row, section SectionKind, now time.Time, columns
 	}
 }
 
+func priorityCellLetters(priority *plan.Priority) (impact, risk, effort string) {
+	if priority == nil {
+		return "-", "-", "-"
+	}
+	level := func(value plan.PriorityLevel) string {
+		switch value {
+		case plan.PriorityLevelLow:
+			return "L"
+		case plan.PriorityLevelMedium:
+			return "M"
+		case plan.PriorityLevelHigh:
+			return "H"
+		default:
+			return "-"
+		}
+	}
+	effort = "-"
+	switch priority.Effort {
+	case plan.PriorityEffortSmall:
+		effort = "S"
+	case plan.PriorityEffortMedium:
+		effort = "M"
+	case plan.PriorityEffortLarge:
+		effort = "L"
+	}
+	return level(priority.Impact), level(priority.Risk), effort
+}
+
+func renderPriorityCell(palette theme.Palette, priority *plan.Priority) string {
+	if priority == nil {
+		return "-"
+	}
+	impact, risk, effort := priorityCellLetters(priority)
+	paint := func(letter string, roles map[string]theme.Role) string {
+		if role, ok := roles[letter]; ok {
+			return palette.Paint(role, letter)
+		}
+		return letter
+	}
+	return paint(impact, map[string]theme.Role{"H": theme.RoleSuccess, "M": theme.RoleNeutral5, "L": theme.RoleNeutral2}) + "/" +
+		paint(risk, map[string]theme.Role{"H": theme.RoleDetailError, "M": theme.RoleWarn, "L": theme.RoleNeutral2}) + "/" +
+		paint(effort, map[string]theme.Role{"L": theme.RoleWarn, "M": theme.RoleNeutral5, "S": theme.RoleSuccess})
+}
+
 func renderSlicesValue(palette theme.Palette, row monitor.Row) string {
 	completed := max(row.OriginalCompletedCount+row.ReworkCompletedCount, 0)
 	total := max(row.OriginalTotalCount+row.ReworkTotalCount, 0)
@@ -590,12 +640,13 @@ func tableRowValues(row monitor.Row, now time.Time, actionLabel string) rowValue
 		next = actionLabel
 	}
 	return rowValues{
-		repo:   rowlabel.DisplayValue(row.RepositoryName),
-		next:   " " + rowlabel.DisplayValue(next) + " ",
-		plan:   rowlabel.PlanLabel(row),
-		slices: rowlabel.SlicesLabel(row),
-		run:    combinedRunLabel(row),
-		age:    relativeAge(row.UpdatedAt, now),
+		repo:     rowlabel.DisplayValue(row.RepositoryName),
+		next:     " " + rowlabel.DisplayValue(next) + " ",
+		plan:     rowlabel.PlanLabel(row),
+		priority: renderPriorityCell(theme.Palette{Profile: theme.ProfileNone}, row.Overview.Priority),
+		slices:   rowlabel.SlicesLabel(row),
+		run:      combinedRunLabel(row),
+		age:      relativeAge(row.UpdatedAt, now),
 	}
 }
 

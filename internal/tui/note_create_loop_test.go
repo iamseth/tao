@@ -39,8 +39,8 @@ func TestNoteCreationFilterRepositoryRouting(t *testing.T) {
 		{Filter{}, ""},
 		{Filter{Repositories: []string{"repo-b"}}, ""},
 		{Filter{Enabled: true, Repositories: []string{"repo-a", "repo-b"}}, ""},
-		{Filter{Enabled: true, Statuses: []string{"planned"}, Tags: []string{"tag"}}, ""},
-		{Filter{Enabled: true, Repositories: []string{"repo-b"}, Tags: []string{"tag"}}, "repo-b"},
+		{Filter{Enabled: true, Statuses: []string{"planned"}}, ""},
+		{Filter{Enabled: true, Repositories: []string{"repo-b"}}, "repo-b"},
 	} {
 		target, picker, err := noteCreationTarget(tc.filter, items, nil)
 		if err != nil || target.ID != tc.want || (picker != nil) != (tc.want == "") {

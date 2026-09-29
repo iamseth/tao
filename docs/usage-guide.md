@@ -224,6 +224,8 @@ stale or absent, the existing merge recovery guidance returns.
 
 ## Interactive dashboard: `tao ui`
 
+The plan list's `I/R/E` column shows impact, risk, and effort as single letters (impact and risk L/M/H, effort S/M/L, `-` when unset) and is hidden before SLICES when the terminal is narrow.
+
 Use `tao ui` when you want one terminal view for plans and open notes across
 registered repositories, or want to launch a common plan action without first
 copying an ID. It requires a terminal; use `tao monitor --once` for redirected
@@ -235,8 +237,7 @@ The dashboard opens on **Plans**. Use `Tab` or the horizontal arrows to move
 among **Plans**, **Notes**, **Settings**, and **Debug**; use `j`/`k` or the
 vertical arrows to select rows. `Page Up` and `Page Down` move by a viewport on
 long pages. `Enter` opens details and `Esc` returns. On Plans and Notes, `f`
-opens the filter menu for repositories, plan statuses, and note tags (tags apply
-only to notes). Use `Space`/`Enter` to toggle a selection, `t` to enable or disable
+opens the filter menu for repositories and plan statuses. Use `Space`/`Enter` to toggle a selection, `t` to enable or disable
 the whole filter without losing its configuration, `c` to clear all criteria,
 and `Esc` to close the menu. The shared filter and its enabled state persist
 across sessions in `<DataHome>/ui-filters.json` under the Tao data home and
@@ -267,7 +268,7 @@ to copy the selected note ID for a separate planning session. Keys
 `0` through `3` replace the selected note's tier tag. Lowercase `d` asks before deleting the
 note; uppercase `D` deletes it immediately. Deletion archives the note and
 removes it from the open Notes list. **Done** is always
-displayed with up to 15 completed or abandoned plans. **Now** contains
+displayed with up to 10 completed or abandoned plans. **Now** contains
 in-progress, blocked, reviewed, and other plans with an immediate action
 such as monitor, approve, or merge. **Next** contains planned work. On Plans, the
 principal actions are run (`r`), approve (`a`), merge one (`m`), and merge the

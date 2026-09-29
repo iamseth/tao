@@ -16,7 +16,6 @@ type Filters struct {
 	Enabled      bool     `json:"enabled"`
 	Repositories []string `json:"repositories"`
 	Statuses     []string `json:"statuses"`
-	Tags         []string `json:"tags"`
 }
 
 // Store persists dashboard preferences directly under Tao's data home.

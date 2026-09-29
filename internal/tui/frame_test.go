@@ -20,18 +20,21 @@ func TestFilterContextAndDebugLabels(t *testing.T) {
 		want   string
 	}{
 		{Filter{}, "all repos"},
-		{Filter{Enabled: true, Statuses: []string{"planned"}}, "all repos"},
-		{repositoryFilter("repo"), "repo alpha"},
-		{repositoryFilter("missing"), "repo missing"},
-		{Filter{Enabled: true, Repositories: []string{"repo", "other"}}, "2 repos"},
+		{Filter{Enabled: true}, "all repos"},
+		{Filter{Enabled: true, Statuses: []string{"planned"}}, "filter on · 1 status"},
+		{Filter{Enabled: true, Statuses: []string{"planned", "blocked"}}, "filter on · 2 statuses"},
+		{repositoryFilter("repo"), "filter on · repo alpha"},
+		{repositoryFilter("missing"), "filter on · repo missing"},
+		{Filter{Enabled: true, Repositories: []string{"repo", "other"}}, "filter on · 2 repos"},
+		{Filter{Enabled: true, Repositories: []string{"repo"}, Statuses: []string{"planned"}}, "filter on · repo alpha · 1 status"},
 		{Filter{Repositories: []string{"repo"}}, "filter off"},
-		{Filter{Tags: []string{"tag"}}, "filter off"},
+		{Filter{Statuses: []string{"planned"}}, "filter off"},
 	} {
 		model := Model{Filter: tc.filter, NoteSnapshot: note.Snapshot{Notes: []note.CatalogNote{{RepositoryID: "repo", RepositoryName: "alpha"}}}}
 		if got := renderGlobalContext(model); !strings.HasPrefix(got, tc.want+"  agent ") {
 			t.Fatalf("filter=%+v context=%q want=%q", tc.filter, got, tc.want)
 		}
-		if got := debugFocusLabel(model); !strings.Contains(got, tc.want) || !strings.Contains(got, fmt.Sprintf("%d tags", len(tc.filter.Tags))) {
+		if got := debugFocusLabel(model); got != fmt.Sprintf("%s; %d repositories, %d statuses", tc.want, len(tc.filter.Repositories), len(tc.filter.Statuses)) {
 			t.Fatalf("debug label=%q filter=%+v", got, tc.filter)
 		}
 	}
@@ -81,7 +84,7 @@ func TestRenderFrameCompactsLongFocusedRepositoryAtSeventyColumns(t *testing.T) 
 	if got := cells.Width(lines[0]); got != model.Width {
 		t.Fatalf("context line width = %d, want %d: %q", got, model.Width, lines[0])
 	}
-	if !strings.Contains(lines[0], "  repo ") || !strings.Contains(lines[0], "…") {
+	if !strings.Contains(lines[0], "  filter on") || !strings.Contains(lines[0], "…") {
 		t.Fatalf("focused repository is not visibly compacted: %q", lines[0])
 	}
 	if !strings.HasSuffix(lines[0], "  agent pi  ●") {
@@ -89,6 +92,20 @@ func TestRenderFrameCompactsLongFocusedRepositoryAtSeventyColumns(t *testing.T) 
 	}
 	if strings.Contains(lines[0], model.Snapshot.Rows[0].RepositoryName) {
 		t.Fatalf("focused repository name was not truncated: %q", lines[0])
+	}
+}
+
+func TestRenderFrameStatusFilterAtSixtyColumns(t *testing.T) {
+	model := Model{
+		Page: PagePlans, Width: 60,
+		Filter: Filter{Enabled: true, Statuses: []string{"planned"}},
+	}
+	if got := filterLabel(model); got != "filter on · 1 status" {
+		t.Fatalf("status-only label = %q", got)
+	}
+	line := renderFrame(model, PagePlans)[0]
+	if cells.Width(line) != model.Width || !strings.Contains(line, "filter on …") || !strings.HasSuffix(line, "  agent -  ●") {
+		t.Fatalf("status-only filter did not truncate cleanly: %q", line)
 	}
 }
 
@@ -195,9 +212,9 @@ func TestRenderStressPlanRowsKeepCompleteResponsiveColumns(t *testing.T) {
 	}
 	values := tableRowValues(row, now, "")
 	expectedNames := map[int]string{
-		199: "REPO,NEXT,PLAN,SLICES,RUN,AGE",
-		120: "REPO,NEXT,PLAN,SLICES,RUN,AGE",
-		100: "REPO,NEXT,PLAN,SLICES,RUN",
+		199: "REPO,NEXT,PLAN,I/R/E,SLICES,RUN,AGE",
+		120: "REPO,NEXT,PLAN,I/R/E,SLICES,RUN,AGE",
+		100: "REPO,NEXT,PLAN,I/R/E,SLICES",
 		80:  "REPO,NEXT,PLAN,SLICES",
 		70:  "REPO,NEXT,PLAN",
 	}
@@ -209,6 +226,8 @@ func TestRenderStressPlanRowsKeepCompleteResponsiveColumns(t *testing.T) {
 			return values.next
 		case "PLAN":
 			return values.plan
+		case "I/R/E":
+			return values.priority
 		case "SLICES":
 			return renderSlicesValue(theme.Default().Palette(theme.ProfileNone), row)
 		case "RUN":

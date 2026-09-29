@@ -11,13 +11,12 @@ import (
 )
 
 // Filter is shared by plans and notes. Values within a criterion are ORed;
-// applicable criteria are ANDed. Matching uses exact IDs, statuses, and tags.
+// applicable criteria are ANDed. Matching uses exact repository IDs and plan statuses.
 // Its zero value matches everything.
 type Filter struct {
 	Enabled      bool
 	Repositories []string
 	Statuses     []string
-	Tags         []string
 }
 
 // FilterStore is the optional persistence boundary for dashboard filters.
@@ -29,7 +28,7 @@ type FilterStore interface {
 
 // IsEmpty reports whether no criteria are configured, independent of Enabled.
 func (f Filter) IsEmpty() bool {
-	return len(f.Repositories) == 0 && len(f.Statuses) == 0 && len(f.Tags) == 0
+	return len(f.Repositories) == 0 && len(f.Statuses) == 0
 }
 
 // Active reports whether the filter is enabled and has configured criteria.
@@ -41,10 +40,9 @@ func (f Filter) Active() bool {
 func (f *Filter) Clear() {
 	f.Repositories = nil
 	f.Statuses = nil
-	f.Tags = nil
 }
 
-// MatchesRow applies repository and plan-status criteria, never note tags.
+// MatchesRow applies repository and plan-status criteria.
 // Repository warnings (unlike invalid plans) bypass the status criterion.
 func (f Filter) MatchesRow(row monitor.Row) bool {
 	if !f.Enabled {
@@ -54,23 +52,12 @@ func (f Filter) MatchesRow(row monitor.Row) bool {
 		(row.Kind == monitor.RowKindRepositoryWarning || matchesFilterValue(f.Statuses, row.Status))
 }
 
-// MatchesNote applies repository and tag criteria, never plan statuses.
+// MatchesNote applies only the repository criterion, never plan statuses.
 func (f Filter) MatchesNote(item note.CatalogNote) bool {
 	if !f.Enabled {
 		return true
 	}
-	if !matchesFilterValue(f.Repositories, item.RepositoryID) {
-		return false
-	}
-	if len(f.Tags) == 0 {
-		return true
-	}
-	for _, tag := range item.Tags {
-		if slices.Contains(f.Tags, tag) {
-			return true
-		}
-	}
-	return false
+	return matchesFilterValue(f.Repositories, item.RepositoryID)
 }
 
 func matchesFilterValue(values []string, value string) bool {
@@ -124,18 +111,6 @@ func DiscoverStatuses(snapshot monitor.Snapshot, persisted []string) []FilterOpt
 	}
 	for _, row := range snapshot.Rows {
 		addFilterOption(options, row.Status, row.Status)
-	}
-	return sortedFilterOptions(options, persisted)
-}
-
-// DiscoverTags returns unique note tags sorted by ID, retaining unavailable
-// persisted values. Tier tags are included like any other note tag.
-func DiscoverTags(snapshot note.Snapshot, persisted []string) []FilterOption {
-	options := make(map[string]FilterOption)
-	for _, item := range snapshot.Notes {
-		for _, tag := range item.Tags {
-			addFilterOption(options, tag, tag)
-		}
 	}
 	return sortedFilterOptions(options, persisted)
 }

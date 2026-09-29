@@ -15,7 +15,7 @@ func TestStoreRoundTrip(t *testing.T) {
 	if got, want := store.Path(), filepath.Join(dataHome, "ui-filters.json"); got != want {
 		t.Fatalf("Path() = %q, want %q", got, want)
 	}
-	want := Filters{Version: 1, Enabled: true, Repositories: []string{"repo-b", "repo-a"}, Statuses: []string{"planned", "completed"}, Tags: []string{"tier1", "bug"}}
+	want := Filters{Version: 1, Enabled: true, Repositories: []string{"repo-b", "repo-a"}, Statuses: []string{"planned", "completed"}}
 	for _, enabled := range []bool{true, false} {
 		want.Enabled = enabled
 		if err := store.Save(want); err != nil {
@@ -32,6 +32,32 @@ func TestStoreRoundTrip(t *testing.T) {
 		if got := info.Mode().Perm(); got != 0o600 {
 			t.Fatalf("permissions = %o, want 600", got)
 		}
+	}
+}
+
+func TestStoreIgnoresLegacyTags(t *testing.T) {
+	store := Store{DataHome: t.TempDir()}
+	if err := os.WriteFile(store.Path(), []byte(`{"version":1,"enabled":true,"repositories":["repo-b","repo-a"],"statuses":["planned","completed"],"tags":["bug","tier1"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Load()
+	want := Filters{Version: 1, Enabled: true, Repositories: []string{"repo-b", "repo-a"}, Statuses: []string{"planned", "completed"}}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("Load() = %+v, %v, want %+v", got, err, want)
+	}
+	if err := store.Save(got); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(content, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := fields["tags"]; exists {
+		t.Fatalf("saved obsolete tags: %s", content)
 	}
 }
 

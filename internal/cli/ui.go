@@ -177,7 +177,6 @@ func (s uiFilterStore) Load(ctx context.Context) (tui.Filter, error) {
 		Enabled:      filters.Enabled,
 		Repositories: filters.Repositories,
 		Statuses:     filters.Statuses,
-		Tags:         filters.Tags,
 	}, nil
 }
 
@@ -190,7 +189,6 @@ func (s uiFilterStore) Save(ctx context.Context, filter tui.Filter) error {
 		Enabled:      filter.Enabled,
 		Repositories: filter.Repositories,
 		Statuses:     filter.Statuses,
-		Tags:         filter.Tags,
 	})
 }
 

@@ -12,7 +12,7 @@ import (
 type SectionKind string
 
 const (
-	maxHistoryPlans = 15
+	maxHistoryPlans = 10
 
 	SectionNow     SectionKind = "now"
 	SectionNext    SectionKind = "next"

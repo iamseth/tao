@@ -190,7 +190,6 @@ func (s *fakeFilterStore) Load(context.Context) (Filter, error) {
 func (s *fakeFilterStore) Save(_ context.Context, filter Filter) error {
 	filter.Repositories = slices.Clone(filter.Repositories)
 	filter.Statuses = slices.Clone(filter.Statuses)
-	filter.Tags = slices.Clone(filter.Tags)
 	s.saves = append(s.saves, filter)
 	return s.saveErr
 }
@@ -1159,7 +1158,7 @@ func TestPlanDetailTabsUseLifecycleDefaultsAndPreserveReloadSelection(t *testing
 		want detailTab
 	}{
 		{name: "planned overview", row: monitor.Row{PlanID: "plan-a", PlanDir: "/plan", Status: plan.StatusPlanned}, want: detailTabOverview},
-		{name: "live activity", row: monitor.Row{PlanID: "plan-a", PlanDir: "/plan", Status: plan.StatusInProgress, Liveness: monitor.LivenessLive}, want: detailTabActivity},
+		{name: "live overview", row: monitor.Row{PlanID: "plan-a", PlanDir: "/plan", Status: plan.StatusInProgress, Liveness: monitor.LivenessLive}, want: detailTabOverview},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
@@ -1168,6 +1167,14 @@ func TestPlanDetailTabsUseLifecycleDefaultsAndPreserveReloadSelection(t *testing
 			app.openDetail(ctx, &state, test.row)
 			if state.detail == nil || state.detail.activeTab != test.want {
 				t.Fatalf("opened detail tab = %#v, want %v", state.detail, test.want)
+			}
+			if test.row.Liveness == monitor.LivenessLive {
+				app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyTab})
+				app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyTab})
+				wantOffset := state.detail.maxOffset(detailTabActivity, state.size)
+				if state.detail.activeTab != detailTabActivity || state.detail.activityOffset != wantOffset || wantOffset == 0 {
+					t.Fatalf("live Activity navigation = tab %v offset %d, want Activity at nonzero tail %d", state.detail.activeTab, state.detail.activityOffset, wantOffset)
+				}
 			}
 			state.detail.activeTab = detailTabSlices
 			state.detail.overviewOffset = 1

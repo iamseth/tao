@@ -913,9 +913,6 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 func (a App) openDetail(ctx context.Context, state *loopState, row monitor.Row) {
 	detailCtx, cancel := context.WithCancel(ctx)
 	detail := &detailState{row: row, ctx: detailCtx, cancel: cancel, activeTab: detailTabOverview, inspection: detailInspectionView{status: detailInspectionUnavailable}}
-	if row.Liveness == monitor.LivenessLive {
-		detail.activeTab = detailTabActivity
-	}
 	state.detail = detail
 
 	loaded, err := a.Details.ResolvePlan(detailCtx, row.PlanDir)
@@ -1481,7 +1478,6 @@ func (s *loopState) applyFilter(filter Filter) {
 	// The menu continues editing its own slices after immediate saves.
 	filter.Repositories = append([]string(nil), filter.Repositories...)
 	filter.Statuses = append([]string(nil), filter.Statuses...)
-	filter.Tags = append([]string(nil), filter.Tags...)
 	s.filter = filter
 	s.restorePlanSelection(planSelected, preservePlan)
 	s.restoreNoteSelection(noteSelected, preserveNote)

@@ -36,7 +36,6 @@ func TestUIFilterStoreRoundTrip(t *testing.T) {
 		Enabled:      true,
 		Repositories: []string{"repo-b", "repo-a"},
 		Statuses:     []string{"planned", "in_progress"},
-		Tags:         []string{"tier1", "bug"},
 	}
 	for _, enabled := range []bool{true, false} {
 		want.Enabled = enabled

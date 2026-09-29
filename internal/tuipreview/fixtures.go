@@ -105,6 +105,7 @@ func mixedScenario() Scenario {
 			Status: plan.StatusInvalid, Liveness: monitor.LivenessMissing, Warnings: []string{"fixture catalog is unreadable"},
 		},
 	}
+	rows[1].Overview.Priority = &plan.Priority{Level: plan.PriorityOverallLevelMust, Impact: plan.PriorityLevelHigh, Risk: plan.PriorityLevelLow, Effort: plan.PriorityEffortSmall}
 	rows[2].ApprovalSliceID = "001-owner-choice"
 	rows[2].ApprovalReason = "Choose the public command spelling"
 

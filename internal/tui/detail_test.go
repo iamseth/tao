@@ -355,6 +355,13 @@ func TestRenderOverviewUsesScannableSectionsChecklistPriorityGridAndExpandableSc
 			t.Fatalf("scannable overview missing %q:\n%s", want, collapsed)
 		}
 	}
+	metadataIndex := strings.Index(collapsed, "PRIORITY  must")
+	priorityIndex := strings.Index(collapsed, "\nPRIORITY ─")
+	contextIndex := strings.Index(collapsed, "\nCONTEXT ─")
+	criteriaIndex := strings.Index(collapsed, "\nSUCCESS CRITERIA ─")
+	if metadataIndex < 0 || priorityIndex <= metadataIndex || contextIndex <= priorityIndex || criteriaIndex <= contextIndex {
+		t.Fatalf("overview must show metadata, PRIORITY, CONTEXT, then SUCCESS CRITERIA:\n%s", collapsed)
+	}
 	for _, row := range []string{"Impact high    Urgency medium     Risk low", "Effort small   Confidence high", "  Rationale  High operator value."} {
 		if !strings.Contains(collapsed, row) {
 			t.Fatalf("priority grid row is not compact and aligned: want %q:\n%s", row, collapsed)

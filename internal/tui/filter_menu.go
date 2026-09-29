@@ -18,7 +18,6 @@ type filterMenu struct {
 	filter       Filter
 	repositories []FilterOption
 	statuses     []FilterOption
-	tags         []FilterOption
 	selected     int
 	offset       int
 }
@@ -26,12 +25,10 @@ type filterMenu struct {
 func newFilterMenu(filter Filter, plans monitor.Snapshot, notes note.Snapshot) *filterMenu {
 	filter.Repositories = slices.Clone(filter.Repositories)
 	filter.Statuses = slices.Clone(filter.Statuses)
-	filter.Tags = slices.Clone(filter.Tags)
 	return &filterMenu{
 		filter:       filter,
 		repositories: DiscoverRepositories(plans, notes, filter.Repositories),
 		statuses:     DiscoverStatuses(plans, filter.Statuses),
-		tags:         DiscoverTags(notes, filter.Tags),
 	}
 }
 
@@ -82,13 +79,10 @@ func (m *filterMenu) handleKey(key term.KeyEvent, size term.Size) (filterMenuAct
 			change.Cleared = true
 		default:
 			index := m.selected - 1
-			switch {
-			case index < len(m.repositories):
+			if index < len(m.repositories) {
 				toggleFilterValue(&m.filter.Repositories, m.repositories[index].ID)
-			case index < len(m.repositories)+len(m.statuses):
+			} else {
 				toggleFilterValue(&m.filter.Statuses, m.statuses[index-len(m.repositories)].ID)
-			default:
-				toggleFilterValue(&m.filter.Tags, m.tags[index-len(m.repositories)-len(m.statuses)].ID)
 			}
 		}
 	}
@@ -105,7 +99,7 @@ func toggleFilterValue(values *[]string, value string) {
 }
 
 func (m filterMenu) optionCount() int {
-	return len(m.repositories) + len(m.statuses) + len(m.tags)
+	return len(m.repositories) + len(m.statuses)
 }
 
 func filterMenuCapacity(size term.Size) int {
@@ -150,7 +144,6 @@ func (m filterMenu) rows() []filterMenuRow {
 	}{
 		{"Repositories", m.repositories, m.filter.Repositories},
 		{"Statuses", m.statuses, m.filter.Statuses},
-		{"Tags", m.tags, m.filter.Tags},
 	} {
 		heading := section.name
 		if len(section.options) == 0 {
