@@ -129,6 +129,8 @@ When a later slice will call or reference a function, type, method, flag, or sub
 
 When a task renames, moves, re-exports, aliases, or changes the visibility or receiver of an existing identifier, search the repository for its current references and either (a) list every file that must change in `expected_files` and name the call-site edits in `tasks`, or (b) keep the old identifier callable through a compatibility shim in the same package and say so explicitly. A slice must never pair such a change with a clause like "no other file under X changes" unless option (b) is chosen. For Go, a type alias to a type from another package cannot carry methods, so the shim must be a package-level function or the callers must move into the slice.
 
+For changed contracts, search the repository for affected consumers, including environment-key sets, validation rules, registries and completion metadata, injected-runner call sequences, and exported API contracts. Search `*_test.go` files and `testdata` as well as other relevant consumers, including indirect or generated consumers rather than only literal symbol matches. List concrete affected tests and fixtures that need edits in the same contract-changing slice's `expected_files`, with explicit update tasks in `tasks`. Unchanged search matches do not require edits or ownership; this is not blanket ownership or permission for unrelated repairs.
+
 ## Verification command selection
 
 Before writing `slices.json`, inspect repository guidance for canonical validation commands.
@@ -152,6 +154,8 @@ For each slice, use the narrowest documented verification command that validates
 If a slice modifies a shared interface, gate or guard, or call sequence whose consumers extend beyond the tests a focused filter would select, verification must run at least the whole affected package or packages with no `-run` filter. Reserve focused filters for slices whose blast radius the selected tests fully cover.
 
 Gate parity: When the repository declares a comprehensive gate composed of build, test, and lint or static-analysis checks, every slice that changes source or test code must include the repository's lint or static-analysis command, narrowed to the touched packages when the tool supports narrowing. Package tests alone are not enough to satisfy that gate; retain the applicable build and test checks as well.
+
+Every Go-changing slice must declare test and lint scope covering every touched Go package, including packages touched only through tests or fixtures. Shared-contract changes require whole affected packages with no focused test filter; retain applicable build checks and fixture-comparator rules. Do not defer gate debt to later slices.
 
 Fixture ownership: If a slice changes rendered output or adds an event, counter, or field that rendered output includes, identify every affected golden or snapshot fixture, list every affected fixture file in `expected_files`, and include a task to update those fixtures. Verification must run each test that compares the affected fixtures, with no `-run` filter narrower than that test, and must still satisfy the whole-package floor above when applicable.
 

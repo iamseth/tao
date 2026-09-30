@@ -814,6 +814,18 @@ func TestPlanningPromptsRequireGateParity(t *testing.T) {
 			t.Errorf("slice prompt missing gate parity guidance %q", want)
 		}
 	}
+	for name, prompt := range map[string]string{"slice": SlicePromptTemplate, "note slice": NoteSlicePromptTemplate} {
+		for _, want := range []string{
+			"Every Go-changing slice must declare test and lint scope covering every touched Go package, including packages touched only through tests or fixtures",
+			"Shared-contract changes require whole affected packages with no focused test filter",
+			"retain applicable build checks and fixture-comparator rules",
+			"Do not defer gate debt to later slices",
+		} {
+			if !strings.Contains(prompt, want) {
+				t.Errorf("%s prompt missing touched-package verification guidance %q", name, want)
+			}
+		}
+	}
 	const scope = "lint or static-analysis command scope and any golden or snapshot fixture files"
 	for name, prompt := range map[string]string{"plan": PlanPromptTemplate, "slice": SlicePromptTemplate} {
 		if !strings.Contains(prompt, scope) {
@@ -822,6 +834,26 @@ func TestPlanningPromptsRequireGateParity(t *testing.T) {
 	}
 	if !strings.Contains(NoteSlicePromptTemplate, "lint or static-analysis command") {
 		t.Error("note slice prompt missing lint or static-analysis command guidance")
+	}
+}
+
+func TestSlicePromptsRequireContractConsumerOwnership(t *testing.T) {
+	for name, prompt := range map[string]string{"slice": SlicePromptTemplate, "note slice": NoteSlicePromptTemplate} {
+		t.Run(name, func(t *testing.T) {
+			for _, want := range []string{
+				"search the repository for affected consumers",
+				"environment-key sets, validation rules, registries and completion metadata, injected-runner call sequences, and exported API contracts",
+				"Search `*_test.go` files and `testdata` as well as other relevant consumers",
+				"concrete affected tests and fixtures that need edits in the same contract-changing slice's `expected_files`",
+				"explicit update tasks in `tasks`",
+				"Unchanged search matches do not require edits or ownership",
+				"not blanket ownership or permission for unrelated repairs",
+			} {
+				if !strings.Contains(prompt, want) {
+					t.Errorf("missing contract-consumer ownership guidance %q", want)
+				}
+			}
+		})
 	}
 }
 
