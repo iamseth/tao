@@ -59,17 +59,24 @@ func TestInterruptedSliceClassifiesRecoveryBoundaries(t *testing.T) {
 		}, want: InterruptedSliceRefuse},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			input := interruptedInput()
-			if tt.mutate != nil {
-				tt.mutate(&input)
+	for _, recorded := range []string{"worktree", "isolated"} {
+		for _, live := range []string{"worktree", "isolated"} {
+			for _, tt := range tests {
+				t.Run(recorded+"/"+live+"/"+tt.name, func(t *testing.T) {
+					input := interruptedInput()
+					input.Detail.State.Workspace.Strategy = recorded
+					input.Detail.Slices.Slices[0].ExecutionStart.WorkspaceStrategy = recorded
+					input.WorkspaceStrategy = live
+					if tt.mutate != nil {
+						tt.mutate(&input)
+					}
+					got := ClassifyInterruptedSlice(input)
+					if got.Disposition != tt.want {
+						t.Fatalf("disposition = %q (%s), want %q; facts=%#v", got.Disposition, got.Reason, tt.want, got.Facts)
+					}
+				})
 			}
-			got := ClassifyInterruptedSlice(input)
-			if got.Disposition != tt.want {
-				t.Fatalf("disposition = %q (%s), want %q; facts=%#v", got.Disposition, got.Reason, tt.want, got.Facts)
-			}
-		})
+		}
 	}
 }
 
@@ -219,7 +226,16 @@ func TestInterruptedSliceClassifiesBlockedContinuation(t *testing.T) {
 }
 
 func TestInterruptedSliceClassifiesBlockedRestart(t *testing.T) {
+	for _, spelling := range []string{"worktree", "isolated"} {
+		t.Run(spelling, func(t *testing.T) { testInterruptedSliceBlockedRestart(t, spelling) })
+	}
+}
+
+func testInterruptedSliceBlockedRestart(t *testing.T, spelling string) {
+	t.Helper()
 	input := interruptedInput()
+	input.Detail.State.Workspace.Strategy = spelling
+	input.Detail.Slices.Slices[0].ExecutionStart.WorkspaceStrategy = spelling
 	input.Detail.State.Status = plan.StatusBlocked
 	input.Detail.Slices.Slices[0].Status = plan.StatusBlocked
 	input.RestartBlocked = true
@@ -246,6 +262,8 @@ func TestInterruptedSliceClassifiesBlockedRestart(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			candidate := interruptedInput()
+			candidate.Detail.State.Workspace.Strategy = spelling
+			candidate.Detail.Slices.Slices[0].ExecutionStart.WorkspaceStrategy = spelling
 			candidate.Detail.State.Status = plan.StatusBlocked
 			candidate.Detail.Slices.Slices[0].Status = plan.StatusBlocked
 			candidate.RestartBlocked = true

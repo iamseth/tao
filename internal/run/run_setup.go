@@ -17,7 +17,11 @@ import (
 // resolve in are visible together rather than scattered behind lazy accessors.
 
 func newRunExecution(config ExecutionConfig, dependencies RunDependencies) runExecution {
-	return runExecution{Config: config, Dependencies: dependencies}
+	return newRequestRunExecution(Request{}, config, dependencies)
+}
+
+func newRequestRunExecution(request Request, config ExecutionConfig, dependencies RunDependencies) runExecution {
+	return runExecution{Request: request, Config: config, Dependencies: dependencies}
 }
 
 // runExecutionFromOptions builds an execution for callers that have no Service
@@ -34,12 +38,16 @@ func runExecutionFromOptions(options Options) runExecution {
 // dependencies in a worktree. Resumes instead bind to their immutable root and
 // retain the clean-start metadata captured by the original run.
 func (s Service) prepareRunExecution(ctx context.Context, detail *plan.PlanDetail, config ExecutionConfig) (runExecution, error) {
-	execution := newRunExecution(config, s.dependencies)
+	return s.prepareRequestRunExecution(ctx, detail, Request{}, config)
+}
+
+func (s Service) prepareRequestRunExecution(ctx context.Context, detail *plan.PlanDetail, request Request, config ExecutionConfig) (runExecution, error) {
+	execution := newRequestRunExecution(request, config, s.dependencies)
 	if err := plan.RequireNotAbandoned(detail); err != nil {
 		return execution, cannotStartf("%s", err)
 	}
 	complete := plan.AnalyzeRunCapabilities(detail).Complete
-	if complete && execution.Config.Reverify {
+	if complete && execution.Request.Reverify {
 		// Reverification is an exact-head verification-only operation. Resolve it
 		// before pull-request admission or recovery so inherited pull-request
 		// defaults cannot impose isolated mode or select remote mutation paths.
@@ -77,12 +85,12 @@ func (s Service) prepareRunExecution(ctx context.Context, detail *plan.PlanDetai
 		}
 	}
 	boundary, err := (ExecutionBoundaryController{}).InspectSelected(ctx, ExecutionBoundaryDurableFacts{
-		Detail: detail, ContinueBlocked: execution.Config.Continue, RestartBlocked: execution.Config.RestartBlocked,
+		Detail: detail, ContinueBlocked: execution.Config.Continue, RestartBlocked: execution.Request.RestartBlocked,
 	}, execution)
 	if err != nil {
 		return execution, err
 	}
-	if execution.Config.RestartBlocked {
+	if execution.Request.RestartBlocked {
 		slice := selectedRunSlice(detail)
 		settledRetry := blockedRestartSettledForRetry(detail, slice)
 		if boundary == nil || boundary.EffectiveDisposition != InterruptedSliceNewStart || !boundary.AllowWorkspacePreparation || !boundary.AllowAgentHandoff || (!settledRetry && boundary.Disposition != InterruptedSliceBlockedRestart) {

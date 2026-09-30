@@ -341,6 +341,13 @@ func TestFailedFinalVerificationAfterCleanRebaseRemainsRepairable(t *testing.T) 
 }
 
 func TestReverifyCompletedRunReplacesEvidenceAtSameHeadWithoutAppendingSlice(t *testing.T) {
+	for _, spelling := range []string{"worktree", "isolated"} {
+		t.Run(spelling, func(t *testing.T) { testReverifyPlacement(t, spelling) })
+	}
+}
+
+func testReverifyPlacement(t *testing.T, spelling string) {
+	t.Helper()
 	root := initSliceCompletionRepo(t)
 	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@true\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -351,16 +358,16 @@ func TestReverifyCompletedRunReplacesEvidenceAtSameHeadWithoutAppendingSlice(t *
 	head := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
 	detail := completedReviewPlanDetail(t.TempDir())
 	detail.State.Repo.Root = root
-	detail.State.Workspace = &plan.Workspace{Strategy: plan.WorkspaceStrategyWorktree, Path: root, Branch: branch, HeadSHA: head}
+	detail.State.Workspace = &plan.Workspace{Strategy: spelling, Path: root, Branch: branch, HeadSHA: head}
 	detail.State.Plan.FinalVerification = &plan.FinalVerification{Command: "make verify", CWD: root, HeadSHA: head, Result: finalVerificationFailed, Fingerprint: "prior-failure", VerifiedAt: time.Now().Add(-time.Hour)}
 	sliceCount := len(detail.Slices.Slices)
 	execution := testRunExecution(ExecutionConfig{
 		ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeIsolated},
-		Reverify:           true,
 	}, RunDependencies{
 		CommandRunner:     defaultCommandRunner,
 		PlanRecordFactory: memoryPlanRecordFactory,
 	})
+	execution.Request = Request{RecoveryMode: RecoveryMode{Reverify: true}}
 	execution.ExecutionRoot = root
 	finalizer := newFinalizer(io.Discard, execution)
 
@@ -396,8 +403,8 @@ func TestReverifyCompletedRunReplacesEvidenceAtAdvancedHead(t *testing.T) {
 	detail.State.Plan.FinalVerification = &plan.FinalVerification{Command: "make verify", CWD: root, HeadSHA: failedHead, Result: finalVerificationFailed, FailureKind: plan.FinalVerificationFailureKindCode, Fingerprint: "prior-failure"}
 	execution := testRunExecution(ExecutionConfig{
 		ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeIsolated},
-		Reverify:           true,
 	}, RunDependencies{CommandRunner: defaultCommandRunner, PlanRecordFactory: memoryPlanRecordFactory})
+	execution.Request = Request{RecoveryMode: RecoveryMode{Reverify: true}}
 	execution.ExecutionRoot = root
 
 	complete, err := newFinalizer(io.Discard, execution).FinalizeIfComplete(context.Background(), 0, detail, plan.AnalyzeRunCapabilities(detail))
@@ -434,8 +441,8 @@ func TestAdvancedHeadReverifyFailurePreservesRepairAttemptCount(t *testing.T) {
 	attempts := plan.VerificationRepairAttemptCount(detail)
 	execution := testRunExecution(ExecutionConfig{
 		ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeIsolated},
-		Reverify:           true,
 	}, RunDependencies{CommandRunner: defaultCommandRunner, PlanRecordFactory: memoryPlanRecordFactory})
+	execution.Request = Request{RecoveryMode: RecoveryMode{Reverify: true}}
 	execution.ExecutionRoot = root
 
 	complete, err := newFinalizer(io.Discard, execution).FinalizeIfComplete(context.Background(), 0, detail, plan.AnalyzeRunCapabilities(detail))

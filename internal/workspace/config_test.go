@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
 func TestDefaultConfigValues(t *testing.T) {
@@ -13,7 +14,7 @@ func TestDefaultConfigValues(t *testing.T) {
 	if config.Root != ".tao/workspaces" {
 		t.Fatalf("unexpected root: %q", config.Root)
 	}
-	if config.Strategy != StrategyWorktree {
+	if config.Strategy != runtimeconfig.ExecutionModeIsolated {
 		t.Fatalf("unexpected strategy: %q", config.Strategy)
 	}
 	if err := config.Validate(); err != nil {
@@ -67,7 +68,7 @@ func TestResolvePlanBranchRejectsTypedPlanWithoutSafeTimestampedSlug(t *testing.
 
 func TestConfigAllowsCurrentCompatibilityStrategy(t *testing.T) {
 	config := DefaultConfig()
-	config.Strategy = StrategyCurrent
+	config.Strategy = runtimeconfig.ExecutionModeCurrent
 
 	if err := config.Validate(); err != nil {
 		t.Fatalf("current strategy should validate: %v", err)

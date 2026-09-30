@@ -664,15 +664,12 @@ func startSlice(ctx context.Context, execution runExecution, detail *plan.PlanDe
 		if err != nil {
 			return fmt.Errorf("capture slice execution head: %w", err)
 		}
-		strategy := plan.WorkspaceStrategyWorktree
-		if execution.Config.ExecutionMode == ExecutionModeCurrent {
-			strategy = plan.WorkspaceStrategyCurrent
-		}
+		strategy := workspaceConfigForExecutionMode(execution.Config.ExecutionMode).Strategy
 		boundary = &plan.SliceExecutionStart{
 			Branch:            branch,
 			Head:              head,
 			CommitPolicy:      execution.Config.CommitPolicy.String(),
-			WorkspaceStrategy: strategy,
+			WorkspaceStrategy: strategy.String(),
 		}
 	}
 	record, err := planMutationRecord(execution, detail)

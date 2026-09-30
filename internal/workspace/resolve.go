@@ -175,7 +175,7 @@ func ResolveManagedWorktreeOwnership(repoRoot, worktreeRoot, branch string, deta
 }
 
 func managedPlanCanOwnWorktree(detail *plan.PlanDetail) bool {
-	if detail == nil || detail.State.Workspace == nil || detail.State.Workspace.Strategy != plan.WorkspaceStrategyWorktree {
+	if detail == nil || detail.State.Workspace == nil || recordedStrategy(detail.State.Workspace.Strategy) != plan.WorkspaceStrategyWorktree {
 		return false
 	}
 	workspace := detail.State.Workspace
@@ -218,7 +218,7 @@ func blockedSliceHasRestartBoundary(slice *plan.Slice) bool {
 	return slice.ExecutionStart != nil &&
 		strings.TrimSpace(slice.ExecutionRoot) != "" &&
 		slice.ExecutionStart.CommitPolicy == "slice" &&
-		slice.ExecutionStart.WorkspaceStrategy == plan.WorkspaceStrategyWorktree &&
+		recordedStrategy(slice.ExecutionStart.WorkspaceStrategy) == plan.WorkspaceStrategyWorktree &&
 		strings.TrimSpace(slice.ExecutionStart.Branch) != "" &&
 		strings.TrimSpace(slice.ExecutionStart.Head) != "" &&
 		slice.CommitIntent == nil && slice.Completion == nil
@@ -237,7 +237,7 @@ func blockedSliceRequiresManualCompletion(detail *plan.PlanDetail, slice *plan.S
 type ExecutionRootIdentity struct {
 	// Root is the filesystem root where plan commands should execute.
 	Root string
-	// Strategy is the physical workspace strategy: "current" or "worktree".
+	// Strategy is the physical workspace strategy: "current" or "isolated".
 	Strategy string
 	// Separate is true when Root is a distinct filesystem path from the plan's
 	// repo root. Current-mode roots are never separate.
@@ -259,14 +259,14 @@ func ResolveExecutionRoot(detail *plan.PlanDetail, config Config) (ExecutionRoot
 		return ExecutionRootIdentity{}, fmt.Errorf("plan detail is nil")
 	}
 
-	strategy := strings.TrimSpace(config.Strategy)
+	strategy := strings.TrimSpace(config.Strategy.String())
 	if detail.State.Workspace != nil {
 		if recorded := strings.TrimSpace(detail.State.Workspace.Strategy); recorded != "" {
 			strategy = recorded
 		}
 	}
 
-	switch strategy {
+	switch recordedStrategy(strategy) {
 	case plan.WorkspaceStrategyCurrent:
 		root := strings.TrimSpace(detail.State.Repo.Root)
 		if root == "" {
@@ -328,7 +328,7 @@ func ResolveRecordedWorktree(detail *plan.PlanDetail) PlanWorktreeIdentity {
 // defends the same drift). Only a plan with neither path nor root falls back
 // to what Manager.workspacePath would create under the given config.
 func ResolvePlanWorktree(detail *plan.PlanDetail, config Config) PlanWorktreeIdentity {
-	if detail == nil || detail.State.Workspace == nil || detail.State.Workspace.Strategy != plan.WorkspaceStrategyWorktree {
+	if detail == nil || detail.State.Workspace == nil || recordedStrategy(detail.State.Workspace.Strategy) != plan.WorkspaceStrategyWorktree {
 		return PlanWorktreeIdentity{}
 	}
 	return resolvePlanWorktreeIdentity(detail, config)

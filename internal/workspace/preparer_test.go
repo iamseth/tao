@@ -13,6 +13,7 @@ import (
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/plantest"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
 func TestPathWithinRoot(t *testing.T) {
@@ -99,8 +100,8 @@ func TestExecutionPreparerCurrentPreservesRecordedLinkedLaunchRoot(t *testing.T)
 }
 
 func TestExecutionPreparerRequiresPlanRecordFactory(t *testing.T) {
-	for _, mode := range []string{"isolated", "current"} {
-		t.Run(mode, func(t *testing.T) {
+	for _, mode := range []runtimeconfig.ExecutionMode{runtimeconfig.ExecutionModeIsolated, runtimeconfig.ExecutionModeCurrent} {
+		t.Run(mode.String(), func(t *testing.T) {
 			detail := executionPreparerPlanDetail(t.TempDir())
 			preparer := ExecutionPreparer{
 				managerFactory: func(Options) (executionWorkspaceManager, error) {
@@ -120,29 +121,36 @@ func TestExecutionPreparerRequiresPlanRecordFactory(t *testing.T) {
 }
 
 func TestExecutionPreparerDefaultsToWorktree(t *testing.T) {
-	repoRoot := t.TempDir()
-	detail := executionPreparerPlanDetail(repoRoot)
-	detail.State.Workspace = nil
-	prepareCalls := 0
-	managerFactory := executionPreparerManagerFactory(Metadata{
-		Path: filepath.Join(repoRoot, ".tao", "workspaces", "plan-a"), Branch: "tao/plan-a",
-		BaseBranch: "feature", BaseSHA: "base123", BaseCurrentSHA: "base123", HeadSHA: "head123", Created: true,
-	}, &prepareCalls)
-
-	root, err := (ExecutionPreparer{managerFactory: managerFactory, PlanRecordFactory: memoryWorkspacePlanRecordFactory}).Prepare(context.Background(), detail, ExecutionPrepareOptions{})
-	if err != nil {
-		t.Fatalf("prepare execution workspace: %v", err)
-	}
-
-	want := filepath.Join(repoRoot, ".tao", "workspaces", "plan-a")
-	if root != want {
-		t.Fatalf("expected workspace root %q, got %q", want, root)
-	}
-	if detail.State.Workspace == nil || detail.State.Workspace.Strategy != plan.WorkspaceStrategyWorktree || detail.State.Workspace.Path != want {
-		t.Fatalf("expected worktree metadata, got %#v", detail.State.Workspace)
-	}
-	if prepareCalls != 1 {
-		t.Fatalf("workspace manager Prepare calls = %d, want 1", prepareCalls)
+	for _, mode := range []runtimeconfig.ExecutionMode{"", runtimeconfig.ExecutionModeIsolated, runtimeconfig.ExecutionModeCurrent} {
+		t.Run("mode="+mode.String(), func(t *testing.T) {
+			repoRoot := t.TempDir()
+			detail := executionPreparerPlanDetail(repoRoot)
+			detail.State.Workspace = nil
+			prepareCalls := 0
+			want := filepath.Join(repoRoot, ".tao", "workspaces", "plan-a")
+			managerFactory := executionPreparerManagerFactory(Metadata{
+				Path: want, Branch: "tao/plan-a", BaseBranch: "feature", BaseSHA: "base123", BaseCurrentSHA: "base123", HeadSHA: "head123", Created: true,
+			}, &prepareCalls)
+			root, err := (ExecutionPreparer{managerFactory: managerFactory, PlanRecordFactory: memoryWorkspacePlanRecordFactory}).Prepare(context.Background(), detail, ExecutionPrepareOptions{ExecutionMode: mode})
+			if err != nil {
+				t.Fatalf("prepare execution workspace: %v", err)
+			}
+			if mode == runtimeconfig.ExecutionModeCurrent {
+				if root != repoRoot || prepareCalls != 0 || detail.State.Workspace != nil {
+					t.Fatalf("current placement: root=%q calls=%d workspace=%#v", root, prepareCalls, detail.State.Workspace)
+				}
+				return
+			}
+			if root != want {
+				t.Fatalf("expected workspace root %q, got %q", want, root)
+			}
+			if detail.State.Workspace == nil || detail.State.Workspace.Strategy != plan.WorkspaceStrategyWorktree || detail.State.Workspace.Path != want {
+				t.Fatalf("expected worktree metadata, got %#v", detail.State.Workspace)
+			}
+			if prepareCalls != 1 {
+				t.Fatalf("workspace manager Prepare calls = %d, want 1", prepareCalls)
+			}
+		})
 	}
 }
 

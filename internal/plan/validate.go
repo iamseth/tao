@@ -31,7 +31,7 @@ const (
 
 // validateDetail reports artifact consistency warnings without rejecting loadable plans.
 func validateDetail(detail *PlanDetail) []string {
-	var warnings []string
+	warnings := recordedPlacementWarnings(detail.State, detail.Slices)
 	if detail.State.Plan.ID == "" {
 		warnings = append(warnings, "state.json missing plan.id")
 	}
@@ -127,7 +127,7 @@ func validateWorkspace(workspace *Workspace) []string {
 		return nil
 	}
 	var warnings []string
-	if workspace.Strategy != WorkspaceStrategyWorktree && workspace.Strategy != WorkspaceStrategyCurrent {
+	if recordedPlacement(workspace.Strategy) != WorkspaceStrategyWorktree && workspace.Strategy != WorkspaceStrategyCurrent {
 		warnings = append(warnings, fmt.Sprintf("state.json workspace.strategy must be %q or %q", WorkspaceStrategyWorktree, WorkspaceStrategyCurrent))
 	}
 	if workspace.LifecycleStatus != "" && !validValue(workspace.LifecycleStatus, []string{WorkspaceStatusPending, WorkspaceStatusPreparing, WorkspaceStatusReady, WorkspaceStatusFailed, WorkspaceStatusCleaning, WorkspaceStatusCleaned, WorkspaceStatusCleanupHeld}) {

@@ -8,7 +8,30 @@ import (
 	"testing"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 )
+
+func TestLegacyPlacementResolutionAndCleanupOwnership(t *testing.T) {
+	for _, spelling := range []string{"worktree", "isolated"} {
+		t.Run(spelling, func(t *testing.T) {
+			detail := executionRootDetail("/repo", "plan-a", &plan.Workspace{Strategy: spelling, Path: "/worktrees/plan-a", Branch: "tao/plan-a"})
+			current := DefaultConfig()
+			current.Strategy = runtimeconfig.ExecutionModeCurrent
+			root, err := ResolveExecutionRoot(detail, current)
+			if err != nil || root.Strategy != "isolated" || root.Root != "/worktrees/plan-a" || !root.Separate {
+				t.Fatalf("resolution = %+v, %v", root, err)
+			}
+			identity := ResolvePlanWorktree(detail, current)
+			if identity.Path != root.Root || !identity.Separate {
+				t.Fatalf("cleanup identity = %+v", identity)
+			}
+			detail.State.Workspace.Path = "/repo"
+			if ResolvePlanWorktree(detail, current).Separate {
+				t.Fatal("legacy spelling waived control checkout safeguard")
+			}
+		})
+	}
+}
 
 func TestResolveExecutionRoot(t *testing.T) {
 	const repoRoot = "/repo/root"
@@ -16,7 +39,7 @@ func TestResolveExecutionRoot(t *testing.T) {
 	const worktreePath = "/repo/worktrees/plan-a"
 
 	currentConfig := DefaultConfig()
-	currentConfig.Strategy = StrategyCurrent
+	currentConfig.Strategy = runtimeconfig.ExecutionModeCurrent
 	customConfig := DefaultConfig()
 	customConfig.Root = "/srv/worktrees"
 	blankStrategyConfig := DefaultConfig()

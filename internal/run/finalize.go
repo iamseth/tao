@@ -55,7 +55,7 @@ func (f Finalizer) FinalizeIfComplete(ctx context.Context, runCount int, detail 
 	}
 	defer refreshHeader(ctx, detail, f.execution.Config)
 	if runCount <= 0 {
-		if f.execution.Config.Reverify {
+		if f.execution.Request.Reverify {
 			return true, f.reverifyCompletedRun(ctx, detail)
 		}
 		if f.pullRequestRecoveryEnabled(detail) {
@@ -195,7 +195,7 @@ func (f Finalizer) finalizeCompletedRun(ctx context.Context, runCount int, detai
 func (f Finalizer) handleFinalVerificationFailure(ctx context.Context, runCount int, detail *plan.PlanDetail, executionRoot string, verificationErr error) error {
 	var failure *FinalVerificationError
 	config := f.execution.Config
-	if runCount <= 0 || !errors.As(verificationErr, &failure) || config.RepairVerification || config.Reverify ||
+	if runCount <= 0 || !errors.As(verificationErr, &failure) || f.execution.Request.RepairVerification || f.execution.Request.Reverify ||
 		(config.MaxSlices > 0 && runCount >= config.MaxSlices) ||
 		plan.DeriveVerificationRecovery(detail).Kind != plan.PlanActionRepairVerification {
 		return verificationErr
@@ -600,20 +600,15 @@ func effectiveWorkspaceStrategy(detail *plan.PlanDetail, config ExecutionConfig)
 	if detail != nil && detail.State.Workspace != nil && strings.TrimSpace(detail.State.Workspace.Strategy) != "" {
 		return detail.State.Workspace.Strategy
 	}
-	return workspaceStrategyForExecutionMode(config.ExecutionMode)
+	return workspaceConfig.Strategy.String()
 }
 
 func workspaceConfigForExecutionMode(mode ExecutionMode) workspace.Config {
 	config := workspace.DefaultConfig()
-	config.Strategy = workspaceStrategyForExecutionMode(mode)
-	return config
-}
-
-func workspaceStrategyForExecutionMode(mode ExecutionMode) string {
-	if mode == ExecutionModeCurrent {
-		return plan.WorkspaceStrategyCurrent
+	if mode != "" {
+		config.Strategy = mode
 	}
-	return plan.WorkspaceStrategyWorktree
+	return config
 }
 
 func writeSessionSummary(out io.Writer, detail *plan.PlanDetail, now time.Time) error {

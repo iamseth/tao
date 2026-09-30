@@ -36,7 +36,7 @@ func TestDiagnosticCollectorsShareSnapshotAcrossRefreshes(t *testing.T) {
 		return value, ok
 	})
 	before := snapshot.Status()
-	registered := taodata.Repo{ID: "repo-a", RunDefaults: &taodata.RepoRunDefaults{PullRequest: new(false), Models: &taodata.RepoModelDefaults{Model: "repo-model"}}}
+	registered := taodata.Repo{ID: "repo-a", RunDefaults: &taodata.RepoRunDefaults{PullRequest: new(false), Models: &taodata.RepoModelDefaults{Base: "repo-model"}}}
 	registry := &fakeNoteRegistry{current: registered, repos: []taodata.Repo{registered}}
 	app := App{RuntimeEnv: &snapshot, Registry: func() NoteRegistry { return registry }, RepoHealthCheck: func(context.Context, taodata.Repo) taodata.RepoHealth { return taodata.RepoHealth{Status: "ok"} }}
 	settings := newUISettingsService(app)
@@ -80,7 +80,7 @@ func TestMergeModelsAndConstructorsUseInvocationSnapshot(t *testing.T) {
 		runtimeconfig.EnvResolverModel: "captured-resolver", runtimeconfig.EnvAgent: "invalid-unused",
 		runtimeconfig.EnvMergeVerifyCommand: "captured-gate",
 	})
-	registry := &fakeNoteRegistry{current: taodata.Repo{RunDefaults: &taodata.RepoRunDefaults{Models: &taodata.RepoModelDefaults{ResolverModel: "repo-resolver"}}}}
+	registry := &fakeNoteRegistry{current: taodata.Repo{RunDefaults: &taodata.RepoRunDefaults{Models: &taodata.RepoModelDefaults{Resolver: "repo-resolver"}}}}
 	app := App{RuntimeEnv: snapshot, Registry: func() NoteRegistry { return registry }}
 	t.Setenv(runtimeconfig.EnvModel, "invalid later model")
 	t.Setenv(runtimeconfig.EnvMergeVerifyCommand, "later-gate")
@@ -251,7 +251,7 @@ func TestInvocationLookupCountsAcrossHelpExecutionAndDiagnostics(t *testing.T) {
 				if err := app.Run(context.Background(), args); err != nil {
 					t.Fatal(err)
 				}
-				if snapshot.Defaults().Model != model || (prior != nil && prior.Defaults().Model != "first-model") {
+				if snapshot.Defaults().Base != model || (prior != nil && prior.Defaults().Base != "first-model") {
 					t.Fatal("independent invocation snapshots shared state")
 				}
 				if len(counts) != len(runtimeconfig.RuntimeEnvKeys()) {

@@ -25,7 +25,7 @@ func TestStatusMixedInvalidConfigurationKeepsCompleteRows(t *testing.T) {
 	for key, value := range values {
 		t.Setenv(key, value)
 	}
-	registered := taodata.Repo{RunDefaults: &taodata.RepoRunDefaults{PullRequest: new(true), Models: &taodata.RepoModelDefaults{Model: "repo-model"}}}
+	registered := taodata.Repo{RunDefaults: &taodata.RepoRunDefaults{PullRequest: new(true), Models: &taodata.RepoModelDefaults{Base: "repo-model"}}}
 	var out bytes.Buffer
 	app := App{Out: &out, Registry: func() NoteRegistry { return &fakeNoteRegistry{current: registered} }, Repository: func(string) Repository { return nil }}
 	if err := app.Run(context.Background(), []string{"status", "--json"}); err != nil {

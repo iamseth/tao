@@ -20,7 +20,7 @@ func preparedInterruptedExecutionRoot(detail *plan.PlanDetail, config ExecutionC
 		return "", fmt.Errorf("interrupted slice has no durable workspace metadata")
 	}
 	workspaceState := detail.State.Workspace
-	if config.ExecutionMode != ExecutionModeIsolated || workspaceState.Strategy != plan.WorkspaceStrategyWorktree {
+	if config.ExecutionMode != ExecutionModeIsolated || recordedWorkspaceStrategy(workspaceState.Strategy) != plan.WorkspaceStrategyWorktree {
 		return "", fmt.Errorf("interrupted automatic start does not record an isolated worktree")
 	}
 	if workspaceState.LifecycleStatus != plan.WorkspaceStatusReady {
@@ -76,7 +76,7 @@ func prepareExecutionWorkspace(ctx context.Context, detail *plan.PlanDetail, inp
 		Config:            workspace.DefaultConfig(),
 	}
 	return preparer.Prepare(ctx, detail, workspace.ExecutionPrepareOptions{
-		ExecutionMode: input.Config.ExecutionMode.String(),
+		ExecutionMode: input.Config.ExecutionMode,
 	})
 }
 

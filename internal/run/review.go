@@ -486,7 +486,7 @@ func reviewExecutionRoot(detail *plan.PlanDetail) (string, error) {
 func workspaceConfigForReview(detail *plan.PlanDetail) workspace.Config {
 	config := workspaceConfigForExecutionMode(ExecutionModeCurrent)
 	if detail != nil && detail.State.Workspace != nil && strings.TrimSpace(detail.State.Workspace.Strategy) == "" && strings.TrimSpace(detail.State.Workspace.Path) != "" {
-		config.Strategy = plan.WorkspaceStrategyWorktree
+		config.Strategy = ExecutionModeIsolated
 	}
 	return config
 }

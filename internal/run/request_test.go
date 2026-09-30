@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -23,12 +25,57 @@ func newTestRequest(input string, overrides runtimeconfig.RunOptionsPatch) (Requ
 	return Request{Input: input, ResolvedRunOptions: config.ResolvedOptions()}, nil
 }
 
+func TestExecutionDefaultsCannotGrantRecovery(t *testing.T) {
+	for _, typ := range []reflect.Type{reflect.TypeFor[ExecutionConfig](), reflect.TypeFor[Options]()} {
+		for _, name := range []string{"RecoveryMode", "RestartBlocked", "RepairVerification", "Reverify"} {
+			if _, ok := typ.FieldByName(name); ok {
+				t.Errorf("%s exposes request-only recovery field %s", typ, name)
+			}
+		}
+	}
+}
+
+func TestSequentialRequestsKeepRecoveryInvocationLocal(t *testing.T) {
+	service := NewService(&memoryRunRepository{}, io.Discard, Options{ExecutionConfig: ExecutionConfig{
+		ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated, PullRequest: true},
+	}})
+	detail := completedReviewPlanDetail(t.TempDir())
+	detail.State.Repo.Root = t.TempDir()
+	detail.State.Workspace = &plan.Workspace{Strategy: plan.WorkspaceStrategyWorktree, Path: detail.State.Repo.Root, Branch: "feature", HeadSHA: "head123"}
+	for _, mode := range []RecoveryMode{{RestartBlocked: true}, {RepairVerification: true}, {Reverify: true}} {
+		request := Request{RecoveryMode: mode, ResolvedRunOptions: service.config.ResolvedRunOptions}
+		config, err := prepareRequestConfig(service.config, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		first, err := service.prepareRequestRunExecution(context.Background(), detail, request, config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ordinaryRequest := Request{ResolvedRunOptions: service.config.ResolvedRunOptions}
+		secondConfig, err := prepareRequestConfig(service.config, ordinaryRequest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := service.prepareRequestRunExecution(context.Background(), detail, ordinaryRequest, secondConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if first.Request != request || second.Request.RecoveryMode != (RecoveryMode{}) || first.Config != second.Config {
+			t.Fatalf("recovery leaked between requests: first=%+v second=%+v", first, second)
+		}
+		for _, ordinary := range []runExecution{newRunExecution(config, RunDependencies{}), runExecutionFromOptions(Options{ExecutionConfig: config})} {
+			if ordinary.Request.RecoveryMode != (RecoveryMode{}) {
+				t.Fatalf("options-only execution granted recovery: %+v", ordinary.Request)
+			}
+		}
+	}
+}
+
 func TestRequestForNextRoundClearsSingleShotRecoveryModes(t *testing.T) {
 	request := Request{
-		Input:              "plan-a",
-		RestartBlocked:     true,
-		RepairVerification: true,
-		Reverify:           true,
+		Input:        "plan-a",
+		RecoveryMode: RecoveryMode{RestartBlocked: true, RepairVerification: true, Reverify: true},
 		ResolvedRunOptions: ResolvedRunOptions{
 			MaxSlices:      3,
 			Continue:       true,
@@ -120,9 +167,9 @@ func TestCheckRequestCanStartRejectsEveryAbandonedRunModeWithSafeReason(t *testi
 	requests := []Request{
 		{},
 		{ResolvedRunOptions: ResolvedRunOptions{Continue: true}},
-		{RestartBlocked: true},
-		{RepairVerification: true},
-		{Reverify: true},
+		{RecoveryMode: RecoveryMode{RestartBlocked: true}},
+		{RecoveryMode: RecoveryMode{RepairVerification: true}},
+		{RecoveryMode: RecoveryMode{Reverify: true}},
 		{ResolvedRunOptions: ResolvedRunOptions{PullRequest: true}},
 	}
 	for _, request := range requests {
@@ -165,7 +212,7 @@ func TestPrepareRequestConfigMapsRunRequestToExecutionConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.MaxSlices != 1 || got.Continue || !got.SkipPermissions || got.MaxReworkAttempts != 7 || got.CommitPolicy != CommitPolicySlice || got.ExecutionMode != ExecutionModeCurrent || got.Agent != AgentPi || got.PullRequest || !got.Reverify {
+	if got.MaxSlices != 1 || got.Continue || !got.SkipPermissions || got.MaxReworkAttempts != 7 || got.CommitPolicy != CommitPolicySlice || got.ExecutionMode != ExecutionModeCurrent || got.Agent != AgentPi || got.PullRequest {
 		t.Fatalf("unexpected execution config: %#v", got)
 	}
 }
@@ -187,7 +234,7 @@ func TestCheckRequestCanStartRequiresRepairVerificationDecision(t *testing.T) {
 			detail.State.Workspace = &plan.Workspace{HeadSHA: "failed-head"}
 			detail.State.Plan.FinalVerification = &plan.FinalVerification{Command: "make verify", HeadSHA: "failed-head", Result: finalVerificationFailed, FailureKind: test.kind, Fingerprint: "failure"}
 
-			err := CheckRequestCanStart(detail, Request{RepairVerification: true})
+			err := CheckRequestCanStart(detail, Request{RecoveryMode: RecoveryMode{RepairVerification: true}})
 			if err == nil || !strings.Contains(err.Error(), "does not authorize code repair") {
 				t.Fatalf("repair admission error = %v", err)
 			}
@@ -200,26 +247,26 @@ func TestCheckRequestCanStartAdmitsFirstTwoRepairAttemptsAndRefusesThird(t *test
 	detail.State.Workspace = &plan.Workspace{HeadSHA: "failed-head"}
 	detail.State.Plan.FinalVerification = &plan.FinalVerification{Command: "make verify", HeadSHA: "failed-head", Result: finalVerificationFailed, FailureKind: plan.FinalVerificationFailureKindCode, Fingerprint: "failure"}
 
-	if err := CheckRequestCanStart(detail, Request{RepairVerification: true}); err != nil {
+	if err := CheckRequestCanStart(detail, Request{RecoveryMode: RecoveryMode{RepairVerification: true}}); err != nil {
 		t.Fatalf("first repair refused: %v", err)
 	}
 	for attempt := 1; attempt <= plan.VerificationRepairAttemptCap; attempt++ {
 		binding := plan.VerificationRepairBinding{Command: "make verify", HeadSHA: "prior-head", Fingerprint: fmt.Sprintf("prior-%d", attempt)}
 		detail.Slices.Slices = append(detail.Slices.Slices, plan.Slice{ID: fmt.Sprintf("vr%02d", attempt), Status: plan.StatusCompleted, VerificationRepair: &binding, Completion: &plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionCommitted}})
 		if attempt == 1 {
-			if err := CheckRequestCanStart(detail, Request{RepairVerification: true}); err != nil {
+			if err := CheckRequestCanStart(detail, Request{RecoveryMode: RecoveryMode{RepairVerification: true}}); err != nil {
 				t.Fatalf("second repair refused: %v", err)
 			}
 		}
 	}
-	if err := CheckRequestCanStart(detail, Request{RepairVerification: true}); err == nil || !strings.Contains(err.Error(), "attempt cap reached") {
+	if err := CheckRequestCanStart(detail, Request{RecoveryMode: RecoveryMode{RepairVerification: true}}); err == nil || !strings.Contains(err.Error(), "attempt cap reached") {
 		t.Fatalf("third repair admission error = %v", err)
 	}
 }
 
 func TestCheckRequestCanStartRefusesReverifyWithoutCurrentFailedEvidence(t *testing.T) {
 	detail := completedReviewPlanDetail(t.TempDir())
-	err := CheckRequestCanStart(detail, Request{Reverify: true})
+	err := CheckRequestCanStart(detail, Request{RecoveryMode: RecoveryMode{Reverify: true}})
 	if err == nil || !strings.Contains(err.Error(), "--reverify requires current failed final-verification evidence") {
 		t.Fatalf("reverify admission error = %v", err)
 	}

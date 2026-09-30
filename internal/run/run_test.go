@@ -741,7 +741,11 @@ func TestServiceExecuteWorkspaceStrategyWorktreeOverridesPlanCurrent(t *testing.
 	executor := &packetCapturingExecutor{}
 	var calls []string
 
-	err := NewService(repo, io.Discard, testOptions(testDependencies(executor, runWorkspaceGitFake(&calls)))).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated}})
+	var out bytes.Buffer
+	err := NewService(repo, &out, testOptions(testDependencies(executor, runWorkspaceGitFake(&calls)))).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated}})
+	if !strings.Contains(out.String(), "requested execution mode isolated differs from recorded mode current; existing placement and safety checks still apply.\n") {
+		t.Fatalf("missing placement notice: %q", out.String())
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1897,7 +1901,11 @@ func TestServiceExecuteWorkspaceStrategyCurrentOverridesPlanWorktree(t *testing.
 	executor := &packetCapturingExecutor{}
 	var calls []string
 
-	err := NewService(repo, io.Discard, testOptions(testDependencies(executor, runGitFake(&calls, nil)))).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeCurrent}})
+	var out bytes.Buffer
+	err := NewService(repo, &out, testOptions(testDependencies(executor, runGitFake(&calls, nil)))).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeCurrent}})
+	if !strings.Contains(out.String(), "requested execution mode current differs from recorded mode isolated; existing placement and safety checks still apply.\n") {
+		t.Fatalf("missing placement notice: %q", out.String())
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2270,7 +2278,7 @@ func TestServiceExecuteRestartRetriesAfterDurableRestartBeforeWorkspacePreparati
 		SliceExecutor: sliceExecutorFunc(func(context.Context, SliceRun) error { return providerErr }),
 		Now:           runClock(blockedAt.Add(time.Minute), blockedAt.Add(2*time.Minute)),
 	}
-	request := Request{Input: planDir, ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated, CommitPolicy: CommitPolicySlice}, RestartBlocked: true}
+	request := Request{Input: planDir, ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated, CommitPolicy: CommitPolicySlice}, RecoveryMode: RecoveryMode{RestartBlocked: true}}
 	service := NewService(plan.NewFileRepository(filepath.Dir(planDir)), io.Discard, Options{RunDependencies: dependencies})
 	if err := service.Execute(context.Background(), request); !errors.Is(err, interrupted) {
 		t.Fatalf("first restart error = %v, want interruption", err)

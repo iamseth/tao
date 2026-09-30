@@ -1,6 +1,7 @@
 package run
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -22,7 +23,8 @@ func TestServiceExecuteRetriesTransportHandoffTwiceWithFreshResumeEvidence(t *te
 	var delays []time.Duration
 	var events []plan.Event
 	agentCalls := 0
-	service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
+	var out bytes.Buffer
+	service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, &out, Options{RunDependencies: RunDependencies{
 		CommandRunner: interruptedServiceGitRunner(t, root, &[]string{}, func() string { return " M partial.go\n" }, "tao/plan-a", "base"),
 		TransportRetryDelay: func(_ context.Context, delay time.Duration) error {
 			delays = append(delays, delay)
@@ -34,13 +36,23 @@ func TestServiceExecuteRetriesTransportHandoffTwiceWithFreshResumeEvidence(t *te
 		}),
 		SliceExecutor: sliceExecutorFunc(func(_ context.Context, run SliceRun) error {
 			agentCalls++
+			if run.RepoRoot != root {
+				t.Fatalf("retry root = %q, want recorded root %q", run.RepoRoot, root)
+			}
 			if !run.Resuming || run.ResumeAttempt != agentCalls {
 				t.Fatalf("handoff %d resume context = %t/%d", agentCalls, run.Resuming, run.ResumeAttempt)
 			}
 			return transportErr
 		}),
 	}})
-	request := Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated, CommitPolicy: CommitPolicySlice}}
+	request := Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeCurrent, CommitPolicy: CommitPolicySlice}}
+	if err := service.Execute(context.Background(), request); err == nil || !strings.Contains(err.Error(), "effective workspace strategy differs from the recorded boundary") {
+		t.Fatalf("mismatched immutable-boundary refusal = %v", err)
+	}
+	if agentCalls != 0 || request.ExecutionMode != ExecutionModeCurrent {
+		t.Fatal("notice changed admission or requested configuration")
+	}
+	request.ExecutionMode = ExecutionModeIsolated
 
 	if err := service.Execute(context.Background(), request); !errors.Is(err, transportErr) {
 		t.Fatalf("execute error = %v, want transport failure", err)
@@ -52,6 +64,9 @@ func TestServiceExecuteRetriesTransportHandoffTwiceWithFreshResumeEvidence(t *te
 		t.Fatalf("retry delays = %v, want [1s 2s]", delays)
 	}
 	assertTransportResumeEvents(t, events, []int{1, 2, 3}, 3)
+	if strings.Count(out.String(), "Info: requested execution mode current differs from recorded mode isolated;") != 1 {
+		t.Fatalf("retry notice output = %q", out.String())
+	}
 
 	// A second explicit invocation gets a fresh two-retry budget while durable
 	// resume numbering continues as audit history.
@@ -65,6 +80,9 @@ func TestServiceExecuteRetriesTransportHandoffTwiceWithFreshResumeEvidence(t *te
 		t.Fatalf("invocation-local retry delays = %v", delays)
 	}
 	assertTransportResumeEvents(t, events, []int{1, 2, 3, 4, 5, 6}, 6)
+	if strings.Count(out.String(), "Info: requested execution mode current differs from recorded mode isolated;") != 1 || request.ExecutionMode != ExecutionModeIsolated {
+		t.Fatalf("second invocation notice output = %q, request = %#v", out.String(), request)
+	}
 }
 
 func TestServiceExecuteTransportRetryEventuallySucceedsOnThirdSession(t *testing.T) {

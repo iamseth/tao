@@ -83,12 +83,7 @@ func repositoryRunOptions(repo taodata.Repo) runtimeconfig.RunOptionsPatch {
 		options = options.WithPullRequest(pullRequest)
 	}
 	if models, ok := repo.ModelDefaults(); ok {
-		options.Model = models.Model
-		options.RunModel = models.RunModel
-		options.ReviewModel = models.ReviewModel
-		options.MergeReviewModel = models.MergeReviewModel
-		options.ResolverModel = models.ResolverModel
-		options.ReworkEscalationModel = models.ReworkEscalationModel
+		options.ModelSelection = models
 	}
 	return options
 }

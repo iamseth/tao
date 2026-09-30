@@ -273,7 +273,7 @@ func blockedSliceRestartWasRecovered(request BlockedSliceRestartRequest) recover
 		if err != nil {
 			return false
 		}
-		return reflect.DeepEqual(settled.State, expected.State) && reflect.DeepEqual(settled.Slices, expected.Slices) && semanticEventsWereRecorded(settled.Events, []Event{event})
+		return equivalentPlacementArtifacts(settled, expected) && semanticEventsWereRecorded(settled.Events, []Event{event})
 	}
 }
 
@@ -285,7 +285,16 @@ func blockedContinuationWasRecovered(stale, settled *PlanDetail) bool {
 	if err := markBlockedContinuedWithChanges(expected, newArtifactChangeSet(expected), settled.State.UpdatedAt); err != nil {
 		return false
 	}
-	return reflect.DeepEqual(settled.State, expected.State) && reflect.DeepEqual(settled.Slices, expected.Slices)
+	return equivalentPlacementArtifacts(settled, expected)
+}
+
+func equivalentPlacementArtifacts(a, b *PlanDetail) bool {
+	a, b = clonePlanDetail(a), clonePlanDetail(b)
+	normalizeArtifactPlacement(&a.State)
+	normalizeArtifactPlacement(&a.Slices)
+	normalizeArtifactPlacement(&b.State)
+	normalizeArtifactPlacement(&b.Slices)
+	return reflect.DeepEqual(a.State, b.State) && reflect.DeepEqual(a.Slices, b.Slices)
 }
 
 type recoveredArtifactMutationMatch func(stale, settled *PlanDetail) bool

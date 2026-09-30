@@ -468,6 +468,12 @@ func markSliceExecutionRoot(detail *PlanDetail, sliceID string, executionRoot st
 // before automatic agent work begins. The workspace mirror is part of the
 // state.json write that precedes slices.json, so a torn later-slice start can
 // still validate the newly captured boundary after reload.
+func equivalentExecutionStart(a, b SliceExecutionStart) bool {
+	a.WorkspaceStrategy = recordedPlacement(a.WorkspaceStrategy)
+	b.WorkspaceStrategy = recordedPlacement(b.WorkspaceStrategy)
+	return a == b
+}
+
 func markSliceExecutionStart(detail *PlanDetail, sliceID string, start SliceExecutionStart) error {
 	if detail == nil {
 		return fmt.Errorf("plan detail is nil")
@@ -480,7 +486,7 @@ func markSliceExecutionStart(detail *PlanDetail, sliceID string, start SliceExec
 		return fmt.Errorf("slice %s execution boundary requires branch and head", sliceID)
 	}
 	if existing := slice.ExecutionStart; existing != nil {
-		if *existing != start {
+		if !equivalentExecutionStart(*existing, start) {
 			if existing.Branch != start.Branch || existing.Head != start.Head {
 				return fmt.Errorf("slice %s execution boundary is immutable: refusing to overwrite branch or head", sliceID)
 			}
@@ -661,7 +667,7 @@ func markSliceCompletedWithOutcomeWithChanges(detail *PlanDetail, changes *artif
 
 func refreshCompletedWorkspaceBoundary(detail *PlanDetail, slice *Slice, outcome SliceCompletionOutcome) {
 	if detail.State.Plan.CurrentSlice == nil || *detail.State.Plan.CurrentSlice != slice.ID ||
-		slice.ExecutionStart == nil || slice.ExecutionStart.WorkspaceStrategy != WorkspaceStrategyWorktree ||
+		slice.ExecutionStart == nil || recordedPlacement(slice.ExecutionStart.WorkspaceStrategy) != WorkspaceStrategyWorktree ||
 		(outcome.Outcome != SliceCompletionCommitted && outcome.Outcome != SliceCompletionNoChanges) ||
 		strings.TrimSpace(outcome.CommitSHA) == "" {
 		return
@@ -870,7 +876,7 @@ func markBlockedSliceRestarted(detail *PlanDetail, changes *artifactChangeSet, r
 	if request.RestartedAt.IsZero() || strings.TrimSpace(request.PriorRoot) == "" || strings.TrimSpace(request.PriorBoundary.Branch) == "" || strings.TrimSpace(request.PriorBoundary.Head) == "" || strings.TrimSpace(request.BaselineBranch) == "" || strings.TrimSpace(request.BaselineHead) == "" {
 		return Event{}, fmt.Errorf("blocked restart requires prior boundary, fresh baseline, and timestamp")
 	}
-	if slice.ExecutionRoot != request.PriorRoot || slice.ExecutionStart == nil || *slice.ExecutionStart != request.PriorBoundary {
+	if slice.ExecutionRoot != request.PriorRoot || slice.ExecutionStart == nil || !equivalentExecutionStart(*slice.ExecutionStart, request.PriorBoundary) {
 		return Event{}, fmt.Errorf("blocked restart boundary changed before mutation")
 	}
 	if slice.CommitIntent != nil || slice.Completion != nil {

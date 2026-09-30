@@ -101,11 +101,7 @@ func (controller ExecutionBoundaryController) InspectSelected(ctx context.Contex
 	if err != nil {
 		return nil, fmt.Errorf("inspect interrupted slice Git state: %w", err)
 	}
-	strategy := plan.WorkspaceStrategyWorktree
-	if execution.Config.ExecutionMode == ExecutionModeCurrent {
-		strategy = plan.WorkspaceStrategyCurrent
-	}
-	live.WorkspaceStrategy = strategy
+	live.WorkspaceStrategy = workspaceConfigForExecutionMode(execution.Config.ExecutionMode).Strategy.String()
 	live.CommitPolicy = execution.Config.CommitPolicy.String()
 	live.Branch = branch
 	live.Head = head
@@ -471,7 +467,7 @@ func recordedAutomaticWorktree(workspace *plan.Workspace) bool {
 	if workspace == nil {
 		return false
 	}
-	switch strings.TrimSpace(workspace.Strategy) {
+	switch recordedWorkspaceStrategy(strings.TrimSpace(workspace.Strategy)) {
 	case plan.WorkspaceStrategyWorktree:
 		return true
 	case "":
@@ -506,7 +502,7 @@ func completedAutomaticSliceProvesBoundary(detail *plan.PlanDetail, branch strin
 		start := slice.ExecutionStart
 		intent := slice.CommitIntent
 		return (start.CommitPolicy == "" || start.CommitPolicy == CommitPolicySlice.String()) &&
-			(start.WorkspaceStrategy == "" || start.WorkspaceStrategy == plan.WorkspaceStrategyWorktree) &&
+			(start.WorkspaceStrategy == "" || recordedWorkspaceStrategy(start.WorkspaceStrategy) == plan.WorkspaceStrategyWorktree) &&
 			(intent.StartingBranch == "" || intent.StartingBranch == start.Branch) &&
 			(intent.StartingHead == "" || intent.StartingHead == start.Head)
 	}

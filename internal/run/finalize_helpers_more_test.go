@@ -15,6 +15,52 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 )
 
+func TestTypedPlacementFinalizationAndReview(t *testing.T) {
+	repoRoot := t.TempDir()
+	worktreeRoot := filepath.Join(repoRoot, ".tao", "workspaces", "plan-a")
+	for _, mode := range []ExecutionMode{"", ExecutionModeIsolated, ExecutionModeCurrent} {
+		t.Run("mode="+mode.String(), func(t *testing.T) {
+			config := workspaceConfigForExecutionMode(mode)
+			wantMode := mode
+			if wantMode == "" {
+				wantMode = ExecutionModeIsolated
+			}
+			if config.Strategy != wantMode {
+				t.Fatalf("strategy = %q, want %q", config.Strategy, wantMode)
+			}
+			detail := &plan.PlanDetail{State: plan.State{Repo: plan.Repo{Root: repoRoot}, Plan: plan.PlanState{ID: "plan-a"}}}
+			if got := effectiveWorkspaceStrategy(detail, ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: mode}}); got != wantMode.String() {
+				t.Fatalf("finalization placement = %q, want %q", got, wantMode)
+			}
+			// Recorded placement wins in both finalization and standalone review,
+			// even when the invocation requests the opposite placement.
+			for _, recorded := range []string{"isolated", "worktree", "current"} {
+				detail.State.Workspace = &plan.Workspace{Strategy: recorded, Path: worktreeRoot}
+				wantRoot, wantStrategy := worktreeRoot, ExecutionModeIsolated
+				if recorded == "current" {
+					wantRoot, wantStrategy = repoRoot, ExecutionModeCurrent
+				}
+				if got := effectiveWorkspaceStrategy(detail, ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: mode}}); got != wantStrategy.String() {
+					t.Fatalf("recorded %q: finalization = %q", recorded, got)
+				}
+				if got, err := reviewExecutionRoot(detail); err != nil || got != wantRoot {
+					t.Fatalf("recorded %q: review root = %q, %v", recorded, got, err)
+				}
+			}
+			// Review without placement metadata retains its current-checkout default;
+			// a legacy path without a strategy still denotes isolated placement.
+			detail.State.Workspace = nil
+			if got, err := reviewExecutionRoot(detail); err != nil || got != repoRoot {
+				t.Fatalf("default review root = %q, %v", got, err)
+			}
+			detail.State.Workspace = &plan.Workspace{Path: worktreeRoot}
+			if got, err := reviewExecutionRoot(detail); err != nil || got != worktreeRoot {
+				t.Fatalf("legacy review root = %q, %v", got, err)
+			}
+		})
+	}
+}
+
 func TestFinalizerHelperDefaults(t *testing.T) {
 	var out bytes.Buffer
 	execution := testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone}}, RunDependencies{OutputWriter: &out, CommandRunner: runGitFake(&[]string{}, nil)})

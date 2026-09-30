@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/iamseth/tao/internal/configtypes"
 )
 
 const (
@@ -160,8 +162,8 @@ func (changeType ChangeType) Category() string {
 }
 
 const (
-	WorkspaceStrategyWorktree = "worktree"
-	WorkspaceStrategyCurrent  = "current"
+	WorkspaceStrategyWorktree = string(configtypes.ExecutionModeIsolated)
+	WorkspaceStrategyCurrent  = string(configtypes.ExecutionModeCurrent)
 
 	WorkspaceStatusPending     = "pending"
 	WorkspaceStatusPreparing   = "preparing"

@@ -90,7 +90,7 @@ func runRequestOverridesFromFlags(fs *flag.FlagSet, values runFlagValues) runtim
 		overrides = overrides.WithModelForAllRoles(values.Model)
 	}
 	if flagWasProvided(fs, "rework-escalation-model") {
-		overrides.ReworkEscalationModel = values.ReworkEscalationModel
+		overrides.ReworkEscalation = values.ReworkEscalationModel
 	}
 	if flagWasProvided(fs, "max-slices") {
 		overrides = overrides.WithMaxSlices(values.MaxSlices)
@@ -215,9 +215,11 @@ func (a App) run(ctx context.Context, repo planRunRepository, args []string) err
 	if err != nil {
 		return err
 	}
-	request.RestartBlocked = blockedRestart
-	request.RepairVerification = repairVerification
-	request.Reverify = reverify
+	request.RecoveryMode = run.RecoveryMode{
+		RestartBlocked:     blockedRestart,
+		RepairVerification: repairVerification,
+		Reverify:           reverify,
+	}
 	policy, err := a.resolveRunAutoReworkPolicy(fs, request.ReviewEnabled)
 	if err != nil {
 		return err

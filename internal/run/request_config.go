@@ -31,8 +31,5 @@ func prepareRequestConfig(defaults ExecutionConfig, request Request) (ExecutionC
 	// Fields not explicitly overridden inherit from the service defaults by design.
 	execution := defaults
 	execution.ResolvedRunOptions = config.ResolvedOptions()
-	execution.RestartBlocked = request.RestartBlocked
-	execution.RepairVerification = request.RepairVerification
-	execution.Reverify = request.Reverify
 	return execution, nil
 }

@@ -272,7 +272,7 @@ func TestEnvSnapshotCompleteTableWrites(t *testing.T) {
 	tokens, cost := int64(1000), 9.5
 	selected, _ := theme.Lookup("gruvbox")
 	want := EnvDefaults{
-		RunOptionsPatch: RunOptionsPatch{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentClaude, PullRequest: &yes, ReviewEnabled: &no, SessionTimeout: &timeout, Model: "base", RunModel: "run", ReviewModel: "review", MergeReviewModel: "merge", ResolverModel: "resolve", ReworkEscalationModel: "strong"},
+		RunOptionsPatch: RunOptionsPatch{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentClaude, PullRequest: &yes, ReviewEnabled: &no, SessionTimeout: &timeout, ModelSelection: ModelSelection{Base: "base", Run: "run", Review: "review", MergeReview: "merge", Resolver: "resolve", ReworkEscalation: "strong"}},
 		AutoRework:      &no, MaxReworkAttempts: &attempts, ReworkEscalationFromAttempt: &escalation, UpdateMode: selfupdate.ModeOff, Theme: selected, SkipPermissions: true,
 		MergeVerifyCommand: "go test ./...", MergeVerifyCommandSet: true, AggregateReviewConvergenceWindow: 5, ApprovedBy: "bot", RunHeader: false,
 		PlannerRouting: PlannerRoutingConfig{Mode: "shadow", Arms: []PlannerRoutingArm{{AgentPi, 0.5}, {AgentClaude, 0.5}}, Floor: 0.2, ModeSet: true, ArmsSet: true, FloorSet: true},
@@ -574,7 +574,7 @@ func TestEnvSnapshotMixedSuccessAndFailure(t *testing.T) {
 		EnvRunModel: " provider/run ", EnvApprovedBy: "bot", EnvBudgetPlanCostWarn: "0",
 	})
 	d := s.Defaults()
-	if d.Agent != AgentPi || d.UpdateMode != selfupdate.ModeWarn || d.Theme != theme.Default() || d.RunModel != "provider/run" || d.ApprovedBy != "bot" || d.Budget.Plan.Cost.Warn != 0 {
+	if d.Agent != AgentPi || d.UpdateMode != selfupdate.ModeWarn || d.Theme != theme.Default() || d.Run != "provider/run" || d.ApprovedBy != "bot" || d.Budget.Plan.Cost.Warn != 0 {
 		t.Fatalf("mixed defaults: %+v", d)
 	}
 	if s.Require(EnvRunModel, EnvApprovedBy, EnvBudgetPlanCostWarn, EnvTheme) != nil || s.Require(EnvAgent, EnvUpdate) == nil {

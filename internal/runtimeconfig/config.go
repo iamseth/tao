@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/iamseth/tao/internal/configtypes"
 )
 
 type CommitPolicy string
@@ -25,45 +27,23 @@ type CommitPolicy string
 // feature-branch + worktree default; current keeps the launch checkout on its
 // launch branch. The run and workspace layers read it directly and derive the
 // physical worktree/current placement from it.
-type ExecutionMode string
+type ExecutionMode = configtypes.ExecutionMode
 
 type AgentKind string
 
-type ModelRole string
+type ModelRole = configtypes.ModelRole
 
 const (
-	ModelRoleDefault     ModelRole = "default"
-	ModelRoleRun         ModelRole = "run"
-	ModelRoleReview      ModelRole = "review"
-	ModelRoleMergeReview ModelRole = "merge_review"
-	ModelRoleResolver    ModelRole = "resolver"
+	ModelRoleDefault     = configtypes.ModelRoleDefault
+	ModelRoleRun         = configtypes.ModelRoleRun
+	ModelRoleReview      = configtypes.ModelRoleReview
+	ModelRoleMergeReview = configtypes.ModelRoleMergeReview
+	ModelRoleResolver    = configtypes.ModelRoleResolver
 )
 
 // ModelSelection keeps role overrides separate from their shared fallback.
 // Empty names leave model selection to the agent runtime.
-type ModelSelection struct {
-	Base, Run, Review, MergeReview, Resolver string
-	// ReworkEscalation is opt-in rework policy, not a role fallback for For.
-	ReworkEscalation string
-}
-
-func (m ModelSelection) For(role ModelRole) string {
-	var override string
-	switch role {
-	case ModelRoleRun:
-		override = m.Run
-	case ModelRoleReview:
-		override = m.Review
-	case ModelRoleMergeReview:
-		override = m.MergeReview
-	case ModelRoleResolver:
-		override = m.Resolver
-	}
-	if override != "" {
-		return override
-	}
-	return m.Base
-}
+type ModelSelection = configtypes.ModelSelection
 
 // ParseModelName treats model names as opaque runtime-specific identifiers.
 func ParseModelName(value string) (string, error) {
@@ -82,20 +62,15 @@ func ParseModelName(value string) (string, error) {
 // model fields mean unset. Pointer fields mean the caller supplied the value,
 // including explicit false or zero.
 type RunOptionsPatch struct {
-	MaxSlices             *int           `json:"max_slices,omitempty"`
-	Continue              *bool          `json:"continue,omitempty"`
-	CommitPolicy          CommitPolicy   `json:"commit_policy,omitempty"`
-	ExecutionMode         ExecutionMode  `json:"execution_mode,omitempty"`
-	Agent                 AgentKind      `json:"agent,omitempty"`
-	PullRequest           *bool          `json:"pull_request,omitempty"`
-	ReviewEnabled         *bool          `json:"review_enabled,omitempty"`
-	SessionTimeout        *time.Duration `json:"session_timeout,omitempty"`
-	Model                 string         `json:"model,omitempty"`
-	RunModel              string         `json:"run_model,omitempty"`
-	ReviewModel           string         `json:"review_model,omitempty"`
-	MergeReviewModel      string         `json:"merge_review_model,omitempty"`
-	ResolverModel         string         `json:"resolver_model,omitempty"`
-	ReworkEscalationModel string         `json:"rework_escalation_model,omitempty"`
+	MaxSlices      *int           `json:"max_slices,omitempty"`
+	Continue       *bool          `json:"continue,omitempty"`
+	CommitPolicy   CommitPolicy   `json:"commit_policy,omitempty"`
+	ExecutionMode  ExecutionMode  `json:"execution_mode,omitempty"`
+	Agent          AgentKind      `json:"agent,omitempty"`
+	PullRequest    *bool          `json:"pull_request,omitempty"`
+	ReviewEnabled  *bool          `json:"review_enabled,omitempty"`
+	SessionTimeout *time.Duration `json:"session_timeout,omitempty"`
+	ModelSelection
 }
 
 // ResolvedRunOptions is the validated execution model after defaults and
@@ -128,8 +103,8 @@ const (
 	CommitPolicySlice CommitPolicy = "slice"
 	CommitPolicyNone  CommitPolicy = "none"
 
-	ExecutionModeIsolated ExecutionMode = "isolated"
-	ExecutionModeCurrent  ExecutionMode = "current"
+	ExecutionModeIsolated = configtypes.ExecutionModeIsolated
+	ExecutionModeCurrent  = configtypes.ExecutionModeCurrent
 
 	AgentPi     AgentKind = "pi"
 	AgentClaude AgentKind = "claude"
@@ -189,10 +164,6 @@ func ParseExecutionMode(value string) (ExecutionMode, error) {
 	}
 }
 
-func (m ExecutionMode) String() string {
-	return string(m)
-}
-
 func ParseAgentKind(value string) (AgentKind, error) {
 	if value == "" {
 		return AgentPi, nil
@@ -243,11 +214,11 @@ func (d RunOptionsPatch) SessionTimeoutValue() time.Duration {
 
 // WithModelForAllRoles overrides both the base and any inherited role choices.
 func (p RunOptionsPatch) WithModelForAllRoles(name string) RunOptionsPatch {
-	p.Model = name
-	p.RunModel = name
-	p.ReviewModel = name
-	p.MergeReviewModel = name
-	p.ResolverModel = name
+	p.Base = name
+	p.Run = name
+	p.Review = name
+	p.MergeReview = name
+	p.Resolver = name
 	return p
 }
 
@@ -356,20 +327,15 @@ func (o ResolvedRunOptions) RunOptionsPatch() RunOptionsPatch {
 	reviewEnabled := o.ReviewEnabled
 	sessionTimeout := o.SessionTimeout
 	return RunOptionsPatch{
-		MaxSlices:             &maxSlices,
-		Continue:              &continueRun,
-		CommitPolicy:          o.CommitPolicy,
-		ExecutionMode:         o.ExecutionMode,
-		Agent:                 o.Agent,
-		PullRequest:           &pullRequest,
-		ReviewEnabled:         &reviewEnabled,
-		SessionTimeout:        &sessionTimeout,
-		Model:                 o.Models.Base,
-		RunModel:              o.Models.Run,
-		ReviewModel:           o.Models.Review,
-		MergeReviewModel:      o.Models.MergeReview,
-		ResolverModel:         o.Models.Resolver,
-		ReworkEscalationModel: o.Models.ReworkEscalation,
+		MaxSlices:      &maxSlices,
+		Continue:       &continueRun,
+		CommitPolicy:   o.CommitPolicy,
+		ExecutionMode:  o.ExecutionMode,
+		Agent:          o.Agent,
+		PullRequest:    &pullRequest,
+		ReviewEnabled:  &reviewEnabled,
+		SessionTimeout: &sessionTimeout,
+		ModelSelection: o.Models,
 	}
 }
 
@@ -453,12 +419,12 @@ func mergeRunOptions(options ResolvedRunOptions, patch RunOptionsPatch) (Resolve
 		value  string
 		target *string
 	}{
-		{"model", patch.Model, &options.Models.Base},
-		{"run_model", patch.RunModel, &options.Models.Run},
-		{"review_model", patch.ReviewModel, &options.Models.Review},
-		{"merge_review_model", patch.MergeReviewModel, &options.Models.MergeReview},
-		{"resolver_model", patch.ResolverModel, &options.Models.Resolver},
-		{"rework_escalation_model", patch.ReworkEscalationModel, &options.Models.ReworkEscalation},
+		{"model", patch.Base, &options.Models.Base},
+		{"run_model", patch.Run, &options.Models.Run},
+		{"review_model", patch.Review, &options.Models.Review},
+		{"merge_review_model", patch.MergeReview, &options.Models.MergeReview},
+		{"resolver_model", patch.Resolver, &options.Models.Resolver},
+		{"rework_escalation_model", patch.ReworkEscalation, &options.Models.ReworkEscalation},
 	} {
 		if model.value == "" {
 			continue

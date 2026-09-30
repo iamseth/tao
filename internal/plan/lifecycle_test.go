@@ -217,6 +217,33 @@ func TestLifecycleSelectedSliceEdges(t *testing.T) {
 	}
 }
 
+func TestLegacyExecutionBoundaryEquivalenceDoesNotWeakenImmutability(t *testing.T) {
+	detail := startSliceDetail("")
+	legacy := SliceExecutionStart{Branch: "tao/plan", Head: "abc123", CommitPolicy: "slice", WorkspaceStrategy: "worktree"}
+	detail.Slices.Slices[0].ExecutionStart = &legacy
+	canonical := legacy
+	canonical.WorkspaceStrategy = "isolated"
+	if err := markSliceExecutionStart(detail, "001-a", canonical); err != nil {
+		t.Fatal(err)
+	}
+	for _, mutate := range []func(*SliceExecutionStart){
+		func(s *SliceExecutionStart) { s.Branch = "other" },
+		func(s *SliceExecutionStart) { s.Head = "other" },
+		func(s *SliceExecutionStart) { s.CommitPolicy = "none" },
+		func(s *SliceExecutionStart) { s.WorkspaceStrategy = "current" },
+		func(s *SliceExecutionStart) { s.WorkspaceStrategy = "invalid" },
+	} {
+		changed := canonical
+		mutate(&changed)
+		if err := markSliceExecutionStart(detail, "001-a", changed); err == nil {
+			t.Fatalf("accepted changed boundary: %+v", changed)
+		}
+	}
+	if *detail.Slices.Slices[0].ExecutionStart != legacy {
+		t.Fatal("comparison rewrote boundary")
+	}
+}
+
 func TestMarkSliceExecutionStartIsIdempotentAndImmutable(t *testing.T) {
 	detail := startSliceDetail("")
 	boundary := SliceExecutionStart{Branch: "tao/plan", Head: "abc123", CommitPolicy: "slice", WorkspaceStrategy: WorkspaceStrategyWorktree}

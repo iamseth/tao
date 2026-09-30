@@ -15,6 +15,38 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 )
 
+func TestInspectSelectedTypedPlacement(t *testing.T) {
+	repoRoot := t.TempDir()
+	runRebaseRecoveryGit(t, repoRoot, "init", "-b", "main")
+	runRebaseRecoveryGit(t, repoRoot, "config", "user.email", "tao@example.com")
+	runRebaseRecoveryGit(t, repoRoot, "config", "user.name", "Tao Test")
+	runRebaseRecoveryGit(t, repoRoot, "commit", "--allow-empty", "-m", "base")
+	head := rebaseRecoveryGitOutput(t, repoRoot, "rev-parse", "HEAD")
+	worktreeRoot := filepath.Join(t.TempDir(), "isolated")
+	runRebaseRecoveryGit(t, repoRoot, "worktree", "add", "-b", "feature/plan-a", worktreeRoot)
+	for _, mode := range []ExecutionMode{"", ExecutionModeIsolated, ExecutionModeCurrent} {
+		t.Run("mode="+mode.String(), func(t *testing.T) {
+			root, branch, strategy := worktreeRoot, "feature/plan-a", ExecutionModeIsolated
+			if mode == ExecutionModeCurrent {
+				root, branch, strategy = repoRoot, "main", ExecutionModeCurrent
+			}
+			current := "001-a"
+			detail := &plan.PlanDetail{
+				State:  plan.State{Status: plan.StatusInProgress, Repo: plan.Repo{Root: repoRoot}, Plan: plan.PlanState{ID: "plan-a", CurrentSlice: &current, LastRunCommitPolicy: "slice"}, Workspace: &plan.Workspace{Strategy: strategy.String(), Path: root, Branch: branch, HeadSHA: head, LifecycleStatus: plan.WorkspaceStatusReady}},
+				Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: current, Status: plan.StatusInProgress, ExecutionRoot: root, ExecutionStart: &plan.SliceExecutionStart{Branch: branch, Head: head, CommitPolicy: "slice", WorkspaceStrategy: strategy.String()}}}},
+			}
+			execution := runExecution{Config: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: mode, CommitPolicy: CommitPolicySlice}}, Dependencies: RunDependencies{CommandRunner: defaultCommandRunner}}
+			action, err := (ExecutionBoundaryController{}).InspectSelected(context.Background(), ExecutionBoundaryDurableFacts{Detail: detail}, execution)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if action == nil || action.live.WorkspaceStrategy != strategy.String() || action.live.ExecutionRoot != root {
+				t.Fatalf("boundary = %#v, want %s at %s", action, strategy, root)
+			}
+		})
+	}
+}
+
 func TestInspectSelectedAuthorizesOnlyCleanDescendantBlockedRestart(t *testing.T) {
 	repoRoot := t.TempDir()
 	runRebaseRecoveryGit(t, repoRoot, "init", "-b", "main")

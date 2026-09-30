@@ -46,6 +46,25 @@ func TestValidatePrintsWarningsWithoutFailing(t *testing.T) {
 	}
 }
 
+func TestValidateLegacyPlacementWarningsAreAdvisory(t *testing.T) {
+	var out bytes.Buffer
+	warnings := []string{
+		"state.json workspace.strategy uses legacy worktree; prefer isolated",
+		"slices.json slice 001-a execution_start.workspace_strategy uses legacy worktree; prefer isolated",
+	}
+	detail := validatePlanDetail(t.TempDir(), []string{"go version"}, warnings)
+	detail.State.Workspace = &plan.Workspace{Strategy: plan.WorkspaceStrategyWorktree}
+	err := (App{Out: &out, Err: &out}).validate(context.Background(), fakeRepository{details: map[string]*plan.PlanDetail{"example": detail}}, []string{"example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, warning := range warnings {
+		if !strings.Contains(out.String(), warning) {
+			t.Fatalf("missing warning %q: %s", warning, out.String())
+		}
+	}
+}
+
 func TestValidatePrintsAgentBudgetWarningsWithoutFailing(t *testing.T) {
 	var out bytes.Buffer
 	detail := validatePlanDetail(t.TempDir(), []string{"go version"}, nil)

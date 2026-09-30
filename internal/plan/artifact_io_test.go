@@ -15,6 +15,81 @@ import (
 	"time"
 )
 
+func TestLegacyPlacementJournalReplaysFrozenBytes(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "plan-a")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	journal := testMutationJournal(t)
+	journal.State = newMutationJournalPayload([]byte(`{"plan":{"id":"plan-a"},"workspace":{"strategy":"worktree"}}`))
+	journal.Slices = newMutationJournalPayload([]byte(`{"plan_id":"plan-a","slices":[{"id":"s","execution_start":{"workspace_strategy":"worktree"},"commit_intent":{"message":"keep worktree verbatim","parent":"exact"}}]}`))
+	store := &failingMutationJournalIO{delegate: fileMutationJournalIO{}, failOperation: "state"}
+	if err := installAndSettleMutation(store, dir, journal); err == nil {
+		t.Fatal("expected interrupted journal")
+	}
+	files, err := loadPlanFiles(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if files.state.Workspace.Strategy != "isolated" || files.slices.Slices[0].ExecutionStart.WorkspaceStrategy != "isolated" {
+		t.Fatal("recovered projection not normalized")
+	}
+	assertMutationFile(t, filepath.Join(dir, "state.json"), journal.State.Payload)
+	assertMutationFile(t, filepath.Join(dir, "slices.json"), journal.Slices.Payload)
+}
+
+func TestRecordedPlacementArtifacts(t *testing.T) {
+	for _, spelling := range []string{"worktree", "isolated", "current", "", "invalid"} {
+		t.Run(spelling, func(t *testing.T) {
+			dir := t.TempDir()
+			stateBytes := []byte(fmt.Sprintf(`{"plan":{"id":"p"},"workspace":{"strategy":%q,"future":true}}`, spelling))
+			sliceBytes := []byte(fmt.Sprintf(`{"plan_id":"p","slices":[{"id":"s","execution_start":{"workspace_strategy":%q,"future":true}}]}`, spelling))
+			for name, data := range map[string][]byte{"state.json": stateBytes, "slices.json": sliceBytes} {
+				if err := os.WriteFile(filepath.Join(dir, name), data, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			files, err := readPlanFiles(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := spelling
+			if want == "worktree" {
+				want = "isolated"
+			}
+			if files.state.Workspace.Strategy != want || files.slices.Slices[0].ExecutionStart.WorkspaceStrategy != want {
+				t.Fatalf("placement not normalized: %+v %+v", files.state.Workspace, files.slices.Slices[0].ExecutionStart)
+			}
+			if spelling == "worktree" {
+				warnings := strings.Join(files.warnings, "\n")
+				for _, field := range []string{"workspace.strategy", "execution_start.workspace_strategy"} {
+					if !strings.Contains(warnings, field) {
+						t.Errorf("missing legacy warning for %s: %s", field, warnings)
+					}
+				}
+			}
+			for name, data := range map[string][]byte{"state.json": stateBytes, "slices.json": sliceBytes} {
+				got, err := os.ReadFile(filepath.Join(dir, name)) // #nosec G304 -- test-owned temporary artifact path.
+				if err != nil || !bytes.Equal(got, data) {
+					t.Fatalf("read changed %s", name)
+				}
+			}
+			// Ordinary writes also accept legacy in-memory objects.
+			files.state.Workspace.Strategy = spelling
+			files.slices.Slices[0].ExecutionStart.WorkspaceStrategy = spelling
+			for name, value := range map[string]any{"state.json": files.state, "slices.json": files.slices} {
+				if err := writeJSON(filepath.Join(dir, name), value); err != nil {
+					t.Fatal(err)
+				}
+				got, _ := os.ReadFile(filepath.Join(dir, name)) // #nosec G304 -- test-owned temporary artifact path.
+				if !bytes.Contains(got, []byte(`"future": true`)) || (spelling == "worktree" && bytes.Contains(got, []byte(`"worktree"`))) {
+					t.Fatalf("bad ordinary write: %s", got)
+				}
+			}
+		})
+	}
+}
+
 func TestReadEventsWarnsAndSkipsMalformedOrOversizedLines(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "events.jsonl")

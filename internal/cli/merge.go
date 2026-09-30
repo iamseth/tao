@@ -303,11 +303,7 @@ func (a App) mergeModels(ctx context.Context, model string) (runtimeconfig.Model
 	if model != "" {
 		overrides = overrides.WithModelForAllRoles(model)
 	}
-	modelDefaults := runtimeconfig.RunOptionsPatch{
-		Model: defaults.Model, RunModel: defaults.RunModel, ReviewModel: defaults.ReviewModel,
-		MergeReviewModel: defaults.MergeReviewModel, ResolverModel: defaults.ResolverModel,
-		ReworkEscalationModel: defaults.ReworkEscalationModel,
-	}
+	modelDefaults := runtimeconfig.RunOptionsPatch{ModelSelection: defaults.ModelSelection}
 	resolved, err := runtimeconfig.ResolveRunOptionsWithRepositoryDefaults(modelDefaults, repository, overrides)
 	return resolved.Models, err
 }

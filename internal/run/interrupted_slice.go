@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/iamseth/tao/internal/configtypes"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/workspace"
@@ -173,7 +174,7 @@ func ClassifyInterruptedSlice(input InterruptedSliceInput) InterruptedSliceResul
 	if input.CommitPolicy != "" && policy != input.CommitPolicy {
 		return InterruptedSliceResult{Disposition: InterruptedSliceRefuse, Reason: "effective commit policy differs from the recorded boundary", Facts: facts}
 	}
-	if input.WorkspaceStrategy != "" && strategy != input.WorkspaceStrategy {
+	if input.WorkspaceStrategy != "" && strategy != recordedWorkspaceStrategy(input.WorkspaceStrategy) {
 		return InterruptedSliceResult{Disposition: InterruptedSliceRefuse, Reason: "effective workspace strategy differs from the recorded boundary", Facts: facts}
 	}
 	if policy == CommitPolicyNone.String() {
@@ -231,7 +232,7 @@ func classifyBlockedRestart(input InterruptedSliceInput, slice *plan.Slice, fact
 	if input.CommitPolicy != "" && input.CommitPolicy != policy {
 		return refuse("requested commit policy differs from the prior automatic boundary")
 	}
-	if input.WorkspaceStrategy != "" && input.WorkspaceStrategy != strategy {
+	if input.WorkspaceStrategy != "" && recordedWorkspaceStrategy(input.WorkspaceStrategy) != strategy {
 		return refuse("requested execution mode differs from the prior isolated boundary")
 	}
 	if slice.ExecutionStart == nil || strings.TrimSpace(slice.ExecutionRoot) == "" {
@@ -338,6 +339,14 @@ func interruptedSliceFacts(input InterruptedSliceInput) InterruptedSliceFacts {
 	return facts
 }
 
+func recordedWorkspaceStrategy(value string) string {
+	mode, err := configtypes.NormalizeRecordedExecutionMode(value)
+	if err != nil {
+		return value
+	}
+	return mode.String()
+}
+
 func effectiveInterruptedBoundary(detail *plan.PlanDetail, slice *plan.Slice) (policy string, strategy string, reason string) {
 	if slice.ExecutionStart != nil {
 		policy = strings.TrimSpace(slice.ExecutionStart.CommitPolicy)
@@ -363,6 +372,7 @@ func effectiveInterruptedBoundary(detail *plan.PlanDetail, slice *plan.Slice) (p
 			strategy = plan.WorkspaceStrategyCurrent
 		}
 	}
+	strategy = recordedWorkspaceStrategy(strategy)
 	if policy != CommitPolicySlice.String() && policy != CommitPolicyNone.String() {
 		return policy, strategy, "recorded commit policy is missing or unsupported"
 	}

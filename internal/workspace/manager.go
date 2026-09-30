@@ -12,6 +12,7 @@ import (
 	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
 // CommandRunner runs local commands for workspace operations.
@@ -307,7 +308,7 @@ func newManager(repoRoot string, config Config, git managerGitCapabilities) *Man
 
 // Prepare creates or reuses the selected plan worktree.
 func (m *Manager) Prepare(ctx context.Context, options PrepareOptions) (Metadata, error) {
-	if m.config.Strategy == StrategyCurrent {
+	if m.config.Strategy == runtimeconfig.ExecutionModeCurrent {
 		return m.currentWorkspace(ctx, options)
 	}
 	planID, err := requirePlanID(options.PlanID)

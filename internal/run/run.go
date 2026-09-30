@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/commandrunner"
+	"github.com/iamseth/tao/internal/configtypes"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 )
@@ -139,15 +141,13 @@ type Options struct {
 type ExecutionConfig struct {
 	ResolvedRunOptions
 	// RuntimeEnv is the invocation snapshot. Nil selects built-ins, never process state.
-	RuntimeEnv         *runtimeconfig.EnvSnapshot
-	SkipPermissions    bool
-	MaxReworkAttempts  int
-	RestartBlocked     bool
-	RepairVerification bool
-	Reverify           bool
+	RuntimeEnv        *runtimeconfig.EnvSnapshot
+	SkipPermissions   bool
+	MaxReworkAttempts int
 }
 
 type runExecution struct {
+	Request            Request
 	Config             ExecutionConfig
 	Dependencies       RunDependencies
 	ExecutionRoot      string
@@ -280,6 +280,7 @@ func (s Service) WithPlanRunLock(ctx context.Context, request Request, operation
 	if detail == nil {
 		return fmt.Errorf("plan %q not found", request.Input)
 	}
+	ctx = withPlacementNotice(ctx)
 	startedAt := now(s.dependencies).UTC()
 	headerConfig := s.config
 	if resolved, resolveErr := prepareRequestConfig(s.config, request); resolveErr == nil {
@@ -331,14 +332,18 @@ func CheckRequestCanStart(detail *plan.PlanDetail, request Request) error {
 }
 
 func (s Service) Execute(ctx context.Context, request Request) error {
+	ctx = withPlacementNotice(ctx)
 	return s.withResolvedPlan(ctx, request, resolvedPlanOptions{header: true, status: true}, func(ownedCtx context.Context, detail *plan.PlanDetail, config ExecutionConfig) error {
+		ownedCtx.Value(placementNoticeKey{}).(*sync.Once).Do(func() {
+			s.reportPlacementMismatch(detail, config)
+		})
 		ReportPhase(ownedCtx, PhasePreparingExecution, nil)
 		if err := CheckRequestCanStart(detail, request); err != nil {
 			return err
 		}
 		prerequisiteResolver, _ := s.repo.(plan.ExactPlanResolver)
-		resumingFinalization := plan.AnalyzeRunCapabilities(detail).Complete && (config.PullRequest || config.Reverify)
-		if !resumingFinalization && !config.RestartBlocked && len(detail.State.Plan.RuntimePrerequisites) > 0 {
+		resumingFinalization := plan.AnalyzeRunCapabilities(detail).Complete && (config.PullRequest || request.Reverify)
+		if !resumingFinalization && !request.RestartBlocked && len(detail.State.Plan.RuntimePrerequisites) > 0 {
 			baseline, err := resolvePrerequisiteBaseline(ownedCtx, detail, config, s.dependencies.CommandRunner, false)
 			if err != nil {
 				return cannotStartf("%s", err)
@@ -347,13 +352,13 @@ func (s Service) Execute(ctx context.Context, request Request) error {
 				return err
 			}
 		}
-		if config.RepairVerification {
+		if request.RepairVerification {
 			// Admit the future slice before journaling a repair or spending its
 			// lifetime attempt; ordinary preparation happens after the append.
 			if err := config.requireSliceBudgets(); err != nil {
 				return err
 			}
-			repairExecution := newRunExecution(config, s.dependencies)
+			repairExecution := newRequestRunExecution(request, config, s.dependencies)
 			s.resolveServiceDependencies(&repairExecution)
 			if detail.State.Workspace == nil || strings.TrimSpace(detail.State.Workspace.Path) == "" {
 				return fmt.Errorf("verification repair requires a recorded isolated worktree")
@@ -363,11 +368,11 @@ func (s Service) Execute(ctx context.Context, request Request) error {
 				return err
 			}
 		}
-		execution, err := s.prepareRunExecution(ownedCtx, detail, config)
+		execution, err := s.prepareRequestRunExecution(ownedCtx, detail, request, config)
 		if err != nil {
 			return err
 		}
-		if config.RestartBlocked && len(detail.State.Plan.RuntimePrerequisites) > 0 {
+		if request.RestartBlocked && len(detail.State.Plan.RuntimePrerequisites) > 0 {
 			baseline, err := resolvePrerequisiteBaseline(ownedCtx, detail, config, s.dependencies.CommandRunner, true)
 			if err != nil {
 				return cannotStartf("%s", err)
@@ -381,6 +386,35 @@ func (s Service) Execute(ctx context.Context, request Request) error {
 			return s.repo.ResolvePlan(ctx, detail.Dir)
 		}, s.out, execution)
 	})
+}
+
+type placementNoticeKey struct{}
+
+// Share presentation lifetime across a CLI invocation's Execute calls, but not
+// across independent invocations using the same Service. Preparation and provider
+// retries do not emit output or acquire authority from this notice.
+func withPlacementNotice(ctx context.Context) context.Context {
+	if ctx.Value(placementNoticeKey{}) != nil {
+		return ctx
+	}
+	return context.WithValue(ctx, placementNoticeKey{}, &sync.Once{})
+}
+
+func (s Service) reportPlacementMismatch(detail *plan.PlanDetail, config ExecutionConfig) {
+	if s.out == nil || detail == nil || detail.State.Workspace == nil {
+		return
+	}
+	recorded, err := configtypes.NormalizeRecordedExecutionMode(detail.State.Workspace.Strategy)
+	if err != nil || recorded == "" {
+		return
+	}
+	requested := config.ExecutionMode
+	if requested == "" {
+		requested = runtimeconfig.ExecutionModeIsolated
+	}
+	if requested != recorded {
+		_ = writef(s.out, "Info: requested execution mode %s differs from recorded mode %s; existing placement and safety checks still apply.\n", requested, recorded)
+	}
 }
 
 func runDisabledError(capabilities plan.RunCapabilities) error {

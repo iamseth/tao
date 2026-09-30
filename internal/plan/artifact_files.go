@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/iamseth/tao/internal/atomicfile"
+	"github.com/iamseth/tao/internal/configtypes"
 )
 
 // planFiles is the raw artifact bundle loaded from a plan directory before deriving
@@ -69,6 +70,9 @@ func readPlanFiles(dir string) (planFiles, error) {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return planFiles{}, fmt.Errorf("read events.jsonl: %w", err)
 	}
+	warnings = append(warnings, recordedPlacementWarnings(state, slices)...)
+	normalizeArtifactPlacement(&state)
+	normalizeArtifactPlacement(&slices)
 	planningSession, artifactWarnings := readPlanningSessionArtifacts(dir)
 	warnings = append(warnings, artifactWarnings...)
 	planningBrief, briefWarnings := readPlanningBriefArtifact(dir)
@@ -109,6 +113,7 @@ func ReadState(planDir string) (State, error) {
 		if err := readJSON(filepath.Join(planDir, "state.json"), &state); err != nil {
 			return state, fmt.Errorf("read state.json: %w", err)
 		}
+		normalizeArtifactPlacement(&state)
 		return state, nil
 	})
 }
@@ -212,11 +217,91 @@ func prepareJSON(path string, value any, changes artifactJSONChanges) ([]byte, e
 	if err != nil {
 		return nil, err
 	}
+	// Only ordinary artifact writes pass here; journal replay installs frozen bytes directly.
+	switch value.(type) {
+	case State, *State, SlicesFile, *SlicesFile:
+		encoded, err = canonicalArtifactPlacementJSON(encoded)
+		if err != nil {
+			return nil, err
+		}
+	}
 	var formatted bytes.Buffer
 	if err := json.Indent(&formatted, encoded, "", "  "); err != nil {
 		return nil, err
 	}
 	return append(formatted.Bytes(), '\n'), nil
+}
+
+// recordedPlacement preserves unknown values so existing refusal paths remain authoritative.
+func recordedPlacement(value string) string {
+	mode, err := configtypes.NormalizeRecordedExecutionMode(value)
+	if err != nil {
+		return value
+	}
+	return mode.String()
+}
+
+func normalizeArtifactPlacement(value any) {
+	switch v := value.(type) {
+	case *State:
+		if v.Workspace != nil {
+			v.Workspace.Strategy = recordedPlacement(v.Workspace.Strategy)
+		}
+	case *SlicesFile:
+		for i := range v.Slices {
+			if start := v.Slices[i].ExecutionStart; start != nil {
+				start.WorkspaceStrategy = recordedPlacement(start.WorkspaceStrategy)
+			}
+		}
+	}
+}
+
+func recordedPlacementWarnings(state State, slices SlicesFile) []string {
+	var warnings []string
+	if state.Workspace != nil && state.Workspace.Strategy == "worktree" {
+		warnings = append(warnings, "state.json workspace.strategy uses legacy worktree; prefer isolated")
+	}
+	for _, slice := range slices.Slices {
+		if slice.ExecutionStart != nil && slice.ExecutionStart.WorkspaceStrategy == "worktree" {
+			warnings = append(warnings, fmt.Sprintf("slices.json slice %s execution_start.workspace_strategy uses legacy worktree; prefer isolated", slice.ID))
+		}
+	}
+	return warnings
+}
+
+func canonicalArtifactPlacementJSON(encoded []byte) ([]byte, error) {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &root); err != nil {
+		return nil, err
+	}
+	normalize := func(raw json.RawMessage, field string) json.RawMessage {
+		var object map[string]json.RawMessage
+		if json.Unmarshal(raw, &object) != nil || object == nil {
+			return raw
+		}
+		var value string
+		if json.Unmarshal(object[field], &value) == nil && recordedPlacement(value) != value {
+			object[field], _ = json.Marshal(recordedPlacement(value))
+		}
+		result, _ := json.Marshal(object)
+		return result
+	}
+	if raw, ok := root["workspace"]; ok {
+		root["workspace"] = normalize(raw, "strategy")
+	}
+	if raw, ok := root["slices"]; ok {
+		var slices []map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &slices); err != nil {
+			return nil, err
+		}
+		for _, slice := range slices {
+			if start, ok := slice["execution_start"]; ok {
+				slice["execution_start"] = normalize(start, "workspace_strategy")
+			}
+		}
+		root["slices"], _ = json.Marshal(slices)
+	}
+	return json.Marshal(root)
 }
 
 func lowerArtifactJSONChanges(encoded []byte, projection artifactJSONChanges) ([]byte, error) {

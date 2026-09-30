@@ -152,12 +152,12 @@ func (a App) repoConfig(ctx context.Context, registry taodata.Registry, args []s
 		name  string
 		value *string
 	}{
-		{"model", &models.Model},
-		{"run-model", &models.RunModel},
-		{"review-model", &models.ReviewModel},
-		{"merge-review-model", &models.MergeReviewModel},
-		{"resolver-model", &models.ResolverModel},
-		{"rework-escalation-model", &models.ReworkEscalationModel},
+		{"model", &models.Base},
+		{"run-model", &models.Run},
+		{"review-model", &models.Review},
+		{"merge-review-model", &models.MergeReview},
+		{"resolver-model", &models.Resolver},
+		{"rework-escalation-model", &models.ReworkEscalation},
 	}
 	for _, model := range modelFlags {
 		if !flagWasProvided(fs, model.name) {

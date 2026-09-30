@@ -198,7 +198,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 			if err != nil {
 				return "", err
 			}
-			defaults.Model = parsed
+			defaults.Base = parsed
 			return parsed, nil
 		},
 	},
@@ -210,7 +210,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 			if err != nil {
 				return "", err
 			}
-			defaults.RunModel = parsed
+			defaults.Run = parsed
 			return parsed, nil
 		},
 	},
@@ -222,7 +222,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 			if err != nil {
 				return "", err
 			}
-			defaults.ReviewModel = parsed
+			defaults.Review = parsed
 			return parsed, nil
 		},
 	},
@@ -234,7 +234,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 			if err != nil {
 				return "", err
 			}
-			defaults.MergeReviewModel = parsed
+			defaults.MergeReview = parsed
 			return parsed, nil
 		},
 	},
@@ -246,7 +246,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 			if err != nil {
 				return "", err
 			}
-			defaults.ResolverModel = parsed
+			defaults.Resolver = parsed
 			return parsed, nil
 		},
 	},
@@ -258,7 +258,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 			if err != nil {
 				return "", err
 			}
-			defaults.ReworkEscalationModel = parsed
+			defaults.ReworkEscalation = parsed
 			return parsed, nil
 		},
 	},

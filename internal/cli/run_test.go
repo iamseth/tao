@@ -304,12 +304,12 @@ func TestRunModelFlagOverridesEveryRole(t *testing.T) {
 		if flagStringValue(fs, "model") != "" {
 			want = "provider/override"
 			patch := inputs.overrides
-			for _, got := range []string{patch.Model, patch.RunModel, patch.ReviewModel, patch.MergeReviewModel, patch.ResolverModel} {
+			for _, got := range []string{patch.Base, patch.Run, patch.Review, patch.MergeReview, patch.Resolver} {
 				if got != want {
 					t.Fatalf("model override patch = %#v", patch)
 				}
 			}
-		} else if inputs.overrides.Model != "" || inputs.overrides.ReviewModel != "" {
+		} else if inputs.overrides.Base != "" || inputs.overrides.Review != "" {
 			t.Fatalf("empty/absent model should not override: %#v", inputs.overrides)
 		}
 		request, err := inputs.defaults.newRunRequestWithRepository(positional[0], (runtimeconfig.RunOptionsPatch{}).WithModelForAllRoles("repo-model"), inputs.overrides)
@@ -338,7 +338,7 @@ func TestRunReworkEscalationModelPrecedence(t *testing.T) {
 			if tt.env != "" {
 				t.Setenv(runtimeconfig.EnvReworkEscalationModel, tt.env)
 			}
-			registered := (taodata.Repo{}).WithModelDefaults(taodata.RepoModelDefaults{ReworkEscalationModel: tt.repository})
+			registered := (taodata.Repo{}).WithModelDefaults(taodata.RepoModelDefaults{ReworkEscalation: tt.repository})
 			args := []string{"--model", "ordinary-model", "plan-a"}
 			if tt.flag != "" {
 				args = append(args, "--rework-escalation-model", tt.flag)
@@ -352,7 +352,7 @@ func TestRunReworkEscalationModelPrecedence(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := inputs.overrides.ReworkEscalationModel; got != tt.flag {
+			if got := inputs.overrides.ReworkEscalation; got != tt.flag {
 				t.Fatalf("escalation override = %q, want %q", got, tt.flag)
 			}
 			request, err := inputs.defaults.newRunRequestWithRepository(positional[0], repositoryRunOptions(registered), inputs.overrides)
@@ -820,8 +820,15 @@ func TestRunPullRequestRejectsInvalidCombinations(t *testing.T) {
 		{name: "current execution mode", args: []string{"--pull-request", "--execution-mode", "current"}, want: "--pull-request requires --execution-mode isolated"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			clearTaoEnv(t)
 			fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
-			app := App{CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
+			statePath := filepath.Join(fixture.dir, "state.json")
+			state := strings.Replace(readText(t, statePath), `"strategy":"current"`, `"strategy":"worktree"`, 1)
+			if err := os.WriteFile(statePath, []byte(state), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			app := App{Out: &out, CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
 				if name != "git" {
 					t.Fatalf("unexpected command %s %v", name, args)
 					return nil
@@ -839,6 +846,15 @@ func TestRunPullRequestRejectsInvalidCombinations(t *testing.T) {
 			err := app.run(context.Background(), plan.NewFileRepository(fixture.root), args)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("expected %q error, got %v", test.want, err)
+			}
+			if test.name == "current execution mode" {
+				want := "Info: requested execution mode current differs from recorded mode isolated; existing placement and safety checks still apply.\n"
+				if strings.Count(out.String(), want) != 1 {
+					t.Fatalf("non-TTY refusal notice = %q", out.String())
+				}
+			}
+			if readText(t, statePath) != state {
+				t.Fatal("refused run rewrote recorded placement")
 			}
 		})
 	}
@@ -1026,7 +1042,7 @@ func TestRunContinueChainsIntoAutoRework(t *testing.T) {
 	if !requests[0].Continue {
 		t.Fatal("first execution lost continue mode")
 	}
-	if requests[1].Continue || requests[1].RestartBlocked || requests[1].RepairVerification {
+	if requests[1].Continue || requests[1].RecoveryMode != (run.RecoveryMode{}) {
 		t.Fatalf("rework execution retained recovery mode: %+v", requests[1])
 	}
 	if !strings.Contains(out.String(), "Plan reopened for rework round 1") {

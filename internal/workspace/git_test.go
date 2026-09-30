@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
 type testRepo struct {
@@ -137,7 +139,7 @@ func TestPrepareCurrentStrategyFallbackRecordsGitMetadata(t *testing.T) {
 		return nil
 	}
 	config := DefaultConfig()
-	config.Strategy = StrategyCurrent
+	config.Strategy = runtimeconfig.ExecutionModeCurrent
 	manager, err := NewManager(Options{RepoRoot: t.TempDir(), Config: config, Runner: runner})
 	if err != nil {
 		t.Fatalf("NewManager failed: %v", err)

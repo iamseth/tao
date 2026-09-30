@@ -1427,6 +1427,15 @@ checkout. Recorded workspace ownership, not a branch naming pattern, determines
 whether Tao may resume or clean work; do not reuse, rename, or delete a branch to
 work around an ownership refusal.
 
+When requested placement differs from recorded placement, `tao run` prints at
+most one informational notice per invocation, including in non-interactive output.
+It names both modes, not an execution outcome: recorded placement and all safety
+checks still apply, and the run may be refused. The notice neither changes the
+request nor grants permission to resume, restart, reverify, or finalize a PR.
+Legacy plans remain readable, but ordinary writes use the current vocabulary;
+downgrading to an older Tao binary afterward is not guaranteed to work. See the
+[artifact contract](plan-format.md) for persistence compatibility.
+
 Use `tao run --pull-request` only for an isolated, automatically committed run.
 Tao requires an approved review for the exact head before push or forge mutation.
 If interrupted, rerun the same command and follow `tao show <plan>` rather than

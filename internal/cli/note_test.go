@@ -561,7 +561,7 @@ func TestNoteRunGeneratesLinksThenUsesNormalRun(t *testing.T) {
 	oldExecutor := executeSinglePlan
 	executeSinglePlan = func(service run.Service, ctx context.Context, request run.Request) error {
 		executeCalls++
-		if request.RepairVerification || request.Reverify {
+		if request.RecoveryMode != (run.RecoveryMode{}) {
 			t.Fatalf("note run must use ordinary automatic policy, got recovery request: %+v", request)
 		}
 		if request.SessionTimeout != 37*time.Minute || request.Models.Base != "" {
@@ -1057,7 +1057,7 @@ func TestNoteRunGenerationUsesRepositoryBaseModel(t *testing.T) {
 			t.Setenv(runtimeconfig.EnvRunModel, "env-run")
 			t.Setenv(runtimeconfig.EnvReviewModel, "env-review")
 			meta.RunDefaults = &taodata.RepoRunDefaults{Models: &taodata.RepoModelDefaults{
-				Model: "repo-base", RunModel: "repo-run", ReviewModel: "repo-review",
+				Base: "repo-base", Run: "repo-run", Review: "repo-review",
 			}}
 			registry := app.registry().(*fakeNoteRegistry)
 			registry.current = meta

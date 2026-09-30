@@ -30,7 +30,7 @@ type PlanRecordFactory func(detail *plan.PlanDetail) (PlanRecord, error)
 // workspace. ExecutionMode is the single user-facing knob: isolated resolves to a
 // dedicated worktree, current resolves to the launch checkout.
 type ExecutionPrepareOptions struct {
-	ExecutionMode string
+	ExecutionMode runtimeconfig.ExecutionMode
 }
 
 type executionWorkspaceManager interface {
@@ -59,22 +59,22 @@ func (p ExecutionPreparer) Prepare(ctx context.Context, detail *plan.PlanDetail,
 	if p.PlanRecordFactory == nil {
 		return "", fmt.Errorf("plan record factory is nil")
 	}
-	strategy := plan.WorkspaceStrategyWorktree
+	strategy := runtimeconfig.ExecutionModeIsolated
 	root := ""
 	if detail.State.Workspace != nil {
 		if detail.State.Workspace.Strategy != "" {
-			strategy = detail.State.Workspace.Strategy
+			strategy = runtimeconfig.ExecutionMode(recordedStrategy(detail.State.Workspace.Strategy))
 		}
 		root = detail.State.Workspace.Root
 	}
 	if options.ExecutionMode != "" {
-		modeStrategy, err := executionModeWorkspaceStrategy(options.ExecutionMode)
+		mode, err := runtimeconfig.ParseExecutionMode(options.ExecutionMode.String())
 		if err != nil {
 			return "", err
 		}
-		strategy = modeStrategy
+		strategy = mode
 	}
-	if strategy != plan.WorkspaceStrategyWorktree && strategy != plan.WorkspaceStrategyCurrent {
+	if strategy != runtimeconfig.ExecutionModeIsolated && strategy != runtimeconfig.ExecutionModeCurrent {
 		return "", fmt.Errorf("unsupported workspace strategy %q", strategy)
 	}
 	config := p.Config
@@ -84,10 +84,10 @@ func (p ExecutionPreparer) Prepare(ctx context.Context, detail *plan.PlanDetail,
 	if root != "" {
 		config.Root = root
 	}
-	if err := guardExecutionContextDrift(detail, strategy, config); err != nil {
+	if err := guardExecutionContextDrift(detail, strategy.String(), config); err != nil {
 		return "", err
 	}
-	if strategy != plan.WorkspaceStrategyWorktree {
+	if strategy != runtimeconfig.ExecutionModeIsolated {
 		return filepath.Abs(detail.State.Repo.Root)
 	}
 	manager, err := p.newManager(Options{RepoRoot: detail.State.Repo.Root, Config: config, Runner: p.runner()})
@@ -122,7 +122,7 @@ func (p ExecutionPreparer) Prepare(ctx context.Context, detail *plan.PlanDetail,
 		return "", err
 	}
 	preparing := plan.WorkspacePreparingRequest{
-		Strategy: config.Strategy, Root: config.Root, Path: metadata.Path, Branch: metadata.Branch,
+		Strategy: config.Strategy.String(), Root: config.Root, Path: metadata.Path, Branch: metadata.Branch,
 		BaseBranch: metadata.BaseBranch, BaseSHA: metadata.BaseSHA, BaseCurrentSHA: metadata.BaseCurrentSHA,
 		BaseStatus: metadata.BaseStatus, HeadSHA: metadata.HeadSHA, RefreshStatus: metadata.RefreshStatus,
 		RebaseStatus: metadata.RebaseStatus, Created: metadata.Created, RecordedAt: p.now(),
@@ -259,21 +259,6 @@ func workspaceReadyRequest(metadata DependencyMetadata, preparedAt time.Time) pl
 	}
 }
 
-// executionModeWorkspaceStrategy maps the user-facing execution mode onto the
-// physical workspace strategy the manager and drift guard operate on: isolated
-// (and the empty default) resolve to a dedicated worktree, current resolves to
-// the launch checkout.
-func executionModeWorkspaceStrategy(mode string) (string, error) {
-	switch runtimeconfig.ExecutionMode(mode) {
-	case "", runtimeconfig.ExecutionModeIsolated:
-		return StrategyWorktree, nil
-	case runtimeconfig.ExecutionModeCurrent:
-		return StrategyCurrent, nil
-	default:
-		return "", fmt.Errorf("unsupported execution mode %q (want isolated or current)", mode)
-	}
-}
-
 func guardExecutionContextDrift(detail *plan.PlanDetail, strategy string, config Config) error {
 	prior := priorExecutionWorkspaceClassification(detail, config)
 	if prior.Strategy == "" || prior.Strategy == strategy {
@@ -315,7 +300,7 @@ func priorExecutionWorkspaceClassification(detail *plan.PlanDetail, config Confi
 		return prior
 	}
 	if detail.State.Workspace != nil && validWorkspaceStrategy(detail.State.Workspace.Strategy) && workspacePrepared(detail.State.Workspace) {
-		return priorExecutionWorkspace{Strategy: detail.State.Workspace.Strategy}
+		return priorExecutionWorkspace{Strategy: recordedStrategy(detail.State.Workspace.Strategy)}
 	}
 	return priorExecutionWorkspace{}
 }
@@ -486,6 +471,7 @@ func PathWithinRoot(root string, value string) bool {
 }
 
 func validWorkspaceStrategy(strategy string) bool {
+	strategy = recordedStrategy(strategy)
 	return strategy == plan.WorkspaceStrategyWorktree || strategy == plan.WorkspaceStrategyCurrent
 }
 

@@ -61,12 +61,12 @@ func (a App) status(ctx context.Context, repo planLister, args []string) error {
 
 func applyRepositoryRunDefaultsToStatus(rows []runtimeconfig.EnvVarStatus, repository runtimeconfig.RunOptionsPatch) []runtimeconfig.EnvVarStatus {
 	values := map[string]string{
-		runtimeconfig.EnvModel:                 repository.Model,
-		runtimeconfig.EnvRunModel:              repository.RunModel,
-		runtimeconfig.EnvReviewModel:           repository.ReviewModel,
-		runtimeconfig.EnvMergeReviewModel:      repository.MergeReviewModel,
-		runtimeconfig.EnvResolverModel:         repository.ResolverModel,
-		runtimeconfig.EnvReworkEscalationModel: repository.ReworkEscalationModel,
+		runtimeconfig.EnvModel:                 repository.Base,
+		runtimeconfig.EnvRunModel:              repository.Run,
+		runtimeconfig.EnvReviewModel:           repository.Review,
+		runtimeconfig.EnvMergeReviewModel:      repository.MergeReview,
+		runtimeconfig.EnvResolverModel:         repository.Resolver,
+		runtimeconfig.EnvReworkEscalationModel: repository.ReworkEscalation,
 	}
 	if repository.PullRequest != nil {
 		values[runtimeconfig.EnvPullRequest] = fmt.Sprintf("%t", *repository.PullRequest)

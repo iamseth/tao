@@ -10,14 +10,19 @@ type AgentKind = runtimeconfig.AgentKind
 
 type ResolvedRunOptions = runtimeconfig.ResolvedRunOptions
 
+// RecoveryMode contains invocation-only recovery entry flags, never defaults.
+type RecoveryMode struct {
+	RestartBlocked     bool
+	RepairVerification bool
+	Reverify           bool
+}
+
 // Request is the run service's input: a plan addressed by Input plus the
 // resolved run options the executor reads. Callers build it from the staged
 // runtimeconfig model (NewConfigFromStages(...).ResolvedOptions()).
 type Request struct {
-	Input              string
-	RestartBlocked     bool
-	RepairVerification bool
-	Reverify           bool
+	Input string
+	RecoveryMode
 	ResolvedRunOptions
 }
 

@@ -285,7 +285,6 @@ func TestExecuteAutomaticVerificationRepair(t *testing.T) {
 			var out bytes.Buffer
 			execution := testRunExecution(ExecutionConfig{
 				ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeIsolated, ReviewEnabled: true, MaxSlices: test.maxSlices},
-				RepairVerification: test.explicit,
 			}, RunDependencies{
 				EventAppender: repo,
 				RootResolver:  ExecutionRootResolverFunc(func(context.Context, *plan.PlanDetail) (string, error) { return root, nil }),
@@ -343,6 +342,7 @@ func TestExecuteAutomaticVerificationRepair(t *testing.T) {
 					return plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove}, nil
 				}),
 			})
+			execution.Request = Request{RecoveryMode: RecoveryMode{RepairVerification: test.explicit}}
 			var pendingRepairID string
 			if test.explicit || test.resume {
 				execution.ExecutionRoot = root

@@ -113,7 +113,7 @@ func TestRepoWithPullRequestDefaultSetsAndClearsExplicitValue(t *testing.T) {
 
 func TestRepoModelDefaultsRoundTripAndRemoval(t *testing.T) {
 	registry := Registry{DataHome: t.TempDir()}
-	models := RepoModelDefaults{Model: "provider/base", RunModel: "run", ReviewModel: "review", MergeReviewModel: "merge", ResolverModel: "resolver", ReworkEscalationModel: "strong"}
+	models := RepoModelDefaults{Base: "provider/base", Run: "run", Review: "review", MergeReview: "merge", Resolver: "resolver", ReworkEscalation: "strong"}
 	value := false
 	repo := (Repo{Schema: RepoSchema, ID: "repo-models", Root: "/repo"}).WithPullRequestDefault(&value).WithModelDefaults(models)
 	if err := registry.WriteRepo(repo); err != nil {
@@ -150,7 +150,7 @@ func TestRepoModelDefaultsRoundTripAndRemoval(t *testing.T) {
 
 func TestRepoModelDefaultsEscalationOnly(t *testing.T) {
 	registry := Registry{DataHome: t.TempDir()}
-	models := RepoModelDefaults{ReworkEscalationModel: "provider/strong"}
+	models := RepoModelDefaults{ReworkEscalation: "provider/strong"}
 	repo := (Repo{Schema: RepoSchema, ID: "escalation-only", Root: "/repo"}).WithModelDefaults(models)
 	if err := registry.WriteRepo(repo); err != nil {
 		t.Fatal(err)
@@ -197,9 +197,9 @@ func TestRepoRunDefaultsSerialization(t *testing.T) {
 		want     string
 	}{
 		{name: "absent", defaults: RepoRunDefaults{}, want: `{}`},
-		{name: "models", defaults: RepoRunDefaults{Models: &RepoModelDefaults{Model: "base", RunModel: "run", ReviewModel: "review", MergeReviewModel: "merge", ResolverModel: "resolver"}}, want: `{"models":{"model":"base","run_model":"run","review_model":"review","merge_review_model":"merge","resolver_model":"resolver"}}`},
-		{name: "one model", defaults: RepoRunDefaults{Models: &RepoModelDefaults{RunModel: "run"}}, want: `{"models":{"run_model":"run"}}`},
-		{name: "escalation", defaults: RepoRunDefaults{Models: &RepoModelDefaults{ReworkEscalationModel: "strong"}}, want: `{"models":{"rework_escalation_model":"strong"}}`},
+		{name: "models", defaults: RepoRunDefaults{Models: &RepoModelDefaults{Base: "base", Run: "run", Review: "review", MergeReview: "merge", Resolver: "resolver"}}, want: `{"models":{"model":"base","run_model":"run","review_model":"review","merge_review_model":"merge","resolver_model":"resolver"}}`},
+		{name: "one model", defaults: RepoRunDefaults{Models: &RepoModelDefaults{Run: "run"}}, want: `{"models":{"run_model":"run"}}`},
+		{name: "escalation", defaults: RepoRunDefaults{Models: &RepoModelDefaults{ReworkEscalation: "strong"}}, want: `{"models":{"rework_escalation_model":"strong"}}`},
 		{name: "true", defaults: RepoRunDefaults{PullRequest: &trueValue}, want: `{"pull_request":true}`},
 		{name: "false", defaults: RepoRunDefaults{PullRequest: &falseValue}, want: `{"pull_request":false}`},
 	}

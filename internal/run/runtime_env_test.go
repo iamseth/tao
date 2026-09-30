@@ -151,7 +151,7 @@ func TestServiceExecuteInvalidBudgetsPreserveVerificationRepair(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			request := Request{Input: planDir, RepairVerification: true, ResolvedRunOptions: ResolvedRunOptions{
+			request := Request{Input: planDir, RecoveryMode: RecoveryMode{RepairVerification: true}, ResolvedRunOptions: ResolvedRunOptions{
 				CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeIsolated,
 			}}
 			if err := CheckRequestCanStart(before, request); err != nil {
@@ -228,10 +228,9 @@ func TestNonSlicePreparationIgnoresInvalidBudgets(t *testing.T) {
 					runtimeconfig.EnvBudgetSliceToolCallsDeprecated: "invalid", runtimeconfig.EnvBudgetPlanCostDeprecated: "invalid",
 				}),
 				ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated, PullRequest: true},
-				Reverify:           reverify,
 			}
 			service := NewService(plan.NewFileRepository(""), io.Discard, Options{})
-			if _, err := service.prepareRunExecution(context.Background(), detail, config); err != nil {
+			if _, err := service.prepareRequestRunExecution(context.Background(), detail, Request{RecoveryMode: RecoveryMode{Reverify: reverify}}, config); err != nil {
 				t.Fatalf("unused budgets blocked non-slice preparation: %v", err)
 			}
 		})

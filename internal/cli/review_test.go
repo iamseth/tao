@@ -275,7 +275,7 @@ func TestReviewRunTriggersFreshReview(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			clearTaoEnv(t)
 			t.Setenv(runtimeconfig.EnvReviewModel, "env-review")
-			registered := taodata.Repo{ID: "repo-a", RunDefaults: &taodata.RepoRunDefaults{Models: &taodata.RepoModelDefaults{Model: "repo-base", ReviewModel: "repo-review"}}}
+			registered := taodata.Repo{ID: "repo-a", RunDefaults: &taodata.RepoRunDefaults{Models: &taodata.RepoModelDefaults{Base: "repo-base", Review: "repo-review"}}}
 			registry := &fakeNoteRegistry{current: registered}
 
 			fixture := newRunPlanFixture(t, plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)

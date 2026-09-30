@@ -5,12 +5,14 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/iamseth/tao/internal/configtypes"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
 const (
-	StrategyWorktree = "worktree"
-	StrategyCurrent  = "current"
+	StrategyWorktree = string(configtypes.ExecutionModeIsolated)
+	StrategyCurrent  = string(configtypes.ExecutionModeCurrent)
 
 	planBranchTemplate = "tao/{plan_id}"
 )
@@ -18,7 +20,7 @@ const (
 // Config defines workspace defaults for future run execution.
 type Config struct {
 	Root     string
-	Strategy string
+	Strategy runtimeconfig.ExecutionMode
 }
 
 // PlanBranchIdentity is the branch Tao expects for a plan. RequireNew is set
@@ -64,16 +66,25 @@ func ResolvePlanBranch(detail *plan.PlanDetail, _ Config) (PlanBranchIdentity, e
 func DefaultConfig() Config {
 	return Config{
 		Root:     ".tao/workspaces",
-		Strategy: StrategyWorktree,
+		Strategy: runtimeconfig.ExecutionModeIsolated,
 	}
+}
+
+func recordedStrategy(value string) string {
+	mode, err := configtypes.NormalizeRecordedExecutionMode(value)
+	if err != nil {
+		return value
+	}
+	return mode.String()
 }
 
 // Validate rejects values Tao cannot execute safely.
 func (c Config) Validate() error {
+	c.Strategy = runtimeconfig.ExecutionMode(recordedStrategy(c.Strategy.String()))
 	if c.Root == "" {
 		return fmt.Errorf("workspace root is required")
 	}
-	if c.Strategy != StrategyWorktree && c.Strategy != StrategyCurrent {
+	if c.Strategy != runtimeconfig.ExecutionModeIsolated && c.Strategy != runtimeconfig.ExecutionModeCurrent {
 		return fmt.Errorf("workspace strategy must be %q or %q", StrategyWorktree, StrategyCurrent)
 	}
 	return nil
