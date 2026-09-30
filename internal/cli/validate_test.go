@@ -12,6 +12,26 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 )
 
+func TestValidateApprovalContractGolden(t *testing.T) {
+	var out bytes.Buffer
+	detail := validatePlanDetail(t.TempDir(), []string{"go version"}, nil)
+	slice := &detail.Slices.Slices[0]
+	slice.Goal = "The user's mGBA check is supplied through this slice's approval."
+	slice.Tasks = []string{"Use the supplied facts.", "Approval must state observer/emulator/version/date/outcome."}
+	slice.Approval = &plan.Approval{Required: true, Approved: true}
+	repo := fakeRepository{details: map[string]*plan.PlanDetail{"example": detail}}
+	err := (App{Out: &out, Err: &out, Repository: func(string) Repository { return repo }}).Run(context.Background(), []string{"validate", "example"})
+	if !errors.Is(err, errPlanValidationFailed) {
+		t.Fatalf("expected validation failure, got %v; output:\n%s", err, out.String())
+	}
+	for _, want := range []string{"error 001-a", "goal", "tasks[1]", "authorization-only", "required_inputs", "operator amendment", "--add-task"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q in output:\n%s", want, out.String())
+		}
+	}
+	assertGolden(t, "testdata/approval_contract_validation.golden", out.Bytes())
+}
+
 func TestValidateUsageAndDispatch(t *testing.T) {
 	var out bytes.Buffer
 	app := App{Out: &out, Err: &out}

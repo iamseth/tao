@@ -1,12 +1,52 @@
 package plan
 
 import (
+	"context"
 	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestValidatePlanVerificationApprovalContractBoundary(t *testing.T) {
+	root := t.TempDir()
+	writeEditPlan(t, root)
+	repo := NewFileRepository(root)
+	detail, err := repo.ResolvePlan(context.Background(), "edit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeWarnings := append([]string(nil), detail.Warnings...)
+	slice := &detail.Slices.Slices[0]
+	slice.Goal = "The user's mGBA check is supplied through this slice's approval."
+	slice.Approval = &Approval{Required: true, Approved: true}
+	slice.Verification.Commands = []string{"go version"}
+	if err := repo.writeSlices(detail.Dir, detail.Slices); err != nil {
+		t.Fatal(err)
+	}
+	// Historical artifacts remain loadable, without new load-time warnings.
+	detail, err = repo.ResolvePlan(context.Background(), "edit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(beforeWarnings, detail.Warnings) {
+		t.Fatalf("load warnings changed: before=%v after=%v", beforeWarnings, detail.Warnings)
+	}
+	result := ValidatePlanVerification(detail)
+	finding := findFindingByCode(result.Findings, "approval_factual_payload")
+	if !result.HasErrors() || finding == nil {
+		t.Fatalf("expected plan-wide approval contract error, got %+v", result.Findings)
+	}
+	if finding.Severity != VerificationFindingError || finding.SliceID != slice.ID || !strings.Contains(finding.Message, "goal") {
+		t.Fatalf("unexpected owned finding: %+v", finding)
+	}
+	selected := ValidateSelectedSliceVerificationAtRoot(detail, root)
+	if selected.HasErrors() || containsFindingCode(selected.Findings, "approval_factual_payload") {
+		t.Fatalf("selected-slice runtime validation changed: %+v", selected.Findings)
+	}
+}
 
 func TestValidatePlanVerificationFindsEverySliceCommand(t *testing.T) {
 	repo := t.TempDir()

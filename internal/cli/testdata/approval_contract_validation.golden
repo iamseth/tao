@@ -1,0 +1,4 @@
+Validation: 20260427-1810-example
+Verification Findings:
+- error 001-a: goal explicitly treats approval as factual evidence; approval is authorization-only. Supply actual contract facts or a concrete required_inputs artifact, or defer executable work until an operator amendment supplies the facts in the contract. Correct the contradictory text; --add-task cannot remove it. Declaring an input alone does not resolve the contradiction.
+- error 001-a: tasks[1] explicitly treats approval as factual evidence; approval is authorization-only. Supply actual contract facts or a concrete required_inputs artifact, or defer executable work until an operator amendment supplies the facts in the contract. Correct the contradictory text; --add-task cannot remove it. Declaring an input alone does not resolve the contradiction.

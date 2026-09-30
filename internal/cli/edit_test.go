@@ -378,6 +378,112 @@ func TestEditAmendAppendsContractChangesToBlockedSlice(t *testing.T) {
 	}
 }
 
+func TestEditAmendApprovalContracts(t *testing.T) {
+	const planID = "20260526-1200-amend"
+	const assertion = "Observations are supplied through approval."
+	const facts = "Observed emulator v2 on 2026-09-30: export includes the header."
+	for _, test := range []struct {
+		name        string
+		field       string
+		replaceGoal bool
+		approved    bool
+		blocked     bool
+		wantField   string
+	}{
+		{name: "reason facts do not repair goal", field: "goal", wantField: "goal"},
+		{name: "approved pending still rejected", field: "goal", approved: true, wantField: "goal"},
+		{name: "replace sole assertion", field: "goal", replaceGoal: true},
+		{name: "appended facts leave context", field: "context", replaceGoal: true, wantField: "context"},
+		{name: "appended facts leave task", field: "tasks", replaceGoal: true, wantField: "tasks[0]"},
+		{name: "appended facts leave approval reason", field: "approval.reason", replaceGoal: true, wantField: "approval.reason"},
+		{name: "another pending slice invalidates preview", field: "other", replaceGoal: true, wantField: "context"},
+		{name: "blocked remains outside detector", field: "context", blocked: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo, detail := amendPlanRepo(t)
+			selected := sliceByID(detail, "001-a")
+			selected.Approval = &plan.Approval{Required: true, Approved: test.approved, Reason: "Authorize export implementation"}
+			switch test.field {
+			case "goal":
+				selected.Goal = assertion
+			case "context":
+				selected.Context = assertion
+			case "tasks":
+				selected.Tasks = []string{assertion}
+			case "approval.reason":
+				selected.Approval.Reason = assertion
+			case "other":
+				other := sliceByID(detail, "002-b")
+				other.Status = plan.StatusPending
+				other.Approval = &plan.Approval{Required: true, Reason: "Authorize export implementation"}
+				other.Context = assertion
+			}
+			if test.blocked {
+				selected.Status = plan.StatusBlocked
+				selected.BlockerNote = "Missing export observation"
+			}
+			before, err := json.Marshal(detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			app := App{Out: &out, Err: io.Discard, Repository: func(string) Repository { return repo }}
+			args := []string{"edit", "amend", planID, "001-a", "--reason-file", writeAmendInput(t, "reason.txt", facts), "--add-task", facts}
+			if test.replaceGoal {
+				args = append(args, "--goal-file", writeAmendInput(t, "goal.txt", facts))
+			}
+			err = app.Run(context.Background(), args)
+			if test.wantField != "" {
+				if err == nil || !strings.Contains(err.Error(), "amended plan verification is invalid") || !strings.Contains(err.Error(), test.wantField+" explicitly treats approval as factual evidence") {
+					t.Fatalf("amend error = %v, want contradiction in %s", err, test.wantField)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			updated, err := repo.GetPlan(context.Background(), planID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.wantField != "" {
+				after, err := json.Marshal(updated)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !bytes.Equal(before, after) || out.Len() != 0 {
+					t.Fatalf("refused preview mutated plan or emitted success: %s; output=%q", after, out.String())
+				}
+				return
+			}
+			amended := sliceByID(updated, "001-a")
+			if amended.Status != selected.Status || amended.BlockerNote != selected.BlockerNote || *amended.Approval != *selected.Approval {
+				t.Fatalf("amend changed lifecycle or authorization: %+v", amended)
+			}
+			if test.replaceGoal && amended.Goal != facts {
+				t.Fatalf("goal = %q", amended.Goal)
+			}
+			if !slices.Contains(amended.Tasks, facts) {
+				t.Fatalf("facts missing from amended tasks: %v", amended.Tasks)
+			}
+			found := false
+			for _, event := range updated.Events {
+				if event.Type == plan.EventTypeSliceAmended && event.SliceID == "001-a" {
+					found = true
+					fields := []string{"tasks"}
+					if test.replaceGoal {
+						fields = []string{"goal", "tasks"}
+					}
+					if event.Reason != facts || !slices.Equal(event.AmendedFields, fields) {
+						t.Fatalf("amend event = %+v", event)
+					}
+				}
+			}
+			if !found {
+				t.Fatal("missing slice_amended event")
+			}
+		})
+	}
+}
+
 func TestEditAmendRefusesWithoutPersisting(t *testing.T) {
 	const planID = "20260526-1200-amend"
 	for _, test := range []struct {

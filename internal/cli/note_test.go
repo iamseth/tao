@@ -257,6 +257,9 @@ func TestNoteArchiveToPlanRejectsInvalidDestinationsBeforeMutation(t *testing.T)
 	if err := os.WriteFile(statePath, []byte(state), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	payloadID := "20260819-1205-approval-payload"
+	payloadDir := writeRunPlan(t, registry.PlansDir(registered), payloadID, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+	addApprovalGate(t, payloadDir, "Observations are supplied through approval.")
 	externalID := "20260819-1204-external"
 	externalDir := writeRunPlan(t, t.TempDir(), externalID, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
 	app.AcquireNotePromotionLock = func(context.Context, string, string, string) (func() error, error) {
@@ -272,6 +275,7 @@ func TestNoteArchiveToPlanRejectsInvalidDestinationsBeforeMutation(t *testing.T)
 		{name: "missing", args: []string{"note", "archive", "--plan", "missing", noteID}, want: "not found"},
 		{name: "ambiguous", args: []string{"note", "archive", "--plan", "ambiguous", noteID}, want: "ambiguous"},
 		{name: "invalid", args: []string{"note", "archive", "--plan", invalidID, noteID}, want: "artifact IDs are missing or inconsistent"},
+		{name: "approval payload", args: []string{"note", "archive", "--plan", payloadID, noteID}, want: "approval.reason explicitly treats approval as factual evidence"},
 		{name: "foreign", args: []string{"note", "archive", "--plan", foreignID, noteID}, want: "does not match registered repository"},
 		{name: "external path", args: []string{"note", "archive", "--plan", externalDir, noteID}, want: "outside repository plans directory"},
 		{name: "blank flag", args: []string{"note", "archive", "--plan=", noteID}, want: "--plan requires"},
@@ -826,6 +830,154 @@ func TestNoteRunGenerationTelemetrySurvivesHandoff(t *testing.T) {
 			}
 			if _, err := os.Stat(filepath.Join(dataHome, "repos", repoMeta.ID, "planning-sessions")); !os.IsNotExist(err) {
 				t.Fatalf("planning sessions unexpectedly persisted: %v", err)
+			}
+		})
+	}
+}
+
+func TestNoteRunGeneratedApprovalContracts(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		invalid  bool
+		approved bool
+	}{
+		{name: "payload cannot promote", invalid: true},
+		{name: "approved payload cannot promote", invalid: true, approved: true},
+		{name: "authorization and evidence promote but still require approval"},
+		{name: "approved authorization and evidence execute", approved: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			clearTaoEnv(t)
+			dataHome := t.TempDir()
+			t.Setenv("TAO_DATA_HOME", dataHome)
+			repoMeta := taodata.Repo{ID: "tao-123", Name: "tao", Root: t.TempDir(), Branch: "main"}
+			if err := taodata.NewRegistry(dataHome).WriteRepo(repoMeta); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(repoMeta.Root, "observations.txt"), []byte("Emulator v2: export includes the header."), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			app, out, _ := noteTestApp(t, strings.NewReader(""), repoMeta)
+			app.CommandRunner = func(_ context.Context, _ string, name string, args []string, stdout, _ io.Writer) error {
+				if name == "git" {
+					writeRunGitOutput(stdout, args)
+				}
+				return nil
+			}
+			if err := app.Run(context.Background(), []string{"note", "create", "implement export"}); err != nil {
+				t.Fatal(err)
+			}
+			noteID := strings.TrimSpace(strings.TrimPrefix(out.String(), "Created note "))
+			before, err := app.noteRepository(repoMeta).Get(context.Background(), noteID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fixture runPlanFixture
+			calls := 0
+			app.ProcessStarter = fakeCLIProcessStarter(t, "generated", func(prompt string) {
+				calls++
+				if calls == 2 {
+					if test.invalid || !test.approved {
+						t.Fatal("execution started without valid approved contract")
+					}
+					stored, err := app.noteRepository(repoMeta).Get(context.Background(), noteID)
+					if err != nil || stored.Status != note.StatusPromoted || stored.Promotion == nil || stored.Promotion.Plan == nil || stored.Promotion.Plan.ID != fixture.id {
+						t.Fatalf("execution before durable promotion: %+v, %v", stored, err)
+					}
+					fixture.write(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
+					return
+				}
+				if calls != 1 {
+					t.Fatalf("unexpected provider call %d", calls)
+				}
+				_, rest, ok := strings.Cut(prompt, "preallocated plan directory: `")
+				if !ok {
+					t.Fatal("generation prompt missing allocation")
+				}
+				dir, _, ok := strings.Cut(rest, "`")
+				if !ok {
+					t.Fatal("unterminated allocation")
+				}
+				fixture = runPlanFixture{root: filepath.Dir(dir), id: filepath.Base(dir), t: t}
+				fixture.write(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+				detail, err := plan.NewFileRepository("").ResolvePlan(context.Background(), dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				detail.State.Repo.Root = repoMeta.Root
+				detail.State.Plan.ChangeType = plan.ChangeTypeFeat
+				detail.State.Plan.Decision = &plan.Decision{
+					Problem: "Missing export", WhyNow: "Evidence available", ExpectedBenefit: "Export works",
+					Readiness: plan.DecisionReadinessReady, SuccessCriteria: []string{"Tests pass"},
+					Disposition: plan.DecisionDispositionReady, DispositionReason: "Bounded work",
+					Priority: plan.Priority{Level: plan.PriorityOverallLevelShould, Impact: plan.PriorityLevelMedium, Urgency: plan.PriorityLevelLow, Effort: plan.PriorityEffortSmall, Risk: plan.PriorityLevelLow, Confidence: plan.PriorityLevelHigh, Rationale: "Small useful change"},
+				}
+				detail.State.Plan.Sequence = &plan.Sequence{Position: 1, Total: 1}
+				slice := &detail.Slices.Slices[0]
+				slice.Approval = &plan.Approval{Required: true, Approved: test.approved, Reason: "Authorize export implementation"}
+				slice.Goal = "Implement export using recorded emulator observations"
+				slice.RequiredInputs = []plan.RequiredInput{{Path: "observations.txt", Kind: plan.RequiredInputFile, Reason: "Recorded export evidence"}}
+				if test.invalid {
+					slice.Context = "Observations are supplied through approval."
+				}
+				found := false
+				for _, finding := range plan.ValidatePlanVerification(detail).Findings {
+					if finding.Code == "approval_factual_payload" && finding.SliceID == "001-a" && finding.Severity == plan.VerificationFindingError {
+						found = true
+					}
+				}
+				if found != test.invalid {
+					t.Fatalf("approval_factual_payload error found=%v, want %v", found, test.invalid)
+				}
+				for name, artifact := range map[string]any{"state.json": detail.State, "slices.json": detail.Slices} {
+					content, err := json.Marshal(artifact)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(dir, name), content, 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			})
+			err = app.Run(context.Background(), []string{"note", "run", "--execution-mode", "current", "--commit-policy", "none", "--no-review", noteID})
+			stored, getErr := app.noteRepository(repoMeta).Get(context.Background(), noteID)
+			if getErr != nil {
+				t.Fatal(getErr)
+			}
+			if test.invalid {
+				if err == nil || !strings.Contains(err.Error(), "context explicitly treats approval as factual evidence") || calls != 1 {
+					t.Fatalf("invalid generation error=%v calls=%d", err, calls)
+				}
+				if !reflect.DeepEqual(stored, before) {
+					t.Fatalf("rejected generation linked or mutated note: %+v", stored)
+				}
+				return
+			}
+			if stored.Status != note.StatusPromoted || stored.Promotion == nil || stored.Promotion.Plan == nil || stored.Promotion.Plan.ID != fixture.id || stored.Promotion.Plan.Mode != "run" {
+				t.Fatalf("valid contract not promoted: %+v", stored)
+			}
+			if test.approved {
+				if err != nil || calls != 2 {
+					t.Fatalf("approved execution error=%v calls=%d", err, calls)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), "tao approve --slice 001-a "+fixture.id) || calls != 1 {
+				t.Fatalf("approval gate error=%v calls=%d", err, calls)
+			}
+			detail, err := plan.NewFileRepository("").ResolvePlan(context.Background(), fixture.dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			started := false
+			for _, event := range detail.Events {
+				if event.Type == plan.EventTypeSliceStarted && event.SliceID == "001-a" {
+					started = true
+					if event.PlanID != fixture.id {
+						t.Fatalf("slice_started event = %+v", event)
+					}
+				}
+			}
+			if started != test.approved {
+				t.Fatalf("slice_started=%v, approved=%v", started, test.approved)
 			}
 		})
 	}

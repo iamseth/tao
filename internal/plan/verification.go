@@ -31,12 +31,13 @@ func (r VerificationValidationResult) HasErrors() bool {
 	return false
 }
 
-// ValidatePlanVerification checks every slice for plan-wide validation commands.
+// ValidatePlanVerification checks every slice's contract and verification commands.
 func ValidatePlanVerification(detail *PlanDetail) VerificationValidationResult {
 	var result VerificationValidationResult
 	analyzer := verificationimpl.NewAnalyzer(detail.State.Repo.Root)
 	allowances := futureFileAllowances(detail, true)
 	for _, slice := range detail.Slices.Slices {
+		result.Findings = append(result.Findings, validateApprovalContract(slice)...)
 		result.Findings = append(result.Findings, validateRequiredInputs(detail, slice, detail.State.Repo.Root, false)...)
 		result.Findings = append(result.Findings, validateSliceVerificationWithAnalyzer(detail.State.Repo.Root, analyzer, slice, allowances[slice.ID])...)
 	}

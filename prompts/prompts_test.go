@@ -895,7 +895,11 @@ func TestPromptsSeparateApprovalFromFactualInputs(t *testing.T) {
 			prompt: SlicePromptTemplate,
 			contains: []string{
 				"Approval is authorization-only; it carries no factual payload",
-				"Reject contracts that say observations or facts are supplied through approval",
+				"Plan-wide validation rejects explicit approval-as-data contracts",
+				"factual keywords alone are not forbidden",
+				"Declared evidence cannot excuse contradictory handoff prose",
+				"--add-task cannot remove contradictions in existing context, tasks, or approval.reason",
+				"--goal-file can replace a contradictory goal when it is the sole offending assertion",
 				"an emulator-observation template in `approval.reason` is not evidence",
 				"Put actual facts in the slice contract or in a concrete artifact declared in `required_inputs`",
 				"defer executable work until an operator amendment supplies the facts",
