@@ -133,6 +133,27 @@ func TestPromptSettingsAndOtherHelpIncludesOptions(t *testing.T) {
 	assertCommandOutputContains(t, "doctor help", []string{"doctor", "--help"}, "actionable prompt and tool problems", "Options:", "--verbose", "-v", "tao doctor --verbose")
 }
 
+func TestCommandHelpRendersSingleDashAliases(t *testing.T) {
+	for _, tt := range []struct {
+		command string
+		alias   string
+	}{
+		{command: "doctor", alias: "v"},
+		{command: "log", alias: "f"},
+	} {
+		t.Run(tt.command, func(t *testing.T) {
+			var out bytes.Buffer
+			app := App{Out: &out, Err: &out}
+			if err := app.Run(context.Background(), []string{tt.command, "--help"}); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(out.String(), "\n  -"+tt.alias+" ") || strings.Contains(out.String(), "\n  --"+tt.alias+" ") {
+				t.Fatalf("expected single-dash alias -%s, got %q", tt.alias, out.String())
+			}
+		})
+	}
+}
+
 func TestEveryRegisteredCommandRendersPerCommandHelp(t *testing.T) {
 	for i := range commandRegistry {
 		metadata := &commandRegistry[i]

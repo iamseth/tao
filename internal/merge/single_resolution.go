@@ -30,6 +30,7 @@ var (
 	ErrSingleResolutionPreflight = errors.New("single-plan conflict resolution could not start safely")
 )
 
+// Authority labels describe the remaining resolver allowance in startup failure diagnostics.
 const (
 	SingleResolutionAuthorityPreserved = "preserved"
 	SingleResolutionAuthorityRearmed   = "rearmed"

@@ -2,7 +2,7 @@
 
 Tao plans are local execution artifacts for agent work. They preserve planning intent, divide work into serial slices, and record progress as slices run.
 
-This document is the artifact contract for Tao contributors and advanced users. For command reference and day-to-day workflow judgment, use the project [`README.md`](../README.md) and [usage guide](usage-guide.md). Maintainers working on persistence and compatibility should follow the [mutation-journal protocol](plan-mutation-journal.md) and [typed clear-vs-preserve design](design/typed-clear-seam.md); those documents explain implementation mechanics while this page defines observable artifact behavior.
+This document is the artifact contract for Tao contributors and advanced users. For command reference and day-to-day workflow judgment, use the project [`README.md`](../README.md) and [usage guide](usage-guide.md). Maintainers working on persistence and compatibility should follow the [mutation-journal protocol](plan-mutation-journal.md), [typed clear-vs-preserve design](design/typed-clear-seam.md), and [single-squash conflict resolution](design/single-squash-resolution.md); those documents explain implementation mechanics while this page defines observable artifact behavior.
 
 ```mermaid
 flowchart LR
@@ -127,7 +127,7 @@ Plan status values:
 | `in_progress` | At least one slice has started or work remains after a completed slice. |
 | `in_review` | All slices are complete and the plan is awaiting a successful review. |
 | `reviewed` | Review completed without requested changes; an approved review may be merged or paired with matching PR metadata. |
-| `changes_requested` | Review completed with requested changes; use `tao rework` or address manually. |
+| `changes_requested` | Review completed with requested changes; an ordinary `tao run` reopens it through automatic rework by default, and `tao rework` is the manual form. |
 | `completed` | Tao's lifecycle is terminal through recorded merge evidence or a qualifying reviewed PR handoff. |
 | `abandoned` | The unfinished plan was intentionally made terminal with a durable reason; this does not assert completion, approval, PR success, or merge integration. |
 | `blocked` | Work cannot continue without a fix, decision, approval, or dependency. |
@@ -160,8 +160,8 @@ Only a current `plan_merged` event in `events.jsonl` proves integration into the
 - Optional `plan.final_verification` records the repository-wide pre-review gate with `command`, absolute `cwd`, `result`, optional `details`, optional `failure_kind`, optional `exit_code`, and `verified_at`. `failure_kind`, when present, is `code`, `tool_missing`, `timeout`, `cancelled`, or `invalid_command`; `exit_code` is the observed process exit code when one is available. Omitting either field remains valid for historical and new artifacts, and each fresh evidence write clears either field it omits rather than preserving stale failure classification. When no repository-owned command is detected, Tao still records `result: skipped` without failure fields rather than inventing a command. A current failed result bound to the exact completed workspace head is projected to consumers as `verification_failed`; this projection never changes the persisted `state.json` status.
 - Optional `plan.review.commit_message` is the untrusted proposal produced by the reviewer of the exact recorded `base..head` diff. It has `subject` and `body` strings; the subject is `<type>(<lowercase-scope>): <lowercase-imperative-summary>`, and the body has non-empty canonical `What:` and `Why:` sections. It must not contain `Tao-*` trailers. New `approve` reviews require a valid proposal; a missing, malformed, oversized, or reserved-trailer proposal downgrades the parsed result to bounded `comment` rather than persisting approval. `changes_requested` and `comment` reviews store `commit_message: null`, explicitly clearing a stale approved proposal. Historical reviews without this field remain readable. Pull-request finalization may replace an unusable historical approval proposal after one proposal-only correction, while preserving its exact review base/head and substantive findings.
 - Optional `plan.finalization_failure` records a bounded post-review failure. `phase` is `proposal_repair` with `review_base` and `review_head`, or `pull_request_finalization` with `branch` and `head_sha`; both forms also carry a machine `category`, UTC `failed_at`, and machine `recovery_action`. The two boundary shapes are mutually exclusive. This evidence drives recovery presentation but grants no authority: live Git plus current review, workspace, intent, and remote identity checks remain required. A matching successful review replacement, PR recording, merge, or reopen clears obsolete evidence; historical plans may omit it.
-- Optional `plan.merge_commit_intent` binds `message`, `plan_id`, `source_head`, `default_branch`, `default_parent`, and `created_at` before a single squash mutates Git. `message` is the exact final validated review (or exceptional generated) proposal plus Tao-owned evidence. Matching retries reuse it without another agent call. Historical intents remain exact recovery authority and are not reformatted. For a default squash conflict it may contain an optional `resolution` object. Resolution phases are `requested`, `resolved`, `committed`, `reviewed`, and `rolled_back`; the object durably carries `conflict_files`, `requested_at`, `outcome`, bounded `summary`, exact `changed_paths`, `content_fingerprint`, exact `commit_message`, `resolved_at`, `integration_head`, `committed_at`, an optional independent `review`, and bounded `rollback_reason`/`rolled_back_at` settlement evidence. The review projection has `status`, `verdict`, bounded `summary` and `findings`, exact `base`/`head`, bounded `agent`, and `reviewed_at`; it does not replace the source plan's `review.md` or `plan.review`. Fields not yet reached are present as their zero values after the optional resolution object is created, and plans without resolution evidence retain their legacy meaning.
-- Single-squash recovery is phase- and boundary-specific. Before writing `requested`, Tao uses a disposable, read-only confined process to validate the executable, ephemeral configuration projection, RPC initialization, selected model, and local credentials without a model request; this does not prove remote credential validity. A preflight failure sends no attributed prompt, writes no resolution phase, and restores the prepared squash so a later explicit invocation can retry. Once written, `requested` is not replayed unless structured `not_transmitted` or explicit rejection evidence proves no prompt was accepted and Tao then restores the exact recorded default/source refs, HEAD, default branch, and clean worktree. An exact compare-and-set clears only that matching provisional resolution and appends bounded `single_merge_resolution_rearmed` diagnostics (`capability`, `prompt_acceptance`, and `failed_at`); the event is history, not authority. Rollback failure, drift, compare-and-set failure, partial transmission, missing response, timeout, post-transmission cancellation, remote authentication rejection, and provider/model execution errors retain `requested` and consume the attempt. `resolved` can settle only when the unstaged path set and content fingerprint match the durable proposal at the recorded default parent. `committed` can recover only the exact Tao-created commit with the recorded parent, full message, source ref, default ref, clean worktree, and integration head. `reviewed` authorizes completion only for a completed `approve` bound to that same parent/head; every other verdict is terminal non-authorization. After verification failure or review non-approval, successful exact-parent restoration advances to `rolled_back` and appends durable diagnostic evidence; that inactive phase permits clearing, source-review replacement, rework reopening, and a fresh intent for a changed source. Drift, ambiguous dirt, protected-ref movement, or incomplete evidence is a refusal, not a new baseline. Neither `--force`, telemetry, nor provider output weakens these predicates; rollback moves default only while the exact recorded boundary still matches.
+- Optional `plan.merge_commit_intent` contains `message`, `plan_id`, `source_head`, `default_branch`, `default_parent`, `created_at`, and optional `resolution`. Historical intents remain exact recovery authority and are not reformatted.
+- Single-squash recovery has `requested`, `resolved`, `committed`, `reviewed`, and `rolled_back` phases. Each phase recovers only its exact recorded boundary. Drift is refusal, not a new baseline; see [single-squash conflict resolution](design/single-squash-resolution.md).
 - A worktree is actively Tao-managed only when canonical repository identity, exact physical `workspace.path`, recorded `workspace.branch`, and non-cleaned workspace metadata all match. Standalone commit context and finalization use this durable ownership tuple rather than branch-name conventions; multiple exact active claims are ambiguous and fail closed. Their recovery hint recommends blocked restart only when the current blocked slice records a complete isolated automatic pre-intent `execution_start` and execution root. Ordinary blockers use continuation, while manual/current-checkout or post-intent boundaries use slice-completion recovery; live Git and baseline checks remain authoritative in the run path. Control checkouts, unrelated worktrees, stale paths, and workspaces with `cleanup_status: done` or lifecycle `cleaned` are not claimed.
 - Placement retains the JSON keys `workspace.strategy` in `state.json` and `execution_start.workspace_strategy` in `slices.json`. Canonical values are `isolated` and `current`. Historical `worktree` reads as `isolated` and produces an advisory validation warning for the raw legacy spelling, including after in-memory normalization. Missing fields retain existing inference rules; invalid non-empty values are not treated as missing or silently accepted. Reads never migrate artifact bytes.
 - Ordinary merge-preserving artifact writes normalize these placement fields to canonical values while preserving unknown fields. Historical append-only events are not rewritten. Frozen intent/journal recovery replays exact historical bytes and messages rather than normalizing recovery authority; spelling compatibility does not relax immutable branch, root, HEAD, parent, or policy checks. New binaries read legacy placement, but older binaries are not guaranteed to understand newly written canonical values: downgrade compatibility is not promised.
@@ -188,6 +188,7 @@ stateDiagram-v2
     in_review --> completed: approve review matches recorded PR
     reviewed --> completed: matching PR recorded or merge completed
     changes_requested --> in_progress: rework opened
+    reviewed --> in_progress: tao rework on a comment review with findings
     planned --> blocked: blocker recorded
     in_progress --> blocked: blocker recorded
     blocked --> in_progress: tao run --continue
@@ -239,42 +240,21 @@ Each slice should include:
 - `depends_on` for serial dependencies.
 - Optional `tags`.
 - `expected_files` to describe the intended scope for planning and commit warnings.
-  For symbol-level contracts, when a later slice calls or references a function, type, method, flag, or subcommand an earlier slice creates, the producer names the exact identifier and signature in one line in its `tasks` and the consumer names the same identifier in its `context` or `tasks`; `depends_on` and `expected_files` remain file-level contracts and Tao does not validate identifiers. When a task renames, moves, re-exports, aliases, or changes the visibility or receiver of an existing identifier, search the repository for its current references and either (a) list every file that must change in `expected_files` and name the call-site edits in `tasks`, or (b) keep the old identifier callable through a compatibility shim in the same package and say so explicitly. A slice must never pair such a change with a clause like "no other file under X changes" unless option (b) is chosen. For Go, a type alias to a type from another package cannot carry methods, so the shim must be a package-level function or the callers must move into the slice.
+  Symbol-level and rename contracts are slicing guidance owned by [`prompts/slice.md`](../prompts/slice.md) and [`AGENTS.md`](../AGENTS.md); Tao validates only file-level contracts.
 - Optional `required_inputs` for concrete repository artifacts that must exist before implementation begins; legacy slices and slices with no prerequisites omit it.
 - Optional `execution_root`, recorded by `tao run` at slice start as the absolute checkout or worktree root used for that run; legacy slices may omit it.
 - Optional `execution_start`, recording the immutable prepared boundary for an automatic slice. `branch` and `head` identify the original Git boundary; `commit_policy` and `workspace_strategy` preserve the effective execution choices (`slice` plus `isolated` for a resumable isolated run; historical `worktree` remains readable). Legacy records may omit the latter fields, which Tao infers only from durable plan/workspace metadata.
 - Optional `commit_intent` written before Git mutation. It contains the completion-input `hash`, `policy`, optional `starting_branch`, `starting_head`, exact final `message`, and `created_at`. For new automatic intents, the hash binds the completion report and message together.
 - Optional `completion` with `outcome` and optional `commit_sha`. Outcomes are `committed`, `no_changes`, and `manual_uncommitted`.
-- `verification.commands`: every slice must include at least one deterministic verification command; select commands from repository-owned guidance where possible. When the repository declares a comprehensive build, test, and lint or static-analysis gate, each slice that changes source or test code must include the repository's lint or static-analysis command for its touched packages (when narrowing is supported), alongside applicable build and test checks. Slices that change rendered output or add an event, counter, or field it includes must list every affected golden or snapshot fixture file in `expected_files`, include a task to update those fixtures, and run each test that compares them with no filter narrower than that test, retaining the whole-package floor for shared-seam work. For docs/config/asset-only slices where no build/test command applies, use a deterministic fallback such as `grep -q`, `test -f`, or `git diff --stat`.
+- `verification.commands`: every slice must include at least one deterministic verification command; select commands from repository-owned guidance where possible. When the repository declares a comprehensive build, test, and lint or static-analysis gate, each slice that changes source or test code must include the repository's lint or static-analysis command for its touched packages (when narrowing is supported), alongside applicable build and test checks. For fixture ownership, follow [AGENTS.md Editing Guidance](../AGENTS.md#editing-guidance). For docs/config/asset-only slices where no build/test command applies, use a deterministic fallback such as `grep -q`, `test -f`, or `git diff --stat`.
 
 ### Observed slice verification
 
-`verification_results` retains its historical `command`, `cwd`, `result`, and
-`details` fields. Optional additions are `source`, one-based `command_index`,
-`original_command`, nullable `exit_code` and `duration_milliseconds`,
-`output_digest`, `output_truncated`, and `failure_kind` (the final-verification
-classification). Absent source stays absent; unknown exits/durations stay absent,
-while measured zero values are emitted. Legacy result JSON, intent hashes, and
-exact messages are not upgraded or reformatted.
+`verification_results` retains its historical `command`, `cwd`, `result`, and `details` fields. Optional additions are `source`, one-based `command_index`, `original_command`, nullable `exit_code` and `duration_milliseconds`, `output_digest`, `output_truncated`, and `failure_kind` (the final-verification classification). Absent source stays absent; unknown exits/durations stay absent, while measured zero values are emitted. Legacy result JSON, intent hashes, and exact messages are not upgraded or reformatted.
 
-Optional slice `verification_attempt` records the latest Tao-observed attempt,
-including failures, without completing a slice or changing lifecycle queues or
-timing. Optional `commit_intent.verification` holds a frozen snapshot for later
-verified completion. Both use `SliceVerificationSnapshot` version 1 with keys
-`version`, `attempt_id`, `execution_root`, `starting_branch`, `starting_head`,
-`worktree_fingerprint`, `declaration_digest`, `runs`, and `recorded_at`. All keys
-inside a present snapshot are emitted. Digests are 64 lowercase, unprefixed
-SHA-256 hex characters; roots and run working directories are absolute.
+Optional slice `verification_attempt` records the latest Tao-observed attempt, including failures, without completing a slice or changing lifecycle queues or timing. Optional `commit_intent.verification` holds a frozen snapshot for later verified completion. Both use `SliceVerificationSnapshot` version 1 with keys `version`, `attempt_id`, `execution_root`, `starting_branch`, `starting_head`, `worktree_fingerprint`, `declaration_digest`, `runs`, and `recorded_at`. All keys inside a present snapshot are emitted. Digests are 64 lowercase, unprefixed SHA-256 hex characters; roots and run working directories are absolute.
 
-New snapshot runs require `source: "tao"`, a positive command index, and a
-`passed` or `failed` result. A pass requires an observed zero exit and no failure
-kind. Producer bounds are 128 bytes for whitespace-free attempt IDs, 4096 bytes
-for each command/path/branch field, 16 KiB for per-run details, and 1024 runs.
-An empty run list can record an interrupted attempt, never prove successful
-coverage. Recording requires the selected in-progress slice, satisfied approval
-and dependencies, and no intent/completion; identical retries are accepted,
-conflicting identities and stale replacements are refused. The completion
-transaction remains responsible for declaration coverage and live Git checks.
+New snapshot runs require `source: "tao"`, a positive command index, and a `passed` or `failed` result. A pass requires an observed zero exit and no failure kind. Producer bounds are 128 bytes for whitespace-free attempt IDs, 4096 bytes for each command/path/branch field, 16 KiB for per-run details, and 1024 runs. An empty run list can record an interrupted attempt, never prove successful coverage. Recording requires the selected in-progress slice, satisfied approval and dependencies, and no intent/completion; identical retries are accepted, conflicting identities and stale replacements are refused. The completion transaction remains responsible for declaration coverage and live Git checks.
 
 `verification_claim_mismatch` is a diagnostic event with optional
 `claimed_result` and `verification_attempt_id`, each bounded to 128 bytes without
@@ -290,39 +270,11 @@ must exist and resolve inside that root, including through symlinks. Agent claim
 never choose commands or cwd. An optional results input is a strict array of
 `command`, `cwd`, `result`, and `details` only; provenance fields are rejected.
 
-Each shell command, including a correction, has a fixed ten-minute timeout and
-shares the implementation session's remaining wall-clock budget. The budget is
-never paused, extended, or replaced. Session timeout `0` leaves the command bound
-active. Signals, owner exit/replacement, and cancellation prevent new intent and
-Git mutation. Completion writers serialize; admission and the execution boundary
-are reloaded and rechecked before mutation. Gates execute **locally, not in a
-sandbox**, and evidence is **not cryptographic attestation** against an agent able
-to edit local artifacts. Final repository verification and its repair cap are
-unchanged.
+Each shell command, including a correction, has a fixed ten-minute timeout and shares the implementation session's remaining wall-clock budget. The budget is never paused, extended, or replaced. Session timeout `0` leaves the command bound active. Signals, owner exit/replacement, and cancellation prevent new intent and Git mutation. Completion writers serialize; admission and the execution boundary are reloaded and rechecked before mutation. Gates execute **locally, not in a sandbox**, and evidence is **not cryptographic attestation** against an agent able to edit local artifacts. Final repository verification and its repair cap are unchanged.
 
-A failed invalid-command attempt may receive one Tao-validated mechanical
-correction: simple ASCII-space-tokenized `go test`, optionally prefixed by
-`cd PATH &&`, in a canonical in-root subdirectory. Exactly one missing target
-must redundantly include that cwd's repository-relative prefix and resolve after
-removing it to an existing in-root Go file or explicit `./` directory target
-(optionally `/...`). No quoting, expansion, shell operators beyond that prefix,
-traversal, ambiguous targets, unknown flags, or test-binary passthrough is accepted.
-Allowed boolean flags are `-race`, `-short`, `-v`, `-failfast`, `-cover`, `-fullpath`,
-`-json`, `-x`, `-work`; value flags are `-run`, `-skip`, `-bench`, `-benchtime`,
-`-count`, `-cpu`, `-parallel`, `-timeout`, `-shuffle`, `-tags`. Both original and
-corrected attempts are recorded, with a shared declaration index and
-`original_command` on the correction. Tool-missing and ordinary code failures
-are not mechanically corrected. Unresolved failures stay pre-intent for
-permitted same-session repair or `slice-blocked`; they grant no new repair budget.
+A failed invalid-command attempt may receive one Tao-validated mechanical correction: simple ASCII-space-tokenized `go test`, optionally prefixed by `cd PATH &&`, in a canonical in-root subdirectory. Exactly one missing target must redundantly include that cwd's repository-relative prefix and resolve after removing it to an existing in-root Go file or explicit `./` directory target (optionally `/...`). No quoting, expansion, shell operators beyond that prefix, traversal, ambiguous targets, unknown flags, or test-binary passthrough is accepted. Allowed boolean flags are `-race`, `-short`, `-v`, `-failfast`, `-cover`, `-fullpath`, `-json`, `-x`, `-work`; value flags are `-run`, `-skip`, `-bench`, `-benchtime`, `-count`, `-cpu`, `-parallel`, `-timeout`, `-shuffle`, `-tags`. Both original and corrected attempts are recorded, with a shared declaration index and `original_command` on the correction. Tool-missing and ordinary code failures are not mechanically corrected. Unresolved failures stay pre-intent for permitted same-session repair or `slice-blocked`; they grant no new repair budget.
 
-Successful coverage is frozen in `commit_intent.verification`. The versioned
-`verified-v1:sha256:` hash binds notes, exact final message, and the entire snapshot.
-It includes the declaration/identity digest and content fingerprint; Tao checks
-branch, parent HEAD, worktree/index, declarations, and admission again after gates.
-A post-intent retry uses only that frozen snapshot and exact parent/message,
-not mutable latest-attempt evidence or new claims, and never reruns gates.
-Historical intent hashes keep their original input decoding and exact messages;
-new transactions cannot enter historical claim-only settlement.
+Successful coverage is frozen in `commit_intent.verification`. The versioned `verified-v1:sha256:` hash binds notes, exact final message, and the entire snapshot. It includes the declaration/identity digest and content fingerprint; Tao checks branch, parent HEAD, worktree/index, declarations, and admission again after gates. A post-intent retry uses only that frozen snapshot and exact parent/message, not mutable latest-attempt evidence or new claims, and never reruns gates. Historical intent hashes keep their original input decoding and exact messages; new transactions cannot enter historical claim-only settlement.
 
 Output retains at most 8 KiB per stdout/stderr stream and 16 KiB of sanitized
 local details per run. `output_digest` hashes the raw bounded tails, each prefixed
@@ -516,9 +468,7 @@ Planning-session capture is no longer supported. If optional legacy planning-ses
 | `planning-session-stats.json` | Legacy Tao-owned planning-session summary, including planning agent when known, session ID, repository root, timestamps, provider/model, usage, cost, and stale-metadata status. |
 | `planning-prompt.md` | Legacy extracted planning prompt text used to create the plan. |
 
-`agent` records the planning runtime when known: `pi` or `claude`. It is audit metadata only; plans remain portable and may be run by either supported agent runtime later. `planning_started_at` records when the `/tao-slice` prompt began. It intentionally lives in `planning-session-stats.json`, not core `state.json` timing. Renderers should round positive canonical planning duration to the nearest second and prefer positive `planning_started_at` duration.
-
-If sidecar metadata appears stale or mismatched, stats should set `capture_suspect` and `capture_suspect_reason`. Stale sidecars must hide all planning metrics, including duration, tokens, messages, cost, model, and tool-call data.
+The legacy fields remain optional compatibility models in `internal/plan/artifact_models.go`, read tolerantly by `internal/plan/artifact_files.go` without making sidecars execution authority.
 
 ## Telemetry Warnings
 
@@ -532,7 +482,7 @@ Agent budget warnings are informational summaries derived from `agent_metrics` e
 | Assistant messages | `80` | `300` |
 | Errored messages | `0` (warn on any) | `0` (warn on any) |
 
-These thresholds apply to output tokens, not total tokens. Corresponding `TAO_BUDGET_SLICE_<METRIC>_WARN` and `TAO_BUDGET_PLAN_<METRIC>_WARN` variables (for example `TAO_BUDGET_SLICE_OUTPUT_TOKENS_WARN`) can override each advisory value, where `<METRIC>` is `OUTPUT_TOKENS`, `COST`, `TOOL_CALLS`, `ASSISTANT_MESSAGES`, or `ERRORED_MESSAGES`. Invalid advisory overrides are rejected by commands that consume them; see the [README budgets section](../README.md#budgets) for defaults, the deprecated alias names, and the [runtime configuration contract](../README.md#configuration).
+These thresholds apply to output tokens, not total tokens. Corresponding `TAO_BUDGET_SLICE_<METRIC>_WARN` and `TAO_BUDGET_PLAN_<METRIC>_WARN` variables (for example `TAO_BUDGET_SLICE_OUTPUT_TOKENS_WARN`) can override each advisory value, where `<METRIC>` is `OUTPUT_TOKENS`, `COST`, `TOOL_CALLS`, `ASSISTANT_MESSAGES`, or `ERRORED_MESSAGES`. Invalid advisory overrides are rejected by commands that consume them; see the [budgets reference](configuration.md#budgets) for defaults, the deprecated alias names, and the [runtime configuration contract](configuration.md).
 
 The opt-in hard caps `TAO_BUDGET_SLICE_OUTPUT_TOKENS_STOP` and `TAO_BUDGET_SLICE_COST_STOP` are separate, disabled by default, and may not be set below their `WARN` values. A crossed hard cap can stop a slice and emit `budget_exceeded`; advisory threshold warnings never change plan lifecycle state or block execution. Renderers should show the metric, threshold, observed value, and slice ID when applicable.
 

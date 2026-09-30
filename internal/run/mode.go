@@ -35,6 +35,8 @@ func (r Request) ForNextRound() Request {
 	return r
 }
 
+// Shared run selectors expose commit policies, execution placement, and agent
+// runtimes to run callers; normalization rejects the legacy plan commit policy.
 const (
 	CommitPolicyPlan  = runtimeconfig.CommitPolicyPlan
 	CommitPolicySlice = runtimeconfig.CommitPolicySlice

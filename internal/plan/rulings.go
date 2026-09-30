@@ -6,6 +6,7 @@ import (
 	"github.com/iamseth/tao/internal/agentinput"
 )
 
+// Ruling limits bound advisory text extracted from agent-written slice notes.
 const (
 	// MaxSliceRulings bounds the number of rulings extracted from slice notes.
 	MaxSliceRulings = 20

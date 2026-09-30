@@ -9,11 +9,16 @@ stable release.
 
 ## [Unreleased]
 
+### Week of 2026-09-28
+
+#### Documentation
+- Condense the README, add a complete `docs/configuration.md` reference with a coverage test, correct `tao ui` help, deduplicate the usage guide, and trim the plan-format reference to its artifact contract.
+
 ### Week of 2026-09-21
 
 #### Added
 - Capture repository-owned backlog notes from the dashboard, using the focused repository or a repository picker.
-- Filter dashboard plans, notes, and sessions by repository, status, and tag; filters persist across refreshes.
+- Filter dashboard plans and notes by repository, status, and tag; filters persist across refreshes.
 - Catch up on recent local changes with `/tao-catch-me-up`, or use the new read-only note-grooming prompt to review a backlog.
 - Scout a remote repository with `tao steal fetch` and a read-only prompt, without executing repository contents or automatically creating notes.
 - Run reproducible note-planning experiments with shadow or randomized routing, then inspect routing cohorts and planner scorecards.

@@ -9,6 +9,7 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 )
 
+// Schema identifiers version persisted merge-batch state and transition records.
 const (
 	BatchStateSchema      = "tao.merge-batch.v1"
 	BatchTransitionSchema = "tao.merge-batch-transition.v1"
@@ -17,6 +18,7 @@ const (
 // BatchStatus is the durable phase of a repository-wide merge transaction.
 type BatchStatus string
 
+// Batch statuses mark durable transaction phases used by merge orchestration and recovery.
 const (
 	BatchStatusPlanned     BatchStatus = "planned"
 	BatchStatusIntegrating BatchStatus = "integrating"
@@ -33,6 +35,7 @@ const (
 // blocked batch can continue.
 type BatchBlockKind string
 
+// Block kinds distinguish resumable pauses from terminal stops in persisted batch state.
 const (
 	BatchBlockKindResumable BatchBlockKind = "resumable"
 	BatchBlockKindTerminal  BatchBlockKind = "terminal"

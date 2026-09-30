@@ -25,6 +25,7 @@ var (
 // grants authority; every other value is bounded diagnostic evidence.
 type SingleReviewOutcome string
 
+// Review outcomes classify the one-shot integration review for single-merge settlement.
 const (
 	SingleReviewOutcomeApprove          SingleReviewOutcome = "approve"
 	SingleReviewOutcomeComment          SingleReviewOutcome = "comment"

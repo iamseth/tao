@@ -91,7 +91,7 @@ Choose **randomized** only when you deliberately want reproducible assignment
 among installed eligible planning runtimes. It changes only the planning runtime:
 execution, review, and merge keep their existing agent settings, including
 `TAO_AGENT`. Interactive `/tao-plan` and `/tao-slice` are not routed. See
-[Configuration](../README.md#configuration) for settings and one-run overrides.
+[Configuration](configuration.md) for settings and one-run overrides.
 Manual overrides are recorded separately and excluded from randomized comparisons.
 
 Shadow ledger failures warn and continue. Randomized routing refuses to allocate
@@ -224,74 +224,31 @@ stale or absent, the existing merge recovery guidance returns.
 
 ## Interactive dashboard: `tao ui`
 
-The plan list's `I/R/E` column shows impact, risk, and effort as single letters (impact and risk L/M/H, effort S/M/L, `-` when unset) and is hidden before SLICES when the terminal is narrow.
+Use `tao ui` for one terminal view of plans and open notes across registered
+repositories, or to launch plan actions without copying IDs. It requires a
+terminal; use `tao monitor --once` for redirected or pasteable output.
 
-Use `tao ui` when you want one terminal view for plans and open notes across
-registered repositories, or want to launch a common plan action without first
-copying an ID. It requires a terminal; use `tao monitor --once` for redirected
-or pasteable output.
-The dashboard and CLI share a palette selected by `TAO_THEME=tokyonight|gruvbox`
-(default: `tokyonight`; invalid names warn in status and use the default).
+The dashboard opens on **Plans**: **NOW** holds plans with immediate actions,
+**NEXT** holds planned work, and **DONE** always shows up to 10 completed or
+abandoned plans. The plan list's `I/R/E` column shows impact/risk (L/M/H) and
+effort (S/M/L), with `-` when unset; it hides before SLICES on narrow terminals.
+The separate **NEXT** action label recommends what to do, not permission to do it.
+Filters and their enabled state persist in `<DataHome>/ui-filters.json` and
+combine with session-only search. See [configuration](configuration.md) for themes.
+Batch merge uses the sole enabled repository filter, otherwise the selected plan's repository.
 
-The dashboard opens on **Plans**. Use `Tab` or the horizontal arrows to move
-among **Plans**, **Notes**, **Settings**, and **Debug**; use `j`/`k` or the
-vertical arrows to select rows. `Page Up` and `Page Down` move by a viewport on
-long pages. `Enter` opens details and `Esc` returns. On Plans and Notes, `f`
-opens the filter menu for repositories and plan statuses. Use `Space`/`Enter` to toggle a selection, `t` to enable or disable
-the whole filter without losing its configuration, `c` to clear all criteria,
-and `Esc` to close the menu. The shared filter and its enabled state persist
-across sessions in `<DataHome>/ui-filters.json` under the Tao data home and
-combine with `/` search, which remains session-only. On either list, `gg` jumps
-to the first visible item and `G` jumps to the last. In plan detail, `Tab` and `Shift+Tab` switch detail
-tabs while left and right open the previous or next visible plan. Notes are grouped by numeric tier,
-with lower tiers first and untiered notes last; their rows show all non-tier tags
-plus both creation age and update recency. On the Notes list, press `n` to
-capture a new note, even when the list is empty or filtered. When the filter is
-enabled with exactly one repository selected, that repository is the destination;
-otherwise, use the repository picker to select a registered repository with
-`Enter` or cancel with `Esc`/`Backspace`. The editor uses `$EDITOR` (or
-`nvim` when unset); write a body and optional tags, then save and quit. A blank
-body cancels without creating a note. Saving preserves filters and selects the
-new note if visible; feedback includes its ID even if hidden or refresh fails.
-On the Notes list or detail view,
-`Ctrl+G` opens the selected note in `$EDITOR` (or `nvim` when unset); edit the
-tag lines and body, then write and quit to persist the changes. Press `p` to
-plan the selected note in a native foreground agent in the same terminal:
-`TAO_AGENT` selects Pi (the default) or Claude (`claude`). Interact normally,
-including native trust/authentication dialogs; Ctrl+C belongs to the agent
-while it runs. Exiting returns to the dashboard with its filters and selection
-preserved. Use the normal later `/tao-slice` workflow to create a plan; existing
-refreshes discover new plans and remove archived notes. Launching or exiting
-alone does not change the note. Unlike detached plan actions, this foreground
-child does not survive dashboard shutdown. Press `c` as the clipboard alternative
-to copy the selected note ID for a separate planning session. Keys
-`0` through `3` replace the selected note's tier tag. Lowercase `d` asks before deleting the
-note; uppercase `D` deletes it immediately. Deletion archives the note and
-removes it from the open Notes list. **Done** is always
-displayed with up to 10 completed or abandoned plans. **Now** contains
-in-progress, blocked, reviewed, and other plans with an immediate action
-such as monitor, approve, or merge. **Next** contains planned work. On Plans, the
-principal actions are run (`r`), approve (`a`), merge one (`m`), and merge the
-repository's approved set (`M`). Batch merge uses the filtered repository only
-when the filter is enabled with exactly one repository selected; otherwise it
-uses the selected row's repository. Confirmations and the underlying commands
-still enforce every normal gate. Settings can change a repository's pull-request
-default, while Debug remains read-only.
+Capture notes and launch note planning from **Notes**. `TAO_AGENT` selects Pi
+(default) or Claude (`claude`) for native foreground planning in the same terminal.
+The agent owns terminal input until exit; returning preserves filters and selection.
+Launching or exiting alone does not change the note; use `/tao-slice` to create
+its plan. Foreground planning ends with dashboard shutdown, unlike detached run,
+approval, and merge actions, which survive exit and still enforce normal gates.
+Check durable state: ordering, heartbeats, and `stalled?`/`crashed?` labels are
+advice or liveness hints, never approval, failure, or merge evidence.
 
-From a plan's Overview, Slices, or Activity tab, press `r` or `R` to run the
-**displayed plan** while keeping the detail page open. Launch feedback appears
-below its header; normal run safeguards still apply. Individual slice pages
-remain read-only: return to the plan detail before running it.
-
-Treat **NEXT**, ordering, heartbeats, and `stalled?`/`crashed?` labels as advice
-or liveness hints, never as approval, failure, or merge evidence. TUI-launched
-run, approval, and merge processes are detached and survive dashboard exit, so
-check durable plan state rather than assuming that exiting or seeing a launch
-label stopped or completed the action.
-
-Run `tao ui --help` for the exact keys, tabs, actions, confirmation behavior,
-and display options. The [README command index](../README.md#command-reference)
-links the non-interactive commands behind those actions.
+The [README command index](../README.md#command-reference) links the underlying
+non-interactive commands. Run `tao ui --help` for exact keys, tabs, actions,
+confirmation behavior, note editing, repository selection, and display options.
 
 ---
 
@@ -538,30 +495,22 @@ context — it slices from the conversation, not from a file you pass it.
 
 ### `/tao-run` and `tao run` — execute slices
 
-Day to day you run **`tao run <plan-id>`** from the CLI. Under the hood the
-`/tao-run` prompt puts the agent in **WORK mode** to implement exactly **one** pending
-slice at a time: select the next slice, honor `depends_on` and approval gates,
-implement only that slice with test-first targeted checks, then call
-`tao slice-complete` for Tao-owned declared gates before intent, commit, and
-completion bookkeeping. No duplicate full gate sequence or results file is
-required. Optional agent results are advisory, not evidence. It stops on blockers and failed verification rather than pushing
-through. Run agents may record single-line `Ruling:` notes instead of blocking
-on small ambiguities already settled by plan intent; genuinely missing or
-contradictory contracts remain blockers.
+Run **`tao run <plan-id>`** day to day. Its `/tao-run` agent implements exactly
+one pending slice per handoff, honoring dependencies and approval, using test-first
+checks, and calling `tao slice-complete` for Tao-owned gates before intent, commit,
+and bookkeeping. Blockers and failed verification stop work. Single-line `Ruling:`
+notes may settle only ambiguities already resolved by plan intent, not missing or
+contradictory contracts.
 
-The run packet lists **Plan-Owned Files** derived by Tao from Git. When a
-declared verification gate fails only in those files, agents make the minimal
-fix in-session and retry `tao slice-complete` before intent, even if an earlier
-slice changed the files. Outside-owned or unresolved failures use `slice-blocked`
-with command/path evidence; they do not grant another repair session. Once intent
-exists, preserve original inputs and recover the exact transaction without edits
-or rerunning gates.
-
-Gates run locally, not sandboxed or cryptographically attested. Each command has
-a fixed ten-minute bound within the unchanged remaining agent-session budget;
-turning off session timeout does not turn off this bound. Tao reports observed
-failures and supported mechanical corrections for diagnosis. Final repository
-verification remains unchanged. See [the evidence contract](plan-format.md#observed-slice-verification).
+Before intent, a gate failure confined to Git-derived **Plan-Owned Files** permits
+minimal in-session repair, including earlier slices' files. Other or unresolved
+failures use `slice-blocked` with command/path evidence, not another repair session.
+After intent, preserve original inputs and recover without edits or rerunning gates.
+Tao owns the declared gates: no duplicate sequence or results file is required,
+and agent claims are advisory. Commands run locally, without sandboxing or attestation,
+with a ten-minute bound inside the remaining session budget even if session timeout
+is disabled. Tao reports failures and supported mechanical corrections; final
+repository verification is unchanged. See [observed verification](plan-format.md#observed-slice-verification).
 
 Tao-owned slice, final, and merge gates override inherited `GOLANGCI_LINT_CACHE`
 with `.tao/cache/golangci-lint` under the actual execution worktree (the integration
@@ -572,11 +521,9 @@ outside this guarantee.
 
 **Choose the run size:**
 
-- `tao run <plan-id>` — normal execution of all pending slices. Choose this when
-  Tao can continue unattended through final verification and review.
-- `tao run --max-slices 1 <plan-id>` — stop after one slice. Choose this when you
-  want to inspect a checkpoint, limit the first handoff, or make a decision
-  before more slices run. The next ordinary `tao run` continues the remainder.
+- `tao run <plan-id>` — execute all pending slices through verification and review.
+- `tao run --max-slices 1 <plan-id>` — inspect one checkpoint or limit the first
+  handoff. The next ordinary run continues the remainder.
 
 **Choose recovery from the durable condition, not from how the failure looked:**
 
@@ -585,29 +532,23 @@ outside this guarantee.
 | An approval-gated pending slice is not approved | `tao approve [--slice ID] <plan-id>`, then `tao run <plan-id>` | Approval satisfies the gate; it is not blocker recovery. |
 | The plan records an ordinary blocker and you have resolved its stated cause | `tao run --continue <plan-id>` | `--continue` explicitly clears blocker lifecycle state. Tao does not infer resolution. |
 | A blocker's fix is a contract change, such as a missing expected file, task, or manual check | `tao edit amend <plan-id> <slice-id> --reason-file FILE [--allow-file PATH] [--add-task TEXT] [--add-manual-check TEXT] [--goal-file FILE]`, then `tao run --continue <plan-id>` | The amendment is journaled with its reason and shown as Operator Amendments; it never changes slice status, clears the blocker note, or bypasses approval, so `--continue` still decides whether the blocker is resolved. |
-| A `plan_owned` blocker has an unchanged worktree | Fix the named paths in the plan worktree, then rerun `tao run --continue <plan-id>` | Tao refuses with `blocker unchanged since <timestamp>; fix required in <paths>` only when structured plan-owned evidence and the recorded head/worktree fingerprint still match. |
+| A `plan_owned` blocker has an unchanged worktree | Fix the named paths in the plan worktree, then rerun `tao run --continue <plan-id>` | Tao refuses with `blocker unchanged since <timestamp>; fix required in <paths>` only when structured plan-owned evidence and the recorded head/worktree fingerprint still match. Changing the fingerprint lifts only this guard; prose-only blockers are unaffected. |
 | A clean isolated automatic slice is blocked on an older execution baseline, and a prerequisite has now produced a strictly newer baseline | `tao run --restart <plan-id>` | `--restart` supersedes that safe blocked boundary and preflights again; it is not a general retry. |
 | An implementation handoff was interrupted before completion | Rerun the same `tao run` command | Tao classifies the recorded workspace, branch, head, policy, intent, and dirt before deciding whether resume is safe. `--continue` and `--restart` do not bypass that check. |
-| Final verification fails with recorded classification `code` after slice execution in an ordinary run | Let automatic repair continue in the same invocation | Eligible failures generate and run repair slices, then rerun the gate, within the fixed lifetime cap of 2 and `--max-slices`. |
-| The plan is already stopped in `verification_failed` with classification `code`, and fewer than two repair slices have ever been generated | `tao run --repair-verification <plan-id>` | This explicit path appends and runs one repair slice for the exact failed gate; it never chains automatic attempts. |
+| Final verification fails with recorded classification `code` after slice execution in an ordinary run | Let automatic repair continue in the same invocation | Eligible failures generate and run repair slices, then rerun the gate, within the fixed lifetime cap of 2. Repairs count toward `--max-slices`; an exhausted invocation budget stops without appending one. `tao note run` shares this policy; reverification, PR recovery, review, and merge never schedule automatic repair. |
+| The plan is already stopped in `verification_failed` with classification `code`, and fewer than two repair slices have ever been generated | `tao run --repair-verification <plan-id>` | This explicit path appends and runs one repair slice for the exact failed gate; it never chains automatic attempts. Plain `tao run` does not repair an already-failed plan. |
 | A code-classified failure remains after two generated repair attempts | Repair and commit the source manually on the same plan branch, then run `tao run --reverify <plan-id>` from a clean worktree | Exhaustion is terminal for generated attempts. Reverification accepts the recorded failed head or a clean same-branch descendant after the manual fix; it does not reset or consult the repair cap. |
 | Final verification is legacy-unclassified, or its recorded external cause (`tool_missing`, `timeout`, `cancelled`, or `invalid_command`) has been resolved | `tao run --reverify <plan-id>` | Tao reruns final verification without a repair slice at the unchanged failed head. |
 
-The repair-attempt count includes every slice with a verification-repair binding,
-including completed attempts, and never resets when failure evidence changes.
-After exhaustion, Tao records the failed command, head, fingerprint, lifetime
-attempt count, and manual-recovery reason as durable stop evidence. Generated
-verification-repair slices are system-owned; `tao edit skip`,
-`tao edit remove`, and `tao edit amend` refuse them so repair history cannot be
-bypassed or erased. `tao edit amend` relaxes or corrects a pending or blocked
-slice's contract without hand-editing `slices.json`: `--allow-file`,
-`--add-task`, and `--add-manual-check` append entries that are not already
-present, `--goal-file` replaces the goal, and the required `--reason-file`
-records why. Tao validates the amended plan in memory before persisting,
-refuses while a run holds the plan lock, and records the amendment on the
-slice and in the event journal.
-`tao insights` shows `verification_repair_stopped` as a signal of exhausted
-repair attempts.
+The lifetime attempt count includes completed repairs and never resets; generated
+repair slices are system-owned and cannot be skipped, removed, or amended. See
+[repair evidence](plan-format.md#final-verification-repair-evidence) for durable
+stop fields (`verification_repair_stopped` also appears in `tao insights`).
+For ordinary pending or blocked slices, `tao edit amend` records a required reason,
+validates before persisting, refuses an active run lock, and journals the change;
+it never clears blockers or bypasses approval. See [slice edits](plan-format.md#state-lifecycle)
+for append/replace semantics. Continue, restart, and explicit verification repair
+are single-shot: later automatic rework rounds in that invocation run as ordinary runs.
 
 **Supply later observations separately from approval.** Approval authorizes a
 choice or overwrite; it does not deliver facts, and approved decisions need no
@@ -660,133 +601,78 @@ outstanding approval gate separately.
 Under `--commit-policy none`, a successful same-head reverification does not by
 itself prove that permitted uncommitted work was committed.
 
-Runtime prerequisites are checked before workspace preparation or agent launch.
-A dependent plan becomes runnable only after each exact same-repository
-prerequisite has current Tao merge evidence that is ancestral to the selected
-baseline; advisory sequence order is not authority.
+Before workspace preparation or launch, every exact same-repository prerequisite
+needs current Tao merge evidence ancestral to the selected baseline; advisory
+sequence order is not authority. Run plans explicitly; independent plans may run
+in separate terminals. Per-plan locks prevent duplicate drivers, not conflicts
+between different plans.
 
-Run each plan explicitly. If two plans are independent, you can launch one
-`tao run <plan-id>` in each of two terminals. A cross-process per-plan lock
-prevents duplicate drivers for the same plan; it does not make overlapping
-changes across different plans conflict-safe.
+In a tall enough TTY, a pinned header shows repository, plan, configuration,
+phase/slice, elapsed time, progress, nearby slices, and session/token/cost metrics
+above `LIVE OUTPUT`. Redirected output stays plain. Use `--no-run-header` or
+`TAO_RUN_HEADER=false` to disable it; [configuration](configuration.md) owns
+boolean defaults and diagnostics. Terminal scroll margins discard older visible
+lines from scrollback; the full `agent-run.log` remains in the plan directory.
 
-In an interactive terminal, `tao run` pins a compact live header above the
-agent log. It combines repository, plan, and run configuration with the active
-slice or phase and elapsed time, a capped progress bar, a titled window of
-nearby slices centered on the current one, and compact session/token/cost
-metrics. A divider and `LIVE OUTPUT` label separate the header from provider
-output. It is TTY-only and requires enough terminal rows; redirected and other
-non-interactive output remains plain. Disable it for one invocation with
-`--no-run-header`, or set `TAO_RUN_HEADER=false` to opt out by default. Unset
-values enable it; invalid values warn and retain that default. See the
-[configuration contract](../README.md#configuration) for the shared boolean
-grammar and diagnostic access.
+**Prefer `tao validate <plan-id>` before running** for whole-plan findings;
+`tao run` preflights only the selected slice.
 
-The pinned region still uses terminal scroll margins rather than an alternate
-screen. Lines that scroll out of that region are therefore dropped from
-terminal scrollback. The complete agent log is still retained as
-`agent-run.log` in the plan directory.
+Execution "done" means completed slices plus persisted repository verification
+and review results. Under default slice policy, the implementing agent proposes
+each checkpoint's scoped Conventional Commit subject and `What:`/`Why:` body;
+Tao validates, adds trusted trailers, persists the message, stages, and commits.
+Invalid proposals stop before intent or Git mutation; only the same active session
+may repair them, with no title fallback or separate message session.
+Broad verification blocks, preferring declared `make verify` over Make/Go fallbacks.
+Review inspects exact `base..HEAD` and is best-effort: recorded failures/timeouts do
+not fail verified runs. Approval leaves a plan `reviewed` for merge, or `completed`
+when recorded PR metadata matches the same non-empty head—not proof of integration.
 
-**Before running, prefer `tao validate <plan-id>`** for whole-plan findings —
-`tao run` only preflights the one slice it's about to execute.
+A changes-requested review triggers automatic rework under ordinary gates:
+generate fix slices, run them, and review again. Stops are checked in this order:
 
-When all slices settle, treat execution "done" as slices complete, a persisted
-repository-wide verification result, and a post-completion review result. With
-the default slice policy, the implementing agent proposes each checkpoint
-message before completion. Tao validates the scoped Conventional Commit subject
-and `What:`/`Why:` body, appends trusted plan/slice trailers, persists the exact
-final message, and alone stages and commits. A malformed proposal stops before
-intent or Git mutation and may be repaired only in that same active session;
-there is no title fallback or separate normal message session. The resulting
-checkpoint commits let review inspect the exact `base..HEAD` diff. Broad
-verification is blocking and uses the repository's declared `make verify` when
-available before narrower Make/Go fallbacks. The review is best-effort: a failed
-or timed-out review session is recorded for you to see, but it does not turn
-verified work into a failed run. Without a qualifying PR, an approved result is
-`reviewed` and ready for `tao merge`; when the same non-empty head also has
-recorded PR metadata, the plan is `completed` as a PR workflow without claiming
-that the host integrated it.
+- **Attempt cap:** five cycles by default; inspect the remaining findings.
+- **Equivalent findings stalled:** consecutive normalized finding sets match;
+  the stop repeats the current blockers.
+- **Plan agent budget warning:** a configured usage threshold was crossed after
+  multiple rounds; inspect the named metric, observed/threshold values, and findings.
 
-When a successful review requests changes, `tao run <plan-id>` automatically
-uses the ordinary rework gates, runs the generated fix slices, and reviews again.
-Before opening another round, Tao can stop for any of these reasons, checked in
-this order:
+Stops preserve the latest review and never approve or merge. Configure the cap
+with `--max-rework-attempts N`; `--auto-rework=false` or `TAO_AUTO_REWORK=false`
+disables the loop, as does disabling review with `--no-review` or `TAO_REVIEW=false`.
+Repeated locations alone do **not** stop new rework. After successful reopening,
+best-effort advisories list normalized locations and rounds: a file-and-line anchor
+in two distinct rounds or a file in three rounds of the current window, not
+necessarily consecutive. These create no durable event or proof of stalled progress.
 
-- **Attempt cap reached:** the run used its bounded rework allowance (five
-  cycles by default). The message tells you to inspect the remaining findings.
-- **Equivalent findings stalled:** consecutive reviews returned the same
-  normalized finding set. The prominent message repeats the current blocking
-  findings.
-- **Plan agent budget warning:** after multiple rework rounds, a configured
-  plan-level usage threshold was crossed. The message names the metric and its
-  observed and threshold values; inspect both the remaining findings and the
-  resource use.
+A later run refuses a fresh budget without prompting and repeats the persisted
+stop reason, including historical anchor-reversal/file-recurrence stops rather
+than converting them to advisories. Address the review first; explicit
+`tao run --rework-restart <plan-id>` preserves history but makes the current round
+a fresh baseline/window. It acknowledges a new bounded budget, never bypasses gates.
 
-These stops gate only the automatic loop: Tao leaves the latest review intact
-and does not approve or merge the plan. Read the heading to identify the kind of
-stop, then use the current findings or budget values
-to decide what needs manual attention. Change the attempt cap with
-`--max-rework-attempts N`; disable the loop with `--auto-rework=false` or
-`TAO_AUTO_REWORK=false`. Disabling review with `--no-review` or
-`TAO_REVIEW=false` also disables automatic rework.
+Start with `tao review <plan-id>` when returning to slice-complete or reviewed
+work: inspect the persisted verdict, summary, findings, and proposal before PR or
+merge. Unlike the `/tao-review` agent prompt, this CLI command reads or runs the
+stored review. Its exact-diff reviewer supplies the merge proposal; Tao validates
+and binds it rather than opening a merge-time message session. Missing, malformed,
+oversized, or reserved-trailer proposals downgrade approval to `comment`, which
+cannot authorize merge but retains findings for ordinary `tao rework`.
+After commits, amendments, or other diff changes, refresh review and proposal with
+`tao review --run <plan-id>`. Use `tao staleness` for pending-work base drift instead.
 
-Repeated locations alone do **not** stop new automatic rework. After a successful
-reopen, Tao may display an advisory listing sorted locations and affected rounds:
-a normalized file-and-line anchor in at least two distinct rounds, or a finding
-file in at least three rounds of the current window, consecutive or not. These
-are location signals, not proof of reversal or stalled progress; rework continues
-under the same bounds and ordinary gates. Advisory output is best-effort and
-creates no durable event.
+Reviewers grade completion needs and user impact: blocker/major findings request
+changes; minor-only findings approve with advisory suggestions retained, even when
+imperative. Mixed reviews put only blockers/majors in JSON, minors in prose.
+Conclusive empty reviews approve; inconclusive ones comment with an explanation,
+never hiding blockers. This is prompt guidance, not parser enforcement or retry
+authority, and approval still requires the validated exact-diff proposal.
 
-After any stop, a later `tao run` refuses to silently grant the plan a fresh
-automatic-rework budget and displays the persisted reason again. Historical
-anchor-reversal and file-recurrence stops, including the older
-consecutive-recurring-files wording, still require explicit restart; Tao preserves
-their evidence rather than converting them to advisories. Inspect and address
-the review first. If you
-deliberately want another bounded budget, rerun that plan directly with
-`tao run --rework-restart <plan-id>`. This preserves historical slices but
-establishes the current round as a fresh baseline, so earlier reviews do not
-count toward the new window. Restart is an explicit acknowledgment, not a bypass
-of the ordinary rework gates, and the refusal never prompts.
-
-The installed `/tao-review` slash command is an agent prompt, while `tao review`
-is the ordinary CLI command that runs or displays Tao's persisted plan review.
-When you return to a slice-complete or reviewed plan, start with
-`tao review <plan-id>`. It reads the persisted review from the data-home plan
-directory, so you can triage the verdict, summary, findings, and approved commit
-proposal before opening a PR or merging. The reviewer already inspecting the
-exact base/head diff supplies that proposal; Tao validates and binds it to the
-review instead of opening a merge-time message session. An approval with a
-missing, malformed, oversized, or reserved-trailer proposal is safely downgraded
-to a non-approving `comment`, so it cannot authorize merge. Such a downgraded
-review keeps its findings and can be reopened with `tao rework` when findings
-remain, or refreshed with `tao review --run` after the head changes. If you make
-follow-up commits, amend the branch, or otherwise change the diff after the
-recorded review, run `tao review --run <plan-id>` to refresh both review and proposal
-against current `HEAD`. Use `tao staleness <plan-id>` for the separate base-commit
-drift check on pending work.
-
-Plan and merge reviewers are instructed to grade findings by completion needs
-and user impact: blocker/major findings request changes, while minor-only
-findings approve with the findings retained. Imperative minor suggestions are
-advisory, not completion requirements. For mixed severities, only blockers/majors
-go into the changes-requested findings array; minor observations stay in prose.
-A conclusive review with no findings approves; an inconclusive review with no
-findings comments and explains the limitation, never hiding known blockers.
-This is prompt guidance, not parser enforcement or new retry authority. Plan
-approval still requires the validated exact-diff proposal described above.
-
-When Tao records who approved an approval gate, it prefers the OS user's display
-name and then login name. `TAO_APPROVED_BY` is only a fallback (ahead of `USER`
-and `USERNAME`), so a status row showing it as an environment override may not
-reflect the approver ultimately recorded.
-
-Run-path agent sessions have a wall-clock hang ceiling so unattended batches do
-not stall forever on one stuck agent process. The default is 20 minutes; set
-`TAO_SESSION_TIMEOUT` to another Go duration such as `45m`, or to `0` to disable
-the ceiling. Interactive planning sessions (`/tao-plan` and `/tao-slice`) are not
-subject to this timeout.
+Approver identity prefers OS display name then login name; `TAO_APPROVED_BY` falls
+back ahead of `USER`/`USERNAME`, so status may not show the eventual approver.
+Run-path sessions default to a 20-minute wall-clock ceiling; `TAO_SESSION_TIMEOUT`
+accepts Go durations or `0` to disable it. Interactive planning is exempt; see
+[configuration](configuration.md) for runtime settings.
 
 #### Choose models for agent sessions
 
@@ -809,7 +695,7 @@ runtime chooses. Defaults are resolved for each invocation, not pinned to a
 plan, so a later invocation can use a different model. The exception is a
 [recorded rework escalation model](#escalate-late-automatic-rework), which stays
 in force for that round's slices. See the
-[README configuration reference](../README.md#configuration) for flags.
+[configuration reference](configuration.md) for flags.
 
 Names are opaque to Tao and passed to `pi --model` or `claude --model`; supplied
 values must be non-empty and whitespace-free. Unset an environment variable
@@ -857,36 +743,8 @@ another direct driver from racing that recovery:
   proven otherwise. Tao will not turn it into a new clean-start baseline or
   attribute it to the interrupted slice.
 
-`tao run --continue` has a different purpose: it explicitly clears lifecycle
-blocker state after you resolve a recorded blocker. Tao does not infer that
-resolution from Git state, blocker prose, or external conditions. For a
-structured plan-owned blocker with a recorded fingerprint, an unchanged head
-and worktree cause refusal before agent handoff; changing the fingerprint lifts
-only that guard, not the other safety checks. Prose-only blockers are unaffected,
-and continue does not override any interrupted-slice boundary check. When a clean automatic
-slice was blocked by a prerequisite and the baseline has since advanced, use
-`tao run --restart` instead; Tao records the superseded boundary and re-runs
-prerequisite and selected-slice preflight before handoff. The `--continue`,
-`--restart`, and `--repair-verification` dispositions are spent once the first
-execution completes, so automatic rework rounds in the same invocation run as
-an ordinary `tao run`. A failed broad final
-gate is not an interrupted implementation slice: follow its recorded
-classification. An ordinary `tao run` performs automatic repair of eligible
-code-classified failures arising after slice execution in that invocation,
-within the fixed two-attempt lifetime cap. Repair slices count toward
-`--max-slices`: if the budget is already consumed when the gate fails, Tao stops
-without appending a repair and surfaces explicit recovery guidance. `tao note run`
-inherits this policy through the same run path.
-
-For a plan already stopped in `verification_failed`, use
-`tao run --repair-verification` while the lifetime budget remains. It runs one
-generated attempt and reverifies, without chaining automatic repair; plain
-`tao run` does not initiate repair of an already-failed plan. After the cap,
-repair and commit the source manually on the same branch, leave the worktree
-clean, and use `tao run --reverify`; Tao accepts a head equal to or descending
-from the recorded failed head. Non-code and unclassified failures do not trigger
-automatic repair: resolve the cause and reverify the unchanged head.
-`--reverify`, PR recovery, review, and merge paths never schedule automatic repair.
+For blockers or final-verification failures rather than interrupted implementation,
+use the durable-condition table above.
 
 ### Decide between automatic and manual rework
 
@@ -938,7 +796,7 @@ Choose a stronger model for late automatic attempts when ordinary rework is
 still eligible but would benefit from different model capability. Set
 `TAO_REWORK_ESCALATION_MODEL` to opt in; without an effective escalation model,
 round events and sessions are unchanged. See the
-[configuration reference](../README.md#configuration) for repository and
+[configuration reference](configuration.md) for repository and
 per-run overrides.
 
 `TAO_REWORK_ESCALATION_FROM_ATTEMPT` defaults to 4: under the default cap of
@@ -1121,105 +979,62 @@ Use it for the solo workflow where the review is the human gate instead of a PR.
   follow-up commits);
 - the plan worktree is clean.
 
-**What it does:** by default Tao checks out the default branch, squash-applies
-the reviewed plan branch, and reuses the approved review's proposal for the one
-commit, adding trusted `Tao-Plan` and `Tao-Source-Head` trailers itself. The
-reviewer already saw the exact base/head diff, so the normal path opens no second
-message session. Historical approved reviews without a proposal remain readable;
-a squash merge generates one proposal on demand from the exact diff before any
-mutation. `--force` also permits this exceptional path when current approved
-proposal evidence is unavailable or invalid. Generation or validation failure
-stops without intent, staging, commit, or title fallback. The plan branch keeps
-its per-slice checkpoint history for review and recovery until managed cleanup
-succeeds. Use `--no-squash` to preserve those commits by rebasing the plan branch
+**What it does:** Tao checks out default, squash-applies the reviewed branch,
+and reuses its approved proposal for one commit with trusted `Tao-Plan` and
+`Tao-Source-Head` trailers, without another message session. Legacy approvals
+without proposals remain readable; they and forced merges lacking usable approval
+may generate one proposal from the exact diff before mutation. Failure stops before
+intent, staging, or commit, never falling back to a title. Checkpoint history stays
+on the source branch until managed cleanup; `--no-squash` preserves it by rebasing
 and fast-forwarding default.
 
-**Single-plan conflict behavior:** an ordinary squash conflict starts exactly
-one configured provider-neutral resolver session in the default worktree while
-the default and source refs remain at their recorded boundaries. These sessions
-use the platform filesystem sandbox; Linux requires an externally installed
-`bwrap` at `/usr/bin/bwrap` or `/bin/bwrap`. `tao doctor` passively checks the
-executable, confinement, ephemeral configuration projection, RPC initialization,
-selected model, and local credential readiness without sending a model request;
-remote credential validity remains unproven. Tao runs that same disposable RPC
-readiness path before recording one-shot `requested` evidence. A readiness
-failure sends no attributed prompt, restores the prepared squash boundary, and
-leaves a later explicit invocation free to try again. Tao treats the
-plan title, source review, changed paths, conflict status, and provider output as
-untrusted. The resolver may edit only; Tao rejects unsafe paths, unresolved
-entries or markers, malformed output, protected-ref or HEAD movement, empty
-edits, and invalid proposals before it stages or commits. Tao then fingerprints
-the exact edits, persists intent, creates the resolution commit itself, runs the
-configured verification gate, and asks a separate fresh session to review the
-exact parent/head integration. Only independent `approve` authorizes merge
-evidence and cleanup. Tao never retries automatically. After `requested`, only
-structured `not_transmitted` or explicit prompt-rejection evidence can rearm a
-later explicit `tao merge`, and only after the exact default/source refs, HEAD,
-branch, and clean worktree are restored and the matching request is cleared by
-compare-and-set. Accepted or unknown delivery, partial writes, missing responses,
-timeouts, post-transmission cancellation, remote authentication rejection,
-provider/model execution errors, rollback failure, or concurrent drift consume
-the one-shot authority and retain manual recovery behavior.
+**Single-plan conflict behavior:** an ordinary squash conflict runs one confined
+resolver session in the default worktree. Tao alone validates the edits and
+proposal, commits, verifies, and asks a fresh reviewer to review the exact
+integration; only `approve` authorizes merge. A failed attempt restores the
+default boundary when it still matches, never overwriting drift. Tao never
+retries automatically; a later explicit `tao merge` may retry the attempt only
+when Tao reports it was rearmed. See the [resolution contract](plan-format.md#state-lifecycle)
+for phases, readiness checks, and rearm predicates.
 
-`--force` does not bypass resolver validation or independent review.
-`--no-verify` skips only command verification; structural validation and exact
-independent review remain required. A failed attempt restores the recorded
-default boundary when it still matches and otherwise refuses rollback rather
-than overwriting drift. Reconcile findings or drift on the plan branch and its
-source review; do not use `tao merge --all` as a repair path for a failed
-single-plan transaction.
+`--force` does not bypass resolver validation or independent review; `--no-verify`
+skips only command verification. Use `tao doctor` to check local resolver readiness
+without a model request; remote credential validity remains unproven. Linux
+confinement requires external `bwrap` at `/usr/bin/bwrap` or `/bin/bwrap`.
+Reconcile findings or drift on the plan branch and refresh its source review;
+do not use `tao merge --all` to repair a failed single-plan transaction.
 
 `--no-squash` remains different: rebase or fast-forward conflicts abort, print
 the conflicted files, and require manual resolution on the plan branch followed
 by a refreshed review when content changes. It never invokes this squash
 resolver/reviewer lifecycle.
 
-**Verification and cleanup:** after integration, Tao prefers a repository's
-declared `make verify` target. Without one, it uses declared Make `build` and/or
-`test` targets, or native `go build ./... && go test ./...` for a Go module.
-Make is not required: Tao invokes it only when the repository declares a
-recognized target, and skips automatic verification when no supported gate is
-detected. `--verify-command CMD` overrides detection for one merge;
-`TAO_MERGE_VERIFY_COMMAND` provides the environment override. Leaving the
-variable unset uses build-system detection, while setting it to an empty string
-disables merge verification. If verification fails, Tao resets default to the
-pre-merge SHA before cleanup. If it passes, Tao
-records the merged default SHA, marks the plan `completed`, and delegates
-worktree/branch removal to managed cleanup. For Tao-created squashes, that
-recorded evidence lets cleanup safely remove the now non-ancestral source branch.
+**Verification and cleanup:** Tao prefers declared `make verify`, then declared
+Make `build`/`test`, then `go build ./... && go test ./...` for Go modules. It invokes
+Make only for recognized targets and skips verification if no supported gate exists.
+Override detection with `--verify-command CMD` or `TAO_MERGE_VERIFY_COMMAND`;
+unset uses detection, empty disables verification. Failure resets default to its
+pre-merge SHA before cleanup; success records the merged SHA, marks `completed`,
+and delegates worktree/branch removal to managed cleanup. Recorded Tao squash
+evidence permits cleanup of the intentionally non-ancestral source branch.
 
-Repository owners who use this convention should make `verify` the comprehensive
-gate for an integrated change, composing the project's relevant build, test,
-lint, static-analysis, and dependency-policy checks. Keep narrower commands for
-ordinary implementation feedback. For gate parity with that declared gate, each
-slice that changes source or test code should carry the lint or static-analysis
-check for its touched packages (when narrowing is supported), alongside applicable
-build and test checks, so the comprehensive gate is not first exercised by the
-last slice. Repositories using another build system can
-keep their native workflow and set an explicit merge verification override;
-Tao does not infer package-manager or other build-system commands.
+Make `verify` comprehensive: applicable build, test, lint, static analysis, and
+dependency-policy checks. Use narrower feedback during implementation, including
+touched-package lint/static analysis for source/test slices alongside build/tests,
+so the final gate is not their first check. Other build systems need an explicit
+merge verification override; Tao does not infer their or package-manager commands.
 
-If a PR or manual `git merge` already integrated the plan and you explicitly
-want Tao to persist actual integration evidence, you may run `tao merge <plan>`.
-A qualifying PR plan is already lifecycle-complete, so this is optional evidence
-recording rather than a completion workaround. Tao checks the plan branch,
-review head, PR head SHA, and workspace head SHA against the default branch.
-When any is already an ancestor of default, Tao skips rebase/fast-forward,
-records `plan_merged`, retains or marks the plan `completed`, and attempts safe
-cleanup. A plan whose branch is the default branch itself
-(execution-mode current) is never auto-detected this way — ancestry against
-default cannot distinguish the plan's work from unrelated commits — so record
-such plans explicitly with `--record-only --force` after verifying the changes
-landed. A recorded head snapshot only counts while it still
-matches the live plan branch tip: if you added follow-up commits after the
-external merge, the snapshot is stale and Tao merges the full branch through
-the normal path instead. Rerunning `tao merge` on an already-recorded plan
-retries any cleanup that previously failed; a branch with nothing left to clean
-counts as success. For squash merges, cherry-picks, or other integrations where
-ancestry cannot prove the merge, use `tao merge --record-only --force <plan>`
-only after you have manually verified the default branch contains the intended
-changes — and because ancestry cannot prove those merges, a later cleanup retry
-for such a branch also needs `--force` to remove it.
+After an external PR/manual merge, optionally run `tao merge <plan>` to record
+integration, not to complete an already-completed PR workflow. If the plan branch,
+review head, PR head, or workspace head is ancestral to default, Tao skips integration,
+records `plan_merged`, retains or marks `completed`, and attempts safe cleanup.
+Snapshots count only while matching the live plan tip; follow-up commits require
+the normal full-branch merge. Default-branch plans are never auto-detected this way:
+ancestry cannot distinguish their changes from unrelated work. For those plans or
+squashes/cherry-picks whose ancestry cannot prove integration, manually verify the
+intended changes landed before using `tao merge --record-only --force <plan>`.
+Cleanup retries for such non-ancestral branches also require `--force`.
+Rerunning an already-recorded merge retries cleanup; nothing left to clean is success.
 
 **Restarting a stale single-plan intent:** when `tao show` or a merge refusal
 reports that an unresolved intent is stale because default advanced cleanly, run
@@ -1230,14 +1045,11 @@ merge. This is distinct from `tao merge --all --restart`: batch restart removes
 only batch-owned pre-landing recovery state, branch, and worktree so the batch
 can start again; it does not clear any source plan's single-plan intent.
 
-**Flags and limits:** `--record-only` records an already external merge without
-integrating. `--no-squash` preserves checkpoint commits with rebase plus
-fast-forward and keeps conflict resolution manual. `--no-verify` skips the
-post-merge command gate, including explicit flag or environment overrides, but
-not structural conflict checks or the independent exact-integration review.
-`--force` bypasses approval, review-base, review-head, and dirty-worktree
-pre-merge gates and is passed to managed cleanup; it cannot bypass automatic
-resolution safety or turn any independent non-approval into authorization.
+**Flags and limits:** `--no-verify` skips even explicit flag/environment command
+gates, never structural checks or exact-integration review. `--force` bypasses
+approval, review-base/head, and dirty-worktree pre-merge gates and reaches managed
+cleanup; it cannot bypass resolution safety or authorize a non-approved integration.
+See `tao merge --help` for the full flag reference.
 
 ### `tao merge --all` — atomically integrate the approved set
 
@@ -1429,8 +1241,8 @@ flag in sequence:
 tao approve <plan-id>                  # approval gate, then run normally
 tao run --continue <plan-id>           # ordinary blocker whose cause is cleared
 tao run --restart <plan-id>            # safe blocked slice on a newer baseline
-tao run --repair-verification <plan-id> # stopped code failure; one attempt if budget remains
-tao run --reverify <plan-id>           # resolved external cause or manual fix after the cap
+tao run --repair-verification <plan-id>
+tao run --reverify <plan-id>
 ```
 
 A `changes_requested` review normally triggers bounded automatic rework. If you
@@ -1500,6 +1312,12 @@ merge; only recorded merge evidence proves default-branch integration. Exact PR
 body, title, labeling, assignment, and option behavior belongs in
 `tao run --help` and the README command reference.
 
+When unfinished work is intentionally no longer needed, use
+`tao abandon --reason "superseded by a different approach" <plan>` to record a
+terminal outcome and its reason. Abandonment preserves plan and workspace
+evidence and never cleans branches or worktrees. Tao refuses it during an
+unsettled lifecycle transaction that still needs recovery.
+
 ### Workspaces
 
 Linked Git worktrees share the main checkout's registered repository identity,
@@ -1565,7 +1383,7 @@ An invalid budget *configuration* is different from exceeding a valid advisory
 threshold: commands that consume it reject the override by name instead of
 silently retaining defaults or disabling a hard cap. Use `tao status` or TUI
 Settings/Debug to inspect it, then correct or unset it. Help and diagnostics
-remain usable; see the [configuration contract](../README.md#configuration).
+remain usable; see the [configuration contract](configuration.md).
 
 ### Data and privacy
 
@@ -1577,6 +1395,6 @@ never blocks a run, and Tao does not currently write agent transcript sidecars.
 The [plan-format contract](plan-format.md#plan-directory) is the authority for
 exact plan files, local-only runtime artifacts, events, and legacy readability.
 Use `tao status` for resolved runtime settings and the
-[README configuration section](../README.md#configuration) for supported
+[configuration reference](configuration.md) for supported
 configuration; provider tuning never replaces Tao's durable plan and Git
 recovery checks.

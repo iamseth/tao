@@ -9,12 +9,9 @@ What does this change do, and why?
 
 ## Testing
 
-Run these before opening the PR (see [CONTRIBUTING.md](../CONTRIBUTING.md)):
+Run this before opening the PR (see [CONTRIBUTING.md](../CONTRIBUTING.md)):
 
-- [ ] `make build`
-- [ ] `make build-targets`
-- [ ] `make lint`
-- [ ] `make test`
+- [ ] `make verify`
 
 Note any tests you added or anything you could not verify.
 

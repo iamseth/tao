@@ -1,6 +1,6 @@
 # Tao Pi Extension
 
-Repo-local [Pi](https://github.com/iamseth/pi) extension that hosts Tao's fast
+Repo-local [Pi](https://github.com/badlogic/pi-mono) extension that hosts Tao's fast
 standalone `/tao-commit` command and context-aware reply composer. It does not
 register unprefixed aliases. The commit command is a thin proposal wrapper
 around the Go-owned `tao commit` boundary:

@@ -31,6 +31,7 @@ type BatchDrift struct {
 // safe recovery path for a failed resume.
 type BatchRestartVerdict string
 
+// Restart verdicts summarize recovery planning in batch resume diagnostics.
 const (
 	BatchRestartVerdictRestartable    BatchRestartVerdict = "restartable"
 	BatchRestartVerdictNotRestartable BatchRestartVerdict = "not-restartable"

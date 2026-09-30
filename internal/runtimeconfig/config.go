@@ -33,6 +33,7 @@ type AgentKind string
 
 type ModelRole = configtypes.ModelRole
 
+// Model roles select operation-specific overrides during runtime model resolution.
 const (
 	ModelRoleDefault     = configtypes.ModelRoleDefault
 	ModelRoleRun         = configtypes.ModelRoleRun
@@ -88,6 +89,8 @@ type ResolvedRunOptions struct {
 	Models         ModelSelection
 }
 
+// Run option values and built-in limits supply normalization defaults and accepted
+// selectors; the legacy plan commit policy is retained for rejection diagnostics.
 const (
 	// DefaultMaxReworkAttempts is the number of automatic rework cycles allowed
 	// after the initial direct run.

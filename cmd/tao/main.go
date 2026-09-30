@@ -1,3 +1,5 @@
+// Command tao is the CLI entry point. It delegates to internal/cli and owns no
+// workflow logic.
 package main
 
 import (

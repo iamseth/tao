@@ -1,4 +1,3 @@
-// Package planreport builds share-safe projections and Markdown reports from plan data.
 package planreport
 
 import (

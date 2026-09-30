@@ -84,8 +84,8 @@ Then run the **Release** workflow manually against `main`. Download the
 
 ## Prepare release content
 
-Choose the next immutable version. The first beta is `v0.1.0-beta.1`; later beta
-fixes increment the beta number, and the first stable release remains `v0.1.0`.
+Choose the next immutable version. The first beta was `v0.1.0-beta.1`; later betas
+increment the beta number, and the first stable release is `v0.1.0`.
 
 Before tagging:
 

@@ -13,6 +13,7 @@ import (
 // single-plan merge intent.
 type SingleMergeIntentPhase string
 
+// Intent phases classify durable single-merge evidence for recovery planning.
 const (
 	SingleMergeIntentPhaseUnresolved                 SingleMergeIntentPhase = "unresolved"
 	SingleMergeIntentPhaseRequestedPreUsableProvider SingleMergeIntentPhase = "requested_pre_usable_provider"
@@ -27,6 +28,7 @@ const (
 // action for a durable single-plan merge intent.
 type SingleMergeIntentRecoveryVerdict string
 
+// Recovery verdicts identify safe action classes after intent and live Git boundary checks.
 const (
 	SingleMergeIntentRecoveryRestartable              SingleMergeIntentRecoveryVerdict = "restartable"
 	SingleMergeIntentRecoveryRebaseAndReviewRequired  SingleMergeIntentRecoveryVerdict = "rebase-and-review-required"

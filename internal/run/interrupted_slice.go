@@ -17,6 +17,7 @@ import (
 // provider results and event telemetry.
 type InterruptedSliceDisposition string
 
+// Interrupted-slice dispositions guide execution admission from durable and live boundary evidence.
 const (
 	InterruptedSliceNewStart           InterruptedSliceDisposition = "new_start"
 	InterruptedSliceBlockedContinue    InterruptedSliceDisposition = "blocked_continue"

@@ -1,4 +1,3 @@
-// Package commit owns Tao's validated commit-message and commit-safety contract.
 package commit
 
 import (

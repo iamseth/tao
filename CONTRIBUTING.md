@@ -14,15 +14,12 @@ reference material across documents.
 
 ## Build, test, and lint
 
-Use the [Makefile](Makefile) — run `make help` to list the targets. The common
-ones are:
+Use the [Makefile](Makefile) — run `make help` to list the targets.
 
-- `make build` — compile the binary.
-- `make build-targets` — cross-build and vet all four release targets.
-- `make test` — run the test suite.
-- `make lint` — run the linters.
-
-Run `make build`, `make build-targets`, `make lint`, and `make test` before opening a pull request.
+Run `make verify` before opening a pull request. This canonical gate composes
+`build`, `test`, `lint`, `verify-no-deps`, and `build-targets` (cross-build and vet
+all four release targets). The separate `make lint-darwin` gate runs only in
+Linux CI to cover darwin-gated files; native macOS lint already covers them.
 
 ## TUI preview workflow
 

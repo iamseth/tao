@@ -41,6 +41,7 @@ type InvocationStatusReporter interface {
 	TrackInvocation(status string, invocation StatusInvocation, fn func(PhaseReporter) error) error
 }
 
+// Observable run phases label best-effort status reports without granting lifecycle authority.
 const (
 	PhaseWaitingForOwnership = runstatus.PhaseWaitingForOwnership
 	PhasePreparingExecution  = runstatus.PhasePreparingExecution

@@ -2,6 +2,7 @@ package plan
 
 import "time"
 
+// Artifact filenames locate plan narratives, reviews, and legacy planning captures in plan storage.
 const (
 	PlanningSessionExportFile = "planning-session.json"
 	PlanningSessionStatsFile  = "planning-session-stats.json"
@@ -90,6 +91,7 @@ type SliceCompletionOutcome struct {
 	CommitSHA string `json:"commit_sha,omitempty"`
 }
 
+// Completion outcomes record how slice work was settled in slices.json.
 const (
 	SliceCompletionCommitted         = "committed"
 	SliceCompletionNoChanges         = "no_changes"
@@ -106,6 +108,7 @@ type SliceTiming struct {
 	DurationSeconds *int64     `json:"duration_seconds"`
 }
 
+// Input kinds tell slice preflight which filesystem objects required inputs must name.
 const (
 	RequiredInputFile      = "file"
 	RequiredInputDirectory = "directory"

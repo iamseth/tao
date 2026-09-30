@@ -6,6 +6,7 @@ import (
 	"time"
 )
 
+// Repair slice naming and the lifetime attempt cap bound automatic final-verification repair.
 const (
 	VerificationRepairSlicePrefix = "vr01-final-verification-"
 	VerificationRepairAttemptCap  = 2

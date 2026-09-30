@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 )
 
+// Snapshot identity and size limits govern newly produced Tao-observed slice verification evidence.
 const (
 	SliceVerificationSnapshotVersion = 1
 	VerificationSourceTao            = "tao"

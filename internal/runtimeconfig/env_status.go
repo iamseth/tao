@@ -11,6 +11,7 @@ import (
 	"github.com/iamseth/tao/internal/theme"
 )
 
+// Environment keys name runtime settings and compatibility aliases read by the settings table.
 const (
 	EnvCommitPolicy                     = "TAO_COMMIT_POLICY"
 	EnvExecutionMode                    = "TAO_EXECUTION_MODE"

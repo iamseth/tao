@@ -31,6 +31,7 @@ type ExecutionBoundaryLiveFacts struct {
 // completed before ordinary execution may proceed.
 type ExecutionBoundaryRepairRequirement string
 
+// Repair requirements tell execution admission which durable boundary must settle before work proceeds.
 const (
 	ExecutionBoundaryRepairNone             ExecutionBoundaryRepairRequirement = "none"
 	ExecutionBoundaryRepairSliceStart       ExecutionBoundaryRepairRequirement = "slice_start"

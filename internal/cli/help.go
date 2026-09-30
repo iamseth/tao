@@ -138,15 +138,19 @@ func commandHelpOptionLines(metadata *commandMetadata) []string {
 	if len(flags) == 0 {
 		return nil
 	}
+	names := make([]string, len(flags))
 	nameWidth := 0
-	for _, fl := range flags {
-		if len(fl.Name)+2 > nameWidth {
-			nameWidth = len(fl.Name) + 2
+	for i, fl := range flags {
+		prefix := "--"
+		if len(fl.Name) == 1 {
+			prefix = "-"
 		}
+		names[i] = prefix + fl.Name
+		nameWidth = max(nameWidth, len(names[i]))
 	}
 	lines := make([]string, 0, len(flags))
-	for _, fl := range flags {
-		lines = append(lines, "  "+cells.Pad("--"+fl.Name, nameWidth+2)+commandHelpFlagUsage(fl))
+	for i, fl := range flags {
+		lines = append(lines, "  "+cells.Pad(names[i], nameWidth+2)+commandHelpFlagUsage(fl))
 	}
 	return lines
 }

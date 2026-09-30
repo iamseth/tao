@@ -14,6 +14,7 @@ const maxPrerequisitePlans = 128
 
 type PrerequisiteStatus string
 
+// Prerequisite statuses classify dependency and merge evidence for the runtime prerequisite gate.
 const (
 	PrerequisiteSatisfied   PrerequisiteStatus = "satisfied"
 	PrerequisiteMissing     PrerequisiteStatus = "missing"

@@ -5,6 +5,7 @@ import "hash/fnv"
 // Role identifies a semantic palette slot.
 type Role uint8
 
+// Semantic color roles select shared palette slots for CLI and TUI rendering.
 const (
 	RoleAccent Role = iota
 	RoleWarn

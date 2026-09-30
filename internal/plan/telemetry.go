@@ -142,6 +142,7 @@ func cloneBudgetLimit[T int64 | float64](limit BudgetLimit[T]) BudgetLimit[T] {
 // AgentRole is assigned by trusted operation context, never inferred from text.
 type AgentRole string
 
+// Agent roles attribute telemetry to trusted operation contexts for metrics summaries.
 const (
 	AgentRolePlanning    AgentRole = "planning"
 	AgentRoleExecution   AgentRole = "execution"
@@ -165,6 +166,7 @@ func (r AgentRole) Normalized() AgentRole {
 // AgentMetricsAvailability describes measurement coverage, not session success.
 type AgentMetricsAvailability string
 
+// Availability levels describe measurement coverage in agent metrics and their summaries.
 const (
 	AgentMetricsReported    AgentMetricsAvailability = "reported"
 	AgentMetricsPartial     AgentMetricsAvailability = "partial"

@@ -18,6 +18,7 @@ const (
 // metadata or from one of the bounded legacy prose fallbacks.
 type DecisionOverviewSource string
 
+// Overview sources identify structured or legacy context used by list and monitor projections.
 const (
 	DecisionOverviewSourceStructured    DecisionOverviewSource = "structured"
 	DecisionOverviewSourcePlanningBrief DecisionOverviewSource = "legacy_planning_brief"

@@ -280,6 +280,10 @@ func cacheCheckingMergeRunner(t *testing.T, wantRoot string) commandrunner.Runne
 		if root != wantRoot {
 			t.Fatalf("gate root = %q, want %q", root, wantRoot)
 		}
+		// Submodule preparation also uses this runner for Git inspection.
+		if name == "git" {
+			return commandrunner.DefaultLocal(ctx, root, name, args, stdout, stderr)
+		}
 		var output bytes.Buffer
 		err := commandrunner.DefaultLocal(ctx, root, name, args, io.MultiWriter(stdout, &output), stderr)
 		wantCache := filepath.Join(wantRoot, ".tao", "cache", "golangci-lint")

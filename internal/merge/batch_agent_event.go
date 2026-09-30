@@ -9,6 +9,8 @@ import (
 	"github.com/iamseth/tao/internal/agentsession"
 )
 
+// Telemetry schema, event labels, outcomes, and bounds govern repository-scoped
+// batch agent events; these records are never lifecycle or recovery authority.
 const (
 	// BatchAgentEventSchema versions repository-scoped merge-batch telemetry.
 	BatchAgentEventSchema = "tao.merge-batch-agent-event.v1"

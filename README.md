@@ -22,7 +22,7 @@ Tao augments supported coding agents with a durable local workflow for turning a
 5. **Review** the exact plan diff; inspect or refresh the result with `tao review`.
 6. **Merge or hand off a PR** with `tao merge` or the pull-request run path.
 
-Tao keeps plans, execution evidence, and recovery state locally. It validates agent-proposed commits, verifies completed work, and binds review to an exact base and head before integration. A PR-path plan becomes `completed` when its approved review and PR metadata describe the same non-empty head; that means the PR handoff is complete, not that the host merged it. **A completed PR handoff does not prove integration; only current `plan_merged` evidence proves default-branch integration.**
+Tao keeps plans, execution evidence, and recovery state locally. It validates agent-proposed commits, verifies completed work, and binds review to an exact base and head before integration. On the PR path, `completed` means handoff, not integration; only current `plan_merged` evidence proves default-branch integration.
 
 For workflow guidance, see the [usage guide](docs/usage-guide.md). For the artifact and lifecycle contract, see the [plan format](docs/plan-format.md).
 
@@ -97,15 +97,7 @@ tao doctor
 ```
 
 `tao doctor` provides diagnostic guidance rather than a guaranteed success
-check. For Pi it passively exercises the confined ephemeral configuration and
-RPC readiness path without a model request; local readiness does not prove that
-remote credentials will be accepted. Follow any actionable setup guidance.
-
-Returning to a repository? Use `/tao-catch-me-up` in Pi or Claude for a read-only,
-plain-language highlights list of the last two weeks of local history reachable
-from HEAD, grouped by features and fixes with commit references. See the
-[usage guide](docs/usage-guide.md#tao-catch-me-up-period-or-focus--catch-up-on-local-changes)
-for period and focus examples.
+check. Follow any actionable setup guidance.
 
 ### Complete a first plan
 
@@ -148,26 +140,21 @@ For a solo local workflow, integrate an approved exact-base/head review with:
 tao merge "$PLAN_ID"
 ```
 
-Tao executes declared slice gates before commit intent; optional agent claims
-cannot authorize completion. Gates run locally (not sandboxed or cryptographically
-attested), with a ten-minute command bound within the remaining agent-session
-budget. Final repository verification is unchanged. See the
-[evidence contract](docs/plan-format.md#observed-slice-verification).
-
 Tao creates isolated execution worktrees, runs repository verification, and
 keeps plans, reviews, execution evidence, and recovery state under its local
 data home. That data and workspace-local `.tao/` metadata are local-only; do not
 commit them. Tao changes source and Git history only through the workflow steps
 you invoke.
 
-You can choose the pull-request run path instead of local merge. In that path,
-`completed` means an approved review and PR metadata identify the same non-empty
-head; it records a completed handoff, not a host-side merge. Only current
-`plan_merged` evidence proves default-branch integration.
-
 For workflow choices, interruption recovery, and rework guidance, see the
 [usage guide](docs/usage-guide.md). For artifact and lifecycle details, see the
 [plan format](docs/plan-format.md).
+
+Returning to a repository? Use `/tao-catch-me-up` in Pi or Claude for a read-only,
+plain-language highlights list of the last two weeks of local history reachable
+from HEAD, grouped by features and fixes with commit references. See the
+[usage guide](docs/usage-guide.md#tao-catch-me-up-period-or-focus--catch-up-on-local-changes)
+for period and focus examples.
 
 ---
 
@@ -205,41 +192,6 @@ bounded follow-up slices; `tao rework --run <plan>` immediately hands them back
 to the ordinary run path. Use `tao show <plan>` whenever you need Tao's
 recommended next action.
 
-An ordinary `tao run` performs automatic repair of an eligible code-classified
-final-verification failure in the same invocation, within a fixed lifetime cap
-of two generated attempts and any `--max-slices` limit. For a plan already stopped
-in `verification_failed`, use the explicit single-shot command below. After the
-cap, repair and commit the source manually on the same branch, leave the worktree
-clean, and explicitly reverify at the failed head or its descendant:
-
-```sh
-tao run --repair-verification <plan> # stopped code failure; one attempt if budget remains
-tao run --reverify <plan>            # resolved external cause or manual fix after the cap
-```
-
-When a blocker's fix is a contract change rather than code, amend the pending
-or blocked slice with a recorded reason instead of editing `slices.json`:
-
-```sh
-tao edit amend <plan> <slice> --reason-file /tmp/reason.txt --allow-file internal/cli/helper.go --add-task 'Add the helper'
-tao run --continue <plan>
-```
-
-Amendments append tasks, expected files, and manual checks or replace the goal;
-they never change slice status, blocker notes, or approval, and Tao refuses
-them while a run holds the plan lock. Generated verification-repair slices are
-system-owned: `tao edit skip`, `tao edit remove`, and `tao edit amend` refuse
-them. If unfinished work is intentionally no longer needed, record that
-terminal outcome without deleting its history:
-
-```sh
-tao abandon --reason "superseded by a different approach" <plan>
-```
-
-Abandonment preserves plan and workspace evidence and does not clean branches
-or worktrees. Tao refuses it while a durable lifecycle transaction still needs
-recovery.
-
 For an approved set of independent plans, preview batch integration before
 running it:
 
@@ -251,11 +203,7 @@ tao log --batch --follow # follow active batch transitions from another terminal
 ```
 
 Batch merge keeps the default branch unchanged until the combined result passes
-full verification and aggregate review. If recurring aggregate findings can be
-attributed to one plan and removing it leaves work to land, the default behavior
-stops and offers ejection on the next rerun. `--auto-eject` opts into ejecting
-that plan and rebuilding, reverifying, and reviewing the reduced batch in the
-same run.
+full verification and aggregate review.
 
 `tao report --output PATH <plan>` writes a share-safe Markdown projection for
 coworkers with repository access; review it before sharing. See the
@@ -277,118 +225,18 @@ For plan artifact and lifecycle semantics, see the
 
 ## Configuration
 
-Most setup needs only an agent selection and, when desired, a non-default local
-data location or execution policy:
-
 ```sh
-TAO_AGENT=pi|claude
-TAO_THEME=tokyonight|gruvbox            # shared CLI/TUI palette; default: tokyonight
-TAO_MODEL=provider/model                # optional shared base
-TAO_RUN_MODEL=provider/model            # implementation and rework slices
-TAO_REVIEW_MODEL=provider/model         # plan review and proposal correction
-TAO_MERGE_REVIEW_MODEL=provider/model    # aggregate merge review
-TAO_RESOLVER_MODEL=provider/model        # merge conflict and rework resolution
-TAO_REWORK_ESCALATION_MODEL=provider/stronger-model # optional late automatic rework
-TAO_REWORK_ESCALATION_FROM_ATTEMPT=4     # first eligible attempt in each window
-TAO_DATA_HOME=/path/to/tao-data
-TAO_COMMIT_POLICY=slice|none
-TAO_EXECUTION_MODE=isolated|current
+TAO_AGENT=pi                     # default; or claude
+TAO_DATA_HOME=/path/to/tao-data   # optional local data location
+TAO_MODEL=provider/model         # optional shared base model
 ```
 
-Runtime-table settings are captured once per invocation. Boolean settings accept
-trimmed, case-insensitive `true/false`, `1/0`, `yes/no`, `on/off`, `t/f`, and `y/n`.
-For example, `TAO_RUN_HEADER=false` disables the TTY-only run header.
-
-Invalid settings are rejected by name only when an operation consumes them,
-including invalid advisory-budget overrides and hard caps; unused settings do
-not block unrelated commands. Invalid `TAO_THEME` and `TAO_RUN_HEADER` values
-instead warn and retain their defaults (`tokyonight` and enabled).
-Help, `tao status` (`--json` for automation), and the TUI Settings/Debug views
-remain available to diagnose invalid configuration, including `TAO_UPDATE`.
-Diagnostics retain every runtime-table setting, even when another is invalid.
-
-Pi is the built-in default agent, `slice` is the default commit policy, and
-`isolated` is the default execution mode. Historical `plan` commit-policy
-metadata remains readable, but new runs accept only `slice` or `none`. Tao does
-not load `.env` files. Repository settings override environment and built-in
-defaults, and explicit per-run flags override repository settings, including
-explicit `false` values. Model settings are optional; unset roles inherit the
-base model, and with no model settings Tao leaves the runtime's selection
-unchanged. Manage the current repository's defaults independently:
-
-```sh
-tao repo config --pull-request true
-tao repo config --pull-request false
-tao repo config --pull-request unset
-tao repo config --model provider/model
-tao repo config --run-model provider/implementation-model
-tao repo config --run-model unset # remove this default and restore inheritance
-tao repo config --rework-escalation-model provider/stronger-model
-```
-
-Planner routing applies only to `tao note run`:
-
-- `TAO_PLANNER_ROUTING=off|shadow|randomized`: `off` is the default; shadow records assignments without changing the planner, randomized selects its runtime.
-- `TAO_PLANNER_ROUTING_ARMS=pi,claude`: default equal-weight runtimes; alternatively use explicit probabilities summing to 1, such as `pi=0.7,claude=0.3`.
-- `TAO_PLANNER_ROUTING_FLOOR=0.1`: default minimum configured arm probability in randomized mode; accepts a finite value from 0 to 0.5.
-
-`tao note run --planner-routing MODE` overrides the mode for one invocation;
-`--planner-arm pi|claude` records a manual override to an installed eligible arm
-when routing is enabled (shadow still leaves the planner unchanged). Provider,
-model, and reasoning effort remain inherited. See the
-[usage guide](docs/usage-guide.md#planner-routing-for-tao-note-run) before enabling
-randomized routing.
-
-Repository model flags are `--model`, `--run-model`, `--review-model`,
-`--merge-review-model`, `--resolver-model`, and `--rework-escalation-model`;
-each accepts a name or `unset`.
-For a one-invocation override of every role, use `tao run --model NAME <plan>`,
-`tao review --run --model NAME <plan>`, or `tao merge --model NAME <plan>`
-(including `tao merge --all --model NAME`). See the
-[model selection guide](docs/usage-guide.md#choose-models-for-agent-sessions)
-for precedence and runtime rejection behavior.
-
-Escalation is opt-in and separate from role selection: use
-`tao run --rework-escalation-model NAME <plan>` for a one-run policy override.
-The attempt threshold is environment-only (default 4); without an effective
-escalation model, rework is unchanged. A model already recorded for a round
-still wins at execution time. See the
-[rework guide](docs/usage-guide.md#escalate-late-automatic-rework)
-for attempt counting and durable selection.
-
-Run `tao status` to see the resolved `TAO_*` runtime values and repository plan
-rollups (`tao status --json` for automation). Use `tao run --help` and
-`tao merge --help` for exact one-run overrides covering review, rework, pull
-requests, permissions, and integration. Configure the agent session timeout with
-`TAO_SESSION_TIMEOUT`; set it to `0` to disable the timeout.
-
-### Budgets
-
-Agent budgets use one `TAO_BUDGET_<SCOPE>_<METRIC>_WARN` scheme, where `<SCOPE>`
-is `SLICE` or `PLAN` and `<METRIC>` is `OUTPUT_TOKENS`, `COST`, `TOOL_CALLS`,
-`ASSISTANT_MESSAGES`, or `ERRORED_MESSAGES`. Crossing a `WARN` value only records
-an advisory warning. The two `STOP` caps are enforced: crossing one records
-`budget_exceeded` and blocks the slice. Each `STOP` value must be at least its
-`WARN` value. The built-in defaults are:
-
-```sh
-TAO_BUDGET_SLICE_OUTPUT_TOKENS_WARN=40000
-TAO_BUDGET_SLICE_COST_WARN=5
-TAO_BUDGET_SLICE_TOOL_CALLS_WARN=120
-TAO_BUDGET_SLICE_ASSISTANT_MESSAGES_WARN=80
-TAO_BUDGET_SLICE_ERRORED_MESSAGES_WARN=0   # warn on any
-TAO_BUDGET_PLAN_OUTPUT_TOKENS_WARN=150000
-TAO_BUDGET_PLAN_COST_WARN=20
-TAO_BUDGET_PLAN_TOOL_CALLS_WARN=400
-TAO_BUDGET_PLAN_ASSISTANT_MESSAGES_WARN=300
-TAO_BUDGET_PLAN_ERRORED_MESSAGES_WARN=0    # warn on any
-TAO_BUDGET_SLICE_OUTPUT_TOKENS_STOP=       # disabled by default; explicit 0 is a hard cap
-TAO_BUDGET_SLICE_COST_STOP=                # disabled by default; explicit 0 is a hard cap
-```
-
-The former `TAO_BUDGET_<SCOPE>_<METRIC>` and `TAO_MAX_SLICE_*` names are
-accepted as deprecated aliases for one release, yield to a set canonical key,
-and appear in `tao status` only when set.
+Environment and built-in defaults establish the baseline, repository defaults
+override it, and explicit per-run flags win over both, including `false` values.
+Use `tao repo config` to manage repository defaults and `tao status` to inspect
+resolved settings.
+See the [configuration reference](docs/configuration.md) for all settings,
+budgets, model selection, and planner routing.
 
 ---
 

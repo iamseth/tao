@@ -18,7 +18,7 @@ import (
 var workspaceCommand = commandMetadata{
 	name:                  "workspace",
 	minPrefix:             "w",
-	usageLines:            []string{"workspace (w) list  (default strategy: worktree)", "workspace (w) prepare <plan-id-or-slug-or-path>", "workspace (w) status <plan-id-or-slug-or-path>", "workspace (w) clean [--force] [--force-active] [--force-dirty] <plan-id-or-slug-or-path>"},
+	usageLines:            []string{"workspace (w) list", "workspace (w) prepare <plan-id-or-slug-or-path>", "workspace (w) status <plan-id-or-slug-or-path>", "workspace (w) clean [--force] [--force-active] [--force-dirty] <plan-id-or-slug-or-path>"},
 	completionDescription: "Manage worktree workspaces",
 	long:                  "Manage isolated worktree workspaces for Tao plans. Prepare a plan workspace, inspect its metadata, list known workspaces, or preview and remove a completed workspace with explicit safety flags.",
 	examples: "  tao workspace list\n" +

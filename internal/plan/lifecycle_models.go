@@ -9,6 +9,7 @@ import (
 	"github.com/iamseth/tao/internal/configtypes"
 )
 
+// Lifecycle statuses describe plan and slice progress in state.json and slices.json.
 const (
 	StatusPlanned            = "planned"
 	StatusPending            = "pending"
@@ -24,6 +25,7 @@ const (
 	StatusInvalid            = "invalid"
 )
 
+// Event types identify lifecycle transitions and diagnostics appended to events.jsonl.
 const (
 	EventTypeSliceStarted               = "slice_started"
 	EventTypeSliceCompleted             = "slice_completed"
@@ -62,6 +64,7 @@ const (
 	EventTypePlanCommitGuard            = "plan_commit_guard"
 )
 
+// Review statuses distinguish completed reviews from errors in persisted review evidence.
 const (
 	ReviewStatusCompleted = "completed"
 	ReviewStatusError     = "error"
@@ -92,6 +95,7 @@ func ValidateAbandonmentReason(reason string) error {
 	return nil
 }
 
+// Review verdicts record the reviewer's disposition for lifecycle approval checks.
 const (
 	ReviewVerdictApprove          = "approve"
 	ReviewVerdictChangesRequested = "changes_requested"
@@ -101,6 +105,7 @@ const (
 // ChangeType is the plan-level Conventional Commit type selected during planning.
 type ChangeType string
 
+// Change types classify plans for Conventional Commit messages and repository categories.
 const (
 	ChangeTypeFeat     ChangeType = "feat"
 	ChangeTypeFix      ChangeType = "fix"
@@ -161,6 +166,8 @@ func (changeType ChangeType) Category() string {
 	return string(changeType)
 }
 
+// Workspace strategies and statuses describe placement, preparation, freshness,
+// and cleanup in persisted workspace metadata.
 const (
 	WorkspaceStrategyWorktree = string(configtypes.ExecutionModeIsolated)
 	WorkspaceStrategyCurrent  = string(configtypes.ExecutionModeCurrent)
@@ -223,6 +230,7 @@ type Repo struct {
 // DecisionReadiness describes whether a plan is sufficiently resolved to act on.
 type DecisionReadiness string
 
+// Readiness levels describe unresolved planning work in the plan decision metadata.
 const (
 	DecisionReadinessReady           DecisionReadiness = "ready"
 	DecisionReadinessNeedsRefinement DecisionReadiness = "needs_refinement"
@@ -233,6 +241,7 @@ const (
 // runtime lifecycle gates.
 type DecisionDisposition string
 
+// Dispositions express advisory planning recommendations in the plan decision metadata.
 const (
 	DecisionDispositionReady       DecisionDisposition = "ready"
 	DecisionDispositionConditional DecisionDisposition = "conditional"
@@ -245,6 +254,7 @@ const (
 // numeric score.
 type PriorityOverallLevel string
 
+// Overall priority levels express categorical importance in the plan decision metadata.
 const (
 	PriorityOverallLevelMust   PriorityOverallLevel = "must"
 	PriorityOverallLevelShould PriorityOverallLevel = "should"
@@ -254,6 +264,7 @@ const (
 // PriorityLevel is a low, medium, or high dimensional priority input.
 type PriorityLevel string
 
+// Dimensional priority levels describe impact, urgency, risk, and confidence in plan decisions.
 const (
 	PriorityLevelLow    PriorityLevel = "low"
 	PriorityLevelMedium PriorityLevel = "medium"
@@ -263,6 +274,7 @@ const (
 // PriorityEffort describes implementation size independently from priority.
 type PriorityEffort string
 
+// Effort sizes describe expected implementation cost in plan decision metadata.
 const (
 	PriorityEffortSmall  PriorityEffort = "small"
 	PriorityEffortMedium PriorityEffort = "medium"
@@ -272,6 +284,7 @@ const (
 // PlanRelationType describes an advisory ordering relationship to another plan.
 type PlanRelationType string
 
+// Relation types express advisory cross-plan ordering in sequence metadata.
 const (
 	PlanRelationBefore  PlanRelationType = "before"
 	PlanRelationAfter   PlanRelationType = "after"
@@ -445,6 +458,7 @@ func (e AutomaticReworkRound) Validate() error {
 // FinalVerificationFailureKind classifies a failed repository-wide gate.
 type FinalVerificationFailureKind string
 
+// Failure kinds classify repository-wide gate results stored in final-verification evidence.
 const (
 	FinalVerificationFailureKindCode           FinalVerificationFailureKind = "code"
 	FinalVerificationFailureKindToolMissing    FinalVerificationFailureKind = "tool_missing"
@@ -497,6 +511,7 @@ type ReviewCommitMessage struct {
 // authority.
 type FinalizationFailurePhase string
 
+// Failure phases identify the post-review operation recorded in finalization diagnostics.
 const (
 	FinalizationFailurePhaseProposalRepair FinalizationFailurePhase = "proposal_repair"
 	FinalizationFailurePhasePullRequest    FinalizationFailurePhase = "pull_request_finalization"
@@ -517,6 +532,7 @@ const (
 	FinalizationCategoryIntentMismatch                = "intent_mismatch"
 )
 
+// Recovery actions label suggested next steps in finalization diagnostics, not recovery authority.
 const (
 	FinalizationRecoveryResumePullRequest = "resume_pull_request"
 	FinalizationRecoveryRestoreBoundary   = "restore_workspace_boundary"
@@ -624,6 +640,7 @@ func validFinalizationLabel(value string) bool {
 // evidence; phases never infer authority from the worktree.
 type SingleMergeResolutionPhase string
 
+// Resolution phases mark durable boundaries in single-merge intents and resolution events.
 const (
 	SingleMergeResolutionPhaseRequested  SingleMergeResolutionPhase = "requested"
 	SingleMergeResolutionPhaseResolved   SingleMergeResolutionPhase = "resolved"
@@ -641,6 +658,7 @@ const SingleMergeResolutionOutcomeResolved SingleMergeResolutionOutcome = "resol
 // only and never grant retry authority by themselves.
 type SingleMergeStartupCapability string
 
+// Startup capabilities identify failed launch stages in single-merge startup evidence.
 const (
 	SingleMergeStartupExecutable        SingleMergeStartupCapability = "executable"
 	SingleMergeStartupConfinement       SingleMergeStartupCapability = "confinement"
@@ -680,6 +698,7 @@ func (f SingleMergeStartupFailure) Validate() error {
 
 type SingleMergeResolutionRollbackReason string
 
+// Rollback reasons classify why a single-merge resolution transaction was restored.
 const (
 	SingleMergeResolutionRollbackVerificationFailed    SingleMergeResolutionRollbackReason = "verification_failed"
 	SingleMergeResolutionRollbackReviewUnavailable     SingleMergeResolutionRollbackReason = "review_unavailable"
@@ -891,6 +910,7 @@ type RunCapabilities struct {
 // authority to mutate plan or repository state.
 type PlanActionKind string
 
+// Action kinds identify read-only next-step recommendations presented by plan consumers.
 const (
 	PlanActionRecoverSliceCompletion PlanActionKind = "recover_slice_completion"
 	PlanActionRecoverRebase          PlanActionKind = "recover_rebase"
@@ -918,6 +938,7 @@ const (
 // equivalent to the primary safe path.
 type PlanActionClass string
 
+// Action classes distinguish ordinary progress from recovery, exceptions, and terminal recommendations.
 const (
 	PlanActionClassProgress       PlanActionClass = "progress"
 	PlanActionClassRecovery       PlanActionClass = "recovery"
@@ -934,6 +955,7 @@ type SingleMergeIntentRecovery struct {
 	Reason  string
 }
 
+// Recovery verdicts describe live single-merge boundaries for next-action projection only.
 const (
 	SingleMergeRecoveryRestartable             = "restartable"
 	SingleMergeRecoveryRebaseAndReviewRequired = "rebase-and-review-required"

@@ -3,6 +3,7 @@ package verification
 // FindingSeverity classifies whether a verification analysis finding should block work.
 type FindingSeverity string
 
+// Finding severities distinguish advisory diagnostics from blocking command-analysis errors.
 const (
 	FindingWarning FindingSeverity = "warning"
 	FindingError   FindingSeverity = "error"

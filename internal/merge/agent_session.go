@@ -63,6 +63,7 @@ type BatchAgentEventAppender interface {
 // BatchAgentOperation identifies the merge-batch operation that owns a provider call.
 type BatchAgentOperation string
 
+// Agent operations attribute merge provider calls to their trusted session context.
 const (
 	BatchAgentOperationCandidateResolution  BatchAgentOperation = "candidate_resolution"
 	BatchAgentOperationSinglePlanResolution BatchAgentOperation = "single_plan_resolution"

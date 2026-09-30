@@ -124,6 +124,7 @@ func (p Palette) MustColor(role Role) Color {
 	return color
 }
 
+// ANSI style sequences control emphasis and style reset in terminal renderers.
 const (
 	Reset = "\x1b[0m"
 	Bold  = "\x1b[1m"

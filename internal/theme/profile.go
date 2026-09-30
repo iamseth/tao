@@ -12,6 +12,7 @@ import (
 // Profile describes the color resolution available to the renderer.
 type Profile uint8
 
+// Color profiles select the terminal encoding used by palette rendering.
 const (
 	ProfileNone Profile = iota
 	ProfileANSI16
