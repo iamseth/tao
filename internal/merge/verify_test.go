@@ -33,6 +33,27 @@ func mergeSnapshotWith(values map[string]string) *runtimeconfig.EnvSnapshot {
 	return &snapshot
 }
 
+func TestSingleMergeVerificationDoesNotPrepareSubmodules(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".gitmodules"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	service := Service{Runner: func(_ context.Context, cwd, name string, args []string, _, _ io.Writer) error {
+		if cwd != root {
+			t.Fatalf("cwd=%s", cwd)
+		}
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		return nil
+	}}
+	if _, err := service.runMergeVerifyAtRoot(context.Background(), root, "true"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(calls, []string{"sh -c true"}) {
+		t.Fatalf("unexpected preparation: %v", calls)
+	}
+}
+
 func TestMergeVerificationSnapshotPrecedenceAndStability(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@true\n"), 0o600); err != nil {

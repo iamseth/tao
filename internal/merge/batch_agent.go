@@ -192,6 +192,14 @@ func (r BatchAgentResolver) Resolve(ctx context.Context, state BatchState, integ
 			if err := r.prepare(ctx, git, integration, *candidate); err != nil && !errors.Is(err, errBatchConflictPrepared) {
 				return r.block(ctx, result, state, git, BatchBlockKindResumable, err.Error())
 			}
+			if err := r.Service.prepareBatchSubmodules(ctx, git); err != nil {
+				// The write-ahead record owns preparation, but no agent attempt
+				// has occurred. Do not spend the repair budget on prerequisites.
+				integration.Attempts--
+				state.Attempts.ConflictResolution--
+				integration.Resolutions = integration.Resolutions[:len(integration.Resolutions)-1]
+				return r.block(ctx, result, state, git, BatchBlockKindResumable, err.Error())
+			}
 			beforeStatus, _ := git.StatusPorcelain(ctx)
 			prompt, renderErr := r.renderPrompt(ctx, state, *integration, *candidate, options.VerifyCommand, beforeStatus)
 			if renderErr != nil {
@@ -517,6 +525,9 @@ func (r BatchAgentResolver) finishResolvedCandidate(ctx context.Context, state B
 	status, err := git.StatusPorcelain(ctx)
 	if err != nil || hasUnmergedStatus(status) {
 		return state, false, false, fmt.Errorf("agent made no progress resolving %s", planID)
+	}
+	if err := r.Service.prepareBatchSubmodules(ctx, git); err != nil {
+		return state, false, false, err
 	}
 	verification := r.Service.resolveMergeVerifyCommandAtRoot(git.Root(), Options{VerifyCommand: verifyCommand})
 	if verification.command != "" {

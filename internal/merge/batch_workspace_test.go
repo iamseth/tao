@@ -3,14 +3,275 @@ package merge
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
 )
+
+// File transport is enabled only for these test-owned repositories, never by
+// production preparation. All other protocols are denied in this runner.
+func batchLocalSubmoduleRunner(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // test-controlled commands and local paths
+	cmd.Dir = cwd
+	cmd.Env = append(os.Environ(), "GIT_ALLOW_PROTOCOL=file")
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	return cmd.Run()
+}
+
+func batchSubmoduleFixture(t *testing.T) (realGitWorktree, string, string, string, string) {
+	t.Helper()
+	leaf := newRealGitWorktree(t).repoRoot
+	oldLeaf := realGitOutput(t, leaf, "rev-parse", "HEAD")
+	if err := os.WriteFile(filepath.Join(leaf, "README.md"), []byte("new leaf\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runRealGit(t, leaf, "commit", "-am", "new leaf")
+	newLeaf := realGitOutput(t, leaf, "rev-parse", "HEAD")
+	child := newRealGitWorktree(t).repoRoot
+	add := func(root, source, path string) {
+		t.Helper()
+		var stderr strings.Builder
+		if err := batchLocalSubmoduleRunner(context.Background(), root, "git", []string{"submodule", "add", source, path}, io.Discard, &stderr); err != nil {
+			t.Fatalf("add submodule: %v: %s", err, stderr.String())
+		}
+	}
+	add(child, leaf, "nested")
+	runRealGit(t, filepath.Join(child, "nested"), "checkout", oldLeaf)
+	runRealGit(t, child, "add", ".")
+	runRealGit(t, child, "commit", "-m", "old nested pin")
+	oldChild := realGitOutput(t, child, "rev-parse", "HEAD")
+	runRealGit(t, filepath.Join(child, "nested"), "checkout", newLeaf)
+	runRealGit(t, child, "commit", "-am", "new nested pin")
+	newChild := realGitOutput(t, child, "rev-parse", "HEAD")
+	fixture := newRealGitWorktree(t)
+	add(fixture.repoRoot, child, "child")
+	runRealGit(t, filepath.Join(fixture.repoRoot, "child"), "checkout", oldChild)
+	runRealGit(t, fixture.repoRoot, "add", ".")
+	runRealGit(t, fixture.repoRoot, "commit", "-m", "old child pin")
+	runRealGit(t, fixture.worktreePath, "merge", "--ff-only", fixture.defaultBranch)
+	runRealGit(t, fixture.worktreePath, "update-index", "--cacheinfo", "160000,"+newChild+",child")
+	runRealGit(t, fixture.worktreePath, "commit", "-m", "new child pin")
+	return fixture, oldChild, newChild, oldLeaf, newLeaf
+}
+
+func TestBatchWorkspaceSubmodulesInitializeReuseAndCleanupSafeguards(t *testing.T) {
+	fixture, oldChild, _, oldLeaf, _ := batchSubmoduleFixture(t)
+	state := batchWorkspaceState(t, fixture)
+	updates := 0
+	runner := func(ctx context.Context, root, name string, args []string, stdout, stderr io.Writer) error {
+		if name == "git" && strings.Join(args, " ") == "submodule update --init --recursive" {
+			updates++
+		}
+		return batchLocalSubmoduleRunner(ctx, root, name, args, stdout, stderr)
+	}
+	owner, err := NewBatchWorkspace(fixture.repoRoot, t.TempDir(), runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := owner.Start(context.Background(), state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRef(t, filepath.Join(created.Path, "child"), "HEAD", oldChild)
+	assertRef(t, filepath.Join(created.Path, "child", "nested"), "HEAD", oldLeaf)
+	reused, err := owner.Start(context.Background(), state)
+	if err != nil || !reused.Reused || updates != 2 {
+		t.Fatalf("reuse=%+v updates=%d err=%v", reused, updates, err)
+	}
+	if err := owner.ValidateResume(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	payload := filepath.Join(created.Path, "child", "nested", "README.md")
+	if err := os.WriteFile(payload, []byte("local edit\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.ValidateResume(context.Background(), state); err == nil {
+		t.Fatal("dirty nested submodule accepted for resume")
+	}
+	runRealGit(t, created.Path, "config", "submodule.child.ignore", "all")
+	if err := owner.RemoveIntegration(context.Background(), state.ID); err == nil {
+		t.Fatal("removed dirty nested submodule hidden by ignore config")
+	}
+	if err := os.Remove(filepath.Join(created.Path, ".gitmodules")); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.RemoveIntegration(context.Background(), state.ID); err == nil {
+		t.Fatal("removed initialized submodule after metadata removal")
+	}
+	runRealGit(t, created.Path, "checkout", "--", ".gitmodules")
+	runRealGit(t, created.Path, "config", "--unset", "submodule.child.ignore")
+	contents, err := os.ReadFile(payload) //nolint:gosec // test-owned fixture
+	if err != nil || string(contents) != "local edit\n" {
+		t.Fatalf("lost local edits: %q %v", contents, err)
+	}
+	if _, err := owner.PlanRestart(context.Background(), state); err == nil {
+		t.Fatal("restart would discard dirty submodule")
+	}
+	if err := os.WriteFile(payload, []byte("initial\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.RemoveIntegration(context.Background(), state.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBatchWorkspaceCleanupPreservesNestedIgnoredEdits(t *testing.T) {
+	for _, operation := range []string{"remove", "restart", "disposable"} {
+		t.Run(operation, func(t *testing.T) {
+			fixture, _, _, _, _ := batchSubmoduleFixture(t)
+			state := batchWorkspaceState(t, fixture)
+			owner, err := NewBatchWorkspace(fixture.repoRoot, t.TempDir(), batchLocalSubmoduleRunner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cleanup, err := owner.PrepareDisposableIntegration(context.Background(), state.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			created, err := owner.Start(context.Background(), state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runRealGit(t, filepath.Join(created.Path, "child"), "config", "submodule.nested.ignore", "all")
+			payload := filepath.Join(created.Path, "child", "nested", "README.md")
+			if err := os.WriteFile(payload, []byte("hidden local edit\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if status := realGitOutput(t, created.Path, "status", "--porcelain", "--ignore-submodules=none"); status != "" {
+				t.Fatalf("expected nested ignore to hide edits from root status, got %q", status)
+			}
+			switch operation {
+			case "remove":
+				err = owner.RemoveIntegration(context.Background(), state.ID)
+			case "restart":
+				_, err = owner.Restart(context.Background(), state)
+			case "disposable":
+				err = cleanup(context.Background())
+			}
+			if err == nil {
+				t.Error("cleanup accepted hidden nested edits")
+			}
+			contents, readErr := os.ReadFile(payload) //nolint:gosec // test-owned fixture
+			if readErr != nil || string(contents) != "hidden local edit\n" {
+				t.Fatalf("lost local edits: %q %v", contents, readErr)
+			}
+		})
+	}
+}
+
+func TestBatchWorkspaceCleanupRefusesNestedInspectionFailure(t *testing.T) {
+	fixture, _, _, _, _ := batchSubmoduleFixture(t)
+	state := batchWorkspaceState(t, fixture)
+	inspectionErr := errors.New("nested status unavailable")
+	runner := func(ctx context.Context, root, name string, args []string, stdout, stderr io.Writer) error {
+		if filepath.Base(root) == "nested" && name == "git" && len(args) > 0 && args[0] == "status" {
+			return inspectionErr
+		}
+		return batchLocalSubmoduleRunner(ctx, root, name, args, stdout, stderr)
+	}
+	owner, err := NewBatchWorkspace(fixture.repoRoot, t.TempDir(), runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := owner.Start(context.Background(), state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.RemoveIntegration(context.Background(), state.ID); !errors.Is(err, inspectionErr) {
+		t.Errorf("cleanup error = %v, want nested inspection failure", err)
+	}
+	if _, err := os.Stat(filepath.Join(created.Path, "child", "nested", "README.md")); err != nil {
+		t.Fatalf("nested files not preserved: %v", err)
+	}
+}
+
+func TestBatchWorkspaceSubmoduleStartFailureRetryAndNoop(t *testing.T) {
+	for _, submodules := range []bool{false, true} {
+		t.Run(map[bool]string{false: "absent", true: "present"}[submodules], func(t *testing.T) {
+			fixture := newRealGitWorktree(t)
+			if submodules {
+				if err := os.WriteFile(filepath.Join(fixture.repoRoot, ".gitmodules"), nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				runRealGit(t, fixture.repoRoot, "add", ".gitmodules")
+				runRealGit(t, fixture.repoRoot, "commit", "-m", "modules")
+				runRealGit(t, fixture.worktreePath, "merge", "--ff-only", fixture.defaultBranch)
+			}
+			state := batchWorkspaceState(t, fixture)
+			updates, fail := 0, true
+			runner := func(ctx context.Context, root, name string, args []string, stdout, stderr io.Writer) error {
+				if name == "git" && strings.Join(args, " ") == "submodule update --init --recursive" {
+					updates++
+					if fail {
+						return errors.New("credential unavailable")
+					}
+				}
+				return batchLocalSubmoduleRunner(ctx, root, name, args, stdout, stderr)
+			}
+			owner, err := NewBatchWorkspace(fixture.repoRoot, t.TempDir(), runner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = owner.Start(context.Background(), state)
+			if submodules != (err != nil) {
+				t.Fatalf("start error=%v", err)
+			}
+			fail = false
+			created, err := owner.Start(context.Background(), state)
+			if err != nil || !created.Reused {
+				t.Fatalf("retry=%+v err=%v", created, err)
+			}
+			want := 0
+			if submodules {
+				want = 2
+			}
+			if updates != want {
+				t.Fatalf("updates=%d want=%d", updates, want)
+			}
+		})
+	}
+}
+
+type batchUnmergedSubmoduleGit struct {
+	GitClient
+	root string
+}
+
+func (g batchUnmergedSubmoduleGit) Root() string { return g.root }
+func (g batchUnmergedSubmoduleGit) StatusPorcelain(context.Context) (string, error) {
+	return "UU conflicted\n", nil
+}
+
+func TestBatchSubmoduleUnmergedPrerequisites(t *testing.T) {
+	for _, entry := range []string{"160000 abc 2\tchild\x00", "100644 abc 3\t.gitmodules\x00"} {
+		updates := 0
+		runner := func(_ context.Context, _, _ string, args []string, stdout, _ io.Writer) error {
+			if strings.Join(args, " ") != "ls-files --unmerged -z" {
+				updates++
+				return nil
+			}
+			_, err := io.WriteString(stdout, entry)
+			return err
+		}
+		// .gitmodules may be absent during a delete/modify conflict.
+		err := prepareBatchSubmodules(context.Background(), batchUnmergedSubmoduleGit{root: t.TempDir()}, runner, nil)
+		if err == nil || !strings.Contains(err.Error(), "unresolved submodule prerequisite") || updates != 0 {
+			t.Fatalf("updates=%d err=%v", updates, err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := prepareBatchSubmodules(ctx, gitops.NewClient(t.TempDir(), nil), nil, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation=%v", err)
+	}
+}
 
 func TestBatchWorkspaceResumeParkedVerificationBisection(t *testing.T) {
 	t.Parallel()

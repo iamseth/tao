@@ -1356,6 +1356,187 @@ func TestExecutionPreparerRemovedLockfileClearsPriorDependencyFingerprint(t *tes
 	}
 }
 
+func TestExecutionPreparerSubmodulesIndependentOfJSCache(t *testing.T) {
+	const gitCommand = "git submodule update --init --recursive"
+	for _, tc := range []struct {
+		name      string
+		reused    bool
+		changedJS bool
+		fail      string
+	}{
+		{name: "fresh"},
+		{name: "fresh submodule failure", fail: "git"},
+		{name: "cached JS", reused: true},
+		{name: "cached JS submodule failure", reused: true, fail: "git"},
+		{name: "changed JS submodule failure", reused: true, changedJS: true, fail: "git"},
+		{name: "changed JS", reused: true, changedJS: true},
+		{name: "changed JS soft failure", reused: true, changedJS: true, fail: "npm"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			detail := executionPreparerPlanDetail(t.TempDir())
+			preparer := ExecutionPreparer{PlanRecordFactory: memoryWorkspacePlanRecordFactory}
+			priorFingerprint := ""
+			if tc.reused {
+				preparer, detail, root, _ = dependencyPreparerFixture(t, DefaultConfig(), nil)
+				priorFingerprint = detail.State.Workspace.DependencyFingerprint
+			} else {
+				preparer.managerFactory = executionPreparerManagerFactory(Metadata{Path: root, Branch: "tao/plan-a", Created: true}, nil)
+				writeFile(t, filepath.Join(root, "package-lock.json"))
+			}
+			writeFile(t, filepath.Join(root, ".gitmodules"))
+			if tc.changedJS {
+				writeFile(t, filepath.Join(root, "package-lock.json"))
+			}
+			var commands []string
+			failure := errors.New("prerequisite unavailable")
+			preparer.Runner = func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+				commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+				if name == tc.fail {
+					return failure
+				}
+				return nil
+			}
+			_, err := preparer.Prepare(context.Background(), detail, ExecutionPrepareOptions{})
+			hardFailure := tc.fail == "git"
+			if hardFailure != errors.Is(err, failure) || (!hardFailure && err != nil) {
+				t.Fatalf("prepare error = %v, hard failure = %v", err, hardFailure)
+			}
+			wantCommand := gitCommand
+			if !hardFailure {
+				wantCommand += " && git submodule status --recursive"
+			}
+			if !hardFailure && (!tc.reused || tc.changedJS) {
+				wantCommand += " && npm ci"
+			}
+			w := detail.State.Workspace
+			if strings.Join(commands, " && ") != wantCommand || w.DependencyCommand != wantCommand || w.DependencyStartedAt == nil || w.DependencyCompletedAt == nil {
+				t.Fatalf("commands = %v, workspace = %#v", commands, w)
+			}
+			switch {
+			case hardFailure:
+				if w.LifecycleStatus != plan.WorkspaceStatusFailed || w.DependencyPreparation != "failed" || !strings.Contains(w.DependencyFailure, gitCommand) || w.DependencyFingerprint != priorFingerprint {
+					t.Fatalf("submodule failure must not record ready or a new fingerprint: %#v", w)
+				}
+				// A new boundary retries Git even after a prior successful JS install.
+				preparer.Runner = func(context.Context, string, string, []string, io.Writer, io.Writer) error { return nil }
+				if _, err := preparer.Prepare(context.Background(), detail, ExecutionPrepareOptions{}); err != nil {
+					t.Fatalf("retry: %v", err)
+				}
+				w = detail.State.Workspace
+				if w.LifecycleStatus != plan.WorkspaceStatusReady || w.DependencyFailure != "" {
+					t.Fatalf("retry did not clear failure: %#v", w)
+				}
+			case tc.fail == "npm":
+				if w.LifecycleStatus != plan.WorkspaceStatusReady || w.DependencyPreparation != "failed" || !strings.Contains(w.DependencyFailure, "npm ci") || w.DependencyFingerprint != priorFingerprint {
+					t.Fatalf("reused JS warning policy changed: %#v", w)
+				}
+			case w.LifecycleStatus != plan.WorkspaceStatusReady || w.DependencyPreparation != "ready" || w.DependencyFailure != "" || w.DependencyFingerprint == "":
+				t.Fatalf("successful preparation metadata: %#v", w)
+			}
+		})
+	}
+}
+
+func TestExecutionPreparerSkippedSubmodulesBlockConsumers(t *testing.T) {
+	for _, cache := range []string{"fresh", "cached JS", "changed JS"} {
+		t.Run(cache, func(t *testing.T) {
+			fixture := newNestedSubmoduleFixture(t)
+			writeFile(t, filepath.Join(fixture.root, "package-lock.json"))
+			detail := executionPreparerPlanDetail(fixture.root)
+			installs := 0
+			preparer := ExecutionPreparer{
+				PlanRecordFactory: memoryWorkspacePlanRecordFactory,
+				Runner: func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+					if name == "npm" {
+						installs++
+						return nil
+					}
+					return localSubmoduleRunner(ctx, cwd, name, args, stdout, stderr)
+				},
+				managerFactory: executionPreparerManagerFactory(Metadata{Path: fixture.root, Branch: "tao/plan-a", Reused: cache != "fresh"}, nil),
+			}
+			if cache != "fresh" {
+				if _, err := preparer.Prepare(context.Background(), detail, ExecutionPrepareOptions{}); err != nil {
+					t.Fatal(err)
+				}
+				runGit(t, filepath.Join(fixture.root, "modules/child"), "checkout", fixture.newChild)
+				if cache == "changed JS" {
+					if err := os.WriteFile(filepath.Join(fixture.root, "package-lock.json"), []byte("changed\n"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			priorInstalls := installs
+			priorFingerprint := ""
+			if detail.State.Workspace != nil {
+				priorFingerprint = detail.State.Workspace.DependencyFingerprint
+			}
+			runGit(t, fixture.root, "config", "submodule.modules/child.update", "none")
+			// Neither initial preparation nor retries may hand a workspace to an
+			// implementation/repair agent or verification while prerequisites fail.
+			for range 2 {
+				root, err := preparer.Prepare(context.Background(), detail, ExecutionPrepareOptions{})
+				w := detail.State.Workspace
+				if err == nil || root != "" || installs != priorInstalls || w.LifecycleStatus != plan.WorkspaceStatusFailed || w.DependencyPreparation != "failed" || w.DependencyFingerprint != priorFingerprint {
+					t.Fatalf("consumer admitted: root=%q installs=%d workspace=%#v err=%v", root, installs, w, err)
+				}
+			}
+			runGit(t, fixture.root, "config", "submodule.modules/child.update", "checkout")
+			if _, err := preparer.Prepare(context.Background(), detail, ExecutionPrepareOptions{}); err != nil {
+				t.Fatalf("retry after explicit configuration fix: %v", err)
+			}
+		})
+	}
+}
+
+func TestExecutionPreparerChangedGitlinksWithCachedJS(t *testing.T) {
+	fixture := newNestedSubmoduleFixture(t)
+	writeFile(t, filepath.Join(fixture.root, "package-lock.json"))
+	detail := executionPreparerPlanDetail(fixture.root)
+	installCalls, submoduleCalls, prepareCalls := 0, 0, 0
+	preparer := ExecutionPreparer{
+		PlanRecordFactory: memoryWorkspacePlanRecordFactory,
+		Runner: func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+			if name == "npm" {
+				installCalls++
+				if gitHead(t, filepath.Join(cwd, "modules/child/nested")) != fixture.oldLeaf {
+					t.Fatal("JS ran before recursive initialization")
+				}
+				return nil
+			}
+			submoduleCalls++
+			return localSubmoduleRunner(ctx, cwd, name, args, stdout, stderr)
+		},
+		managerFactory: func(Options) (executionWorkspaceManager, error) {
+			return executionWorkspaceManagerFunc(func(context.Context, PrepareOptions) (Metadata, error) {
+				prepareCalls++
+				return Metadata{Path: fixture.root, Branch: "tao/plan-a", Created: prepareCalls == 1, Reused: prepareCalls > 1}, nil
+			}), nil
+		},
+	}
+	prepare := func() {
+		t.Helper()
+		if _, err := preparer.Prepare(context.Background(), detail, ExecutionPrepareOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prepare()
+	fingerprint := detail.State.Workspace.DependencyFingerprint
+	runGit(t, fixture.root, "update-index", "--cacheinfo", "160000,"+fixture.newChild+",modules/child")
+	prepare()
+	prepare()
+	if installCalls != 1 || submoduleCalls != 6 || fingerprint == "" || detail.State.Workspace.DependencyFingerprint != fingerprint {
+		t.Fatalf("cache must apply only to JS: installs=%d submodules=%d workspace=%#v", installCalls, submoduleCalls, detail.State.Workspace)
+	}
+	if gitHead(t, filepath.Join(fixture.root, "modules/child")) != fixture.newChild || gitHead(t, filepath.Join(fixture.root, "modules/child/nested")) != fixture.newLeaf {
+		t.Fatal("cached JS suppressed changed gitlink initialization")
+	}
+	if detail.State.Workspace.DependencyCommand != "git submodule update --init --recursive && git submodule status --recursive" || detail.State.Workspace.DependencyPreparation != "ready" {
+		t.Fatalf("metadata should describe only the attempted Git command: %#v", detail.State.Workspace)
+	}
+}
+
 func dependencyPreparerFixture(t *testing.T, config Config, install func(io.Writer) error) (ExecutionPreparer, *plan.PlanDetail, string, *int) {
 	t.Helper()
 	repoRoot := t.TempDir()

@@ -40,6 +40,164 @@ func (s *batchReviewTestStore) WriteAggregateReview(_ string, attempt int, outpu
 	return filepath.Base(name), os.WriteFile(name, []byte(output), 0o600)
 }
 
+func TestBatchSubmoduleFailureStopsBeforeAggregateGate(t *testing.T) {
+	for _, failure := range []error{errors.New("authentication denied"), context.Canceled} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			fixture, state, root := batchReviewFixture(t)
+			if err := os.WriteFile(filepath.Join(root, ".gitmodules"), nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			service := NewService(fixture.repoRoot, nil)
+			preparations, gates, agents := 0, 0, 0
+			service.Runner = func(_ context.Context, cwd, name string, args []string, _, stderr io.Writer) error {
+				if name == "git" && strings.Join(args, " ") == "submodule update --init --recursive" {
+					preparations++
+					if cwd != root {
+						t.Fatalf("preparation cwd = %s", cwd)
+					}
+					_, _ = io.WriteString(stderr, failure.Error())
+					return failure
+				}
+				gates++
+				return nil
+			}
+			reviewer := BatchAggregateReviewer{Service: service, Store: &batchReviewTestStore{dir: t.TempDir()}, Agent: batchReviewAgentFunc(func(context.Context, string, string) (string, error) {
+				agents++
+				return reviewJSON("approve", "green", ""), nil
+			})}
+			got, err := reviewer.Review(context.Background(), state, root, BatchReviewOptions{VerifyCommand: "true"})
+			if err == nil || !strings.Contains(err.Error(), "submodule") || preparations != 1 || gates != 0 || agents != 0 || got.State.Attempts.AggregateRework != 0 || got.State.VerificationAttribution != nil || got.State.Verification != nil || got.State.BlockKind != BatchBlockKindResumable {
+				t.Fatalf("prerequisite failure reached consumers: preparations=%d gates=%d agents=%d state=%+v err=%v", preparations, gates, agents, got.State, err)
+			}
+		})
+	}
+}
+
+func TestBatchUnpinnedSubmodulesDoNotAuthorizeGatesOrRepair(t *testing.T) {
+	for _, status := range []string{"-012345 child\n", " 012345 child\n+678901 child/nested\n"} {
+		t.Run(status[:1], func(t *testing.T) {
+			fixture, state, root := batchReviewFixture(t)
+			if err := os.WriteFile(filepath.Join(root, ".gitmodules"), nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			service := NewService(fixture.repoRoot, nil)
+			service.Runner = func(_ context.Context, _, name string, args []string, stdout, _ io.Writer) error {
+				if name == "git" && strings.Join(args, " ") == "submodule update --init --recursive" {
+					return nil
+				}
+				if name == "git" && strings.Join(args, " ") == "submodule status --recursive" {
+					_, _ = io.WriteString(stdout, status)
+					return nil
+				}
+				t.Fatal("gate ran without pinned recursive prerequisites")
+				return nil
+			}
+			reviewer := BatchAggregateReviewer{Service: service, Store: &batchReviewTestStore{dir: t.TempDir()}, Agent: batchReviewAgentFunc(func(context.Context, string, string) (string, error) {
+				t.Fatal("review/repair agent ran without pinned recursive prerequisites")
+				return "", nil
+			})}
+			got, err := reviewer.Review(context.Background(), state, root, BatchReviewOptions{VerifyCommand: "false"})
+			if err == nil || !strings.Contains(err.Error(), "recorded gitlink") || got.State.Attempts.AggregateRework != 0 || got.State.VerificationAttribution != nil || got.State.Verification != nil || got.State.BlockKind != BatchBlockKindResumable {
+				t.Fatalf("prerequisite failure authorized verification or repair: state=%+v err=%v", got.State, err)
+			}
+		})
+	}
+}
+
+func TestBatchSubmodulesPrepareAcrossReworkAndResume(t *testing.T) {
+	fixture, state, root := batchReviewFixture(t)
+	if err := os.WriteFile(filepath.Join(root, ".gitmodules"), []byte("# initial\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runRealGit(t, root, "add", ".gitmodules")
+	runRealGit(t, root, "commit", "-m", "modules")
+	state.IntegrationHead = realGitOutput(t, root, "rev-parse", "HEAD")
+	service := NewService(fixture.repoRoot, nil)
+	var sequence []string
+	service.Runner = func(_ context.Context, _, name string, args []string, _, _ io.Writer) error {
+		if name == "git" {
+			if strings.Join(args, " ") == "submodule status --recursive" {
+				return nil // The fixture has module metadata but no gitlinks.
+			}
+			if strings.Join(args, " ") != "submodule update --init --recursive" {
+				t.Fatalf("unexpected command: %v", args)
+			}
+			data, err := os.ReadFile(filepath.Join(root, ".gitmodules")) //nolint:gosec // test-owned fixture
+			if err != nil {
+				return err
+			}
+			sequence = append(sequence, "prepare:"+strings.TrimSpace(string(data)))
+		} else {
+			sequence = append(sequence, "gate")
+		}
+		return nil
+	}
+	// Resume a recorded rework intent: prepare before the editing session,
+	// then prepare the new tree again before its gate and aggregate review.
+	state.Review = &BatchReview{Status: "reworking", BaseSHA: state.DefaultStartSHA, HeadSHA: state.IntegrationHead}
+	state.Attempts.AggregateRework = 1
+	agent := batchSessionAgentFunc(func(_ context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+		if request.Operation == BatchAgentOperationAggregateRework {
+			sequence = append(sequence, "rework")
+			return BatchAgentSessionResult{Output: batchResolutionJSON("update module metadata")}, os.WriteFile(filepath.Join(root, ".gitmodules"), []byte("# changed\n"), 0o600)
+		}
+		sequence = append(sequence, "review")
+		return BatchAgentSessionResult{Output: reviewJSON("approve", "green", "")}, nil
+	})
+	got, err := (BatchAggregateReviewer{Service: service, Store: &batchReviewTestStore{dir: t.TempDir()}, Agent: agent}).Review(context.Background(), state, root, BatchReviewOptions{VerifyCommand: "true"})
+	want := []string{"prepare:# initial", "rework", "prepare:# changed", "gate", "review"}
+	if err != nil || got.State.Status != BatchStatusReadyToLand || !slices.Equal(sequence, want) {
+		t.Fatalf("sequence=%v state=%+v err=%v", sequence, got.State, err)
+	}
+}
+
+func TestBatchSubmoduleBisectionPreparationFailureRestoresWithoutAttribution(t *testing.T) {
+	fixture, state, root := batchAttributionFixture(t)
+	service := NewService(fixture.repoRoot, nil)
+	// Use a Git wrapper to place the test marker after each restore. Production
+	// preparation still runs through its real filesystem detection boundary.
+	git := &submoduleProbeGit{GitClient: service.NewGit(root), root: root}
+	service.NewGit = func(string) GitClient { return git }
+	if err := os.WriteFile(filepath.Join(root, ".gitmodules"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var sequence []string
+	gates, agents := 0, 0
+	service.Runner = func(_ context.Context, _, name string, args []string, _, _ io.Writer) error {
+		if name == "git" && strings.Join(args, " ") == "submodule update --init --recursive" {
+			head := realGitOutput(t, root, "rev-parse", "HEAD")
+			sequence = append(sequence, head)
+			if head != state.IntegrationHead {
+				return errors.New("credential unavailable at probe")
+			}
+			return nil
+		}
+		if name == "git" && strings.Join(args, " ") == "submodule status --recursive" {
+			return nil // The fixture has module metadata but no gitlinks.
+		}
+		gates++
+		return errors.New("aggregate code failure")
+	}
+	got, err := (BatchAggregateReviewer{Service: service, Store: &batchReviewTestStore{dir: t.TempDir()}, Agent: batchReviewAgentFunc(func(context.Context, string, string) (string, error) { agents++; return "", nil })}).Review(context.Background(), state, root, BatchReviewOptions{VerifyCommand: "false"})
+	a := got.State.VerificationAttribution
+	if err == nil || !strings.Contains(err.Error(), "submodule") || gates != 1 || agents != 0 || got.State.Attempts.AggregateRework != 0 || a == nil || a.Status != batchAttributionBisecting || a.PlanID != "" || a.GateRuns != 0 || a.ParkedSHA != "" || len(sequence) != 3 || sequence[0] != state.IntegrationHead || sequence[2] != state.IntegrationHead {
+		t.Fatalf("sequence=%v gates=%d agents=%d state=%+v attribution=%+v err=%v", sequence, gates, agents, got.State, a, err)
+	}
+	assertRef(t, root, "HEAD", state.IntegrationHead)
+}
+
+type submoduleProbeGit struct {
+	GitClient
+	root string
+}
+
+func (g *submoduleProbeGit) CleanUntracked(ctx context.Context) error {
+	if err := g.GitClient.CleanUntracked(ctx); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(g.root, ".gitmodules"), nil, 0o600)
+}
+
 func TestBatchReviewPromptUsesConfiguredDiffStat(t *testing.T) {
 	t.Parallel()
 	state := BatchState{ID: "batch-1", DefaultStartSHA: "base", IntegrationHead: "head"}

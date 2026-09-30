@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +19,132 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/workspace"
 )
+
+func TestBatchSubmodulesPinnedAcrossIntegrationBisectionAndRework(t *testing.T) {
+	fixture, oldChild, newChild, oldLeaf, newLeaf := batchSubmoduleFixture(t)
+	state := batchWorkspaceState(t, fixture)
+	state.Candidates[0].ReviewCommitMessage = &plan.ReviewCommitMessage{Subject: "fix(batch): update pinned submodule", Body: "What:\nUpdate the recursive submodule pin.\n\nWhy:\nUse the reviewed dependency revision."}
+	owner, err := NewBatchWorkspace(fixture.repoRoot, t.TempDir(), batchLocalSubmoduleRunner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := owner.Start(context.Background(), state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := created.Path
+	service := NewService(fixture.repoRoot, batchLocalSubmoduleRunner)
+	service.Runner = batchLocalSubmoduleRunner
+	integrated, err := (BatchIntegrator{Store: &recordingBatchTransitionStore{}, Service: service}).Integrate(context.Background(), state, root, BatchIntegrateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(integrated.Applied) != 1 {
+		t.Fatalf("integration=%+v", integrated)
+	}
+	// Staging changes the recorded pin, not the existing child checkout.
+	assertRef(t, filepath.Join(root, "child"), "HEAD", oldChild)
+	var pins []string
+	service.Runner = func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+		if name == "git" {
+			return batchLocalSubmoduleRunner(ctx, cwd, name, args, stdout, stderr)
+		}
+		pin := realGitOutput(t, filepath.Join(root, "child"), "rev-parse", "HEAD")
+		pins = append(pins, pin)
+		wantLeaf := oldLeaf
+		if pin == newChild {
+			wantLeaf = newLeaf
+		}
+		assertRef(t, filepath.Join(root, "child", "nested"), "HEAD", wantLeaf)
+		if pin == newChild {
+			if _, err := os.Stat(filepath.Join(root, "fixed.txt")); err != nil {
+				return errors.New("candidate code failure")
+			}
+		}
+		return nil
+	}
+	var operations []BatchAgentOperation
+	agent := batchSessionAgentFunc(func(_ context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+		operations = append(operations, request.Operation)
+		assertRef(t, filepath.Join(root, "child"), "HEAD", newChild)
+		assertRef(t, filepath.Join(root, "child", "nested"), "HEAD", newLeaf)
+		if request.Operation == BatchAgentOperationAggregateRework {
+			return BatchAgentSessionResult{Output: batchResolutionJSON("fix candidate")}, os.WriteFile(filepath.Join(root, "fixed.txt"), []byte("fixed\n"), 0o600)
+		}
+		return BatchAgentSessionResult{Output: reviewJSON("approve", "green", "")}, nil
+	})
+	got, err := (BatchAggregateReviewer{Service: service, Store: &batchReviewTestStore{dir: t.TempDir()}, Agent: agent}).Review(context.Background(), integrated.State, root, BatchReviewOptions{VerifyCommand: "local gate"})
+	if err != nil || got.State.Status != BatchStatusReadyToLand {
+		t.Fatalf("review=%+v err=%v", got, err)
+	}
+	if !slices.Equal(pins, []string{newChild, oldChild, newChild}) || !slices.Equal(operations, []BatchAgentOperation{BatchAgentOperationAggregateRework, BatchAgentOperationAggregateReview}) {
+		t.Fatalf("pins=%v operations=%v", pins, operations)
+	}
+	if err := owner.ValidateResume(context.Background(), got.State); err != nil {
+		t.Fatal(err)
+	}
+	assertRef(t, fixture.repoRoot, fixture.defaultBranch, state.DefaultStartSHA)
+	assertRef(t, fixture.repoRoot, fixture.planBranch, state.Candidates[0].SourceTip)
+}
+
+func TestBatchSubmodulesPrepareReducedTreeAfterEjection(t *testing.T) {
+	fixture, oldChild, _, oldLeaf, _ := batchSubmoduleFixture(t)
+	state := batchWorkspaceState(t, fixture)
+	proposal := &plan.ReviewCommitMessage{Subject: "fix(batch): integrate reviewed changes", Body: "What:\nIntegrate the reviewed source.\n\nWhy:\nKeep the exact approved intent."}
+	state.Candidates[0].ReviewCommitMessage = proposal
+	other := filepath.Join(t.TempDir(), "other")
+	runRealGit(t, fixture.repoRoot, "worktree", "add", "-b", "tao/plan-b", other, fixture.defaultBranch)
+	if err := os.WriteFile(filepath.Join(other, "other.txt"), []byte("other\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runRealGit(t, other, "add", "other.txt")
+	runRealGit(t, other, "commit", "-m", "other candidate")
+	head := realGitOutput(t, other, "rev-parse", "HEAD")
+	candidate := state.Candidates[0]
+	candidate.PlanID, candidate.PlanDir, candidate.Branch, candidate.SourceTip, candidate.ReviewHead = "plan-b", t.TempDir(), "tao/plan-b", head, head
+	state.Candidates = append(state.Candidates, candidate)
+	state.ChosenOrder = append(state.ChosenOrder, "plan-b")
+	owner, err := NewBatchWorkspace(fixture.repoRoot, t.TempDir(), batchLocalSubmoduleRunner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := owner.Start(context.Background(), state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(fixture.repoRoot, batchLocalSubmoduleRunner)
+	service.Runner = batchLocalSubmoduleRunner
+	store := &batchReviewTestStore{dir: t.TempDir()}
+	integrator := BatchIntegrator{Service: service, Store: store}
+	integrated, err := integrator.Integrate(context.Background(), state, created.Path, BatchIntegrateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Model the old aggregate having already consumed its newer pinned tree.
+	if err := service.prepareBatchSubmodules(context.Background(), service.NewGit(created.Path)); err != nil {
+		t.Fatal(err)
+	}
+	rebuilt, err := integrator.Eject(context.Background(), integrated.State, created.Path, BatchEjectOptions{PlanID: "plan-a", Reason: "attributed review finding"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gates := 0
+	service.Runner = func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+		if name == "git" {
+			return batchLocalSubmoduleRunner(ctx, cwd, name, args, stdout, stderr)
+		}
+		gates++
+		assertRef(t, filepath.Join(created.Path, "child"), "HEAD", oldChild)
+		assertRef(t, filepath.Join(created.Path, "child", "nested"), "HEAD", oldLeaf)
+		return nil
+	}
+	got, err := (BatchAggregateReviewer{Service: service, Store: store, Agent: batchReviewAgentFunc(func(context.Context, string, string) (string, error) {
+		return reviewJSON("approve", "reduced set is green", ""), nil
+	})}).Review(context.Background(), rebuilt.State, created.Path, BatchReviewOptions{VerifyCommand: "local gate"})
+	if err != nil || got.State.Status != BatchStatusReadyToLand || gates != 1 {
+		t.Fatalf("review=%+v gates=%d err=%v", got, gates, err)
+	}
+}
 
 func TestBatchAgentTelemetryEndToEndStaysInBatchTransaction(t *testing.T) {
 	t.Parallel()

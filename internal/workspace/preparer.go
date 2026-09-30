@@ -135,34 +135,27 @@ func (p ExecutionPreparer) Prepare(ctx context.Context, detail *plan.PlanDetail,
 	if err != nil {
 		return "", err
 	}
-	var dependency DependencyMetadata
-	dependencySucceeded := false
-	if metadata.Reused && fingerprint != "" && fingerprint == priorFingerprint {
-		dependency = DependencyMetadata{Status: "skipped", FailureReason: "lockfile unchanged since last successful install"}
-	} else {
-		var dependencyErr error
-		dependency, dependencyErr = PrepareDependencies(ctx, metadata.Path, config, p.runner(), p.now)
-		if dependencyErr != nil {
-			if !metadata.Reused || priorFingerprint == "" {
-				failure := workspaceDependencyFailureRequest(dependency)
-				if writeErr := recordWorkspaceDependencyFailure(record, failure); writeErr != nil {
-					return "", fmt.Errorf("record dependency failure: %w", writeErr)
-				}
-				return "", dependencyErr
-			}
-		} else {
-			dependencySucceeded = true
-			fingerprint, err = dependencyLockfileFingerprint(metadata.Path)
-			if err != nil {
-				return "", err
-			}
+	skipJS := metadata.Reused && fingerprint != "" && fingerprint == priorFingerprint
+	dependency, submoduleFailed, dependencyErr := prepareDependencies(ctx, metadata.Path, p.runner(), p.now, skipJS)
+	if dependencyErr != nil && (submoduleFailed || !metadata.Reused || priorFingerprint == "") {
+		failure := workspaceDependencyFailureRequest(dependency)
+		if writeErr := recordWorkspaceDependencyFailure(record, failure); writeErr != nil {
+			return "", fmt.Errorf("record dependency failure: %w", writeErr)
+		}
+		return "", dependencyErr
+	}
+	jsSucceeded := dependencyErr == nil && !skipJS
+	if jsSucceeded {
+		fingerprint, err = dependencyLockfileFingerprint(metadata.Path)
+		if err != nil {
+			return "", err
 		}
 	}
 	ready := workspaceReadyRequest(dependency, p.now())
-	if dependencySucceeded && dependency.Status == plan.DependencyPreparationStatusReady {
+	if dependencyErr == nil && dependency.Status == plan.DependencyPreparationStatusReady {
 		ready.ClearDependencyFailure = true
 	}
-	if dependencySucceeded {
+	if jsSucceeded {
 		if fingerprint == "" {
 			ready.ClearDependencyFingerprint = true
 		} else {

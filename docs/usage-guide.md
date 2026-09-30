@@ -1490,6 +1490,17 @@ fetch or pull first; dirt, conflicts, or missing inputs stop before the agent.
 Resolve the reported condition rather than editing workspace metadata or relying
 on an earlier slice's promise that a file should exist.
 
+Managed plan workspaces automatically initialize pinned recursive Git submodules
+before JS dependency installation, independently of its cache. Batch integration
+workspaces (`tao merge --all`) initialize submodules before dependent agents and
+gates, including changed pins, resumed work, and verification probes; they do not
+install JS dependencies. Git transport and authentication policy still apply.
+Credential, transport, and unresolved submodule prerequisites stop the batch
+without being attributed as code defects or spending a repair attempt. Resolve
+the reported prerequisite and rerun; preserve local submodule edits before
+retrying a refused update or cleanup. This adds neither configurable prepare
+commands nor preparation of the control checkout for ordinary single-plan merges.
+
 Cleanup is explicit and preview-first. Use `tao workspace clean <plan>` for one
 workspace and `tao cleanup --dry-run` after integration for repository-wide
 managed cleanup, including unreferenced integration namespaces (`tao/integration`

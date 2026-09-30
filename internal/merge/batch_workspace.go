@@ -169,7 +169,52 @@ func (b *BatchWorkspace) Start(ctx context.Context, state BatchState) (workspace
 	if len(drifts) != 0 {
 		return workspace.IntegrationWorkspace{}, &BatchResumeError{Drifts: drifts}
 	}
-	return b.workspaces.CreateIntegration(ctx, state.ID, state.DefaultStartSHA)
+	created, err := b.workspaces.CreateIntegration(ctx, state.ID, state.DefaultStartSHA)
+	if err != nil {
+		return created, err
+	}
+	return created, prepareBatchSubmodules(ctx, gitops.NewClient(created.Path, b.runner), b.runner, nil)
+}
+
+// Preparation is a batch prerequisite, not a verification result. In particular,
+// Git can skip unmerged gitlinks and still exit successfully; never let an agent
+// or gate consume an arbitrary existing checkout in that case.
+func prepareBatchSubmodules(ctx context.Context, git GitClient, runner commandrunner.Runner, now func() time.Time) error {
+	fail := func(err error) error {
+		return fmt.Errorf("prepare merge batch submodules in %s: %w; resolve submodule conflicts or Git credentials/transport prerequisites, then rerun tao merge --all", git.Root(), err)
+	}
+	if err := ctx.Err(); err != nil {
+		return fail(err)
+	}
+	status, err := git.StatusPorcelain(ctx)
+	if err != nil {
+		return fail(err)
+	}
+	if hasUnmergedStatus(status) {
+		var entries, stderr strings.Builder
+		if runner == nil {
+			runner = commandrunner.DefaultLocal
+		}
+		if err := runner(ctx, git.Root(), "git", []string{"ls-files", "--unmerged", "-z"}, &entries, &stderr); err != nil {
+			return fail(fmt.Errorf("inspect unresolved submodules: %w: %s", err, stderr.String()))
+		}
+		for entry := range strings.SplitSeq(entries.String(), "\x00") {
+			mode, rest, _ := strings.Cut(entry, " ")
+			_, path, _ := strings.Cut(rest, "\t")
+			if mode == "160000" || path == ".gitmodules" {
+				return fail(fmt.Errorf("unresolved submodule prerequisite %q", path))
+			}
+		}
+	}
+	_, err = workspace.PrepareSubmodules(ctx, git.Root(), runner, now)
+	if err != nil {
+		return fail(err)
+	}
+	return nil
+}
+
+func (s Service) prepareBatchSubmodules(ctx context.Context, git GitClient) error {
+	return prepareBatchSubmodules(ctx, git, s.commandRunner(), s.Now)
 }
 
 // PrepareDisposableIntegration proves the dry-run namespace is absent before
@@ -246,6 +291,11 @@ func (b *BatchWorkspace) removeDisposableIntegration(ctx context.Context, identi
 			// disposable, registered directory; Git then removes its own entry.
 			if err := os.RemoveAll(identity.Path); err != nil {
 				return fmt.Errorf("remove incomplete disposable worktree: %w", err)
+			}
+		}
+		if pathErr == nil && !incomplete && gitFileErr == nil {
+			if err := b.checkSubmoduleCleanup(ctx, identity.Path); err != nil {
+				return err
 			}
 		}
 		// Git leaves an initialization lock when worktree add is killed. Two
@@ -565,6 +615,11 @@ func (b *BatchWorkspace) PlanRestart(ctx context.Context, state BatchState) (Bat
 	if err != nil {
 		return BatchRestartPlan{}, err
 	}
+	if !status.Missing {
+		if err := b.checkSubmoduleCleanup(ctx, status.Path); err != nil {
+			return BatchRestartPlan{}, &batchRestartRefusalError{reason: err.Error()}
+		}
+	}
 	branch := "tao/integration/" + state.ID
 	branchExists, err := b.git.LocalBranchExists(ctx, branch)
 	if err != nil {
@@ -592,7 +647,70 @@ func (b *BatchWorkspace) Restart(ctx context.Context, state BatchState) (BatchRe
 // RemoveIntegration removes only the batch-owned integration worktree and
 // branch. Settlement calls it after every source plan is durably recorded.
 func (b *BatchWorkspace) RemoveIntegration(ctx context.Context, batchID string) error {
+	status, err := b.workspaces.IntegrationStatus(ctx, batchID)
+	if err != nil {
+		return err
+	}
+	if !status.Missing {
+		if err := b.checkSubmoduleCleanup(ctx, status.Path); err != nil {
+			return err
+		}
+	}
 	return b.workspaces.RemoveIntegration(ctx, batchID)
+}
+
+// Existing batch-owned cleanup may force removal, but that must not discard
+// local submodule edits (including ones hidden by submodule ignore settings).
+func (b *BatchWorkspace) checkSubmoduleCleanup(ctx context.Context, root string) error {
+	_, modulesErr := os.Lstat(filepath.Join(root, ".gitmodules"))
+	if modulesErr != nil && !errors.Is(modulesErr, os.ErrNotExist) {
+		return fmt.Errorf("inspect submodules before batch cleanup: %w", modulesErr)
+	}
+	isDirty := func(repo string) (bool, error) {
+		var status, stderr strings.Builder
+		if err := b.runner(ctx, repo, "git", []string{"status", "--porcelain", "--ignore-submodules=none", "--untracked-files=all"}, &status, &stderr); err != nil {
+			return false, fmt.Errorf("inspect repository %s before batch cleanup: %w: %s", repo, err, stderr.String())
+		}
+		return strings.TrimSpace(status.String()) != "", nil
+	}
+	dirty, err := isDirty(root)
+	if err != nil {
+		return err
+	}
+	hasModules := modulesErr == nil
+	// Parent status, even with --ignore-submodules=none, can hide changes
+	// under a child's nested ignore settings. Inspect each initialized repo
+	// independently, including checkouts left behind without .gitmodules.
+	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if entry.Name() != ".git" {
+			return nil
+		}
+		if repo := filepath.Dir(path); repo != filepath.Clean(root) {
+			hasModules = true
+			nestedDirty, err := isDirty(repo)
+			if err != nil {
+				return err
+			}
+			dirty = dirty || nestedDirty
+		}
+		if entry.IsDir() {
+			return filepath.SkipDir
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("inspect nested repositories before batch cleanup: %w", err)
+	}
+	if hasModules && dirty {
+		return fmt.Errorf("refusing batch cleanup of %s: submodule workspace has local changes; preserve or resolve them before retrying", root)
+	}
+	return nil
 }
 
 // ClearActive completes a landed transaction without deleting its retained

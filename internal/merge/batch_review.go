@@ -107,6 +107,9 @@ func (r BatchAggregateReviewer) Review(ctx context.Context, state BatchState, in
 	}
 
 	for {
+		if err := r.Service.prepareBatchSubmodules(ctx, git); err != nil {
+			return r.block(result, state, BatchBlockKindResumable, err.Error())
+		}
 		head, revErr := git.RevParse(ctx, "HEAD")
 		if revErr != nil {
 			return r.block(result, state, BatchBlockKindResumable, "capture aggregate review head: "+revErr.Error())
@@ -135,8 +138,7 @@ func (r BatchAggregateReviewer) Review(ctx context.Context, state BatchState, in
 				if state.Review == nil && state.VerificationAttribution == nil {
 					state, err = r.attributeVerificationFailure(ctx, git, state, integrationRoot, verify.command, output)
 					if err != nil {
-						result.State = state
-						return result, err
+						return r.block(result, state, BatchBlockKindResumable, err.Error())
 					}
 				}
 				a := state.VerificationAttribution
@@ -420,6 +422,9 @@ func (r BatchAggregateReviewer) attributeVerificationFailure(ctx context.Context
 		cleanupCtx, cancel := singleAgentCleanupContext(ctx)
 		defer cancel()
 		restoreErr := restoreBatchIntegration(cleanupCtx, git, state.IntegrationHead)
+		if restoreErr == nil {
+			restoreErr = r.Service.prepareBatchSubmodules(cleanupCtx, git)
+		}
 		refsErr := compareBatchProtectedRefs(cleanupCtx, git, refs)
 		if restoreErr == nil {
 			attribution.ParkedSHA = ""
@@ -445,6 +450,9 @@ func (r BatchAggregateReviewer) attributeVerificationFailure(ctx context.Context
 		}
 		if err := restoreBatchIntegration(ctx, git, prefixes[index]); err != nil {
 			return false, "", fmt.Errorf("restore verification prefix: %w", err)
+		}
+		if err := r.Service.prepareBatchSubmodules(ctx, git); err != nil {
+			return false, "", err
 		}
 		output, gateErr := r.Service.runMergeVerifyAtRoot(ctx, integrationRoot, command)
 		attribution.GateRuns++
@@ -500,6 +508,9 @@ func (r BatchAggregateReviewer) recoverVerificationAttribution(ctx context.Conte
 	defer cancel()
 	if err := restoreBatchIntegration(cleanupCtx, git, state.IntegrationHead); err != nil {
 		return state, fmt.Errorf("restore interrupted verification attribution: %w", err)
+	}
+	if err := r.Service.prepareBatchSubmodules(ctx, git); err != nil {
+		return state, err
 	}
 	state.VerificationAttribution = nil
 	persisted, err := r.persist(state)

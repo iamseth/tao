@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -206,6 +207,53 @@ func TestFinishResolvedCandidatePreparedCommitPhases(t *testing.T) {
 				}
 			} else if got.IntegrationHead != head || got.Integrations[0].IntegrationSHA != head {
 				t.Fatalf("settlement omitted exact commit SHA: %+v", got)
+			}
+		})
+	}
+}
+
+func TestBatchSubmodulesResolverPreparationOrderingAndFailure(t *testing.T) {
+	for _, failAt := range []int{0, 1, 2} {
+		t.Run(fmt.Sprintf("fail-at-%d", failAt), func(t *testing.T) {
+			fixture, source, base, root := batchAgentConflictFixture(t)
+			state := batchAgentDeferredState(fixture, source, base)
+			if err := os.WriteFile(filepath.Join(root, ".gitmodules"), nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			service := NewService(fixture.repoRoot, nil)
+			runner := service.commandRunner()
+			var sequence []string
+			preparations, agents, gates := 0, 0, 0
+			service.Runner = func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+				if name == "git" && strings.Join(args, " ") == "submodule update --init --recursive" {
+					preparations++
+					sequence = append(sequence, "prepare")
+					if preparations == failAt {
+						return errors.New("transport denied")
+					}
+					return nil
+				}
+				if name == "sh" {
+					gates++
+					sequence = append(sequence, "gate")
+				}
+				return runner(ctx, cwd, name, args, stdout, stderr)
+			}
+			agent := batchSessionAgentFunc(func(context.Context, BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+				agents++
+				sequence = append(sequence, "agent")
+				return BatchAgentSessionResult{Output: batchResolutionJSON("resolve README")}, os.WriteFile(filepath.Join(root, "README.md"), []byte("resolved\n"), 0o600)
+			})
+			got, err := (BatchAgentResolver{Service: service, Store: &recordingBatchTransitionStore{}, Agent: agent}).Resolve(context.Background(), state, root, BatchResolveOptions{VerifyCommand: "true"})
+			if failAt == 0 {
+				if err != nil || !slices.Equal(sequence, []string{"prepare", "agent", "prepare", "gate"}) {
+					t.Fatalf("sequence=%v err=%v", sequence, err)
+				}
+			} else {
+				wantAgents := failAt - 1
+				if err == nil || !strings.Contains(err.Error(), "submodule") || agents != wantAgents || gates != 0 || got.State.Attempts.ConflictResolution != wantAgents || got.State.BlockKind != BatchBlockKindResumable {
+					t.Fatalf("sequence=%v state=%+v err=%v", sequence, got.State, err)
+				}
 			}
 		})
 	}
