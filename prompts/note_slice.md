@@ -52,6 +52,21 @@ Verification command contract:
 - When no build or test command applies, use the narrowest deterministic fallback, such as `grep -q`, `test -f`, or `git diff --stat`.
 - Keep `manual_checks` additive; every slice still needs a deterministic command.
 
+## Advisory coverage check
+
+Before validation, for each plan, inventory every item in `plan.decision.success_criteria` and every durable constraint in `planning-brief.md`'s Constraints section. Preserve each item's meaning; do not omit inconvenient items.
+
+- Map each item to actual slice IDs and cite supporting goals, tasks, or verification commands. Shared file paths alone are not coverage.
+- For each uncovered item, add or adjust slice work to cover it; explicitly classify it as a genuine Non-goal only when the established scope excludes it; or record it as an Open Question in the existing brief and `open_questions` with `plan.decision.readiness` set to `needs_refinement`. Do not silently reduce scope, drop requirements, or weaken constraints.
+- For each slice mapping to no success criterion or constraint, justify its necessity in its existing `context` field.
+- Recheck coverage after validation fixes change scope and before returning.
+
+Stronger blocked or refusal rules still take precedence; `needs_refinement` never overrides a requirement to refuse without artifacts. In particular, unsupervised generation must refuse without artifacts when unresolved decisions prevent safe execution.
+
+Keep the coverage map only in the final response, never in `planning-brief.md` or any other artifact. Coverage and readiness remain advisory: do not add fields, validator errors, or execution authority. Use only the existing fields and sections for scope adjustments, dispositions, and context justifications.
+
+## Validation
+
 After writing the artifacts, run `tao validate {{.PlanDir}}` and fix every reported error before returning. Re-run validation after fixes; warnings are non-fatal.
 
 ## Repository
@@ -91,3 +106,5 @@ END TAO UNTRUSTED WORK DESCRIPTION
 ## Response
 
 After validation succeeds, return a concise summary that includes the generated plan ID and any non-fatal validation warnings you intentionally left unresolved.
+
+Include a compact requirement/constraint-to-slice table covering every inventoried success criterion and constraint: actual slice IDs and supporting evidence, or an explicit Non-goal/Open Question disposition with its reason. This advisory map belongs in the final response only, not a persisted artifact.

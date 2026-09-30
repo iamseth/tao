@@ -1012,6 +1012,99 @@ func TestSlicePromptKeepsVerificationProvenanceAndSemanticsAdvisory(t *testing.T
 	}
 }
 
+func TestRenderSlicePromptsRequireAdvisoryCoverageBeforeValidation(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		prompt       string
+		unsupervised bool
+		validation   string
+		response     string
+		preserved    []string
+	}{
+		{
+			name: "slice", prompt: PromptSlice,
+			validation: "After writing the plan artifacts, you must run `tao validate",
+			response:   "## Final response",
+			preserved: []string{
+				"- plan directory path", "- slice count", "- first slice id", "- any open questions",
+				"stop and ask the user rather than inventing a type or writing incomplete plan artifacts",
+				"resolve it with the user before writing artifacts instead of guessing",
+			},
+		},
+		{
+			name: "note supervised", prompt: PromptNoteSlice,
+			validation: "After writing the artifacts, run `tao validate /tmp/plan`",
+			response:   "## Response",
+			preserved: []string{
+				"includes the generated plan ID and any non-fatal validation warnings you intentionally left unresolved",
+				"write no plan artifacts and explain the refusal rather than inventing a type",
+			},
+		},
+		{
+			name: "note unsupervised", prompt: PromptNoteSlice, unsupervised: true,
+			validation: "After writing the artifacts, run `tao validate /tmp/plan`",
+			response:   "## Response",
+			preserved: []string{
+				"includes the generated plan ID and any non-fatal validation warnings you intentionally left unresolved",
+				"write no plan artifacts and explain the refusal rather than inventing a type",
+				"If unresolved decisions prevent safe execution, write no plan artifacts and explain the refusal in your response",
+				"Do not hide unresolved decisions as questions inside runnable slice tasks",
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Render(tt.prompt, Data{PlanDir: "/tmp/plan", UnsupervisedPolicy: tt.unsupervised, Transcript: "Build the requested feature"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			coverage := strings.Index(got, "## Advisory coverage check")
+			validation := strings.Index(got, tt.validation)
+			response := strings.Index(got, tt.response)
+			if coverage < 0 || validation <= coverage || response <= validation {
+				t.Fatalf("expected coverage check before mandatory validation before response (coverage=%d validation=%d response=%d)", coverage, validation, response)
+			}
+			for _, want := range []string{
+				"Before validation, for each plan, inventory every item in `plan.decision.success_criteria` and every durable constraint in `planning-brief.md`'s Constraints section",
+				"Map each item to actual slice IDs and cite supporting goals, tasks, or verification commands",
+				"Shared file paths alone are not coverage",
+				"For each uncovered item, add or adjust slice work to cover it",
+				"explicitly classify it as a genuine Non-goal only when the established scope excludes it",
+				"record it as an Open Question in the existing brief and `open_questions` with `plan.decision.readiness` set to `needs_refinement`",
+				"Do not silently reduce scope, drop requirements, or weaken constraints",
+				"For each slice mapping to no success criterion or constraint, justify its necessity in its existing `context` field",
+				"Recheck coverage after validation fixes change scope and before returning",
+				"Stronger blocked or refusal rules still take precedence",
+				"`needs_refinement` never overrides a requirement to refuse without artifacts",
+				"unsupervised generation must refuse without artifacts when unresolved decisions prevent safe execution",
+				"Keep the coverage map only in the final response, never in `planning-brief.md` or any other artifact",
+				"Coverage and readiness remain advisory: do not add fields, validator errors, or execution authority",
+			} {
+				if !strings.Contains(got[coverage:validation], want) {
+					t.Errorf("pre-validation coverage guidance missing %q", want)
+				}
+			}
+			for _, want := range []string{
+				"compact requirement/constraint-to-slice table",
+				"every inventoried success criterion and constraint",
+				"actual slice IDs and supporting evidence, or an explicit Non-goal/Open Question disposition",
+				"final response only, not a persisted artifact",
+			} {
+				if !strings.Contains(got[response:], want) {
+					t.Errorf("final response guidance missing %q", want)
+				}
+			}
+			for _, want := range tt.preserved {
+				if !strings.Contains(got, want) {
+					t.Errorf("existing response or stronger refusal contract missing %q", want)
+				}
+			}
+			if tt.unsupervised && validation >= strings.Index(got, "BEGIN TAO UNTRUSTED WORK DESCRIPTION\n") {
+				t.Fatal("coverage and validation guidance must remain outside and before untrusted source")
+			}
+		})
+	}
+}
+
 func TestRenderNoteSlicePromptUsesPlanDirectoryAndTranscript(t *testing.T) {
 	got, err := Render(PromptNoteSlice, Data{
 		PlanDir:    "/tmp/tao/plans/20260614-note",

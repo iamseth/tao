@@ -175,6 +175,21 @@ Quote focused regex patterns that contain shell-sensitive characters, for exampl
 
 For every verification command, set `verification.source` to the file, script, or repository convention that justifies it. If no repository-owned build, test, lint, or documented validation command applies, still include the narrowest deterministic fallback command for the slice. These fallbacks apply only when no build/test command applies. Examples include `grep -q <expected-string> <file>` to assert documented content exists, `test -f <path>` to assert a file exists, or `git diff --stat -- <files>` to assert the intended files changed. Mark the fallback assumption explicitly in `plan.md`, in the slice `verification.source`, and in `verification.manual_checks`. Keep manual checks as additive depth; never use them as a replacement for `verification.commands`. If the fallback command is uncertain, include manual checks and validation assumptions without presenting the command as broader proof than it provides.
 
+## Advisory coverage check
+
+Before validation, for each plan, inventory every item in `plan.decision.success_criteria` and every durable constraint in `planning-brief.md`'s Constraints section. Preserve each item's meaning; do not omit inconvenient items.
+
+- Map each item to actual slice IDs and cite supporting goals, tasks, or verification commands. Shared file paths alone are not coverage.
+- For each uncovered item, add or adjust slice work to cover it; explicitly classify it as a genuine Non-goal only when the established scope excludes it; or record it as an Open Question in the existing brief and `open_questions` with `plan.decision.readiness` set to `needs_refinement`. Do not silently reduce scope, drop requirements, or weaken constraints.
+- For each slice mapping to no success criterion or constraint, justify its necessity in its existing `context` field.
+- Recheck coverage after validation fixes change scope and before returning.
+
+Stronger blocked or refusal rules still take precedence; `needs_refinement` never overrides a requirement to refuse without artifacts. In particular, unsupervised generation must refuse without artifacts when unresolved decisions prevent safe execution.
+
+Keep the coverage map only in the final response, never in `planning-brief.md` or any other artifact. Coverage and readiness remain advisory: do not add fields, validator errors, or execution authority. Use only the existing fields and sections for scope adjustments, dispositions, and context justifications.
+
+## Validation and approval
+
 After writing the plan artifacts, you must run `tao validate <plan-id-or-slug-or-path>`, and if it reports any errors, fix the slices and re-run until it reports no errors (warnings are non-fatal).
 
 For a note-backed packet, only after that mandatory validation succeeds, invoke the linked archive command exactly once:
@@ -407,3 +422,4 @@ After writing files, respond with:
 - slice count
 - first slice id
 - any open questions
+- a compact requirement/constraint-to-slice table covering every inventoried success criterion and constraint: actual slice IDs and supporting evidence, or an explicit Non-goal/Open Question disposition with its reason. This advisory map belongs in the final response only, not a persisted artifact.
