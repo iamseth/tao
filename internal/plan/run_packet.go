@@ -96,6 +96,10 @@ func RenderRunPacket(detail *PlanDetail, options RunPacketOptions) (string, erro
 		writeRunPacketList(&b, "Plan-Owned Files", options.PlanOwnedFiles)
 		b.WriteString("These files were changed on the plan branch by earlier slices; a declared verification command failing only in them is in scope to fix minimally.\n")
 	}
+	if len(slice.ExpectedFiles) == 0 && commitPolicy == "slice" {
+		writeRunPacketSection(&b, "No-Edit Completion")
+		b.WriteString("Empty `expected_files` is advisory, not evidence of cleanliness or permission to skip gates. For validation-only, no-edit, or already-satisfied work, new slice-policy completion still requires a valid temporary proposal outside the worktree. Describe the actual task and purpose without fabricated changes, cosmetic edits, or unobserved gate claims. Tao runs authoritative declared gates and repository checks; a clean successful slice can record `no_changes` without a commit. Required proposal input does not guarantee a commit. Preserve original inputs for exact recorded-intent recovery.\n")
+	}
 	writeDependencyStatus(&b, detail, slice)
 	writeRunPacketList(&b, "Global Invariants", detail.State.GlobalInvariants)
 	writeRunPacketList(&b, "Open Questions", detail.State.OpenQuestions)

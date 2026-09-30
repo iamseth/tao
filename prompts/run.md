@@ -153,6 +153,8 @@ When implementation and targeted checks are ready, write local files for Tao-own
 - No verification results file is required for a new transaction. Optional `--verification-results-file` input is advisory only: an array of `command`, `cwd`, `result`, and `details` fields, with no observed provenance fields. Historical intent recovery still requires the original results file.
 {{ if eq .CommitPolicy "slice" -}}
 - A commit proposal JSON file containing exactly one object with `type`, `scope`, `summary`, `what`, and `why` string fields. Use the supported Conventional Commit type and narrow lowercase scope that best describe this slice, a lowercase imperative summary of at most 72 characters, and useful non-empty what/why text. Do not add `Tao-*` fields or trailers; Tao alone appends trusted evidence and creates the commit.
+
+For new slice-policy completion, validation-only, no-edit, and already-satisfied work still requires a valid temporary proposal before `tao slice-complete`. Describe the actual task and purpose truthfully; do not fabricate changes, make cosmetic edits, or claim unobserved gates passed. Tao runs the authoritative declared gates and repository checks to determine the actual outcome: a clean successful slice can record `no_changes` without creating a commit. Required proposal input does not guarantee a commit. This applies only to new completion before intent, not exact recorded-intent recovery.
 {{ end }}
 These are throwaway inputs consumed by Tao, not project files: never write them into the repository, and never stage or commit them. Tao deletes them after successful completion.
 

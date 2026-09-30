@@ -157,6 +157,39 @@ func TestRenderRunPromptDerivesSliceCommitPolicyFromLegacyFlag(t *testing.T) {
 	}
 }
 
+func TestRunNoEditCompletionGuidance(t *testing.T) {
+	for _, policy := range []string{"slice", "none"} {
+		for _, resuming := range []bool{false, true} {
+			got, err := Render(PromptRun, Data{PlanDir: "/tmp/plan", CommitPolicy: policy, Resuming: resuming})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, guidance := range []string{
+				"For new slice-policy completion, validation-only, no-edit, and already-satisfied work still requires a valid temporary proposal before `tao slice-complete`",
+				"Describe the actual task and purpose truthfully",
+				"do not fabricate changes, make cosmetic edits, or claim unobserved gates passed",
+				"Tao runs the authoritative declared gates and repository checks to determine the actual outcome",
+				"a clean successful slice can record `no_changes` without creating a commit",
+				"Required proposal input does not guarantee a commit",
+				"This applies only to new completion before intent, not exact recorded-intent recovery",
+				"--commit-proposal-file",
+			} {
+				if strings.Contains(got, guidance) != (policy == "slice") {
+					t.Errorf("policy=%s resuming=%t: incorrect presence of %q", policy, resuming, guidance)
+				}
+			}
+			for _, want := range []string{"outside the repository working tree", "After recorded intent, preserve original inputs", "Historical intent recovery still requires the original results file"} {
+				if !strings.Contains(got, want) {
+					t.Errorf("policy=%s resuming=%t: missing %q", policy, resuming, want)
+				}
+			}
+			if policy == "none" && !strings.Contains(got, "Leave the worktree changes in place for the user to review or commit manually") {
+				t.Error("none policy must retain manual completion guidance")
+			}
+		}
+	}
+}
+
 func TestRunDelegatesAuthoritativeGatesWithoutDuplicateSequence(t *testing.T) {
 	for _, policy := range []string{"slice", "none"} {
 		got, err := Render(PromptRun, Data{PlanDir: "/tmp/plan", CommitPolicy: policy, Resuming: true})

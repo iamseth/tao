@@ -458,6 +458,41 @@ func runPacketTelemetryFeedbackSection(packet string) string {
 	return section
 }
 
+func TestRunPacketNoEditCompletionGuidance(t *testing.T) {
+	for _, policy := range []string{"slice", "none", ""} {
+		for _, files := range []struct {
+			name  string
+			paths []string
+		}{
+			{name: "omitted"},
+			{name: "empty", paths: []string{}},
+			{name: "nonempty", paths: []string{"file.go"}},
+		} {
+			for _, resuming := range []bool{false, true} {
+				detail := runPacketDetail()
+				detail.Slices.Slices[1].ExpectedFiles = files.paths
+				packet, err := RenderRunPacket(detail, RunPacketOptions{CommitPolicy: policy, Resuming: resuming})
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, guidance := range []string{
+					"Empty `expected_files` is advisory, not evidence of cleanliness or permission to skip gates",
+					"new slice-policy completion still requires a valid temporary proposal outside the worktree",
+					"Describe the actual task and purpose without fabricated changes, cosmetic edits, or unobserved gate claims",
+					"Tao runs authoritative declared gates and repository checks",
+					"a clean successful slice can record `no_changes` without a commit",
+					"Required proposal input does not guarantee a commit",
+					"Preserve original inputs for exact recorded-intent recovery",
+				} {
+					if strings.Contains(packet, guidance) != (policy == "slice" && len(files.paths) == 0) {
+						t.Errorf("policy=%q files=%s resuming=%t: incorrect presence of %q", policy, files.name, resuming, guidance)
+					}
+				}
+			}
+		}
+	}
+}
+
 func runPacketDetail() *PlanDetail {
 	current := "002-build"
 	return &PlanDetail{
