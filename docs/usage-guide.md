@@ -1438,6 +1438,18 @@ body, title, labeling, assignment, and option behavior belongs in
 
 ### Workspaces
 
+Linked Git worktrees share the main checkout's registered repository identity,
+plans, notes, and repository defaults. Commands such as `tao list` and
+`tao show` find that shared data from a linked checkout or its subdirectories;
+you do not need a separate registration or `--plans-dir` override.
+
+Shared identity does not redirect execution to the main checkout. For a new
+`current`-mode workspace, Tao uses the launch checkout and records it as the
+execution root; subsequent runs still honor the plan's recorded root and health
+checks. Standalone `tao commit` (including `--context` and `--push`) intentionally
+refuses an active Tao-managed worktree. Follow its recovery guidance instead of
+trying to bypass ownership with another launch directory.
+
 Isolated runs may update a stale clean workspace from the current local default
 branch, prepare dependencies when a supported lockfile is present, and then
 check the selected slice's required inputs inside that workspace. Tao does not

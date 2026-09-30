@@ -400,6 +400,113 @@ func TestModelFlagsRejectInvalidNames(t *testing.T) {
 	}
 }
 
+func TestRunCurrentKeepsRecordedLinkedCheckoutAtHandoff(t *testing.T) {
+	for _, location := range []string{"root", "subdirectory", "symlink"} {
+		t.Run(location, func(t *testing.T) {
+			clearTaoEnv(t)
+			mainRoot, linked := linkedLaunchFixture(t)
+			mainHead := runCLICommitGit(t, mainRoot, "rev-parse", "HEAD")
+			launch := linked
+			if location != "root" {
+				launch = filepath.Join(linked, "nested")
+				if err := os.Mkdir(launch, 0o750); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if location == "symlink" {
+				alias := filepath.Join(t.TempDir(), "alias")
+				if err := os.Symlink(launch, alias); err != nil {
+					t.Fatal(err)
+				}
+				launch = alias
+			}
+			t.Chdir(launch)
+			fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+			repo := plan.NewFileRepository(fixture.root)
+			detail, err := repo.ResolvePlan(context.Background(), fixture.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			detail.State.Repo.Root = linked
+			detail.State.Repo.Branch = "main" // Starting-branch capture must use the execution checkout.
+			record, err := plan.NewPlanRecord(fixture.dir, detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := record.PersistArtifacts(); err != nil {
+				t.Fatal(err)
+			}
+			stopped := errors.New("stop at agent handoff")
+			var gotRoot string
+			app := App{Out: io.Discard, Err: io.Discard, ProcessStarter: func(_ context.Context, cwd, _ string, _ []string) (run.Process, error) {
+				gotRoot = cwd
+				return nil, stopped
+			}}
+			err = app.run(context.Background(), repo, []string{"--execution-mode", "current", "--commit-policy", "none", "--no-review", fixture.id})
+			if err == nil || !strings.Contains(err.Error(), stopped.Error()) || gotRoot != linked {
+				t.Fatalf("handoff root = %q, error = %v; want %q and sentinel", gotRoot, err, linked)
+			}
+			reloaded, err := repo.ResolvePlan(context.Background(), fixture.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reloaded.State.Repo.Root != linked || reloaded.Slices.Slices[0].ExecutionRoot != linked || reloaded.State.Repo.Branch != "launch" {
+				t.Fatalf("execution redirected: repo=%q slice=%+v", reloaded.State.Repo.Root, reloaded.Slices.Slices[0])
+			}
+			if reloaded.State.Workspace == nil || reloaded.State.Workspace.Branch != "launch" {
+				t.Fatalf("workspace branch did not retain launch identity: %+v", reloaded.State.Workspace)
+			}
+			if got := strings.TrimSpace(runCLICommitGit(t, linked, "branch", "--show-current")); got != "launch" {
+				t.Fatalf("launch branch changed: %q", got)
+			}
+			if runCLICommitGit(t, mainRoot, "rev-parse", "HEAD") != mainHead || strings.TrimSpace(runCLICommitGit(t, mainRoot, "branch", "--show-current")) != "main" || runCLICommitGit(t, mainRoot, "status", "--porcelain") != "" {
+				t.Fatal("main checkout changed")
+			}
+		})
+	}
+}
+
+func TestRunCurrentDoesNotReplaceUnhealthyRecordedRootWithLaunchCheckout(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		t.Run(strconv.FormatBool(missing), func(t *testing.T) {
+			clearTaoEnv(t)
+			linkedLaunchFixture(t)
+			fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+			repo := plan.NewFileRepository(fixture.root)
+			detail, err := repo.ResolvePlan(context.Background(), fixture.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			root := t.TempDir()
+			if missing {
+				root = filepath.Join(root, "missing")
+			}
+			detail.State.Repo.Root = root
+			record, err := plan.NewPlanRecord(fixture.dir, detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := record.PersistArtifacts(); err != nil {
+				t.Fatal(err)
+			}
+			app := App{Out: io.Discard, Err: io.Discard, ProcessStarter: func(context.Context, string, string, []string) (run.Process, error) {
+				t.Fatal("unhealthy recorded repository reached agent handoff")
+				return nil, nil
+			}}
+			if err := app.run(context.Background(), repo, []string{"--execution-mode", "current", "--commit-policy", "none", "--no-review", fixture.id}); err == nil || !strings.Contains(err.Error(), "detect starting branch for branch policy current") {
+				t.Fatalf("expected recorded-root Git refusal before handoff, got %v", err)
+			}
+			reloaded, err := repo.ResolvePlan(context.Background(), fixture.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reloaded.State.Repo.Root != root || reloaded.Slices.Slices[0].Status != plan.StatusPending || reloaded.Slices.Slices[0].ExecutionRoot != "" {
+				t.Fatalf("unhealthy root changed or slice started: %+v", reloaded)
+			}
+		})
+	}
+}
+
 func TestRunAgentFlagIsRejected(t *testing.T) {
 	clearTaoEnv(t)
 	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)

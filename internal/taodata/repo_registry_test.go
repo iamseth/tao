@@ -338,6 +338,83 @@ func TestRegisterCurrentDiscoversGitRepo(t *testing.T) {
 	})
 }
 
+func TestRegisterCurrentLinkedWorktreeIdentity(t *testing.T) {
+	root := newGitRepo(t)
+	runGit(t, root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "initial")
+	linked := filepath.Join(t.TempDir(), "linked \"checkout\"")
+	runGit(t, root, "worktree", "add", "-b", "linked", linked)
+	subdir := filepath.Join(linked, "nested")
+	if err := os.Mkdir(subdir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	symlink := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(linked, symlink); err != nil {
+		t.Fatal(err)
+	}
+	registry := Registry{DataHome: t.TempDir(), Now: fixedNow}
+	var original Repo
+	withDir(t, root, func() {
+		var err error
+		original, err = registry.RegisterCurrent(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		pullRequest := false
+		original.RunDefaults = &RepoRunDefaults{PullRequest: &pullRequest}
+		if err := registry.WriteRepo(original); err != nil {
+			t.Fatal(err)
+		}
+	})
+	for _, dir := range []string{linked, subdir, symlink, filepath.Join(symlink, "nested")} {
+		withDir(t, dir, func() {
+			for _, lookup := range []func(context.Context) (Repo, error){registry.Current, registry.RegisterCurrent} {
+				repo, err := lookup(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if repo.ID != original.ID || repo.ID != RepoID(root) || repo.Root != root || repo.Branch != original.Branch {
+					t.Fatalf("from %q: got %+v, want %+v", dir, repo, original)
+				}
+				if value, set := repo.PullRequestDefault(); !set || value {
+					t.Fatalf("lost defaults: %+v", repo)
+				}
+			}
+		})
+	}
+	repos, err := registry.ListRepos()
+	if err != nil || len(repos) != 1 {
+		t.Fatalf("repos=%+v, err=%v", repos, err)
+	}
+}
+
+func TestRegisterCurrentSubmoduleIdentity(t *testing.T) {
+	source := newGitRepo(t)
+	runGit(t, source, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "initial")
+	super := newGitRepo(t)
+	runGit(t, super, "-c", "protocol.file.allow=always", "submodule", "add", source, "module")
+	module := filepath.Join(super, "module")
+	registry := Registry{DataHome: t.TempDir(), Now: fixedNow}
+	for _, root := range []string{super, module} {
+		withDir(t, root, func() {
+			repo, err := registry.RegisterCurrent(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if repo.Root != root || repo.ID != RepoID(root) {
+				t.Fatalf("identity = %+v, want %q", repo, root)
+			}
+			current, err := registry.Current(context.Background())
+			if err != nil || current.ID != repo.ID {
+				t.Fatalf("Current() = %+v, %v", current, err)
+			}
+		})
+	}
+	repos, err := registry.ListRepos()
+	if err != nil || len(repos) != 2 {
+		t.Fatalf("repos=%+v, err=%v", repos, err)
+	}
+}
+
 func TestRegisterCurrentPreservesRunDefaults(t *testing.T) {
 	root := newGitRepo(t)
 	dataHome := t.TempDir()

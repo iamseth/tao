@@ -9,8 +9,72 @@ import (
 	"testing"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/taodata"
 	"github.com/iamseth/tao/internal/workspace"
 )
+
+// linkedLaunchFixture keeps registered identity distinct from the checkout used
+// for execution. All Git operations stay in disposable local repositories.
+func linkedLaunchFixture(t *testing.T) (string, string) {
+	t.Helper()
+	mainRoot := newCLICommitRepo(t)
+	mainRoot, err := filepath.EvalSymlinks(mainRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	linked := filepath.Join(t.TempDir(), "linked")
+	runCLICommitGit(t, mainRoot, "worktree", "add", "-b", "launch", linked)
+	linked, err = filepath.EvalSymlinks(linked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TAO_DATA_HOME", t.TempDir())
+	t.Chdir(linked)
+	registered, err := taodata.NewRegistry(os.Getenv("TAO_DATA_HOME")).RegisterCurrent(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if registered.Root != mainRoot {
+		t.Fatalf("registered root = %q, want main checkout %q", registered.Root, mainRoot)
+	}
+	return mainRoot, linked
+}
+
+func TestWorkspaceManagerFromCWDKeepsLinkedLaunchPath(t *testing.T) {
+	_, linked := linkedLaunchFixture(t)
+	sub := filepath.Join(linked, "nested")
+	if err := os.Mkdir(sub, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(sub, alias); err != nil {
+		t.Fatal(err)
+	}
+	for _, launch := range []string{linked, sub, alias} {
+		t.Run(filepath.Base(launch), func(t *testing.T) {
+			t.Chdir(launch)
+			want, err := filepath.EvalSymlinks(launch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got string
+			app := App{WorkspaceManager: func(root string) (WorkspaceManager, error) {
+				got = root
+				return &fakeWorkspaceManager{}, nil
+			}}
+			if _, err := app.workspaceManagerFromCWD(); err != nil {
+				t.Fatal(err)
+			}
+			physical, err := filepath.EvalSymlinks(got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if physical != want {
+				t.Fatalf("manager root = %q, want caller path %q", got, want)
+			}
+		})
+	}
+}
 
 type fakeWorkspaceManager struct {
 	prepareOptions       workspace.PrepareOptions

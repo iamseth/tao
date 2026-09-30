@@ -208,36 +208,62 @@ func TestCommitRefusesManagedWorktreeBeforeContextOrGitMutation(t *testing.T) {
 	planDir := writeRunPlan(t, plansDir, "plan-managed", plan.StatusInProgress, []string{"001-a"}, nil, "001-a", plan.StatusInProgress)
 	configureManagedCommitPlan(t, planDir, control, worktree, "feature/managed", true)
 
-	beforeHead := strings.TrimSpace(runCLICommitGit(t, worktree, "rev-parse", "HEAD"))
+	// A local-only transport sentinel makes any attempted publication observable.
+	transport := filepath.Join(t.TempDir(), "transport")
+	marker := transport + ".called"
+	if err := os.WriteFile(transport, []byte("#!/bin/sh\ntouch '"+marker+"'\nexit 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_ALLOW_PROTOCOL", "ext")
+	runCLICommitGit(t, worktree, "remote", "add", "publish", "ext::sh "+transport)
+	runCLICommitGit(t, worktree, "config", "branch.feature/managed.remote", "publish")
+	runCLICommitGit(t, worktree, "config", "branch.feature/managed.merge", "refs/heads/target")
+	runCLICommitGit(t, worktree, "add", "managed.go")
+	writeCLICommitFile(t, worktree, "managed.go", "package managed\n// unstaged\n")
+	writeCLICommitFile(t, worktree, "untracked.go", "package untracked\n")
+	beforeHead := runCLICommitGit(t, worktree, "rev-parse", "HEAD")
 	beforeIndex := runCLICommitGit(t, worktree, "diff", "--cached")
-	var out bytes.Buffer
-	app := App{Out: &out, Err: io.Discard}
-	err = app.Run(context.Background(), []string{"commit", "--context", "--repo-root", worktree})
-	if err == nil || !strings.Contains(err.Error(), "active Tao-managed worktree") || !strings.Contains(err.Error(), "tao run --continue plan-managed") {
-		t.Fatalf("managed context error = %v", err)
-	}
-	if out.Len() != 0 {
-		t.Fatalf("managed context exposed output: %q", out.String())
-	}
-	if got := strings.TrimSpace(runCLICommitGit(t, worktree, "rev-parse", "HEAD")); got != beforeHead {
-		t.Fatalf("HEAD = %q, want %q", got, beforeHead)
-	}
-	if got := runCLICommitGit(t, worktree, "diff", "--cached"); got != beforeIndex {
-		t.Fatalf("index changed: %q", got)
-	}
-
-	err = app.Run(context.Background(), []string{"commit", "--context", "--push", "--repo-root", worktree})
-	if err == nil || !strings.Contains(err.Error(), "active Tao-managed worktree") {
-		t.Fatalf("managed push context error = %v", err)
-	}
+	beforeDiff := runCLICommitGit(t, worktree, "diff")
+	beforeStatus := runCLICommitGit(t, worktree, "status", "--porcelain")
 	message := "chore(cli): guard managed commits\n\nWhat:\nRefuse unsafe standalone commits.\n\nWhy:\nKeep workspace metadata synchronized."
-	err = app.Run(context.Background(), []string{"commit", "--message", message, "--push", "--repo-root", worktree})
-	if err == nil || !strings.Contains(err.Error(), "active Tao-managed worktree") {
-		t.Fatalf("managed push finalization error = %v", err)
+	sub := filepath.Join(worktree, "nested")
+	if err := os.Mkdir(sub, 0o750); err != nil {
+		t.Fatal(err)
 	}
-	err = app.Run(context.Background(), []string{"commit", "--message", message, "--repo-root", worktree})
-	if err == nil || !strings.Contains(err.Error(), "active Tao-managed worktree") {
-		t.Fatalf("managed finalization error = %v", err)
+	for _, launch := range []string{worktree, sub} {
+		t.Run(filepath.Base(launch), func(t *testing.T) {
+			t.Chdir(launch)
+			for _, explicitRoot := range []bool{false, true} {
+				for _, push := range []bool{false, true} {
+					for _, mode := range [][]string{{"--context"}, {"--message", message}} {
+						args := append([]string{"commit"}, mode...)
+						if explicitRoot {
+							args = append(args, "--repo-root", worktree)
+						}
+						if push {
+							args = append(args, "--push")
+						}
+						var out bytes.Buffer
+						err := (App{Out: &out, Err: io.Discard}).Run(context.Background(), args)
+						if err == nil || !strings.Contains(err.Error(), "active Tao-managed worktree") || !strings.Contains(err.Error(), "tao run --continue plan-managed") {
+							t.Fatalf("%v: managed refusal = %v", args, err)
+						}
+						if out.Len() != 0 {
+							t.Fatalf("managed commit exposed output: %q", out.String())
+						}
+						if runCLICommitGit(t, worktree, "rev-parse", "HEAD") != beforeHead ||
+							runCLICommitGit(t, worktree, "diff", "--cached") != beforeIndex ||
+							runCLICommitGit(t, worktree, "diff") != beforeDiff ||
+							runCLICommitGit(t, worktree, "status", "--porcelain") != beforeStatus {
+							t.Fatalf("%v mutated HEAD, index, or worktree", args)
+						}
+						if _, err := os.Stat(marker); !os.IsNotExist(err) {
+							t.Fatalf("publication transport invoked: %v", err)
+						}
+					}
+				}
+			}
+		})
 	}
 }
 
@@ -338,14 +364,15 @@ func TestCommitRefusesActiveManagedWorktreeAfterLiveBranchDrift(t *testing.T) {
 			planDir := writeRunPlan(t, plansDir, "plan-managed", plan.StatusInProgress, []string{"001-a"}, nil, "001-a", plan.StatusInProgress)
 			configureManagedCommitPlan(t, planDir, control, worktree, "feature/managed", false)
 			runCLICommitGit(t, worktree, tt.driftArgs...)
+			t.Chdir(worktree)
 
 			beforeHead := strings.TrimSpace(runCLICommitGit(t, worktree, "rev-parse", "HEAD"))
 			beforeIndex := runCLICommitGit(t, worktree, "diff", "--cached")
 			var out bytes.Buffer
 			app := App{Out: &out, Err: io.Discard}
 			for _, args := range [][]string{
-				{"commit", "--context", "--repo-root", worktree},
-				{"commit", "--message", "chore(cli): unsafe commit\n\nWhat:\nCommit drifted work.\n\nWhy:\nExercise the ownership guard.", "--repo-root", worktree},
+				{"commit", "--context"},
+				{"commit", "--message", "chore(cli): unsafe commit\n\nWhat:\nCommit drifted work.\n\nWhy:\nExercise the ownership guard."},
 			} {
 				err := app.Run(context.Background(), args)
 				if err == nil || !strings.Contains(err.Error(), "ownership cannot be safely resolved") || !strings.Contains(err.Error(), "plan-managed") {
@@ -386,7 +413,8 @@ func TestCommitRefusesInvalidPlanAssociatedWithTargetWorktree(t *testing.T) {
 	beforeHead := strings.TrimSpace(runCLICommitGit(t, worktree, "rev-parse", "HEAD"))
 	beforeIndex := runCLICommitGit(t, worktree, "diff", "--cached")
 	var out bytes.Buffer
-	err = (App{Out: &out, Err: io.Discard}).Run(context.Background(), []string{"commit", "--context", "--repo-root", worktree})
+	t.Chdir(worktree)
+	err = (App{Out: &out, Err: io.Discard}).Run(context.Background(), []string{"commit", "--context"})
 	if err == nil || !strings.Contains(err.Error(), "ownership cannot be safely resolved") || !strings.Contains(err.Error(), "plan-invalid") {
 		t.Fatalf("invalid managed plan error = %v", err)
 	}
@@ -418,7 +446,8 @@ func TestCommitAllowsUnrelatedWorktreeWithStaleManagedMetadata(t *testing.T) {
 
 	message := "chore(cli): keep unrelated commits\n\nWhat:\nCommit work in an unrelated worktree.\n\nWhy:\nStale plan metadata must not claim a different exact path."
 	var out bytes.Buffer
-	if err := (App{Out: &out, Err: io.Discard}).Run(context.Background(), []string{"commit", "--message", message, "--repo-root", unrelated}); err != nil {
+	t.Chdir(unrelated)
+	if err := (App{Out: &out, Err: io.Discard}).Run(context.Background(), []string{"commit", "--message", message}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "Created local commit") {

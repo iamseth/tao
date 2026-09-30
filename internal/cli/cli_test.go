@@ -2,17 +2,55 @@ package cli
 
 import (
 	"bytes"
+	"context"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/promptinstall"
+	"github.com/iamseth/tao/internal/taodata"
 	"github.com/iamseth/tao/internal/theme"
 	planview "github.com/iamseth/tao/internal/view"
 )
 
 func init() {
 	defaultPromptFreshnessCheck = func() ([]promptinstall.Result, error) { return nil, nil }
+}
+
+func TestDefaultPlanLookupFromLinkedLaunchDirectory(t *testing.T) {
+	mainRoot := newCLICommitRepo(t)
+	dataHome := t.TempDir()
+	t.Setenv("TAO_DATA_HOME", dataHome)
+	t.Chdir(mainRoot)
+	registered, err := taodata.NewRegistry(dataHome).RegisterCurrent(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	plansDir := filepath.Join(dataHome, "repos", registered.ID, "plans")
+	writeRunPlan(t, plansDir, "plan-shared", plan.StatusPending, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+	linked := filepath.Join(t.TempDir(), "linked")
+	runCLICommitGit(t, mainRoot, "worktree", "add", "-b", "lookup", linked)
+	sub := filepath.Join(linked, "nested")
+	if err := os.Mkdir(sub, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for _, launch := range []string{linked, sub} {
+		t.Run(filepath.Base(launch), func(t *testing.T) {
+			t.Chdir(launch)
+			for _, args := range [][]string{{"list"}, {"show", "plan-shared"}} {
+				var out bytes.Buffer
+				if err := (App{Out: &out, Err: io.Discard}).Run(context.Background(), args); err != nil {
+					t.Fatalf("%v: %v", args, err)
+				}
+				if !strings.Contains(out.String(), "plan-shared") {
+					t.Fatalf("%v did not find registered plan: %s", args, out.String())
+				}
+			}
+		})
+	}
 }
 
 func TestColorHelpersCoverStatusAndDoneBranches(t *testing.T) {

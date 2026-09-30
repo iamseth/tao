@@ -43,7 +43,9 @@ func TestRegisterCurrentUsesInjectedRunnerForGitMetadata(t *testing.T) {
 		key := dir + "|" + strings.Join(args, " ")
 		calls = append(calls, key)
 		switch key {
-		case "|rev-parse --show-toplevel":
+		case "|worktree list --porcelain -z":
+			_, _ = io.WriteString(stdout, "worktree "+root+"\x00HEAD abc\x00\x00")
+		case root + "|rev-parse --show-toplevel":
 			_, _ = io.WriteString(stdout, root+"\n")
 		case root + "|branch --show-current":
 			_, _ = io.WriteString(stdout, "main\n")
@@ -62,7 +64,7 @@ func TestRegisterCurrentUsesInjectedRunnerForGitMetadata(t *testing.T) {
 	if repo.Root != root || repo.Branch != "main" || repo.RemoteURL != "https://example.com/repo.git" {
 		t.Fatalf("unexpected repo: %#v", repo)
 	}
-	wantCalls := []string{"|rev-parse --show-toplevel", root + "|branch --show-current", root + "|config --get remote.origin.url"}
+	wantCalls := []string{"|worktree list --porcelain -z", root + "|rev-parse --show-toplevel", root + "|branch --show-current", root + "|config --get remote.origin.url"}
 	if !reflect.DeepEqual(calls, wantCalls) {
 		t.Fatalf("calls = %#v, want %#v", calls, wantCalls)
 	}

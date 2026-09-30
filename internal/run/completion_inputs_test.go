@@ -151,6 +151,53 @@ func TestLoadSliceCompletionInputsNormalizesRelativeCWDs(t *testing.T) {
 	}
 }
 
+func TestCompletionInputsStayRelativeToLinkedCheckoutCaller(t *testing.T) {
+	mainRoot := initSliceCompletionRepo(t)
+	linked := filepath.Join(t.TempDir(), "linked")
+	runCommitTestGitCommand(t, mainRoot, "worktree", "add", "-b", "linked", linked)
+	caller := filepath.Join(linked, "nested")
+	for _, dir := range []string{filepath.Join(caller, "sub"), filepath.Join(mainRoot, "sub")} {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(caller, alias); err != nil {
+		t.Fatal(err)
+	}
+	for _, launch := range []string{caller, alias} {
+		t.Run(filepath.Base(launch), func(t *testing.T) {
+			t.Chdir(launch)
+			absolute := filepath.Join(mainRoot, "sub")
+			data, err := json.Marshal([]plan.VerificationRun{
+				{Command: "true", CWD: "sub", Result: "passed"},
+				{Command: "true", CWD: absolute, Result: "passed"},
+				{Command: "true", CWD: "missing", Result: "passed"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			inputs, err := LoadSliceCompletionInputs(writeCompletionInputFiles(t, "ok", string(data)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			physicalCaller, err := filepath.EvalSymlinks(caller)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cwd, err := os.Getwd()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i, want := range []string{filepath.Join(physicalCaller, "sub"), absolute, filepath.Join(cwd, "missing")} {
+				if got := inputs.VerificationResults[i].CWD; got != want {
+					t.Errorf("result %d cwd = %q, want %q", i, got, want)
+				}
+			}
+		})
+	}
+}
+
 func TestSliceCompletionInputFilesRemoveIsBestEffort(t *testing.T) {
 	files := writeCompletionInputFiles(t, "ok", `[]`)
 	files.CommitProposalFile = filepath.Join(t.TempDir(), "missing.json")

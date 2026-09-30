@@ -73,6 +73,60 @@ func (c Client) WorktreeStatus(ctx context.Context, path string) (WorktreeStatus
 	return WorktreeStatus{Branch: branch, HEAD: head, Dirty: porcelain != ""}, nil
 }
 
+// MainWorktreeRoot resolves repository identity, not the launch or execution root.
+// Git lists the main worktree first; -z preserves paths without C-style quoting
+// or whitespace loss. The entry is resolved through show-toplevel because
+// submodule entries can name their Git directory instead of their checkout.
+// A bare repository has no main checkout, so its Git directory is never used
+// as an identity root. If discovery fails or the main
+// entry is unusable, show-toplevel falls back to the current checkout (and fails
+// in a bare repository without a checkout). GIT_DIR/GIT_WORK_TREE overrides are
+// honored by Git: this helper does not isolate discovery from those overrides.
+// It deliberately does not infer a checkout from the common Git directory.
+func (c Client) MainWorktreeRoot(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	out, err := c.rawOutput(ctx, "worktree", "list", "--porcelain", "-z")
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", ctxErr
+	}
+	if err == nil {
+		entry, _, _ := strings.Cut(out, "\x00\x00")
+		var root string
+		bare := false
+		for field := range strings.SplitSeq(entry, "\x00") {
+			if path, ok := strings.CutPrefix(field, "worktree "); ok {
+				root = path
+			}
+			if field == "bare" {
+				bare = true
+			}
+		}
+		if root != "" && !bare {
+			checkout, resolveErr := c.rawOutputAt(ctx, root, "rev-parse", "--show-toplevel")
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return "", ctxErr
+			}
+			if resolveErr == nil && strings.TrimSuffix(checkout, "\n") != "" {
+				return strings.TrimSuffix(checkout, "\n"), nil
+			}
+		}
+	}
+	out, err = c.rawOutput(ctx, "rev-parse", "--show-toplevel")
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", ctxErr
+	}
+	if err != nil {
+		return "", err
+	}
+	root := strings.TrimSuffix(out, "\n")
+	if root == "" {
+		return "", fmt.Errorf("git show-toplevel returned no checkout")
+	}
+	return root, nil
+}
+
 // Worktrees returns the repository's worktrees parsed from git worktree porcelain output.
 func (c Client) Worktrees(ctx context.Context) ([]Worktree, error) {
 	out, err := c.output(ctx, "worktree", "list", "--porcelain")

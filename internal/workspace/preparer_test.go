@@ -47,6 +47,57 @@ func TestPathWithinRoot(t *testing.T) {
 	}
 }
 
+func TestExecutionPreparerCurrentPreservesRecordedLinkedLaunchRoot(t *testing.T) {
+	repo := newTestRepo(t)
+	mainHead := gitHead(t, repo.path)
+	linked := filepath.Join(t.TempDir(), "linked")
+	runGit(t, repo.path, "worktree", "add", "-b", "launch", linked)
+	linked, err := filepath.EvalSymlinks(linked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail := executionPreparerPlanDetail(linked)
+	detail.State.Repo.Branch = "launch"
+	sub := filepath.Join(linked, "nested")
+	if err := os.Mkdir(sub, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(sub, alias); err != nil {
+		t.Fatal(err)
+	}
+	for _, launch := range []string{linked, sub, alias} {
+		t.Run(filepath.Base(launch), func(t *testing.T) {
+			t.Chdir(launch)
+			preparer := ExecutionPreparer{PlanRecordFactory: memoryWorkspacePlanRecordFactory,
+				managerFactory: func(Options) (executionWorkspaceManager, error) {
+					t.Fatal("current mode must not prepare a managed worktree")
+					return nil, nil
+				},
+			}
+			got, err := preparer.Prepare(context.Background(), detail, ExecutionPrepareOptions{ExecutionMode: "current"})
+			if err != nil || got != linked {
+				t.Fatalf("Prepare = %q, %v; want launch checkout %q", got, err, linked)
+			}
+			if detail.State.Repo.Root != linked || detail.State.Repo.Branch != "launch" {
+				t.Fatalf("recorded launch identity changed: %+v", detail.State.Repo)
+			}
+		})
+	}
+	// Recording current-checkout work must still prevent a later mode change,
+	// even though Git also knows the registered main checkout.
+	detail.State.Plan.CompletedSlices = []string{"001-a"}
+	detail.Slices.Slices = []plan.Slice{{ID: "001-a", Status: plan.StatusCompleted, ExecutionRoot: linked}}
+	prepareCalls := 0
+	_, err = (ExecutionPreparer{PlanRecordFactory: memoryWorkspacePlanRecordFactory, managerFactory: executionPreparerManagerFactory(Metadata{}, &prepareCalls)}).Prepare(context.Background(), detail, ExecutionPrepareOptions{ExecutionMode: "isolated"})
+	if err == nil || !strings.Contains(err.Error(), "refusing to switch execution workspace") || prepareCalls != 0 {
+		t.Fatalf("linked execution drift guard: error=%v prepare calls=%d", err, prepareCalls)
+	}
+	if gitHead(t, repo.path) != mainHead || strings.TrimSpace(runGit(t, repo.path, "branch", "--show-current")) != "master" || runGit(t, repo.path, "status", "--porcelain") != "" {
+		t.Fatal("main checkout changed")
+	}
+}
+
 func TestExecutionPreparerRequiresPlanRecordFactory(t *testing.T) {
 	for _, mode := range []string{"isolated", "current"} {
 		t.Run(mode, func(t *testing.T) {

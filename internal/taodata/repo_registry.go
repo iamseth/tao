@@ -122,7 +122,7 @@ func NewRegistry(dataHome string) Registry {
 }
 
 func (r Registry) RegisterCurrent(ctx context.Context) (Repo, error) {
-	root, err := gitops.NewClient("", r.commandRunner()).RevParse(ctx, "--show-toplevel")
+	root, err := gitops.NewClient("", r.commandRunner()).MainWorktreeRoot(ctx)
 	if err != nil {
 		return Repo{}, fmt.Errorf("resolve git root: %w", err)
 	}
@@ -152,7 +152,7 @@ func (r Registry) RegisterCurrent(ctx context.Context) (Repo, error) {
 }
 
 func (r Registry) Current(ctx context.Context) (Repo, error) {
-	root, err := gitops.NewClient("", r.commandRunner()).RevParse(ctx, "--show-toplevel")
+	root, err := gitops.NewClient("", r.commandRunner()).MainWorktreeRoot(ctx)
 	if err != nil {
 		return Repo{}, fmt.Errorf("resolve git root: %w", err)
 	}
