@@ -11,6 +11,7 @@ import (
 func TestDefaultRunnerWithRealGitAndErrorWithoutStderr(t *testing.T) {
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
+	disableGitFixtureMaintenance(t, root)
 	client := NewClient(root, nil)
 	branch, err := client.CurrentBranch(context.Background())
 	if err != nil {

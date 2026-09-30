@@ -84,6 +84,7 @@ func TestRenderRunPacketIncludesPlanOwnedFilesOnHandoff(t *testing.T) {
 func TestRenderRunPacketIncludesExactPlanOwnedPaths(t *testing.T) {
 	root := t.TempDir()
 	runRebaseRecoveryGit(t, root, "init", "-b", "feature/test")
+	disableRunGitMaintenance(t, root)
 	runRebaseRecoveryGit(t, root, "config", "user.email", "tao@example.com")
 	runRebaseRecoveryGit(t, root, "config", "user.name", "Tao Test")
 	runRebaseRecoveryGit(t, root, "config", "core.quotePath", "true")
@@ -2017,6 +2018,7 @@ func TestContinuePlanOwnedBlocker(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
 			runRebaseRecoveryGit(t, root, "init", "-b", "feature/test")
+			disableRunGitMaintenance(t, root)
 			runRebaseRecoveryGit(t, root, "config", "user.email", "tao@example.com")
 			runRebaseRecoveryGit(t, root, "config", "user.name", "Tao Test")
 			writeFile := func(name, text string) {
@@ -2226,6 +2228,7 @@ func TestExecuteDetailAfterContinueRunsReopenedReworkSlice(t *testing.T) {
 func TestServiceExecuteRestartRetriesAfterDurableRestartBeforeWorkspacePreparation(t *testing.T) {
 	repoRoot := t.TempDir()
 	runRebaseRecoveryGit(t, repoRoot, "init", "-b", "main")
+	disableRunGitMaintenance(t, repoRoot)
 	runRebaseRecoveryGit(t, repoRoot, "config", "user.email", "tao@example.com")
 	runRebaseRecoveryGit(t, repoRoot, "config", "user.name", "Tao Test")
 	if err := os.WriteFile(filepath.Join(repoRoot, "base.txt"), []byte("base\n"), 0o600); err != nil {

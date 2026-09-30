@@ -775,6 +775,7 @@ func newPullRequestOrchestrationFixture(t *testing.T) pullRequestOrchestrationFi
 		}
 	}
 	runCommitTestGitCommand(t, repoRoot, "init")
+	disableRunGitMaintenance(t, repoRoot)
 	runCommitTestGitCommand(t, repoRoot, "config", "user.email", "tao@example.com")
 	runCommitTestGitCommand(t, repoRoot, "config", "user.name", "Tao Test")
 	runCommitTestGitCommand(t, repoRoot, "checkout", "-b", "main")
@@ -785,6 +786,7 @@ func newPullRequestOrchestrationFixture(t *testing.T) pullRequestOrchestrationFi
 	runCommitTestGitCommand(t, repoRoot, "commit", "-m", "base")
 	base := strings.TrimSpace(runCommitTestGitOutput(t, repoRoot, "rev-parse", "HEAD"))
 	runCommitTestGitCommand(t, originRoot, "init", "--bare")
+	disableRunGitMaintenance(t, originRoot)
 	runCommitTestGitCommand(t, repoRoot, "remote", "add", "origin", originRoot)
 	runCommitTestGitCommand(t, repoRoot, "push", "--set-upstream", "origin", "main")
 	const branch = "fix/pr-finalization-recovery"

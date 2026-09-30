@@ -78,6 +78,7 @@ func TestDirtyFingerprintChangesWhenOnlyStagedBlobChanges(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
+	disableGitFixtureMaintenance(t, root)
 	runGitCommand(t, root, "config", "user.name", "Tao Test")
 	runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
 	writeRepoFile(t, root, "tracked.txt", "base\n")

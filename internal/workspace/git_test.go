@@ -23,6 +23,7 @@ func newTestRepo(t *testing.T) testRepo {
 	configureHermeticGit(t)
 	dir := t.TempDir()
 	runGit(t, dir, "init", "-b", "master")
+	disableGitMaintenance(t, dir)
 	runGit(t, dir, "config", "user.name", "Tao Test")
 	runGit(t, dir, "config", "user.email", "tao@example.com")
 	runGit(t, dir, "config", "commit.gpgSign", "false")

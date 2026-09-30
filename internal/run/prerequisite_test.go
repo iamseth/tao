@@ -117,6 +117,7 @@ func TestCheckRuntimePrerequisitesDetectsCyclesAndSatisfiedAncestry(t *testing.T
 func TestResolvePrerequisiteBaselineMatchesAutomaticPreparation(t *testing.T) {
 	repoRoot := t.TempDir()
 	runRebaseRecoveryGit(t, repoRoot, "init", "-b", "main")
+	disableRunGitMaintenance(t, repoRoot)
 	runRebaseRecoveryGit(t, repoRoot, "config", "user.email", "tao@example.com")
 	runRebaseRecoveryGit(t, repoRoot, "config", "user.name", "Tao Test")
 	runRebaseRecoveryGit(t, repoRoot, "commit", "--allow-empty", "-m", "base")

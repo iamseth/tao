@@ -17,6 +17,7 @@ import (
 func TestChangedFilesExactPreservesQuotedPaths(t *testing.T) {
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
+	disableGitFixtureMaintenance(t, root)
 	runGitCommand(t, root, "config", "user.name", "Test")
 	runGitCommand(t, root, "config", "user.email", "test@example.com")
 	runGitCommand(t, root, "config", "core.quotePath", "true")
@@ -50,6 +51,7 @@ func TestChangedFilesExactPreservesQuotedPaths(t *testing.T) {
 func TestWorktreeFingerprintParts(t *testing.T) {
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
+	disableGitFixtureMaintenance(t, root)
 	runGitCommand(t, root, "config", "user.name", "Test")
 	runGitCommand(t, root, "config", "user.email", "test@example.com")
 	writeRepoFile(t, root, "tracked", "original\n")
@@ -505,6 +507,7 @@ func TestCommitPathsCommitsOnlyGivenPaths(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
+	disableGitFixtureMaintenance(t, root)
 	runGitCommand(t, root, "config", "user.name", "Tao Test")
 	runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
 	writeRepoFile(t, root, "a.txt", "before\n")
@@ -911,6 +914,7 @@ func TestMergedIntoMechanismDistinguishesAncestryAndSquash(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
+	disableGitFixtureMaintenance(t, root)
 	runGitCommand(t, root, "config", "user.name", "Tao Test")
 	runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
 	writeRepoFile(t, root, "initial.txt", "initial\n")

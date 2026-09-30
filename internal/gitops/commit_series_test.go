@@ -64,6 +64,7 @@ func TestCommitSeriesProofSurvivesConflictFreeRebase(t *testing.T) {
 func TestCommitSeriesRebaseProofSurvivesConflictFreeUpstreamRename(t *testing.T) {
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
+	disableGitFixtureMaintenance(t, root)
 	runGitCommand(t, root, "config", "user.name", "Tao Test")
 	runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
 	writeCommitSeriesFile(t, root, "original.txt", "top\ntarget\nbottom\n")
@@ -137,6 +138,7 @@ func assertCommitSeriesProofSurvivesRebase(t *testing.T, fixture rebaseProofFixt
 	t.Helper()
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
+	disableGitFixtureMaintenance(t, root)
 	runGitCommand(t, root, "config", "user.name", "Tao Test")
 	runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
 	writeCommitSeriesFile(t, root, fixture.filename, fixture.baseContent)
@@ -170,6 +172,7 @@ func assertCommitSeriesProofSurvivesRebase(t *testing.T, fixture rebaseProofFixt
 func TestCommitSeriesProofRetainsFileIdentity(t *testing.T) {
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
+	disableGitFixtureMaintenance(t, root)
 	runGitCommand(t, root, "config", "user.name", "Tao Test")
 	runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
 	writeCommitSeriesFile(t, root, "left.txt", "top\ntarget\nbottom\n")
@@ -201,6 +204,7 @@ func TestCommitSeriesProofRetainsFileIdentity(t *testing.T) {
 func TestCommitSeriesProofDistinguishesDuplicateOccurrenceLocations(t *testing.T) {
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
+	disableGitFixtureMaintenance(t, root)
 	runGitCommand(t, root, "config", "user.name", "Tao Test")
 	runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
 	writeCommitSeriesFile(t, root, "duplicate.txt", "same\nbetween\nsame\n")
@@ -379,6 +383,7 @@ func newBinaryProofRepository(t *testing.T) string {
 	t.Setenv("GIT_COMMITTER_DATE", "2026-08-06T00:00:00Z")
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
+	disableGitFixtureMaintenance(t, root)
 	runGitCommand(t, root, "config", "user.name", "Tao Test")
 	runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
 	runGitCommand(t, root, "config", "core.filemode", "true")
@@ -719,6 +724,7 @@ func commitSeriesRepository(t *testing.T) (root, base, first, second string) {
 	t.Helper()
 	root = t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
+	disableGitFixtureMaintenance(t, root)
 	runGitCommand(t, root, "config", "user.name", "Tao Test")
 	runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
 	writeCommitSeriesFile(t, root, "base.txt", "base\n")

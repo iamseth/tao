@@ -18,6 +18,7 @@ import (
 func TestInspectSelectedTypedPlacement(t *testing.T) {
 	repoRoot := t.TempDir()
 	runRebaseRecoveryGit(t, repoRoot, "init", "-b", "main")
+	disableRunGitMaintenance(t, repoRoot)
 	runRebaseRecoveryGit(t, repoRoot, "config", "user.email", "tao@example.com")
 	runRebaseRecoveryGit(t, repoRoot, "config", "user.name", "Tao Test")
 	runRebaseRecoveryGit(t, repoRoot, "commit", "--allow-empty", "-m", "base")
@@ -50,6 +51,7 @@ func TestInspectSelectedTypedPlacement(t *testing.T) {
 func TestInspectSelectedAuthorizesOnlyCleanDescendantBlockedRestart(t *testing.T) {
 	repoRoot := t.TempDir()
 	runRebaseRecoveryGit(t, repoRoot, "init", "-b", "main")
+	disableRunGitMaintenance(t, repoRoot)
 	runRebaseRecoveryGit(t, repoRoot, "config", "user.email", "tao@example.com")
 	runRebaseRecoveryGit(t, repoRoot, "config", "user.name", "Tao Test")
 	if err := os.WriteFile(filepath.Join(repoRoot, "base.txt"), []byte("base\n"), 0o600); err != nil {
@@ -352,6 +354,7 @@ func newRebaseRecoveryRepo(t *testing.T, conflict bool) (repo, oldBase, oldHead,
 	t.Setenv("GIT_TERMINAL_PROMPT", "0")
 	repo = t.TempDir()
 	runRebaseRecoveryGit(t, repo, "init", "-b", "master")
+	disableRunGitMaintenance(t, repo)
 	runRebaseRecoveryGit(t, repo, "config", "user.name", "Tao Test")
 	runRebaseRecoveryGit(t, repo, "config", "user.email", "tao@example.com")
 	writeRebaseRecoveryFile(t, repo, "shared.txt", "base\n")
@@ -388,6 +391,7 @@ func newLinkedRebaseRecoveryRepo(t *testing.T) (repoRoot, workspaceRoot, oldBase
 	repoRoot = t.TempDir()
 	workspaceRoot = filepath.Join(t.TempDir(), "plan-a")
 	runRebaseRecoveryGit(t, repoRoot, "init", "-b", "master")
+	disableRunGitMaintenance(t, repoRoot)
 	runRebaseRecoveryGit(t, repoRoot, "config", "user.name", "Tao Test")
 	runRebaseRecoveryGit(t, repoRoot, "config", "user.email", "tao@example.com")
 	writeRebaseRecoveryFile(t, repoRoot, "shared.txt", "base\n")

@@ -106,6 +106,9 @@ func TestPrepareCreatesWorktreeWithDefaultBranchName(t *testing.T) {
 		t.Fatalf("Prepare failed: %v", err)
 	}
 
+	assertGitMaintenanceDisabled(t, repo.path)
+	assertGitMaintenanceDisabled(t, metadata.Path)
+
 	if metadata.Path != filepath.Join(repo.path, ".tao", "workspaces", "20260528-0140-workspace-manager-refactor") {
 		t.Fatalf("unexpected path: %q", metadata.Path)
 	}
@@ -186,6 +189,8 @@ func TestPrepareRejectsRemoteBranchCreatedAfterLastFetch(t *testing.T) {
 	repo := newTestRepo(t)
 	remote := t.TempDir()
 	runGit(t, remote, "init", "--bare")
+	disableGitMaintenance(t, remote)
+	assertGitMaintenanceDisabled(t, remote)
 	runGit(t, repo.path, "remote", "add", "origin", remote)
 	runGit(t, repo.path, "push", "--set-upstream", "origin", "master")
 	runGit(t, repo.path, "fetch", "origin")

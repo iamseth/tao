@@ -64,7 +64,9 @@ func TestMainWorktreeRootGitDirOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 	runGitCommand(t, launch, "init", "-b", "main")
+	disableGitFixtureMaintenance(t, launch)
 	runGitCommand(t, other, "init", "-b", "main")
+	disableGitFixtureMaintenance(t, other)
 	t.Setenv("GIT_DIR", filepath.Join(other, ".git"))
 	got, err := NewClient(launch, nil).MainWorktreeRoot(context.Background())
 	if err != nil || got != other {
@@ -74,6 +76,8 @@ func TestMainWorktreeRootGitDirOverride(t *testing.T) {
 	bare := t.TempDir()
 	runGitCommand(t, launch, "init", "--bare", bare)
 	t.Setenv("GIT_DIR", bare)
+	disableGitFixtureMaintenance(t, bare)
+	assertGitFixtureConfig(t, bare, "false", "0")
 	got, err = NewClient(launch, nil).MainWorktreeRoot(context.Background())
 	if err == nil || got != "" {
 		t.Fatalf("bare GIT_DIR override: got %q, %v", got, err)

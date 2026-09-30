@@ -218,6 +218,7 @@ func TestMergeBatchEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	runRealGit(t, root, "init", "-b", "main")
+	disableGitFixtureMaintenance(t, root)
 	runRealGit(t, root, "config", "user.name", "Tao E2E")
 	runRealGit(t, root, "config", "user.email", "tao-e2e@example.invalid")
 	writeBatchE2EFile(t, root, "shared.txt", "base\n")

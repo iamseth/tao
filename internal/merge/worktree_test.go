@@ -31,6 +31,7 @@ func newRealGitWorktree(t *testing.T) realGitWorktree {
 		t.Fatal(err)
 	}
 	runRealGit(t, repoRoot, "init", "-b", defaultBranch)
+	disableGitFixtureMaintenance(t, repoRoot)
 	runRealGit(t, repoRoot, "config", "user.name", "Tao Test")
 	runRealGit(t, repoRoot, "config", "user.email", "tao@example.invalid")
 	if err := os.WriteFile(filepath.Join(repoRoot, "README.md"), []byte("initial\n"), 0o600); err != nil {

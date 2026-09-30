@@ -1213,6 +1213,8 @@ func TestSingleMergeProcessSandboxPermitsReadOnlyGitAndDeviceWrites(t *testing.T
 	}
 	for _, args := range [][]string{
 		{"init", "-q", "-b", "main"},
+		{"config", "--local", "maintenance.auto", "false"},
+		{"config", "--local", "gc.auto", "0"},
 		{"add", "README.md"},
 		{"-c", "user.name=Tao Test", "-c", "user.email=tao@example.com", "commit", "-q", "-m", "seed"},
 	} {
