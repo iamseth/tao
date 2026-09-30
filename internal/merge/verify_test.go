@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 )
@@ -266,6 +267,105 @@ func TestMergeDetectsDefaultVerifyCommand(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The command itself observes the inherited environment and writes cache data;
+// delegated runners must preserve the policy context, not emulate the override.
+const mergeCacheProbe = `printf '%s\n' "$GOLANGCI_LINT_CACHE"; printf cache > "$GOLANGCI_LINT_CACHE/entry" || exit 1; `
+
+func cacheCheckingMergeRunner(t *testing.T, wantRoot string) commandrunner.Runner {
+	t.Helper()
+	return func(ctx context.Context, root, name string, args []string, stdout, stderr io.Writer) error {
+		t.Helper()
+		if root != wantRoot {
+			t.Fatalf("gate root = %q, want %q", root, wantRoot)
+		}
+		var output bytes.Buffer
+		err := commandrunner.DefaultLocal(ctx, root, name, args, io.MultiWriter(stdout, &output), stderr)
+		wantCache := filepath.Join(wantRoot, ".tao", "cache", "golangci-lint")
+		if !strings.HasPrefix(output.String(), wantCache+"\n") {
+			t.Fatalf("gate cache output = %q, want prefix %q (error %v)", output.String(), wantCache, err)
+		}
+		return err
+	}
+}
+
+func requireNoMergeCache(t *testing.T, roots ...string) {
+	t.Helper()
+	for _, root := range roots {
+		if _, err := os.Stat(filepath.Join(root, ".tao", "cache", "golangci-lint")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("unexpected cache in %s: %v", root, err)
+		}
+	}
+}
+
+func TestMergeVerificationCacheSubprocess(t *testing.T) {
+	shared := t.TempDir()
+	t.Setenv("GOLANGCI_LINT_CACHE", shared)
+	for _, broken := range []bool{false, true} {
+		t.Run(fmt.Sprintf("preparation_failure=%t", broken), func(t *testing.T) {
+			detail := mergeVerifyFixtureDetail(t, nil)
+			root := detail.State.Repo.Root
+			if broken {
+				if err := os.WriteFile(filepath.Join(root, ".tao"), []byte("not a directory"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			git, events, cleaner := mergeVerifyGit(), &fakeEventAppender{}, successfulCleanup()
+			service := Service{Git: git, Events: events, Cleaner: cleaner}
+			command := mergeCacheProbe + "touch executed"
+			err := service.Merge(context.Background(), detail, Options{VerifyCommand: command})
+			verification := events.requireSingle(t, plan.EventTypeMergeVerification)
+			if broken {
+				var verifyErr *VerifyFailedError
+				if !errors.Is(err, ErrVerifyFailed) || !errors.As(err, &verifyErr) || !strings.Contains(verifyErr.Cause.Error(), "prepare verification cache") {
+					t.Fatalf("expected cache preparation failure, got %v", err)
+				}
+				if verification.Result != "failed" || events.count(plan.EventTypePlanMerged) != 0 || len(cleaner.calls) != 0 {
+					t.Fatalf("failed preparation recorded success or cleanup: events=%+v cleanup=%+v", events.events, cleaner.calls)
+				}
+				if !hasGitCall(git.calls, "reset-hard pre123") || !hasGitCall(git.calls, "checkout main") {
+					t.Fatalf("missing rollback: %v", git.calls)
+				}
+				if _, statErr := os.Stat(filepath.Join(root, "executed")); !errors.Is(statErr, os.ErrNotExist) {
+					t.Fatalf("command ran after preparation failure: %v", statErr)
+				}
+				return
+			}
+			if err != nil || verification.Result != "passed" {
+				t.Fatalf("merge verification = %+v, %v", verification, err)
+			}
+			events.requireSingle(t, plan.EventTypePlanMerged)
+			if data, readErr := os.ReadFile(filepath.Join(root, ".tao", "cache", "golangci-lint", "entry")); readErr != nil || string(data) != "cache" { //nolint:gosec // test path is rooted in t.TempDir.
+				t.Fatalf("cache write = %q, %v", data, readErr)
+			}
+		})
+	}
+	if entries, err := os.ReadDir(shared); err != nil || len(entries) != 0 || os.Getenv("GOLANGCI_LINT_CACHE") != shared {
+		t.Fatalf("inherited cache or environment changed: %v, %v", entries, err)
+	}
+}
+
+func TestMergeVerificationCacheDistinctIntegrationRoots(t *testing.T) {
+	fixture := newRealGitWorktree(t)
+	service := NewService(fixture.repoRoot, nil)
+	for i, inheritedRoot := range []string{fixture.repoRoot, fixture.worktreePath} {
+		root := filepath.Join(t.TempDir(), "integration with spaces")
+		runRealGit(t, fixture.repoRoot, "worktree", "add", "-b", fmt.Sprintf("tao/integration/cache-%d", i), root, fixture.defaultBranch)
+		inherited := filepath.Join(inheritedRoot, ".tao", "cache", "golangci-lint")
+		t.Setenv("GOLANGCI_LINT_CACHE", inherited)
+		service.Runner = cacheCheckingMergeRunner(t, root)
+		if output, err := service.runMergeVerifyAtRoot(context.Background(), root, mergeCacheProbe+"true"); err != nil {
+			t.Fatalf("verification failed: %v\n%s", err, output)
+		}
+		if status := realGitOutput(t, root, "-c", "core.excludesFile="+os.DevNull, "status", "--porcelain", "--untracked-files=all"); status != "" {
+			t.Fatalf("cache dirtied integration worktree: %s", status)
+		}
+		if os.Getenv("GOLANGCI_LINT_CACHE") != inherited {
+			t.Fatal("parent environment changed")
+		}
+	}
+	requireNoMergeCache(t, fixture.repoRoot, fixture.worktreePath)
 }
 
 func TestMergeVerifyUsesExplicitIntegrationRoot(t *testing.T) {

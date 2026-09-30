@@ -2,6 +2,7 @@ package merge
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1781,26 +1782,32 @@ func TestBatchReviewArtifactPersistenceFailureStopsBeforeRework(t *testing.T) {
 }
 
 func TestBatchReviewVerificationAttribution(t *testing.T) {
-	t.Parallel()
+	t.Setenv("GOLANGCI_LINT_CACHE", filepath.Join(t.TempDir(), "inherited-cache"))
 	for _, fix := range []bool{true, false} {
 		t.Run(fmt.Sprintf("fix=%t", fix), func(t *testing.T) {
-			fixture, state, root := batchAttributionFixture(t)
+			fixture, state, _ := batchAttributionFixture(t)
+			root := filepath.Join(t.TempDir(), "integration")
+			runRealGit(t, fixture.repoRoot, "worktree", "add", "-b", "tao/integration/cache", root, state.IntegrationHead)
 			store := &batchReviewTestStore{dir: t.TempDir()}
 			service := NewService(fixture.repoRoot, nil)
-			runner := service.commandRunner()
+			runner := cacheCheckingMergeRunner(t, root)
 			gateRuns, runsBeforeRework, reworks := 0, 0, 0
 			service.Runner = func(ctx context.Context, root, name string, args []string, stdout, stderr io.Writer) error {
 				gateRuns++
 				return runner(ctx, root, name, args, stdout, stderr)
 			}
-			command := "if test -f broken.txt; then echo broken-candidate; exit 1; fi"
+			command := mergeCacheProbe + "if test -f broken.txt; then echo broken-candidate; exit 1; fi"
+			encodedCommand, err := json.Marshal(command)
+			if err != nil {
+				t.Fatal(err)
+			}
 			agent := batchSessionAgentFunc(func(_ context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
 				if request.Operation == BatchAgentOperationAggregateReview {
 					return BatchAgentSessionResult{Output: reviewJSON("approve", "green", "")}, nil
 				}
 				reworks++
 				runsBeforeRework = gateRuns
-				for _, material := range []string{"plan-b", "Plan Two", state.Integrations[0].IntegrationSHA, state.Integrations[1].IntegrationSHA, command, "broken-candidate"} {
+				for _, material := range []string{"plan-b", "Plan Two", state.Integrations[0].IntegrationSHA, state.Integrations[1].IntegrationSHA, string(encodedCommand), "broken-candidate"} {
 					if !strings.Contains(request.Prompt, material) {
 						t.Fatalf("rework prompt missing %q:\n%s", material, request.Prompt)
 					}
@@ -1838,6 +1845,13 @@ func TestBatchReviewVerificationAttribution(t *testing.T) {
 			}
 			assertRef(t, root, "HEAD", got.State.IntegrationHead)
 			assertRef(t, fixture.repoRoot, fixture.defaultBranch, state.DefaultStartSHA)
+			requireNoMergeCache(t, fixture.repoRoot, fixture.worktreePath)
+			if status := realGitOutput(t, root, "-c", "core.excludesFile="+os.DevNull, "status", "--porcelain", "--untracked-files=all"); status != "" {
+				t.Fatalf("cache dirtied integration worktree: %s", status)
+			}
+			if fix && (got.State.Review == nil || got.State.Review.HeadSHA != got.State.IntegrationHead) {
+				t.Fatalf("approval not bound to exact verified head: %+v", got.State.Review)
+			}
 			for _, candidate := range state.Candidates {
 				assertRef(t, root, candidate.Branch, candidate.SourceTip)
 			}
@@ -2142,6 +2156,37 @@ func TestBatchVerificationAttributionSkipsResolutionHead(t *testing.T) {
 		t.Fatalf("expected unattributed resolution head: %+v %v", got, err)
 	}
 	assertRef(t, root, "HEAD", state.IntegrationHead)
+}
+
+func TestBatchReviewCachePreparationFailureBlocksApproval(t *testing.T) {
+	t.Parallel()
+	fixture, state, root := batchAttributionFixture(t)
+	if err := os.WriteFile(filepath.Join(root, ".tao"), []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Track the obstruction so dirty-worktree checks cannot mask preparation
+	// failure. This additional head is not eligible for clean-prefix attribution.
+	runRealGit(t, root, "add", "-f", ".tao")
+	runRealGit(t, root, "commit", "-m", "test: obstruct cache storage")
+	state.IntegrationHead = realGitOutput(t, root, "rev-parse", "HEAD")
+	got, err := (BatchAggregateReviewer{
+		Store: &batchReviewTestStore{dir: t.TempDir()}, Service: NewService(fixture.repoRoot, nil),
+		Agent: batchReviewAgentFunc(func(context.Context, string, string) (string, error) {
+			t.Fatal("cache preparation failure must not reach review")
+			return "", nil
+		}),
+	}).Review(context.Background(), state, root, BatchReviewOptions{VerifyCommand: "touch executed"})
+	if err == nil || !strings.Contains(err.Error(), "prepare verification cache") || got.State.Status != BatchStatusBlocked {
+		t.Fatalf("expected blocked preparation failure: state=%+v err=%v", got.State, err)
+	}
+	if got.State.Verification == nil || got.State.Verification.Passed || got.State.Review != nil {
+		t.Fatalf("preparation failure recorded passing evidence: %+v", got.State)
+	}
+	if _, err := os.Stat(filepath.Join(root, "executed")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("command ran after preparation failure: %v", err)
+	}
+	assertRef(t, root, "HEAD", state.IntegrationHead)
+	assertRef(t, fixture.repoRoot, fixture.defaultBranch, state.DefaultStartSHA)
 }
 
 func TestBatchReviewVerificationBaselineFailure(t *testing.T) {

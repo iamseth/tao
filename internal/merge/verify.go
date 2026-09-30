@@ -151,7 +151,7 @@ func (s Service) runMergeVerifyAtRoot(ctx context.Context, repoRoot, command str
 	s.progressf("%s verify start: %s (cwd %s)\n", started.UTC().Format(time.RFC3339), command, repoRoot)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	err := s.commandRunner()(ctx, repoRoot, "sh", []string{"-c", command}, &stdout, &stderr)
+	err := s.commandRunner()(commandrunner.WithVerificationCache(ctx, repoRoot), repoRoot, "sh", []string{"-c", command}, &stdout, &stderr)
 	finished := now()
 	status := "passed"
 	if err != nil {

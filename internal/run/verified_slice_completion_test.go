@@ -98,7 +98,7 @@ func TestCompleteVerifiedRejectsProposalBeforeGates(t *testing.T) {
 }
 
 func TestCompleteVerifiedFailedAttemptDoesNotMutateGit(t *testing.T) {
-	for _, failure := range []string{"exit", "unknown", "unsafe correction", "cancelled", "content drift", "binary drift", "index drift", "head drift", "declaration drift", "snapshot write"} {
+	for _, failure := range []string{"exit", "unknown", "cache setup", "unsafe correction", "cancelled", "content drift", "binary drift", "index drift", "head drift", "declaration drift", "snapshot write"} {
 		t.Run(failure, func(t *testing.T) {
 			request := verifiedCompletionFixture(t, CommitPolicySlice, "true")
 			root := request.Record.Detail().Slices.Slices[0].ExecutionRoot
@@ -116,6 +116,11 @@ func TestCompleteVerifiedFailedAttemptDoesNotMutateGit(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			if failure == "cache setup" {
+				if err := os.WriteFile(filepath.Join(root, ".tao"), []byte("not a directory"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
 			parent := runCommitTestGitOutput(t, root, "rev-parse", "HEAD")
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -126,6 +131,8 @@ func TestCompleteVerifiedFailedAttemptDoesNotMutateGit(t *testing.T) {
 				}
 				calls++
 				switch failure {
+				case "cache setup":
+					return commandrunner.DefaultLocal(ctx, cwd, name, []string{"-c", "touch executed"}, stdout, stderr)
 				case "exit":
 					return commandrunner.DefaultLocal(ctx, cwd, "sh", []string{"-c", "exit 1"}, stdout, stderr)
 				case "unknown":
@@ -174,6 +181,14 @@ func TestCompleteVerifiedFailedAttemptDoesNotMutateGit(t *testing.T) {
 			}
 			if staged := runCommitTestGitOutput(t, root, "diff", "--cached", "--name-only"); strings.TrimSpace(staged) != "" && failure != "index drift" {
 				t.Fatalf("staged %s", staged)
+			}
+			if failure == "cache setup" {
+				if _, err := os.Stat(filepath.Join(root, "executed")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("gate ran despite setup failure: %v", err)
+				}
+				if slice.VerificationAttempt == nil || len(slice.VerificationAttempt.Runs) != 1 || slice.VerificationAttempt.Runs[0].Result != "failed" {
+					t.Fatalf("setup failure evidence: %+v", slice.VerificationAttempt)
+				}
 			}
 			if failure == "exit" || failure == "unknown" || failure == "cancelled" {
 				if slice.VerificationAttempt == nil {
@@ -236,7 +251,7 @@ func TestCompleteVerifiedSuccessAndRecovery(t *testing.T) {
 func TestCompleteVerifiedInterruptedIntentRecovery(t *testing.T) {
 	for _, point := range []string{"before stage", "after stage", "after commit"} {
 		t.Run(point, func(t *testing.T) {
-			request := verifiedCompletionFixture(t, CommitPolicySlice, "true")
+			request := verifiedCompletionFixture(t, CommitPolicySlice, `printf cache > "$GOLANGCI_LINT_CACHE/entry"`)
 			root := request.Record.Detail().Slices.Slices[0].ExecutionRoot
 			if err := os.WriteFile(filepath.Join(root, "change.go"), []byte("package change\n"), 0o600); err != nil {
 				t.Fatal(err)
@@ -271,6 +286,15 @@ func TestCompleteVerifiedInterruptedIntentRecovery(t *testing.T) {
 				t.Fatal("no frozen intent")
 			}
 			exactMessage, exactHash := intent.Message, intent.Hash
+			// Cache changes cannot invalidate the frozen worktree fingerprint, and
+			// even broken cache setup must not rerun gates during intent recovery.
+			cache := filepath.Join(root, ".tao", "cache", "golangci-lint")
+			if err := os.WriteFile(filepath.Join(cache, "entry"), []byte("changed cache"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(cache, ".gitignore"), []byte("*\n# changed metadata\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
 			// Latest diagnostic evidence may disappear without changing recovery authority.
 			rewriteVerifiedSliceFixture(t, request, func(slice *plan.Slice) { slice.VerificationAttempt = nil })
 			if reloadVerifiedCompletion(t, request).Detail().Slices.Slices[0].VerificationAttempt != nil {
@@ -638,6 +662,66 @@ func TestCompleteVerifiedOwnerEndsDuringGate(t *testing.T) {
 	}
 	if slice := reloadVerifiedCompletion(t, request).Detail().Slices.Slices[0]; slice.CommitIntent != nil || slice.VerificationAttempt == nil {
 		t.Fatalf("owner death snapshot/intent = %+v", slice)
+	}
+}
+
+func TestCompleteVerifiedCacheExclusion(t *testing.T) {
+	t.Setenv("GOLANGCI_LINT_CACHE", t.TempDir())
+	for _, mode := range []string{"no ignore rule", "ignored tao", "unrelated file"} {
+		t.Run(mode, func(t *testing.T) {
+			command := `printf 'cache contents' > "$GOLANGCI_LINT_CACHE/entry"`
+			dirt := ""
+			if mode == "unrelated file" {
+				dirt = "unrelated.txt"
+			}
+			if dirt != "" {
+				command += "; touch " + dirt
+			}
+			request := verifiedCompletionFixture(t, CommitPolicySlice, command)
+			root := request.Record.Detail().Slices.Slices[0].ExecutionRoot
+			if mode == "ignored tao" {
+				if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".tao/\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(filepath.Join(root, "change.go"), []byte("package change\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			parent := runCommitTestGitOutput(t, root, "rev-parse", "HEAD")
+			service := SliceCompletionService{CommandRunner: commandrunner.DefaultLocal}
+			err := service.Complete(context.Background(), request)
+			slice := reloadVerifiedCompletion(t, request).Detail().Slices.Slices[0]
+			if dirt != "" {
+				if err == nil || slice.CommitIntent != nil || slice.Completion != nil {
+					t.Fatalf("unrelated gate dirt bypassed safeguards: %+v, %v", slice, err)
+				}
+				status := runCommitTestGitOutput(t, root, "status", "--porcelain", "--untracked-files=all")
+				if !strings.Contains(status, dirt) || strings.Contains(status, "golangci-lint") {
+					t.Fatalf("unexpected visible dirt: %s", status)
+				}
+				if runCommitTestGitOutput(t, root, "rev-parse", "HEAD") != parent || strings.TrimSpace(runCommitTestGitOutput(t, root, "diff", "--cached", "--name-only")) != "" {
+					t.Fatal("mutated Git after gate drift")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if slice.Completion == nil || slice.Completion.Outcome != plan.SliceCompletionCommitted || slice.CommitIntent.Verification == nil {
+				t.Fatalf("completion=%+v", slice)
+			}
+			cacheFile := filepath.Join(root, ".tao", "cache", "golangci-lint", "entry")
+			if data, err := os.ReadFile(cacheFile); err != nil || string(data) != "cache contents" { //nolint:gosec // G304: fixed file in a test-owned temporary worktree.
+				t.Fatalf("cache contents=%q err=%v", data, err)
+			}
+			tracked := runCommitTestGitOutput(t, root, "ls-tree", "-r", "--name-only", "HEAD")
+			if strings.Contains(tracked, ".tao/") || !strings.Contains(tracked, "change.go") {
+				t.Fatalf("committed files=%s", tracked)
+			}
+			if status := runCommitTestGitOutput(t, root, "status", "--porcelain", "--untracked-files=all"); strings.TrimSpace(status) != "" {
+				t.Fatalf("cache escaped Git ignore: %s", status)
+			}
+		})
 	}
 }
 

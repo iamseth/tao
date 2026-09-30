@@ -27,7 +27,11 @@ func DefaultLocal(ctx context.Context, cwd string, name string, args []string, s
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
-	cmd.Env = withoutSliceCompletionOwner(os.Environ())
+	environ, err := verificationCacheEnvironment(ctx, withoutSliceCompletionOwner(os.Environ()))
+	if err != nil {
+		return err
+	}
+	cmd.Env = environ
 	// A shell can exit while descendants retain its output pipes. Bound Wait's
 	// pipe drain too: context cancellation alone does not interrupt that wait
 	// after the shell exits. ErrWaitDelay reports incomplete output, and deferred

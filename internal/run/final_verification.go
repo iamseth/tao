@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/textbound"
 	"github.com/iamseth/tao/internal/verifydetect"
@@ -75,7 +76,8 @@ func (f Finalizer) verifyCompletedBranch(ctx context.Context, detail *plan.PlanD
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	startedAt := now(f.execution)
-	runErr := f.execution.Dependencies.CommandRunner(ctx, executionRoot, "sh", []string{"-c", command}, &stdout, &stderr)
+	gateCtx := commandrunner.WithVerificationCache(ctx, executionRoot)
+	runErr := f.execution.Dependencies.CommandRunner(gateCtx, executionRoot, "sh", []string{"-c", command}, &stdout, &stderr)
 	finishedAt := now(f.execution)
 	durationSeconds := max(int64(finishedAt.Sub(startedAt)/time.Second), 0)
 	combined := combineFinalVerificationOutput(stdout.String(), stderr.String())

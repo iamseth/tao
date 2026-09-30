@@ -563,6 +563,13 @@ turning off session timeout does not turn off this bound. Tao reports observed
 failures and supported mechanical corrections for diagnosis. Final repository
 verification remains unchanged. See [the evidence contract](plan-format.md#observed-slice-verification).
 
+Tao-owned slice, final, and merge gates override inherited `GOLANGCI_LINT_CACHE`
+with `.tao/cache/golangci-lint` under the actual execution worktree (the integration
+worktree for batch merges). Lint remains mandatory where declared; only its cache
+is isolated. These caches disappear when their worktrees are removed. Manual
+commands and explicit cache overrides inside commands or build scripts are
+outside this guarantee.
+
 **Choose the run size:**
 
 - `tao run <plan-id>` — normal execution of all pending slices. Choose this when

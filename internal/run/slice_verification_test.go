@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/plan"
 )
 
@@ -291,6 +292,109 @@ func TestSliceVerifierMissingShellAndEmptyDeclaration(t *testing.T) {
 	runs, err = v.Verify(context.Background(), SliceVerificationRequest{root, plan.Verification{}})
 	if err != nil || len(runs) != 0 {
 		t.Fatalf("empty declaration: runs=%+v err=%v", runs, err)
+	}
+}
+
+func TestSliceVerifierCacheAcrossWorktreesAndSteps(t *testing.T) {
+	shared := t.TempDir()
+	t.Setenv("GOLANGCI_LINT_CACHE", shared)
+	repo := initSliceCompletionRepo(t)
+	for _, branch := range []string{"cache-one", "cache-two"} {
+		root := filepath.Join(sliceVerifierRoot(t), "worktree with spaces")
+		runCommitTestGitCommand(t, repo, "worktree", "add", "-b", branch, root)
+		sub := filepath.Join(root, "pkg")
+		if err := os.Mkdir(sub, 0700); err != nil {
+			t.Fatal(err)
+		}
+		command := `printf '%s\n' "$GOLANGCI_LINT_CACHE"; printf 'cache data\n' >> "$GOLANGCI_LINT_CACHE/entries"`
+		rootCommand := `printf '%s\n' "$GOLANGCI_LINT_CACHE"`
+		calls := 0
+		v := SliceVerifier{CommandRunner: func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+			wantCWD, wantCommand := root, rootCommand
+			if calls > 0 {
+				wantCWD, wantCommand = sub, command
+			}
+			calls++
+			if cwd != wantCWD || name != "sh" || !reflect.DeepEqual(args, []string{"-c", wantCommand}) {
+				t.Fatalf("changed dispatch: %s %s %v", cwd, name, args)
+			}
+			return commandrunner.DefaultLocal(ctx, cwd, name, args, stdout, stderr)
+		}}
+		runs, err := v.Verify(context.Background(), SliceVerificationRequest{root, plan.Verification{
+			Commands: []string{rootCommand, command, command},
+			Steps:    []plan.VerificationStep{{Command: command, CWD: "pkg"}},
+		}})
+		if err != nil || len(runs) != 3 {
+			t.Fatalf("runs=%+v err=%v", runs, err)
+		}
+		cache := filepath.Join(root, ".tao", "cache", "golangci-lint")
+		for _, run := range runs {
+			if run.Result != "passed" || !strings.Contains(run.Details, "\n"+cache+"\n") {
+				t.Fatalf("wrong cache: %+v; want %s", run, cache)
+			}
+		}
+		contents, err := os.ReadFile(filepath.Join(cache, "entries")) //nolint:gosec // G304: fixed file in a test-owned temporary worktree.
+		if err != nil || string(contents) != "cache data\ncache data\n" {
+			t.Fatalf("repeated cache use: %q, %v", contents, err)
+		}
+		if _, err := os.Stat(filepath.Join(sub, ".tao")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("prepared subdirectory cache: %v", err)
+		}
+	}
+	if os.Getenv("GOLANGCI_LINT_CACHE") != shared {
+		t.Fatal("changed parent environment")
+	}
+	entries, err := os.ReadDir(shared)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("wrote shared cache: %v %v", entries, err)
+	}
+}
+
+func TestSliceVerifierCacheMechanicalCorrection(t *testing.T) {
+	root := sliceVerifierRoot(t)
+	sub := filepath.Join(root, "pkg")
+	if err := os.Mkdir(sub, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "example_test.go"), []byte("package example"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	// A deterministic tool failure exercises the real shell and correction classifier.
+	tool := "#!/bin/sh\nprintf '%s\\n' \"$GOLANGCI_LINT_CACHE\"\nif [ \"$2\" = pkg/example_test.go ]; then echo 'No test files found' >&2; exit 1; fi\n"
+	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(tool), 0700); err != nil { //nolint:gosec // G306: owner-only executable permission for the test tool.
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GOLANGCI_LINT_CACHE", t.TempDir())
+	command := "go test pkg/example_test.go"
+	v := SliceVerifier{CommandRunner: commandrunner.DefaultLocal}
+	runs, err := v.Verify(context.Background(), SliceVerificationRequest{root, plan.Verification{Commands: []string{command}, Steps: []plan.VerificationStep{{Command: command, CWD: "pkg"}}}})
+	if err != nil || len(runs) != 2 {
+		t.Fatalf("runs=%+v err=%v", runs, err)
+	}
+	cache := filepath.Join(root, ".tao", "cache", "golangci-lint")
+	for _, run := range runs {
+		if run.CWD != sub || !strings.Contains(run.Details, cache) {
+			t.Fatalf("correction lost root cache: %+v", run)
+		}
+	}
+	if runs[0].Command != command || runs[0].Result != "failed" || runs[1].Command != "go test example_test.go" || runs[1].OriginalCommand != command || runs[1].Result != "passed" {
+		t.Fatalf("changed correction evidence: %+v", runs)
+	}
+}
+
+func TestSliceVerifierCacheSetupFailure(t *testing.T) {
+	root := sliceVerifierRoot(t)
+	if err := os.WriteFile(filepath.Join(root, ".tao"), []byte("not a directory"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := (SliceVerifier{}).Verify(context.Background(), SliceVerificationRequest{root, plan.Verification{Commands: []string{"touch executed"}}})
+	if err == nil || len(runs) != 1 || runs[0].Result != "failed" || !strings.Contains(err.Error(), "prepare verification cache") {
+		t.Fatalf("runs=%+v err=%v", runs, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "executed")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("command executed after setup failure: %v", err)
 	}
 }
 

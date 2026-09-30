@@ -13,8 +13,89 @@ import (
 	"testing"
 	"time"
 
+	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/plan"
 )
+
+func TestVerifyCompletedBranchCache(t *testing.T) {
+	shared := t.TempDir()
+	t.Setenv("GOLANGCI_LINT_CACHE", shared)
+	for _, mode := range []string{"passed", "setup failure", "skipped"} {
+		t.Run(mode, func(t *testing.T) {
+			repo := initSliceCompletionRepo(t)
+			root := filepath.Join(sliceVerifierRoot(t), "execution worktree")
+			runCommitTestGitCommand(t, repo, "worktree", "add", "-b", "final-cache", root)
+			if mode != "skipped" {
+				makefile := "verify:\n\t@printf '%s\\n' \"$$GOLANGCI_LINT_CACHE\"\n\t@printf data > \"$$GOLANGCI_LINT_CACHE/entry\"\n\t@touch executed\n"
+				if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte(makefile), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "setup failure" {
+				if err := os.WriteFile(filepath.Join(root, ".tao"), []byte("not a directory"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			detail := completedReviewPlanDetail(t.TempDir())
+			detail.State.Repo.Root = repo
+			calls := 0
+			finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{}, RunDependencies{
+				CommandRunner: func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+					calls++
+					if cwd != root || name != "sh" || len(args) != 2 || args[0] != "-c" || args[1] != "make verify" {
+						t.Fatalf("changed dispatch: %s %s %v", cwd, name, args)
+					}
+					return commandrunner.DefaultLocal(ctx, cwd, name, args, stdout, stderr)
+				},
+				reviewGitFactory:  fixedReviewGit(&fakeReviewGit{head: "live-head"}),
+				PlanRecordFactory: memoryPlanRecordFactory,
+			}))
+			err := finalizer.verifyCompletedBranch(context.Background(), detail, root)
+			verification := detail.State.Plan.FinalVerification
+			want := mode
+			if mode == "setup failure" {
+				want = "failed"
+				var gateErr *FinalVerificationError
+				if !errors.As(err, &gateErr) || gateErr.Cause == nil || !strings.Contains(gateErr.Cause.Error(), "prepare verification cache") {
+					t.Fatalf("setup error = %v", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if verification == nil || verification.Result != want || verification.CWD != root {
+				t.Fatalf("verification=%+v", verification)
+			}
+			if mode == "passed" {
+				cache := filepath.Join(root, ".tao", "cache", "golangci-lint")
+				if strings.TrimSpace(verification.Details) != cache {
+					t.Fatalf("cache output=%q, want %q", verification.Details, cache)
+				}
+				if data, err := os.ReadFile(filepath.Join(cache, "entry")); err != nil || string(data) != "data" { //nolint:gosec // G304: fixed file in a test-owned temporary worktree.
+					t.Fatalf("cache contents=%q err=%v", data, err)
+				}
+			} else if _, err := os.Stat(filepath.Join(root, "executed")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("unexpected execution: %v", err)
+			}
+			if mode == "skipped" {
+				if calls != 0 {
+					t.Fatal("dispatched skipped gate")
+				}
+				if _, err := os.Stat(filepath.Join(root, ".tao")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("prepared skipped cache: %v", err)
+				}
+			} else if calls != 1 {
+				t.Fatalf("gate calls=%d", calls)
+			}
+			if _, err := os.Stat(filepath.Join(repo, ".tao")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("prepared control repo cache: %v", err)
+			}
+		})
+	}
+	entries, err := os.ReadDir(shared)
+	if err != nil || len(entries) != 0 || os.Getenv("GOLANGCI_LINT_CACHE") != shared {
+		t.Fatalf("changed inherited cache: %v %v", entries, err)
+	}
+}
 
 func TestVerifyCompletedBranchAppendsOutcomeEvents(t *testing.T) {
 	tests := []struct {

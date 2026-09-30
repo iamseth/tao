@@ -260,7 +260,7 @@ func TestBatchSubmodulesResolverPreparationOrderingAndFailure(t *testing.T) {
 }
 
 func TestBatchAgentResolvesTextConflictAndTaoOwnsCommit(t *testing.T) {
-	t.Parallel()
+	t.Setenv("GOLANGCI_LINT_CACHE", filepath.Join(t.TempDir(), "inherited-cache"))
 	fixture, sourceHead, defaultHead, integrationRoot := batchAgentConflictFixture(t)
 	state := batchAgentDeferredState(fixture, sourceHead, defaultHead)
 	reviewProposal := plan.ReviewCommitMessage{
@@ -285,7 +285,8 @@ func TestBatchAgentResolvesTextConflictAndTaoOwnsCommit(t *testing.T) {
 		return BatchAgentSessionResult{Output: batchResolutionJSON("resolved README")}, os.WriteFile(filepath.Join(request.IntegrationRoot, "README.md"), []byte("combined\n"), 0o600)
 	})
 	service := NewService(fixture.repoRoot, nil)
-	got, err := (BatchAgentResolver{Store: store, Service: service, Agent: agent}).Resolve(context.Background(), state, integrationRoot, BatchResolveOptions{VerifyCommand: "grep -q combined README.md"})
+	service.Runner = cacheCheckingMergeRunner(t, integrationRoot)
+	got, err := (BatchAgentResolver{Store: store, Service: service, Agent: agent}).Resolve(context.Background(), state, integrationRoot, BatchResolveOptions{VerifyCommand: mergeCacheProbe + "grep -q combined README.md"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,6 +316,13 @@ func TestBatchAgentResolvesTextConflictAndTaoOwnsCommit(t *testing.T) {
 	}
 	if len(store.states) < 4 {
 		t.Fatalf("request, outcome, commit, and phase were not durably transitioned: %d states", len(store.states))
+	}
+	requireNoMergeCache(t, fixture.repoRoot, fixture.worktreePath)
+	if status := realGitOutput(t, integrationRoot, "-c", "core.excludesFile="+os.DevNull, "status", "--porcelain", "--untracked-files=all"); status != "" {
+		t.Fatalf("cache dirtied resolver worktree: %s", status)
+	}
+	if tracked := realGitOutput(t, integrationRoot, "ls-files", ".tao"); tracked != "" {
+		t.Fatalf("resolver committed cache metadata: %s", tracked)
 	}
 }
 

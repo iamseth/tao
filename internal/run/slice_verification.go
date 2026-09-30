@@ -74,7 +74,8 @@ func (v SliceVerifier) verify(ctx context.Context, request SliceVerificationRequ
 		if err := sliceVerificationCheckCWD(i+1, command, cwds[i]); err != nil {
 			return runs, err
 		}
-		run, cause := v.attempt(ctx, command, cwds[i], i+1, timeout)
+		gateCtx := commandrunner.WithVerificationCache(ctx, root)
+		run, cause := v.attempt(gateCtx, command, cwds[i], i+1, timeout)
 		runs = append(runs, run)
 		if run.Result == "passed" {
 			continue
@@ -88,7 +89,7 @@ func (v SliceVerifier) verify(ctx context.Context, request SliceVerificationRequ
 				if err := sliceVerificationCheckCWD(i+1, candidate.Command, candidate.CWD); err != nil {
 					return runs, err
 				}
-				run, cause = v.attempt(ctx, candidate.Command, candidate.CWD, i+1, timeout)
+				run, cause = v.attempt(gateCtx, candidate.Command, candidate.CWD, i+1, timeout)
 				run.OriginalCommand = command
 				runs = append(runs, run)
 				if run.Result == "passed" {

@@ -120,6 +120,107 @@ func TestDefaultLocalTimeoutKillsDescendants(t *testing.T) {
 	assertCommandDescendantGone(t, pidPath)
 }
 
+func TestDefaultLocalVerificationCacheProcessLifecycle(t *testing.T) {
+	for _, mode := range []string{"cancellation", "timeout", "detached", "inherited-pipes"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			pidPath := filepath.Join(root, "child.pid")
+			ctx := WithVerificationCache(context.Background(), root)
+			var cancel context.CancelFunc
+			if mode == "timeout" {
+				ctx, cancel = context.WithTimeout(ctx, 200*time.Millisecond)
+			} else {
+				ctx, cancel = context.WithCancel(ctx)
+			}
+			defer cancel()
+			script := `sleep 30 & echo $! > "$1"; wait`
+			switch mode {
+			case "detached":
+				script = `sleep 30 >/dev/null 2>&1 & echo $! > "$1"`
+			case "inherited-pipes":
+				script = `sleep 30 & echo $! > "$1"`
+			}
+			result := make(chan error, 1)
+			go func() {
+				result <- DefaultLocal(ctx, root, "sh", []string{"-c", script, "sh", pidPath}, io.Discard, io.Discard)
+			}()
+			if mode == "cancellation" {
+				deadline := time.Now().Add(5 * time.Second)
+				for {
+					if _, err := os.Stat(pidPath); err == nil {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("child command did not start")
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				cancel()
+			}
+			select {
+			case err := <-result:
+				switch mode {
+				case "detached":
+					if err != nil {
+						t.Fatal(err)
+					}
+				case "inherited-pipes":
+					if !errors.Is(err, exec.ErrWaitDelay) {
+						t.Fatalf("want ErrWaitDelay, got %v", err)
+					}
+				default:
+					if err == nil || ctx.Err() == nil {
+						t.Fatalf("cancellation failed: %v, %v", err, ctx.Err())
+					}
+				}
+			case <-time.After(2 * time.Second):
+				cancel()
+				<-result
+				t.Fatal("opt-in command did not finish promptly")
+			}
+			assertCommandDescendantGone(t, pidPath)
+		})
+	}
+}
+
+func TestVerificationCachePrivateAndInaccessibleStorage(t *testing.T) {
+	setupCacheChild(t)
+	root := t.TempDir()
+	ctx := WithVerificationCache(context.Background(), root)
+	if _, err := cacheChild(ctx, root); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{".tao", ".tao/cache", ".tao/cache/golangci-lint", ".tao/cache/golangci-lint/.gitignore"} {
+		info, err := os.Stat(filepath.Join(root, path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := os.FileMode(0700)
+		if !info.IsDir() {
+			want = 0600
+		}
+		if info.Mode().Perm() != want {
+			t.Fatalf("%s permissions = %o, want %o", path, info.Mode().Perm(), want)
+		}
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses permission checks")
+	}
+	cache := filepath.Join(root, ".tao", "cache", "golangci-lint")
+	if err := os.Chmod(cache, 0500); err != nil { //nolint:gosec // G302: owner-only directory traversal is required for this permission test.
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(cache, 0700) }) //nolint:gosec // G302: restore owner-only directory access for test cleanup.
+	marker := filepath.Join(root, "launched")
+	t.Setenv("TAO_CACHE_TEST_MARKER", marker)
+	if _, err := cacheChild(ctx, root); err == nil || !strings.Contains(err.Error(), "verification cache") {
+		t.Fatalf("want inaccessible storage error, got %v", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("command launched with inaccessible storage: %v", err)
+	}
+}
+
 func TestDefaultLocalStripsSliceCompletionOwnerToken(t *testing.T) {
 	t.Setenv(SliceCompletionOwnerEnv, "leaked-owner")
 	t.Setenv("TAO_RUNNER_KEEP", "kept")
