@@ -605,11 +605,31 @@ repair attempts.
 **Supply later observations separately from approval.** Approval authorizes a
 choice or overwrite; it does not deliver facts, and approved decisions need no
 reconfirmation. An unfilled observation template remains missing information.
+Tao conservatively detects some approval-as-data wording before agent launch and
+refuses it with the implicated requirement and amendment guidance. Repeating
+approval cannot fix missing facts; repeating `--continue` on this refusal leaves
+the blocked state unchanged. This is a narrow heuristic, not a completeness check.
 Put observations in the slice contract or a concrete `required_inputs` file with
 real content available in the execution worktree, not only the control checkout.
 File existence alone does not prove content. A missing external file still fails
 whole-plan validation unless an exact direct producer contract exists; do not
 invent an agent producer for human observations.
+
+If the refused slice is interrupted and still `in_progress`, amendment is not
+yet allowed. Confirm no run is active, write a blocker reason describing the
+missing facts, and explicitly block the slice first using its data-home plan
+directory:
+
+```sh
+tao slice-blocked --plan-dir /absolute/path/to/plan --slice-id <slice-id> \
+  --reason-file /tmp/missing-observations.txt
+```
+
+This preserves the recorded execution boundary and worktree changes; do not reset
+or commit interrupted automatic work. Then amend the blocked slice as below and
+use `tao run --continue <plan-id>`. Amendment locking and ordinary exact-boundary
+recovery checks still apply; blocking and amendment do not make unsafe recovery
+eligible.
 
 For a pending or blocked slice, record later facts with a contract amendment:
 
@@ -621,10 +641,14 @@ tao edit amend <plan-id> <slice-id> --reason-file /tmp/observation-reason.txt \
 The reason file explains why the contract changes. Put the actual observations
 in `--add-task`, or use `--goal-file /tmp/observed-goal.txt` containing the full
 replacement goal and facts; facts recorded only in the amendment reason are not
-a contract change. These flags do not add or waive `required_inputs`, and the
-amended plan must still validate. After resolving the cause, a blocked plan still
-needs ordinary `tao run --continue <plan-id>`. Amendments neither clear blockers
-nor grant or bypass approval; satisfy any outstanding approval gate separately.
+a contract change. Only recorded goal/tasks amendments lift the approval-as-data
+heuristic; reason-only, file-scope, and manual-check changes do not. Neither an
+amendment nor file existence proves factual completeness. These flags do not add
+or waive `required_inputs`: declared inputs still undergo execution-worktree
+checks, and the amended plan must still validate. After remediation, use ordinary
+`tao run <plan-id>` for pending work or `tao run --continue <plan-id>` for blocked
+work. Amendments neither clear blockers nor grant or bypass approval; satisfy any
+outstanding approval gate separately.
 
 Under `--commit-policy none`, a successful same-head reverification does not by
 itself prove that permitted uncommitted work was committed.

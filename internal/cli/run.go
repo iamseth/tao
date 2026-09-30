@@ -304,6 +304,12 @@ func decorateRunCannotStartError(ctx context.Context, repo planRunRepository, in
 	if resolveErr != nil || detail == nil {
 		return err
 	}
+	var evidence *plan.ApprovalEvidenceError
+	if errors.As(err, &evidence) {
+		if slice := runSliceByID(detail, evidence.SliceID); slice != nil {
+			return fmt.Errorf("%w\n\n%s", err, formatApprovalEvidenceGuidance(detail, slice, input, evidence.Requirement))
+		}
+	}
 	commands := runUnblockCommands(detail, input)
 	if len(commands) == 0 {
 		return err
@@ -315,6 +321,37 @@ func decorateRunCannotStartError(ctx context.Context, repo planRunRepository, in
 		}
 	}
 	return fmt.Errorf("%w\n\n%s", err, formatRunUnblockCommands(commands))
+}
+
+func formatApprovalEvidenceGuidance(detail *plan.PlanDetail, slice *plan.Slice, input, requirement string) string {
+	planRef := strings.TrimSpace(input)
+	if planRef == "" {
+		planRef = detail.State.Plan.ID
+	}
+	planRef = shellCommandArg(planRef)
+	sliceRef := shellCommandArg(slice.ID)
+	amend := "tao edit amend " + planRef + " " + sliceRef + " --reason-file " + shellCommandArg("<reason-file>")
+	var b strings.Builder
+	fmt.Fprintf(&b, "Unresolved requirement: %q\n", planview.FormatBlockerText(requirement).Detailed)
+	b.WriteString("Approval is authorization-only; repeated approval cannot supply missing facts.\n")
+	if slice.Status == plan.StatusInProgress {
+		b.WriteString("This interrupted slice is in_progress and cannot be amended. After confirming no run is active, write a blocker reason describing the missing facts and explicitly block it first:\n  tao slice-blocked --plan-dir " + shellCommandArg(detail.Dir) + " --slice-id " + sliceRef + " --reason-file " + shellCommandArg("<blocker-reason-file>"))
+		b.WriteString("\nBlocking preserves the recorded execution boundary and worktree changes; do not reset or commit interrupted automatic work. Amendment locking and ordinary recovery checks still apply.\n")
+	}
+	b.WriteString("Replace the placeholders below with your own files or text. The goal file must contain the complete replacement goal plus actual facts; the reason file only explains the change. Record the contract amendment:\n  ")
+	b.WriteString(amend + " --goal-file " + shellCommandArg("<goal-file>"))
+	b.WriteString("\nAlternatively, append a task containing the actual facts (do not invent observations):\n  ")
+	b.WriteString(amend + " --add-task " + shellCommandArg("<task containing actual facts>"))
+	b.WriteString("\nA recorded goal/tasks amendment lifts only this heuristic, not approval or other run gates. Declared inputs must still pass execution-worktree checks; neither amendments nor file existence prove factual completeness.")
+	if slice.Approval != nil && slice.Approval.Required && !slice.Approval.Approved {
+		b.WriteString("\nAuthorization is also outstanding; approve separately:\n  tao approve --slice " + sliceRef + " " + planRef)
+	}
+	b.WriteString("\nOnly after remediation, run:\n  tao run ")
+	if slice.Status == plan.StatusInProgress || runNeedsContinueAfterUnblock(detail, slice) {
+		b.WriteString("--continue ")
+	}
+	b.WriteString(planRef)
+	return b.String()
 }
 
 func runUnblockCommands(detail *plan.PlanDetail, input string) []string {

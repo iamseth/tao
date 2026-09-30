@@ -1,0 +1,41 @@
+Blocked: false
+Error: cannot start run: slice 001-a requires factual evidence through approval, but approval is authorization-only: approval must include factual observations from production
+
+Unresolved requirement: "approval must include factual observations from production"
+Approval is authorization-only; repeated approval cannot supply missing facts.
+Replace the placeholders below with your own files or text. The goal file must contain the complete replacement goal plus actual facts; the reason file only explains the change. Record the contract amendment:
+  tao edit amend 20260430-1200-run-plan 001-a --reason-file '<reason-file>' --goal-file '<goal-file>'
+Alternatively, append a task containing the actual facts (do not invent observations):
+  tao edit amend 20260430-1200-run-plan 001-a --reason-file '<reason-file>' --add-task '<task containing actual facts>'
+A recorded goal/tasks amendment lifts only this heuristic, not approval or other run gates. Declared inputs must still pass execution-worktree checks; neither amendments nor file existence prove factual completeness.
+Only after remediation, run:
+  tao run 20260430-1200-run-plan
+
+Blocked: true
+Error: cannot start run: slice 001-a requires factual evidence through approval, but approval is authorization-only: approval must include factual observations from production
+
+Unresolved requirement: "approval must include factual observations from production"
+Approval is authorization-only; repeated approval cannot supply missing facts.
+Replace the placeholders below with your own files or text. The goal file must contain the complete replacement goal plus actual facts; the reason file only explains the change. Record the contract amendment:
+  tao edit amend 20260430-1200-run-plan 001-a --reason-file '<reason-file>' --goal-file '<goal-file>'
+Alternatively, append a task containing the actual facts (do not invent observations):
+  tao edit amend 20260430-1200-run-plan 001-a --reason-file '<reason-file>' --add-task '<task containing actual facts>'
+A recorded goal/tasks amendment lifts only this heuristic, not approval or other run gates. Declared inputs must still pass execution-worktree checks; neither amendments nor file existence prove factual completeness.
+Only after remediation, run:
+  tao run --continue 20260430-1200-run-plan
+
+Interrupted: true
+Error: cannot start run: slice 001-a requires factual evidence through approval, but approval is authorization-only: approval must include factual observations from production
+
+Unresolved requirement: "approval must include factual observations from production"
+Approval is authorization-only; repeated approval cannot supply missing facts.
+This interrupted slice is in_progress and cannot be amended. After confirming no run is active, write a blocker reason describing the missing facts and explicitly block it first:
+  tao slice-blocked --plan-dir <plan-dir> --slice-id 001-a --reason-file '<blocker-reason-file>'
+Blocking preserves the recorded execution boundary and worktree changes; do not reset or commit interrupted automatic work. Amendment locking and ordinary recovery checks still apply.
+Replace the placeholders below with your own files or text. The goal file must contain the complete replacement goal plus actual facts; the reason file only explains the change. Record the contract amendment:
+  tao edit amend 20260430-1200-run-plan 001-a --reason-file '<reason-file>' --goal-file '<goal-file>'
+Alternatively, append a task containing the actual facts (do not invent observations):
+  tao edit amend 20260430-1200-run-plan 001-a --reason-file '<reason-file>' --add-task '<task containing actual facts>'
+A recorded goal/tasks amendment lifts only this heuristic, not approval or other run gates. Declared inputs must still pass execution-worktree checks; neither amendments nor file existence prove factual completeness.
+Only after remediation, run:
+  tao run --continue 20260430-1200-run-plan

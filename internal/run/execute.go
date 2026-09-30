@@ -108,6 +108,9 @@ func (e *detailExecutor) continueBlocked(ctx context.Context, detail *plan.PlanD
 	if err := refuseUnchangedPlanOwnedBlocker(ctx, e.execution, detail); err != nil {
 		return err
 	}
+	if err := checkSelectedApprovalEvidence(detail); err != nil {
+		return err
+	}
 	if err := continueBlockedPlan(e.execution, detail, now(e.execution).UTC()); err != nil {
 		return err
 	}
@@ -199,6 +202,9 @@ func (r SelectedSliceRunner) Run(ctx context.Context, detail *plan.PlanDetail, d
 	}
 	if !action.AllowAgentHandoff {
 		return nil, interruptedSliceRunError(slice.ID, action)
+	}
+	if err := checkSelectedApprovalEvidence(detail); err != nil {
+		return nil, err
 	}
 	before := plan.SnapshotProgress(detail)
 	logPath := plan.LogPath(detail.Dir)
@@ -408,6 +414,9 @@ func (r SelectedSliceRunner) preflightTransportResume(ctx context.Context, detai
 	}
 	if action.FixedRoot != executionRoot {
 		return plan.VerificationValidationResult{}, *action, fmt.Errorf("slice %s recovery root changed from %q to %q before transport retry", sliceID, executionRoot, action.FixedRoot)
+	}
+	if err := checkSelectedApprovalEvidence(detail); err != nil {
+		return plan.VerificationValidationResult{}, *action, err
 	}
 	validation, err := r.validateSelectedSlice(detail, sliceID, executionRoot)
 	if err != nil {

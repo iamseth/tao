@@ -90,6 +90,11 @@ func (s Service) prepareRequestRunExecution(ctx context.Context, detail *plan.Pl
 	if err != nil {
 		return execution, err
 	}
+	if boundary != nil && boundary.AllowAgentHandoff {
+		if err := checkSelectedApprovalEvidence(detail); err != nil {
+			return execution, err
+		}
+	}
 	if execution.Request.RestartBlocked {
 		slice := selectedRunSlice(detail)
 		settledRetry := blockedRestartSettledForRetry(detail, slice)
