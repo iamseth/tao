@@ -22,6 +22,8 @@ flowchart LR
     Validate --> Slices
 ```
 
+Session wrap-up warnings are transient implementation/rework advice, not events or lifecycle evidence; they do not change the completion deadline or recovery contract. Resume notes are not plan artifacts: `slice-blocked --resume-note-file` may publish disposable, untrusted context to a private data-home cache outside worktrees. Only an ordinarily admitted same-slice continuation consumes fresh context; loaders, state/events, and share-safe reports never include note text. See [agent-input trust](agent-input-trust.md).
+
 ## Plan Directory
 
 A plan directory is usually allocated by `/tao-slice` through:

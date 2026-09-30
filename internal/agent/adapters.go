@@ -43,6 +43,7 @@ func (r piRuntime) RunSession(ctx context.Context, session Session) (SessionResu
 		NoProgressToolLimit:  session.NoProgressToolLimit,
 		VerificationCommands: session.VerificationCommands,
 		SessionInfoMode:      mode,
+		WarningMessages:      session.WarningMessages,
 	})
 	out := SessionResult{Output: result.Output, FinalText: result.FinalText, PromptAcceptance: result.PromptAcceptance}
 	if session.CollectMetrics {

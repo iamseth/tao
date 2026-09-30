@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -13,6 +14,221 @@ type fakeSlowRuntime struct {
 
 func (r fakeSlowRuntime) RunSession(ctx context.Context, session Session) (SessionResult, error) {
 	return r.run(ctx, session)
+}
+
+func TestTimeoutRuntimeWarningThreshold(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		runtime := WithSessionTimeout(fakeSlowRuntime{run: func(ctx context.Context, session Session) (SessionResult, error) {
+			if session.WarningMessages == nil {
+				t.Fatal("missing warning channel")
+			}
+			time.Sleep(5*time.Second - time.Nanosecond)
+			synctest.Wait()
+			select {
+			case <-session.WarningMessages:
+				t.Fatal("early warning")
+			default:
+			}
+			time.Sleep(time.Nanosecond)
+			synctest.Wait()
+			select {
+			case message := <-session.WarningMessages:
+				if message != "wrap up" {
+					t.Fatalf("message=%q", message)
+				}
+			default:
+				t.Fatal("missing warning at threshold")
+			}
+			if time.Since(start) != 8*time.Second {
+				t.Fatal("binding shifted warning origin")
+			}
+			<-ctx.Done()
+			select {
+			case <-session.WarningMessages:
+				t.Fatal("duplicate warning")
+			default:
+			}
+			return SessionResult{Output: "partial"}, ctx.Err()
+		}})
+		result, err := runtime.RunSession(context.Background(), Session{
+			Timeout: 10 * time.Second, Warning: &SessionWarning{Percent: 80, Message: "wrap up"},
+			BindLifetime: func(ctx context.Context) (context.Context, func() error, error) {
+				time.Sleep(3 * time.Second)
+				return ctx, func() error { return nil }, nil
+			},
+		})
+		var timeout *SessionTimeoutError
+		if !errors.As(err, &timeout) || !errors.Is(err, context.DeadlineExceeded) || result.Output != "partial" {
+			t.Fatalf("result=%+v err=%v", result, err)
+		}
+	})
+}
+
+func TestTimeoutRuntimeWarningDisabled(t *testing.T) {
+	for _, timeout := range []time.Duration{0, time.Second} {
+		for _, policy := range []*SessionWarning{nil, {}, {Percent: -1}, {Percent: 100}, {Percent: 80}} {
+			if timeout > 0 && policy != nil && policy.Percent == 80 {
+				continue
+			}
+			runtime := timeoutRuntime{
+				newWarningTimer: func(time.Duration) (<-chan time.Time, func()) { t.Fatal("disabled warning scheduled"); return nil, nil },
+				inner: fakeSlowRuntime{run: func(ctx context.Context, session Session) (SessionResult, error) {
+					if session.WarningMessages != nil {
+						t.Fatal("disabled warning has channel")
+					}
+					_, deadline := ctx.Deadline()
+					if deadline != (timeout > 0) {
+						t.Fatal("policy changed hard timeout")
+					}
+					return SessionResult{}, nil
+				}},
+			}
+			_, err := runtime.RunSession(context.Background(), Session{Timeout: timeout, Warning: policy, WarningMessages: make(chan string)})
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
+func TestTimeoutRuntimeWarningCleanup(t *testing.T) {
+	for _, mode := range []string{"success", "error", "parent cancellation", "parent deadline", "binding failure", "cancelled binding", "unconsumed"} {
+		t.Run(mode, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				parent, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				if mode == "parent deadline" {
+					var stop context.CancelFunc
+					parent, stop = context.WithTimeout(parent, time.Second)
+					defer stop()
+				}
+				created, stopped, calls := 0, 0, 0
+				wantErr := errors.New("failure")
+				var messages <-chan string
+				runtime := timeoutRuntime{
+					newWarningTimer: func(d time.Duration) (<-chan time.Time, func()) {
+						created++
+						timer := time.NewTimer(d)
+						return timer.C, func() { stopped++; timer.Stop() }
+					},
+					inner: fakeSlowRuntime{run: func(ctx context.Context, session Session) (SessionResult, error) {
+						calls++
+						messages = session.WarningMessages
+						switch mode {
+						case "error":
+							return SessionResult{}, wantErr
+						case "parent cancellation":
+							cancel()
+							<-ctx.Done()
+							return SessionResult{}, ctx.Err()
+						case "parent deadline", "cancelled binding":
+							<-ctx.Done()
+							return SessionResult{}, ctx.Err()
+						case "unconsumed":
+							time.Sleep(9 * time.Second)
+							synctest.Wait()
+						}
+						return SessionResult{Output: "done"}, nil
+					}},
+				}
+				session := Session{Timeout: 10 * time.Second, Warning: &SessionWarning{Percent: 80, Message: "notice"}}
+				if mode == "binding failure" || mode == "cancelled binding" {
+					session.BindLifetime = func(ctx context.Context) (context.Context, func() error, error) {
+						if mode == "binding failure" {
+							return nil, nil, wantErr
+						}
+						bound, stop := context.WithCancel(ctx)
+						stop()
+						return bound, func() error { return nil }, nil
+					}
+				}
+				_, err := runtime.RunSession(parent, session)
+				switch mode {
+				case "error", "binding failure":
+					if !errors.Is(err, wantErr) {
+						t.Fatalf("err=%v", err)
+					}
+				case "parent cancellation", "cancelled binding":
+					if !errors.Is(err, context.Canceled) {
+						t.Fatalf("err=%v", err)
+					}
+				case "parent deadline":
+					if !errors.Is(err, context.DeadlineExceeded) {
+						t.Fatalf("err=%v", err)
+					}
+				default:
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				if mode == "binding failure" {
+					if created != 0 || calls != 0 {
+						t.Fatal("binding failure scheduled work")
+					}
+				} else if created != 1 || calls != 1 {
+					t.Fatal("unexpected invocation count")
+				}
+				if stopped != created {
+					t.Fatal("timer not stopped")
+				}
+				time.Sleep(20 * time.Second)
+				synctest.Wait()
+				if mode == "unconsumed" {
+					select {
+					case message := <-messages:
+						if message != "notice" {
+							t.Fatal(message)
+						}
+					default:
+						t.Fatal("missing buffered notice")
+					}
+				}
+				select {
+				case <-messages:
+					t.Fatal("unexpected notice after cleanup")
+				default:
+				}
+			})
+		})
+	}
+}
+
+func TestTimeoutRuntimeWarningDurationBounds(t *testing.T) {
+	for _, timeout := range []time.Duration{time.Nanosecond, 99 * time.Nanosecond, time.Duration(1<<63 - 1)} {
+		t.Run(timeout.String(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				runtime := timeoutRuntime{
+					newWarningTimer: func(d time.Duration) (<-chan time.Time, func()) {
+						want := timeout/100*99 + timeout%100*99/100
+						if d != want || d < 0 || d >= timeout {
+							t.Fatalf("delay=%v want=%v timeout=%v", d, want, timeout)
+						}
+						// Do not advance the fake clock centuries beyond its timer range.
+						if timeout == time.Duration(1<<63-1) {
+							ticks := make(chan time.Time, 1)
+							ticks <- time.Now()
+							return ticks, func() {}
+						}
+						timer := time.NewTimer(d)
+						return timer.C, func() { timer.Stop() }
+					},
+					inner: fakeSlowRuntime{run: func(ctx context.Context, session Session) (SessionResult, error) {
+						if got := <-session.WarningMessages; got != "notice" {
+							t.Fatal(got)
+						}
+						if ctx.Err() != nil {
+							t.Fatal("warning extended to deadline")
+						}
+						return SessionResult{}, nil
+					}},
+				}
+				if _, err := runtime.RunSession(context.Background(), Session{Timeout: timeout, Warning: &SessionWarning{Percent: 99, Message: "notice"}}); err != nil {
+					t.Fatal(err)
+				}
+			})
+		})
+	}
 }
 
 func TestTimeoutRuntimeLifetimeUsesActualDeadlineAndCloses(t *testing.T) {

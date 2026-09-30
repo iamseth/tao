@@ -674,6 +674,35 @@ Run-path sessions default to a 20-minute wall-clock ceiling; `TAO_SESSION_TIMEOU
 accepts Go durations or `0` to disable it. Interactive planning is exempt; see
 [configuration](configuration.md) for runtime settings.
 
+#### Session wrap-up and continuation
+
+`TAO_SESSION_WARN_PERCENT` defaults to 80 and accepts integers 0–99. It requests
+one advisory notice at that percentage of the existing hard session budget, only
+for implementation/rework slices. Set it to `0` to roll back warning delivery;
+resume notes still work. A zero hard timeout also disables warnings. Invalid
+values are rejected when implementation consumes the invocation snapshot, not by
+planning, review, PR, or merge operations. `tao note run` planning is warning-free;
+its eventual implementation uses the shared run policy.
+
+Pi steers within the existing session, between turns. A long tool or verification
+command may leave no opportunity to wrap up before the deadline. Unsupported
+runtimes silently ignore the notice. No deadline is extended and no new session
+or warning-driven retry starts.
+
+The notice asks the agent to stop expanding scope and use `slice-complete` only
+when ready under the normal gates. If unfinished and safely before completion
+intent, it may block with `slice-blocked --resume-note-file` pointing to a bounded
+private temporary file outside the worktree, describing last action, next action,
+why, and do-not guidance. Never weaken verification, commit manually, or interfere
+with existing completion intent to beat a deadline. Notes are disposable untrusted
+context, cached privately outside worktrees, not plan artifacts or report data.
+See [agent-input trust](agent-input-trust.md#local-advisory-resume-note-cache).
+
+A blocked slice still needs explicit `tao run --continue`; unchanged plan-owned
+blockers still refuse continuation. A stale or unavailable note is simply omitted.
+Timeouts retain their ordinary classification and recovery requirements: neither
+a warning nor a note supplies completion, retry, or recovery authority.
+
 #### Choose models for agent sessions
 
 Use `TAO_MODEL` as a shared base and role settings when implementation, review,

@@ -17,7 +17,8 @@ import (
 func TestStatusMixedInvalidConfigurationKeepsCompleteRows(t *testing.T) {
 	clearTaoEnv(t)
 	values := map[string]string{
-		runtimeconfig.EnvAgent: "bad-agent", runtimeconfig.EnvUpdate: "bad-update",
+		runtimeconfig.EnvSessionWarnPercent: "100",
+		runtimeconfig.EnvAgent:              "bad-agent", runtimeconfig.EnvUpdate: "bad-update",
 		runtimeconfig.EnvBudgetPlanCostWarn: "bad-budget", runtimeconfig.EnvTheme: "bad-theme",
 		runtimeconfig.EnvRunHeader: "bad-header", runtimeconfig.EnvPullRequest: "bad-bool",
 		runtimeconfig.EnvModel: "bad model", runtimeconfig.EnvMaxSliceCostDeprecated: "10",

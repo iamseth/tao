@@ -9,13 +9,15 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/iamseth/tao/internal/agentinput"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/run"
 )
 
-const sliceBlockedUsage = "slice-blocked --plan-dir DIR --slice-id ID --reason-file FILE [--gate-command COMMAND --failing-path PATH ...] [--invalid-command COMMAND --invalid-reason REASON [--corrected-command COMMAND]]"
+const sliceBlockedUsage = "slice-blocked --plan-dir DIR --slice-id ID --reason-file FILE [--resume-note-file FILE] [--gate-command COMMAND --failing-path PATH ...] [--invalid-command COMMAND --invalid-reason REASON [--corrected-command COMMAND]]"
 
 var sliceBlockedCommand = commandMetadata{
 	name:                  "slice-blocked",
@@ -32,6 +34,7 @@ var sliceBlockedCommand = commandMetadata{
 		"invalid-reason":    {kind: completionValueText, label: "reason"},
 		"plan-dir":          {kind: completionValuePath, label: "path"},
 		"reason-file":       {kind: completionValuePath, label: "path"},
+		"resume-note-file":  {kind: completionValuePath, label: "path"},
 		"slice-id":          {kind: completionValueText, label: "slice id"},
 	}},
 	execute: func(c commandContext) error {
@@ -43,6 +46,7 @@ func registerSliceBlockedFlags(fs *flag.FlagSet) {
 	fs.String("plan-dir", "", "plan directory")
 	fs.String("slice-id", "", "slice id to block")
 	fs.String("reason-file", "", "file containing the blocker reason")
+	fs.String("resume-note-file", "", "optional private file containing untrusted advisory continuation context")
 	fs.String("gate-command", "", "failing verification gate command")
 	fs.Var(new(stringListFlag), "failing-path", "repository-relative failing path (repeatable)")
 	fs.String("invalid-command", "", "verification command that failed before tests loaded")
@@ -192,6 +196,13 @@ func (a App) sliceBlocked(ctx context.Context, args []string) error {
 		return err
 	}
 	now := a.now().UTC()
+	// Even idempotent blocks supersede the previous advisory generation. Keep
+	// freshness distinct if the clock repeats or moves backwards and clear fails.
+	for _, slice := range record.Detail().Slices.Slices {
+		if slice.ID == sliceID && !now.After(slice.Timing.UpdatedAt) {
+			now = slice.Timing.UpdatedAt.Add(time.Nanosecond)
+		}
+	}
 	if gateEvidence != nil {
 		a.verifySliceBlockedOwnership(ctx, record.Detail(), sliceID, gateEvidence)
 		err = record.BlockSliceWithEvidence(sliceID, reason, gateEvidence, now)
@@ -201,6 +212,9 @@ func (a App) sliceBlocked(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	noteDetail := *record.Detail()
+	store := run.ResumeNoteStore{}
+	_ = store.Clear(record.Dir(), sliceID) // Freshness suppresses context if cleanup is unavailable.
 	if evidence.provided && !hasVerificationCommandInvalidEvidence(record.Detail().Events, sliceID, evidence) {
 		event := plan.Event{
 			Type:             plan.EventTypeVerificationCommandInvalid,
@@ -214,6 +228,17 @@ func (a App) sliceBlocked(ctx context.Context, args []string) error {
 		}
 		if err := repository.AppendEvent(record.Dir(), event); err != nil {
 			return fmt.Errorf("append verification_command_invalid event: %w", err)
+		}
+		noteDetail.Events = append(slices.Clone(noteDetail.Events), event)
+	}
+	if path := flagStringValue(fs, "resume-note-file"); path != "" {
+		text, noteErr := run.ReadResumeNoteFile(path)
+		if noteErr == nil {
+			// Bind only this successful block, not a concurrent superseding block.
+			noteErr = store.Save(&noteDetail, sliceID, text)
+		}
+		if noteErr != nil {
+			_ = writef(a.Err, "Warning: resume note unavailable; blocker recorded without advisory context.\n")
 		}
 	}
 	return writef(a.Out, "Slice blocked: %s\n", sliceID)

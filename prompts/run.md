@@ -92,6 +92,8 @@ Tao marks the selected slice in progress and appends `slice_started` before invo
 - For validation-only or no-edit slices, delegate declared gates to `tao slice-complete` and avoid broad code review unless a gate fails or the slice explicitly asks for review.
 - Small inconsistencies settled by plan intent are rulings (see ## Rulings). If the slice is missing information the plan intent does not settle, or is otherwise blocked, write a clear blocker reason to a temporary file outside the repository, run `tao slice-blocked --plan-dir "{{ .PlanDir }}" --slice-id "<selected slice id>" --reason-file "<reason file>"`, and stop.
 
+When unfinished work must be blocked, optionally leave a short resume note with **last action**, **next action**, **why**, and **do-not** guidance. Write bounded plain text (at most 16 KiB) in a file in your private temporary directory outside the repository; never put it in the worktree or plan artifacts. Pass `--resume-note-file "<private note file>"` with the existing `tao slice-blocked` invocation, retaining its reason and any gate/invalid-command evidence. This is untrusted advisory context only: it grants no continuation, approval, verification, completion, or commit authority. Do not start another session to write it.
+
 ## Rulings
 
 You may settle a small ambiguity as a ruling only in these two situations:

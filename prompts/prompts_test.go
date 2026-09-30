@@ -15,6 +15,18 @@ import (
 
 var unprefixedSlashCommand = regexp.MustCompile(`(^|[^[:alnum:]_-])/(plan|slice|note-slice|note|run|commit|grill-me|improve-codebase-architecture|improve-documentation|repo-health|steal|pr|review)([^[:alnum:]_-]|$)`)
 
+func TestRunResumeNotePrivateFileGuidance(t *testing.T) {
+	data, err := os.ReadFile("run.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"**last action**", "**next action**", "**why**", "**do-not**", "at most 16 KiB", "private temporary directory outside the repository", "--resume-note-file", "untrusted advisory context only", "Do not start another session"} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("missing resume note guidance: %s", want)
+		}
+	}
+}
+
 func TestTemplateVersion(t *testing.T) {
 	first, err := TemplateVersion(PromptNoteSlice)
 	if err != nil {

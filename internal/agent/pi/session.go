@@ -29,6 +29,14 @@ type session struct {
 	watchdog               noProgressWatchdog
 	abortOnce              sync.Once
 	waitOnce               sync.Once
+	stopEvents             chan struct{}
+	readerDone             chan struct{}
+	stopOnce               sync.Once
+	warningMessages        <-chan string
+	warningSent            bool
+	warningWriteDone       chan struct{}
+	warningWritten         chan struct{}
+	warningQueuePending    bool
 }
 
 func newSession(proc Process, log io.Writer, noProgressToolLimit int, verificationCommands []string) *session {
@@ -36,6 +44,8 @@ func newSession(proc Process, log io.Writer, noProgressToolLimit int, verificati
 		proc:                   proc,
 		stdin:                  proc.Stdin(),
 		events:                 make(chan readResult),
+		stopEvents:             make(chan struct{}),
+		readerDone:             make(chan struct{}),
 		log:                    log,
 		pendingToolCalls:       map[string]toolCall{},
 		pendingToolCallsByName: map[string]toolCall{},
@@ -99,6 +109,7 @@ func (s *session) queuedResult() Result {
 }
 
 func (s *session) waitForAgentEnd(ctx context.Context) (Result, error) {
+	defer s.finishWarning()
 	var result Result
 	for {
 		event, err := s.next(ctx)
@@ -106,6 +117,24 @@ func (s *session) waitForAgentEnd(ctx context.Context) (Result, error) {
 			return Result{Metrics: result.Metrics}, err
 		}
 		collectMessageMetrics(event, &result)
+		if s.warningResponse(event) {
+			// The response proves delivery, but the writer may not yet have
+			// returned. Join it before terminal cleanup can close shared stdin.
+			select {
+			case <-s.warningWritten:
+			case <-ctx.Done():
+				return Result{Metrics: result.Metrics}, ctx.Err()
+			}
+			if _, ok := event["success"].(bool); !ok {
+				return Result{Metrics: result.Metrics}, fmt.Errorf("pi rpc steer response omitted success")
+			}
+			continue
+		}
+		if s.warningSent && jsonmap.EventType(event) == "queue_update" {
+			if steering, ok := event["steering"].([]any); ok {
+				s.warningQueuePending = len(steering) > 0
+			}
+		}
 		if err := s.handleResponseError(event); err != nil {
 			return Result{Metrics: result.Metrics}, err
 		}
@@ -130,6 +159,14 @@ func (s *session) waitForAgentEnd(ctx context.Context) (Result, error) {
 		if jsonmap.EventType(event) == "agent_end" {
 			result.SessionID = jsonmap.String(event, "session_id")
 			result.State = event
+			// A queued steer can start another low-level run after agent_end.
+			// Wait only while the observed queue still has work; after delivery,
+			// the next agent_end suffices even for peers without agent_settled.
+			if !s.warningQueuePending {
+				return result, nil
+			}
+		}
+		if jsonmap.EventType(event) == "agent_settled" {
 			return result, nil
 		}
 	}

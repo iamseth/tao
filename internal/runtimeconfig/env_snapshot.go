@@ -156,6 +156,15 @@ func (s EnvSnapshot) Require(keys ...string) error {
 	return errors.Join(failures...)
 }
 
+// SessionWarnPercent validates only the warning percentage before projecting it.
+// Zero disables warnings; a zero snapshot returns the built-in default.
+func (s EnvSnapshot) SessionWarnPercent() (int, error) {
+	if err := s.Require(EnvSessionWarnPercent); err != nil {
+		return 0, err
+	}
+	return s.Defaults().SessionWarnPercent, nil
+}
+
 // Budget validates every budget key, canonical and alias, including the
 // stop-not-below-warn rule, before projecting the typed budget. Provider,
 // routing, and merge settings are unrelated.
@@ -182,6 +191,7 @@ func builtinEnvDefaults() EnvDefaults {
 	enabled, attempts, escalation := true, DefaultMaxReworkAttempts, DefaultReworkEscalationFromAttempt
 	return EnvDefaults{
 		RunOptionsPatch:                  DefaultRunOptionsPatch(),
+		SessionWarnPercent:               DefaultSessionWarnPercent,
 		AutoRework:                       &enabled,
 		MaxReworkAttempts:                &attempts,
 		ReworkEscalationFromAttempt:      &escalation,

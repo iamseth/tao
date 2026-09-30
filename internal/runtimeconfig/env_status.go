@@ -11,8 +11,11 @@ import (
 	"github.com/iamseth/tao/internal/theme"
 )
 
+const DefaultSessionWarnPercent = 80
+
 // Environment keys name runtime settings and compatibility aliases read by the settings table.
 const (
+	EnvSessionWarnPercent               = "TAO_SESSION_WARN_PERCENT"
 	EnvCommitPolicy                     = "TAO_COMMIT_POLICY"
 	EnvExecutionMode                    = "TAO_EXECUTION_MODE"
 	EnvAgent                            = "TAO_AGENT"
@@ -77,6 +80,7 @@ const (
 // environment variables.
 type EnvDefaults struct {
 	RunOptionsPatch
+	SessionWarnPercent          int
 	AutoRework                  *bool
 	MaxReworkAttempts           *int
 	ReworkEscalationFromAttempt *int
@@ -189,6 +193,18 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 			}
 			defaults.SessionTimeout = &parsed
 			return parsed.String(), nil
+		},
+	},
+	{
+		name:         EnvSessionWarnPercent,
+		defaultValue: func(RunOptionsPatch) string { return strconv.Itoa(DefaultSessionWarnPercent) },
+		apply: func(defaults *EnvDefaults, value string) (string, error) {
+			parsed, err := strconv.Atoi(strings.TrimSpace(value))
+			if err != nil || parsed < 0 || parsed > 99 {
+				return "", fmt.Errorf("must be an integer from 0 to 99 (0 disables warnings)")
+			}
+			defaults.SessionWarnPercent = parsed
+			return strconv.Itoa(parsed), nil
 		},
 	},
 	{

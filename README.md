@@ -238,6 +238,9 @@ resolved settings.
 See the [configuration reference](docs/configuration.md) for all settings,
 budgets, model selection, and planner routing.
 
+See [wrap-up and continuation](docs/usage-guide.md#session-wrap-up-and-continuation)
+for advisory session warnings and private resume notes.
+
 ---
 
 ## Development

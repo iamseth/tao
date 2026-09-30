@@ -252,7 +252,7 @@ _tao() {
       _arguments '--commit-proposal-file[JSON file containing a structured commit proposal (required for a new slice-policy intent)]:path:_files' '--notes-file[file containing completion notes]:path:_files' '--plan-dir[plan directory]:path:_files' '--slice-id[slice id to complete]:slice id:' '--verification-results-file[optional JSON advisory claims; original results required for historical intents]:path:_files'
       ;;
     slice-blocked)
-      _arguments '--corrected-command[mechanically equivalent corrected verification command]:command:' '*--failing-path[repository-relative failing path (repeatable)]:path:_files' '--gate-command[failing verification gate command]:command:' '--invalid-command[verification command that failed before tests loaded]:command:' '--invalid-reason[reason the verification command was invalid]:reason:' '--plan-dir[plan directory]:path:_files' '--reason-file[file containing the blocker reason]:path:_files' '--slice-id[slice id to block]:slice id:'
+      _arguments '--corrected-command[mechanically equivalent corrected verification command]:command:' '*--failing-path[repository-relative failing path (repeatable)]:path:_files' '--gate-command[failing verification gate command]:command:' '--invalid-command[verification command that failed before tests loaded]:command:' '--invalid-reason[reason the verification command was invalid]:reason:' '--plan-dir[plan directory]:path:_files' '--reason-file[file containing the blocker reason]:path:_files' '--resume-note-file[optional private file containing untrusted advisory continuation context]:path:_files' '--slice-id[slice id to block]:slice id:'
       ;;
     s|sh|sho|show)
       _arguments '--json[write JSON]'

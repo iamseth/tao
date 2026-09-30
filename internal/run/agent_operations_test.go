@@ -989,6 +989,64 @@ func TestRunAgentSessionCapsExcludeAttributedNonExecutionHistory(t *testing.T) {
 	}
 }
 
+func TestImplementationWrapUpPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name, value string
+		role        plan.AgentRole
+		slice       string
+		timeout     time.Duration
+		want        int
+		invalid     bool
+	}{
+		{"default", "", plan.AgentRoleExecution, "001-a", time.Hour, 80, false},
+		{"rework", "45", plan.AgentRoleRework, "001-a", time.Hour, 45, false},
+		{"disabled", "0", plan.AgentRoleExecution, "001-a", time.Hour, 0, false},
+		{"unbounded", "80", plan.AgentRoleExecution, "001-a", 0, 0, false},
+		{"invalid", "100", plan.AgentRoleExecution, "001-a", time.Hour, 0, true},
+		{"invalid unbounded", "bad", plan.AgentRoleRework, "001-a", 0, 0, true},
+		{"review", "bad", plan.AgentRoleReview, "001-a", time.Hour, 0, false},
+		{"pr", "bad", plan.AgentRolePullRequest, "", time.Hour, 0, false},
+		{"no slice", "bad", plan.AgentRoleExecution, "", time.Hour, 0, false},
+		{"no operation", "bad", "", "", time.Hour, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			runtime := agentRuntimeFunc(func(_ context.Context, session agent.Session) (agent.SessionResult, error) {
+				calls++
+				if tc.want == 0 {
+					if session.Warning != nil || session.WarningMessages != nil {
+						t.Fatal("unexpected warning")
+					}
+				} else if session.Warning == nil || session.Warning.Percent != tc.want || session.WarningMessages == nil {
+					t.Fatalf("warning = %+v, want %d", session.Warning, tc.want)
+				}
+				return agent.SessionResult{}, nil // Unsupported providers may ignore the channel.
+			})
+			root := t.TempDir()
+			detail := runPathSessionDetail(t, root, plan.StatusPlanned, []string{"001-a"}, nil, plan.StatusPending)
+			values := map[string]string{}
+			if tc.value != "" {
+				values[runtimeconfig.EnvSessionWarnPercent] = tc.value
+			}
+			runner := newAgentSessionRunner(agentSessionRunnerConfig{
+				runtimeEnv: runEnvSnapshot(values), sessionTimeout: tc.timeout,
+				descriptor:  agent.Descriptor{Label: "fake", NewRuntime: func(agent.RuntimeDeps) agent.Runtime { return runtime }},
+				logAppender: plan.NewFileRepository(""),
+			})
+			// Configuration is invocation-local, even if the process environment changes.
+			t.Setenv(runtimeconfig.EnvSessionWarnPercent, "invalid-after-snapshot")
+			_, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{PlanDir: detail.Dir, RepoRoot: root, Metrics: &AgentSessionMetricsRequest{Role: tc.role, SliceID: tc.slice}})
+			if tc.invalid {
+				if err == nil || !strings.Contains(err.Error(), runtimeconfig.EnvSessionWarnPercent) || calls != 0 {
+					t.Fatalf("calls=%d err=%v", calls, err)
+				}
+			} else if err != nil || calls != 1 {
+				t.Fatalf("calls=%d err=%v", calls, err)
+			}
+		})
+	}
+}
+
 func sessionEventTestRunner(t *testing.T, runtime agent.Runtime, appender plan.EventAppender, logWriter io.Writer, timestamp time.Time) (agentSessionRunner, string, string) {
 	t.Helper()
 	repoRoot := t.TempDir()

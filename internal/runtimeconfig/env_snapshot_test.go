@@ -235,9 +235,61 @@ func TestEnvSnapshotBudgetStopBelowWarn(t *testing.T) {
 	}
 }
 
+func TestSessionWarnPercent(t *testing.T) {
+	t.Setenv("TAO_SESSION_WARN_PERCENT", "12")
+	var zero EnvSnapshot
+	if got, err := zero.SessionWarnPercent(); err != nil || got != 80 {
+		t.Fatalf("zero snapshot = %d, %v", got, err)
+	}
+	for _, tc := range []struct {
+		raw     string
+		want    int
+		invalid bool
+	}{
+		{"", 80, false}, {"0", 0, false}, {"1", 1, false}, {"99", 99, false}, {" 80 ", 80, false},
+		{"-1", 0, true}, {"100", 0, true}, {"1.5", 0, true}, {"999999999999999999999999", 0, true}, {"oops", 0, true},
+	} {
+		t.Run(tc.raw, func(t *testing.T) {
+			values := map[string]string{EnvSessionWarnPercent: tc.raw, EnvSessionTimeout: "invalid"}
+			calls := map[string]int{}
+			s := LoadEnv(func(key string) (string, bool) { calls[key]++; v, ok := values[key]; return v, ok })
+			values[EnvSessionWarnPercent] = "42"
+			d := s.Defaults()
+			d.SessionWarnPercent = 42
+			for range 2 {
+				got, err := s.SessionWarnPercent()
+				if (err != nil) != tc.invalid || (!tc.invalid && got != tc.want) {
+					t.Fatalf("accessor = %d, %v", got, err)
+				}
+				if (s.Require(EnvSessionWarnPercent) != nil) != tc.invalid || s.Require(EnvAgent) != nil {
+					t.Fatal("consumption validation leaked")
+				}
+			}
+			for _, key := range RuntimeEnvKeys() {
+				if calls[key] != 1 {
+					t.Errorf("%s looked up %d times", key, calls[key])
+				}
+			}
+			count := 0
+			for _, row := range s.Status() {
+				if row.Name != EnvSessionWarnPercent {
+					continue
+				}
+				count++
+				if tc.invalid && (row.Source != "invalid" || !strings.Contains(row.Warning, "rejected")) {
+					t.Fatalf("diagnostic = %+v", row)
+				}
+			}
+			if count != 1 {
+				t.Fatalf("warning rows = %d", count)
+			}
+		})
+	}
+}
+
 func TestEnvSnapshotCompleteTableWrites(t *testing.T) {
 	values := map[string]string{
-		EnvCommitPolicy: "none", EnvExecutionMode: "current", EnvAgent: "claude", EnvSessionTimeout: "3m0s",
+		EnvCommitPolicy: "none", EnvExecutionMode: "current", EnvAgent: "claude", EnvSessionTimeout: "3m0s", EnvSessionWarnPercent: "65",
 		EnvModel: "base", EnvRunModel: "run", EnvReviewModel: "review", EnvMergeReviewModel: "merge", EnvResolverModel: "resolve", EnvReworkEscalationModel: "strong",
 		EnvUpdate: "off", EnvPullRequest: "true", EnvReview: "false", EnvAutoRework: "false", EnvMaxReworkAttempts: "7", EnvReworkEscalationFromAttempt: "6", EnvSkipPermissions: "true",
 		EnvMergeVerifyCommand: "go test ./...", EnvAggregateReviewConvergenceWindow: "5", EnvApprovedBy: "bot", EnvRunHeader: "false", EnvTheme: "gruvbox",
@@ -272,8 +324,9 @@ func TestEnvSnapshotCompleteTableWrites(t *testing.T) {
 	tokens, cost := int64(1000), 9.5
 	selected, _ := theme.Lookup("gruvbox")
 	want := EnvDefaults{
-		RunOptionsPatch: RunOptionsPatch{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentClaude, PullRequest: &yes, ReviewEnabled: &no, SessionTimeout: &timeout, ModelSelection: ModelSelection{Base: "base", Run: "run", Review: "review", MergeReview: "merge", Resolver: "resolve", ReworkEscalation: "strong"}},
-		AutoRework:      &no, MaxReworkAttempts: &attempts, ReworkEscalationFromAttempt: &escalation, UpdateMode: selfupdate.ModeOff, Theme: selected, SkipPermissions: true,
+		RunOptionsPatch:    RunOptionsPatch{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentClaude, PullRequest: &yes, ReviewEnabled: &no, SessionTimeout: &timeout, ModelSelection: ModelSelection{Base: "base", Run: "run", Review: "review", MergeReview: "merge", Resolver: "resolve", ReworkEscalation: "strong"}},
+		SessionWarnPercent: 65,
+		AutoRework:         &no, MaxReworkAttempts: &attempts, ReworkEscalationFromAttempt: &escalation, UpdateMode: selfupdate.ModeOff, Theme: selected, SkipPermissions: true,
 		MergeVerifyCommand: "go test ./...", MergeVerifyCommandSet: true, AggregateReviewConvergenceWindow: 5, ApprovedBy: "bot", RunHeader: false,
 		PlannerRouting: PlannerRoutingConfig{Mode: "shadow", Arms: []PlannerRoutingArm{{AgentPi, 0.5}, {AgentClaude, 0.5}}, Floor: 0.2, ModeSet: true, ArmsSet: true, FloorSet: true},
 		Budget: plan.AgentBudget{

@@ -1205,6 +1205,8 @@ func TestNoteRunGenerationUsesRepositoryBaseModel(t *testing.T) {
 			app, meta, id, _, _ := noteRoutingTestApp(t)
 			dataHome := t.TempDir()
 			t.Setenv("TAO_DATA_HOME", dataHome)
+			// Promotion planning must not consume implementation-only warning settings.
+			t.Setenv(runtimeconfig.EnvSessionWarnPercent, "invalid")
 			t.Setenv(runtimeconfig.EnvModel, "env-base")
 			t.Setenv(runtimeconfig.EnvRunModel, "env-run")
 			t.Setenv(runtimeconfig.EnvReviewModel, "env-review")

@@ -28,6 +28,13 @@ const (
 	PermissionModeBypassPermissions PermissionMode = perm.PermissionModeBypassPermissions
 )
 
+// SessionWarning requests one advisory notice at Percent (1–99) of the session
+// timeout. Nil, zero, and invalid policies do not schedule a notice.
+type SessionWarning struct {
+	Percent int
+	Message string
+}
+
 // Session is the provider-neutral description of a single agent run. Each field
 // maps onto the corresponding underlying client request; fields a given client
 // ignores are dropped by the adapter to preserve current behavior.
@@ -44,6 +51,10 @@ type Session struct {
 	// Timeout caps a single Runtime session's wall-clock duration. A zero value
 	// means no timeout.
 	Timeout time.Duration
+	Warning *SessionWarning
+	// WarningMessages is transient, decorator-owned delivery. Providers may
+	// ignore it; notices never extend the deadline or authorize completion.
+	WarningMessages <-chan string
 	// BindLifetime is optional transient coordination for nested work. The
 	// decorator supplies the actual timeout context and closes it on return.
 	BindLifetime func(context.Context) (context.Context, func() error, error)

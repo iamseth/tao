@@ -17,6 +17,22 @@ func (f runtimeFunc) RunSession(ctx context.Context, session agent.Session) (age
 	return f(ctx, session)
 }
 
+func TestRunnerForwardsWarningPolicy(t *testing.T) {
+	warning := &agent.SessionWarning{Percent: 80, Message: "wrap up"}
+	calls := 0
+	runner := New(Config{Timeout: time.Minute, Runtime: runtimeFunc(func(_ context.Context, session agent.Session) (agent.SessionResult, error) {
+		calls++
+		if session.Warning != warning || session.WarningMessages == nil || session.Timeout != time.Minute {
+			t.Fatalf("session=%+v", session)
+		}
+		return agent.SessionResult{Output: "done"}, nil
+	})})
+	result, err := runner.Run(context.Background(), Request{Warning: warning})
+	if err != nil || calls != 1 || result.Output != "done" {
+		t.Fatalf("result=%+v calls=%d err=%v", result, calls, err)
+	}
+}
+
 func TestRunnerPropagatesLifetimeWithoutMetrics(t *testing.T) {
 	var bound context.Context
 	closed := false

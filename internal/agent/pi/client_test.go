@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/iamseth/tao/internal/agent/lifecycle"
 	"github.com/iamseth/tao/internal/agent/logrecord"
@@ -883,6 +884,262 @@ func (b *lockedBuffer) String() string {
 	defer b.mu.Unlock()
 	return b.buf.String()
 }
+
+func TestClientWarningSteering(t *testing.T) {
+	for _, scenario := range []string{"accepted", "unsupported", "unrelated", "settled", "queued-legacy", "auth", "transport", "malformed", "wrong-command"} {
+		t.Run(scenario, func(t *testing.T) {
+			proc := newFakeProcess(t)
+			warnings := make(chan string, 2)
+			warnings <- "wrap up"
+			warnings <- "never send twice"
+			serverErr := make(chan error, 1)
+			go func() {
+				defer proc.finish()
+				_, _ = proc.readCommand()
+				cmd, err := proc.readCommand()
+				if err != nil || cmd["type"] != "steer" || cmd["message"] != "wrap up" || cmd["id"] == promptID || cmd["id"] == "" {
+					serverErr <- fmt.Errorf("warning = %v, %w", cmd, err)
+					return
+				}
+				id := cmd["id"].(string)
+				if scenario == "settled" || scenario == "queued-legacy" {
+					proc.writeEvent(`{"type":"queue_update","steering":["wrap up"],"followUp":[]}`)
+				}
+				if scenario == "unrelated" {
+					id = "unrelated"
+				}
+				switch scenario {
+				case "auth":
+					proc.writeEvent(`{"type":"error","message":"authentication failed"}`)
+				case "transport":
+					proc.writeEvent(`{"type":"error","message":"transport failed","diagnostics":[{"type":"provider_transport_failure"}]}`)
+				case "malformed":
+					proc.writeEvent(fmt.Sprintf(`{"type":"response","id":%q,"command":"steer"}`, id))
+				case "wrong-command":
+					proc.writeEvent(fmt.Sprintf(`{"type":"response","id":%q,"command":"prompt","success":false,"error":"original failure"}`, id))
+				default:
+					proc.writeEvent(fmt.Sprintf(`{"type":"response","id":%q,"command":"steer","success":%t,"error":"unsupported","diagnostics":[{"type":"provider_transport_failure"}]}`, id, scenario == "accepted" || scenario == "settled" || scenario == "queued-legacy"))
+				}
+				if slices.Contains([]string{"unrelated", "auth", "transport", "malformed", "wrong-command"}, scenario) {
+					_, _ = proc.readCommand()
+				} else {
+					proc.writeEvent(`{"type":"agent_end"}`)
+					if scenario == "settled" || scenario == "queued-legacy" {
+						proc.writeEvent(`{"type":"queue_update","steering":[],"followUp":[]}`)
+						proc.writeEvent(`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"wrapped"}],"usage":{"input":10,"output":2,"totalTokens":12}}}`)
+						proc.writeEvent(`{"type":"agent_end"}`)
+						if scenario == "settled" {
+							proc.writeEvent(`{"type":"agent_settled"}`)
+						}
+					}
+				}
+				serverErr <- nil
+			}()
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			client := Client{ProcessStarter: func(context.Context, string, string, []string) (Process, error) { return proc, nil }}
+			result, err := client.RunAgentSession(ctx, Request{Prompt: "work", WarningMessages: warnings})
+			if server := <-serverErr; server != nil {
+				t.Fatal(server)
+			}
+			wantError := slices.Contains([]string{"unrelated", "auth", "transport", "malformed", "wrong-command"}, scenario)
+			var retryable interface{ RetryableTransportFailure() }
+			if errors.As(err, &retryable) != (scenario == "transport") {
+				t.Fatalf("retry classification: %v", err)
+			}
+			if (err != nil) != wantError {
+				t.Fatalf("result %v error %v", result, err)
+			}
+			if result.PromptAcceptance != lifecycle.PromptAcceptanceAccepted {
+				t.Fatalf("acceptance %v", result.PromptAcceptance)
+			}
+			if (scenario == "settled" || scenario == "queued-legacy") && (result.FinalText != "wrapped" || result.Metrics.TotalTokens != 12) {
+				t.Fatalf("lost queued work: %+v", result)
+			}
+			if len(warnings) != 1 {
+				t.Fatal("consumed more than one warning")
+			}
+		})
+	}
+}
+
+func TestClientWarningWaitsForAcceptanceAndSkipsEarlyTerminal(t *testing.T) {
+	for _, scenario := range []string{"delayed", "rejected", "early-terminal", "late-notice"} {
+		t.Run(scenario, func(t *testing.T) {
+			proc := newFakeProcess(t)
+			proc.disableAutoPromptResponse = true
+			warnings := make(chan string, 1)
+			if scenario != "late-notice" {
+				warnings <- "wrap up"
+			}
+			serverErr := make(chan error, 1)
+			go func() {
+				defer proc.finish()
+				cmd, err := proc.readCommand()
+				if err != nil || cmd["type"] != "prompt" {
+					serverErr <- fmt.Errorf("prompt: %v %w", cmd, err)
+					return
+				}
+				// A due notice must remain buffered until acceptance, including
+				// while events arrive before the correlated prompt response.
+				proc.writeEvent(`{"type":"agent_start"}`)
+				if scenario == "early-terminal" {
+					proc.writeEvent(`{"type":"agent_end"}`)
+				}
+				if scenario != "late-notice" && len(warnings) != 1 {
+					serverErr <- errors.New("warning consumed before acceptance")
+					return
+				}
+				proc.writeEvent(fmt.Sprintf(`{"type":"response","id":"tao-prompt","command":"prompt","success":%t,"error":"rejected"}`, scenario != "rejected"))
+				switch scenario {
+				case "delayed":
+					cmd, err = proc.readCommand()
+					if err != nil || cmd["type"] != "steer" {
+						serverErr <- fmt.Errorf("steer: %v %w", cmd, err)
+						return
+					}
+					proc.writeEvent(fmt.Sprintf(`{"type":"response","id":%q,"command":"steer","success":true}`, cmd["id"]))
+					proc.writeEvent(`{"type":"agent_end"}`)
+				case "rejected":
+					cmd, err = proc.readCommand()
+					if err != nil || cmd["type"] != "abort" {
+						serverErr <- fmt.Errorf("abort: %v %w", cmd, err)
+						return
+					}
+				case "late-notice":
+					proc.writeEvent(`{"type":"agent_end"}`)
+				}
+				if scenario != "rejected" {
+					cmd, err = proc.readCommand()
+					if !errors.Is(err, io.EOF) {
+						serverErr <- fmt.Errorf("post-terminal command: %v %w", cmd, err)
+						return
+					}
+				}
+				serverErr <- nil
+			}()
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			client := Client{ProcessStarter: func(context.Context, string, string, []string) (Process, error) { return proc, nil }}
+			result, err := client.RunAgentSession(ctx, Request{Prompt: "work", WarningMessages: warnings})
+			if server := <-serverErr; server != nil {
+				t.Fatal(server)
+			}
+			wantAcceptance := lifecycle.PromptAcceptanceAccepted
+			if scenario == "rejected" {
+				wantAcceptance = lifecycle.PromptAcceptanceRejected
+			}
+			if result.PromptAcceptance != wantAcceptance || (err != nil) != (scenario == "rejected") {
+				t.Fatalf("result %+v error %v", result, err)
+			}
+			if scenario == "late-notice" {
+				warnings <- "too late"
+			}
+			if scenario != "delayed" && len(warnings) != 1 {
+				t.Fatal("notice consumed outside active operation")
+			}
+		})
+	}
+}
+
+func TestClientWarningBackpressurePreservesRPCTraffic(t *testing.T) {
+	proc := newFakeProcess(t)
+	warnings := make(chan string, 1)
+	serverErr := make(chan error, 1)
+	go func() {
+		defer proc.finish()
+		_, _ = proc.readCommand()
+		warnings <- "wrap up"
+		// Synchronize with a warning write blocked mid-record, then stall
+		// longer than the former destructive write timeout.
+		var first [1]byte
+		if _, err := io.ReadFull(proc.stdinReader, first[:]); err != nil {
+			serverErr <- err
+			return
+		}
+		time.Sleep(250 * time.Millisecond)
+		proc.stdinDecoder = json.NewDecoder(io.MultiReader(strings.NewReader(string(first[:])), proc.stdinReader))
+		cmd, err := proc.readCommand()
+		if err != nil || cmd["type"] != "steer" || cmd["id"] != warningID {
+			serverErr <- fmt.Errorf("warning after backpressure: %v, %w", cmd, err)
+			return
+		}
+		proc.writeEvent(`{"type":"response","id":"tao-session-warning","command":"steer","success":true}`)
+		proc.writeEvent(`{"type":"extension_ui_request","id":"after-warning","method":"confirm"}`)
+		cmd, err = proc.readCommand()
+		if err != nil || cmd["type"] != "extension_ui_response" || cmd["request_id"] != "after-warning" || cmd["cancelled"] != true {
+			serverErr <- fmt.Errorf("UI response after warning: %v, %w", cmd, err)
+			return
+		}
+		proc.writeEvent(`{"type":"agent_end"}`)
+		serverErr <- nil
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	client := Client{ProcessStarter: func(context.Context, string, string, []string) (Process, error) { return proc, nil }}
+	result, err := client.RunAgentSession(ctx, Request{Prompt: "work", WarningMessages: warnings})
+	if server := <-serverErr; server != nil {
+		t.Fatal(server)
+	}
+	if err != nil || result.PromptAcceptance != lifecycle.PromptAcceptanceAccepted {
+		t.Fatalf("result %+v, error %v", result, err)
+	}
+}
+
+func TestClientWarningStalledStdinDoesNotBlockCancellationOrTerminal(t *testing.T) {
+	for _, terminal := range []bool{false, true} {
+		t.Run(fmt.Sprint(terminal), func(t *testing.T) {
+			proc := newFakeProcess(t)
+			warnings := make(chan string, 1)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			go func() {
+				_, _ = proc.readCommand()
+				warnings <- "wrap up"
+				// Read one byte, leaving the warning write blocked mid-record.
+				var b [1]byte
+				_, _ = proc.stdinReader.Read(b[:])
+				if terminal {
+					proc.writeEvent(`{"type":"agent_end"}`)
+				} else {
+					cancel()
+				}
+				<-proc.done
+			}()
+			client := Client{ProcessStarter: func(context.Context, string, string, []string) (Process, error) {
+				return stoppingFakeProcess{proc}, nil
+			}}
+			done := make(chan error, 1)
+			go func() {
+				_, err := client.RunAgentSession(ctx, Request{Prompt: "work", WarningMessages: warnings})
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				if terminal && err != nil {
+					t.Fatal(err)
+				}
+				if !terminal && !errors.Is(err, context.Canceled) {
+					t.Fatalf("cancellation: %v", err)
+				}
+			case <-time.After(2 * time.Second):
+				proc.finish()
+				t.Fatal("blocked warning prevented shutdown")
+			}
+		})
+	}
+}
+
+// Model real process exit on stdin close/kill without a live executable.
+type stoppingFakeProcess struct{ *fakeProcess }
+
+func (p stoppingFakeProcess) Stdin() io.WriteCloser { return stoppingFakeStdin(p) }
+func (p stoppingFakeProcess) Kill() error           { p.finish(); return nil }
+
+type stoppingFakeStdin struct{ *fakeProcess }
+
+func (p stoppingFakeStdin) Write(b []byte) (int, error) { return p.stdinWriter.Write(b) }
+func (p stoppingFakeStdin) Close() error                { err := p.stdinWriter.Close(); p.finish(); return err }
 
 type fakeProcess struct {
 	t                         *testing.T

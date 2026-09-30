@@ -2,6 +2,7 @@ package run
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -21,13 +22,14 @@ import (
 type reloadDetailFunc func(ctx context.Context, detail *plan.PlanDetail) (*plan.PlanDetail, error)
 
 type detailExecutor struct {
-	reload        reloadDetailFunc
-	out           io.Writer
-	execution     runExecution
-	sliceExecutor SliceExecutor
-	finalizer     Finalizer
-	runs          int
-	continued     bool
+	reload         reloadDetailFunc
+	out            io.Writer
+	execution      runExecution
+	sliceExecutor  SliceExecutor
+	finalizer      Finalizer
+	runs           int
+	continued      bool
+	resumeSnapshot *plan.PlanDetail
 }
 
 func executeDetail(ctx context.Context, detail *plan.PlanDetail, reload reloadDetailFunc, out io.Writer, options Options) error {
@@ -111,6 +113,15 @@ func (e *detailExecutor) continueBlocked(ctx context.Context, detail *plan.PlanD
 	if err := checkSelectedApprovalEvidence(detail); err != nil {
 		return err
 	}
+	// Freeze the block generation before continuation clears its metadata. This
+	// snapshot is advisory only; no cache is read until the handoff is admitted.
+	var snapshot plan.PlanDetail
+	if data, err := json.Marshal(detail); err == nil {
+		if json.Unmarshal(data, &snapshot) == nil {
+			snapshot.Dir = detail.Dir
+			e.resumeSnapshot = &snapshot
+		}
+	}
 	if err := continueBlockedPlan(e.execution, detail, now(e.execution).UTC()); err != nil {
 		return err
 	}
@@ -178,6 +189,7 @@ func (e *detailExecutor) selectedSliceRunner() SelectedSliceRunner {
 		rootResolver:      executionRootResolver(e.execution),
 		boundaryAction:    e.execution.ExecutionBoundary,
 		incrementRunCount: func() { e.runs++ },
+		resumeSnapshot:    e.resumeSnapshot,
 	}
 }
 
@@ -189,6 +201,8 @@ type SelectedSliceRunner struct {
 	rootResolver      ExecutionRootResolver
 	boundaryAction    *ExecutionBoundaryAction
 	incrementRunCount func()
+	resumeSnapshot    *plan.PlanDetail
+	resumeNote        string
 }
 
 func (r SelectedSliceRunner) Run(ctx context.Context, detail *plan.PlanDetail, derived plan.DerivedPlan) (*plan.PlanDetail, error) {
@@ -280,6 +294,9 @@ func (r SelectedSliceRunner) Run(ctx context.Context, detail *plan.PlanDetail, d
 		return nil, err
 	}
 
+	if r.resumeSnapshot != nil && resumeNoteRevision(r.resumeSnapshot, slice.ID) != "" {
+		r.resumeNote, _ = (ResumeNoteStore{}).Load(r.resumeSnapshot, slice.ID)
+	}
 	runPacket, err := r.renderRunPacket(ctx, detail, executionRoot, resuming, resumeAttempt)
 	if err != nil {
 		return nil, err
@@ -432,6 +449,7 @@ func (r SelectedSliceRunner) finishCompletedHandoff(ctx context.Context, detail 
 	if err := r.validateAutomaticSliceBoundary(ctx, detail, sliceID, executionRoot); err != nil {
 		return nil, err
 	}
+	_ = (ResumeNoteStore{}).Clear(detail.Dir, sliceID)
 	r.recordRunCompleted()
 	refreshHeader(ctx, detail, r.execution.Config)
 	if err := writef(r.out, "Slice completed: %s\n", sliceID); err != nil {
@@ -507,6 +525,7 @@ func (r SelectedSliceRunner) renderRunPacket(ctx context.Context, detail *plan.P
 		PlanOwnedFiles:   planOwnedFiles(ctx, r.execution, detail, workingRoot),
 		Resuming:         resuming,
 		ResumeAttempt:    resumeAttempt,
+		ResumeNote:       r.resumeNote,
 		BudgetThresholds: &budgetThresholds,
 	})
 }

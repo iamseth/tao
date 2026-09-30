@@ -57,6 +57,7 @@ func New(config Config) Runner {
 // Request describes one provider call. ControlRoot enables leak detection when
 // it differs from RepoRoot.
 type Request struct {
+	Warning *agent.SessionWarning
 	// BindLifetime coordinates nested work using the actual provider deadline.
 	BindLifetime         func(context.Context) (context.Context, func() error, error)
 	Model                string
@@ -114,6 +115,7 @@ func (r Runner) Run(ctx context.Context, request Request) (Result, error) {
 			NoProgressToolLimit:  request.NoProgressToolLimit,
 			VerificationCommands: request.VerificationCommands,
 			Timeout:              r.timeout,
+			Warning:              request.Warning,
 			BindLifetime:         request.BindLifetime,
 			Log:                  request.Log,
 			Progress:             progress,

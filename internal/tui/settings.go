@@ -534,7 +534,7 @@ func settingsRuntimeIsOverride(row SettingsRuntimeDefault) bool {
 
 func settingsDefaultGroupForName(name string) (string, bool) {
 	switch name {
-	case "TAO_COMMIT_POLICY", "TAO_EXECUTION_MODE", "TAO_AGENT", "TAO_SESSION_TIMEOUT",
+	case "TAO_COMMIT_POLICY", "TAO_EXECUTION_MODE", "TAO_AGENT", "TAO_SESSION_TIMEOUT", "TAO_SESSION_WARN_PERCENT",
 		"TAO_MODEL", "TAO_RUN_MODEL", "TAO_REVIEW_MODEL", "TAO_MERGE_REVIEW_MODEL", "TAO_RESOLVER_MODEL", "TAO_REWORK_ESCALATION_MODEL":
 		return settingsGroupExecution, true
 	case "TAO_PULL_REQUEST", "TAO_REVIEW", "TAO_AUTO_REWORK", "TAO_MAX_REWORK_ATTEMPTS", "TAO_REWORK_ESCALATION_FROM_ATTEMPT",

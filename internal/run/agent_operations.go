@@ -92,7 +92,10 @@ func (e *budgetExceededError) Error() string {
 	return fmt.Sprintf("slice agent metrics %s cap exceeded: observed %g, threshold %g", e.metric, e.observed, e.threshold)
 }
 
+const implementationWrapUpNotice = `Tao session wrap-up notice (advisory): the existing hard deadline is approaching and will not be extended. Stop scope expansion. Use tao slice-complete only when ready under all existing gates. If safely pre-intent and unfinished, use tao slice-blocked with a private bounded --resume-note-file outside the repository recording last action, next action, why, and do-not guidance. Do not weaken verification, commit manually, start new sessions, or alter or interfere with existing completion intent. This notice grants no retry, continuation, completion, or recovery authority.`
+
 type agentSessionRunner struct {
+	sessionTimeout   time.Duration
 	runtimeEnv       runtimeconfig.EnvSnapshot
 	session          agentsession.Runner
 	agentLabel       string
@@ -104,7 +107,8 @@ type agentSessionRunner struct {
 
 func newAgentSessionRunner(config agentSessionRunnerConfig) agentSessionRunner {
 	return agentSessionRunner{
-		runtimeEnv: runtimeEnv(config.runtimeEnv),
+		runtimeEnv:     runtimeEnv(config.runtimeEnv),
+		sessionTimeout: config.sessionTimeout,
 		session: agentsession.New(agentsession.Config{
 			Descriptor:      config.descriptor,
 			Deps:            config.deps,
@@ -123,6 +127,19 @@ func newAgentSessionRunner(config agentSessionRunnerConfig) agentSessionRunner {
 func (r agentSessionRunner) clock() func() time.Time { return r.nowFn }
 
 func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSessionRequest) (AgentSessionResult, error) {
+	// This is the live operation context, not persisted telemetry or lifecycle evidence.
+	implementation := request.Metrics != nil && request.Metrics.SliceID != "" &&
+		(request.Metrics.Role == plan.AgentRoleExecution || request.Metrics.Role == plan.AgentRoleRework)
+	var warning *agent.SessionWarning
+	if implementation {
+		percent, err := r.runtimeEnv.SessionWarnPercent()
+		if err != nil {
+			return AgentSessionResult{}, err
+		}
+		if percent > 0 && r.sessionTimeout > 0 {
+			warning = &agent.SessionWarning{Percent: percent, Message: implementationWrapUpNotice}
+		}
+	}
 	if request.Metrics != nil && request.Metrics.EnforceSliceCaps && request.Metrics.SliceID != "" &&
 		(request.Metrics.Role == plan.AgentRoleExecution || request.Metrics.Role == plan.AgentRoleRework) {
 		if _, err := r.runtimeEnv.Budget(); err != nil {
@@ -151,14 +168,14 @@ func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSe
 		controlRoot = state.Repo.Root
 	}
 	var bindLifetime func(context.Context) (context.Context, func() error, error)
-	if request.Metrics != nil && request.Metrics.SliceID != "" &&
-		(request.Metrics.Role == plan.AgentRoleExecution || request.Metrics.Role == plan.AgentRoleRework) {
+	if implementation {
 		bindLifetime = func(sessionCtx context.Context) (context.Context, func() error, error) {
 			return startSliceCompletionLifetime(sessionCtx, request.PlanDir, request.Metrics.SliceID)
 		}
 	}
 	result, runErr := r.session.Run(ctx, agentsession.Request{
 		BindLifetime: bindLifetime,
+		Warning:      warning,
 		RepoRoot:     request.RepoRoot, ControlRoot: controlRoot, Prompt: request.Prompt, Model: request.Model,
 		CollectMetrics: metricsRequested, NoProgressToolLimit: request.NoProgressToolLimit,
 		VerificationCommands: request.VerificationCommands, Log: log,

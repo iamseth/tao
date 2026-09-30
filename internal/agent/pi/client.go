@@ -24,6 +24,7 @@ type Request struct {
 	NoProgressToolLimit  int
 	VerificationCommands []string
 	SessionInfoMode      SessionInfoMode
+	WarningMessages      <-chan string
 }
 
 type Result struct {
@@ -115,6 +116,7 @@ func (c Client) RunAgentSession(ctx context.Context, request Request) (Result, e
 		return partial, session.abort(err)
 	}
 
+	session.warningMessages = request.WarningMessages
 	agentResult, err := session.waitForAgentEnd(ctx)
 	agentResult.PromptAcceptance = result.PromptAcceptance
 	if err != nil {

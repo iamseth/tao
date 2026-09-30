@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -200,6 +201,71 @@ func TestAdaptersPassOpaqueModel(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestAdaptersOptionalWarningCompatibility(t *testing.T) {
+	for _, provider := range []string{"pi", "claude"} {
+		t.Run(provider, func(t *testing.T) {
+			proc := newFakeProcess(t)
+			warnings := make(chan string, 1)
+			warnings <- "wrap up"
+			calls := 0
+			serverDone := make(chan struct{})
+			starter := func(_ context.Context, _ string, name string, args []string) (process.Process, error) {
+				calls++
+				if name != provider {
+					t.Fatalf("runtime %q", name)
+				}
+				return proc, nil
+			}
+			go func() {
+				defer close(serverDone)
+				defer proc.finish()
+				if provider == "pi" {
+					_ = proc.readCommand()
+					var cmd map[string]any
+					if err := proc.stdinDecoder.Decode(&cmd); err != nil {
+						t.Error(err)
+						return
+					}
+					if cmd["type"] != "steer" || cmd["message"] != "wrap up" {
+						t.Errorf("warning %v", cmd)
+						return
+					}
+					proc.writeEvent(fmt.Sprintf(`{"type":"response","command":"steer","id":%q,"success":false,"error":"unsupported"}`, cmd["id"]))
+					proc.writeEvent(`{"type":"agent_end"}`)
+					_ = proc.readCommand()
+					proc.writeEvent(`{"id":"2","type":"response","command":"get_state","success":true,"data":{"sessionId":"final"}}`)
+					_ = proc.readCommand()
+					proc.writeEvent(`{"id":"3","type":"response","command":"get_session_stats","success":true,"data":{"tokens":{"total":42}}}`)
+				} else {
+					prompt, err := io.ReadAll(proc.stdinReader)
+					if err != nil || string(prompt) != "work" {
+						t.Errorf("Claude prompt %q, %v", prompt, err)
+						return
+					}
+					proc.writeEvent(`{"type":"result","subtype":"success","session_id":"final"}`)
+				}
+			}()
+			var runtime Runtime = piRuntime{starter: starter}
+			if provider == "claude" {
+				runtime = claudeRuntime{starter: starter}
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			result, err := runtime.RunSession(ctx, Session{Prompt: "work", Warning: &SessionWarning{Percent: 80, Message: "policy"}, WarningMessages: warnings, CollectMetrics: true})
+			<-serverDone
+			if err != nil || calls != 1 {
+				t.Fatalf("calls %d error %v", calls, err)
+			}
+			if provider == "pi" && (result.Metrics == nil || result.Metrics.TotalTokens != 42 || len(warnings) != 0) {
+				t.Fatalf("Pi result %+v", result)
+			}
+			if provider == "claude" && len(warnings) != 1 {
+				t.Fatal("Claude consumed unsupported notice")
+			}
+		})
 	}
 }
 

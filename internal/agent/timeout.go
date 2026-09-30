@@ -32,13 +32,17 @@ func WithSessionTimeout(runtime Runtime) Runtime {
 
 type timeoutRuntime struct {
 	inner Runtime
+	// newWarningTimer is an internal timer seam; nil uses the wall clock.
+	newWarningTimer func(time.Duration) (<-chan time.Time, func())
 }
 
 func (r timeoutRuntime) RunSession(ctx context.Context, session Session) (SessionResult, error) {
+	start := time.Now()
+	session.WarningMessages = nil
 	timeoutCtx := ctx
 	if session.Timeout > 0 {
 		var cancel context.CancelFunc
-		timeoutCtx, cancel = context.WithTimeout(ctx, session.Timeout)
+		timeoutCtx, cancel = context.WithDeadline(ctx, start.Add(session.Timeout))
 		defer cancel()
 	}
 	liveCtx := timeoutCtx
@@ -50,6 +54,37 @@ func (r timeoutRuntime) RunSession(ctx context.Context, session Session) (Sessio
 			return SessionResult{}, err
 		}
 		defer func() { _ = closeLifetime() }()
+	}
+	if warning := session.Warning; session.Timeout > 0 && warning != nil && warning.Percent > 0 && warning.Percent < 100 {
+		// Divide before multiplying to avoid overflowing even a maximal duration.
+		percent := time.Duration(warning.Percent)
+		delay := session.Timeout/100*percent + session.Timeout%100*percent/100
+		messages := make(chan string, 1)
+		session.WarningMessages = messages
+		newTimer := r.newWarningTimer
+		if newTimer == nil {
+			newTimer = func(d time.Duration) (<-chan time.Time, func()) {
+				timer := time.NewTimer(d)
+				return timer.C, func() { timer.Stop() }
+			}
+		}
+		ticks, stop := newTimer(time.Until(start.Add(delay)))
+		defer stop()
+		warningCtx, cancelWarning := context.WithCancel(liveCtx)
+		done := make(chan struct{})
+		message := warning.Message
+		go func() {
+			defer close(done)
+			select {
+			case <-warningCtx.Done():
+			case <-timeoutCtx.Done():
+			case <-ticks:
+				if warningCtx.Err() == nil && timeoutCtx.Err() == nil {
+					messages <- message // One buffered send never waits on a provider.
+				}
+			}
+		}()
+		defer func() { cancelWarning(); <-done }()
 	}
 	result, err := r.inner.RunSession(liveCtx, session)
 	if session.Timeout > 0 && errors.Is(timeoutCtx.Err(), context.DeadlineExceeded) {

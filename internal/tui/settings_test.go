@@ -107,6 +107,7 @@ func TestRenderSettingsDefaultsUsesResponsivePairGrid(t *testing.T) {
 		{Name: "TAO_EXECUTION_MODE", Value: "isolated", Source: "default"},
 		{Name: "TAO_AGENT", Value: "pi", Source: "default"},
 		{Name: "TAO_SESSION_TIMEOUT", Value: "20m", Source: "default"},
+		{Name: "TAO_SESSION_WARN_PERCENT", Value: "80", Source: "default"},
 		{Name: "TAO_PULL_REQUEST", Value: "false", Source: "default"},
 	}
 	wide, _ := renderSettingsDefaultGroups(Model{Page: PageSettings, Width: 120, SettingsSnapshot: SettingsSnapshot{RuntimeDefaults: rows}})
@@ -119,6 +120,14 @@ func TestRenderSettingsDefaultsUsesResponsivePairGrid(t *testing.T) {
 	}
 
 	narrow, _ := renderSettingsDefaultGroups(Model{Page: PageSettings, Width: 35, SettingsSnapshot: SettingsSnapshot{RuntimeDefaults: rows}})
+	for _, lines := range [][]string{wide, narrow} {
+		if text := strings.Join(lines, "\n"); strings.Count(text, "Session warn percent") != 1 || !strings.Contains(text, "80") {
+			t.Fatalf("warning percentage missing or duplicated: %s", text)
+		}
+	}
+	if got, _ := settingsDefaultGroupForName("TAO_SESSION_WARN_PERCENT"); got != settingsGroupExecution {
+		t.Fatalf("warning percentage group = %q", got)
+	}
 	for _, labels := range [][2]string{{"Commit policy", "Execution mode"}, {"Agent", "Session timeout"}} {
 		if lineContainsAll(narrow, labels[0], labels[1]) {
 			t.Fatalf("narrow Settings defaults kept pair %q/%q on one line:\n%s", labels[0], labels[1], strings.Join(narrow, "\n"))

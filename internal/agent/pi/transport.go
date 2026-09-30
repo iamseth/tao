@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/iamseth/tao/internal/agent/jsonmap"
 	"github.com/iamseth/tao/internal/agent/lifecycle"
@@ -31,6 +32,9 @@ type readResult struct {
 
 func (s *session) readStdout(stdout io.Reader) {
 	defer close(s.events)
+	if s.readerDone != nil {
+		defer close(s.readerDone)
+	}
 	var parseErr error
 	err := streamjson.ReadLines(stdout, func(line int, raw []byte) error {
 		var event event
@@ -38,14 +42,20 @@ func (s *session) readStdout(stdout io.Reader) {
 			parseErr = fmt.Errorf("parse pi rpc jsonl line %d: %w", line, err)
 			return parseErr
 		}
-		s.events <- readResult{event: event}
+		select {
+		case s.events <- readResult{event: event}:
+		case <-s.stopEvents:
+		}
 		return nil
 	})
 	if err != nil {
 		if parseErr == nil {
 			err = fmt.Errorf("read pi rpc stdout: %w", err)
 		}
-		s.events <- readResult{err: err}
+		select {
+		case s.events <- readResult{err: err}:
+		case <-s.stopEvents:
+		}
 	}
 }
 
@@ -68,12 +78,26 @@ func (s *session) sendCommand(ctx context.Context, command command) (bool, error
 	if err != nil {
 		return false, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, err := s.stdin.Write(append(data, '\n')); err != nil {
-		return true, fmt.Errorf("send pi rpc %s: %w", command.Type, err)
+	done := make(chan error, 1)
+	go func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		_, err := s.stdin.Write(append(data, '\n'))
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			return true, fmt.Errorf("send pi rpc %s: %w", command.Type, err)
+		}
+		return true, nil
+	case <-ctx.Done():
+		// Abort closes the pipe without acquiring mu if its bounded
+		// best-effort command cannot pass the outstanding write.
+		err := s.abort(ctx.Err())
+		<-done
+		return true, err
 	}
-	return true, nil
 }
 
 func (s *session) requestMap(ctx context.Context, command command, wantType string) (map[string]any, error) {
@@ -180,7 +204,87 @@ func (s *session) next(ctx context.Context) (event, error) {
 		s.queuedEvents = s.queuedEvents[1:]
 		return event, nil
 	}
-	return s.nextTransport(ctx)
+	for {
+		if ctx.Err() != nil {
+			return nil, s.abort(ctx.Err())
+		}
+		// Prefer already-observed terminal/error events over an overdue notice.
+		select {
+		case result, ok := <-s.events:
+			return transportResult(result, ok)
+		default:
+		}
+		select {
+		case <-ctx.Done():
+			return nil, s.abort(ctx.Err())
+		case result, ok := <-s.events:
+			return transportResult(result, ok)
+		case message, ok := <-s.warningMessages:
+			s.warningMessages = nil
+			if ok && ctx.Err() == nil && message != "" && len(message) <= 16*1024 {
+				s.startWarning(ctx, message)
+			}
+		}
+	}
+}
+
+// The ID is unique among commands in this fresh, single-operation process.
+const warningID = "tao-session-warning"
+
+func (s *session) warningResponse(event event) bool {
+	return s.warningSent && jsonmap.EventType(event) == "response" &&
+		jsonmap.String(event, "id") == warningID && jsonmap.String(event, "command") == "steer"
+}
+
+func (s *session) startWarning(ctx context.Context, message string) {
+	s.warningSent = true
+	s.warningWriteDone = make(chan struct{})
+	written := make(chan struct{})
+	s.warningWritten = written
+	started := make(chan struct{})
+	go func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		defer close(written)
+		close(started)
+		if ctx.Err() != nil {
+			return
+		}
+		data, _ := json.Marshal(command{ID: warningID, Type: "steer", Message: message})
+		_, _ = s.stdin.Write(append(data, '\n'))
+	}()
+	go func() {
+		defer close(s.warningWriteDone)
+		// Backpressure is not a session failure. Keep the serialized write
+		// alive until it drains, cancellation, or finishWarning's terminal
+		// cleanup; a warning-local timeout must not close shared stdin.
+		select {
+		case <-written:
+		case <-ctx.Done():
+			_ = s.stdin.Close()
+			<-written
+		}
+	}()
+	<-started
+}
+
+func (s *session) finishWarning() {
+	s.warningMessages = nil
+	if s.warningWriteDone != nil {
+		select {
+		case <-s.warningWritten:
+		default:
+			_ = s.stdin.Close()
+		}
+		<-s.warningWriteDone
+	}
+}
+
+func transportResult(result readResult, ok bool) (event, error) {
+	if !ok {
+		return nil, errors.New("pi rpc stdout closed before agent completion")
+	}
+	return result.event, result.err
 }
 
 func (s *session) nextTransport(ctx context.Context) (event, error) {
@@ -235,8 +339,22 @@ func (s *session) handleUIRequest(ctx context.Context, event event) error {
 
 func (s *session) abort(cause error) error {
 	s.abortOnce.Do(func() {
-		_ = s.sendWithoutContext(command{Type: "abort"})
+		// Abort is advisory: a full stdin pipe must never postpone kill/wait.
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_ = s.sendWithoutContext(command{Type: "abort"})
+		}()
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-done:
+		case <-timer.C:
+		}
+		timer.Stop()
 		_ = s.proc.Kill()
+		_ = s.stdin.Close()
+		<-done
+		s.stopReadingEvents()
 		s.wait()
 	})
 	var annotated stderrError
@@ -268,7 +386,22 @@ func (s *session) sendWithoutContext(command command) error {
 
 func (s *session) close() {
 	_ = s.stdin.Close()
+	s.stopReadingEvents()
 	s.wait()
+	if s.warningWriteDone != nil {
+		<-s.warningWriteDone
+	}
+	if s.readerDone != nil {
+		<-s.readerDone
+	}
+}
+
+func (s *session) stopReadingEvents() {
+	s.stopOnce.Do(func() {
+		if s.stopEvents != nil {
+			close(s.stopEvents)
+		}
+	})
 }
 
 func (s *session) wait() {

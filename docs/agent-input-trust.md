@@ -6,6 +6,15 @@ This audit inventories places where Tao consumes data written by an agent or by 
 
 Each boundary separates **Current mitigation** from **Residual risk** and **Future recommendation**. Current mitigations describe implemented behavior, not proof that the input is authentic or correct. The traceability appendix ties completed audit work to its present code and focused tests.
 
+## Local advisory resume-note cache
+
+- **Warning boundary:** The trusted implementation/rework wrap-up notice is transient and advisory, selected from live operation context and the invocation snapshot, never durable telemetry. Best-effort in-session delivery cannot interrupt a long tool reliably, extend completion lifetime, or authorize intent mutation. See [session wrap-up](usage-guide.md#session-wrap-up-and-continuation).
+- **Producer:** An unfinished implementation agent may pass a bounded private temporary file outside the repository to `slice-blocked --resume-note-file`. Pi and Claude share this path independently of warning support.
+- **Consumer:** `internal/run` loads context only after ordinary boundary admission and selected-slice preflight, using an immutable pre-continuation block snapshot. The run packet encodes text as an HTML-escaped JSON string, labels it untrusted, and requires Git inspection rather than trusting prose.
+- **Boundary:** `ResumeNoteStore` stores disposable private data under data-home `run-resume/`, keyed by canonical plan/slice identity, never inside worktrees. Freshness binds block timing, execution boundary, and ordered events; repeated blocks supersede old notes even without another block event. Restart and completion suppress stale context. Invalid input, unavailable storage, malformed or stale envelopes are omissions, never lifecycle failures. Rejected blocking never publishes a note.
+- **Authority:** None. Notes never grant continuation, approval, verification, completion, commit, retries, or recovery. Text is not copied to plan artifacts, state/events, ordinary loaders, or share-safe reports.
+- **Residual risk:** Agent prose can be misleading even when encoded; this local cache is not authenticated evidence. Cache cleanup is best-effort, with freshness checks providing suppression when removal fails.
+
 ## Core `state.json` and `slices.json` plan artifacts
 
 - **Agent-authored input:** `/tao-slice` agents write `state.json`, `slices.json`, `planning-brief.md`, and related plan files; `/tao-run` agents can also edit `slices.json` on exceptional paths.

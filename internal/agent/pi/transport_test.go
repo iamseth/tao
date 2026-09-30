@@ -6,7 +6,45 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestWarningResponseJoinsWriterBeforeTerminalCleanup(t *testing.T) {
+	reader, writer := io.Pipe()
+	defer func() { _ = reader.Close() }()
+	defer func() { _ = writer.Close() }()
+	written := make(chan struct{})
+	done := make(chan struct{})
+	s := &session{
+		stdin: writer, events: make(chan readResult, 2),
+		warningSent: true, warningWritten: written, warningWriteDone: done,
+	}
+	s.events <- readResult{event: event{"type": "response", "command": "steer", "id": warningID, "success": false}}
+	s.events <- readResult{event: event{"type": "agent_end"}}
+	// Model a delivered command whose writer has not yet returned.
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		close(written)
+		close(done)
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := s.waitForAgentEnd(ctx); err != nil {
+		t.Fatal(err)
+	}
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(io.Discard, reader)
+		readDone <- err
+	}()
+	if _, err := writer.Write([]byte("get_state\n")); err != nil {
+		t.Errorf("terminal cleanup closed stdin after acknowledged warning: %v", err)
+	}
+	_ = writer.Close()
+	if err := <-readDone; err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestSendPromptDistinguishesNoAttemptFromPartialWrite(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -138,6 +176,43 @@ func collectReadResults(stdout io.Reader) []readResult {
 		results = append(results, result)
 	}
 	return results
+}
+
+func TestWarningWritePreservesLiveSessionUntilCancellation(t *testing.T) {
+	reader, writer := io.Pipe()
+	defer func() { _ = reader.Close() }()
+	s := &session{stdin: writer}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s.startWarning(ctx, "wrap up")
+	select {
+	case <-s.warningWriteDone:
+		t.Fatal("warning closed stdin while session was live")
+	case <-time.After(250 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case <-s.warningWriteDone:
+	case <-time.After(time.Second):
+		_ = writer.Close()
+		t.Fatal("warning work was not bounded")
+	}
+	if _, err := writer.Write([]byte("another command")); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("stalled pipe remained writable: %v", err)
+	}
+}
+
+func TestWarningDoesNotOverrideBufferedTerminal(t *testing.T) {
+	warnings := make(chan string, 1)
+	warnings <- "too late"
+	s := &session{warningMessages: warnings, events: make(chan readResult, 1)}
+	s.events <- readResult{event: event{"type": "agent_end"}}
+	if _, err := s.waitForAgentEnd(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if s.warningSent || len(warnings) != 1 {
+		t.Fatal("warning sent after terminal event")
+	}
 }
 
 type errorReader struct {

@@ -21,6 +21,70 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 )
 
+func TestWrapUpPreservesCompletionDeadline(t *testing.T) {
+	root := t.TempDir()
+	detail := runPathSessionDetail(t, root, plan.StatusInProgress, []string{"001-a"}, nil, plan.StatusInProgress)
+	calls := 0
+	runtime := agentRuntimeFunc(func(ctx context.Context, session agent.Session) (agent.SessionResult, error) {
+		calls++
+		before, err := readCompletionOwner(detail.Dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		deadline, _ := ctx.Deadline()
+		select {
+		case notice := <-session.WarningMessages:
+			for _, required := range []string{"slice-complete", "--resume-note-file", "pre-intent", "Do not weaken verification", "existing completion intent"} {
+				if !strings.Contains(notice, required) {
+					t.Fatalf("missing %q in notice", required)
+				}
+			}
+		case <-ctx.Done():
+			t.Fatal("warning missing")
+		}
+		after, err := readCompletionOwner(detail.Dir)
+		if err != nil || before != after || !after.Deadline.Equal(deadline) {
+			t.Fatalf("warning changed completion owner: %v", err)
+		}
+		// Simulate a tool/gate that cannot wrap up. The warning cannot extend its budget.
+		<-ctx.Done()
+		select {
+		case <-session.WarningMessages:
+			t.Fatal("duplicate warning")
+		default:
+		}
+		return agent.SessionResult{}, ctx.Err()
+	})
+	repository := plan.NewFileRepository("")
+	var events []plan.Event
+	runner := newAgentSessionRunner(agentSessionRunnerConfig{
+		runtimeEnv:     runEnvSnapshot(map[string]string{"TAO_SESSION_WARN_PERCENT": "10"}),
+		sessionTimeout: 500 * time.Millisecond,
+		descriptor:     agent.Descriptor{Label: "fake", NewRuntime: func(agent.RuntimeDeps) agent.Runtime { return runtime }},
+		logAppender:    repository, eventAppender: eventAppenderFunc(func(_ string, event plan.Event) error { events = append(events, event); return nil }),
+	})
+	_, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{PlanDir: detail.Dir, RepoRoot: root, Metrics: &AgentSessionMetricsRequest{Role: plan.AgentRoleExecution, SliceID: "001-a"}})
+	var timeoutErr *agent.SessionTimeoutError
+	if !errors.As(err, &timeoutErr) || timeoutErr.Timeout != 500*time.Millisecond || calls != 1 {
+		t.Fatalf("calls=%d err=%v", calls, err)
+	}
+	found := false
+	for _, event := range events {
+		if event.Type == plan.EventTypeSessionTimeout {
+			found = true
+			if event.SliceID != "001-a" {
+				t.Fatal(event)
+			}
+		}
+		if event.Type == plan.EventTypeSliceCompleted {
+			t.Fatal("warning authorized completion")
+		}
+	}
+	if !found {
+		t.Fatal("timeout event missing")
+	}
+}
+
 func TestSliceCompletionLifetimeDirect(t *testing.T) {
 	t.Setenv(sliceCompletionOwnerEnv, "")
 	_ = os.Unsetenv(sliceCompletionOwnerEnv)

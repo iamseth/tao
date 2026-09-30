@@ -351,7 +351,7 @@ func TestOperationSnapshotAdmission(t *testing.T) {
 
 func TestPromptAndTriageIgnoreUnrelatedEnvironment(t *testing.T) {
 	clearTaoEnv(t)
-	for _, key := range []string{runtimeconfig.EnvUpdate, runtimeconfig.EnvAutoRework, runtimeconfig.EnvMergeReviewModel, runtimeconfig.EnvAggregateReviewConvergenceWindow, runtimeconfig.EnvPlannerRoutingArms, runtimeconfig.EnvMaxSliceCostDeprecated} {
+	for _, key := range []string{runtimeconfig.EnvSessionWarnPercent, runtimeconfig.EnvUpdate, runtimeconfig.EnvAutoRework, runtimeconfig.EnvMergeReviewModel, runtimeconfig.EnvAggregateReviewConvergenceWindow, runtimeconfig.EnvPlannerRoutingArms, runtimeconfig.EnvMaxSliceCostDeprecated} {
 		t.Run(key, func(t *testing.T) {
 			t.Setenv(key, "invalid value")
 			app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{key: "invalid value"})}

@@ -233,6 +233,82 @@ func TestSliceBlockedGateEvidenceAcceptsPathLimit(t *testing.T) {
 	}
 }
 
+func TestSliceBlockedRejectedNoteNotPublished(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TAO_DATA_HOME", home)
+	fixture := newStartedSliceBlockedFixture(t)
+	file := writeSliceBlockedReason(t, "private advisory")
+	app := App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}
+	if err := app.Run(context.Background(), []string{"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "missing", "--reason-file", file, "--resume-note-file", file}); err == nil {
+		t.Fatal("invalid block accepted")
+	}
+	if countSliceBlockedEvents(resolveSliceBlockedDetail(t, fixture.dir).Events, plan.EventTypeSliceBlocked, "missing") != 0 {
+		t.Fatal("rejected block recorded an event")
+	}
+	if _, err := os.Stat(filepath.Join(home, "run-resume")); !os.IsNotExist(err) {
+		t.Fatalf("rejected block created cache: %v", err)
+	}
+}
+
+func TestSliceBlockedResumeNote(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TAO_DATA_HOME", home)
+	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+	record, err := plan.NewPlanRecord(fixture.dir, resolveSliceBlockedDetail(t, fixture.dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := record.StartSlice("001-a", plan.SliceStartRequest{ExecutionRoot: t.TempDir(), StartedAt: time.Date(2026, 7, 19, 16, 0, 0, 0, time.UTC)}); err != nil {
+		t.Fatal(err)
+	}
+	reason := writeSliceBlockedReason(t, "waiting")
+	note := writeSliceBlockedReason(t, "last action: inspect; next action: fix; why: failing; do-not: commit")
+	var warnings bytes.Buffer
+	app := App{Out: &bytes.Buffer{}, Err: &warnings, Now: func() time.Time { return time.Date(2026, 7, 19, 17, 0, 0, 0, time.UTC) }}
+	args := []string{"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--reason-file", reason}
+	if err := app.Run(context.Background(), append(append([]string{}, args...), "--resume-note-file", note)); err != nil {
+		t.Fatal(err)
+	}
+	store := run.ResumeNoteStore{}
+	before := resolveSliceBlockedDetail(t, fixture.dir)
+	if text, err := store.Load(before, "001-a"); err != nil || !strings.Contains(text, "last action") {
+		t.Fatalf("note=%q err=%v warnings=%s", text, err, &warnings)
+	}
+	// Make cache cleanup unavailable; freshness must still suppress the old
+	// envelope after permissions are repaired, even with an identical clock.
+	if err := os.Chmod(filepath.Join(home, "run-resume"), 0o755); err != nil { //nolint:gosec // Deliberately unsafe directory permissions exercise failed cleanup.
+		t.Fatal(err)
+	}
+	for _, path := range []string{"", filepath.Join(t.TempDir(), "missing")} {
+		call := append([]string{}, args...)
+		if path != "" {
+			call = append(call, "--resume-note-file", path)
+		}
+		if err := app.Run(context.Background(), call); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(filepath.Join(home, "run-resume"), 0o700); err != nil { //nolint:gosec // Restore private directory traversal permissions.
+			t.Fatal(err)
+		}
+		detail := resolveSliceBlockedDetail(t, fixture.dir)
+		if text, _ := store.Load(detail, "001-a"); text != "" {
+			t.Fatalf("stale note: %q", text)
+		}
+		if countSliceBlockedEvents(detail.Events, plan.EventTypeSliceBlocked, "001-a") != 1 {
+			t.Fatal("repeat added block event")
+		}
+	}
+	if !strings.Contains(warnings.String(), "resume note unavailable") {
+		t.Fatalf("missing warning: %s", &warnings)
+	}
+}
+
 func TestSliceBlockedCommandBlocksCurrentSlice(t *testing.T) {
 	fixture := newStartedSliceBlockedFixture(t)
 	reasonFile := writeSliceBlockedReason(t, "  dependency service is unavailable  ")
