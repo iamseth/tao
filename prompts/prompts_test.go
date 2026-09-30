@@ -883,6 +883,54 @@ func TestSlicePromptSeparatesRuntimePrerequisitesFromAdvisorySequence(t *testing
 	}
 }
 
+// These assertions cover guidance structure, not model compliance.
+func TestPromptsSeparateApprovalFromFactualInputs(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		prompt   string
+		contains []string
+	}{
+		{
+			name:   "slice",
+			prompt: SlicePromptTemplate,
+			contains: []string{
+				"Approval is authorization-only; it carries no factual payload",
+				"Reject contracts that say observations or facts are supplied through approval",
+				"an emulator-observation template in `approval.reason` is not evidence",
+				"Put actual facts in the slice contract or in a concrete artifact declared in `required_inputs`",
+				"defer executable work until an operator amendment supplies the facts",
+				"facts must be in the contract change, not only the amendment reason",
+				"Phrase `approval.reason` as the decision being approved",
+				"File existence is not proof of content",
+				"Inputs must be available in the prepared execution worktree",
+				"Never invent an agent producer for human observations",
+				"a missing externally supplied file cannot bypass whole-plan validation",
+				"consumer's `depends_on` must name that direct producer slice",
+				"producer's `expected_files` must contain the exact same concrete path",
+			},
+		},
+		{
+			name:   "run",
+			prompt: RunPromptTemplate,
+			contains: []string{
+				"Do not ask the user to reconfirm approved choices or approved file overwrites",
+				"interpret that text as already satisfied by the approval event and continue",
+				"Approval is authorization-only; approval metadata does not fill missing observations or factual fields",
+				"Only stop for genuinely missing information",
+				"Use the existing `tao slice-blocked` path for those missing facts",
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, want := range tt.contains {
+				if !strings.Contains(tt.prompt, want) {
+					t.Errorf("prompt missing approval/input guidance %q", want)
+				}
+			}
+		})
+	}
+}
+
 func TestSlicePromptDeclaresConcreteRequiredInputs(t *testing.T) {
 	for _, want := range []string{
 		"concrete repository files or directories",

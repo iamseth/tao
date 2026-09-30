@@ -602,6 +602,30 @@ slice and in the event journal.
 `tao insights` shows `verification_repair_stopped` as a signal of exhausted
 repair attempts.
 
+**Supply later observations separately from approval.** Approval authorizes a
+choice or overwrite; it does not deliver facts, and approved decisions need no
+reconfirmation. An unfilled observation template remains missing information.
+Put observations in the slice contract or a concrete `required_inputs` file with
+real content available in the execution worktree, not only the control checkout.
+File existence alone does not prove content. A missing external file still fails
+whole-plan validation unless an exact direct producer contract exists; do not
+invent an agent producer for human observations.
+
+For a pending or blocked slice, record later facts with a contract amendment:
+
+```sh
+tao edit amend <plan-id> <slice-id> --reason-file /tmp/observation-reason.txt \
+  --add-task 'Use the observed emulator result: startup displayed a blank screen after 30 seconds.'
+```
+
+The reason file explains why the contract changes. Put the actual observations
+in `--add-task`, or use `--goal-file /tmp/observed-goal.txt` containing the full
+replacement goal and facts; facts recorded only in the amendment reason are not
+a contract change. These flags do not add or waive `required_inputs`, and the
+amended plan must still validate. After resolving the cause, a blocked plan still
+needs ordinary `tao run --continue <plan-id>`. Amendments neither clear blockers
+nor grant or bypass approval; satisfy any outstanding approval gate separately.
+
 Under `--commit-policy none`, a successful same-head reverification does not by
 itself prove that permitted uncommitted work was committed.
 

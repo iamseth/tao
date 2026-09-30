@@ -348,7 +348,7 @@ excluded. Unknown exits render `unknown`, never zero. Agent proposals cannot add
 
 `path` must be a concrete repository-relative path: absolute paths, parent traversal, wildcards, trailing-slash placeholders, and vague paths are invalid. `kind` is exactly `file` or `directory`, and `reason` must be non-blank. Omit the field when the slice needs no repository artifact before work begins; plans that predate this field remain readable and runnable without migration.
 
-During whole-plan validation, a missing input is allowed as a warning only when a slice named directly in the consumer's `depends_on` declares the exact normalized path in its `expected_files`. Serial order, transitive dependencies, prefixes, wildcards, and near matches do not establish a producer contract. At selected-slice preflight, the artifact must actually exist with the declared kind in the prepared execution worktree. A producer declaration does not waive that runtime check.
+During whole-plan validation, a missing input is allowed as a warning only when a slice named directly in the consumer's `depends_on` declares the exact normalized path in its `expected_files`. Serial order, transitive dependencies, prefixes, wildcards, and near matches do not establish a producer contract. At selected-slice preflight, the artifact must actually exist with the declared kind in the prepared execution worktree. A producer declaration does not waive that runtime check. Existence and kind checks do not prove factual content: placeholder files and observation templates are not evidence. Human observations must not be assigned an invented agent producer; missing external files without the exact direct-producer contract still fail whole-plan validation.
 
 These commit fields are optional for backward compatibility: plans completed
 before transactional slice commits load without them. Under policy `slice`, a
@@ -394,7 +394,7 @@ sequenceDiagram
     Tao->>Plan: mark slice completed + update queue
 ```
 
-Approval-gated work uses an `approval` object. A runner must stop before implementation when approval is required but not granted. `tao approve [--slice ID] [--by NAME] <plan>` sets `approval.approved`, `approval.approved_by`, and `approval.approved_at`, preserves existing approval metadata on repeated approval, and does not execute work.
+Approval-gated work uses an `approval` object. Approval is authorization-only, with no factual payload: `approval.reason` describes the decision, not a template for observations to be supplied by approving. Actual facts belong in the slice contract or a concrete `required_inputs` artifact available in the execution worktree. Otherwise defer executable work until an operator amendment supplies the facts in a contract change, not only its reason. Approved choices and overwrites need no reconfirmation, but approval does not resolve missing information. A runner must stop before implementation when approval is required but not granted. `tao approve [--slice ID] [--by NAME] <plan>` sets `approval.approved`, `approval.approved_by`, and `approval.approved_at`, preserves existing approval metadata on repeated approval, and does not execute work.
 
 `tao run` owns deterministic start bookkeeping after selected-slice preflight passes and before invoking the agent: it sets the plan and selected slice to `in_progress`, updates start and last-activity timestamps, records `plan.current_slice`, and appends one `slice_started` event per slice attempt sequence. Agents should not duplicate this metadata during normal runs.
 
