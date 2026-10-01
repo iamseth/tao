@@ -21,14 +21,19 @@ import (
 	"github.com/iamseth/tao/prompts"
 )
 
+// ReviewRangePresenter is an optional, presentation-only observer of the resolved
+// committed review range. It cannot refuse a review or grant lifecycle authority.
+type ReviewRangePresenter func(detail *plan.PlanDetail, base, head string)
+
 type ReviewRun struct {
-	PlanDir  string
-	PlanID   string
-	LogPath  string
-	Detail   *plan.PlanDetail
-	RepoRoot string
-	Base     string
-	HeadSHA  string
+	ReviewRangePresenter ReviewRangePresenter
+	PlanDir              string
+	PlanID               string
+	LogPath              string
+	Detail               *plan.PlanDetail
+	RepoRoot             string
+	Base                 string
+	HeadSHA              string
 }
 
 type ReviewCreator interface {
@@ -106,7 +111,7 @@ func (s Service) Review(ctx context.Context, request Request) (review plan.PlanR
 		if err := writef(s.out, "Running agent review: %s\n", execution.Config.Agent); err != nil {
 			return err
 		}
-		review, err = execution.Dependencies.ReviewCreator.CreateReview(ownedCtx, ReviewRun{PlanDir: absolutePlanDir(detail.Dir), PlanID: detail.State.Plan.ID, LogPath: plan.LogPath(detail.Dir), Detail: detail, RepoRoot: execution.ExecutionRoot, Base: reviewDetailBase(detail)})
+		review, err = execution.Dependencies.ReviewCreator.CreateReview(ownedCtx, ReviewRun{PlanDir: absolutePlanDir(detail.Dir), PlanID: detail.State.Plan.ID, LogPath: plan.LogPath(detail.Dir), Detail: detail, RepoRoot: execution.ExecutionRoot, Base: reviewDetailBase(detail), ReviewRangePresenter: execution.Dependencies.ReviewRangePresenter})
 		return err
 	})
 	return review, lockErr
@@ -851,6 +856,9 @@ func createReviewWithAgentSession(ctx context.Context, executor AgentSessionExec
 		if err != nil {
 			return plan.PlanReview{}, fmt.Errorf("detect review head: %w", err)
 		}
+	}
+	if run.ReviewRangePresenter != nil {
+		run.ReviewRangePresenter(detail, base, head)
 	}
 	changeType := state.Plan.ChangeType
 	prompt, err := renderReviewPrompt(reviewPromptData{PlanDir: planDir, PlanID: planID, Base: base, Head: head, ChangeType: changeType})

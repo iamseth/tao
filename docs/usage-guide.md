@@ -676,6 +676,15 @@ cannot authorize merge but retains findings for ordinary `tao rework`.
 After commits, amendments, or other diff changes, refresh review and proposal with
 `tao review --run <plan-id>`. Use `tao staleness` for pending-work base drift instead.
 
+An explicit fresh review prints an advisory notice when the committed base/head
+range matches a completed, non-approving prior review, then proceeds normally.
+This compares only committed ranges—not prompts, models, or dirty worktree contents.
+To deliberately retry with a different model, use
+`tao review --run --model <name> <plan-id>`. The notice offers `tao rework` when
+eligible; any `tao merge --force` alternative is an administrative exception that
+intentionally bypasses review and merge safeguards, not a routine recommendation.
+Historical superseded reviews do not authorize either alternative.
+
 Reviewers grade completion needs and user impact: blocker/major findings request
 changes; minor-only findings approve with advisory suggestions retained, even when
 imperative. Mixed reviews put only blockers/majors in JSON, minors in prose.

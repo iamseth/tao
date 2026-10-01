@@ -1363,6 +1363,7 @@ func TestReviewSettledWorkRunsVerificationAndAgent(t *testing.T) {
 	detail.State.Plan.LastRunCommitPolicy = CommitPolicySlice.String()
 	commandCalled := false
 	creatorCalled := false
+	presenterCalled := false
 	repo := &memoryRunRepository{details: []*plan.PlanDetail{detail, detail}}
 	service := NewService(repo, io.Discard, testOptions(
 		RunDependencies{
@@ -1370,8 +1371,18 @@ func TestReviewSettledWorkRunsVerificationAndAgent(t *testing.T) {
 				commandCalled = true
 				return nil
 			},
-			ReviewCreator: reviewCreatorFunc(func(context.Context, ReviewRun) (plan.PlanReview, error) {
+			ReviewRangePresenter: func(prior *plan.PlanDetail, base, head string) {
+				presenterCalled = true
+				if prior != detail || base != "resolved-base" || head != "resolved-head" {
+					t.Fatal("unexpected forwarded observation")
+				}
+			},
+			ReviewCreator: reviewCreatorFunc(func(_ context.Context, request ReviewRun) (plan.PlanReview, error) {
 				creatorCalled = true
+				if request.ReviewRangePresenter == nil {
+					t.Fatal("Service.Review did not forward presenter")
+				}
+				request.ReviewRangePresenter(request.Detail, "resolved-base", "resolved-head")
 				return plan.PlanReview{Verdict: plan.ReviewVerdictApprove}, nil
 			}),
 		},
@@ -1383,6 +1394,9 @@ func TestReviewSettledWorkRunsVerificationAndAgent(t *testing.T) {
 
 	if _, err := service.Review(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi}}); err != nil {
 		t.Fatal(err)
+	}
+	if !presenterCalled {
+		t.Fatal("forwarded presenter did not run")
 	}
 	if !commandCalled || !creatorCalled {
 		t.Fatalf("settled review did not run verification and agent: command=%v creator=%v", commandCalled, creatorCalled)
@@ -1912,5 +1926,104 @@ func TestReviewCreatorDefaultsFromAgentCapabilities(t *testing.T) {
 	creator, ok := execution.Dependencies.ReviewCreator.(agentExecutor)
 	if !ok || creator.descriptor.Kind != AgentPi {
 		t.Fatalf("expected pi review creator, got %T", execution.Dependencies.ReviewCreator)
+	}
+}
+
+func TestReviewRangePresenterResolvedRangeAndOrdering(t *testing.T) {
+	for _, tt := range []struct {
+		name, live, workspace, runBase, repoBase, explicitHead, want string
+		observe                                                      bool
+	}{
+		{name: "live", live: "live", workspace: "workspace", runBase: "run", repoBase: "repo", want: "live", observe: true},
+		{name: "workspace fallback", workspace: "workspace", runBase: "run", repoBase: "repo", want: "workspace", observe: true},
+		{name: "run fallback", runBase: "run", repoBase: "repo", want: "run", observe: true},
+		{name: "repo fallback", repoBase: "repo", want: "repo", observe: true},
+		{name: "explicit head", repoBase: "repo", explicitHead: "explicit", want: "repo", observe: true},
+		{name: "nil observer", repoBase: "repo", want: "repo"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			planDir, controlRoot, executionRoot := t.TempDir(), t.TempDir(), t.TempDir()
+			at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+			detail := runPlanDetail(plan.StatusReviewed, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, &at)
+			detail.Dir = planDir
+			detail.State.Repo.Root = controlRoot
+			detail.State.Repo.BaseCommit = tt.repoBase
+			detail.State.Workspace = &plan.Workspace{Path: executionRoot, Branch: "feature/test", BaseBranch: "main", BaseSHA: tt.workspace}
+			detail.State.Plan.Review = &plan.PlanReview{Status: "completed", Verdict: "changes_requested", Base: "prior-base", Head: "prior-head"}
+			persistReviewState(t, planDir, detail)
+			executor := &recordingAgentSessionExecutor{result: AgentSessionResult{Output: "Fresh comment"}}
+			git := &fakeReviewGit{head: "worktree-head", defaultBranch: "main", mergeBase: tt.live}
+			observed := false
+			request := ReviewRun{PlanDir: planDir, Detail: detail, RepoRoot: executionRoot, Base: tt.runBase, HeadSHA: tt.explicitHead}
+			wantHead := tt.explicitHead
+			if wantHead == "" {
+				wantHead = "worktree-head"
+			}
+			if tt.observe {
+				request.ReviewRangePresenter = func(prior *plan.PlanDetail, base, head string) {
+					observed = true
+					if len(executor.requests) != 0 {
+						t.Fatal("observer ran after agent startup")
+					}
+					state, err := plan.ReadState(planDir)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if state.Plan.Review.Head != "prior-head" || plan.PersistedReview(prior).Head != "prior-head" {
+						t.Fatal("prior review replaced before observation")
+					}
+					if base != tt.want || head != wantHead {
+						t.Fatalf("range %q..%q", base, head)
+					}
+				}
+			}
+			review, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", reviewGitFactory: func(root string) reviewGit {
+				if root != executionRoot {
+					t.Fatalf("Git root = %q", root)
+				}
+				return git
+			}}, request, fileReviewRecordFactory(plan.NewFileRepository("")))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if observed != tt.observe || len(executor.requests) != 1 || review.Base != tt.want || review.Head != wantHead {
+				t.Fatalf("observed %v review %+v", observed, review)
+			}
+			if tt.explicitHead != "" {
+				for _, call := range git.calls {
+					if call == "rev-parse HEAD" {
+						t.Fatal("explicit head caused HEAD lookup")
+					}
+				}
+			}
+			state, err := plan.ReadState(planDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state.Plan.Review.Head != wantHead {
+				t.Fatalf("review not persisted: %+v", state.Plan.Review)
+			}
+		})
+	}
+}
+
+func TestAutomaticFinalizerDoesNotPresentReviewRange(t *testing.T) {
+	called := false
+	detail := runPlanDetail(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
+	f := newFinalizer(io.Discard, runExecution{Config: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{ReviewEnabled: true}}, Dependencies: RunDependencies{
+		ReviewRangePresenter: func(*plan.PlanDetail, string, string) { t.Fatal("automatic review presented notice") },
+		ReviewCreator: reviewCreatorFunc(func(_ context.Context, request ReviewRun) (plan.PlanReview, error) {
+			called = true
+			if request.ReviewRangePresenter != nil {
+				t.Fatal("automatic finalizer forwarded observer")
+			}
+			return plan.PlanReview{Status: "completed", Verdict: "comment"}, nil
+		}),
+	}})
+	if err := f.reviewCompletedRun(context.Background(), detail, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("automatic review did not run")
 	}
 }

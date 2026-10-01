@@ -264,12 +264,15 @@ func TestReviewPrintsClearMessageWhenNoReviewExists(t *testing.T) {
 
 func TestReviewRunTriggersFreshReview(t *testing.T) {
 	for _, tt := range []struct {
-		name      string
-		modelFlag []string
-		wantModel string
+		name       string
+		modelFlag  []string
+		wantModel  string
+		verdict    string
+		failNotice bool
 	}{
-		{name: "repository default", wantModel: "repo-review"},
-		{name: "explicit override", modelFlag: []string{"--model", "provider/override"}, wantModel: "provider/override"},
+		{name: "repository default", wantModel: "repo-review", verdict: "comment"},
+		{name: "explicit override", modelFlag: []string{"--model", "provider/override"}, wantModel: "provider/override", verdict: "changes_requested"},
+		{name: "notice write failure", wantModel: "repo-review", verdict: "comment", failNotice: true},
 		{name: "empty inherits", modelFlag: []string{"--model="}, wantModel: "repo-review"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -279,6 +282,21 @@ func TestReviewRunTriggersFreshReview(t *testing.T) {
 			registry := &fakeNoteRegistry{current: registered}
 
 			fixture := newRunPlanFixture(t, plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
+			if tt.verdict != "" {
+				detail, err := plan.NewFileRepository(fixture.root).ResolvePlan(context.Background(), fixture.id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				detail.State.Repo.BaseCommit = "base123"
+				detail.State.Plan.Review = &plan.PlanReview{Status: "completed", Verdict: tt.verdict, Base: "base123", Head: "head123"}
+				record, err := plan.NewPlanRecord(fixture.dir, detail)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := record.PersistState(); err != nil {
+					t.Fatal(err)
+				}
+			}
 			reviewOutput := "Fresh review\n```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"ready\",\"commit_message\":{\"subject\":\"feat(review): persist approved commit proposals\",\"body\":\"What:\\nPersist the proposal for the exact reviewed diff.\\n\\nWhy:\\nReuse review context during merge.\"},\"findings\":[]}\n```"
 			var out bytes.Buffer
 			var prompt string
@@ -301,11 +319,21 @@ func TestReviewRunTriggersFreshReview(t *testing.T) {
 				prompt = value
 			})}
 
+			failingWriter := &noticeFailWriter{Buffer: &out}
+			if tt.failNotice {
+				app.Out = failingWriter
+			}
 			snapshot := runtimeconfig.RuntimeEnv()
 			app.RuntimeEnv = &snapshot
 			app.Registry = func() NoteRegistry { return registry }
 			starter := app.ProcessStarter
 			app.ProcessStarter = func(ctx context.Context, cwd, name string, args []string) (agent.Process, error) {
+				if tt.failNotice && !failingWriter.attempted {
+					t.Fatal("notice write was not attempted before startup")
+				}
+				if tt.verdict != "" && !tt.failNotice && !strings.Contains(out.String(), "unchanged committed review range") {
+					t.Fatalf("notice missing before startup: %s", out.String())
+				}
 				if len(args) < 2 || args[len(args)-2] != "--model" || args[len(args)-1] != tt.wantModel {
 					t.Fatalf("review process args = %v, want model %q", args, tt.wantModel)
 				}
@@ -401,4 +429,94 @@ func reviewCommandKey(args []string) string {
 		args = args[2:]
 	}
 	return strings.Join(args, " ")
+}
+
+func TestUnchangedReviewNotice(t *testing.T) {
+	var empty bytes.Buffer
+	presentUnchangedReviewRange(&empty, nil, "base", "head")
+	if empty.Len() != 0 {
+		t.Fatal("nil detail produced a notice")
+	}
+	for _, tt := range []struct {
+		name, verdict, status, base, head string
+		absent                            bool
+		want                              bool
+	}{
+		{name: "comment", verdict: "comment", status: "completed", base: "base", head: "head", want: true},
+		{name: "changes requested", verdict: "changes_requested", status: "completed", base: "base", head: "head", want: true},
+		{name: "approve", verdict: "approve", status: "completed", base: "base", head: "head"},
+		{name: "changed base", verdict: "comment", status: "completed", base: "other", head: "head"},
+		{name: "changed head", verdict: "comment", status: "completed", base: "base", head: "other"},
+		{name: "empty base", verdict: "comment", status: "completed", head: "head"},
+		{name: "empty head", verdict: "comment", status: "completed", base: "base"},
+		{name: "incomplete", verdict: "comment", base: "base", head: "head"},
+		{name: "absent", absent: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			detail := &plan.PlanDetail{}
+			if !tt.absent {
+				detail.State.Plan.Review = &plan.PlanReview{Status: tt.status, Verdict: tt.verdict, Base: tt.base, Head: tt.head}
+			}
+			var out bytes.Buffer
+			for _, resolved := range [][2]string{{"", "head"}, {"base", ""}, {"", ""}} {
+				presentUnchangedReviewRange(&out, detail, resolved[0], resolved[1])
+				if out.Len() != 0 {
+					t.Fatal("empty resolved range produced a notice")
+				}
+			}
+			presentUnchangedReviewRange(&out, detail, "base", "head")
+			if got := out.String(); (got != "") != tt.want {
+				t.Fatalf("notice = %q, want visible %v", got, tt.want)
+			}
+			if tt.want && (!strings.Contains(out.String(), "reviewed at unknown") || !strings.Contains(out.String(), "review proceeds") || !strings.Contains(out.String(), "--model")) {
+				t.Fatalf("notice = %q", out.String())
+			}
+		})
+	}
+}
+
+type noticeFailWriter struct {
+	*bytes.Buffer
+	attempted bool
+}
+
+func (w *noticeFailWriter) Write(p []byte) (int, error) {
+	if bytes.HasPrefix(p, []byte("Notice:")) {
+		w.attempted = true
+		return 0, errors.New("notice unavailable")
+	}
+	return w.Buffer.Write(p)
+}
+func (w *noticeFailWriter) WriteString(s string) (int, error) { return w.Write([]byte(s)) }
+
+func TestUnchangedReviewNoticeGuidanceAndSafeMetadata(t *testing.T) {
+	for _, actionable := range []bool{false, true} {
+		for _, superseded := range []bool{false, true} {
+			detail := &plan.PlanDetail{}
+			detail.State.Plan.ID = "plan\n\x1b[31m"
+			detail.State.Status = plan.StatusReviewed
+			detail.State.Plan.Review = &plan.PlanReview{Status: "completed", Verdict: "comment", Base: "base\n", Head: "head\x1b", ReviewedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.FixedZone("offset", 3600))}
+			if actionable {
+				detail.State.Plan.Review.Findings = []plan.ReviewFinding{{Message: "fix it"}}
+			}
+			if superseded {
+				detail.Events = []plan.Event{{Type: plan.EventTypePlanReopened}}
+			}
+			var out bytes.Buffer
+			presentUnchangedReviewRange(&out, detail, "base\n", "head\x1b")
+			text := out.String()
+			if strings.Count(text, "\n") != 1 || strings.Contains(text, "\x1b") || !strings.Contains(text, "2026-01-02T02:04:05Z") {
+				t.Fatalf("unsafe notice/time: %q", text)
+			}
+			if strings.Contains(text, "tao rework") != (actionable && !superseded) {
+				t.Fatalf("rework guidance: %q", text)
+			}
+			if superseded && strings.Contains(text, "--force") {
+				t.Fatalf("historical merge guidance: %q", text)
+			}
+			if !superseded && (!strings.Contains(text, "tao merge --force") || !strings.Contains(text, "intentionally bypasses")) {
+				t.Fatalf("missing force warning: %q", text)
+			}
+		}
+	}
 }

@@ -3,11 +3,25 @@ package run
 import (
 	"context"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
 )
+
+func TestReviewRangePresenterIsOptionalDependency(t *testing.T) {
+	deps := RunDependencies{}
+	without := requireResolvedDependencies(deps).Error()
+	deps.ReviewRangePresenter = func(*plan.PlanDetail, string, string) {}
+	with := requireResolvedDependencies(deps).Error()
+	if with != without || strings.Contains(without, "ReviewRangePresenter") {
+		t.Fatalf("presentation changed dependency requirements: without=%s with=%s", without, with)
+	}
+	if newRunDependencies(Options{RunDependencies: deps}).ReviewRangePresenter == nil {
+		t.Fatal("dependency composition dropped optional presenter")
+	}
+}
 
 func TestRunDependencyHelperAccessors(t *testing.T) {
 	runner := func(context.Context, string, string, []string, io.Writer, io.Writer) error { return nil }

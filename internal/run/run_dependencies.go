@@ -15,24 +15,25 @@ import (
 // missing dependencies are resolved lives in run_setup.go so the dependency
 // graph stays legible at a single place.
 type RunDependencies struct {
-	CommandRunner       CommandRunner
-	reviewGitFactory    reviewGitFactory
-	ProcessStarter      ProcessStarter
-	SliceExecutor       SliceExecutor
-	PlanRecordFactory   PlanRecordFactory
-	PullRequestCreator  PullRequestCreator
-	ReviewCreator       ReviewCreator
-	EventAppender       plan.EventAppender
-	LogAppender         plan.LogAppender
-	RootResolver        ExecutionRootResolver
-	WorkspacePreparer   WorkspacePreparer
-	AgentFactory        AgentCapabilitiesFactory
-	StatusReporter      StatusReporter
-	HeaderReporter      HeaderReporter
-	OutputWriter        io.Writer
-	SessionLogWriter    io.Writer
-	TransportRetryDelay func(context.Context, time.Duration) error
-	Now                 func() time.Time
+	CommandRunner        CommandRunner
+	reviewGitFactory     reviewGitFactory
+	ProcessStarter       ProcessStarter
+	SliceExecutor        SliceExecutor
+	PlanRecordFactory    PlanRecordFactory
+	PullRequestCreator   PullRequestCreator
+	ReviewCreator        ReviewCreator
+	ReviewRangePresenter ReviewRangePresenter
+	EventAppender        plan.EventAppender
+	LogAppender          plan.LogAppender
+	RootResolver         ExecutionRootResolver
+	WorkspacePreparer    WorkspacePreparer
+	AgentFactory         AgentCapabilitiesFactory
+	StatusReporter       StatusReporter
+	HeaderReporter       HeaderReporter
+	OutputWriter         io.Writer
+	SessionLogWriter     io.Writer
+	TransportRetryDelay  func(context.Context, time.Duration) error
+	Now                  func() time.Time
 }
 
 // newRunDependencies returns the collaborators composed into Options. It does

@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/iamseth/tao/internal/plan"
 	runpkg "github.com/iamseth/tao/internal/run"
@@ -84,7 +85,11 @@ func (a App) runPlanReview(ctx context.Context, repo runpkg.Repository, input st
 	snapshot := a.envSnapshot()
 	runner := runpkg.NewService(repo, a.Out, runpkg.Options{
 		ExecutionConfig: runpkg.ExecutionConfig{RuntimeEnv: &snapshot, ResolvedRunOptions: request.ResolvedRunOptions, SkipPermissions: defaults.SkipPermissions},
-		RunDependencies: runpkg.RunDependencies{CommandRunner: a.CommandRunner, ProcessStarter: a.ProcessStarter, StatusReporter: a.StatusReporter, SessionLogWriter: a.Out, Now: a.Now},
+		RunDependencies: runpkg.RunDependencies{CommandRunner: a.CommandRunner, ProcessStarter: a.ProcessStarter, StatusReporter: a.StatusReporter, SessionLogWriter: a.Out, Now: a.Now,
+			ReviewRangePresenter: func(detail *plan.PlanDetail, base, head string) {
+				presentUnchangedReviewRange(a.Out, detail, base, head)
+			},
+		},
 	})
 	review, err := runner.Review(ctx, request)
 	if err != nil {
@@ -106,6 +111,38 @@ func (a App) runPlanReview(ctx context.Context, repo runpkg.Repository, input st
 		return err
 	}
 	return renderReviewGuidance(a.Out, detail)
+}
+
+func presentUnchangedReviewRange(out io.Writer, detail *plan.PlanDetail, base, head string) {
+	review := plan.PersistedReview(detail)
+	if out == nil || review == nil || review.Status != plan.ReviewStatusCompleted || review.Verdict == plan.ReviewVerdictApprove ||
+		base == "" || head == "" || review.Base != base || review.Head != head {
+		return
+	}
+	reviewedAt := "unknown"
+	if !review.ReviewedAt.IsZero() {
+		reviewedAt = review.ReviewedAt.UTC().Format(time.RFC3339)
+	}
+	guidance := "For a deliberate different-model retry, use tao review --run --model <name> <plan>."
+	// Historical reviews can explain the notice, but cannot authorize actions.
+	if !plan.ReviewSupersededByReopen(detail.Events) {
+		actions := plan.DeriveNextAction(detail)
+		if actions.Primary.Kind == plan.PlanActionRework {
+			guidance += " Alternatively: " + actions.Primary.Command + "."
+		}
+		for _, action := range actions.Alternatives {
+			if action.Kind == plan.PlanActionMerge && action.Class == plan.PlanActionClassAdministrative {
+				guidance += " Administrative exception only: " + action.Command + " intentionally bypasses review and merge safeguards."
+			}
+		}
+	}
+	// Quote persisted text to keep control characters from escaping this line.
+	_ = writef(out, "Notice: unchanged committed review range %q..%q; prior verdict %q, reviewed at %s; review proceeds (prompts, models, and dirty worktree contents may differ). %s\n", base, head, review.Verdict, reviewedAt, strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
+			return ' '
+		}
+		return r
+	}, guidance))
 }
 
 func renderPersistedPlanReview(out io.Writer, detail *plan.PlanDetail) error {
