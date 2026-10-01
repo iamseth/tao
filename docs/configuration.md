@@ -6,16 +6,21 @@ Run settings resolve in three stages:
 
 1. Environment values and built-in defaults establish the baseline.
 2. Repository defaults from `tao repo config` override that baseline.
-3. Explicit per-run flags win over both, including explicit `false` values.
+3. Explicit per-run flags win over both, including explicit `false` and `0` values.
 
-Tao does not load `.env` files. Repository defaults currently cover pull requests
-and model selection; `unset` removes a stored default and restores inheritance.
+Tao does not load `.env` files. Repository defaults cover pull requests,
+model selection, maximum rework attempts, and the rework escalation threshold;
+`unset` removes only the named stored default and restores inheritance.
 For example:
 
 ```sh
 tao repo config --pull-request true
 tao repo config --pull-request false
 tao repo config --pull-request unset
+tao repo config --max-rework-attempts 0 # explicit zero disables automatic rework
+tao repo config --max-rework-attempts unset # restore environment/default inheritance
+tao repo config --rework-escalation-from-attempt 4
+tao repo config --rework-escalation-from-attempt unset
 ```
 
 ## Runtime settings
@@ -42,9 +47,10 @@ explicitly setting it to an empty value is invalid.
 | `TAO_UPDATE` | `warn` | `warn`, `auto`, `off` | Report updates, permit automatic installation, or disable automatic update checks. |
 | `TAO_PULL_REQUEST` | `false` | Boolean | Enable pull-request finalization after successful execution and approval. |
 | `TAO_REVIEW` | `true` | Boolean | Enable the post-execution plan review. |
-| `TAO_AUTO_REWORK` | `true` | Boolean | Automatically reopen eligible changes-requested reviews during direct runs when review is enabled. |
-| `TAO_MAX_REWORK_ATTEMPTS` | `5` | Non-negative integer | Bound automatic-rework cycles; `0` disables them. |
-| `TAO_REWORK_ESCALATION_FROM_ATTEMPT` | `4` | Integer at least `1` | First escalation-eligible attempt in each automatic-rework window; environment-only. |
+| `TAO_AUTO_REWORK` | unset | Deprecated boolean alias | Accepted for one release: false maps to zero attempts, true to five. `TAO_MAX_REWORK_ATTEMPTS` wins when both are supplied, even if the ignored alias is invalid. Supplied aliases warn; unset aliases are hidden in status/settings. |
+| `TAO_MAX_REWORK_ATTEMPTS` | `5` | Non-negative integer | Bound automatic-rework cycles; `0` disables them. Does not affect merge-batch review. |
+| `TAO_MERGE_REVIEW_MAX_ATTEMPTS` | `5` | Non-negative integer | Bound aggregate merge-review attempts independently of run rework settings; `0` allows no attempts. A positive explicit merge-review option overrides this setting; a zero option uses it. |
+| `TAO_REWORK_ESCALATION_FROM_ATTEMPT` | `4` | Integer at least `1` | First escalation-eligible attempt in each automatic-rework window; a threshold above the attempt count is valid. |
 | `TAO_DANGEROUSLY_SKIP_PERMISSIONS` | `false` | Boolean | Skip Claude permission checks; compatibility no-op for Pi. |
 | `TAO_MERGE_VERIFY_COMMAND` | Auto-detect | Command string, including empty | Override merge verification; explicitly empty disables verification. |
 | `TAO_AGGREGATE_REVIEW_CONVERGENCE_WINDOW` | `2` | Integer at least `2` | Consecutive changes-requested rounds considered for aggregate-review non-convergence. |
@@ -97,6 +103,15 @@ Only `TAO_BUDGET_SLICE_OUTPUT_TOKENS_STOP` and `TAO_BUDGET_SLICE_COST_STOP`
 are supported hard caps. Counts accept non-negative integers; costs accept
 finite non-negative numbers. Unset or empty stop values leave the cap disabled;
 an explicit `0` is a hard cap and requires the corresponding warning to be `0`.
+
+Automatic rework defaults to five attempts with escalation eligible from attempt four.
+Repository flags `--max-rework-attempts N|unset` (non-negative) and
+`--rework-escalation-from-attempt N|unset` (at least one) validate before writing;
+unmentioned settings are preserved. `tao repo config` displays absent values as
+`unset` and explicit zero as `0`; status and Settings show numeric repository
+values with source `repository` while retaining captured environment diagnostics.
+
+Automatic rework resolves environment → repository numeric defaults → explicit invocation flags. `--max-rework-attempts N` and `--rework-escalation-from-attempt N` preserve explicit zero/count overrides; only the attempt count permits zero. The deprecated `--auto-rework` alias remains accepted for one release (false = zero, true = five), warns whenever supplied, and yields to an explicit count in the same invocation. Registered flag defaults are not overrides. Positive attempts with automatic review disabled normalize to zero with one warning, regardless of source. Reverify always executes and presents zero attempts. Note promotion keeps automatic rework disabled. Invalid consumed environment settings are rejected lazily before execution/handoff mutation; unrelated merge settings do not block ordinary runs.
 
 ## Model selection
 

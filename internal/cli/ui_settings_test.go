@@ -102,3 +102,46 @@ func TestUISettingsServiceLeavesDisplayHomeEmptyWhenLookupFails(t *testing.T) {
 		t.Fatalf("display home = %q, want empty fallback context", snapshot.DisplayHome)
 	}
 }
+
+func TestUISettingsRepositoryReworkProjection(t *testing.T) {
+	for _, explicit := range []bool{false, true} {
+		t.Run(map[bool]string{false: "legacy", true: "explicit zero"}[explicit], func(t *testing.T) {
+			repo := taodata.Repo{ID: "repo-a"}
+			if explicit {
+				repo = repo.WithReworkDefaults(new(0), new(1))
+			}
+			registry := &fakeNoteRegistry{current: repo, repos: []taodata.Repo{repo}}
+			service := uiSettingsService{app: App{RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvMaxReworkAttempts: "8"})}, registry: registry}
+			snapshot, err := service.Collect(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			wants := map[string]string{runtimeconfig.EnvMaxReworkAttempts: "8", runtimeconfig.EnvReworkEscalationFromAttempt: "4"}
+			if explicit {
+				wants[runtimeconfig.EnvMaxReworkAttempts] = "0"
+				wants[runtimeconfig.EnvReworkEscalationFromAttempt] = "1"
+			}
+			for name, want := range wants {
+				found := false
+				for _, row := range snapshot.RuntimeDefaults {
+					if row.Name == name {
+						found = true
+						source := "default"
+						if name == runtimeconfig.EnvMaxReworkAttempts {
+							source = "env"
+						}
+						if explicit {
+							source = "repository"
+						}
+						if row.Value != want || row.Source != source {
+							t.Fatalf("row: %+v", row)
+						}
+					}
+				}
+				if !found {
+					t.Fatal("missing", name)
+				}
+			}
+		})
+	}
+}

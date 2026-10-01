@@ -318,6 +318,7 @@ func settingsFixture(now time.Time) tui.SettingsSnapshot {
 			{Name: "TAO_REWORK_ESCALATION_FROM_ATTEMPT", Value: "4", Source: "default"},
 			{Name: "TAO_DANGEROUSLY_SKIP_PERMISSIONS", Value: "false", Source: "default"},
 			{Name: "TAO_MERGE_VERIFY_COMMAND", Value: "auto-detect", Source: "default"},
+			{Name: "TAO_MERGE_REVIEW_MAX_ATTEMPTS", Value: "5", Source: "default"},
 			{Name: "TAO_AGGREGATE_REVIEW_CONVERGENCE_WINDOW", Value: "2", Source: "default"},
 			{Name: "TAO_APPROVED_BY", Value: "", Source: "default"},
 			{Name: "TAO_RUN_HEADER", Value: "true", Source: "default"},

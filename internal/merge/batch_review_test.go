@@ -1582,11 +1582,15 @@ func TestBatchReviewAutoEjectDoesNotAttributeCountStallWithMissingFile(t *testin
 
 func TestBatchReviewSnapshotLimits(t *testing.T) {
 	for _, tt := range []struct {
-		name, captured string
-		explicit, want int
-		wantError      bool
+		name, captured, run string
+		explicit, want      int
+		wantError           bool
 	}{
-		{name: "default", want: defaultBatchReviewMaxAttempts},
+		{name: "default", want: 5},
+		{name: "run ignored", run: "9", want: 5},
+		{name: "malformed run ignored", run: "bad", want: 5},
+		{name: "run disabled", run: "0", captured: "3", want: 3},
+		{name: "negative merge", captured: "-1", wantError: true},
 		{name: "captured", captured: "3", want: 3},
 		{name: "zero", captured: "0", want: 0},
 		{name: "explicit", captured: "3", explicit: 2, want: 2},
@@ -1594,7 +1598,8 @@ func TestBatchReviewSnapshotLimits(t *testing.T) {
 		{name: "explicit short circuit", captured: "bad", explicit: 2, want: 2},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			service := Service{RuntimeEnv: mergeSnapshotWith(map[string]string{runtimeconfig.EnvMaxReworkAttempts: tt.captured})}
+			service := Service{RuntimeEnv: mergeSnapshotWith(map[string]string{runtimeconfig.EnvMergeReviewMaxAttempts: tt.captured, runtimeconfig.EnvMaxReworkAttempts: tt.run})}
+			t.Setenv(runtimeconfig.EnvMergeReviewMaxAttempts, "99")
 			t.Setenv(runtimeconfig.EnvMaxReworkAttempts, "99")
 			got, err := service.batchReviewMaxAttempts(tt.explicit)
 			if (err != nil) != tt.wantError || got != tt.want {
@@ -1603,6 +1608,7 @@ func TestBatchReviewSnapshotLimits(t *testing.T) {
 		})
 	}
 	t.Setenv(runtimeconfig.EnvMaxReworkAttempts, "invalid")
+	t.Setenv(runtimeconfig.EnvMergeReviewMaxAttempts, "invalid")
 	t.Setenv(runtimeconfig.EnvAggregateReviewConvergenceWindow, "invalid")
 	if got, err := (Service{}).batchReviewMaxAttempts(0); err != nil || got != defaultBatchReviewMaxAttempts {
 		t.Fatalf("nil snapshot attempts = %d, %v", got, err)

@@ -122,6 +122,7 @@ func TestPlanAndExecutionCommandHelpIncludesSubcommandsOptionsAndExamples(t *tes
 
 func TestRepositoryWorkspaceAndMonitoringHelpIncludesSubcommandsAndOptions(t *testing.T) {
 	assertCommandOutputContains(t, "repo help", []string{"repo", "--help"}, "Available Commands:", "list", "show", "doctor")
+	assertCommandOutputContains(t, "repo config help", []string{"repo", "config", "--help"}, "--max-rework-attempts", "--rework-escalation-from-attempt", "N|unset", "zero disables", "at least one")
 	assertCommandOutputContains(t, "cleanup help", []string{"cleanup", "--help"}, "Options:", "--dry-run", "--force")
 	assertCommandOutputContains(t, "monitor help", []string{"monitor", "--help"}, "non-completed plans across registered repositories", "Heartbeats report process liveness", "--once", "--interval", "tao monitor --interval 5s")
 }
@@ -278,7 +279,7 @@ func TestCommandHelpReflectsRuntimeEnvDefaults(t *testing.T) {
 		"execution mode: isolated or current (default current)",
 		"create a GitHub pull request after a completed full run (default true)",
 		"disable automatic plan review for this run (default true)",
-		"automatically rework plans with requested changes (default true)",
+		"deprecated: use --max-rework-attempts (false=0, true=5) (default true)",
 		"maximum automatic rework cycles (0 disables) (default 3)",
 		"legacy no-op for the Pi agent (default true)",
 	} {

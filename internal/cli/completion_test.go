@@ -146,7 +146,8 @@ func TestZshCommandArgumentsUseRegisteredFlagsAndSemanticHints(t *testing.T) {
 		{
 			command: "run",
 			want: []string{
-				"'--auto-rework=-[automatically rework plans with requested changes]:boolean:(true false)'",
+				"'--auto-rework=-[deprecated: use --max-rework-attempts (false=0, true=5)]:boolean:(true false)'",
+				"'--rework-escalation-from-attempt[first automatic rework attempt eligible for escalation]:count:'",
 				"'--commit-policy[automatic commit policy: slice or none]:policy:(slice none)'",
 				"'--execution-mode[execution mode: isolated or current]:mode:(isolated current)'",
 				"'--max-rework-attempts[maximum automatic rework cycles (0 disables)]:count:'",
@@ -443,6 +444,8 @@ func TestZshCompletionScriptCompletesReportsWithoutChangingRepo(t *testing.T) {
 		"'list:List registered repositories and health summaries'",
 		"'show:Show details for one registered repository'",
 		"'doctor:Check registered repositories for health problems'",
+		"--max-rework-attempts[set automatic rework attempts (non-negative integer, zero disables) or unset]",
+		"--rework-escalation-from-attempt[set the first escalation-eligible attempt (integer at least one) or unset]",
 		"_describe -t commands 'repo command' subcommands",
 	} {
 		if !strings.Contains(repoCase, want) {
@@ -500,7 +503,7 @@ func TestZshBooleanCompletionUsesEqualsOnlyParserSyntax(t *testing.T) {
 		},
 	}
 
-	const want = "'--auto-rework=-[automatically rework plans with requested changes]:boolean:(true false)'"
+	const want = "'--auto-rework=-[deprecated: use --max-rework-attempts (false=0, true=5)]:boolean:(true false)'"
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			arguments := zshCommandArguments(test.command, test.subcommands...)

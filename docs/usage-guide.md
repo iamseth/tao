@@ -653,8 +653,20 @@ generate fix slices, run them, and review again. Stops are checked in this order
   multiple rounds; inspect the named metric, observed/threshold values, and findings.
 
 Stops preserve the latest review and never approve or merge. Configure the cap
-with `--max-rework-attempts N`; `--auto-rework=false` or `TAO_AUTO_REWORK=false`
-disables the loop, as does disabling review with `--no-review` or `TAO_REVIEW=false`.
+with `TAO_MAX_REWORK_ATTEMPTS`, `tao repo config --max-rework-attempts N|unset`,
+or `tao run --max-rework-attempts N <plan-id>`; zero disables the loop.
+Environment/defaults → repository → explicit invocation is the precedence order,
+including explicit zero. Use repository `unset` to restore inheritance.
+Disabling review with `--no-review` or `TAO_REVIEW=false` makes the effective cap
+zero, with one explanatory warning if the resolved count was positive.
+`--reverify` also executes and presents zero attempts.
+
+**Migration:** replace `TAO_AUTO_REWORK=false` or `--auto-rework=false` with the
+corresponding numeric count of zero; `true` maps to five. These deprecated boolean
+inputs remain accepted for one release and warn whenever supplied. A canonical
+count wins over the boolean in the same layer; higher-precedence layers still win.
+Merge-batch review is independent: `TAO_MERGE_REVIEW_MAX_ATTEMPTS` defaults to five
+and is not affected by run rework settings.
 Repeated locations alone do **not** stop new rework. After successful reopening,
 best-effort advisories list normalized locations and rounds: a file-and-line anchor
 in two distinct rounds or a file in three rounds of the current window, not
@@ -852,7 +864,11 @@ round events and sessions are unchanged. See the
 [configuration reference](configuration.md) for repository and
 per-run overrides.
 
-`TAO_REWORK_ESCALATION_FROM_ATTEMPT` defaults to 4: under the default cap of
+`TAO_REWORK_ESCALATION_FROM_ATTEMPT` defaults to 4 and requires at least 1.
+Override it with `tao repo config --rework-escalation-from-attempt N|unset` or
+`tao run --rework-escalation-from-attempt N <plan-id>`, in the same environment →
+repository → invocation order. A threshold above the attempt cap is valid and
+leaves no escalation-eligible attempt in that window. Under the default cap of
 five attempts, attempts 4 and 5 are eligible. Counting is one-based within the
 current automatic-rework window, not the absolute round number or slice count.
 `--rework-restart` and a successful pull-request reopen establish fresh

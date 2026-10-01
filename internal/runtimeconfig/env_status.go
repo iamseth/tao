@@ -23,6 +23,7 @@ const (
 	EnvReview                           = "TAO_REVIEW"
 	EnvAutoRework                       = "TAO_AUTO_REWORK"
 	EnvMaxReworkAttempts                = "TAO_MAX_REWORK_ATTEMPTS"
+	EnvMergeReviewMaxAttempts           = "TAO_MERGE_REVIEW_MAX_ATTEMPTS"
 	EnvReworkEscalationFromAttempt      = "TAO_REWORK_ESCALATION_FROM_ATTEMPT"
 	EnvSessionTimeout                   = "TAO_SESSION_TIMEOUT"
 	EnvModel                            = "TAO_MODEL"
@@ -83,6 +84,7 @@ type EnvDefaults struct {
 	SessionWarnPercent          int
 	AutoRework                  *bool
 	MaxReworkAttempts           *int
+	MergeReviewMaxAttempts      int
 	ReworkEscalationFromAttempt *int
 	UpdateMode                  selfupdate.Mode
 	Theme                       theme.Theme
@@ -316,20 +318,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 		},
 	},
 	{
-		// Direct runs default on; false disables automatic rework.
-		name:         EnvAutoRework,
-		defaultValue: func(RunOptionsPatch) string { return strconv.FormatBool(true) },
-		apply: func(defaults *EnvDefaults, value string) (string, error) {
-			parsed, err := ParseEnvBool(value)
-			if err != nil {
-				return "", err
-			}
-			defaults.AutoRework = &parsed
-			return strconv.FormatBool(parsed), nil
-		},
-	},
-	{
-		// Direct-run rework defaults to five bounded cycles; zero disables it.
+		// Canonical counts precede the compatibility alias.
 		name:         EnvMaxReworkAttempts,
 		defaultValue: func(RunOptionsPatch) string { return strconv.Itoa(DefaultMaxReworkAttempts) },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
@@ -338,6 +327,38 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 				return "", err
 			}
 			defaults.MaxReworkAttempts = &parsed
+			enabled := parsed > 0
+			defaults.AutoRework = &enabled
+			return strconv.Itoa(parsed), nil
+		},
+	},
+	{
+		name:         EnvAutoRework,
+		aliasOf:      EnvMaxReworkAttempts,
+		defaultValue: func(RunOptionsPatch) string { return strconv.FormatBool(true) },
+		apply: func(defaults *EnvDefaults, value string) (string, error) {
+			parsed, err := ParseEnvBool(value)
+			if err != nil {
+				return "", err
+			}
+			defaults.AutoRework = &parsed
+			attempts := 0
+			if parsed {
+				attempts = DefaultMaxReworkAttempts
+			}
+			defaults.MaxReworkAttempts = &attempts
+			return strconv.FormatBool(parsed), nil
+		},
+	},
+	{
+		name:         EnvMergeReviewMaxAttempts,
+		defaultValue: func(RunOptionsPatch) string { return strconv.Itoa(DefaultMergeReviewMaxAttempts) },
+		apply: func(defaults *EnvDefaults, value string) (string, error) {
+			parsed, err := parseMaxReworkAttempts(value)
+			if err != nil {
+				return "", err
+			}
+			defaults.MergeReviewMaxAttempts = parsed
 			return strconv.Itoa(parsed), nil
 		},
 	},

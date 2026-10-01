@@ -409,3 +409,92 @@ func TestRepoUsageErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestRepoConfigReworkDefaults(t *testing.T) {
+	t.Setenv("TAO_DATA_HOME", t.TempDir())
+	registry := taodata.NewRegistry("")
+	repo := taodata.Repo{Schema: taodata.RepoSchema, ID: "repo-a", Name: "repo", Root: initTestGitRepo(t)}
+	if err := registry.WriteRepo(repo); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	app := App{Out: &out, Err: &out}
+	call := func(args ...string) error {
+		out.Reset()
+		return app.Run(context.Background(), append(append([]string{"repo", "config"}, args...), repo.ID))
+	}
+	if err := call(); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"max_rework_attempts", "rework_escalation_from_attempt"} {
+		if !strings.Contains(out.String(), key+": unset\n") {
+			t.Fatalf("legacy output: %s", &out)
+		}
+	}
+	if err := call("--max-rework-attempts=0", "--rework-escalation-from-attempt=1", "--model=provider/base", "--pull-request=false"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "max_rework_attempts: 0\n") {
+		t.Fatal(out.String())
+	}
+	stored, err := registry.ReadRepo(repo.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := json.Marshal(stored)
+	for _, flag := range []string{"max-rework-attempts", "rework-escalation-from-attempt"} {
+		invalids := []string{"", "-1", "x", "1.5", "9999999999999999999999999"}
+		if flag == "rework-escalation-from-attempt" {
+			invalids = append(invalids, "0")
+		}
+		for _, value := range invalids {
+			if err := call("--pull-request=true", "--model=changed", "--"+flag+"="+value); err == nil {
+				t.Fatalf("accepted %s=%q", flag, value)
+			}
+			got, err := registry.ReadRepo(repo.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			after, _ := json.Marshal(got)
+			if !bytes.Equal(before, after) {
+				t.Fatalf("invalid value wrote repository: %s", after)
+			}
+		}
+	}
+	if err := call("--max-rework-attempts=unset"); err != nil {
+		t.Fatal(err)
+	}
+	stored, err = registry.ReadRepo(repo.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.RunDefaults.MaxReworkAttempts != nil || *stored.RunDefaults.ReworkEscalationFromAttempt != 1 {
+		t.Fatalf("unset lost sibling: %+v", stored.RunDefaults)
+	}
+	if err := call("--max-rework-attempts=7", "--rework-escalation-from-attempt=unset"); err != nil {
+		t.Fatal(err)
+	}
+	stored, err = registry.ReadRepo(repo.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *stored.RunDefaults.MaxReworkAttempts != 7 || stored.RunDefaults.ReworkEscalationFromAttempt != nil {
+		t.Fatalf("set/unset: %+v", stored.RunDefaults)
+	}
+	if value, ok := stored.PullRequestDefault(); !ok || value {
+		t.Fatal("lost explicit false")
+	}
+	if models, _ := stored.ModelDefaults(); models.Base != "provider/base" {
+		t.Fatal("lost model")
+	}
+	if err := call("--model=other", "--pull-request=true"); err != nil {
+		t.Fatal(err)
+	}
+	stored, err = registry.ReadRepo(repo.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *stored.RunDefaults.MaxReworkAttempts != 7 {
+		t.Fatal("unmentioned count lost")
+	}
+}

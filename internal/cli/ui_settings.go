@@ -35,7 +35,13 @@ func (s uiSettingsService) Collect(ctx context.Context) (tui.SettingsSnapshot, e
 		snapshot.InheritedPullRequest = *baseline
 	}
 	snapshot.InheritedPullRequestInvalid = env.Require(runtimeconfig.EnvPullRequest) != nil
-	for _, row := range env.Status() {
+	rows := env.Status()
+	if repository, err := s.registry.Current(ctx); err == nil {
+		rows = applyRepositoryReworkDefaultsToStatus(rows, repositoryReworkOptions(repository))
+	} else {
+		snapshot.CollectionError = "repository rework defaults: " + err.Error()
+	}
+	for _, row := range rows {
 		snapshot.RuntimeDefaults = append(snapshot.RuntimeDefaults, tui.SettingsRuntimeDefault{Name: row.Name, Value: row.Value, Source: row.Source, Warning: row.Warning})
 	}
 	repositories, err := s.registry.ListRepos()

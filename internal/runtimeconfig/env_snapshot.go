@@ -70,6 +70,9 @@ func LoadEnv(lookup func(string) (string, bool)) EnvSnapshot {
 				row.Warning = fmt.Sprintf("deprecated; use %s", v.aliasOf)
 				canonical := &s.rows[rowIndex[v.aliasOf]]
 				canonical.Value, canonical.Source = value, "env"
+				if v.name == EnvAutoRework {
+					canonical.Value = fmt.Sprint(*candidate.MaxReworkAttempts)
+				}
 			}
 		case v.fallbackOnInvalid:
 			row.Warning = fmt.Sprintf("invalid env value %q: %v; using default", raw, err)
@@ -78,6 +81,9 @@ func LoadEnv(lookup func(string) (string, bool)) EnvSnapshot {
 			s.failures[v.name] = failure
 			row.Source = "invalid"
 			row.Warning = fmt.Sprintf("invalid env value %q: %v; rejected", raw, failure)
+			if v.aliasOf != "" {
+				row.Warning += fmt.Sprintf("; deprecated; use %s", v.aliasOf)
+			}
 		}
 		rowIndex[v.name] = len(s.rows)
 		s.rows = append(s.rows, row)
@@ -194,6 +200,7 @@ func builtinEnvDefaults() EnvDefaults {
 		SessionWarnPercent:               DefaultSessionWarnPercent,
 		AutoRework:                       &enabled,
 		MaxReworkAttempts:                &attempts,
+		MergeReviewMaxAttempts:           DefaultMergeReviewMaxAttempts,
 		ReworkEscalationFromAttempt:      &escalation,
 		UpdateMode:                       selfupdate.ModeWarn,
 		Theme:                            theme.Default(),

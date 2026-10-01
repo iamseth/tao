@@ -183,20 +183,96 @@ func TestRegistryLegacyPullRequestWithoutModels(t *testing.T) {
 	if got, ok := stored.PullRequestDefault(); !ok || got {
 		t.Fatal("legacy explicit false default lost")
 	}
+	if stored.RunDefaults.MaxReworkAttempts != nil || stored.RunDefaults.ReworkEscalationFromAttempt != nil {
+		t.Fatal("legacy record gained rework defaults")
+	}
 	if got, ok := stored.ModelDefaults(); ok || got != (RepoModelDefaults{}) {
 		t.Fatalf("legacy model defaults = (%+v, %t)", got, ok)
+	}
+}
+
+func TestRepoReworkDefaults(t *testing.T) {
+	maxAttempts, escalation := 0, 4
+	pullRequest := false
+	models := RepoModelDefaults{Base: "base"}
+	original := (Repo{Schema: RepoSchema, ID: "rework", Root: "/repo"}).WithPullRequestDefault(&pullRequest).WithModelDefaults(models)
+	repo := original.WithReworkDefaults(&maxAttempts, &escalation)
+	assertRework := func(t *testing.T, repo Repo, max, from int) {
+		t.Helper()
+		d := repo.RunDefaults
+		if d == nil || d.MaxReworkAttempts == nil || d.ReworkEscalationFromAttempt == nil || *d.MaxReworkAttempts != max || *d.ReworkEscalationFromAttempt != from {
+			t.Fatalf("rework defaults = %+v, want %d/%d", d, max, from)
+		}
+	}
+	maxAttempts, escalation = 9, 10
+	assertRework(t, repo, 0, 4)
+	if original.RunDefaults.MaxReworkAttempts != nil || original.RunDefaults.ReworkEscalationFromAttempt != nil {
+		t.Fatal("setting rework mutated original")
+	}
+	registry := Registry{DataHome: t.TempDir()}
+	if err := registry.WriteRepo(repo); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := registry.ReadRepo(repo.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRework(t, stored, 0, 4)
+	for _, clearMax := range []bool{false, true} {
+		var cleared Repo
+		if clearMax {
+			cleared = stored.WithReworkDefaults(nil, stored.RunDefaults.ReworkEscalationFromAttempt)
+			if cleared.RunDefaults.MaxReworkAttempts != nil || *cleared.RunDefaults.ReworkEscalationFromAttempt != 4 {
+				t.Fatal("clearing max lost escalation")
+			}
+			*cleared.RunDefaults.ReworkEscalationFromAttempt = 8
+		} else {
+			cleared = stored.WithReworkDefaults(stored.RunDefaults.MaxReworkAttempts, nil)
+			if cleared.RunDefaults.ReworkEscalationFromAttempt != nil || *cleared.RunDefaults.MaxReworkAttempts != 0 {
+				t.Fatal("clearing escalation lost max")
+			}
+			*cleared.RunDefaults.MaxReworkAttempts = 8
+		}
+		assertRework(t, stored, 0, 4)
+	}
+	cleared := stored.WithReworkDefaults(nil, nil)
+	if got, ok := cleared.PullRequestDefault(); !ok || got {
+		t.Fatal("clearing rework lost explicit false")
+	}
+	if got, ok := cleared.ModelDefaults(); !ok || got != models {
+		t.Fatal("clearing rework lost models")
+	}
+	assertRework(t, stored.WithModelDefaults(RepoModelDefaults{}).WithPullRequestDefault(nil), 0, 4)
+	for _, reworkOnly := range []Repo{
+		(Repo{}).WithReworkDefaults(&maxAttempts, nil),
+		(Repo{}).WithReworkDefaults(nil, &escalation),
+	} {
+		got := reworkOnly.WithPullRequestDefault(nil).WithModelDefaults(RepoModelDefaults{})
+		if got.RunDefaults == nil {
+			t.Fatal("clearing unrelated defaults lost rework")
+		}
+		if got.WithReworkDefaults(nil, nil).RunDefaults != nil {
+			t.Fatal("clearing last rework field retained empty defaults")
+		}
+	}
+	if (Repo{}).WithReworkDefaults(nil, nil).RunDefaults != nil {
+		t.Fatal("clearing absent defaults allocated empty defaults")
 	}
 }
 
 func TestRepoRunDefaultsSerialization(t *testing.T) {
 	trueValue := true
 	falseValue := false
+	zero, four := 0, 4
 	tests := []struct {
 		name     string
 		defaults RepoRunDefaults
 		want     string
 	}{
 		{name: "absent", defaults: RepoRunDefaults{}, want: `{}`},
+		{name: "zero max", defaults: RepoRunDefaults{MaxReworkAttempts: &zero}, want: `{"max_rework_attempts":0}`},
+		{name: "zero escalation", defaults: RepoRunDefaults{ReworkEscalationFromAttempt: &zero}, want: `{"rework_escalation_from_attempt":0}`},
+		{name: "both rework", defaults: RepoRunDefaults{MaxReworkAttempts: &zero, ReworkEscalationFromAttempt: &four}, want: `{"max_rework_attempts":0,"rework_escalation_from_attempt":4}`},
 		{name: "models", defaults: RepoRunDefaults{Models: &RepoModelDefaults{Base: "base", Run: "run", Review: "review", MergeReview: "merge", Resolver: "resolver"}}, want: `{"models":{"model":"base","run_model":"run","review_model":"review","merge_review_model":"merge","resolver_model":"resolver"}}`},
 		{name: "one model", defaults: RepoRunDefaults{Models: &RepoModelDefaults{Run: "run"}}, want: `{"models":{"run_model":"run"}}`},
 		{name: "escalation", defaults: RepoRunDefaults{Models: &RepoModelDefaults{ReworkEscalation: "strong"}}, want: `{"models":{"rework_escalation_model":"strong"}}`},
@@ -425,7 +501,8 @@ func TestRegisterCurrentPreservesRunDefaults(t *testing.T) {
 			t.Fatalf("initial RegisterCurrent() failed: %v", err)
 		}
 		pullRequest := true
-		repo.RunDefaults = &RepoRunDefaults{PullRequest: &pullRequest}
+		maxAttempts, escalation := 0, 4
+		repo = repo.WithPullRequestDefault(&pullRequest).WithReworkDefaults(&maxAttempts, &escalation)
 		if err := registry.WriteRepo(repo); err != nil {
 			t.Fatalf("configure pull_request default: %v", err)
 		}
@@ -443,6 +520,12 @@ func TestRegisterCurrentPreservesRunDefaults(t *testing.T) {
 		}
 		if got, set := stored.PullRequestDefault(); !set || !got {
 			t.Fatalf("stored PullRequestDefault() = (%t, %t), want (true, true)", got, set)
+		}
+		for _, got := range []Repo{reregistered, stored} {
+			d := got.RunDefaults
+			if d.MaxReworkAttempts == nil || *d.MaxReworkAttempts != 0 || d.ReworkEscalationFromAttempt == nil || *d.ReworkEscalationFromAttempt != 4 {
+				t.Fatalf("registration lost rework defaults: %+v", d)
+			}
 		}
 	})
 }

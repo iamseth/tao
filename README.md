@@ -232,12 +232,14 @@ For plan artifact and lifecycle semantics, see the
 TAO_AGENT=pi                     # default; or claude
 TAO_DATA_HOME=/path/to/tao-data   # optional local data location
 TAO_MODEL=provider/model         # optional shared base model
+TAO_MAX_REWORK_ATTEMPTS=5         # automatic rework; 0 disables
 ```
 
 Environment and built-in defaults establish the baseline, repository defaults
-override it, and explicit per-run flags win over both, including `false` values.
+override it, and explicit per-run flags win over both, including `false` and `0` values.
 Use `tao repo config` to manage repository defaults and `tao status` to inspect
-resolved settings.
+resolved settings. For example, `tao repo config --max-rework-attempts 0`
+disables automatic rework for this repository; use `unset` to inherit again.
 See the [configuration reference](docs/configuration.md) for all settings,
 budgets, model selection, and planner routing.
 

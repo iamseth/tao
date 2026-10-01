@@ -30,11 +30,12 @@ var runCommand = commandMetadata{
 	registerRuntimeFlags: App.registerRunFlags,
 	completion: completionContext{
 		flagValues: map[string]completionFlagValue{
-			"auto-rework":         {kind: completionValueBoolean, label: "boolean", values: []string{"true", "false"}},
-			"commit-policy":       {kind: completionValueEnum, label: "policy", values: []string{"slice", "none"}},
-			"execution-mode":      {kind: completionValueEnum, label: "mode", values: []string{"isolated", "current"}},
-			"max-rework-attempts": {kind: completionValueCount, label: "count"},
-			"max-slices":          {kind: completionValueCount, label: "count"},
+			"auto-rework":                    {kind: completionValueBoolean, label: "boolean", values: []string{"true", "false"}},
+			"commit-policy":                  {kind: completionValueEnum, label: "policy", values: []string{"slice", "none"}},
+			"execution-mode":                 {kind: completionValueEnum, label: "mode", values: []string{"isolated", "current"}},
+			"max-rework-attempts":            {kind: completionValueCount, label: "count"},
+			"rework-escalation-from-attempt": {kind: completionValueCount, label: "count"},
+			"max-slices":                     {kind: completionValueCount, label: "count"},
 		},
 		positional: completionPositional{index: 1, label: "plan", completer: completeRunnablePlanIDs},
 	},
@@ -68,7 +69,8 @@ func (a App) registerRunFlags(fs *flag.FlagSet) {
 	fs.Bool("repair-verification", false, "append and run one bounded repair for current failed final verification")
 	fs.Bool("reverify", false, "rerun final verification at the exact recorded failed head")
 	fs.Bool("no-run-header", !defaults.RunHeader, "disable the pinned run header")
-	fs.Bool("auto-rework", *defaults.AutoRework, "automatically rework plans with requested changes")
+	fs.Bool("auto-rework", *defaults.AutoRework, "deprecated: use --max-rework-attempts (false=0, true=5)")
+	fs.Int("rework-escalation-from-attempt", defaults.ReworkEscalationFromAttemptValue(), "first automatic rework attempt eligible for escalation")
 	fs.Int("max-rework-attempts", *defaults.MaxReworkAttempts, "maximum automatic rework cycles (0 disables)")
 	fs.Bool("rework-restart", false, "start a new automatic-rework budget after a previous stop")
 }
@@ -159,21 +161,48 @@ func (a App) resolveRunRequestFlags(fs *flag.FlagSet) (runRequestInputs, error) 
 }
 
 func (a App) resolveRunAutoReworkPolicy(fs *flag.FlagSet, reviewEnabled bool) (runtimeconfig.AutoReworkPolicy, error) {
-	defaults, err := a.envDefaultsFor(runtimeconfig.EnvAutoRework, runtimeconfig.EnvMaxReworkAttempts)
-	if err != nil {
-		return runtimeconfig.AutoReworkPolicy{}, err
+	options, err := a.resolveRunReworkOptions(fs, reviewEnabled, runtimeconfig.ReworkOptionsPatch{}, true)
+	return runtimeconfig.AutoReworkPolicy{Enabled: options.MaxAttempts > 0, MaxAttempts: options.MaxAttempts}, err
+}
+
+func (a App) resolveRunReworkOptions(fs *flag.FlagSet, reviewEnabled bool, repository runtimeconfig.ReworkOptionsPatch, warn bool) (runtimeconfig.ResolvedReworkOptions, error) {
+	warning := func(message string) {
+		if warn && a.Err != nil {
+			_, _ = fmt.Fprintln(a.Err, "warning: "+message)
+		}
 	}
-	enabled := effectiveBoolFlagValue(fs, "auto-rework", *defaults.AutoRework)
-	attempts := *defaults.MaxReworkAttempts
+	for _, row := range a.envSnapshot().Status() {
+		if row.Name == runtimeconfig.EnvAutoRework {
+			warning("TAO_AUTO_REWORK is deprecated; use TAO_MAX_REWORK_ATTEMPTS")
+		}
+	}
+	var invocation runtimeconfig.ReworkOptionsPatch
+	if flagWasProvided(fs, "auto-rework") {
+		value := flagBoolValue(fs, "auto-rework")
+		invocation.AutoRework = &value
+		warning("--auto-rework is deprecated; use --max-rework-attempts")
+	}
 	if flagWasProvided(fs, "max-rework-attempts") {
-		attempts = flagIntValue(fs, "max-rework-attempts")
+		value := flagIntValue(fs, "max-rework-attempts")
+		invocation.MaxAttempts = &value
 	}
-	explicitConflict := enabled && flagWasProvided(fs, "auto-rework") &&
-		flagWasProvided(fs, "no-review") && flagBoolValue(fs, "no-review")
-	if !reviewEnabled && !explicitConflict {
-		enabled = false
+	if flagWasProvided(fs, "rework-escalation-from-attempt") {
+		value := flagIntValue(fs, "rework-escalation-from-attempt")
+		invocation.EscalationFromAttempt = &value
 	}
-	return runtimeconfig.ResolveAutoReworkPolicy(enabled, attempts, reviewEnabled)
+	defaults, err := a.envDefaultsFor(runtimeconfig.EnvAutoRework, runtimeconfig.EnvMaxReworkAttempts, runtimeconfig.EnvReworkEscalationFromAttempt)
+	if err != nil {
+		return runtimeconfig.ResolvedReworkOptions{}, err
+	}
+	environment := runtimeconfig.ReworkOptionsPatch{MaxAttempts: defaults.MaxReworkAttempts, EscalationFromAttempt: defaults.ReworkEscalationFromAttempt}
+	raw, err := runtimeconfig.ResolveReworkOptions(true, false, environment, repository, invocation)
+	if err != nil {
+		return raw, err
+	}
+	if !reviewEnabled && raw.MaxAttempts > 0 {
+		warning("automatic rework disabled because automatic review is disabled")
+	}
+	return runtimeconfig.ResolveReworkOptions(reviewEnabled, flagBoolValue(fs, "reverify"), environment, repository, invocation)
 }
 
 type planRunRepository interface {
@@ -220,11 +249,16 @@ func (a App) run(ctx context.Context, repo planRunRepository, args []string) err
 		RepairVerification: repairVerification,
 		Reverify:           reverify,
 	}
-	policy, err := a.resolveRunAutoReworkPolicy(fs, request.ReviewEnabled)
+	repositoryRework, err := a.currentRepositoryReworkOptions(ctx)
 	if err != nil {
 		return err
 	}
-	return a.executeResolvedRun(ctx, repo, input, request, inputs.skipPermissions, policy, inputs.defaults.ReworkEscalationFromAttemptValue(), reworkRestart, flagBoolValue(fs, "no-run-header"))
+	options, err := a.resolveRunReworkOptions(fs, request.ReviewEnabled, repositoryRework, true)
+	policy := runtimeconfig.AutoReworkPolicy{Enabled: options.MaxAttempts > 0, MaxAttempts: options.MaxAttempts}
+	if err != nil {
+		return err
+	}
+	return a.executeResolvedRun(ctx, repo, input, request, inputs.skipPermissions, policy, options.EscalationFromAttempt, reworkRestart, flagBoolValue(fs, "no-run-header"))
 }
 
 var executeSinglePlan = func(service run.Service, ctx context.Context, request run.Request) error {
@@ -235,7 +269,7 @@ var executeSinglePlan = func(service run.Service, ctx context.Context, request r
 // points after their inputs and runtime options have been fully resolved.
 func (a App) executeResolvedRun(ctx context.Context, repo planRunRepository, input string, request run.Request, skipPermissions bool, policy runtimeconfig.AutoReworkPolicy, escalationFromAttempt int, reworkRestart, noRunHeader bool) error {
 	if request.Reverify {
-		policy.Enabled = false
+		policy = runtimeconfig.AutoReworkPolicy{}
 	}
 	snapshot := a.envSnapshot()
 	thresholds := snapshot.Defaults().Budget.Warn()

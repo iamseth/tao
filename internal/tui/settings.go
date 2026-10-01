@@ -542,7 +542,7 @@ func settingsDefaultGroupForName(name string) (string, bool) {
 		return settingsGroupWorkflow, true
 	case "TAO_UPDATE", "TAO_DANGEROUSLY_SKIP_PERMISSIONS":
 		return settingsGroupSafety, true
-	case "TAO_MERGE_VERIFY_COMMAND", "TAO_AGGREGATE_REVIEW_CONVERGENCE_WINDOW", "TAO_APPROVED_BY", "TAO_RUN_HEADER", "TAO_THEME":
+	case "TAO_MERGE_VERIFY_COMMAND", "TAO_MERGE_REVIEW_MAX_ATTEMPTS", "TAO_AGGREGATE_REVIEW_CONVERGENCE_WINDOW", "TAO_APPROVED_BY", "TAO_RUN_HEADER", "TAO_THEME":
 		return settingsGroupOther, true
 	default:
 		return settingsGroupOther, false

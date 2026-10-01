@@ -77,6 +77,23 @@ func (a App) currentRepositoryRunOptions(ctx context.Context) (runtimeconfig.Run
 	return repositoryRunOptions(repo), nil
 }
 
+func (a App) currentRepositoryReworkOptions(ctx context.Context) (runtimeconfig.ReworkOptionsPatch, error) {
+	repo, err := a.registry().Current(ctx)
+	if err != nil {
+		return runtimeconfig.ReworkOptionsPatch{}, err
+	}
+	return repositoryReworkOptions(repo), nil
+}
+
+func repositoryReworkOptions(repo taodata.Repo) runtimeconfig.ReworkOptionsPatch {
+	var options runtimeconfig.ReworkOptionsPatch
+	if repo.RunDefaults != nil {
+		options.MaxAttempts = repo.RunDefaults.MaxReworkAttempts
+		options.EscalationFromAttempt = repo.RunDefaults.ReworkEscalationFromAttempt
+	}
+	return options
+}
+
 func repositoryRunOptions(repo taodata.Repo) runtimeconfig.RunOptionsPatch {
 	var options runtimeconfig.RunOptionsPatch
 	if pullRequest, ok := repo.PullRequestDefault(); ok {

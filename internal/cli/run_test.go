@@ -609,8 +609,8 @@ func TestRunApprovalGateShowsUnblockCommands(t *testing.T) {
 			t.Fatalf("expected %q in error:\n%s", want, text)
 		}
 	}
-	if out.Len() != 0 {
-		t.Fatalf("expected no stdout before run starts, got %q", out.String())
+	if out.String() != "warning: automatic rework disabled because automatic review is disabled\n" {
+		t.Fatalf("expected only normalization warning before run starts, got %q", out.String())
 	}
 }
 
@@ -902,15 +902,15 @@ func TestRunAutoReworkPolicyResolution(t *testing.T) {
 		wantError     string
 	}{
 		{name: "default on", reviewEnabled: true, want: runtimeconfig.AutoReworkPolicy{Enabled: true, MaxAttempts: runtimeconfig.DefaultMaxReworkAttempts}},
-		{name: "environment disables", envEnabled: "false", reviewEnabled: true, want: runtimeconfig.AutoReworkPolicy{MaxAttempts: runtimeconfig.DefaultMaxReworkAttempts}},
+		{name: "environment disables", envEnabled: "false", reviewEnabled: true, want: runtimeconfig.AutoReworkPolicy{}},
 		{name: "explicit false and zero", args: []string{"--auto-rework=false", "--max-rework-attempts=0"}, reviewEnabled: true, want: runtimeconfig.AutoReworkPolicy{}},
 		{name: "environment zero", envAttempts: "0", reviewEnabled: true, want: runtimeconfig.AutoReworkPolicy{}},
 		{name: "invalid enabled not rescued", envEnabled: "invalid", args: []string{"--auto-rework=false"}, reviewEnabled: true, wantError: runtimeconfig.EnvAutoRework},
 		{name: "invalid attempts not rescued", envAttempts: "invalid", args: []string{"--max-rework-attempts=0"}, reviewEnabled: true, wantError: runtimeconfig.EnvMaxReworkAttempts},
 		{name: "explicit flag beats environment", envEnabled: "false", envAttempts: "3", args: []string{"--auto-rework", "--max-rework-attempts=2"}, reviewEnabled: true, want: runtimeconfig.AutoReworkPolicy{Enabled: true, MaxAttempts: 2}},
-		{name: "review disabled silently disables default", reviewEnabled: false, want: runtimeconfig.AutoReworkPolicy{MaxAttempts: runtimeconfig.DefaultMaxReworkAttempts}},
-		{name: "review environment disabled silently overrides explicit auto rework", envReview: "false", args: []string{"--auto-rework"}, reviewEnabled: false, want: runtimeconfig.AutoReworkPolicy{MaxAttempts: runtimeconfig.DefaultMaxReworkAttempts}},
-		{name: "explicit conflict", args: []string{"--auto-rework", "--no-review"}, reviewEnabled: false, wantError: "--auto-rework requires automatic review"},
+		{name: "review disabled normalizes default", reviewEnabled: false, want: runtimeconfig.AutoReworkPolicy{}},
+		{name: "review environment disabled normalizes explicit alias", envReview: "false", args: []string{"--auto-rework"}, reviewEnabled: false, want: runtimeconfig.AutoReworkPolicy{}},
+		{name: "explicit conflict normalizes", args: []string{"--auto-rework", "--no-review"}, reviewEnabled: false, want: runtimeconfig.AutoReworkPolicy{}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -942,6 +942,60 @@ func TestRunAutoReworkPolicyResolution(t *testing.T) {
 			}
 			if policy != tt.want {
 				t.Fatalf("policy = %+v, want %+v", policy, tt.want)
+			}
+		})
+	}
+}
+
+func TestRunReworkLayeredOptions(t *testing.T) {
+	zero, two, seven, threshold := 0, 2, 7, 9
+	for _, tc := range []struct {
+		name                       string
+		env                        map[string]string
+		repository                 runtimeconfig.ReworkOptionsPatch
+		args                       []string
+		noReview                   bool
+		want, escalation, warnings int
+		wantError                  bool
+	}{
+		{name: "repository zero", env: map[string]string{runtimeconfig.EnvMaxReworkAttempts: "7"}, repository: runtimeconfig.ReworkOptionsPatch{MaxAttempts: &zero}, want: 0, escalation: 4},
+		{name: "invocation alias overrides repository", repository: runtimeconfig.ReworkOptionsPatch{MaxAttempts: &zero}, args: []string{"--auto-rework=true"}, want: 5, escalation: 4, warnings: 1},
+		{name: "canonical beats false alias", args: []string{"--auto-rework=false", "--max-rework-attempts=2"}, want: 2, escalation: 4, warnings: 1},
+		{name: "repository overrides environment alias", env: map[string]string{runtimeconfig.EnvAutoRework: "false"}, repository: runtimeconfig.ReworkOptionsPatch{MaxAttempts: &two, EscalationFromAttempt: &threshold}, want: 2, escalation: 9, warnings: 1},
+		{name: "canonical ignores invalid alias", env: map[string]string{runtimeconfig.EnvAutoRework: "bad", runtimeconfig.EnvMaxReworkAttempts: "2"}, want: 2, escalation: 4, warnings: 1},
+		{name: "review normalizes repository once", repository: runtimeconfig.ReworkOptionsPatch{MaxAttempts: &seven}, noReview: true, want: 0, escalation: 4, warnings: 1},
+		{name: "zero needs no normalization warning", repository: runtimeconfig.ReworkOptionsPatch{MaxAttempts: &zero}, noReview: true, want: 0, escalation: 4},
+		{name: "reverify normalizes", args: []string{"--reverify", "--max-rework-attempts=7", "--rework-escalation-from-attempt=8"}, want: 0, escalation: 8},
+		{name: "invalid threshold even disabled", args: []string{"--max-rework-attempts=0", "--rework-escalation-from-attempt=0"}, wantError: true},
+		{name: "malformed merge ignored", env: map[string]string{runtimeconfig.EnvMergeReviewMaxAttempts: "bad"}, want: 5, escalation: 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			snapshot := runtimeconfig.LoadEnv(func(key string) (string, bool) { v, ok := tc.env[key]; return v, ok })
+			var warnings bytes.Buffer
+			app := App{RuntimeEnv: &snapshot, Err: &warnings}
+			fs, _, err := app.parseArgsFor(&runCommand, tc.args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := app.resolveRunReworkOptions(fs, !tc.noReview, tc.repository, false)
+			if warnings.Len() != 0 {
+				t.Fatal("preflight emitted warning")
+			}
+			if (err != nil) != tc.wantError {
+				t.Fatalf("preflight error: %v", err)
+			}
+			got, err = app.resolveRunReworkOptions(fs, !tc.noReview, tc.repository, true)
+			if (err != nil) != tc.wantError {
+				t.Fatalf("execution error: %v", err)
+			}
+			if tc.wantError {
+				return
+			}
+			if got.MaxAttempts != tc.want || got.EscalationFromAttempt != tc.escalation {
+				t.Fatalf("options: %+v", got)
+			}
+			if strings.Count(warnings.String(), "warning:") != tc.warnings {
+				t.Fatalf("warnings: %q", warnings.String())
 			}
 		})
 	}

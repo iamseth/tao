@@ -19,6 +19,7 @@ import (
 	reworkpkg "github.com/iamseth/tao/internal/rework"
 	runpkg "github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+	"github.com/iamseth/tao/internal/taodata"
 )
 
 func TestReworkCommandReopensChangesRequestedPlanWithGeneratedSlices(t *testing.T) {
@@ -404,7 +405,7 @@ func hasPendingReworkSlice(detail *plan.PlanDetail) bool {
 
 func TestReworkRunRejectsConsumedSnapshotBeforeReopening(t *testing.T) {
 	for _, key := range []string{
-		runtimeconfig.EnvSessionTimeout, runtimeconfig.EnvAutoRework, runtimeconfig.EnvReworkEscalationFromAttempt,
+		runtimeconfig.EnvSessionTimeout, runtimeconfig.EnvAutoRework, runtimeconfig.EnvMaxReworkAttempts, runtimeconfig.EnvReworkEscalationFromAttempt,
 		runtimeconfig.EnvMaxSliceCostDeprecated, runtimeconfig.EnvMaxSliceOutputTokensDeprecated,
 		runtimeconfig.EnvBudgetPlanCostDeprecated, runtimeconfig.EnvBudgetSliceToolCallsDeprecated,
 	} {
@@ -427,6 +428,23 @@ func TestReworkRunRejectsConsumedSnapshotBeforeReopening(t *testing.T) {
 				t.Fatal("rejected run configuration reopened the plan")
 			}
 		})
+	}
+}
+
+func TestReworkRunRejectsRepositoryPolicyBeforeReopening(t *testing.T) {
+	root := t.TempDir()
+	const id = "20260628-1200-repository-admission"
+	dir := writeCLIReworkPlan(t, root, id, plan.StatusCompleted, reworkReview(plan.ReviewVerdictChangesRequested, []plan.ReviewFinding{{File: "file.go", Message: "fix this"}}))
+	before := readReworkArtifacts(t, dir)
+	negative := -1
+	registry := &fakeNoteRegistry{current: taodata.Repo{ID: "repo-a", RunDefaults: &taodata.RepoRunDefaults{MaxReworkAttempts: &negative}}}
+	app := App{Out: io.Discard, Err: io.Discard, Registry: func() NoteRegistry { return registry }}
+	err := app.rework(context.Background(), plan.NewFileRepository(root), []string{"--run", id})
+	if err == nil || !strings.Contains(err.Error(), "--max-rework-attempts") {
+		t.Fatalf("policy not rejected: %v", err)
+	}
+	if readReworkArtifacts(t, dir) != before {
+		t.Fatal("invalid repository policy reopened plan")
 	}
 }
 

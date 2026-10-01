@@ -95,6 +95,9 @@ const (
 	// DefaultMaxReworkAttempts is the number of automatic rework cycles allowed
 	// after the initial direct run.
 	DefaultMaxReworkAttempts = 5
+
+	// DefaultMergeReviewMaxAttempts independently bounds aggregate merge review.
+	DefaultMergeReviewMaxAttempts = 5
 	// DefaultReworkEscalationFromAttempt is the first attempt eligible for a
 	// configured escalation model within an automatic-rework window.
 	DefaultReworkEscalationFromAttempt = 4

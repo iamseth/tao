@@ -76,7 +76,11 @@ func (a App) rework(ctx context.Context, repo planRunRepository, args []string) 
 		if err != nil {
 			return err
 		}
-		if _, err := a.resolveRunAutoReworkPolicy(fs, defaults.ReviewEnabledValue()); err != nil {
+		repository, err := a.currentRepositoryReworkOptions(ctx)
+		if err != nil {
+			return err
+		}
+		if _, err := a.resolveRunReworkOptions(fs, defaults.ReviewEnabledValue(), repository, false); err != nil {
 			return err
 		}
 		if err := a.requireRunHandoffBudgets(); err != nil {

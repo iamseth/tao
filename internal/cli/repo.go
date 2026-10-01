@@ -12,7 +12,7 @@ import (
 	"github.com/iamseth/tao/internal/taodata"
 )
 
-const repoConfigUsage = "repo config [--pull-request true|false|unset] [--model NAME|unset] [--run-model NAME|unset] [--review-model NAME|unset] [--merge-review-model NAME|unset] [--resolver-model NAME|unset] [--rework-escalation-model NAME|unset] [<repo-id>]"
+const repoConfigUsage = "repo config [--pull-request true|false|unset] [--max-rework-attempts N|unset] [--rework-escalation-from-attempt N|unset] [--model NAME|unset] [--run-model NAME|unset] [--review-model NAME|unset] [--merge-review-model NAME|unset] [--resolver-model NAME|unset] [--rework-escalation-model NAME|unset] [<repo-id>]"
 
 var repoCommand = commandMetadata{
 	name:                  "repo",
@@ -112,6 +112,8 @@ func (a App) repoShow(ctx context.Context, registry taodata.Registry, input stri
 }
 
 func registerRepoConfigFlags(fs *flag.FlagSet) {
+	fs.String("max-rework-attempts", "", "set automatic rework attempts (non-negative integer, zero disables) or unset")
+	fs.String("rework-escalation-from-attempt", "", "set the first escalation-eligible attempt (integer at least one) or unset")
 	fs.String("pull-request", "", "set the repository pull_request run default to true, false, or unset")
 	for _, name := range []string{"model", "run-model", "review-model", "merge-review-model", "resolver-model", "rework-escalation-model"} {
 		fs.String(name, "", "set the repository "+strings.ReplaceAll(name, "-", "_")+" default to a model name or unset")
@@ -147,6 +149,31 @@ func (a App) repoConfig(ctx context.Context, registry taodata.Registry, args []s
 		repo = repo.WithPullRequestDefault(value)
 		changed = true
 	}
+	rework := repositoryReworkOptions(repo)
+	numericFlags := []struct {
+		name    string
+		value   **int
+		minimum int
+	}{
+		{"max-rework-attempts", &rework.MaxAttempts, 0},
+		{"rework-escalation-from-attempt", &rework.EscalationFromAttempt, 1},
+	}
+	for _, setting := range numericFlags {
+		if !flagWasProvided(fs, setting.name) {
+			continue
+		}
+		raw := strings.TrimSpace(flagStringValue(fs, setting.name))
+		var value *int
+		if !strings.EqualFold(raw, "unset") {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil || parsed < setting.minimum {
+				return fmt.Errorf("--%s must be an integer at least %d, or unset", setting.name, setting.minimum)
+			}
+			value = &parsed
+		}
+		*setting.value = value
+		changed = true
+	}
 	models, _ := repo.ModelDefaults()
 	modelFlags := []struct {
 		name  string
@@ -176,7 +203,7 @@ func (a App) repoConfig(ctx context.Context, registry taodata.Registry, args []s
 		changed = true
 	}
 	if changed {
-		repo = repo.WithModelDefaults(models)
+		repo = repo.WithModelDefaults(models).WithReworkDefaults(rework.MaxAttempts, rework.EscalationFromAttempt)
 		repo.UpdatedAt = a.now().UTC().Format("2006-01-02T15:04:05Z07:00")
 		if err := registry.WriteRepo(repo); err != nil {
 			return err
@@ -190,6 +217,13 @@ func (a App) repoConfig(ctx context.Context, registry taodata.Registry, args []s
 		"Repo: " + emptyDash(repo.Name),
 		"ID: " + emptyDash(repo.ID),
 		"pull_request: " + pullRequest,
+	}
+	for _, setting := range numericFlags {
+		value := "unset"
+		if *setting.value != nil {
+			value = strconv.Itoa(**setting.value)
+		}
+		lines = append(lines, strings.ReplaceAll(setting.name, "-", "_")+": "+value)
 	}
 	for _, model := range modelFlags {
 		value := *model.value

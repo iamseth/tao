@@ -23,7 +23,7 @@ import (
 	"github.com/iamseth/tao/prompts"
 )
 
-const defaultBatchReviewMaxAttempts = runtimeconfig.DefaultMaxReworkAttempts
+const defaultBatchReviewMaxAttempts = runtimeconfig.DefaultMergeReviewMaxAttempts
 
 // BatchReviewStore persists normalized transitions and full aggregate output.
 type BatchReviewStore interface {
@@ -949,13 +949,10 @@ func (s Service) batchReviewMaxAttempts(value int) (int, error) {
 		return value, nil
 	}
 	snapshot := s.runtimeEnv()
-	if err := snapshot.Require(runtimeconfig.EnvMaxReworkAttempts); err != nil {
+	if err := snapshot.Require(runtimeconfig.EnvMergeReviewMaxAttempts); err != nil {
 		return 0, err
 	}
-	if attempts := snapshot.Defaults().MaxReworkAttempts; attempts != nil {
-		return *attempts, nil
-	}
-	return defaultBatchReviewMaxAttempts, nil
+	return snapshot.Defaults().MergeReviewMaxAttempts, nil
 }
 
 func formatFindings(findings []plan.ReviewFinding) string {

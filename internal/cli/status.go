@@ -50,6 +50,11 @@ func (a App) status(ctx context.Context, repo planLister, args []string) error {
 		return err
 	}
 	env = applyRepositoryRunDefaultsToStatus(env, repositoryDefaults)
+	rework, err := a.currentRepositoryReworkOptions(ctx)
+	if err != nil {
+		return err
+	}
+	env = applyRepositoryReworkDefaultsToStatus(env, rework)
 	payload := statusPayload{RuntimeEnv: env, Plans: statusPlanRollup(ctx, repo)}
 	if flagBoolValue(fs, "json") {
 		encoder := json.NewEncoder(a.Out)
@@ -74,6 +79,22 @@ func applyRepositoryRunDefaultsToStatus(rows []runtimeconfig.EnvVarStatus, repos
 	for i := range rows {
 		if value := values[rows[i].Name]; value != "" {
 			rows[i].Value = value
+			rows[i].Source = "repository"
+		}
+	}
+	return rows
+}
+
+// Numeric defaults are an overlay, not a second execution-policy resolver.
+// Preserve captured diagnostics even when a repository value takes precedence.
+func applyRepositoryReworkDefaultsToStatus(rows []runtimeconfig.EnvVarStatus, repository runtimeconfig.ReworkOptionsPatch) []runtimeconfig.EnvVarStatus {
+	values := map[string]*int{
+		runtimeconfig.EnvMaxReworkAttempts:           repository.MaxAttempts,
+		runtimeconfig.EnvReworkEscalationFromAttempt: repository.EscalationFromAttempt,
+	}
+	for i := range rows {
+		if value := values[rows[i].Name]; value != nil {
+			rows[i].Value = fmt.Sprint(*value)
 			rows[i].Source = "repository"
 		}
 	}

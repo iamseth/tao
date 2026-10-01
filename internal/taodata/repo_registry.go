@@ -34,8 +34,38 @@ type Repo struct {
 
 // RepoRunDefaults records optional defaults for runs in one repository.
 type RepoRunDefaults struct {
-	PullRequest *bool              `json:"pull_request,omitempty"`
-	Models      *RepoModelDefaults `json:"models,omitempty"`
+	PullRequest                 *bool              `json:"pull_request,omitempty"`
+	Models                      *RepoModelDefaults `json:"models,omitempty"`
+	MaxReworkAttempts           *int               `json:"max_rework_attempts,omitempty"`
+	ReworkEscalationFromAttempt *int               `json:"rework_escalation_from_attempt,omitempty"`
+}
+
+func (d RepoRunDefaults) empty() bool {
+	return d.PullRequest == nil && d.Models == nil && d.MaxReworkAttempts == nil && d.ReworkEscalationFromAttempt == nil
+}
+
+// WithReworkDefaults returns a copy with each numeric default copied from its
+// input, or removed when that input is nil. Other defaults are preserved.
+func (r Repo) WithReworkDefaults(maxAttempts, escalationFromAttempt *int) Repo {
+	var defaults RepoRunDefaults
+	if r.RunDefaults != nil {
+		defaults = *r.RunDefaults
+	}
+	defaults.MaxReworkAttempts = nil
+	if maxAttempts != nil {
+		value := *maxAttempts
+		defaults.MaxReworkAttempts = &value
+	}
+	defaults.ReworkEscalationFromAttempt = nil
+	if escalationFromAttempt != nil {
+		value := *escalationFromAttempt
+		defaults.ReworkEscalationFromAttempt = &value
+	}
+	r.RunDefaults = &defaults
+	if defaults.empty() {
+		r.RunDefaults = nil
+	}
+	return r
 }
 
 // RepoModelDefaults records optional base, per-role, and rework escalation model selections.
@@ -61,7 +91,7 @@ func (r Repo) WithModelDefaults(values RepoModelDefaults) Repo {
 		defaults.Models = &values
 	}
 	r.RunDefaults = &defaults
-	if defaults.PullRequest == nil && defaults.Models == nil {
+	if defaults.empty() {
 		r.RunDefaults = nil
 	}
 	return r
@@ -89,7 +119,7 @@ func (r Repo) WithPullRequestDefault(value *bool) Repo {
 		defaults.PullRequest = &copyValue
 	}
 	r.RunDefaults = &defaults
-	if defaults.PullRequest == nil && defaults.Models == nil {
+	if defaults.empty() {
 		r.RunDefaults = nil
 	}
 	return r

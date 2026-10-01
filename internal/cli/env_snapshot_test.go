@@ -27,7 +27,7 @@ func TestDiagnosticCollectorsShareSnapshotAcrossRefreshes(t *testing.T) {
 		runtimeconfig.EnvAgent: "invalid", runtimeconfig.EnvUpdate: "invalid",
 		runtimeconfig.EnvBudgetSliceCostDeprecated: "invalid", runtimeconfig.EnvTheme: "invalid",
 		runtimeconfig.EnvRunHeader: "invalid", runtimeconfig.EnvPullRequest: " YES ",
-		runtimeconfig.EnvModel: "bad model",
+		runtimeconfig.EnvModel: "bad model", runtimeconfig.EnvMaxReworkAttempts: "invalid", runtimeconfig.EnvAutoRework: "false",
 	}
 	lookups := map[string]int{}
 	snapshot := runtimeconfig.LoadEnv(func(key string) (string, bool) {
@@ -36,7 +36,7 @@ func TestDiagnosticCollectorsShareSnapshotAcrossRefreshes(t *testing.T) {
 		return value, ok
 	})
 	before := snapshot.Status()
-	registered := taodata.Repo{ID: "repo-a", RunDefaults: &taodata.RepoRunDefaults{PullRequest: new(false), Models: &taodata.RepoModelDefaults{Base: "repo-model"}}}
+	registered := taodata.Repo{ID: "repo-a", RunDefaults: &taodata.RepoRunDefaults{PullRequest: new(false), Models: &taodata.RepoModelDefaults{Base: "repo-model"}, MaxReworkAttempts: new(0), ReworkEscalationFromAttempt: new(2)}}
 	registry := &fakeNoteRegistry{current: registered, repos: []taodata.Repo{registered}}
 	app := App{RuntimeEnv: &snapshot, Registry: func() NoteRegistry { return registry }, RepoHealthCheck: func(context.Context, taodata.Repo) taodata.RepoHealth { return taodata.RepoHealth{Status: "ok"} }}
 	settings := newUISettingsService(app)
@@ -51,6 +51,16 @@ func TestDiagnosticCollectorsShareSnapshotAcrossRefreshes(t *testing.T) {
 			t.Fatalf("incomplete diagnostics: settings=%d debug=%d error=%v", len(s.RuntimeDefaults), len(d.RuntimeDefaults), err)
 		}
 		for i, row := range before {
+			if row.Name == runtimeconfig.EnvMaxReworkAttempts || row.Name == runtimeconfig.EnvReworkEscalationFromAttempt {
+				want := "0"
+				if row.Name == runtimeconfig.EnvReworkEscalationFromAttempt {
+					want = "2"
+				}
+				if s.RuntimeDefaults[i].Value != want || d.RuntimeDefaults[i].Value != want || s.RuntimeDefaults[i].Source != "repository" || d.RuntimeDefaults[i].Source != "repository" || s.RuntimeDefaults[i].Warning != row.Warning || d.RuntimeDefaults[i].Warning != row.Warning {
+					t.Fatalf("lost numeric projection/diagnostic: %+v, %+v", s.RuntimeDefaults[i], d.RuntimeDefaults[i])
+				}
+				continue
+			}
 			if s.RuntimeDefaults[i].Name != row.Name || s.RuntimeDefaults[i].Value != row.Value || s.RuntimeDefaults[i].Source != row.Source || s.RuntimeDefaults[i].Warning != row.Warning || d.RuntimeDefaults[i].Name != row.Name || d.RuntimeDefaults[i].Warning != row.Warning {
 				t.Fatalf("lost captured diagnostic for %s: %+v, %+v", row.Name, s.RuntimeDefaults[i], d.RuntimeDefaults[i])
 			}
@@ -164,7 +174,7 @@ func TestSnapshotHelpRetainsValidDefaultsBesideInvalidFields(t *testing.T) {
 				wants = append(wants, "pull request after a completed full run (default true)")
 			}
 			if command == "run" {
-				wants = append(wants, "disable the pinned run header (default true)", "automatically rework plans with requested changes (default false)")
+				wants = append(wants, "disable the pinned run header (default true)", "deprecated: use --max-rework-attempts (false=0, true=5) (default true)")
 			}
 			for _, want := range wants {
 				if !strings.Contains(out.String(), want) {

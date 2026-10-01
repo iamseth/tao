@@ -294,3 +294,41 @@ func TestStatusJSONWithPlanListErrorIsValidAndEmpty(t *testing.T) {
 		t.Fatalf("unexpected status payload: %+v", payload)
 	}
 }
+
+func TestStatusRepositoryReworkDefaults(t *testing.T) {
+	clearTaoEnv(t)
+	registered := taodata.Repo{RunDefaults: &taodata.RepoRunDefaults{MaxReworkAttempts: new(0), ReworkEscalationFromAttempt: new(2)}}
+	snapshot := snapshotWith(map[string]string{runtimeconfig.EnvMaxReworkAttempts: "9"})
+	var out bytes.Buffer
+	app := App{Out: &out, RuntimeEnv: snapshot, Registry: func() NoteRegistry { return &fakeNoteRegistry{current: registered} }}
+	if err := app.status(context.Background(), nil, []string{"--json"}); err != nil {
+		t.Fatal(err)
+	}
+	var payload statusPayload
+	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{runtimeconfig.EnvMaxReworkAttempts: "0", runtimeconfig.EnvReworkEscalationFromAttempt: "2"} {
+		found := false
+		for _, row := range payload.RuntimeEnv {
+			if row.Name == name {
+				found = true
+				if row.Value != want || row.Source != "repository" {
+					t.Fatalf("row: %+v", row)
+				}
+			}
+		}
+		if !found {
+			t.Fatal("missing", name)
+		}
+	}
+	out.Reset()
+	if err := app.status(context.Background(), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(out.String(), "\n") {
+		if strings.Contains(line, runtimeconfig.EnvMaxReworkAttempts) && (!strings.Contains(line, "repository") || !strings.Contains(line, "0")) {
+			t.Fatal(line)
+		}
+	}
+}

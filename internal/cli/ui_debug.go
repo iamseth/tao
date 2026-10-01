@@ -42,6 +42,11 @@ func (c uiDebugCollector) Collect(ctx context.Context) (tui.DebugSnapshot, error
 	} else {
 		snapshot.DoctorProblems = append(snapshot.DoctorProblems, tui.DebugProblem{Category: "repository", Name: "run defaults", Status: "unavailable", Detail: repoErr.Error()})
 	}
+	if rework, repoErr := c.app.currentRepositoryReworkOptions(ctx); repoErr == nil {
+		rows = applyRepositoryReworkDefaultsToStatus(rows, rework)
+	} else {
+		snapshot.DoctorProblems = append(snapshot.DoctorProblems, tui.DebugProblem{Category: "repository", Name: "rework defaults", Status: "unavailable", Detail: repoErr.Error()})
+	}
 	for _, row := range rows {
 		snapshot.RuntimeDefaults = append(snapshot.RuntimeDefaults, tui.DebugRuntimeDefault{Name: row.Name, Value: row.Value, Source: row.Source, Warning: row.Warning})
 	}
