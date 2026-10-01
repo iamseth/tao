@@ -934,7 +934,13 @@ func probeSingleMergePiRPCReadiness(ctx context.Context, policy singleMergeFiles
 	return nil
 }
 
+const singleMergeFilesystemProbeTimeout = 5 * time.Second
+
 func probeSingleMergeFilesystemConfinement(ctx context.Context, policy singleMergeFilesystemConfinement, providerExecutable string) error {
+	return probeSingleMergeFilesystemConfinementWithTimeout(ctx, policy, providerExecutable, singleMergeFilesystemProbeTimeout)
+}
+
+func probeSingleMergeFilesystemConfinementWithTimeout(ctx context.Context, policy singleMergeFilesystemConfinement, providerExecutable string, timeout time.Duration) error {
 	// Non-Pi providers retain a no-session version launch. Pi uses the RPC
 	// readiness path above because --version cannot exercise configuration locks
 	// or selected-model loading.
@@ -946,15 +952,24 @@ func probeSingleMergeFilesystemConfinement(ctx context.Context, policy singleMer
 	if err != nil {
 		return err
 	}
+	return executeSingleMergeFilesystemProbe(ctx, spec, timeout, nil)
+}
+
+// observe is a per-call test seam for inspecting the effective deadline without
+// waiting for the probe budget to elapse. Execution and cleanup remain identical.
+func executeSingleMergeFilesystemProbe(ctx context.Context, spec *singleMergeLaunchSpec, timeout time.Duration, observe func(context.Context)) error {
 	defer func() { _ = spec.runtime.cleanup() }()
-	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	if observe != nil {
+		observe(probeCtx)
+	}
 	command := exec.CommandContext(probeCtx, spec.name, spec.args...) // #nosec G204,G702 -- Tao resolves the configured provider and runs only its fixed version probe through Tao's platform confiner.
 	command.Dir = spec.cwd
 	var output singleMergeConfinementProbeOutput
 	command.Stdout = &output
 	command.Stderr = &output
-	err = command.Run()
+	err := command.Run()
 	if err == nil {
 		return nil
 	}

@@ -546,6 +546,92 @@ func TestSingleMergeConfiningStarterCleansRuntimeOnStartupError(t *testing.T) {
 	}
 }
 
+func TestSingleMergeConfinementProbeBudgetsAndCleanup(t *testing.T) {
+	if singleMergeFilesystemProbeTimeout != 5*time.Second {
+		t.Fatal("production filesystem probe budget changed")
+	}
+	for _, name := range []string{"production", "supplied", "parent", "expired", "cancelled", "failure"} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			budget := singleMergeFilesystemProbeTimeout
+			if name == "supplied" {
+				budget = 30 * time.Second
+			}
+			var parentDeadline time.Time
+			if name == "parent" || name == "expired" {
+				parentDeadline = time.Now().Add(time.Second)
+				if name == "expired" {
+					parentDeadline = time.Now().Add(-time.Second)
+				}
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithDeadline(ctx, parentDeadline)
+				defer cancel()
+			}
+			if name == "cancelled" {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+			runtimeRoot := t.TempDir()
+			script := "exit 0"
+			if name == "failure" {
+				script = "printf '%s' '" + strings.Repeat("x", 2*maxSingleMergeConfinementProbeOutputBytes) + "'; exit 17"
+			}
+			spec := &singleMergeLaunchSpec{
+				name: "/bin/sh", args: []string{"-c", script}, cwd: t.TempDir(),
+				runtime: &singleMergeInvocationRuntime{root: runtimeRoot},
+			}
+			before := time.Now()
+			observed := false
+			err := executeSingleMergeFilesystemProbe(ctx, spec, budget, func(probeCtx context.Context) {
+				observed = true
+				deadline, ok := probeCtx.Deadline()
+				if !ok {
+					t.Fatal("probe has no deadline")
+				}
+				if name == "parent" || name == "expired" {
+					if !deadline.Equal(parentDeadline) {
+						t.Fatalf("deadline = %v, want parent %v", deadline, parentDeadline)
+					}
+				} else if deadline.Before(before.Add(budget)) || deadline.After(time.Now().Add(budget)) {
+					t.Fatalf("deadline %v does not select budget %v", deadline, budget)
+				}
+				if name == "cancelled" && !errors.Is(probeCtx.Err(), context.Canceled) {
+					t.Fatalf("cancelled parent not inherited: %v", probeCtx.Err())
+				}
+			})
+			if !observed {
+				t.Fatal("probe context not observed")
+			}
+			switch name {
+			case "cancelled":
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("cancelled probe = %v", err)
+				}
+			case "expired":
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("expired probe = %v", err)
+				}
+			case "failure":
+				var exitErr *exec.ExitError
+				if !errors.As(err, &exitErr) || exitErr.ExitCode() != 17 {
+					t.Fatalf("nonzero provider did not fail closed: %v", err)
+				}
+				if len(err.Error()) > maxSingleMergeConfinementProbeOutputBytes+128 || !strings.Contains(err.Error(), strings.Repeat("x", maxSingleMergeConfinementProbeOutputBytes)) {
+					t.Fatal("provider diagnostics did not retain bounded prefix")
+				}
+			default:
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := os.Stat(runtimeRoot); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("probe runtime survived: %v", err)
+			}
+		})
+	}
+}
+
 func TestSingleMergeConfinementProbeOutputRetainsOnlyBoundedPrefix(t *testing.T) {
 	var output singleMergeConfinementProbeOutput
 	prefix := bytes.Repeat([]byte("p"), maxSingleMergeConfinementProbeOutputBytes)
@@ -564,9 +650,9 @@ func TestSingleMergeConfinementProbeOutputRetainsOnlyBoundedPrefix(t *testing.T)
 
 func TestSingleMergeConfinementProbeKeepsIntegrationReadOnlyAndRuntimeWritable(t *testing.T) {
 	integrationRoot, protectedRoot := t.TempDir(), t.TempDir()
-	if err := probeSingleMergeFilesystemConfinement(context.Background(), singleMergeFilesystemConfinement{
+	if err := probeSingleMergeFilesystemConfinementWithTimeout(context.Background(), singleMergeFilesystemConfinement{
 		protectedPaths: []string{protectedRoot}, integrationRoot: integrationRoot, allowEdits: true,
-	}, "/usr/bin/true"); err != nil {
+	}, "/usr/bin/true", 30*time.Second); err != nil {
 		t.Skipf("OS confinement is unavailable for provider launch regression: %v", err)
 	}
 
@@ -589,9 +675,9 @@ printf 'provider version\n'
 	if err := os.Chmod(provider, 0o700); err != nil { //nolint:gosec // executable mode is required for the fixture provider.
 		t.Fatal(err)
 	}
-	if err := probeSingleMergeFilesystemConfinement(context.Background(), singleMergeFilesystemConfinement{
+	if err := probeSingleMergeFilesystemConfinementWithTimeout(context.Background(), singleMergeFilesystemConfinement{
 		protectedPaths: []string{protectedRoot}, integrationRoot: integrationRoot, allowEdits: true,
-	}, provider); err != nil {
+	}, provider, 30*time.Second); err != nil {
 		t.Fatalf("read-only provider launch probe failed: %v", err)
 	}
 	if contents, err := os.ReadFile(target); err != nil || string(contents) != "prepared conflict\n" { //nolint:gosec // fixture-owned worktree content is the confinement assertion.
