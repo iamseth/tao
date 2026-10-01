@@ -1,0 +1,3 @@
+Validation: 20260427-1810-example
+Verification Findings:
+- error 001-a: in_progress slice 001-a is missing timing.started_at; restore only through Tao's journaled timing repair using matching plan/slice slice_started evidence; absent, zero, or conflicting evidence requires investigation, never a guessed timestamp

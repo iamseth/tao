@@ -3,14 +3,81 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
 )
+
+func TestValidateSliceTimingGolden(t *testing.T) {
+	for _, evidence := range []bool{false, true} {
+		t.Run(map[bool]string{false: "without evidence", true: "matching evidence"}[evidence], func(t *testing.T) {
+			var out bytes.Buffer
+			detail := validatePlanDetail(t.TempDir(), []string{"go version"}, nil)
+			detail.State.Status = plan.StatusInProgress
+			current := detail.Slices.Slices[0].ID
+			detail.State.Plan.CurrentSlice = &current
+			detail.Slices.Slices[0].Status = plan.StatusInProgress
+			if evidence {
+				detail.Events = []plan.Event{{Type: plan.EventTypeSliceStarted, PlanID: detail.State.Plan.ID, SliceID: current, Timestamp: time.Date(2026, 10, 1, 3, 0, 0, 0, time.UTC)}}
+			}
+			before, err := json.Marshal(detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			repo := fakeRepository{details: map[string]*plan.PlanDetail{"example": detail}}
+			err = (App{Out: &out, Err: &out, Repository: func(string) Repository { return repo }}).Run(context.Background(), []string{"validate", "example"})
+			if !errors.Is(err, errPlanValidationFailed) {
+				t.Fatalf("expected validation failure, got %v; output:\n%s", err, out.String())
+			}
+			after, err := json.Marshal(detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(before, after) {
+				t.Fatal("validation mutated detail")
+			}
+			assertGolden(t, "testdata/slice_timing_validation.golden", out.Bytes())
+		})
+	}
+}
+
+func TestValidateSliceTimingLeavesArtifactsUnchanged(t *testing.T) {
+	for _, evidence := range []bool{false, true} {
+		t.Run(map[bool]string{false: "without evidence", true: "matching evidence"}[evidence], func(t *testing.T) {
+			fixture := newRunPlanFixture(t, plan.StatusInProgress, []string{"001-a"}, nil, "001-a", plan.StatusInProgress)
+			if evidence {
+				event, err := json.Marshal(plan.Event{Type: plan.EventTypeSliceStarted, PlanID: fixture.id, SliceID: "001-a", Timestamp: time.Date(2026, 10, 1, 3, 0, 0, 0, time.UTC)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(fixture.dir, "events.jsonl"), append(event, '\n'), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := map[string]string{}
+			for _, name := range []string{"state.json", "slices.json", "events.jsonl"} {
+				before[name] = readText(t, filepath.Join(fixture.dir, name))
+			}
+			var out bytes.Buffer
+			err := (App{Out: &out, Err: &out}).Run(context.Background(), []string{"--plans-dir", fixture.root, "validate", fixture.id})
+			if !errors.Is(err, errPlanValidationFailed) || !strings.Contains(out.String(), "timing.started_at") {
+				t.Fatalf("expected timing failure, got %v; output:\n%s", err, out.String())
+			}
+			for name, content := range before {
+				if readText(t, filepath.Join(fixture.dir, name)) != content {
+					t.Fatalf("validation changed %s", name)
+				}
+			}
+		})
+	}
+}
 
 func TestValidateApprovalContractGolden(t *testing.T) {
 	var out bytes.Buffer

@@ -151,6 +151,12 @@ func (b *SliceBuilder) WithApproval(a *plan.Approval) *SliceBuilder {
 	return b
 }
 
+// WithStartedAt records a start timestamp on the slice timing.
+func (b *SliceBuilder) WithStartedAt(t time.Time) *SliceBuilder {
+	b.s.Timing.StartedAt = &t
+	return b
+}
+
 // WithCompletedAt records a completion timestamp on the slice timing.
 func (b *SliceBuilder) WithCompletedAt(t time.Time) *SliceBuilder {
 	b.s.Timing.CompletedAt = &t

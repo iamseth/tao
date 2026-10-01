@@ -44,6 +44,9 @@ func (s SliceCompletionService) CompleteVerified(ctx context.Context, request Sl
 	if slice == nil {
 		return fmt.Errorf("slice %s not found", request.SliceID)
 	}
+	if err := s.repairCompletionTiming(ctx, request); err != nil {
+		return err
+	}
 	if slice.CommitIntent != nil {
 		if UsesHistoricalCompletionInputs(detail, request.SliceID) {
 			return s.settleHistoricalCompletion(ctx, request)
@@ -119,6 +122,9 @@ func (s SliceCompletionService) CompleteVerified(ctx context.Context, request Sl
 	if err := admitVerifiedCompletion(request); err != nil {
 		return err
 	}
+	if err := s.repairCompletionTiming(ctx, request); err != nil {
+		return err
+	}
 	after, err := s.inspectVerifiedCompletion(ctx, request)
 	if err != nil {
 		return err
@@ -150,6 +156,28 @@ func (s SliceCompletionService) CompleteVerified(ctx context.Context, request Sl
 	}
 	request.VerificationResults = snapshot.Runs
 	return s.finishSliceCompletion(ctx, gitops.NewClient(before.root, s.CommandRunner), request, intent, false, lifetime.Check)
+}
+
+// Timing repair is metadata-only, before both fresh gates and frozen recovery.
+// Settlement independently resolves timing again inside the durable mutation.
+func (s SliceCompletionService) repairCompletionTiming(ctx context.Context, request SliceCompletionRequest) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, recovered, err := plan.ResolveSliceStartedAt(request.Record.Detail(), request.SliceID)
+	if err != nil {
+		return err
+	}
+	if !recovered {
+		return nil
+	}
+	if err := request.Record.RepairSliceStartedAt(request.SliceID); err != nil {
+		return err
+	}
+	if s.Output != nil {
+		_, _ = fmt.Fprintf(s.Output, "Warning: restored slice %s started_at from durable slice_started evidence\n", request.SliceID)
+	}
+	return nil
 }
 
 func reloadCompletionRequest(ctx context.Context, request *SliceCompletionRequest) error {

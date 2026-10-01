@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -84,6 +85,144 @@ func reloadVerifiedCompletion(t *testing.T, request SliceCompletionRequest) *pla
 		t.Fatal(err)
 	}
 	return record
+}
+
+func TestCompletionTimingLoss(t *testing.T) {
+	for _, policy := range []CommitPolicy{CommitPolicySlice, CommitPolicyNone} {
+		for _, point := range []string{"before gates", "during gates", "after commit", "frozen intent", "existing outcome"} {
+			if policy == CommitPolicyNone && (point == "after commit" || point == "frozen intent") {
+				continue
+			}
+			t.Run(policy.String()+"/"+point, func(t *testing.T) {
+				request := verifiedCompletionFixture(t, policy, "true")
+				rewriteVerifiedSliceFixture(t, request, func(slice *plan.Slice) { slice.ExpectedFiles = []string{"change.go"} })
+				start := *request.Record.Detail().Slices.Slices[0].Timing.StartedAt
+				if err := plan.AppendEvent(request.Record.Dir(), plan.Event{Type: plan.EventTypeSliceStarted, PlanID: request.Record.Detail().State.Plan.ID, SliceID: request.SliceID, Timestamp: start}); err != nil {
+					t.Fatal(err)
+				}
+				clear := func() {
+					rewriteVerifiedSliceFixture(t, request, func(slice *plan.Slice) { slice.Timing.StartedAt = nil })
+				}
+				root := request.Record.Detail().Slices.Slices[0].ExecutionRoot
+				if err := os.WriteFile(filepath.Join(root, "change.go"), []byte("package change\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if point == "before gates" {
+					clear()
+				}
+				gates, commits := 0, 0
+				service := SliceCompletionService{Output: timingErrorWriter{}, CommandRunner: func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+					if name == "sh" {
+						gates++
+						if point == "during gates" {
+							clear()
+						}
+					}
+					err := commandrunner.DefaultLocal(ctx, cwd, name, args, stdout, stderr)
+					if err == nil && name == "git" && len(args) > 2 && args[2] == "commit" {
+						commits++
+						if point == "after commit" || point == "frozen intent" {
+							clear()
+						}
+						if point == "frozen intent" {
+							return errors.New("interrupted after commit")
+						}
+					}
+					return err
+				}}
+				err := service.Complete(context.Background(), request)
+				if point == "frozen intent" {
+					if err == nil {
+						t.Fatal("expected interruption")
+					}
+				} else if err != nil {
+					t.Fatal(err)
+				}
+				if point == "existing outcome" {
+					clear()
+				}
+				if err := service.Complete(context.Background(), request); err != nil {
+					t.Fatal(err)
+				}
+				detail := reloadVerifiedCompletion(t, request).Detail()
+				slice := detail.Slices.Slices[0]
+				if slice.Timing.StartedAt == nil || !slice.Timing.StartedAt.Equal(start) || slice.Completion == nil {
+					t.Fatalf("bad settlement: %+v", slice)
+				}
+				wantCommits := 0
+				if policy == CommitPolicySlice {
+					wantCommits = 1
+				}
+				if gates != 1 || commits != wantCommits {
+					t.Fatalf("gates=%d commits=%d", gates, commits)
+				}
+				if countPlanEvents(detail.Events, plan.EventTypeSliceCompleted) != 1 || countPlanEvents(detail.Events, plan.EventTypeSliceStarted) != 1 {
+					t.Fatal("duplicated lifecycle evidence")
+				}
+			})
+		}
+	}
+}
+
+type timingErrorWriter struct{}
+
+func (timingErrorWriter) Write(p []byte) (int, error) { return 0, errors.New("output unavailable") }
+
+func TestCompletionTimingPostGateRefusal(t *testing.T) {
+	request := verifiedCompletionFixture(t, CommitPolicyNone, "true")
+	service := SliceCompletionService{CommandRunner: func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+		if name == "sh" {
+			rewriteVerifiedSliceFixture(t, request, func(slice *plan.Slice) { slice.Timing.StartedAt = nil })
+		}
+		return commandrunner.DefaultLocal(ctx, cwd, name, args, stdout, stderr)
+	}}
+	if err := service.Complete(context.Background(), request); err == nil || !strings.Contains(err.Error(), "started_at") {
+		t.Fatalf("err=%v", err)
+	}
+	if slice := reloadVerifiedCompletion(t, request).Detail().Slices.Slices[0]; slice.CommitIntent != nil || slice.Completion != nil {
+		t.Fatal("unresolved timing granted intent")
+	}
+}
+
+func TestCompletionTimingCancelled(t *testing.T) {
+	request := verifiedCompletionFixture(t, CommitPolicyNone, "true")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	service := SliceCompletionService{CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error {
+		t.Fatal("cancelled request ran command")
+		return nil
+	}}
+	if err := service.Complete(ctx, request); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestCompletionTimingPreflight(t *testing.T) {
+	for _, conflicting := range []bool{false, true} {
+		t.Run(fmt.Sprint(conflicting), func(t *testing.T) {
+			request := verifiedCompletionFixture(t, CommitPolicySlice, "true")
+			if conflicting {
+				for _, stamp := range []time.Time{request.Now, request.Now.Add(time.Second)} {
+					if err := plan.AppendEvent(request.Record.Dir(), plan.Event{Type: plan.EventTypeSliceStarted, PlanID: request.Record.Detail().State.Plan.ID, SliceID: request.SliceID, Timestamp: stamp}); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			rewriteVerifiedSliceFixture(t, request, func(slice *plan.Slice) { slice.Timing.StartedAt = nil })
+			calls := 0
+			service := SliceCompletionService{CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error {
+				calls++
+				return errors.New("runner must not run")
+			}}
+			err := service.Complete(context.Background(), request)
+			if err == nil || !strings.Contains(err.Error(), "started_at") || calls != 0 {
+				t.Fatalf("err=%v calls=%d", err, calls)
+			}
+			if slice := reloadVerifiedCompletion(t, request).Detail().Slices.Slices[0]; slice.CommitIntent != nil || slice.VerificationAttempt != nil {
+				t.Fatal("preflight persisted authority")
+			}
+		})
+	}
 }
 
 func TestHistoricalSettlementRefusesNewTransaction(t *testing.T) {
@@ -447,6 +586,11 @@ func TestCompleteVerifiedRecoversBothHistoricalHashesVerbatim(t *testing.T) {
 			if err := request.Record.RecordSliceCommitIntent(request.SliceID, plan.SliceCommitIntent{Hash: hash, Policy: "slice", StartingBranch: start.Branch, StartingHead: start.Head, Message: message, CreatedAt: request.Now}); err != nil {
 				t.Fatal(err)
 			}
+			startedAt := *request.Record.Detail().Slices.Slices[0].Timing.StartedAt
+			if err := plan.AppendEvent(request.Record.Dir(), plan.Event{Type: plan.EventTypeSliceStarted, PlanID: request.Record.Detail().State.Plan.ID, SliceID: request.SliceID, Timestamp: startedAt}); err != nil {
+				t.Fatal(err)
+			}
+			rewriteVerifiedSliceFixture(t, request, func(slice *plan.Slice) { slice.Timing.StartedAt = nil })
 			request.CommitProposal = nil
 			t.Setenv(sliceCompletionOwnerEnv, "ended")
 			service := SliceCompletionService{CommandRunner: func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
@@ -465,6 +609,10 @@ func TestCompleteVerifiedRecoversBothHistoricalHashesVerbatim(t *testing.T) {
 			}
 			if got := strings.TrimRight(runCommitTestGitOutput(t, root, "log", "-1", "--format=%B"), "\n"); got != message {
 				t.Fatalf("rewrote historical message: %q", got)
+			}
+			settled := reloadVerifiedCompletion(t, request).Detail().Slices.Slices[0]
+			if settled.Timing.StartedAt == nil || !settled.Timing.StartedAt.Equal(startedAt) {
+				t.Fatal("historical recovery lost original start")
 			}
 		})
 	}

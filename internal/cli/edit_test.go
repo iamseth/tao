@@ -288,7 +288,9 @@ func amendPlanRepo(t *testing.T) (*plantest.Repository, *plan.PlanDetail) {
 			WithManualChecks("Existing check").
 			WithVerificationCommands("go test ./internal/cli").
 			WithBlockerNote("expected_files does not allow internal/cli/new.go").Build()).
-		AddSlice(plantest.NewSlice("003-c").WithTitle("C").WithStatus(plan.StatusInProgress).WithVerificationCommands("go test ./...").Build()).
+		AddSlice(plantest.NewSlice("003-c").WithTitle("C").WithStatus(plan.StatusInProgress).
+			WithStartedAt(time.Date(2026, 5, 26, 12, 15, 0, 0, time.UTC)).
+			WithVerificationCommands("go test ./...").Build()).
 		AddSlice(plantest.NewSlice("005-e").WithTitle("E").WithStatus(plan.StatusCompleted).
 			WithCompletedAt(time.Date(2026, 5, 26, 12, 30, 0, 0, time.UTC)).Build()).
 		Build()

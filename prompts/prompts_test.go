@@ -735,6 +735,45 @@ func TestSlicePromptRequiresReviewFocusInPlanningBrief(t *testing.T) {
 	}
 }
 
+func TestSlicePromptFreezesValidatedHandoff(t *testing.T) {
+	got, err := Render(PromptSlice, Data{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := -1
+	for _, step := range []string{
+		"1. Create the initial artifacts",
+		"2. Complete coverage adjustments and normalization",
+		"3. Run validation and correct errors",
+		"4. After successful validation",
+		"5. Publish the final handoff",
+		"6. Any final check after publication is read-only",
+	} {
+		at := strings.Index(got, step)
+		if at <= previous {
+			t.Fatalf("missing or out-of-order handoff step %q", step)
+		}
+		previous = at
+	}
+	for _, want := range []string{
+		"Timing defaults are for the initial write only",
+		"Never bulk-regenerate timing defaults after the initial write",
+		"Tao owns runtime timing",
+		"If execution has begun, stop rather than overwrite runtime state",
+		"Validation errors may be corrected only before publication and before execution",
+		"After validated handoff publication, executable artifacts are frozen",
+		"do not rewrite `state.json`, `slices.json`, or `events.jsonl`",
+		"Recheck coverage after validation fixes change scope and before returning",
+		"after publication that recheck is read-only",
+		"retain the validated plan unchanged",
+		"do not retry the archive command during this slicing session",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing handoff safety contract %q", want)
+		}
+	}
+}
+
 func TestSlicePromptArchivesSourceNoteOnlyAfterValidation(t *testing.T) {
 	got, err := Render(PromptSlice, Data{})
 	if err != nil {

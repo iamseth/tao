@@ -61,6 +61,19 @@ slices.json
 handoff.md
 events.jsonl
 
+## Artifact lifecycle and handoff freeze
+
+Follow this order; the artifact templates below describe content, not permission for later rewrites:
+
+1. Create the initial artifacts, including a draft `handoff.md` and the initial `plan_created` event. Timing defaults are for the initial write only. Tao owns runtime timing; preserve existing timing values. Never bulk-regenerate timing defaults after the initial write.
+2. Complete coverage adjustments and normalization before successful validation, including approval metadata and all template content.
+3. Run validation and correct errors, rechecking coverage after scope changes and re-running validation until it succeeds. Validation errors may be corrected only before publication and before execution.
+4. After successful validation, perform linked-note archival exactly as specified below, retaining the validated plan unchanged if archival fails.
+5. Publish the final handoff in the final response only after these steps. After validated handoff publication, executable artifacts are frozen: do not rewrite `state.json`, `slices.json`, or `events.jsonl`, or regenerate artifacts from templates.
+6. Any final check after publication is read-only, including coverage checks and validation. Report newly discovered issues instead of normalizing or repairing the published artifacts.
+
+Before any artifact update, check for execution having begun (for example, active/completed slice status, runtime timing, or a `slice_started` event). If execution has begun, stop rather than overwrite runtime state. Do not reset timing, lifecycle fields, or events to planning defaults.
+
 ## Rules
 
 - Preserve intent, constraints, and decisions from this session.
@@ -186,7 +199,7 @@ Before validation, for each plan, inventory every item in `plan.decision.success
 - Map each item to actual slice IDs and cite supporting goals, tasks, or verification commands. Shared file paths alone are not coverage.
 - For each uncovered item, add or adjust slice work to cover it; explicitly classify it as a genuine Non-goal only when the established scope excludes it; or record it as an Open Question in the existing brief and `open_questions` with `plan.decision.readiness` set to `needs_refinement`. Do not silently reduce scope, drop requirements, or weaken constraints.
 - For each slice mapping to no success criterion or constraint, justify its necessity in its existing `context` field.
-- Recheck coverage after validation fixes change scope and before returning.
+- Recheck coverage after validation fixes change scope and before returning; finish all resulting fixes before successful validation and publication, and after publication that recheck is read-only.
 
 Stronger blocked or refusal rules still take precedence; `needs_refinement` never overrides a requirement to refuse without artifacts. In particular, unsupervised generation must refuse without artifacts when unresolved decisions prevent safe execution.
 
@@ -194,7 +207,7 @@ Keep the coverage map only in the final response, never in `planning-brief.md` o
 
 ## Validation and approval
 
-After writing the plan artifacts, you must run `tao validate <plan-id-or-slug-or-path>`, and if it reports any errors, fix the slices and re-run until it reports no errors (warnings are non-fatal).
+After writing the plan artifacts, you must run `tao validate <plan-id-or-slug-or-path>`, and if it reports any errors, fix the slices and re-run until it reports no errors (warnings are non-fatal). This correction loop applies only before handoff publication and before execution; otherwise stop and report the errors without rewriting artifacts.
 
 For a note-backed packet, only after that mandatory validation succeeds, invoke the linked archive command exactly once:
 
@@ -420,7 +433,7 @@ Initialize with one event:
 
 ## Final response
 
-After writing files, respond with:
+After completing the artifact lifecycle above (successful validation and, when applicable, the linked-note archival attempt), publish the final handoff by responding with:
 
 - plan directory path
 - slice count

@@ -10,6 +10,65 @@ import (
 	"time"
 )
 
+func TestValidatePlanVerificationSliceTiming(t *testing.T) {
+	for _, evidence := range []bool{false, true} {
+		t.Run(map[bool]string{false: "without evidence", true: "matching evidence"}[evidence], func(t *testing.T) {
+			current := "001-a"
+			detail := &PlanDetail{
+				State: State{Status: StatusInProgress, Repo: Repo{Root: t.TempDir()}, Plan: PlanState{ID: "plan", CurrentSlice: &current, PendingSlices: []string{current, "002-b"}}},
+				Slices: SlicesFile{PlanID: "plan", Slices: []Slice{
+					{ID: current, Status: StatusInProgress, Verification: Verification{Commands: []string{"go version"}}},
+					{ID: "002-b", Status: StatusInProgress, Verification: Verification{Commands: []string{"go version"}}},
+					{ID: "003-pending", Status: StatusPending, Verification: Verification{Commands: []string{"go version"}}},
+				}},
+			}
+			if evidence {
+				detail.Events = []Event{{Type: EventTypeSliceStarted, PlanID: "plan", SliceID: current, Timestamp: time.Date(2026, 10, 1, 3, 0, 0, 0, time.UTC)}}
+			}
+			before, err := json.Marshal(detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := ValidatePlanVerification(detail)
+			var ids []string
+			for _, finding := range result.Findings {
+				if finding.Code == "slice_started_at_missing" {
+					ids = append(ids, finding.SliceID)
+					if finding.Severity != VerificationFindingError || !strings.Contains(finding.Message, "slice_started") {
+						t.Fatalf("unexpected timing finding: %+v", finding)
+					}
+				}
+			}
+			if !result.HasErrors() || !reflect.DeepEqual(ids, []string{current, "002-b"}) {
+				t.Fatalf("unexpected findings: %+v", result.Findings)
+			}
+			selected := ValidateSelectedSliceVerificationAtRoot(detail, "")
+			if selected.HasErrors() || containsFindingCode(selected.Findings, "slice_started_at_missing") {
+				t.Fatalf("selected validation changed: %+v", selected.Findings)
+			}
+			after, err := json.Marshal(detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(before) != string(after) {
+				t.Fatal("validation mutated detail")
+			}
+			for i := range detail.Slices.Slices {
+				detail.Slices.Slices[i].Status = StatusPending
+			}
+			if result := ValidatePlanVerification(detail); result.HasErrors() {
+				t.Fatalf("pending defaults invalid: %+v", result.Findings)
+			}
+			started := time.Now()
+			detail.Slices.Slices[0].Status = StatusInProgress
+			detail.Slices.Slices[0].Timing.StartedAt = &started
+			if result := ValidatePlanVerification(detail); result.HasErrors() {
+				t.Fatalf("present start invalid: %+v", result.Findings)
+			}
+		})
+	}
+}
+
 func TestValidatePlanVerificationApprovalContractBoundary(t *testing.T) {
 	root := t.TempDir()
 	writeEditPlan(t, root)

@@ -624,10 +624,22 @@ func markSliceCompletedWithOutcomeWithChanges(detail *PlanDetail, changes *artif
 	if slice == nil {
 		return Event{}, false, classify(ErrNotFound, "slice %s not found", sliceID)
 	}
-	if slice.Timing.StartedAt == nil {
-		return Event{}, false, fmt.Errorf("slice %s has no started_at", sliceID)
+	startedAt, recovered, err := ResolveSliceStartedAt(detail, sliceID)
+	if err != nil {
+		return Event{}, false, err
 	}
-	durationSeconds := max(int64(now.Sub(*slice.Timing.StartedAt).Seconds()), 0)
+	if outcome != nil {
+		if slice.CommitIntent == nil {
+			return Event{}, false, fmt.Errorf("slice %s has no commit intent", sliceID)
+		}
+		if slice.Completion != nil && *slice.Completion != *outcome {
+			return Event{}, false, fmt.Errorf("slice %s has a conflicting completion outcome", sliceID)
+		}
+	}
+	durationSeconds := max(int64(now.Sub(startedAt).Seconds()), 0)
+	if recovered {
+		slice.Timing.StartedAt = &startedAt
+	}
 
 	slice.Status = StatusCompleted
 	slice.Timing.CompletedAt = new(now)
@@ -637,12 +649,6 @@ func markSliceCompletedWithOutcomeWithChanges(detail *PlanDetail, changes *artif
 	slice.Notes = notes
 	slice.VerificationResults = verificationResults
 	if outcome != nil {
-		if slice.CommitIntent == nil {
-			return Event{}, false, fmt.Errorf("slice %s has no commit intent", sliceID)
-		}
-		if slice.Completion != nil && *slice.Completion != *outcome {
-			return Event{}, false, fmt.Errorf("slice %s has a conflicting completion outcome", sliceID)
-		}
 		slice.Completion = outcome
 		refreshCompletedWorkspaceBoundary(detail, slice, *outcome)
 	}

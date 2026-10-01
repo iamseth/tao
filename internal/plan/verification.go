@@ -31,12 +31,21 @@ func (r VerificationValidationResult) HasErrors() bool {
 	return false
 }
 
-// ValidatePlanVerification checks every slice's contract and verification commands.
+// ValidatePlanVerification checks every slice's contract, active timing, and
+// verification commands without repairing or otherwise mutating the plan.
 func ValidatePlanVerification(detail *PlanDetail) VerificationValidationResult {
 	var result VerificationValidationResult
 	analyzer := verificationimpl.NewAnalyzer(detail.State.Repo.Root)
 	allowances := futureFileAllowances(detail, true)
 	for _, slice := range detail.Slices.Slices {
+		if slice.Status == StatusInProgress && slice.Timing.StartedAt == nil {
+			result.Findings = append(result.Findings, VerificationFinding{
+				Severity: VerificationFindingError,
+				SliceID:  slice.ID,
+				Code:     "slice_started_at_missing",
+				Message:  fmt.Sprintf("in_progress slice %s is missing timing.started_at; restore only through Tao's journaled timing repair using matching plan/slice slice_started evidence; absent, zero, or conflicting evidence requires investigation, never a guessed timestamp", slice.ID),
+			})
+		}
 		result.Findings = append(result.Findings, validateApprovalContract(slice)...)
 		result.Findings = append(result.Findings, validateRequiredInputs(detail, slice, detail.State.Repo.Root, false)...)
 		result.Findings = append(result.Findings, validateSliceVerificationWithAnalyzer(detail.State.Repo.Root, analyzer, slice, allowances[slice.ID])...)

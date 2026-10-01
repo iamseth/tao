@@ -1638,18 +1638,41 @@ type fakeCLIPiProcess struct {
 	t            *testing.T
 	stdinReader  *io.PipeReader
 	stdinWriter  *io.PipeWriter
-	stdinDecoder *json.Decoder
+	commands     chan fakeCLIPiCommand
 	stdoutReader *io.PipeReader
 	stdoutWriter *io.PipeWriter
 	done         chan struct{}
 	once         sync.Once
 }
 
+type fakeCLIPiCommand struct {
+	cmd map[string]any
+	err error
+}
+
+// newFakeCLIPiProcess decodes stdin on its own goroutine so the client's
+// synchronous pipe write never waits on the fake's stdout writes. A decoder
+// driven from readCommand can return a command while the client's trailing
+// newline is still unread; the fake then blocks writing its response while
+// the client blocks finishing its write, which deadlocks at prompt lengths
+// that align with the decoder's refill boundaries.
 func newFakeCLIPiProcess(t *testing.T) *fakeCLIPiProcess {
 	t.Helper()
 	stdinReader, stdinWriter := io.Pipe()
 	stdoutReader, stdoutWriter := io.Pipe()
-	return &fakeCLIPiProcess{t: t, stdinReader: stdinReader, stdinWriter: stdinWriter, stdinDecoder: json.NewDecoder(stdinReader), stdoutReader: stdoutReader, stdoutWriter: stdoutWriter, done: make(chan struct{})}
+	proc := &fakeCLIPiProcess{t: t, stdinReader: stdinReader, stdinWriter: stdinWriter, commands: make(chan fakeCLIPiCommand, 64), stdoutReader: stdoutReader, stdoutWriter: stdoutWriter, done: make(chan struct{})}
+	go func() {
+		decoder := json.NewDecoder(stdinReader)
+		for {
+			var cmd map[string]any
+			if err := decoder.Decode(&cmd); err != nil {
+				proc.commands <- fakeCLIPiCommand{err: err}
+				return
+			}
+			proc.commands <- fakeCLIPiCommand{cmd: cmd}
+		}
+	}()
+	return proc
 }
 
 func (p *fakeCLIPiProcess) Stdin() io.WriteCloser { return p.stdinWriter }
@@ -1670,11 +1693,11 @@ func (p *fakeCLIPiProcess) finish() {
 }
 
 func (p *fakeCLIPiProcess) readCommand() (map[string]any, error) {
-	var cmd map[string]any
-	if err := p.stdinDecoder.Decode(&cmd); err != nil {
-		return nil, err
+	next := <-p.commands
+	if next.err != nil {
+		return nil, next.err
 	}
-	return cmd, nil
+	return next.cmd, nil
 }
 
 func (p *fakeCLIPiProcess) writeEvent(line string) {

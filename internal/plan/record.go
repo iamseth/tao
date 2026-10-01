@@ -249,6 +249,21 @@ func (r *PlanRecord) RepairMissingSliceStartedEvent(sliceID string, startedAt ti
 	return r.apply(repairMissingSliceStartedEventMutation(sliceID, startedAt))
 }
 
+// RepairSliceStartedAt restores only missing timing from durable start evidence.
+// It neither starts work nor changes lifecycle authority or event history.
+func (r *PlanRecord) RepairSliceStartedAt(sliceID string) error {
+	return r.apply(func(detail *PlanDetail) (lifecycleMutation, error) {
+		startedAt, recovered, err := ResolveSliceStartedAt(detail, sliceID)
+		if err != nil {
+			return lifecycleMutation{}, err
+		}
+		if recovered {
+			findSlice(detail, sliceID).Timing.StartedAt = &startedAt
+		}
+		return lifecycleMutation{State: detail.State, Slices: detail.Slices}, nil
+	})
+}
+
 func (r *PlanRecord) CompleteSlice(sliceID string, notes string, verificationResults []VerificationRun, now time.Time) error {
 	return r.apply(completeSliceMutation(sliceID, notes, verificationResults, now))
 }
