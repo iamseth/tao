@@ -453,14 +453,90 @@ func TestAggregateReturnsListingAndContextErrors(t *testing.T) {
 	}
 }
 
+func TestBlockedEvidenceSharedProjection(t *testing.T) {
+	now := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	events := []plan.Event{
+		{Type: "slice_blocked", Command: "golangci-lint run ./...", Paths: []string{"secret_test.go"}, Reason: "network unavailable", HeadSHA: "private-head", Fingerprint: "private-fingerprint"},
+		{Type: "slice_blocked", Command: "go test ./...", Paths: []string{"../bad_test.go"}, Reason: "outside scope"},
+		{Type: "slice_blocked", Command: "touch SHOULD_NOT_EXIST; go test", Paths: []string{"$(touch SHOULD_NOT_EXIST)_test.go"}, Reason: "novel\x1b[31m reason\nwith control"},
+		{Type: "slice_blocked", Message: "dependency missing"},
+		{Type: "slice_blocked"},
+		{Type: "slice_blocked", Reason: strings.Repeat("novel ", 500)},
+		{Type: "slice_blocked", Reason: strings.Repeat("novel ", 500)},
+	}
+	var content strings.Builder
+	data := planData{}
+	for i, event := range events {
+		encoded, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		content.Write(encoded)
+		content.WriteByte('\n')
+		consumeEvent(&data, event, i)
+	}
+	content.WriteString("{broken json\n{\"type\":\"slice_blocked\",\"command\":[],\"paths\":42}\n")
+	file := filepath.Join(dir, "events.jsonl")
+	if err := os.WriteFile(file, []byte(content.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sources := fixtureSourceLister{sources: []RepositorySource{{ID: "repo-a", Name: "Alpha", Plans: fixtureLister{summaries: []plan.PlanSummary{{ID: "one", Dir: dir}}}}}}
+	first, err := AggregateSourcesWithOptions(context.Background(), sources, Options{Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := AggregateSourcesWithOptions(context.Background(), sources, Options{Now: now})
+	if err != nil || !reflect.DeepEqual(first, second) {
+		t.Fatalf("nondeterministic: %v", err)
+	}
+	observation := observePlan(sourceIdentity{}, plan.PlanSummary{}, data, now)
+	total := 0
+	for _, bucket := range first.BlockedReasons {
+		total += bucket.Count
+		for _, exemplar := range bucket.Exemplars {
+			if strings.ContainsAny(exemplar, "\x1b\n") || len(exemplar) > 1024 {
+				t.Fatalf("unsafe exemplar: %q", exemplar)
+			}
+		}
+		if observation.reliability["blocked_"+bucket.Reason] != bucket.Count || len(bucket.Exemplars) > maxExemplars || len(bucket.Repositories) != 1 || bucket.Repositories[0].RepositoryID != "repo-a" || bucket.Repositories[0].Count != bucket.Count {
+			t.Fatalf("inconsistent bucket: %+v / %+v", bucket, observation.reliability)
+		}
+	}
+	if total != len(events) || observation.reliability["blocked_other"] != 4 {
+		t.Fatalf("counts: %d / %+v", total, observation.reliability)
+	}
+	encoded, err := json.Marshal(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, private := range []string{"secret_test.go", "private-head", "private-fingerprint", "SHOULD_NOT_EXIST", "../bad_test.go", "golangci-lint run"} {
+		if strings.Contains(string(encoded), private) {
+			t.Errorf("structured evidence leaked: %s", private)
+		}
+	}
+	if _, err := os.Stat("SHOULD_NOT_EXIST"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("evidence command executed: %v", err)
+	}
+	after, err := os.ReadFile(file) // #nosec G304 -- fixed events filename in the test's private temporary directory.
+	if err != nil || string(after) != content.String() {
+		t.Fatalf("history mutated: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := AggregateSources(ctx, sources); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation: %v", err)
+	}
+}
+
 func TestNormalizeBlockedReasonUsesKnownKeywordsAndPrefixes(t *testing.T) {
 	tests := map[string]string{
 		"pre-existing lint failure":       "unrelated_failure",
 		"verification command is invalid": "invalid_verification_command",
 		"agent timed out":                 "timeout",
 		"Dependency missing":              "dependency",
-		"Custom Check: detail 123":        "custom_check",
-		"":                                "unknown",
+		"Custom Check: detail 123":        "other",
+		"":                                "other",
 	}
 	for input, want := range tests {
 		if got := NormalizeBlockedReason(input); got != want {

@@ -281,7 +281,7 @@ func representativeInsightsReport() insights.Report {
 			},
 		},
 	}
-	for i, reason := range []string{"network_timeout", "invalid_command", "merge_conflict", "missing_approval", "stale_base", "digest_overflow"} {
+	for i, reason := range []string{"lint_test_files", "test_failure", "build_failure", "other", "invalid_verification_command", "timeout"} {
 		report.BlockedReasons = append(report.BlockedReasons, insights.ReasonBucket{
 			Reason: reason, Count: i + 1, Exemplars: []string{fmt.Sprintf("example %d", i+1), "second example"},
 			QualifiedExemplars: []insights.EvidenceExemplar{{RepositoryID: "repo-a", RepositoryName: "alpha", Value: fmt.Sprintf("example %d", i+1)}},
@@ -333,7 +333,7 @@ func representativeScorecard() insights.Scorecard {
 					},
 				},
 				Reliability: insights.ReliabilityOutcomes{
-					Infrastructure: []insights.LabelCount{{Label: "session_timeout", Count: 1}},
+					Infrastructure: []insights.LabelCount{{Label: "session_timeout", Count: 1}, {Label: "blocked_lint_test_files", Count: 2}, {Label: "blocked_other", Count: 3}},
 					Quality:        []insights.LabelCount{{Label: "verification_failed", Count: 1}},
 				},
 			},
@@ -560,7 +560,8 @@ func TestInsightsAllReposCatalogCoverageSignalsAndOrdering(t *testing.T) {
 
 	planDir := t.TempDir()
 	now := time.Now()
-	events := `{"type":"slice_blocked","reason":"external service unreachable"}` + "\n" +
+	events := `{"type":"slice_blocked","command":"go build ./...","paths":["private.go"],"reason":"external service unreachable"}` + "\n" +
+		`{"type":"slice_blocked","reason":"neutral dependency precheck"}` + "\n" +
 		`{"type":"session_timeout"}` + "\n" +
 		`{"type":"agent_metrics","metrics":{"session_id":"one","output_tokens":42,"cost":1.5}}` + "\n"
 	if err := os.WriteFile(filepath.Join(planDir, "events.jsonl"), []byte(events), 0o600); err != nil {
@@ -598,7 +599,7 @@ func TestInsightsAllReposCatalogCoverageSignalsAndOrdering(t *testing.T) {
 	for _, want := range []string{
 		"All-repository insights (3 registered; 1 scanned, 1 empty, 1 unreadable, 0 skipped)",
 		"alpha [repo-a]: scanned", "middle [repo-m]: empty", "zeta [repo-z]: unreadable",
-		"Skipped-source warnings:", "unreachable_service: 1", "alpha [repo-a]: external service unreachable",
+		"Skipped-source warnings:", "build_failure: 1", "other: 1", "alpha [repo-a]: external service unreachable",
 		"Structured event counters:", "session_timeout: 1", "Global session telemetry:",
 		"output tokens (1 sessions): p50=42", "cutoff: plan activity within the last 30 days",
 		"missing-tool: 1 occurrences across 1 plans / 1 repositories",
@@ -694,7 +695,8 @@ func TestInsightsAllReposEmptyHistoryAndDigestCap(t *testing.T) {
 
 func TestInsightsCommandAggregatesHistoryAndDigestHandlesEmptyHistory(t *testing.T) {
 	dir := t.TempDir()
-	events := `{"type":"slice_blocked","reason":"external service unreachable"}` + "\n" +
+	events := `{"type":"slice_blocked","command":"golangci-lint run ./...","paths":["private_test.go"],"reason":"external service unreachable"}` + "\n" +
+		`{"type":"slice_blocked","reason":"pnpm dependency precheck"}` + "\n" +
 		`{"type":"session_timeout"}` + "\n" +
 		`{"type":"agent_metrics","metrics":{"session_id":"one","output_tokens":42,"cost":1.5}}` + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(events), 0o600); err != nil {
@@ -708,7 +710,7 @@ func TestInsightsCommandAggregatesHistoryAndDigestHandlesEmptyHistory(t *testing
 	if err := app.Run(context.Background(), []string{"insights"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"unreachable_service: 1", "session_timeout: 1", "output tokens (1 sessions): p50=42"} {
+	for _, want := range []string{"lint_test_files: 1", "other: 1", "session_timeout: 1", "output tokens (1 sessions): p50=42"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("command output missing %q:\n%s", want, out.String())
 		}

@@ -187,7 +187,7 @@ func TestScorecardPartialHistoryAndHistogramBounds(t *testing.T) {
 		{Type: "plan_reopened"},
 	}
 	for i := 0; i < 100; i++ {
-		data.blockedReasons = append(data.blockedReasons, fmt.Sprintf("reason-%d", i))
+		consumeEvent(&data, plan.Event{Type: "slice_blocked", Reason: fmt.Sprintf("reason-%d", i)}, i)
 		data.lifecycle = append(data.lifecycle, plan.Event{Type: "finalization_failed", FinalizationFailure: &plan.FinalizationFailure{Category: fmt.Sprintf("category-%d", i)}})
 	}
 	got := observePlan(sourceIdentity{}, plan.PlanSummary{Reviewed: true, ReviewVerdict: "approve"}, data, now)
@@ -201,6 +201,10 @@ func TestScorecardPartialHistoryAndHistogramBounds(t *testing.T) {
 		if count <= 0 {
 			t.Fatal("nonpositive histogram count")
 		}
+	}
+	blockedOnly := observePlan(sourceIdentity{}, plan.PlanSummary{}, planData{blockedReasons: data.blockedReasons}, now)
+	if blockedOnly.reliability["blocked_other"] != 100 {
+		t.Fatalf("unmatched blocked counts = %+v", blockedOnly.reliability)
 	}
 	empty := scorecardCoverage(nil)
 	if empty.Plans != 0 || empty.MaturityWindowDays != 14 || empty.MinimumSamples != 5 {

@@ -11,6 +11,45 @@ import (
 	"github.com/iamseth/tao/internal/insights"
 )
 
+func TestBlockedLabelsAcrossInsightsViews(t *testing.T) {
+	report := insights.Report{
+		PlansScanned: 1,
+		BlockedReasons: []insights.ReasonBucket{
+			// Exemplars arrive through the sanitized collection projection.
+			{Reason: "lint_test_files", Count: 2, Exemplars: []string{"failure example"}, QualifiedExemplars: []insights.EvidenceExemplar{{RepositoryID: "repo-a", RepositoryName: "Alpha", Value: "failure example"}}},
+			{Reason: "other", Count: 1, Exemplars: []string{"unmatched"}},
+		},
+		Scorecard: insights.Scorecard{Cohorts: []insights.TreatmentCohort{{Key: "pi", Outcomes: insights.CohortOutcomes{Reliability: insights.ReliabilityOutcomes{Infrastructure: []insights.LabelCount{{Label: "blocked_lint_test_files", Count: 2}, {Label: "blocked_other", Count: 1}}}}}}},
+	}
+	for _, scope := range []InsightsScope{InsightsScopeRepository, InsightsScopeAllRepositories} {
+		for _, format := range []InsightsFormat{InsightsFormatReport, InsightsFormatDigest, InsightsFormatScorecard} {
+			options := InsightsOptions{Scope: scope, Format: format}
+			var first, second bytes.Buffer
+			if err := RenderInsights(&first, report, options); err != nil {
+				t.Fatal(err)
+			}
+			if err := RenderInsights(&second, report, options); err != nil {
+				t.Fatal(err)
+			}
+			if first.String() != second.String() || strings.Contains(first.String(), "\x1b") {
+				t.Fatalf("unsafe/nondeterministic output: %q", first.String())
+			}
+			if (format == InsightsFormatReport || (format == InsightsFormatDigest && scope == InsightsScopeRepository)) && !strings.Contains(first.String(), "failure example") {
+				t.Fatalf("missing safe exemplar: %s", first.String())
+			}
+			prefix := ""
+			if format == InsightsFormatScorecard {
+				prefix = "blocked_"
+			}
+			for _, label := range []string{"lint_test_files", "other"} {
+				if !strings.Contains(first.String(), prefix+label) {
+					t.Fatalf("missing %s: %s", prefix+label, first.String())
+				}
+			}
+		}
+	}
+}
+
 func TestRenderInsightsValidatesOptions(t *testing.T) {
 	report := insights.Report{}
 	valid := []InsightsOptions{

@@ -222,7 +222,7 @@ type planData struct {
 	planningMetrics  []plan.AgentMetrics
 	reworkEvents     []plan.Event
 	stopReasons      []string
-	blockedReasons   []string
+	blockedReasons   []blockedEvidence
 	sessions         map[string][]plan.AgentMetricEvent
 	toolCallsPresent map[string]bool
 	signals          []signalEvent
@@ -612,7 +612,7 @@ func consumeEvent(data *planData, event plan.Event, line int) {
 	}
 	switch event.Type {
 	case plan.EventTypeSliceBlocked:
-		data.blockedReasons = append(data.blockedReasons, eventReason(event))
+		data.blockedReasons = append(data.blockedReasons, blockedEvent(event))
 	case plan.EventTypeReworkRound:
 		data.reworkEvents = append(data.reworkEvents, event)
 	case plan.EventTypeReworkStopped:
@@ -693,8 +693,8 @@ func addSignal(signals map[string]*signalAccumulator, repository sourceIdentity,
 	}
 }
 
-func addBlocked(buckets map[string]*ReasonBucket, repository sourceIdentity, exemplar string) {
-	reason := NormalizeBlockedReason(exemplar)
+func addBlocked(buckets map[string]*ReasonBucket, repository sourceIdentity, evidence blockedEvidence) {
+	reason, exemplar := evidence.category, evidence.exemplar
 	bucket := buckets[reason]
 	if bucket == nil {
 		bucket = &ReasonBucket{Reason: reason}
@@ -720,42 +720,6 @@ func addBlocked(buckets map[string]*ReasonBucket, repository sourceIdentity, exe
 			})
 		}
 	}
-}
-
-// NormalizeBlockedReason maps common operational variants to stable report buckets.
-func NormalizeBlockedReason(message string) string {
-	normalized := strings.ToLower(strings.TrimSpace(message))
-	switch {
-	case containsAny(normalized, "connection refused", "unreachable", "external service", "network unavailable", "service unavailable"):
-		return "unreachable_service"
-	case containsAny(normalized, "unrelated", "pre-existing", "preexisting", "outside scope"):
-		return "unrelated_failure"
-	case containsAny(normalized, "invalid verification", "verification command", "invalid command"):
-		return "invalid_verification_command"
-	case containsAny(normalized, "timed out", "timeout"):
-		return "timeout"
-	case containsAny(normalized, "dependency", "prerequisite"):
-		return "dependency"
-	}
-	if prefix, _, ok := strings.Cut(normalized, ":"); ok {
-		normalized = prefix
-	}
-	var result strings.Builder
-	underscore := false
-	for _, r := range normalized {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			result.WriteRune(r)
-			underscore = false
-		} else if result.Len() > 0 && !underscore {
-			result.WriteByte('_')
-			underscore = true
-		}
-	}
-	key := strings.Trim(result.String(), "_")
-	if key == "" {
-		return "unknown"
-	}
-	return key
 }
 
 func finalizeSignals(report *Report, signals map[string]*signalAccumulator) {

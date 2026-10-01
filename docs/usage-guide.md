@@ -395,6 +395,17 @@ The workflow starts from this deterministic report:
 tao insights --all-repos --digest
 ```
 
+Blocked insights use structured gate evidence first: literal `golangci-lint run`,
+`go test`, `go build`, and single-target `make lint/test/build` commands yield
+`lint_failure`, `test_failure`, or `build_failure`. Only nonempty, all-valid
+relative `_test.go` paths specialize these to `*_test_files`. This lexical hint
+proves neither ownership nor root cause (including cache or outside-plan issues).
+Composite commands, wrappers, quoted commands, and `make verify` do not identify
+a failing family. Historical prose uses conservative known failure phrases;
+unmatched or empty reasons contribute to counted `other`, not bespoke labels.
+Reports, digests, and `blocked_` scorecard labels agree. Historical labels can
+therefore change at read time; stored events and lifecycle behavior do not.
+
 `tao insights` reports evidence and coverage; it does not generate advice. Its
 bounded digest selects output-token and cost outliers independently so one
 metric cannot crowd out the other, and states how many detected outlier plans

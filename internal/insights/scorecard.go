@@ -265,7 +265,7 @@ func observePlan(repository sourceIdentity, summary plan.PlanSummary, data planD
 		o.hoursToApproval = approvalAt.Sub(start).Hours()
 	}
 	for _, reason := range data.blockedReasons {
-		incrementBounded(o.reliability, "blocked_"+scorecardLabel(NormalizeBlockedReason(reason)), scorecardDynamicReliabilityKeys)
+		incrementBounded(o.reliability, "blocked_"+scorecardLabel(reason.category), scorecardDynamicReliabilityKeys)
 	}
 	for _, signal := range data.signals {
 		switch signal.typeName {

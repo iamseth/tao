@@ -17,17 +17,17 @@ Skipped-source warnings:
   - delta [repo-d]: skipped plan store
 
 Repository-qualified failure patterns:
-  network_timeout: 1
+  lint_test_files: 1
     - alpha [repo-a]: example 1
-  invalid_command: 2
+  test_failure: 2
     - alpha [repo-a]: example 2
-  merge_conflict: 3
+  build_failure: 3
     - alpha [repo-a]: example 3
-  missing_approval: 4
+  other: 4
     - alpha [repo-a]: example 4
-  stale_base: 5
+  invalid_verification_command: 5
     - alpha [repo-a]: example 5
-  digest_overflow: 6
+  timeout: 6
     - alpha [repo-a]: example 6
 
 Repository-qualified rework loops:

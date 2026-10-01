@@ -75,6 +75,8 @@ Outcome rates use matured plans; active plans inside the maturity window are cen
   - error: 1
 - infrastructure reliability histogram:
   - session_timeout: 1
+  - blocked_lint_test_files: 2
+  - blocked_other: 3
 - quality reliability histogram:
   - verification_failed: 1
 
@@ -128,6 +130,8 @@ Outcome rates use matured plans; active plans inside the maturity window are cen
   - error: 1
 - infrastructure reliability histogram:
   - session_timeout: 1
+  - blocked_lint_test_files: 2
+  - blocked_other: 3
 - quality reliability histogram:
   - verification_failed: 1
 
@@ -185,6 +189,8 @@ Outcome rates use matured plans; active plans inside the maturity window are cen
   - error: 1
 - infrastructure reliability histogram:
   - session_timeout: 1
+  - blocked_lint_test_files: 2
+  - blocked_other: 3
 - quality reliability histogram:
   - verification_failed: 1
 
@@ -240,6 +246,8 @@ Outcome rates use matured plans; active plans inside the maturity window are cen
   - error: 1
 - infrastructure reliability histogram:
   - session_timeout: 1
+  - blocked_lint_test_files: 2
+  - blocked_other: 3
 - quality reliability histogram:
   - verification_failed: 1
 
@@ -293,6 +301,8 @@ Outcome rates use matured plans; active plans inside the maturity window are cen
   - error: 1
 - infrastructure reliability histogram:
   - session_timeout: 1
+  - blocked_lint_test_files: 2
+  - blocked_other: 3
 - quality reliability histogram:
   - verification_failed: 1
 

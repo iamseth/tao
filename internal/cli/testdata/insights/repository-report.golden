@@ -1,22 +1,22 @@
 Repository insights (9 plans scanned, 2 skipped)
 
 Failure patterns:
-  network_timeout: 1
+  lint_test_files: 1
     - example 1
     - second example
-  invalid_command: 2
+  test_failure: 2
     - example 2
     - second example
-  merge_conflict: 3
+  build_failure: 3
     - example 3
     - second example
-  missing_approval: 4
+  other: 4
     - example 4
     - second example
-  stale_base: 5
+  invalid_verification_command: 5
     - example 5
     - second example
-  digest_overflow: 6
+  timeout: 6
     - example 6
     - second example
 
