@@ -10,6 +10,64 @@ import (
 	"github.com/iamseth/tao/internal/taodata"
 )
 
+func TestReviewAgentStages(t *testing.T) {
+	for _, env := range []AgentKind{"", AgentPi, AgentClaude} {
+		for _, repo := range []AgentKind{"", AgentPi, AgentClaude} {
+			for _, invocation := range []AgentKind{"", AgentPi, AgentClaude} {
+				want := env
+				if repo != "" {
+					want = repo
+				}
+				if invocation != "" {
+					want = invocation
+				}
+				o, err := ResolveRunOptionsWithRepositoryDefaults(RunOptionsPatch{ReviewAgent: env, ModelSelection: ModelSelection{Review: "review-model"}}, RunOptionsPatch{ReviewAgent: repo}, RunOptionsPatch{Agent: AgentClaude, ReviewAgent: invocation})
+				if err != nil || o.ReviewAgent != want || o.Models.Review != "review-model" {
+					t.Fatalf("%q/%q/%q: %+v %v", env, repo, invocation, o, err)
+				}
+				effective := want
+				if effective == "" {
+					effective = AgentClaude
+				}
+				if o.ReviewAgentKind() != effective {
+					t.Fatal("wrong effective reviewer")
+				}
+				reprojected, err := ResolveRunOptions(o.RunOptionsPatch(), RunOptionsPatch{Agent: AgentPi})
+				if err != nil || reprojected.ReviewAgent != want {
+					t.Fatalf("reprojection: %+v %v", reprojected, err)
+				}
+				if want == "" && reprojected.ReviewAgentKind() != AgentPi {
+					t.Fatal("inheritance frozen")
+				}
+			}
+		}
+	}
+	if (ResolvedRunOptions{}).ReviewAgentKind() != AgentPi {
+		t.Fatal("zero default")
+	}
+	for i := range 3 {
+		stages := make([]RunOptionsPatch, 3)
+		stages[i].ReviewAgent = "invalid"
+		if _, err := ResolveRunOptionsWithRepositoryDefaults(stages[0], stages[1], stages[2]); err == nil {
+			t.Fatal("accepted invalid reviewer")
+		}
+	}
+	data, err := json.Marshal(RunOptionsPatch{})
+	if err != nil || strings.Contains(string(data), "review_agent") {
+		t.Fatalf("empty JSON: %s %v", data, err)
+	}
+	for _, agent := range []AgentKind{AgentPi, AgentClaude} {
+		data, err := json.Marshal(RunOptionsPatch{ReviewAgent: agent})
+		var patch RunOptionsPatch
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(data, &patch); err != nil || patch.ReviewAgent != agent {
+			t.Fatalf("round trip: %s %v", data, err)
+		}
+	}
+}
+
 func TestParseModelName(t *testing.T) {
 	for _, value := range []string{"provider/model-v1:latest", "model*", "模型", " \tprovider/model-v1:latest\u2003"} {
 		got, err := ParseModelName(value)

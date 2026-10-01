@@ -67,6 +67,7 @@ var commandOptionRules = []commandOptionRule{
 	{EnvCommitPolicy, []CommandProfile{CommandRun, CommandPromptRun}, func(p RunOptionsPatch) RunOptionsPatch { return RunOptionsPatch{CommitPolicy: p.CommitPolicy} }},
 	{EnvExecutionMode, []CommandProfile{CommandRun, CommandPromptRun}, func(p RunOptionsPatch) RunOptionsPatch { return RunOptionsPatch{ExecutionMode: p.ExecutionMode} }},
 	{EnvAgent, []CommandProfile{CommandRun, CommandReview, CommandMerge}, func(p RunOptionsPatch) RunOptionsPatch { return RunOptionsPatch{Agent: p.Agent} }},
+	{EnvReviewAgent, []CommandProfile{CommandRun, CommandReview}, func(p RunOptionsPatch) RunOptionsPatch { return RunOptionsPatch{ReviewAgent: p.ReviewAgent} }},
 	{EnvPullRequest, []CommandProfile{CommandRun}, func(p RunOptionsPatch) RunOptionsPatch { return RunOptionsPatch{PullRequest: p.PullRequest} }},
 	{EnvReview, []CommandProfile{CommandRun}, func(p RunOptionsPatch) RunOptionsPatch { return RunOptionsPatch{ReviewEnabled: p.ReviewEnabled} }},
 	{EnvSessionTimeout, []CommandProfile{CommandRun, CommandReview, CommandMerge}, func(p RunOptionsPatch) RunOptionsPatch { return RunOptionsPatch{SessionTimeout: p.SessionTimeout} }},

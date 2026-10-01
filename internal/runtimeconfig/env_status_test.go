@@ -34,6 +34,29 @@ func TestSnapshotModelStatusAndConsumption(t *testing.T) {
 	}
 }
 
+func TestReviewAgentStatus(t *testing.T) {
+	for _, value := range []string{"", "pi", "claude", "invalid"} {
+		s := snapshotFrom(map[string]string{EnvReviewAgent: value})
+		found := false
+		for _, row := range s.Status() {
+			if row.Name != EnvReviewAgent {
+				continue
+			}
+			found = true
+			if value == "invalid" {
+				if row.Source != "invalid" || row.Warning == "" {
+					t.Fatalf("%+v", row)
+				}
+			} else if row.Value != value || row.Warning != "" {
+				t.Fatalf("%+v", row)
+			}
+		}
+		if !found {
+			t.Fatal("missing review agent row")
+		}
+	}
+}
+
 func TestSnapshotDefaultsRemainLowestPrecedence(t *testing.T) {
 	s := snapshotFrom(map[string]string{EnvAgent: "claude", EnvPullRequest: "true", EnvExecutionMode: "current"})
 	overrides := RunOptionsPatch{Agent: AgentPi, ExecutionMode: ExecutionModeIsolated}.WithPullRequest(false)

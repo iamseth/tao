@@ -230,11 +230,13 @@ func (a App) doctor(args []string) error {
 }
 
 type doctorReport struct {
-	selectedAgent runtimeconfig.AgentKind
-	agents        []agentpkg.Descriptor
-	prompts       []promptinstall.Result
-	tools         []doctorToolResultCategory
-	piReadiness   []doctorReadinessResult
+	selectedAgent         runtimeconfig.AgentKind
+	reviewAgent           runtimeconfig.AgentKind
+	repositoryUnavailable bool
+	agents                []agentpkg.Descriptor
+	prompts               []promptinstall.Result
+	tools                 []doctorToolResultCategory
+	piReadiness           []doctorReadinessResult
 }
 
 type doctorReadinessResult struct {
@@ -254,11 +256,23 @@ type doctorToolResult struct {
 }
 
 func (a App) collectDoctorReport() (doctorReport, error) {
-	defaults, err := a.envDefaultsFor(runtimeconfig.EnvAgent)
+	defaults, err := a.envDefaultsFor(runtimeconfig.EnvAgent, runtimeconfig.EnvReviewAgent)
 	if err != nil {
 		return doctorReport{}, err
 	}
-	report := doctorReport{selectedAgent: defaults.Agent, agents: agentpkg.Installed()}
+	// Resolve only role selectors: unrelated malformed models or budgets must not
+	// prevent passive setup diagnostics. Repository lookup is best-effort outside Git.
+	repoCtx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	repository, repoErr := a.currentRepositoryRunOptions(repoCtx)
+	resolved, err := runtimeconfig.ResolveRunOptionsWithRepositoryDefaults(
+		runtimeconfig.RunOptionsPatch{Agent: defaults.Agent, ReviewAgent: defaults.ReviewAgent},
+		runtimeconfig.RunOptionsPatch{ReviewAgent: repository.ReviewAgent}, runtimeconfig.RunOptionsPatch{})
+	if err != nil {
+		return doctorReport{}, err
+	}
+	report := doctorReport{selectedAgent: defaults.Agent, reviewAgent: resolved.ReviewAgentKind(),
+		repositoryUnavailable: repoErr != nil, agents: agentpkg.Installed()}
 	report.prompts, err = promptinstall.CheckDiscovered(report.agents)
 	if err != nil {
 		return doctorReport{}, err
@@ -276,7 +290,7 @@ func (a App) collectDoctorReport() (doctorReport, error) {
 		}
 		report.tools = append(report.tools, collected)
 	}
-	if report.selectedAgent == runtimeconfig.AgentPi {
+	if report.selectedAgent == runtimeconfig.AgentPi || report.reviewAgent == runtimeconfig.AgentPi {
 		report.piReadiness = collectPiReadiness()
 	}
 	return report, nil
@@ -329,6 +343,34 @@ func collectDoctorTool(tool doctorTool) doctorToolResult {
 	return doctorToolResult{tool: tool, status: status, found: found}
 }
 
+func renderDoctorRoles(out io.Writer, report doctorReport) error {
+	if err := writef(out, "implementation: %s\nplan reviewer: %s\n", report.selectedAgent, report.reviewAgent); err != nil {
+		return err
+	}
+	if report.repositoryUnavailable {
+		if err := writeln(out, "Repository defaults unavailable; showing environment role selection."); err != nil {
+			return err
+		}
+	}
+	seen := make(map[runtimeconfig.AgentKind]bool)
+	for _, kind := range []runtimeconfig.AgentKind{report.selectedAgent, report.reviewAgent} {
+		if seen[kind] {
+			continue
+		}
+		seen[kind] = true
+		installed := false
+		for _, descriptor := range report.agents {
+			installed = installed || descriptor.Kind == kind
+		}
+		if !installed {
+			if err := writef(out, "warning: configured runtime %s missing from PATH. Install %s, add it to PATH, then run tao install-prompts and tao doctor --verbose.\n", kind, kind); err != nil {
+				return err
+			}
+		}
+	}
+	return writeln(out, "Passive setup only: no remote authentication or provider/model compatibility guarantee; unused reviewers are not required by --no-review.")
+}
+
 func renderCompactDoctor(out io.Writer, report doctorReport, palette theme.Palette) error {
 	agents := make([]string, 0, len(report.agents))
 	for _, descriptor := range report.agents {
@@ -338,6 +380,9 @@ func renderCompactDoctor(out io.Writer, report doctorReport, palette theme.Palet
 		agents = append(agents, "none")
 	}
 	if err := writef(out, "agents: %s\n", strings.Join(agents, ", ")); err != nil {
+		return err
+	}
+	if err := renderDoctorRoles(out, report); err != nil {
 		return err
 	}
 	for _, descriptor := range report.agents {
@@ -386,7 +431,7 @@ func renderCompactDoctor(out io.Writer, report doctorReport, palette theme.Palet
 		}
 	}
 	if len(readinessProblems) > 0 {
-		if err := writeln(out, "\nPi merge readiness (passive; no model request):"); err != nil {
+		if err := writeln(out, "\nPi readiness (passive; no model request; shared merge probe):"); err != nil {
 			return err
 		}
 		for _, result := range readinessProblems {
@@ -400,6 +445,9 @@ func renderCompactDoctor(out io.Writer, report doctorReport, palette theme.Palet
 }
 
 func renderVerboseDoctor(out io.Writer, report doctorReport, palette theme.Palette) error {
+	if err := renderDoctorRoles(out, report); err != nil {
+		return err
+	}
 	if err := writef(out, "selected runtime agent: %s\n", report.selectedAgent); err != nil {
 		return err
 	}
@@ -439,7 +487,7 @@ func renderVerboseDoctor(out io.Writer, report doctorReport, palette theme.Palet
 		}
 	}
 	if len(report.piReadiness) > 0 {
-		if err := writeln(out, "\nPi merge readiness (passive; no model request):"); err != nil {
+		if err := writeln(out, "\nPi readiness (passive; no model request; shared merge probe):"); err != nil {
 			return err
 		}
 		for _, result := range report.piReadiness {

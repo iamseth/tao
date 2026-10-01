@@ -568,6 +568,9 @@ func TestNoteRunGeneratesLinksThenUsesNormalRun(t *testing.T) {
 		if request.RecoveryMode != (run.RecoveryMode{}) {
 			t.Fatalf("note run must use ordinary automatic policy, got recovery request: %+v", request)
 		}
+		if request.ReviewAgentKind() != runtimeconfig.AgentClaude {
+			t.Fatalf("note run lost repository review runtime: %+v", request)
+		}
 		if request.SessionTimeout != 37*time.Minute || request.Models.Base != "" {
 			t.Fatalf("note-to-run handoff reloaded settings: %+v", request)
 		}
@@ -575,7 +578,8 @@ func TestNoteRunGeneratesLinksThenUsesNormalRun(t *testing.T) {
 	}
 	t.Cleanup(func() { executeSinglePlan = oldExecutor })
 	t.Setenv("TAO_SESSION_TIMEOUT", "37m")
-	repoMeta := taodata.Repo{ID: "tao-123", Name: "tao", Root: "/repo", Branch: "main"}
+	t.Setenv(runtimeconfig.EnvReviewAgent, "pi")
+	repoMeta := (taodata.Repo{ID: "tao-123", Name: "tao", Root: "/repo", Branch: "main"}).WithReviewAgentDefault("claude")
 	app, out, errOut := noteTestApp(t, strings.NewReader(""), repoMeta)
 	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
 	app.RepoHealthCheck = func(context.Context, taodata.Repo) taodata.RepoHealth {

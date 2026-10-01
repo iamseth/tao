@@ -39,7 +39,7 @@ func (a App) flagDefaults() runtimeconfig.EnvDefaults {
 func (a App) runEnvDefaults() (envDefaults, error) {
 	return a.envDefaultsFor(
 		runtimeconfig.EnvCommitPolicy, runtimeconfig.EnvExecutionMode,
-		runtimeconfig.EnvAgent, runtimeconfig.EnvPullRequest, runtimeconfig.EnvReview,
+		runtimeconfig.EnvAgent, runtimeconfig.EnvReviewAgent, runtimeconfig.EnvPullRequest, runtimeconfig.EnvReview,
 		runtimeconfig.EnvSessionTimeout, runtimeconfig.EnvSkipPermissions,
 		runtimeconfig.EnvModel, runtimeconfig.EnvRunModel, runtimeconfig.EnvReviewModel,
 		runtimeconfig.EnvReworkEscalationModel, runtimeconfig.EnvReworkEscalationFromAttempt,
@@ -96,6 +96,9 @@ func repositoryReworkOptions(repo taodata.Repo) runtimeconfig.ReworkOptionsPatch
 
 func repositoryRunOptions(repo taodata.Repo) runtimeconfig.RunOptionsPatch {
 	var options runtimeconfig.RunOptionsPatch
+	if value, ok := repo.ReviewAgentDefault(); ok {
+		options.ReviewAgent = runtimeconfig.AgentKind(value)
+	}
 	if pullRequest, ok := repo.PullRequestDefault(); ok {
 		options = options.WithPullRequest(pullRequest)
 	}

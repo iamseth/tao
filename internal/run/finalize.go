@@ -543,7 +543,7 @@ func (f Finalizer) recordReviewError(detail *plan.PlanDetail, reviewErr error) {
 		return
 	}
 	reviewedAt := now(f.execution).UTC()
-	review := plan.PlanReview{Status: plan.ReviewStatusError, Verdict: plan.ReviewStatusError, Summary: fmt.Sprintf("Review failed: %v", reviewErr), Base: detail.State.Repo.BaseCommit, Agent: f.execution.Config.Agent.String(), ReviewedAt: reviewedAt}
+	review := plan.PlanReview{Status: plan.ReviewStatusError, Verdict: plan.ReviewStatusError, Summary: fmt.Sprintf("Review failed: %v", reviewErr), Base: detail.State.Repo.BaseCommit, Agent: f.execution.Config.ReviewAgentKind().String(), ReviewedAt: reviewedAt}
 	if detail.State.Workspace != nil {
 		review.Head = detail.State.Workspace.HeadSHA
 	}
@@ -552,7 +552,7 @@ func (f Finalizer) recordReviewError(detail *plan.PlanDetail, reviewErr error) {
 		f.warnReviewRecording("record review error metadata", err)
 		return
 	}
-	if err := record.RecordReviewError(review, f.execution.Config.Agent.String()); err != nil {
+	if err := record.RecordReviewError(review, f.execution.Config.ReviewAgentKind().String()); err != nil {
 		f.warnReviewRecording("record review error metadata", err)
 	}
 }

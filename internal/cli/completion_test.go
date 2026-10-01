@@ -17,6 +17,34 @@ import (
 	"github.com/iamseth/tao/prompts"
 )
 
+func TestReviewAgentFlagScopeAndCompletion(t *testing.T) {
+	for _, command := range []commandMetadata{runCommand, reviewCommand, reworkCommand} {
+		fs := flag.NewFlagSet(command.name, flag.ContinueOnError)
+		command.registerFlags(fs)
+		if fs.Lookup("review-agent") == nil {
+			t.Fatalf("%s missing review selector", command.name)
+		}
+		if got := command.completion.flagValues["review-agent"].values; !slices.Equal(got, []string{"pi", "claude"}) {
+			t.Fatalf("%s values: %v", command.name, got)
+		}
+	}
+	fs := flag.NewFlagSet("merge", flag.ContinueOnError)
+	registerMergeFlags(fs)
+	if fs.Lookup("review-agent") != nil {
+		t.Fatal("merge acquired plan review selector")
+	}
+	fs = flag.NewFlagSet("note run", flag.ContinueOnError)
+	(App{}).registerRunRequestFlags(fs)
+	if fs.Lookup("review-agent") != nil {
+		t.Fatal("shared note-run flags acquired review selector")
+	}
+	for _, subcommand := range repoCommand.subcommands {
+		if subcommand.name == "config" && !slices.Equal(subcommand.completion.flagValues["review-agent"].values, []string{"pi", "claude", "unset"}) {
+			t.Fatal("repo config selector completions missing")
+		}
+	}
+}
+
 func TestCommandAliases(t *testing.T) {
 	tests := []struct {
 		name string
@@ -151,6 +179,7 @@ func TestZshCommandArgumentsUseRegisteredFlagsAndSemanticHints(t *testing.T) {
 				"'--commit-policy[automatic commit policy: slice or none]:policy:(slice none)'",
 				"'--execution-mode[execution mode: isolated or current]:mode:(isolated current)'",
 				"'--max-rework-attempts[maximum automatic rework cycles (0 disables)]:count:'",
+				"'--review-agent[select the plan review runtime: pi or claude (default inherit)]:agent:(pi claude)'",
 				"'--max-slices[maximum slices to run; use 0 for all]:count:'",
 			},
 		},

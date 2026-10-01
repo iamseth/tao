@@ -9,7 +9,7 @@ Run settings resolve in three stages:
 3. Explicit per-run flags win over both, including explicit `false` and `0` values.
 
 Tao does not load `.env` files. Repository defaults cover pull requests,
-model selection, maximum rework attempts, and the rework escalation threshold;
+review runtime, model selection, maximum rework attempts, and the rework escalation threshold;
 `unset` removes only the named stored default and restores inheritance.
 For example:
 
@@ -39,6 +39,7 @@ PRs or inherit automatic slice-commit behavior.
 | `TAO_COMMIT_POLICY` | yes | yes | yes | — | — | yes |
 | `TAO_EXECUTION_MODE` | yes | yes | yes | — | — | yes |
 | `TAO_AGENT` | yes | yes | yes | yes | yes | — |
+| `TAO_REVIEW_AGENT` | yes | yes | yes | yes | — | — |
 | `TAO_PULL_REQUEST` | yes | yes | yes | — | — | — |
 | `TAO_REVIEW` | yes | yes | yes | — | — | — |
 | `TAO_SESSION_TIMEOUT` | yes | yes | yes | yes | yes | — |
@@ -62,7 +63,7 @@ for example, the full-run profile does not grant note execution recovery flags.
 
 Precedence is unchanged: built-ins → captured invocation environment → repository
 defaults → explicitly provided registered flags. Only existing repository fields
-(PR preference and models) participate. An explicit flag is an override even when
+(PR preference, review runtime, models, and numeric rework defaults) participate. An explicit flag is an override even when
 its value equals the built-in default, including explicit `false`; an absent or
 unregistered flag is never an override. Unset model roles fall back to the resolved
 base (escalation remains opt-in). The invocation reuses its environment snapshot
@@ -106,6 +107,7 @@ explicitly setting it to an empty value is invalid.
 | `TAO_COMMIT_POLICY` | `slice` | `slice`, `none` | Automatic per-slice commits or manual commits. Historical `plan` metadata remains readable, but new runs reject it. |
 | `TAO_EXECUTION_MODE` | `isolated` | `isolated`, `current` | Use a feature branch/worktree or the launch checkout and branch. |
 | `TAO_AGENT` | `pi` | `pi`, `claude` | Select the agent runtime. |
+| `TAO_REVIEW_AGENT` | empty (inherit) | empty, `pi`, `claude` | Select the plan review runtime independently. Empty/unset inherits the final implementing runtime; repository and invocation selectors override the environment. Model selection remains independent. |
 | `TAO_SESSION_TIMEOUT` | `20m` | Non-negative Go duration; `0` disables | Wall-clock limit for run-path agent sessions, not interactive planning. |
 | `TAO_SESSION_WARN_PERCENT` | `80` | Integer 0–99; `0` disables | Requests one advisory wrap-up notice for implementation/rework sessions. Unsupported runtimes skip delivery; Pi delivers between turns without extending the deadline. |
 | `TAO_MODEL` | Unset (runtime selection) | Model name | Shared base for unset roles, planning generation, PR work, and standalone merge-message generation. |
@@ -182,6 +184,48 @@ unmentioned settings are preserved. `tao repo config` displays absent values as
 values with source `repository` while retaining captured environment diagnostics.
 
 Automatic rework resolves environment → repository numeric defaults → explicit invocation flags. `--max-rework-attempts N` and `--rework-escalation-from-attempt N` preserve explicit zero/count overrides; only the attempt count permits zero. The deprecated `--auto-rework` alias remains accepted for one release (false = zero, true = five), warns whenever supplied, and yields to an explicit count in the same invocation. Registered flag defaults are not overrides. Positive attempts with automatic review disabled normalize to zero with one warning, regardless of source. Reverify always executes and presents zero attempts. Note promotion inherits the selected repository's automatic-rework settings. Invalid consumed environment settings are rejected lazily before execution/handoff mutation; unrelated merge settings do not block ordinary runs.
+
+## Review runtime selection
+
+Plan reviews resolve `TAO_REVIEW_AGENT` → repository `review_agent` → explicit
+`--review-agent`. Only `pi` and `claude` are selectors. Empty/unset environment
+configuration inherits the final implementing `TAO_AGENT`; omitted invocation
+flags preserve repository defaults. Legacy and unregistered repositories inherit
+normally. An explicitly empty CLI selector is invalid.
+
+```sh
+tao repo config --review-agent claude
+tao run --review-agent pi my-plan
+tao review --run --review-agent claude my-plan
+tao rework --from-pr --run --review-agent pi my-plan
+tao repo config --review-agent unset # remove only this override
+```
+
+`review` and `rework` require `--run` with this flag. Explicit selection survives
+rework handoffs and automatic rounds; PR triage keeps its existing runtime.
+`note run` inherits review configuration but has no new selector flag.
+`--no-review` does not require the unused reviewer runtime to be available.
+Invalid selectors are rejected before execution or reopening work.
+
+Runtime and model selection are independent: `TAO_REVIEW_MODEL` and repository
+`--review-model` still select the review model, with existing base-model fallback
+and invocation `--model` precedence. Tao passes model names unchanged; runtime or
+model rejection never triggers fallback to another runtime or model. Plan-review
+failures retain their existing best-effort handling. This selector does not affect
+implementation, PR creation, or any merge-owned session. `tao merge` has no
+`--review-agent` flag.
+
+`tao doctor` (or `--verbose`) shows implementation and effective plan-review
+roles from the captured environment and current repository defaults, not a future
+invocation's flags. Outside a registered checkout it uses environment inheritance;
+if repository lookup is unavailable, it says so. Only role settings are consumed:
+unrelated malformed model, timeout, or budget settings do not prevent collection.
+Missing selected executables get setup guidance; an unused second runtime is not
+required. Pi's bounded passive readiness probe runs once when either role selects
+Pi; Claude retains executable and prompt checks. These checks do not authenticate
+remotely or prove provider availability or compatibility with the review model.
+`install-prompts` and `install-prompts --check` cover every installed supported
+runtime regardless of the selected roles, and install nothing if none is found.
 
 ## Model selection
 

@@ -19,7 +19,7 @@ var runCommand = commandMetadata{
 	name:      "run",
 	minPrefix: "r",
 	usageLines: []string{
-		"run (r) [--model NAME] [--rework-escalation-model NAME] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue|--restart|--repair-verification|--reverify] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>",
+		"run (r) [--review-agent pi|claude] [--model NAME] [--rework-escalation-model NAME] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue|--restart|--repair-verification|--reverify] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>",
 	},
 	completionDescription: "Run pending slices with the selected agent",
 	long:                  "Run pending slices for a Tao plan with the selected agent. Tao prepares the requested workspace, executes pending work, automatically reworks review findings by default, records verification metadata, and follows the configured commit policy. In a sufficiently large terminal, Tao displays a pinned run header unless --no-run-header disables it.",
@@ -30,6 +30,7 @@ var runCommand = commandMetadata{
 	registerRuntimeFlags: App.registerRunFlags,
 	completion: completionContext{
 		flagValues: map[string]completionFlagValue{
+			"review-agent":                   {kind: completionValueEnum, label: "agent", values: []string{"pi", "claude"}},
 			"auto-rework":                    {kind: completionValueBoolean, label: "boolean", values: []string{"true", "false"}},
 			"commit-policy":                  {kind: completionValueEnum, label: "policy", values: []string{"slice", "none"}},
 			"execution-mode":                 {kind: completionValueEnum, label: "mode", values: []string{"isolated", "current"}},
@@ -61,6 +62,7 @@ func registerRunFlags(fs *flag.FlagSet) { (App{}).registerRunFlags(fs) }
 
 func (a App) registerRunFlags(fs *flag.FlagSet) {
 	a.registerRunRequestFlags(fs)
+	registerReviewAgentFlag(fs)
 	defaults := a.flagDefaults()
 	fs.String("model", "", "override the agent model for every role in this run")
 	fs.String("rework-escalation-model", "", "override the model for late automatic rework attempts")
@@ -165,6 +167,11 @@ func runRequestFlagOverrides(fs *flag.FlagSet) (runtimeconfig.RunOptionsPatch, e
 		Continue:              flagBoolValue(fs, "continue"),
 		NoReview:              flagBoolValue(fs, "no-review"),
 	})
+	reviewAgent, err := reviewAgentFlagValue(fs, false)
+	if err != nil {
+		return runtimeconfig.RunOptionsPatch{}, err
+	}
+	overrides.ReviewAgent = reviewAgent
 	return overrides, nil
 }
 
@@ -240,7 +247,7 @@ func (a App) run(ctx context.Context, repo planRunRepository, args []string) err
 	if recoveryModeCount > 1 {
 		return fmt.Errorf("--continue, --restart, --repair-verification, and --reverify are mutually exclusive")
 	}
-	if err := requirePositionals(positional, 1, "usage: tao run [--model NAME] [--rework-escalation-model NAME] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue|--restart|--repair-verification|--reverify] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>"); err != nil {
+	if err := requirePositionals(positional, 1, "usage: tao run [--review-agent pi|claude] [--model NAME] [--rework-escalation-model NAME] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue|--restart|--repair-verification|--reverify] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>"); err != nil {
 		return err
 	}
 	input := positional[0]

@@ -195,6 +195,14 @@ bounded follow-up slices; `tao rework --run <plan>` immediately hands them back
 to the ordinary run path. Use `tao show <plan>` whenever you need Tao's
 recommended next action.
 
+Select a plan reviewer independently with `tao run --review-agent claude <plan>`,
+`tao review --run --review-agent pi <plan>`, or
+`tao rework --run --review-agent claude <plan>`. The default inherits `TAO_AGENT`;
+`TAO_REVIEW_AGENT` and `tao repo config --review-agent pi|claude|unset` supply
+inherited defaults. Review models are configured separately; rejection never
+falls back to another runtime. Merge sessions are unchanged. See
+[review runtime configuration](docs/configuration.md#review-runtime-selection).
+
 For an approved set of independent plans, preview batch integration before
 running it:
 

@@ -739,6 +739,50 @@ blockers still refuse continuation. A stale or unavailable note is simply omitte
 Timeouts retain their ordinary classification and recovery requirements: neither
 a warning nor a note supplies completion, retry, or recovery authority.
 
+#### Choose an independent plan reviewer
+
+Use a different runtime when you want review independent of the implementing
+agent, for example:
+
+```sh
+TAO_AGENT=pi tao run --review-agent claude <plan>
+tao review --run --review-agent claude <plan>
+tao rework --run --review-agent claude <plan>
+```
+
+For a persistent choice, set `TAO_REVIEW_AGENT` or use
+`tao repo config --review-agent claude`. Repository settings override the
+environment; explicit flags win. `tao repo config --review-agent unset` removes
+only that repository override. With no selector, reviews inherit the implementing
+runtime, preserving existing behavior. `review` and `rework` accept the flag only
+with `--run`; ordinary and `--from-pr` handoffs and automatic rounds retain it.
+PR feedback triage itself stays on the implementing runtime.
+
+Choose a compatible review model separately with `TAO_REVIEW_MODEL` or
+`tao repo config --review-model NAME`; selecting a runtime does not translate
+model names or reset model precedence. Rejection is surfaced without fallback.
+Review approval still requires Tao's exact-diff proposal validation; selecting a
+runtime grants no lifecycle authority. `--no-review` leaves the unused reviewer
+unstarted. Merge reviews, resolvers, and all other merge-owned sessions are
+unaffected, and `tao merge` does not accept `--review-agent`.
+
+Before using mixed runtimes, run `tao doctor --verbose` in the registered checkout.
+It identifies the implementation and effective plan reviewer using environment and
+repository settings; invocation-only overrides are not included. Install any
+missing selected executable, put it on `PATH`, and run `tao install-prompts`, then
+`tao install-prompts --check`. Installation covers both supported runtimes when
+both are installed, regardless of role selection. Inherited single-runtime use
+needs only that runtime; `--no-review` never needs the unused reviewer installed.
+
+Doctor is passive setup guidance, not a live-provider test. Pi checks local
+startup readiness once if selected for either role, using the shared merge probe;
+Claude checks remain executable/prompt diagnostics. Neither proves remote
+credentials, service availability, or compatibility with your review model. If a
+review fails, correct the selected runtime's setup or review-model configuration,
+then explicitly retry with `tao review --run <plan>` (repeat any invocation-only
+selector). Tao does not silently switch runtimes or models, and diagnostics never
+authorize approval, completion, or Git mutation.
+
 #### Choose models for agent sessions
 
 Use `TAO_MODEL` as a shared base and role settings when implementation, review,

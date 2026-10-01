@@ -58,6 +58,33 @@ func TestUISettingsServiceCollectsAndUpdatesRepositoryDefaults(t *testing.T) {
 	}
 }
 
+func TestUISettingsReviewAgentProjection(t *testing.T) {
+	for _, value := range []string{"", "pi", "claude", "invalid"} {
+		service := uiSettingsService{app: App{RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvReviewAgent: value})}, registry: &fakeNoteRegistry{}}
+		snapshot, err := service.Collect(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, row := range snapshot.RuntimeDefaults {
+			if row.Name != runtimeconfig.EnvReviewAgent {
+				continue
+			}
+			found = true
+			if value == "invalid" {
+				if row.Source != "invalid" || row.Warning == "" {
+					t.Fatalf("invalid row: %+v", row)
+				}
+			} else if row.Value != value {
+				t.Fatalf("row: %+v, want %q", row, value)
+			}
+		}
+		if !found {
+			t.Fatal("missing review agent setting")
+		}
+	}
+}
+
 func TestUISettingsDiagnosticBaselineDoesNotChangeRepositorySettings(t *testing.T) {
 	clearTaoEnv(t)
 	t.Setenv(runtimeconfig.EnvPullRequest, "true")

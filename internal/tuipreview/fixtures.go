@@ -308,6 +308,7 @@ func settingsFixture(now time.Time) tui.SettingsSnapshot {
 			{Name: "TAO_COMMIT_POLICY", Value: "slice", Source: "default"},
 			{Name: "TAO_EXECUTION_MODE", Value: "isolated", Source: "default"},
 			{Name: "TAO_AGENT", Value: "pi", Source: "default"},
+			{Name: "TAO_REVIEW_AGENT", Value: "", Source: "default"},
 			{Name: "TAO_SESSION_TIMEOUT", Value: "20m", Source: "default"},
 			{Name: "TAO_SESSION_WARN_PERCENT", Value: "80", Source: "default"},
 			{Name: "TAO_UPDATE", Value: "warn", Source: "default", Warning: "fixture warning"},

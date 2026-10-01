@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"path/filepath"
 	"reflect"
@@ -333,6 +334,76 @@ func snapshotWith(values map[string]string) *runtimeconfig.EnvSnapshot {
 	return &snapshot
 }
 
+func TestReviewAgentUnregisteredAndMissingRepository(t *testing.T) {
+	root := initTestGitRepo(t)
+	t.Chdir(root)
+	registry := taodata.Registry{DataHome: t.TempDir()}
+	app := App{RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvReviewAgent: "claude"}), Registry: func() NoteRegistry { return registry }}
+	repository, err := app.currentRepositoryRunOptions(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaults, err := app.runEnvDefaults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := defaults.resolveRunOptionsWithRepository(repository, runtimeconfig.RunOptionsPatch{})
+	if err != nil || resolved.ReviewAgentKind() != runtimeconfig.AgentClaude {
+		t.Fatalf("unregistered inheritance: %+v, %v", resolved, err)
+	}
+	t.Chdir(t.TempDir())
+	if _, err := app.currentRepositoryRunOptions(context.Background()); err == nil {
+		t.Fatal("missing git repository accepted")
+	}
+}
+
+func TestReviewAgentSnapshotAdmission(t *testing.T) {
+	app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvReviewAgent: "invalid"})}
+	for _, command := range []string{"run", "review", "rework"} {
+		var err error
+		switch command {
+		case "run":
+			err = app.run(context.Background(), fakeRepository{}, []string{"plan-a"})
+		case "review":
+			err = app.runPlanReview(context.Background(), fakeRepository{}, "plan-a", runtimeconfig.RunOptionsPatch{})
+		case "rework":
+			err = app.rework(context.Background(), fakeRepository{}, []string{"--run", "plan-a"})
+		}
+		if err == nil || !strings.Contains(err.Error(), runtimeconfig.EnvReviewAgent) {
+			t.Errorf("%s consumed review selector: %v", command, err)
+		}
+	}
+	if _, err := newReworkTriageTextGenerator(app, nil); err != nil {
+		t.Fatalf("triage consumed unrelated review selector: %v", err)
+	}
+}
+
+func TestReviewAgentFlagPrecedence(t *testing.T) {
+	app := App{Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvAgent: "pi", runtimeconfig.EnvReviewAgent: "pi"})}
+	repository := repositoryRunOptions((taodata.Repo{}).WithReviewAgentDefault("claude"))
+	for _, test := range []struct{ arg, want string }{{"", "claude"}, {"--review-agent=pi", "pi"}, {"--review-agent=claude", "claude"}} {
+		args := []string{}
+		if test.arg != "" {
+			args = append(args, test.arg)
+		}
+		fs, _, err := app.parseArgs("run", args, app.registerRunFlags)
+		if err != nil {
+			t.Fatal(err)
+		}
+		inputs, err := app.resolveRunRequestFlags(fs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resolved, err := inputs.defaults.resolveRunOptionsWithRepository(repository, inputs.overrides)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resolved.ReviewAgentKind().String() != test.want {
+			t.Fatalf("%s: got %s want %s", test.arg, resolved.ReviewAgentKind(), test.want)
+		}
+	}
+}
+
 func TestOperationSnapshotAdmission(t *testing.T) {
 	clearTaoEnv(t)
 	for _, command := range []string{"run", "review", "triage", "prompt"} {
@@ -629,6 +700,46 @@ func TestRunNonSlicePathsIgnoreInvalidHardCaps(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+type unavailableDoctorRegistry struct{ fakeNoteRegistry }
+
+func (unavailableDoctorRegistry) Current(context.Context) (taodata.Repo, error) {
+	return taodata.Repo{}, errors.New("not a registered checkout")
+}
+
+func TestDoctorUsesCapturedReviewRolesAndRepositoryDefaults(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	setPathExecutables(t)
+	snapshot := snapshotWith(map[string]string{
+		runtimeconfig.EnvAgent: "claude", runtimeconfig.EnvReviewAgent: "pi",
+		runtimeconfig.EnvModel: "invalid model", runtimeconfig.EnvSessionTimeout: "invalid",
+	})
+	t.Setenv(runtimeconfig.EnvAgent, "invalid")
+	t.Setenv(runtimeconfig.EnvReviewAgent, "invalid")
+	registry := &fakeNoteRegistry{}
+	app := App{RuntimeEnv: snapshot, Registry: func() NoteRegistry { return registry }}
+	for _, override := range []string{"", "claude"} {
+		registry.current = (taodata.Repo{RunDefaults: &taodata.RepoRunDefaults{Models: &taodata.RepoModelDefaults{Base: "invalid model"}}}).WithReviewAgentDefault(override)
+		report, err := app.collectDoctorReport()
+		want := runtimeconfig.AgentPi
+		if override != "" {
+			want = runtimeconfig.AgentClaude
+		}
+		if err != nil || report.selectedAgent != runtimeconfig.AgentClaude || report.reviewAgent != want {
+			t.Fatalf("captured roles with repository %q: %+v, %v", override, report, err)
+		}
+	}
+	app.Registry = func() NoteRegistry { return &unavailableDoctorRegistry{} }
+	app.RuntimeEnv = snapshotWith(map[string]string{runtimeconfig.EnvAgent: "claude"})
+	report, err := app.collectDoctorReport()
+	if err != nil || report.reviewAgent != runtimeconfig.AgentClaude || !report.repositoryUnavailable {
+		t.Fatalf("outside checkout inheritance: %+v, %v", report, err)
+	}
+	app.RuntimeEnv = snapshotWith(map[string]string{runtimeconfig.EnvReviewAgent: "invalid"})
+	if _, err := app.collectDoctorReport(); err == nil || !strings.Contains(err.Error(), runtimeconfig.EnvReviewAgent) {
+		t.Fatalf("invalid reviewer not diagnosed: %v", err)
 	}
 }
 

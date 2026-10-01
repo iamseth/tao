@@ -302,8 +302,13 @@ func TestFinalizerRunsReviewWhenEnabled(t *testing.T) {
 func TestFinalizerSkipsReviewWhenDisabled(t *testing.T) {
 	detail := completedReviewPlanDetail(t.TempDir())
 	var out bytes.Buffer
-	reviewer := &recordingReviewCreator{review: plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: "approve"}}
-	finalizer := newFinalizer(&out, testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, ReviewEnabled: false}}, RunDependencies{ReviewCreator: reviewer, RootResolver: staticRootResolver()}))
+	calls := 0
+	execution := testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Agent: AgentPi, ReviewAgent: AgentClaude, CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, ReviewEnabled: false}}, RunDependencies{RootResolver: staticRootResolver(), ProcessStarter: func(context.Context, string, string, []string) (Process, error) {
+		calls++
+		return nil, errors.New("reviewer not installed")
+	}})
+	execution.Dependencies.ReviewCreator = newAgentFactory(execution).runCapabilities().reviewCreator
+	finalizer := newFinalizer(&out, execution)
 
 	complete, err := finalizer.FinalizeIfComplete(context.Background(), 1, detail, plan.RunCapabilities{Complete: true})
 	if err != nil {
@@ -312,8 +317,8 @@ func TestFinalizerSkipsReviewWhenDisabled(t *testing.T) {
 	if !complete {
 		t.Fatal("expected completed plan")
 	}
-	if reviewer.calls != 0 {
-		t.Fatalf("expected review to be skipped, got %d call(s)", reviewer.calls)
+	if calls != 0 {
+		t.Fatalf("expected review to be skipped, got %d call(s)", calls)
 	}
 	if strings.Contains(out.String(), "Review:") {
 		t.Fatalf("disabled review should preserve prior output, got:\n%s", out.String())
@@ -460,8 +465,9 @@ func TestFinalizerReportsPullRequestCompletionOnlyForMatchingApproval(t *testing
 
 type captureReviewRecord struct {
 	PlanMutationRecord
-	detail *plan.PlanDetail
-	wrote  *plan.State
+	detail     *plan.PlanDetail
+	wrote      *plan.State
+	wroteAgent *string
 }
 
 func (r captureReviewRecord) RecordFinalVerification(verification plan.FinalVerification) error {
@@ -472,7 +478,10 @@ func (r captureReviewRecord) RecordFinalVerification(verification plan.FinalVeri
 	return nil
 }
 
-func (r captureReviewRecord) RecordReviewError(review plan.PlanReview, _ string) error {
+func (r captureReviewRecord) RecordReviewError(review plan.PlanReview, agent string) error {
+	if r.wroteAgent != nil {
+		*r.wroteAgent = agent
+	}
 	reviewedAt := review.ReviewedAt
 	r.detail.State.Plan.Review = &review
 	r.detail.State.UpdatedAt = reviewedAt
@@ -487,8 +496,9 @@ func TestFinalizerReviewErrorIsBestEffort(t *testing.T) {
 	var out bytes.Buffer
 	var log bytes.Buffer
 	var wroteState plan.State
+	var wroteAgent string
 	reviewer := &recordingReviewCreator{err: errors.New("review timed out")}
-	finalizer := newFinalizer(&out, testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Agent: AgentPi, CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, ReviewEnabled: true}}, RunDependencies{
+	finalizer := newFinalizer(&out, testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Agent: AgentPi, ReviewAgent: AgentClaude, CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, ReviewEnabled: true}}, RunDependencies{
 		ReviewCreator:    reviewer,
 		RootResolver:     staticRootResolver(),
 		SessionLogWriter: &log,
@@ -497,7 +507,7 @@ func TestFinalizerReviewErrorIsBestEffort(t *testing.T) {
 			if err != nil {
 				return nil, err
 			}
-			return captureReviewRecord{PlanMutationRecord: record, detail: detail, wrote: &wroteState}, nil
+			return captureReviewRecord{PlanMutationRecord: record, detail: detail, wrote: &wroteState, wroteAgent: &wroteAgent}, nil
 		},
 	}))
 
@@ -517,7 +527,10 @@ func TestFinalizerReviewErrorIsBestEffort(t *testing.T) {
 	if detail.State.Plan.Review == nil || detail.State.Plan.Review.Status != plan.ReviewStatusError || detail.State.Plan.Review.Verdict != plan.ReviewStatusError {
 		t.Fatalf("review error not recorded on detail: %+v", detail.State.Plan.Review)
 	}
-	if wroteState.Plan.Review == nil || wroteState.Plan.Review.Status != plan.ReviewStatusError || !strings.Contains(wroteState.Plan.Review.Summary, "review timed out") {
+	if wroteAgent != "claude" {
+		t.Fatalf("review error event agent = %q", wroteAgent)
+	}
+	if wroteState.Plan.Review == nil || wroteState.Plan.Review.Agent != "claude" || wroteState.Plan.Review.Status != plan.ReviewStatusError || !strings.Contains(wroteState.Plan.Review.Summary, "review timed out") {
 		t.Fatalf("review error not persisted: %+v", wroteState.Plan.Review)
 	}
 }

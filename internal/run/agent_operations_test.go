@@ -125,6 +125,7 @@ func TestHistoricalProposalCorrectionModel(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			detail.State.Plan.Review.Agent = "historical-reviewer"
 			calls := 0
 			reviewer := struct {
 				ReviewCreator
@@ -140,7 +141,7 @@ func TestHistoricalProposalCorrectionModel(t *testing.T) {
 			if model != "" {
 				models = runtimeconfig.ModelSelection{Base: "b", Run: "r", Review: model}
 			}
-			finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Models: models}}, RunDependencies{
+			finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Models: models, Agent: AgentPi, ReviewAgent: AgentClaude}}, RunDependencies{
 				CommandRunner: defaultCommandRunner, PlanRecordFactory: fileReviewRecordFactory(repository), ReviewCreator: reviewer,
 			}))
 			if err := finalizer.ensureApprovedReviewProposal(context.Background(), detail, fixture.worktreeRoot, fixture.branch, fixture.head); err != nil {
@@ -148,6 +149,18 @@ func TestHistoricalProposalCorrectionModel(t *testing.T) {
 			}
 			if calls != 1 {
 				t.Fatalf("correction calls = %d, want 1", calls)
+			}
+			if detail.State.Plan.Review.Agent != "historical-reviewer" {
+				t.Fatalf("historical review relabeled: %+v", detail.State.Plan.Review)
+			}
+			found := false
+			for _, event := range detail.Events {
+				if event.Type == plan.EventTypePlanReviewed && event.Agent == "claude" {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatal("missing correction event attributed to selected reviewer")
 			}
 		})
 	}
@@ -204,6 +217,7 @@ func TestReviewAndPullRequestTelemetry(t *testing.T) {
 			for _, measurement := range []plan.AgentMetricsAvailability{plan.AgentMetricsReported, plan.AgentMetricsPartial, plan.AgentMetricsUnavailable} {
 				for _, outcome := range []string{"success", "failed", "timeout", "append failure"} {
 					t.Run(fmt.Sprintf("%s/%s/%s/%s", kind, operation, measurement, outcome), func(t *testing.T) {
+						kind := kind
 						t.Setenv(runtimeconfig.EnvMaxSliceOutputTokensDeprecated, "1")
 						t.Setenv(runtimeconfig.EnvMaxSliceCostDeprecated, "1")
 						repoRoot := t.TempDir()
@@ -223,7 +237,17 @@ func TestReviewAndPullRequestTelemetry(t *testing.T) {
 							sessionErr = &agent.SessionTimeoutError{Timeout: time.Minute}
 						}
 						calls := 0
-						descriptor, _ := agent.Lookup(kind)
+						implementation := AgentPi
+						if kind == AgentPi {
+							implementation = AgentClaude
+						}
+						capabilities := newAgentFactory(testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Agent: implementation, ReviewAgent: kind}}, RunDependencies{})).runCapabilities()
+						executor := capabilities.reviewCreator.(agentExecutor)
+						if operation == "pr" || operation == "body" {
+							executor = capabilities.pullRequestBodyGenerator.(agentExecutor)
+							kind = implementation
+						}
+						descriptor := executor.descriptor
 						providerFactory := descriptor.NewRuntime
 						descriptor.NewRuntime = func(agent.RuntimeDeps) agent.Runtime {
 							return agentRuntimeFunc(func(ctx context.Context, session agent.Session) (agent.SessionResult, error) {
@@ -259,7 +283,14 @@ func TestReviewAndPullRequestTelemetry(t *testing.T) {
 							})
 						}
 						appendCalls := 0
+						timeouts := 0
 						appender := eventAppenderFunc(func(dir string, event plan.Event) error {
+							if event.Type == plan.EventTypeSessionTimeout {
+								timeouts++
+								if event.Agent != string(kind) || event.PlanID != detail.State.Plan.ID {
+									t.Fatalf("timeout attribution: %+v", event)
+								}
+							}
 							if event.Type == plan.EventTypeAgentMetrics {
 								appendCalls++
 								if outcome == "append failure" {
@@ -276,7 +307,7 @@ func TestReviewAndPullRequestTelemetry(t *testing.T) {
 							role = plan.AgentRoleReview
 							var review plan.PlanReview
 							review, err = createReviewWithAgentSession(context.Background(), runner, agentOperationOptions{Agent: string(kind), reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123", currentBranch: "feature"})}, ReviewRun{PlanDir: detail.Dir, Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(repository))
-							if sessionErr == nil && (review.Verdict != plan.ReviewVerdictApprove || review.CommitMessage == nil) {
+							if sessionErr == nil && (review.Agent != string(kind) || review.Verdict != plan.ReviewVerdictApprove || review.CommitMessage == nil) {
 								t.Fatalf("telemetry changed approval: %+v", review)
 							}
 							if operation == "correction" && sessionErr != nil && (detail.State.Plan.Review.Verdict != plan.ReviewVerdictComment || detail.State.Plan.Review.CommitMessage != nil) {
@@ -297,6 +328,9 @@ func TestReviewAndPullRequestTelemetry(t *testing.T) {
 						}
 						if !errors.Is(err, sessionErr) {
 							t.Fatalf("error = %v, want %v", err, sessionErr)
+						}
+						if (timeouts == 1) != (outcome == "timeout") {
+							t.Fatalf("timeout events = %d, outcome = %s", timeouts, outcome)
 						}
 						wantCalls := 1
 						if operation == "correction" {

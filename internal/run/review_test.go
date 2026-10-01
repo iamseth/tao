@@ -1058,7 +1058,7 @@ func TestServiceReviewReportsStandalonePhasesInOrderAndStopsOnFailure(t *testing
 			t.Fatal(err)
 		}
 
-		options := ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi}
+		options := ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi, ReviewAgent: AgentClaude}
 		service := NewService(plan.NewFileRepository(plansRoot), out, Options{
 			ExecutionConfig: ExecutionConfig{ResolvedRunOptions: options},
 			RunDependencies: RunDependencies{CommandRunner: runner, reviewGitFactory: fixedReviewGit(git), ReviewCreator: creator},
@@ -1093,7 +1093,7 @@ func TestServiceReviewReportsStandalonePhasesInOrderAndStopsOnFailure(t *testing
 			creatorCalled = true
 			reviewedDetail = run.Detail
 			requirePhase(PhaseReview)
-			if !strings.Contains(out.String(), "Running agent review: pi\n") {
+			if !strings.Contains(out.String(), "Running agent review: claude\n") {
 				t.Fatal("agent phase was not emitted before review creation")
 			}
 			return plan.PlanReview{Verdict: plan.ReviewVerdictApprove}, nil
@@ -1124,7 +1124,7 @@ func TestServiceReviewReportsStandalonePhasesInOrderAndStopsOnFailure(t *testing
 				t.Fatalf("phase %d = %q, want %q", i, reporter.phases[i].phase, want)
 			}
 		}
-		assertTextOrder(t, out.String(), "Preparing review: plan-a", "Verifying completed branch: ", "Running agent review: pi")
+		assertTextOrder(t, out.String(), "Preparing review: plan-a", "Verifying completed branch: ", "Running agent review: claude")
 	})
 
 	t.Run("preparation failure", func(t *testing.T) {
@@ -1921,11 +1921,11 @@ func TestResumeReviewHonorsExistingPlanOwnershipAndPreservesBestEffortReviewFail
 
 func TestReviewCreatorDefaultsFromAgentCapabilities(t *testing.T) {
 	repo := plan.NewFileRepository(t.TempDir())
-	execution := testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Agent: AgentPi}}, RunDependencies{PlanRecordFactory: func(detail *plan.PlanDetail) (PlanMutationRecord, error) { return repo.PlanRecord(detail) }, EventAppender: repo, LogAppender: repo})
+	execution := testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Agent: AgentPi, ReviewAgent: AgentClaude}}, RunDependencies{PlanRecordFactory: func(detail *plan.PlanDetail) (PlanMutationRecord, error) { return repo.PlanRecord(detail) }, EventAppender: repo, LogAppender: repo})
 	resolveExecutorDefaults(&execution)
 	creator, ok := execution.Dependencies.ReviewCreator.(agentExecutor)
-	if !ok || creator.descriptor.Kind != AgentPi {
-		t.Fatalf("expected pi review creator, got %T", execution.Dependencies.ReviewCreator)
+	if !ok || creator.descriptor.Kind != AgentClaude {
+		t.Fatalf("expected claude review creator, got %T", execution.Dependencies.ReviewCreator)
 	}
 }
 

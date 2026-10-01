@@ -17,13 +17,14 @@ import (
 var reviewCommand = commandMetadata{
 	name:                  "review",
 	minPrefix:             "rev",
-	usageLines:            []string{"review (rev) [--run [--model NAME]] <plan-id-or-slug-or-path>"},
+	usageLines:            []string{"review (rev) [--run [--review-agent pi|claude] [--model NAME]] <plan-id-or-slug-or-path>"},
 	completionDescription: "Show or refresh the persisted plan review",
 	long:                  "Show the persisted LLM review for a plan, or run a fresh review and display its metadata. Reviews are stored with Tao plan metadata, not in the worktree.",
 	examples: "  tao review my-plan\n" +
 		"  tao review --run my-plan",
 	registerFlags: registerReviewFlags,
 	completion: completionContext{
+		flagValues: map[string]completionFlagValue{"review-agent": {kind: completionValueEnum, label: "agent", values: []string{"pi", "claude"}}},
 		positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs},
 	},
 	repository: repositoryDefault,
@@ -32,7 +33,30 @@ var reviewCommand = commandMetadata{
 	},
 }
 
+func registerReviewAgentFlag(fs *flag.FlagSet) {
+	fs.String("review-agent", "", "select the plan review runtime: pi or claude (default inherit)")
+}
+
+func reviewAgentFlagValue(fs *flag.FlagSet, requireRun bool) (runtimeconfig.AgentKind, error) {
+	if !flagWasProvided(fs, "review-agent") {
+		return "", nil
+	}
+	if requireRun && !flagBoolValue(fs, "run") {
+		return "", fmt.Errorf("--review-agent requires --run")
+	}
+	raw := flagStringValue(fs, "review-agent")
+	if raw == "" {
+		return "", fmt.Errorf("--review-agent must be pi or claude")
+	}
+	value, err := runtimeconfig.ParseAgentKind(raw)
+	if err != nil {
+		return "", fmt.Errorf("--review-agent: %w", err)
+	}
+	return value, nil
+}
+
 func registerReviewFlags(fs *flag.FlagSet) {
+	registerReviewAgentFlag(fs)
 	fs.Bool("run", false, "run a fresh review before displaying the result")
 	fs.String("model", "", "override the agent model for a fresh review (--run)")
 }
@@ -42,10 +66,14 @@ func (a App) review(ctx context.Context, repo runpkg.Repository, args []string) 
 	if err != nil {
 		return err
 	}
-	if err := requirePositionals(positional, 1, "usage: tao review [--run [--model NAME]] <plan-id-or-slug-or-path>"); err != nil {
+	if err := requirePositionals(positional, 1, "usage: tao review [--run [--review-agent pi|claude] [--model NAME]] <plan-id-or-slug-or-path>"); err != nil {
 		return err
 	}
 	if _, err := modelFlagValue(fs); err != nil {
+		return err
+	}
+	_, err = reviewAgentFlagValue(fs, true)
+	if err != nil {
 		return err
 	}
 	if flagBoolValue(fs, "run") {

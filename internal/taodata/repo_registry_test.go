@@ -11,6 +11,89 @@ import (
 	"time"
 )
 
+func TestRepoReviewAgentDefaults(t *testing.T) {
+	var legacy Repo
+	if err := json.Unmarshal([]byte(`{"id":"legacy","unknown":true}`), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if value, ok := legacy.ReviewAgentDefault(); ok || value != "" {
+		t.Fatal("legacy override")
+	}
+	data, err := json.Marshal(legacy)
+	if err != nil || strings.Contains(string(data), "review_agent") {
+		t.Fatalf("legacy JSON: %s %v", data, err)
+	}
+	for _, agent := range []string{"pi", "claude", "future-runtime"} {
+		registry := Registry{DataHome: t.TempDir()}
+		repo := (Repo{Schema: RepoSchema, ID: "review-agent", Root: "/repo"}).WithReviewAgentDefault(agent)
+		if err := registry.WriteRepo(repo); err != nil {
+			t.Fatal(err)
+		}
+		stored, err := registry.ReadRepo(repo.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if value, ok := stored.ReviewAgentDefault(); !ok || value != agent {
+			t.Fatal("registry lost review selector")
+		}
+		for _, order := range []string{"rpm", "rmp", "prm", "pmr", "mrp", "mpr"} {
+			for _, unsetOrder := range []string{"rpm", "rmp", "prm", "pmr", "mrp", "mpr"} {
+				r := legacy
+				pr := false
+				models := RepoModelDefaults{Review: "review-model"}
+				for _, key := range order {
+					switch key {
+					case 'r':
+						r = r.WithReviewAgentDefault(agent)
+					case 'p':
+						r = r.WithPullRequestDefault(&pr)
+					case 'm':
+						r = r.WithModelDefaults(models)
+					}
+				}
+				data, err := json.Marshal(r)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var stored Repo
+				if err := json.Unmarshal(data, &stored); err != nil {
+					t.Fatal(err)
+				}
+				if value, ok := stored.ReviewAgentDefault(); !ok || value != agent {
+					t.Fatalf("round trip: %s", data)
+				}
+				remaining := map[rune]bool{'r': true, 'p': true, 'm': true}
+				for _, key := range unsetOrder {
+					switch key {
+					case 'r':
+						stored = stored.WithReviewAgentDefault("")
+					case 'p':
+						stored = stored.WithPullRequestDefault(nil)
+					case 'm':
+						stored = stored.WithModelDefaults(RepoModelDefaults{})
+					}
+					remaining[key] = false
+					if value, ok := stored.ReviewAgentDefault(); ok != remaining['r'] || (ok && value != agent) {
+						t.Fatal("review default lost")
+					}
+					if value, ok := stored.PullRequestDefault(); ok != remaining['p'] || value {
+						t.Fatal("PR default lost")
+					}
+					if value, ok := stored.ModelDefaults(); ok != remaining['m'] || (ok && value != models) {
+						t.Fatal("model defaults lost")
+					}
+				}
+				if stored.RunDefaults != nil {
+					t.Fatal("empty container retained")
+				}
+				if value, ok := r.ReviewAgentDefault(); !ok || value != agent {
+					t.Fatal("original mutated")
+				}
+			}
+		}
+	}
+}
+
 func TestRepoIDStableFromCanonicalRoot(t *testing.T) {
 	root := filepath.Clean("/tmp/example-repo")
 	first := RepoID(root)

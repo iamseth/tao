@@ -36,5 +36,7 @@ func newAgentFactory(execution runExecution) agentFactory {
 func (f agentFactory) runCapabilities() agentRunCapabilities {
 	descriptor, _ := agent.Lookup(f.config.Agent)
 	executor := newAgentExecutor(descriptor, f.config, f.dependencies, f.startingBranch, f.startingDirtyPaths)
-	return agentRunCapabilities{sliceExecutor: executor, pullRequestBodyGenerator: executor, reviewCreator: executor}
+	reviewDescriptor, _ := agent.Lookup(f.config.ReviewAgentKind())
+	reviewer := newAgentExecutor(reviewDescriptor, f.config, f.dependencies, f.startingBranch, f.startingDirtyPaths)
+	return agentRunCapabilities{sliceExecutor: executor, pullRequestBodyGenerator: executor, reviewCreator: reviewer}
 }

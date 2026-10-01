@@ -35,6 +35,40 @@ func TestCommandOptionsPrecedence(t *testing.T) {
 	}
 }
 
+func TestCommandOptionsReviewAgent(t *testing.T) {
+	for _, profile := range []CommandProfile{CommandRun, CommandReview} {
+		for _, tc := range []struct {
+			name                   string
+			env                    string
+			repository, flag, want AgentKind
+			source                 string
+		}{
+			{"inherited", "", "", "", "", "default"},
+			{"environment", "claude", "", "", AgentClaude, "env"},
+			{"repository", "claude", AgentPi, "", AgentPi, "repository"},
+			{"flag", "claude", AgentPi, AgentClaude, AgentClaude, "flag"},
+		} {
+			t.Run(string(profile)+"/"+tc.name, func(t *testing.T) {
+				got, err := ResolveCommandOptions(CommandOptionsInput{Profile: profile,
+					Env:        commandSnapshot(map[string]string{EnvReviewAgent: tc.env}),
+					Repository: RunOptionsPatch{ReviewAgent: tc.repository}, Flags: RunOptionsPatch{ReviewAgent: tc.flag}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got.RunOptions.ReviewAgent != tc.want || got.Sources[EnvReviewAgent] != tc.source {
+					t.Fatalf("got %+v", got)
+				}
+			})
+		}
+		if _, err := ResolveCommandOptions(CommandOptionsInput{Profile: profile, Env: commandSnapshot(map[string]string{EnvReviewAgent: "invalid"})}); err == nil {
+			t.Fatal("invalid reviewer admitted")
+		}
+	}
+	if _, err := ResolveCommandOptions(CommandOptionsInput{Profile: CommandMerge, Env: commandSnapshot(map[string]string{EnvReviewAgent: "invalid"})}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCommandOptionsApplicability(t *testing.T) {
 	for _, profile := range []CommandProfile{CommandReview, CommandMerge, CommandPromptRun, CommandPromptOther} {
 		t.Run(string(profile), func(t *testing.T) {

@@ -22,6 +22,30 @@ func TestPrepareRunExecutionResolvesAllRequiredDependencies(t *testing.T) {
 	}
 }
 
+func TestReviewSelectionPreservesInjectedCapabilities(t *testing.T) {
+	for _, explicit := range []bool{false, true} {
+		injected := &recordingReviewCreator{}
+		factoryReview := &recordingReviewCreator{}
+		calls := 0
+		execution := testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Agent: AgentPi, ReviewAgent: AgentClaude}}, RunDependencies{AgentFactory: func(execution runExecution) agentRunCapabilities {
+			calls++
+			if execution.Config.ReviewAgentKind() != AgentClaude {
+				t.Fatal("factory lost review selection")
+			}
+			return agentRunCapabilities{reviewCreator: factoryReview}
+		}})
+		want := factoryReview
+		if explicit {
+			execution.Dependencies.ReviewCreator = injected
+			want = injected
+		}
+		resolveExecutorDefaults(&execution)
+		if calls != 1 || execution.Dependencies.ReviewCreator != want {
+			t.Fatalf("injected capability replaced: calls=%d reviewer=%v", calls, execution.Dependencies.ReviewCreator)
+		}
+	}
+}
+
 func TestPrepareRunExecutionAllowsCurrentModeReverifyWithPullRequestDefault(t *testing.T) {
 	detail := completedReviewPlanDetail(t.TempDir())
 	detail.State.Repo.Root = "/current-root"

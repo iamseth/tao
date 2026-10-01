@@ -24,7 +24,7 @@ import (
 var reworkCommand = commandMetadata{
 	name:                  "rework",
 	minPrefix:             "rew",
-	usageLines:            []string{"rework (rew) [--force] [--run] [--from-pr] [--from-authors owner|all] [--dry-run] <plan-id-or-slug-or-path>"},
+	usageLines:            []string{"rework (rew) [--force] [--run [--review-agent pi|claude]] [--from-pr] [--from-authors owner|all] [--dry-run] <plan-id-or-slug-or-path>"},
 	completionDescription: "Reopen a reviewed plan with deterministic rework slices",
 	long:                  "Reopen a reviewed plan from its persisted Tao review or recorded pull-request feedback. With --from-pr, Tao classifies unresolved review threads, persists the triage, and converts change requests into ordinary rework slices.",
 	examples: "  tao rework my-plan\n" +
@@ -34,6 +34,7 @@ var reworkCommand = commandMetadata{
 		"  tao rework --force my-plan",
 	registerFlags: registerReworkFlags,
 	completion: completionContext{
+		flagValues: map[string]completionFlagValue{"review-agent": {kind: completionValueEnum, label: "agent", values: []string{"pi", "claude"}}},
 		positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs},
 	},
 	repository: repositoryDefault,
@@ -43,6 +44,7 @@ var reworkCommand = commandMetadata{
 }
 
 func registerReworkFlags(fs *flag.FlagSet) {
+	registerReviewAgentFlag(fs)
 	fs.Bool("force", false, "reopen even when the review gate would refuse")
 	fs.Bool("run", false, "run the plan after reopening")
 	fs.Bool("from-pr", false, "reopen from unresolved threads on the recorded pull request")
@@ -58,7 +60,7 @@ func (a App) rework(ctx context.Context, repo planRunRepository, args []string) 
 	if err != nil {
 		return err
 	}
-	if err := requirePositionals(positional, 1, "usage: tao rework [--force] [--run] [--from-pr] [--from-authors owner|all] [--dry-run] <plan-id-or-slug-or-path>"); err != nil {
+	if err := requirePositionals(positional, 1, "usage: tao rework [--force] [--run [--review-agent pi|claude]] [--from-pr] [--from-authors owner|all] [--dry-run] <plan-id-or-slug-or-path>"); err != nil {
 		return err
 	}
 	input := positional[0]
@@ -71,6 +73,9 @@ func (a App) rework(ctx context.Context, repo planRunRepository, args []string) 
 		return err
 	}
 	var options runtimeconfig.CommandOptions
+	if _, err := reviewAgentFlagValue(fs, true); err != nil {
+		return err
+	}
 	if runAfter {
 		// Resolve once before any durable reopening or PR triage mutation.
 		options, err = a.resolveCommandOptions(ctx, fs, runtimeconfig.CommandRun)

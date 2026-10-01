@@ -72,6 +72,29 @@ func TestSequentialRequestsKeepRecoveryInvocationLocal(t *testing.T) {
 	}
 }
 
+func TestPrepareRequestConfigPreservesReviewSelector(t *testing.T) {
+	for _, selected := range []AgentKind{"", AgentPi, AgentClaude} {
+		defaults := ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Agent: AgentPi, ReviewAgent: selected}}
+		request := Request{ResolvedRunOptions: ResolvedRunOptions{Agent: AgentClaude}}
+		config, err := prepareRequestConfig(defaults, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := selected
+		if want == "" {
+			want = AgentClaude
+		}
+		if config.ReviewAgent != selected || config.ReviewAgentKind() != want {
+			t.Fatalf("selector %q: config = %+v", selected, config)
+		}
+		request.ReviewAgent = AgentPi
+		config, err = prepareRequestConfig(defaults, request.ForNextRound())
+		if err != nil || config.ReviewAgentKind() != AgentPi {
+			t.Fatalf("invocation reviewer lost: %+v, %v", config, err)
+		}
+	}
+}
+
 func TestRequestForNextRoundClearsSingleShotRecoveryModes(t *testing.T) {
 	request := Request{
 		Input:        "plan-a",
@@ -82,6 +105,7 @@ func TestRequestForNextRoundClearsSingleShotRecoveryModes(t *testing.T) {
 			CommitPolicy:   CommitPolicyNone,
 			ExecutionMode:  ExecutionModeCurrent,
 			Agent:          AgentClaude,
+			ReviewAgent:    AgentPi,
 			PullRequest:    true,
 			ReviewEnabled:  true,
 			SessionTimeout: 5 * time.Minute,

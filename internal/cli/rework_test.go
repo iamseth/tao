@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -117,6 +118,29 @@ func TestReworkFromPullRequestRefusesPlanWithoutRecordedPullRequest(t *testing.T
 	err := (App{Out: &bytes.Buffer{}}).Run(context.Background(), []string{"--plans-dir", root, "rework", "--from-pr", planID})
 	if err == nil || !strings.Contains(err.Error(), "requires plan "+planID+" to have a recorded pull request") {
 		t.Fatalf("rework --from-pr error = %v, want missing recorded pull request", err)
+	}
+}
+
+func TestReworkFromPullRequestRunPreservesReviewAgent(t *testing.T) {
+	root := t.TempDir()
+	id := "review-agent-pr-handoff"
+	dir := writeCLIReworkPlan(t, root, id, plan.StatusCompleted, reworkReview(plan.ReviewVerdictApprove, nil))
+	addCLIReworkPullRequest(t, dir)
+	thread := forge.ReviewThread{NodeID: "PRRT_change", Path: "a.go", Comments: []forge.ReviewThreadComment{{AuthorLogin: "owner", Body: "Fix this."}}}
+	stubCLIReworkPRPipeline(t, []forge.ReviewThread{thread}, []reworkpkg.PRThreadClassification{{ThreadNodeID: thread.NodeID, Kind: reworkpkg.PRThreadKindChange, Rationale: "Fix needed."}})
+	old := executeSinglePlan
+	t.Cleanup(func() { executeSinglePlan = old })
+	stop := errors.New("handoff reached")
+	executeSinglePlan = func(_ runpkg.Service, _ context.Context, request runpkg.Request) error {
+		if request.ReviewAgentKind() != runtimeconfig.AgentClaude {
+			t.Fatalf("lost reviewer: %+v", request)
+		}
+		return stop
+	}
+	app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }}
+	err := app.rework(context.Background(), plan.NewFileRepository(root), []string{"--from-pr", "--run", "--review-agent=claude", id})
+	if !errors.Is(err, stop) {
+		t.Fatalf("handoff: %v", err)
 	}
 }
 
@@ -254,6 +278,39 @@ func TestReworkFromPullRequestAllQuestionsProducesNoSlices(t *testing.T) {
 	}
 }
 
+func TestReworkReviewAgentAdmissionBeforeMutation(t *testing.T) {
+	for _, fromPR := range []bool{false, true} {
+		for _, test := range []struct {
+			name, repository string
+			flags            []string
+		}{
+			{"invalid flag", "", []string{"--run", "--review-agent=invalid"}},
+			{"empty flag", "", []string{"--run", "--review-agent="}},
+			{"requires run", "", []string{"--review-agent=claude"}},
+			{"invalid repository", "invalid", []string{"--run", "--review-agent=pi"}},
+		} {
+			t.Run(fmt.Sprintf("%s/pr=%t", test.name, fromPR), func(t *testing.T) {
+				root := t.TempDir()
+				id := "review-agent-admission"
+				dir := writeCLIReworkPlan(t, root, id, plan.StatusCompleted, reworkReview(plan.ReviewVerdictChangesRequested, []plan.ReviewFinding{{Severity: "major", File: "a.go", Message: "fix"}}))
+				before := readText(t, filepath.Join(dir, "state.json"))
+				registry := &fakeNoteRegistry{current: (taodata.Repo{}).WithReviewAgentDefault(test.repository)}
+				app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry { return registry }}
+				args := append([]string{id}, test.flags...)
+				if fromPR {
+					args = append(args, "--from-pr")
+				}
+				if err := app.rework(context.Background(), plan.NewFileRepository(root), args); err == nil {
+					t.Fatal("accepted invalid selector")
+				}
+				if after := readText(t, filepath.Join(dir, "state.json")); after != before {
+					t.Fatal("mutated state before admission")
+				}
+			})
+		}
+	}
+}
+
 func TestReworkRunRetainsLockOwnershipForNestedRun(t *testing.T) {
 	root := t.TempDir()
 	planID := "20260628-1200-rework-run-lock"
@@ -265,12 +322,15 @@ func TestReworkRunRetainsLockOwnershipForNestedRun(t *testing.T) {
 	executeSinglePlan = func(service runpkg.Service, ctx context.Context, request runpkg.Request) error {
 		return service.WithPlanRunLock(ctx, request, func(context.Context) error {
 			nestedRan = true
+			if request.ReviewAgentKind() != runtimeconfig.AgentClaude {
+				t.Fatalf("lost explicit review agent: %+v", request)
+			}
 			return nestedErr
 		})
 	}
 	t.Cleanup(func() { executeSinglePlan = oldExecutor })
 
-	err := (App{Out: &bytes.Buffer{}}).Run(context.Background(), []string{"--plans-dir", root, "rework", "--run", planID})
+	err := (App{Out: &bytes.Buffer{}}).Run(context.Background(), []string{"--plans-dir", root, "rework", "--run", "--review-agent=claude", planID})
 	if !errors.Is(err, nestedErr) {
 		t.Fatalf("rework --run error = %v, want nested sentinel", err)
 	}

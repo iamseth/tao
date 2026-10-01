@@ -265,6 +265,39 @@ func TestRunRejectsMutuallyExclusiveRecoveryModes(t *testing.T) {
 	}
 }
 
+func TestRunReviewAgentAdmission(t *testing.T) {
+	for _, value := range []string{"", "invalid", "PI"} {
+		app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil)}
+		err := app.run(context.Background(), fakeRepository{}, []string{"--review-agent=" + value, "plan-a"})
+		if err == nil || !strings.Contains(err.Error(), "--review-agent") {
+			t.Fatalf("%q: %v", value, err)
+		}
+	}
+}
+
+func TestRunNoReviewWithUnavailableReviewer(t *testing.T) {
+	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+	app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }}
+	app.CommandRunner = func(_ context.Context, _ string, name string, args []string, stdout, _ io.Writer) error {
+		if name == "git" {
+			writeRunGitOutput(stdout, args)
+		}
+		return nil
+	}
+	starter := fakeCLIProcessStarter(t, "done", func(string) {
+		fixture.write(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
+	})
+	app.ProcessStarter = func(ctx context.Context, cwd, name string, args []string) (run.Process, error) {
+		if name != "pi" {
+			t.Fatalf("unused reviewer started: %s", name)
+		}
+		return starter(ctx, cwd, name, args)
+	}
+	if err := app.run(context.Background(), plan.NewFileRepository(fixture.root), []string{"--execution-mode=current", "--commit-policy=none", "--no-review", "--review-agent=claude", fixture.id}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunNoReviewFlagOverridesRunRequest(t *testing.T) {
 	defaults, err := (App{}).runEnvDefaults()
 	if err != nil {

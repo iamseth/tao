@@ -68,6 +68,7 @@ type RunOptionsPatch struct {
 	CommitPolicy   CommitPolicy   `json:"commit_policy,omitempty"`
 	ExecutionMode  ExecutionMode  `json:"execution_mode,omitempty"`
 	Agent          AgentKind      `json:"agent,omitempty"`
+	ReviewAgent    AgentKind      `json:"review_agent,omitempty"`
 	PullRequest    *bool          `json:"pull_request,omitempty"`
 	ReviewEnabled  *bool          `json:"review_enabled,omitempty"`
 	SessionTimeout *time.Duration `json:"session_timeout,omitempty"`
@@ -83,10 +84,22 @@ type ResolvedRunOptions struct {
 	CommitPolicy   CommitPolicy
 	ExecutionMode  ExecutionMode
 	Agent          AgentKind
+	ReviewAgent    AgentKind
 	PullRequest    bool
 	ReviewEnabled  bool
 	SessionTimeout time.Duration
 	Models         ModelSelection
+}
+
+// ReviewAgentKind resolves inheritance against the final implementing runtime.
+func (o ResolvedRunOptions) ReviewAgentKind() AgentKind {
+	if o.ReviewAgent != "" {
+		return o.ReviewAgent
+	}
+	if o.Agent != "" {
+		return o.Agent
+	}
+	return AgentPi
 }
 
 // Run option values and built-in limits supply normalization defaults and accepted
@@ -338,6 +351,7 @@ func (o ResolvedRunOptions) RunOptionsPatch() RunOptionsPatch {
 		CommitPolicy:   o.CommitPolicy,
 		ExecutionMode:  o.ExecutionMode,
 		Agent:          o.Agent,
+		ReviewAgent:    o.ReviewAgent,
 		PullRequest:    &pullRequest,
 		ReviewEnabled:  &reviewEnabled,
 		SessionTimeout: &sessionTimeout,
@@ -403,6 +417,13 @@ func mergeRunOptions(options ResolvedRunOptions, patch RunOptionsPatch) (Resolve
 			return ResolvedRunOptions{}, err
 		}
 		options.ExecutionMode = executionMode
+	}
+	if patch.ReviewAgent != "" {
+		agent, err := ParseAgentKind(patch.ReviewAgent.String())
+		if err != nil {
+			return ResolvedRunOptions{}, fmt.Errorf("review_agent: %w", err)
+		}
+		options.ReviewAgent = agent
 	}
 	if patch.Agent != "" {
 		agent, err := ParseAgentKind(patch.Agent.String())

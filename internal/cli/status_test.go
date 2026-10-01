@@ -156,7 +156,11 @@ func TestStatusRepositoryModelDefaults(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			if mode == "repository" {
+				registered = registered.WithReviewAgentDefault("claude")
+			}
 			if mode != "default" {
+				t.Setenv(runtimeconfig.EnvReviewAgent, "pi")
 				for _, key := range modelKeys {
 					t.Setenv(key, "environment")
 				}
@@ -177,10 +181,17 @@ func TestStatusRepositoryModelDefaults(t *testing.T) {
 				t.Fatal(err)
 			}
 			values := []string{"base", "run", "review", "merge", "resolver", "escalation"}
-			keys := append(append([]string(nil), modelKeys...), runtimeconfig.EnvReworkEscalationFromAttempt)
+			keys := append(append([]string(nil), modelKeys...), runtimeconfig.EnvReworkEscalationFromAttempt, runtimeconfig.EnvReviewAgent)
 			for i, key := range keys {
 				want, source := "", mode
 				switch key {
+				case runtimeconfig.EnvReviewAgent:
+					if mode == "repository" {
+						want = "claude"
+					}
+					if mode == "env" {
+						want = "pi"
+					}
 				case runtimeconfig.EnvReworkEscalationFromAttempt:
 					want, source = "4", "default"
 					if mode != "default" {

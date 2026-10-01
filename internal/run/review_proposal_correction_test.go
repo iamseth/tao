@@ -47,7 +47,7 @@ func TestReviewProposalCorrectionFailureParity(t *testing.T) {
 						if err != nil {
 							return nil, err
 						}
-						return correctionParityRecord{PlanRecord: record, recordingCalls: &recordingCalls, fail: tt.recordingFails}, nil
+						return correctionParityRecord{t: t, PlanRecord: record, recordingCalls: &recordingCalls, fail: tt.recordingFails}, nil
 					}
 					calls := 0
 					executor := agentSessionExecutorFunc(func(_ context.Context, request AgentSessionRequest) (AgentSessionResult, error) {
@@ -74,11 +74,11 @@ func TestReviewProposalCorrectionFailureParity(t *testing.T) {
 							ReviewCreator
 							AgentSessionExecutor
 						}{AgentSessionExecutor: executor}
-						finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{}, RunDependencies{CommandRunner: defaultCommandRunner, PlanRecordFactory: factory, ReviewCreator: reviewer, Now: clock}))
+						finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Agent: AgentPi, ReviewAgent: AgentClaude}}, RunDependencies{CommandRunner: defaultCommandRunner, PlanRecordFactory: factory, ReviewCreator: reviewer, Now: clock}))
 						err = finalizer.ensureApprovedReviewProposal(context.Background(), detail, fixture.worktreeRoot, fixture.branch, fixture.head)
 					} else {
 						var review plan.PlanReview
-						review, err = createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", CommandRunner: defaultCommandRunner, StartingBranch: fixture.branch, Now: clock}, ReviewRun{PlanDir: fixture.planDir, Detail: detail, RepoRoot: fixture.worktreeRoot}, factory)
+						review, err = createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "claude", CommandRunner: defaultCommandRunner, StartingBranch: fixture.branch, Now: clock}, ReviewRun{PlanDir: fixture.planDir, Detail: detail, RepoRoot: fixture.worktreeRoot}, factory)
 						if review.IsApproved() || review.Verdict != plan.ReviewVerdictComment || review.CommitMessage != nil {
 							t.Fatalf("unsafe fresh review projection: %#v", review)
 						}
@@ -127,6 +127,7 @@ func TestReviewProposalCorrectionFailureParity(t *testing.T) {
 }
 
 type correctionParityRecord struct {
+	t *testing.T
 	*plan.PlanRecord
 	recordingCalls *int
 	fail           bool
@@ -134,6 +135,9 @@ type correctionParityRecord struct {
 
 func (r correctionParityRecord) RecordReviewProposalCorrection(expected plan.FinalizationFailure, review plan.PlanReview, agent string) error {
 	*r.recordingCalls++
+	if agent != "claude" {
+		r.t.Errorf("correction attributed to wrong reviewer: %s", agent)
+	}
 	if r.fail {
 		return errors.New("record correction failed")
 	}

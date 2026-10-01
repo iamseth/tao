@@ -12,7 +12,7 @@ import (
 	"github.com/iamseth/tao/internal/taodata"
 )
 
-const repoConfigUsage = "repo config [--pull-request true|false|unset] [--max-rework-attempts N|unset] [--rework-escalation-from-attempt N|unset] [--model NAME|unset] [--run-model NAME|unset] [--review-model NAME|unset] [--merge-review-model NAME|unset] [--resolver-model NAME|unset] [--rework-escalation-model NAME|unset] [<repo-id>]"
+const repoConfigUsage = "repo config [--review-agent pi|claude|unset] [--pull-request true|false|unset] [--max-rework-attempts N|unset] [--rework-escalation-from-attempt N|unset] [--model NAME|unset] [--run-model NAME|unset] [--review-model NAME|unset] [--merge-review-model NAME|unset] [--resolver-model NAME|unset] [--rework-escalation-model NAME|unset] [<repo-id>]"
 
 var repoCommand = commandMetadata{
 	name:                  "repo",
@@ -29,7 +29,8 @@ var repoCommand = commandMetadata{
 	subcommands: []commandSubcommand{
 		{name: "list", description: "List registered repositories and health summaries"},
 		{name: "show", description: "Show details for one registered repository"},
-		{name: "config", description: "Show or set repository run defaults", registerFlags: registerRepoConfigFlags},
+		{name: "config", description: "Show or set repository run defaults", registerFlags: registerRepoConfigFlags,
+			completion: completionContext{flagValues: map[string]completionFlagValue{"review-agent": {kind: completionValueEnum, label: "agent", values: []string{"pi", "claude", "unset"}}}}},
 		{name: "doctor", description: "Check registered repositories for health problems"},
 	},
 	registerFlags: registerRepoConfigFlags,
@@ -114,6 +115,7 @@ func (a App) repoShow(ctx context.Context, registry taodata.Registry, input stri
 func registerRepoConfigFlags(fs *flag.FlagSet) {
 	fs.String("max-rework-attempts", "", "set automatic rework attempts (non-negative integer, zero disables) or unset")
 	fs.String("rework-escalation-from-attempt", "", "set the first escalation-eligible attempt (integer at least one) or unset")
+	fs.String("review-agent", "", "set the repository review_agent default to pi, claude, or unset")
 	fs.String("pull-request", "", "set the repository pull_request run default to true, false, or unset")
 	for _, name := range []string{"model", "run-model", "review-model", "merge-review-model", "resolver-model", "rework-escalation-model"} {
 		fs.String(name, "", "set the repository "+strings.ReplaceAll(name, "-", "_")+" default to a model name or unset")
@@ -137,6 +139,22 @@ func (a App) repoConfig(ctx context.Context, registry taodata.Registry, args []s
 		return err
 	}
 	changed := false
+	if flagWasProvided(fs, "review-agent") {
+		raw := flagStringValue(fs, "review-agent")
+		value := ""
+		if raw != "unset" {
+			if raw == "" {
+				return errors.New("--review-agent must be pi, claude, or unset")
+			}
+			parsed, err := runtimeconfig.ParseAgentKind(raw)
+			if err != nil {
+				return fmt.Errorf("--review-agent: %w (use unset to inherit)", err)
+			}
+			value = parsed.String()
+		}
+		repo = repo.WithReviewAgentDefault(value)
+		changed = true
+	}
 	if flagWasProvided(fs, "pull-request") {
 		var value *bool
 		if raw := strings.TrimSpace(flagStringValue(fs, "pull-request")); !strings.EqualFold(raw, "unset") {
@@ -209,6 +227,10 @@ func (a App) repoConfig(ctx context.Context, registry taodata.Registry, args []s
 			return err
 		}
 	}
+	reviewAgent := "unset"
+	if value, ok := repo.ReviewAgentDefault(); ok {
+		reviewAgent = value
+	}
 	pullRequest := "unset"
 	if value, ok := repo.PullRequestDefault(); ok {
 		pullRequest = strconv.FormatBool(value)
@@ -217,6 +239,7 @@ func (a App) repoConfig(ctx context.Context, registry taodata.Registry, args []s
 		"Repo: " + emptyDash(repo.Name),
 		"ID: " + emptyDash(repo.ID),
 		"pull_request: " + pullRequest,
+		"review_agent: " + reviewAgent,
 	}
 	for _, setting := range numericFlags {
 		value := "unset"

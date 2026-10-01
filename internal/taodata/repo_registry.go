@@ -34,6 +34,7 @@ type Repo struct {
 
 // RepoRunDefaults records optional defaults for runs in one repository.
 type RepoRunDefaults struct {
+	ReviewAgent                 string             `json:"review_agent,omitempty"`
 	PullRequest                 *bool              `json:"pull_request,omitempty"`
 	Models                      *RepoModelDefaults `json:"models,omitempty"`
 	MaxReworkAttempts           *int               `json:"max_rework_attempts,omitempty"`
@@ -41,7 +42,7 @@ type RepoRunDefaults struct {
 }
 
 func (d RepoRunDefaults) empty() bool {
-	return d.PullRequest == nil && d.Models == nil && d.MaxReworkAttempts == nil && d.ReworkEscalationFromAttempt == nil
+	return d.ReviewAgent == "" && d.PullRequest == nil && d.Models == nil && d.MaxReworkAttempts == nil && d.ReworkEscalationFromAttempt == nil
 }
 
 // WithReworkDefaults returns a copy with each numeric default copied from its
@@ -90,6 +91,29 @@ func (r Repo) WithModelDefaults(values RepoModelDefaults) Repo {
 	if values != (RepoModelDefaults{}) {
 		defaults.Models = &values
 	}
+	r.RunDefaults = &defaults
+	if defaults.empty() {
+		r.RunDefaults = nil
+	}
+	return r
+}
+
+// ReviewAgentDefault returns the optional repository review runtime selector.
+func (r Repo) ReviewAgentDefault() (string, bool) {
+	if r.RunDefaults == nil || r.RunDefaults.ReviewAgent == "" {
+		return "", false
+	}
+	return r.RunDefaults.ReviewAgent, true
+}
+
+// WithReviewAgentDefault returns a copy; an empty value removes only this override.
+// Runtime admission, not storage, validates supported selectors.
+func (r Repo) WithReviewAgentDefault(value string) Repo {
+	var defaults RepoRunDefaults
+	if r.RunDefaults != nil {
+		defaults = *r.RunDefaults
+	}
+	defaults.ReviewAgent = value
 	r.RunDefaults = &defaults
 	if defaults.empty() {
 		r.RunDefaults = nil

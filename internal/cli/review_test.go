@@ -90,6 +90,33 @@ func TestStalenessWarnsWhenBaseCommitMissing(t *testing.T) {
 	}
 }
 
+func TestReviewAgentUnavailableDoesNotFallback(t *testing.T) {
+	fixture := newRunPlanFixture(t, plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
+	calls := 0
+	app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvAgent: "pi"}), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }}
+	app.CommandRunner = reviewFakeRunner(map[string]string{"status --porcelain": "", "rev-parse HEAD": "head123\n"}, nil)
+	app.ProcessStarter = func(_ context.Context, _, name string, _ []string) (agent.Process, error) {
+		calls++
+		if name != "claude" {
+			t.Fatalf("fell back to %s", name)
+		}
+		return nil, errors.New("review runtime unavailable")
+	}
+	err := app.review(context.Background(), plan.NewFileRepository(fixture.root), []string{"--run", "--review-agent=claude", fixture.id})
+	if err == nil || !strings.Contains(err.Error(), "review runtime unavailable") || calls != 1 {
+		t.Fatalf("error=%v calls=%d", err, calls)
+	}
+}
+
+func TestReviewAgentRejectsInvalidFlags(t *testing.T) {
+	app := App{Out: io.Discard, Err: io.Discard}
+	for _, args := range [][]string{{"--review-agent=claude", "plan-a"}, {"--run", "--review-agent=invalid", "plan-a"}, {"--run", "--review-agent=", "plan-a"}} {
+		if err := app.review(context.Background(), fakeRepository{}, args); err == nil || !strings.Contains(err.Error(), "--review-agent") {
+			t.Fatalf("%v: %v", args, err)
+		}
+	}
+}
+
 func TestReviewPrintsPersistedReviewArtifact(t *testing.T) {
 	detail := &plan.PlanDetail{
 		State:  plan.State{Status: plan.StatusInReview, Plan: plan.PlanState{ID: "plan-a", Review: &plan.PlanReview{Verdict: "approve", Summary: "ready"}}},
@@ -281,9 +308,12 @@ func TestReviewRunTriggersFreshReview(t *testing.T) {
 		{name: "explicit override", modelFlag: []string{"--model", "provider/override"}, wantModel: "provider/override", verdict: "changes_requested"},
 		{name: "notice write failure", wantModel: "repo-review", verdict: "comment", failNotice: true},
 		{name: "empty inherits", modelFlag: []string{"--model="}, wantModel: "repo-review"},
+		{name: "explicit reviewer", modelFlag: []string{"--review-agent=pi"}, wantModel: "repo-review"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			clearTaoEnv(t)
+			t.Setenv(runtimeconfig.EnvAgent, "claude")
+			t.Setenv(runtimeconfig.EnvReviewAgent, "claude")
 			t.Setenv(runtimeconfig.EnvModel, "env-base")
 			if !tt.baseOnly || !tt.envOnly {
 				t.Setenv(runtimeconfig.EnvReviewModel, "env-review")
@@ -303,6 +333,7 @@ func TestReviewRunTriggersFreshReview(t *testing.T) {
 			} else if tt.baseOnly {
 				registered.RunDefaults.Models.Review = ""
 			}
+			registered = registered.WithReviewAgentDefault("pi")
 			registry := &commandOptionsRegistry{fakeNoteRegistry: fakeNoteRegistry{current: registered}}
 
 			fixture := newRunPlanFixture(t, plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
@@ -354,6 +385,9 @@ func TestReviewRunTriggersFreshReview(t *testing.T) {
 			app.Registry = func() NoteRegistry { return registry }
 			starter := app.ProcessStarter
 			app.ProcessStarter = func(ctx context.Context, cwd, name string, args []string) (agent.Process, error) {
+				if name != "pi" {
+					t.Fatalf("wrong review runtime: %s", name)
+				}
 				if tt.failNotice && !failingWriter.attempted {
 					t.Fatal("notice write was not attempted before startup")
 				}

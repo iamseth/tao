@@ -472,8 +472,12 @@ func TestRunLocationAdvisoriesContinueThroughDirectExecution(t *testing.T) {
 			calls := 0
 			oldExecutor := executeSinglePlan
 			t.Cleanup(func() { executeSinglePlan = oldExecutor })
-			executeSinglePlan = func(run.Service, context.Context, run.Request) error {
+			executeSinglePlan = func(_ run.Service, _ context.Context, request run.Request) error {
 				calls++
+				if request.ReviewAgentKind() != runtimeconfig.AgentClaude {
+					t.Fatalf("round %d lost explicit reviewer: %+v", calls, request)
+				}
+				t.Setenv(runtimeconfig.EnvReviewAgent, "pi")
 				// Later rounds must retain the invocation's typed thresholds.
 				t.Setenv(runtimeconfig.EnvBudgetPlanToolCallsWarn, "99999")
 				if test.execFail && calls == 4 {
@@ -516,7 +520,7 @@ func TestRunLocationAdvisoriesContinueThroughDirectExecution(t *testing.T) {
 				}
 				return nil
 			}
-			args := []string{"--no-run-header"}
+			args := []string{"--no-run-header", "--review-agent=claude"}
 			if test.cap {
 				args = append(args, "--max-rework-attempts", "2")
 			}

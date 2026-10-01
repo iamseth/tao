@@ -21,6 +21,32 @@ func snapshotStatusRow(s EnvSnapshot, key string) EnvVarStatus {
 	return EnvVarStatus{}
 }
 
+func TestReviewAgentSnapshot(t *testing.T) {
+	for _, value := range []string{"", "pi", "claude", "invalid"} {
+		values := map[string]string{EnvReviewAgent: value}
+		s := snapshotFrom(values)
+		values[EnvReviewAgent] = "changed"
+		if err := s.Require(EnvReviewAgent); (err != nil) != (value == "invalid") {
+			t.Fatalf("%q: %v", value, err)
+		}
+		want := AgentKind(value)
+		if value == "invalid" {
+			want = ""
+		}
+		if s.Defaults().ReviewAgent != want {
+			t.Fatalf("%q: %+v", value, s.Defaults())
+		}
+		copyDefaults := s.Defaults()
+		copyDefaults.ReviewAgent = AgentClaude
+		if s.Defaults().ReviewAgent != want {
+			t.Fatal("snapshot mutated")
+		}
+	}
+	if LoadEnv(nil).Defaults().ReviewAgent != "" {
+		t.Fatal("unset must inherit")
+	}
+}
+
 func snapshotFrom(values map[string]string) EnvSnapshot {
 	return LoadEnv(func(key string) (string, bool) { value, ok := values[key]; return value, ok })
 }
@@ -323,7 +349,7 @@ func TestSessionWarnPercent(t *testing.T) {
 
 func TestEnvSnapshotCompleteTableWrites(t *testing.T) {
 	values := map[string]string{
-		EnvCommitPolicy: "none", EnvExecutionMode: "current", EnvAgent: "claude", EnvSessionTimeout: "3m0s", EnvSessionWarnPercent: "65",
+		EnvCommitPolicy: "none", EnvExecutionMode: "current", EnvAgent: "claude", EnvReviewAgent: "pi", EnvSessionTimeout: "3m0s", EnvSessionWarnPercent: "65",
 		EnvModel: "base", EnvRunModel: "run", EnvReviewModel: "review", EnvMergeReviewModel: "merge", EnvResolverModel: "resolve", EnvReworkEscalationModel: "strong",
 		EnvUpdate: "off", EnvPullRequest: "true", EnvReview: "false", EnvAutoRework: "false", EnvMaxReworkAttempts: "7", EnvReworkEscalationFromAttempt: "6", EnvSkipPermissions: "true",
 		EnvMergeReviewMaxAttempts: "8", EnvMergeVerifyCommand: "go test ./...", EnvAggregateReviewConvergenceWindow: "5", EnvApprovedBy: "bot", EnvRunHeader: "false", EnvTheme: "gruvbox",
@@ -358,7 +384,7 @@ func TestEnvSnapshotCompleteTableWrites(t *testing.T) {
 	tokens, cost := int64(1000), 9.5
 	selected, _ := theme.Lookup("gruvbox")
 	want := EnvDefaults{
-		RunOptionsPatch:    RunOptionsPatch{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentClaude, PullRequest: &yes, ReviewEnabled: &no, SessionTimeout: &timeout, ModelSelection: ModelSelection{Base: "base", Run: "run", Review: "review", MergeReview: "merge", Resolver: "resolve", ReworkEscalation: "strong"}},
+		RunOptionsPatch:    RunOptionsPatch{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentClaude, ReviewAgent: AgentPi, PullRequest: &yes, ReviewEnabled: &no, SessionTimeout: &timeout, ModelSelection: ModelSelection{Base: "base", Run: "run", Review: "review", MergeReview: "merge", Resolver: "resolve", ReworkEscalation: "strong"}},
 		SessionWarnPercent: 65,
 		AutoRework:         &yes, MaxReworkAttempts: &attempts, ReworkEscalationFromAttempt: &escalation, UpdateMode: selfupdate.ModeOff, Theme: selected, SkipPermissions: true,
 		MergeReviewMaxAttempts: 8, MergeVerifyCommand: "go test ./...", MergeVerifyCommandSet: true, AggregateReviewConvergenceWindow: 5, ApprovedBy: "bot", RunHeader: false,

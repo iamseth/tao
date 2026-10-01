@@ -66,6 +66,7 @@ func (a App) status(ctx context.Context, repo planLister, args []string) error {
 
 func applyRepositoryRunDefaultsToStatus(rows []runtimeconfig.EnvVarStatus, repository runtimeconfig.RunOptionsPatch) []runtimeconfig.EnvVarStatus {
 	values := map[string]string{
+		runtimeconfig.EnvReviewAgent:           repository.ReviewAgent.String(),
 		runtimeconfig.EnvModel:                 repository.Base,
 		runtimeconfig.EnvRunModel:              repository.Run,
 		runtimeconfig.EnvReviewModel:           repository.Review,

@@ -95,7 +95,7 @@ func TestCommandHelpRendersOptionsExamplesAndFlaglessCommands(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"run", "--help"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Run pending slices for a Tao plan", "Examples:", "Options:", "--max-slices", "--auto-rework", "--max-rework-attempts", "Usage:\n  tao run (r)"} {
+	for _, want := range []string{"Run pending slices for a Tao plan", "Examples:", "Options:", "--review-agent", "--max-slices", "--auto-rework", "--max-rework-attempts", "Usage:\n  tao run (r)"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("expected run help to contain %q, got %q", want, out.String())
 		}
@@ -117,12 +117,13 @@ func TestPlanAndExecutionCommandHelpIncludesSubcommandsOptionsAndExamples(t *tes
 		"Export one readable Tao plan", "Options:", "--output", "--planning-only", "--force", "tao report --output -")
 	assertCommandOutputContains(t, "abandon help", []string{"abandon", "--help"},
 		"Mark an unfinished plan abandoned", "Options:", "--reason", "does not clean branches or worktrees", "tao abandon --reason")
-	assertCommandOutputContains(t, "review help", []string{"review", "--help"}, "Options:", "--run", "Examples:")
+	assertCommandOutputContains(t, "review help", []string{"review", "--help"}, "Options:", "--run", "--review-agent", "Examples:")
 }
 
 func TestRepositoryWorkspaceAndMonitoringHelpIncludesSubcommandsAndOptions(t *testing.T) {
-	assertCommandOutputContains(t, "repo help", []string{"repo", "--help"}, "Available Commands:", "list", "show", "doctor")
+	assertCommandOutputContains(t, "repo help", []string{"repo", "--help"}, "Available Commands:", "list", "show", "doctor", "--review-agent")
 	assertCommandOutputContains(t, "repo config help", []string{"repo", "config", "--help"}, "--max-rework-attempts", "--rework-escalation-from-attempt", "N|unset", "zero disables", "at least one")
+	assertCommandOutputContains(t, "rework help", []string{"rework", "--help"}, "Options:", "--review-agent", "--run")
 	assertCommandOutputContains(t, "cleanup help", []string{"cleanup", "--help"}, "Options:", "--dry-run", "--force")
 	assertCommandOutputContains(t, "monitor help", []string{"monitor", "--help"}, "non-completed plans across registered repositories", "Heartbeats report process liveness", "--once", "--interval", "tao monitor --interval 5s")
 }

@@ -19,6 +19,7 @@ const (
 	EnvCommitPolicy                     = "TAO_COMMIT_POLICY"
 	EnvExecutionMode                    = "TAO_EXECUTION_MODE"
 	EnvAgent                            = "TAO_AGENT"
+	EnvReviewAgent                      = "TAO_REVIEW_AGENT"
 	EnvPullRequest                      = "TAO_PULL_REQUEST"
 	EnvReview                           = "TAO_REVIEW"
 	EnvAutoRework                       = "TAO_AUTO_REWORK"
@@ -182,6 +183,22 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 				return "", err
 			}
 			defaults.Agent = parsed
+			return parsed.String(), nil
+		},
+	},
+	{
+		name:         EnvReviewAgent,
+		defaultValue: func(d RunOptionsPatch) string { return d.ReviewAgent.String() },
+		apply: func(defaults *EnvDefaults, value string) (string, error) {
+			if value == "" {
+				defaults.ReviewAgent = ""
+				return "", nil
+			}
+			parsed, err := ParseAgentKind(value)
+			if err != nil {
+				return "", err
+			}
+			defaults.ReviewAgent = parsed
 			return parsed.String(), nil
 		},
 	},

@@ -85,8 +85,11 @@ func TestDefaultLocalCancellationKillsDescendants(t *testing.T) {
 
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		if _, err := os.Stat(pidPath); err == nil {
-			break
+		// File creation precedes the shell's PID write; cancel only after publication.
+		if data, err := os.ReadFile(pidPath); err == nil { //nolint:gosec // G304: test-owned temporary PID file.
+			if strings.HasSuffix(string(data), "\n") {
+				break
+			}
 		} else if !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("inspect child pid file: %v", err)
 		}
@@ -147,8 +150,10 @@ func TestDefaultLocalVerificationCacheProcessLifecycle(t *testing.T) {
 			if mode == "cancellation" {
 				deadline := time.Now().Add(5 * time.Second)
 				for {
-					if _, err := os.Stat(pidPath); err == nil {
-						break
+					if data, err := os.ReadFile(pidPath); err == nil { //nolint:gosec // G304: test-owned temporary PID file.
+						if strings.HasSuffix(string(data), "\n") {
+							break
+						}
 					}
 					if time.Now().After(deadline) {
 						t.Fatal("child command did not start")

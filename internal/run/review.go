@@ -108,7 +108,7 @@ func (s Service) Review(ctx context.Context, request Request) (review plan.PlanR
 			return fmt.Errorf("prepare review: %w", err)
 		}
 		ReportPhase(ownedCtx, PhaseReview, nil)
-		if err := writef(s.out, "Running agent review: %s\n", execution.Config.Agent); err != nil {
+		if err := writef(s.out, "Running agent review: %s\n", execution.Config.ReviewAgentKind()); err != nil {
 			return err
 		}
 		review, err = execution.Dependencies.ReviewCreator.CreateReview(ownedCtx, ReviewRun{PlanDir: absolutePlanDir(detail.Dir), PlanID: detail.State.Plan.ID, LogPath: plan.LogPath(detail.Dir), Detail: detail, RepoRoot: execution.ExecutionRoot, Base: reviewDetailBase(detail), ReviewRangePresenter: execution.Dependencies.ReviewRangePresenter})
@@ -204,10 +204,7 @@ func (f Finalizer) ensureApprovedReviewProposal(ctx context.Context, detail *pla
 	if !ok {
 		return f.failProposalRepair(detail, evidenceReview, plan.FinalizationCategoryProposalCorrectionUnavailable, fmt.Errorf("approved review commit proposal is unusable and the proposal-only correction session is unavailable"))
 	}
-	agent := evidenceReview.Agent
-	if strings.TrimSpace(agent) == "" {
-		agent = f.execution.Config.Agent.String()
-	}
+	agent := f.execution.Config.ReviewAgentKind().String()
 	corrected, err := correctReviewProposal(ctx, AgentSessionRequest{
 		PlanDir: absolutePlanDir(detail.Dir), RepoRoot: repoRoot,
 		LogAction: "correcting review proposal for plan " + detail.State.Plan.ID,

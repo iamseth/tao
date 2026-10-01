@@ -120,6 +120,59 @@ func TestRepoConfigShowsUnsetAndSetsPullRequest(t *testing.T) {
 	}
 }
 
+func TestRepoConfigReviewAgent(t *testing.T) {
+	t.Setenv("TAO_DATA_HOME", t.TempDir())
+	t.Chdir(initTestGitRepo(t))
+	registry := taodata.NewRegistry("")
+	repo, err := registry.RegisterCurrent(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	app := App{Out: &out, Err: &out}
+	for _, value := range []string{"claude", "pi", "unset"} {
+		out.Reset()
+		if err := app.Run(context.Background(), []string{"repo", "config", "--review-agent=" + value, "--pull-request=false", "--review-model=provider/review"}); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out.String(), "review_agent: "+value+"\n") {
+			t.Fatal(out.String())
+		}
+		stored, err := registry.ReadRepo(repo.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, ok := stored.ReviewAgentDefault()
+		if (value == "unset" && ok) || (value != "unset" && got != value) {
+			t.Fatalf("stored selector = %q, %t", got, ok)
+		}
+		models, _ := stored.ModelDefaults()
+		pr, hasPR := stored.PullRequestDefault()
+		if models.Review != "provider/review" || !hasPR || pr {
+			t.Fatalf("lost sibling defaults: %#v", stored)
+		}
+	}
+	before, err := registry.ReadRepo(repo.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"", "invalid", "PI", " claude"} {
+		err := app.Run(context.Background(), []string{"repo", "config", "--pull-request=true", "--review-agent=" + value})
+		if err == nil || !strings.Contains(err.Error(), "--review-agent") {
+			t.Fatalf("%q: %v", value, err)
+		}
+	}
+	after, err := registry.ReadRepo(repo.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeJSON, _ := json.Marshal(before)
+	afterJSON, _ := json.Marshal(after)
+	if !bytes.Equal(beforeJSON, afterJSON) {
+		t.Fatal("invalid selector mutated registry")
+	}
+}
+
 func TestRepoConfigModelDefaults(t *testing.T) {
 	t.Setenv("TAO_DATA_HOME", t.TempDir())
 	root := initTestGitRepo(t)

@@ -940,7 +940,7 @@ func TestDoctorPiReadinessReportsPassiveCapabilitiesWithoutRemoteClaim(t *testin
 				t.Fatal(err)
 			}
 			text := stripANSIGreen(out.String())
-			for _, want := range []string{"Pi merge readiness (passive; no model request)", "executable", "configuration projection", "RPC initialization", "selected model", "local credentials", "remote credential validity is not proven"} {
+			for _, want := range []string{"Pi readiness (passive; no model request; shared merge probe)", "executable", "configuration projection", "RPC initialization", "selected model", "local credentials", "remote credential validity is not proven"} {
 				if !strings.Contains(strings.ToLower(text), strings.ToLower(want)) {
 					t.Fatalf("doctor output missing %q: %q", want, text)
 				}
@@ -1102,5 +1102,85 @@ func TestPromptUsesEnvPolicyDefaults(t *testing.T) {
 	}
 	if !strings.Contains(text, "Stay on the branch Tao prepared") || !strings.Contains(text, "Do not create or switch branches") || strings.Contains(text, "Create or reuse a single feature branch") {
 		t.Fatalf("expected Tao-prepared branch default from env, got %q", text)
+	}
+}
+
+func TestDoctorReviewRoles(t *testing.T) {
+	original := probeDoctorPiReadiness
+	t.Cleanup(func() { probeDoctorPiReadiness = original })
+	for _, tc := range []struct {
+		name, implementation, reviewer, effective string
+		tools                                     []string
+	}{
+		{"pi to claude", "pi", "claude", "claude", []string{"pi", "claude"}},
+		{"claude to pi", "claude", "pi", "pi", []string{"pi", "claude"}},
+		{"inherited", "claude", "", "claude", []string{"claude"}},
+		{"unused pi installed", "claude", "claude", "claude", []string{"pi", "claude"}},
+		{"missing claude reviewer", "pi", "claude", "claude", []string{"pi"}},
+		{"same", "pi", "pi", "pi", []string{"pi"}},
+		{"missing reviewer", "claude", "pi", "pi", []string{"claude"}},
+		{"none", "pi", "claude", "claude", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			setPathExecutables(t, tc.tools...)
+			calls := 0
+			probeDoctorPiReadiness = func(context.Context, string) error { calls++; return nil }
+			var out bytes.Buffer
+			app := App{Out: &out, Err: &out, RuntimeEnv: snapshotWith(map[string]string{
+				runtimeconfig.EnvAgent: tc.implementation, runtimeconfig.EnvReviewAgent: tc.reviewer,
+			}), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }}
+			report, err := app.collectDoctorReport()
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantsPi := tc.implementation == "pi" || tc.effective == "pi"
+			if (len(report.piReadiness) > 0) != wantsPi {
+				t.Fatalf("readiness: %+v", report)
+			}
+			expectedCalls := 0
+			for _, tool := range tc.tools {
+				if tool == "pi" && wantsPi {
+					expectedCalls = 1
+				}
+			}
+			if calls != expectedCalls {
+				t.Fatalf("probes = %d, want %d", calls, expectedCalls)
+			}
+			for _, args := range [][]string{nil, {"--verbose"}} {
+				out.Reset()
+				if err := app.doctor(args); err != nil {
+					t.Fatal(err)
+				}
+				for _, want := range []string{"implementation: " + tc.implementation, "plan reviewer: " + tc.effective} {
+					if !strings.Contains(out.String(), want) {
+						t.Fatalf("missing %q: %s", want, &out)
+					}
+				}
+				installed := false
+				for _, tool := range tc.tools {
+					if tool == tc.effective {
+						installed = true
+					}
+				}
+				if !installed && !strings.Contains(out.String(), "Install "+tc.effective) {
+					t.Fatalf("missing setup guidance: %s", &out)
+				}
+			}
+			// Installation remains discovery-based, regardless of the selected roles.
+			out.Reset()
+			if err := app.installPrompts(nil); err != nil {
+				t.Fatal(err)
+			}
+			out.Reset()
+			if err := app.installPrompts([]string{"--check"}); err != nil {
+				t.Fatal(err)
+			}
+			for _, tool := range tc.tools {
+				if !strings.Contains(out.String(), "["+tool+"] current ") {
+					t.Fatalf("missing installed runtime %s: %s", tool, &out)
+				}
+			}
+		})
 	}
 }

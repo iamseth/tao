@@ -13,6 +13,7 @@ import (
 
 	"github.com/iamseth/tao/internal/forge"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
 type driverRecord struct {
@@ -1048,6 +1049,7 @@ func TestDriverRunDisabledPolicyExecutesOnceWithoutLoadingState(t *testing.T) {
 }
 
 func TestDriverRunExecutesThenDecidesWithFreshBudget(t *testing.T) {
+	options := runtimeconfig.ResolvedRunOptions{Agent: runtimeconfig.AgentPi, ReviewAgent: runtimeconfig.AgentClaude}
 	detail := actionableDriverDetail(2)
 	var calls []string
 	decisions := 0
@@ -1067,6 +1069,9 @@ func TestDriverRunExecutesThenDecidesWithFreshBudget(t *testing.T) {
 		MaxAttempts: 5,
 		Execute: func(context.Context) error {
 			calls = append(calls, "execute")
+			if options.Agent != runtimeconfig.AgentPi || options.ReviewAgentKind() != runtimeconfig.AgentClaude {
+				t.Fatalf("automatic round lost runtime selection: %+v", options)
+			}
 			return nil
 		},
 		PersistProgress: func(_ context.Context, attempts, round int, fingerprint string) error {
