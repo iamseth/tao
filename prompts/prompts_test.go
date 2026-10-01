@@ -211,6 +211,8 @@ func TestRunDelegatesAuthoritativeGatesWithoutDuplicateSequence(t *testing.T) {
 		for _, want := range []string{"test-first development and targeted diagnosis", "Do not routinely run a duplicate full declared-gate sequence", "No verification results file is required", "Tao alone validates and executes", "Before intent only", "same active implementation session", "outside Plan-Owned Files", "--gate-command", "--failing-path", "never repair or reinterpret a recorded intent", "Final Tao-observed", "ten-minute timeout",
 			"An in-session `internal/run` test failure confirmed to result solely from inherited `TAO_SLICE_COMPLETION_OWNER` is not by itself a blocker",
 			"invoke `tao slice-complete`, whose authoritative gates strip that variable and must still pass",
+			"Tao executes every selected slice `verification.commands` entry in order before intent",
+			"Do not substitute a weaker gate, edit declarations to bypass a failure",
 		} {
 			if !strings.Contains(got, want) {
 				t.Errorf("%s prompt missing %q", policy, want)

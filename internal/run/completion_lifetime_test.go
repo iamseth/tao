@@ -29,6 +29,58 @@ func clearSliceCompletionOwnerEnv(t *testing.T) {
 	}
 }
 
+func TestClearSliceCompletionOwnerEnv(t *testing.T) {
+	for _, initial := range []struct {
+		name  string
+		value string
+		set   bool
+	}{
+		{name: "absent"},
+		{name: "empty", set: true},
+		{name: "nonempty", value: "inherited-owner", set: true},
+	} {
+		t.Run(initial.name, func(t *testing.T) {
+			t.Setenv(sliceCompletionOwnerEnv, initial.value)
+			if !initial.set {
+				if err := os.Unsetenv(sliceCompletionOwnerEnv); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Run("isolated", func(t *testing.T) {
+				clearSliceCompletionOwnerEnv(t)
+				if value, set := os.LookupEnv(sliceCompletionOwnerEnv); set || value != "" {
+					t.Fatalf("isolated owner = %q, %t", value, set)
+				}
+				// Isolation must not disable subsequent intentional managed checks.
+				t.Setenv(sliceCompletionOwnerEnv, "missing-owner")
+				if _, err := BindSliceCompletionLifetime(context.Background(), t.TempDir(), "001"); err == nil || !strings.Contains(err.Error(), "managed invocation missing or replaced") {
+					t.Fatalf("explicit invalid owner check = %v", err)
+				}
+			})
+			if value, set := os.LookupEnv(sliceCompletionOwnerEnv); value != initial.value || set != initial.set {
+				t.Fatalf("restored owner = %q, %t; want %q, %t", value, set, initial.value, initial.set)
+			}
+		})
+	}
+}
+
+func TestVerifiedCompletionFixtureClearsInheritedOwner(t *testing.T) {
+	t.Setenv(sliceCompletionOwnerEnv, "inherited-owner")
+	t.Run("fixture", func(t *testing.T) {
+		request := verifiedCompletionFixture(t, CommitPolicyNone, "true")
+		if value, set := os.LookupEnv(sliceCompletionOwnerEnv); set || value != "" {
+			t.Fatalf("fixture owner = %q, %t", value, set)
+		}
+		t.Setenv(sliceCompletionOwnerEnv, "missing-owner")
+		if err := (SliceCompletionService{}).CompleteVerified(context.Background(), request); err == nil || !strings.Contains(err.Error(), "managed invocation missing or replaced") {
+			t.Fatalf("fixture explicit owner check = %v", err)
+		}
+	})
+	if value, set := os.LookupEnv(sliceCompletionOwnerEnv); !set || value != "inherited-owner" {
+		t.Fatalf("fixture did not restore inherited owner: %q, %t", value, set)
+	}
+}
+
 func TestWrapUpPreservesCompletionDeadline(t *testing.T) {
 	clearSliceCompletionOwnerEnv(t)
 	root := t.TempDir()
