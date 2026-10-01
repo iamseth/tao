@@ -132,15 +132,27 @@ func (a App) resolveRunRequestFlags(fs *flag.FlagSet) (runRequestInputs, error) 
 	if err != nil {
 		return runRequestInputs{}, err
 	}
-	model, err := modelFlagValue(fs)
+	overrides, err := runRequestFlagOverrides(fs)
 	if err != nil {
 		return runRequestInputs{}, err
+	}
+	return runRequestInputs{
+		defaults:        defaults,
+		overrides:       overrides,
+		skipPermissions: effectiveBoolFlagValue(fs, "dangerously-skip-permissions", defaults.SkipPermissions),
+	}, nil
+}
+
+func runRequestFlagOverrides(fs *flag.FlagSet) (runtimeconfig.RunOptionsPatch, error) {
+	model, err := modelFlagValue(fs)
+	if err != nil {
+		return runtimeconfig.RunOptionsPatch{}, err
 	}
 	var escalationModel string
 	if flagWasProvided(fs, "rework-escalation-model") {
 		escalationModel, err = runtimeconfig.ParseModelName(flagStringValue(fs, "rework-escalation-model"))
 		if err != nil {
-			return runRequestInputs{}, fmt.Errorf("--rework-escalation-model: %w", err)
+			return runtimeconfig.RunOptionsPatch{}, fmt.Errorf("--rework-escalation-model: %w", err)
 		}
 	}
 	overrides := runRequestOverridesFromFlags(fs, runFlagValues{
@@ -153,11 +165,7 @@ func (a App) resolveRunRequestFlags(fs *flag.FlagSet) (runRequestInputs, error) 
 		Continue:              flagBoolValue(fs, "continue"),
 		NoReview:              flagBoolValue(fs, "no-review"),
 	})
-	return runRequestInputs{
-		defaults:        defaults,
-		overrides:       overrides,
-		skipPermissions: effectiveBoolFlagValue(fs, "dangerously-skip-permissions", defaults.SkipPermissions),
-	}, nil
+	return overrides, nil
 }
 
 func (a App) resolveRunAutoReworkPolicy(fs *flag.FlagSet, reviewEnabled bool) (runtimeconfig.AutoReworkPolicy, error) {
@@ -214,7 +222,7 @@ func (a App) run(ctx context.Context, repo planRunRepository, args []string) err
 	if err != nil {
 		return err
 	}
-	inputs, err := a.resolveRunRequestFlags(fs)
+	options, err := a.resolveCommandOptions(ctx, fs, runtimeconfig.CommandRun)
 	if err != nil {
 		return err
 	}
@@ -232,33 +240,17 @@ func (a App) run(ctx context.Context, repo planRunRepository, args []string) err
 	if recoveryModeCount > 1 {
 		return fmt.Errorf("--continue, --restart, --repair-verification, and --reverify are mutually exclusive")
 	}
-	repositoryDefaults, err := a.currentRepositoryRunOptions(ctx)
-	if err != nil {
-		return err
-	}
 	if err := requirePositionals(positional, 1, "usage: tao run [--model NAME] [--rework-escalation-model NAME] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue|--restart|--repair-verification|--reverify] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>"); err != nil {
 		return err
 	}
 	input := positional[0]
-	request, err := inputs.defaults.newRunRequestWithRepository(input, repositoryDefaults, inputs.overrides)
-	if err != nil {
-		return err
-	}
+	request := run.Request{Input: input, ResolvedRunOptions: options.RunOptions}
 	request.RecoveryMode = run.RecoveryMode{
 		RestartBlocked:     blockedRestart,
 		RepairVerification: repairVerification,
 		Reverify:           reverify,
 	}
-	repositoryRework, err := a.currentRepositoryReworkOptions(ctx)
-	if err != nil {
-		return err
-	}
-	options, err := a.resolveRunReworkOptions(fs, request.ReviewEnabled, repositoryRework, true)
-	policy := runtimeconfig.AutoReworkPolicy{Enabled: options.MaxAttempts > 0, MaxAttempts: options.MaxAttempts}
-	if err != nil {
-		return err
-	}
-	return a.executeResolvedRun(ctx, repo, input, request, inputs.skipPermissions, policy, options.EscalationFromAttempt, reworkRestart, flagBoolValue(fs, "no-run-header"))
+	return a.executeCommandRunRequest(ctx, repo, input, request, options, reworkRestart)
 }
 
 var executeSinglePlan = func(service run.Service, ctx context.Context, request run.Request) error {
@@ -268,6 +260,10 @@ var executeSinglePlan = func(service run.Service, ctx context.Context, request r
 // executeResolvedRun is the single-plan execution boundary shared by run entry
 // points after their inputs and runtime options have been fully resolved.
 func (a App) executeResolvedRun(ctx context.Context, repo planRunRepository, input string, request run.Request, skipPermissions bool, policy runtimeconfig.AutoReworkPolicy, escalationFromAttempt int, reworkRestart, noRunHeader bool) error {
+	return a.executeResolvedRunWithSources(ctx, repo, input, request, skipPermissions, policy, escalationFromAttempt, reworkRestart, noRunHeader, nil)
+}
+
+func (a App) executeResolvedRunWithSources(ctx context.Context, repo planRunRepository, input string, request run.Request, skipPermissions bool, policy runtimeconfig.AutoReworkPolicy, escalationFromAttempt int, reworkRestart, noRunHeader bool, sources map[string]string) error {
 	if request.Reverify {
 		policy = runtimeconfig.AutoReworkPolicy{}
 	}
@@ -293,7 +289,8 @@ func (a App) executeResolvedRun(ctx context.Context, repo planRunRepository, inp
 	service := run.NewService(repo, runOut, run.Options{
 		ExecutionConfig: run.ExecutionConfig{
 			RuntimeEnv:         &snapshot,
-			ResolvedRunOptions: runtimeconfig.ResolvedRunOptions{Agent: request.Agent},
+			ResolvedRunOptions: request.ResolvedRunOptions,
+			OptionSources:      run.RunOptionSources{PullRequest: sources[runtimeconfig.EnvPullRequest], ExecutionMode: sources[runtimeconfig.EnvExecutionMode]},
 			SkipPermissions:    skipPermissions,
 			MaxReworkAttempts:  policy.MaxAttempts,
 		},

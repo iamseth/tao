@@ -70,17 +70,11 @@ func (a App) rework(ctx context.Context, repo planRunRepository, args []string) 
 	if err := validateReworkFlagCombination(fs, fromPR, force, runAfter, dryRun, authorScope); err != nil {
 		return err
 	}
+	var options runtimeconfig.CommandOptions
 	if runAfter {
-		// Reject the handoff's consumed settings before reopening durable state.
-		defaults, err := a.runEnvDefaults()
+		// Resolve once before any durable reopening or PR triage mutation.
+		options, err = a.resolveCommandOptions(ctx, fs, runtimeconfig.CommandRun)
 		if err != nil {
-			return err
-		}
-		repository, err := a.currentRepositoryReworkOptions(ctx)
-		if err != nil {
-			return err
-		}
-		if _, err := a.resolveRunReworkOptions(fs, defaults.ReviewEnabledValue(), repository, false); err != nil {
 			return err
 		}
 		if err := a.requireRunHandoffBudgets(); err != nil {
@@ -115,7 +109,10 @@ func (a App) rework(ctx context.Context, repo planRunRepository, args []string) 
 			return err
 		}
 		if fromPR {
-			return a.reworkFromPullRequest(ownedCtx, repo, record, now, authorScope, dryRun, runAfter)
+			if !runAfter {
+				return a.reworkFromPullRequest(ownedCtx, repo, record, now, authorScope, dryRun, false)
+			}
+			return a.reworkFromPullRequestWithOptions(ownedCtx, repo, record, now, authorScope, dryRun, runAfter, options)
 		}
 
 		var newSlices []plan.Slice
@@ -143,7 +140,7 @@ func (a App) rework(ctx context.Context, repo planRunRepository, args []string) 
 			return err
 		}
 		if runAfter {
-			return a.run(ownedCtx, repo, []string{record.Dir()})
+			return a.executeCommandRun(ownedCtx, repo, record.Dir(), options)
 		}
 		return nil
 	})
@@ -215,6 +212,23 @@ func newReworkTriageTextGenerator(app App, observe func(agentsession.Result, err
 }
 
 func (a App) reworkFromPullRequest(ctx context.Context, repo planRunRepository, record *plan.PlanRecord, now time.Time, scope forge.ReviewThreadAuthorScope, dryRun, runAfter bool) error {
+	var options runtimeconfig.CommandOptions
+	if runAfter {
+		fs := flag.NewFlagSet("rework", flag.ContinueOnError)
+		registerReworkFlags(fs)
+		var err error
+		options, err = a.resolveCommandOptions(ctx, fs, runtimeconfig.CommandRun)
+		if err != nil {
+			return err
+		}
+		if err := a.requireRunHandoffBudgets(); err != nil {
+			return err
+		}
+	}
+	return a.reworkFromPullRequestWithOptions(ctx, repo, record, now, scope, dryRun, runAfter, options)
+}
+
+func (a App) reworkFromPullRequestWithOptions(ctx context.Context, repo planRunRepository, record *plan.PlanRecord, now time.Time, scope forge.ReviewThreadAuthorScope, dryRun, runAfter bool, options runtimeconfig.CommandOptions) error {
 	detail := record.Detail()
 	request, err := pullRequestThreadReadRequest(detail, scope)
 	if err != nil {
@@ -262,7 +276,7 @@ func (a App) reworkFromPullRequest(ctx context.Context, repo planRunRepository, 
 		return err
 	}
 	if runAfter {
-		return a.run(ctx, repo, []string{record.Dir()})
+		return a.executeCommandRun(ctx, repo, record.Dir(), options)
 	}
 	return nil
 }

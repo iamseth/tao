@@ -267,19 +267,43 @@ func TestReviewRunTriggersFreshReview(t *testing.T) {
 		name       string
 		modelFlag  []string
 		wantModel  string
+		envOnly    bool
+		baseOnly   bool
+		malformed  bool
 		verdict    string
 		failNotice bool
 	}{
+		{name: "environment role", envOnly: true, wantModel: "env-review"},
+		{name: "base fallback", envOnly: true, baseOnly: true, wantModel: "env-base"},
+		{name: "repository base with environment role", baseOnly: true, wantModel: "env-review"},
 		{name: "repository default", wantModel: "repo-review", verdict: "comment"},
+		{name: "unrelated malformed settings", malformed: true, wantModel: "repo-review"},
 		{name: "explicit override", modelFlag: []string{"--model", "provider/override"}, wantModel: "provider/override", verdict: "changes_requested"},
 		{name: "notice write failure", wantModel: "repo-review", verdict: "comment", failNotice: true},
 		{name: "empty inherits", modelFlag: []string{"--model="}, wantModel: "repo-review"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			clearTaoEnv(t)
-			t.Setenv(runtimeconfig.EnvReviewModel, "env-review")
-			registered := taodata.Repo{ID: "repo-a", RunDefaults: &taodata.RepoRunDefaults{Models: &taodata.RepoModelDefaults{Base: "repo-base", Review: "repo-review"}}}
-			registry := &fakeNoteRegistry{current: registered}
+			t.Setenv(runtimeconfig.EnvModel, "env-base")
+			if !tt.baseOnly || !tt.envOnly {
+				t.Setenv(runtimeconfig.EnvReviewModel, "env-review")
+			}
+			t.Setenv(runtimeconfig.EnvSessionTimeout, "37s")
+			t.Setenv(runtimeconfig.EnvSkipPermissions, "false")
+			for _, key := range []string{runtimeconfig.EnvCommitPolicy, runtimeconfig.EnvExecutionMode, runtimeconfig.EnvPullRequest, runtimeconfig.EnvReview, runtimeconfig.EnvAutoRework, runtimeconfig.EnvMaxReworkAttempts, runtimeconfig.EnvRunModel} {
+				t.Setenv(key, "invalid value")
+			}
+			if !tt.malformed {
+				t.Setenv(runtimeconfig.EnvCommitPolicy, "none")
+				t.Setenv(runtimeconfig.EnvExecutionMode, "current")
+			}
+			registered := taodata.Repo{ID: "repo-a", RunDefaults: &taodata.RepoRunDefaults{PullRequest: new(true), Models: &taodata.RepoModelDefaults{Base: "repo-base", Review: "repo-review"}}}
+			if tt.envOnly {
+				registered.RunDefaults.Models = nil
+			} else if tt.baseOnly {
+				registered.RunDefaults.Models.Review = ""
+			}
+			registry := &commandOptionsRegistry{fakeNoteRegistry: fakeNoteRegistry{current: registered}}
 
 			fixture := newRunPlanFixture(t, plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
 			if tt.verdict != "" {
@@ -325,6 +349,8 @@ func TestReviewRunTriggersFreshReview(t *testing.T) {
 			}
 			snapshot := runtimeconfig.RuntimeEnv()
 			app.RuntimeEnv = &snapshot
+			t.Setenv(runtimeconfig.EnvSessionTimeout, "invalid")
+			t.Setenv(runtimeconfig.EnvReviewModel, "changed-after-capture")
 			app.Registry = func() NoteRegistry { return registry }
 			starter := app.ProcessStarter
 			app.ProcessStarter = func(ctx context.Context, cwd, name string, args []string) (agent.Process, error) {
@@ -334,6 +360,9 @@ func TestReviewRunTriggersFreshReview(t *testing.T) {
 				if tt.verdict != "" && !tt.failNotice && !strings.Contains(out.String(), "unchanged committed review range") {
 					t.Fatalf("notice missing before startup: %s", out.String())
 				}
+				if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) <= 0 || time.Until(deadline) > 37*time.Second {
+					t.Fatalf("review session deadline = %v, present = %v", deadline, ok)
+				}
 				if len(args) < 2 || args[len(args)-2] != "--model" || args[len(args)-1] != tt.wantModel {
 					t.Fatalf("review process args = %v, want model %q", args, tt.wantModel)
 				}
@@ -342,6 +371,9 @@ func TestReviewRunTriggersFreshReview(t *testing.T) {
 			args := append([]string{"--run", fixture.id}, tt.modelFlag...)
 			if err := app.review(context.Background(), plan.NewFileRepository(fixture.root), args); err != nil {
 				t.Fatal(err)
+			}
+			if registry.calls != 1 {
+				t.Fatalf("repository lookups = %d, want 1", registry.calls)
 			}
 			reporter.requireCall(t, "run run-plan", "idle")
 			state, err := plan.ReadState(fixture.dir)

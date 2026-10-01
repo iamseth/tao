@@ -14,6 +14,32 @@ import (
 	"github.com/iamseth/tao/internal/taodata"
 )
 
+func TestStatusCommandApplicability(t *testing.T) {
+	var out bytes.Buffer
+	rows := snapshotWith(nil).Status()
+	if err := (App{Out: &out}).writeStatus(statusPayload{RuntimeEnv: rows}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Defaults are command-specific; see docs/configuration.md#command-applicability.") {
+		t.Fatal("missing applicability guidance")
+	}
+	for _, row := range rows {
+		commands := runtimeconfig.ApplicableCommands(row.Name)
+		if len(commands) == 0 {
+			continue
+		}
+		start := strings.Index(out.String(), row.Name+" ")
+		if start < 0 {
+			t.Fatalf("missing row %s", row.Name)
+		}
+		lines := strings.Split(out.String()[start:], "\n")
+		want := "    applies to: " + strings.Join(commands, ", ")
+		if len(lines) < 2 || lines[1] != want {
+			t.Errorf("%s: want next line %q", row.Name, want)
+		}
+	}
+}
+
 func TestStatusMixedInvalidConfigurationKeepsCompleteRows(t *testing.T) {
 	clearTaoEnv(t)
 	values := map[string]string{

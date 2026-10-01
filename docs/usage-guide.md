@@ -771,6 +771,36 @@ runtime's message; Tao does not retry or fall back to another model. Correct the
 setting before trying again under the ordinary recovery rules. Model selection
 never authorizes recovery, approval, commit, PR, or merge.
 
+#### Check which defaults apply
+
+Use `tao status` to inspect defaults and their sources, not to infer that every
+setting is active everywhere. The [six-path applicability matrix and diagnostic
+contract](configuration.md#command-applicability) covers `run`, `note run`,
+`rework --run`, `review --run`, `merge`, and `prompt run`. Full execution shares
+run settings; fresh review consumes review-session settings, while merge consumes
+merge-session settings, never the run-only PR or slice-commit preferences.
+
+Precedence remains built-ins, captured environment, repository defaults, then
+explicit registered invocation flags. Explicit `false` and same-as-default values
+still override; omitted flags do not. Conflicts report winning sources and remain
+errors: fix an incompatible PR/workspace or PR/commit preference rather than
+expecting Tao to silently drop PR creation. Malformed consumed environment values
+must be fixed even when overridden; unrelated settings are not admitted. Disabling
+review normalizes positive automatic-rework attempts to zero with a warning,
+including explicitly requested attempts.
+
+Direct note execution inherits automatic-rework limits, escalation, header,
+models, permissions and timeout preferences; execution settings are validated
+before durable promotion. Both normal and PR-thread `rework --run` validate and
+carry their full-run options before persisting rework. These handoffs preserve
+ordinary recovery and approval safeguards; planning routing remains separate.
+
+For standalone rendering, `tao prompt run` uses only commit policy and execution
+mode, without repository registration or repository-default lookup. Other prompts
+consume neither. Existing prompt flag registration remains compatible, including
+`--commit=false`; rendering is not execution admission. See the matrix before
+changing a global setting to address a command-specific problem.
+
 #### Recover an interrupted slice
 
 Tao may retry an implementation handoff after at most two explicitly structured

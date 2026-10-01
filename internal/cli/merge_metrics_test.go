@@ -429,3 +429,93 @@ func TestSingleMergeObserverIgnoresBatchAndUninvokedResults(t *testing.T) {
 		t.Fatal("batch or uninvoked session recorded")
 	}
 }
+
+type mergeCountingRegistry struct {
+	logBatchRegistry
+	calls int
+}
+
+func (r *mergeCountingRegistry) Current(context.Context) (taodata.Repo, error) {
+	r.calls++
+	return r.current, nil
+}
+
+func TestMergeConstructorsCaptureRepositoryOnce(t *testing.T) {
+	for _, batch := range []bool{false, true} {
+		t.Run(fmt.Sprintf("batch=%t", batch), func(t *testing.T) {
+			detail := cliMergeDetail(t)
+			registry := &mergeCountingRegistry{logBatchRegistry: logBatchRegistry{&fakeNoteRegistry{
+				current: taodata.Repo{ID: "repo", Root: detail.State.Repo.Root}, dir: t.TempDir(),
+			}}}
+			app := App{Out: io.Discard, Registry: func() NoteRegistry { return registry },
+				RuntimeEnv:       snapshotWith(map[string]string{runtimeconfig.EnvAgent: "invalid"}),
+				CommandRunner:    newCLIMergeGitRunner(t, detail.State.Repo.Root),
+				WorkspaceManager: func(string) (WorkspaceManager, error) { return &fakeWorkspaceManager{}, nil },
+			}
+			if batch {
+				runner, err := app.newMergeBatchRunner(context.Background(), fakeRepository{}, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() { _ = runner.(closingMergeBatchRunner).closer.Close() }()
+			} else {
+				runner, err := app.newMergeServiceRunner(context.Background(), detail, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = runner.(phaseReportingMergeService).ProposalGenerator.GenerateMergeProposal(context.Background(), commitcontract.MergeProposalContext{
+					RepoRoot: detail.State.Repo.Root, PlanID: mergePlanID(detail), DefaultBranch: "main", DefaultParent: "parent", MergeBase: "base", SourceBranch: "feature/test", SourceHead: "head", Diff: "diff --git a/a.go b/a.go\n+change\n",
+				})
+				if err == nil || !strings.Contains(err.Error(), runtimeconfig.EnvAgent) {
+					t.Fatalf("deferred admission=%v", err)
+				}
+			}
+			if registry.calls != 1 {
+				t.Fatalf("repository lookups=%d", registry.calls)
+			}
+		})
+	}
+}
+
+func TestMergeApplicableOptionErrorsAndFallback(t *testing.T) {
+	for _, key := range []string{runtimeconfig.EnvAgent, runtimeconfig.EnvSessionTimeout, runtimeconfig.EnvSkipPermissions, runtimeconfig.EnvResolverModel, runtimeconfig.EnvMergeReviewModel} {
+		t.Run(key, func(t *testing.T) {
+			app := App{RuntimeEnv: snapshotWith(map[string]string{key: "invalid value"})}
+			resolve := app.mergeSessionOptions(runtimeconfig.RunOptionsPatch{}, "")
+			for range 2 {
+				if _, err := resolve(); err == nil || !strings.Contains(err.Error(), key) {
+					t.Fatalf("admission=%v", err)
+				}
+			}
+		})
+	}
+	app := App{RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvModel: "env-base"})}
+	options, err := app.mergeSessionOptions(runtimeconfig.RunOptionsPatch{ModelSelection: runtimeconfig.ModelSelection{Base: "repo-base"}}, "")()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.RunOptions.Models.Base != "repo-base" || options.Sources[runtimeconfig.EnvResolverModel] != "repository" || options.Sources[runtimeconfig.EnvMergeReviewModel] != "repository" {
+		t.Fatalf("fallback=%+v", options)
+	}
+}
+
+func TestMergeApplicableOptionsCapturedOnce(t *testing.T) {
+	snapshot := snapshotWith(map[string]string{
+		runtimeconfig.EnvAgent: "claude", runtimeconfig.EnvSessionTimeout: "0",
+		runtimeconfig.EnvSkipPermissions: "true", runtimeconfig.EnvCommitPolicy: "invalid",
+		runtimeconfig.EnvPullRequest: "invalid", runtimeconfig.EnvModel: "captured",
+		runtimeconfig.EnvRunModel: "invalid unused model",
+	})
+	app := App{RuntimeEnv: snapshot}
+	resolve := app.mergeSessionOptions(repositoryRunOptions(taodata.Repo{}), "chosen")
+	t.Setenv(runtimeconfig.EnvAgent, "invalid")
+	for range 2 {
+		options, err := resolve()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if options.RunOptions.Agent != runtimeconfig.AgentClaude || options.RunOptions.SessionTimeout != 0 || !options.SkipPermissions || options.RunOptions.Models.Resolver != "chosen" {
+			t.Fatalf("options=%+v", options)
+		}
+	}
+}

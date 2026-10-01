@@ -403,6 +403,46 @@ func hasPendingReworkSlice(detail *plan.PlanDetail) bool {
 	return slices.Contains(detail.State.Plan.PendingSlices, "r101-internal-cli-rework-go")
 }
 
+func TestReworkRunCarriesOptionsThroughBothHandoffs(t *testing.T) {
+	for _, fromPR := range []bool{false, true} {
+		t.Run(map[bool]string{false: "ordinary", true: "from-pr"}[fromPR], func(t *testing.T) {
+			root := t.TempDir()
+			const id = "20260628-1200-carried"
+			review := reworkReview(plan.ReviewVerdictChangesRequested, []plan.ReviewFinding{{File: "file.go", Message: "fix"}})
+			if fromPR {
+				review = reworkReview(plan.ReviewVerdictApprove, nil)
+			}
+			dir := writeCLIReworkPlan(t, root, id, plan.StatusCompleted, review)
+			args := []string{"--run", id}
+			if fromPR {
+				addCLIReworkPullRequest(t, dir)
+				thread := forge.ReviewThread{NodeID: "thread", Path: "file.go"}
+				stubCLIReworkPRPipeline(t, []forge.ReviewThread{thread}, []reworkpkg.PRThreadClassification{{ThreadNodeID: "thread", Kind: reworkpkg.PRThreadKindChange, Rationale: "fix"}})
+				args = []string{"--from-pr", "--run", id}
+			}
+			registry := &commandOptionsRegistry{fakeNoteRegistry: fakeNoteRegistry{current: taodata.Repo{RunDefaults: &taodata.RepoRunDefaults{Models: &taodata.RepoModelDefaults{Run: "repo-run"}}}}}
+			app := App{Out: io.Discard, RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvModel: "captured", runtimeconfig.EnvAutoRework: "false", runtimeconfig.EnvRunHeader: "false"}), Registry: func() NoteRegistry { return registry }}
+			t.Setenv(runtimeconfig.EnvModel, "changed")
+			old := executeSinglePlan
+			t.Cleanup(func() { executeSinglePlan = old })
+			calls := 0
+			executeSinglePlan = func(service runpkg.Service, ctx context.Context, request runpkg.Request) error {
+				calls++
+				if request.Models.Base != "captured" || request.Models.Run != "repo-run" || registry.calls != 1 {
+					t.Fatalf("request=%+v lookups=%d", request, registry.calls)
+				}
+				return service.WithPlanRunLock(ctx, request, func(context.Context) error { return context.Canceled })
+			}
+			if err := app.rework(context.Background(), plan.NewFileRepository(root), args); !errors.Is(err, context.Canceled) {
+				t.Fatalf("handoff cancellation=%v", err)
+			}
+			if calls != 1 || registry.calls != 1 {
+				t.Fatalf("execution=%d lookups=%d", calls, registry.calls)
+			}
+		})
+	}
+}
+
 func TestReworkRunRejectsConsumedSnapshotBeforeReopening(t *testing.T) {
 	for _, key := range []string{
 		runtimeconfig.EnvSessionTimeout, runtimeconfig.EnvAutoRework, runtimeconfig.EnvMaxReworkAttempts, runtimeconfig.EnvReworkEscalationFromAttempt,
@@ -454,6 +494,7 @@ func TestReworkWithoutRunIgnoresInvalidExecutionBudgets(t *testing.T) {
 	dir := writeCLIReworkPlan(t, root, id, plan.StatusCompleted, reworkReview(plan.ReviewVerdictChangesRequested, []plan.ReviewFinding{{File: "file.go", Message: "fix this"}}))
 	before := readReworkArtifacts(t, dir)
 	app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{
+		runtimeconfig.EnvSessionTimeout: "invalid", runtimeconfig.EnvAutoRework: "invalid", runtimeconfig.EnvCommitPolicy: "invalid",
 		runtimeconfig.EnvMaxSliceCostDeprecated: "invalid", runtimeconfig.EnvMaxSliceOutputTokensDeprecated: "invalid",
 		runtimeconfig.EnvBudgetPlanCostDeprecated: "invalid", runtimeconfig.EnvBudgetSliceToolCallsDeprecated: "invalid",
 	}), ProcessStarter: func(context.Context, string, string, []string) (runpkg.Process, error) {

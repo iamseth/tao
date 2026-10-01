@@ -9,6 +9,7 @@ import (
 
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/workspace"
 )
 
@@ -64,7 +65,16 @@ func (s Service) prepareRequestRunExecution(ctx context.Context, detail *plan.Pl
 		return execution, nil
 	}
 	if execution.Config.PullRequest && execution.Config.ExecutionMode == ExecutionModeCurrent {
-		return execution, fmt.Errorf("--pull-request requires --execution-mode isolated")
+		err := fmt.Errorf("--pull-request requires --execution-mode isolated")
+		for _, option := range []struct{ key, source string }{
+			{runtimeconfig.EnvPullRequest, execution.Config.OptionSources.PullRequest},
+			{runtimeconfig.EnvExecutionMode, execution.Config.OptionSources.ExecutionMode},
+		} {
+			if option.source != "" {
+				err = fmt.Errorf("%w; %s source=%s", err, option.key, option.source)
+			}
+		}
+		return execution, err
 	}
 	s.resolveServiceDependencies(&execution)
 	if complete && execution.Config.PullRequest {

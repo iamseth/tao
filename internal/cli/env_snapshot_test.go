@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/planning"
 	"github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/selfupdate"
@@ -350,10 +351,54 @@ func TestOperationSnapshotAdmission(t *testing.T) {
 			case "triage":
 				_, err = newReworkTriageTextGenerator(app, nil)
 			case "prompt":
-				err = app.prompt(context.Background(), nil, []string{"plan", "--execution-mode=current"})
+				err = app.prompt(context.Background(), nil, []string{"run", "--execution-mode=current"})
 			}
 			if err == nil || !strings.Contains(err.Error(), key) {
 				t.Fatalf("consumed snapshot %s not rejected: %v", key, err)
+			}
+		})
+	}
+}
+
+func TestReviewSnapshotApplicability(t *testing.T) {
+	clearTaoEnv(t)
+	keys := []string{runtimeconfig.EnvAgent, runtimeconfig.EnvModel, runtimeconfig.EnvReviewModel, runtimeconfig.EnvSessionTimeout, runtimeconfig.EnvSkipPermissions}
+	for _, key := range keys {
+		t.Run(key, func(t *testing.T) {
+			fixture := newRunPlanFixture(t, plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
+			before := readText(t, filepath.Join(fixture.dir, "state.json"))
+			registry := &commandOptionsRegistry{}
+			app := App{Out: io.Discard, Err: io.Discard,
+				RuntimeEnv:     snapshotWith(map[string]string{key: "invalid value"}),
+				Registry:       func() NoteRegistry { return registry },
+				ProcessStarter: fakeCLIProcessStarter(t, "", func(string) { t.Fatal("provider called after rejected admission") }),
+			}
+			repo := plan.NewFileRepository(fixture.root)
+			if err := app.review(context.Background(), repo, []string{fixture.id}); err != nil {
+				t.Fatalf("persisted review admitted execution settings: %v", err)
+			}
+			if registry.calls != 0 {
+				t.Fatal("persisted display resolved repository defaults")
+			}
+			if err := app.review(context.Background(), repo, []string{"--run", "--model=override", fixture.id}); err == nil || !strings.Contains(err.Error(), key) {
+				t.Fatalf("fresh review did not reject %s: %v", key, err)
+			}
+			if readText(t, filepath.Join(fixture.dir, "state.json")) != before {
+				t.Fatal("admission mutated plan")
+			}
+		})
+	}
+}
+
+func TestPromptSnapshotApplicability(t *testing.T) {
+	for _, key := range []string{runtimeconfig.EnvCommitPolicy, runtimeconfig.EnvExecutionMode} {
+		t.Run(key, func(t *testing.T) {
+			app := App{Out: io.Discard, RuntimeEnv: snapshotWith(map[string]string{key: "invalid"}), Registry: func() NoteRegistry { t.Fatal("rendering looked up repository"); return nil }}
+			if err := app.prompt(context.Background(), nil, []string{"plan", "--commit-policy=invalid", "--execution-mode=invalid"}); err != nil {
+				t.Fatalf("non-run prompt consumed run settings: %v", err)
+			}
+			if err := app.prompt(context.Background(), nil, []string{"run", "--commit=false"}); err == nil || !strings.Contains(err.Error(), key) {
+				t.Fatalf("run prompt failed to admit %s: %v", key, err)
 			}
 		})
 	}
@@ -604,6 +649,105 @@ func TestPromptManagementConsumesOnlySelectedAgent(t *testing.T) {
 	}
 	if err := app.installPrompts([]string{"--check"}); err != nil {
 		t.Fatalf("all-agent prompt discovery consumed selected runtime: %v", err)
+	}
+}
+
+type noteReworkTestRepository struct {
+	fakeRepository
+	recording *recordingAutoReworkRepository
+}
+
+func (r noteReworkTestRepository) PlanRecord(detail *plan.PlanDetail) (*plan.PlanRecord, error) {
+	return r.recording.PlanRecord(detail)
+}
+
+func TestNoteRunInheritsCapturedReworkSettings(t *testing.T) {
+	for _, tc := range []struct {
+		name, enabled, attempts string
+		args                    []string
+		wantCalls               int
+	}{
+		{"enabled", "true", "1", nil, 2},
+		{"disabled", "false", "0", nil, 1},
+		{"zero attempts", "true", "0", nil, 1},
+		{"explicit no review", "true", "1", []string{"--no-review"}, 1},
+		{"explicit existing flags", "true", "1", []string{"--no-review=false", "--pull-request=false", "--max-slices=2", "--commit-policy=none", "--execution-mode=current", "--dangerously-skip-permissions=false"}, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clearTaoEnv(t)
+			now := time.Now()
+			const planID = "generated-note-plan"
+			detail, _ := autoReworkTestDetail(planID, now)
+			detail.Dir = t.TempDir()
+			repo := newRecordingAutoReworkRepository(planID, detail)
+			meta := taodata.Repo{ID: "note-repo", Root: "/repo", RunDefaults: &taodata.RepoRunDefaults{Models: &taodata.RepoModelDefaults{Run: "repository-implementation"}}}
+			other := taodata.Repo{ID: "other-repo", Root: "/other", RunDefaults: &taodata.RepoRunDefaults{Models: &taodata.RepoModelDefaults{Run: "wrong-repository"}}}
+			app, _, _ := noteTestApp(t, strings.NewReader(""), other, meta)
+			t.Setenv("TERM", "xterm-256color")
+			terminal := newFakeRunHeaderTerminalWriter(term.Size{Width: 100, Height: 24})
+			app.Out = terminal
+			app.RuntimeEnv = snapshotWith(map[string]string{
+				runtimeconfig.EnvRunHeader:  tc.enabled,
+				runtimeconfig.EnvAutoRework: tc.enabled, runtimeconfig.EnvMaxReworkAttempts: tc.attempts,
+				runtimeconfig.EnvModel: "planning-base", runtimeconfig.EnvRunModel: "implementation",
+				runtimeconfig.EnvReworkEscalationModel: "escalated", runtimeconfig.EnvReworkEscalationFromAttempt: "1",
+			})
+			app.Repository = func(string) Repository {
+				return noteReworkTestRepository{fakeRepository: repo.planRunRepository.(fakeRepository), recording: repo}
+			}
+			app.PlanGenerator = planGeneratorFunc(func(context.Context, planning.GeneratePlanRequest) (*planning.GeneratePlanResult, error) {
+				t.Setenv(runtimeconfig.EnvAutoRework, "false")
+				t.Setenv(runtimeconfig.EnvMaxReworkAttempts, "0")
+				t.Setenv(runtimeconfig.EnvRunModel, "changed")
+				t.Setenv(runtimeconfig.EnvRunHeader, "false")
+				return &planning.GeneratePlanResult{Allocation: planning.PlanAllocation{ID: planID, Dir: detail.Dir}}, nil
+			})
+			calls := 0
+			old := executeSinglePlan
+			t.Cleanup(func() { executeSinglePlan = old })
+			executeSinglePlan = func(_ run.Service, _ context.Context, request run.Request) error {
+				calls++
+				if request.Models.Base != "planning-base" || request.Models.Run != "repository-implementation" {
+					t.Fatalf("execution models = %+v", request.Models)
+				}
+				if tc.name == "explicit existing flags" && (!request.ReviewEnabled || request.PullRequest || request.MaxSlices != 2 || request.CommitPolicy != "none" || request.ExecutionMode != "current") {
+					t.Fatalf("explicit note flags lost: %+v", request)
+				}
+				if calls == 2 {
+					detail.State.Status = plan.StatusReviewed
+					detail.State.Plan.Review = reworkReview(plan.ReviewVerdictApprove, nil)
+				}
+				return nil
+			}
+			item, err := app.noteRepository(meta).Create(context.Background(), "implement fix", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			args := append([]string{"note", "run", "--repo", meta.ID, item.ID}, tc.args...)
+			if err := app.Run(context.Background(), args); err != nil {
+				t.Fatal(err)
+			}
+			if calls != tc.wantCalls {
+				t.Fatalf("execution calls = %d, want %d", calls, tc.wantCalls)
+			}
+			if pinned := strings.Contains(terminal.String(), "\x1b[8;24r"); pinned != (tc.enabled == "true") {
+				t.Fatalf("pinned header = %v, captured enabled = %s", pinned, tc.enabled)
+			}
+			if calls == 2 {
+				found := false
+				for _, event := range repo.events {
+					if event.Type == plan.EventTypeReworkRound {
+						found = true
+						if event.Model != "escalated" || event.Attempts != 1 {
+							t.Fatalf("inherited escalation = %+v", event)
+						}
+					}
+				}
+				if !found {
+					t.Fatal("missing rework round evidence")
+				}
+			}
+		})
 	}
 }
 

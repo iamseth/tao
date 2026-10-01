@@ -116,6 +116,9 @@ func (a App) writeStatus(payload statusPayload) error {
 	if err := writeln(a.Out, "Runtime defaults:"); err != nil {
 		return err
 	}
+	if err := writeln(a.Out, "Defaults are command-specific; see docs/configuration.md#command-applicability."); err != nil {
+		return err
+	}
 	width := len("TAO_DANGEROUSLY_SKIP_PERMISSIONS")
 	for _, row := range payload.RuntimeEnv {
 		if len(row.Name) > width {
@@ -127,6 +130,11 @@ func (a App) writeStatus(payload statusPayload) error {
 		}
 		if err := writef(a.Out, "  %-*s  %-8s  %s\n", width, row.Name, value, row.Source); err != nil {
 			return err
+		}
+		if commands := runtimeconfig.ApplicableCommands(row.Name); len(commands) > 0 {
+			if err := writef(a.Out, "    applies to: %s\n", strings.Join(commands, ", ")); err != nil {
+				return err
+			}
 		}
 		if row.Warning != "" {
 			if err := writef(a.Out, "    warning: %s\n", row.Warning); err != nil {

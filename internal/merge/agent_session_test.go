@@ -1504,6 +1504,35 @@ func TestDeferredMergeSessionsRequireCapturedSettingsBeforeLaunch(t *testing.T) 
 	}
 }
 
+func TestMergeSessionSharedProjection(t *testing.T) {
+	for _, single := range []bool{false, true} {
+		t.Run(fmt.Sprintf("single=%t", single), func(t *testing.T) {
+			calls := 0
+			config := BatchAgentSessionConfig{
+				RuntimeEnv: mergeSnapshotWith(map[string]string{runtimeconfig.EnvAgent: "invalid"}),
+				ResolveOptions: func() (runtimeconfig.CommandOptions, error) {
+					calls++
+					return runtimeconfig.CommandOptions{RunOptions: runtimeconfig.ResolvedRunOptions{
+						Agent: runtimeconfig.AgentClaude, Models: runtimeconfig.ModelSelection{Base: "shared"},
+					}, SkipPermissions: true}, nil
+				},
+			}
+			session, err := newBatchAgentSession(config, single)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if calls != 1 || session.providerToolName != "claude" || session.models.Base != "shared" {
+				t.Fatalf("calls=%d session=%+v", calls, session)
+			}
+			want := errors.New("applicable option rejected")
+			config.ResolveOptions = func() (runtimeconfig.CommandOptions, error) { return runtimeconfig.CommandOptions{}, want }
+			if _, err := newBatchAgentSession(config, single); !errors.Is(err, want) {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+}
+
 func TestDeferredBatchSessionUsesStableSnapshot(t *testing.T) {
 	var got mergeFakeClaudeStart
 	session := NewDeferredBatchAgentSession(BatchAgentSessionConfig{

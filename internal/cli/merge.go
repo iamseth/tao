@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	"github.com/iamseth/tao/internal/commandrunner"
 	mergepkg "github.com/iamseth/tao/internal/merge"
@@ -252,12 +253,10 @@ func (a App) newMergeBatchRunner(ctx context.Context, repository mergepkg.BatchP
 	service.Progress = a.Out
 	service.Now = a.Now
 	store := mergepkg.NewBatchStore(batchesDir, registry.ActiveMergeBatchPath(current))
-	models, err := a.mergeModels(ctx, model)
-	if err != nil {
-		return nil, err
-	}
+	resolveOptions := a.mergeSessionOptions(repositoryRunOptions(current), model)
 	transcript := mergepkg.NewBatchTranscriptWriter(store, a.Out, a.Now)
-	agentConfig := newMergeBatchAgentConfig(a, current.Root, runner, store, models, transcript)
+	agentConfig := newMergeBatchAgentConfig(a, current.Root, runner, store, runtimeconfig.ModelSelection{}, transcript)
+	agentConfig.ResolveOptions = resolveOptions
 	session := mergepkg.NewDeferredBatchAgentSession(agentConfig)
 	generator, err := mergepkg.NewMergeProposalGenerator(agentConfig)
 	if err != nil {
@@ -285,6 +284,24 @@ func newMergeBatchCoordinatorSeams(a App, store *mergepkg.BatchStore, service me
 		Now:        a.Now,
 		Progress:   a.Out,
 	}
+}
+
+// mergeSessionOptions captures one applicable projection for every session in
+// the invocation. Admission remains deferred so passive merges and dry runs do
+// not require valid provider configuration or provider readiness.
+func (a App) mergeSessionOptions(repository runtimeconfig.RunOptionsPatch, model string) func() (runtimeconfig.CommandOptions, error) {
+	snapshot := a.envSnapshot()
+	a.RuntimeEnv = &snapshot
+	return sync.OnceValues(func() (runtimeconfig.CommandOptions, error) {
+		fs := flag.NewFlagSet("merge", flag.ContinueOnError)
+		registerMergeFlags(fs)
+		if model != "" {
+			if err := fs.Set("model", model); err != nil {
+				return runtimeconfig.CommandOptions{}, err
+			}
+		}
+		return a.resolveCommandOptionsWithRepository(fs, runtimeconfig.CommandMerge, repository)
+	})
 }
 
 func (a App) mergeModels(ctx context.Context, model string) (runtimeconfig.ModelSelection, error) {
@@ -521,11 +538,12 @@ func (a App) newMergeServiceRunner(ctx context.Context, detail *plan.PlanDetail,
 		return nil, err
 	}
 	eventAppender := plan.NewFileRepository("")
-	models, err := a.mergeModels(ctx, model)
+	repository, err := a.currentRepositoryRunOptions(ctx)
 	if err != nil {
 		return nil, err
 	}
-	agentConfig := newSingleMergeAgentConfig(a, detail, repoRoot, runner, eventAppender, models)
+	agentConfig := newSingleMergeAgentConfig(a, detail, repoRoot, runner, eventAppender, runtimeconfig.ModelSelection{})
+	agentConfig.ResolveOptions = a.mergeSessionOptions(repository, model)
 	generator, err := mergepkg.NewMergeProposalGenerator(agentConfig)
 	if err != nil {
 		return nil, fmt.Errorf("configure exceptional merge proposal generator: %w", err)

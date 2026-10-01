@@ -619,20 +619,16 @@ func (a App) noteRun(ctx context.Context, registered taodata.Repo, repo NoteRepo
 	if len(args) != 1 {
 		return errors.New("usage: tao note run <note-id> [--repo REPO] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--no-review] [--dangerously-skip-permissions]")
 	}
-	inputs, err := a.resolveRunRequestFlags(fs)
+	options, err := a.resolveCommandOptionsWithRepository(fs, runtimeconfig.CommandRun, repositoryRunOptions(registered), repositoryReworkOptions(registered))
 	if err != nil {
 		return err
 	}
 	if err := a.requireRunHandoffBudgets(); err != nil {
 		return err
 	}
-	// Resolve every run option before allocating a plan or invoking the planner.
-	request, err := inputs.defaults.newRunRequestWithRepository("pending-note-plan", repositoryRunOptions(registered), inputs.overrides)
-	if err != nil {
-		return err
-	}
-	generator := a.planGenerator(request.ResolvedRunOptions)
-	skipPermissions := inputs.skipPermissions
+	// Carry these options unchanged across planning and the execution handoff.
+	generator := a.planGenerator(options.RunOptions)
+	skipPermissions := options.SkipPermissions
 	if err := a.requireHealthyNoteRepository(ctx, registered); err != nil {
 		return err
 	}
@@ -662,7 +658,7 @@ func (a App) noteRun(ctx context.Context, registered taodata.Repo, repo NoteRepo
 			if skipPermissions {
 				mode = agent.PermissionModeBypassPermissions
 			}
-			routing, err := a.resolvePlannerRouting(fs, registered, item, inputs.defaults.Agent, mode)
+			routing, err := a.resolvePlannerRouting(fs, registered, item, options.RunOptions.Agent, mode)
 			if err != nil {
 				return note.Note{}, "", "", err
 			}
@@ -672,7 +668,7 @@ func (a App) noteRun(ctx context.Context, registered taodata.Repo, repo NoteRepo
 			}
 			generationCtx, stopSignals := newCommandSignalContext(ctx)
 			generated, err = generator.GeneratePlan(generationCtx, planning.GeneratePlanRequest{
-				Session: session, AgentKind: routing.agentKind(inputs.defaults.Agent), PermissionMode: mode, Timeout: request.SessionTimeout, RejectOpenQuestions: true,
+				Session: session, AgentKind: routing.agentKind(options.RunOptions.Agent), PermissionMode: mode, Timeout: options.RunOptions.SessionTimeout, RejectOpenQuestions: true,
 			})
 			interrupted := generationCtx.Err() != nil || errors.Is(err, context.Canceled)
 			stopSignals()
@@ -703,9 +699,8 @@ func (a App) noteRun(ctx context.Context, registered taodata.Repo, repo NoteRepo
 	if err := writef(a.Out, "Promoted note %s to plan %s\n", promoted.ID, generated.Allocation.ID); err != nil {
 		return err
 	}
-	request.Input = generated.Allocation.ID
 	planRepo := a.repository(filepath.Dir(generated.Allocation.Dir))
-	return a.executeResolvedRun(ctx, planRepo, generated.Allocation.ID, request, skipPermissions, runtimeconfig.AutoReworkPolicy{}, inputs.defaults.ReworkEscalationFromAttemptValue(), false, true)
+	return a.executeCommandRun(ctx, planRepo, generated.Allocation.ID, options)
 }
 
 func (a App) planGenerator(options runtimeconfig.ResolvedRunOptions) PlanGenerator {

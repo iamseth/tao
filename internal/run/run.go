@@ -135,10 +135,19 @@ type Options struct {
 	RunDependencies
 }
 
+// RunOptionSources carries winning sources only for state-dependent admission
+// diagnostics. It is not lifecycle evidence or persisted configuration.
+type RunOptionSources struct {
+	PullRequest   string
+	ExecutionMode string
+}
+
 // ExecutionConfig carries the run configuration the executor reads. It embeds
 // the resolved runtime options and adds process-only knobs that stay outside
 // runtimeconfig.
 type ExecutionConfig struct {
+	// OptionSources is invocation-only diagnostic context, never persisted evidence.
+	OptionSources RunOptionSources
 	ResolvedRunOptions
 	// RuntimeEnv is the invocation snapshot. Nil selects built-ins, never process state.
 	RuntimeEnv        *runtimeconfig.EnvSnapshot

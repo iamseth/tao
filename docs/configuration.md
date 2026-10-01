@@ -23,6 +23,76 @@ tao repo config --rework-escalation-from-attempt 4
 tao repo config --rework-escalation-from-attempt unset
 ```
 
+## Command applicability
+
+Defaults are command-specific, not live settings for every command. The matrix
+below covers shared option composition for six paths; `yes` means consumed, not
+that the command registers a corresponding flag. `note run` and `rework --run`
+use the full-run profile. `review --run` runs a fresh review, not implementation
+slices. `merge` covers both single and batch agent sessions and does not create
+PRs or inherit automatic slice-commit behavior.
+
+| Setting | run | note run | rework --run | review --run | merge | prompt run |
+| --- | --- | --- | --- | --- | --- | --- |
+| `--max-slices` | yes | yes | yes | — | — | — |
+| `--continue` | yes | yes | yes | — | — | — |
+| `TAO_COMMIT_POLICY` | yes | yes | yes | — | — | yes |
+| `TAO_EXECUTION_MODE` | yes | yes | yes | — | — | yes |
+| `TAO_AGENT` | yes | yes | yes | yes | yes | — |
+| `TAO_PULL_REQUEST` | yes | yes | yes | — | — | — |
+| `TAO_REVIEW` | yes | yes | yes | — | — | — |
+| `TAO_SESSION_TIMEOUT` | yes | yes | yes | yes | yes | — |
+| `TAO_MODEL` | yes | yes | yes | yes | yes | — |
+| `TAO_RUN_MODEL` | yes | yes | yes | — | — | — |
+| `TAO_REVIEW_MODEL` | yes | yes | yes | yes | — | — |
+| `TAO_MERGE_REVIEW_MODEL` | — | — | — | — | yes | — |
+| `TAO_RESOLVER_MODEL` | — | — | — | — | yes | — |
+| `TAO_REWORK_ESCALATION_MODEL` | yes | yes | yes | — | — | — |
+| `TAO_AUTO_REWORK` | yes | yes | yes | — | — | — |
+| `TAO_MAX_REWORK_ATTEMPTS` | yes | yes | yes | — | — | — |
+| `TAO_RUN_HEADER` | yes | yes | yes | — | — | — |
+| `TAO_REWORK_ESCALATION_FROM_ATTEMPT` | yes | yes | yes | — | — | — |
+| `TAO_DANGEROUSLY_SKIP_PERMISSIONS` | yes | yes | yes | yes | yes | — |
+
+This is not a table of all runtime consumers. Budgets, planning routing, theme,
+merge verification and other settings retain their independent consumers and
+validation. Planning agent/model selection remains separate from execution.
+Applicability conveys no lifecycle, recovery, approval, commit or merge authority;
+for example, the full-run profile does not grant note execution recovery flags.
+
+Precedence is unchanged: built-ins → captured invocation environment → repository
+defaults → explicitly provided registered flags. Only existing repository fields
+(PR preference and models) participate. An explicit flag is an override even when
+its value equals the built-in default, including explicit `false`; an absent or
+unregistered flag is never an override. Unset model roles fall back to the resolved
+base (escalation remains opt-in). The invocation reuses its environment snapshot
+and selected repository defaults through execution handoffs.
+
+Only consumed settings are admitted. A malformed applicable environment value
+still fails even if a repository default or flag would override it; unrelated
+invalid settings do not block the path. Applicable conflicts are strict, with
+winning sources (`default`, `env`, `repository`, `flag`) in option-conflict
+diagnostics: PR with commit policy `none`, or PR in the current workspace, is an
+error, not a silent PR fallback. Positive automatic-rework attempts with
+review disabled normalize to zero with a warning, including explicit flags. State-dependent checks still run on the execution path.
+
+`note run` inherits automatic-rework policy, attempt limits, escalation and the
+TTY-only header preference, as well as models, permissions and session timeout.
+Execution options are validated before durable note promotion. Both ordinary
+and PR-thread `rework --run` resolve and validate the full-run handoff before
+persisting rework; they carry the resolved options into execution. Rework without
+`--run` does not admit execution-only settings.
+
+`prompt run` consumes only commit policy and execution mode. Rendering does not
+look up repository defaults or require repository registration; other prompts
+consume neither setting. Existing prompt flags remain accepted for compatibility,
+including `--commit=false` to suppress commit instructions. Rendering starts no
+agent session and does not validate unrelated execution settings.
+
+Human-readable `tao status` annotates shared settings with applicable commands;
+its values and source overlay are still defaults, not an execution admission
+result. Status JSON and TUI Settings retain their existing shapes and values.
+
 ## Runtime settings
 
 Defaults below describe the environment/built-in layer, before repository and
@@ -111,7 +181,7 @@ unmentioned settings are preserved. `tao repo config` displays absent values as
 `unset` and explicit zero as `0`; status and Settings show numeric repository
 values with source `repository` while retaining captured environment diagnostics.
 
-Automatic rework resolves environment → repository numeric defaults → explicit invocation flags. `--max-rework-attempts N` and `--rework-escalation-from-attempt N` preserve explicit zero/count overrides; only the attempt count permits zero. The deprecated `--auto-rework` alias remains accepted for one release (false = zero, true = five), warns whenever supplied, and yields to an explicit count in the same invocation. Registered flag defaults are not overrides. Positive attempts with automatic review disabled normalize to zero with one warning, regardless of source. Reverify always executes and presents zero attempts. Note promotion keeps automatic rework disabled. Invalid consumed environment settings are rejected lazily before execution/handoff mutation; unrelated merge settings do not block ordinary runs.
+Automatic rework resolves environment → repository numeric defaults → explicit invocation flags. `--max-rework-attempts N` and `--rework-escalation-from-attempt N` preserve explicit zero/count overrides; only the attempt count permits zero. The deprecated `--auto-rework` alias remains accepted for one release (false = zero, true = five), warns whenever supplied, and yields to an explicit count in the same invocation. Registered flag defaults are not overrides. Positive attempts with automatic review disabled normalize to zero with one warning, regardless of source. Reverify always executes and presents zero attempts. Note promotion inherits the selected repository's automatic-rework settings. Invalid consumed environment settings are rejected lazily before execution/handoff mutation; unrelated merge settings do not block ordinary runs.
 
 ## Model selection
 

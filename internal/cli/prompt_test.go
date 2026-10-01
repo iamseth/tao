@@ -1051,6 +1051,41 @@ func stripANSIGreen(value string) string {
 	return stripANSI(value)
 }
 
+func TestPromptApplicableOptionsStandalone(t *testing.T) {
+	clearTaoEnv(t)
+	t.Chdir(t.TempDir())
+	for _, tt := range []struct {
+		name   string
+		flags  []string
+		policy string
+		mode   string
+	}{
+		{"inherited", nil, "none", "current"},
+		{"explicit", []string{"--commit-policy=slice", "--execution-mode=isolated"}, "slice", "isolated"},
+		{"suppressed", []string{"--commit-policy=slice", "--commit=false"}, "none", "current"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var out bytes.Buffer
+			app := App{Out: &out, RuntimeEnv: snapshotWith(map[string]string{
+				runtimeconfig.EnvCommitPolicy: "none", runtimeconfig.EnvExecutionMode: "current",
+				runtimeconfig.EnvPullRequest: "invalid", runtimeconfig.EnvSessionTimeout: "invalid",
+			}), Registry: func() NoteRegistry { t.Fatal("standalone rendering resolved repository"); return nil }}
+			// A real packet exposes both option values, unlike mode-independent prose.
+			root := t.TempDir()
+			dir := writeRunPlan(t, root, "20260430-1200-options", plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+			args := append([]string{"run", "--plan-dir", dir}, tt.flags...)
+			if err := app.prompt(context.Background(), plan.NewFileRepository(root), args); err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{"Commit Policy: " + tt.policy, "Execution Mode: " + tt.mode} {
+				if !strings.Contains(out.String(), want) {
+					t.Fatalf("missing %q in rendered packet", want)
+				}
+			}
+		})
+	}
+}
+
 func TestPromptUsesEnvPolicyDefaults(t *testing.T) {
 	clearTaoEnv(t)
 	t.Setenv("TAO_COMMIT_POLICY", "slice")

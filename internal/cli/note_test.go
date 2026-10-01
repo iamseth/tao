@@ -655,6 +655,7 @@ func TestNoteRunRejectsConsumedSnapshotBeforePromotion(t *testing.T) {
 	clearTaoEnv(t)
 	for _, key := range []string{
 		runtimeconfig.EnvAgent, runtimeconfig.EnvSessionTimeout, runtimeconfig.EnvModel, runtimeconfig.EnvExecutionMode, runtimeconfig.EnvReworkEscalationFromAttempt,
+		runtimeconfig.EnvAutoRework, runtimeconfig.EnvMaxReworkAttempts,
 		runtimeconfig.EnvMaxSliceCostDeprecated, runtimeconfig.EnvMaxSliceOutputTokensDeprecated,
 		runtimeconfig.EnvBudgetPlanCostDeprecated, runtimeconfig.EnvBudgetSliceToolCallsDeprecated,
 	} {
@@ -1153,7 +1154,7 @@ func TestNoteRunRejectsContinueAndBatchFlags(t *testing.T) {
 	clearTaoEnv(t)
 	repoMeta := taodata.Repo{ID: "tao-123", Name: "tao", Root: "/repo"}
 	app, _, _ := noteTestApp(t, strings.NewReader(""), repoMeta)
-	for _, flag := range []string{"--continue", "--all", "--active"} {
+	for _, flag := range []string{"--continue", "--all", "--active", "--model=x", "--run-model=x", "--auto-rework=false", "--max-rework-attempts=1", "--no-run-header"} {
 		err := app.Run(context.Background(), []string{"note", "run", flag, "note-id"})
 		if err == nil {
 			t.Fatalf("%s unexpectedly accepted", flag)

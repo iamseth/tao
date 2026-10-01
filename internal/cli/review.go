@@ -45,16 +45,15 @@ func (a App) review(ctx context.Context, repo runpkg.Repository, args []string) 
 	if err := requirePositionals(positional, 1, "usage: tao review [--run [--model NAME]] <plan-id-or-slug-or-path>"); err != nil {
 		return err
 	}
-	model, err := modelFlagValue(fs)
-	if err != nil {
+	if _, err := modelFlagValue(fs); err != nil {
 		return err
 	}
 	if flagBoolValue(fs, "run") {
-		var overrides runtimeconfig.RunOptionsPatch
-		if model != "" {
-			overrides = overrides.WithModelForAllRoles(model)
+		options, err := a.resolveCommandOptions(ctx, fs, runtimeconfig.CommandReview)
+		if err != nil {
+			return err
 		}
-		return a.runPlanReview(ctx, repo, positional[0], overrides)
+		return a.runPlanReviewWithOptions(ctx, repo, positional[0], options)
 	}
 	detail, err := repo.ResolvePlan(ctx, positional[0])
 	if err != nil {
@@ -67,24 +66,24 @@ func (a App) review(ctx context.Context, repo runpkg.Repository, args []string) 
 }
 
 func (a App) runPlanReview(ctx context.Context, repo runpkg.Repository, input string, overrides runtimeconfig.RunOptionsPatch) error {
-	defaults, err := a.envDefaultsFor(
-		runtimeconfig.EnvAgent, runtimeconfig.EnvSessionTimeout, runtimeconfig.EnvSkipPermissions,
-		runtimeconfig.EnvModel, runtimeconfig.EnvReviewModel,
-	)
-	if err != nil {
-		return err
-	}
 	repositoryDefaults, err := a.currentRepositoryRunOptions(ctx)
 	if err != nil {
 		return err
 	}
-	request, err := defaults.newRunRequestWithRepository(input, repositoryDefaults, overrides)
+	options, err := runtimeconfig.ResolveCommandOptions(runtimeconfig.CommandOptionsInput{
+		Env: a.envSnapshot(), Profile: runtimeconfig.CommandReview, Repository: repositoryDefaults, Flags: overrides,
+	})
 	if err != nil {
 		return err
 	}
+	return a.runPlanReviewWithOptions(ctx, repo, input, options)
+}
+
+func (a App) runPlanReviewWithOptions(ctx context.Context, repo runpkg.Repository, input string, options runtimeconfig.CommandOptions) error {
+	request := runpkg.Request{Input: input, ResolvedRunOptions: options.RunOptions}
 	snapshot := a.envSnapshot()
 	runner := runpkg.NewService(repo, a.Out, runpkg.Options{
-		ExecutionConfig: runpkg.ExecutionConfig{RuntimeEnv: &snapshot, ResolvedRunOptions: request.ResolvedRunOptions, SkipPermissions: defaults.SkipPermissions},
+		ExecutionConfig: runpkg.ExecutionConfig{RuntimeEnv: &snapshot, ResolvedRunOptions: request.ResolvedRunOptions, SkipPermissions: options.SkipPermissions},
 		RunDependencies: runpkg.RunDependencies{CommandRunner: a.CommandRunner, ProcessStarter: a.ProcessStarter, StatusReporter: a.StatusReporter, SessionLogWriter: a.Out, Now: a.Now,
 			ReviewRangePresenter: func(detail *plan.PlanDetail, base, head string) {
 				presentUnchangedReviewRange(a.Out, detail, base, head)

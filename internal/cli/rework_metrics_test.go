@@ -68,7 +68,12 @@ func TestReworkPRClassifierMetrics(t *testing.T) {
 					app := App{RuntimeEnv: &snapshot, Out: &bytes.Buffer{}, Now: func() time.Time { return fixed }, ProcessStarter: reworkMetricsProcessStarter(t, provider, outcome, providerErr, &calls)}
 					args := []string{"--from-pr", "--dry-run", id}
 					if outcome == "reopen" {
-						args = []string{"--from-pr", id}
+						args = []string{"--from-pr", "--run", id}
+						oldExecute := executeSinglePlan
+						t.Cleanup(func() { executeSinglePlan = oldExecute })
+						executeSinglePlan = func(service runpkg.Service, ctx context.Context, request runpkg.Request) error {
+							return service.WithPlanRunLock(ctx, request, func(context.Context) error { return nil })
+						}
 					}
 					err := app.rework(context.Background(), repo, args)
 					switch outcome {

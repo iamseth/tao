@@ -107,9 +107,6 @@ func registerDoctorFlags(fs *flag.FlagSet) {
 }
 
 func (a App) prompt(ctx context.Context, repo plan.Resolver, args []string) error {
-	if _, err := a.envDefaultsFor(runtimeconfig.EnvCommitPolicy, runtimeconfig.EnvExecutionMode); err != nil {
-		return err
-	}
 	fs, positional, err := a.parseArgs("prompt", args, a.registerPromptFlags)
 	if err != nil {
 		return err
@@ -132,11 +129,15 @@ func (a App) prompt(ctx context.Context, repo plan.Resolver, args []string) erro
 			return err
 		}
 	}
-	config, err := runtimeconfig.NewConfigFromStages(runtimeconfig.DefaultRunOptionsPatch(), runtimeconfig.RunOptionsPatch{CommitPolicy: runtimeconfig.CommitPolicy(flagStringValue(fs, "commit-policy")), ExecutionMode: runtimeconfig.ExecutionMode(flagStringValue(fs, "execution-mode"))})
+	profile := runtimeconfig.CommandPromptOther
+	if positional[0] == prompts.PromptRun {
+		profile = runtimeconfig.CommandPromptRun
+	}
+	options, err := a.resolveCommandOptions(ctx, fs, profile)
 	if err != nil {
 		return err
 	}
-	resolved := config.ResolvedOptions()
+	resolved := options.RunOptions
 	policy := resolved.CommitPolicy
 	if !commit {
 		policy = runtimeconfig.CommitPolicyNone

@@ -43,6 +43,7 @@ func TestPrepareRunExecutionAllowsCurrentModeReverifyWithPullRequestDefault(t *t
 		PullRequest:   true,
 	}}})
 	config := service.config
+	config.OptionSources = RunOptionSources{PullRequest: "repository", ExecutionMode: "flag"}
 	request := Request{RecoveryMode: RecoveryMode{Reverify: true}}
 
 	execution, err := service.prepareRequestRunExecution(context.Background(), detail, request, config)
@@ -125,10 +126,15 @@ func TestPlacementNoticePreservesPRRefusalDespiteOutputFailure(t *testing.T) {
 		detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 		detail.Dir = t.TempDir()
 		detail.State.Workspace = &plan.Workspace{Strategy: "worktree", Path: "/recorded-root"}
-		service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, out, Options{})
+		service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, out, Options{ExecutionConfig: ExecutionConfig{OptionSources: RunOptionSources{PullRequest: "repository", ExecutionMode: "flag"}}})
 		err := service.Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeCurrent, CommitPolicy: CommitPolicySlice, PullRequest: true}})
 		if err == nil || !strings.Contains(err.Error(), "--pull-request requires --execution-mode isolated") {
 			t.Fatalf("PR refusal = %v", err)
+		}
+		for _, source := range []string{"TAO_PULL_REQUEST source=repository", "TAO_EXECUTION_MODE source=flag"} {
+			if !strings.Contains(err.Error(), source) {
+				t.Fatalf("missing %s: %v", source, err)
+			}
 		}
 		if detail.State.Workspace.Path != "/recorded-root" {
 			t.Fatal("recorded root changed")

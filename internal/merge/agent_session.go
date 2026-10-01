@@ -29,8 +29,12 @@ import (
 
 // BatchAgentSessionConfig configures a merge-owned agent operation. Zero-value
 // provider, permission, and timeout settings use RuntimeEnv (built-ins when
-// omitted). Models must already be resolved by the caller.
+// omitted). Models must already be resolved by the caller unless ResolveOptions
+// supplies the shared applicable projection.
 type BatchAgentSessionConfig struct {
+	// ResolveOptions optionally supplies the invocation's shared, lazily admitted
+	// merge projection. Direct domain callers retain the explicit-field defaults.
+	ResolveOptions  func() (runtimeconfig.CommandOptions, error)
 	RuntimeEnv      *runtimeconfig.EnvSnapshot
 	Agent           runtimeconfig.AgentKind
 	Models          runtimeconfig.ModelSelection
@@ -262,12 +266,24 @@ func NewDeferredBatchAgentSession(config BatchAgentSessionConfig) BatchAgentSess
 }
 
 func newBatchAgentSession(config BatchAgentSessionConfig, confineFilesystem bool) (BatchAgentSession, error) {
+	if config.ResolveOptions != nil {
+		options, err := config.ResolveOptions()
+		if err != nil {
+			return BatchAgentSession{}, err
+		}
+		config.Agent = options.RunOptions.Agent
+		config.Models = options.RunOptions.Models
+		config.SkipPermissions = &options.SkipPermissions
+		config.Timeout = &options.RunOptions.SessionTimeout
+	}
 	var snapshot runtimeconfig.EnvSnapshot
 	if config.RuntimeEnv != nil {
 		snapshot = *config.RuntimeEnv
 	}
-	if err := snapshot.Require(runtimeconfig.EnvAgent, runtimeconfig.EnvSessionTimeout, runtimeconfig.EnvSkipPermissions); err != nil {
-		return BatchAgentSession{}, err
+	if config.ResolveOptions == nil {
+		if err := snapshot.Require(runtimeconfig.EnvAgent, runtimeconfig.EnvSessionTimeout, runtimeconfig.EnvSkipPermissions); err != nil {
+			return BatchAgentSession{}, err
+		}
 	}
 	defaults := snapshot.Defaults()
 	kind := config.Agent
