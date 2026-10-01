@@ -21,7 +21,16 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 )
 
+func clearSliceCompletionOwnerEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv(sliceCompletionOwnerEnv, "")
+	if err := os.Unsetenv(sliceCompletionOwnerEnv); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWrapUpPreservesCompletionDeadline(t *testing.T) {
+	clearSliceCompletionOwnerEnv(t)
 	root := t.TempDir()
 	detail := runPathSessionDetail(t, root, plan.StatusInProgress, []string{"001-a"}, nil, plan.StatusInProgress)
 	calls := 0
@@ -86,8 +95,7 @@ func TestWrapUpPreservesCompletionDeadline(t *testing.T) {
 }
 
 func TestSliceCompletionLifetimeDirect(t *testing.T) {
-	t.Setenv(sliceCompletionOwnerEnv, "")
-	_ = os.Unsetenv(sliceCompletionOwnerEnv)
+	clearSliceCompletionOwnerEnv(t)
 	guard, err := BindSliceCompletionLifetime(context.Background(), t.TempDir(), "001")
 	if err != nil {
 		t.Fatal(err)
@@ -117,6 +125,7 @@ func TestSliceCompletionLifetimeDirect(t *testing.T) {
 }
 
 func TestSliceCompletionLifetimeManaged(t *testing.T) {
+	clearSliceCompletionOwnerEnv(t)
 	dir := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -346,6 +355,7 @@ func assertCompletionHeartbeatStopped(t *testing.T, dir string) {
 }
 
 func TestSliceCompletionLifetimeAcrossProcesses(t *testing.T) {
+	clearSliceCompletionOwnerEnv(t)
 	for _, mode := range []string{"death", "timeout", "normal-end", "supersession", "disabled-timeout"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
@@ -407,9 +417,8 @@ func TestSliceCompletionLifetimeAcrossProcesses(t *testing.T) {
 }
 
 func TestSliceCompletionLifetimeFailClosed(t *testing.T) {
+	clearSliceCompletionOwnerEnv(t)
 	dir := t.TempDir()
-	t.Setenv(sliceCompletionOwnerEnv, "")
-	_ = os.Unsetenv(sliceCompletionOwnerEnv)
 	lock, err := plan.AcquireRunLock(dir, "plan", time.Now())
 	if err != nil {
 		t.Fatal(err)
@@ -469,6 +478,7 @@ func TestSliceCompletionLifetimeFailClosed(t *testing.T) {
 // Real provider paths exercise the shared session decorator, process starter,
 // inherited environment, and a nested CLI in its own process group.
 func TestSliceCompletionLifetimeLocalProviders(t *testing.T) {
+	clearSliceCompletionOwnerEnv(t)
 	for _, kind := range []AgentKind{AgentPi, AgentClaude} {
 		for _, outcome := range []string{"normal", "death", "timeout"} {
 			t.Run(string(kind)+"/"+outcome, func(t *testing.T) {
@@ -612,6 +622,7 @@ func completionFakeProvider(t *testing.T, dir, mode string) {
 }
 
 func TestSliceCompletionLifetimeRoleScope(t *testing.T) {
+	clearSliceCompletionOwnerEnv(t)
 	for _, role := range []plan.AgentRole{plan.AgentRoleExecution, plan.AgentRoleRework, plan.AgentRoleReview, plan.AgentRolePullRequest} {
 		t.Run(string(role), func(t *testing.T) {
 			dir := writeMetricsPlan(t, "/repo", "plan-a")
@@ -646,6 +657,7 @@ func TestSliceCompletionLifetimeRoleScope(t *testing.T) {
 }
 
 func TestSliceCompletionLifetimeDeadOwnerCleanup(t *testing.T) {
+	clearSliceCompletionOwnerEnv(t)
 	dir := t.TempDir()
 	owner := startCompletionHelper(t, dir, "owner", "")
 	token := owner.line(t)
@@ -831,6 +843,7 @@ func TestCompleteVerifiedParentLossAcrossProcesses(t *testing.T) {
 }
 
 func TestSliceCompletionLifetimeExpiredCheck(t *testing.T) {
+	clearSliceCompletionOwnerEnv(t)
 	dir := t.TempDir()
 	_, closeOwner, err := startSliceCompletionLifetime(context.Background(), dir, "001")
 	if err != nil {

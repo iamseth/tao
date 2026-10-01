@@ -17,6 +17,7 @@ import (
 
 func verifiedCompletionFixture(t *testing.T, policy CommitPolicy, commands ...string) SliceCompletionRequest {
 	t.Helper()
+	clearSliceCompletionOwnerEnv(t)
 	repo := initSliceCompletionRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "binary.dat"), []byte{0, 0, 0}, 0o600); err != nil {
 		t.Fatal(err)
@@ -44,6 +45,36 @@ func verifiedCompletionFixture(t *testing.T, policy CommitPolicy, commands ...st
 		t.Fatal(err)
 	}
 	return SliceCompletionRequest{Record: record, SliceID: "001-a", Notes: "verified completion", CommitProposal: sliceCompletionProposal(), Now: time.Now().UTC()}
+}
+
+func TestVerifiedCompletionFixtureOwnerEnvIsolation(t *testing.T) {
+	for _, initial := range []struct {
+		name    string
+		present bool
+		value   string
+	}{
+		{name: "absent"},
+		{name: "empty", present: true},
+		{name: "nonempty", present: true, value: "dummy"},
+	} {
+		t.Run(initial.name, func(t *testing.T) {
+			t.Setenv(sliceCompletionOwnerEnv, initial.value)
+			if !initial.present {
+				if err := os.Unsetenv(sliceCompletionOwnerEnv); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Run("isolated", func(t *testing.T) {
+				verifiedCompletionFixture(t, CommitPolicySlice, "true")
+				if value, present := os.LookupEnv(sliceCompletionOwnerEnv); present {
+					t.Errorf("isolated owner environment present: %q", value)
+				}
+			})
+			if value, present := os.LookupEnv(sliceCompletionOwnerEnv); present != initial.present || value != initial.value {
+				t.Errorf("restored owner environment = (%q, %t), want (%q, %t)", value, present, initial.value, initial.present)
+			}
+		})
+	}
 }
 
 func reloadVerifiedCompletion(t *testing.T, request SliceCompletionRequest) *plan.PlanRecord {

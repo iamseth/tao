@@ -130,6 +130,8 @@ When the selected slice ID matches `r<round><NN>-`, the slice derives from a rev
 
 ## Verification
 
+An in-session `internal/run` test failure confirmed to result solely from inherited `TAO_SLICE_COMPLETION_OWNER` is not by itself a blocker: invoke `tao slice-complete`, whose authoritative gates strip that variable and must still pass.
+
 Keep test-first development and targeted diagnosis. Do not routinely run a duplicate full declared-gate sequence or manufacture a results file: call `tao slice-complete` below for authoritative verification. Tao executes every selected slice `verification.commands` entry in order before intent; `verification.steps` supplies cwd context only. Use `verification.source` to understand why gates were selected.
 
 Gates execute locally, not in a sandbox or with cryptographic attestation. Each command has a fixed ten-minute timeout within the unchanged remaining agent-session wall-clock budget; disabling the session timeout does not disable the command bound. Final repository verification is unchanged.
