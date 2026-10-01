@@ -721,6 +721,10 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 		case key.Key == term.KeyEsc || key.Key == term.KeyBackspace:
 			state.noteDetail = nil
 			state.noteDetailOffset = 0
+		case key.Key == term.KeyArrowLeft:
+			state.moveAdjacentNoteDetail(-1)
+		case key.Key == term.KeyArrowRight:
+			state.moveAdjacentNoteDetail(1)
 		case key.Key == term.KeyArrowUp || (key.Key == term.KeyRune && key.Rune == 'k'):
 			state.moveNoteDetail(-1)
 		case key.Key == term.KeyArrowDown || (key.Key == term.KeyRune && key.Rune == 'j'):
@@ -758,6 +762,10 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 			state.detail.moveTab(1, state.size)
 		case !state.detail.sliceOpen && key.Key == term.KeyShiftTab:
 			state.detail.moveTab(-1, state.size)
+		case state.detail.sliceOpen && key.Key == term.KeyArrowRight:
+			state.detail.moveSlice(1)
+		case state.detail.sliceOpen && key.Key == term.KeyArrowLeft:
+			state.detail.moveSlice(-1)
 		case !state.detail.sliceOpen && key.Key == term.KeyArrowRight:
 			a.movePlanDetail(ctx, state, 1)
 		case !state.detail.sliceOpen && key.Key == term.KeyArrowLeft:
@@ -796,6 +804,9 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 			state.detail.jumpVertical(true, state.size)
 		}
 		return false
+	}
+	if state.activePage() == PageReview {
+		return state.handleKey(key)
 	}
 	if normalizedSearchQuery(state.searchQuery) != "" && (key.Key == term.KeyEsc || key.Key == term.KeyBackspace) {
 		state.clearSearch()
@@ -1071,6 +1082,9 @@ func (d *detailState) reconcileSliceSelection() {
 }
 
 func (d *detailState) moveSlice(delta int) {
+	if d.plan == nil {
+		return
+	}
 	ordered := orderedDetailSlices(d.plan)
 	if len(ordered) == 0 {
 		return
@@ -1083,7 +1097,10 @@ func (d *detailState) moveSlice(delta int) {
 		}
 	}
 	index = max(0, min(len(ordered)-1, index+delta))
-	d.selectedSliceID = ordered[index].ID
+	if d.selectedSliceID != ordered[index].ID {
+		d.selectedSliceID = ordered[index].ID
+		d.sliceOffset = 0
+	}
 }
 
 func (d *detailState) moveTab(delta int, size term.Size) {
@@ -1250,7 +1267,7 @@ func (s *loopState) handleKey(key term.KeyEvent) bool {
 	case key.Key == term.KeyShiftTab || key.Key == term.KeyArrowLeft:
 		s.switchPage(-1)
 	case key.Key == term.KeyArrowUp || (key.Key == term.KeyRune && key.Rune == 'k'):
-		if s.selected > 0 {
+		if s.activePage() != PageReview && s.selected > 0 {
 			s.selected--
 		}
 	case key.Key == term.KeyArrowDown || (key.Key == term.KeyRune && key.Rune == 'j'):
@@ -1557,6 +1574,28 @@ func (s *loopState) refreshNoteDetail() {
 	}
 	s.noteDetail = nil
 	s.noteDetailOffset = 0
+}
+
+func (s *loopState) moveAdjacentNoteDetail(delta int) {
+	if s.noteDetail == nil {
+		return
+	}
+	items := s.visibleNotes()
+	identity := noteIdentity(*s.noteDetail)
+	for index, item := range items {
+		if noteIdentity(item) != identity {
+			continue
+		}
+		next := index + delta
+		if next < 0 || next >= len(items) || noteIdentity(items[next]) == identity {
+			return
+		}
+		selected := items[next]
+		s.noteDetail = &selected
+		s.noteDetailOffset = 0
+		s.restoreNoteSelection(selected, true)
+		return
+	}
 }
 
 func (s *loopState) moveNoteDetail(delta int) {

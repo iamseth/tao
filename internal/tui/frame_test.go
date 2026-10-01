@@ -55,8 +55,8 @@ func TestRenderFrameStylesTabsSummaryAndContextWithoutRule(t *testing.T) {
 	for _, want := range []string{
 		theme.Default().Palette(theme.ProfileANSI16).Paint(theme.RoleNeutral5, "tao"),
 		theme.Default().Palette(theme.ProfileANSI16).Paint(theme.RoleNeutral1, "│"),
-		theme.Default().Palette(theme.ProfileANSI16).Paint(theme.RoleAccent, "notes"),
-		theme.Default().Palette(theme.ProfileANSI16).Paint(theme.RoleNeutral2, "plans"),
+		theme.Default().Palette(theme.ProfileANSI16).Paint(theme.RoleAccent, "Backlog"),
+		theme.Default().Palette(theme.ProfileANSI16).Paint(theme.RoleNeutral2, "WIP"),
 		theme.Default().Palette(theme.ProfileANSI16).Paint(theme.RoleWarn, "2 warnings"),
 	} {
 		if !strings.Contains(strings.Join(lines, "\n"), want) {
@@ -104,17 +104,16 @@ func TestRenderFrameStatusFilterAtSixtyColumns(t *testing.T) {
 		t.Fatalf("status-only label = %q", got)
 	}
 	line := renderFrame(model, PagePlans)[0]
-	if cells.Width(line) != model.Width || !strings.Contains(line, "filter on …") || !strings.HasSuffix(line, "  agent -  ●") {
+	if cells.Width(line) != model.Width || !strings.Contains(line, "filter on · 1 status") || !strings.HasSuffix(line, "  agent -  ●") {
 		t.Fatalf("status-only filter did not truncate cleanly: %q", line)
 	}
 }
 
 func TestRenderTabStripMarksEveryActivePageWithoutColor(t *testing.T) {
 	wantStrips := map[PageID]string{
-		PageNotes:    "tao │▸notes  plans  settings  debug",
-		PagePlans:    "tao │ notes ▸plans  settings  debug",
-		PageSettings: "tao │ notes  plans ▸settings  debug",
-		PageDebug:    "tao │ notes  plans  settings ▸debug",
+		PageNotes:  "tao │▸Backlog  WIP  Review",
+		PagePlans:  "tao │ Backlog ▸WIP  Review",
+		PageReview: "tao │ Backlog  WIP ▸Review",
 	}
 	for _, tab := range dashboardTabs {
 		t.Run(string(tab.ID), func(t *testing.T) {

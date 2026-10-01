@@ -116,7 +116,7 @@ func TestRenderNoteDetailShowsFullSanitizedMultilineText(t *testing.T) {
 		Text:           "first line\n第二行\x1b]52;c;payload\a\nthird\tline",
 	}, 80, 30)
 	body := strings.TrimPrefix(frame, clearScreenSequence)
-	for _, want := range []string{"NOTE DETAIL", "Repository: répo", "Note: note-完整", "Status: open", "Tags: one, two", created.Format(time.RFC3339), updated.Format(time.RFC3339), "  first line", "  第二行", "  third line", "PgUp/PgDn", "p plan", "c copy", "d/D del", "0-3 tier", "Esc back"} {
+	for _, want := range []string{"NOTE DETAIL", "Repository: répo", "Note: note-完整", "Status: open", "Tags: one, two", created.Format(time.RFC3339), updated.Format(time.RFC3339), "  first line", "  第二行", "  third line", "←/→ prev/next", "PgUp/PgDn", "p plan", "c copy", "d/D del", "0-3 tier", "Esc back"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("note detail missing %q:\n%s", want, frame)
 		}
@@ -141,7 +141,7 @@ func TestRenderNoteDetailScrollReachesWrappedTailWithFixedChrome(t *testing.T) {
 	}
 	frame := renderNoteDetail(item, 40, 11, 100)
 	body := strings.TrimPrefix(frame, clearScreenSequence)
-	for _, want := range []string{"Tao UI | NOTE DETAIL", "Text:", "  final wrapped line", noteDetailFooter} {
+	for _, want := range []string{"Tao UI | NOTE DETAIL", "Text:", "  final wrapped line", cells.Truncate(noteDetailFooter, 40)} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("scrolled note detail missing %q:\n%s", want, frame)
 		}
@@ -735,7 +735,7 @@ func TestSliceDetailScrollRangeIncludesLogTail(t *testing.T) {
 		t.Fatalf("log-aware max offset = %d, want greater than %d", withLog, withoutLog)
 	}
 	frame := RenderSliceDetail(DetailModel{Plan: detail, SelectedSliceID: "001-work", SliceLog: log, SliceOffset: withLog, Width: 50, Height: 12})
-	if !strings.Contains(frame, "LOG") || !strings.Contains(frame, "log-tail") {
+	if !strings.Contains(frame, "log-tail") || !strings.Contains(frame, sliceDetailFooter) {
 		t.Fatalf("slice detail did not scroll to log tail:\n%s", frame)
 	}
 }
@@ -798,7 +798,7 @@ func TestDetailStateAttributesLiveLogUpdatesToActiveSlice(t *testing.T) {
 
 func TestRenderSliceDetailShortcutPopoverIsContextAware(t *testing.T) {
 	frame := RenderSliceDetail(DetailModel{ShowShortcuts: true, Width: 64, Height: 12})
-	for _, want := range []string{"Keyboard shortcuts", "PgUp / PgDn", "Scroll details / page", "Return to plan", "Quit", "Close shortcuts"} {
+	for _, want := range []string{"Keyboard shortcuts", "Previous / next slice", "PgUp / PgDn", "Scroll details / page", "Return to plan", "Quit", "Close shortcuts"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("slice detail shortcuts missing %q:\n%s", want, frame)
 		}

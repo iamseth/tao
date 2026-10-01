@@ -18,9 +18,10 @@ import (
 
 func TestRunNotePlanningPreservesSettingsP(t *testing.T) {
 	settings := &fakeSettingsService{snapshot: SettingsSnapshot{Repositories: []RepositorySetting{{ID: "repo", Name: "repo", Health: "ok"}}}}
-	err := (App{Input: strings.NewReader("\tpyq"), Output: io.Discard, Terminal: &fakeTerminal{size: term.Size{Width: 80, Height: 24}}, Ticker: &fakeTicker{}, Collector: &fakeCollector{snapshots: []monitor.Snapshot{{}}}, Settings: settings, NotePlanningLauncher: notePlanningFunc(func(context.Context, note.CatalogNote) error { t.Fatal("settings p launched planning"); return nil })}).Run(context.Background())
-	if err != nil {
-		t.Fatal(err)
+	app := App{Settings: settings, NotePlanningLauncher: notePlanningFunc(func(context.Context, note.CatalogNote) error { t.Fatal("settings p launched planning"); return nil })}
+	state := loopState{page: PageSettings, settingsSnapshot: settings.snapshot}
+	for _, key := range "py" {
+		app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: key})
 	}
 	if settings.calls != 1 || settings.snapshot.Repositories[0].PullRequest == nil || !*settings.snapshot.Repositories[0].PullRequest {
 		t.Fatal("settings p did not retain its meaning")

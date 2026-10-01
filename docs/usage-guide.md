@@ -228,7 +228,8 @@ Use `tao ui` for one terminal view of plans and open notes across registered
 repositories, or to launch plan actions without copying IDs. It requires a
 terminal; use `tao monitor --once` for redirected or pasteable output.
 
-The dashboard opens on **Plans**: **NOW** holds plans with immediate actions,
+Tabs cycle **Backlog → WIP → Review**; Review is a static coming-soon placeholder.
+The dashboard opens on **WIP** (plans): **NOW** holds plans with immediate actions,
 **NEXT** holds planned work, and **DONE** always shows up to 10 completed or
 abandoned plans. The plan list's `I/R/E` column shows impact/risk (L/M/H) and
 effort (S/M/L), with `-` when unset; it hides before SLICES on narrow terminals.
@@ -237,7 +238,7 @@ Filters and their enabled state persist in `<DataHome>/ui-filters.json` and
 combine with session-only search. See [configuration](configuration.md) for themes.
 Batch merge uses the sole enabled repository filter, otherwise the selected plan's repository.
 
-Capture notes and launch note planning from **Notes**. `TAO_AGENT` selects Pi
+Capture notes and launch note planning from **Backlog** (notes). `TAO_AGENT` selects Pi
 (default) or Claude (`claude`) for native foreground planning in the same terminal.
 The agent owns terminal input until exit; returning preserves filters and selection.
 Launching or exiting alone does not change the note; use `/tao-slice` to create
@@ -1410,8 +1411,9 @@ plan; `tao run` preflights only the selected runnable slice. See the
 
 An invalid budget *configuration* is different from exceeding a valid advisory
 threshold: commands that consume it reject the override by name instead of
-silently retaining defaults or disabling a hard cap. Use `tao status` or TUI
-Settings/Debug to inspect it, then correct or unset it. Help and diagnostics
+silently retaining defaults or disabling a hard cap. Use `tao status` to inspect
+it, then correct or unset it with environment settings or `tao repo config`.
+Settings/Debug are developer previews, not interactive tabs. Help and diagnostics
 remain usable; see the [configuration contract](configuration.md).
 
 ### Data and privacy

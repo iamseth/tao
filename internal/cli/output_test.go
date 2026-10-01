@@ -50,7 +50,7 @@ func TestListSelectedTheme(t *testing.T) {
 	}
 }
 
-func TestUIUsesRuntimeThemeAndShowsSetting(t *testing.T) {
+func TestUIUsesRuntimeTheme(t *testing.T) {
 	clearTaoEnv(t)
 	t.Setenv("TAO_DATA_HOME", t.TempDir())
 	t.Setenv("TAO_THEME", "gruvbox")
@@ -62,7 +62,7 @@ func TestUIUsesRuntimeThemeAndShowsSetting(t *testing.T) {
 	var out testTerminalBuffer
 	registry := taodata.NewRegistry(t.TempDir())
 	app := App{
-		In: strings.NewReader("\tq"), Out: &out, Err: &out,
+		In: strings.NewReader("q"), Out: &out, Err: &out,
 		Registry: func() NoteRegistry { return registry },
 		MonitorTicker: func(time.Duration) MonitorTicker {
 			return &monitorTickerStub{ch: make(chan time.Time), stopped: make(chan struct{})}
@@ -72,19 +72,17 @@ func TestUIUsesRuntimeThemeAndShowsSetting(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"ui"}); err != nil {
 		t.Fatal(err)
 	}
+	// Settings is no longer reachable by Tab, so prove theme threading on the
+	// default WIP frame: the gruvbox accent paints the tab strip, the default
+	// theme's accent must not appear anywhere.
 	selected, _ := theme.Lookup("gruvbox")
-	palette := selected.Palette(theme.ProfileTrueColor)
-	if !strings.Contains(out.String(), theme.Sequence(palette.MustColor(theme.RoleSettingsSection), false)) {
-		t.Fatal("TUI missing gruvbox settings section color")
+	accent := selected.Palette(theme.ProfileTrueColor).Paint(theme.RoleAccent, "WIP")
+	defaultAccent := theme.Default().Palette(theme.ProfileTrueColor).Paint(theme.RoleAccent, "WIP")
+	if accent == defaultAccent {
+		t.Fatal("gruvbox accent must differ from the default theme to be observable")
 	}
-	found := false
-	for _, line := range strings.Split(stripANSI(out.String()), "\n") {
-		if strings.Contains(line, "TAO_THEME") && strings.Contains(line, "gruvbox") && strings.Contains(line, "env") {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("TUI missing env-sourced TAO_THEME: %s", stripANSI(out.String()))
+	if !strings.Contains(out.String(), accent) || strings.Contains(out.String(), defaultAccent) {
+		t.Fatalf("TUI did not render with the runtime gruvbox theme: %q", out.String())
 	}
 }
 

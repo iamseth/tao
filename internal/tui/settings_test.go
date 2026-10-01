@@ -63,7 +63,7 @@ func TestRenderSettingsShowsGlobalAndRepositoryDefaults(t *testing.T) {
 		},
 	})
 	for _, want := range []string{
-		"tao │ notes  plans ▸settings  debug", "OVERRIDES", "EXECUTION · all default", "Agent", "← env", "← alpha", "warning: example warning",
+		"tao │ Backlog  WIP  Review", "OVERRIDES", "EXECUTION · all default", "Agent", "← env", "← alpha", "warning: example warning",
 		"REPOSITORY DEFAULTS", "alpha", "● ok", "pr=on", "/repos/alpha", "> beta", "● missing root", "pr=inherit", "finding: repo root does not exist",
 	} {
 		if !strings.Contains(frame, want) {

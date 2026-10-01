@@ -20,8 +20,8 @@ func TestRenderGoldenColorModesDistinctTheme(t *testing.T) {
 	custom := theme.DistinctTestTheme()
 	model.Theme = custom
 	colored := tui.Render(model)
-	accent := custom.Palette(model.Profile).Paint(theme.RoleAccent, "plans")
-	defaultAccent := theme.Default().Palette(model.Profile).Paint(theme.RoleAccent, "plans")
+	accent := custom.Palette(model.Profile).Paint(theme.RoleAccent, "WIP")
+	defaultAccent := theme.Default().Palette(model.Profile).Paint(theme.RoleAccent, "WIP")
 	if accent == defaultAccent || !strings.Contains(colored, accent) || strings.Contains(colored, defaultAccent) {
 		t.Fatalf("custom frame does not use its distinct accent: %q", colored)
 	}

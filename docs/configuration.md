@@ -155,8 +155,11 @@ Invalid settings are rejected by name only when an operation consumes them,
 including invalid advisory-budget overrides and hard caps; unused settings do
 not block unrelated commands. Invalid `TAO_THEME` and `TAO_RUN_HEADER` values
 instead warn and retain their defaults (`tokyonight` and enabled).
-Help, `tao status` (`--json` for automation), and the TUI Settings/Debug views
-remain available to diagnose invalid configuration, including `TAO_UPDATE`.
+Help and `tao status` (`--json` for automation) remain available to diagnose
+invalid configuration, including `TAO_UPDATE`. Settings/Debug remain explicit
+developer previews (`tui-preview --view settings` or `--view debug`), not
+interactive dashboard tabs. Use environment settings and `tao repo config`
+to configure runtime and repository defaults.
 Diagnostics retain every runtime-table setting, even when another is invalid.
 
 Run `tao status` to see the resolved `TAO_*` runtime values and repository plan

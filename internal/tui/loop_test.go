@@ -804,7 +804,7 @@ func TestTopLevelTabNavigationPreservesPlanSelectionAcrossRefresh(t *testing.T) 
 	if state.activePage() != PagePlans || !ok || state.selected != 0 || row.PlanID != "target" {
 		t.Fatalf("Tab page=%q selection=%d row=%+v ok=%t, want preserved target", state.activePage(), state.selected, row, ok)
 	}
-	for _, want := range []PageID{PageSettings, PageDebug, PageNotes, PagePlans} {
+	for _, want := range []PageID{PageReview, PageNotes, PagePlans} {
 		state.handleKey(term.KeyEvent{Key: term.KeyArrowRight})
 		if state.activePage() != want {
 			t.Fatalf("right navigation page=%q, want %q", state.activePage(), want)
@@ -1022,6 +1022,136 @@ func TestNoteNumberKeysReplaceTierAndRefreshSelection(t *testing.T) {
 	}
 	if collector.callCount() != 4 || state.selected != 0 || !strings.Contains(state.noteEditMessage, "tier3") {
 		t.Fatalf("tier refreshes=%d selected=%d message=%q", collector.callCount(), state.selected, state.noteEditMessage)
+	}
+}
+
+func TestAdjacentNoteDetails(t *testing.T) {
+	first := note.CatalogNote{RepositoryID: "a", ID: "same", Text: "match\n" + strings.Repeat("body\n", 30), Tags: []string{"tier1"}}
+	second := note.CatalogNote{RepositoryID: "b", ID: "same", Text: first.Text, Tags: []string{"tier2"}}
+	hidden := note.CatalogNote{RepositoryID: "a", ID: "hidden", Text: "excluded", Tags: []string{"tier0"}}
+	state := loopState{page: PageNotes, searchQuery: "match", noteSnapshot: note.Snapshot{Notes: []note.CatalogNote{second, hidden, first}}, noteDetail: &first, noteDetailOffset: 3, size: term.Size{Width: 80, Height: 12}}
+	press := func(key term.Key) { (App{}).handleKey(context.Background(), &state, term.KeyEvent{Key: key}) }
+	press(term.KeyArrowLeft)
+	if state.noteDetailOffset != 3 {
+		t.Fatal("boundary reset scroll")
+	}
+	press(term.KeyArrowRight)
+	if noteIdentity(*state.noteDetail) != noteIdentity(second) || state.selected != 1 || state.noteDetailOffset != 0 {
+		t.Fatalf("switch: %+v", state)
+	}
+	press(term.KeyArrowDown)
+	press(term.KeyArrowRight)
+	if state.noteDetailOffset != 1 {
+		t.Fatal("right boundary changed scroll")
+	}
+	press(term.KeyArrowUp)
+	if state.noteDetailOffset != 0 {
+		t.Fatal("up did not scroll")
+	}
+	press(term.KeyArrowLeft)
+	if noteIdentity(*state.noteDetail) != noteIdentity(first) || state.selected != 0 {
+		t.Fatal("left did not return to first note")
+	}
+	press(term.KeyArrowRight)
+	second.Tags = []string{"tier0"}
+	state.replaceNoteSnapshot(note.Snapshot{Notes: []note.CatalogNote{first, second}})
+	state.refreshNoteDetail()
+	if state.selected != 0 || noteIdentity(*state.noteDetail) != noteIdentity(second) {
+		t.Fatal("refresh lost identity")
+	}
+	press(term.KeyArrowRight)
+	if noteIdentity(*state.noteDetail) != noteIdentity(first) || state.selected != 1 {
+		t.Fatal("did not follow refreshed tier order")
+	}
+	press(term.KeyBackspace)
+	if state.noteDetail != nil || state.selected != 1 {
+		t.Fatal("back lost selection")
+	}
+	state.noteDetail = &first
+	state.filter = repositoryFilter("a")
+	state.noteDetailOffset = 2
+	for _, key := range []term.Key{term.KeyArrowLeft, term.KeyArrowRight} {
+		press(key)
+	}
+	if state.noteDetailOffset != 2 || noteIdentity(*state.noteDetail) != noteIdentity(first) {
+		t.Fatal("singleton moved")
+	}
+	state.searchQuery = "no matches"
+	press(term.KeyArrowRight)
+	press(term.KeyArrowLeft)
+	if state.noteDetailOffset != 2 {
+		t.Fatal("empty visibility moved")
+	}
+	state.replaceNoteSnapshot(note.Snapshot{})
+	state.refreshNoteDetail()
+	if state.noteDetail != nil {
+		t.Fatal("removed detail stayed open")
+	}
+}
+
+func TestAdjacentSliceDetails(t *testing.T) {
+	for _, count := range []int{0, 1, 2} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			p := &plan.PlanDetail{}
+			for i := 0; i < count; i++ {
+				p.Slices.Slices = append(p.Slices.Slices, plan.Slice{ID: fmt.Sprint(i), Tasks: []string{strings.Repeat("task\n", 30)}})
+				p.State.Plan.PendingSlices = append(p.State.Plan.PendingSlices, fmt.Sprint(i))
+			}
+			d := &detailState{plan: p, row: monitor.Row{PlanID: "one"}, selectedSliceID: "0", activeTab: detailTabSlices, sliceOpen: true, sliceOffset: 2, sliceLogs: map[string]string{"0": "first-log", "1": "second-log"}}
+			cancelled := false
+			d.cancel = func() { cancelled = true }
+			state := loopState{detail: d, snapshot: monitor.Snapshot{Rows: []monitor.Row{{PlanID: "one"}, {PlanID: "two"}}}, size: term.Size{Width: 80, Height: 12}}
+			otherPlan := &plan.PlanDetail{State: plan.State{Plan: plan.PlanState{PendingSlices: []string{"other"}}}, Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "other"}}}}
+			app := App{Details: &fakeDetailRepository{detail: otherPlan}}
+			press := func(key term.Key) { app.handleKey(context.Background(), &state, term.KeyEvent{Key: key}) }
+			press(term.KeyArrowLeft)
+			if d.sliceOffset != 2 {
+				t.Fatal("left boundary reset scroll")
+			}
+			press(term.KeyArrowRight)
+			if count == 2 {
+				if d.selectedSliceID != "1" || d.sliceOffset != 0 {
+					t.Fatal("did not switch slice")
+				}
+				var output bytes.Buffer
+				app.Output = &output
+				frameState := state
+				frameState.size.Height = 0
+				if err := app.writeFrame(frameState); err != nil {
+					t.Fatal(err)
+				}
+				frame := output.String()
+				if !strings.Contains(frame, "second-log") || strings.Contains(frame, "first-log") {
+					t.Fatal("wrong log")
+				}
+				press(term.KeyArrowDown)
+				press(term.KeyArrowRight)
+				if d.sliceOffset != 1 {
+					t.Fatal("right boundary reset scroll")
+				}
+				press(term.KeyArrowUp)
+				if d.sliceOffset != 0 {
+					t.Fatal("up did not scroll")
+				}
+				press(term.KeyArrowLeft)
+				if d.selectedSliceID != "0" || d.sliceOffset != 0 {
+					t.Fatal("left did not switch")
+				}
+			} else if d.sliceOffset != 2 {
+				t.Fatal("empty/singleton moved")
+			}
+			if state.detail != d || d.plan != p || d.row.PlanID != "one" || cancelled || state.selected != 0 {
+				t.Fatal("changed parent or follower")
+			}
+			press(term.KeyBackspace)
+			if d.sliceOpen || d.selectedSliceID != "0" || d.activeTab != detailTabSlices {
+				t.Fatal("back lost slice selection")
+			}
+			press(term.KeyTab)
+			if d.activeTab == detailTabSlices {
+				t.Fatal("plan Tab stopped working")
+			}
+		})
 	}
 }
 

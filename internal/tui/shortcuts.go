@@ -13,6 +13,13 @@ type shortcut struct {
 }
 
 func shortcutsForPage(page PageID) []shortcut {
+	if normalizePage(page) == PageReview {
+		return []shortcut{
+			{key: "Tab / Shift+Tab / ← / →", action: "Switch tabs"},
+			{key: "q / Esc Esc", action: "Quit"},
+			{key: "? / Esc", action: "Close shortcuts"},
+		}
+	}
 	if normalizePage(page) == PageSettings {
 		return []shortcut{
 			{key: "↑ / ↓ / j / k / PgUp / PgDn", action: "Select repository / page"},
@@ -40,6 +47,7 @@ func shortcutsForPage(page PageID) []shortcut {
 	}
 	if normalizePage(page) == PageNotes {
 		common = append(common,
+			shortcut{key: "← / → in detail", action: "Previous / next note"},
 			shortcut{key: "n", action: "Create note (filter or repo picker)"},
 			shortcut{key: "Ctrl+G", action: "Edit selected note"},
 			shortcut{key: "p", action: "Plan note in foreground agent"},
@@ -80,6 +88,7 @@ func planDetailShortcuts() []shortcut {
 
 func sliceDetailShortcuts() []shortcut {
 	return []shortcut{
+		{key: "← / →", action: "Previous / next slice"},
 		{key: "↑ / ↓ / j / k / PgUp / PgDn", action: "Scroll details / page"},
 		{key: "g / G", action: "Jump to top / bottom"},
 		{key: "Backspace / Esc", action: "Return to plan"},

@@ -8,27 +8,25 @@ const (
 	PageNotes    PageID = "notes"
 	PageSettings PageID = "settings"
 	PageDebug    PageID = "debug"
+	PageReview   PageID = "review"
 )
 
-// Tab describes one top-level dashboard destination. Adding a page only
-// requires registering another tab and implementing its page seams.
+// Tab describes one visible top-level dashboard destination.
 type Tab struct {
 	ID    PageID
 	Label string
 }
 
 var dashboardTabs = []Tab{
-	{ID: PageNotes, Label: "notes"},
-	{ID: PagePlans, Label: "plans"},
-	{ID: PageSettings, Label: "settings"},
-	{ID: PageDebug, Label: "debug"},
+	{ID: PageNotes, Label: "Backlog"},
+	{ID: PagePlans, Label: "WIP"},
+	{ID: PageReview, Label: "Review"},
 }
 
 func normalizePage(page PageID) PageID {
-	for _, tab := range dashboardTabs {
-		if tab.ID == page {
-			return page
-		}
+	switch page {
+	case PageNotes, PagePlans, PageReview, PageSettings, PageDebug:
+		return page
 	}
 	return PagePlans
 }

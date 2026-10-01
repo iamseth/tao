@@ -22,7 +22,7 @@ func TestListScenariosAndViews(t *testing.T) {
 	if code := run(context.Background(), []string{"--list-views"}, &bytes.Buffer{}, &views, &bytes.Buffer{}); code != 0 {
 		t.Fatalf("view list exit = %d", code)
 	}
-	if got, want := views.String(), "plans\nnotes\nsettings\ndebug\nplan-detail\nnote-detail\nslice-detail\n"; got != want {
+	if got, want := views.String(), "plans\nnotes\nsettings\ndebug\nreview\nplan-detail\nnote-detail\nslice-detail\n"; got != want {
 		t.Fatalf("view list = %q, want %q", got, want)
 	}
 }
@@ -47,6 +47,18 @@ func TestPlainOutputIsDeterministicAndUsesSelectedFixture(t *testing.T) {
 	}
 	if lines := strings.Count(strings.TrimSuffix(first.String(), "\n"), "\n") + 1; lines > 8 {
 		t.Fatalf("plain output has %d lines, want at most 8", lines)
+	}
+}
+
+func TestPlainReviewPreview(t *testing.T) {
+	var output bytes.Buffer
+	if err := execute(context.Background(), []string{"--plain", "--view", "review", "--size", "80x15"}, &bytes.Buffer{}, &output, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Review — coming soon", "Changed files", "Diff"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("missing %q: %s", want, output.String())
+		}
 	}
 }
 

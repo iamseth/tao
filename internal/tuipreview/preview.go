@@ -24,6 +24,7 @@ const (
 	ViewNotes       View = "notes"
 	ViewSettings    View = "settings"
 	ViewDebug       View = "debug"
+	ViewReview      View = "review"
 	ViewPlanDetail  View = "plan-detail"
 	ViewNoteDetail  View = "note-detail"
 	ViewSliceDetail View = "slice-detail"
@@ -51,7 +52,7 @@ var ErrUnknownPlan = errors.New("unknown preview plan directory")
 // Views returns the production renderers available for one-shot previews in a
 // stable display order.
 func Views() []View {
-	return []View{ViewPlans, ViewNotes, ViewSettings, ViewDebug, ViewPlanDetail, ViewNoteDetail, ViewSliceDetail}
+	return []View{ViewPlans, ViewNotes, ViewSettings, ViewDebug, ViewReview, ViewPlanDetail, ViewNoteDetail, ViewSliceDetail}
 }
 
 // LookupView resolves a one-shot view by name.
@@ -263,6 +264,8 @@ func Render(scenario Scenario, options RenderOptions) (string, error) {
 
 	var frame string
 	switch options.View {
+	case ViewReview:
+		frame = tui.Render(tui.Model{Page: tui.PageReview, Width: options.Width, Height: options.Height, Profile: profile, Theme: options.Theme, ShowShortcuts: options.ShowShortcuts})
 	case ViewPlans:
 		count := visiblePlanCount(scenario.Snapshot, options.SearchQuery)
 		if err := validateSelection(options.Selection, count, "plan"); err != nil {

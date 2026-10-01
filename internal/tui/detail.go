@@ -31,8 +31,9 @@ const (
 	detailOverviewScopePreview = 6
 	detailOverviewMaxQuestions = 12
 	noteDetailHeaderLines      = 8
-	noteDetailFooter           = "↑/↓ PgUp/PgDn p plan ^G edit Esc back"
-	noteDetailFooterWide       = "↑/↓ PgUp/PgDn  p plan  ^G edit  c copy  d/D del  0-3 tier  Esc back"
+	noteDetailFooter           = "←/→ prev/next ↑/↓ PgUp/PgDn p plan ^G edit Esc back"
+	noteDetailFooterWide       = "←/→ prev/next ↑/↓ PgUp/PgDn p plan ^G edit c copy d/D del 0-3 tier Esc back"
+	sliceDetailFooter          = "←/→ prev/next  ↑/↓ scroll  ? help  Esc back"
 )
 
 // detailTab identifies the independently navigable plan-detail views.
@@ -1023,7 +1024,7 @@ func RenderSliceDetail(model DetailModel) string {
 	document = append(document, renderSliceLogSection(filteredLog, model.Width, palette)...)
 	bodyHeight := len(document)
 	if model.Height > 0 {
-		bodyHeight = max(model.Height-len(header)-1, 0)
+		bodyHeight = max(model.Height-len(header)-2, 0)
 	}
 
 	lines := append([]string(nil), header...)
@@ -1031,13 +1032,14 @@ func RenderSliceDetail(model DetailModel) string {
 		lines = append(lines, "")
 		lines = append(lines, fitDetailPaneAt(document, model.Width, bodyHeight, model.SliceOffset)...)
 	}
+	if model.Height > 0 && len(lines) >= model.Height {
+		lines = lines[:model.Height-1]
+	}
+	lines = append(lines, sliceDetailFooter)
 	if model.Width > 0 {
 		for index := range lines {
 			lines[index] = cells.Truncate(lines[index], model.Width)
 		}
-	}
-	if model.Height > 0 && len(lines) > model.Height {
-		lines = lines[:model.Height]
 	}
 	if model.ShowShortcuts {
 		lines = overlaySliceDetailShortcuts(lines, model.Width, model.Height, model.Theme.Palette(profileForEnabledColor(model.UseColor)))
@@ -1353,7 +1355,7 @@ func sliceDetailMaxOffset(detail *plan.PlanDetail, selectedID string, width, hei
 		log = logs[0]
 	}
 	document = append(document, renderSliceLogSection(log, width, theme.Palette{})...)
-	bodyHeight := max(height-len(header)-1, 0)
+	bodyHeight := max(height-len(header)-2, 0)
 	return max(len(document)-bodyHeight, 0)
 }
 

@@ -72,7 +72,7 @@ func TestRenderGoldenColorModes(t *testing.T) {
 	}}}
 	plain := Render(Model{Snapshot: snapshot})
 	for _, want := range []string{
-		"tao │ notes ▸plans  settings  debug", "all repos", "agent -", "1 plan",
+		"tao │ Backlog ▸WIP  Review", "all repos", "agent -", "1 plan",
 		"NEXT", "REPO  NEXT   PLAN", "  repo   RUN   plan",
 	} {
 		if !strings.Contains(plain, want) {
@@ -88,8 +88,8 @@ func TestRenderGoldenColorModes(t *testing.T) {
 		t.Fatal("zero theme and explicit default produced different frames")
 	}
 	for _, want := range []string{
-		theme.Default().Palette(theme.ProfileTrueColor).Paint(theme.RoleAccent, "plans"),
-		theme.Default().Palette(theme.ProfileTrueColor).Paint(theme.RoleNeutral2, "notes"),
+		theme.Default().Palette(theme.ProfileTrueColor).Paint(theme.RoleAccent, "WIP"),
+		theme.Default().Palette(theme.ProfileTrueColor).Paint(theme.RoleNeutral2, "Backlog"),
 	} {
 		if !strings.Contains(colored, want) {
 			t.Fatalf("colored frame missing %q:\n%q", want, colored)
@@ -516,7 +516,7 @@ func columnNames(columns []column) []string {
 }
 
 func TestRenderOmitsEmptySectionsAndAlwaysShowsDonePlans(t *testing.T) {
-	const wantEmpty = clearScreenSequence + `tao │ notes ▸plans  settings  debug  all repos  agent -  ●
+	const wantEmpty = clearScreenSequence + `tao │ Backlog ▸WIP  Review  all repos  agent -  ●
 
   No plans.
 0 plans
@@ -603,14 +603,14 @@ func TestRenderHeaderTracksActivePage(t *testing.T) {
 	snapshot := monitor.Snapshot{Rows: []monitor.Row{{RepositoryName: "repo", PlanID: "plan", Status: plan.StatusPlanned}}}
 
 	plans := Render(Model{Snapshot: snapshot})
-	for _, want := range []string{"tao │ notes ▸plans  settings  debug", "1 plan", "  repo   RUN   plan"} {
+	for _, want := range []string{"tao │ Backlog ▸WIP  Review", "1 plan", "  repo   RUN   plan"} {
 		if !strings.Contains(plans, want) {
 			t.Fatalf("plans page missing %q:\n%s", want, plans)
 		}
 	}
 
 	notes := Render(Model{Snapshot: snapshot, Page: PageNotes, ActionMessage: "plan action"})
-	for _, want := range []string{"tao │▸notes  plans  settings  debug", "0 open notes", "Notes page."} {
+	for _, want := range []string{"tao │▸Backlog  WIP  Review", "0 open notes", "Notes page."} {
 		if !strings.Contains(notes, want) {
 			t.Fatalf("notes page missing %q:\n%s", want, notes)
 		}
@@ -625,10 +625,9 @@ func TestRenderHeaderTracksActivePage(t *testing.T) {
 		page PageID
 		want string
 	}{
-		{page: PagePlans, want: "plans"},
-		{page: PageNotes, want: "notes"},
-		{page: PageSettings, want: "settings"},
-		{page: PageDebug, want: "debug"},
+		{page: PagePlans, want: "WIP"},
+		{page: PageNotes, want: "Backlog"},
+		{page: PageReview, want: "Review"},
 	} {
 		got := Render(Model{Snapshot: snapshot, Page: test.page, Profile: theme.ProfileTrueColor})
 		if !strings.Contains(got, theme.Default().Palette(theme.ProfileTrueColor).Paint(theme.RoleAccent, test.want)) {
@@ -684,7 +683,7 @@ func TestRenderNotesSummaryPreservesActiveSearchBeforeRepositoryBreakdown(t *tes
 func TestRenderConstrainedDimensionsKeepPageIdentity(t *testing.T) {
 	got := Render(Model{Page: PageNotes, Width: 18, Height: 1})
 	lines := renderedLines(got)
-	if len(lines) != 1 || lines[0] != "tao │▸notes  plans" {
+	if len(lines) != 1 || lines[0] != "tao │▸Backlog  WIP" {
 		t.Fatalf("constrained frame = %#v, want truncated header with active page", lines)
 	}
 	for _, line := range lines {
@@ -715,7 +714,7 @@ func TestRenderHeightViewportKeepsSelectionVisible(t *testing.T) {
 			if len(lines) != 8 {
 				t.Fatalf("rendered lines = %d, want 8:\n%s", len(lines), got)
 			}
-			if !strings.HasPrefix(lines[0], "tao │ notes ▸plans") {
+			if !strings.HasPrefix(lines[0], "tao │ Backlog ▸WIP") {
 				t.Fatalf("viewport header = %q, want shared tab strip", lines[0])
 			}
 			if strings.HasSuffix(got, "\n") {
@@ -844,7 +843,7 @@ func TestRenderPlanTableKeepsSelectionAndConfirmation(t *testing.T) {
 	if len(lines) != 7 {
 		t.Fatalf("rendered lines = %d, want 7:\n%s", len(lines), got)
 	}
-	for _, want := range []string{"tao │ notes ▸plans", "  repo   RUN     selected", "Run selected plan? [y/n]"} {
+	for _, want := range []string{"tao │ Backlog ▸WIP", "  repo   RUN     selected", "Run selected plan? [y/n]"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("responsive frame missing %q:\n%s", want, got)
 		}
@@ -954,11 +953,11 @@ func TestRenderShortcutLegendAsBoundedPopover(t *testing.T) {
 		},
 		{
 			page:        PageNotes,
-			want:        []string{"Keyboard shortcuts", "PgUp / PgDn", "gg / G", "Jump to top / bottom", "Open selected item", "Create note", "Ctrl+G", "Edit selected note", "p", "Plan note in foreground agent", "c", "Copy selected note ID", "0 / 1 / 2 / 3", "Set selected note tier", "d / D", "Open filter menu", "/", "Search plans and notes", "Backspace", "Go back / clear search", "? / Esc"},
+			want:        []string{"Keyboard shortcuts", "PgUp / PgDn", "gg / G", "Jump to top / bottom", "Open selected item", "Create note", "Previous / next note", "Ctrl+G", "Edit selected note", "p", "Plan note in foreground agent", "c", "Copy selected note ID", "0 / 1 / 2 / 3", "Set selected note tier", "d / D", "Open filter menu", "/", "Search plans and notes", "Backspace", "Go back / clear search", "? / Esc"},
 			unavailable: "Run selected plan",
 		},
 	} {
-		frame := Render(Model{Page: test.page, ShowShortcuts: true, Width: 64, Height: 20, Profile: theme.ProfileTrueColor})
+		frame := Render(Model{Page: test.page, ShowShortcuts: true, Width: 64, Height: 21, Profile: theme.ProfileTrueColor})
 		for _, want := range test.want {
 			if !strings.Contains(frame, want) {
 				t.Fatalf("%s shortcut popover missing %q:\n%s", test.page, want, frame)
@@ -968,8 +967,8 @@ func TestRenderShortcutLegendAsBoundedPopover(t *testing.T) {
 			t.Fatalf("%s shortcut popover contains unavailable action %q:\n%s", test.page, test.unavailable, frame)
 		}
 		lines := renderedLines(frame)
-		if len(lines) != 20 {
-			t.Fatalf("%s shortcut popover lines = %d, want 20", test.page, len(lines))
+		if len(lines) != 21 {
+			t.Fatalf("%s shortcut popover lines = %d, want 21", test.page, len(lines))
 		}
 		for _, line := range lines {
 			if width := cells.Width(line); width > 64 {
