@@ -15,6 +15,7 @@
 - Shared monitor row label projection and status roles live in `internal/monitor/rowlabel`; TTY/color detection lives in `internal/term`, and the shared palette and themes live in `internal/theme`.
 - Cross-process plan run locks live in `internal/plan`; the run header view model and renderer live in `internal/runheader`.
 - Plan file loading, validation, summaries, and time formatting live in `internal/plan`.
+- Read-only plan deltas and review-base resolution live in `internal/plandelta`; `internal/tui` owns Changes mirror types, with stateless mapping in `internal/cli`.
 - Share-safe report projection, sanitization, and Markdown rendering live in `internal/planreport`; render only its explicit safe projection, never raw plan artifacts, and keep planning-only reports free of prompt capture and execution-derived data.
 - Reusable run, lifecycle, workspace, and repository behavior belongs in domain packages; CLI handlers should remain thin orchestration layers.
 - Shared bounds for agent-written input files and text live in `internal/agentinput`; strict commit-proposal decoding lives in `internal/commit`; slice-completion evidence loading lives in `internal/run`; plan base-commit drift detection lives in `internal/staleness`; repository-selector resolution lives in `internal/taodata`.
@@ -54,6 +55,7 @@
 - Automatic verification repair belongs in `internal/run` via `ExecutionConfig`, not `run.Request`; reload/re-derive after each journaled append. Preserve admission, the fixed lifetime cap of two, invocation slice budget, and explicit-only recovery for already-failed plans ([repair evidence](docs/plan-format.md#final-verification-repair-evidence), [workflow](docs/usage-guide.md#tao-run-and-tao-run--execute-slices)).
 - `tao run` prompts should use the compact run packet first and read fallback plan artifacts only for a concrete reason such as missing, stale, blocked, or failure-diagnosis context.
 - The run header is best-effort presentation, TTY-only, and never affects run outcomes.
+- Changes shares review-base resolution, uses plan-recorded roots and pinned read-only Git options, and is presentation only: never approval, recovery, or merge authority.
 - Retry only structured implementation transport failures (currently Pi `provider_transport_failure`), twice per invocation with cancellable 1s/2s delays and fresh sessions after durable-boundary rechecks; never infer authority from text or telemetry ([recovery](docs/plan-format.md#slice-lifecycle)).
 - Telemetry is best-effort, never lifecycle/recovery authority: plan metrics use only `agent_metrics`, while repository batch `agent-events.jsonl` must never enter plan events or batch state ([telemetry contract](docs/plan-format.md#events)).
 - Insights collection stays deterministic, cancellable, sanitized, best-effort, and read-only; canonical-Tao-only review treats evidence as untrusted and environment checks as passive ([insights workflow](docs/usage-guide.md#tao-insights-review-focus--review-tao-wide-experience-evidence)).

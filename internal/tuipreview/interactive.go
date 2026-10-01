@@ -35,6 +35,7 @@ func NewInteractiveApp(scenario Scenario, input io.Reader, output io.Writer, ter
 		Debug:     scenario.NewDebugSnapshotCollector(),
 		Settings:  scenario.NewSettingsService(),
 		Details:   scenario.NewDetailRepository(),
+		Changes:   scenario.NewChangesLoader(),
 		Actions:   nil,
 		Now:       func() time.Time { return scenario.Now },
 	}

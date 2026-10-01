@@ -16,9 +16,58 @@ import (
 
 	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/plandelta"
 	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/taodata"
 )
+
+func TestReviewBasePresentationParity(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		ws          *plan.Workspace
+		repo        string
+		git         fakeReviewGit
+		want, calls string
+	}{
+		{"origin HEAD unavailable", &plan.Workspace{Branch: " topic ", BaseBranch: " main ", BaseSHA: "old"}, "repo", fakeReviewGit{defaultBranchErr: errors.New("unavailable"), mergeBase: " live "}, "live", "default-branch,merge-base main topic"},
+		{"default equals branch", &plan.Workspace{Branch: "main", BaseSHA: " old "}, "repo", fakeReviewGit{defaultBranch: "main"}, "old", "default-branch"},
+		{"merge failure", &plan.Workspace{Branch: "topic", BaseSHA: "old"}, "repo", fakeReviewGit{defaultBranch: "main", mergeBaseErr: errors.New("unavailable")}, "old", "default-branch,merge-base main topic"},
+		{"nil workspace", nil, " repo ", fakeReviewGit{}, "repo", ""},
+		{"absent", nil, "", fakeReviewGit{}, "", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			state := plan.State{Workspace: tt.ws}
+			state.Repo.BaseCommit = tt.repo
+			got := reviewRunBase(context.Background(), &tt.git, ReviewRun{}, state)
+			if got != tt.want || strings.Join(tt.git.calls, ",") != tt.calls {
+				t.Fatalf("review base %q calls %v", got, tt.git.calls)
+			}
+			tt.git.calls = nil
+			projected := plandelta.ResolveBase(context.Background(), &tt.git, state)
+			if projected.SHA != got || strings.Join(tt.git.calls, ",") != tt.calls {
+				t.Fatalf("presentation base %+v calls %v", projected, tt.git.calls)
+			}
+		})
+	}
+}
+
+func TestReviewRunBaseOverrideFallback(t *testing.T) {
+	state := plan.State{}
+	state.Repo.BaseCommit = "repo"
+	if got := reviewRunBase(context.Background(), &fakeReviewGit{}, ReviewRun{Base: " override "}, state); got != "override" {
+		t.Fatalf("base = %q", got)
+	}
+	state.Workspace = &plan.Workspace{BaseSHA: "workspace"}
+	if got := reviewRunBase(context.Background(), &fakeReviewGit{}, ReviewRun{Base: "override"}, state); got != "workspace" {
+		t.Fatalf("base = %q", got)
+	}
+	if got := reviewDetailBase(&plan.PlanDetail{State: state}); got != "workspace" {
+		t.Fatalf("detail base = %q", got)
+	}
+	if got := reviewDetailBase(nil); got != "" {
+		t.Fatalf("nil detail base = %q", got)
+	}
+}
 
 func TestRequireNoCurrentFinalVerificationFailureUsesProjectedGuidance(t *testing.T) {
 	tests := []struct {

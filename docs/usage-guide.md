@@ -228,7 +228,10 @@ Use `tao ui` for one terminal view of plans and open notes across registered
 repositories, or to launch plan actions without copying IDs. It requires a
 terminal; use `tao monitor --once` for redirected or pasteable output.
 
-Tabs cycle **Backlog → WIP → Review**; Review is a static coming-soon placeholder.
+Tabs cycle **Backlog → WIP**. Press `c` on WIP to open the selected plan's
+**Changes** detail tab, showing a live read-only delta against its review base.
+Use `w` to switch worktree/branch scope and `u` to force a refresh; missing
+worktrees fall back to branch scope.
 The dashboard opens on **WIP** (plans): **NOW** holds plans with immediate actions,
 **NEXT** holds planned work, and **DONE** always shows up to 10 completed or
 abandoned plans. The plan list's `I/R/E` column shows impact/risk (L/M/H) and
@@ -1019,6 +1022,14 @@ Use it for the solo workflow where the review is the human gate instead of a PR.
   the review cannot merge unreviewed (rerun `tao review --run <plan>` after
   follow-up commits);
 - the plan worktree is clean.
+
+Use plan-detail **Changes** to understand the delta, not to decide that merge
+gates have passed. Branch scope shows committed base/head content; worktree
+scope can include unreviewed edits. The shared review-base strategy is live:
+a moved default branch or current-strategy checkout need not reproduce a
+historical review's exact diff. Review and ancestor labels are advisory, and
+neither scope grants approval or merge authority; the exact recorded evidence
+and ordinary merge gates still decide.
 
 **What it does:** Tao checks out default, squash-applies the reviewed branch,
 and reuses its approved proposal for one commit with trusted `Tao-Plan` and

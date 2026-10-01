@@ -96,6 +96,8 @@ type App struct {
 	Actions              *Actions
 	Details              DetailRepository
 	Inspector            DetailInspector
+	Changes              DetailChangesLoader
+	ChangesWait          func(context.Context, time.Duration) bool
 	Now                  func() time.Time
 }
 
@@ -221,6 +223,7 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 		return err
 	}
 
+	defer state.closeDetail()
 	loopCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	input := make(chan inputResult)
@@ -297,6 +300,16 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 			if err := a.writeFrame(state); err != nil {
 				return err
 			}
+		case update := <-state.changesUpdates():
+			a.acceptDetailChanges(&state, update)
+			if err := a.writeFrame(state); err != nil {
+				return err
+			}
+		case update := <-state.fileDiffUpdates():
+			a.acceptDetailFileDiff(&state, update)
+			if err := a.writeFrame(state); err != nil {
+				return err
+			}
 		case update, ok := <-state.inspectionUpdates():
 			if !ok {
 				state.detail.inspectionUpdates = nil
@@ -316,7 +329,7 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 			if err := a.writeFrame(state); err != nil {
 				return err
 			}
-		case <-a.Ticker.C():
+		case tick := <-a.Ticker.C():
 			snapshot, err := a.Collector.Collect(ctx)
 			if err != nil {
 				if errors.Is(err, context.Canceled) || ctx.Err() != nil {
@@ -352,6 +365,7 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 			if state.detail != nil {
 				state.refreshDetailRow()
 				a.reloadDetail(ctx, &state)
+				a.refreshDetailChanges(&state, tick)
 			}
 			state.refreshNoteDetail()
 			if err := a.writeFrame(state); err != nil {
@@ -573,6 +587,8 @@ func (a App) writeFrame(state loopState) error {
 	case state.detail != nil:
 		frame.WriteString(RenderDetail(DetailModel{
 			Plan:            state.detail.plan,
+			Changes:         state.detail.changes,
+			Now:             state.currentTime(),
 			Row:             state.detail.row,
 			ActionMessage:   a.Actions.messageForRow(state.detail.row),
 			Log:             state.detail.log,
@@ -754,14 +770,17 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 		case (key.Key == term.KeyEsc || key.Key == term.KeyBackspace) && state.detail.sliceOpen:
 			state.detail.sliceOpen = false
 			state.detail.sliceOffset = 0
+		case !state.detail.sliceOpen && state.detail.activeTab == detailTabChanges && a.handleChangesKey(state, key):
 		case key.Key == term.KeyEsc || key.Key == term.KeyBackspace:
 			state.closeDetail()
 		case !state.detail.sliceOpen && a.Actions != nil && key.Key == term.KeyRune && (key.Rune == 'r' || key.Rune == 'R'):
 			a.Actions.RunPlan(ctx, state.detail.row)
 		case !state.detail.sliceOpen && key.Key == term.KeyTab:
 			state.detail.moveTab(1, state.size)
+			a.syncDetailChanges(state)
 		case !state.detail.sliceOpen && key.Key == term.KeyShiftTab:
 			state.detail.moveTab(-1, state.size)
+			a.syncDetailChanges(state)
 		case state.detail.sliceOpen && key.Key == term.KeyArrowRight:
 			state.detail.moveSlice(1)
 		case state.detail.sliceOpen && key.Key == term.KeyArrowLeft:
@@ -804,9 +823,6 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 			state.detail.jumpVertical(true, state.size)
 		}
 		return false
-	}
-	if state.activePage() == PageReview {
-		return state.handleKey(key)
 	}
 	if normalizedSearchQuery(state.searchQuery) != "" && (key.Key == term.KeyEsc || key.Key == term.KeyBackspace) {
 		state.clearSearch()
@@ -879,6 +895,12 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 	}
 	if state.activePage() == PagePlans && key.Key == term.KeyEnter && selected && row.PlanDir != "" {
 		a.openDetail(ctx, state, row)
+		return false
+	}
+	if state.activePage() == PagePlans && key.Key == term.KeyRune && key.Rune == 'c' {
+		if selected && row.PlanDir != "" {
+			a.openDetailTab(ctx, state, row, detailTabChanges)
+		}
 		return false
 	}
 	if state.activePage() == PagePlans && a.Actions != nil && key.Key == term.KeyRune {
@@ -969,11 +991,7 @@ func (a App) movePlanDetail(ctx context.Context, state *loopState, delta int) {
 		tab := state.detail.activeTab
 		state.closeDetail()
 		state.selected = candidate
-		a.openDetail(ctx, state, rows[candidate])
-		if state.detail != nil {
-			state.detail.activeTab = tab
-			state.detail.clampOffsets(state.size)
-		}
+		a.openDetailTab(ctx, state, rows[candidate], tab)
 		return
 	}
 }
@@ -1110,6 +1128,8 @@ func (d *detailState) moveTab(delta int, size term.Size) {
 
 func (d *detailState) moveVertical(delta int, size term.Size) {
 	switch d.activeTab {
+	case detailTabChanges:
+		return // Changes navigation uses its own focus and cached geometry.
 	case detailTabSlices:
 		d.moveSlice(delta)
 	case detailTabActivity:
@@ -1132,6 +1152,9 @@ func detailPageStep(size term.Size, fixedLines int) int {
 }
 
 func (d *detailState) jumpVertical(bottom bool, size term.Size) {
+	if d.activeTab == detailTabChanges {
+		return
+	}
 	if d.activeTab == detailTabSlices {
 		ordered := orderedDetailSlices(d.plan)
 		if len(ordered) > 0 {
@@ -1167,12 +1190,30 @@ func (d *detailState) sliceMaxOffset(size term.Size) int {
 }
 
 func (d *detailState) clampOffsets(size term.Size) {
+	d.changes.FileIndex = max(0, min(d.changes.FileIndex, len(d.changes.Snapshot.Files)-1))
+	g := changesLayout(size.Width, max(size.Height-planDetailFixedLines, 0), d.changes.Zoom)
+	d.changes.ListOffset = max(0, min(d.changes.ListOffset, len(d.changes.Snapshot.Files)+boolChanges(d.changes.Snapshot.FilesTruncated)-g.Rows))
+	if d.changes.Pinned {
+		d.changes.DiffOffset = d.maxOffset(detailTabChanges, size)
+	}
+	d.changes.DiffOffset = max(0, min(d.changes.DiffOffset, d.maxOffset(detailTabChanges, size)))
 	d.overviewOffset = max(0, min(d.overviewOffset, d.maxOffset(detailTabOverview, size)))
 	d.activityOffset = max(0, min(d.activityOffset, d.maxOffset(detailTabActivity, size)))
 	d.sliceOffset = max(0, min(d.sliceOffset, d.sliceMaxOffset(size)))
 }
 
+func boolChanges(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
+}
+
 func (d *detailState) maxOffset(tab detailTab, size term.Size) int {
+	if tab == detailTabChanges {
+		g := changesLayout(size.Width, max(size.Height-planDetailFixedLines, 0), d.changes.Zoom)
+		return max(len(d.changes.Diff.Lines)+boolChanges(d.changes.Diff.Truncated)-g.Rows, 0)
+	}
 	fixedLines := planDetailFixedLines
 	if tab == detailTabOverview {
 		fixedLines = planOverviewFixedLines
@@ -1194,6 +1235,7 @@ func (s *loopState) closeDetail() {
 	if s.detail == nil {
 		return
 	}
+	s.detail.cancelChanges()
 	if s.detail.inspectionCancel != nil {
 		s.detail.inspectionCancel()
 	}
@@ -1267,7 +1309,7 @@ func (s *loopState) handleKey(key term.KeyEvent) bool {
 	case key.Key == term.KeyShiftTab || key.Key == term.KeyArrowLeft:
 		s.switchPage(-1)
 	case key.Key == term.KeyArrowUp || (key.Key == term.KeyRune && key.Rune == 'k'):
-		if s.activePage() != PageReview && s.selected > 0 {
+		if s.selected > 0 {
 			s.selected--
 		}
 	case key.Key == term.KeyArrowDown || (key.Key == term.KeyRune && key.Rune == 'j'):

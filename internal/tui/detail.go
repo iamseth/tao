@@ -43,11 +43,22 @@ const (
 	detailTabOverview detailTab = iota
 	detailTabSlices
 	detailTabActivity
+	detailTabChanges
 	detailTabCount
 )
 
+// DetailTab exposes detail selection to deterministic preview adapters.
+type DetailTab = detailTab
+
+const (
+	DetailTabOverview = detailTabOverview
+	DetailTabSlices   = detailTabSlices
+	DetailTabActivity = detailTabActivity
+	DetailTabChanges  = detailTabChanges
+)
+
 func (t detailTab) label() string {
-	return [...]string{"Overview", "Slices", "Activity"}[max(0, min(int(detailTabCount)-1, int(t)))]
+	return [...]string{"Overview", "Slices", "Activity", "Changes"}[max(0, min(int(detailTabCount)-1, int(t)))]
 }
 
 // DetailRepository is the read-only plan and log boundary used by the detail
@@ -61,6 +72,8 @@ type DetailRepository interface {
 
 // DetailModel contains the render-neutral state for one detail frame.
 type DetailModel struct {
+	Changes         DetailChangesModel
+	Now             time.Time
 	Plan            *plan.PlanDetail
 	Row             monitor.Row
 	Log             string
@@ -94,6 +107,8 @@ func (m DetailModel) Palette() theme.Palette {
 }
 
 type detailState struct {
+	changesLoadState
+	changes           DetailChangesModel
 	row               monitor.Row
 	plan              *plan.PlanDetail
 	selectedSliceID   string
@@ -284,6 +299,8 @@ func RenderDetail(model DetailModel) string {
 	}
 	var content []string
 	switch {
+	case tab == detailTabChanges:
+		content = renderChangesPane(model.Changes, model.Width, bodyHeight, palette, model.Now)
 	case model.LoadError != "":
 		content = []string{"unable to load plan: " + singleLineDetail(model.LoadError)}
 	case model.Plan == nil:
@@ -325,7 +342,7 @@ func RenderDetail(model DetailModel) string {
 		}
 	}
 	if model.ShowShortcuts {
-		lines = overlayPlanDetailShortcuts(lines, model.Width, model.Height, model.Theme.Palette(profileForEnabledColor(model.UseColor)))
+		lines = overlayPlanDetailShortcuts(lines, model.Width, model.Height, model.Theme.Palette(profileForEnabledColor(model.UseColor)), tab)
 	}
 	if palette.Enabled() {
 		for index, line := range lines {

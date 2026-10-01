@@ -169,12 +169,12 @@ func TestRenderEveryViewIsDeterministicAndBounded(t *testing.T) {
 		selection int
 		header    string
 	}{
-		{view: ViewPlans, header: "tao │ Backlog ▸WIP  Review"},
-		{view: ViewReview, header: "Review — coming soon"},
-		{view: ViewNotes, selection: 1, header: "tao │▸Backlog  WIP  Review"},
-		{view: ViewSettings, selection: 1, header: "tao │ Backlog  WIP  Review"},
-		{view: ViewDebug, header: "tao │ Backlog  WIP  Review"},
+		{view: ViewPlans, header: "tao │ Backlog ▸WIP"},
+		{view: ViewNotes, selection: 1, header: "tao │▸Backlog  WIP"},
+		{view: ViewSettings, selection: 1, header: "tao │ Backlog  WIP"},
+		{view: ViewDebug, header: "tao │ Backlog  WIP"},
 		{view: ViewPlanDetail, selection: 1, header: "Tao UI | live | alpha"},
+		{view: ViewPlanChanges, selection: 1, header: "Overview  Slices  Activity  [Changes]"},
 		{view: ViewNoteDetail, selection: 1, header: "Tao UI | NOTE DETAIL"},
 		{view: ViewSliceDetail, selection: 1, header: "Tao UI | 002-render-boundary"},
 	}

@@ -8,7 +8,6 @@ const (
 	PageNotes    PageID = "notes"
 	PageSettings PageID = "settings"
 	PageDebug    PageID = "debug"
-	PageReview   PageID = "review"
 )
 
 // Tab describes one visible top-level dashboard destination.
@@ -20,12 +19,11 @@ type Tab struct {
 var dashboardTabs = []Tab{
 	{ID: PageNotes, Label: "Backlog"},
 	{ID: PagePlans, Label: "WIP"},
-	{ID: PageReview, Label: "Review"},
 }
 
 func normalizePage(page PageID) PageID {
 	switch page {
-	case PageNotes, PagePlans, PageReview, PageSettings, PageDebug:
+	case PageNotes, PagePlans, PageSettings, PageDebug:
 		return page
 	}
 	return PagePlans

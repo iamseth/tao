@@ -81,7 +81,7 @@ func TestRenderSearchStateAndResults(t *testing.T) {
 		SearchActive: true,
 	}
 	frame := Render(model)
-	for _, want := range []string{"tao │ Backlog ▸WIP  Review", "1 plan", "Search: /owner█", "owner"} {
+	for _, want := range []string{"tao │ Backlog ▸WIP", "1 plan", "Search: /owner█", "owner"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("search frame missing %q:\n%s", want, frame)
 		}

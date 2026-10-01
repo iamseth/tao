@@ -309,6 +309,23 @@ func (c Client) canonicalCommitDelta(ctx context.Context, parent, commit string,
 	return canonical.Bytes(), nil
 }
 
+// ParseNameStatusZ validates a complete NUL-delimited name/status capture.
+// The private commit-series parser remains unchanged for proof consumers.
+func ParseNameStatusZ(raw string) ([]NameStatusEntry, error) {
+	if _, err := completeList(raw, false, "name"); err != nil {
+		return nil, err
+	}
+	changes, err := parseCommitPathChanges(raw)
+	if err != nil {
+		return nil, err
+	}
+	var entries []NameStatusEntry
+	for _, change := range changes {
+		entries = append(entries, NameStatusEntry{Status: change.status, OldPath: change.oldPath, Path: change.path})
+	}
+	return entries, nil
+}
+
 func parseCommitPathChanges(raw string) ([]commitPathChange, error) {
 	if raw == "" {
 		return nil, nil

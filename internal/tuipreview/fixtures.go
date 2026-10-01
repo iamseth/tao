@@ -29,6 +29,8 @@ var fixtureNow = time.Date(2026, 8, 21, 23, 0, 0, 0, time.UTC)
 // PlanFixture associates the plan directory used by monitor rows with its
 // typed detail projection and in-memory log.
 type PlanFixture struct {
+	Changes *tui.DetailChangesSnapshot
+	Diffs   map[string]tui.DetailFileDiff
 	PlanDir string
 	Detail  plan.PlanDetail
 	Log     string
@@ -166,7 +168,8 @@ func mixedPlanFixture(now time.Time) PlanFixture {
 		logrecord.Record{Type: logrecord.TypeAssistant, Content: "checking widths with 日本語 and 🧭"},
 		logrecord.Record{Type: logrecord.TypeToolCall, Name: "bash", Payload: `{"command":"go test ./internal/tuipreview ./internal/tui"}`},
 	)
-	return PlanFixture{PlanDir: detail.Dir, Detail: detail, Log: log}
+	changes, diffs := mixedChangesFixture(now)
+	return PlanFixture{PlanDir: detail.Dir, Detail: detail, Log: log, Changes: &changes, Diffs: diffs}
 }
 
 func emptyScenario() Scenario {
@@ -247,6 +250,12 @@ func planFixturesForRows(primary PlanFixture, rows []monitor.Row) []PlanFixture 
 
 func stressPlanFixture(now time.Time) PlanFixture {
 	fixture := mixedPlanFixture(now)
+	fixture.Changes.FilesTruncated = true
+	fixture.Changes.Files[0].Display = "very/long/目录/日本語/δ/with/a/long/prefix/that/is/clipped/changes.go"
+	d := fixture.Diffs[fixture.Changes.Files[0].Path]
+	d.Truncated = true
+	d.Lines = append(d.Lines, tui.DetailDiffLine{Kind: tui.DetailDiffMarker, Text: "… line limit: truncated Unicode 界界界 preview"})
+	fixture.Diffs[d.Path] = d
 	fixture.PlanDir = "fixture://stress/00"
 	fixture.Detail.Dir = fixture.PlanDir
 	fixture.Detail.State.Repo.Name = "日本語リポジトリ🧭"

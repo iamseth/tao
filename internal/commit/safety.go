@@ -69,8 +69,7 @@ func NormalizePath(path string) string {
 
 // IsTaoMetadataPath reports whether path belongs to workspace-local Tao metadata.
 func IsTaoMetadataPath(path string) bool {
-	path = NormalizePath(path)
-	return path == ".tao" || strings.HasPrefix(path, ".tao/")
+	return gitops.IsTaoMetadataPath(path)
 }
 
 func taoMetadataRenamePaths(line string) ([]string, bool) {

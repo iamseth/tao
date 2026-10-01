@@ -179,8 +179,9 @@ commands also accept the short unambiguous prefixes shown by help.
 ### Everyday command paths
 
 Open the terminal dashboard for **Backlog** (notes), **WIP** (plans, including
-history), and a static **Review** coming-soon page. It opens on WIP and supports
-common actions across registered repositories. Use `tao status` for diagnostics
+history). It opens on WIP and supports common actions across registered
+repositories. Press `c` on WIP to open plan-detail **Changes**, a read-only view
+of the live review-base delta. Use `tao status` for diagnostics
 and `tao repo config` for repository settings:
 
 ```sh

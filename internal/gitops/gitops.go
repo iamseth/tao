@@ -23,6 +23,7 @@ type Runner = commandrunner.Runner
 type Client struct {
 	repoRoot string
 	runner   Runner
+	readOnly bool
 }
 
 // NewClient returns a Git client bound to repoRoot.
@@ -786,6 +787,9 @@ func (c Client) output(ctx context.Context, args ...string) (string, error) {
 }
 
 func (c Client) rawOutput(ctx context.Context, args ...string) (string, error) {
+	if c.readOnly {
+		return c.boundedProbeOutput(ctx, args)
+	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	if err := c.git(ctx, args, &stdout, &stderr); err != nil {
@@ -795,6 +799,10 @@ func (c Client) rawOutput(ctx context.Context, args ...string) (string, error) {
 }
 
 func (c Client) run(ctx context.Context, args ...string) error {
+	if c.readOnly {
+		_, err := c.boundedProbeOutput(ctx, args)
+		return err
+	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	if err := c.git(ctx, args, &stdout, &stderr); err != nil {

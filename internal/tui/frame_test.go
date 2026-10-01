@@ -111,9 +111,8 @@ func TestRenderFrameStatusFilterAtSixtyColumns(t *testing.T) {
 
 func TestRenderTabStripMarksEveryActivePageWithoutColor(t *testing.T) {
 	wantStrips := map[PageID]string{
-		PageNotes:  "tao │▸Backlog  WIP  Review",
-		PagePlans:  "tao │ Backlog ▸WIP  Review",
-		PageReview: "tao │ Backlog  WIP ▸Review",
+		PageNotes: "tao │▸Backlog  WIP",
+		PagePlans: "tao │ Backlog ▸WIP",
 	}
 	for _, tab := range dashboardTabs {
 		t.Run(string(tab.ID), func(t *testing.T) {

@@ -194,6 +194,46 @@ func (s *fakeFilterStore) Save(_ context.Context, filter Filter) error {
 	return s.saveErr
 }
 
+func TestWIPChangesShortcut(t *testing.T) {
+	for _, mode := range []string{"nil actions", "actions", "missing directory", "search", "filter"} {
+		t.Run(mode, func(t *testing.T) {
+			starts := make(chan struct{}, 1)
+			app := App{Details: &fakeDetailRepository{detail: &plan.PlanDetail{}}, Changes: DetailChangesFuncs{SnapshotFunc: func(context.Context, *plan.PlanDetail, string) (DetailChangesSnapshot, error) {
+				starts <- struct{}{}
+				return DetailChangesSnapshot{}, nil
+			}}}
+			row := testActionRow()
+			row.PlanDir = "/plan"
+			if mode == "actions" {
+				app.Actions = newTestActions(t, &recordingActionLauncher{}, nil, nil)
+			}
+			if mode == "missing directory" {
+				row.PlanDir = ""
+			}
+			state := loopState{page: PagePlans, snapshot: monitor.Snapshot{Rows: []monitor.Row{row}}, size: term.Size{Width: 120, Height: 30}}
+			defer state.closeDetail()
+			if mode == "search" {
+				state.searchActive = true
+			}
+			if mode == "filter" {
+				state.filterMenu = newFilterMenu(state.filter, state.snapshot, state.noteSnapshot)
+			}
+			app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyRune, Rune: 'c'})
+			if mode == "nil actions" || mode == "actions" {
+				if state.detail == nil || state.detail.activeTab != detailTabChanges {
+					t.Fatal("c did not open Changes")
+				}
+				receiveChanges(t, starts)
+			} else if state.detail != nil {
+				t.Fatal("c bypassed input precedence or missing directory")
+			}
+			if mode == "search" && state.searchQuery != "c" {
+				t.Fatal("search did not consume c")
+			}
+		})
+	}
+}
+
 func TestRunLoadsFilterBestEffort(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -804,7 +844,7 @@ func TestTopLevelTabNavigationPreservesPlanSelectionAcrossRefresh(t *testing.T) 
 	if state.activePage() != PagePlans || !ok || state.selected != 0 || row.PlanID != "target" {
 		t.Fatalf("Tab page=%q selection=%d row=%+v ok=%t, want preserved target", state.activePage(), state.selected, row, ok)
 	}
-	for _, want := range []PageID{PageReview, PageNotes, PagePlans} {
+	for _, want := range []PageID{PageNotes, PagePlans} {
 		state.handleKey(term.KeyEvent{Key: term.KeyArrowRight})
 		if state.activePage() != want {
 			t.Fatalf("right navigation page=%q, want %q", state.activePage(), want)
@@ -1352,8 +1392,16 @@ func TestPlanDetailLocalNavigationBoundsEachTab(t *testing.T) {
 		t.Fatalf("Activity g offset = %d", state.detail.activityOffset)
 	}
 	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyTab})
+	if state.detail.activeTab != detailTabChanges {
+		t.Fatalf("missing Changes tab: %v", state.detail.activeTab)
+	}
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyTab})
 	if state.detail.activeTab != detailTabOverview {
 		t.Fatalf("Tab did not wrap to Overview: %v", state.detail.activeTab)
+	}
+	app.handleKey(context.Background(), &state, term.KeyEvent{Key: term.KeyShiftTab})
+	if state.detail.activeTab != detailTabChanges {
+		t.Fatalf("reverse wrap: %v", state.detail.activeTab)
 	}
 }
 

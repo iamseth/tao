@@ -6,6 +6,19 @@ import (
 	"testing"
 )
 
+func TestMetadataPathCompatibility(t *testing.T) {
+	for _, path := range []string{".tao", "./.tao/state.json", "sub/../.tao/state.json"} {
+		if !IsTaoMetadataPath(path) {
+			t.Errorf("metadata rejected: %q", path)
+		}
+	}
+	for _, path := range []string{".git/config", ".tao/../source.go", "sub/.tao", ".tao-other"} {
+		if IsTaoMetadataPath(path) {
+			t.Errorf("non-metadata rejected: %q", path)
+		}
+	}
+}
+
 func TestClassifyStatusPreservesAutomaticSliceSafety(t *testing.T) {
 	status := strings.Join([]string{
 		" M internal/run/run.go",

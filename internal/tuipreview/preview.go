@@ -24,8 +24,8 @@ const (
 	ViewNotes       View = "notes"
 	ViewSettings    View = "settings"
 	ViewDebug       View = "debug"
-	ViewReview      View = "review"
 	ViewPlanDetail  View = "plan-detail"
+	ViewPlanChanges View = "plan-changes"
 	ViewNoteDetail  View = "note-detail"
 	ViewSliceDetail View = "slice-detail"
 )
@@ -52,7 +52,7 @@ var ErrUnknownPlan = errors.New("unknown preview plan directory")
 // Views returns the production renderers available for one-shot previews in a
 // stable display order.
 func Views() []View {
-	return []View{ViewPlans, ViewNotes, ViewSettings, ViewDebug, ViewReview, ViewPlanDetail, ViewNoteDetail, ViewSliceDetail}
+	return []View{ViewPlans, ViewNotes, ViewSettings, ViewDebug, ViewPlanDetail, ViewPlanChanges, ViewNoteDetail, ViewSliceDetail}
 }
 
 // LookupView resolves a one-shot view by name.
@@ -264,8 +264,6 @@ func Render(scenario Scenario, options RenderOptions) (string, error) {
 
 	var frame string
 	switch options.View {
-	case ViewReview:
-		frame = tui.Render(tui.Model{Page: tui.PageReview, Width: options.Width, Height: options.Height, Profile: profile, Theme: options.Theme, ShowShortcuts: options.ShowShortcuts})
 	case ViewPlans:
 		count := visiblePlanCount(scenario.Snapshot, options.SearchQuery)
 		if err := validateSelection(options.Selection, count, "plan"); err != nil {
@@ -306,6 +304,31 @@ func Render(scenario Scenario, options RenderOptions) (string, error) {
 			Snapshot: scenario.Snapshot, NoteSnapshot: scenario.Notes, DebugSnapshot: scenario.Debug, SettingsSnapshot: scenario.Settings,
 			Page: tui.PageDebug, Width: options.Width, Height: options.Height, Now: scenario.Now, Profile: profile, Theme: options.Theme, ShowShortcuts: options.ShowShortcuts,
 		})
+	case ViewPlanChanges:
+		if options.SearchQuery != "" {
+			return "", errors.New("search preview is available only for plans and notes views")
+		}
+		fixture, err := detailFixture(scenario, options.PlanDir)
+		if err != nil {
+			return "", err
+		}
+		loader := scenario.NewChangesLoader()
+		snapshot, err := loader.Snapshot(context.Background(), &fixture.Detail, "")
+		if err != nil {
+			return "", err
+		}
+		changes := tui.DetailChangesModel{Status: snapshot.Availability, Snapshot: snapshot, FileIndex: options.Selection, UpdatedAt: snapshot.CollectedAt}
+		if len(snapshot.Files) > 0 {
+			if err := validateSelection(options.Selection, len(snapshot.Files), "file"); err != nil {
+				return "", err
+			}
+			changes.Diff, err = loader.FileDiff(context.Background(), snapshot, snapshot.Files[options.Selection].Path)
+			if err != nil {
+				return "", err
+			}
+			changes.DiffStatus = "ready"
+		}
+		frame = tui.RenderDetail(tui.DetailModel{Plan: &fixture.Detail, Row: detailRow(scenario.Snapshot, fixture), ActiveTab: tui.DetailTabChanges, Changes: changes, Now: scenario.Now, Width: options.Width, Height: options.Height, UseColor: options.Color, Profile: profile, Theme: options.Theme, ShowShortcuts: options.ShowShortcuts})
 	case ViewPlanDetail:
 		if options.SearchQuery != "" {
 			return "", errors.New("search preview is available only for plans and notes views")

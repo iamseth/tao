@@ -274,7 +274,7 @@ func TestRenderDetailIncludesHeaderAndFitsTerminal(t *testing.T) {
 		Log:   "working\n",
 		Width: 100, Height: 18,
 	})
-	for _, want := range []string{"Tao UI | plan-a | alpha | implement | 7s ago", "[Overview]  Slices  Activity", "Plan A", "STATUS  in_progress", "CONTEXT", "Problem"} {
+	for _, want := range []string{"Tao UI | plan-a | alpha | implement | 7s ago", "[Overview]  Slices  Activity  Changes", "Plan A", "STATUS  in_progress", "CONTEXT", "Problem"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("detail frame missing %q:\n%s", want, frame)
 		}
@@ -284,7 +284,7 @@ func TestRenderDetailIncludesHeaderAndFitsTerminal(t *testing.T) {
 	}
 	body := strings.TrimSuffix(strings.TrimPrefix(frame, clearScreenSequence), "\n")
 	lines := strings.Split(body, "\n")
-	if len(lines) < 5 || lines[1] != "" || lines[2] != "[Overview]  Slices  Activity" || lines[3] != "" || lines[4] != "Plan A" {
+	if len(lines) < 5 || lines[1] != "" || lines[2] != "[Overview]  Slices  Activity  Changes" || lines[3] != "" || lines[4] != "Plan A" {
 		t.Fatalf("detail frame did not preserve the tab layout and summary: %q", lines)
 	}
 	if strings.Contains(lines[0], "PLAN DETAIL") || strings.Contains(lines[0], "Plan A") {
@@ -377,7 +377,7 @@ func TestRenderDetailTabsShowBoundedOverviewSlicesAndActivity(t *testing.T) {
 	}
 
 	overview := RenderDetail(DetailModel{Plan: detail, ActiveTab: detailTabOverview, Width: 72, Height: 50})
-	for _, want := range []string{"[Overview]  Slices  Activity", "TYPE  feat", "CONTEXT", "Problem", "Operators lack context.", "SCOPE", "internal/tui/detail.go", "Open questions"} {
+	for _, want := range []string{"[Overview]  Slices  Activity  Changes", "TYPE  feat", "CONTEXT", "Problem", "Operators lack context.", "SCOPE", "internal/tui/detail.go", "Open questions"} {
 		if !strings.Contains(overview, want) {
 			t.Fatalf("overview missing %q:\n%s", want, overview)
 		}
@@ -387,12 +387,12 @@ func TestRenderDetailTabsShowBoundedOverviewSlicesAndActivity(t *testing.T) {
 	}
 
 	slices := RenderDetail(DetailModel{Plan: detail, ActiveTab: detailTabSlices, SelectedSliceID: "001-work", Width: 50, Height: 10})
-	if !strings.Contains(slices, "Overview  [Slices]  Activity") || !strings.Contains(slices, "> pending  001-work") {
+	if !strings.Contains(slices, "Overview  [Slices]  Activity  Changes") || !strings.Contains(slices, "> pending  001-work") {
 		t.Fatalf("Slices tab lost queue-authoritative selection:\n%s", slices)
 	}
 
 	activity := RenderDetail(DetailModel{Plan: detail, ActiveTab: detailTabActivity, Log: "one\ntwo\nthree\nfour\n", ActivityOffset: 2, Width: 40, Height: 8})
-	if !strings.Contains(activity, "Overview  Slices  [Activity]") || !strings.Contains(activity, "three") || !strings.Contains(activity, "four") || strings.Contains(activity, "│ one") {
+	if !strings.Contains(activity, "Overview  Slices  [Activity]  Changes") || !strings.Contains(activity, "three") || !strings.Contains(activity, "four") || strings.Contains(activity, "│ one") {
 		t.Fatalf("Activity tab did not honor its offset:\n%s", activity)
 	}
 	for _, frame := range []string{overview, slices, activity} {
@@ -535,7 +535,7 @@ func TestRenderDetailVerticalResizeKeepsFrameInsideTerminal(t *testing.T) {
 	if len(lines) > 6 {
 		t.Fatalf("resized detail frame has %d lines, want at most 6:\n%s", len(lines), frame)
 	}
-	if !strings.HasPrefix(lines[0], "Tao UI | plan-a |") || lines[2] != "[Overview]  Slices  Activity" || lines[3] != "" || lines[4] != "Plan details unavailable." {
+	if !strings.HasPrefix(lines[0], "Tao UI | plan-a |") || lines[2] != "[Overview]  Slices  Activity  Changes" || lines[3] != "" || lines[4] != "Plan details unavailable." {
 		t.Fatalf("resized detail frame lost compact header or detail tabs: %q", lines)
 	}
 }

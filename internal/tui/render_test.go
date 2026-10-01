@@ -72,7 +72,7 @@ func TestRenderGoldenColorModes(t *testing.T) {
 	}}}
 	plain := Render(Model{Snapshot: snapshot})
 	for _, want := range []string{
-		"tao │ Backlog ▸WIP  Review", "all repos", "agent -", "1 plan",
+		"tao │ Backlog ▸WIP", "all repos", "agent -", "1 plan",
 		"NEXT", "REPO  NEXT   PLAN", "  repo   RUN   plan",
 	} {
 		if !strings.Contains(plain, want) {
@@ -516,7 +516,7 @@ func columnNames(columns []column) []string {
 }
 
 func TestRenderOmitsEmptySectionsAndAlwaysShowsDonePlans(t *testing.T) {
-	const wantEmpty = clearScreenSequence + `tao │ Backlog ▸WIP  Review  all repos  agent -  ●
+	const wantEmpty = clearScreenSequence + `tao │ Backlog ▸WIP  all repos  agent -  ●
 
   No plans.
 0 plans
@@ -603,14 +603,14 @@ func TestRenderHeaderTracksActivePage(t *testing.T) {
 	snapshot := monitor.Snapshot{Rows: []monitor.Row{{RepositoryName: "repo", PlanID: "plan", Status: plan.StatusPlanned}}}
 
 	plans := Render(Model{Snapshot: snapshot})
-	for _, want := range []string{"tao │ Backlog ▸WIP  Review", "1 plan", "  repo   RUN   plan"} {
+	for _, want := range []string{"tao │ Backlog ▸WIP", "1 plan", "  repo   RUN   plan"} {
 		if !strings.Contains(plans, want) {
 			t.Fatalf("plans page missing %q:\n%s", want, plans)
 		}
 	}
 
 	notes := Render(Model{Snapshot: snapshot, Page: PageNotes, ActionMessage: "plan action"})
-	for _, want := range []string{"tao │▸Backlog  WIP  Review", "0 open notes", "Notes page."} {
+	for _, want := range []string{"tao │▸Backlog  WIP", "0 open notes", "Notes page."} {
 		if !strings.Contains(notes, want) {
 			t.Fatalf("notes page missing %q:\n%s", want, notes)
 		}
@@ -627,7 +627,6 @@ func TestRenderHeaderTracksActivePage(t *testing.T) {
 	}{
 		{page: PagePlans, want: "WIP"},
 		{page: PageNotes, want: "Backlog"},
-		{page: PageReview, want: "Review"},
 	} {
 		got := Render(Model{Snapshot: snapshot, Page: test.page, Profile: theme.ProfileTrueColor})
 		if !strings.Contains(got, theme.Default().Palette(theme.ProfileTrueColor).Paint(theme.RoleAccent, test.want)) {

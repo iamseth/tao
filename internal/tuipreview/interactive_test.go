@@ -38,7 +38,7 @@ func TestNewInteractiveAppUsesOnlyFixtureBoundaries(t *testing.T) {
 	if app.Actions != nil {
 		t.Fatal("interactive fixture app has production actions")
 	}
-	if app.Terminal == nil || app.Ticker != ticker || app.Collector == nil || app.Notes == nil || app.Debug == nil || app.Settings == nil || app.Details == nil {
+	if app.Terminal == nil || app.Ticker != ticker || app.Collector == nil || app.Notes == nil || app.Debug == nil || app.Settings == nil || app.Details == nil || app.Changes == nil {
 		t.Fatalf("interactive fixture app is incompletely wired: %+v", app)
 	}
 	if got := app.Now(); !got.Equal(scenario.Now) {
@@ -51,6 +51,18 @@ func TestNewInteractiveAppUsesOnlyFixtureBoundaries(t *testing.T) {
 	detail, err := app.Details.ResolvePlan(context.Background(), scenario.Plans[0].PlanDir)
 	if err != nil || detail.State.Plan.ID != scenario.Plans[0].Detail.State.Plan.ID {
 		t.Fatalf("fixture detail = %#v, error = %v", detail, err)
+	}
+}
+
+func TestInteractiveChangesWithNilActions(t *testing.T) {
+	scenario, _ := Lookup(ScenarioMixed)
+	var output bytes.Buffer
+	app := NewInteractiveApp(scenario, strings.NewReader("clhzuw\x1bq"), &output, previewTestTerminal{}, &previewTestTicker{})
+	if err := app.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "Changes") {
+		t.Fatal("changes tab not painted")
 	}
 }
 

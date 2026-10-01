@@ -13,13 +13,6 @@ type shortcut struct {
 }
 
 func shortcutsForPage(page PageID) []shortcut {
-	if normalizePage(page) == PageReview {
-		return []shortcut{
-			{key: "Tab / Shift+Tab / ← / →", action: "Switch tabs"},
-			{key: "q / Esc Esc", action: "Quit"},
-			{key: "? / Esc", action: "Close shortcuts"},
-		}
-	}
 	if normalizePage(page) == PageSettings {
 		return []shortcut{
 			{key: "↑ / ↓ / j / k / PgUp / PgDn", action: "Select repository / page"},
@@ -58,6 +51,7 @@ func shortcutsForPage(page PageID) []shortcut {
 	}
 	if normalizePage(page) == PagePlans {
 		common = append(common,
+			shortcut{key: "c", action: "Open plan Changes"},
 			shortcut{key: "r", action: "Run selected plan"},
 			shortcut{key: "a", action: "Approve selected slice"},
 			shortcut{key: "m", action: "Merge selected plan"},
@@ -72,7 +66,23 @@ func shortcutsForPage(page PageID) []shortcut {
 	)
 }
 
-func planDetailShortcuts() []shortcut {
+func planDetailShortcuts(tab detailTab) []shortcut {
+	if tab == detailTabChanges {
+		return []shortcut{
+			{key: "h / l / Enter", action: "Focus FILES / DIFF"},
+			{key: "j / k / ↑ / ↓ / PgUp / PgDn", action: "Select file / scroll diff"},
+			{key: "g / G", action: "Top / bottom (pin diff)"},
+			{key: "n / p", action: "Next / previous file"},
+			{key: "[ / ]", action: "Previous / next hunk"},
+			{key: "w / z / u", action: "Scope / zoom / refresh"},
+			{key: "Esc / Backspace", action: "DIFF to FILES / close"},
+			{key: "r / R", action: "Run displayed plan"},
+			{key: "Tab / Shift+Tab", action: "Switch detail tabs"},
+			{key: "← / →", action: "Previous / next plan"},
+			{key: "Backspace / Esc / q", action: "Return to plans / quit"},
+			{key: "?", action: "Close shortcuts"},
+		}
+	}
 	return []shortcut{
 		{key: "r", action: "Run displayed plan"},
 		{key: "Tab / Shift+Tab", action: "Switch detail tabs"},
@@ -101,8 +111,8 @@ func overlayShortcutLegend(background []string, page PageID, width, height int, 
 	return overlayShortcutTable(background, shortcutsForPage(page), width, height, palette)
 }
 
-func overlayPlanDetailShortcuts(background []string, width, height int, palette theme.Palette) []string {
-	return overlayShortcutTable(background, planDetailShortcuts(), width, height, palette)
+func overlayPlanDetailShortcuts(background []string, width, height int, palette theme.Palette, tab detailTab) []string {
+	return overlayShortcutTable(background, planDetailShortcuts(tab), width, height, palette)
 }
 
 func overlaySliceDetailShortcuts(background []string, width, height int, palette theme.Palette) []string {

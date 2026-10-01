@@ -22,7 +22,7 @@ func TestListScenariosAndViews(t *testing.T) {
 	if code := run(context.Background(), []string{"--list-views"}, &bytes.Buffer{}, &views, &bytes.Buffer{}); code != 0 {
 		t.Fatalf("view list exit = %d", code)
 	}
-	if got, want := views.String(), "plans\nnotes\nsettings\ndebug\nreview\nplan-detail\nnote-detail\nslice-detail\n"; got != want {
+	if got, want := views.String(), "plans\nnotes\nsettings\ndebug\nplan-detail\nplan-changes\nnote-detail\nslice-detail\n"; got != want {
 		t.Fatalf("view list = %q, want %q", got, want)
 	}
 }
@@ -50,12 +50,12 @@ func TestPlainOutputIsDeterministicAndUsesSelectedFixture(t *testing.T) {
 	}
 }
 
-func TestPlainReviewPreview(t *testing.T) {
+func TestPlainChangesPreview(t *testing.T) {
 	var output bytes.Buffer
-	if err := execute(context.Background(), []string{"--plain", "--view", "review", "--size", "80x15"}, &bytes.Buffer{}, &output, &bytes.Buffer{}); err != nil {
+	if err := execute(context.Background(), []string{"--plain", "--view", "plan-changes", "--size", "160x24"}, &bytes.Buffer{}, &output, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Review — coming soon", "Changed files", "Diff"} {
+	for _, want := range []string{"CHANGES", "> FILES", "DIFF", "read-only", "+ content", "@@"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("missing %q: %s", want, output.String())
 		}
@@ -80,11 +80,11 @@ func TestPlainSearchUsesProductionRenderer(t *testing.T) {
 
 func TestPlainShortcutPopoverUsesProductionRenderer(t *testing.T) {
 	var output bytes.Buffer
-	err := execute(context.Background(), []string{"--plain", "--shortcuts", "--scenario", "mixed", "--view", "plans", "--size", "64x18"}, &bytes.Buffer{}, &output, &bytes.Buffer{})
+	err := execute(context.Background(), []string{"--plain", "--shortcuts", "--scenario", "mixed", "--view", "plans", "--size", "64x20"}, &bytes.Buffer{}, &output, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Keyboard shortcuts", "KEY", "ACTION", "Backspace", "Go back", "? / Esc", "Close shortcuts"} {
+	for _, want := range []string{"Keyboard shortcuts", "KEY", "ACTION", "Open plan Changes", "Backspace", "Go back", "? / Esc", "Close shortcuts"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("shortcut preview missing %q:\n%s", want, output.String())
 		}

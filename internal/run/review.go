@@ -14,6 +14,7 @@ import (
 	"github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/plandelta"
 	"github.com/iamseth/tao/internal/reviewcontract"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/workspace"
@@ -1062,58 +1063,24 @@ func reviewDetailBase(detail *plan.PlanDetail) string {
 	if detail == nil {
 		return ""
 	}
-	if base := reviewWorkspaceBase(detail.State); base != "" {
+	if base := plandelta.WorkspaceBase(detail.State); base != "" {
 		return base
 	}
 	return strings.TrimSpace(detail.State.Repo.BaseCommit)
 }
 
-// reviewRunBase prefers the live merge-base so the persisted review matches
-// what the merge gate will compute, then falls back to bases recorded at plan
-// creation for plans without branch metadata or when git is unavailable.
+// reviewRunBase shares persisted-review base resolution with plan presentation,
+// retaining the run-only override before the final repository-base fallback.
+// This does not imply equivalence with every merge gate.
 func reviewRunBase(ctx context.Context, git reviewGit, run ReviewRun, state plan.State) string {
-	if base := reviewLiveMergeBase(ctx, git, state); base != "" {
+	if base := plandelta.LiveMergeBase(ctx, git, state); base != "" {
 		return base
 	}
-	if base := reviewWorkspaceBase(state); base != "" {
+	if base := plandelta.WorkspaceBase(state); base != "" {
 		return base
 	}
 	if base := strings.TrimSpace(run.Base); base != "" {
 		return base
 	}
 	return strings.TrimSpace(state.Repo.BaseCommit)
-}
-
-// reviewLiveMergeBase computes merge-base(default, plan branch) with the same
-// inputs `tao merge` uses for its review-base gate, so a review rerun after a
-// manual rebase records a base the merge gate accepts. An empty result means
-// the live base is not computable and callers must fall back to recorded bases.
-func reviewLiveMergeBase(ctx context.Context, git reviewGit, state plan.State) string {
-	if state.Workspace == nil {
-		return ""
-	}
-	branch := strings.TrimSpace(state.Workspace.Branch)
-	if branch == "" {
-		return ""
-	}
-	defaultBranch, err := git.DefaultBranch(ctx)
-	defaultBranch = strings.TrimSpace(defaultBranch)
-	if err != nil || defaultBranch == "" {
-		defaultBranch = strings.TrimSpace(state.Workspace.BaseBranch)
-	}
-	if defaultBranch == "" || defaultBranch == branch {
-		return ""
-	}
-	base, err := git.MergeBase(ctx, defaultBranch, branch)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(base)
-}
-
-func reviewWorkspaceBase(state plan.State) string {
-	if state.Workspace == nil {
-		return ""
-	}
-	return strings.TrimSpace(state.Workspace.BaseSHA)
 }

@@ -98,9 +98,6 @@ func offsetLineNumbers(lines []int, offset int) []int {
 // Render builds one complete terminal frame without writing it.
 func Render(model Model) string {
 	page := normalizePage(model.Page)
-	if page == PageReview {
-		return renderReview(model)
-	}
 	planRows := FilterPlanRows(model.Snapshot.Rows, model.SearchQuery)
 	noteSnapshot := FilterNoteSnapshot(model.NoteSnapshot, model.SearchQuery)
 	sections := BuildFilteredSections(planRows, model.Filter)
