@@ -329,7 +329,7 @@ _tao() {
       _arguments '--interval[interactive refresh interval]:duration:' '--once[render one snapshot and exit]' '--show-invalid[include invalid plans for diagnostics]'
       ;;
     ui)
-      _arguments '--completed-window[completed-plan lookback window (0 omits completed plans)]:duration:' '--interval[dashboard refresh interval (must be greater than zero)]:duration:'
+      _arguments '--completed-window[completed-plan lookback window (all includes all history; 0 omits completed plans)]:duration or all:' '--interval[dashboard refresh interval (must be greater than zero)]:duration:'
       ;;
     insi|insig|insigh|insight|insights)
       _arguments '--all-repos[include plan history from all registered repositories]' '--digest[write compact deterministic Markdown]' '--scorecard[write the planner scorecard]'

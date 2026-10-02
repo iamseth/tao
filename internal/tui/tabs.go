@@ -5,6 +5,7 @@ type PageID string
 
 const (
 	PagePlans    PageID = "plans"
+	PageHistory  PageID = "history"
 	PageNotes    PageID = "notes"
 	PageSettings PageID = "settings"
 	PageDebug    PageID = "debug"
@@ -17,13 +18,14 @@ type Tab struct {
 }
 
 var dashboardTabs = []Tab{
+	{ID: PageHistory, Label: "History"},
 	{ID: PageNotes, Label: "Backlog"},
 	{ID: PagePlans, Label: "WIP"},
 }
 
 func normalizePage(page PageID) PageID {
 	switch page {
-	case PageNotes, PagePlans, PageSettings, PageDebug:
+	case PageNotes, PagePlans, PageHistory, PageSettings, PageDebug:
 		return page
 	}
 	return PagePlans

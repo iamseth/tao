@@ -102,7 +102,10 @@ func Render(model Model) string {
 	page := normalizePage(model.Page)
 	planRows := FilterPlanRows(model.Snapshot.Rows, model.SearchQuery)
 	noteSnapshot := FilterNoteSnapshot(model.NoteSnapshot, model.SearchQuery)
-	sections := BuildFilteredSections(planRows, model.Filter)
+	sections := BuildPageSections(planRows, model.Filter, page)
+	if isPlanPage(page) || page == PageNotes {
+		model.Filter = filterForPage(model.Filter, page)
+	}
 	visibleCount := 0
 	for _, section := range sections {
 		visibleCount += len(section.Rows)
@@ -113,7 +116,7 @@ func Render(model Model) string {
 	}
 	var summary *frameSummary
 	switch page {
-	case PagePlans:
+	case PagePlans, PageHistory:
 		attentionCount := 0
 		for _, section := range sections {
 			for _, row := range section.Rows {
@@ -182,7 +185,7 @@ func Render(model Model) string {
 			if len(section.Rows) == 0 {
 				continue
 			}
-			sectionWidth := dashboardSectionWidth(model, PagePlans, section.Title, 0)
+			sectionWidth := dashboardSectionWidth(model, page, section.Title, 0)
 			lines = append(lines, "", sectionTitleRule(model.Palette(), planSectionRole(section.Kind), section.Title, sectionWidth), renderHeader(columns, paneWidth))
 			viewportSection := tableViewportSection{headingLines: []int{len(lines) - 2, len(lines) - 1}}
 			for _, row := range section.Rows {
@@ -200,7 +203,7 @@ func Render(model Model) string {
 	if strings.TrimSpace(model.FilterMessage) != "" {
 		lines = append(lines, "", singleLineDetail(model.FilterMessage))
 	}
-	if page == PagePlans && strings.TrimSpace(model.ActionMessage) != "" {
+	if isPlanPage(page) && strings.TrimSpace(model.ActionMessage) != "" {
 		lines = append(lines, "", model.ActionMessage)
 	}
 	if page == PageNotes && strings.TrimSpace(model.NoteMessage) != "" {

@@ -51,9 +51,11 @@ func shortcutsForPage(page PageID) []shortcut {
 			shortcut{key: "d / D", action: "Delete with / without confirmation"},
 		)
 	}
+	if isPlanPage(normalizePage(page)) {
+		common = append(common, shortcut{key: "c", action: "Open plan Changes"})
+	}
 	if normalizePage(page) == PagePlans {
 		common = append(common,
-			shortcut{key: "c", action: "Open plan Changes"},
 			shortcut{key: "r", action: "Run selected plan"},
 			shortcut{key: "a", action: "Approve selected slice"},
 			shortcut{key: "m", action: "Merge selected plan"},

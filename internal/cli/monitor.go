@@ -118,6 +118,10 @@ func (a App) monitorCollector(showInvalid bool) (MonitorSnapshotCollector, error
 }
 
 func (a App) newMonitorCollector(showInvalid bool, completedWindow time.Duration) (MonitorSnapshotCollector, error) {
+	return a.newMonitorCollectorWithHistory(showInvalid, completedWindow, false)
+}
+
+func (a App) newMonitorCollectorWithHistory(showInvalid bool, completedWindow time.Duration, allCompleted bool) (MonitorSnapshotCollector, error) {
 	if a.MonitorCollector != nil {
 		return a.MonitorCollector, nil
 	}
@@ -129,6 +133,7 @@ func (a App) newMonitorCollector(showInvalid bool, completedWindow time.Duration
 	collector.Now = a.now
 	collector.ShowInvalid = showInvalid
 	collector.IncludeCompletedWithin = completedWindow
+	collector.IncludeAllCompleted = allCompleted
 	collector.NewPlanLister = func(entry taodata.RepoInventoryEntry) monitor.PlanLister {
 		return a.repository(entry.PlansDir)
 	}

@@ -228,17 +228,25 @@ Use `tao ui` for one terminal view of plans and open notes across registered
 repositories, or to launch plan actions without copying IDs. It requires a
 terminal; use `tao monitor --once` for redirected or pasteable output.
 
-Tabs cycle **Backlog → WIP**. Press `c` on WIP to open the selected plan's
+Tabs cycle **History → Backlog → WIP**, opening on **WIP**. Press `c` on WIP
+or History to open the selected plan's
 **Changes** detail tab, showing a live read-only delta against its review base.
 Use `w` to switch worktree/branch scope and `u` to force a refresh; missing
 worktrees fall back to branch scope.
-The dashboard opens on **WIP** (plans): **NOW** holds plans with immediate actions,
-**NEXT** holds planned work, and **DONE** always shows up to 10 completed or
-abandoned plans. The plan list's `I/R/E` column shows impact/risk (L/M/H) and
+**WIP** contains unfinished plans: **NOW** holds plans with immediate actions and
+**NEXT** holds planned work. Blocked, failed, and awaiting-review/merge plans stay
+in WIP. **History** contains completed and abandoned plans, newest activity first,
+without a ten-plan limit; use search and paging to revisit older work. Completed
+plans have no default lookback limit; `--completed-window 24h` restricts them to
+the last day, while `--completed-window 0` omits them. Skipped
+slices do not move their parent plan to History.
+The plan list's `I/R/E` column shows impact/risk (L/M/H) and
 effort (S/M/L), with `-` when unset; it hides before SLICES on narrow terminals.
 The separate **NEXT** action label recommends what to do, not permission to do it.
 Filters and their enabled state persist in `<DataHome>/ui-filters.json` and
-combine with session-only search. See [configuration](configuration.md) for themes.
+combine with session-only search. Repository criteria are shared; WIP and History
+have independent status selections limited to their respective states. Turning
+filters off never changes which page a plan belongs to. See [configuration](configuration.md) for themes.
 Batch merge uses the sole enabled repository filter, otherwise the selected plan's repository.
 
 Capture notes and launch note planning from **Backlog** (notes). `TAO_AGENT` selects Pi

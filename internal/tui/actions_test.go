@@ -92,6 +92,7 @@ func TestAbandonedPlanSuppressesEveryPlanAction(t *testing.T) {
 	}
 
 	state := loopState{
+		page:     PageHistory,
 		snapshot: monitor.Snapshot{Rows: []monitor.Row{row}},
 		filter:   repositoryFilter(row.RepositoryID),
 	}

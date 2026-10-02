@@ -698,7 +698,7 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 	if state.filterMenu != nil {
 		action, change := state.filterMenu.handleKey(key, state.size)
 		if action == filterMenuClosed || change.EnabledChanged || change.Cleared {
-			state.applyFilter(state.filterMenu.filter)
+			state.applyPageFilter(state.filterMenu.filter)
 			if a.FilterStore != nil {
 				if err := a.FilterStore.Save(ctx, state.filter); err != nil {
 					state.filterMessage = "Save filters: " + err.Error()
@@ -864,7 +864,7 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 		state.clearSearch()
 		return false
 	}
-	if (state.activePage() == PagePlans || state.activePage() == PageNotes) && key.Key == term.KeyRune && key.Rune == '/' {
+	if (isPlanPage(state.activePage()) || state.activePage() == PageNotes) && key.Key == term.KeyRune && key.Rune == '/' {
 		state.setSearchQuery("")
 		state.searchActive = true
 		state.interruptEscape()
@@ -929,11 +929,11 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 		}
 		return false
 	}
-	if state.activePage() == PagePlans && key.Key == term.KeyEnter && selected && row.PlanDir != "" {
+	if isPlanPage(state.activePage()) && key.Key == term.KeyEnter && selected && row.PlanDir != "" {
 		a.openDetail(ctx, state, row)
 		return false
 	}
-	if state.activePage() == PagePlans && key.Key == term.KeyRune && key.Rune == 'c' {
+	if isPlanPage(state.activePage()) && key.Key == term.KeyRune && key.Rune == 'c' {
 		if selected && row.PlanDir != "" {
 			a.openDetailTab(ctx, state, row, detailTabChanges)
 		}
@@ -1374,8 +1374,8 @@ func (s *loopState) handleKey(key term.KeyEvent) bool {
 			s.selected++
 			s.settingsOffset = 0
 		}
-	case (s.activePage() == PagePlans || s.activePage() == PageNotes) && key.Key == term.KeyRune && (key.Rune == 'f' || key.Rune == 'F'):
-		s.filterMenu = newFilterMenu(s.filter, s.snapshot, s.noteSnapshot)
+	case (isPlanPage(s.activePage()) || s.activePage() == PageNotes) && key.Key == term.KeyRune && (key.Rune == 'f' || key.Rune == 'F'):
+		s.filterMenu = newPageFilterMenu(s.filter, s.snapshot, s.noteSnapshot, s.activePage())
 		s.listTopPending = false
 	}
 	return false
@@ -1411,6 +1411,7 @@ func (s *loopState) clearSearch() {
 }
 
 func (s *loopState) setSearchQuery(query string) {
+	defer s.preserveOtherPlanSelection()()
 	selectedPlan, preservePlan := s.planRowAt(s.planSelection())
 	selectedNote, preserveNote := s.noteAt(s.noteSelection())
 	s.searchQuery = query
@@ -1430,7 +1431,7 @@ func (s loopState) activePage() PageID {
 }
 
 func (s *loopState) handleListJumpKey(key term.KeyEvent) bool {
-	if s.activePage() != PagePlans && s.activePage() != PageNotes {
+	if !isPlanPage(s.activePage()) && s.activePage() != PageNotes {
 		s.listTopPending = false
 		return false
 	}
@@ -1483,7 +1484,7 @@ func (s *loopState) switchPage(delta int) {
 
 func (s loopState) pageRowCount() int {
 	switch s.activePage() {
-	case PagePlans:
+	case PagePlans, PageHistory:
 		return len(s.visibleRows())
 	case PageNotes:
 		return len(s.visibleNotes())
@@ -1513,11 +1514,22 @@ func (s *loopState) restoreSettingsSelection(repositoryID string) {
 
 func (s loopState) visibleRows() []monitor.Row {
 	rows := FilterPlanRows(s.snapshot.Rows, s.searchQuery)
-	return visibleRows(rows, s.filter)
+	var visible []monitor.Row
+	for _, section := range BuildPageSections(rows, s.filter, s.planPage()) {
+		visible = append(visible, section.Rows...)
+	}
+	return visible
+}
+
+func (s loopState) planPage() PageID {
+	if s.activePage() == PageHistory {
+		return PageHistory
+	}
+	return PagePlans
 }
 
 func (s loopState) planSelection() int {
-	if s.activePage() == PagePlans {
+	if isPlanPage(s.activePage()) {
 		return s.selected
 	}
 	return s.pageSelections[PagePlans]
@@ -1559,7 +1571,7 @@ func (s loopState) planRowAt(index int) (monitor.Row, bool) {
 }
 
 func (s loopState) selectedRow() (monitor.Row, bool) {
-	if s.activePage() != PagePlans {
+	if !isPlanPage(s.activePage()) {
 		return monitor.Row{}, false
 	}
 	return s.planRowAt(s.selected)
@@ -1585,6 +1597,7 @@ func (s loopState) confirmMessage() string {
 }
 
 func (s *loopState) replaceSnapshot(snapshot monitor.Snapshot) {
+	defer s.preserveOtherPlanSelection()()
 	selected, preserve := s.planRowAt(s.planSelection())
 	s.snapshot = snapshot
 	s.restorePlanSelection(selected, preserve)
@@ -1597,6 +1610,7 @@ func (s *loopState) replaceNoteSnapshot(snapshot note.Snapshot) {
 }
 
 func (s *loopState) applyFilter(filter Filter) {
+	defer s.preserveOtherPlanSelection()()
 	planSelected, preservePlan := s.planRowAt(s.planSelection())
 	noteSelected, preserveNote := s.noteAt(s.noteSelection())
 	// The menu continues editing its own slices after immediate saves.
@@ -1733,13 +1747,13 @@ func (s *loopState) restorePlanSelection(selected monitor.Row, preserve bool) {
 		for candidate, row := range s.visibleRows() {
 			if row.RepositoryID == selected.RepositoryID && row.PlanID == selected.PlanID {
 				index = candidate
-				if s.activePage() == PagePlans {
+				if isPlanPage(s.activePage()) {
 					s.selected = index
 				} else {
 					if s.pageSelections == nil {
 						s.pageSelections = make(map[PageID]int)
 					}
-					s.pageSelections[PagePlans] = index
+					s.pageSelections[s.planPage()] = index
 				}
 				return
 			}
@@ -1751,13 +1765,13 @@ func (s *loopState) restorePlanSelection(selected monitor.Row, preserve bool) {
 	} else {
 		index = max(0, min(index, count-1))
 	}
-	if s.activePage() == PagePlans {
+	if isPlanPage(s.activePage()) {
 		s.selected = index
 	} else {
 		if s.pageSelections == nil {
 			s.pageSelections = make(map[PageID]int)
 		}
-		s.pageSelections[PagePlans] = index
+		s.pageSelections[s.planPage()] = index
 	}
 }
 

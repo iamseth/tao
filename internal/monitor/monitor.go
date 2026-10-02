@@ -182,6 +182,7 @@ type Collector struct {
 	Now                    func() time.Time
 	ShowInvalid            bool
 	IncludeCompletedWithin time.Duration
+	IncludeAllCompleted    bool
 }
 
 // NewCollector returns a filesystem-backed collector without repository health probes.
@@ -324,7 +325,7 @@ func (c Collector) runLockReader() RunLockReader {
 }
 
 func (c Collector) includeSummary(summary plan.PlanSummary, now time.Time) bool {
-	if summary.Status != plan.StatusCompleted || summary.NextAction.Primary.Class == plan.PlanActionClassRecovery {
+	if c.IncludeAllCompleted || summary.Status != plan.StatusCompleted || summary.NextAction.Primary.Class == plan.PlanActionClassRecovery {
 		return true
 	}
 	if c.IncludeCompletedWithin <= 0 {

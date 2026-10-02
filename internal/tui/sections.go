@@ -12,8 +12,6 @@ import (
 type SectionKind string
 
 const (
-	maxHistoryPlans = 10
-
 	SectionNow     SectionKind = "now"
 	SectionNext    SectionKind = "next"
 	SectionHistory SectionKind = "history"
@@ -38,8 +36,7 @@ func BuildRepositorySections(rows []monitor.Row, repositoryID string) []Section 
 	return BuildFilteredSections(rows, repositoryFilter(repositoryID))
 }
 
-// BuildFilteredSections filters before grouping, preserving section ordering and
-// the DONE cap without mutating the collector snapshot.
+// BuildFilteredSections filters before grouping without mutating the collector snapshot.
 func BuildFilteredSections(rows []monitor.Row, filter Filter) []Section {
 	sections := []Section{
 		{Kind: SectionNow, Title: "NOW"},
@@ -59,13 +56,8 @@ func BuildFilteredSections(rows []monitor.Row, filter Filter) []Section {
 		}
 	}
 	for index := range sections {
-		switch sections[index].Kind {
-		case SectionNext:
+		if sections[index].Kind == SectionNext {
 			orderNextRows(sections[index].Rows)
-		case SectionHistory:
-			if len(sections[index].Rows) > maxHistoryPlans {
-				sections[index].Rows = sections[index].Rows[:maxHistoryPlans]
-			}
 		}
 	}
 	return sections
@@ -133,12 +125,4 @@ func sectionKind(row monitor.Row) SectionKind {
 
 func hasVisibleRun(row monitor.Row) bool {
 	return row.Liveness == monitor.LivenessLive || rowlabel.IsStalled(row)
-}
-
-func visibleRows(rows []monitor.Row, filter Filter) []monitor.Row {
-	var visible []monitor.Row
-	for _, section := range BuildFilteredSections(rows, filter) {
-		visible = append(visible, section.Rows...)
-	}
-	return visible
 }

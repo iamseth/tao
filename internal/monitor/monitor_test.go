@@ -974,6 +974,16 @@ func TestCollectorCompletedWindowIsOptInWithActivityFallback(t *testing.T) {
 	if got := planIDs(windowSnapshot.Rows); !slices.Equal(got, []string{"fallback", "recent", "active"}) {
 		t.Fatalf("window plan ids = %v, want recent completed plans plus active", got)
 	}
+	collector.IncludeAllCompleted = true
+	all, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := planIDs(all.Rows)
+	slices.Sort(ids)
+	if !slices.Equal(ids, []string{"active", "fallback", "old", "recent", "unknown"}) {
+		t.Fatalf("all-history IDs = %v; old and undated plans must remain discoverable", ids)
+	}
 }
 
 func TestCollectorIncludesLegacyCompletedPlanWithPendingPullRequestIntent(t *testing.T) {

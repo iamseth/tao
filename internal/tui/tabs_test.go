@@ -14,7 +14,7 @@ import (
 )
 
 func TestDashboardViewportBounds(t *testing.T) {
-	for _, page := range []PageID{PageNotes, PagePlans} {
+	for _, page := range []PageID{PageHistory, PageNotes, PagePlans} {
 		for _, width := range []int{1, 20, 59, 60, 100} {
 			for _, height := range []int{1, 3, 8, 24} {
 				for _, profile := range []theme.Profile{theme.ProfileNone, theme.ProfileTrueColor} {
@@ -41,7 +41,7 @@ func TestDashboardNavigationRetainsListsWithoutActions(t *testing.T) {
 	app := App{}
 	state := loopState{page: PagePlans, selected: 1, snapshot: monitor.Snapshot{Rows: []monitor.Row{testActionRow(), testActionRow()}}, noteSnapshot: note.Snapshot{Notes: []note.CatalogNote{{ID: "one"}, {ID: "two"}, {ID: "three"}}}, pageSelections: map[PageID]int{PageNotes: 2}}
 	originalRows := state.visibleRows()
-	for _, keys := range [][2]term.Key{{term.KeyTab, term.KeyShiftTab}, {term.KeyArrowRight, term.KeyArrowRight}, {term.KeyArrowLeft, term.KeyArrowLeft}} {
+	for _, keys := range [][2]term.Key{{term.KeyShiftTab, term.KeyTab}, {term.KeyArrowLeft, term.KeyArrowRight}} {
 		app.handleKey(context.Background(), &state, term.KeyEvent{Key: keys[0]})
 		if state.activePage() != PageNotes || state.selected != 2 {
 			t.Fatal("WIP did not cycle to saved Backlog selection")
@@ -82,7 +82,7 @@ func TestDashboardNavigationRetainsListsWithoutActions(t *testing.T) {
 			t.Fatal("global quit failed")
 		}
 	}
-	if normalizePage("") != PagePlans || len(dashboardTabs) != 2 {
+	if normalizePage("") != PagePlans || len(dashboardTabs) != 3 {
 		t.Fatal("dashboard contract changed")
 	}
 	for _, page := range []PageID{PageSettings, PageDebug} {

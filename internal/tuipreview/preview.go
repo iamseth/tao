@@ -26,6 +26,7 @@ type View string
 
 const (
 	ViewPlans       View = "plans"
+	ViewHistory     View = "history"
 	ViewNotes       View = "notes"
 	ViewSettings    View = "settings"
 	ViewDebug       View = "debug"
@@ -57,7 +58,7 @@ var ErrUnknownPlan = errors.New("unknown preview plan directory")
 // Views returns the production renderers available for one-shot previews in a
 // stable display order.
 func Views() []View {
-	return []View{ViewPlans, ViewNotes, ViewSettings, ViewDebug, ViewPlanDetail, ViewPlanChanges, ViewNoteDetail, ViewSliceDetail}
+	return []View{ViewPlans, ViewHistory, ViewNotes, ViewSettings, ViewDebug, ViewPlanDetail, ViewPlanChanges, ViewNoteDetail, ViewSliceDetail}
 }
 
 // LookupView resolves a one-shot view by name.
@@ -381,14 +382,18 @@ func Render(scenario Scenario, options RenderOptions) (string, error) {
 
 	var frame string
 	switch options.View {
-	case ViewPlans:
-		count := visiblePlanCount(scenario.Snapshot, options.SearchQuery)
+	case ViewPlans, ViewHistory:
+		page := tui.PagePlans
+		if options.View == ViewHistory {
+			page = tui.PageHistory
+		}
+		count := visiblePlanCount(scenario.Snapshot, options.SearchQuery, page)
 		if err := validateSelection(options.Selection, count, "plan"); err != nil {
 			return "", err
 		}
 		frame = tui.Render(tui.Model{
 			Snapshot: scenario.Snapshot, NoteSnapshot: scenario.Notes, DebugSnapshot: scenario.Debug, SettingsSnapshot: scenario.Settings,
-			Page: tui.PagePlans, Selected: options.Selection, Width: options.Width, Height: options.Height, Now: scenario.Now,
+			Page: page, Selected: options.Selection, Width: options.Width, Height: options.Height, Now: scenario.Now,
 			Profile: profile, Theme: options.Theme, ShowShortcuts: options.ShowShortcuts, SearchQuery: options.SearchQuery,
 		})
 	case ViewNotes:
@@ -563,9 +568,9 @@ func validateSelection(selection, count int, kind string) error {
 	return nil
 }
 
-func visiblePlanCount(snapshot monitor.Snapshot, searchQuery string) int {
+func visiblePlanCount(snapshot monitor.Snapshot, searchQuery string, page tui.PageID) int {
 	count := 0
-	for _, section := range tui.BuildSections(tui.FilterPlanRows(snapshot.Rows, searchQuery)) {
+	for _, section := range tui.BuildPageSections(tui.FilterPlanRows(snapshot.Rows, searchQuery), tui.Filter{}, page) {
 		count += len(section.Rows)
 	}
 	return count

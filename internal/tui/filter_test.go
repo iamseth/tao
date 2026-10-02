@@ -134,7 +134,7 @@ func TestDiscoverFilterOptions(t *testing.T) {
 	}
 }
 
-func TestBuildFilteredSectionsPreservesGroupingAndHistoryCap(t *testing.T) {
+func TestBuildFilteredSectionsPreservesGroupingAndAllHistory(t *testing.T) {
 	rows := []monitor.Row{
 		{RepositoryID: "a", PlanID: "now", Status: plan.StatusBlocked},
 		{RepositoryID: "b", PlanID: "next", Status: plan.StatusPlanned},
@@ -154,7 +154,7 @@ func TestBuildFilteredSectionsPreservesGroupingAndHistoryCap(t *testing.T) {
 	if len(sections[0].Rows) != 2 || sections[0].Rows[0].PlanID != "now" || sections[0].Rows[1].Kind != monitor.RowKindRepositoryWarning || len(sections[1].Rows) != 1 || sections[1].Rows[0].PlanID != "next" {
 		t.Fatalf("filtered groups = %+v", sections)
 	}
-	if len(sections[2].Rows) != maxHistoryPlans {
+	if len(sections[2].Rows) != 20 {
 		t.Fatalf("DONE count = %d", len(sections[2].Rows))
 	}
 	for i, row := range sections[2].Rows {

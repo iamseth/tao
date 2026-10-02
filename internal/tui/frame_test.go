@@ -104,15 +104,16 @@ func TestRenderFrameStatusFilterAtSixtyColumns(t *testing.T) {
 		t.Fatalf("status-only label = %q", got)
 	}
 	line := renderFrame(model, PagePlans)[0]
-	if cells.Width(line) != model.Width || !strings.Contains(line, "filter on · 1 status") || !strings.HasSuffix(line, "  agent -  ●") {
+	if cells.Width(line) != model.Width || !strings.Contains(line, "filter on · 1 stat…") || !strings.HasSuffix(line, "  agent -  ●") {
 		t.Fatalf("status-only filter did not truncate cleanly: %q", line)
 	}
 }
 
 func TestRenderTabStripMarksEveryActivePageWithoutColor(t *testing.T) {
 	wantStrips := map[PageID]string{
-		PageNotes: "tao │▸Backlog  WIP",
-		PagePlans: "tao │ Backlog ▸WIP",
+		PageHistory: "tao │▸History  Backlog  WIP",
+		PageNotes:   "tao │ History ▸Backlog  WIP",
+		PagePlans:   "tao │ History  Backlog ▸WIP",
 	}
 	for _, tab := range dashboardTabs {
 		t.Run(string(tab.ID), func(t *testing.T) {

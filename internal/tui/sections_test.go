@@ -232,8 +232,9 @@ func TestBuildSectionsRoutesOperationalActionsToNow(t *testing.T) {
 	}
 }
 
-func TestBuildSectionsLimitsHistoryToTenPlans(t *testing.T) {
-	rows := make([]monitor.Row, maxHistoryPlans+2)
+func TestBuildSectionsIncludesAllHistory(t *testing.T) {
+	const historyPlans = 25
+	rows := make([]monitor.Row, historyPlans)
 	for index := range rows {
 		status := plan.StatusCompleted
 		if index%2 != 0 {
@@ -247,11 +248,11 @@ func TestBuildSectionsLimitsHistoryToTenPlans(t *testing.T) {
 		if section.Kind != SectionHistory {
 			continue
 		}
-		if len(section.Rows) != 10 {
-			t.Fatalf("history row count = %d, want 10", len(section.Rows))
+		if len(section.Rows) != historyPlans {
+			t.Fatalf("history row count = %d, want %d", len(section.Rows), historyPlans)
 		}
-		if section.Rows[0].PlanID != "history-00" || section.Rows[maxHistoryPlans-1].PlanID != fmt.Sprintf("history-%02d", maxHistoryPlans-1) {
-			t.Fatalf("history rows did not retain collector order: first=%q last=%q", section.Rows[0].PlanID, section.Rows[maxHistoryPlans-1].PlanID)
+		if section.Rows[0].PlanID != "history-00" || section.Rows[historyPlans-1].PlanID != fmt.Sprintf("history-%02d", historyPlans-1) {
+			t.Fatal("history rows did not retain collector order")
 		}
 		return
 	}

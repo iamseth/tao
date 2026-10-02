@@ -22,7 +22,7 @@ func TestListScenariosAndViews(t *testing.T) {
 	if code := run(context.Background(), []string{"--list-views"}, &bytes.Buffer{}, &views, &bytes.Buffer{}); code != 0 {
 		t.Fatalf("view list exit = %d", code)
 	}
-	if got, want := views.String(), "plans\nnotes\nsettings\ndebug\nplan-detail\nplan-changes\nnote-detail\nslice-detail\n"; got != want {
+	if got, want := views.String(), "plans\nhistory\nnotes\nsettings\ndebug\nplan-detail\nplan-changes\nnote-detail\nslice-detail\n"; got != want {
 		t.Fatalf("view list = %q, want %q", got, want)
 	}
 }

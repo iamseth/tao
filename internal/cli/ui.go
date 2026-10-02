@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -20,15 +21,15 @@ import (
 	"github.com/iamseth/tao/internal/uistate"
 )
 
-const defaultUICompletedWindow = 168 * time.Hour
+const defaultUICompletedWindow = "all"
 
 var uiCommand = commandMetadata{
 	name:                  "ui",
-	usageLines:            []string{"ui [--interval DURATION] [--completed-window DURATION]"},
+	usageLines:            []string{"ui [--interval DURATION] [--completed-window DURATION|all]"},
 	completionDescription: "Open the cross-repository interactive dashboard",
-	long: "Open a keyboard-driven dashboard with Backlog (notes) and WIP (plans) tabs across registered repositories. WIP is the initial tab. Settings and Debug remain developer previews, outside the dashboard cycle. Use Tab or the right arrow to advance tabs and Shift+Tab or the left arrow to move back; j/k or the up/down arrows move within tables and scroll Debug diagnostics. On WIP and Backlog, gg jumps to the top of the visible list and G jumps to the bottom. On WIP and Backlog, f opens the filter menu for repositories and plan statuses. In the menu, Space or Enter toggles a selection, t enables or disables the filter without losing it, c clears it, and Esc closes it. The filter persists across sessions and combines with / search, which is session-only.\n" +
-		"WIP groups immediate work under NOW, planned work under NEXT, and terminal plans under DONE. NOW includes in-progress, blocked, reviewed, and other plans with immediate operational actions such as MONITOR, APPROVE, or MERGE. Operational urgency always takes precedence: NOW remains ahead of advisory business ordering. Within NEXT, disposition, valid sequence relationships, categorical priority, and recent activity guide the order; missing, duplicate, or cyclic relationships only warn, and legacy plans remain visible as unranked. RUN AGE is elapsed time for an observed invocation, not plan age. NEXT is a derived advisory label and never authorizes an action. Press Enter to inspect the selected plan's full decision and lifecycle context. Page Up and Page Down move by a viewport on long detail pages. Heartbeats and the stalled?/crashed? labels are liveness hints, not workflow verdicts. DONE is always displayed with up to 10 completed or abandoned plans. The completed-plan lookback window controls how far back completed plans are loaded. On WIP, c opens the selected plan's Changes tab, r runs, a prompts for approval, m confirms a selected reviewed-plan merge, M confirms a repository-scoped merge --all, and Enter opens plan details. In plan detail, use Tab or Shift+Tab to switch Overview, Slices, Activity, and Changes; left and right open the previous or next visible plan. Press r or R on any detail tab to run the displayed plan without leaving the page; launch feedback appears below its header. Overview inspects advisory base drift only while the detail is open, and e expands or collapses its scope file list. On Slices, move with j/k or the arrows and press Enter for the full read-only slice page. Changes is a read-only, advisory viewer of one plan against its review base, not approval or merge authority. It defaults to worktree scope when available and branch scope otherwise. In Changes, h returns to FILES; l or Enter focuses DIFF; n/p selects the next/previous file; [/] jumps between hunks; w toggles worktree/branch scope; z toggles wide-layout diff zoom; u forces a refresh. Changes refreshes while visible; both scopes are read-only. Esc returns from DIFF to FILES before closing detail.\n" +
-		"Backlog lists only repository-owned open notes, grouped by ascending tier so lower-numbered tiers appear first and untiered notes appear last. Its table shows every non-tier tag plus separate created and updated ages. On the Backlog list, n creates a note in $EDITOR (nvim fallback), including when the list is empty or filtered. Active repository focus chooses the destination; otherwise choose explicitly from registered repositories with Enter, or cancel with Esc/Backspace. A blank body cancels without saving. Optional tags are editable in the buffer; saving refreshes the list while preserving filters. Ctrl+G edits the selected note's text and tags in $EDITOR, falling back to nvim, from either the list or detail view. Press p on the Backlog list or detail to plan the selected note in a native foreground agent selected by TAO_AGENT (Pi by default, or claude). Interact normally in the same terminal; Ctrl+C belongs to the agent while it runs, and exiting returns to the dashboard. Use the normal later /tao-slice workflow to create a plan; existing refreshes discover plans and archived notes. Unlike detached plan actions, foreground planning ends with the dashboard. The c key copies its note ID to the system clipboard as an alternative for use in planning sessions. Keys 0 through 3 replace its tier tag with tier0 through tier3. Lowercase d asks before deleting the selected note; uppercase D deletes it immediately. Enter opens the selected note's full detail, and Esc returns. Settings shows global runtime defaults and per-repository pull-request defaults; p confirms a cycle through explicit true, explicit false, and inherited. Debug shows UI state, build and data paths, doctor problems, collector warnings, and resolved runtime defaults from tao status; g/G jump to its top or bottom. Plan actions do not act on Backlog, Settings, or Debug. q and Ctrl-C quit globally except that q safely declines confirmation and foreground planning owns its terminal input. Esc returns one page or declines confirmation; at a top-level page, press Esc twice within one second to quit. Run, approval, and merge subprocesses are detached and survive dashboard exit.\n" +
+	long: "Open a keyboard-driven dashboard with History, Backlog (notes), and WIP (plans) tabs across registered repositories. WIP is the initial tab. Settings and Debug remain developer previews, outside the dashboard cycle. Use Tab or the right arrow to advance tabs and Shift+Tab or the left arrow to move back; j/k or the up/down arrows move within tables and scroll Debug diagnostics. On WIP, History, and Backlog, gg jumps to the top of the visible list and G jumps to the bottom. On WIP, History, and Backlog, f opens the filter menu. Repository criteria are shared; WIP and History have independent status selections limited to their respective states. Disabling filters never crosses page boundaries. In the menu, Space or Enter toggles a selection, t enables or disables the filter without losing it, c clears it, and Esc closes it. The filter persists across sessions and combines with / search, which is session-only.\n" +
+		"WIP groups unfinished plans under NOW and NEXT. History shows completed and abandoned plans under DONE, newest activity first, without a row limit. Skipped slices do not move their parent plan to History. NOW includes in-progress, blocked, reviewed, and other plans with immediate operational actions such as MONITOR, APPROVE, or MERGE. Operational urgency always takes precedence: NOW remains ahead of advisory business ordering. Within NEXT, disposition, valid sequence relationships, categorical priority, and recent activity guide the order; missing, duplicate, or cyclic relationships only warn, and legacy plans remain visible as unranked. RUN AGE is elapsed time for an observed invocation, not plan age. NEXT is a derived advisory label and never authorizes an action. Press Enter to inspect the selected plan's full decision and lifecycle context. Page Up and Page Down move by a viewport on long detail pages. Heartbeats and the stalled?/crashed? labels are liveness hints, not workflow verdicts. History loads all completed plans by default; --completed-window optionally limits the lookback, and 0 omits completed plans. On History, Enter opens details and c opens Changes. On WIP, c opens the selected plan's Changes tab, r runs, a prompts for approval, m confirms a selected reviewed-plan merge, M confirms a repository-scoped merge --all, and Enter opens plan details. In plan detail, use Tab or Shift+Tab to switch Overview, Slices, Activity, and Changes; left and right open the previous or next visible plan. Press r or R on any detail tab to run the displayed plan without leaving the page; launch feedback appears below its header. Overview inspects advisory base drift only while the detail is open, and e expands or collapses its scope file list. On Slices, move with j/k or the arrows and press Enter for the full read-only slice page. Changes is a read-only, advisory viewer of one plan against its review base, not approval or merge authority. It defaults to worktree scope when available and branch scope otherwise. In Changes, h returns to FILES; l or Enter focuses DIFF; n/p selects the next/previous file; [/] jumps between hunks; w toggles worktree/branch scope; z toggles wide-layout diff zoom; u forces a refresh. Changes refreshes while visible; both scopes are read-only. Esc returns from DIFF to FILES before closing detail.\n" +
+		"Backlog lists only repository-owned open notes, grouped by ascending tier so lower-numbered tiers appear first and untiered notes appear last. Its table shows every non-tier tag plus separate created and updated ages. On the Backlog list, n creates a note in $EDITOR (nvim fallback), including when the list is empty or filtered. Active repository focus chooses the destination; otherwise choose explicitly from registered repositories with Enter, or cancel with Esc/Backspace. A blank body cancels without saving. Optional tags are editable in the buffer; saving refreshes the list while preserving filters. Ctrl+G edits the selected note's text and tags in $EDITOR, falling back to nvim, from either the list or detail view. Press p on the Backlog list or detail to plan the selected note in a native foreground agent selected by TAO_AGENT (Pi by default, or claude). Interact normally in the same terminal; Ctrl+C belongs to the agent while it runs, and exiting returns to the dashboard. Use the normal later /tao-slice workflow to create a plan; existing refreshes discover plans and archived notes. Unlike detached plan actions, foreground planning ends with the dashboard. The c key copies its note ID to the system clipboard as an alternative for use in planning sessions. Keys 0 through 3 replace its tier tag with tier0 through tier3. Lowercase d asks before deleting the selected note; uppercase D deletes it immediately. Enter opens the selected note's full detail, and Esc returns. Settings shows global runtime defaults and per-repository pull-request defaults; p confirms a cycle through explicit true, explicit false, and inherited. Debug shows UI state, build and data paths, doctor problems, collector warnings, and resolved runtime defaults from tao status; g/G jump to its top or bottom. Plan-list actions do not act on History, Backlog, Settings, or Debug. q and Ctrl-C quit globally except that q safely declines confirmation and foreground planning owns its terminal input. Esc returns one page or declines confirmation; at a top-level page, press Esc twice within one second to quit. Run, approval, and merge subprocesses are detached and survive dashboard exit.\n" +
 		"tao ui requires a terminal. Use tao monitor --once for non-interactive plan output.",
 	examples: "  tao ui\n" +
 		"  tao ui --interval 5s\n" +
@@ -36,7 +37,7 @@ var uiCommand = commandMetadata{
 		"  tao ui --completed-window 0",
 	registerFlags: registerUIFlags,
 	completion: completionContext{flagValues: map[string]completionFlagValue{
-		"completed-window": {kind: completionValueText, label: "duration"},
+		"completed-window": {kind: completionValueText, label: "duration or all"},
 		"interval":         {kind: completionValueText, label: "duration"},
 	}},
 	execute: func(c commandContext) error {
@@ -46,7 +47,7 @@ var uiCommand = commandMetadata{
 
 func registerUIFlags(fs *flag.FlagSet) {
 	fs.Duration("interval", defaultMonitorInterval, "dashboard refresh interval (must be greater than zero)")
-	fs.Duration("completed-window", defaultUICompletedWindow, "completed-plan lookback window (0 omits completed plans)")
+	fs.String("completed-window", defaultUICompletedWindow, "completed-plan lookback window (all includes all history; 0 omits completed plans)")
 }
 
 func (a App) ui(ctx context.Context, args []string) error {
@@ -54,14 +55,22 @@ func (a App) ui(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := requireNoArgs(positional, "usage: tao ui [--interval DURATION] [--completed-window DURATION]"); err != nil {
+	if err := requireNoArgs(positional, "usage: tao ui [--interval DURATION] [--completed-window DURATION|all]"); err != nil {
 		return err
 	}
 	interval := flagDurationValue(fs, "interval")
 	if interval <= 0 {
 		return errors.New("--interval must be greater than zero")
 	}
-	completedWindow := flagDurationValue(fs, "completed-window")
+	completedValue := flagStringValue(fs, "completed-window")
+	allCompleted := completedValue == "all"
+	var completedWindow time.Duration
+	if !allCompleted {
+		completedWindow, err = time.ParseDuration(completedValue)
+		if err != nil {
+			return fmt.Errorf("--completed-window must be all or a duration: %w", err)
+		}
+	}
 	if completedWindow < 0 {
 		return errors.New("--completed-window must be zero or greater")
 	}
@@ -78,7 +87,7 @@ func (a App) ui(ctx context.Context, args []string) error {
 		}
 		terminal = term.NewTerminal(inputFile)
 	}
-	collector, err := a.newMonitorCollector(false, completedWindow)
+	collector, err := a.newMonitorCollectorWithHistory(false, completedWindow, allCompleted)
 	if err != nil {
 		return err
 	}

@@ -72,7 +72,7 @@ func TestRenderGoldenColorModes(t *testing.T) {
 	}}}
 	plain := Render(Model{Snapshot: snapshot})
 	for _, want := range []string{
-		"tao │ Backlog ▸WIP", "all repos", "agent -", "1 plan",
+		"tao │ History  Backlog ▸WIP", "all repos", "agent -", "1 plan",
 		"NEXT", "REPO  NEXT   PLAN", "  repo   RUN   plan",
 	} {
 		if !strings.Contains(plain, want) {
@@ -110,7 +110,7 @@ func TestPlanSectionsUseDedicatedColors(t *testing.T) {
 }
 
 func TestPlanRowsUseSectionBackgroundsAndNeutralHistoryText(t *testing.T) {
-	frame := Render(Model{
+	model := Model{
 		Snapshot: monitor.Snapshot{Rows: []monitor.Row{
 			{RepositoryName: "alpha", PlanID: "now-row", Status: plan.StatusBlocked, AttentionReasons: []monitor.AttentionReason{monitor.AttentionBlocked}},
 			{RepositoryName: "alpha", PlanID: "next-row", Status: plan.StatusPlanned},
@@ -119,7 +119,10 @@ func TestPlanRowsUseSectionBackgroundsAndNeutralHistoryText(t *testing.T) {
 		Selected: 99,
 		Width:    120,
 		Profile:  theme.ProfileTrueColor,
-	})
+	}
+	frame := Render(model)
+	model.Page = PageHistory
+	frame += Render(model)
 
 	backgrounds := map[string]theme.Role{
 		"now-row":     theme.RolePlanNowBackground,
@@ -228,7 +231,7 @@ func TestRenderSectionsAndOperationalLabels(t *testing.T) {
 	}}
 
 	got := Render(Model{Snapshot: snapshot, Selected: 2})
-	ordered := []string{"NOW", "NEXT", "DONE"}
+	ordered := []string{"NOW", "NEXT"}
 	previous := -1
 	for _, label := range ordered {
 		index := strings.Index(got, label)
@@ -238,7 +241,7 @@ func TestRenderSectionsAndOperationalLabels(t *testing.T) {
 		previous = index
 	}
 	for _, want := range []string{
-		"NEXT", "RUN", "AGE", "MERGE", "DONE", "ABANDONED", "SLICES", "stalled? (45s old)",
+		"NEXT", "RUN", "AGE", "MERGE", "SLICES", "stalled? (45s old)",
 		"004-ui 2m", "2/4", "30m",
 	} {
 		if !strings.Contains(got, want) {
@@ -408,7 +411,7 @@ func TestPlanColumnsVaryAcrossMixedAndStressScenarios(t *testing.T) {
 	}
 }
 
-func TestPlanColumnsAlignAcrossNowNextAndHistory(t *testing.T) {
+func TestPlanColumnsAlignAcrossNowAndNext(t *testing.T) {
 	frame := Render(Model{
 		Snapshot: monitor.Snapshot{Rows: []monitor.Row{
 			{RepositoryName: "alpha", PlanID: "blocked", Status: plan.StatusBlocked, AttentionReasons: []monitor.AttentionReason{monitor.AttentionBlocked}},
@@ -424,8 +427,8 @@ func TestPlanColumnsAlignAcrossNowNextAndHistory(t *testing.T) {
 			headers = append(headers, line)
 		}
 	}
-	if len(headers) != 3 {
-		t.Fatalf("plan header count = %d, want 3:\n%s", len(headers), frame)
+	if len(headers) != 2 {
+		t.Fatalf("plan header count = %d, want 2:\n%s", len(headers), frame)
 	}
 	for _, name := range []string{"REPO", "NEXT", "PLAN", "SLICES", "AGE"} {
 		wantOffset := strings.Index(headers[0], name)
@@ -515,8 +518,8 @@ func columnNames(columns []column) []string {
 	return names
 }
 
-func TestRenderOmitsEmptySectionsAndAlwaysShowsDonePlans(t *testing.T) {
-	const wantEmpty = clearScreenSequence + `tao │ Backlog ▸WIP  all repos  agent -  ●
+func TestRenderOmitsEmptySectionsAndHistoryShowsDonePlans(t *testing.T) {
+	const wantEmpty = clearScreenSequence + `tao │ History  Backlog ▸WIP  all repos  agent -  ●
 
   No plans.
 0 plans
@@ -525,7 +528,7 @@ func TestRenderOmitsEmptySectionsAndAlwaysShowsDonePlans(t *testing.T) {
 		t.Fatalf("empty Render() mismatch\nwant:\n%q\n got:\n%q", wantEmpty, got)
 	}
 
-	got := Render(Model{Snapshot: monitor.Snapshot{Rows: []monitor.Row{
+	got := Render(Model{Page: PageHistory, Snapshot: monitor.Snapshot{Rows: []monitor.Row{
 		{PlanID: "done", Status: plan.StatusCompleted},
 		{PlanID: "abandoned", Status: plan.StatusAbandoned},
 	}}})
@@ -603,14 +606,14 @@ func TestRenderHeaderTracksActivePage(t *testing.T) {
 	snapshot := monitor.Snapshot{Rows: []monitor.Row{{RepositoryName: "repo", PlanID: "plan", Status: plan.StatusPlanned}}}
 
 	plans := Render(Model{Snapshot: snapshot})
-	for _, want := range []string{"tao │ Backlog ▸WIP", "1 plan", "  repo   RUN   plan"} {
+	for _, want := range []string{"tao │ History  Backlog ▸WIP", "1 plan", "  repo   RUN   plan"} {
 		if !strings.Contains(plans, want) {
 			t.Fatalf("plans page missing %q:\n%s", want, plans)
 		}
 	}
 
 	notes := Render(Model{Snapshot: snapshot, Page: PageNotes, ActionMessage: "plan action"})
-	for _, want := range []string{"tao │▸Backlog  WIP", "0 open notes", "Notes page."} {
+	for _, want := range []string{"tao │ History ▸Backlog  WIP", "0 open notes", "Notes page."} {
 		if !strings.Contains(notes, want) {
 			t.Fatalf("notes page missing %q:\n%s", want, notes)
 		}
@@ -682,7 +685,7 @@ func TestRenderNotesSummaryPreservesActiveSearchBeforeRepositoryBreakdown(t *tes
 func TestRenderConstrainedDimensionsKeepPageIdentity(t *testing.T) {
 	got := Render(Model{Page: PageNotes, Width: 18, Height: 1})
 	lines := renderedLines(got)
-	if len(lines) != 1 || lines[0] != "tao │▸Backlog  WIP" {
+	if len(lines) != 1 || lines[0] != "tao │ History ▸Bac" {
 		t.Fatalf("constrained frame = %#v, want truncated header with active page", lines)
 	}
 	for _, line := range lines {
@@ -713,7 +716,7 @@ func TestRenderHeightViewportKeepsSelectionVisible(t *testing.T) {
 			if len(lines) != 8 {
 				t.Fatalf("rendered lines = %d, want 8:\n%s", len(lines), got)
 			}
-			if !strings.HasPrefix(lines[0], "tao │ Backlog ▸WIP") {
+			if !strings.HasPrefix(lines[0], "tao │ History  Backlog ▸WIP") {
 				t.Fatalf("viewport header = %q, want shared tab strip", lines[0])
 			}
 			if strings.HasSuffix(got, "\n") {
@@ -810,7 +813,7 @@ func TestRenderAbandonmentAsSafeHistoricalOutcome(t *testing.T) {
 		AttentionReasons: []monitor.AttentionReason{monitor.AttentionApprovalRequired, monitor.AttentionFinalizationFailed},
 		NextAction:       "FINALIZE PR",
 	}
-	got := Render(Model{Snapshot: monitor.Snapshot{Rows: []monitor.Row{row}}, Width: 120})
+	got := Render(Model{Page: PageHistory, Snapshot: monitor.Snapshot{Rows: []monitor.Row{row}}, Width: 120})
 	for _, want := range []string{"DONE", "ABANDONED   old-plan"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("abandonment render missing %q:\n%s", want, got)
@@ -842,7 +845,7 @@ func TestRenderPlanTableKeepsSelectionAndConfirmation(t *testing.T) {
 	if len(lines) != 7 {
 		t.Fatalf("rendered lines = %d, want 7:\n%s", len(lines), got)
 	}
-	for _, want := range []string{"tao │ Backlog ▸WIP", "  repo   RUN     selected", "Run selected plan? [y/n]"} {
+	for _, want := range []string{"tao │ History  Backlog ▸WIP", "  repo   RUN     selected", "Run selected plan? [y/n]"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("responsive frame missing %q:\n%s", want, got)
 		}

@@ -701,7 +701,7 @@ func TestRunRestoresTerminalBeforeResumingPanic(t *testing.T) {
 	}).Run(context.Background())
 }
 
-func TestLoopStateMovesAcrossSectionsAndKeepsHistoryVisible(t *testing.T) {
+func TestLoopStateMovesAcrossSectionsAndKeepsHistorySeparate(t *testing.T) {
 	state := loopState{
 		snapshot: monitor.Snapshot{Rows: []monitor.Row{
 			{PlanID: "running", Liveness: monitor.LivenessLive},
@@ -714,11 +714,11 @@ func TestLoopStateMovesAcrossSectionsAndKeepsHistoryVisible(t *testing.T) {
 	if quit := state.handleKey(term.KeyEvent{Key: term.KeyArrowDown}); quit || state.selected != 1 {
 		t.Fatalf("down across section boundary quit=%t selected=%d, want false, 1", quit, state.selected)
 	}
-	state.selected = 4
+	state.selected = 2
 	if quit := state.handleKey(term.KeyEvent{Key: term.KeyRune, Rune: 'h'}); quit {
 		t.Fatal("disabled history key unexpectedly quit")
 	}
-	if rows := state.visibleRows(); len(rows) != 5 || state.selected != 4 {
+	if rows := state.visibleRows(); len(rows) != 3 || state.selected != 2 {
 		t.Fatalf("history key changed visible rows or selection: rows=%d selected=%d", len(rows), state.selected)
 	}
 }
@@ -792,8 +792,8 @@ func TestFilterComposesWithWarningsHistoryAndRefresh(t *testing.T) {
 		t.Fatalf("filtered selection index=%d row=%+v ok=%t", state.selected, row, ok)
 	}
 	rows := state.visibleRows()
-	if len(rows) != 3 || rows[0].Kind != monitor.RowKindRepositoryWarning || rows[1].PlanID != "target" || rows[2].PlanID != "done" {
-		t.Fatalf("focused rows = %+v, want repository warning, target, and history", rows)
+	if len(rows) != 2 || rows[0].Kind != monitor.RowKindRepositoryWarning || rows[1].PlanID != "target" {
+		t.Fatalf("focused rows = %+v, want repository warning and target only", rows)
 	}
 
 	state.replaceSnapshot(monitor.Snapshot{Rows: []monitor.Row{
@@ -844,7 +844,7 @@ func TestTopLevelTabNavigationPreservesPlanSelectionAcrossRefresh(t *testing.T) 
 	if state.activePage() != PagePlans || !ok || state.selected != 0 || row.PlanID != "target" {
 		t.Fatalf("Tab page=%q selection=%d row=%+v ok=%t, want preserved target", state.activePage(), state.selected, row, ok)
 	}
-	for _, want := range []PageID{PageNotes, PagePlans} {
+	for _, want := range []PageID{PageHistory, PageNotes, PagePlans} {
 		state.handleKey(term.KeyEvent{Key: term.KeyArrowRight})
 		if state.activePage() != want {
 			t.Fatalf("right navigation page=%q, want %q", state.activePage(), want)
@@ -1648,7 +1648,7 @@ func TestShortcutLegendToggleEscapeAndModalKeys(t *testing.T) {
 	}
 }
 
-func TestRootQuitKeysAndHistoryDefault(t *testing.T) {
+func TestRootQuitKeysAndWIPDefault(t *testing.T) {
 	base := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	now := base
 	state := loopState{
@@ -1659,8 +1659,8 @@ func TestRootQuitKeysAndHistoryDefault(t *testing.T) {
 		}},
 		now: func() time.Time { return now },
 	}
-	if rows := state.visibleRows(); len(rows) != 3 || rows[0].PlanID != "active" || rows[1].PlanID != "done" || rows[2].PlanID != "abandoned" {
-		t.Fatalf("initial visible rows = %+v, want active and history plans", rows)
+	if rows := state.visibleRows(); len(rows) != 1 || rows[0].PlanID != "active" {
+		t.Fatalf("initial visible rows = %+v, want unfinished plans only", rows)
 	}
 	if quit := state.handleKey(term.KeyEvent{Key: term.KeyBackspace}); quit {
 		t.Fatal("root Backspace unexpectedly quit")
