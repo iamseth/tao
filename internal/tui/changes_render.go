@@ -59,9 +59,7 @@ func renderChangesPane(m DetailChangesModel, width, height int, p theme.Palette,
 	if updated.IsZero() {
 		updated = s.CollectedAt
 	}
-	if m.Updating {
-		strip += " | updating"
-	} else if !now.IsZero() && !updated.IsZero() {
+	if !now.IsZero() && !updated.IsZero() {
 		strip += " | " + rowlabel.DurationLabel(max(now.Sub(updated), 0)) + " ago"
 	}
 	if s.Base.DefaultBranch != "" {
@@ -95,8 +93,8 @@ func renderChangesPane(m DetailChangesModel, width, height int, p theme.Palette,
 		k := sort.SearchInts(m.Diff.Hunks, max(m.DiffOffset, 0)+1)
 		diffHeader += fmt.Sprintf(" hunk %d/%d", max(k, 1), len(m.Diff.Hunks))
 	}
-	if m.Updating || m.DiffStatus == "loading" {
-		diffHeader += " updating"
+	if m.DiffStatus == "loading" && m.Diff.Path == "" {
+		diffHeader += " loading"
 	}
 	if m.DiffStatus == "error" {
 		diffHeader += " failed"
@@ -256,8 +254,6 @@ func changesDiffRow(m DetailChangesModel, index, width int, p theme.Palette) str
 				text = "… byte/line limit: diff truncated"
 			case m.Diff.Binary:
 				text = "Binary file"
-			case m.DiffStatus == "loading" || m.Updating:
-				text = "Updating diff…"
 			case m.DiffStatus == "error":
 				text = "Diff failed (last good content above)"
 			case len(m.Diff.Lines) == 0:

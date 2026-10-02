@@ -60,7 +60,10 @@ func TestChangesTickerLoop(t *testing.T) {
 		ticker.channel <- time.Unix(sec, 0)
 		receiveChanges(t, starts)
 		// Snapshot stays visible while collection is held behind this barrier.
-		wait("updating")
+		frame := waitForFrame(t, output.writes)
+		if !strings.Contains(frame, "snapshot landed") || strings.Contains(strings.ToLower(frame), "updating") {
+			t.Fatalf("background refresh should retain content quietly: %q", frame)
+		}
 		release <- struct{}{}
 		wait("snapshot landed")
 	}

@@ -58,7 +58,7 @@ func TestChangesStates(t *testing.T) {
 	ready.RefreshError = "offline"
 	ready.Updating = true
 	text := strings.Join(renderChangesPane(ready, 160, 24, theme.Default().Palette(theme.ProfileNone), time.Time{}), "\n")
-	for _, want := range []string{"offline", "+ content", "stale", "updating", "not reviewed", "hunk 1/1"} {
+	for _, want := range []string{"offline", "+ content", "stale", "not reviewed", "hunk 1/1"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q: %s", want, text)
 		}

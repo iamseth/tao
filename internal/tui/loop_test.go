@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -446,7 +447,7 @@ func TestRunMovesSelectionAndRestoresTerminal(t *testing.T) {
 	var frames []string
 	for len(output.writes) > 0 {
 		value := <-output.writes
-		if strings.HasPrefix(value, clearScreenSequence) {
+		if strings.HasPrefix(value, "\x1b[1;1H") {
 			frames = append(frames, value)
 		}
 	}
@@ -535,8 +536,7 @@ func TestRunRefreshesAndHandlesResize(t *testing.T) {
 	terminal.setSize(term.Size{Width: 10, Height: 6})
 	terminal.resizes <- struct{}{}
 	resized := waitForFrame(t, output.writes)
-	body := strings.TrimPrefix(resized, clearScreenSequence)
-	lines := strings.Split(strings.TrimSuffix(body, "\n"), "\n")
+	lines := regexp.MustCompile(`\x1b\[\d+;1H`).Split(resized, -1)[1:]
 	if len(lines) > 6 {
 		t.Fatalf("resized frame has %d lines, want at most 6: %q", len(lines), resized)
 	}
@@ -1867,7 +1867,7 @@ func waitForFrame(t *testing.T, writes <-chan string) string {
 	for {
 		select {
 		case value := <-writes:
-			if strings.HasPrefix(value, clearScreenSequence) {
+			if strings.HasPrefix(value, "\x1b[1;1H") {
 				return value
 			}
 		case <-timer.C:

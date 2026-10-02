@@ -662,7 +662,7 @@ func (a App) writeFrame(state loopState) error {
 		}
 		frame.WriteString(rendered)
 	}
-	contents := frame.Bytes()
+	contents := []byte(terminalFrame(frame.String(), state.size))
 	n, err := a.Output.Write(contents)
 	if err != nil {
 		return fmt.Errorf("render dashboard: %w", err)
