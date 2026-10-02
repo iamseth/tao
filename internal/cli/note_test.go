@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/agent"
+	"github.com/iamseth/tao/internal/configtypes"
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/plannerroute"
@@ -61,6 +62,14 @@ func noteTestApp(t *testing.T, in any, repos ...taodata.Repo) (App, *bytes.Buffe
 	t.Helper()
 	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
 	registry := &fakeNoteRegistry{current: repos[0], repos: repos, dir: t.TempDir()}
+	home := t.TempDir()
+	t.Setenv("TAO_DATA_HOME", home)
+	for _, repo := range repos {
+		repo.Schema = "tao.repo.v1"
+		if err := (taodata.Registry{DataHome: home}).WriteRepo(repo); err != nil {
+			t.Fatal(err)
+		}
+	}
 	app := App{
 		Out:      out,
 		Err:      errOut,
@@ -571,15 +580,15 @@ func TestNoteRunGeneratesLinksThenUsesNormalRun(t *testing.T) {
 		if request.ReviewAgentKind() != runtimeconfig.AgentClaude {
 			t.Fatalf("note run lost repository review runtime: %+v", request)
 		}
-		if request.SessionTimeout != 37*time.Minute || request.Models.Base != "" {
+		if request.SessionTimeout != 0 || request.Agent != runtimeconfig.AgentPi || request.Models.Base != "" {
 			t.Fatalf("note-to-run handoff reloaded settings: %+v", request)
 		}
 		return service.Execute(ctx, request)
 	}
 	t.Cleanup(func() { executeSinglePlan = oldExecutor })
 	t.Setenv("TAO_SESSION_TIMEOUT", "37m")
-	t.Setenv(runtimeconfig.EnvReviewAgent, "pi")
-	repoMeta := (taodata.Repo{ID: "tao-123", Name: "tao", Root: "/repo", Branch: "main"}).WithReviewAgentDefault("claude")
+	t.Setenv("TAO_AGENT", "claude")
+	repoMeta := taodata.Repo{ID: "tao-123", Name: "tao", Root: "/repo", Branch: "main", RunDefaults: &taodata.RepoRunDefaults{Extra: configtypes.SettingsValues{"session_timeout": []byte(`"3m"`), "dangerously_skip_permissions": []byte(`true`), "review_agent": []byte(`"claude"`)}}}
 	app, out, errOut := noteTestApp(t, strings.NewReader(""), repoMeta)
 	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
 	app.RepoHealthCheck = func(context.Context, taodata.Repo) taodata.RepoHealth {
@@ -597,7 +606,7 @@ func TestNoteRunGeneratesLinksThenUsesNormalRun(t *testing.T) {
 		// A planner cannot change the invocation's captured execution settings.
 		t.Setenv(runtimeconfig.EnvSessionTimeout, "1s")
 		t.Setenv(runtimeconfig.EnvModel, "changed-model")
-		if request.Timeout != 37*time.Minute || request.PermissionMode != agent.PermissionModeBypassPermissions || !request.RejectOpenQuestions {
+		if request.Timeout != 0 || request.AgentKind != runtimeconfig.AgentPi || request.PermissionMode != agent.PermissionModeBypassPermissions || !request.RejectOpenQuestions {
 			t.Fatalf("generation policy = timeout %s, permission %q, reject=%v", request.Timeout, request.PermissionMode, request.RejectOpenQuestions)
 		}
 		if request.Session.Source == nil || request.Session.Source.Note == nil || request.Session.Source.Note.Text != "implement a small fix" || request.Session.Repo.ID != repoMeta.ID {
@@ -632,7 +641,7 @@ func TestNoteRunGeneratesLinksThenUsesNormalRun(t *testing.T) {
 	}
 	id = strings.TrimSpace(strings.TrimPrefix(out.String(), "Created note "))
 	out.Reset()
-	if err := app.Run(context.Background(), []string{"note", "run", "--execution-mode", "current", "--commit-policy", "none", "--no-review", "--dangerously-skip-permissions", id}); err != nil {
+	if err := app.Run(context.Background(), []string{"note", "run", "--agent=pi", "--session-timeout=0", "--execution-mode", "current", "--commit-policy", "none", "--no-review", id}); err != nil {
 		t.Fatal(err)
 	}
 	if generated != 1 || !strings.Contains(errOut.String(), "warning: old plan compatibility") || !strings.Contains(out.String(), "Promoted note "+id+" to plan "+fixture.id) {
@@ -652,6 +661,39 @@ func TestNoteRunGeneratesLinksThenUsesNormalRun(t *testing.T) {
 	}
 	if executeCalls != 1 {
 		t.Fatalf("shared run entry calls = %d, want one Service.Execute handoff", executeCalls)
+	}
+}
+
+func TestNoteRunRejectsInvalidFlagsBeforePromotion(t *testing.T) {
+	clearTaoEnv(t)
+	for _, arg := range []string{"--agent=robot", "--agent=", "--session-timeout=-1s", "--session-timeout=soon", "--session-timeout="} {
+		t.Run(arg, func(t *testing.T) {
+			meta := taodata.Repo{ID: "tao-123", Name: "tao", Root: "/repo", Branch: "main"}
+			app, _, _ := noteTestApp(t, strings.NewReader(""), meta)
+			app.PlanGenerator = planGeneratorFunc(func(context.Context, planning.GeneratePlanRequest) (*planning.GeneratePlanResult, error) {
+				t.Fatal("generator called")
+				return nil, nil
+			})
+			app.AcquireNotePromotionLock = func(context.Context, string, string, string) (func() error, error) {
+				t.Fatal("promotion lock acquired")
+				return nil, nil
+			}
+			item, err := app.noteRepository(meta).Create(context.Background(), "implement a fix", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = app.Run(context.Background(), []string{"note", "run", arg, item.ID})
+			if err == nil || !strings.Contains(err.Error(), strings.Split(arg, "=")[0]+":") {
+				t.Fatalf("%s: %v", arg, err)
+			}
+			stored, err := app.noteRepository(meta).Get(context.Background(), item.ID)
+			if err != nil || stored.Status != note.StatusOpen || stored.Promotion != nil {
+				t.Fatalf("note mutated: %+v, %v", stored, err)
+			}
+			if _, err := os.Stat(app.registry().PlansDir(meta)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("plans allocated: %v", err)
+			}
+		})
 	}
 }
 
@@ -1215,6 +1257,7 @@ func TestNoteRunGenerationUsesRepositoryBaseModel(t *testing.T) {
 			t.Setenv(runtimeconfig.EnvModel, "env-base")
 			t.Setenv(runtimeconfig.EnvRunModel, "env-run")
 			t.Setenv(runtimeconfig.EnvReviewModel, "env-review")
+			meta.Schema = "tao.repo.v1"
 			meta.RunDefaults = &taodata.RepoRunDefaults{Models: &taodata.RepoModelDefaults{
 				Base: "repo-base", Run: "repo-run", Review: "repo-review",
 			}}
@@ -1235,8 +1278,8 @@ func TestNoteRunGenerationUsesRepositoryBaseModel(t *testing.T) {
 				for i, arg := range args {
 					if arg == "--model" && i+1 < len(args) {
 						found = true
-						if args[i+1] != "repo-base" {
-							t.Fatalf("planning model = %q, want repository base", args[i+1])
+						if args[i+1] != "env-base" {
+							t.Fatalf("planning model = %q, want captured environment base", args[i+1])
 						}
 					}
 				}

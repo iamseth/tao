@@ -55,6 +55,7 @@ _tao() {
     'run:Run pending slices with the selected agent'
     'commit:Safely commit outside managed plan worktrees'
     'repo:Inspect registered repositories'
+    'config:Inspect and edit scoped settings'
     'ste:Fetch a foreign repository snapshot for read-only scouting'
     'steal:Fetch a foreign repository snapshot for read-only scouting'
     'n:Capture and maintain repository notes'
@@ -129,8 +130,8 @@ _tao() {
       fi
       ;;
     r|ru|run)
-      _arguments '--auto-rework=-[deprecated: use --max-rework-attempts (false=0, true=5)]:boolean:(true false)' '--commit-policy[automatic commit policy: slice or none]:policy:(slice none)' '--continue[continue a blocked slice at its preserved execution boundary]' '--dangerously-skip-permissions[legacy no-op for the Pi agent]' '--execution-mode[execution mode: isolated or current]:mode:(isolated current)' '--max-rework-attempts[maximum automatic rework cycles (0 disables)]:count:' '--max-slices[maximum slices to run; use 0 for all]:count:' '--model[override the agent model for every role in this run]:value:' '--no-review[disable automatic plan review for this run]' '--no-run-header[disable the pinned run header]' '--pull-request[create a GitHub pull request after a completed full run]' '--repair-verification[append and run one bounded repair for current failed final verification]' '--restart[restart a safe blocked automatic slice on a newer baseline]' '--reverify[rerun final verification at the exact recorded failed head]' '--review-agent[select the plan review runtime: pi or claude (default inherit)]:agent:(pi claude)' '--rework-escalation-from-attempt[first automatic rework attempt eligible for escalation]:count:' '--rework-escalation-model[override the model for late automatic rework attempts]:value:' '--rework-restart[start a new automatic-rework budget after a previous stop]'
-      if _tao_at_positional 3 1 0 ',,' '--commit-policy' '--execution-mode' '--max-rework-attempts' '--max-slices' '--model' '--review-agent' '--rework-escalation-from-attempt' '--rework-escalation-model'; then
+      _arguments '--agent[agent runtime: pi or claude]:agent:(pi claude)' '--auto-rework=-[deprecated: use --max-rework-attempts (false=0, true=5)]:boolean:(true false)' '--commit-policy[automatic commit policy: slice or none]:policy:(slice none)' '--continue[continue a blocked slice at its preserved execution boundary]' '--dangerously-skip-permissions[bypass Claude permission checks; compatibility no-op for Pi]' '--execution-mode[execution mode: isolated or current]:mode:(isolated current)' '--max-rework-attempts[maximum automatic rework cycles (0 disables)]:count:' '--max-slices[maximum slices to run; use 0 for all]:count:' '--model[override the agent model for every role in this run]:value:' '--no-review[disable automatic plan review for this run]' '--no-run-header[disable the pinned run header]' '--pull-request[create a GitHub pull request after a completed full run]' '--repair-verification[append and run one bounded repair for current failed final verification]' '--restart[restart a safe blocked automatic slice on a newer baseline]' '--reverify[rerun final verification at the exact recorded failed head]' '--review-agent[select the plan review runtime: pi or claude (default inherit)]:agent:(pi claude)' '--rework-escalation-from-attempt[first automatic rework attempt eligible for escalation]:count:' '--rework-escalation-model[override the model for late automatic rework attempts]:value:' '--rework-restart[start a new automatic-rework budget after a previous stop]' '--session-timeout[session timeout as a Go duration; 0 disables]:duration:'
+      if _tao_at_positional 3 1 0 ',,' '--agent' '--commit-policy' '--execution-mode' '--max-rework-attempts' '--max-slices' '--model' '--review-agent' '--rework-escalation-from-attempt' '--rework-escalation-model' '--session-timeout'; then
         plan_ids=("${(@f)$(${words[1]} complete run-plan-ids 2>/dev/null)}")
         compadd -a plan_ids
       fi
@@ -140,7 +141,7 @@ _tao() {
       ;;
     repo)
       if (( CURRENT == 3 )); then
-        subcommands=('list:List registered repositories and health summaries' 'show:Show details for one registered repository' 'config:Show or set repository run defaults' 'doctor:Check registered repositories for health problems')
+        subcommands=('list:List registered repositories and health summaries' 'show:Show details for one registered repository' 'config:Deprecated compatibility adapter; use tao config' 'doctor:Check registered repositories for health problems')
         _describe -t commands 'repo command' subcommands
         return
       fi
@@ -156,6 +157,33 @@ _tao() {
           ;;
       esac
       ;;
+    config)
+      if (( CURRENT == 3 )); then
+        subcommands=('get:get scoped settings' 'set:set scoped settings' 'unset:unset scoped settings')
+        _describe -t commands 'config command' subcommands
+        return
+      fi
+      case ${words[3]} in
+        get)
+          _arguments '--global[use global settings instead of repository settings]' '--repo[select a registered repository by ID prefix or exact name]:value:'
+          if _tao_at_positional 4 1 0 ',,' '--repo'; then
+            compadd -- 'agent' 'budget.plan.assistant_messages.warn' 'budget.plan.cost.warn' 'budget.plan.errored_messages.warn' 'budget.plan.output_tokens.warn' 'budget.plan.tool_calls.warn' 'budget.slice.assistant_messages.warn' 'budget.slice.cost.stop' 'budget.slice.cost.warn' 'budget.slice.errored_messages.warn' 'budget.slice.output_tokens.stop' 'budget.slice.output_tokens.warn' 'budget.slice.tool_calls.warn' 'commit_policy' 'dangerously_skip_permissions' 'execution_mode' 'max_rework_attempts' 'max_slices' 'models.merge_review_model' 'models.model' 'models.resolver_model' 'models.review_model' 'models.rework_escalation_model' 'models.run_model' 'pull_request' 'review_agent' 'review_enabled' 'rework_escalation_from_attempt' 'run_header' 'session_timeout' 'session_warn_percent' 'theme' 'update'
+          fi
+          ;;
+        set)
+          _arguments '--global[use global settings instead of repository settings]' '--repo[select a registered repository by ID prefix or exact name]:value:'
+          if _tao_at_positional 4 1 0 ',,' '--repo'; then
+            compadd -- 'agent' 'budget.plan.assistant_messages.warn' 'budget.plan.cost.warn' 'budget.plan.errored_messages.warn' 'budget.plan.output_tokens.warn' 'budget.plan.tool_calls.warn' 'budget.slice.assistant_messages.warn' 'budget.slice.cost.stop' 'budget.slice.cost.warn' 'budget.slice.errored_messages.warn' 'budget.slice.output_tokens.stop' 'budget.slice.output_tokens.warn' 'budget.slice.tool_calls.warn' 'commit_policy' 'dangerously_skip_permissions' 'execution_mode' 'max_rework_attempts' 'max_slices' 'models.merge_review_model' 'models.model' 'models.resolver_model' 'models.review_model' 'models.rework_escalation_model' 'models.run_model' 'pull_request' 'review_agent' 'review_enabled' 'rework_escalation_from_attempt' 'run_header' 'session_timeout' 'session_warn_percent' 'theme' 'update'
+          fi
+          ;;
+        unset)
+          _arguments '--global[use global settings instead of repository settings]' '--repo[select a registered repository by ID prefix or exact name]:value:'
+          if _tao_at_positional 4 1 0 ',,' '--repo'; then
+            compadd -- 'agent' 'budget.plan.assistant_messages.warn' 'budget.plan.cost.warn' 'budget.plan.errored_messages.warn' 'budget.plan.output_tokens.warn' 'budget.plan.tool_calls.warn' 'budget.slice.assistant_messages.warn' 'budget.slice.cost.stop' 'budget.slice.cost.warn' 'budget.slice.errored_messages.warn' 'budget.slice.output_tokens.stop' 'budget.slice.output_tokens.warn' 'budget.slice.tool_calls.warn' 'commit_policy' 'dangerously_skip_permissions' 'execution_mode' 'max_rework_attempts' 'max_slices' 'models.merge_review_model' 'models.model' 'models.resolver_model' 'models.review_model' 'models.rework_escalation_model' 'models.run_model' 'pull_request' 'review_agent' 'review_enabled' 'rework_escalation_from_attempt' 'run_header' 'session_timeout' 'session_warn_percent' 'theme' 'update'
+          fi
+          ;;
+      esac
+      ;;
     ste|stea|steal)
       if (( CURRENT == 3 )); then
         subcommands=('fetch:Perform the hardened shallow clone into Tao'\''s data home')
@@ -168,7 +196,7 @@ _tao() {
       esac
       ;;
     n|no|not|note)
-      _arguments '--all[include all note statuses]' '--commit-policy[automatic commit policy: slice or none]:policy:(slice none)' '--dangerously-skip-permissions[legacy no-op for the Pi agent]' '--execution-mode[execution mode: isolated or current]:mode:(isolated current)' '--limit[maximum notes to list (0 means unlimited)]:count:' '--max-slices[maximum slices to run; use 0 for all]:count:' '--no-review[disable automatic plan review for this run]' '--plan[validated normal plan destination]:plan:' '--planner-arm[force this planner runtime and record a manual override]:runtime:(pi claude)' '--planner-routing[planner routing mode for this run: off, shadow, or randomized]:mode:(off shadow randomized)' '--pull-request[create a GitHub pull request after a completed full run]' '--reason[archive reason]:text:' '--repo[registered repository ID prefix or exact name]:repository:' '*--status[status to list: open, promoted, or archived (repeatable)]:status:(open promoted archived)' '*--tag[tag to apply or require (repeatable)]:tag:'
+      _arguments '--agent[agent runtime: pi or claude]:agent:(pi claude)' '--all[include all note statuses]' '--commit-policy[automatic commit policy: slice or none]:policy:(slice none)' '--dangerously-skip-permissions[bypass Claude permission checks; compatibility no-op for Pi]' '--execution-mode[execution mode: isolated or current]:mode:(isolated current)' '--limit[maximum notes to list (0 means unlimited)]:count:' '--max-slices[maximum slices to run; use 0 for all]:count:' '--no-review[disable automatic plan review for this run]' '--plan[validated normal plan destination]:plan:' '--planner-arm[force this planner runtime and record a manual override]:runtime:(pi claude)' '--planner-routing[planner routing mode for this run: off, shadow, or randomized]:mode:(off shadow randomized)' '--pull-request[create a GitHub pull request after a completed full run]' '--reason[archive reason]:text:' '--repo[registered repository ID prefix or exact name]:repository:' '--session-timeout[session timeout as a Go duration; 0 disables]:duration:' '*--status[status to list: open, promoted, or archived (repeatable)]:status:(open promoted archived)' '*--tag[tag to apply or require (repeatable)]:tag:'
       if (( CURRENT == 3 )); then
         subcommands=('create:Create a note from arguments or standard input' 'c:Create a note from arguments or standard input' 'list:List notes (the default subcommand)' 'l:List notes (the default subcommand)' 'show:Show raw note text and provenance' 's:Show raw note text and provenance' 'edit:Edit a note'\''s text and optional tags' 'e:Edit a note'\''s text and optional tags' 'archive:Archive an open note' 'a:Archive an open note' 'reopen:Reopen an archived note' 'run:Generate and run a plan for a clear note' 'r:Generate and run a plan for a clear note')
         _describe -t commands 'note command' subcommands
@@ -180,31 +208,31 @@ _tao() {
         list|l)
           ;;
         show|s)
-          if _tao_at_positional 4 1 0 ',,' '--commit-policy' '--execution-mode' '--limit' '--max-slices' '--plan' '--planner-arm' '--planner-routing' '--reason' '--repo' '--status' '--tag'; then
+          if _tao_at_positional 4 1 0 ',,' '--agent' '--commit-policy' '--execution-mode' '--limit' '--max-slices' '--plan' '--planner-arm' '--planner-routing' '--reason' '--repo' '--session-timeout' '--status' '--tag'; then
             plan_ids=("${(@f)$(${words[1]} complete note-ids 2>/dev/null)}")
             compadd -a plan_ids
           fi
           ;;
         edit|e)
-          if _tao_at_positional 4 1 0 ',,' '--commit-policy' '--execution-mode' '--limit' '--max-slices' '--plan' '--planner-arm' '--planner-routing' '--reason' '--repo' '--status' '--tag'; then
+          if _tao_at_positional 4 1 0 ',,' '--agent' '--commit-policy' '--execution-mode' '--limit' '--max-slices' '--plan' '--planner-arm' '--planner-routing' '--reason' '--repo' '--session-timeout' '--status' '--tag'; then
             plan_ids=("${(@f)$(${words[1]} complete note-ids 2>/dev/null)}")
             compadd -a plan_ids
           fi
           ;;
         archive|a)
-          if _tao_at_positional 4 1 0 ',,' '--commit-policy' '--execution-mode' '--limit' '--max-slices' '--plan' '--planner-arm' '--planner-routing' '--reason' '--repo' '--status' '--tag'; then
+          if _tao_at_positional 4 1 0 ',,' '--agent' '--commit-policy' '--execution-mode' '--limit' '--max-slices' '--plan' '--planner-arm' '--planner-routing' '--reason' '--repo' '--session-timeout' '--status' '--tag'; then
             plan_ids=("${(@f)$(${words[1]} complete note-ids 2>/dev/null)}")
             compadd -a plan_ids
           fi
           ;;
         reopen)
-          if _tao_at_positional 4 1 0 ',,' '--commit-policy' '--execution-mode' '--limit' '--max-slices' '--plan' '--planner-arm' '--planner-routing' '--reason' '--repo' '--status' '--tag'; then
+          if _tao_at_positional 4 1 0 ',,' '--agent' '--commit-policy' '--execution-mode' '--limit' '--max-slices' '--plan' '--planner-arm' '--planner-routing' '--reason' '--repo' '--session-timeout' '--status' '--tag'; then
             plan_ids=("${(@f)$(${words[1]} complete note-ids 2>/dev/null)}")
             compadd -a plan_ids
           fi
           ;;
         run|r)
-          if _tao_at_positional 4 1 0 ',,' '--commit-policy' '--execution-mode' '--limit' '--max-slices' '--plan' '--planner-arm' '--planner-routing' '--reason' '--repo' '--status' '--tag'; then
+          if _tao_at_positional 4 1 0 ',,' '--agent' '--commit-policy' '--execution-mode' '--limit' '--max-slices' '--plan' '--planner-arm' '--planner-routing' '--reason' '--repo' '--session-timeout' '--status' '--tag'; then
             plan_ids=("${(@f)$(${words[1]} complete note-ids 2>/dev/null)}")
             compadd -a plan_ids
           fi

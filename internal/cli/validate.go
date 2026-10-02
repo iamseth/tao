@@ -36,6 +36,10 @@ func (a App) validate(ctx context.Context, repo plan.Resolver, args []string) er
 	if err != nil {
 		return err
 	}
+	a, err = a.settingsForPlanRoot(ctx, detail.State.Repo.Root)
+	if err != nil {
+		return err
+	}
 	budget, err := a.envSnapshot().Budget()
 	if err != nil {
 		return err

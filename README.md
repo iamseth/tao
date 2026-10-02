@@ -173,16 +173,16 @@ commands also accept the short unambiguous prefixes shown by help.
 | Repository | `init`, `repo`, `steal` | Register checkouts, inspect repository configuration and health, and fetch a read-only scouting snapshot. |
 | Monitoring | `ui`, `monitor`, `status`, `insights`, `log` | See cross-repository work, resolved settings, telemetry, and run logs; `insights` offers `--digest` or `--scorecard`, optionally with `--all-repos`. |
 | Prompts and agents | `prompt`, `draft-prompt`, `install-prompts` | Render, save, and install Tao's agent prompts. |
-| Settings | `completion`, `doctor`, `update` | Configure shell support, diagnose setup, and update release binaries. |
+| Settings | `config`, `completion`, `doctor`, `update` | Manage scoped preferences, configure shell support, diagnose setup, and update release binaries. |
 | Other | `version`, `slice-complete`, `slice-blocked` | Inspect the build or support Tao-managed agent lifecycle handoffs and compatibility. |
 
 ### Everyday command paths
 
-Open the terminal dashboard for **Backlog** (notes), **WIP** (plans, including
-history). It opens on WIP and supports common actions across registered
-repositories. Press `c` on WIP to open plan-detail **Changes**, a read-only view
-of the live review-base delta. Use `tao status` for diagnostics
-and `tao repo config` for repository settings:
+Open the terminal dashboard for **Notes**, **Plans** (including history),
+**Settings**, and **Debug**. It opens on Plans and supports common actions across
+registered repositories. Press `c` on Plans to open plan-detail **Changes**, a
+read-only view of the live review-base delta. Use `tao status` for diagnostics
+and `tao config` for saved global/repository preferences:
 
 ```sh
 tao ui
@@ -243,13 +243,20 @@ TAO_MODEL=provider/model         # optional shared base model
 TAO_MAX_REWORK_ATTEMPTS=5         # automatic rework; 0 disables
 ```
 
-Environment and built-in defaults establish the baseline, repository defaults
-override it, and explicit per-run flags win over both, including `false` and `0` values.
-Use `tao repo config` to manage repository defaults and `tao status` to inspect
-resolved settings. For example, `tao repo config --max-rework-attempts 0`
-disables automatic rework for this repository; use `unset` to inherit again.
-See the [configuration reference](docs/configuration.md) for all settings,
-budgets, model selection, and planner routing.
+Precedence is **built-in → global → repository → environment → flags**,
+including explicit `false` values. Save durable preferences with `tao config`:
+
+```sh
+tao config set models.model provider/model --global
+tao config set pull_request true # current registered repository
+tao config unset pull_request    # restore inheritance
+tao status                      # effective values, sources, and saved values
+```
+
+Environment now overrides repository defaults; `tao repo config` remains a
+compatibility adapter for one release. See the
+[configuration reference](docs/configuration.md) for scopes, migration,
+all settings, budgets, model selection, and planner routing.
 
 See [wrap-up and continuation](docs/usage-guide.md#session-wrap-up-and-continuation)
 for advisory session warnings and private resume notes.

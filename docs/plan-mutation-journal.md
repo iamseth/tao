@@ -166,21 +166,15 @@ prefix cannot cause duplicates or skipped later events.
 
 ### Automatic rework reconstruction
 
-Queue progress is persisted after the authoritative plan mutation and may lag it
-after interruption. A recovering driver reconstructs attempts and prior-finding
-state from the settled plan before deciding whether execution is still needed.
-For the recurring-file window, the current review is the terminal observation;
-the preceding observations come from the first `expected_files` entry of slices
-in the two immediately preceding generated rounds. Associated expected files do
-not count, and generated-round evidence after the current baseline must be safe,
-complete, and contiguous. Queue recovery records that third observation once and
-must not execute or reopen after the corresponding `rework_stopped` event has
-settled.
+A direct driver reads the settled plan's generated rounds and events before
+deciding whether execution or reopening is allowed. Persisted `rework_stopped`
+evidence still requires explicit restart; new location recurrence is advisory,
+not stop authority. Historical generated slices without `rework_round` remain
+compatible round-count evidence. See the [rework lifecycle contract](plan-format.md#events).
 
-Historical generated slices without `rework_round` remain compatible round-count
-evidence, but incomplete, unsafe, or associated-only history never authorizes a
-retroactive recurring-file stop. This reconstruction does not add artifact
-fields or make queue snapshots lifecycle authority.
+Legacy cross-plan `queue.json` and `queue.jsonl` files are ignored, not recovered,
+migrated, or deleted. They are not lifecycle authority. This is distinct from
+the valid per-plan pending/completed slice queues described above.
 
 ## Write and settlement order
 

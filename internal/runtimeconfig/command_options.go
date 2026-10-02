@@ -27,22 +27,23 @@ type CommandAuxiliaryFlags struct {
 	ReworkEscalationFromAttempt *int
 }
 
-// CommandOptionsInput uses one captured snapshot; callers must supply only
-// explicitly provided, registered flags. Empty model/enum fields remain unset.
+// CommandOptionsInput uses one composed snapshot: global and repository
+// settings already sit beneath the captured environment (see ResolveSettings).
+// Callers must supply only explicitly provided, registered flags. Empty
+// model/enum fields remain unset.
 type CommandOptionsInput struct {
-	Env              EnvSnapshot
-	Repository       RunOptionsPatch
-	RepositoryRework ReworkOptionsPatch
-	Flags            RunOptionsPatch
-	Profile          CommandProfile
-	Auxiliary        CommandAuxiliaryFlags
+	Env       EnvSnapshot
+	Flags     RunOptionsPatch
+	Profile   CommandProfile
+	Auxiliary CommandAuxiliaryFlags
 }
 
 // CommandOptions contains applicable configuration, never execution authority.
 // Sources is keyed by environment name (or --max-slices/--continue) and records
-// "default", "env", "repository", or "flag". Unset model roles report their
-// base model's winning source. Inapplicable options retain inert built-ins;
-// their keys are absent from Sources. Models retain their normal lazy fallback.
+// the winning layer: "default", "global", "repository", "env", or "flag".
+// Unset model roles report their base model's winning source. Inapplicable
+// options retain inert built-ins; their keys are absent from Sources. Models
+// retain their normal lazy fallback.
 type CommandOptions struct {
 	RunOptions                  ResolvedRunOptions
 	AutoRework                  AutoReworkPolicy
@@ -60,7 +61,7 @@ type commandOptionRule struct {
 }
 
 // The same rules drive admission, patch filtering, and presentation. Auxiliary
-// settings have no patch projection; repository defaults cannot set them.
+// settings have no patch projection; they resolve from the snapshot and flags.
 var commandOptionRules = []commandOptionRule{
 	{"--max-slices", []CommandProfile{CommandRun}, func(p RunOptionsPatch) RunOptionsPatch { return RunOptionsPatch{MaxSlices: p.MaxSlices} }},
 	{"--continue", []CommandProfile{CommandRun}, func(p RunOptionsPatch) RunOptionsPatch { return RunOptionsPatch{Continue: p.Continue} }},
@@ -122,11 +123,12 @@ func ApplicableCommands(key string) []string {
 	return nil
 }
 
-// ResolveCommandOptions composes built-ins, captured environment, repository,
-// and explicit invocation options without consulting process state. Applicable
-// malformed environment settings are rejected even when a later layer overrides
-// them, preserving EnvSnapshot's admission contract. PR/current-workspace
-// checks are deliberately left to state-dependent execution validation.
+// ResolveCommandOptions composes the snapshot's effective values (built-ins,
+// global and repository settings, then the captured environment) with explicit
+// invocation options, without consulting process state. Applicable malformed
+// settings are rejected even when a flag overrides them, preserving
+// EnvSnapshot's admission contract. PR/current-workspace checks are
+// deliberately left to state-dependent execution validation.
 func ResolveCommandOptions(input CommandOptionsInput) (CommandOptions, error) {
 	switch input.Profile {
 	case CommandRun, CommandReview, CommandMerge, CommandPromptRun, CommandPromptOther:
@@ -140,20 +142,17 @@ func ResolveCommandOptions(input CommandOptionsInput) (CommandOptions, error) {
 	if err != nil {
 		return CommandOptions{}, err
 	}
-	origins := make(map[string]string)
-	for _, row := range input.Env.Status() {
-		origins[row.Name] = row.Source
-	}
+	origins := snapshotOrigins(input.Env)
 	for _, rule := range commandOptionRules {
 		if !slices.Contains(rule.profiles, input.Profile) {
 			continue
 		}
-		if err := input.Env.Require(rule.key); err != nil {
+		if err := input.Env.Require(admissionKey(rule.key)); err != nil {
 			return CommandOptions{}, fmt.Errorf("environment: %w", err)
 		}
 		out.Sources[rule.key] = "default"
-		if origins[rule.key] == "env" {
-			out.Sources[rule.key] = "env"
+		if origin := origins[rule.key]; origin != "" {
+			out.Sources[rule.key] = origin
 		}
 		if rule.project == nil {
 			continue
@@ -163,7 +162,6 @@ func ResolveCommandOptions(input CommandOptionsInput) (CommandOptions, error) {
 			source string
 		}{
 			{defaults.RunOptionsPatch, out.Sources[rule.key]},
-			{input.Repository, "repository"},
 			{input.Flags, "flag"},
 		} {
 			patch := rule.project(stage.patch)
@@ -205,6 +203,32 @@ func ResolveCommandOptions(input CommandOptionsInput) (CommandOptions, error) {
 	return out, nil
 }
 
+// admissionKey maps a rule to the snapshot key that records its failures.
+// max_slices has no environment alias, so its saved-value diagnostics live
+// under the canonical setting key rather than the flag name.
+func admissionKey(ruleKey string) string {
+	if ruleKey == "--max-slices" {
+		return "max_slices"
+	}
+	return ruleKey
+}
+
+// snapshotOrigins reports each option's winning layer within the composed
+// snapshot. Environment rows carry their own provenance; max_slices has no
+// environment alias and is read from the persisted-settings projection.
+func snapshotOrigins(env EnvSnapshot) map[string]string {
+	origins := make(map[string]string)
+	for _, row := range env.Status() {
+		origins[row.Name] = row.Source
+	}
+	for _, setting := range env.SettingsStatus() {
+		if setting.Key == "max_slices" && setting.Source != "default" {
+			origins["--max-slices"] = setting.Source
+		}
+	}
+	return origins
+}
+
 func commandAuxiliaryValue[T any](out *CommandOptions, key string, value T, flag *T) T {
 	if flag != nil {
 		out.Sources[key] = "flag"
@@ -216,19 +240,12 @@ func commandAuxiliaryValue[T any](out *CommandOptions, key string, value T, flag
 func (out *CommandOptions) resolveRunAuxiliary(input CommandOptionsInput, defaults EnvDefaults) error {
 	aux := input.Auxiliary
 	out.NoRunHeader = commandAuxiliaryValue(out, EnvRunHeader, !defaults.RunHeader, aux.NoRunHeader)
-	for _, stage := range []struct {
-		patch  ReworkOptionsPatch
-		source string
-	}{
-		{input.RepositoryRework, "repository"},
-		{ReworkOptionsPatch{MaxAttempts: aux.MaxReworkAttempts, AutoRework: aux.AutoRework, EscalationFromAttempt: aux.ReworkEscalationFromAttempt}, "flag"},
-	} {
-		if stage.patch.MaxAttempts != nil || stage.patch.AutoRework != nil {
-			out.Sources[EnvMaxReworkAttempts] = stage.source
-		}
-		if stage.patch.EscalationFromAttempt != nil {
-			out.Sources[EnvReworkEscalationFromAttempt] = stage.source
-		}
+	flags := ReworkOptionsPatch{MaxAttempts: aux.MaxReworkAttempts, AutoRework: aux.AutoRework, EscalationFromAttempt: aux.ReworkEscalationFromAttempt}
+	if flags.MaxAttempts != nil || flags.AutoRework != nil {
+		out.Sources[EnvMaxReworkAttempts] = "flag"
+	}
+	if flags.EscalationFromAttempt != nil {
+		out.Sources[EnvReworkEscalationFromAttempt] = "flag"
 	}
 	for _, row := range input.Env.Status() {
 		if row.Name == EnvAutoRework {
@@ -240,8 +257,7 @@ func (out *CommandOptions) resolveRunAuxiliary(input CommandOptionsInput, defaul
 	}
 	resolved, err := ResolveReworkOptions(true, false,
 		ReworkOptionsPatch{MaxAttempts: defaults.MaxReworkAttempts, EscalationFromAttempt: defaults.ReworkEscalationFromAttempt},
-		input.RepositoryRework,
-		ReworkOptionsPatch{MaxAttempts: aux.MaxReworkAttempts, AutoRework: aux.AutoRework, EscalationFromAttempt: aux.ReworkEscalationFromAttempt})
+		flags)
 	if err != nil {
 		return out.optionError(err, EnvMaxReworkAttempts, EnvReworkEscalationFromAttempt)
 	}

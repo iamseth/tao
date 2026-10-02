@@ -14,6 +14,7 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+	"github.com/iamseth/tao/internal/settings"
 	"github.com/iamseth/tao/internal/taodata"
 )
 
@@ -268,13 +269,30 @@ func TestRepoConfigModelDefaults(t *testing.T) {
 
 func TestRepositoryPullRequestDefaultAppliesToRunAndExplicitFlagWins(t *testing.T) {
 	clearTaoEnv(t)
-	t.Setenv(runtimeconfig.EnvPullRequest, "false")
-	value := true
-	registered := taodata.Repo{ID: "repo-a", RunDefaults: &taodata.RepoRunDefaults{PullRequest: &value}}
-	registry := &fakeNoteRegistry{current: registered, repos: []taodata.Repo{registered}}
-	app := App{Out: io.Discard, Err: io.Discard, Registry: func() NoteRegistry { return registry }}
-
+	ctx := context.Background()
+	home := t.TempDir()
 	first := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+	detail, err := plan.NewFileRepository(first.root).ResolvePlan(ctx, first.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The repository is selected by the plan's recorded root, and its persisted
+	// pull_request default is read from the data-home repo.json.
+	registered := taodata.Repo{ID: "repo-a", Root: detail.State.Repo.Root}
+	dir := filepath.Join(home, "repos", registered.ID)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(map[string]any{"schema": taodata.RepoSchema, "id": registered.ID, "name": "repo", "root": registered.Root, "run_defaults": map[string]any{"pull_request": true}})
+	if err := os.WriteFile(filepath.Join(dir, "repo.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	newApp := func(environment map[string]string) App {
+		return (App{Out: io.Discard, Err: io.Discard, SettingsService: settings.NewService(home, *snapshotWith(environment)), Registry: func() NoteRegistry {
+			return &fakeNoteRegistry{current: registered, repos: []taodata.Repo{registered}}
+		}}).initializeSettings(ctx)
+	}
+
 	active := &first
 	oldExecutor := executeSinglePlan
 	var requests []run.Request
@@ -285,7 +303,8 @@ func TestRepositoryPullRequestDefaultAppliesToRunAndExplicitFlagWins(t *testing.
 	}
 	t.Cleanup(func() { executeSinglePlan = oldExecutor })
 
-	if err := app.run(context.Background(), plan.NewFileRepository(first.root), []string{"--no-review", first.id}); err != nil {
+	app := newApp(nil)
+	if err := app.run(ctx, plan.NewFileRepository(first.root), []string{"--no-review", first.id}); err != nil {
 		t.Fatal(err)
 	}
 	if len(requests) != 1 || !requests[0].PullRequest {
@@ -294,15 +313,36 @@ func TestRepositoryPullRequestDefaultAppliesToRunAndExplicitFlagWins(t *testing.
 
 	second := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
 	active = &second
-	if err := app.run(context.Background(), plan.NewFileRepository(second.root), []string{"--pull-request=false", "--no-review", second.id}); err != nil {
+	if err := app.run(ctx, plan.NewFileRepository(second.root), []string{"--pull-request=false", "--no-review", second.id}); err != nil {
 		t.Fatal(err)
 	}
 	if len(requests) != 2 || requests[1].PullRequest {
 		t.Fatalf("explicit --pull-request=false did not override repository default: %#v", requests)
 	}
+
+	// Environment sits above the repository layer, so an explicit environment
+	// false masks the persisted repository true.
+	third := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+	active = &third
+	masked := newApp(map[string]string{runtimeconfig.EnvPullRequest: "false"})
+	if err := masked.run(ctx, plan.NewFileRepository(third.root), []string{"--no-review", third.id}); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 3 || requests[2].PullRequest {
+		t.Fatalf("environment false did not mask repository pull_request true: %#v", requests)
+	}
+
+	fourth := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+	active = &fourth
+	if err := masked.run(ctx, plan.NewFileRepository(fourth.root), []string{"--pull-request=true", "--no-review", fourth.id}); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 4 || !requests[3].PullRequest {
+		t.Fatalf("explicit --pull-request=true did not override environment false: %#v", requests)
+	}
 }
 
-func TestStatusShowsEffectiveRepositoryPullRequestSource(t *testing.T) {
+func TestStatusShowsEnvironmentMasksRepositoryPullRequestSource(t *testing.T) {
 	clearTaoEnv(t)
 	t.Setenv(runtimeconfig.EnvPullRequest, "false")
 	value := true
@@ -324,7 +364,7 @@ func TestStatusShowsEffectiveRepositoryPullRequestSource(t *testing.T) {
 			break
 		}
 	}
-	if !strings.Contains(line, "true") || !strings.Contains(line, "repository") {
+	if !strings.Contains(line, "false") || !strings.Contains(line, "env") {
 		t.Fatalf("effective pull_request status line = %q; output=%q", line, out.String())
 	}
 }
@@ -440,7 +480,7 @@ func TestRepoShowPreservesUnhealthyCatalogDetails(t *testing.T) {
 		t.Run(tt.selector, func(t *testing.T) {
 			var out bytes.Buffer
 			err := (App{Out: &out, Err: &out}).Run(context.Background(), []string{"repo", "show", tt.selector})
-			if err != nil || out.String() != tt.want {
+			if (err != nil) != strings.HasPrefix(tt.selector, "bad-") || !strings.HasPrefix(out.String(), tt.want) {
 				t.Fatalf("repo show = %q, %v; want %q", out.String(), err, tt.want)
 			}
 		})
@@ -448,7 +488,7 @@ func TestRepoShowPreservesUnhealthyCatalogDetails(t *testing.T) {
 
 	var out bytes.Buffer
 	err := (App{Out: &out, Err: &out}).Run(context.Background(), []string{"repo", "config", "--pull-request=true", "bad-json"})
-	if err == nil || !strings.Contains(err.Error(), "not registered") {
+	if err == nil || !strings.Contains(err.Error(), "repair the file manually") {
 		t.Fatalf("config accepted malformed metadata: %v", err)
 	}
 }

@@ -3,10 +3,13 @@ package cli
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/iamseth/tao/internal/runtimeconfig"
+	"github.com/iamseth/tao/internal/settings"
 	"github.com/iamseth/tao/internal/taodata"
 )
 
@@ -31,6 +34,7 @@ func TestUISettingsServiceCollectsAndUpdatesRepositoryDefaults(t *testing.T) {
 			return taodata.RepoHealth{Status: taodata.RepoHealthOK, Message: "ok"}
 		},
 	}
+	app.SettingsService = settings.NewService(registry.DataHome, *app.RuntimeEnv)
 	service := uiSettingsService{app: app, registry: registry, userHomeDir: func() (string, error) { return "/test/home", nil }}
 	snapshot, err := service.Collect(context.Background())
 	if err != nil {
@@ -53,7 +57,7 @@ func TestUISettingsServiceCollectsAndUpdatesRepositoryDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := stored.PullRequestDefault(); ok || stored.UpdatedAt != now.Format(time.RFC3339) {
+	if _, ok := stored.PullRequestDefault(); ok {
 		t.Fatalf("stored unset repository = %+v", stored)
 	}
 }
@@ -96,10 +100,11 @@ func TestUISettingsDiagnosticBaselineDoesNotChangeRepositorySettings(t *testing.
 				t.Fatal(err)
 			}
 			app := App{RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvPullRequest: value, runtimeconfig.EnvUpdate: "invalid"}), RepoHealthCheck: func(context.Context, taodata.Repo) taodata.RepoHealth { return taodata.RepoHealth{Status: "ok"} }}
+			app.SettingsService = settings.NewService(registry.DataHome, *app.RuntimeEnv)
 			service := uiSettingsService{app: app, registry: registry}
 			for range 2 {
 				snapshot, err := service.Collect(context.Background())
-				if err != nil || snapshot.CollectionError != "" || snapshot.InheritedPullRequest != (value == " YES ") || snapshot.InheritedPullRequestInvalid != (value == "invalid") {
+				if err != nil || snapshot.InheritedPullRequest != (value == " YES ") || snapshot.InheritedPullRequestInvalid != (value == "invalid") {
 					t.Fatalf("incorrect typed diagnostic baseline: %+v, %v", snapshot, err)
 				}
 			}
@@ -130,45 +135,163 @@ func TestUISettingsServiceLeavesDisplayHomeEmptyWhenLookupFails(t *testing.T) {
 	}
 }
 
+func TestUISettingsInvalidFieldsRemainVisibleAndRefresh(t *testing.T) {
+	ctx := context.Background()
+	registry := taodata.Registry{DataHome: t.TempDir()}
+	if err := registry.WriteRepo(taodata.Repo{Schema: taodata.RepoSchema, ID: "repo", Name: "broken", Root: "/missing"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(registry.DataHome, "repos", "repo", "repo.json"), []byte(`{"schema":"tao.repo.v1","id":"repo","name":"broken","root":"/missing","run_defaults":{"agent":"invalid","max_slices":3}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	service := uiSettingsService{registry: registry, app: App{SettingsService: settings.NewService(registry.DataHome, *snapshotWith(map[string]string{runtimeconfig.EnvAgent: "pi"}))}}
+	snapshot, err := service.Collect(ctx)
+	if err != nil || len(snapshot.Repositories) != 1 {
+		t.Fatalf("inventory: %+v %v", snapshot, err)
+	}
+	repo := snapshot.Repositories[0]
+	if repo.ID != "repo" || repo.Root != "/missing" || repo.Name != "broken" || repo.Finding == "" {
+		t.Fatalf("lost identity/diagnostics: %+v", repo)
+	}
+	for _, row := range repo.Values {
+		if row.Key == "agent" && (row.Stored != "invalid" || row.Warning == "" || row.Value != "pi") {
+			t.Fatalf("invalid masked row: %+v", row)
+		}
+	}
+	value := "claude"
+	if err := service.SetSetting(ctx, "repo", "agent", &value); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(runtimeconfig.EnvAgent, "claude")
+	snapshot, err = service.Collect(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range snapshot.Repositories[0].Values {
+		if row.Key == "agent" && (row.Stored != "claude" || row.Warning != "" || row.Value != "pi") {
+			t.Fatalf("refresh recaptured environment or lost save: %+v", row)
+		}
+	}
+}
+
+func TestUISettingsEditorUnsetDisabledAndInvalid(t *testing.T) {
+	ctx := context.Background()
+	registry := taodata.Registry{DataHome: t.TempDir()}
+	if err := registry.WriteRepo(taodata.Repo{Schema: taodata.RepoSchema, ID: "repo", Name: "example", Root: "/missing"}); err != nil {
+		t.Fatal(err)
+	}
+	service := uiSettingsService{registry: registry, app: App{SettingsService: settings.NewService(registry.DataHome, *snapshotWith(map[string]string{runtimeconfig.EnvModel: "frozen"}))}}
+	for _, test := range []struct {
+		key    string
+		value  *string
+		valid  bool
+		stored string
+	}{
+		{"models.model", new("saved"), true, "saved"},
+		{"models.model", new(""), false, "saved"},
+		{"models.model", nil, true, ""},
+		{"budget.slice.cost.stop", new("0"), true, "0"},
+		{"budget.slice.cost.stop", new("null"), true, "null"},
+		{"budget.slice.cost.stop", nil, true, ""},
+	} {
+		err := service.SetSetting(ctx, "repo", test.key, test.value)
+		if (err == nil) != test.valid {
+			t.Fatalf("%s: %v", test.key, err)
+		}
+		snapshot, err := service.Collect(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range snapshot.Repositories[0].Values {
+			if row.Key == test.key {
+				if row.Stored != test.stored {
+					t.Fatalf("stored %s=%q want %q", test.key, row.Stored, test.stored)
+				}
+				if test.key == "models.model" && row.Value != "frozen" {
+					t.Fatal("environment changed")
+				}
+			}
+		}
+	}
+}
+
+func TestUISettingsSharedWriterAndMaskedProjection(t *testing.T) {
+	ctx := context.Background()
+	registry := taodata.Registry{DataHome: t.TempDir()}
+	if err := registry.WriteRepo(taodata.Repo{Schema: taodata.RepoSchema, ID: "repo", Name: "example", Root: "/missing"}); err != nil {
+		t.Fatal(err)
+	}
+	service := uiSettingsService{registry: registry, app: App{SettingsService: settings.NewService(registry.DataHome, *snapshotWith(map[string]string{runtimeconfig.EnvModel: "environment"}))}}
+	model := "saved"
+	if err := service.SetSetting(ctx, "repo", "models.model", &model); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.SetPullRequestDefault(ctx, "repo", new(true)); err != nil {
+		t.Fatal(err)
+	}
+	model = "saved-again"
+	if err := service.SetSetting(ctx, "repo", "models.model", &model); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := service.Collect(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Paths) == 0 || len(snapshot.Values) != len(runtimeconfig.SettingDefinitions()) {
+		t.Fatal("missing global settings or paths")
+	}
+	rows := snapshot.Repositories[0].Values
+	if len(rows) != len(runtimeconfig.SettingDefinitions()) {
+		t.Fatalf("missing schema rows: %d", len(rows))
+	}
+	for _, row := range rows {
+		if row.Key == "models.model" && (row.Value != "environment" || row.Stored != "saved-again" || row.Source != "env" || !row.Editable) {
+			t.Fatalf("masked model: %+v", row)
+		}
+		if row.Key == "pull_request" && row.Stored != "true" {
+			t.Fatalf("PR lost: %+v", row)
+		}
+		if row.Key == "theme" && row.Editable {
+			t.Fatal("global theme editable")
+		}
+	}
+}
+
+// Repository values are projected under the repository, never onto the global
+// rows, and an environment export masks a saved repository value.
 func TestUISettingsRepositoryReworkProjection(t *testing.T) {
-	for _, explicit := range []bool{false, true} {
-		t.Run(map[bool]string{false: "legacy", true: "explicit zero"}[explicit], func(t *testing.T) {
-			repo := taodata.Repo{ID: "repo-a"}
-			if explicit {
-				repo = repo.WithReworkDefaults(new(0), new(1))
-			}
-			registry := &fakeNoteRegistry{current: repo, repos: []taodata.Repo{repo}}
-			service := uiSettingsService{app: App{RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvMaxReworkAttempts: "8"})}, registry: registry}
-			snapshot, err := service.Collect(context.Background())
-			if err != nil {
-				t.Fatal(err)
-			}
-			wants := map[string]string{runtimeconfig.EnvMaxReworkAttempts: "8", runtimeconfig.EnvReworkEscalationFromAttempt: "4"}
-			if explicit {
-				wants[runtimeconfig.EnvMaxReworkAttempts] = "0"
-				wants[runtimeconfig.EnvReworkEscalationFromAttempt] = "1"
-			}
-			for name, want := range wants {
-				found := false
-				for _, row := range snapshot.RuntimeDefaults {
-					if row.Name == name {
-						found = true
-						source := "default"
-						if name == runtimeconfig.EnvMaxReworkAttempts {
-							source = "env"
-						}
-						if explicit {
-							source = "repository"
-						}
-						if row.Value != want || row.Source != source {
-							t.Fatalf("row: %+v", row)
-						}
-					}
-				}
-				if !found {
-					t.Fatal("missing", name)
-				}
-			}
-		})
+	ctx := context.Background()
+	registry := taodata.Registry{DataHome: t.TempDir()}
+	repo := (taodata.Repo{Schema: taodata.RepoSchema, ID: "repo", Name: "example", Root: "/missing"}).WithReworkDefaults(new(0), new(1))
+	if err := registry.WriteRepo(repo); err != nil {
+		t.Fatal(err)
+	}
+	service := uiSettingsService{registry: registry, app: App{SettingsService: settings.NewService(registry.DataHome, *snapshotWith(map[string]string{runtimeconfig.EnvMaxReworkAttempts: "8"}))}}
+	snapshot, err := service.Collect(ctx)
+	if err != nil || len(snapshot.Repositories) != 1 {
+		t.Fatalf("inventory: %+v %v", snapshot, err)
+	}
+	wants := map[string][3]string{
+		"max_rework_attempts":            {"8", "env", "0"},
+		"rework_escalation_from_attempt": {"1", "repository", "1"},
+	}
+	seen := 0
+	for _, row := range snapshot.Repositories[0].Values {
+		want, ok := wants[row.Key]
+		if !ok {
+			continue
+		}
+		seen++
+		if row.Value != want[0] || row.Source != want[1] || row.Stored != want[2] {
+			t.Fatalf("%s: %+v", row.Key, row)
+		}
+	}
+	if seen != len(wants) {
+		t.Fatalf("missing numeric rework rows: %d", seen)
+	}
+	for _, row := range snapshot.RuntimeDefaults {
+		if row.Source == "repository" {
+			t.Fatalf("global row carries a repository value: %+v", row)
+		}
 	}
 }

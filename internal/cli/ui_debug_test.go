@@ -13,7 +13,7 @@ import (
 func TestUIDebugInvalidProviderKeepsRuntimeRowsAndDoctorFailure(t *testing.T) {
 	app := App{RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvAgent: "invalid", runtimeconfig.EnvUpdate: "invalid"}), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }}
 	snapshot, err := (uiDebugCollector{app: app}).Collect(context.Background())
-	if err != nil || len(snapshot.RuntimeDefaults) != len(app.envSnapshot().Status()) {
+	if err != nil || len(snapshot.RuntimeDefaults) != len(app.envSnapshot().Status())+1 {
 		t.Fatalf("invalid provider discarded runtime diagnostics: %+v, %v", snapshot, err)
 	}
 	if snapshot.SelectedAgent != "" {
@@ -32,12 +32,12 @@ func TestUIDebugCollectorIncludesRepositoryRuntimeDefaultsAndDoctorProblems(t *t
 	t.Setenv("PATH", "")
 	t.Setenv("TAO_DATA_HOME", t.TempDir())
 	pullRequest := true
+	registered := taodata.Repo{ID: "repo-a", RunDefaults: &taodata.RepoRunDefaults{PullRequest: &pullRequest}}
+	persistStatusRepository(t, registered)
 	app := App{
 		Now: func() time.Time { return time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC) },
 		Registry: func() NoteRegistry {
-			return &fakeNoteRegistry{current: taodata.Repo{
-				ID: "repo-a", RunDefaults: &taodata.RepoRunDefaults{PullRequest: &pullRequest},
-			}}
+			return &fakeNoteRegistry{current: registered, repos: []taodata.Repo{registered}}
 		},
 	}
 	snapshot, err := (uiDebugCollector{app: app, executable: "/tmp/tao"}).Collect(context.Background())

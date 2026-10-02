@@ -52,6 +52,7 @@ func TestCommandAliases(t *testing.T) {
 	}{
 		{name: "list", want: []string{"l", "li", "lis", "list"}},
 		{name: "repo", want: []string{"repo"}},
+		{name: "config", want: []string{"config"}},
 		{name: "report", want: []string{"report"}},
 		{name: "note", want: []string{"n", "no", "not", "note"}},
 		{name: "monitor", want: []string{"mon", "moni", "monit", "monito", "monitor"}},
@@ -147,6 +148,7 @@ func TestCommandAliasPatternCompletionSpecialCases(t *testing.T) {
 		{command: "list", want: "l|li|lis|list"},
 		{command: "completion", want: "co|com|comp|compl|comple|completi|completio|completion"}, //nolint:misspell // intentional completion-prefix fixture
 		{command: "repo", want: "repo"},
+		{command: "config", want: "config"},
 		{command: "report", want: "report"},
 		{command: "note", want: "n|no|not|note"},
 		{command: "monitor", want: "mon|moni|monit|monito|monitor"},
@@ -174,6 +176,10 @@ func TestZshCommandArgumentsUseRegisteredFlagsAndSemanticHints(t *testing.T) {
 		{
 			command: "run",
 			want: []string{
+				"'--agent[agent runtime: pi or claude]:agent:(pi claude)'",
+				"'--session-timeout[session timeout as a Go duration; 0 disables]:duration:'",
+				"'--dangerously-skip-permissions[bypass Claude permission checks; compatibility no-op for Pi]'",
+
 				"'--auto-rework=-[deprecated: use --max-rework-attempts (false=0, true=5)]:boolean:(true false)'",
 				"'--rework-escalation-from-attempt[first automatic rework attempt eligible for escalation]:count:'",
 				"'--commit-policy[automatic commit policy: slice or none]:policy:(slice none)'",
@@ -181,6 +187,13 @@ func TestZshCommandArgumentsUseRegisteredFlagsAndSemanticHints(t *testing.T) {
 				"'--max-rework-attempts[maximum automatic rework cycles (0 disables)]:count:'",
 				"'--review-agent[select the plan review runtime: pi or claude (default inherit)]:agent:(pi claude)'",
 				"'--max-slices[maximum slices to run; use 0 for all]:count:'",
+			},
+		},
+		{
+			command: "note",
+			want: []string{
+				"'--agent[agent runtime: pi or claude]:agent:(pi claude)'",
+				"'--session-timeout[session timeout as a Go duration; 0 disables]:duration:'",
 			},
 		},
 		{

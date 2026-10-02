@@ -1,30 +1,57 @@
 package runtimeconfig
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/iamseth/tao/internal/configtypes"
 )
 
 func commandSnapshot(values map[string]string) EnvSnapshot {
 	return LoadEnv(func(key string) (string, bool) { v, ok := values[key]; return v, ok })
 }
 
+// composedSnapshot layers raw JSON global and repository values beneath the
+// captured environment exactly as the settings service does for commands.
+func composedSnapshot(env, global, repository map[string]string) EnvSnapshot {
+	layer := func(values map[string]string) configtypes.SettingsValues {
+		if len(values) == 0 {
+			return nil
+		}
+		out := configtypes.SettingsValues{}
+		for key, value := range values {
+			out[key] = json.RawMessage(value)
+		}
+		return out
+	}
+	return ResolveSettings(layer(global), layer(repository), commandSnapshot(env))
+}
+
 func TestCommandOptionsPrecedence(t *testing.T) {
 	for _, tc := range []struct {
-		name              string
-		repository, flags RunOptionsPatch
-		want              bool
-		source            string
+		name               string
+		env                string
+		global, repository map[string]string
+		flags              RunOptionsPatch
+		want               bool
+		source             string
 	}{
-		{"environment", RunOptionsPatch{}, RunOptionsPatch{}, true, "env"},
-		{"repository false", RunOptionsPatch{}.WithPullRequest(false), RunOptionsPatch{}, false, "repository"},
-		{"explicit false", RunOptionsPatch{}.WithPullRequest(true), RunOptionsPatch{}.WithPullRequest(false), false, "flag"},
-		{"same as environment", RunOptionsPatch{}.WithPullRequest(false), RunOptionsPatch{}.WithPullRequest(true), true, "flag"},
+		{"environment", "true", nil, nil, RunOptionsPatch{}, true, "env"},
+		{"global", "", map[string]string{"pull_request": "true"}, nil, RunOptionsPatch{}, true, "global"},
+		{"repository beats global", "", map[string]string{"pull_request": "true"}, map[string]string{"pull_request": "false"}, RunOptionsPatch{}, false, "repository"},
+		{"environment masks repository", "true", nil, map[string]string{"pull_request": "false"}, RunOptionsPatch{}, true, "env"},
+		{"explicit false", "true", nil, map[string]string{"pull_request": "true"}, RunOptionsPatch{}.WithPullRequest(false), false, "flag"},
+		{"same as environment", "true", nil, map[string]string{"pull_request": "false"}, RunOptionsPatch{}.WithPullRequest(true), true, "flag"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := ResolveCommandOptions(CommandOptionsInput{Profile: CommandRun, Env: commandSnapshot(map[string]string{EnvPullRequest: "true"}), Repository: tc.repository, Flags: tc.flags})
+			env := map[string]string{}
+			if tc.env != "" {
+				env[EnvPullRequest] = tc.env
+			}
+			got, err := ResolveCommandOptions(CommandOptionsInput{Profile: CommandRun, Env: composedSnapshot(env, tc.global, tc.repository), Flags: tc.flags})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -35,23 +62,68 @@ func TestCommandOptionsPrecedence(t *testing.T) {
 	}
 }
 
+func TestCommandOptionsMaxSlicesSource(t *testing.T) {
+	got, err := ResolveCommandOptions(CommandOptionsInput{Profile: CommandRun, Env: composedSnapshot(nil, map[string]string{"max_slices": "3"}, nil)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RunOptions.MaxSlices != 3 || got.Sources["--max-slices"] != "global" {
+		t.Fatalf("got %+v", got)
+	}
+	got, err = ResolveCommandOptions(CommandOptionsInput{Profile: CommandRun, Env: composedSnapshot(nil, map[string]string{"max_slices": "3"}, nil), Flags: RunOptionsPatch{}.WithMaxSlices(1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RunOptions.MaxSlices != 1 || got.Sources["--max-slices"] != "flag" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestCommandOptionsRejectsInvalidSavedMaxSlices(t *testing.T) {
+	for _, scope := range []string{"global", "repository"} {
+		t.Run(scope, func(t *testing.T) {
+			layer := map[string]string{"max_slices": "-3"}
+			var env EnvSnapshot
+			if scope == "global" {
+				env = composedSnapshot(nil, layer, nil)
+			} else {
+				env = composedSnapshot(nil, nil, layer)
+			}
+			_, err := ResolveCommandOptions(CommandOptionsInput{Profile: CommandRun, Env: env})
+			if err == nil || !strings.Contains(err.Error(), "max_slices") {
+				t.Fatalf("invalid saved limit admitted as all slices: %v", err)
+			}
+			// Inapplicable profiles ignore the saved limit entirely.
+			if _, err := ResolveCommandOptions(CommandOptionsInput{Profile: CommandReview, Env: env}); err != nil {
+				t.Fatalf("review consumed max_slices: %v", err)
+			}
+		})
+	}
+}
+
 func TestCommandOptionsReviewAgent(t *testing.T) {
 	for _, profile := range []CommandProfile{CommandRun, CommandReview} {
 		for _, tc := range []struct {
-			name                   string
-			env                    string
-			repository, flag, want AgentKind
-			source                 string
+			name       string
+			env        string
+			repository string
+			flag, want AgentKind
+			source     string
 		}{
 			{"inherited", "", "", "", "", "default"},
 			{"environment", "claude", "", "", AgentClaude, "env"},
-			{"repository", "claude", AgentPi, "", AgentPi, "repository"},
-			{"flag", "claude", AgentPi, AgentClaude, AgentClaude, "flag"},
+			{"repository", "", `"pi"`, "", AgentPi, "repository"},
+			{"environment masks repository", "claude", `"pi"`, "", AgentClaude, "env"},
+			{"flag", "claude", `"pi"`, AgentPi, AgentPi, "flag"},
 		} {
 			t.Run(string(profile)+"/"+tc.name, func(t *testing.T) {
+				var repository map[string]string
+				if tc.repository != "" {
+					repository = map[string]string{"review_agent": tc.repository}
+				}
 				got, err := ResolveCommandOptions(CommandOptionsInput{Profile: profile,
-					Env:        commandSnapshot(map[string]string{EnvReviewAgent: tc.env}),
-					Repository: RunOptionsPatch{ReviewAgent: tc.repository}, Flags: RunOptionsPatch{ReviewAgent: tc.flag}})
+					Env:   composedSnapshot(map[string]string{EnvReviewAgent: tc.env}, nil, repository),
+					Flags: RunOptionsPatch{ReviewAgent: tc.flag}})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -60,8 +132,13 @@ func TestCommandOptionsReviewAgent(t *testing.T) {
 				}
 			})
 		}
-		if _, err := ResolveCommandOptions(CommandOptionsInput{Profile: profile, Env: commandSnapshot(map[string]string{EnvReviewAgent: "invalid"})}); err == nil {
-			t.Fatal("invalid reviewer admitted")
+		for _, env := range []EnvSnapshot{
+			commandSnapshot(map[string]string{EnvReviewAgent: "invalid"}),
+			composedSnapshot(nil, nil, map[string]string{"review_agent": `"invalid"`}),
+		} {
+			if _, err := ResolveCommandOptions(CommandOptionsInput{Profile: profile, Env: env}); err == nil {
+				t.Fatal("invalid reviewer admitted")
+			}
 		}
 	}
 	if _, err := ResolveCommandOptions(CommandOptionsInput{Profile: CommandMerge, Env: commandSnapshot(map[string]string{EnvReviewAgent: "invalid"})}); err != nil {
@@ -76,7 +153,7 @@ func TestCommandOptionsApplicability(t *testing.T) {
 			if profile != CommandPromptRun {
 				env[EnvCommitPolicy] = "invalid"
 			}
-			got, err := ResolveCommandOptions(CommandOptionsInput{Profile: profile, Env: commandSnapshot(env), Repository: RunOptionsPatch{}.WithPullRequest(true)})
+			got, err := ResolveCommandOptions(CommandOptionsInput{Profile: profile, Env: composedSnapshot(env, nil, map[string]string{"pull_request": "true"})})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -88,7 +165,7 @@ func TestCommandOptionsApplicability(t *testing.T) {
 }
 
 func TestCommandOptionsCrossFieldSources(t *testing.T) {
-	_, err := ResolveCommandOptions(CommandOptionsInput{Profile: CommandRun, Env: commandSnapshot(map[string]string{EnvCommitPolicy: "none"}), Repository: RunOptionsPatch{}.WithPullRequest(true)})
+	_, err := ResolveCommandOptions(CommandOptionsInput{Profile: CommandRun, Env: composedSnapshot(map[string]string{EnvCommitPolicy: "none"}, nil, map[string]string{"pull_request": "true"})})
 	if err == nil {
 		t.Fatal("expected PR conflict")
 	}
@@ -132,21 +209,21 @@ func TestCommandOptionsAuxiliary(t *testing.T) {
 }
 
 func TestCommandOptionsNumericReworkPrecedence(t *testing.T) {
+	repository := map[string]string{"max_rework_attempts": "2", "rework_escalation_from_attempt": "6"}
 	for _, tc := range []struct {
 		name   string
+		env    map[string]string
 		aux    CommandAuxiliaryFlags
 		want   int
 		source string
 	}{
-		{"repository", CommandAuxiliaryFlags{}, 2, "repository"},
-		{"explicit zero", CommandAuxiliaryFlags{MaxReworkAttempts: new(0)}, 0, "flag"},
-		{"count beats alias", CommandAuxiliaryFlags{MaxReworkAttempts: new(3), AutoRework: new(false)}, 3, "flag"},
+		{"repository", nil, CommandAuxiliaryFlags{}, 2, "repository"},
+		{"environment masks repository", map[string]string{EnvMaxReworkAttempts: "7"}, CommandAuxiliaryFlags{}, 7, "env"},
+		{"explicit zero", map[string]string{EnvMaxReworkAttempts: "7"}, CommandAuxiliaryFlags{MaxReworkAttempts: new(0)}, 0, "flag"},
+		{"count beats alias", nil, CommandAuxiliaryFlags{MaxReworkAttempts: new(3), AutoRework: new(false)}, 3, "flag"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := ResolveCommandOptions(CommandOptionsInput{
-				Profile: CommandRun, Env: commandSnapshot(map[string]string{EnvMaxReworkAttempts: "7"}),
-				RepositoryRework: ReworkOptionsPatch{MaxAttempts: new(2), EscalationFromAttempt: new(6)}, Auxiliary: tc.aux,
-			})
+			got, err := ResolveCommandOptions(CommandOptionsInput{Profile: CommandRun, Env: composedSnapshot(tc.env, nil, repository), Auxiliary: tc.aux})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -209,7 +286,9 @@ func TestCommandOptionsModelStages(t *testing.T) {
 		{"all roles", RunOptionsPatch{}.WithModelForAllRoles("all"), "all", "flag"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := ResolveCommandOptions(CommandOptionsInput{Profile: CommandReview, Env: commandSnapshot(map[string]string{EnvReviewModel: "env-review"}), Repository: RunOptionsPatch{ModelSelection: ModelSelection{Base: "repo-base", Run: "bad model"}}, Flags: tc.flags})
+			// An unrelated malformed repository role must not block the review profile.
+			env := composedSnapshot(map[string]string{EnvReviewModel: "env-review"}, nil, map[string]string{"models.model": `"repo-base"`, "models.run_model": `"bad model"`})
+			got, err := ResolveCommandOptions(CommandOptionsInput{Profile: CommandReview, Env: env, Flags: tc.flags})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -228,10 +307,11 @@ func TestCommandOptionsValidation(t *testing.T) {
 	}{
 		{"profile", CommandOptionsInput{Profile: "unknown"}, "unknown command profile"},
 		{"negative slices", CommandOptionsInput{Profile: CommandRun, Flags: RunOptionsPatch{}.WithMaxSlices(-1)}, "--max-slices source=flag"},
-		{"negative timeout", CommandOptionsInput{Profile: CommandReview, Repository: RunOptionsPatch{}.WithSessionTimeout(-1)}, EnvSessionTimeout + " source=repository"},
+		{"negative timeout", CommandOptionsInput{Profile: CommandReview, Flags: RunOptionsPatch{}.WithSessionTimeout(-1)}, EnvSessionTimeout + " source=flag"},
 		{"negative attempts", CommandOptionsInput{Profile: CommandRun, Auxiliary: CommandAuxiliaryFlags{MaxReworkAttempts: new(-1)}}, EnvMaxReworkAttempts + " source=flag"},
 		{"invalid threshold", CommandOptionsInput{Profile: CommandRun, Auxiliary: CommandAuxiliaryFlags{ReworkEscalationFromAttempt: new(0)}}, EnvReworkEscalationFromAttempt + " source=flag"},
 		{"invalid model", CommandOptionsInput{Profile: CommandMerge, Flags: RunOptionsPatch{ModelSelection: ModelSelection{Resolver: "bad model"}}}, EnvResolverModel + " source=flag"},
+		{"invalid repository timeout", CommandOptionsInput{Profile: CommandReview, Env: composedSnapshot(nil, nil, map[string]string{"session_timeout": `"-1s"`})}, "session_timeout"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := ResolveCommandOptions(tc.input)
@@ -250,11 +330,21 @@ func TestCommandOptionsValidation(t *testing.T) {
 }
 
 func TestCommandOptionsModelsAndTypedFlags(t *testing.T) {
-	got, err := ResolveCommandOptions(CommandOptionsInput{Profile: CommandReview, Env: commandSnapshot(map[string]string{EnvModel: "env-model", EnvSessionTimeout: "20m", EnvRunModel: "bad model"}), Repository: RunOptionsPatch{ModelSelection: ModelSelection{Base: "repo-model"}, SessionTimeout: new(time.Minute)}, Flags: RunOptionsPatch{SessionTimeout: new(DefaultSessionTimeout)}})
+	// The environment base masks the repository base, so the unset review role
+	// follows the environment; the explicit flag wins the timeout.
+	env := composedSnapshot(map[string]string{EnvModel: "env-model", EnvSessionTimeout: "20m", EnvRunModel: "bad model"}, nil, map[string]string{"models.model": `"repo-model"`, "session_timeout": `"1m"`})
+	got, err := ResolveCommandOptions(CommandOptionsInput{Profile: CommandReview, Env: env, Flags: RunOptionsPatch{SessionTimeout: new(DefaultSessionTimeout)}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.RunOptions.Models.For(ModelRoleReview) != "repo-model" || got.Sources[EnvReviewModel] != "repository" || got.RunOptions.SessionTimeout != DefaultSessionTimeout || got.Sources[EnvSessionTimeout] != "flag" {
+	if got.RunOptions.Models.For(ModelRoleReview) != "env-model" || got.Sources[EnvReviewModel] != "env" || got.RunOptions.SessionTimeout != DefaultSessionTimeout || got.Sources[EnvSessionTimeout] != "flag" {
+		t.Fatalf("got %+v", got)
+	}
+	got, err = ResolveCommandOptions(CommandOptionsInput{Profile: CommandReview, Env: composedSnapshot(nil, nil, map[string]string{"models.review_model": `"repo-review"`, "session_timeout": `"1m"`})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RunOptions.Models.For(ModelRoleReview) != "repo-review" || got.Sources[EnvReviewModel] != "repository" || got.RunOptions.SessionTimeout != time.Minute || got.Sources[EnvSessionTimeout] != "repository" {
 		t.Fatalf("got %+v", got)
 	}
 }

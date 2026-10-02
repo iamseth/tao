@@ -38,11 +38,13 @@ type Model struct {
 	SearchQuery      string
 	SearchActive     bool
 	DebugOffset      int
+	SettingsOffset   int
 	ConfirmMessage   string
 	ActionLabels     map[string]string
 	ActionMessage    string
 	NoteMessage      string
 	SettingsMessage  string
+	settingsEditor   *settingsEditorState
 }
 
 // Palette binds this frame's theme to its terminal profile.
@@ -142,6 +144,11 @@ func Render(model Model) string {
 	selectedLine := -1
 	var viewportMetadata tableViewportMetadata
 	switch {
+	case page == PageSettings && model.SettingsOffset > 0 && model.settingsEditor == nil:
+		// A manual scroll shows the page as a plain window so non-selectable
+		// global values and paths remain reachable at any terminal height.
+		body, _, _ := renderSettingsPage(model)
+		lines = appendScrolledBody(lines, body, model.SettingsOffset, frameLineCount, model)
 	case page == PageSettings:
 		settingsLines, settingsSelectedLine, settingsMetadata := renderSettingsPage(model)
 		selectedLine = len(lines) + settingsSelectedLine
@@ -151,21 +158,7 @@ func Render(model Model) string {
 		}
 		lines = append(lines, settingsLines...)
 	case page == PageDebug:
-		body := renderDebugPage(model)
-		bodyHeight := len(body)
-		if model.Height > 0 {
-			bodyHeight = max(model.Height-frameLineCount, 0)
-		}
-		start := max(0, min(model.DebugOffset, max(len(body)-bodyHeight, 0)))
-		if bodyHeight > 0 && len(body)-start > bodyHeight {
-			visibleHeight := max(bodyHeight-1, 0)
-			end := min(start+visibleHeight, len(body))
-			lines = append(lines, body[start:end]...)
-			lines = append(lines, moreIndicator(model.Palette(), len(body)-(end-start)))
-		} else {
-			end := min(start+bodyHeight, len(body))
-			lines = append(lines, body[start:end]...)
-		}
+		lines = appendScrolledBody(lines, renderDebugPage(model), model.DebugOffset, frameLineCount, model)
 	case page == PageNotes:
 		now := model.Now
 		if now.IsZero() {
@@ -214,10 +207,16 @@ func Render(model Model) string {
 		lines = append(lines, "", model.NoteMessage)
 	}
 	if page == PageSettings && strings.TrimSpace(model.SettingsMessage) != "" {
-		lines = append(lines, "", model.SettingsMessage)
+		lines = append(lines, "")
+		lines = append(lines, wrapDetailWords(singleLineDetail(model.SettingsMessage), max(1, model.Width-2))...)
 	}
 	if strings.TrimSpace(model.ConfirmMessage) != "" {
-		lines = append(lines, "", model.ConfirmMessage+" [y/n]")
+		if model.settingsEditor != nil {
+			lines = append(lines, "")
+			lines = append(lines, wrapDetailWords(singleLineDetail(model.ConfirmMessage)+" [y/n]", max(1, model.Width-2))...)
+		} else {
+			lines = append(lines, "", model.ConfirmMessage+" [y/n]")
+		}
 	}
 	if summary != nil {
 		lines = append(lines, renderFrameSummary(model.Palette(), *summary))
@@ -713,4 +712,22 @@ func colorStatus(palette theme.Palette, value, status string) string {
 		role = theme.RoleWarn
 	}
 	return palette.Paint(role, value)
+}
+
+// appendScrolledBody appends a plain offset window of body below the frame,
+// reserving one line for the hidden-row indicator when rows remain.
+func appendScrolledBody(lines, body []string, offset, frameLineCount int, model Model) []string {
+	bodyHeight := len(body)
+	if model.Height > 0 {
+		bodyHeight = max(model.Height-frameLineCount, 0)
+	}
+	start := max(0, min(offset, max(len(body)-bodyHeight, 0)))
+	if bodyHeight > 0 && len(body)-start > bodyHeight {
+		visibleHeight := max(bodyHeight-1, 0)
+		end := min(start+visibleHeight, len(body))
+		lines = append(lines, body[start:end]...)
+		return append(lines, moreIndicator(model.Palette(), len(body)-(end-start)))
+	}
+	end := min(start+bodyHeight, len(body))
+	return append(lines, body[start:end]...)
 }

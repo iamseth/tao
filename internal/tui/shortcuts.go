@@ -15,7 +15,9 @@ type shortcut struct {
 func shortcutsForPage(page PageID) []shortcut {
 	if normalizePage(page) == PageSettings {
 		return []shortcut{
-			{key: "↑ / ↓ / j / k / PgUp / PgDn", action: "Select repository / page"},
+			{key: "↑ / ↓ / j / k", action: "Select repository (scroll when none)"},
+			{key: "PgUp / PgDn / g / G", action: "Scroll global values and paths"},
+			{key: "e", action: "Edit repository settings"},
 			{key: "p", action: "Cycle pull-request default"},
 			{key: "Tab / Shift+Tab / ← / →", action: "Switch tabs"},
 			{key: "q / Esc Esc", action: "Quit"},

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/iamseth/tao/internal/runtimeconfig"
+	"github.com/iamseth/tao/internal/settings"
 	"github.com/iamseth/tao/internal/taodata"
 )
 
@@ -29,7 +31,7 @@ var repoCommand = commandMetadata{
 	subcommands: []commandSubcommand{
 		{name: "list", description: "List registered repositories and health summaries"},
 		{name: "show", description: "Show details for one registered repository"},
-		{name: "config", description: "Show or set repository run defaults", registerFlags: registerRepoConfigFlags,
+		{name: "config", description: "Deprecated compatibility adapter; use tao config", registerFlags: registerRepoConfigFlags,
 			completion: completionContext{flagValues: map[string]completionFlagValue{"review-agent": {kind: completionValueEnum, label: "agent", values: []string{"pi", "claude", "unset"}}}}},
 		{name: "doctor", description: "Check registered repositories for health problems"},
 	},
@@ -109,7 +111,24 @@ func (a App) repoShow(ctx context.Context, registry taodata.Registry, input stri
 		"Health: " + entry.Health.Status,
 		"Finding: " + entry.Health.Message,
 	}
-	return writeLines(a.Out, lines...)
+	if err := writeLines(a.Out, lines...); err != nil {
+		return err
+	}
+	return a.repoSettingsDiagnostics(ctx, registry, entry.Repo.ID)
+}
+
+func (a App) repoSettingsDiagnostics(ctx context.Context, registry taodata.Registry, id string) error {
+	service := a.SettingsService
+	if service == nil {
+		service = settings.NewService(registry.DataHome, a.envSnapshot())
+	}
+	view, readErr := service.Read(ctx, settings.Target{RepositoryID: id})
+	for _, diagnostic := range view.Diagnostics {
+		if err := writef(a.Out, "Settings diagnostic: %s\n", diagnostic); err != nil {
+			return err
+		}
+	}
+	return readErr
 }
 
 func registerRepoConfigFlags(fs *flag.FlagSet) {
@@ -134,14 +153,14 @@ func (a App) repoConfig(ctx context.Context, registry taodata.Registry, args []s
 	if len(positional) == 1 {
 		selector = positional[0]
 	}
-	repo, err := taodata.ResolveRepo(ctx, registry, selector)
+	repo, err := configRepo(ctx, registry, selector)
 	if err != nil {
 		return err
 	}
-	changed := false
+	changes := map[string]*string{}
 	if flagWasProvided(fs, "review-agent") {
 		raw := flagStringValue(fs, "review-agent")
-		value := ""
+		var value *string
 		if raw != "unset" {
 			if raw == "" {
 				return errors.New("--review-agent must be pi, claude, or unset")
@@ -150,10 +169,10 @@ func (a App) repoConfig(ctx context.Context, registry taodata.Registry, args []s
 			if err != nil {
 				return fmt.Errorf("--review-agent: %w (use unset to inherit)", err)
 			}
-			value = parsed.String()
+			text := parsed.String()
+			value = &text
 		}
-		repo = repo.WithReviewAgentDefault(value)
-		changed = true
+		changes["review_agent"] = value
 	}
 	if flagWasProvided(fs, "pull-request") {
 		var value *bool
@@ -164,35 +183,37 @@ func (a App) repoConfig(ctx context.Context, registry taodata.Registry, args []s
 			}
 			value = &parsed
 		}
-		repo = repo.WithPullRequestDefault(value)
-		changed = true
+		var text *string
+		if value != nil {
+			raw := strconv.FormatBool(*value)
+			text = &raw
+		}
+		changes["pull_request"] = text
 	}
-	rework := repositoryReworkOptions(repo)
 	numericFlags := []struct {
 		name    string
-		value   **int
 		minimum int
 	}{
-		{"max-rework-attempts", &rework.MaxAttempts, 0},
-		{"rework-escalation-from-attempt", &rework.EscalationFromAttempt, 1},
+		{"max-rework-attempts", 0},
+		{"rework-escalation-from-attempt", 1},
 	}
 	for _, setting := range numericFlags {
 		if !flagWasProvided(fs, setting.name) {
 			continue
 		}
 		raw := strings.TrimSpace(flagStringValue(fs, setting.name))
-		var value *int
+		var value *string
 		if !strings.EqualFold(raw, "unset") {
 			parsed, err := strconv.Atoi(raw)
 			if err != nil || parsed < setting.minimum {
 				return fmt.Errorf("--%s must be an integer at least %d, or unset", setting.name, setting.minimum)
 			}
-			value = &parsed
+			text := strconv.Itoa(parsed)
+			value = &text
 		}
-		*setting.value = value
-		changed = true
+		changes[strings.ReplaceAll(setting.name, "-", "_")] = value
 	}
-	models, _ := repo.ModelDefaults()
+	models := struct{ Base, Run, Review, MergeReview, Resolver, ReworkEscalation string }{}
 	modelFlags := []struct {
 		name  string
 		value *string
@@ -209,44 +230,53 @@ func (a App) repoConfig(ctx context.Context, registry taodata.Registry, args []s
 			continue
 		}
 		raw := flagStringValue(fs, model.name)
-		value := ""
+		var value *string
 		if raw != "unset" {
 			parsed, err := runtimeconfig.ParseModelName(raw)
 			if err != nil {
 				return fmt.Errorf("--%s: %w (use unset to inherit)", model.name, err)
 			}
-			value = parsed
+			value = &parsed
 		}
-		*model.value = value
-		changed = true
+		changes["models."+strings.ReplaceAll(model.name, "-", "_")] = value
 	}
-	if changed {
-		repo = repo.WithModelDefaults(models).WithReworkDefaults(rework.MaxAttempts, rework.EscalationFromAttempt)
-		repo.UpdatedAt = a.now().UTC().Format("2006-01-02T15:04:05Z07:00")
-		if err := registry.WriteRepo(repo); err != nil {
+	service := a.SettingsService
+	if service == nil {
+		service = settings.NewService(registry.DataHome, a.envSnapshot())
+	}
+	target := settings.Target{RepositoryID: repo.ID}
+	if len(changes) > 0 {
+		if err := service.Update(ctx, target, changes); err != nil {
 			return err
 		}
 	}
-	reviewAgent := "unset"
-	if value, ok := repo.ReviewAgentDefault(); ok {
-		reviewAgent = value
-	}
+	view, readErr := service.Read(ctx, target)
 	pullRequest := "unset"
-	if value, ok := repo.PullRequestDefault(); ok {
-		pullRequest = strconv.FormatBool(value)
+	if raw, ok := view.Stored["pull_request"]; ok {
+		pullRequest = string(raw)
+	}
+	for _, model := range modelFlags {
+		if raw, ok := view.Stored["models."+strings.ReplaceAll(model.name, "-", "_")]; ok {
+			if err := json.Unmarshal(raw, model.value); err != nil {
+				*model.value = string(raw)
+			}
+		}
 	}
 	lines := []string{
 		"Repo: " + emptyDash(repo.Name),
 		"ID: " + emptyDash(repo.ID),
 		"pull_request: " + pullRequest,
-		"review_agent: " + reviewAgent,
 	}
-	for _, setting := range numericFlags {
+	for _, key := range []string{"review_agent", "max_rework_attempts", "rework_escalation_from_attempt"} {
 		value := "unset"
-		if *setting.value != nil {
-			value = strconv.Itoa(**setting.value)
+		if raw, ok := view.Stored[key]; ok {
+			var text string
+			if err := json.Unmarshal(raw, &text); err != nil {
+				text = string(raw)
+			}
+			value = text
 		}
-		lines = append(lines, strings.ReplaceAll(setting.name, "-", "_")+": "+value)
+		lines = append(lines, key+": "+value)
 	}
 	for _, model := range modelFlags {
 		value := *model.value
@@ -255,7 +285,15 @@ func (a App) repoConfig(ctx context.Context, registry taodata.Registry, args []s
 		}
 		lines = append(lines, strings.ReplaceAll(model.name, "-", "_")+": "+value)
 	}
-	return writeLines(a.Out, lines...)
+	if err := writeLines(a.Out, lines...); err != nil {
+		return err
+	}
+	for _, diagnostic := range view.Diagnostics {
+		if err := writef(a.Out, "Diagnostic: %s\n", diagnostic); err != nil {
+			return err
+		}
+	}
+	return readErr
 }
 
 func (a App) repoDoctor(ctx context.Context, registry taodata.Registry) error {
@@ -268,6 +306,9 @@ func (a App) repoDoctor(ctx context.Context, registry taodata.Registry) error {
 	}
 	hasErrors := false
 	for _, entry := range catalog {
+		if err := a.repoSettingsDiagnostics(ctx, registry, entry.Repo.ID); err != nil {
+			hasErrors = true
+		}
 		if entry.Health.Error {
 			hasErrors = true
 		}

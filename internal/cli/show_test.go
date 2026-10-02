@@ -768,7 +768,7 @@ func TestShowUsesLiveGitToResumeExactBoundaryAndRestartStaleIntent(t *testing.T)
 
 	detail.Dir = t.TempDir()
 	registry := taodata.NewRegistry("")
-	registered := taodata.Repo{ID: taodata.RepoID(root), Name: "repo", Root: root}
+	registered := taodata.Repo{Schema: taodata.RepoSchema, ID: taodata.RepoID(root), Name: "repo", Root: root}
 	if err := registry.WriteRepo(registered); err != nil {
 		t.Fatal(err)
 	}

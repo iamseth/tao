@@ -423,6 +423,10 @@ func TestEnvSnapshotBuiltinsAndEmptyRules(t *testing.T) {
 			unset := snapshotFrom(nil)
 			empty := snapshotFrom(map[string]string{v.name: ""})
 			switch {
+			case v.applyWhenEmpty && (v.setting.Key == "budget.slice.output_tokens.stop" || v.setting.Key == "budget.slice.cost.stop"):
+				if empty.Require(v.name) != nil || !reflect.DeepEqual(empty.Defaults().Budget, unset.Defaults().Budget) {
+					t.Fatal("empty STOP must explicitly disable cap")
+				}
 			case v.applyWhenEmpty && v.name != EnvMergeVerifyCommand:
 				if empty.Require(v.name) == nil || unset.Require(v.name) != nil {
 					t.Fatal("models must reject set-empty only")

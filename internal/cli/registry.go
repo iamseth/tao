@@ -142,6 +142,7 @@ var commandRegistry = []commandMetadata{
 	runCommand,
 	commitCommand,
 	repoCommand,
+	configCommand,
 	stealCommand,
 	noteCommand,
 	routeCommand,

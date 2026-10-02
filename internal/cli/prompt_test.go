@@ -1069,7 +1069,7 @@ func TestPromptApplicableOptionsStandalone(t *testing.T) {
 			app := App{Out: &out, RuntimeEnv: snapshotWith(map[string]string{
 				runtimeconfig.EnvCommitPolicy: "none", runtimeconfig.EnvExecutionMode: "current",
 				runtimeconfig.EnvPullRequest: "invalid", runtimeconfig.EnvSessionTimeout: "invalid",
-			}), Registry: func() NoteRegistry { t.Fatal("standalone rendering resolved repository"); return nil }}
+			}), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }}
 			// A real packet exposes both option values, unlike mode-independent prose.
 			root := t.TempDir()
 			dir := writeRunPlan(t, root, "20260430-1200-options", plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)

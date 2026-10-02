@@ -49,7 +49,7 @@ func TestUINotePlanningCommand(t *testing.T) {
 			app.RuntimeEnv = snapshotWith(map[string]string{
 				runtimeconfig.EnvAgent:          kind,
 				runtimeconfig.EnvSessionTimeout: "invalid",
-				runtimeconfig.EnvModel:          "invalid model",
+				runtimeconfig.EnvModel:          "captured-model",
 				runtimeconfig.EnvPlannerRouting: "invalid",
 			})
 			t.Setenv("TAO_AGENT", "invalid-after-capture")
@@ -62,7 +62,7 @@ func TestUINotePlanningCommand(t *testing.T) {
 				if want == "" {
 					want = "pi"
 				}
-				if !reflect.DeepEqual(cmd.Args, []string{want, "/tao-plan note:" + item.ID}) || cmd.Dir != registered.Root {
+				if !reflect.DeepEqual(cmd.Args, []string{want, "--model", "captured-model", "/tao-plan note:" + item.ID}) || cmd.Dir != registered.Root {
 					t.Fatalf("command = %+v", cmd)
 				}
 				if cmd.Stdin != app.In || cmd.Stdout != app.Out || cmd.Stderr != app.Err {
@@ -83,6 +83,19 @@ func TestUINotePlanningCommand(t *testing.T) {
 				t.Fatal("launch wrote metadata")
 			}
 		})
+	}
+}
+
+func TestUINotePlanningRejectsInvalidConsumedModelBeforeSession(t *testing.T) {
+	app, _, item := planningFixture(t)
+	app.RuntimeEnv = snapshotWith(map[string]string{runtimeconfig.EnvModel: "invalid model"})
+	launcher := newUINotePlanningLauncher(app, app.In, app.Out)
+	launcher.run = func(*exec.Cmd) error {
+		t.Fatal("session started with invalid model")
+		return nil
+	}
+	if err := launcher.Launch(context.Background(), item); err == nil || !strings.Contains(err.Error(), runtimeconfig.EnvModel) {
+		t.Fatalf("invalid model admitted: %v", err)
 	}
 }
 

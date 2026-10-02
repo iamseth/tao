@@ -12,7 +12,8 @@ import (
 	"github.com/iamseth/tao/internal/theme"
 )
 
-// EnvSnapshot captures the runtime table for one invocation. Construction never
+// EnvSnapshot captures the runtime table and optionally resolved saved layers for
+// one invocation, retaining original environment presence for recomposition. Construction never
 // fails: consumers must Require the settings they use before acting on Defaults.
 // Fields are immutable after construction; projections do not share mutable data.
 // The zero snapshot projects built-ins, without consulting the environment.
@@ -20,6 +21,9 @@ type EnvSnapshot struct {
 	defaults EnvDefaults
 	rows     []EnvVarStatus
 	failures map[string]error
+	// captured contains only original environment presence, never resolved defaults.
+	captured map[string]string
+	settings []SettingStatus
 }
 
 // LoadEnv looks up and parses each runtime key once, retaining every status row
@@ -29,20 +33,35 @@ type EnvSnapshot struct {
 // ignored when its canonical key is also set, otherwise it is applied and the
 // canonical row reflects the value. Unset aliases produce no row.
 func LoadEnv(lookup func(string) (string, bool)) EnvSnapshot {
-	s := EnvSnapshot{
-		defaults: builtinEnvDefaults(),
-		rows:     make([]EnvVarStatus, 0, len(runtimeEnvVars)),
-		failures: make(map[string]error),
+	captured := make(map[string]string)
+	if lookup != nil {
+		for _, v := range runtimeEnvVars {
+			if raw, set := lookup(v.name); set {
+				captured[v.name] = raw
+			}
+		}
 	}
-	builtins := s.defaults.RunOptionsPatch
+	return loadEnvOnto(captured, EnvSnapshot{defaults: builtinEnvDefaults(), failures: make(map[string]error)})
+}
+
+func loadEnvOnto(captured map[string]string, s EnvSnapshot) EnvSnapshot {
+	baseline := make(map[string]EnvVarStatus)
+	for _, row := range s.rows {
+		baseline[row.Name] = row
+	}
+	s.rows = make([]EnvVarStatus, 0, len(runtimeEnvVars))
+	s.captured = make(map[string]string)
+	builtins := builtinEnvDefaults().RunOptionsPatch
 	rowIndex := map[string]int{}
 	overridden := map[string]bool{}
 	for _, v := range runtimeEnvVars {
 		row := EnvVarStatus{Name: v.name, Value: v.defaultValue(builtins), Source: "default"}
-		var raw string
-		var set bool
-		if lookup != nil {
-			raw, set = lookup(v.name)
+		if saved, ok := baseline[v.name]; ok {
+			row = saved
+		}
+		raw, set := captured[v.name]
+		if set {
+			s.captured[v.name] = raw
 		}
 		if !v.hasOverride(raw, set) {
 			if v.aliasOf != "" {
@@ -75,20 +94,29 @@ func LoadEnv(lookup func(string) (string, bool)) EnvSnapshot {
 				}
 			}
 		case v.fallbackOnInvalid:
-			row.Warning = fmt.Sprintf("invalid env value %q: %v; using default", raw, err)
+			row.Warning = joinSettingWarning(row.Warning, fmt.Sprintf("invalid env value %q: %v; using %s", raw, err, row.Source))
 		default:
 			failure := fmt.Errorf("%s: %w", v.name, err)
-			s.failures[v.name] = failure
+			s.failures[v.name] = errors.Join(s.failures[v.name], failure)
 			row.Source = "invalid"
-			row.Warning = fmt.Sprintf("invalid env value %q: %v; rejected", raw, failure)
+			row.Warning = joinSettingWarning(row.Warning, fmt.Sprintf("invalid env value %q: %v; rejected", raw, failure))
 			if v.aliasOf != "" {
 				row.Warning += fmt.Sprintf("; deprecated; use %s", v.aliasOf)
+				s.failures[v.aliasOf] = errors.Join(s.failures[v.aliasOf], failure)
+				canonical := &s.rows[rowIndex[v.aliasOf]]
+				canonical.Source = "invalid"
+				canonical.Warning = joinSettingWarning(canonical.Warning, row.Warning)
 			}
 		}
 		rowIndex[v.name] = len(s.rows)
 		s.rows = append(s.rows, row)
 	}
 	s.rejectBudgetStopBelowWarn(rowIndex)
+	for i := range s.rows {
+		if s.failures[s.rows[i].Name] != nil {
+			s.rows[i].Source = "invalid"
+		}
+	}
 	return s
 }
 
@@ -113,10 +141,10 @@ func (s *EnvSnapshot) rejectBudgetStopBelowWarn(rowIndex map[string]int) {
 			continue
 		}
 		failure := fmt.Errorf("%s: stop %s is below %s warn %s; stop must be at least warn", stopKey, formatBudgetNumber(limit.Stop), warnKey, formatBudgetNumber(limit.Warn))
-		s.failures[stopKey] = failure
+		s.failures[stopKey] = errors.Join(s.failures[stopKey], failure)
 		if index, ok := rowIndex[stopKey]; ok {
 			s.rows[index].Source = "invalid"
-			s.rows[index].Warning = failure.Error()
+			s.rows[index].Warning = joinSettingWarning(s.rows[index].Warning, failure.Error())
 		}
 	}
 }

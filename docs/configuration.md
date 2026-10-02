@@ -2,26 +2,118 @@
 
 ## How settings resolve
 
-Run settings resolve in three stages:
+Settings resolve in this order, with the rightmost explicit value winning:
+**built-in → global → repository → environment → flags**.
+Absent fields inherit; explicit `false` and `0` do not. Tao does not load `.env`
+files. Environment values are captured once per invocation. Direct runs select
+settings from the plan-recorded repository, not the launch checkout; note runs
+use the selected registered repository. Unhealthy repositories remain
+inspectable but are not runnable.
 
-1. Environment values and built-in defaults establish the baseline.
-2. Repository defaults from `tao repo config` override that baseline.
-3. Explicit per-run flags win over both, including explicit `false` and `0` values.
-
-Tao does not load `.env` files. Repository defaults cover pull requests,
-review runtime, model selection, maximum rework attempts, and the rework escalation threshold;
-`unset` removes only the named stored default and restores inheritance.
-For example:
+### Read and write durable settings
 
 ```sh
-tao repo config --pull-request true
-tao repo config --pull-request false
-tao repo config --pull-request unset
-tao repo config --max-rework-attempts 0 # explicit zero disables automatic rework
-tao repo config --max-rework-attempts unset # restore environment/default inheritance
-tao repo config --rework-escalation-from-attempt 4
-tao repo config --rework-escalation-from-attempt unset
+tao config                         # same as get, current registered repository
+tao config get pull_request
+tao config set pull_request true
+tao config set models.model provider/model --global
+tao config set session_timeout 30m --repo tao
+tao config unset pull_request       # remove only this repository's value
 ```
+
+`tao config get [key]`, `set <key> <value>`, and `unset <key>` accept
+`--global` or `--repo ID`, never both. With neither, the current checkout must
+be registered (`tao init`). `--repo` accepts a unique ID prefix or exact name;
+`--global` works outside a repository. Omitting the verb lists settings.
+`get` reports the effective value/source and the selected scope's stored value;
+writing a saved value does not defeat an environment override.
+
+For one release, `tao repo config [<repo-id>]` remains a compatibility adapter
+for repository `--pull-request true|false|unset` and model flags `--model`,
+`--run-model`, `--review-model`, `--merge-review-model`, `--resolver-model`,
+and `--rework-escalation-model` (each accepts a name or `unset`). Prefer
+`tao config` for new scripts. No automatic migration is required.
+
+### Storage and canonical keys
+
+Global settings live in `<data-home>/config.json` (normally
+`~/.local/share/tao/config.json`), with schema `tao.config.v1`:
+
+```json
+{
+  "schema": "tao.config.v1",
+  "settings": {
+    "agent": "pi",
+    "pull_request": false,
+    "session_timeout": "30m",
+    "models": {"model": "provider/model"},
+    "budget": {"slice": {"cost": {"warn": 5, "stop": null}}}
+  }
+}
+```
+
+Repository settings stay in `<data-home>/repos/<repo-id>/repo.json`, schema
+`tao.repo.v1`, under the existing `run_defaults` object; its nested `models`
+and `pull_request` representation remains readable. Missing global files or
+missing repository defaults mean inheritance. These files are local-only:
+do not add them to a checkout. CLI and Settings writes share serialized atomic
+updates that preserve unrelated metadata and saved fields.
+
+CLI keys are dotted paths; JSON uses nested objects, not literal dotted keys.
+Values are native JSON booleans/numbers/strings, not stringified booleans or
+numbers. Durations, enums, and model names are strings. CLI values use the
+runtime parsers below, then save native scalars.
+
+| Scope | Canonical keys | Native value |
+| --- | --- | --- |
+| Global and repository | `agent`, `review_agent`, `commit_policy`, `execution_mode`, `session_timeout` | String; choices/ranges below |
+| Global and repository | `pull_request`, `review_enabled`, `dangerously_skip_permissions`, `run_header` | Boolean |
+| Global and repository | `max_slices`, `session_warn_percent`, `max_rework_attempts`, `rework_escalation_from_attempt` | Integer |
+| Global and repository | `models.model`, `models.run_model`, `models.review_model`, `models.merge_review_model`, `models.resolver_model`, `models.rework_escalation_model` | Non-empty model string |
+| Global and repository | `budget.<slice\|plan>.<metric>.warn` | Non-negative count integer or cost number |
+| Global and repository | `budget.slice.output_tokens.stop`, `budget.slice.cost.stop` | Non-negative integer/number or `null` |
+| Global only | `theme`, `update` | String; choices below |
+| Environment/flags only (not persisted) | `merge_verify_command`, `aggregate_review_convergence_window`, `approved_by`, `planner_routing`, `planner_routing_arms`, `planner_routing_floor` | Existing process/merge/planner controls; see below and command help |
+
+Budget metrics are `output_tokens`, `cost`, `tool_calls`, `assistant_messages`,
+and `errored_messages`. `max_slices` has no environment alias: it defaults to
+`0` (all pending slices) and accepts non-negative integers. Other defaults and
+environment aliases appear below (`review_enabled` maps to `TAO_REVIEW`). The
+deprecated `TAO_AUTO_REWORK` alias is environment-only; save `max_rework_attempts`
+instead.
+Bootstrap paths and recovery actions are never persisted settings.
+
+### Migration: environment now wins
+
+Previously a repository value could mask a `TAO_*` value. That order is
+intentionally reversed. For example, after saving `pull_request=true`:
+
+```sh
+tao config set pull_request true
+TAO_PULL_REQUEST=false tao run <plan>  # now false, formerly repository true won
+TAO_PULL_REQUEST=false tao run --pull-request=true <plan> # explicit flag wins
+```
+
+Similarly, `TAO_MODEL=provider/env-model` now wins over a repository
+`models.model=provider/repo-model`. Remove old exports from your shell/CI to
+use saved preferences; `tao config unset` removes only the selected saved
+field, not an environment value. Inspect `tao status` before migrating a run.
+
+### Invocation flags
+
+`tao run` and `tao note run` add only `--agent pi|claude` and
+`--session-timeout DURATION` (non-negative Go duration; `0` disables).
+All existing flags retain their names and behavior, including `--max-slices`,
+`--commit-policy`, `--execution-mode`, `--pull-request`, `--no-review`, and
+`--dangerously-skip-permissions`. The permissions flag bypasses Claude
+permission checks and is a compatibility no-op for Pi, exactly like
+`TAO_DANGEROUSLY_SKIP_PERMISSIONS`.
+
+Run-specific flags such as `--model`, `--rework-escalation-model`,
+`--no-run-header`, `--review-agent`, `--max-rework-attempts`,
+`--rework-escalation-from-attempt`, and recovery flags are unchanged; note-run planner-routing flags are unchanged. This does not add
+all run flags to note run or change merge policy. Use `tao run --help`,
+`tao note run --help`, and `tao merge --help` for each command's full flag set.
 
 ## Command applicability
 
@@ -61,18 +153,19 @@ validation. Planning agent/model selection remains separate from execution.
 Applicability conveys no lifecycle, recovery, approval, commit or merge authority;
 for example, the full-run profile does not grant note execution recovery flags.
 
-Precedence is unchanged: built-ins → captured invocation environment → repository
-defaults → explicitly provided registered flags. Only existing repository fields
-(PR preference, review runtime, models, and numeric rework defaults) participate. An explicit flag is an override even when
-its value equals the built-in default, including explicit `false`; an absent or
-unregistered flag is never an override. Unset model roles fall back to the resolved
-base (escalation remains opt-in). The invocation reuses its environment snapshot
-and selected repository defaults through execution handoffs.
+Precedence follows the scoped order above: built-ins → global settings → repository
+settings → captured invocation environment → explicitly provided registered flags.
+Only persisted settings participate below the environment; environment-only
+controls still come from the captured environment. An explicit flag is an override
+even when its value equals the built-in default, including explicit `false`; an
+absent or unregistered flag is never an override. Unset model roles fall back to the
+resolved base (escalation remains opt-in). The invocation reuses its composed
+snapshot through execution handoffs.
 
 Only consumed settings are admitted. A malformed applicable environment value
 still fails even if a repository default or flag would override it; unrelated
 invalid settings do not block the path. Applicable conflicts are strict, with
-winning sources (`default`, `env`, `repository`, `flag`) in option-conflict
+winning sources (`default`, `global`, `repository`, `env`, `flag`) in option-conflict
 diagnostics: PR with commit policy `none`, or PR in the current workspace, is an
 error, not a silent PR fallback. Positive automatic-rework attempts with
 review disabled normalize to zero with a warning, including explicit flags. State-dependent checks still run on the execution path.
@@ -96,8 +189,8 @@ result. Status JSON and TUI Settings retain their existing shapes and values.
 
 ## Runtime settings
 
-Defaults below describe the environment/built-in layer, before repository and
-per-run overrides. Boolean values use the grammar described below. Model names
+Defaults below are built-in values, before saved settings, environment, and
+explicit flags. Boolean values use the grammar described below. Model names
 are opaque runtime-specific identifiers: non-empty and whitespace-free after
 trimming surrounding whitespace. Leave a model variable unset to inherit;
 explicitly setting it to an empty value is invalid.
@@ -173,32 +266,48 @@ The canonical warning settings are:
 
 Only `TAO_BUDGET_SLICE_OUTPUT_TOKENS_STOP` and `TAO_BUDGET_SLICE_COST_STOP`
 are supported hard caps. Counts accept non-negative integers; costs accept
-finite non-negative numbers. Unset or empty stop values leave the cap disabled;
+finite non-negative numbers. An empty environment STOP value disables the cap;
 an explicit `0` is a hard cap and requires the corresponding warning to be `0`.
+Absent environment keys inherit saved caps (disabled by default). In saved settings, `null` explicitly disables a STOP cap while
+`tao config unset` restores inheritance. Null is not accepted for other settings.
+STOP/WARN relationships are checked on the fully resolved values when consumed,
+not on an incomplete saved layer; saving a scalar does not prove admission.
+
+```sh
+tao config set budget.slice.cost.stop 10 --global
+tao config set budget.slice.cost.stop null # disable inherited cap in this repo
+tao config unset budget.slice.cost.stop    # inherit global cap again
+```
 
 Automatic rework defaults to five attempts with escalation eligible from attempt four.
-Repository flags `--max-rework-attempts N|unset` (non-negative) and
-`--rework-escalation-from-attempt N|unset` (at least one) validate before writing;
+`max_rework_attempts` (non-negative) and `rework_escalation_from_attempt` (at
+least one) are scoped settings; `tao config set` and the compatibility flags
+`tao repo config --max-rework-attempts N|unset` and
+`--rework-escalation-from-attempt N|unset` validate before writing, and
 unmentioned settings are preserved. `tao repo config` displays absent values as
-`unset` and explicit zero as `0`; status and Settings show numeric repository
-values with source `repository` while retaining captured environment diagnostics.
+`unset` and explicit zero as `0`; status and Settings show saved numeric values
+with their winning source while retaining captured environment diagnostics.
 
-Automatic rework resolves environment → repository numeric defaults → explicit invocation flags. `--max-rework-attempts N` and `--rework-escalation-from-attempt N` preserve explicit zero/count overrides; only the attempt count permits zero. The deprecated `--auto-rework` alias remains accepted for one release (false = zero, true = five), warns whenever supplied, and yields to an explicit count in the same invocation. Registered flag defaults are not overrides. Positive attempts with automatic review disabled normalize to zero with one warning, regardless of source. Reverify always executes and presents zero attempts. Note promotion inherits the selected repository's automatic-rework settings. Invalid consumed environment settings are rejected lazily before execution/handoff mutation; unrelated merge settings do not block ordinary runs.
+Automatic rework resolves global → repository numeric defaults → environment → explicit invocation flags. `--max-rework-attempts N` and `--rework-escalation-from-attempt N` preserve explicit zero/count overrides; only the attempt count permits zero. The deprecated `--auto-rework` alias remains accepted for one release (false = zero, true = five), warns whenever supplied, and yields to an explicit count in the same invocation. Registered flag defaults are not overrides. Positive attempts with automatic review disabled normalize to zero with one warning, regardless of source. Reverify always executes and presents zero attempts. Note promotion inherits the selected repository's automatic-rework settings. Invalid consumed environment settings are rejected lazily before execution/handoff mutation; unrelated merge settings do not block ordinary runs.
 
 ## Review runtime selection
 
-Plan reviews resolve `TAO_REVIEW_AGENT` → repository `review_agent` → explicit
-`--review-agent`. Only `pi` and `claude` are selectors. Empty/unset environment
-configuration inherits the final implementing `TAO_AGENT`; omitted invocation
-flags preserve repository defaults. Legacy and unregistered repositories inherit
-normally. An explicitly empty CLI selector is invalid.
+`review_agent` is a scoped setting (global and repository) with environment
+alias `TAO_REVIEW_AGENT`, so plan reviews resolve it like every other run
+preference: built-in → global → repository `review_agent` → `TAO_REVIEW_AGENT`
+→ explicit `--review-agent`. Only `pi` and `claude` are selectors. An unset
+selector inherits the final implementing `TAO_AGENT`; omitted invocation flags
+preserve saved values. Legacy and unregistered repositories inherit normally. An
+explicitly empty CLI selector is invalid.
 
 ```sh
-tao repo config --review-agent claude
+tao config set review_agent claude          # current registered repository
+tao config set review_agent claude --global
 tao run --review-agent pi my-plan
 tao review --run --review-agent claude my-plan
 tao rework --from-pr --run --review-agent pi my-plan
-tao repo config --review-agent unset # remove only this override
+tao config unset review_agent               # remove only this saved value
+tao repo config --review-agent unset        # compatibility adapter, same effect
 ```
 
 `review` and `rework` require `--run` with this flag. Explicit selection survives
@@ -216,8 +325,8 @@ implementation, PR creation, or any merge-owned session. `tao merge` has no
 `--review-agent` flag.
 
 `tao doctor` (or `--verbose`) shows implementation and effective plan-review
-roles from the captured environment and current repository defaults, not a future
-invocation's flags. Outside a registered checkout it uses environment inheritance;
+roles from the composed settings (saved global and repository values beneath the
+captured environment), not a future invocation's flags. Outside a registered checkout it uses environment inheritance;
 if repository lookup is unavailable, it says so. Only role settings are consumed:
 unrelated malformed model, timeout, or budget settings do not prevent collection.
 Missing selected executables get setup guidance; an unused second runtime is not
@@ -230,21 +339,17 @@ runtime regardless of the selected roles, and install nothing if none is found.
 ## Model selection
 
 Model settings are optional; unset roles inherit the resolved base model, and
-with no model settings Tao leaves the runtime's selection unchanged. Environment
-values establish the base and role fields, repository defaults override matching
-fields, and an explicit per-invocation `--model` overrides the base and all roles.
-Manage the current repository's defaults independently:
+with no model settings Tao leaves the runtime's selection unchanged. Each field
+uses the scoped precedence above; role fallback happens after resolution. A
+saved base never erases an explicit environment role. An explicit per-invocation
+`--model` overrides the base and all roles. Manage defaults independently:
 
 ```sh
-tao repo config --model provider/model
-tao repo config --run-model provider/implementation-model
-tao repo config --run-model unset # remove this default and restore inheritance
-tao repo config --rework-escalation-model provider/stronger-model
+tao config set models.model provider/model --global
+tao config set models.run_model provider/implementation-model
+tao config unset models.run_model # restore inheritance
+tao config set models.rework_escalation_model provider/stronger-model
 ```
-
-Repository model flags are `--model`, `--run-model`, `--review-model`,
-`--merge-review-model`, `--resolver-model`, and `--rework-escalation-model`;
-each accepts a name or `unset`.
 For a one-invocation override of every role, use `tao run --model NAME <plan>`,
 `tao review --run --model NAME <plan>`, or `tao merge --model NAME <plan>`
 (including `tao merge --all --model NAME`). See the
@@ -253,7 +358,8 @@ for precedence and runtime rejection behavior.
 
 Escalation is opt-in and separate from role selection: use
 `tao run --rework-escalation-model NAME <plan>` for a one-run policy override.
-The attempt threshold is environment-only (default 4); without an effective
+The attempt threshold is `rework_escalation_from_attempt` (default 4), also
+settable via `TAO_REWORK_ESCALATION_FROM_ATTEMPT`; without an effective
 escalation model, rework is unchanged. A model already recorded for a round
 still wins at execution time. See the
 [rework guide](usage-guide.md#escalate-late-automatic-rework)
@@ -285,21 +391,39 @@ including invalid advisory-budget overrides and hard caps; unused settings do
 not block unrelated commands. Invalid `TAO_THEME` and `TAO_RUN_HEADER` values
 instead warn and retain their defaults (`tokyonight` and enabled).
 Help and `tao status` (`--json` for automation) remain available to diagnose
-invalid configuration, including `TAO_UPDATE`. Settings/Debug remain explicit
-developer previews (`tui-preview --view settings` or `--view debug`), not
-interactive dashboard tabs. Use environment settings and `tao repo config`
-to configure runtime and repository defaults.
-Diagnostics retain every runtime-table setting, even when another is invalid.
+invalid configuration, including `TAO_UPDATE`. Diagnostics retain every
+runtime-table setting even when another is invalid. Invalid saved fields remain
+diagnostic/admission errors even when a valid environment value masks them;
+fix or unset the saved field rather than treating the override as repair.
+Unknown keys, disallowed scopes, invalid scalars, and unsupported schemas report
+errors. Malformed files (including duplicate or ambiguous keys) require manual
+repair at the reported path; Tao does not silently replace them. Readable files
+can have individual invalid/unknown saved fields repaired or unset without
+losing unrelated fields. A write followed by diagnostic output may have saved
+successfully while another field remains invalid; inspect `get` before retrying.
 
-Run `tao status` to see the resolved `TAO_*` runtime values and repository plan
-rollups (`tao status --json` for automation). Use `tao run --help` and
-`tao merge --help` for exact one-run overrides covering review, rework, pull
-requests, permissions, and integration. Configure the agent session timeout with
-`TAO_SESSION_TIMEOUT`; set it to `0` to disable the timeout.
+`tao status` shows effective scoped settings, their sources, retained global and
+repository values, environment masking, invalid diagnostics, and repository plan
+rollups. Its JSON retains `runtime_env` alongside scoped settings and read-only
+path facts. Paths are reported separately, never as editable preferences.
+`tao config get` distinguishes selected-scope storage from effective values;
+`source=env` with a saved value explains why changing that saved value has no
+immediate effect. Inspection does not supply invocation flags for a future run.
+
+The `tao ui` Settings tab shows global-effective and repository-effective
+settings. Repository values are editable with typed validation, inherit/unset,
+STOP disabling, and confirmation; global-only and process/path rows are
+read-only. Use `tao config --global` to edit global preferences. File values
+refresh through the shared service, while the UI's captured environment stays
+fixed until a new invocation. See the [workflow guide](usage-guide.md#choose-durable-settings-or-one-off-overrides)
+for editing keys. Debug and developer previews remain available for diagnostics.
 
 ## Other environment variables
 
-These variables are read outside the runtime settings table:
+These variables are read outside the runtime settings table. Bootstrap paths
+are environment/flag-only (`--plans-dir` still selects runtime plan storage);
+they cannot be saved with `tao config`. Status/Settings display captured resolved
+paths without installing anything. No new Pi prompt override was introduced.
 
 - `TAO_DATA_HOME`: override Tao's data directory. Resolution uses this value
   first, then `XDG_DATA_HOME` with `/tao` appended, then `HOME` with
@@ -308,7 +432,12 @@ These variables are read outside the runtime settings table:
 - `TAO_PI_EXTENSION_DIR`: prompt-install override for the Pi extension **source**
   directory (containing `package.json`), not its installation destination. By
   default Tao discovers `extensions/pi` from the working directory, executable,
-  or build-source location.
+  or build-source location. The Pi extension installation destination defaults
+  to `~/.pi/agent/extensions/tao`; it is distinct from that source directory.
+- `PI_CODING_AGENT_DIR`: existing Pi agent-directory override. Pi prompts and
+  extensions install under its `prompts/` and `extensions/tao` children;
+  by default the agent directory is `~/.pi/agent`. This is not a new
+  Tao-specific prompt override.
 - `TAO_CLAUDE_COMMANDS_DIR`: prompt-install override for the Claude commands
   directory; defaults to `~/.claude/commands`.
 - `TAO_SLICE_COMPLETION_OWNER`: internal handshake binding slice completion to

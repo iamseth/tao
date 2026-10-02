@@ -16,6 +16,7 @@ import (
 	"github.com/iamseth/tao/internal/planning"
 	"github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+	"github.com/iamseth/tao/internal/settings"
 	"github.com/iamseth/tao/internal/taodata"
 	"github.com/iamseth/tao/internal/theme"
 	"github.com/iamseth/tao/internal/tui"
@@ -52,8 +53,14 @@ type App struct {
 	// RuntimeEnv is the immutable invocation snapshot. Nil captures fresh process
 	// settings on each Run; lower-level consumers without injection use built-ins.
 	RuntimeEnv *runtimeconfig.EnvSnapshot
+	// SettingsService may be injected with a frozen environment and data home.
+	SettingsService     *settings.Service
+	settingsEnvironment *runtimeconfig.EnvSnapshot
+	settingsGlobal      *settings.View
+	settingsPathFacts   []settingsPathRow
 	// Theme overrides runtime selection. Nil uses the invocation snapshot.
-	Theme *theme.Theme
+	Theme        *theme.Theme
+	runtimeTheme bool
 	// Now supplies the wall clock for timestamps recorded by commands. Tests
 	// inject a fixed clock; when nil it defaults to time.Now.
 	Now func() time.Time
@@ -127,6 +134,7 @@ func (a App) Run(ctx context.Context, args []string) error {
 		snapshot := runtimeconfig.RuntimeEnv()
 		a.RuntimeEnv = &snapshot
 	}
+	a = a.initializeSettings(ctx)
 	a = a.withRuntimeTheme()
 	a = a.withDefaultStatusReporter()
 	if len(args) == 0 {
@@ -142,6 +150,7 @@ func (a App) Run(ctx context.Context, args []string) error {
 		return a.usage()
 	}
 
+	a = a.captureSettingsPaths(plansDir)
 	command := normalizeCommand(args[0])
 	if command == "complete" {
 		if len(args) == 2 && args[1] == "note-ids" {
@@ -166,9 +175,11 @@ func (a App) Run(ctx context.Context, args []string) error {
 		return fmt.Errorf("unknown command %q", args[0])
 	}
 	help := containsHelpFlag(args[1:])
+	diagnostic := help || metadata.name == "status" || metadata.name == "ui" || metadata.name == "config" ||
+		metadata.name == "repo"
 	if metadata.name != updateCommand.name {
 		startup := a.runStartupUpdate
-		if help || metadata.name == "status" || metadata.name == "ui" {
+		if diagnostic {
 			startup = a.runDiagnosticStartupUpdate
 		}
 		if err := startup(ctx); err != nil {

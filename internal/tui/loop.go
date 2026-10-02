@@ -69,6 +69,11 @@ type DebugSnapshotCollector interface {
 }
 
 // SettingsService supplies repository settings and persists confirmed updates.
+// SettingsEditor is an optional capability; existing read/PR services remain valid.
+type SettingsEditor interface {
+	SetSetting(context.Context, string, string, *string) error
+}
+
 type SettingsService interface {
 	Collect(context.Context) (SettingsSnapshot, error)
 	SetPullRequestDefault(context.Context, string, *bool) error
@@ -117,6 +122,7 @@ type loopState struct {
 	noteSnapshot     note.Snapshot
 	debugSnapshot    DebugSnapshot
 	settingsSnapshot SettingsSnapshot
+	settingsEditor   *settingsEditorState
 	page             PageID
 	selected         int
 	pageSelections   map[PageID]int
@@ -130,6 +136,7 @@ type loopState struct {
 	searchQuery      string
 	searchActive     bool
 	debugOffset      int
+	settingsOffset   int
 	settingsMessage  string
 	confirm          *confirmPrompt
 	detail           *detailState
@@ -358,6 +365,7 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 				} else {
 					state.clampSelection()
 				}
+				state.clampSettingsOffset()
 			}
 			if a.Actions != nil {
 				a.Actions.Reconcile(snapshot)
@@ -386,6 +394,7 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 			}
 			state.clampNoteDetailOffset()
 			state.clampDebugOffset()
+			state.clampSettingsOffset()
 			if err := a.writeFrame(state); err != nil {
 				return err
 			}
@@ -567,6 +576,15 @@ func (a App) collectSettings(ctx context.Context) SettingsSnapshot {
 		return SettingsSnapshot{CollectionError: "settings service unavailable"}
 	}
 	snapshot, err := a.Settings.Collect(ctx)
+	if _, ok := a.Settings.(SettingsEditor); !ok {
+		snapshot.Repositories = append([]RepositorySetting(nil), snapshot.Repositories...)
+		for i := range snapshot.Repositories {
+			snapshot.Repositories[i].Values = append([]SettingsValue(nil), snapshot.Repositories[i].Values...)
+			for j := range snapshot.Repositories[i].Values {
+				snapshot.Repositories[i].Values[j].Editable = false
+			}
+		}
+	}
 	if err != nil {
 		snapshot.CollectionError = err.Error()
 	}
@@ -629,11 +647,13 @@ func (a App) writeFrame(state loopState) error {
 			SearchQuery:      state.searchQuery,
 			SearchActive:     state.searchActive,
 			DebugOffset:      state.debugOffset,
+			SettingsOffset:   state.settingsOffset,
 			ConfirmMessage:   state.confirmMessage(),
 			ActionLabels:     a.Actions.labels(),
 			ActionMessage:    a.Actions.statusMessage(),
 			NoteMessage:      state.noteEditMessage,
 			SettingsMessage:  state.settingsMessage,
+			settingsEditor:   state.settingsEditor,
 		})
 		if state.filterMenu != nil {
 			lines := strings.Split(strings.TrimPrefix(rendered, clearScreenSequence), "\n")
@@ -714,6 +734,22 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 	}
 	if state.confirm != nil {
 		return state.handleKey(key)
+	}
+	if state.settingsEditor != nil {
+		a.handleSettingsEditor(ctx, state, key)
+		return false
+	}
+	if state.detail == nil && state.noteDetail == nil && !state.searchActive && key.Key == term.KeyRune && key.Rune == 's' {
+		state.page = PageSettings
+		state.selected = 0
+		state.settingsSnapshot = a.collectSettings(ctx)
+		return false
+	}
+	if state.activePage() == PageSettings && key.Key == term.KeyRune && key.Rune == 'e' {
+		if repo, ok := state.selectedRepositorySetting(); ok {
+			state.settingsEditor = &settingsEditorState{repositoryID: repo.ID}
+		}
+		return false
 	}
 	if state.searchActive {
 		state.handleSearchKey(key)
@@ -1293,6 +1329,26 @@ func (s *loopState) handleKey(key term.KeyEvent) bool {
 			return false
 		}
 	}
+	if s.activePage() == PageSettings && s.settingsEditor == nil {
+		// Global values and paths are not selectable; scroll them like the Debug
+		// page. Repository selection keeps the arrow keys while repositories exist.
+		handled := true
+		switch {
+		case key.Key == term.KeyRune && key.Rune == 'g':
+			s.settingsOffset = 0
+		case key.Key == term.KeyRune && key.Rune == 'G':
+			s.settingsOffset = s.settingsPageMaxOffset()
+		case s.pageRowCount() == 0 && (key.Key == term.KeyArrowUp || (key.Key == term.KeyRune && key.Rune == 'k')):
+			s.settingsOffset = max(s.settingsOffset-1, 0)
+		case s.pageRowCount() == 0 && (key.Key == term.KeyArrowDown || (key.Key == term.KeyRune && key.Rune == 'j')):
+			s.settingsOffset = min(s.settingsOffset+1, s.settingsPageMaxOffset())
+		default:
+			handled = false
+		}
+		if handled {
+			return false
+		}
+	}
 
 	switch {
 	case key.Key == term.KeyEsc:
@@ -1311,10 +1367,12 @@ func (s *loopState) handleKey(key term.KeyEvent) bool {
 	case key.Key == term.KeyArrowUp || (key.Key == term.KeyRune && key.Rune == 'k'):
 		if s.selected > 0 {
 			s.selected--
+			s.settingsOffset = 0
 		}
 	case key.Key == term.KeyArrowDown || (key.Key == term.KeyRune && key.Rune == 'j'):
 		if s.selected+1 < s.pageRowCount() {
 			s.selected++
+			s.settingsOffset = 0
 		}
 	case (s.activePage() == PagePlans || s.activePage() == PageNotes) && key.Key == term.KeyRune && (key.Rune == 'f' || key.Rune == 'F'):
 		s.filterMenu = newFilterMenu(s.filter, s.snapshot, s.noteSnapshot)
@@ -1400,6 +1458,10 @@ func (s *loopState) movePage(direction int) {
 	switch s.activePage() {
 	case PageDebug:
 		s.debugOffset = max(0, min(s.debugPageMaxOffset(), s.debugOffset+direction*step))
+	case PageSettings:
+		if s.settingsEditor == nil {
+			s.settingsOffset = max(0, min(s.settingsPageMaxOffset(), s.settingsOffset+direction*step))
+		}
 	default:
 		count := s.pageRowCount()
 		if count > 0 {
@@ -1721,6 +1783,27 @@ func (s loopState) debugPageMaxOffset() int {
 		SearchActive:  s.searchActive,
 		Filter:        s.filter,
 	})
+}
+
+func (s loopState) settingsPageMaxOffset() int {
+	return settingsMaxOffset(Model{
+		Page:             PageSettings,
+		Selected:         s.selected,
+		Snapshot:         s.snapshot,
+		NoteSnapshot:     s.noteSnapshot,
+		SettingsSnapshot: s.settingsSnapshot,
+		Width:            s.size.Width,
+		Height:           s.size.Height,
+		Profile:          s.profile,
+		Theme:            s.theme,
+		SearchQuery:      s.searchQuery,
+		SearchActive:     s.searchActive,
+		Filter:           s.filter,
+	})
+}
+
+func (s *loopState) clampSettingsOffset() {
+	s.settingsOffset = max(0, min(s.settingsOffset, s.settingsPageMaxOffset()))
 }
 
 func (s *loopState) clampDebugOffset() {

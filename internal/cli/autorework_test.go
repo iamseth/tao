@@ -10,10 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/iamseth/tao/internal/configtypes"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/rework"
 	"github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+	"github.com/iamseth/tao/internal/taodata"
 )
 
 type recordingAutoReworkRepository struct {
@@ -67,7 +69,9 @@ func TestRunRecordsResolvedEscalationPolicy(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			clearTaoEnv(t)
-			t.Setenv("TAO_DATA_HOME", t.TempDir())
+			home := t.TempDir()
+			t.Setenv("TAO_DATA_HOME", home)
+			writeGlobalSettings(t, home, `{"session_timeout":"2m"}`)
 			if tt.model != "" {
 				t.Setenv(runtimeconfig.EnvReworkEscalationModel, tt.model)
 			}
@@ -78,15 +82,26 @@ func TestRunRecordsResolvedEscalationPolicy(t *testing.T) {
 			const planID = "20260926-2132-escalation"
 			detail, _ := autoReworkTestDetail(planID, now)
 			detail.Dir = t.TempDir()
+			detail.State.Repo.Root = "/recorded"
+			registered := taodata.Repo{Schema: "tao.repo.v1", ID: "selected", Name: "selected", Root: detail.State.Repo.Root, RunDefaults: &taodata.RepoRunDefaults{Extra: configtypes.SettingsValues{"session_timeout": []byte(`"3m"`)}}}
+			registry := taodata.NewRegistry(home)
+			if err := registry.WriteRepo(registered); err != nil {
+				t.Fatal(err)
+			}
 			repo := newRecordingAutoReworkRepository(planID, detail)
 			calls := 0
 			oldExecutor := executeSinglePlan
 			t.Cleanup(func() { executeSinglePlan = oldExecutor })
 			executeSinglePlan = func(_ run.Service, _ context.Context, request run.Request) error {
 				calls++
-				if request.SessionTimeout != 20*time.Minute {
+				if request.SessionTimeout != 3*time.Minute {
 					t.Fatalf("automatic rework reloaded timeout: %s", request.SessionTimeout)
 				}
+				registered.RunDefaults.Extra["session_timeout"] = []byte(`"1s"`)
+				if err := registry.WriteRepo(registered); err != nil {
+					t.Fatal(err)
+				}
+				writeGlobalSettings(t, home, `{"session_timeout":"1s"}`)
 				t.Setenv(runtimeconfig.EnvSessionTimeout, "1s")
 				t.Setenv(runtimeconfig.EnvAutoRework, "false")
 				t.Setenv(runtimeconfig.EnvMaxReworkAttempts, "0")

@@ -19,7 +19,7 @@ var runCommand = commandMetadata{
 	name:      "run",
 	minPrefix: "r",
 	usageLines: []string{
-		"run (r) [--review-agent pi|claude] [--model NAME] [--rework-escalation-model NAME] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue|--restart|--repair-verification|--reverify] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>",
+		"run (r) [--agent pi|claude] [--session-timeout DURATION] [--review-agent pi|claude] [--model NAME] [--rework-escalation-model NAME] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue|--restart|--repair-verification|--reverify] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>",
 	},
 	completionDescription: "Run pending slices with the selected agent",
 	long:                  "Run pending slices for a Tao plan with the selected agent. Tao prepares the requested workspace, executes pending work, automatically reworks review findings by default, records verification metadata, and follows the configured commit policy. In a sufficiently large terminal, Tao displays a pinned run header unless --no-run-header disables it.",
@@ -30,13 +30,15 @@ var runCommand = commandMetadata{
 	registerRuntimeFlags: App.registerRunFlags,
 	completion: completionContext{
 		flagValues: map[string]completionFlagValue{
-			"review-agent":                   {kind: completionValueEnum, label: "agent", values: []string{"pi", "claude"}},
+			"agent":                          {kind: completionValueEnum, label: "agent", values: []string{"pi", "claude"}},
+			"session-timeout":                {kind: completionValueText, label: "duration"},
 			"auto-rework":                    {kind: completionValueBoolean, label: "boolean", values: []string{"true", "false"}},
 			"commit-policy":                  {kind: completionValueEnum, label: "policy", values: []string{"slice", "none"}},
 			"execution-mode":                 {kind: completionValueEnum, label: "mode", values: []string{"isolated", "current"}},
 			"max-rework-attempts":            {kind: completionValueCount, label: "count"},
-			"rework-escalation-from-attempt": {kind: completionValueCount, label: "count"},
 			"max-slices":                     {kind: completionValueCount, label: "count"},
+			"review-agent":                   {kind: completionValueEnum, label: "agent", values: []string{"pi", "claude"}},
+			"rework-escalation-from-attempt": {kind: completionValueCount, label: "count"},
 		},
 		positional: completionPositional{index: 1, label: "plan", completer: completeRunnablePlanIDs},
 	},
@@ -50,11 +52,13 @@ var runCommand = commandMetadata{
 // handler that executes plans, currently tao run and tao note run.
 func (a App) registerRunRequestFlags(fs *flag.FlagSet) {
 	defaults := a.flagDefaults()
+	fs.String("agent", defaults.Agent.String(), "agent runtime: pi or claude")
+	fs.String("session-timeout", defaults.SessionTimeoutValue().String(), "session timeout as a Go duration; 0 disables")
 	fs.Int("max-slices", 0, "maximum slices to run; use 0 for all")
 	fs.String("commit-policy", defaults.CommitPolicy.String(), "automatic commit policy: slice or none")
 	fs.String("execution-mode", defaults.ExecutionModeValue().String(), "execution mode: isolated or current")
 	fs.Bool("pull-request", defaults.PullRequestValue(), "create a GitHub pull request after a completed full run")
-	fs.Bool("dangerously-skip-permissions", defaults.SkipPermissions, "legacy no-op for the Pi agent")
+	fs.Bool("dangerously-skip-permissions", defaults.SkipPermissions, "bypass Claude permission checks; compatibility no-op for Pi")
 	fs.Bool("no-review", !defaults.ReviewEnabledValue(), "disable automatic plan review for this run")
 }
 
@@ -78,6 +82,8 @@ func (a App) registerRunFlags(fs *flag.FlagSet) {
 }
 
 type runFlagValues struct {
+	Agent                 runtimeconfig.AgentKind
+	SessionTimeout        time.Duration
 	Model                 string
 	ReworkEscalationModel string
 	MaxSlices             int
@@ -90,6 +96,12 @@ type runFlagValues struct {
 
 func runRequestOverridesFromFlags(fs *flag.FlagSet, values runFlagValues) runtimeconfig.RunOptionsPatch {
 	var overrides runtimeconfig.RunOptionsPatch
+	if flagWasProvided(fs, "agent") {
+		overrides.Agent = values.Agent
+	}
+	if flagWasProvided(fs, "session-timeout") {
+		overrides = overrides.WithSessionTimeout(values.SessionTimeout)
+	}
 	if flagWasProvided(fs, "model") && values.Model != "" {
 		overrides = overrides.WithModelForAllRoles(values.Model)
 	}
@@ -157,7 +169,30 @@ func runRequestFlagOverrides(fs *flag.FlagSet) (runtimeconfig.RunOptionsPatch, e
 			return runtimeconfig.RunOptionsPatch{}, fmt.Errorf("--rework-escalation-model: %w", err)
 		}
 	}
+	var agentKind runtimeconfig.AgentKind
+	if flagWasProvided(fs, "agent") {
+		if strings.TrimSpace(flagStringValue(fs, "agent")) == "" {
+			return runtimeconfig.RunOptionsPatch{}, fmt.Errorf("--agent: must be pi or claude")
+		}
+		agentKind, err = runtimeconfig.ParseAgentKind(flagStringValue(fs, "agent"))
+		if err != nil {
+			return runtimeconfig.RunOptionsPatch{}, fmt.Errorf("--agent: %w", err)
+		}
+	}
+	var timeout time.Duration
+	if flagWasProvided(fs, "session-timeout") {
+		value := flagStringValue(fs, "session-timeout")
+		if _, err := runtimeconfig.ParseSetting("session_timeout", value); err != nil {
+			return runtimeconfig.RunOptionsPatch{}, fmt.Errorf("--session-timeout: %w", err)
+		}
+		timeout, err = time.ParseDuration(value)
+		if err != nil {
+			return runtimeconfig.RunOptionsPatch{}, fmt.Errorf("--session-timeout: %w", err)
+		}
+	}
 	overrides := runRequestOverridesFromFlags(fs, runFlagValues{
+		Agent:                 agentKind,
+		SessionTimeout:        timeout,
 		Model:                 model,
 		ReworkEscalationModel: escalationModel,
 		MaxSlices:             flagIntValue(fs, "max-slices"),
@@ -225,13 +260,22 @@ type planRunRepository interface {
 }
 
 func (a App) run(ctx context.Context, repo planRunRepository, args []string) error {
+	return a.runWithRepositorySettings(ctx, repo, args, true)
+}
+
+func (a App) runWithRepositorySettings(ctx context.Context, repo planRunRepository, args []string, compose bool) error {
 	fs, positional, err := a.parseArgs("run", args, a.registerRunFlags)
 	if err != nil {
 		return err
 	}
-	options, err := a.resolveCommandOptions(ctx, fs, runtimeconfig.CommandRun)
-	if err != nil {
+	// Validate explicit model syntax even before resolving the selected plan.
+	if _, err := modelFlagValue(fs); err != nil {
 		return err
+	}
+	if flagWasProvided(fs, "rework-escalation-model") {
+		if _, err := runtimeconfig.ParseModelName(flagStringValue(fs, "rework-escalation-model")); err != nil {
+			return fmt.Errorf("--rework-escalation-model: %w", err)
+		}
 	}
 	reworkRestart := flagBoolValue(fs, "rework-restart")
 	blockedRestart := flagBoolValue(fs, "restart")
@@ -247,10 +291,24 @@ func (a App) run(ctx context.Context, repo planRunRepository, args []string) err
 	if recoveryModeCount > 1 {
 		return fmt.Errorf("--continue, --restart, --repair-verification, and --reverify are mutually exclusive")
 	}
-	if err := requirePositionals(positional, 1, "usage: tao run [--review-agent pi|claude] [--model NAME] [--rework-escalation-model NAME] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue|--restart|--repair-verification|--reverify] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>"); err != nil {
+	if err := requirePositionals(positional, 1, "usage: tao run [--agent pi|claude] [--session-timeout DURATION] [--review-agent pi|claude] [--model NAME] [--rework-escalation-model NAME] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue|--restart|--repair-verification|--reverify] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>"); err != nil {
 		return err
 	}
 	input := positional[0]
+	detail, err := repo.ResolvePlan(ctx, input)
+	if err != nil {
+		return err
+	}
+	if compose && detail != nil {
+		a, err = a.settingsForPlanRoot(ctx, detail.State.Repo.Root)
+		if err != nil {
+			return err
+		}
+	}
+	options, err := a.resolveCommandOptions(fs, runtimeconfig.CommandRun)
+	if err != nil {
+		return err
+	}
 	request := run.Request{Input: input, ResolvedRunOptions: options.RunOptions}
 	request.RecoveryMode = run.RecoveryMode{
 		RestartBlocked:     blockedRestart,

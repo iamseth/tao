@@ -77,7 +77,18 @@ func (a App) review(ctx context.Context, repo runpkg.Repository, args []string) 
 		return err
 	}
 	if flagBoolValue(fs, "run") {
-		options, err := a.resolveCommandOptions(ctx, fs, runtimeconfig.CommandReview)
+		detail, err := repo.ResolvePlan(ctx, positional[0])
+		if err != nil {
+			return err
+		}
+		if detail == nil {
+			return fmt.Errorf("plan %q not found", positional[0])
+		}
+		a, err = a.settingsForPlanRoot(ctx, detail.State.Repo.Root)
+		if err != nil {
+			return err
+		}
+		options, err := a.resolveCommandOptions(fs, runtimeconfig.CommandReview)
 		if err != nil {
 			return err
 		}
@@ -94,12 +105,19 @@ func (a App) review(ctx context.Context, repo runpkg.Repository, args []string) 
 }
 
 func (a App) runPlanReview(ctx context.Context, repo runpkg.Repository, input string, overrides runtimeconfig.RunOptionsPatch) error {
-	repositoryDefaults, err := a.currentRepositoryRunOptions(ctx)
+	detail, err := repo.ResolvePlan(ctx, input)
+	if err != nil {
+		return err
+	}
+	if detail == nil {
+		return fmt.Errorf("plan %q not found", input)
+	}
+	a, err = a.settingsForPlanRoot(ctx, detail.State.Repo.Root)
 	if err != nil {
 		return err
 	}
 	options, err := runtimeconfig.ResolveCommandOptions(runtimeconfig.CommandOptionsInput{
-		Env: a.envSnapshot(), Profile: runtimeconfig.CommandReview, Repository: repositoryDefaults, Flags: overrides,
+		Env: a.envSnapshot(), Profile: runtimeconfig.CommandReview, Flags: overrides,
 	})
 	if err != nil {
 		return err

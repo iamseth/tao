@@ -12,6 +12,45 @@ import (
 	"github.com/iamseth/tao/internal/theme"
 )
 
+func TestLegacySettingsServiceDisablesGenericEditing(t *testing.T) {
+	service := &fakeSettingsService{snapshot: SettingsSnapshot{Repositories: []RepositorySetting{{Values: []SettingsValue{{Key: "agent", Editable: true}}}}}}
+	snapshot := (App{Settings: service}).collectSettings(context.Background())
+	if snapshot.Repositories[0].Values[0].Editable {
+		t.Fatal("legacy service advertised generic editing")
+	}
+	if !service.snapshot.Repositories[0].Values[0].Editable {
+		t.Fatal("collection mutated service snapshot")
+	}
+}
+
+func TestScopedSettingsProjectionNarrow(t *testing.T) {
+	for _, width := range []int{35, 70, 120} {
+		model := Model{Page: PageSettings, Width: width, SettingsSnapshot: SettingsSnapshot{
+			Values: []SettingsValue{{Key: "agent", Value: "pi", Source: "default"}},
+			Paths:  []SettingsRuntimeDefault{{Name: "data home", Value: "/local/data", Source: "captured"}},
+			Repositories: []RepositorySetting{{ID: "repo-id", Name: "broken", Root: "/missing", Health: "missing", Finding: "invalid agent", PullRequest: new(true), Values: []SettingsValue{
+				{Key: "agent", Value: "pi", Source: "env", Stored: "invalid", Warning: "invalid choice"},
+				{Key: "budget.slice.cost.stop", Value: "disabled", Source: "default"},
+			}}},
+		}}
+		lines, selected, _ := renderSettingsPage(model)
+		frame := strings.Join(lines, "\n")
+		for _, want := range []string{"GLOBAL DEFAULTS", "PATHS", "repo-id", "broken", "/missing", "health: missing", "invalid choice", "saved (masked by", "disabled", "[env]"} {
+			if !strings.Contains(frame, want) {
+				t.Errorf("width %d missing %q:\n%s", width, want, frame)
+			}
+		}
+		if selected < 0 || strings.Contains(frame, "pr=on") {
+			t.Fatalf("legacy projection won: %s", frame)
+		}
+		for _, line := range lines {
+			if cells.Width(line) > width {
+				t.Errorf("width %d overflow: %q", width, line)
+			}
+		}
+	}
+}
+
 func TestSettingsRejectedDiagnosticsStayVisibleAtNarrowWidths(t *testing.T) {
 	for _, width := range []int{40, 70, 120} {
 		model := Model{Page: PageSettings, Width: width, Height: 80, SettingsSnapshot: SettingsSnapshot{RuntimeDefaults: []SettingsRuntimeDefault{
@@ -705,4 +744,66 @@ func (s *fakeSettingsService) SetPullRequestDefault(ctx context.Context, reposit
 	}
 	s.snapshot.CollectedAt = time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
 	return nil
+}
+
+func TestSettingsPageScrollReachesGlobalValuesAndPaths(t *testing.T) {
+	var values []SettingsValue
+	for index := range 24 {
+		values = append(values, SettingsValue{Key: "budget.slice.metric" + string(rune('a'+index)) + ".warn", Value: "1", Source: "global", Editable: true})
+	}
+	snapshot := SettingsSnapshot{
+		Values: values,
+		Paths: []SettingsRuntimeDefault{
+			{Name: "TAO_DATA_HOME", Value: "/data", Source: "env"},
+			{Name: "TAO_PI_EXTENSION_DIR", Value: "/last-path-row", Source: "default"},
+		},
+		Repositories: []RepositorySetting{{ID: "repo", Name: "example", Root: "/repo", Health: "ok"}},
+	}
+	state := loopState{page: PageSettings, size: term.Size{Width: 80, Height: 12}, settingsSnapshot: snapshot}
+	render := func() string {
+		return Render(Model{Page: PageSettings, Selected: state.selected, SettingsSnapshot: snapshot, Width: 80, Height: 12, SettingsOffset: state.settingsOffset})
+	}
+	if frame := render(); strings.Contains(frame, "/last-path-row") {
+		t.Fatalf("finite frame already shows the last path row:\n%s", frame)
+	}
+	state.handleKey(term.KeyEvent{Key: term.KeyRune, Rune: 'G'})
+	if state.settingsOffset == 0 || state.settingsOffset != state.settingsPageMaxOffset() {
+		t.Fatalf("settings bottom offset = %d max=%d", state.settingsOffset, state.settingsPageMaxOffset())
+	}
+	if frame := render(); !strings.Contains(frame, "/last-path-row") {
+		t.Fatalf("scrolled frame hides the last path row:\n%s", frame)
+	}
+	state.handleKey(term.KeyEvent{Key: term.KeyRune, Rune: 'g'})
+	if state.settingsOffset != 0 {
+		t.Fatalf("settings top offset = %d", state.settingsOffset)
+	}
+	state.movePage(1)
+	if state.settingsOffset == 0 {
+		t.Fatal("page down did not scroll settings")
+	}
+	seen := false
+	for offset := 0; offset <= state.settingsPageMaxOffset(); offset++ {
+		state.settingsOffset = offset
+		if strings.Contains(render(), "budget.slice.metricx.warn") {
+			seen = true
+			break
+		}
+	}
+	if !seen {
+		t.Fatal("a global budget row is unreachable at every scroll offset")
+	}
+	// Moving the repository selection returns to the selection-anchored viewport.
+	state.settingsOffset = 3
+	state.settingsSnapshot.Repositories = append(state.settingsSnapshot.Repositories, RepositorySetting{ID: "second", Name: "second", Root: "/second", Health: "ok"})
+	state.handleKey(term.KeyEvent{Key: term.KeyArrowDown})
+	if state.selected != 1 || state.settingsOffset != 0 {
+		t.Fatalf("selection move kept manual scroll: selected=%d offset=%d", state.selected, state.settingsOffset)
+	}
+	// Without repositories the arrow keys scroll instead of selecting.
+	state.settingsSnapshot.Repositories = nil
+	state.selected, state.settingsOffset = 0, 0
+	state.handleKey(term.KeyEvent{Key: term.KeyArrowDown})
+	if state.settingsOffset != 1 {
+		t.Fatalf("arrow down without repositories offset = %d", state.settingsOffset)
+	}
 }

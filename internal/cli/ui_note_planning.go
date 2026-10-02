@@ -62,7 +62,11 @@ func (launcher *uiNotePlanningLauncher) Launch(ctx context.Context, item note.Ca
 		(current.Promotion != nil && current.Promotion.Plan != nil) {
 		return fmt.Errorf("planning note is no longer open or is already linked to a plan")
 	}
-	defaults, err := launcher.app.envDefaultsFor(runtimeconfig.EnvAgent)
+	app, err := launcher.app.settingsForRepository(ctx, registered)
+	if err != nil {
+		return err
+	}
+	defaults, err := app.envDefaultsFor(runtimeconfig.EnvAgent, runtimeconfig.EnvModel)
 	if err != nil {
 		return err
 	}
@@ -73,7 +77,11 @@ func (launcher *uiNotePlanningLauncher) Launch(ctx context.Context, item note.Ca
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, descriptor.ToolName, "/tao-plan note:"+current.ID) //nolint:gosec // G204: registered executable and exact validated note ID; no shell or note prose.
+	args := []string{"/tao-plan note:" + current.ID}
+	if defaults.Base != "" {
+		args = append([]string{"--model", defaults.Base}, args...)
+	}
+	cmd := exec.CommandContext(ctx, descriptor.ToolName, args...) //nolint:gosec // G204: registered executable and exact validated note ID; no shell or note prose.
 	cmd.Dir = root
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = launcher.input, launcher.output, launcher.app.noteErrorOutput()
 	cmd.Env = herdr.StripInjectedEnv(os.Environ())

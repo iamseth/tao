@@ -76,23 +76,26 @@ func (a App) rework(ctx context.Context, repo planRunRepository, args []string) 
 	if _, err := reviewAgentFlagValue(fs, true); err != nil {
 		return err
 	}
-	if runAfter {
-		// Resolve once before any durable reopening or PR triage mutation.
-		options, err = a.resolveCommandOptions(ctx, fs, runtimeconfig.CommandRun)
-		if err != nil {
-			return err
-		}
-		if err := a.requireRunHandoffBudgets(); err != nil {
-			return err
-		}
-	}
-
 	detail, err := repo.ResolvePlan(ctx, input)
 	if err != nil {
 		return err
 	}
 	if detail == nil {
 		return fmt.Errorf("plan %q not found", input)
+	}
+	a, err = a.settingsForPlanRoot(ctx, detail.State.Repo.Root)
+	if err != nil {
+		return err
+	}
+	if runAfter {
+		// Resolve once before any durable reopening or PR triage mutation.
+		options, err = a.resolveCommandOptions(fs, runtimeconfig.CommandRun)
+		if err != nil {
+			return err
+		}
+		if err := a.requireRunHandoffBudgets(); err != nil {
+			return err
+		}
 	}
 
 	now := a.now().UTC()
@@ -222,7 +225,7 @@ func (a App) reworkFromPullRequest(ctx context.Context, repo planRunRepository, 
 		fs := flag.NewFlagSet("rework", flag.ContinueOnError)
 		registerReworkFlags(fs)
 		var err error
-		options, err = a.resolveCommandOptions(ctx, fs, runtimeconfig.CommandRun)
+		options, err = a.resolveCommandOptions(fs, runtimeconfig.CommandRun)
 		if err != nil {
 			return err
 		}

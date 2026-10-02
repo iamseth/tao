@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -14,14 +16,59 @@ import (
 	"github.com/iamseth/tao/internal/taodata"
 )
 
+func persistStatusRepository(t *testing.T, repo taodata.Repo) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("TAO_DATA_HOME", home)
+	repo.Schema = taodata.RepoSchema
+	repo.Root = home
+	repo.Name = "test-repo"
+	dir := filepath.Join(home, "repos", repo.ID)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "repo.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return home
+}
+
+// Legacy adapters remain callable for the compatibility release, but are not
+// used to compose effective presentation.
+func TestLegacyRepositoryStatusAdapter(t *testing.T) {
+	repo := taodata.Repo{RunDefaults: &taodata.RepoRunDefaults{PullRequest: new(false), Models: &taodata.RepoModelDefaults{Base: "legacy"}}}
+	app := App{Registry: func() NoteRegistry { return &fakeNoteRegistry{current: repo} }}
+	patch, err := app.currentRepositoryRunOptions(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := applyRepositoryRunDefaultsToStatus(runtimeconfig.LoadEnv(nil).Status(), patch)
+	for _, row := range rows {
+		switch row.Name {
+		case runtimeconfig.EnvModel:
+			if row.Value != "legacy" || row.Source != "repository" {
+				t.Fatal(row)
+			}
+		case runtimeconfig.EnvPullRequest:
+			if row.Value != "false" || row.Source != "repository" {
+				t.Fatal(row)
+			}
+		}
+	}
+}
+
 func TestStatusCommandApplicability(t *testing.T) {
 	var out bytes.Buffer
 	rows := snapshotWith(nil).Status()
 	if err := (App{Out: &out}).writeStatus(statusPayload{RuntimeEnv: rows}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "Defaults are command-specific; see docs/configuration.md#command-applicability.") {
-		t.Fatal("missing applicability guidance")
+	if !strings.Contains(out.String(), "Precedence: built-in → global → repository → environment → flags") {
+		t.Fatal("missing precedence guidance")
 	}
 	for _, row := range rows {
 		commands := runtimeconfig.ApplicableCommands(row.Name)
@@ -52,9 +99,10 @@ func TestStatusMixedInvalidConfigurationKeepsCompleteRows(t *testing.T) {
 	for key, value := range values {
 		t.Setenv(key, value)
 	}
-	registered := taodata.Repo{RunDefaults: &taodata.RepoRunDefaults{PullRequest: new(true), Models: &taodata.RepoModelDefaults{Base: "repo-model"}}}
+	registered := taodata.Repo{ID: "repo-a", RunDefaults: &taodata.RepoRunDefaults{PullRequest: new(true), Models: &taodata.RepoModelDefaults{Base: "repo-model"}}}
 	var out bytes.Buffer
-	app := App{Out: &out, Registry: func() NoteRegistry { return &fakeNoteRegistry{current: registered} }, Repository: func(string) Repository { return nil }}
+	persistStatusRepository(t, registered)
+	app := App{Out: &out, Registry: func() NoteRegistry { return &fakeNoteRegistry{current: registered, repos: []taodata.Repo{registered}} }, Repository: func(string) Repository { return nil }}
 	if err := app.Run(context.Background(), []string{"status", "--json"}); err != nil {
 		t.Fatal(err)
 	}
@@ -71,9 +119,6 @@ func TestStatusMixedInvalidConfigurationKeepsCompleteRows(t *testing.T) {
 			t.Errorf("lost order/diagnostic: %+v, want %+v", row, want[i])
 		}
 		source := want[i].Source
-		if row.Name == runtimeconfig.EnvPullRequest || row.Name == runtimeconfig.EnvModel {
-			source = "repository"
-		}
 		if row.Source != source {
 			t.Errorf("source = %q, want %q for %s", row.Source, source, row.Name)
 		}
@@ -159,12 +204,15 @@ func TestStatusRepositoryModelDefaults(t *testing.T) {
 			if mode == "repository" {
 				registered = registered.WithReviewAgentDefault("claude")
 			}
-			if mode != "default" {
+			if mode == "env" {
 				t.Setenv(runtimeconfig.EnvReviewAgent, "pi")
 				for _, key := range modelKeys {
 					t.Setenv(key, "environment")
 				}
 				t.Setenv(runtimeconfig.EnvReworkEscalationFromAttempt, "3")
+			}
+			if registered.ID != "" {
+				persistStatusRepository(t, registered)
 			}
 			registry := &fakeNoteRegistry{current: registered, repos: []taodata.Repo{registered}}
 			var out bytes.Buffer
@@ -194,7 +242,7 @@ func TestStatusRepositoryModelDefaults(t *testing.T) {
 					}
 				case runtimeconfig.EnvReworkEscalationFromAttempt:
 					want, source = "4", "default"
-					if mode != "default" {
+					if mode == "env" {
 						want, source = "3", "env"
 					}
 				default:
@@ -290,7 +338,7 @@ func TestStatusJSONContainsOnlyLocalStatus(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &raw); err != nil {
 		t.Fatalf("invalid JSON: %v\n%s", err, out.String())
 	}
-	if len(raw) != 2 || raw["runtime_env"] == nil || raw["plans"] == nil {
+	if len(raw) != 4 || raw["runtime_env"] == nil || raw["plans"] == nil || raw["settings"] == nil || raw["paths"] == nil {
 		t.Fatalf("unexpected status JSON fields: %s", out.String())
 	}
 	var payload statusPayload
@@ -334,10 +382,11 @@ func TestStatusJSONWithPlanListErrorIsValidAndEmpty(t *testing.T) {
 
 func TestStatusRepositoryReworkDefaults(t *testing.T) {
 	clearTaoEnv(t)
-	registered := taodata.Repo{RunDefaults: &taodata.RepoRunDefaults{MaxReworkAttempts: new(0), ReworkEscalationFromAttempt: new(2)}}
+	registered := taodata.Repo{ID: "repo-a", RunDefaults: &taodata.RepoRunDefaults{MaxReworkAttempts: new(0), ReworkEscalationFromAttempt: new(2)}}
+	persistStatusRepository(t, registered)
 	snapshot := snapshotWith(map[string]string{runtimeconfig.EnvMaxReworkAttempts: "9"})
 	var out bytes.Buffer
-	app := App{Out: &out, RuntimeEnv: snapshot, Registry: func() NoteRegistry { return &fakeNoteRegistry{current: registered} }}
+	app := App{Out: &out, RuntimeEnv: snapshot, Registry: func() NoteRegistry { return &fakeNoteRegistry{current: registered, repos: []taodata.Repo{registered}} }}
 	if err := app.status(context.Background(), nil, []string{"--json"}); err != nil {
 		t.Fatal(err)
 	}
@@ -345,12 +394,13 @@ func TestStatusRepositoryReworkDefaults(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	for name, want := range map[string]string{runtimeconfig.EnvMaxReworkAttempts: "0", runtimeconfig.EnvReworkEscalationFromAttempt: "2"} {
+	wants := map[string][2]string{runtimeconfig.EnvMaxReworkAttempts: {"9", "env"}, runtimeconfig.EnvReworkEscalationFromAttempt: {"2", "repository"}}
+	for name, want := range wants {
 		found := false
 		for _, row := range payload.RuntimeEnv {
 			if row.Name == name {
 				found = true
-				if row.Value != want || row.Source != "repository" {
+				if row.Value != want[0] || row.Source != want[1] {
 					t.Fatalf("row: %+v", row)
 				}
 			}
@@ -364,8 +414,11 @@ func TestStatusRepositoryReworkDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, line := range strings.Split(out.String(), "\n") {
-		if strings.Contains(line, runtimeconfig.EnvMaxReworkAttempts) && (!strings.Contains(line, "repository") || !strings.Contains(line, "0")) {
+		if strings.Contains(line, runtimeconfig.EnvReworkEscalationFromAttempt) && (!strings.Contains(line, "repository") || !strings.Contains(line, "2")) {
 			t.Fatal(line)
 		}
+	}
+	if !strings.Contains(out.String(), "saved global=- repository=0") {
+		t.Fatalf("masked saved value not shown: %s", out.String())
 	}
 }

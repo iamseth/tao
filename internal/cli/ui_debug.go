@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/iamseth/tao/internal/build"
-	"github.com/iamseth/tao/internal/taodata"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/tui"
 )
 
@@ -28,7 +28,6 @@ func (c uiDebugCollector) Collect(ctx context.Context) (tui.DebugSnapshot, error
 		tui.DebugValue{Label: "go", Value: runtime.Version()},
 		tui.DebugValue{Label: "platform", Value: runtime.GOOS + "/" + runtime.GOARCH},
 		tui.DebugValue{Label: "executable", Value: c.executable},
-		tui.DebugValue{Label: "data home", Value: taodata.DataHome()},
 	)
 	if cwd, err := os.Getwd(); err == nil {
 		snapshot.System = append(snapshot.System, tui.DebugValue{Label: "working directory", Value: cwd})
@@ -36,22 +35,39 @@ func (c uiDebugCollector) Collect(ctx context.Context) (tui.DebugSnapshot, error
 		snapshot.DoctorProblems = append(snapshot.DoctorProblems, tui.DebugProblem{Category: "system", Name: "working directory", Status: "unavailable", Detail: err.Error()})
 	}
 
-	rows := c.app.envSnapshot().Status()
-	if repositoryDefaults, repoErr := c.app.currentRepositoryRunOptions(ctx); repoErr == nil {
-		rows = applyRepositoryRunDefaultsToStatus(rows, repositoryDefaults)
-	} else {
-		snapshot.DoctorProblems = append(snapshot.DoctorProblems, tui.DebugProblem{Category: "repository", Name: "run defaults", Status: "unavailable", Detail: repoErr.Error()})
+	effective, repoErr := c.app.settingsForStatus(ctx)
+	rows := settingsRuntimeRows(effective.envSnapshot())
+	if effective.settingsGlobal != nil && effective.settingsGlobal.LoadError != nil {
+		snapshot.DoctorProblems = append(snapshot.DoctorProblems, tui.DebugProblem{Category: "settings", Name: "global config", Status: "invalid", Detail: effective.settingsGlobal.LoadError.Error()})
 	}
-	if rework, repoErr := c.app.currentRepositoryReworkOptions(ctx); repoErr == nil {
-		rows = applyRepositoryReworkDefaultsToStatus(rows, rework)
-	} else {
-		snapshot.DoctorProblems = append(snapshot.DoctorProblems, tui.DebugProblem{Category: "repository", Name: "rework defaults", Status: "unavailable", Detail: repoErr.Error()})
+	if repoErr != nil {
+		snapshot.DoctorProblems = append(snapshot.DoctorProblems, tui.DebugProblem{Category: "repository", Name: "run defaults", Status: "unavailable", Detail: repoErr.Error()})
 	}
 	for _, row := range rows {
 		snapshot.RuntimeDefaults = append(snapshot.RuntimeDefaults, tui.DebugRuntimeDefault{Name: row.Name, Value: row.Value, Source: row.Source, Warning: row.Warning})
 	}
 
-	report, reportErr := c.app.collectDoctorReport()
+	envKeys := make(map[string]bool)
+	for _, definition := range runtimeconfig.SettingDefinitions() {
+		if definition.EnvKey != "" {
+			envKeys[definition.Key] = true
+		}
+	}
+	for _, row := range effective.envSnapshot().SettingsStatus() {
+		if !envKeys[row.Key] {
+			snapshot.RuntimeDefaults = append(snapshot.RuntimeDefaults, tui.DebugRuntimeDefault{Name: row.Key, Value: row.Value, Source: row.Source, Warning: row.Warning})
+		}
+		if row.GlobalValue != "" || row.RepositoryValue != "" {
+			snapshot.System = append(snapshot.System, tui.DebugValue{Label: row.Key + " saved (global / repository)", Value: emptyDash(row.GlobalValue) + " / " + emptyDash(row.RepositoryValue)})
+		}
+	}
+	for _, row := range c.app.settingsPaths() {
+		snapshot.System = append(snapshot.System, tui.DebugValue{Label: row.Name, Value: row.Value + " (" + row.Source + ")"})
+		if row.Warning != "" {
+			snapshot.DoctorProblems = append(snapshot.DoctorProblems, tui.DebugProblem{Category: "path", Name: row.Name, Status: "unavailable", Detail: row.Warning})
+		}
+	}
+	report, reportErr := effective.collectDoctorReport()
 	appendUIDoctorReport(&snapshot, report, reportErr)
 	return snapshot, nil
 }
@@ -93,5 +109,8 @@ func appendUIDoctorReport(snapshot *tui.DebugSnapshot, report doctorReport, err 
 }
 
 func newUIDebugCollector(a App, executable string) tui.DebugSnapshotCollector {
+	if a.settingsPathFacts == nil {
+		a = a.captureSettingsPaths("")
+	}
 	return uiDebugCollector{app: a, executable: executable}
 }

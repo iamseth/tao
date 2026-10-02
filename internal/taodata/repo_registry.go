@@ -30,19 +30,17 @@ type Repo struct {
 	RemoteURL   string           `json:"remote_url,omitempty"`
 	UpdatedAt   string           `json:"updated_at"`
 	RunDefaults *RepoRunDefaults `json:"run_defaults,omitempty"`
+	extra       string
 }
 
 // RepoRunDefaults records optional defaults for runs in one repository.
 type RepoRunDefaults struct {
-	ReviewAgent                 string             `json:"review_agent,omitempty"`
-	PullRequest                 *bool              `json:"pull_request,omitempty"`
-	Models                      *RepoModelDefaults `json:"models,omitempty"`
-	MaxReworkAttempts           *int               `json:"max_rework_attempts,omitempty"`
-	ReworkEscalationFromAttempt *int               `json:"rework_escalation_from_attempt,omitempty"`
-}
-
-func (d RepoRunDefaults) empty() bool {
-	return d.ReviewAgent == "" && d.PullRequest == nil && d.Models == nil && d.MaxReworkAttempts == nil && d.ReworkEscalationFromAttempt == nil
+	ReviewAgent                 string                     `json:"review_agent,omitempty"`
+	PullRequest                 *bool                      `json:"pull_request,omitempty"`
+	Models                      *RepoModelDefaults         `json:"models,omitempty"`
+	MaxReworkAttempts           *int                       `json:"max_rework_attempts,omitempty"`
+	ReworkEscalationFromAttempt *int                       `json:"rework_escalation_from_attempt,omitempty"`
+	Extra                       configtypes.SettingsValues `json:"-"`
 }
 
 // WithReworkDefaults returns a copy with each numeric default copied from its
@@ -50,7 +48,7 @@ func (d RepoRunDefaults) empty() bool {
 func (r Repo) WithReworkDefaults(maxAttempts, escalationFromAttempt *int) Repo {
 	var defaults RepoRunDefaults
 	if r.RunDefaults != nil {
-		defaults = *r.RunDefaults
+		defaults = r.RunDefaults.clone()
 	}
 	defaults.MaxReworkAttempts = nil
 	if maxAttempts != nil {
@@ -85,8 +83,9 @@ func (r Repo) ModelDefaults() (RepoModelDefaults, bool) {
 func (r Repo) WithModelDefaults(values RepoModelDefaults) Repo {
 	var defaults RepoRunDefaults
 	if r.RunDefaults != nil {
-		defaults = *r.RunDefaults
+		defaults = r.RunDefaults.clone()
 	}
+	defaults.clearModels()
 	defaults.Models = nil
 	if values != (RepoModelDefaults{}) {
 		defaults.Models = &values
@@ -111,7 +110,7 @@ func (r Repo) ReviewAgentDefault() (string, bool) {
 func (r Repo) WithReviewAgentDefault(value string) Repo {
 	var defaults RepoRunDefaults
 	if r.RunDefaults != nil {
-		defaults = *r.RunDefaults
+		defaults = r.RunDefaults.clone()
 	}
 	defaults.ReviewAgent = value
 	r.RunDefaults = &defaults
@@ -135,8 +134,9 @@ func (r Repo) PullRequestDefault() (bool, bool) {
 func (r Repo) WithPullRequestDefault(value *bool) Repo {
 	var defaults RepoRunDefaults
 	if r.RunDefaults != nil {
-		defaults = *r.RunDefaults
+		defaults = r.RunDefaults.clone()
 	}
+	delete(defaults.Extra, "pull_request")
 	defaults.PullRequest = nil
 	if value != nil {
 		copyValue := *value
@@ -190,8 +190,16 @@ func (r Registry) RegisterCurrent(ctx context.Context) (Repo, error) {
 		RemoteURL: strings.TrimSpace(remote),
 		UpdatedAt: r.now().UTC().Format(time.RFC3339),
 	}
+	release, err := r.lockRepo(ctx, repo.ID)
+	if err != nil {
+		return Repo{}, err
+	}
+	defer release()
 	if stored, readErr := r.ReadRepo(repo.ID); readErr == nil {
 		repo.RunDefaults = stored.RunDefaults
+		repo.extra = stored.extra
+	} else if !os.IsNotExist(readErr) {
+		return Repo{}, readErr
 	}
 	if err := r.WriteRepo(repo); err != nil {
 		return Repo{}, err

@@ -121,7 +121,8 @@ type EnvVarStatus struct {
 // one new table entry.
 type runtimeEnvVar struct {
 	// name is the environment variable key.
-	name string
+	name    string
+	setting SettingDefinition
 	// aliasOf names the canonical key this deprecated row feeds. Alias rows
 	// share the canonical apply function, yield to a set canonical key, and
 	// are omitted from status while unset.
@@ -152,6 +153,7 @@ func (v runtimeEnvVar) hasOverride(value string, present bool) bool {
 var runtimeEnvVars = append([]runtimeEnvVar{
 	{
 		name:         EnvCommitPolicy,
+		setting:      scopedSetting("commit_policy", "string", "slice", "none"),
 		defaultValue: func(d RunOptionsPatch) string { return d.CommitPolicy.String() },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			parsed, err := ParseCommitPolicy(value)
@@ -164,6 +166,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 	},
 	{
 		name:         EnvExecutionMode,
+		setting:      scopedSetting("execution_mode", "string", "isolated", "current"),
 		defaultValue: func(d RunOptionsPatch) string { return d.ExecutionModeValue().String() },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			parsed, err := ParseExecutionMode(value)
@@ -176,6 +179,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 	},
 	{
 		name:         EnvAgent,
+		setting:      scopedSetting("agent", "string", "pi", "claude"),
 		defaultValue: func(d RunOptionsPatch) string { return d.Agent.String() },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			parsed, err := ParseAgentKind(value)
@@ -188,6 +192,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 	},
 	{
 		name:         EnvReviewAgent,
+		setting:      scopedSetting("review_agent", "string", "pi", "claude"),
 		defaultValue: func(d RunOptionsPatch) string { return d.ReviewAgent.String() },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			if value == "" {
@@ -204,6 +209,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 	},
 	{
 		name:         EnvSessionTimeout,
+		setting:      scopedSetting("session_timeout", "string"),
 		defaultValue: func(d RunOptionsPatch) string { return d.SessionTimeoutValue().String() },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			parsed, err := parseSessionTimeout(value)
@@ -216,6 +222,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 	},
 	{
 		name:         EnvSessionWarnPercent,
+		setting:      scopedSetting("session_warn_percent", "integer"),
 		defaultValue: func(RunOptionsPatch) string { return strconv.Itoa(DefaultSessionWarnPercent) },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			parsed, err := strconv.Atoi(strings.TrimSpace(value))
@@ -228,6 +235,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 	},
 	{
 		name: EnvModel, applyWhenEmpty: true,
+		setting:      scopedSetting("models.model", "string"),
 		defaultValue: func(RunOptionsPatch) string { return "" },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			parsed, err := ParseModelName(value)
@@ -240,6 +248,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 	},
 	{
 		name: EnvRunModel, applyWhenEmpty: true,
+		setting:      scopedSetting("models.run_model", "string"),
 		defaultValue: func(RunOptionsPatch) string { return "" },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			parsed, err := ParseModelName(value)
@@ -252,6 +261,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 	},
 	{
 		name: EnvReviewModel, applyWhenEmpty: true,
+		setting:      scopedSetting("models.review_model", "string"),
 		defaultValue: func(RunOptionsPatch) string { return "" },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			parsed, err := ParseModelName(value)
@@ -264,6 +274,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 	},
 	{
 		name: EnvMergeReviewModel, applyWhenEmpty: true,
+		setting:      scopedSetting("models.merge_review_model", "string"),
 		defaultValue: func(RunOptionsPatch) string { return "" },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			parsed, err := ParseModelName(value)
@@ -276,6 +287,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 	},
 	{
 		name: EnvResolverModel, applyWhenEmpty: true,
+		setting:      scopedSetting("models.resolver_model", "string"),
 		defaultValue: func(RunOptionsPatch) string { return "" },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			parsed, err := ParseModelName(value)
@@ -288,6 +300,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 	},
 	{
 		name: EnvReworkEscalationModel, applyWhenEmpty: true,
+		setting:      scopedSetting("models.rework_escalation_model", "string"),
 		defaultValue: func(RunOptionsPatch) string { return "" },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			parsed, err := ParseModelName(value)
@@ -300,6 +313,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 	},
 	{
 		name:         EnvUpdate,
+		setting:      SettingDefinition{Key: "update", Kind: "string", Scopes: []string{"global"}, Choices: []string{"warn", "auto", "off"}},
 		defaultValue: func(RunOptionsPatch) string { return string(selfupdate.ModeWarn) },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			parsed, err := selfupdate.ParseMode(value)
@@ -312,6 +326,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 	},
 	{
 		name:         EnvPullRequest,
+		setting:      scopedSetting("pull_request", "boolean"),
 		defaultValue: func(d RunOptionsPatch) string { return strconv.FormatBool(d.PullRequestValue()) },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			parsed, err := ParseEnvBool(value)
@@ -324,6 +339,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 	},
 	{
 		name:         EnvReview,
+		setting:      scopedSetting("review_enabled", "boolean"),
 		defaultValue: func(d RunOptionsPatch) string { return strconv.FormatBool(d.ReviewEnabledValue()) },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			parsed, err := ParseEnvBool(value)
@@ -337,6 +353,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 	{
 		// Canonical counts precede the compatibility alias.
 		name:         EnvMaxReworkAttempts,
+		setting:      scopedSetting("max_rework_attempts", "integer"),
 		defaultValue: func(RunOptionsPatch) string { return strconv.Itoa(DefaultMaxReworkAttempts) },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			parsed, err := parseMaxReworkAttempts(value)
@@ -381,6 +398,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 	},
 	{
 		name:         EnvReworkEscalationFromAttempt,
+		setting:      scopedSetting("rework_escalation_from_attempt", "integer"),
 		defaultValue: func(RunOptionsPatch) string { return strconv.Itoa(DefaultReworkEscalationFromAttempt) },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			parsed, err := strconv.Atoi(strings.TrimSpace(value))
@@ -393,6 +411,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 	},
 	{
 		name:         EnvSkipPermissions,
+		setting:      scopedSetting("dangerously_skip_permissions", "boolean"),
 		defaultValue: func(RunOptionsPatch) string { return strconv.FormatBool(false) },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			parsed, err := ParseEnvBool(value)
@@ -416,6 +435,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 	},
 	{
 		name:         EnvAggregateReviewConvergenceWindow,
+		setting:      SettingDefinition{Key: "aggregate_review_convergence_window", Kind: "integer"},
 		blankIsEmpty: true,
 		defaultValue: func(RunOptionsPatch) string { return strconv.Itoa(DefaultAggregateReviewConvergenceWindow) },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
@@ -437,6 +457,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 	},
 	{
 		name:              EnvRunHeader,
+		setting:           scopedSetting("run_header", "boolean"),
 		fallbackOnInvalid: true,
 		defaultValue:      func(RunOptionsPatch) string { return strconv.FormatBool(true) },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
@@ -478,6 +499,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 	},
 	{
 		name:         EnvPlannerRoutingFloor,
+		setting:      SettingDefinition{Key: "planner_routing_floor", Kind: "number"},
 		blankIsEmpty: true,
 		defaultValue: func(RunOptionsPatch) string { return "not set (default: 0.1)" },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
@@ -492,6 +514,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 	},
 	{
 		name: EnvTheme, fallbackOnInvalid: true,
+		setting:      SettingDefinition{Key: "theme", Kind: "string", Scopes: []string{"global"}, Choices: theme.Names()},
 		defaultValue: func(RunOptionsPatch) string { return theme.Default().Name() },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			selected, ok := theme.Lookup(value)
@@ -560,9 +583,15 @@ func agentBudgetRuntimeEnvVars() []runtimeEnvVar {
 
 func budgetIntegerEnvVar(name, defaultValue string, set func(*plan.AgentBudget, int64)) runtimeEnvVar {
 	return runtimeEnvVar{
-		name:         name,
-		defaultValue: func(RunOptionsPatch) string { return defaultValue },
+		name:           name,
+		applyWhenEmpty: strings.HasSuffix(name, "_STOP"),
+		setting:        budgetSetting(name, "integer"),
+		defaultValue:   func(RunOptionsPatch) string { return defaultValue },
 		apply: func(env *EnvDefaults, value string) (string, error) {
+			if name == EnvBudgetSliceOutputTokensStop && strings.TrimSpace(value) == "" {
+				env.Budget.Slice.OutputTokens.Stop = nil
+				return "disabled", nil
+			}
 			parsed, err := parseBudgetInteger(value)
 			if err != nil {
 				return "", err
@@ -575,9 +604,15 @@ func budgetIntegerEnvVar(name, defaultValue string, set func(*plan.AgentBudget, 
 
 func budgetCostEnvVar(name, defaultValue string, set func(*plan.AgentBudget, float64)) runtimeEnvVar {
 	return runtimeEnvVar{
-		name:         name,
-		defaultValue: func(RunOptionsPatch) string { return defaultValue },
+		name:           name,
+		applyWhenEmpty: strings.HasSuffix(name, "_STOP"),
+		setting:        budgetSetting(name, "number"),
+		defaultValue:   func(RunOptionsPatch) string { return defaultValue },
 		apply: func(env *EnvDefaults, value string) (string, error) {
+			if name == EnvBudgetSliceCostStop && strings.TrimSpace(value) == "" {
+				env.Budget.Slice.Cost.Stop = nil
+				return "disabled", nil
+			}
 			parsed, err := parseBudgetCost(value)
 			if err != nil {
 				return "", err

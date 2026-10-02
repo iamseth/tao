@@ -54,6 +54,32 @@ func TestNewInteractiveAppUsesOnlyFixtureBoundaries(t *testing.T) {
 	}
 }
 
+func TestInteractiveSettingsEditing(t *testing.T) {
+	scenario, _ := Lookup(ScenarioMixed)
+	for _, accept := range []string{"y", "n"} {
+		var output bytes.Buffer
+		app := NewInteractiveApp(scenario, strings.NewReader("se\r\x1b[C\r"+accept+"\x1b\x1bq"), &output, previewTestTerminal{}, &previewTestTicker{})
+		before, err := app.Settings.Collect(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := app.Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		after, err := app.Settings.Collect(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(output.String(), "stored value") {
+			t.Fatal("preview did not display confirmation")
+		}
+		changed := before.Repositories[0].Values[0].Stored != after.Repositories[0].Values[0].Stored
+		if changed != (accept == "y") {
+			t.Fatalf("confirmation %s changed=%t", accept, changed)
+		}
+	}
+}
+
 func TestInteractiveChangesWithNilActions(t *testing.T) {
 	scenario, _ := Lookup(ScenarioMixed)
 	var output bytes.Buffer

@@ -2,16 +2,21 @@ package tuipreview
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/iamseth/tao/internal/configtypes"
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/theme"
 	"github.com/iamseth/tao/internal/tui"
 )
@@ -129,7 +134,30 @@ type SettingsService struct {
 
 // NewSettingsService copies snapshot into an in-memory service.
 func NewSettingsService(snapshot tui.SettingsSnapshot) *SettingsService {
-	return &SettingsService{snapshot: cloneSettingsSnapshot(snapshot)}
+	snapshot = cloneSettingsSnapshot(snapshot)
+	defaults := runtimeconfig.LoadEnv(func(string) (string, bool) { return "", false }).SettingsStatus()
+	definitions := runtimeconfig.SettingDefinitions()
+	for i := range snapshot.Repositories {
+		repo := &snapshot.Repositories[i]
+		if len(repo.Values) != 0 {
+			continue
+		}
+		for _, status := range defaults {
+			for _, d := range definitions {
+				if status.Key != d.Key {
+					continue
+				}
+				row := tui.SettingsValue{Key: d.Key, Kind: d.Kind, Choices: slices.Clone(d.Choices), Editable: slices.Contains(d.Scopes, "repo"), Value: status.Value, Source: status.Source}
+				if d.Key == "pull_request" && repo.PullRequest != nil {
+					row.Stored = strconv.FormatBool(*repo.PullRequest)
+					row.Value = row.Stored
+					row.Source = "repository"
+				}
+				repo.Values = append(repo.Values, row)
+			}
+		}
+	}
+	return &SettingsService{snapshot: snapshot}
 }
 
 // Collect returns a fresh projection or the context error.
@@ -140,6 +168,77 @@ func (s *SettingsService) Collect(ctx context.Context) (tui.SettingsSnapshot, er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return cloneSettingsSnapshot(s.snapshot), nil
+}
+
+// SetSetting edits only fixture memory. Validation is the production schema;
+// no configuration paths or process environment are consulted.
+func (s *SettingsService) SetSetting(ctx context.Context, repositoryID, key string, value *string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	var raw json.RawMessage
+	var err error
+	if value != nil {
+		raw, err = runtimeconfig.ParseSetting(key, *value)
+		if err != nil {
+			return err
+		}
+		if err = runtimeconfig.ValidateSettings(configtypes.SettingsValues{key: raw}, "repo"); err != nil {
+			return err
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.snapshot.Repositories {
+		repo := &s.snapshot.Repositories[i]
+		if repo.ID != repositoryID {
+			continue
+		}
+		for j := range repo.Values {
+			row := &repo.Values[j]
+			if row.Key != key {
+				continue
+			}
+			if !row.Editable {
+				return fmt.Errorf("fixture setting %q is read-only", key)
+			}
+			row.Stored = string(raw)
+			var text string
+			if raw != nil && json.Unmarshal(raw, &text) == nil && string(raw) != "null" {
+				row.Stored = text
+			}
+			if row.Source != "env" {
+				if value == nil {
+					for _, status := range runtimeconfig.LoadEnv(func(string) (string, bool) { return "", false }).SettingsStatus() {
+						if status.Key == key {
+							row.Value = status.Value
+							row.Source = status.Source
+						}
+					}
+					for _, global := range s.snapshot.Values {
+						if global.Key == key {
+							row.Value = global.Value
+							row.Source = global.Source
+						}
+					}
+				} else {
+					row.Value = row.Stored
+					row.Source = "repository"
+				}
+			}
+			row.Warning = ""
+			if key == "pull_request" {
+				repo.PullRequest = nil
+				if value != nil {
+					b := string(raw) == "true"
+					repo.PullRequest = &b
+				}
+			}
+			return nil
+		}
+		return fmt.Errorf("fixture setting %q not found", key)
+	}
+	return fmt.Errorf("fixture repository %q not found", repositoryID)
 }
 
 // SetPullRequestDefault updates one fixture repository without external state.
@@ -154,6 +253,24 @@ func (s *SettingsService) SetPullRequestDefault(ctx context.Context, repositoryI
 			continue
 		}
 		s.snapshot.Repositories[index].PullRequest = cloneBool(value)
+		for j := range s.snapshot.Repositories[index].Values {
+			row := &s.snapshot.Repositories[index].Values[j]
+			if row.Key != "pull_request" {
+				continue
+			}
+			row.Stored = ""
+			if value != nil {
+				row.Stored = strconv.FormatBool(*value)
+			}
+			if row.Source != "env" {
+				row.Value = strconv.FormatBool(s.snapshot.InheritedPullRequest)
+				row.Source = "default"
+				if value != nil {
+					row.Value = row.Stored
+					row.Source = "repository"
+				}
+			}
+		}
 		return nil
 	}
 	return fmt.Errorf("fixture repository %q not found", repositoryID)
@@ -534,9 +651,20 @@ func cloneNoteSnapshot(source note.Snapshot) note.Snapshot {
 func cloneSettingsSnapshot(source tui.SettingsSnapshot) tui.SettingsSnapshot {
 	result := source
 	result.RuntimeDefaults = append([]tui.SettingsRuntimeDefault(nil), source.RuntimeDefaults...)
+	result.Paths = append([]tui.SettingsRuntimeDefault(nil), source.Paths...)
+	result.Values = cloneSettingsValues(source.Values)
 	result.Repositories = append([]tui.RepositorySetting(nil), source.Repositories...)
 	for index := range result.Repositories {
 		result.Repositories[index].PullRequest = cloneBool(result.Repositories[index].PullRequest)
+		result.Repositories[index].Values = cloneSettingsValues(result.Repositories[index].Values)
+	}
+	return result
+}
+
+func cloneSettingsValues(source []tui.SettingsValue) []tui.SettingsValue {
+	result := append([]tui.SettingsValue(nil), source...)
+	for i := range result {
+		result[i].Choices = append([]string(nil), result[i].Choices...)
 	}
 	return result
 }

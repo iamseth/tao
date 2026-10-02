@@ -129,11 +129,19 @@ func (a App) prompt(ctx context.Context, repo plan.Resolver, args []string) erro
 			return err
 		}
 	}
+	if planDir != "" {
+		if detail, resolveErr := repo.ResolvePlan(ctx, planDir); resolveErr == nil && detail != nil {
+			a, err = a.settingsForPlanRoot(ctx, detail.State.Repo.Root)
+			if err != nil {
+				return err
+			}
+		}
+	}
 	profile := runtimeconfig.CommandPromptOther
 	if positional[0] == prompts.PromptRun {
 		profile = runtimeconfig.CommandPromptRun
 	}
-	options, err := a.resolveCommandOptions(ctx, fs, profile)
+	options, err := a.resolveCommandOptions(fs, profile)
 	if err != nil {
 		return err
 	}
@@ -256,22 +264,28 @@ type doctorToolResult struct {
 }
 
 func (a App) collectDoctorReport() (doctorReport, error) {
+	// Resolve only role selectors: unrelated malformed models or budgets must not
+	// prevent passive setup diagnostics. Repository lookup is best-effort outside
+	// Git; when it succeeds, saved repository settings compose beneath the
+	// captured environment exactly as they do for execution.
+	repoCtx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	current, repoErr := a.registry().Current(repoCtx)
+	if repoErr == nil {
+		var composeErr error
+		if a, composeErr = a.settingsForRepository(repoCtx, current); composeErr != nil {
+			repoErr = composeErr
+		}
+	}
 	defaults, err := a.envDefaultsFor(runtimeconfig.EnvAgent, runtimeconfig.EnvReviewAgent)
 	if err != nil {
 		return doctorReport{}, err
 	}
-	// Resolve only role selectors: unrelated malformed models or budgets must not
-	// prevent passive setup diagnostics. Repository lookup is best-effort outside Git.
-	repoCtx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-	defer cancel()
-	repository, repoErr := a.currentRepositoryRunOptions(repoCtx)
-	resolved, err := runtimeconfig.ResolveRunOptionsWithRepositoryDefaults(
-		runtimeconfig.RunOptionsPatch{Agent: defaults.Agent, ReviewAgent: defaults.ReviewAgent},
-		runtimeconfig.RunOptionsPatch{ReviewAgent: repository.ReviewAgent}, runtimeconfig.RunOptionsPatch{})
-	if err != nil {
-		return doctorReport{}, err
+	reviewAgent := defaults.ReviewAgent
+	if reviewAgent == "" {
+		reviewAgent = defaults.Agent
 	}
-	report := doctorReport{selectedAgent: defaults.Agent, reviewAgent: resolved.ReviewAgentKind(),
+	report := doctorReport{selectedAgent: defaults.Agent, reviewAgent: reviewAgent,
 		repositoryUnavailable: repoErr != nil, agents: agentpkg.Installed()}
 	report.prompts, err = promptinstall.CheckDiscovered(report.agents)
 	if err != nil {

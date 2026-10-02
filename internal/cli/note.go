@@ -27,7 +27,7 @@ const defaultNoteListLimit = 20
 var noteCommand = commandMetadata{
 	name:                  "note",
 	minPrefix:             "n",
-	usageLines:            []string{"note (n) [list (l)] [--repo REPO] [--tag TAG] [--status STATUS] [--all] [--limit N]", "note (n) create (c) [--repo REPO] [--tag TAG] [--] [TEXT...]", "note (n) show (s) [--repo REPO] <note-id>", "note (n) edit (e) [--repo REPO] [--tag TAG] <note-id> [--] [TEXT...]", "note (n) archive (a) [--repo REPO] [--reason TEXT | --plan PLAN] <note-id>", "note (n) reopen [--repo REPO] <note-id>", "note (n) run (r) [--repo REPO] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--no-review] [--dangerously-skip-permissions] <note-id>"},
+	usageLines:            []string{"note (n) [list (l)] [--repo REPO] [--tag TAG] [--status STATUS] [--all] [--limit N]", "note (n) create (c) [--repo REPO] [--tag TAG] [--] [TEXT...]", "note (n) show (s) [--repo REPO] <note-id>", "note (n) edit (e) [--repo REPO] [--tag TAG] <note-id> [--] [TEXT...]", "note (n) archive (a) [--repo REPO] [--reason TEXT | --plan PLAN] <note-id>", "note (n) reopen [--repo REPO] <note-id>", "note (n) run (r) [--repo REPO] [--agent pi|claude] [--session-timeout DURATION] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--no-review] [--dangerously-skip-permissions] <note-id>"},
 	completionDescription: "Capture and maintain repository notes",
 	long:                  "Capture and maintain a private note backlog for a registered repository. With no subcommand, note lists open notes newest first.",
 	examples:              "  tao n c fix flaky queue test\n  printf 'First line\\n\\nMore detail\\n' | tao note create --tag testing\n  tao note list --all\n  tao note archive 20260713-155800-abcd",
@@ -43,6 +43,8 @@ var noteCommand = commandMetadata{
 	registerFlags:        registerNoteFlags,
 	registerRuntimeFlags: App.registerNoteFlags,
 	completion: completionContext{flagValues: map[string]completionFlagValue{
+		"agent":           {kind: completionValueEnum, label: "agent", values: []string{"pi", "claude"}},
+		"session-timeout": {kind: completionValueText, label: "duration"},
 		"commit-policy":   {kind: completionValueEnum, label: "policy", values: []string{"slice", "none"}},
 		"execution-mode":  {kind: completionValueEnum, label: "mode", values: []string{"isolated", "current"}},
 		"limit":           {kind: completionValueCount, label: "count"},
@@ -139,7 +141,7 @@ func (a App) note(ctx context.Context, args []string) error {
 func boundNoteTextArgs(args []string) []string {
 	valueFlags := map[string]bool{
 		"repo": true, "tag": true, "status": true, "limit": true,
-		"reason": true, "plan": true, "max-slices": true,
+		"reason": true, "plan": true, "max-slices": true, "agent": true, "session-timeout": true,
 		"commit-policy": true, "execution-mode": true,
 		"planner-routing": true, "planner-arm": true,
 	}
@@ -226,7 +228,7 @@ func validateNoteFlags(fs *flag.FlagSet, subcommand string) error {
 		"edit":    {"repo": true, "tag": true},
 		"archive": {"repo": true, "reason": true, "plan": true},
 		"reopen":  {"repo": true},
-		"run":     {"repo": true, "max-slices": true, "commit-policy": true, "execution-mode": true, "pull-request": true, "dangerously-skip-permissions": true, "no-review": true, "planner-routing": true, "planner-arm": true},
+		"run":     {"repo": true, "agent": true, "session-timeout": true, "max-slices": true, "commit-policy": true, "execution-mode": true, "pull-request": true, "dangerously-skip-permissions": true, "no-review": true, "planner-routing": true, "planner-arm": true},
 	}
 	var invalid string
 	fs.Visit(func(fl *flag.Flag) {
@@ -617,9 +619,13 @@ func (a App) promoteOpenNote(ctx context.Context, registered taodata.Repo, repo 
 
 func (a App) noteRun(ctx context.Context, registered taodata.Repo, repo NoteRepository, fs *flag.FlagSet, args []string) error {
 	if len(args) != 1 {
-		return errors.New("usage: tao note run <note-id> [--repo REPO] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--no-review] [--dangerously-skip-permissions]")
+		return errors.New("usage: tao note run <note-id> [--repo REPO] [--agent pi|claude] [--session-timeout DURATION] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--no-review] [--dangerously-skip-permissions]")
 	}
-	options, err := a.resolveCommandOptionsWithRepository(fs, runtimeconfig.CommandRun, repositoryRunOptions(registered), repositoryReworkOptions(registered))
+	a, err := a.settingsForRepository(ctx, registered)
+	if err != nil {
+		return err
+	}
+	options, err := a.resolveCommandOptions(fs, runtimeconfig.CommandRun)
 	if err != nil {
 		return err
 	}

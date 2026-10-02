@@ -121,7 +121,9 @@ func TestPlanAndExecutionCommandHelpIncludesSubcommandsOptionsAndExamples(t *tes
 }
 
 func TestRepositoryWorkspaceAndMonitoringHelpIncludesSubcommandsAndOptions(t *testing.T) {
-	assertCommandOutputContains(t, "repo help", []string{"repo", "--help"}, "Available Commands:", "list", "show", "doctor", "--review-agent")
+	assertCommandOutputContains(t, "config help", []string{"config", "--help"}, "config get", "config set", "config unset", "--global", "--repo", "Environment values mask saved values")
+	assertCommandOutputContains(t, "legacy config help", []string{"repo", "--help"}, "Deprecated compatibility adapter; use tao config")
+	assertCommandOutputContains(t, "repo help", []string{"repo", "--help"}, "Available Commands:", "list", "show", "doctor")
 	assertCommandOutputContains(t, "repo config help", []string{"repo", "config", "--help"}, "--max-rework-attempts", "--rework-escalation-from-attempt", "N|unset", "zero disables", "at least one")
 	assertCommandOutputContains(t, "rework help", []string{"rework", "--help"}, "Options:", "--review-agent", "--run")
 	assertCommandOutputContains(t, "cleanup help", []string{"cleanup", "--help"}, "Options:", "--dry-run", "--force")
@@ -223,8 +225,10 @@ func TestRunHandlesHelpCompletionAndUnknownCommand(t *testing.T) {
 	if !strings.Contains(out.String(), "rev|revi|revie|review)") || strings.Contains(out.String(), "[review mode]") {
 		t.Fatalf("expected registry-generated review completion without the removed review mode flag, got %q", out.String())
 	}
-	if strings.Contains(out.String(), "--agent") {
-		t.Fatalf("expected completion output to omit --agent, got %q", out.String())
+	for _, want := range []string{"--agent[agent runtime: pi or claude]:agent:(pi claude)", "--session-timeout[session timeout as a Go duration; 0 disables]:duration:", "--dangerously-skip-permissions[bypass Claude permission checks; compatibility no-op for Pi]"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("completion missing %q", want)
+		}
 	}
 	if !strings.Contains(out.String(), "w|wo|wor|work|works|worksp|workspa|workspac|workspace)") || !strings.Contains(out.String(), "--force-dirty[allow cleaning a dirty or unmerged workspace]") {
 		t.Fatalf("expected workspace aliases and flags in completion output, got %q", out.String())
@@ -282,7 +286,9 @@ func TestCommandHelpReflectsRuntimeEnvDefaults(t *testing.T) {
 		"disable automatic plan review for this run (default true)",
 		"deprecated: use --max-rework-attempts (false=0, true=5) (default true)",
 		"maximum automatic rework cycles (0 disables) (default 3)",
-		"legacy no-op for the Pi agent (default true)",
+		"bypass Claude permission checks; compatibility no-op for Pi (default true)",
+		"agent runtime: pi or claude (default pi)",
+		"session timeout as a Go duration; 0 disables (default 20m0s)",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("expected run help to reflect env default %q, got %q", want, out.String())

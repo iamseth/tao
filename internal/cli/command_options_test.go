@@ -2,77 +2,101 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/iamseth/tao/internal/configtypes"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/run"
-
 	"github.com/iamseth/tao/internal/runtimeconfig"
+	"github.com/iamseth/tao/internal/settings"
 	"github.com/iamseth/tao/internal/taodata"
 )
 
-type commandOptionsRegistry struct {
-	fakeNoteRegistry
-	calls int
-}
-
-func (r *commandOptionsRegistry) Current(ctx context.Context) (taodata.Repo, error) {
-	r.calls++
-	return r.fakeNoteRegistry.Current(ctx)
+// composedSnapshotWith layers raw JSON repository values beneath the captured
+// environment, the shape every executing command sees after composition.
+func composedSnapshotWith(env, repository map[string]string) *runtimeconfig.EnvSnapshot {
+	values := configtypes.SettingsValues{}
+	for key, value := range repository {
+		values[key] = json.RawMessage(value)
+	}
+	snapshot := runtimeconfig.ResolveSettings(nil, values, *snapshotWith(env))
+	return &snapshot
 }
 
 func TestResolveCommandOptionsCapturedAndExplicit(t *testing.T) {
-	snapshot := snapshotWith(map[string]string{runtimeconfig.EnvPullRequest: "true", runtimeconfig.EnvRunHeader: "false", runtimeconfig.EnvModel: "captured"})
-	registry := &commandOptionsRegistry{fakeNoteRegistry: fakeNoteRegistry{current: taodata.Repo{RunDefaults: &taodata.RepoRunDefaults{PullRequest: new(true)}}}}
-	app := App{RuntimeEnv: snapshot, Registry: func() NoteRegistry { return registry }}
+	snapshot := composedSnapshotWith(
+		map[string]string{runtimeconfig.EnvPullRequest: "true", runtimeconfig.EnvRunHeader: "false", runtimeconfig.EnvModel: "captured"},
+		map[string]string{"pull_request": "true", "models.model": `"repository"`},
+	)
+	app := App{RuntimeEnv: snapshot}
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	app.registerRunFlags(fs)
 	if err := fs.Parse([]string{"--pull-request=false", "--no-review", "--no-run-header=false"}); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(runtimeconfig.EnvModel, "changed")
-	got, err := app.resolveCommandOptions(context.Background(), fs, runtimeconfig.CommandRun)
+	got, err := app.resolveCommandOptions(fs, runtimeconfig.CommandRun)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if registry.calls != 1 || got.RunOptions.PullRequest || got.RunOptions.ReviewEnabled || got.AutoRework.Enabled || got.NoRunHeader || got.RunOptions.Models.Base != "captured" || got.Sources[runtimeconfig.EnvPullRequest] != "flag" {
-		t.Fatalf("calls=%d options=%+v", registry.calls, got)
+	if got.RunOptions.PullRequest || got.RunOptions.ReviewEnabled || got.AutoRework.Enabled || got.NoRunHeader || got.RunOptions.Models.Base != "captured" || got.Sources[runtimeconfig.EnvModel] != "env" || got.Sources[runtimeconfig.EnvPullRequest] != "flag" {
+		t.Fatalf("options=%+v", got)
+	}
+}
+
+func TestResolveCommandOptionsRepositoryLayer(t *testing.T) {
+	snapshot := composedSnapshotWith(nil, map[string]string{"pull_request": "true", "models.model": `"repository"`, "review_agent": `"claude"`})
+	app := App{RuntimeEnv: snapshot}
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	app.registerRunFlags(fs)
+	if err := fs.Parse(nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := app.resolveCommandOptions(fs, runtimeconfig.CommandRun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.RunOptions.PullRequest || got.RunOptions.Models.Base != "repository" || got.RunOptions.ReviewAgent != runtimeconfig.AgentClaude ||
+		got.Sources[runtimeconfig.EnvPullRequest] != "repository" || got.Sources[runtimeconfig.EnvModel] != "repository" || got.Sources[runtimeconfig.EnvReviewAgent] != "repository" {
+		t.Fatalf("options=%+v", got)
 	}
 }
 
 func TestReviewCommandOptionsMatchProfile(t *testing.T) {
 	for _, permission := range []string{"true", "false"} {
 		t.Run(permission, func(t *testing.T) {
-			snapshot := snapshotWith(map[string]string{
+			snapshot := composedSnapshotWith(map[string]string{
 				runtimeconfig.EnvModel: "env-base", runtimeconfig.EnvReviewModel: "env-review",
 				runtimeconfig.EnvSessionTimeout: "37s", runtimeconfig.EnvSkipPermissions: permission,
 				runtimeconfig.EnvCommitPolicy: "none", runtimeconfig.EnvExecutionMode: "invalid",
-			})
-			registry := &commandOptionsRegistry{fakeNoteRegistry: fakeNoteRegistry{current: taodata.Repo{RunDefaults: &taodata.RepoRunDefaults{PullRequest: new(true), Models: &taodata.RepoModelDefaults{Base: "repo-base"}}}}}
-			app := App{RuntimeEnv: snapshot, Registry: func() NoteRegistry { return registry }}
+			}, map[string]string{"pull_request": "true", "models.model": `"repo-base"`})
+			app := App{RuntimeEnv: snapshot}
 			fs := flag.NewFlagSet("review", flag.ContinueOnError)
 			registerReviewFlags(fs)
 			if err := fs.Parse([]string{"--run", "--model=explicit"}); err != nil {
 				t.Fatal(err)
 			}
-			got, err := app.resolveCommandOptions(context.Background(), fs, runtimeconfig.CommandReview)
+			got, err := app.resolveCommandOptions(fs, runtimeconfig.CommandReview)
 			if err != nil {
 				t.Fatal(err)
 			}
 			want, err := runtimeconfig.ResolveCommandOptions(runtimeconfig.CommandOptionsInput{
 				Env: *snapshot, Profile: runtimeconfig.CommandReview,
-				Repository: runtimeconfig.RunOptionsPatch{PullRequest: new(true), ModelSelection: runtimeconfig.ModelSelection{Base: "repo-base"}},
-				Flags:      (runtimeconfig.RunOptionsPatch{}).WithModelForAllRoles("explicit"),
+				Flags: (runtimeconfig.RunOptionsPatch{}).WithModelForAllRoles("explicit"),
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if registry.calls != 1 || !reflect.DeepEqual(got, want) || got.SkipPermissions != (permission == "true") || got.RunOptions.PullRequest || got.Sources[runtimeconfig.EnvReviewModel] != "flag" {
-				t.Fatalf("calls=%d got=%+v want=%+v", registry.calls, got, want)
+			if !reflect.DeepEqual(got, want) || got.SkipPermissions != (permission == "true") || got.RunOptions.PullRequest || got.Sources[runtimeconfig.EnvReviewModel] != "flag" {
+				t.Fatalf("got=%+v want=%+v", got, want)
 			}
 		})
 	}
@@ -80,8 +104,7 @@ func TestReviewCommandOptionsMatchProfile(t *testing.T) {
 
 func TestCommandRunHandoffUsesResolvedOptions(t *testing.T) {
 	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
-	registry := &commandOptionsRegistry{}
-	app := App{Out: io.Discard, RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvModel: "captured", runtimeconfig.EnvRunHeader: "false"}), Registry: func() NoteRegistry { return registry }}
+	app := App{Out: io.Discard, RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvModel: "captured", runtimeconfig.EnvRunHeader: "false"}), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }}
 	old := executeSinglePlan
 	t.Cleanup(func() { executeSinglePlan = old })
 	calls := 0
@@ -96,23 +119,23 @@ func TestCommandRunHandoffUsesResolvedOptions(t *testing.T) {
 	if err := app.run(context.Background(), repo, []string{"--no-review", "--commit-policy=none", fixture.id}); err != nil {
 		t.Fatal(err)
 	}
-	if registry.calls != 1 || calls != 1 {
-		t.Fatalf("repository=%d execution=%d", registry.calls, calls)
+	if calls != 1 {
+		t.Fatalf("execution=%d", calls)
 	}
 	fs := flag.NewFlagSet("handoff", flag.ContinueOnError)
 	app.registerRunFlags(fs)
 	if err := fs.Parse([]string{"--no-review", "--commit-policy=none"}); err != nil {
 		t.Fatal(err)
 	}
-	options, err := app.resolveCommandOptions(context.Background(), fs, runtimeconfig.CommandRun)
+	options, err := app.resolveCommandOptions(fs, runtimeconfig.CommandRun)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := app.executeCommandRun(context.Background(), repo, fixture.id, options); err != nil {
 		t.Fatal(err)
 	}
-	if registry.calls != 2 || calls != 2 {
-		t.Fatalf("handoff recomposed options: repository=%d execution=%d", registry.calls, calls)
+	if calls != 2 {
+		t.Fatalf("handoff recomposed options: execution=%d", calls)
 	}
 }
 
@@ -124,14 +147,13 @@ func TestResolveCommandOptionsStrictConflicts(t *testing.T) {
 		{[]string{"--commit-policy=none"}, []string{"requires commit policy slice", "TAO_PULL_REQUEST source=repository", "TAO_COMMIT_POLICY source=flag"}},
 		{[]string{"--max-rework-attempts=-1"}, []string{"TAO_MAX_REWORK_ATTEMPTS source=flag"}},
 	} {
-		registry := &fakeNoteRegistry{current: taodata.Repo{RunDefaults: &taodata.RepoRunDefaults{PullRequest: new(true)}}}
-		app := App{RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry { return registry }}
+		app := App{RuntimeEnv: composedSnapshotWith(nil, map[string]string{"pull_request": "true"})}
 		fs := flag.NewFlagSet("test", flag.ContinueOnError)
 		app.registerRunFlags(fs)
 		if err := fs.Parse(tt.args); err != nil {
 			t.Fatal(err)
 		}
-		_, err := app.resolveCommandOptions(context.Background(), fs, runtimeconfig.CommandRun)
+		_, err := app.resolveCommandOptions(fs, runtimeconfig.CommandRun)
 		for _, want := range tt.want {
 			if err == nil || !strings.Contains(err.Error(), want) {
 				t.Fatalf("want %s: %v", want, err)
@@ -147,8 +169,7 @@ func TestReworkRunRepositoryConflictBeforeMutation(t *testing.T) {
 			const id = "20260628-1200-conflict"
 			dir := writeCLIReworkPlan(t, root, id, plan.StatusCompleted, reworkReview(plan.ReviewVerdictChangesRequested, []plan.ReviewFinding{{File: "file.go", Message: "fix"}}))
 			before := readReworkArtifacts(t, dir)
-			registry := &commandOptionsRegistry{fakeNoteRegistry: fakeNoteRegistry{current: taodata.Repo{RunDefaults: &taodata.RepoRunDefaults{PullRequest: new(true)}}}}
-			app := App{Out: io.Discard, RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvCommitPolicy: "none"}), Registry: func() NoteRegistry { return registry }}
+			app := App{Out: io.Discard, RuntimeEnv: composedSnapshotWith(map[string]string{runtimeconfig.EnvCommitPolicy: "none"}, map[string]string{"pull_request": "true"}), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }}
 			args := []string{"--run", id}
 			if fromPR {
 				args = []string{"--from-pr", "--run", id}
@@ -157,8 +178,8 @@ func TestReworkRunRepositoryConflictBeforeMutation(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), "TAO_PULL_REQUEST source=repository") {
 				t.Fatalf("expected repository conflict, got %v", err)
 			}
-			if registry.calls != 1 || readReworkArtifacts(t, dir) != before {
-				t.Fatalf("admission mutated artifacts or lookup count=%d", registry.calls)
+			if readReworkArtifacts(t, dir) != before {
+				t.Fatal("admission mutated artifacts")
 			}
 		})
 	}
@@ -169,13 +190,12 @@ func TestReworkRunRepositoryConflictBeforeMutation(t *testing.T) {
 // Prompt rendering intentionally has no repository/session/model admission;
 // review and merge intentionally omit run commit/publication preferences.
 func TestCommandOptionsSixPaths(t *testing.T) {
-	snapshot := snapshotWith(map[string]string{
+	snapshot := composedSnapshotWith(map[string]string{
 		runtimeconfig.EnvModel: "env-base", runtimeconfig.EnvReviewModel: "env-review",
 		runtimeconfig.EnvSessionTimeout: "37s", runtimeconfig.EnvSkipPermissions: "false",
 		runtimeconfig.EnvCommitPolicy: "slice", runtimeconfig.EnvExecutionMode: "current",
-	})
-	registry := &commandOptionsRegistry{fakeNoteRegistry: fakeNoteRegistry{current: taodata.Repo{RunDefaults: &taodata.RepoRunDefaults{PullRequest: new(true), Models: &taodata.RepoModelDefaults{Base: "repo-base"}}}}}
-	app := App{RuntimeEnv: snapshot, Registry: func() NoteRegistry { return registry }}
+	}, map[string]string{"pull_request": "true", "models.model": `"repo-base"`, "models.merge_review_model": `"repo-merge"`})
+	app := App{RuntimeEnv: snapshot}
 	var baseline runtimeconfig.CommandOptions
 	for _, tt := range []struct {
 		name     string
@@ -195,20 +215,12 @@ func TestCommandOptionsSixPaths(t *testing.T) {
 			if err := fs.Parse(nil); err != nil {
 				t.Fatal(err)
 			}
-			before := registry.calls
-			got, err := app.resolveCommandOptions(context.Background(), fs, tt.profile)
+			got, err := app.resolveCommandOptions(fs, tt.profile)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if tt.name == "run" {
 				baseline = got
-			}
-			wantCalls := 1
-			if tt.name == "prompt" {
-				wantCalls = 0
-			}
-			if registry.calls-before != wantCalls {
-				t.Fatal("unexpected repository lookup count")
 			}
 			for key, source := range got.Sources {
 				if other, ok := baseline.Sources[key]; ok && source != other {
@@ -223,10 +235,12 @@ func TestCommandOptionsSixPaths(t *testing.T) {
 			if tt.profile == runtimeconfig.CommandRun && !reflect.DeepEqual(got, baseline) {
 				t.Fatal("full execution options diverged")
 			}
+			if tt.profile == runtimeconfig.CommandMerge && (got.RunOptions.Models.MergeReview != "repo-merge" || got.Sources[runtimeconfig.EnvMergeReviewModel] != "repository") {
+				t.Fatalf("merge lost repository role: %+v", got)
+			}
 			for key, values := range map[string][2]string{
-				runtimeconfig.EnvReviewModel:      {got.RunOptions.Models.Review, baseline.RunOptions.Models.Review},
-				runtimeconfig.EnvMergeReviewModel: {got.RunOptions.Models.MergeReview, baseline.RunOptions.Models.MergeReview},
-				runtimeconfig.EnvResolverModel:    {got.RunOptions.Models.Resolver, baseline.RunOptions.Models.Resolver},
+				runtimeconfig.EnvReviewModel:   {got.RunOptions.Models.Review, baseline.RunOptions.Models.Review},
+				runtimeconfig.EnvResolverModel: {got.RunOptions.Models.Resolver, baseline.RunOptions.Models.Resolver},
 			} {
 				if _, applicable := got.Sources[key]; applicable && values[0] != values[1] {
 					t.Errorf("%s values diverged: %v", key, values)
@@ -244,7 +258,141 @@ func TestCommandOptionsSixPaths(t *testing.T) {
 func TestResolveCommandOptionsWithoutRepositoryProfile(t *testing.T) {
 	app := App{RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvAgent: "invalid"}), Registry: func() NoteRegistry { t.Fatal("unexpected repository lookup"); return nil }}
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
-	if _, err := app.resolveCommandOptions(context.Background(), fs, runtimeconfig.CommandPromptOther); err != nil {
+	if _, err := app.resolveCommandOptions(fs, runtimeconfig.CommandPromptOther); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// persistRepositorySettings stores the repository under a fresh data home so
+// settings composition finds its run defaults. The repository keeps its own
+// root (which must be absolute) and name.
+func persistRepositorySettings(t *testing.T, repo taodata.Repo) taodata.Repo {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("TAO_DATA_HOME", home)
+	repo.Schema = taodata.RepoSchema
+	if repo.Name == "" {
+		repo.Name = "test-repo"
+	}
+	dir := filepath.Join(home, "repos", repo.ID)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "repo.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return repo
+}
+
+// A corrupt global configuration file blocks every execution profile, even
+// when the plan's recorded repository is unregistered and composition returns
+// the invocation baseline untouched.
+func TestResolveCommandOptionsRejectsStructuralGlobalLoadError(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TAO_DATA_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte("{not json"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }}
+	app = app.initializeSettings(context.Background())
+	if app.settingsGlobal == nil || app.settingsGlobal.LoadError == nil {
+		t.Fatalf("corrupt global settings not surfaced: %+v", app.settingsGlobal)
+	}
+	composed, err := app.settingsForPlanRoot(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, profile := range []runtimeconfig.CommandProfile{runtimeconfig.CommandRun, runtimeconfig.CommandReview, runtimeconfig.CommandMerge, runtimeconfig.CommandPromptRun} {
+		fs := flag.NewFlagSet(string(profile), flag.ContinueOnError)
+		composed.registerRunFlags(fs)
+		if _, err := composed.resolveCommandOptions(fs, profile); err == nil || !strings.Contains(err.Error(), "config.json") {
+			t.Fatalf("%s admitted a corrupt global configuration: %v", profile, err)
+		}
+	}
+	fixture := newRunPlanFixture(t, plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
+	if err := app.run(context.Background(), plan.NewFileRepository(fixture.root), []string{fixture.id}); err == nil || !strings.Contains(err.Error(), "config.json") {
+		t.Fatalf("run admitted a corrupt global configuration: %v", err)
+	}
+	if _, err := settings.NewService(home, *snapshotWith(nil)).Read(context.Background(), settings.Target{Global: true}); err == nil {
+		t.Fatal("service did not report the structural error")
+	}
+}
+
+// A registered repository whose repo.json is unreadable is omitted from the
+// catalog listing; composition must still find the registration by its
+// derived identifier and refuse execution rather than fall back to baseline.
+func TestSettingsForPlanRootFailsClosedOnUnreadableRegistration(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TAO_DATA_HOME", home)
+	fixture := newRunPlanFixture(t, plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
+	detail, err := plan.NewFileRepository(fixture.root).ResolvePlan(context.Background(), fixture.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := detail.State.Repo.Root
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	id := taodata.RepoID(filepath.Clean(root))
+	dir := filepath.Join(home, "repos", id)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "repo.json"), []byte("{not json"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	registry := taodata.Registry{DataHome: home}
+	if repos, err := registry.ListRepos(); err != nil || len(repos) != 0 {
+		t.Fatalf("catalog listing should omit the unreadable registration: %v %v", repos, err)
+	}
+	app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry { return registry }}
+	if _, err := app.settingsForPlanRoot(context.Background(), detail.State.Repo.Root); err == nil {
+		t.Fatal("unreadable registration composed as unregistered")
+	}
+	if err := app.run(context.Background(), plan.NewFileRepository(fixture.root), []string{fixture.id}); err == nil || !strings.Contains(err.Error(), "repo.json") {
+		t.Fatalf("run admitted an unreadable registration: %v", err)
+	}
+	// An unregistered root still uses the invocation baseline.
+	if _, err := app.settingsForPlanRoot(context.Background(), t.TempDir()); err != nil {
+		t.Fatalf("unregistered root rejected: %v", err)
+	}
+}
+
+// A linked worktree is registered through its control checkout. When that sole
+// registration is unreadable, the catalog listing is empty, yet the plan must
+// still be refused rather than treated as unregistered.
+func TestSettingsForPlanRootFailsClosedOnUnreadableControlCheckout(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TAO_DATA_HOME", home)
+	control := initTestGitRepo(t)
+	if resolved, err := filepath.EvalSymlinks(control); err == nil {
+		control = resolved
+	}
+	initRunGit(t, control, "-c", "user.name=tao", "-c", "user.email=tao@example.com", "commit", "--allow-empty", "-m", "init")
+	linked := filepath.Join(t.TempDir(), "linked")
+	initRunGit(t, control, "worktree", "add", "--detach", linked)
+	t.Cleanup(func() {
+		remove := exec.Command("git", "worktree", "remove", "--force", linked) //nolint:gosec // G204: fixed git command with test paths
+		remove.Dir = control
+		_ = remove.Run()
+	})
+	dir := filepath.Join(home, "repos", taodata.RepoID(filepath.Clean(control)))
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "repo.json"), []byte("{not json"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	registry := taodata.Registry{DataHome: home}
+	if repos, err := registry.ListRepos(); err != nil || len(repos) != 0 {
+		t.Fatalf("catalog listing should omit the unreadable registration: %v %v", repos, err)
+	}
+	app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry { return registry }}
+	if _, err := app.settingsForPlanRoot(context.Background(), linked); err == nil || !strings.Contains(err.Error(), "repo.json") {
+		t.Fatalf("linked worktree of an unreadable registration composed as unregistered: %v", err)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/agent"
+	"github.com/iamseth/tao/internal/configtypes"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 )
@@ -19,6 +20,36 @@ import (
 func runEnvSnapshot(values map[string]string) *runtimeconfig.EnvSnapshot {
 	snapshot := runtimeconfig.LoadEnv(func(key string) (string, bool) { value, ok := values[key]; return value, ok })
 	return &snapshot
+}
+
+func TestComposedSnapshotSessionAdmission(t *testing.T) {
+	global := configtypes.SettingsValues{"budget.slice.cost.warn": []byte(`0`), "budget.slice.cost.stop": []byte(`4`)}
+	for _, stop := range []string{`0`, `null`} {
+		t.Run(stop, func(t *testing.T) {
+			snapshot := runtimeconfig.ResolveSettings(global, configtypes.SettingsValues{"budget.slice.cost.stop": []byte(stop)}, runtimeconfig.LoadEnv(nil))
+			t.Setenv(runtimeconfig.EnvBudgetSliceCostStop, "invalid")
+			runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
+				return agent.SessionResult{Metrics: &agent.Metrics{Cost: 1}}, nil
+			})
+			runner, dir, root := sessionEventTestRunner(t, runtime, plan.NewFileRepository(""), io.Discard, time.Now())
+			runner.runtimeEnv = snapshot
+			_, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{PlanDir: dir, RepoRoot: root, Metrics: &AgentSessionMetricsRequest{SliceID: "001-a", Role: plan.AgentRoleExecution, EnforceSliceCaps: true}})
+			var exceeded *budgetExceededError
+			if stop == `0` && !errors.As(err, &exceeded) {
+				t.Fatalf("zero cap lost: %v", err)
+			}
+			if stop == `null` && err != nil {
+				t.Fatalf("disabled cap lost: %v", err)
+			}
+		})
+	}
+	snapshot := runtimeconfig.ResolveSettings(nil, configtypes.SettingsValues{"session_warn_percent": []byte(`"invalid"`)}, runtimeconfig.LoadEnv(nil))
+	t.Setenv(runtimeconfig.EnvSessionWarnPercent, "0")
+	runner := agentSessionRunner{runtimeEnv: snapshot}
+	_, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{Metrics: &AgentSessionMetricsRequest{SliceID: "001-a", Role: plan.AgentRoleExecution}})
+	if err == nil || !strings.Contains(err.Error(), "invalid") {
+		t.Fatalf("composed session warning admitted: %v", err)
+	}
 }
 
 func TestInvalidSessionCapsRejectBeforeLaunch(t *testing.T) {

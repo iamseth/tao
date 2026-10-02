@@ -85,6 +85,10 @@ func (a App) show(ctx context.Context, repo plan.Repository, args []string) erro
 			MergeInProgress *showMergeInProgress `json:"merge_in_progress,omitempty"`
 		}{payload, merging})
 	}
+	a, err = a.settingsForPlanRoot(ctx, root)
+	if err != nil {
+		return err
+	}
 	budget, err := a.envSnapshot().Budget()
 	if err != nil {
 		return err

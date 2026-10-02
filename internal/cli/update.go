@@ -81,6 +81,9 @@ func (a App) runDiagnosticStartupUpdate(ctx context.Context) error {
 }
 
 func (a App) runStartupUpdate(ctx context.Context) error {
+	if a.settingsGlobal != nil && a.settingsGlobal.LoadError != nil {
+		return nil //nolint:nilerr // Initialization reported diagnostics; skip updates rather than guess policy.
+	}
 	defaults, err := a.envDefaultsFor(runtimeconfig.EnvUpdate)
 	if err != nil {
 		return err

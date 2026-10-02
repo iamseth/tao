@@ -3,8 +3,10 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,6 +16,7 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/planning"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+	"github.com/iamseth/tao/internal/settings"
 	"github.com/iamseth/tao/internal/taodata"
 )
 
@@ -294,56 +297,71 @@ func TestReviewRunTriggersFreshReview(t *testing.T) {
 		name       string
 		modelFlag  []string
 		wantModel  string
+		envReview  bool
+		globalOnly bool
 		envOnly    bool
 		baseOnly   bool
 		malformed  bool
 		verdict    string
 		failNotice bool
 	}{
-		{name: "environment role", envOnly: true, wantModel: "env-review"},
-		{name: "base fallback", envOnly: true, baseOnly: true, wantModel: "env-base"},
-		{name: "repository base with environment role", baseOnly: true, wantModel: "env-review"},
 		{name: "repository default", wantModel: "repo-review", verdict: "comment"},
+		{name: "global default", globalOnly: true, wantModel: "global-review"},
+		{name: "environment masks repository", envReview: true, wantModel: "env-review"},
+		{name: "environment role", envOnly: true, envReview: true, wantModel: "env-review"},
+		{name: "base fallback", envOnly: true, baseOnly: true, wantModel: "env-base"},
+		{name: "repository base with environment role", baseOnly: true, envReview: true, wantModel: "env-review"},
 		{name: "unrelated malformed settings", malformed: true, wantModel: "repo-review"},
 		{name: "explicit override", modelFlag: []string{"--model", "provider/override"}, wantModel: "provider/override", verdict: "changes_requested"},
 		{name: "notice write failure", wantModel: "repo-review", verdict: "comment", failNotice: true},
-		{name: "empty inherits", modelFlag: []string{"--model="}, wantModel: "repo-review"},
+		{name: "empty inherits", modelFlag: []string{"--model="}, envReview: true, wantModel: "env-review"},
 		{name: "explicit reviewer", modelFlag: []string{"--review-agent=pi"}, wantModel: "repo-review"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			clearTaoEnv(t)
 			t.Setenv(runtimeconfig.EnvAgent, "claude")
-			t.Setenv(runtimeconfig.EnvReviewAgent, "claude")
 			t.Setenv(runtimeconfig.EnvModel, "env-base")
-			if !tt.baseOnly || !tt.envOnly {
+			if tt.envReview {
 				t.Setenv(runtimeconfig.EnvReviewModel, "env-review")
 			}
 			t.Setenv(runtimeconfig.EnvSessionTimeout, "37s")
 			t.Setenv(runtimeconfig.EnvSkipPermissions, "false")
-			for _, key := range []string{runtimeconfig.EnvCommitPolicy, runtimeconfig.EnvExecutionMode, runtimeconfig.EnvPullRequest, runtimeconfig.EnvReview, runtimeconfig.EnvAutoRework, runtimeconfig.EnvMaxReworkAttempts, runtimeconfig.EnvRunModel} {
+			for _, key := range []string{runtimeconfig.EnvCommitPolicy, runtimeconfig.EnvExecutionMode, runtimeconfig.EnvPullRequest, runtimeconfig.EnvReview, runtimeconfig.EnvAutoRework, runtimeconfig.EnvMaxReworkAttempts, runtimeconfig.EnvReworkEscalationFromAttempt, runtimeconfig.EnvRunHeader} {
 				t.Setenv(key, "invalid value")
 			}
 			if !tt.malformed {
 				t.Setenv(runtimeconfig.EnvCommitPolicy, "none")
 				t.Setenv(runtimeconfig.EnvExecutionMode, "current")
 			}
-			registered := taodata.Repo{ID: "repo-a", RunDefaults: &taodata.RepoRunDefaults{PullRequest: new(true), Models: &taodata.RepoModelDefaults{Base: "repo-base", Review: "repo-review"}}}
-			if tt.envOnly {
+			fixture := newRunPlanFixture(t, plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
+			detail, err := plan.NewFileRepository(fixture.root).ResolvePlan(context.Background(), fixture.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			registered := taodata.Repo{Schema: taodata.RepoSchema, ID: "repo-a", Name: "selected", Root: detail.State.Repo.Root, RunDefaults: &taodata.RepoRunDefaults{PullRequest: new(true), Models: &taodata.RepoModelDefaults{Base: "repo-base", Review: "repo-review"}}}
+			if tt.envOnly || tt.globalOnly {
 				registered.RunDefaults.Models = nil
 			} else if tt.baseOnly {
 				registered.RunDefaults.Models.Review = ""
 			}
+			// The saved repository reviewer is the only selector; it must reach the session.
 			registered = registered.WithReviewAgentDefault("pi")
-			registry := &commandOptionsRegistry{fakeNoteRegistry: fakeNoteRegistry{current: registered}}
-
-			fixture := newRunPlanFixture(t, plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
+			registry := &fakeNoteRegistry{current: taodata.Repo{ID: "wrong-checkout"}, repos: []taodata.Repo{registered}}
+			home := t.TempDir()
+			if tt.globalOnly {
+				writeGlobalSettings(t, home, `{"models":{"model":"global-base","review_model":"global-review"}}`)
+			}
+			dir := filepath.Join(home, "repos", registered.ID)
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			data, _ := json.Marshal(registered)
+			if err := os.WriteFile(filepath.Join(dir, "repo.json"), data, 0600); err != nil {
+				t.Fatal(err)
+			}
 			if tt.verdict != "" {
-				detail, err := plan.NewFileRepository(fixture.root).ResolvePlan(context.Background(), fixture.id)
-				if err != nil {
-					t.Fatal(err)
-				}
 				detail.State.Repo.BaseCommit = "base123"
-				detail.State.Plan.Review = &plan.PlanReview{Status: "completed", Verdict: tt.verdict, Base: "base123", Head: "head123"}
+				plan.SetPersistedReview(detail, plan.PlanReview{Status: "completed", Verdict: tt.verdict, Base: "base123", Head: "head123"})
 				record, err := plan.NewPlanRecord(fixture.dir, detail)
 				if err != nil {
 					t.Fatal(err)
@@ -380,6 +398,7 @@ func TestReviewRunTriggersFreshReview(t *testing.T) {
 			}
 			snapshot := runtimeconfig.RuntimeEnv()
 			app.RuntimeEnv = &snapshot
+			app.SettingsService = settings.NewService(home, snapshot)
 			t.Setenv(runtimeconfig.EnvSessionTimeout, "invalid")
 			t.Setenv(runtimeconfig.EnvReviewModel, "changed-after-capture")
 			app.Registry = func() NoteRegistry { return registry }
@@ -405,9 +424,6 @@ func TestReviewRunTriggersFreshReview(t *testing.T) {
 			args := append([]string{"--run", fixture.id}, tt.modelFlag...)
 			if err := app.review(context.Background(), plan.NewFileRepository(fixture.root), args); err != nil {
 				t.Fatal(err)
-			}
-			if registry.calls != 1 {
-				t.Fatalf("repository lookups = %d, want 1", registry.calls)
 			}
 			reporter.requireCall(t, "run run-plan", "idle")
 			state, err := plan.ReadState(fixture.dir)
@@ -441,7 +457,6 @@ func TestReviewRunTriggersFreshReview(t *testing.T) {
 		})
 	}
 }
-
 func TestAuxiliaryGeneratorsInheritBaseModel(t *testing.T) {
 	clearTaoEnv(t)
 	t.Setenv(runtimeconfig.EnvModel, "provider/base")

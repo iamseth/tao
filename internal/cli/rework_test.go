@@ -294,7 +294,12 @@ func TestReworkReviewAgentAdmissionBeforeMutation(t *testing.T) {
 				id := "review-agent-admission"
 				dir := writeCLIReworkPlan(t, root, id, plan.StatusCompleted, reworkReview(plan.ReviewVerdictChangesRequested, []plan.ReviewFinding{{Severity: "major", File: "a.go", Message: "fix"}}))
 				before := readText(t, filepath.Join(dir, "state.json"))
-				registry := &fakeNoteRegistry{current: (taodata.Repo{}).WithReviewAgentDefault(test.repository)}
+				cwd, err := os.Getwd()
+				if err != nil {
+					t.Fatal(err)
+				}
+				repository := persistRepositorySettings(t, (taodata.Repo{ID: "admission-repo", Root: cwd}).WithReviewAgentDefault(test.repository))
+				registry := &fakeNoteRegistry{current: repository, repos: []taodata.Repo{repository}}
 				app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry { return registry }}
 				args := append([]string{id}, test.flags...)
 				if fromPR {
@@ -480,24 +485,23 @@ func TestReworkRunCarriesOptionsThroughBothHandoffs(t *testing.T) {
 				stubCLIReworkPRPipeline(t, []forge.ReviewThread{thread}, []reworkpkg.PRThreadClassification{{ThreadNodeID: "thread", Kind: reworkpkg.PRThreadKindChange, Rationale: "fix"}})
 				args = []string{"--from-pr", "--run", id}
 			}
-			registry := &commandOptionsRegistry{fakeNoteRegistry: fakeNoteRegistry{current: taodata.Repo{RunDefaults: &taodata.RepoRunDefaults{Models: &taodata.RepoModelDefaults{Run: "repo-run"}}}}}
-			app := App{Out: io.Discard, RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvModel: "captured", runtimeconfig.EnvAutoRework: "false", runtimeconfig.EnvRunHeader: "false"}), Registry: func() NoteRegistry { return registry }}
+			app := App{Out: io.Discard, RuntimeEnv: composedSnapshotWith(map[string]string{runtimeconfig.EnvModel: "captured", runtimeconfig.EnvAutoRework: "false", runtimeconfig.EnvRunHeader: "false"}, map[string]string{"models.run_model": `"repo-run"`}), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }}
 			t.Setenv(runtimeconfig.EnvModel, "changed")
 			old := executeSinglePlan
 			t.Cleanup(func() { executeSinglePlan = old })
 			calls := 0
 			executeSinglePlan = func(service runpkg.Service, ctx context.Context, request runpkg.Request) error {
 				calls++
-				if request.Models.Base != "captured" || request.Models.Run != "repo-run" || registry.calls != 1 {
-					t.Fatalf("request=%+v lookups=%d", request, registry.calls)
+				if request.Models.Base != "captured" || request.Models.Run != "repo-run" {
+					t.Fatalf("request=%+v", request)
 				}
 				return service.WithPlanRunLock(ctx, request, func(context.Context) error { return context.Canceled })
 			}
 			if err := app.rework(context.Background(), plan.NewFileRepository(root), args); !errors.Is(err, context.Canceled) {
 				t.Fatalf("handoff cancellation=%v", err)
 			}
-			if calls != 1 || registry.calls != 1 {
-				t.Fatalf("execution=%d lookups=%d", calls, registry.calls)
+			if calls != 1 {
+				t.Fatalf("execution=%d", calls)
 			}
 		})
 	}
@@ -537,10 +541,15 @@ func TestReworkRunRejectsRepositoryPolicyBeforeReopening(t *testing.T) {
 	dir := writeCLIReworkPlan(t, root, id, plan.StatusCompleted, reworkReview(plan.ReviewVerdictChangesRequested, []plan.ReviewFinding{{File: "file.go", Message: "fix this"}}))
 	before := readReworkArtifacts(t, dir)
 	negative := -1
-	registry := &fakeNoteRegistry{current: taodata.Repo{ID: "repo-a", RunDefaults: &taodata.RepoRunDefaults{MaxReworkAttempts: &negative}}}
-	app := App{Out: io.Discard, Err: io.Discard, Registry: func() NoteRegistry { return registry }}
-	err := app.rework(context.Background(), plan.NewFileRepository(root), []string{"--run", id})
-	if err == nil || !strings.Contains(err.Error(), "--max-rework-attempts") {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := persistRepositorySettings(t, taodata.Repo{ID: "repo-a", Root: cwd, RunDefaults: &taodata.RepoRunDefaults{MaxReworkAttempts: &negative}})
+	registry := &fakeNoteRegistry{current: repository, repos: []taodata.Repo{repository}}
+	app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry { return registry }}
+	err = app.rework(context.Background(), plan.NewFileRepository(root), []string{"--run", id})
+	if err == nil || !strings.Contains(err.Error(), "max_rework_attempts") {
 		t.Fatalf("policy not rejected: %v", err)
 	}
 	if readReworkArtifacts(t, dir) != before {

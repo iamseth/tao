@@ -17,6 +17,7 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/theme"
+	"github.com/iamseth/tao/internal/tui"
 )
 
 func TestMixedPriorityColumn(t *testing.T) {
@@ -302,6 +303,65 @@ func TestSettingsPreviewLeadsWithTruthfulOverrides(t *testing.T) {
 	}
 	if strings.Contains(withoutOverrides, "OVERRIDES") {
 		t.Fatalf("Settings preview renders an empty Overrides section:\n%s", withoutOverrides)
+	}
+}
+
+func TestSettingsServiceEditsOnlyMemory(t *testing.T) {
+	ctx := context.Background()
+	service := NewSettingsService(tui.SettingsSnapshot{Repositories: []tui.RepositorySetting{{ID: "fixture", Values: []tui.SettingsValue{
+		{Key: "agent", Kind: "string", Editable: true, Source: "env", Value: "pi"},
+		{Key: "budget.slice.cost.stop", Kind: "number", Editable: true},
+	}}}})
+	value := "claude"
+	if err := service.SetSetting(ctx, "fixture", "agent", &value); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, _ := service.Collect(ctx)
+	row := snapshot.Repositories[0].Values[0]
+	if row.Value != "pi" || row.Stored != "claude" || row.Source != "env" {
+		t.Fatalf("mask lost: %+v", row)
+	}
+	value = "null"
+	if err := service.SetSetting(ctx, "fixture", "budget.slice.cost.stop", &value); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, _ = service.Collect(ctx)
+	if snapshot.Repositories[0].Values[1].Stored != "null" {
+		t.Fatal("disabled cap lost")
+	}
+	if err := service.SetSetting(ctx, "fixture", "agent", nil); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, _ = service.Collect(ctx)
+	if snapshot.Repositories[0].Values[0].Stored != "" {
+		t.Fatal("unset retained stored value")
+	}
+	if err := service.SetSetting(ctx, "missing", "agent", nil); err == nil {
+		t.Fatal("missing repository accepted")
+	}
+	value = "invalid-agent"
+	if err := service.SetSetting(ctx, "fixture", "agent", &value); err == nil {
+		t.Fatal("invalid agent accepted")
+	}
+}
+
+func TestSettingsServiceClonesScopedRows(t *testing.T) {
+	snapshot := tui.SettingsSnapshot{Values: []tui.SettingsValue{{Key: "agent", Choices: []string{"pi"}}}, Paths: []tui.SettingsRuntimeDefault{{Name: "home"}}, Repositories: []tui.RepositorySetting{{Values: []tui.SettingsValue{{Key: "agent", Choices: []string{"claude"}}}}}}
+	service := NewSettingsService(snapshot)
+	snapshot.Values[0].Choices[0] = "changed"
+	first, err := service.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Values[0].Choices[0] = "changed"
+	first.Paths[0].Name = "changed"
+	first.Repositories[0].Values[0].Choices[0] = "changed"
+	second, err := service.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Values[0].Choices[0] != "pi" || second.Paths[0].Name != "home" || second.Repositories[0].Values[0].Choices[0] != "claude" {
+		t.Fatalf("aliased snapshot: %+v", second)
 	}
 }
 

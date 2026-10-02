@@ -739,6 +739,38 @@ blockers still refuse continuation. A stale or unavailable note is simply omitte
 Timeouts retain their ordinary classification and recovery requirements: neither
 a warning nor a note supplies completion, retry, or recovery authority.
 
+#### Choose durable settings or one-off overrides
+
+Use `tao config set <key> <value> --global` for your usual preferences across
+repositories; omit `--global` for a registered checkout's defaults, or select
+one explicitly with `--repo ID`. Use `unset` to inherit again. Keep these
+local-only preferences out of Git. Use flags for a single run, or environment
+variables for a shell/CI job. Resolution is
+**built-in → global → repository → environment → flags**: an old shell export
+can mask a newly saved value. `tao config get` and `tao status` show both stored
+values and effective sources, so inspect those before changing more defaults.
+
+For example, save `tao config set session_timeout 30m`, then use
+`tao run --agent claude --session-timeout 45m <plan>` for a one-off exception.
+The same two flags work on `tao note run`. Permissions remain runtime-specific:
+`--dangerously-skip-permissions` bypasses Claude checks but is a compatibility
+no-op for Pi. Neither preferences nor overrides authorize recovery actions.
+
+In `tao ui`, open Settings and select a repository, then press `e` to open its
+settings editor. Global values and read-only paths are not selectable; scroll
+them with PgUp/PgDn or `g`/`G` (the arrow keys scroll too when no repository
+is registered), and moving the repository selection returns to the selection
+view. Use arrows/Tab to focus a field, Enter to edit, left/right
+arrows for choices (or type a value), and Enter to request confirmation. Outside
+text editing, `u` proposes unset/inherit and `d` disables a STOP cap with `null`.
+Escape cancels editing or confirmation without saving. Confirmation separates
+the proposed saved value from the current effective value and warns about
+environment masking. Successful saves refresh settings; stale proposals require
+refreshing and trying again. Global-only, process, and path rows are read-only;
+use `tao config ... --global` for global edits. Restart the UI to capture changed
+environment exports. See the [configuration reference](configuration.md) for the
+complete scope/key matrix, budget rules, errors, and migration examples.
+
 #### Choose an independent plan reviewer
 
 Use a different runtime when you want review independent of the implementing
@@ -751,9 +783,10 @@ tao rework --run --review-agent claude <plan>
 ```
 
 For a persistent choice, set `TAO_REVIEW_AGENT` or use
-`tao repo config --review-agent claude`. Repository settings override the
-environment; explicit flags win. `tao repo config --review-agent unset` removes
-only that repository override. With no selector, reviews inherit the implementing
+`tao config set review_agent claude` (or `--global`). Resolution follows the
+scoped precedence above: a `TAO_REVIEW_AGENT` export masks a saved value, and an
+explicit flag wins over both. `tao config unset review_agent` removes only that
+saved value. With no selector, reviews inherit the implementing
 runtime, preserving existing behavior. `review` and `rework` accept the flag only
 with `--run`; ordinary and `--from-pr` handoffs and automatic rounds retain it.
 PR feedback triage itself stays on the implementing runtime.
@@ -793,12 +826,12 @@ proposal correction; `TAO_MERGE_REVIEW_MODEL` covers aggregate merge review;
 generation, pull-request work, and standalone merge-message generation use the
 base model, not a role override.
 
-Resolution has three stages: environment settings establish the baseline,
-repository defaults override the corresponding fields, and an explicit
-per-invocation `--model` overrides the base and every role. After resolution,
-each unset role falls back to the base. Thus a repository base does not erase
-an inherited environment role setting; remove that role setting to use the
-base. Repository `unset` removes only that stored default, restoring inheritance.
+Each model field follows built-in → global → repository → environment → flags.
+An explicit per-invocation `--model` overrides the base and every role. After
+resolution, each unset role falls back to the base. Thus a repository base does
+not erase an explicit environment role setting; remove that role setting to use
+the base. `tao config unset models.run_model`, for example, removes only that
+repository's stored role default, restoring inheritance.
 With no effective model setting, launch arguments remain unchanged and the
 runtime chooses. Defaults are resolved for each invocation, not pinned to a
 plan, so a later invocation can use a different model. The exception is a
@@ -1533,9 +1566,10 @@ plan; `tao run` preflights only the selected runnable slice. See the
 An invalid budget *configuration* is different from exceeding a valid advisory
 threshold: commands that consume it reject the override by name instead of
 silently retaining defaults or disabling a hard cap. Use `tao status` to inspect
-it, then correct or unset it with environment settings or `tao repo config`.
-Settings/Debug are developer previews, not interactive tabs. Help and diagnostics
-remain usable; see the [configuration contract](configuration.md).
+it, then correct or unset it at its source: environment, `tao config`, or the
+Settings repository editor. A valid environment override does not repair invalid
+saved configuration. Help, status, and the Settings/Debug tabs remain available
+for diagnosis; see the [configuration contract](configuration.md).
 
 ### Data and privacy
 

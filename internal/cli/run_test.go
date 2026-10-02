@@ -16,12 +16,12 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/agent/logrecord"
+	"github.com/iamseth/tao/internal/configtypes"
 	"github.com/iamseth/tao/internal/plan"
 	reworkpkg "github.com/iamseth/tao/internal/rework"
 	"github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/runtimeconfig"
-	"github.com/iamseth/tao/internal/taodata"
 )
 
 func TestRunInvokesPiUntilPlanCompletedAndLogsOutput(t *testing.T) {
@@ -363,7 +363,8 @@ func TestRunReworkEscalationModelPrecedence(t *testing.T) {
 	}{
 		{name: "unset"},
 		{name: "environment", env: "env-escalation", want: "env-escalation"},
-		{name: "repository", env: "env-escalation", repository: "repo-escalation", want: "repo-escalation"},
+		{name: "repository", repository: "repo-escalation", want: "repo-escalation"},
+		{name: "environment masks repository", env: "env-escalation", repository: "repo-escalation", want: "env-escalation"},
 		{name: "flag", env: "env-escalation", repository: "repo-escalation", flag: "provider/escalation", want: "provider/escalation"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -371,7 +372,10 @@ func TestRunReworkEscalationModelPrecedence(t *testing.T) {
 			if tt.env != "" {
 				t.Setenv(runtimeconfig.EnvReworkEscalationModel, tt.env)
 			}
-			registered := (taodata.Repo{}).WithModelDefaults(taodata.RepoModelDefaults{ReworkEscalation: tt.repository})
+			repository := configtypes.SettingsValues{}
+			if tt.repository != "" {
+				repository["models.rework_escalation_model"], _ = json.Marshal(tt.repository)
+			}
 			args := []string{"--model", "ordinary-model", "plan-a"}
 			if tt.flag != "" {
 				args = append(args, "--rework-escalation-model", tt.flag)
@@ -380,7 +384,7 @@ func TestRunReworkEscalationModelPrecedence(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			snapshot := runtimeconfig.RuntimeEnv()
+			snapshot := runtimeconfig.ResolveSettings(nil, repository, runtimeconfig.RuntimeEnv())
 			inputs, err := (App{RuntimeEnv: &snapshot}).resolveRunRequestFlags(fs)
 			if err != nil {
 				t.Fatal(err)
@@ -388,7 +392,7 @@ func TestRunReworkEscalationModelPrecedence(t *testing.T) {
 			if got := inputs.overrides.ReworkEscalation; got != tt.flag {
 				t.Fatalf("escalation override = %q, want %q", got, tt.flag)
 			}
-			request, err := inputs.defaults.newRunRequestWithRepository(positional[0], repositoryRunOptions(registered), inputs.overrides)
+			request, err := inputs.defaults.newRunRequestWithRepository(positional[0], runtimeconfig.RunOptionsPatch{}, inputs.overrides)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -540,15 +544,39 @@ func TestRunCurrentDoesNotReplaceUnhealthyRecordedRootWithLaunchCheckout(t *test
 	}
 }
 
-func TestRunAgentFlagIsRejected(t *testing.T) {
+func TestRunAgentAndTimeoutFlags(t *testing.T) {
+	for _, kind := range []string{"pi", "claude"} {
+		for _, duration := range []string{"0", "3m"} {
+			app := App{Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvAgent: "claude", runtimeconfig.EnvSessionTimeout: "7m"})}
+			fs, _, err := app.parseArgs("run", []string{"--agent=" + kind, "--session-timeout=" + duration}, app.registerRunFlags)
+			if err != nil {
+				t.Fatal(err)
+			}
+			inputs, err := app.resolveRunRequestFlags(fs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request, err := inputs.defaults.newRunRequestWithRepository("plan", runtimeconfig.RunOptionsPatch{}, inputs.overrides)
+			want, _ := time.ParseDuration(duration)
+			if err != nil || request.Agent.String() != kind || request.SessionTimeout != want {
+				t.Fatalf("request=%+v err=%v", request, err)
+			}
+		}
+	}
+}
+
+func TestRunRejectsInvalidAgentAndTimeoutBeforeSession(t *testing.T) {
 	clearTaoEnv(t)
 	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
-	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
-
-	err := app.run(context.Background(), plan.NewFileRepository(fixture.root), []string{"--agent", "pi", "--commit-policy", "none", fixture.id})
-	if err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -agent") {
-		t.Fatalf("expected --agent rejection, got %v", err)
+	for _, arg := range []string{"--agent=robot", "--agent=", "--session-timeout=-1s", "--session-timeout=soon", "--session-timeout="} {
+		app := App{Out: io.Discard, Err: io.Discard, ProcessStarter: func(context.Context, string, string, []string) (run.Process, error) {
+			t.Fatal("session started")
+			return nil, nil
+		}}
+		err := app.run(context.Background(), plan.NewFileRepository(fixture.root), []string{arg, fixture.id})
+		if err == nil || !strings.Contains(err.Error(), strings.Split(arg, "=")[0]+":") {
+			t.Fatalf("%s: %v", arg, err)
+		}
 	}
 }
 

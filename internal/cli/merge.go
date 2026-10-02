@@ -240,6 +240,10 @@ func (a App) newMergeBatchRunner(ctx context.Context, repository mergepkg.BatchP
 	if err != nil {
 		return nil, fmt.Errorf("resolve current repository for merge batch: %w", err)
 	}
+	a, err = a.settingsForPlanRoot(ctx, current.Root)
+	if err != nil {
+		return nil, err
+	}
 	batchesDir := registry.MergeBatchesDir(current)
 	workspaceOwner, err := mergepkg.NewBatchWorkspace(current.Root, batchesDir, runner)
 	if err != nil {
@@ -253,7 +257,7 @@ func (a App) newMergeBatchRunner(ctx context.Context, repository mergepkg.BatchP
 	service.Progress = a.Out
 	service.Now = a.Now
 	store := mergepkg.NewBatchStore(batchesDir, registry.ActiveMergeBatchPath(current))
-	resolveOptions := a.mergeSessionOptions(repositoryRunOptions(current), model)
+	resolveOptions := a.mergeSessionOptions(model)
 	transcript := mergepkg.NewBatchTranscriptWriter(store, a.Out, a.Now)
 	agentConfig := newMergeBatchAgentConfig(a, current.Root, runner, store, runtimeconfig.ModelSelection{}, transcript)
 	agentConfig.ResolveOptions = resolveOptions
@@ -287,9 +291,9 @@ func newMergeBatchCoordinatorSeams(a App, store *mergepkg.BatchStore, service me
 }
 
 // mergeSessionOptions captures one applicable projection for every session in
-// the invocation. Admission remains deferred so passive merges and dry runs do
+// the invocation from the already composed repository settings. Admission remains deferred so passive merges and dry runs do
 // not require valid provider configuration or provider readiness.
-func (a App) mergeSessionOptions(repository runtimeconfig.RunOptionsPatch, model string) func() (runtimeconfig.CommandOptions, error) {
+func (a App) mergeSessionOptions(model string) func() (runtimeconfig.CommandOptions, error) {
 	snapshot := a.envSnapshot()
 	a.RuntimeEnv = &snapshot
 	return sync.OnceValues(func() (runtimeconfig.CommandOptions, error) {
@@ -300,19 +304,28 @@ func (a App) mergeSessionOptions(repository runtimeconfig.RunOptionsPatch, model
 				return runtimeconfig.CommandOptions{}, err
 			}
 		}
-		return a.resolveCommandOptionsWithRepository(fs, runtimeconfig.CommandMerge, repository)
+		return a.resolveCommandOptions(fs, runtimeconfig.CommandMerge)
 	})
 }
 
+// mergeModels retains the current-repository adapter for same-package callers.
 func (a App) mergeModels(ctx context.Context, model string) (runtimeconfig.ModelSelection, error) {
+	repository, err := a.registry().Current(ctx)
+	if err != nil {
+		return runtimeconfig.ModelSelection{}, err
+	}
+	a, err = a.settingsForPlanRoot(ctx, repository.Root)
+	if err != nil {
+		return runtimeconfig.ModelSelection{}, err
+	}
+	return a.effectiveMergeModels(model)
+}
+
+func (a App) effectiveMergeModels(model string) (runtimeconfig.ModelSelection, error) {
 	defaults, err := a.envDefaultsFor(
 		runtimeconfig.EnvModel, runtimeconfig.EnvRunModel, runtimeconfig.EnvReviewModel,
 		runtimeconfig.EnvMergeReviewModel, runtimeconfig.EnvResolverModel, runtimeconfig.EnvReworkEscalationModel,
 	)
-	if err != nil {
-		return runtimeconfig.ModelSelection{}, err
-	}
-	repository, err := a.currentRepositoryRunOptions(ctx)
 	if err != nil {
 		return runtimeconfig.ModelSelection{}, err
 	}
@@ -321,8 +334,11 @@ func (a App) mergeModels(ctx context.Context, model string) (runtimeconfig.Model
 		overrides = overrides.WithModelForAllRoles(model)
 	}
 	modelDefaults := runtimeconfig.RunOptionsPatch{ModelSelection: defaults.ModelSelection}
-	resolved, err := runtimeconfig.ResolveRunOptionsWithRepositoryDefaults(modelDefaults, repository, overrides)
-	return resolved.Models, err
+	config, err := runtimeconfig.NewConfigFromStages(modelDefaults, overrides)
+	if err != nil {
+		return runtimeconfig.ModelSelection{}, err
+	}
+	return config.ResolvedOptions().Models, nil
 }
 
 type closingMergeBatchRunner struct {
@@ -532,18 +548,18 @@ func (a App) newMergeServiceRunner(ctx context.Context, detail *plan.PlanDetail,
 	if repoRoot == "" {
 		return nil, fmt.Errorf("plan %s does not record a repo root", mergePlanID(detail))
 	}
+	a, err := a.settingsForPlanRoot(ctx, repoRoot)
+	if err != nil {
+		return nil, err
+	}
 	runner := a.mergeRunner()
 	manager, err := a.mergeWorkspaceManager(repoRoot, runner)
 	if err != nil {
 		return nil, err
 	}
 	eventAppender := plan.NewFileRepository("")
-	repository, err := a.currentRepositoryRunOptions(ctx)
-	if err != nil {
-		return nil, err
-	}
 	agentConfig := newSingleMergeAgentConfig(a, detail, repoRoot, runner, eventAppender, runtimeconfig.ModelSelection{})
-	agentConfig.ResolveOptions = a.mergeSessionOptions(repository, model)
+	agentConfig.ResolveOptions = a.mergeSessionOptions(model)
 	generator, err := mergepkg.NewMergeProposalGenerator(agentConfig)
 	if err != nil {
 		return nil, fmt.Errorf("configure exceptional merge proposal generator: %w", err)

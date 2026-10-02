@@ -14,8 +14,11 @@ import (
 
 // SettingsSnapshot is the read-only projection rendered by the Settings tab.
 type SettingsSnapshot struct {
-	CollectedAt          time.Time
-	RuntimeDefaults      []SettingsRuntimeDefault
+	CollectedAt     time.Time
+	RuntimeDefaults []SettingsRuntimeDefault
+	// Values is the global-effective schema projection; legacy fields remain supported.
+	Values               []SettingsValue
+	Paths                []SettingsRuntimeDefault
 	Repositories         []RepositorySetting
 	InheritedPullRequest bool
 	// Invalid baselines are diagnostic placeholders, not accepted defaults.
@@ -33,7 +36,19 @@ type SettingsRuntimeDefault struct {
 }
 
 // RepositorySetting is one registered repository and its explicit run default.
+type SettingsValue struct {
+	Key      string
+	Value    string
+	Stored   string
+	Source   string
+	Kind     string
+	Warning  string
+	Editable bool
+	Choices  []string
+}
+
 type RepositorySetting struct {
+	Values      []SettingsValue
 	ID          string
 	Name        string
 	Root        string
@@ -87,8 +102,14 @@ const (
 )
 
 func renderSettingsPage(model Model) ([]string, int, tableViewportMetadata) {
+	if model.settingsEditor != nil {
+		return renderSettingsEditor(model)
+	}
 	var lines []string
 	var metadata tableViewportMetadata
+	if len(model.SettingsSnapshot.Values) > 0 {
+		return renderScopedSettingsPage(model)
+	}
 	if overrideLines, overrideSection := renderSettingsOverrides(model); len(overrideLines) > 0 {
 		lines = append(lines, overrideLines...)
 		metadata.sections = append(metadata.sections, overrideSection)
@@ -183,6 +204,132 @@ func renderSettingsPage(model Model) ([]string, int, tableViewportMetadata) {
 	}
 	metadata.sections = append(metadata.sections, repositorySection)
 	return lines, selectedLine, metadata
+}
+
+// renderScopedSettingsPage keeps effective, saved and diagnostic text together
+// rather than hiding provenance in columns that disappear on narrow terminals.
+func renderScopedSettingsPage(model Model) ([]string, int, tableViewportMetadata) {
+	var lines []string
+	var metadata tableViewportMetadata
+	width := dashboardSectionWidth(model, PageSettings, "GLOBAL DEFAULTS", 100)
+	section := tableViewportSection{}
+	finish := func() {
+		if len(section.headingLines) > 0 {
+			metadata.sections = append(metadata.sections, section)
+		}
+		section = tableViewportSection{}
+	}
+	heading := func(title string) {
+		finish()
+		lines = append(lines, "", settingsDefaultGroupRule(model.Palette(), title, width))
+		section.headingLines = []int{len(lines) - 1}
+	}
+	text := func(value string) {
+		for _, line := range wrapDetailWords(singleLineDetail(value), max(width-4, 1)) {
+			section.contentLines = append(section.contentLines, len(lines))
+			lines = append(lines, "    "+line)
+		}
+	}
+	values := func(rows []SettingsValue) {
+		for _, group := range []string{"Execution", "Workflow", "Safety / update", "Other", "BUDGET"} {
+			var grouped []SettingsValue
+			for _, row := range rows {
+				if settingsValueGroup(row.Key) == group {
+					grouped = append(grouped, row)
+				}
+			}
+			if len(grouped) == 0 {
+				continue
+			}
+			text(group)
+			for _, row := range grouped {
+				value := row.Value
+				if strings.HasPrefix(row.Key, "budget.") && strings.HasSuffix(row.Key, ".stop") && (value == "" || value == "null") {
+					value = "disabled"
+				} else if value == "" {
+					value = "(unset)"
+				}
+				text(row.Key + " = " + value + " [" + row.Source + "]")
+				if row.Stored != "" {
+					label := "saved: "
+					if row.Source == "env" {
+						label = "saved (masked by environment): "
+					}
+					text(label + row.Stored)
+				}
+				if row.Warning != "" {
+					text("warning: " + row.Warning)
+				}
+			}
+		}
+	}
+	heading("GLOBAL DEFAULTS")
+	text("built-in → global → repository → environment → flags")
+	values(model.SettingsSnapshot.Values)
+	// Alias rows are intentionally set-only, as provided by the captured status.
+	for _, row := range model.SettingsSnapshot.RuntimeDefaults {
+		if strings.Contains(row.Warning, "deprecated") {
+			text(row.Name + " = " + row.Value + " [" + row.Source + "]: " + row.Warning)
+		}
+	}
+	if len(model.SettingsSnapshot.Paths) > 0 {
+		heading("PATHS · read-only")
+		for _, row := range model.SettingsSnapshot.Paths {
+			text(row.Name + " = " + row.Value + " [" + row.Source + "]")
+			if row.Warning != "" {
+				text(row.Warning)
+			}
+		}
+	}
+	heading("REPOSITORY DEFAULTS")
+	text("e: repository setting details / edit · p: legacy pull-request default · PgUp/PgDn, g/G: scroll")
+	if model.SettingsSnapshot.CollectionError != "" {
+		text("warning: " + model.SettingsSnapshot.CollectionError)
+	}
+	if len(model.SettingsSnapshot.Repositories) == 0 {
+		text("No registered repositories.")
+	}
+	selected := -1
+	for i, repository := range model.SettingsSnapshot.Repositories {
+		cursor := "  "
+		if i == model.Selected {
+			cursor = "> "
+			selected = len(lines)
+		}
+		text(cursor + settingsRepositoryName(repository) + " [" + repository.ID + "]")
+		text("root: " + settingsRepositoryRoot(repository.Root, model.SettingsSnapshot.DisplayHome))
+		text("health: " + repository.Health)
+		if repository.Finding != "" && repository.Finding != "ok" {
+			text("finding: " + repository.Finding)
+		}
+		values(repository.Values)
+	}
+	finish()
+	return lines, selected, metadata
+}
+
+func settingsValueGroup(key string) string {
+	if strings.HasPrefix(key, "budget.") {
+		return "BUDGET"
+	}
+	if key == "max_slices" {
+		return "Execution"
+	}
+	name := "TAO_" + strings.ToUpper(strings.TrimPrefix(key, "models."))
+	if key == "review_enabled" {
+		name = "TAO_REVIEW"
+	}
+	group, _ := settingsDefaultGroupForName(name)
+	switch group {
+	case settingsGroupExecution:
+		return "Execution"
+	case settingsGroupWorkflow:
+		return "Workflow"
+	case settingsGroupSafety:
+		return "Safety / update"
+	default:
+		return "Other"
+	}
 }
 
 func renderSettingsOverrides(model Model) ([]string, tableViewportSection) {
@@ -725,4 +872,13 @@ func nextPullRequestSetting(value *bool) *bool {
 		return &next
 	}
 	return nil
+}
+
+// settingsMaxOffset is the largest manual scroll offset that still fills the
+// body below the frame.
+func settingsMaxOffset(model Model) int {
+	frameHeight := len(renderFrame(model, PageSettings))
+	bodyHeight := max(model.Height-frameHeight, 0)
+	lines, _, _ := renderSettingsPage(model)
+	return max(len(lines)-bodyHeight, 0)
 }

@@ -28,8 +28,11 @@ var statusCommand = commandMetadata{
 }
 
 type statusPayload struct {
-	RuntimeEnv []runtimeconfig.EnvVarStatus `json:"runtime_env"`
-	Plans      plan.PlanRollup              `json:"plans"`
+	RuntimeEnv  []runtimeconfig.EnvVarStatus  `json:"runtime_env"`
+	Plans       plan.PlanRollup               `json:"plans"`
+	Settings    []runtimeconfig.SettingStatus `json:"settings"`
+	Paths       []settingsPathRow             `json:"paths"`
+	Diagnostics []string                      `json:"diagnostics,omitempty"`
 }
 
 func registerStatusFlags(fs *flag.FlagSet) {
@@ -44,18 +47,14 @@ func (a App) status(ctx context.Context, repo planLister, args []string) error {
 	if err := requireNoArgs(positional, "usage: tao status [--json]"); err != nil {
 		return err
 	}
-	env := a.envSnapshot().Status()
-	repositoryDefaults, err := a.currentRepositoryRunOptions(ctx)
-	if err != nil {
-		return err
+	effective, settingsErr := a.settingsForStatus(ctx)
+	payload := statusPayload{RuntimeEnv: settingsRuntimeRows(effective.envSnapshot()), Settings: effective.envSnapshot().SettingsStatus(), Paths: a.settingsPaths(), Plans: statusPlanRollup(ctx, repo)}
+	if settingsErr != nil {
+		payload.Diagnostics = append(payload.Diagnostics, settingsErr.Error())
 	}
-	env = applyRepositoryRunDefaultsToStatus(env, repositoryDefaults)
-	rework, err := a.currentRepositoryReworkOptions(ctx)
-	if err != nil {
-		return err
+	if a.settingsGlobal != nil && a.settingsGlobal.LoadError != nil {
+		payload.Diagnostics = append(payload.Diagnostics, a.settingsGlobal.LoadError.Error())
 	}
-	env = applyRepositoryReworkDefaultsToStatus(env, rework)
-	payload := statusPayload{RuntimeEnv: env, Plans: statusPlanRollup(ctx, repo)}
 	if flagBoolValue(fs, "json") {
 		encoder := json.NewEncoder(a.Out)
 		encoder.SetIndent("", "  ")
@@ -64,6 +63,30 @@ func (a App) status(ctx context.Context, repo planLister, args []string) error {
 	return a.writeStatus(payload)
 }
 
+// settingsRuntimeRows preserves the runtime_env compatibility shape while
+// retaining admission diagnostics from every saved layer.
+func settingsRuntimeRows(snapshot runtimeconfig.EnvSnapshot) []runtimeconfig.EnvVarStatus {
+	rows := snapshot.Status()
+	settings := make(map[string]runtimeconfig.SettingStatus)
+	for _, row := range snapshot.SettingsStatus() {
+		settings[row.Key] = row
+	}
+	byEnv := make(map[string]runtimeconfig.SettingStatus)
+	for _, definition := range runtimeconfig.SettingDefinitions() {
+		if definition.EnvKey != "" {
+			byEnv[definition.EnvKey] = settings[definition.Key]
+		}
+	}
+	for i := range rows {
+		if row, ok := byEnv[rows[i].Name]; ok {
+			rows[i].Value, rows[i].Source, rows[i].Warning = row.Value, row.Source, row.Warning
+		}
+	}
+	return rows
+}
+
+// applyRepositoryRunDefaultsToStatus is a legacy same-package adapter. Effective
+// presentation uses the scoped resolver instead.
 func applyRepositoryRunDefaultsToStatus(rows []runtimeconfig.EnvVarStatus, repository runtimeconfig.RunOptionsPatch) []runtimeconfig.EnvVarStatus {
 	values := map[string]string{
 		runtimeconfig.EnvReviewAgent:           repository.ReviewAgent.String(),
@@ -86,22 +109,6 @@ func applyRepositoryRunDefaultsToStatus(rows []runtimeconfig.EnvVarStatus, repos
 	return rows
 }
 
-// Numeric defaults are an overlay, not a second execution-policy resolver.
-// Preserve captured diagnostics even when a repository value takes precedence.
-func applyRepositoryReworkDefaultsToStatus(rows []runtimeconfig.EnvVarStatus, repository runtimeconfig.ReworkOptionsPatch) []runtimeconfig.EnvVarStatus {
-	values := map[string]*int{
-		runtimeconfig.EnvMaxReworkAttempts:           repository.MaxAttempts,
-		runtimeconfig.EnvReworkEscalationFromAttempt: repository.EscalationFromAttempt,
-	}
-	for i := range rows {
-		if value := values[rows[i].Name]; value != nil {
-			rows[i].Value = fmt.Sprint(*value)
-			rows[i].Source = "repository"
-		}
-	}
-	return rows
-}
-
 func statusPlanRollup(ctx context.Context, repo planLister) plan.PlanRollup {
 	if repo == nil {
 		return plan.SummarizePlans(nil)
@@ -117,8 +124,19 @@ func (a App) writeStatus(payload statusPayload) error {
 	if err := writeln(a.Out, "Runtime defaults:"); err != nil {
 		return err
 	}
-	if err := writeln(a.Out, "Defaults are command-specific; see docs/configuration.md#command-applicability."); err != nil {
+	if err := writeln(a.Out, "Precedence: built-in → global → repository → environment → flags"); err != nil {
 		return err
+	}
+	byEnv := make(map[string]runtimeconfig.SettingStatus)
+	byKey := make(map[string]runtimeconfig.SettingStatus)
+	for _, row := range payload.Settings {
+		byKey[row.Key] = row
+	}
+	for _, definition := range runtimeconfig.SettingDefinitions() {
+		if definition.EnvKey != "" {
+			byEnv[definition.EnvKey] = byKey[definition.Key]
+			delete(byKey, definition.Key)
+		}
 	}
 	width := len("TAO_DANGEROUSLY_SKIP_PERMISSIONS")
 	for _, row := range payload.RuntimeEnv {
@@ -131,6 +149,11 @@ func (a App) writeStatus(payload statusPayload) error {
 		}
 		if err := writef(a.Out, "  %-*s  %-8s  %s\n", width, row.Name, value, row.Source); err != nil {
 			return err
+		}
+		if setting, ok := byEnv[row.Name]; ok {
+			if err := a.writeSavedSetting(setting); err != nil {
+				return err
+			}
 		}
 		if commands := runtimeconfig.ApplicableCommands(row.Name); len(commands) > 0 {
 			if err := writef(a.Out, "    applies to: %s\n", strings.Join(commands, ", ")); err != nil {
@@ -146,7 +169,48 @@ func (a App) writeStatus(payload statusPayload) error {
 	if err := writeln(a.Out, ""); err != nil {
 		return err
 	}
+	for _, row := range payload.Settings {
+		if _, ok := byKey[row.Key]; !ok {
+			continue
+		}
+		if err := writef(a.Out, "  %s  %s  %s\n", row.Key, emptyDash(row.Value), row.Source); err != nil {
+			return err
+		}
+		if err := a.writeSavedSetting(row); err != nil {
+			return err
+		}
+		if row.Warning != "" {
+			if err := writef(a.Out, "    warning: %s\n", row.Warning); err != nil {
+				return err
+			}
+		}
+	}
+	for _, diagnostic := range payload.Diagnostics {
+		if err := writef(a.Out, "warning: %s\n", diagnostic); err != nil {
+			return err
+		}
+	}
+	if err := writeln(a.Out, "Paths (read-only):"); err != nil {
+		return err
+	}
+	for _, row := range payload.Paths {
+		if err := writef(a.Out, "  %s: %s (%s)\n", row.Name, emptyDash(row.Value), row.Source); err != nil {
+			return err
+		}
+		if row.Warning != "" {
+			if err := writef(a.Out, "    warning: %s\n", row.Warning); err != nil {
+				return err
+			}
+		}
+	}
 	return a.writePlanRollup(payload.Plans)
+}
+
+func (a App) writeSavedSetting(row runtimeconfig.SettingStatus) error {
+	if row.GlobalValue == "" && row.RepositoryValue == "" {
+		return nil
+	}
+	return writef(a.Out, "    saved global=%s repository=%s (higher precedence values mask saved values)\n", emptyDash(row.GlobalValue), emptyDash(row.RepositoryValue))
 }
 
 func (a App) writePlanRollup(rollup plan.PlanRollup) error {

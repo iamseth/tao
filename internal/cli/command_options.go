@@ -10,30 +10,17 @@ import (
 )
 
 // resolveCommandOptions composes only applicable settings from the invocation's
-// captured environment and explicit registered flags. Rendering-only profiles
-// do not require a registered checkout.
-func (a App) resolveCommandOptions(ctx context.Context, fs *flag.FlagSet, profile runtimeconfig.CommandProfile) (runtimeconfig.CommandOptions, error) {
-	var repository runtimeconfig.RunOptionsPatch
-	var rework runtimeconfig.ReworkOptionsPatch
-	switch profile {
-	case runtimeconfig.CommandRun, runtimeconfig.CommandReview, runtimeconfig.CommandMerge:
-		repo, err := a.registry().Current(ctx)
-		if err != nil {
-			return runtimeconfig.CommandOptions{}, err
-		}
-		repository = repositoryRunOptions(repo)
-		rework = repositoryReworkOptions(repo)
+// snapshot and explicit registered flags. Callers that execute against a
+// registered repository compose that repository's settings first
+// (settingsForPlanRoot / settingsForRepository); rendering-only profiles use
+// the invocation baseline as is. No process state is consulted here.
+func (a App) resolveCommandOptions(fs *flag.FlagSet, profile runtimeconfig.CommandProfile) (runtimeconfig.CommandOptions, error) {
+	// A structurally unreadable global settings file never admits execution,
+	// whether or not a repository layer was composed on top of it.
+	if a.settingsGlobal != nil && a.settingsGlobal.LoadError != nil {
+		return runtimeconfig.CommandOptions{}, a.settingsGlobal.LoadError
 	}
-	return a.resolveCommandOptionsWithRepository(fs, profile, repository, rework)
-}
-
-// resolveCommandOptionsWithRepository reuses an already selected repository,
-// including note --repo selections that differ from the current checkout.
-func (a App) resolveCommandOptionsWithRepository(fs *flag.FlagSet, profile runtimeconfig.CommandProfile, repository runtimeconfig.RunOptionsPatch, rework ...runtimeconfig.ReworkOptionsPatch) (runtimeconfig.CommandOptions, error) {
-	input := runtimeconfig.CommandOptionsInput{Env: a.envSnapshot(), Profile: profile, Repository: repository}
-	if len(rework) > 0 {
-		input.RepositoryRework = rework[0]
-	}
+	input := runtimeconfig.CommandOptionsInput{Env: a.envSnapshot(), Profile: profile}
 	var err error
 	input.Flags, err = runRequestFlagOverrides(fs)
 	if err != nil {

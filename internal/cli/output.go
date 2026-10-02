@@ -107,6 +107,7 @@ func (a App) withRuntimeTheme() App {
 	if a.Theme == nil {
 		selected := a.envSnapshot().Defaults().Theme // Warnings remain in snapshot status.
 		a.Theme = &selected
+		a.runtimeTheme = true
 	}
 	return a
 }

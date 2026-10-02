@@ -43,7 +43,7 @@ func TestMergeModelSelection(t *testing.T) {
 					} else {
 						config = newSingleMergeAgentConfig(a, detail, "", nil, nil, models)
 					}
-					want := runtimeconfig.ModelSelection{Base: "repo-base", Resolver: "repo-resolver", MergeReview: "env-review"}
+					want := runtimeconfig.ModelSelection{Base: "env-base", Resolver: "env-resolver", MergeReview: "env-review"}
 					if override != "" {
 						want = runtimeconfig.ModelSelection{Base: override, Run: override, Review: override, Resolver: override, MergeReview: override}
 					}
@@ -470,8 +470,14 @@ func TestMergeConstructorsCaptureRepositoryOnce(t *testing.T) {
 					t.Fatalf("deferred admission=%v", err)
 				}
 			}
-			if registry.calls != 1 {
-				t.Fatalf("repository lookups=%d", registry.calls)
+			// Batch merges resolve the current checkout once; single merges compose
+			// the plan's recorded root from the catalog instead of the current checkout.
+			want := 0
+			if batch {
+				want = 1
+			}
+			if registry.calls != want {
+				t.Fatalf("repository lookups=%d, want %d", registry.calls, want)
 			}
 		})
 	}
@@ -481,7 +487,7 @@ func TestMergeApplicableOptionErrorsAndFallback(t *testing.T) {
 	for _, key := range []string{runtimeconfig.EnvAgent, runtimeconfig.EnvSessionTimeout, runtimeconfig.EnvSkipPermissions, runtimeconfig.EnvResolverModel, runtimeconfig.EnvMergeReviewModel} {
 		t.Run(key, func(t *testing.T) {
 			app := App{RuntimeEnv: snapshotWith(map[string]string{key: "invalid value"})}
-			resolve := app.mergeSessionOptions(runtimeconfig.RunOptionsPatch{}, "")
+			resolve := app.mergeSessionOptions("")
 			for range 2 {
 				if _, err := resolve(); err == nil || !strings.Contains(err.Error(), key) {
 					t.Fatalf("admission=%v", err)
@@ -489,8 +495,8 @@ func TestMergeApplicableOptionErrorsAndFallback(t *testing.T) {
 			}
 		})
 	}
-	app := App{RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvModel: "env-base"})}
-	options, err := app.mergeSessionOptions(runtimeconfig.RunOptionsPatch{ModelSelection: runtimeconfig.ModelSelection{Base: "repo-base"}}, "")()
+	app := App{RuntimeEnv: composedSnapshotWith(nil, map[string]string{"models.model": `"repo-base"`})}
+	options, err := app.mergeSessionOptions("")()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -507,7 +513,7 @@ func TestMergeApplicableOptionsCapturedOnce(t *testing.T) {
 		runtimeconfig.EnvRunModel: "invalid unused model",
 	})
 	app := App{RuntimeEnv: snapshot}
-	resolve := app.mergeSessionOptions(repositoryRunOptions(taodata.Repo{}), "chosen")
+	resolve := app.mergeSessionOptions("chosen")
 	t.Setenv(runtimeconfig.EnvAgent, "invalid")
 	for range 2 {
 		options, err := resolve()
