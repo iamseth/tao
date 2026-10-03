@@ -97,6 +97,35 @@ func TestAmendBlockedSliceMutatesOnlyRequestedFields(t *testing.T) {
 	}
 }
 
+func TestAmendRepairSliceAppendsOnly(t *testing.T) {
+	for _, status := range []string{StatusPending, StatusBlocked} {
+		t.Run(status, func(t *testing.T) {
+			detail := blockedAmendDetail()
+			slice := findSlice(detail, "001-a")
+			slice.Status = status
+			slice.VerificationRepair = &VerificationRepairBinding{Command: "make verify", HeadSHA: "failed-head", Fingerprint: "failure"}
+			before := clonePlanDetail(detail)
+			request := amendRequest()
+			request.Goal = ""
+			event, err := markSliceAmendedWithChanges(detail, newArtifactChangeSet(detail), slice.ID, request, amendTime())
+			if err != nil {
+				t.Fatal(err)
+			}
+			original := findSlice(before, slice.ID)
+			if slice.Goal != original.Goal || slice.Status != status || !reflect.DeepEqual(slice.VerificationRepair, original.VerificationRepair) || !slices.Equal(slice.Verification.Commands, original.Verification.Commands) {
+				t.Fatalf("amend changed frozen fields: %+v", slice)
+			}
+			if !slices.Equal(slice.ExpectedFiles, []string{"internal/x/x.go", "internal/x/helper.go"}) || !slices.Equal(slice.Tasks, []string{"Existing task", "Add the helper"}) || !slices.Equal(slice.Verification.ManualChecks, []string{"Existing check", "Confirm the helper is exercised"}) {
+				t.Fatalf("missing appended contract fields: %+v", slice)
+			}
+			fields := []string{"tasks", "expected_files", "manual_checks"}
+			if len(slice.Amendments) != 1 || slice.Amendments[0].Reason != "reviewer needs a helper file" || !slices.Equal(slice.Amendments[0].Fields, fields) || event.Type != EventTypeSliceAmended || !slices.Equal(event.AmendedFields, fields) {
+				t.Fatalf("missing amendment evidence: %+v event=%+v", slice.Amendments, event)
+			}
+		})
+	}
+}
+
 func TestAmendPendingSliceRecordsOnlyChangedFields(t *testing.T) {
 	detail := editPlanDetail()
 	detail.Slices.Slices[2].Goal = "Original goal"
@@ -155,7 +184,7 @@ func TestAmendSliceRefusals(t *testing.T) {
 		{name: "skipped", setup: func(d *PlanDetail) { d.Slices.Slices[0].Status = StatusSkipped }, sliceID: "001-a", request: amendRequest(), want: "slice 001-a is skipped; only pending or blocked slices can be amended"},
 		{name: "verification repair", setup: func(d *PlanDetail) {
 			d.Slices.Slices[2].VerificationRepair = &VerificationRepairBinding{Command: "make verify", HeadSHA: "failed-head", Fingerprint: "failure"}
-		}, sliceID: "003-c", request: amendRequest(), want: "cannot amend generated verification-repair slice 003-c"},
+		}, sliceID: "003-c", request: amendRequest(), want: "cannot replace the goal of generated verification-repair slice 003-c; amend may only append expected files, tasks, or manual checks with a recorded reason"},
 		{name: "abandoned plan", setup: func(d *PlanDetail) { d.State.Status = StatusAbandoned }, sliceID: "001-a", request: amendRequest(), want: "plan edit is abandoned"},
 		{name: "empty reason", sliceID: "001-a", request: SliceAmendmentRequest{Reason: "   ", Goal: "x"}, want: "amendment reason is required"},
 		{name: "no change requested", sliceID: "001-a", request: SliceAmendmentRequest{Reason: "why", AddTasks: []string{"  "}}, want: "amendment must supply a goal, task, allowed file, or manual check"},

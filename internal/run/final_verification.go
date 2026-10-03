@@ -41,6 +41,9 @@ func (e *FinalVerificationError) Error() string {
 	if details := strings.TrimSpace(e.Verification.Details); details != "" {
 		message += ":\n" + details
 	}
+	if baseline := e.Verification.Baseline; baseline != nil {
+		message += fmt.Sprintf(" (baseline: also fails at %.12s: %s)", baseline.SHA, strings.Join(baseline.Signatures, ", "))
+	}
 	return message
 }
 
@@ -85,6 +88,10 @@ func (f Finalizer) verifyCompletedBranch(ctx context.Context, detail *plan.PlanD
 	if runErr != nil {
 		verification.Result = finalVerificationFailed
 		verification.FailureKind, verification.ExitCode = classifyFinalVerificationFailure(ctx, runErr)
+		if baseline := f.probeBaselineFailure(ctx, detail, executionRoot, verification, combined); baseline != nil {
+			verification.FailureKind = plan.FinalVerificationFailureKindBaseline
+			verification.Baseline = baseline
+		}
 		verification.Details, verification.OutputTruncated = boundedFinalVerificationDetails(combined)
 		verification.Fingerprint = finalVerificationFingerprint(verification)
 		recordErr := f.recordFinalVerification(detail, verification)
@@ -133,6 +140,7 @@ func (f Finalizer) appendFinalVerificationEvent(detail *plan.PlanDetail, verific
 		Command:         verification.Command,
 		Result:          verification.Result,
 		FailureKind:     verification.FailureKind,
+		Baseline:        verification.Baseline,
 		ExitCode:        exitCode,
 		Reason:          reason,
 		Message:         fmt.Sprintf("Final verification %s in %s", verification.Result, verification.CWD),

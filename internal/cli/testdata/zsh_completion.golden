@@ -353,7 +353,7 @@ _tao() {
       ;;
     e|ed|edi|edit)
       if (( CURRENT == 3 )); then
-        subcommands=('remove:Remove a pending slice from the plan' 'skip:Mark a pending slice skipped' 'move:Move a pending slice before or after another pending slice' 'amend:Amend a pending or blocked slice'\''s contract with a recorded reason')
+        subcommands=('remove:Remove a pending slice from the plan' 'skip:Mark a pending slice skipped' 'move:Move a pending slice before or after another pending slice' 'amend:Amend a pending or blocked slice'\''s contract with a recorded reason; generated repair slices accept appended files, tasks, and manual checks but never a replacement goal')
         _describe -t commands 'edit command' subcommands
         return
       fi

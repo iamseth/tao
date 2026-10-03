@@ -71,6 +71,19 @@ func DeriveVerificationRecovery(detail *PlanDetail) VerificationRecoveryDecision
 		decision.Kind = PlanActionRepairVerification
 		decision.Command = "tao run --repair-verification " + id
 		decision.Reason = "current code-classified final repository verification failed on the completed branch"
+	case FinalVerificationFailureKindBaseline:
+		decision.Kind = PlanActionReverify
+		decision.Command = "tao run --reverify " + id
+		sha, signatures := "unknown", "unknown"
+		if failure.Baseline != nil {
+			sha = failure.Baseline.SHA
+			if len(sha) > 12 {
+				sha = sha[:12]
+			}
+			signatures = strings.Join(failure.Baseline.Signatures, ",")
+		}
+		decision.Reason = fmt.Sprintf("final verification failed on pre-existing failures that also fail at base %s: %s; rerun with --reverify or fix them on the default branch; explicit --repair-verification remains available under the repair cap", sha, signatures)
+		return decision
 	case FinalVerificationFailureKindToolMissing:
 		decision.Kind = PlanActionResolveVerification
 		decision.Instruction = "Restore the tool required by the repository verification command before explicitly reverifying the unchanged head"
@@ -96,6 +109,16 @@ func DeriveVerificationRecovery(detail *PlanDetail) VerificationRecoveryDecision
 		decision.Reason = stopReason
 	}
 	return decision
+}
+
+// RepairVerificationAdmissible admits explicit repair without granting automatic scheduling authority.
+func RepairVerificationAdmissible(detail *PlanDetail) (bool, string) {
+	decision := DeriveVerificationRecovery(detail)
+	failure := CurrentFailedFinalVerification(detail)
+	if failure != nil && (failure.FailureKind == FinalVerificationFailureKindCode || failure.FailureKind == FinalVerificationFailureKindBaseline) && !decision.AttemptCapReached {
+		return true, decision.Reason
+	}
+	return false, decision.Reason
 }
 
 func currentVerificationRepairStop(detail *PlanDetail, failure FinalVerification) *Event {
@@ -146,9 +169,8 @@ func (r *PlanRecord) AppendVerificationRepair(request VerificationRepairRequest)
 		if failed.Command != request.Binding.Command || failed.HeadSHA != request.Binding.HeadSHA || failed.Fingerprint != request.Binding.Fingerprint {
 			return lifecycleMutation{}, fmt.Errorf("verification repair evidence changed before mutation")
 		}
-		decision := DeriveVerificationRecovery(detail)
-		if decision.Kind != PlanActionRepairVerification {
-			return lifecycleMutation{}, fmt.Errorf("verification repair refused: %s", decision.Reason)
+		if ok, reason := RepairVerificationAdmissible(detail); !ok {
+			return lifecycleMutation{}, fmt.Errorf("verification repair refused: %s", reason)
 		}
 		repairNumber := 1
 		for i := range detail.Slices.Slices {

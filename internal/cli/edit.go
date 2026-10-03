@@ -18,7 +18,7 @@ var editCommand = commandMetadata{
 	minPrefix:             "e",
 	usageLines:            []string{"edit (e) remove <plan-id-or-slug-or-path> <slice-id>", "edit (e) skip <plan-id-or-slug-or-path> <slice-id>", "edit (e) move <plan-id-or-slug-or-path> <slice-id> (--before ID | --after ID)", "edit (e) amend <plan-id-or-slug-or-path> <slice-id> --reason-file FILE [--goal-file FILE] [--add-task TEXT]... [--allow-file PATH]... [--add-manual-check TEXT]..."},
 	completionDescription: "Edit pending slices in a plan",
-	long:                  "Edit pending slices in a Tao plan without changing application files. Use it to remove, skip, or reorder work before running the remaining queue, or to amend a pending or blocked slice's contract with a recorded reason. Amend appends tasks, expected files, and manual checks or replaces the goal; it never changes slice status, blocker notes, or approval, refuses while a run holds the plan lock, and validates the amended plan before persisting.",
+	long:                  "Edit pending slices in a Tao plan without changing application files. Use it to remove, skip, or reorder work before running the remaining queue, or to amend a pending or blocked slice's contract with a recorded reason. Amend appends tasks, expected files, and manual checks or replaces the goal. Generated repair slices accept appended files, tasks, and manual checks but never a replacement goal. Amend never changes slice status, blocker notes, or approval, refuses while a run holds the plan lock, and validates the amended plan before persisting.",
 	examples: "  tao edit remove my-plan 003-old-slice\n" +
 		"  tao edit skip my-plan 004-optional\n" +
 		"  tao edit move my-plan 005-tests --before 004-docs\n" +
@@ -27,7 +27,7 @@ var editCommand = commandMetadata{
 		{name: "remove", description: "Remove a pending slice from the plan", completion: completionContext{positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs}}},
 		{name: "skip", description: "Mark a pending slice skipped", completion: completionContext{positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs}}},
 		{name: "move", description: "Move a pending slice before or after another pending slice", registerFlags: registerEditMoveFlags, completion: completionContext{positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs}}},
-		{name: "amend", description: "Amend a pending or blocked slice's contract with a recorded reason", registerFlags: registerEditAmendFlags, completion: completionContext{
+		{name: "amend", description: "Amend a pending or blocked slice's contract with a recorded reason; generated repair slices accept appended files, tasks, and manual checks but never a replacement goal", registerFlags: registerEditAmendFlags, completion: completionContext{
 			positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs},
 			flagValues: map[string]completionFlagValue{
 				"reason-file":      {kind: completionValuePath, label: "path"},

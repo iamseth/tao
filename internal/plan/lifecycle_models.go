@@ -462,11 +462,20 @@ type FinalVerificationFailureKind string
 // Failure kinds classify repository-wide gate results stored in final-verification evidence.
 const (
 	FinalVerificationFailureKindCode           FinalVerificationFailureKind = "code"
+	FinalVerificationFailureKindBaseline       FinalVerificationFailureKind = "baseline"
 	FinalVerificationFailureKindToolMissing    FinalVerificationFailureKind = "tool_missing"
 	FinalVerificationFailureKindTimeout        FinalVerificationFailureKind = "timeout"
 	FinalVerificationFailureKindCancelled      FinalVerificationFailureKind = "cancelled"
 	FinalVerificationFailureKindInvalidCommand FinalVerificationFailureKind = "invalid_command"
 )
+
+// FinalVerificationBaseline records matching failure evidence at the plan base.
+type FinalVerificationBaseline struct {
+	SHA        string   `json:"sha"`
+	Source     string   `json:"source"`
+	Result     string   `json:"result"`
+	Signatures []string `json:"signatures"`
+}
 
 // FinalVerification records broad repository verification performed after all
 // slices settle and before a completed branch is reviewed.
@@ -476,6 +485,7 @@ type FinalVerification struct {
 	HeadSHA         string                       `json:"head_sha,omitempty"`
 	Result          string                       `json:"result"`
 	FailureKind     FinalVerificationFailureKind `json:"failure_kind,omitempty"`
+	Baseline        *FinalVerificationBaseline   `json:"baseline,omitempty"`
 	ExitCode        *int                         `json:"exit_code,omitempty"`
 	Details         string                       `json:"details,omitempty"`
 	Fingerprint     string                       `json:"fingerprint,omitempty"`
@@ -1033,6 +1043,7 @@ type Event struct {
 	CorrectedCommand      string                       `json:"corrected_command,omitempty"`
 	Result                string                       `json:"result,omitempty"`
 	FailureKind           FinalVerificationFailureKind `json:"failure_kind,omitempty"`
+	Baseline              *FinalVerificationBaseline   `json:"baseline,omitempty"`
 	ExitCode              *int                         `json:"exit_code,omitempty"`
 	Round                 int                          `json:"round,omitempty"`
 	Attempts              int                          `json:"attempts,omitempty"`

@@ -7,6 +7,32 @@ import (
 	"time"
 )
 
+func TestBaselineVerificationRecovery(t *testing.T) {
+	detail := completedReopenDetail()
+	detail.Dir = t.TempDir()
+	detail.State.Status = StatusInReview
+	detail.State.Workspace = &Workspace{HeadSHA: "head-a"}
+	detail.State.Plan.FinalVerification = &FinalVerification{Command: "make verify", HeadSHA: "head-a", Result: "failed", FailureKind: FinalVerificationFailureKindBaseline, Fingerprint: "failure", Baseline: &FinalVerificationBaseline{SHA: "1234567890123456", Source: "base_commit", Result: "failed", Signatures: []string{"TestFlake", "example/pkg"}}}
+	decision := DeriveVerificationRecovery(detail)
+	if decision.Kind != PlanActionReverify || decision.Command != "tao run --reverify "+detail.State.Plan.ID || !strings.Contains(decision.Reason, "base 123456789012: TestFlake,example/pkg;") {
+		t.Fatalf("decision = %+v", decision)
+	}
+	if ok, reason := RepairVerificationAdmissible(detail); !ok {
+		t.Fatal(reason)
+	}
+	for range VerificationRepairAttemptCap {
+		detail.Slices.Slices = append(detail.Slices.Slices, Slice{VerificationRepair: &VerificationRepairBinding{}})
+	}
+	if ok, _ := RepairVerificationAdmissible(detail); ok {
+		t.Fatal("admitted at cap")
+	}
+	detail.Slices.Slices = detail.Slices.Slices[:len(detail.Slices.Slices)-VerificationRepairAttemptCap]
+	record := testRecord(detail.Dir, detail)
+	if err := record.AppendVerificationRepair(VerificationRepairRequest{Binding: VerificationRepairBinding{Command: "make verify", HeadSHA: "head-a", Fingerprint: "failure"}, CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAppendVerificationRepairIsBoundAndSingleUse(t *testing.T) {
 	detail := completedReopenDetail()
 	detail.Dir = t.TempDir()

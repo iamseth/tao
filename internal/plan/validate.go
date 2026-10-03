@@ -39,8 +39,13 @@ func validateDetail(detail *PlanDetail) []string {
 		warnings = append(warnings, "state.json plan.change_type is invalid: "+err.Error())
 	}
 	warnings = append(warnings, validateApprovedProposalType(detail.State.Plan)...)
-	if verification := detail.State.Plan.FinalVerification; verification != nil && !validFinalVerificationFailureKind(verification.FailureKind) {
-		warnings = append(warnings, "state.json plan.final_verification.failure_kind is invalid")
+	if verification := detail.State.Plan.FinalVerification; verification != nil {
+		if !validFinalVerificationFailureKind(verification.FailureKind) {
+			warnings = append(warnings, "state.json plan.final_verification.failure_kind is invalid")
+		}
+		if !validFinalVerificationBaseline(verification.Baseline) {
+			warnings = append(warnings, "state.json plan.final_verification.baseline requires a non-empty SHA and at least one signature")
+		}
 	}
 	abandonmentEvents := 0
 	for i, event := range detail.Events {
@@ -54,6 +59,9 @@ func validateDetail(detail *PlanDetail) []string {
 		}
 		if !validFinalVerificationFailureKind(event.FailureKind) {
 			warnings = append(warnings, fmt.Sprintf("events.jsonl event %d failure_kind is invalid", i+1))
+		}
+		if !validFinalVerificationBaseline(event.Baseline) {
+			warnings = append(warnings, fmt.Sprintf("events.jsonl event %d baseline requires a non-empty SHA and at least one signature", i+1))
 		}
 		if event.Type == EventTypePlanAbandoned {
 			abandonmentEvents++
@@ -155,9 +163,13 @@ func validValue(value string, allowed []string) bool {
 	return slices.Contains(allowed, value)
 }
 
+func validFinalVerificationBaseline(baseline *FinalVerificationBaseline) bool {
+	return baseline == nil || (strings.TrimSpace(baseline.SHA) != "" && len(baseline.Signatures) > 0)
+}
+
 func validFinalVerificationFailureKind(kind FinalVerificationFailureKind) bool {
 	switch kind {
-	case "", FinalVerificationFailureKindCode, FinalVerificationFailureKindToolMissing, FinalVerificationFailureKindTimeout, FinalVerificationFailureKindCancelled, FinalVerificationFailureKindInvalidCommand:
+	case "", FinalVerificationFailureKindBaseline, FinalVerificationFailureKindCode, FinalVerificationFailureKindToolMissing, FinalVerificationFailureKindTimeout, FinalVerificationFailureKindCancelled, FinalVerificationFailureKindInvalidCommand:
 		return true
 	default:
 		return false

@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 )
 
@@ -63,6 +64,75 @@ func (d Detector) GoModuleForPath(file string) (string, bool) {
 			return "", false
 		}
 	}
+}
+
+// GoPackageDir maps an import path to a repository-relative directory using the
+// most specific discovered module directive. It does not execute Go commands or
+// assert that the package directory exists.
+func (d Detector) GoPackageDir(importPath string) (string, bool) {
+	if !fs.ValidPath(importPath) || strings.ContainsAny(importPath, "\\\\ \t\r\n") {
+		return "", false
+	}
+	fileSystem := d.FS
+	if fileSystem == nil {
+		fileSystem = os.DirFS(".")
+	}
+	bestModule, result := "", ""
+	err := fs.WalkDir(fileSystem, ".", func(name string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if entry.Name() == ".git" || entry.Name() == "vendor" {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if entry.Name() != "go.mod" {
+			return nil
+		}
+		content, err := fs.ReadFile(fileSystem, name)
+		if err != nil {
+			return err
+		}
+		module := goModulePath(string(content))
+		if module == "" || len(module) <= len(bestModule) {
+			return nil
+		}
+		if importPath != module && !strings.HasPrefix(importPath, module+"/") {
+			return nil
+		}
+		bestModule = module
+		suffix := strings.TrimPrefix(strings.TrimPrefix(importPath, module), "/")
+		result = path.Join(path.Dir(name), suffix)
+		return nil
+	})
+	if err != nil || bestModule == "" {
+		return "", false
+	}
+	return result, true
+}
+
+func goModulePath(content string) string {
+	for line := range strings.SplitSeq(content, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != "module" {
+			continue
+		}
+		module := fields[1]
+		if strings.HasPrefix(module, `"`) || strings.HasPrefix(module, "`") {
+			unquoted, err := strconv.Unquote(module)
+			if err != nil {
+				return ""
+			}
+			module = unquoted
+		}
+		if !fs.ValidPath(module) || module == "." {
+			return ""
+		}
+		return module
+	}
+	return ""
 }
 
 // DetectCommands returns ordered verification commands for the first recognized

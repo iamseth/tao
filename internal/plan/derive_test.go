@@ -1092,6 +1092,45 @@ func TestSummarizeExposesAttentionSignals(t *testing.T) {
 	}
 }
 
+func TestDeriveNextActionBlockedPathGuidance(t *testing.T) {
+	const original = "continue at the preserved boundary after resolving its blocker; use restart only for an eligible newer baseline"
+	guidance := func(paths string) string {
+		return original + "; the blocker names paths outside Plan-Owned Files (" + paths + "); authorize them with tao edit amend plan-a 001-a --reason-file FILE --allow-file PATH before tao run --continue"
+	}
+	for _, tt := range []struct {
+		name   string
+		events []Event
+		want   string
+	}{
+		{name: "outside paths", events: []Event{{Type: EventTypeSliceBlocked, SliceID: "001-a", Paths: []string{"outside.go"}}}, want: guidance("outside.go")},
+		{name: "plan owned", events: []Event{{Type: EventTypeSliceBlocked, SliceID: "001-a", Paths: []string{"owned.go"}, BlockerClassification: BlockerClassificationPlanOwned}}, want: original},
+		{name: "prose only", events: []Event{{Type: EventTypeSliceBlocked, SliceID: "001-a"}}, want: original},
+		{name: "no event", want: original},
+		{name: "bounded paths", events: []Event{{Type: EventTypeSliceBlocked, SliceID: "001-a", Paths: []string{"a.go", "b.go", "c.go", "d.go", "e.go", "f.go", "g.go"}}}, want: guidance("a.go, b.go, c.go, d.go, e.go, +2 more")},
+		{name: "latest supersedes paths", events: []Event{
+			{Type: EventTypeSliceBlocked, SliceID: "001-a", Paths: []string{"old.go"}},
+			{Type: EventTypeSliceBlocked, SliceID: "001-a"},
+		}, want: original},
+		{name: "ignore other slices and event types", events: []Event{
+			{Type: EventTypeSliceBlocked, SliceID: "001-a", Paths: []string{"outside.go"}},
+			{Type: EventTypeSliceBlocked, SliceID: "002-b"},
+			{Type: EventTypeSliceStarted, SliceID: "001-a"},
+		}, want: guidance("outside.go")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			detail := &PlanDetail{
+				State:  State{Status: StatusBlocked, Plan: PlanState{ID: "plan-a", CurrentSlice: ptrString("001-a"), PendingSlices: []string{"001-a"}}},
+				Slices: SlicesFile{Slices: []Slice{{ID: "001-a", Status: StatusBlocked}}},
+				Events: tt.events,
+			}
+			action := DeriveNextAction(detail).Primary
+			if action.Kind != PlanActionContinue || action.Reason != tt.want {
+				t.Fatalf("action = %+v; want continue with reason %q", action, tt.want)
+			}
+		})
+	}
+}
+
 func TestDeriveNextActionLifecyclePrecedence(t *testing.T) {
 	pending := func() *PlanDetail {
 		return &PlanDetail{

@@ -13,13 +13,24 @@ const maxBlockerPaths = 64
 // LatestPlanOwnedBlocker returns the last qualifying slice block in event-log
 // order. Prose-only blocks never establish plan ownership.
 func LatestPlanOwnedBlocker(detail *PlanDetail, sliceID string) *Event {
+	return latestSliceBlockedEvent(detail, sliceID, func(event *Event) bool {
+		return event.BlockerClassification == BlockerClassificationPlanOwned && event.HeadSHA != "" && event.Fingerprint != ""
+	})
+}
+
+// LatestSliceBlockedEvent returns the most recent slice block in event-log order.
+func LatestSliceBlockedEvent(detail *PlanDetail, sliceID string) *Event {
+	return latestSliceBlockedEvent(detail, sliceID, nil)
+}
+
+func latestSliceBlockedEvent(detail *PlanDetail, sliceID string, qualifies func(*Event) bool) *Event {
 	if detail == nil {
 		return nil
 	}
 	for i := len(detail.Events) - 1; i >= 0; i-- {
 		event := &detail.Events[i]
 		if event.Type == EventTypeSliceBlocked && event.SliceID == sliceID &&
-			event.BlockerClassification == BlockerClassificationPlanOwned && event.HeadSHA != "" && event.Fingerprint != "" {
+			(qualifies == nil || qualifies(event)) {
 			return event
 		}
 	}

@@ -15,6 +15,18 @@ import (
 
 var unprefixedSlashCommand = regexp.MustCompile(`(^|[^[:alnum:]_-])/(plan|slice|note-slice|note|run|commit|grill-me|improve-codebase-architecture|improve-documentation|repo-health|steal|pr|review)([^[:alnum:]_-]|$)`)
 
+func TestRunOperatorAmendmentGuidance(t *testing.T) {
+	data, err := os.ReadFile("run.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Operator Amendments", "supersede the planning brief", "never change declared verification commands"} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("missing operator amendment guidance: %s", want)
+		}
+	}
+}
+
 func TestRunResumeNotePrivateFileGuidance(t *testing.T) {
 	data, err := os.ReadFile("run.md")
 	if err != nil {

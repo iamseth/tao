@@ -15,9 +15,8 @@ func appendVerificationRepair(ctx context.Context, detail *plan.PlanDetail, exec
 	if execution.Config.ExecutionMode != ExecutionModeIsolated {
 		return fmt.Errorf("verification repair requires isolated execution mode")
 	}
-	decision := plan.DeriveVerificationRecovery(detail)
-	if decision.Kind != plan.PlanActionRepairVerification {
-		return fmt.Errorf("verification repair refused: %s", decision.Reason)
+	if ok, reason := plan.RepairVerificationAdmissible(detail); !ok {
+		return fmt.Errorf("verification repair refused: %s", reason)
 	}
 	if detail.State.Plan.MergeCommitIntent != nil || detail.State.Plan.PullRequestIntent != nil {
 		return fmt.Errorf("verification repair refuses unsettled post-slice intent")

@@ -266,6 +266,22 @@ func TestCheckRequestCanStartRequiresRepairVerificationDecision(t *testing.T) {
 	}
 }
 
+func TestCheckRequestCanStartBaselineRepair(t *testing.T) {
+	detail := completedReviewPlanDetail(t.TempDir())
+	detail.State.Workspace = &plan.Workspace{HeadSHA: "failed-head"}
+	detail.State.Plan.FinalVerification = &plan.FinalVerification{Command: "make verify", HeadSHA: "failed-head", Result: finalVerificationFailed, FailureKind: plan.FinalVerificationFailureKindBaseline, Fingerprint: "failure"}
+	request := Request{RecoveryMode: RecoveryMode{RepairVerification: true}}
+	if err := CheckRequestCanStart(detail, request); err != nil {
+		t.Fatal(err)
+	}
+	for range plan.VerificationRepairAttemptCap {
+		detail.Slices.Slices = append(detail.Slices.Slices, plan.Slice{Status: plan.StatusCompleted, VerificationRepair: &plan.VerificationRepairBinding{}, Completion: &plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionCommitted}})
+	}
+	if err := CheckRequestCanStart(detail, request); err == nil {
+		t.Fatal("baseline repair admitted at cap")
+	}
+}
+
 func TestCheckRequestCanStartAdmitsFirstTwoRepairAttemptsAndRefusesThird(t *testing.T) {
 	detail := completedReviewPlanDetail(t.TempDir())
 	detail.State.Workspace = &plan.Workspace{HeadSHA: "failed-head"}

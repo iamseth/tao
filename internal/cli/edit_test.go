@@ -380,6 +380,27 @@ func TestEditAmendAppendsContractChangesToBlockedSlice(t *testing.T) {
 	}
 }
 
+func TestEditAmendRepairSliceAppends(t *testing.T) {
+	const planID = "20260526-1200-amend"
+	repo, detail := amendPlanRepo(t)
+	sliceByID(detail, "002-b").VerificationRepair = &plan.VerificationRepairBinding{Command: "make verify", HeadSHA: "failed-head", Fingerprint: "failure"}
+	app := App{Out: io.Discard, Err: io.Discard, Repository: func(_ string) Repository { return repo }}
+	err := app.Run(context.Background(), []string{"edit", "amend", planID, "002-b",
+		"--reason-file", writeAmendInput(t, "reason.txt", "authorize helper"),
+		"--allow-file", "internal/cli/new.go", "--add-task", "Add the helper"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := repo.GetPlan(context.Background(), planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	amended := sliceByID(updated, "002-b")
+	if !slices.Contains(amended.ExpectedFiles, "internal/cli/new.go") || !slices.Contains(amended.Tasks, "Add the helper") || len(amended.Amendments) != 1 || !slices.Equal(amended.Amendments[0].Fields, []string{"tasks", "expected_files"}) {
+		t.Fatalf("repair amendment not persisted: %+v", amended)
+	}
+}
+
 func TestEditAmendApprovalContracts(t *testing.T) {
 	const planID = "20260526-1200-amend"
 	const assertion = "Observations are supplied through approval."
@@ -542,14 +563,14 @@ func TestEditAmendRefusesWithoutPersisting(t *testing.T) {
 			want: "slice 003-c is in_progress; only pending or blocked slices can be amended",
 		},
 		{
-			name: "verification repair slice",
+			name: "verification repair goal",
 			args: func(t *testing.T) []string {
-				return []string{"edit", "amend", planID, "001-a", "--reason-file", writeAmendInput(t, "reason.txt", "why"), "--add-task", "x"}
+				return []string{"edit", "amend", planID, "001-a", "--reason-file", writeAmendInput(t, "reason.txt", "why"), "--goal-file", writeAmendInput(t, "goal.txt", "Replace goal")}
 			},
 			prepare: func(_ *testing.T, detail *plan.PlanDetail) {
 				sliceByID(detail, "001-a").VerificationRepair = &plan.VerificationRepairBinding{Command: "make verify", HeadSHA: "failed-head", Fingerprint: "failure"}
 			},
-			want: "cannot amend generated verification-repair slice 001-a; run `tao run " + planID + "` to complete it",
+			want: "cannot replace the goal of generated verification-repair slice 001-a; amend may only append expected files, tasks, or manual checks with a recorded reason",
 		},
 		{
 			name: "run lock held",

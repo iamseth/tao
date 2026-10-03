@@ -314,7 +314,17 @@ func deriveNextAction(detail *PlanDetail, derived DerivedPlan) PlanNextAction {
 				Reason: "a clean isolated pre-intent boundary may be restarted only after its baseline advances",
 			})
 		}
-		return primary(PlanActionContinue, PlanActionClassRecovery, command("tao run --continue"), "continue at the preserved boundary after resolving its blocker; use restart only for an eligible newer baseline", alternatives...)
+		reason := "continue at the preserved boundary after resolving its blocker; use restart only for an eligible newer baseline"
+		if slice := derived.CurrentSlice; slice != nil {
+			if event := LatestSliceBlockedEvent(detail, slice.ID); event != nil && len(event.Paths) > 0 && event.BlockerClassification != BlockerClassificationPlanOwned {
+				paths := strings.Join(event.Paths[:min(5, len(event.Paths))], ", ")
+				if len(event.Paths) > 5 {
+					paths += ", +" + strconv.Itoa(len(event.Paths)-5) + " more"
+				}
+				reason += "; the blocker names paths outside Plan-Owned Files (" + paths + "); authorize them with tao edit amend " + id + " " + slice.ID + " --reason-file FILE --allow-file PATH before tao run --continue"
+			}
+		}
+		return primary(PlanActionContinue, PlanActionClassRecovery, command("tao run --continue"), reason, alternatives...)
 	}
 	if derived.Active {
 		return primary(PlanActionRun, PlanActionClassRecovery, command("tao run"), "the active slice was interrupted before a durable commit intent")

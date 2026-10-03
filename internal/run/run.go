@@ -325,9 +325,8 @@ func CheckRequestCanStart(detail *plan.PlanDetail, request Request) error {
 		return nil
 	}
 	if request.RepairVerification {
-		decision := plan.DeriveVerificationRecovery(detail)
-		if decision.Kind != plan.PlanActionRepairVerification {
-			return cannotStartf("--repair-verification refused: %s", decision.Reason)
+		if ok, reason := plan.RepairVerificationAdmissible(detail); !ok {
+			return cannotStartf("--repair-verification refused: %s", reason)
 		}
 		return nil
 	}

@@ -1275,6 +1275,10 @@ func markSliceAmendedWithChanges(detail *PlanDetail, changes *artifactChangeSet,
 		return Event{}, err
 	}
 
+	if slice.VerificationRepair != nil && normalized.Goal != "" {
+		return Event{}, fmt.Errorf("cannot replace the goal of generated verification-repair slice %s; amend may only append expected files, tasks, or manual checks with a recorded reason", sliceID)
+	}
+
 	var fields []string
 	goal := slice.Goal
 	if normalized.Goal != "" && normalized.Goal != slice.Goal {
@@ -1323,8 +1327,8 @@ func markSliceAmendedWithChanges(detail *PlanDetail, changes *artifactChangeSet,
 }
 
 // amendableSlice returns the slice an operator may amend: a pending or
-// blocked slice that is not a generated verification-repair slice. It is
-// deliberately separate from editablePendingSlice, which stays pending-only
+// blocked slice, including generated repair slices whose goals stay frozen.
+// It is deliberately separate from editablePendingSlice, which stays pending-only
 // for remove, skip, and move.
 func amendableSlice(detail *PlanDetail, sliceID string) (*Slice, error) {
 	slice := findSlice(detail, sliceID)
@@ -1333,9 +1337,6 @@ func amendableSlice(detail *PlanDetail, sliceID string) (*Slice, error) {
 	}
 	if slice.Status != StatusPending && slice.Status != StatusBlocked {
 		return nil, fmt.Errorf("slice %s is %s; only pending or blocked slices can be amended", sliceID, slice.Status)
-	}
-	if slice.VerificationRepair != nil {
-		return nil, generatedVerificationRepairEditError(detail, sliceID, "amend")
 	}
 	return slice, nil
 }

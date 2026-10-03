@@ -790,8 +790,29 @@ func TestValidateDetailReportsInvalidAbandonmentEvidence(t *testing.T) {
 	}
 }
 
+func TestValidateDetailBaselineEvidence(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		baseline *FinalVerificationBaseline
+		invalid  bool
+	}{
+		{name: "legacy"},
+		{name: "valid", baseline: &FinalVerificationBaseline{SHA: "base", Signatures: []string{"TestFlake"}}},
+		{name: "empty sha", baseline: &FinalVerificationBaseline{Signatures: []string{"TestFlake"}}, invalid: true},
+		{name: "empty signatures", baseline: &FinalVerificationBaseline{SHA: "base"}, invalid: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			detail := &PlanDetail{State: State{Plan: PlanState{ID: "plan", FinalVerification: &FinalVerification{Result: "failed", FailureKind: FinalVerificationFailureKindBaseline, Baseline: test.baseline}}}, Events: []Event{{Type: "final_verification", Result: "failed", FailureKind: FinalVerificationFailureKindBaseline, Baseline: test.baseline}}}
+			warnings := validateDetail(detail)
+			if containsWarning(warnings, "final_verification.baseline") != test.invalid || containsWarning(warnings, "event 1 baseline") != test.invalid {
+				t.Fatalf("warnings = %v", warnings)
+			}
+		})
+	}
+}
+
 func TestValidateDetailConstrainsFinalVerificationFailureKind(t *testing.T) {
-	validKinds := []FinalVerificationFailureKind{"", FinalVerificationFailureKindCode, FinalVerificationFailureKindToolMissing, FinalVerificationFailureKindTimeout, FinalVerificationFailureKindCancelled, FinalVerificationFailureKindInvalidCommand}
+	validKinds := []FinalVerificationFailureKind{FinalVerificationFailureKindBaseline, "", FinalVerificationFailureKindCode, FinalVerificationFailureKindToolMissing, FinalVerificationFailureKindTimeout, FinalVerificationFailureKindCancelled, FinalVerificationFailureKindInvalidCommand}
 	for _, kind := range validKinds {
 		detail := &PlanDetail{
 			State:         State{Plan: PlanState{ID: "plan", FinalVerification: &FinalVerification{FailureKind: kind}}},

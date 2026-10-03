@@ -85,6 +85,9 @@ Tao marks the selected slice in progress and appends `slice_started` before invo
 
 - Implement only the selected slice.
 - Follow the selected slice `goal`, `tasks`, and `expected_files` from the run packet or fallback artifacts if read.
+
+Operator Amendments listed in the run packet are Tao-recorded owner decisions: for the fields they list (goal, tasks, expected files, manual checks), they supersede the planning brief and earlier scope statements for this slice only. A path appended to Expected Files by an amendment is in scope even when the brief excludes its kind. Amendments never change declared verification commands, approval, or the blocking rules.
+
 - Preserve the global constraints and invariants from the run packet or fallback artifacts if read.
 - An Operator Amendments entry in the run packet relaxes that slice's contract: an amended expected file is in scope for this slice even where `global_invariants` or `planning-brief.md` excluded it; rulings and verification rules are unchanged.
 - Do not invent new requirements.
