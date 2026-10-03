@@ -319,6 +319,66 @@ func TestRunNoReviewFlagOverridesRunRequest(t *testing.T) {
 	}
 }
 
+func TestEffortFlagsOverrideEveryRole(t *testing.T) {
+	clearTaoEnv(t)
+	for _, command := range []string{"run", "review", "merge"} {
+		t.Run(command, func(t *testing.T) {
+			register := registerRunFlags
+			switch command {
+			case "review":
+				register = registerReviewFlags
+			case "merge":
+				register = registerMergeFlags
+			}
+			fs, _, err := (App{Err: io.Discard}).parseArgs(command, []string{"--effort", "opaque-level"}, register)
+			if err != nil {
+				t.Fatal(err)
+			}
+			patch, err := runRequestFlagOverrides(fs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := (runtimeconfig.RunOptionsPatch{}).WithEffortForAllRoles("opaque-level")
+			if patch.ModelSelection != want.ModelSelection {
+				t.Fatalf("patch = %#v, want %#v", patch, want)
+			}
+			inputs, err := (App{}).resolveRunRequestFlags(fs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request, err := inputs.defaults.newRunRequestWithRepository("plan-a", (runtimeconfig.RunOptionsPatch{}).WithEffortForAllRoles("repository"), inputs.overrides)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if request.Models != want.ModelSelection {
+				t.Fatalf("resolved models = %#v", request.Models)
+			}
+			profile := runtimeconfig.CommandRun
+			if command == "review" {
+				profile = runtimeconfig.CommandReview
+			}
+			if command == "merge" {
+				profile = runtimeconfig.CommandMerge
+			}
+			options, err := (App{}).resolveCommandOptions(fs, profile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, role := range []runtimeconfig.ModelRole{runtimeconfig.ModelRoleDefault, runtimeconfig.ModelRoleRun, runtimeconfig.ModelRoleReview, runtimeconfig.ModelRoleMergeReview, runtimeconfig.ModelRoleResolver} {
+				if got := options.RunOptions.Models.EffortFor(role); got != "opaque-level" {
+					t.Fatalf("command role %s effort = %q", role, got)
+				}
+			}
+			for _, value := range []string{" ", "two levels", "a\tb"} {
+				err := (App{Out: io.Discard, Err: io.Discard}).Run(context.Background(), []string{command, "--effort=" + value, "missing-plan"})
+				if err == nil || !strings.Contains(err.Error(), "--effort") {
+					t.Fatalf("invalid effort error = %v", err)
+				}
+			}
+		})
+	}
+}
+
 func TestRunModelFlagOverridesEveryRole(t *testing.T) {
 	clearTaoEnv(t)
 	t.Setenv(runtimeconfig.EnvModel, "env-base")

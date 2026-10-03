@@ -6,7 +6,7 @@
 - treatment confidence: high=6; low=2; ambiguous=1; missing=1
 - planning-metrics coverage: 0/10 plans
 - role attribution: 6 attributed; 2 unattributed sessions
-- reasoning effort: not recorded
+- reasoning effort: 0 sessions recorded
 - maturity window: 14 days; minimum samples: 5
 - plan scan: 9 scanned; 2 skipped
 - repositories: 9 registered; 6 scanned; 1 empty; 1 unreadable; 1 skipped

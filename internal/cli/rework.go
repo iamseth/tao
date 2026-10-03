@@ -180,7 +180,7 @@ var readReworkPRThreads = func(ctx context.Context, app App, request forge.Revie
 	return forge.NewGitHub(app.CommandRunner).ReadReviewThreads(ctx, request)
 }
 
-var classifyReworkPRThreads = func(ctx context.Context, app App, repoRoot string, threads []forge.ReviewThread, observe func(agentsession.Result, error)) ([]reworkpkg.PRThreadClassification, error) {
+var classifyReworkPRThreads = func(ctx context.Context, app App, repoRoot string, threads []forge.ReviewThread, observe func(agentsession.Result, string, error)) ([]reworkpkg.PRThreadClassification, error) {
 	text := reworkpkg.PRTriageTextGeneratorFunc(func(ctx context.Context, repoRoot, prompt string) (string, error) {
 		generator, err := newReworkTriageTextGenerator(app, observe)
 		if err != nil {
@@ -191,10 +191,10 @@ var classifyReworkPRThreads = func(ctx context.Context, app App, repoRoot string
 	return (reworkpkg.PRThreadClassifier{Text: text}).Classify(ctx, repoRoot, threads)
 }
 
-func newReworkTriageTextGenerator(app App, observe func(agentsession.Result, error)) (agentsession.TextGenerator, error) {
+func newReworkTriageTextGenerator(app App, observe func(agentsession.Result, string, error)) (agentsession.TextGenerator, error) {
 	defaults, err := app.envDefaultsFor(
 		runtimeconfig.EnvAgent, runtimeconfig.EnvSessionTimeout, runtimeconfig.EnvSkipPermissions,
-		runtimeconfig.EnvModel,
+		runtimeconfig.EnvModel, runtimeconfig.EnvEffort,
 	)
 	if err != nil {
 		return agentsession.TextGenerator{}, err
@@ -211,12 +211,18 @@ func newReworkTriageTextGenerator(app App, observe func(agentsession.Result, err
 	if starter == nil {
 		starter = agent.DefaultProcessStarter
 	}
+	effort := config.ResolvedOptions().Models.EffortFor(runtimeconfig.ModelRoleDefault)
+	var observer func(agentsession.Result, error)
+	if observe != nil {
+		observer = func(result agentsession.Result, err error) { observe(result, effort, err) }
+	}
 	return agentsession.NewTextGenerator(agentsession.Config{
 		Descriptor: descriptor, Deps: agent.RuntimeDeps{ProcessStarter: starter},
 		SkipPermissions: defaults.SkipPermissions, Timeout: defaults.SessionTimeoutValue(),
 		Progress: app.Out, CommandRunner: app.CommandRunner,
-		Model: config.ResolvedOptions().Models.For(runtimeconfig.ModelRoleDefault),
-	}, observe), nil
+		Model:  config.ResolvedOptions().Models.For(runtimeconfig.ModelRoleDefault),
+		Effort: effort,
+	}, observer), nil
 }
 
 func (a App) reworkFromPullRequest(ctx context.Context, repo planRunRepository, record *plan.PlanRecord, now time.Time, scope forge.ReviewThreadAuthorScope, dryRun, runAfter bool) error {
@@ -247,8 +253,8 @@ func (a App) reworkFromPullRequestWithOptions(ctx context.Context, repo planRunR
 		return err
 	}
 	if !triageMatchesThreads(detail.State.Plan.PRFeedbackTriage, result.Threads) && len(result.Threads) > 0 {
-		classifications, err := classifyReworkPRThreads(ctx, a, request.RepoRoot, result.Threads, func(result agentsession.Result, runErr error) {
-			metrics := agenttelemetry.Project(result, plan.AgentRoleRework, runErr)
+		classifications, err := classifyReworkPRThreads(ctx, a, request.RepoRoot, result.Threads, func(result agentsession.Result, effort string, runErr error) {
+			metrics := agenttelemetry.Project(result, plan.AgentRoleRework, effort, runErr)
 			event := agenttelemetry.Event(detail.State.Plan.ID, "", a.now(), metrics)
 			if err := repo.AppendEvent(record.Dir(), event); err == nil {
 				detail.Events = append(detail.Events, event)

@@ -90,6 +90,21 @@ var commandOptionRules = []commandOptionRule{
 	{EnvReworkEscalationModel, []CommandProfile{CommandRun}, func(p RunOptionsPatch) RunOptionsPatch {
 		return RunOptionsPatch{ModelSelection: ModelSelection{ReworkEscalation: p.ReworkEscalation}}
 	}},
+	{EnvEffort, []CommandProfile{CommandRun, CommandReview, CommandMerge}, func(p RunOptionsPatch) RunOptionsPatch {
+		return RunOptionsPatch{ModelSelection: ModelSelection{Effort: p.Effort}}
+	}},
+	{EnvRunEffort, []CommandProfile{CommandRun}, func(p RunOptionsPatch) RunOptionsPatch {
+		return RunOptionsPatch{ModelSelection: ModelSelection{RunEffort: p.RunEffort}}
+	}},
+	{EnvReviewEffort, []CommandProfile{CommandRun, CommandReview}, func(p RunOptionsPatch) RunOptionsPatch {
+		return RunOptionsPatch{ModelSelection: ModelSelection{ReviewEffort: p.ReviewEffort}}
+	}},
+	{EnvMergeReviewEffort, []CommandProfile{CommandMerge}, func(p RunOptionsPatch) RunOptionsPatch {
+		return RunOptionsPatch{ModelSelection: ModelSelection{MergeReviewEffort: p.MergeReviewEffort}}
+	}},
+	{EnvResolverEffort, []CommandProfile{CommandMerge}, func(p RunOptionsPatch) RunOptionsPatch {
+		return RunOptionsPatch{ModelSelection: ModelSelection{ResolverEffort: p.ResolverEffort}}
+	}},
 	{EnvAutoRework, []CommandProfile{CommandRun}, nil},
 	{EnvMaxReworkAttempts, []CommandProfile{CommandRun}, nil},
 	{EnvRunHeader, []CommandProfile{CommandRun}, nil},
@@ -184,12 +199,14 @@ func ResolveCommandOptions(input CommandOptionsInput) (CommandOptions, error) {
 	if out.RunOptions.PullRequest && out.RunOptions.CommitPolicy == CommitPolicyNone {
 		return CommandOptions{}, out.optionError(fmt.Errorf("--pull-request requires commit policy slice"), EnvPullRequest, EnvCommitPolicy)
 	}
-	for _, role := range []struct{ key, value string }{
-		{EnvRunModel, out.RunOptions.Models.Run}, {EnvReviewModel, out.RunOptions.Models.Review},
-		{EnvMergeReviewModel, out.RunOptions.Models.MergeReview}, {EnvResolverModel, out.RunOptions.Models.Resolver},
+	for _, role := range []struct{ key, value, base string }{
+		{EnvRunModel, out.RunOptions.Models.Run, EnvModel}, {EnvReviewModel, out.RunOptions.Models.Review, EnvModel},
+		{EnvMergeReviewModel, out.RunOptions.Models.MergeReview, EnvModel}, {EnvResolverModel, out.RunOptions.Models.Resolver, EnvModel},
+		{EnvRunEffort, out.RunOptions.Models.RunEffort, EnvEffort}, {EnvReviewEffort, out.RunOptions.Models.ReviewEffort, EnvEffort},
+		{EnvMergeReviewEffort, out.RunOptions.Models.MergeReviewEffort, EnvEffort}, {EnvResolverEffort, out.RunOptions.Models.ResolverEffort, EnvEffort},
 	} {
 		if _, applicable := out.Sources[role.key]; applicable && role.value == "" {
-			out.Sources[role.key] = out.Sources[EnvModel]
+			out.Sources[role.key] = out.Sources[role.base]
 		}
 	}
 	if _, applicable := out.Sources[EnvSkipPermissions]; applicable {

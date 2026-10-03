@@ -18,6 +18,7 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/plandelta"
 	"github.com/iamseth/tao/internal/runstatus"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/taodata"
 )
 
@@ -741,12 +742,15 @@ func TestCreateReviewWithAgentSessionReportsOneCorrectionExhaustion(t *testing.T
 	var requests []AgentSessionRequest
 	executor := agentSessionExecutorFunc(func(ctx context.Context, request AgentSessionRequest) (AgentSessionResult, error) {
 		requests = append(requests, request)
+		if request.Effort != "review-effort" {
+			t.Fatalf("review/correction effort = %q", request.Effort)
+		}
 		if len(requests) == 1 {
 			return AgentSessionResult{Output: initial}, ctx.Err()
 		}
 		return AgentSessionResult{Output: "```tao-review-proposal-json\n{bad}\n```"}, ctx.Err()
 	})
-	review, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123", currentBranch: "feature"}), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(plan.NewFileRepository("")))
+	review, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", Models: runtimeconfig.ModelSelection{Effort: "base-effort", ReviewEffort: "review-effort"}, reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123", currentBranch: "feature"}), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(plan.NewFileRepository("")))
 	repairErr, ok := errors.AsType[*reviewProposalRepairError](err)
 	if !ok || repairErr.category != "proposal_invalid" || !strings.Contains(err.Error(), "valid typed commit proposal") {
 		t.Fatalf("correction exhaustion error = %v", err)

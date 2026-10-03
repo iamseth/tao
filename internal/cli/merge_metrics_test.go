@@ -31,8 +31,17 @@ func TestMergeModelSelection(t *testing.T) {
 				detail := cliMergeDetail(t)
 				registry := &fakeNoteRegistry{current: taodata.Repo{RunDefaults: &taodata.RepoRunDefaults{Models: &taodata.RepoModelDefaults{Base: "repo-base", Resolver: "repo-resolver"}}}}
 				app := App{Out: io.Discard, Err: io.Discard, Registry: func() NoteRegistry { return registry }, Repository: func(string) Repository { return fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}} }}
-				check := func(a App, model string) {
+				check := func(a App, model string, effort ...string) {
 					t.Helper()
+					options, err := a.mergeSessionOptions(model, effort...)()
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, role := range []runtimeconfig.ModelRole{runtimeconfig.ModelRoleDefault, runtimeconfig.ModelRoleRun, runtimeconfig.ModelRoleReview, runtimeconfig.ModelRoleMergeReview, runtimeconfig.ModelRoleResolver} {
+						if got := options.RunOptions.Models.EffortFor(role); got != "opaque" {
+							t.Fatalf("role %s effort = %q", role, got)
+						}
+					}
 					models, err := a.mergeModels(context.Background(), model)
 					if err != nil {
 						t.Fatal(err)
@@ -54,17 +63,17 @@ func TestMergeModelSelection(t *testing.T) {
 				calls := 0
 				oldBatch, oldSingle := newMergeBatchRunner, newMergeServiceRunner
 				t.Cleanup(func() { newMergeBatchRunner, newMergeServiceRunner = oldBatch, oldSingle })
-				newMergeBatchRunner = func(_ context.Context, a App, _ mergepkg.BatchPlanRepository, model string) (mergeBatchRunner, error) {
+				newMergeBatchRunner = func(_ context.Context, a App, _ mergepkg.BatchPlanRepository, model string, effort ...string) (mergeBatchRunner, error) {
 					calls++
-					check(a, model)
+					check(a, model, effort...)
 					return &fakeCLIMergeBatchRunner{}, nil
 				}
-				newMergeServiceRunner = func(_ context.Context, a App, _ *plan.PlanDetail, model string) (mergeServiceRunner, error) {
+				newMergeServiceRunner = func(_ context.Context, a App, _ *plan.PlanDetail, model string, effort ...string) (mergeServiceRunner, error) {
 					calls++
-					check(a, model)
+					check(a, model, effort...)
 					return &fakeCLIMergeService{}, nil
 				}
-				args := []string{"merge"}
+				args := []string{"merge", "--effort", "opaque"}
 				if override != "" {
 					args = append(args, "--model", override)
 				}

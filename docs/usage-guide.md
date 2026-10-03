@@ -856,6 +856,16 @@ runtime's message; Tao does not retry or fall back to another model. Correct the
 setting before trying again under the ordinary recovery rules. Model selection
 never authorizes recovery, approval, commit, PR, or merge.
 
+Optional reasoning effort uses the same precedence and role fallback: `TAO_EFFORT`
+is the base, with `TAO_RUN_EFFORT`, `TAO_REVIEW_EFFORT`,
+`TAO_MERGE_REVIEW_EFFORT`, and `TAO_RESOLVER_EFFORT` for roles. On `tao run`,
+`tao review --run`, and `tao merge` (including `--all`), `--effort NAME` overrides
+the base and every role. Values are opaque, non-empty, whitespace-free strings
+passed to `pi --thinking` or `claude --effort`; runtime rejection fails the session
+without retry or fallback. Unset effort adds no launch argument (including when
+Pi derives effort from a model suffix). Escalation rounds keep the run-role effort;
+there is no escalation-effort setting.
+
 #### Check which defaults apply
 
 Use `tao status` to inspect defaults and their sources, not to infer that every

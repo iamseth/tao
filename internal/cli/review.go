@@ -17,7 +17,7 @@ import (
 var reviewCommand = commandMetadata{
 	name:                  "review",
 	minPrefix:             "rev",
-	usageLines:            []string{"review (rev) [--run [--review-agent pi|claude] [--model NAME]] <plan-id-or-slug-or-path>"},
+	usageLines:            []string{"review (rev) [--run [--review-agent pi|claude] [--model NAME] [--effort NAME]] <plan-id-or-slug-or-path>"},
 	completionDescription: "Show or refresh the persisted plan review",
 	long:                  "Show the persisted LLM review for a plan, or run a fresh review and display its metadata. Reviews are stored with Tao plan metadata, not in the worktree.",
 	examples: "  tao review my-plan\n" +
@@ -59,6 +59,7 @@ func registerReviewFlags(fs *flag.FlagSet) {
 	registerReviewAgentFlag(fs)
 	fs.Bool("run", false, "run a fresh review before displaying the result")
 	fs.String("model", "", "override the agent model for a fresh review (--run)")
+	fs.String("effort", "", "override reasoning effort for a fresh review (--run)")
 }
 
 func (a App) review(ctx context.Context, repo runpkg.Repository, args []string) error {
@@ -66,7 +67,10 @@ func (a App) review(ctx context.Context, repo runpkg.Repository, args []string) 
 	if err != nil {
 		return err
 	}
-	if err := requirePositionals(positional, 1, "usage: tao review [--run [--review-agent pi|claude] [--model NAME]] <plan-id-or-slug-or-path>"); err != nil {
+	if err := requirePositionals(positional, 1, "usage: tao review [--run [--review-agent pi|claude] [--model NAME] [--effort NAME]] <plan-id-or-slug-or-path>"); err != nil {
+		return err
+	}
+	if _, err := effortFlagValue(fs); err != nil {
 		return err
 	}
 	if _, err := modelFlagValue(fs); err != nil {

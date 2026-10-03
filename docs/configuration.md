@@ -31,7 +31,9 @@ writing a saved value does not defeat an environment override.
 For one release, `tao repo config [<repo-id>]` remains a compatibility adapter
 for repository `--pull-request true|false|unset` and model flags `--model`,
 `--run-model`, `--review-model`, `--merge-review-model`, `--resolver-model`,
-and `--rework-escalation-model` (each accepts a name or `unset`). Prefer
+and `--rework-escalation-model`, plus effort flags `--effort`, `--run-effort`,
+`--review-effort`, `--merge-review-effort`, and `--resolver-effort`
+(each accepts a value or `unset`). Prefer
 `tao config` for new scripts. No automatic migration is required.
 
 ### Storage and canonical keys
@@ -69,7 +71,7 @@ runtime parsers below, then save native scalars.
 | Global and repository | `agent`, `review_agent`, `commit_policy`, `execution_mode`, `session_timeout` | String; choices/ranges below |
 | Global and repository | `pull_request`, `review_enabled`, `dangerously_skip_permissions`, `run_header` | Boolean |
 | Global and repository | `max_slices`, `session_warn_percent`, `max_rework_attempts`, `rework_escalation_from_attempt` | Integer |
-| Global and repository | `models.model`, `models.run_model`, `models.review_model`, `models.merge_review_model`, `models.resolver_model`, `models.rework_escalation_model` | Non-empty model string |
+| Global and repository | `models.model`, `models.run_model`, `models.review_model`, `models.merge_review_model`, `models.resolver_model`, `models.rework_escalation_model`; `models.effort`, `models.run_effort`, `models.review_effort`, `models.merge_review_effort`, `models.resolver_effort` | Non-empty model string; non-empty effort level string |
 | Global and repository | `budget.<slice\|plan>.<metric>.warn` | Non-negative count integer or cost number |
 | Global and repository | `budget.slice.output_tokens.stop`, `budget.slice.cost.stop` | Non-negative integer/number or `null` |
 | Global only | `theme`, `update` | String; choices below |
@@ -141,6 +143,11 @@ PRs or inherit automatic slice-commit behavior.
 | `TAO_MERGE_REVIEW_MODEL` | — | — | — | — | yes | — |
 | `TAO_RESOLVER_MODEL` | — | — | — | — | yes | — |
 | `TAO_REWORK_ESCALATION_MODEL` | yes | yes | yes | — | — | — |
+| `TAO_EFFORT` | yes | yes | yes | yes | yes | — |
+| `TAO_RUN_EFFORT` | yes | yes | yes | — | — | — |
+| `TAO_REVIEW_EFFORT` | yes | yes | yes | yes | — | — |
+| `TAO_MERGE_REVIEW_EFFORT` | — | — | — | — | yes | — |
+| `TAO_RESOLVER_EFFORT` | — | — | — | — | yes | — |
 | `TAO_AUTO_REWORK` | yes | yes | yes | — | — | — |
 | `TAO_MAX_REWORK_ATTEMPTS` | yes | yes | yes | — | — | — |
 | `TAO_RUN_HEADER` | yes | yes | yes | — | — | — |
@@ -209,6 +216,11 @@ explicitly setting it to an empty value is invalid.
 | `TAO_MERGE_REVIEW_MODEL` | Unset (resolved base) | Model name | Aggregate merge review. |
 | `TAO_RESOLVER_MODEL` | Unset (resolved base) | Model name | Merge conflict and rework resolution. |
 | `TAO_REWORK_ESCALATION_MODEL` | Unset (disabled) | Model name | Opt-in model for late automatic-rework rounds. |
+| `TAO_EFFORT` | Unset (runtime selection) | Opaque level string | Shared base effort for unset roles, planning, PR work, and merge-message generation. |
+| `TAO_RUN_EFFORT` | Unset (runtime selection) | Opaque level string | Implementation and rework slices. |
+| `TAO_REVIEW_EFFORT` | Unset (runtime selection) | Opaque level string | Plan review and proposal correction. |
+| `TAO_MERGE_REVIEW_EFFORT` | Unset (runtime selection) | Opaque level string | Aggregate merge review. |
+| `TAO_RESOLVER_EFFORT` | Unset (runtime selection) | Opaque level string | Merge conflict and rework resolution. |
 | `TAO_UPDATE` | `warn` | `warn`, `auto`, `off` | Report updates, permit automatic installation, or disable automatic update checks. |
 | `TAO_PULL_REQUEST` | `false` | Boolean | Enable pull-request finalization after successful execution and approval. |
 | `TAO_REVIEW` | `true` | Boolean | Enable the post-execution plan review. |
@@ -364,6 +376,25 @@ escalation model, rework is unchanged. A model already recorded for a round
 still wins at execution time. See the
 [rework guide](usage-guide.md#escalate-late-automatic-rework)
 for attempt counting and durable selection.
+
+Reasoning effort follows the same scoped precedence and role fallback as models.
+Values are opaque, non-empty, whitespace-free level strings (surrounding whitespace
+is trimmed), passed to Pi as `--thinking` or Claude as `--effort`. Unset effort
+leaves launch arguments unchanged; runtime rejection never triggers a retry or
+fallback. There is no escalation effort setting: rework escalation rounds keep
+the run-role effort. Override the base and every role for one invocation with
+`tao run --effort NAME <plan>`, `tao review --run --effort NAME <plan>`,
+`tao merge --effort NAME <plan>`, or `tao merge --all --effort NAME`.
+For example:
+
+```sh
+tao config set models.run_effort high
+tao config set models.review_effort medium
+tao config unset models.run_effort # restore inheritance
+```
+
+Older binaries read a `repo.json` containing effort fields through the salvage
+path, preserving repository identity and recognized non-effort defaults.
 
 ## Planner routing
 

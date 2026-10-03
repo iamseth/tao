@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/agentsession"
+	"github.com/iamseth/tao/internal/configtypes"
 	"github.com/iamseth/tao/internal/forge"
 	"github.com/iamseth/tao/internal/plan"
 	reworkpkg "github.com/iamseth/tao/internal/rework"
@@ -142,6 +143,80 @@ func TestReworkFromPullRequestRunPreservesReviewAgent(t *testing.T) {
 	err := app.rework(context.Background(), plan.NewFileRepository(root), []string{"--from-pr", "--run", "--review-agent=claude", id})
 	if !errors.Is(err, stop) {
 		t.Fatalf("handoff: %v", err)
+	}
+}
+
+func TestReworkFromPullRequestEffortAdmissionWithoutRun(t *testing.T) {
+	for _, provider := range []string{"pi", "claude"} {
+		for _, tc := range []struct {
+			name      string
+			effort    string
+			saved     configtypes.SettingsValues
+			wantError string
+		}{
+			{name: "invalid environment", effort: "not valid", wantError: runtimeconfig.EnvEffort},
+			{name: "masked invalid saved", effort: "custom-effort", saved: configtypes.SettingsValues{"models.effort": []byte(`"not valid"`)}, wantError: "models.effort"},
+			{name: "valid", effort: "custom-effort"},
+		} {
+			t.Run(provider+"/"+tc.name, func(t *testing.T) {
+				root := t.TempDir()
+				const id = "20260628-1200-pr-effort"
+				dir := writeCLIReworkPlan(t, root, id, plan.StatusCompleted, reworkReview(plan.ReviewVerdictApprove, nil))
+				addCLIReworkPullRequest(t, dir)
+				oldRead := readReworkPRThreads
+				t.Cleanup(func() { readReworkPRThreads = oldRead })
+				readReworkPRThreads = func(context.Context, App, forge.ReviewThreadReadRequest) (forge.ReviewThreadReadResult, error) {
+					return forge.ReviewThreadReadResult{Threads: []forge.ReviewThread{{NodeID: "PRRT_change", Path: "internal/cli/rework.go", Comments: []forge.ReviewThreadComment{{AuthorLogin: "owner", Body: "Please fix this."}}}}}, nil
+				}
+				snapshot := runtimeconfig.ResolveSettings(nil, tc.saved, *snapshotWith(map[string]string{runtimeconfig.EnvAgent: provider, runtimeconfig.EnvEffort: tc.effort}))
+				calls := 0
+				starter := reworkMetricsProcessStarter(t, provider, "reported", nil, &calls)
+				app := App{RuntimeEnv: &snapshot, Out: io.Discard, ProcessStarter: func(ctx context.Context, cwd, name string, args []string) (runpkg.Process, error) {
+					if tc.wantError != "" {
+						t.Error("session launched before effort admission")
+					}
+					flag := "--thinking"
+					if provider == "claude" {
+						flag = "--effort"
+					}
+					if i := slices.Index(args, flag); i < 0 || i+1 >= len(args) || args[i+1] != tc.effort {
+						t.Errorf("effort missing from runtime args: %v", args)
+					}
+					return starter(ctx, cwd, name, args)
+				}}
+				repo := plan.NewFileRepository(root)
+				err := app.rework(context.Background(), repo, []string{"--from-pr", "--dry-run", id})
+				if tc.wantError != "" {
+					if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+						t.Errorf("error = %v, want %q", err, tc.wantError)
+					}
+				} else if err != nil {
+					t.Fatal(err)
+				}
+				detail, err := repo.ResolvePlan(context.Background(), id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var metrics []plan.Event
+				for _, event := range detail.Events {
+					if event.Type == plan.EventTypeAgentMetrics {
+						metrics = append(metrics, event)
+					}
+				}
+				if tc.wantError != "" {
+					if calls != 0 || len(metrics) != 0 || len(detail.State.Plan.PRFeedbackTriage) != 0 {
+						t.Fatalf("rejected effort launched %d sessions, persisted metrics %v or triage %v", calls, metrics, detail.State.Plan.PRFeedbackTriage)
+					}
+				} else {
+					if calls != 1 || len(metrics) != 1 || metrics[0].Metrics == nil || metrics[0].Metrics.ReasoningEffort != tc.effort {
+						t.Fatalf("calls = %d, metrics = %+v", calls, metrics)
+					}
+					if detail.State.Plan.PRFeedbackTriage["PRRT_change"].Kind != "change" {
+						t.Fatalf("triage not persisted: %v", detail.State.Plan.PRFeedbackTriage)
+					}
+				}
+			})
+		}
 	}
 }
 
@@ -720,7 +795,7 @@ func stubCLIReworkPRPipeline(t *testing.T, threads []forge.ReviewThread, classif
 		}
 		return forge.ReviewThreadReadResult{OwnerLogin: "owner", Threads: threads}, nil
 	}
-	classifyReworkPRThreads = func(_ context.Context, _ App, _ string, got []forge.ReviewThread, _ func(agentsession.Result, error)) ([]reworkpkg.PRThreadClassification, error) {
+	classifyReworkPRThreads = func(_ context.Context, _ App, _ string, got []forge.ReviewThread, _ func(agentsession.Result, string, error)) ([]reworkpkg.PRThreadClassification, error) {
 		if len(got) != len(threads) {
 			t.Fatalf("classified threads = %d, want %d", len(got), len(threads))
 		}

@@ -91,6 +91,11 @@ func applyRepositoryRunDefaultsToStatus(rows []runtimeconfig.EnvVarStatus, repos
 	values := map[string]string{
 		runtimeconfig.EnvReviewAgent:           repository.ReviewAgent.String(),
 		runtimeconfig.EnvModel:                 repository.Base,
+		runtimeconfig.EnvEffort:                repository.Effort,
+		runtimeconfig.EnvRunEffort:             repository.RunEffort,
+		runtimeconfig.EnvReviewEffort:          repository.ReviewEffort,
+		runtimeconfig.EnvMergeReviewEffort:     repository.MergeReviewEffort,
+		runtimeconfig.EnvResolverEffort:        repository.ResolverEffort,
 		runtimeconfig.EnvRunModel:              repository.Run,
 		runtimeconfig.EnvReviewModel:           repository.Review,
 		runtimeconfig.EnvMergeReviewModel:      repository.MergeReview,

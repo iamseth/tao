@@ -715,6 +715,7 @@ func (a App) planGenerator(options runtimeconfig.ResolvedRunOptions) PlanGenerat
 	}
 	return planning.NewService(planning.NewFileRepository(""), nil, planning.ServiceOptions{
 		Agent: options.Agent, Model: options.Models.For(runtimeconfig.ModelRoleDefault),
+		Effort:         options.Models.EffortFor(runtimeconfig.ModelRoleDefault),
 		ProcessStarter: a.ProcessStarter, Log: a.Out,
 	})
 }

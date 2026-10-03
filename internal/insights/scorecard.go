@@ -172,6 +172,7 @@ type planObservation struct {
 	hoursToApproval                                                   float64
 	hasApproval                                                       bool
 	planningMetrics                                                   bool
+	reasoningEffortRecorded                                           int
 	reliability                                                       map[string]int
 }
 
@@ -298,12 +299,17 @@ func (o *planObservation) observeMetrics(data planData) {
 	slices.Sort(keys)
 	for _, key := range keys {
 		byRole := make(map[string][]plan.AgentMetricEvent)
+		effortRecorded := false
 		for _, event := range data.sessions[key] {
+			effortRecorded = effortRecorded || event.Metrics.ReasoningEffort != ""
 			role := scorecardMetricRole(event.Metrics.Role)
 			byRole[role] = append(byRole[role], event)
 			if event.Metrics.Status == "failed" {
 				o.reliability["provider_failure"]++
 			}
+		}
+		if effortRecorded {
+			o.reasoningEffortRecorded++
 		}
 		for role, events := range byRole {
 			metrics := plan.SummarizeAgentMetrics(events).Totals
@@ -709,6 +715,7 @@ func scorecardCoverage(observations []planObservation) ScorecardCoverage {
 	c := ScorecardCoverage{MaturityWindowDays: int(scorecardMaturityWindow / (24 * time.Hour)), MinimumSamples: scorecardMinimumSamples}
 	for _, o := range observations {
 		c.Plans++
+		c.ReasoningEffortRecorded += o.reasoningEffortRecorded
 		switch o.class {
 		case observationNeverStarted:
 			c.NeverStarted++

@@ -19,7 +19,7 @@ var runCommand = commandMetadata{
 	name:      "run",
 	minPrefix: "r",
 	usageLines: []string{
-		"run (r) [--agent pi|claude] [--session-timeout DURATION] [--review-agent pi|claude] [--model NAME] [--rework-escalation-model NAME] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue|--restart|--repair-verification|--reverify] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>",
+		"run (r) [--agent pi|claude] [--session-timeout DURATION] [--review-agent pi|claude] [--model NAME] [--effort NAME] [--rework-escalation-model NAME] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue|--restart|--repair-verification|--reverify] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>",
 	},
 	completionDescription: "Run pending slices with the selected agent",
 	long:                  "Run pending slices for a Tao plan with the selected agent. Tao prepares the requested workspace, executes pending work, automatically reworks review findings by default, records verification metadata, and follows the configured commit policy. In a sufficiently large terminal, Tao displays a pinned run header unless --no-run-header disables it.",
@@ -69,6 +69,7 @@ func (a App) registerRunFlags(fs *flag.FlagSet) {
 	registerReviewAgentFlag(fs)
 	defaults := a.flagDefaults()
 	fs.String("model", "", "override the agent model for every role in this run")
+	fs.String("effort", "", "override reasoning effort for every role in this run")
 	fs.String("rework-escalation-model", "", "override the model for late automatic rework attempts")
 	fs.Bool("continue", false, "continue a blocked slice at its preserved execution boundary")
 	fs.Bool("restart", false, "restart a safe blocked automatic slice on a newer baseline")
@@ -157,7 +158,23 @@ func (a App) resolveRunRequestFlags(fs *flag.FlagSet) (runRequestInputs, error) 
 	}, nil
 }
 
+func effortFlagValue(fs *flag.FlagSet) (string, error) {
+	value := flagStringValue(fs, "effort")
+	if value == "" {
+		return "", nil
+	}
+	level, err := runtimeconfig.ParseEffortLevel(value)
+	if err != nil {
+		return "", fmt.Errorf("--effort: %w", err)
+	}
+	return level, nil
+}
+
 func runRequestFlagOverrides(fs *flag.FlagSet) (runtimeconfig.RunOptionsPatch, error) {
+	effort, err := effortFlagValue(fs)
+	if err != nil {
+		return runtimeconfig.RunOptionsPatch{}, err
+	}
 	model, err := modelFlagValue(fs)
 	if err != nil {
 		return runtimeconfig.RunOptionsPatch{}, err
@@ -207,6 +224,9 @@ func runRequestFlagOverrides(fs *flag.FlagSet) (runtimeconfig.RunOptionsPatch, e
 		return runtimeconfig.RunOptionsPatch{}, err
 	}
 	overrides.ReviewAgent = reviewAgent
+	if effort != "" {
+		overrides = overrides.WithEffortForAllRoles(effort)
+	}
 	return overrides, nil
 }
 
@@ -268,7 +288,10 @@ func (a App) runWithRepositorySettings(ctx context.Context, repo planRunReposito
 	if err != nil {
 		return err
 	}
-	// Validate explicit model syntax even before resolving the selected plan.
+	// Validate explicit selection syntax even before resolving the selected plan.
+	if _, err := effortFlagValue(fs); err != nil {
+		return err
+	}
 	if _, err := modelFlagValue(fs); err != nil {
 		return err
 	}
@@ -291,7 +314,7 @@ func (a App) runWithRepositorySettings(ctx context.Context, repo planRunReposito
 	if recoveryModeCount > 1 {
 		return fmt.Errorf("--continue, --restart, --repair-verification, and --reverify are mutually exclusive")
 	}
-	if err := requirePositionals(positional, 1, "usage: tao run [--agent pi|claude] [--session-timeout DURATION] [--review-agent pi|claude] [--model NAME] [--rework-escalation-model NAME] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue|--restart|--repair-verification|--reverify] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>"); err != nil {
+	if err := requirePositionals(positional, 1, "usage: tao run [--agent pi|claude] [--session-timeout DURATION] [--review-agent pi|claude] [--model NAME] [--effort NAME] [--rework-escalation-model NAME] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--continue|--restart|--repair-verification|--reverify] [--no-review] [--no-run-header] [--auto-rework] [--max-rework-attempts N] [--rework-restart] [--dangerously-skip-permissions] <plan-id-or-slug-or-path>"); err != nil {
 		return err
 	}
 	input := positional[0]

@@ -48,6 +48,8 @@ type Session struct {
 	// Model is an opaque provider model selector passed to the runtime's
 	// --model flag when non-empty.
 	Model string
+	// Effort is an opaque reasoning-effort selector passed as a native runtime flag when non-empty.
+	Effort string
 	// Timeout caps a single Runtime session's wall-clock duration. A zero value
 	// means no timeout.
 	Timeout time.Duration

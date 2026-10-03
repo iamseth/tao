@@ -58,6 +58,18 @@ func TestNormalizePlannerLabel(t *testing.T) {
 	}
 }
 
+func TestPlannerTreatmentReasoningEffort(t *testing.T) {
+	metrics := []plan.AgentMetrics{{Role: plan.AgentRolePlanning, Agent: "pi", ModelID: "model", ReasoningEffort: " HIGH\x00 "}}
+	got := ResolvePlannerTreatment("pi", metrics)
+	if got.ReasoningEffort != "high_" {
+		t.Fatalf("effort = %q", got.ReasoningEffort)
+	}
+	metrics[0].ReasoningEffort = ""
+	if got.CohortKey() != ResolvePlannerTreatment("pi", metrics).CohortKey() {
+		t.Fatal("effort changed cohort")
+	}
+}
+
 func TestResolvePlannerTreatment(t *testing.T) {
 	tests := []struct {
 		name, label string

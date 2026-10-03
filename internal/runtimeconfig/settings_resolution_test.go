@@ -25,6 +25,28 @@ func settingStatus(t *testing.T, s EnvSnapshot, key string) SettingStatus {
 	return SettingStatus{}
 }
 
+func TestEffortInvalidSavedLayerSurvivesMasking(t *testing.T) {
+	for _, global := range []bool{false, true} {
+		bad := settingLayer("models.run_effort", `"two levels"`)
+		var g, r configtypes.SettingsValues
+		if global {
+			g = bad
+		} else {
+			r = bad
+		}
+		s := ResolveSettings(g, r, capturedSettings(map[string]string{EnvRunEffort: "high"}))
+		if s.Defaults().RunEffort != "high" {
+			t.Fatal(s.Defaults())
+		}
+		if err := s.Require(EnvRunEffort); err == nil {
+			t.Fatal("masked invalid saved effort")
+		}
+		if row := settingStatus(t, s, "models.run_effort"); row.Warning == "" {
+			t.Fatal(row)
+		}
+	}
+}
+
 func TestResolveSettingsSparseCapture(t *testing.T) {
 	global := settingLayer("pull_request", `true`)
 	global["max_slices"] = json.RawMessage(`0`)
@@ -61,6 +83,7 @@ func TestResolveSettingsPrecedence(t *testing.T) {
 		{"dangerously_skip_permissions", `true`, `false`, "true"},
 		{"run_header", `false`, `true`, "false"},
 		{"models.model", `"base-a"`, `"base-b"`, "base-c"},
+		{"models.run_effort", `"low"`, `"medium"`, "high"},
 		{"models.run_model", `"run-a"`, `"run-b"`, "run-c"},
 		{"models.review_model", `"review-a"`, `"review-b"`, "review-c"},
 		{"models.merge_review_model", `"merge-a"`, `"merge-b"`, "merge-c"},

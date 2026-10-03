@@ -1,7 +1,7 @@
 // Planner treatment normalization uses a deliberately explicit, low-confidence
 // table of observed plan_created.agent labels, not provider or model inference.
 // Additions require listing the exact observed label; only the documented runtime
-// prefix forms generalize. Reasoning effort was never recorded and stays empty.
+// prefix forms generalize. Reasoning effort comes only from planning metrics.
 package insights
 
 import (
@@ -92,6 +92,7 @@ func ResolvePlannerTreatment(label string, planning []plan.AgentMetrics) Planner
 			t.Runtime = agent.Runtime
 		}
 		t.Provider = provider
+		t.ReasoningEffort = sanitizeTreatmentLabel(metrics.ReasoningEffort)
 		if model != "" {
 			t.Model = model
 		}

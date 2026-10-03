@@ -21,6 +21,7 @@ type Request struct {
 	RepoRoot             string
 	Prompt               string
 	Model                string
+	Effort               string
 	NoProgressToolLimit  int
 	VerificationCommands []string
 	SessionInfoMode      SessionInfoMode
@@ -56,12 +57,12 @@ const (
 // CheckReadiness starts a disposable RPC process, verifies that Pi selected a
 // locally available model, and stops it without sending a prompt. Callers use
 // this to prove startup separately from an attributed model request.
-func (c Client) CheckReadiness(ctx context.Context, repoRoot, model string) error {
+func (c Client) CheckReadiness(ctx context.Context, repoRoot, model, effort string) error {
 	starter := c.ProcessStarter
 	if starter == nil {
 		starter = DefaultProcessStarter
 	}
-	proc, err := starter(ctx, repoRoot, "pi", launchArgs(model))
+	proc, err := starter(ctx, repoRoot, "pi", launchArgs(model, effort))
 	if err != nil {
 		return err
 	}
@@ -83,7 +84,7 @@ func (c Client) RunAgentSession(ctx context.Context, request Request) (Result, e
 	if starter == nil {
 		starter = DefaultProcessStarter
 	}
-	proc, err := starter(ctx, request.RepoRoot, "pi", launchArgs(request.Model))
+	proc, err := starter(ctx, request.RepoRoot, "pi", launchArgs(request.Model, request.Effort))
 	if err != nil {
 		result.PromptAcceptance = lifecycle.PromptAcceptanceNotTransmitted
 		return result, err
@@ -137,10 +138,13 @@ func (c Client) RunAgentSession(ctx context.Context, request Request) (Result, e
 	return result, nil
 }
 
-func launchArgs(model string) []string {
+func launchArgs(model, effort string) []string {
 	args := []string{"--mode", "rpc", "--no-session"}
 	if model != "" {
 		args = append(args, "--model", model)
+	}
+	if effort != "" {
+		args = append(args, "--thinking", effort)
 	}
 	return args
 }

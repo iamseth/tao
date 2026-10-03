@@ -88,6 +88,38 @@ func TestParseModelName(t *testing.T) {
 	}
 }
 
+func TestEffortParsingAndPatch(t *testing.T) {
+	for _, value := range []string{"high", " custom:level ", "\u2003opaque/level\t"} {
+		got, err := ParseEffortLevel(value)
+		if err != nil || got != strings.TrimSpace(value) {
+			t.Fatalf("%q: %q, %v", value, got, err)
+		}
+	}
+	for _, value := range []string{"", " \t", "two levels", "a\nb", "a\u00a0b"} {
+		if _, err := ParseEffortLevel(value); err == nil {
+			t.Fatalf("accepted %q", value)
+		}
+	}
+	patch := (RunOptionsPatch{Agent: AgentClaude, ModelSelection: ModelSelection{Base: "model", ReworkEscalation: "strong"}}).WithEffortForAllRoles(" custom ")
+	got, err := mergeRunOptions(ResolvedRunOptions{}, patch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Agent != AgentClaude || got.Models.Base != "model" || got.Models.ReworkEscalation != "strong" {
+		t.Fatal(got)
+	}
+	for _, role := range []ModelRole{ModelRoleDefault, ModelRoleRun, ModelRoleReview, ModelRoleMergeReview, ModelRoleResolver} {
+		if got.Models.EffortFor(role) != "custom" {
+			t.Fatal(got.Models)
+		}
+	}
+	for _, m := range []ModelSelection{{Effort: " "}, {RunEffort: "a b"}, {ReviewEffort: "a\tb"}, {MergeReviewEffort: "a\nb"}, {ResolverEffort: "a\u2003b"}} {
+		if _, err := mergeRunOptions(ResolvedRunOptions{}, RunOptionsPatch{ModelSelection: m}); err == nil {
+			t.Fatalf("accepted %+v", m)
+		}
+	}
+}
+
 func TestModelSelectionFor(t *testing.T) {
 	roles := []ModelRole{ModelRoleDefault, ModelRoleRun, ModelRoleReview, ModelRoleMergeReview, ModelRoleResolver, "unknown"}
 	for _, role := range roles {

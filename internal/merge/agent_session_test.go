@@ -39,19 +39,26 @@ func TestMergeSessionModels(t *testing.T) {
 		t.Run(string(tt.op), func(t *testing.T) {
 			t.Setenv("TAO_MODEL", "ignored-env-model")
 			session, err := NewBatchAgentSession(BatchAgentSessionConfig{
-				Models: runtimeconfig.ModelSelection{Base: "base", Resolver: "r", MergeReview: "v"},
+				Models: runtimeconfig.ModelSelection{Base: "base", Resolver: "r", MergeReview: "v", Effort: "base-effort", ResolverEffort: "r-effort", MergeReviewEffort: "v-effort"},
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
 			session.run = func(_ context.Context, request agentsession.Request) (agentsession.Result, error) {
+				if request.Effort != tt.want+"-effort" {
+					t.Fatalf("effort = %q, want %q", request.Effort, tt.want+"-effort")
+				}
 				if request.Model != tt.want {
 					t.Fatalf("model = %q, want %q", request.Model, tt.want)
 				}
 				return agentsession.Result{}, nil
 			}
-			if _, err := session.Resolve(context.Background(), BatchAgentSessionRequest{Operation: tt.op}); err != nil {
+			result, err := session.Resolve(context.Background(), BatchAgentSessionRequest{Operation: tt.op})
+			if err != nil {
 				t.Fatal(err)
+			}
+			if result.ReasoningEffort != tt.want+"-effort" {
+				t.Fatalf("recorded request effort = %q", result.ReasoningEffort)
 			}
 		})
 	}
@@ -83,13 +90,13 @@ func TestSingleMergePreflightUsesResolverModel(t *testing.T) {
 	calls := 0
 	agent.DefaultProcessStarter = func(_ context.Context, _, _ string, args []string) (agent.Process, error) {
 		calls++
-		if !strings.Contains(strings.Join(args, " "), "--model r") {
+		if !strings.Contains(strings.Join(args, " "), "--model r --thinking resolver-effort") {
 			t.Fatalf("readiness args = %v", args)
 		}
 		return nil, stopped
 	}
 	session, err := NewSingleMergeAgentSession(SingleMergeAgentSessionConfig{
-		Agent: runtimeconfig.AgentPi, Models: runtimeconfig.ModelSelection{Resolver: "r", MergeReview: "v"}, ProviderLookPath: testProviderLookPath,
+		Agent: runtimeconfig.AgentPi, Models: runtimeconfig.ModelSelection{Resolver: "r", MergeReview: "v", ResolverEffort: "resolver-effort"}, ProviderLookPath: testProviderLookPath,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +114,9 @@ func TestSingleMergePreflightProbesDistinctEffectiveModels(t *testing.T) {
 		models runtimeconfig.ModelSelection
 		want   []string
 	}{
-		{"distinct roles", runtimeconfig.ModelSelection{Resolver: "r", MergeReview: "v"}, []string{"r", "v"}},
+		{"distinct roles", runtimeconfig.ModelSelection{Resolver: "r", MergeReview: "v", ResolverEffort: "low", MergeReviewEffort: "high"}, []string{"r/low", "v/high"}},
+		{"same model distinct efforts", runtimeconfig.ModelSelection{Base: "b", ResolverEffort: "low", MergeReviewEffort: "high"}, []string{"b/low", "b/high"}},
+		{"same model and effort", runtimeconfig.ModelSelection{Base: "b", Effort: "high"}, []string{"b/high"}},
 		{"identical roles", runtimeconfig.ModelSelection{Resolver: "r", MergeReview: "r"}, []string{"r"}},
 		{"base fallback", runtimeconfig.ModelSelection{Base: "base", Resolver: "r"}, []string{"r", "base"}},
 		{"identical effective roles", runtimeconfig.ModelSelection{Base: "base", Resolver: "base"}, []string{"base"}},
@@ -180,7 +189,11 @@ func installSingleMergeReadinessFixture(t *testing.T, models *[]string, rejected
 		if i := slices.Index(args, "--model"); i >= 0 && i+1 < len(args) {
 			model = args[i+1]
 		}
-		*models = append(*models, model)
+		selection := model
+		if i := slices.Index(args, "--thinking"); i >= 0 && i+1 < len(args) {
+			selection += "/" + args[i+1]
+		}
+		*models = append(*models, selection)
 		output := `{"id":"tao-readiness-state","type":"response","command":"get_state","success":true,"data":{"model":{"provider":"fixture","id":"valid"}}}` + "\n" +
 			`{"id":"tao-readiness-models","type":"response","command":"get_available_models","success":true,"data":{"models":[{"provider":"fixture","id":"valid"}]}}` + "\n"
 		if model == rejected {
@@ -1430,7 +1443,7 @@ func TestSingleMergeAgentMetricsEventUsesGenericPlanTelemetry(t *testing.T) {
 		t.Fatalf("unusable metrics produced event %#v", event)
 	}
 	request := BatchAgentSessionRequest{Operation: BatchAgentOperationSinglePlanReview, CandidatePlanID: "plan-a"}
-	result := BatchAgentSessionResult{Provider: agentsession.Result{
+	result := BatchAgentSessionResult{ReasoningEffort: "high", Provider: agentsession.Result{
 		Invoked: true, AgentLabel: "claude", MetricsUsable: true,
 		Metrics: &agent.Metrics{SessionID: "session-a", ProviderID: "anthropic", ModelID: "model-a", OutputTokens: 17, ToolCalls: 2},
 	}}
@@ -1438,7 +1451,7 @@ func TestSingleMergeAgentMetricsEventUsesGenericPlanTelemetry(t *testing.T) {
 	if event == nil || event.Type != plan.EventTypeAgentMetrics || event.PlanID != "plan-a" || event.Agent != "claude" || event.Timestamp != timestamp {
 		t.Fatalf("generic metrics event = %#v", event)
 	}
-	if event.Message != "Captured independent integration reviewer agent metrics" || event.Metrics == nil || event.Metrics.SessionID != "session-a" || event.Metrics.OutputTokens != 17 || event.Metrics.ToolCalls != 2 || event.Metrics.Status != "failed" || event.Metrics.Result != "failed" {
+	if event.Message != "Captured independent integration reviewer agent metrics" || event.Metrics == nil || event.Metrics.ReasoningEffort != "high" || event.Metrics.SessionID != "session-a" || event.Metrics.OutputTokens != 17 || event.Metrics.ToolCalls != 2 || event.Metrics.Status != "failed" || event.Metrics.Result != "failed" {
 		t.Fatalf("projected metrics = %#v", event)
 	}
 }

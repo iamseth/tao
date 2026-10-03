@@ -865,7 +865,7 @@ func createReviewWithAgentSession(ctx context.Context, executor AgentSessionExec
 	prompt = appendPriorReworkAndBudgetContext(prompt, detail, thresholds)
 	prompt = appendImplementerRulingsContext(prompt, detail)
 	prompt = appendOperatorAmendmentsContext(prompt, detail)
-	result, err := executor.RunAgentSession(ctx, AgentSessionRequest{Model: options.Models.For(runtimeconfig.ModelRoleReview), PlanDir: planDir, RepoRoot: repoRoot, LogAction: "reviewing plan " + planID, Prompt: prompt, CaptureOutput: true, Metrics: &AgentSessionMetricsRequest{Role: plan.AgentRoleReview}})
+	result, err := executor.RunAgentSession(ctx, AgentSessionRequest{Model: options.Models.For(runtimeconfig.ModelRoleReview), Effort: options.Models.EffortFor(runtimeconfig.ModelRoleReview), PlanDir: planDir, RepoRoot: repoRoot, LogAction: "reviewing plan " + planID, Prompt: prompt, CaptureOutput: true, Metrics: &AgentSessionMetricsRequest{Role: plan.AgentRoleReview}})
 	if err != nil {
 		return plan.PlanReview{}, err
 	}

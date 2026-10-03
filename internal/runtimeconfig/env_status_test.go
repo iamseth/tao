@@ -10,7 +10,7 @@ import (
 // built-ins, empty/zero/presence, boolean grammar, consumption and status tests.
 // Exercise invalid syntax for every model role rather than a legacy filter.
 func TestSnapshotModelStatusAndConsumption(t *testing.T) {
-	for _, key := range []string{EnvModel, EnvRunModel, EnvReviewModel, EnvMergeReviewModel, EnvResolverModel, EnvReworkEscalationModel} {
+	for _, key := range []string{EnvModel, EnvRunModel, EnvReviewModel, EnvMergeReviewModel, EnvResolverModel, EnvReworkEscalationModel, EnvEffort, EnvRunEffort, EnvReviewEffort, EnvMergeReviewEffort, EnvResolverEffort} {
 		for _, value := range []string{"", " \t\u2003", "two models", "two\tmodels", "two\nmodels", "two\u00a0models"} {
 			s := snapshotFrom(map[string]string{key: value})
 			if err := s.Require(key); err == nil || !strings.HasPrefix(err.Error(), key+":") {

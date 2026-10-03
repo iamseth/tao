@@ -58,6 +58,18 @@ func ParseModelName(value string) (string, error) {
 	return name, nil
 }
 
+// ParseEffortLevel treats effort levels as opaque runtime-specific identifiers.
+func ParseEffortLevel(value string) (string, error) {
+	level := strings.TrimSpace(value)
+	if level == "" {
+		return "", fmt.Errorf("effort level must not be empty")
+	}
+	if strings.ContainsFunc(level, unicode.IsSpace) {
+		return "", fmt.Errorf("effort level must not contain whitespace")
+	}
+	return level, nil
+}
+
 // RunOptionsPatch models partial values supplied as environment or service
 // defaults, repository defaults, or one run request's overrides. Empty enum and
 // model fields mean unset. Pointer fields mean the caller supplied the value,
@@ -238,6 +250,16 @@ func (p RunOptionsPatch) WithModelForAllRoles(name string) RunOptionsPatch {
 	p.Review = name
 	p.MergeReview = name
 	p.Resolver = name
+	return p
+}
+
+// WithEffortForAllRoles overrides the base and all inherited role efforts.
+func (p RunOptionsPatch) WithEffortForAllRoles(level string) RunOptionsPatch {
+	p.Effort = level
+	p.RunEffort = level
+	p.ReviewEffort = level
+	p.MergeReviewEffort = level
+	p.ResolverEffort = level
 	return p
 }
 
@@ -452,11 +474,20 @@ func mergeRunOptions(options ResolvedRunOptions, patch RunOptionsPatch) (Resolve
 		{"merge_review_model", patch.MergeReview, &options.Models.MergeReview},
 		{"resolver_model", patch.Resolver, &options.Models.Resolver},
 		{"rework_escalation_model", patch.ReworkEscalation, &options.Models.ReworkEscalation},
+		{"effort", patch.Effort, &options.Models.Effort},
+		{"run_effort", patch.RunEffort, &options.Models.RunEffort},
+		{"review_effort", patch.ReviewEffort, &options.Models.ReviewEffort},
+		{"merge_review_effort", patch.MergeReviewEffort, &options.Models.MergeReviewEffort},
+		{"resolver_effort", patch.ResolverEffort, &options.Models.ResolverEffort},
 	} {
 		if model.value == "" {
 			continue
 		}
-		parsed, err := ParseModelName(model.value)
+		parse := ParseModelName
+		if strings.HasSuffix(model.field, "effort") {
+			parse = ParseEffortLevel
+		}
+		parsed, err := parse(model.value)
 		if err != nil {
 			return ResolvedRunOptions{}, fmt.Errorf("%s: %w", model.field, err)
 		}

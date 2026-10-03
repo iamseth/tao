@@ -40,7 +40,7 @@ func persistStatusRepository(t *testing.T, repo taodata.Repo) string {
 // Legacy adapters remain callable for the compatibility release, but are not
 // used to compose effective presentation.
 func TestLegacyRepositoryStatusAdapter(t *testing.T) {
-	repo := taodata.Repo{RunDefaults: &taodata.RepoRunDefaults{PullRequest: new(false), Models: &taodata.RepoModelDefaults{Base: "legacy"}}}
+	repo := taodata.Repo{RunDefaults: &taodata.RepoRunDefaults{PullRequest: new(false), Models: &taodata.RepoModelDefaults{Base: "legacy", Effort: "legacy", RunEffort: "legacy", ReviewEffort: "legacy", MergeReviewEffort: "legacy", ResolverEffort: "legacy"}}}
 	app := App{Registry: func() NoteRegistry { return &fakeNoteRegistry{current: repo} }}
 	patch, err := app.currentRepositoryRunOptions(context.Background())
 	if err != nil {
@@ -49,7 +49,7 @@ func TestLegacyRepositoryStatusAdapter(t *testing.T) {
 	rows := applyRepositoryRunDefaultsToStatus(runtimeconfig.LoadEnv(nil).Status(), patch)
 	for _, row := range rows {
 		switch row.Name {
-		case runtimeconfig.EnvModel:
+		case runtimeconfig.EnvModel, runtimeconfig.EnvEffort, runtimeconfig.EnvRunEffort, runtimeconfig.EnvReviewEffort, runtimeconfig.EnvMergeReviewEffort, runtimeconfig.EnvResolverEffort:
 			if row.Value != "legacy" || row.Source != "repository" {
 				t.Fatal(row)
 			}
@@ -191,13 +191,13 @@ func TestStatusInvalidThemeWarnsWithoutFailing(t *testing.T) {
 }
 
 func TestStatusRepositoryModelDefaults(t *testing.T) {
-	modelKeys := []string{runtimeconfig.EnvModel, runtimeconfig.EnvRunModel, runtimeconfig.EnvReviewModel, runtimeconfig.EnvMergeReviewModel, runtimeconfig.EnvResolverModel, runtimeconfig.EnvReworkEscalationModel}
+	modelKeys := []string{runtimeconfig.EnvModel, runtimeconfig.EnvRunModel, runtimeconfig.EnvReviewModel, runtimeconfig.EnvMergeReviewModel, runtimeconfig.EnvResolverModel, runtimeconfig.EnvReworkEscalationModel, runtimeconfig.EnvEffort, runtimeconfig.EnvRunEffort, runtimeconfig.EnvReviewEffort, runtimeconfig.EnvMergeReviewEffort, runtimeconfig.EnvResolverEffort}
 	for _, mode := range []string{"repository", "default", "env"} {
 		t.Run(mode, func(t *testing.T) {
 			clearTaoEnv(t)
 			var registered taodata.Repo
 			if mode == "repository" {
-				if err := json.Unmarshal([]byte(`{"id":"repo-a","run_defaults":{"models":{"model":"base","run_model":"run","review_model":"review","merge_review_model":"merge","resolver_model":"resolver","rework_escalation_model":"escalation"}}}`), &registered); err != nil {
+				if err := json.Unmarshal([]byte(`{"id":"repo-a","run_defaults":{"models":{"model":"base","run_model":"run","review_model":"review","merge_review_model":"merge","resolver_model":"resolver","rework_escalation_model":"escalation","effort":"low","run_effort":"high","review_effort":"medium","merge_review_effort":"custom","resolver_effort":"max"}}}`), &registered); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -228,7 +228,7 @@ func TestStatusRepositoryModelDefaults(t *testing.T) {
 			if err := app.Run(context.Background(), []string{"status"}); err != nil {
 				t.Fatal(err)
 			}
-			values := []string{"base", "run", "review", "merge", "resolver", "escalation"}
+			values := []string{"base", "run", "review", "merge", "resolver", "escalation", "low", "high", "medium", "custom", "max"}
 			keys := append(append([]string(nil), modelKeys...), runtimeconfig.EnvReworkEscalationFromAttempt, runtimeconfig.EnvReviewAgent)
 			for i, key := range keys {
 				want, source := "", mode

@@ -13,6 +13,7 @@ import (
 // Config describes the stable policy and dependencies for bounded sessions.
 type Config struct {
 	Model           string
+	Effort          string
 	Descriptor      agent.Descriptor
 	Runtime         agent.Runtime
 	Deps            agent.RuntimeDeps
@@ -25,6 +26,7 @@ type Config struct {
 // Runner invokes exactly one provider session for each Run call.
 type Runner struct {
 	model          string
+	effort         string
 	runtime        agent.Runtime
 	descriptor     agent.Descriptor
 	permissionMode agent.PermissionMode
@@ -45,6 +47,7 @@ func New(config Config) Runner {
 	}
 	return Runner{
 		model:          config.Model,
+		effort:         config.Effort,
 		runtime:        agent.WithSessionTimeout(runtime),
 		descriptor:     config.Descriptor,
 		permissionMode: permissionMode,
@@ -61,6 +64,7 @@ type Request struct {
 	// BindLifetime coordinates nested work using the actual provider deadline.
 	BindLifetime         func(context.Context) (context.Context, func() error, error)
 	Model                string
+	Effort               string
 	RepoRoot             string
 	ControlRoot          string
 	Prompt               string
@@ -103,11 +107,16 @@ func (r Runner) Run(ctx context.Context, request Request) (Result, error) {
 	if model == "" {
 		model = r.model
 	}
+	effort := request.Effort
+	if effort == "" {
+		effort = r.effort
+	}
 	invoked := false
 	run := func() (agent.SessionResult, error) {
 		invoked = true
 		return r.runtime.RunSession(ctx, agent.Session{
 			Model:                model,
+			Effort:               effort,
 			RepoRoot:             request.RepoRoot,
 			Prompt:               request.Prompt,
 			PermissionMode:       r.permissionMode,

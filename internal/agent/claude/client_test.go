@@ -176,23 +176,28 @@ func TestClientReturnsAgentErrorAndLogs(t *testing.T) {
 
 func TestClientModelLaunchArguments(t *testing.T) {
 	for _, model := range []string{"", "opaque-model"} {
-		t.Run("model="+model, func(t *testing.T) {
-			startErr := errors.New("stop after argv capture")
-			client := Client{ProcessStarter: func(_ context.Context, cwd, name string, args []string) (process.Process, error) {
-				want := []string{"--print", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--permission-mode", "auto"}
-				if model != "" {
-					want = append(want, "--model", model)
+		for _, effort := range []string{"", "opaque-effort"} {
+			t.Run("model="+model+"/effort="+effort, func(t *testing.T) {
+				startErr := errors.New("stop after argv capture")
+				client := Client{ProcessStarter: func(_ context.Context, cwd, name string, args []string) (process.Process, error) {
+					want := []string{"--print", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--permission-mode", "auto"}
+					if model != "" {
+						want = append(want, "--model", model)
+					}
+					if effort != "" {
+						want = append(want, "--effort", effort)
+					}
+					if cwd != "/repo" || name != "claude" || !slices.Equal(args, want) {
+						t.Fatalf("launch = %q %q %q, want %q", cwd, name, args, want)
+					}
+					return nil, startErr
+				}}
+				_, err := client.RunAgentSession(context.Background(), Request{RepoRoot: "/repo", Model: model, Effort: effort})
+				if !errors.Is(err, startErr) {
+					t.Fatalf("error = %v, want starter error", err)
 				}
-				if cwd != "/repo" || name != "claude" || !slices.Equal(args, want) {
-					t.Fatalf("launch = %q %q %q, want %q", cwd, name, args, want)
-				}
-				return nil, startErr
-			}}
-			_, err := client.RunAgentSession(context.Background(), Request{RepoRoot: "/repo", Model: model})
-			if !errors.Is(err, startErr) {
-				t.Fatalf("error = %v, want starter error", err)
-			}
-		})
+			})
+		}
 	}
 }
 

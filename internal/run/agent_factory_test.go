@@ -128,7 +128,7 @@ func TestSelectedReviewerCancellationAndDeadline(t *testing.T) {
 					return agent.SessionResult{}, ctx.Err()
 				})
 			}
-			_, err := executor.RunAgentSession(ctx, AgentSessionRequest{PlanDir: detail.Dir, RepoRoot: root, Prompt: "review", CaptureOutput: true, Metrics: &AgentSessionMetricsRequest{Role: plan.AgentRoleReview}})
+			_, err := executor.RunAgentSession(ctx, AgentSessionRequest{PlanDir: detail.Dir, RepoRoot: root, Prompt: "review", Effort: "high", CaptureOutput: true, Metrics: &AgentSessionMetricsRequest{Role: plan.AgentRoleReview}})
 			stop()
 			if err == nil || calls != 1 {
 				t.Fatalf("reviewer %s cancellation=%v: calls=%d error=%v", reviewer, cancel, calls, err)
@@ -138,7 +138,7 @@ func TestSelectedReviewerCancellationAndDeadline(t *testing.T) {
 				t.Fatalf("cancellation=%v error=%v", cancel, err)
 			}
 			for _, event := range readAgentMetricEvents(t, detail.Dir) {
-				if event.Metrics.Agent != string(reviewer) || event.Metrics.Role != plan.AgentRoleReview {
+				if event.Metrics.Agent != string(reviewer) || event.Metrics.Role != plan.AgentRoleReview || event.Metrics.ReasoningEffort != "high" {
 					t.Fatalf("wrong reviewer telemetry: %+v", event.Metrics)
 				}
 			}

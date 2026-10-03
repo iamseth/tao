@@ -176,32 +176,42 @@ func TestAdaptersInheritedStderrShutdown(t *testing.T) {
 func TestAdaptersPassOpaqueModel(t *testing.T) {
 	for _, provider := range []string{"pi", "claude"} {
 		for _, model := range []string{"", "provider/opaque-model"} {
-			t.Run(provider+"/model="+model, func(t *testing.T) {
-				startErr := errors.New("stop after argv capture")
-				starter := func(_ context.Context, cwd, name string, args []string) (process.Process, error) {
-					want := []string{"--mode", "rpc", "--no-session"}
+			for _, effort := range []string{"", "opaque-effort"} {
+				t.Run(provider+"/model="+model+"/effort="+effort, func(t *testing.T) {
+					startErr := errors.New("stop after argv capture")
+					starter := func(_ context.Context, cwd, name string, args []string) (process.Process, error) {
+						want := []string{"--mode", "rpc", "--no-session"}
+						if provider == "claude" {
+							want = []string{"--print", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--permission-mode", "auto"}
+						}
+						if model != "" {
+							want = append(want, "--model", model)
+						}
+						if effort != "" {
+							flag := "--thinking"
+							if provider == "claude" {
+								flag = "--effort"
+							}
+							want = append(want, flag, effort)
+						}
+						if cwd != "/repo" || name != provider || !slices.Equal(args, want) {
+							t.Fatalf("launch = %q %q %q, want %q", cwd, name, args, want)
+						}
+						return nil, startErr
+					}
+					var runtime Runtime = piRuntime{starter: starter}
 					if provider == "claude" {
-						want = []string{"--print", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--permission-mode", "auto"}
+						runtime = claudeRuntime{starter: starter}
 					}
-					if model != "" {
-						want = append(want, "--model", model)
+					_, err := runtime.RunSession(context.Background(), Session{RepoRoot: "/repo", Model: model, Effort: effort})
+					if !errors.Is(err, startErr) {
+						t.Fatalf("error = %v, want starter error", err)
 					}
-					if cwd != "/repo" || name != provider || !slices.Equal(args, want) {
-						t.Fatalf("launch = %q %q %q, want %q", cwd, name, args, want)
-					}
-					return nil, startErr
-				}
-				var runtime Runtime = piRuntime{starter: starter}
-				if provider == "claude" {
-					runtime = claudeRuntime{starter: starter}
-				}
-				_, err := runtime.RunSession(context.Background(), Session{RepoRoot: "/repo", Model: model})
-				if !errors.Is(err, startErr) {
-					t.Fatalf("error = %v, want starter error", err)
-				}
-			})
+				})
+			}
 		}
 	}
+
 }
 
 func TestAdaptersOptionalWarningCompatibility(t *testing.T) {

@@ -31,6 +31,9 @@ func TestGeneratePlanPropagatesCallerPolicyAndReturnsValidatedDetail(t *testing.
 		if got.Timeout != timeout || got.PermissionMode != agent.PermissionModeBypassPermissions {
 			t.Fatalf("unexpected runtime policy: timeout=%s permission=%q", got.Timeout, got.PermissionMode)
 		}
+		if got.Effort != "planning-effort" {
+			t.Fatalf("generation effort = %q", got.Effort)
+		}
 		if got.Model != "provider/planning-model" {
 			t.Fatalf("generation model = %q", got.Model)
 		}
@@ -59,7 +62,7 @@ func TestGeneratePlanPropagatesCallerPolicyAndReturnsValidatedDetail(t *testing.
 		writeGeneratedPlan(t, planDir, filepath.Base(planDir), repoMeta.Root, false)
 		return agent.SessionResult{FinalText: "generated"}, nil
 	}}
-	service := NewService(store, stub, ServiceOptions{Log: &progress, Model: "provider/planning-model"})
+	service := NewService(store, stub, ServiceOptions{Log: &progress, Model: "provider/planning-model", Effort: "planning-effort"})
 	result, err := service.GeneratePlan(context.Background(), GeneratePlanRequest{
 		Session: session, Slug: "explicit-slug", Extra: "small slices", PermissionMode: agent.PermissionModeBypassPermissions,
 		Timeout: timeout, RejectOpenQuestions: true,
@@ -300,7 +303,7 @@ func TestGeneratePlanTelemetry(t *testing.T) {
 					if kind == runtimeconfig.AgentPi {
 						serviceKind = runtimeconfig.AgentClaude
 					}
-					service := NewService(store, stub, ServiceOptions{Agent: serviceKind, EventAppender: generationEventAppender(func(dir string, event plan.Event) error {
+					service := NewService(store, stub, ServiceOptions{Agent: serviceKind, Effort: "planning-effort", EventAppender: generationEventAppender(func(dir string, event plan.Event) error {
 						appends++
 						if appendFails {
 							return errors.New("append failed")
@@ -336,7 +339,7 @@ func TestGeneratePlanTelemetry(t *testing.T) {
 							}
 							count++
 							m := event.Metrics
-							if m == nil || m.Role != plan.AgentRolePlanning || m.Availability != measurement.want || m.Agent != string(kind) || event.Agent != string(kind) || event.PlanID != result.Allocation.ID || event.SliceID != "" || event.Timestamp.IsZero() || m.Status != plan.StatusCompleted || m.Result != plan.StatusCompleted {
+							if m == nil || m.ReasoningEffort != "planning-effort" || m.Role != plan.AgentRolePlanning || m.Availability != measurement.want || m.Agent != string(kind) || event.Agent != string(kind) || event.PlanID != result.Allocation.ID || event.SliceID != "" || event.Timestamp.IsZero() || m.Status != plan.StatusCompleted || m.Result != plan.StatusCompleted {
 								t.Fatalf("metrics event = %#v, metrics=%#v", event, m)
 							}
 							if measurement.metrics != nil {

@@ -14,7 +14,7 @@ import (
 	"github.com/iamseth/tao/internal/taodata"
 )
 
-const repoConfigUsage = "repo config [--review-agent pi|claude|unset] [--pull-request true|false|unset] [--max-rework-attempts N|unset] [--rework-escalation-from-attempt N|unset] [--model NAME|unset] [--run-model NAME|unset] [--review-model NAME|unset] [--merge-review-model NAME|unset] [--resolver-model NAME|unset] [--rework-escalation-model NAME|unset] [<repo-id>]"
+const repoConfigUsage = "repo config [--review-agent pi|claude|unset] [--pull-request true|false|unset] [--max-rework-attempts N|unset] [--rework-escalation-from-attempt N|unset] [--model NAME|unset] [--run-model NAME|unset] [--review-model NAME|unset] [--merge-review-model NAME|unset] [--resolver-model NAME|unset] [--rework-escalation-model NAME|unset] [--effort NAME|unset] [--run-effort NAME|unset] [--review-effort NAME|unset] [--merge-review-effort NAME|unset] [--resolver-effort NAME|unset] [<repo-id>]"
 
 var repoCommand = commandMetadata{
 	name:                  "repo",
@@ -27,6 +27,8 @@ var repoCommand = commandMetadata{
 		"  tao repo config --pull-request true\n" +
 		"  tao repo config --model provider/model --review-model provider/reviewer\n" +
 		"  tao repo config --run-model unset\n" +
+		"  tao repo config --effort medium --run-effort high\n" +
+		"  tao repo config --run-effort unset\n" +
 		"  tao repo doctor",
 	subcommands: []commandSubcommand{
 		{name: "list", description: "List registered repositories and health summaries"},
@@ -136,6 +138,9 @@ func registerRepoConfigFlags(fs *flag.FlagSet) {
 	fs.String("rework-escalation-from-attempt", "", "set the first escalation-eligible attempt (integer at least one) or unset")
 	fs.String("review-agent", "", "set the repository review_agent default to pi, claude, or unset")
 	fs.String("pull-request", "", "set the repository pull_request run default to true, false, or unset")
+	for _, name := range []string{"effort", "run-effort", "review-effort", "merge-review-effort", "resolver-effort"} {
+		fs.String(name, "", "set the repository "+strings.ReplaceAll(name, "-", "_")+" default to a reasoning-effort level or unset")
+	}
 	for _, name := range []string{"model", "run-model", "review-model", "merge-review-model", "resolver-model", "rework-escalation-model"} {
 		fs.String(name, "", "set the repository "+strings.ReplaceAll(name, "-", "_")+" default to a model name or unset")
 	}
@@ -213,7 +218,7 @@ func (a App) repoConfig(ctx context.Context, registry taodata.Registry, args []s
 		}
 		changes[strings.ReplaceAll(setting.name, "-", "_")] = value
 	}
-	models := struct{ Base, Run, Review, MergeReview, Resolver, ReworkEscalation string }{}
+	models := runtimeconfig.ModelSelection{}
 	modelFlags := []struct {
 		name  string
 		value *string
@@ -224,6 +229,11 @@ func (a App) repoConfig(ctx context.Context, registry taodata.Registry, args []s
 		{"merge-review-model", &models.MergeReview},
 		{"resolver-model", &models.Resolver},
 		{"rework-escalation-model", &models.ReworkEscalation},
+		{"effort", &models.Effort},
+		{"run-effort", &models.RunEffort},
+		{"review-effort", &models.ReviewEffort},
+		{"merge-review-effort", &models.MergeReviewEffort},
+		{"resolver-effort", &models.ResolverEffort},
 	}
 	for _, model := range modelFlags {
 		if !flagWasProvided(fs, model.name) {
@@ -232,7 +242,11 @@ func (a App) repoConfig(ctx context.Context, registry taodata.Registry, args []s
 		raw := flagStringValue(fs, model.name)
 		var value *string
 		if raw != "unset" {
-			parsed, err := runtimeconfig.ParseModelName(raw)
+			parse := runtimeconfig.ParseModelName
+			if strings.HasSuffix(model.name, "effort") {
+				parse = runtimeconfig.ParseEffortLevel
+			}
+			parsed, err := parse(raw)
 			if err != nil {
 				return fmt.Errorf("--%s: %w (use unset to inherit)", model.name, err)
 			}

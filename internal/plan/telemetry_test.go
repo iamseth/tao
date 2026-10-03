@@ -169,6 +169,29 @@ func TestAgentMetricsMeasurementRoundTrip(t *testing.T) {
 	}
 }
 
+func TestAgentMetricsReasoningEffortRoundTrip(t *testing.T) {
+	for _, effort := range []string{"", "opaque:HIGH"} {
+		encoded, err := json.Marshal(AgentMetrics{ReasoningEffort: effort})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(encoded, &fields); err != nil {
+			t.Fatal(err)
+		}
+		if _, present := fields["reasoning_effort"]; present != (effort != "") {
+			t.Fatalf("unexpected effort presence: %s", encoded)
+		}
+		var decoded AgentMetrics
+		if err := json.Unmarshal(encoded, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if decoded.ReasoningEffort != effort {
+			t.Fatalf("effort = %q", decoded.ReasoningEffort)
+		}
+	}
+}
+
 func TestAgentMetricsGoZeroPresence(t *testing.T) {
 	for _, present := range []bool{false, true} {
 		m := AgentMetrics{InputTokensPresent: present, OutputTokensPresent: present, ReasoningTokensPresent: present, CacheReadTokensPresent: present, CacheWriteTokensPresent: present, TotalTokensPresent: present, CostPresent: present}

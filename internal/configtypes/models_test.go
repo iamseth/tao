@@ -34,6 +34,20 @@ func TestModelSelectionFor(t *testing.T) {
 	}
 }
 
+func TestEffortFor(t *testing.T) {
+	m := ModelSelection{Effort: "base", RunEffort: "run", ReviewEffort: "review", MergeReviewEffort: "merge", ResolverEffort: "resolver", ReworkEscalation: "strong"}
+	for role, want := range map[ModelRole]string{ModelRoleDefault: "base", ModelRoleRun: "run", ModelRoleReview: "review", ModelRoleMergeReview: "merge", ModelRoleResolver: "resolver", "unknown": "base", "rework_escalation": "base"} {
+		if got := m.EffortFor(role); got != want {
+			t.Fatalf("%s: %q != %q", role, got, want)
+		}
+		for _, base := range []string{"", "fallback"} {
+			if got := (ModelSelection{Effort: base, ReworkEscalation: "strong"}).EffortFor(role); got != base {
+				t.Fatalf("%s: fallback %q != %q", role, got, base)
+			}
+		}
+	}
+}
+
 func TestModelSelectionJSON(t *testing.T) {
 	for _, tt := range []struct {
 		models ModelSelection

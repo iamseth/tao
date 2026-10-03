@@ -125,7 +125,7 @@ func (s *Service) GeneratePlan(ctx context.Context, request GeneratePlanRequest)
 	descriptor, _ := agent.Lookup(kind)
 	result, err := s.runtimeFor(kind).RunSession(ctx, agent.Session{
 		RepoRoot: request.Session.Repo.Root, Prompt: prompt, PermissionMode: mode,
-		Timeout: request.Timeout, Model: s.Model, Progress: s.Log, CollectMetrics: true,
+		Timeout: request.Timeout, Model: s.Model, Effort: s.Effort, Progress: s.Log, CollectMetrics: true,
 	})
 	treatment = &Treatment{
 		RuntimeLabel: descriptor.Label, ProviderID: "unknown", ModelID: "unknown",
@@ -157,7 +157,7 @@ func (s *Service) GeneratePlan(ctx context.Context, request GeneratePlanRequest)
 	// append never creates a plan directory and cannot change generation success.
 	metrics := agenttelemetry.Project(agentsession.Result{
 		AgentLabel: descriptor.Label, Metrics: result.Metrics, MetricsAvailability: result.MetricsAvailability(),
-	}, plan.AgentRolePlanning, nil)
+	}, plan.AgentRolePlanning, s.Effort, nil)
 	event := agenttelemetry.Event(allocation.ID, "", time.Now(), metrics)
 	appender := s.EventAppender
 	if appender == nil {

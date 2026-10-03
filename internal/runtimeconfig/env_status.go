@@ -33,6 +33,11 @@ const (
 	EnvMergeReviewModel                 = "TAO_MERGE_REVIEW_MODEL"
 	EnvResolverModel                    = "TAO_RESOLVER_MODEL"
 	EnvReworkEscalationModel            = "TAO_REWORK_ESCALATION_MODEL"
+	EnvEffort                           = "TAO_EFFORT"
+	EnvRunEffort                        = "TAO_RUN_EFFORT"
+	EnvReviewEffort                     = "TAO_REVIEW_EFFORT"
+	EnvMergeReviewEffort                = "TAO_MERGE_REVIEW_EFFORT"
+	EnvResolverEffort                   = "TAO_RESOLVER_EFFORT"
 	EnvUpdate                           = "TAO_UPDATE"
 	EnvSkipPermissions                  = "TAO_DANGEROUSLY_SKIP_PERMISSIONS"
 	EnvMergeVerifyCommand               = "TAO_MERGE_VERIFY_COMMAND"
@@ -308,6 +313,71 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 				return "", err
 			}
 			defaults.ReworkEscalation = parsed
+			return parsed, nil
+		},
+	},
+	{
+		name: EnvEffort, applyWhenEmpty: true,
+		setting:      scopedSetting("models.effort", "string"),
+		defaultValue: func(RunOptionsPatch) string { return "" },
+		apply: func(defaults *EnvDefaults, value string) (string, error) {
+			parsed, err := ParseEffortLevel(value)
+			if err != nil {
+				return "", err
+			}
+			defaults.Effort = parsed
+			return parsed, nil
+		},
+	},
+	{
+		name: EnvRunEffort, applyWhenEmpty: true,
+		setting:      scopedSetting("models.run_effort", "string"),
+		defaultValue: func(RunOptionsPatch) string { return "" },
+		apply: func(defaults *EnvDefaults, value string) (string, error) {
+			parsed, err := ParseEffortLevel(value)
+			if err != nil {
+				return "", err
+			}
+			defaults.RunEffort = parsed
+			return parsed, nil
+		},
+	},
+	{
+		name: EnvReviewEffort, applyWhenEmpty: true,
+		setting:      scopedSetting("models.review_effort", "string"),
+		defaultValue: func(RunOptionsPatch) string { return "" },
+		apply: func(defaults *EnvDefaults, value string) (string, error) {
+			parsed, err := ParseEffortLevel(value)
+			if err != nil {
+				return "", err
+			}
+			defaults.ReviewEffort = parsed
+			return parsed, nil
+		},
+	},
+	{
+		name: EnvMergeReviewEffort, applyWhenEmpty: true,
+		setting:      scopedSetting("models.merge_review_effort", "string"),
+		defaultValue: func(RunOptionsPatch) string { return "" },
+		apply: func(defaults *EnvDefaults, value string) (string, error) {
+			parsed, err := ParseEffortLevel(value)
+			if err != nil {
+				return "", err
+			}
+			defaults.MergeReviewEffort = parsed
+			return parsed, nil
+		},
+	},
+	{
+		name: EnvResolverEffort, applyWhenEmpty: true,
+		setting:      scopedSetting("models.resolver_effort", "string"),
+		defaultValue: func(RunOptionsPatch) string { return "" },
+		apply: func(defaults *EnvDefaults, value string) (string, error) {
+			parsed, err := ParseEffortLevel(value)
+			if err != nil {
+				return "", err
+			}
+			defaults.ResolverEffort = parsed
 			return parsed, nil
 		},
 	},

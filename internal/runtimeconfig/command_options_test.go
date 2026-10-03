@@ -10,6 +10,78 @@ import (
 	"github.com/iamseth/tao/internal/configtypes"
 )
 
+func TestCommandEffortResolution(t *testing.T) {
+	for _, tc := range []struct {
+		key      string
+		role     ModelRole
+		profiles []CommandProfile
+		commands []string
+	}{
+		{EnvEffort, ModelRoleDefault, []CommandProfile{CommandRun, CommandReview, CommandMerge}, []string{"run", "note run", "rework --run", "review --run", "merge"}},
+		{EnvRunEffort, ModelRoleRun, []CommandProfile{CommandRun}, []string{"run", "note run", "rework --run"}},
+		{EnvReviewEffort, ModelRoleReview, []CommandProfile{CommandRun, CommandReview}, []string{"run", "note run", "rework --run", "review --run"}},
+		{EnvMergeReviewEffort, ModelRoleMergeReview, []CommandProfile{CommandMerge}, []string{"merge"}},
+		{EnvResolverEffort, ModelRoleResolver, []CommandProfile{CommandMerge}, []string{"merge"}},
+	} {
+		if got := ApplicableCommands(tc.key); !reflect.DeepEqual(got, tc.commands) {
+			t.Fatalf("%s: %v", tc.key, got)
+		}
+		for _, profile := range []CommandProfile{CommandRun, CommandReview, CommandMerge, CommandPromptRun, CommandPromptOther} {
+			applicable := false
+			for _, p := range tc.profiles {
+				if p == profile {
+					applicable = true
+				}
+			}
+			for _, flag := range []bool{false, true} {
+				input := CommandOptionsInput{Profile: profile, Env: commandSnapshot(map[string]string{tc.key: "environment"})}
+				if flag {
+					input.Flags = (RunOptionsPatch{}).WithEffortForAllRoles("flag")
+				}
+				out, err := ResolveCommandOptions(input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, ok := out.Sources[tc.key]; ok != applicable {
+					t.Fatalf("%s %s: %+v", tc.key, profile, out.Sources)
+				}
+				if applicable {
+					want, source := "environment", "env"
+					if flag {
+						want, source = "flag", "flag"
+					}
+					if out.RunOptions.Models.EffortFor(tc.role) != want || out.Sources[tc.key] != source {
+						t.Fatal(out)
+					}
+				}
+			}
+			if applicable && tc.key != EnvEffort {
+				for _, source := range []string{"default", "global", "repository", "env", "flag"} {
+					var g, r map[string]string
+					e := map[string]string{}
+					if source == "global" {
+						g = map[string]string{"models.effort": `"base"`}
+					}
+					if source == "repository" {
+						r = map[string]string{"models.effort": `"base"`}
+					}
+					if source == "env" {
+						e[EnvEffort] = "base"
+					}
+					input := CommandOptionsInput{Profile: profile, Env: composedSnapshot(e, g, r)}
+					if source == "flag" {
+						input.Flags.Effort = "base"
+					}
+					out, err := ResolveCommandOptions(input)
+					if err != nil || out.Sources[tc.key] != source {
+						t.Fatalf("%s %s: %+v %v", tc.key, source, out, err)
+					}
+				}
+			}
+		}
+	}
+}
+
 func commandSnapshot(values map[string]string) EnvSnapshot {
 	return LoadEnv(func(key string) (string, bool) { v, ok := values[key]; return v, ok })
 }

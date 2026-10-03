@@ -40,6 +40,7 @@ func (r piRuntime) RunSession(ctx context.Context, session Session) (SessionResu
 		RepoRoot:             session.RepoRoot,
 		Prompt:               session.Prompt,
 		Model:                session.Model,
+		Effort:               session.Effort,
 		NoProgressToolLimit:  session.NoProgressToolLimit,
 		VerificationCommands: session.VerificationCommands,
 		SessionInfoMode:      mode,
@@ -77,6 +78,7 @@ func (r claudeRuntime) RunSession(ctx context.Context, session Session) (Session
 		RepoRoot:       session.RepoRoot,
 		Prompt:         session.Prompt,
 		Model:          session.Model,
+		Effort:         session.Effort,
 		PermissionMode: session.PermissionMode,
 	})
 	out := SessionResult{Output: result.Output, FinalText: result.FinalText, PromptAcceptance: result.PromptAcceptance}

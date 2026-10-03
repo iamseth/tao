@@ -135,6 +135,17 @@ func TestScorecardQualityReliabilityAndBounds(t *testing.T) {
 	}
 }
 
+func TestScorecardReasoningEffortCoverage(t *testing.T) {
+	data := planData{sessions: map[string][]plan.AgentMetricEvent{
+		"set":   {{Metrics: plan.AgentMetrics{ReasoningEffort: "high"}}, {Metrics: plan.AgentMetrics{ReasoningEffort: "high"}}},
+		"unset": {{Metrics: plan.AgentMetrics{}}},
+	}}
+	o := observePlan(sourceIdentity{}, plan.PlanSummary{}, data, time.Now())
+	if got := scorecardCoverage([]planObservation{o, o}).ReasoningEffortRecorded; got != 2 {
+		t.Fatalf("recorded sessions = %d, want 2 (one per plan)", got)
+	}
+}
+
 func TestScorecardClassificationAndTreatment(t *testing.T) {
 	now := time.Date(2026, 9, 26, 0, 0, 0, 0, time.UTC)
 	for _, tc := range []struct {

@@ -180,8 +180,8 @@ func TestDiagnosticCollectorsShareSnapshotAcrossRefreshes(t *testing.T) {
 
 func TestModelConsumersComposeSelectedRepository(t *testing.T) {
 	ctx := context.Background()
-	keys := []string{"model", "run_model", "review_model", "merge_review_model", "resolver_model", "rework_escalation_model"}
-	envKeys := []string{runtimeconfig.EnvModel, runtimeconfig.EnvRunModel, runtimeconfig.EnvReviewModel, runtimeconfig.EnvMergeReviewModel, runtimeconfig.EnvResolverModel, runtimeconfig.EnvReworkEscalationModel}
+	keys := []string{"model", "run_model", "review_model", "merge_review_model", "resolver_model", "rework_escalation_model", "effort", "run_effort", "review_effort", "merge_review_effort", "resolver_effort"}
+	envKeys := []string{runtimeconfig.EnvModel, runtimeconfig.EnvRunModel, runtimeconfig.EnvReviewModel, runtimeconfig.EnvMergeReviewModel, runtimeconfig.EnvResolverModel, runtimeconfig.EnvReworkEscalationModel, runtimeconfig.EnvEffort, runtimeconfig.EnvRunEffort, runtimeconfig.EnvReviewEffort, runtimeconfig.EnvMergeReviewEffort, runtimeconfig.EnvResolverEffort}
 	for _, layer := range []string{"global", "repo", "env"} {
 		t.Run(layer, func(t *testing.T) {
 			home := t.TempDir()
@@ -218,7 +218,7 @@ func TestModelConsumersComposeSelectedRepository(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got := []string{models.Base, models.Run, models.Review, models.MergeReview, models.Resolver, models.ReworkEscalation}
+			got := []string{models.Base, models.Run, models.Review, models.MergeReview, models.Resolver, models.ReworkEscalation, models.Effort, models.RunEffort, models.ReviewEffort, models.MergeReviewEffort, models.ResolverEffort}
 			for i, key := range keys {
 				if got[i] != layer+"-"+key {
 					t.Fatalf("%s = %q", key, got[i])

@@ -155,7 +155,7 @@ func (p insightsProjection) renderScorecard(out io.Writer) error {
 	fmt.Fprintf(&b, "- treatment confidence: high=%d; low=%d; ambiguous=%d; missing=%d\n", c.TreatmentHigh, c.TreatmentLow, c.TreatmentAmbiguous, c.TreatmentMissing)
 	fmt.Fprintf(&b, "- planning-metrics coverage: %d/%d plans\n", c.PlanningMetricsPlans, c.Plans)
 	fmt.Fprintf(&b, "- role attribution: %d attributed; %d unattributed sessions\n", c.RoleAttributedSessions, c.UnattributedSessions)
-	b.WriteString("- reasoning effort: not recorded\n")
+	fmt.Fprintf(&b, "- reasoning effort: %d sessions recorded\n", c.ReasoningEffortRecorded)
 	fmt.Fprintf(&b, "- maturity window: %d days; minimum samples: %d\n", c.MaturityWindowDays, c.MinimumSamples)
 	fmt.Fprintf(&b, "- plan scan: %d scanned; %d skipped\n", p.report.PlansScanned, p.report.PlansSkipped)
 	if all {

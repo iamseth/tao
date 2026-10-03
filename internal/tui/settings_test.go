@@ -164,6 +164,11 @@ func TestRenderSettingsDefaultsUsesResponsivePairGrid(t *testing.T) {
 			t.Fatalf("warning percentage missing or duplicated: %s", text)
 		}
 	}
+	for _, name := range []string{"TAO_EFFORT", "TAO_RUN_EFFORT", "TAO_REVIEW_EFFORT", "TAO_MERGE_REVIEW_EFFORT", "TAO_RESOLVER_EFFORT"} {
+		if got, known := settingsDefaultGroupForName(name); !known || got != settingsGroupExecution {
+			t.Errorf("%s group = %v, known = %t", name, got, known)
+		}
+	}
 	if got, _ := settingsDefaultGroupForName("TAO_SESSION_WARN_PERCENT"); got != settingsGroupExecution {
 		t.Fatalf("warning percentage group = %q", got)
 	}

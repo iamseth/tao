@@ -12,6 +12,7 @@ type ServiceOptions struct {
 	EventAppender  plan.EventAppender
 	Agent          runtimeconfig.AgentKind
 	Model          string
+	Effort         string
 	ProcessStarter agent.ProcessStarter
 	Log            io.Writer
 }
@@ -22,12 +23,13 @@ type Service struct {
 	Runtime        agent.Runtime
 	AgentKind      runtimeconfig.AgentKind
 	Model          string
+	Effort         string
 	ProcessStarter agent.ProcessStarter
 	Log            io.Writer
 }
 
 func NewService(repo SliceRepository, runtime agent.Runtime, options ServiceOptions) *Service {
-	return &Service{Repo: repo, Runtime: runtime, AgentKind: options.Agent, Model: options.Model, ProcessStarter: options.ProcessStarter, Log: options.Log, EventAppender: options.EventAppender}
+	return &Service{Repo: repo, Runtime: runtime, AgentKind: options.Agent, Model: options.Model, Effort: options.Effort, ProcessStarter: options.ProcessStarter, Log: options.Log, EventAppender: options.EventAppender}
 }
 
 // runtimeFor prefers an injected Runtime, then the requested kind, then the

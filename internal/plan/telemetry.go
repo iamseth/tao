@@ -207,6 +207,7 @@ type AgentMetrics struct {
 	SessionID               string                   `json:"session_id"`
 	ProviderID              string                   `json:"provider_id,omitempty"`
 	ModelID                 string                   `json:"model_id,omitempty"`
+	ReasoningEffort         string                   `json:"reasoning_effort,omitempty"`
 	Status                  string                   `json:"status,omitempty"`
 	Result                  string                   `json:"result,omitempty"`
 	InputTokens             int64                    `json:"input_tokens,omitempty"`

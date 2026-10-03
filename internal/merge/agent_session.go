@@ -99,6 +99,8 @@ type BatchAgentSessionRequest struct {
 type BatchAgentSessionResult struct {
 	Output   string
 	Provider agentsession.Result
+	// ReasoningEffort is the Tao-owned request value, not provider output.
+	ReasoningEffort string
 }
 
 // BatchAgentSession is the provider-neutral session seam used by merge batches.
@@ -203,7 +205,7 @@ func SingleMergeAgentMetricsEvent(request BatchAgentSessionRequest, result Batch
 	default:
 		return nil
 	}
-	event := agenttelemetry.Event(request.CandidatePlanID, "", timestamp, agenttelemetry.Project(result.Provider, role, sessionErr))
+	event := agenttelemetry.Event(request.CandidatePlanID, "", timestamp, agenttelemetry.Project(result.Provider, role, result.ReasoningEffort, sessionErr))
 	event.Message = message
 	return &event
 }
@@ -921,7 +923,7 @@ func ProbeSingleMergePiReadiness(ctx context.Context, providerExecutable string)
 	defer func() { _ = os.RemoveAll(protectedRoot) }()
 	return probeSingleMergePiRPCReadiness(ctx, singleMergeFilesystemConfinement{
 		protectedPaths: []string{protectedRoot}, integrationRoot: integrationRoot,
-	}, providerExecutable, "")
+	}, providerExecutable, "", "")
 }
 
 // SingleMergeStartupCapabilityForError maps a bounded launch diagnostic to its
@@ -933,7 +935,7 @@ func SingleMergeStartupCapabilityForError(err error) plan.SingleMergeStartupCapa
 	return startupCapability(err)
 }
 
-func probeSingleMergePiRPCReadiness(ctx context.Context, policy singleMergeFilesystemConfinement, providerExecutable, model string) error {
+func probeSingleMergePiRPCReadiness(ctx context.Context, policy singleMergeFilesystemConfinement, providerExecutable, model, effort string) error {
 	// Readiness gets the same fresh projection and generated sandbox as the
 	// attributed process, but never receives integration-worktree write access.
 	probePolicy := policy
@@ -944,7 +946,7 @@ func probeSingleMergePiRPCReadiness(ctx context.Context, policy singleMergeFiles
 	probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	probeCtx = context.WithValue(probeCtx, singleMergeFilesystemConfinementContextKey{}, probePolicy)
-	if err := (piagent.Client{ProcessStarter: starter}).CheckReadiness(probeCtx, policy.integrationRoot, model); err != nil {
+	if err := (piagent.Client{ProcessStarter: starter}).CheckReadiness(probeCtx, policy.integrationRoot, model, effort); err != nil {
 		return boundedSingleMergeProbeError{cause: err}
 	}
 	return nil
@@ -1122,9 +1124,13 @@ func (s BatchAgentSession) confinementPolicy(ctx context.Context, request BatchA
 		} else if s.providerToolName == "pi" {
 			// Resolution requires a subsequent integration review. Check both
 			// effective selectors before consuming the one-shot resolution authority.
-			models := []string{s.models.For(runtimeconfig.ModelRoleResolver), s.models.For(runtimeconfig.ModelRoleMergeReview)}
-			for _, model := range slices.Compact(models) {
-				if err := probeSingleMergePiRPCReadiness(ctx, *policy, providerExecutable, model); err != nil {
+			type selection struct{ model, effort string }
+			selections := []selection{
+				{s.models.For(runtimeconfig.ModelRoleResolver), s.models.EffortFor(runtimeconfig.ModelRoleResolver)},
+				{s.models.For(runtimeconfig.ModelRoleMergeReview), s.models.EffortFor(runtimeconfig.ModelRoleMergeReview)},
+			}
+			for _, selected := range slices.Compact(selections) {
+				if err := probeSingleMergePiRPCReadiness(ctx, *policy, providerExecutable, selected.model, selected.effort); err != nil {
 					return nil, err
 				}
 			}
@@ -1170,6 +1176,7 @@ func (s BatchAgentSession) Resolve(ctx context.Context, request BatchAgentSessio
 	}
 	result, err := run(ctx, agentsession.Request{
 		Model:    s.models.For(role),
+		Effort:   s.models.EffortFor(role),
 		RepoRoot: request.IntegrationRoot, ControlRoot: s.controlRoot, Prompt: request.Prompt, CollectMetrics: true, Log: s.framedLog,
 	})
 	summary := agentsession.Summarize(result, err)
@@ -1182,7 +1189,7 @@ func (s BatchAgentSession) Resolve(ctx context.Context, request BatchAgentSessio
 	} else if summary.ReportWarning && s.log != nil {
 		s.writeLogDiagnostic("tao telemetry warning: " + summary.WarningMessage)
 	}
-	sessionResult := BatchAgentSessionResult{Output: agentsession.ResultText(result), Provider: result}
+	sessionResult := BatchAgentSessionResult{Output: agentsession.ResultText(result), Provider: result, ReasoningEffort: s.models.EffortFor(role)}
 	s.recordTelemetry(request, result, err)
 	if s.observe != nil {
 		s.observe(request, sessionResult, err)

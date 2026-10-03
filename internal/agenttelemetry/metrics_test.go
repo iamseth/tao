@@ -25,9 +25,9 @@ func TestProjectPreservesMeasurements(t *testing.T) {
 				CacheReadTokensPresent: true, CacheWriteTokensPresent: true, TotalTokensPresent: true, CostPresent: true,
 				TotalMessages: 6, UserMessages: 1, AssistantMessages: 5, ErroredMessages: 2, ToolCalls: 7,
 			}
-			got := Project(agentsession.Result{AgentLabel: label, Metrics: m, MetricsAvailability: agentmetrics.Reported}, plan.AgentRoleRework, nil)
+			got := Project(agentsession.Result{AgentLabel: label, Metrics: m, MetricsAvailability: agentmetrics.Reported}, plan.AgentRoleRework, "opaque:HIGH", nil)
 			want := plan.AgentMetrics{
-				Role: plan.AgentRoleRework, Availability: plan.AgentMetricsReported, Agent: label,
+				Role: plan.AgentRoleRework, Availability: plan.AgentMetricsReported, Agent: label, ReasoningEffort: "opaque:HIGH",
 				Status: plan.StatusCompleted, Result: plan.StatusCompleted,
 				SessionID: "session", ProviderID: "provider", ModelID: "model",
 				InputTokens: 10, OutputTokens: 5, ReasoningTokens: 2, CacheReadTokens: 3,
@@ -62,7 +62,10 @@ func TestProjectAvailabilityPresenceAndSafeFailure(t *testing.T) {
 				got := Project(agentsession.Result{
 					AgentLabel: "pi", Metrics: tt.metrics, MetricsAvailability: tt.availability,
 					Output: "private-output", MetricsWarning: "private-warning", MetricsWarningMessage: "private-warning", MetricsMessage: "private-message",
-				}, "future-role", runErr)
+				}, "future-role", "high", runErr)
+				if got.ReasoningEffort != "high" {
+					t.Fatalf("effort lost: %+v", got)
+				}
 				if got.Role != plan.AgentRoleUnknown || got.Availability != tt.want || (got.Status == "failed") != (runErr != nil) || got.Result != got.Status {
 					t.Fatalf("projection = %+v", got)
 				}

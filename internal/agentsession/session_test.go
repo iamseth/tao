@@ -68,14 +68,20 @@ func TestRunnerModelSelection(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			calls := 0
-			runner := New(Config{Model: tt.configured, Runtime: runtimeFunc(func(_ context.Context, session agent.Session) (agent.SessionResult, error) {
+			effort := func(value string) string {
+				if value == "" {
+					return ""
+				}
+				return "effort-" + value
+			}
+			runner := New(Config{Model: tt.configured, Effort: effort(tt.configured), Runtime: runtimeFunc(func(_ context.Context, session agent.Session) (agent.SessionResult, error) {
 				calls++
-				if session.Model != tt.want {
-					t.Fatalf("model = %q, want %q", session.Model, tt.want)
+				if session.Model != tt.want || session.Effort != effort(tt.want) {
+					t.Fatalf("model/effort = %q/%q, want %q", session.Model, session.Effort, tt.want)
 				}
 				return agent.SessionResult{}, nil
 			})})
-			if _, err := runner.Run(context.Background(), Request{Model: tt.override}); err != nil {
+			if _, err := runner.Run(context.Background(), Request{Model: tt.override, Effort: effort(tt.override)}); err != nil {
 				t.Fatal(err)
 			}
 			if calls != 1 {
@@ -89,8 +95,11 @@ func TestTextGeneratorUsesConfiguredModel(t *testing.T) {
 	for _, model := range []string{"", "base"} {
 		t.Run("model="+model, func(t *testing.T) {
 			calls := 0
-			generator := NewTextGenerator(Config{Model: model, Runtime: runtimeFunc(func(_ context.Context, session agent.Session) (agent.SessionResult, error) {
+			generator := NewTextGenerator(Config{Model: model, Effort: "text-effort", Runtime: runtimeFunc(func(_ context.Context, session agent.Session) (agent.SessionResult, error) {
 				calls++
+				if session.Effort != "text-effort" {
+					t.Fatalf("effort = %q", session.Effort)
+				}
 				if session.Model != model {
 					t.Fatalf("model = %q, want %q", session.Model, model)
 				}

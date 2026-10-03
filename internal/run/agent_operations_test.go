@@ -29,11 +29,12 @@ func TestAgentOperationModels(t *testing.T) {
 		run, review, base string
 	}{
 		{name: "unset"},
-		{name: "roles", models: runtimeconfig.ModelSelection{Base: "b", Run: "r", Review: "v"}, run: "r", review: "v", base: "b"},
-		{name: "base fallback", models: runtimeconfig.ModelSelection{Base: "b"}, run: "b", review: "b", base: "b"},
+		{name: "effort only", models: runtimeconfig.ModelSelection{Effort: "base-effort", RunEffort: "run-effort", ReviewEffort: "review-effort"}},
+		{name: "roles", models: runtimeconfig.ModelSelection{Base: "b", Run: "r", Review: "v", Effort: "base-effort", RunEffort: "run-effort", ReviewEffort: "review-effort"}, run: "r", review: "v", base: "b"},
+		{name: "base fallback", models: runtimeconfig.ModelSelection{Base: "b", Effort: "base-effort"}, run: "b", review: "b", base: "b"},
 	} {
 		for _, kind := range []AgentKind{AgentPi, AgentClaude} {
-			for _, operation := range []string{"execution", "rework", "review and correction", "pr", "body"} {
+			for _, operation := range []string{"execution", "rework", "escalation", "review and correction", "pr", "body"} {
 				t.Run(selection.name+"/"+string(kind)+"/"+operation, func(t *testing.T) {
 					repoRoot := t.TempDir()
 					detail := runPathSessionDetail(t, repoRoot, plan.StatusInReview, nil, []string{"001-a"}, plan.StatusCompleted)
@@ -42,18 +43,30 @@ func TestAgentOperationModels(t *testing.T) {
 					persistReviewState(t, detail.Dir, detail)
 					repository := plan.NewFileRepository("")
 					want := selection.base
+					role := runtimeconfig.ModelRoleDefault
 					switch operation {
-					case "execution", "rework":
+					case "execution", "rework", "escalation":
 						want = selection.run
+						role = runtimeconfig.ModelRoleRun
 					case "review and correction":
 						want = selection.review
+						role = runtimeconfig.ModelRoleReview
 					}
+					override := ""
+					if operation == "escalation" {
+						override = "escalated-model"
+						want = override
+					}
+					wantEffort := selection.models.EffortFor(role)
 					calls := 0
 					descriptor, _ := agent.Lookup(kind)
 					providerFactory := descriptor.NewRuntime
 					descriptor.NewRuntime = func(agent.RuntimeDeps) agent.Runtime {
 						return agentRuntimeFunc(func(ctx context.Context, session agent.Session) (agent.SessionResult, error) {
 							calls++
+							if session.Effort != wantEffort {
+								t.Fatalf("session effort = %q, want %q", session.Effort, wantEffort)
+							}
 							if session.Model != want {
 								t.Fatalf("session %d model = %q, want %q", calls, session.Model, want)
 							}
@@ -66,6 +79,21 @@ func TestAgentOperationModels(t *testing.T) {
 							}
 							starter := phaseTelemetryStarter(t, kind, output, plan.AgentMetricsUnavailable)
 							return providerFactory(agent.RuntimeDeps{ProcessStarter: func(ctx context.Context, cwd, name string, args []string) (Process, error) {
+								effortFlag := "--thinking"
+								if kind == AgentClaude {
+									effortFlag = "--effort"
+								}
+								effortIndex := slices.Index(args, effortFlag)
+								if wantEffort == "" {
+									if effortIndex != -1 {
+										t.Fatalf("unset effort changed args: %v", args)
+									}
+								} else {
+									if effortIndex != len(args)-2 || args[effortIndex+1] != wantEffort {
+										t.Fatalf("effort args = %v, want %q", args, wantEffort)
+									}
+									args = args[:effortIndex]
+								}
 								index := slices.Index(args, "--model")
 								if want == "" {
 									if index != -1 {
@@ -89,12 +117,12 @@ func TestAgentOperationModels(t *testing.T) {
 					var err error
 					wantCalls := 1
 					switch operation {
-					case "execution", "rework":
+					case "execution", "rework", "escalation":
 						sliceID := "001-a"
-						if operation == "rework" {
+						if operation == "rework" || operation == "escalation" {
 							sliceID = "r101-fix"
 						}
-						err = executor.RunSlice(context.Background(), SliceRun{PlanDir: detail.Dir, RepoRoot: repoRoot, SliceID: sliceID})
+						err = executor.RunSlice(context.Background(), SliceRun{Model: override, PlanDir: detail.Dir, RepoRoot: repoRoot, SliceID: sliceID})
 					case "review and correction":
 						wantCalls = 2
 						var review plan.PlanReview
@@ -116,6 +144,32 @@ func TestAgentOperationModels(t *testing.T) {
 	}
 }
 
+func TestRunSliceEscalationPreservesRoleEffort(t *testing.T) {
+	for _, override := range []string{"", "escalated-model"} {
+		t.Run("override="+override, func(t *testing.T) {
+			models := runtimeconfig.ModelSelection{Run: "run-model", Effort: "base-effort", RunEffort: "run-effort"}
+			calls := 0
+			executor := agentSessionExecutorFunc(func(_ context.Context, request AgentSessionRequest) (AgentSessionResult, error) {
+				calls++
+				wantModel := models.Run
+				if override != "" {
+					wantModel = override
+				}
+				if request.Model != wantModel || request.Effort != "run-effort" {
+					t.Fatalf("model/effort = %q/%q, want %q/run-effort", request.Model, request.Effort, wantModel)
+				}
+				return AgentSessionResult{}, nil
+			})
+			if err := runSliceWithAgentSession(context.Background(), executor, agentOperationOptions{Models: models}, SliceRun{PlanDir: t.TempDir(), SliceID: "r101-fix", Model: override}); err != nil {
+				t.Fatal(err)
+			}
+			if calls != 1 {
+				t.Fatalf("calls = %d", calls)
+			}
+		})
+	}
+}
+
 func TestHistoricalProposalCorrectionModel(t *testing.T) {
 	for _, model := range []string{"", "v"} {
 		t.Run("model="+model, func(t *testing.T) {
@@ -132,14 +186,17 @@ func TestHistoricalProposalCorrectionModel(t *testing.T) {
 				AgentSessionExecutor
 			}{AgentSessionExecutor: agentSessionExecutorFunc(func(_ context.Context, request AgentSessionRequest) (AgentSessionResult, error) {
 				calls++
+				if request.Effort != "review-effort" {
+					t.Fatalf("correction effort = %q", request.Effort)
+				}
 				if request.Model != model {
 					t.Fatalf("correction model = %q, want %q", request.Model, model)
 				}
 				return AgentSessionResult{Output: "```tao-review-proposal-json\n{\"commit_message\":{\"subject\":\"fix(pr): recover exact finalization\",\"body\":\"What:\\nRecover the exact approved head.\\n\\nWhy:\\nFinish pull request handoff safely.\"}}\n```"}, nil
 			})}
-			models := runtimeconfig.ModelSelection{}
+			models := runtimeconfig.ModelSelection{ReviewEffort: "review-effort"}
 			if model != "" {
-				models = runtimeconfig.ModelSelection{Base: "b", Run: "r", Review: model}
+				models = runtimeconfig.ModelSelection{Base: "b", Run: "r", Review: model, Effort: "base-effort", ReviewEffort: "review-effort"}
 			}
 			finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Models: models, Agent: AgentPi, ReviewAgent: AgentClaude}}, RunDependencies{
 				CommandRunner: defaultCommandRunner, PlanRecordFactory: fileReviewRecordFactory(repository), ReviewCreator: reviewer,

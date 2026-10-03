@@ -176,7 +176,7 @@ func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSe
 	result, runErr := r.session.Run(ctx, agentsession.Request{
 		BindLifetime: bindLifetime,
 		Warning:      warning,
-		RepoRoot:     request.RepoRoot, ControlRoot: controlRoot, Prompt: request.Prompt, Model: request.Model,
+		RepoRoot:     request.RepoRoot, ControlRoot: controlRoot, Prompt: request.Prompt, Model: request.Model, Effort: request.Effort,
 		CollectMetrics: metricsRequested, NoProgressToolLimit: request.NoProgressToolLimit,
 		VerificationCommands: request.VerificationCommands, Log: log,
 	})
@@ -210,7 +210,7 @@ func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSe
 
 	var capErr error
 	if metricsRequested && result.Invoked && stateErr == nil && r.eventAppender != nil {
-		metrics := agenttelemetry.Project(result, request.Metrics.Role, runErr)
+		metrics := agenttelemetry.Project(result, request.Metrics.Role, request.Effort, runErr)
 		publishAgentMetrics(ctx, metrics)
 		if appendErr := r.eventAppender.AppendEvent(request.PlanDir, agenttelemetry.Event(state.Plan.ID, request.Metrics.SliceID, now(r).UTC(), metrics)); appendErr != nil {
 			writeAgentLogDiagnostic(log, fmt.Sprintf("tao telemetry warning: append metrics event: %v", appendErr))
@@ -306,7 +306,7 @@ func runSliceWithAgentSession(ctx context.Context, executor AgentSessionExecutor
 	if model == "" {
 		model = options.Models.For(runtimeconfig.ModelRoleRun)
 	}
-	_, err = executor.RunAgentSession(ctx, AgentSessionRequest{Model: model, PlanDir: run.PlanDir, RepoRoot: run.RepoRoot, LogAction: "running " + run.SliceID, Prompt: prompt, Metrics: &AgentSessionMetricsRequest{SliceID: run.SliceID, Role: role, EnforceSliceCaps: true}, NoProgressToolLimit: options.NoProgressToolLimit, VerificationCommands: run.VerificationCommands})
+	_, err = executor.RunAgentSession(ctx, AgentSessionRequest{Model: model, Effort: options.Models.EffortFor(runtimeconfig.ModelRoleRun), PlanDir: run.PlanDir, RepoRoot: run.RepoRoot, LogAction: "running " + run.SliceID, Prompt: prompt, Metrics: &AgentSessionMetricsRequest{SliceID: run.SliceID, Role: role, EnforceSliceCaps: true}, NoProgressToolLimit: options.NoProgressToolLimit, VerificationCommands: run.VerificationCommands})
 	return err
 }
 
@@ -315,7 +315,7 @@ func createPullRequestWithAgentSession(ctx context.Context, executor AgentSessio
 	if err != nil {
 		return plan.PullRequest{}, err
 	}
-	result, err := executor.RunAgentSession(ctx, AgentSessionRequest{Model: options.Models.For(runtimeconfig.ModelRoleDefault), PlanDir: run.PlanDir, RepoRoot: run.RepoRoot, LogAction: "creating pull request for plan " + run.PlanID, Prompt: prompt, CaptureOutput: true, Metrics: &AgentSessionMetricsRequest{Role: plan.AgentRolePullRequest}})
+	result, err := executor.RunAgentSession(ctx, AgentSessionRequest{Model: options.Models.For(runtimeconfig.ModelRoleDefault), Effort: options.Models.EffortFor(runtimeconfig.ModelRoleDefault), PlanDir: run.PlanDir, RepoRoot: run.RepoRoot, LogAction: "creating pull request for plan " + run.PlanID, Prompt: prompt, CaptureOutput: true, Metrics: &AgentSessionMetricsRequest{Role: plan.AgentRolePullRequest}})
 	if err != nil {
 		return plan.PullRequest{}, err
 	}
@@ -332,7 +332,7 @@ func generatePullRequestBodyWithAgentSession(ctx context.Context, executor Agent
 		bodyCtx, cancel = context.WithTimeout(ctx, pullRequestBodyAgentTimeout)
 	}
 	defer cancel()
-	result, err := executor.RunAgentSession(bodyCtx, AgentSessionRequest{Model: options.Models.For(runtimeconfig.ModelRoleDefault), PlanDir: run.PlanDir, RepoRoot: run.RepoRoot, LogAction: "drafting pull request body for plan " + run.PlanID, Prompt: prompt, CaptureOutput: true, Metrics: &AgentSessionMetricsRequest{Role: plan.AgentRolePullRequest}})
+	result, err := executor.RunAgentSession(bodyCtx, AgentSessionRequest{Model: options.Models.For(runtimeconfig.ModelRoleDefault), Effort: options.Models.EffortFor(runtimeconfig.ModelRoleDefault), PlanDir: run.PlanDir, RepoRoot: run.RepoRoot, LogAction: "drafting pull request body for plan " + run.PlanID, Prompt: prompt, CaptureOutput: true, Metrics: &AgentSessionMetricsRequest{Role: plan.AgentRolePullRequest}})
 	if err != nil {
 		return "", err
 	}

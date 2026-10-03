@@ -95,16 +95,19 @@ func TestRenderInsightsScorecard(t *testing.T) {
 	if err := RenderInsights(&out, insights.Report{}, options); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"# Tao Planner Scorecard", "No plan history.", "## Coverage", "plans: 0", "matured: 0; censored: 0", "reasoning effort: not recorded", "## Inversions\nnone detected"} {
+	for _, want := range []string{"# Tao Planner Scorecard", "No plan history.", "## Coverage", "plans: 0", "matured: 0; censored: 0", "reasoning effort: 0 sessions recorded", "## Inversions\nnone detected"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing %q in:\n%s", want, out.String())
 		}
 	}
 	label := strings.Repeat("界", 200)
-	report := insights.Report{Scorecard: insights.Scorecard{Cohorts: []insights.TreatmentCohort{{Key: label}}}}
+	report := insights.Report{Scorecard: insights.Scorecard{Coverage: insights.ScorecardCoverage{ReasoningEffortRecorded: 3}, Cohorts: []insights.TreatmentCohort{{Key: label}}}}
 	out.Reset()
 	if err := RenderInsights(&out, report, options); err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "reasoning effort: 3 sessions recorded") {
+		t.Fatalf("missing effort count: %s", out.String())
 	}
 	if !utf8.Valid(out.Bytes()) || strings.Contains(out.String(), label) || !strings.Contains(out.String(), "### Cohort: "+limitDigestText(label)+"\n") {
 		t.Fatalf("cohort label was not bounded on a rune boundary:\n%s", out.String())

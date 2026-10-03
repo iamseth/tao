@@ -390,7 +390,7 @@ func TestMergeCommandRefusesAbandonedPlanBeforeServiceConstruction(t *testing.T)
 	detail.Events = []plan.Event{{Type: plan.EventTypePlanAbandoned, Reason: "superseded"}}
 	constructed := false
 	original := newMergeServiceRunner
-	newMergeServiceRunner = func(context.Context, App, *plan.PlanDetail, string) (mergeServiceRunner, error) {
+	newMergeServiceRunner = func(context.Context, App, *plan.PlanDetail, string, ...string) (mergeServiceRunner, error) {
 		constructed = true
 		return &fakeCLIMergeService{}, nil
 	}
@@ -691,7 +691,7 @@ func TestMergeBatchRestartDoesNotConstructSinglePlanService(t *testing.T) {
 	stubMergeBatchRunner(t, batch)
 	constructed := false
 	original := newMergeServiceRunner
-	newMergeServiceRunner = func(context.Context, App, *plan.PlanDetail, string) (mergeServiceRunner, error) {
+	newMergeServiceRunner = func(context.Context, App, *plan.PlanDetail, string, ...string) (mergeServiceRunner, error) {
 		constructed = true
 		return &fakeCLIMergeService{}, nil
 	}
@@ -1250,7 +1250,7 @@ func TestMergeCommandHelpDocumentsVerifyCommand(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"merge", "--help"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"--all", "--dry-run", "an interrupted dry run removes its disposable integration worktree before exiting", "preview batch candidates and order without durable changes or verification", "verifies the staged aggregate once", "attributes an aggregate verification failure to one candidate", "--restart", "--auto-eject", "eject-and-reland", "--verify-command", "override the post-merge build/test verification command", "one automatic resolver attempt", "independent fresh-session review", "--force cannot bypass these safety and review gates", "--no-verify skips only command verification", "--no-squash rebase conflicts remain manual", "bounded agent resolution", "aggregate approval before one fast-forward", "For one plan, --restart safely discards only an eligible stale pre-landing merge intent", "--all --restart discards only pre-landing batch recovery", "Batch mode rejects --force, --record-only, --no-squash, and --no-verify", "single-plan only", "Usage:\n  tao merge (m) [--force] [--record-only] [--no-squash] [--no-verify] [--verify-command CMD]", "merge (m) --restart <plan-id-or-slug-or-path>", "merge (m) --all [--dry-run] [--restart] [--auto-eject] [--verify-command CMD]"} {
+	for _, want := range []string{"--all", "--dry-run", "an interrupted dry run removes its disposable integration worktree before exiting", "preview batch candidates and order without durable changes or verification", "verifies the staged aggregate once", "attributes an aggregate verification failure to one candidate", "--restart", "--auto-eject", "eject-and-reland", "--verify-command", "override the post-merge build/test verification command", "one automatic resolver attempt", "independent fresh-session review", "--force cannot bypass these safety and review gates", "--no-verify skips only command verification", "--no-squash rebase conflicts remain manual", "bounded agent resolution", "aggregate approval before one fast-forward", "For one plan, --restart safely discards only an eligible stale pre-landing merge intent", "--all --restart discards only pre-landing batch recovery", "Batch mode rejects --force, --record-only, --no-squash, and --no-verify", "single-plan only", "Usage:\n  tao merge (m) [--model NAME] [--effort NAME] [--force] [--record-only] [--no-squash] [--no-verify] [--verify-command CMD]", "merge (m) --restart <plan-id-or-slug-or-path>", "merge (m) --all [--model NAME] [--effort NAME] [--dry-run] [--restart] [--auto-eject] [--verify-command CMD]"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("expected help to contain %q, got %q", want, out.String())
 		}
@@ -1275,7 +1275,7 @@ func (f *fakeCLIMergeBatchRunner) Run(ctx context.Context, options mergeBatchOpt
 func stubMergeBatchRunner(t *testing.T, runner mergeBatchRunner) {
 	t.Helper()
 	original := newMergeBatchRunner
-	newMergeBatchRunner = func(context.Context, App, mergepkg.BatchPlanRepository, string) (mergeBatchRunner, error) {
+	newMergeBatchRunner = func(context.Context, App, mergepkg.BatchPlanRepository, string, ...string) (mergeBatchRunner, error) {
 		return runner, nil
 	}
 	t.Cleanup(func() { newMergeBatchRunner = original })
@@ -1314,7 +1314,7 @@ func (f *fakeCLIMergeService) RestartSingleMerge(_ context.Context, planDir stri
 func stubMergeServiceRunner(t *testing.T, service mergeServiceRunner) {
 	t.Helper()
 	original := newMergeServiceRunner
-	newMergeServiceRunner = func(_ context.Context, a App, detail *plan.PlanDetail, _ string) (mergeServiceRunner, error) {
+	newMergeServiceRunner = func(_ context.Context, a App, detail *plan.PlanDetail, _ string, _ ...string) (mergeServiceRunner, error) {
 		return service, nil
 	}
 	t.Cleanup(func() { newMergeServiceRunner = original })

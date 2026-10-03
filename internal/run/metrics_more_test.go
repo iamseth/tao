@@ -24,7 +24,10 @@ func TestCollectAgentMetricsMapsNeutralMetricsAndMarksFailures(t *testing.T) {
 		Cost:             1.25,
 		ErroredMessages:  1,
 	}
-	got := agenttelemetry.Project(agentsession.Result{AgentLabel: "pi", Metrics: &result}, plan.AgentRoleExecution, errors.New("boom"))
+	got := agenttelemetry.Project(agentsession.Result{AgentLabel: "pi", Metrics: &result}, plan.AgentRoleExecution, "opaque:HIGH", errors.New("boom"))
+	if got.ReasoningEffort != "opaque:HIGH" {
+		t.Fatalf("effort lost: %+v", got)
+	}
 	if got.SessionID != "stats-session" || got.ProviderID != "stats-provider" || got.ModelID != "stats-model" {
 		t.Fatalf("unexpected identity mapping: %#v", got)
 	}

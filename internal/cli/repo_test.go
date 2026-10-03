@@ -185,8 +185,8 @@ func TestRepoConfigModelDefaults(t *testing.T) {
 	}
 	var out bytes.Buffer
 	app := App{Out: &out, Err: &out}
-	flags := []string{"model", "run-model", "review-model", "merge-review-model", "resolver-model", "rework-escalation-model"}
-	keys := []string{"model", "run_model", "review_model", "merge_review_model", "resolver_model", "rework_escalation_model"}
+	flags := []string{"model", "run-model", "review-model", "merge-review-model", "resolver-model", "rework-escalation-model", "effort", "run-effort", "review-effort", "merge-review-effort", "resolver-effort"}
+	keys := []string{"model", "run_model", "review_model", "merge_review_model", "resolver_model", "rework_escalation_model", "effort", "run_effort", "review_effort", "merge_review_effort", "resolver_effort"}
 	if err := app.Run(context.Background(), []string{"repo", "config"}); err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestRepoConfigModelDefaults(t *testing.T) {
 	for _, flag := range flags {
 		for _, invalid := range []string{"", "bad model", "   ", "tab\tmodel", "line\nmodel"} {
 			err := app.Run(context.Background(), []string{"repo", "config", "--pull-request=false", "--" + flag + "=" + invalid})
-			if err == nil || !strings.Contains(err.Error(), "--"+flag) {
+			if err == nil || !strings.Contains(err.Error(), "--"+flag) || !strings.Contains(err.Error(), "use unset") {
 				t.Errorf("%s=%q error = %v, want flag-specific rejection", flag, invalid, err)
 			}
 		}

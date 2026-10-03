@@ -49,6 +49,7 @@ func (a App) runEnvDefaults() (envDefaults, error) {
 		runtimeconfig.EnvAgent, runtimeconfig.EnvReviewAgent, runtimeconfig.EnvPullRequest, runtimeconfig.EnvReview,
 		runtimeconfig.EnvSessionTimeout, runtimeconfig.EnvSkipPermissions,
 		runtimeconfig.EnvModel, runtimeconfig.EnvRunModel, runtimeconfig.EnvReviewModel,
+		runtimeconfig.EnvEffort, runtimeconfig.EnvRunEffort, runtimeconfig.EnvReviewEffort,
 		runtimeconfig.EnvReworkEscalationModel, runtimeconfig.EnvReworkEscalationFromAttempt,
 	)
 }

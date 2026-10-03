@@ -10,11 +10,11 @@ import (
 )
 
 // Project preserves measurement presence and the original session outcome.
-// Role is supplied by the trusted operation boundary, never provider prose.
-func Project(result agentsession.Result, role plan.AgentRole, runErr error) plan.AgentMetrics {
+// Role and effort are supplied by the trusted operation boundary, never provider prose.
+func Project(result agentsession.Result, role plan.AgentRole, effort string, runErr error) plan.AgentMetrics {
 	metrics := plan.AgentMetrics{
 		Role: role.Normalized(), Availability: plan.AgentMetricsAvailability(result.MetricsAvailability).Normalized(),
-		Agent: result.AgentLabel, Status: plan.StatusCompleted, Result: plan.StatusCompleted,
+		Agent: result.AgentLabel, Status: plan.StatusCompleted, Result: plan.StatusCompleted, ReasoningEffort: effort,
 	}
 	if m := result.Metrics; m != nil {
 		metrics.SessionID = m.SessionID

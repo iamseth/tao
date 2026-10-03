@@ -351,6 +351,7 @@ func TestEnvSnapshotCompleteTableWrites(t *testing.T) {
 	values := map[string]string{
 		EnvCommitPolicy: "none", EnvExecutionMode: "current", EnvAgent: "claude", EnvReviewAgent: "pi", EnvSessionTimeout: "3m0s", EnvSessionWarnPercent: "65",
 		EnvModel: "base", EnvRunModel: "run", EnvReviewModel: "review", EnvMergeReviewModel: "merge", EnvResolverModel: "resolve", EnvReworkEscalationModel: "strong",
+		EnvEffort: "low", EnvRunEffort: "high", EnvReviewEffort: "medium", EnvMergeReviewEffort: "custom", EnvResolverEffort: "max",
 		EnvUpdate: "off", EnvPullRequest: "true", EnvReview: "false", EnvAutoRework: "false", EnvMaxReworkAttempts: "7", EnvReworkEscalationFromAttempt: "6", EnvSkipPermissions: "true",
 		EnvMergeReviewMaxAttempts: "8", EnvMergeVerifyCommand: "go test ./...", EnvAggregateReviewConvergenceWindow: "5", EnvApprovedBy: "bot", EnvRunHeader: "false", EnvTheme: "gruvbox",
 		EnvPlannerRouting: "shadow", EnvPlannerRoutingArms: "pi=0.5,claude=0.5", EnvPlannerRoutingFloor: "0.2",
@@ -384,7 +385,7 @@ func TestEnvSnapshotCompleteTableWrites(t *testing.T) {
 	tokens, cost := int64(1000), 9.5
 	selected, _ := theme.Lookup("gruvbox")
 	want := EnvDefaults{
-		RunOptionsPatch:    RunOptionsPatch{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentClaude, ReviewAgent: AgentPi, PullRequest: &yes, ReviewEnabled: &no, SessionTimeout: &timeout, ModelSelection: ModelSelection{Base: "base", Run: "run", Review: "review", MergeReview: "merge", Resolver: "resolve", ReworkEscalation: "strong"}},
+		RunOptionsPatch:    RunOptionsPatch{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentClaude, ReviewAgent: AgentPi, PullRequest: &yes, ReviewEnabled: &no, SessionTimeout: &timeout, ModelSelection: ModelSelection{Base: "base", Run: "run", Review: "review", MergeReview: "merge", Resolver: "resolve", ReworkEscalation: "strong", Effort: "low", RunEffort: "high", ReviewEffort: "medium", MergeReviewEffort: "custom", ResolverEffort: "max"}},
 		SessionWarnPercent: 65,
 		AutoRework:         &yes, MaxReworkAttempts: &attempts, ReworkEscalationFromAttempt: &escalation, UpdateMode: selfupdate.ModeOff, Theme: selected, SkipPermissions: true,
 		MergeReviewMaxAttempts: 8, MergeVerifyCommand: "go test ./...", MergeVerifyCommandSet: true, AggregateReviewConvergenceWindow: 5, ApprovedBy: "bot", RunHeader: false,

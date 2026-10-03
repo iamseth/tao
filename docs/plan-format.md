@@ -592,7 +592,7 @@ A `finalization_failed` event includes `finalization_failure` with the same boun
 
 A `verification_command_invalid` event should include the original `command`, a concise `reason`, and, when a mechanically equivalent command is used successfully, `corrected_command`.
 
-An `agent_metrics` event includes the usual event fields plus a top-level `agent` and a `metrics` object. The metrics object records the agent name, session ID, provider and model IDs when available, token counts, cost, assistant message count, tool call count, and run result/status so failed attempts can still be represented in telemetry totals. Metrics are generic across built-in runtimes; consumers should not assume runtime-specific fields.
+An `agent_metrics` event includes the usual event fields plus a top-level `agent` and a `metrics` object. The metrics object records the agent name, session ID, provider and model IDs when available, token counts, cost, assistant message count, tool call count, and run result/status so failed attempts can still be represented in telemetry totals. The metrics object also records the reasoning-effort level Tao requested when one was set (`reasoning_effort`); it is omitted when unset, even if the runtime infers effort from a model suffix or its own defaults. Metrics are generic across built-in runtimes; consumers should not assume runtime-specific fields.
 
 The additive, optional metrics metadata is:
 

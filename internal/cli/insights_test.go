@@ -624,7 +624,7 @@ func TestInsightsAllReposCatalogCoverageSignalsAndOrdering(t *testing.T) {
 		"# Tao Planner Scorecard (all repositories)",
 		"repositories: 3 registered; 1 scanned; 1 empty; 1 unreadable; 0 skipped",
 		"alpha [repo-a]: scanned", "middle [repo-m]: empty", "zeta [repo-z]: unreadable",
-		"planning-metrics coverage: 0/1 plans", "reasoning effort: not recorded",
+		"planning-metrics coverage: 0/1 plans", "reasoning effort: 0 sessions recorded",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("all-repository scorecard missing %q:\n%s", want, out.String())

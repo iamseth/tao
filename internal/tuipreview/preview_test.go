@@ -383,7 +383,7 @@ func TestSettingsFixtureCoversEveryRuntimeStatus(t *testing.T) {
 func TestSettingsPreviewExercisesFinalizedGroupsAcrossWidths(t *testing.T) {
 	scenario, _ := Lookup(ScenarioMixed)
 	for _, width := range []int{120, 80, 70} {
-		frame, err := Render(scenario, RenderOptions{View: ViewSettings, Width: width, Height: 40, Plain: true})
+		frame, err := Render(scenario, RenderOptions{View: ViewSettings, Width: width, Height: 45, Plain: true})
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -21,6 +21,7 @@ type Request struct {
 	RepoRoot       string
 	Prompt         string
 	Model          string
+	Effort         string
 	PermissionMode perm.PermissionMode
 }
 
@@ -68,6 +69,9 @@ func (c Client) RunAgentSession(ctx context.Context, request Request) (Result, e
 	args := []string{"--print", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--permission-mode", string(mode)}
 	if request.Model != "" {
 		args = append(args, "--model", request.Model)
+	}
+	if request.Effort != "" {
+		args = append(args, "--effort", request.Effort)
 	}
 	result, err := streamjson.RunSession(ctx, streamjson.SessionConfig[Result]{
 		Starter:    observedStarter,

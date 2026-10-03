@@ -23,9 +23,9 @@ var mergeCommand = commandMetadata{
 	name:      "merge",
 	minPrefix: "m",
 	usageLines: []string{
-		"merge (m) [--force] [--record-only] [--no-squash] [--no-verify] [--verify-command CMD] <plan-id-or-slug-or-path>",
+		"merge (m) [--model NAME] [--effort NAME] [--force] [--record-only] [--no-squash] [--no-verify] [--verify-command CMD] <plan-id-or-slug-or-path>",
 		"merge (m) --restart <plan-id-or-slug-or-path>",
-		"merge (m) --all [--dry-run] [--restart] [--auto-eject] [--verify-command CMD]",
+		"merge (m) --all [--model NAME] [--effort NAME] [--dry-run] [--restart] [--auto-eject] [--verify-command CMD]",
 	},
 	completionDescription: "Merge approved plans into the default branch",
 	long:                  "Merge one reviewed, approved Tao plan, or atomically stage every reviewed and approved plan with --all. For one plan, --restart safely discards only an eligible stale pre-landing merge intent, then stops so the branch can be rebased and reviewed again; it cannot be combined with --force. An ordinary single-plan squash conflict gets one automatic resolver attempt, exact structural validation, the configured verification gate, and an independent fresh-session review before completion; --force cannot bypass these safety and review gates, while --no-verify skips only command verification. --no-squash rebase conflicts remain manual. Batch mode keeps default unchanged while it orders and stages one squash per source, uses bounded agent resolution, verifies the staged aggregate once, attributes an aggregate verification failure to one candidate, and requires aggregate approval before one fast-forward. Eligible attributed aggregate-review non-convergence stops and offers to eject that plan on the next rerun; --auto-eject performs the eject-and-reland in the same run. Ejection is offered only when it leaves a non-empty batch and no plan was already ejected. Reruns resume durable progress. When an active durable batch exists, --dry-run inspects and resume-validates it before it can snapshot fresh candidates; use tao merge --all --restart --dry-run as the safe pre-landing recovery preview when restart is offered. On SIGINT or SIGTERM, an interrupted dry run removes its disposable integration worktree before exiting. --all --restart discards only pre-landing batch recovery. Batch mode rejects --force, --record-only, --no-squash, and --no-verify.",
@@ -61,6 +61,7 @@ func registerMergeFlags(fs *flag.FlagSet) {
 	fs.Bool("no-verify", false, "skip post-merge command verification, not structural validation or independent review (single-plan only)")
 	fs.String("verify-command", "", "override the post-merge build/test verification command")
 	fs.String("model", "", "override the agent model for all merge roles")
+	fs.String("effort", "", "override reasoning effort for all merge roles")
 }
 
 type mergeServiceRunner interface {
@@ -87,12 +88,12 @@ type mergeBatchRunner interface {
 	Run(context.Context, mergeBatchOptions) (mergeBatchResult, error)
 }
 
-var newMergeBatchRunner = func(ctx context.Context, a App, repo mergepkg.BatchPlanRepository, model string) (mergeBatchRunner, error) {
-	return a.newMergeBatchRunner(ctx, repo, model)
+var newMergeBatchRunner = func(ctx context.Context, a App, repo mergepkg.BatchPlanRepository, model string, effort ...string) (mergeBatchRunner, error) {
+	return a.newMergeBatchRunner(ctx, repo, model, effort...)
 }
 
-var newMergeServiceRunner = func(ctx context.Context, a App, detail *plan.PlanDetail, model string) (mergeServiceRunner, error) {
-	return a.newMergeServiceRunner(ctx, detail, model)
+var newMergeServiceRunner = func(ctx context.Context, a App, detail *plan.PlanDetail, model string, effort ...string) (mergeServiceRunner, error) {
+	return a.newMergeServiceRunner(ctx, detail, model, effort...)
 }
 
 func (a App) merge(ctx context.Context, repo plan.Resolver, args []string) error {
@@ -100,6 +101,10 @@ func (a App) merge(ctx context.Context, repo plan.Resolver, args []string) error
 		return errors.New("merge requires a plan repository")
 	}
 	fs, positional, err := a.parseArgs("merge", args, registerMergeFlags)
+	if err != nil {
+		return err
+	}
+	effort, err := effortFlagValue(fs)
 	if err != nil {
 		return err
 	}
@@ -113,7 +118,7 @@ func (a App) merge(ctx context.Context, repo plan.Resolver, args []string) error
 	all := flagBoolValue(fs, "all")
 	if all {
 		if len(positional) != 0 {
-			return errors.New("usage: tao merge --all [--dry-run] [--restart] [--auto-eject] [--verify-command CMD]")
+			return errors.New("usage: tao merge --all [--model NAME] [--effort NAME] [--dry-run] [--restart] [--auto-eject] [--verify-command CMD]")
 		}
 		for _, incompatible := range []string{"force", "record-only", "no-squash", "no-verify"} {
 			if flagBoolValue(fs, incompatible) {
@@ -124,7 +129,7 @@ func (a App) merge(ctx context.Context, repo plan.Resolver, args []string) error
 		if !ok {
 			return errors.New("merge --all requires a repository that can list and resolve plans")
 		}
-		runner, err := newMergeBatchRunner(ctx, a, batchRepo, model)
+		runner, err := newMergeBatchRunner(ctx, a, batchRepo, model, effort)
 		if err != nil {
 			return err
 		}
@@ -146,7 +151,7 @@ func (a App) merge(ctx context.Context, repo plan.Resolver, args []string) error
 	if restart && flagBoolValue(fs, "force") {
 		return errors.New("--restart cannot be combined with --force")
 	}
-	usage := "usage: tao merge [--force] [--record-only] [--no-squash] [--no-verify] [--verify-command CMD] <plan-id-or-slug-or-path>"
+	usage := "usage: tao merge [--model NAME] [--effort NAME] [--force] [--record-only] [--no-squash] [--no-verify] [--verify-command CMD] <plan-id-or-slug-or-path>"
 	if restart {
 		usage = "usage: tao merge --restart <plan-id-or-slug-or-path>"
 	}
@@ -181,7 +186,7 @@ func (a App) merge(ctx context.Context, repo plan.Resolver, args []string) error
 		if err := plan.RequireNotAbandoned(refreshed); err != nil {
 			return err
 		}
-		service, err := newMergeServiceRunner(ownedCtx, a, refreshed, model)
+		service, err := newMergeServiceRunner(ownedCtx, a, refreshed, model, effort)
 		if err != nil {
 			return err
 		}
@@ -222,7 +227,7 @@ type mergeBatchRegistry interface {
 	ActiveMergeBatchPath(taodata.Repo) string
 }
 
-func (a App) newMergeBatchRunner(ctx context.Context, repository mergepkg.BatchPlanRepository, model string) (mergeBatchRunner, error) {
+func (a App) newMergeBatchRunner(ctx context.Context, repository mergepkg.BatchPlanRepository, model string, effort ...string) (mergeBatchRunner, error) {
 	runner := a.mergeRunner()
 	var registry mergeBatchRegistry
 	if a.Registry != nil {
@@ -257,7 +262,7 @@ func (a App) newMergeBatchRunner(ctx context.Context, repository mergepkg.BatchP
 	service.Progress = a.Out
 	service.Now = a.Now
 	store := mergepkg.NewBatchStore(batchesDir, registry.ActiveMergeBatchPath(current))
-	resolveOptions := a.mergeSessionOptions(model)
+	resolveOptions := a.mergeSessionOptions(model, effort...)
 	transcript := mergepkg.NewBatchTranscriptWriter(store, a.Out, a.Now)
 	agentConfig := newMergeBatchAgentConfig(a, current.Root, runner, store, runtimeconfig.ModelSelection{}, transcript)
 	agentConfig.ResolveOptions = resolveOptions
@@ -293,7 +298,7 @@ func newMergeBatchCoordinatorSeams(a App, store *mergepkg.BatchStore, service me
 // mergeSessionOptions captures one applicable projection for every session in
 // the invocation from the already composed repository settings. Admission remains deferred so passive merges and dry runs do
 // not require valid provider configuration or provider readiness.
-func (a App) mergeSessionOptions(model string) func() (runtimeconfig.CommandOptions, error) {
+func (a App) mergeSessionOptions(model string, effort ...string) func() (runtimeconfig.CommandOptions, error) {
 	snapshot := a.envSnapshot()
 	a.RuntimeEnv = &snapshot
 	return sync.OnceValues(func() (runtimeconfig.CommandOptions, error) {
@@ -301,6 +306,11 @@ func (a App) mergeSessionOptions(model string) func() (runtimeconfig.CommandOpti
 		registerMergeFlags(fs)
 		if model != "" {
 			if err := fs.Set("model", model); err != nil {
+				return runtimeconfig.CommandOptions{}, err
+			}
+		}
+		if len(effort) > 0 && effort[0] != "" {
+			if err := fs.Set("effort", effort[0]); err != nil {
 				return runtimeconfig.CommandOptions{}, err
 			}
 		}
@@ -321,10 +331,11 @@ func (a App) mergeModels(ctx context.Context, model string) (runtimeconfig.Model
 	return a.effectiveMergeModels(model)
 }
 
-func (a App) effectiveMergeModels(model string) (runtimeconfig.ModelSelection, error) {
+func (a App) effectiveMergeModels(model string, effort ...string) (runtimeconfig.ModelSelection, error) {
 	defaults, err := a.envDefaultsFor(
 		runtimeconfig.EnvModel, runtimeconfig.EnvRunModel, runtimeconfig.EnvReviewModel,
 		runtimeconfig.EnvMergeReviewModel, runtimeconfig.EnvResolverModel, runtimeconfig.EnvReworkEscalationModel,
+		runtimeconfig.EnvEffort, runtimeconfig.EnvRunEffort, runtimeconfig.EnvReviewEffort, runtimeconfig.EnvMergeReviewEffort, runtimeconfig.EnvResolverEffort,
 	)
 	if err != nil {
 		return runtimeconfig.ModelSelection{}, err
@@ -332,6 +343,9 @@ func (a App) effectiveMergeModels(model string) (runtimeconfig.ModelSelection, e
 	var overrides runtimeconfig.RunOptionsPatch
 	if model != "" {
 		overrides = overrides.WithModelForAllRoles(model)
+	}
+	if len(effort) > 0 && effort[0] != "" {
+		overrides = overrides.WithEffortForAllRoles(effort[0])
 	}
 	modelDefaults := runtimeconfig.RunOptionsPatch{ModelSelection: defaults.ModelSelection}
 	config, err := runtimeconfig.NewConfigFromStages(modelDefaults, overrides)
@@ -540,7 +554,7 @@ func renderMergeBatchFailure(out io.Writer, err error) error {
 	return writeln(out, "Next: `tao merge --all --restart --dry-run`")
 }
 
-func (a App) newMergeServiceRunner(ctx context.Context, detail *plan.PlanDetail, model string) (mergeServiceRunner, error) {
+func (a App) newMergeServiceRunner(ctx context.Context, detail *plan.PlanDetail, model string, effort ...string) (mergeServiceRunner, error) {
 	if detail == nil {
 		return nil, fmt.Errorf("plan detail is nil")
 	}
@@ -559,7 +573,7 @@ func (a App) newMergeServiceRunner(ctx context.Context, detail *plan.PlanDetail,
 	}
 	eventAppender := plan.NewFileRepository("")
 	agentConfig := newSingleMergeAgentConfig(a, detail, repoRoot, runner, eventAppender, runtimeconfig.ModelSelection{})
-	agentConfig.ResolveOptions = a.mergeSessionOptions(model)
+	agentConfig.ResolveOptions = a.mergeSessionOptions(model, effort...)
 	generator, err := mergepkg.NewMergeProposalGenerator(agentConfig)
 	if err != nil {
 		return nil, fmt.Errorf("configure exceptional merge proposal generator: %w", err)
