@@ -76,6 +76,7 @@ Before any artifact update, check for execution having begun (for example, activ
 
 ## Rules
 
+- Never write a task that requires reading, editing, or running commands in any checkout other than the plan workspace, including the control or owning checkout; Git branches, tags, and other refs are shared by every worktree of the repository, so phrase branch and ref operations as commands run from the workspace root and refer to 'the plan workspace' rather than naming another checkout. Working-tree and index status are checkout-specific, not shared-ref operations: do not require another checkout's status or cleanliness, and never substitute workspace status for another checkout's status.
 - Preserve intent, constraints, and decisions from this session.
 - Select exactly one plan-level `change_type` from the supported Conventional Commit types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, or `revert`.
 - Treat `change_type` as a required planning-time decision for every new plan. Derive it only from the resolved planning conversation; if the planning packet leaves it unresolved, stop and ask the user rather than inventing a type or writing incomplete plan artifacts.

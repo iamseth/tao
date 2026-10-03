@@ -20,6 +20,8 @@ Do not expand scope beyond the selected slice.
 
 Work only inside the workspace (worktree) root for this run. Keep every file read, file edit, and shell `cd` within that root; never read from or write to another checkout of this repository, including the control checkout. The plan directory is separate metadata storage: use it only as the absolute `--plan-dir` argument for Tao commands, and do not edit code there.
 
+Git branches, tags, and other refs are shared by every worktree, so ref operations such as `git branch -d` run from the workspace root. When slice text names another checkout for only a genuinely shared-ref operation, perform the shared operation from the workspace root and record that interpretation in the completion notes instead of entering that checkout or blocking on the wording. Task text that truly requires reading or editing files in another checkout remains a blocker and still uses `tao slice-blocked`. Working-tree and index status are checkout-specific, not shared-ref operations. If a task requires another checkout's working-tree or index status (including whether it is clean), use `tao slice-blocked` without entering or reading that checkout. Checking the plan workspace's status does not establish another checkout's status, and recording that substitution in completion notes does not satisfy the task.
+
 ## Run packet
 
 Use this compact packet as the default execution context for the selected slice:

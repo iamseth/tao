@@ -107,6 +107,31 @@ func TestValidatePlanVerificationApprovalContractBoundary(t *testing.T) {
 	}
 }
 
+func TestValidatePlanVerificationCheckoutConfinementBoundary(t *testing.T) {
+	root := t.TempDir()
+	writeEditPlan(t, root)
+	repo := NewFileRepository(root)
+	detail, err := repo.ResolvePlan(context.Background(), "edit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	slice := &detail.Slices.Slices[0]
+	slice.Tasks = []string{"Run git branch -d in the owning checkout"}
+	slice.Verification.Commands = []string{"go version"}
+	result := ValidatePlanVerification(detail)
+	finding := findFindingByCode(result.Findings, "slice_foreign_checkout_reference")
+	if result.HasErrors() || finding == nil {
+		t.Fatalf("expected plan-wide checkout warning, got %+v", result.Findings)
+	}
+	if finding.Severity != VerificationFindingWarning || finding.SliceID != slice.ID || !strings.Contains(finding.Message, "tasks[0]") {
+		t.Fatalf("unexpected owned finding: %+v", finding)
+	}
+	selected := ValidateSelectedSliceVerificationAtRoot(detail, root)
+	if selected.HasErrors() || containsFindingCode(selected.Findings, "slice_foreign_checkout_reference") {
+		t.Fatalf("selected-slice runtime validation changed: %+v", selected.Findings)
+	}
+}
+
 func TestValidatePlanVerificationFindsEverySliceCommand(t *testing.T) {
 	repo := t.TempDir()
 	mkdir(t, filepath.Join(repo, "pkg"))

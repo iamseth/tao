@@ -129,6 +129,49 @@ func TestRenderRunPromptAppliesDefaultsAndData(t *testing.T) {
 	}
 }
 
+func TestSlicePromptsForbidForeignCheckoutTasks(t *testing.T) {
+	for name, prompt := range map[string]string{"slice": SlicePromptTemplate, "note slice": NoteSlicePromptTemplate} {
+		t.Run(name, func(t *testing.T) {
+			for _, want := range []string{
+				"any checkout other than the plan workspace",
+				"including the control or owning checkout",
+				"shared by every worktree",
+				"commands run from the workspace root",
+				"Working-tree and index status are checkout-specific, not shared-ref operations",
+				"never substitute workspace status for another checkout's status",
+			} {
+				if !strings.Contains(prompt, want) {
+					t.Errorf("slicing prompt missing confinement guidance %q", want)
+				}
+			}
+		})
+	}
+}
+
+func TestRenderRunPromptTreatsRefOperationsAsWorkspaceLocal(t *testing.T) {
+	got, err := Render(PromptRun, Data{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"shared by every worktree",
+		"ref operations such as `git branch -d` run from the workspace root",
+		"only a genuinely shared-ref operation",
+		"perform the shared operation from the workspace root",
+		"record that interpretation in the completion notes",
+		"instead of entering that checkout or blocking on the wording",
+		"never read from or write to another checkout of this repository, including the control checkout",
+		"Task text that truly requires reading or editing files in another checkout remains a blocker and still uses `tao slice-blocked`",
+		"Working-tree and index status are checkout-specific, not shared-ref operations",
+		"If a task requires another checkout's working-tree or index status (including whether it is clean), use `tao slice-blocked` without entering or reading that checkout",
+		"Checking the plan workspace's status does not establish another checkout's status",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered run prompt missing confinement guidance %q", want)
+		}
+	}
+}
+
 func TestRenderRunPromptAuthorizesPlanOwnedGateRepair(t *testing.T) {
 	got, err := Render(PromptRun, Data{})
 	if err != nil {
