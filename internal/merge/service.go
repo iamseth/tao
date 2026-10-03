@@ -1437,6 +1437,32 @@ func (e *DirtyWorktreeError) Error() string {
 
 func (e *DirtyWorktreeError) Unwrap() error { return ErrDirtyWorktree }
 
+// UntrackedOnly reports whether every status entry is unambiguously untracked.
+func (e *DirtyWorktreeError) UntrackedOnly() bool {
+	if e.Status == "" {
+		return false
+	}
+	for line := range strings.SplitSeq(strings.TrimSuffix(e.Status, "\n"), "\n") {
+		if _, ambiguous := gitops.PorcelainPath(line); ambiguous || line[:2] != "??" {
+			return false
+		}
+	}
+	return true
+}
+
+// UntrackedPaths returns sorted, unambiguously parsed untracked paths.
+func (e *DirtyWorktreeError) UntrackedPaths() []string {
+	var paths []string
+	for line := range strings.SplitSeq(e.Status, "\n") {
+		path, ambiguous := gitops.PorcelainPath(line)
+		if !ambiguous && line[:2] == "??" {
+			paths = append(paths, path)
+		}
+	}
+	slices.Sort(paths)
+	return paths
+}
+
 func (s Service) CheckPreMergeGate(ctx context.Context, detail *plan.PlanDetail, options Options) error {
 	if detail == nil {
 		return fmt.Errorf("merge plan detail is nil")

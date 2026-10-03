@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -129,8 +130,8 @@ func (s SliceCompletionService) CompleteVerified(ctx context.Context, request Sl
 	if err != nil {
 		return err
 	}
-	if before != after {
-		return fmt.Errorf("slice verification boundary or declarations changed; repair and rerun all gates")
+	if before.verifiedCompletionBoundary != after.verifiedCompletionBoundary {
+		return errors.New(describeVerificationBoundaryDrift(before, after))
 	}
 	current := completionSlice(request.Record.Detail(), request.SliceID)
 	if !reflect.DeepEqual(current.VerificationAttempt, &snapshot) {
@@ -220,8 +221,14 @@ func admitVerifiedCompletion(request SliceCompletionRequest) error {
 
 type verifiedCompletionBoundary struct{ root, branch, head, fingerprint, indexFingerprint, declaration, policy, strategy string }
 
-func (s SliceCompletionService) inspectVerifiedCompletion(ctx context.Context, request SliceCompletionRequest) (verifiedCompletionBoundary, error) {
-	var result verifiedCompletionBoundary
+type verifiedCompletionInspection struct {
+	verifiedCompletionBoundary
+	paths     map[string]string
+	untracked map[string]bool
+}
+
+func (s SliceCompletionService) inspectVerifiedCompletion(ctx context.Context, request SliceCompletionRequest) (verifiedCompletionInspection, error) {
+	var result verifiedCompletionInspection
 	detail := request.Record.Detail()
 	slice := completionSlice(detail, request.SliceID)
 	root, err := canonicalVerificationDirectory(slice.ExecutionRoot)
@@ -283,7 +290,7 @@ func (s SliceCompletionService) inspectVerifiedCompletion(ctx context.Context, r
 	if err != nil {
 		return result, err
 	}
-	fingerprint, err := verifiedWorktreeFingerprint(ctx, git)
+	fingerprint, paths, untracked, err := captureVerifiedWorktree(ctx, git)
 	if err != nil {
 		return result, err
 	}
@@ -302,7 +309,10 @@ func (s SliceCompletionService) inspectVerifiedCompletion(ctx context.Context, r
 		return result, err
 	}
 	digest := sha256.Sum256(declaration)
-	return verifiedCompletionBoundary{root, branch, head, fingerprint, indexFingerprint.Hash, hex.EncodeToString(digest[:]), policy, strategy}, nil
+	return verifiedCompletionInspection{
+		verifiedCompletionBoundary: verifiedCompletionBoundary{root, branch, head, fingerprint, indexFingerprint.Hash, hex.EncodeToString(digest[:]), policy, strategy},
+		paths:                      paths, untracked: untracked,
+	}, nil
 }
 
 func verifiedSliceCompletionHash(notes, message string, snapshot plan.SliceVerificationSnapshot) (string, error) {
@@ -412,15 +422,27 @@ func recordVerificationDiagnostics(request SliceCompletionRequest, snapshot plan
 // The frozen fingerprint ignores index placement (staging is Tao's own effect),
 // but includes exact changed-file bytes and modes, including binary files and
 // untracked files. Ignored build outputs and Tao metadata cannot enter a commit.
-func verifiedWorktreeFingerprint(ctx context.Context, git gitops.Client) (string, error) {
+func verifiedWorktreeFingerprint(ctx context.Context, git gitops.Client) (string, map[string]string, error) {
+	fingerprint, paths, _, err := captureVerifiedWorktree(ctx, git)
+	return fingerprint, paths, err
+}
+
+// Capture presentation detail from the same classification as the fingerprint,
+// without adding it to the comparable boundary or the persisted snapshot.
+func captureVerifiedWorktree(ctx context.Context, git gitops.Client) (string, map[string]string, map[string]bool, error) {
 	status, err := git.StatusPorcelainAllUntracked(ctx)
 	if err != nil {
-		return "", err
+		return "", nil, nil, err
 	}
 	classification := commitcontract.ClassifyStatus(status, nil)
 	facts := interruptedSliceFacts(InterruptedSliceInput{PorcelainStatus: status})
 	if len(classification.AmbiguousLines) != 0 || facts.Conflicted {
-		return "", fmt.Errorf("cannot fingerprint ambiguous or conflicted worktree")
+		return "", nil, nil, fmt.Errorf("cannot fingerprint ambiguous or conflicted worktree")
+	}
+	records := make(map[string]string)
+	untracked := make(map[string]bool)
+	for _, path := range classification.UntrackedStagePaths {
+		untracked[path] = true
 	}
 	paths := commitcontract.UniquePaths(classification.CommitCandidates)
 	slices.Sort(paths)
@@ -428,29 +450,30 @@ func verifiedWorktreeFingerprint(ctx context.Context, git gitops.Client) (string
 	encoder := json.NewEncoder(digest)
 	for _, path := range paths {
 		if err := ctx.Err(); err != nil {
-			return "", err
+			return "", nil, nil, err
 		}
 		if filepath.IsAbs(path) || path == ".." || strings.HasPrefix(path, "../") {
-			return "", fmt.Errorf("unsafe verification path")
+			return "", nil, nil, fmt.Errorf("unsafe verification path")
 		}
 		full := filepath.Join(git.Root(), path)
 		info, err := os.Lstat(full)
 		if os.IsNotExist(err) {
 			if err := encoder.Encode([]string{path, "deleted"}); err != nil {
-				return "", err
+				return "", nil, nil, err
 			}
+			records[path] = "deleted"
 			continue
 		}
 		if err != nil {
-			return "", err
+			return "", nil, nil, err
 		}
 		parent, err := canonicalVerificationDirectory(filepath.Dir(full))
 		if err != nil {
-			return "", err
+			return "", nil, nil, err
 		}
 		relative, err := filepath.Rel(git.Root(), parent)
 		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-			return "", fmt.Errorf("verification path escapes execution root")
+			return "", nil, nil, fmt.Errorf("verification path escapes execution root")
 		}
 		var mode, content string
 		switch {
@@ -464,16 +487,23 @@ func verifiedWorktreeFingerprint(ctx context.Context, git gitops.Client) (string
 			}
 			content, err = verifiedFileDigest(full)
 		default:
-			return "", fmt.Errorf("unsupported verification path %q", path)
+			return "", nil, nil, fmt.Errorf("unsupported verification path %q", path)
 		}
 		if err != nil {
-			return "", err
+			return "", nil, nil, err
 		}
 		if err := encoder.Encode([]string{path, mode, content}); err != nil {
-			return "", err
+			return "", nil, nil, err
 		}
+		// Keep the historical fingerprint encoding (including symlink targets)
+		// unchanged, but retain only a digest in presentation records.
+		if mode == "120000" {
+			sum := sha256.Sum256([]byte(content))
+			content = hex.EncodeToString(sum[:])
+		}
+		records[path] = mode + ":" + content
 	}
-	return hex.EncodeToString(digest.Sum(nil)), nil
+	return hex.EncodeToString(digest.Sum(nil)), records, untracked, nil
 }
 
 func verifiedFileDigest(path string) (string, error) {
@@ -500,7 +530,7 @@ func checkFrozenVerificationWorktree(ctx context.Context, git gitops.Client, int
 	if active != "" {
 		return fmt.Errorf("verified completion refused during Git operation %q", active)
 	}
-	fingerprint, err := verifiedWorktreeFingerprint(ctx, git)
+	fingerprint, _, err := verifiedWorktreeFingerprint(ctx, git)
 	if err != nil {
 		return err
 	}

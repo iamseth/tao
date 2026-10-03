@@ -506,9 +506,15 @@ func TestMergeCommandRendersTypedFailures(t *testing.T) {
 		},
 		{
 			name: "dirty worktree",
-			err:  &mergepkg.DirtyWorktreeError{Status: " M internal/cli/merge.go\n"},
+			err:  &mergepkg.DirtyWorktreeError{Status: " M internal/cli/merge.go\n?? cache.pyc\n"},
 			is:   mergepkg.ErrDirtyWorktree,
-			want: []string{"Merge refused: worktree is dirty", "Status:", "M internal/cli/merge.go", "commit, stash, or discard"},
+			want: []string{"Merge refused: worktree is dirty\n", "Status:", "M internal/cli/merge.go", "commit, stash, or discard"},
+		},
+		{
+			name: "untracked-only dirty worktree",
+			err:  &mergepkg.DirtyWorktreeError{Status: "?? tests/__pycache__/test_frontend.cpython-312.pyc"},
+			is:   mergepkg.ErrDirtyWorktree,
+			want: []string{"Merge refused: worktree is dirty (untracked files only)", "Status:", "?? tests/__pycache__/test_frontend.cpython-312.pyc", "every dirty entry is untracked", "deleted or added to .gitignore in the repository root", "tao merge plan-a", "pass --force only if you intentionally bypass the dirty-worktree gate"},
 		},
 		{
 			name: "conflict",

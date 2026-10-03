@@ -803,13 +803,22 @@ func renderMergeReviewHeadMismatch(out io.Writer, planID string, err error) erro
 }
 
 func renderMergeDirtyWorktree(out io.Writer, detail *plan.PlanDetail, planID string, err error) error {
-	if err := writeln(out, "Merge refused: worktree is dirty"); err != nil {
+	dirty, ok := errors.AsType[*mergepkg.DirtyWorktreeError](err)
+	untrackedOnly := ok && dirty.UntrackedOnly()
+	heading := "Merge refused: worktree is dirty"
+	if untrackedOnly {
+		heading += " (untracked files only)"
+	}
+	if err := writeln(out, heading); err != nil {
 		return err
 	}
-	if dirty, ok := errors.AsType[*mergepkg.DirtyWorktreeError](err); ok {
+	if ok {
 		if err := renderIndentedBlock(out, "Status:", dirty.Status); err != nil {
 			return err
 		}
+	}
+	if untrackedOnly {
+		return writef(out, "Next: every dirty entry is untracked; build or cache outputs such as Python __pycache__ should be deleted or added to .gitignore in the repository root, then rerun `tao merge %s`; pass --force only if you intentionally bypass the dirty-worktree gate.\n", planID)
 	}
 	repoRoot := strings.TrimSpace(detail.State.Repo.Root)
 	if repoRoot == "" {

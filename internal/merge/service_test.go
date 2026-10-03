@@ -22,6 +22,36 @@ import (
 	"github.com/iamseth/tao/internal/runstatus"
 )
 
+func TestDirtyWorktreeErrorUntracked(t *testing.T) {
+	tests := []struct {
+		name   string
+		status string
+		only   bool
+		paths  []string
+	}{
+		{"untracked only", "?? z.pyc\n?? a.pyc\n", true, []string{"a.pyc", "z.pyc"}},
+		{"mixed", " M tracked.go\n?? cache.pyc\n", false, []string{"cache.pyc"}},
+		{"staged", "A  tracked.go\n", false, nil},
+		{"rename", "R  old -> new\n?? cache.pyc\n", false, []string{"cache.pyc"}},
+		{"quoted spaces", "?? \"cache with spaces.pyc\"\n", true, []string{"cache with spaces.pyc"}},
+		{"quoted unicode", "?? \"caf\\303\\251.pyc\"\n", true, []string{"café.pyc"}},
+		{"malformed", "??\n", false, nil},
+		{"ambiguous untracked", "?? old -> new\n", false, nil},
+		{"empty", "", false, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := &DirtyWorktreeError{Status: tt.status}
+			if got := err.UntrackedOnly(); got != tt.only {
+				t.Errorf("UntrackedOnly() = %v, want %v", got, tt.only)
+			}
+			if got := err.UntrackedPaths(); !slices.Equal(got, tt.paths) {
+				t.Errorf("UntrackedPaths() = %q, want %q", got, tt.paths)
+			}
+		})
+	}
+}
+
 type fakeGitClient struct {
 	root                string
 	defaultBranch       string

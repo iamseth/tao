@@ -846,15 +846,29 @@ func TestCompleteVerifiedOwnerEndsDuringGate(t *testing.T) {
 
 func TestCompleteVerifiedCacheExclusion(t *testing.T) {
 	t.Setenv("GOLANGCI_LINT_CACHE", t.TempDir())
-	for _, mode := range []string{"no ignore rule", "ignored tao", "unrelated file"} {
+	for _, mode := range []string{"no ignore rule", "ignored tao", "unrelated file", "nested untracked", "tracked changed", "tracked vanished"} {
 		t.Run(mode, func(t *testing.T) {
 			command := `printf 'cache contents' > "$GOLANGCI_LINT_CACHE/entry"`
 			dirt := ""
 			if mode == "unrelated file" {
 				dirt = "unrelated.txt"
 			}
-			if dirt != "" {
+			wantDrift := "appeared:\n  unrelated.txt (untracked)"
+			switch mode {
+			case "unrelated file":
 				command += "; touch " + dirt
+			case "nested untracked":
+				dirt = "gate-output/nested.txt"
+				command += "; mkdir gate-output; touch " + dirt
+				wantDrift = "appeared:\n  gate-output/nested.txt (untracked)"
+			case "tracked changed":
+				dirt = "binary.dat"
+				command += "; printf changed > binary.dat"
+				wantDrift = "changed:\n  binary.dat"
+			case "tracked vanished":
+				dirt = "binary.dat"
+				command += "; rm binary.dat"
+				wantDrift = "vanished:\n  binary.dat"
 			}
 			request := verifiedCompletionFixture(t, CommitPolicySlice, command)
 			root := request.Record.Detail().Slices.Slices[0].ExecutionRoot
@@ -866,7 +880,14 @@ func TestCompleteVerifiedCacheExclusion(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(root, "change.go"), []byte("package change\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
+			if strings.HasPrefix(mode, "tracked ") {
+				if err := os.WriteFile(filepath.Join(root, "binary.dat"), []byte("slice work"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				runCommitTestGitCommand(t, root, "add", "binary.dat")
+			}
 			parent := runCommitTestGitOutput(t, root, "rev-parse", "HEAD")
+			index := runCommitTestGitOutput(t, root, "write-tree")
 			service := SliceCompletionService{CommandRunner: commandrunner.DefaultLocal}
 			err := service.Complete(context.Background(), request)
 			slice := reloadVerifiedCompletion(t, request).Detail().Slices.Slices[0]
@@ -874,11 +895,14 @@ func TestCompleteVerifiedCacheExclusion(t *testing.T) {
 				if err == nil || slice.CommitIntent != nil || slice.Completion != nil {
 					t.Fatalf("unrelated gate dirt bypassed safeguards: %+v, %v", slice, err)
 				}
+				if !strings.Contains(err.Error(), wantDrift) || !strings.Contains(err.Error(), "no intent recorded") {
+					t.Fatalf("missing drift diagnostic %q: %v", wantDrift, err)
+				}
 				status := runCommitTestGitOutput(t, root, "status", "--porcelain", "--untracked-files=all")
 				if !strings.Contains(status, dirt) || strings.Contains(status, "golangci-lint") {
 					t.Fatalf("unexpected visible dirt: %s", status)
 				}
-				if runCommitTestGitOutput(t, root, "rev-parse", "HEAD") != parent || strings.TrimSpace(runCommitTestGitOutput(t, root, "diff", "--cached", "--name-only")) != "" {
+				if runCommitTestGitOutput(t, root, "rev-parse", "HEAD") != parent || strings.TrimSpace(runCommitTestGitOutput(t, root, "write-tree")) != strings.TrimSpace(index) {
 					t.Fatal("mutated Git after gate drift")
 				}
 				return
@@ -901,6 +925,52 @@ func TestCompleteVerifiedCacheExclusion(t *testing.T) {
 				t.Fatalf("cache escaped Git ignore: %s", status)
 			}
 		})
+	}
+}
+
+func TestDescribeVerificationBoundaryDrift(t *testing.T) {
+	before := verifiedCompletionInspection{
+		verifiedCompletionBoundary: verifiedCompletionBoundary{fingerprint: "before", branch: "old"},
+		paths:                      make(map[string]string), untracked: make(map[string]bool),
+	}
+	after := verifiedCompletionInspection{
+		verifiedCompletionBoundary: verifiedCompletionBoundary{fingerprint: "after", branch: "new"},
+		paths:                      make(map[string]string), untracked: make(map[string]bool),
+	}
+	for i := range 23 {
+		suffix := fmt.Sprintf("%02d", i)
+		after.paths["appeared/"+suffix] = "new"
+		after.untracked["appeared/"+suffix] = true
+		before.paths["changed/"+suffix] = "old"
+		after.paths["changed/"+suffix] = "new"
+		before.paths["vanished/"+suffix] = "old"
+	}
+	after.paths["vanished/00"] = "deleted"
+	after.paths["appeared/00\n\x1b\t"] = "new"
+	before.paths["unchanged"] = "same"
+	after.paths["unchanged"] = "same"
+	got := describeVerificationBoundaryDrift(before, after)
+	for _, want := range []string{
+		"branch changed\n", "appeared:\n", "changed:\n", "vanished:\n",
+		"  appeared/00 (untracked)\n", "  ... and 4 more\n",
+		`appeared/00\n�\t`, "Next:",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in %s", want, got)
+		}
+	}
+	if strings.Count(got, "  ... and 3 more\n") != 2 || strings.Count(got, "\n  ") != 63 {
+		t.Fatalf("per-category caps not enforced: %s", got)
+	}
+	for _, unwanted := range []string{"\x1b", "\t", "00\n\x1b", "unchanged", "/22"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("unexpected %q in %s", unwanted, got)
+		}
+	}
+	for _, prefix := range []string{"appeared/", "changed/", "vanished/"} {
+		if strings.Index(got, prefix+"01") > strings.Index(got, prefix+"02") {
+			t.Errorf("unsorted category %s", prefix)
+		}
 	}
 }
 

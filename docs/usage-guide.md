@@ -540,7 +540,11 @@ with `.tao/cache/golangci-lint` under the actual execution worktree (the integra
 worktree for batch merges). Lint remains mandatory where declared; only its cache
 is isolated. These caches disappear when their worktrees are removed. Manual
 commands and explicit cache overrides inside commands or build scripts are
-outside this guarantee.
+outside this guarantee. The same gates default `PYTHONDONTWRITEBYTECODE=1` so
+Python test runs do not leave `__pycache__` in the worktree; an explicit environment
+value or an override inside the command wins (for example,
+`PYTHONDONTWRITEBYTECODE= python3 ...`, which Python treats as unset).
+Manual commands are outside this bytecode guarantee too.
 
 **Choose the run size:**
 
@@ -1253,6 +1257,8 @@ can start again; it does not clear any source plan's single-plan intent.
 gates, never structural checks or exact-integration review. `--force` bypasses
 approval, review-base/head, and dirty-worktree pre-merge gates and reaches managed
 cleanup; it cannot bypass resolution safety or authorize a non-approved integration.
+A dirty-worktree refusal reports "untracked files only" when every dirty entry is
+untracked and suggests deleting or ignoring those paths.
 See `tao merge --help` for the full flag reference.
 
 ### `tao merge --all` — atomically integrate the approved set

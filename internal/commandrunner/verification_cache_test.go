@@ -81,6 +81,23 @@ func assertCacheChild(t *testing.T, ctx context.Context, cwd, want string) {
 	if len(caches) != 1 || caches[0] != cacheEnv+"="+want {
 		t.Fatalf("cache entries = %q, want exactly %q", caches, want)
 	}
+	bytecode, present := os.LookupEnv("PYTHONDONTWRITEBYTECODE")
+	if _, gate := ctx.Value(verificationCacheKey{}).(verificationCachePolicy); gate && !present {
+		bytecode, present = "1", true
+	}
+	var bytecodeEntries []string
+	for _, entry := range got.Environment {
+		if strings.HasPrefix(entry, "PYTHONDONTWRITEBYTECODE=") {
+			bytecodeEntries = append(bytecodeEntries, entry)
+		}
+	}
+	var wantBytecode []string
+	if present {
+		wantBytecode = []string{"PYTHONDONTWRITEBYTECODE=" + bytecode}
+	}
+	if !slices.Equal(bytecodeEntries, wantBytecode) {
+		t.Fatalf("bytecode entries = %q, want %q", bytecodeEntries, wantBytecode)
+	}
 	if !slices.Contains(got.Environment, "TAO_CACHE_TEST_KEEP=kept value") {
 		t.Fatal("unrelated environment lost")
 	}
@@ -135,13 +152,55 @@ func TestVerificationCacheEnvironmentReplacesEveryEntry(t *testing.T) {
 	inherited := []string{"KEEP=one", cacheEnv + "=first", "OTHER=two", cacheEnv + "=second"}
 	original := slices.Clone(inherited)
 	got, err := verificationCacheEnvironment(WithVerificationCache(context.Background(), root), inherited)
-	want := []string{"KEEP=one", "OTHER=two", cacheEnv + "=" + filepath.Join(root, ".tao", "cache", "golangci-lint")}
+	want := []string{"KEEP=one", "OTHER=two", "PYTHONDONTWRITEBYTECODE=1", cacheEnv + "=" + filepath.Join(root, ".tao", "cache", "golangci-lint")}
 	if err != nil || !reflect.DeepEqual(got, want) || !reflect.DeepEqual(inherited, original) {
 		t.Fatalf("environment = %q, error = %v, original = %q", got, err, inherited)
 	}
 	got, err = verificationCacheEnvironment(context.Background(), inherited)
 	if err != nil || !reflect.DeepEqual(got, original) {
 		t.Fatalf("ordinary environment changed: %q %v", got, err)
+	}
+}
+
+func TestVerificationCacheBytecodeEnvironment(t *testing.T) {
+	for _, value := range []string{"absent", "", "0", "custom"} {
+		t.Run(value, func(t *testing.T) {
+			setupCacheChild(t)
+			t.Setenv("PYTHONDONTWRITEBYTECODE", value)
+			inherited := make([]string, 1, 8)
+			inherited[0] = "KEEP=one"
+			if value == "absent" {
+				if err := os.Unsetenv("PYTHONDONTWRITEBYTECODE"); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				inherited = append(inherited, "PYTHONDONTWRITEBYTECODE="+value)
+			}
+			backing := inherited[:cap(inherited)]
+			original := slices.Clone(backing)
+			root := t.TempDir()
+			for _, gate := range []bool{false, true} {
+				ctx := context.Background()
+				want := slices.Clone(inherited)
+				cache := "inherited shared cache"
+				if gate {
+					ctx = WithVerificationCache(ctx, root)
+					if value == "absent" {
+						want = append(want, "PYTHONDONTWRITEBYTECODE=1")
+					}
+					cache = filepath.Join(root, ".tao", "cache", "golangci-lint")
+					want = append(want, cacheEnv+"="+cache)
+				}
+				got, err := verificationCacheEnvironment(ctx, inherited)
+				if err != nil || !slices.Equal(got, want) {
+					t.Fatalf("gate=%v: environment = %q, want %q, error = %v", gate, got, want, err)
+				}
+				if !slices.Equal(backing, original) {
+					t.Fatal("inherited backing array mutated")
+				}
+				assertCacheChild(t, ctx, root, cache)
+			}
+		})
 	}
 }
 

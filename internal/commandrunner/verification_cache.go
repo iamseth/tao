@@ -12,6 +12,7 @@ import (
 )
 
 const verificationCacheEnv = "GOLANGCI_LINT_CACHE"
+const verificationBytecodeEnv = "PYTHONDONTWRITEBYTECODE"
 
 // The rule lives inside golangci-lint, not .tao or cache: sibling metadata and
 // unrelated untracked files must remain visible to Git.
@@ -40,11 +41,19 @@ func verificationCacheEnvironment(ctx context.Context, environ []string) ([]stri
 	if err != nil {
 		return nil, fmt.Errorf("prepare verification cache: %w", err)
 	}
-	child := make([]string, 0, len(environ)+1)
+	child := make([]string, 0, len(environ)+2)
+	bytecodeDefined := false
 	for _, entry := range environ {
-		if key, _, _ := strings.Cut(entry, "="); key != verificationCacheEnv {
+		key, _, _ := strings.Cut(entry, "=")
+		if key == verificationBytecodeEnv {
+			bytecodeDefined = true
+		}
+		if key != verificationCacheEnv {
 			child = append(child, entry)
 		}
+	}
+	if !bytecodeDefined {
+		child = append(child, verificationBytecodeEnv+"=1")
 	}
 	return append(child, verificationCacheEnv+"="+cache), nil
 }
