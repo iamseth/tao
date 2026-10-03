@@ -35,6 +35,35 @@ func TestShowPlanOwnedBlocker(t *testing.T) {
 	}
 }
 
+func TestRenderPlanDetailFinalVerificationEvents(t *testing.T) {
+	now := time.Date(2026, 8, 14, 3, 30, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name, result, reason, suffix string
+	}{
+		{"failed", "failed", "--- FAIL: TestChangesRunExitCancelsLoader (0.01s)", ": first failing TestChangesRunExitCancelsLoader"},
+		{"historical", "failed", "ok example/pkg 0.01s coverage: 90%", ""},
+		{"passed", "passed", "--- FAIL: TestIgnored (0.01s)", ""},
+		{"skipped", "skipped", "--- FAIL: TestIgnored (0.01s)", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			message := "Final verification " + tc.result + " in /workspace"
+			detail := &plan.PlanDetail{
+				State:  plan.State{Plan: plan.PlanState{ID: "plan-a"}},
+				Events: []plan.Event{{Type: plan.EventTypeFinalVerification, Timestamp: now, Result: tc.result, Reason: tc.reason, Message: message}},
+			}
+			var out bytes.Buffer
+			if err := (App{}).renderPlanDetail(&out, planview.Plan{Detail: detail, Derived: plan.Derive(detail, now)}); err != nil {
+				t.Fatal(err)
+			}
+			_, recent, ok := strings.Cut(out.String(), "Recent Events:\n")
+			want := "- " + now.Format(time.RFC3339) + " final_verification " + message + tc.suffix + "\n"
+			if !ok || recent != want {
+				t.Fatalf("Recent Events = %q; want %q", recent, want)
+			}
+		})
+	}
+}
+
 func TestRenderPlanDetailExplainsBlockedSlicesAndEvents(t *testing.T) {
 	now := time.Date(2026, 8, 14, 3, 30, 0, 0, time.UTC)
 	reason := "Waiting for the infrastructure team\n to restore " + strings.Repeat("service ", 30)

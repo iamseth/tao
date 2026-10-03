@@ -270,6 +270,12 @@ func (a App) renderPlanDetailWithMerge(out io.Writer, loaded planview.Plan, thre
 		for _, event := range detail.Events[start:] {
 			message := event.Message
 			switch event.Type {
+			case plan.EventTypeFinalVerification:
+				if event.Result == "failed" {
+					if hint := planview.FormatFinalVerificationHint(event.Reason); hint != "" {
+						message = event.Message + ": first failing " + hint
+					}
+				}
 			case plan.EventTypeSliceBlocked:
 				message = planview.FormatBlockerText(event.Reason).Concise
 			case plan.EventTypeFinalizationFailed, plan.EventTypeFinalizationFailureCleared:

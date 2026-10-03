@@ -333,7 +333,7 @@ func TestAppendFinalVerificationEventCopiesFailureEvidence(t *testing.T) {
 	}))
 	detail := completedReviewPlanDetail(t.TempDir())
 	verification := plan.FinalVerification{CWD: "/repo", Result: finalVerificationFailed, FailureKind: plan.FinalVerificationFailureKindToolMissing, ExitCode: &exitCode}
-	finalizer.appendFinalVerificationEvent(detail, verification, time.Now(), nil)
+	finalizer.appendFinalVerificationEvent(detail, verification, "", time.Now(), nil)
 	exitCode = 1
 	if event.FailureKind != plan.FinalVerificationFailureKindToolMissing || event.ExitCode == nil || *event.ExitCode != 127 || event.ExitCode == verification.ExitCode {
 		t.Fatalf("event failure evidence = %+v", event)
@@ -640,6 +640,61 @@ func TestVerifyCompletedBranchStateWriteFailureStillEmitsOutcomeEvent(t *testing
 		if event.Type == plan.EventTypeFinalVerification {
 			t.Fatalf("current event seam unexpectedly appended to in-memory detail: %#v", event)
 		}
+	}
+}
+
+func TestAppendFinalVerificationEventPrefersFailureLines(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output strings.Builder
+	for i := range 1000 {
+		fmt.Fprintf(&output, "ok\tgithub.com/iamseth/tao/internal/pkg%d\tcoverage: 80.0%% of statements\n", i)
+	}
+	const failingTest = "--- FAIL: TestChangesRunExitCancelsLoader (0.01s)"
+	const failingPackage = "FAIL\tgithub.com/iamseth/tao/internal/tui"
+	output.WriteString(failingTest + "\n" + failingPackage + "\n")
+	commandErr := errors.New("exit status 1")
+	var event plan.Event
+	finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{}, RunDependencies{
+		CommandRunner: func(_ context.Context, _ string, _ string, _ []string, stdout, stderr io.Writer) error {
+			_, _ = io.WriteString(stdout, output.String())
+			_, _ = io.WriteString(stderr, "make: *** [verify] Error 1\n")
+			return commandErr
+		},
+		reviewGitFactory:  fixedReviewGit(&fakeReviewGit{head: "live-head"}),
+		PlanRecordFactory: memoryPlanRecordFactory,
+		EventAppender: eventAppenderFunc(func(_ string, appended plan.Event) error {
+			if appended.Type == plan.EventTypeFinalVerification {
+				event = appended
+			}
+			return nil
+		}),
+	}))
+	detail := completedReviewPlanDetail(t.TempDir())
+	if err := finalizer.verifyCompletedBranch(context.Background(), detail, root); !errors.Is(err, commandErr) {
+		t.Fatalf("verification error = %v, want command error", err)
+	}
+	for _, line := range []string{failingTest, failingPackage} {
+		if !strings.Contains(event.Reason, line) {
+			t.Errorf("reason missing %q: %q", line, event.Reason)
+		}
+	}
+	if got := len([]rune(event.Reason)); got > 1000 {
+		t.Errorf("reason length = %d, want at most 1000", got)
+	}
+	combined := combineFinalVerificationOutput(output.String(), "make: *** [verify] Error 1\n")
+	wantDetails, wantTruncated := boundedFinalVerificationDetails(combined)
+	verification := detail.State.Plan.FinalVerification
+	if verification == nil {
+		t.Fatal("missing final verification")
+	}
+	if verification.Details != wantDetails || verification.OutputTruncated != wantTruncated || !wantTruncated {
+		t.Error("persisted details or truncation differ from bounded output tail")
+	}
+	if verification.Fingerprint != finalVerificationFingerprint(*verification) {
+		t.Error("persisted fingerprint differs from final verification fingerprint")
 	}
 }
 

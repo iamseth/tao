@@ -16,6 +16,7 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/textbound"
 	"github.com/iamseth/tao/internal/verifydetect"
+	"github.com/iamseth/tao/internal/verifyoutput"
 )
 
 const (
@@ -60,7 +61,7 @@ func (f Finalizer) verifyCompletedBranch(ctx context.Context, detail *plan.PlanD
 	}
 	if command == "" {
 		recordErr := f.recordFinalVerification(detail, verification)
-		f.appendFinalVerificationEvent(detail, verification, verification.VerifiedAt, nil)
+		f.appendFinalVerificationEvent(detail, verification, "", verification.VerifiedAt, nil)
 		return recordErr
 	}
 
@@ -87,7 +88,7 @@ func (f Finalizer) verifyCompletedBranch(ctx context.Context, detail *plan.PlanD
 		verification.Details, verification.OutputTruncated = boundedFinalVerificationDetails(combined)
 		verification.Fingerprint = finalVerificationFingerprint(verification)
 		recordErr := f.recordFinalVerification(detail, verification)
-		f.appendFinalVerificationEvent(detail, verification, finishedAt.UTC(), &durationSeconds)
+		f.appendFinalVerificationEvent(detail, verification, combined, finishedAt.UTC(), &durationSeconds)
 		if recordErr != nil {
 			return fmt.Errorf("record failed final repository verification: %w (verification error: %w)", recordErr, runErr)
 		}
@@ -101,21 +102,23 @@ func (f Finalizer) verifyCompletedBranch(ctx context.Context, detail *plan.PlanD
 	verification.Details, verification.OutputTruncated = boundedFinalVerificationDetails(combined)
 	verification.Fingerprint = finalVerificationFingerprint(verification)
 	recordErr := f.recordFinalVerification(detail, verification)
-	f.appendFinalVerificationEvent(detail, verification, finishedAt.UTC(), &durationSeconds)
+	f.appendFinalVerificationEvent(detail, verification, combined, finishedAt.UTC(), &durationSeconds)
 	if recordErr != nil {
 		return recordErr
 	}
 	return writef(f.outputWriter(), "Final verification: passed (%s)\n", command)
 }
 
-func (f Finalizer) appendFinalVerificationEvent(detail *plan.PlanDetail, verification plan.FinalVerification, timestamp time.Time, durationSeconds *int64) {
+func (f Finalizer) appendFinalVerificationEvent(detail *plan.PlanDetail, verification plan.FinalVerification, combinedOutput string, timestamp time.Time, durationSeconds *int64) {
 	appender := f.execution.Dependencies.EventAppender
 	if detail == nil || appender == nil {
 		return
 	}
-	reason := []rune(verification.Details)
-	if len(reason) > 1000 {
-		reason = reason[:1000]
+	reason := verification.Details
+	if verification.Result == finalVerificationFailed {
+		reason = verifyoutput.Reason(combinedOutput, verification.Details, 1000)
+	} else if runes := []rune(reason); len(runes) > 1000 {
+		reason = string(runes[:1000])
 	}
 	var exitCode *int
 	if verification.ExitCode != nil {
@@ -131,7 +134,7 @@ func (f Finalizer) appendFinalVerificationEvent(detail *plan.PlanDetail, verific
 		Result:          verification.Result,
 		FailureKind:     verification.FailureKind,
 		ExitCode:        exitCode,
-		Reason:          string(reason),
+		Reason:          reason,
 		Message:         fmt.Sprintf("Final verification %s in %s", verification.Result, verification.CWD),
 	}
 	if err := appender.AppendEvent(detail.Dir, event); err != nil {

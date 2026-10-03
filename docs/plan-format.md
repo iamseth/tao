@@ -534,7 +534,7 @@ Current well-known event types include:
 | `budget_exceeded` | An opt-in hard slice output-token or cost cap was crossed; records the metric, threshold, and observed value. |
 | `rework_round` | Authoritative evidence that an automatic rework round was atomically reopened. |
 | `rework_stopped` | Authoritative evidence that automatic rework stopped at a persisted safety bound. |
-| `final_verification` | Final repository verification result was recorded, including optional `failure_kind` and `exit_code`. |
+| `final_verification` | Final repository verification result was recorded, including optional `failure_kind` and `exit_code`. For failed results, the bounded reason (at most 1000 runes) prefers failure-bearing output lines (`--- FAIL`, `FAIL`, `panic:`, `Error:`, `make: ***`) followed by trailing output, and falls back to the output head when none match. |
 | `verification_repair_created` | A bounded repair slice was generated for the current failed final verification; records the generated slice ID, failed command and fingerprint, and the failed head in `reason`. |
 | `verification_repair_stopped` | Authoritative stop evidence emitted when failed final verification exhausts the fixed cap of two generated attempts; records the failed `command`, `head_sha`, and `fingerprint`, the lifetime `attempts`, and an actionable manual-recovery `reason`. |
 | `merge_verification` | Merge verification result was recorded. |

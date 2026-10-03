@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/verifyoutput"
 )
 
 const (
@@ -37,6 +38,19 @@ func FormatBlockerText(reason string) BlockerText {
 		Detailed: boundBlockerText(normalized, blockerReasonDetailRunes),
 		Concise:  boundBlockerText(normalized, blockerReasonExcerptRunes),
 	}
+}
+
+// FormatFinalVerificationHint returns a bounded, control-safe, display-only
+// failing test or package hint from untrusted verification output.
+func FormatFinalVerificationHint(reason string) string {
+	// Preserve line boundaries for the failure parser while normalizing each line.
+	lines := strings.Split(reason, "\n")
+	for i, line := range lines {
+		lines[i] = strings.Join(strings.FieldsFunc(line, func(r rune) bool {
+			return unicode.IsSpace(r) || unicode.IsControl(r)
+		}), " ")
+	}
+	return boundDisplayText(verifyoutput.FirstFailingTest(strings.Join(lines, "\n")), blockerReasonExcerptRunes)
 }
 
 // FormatBlockedRunGuidance presents a persisted blocker as display-only context
