@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -164,11 +165,43 @@ func TestChangesEqualSignatureKeepsPendingDiffAndFreshMetadata(t *testing.T) {
 	}
 }
 
+// gatedReader serves its first reader to EOF, then blocks until gate closes
+// before serving the rest. It lets a scripted input stream wait for a loader to
+// start before it delivers the keys that exit the loop.
+type gatedReader struct {
+	first io.Reader
+	gate  <-chan struct{}
+	rest  io.Reader
+}
+
+func (r *gatedReader) Read(p []byte) (int, error) {
+	if r.first != nil {
+		n, err := r.first.Read(p)
+		if err == io.EOF {
+			r.first = nil
+			if n == 0 {
+				return r.Read(p)
+			}
+			return n, nil
+		}
+		return n, err
+	}
+	<-r.gate
+	return r.rest.Read(p)
+}
+
 func TestChangesRunExitCancelsLoader(t *testing.T) {
 	starts := make(chan context.Context, 1)
+	started := make(chan struct{})
+	var once sync.Once
 	row := monitor.Row{RepositoryID: "repo", PlanID: "one", PlanDir: "/one", Status: plan.StatusPlanned}
-	a := App{Input: strings.NewReader("\r\t\t\tq"), Output: io.Discard, Terminal: &fakeTerminal{size: term.Size{Width: 120, Height: 30}}, Ticker: &fakeTicker{}, Collector: &fakeCollector{snapshots: []monitor.Snapshot{{Rows: []monitor.Row{row}}}}, Details: &fakeDetailRepository{detail: &plan.PlanDetail{}}, Changes: DetailChangesFuncs{SnapshotFunc: func(ctx context.Context, _ *plan.PlanDetail, _ string) (DetailChangesSnapshot, error) {
+	// Quit only after the loader has observably started: exiting earlier cancels the
+	// loader context before its goroutine runs, and Snapshot returns on ctx.Err()
+	// without ever invoking SnapshotFunc.
+	input := &gatedReader{first: strings.NewReader("\r\t\t\t"), gate: started, rest: strings.NewReader("q")}
+	a := App{Input: input, Output: io.Discard, Terminal: &fakeTerminal{size: term.Size{Width: 120, Height: 30}}, Ticker: &fakeTicker{}, Collector: &fakeCollector{snapshots: []monitor.Snapshot{{Rows: []monitor.Row{row}}}}, Details: &fakeDetailRepository{detail: &plan.PlanDetail{}}, Changes: DetailChangesFuncs{SnapshotFunc: func(ctx context.Context, _ *plan.PlanDetail, _ string) (DetailChangesSnapshot, error) {
 		starts <- ctx
+		once.Do(func() { close(started) })
 		<-ctx.Done()
 		return DetailChangesSnapshot{}, ctx.Err()
 	}}}
