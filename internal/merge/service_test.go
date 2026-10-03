@@ -232,6 +232,12 @@ func (f *fakeGitClient) Add(ctx context.Context, paths ...string) error {
 	return f.addErr
 }
 
+func (f *fakeGitClient) AddTracked(ctx context.Context, paths ...string) error {
+	_ = ctx
+	f.calls = append(f.calls, "add-tracked "+strings.Join(paths, " "))
+	return f.addErr
+}
+
 func (f *fakeGitClient) Commit(ctx context.Context, message string) error {
 	_ = ctx
 	f.calls = append(f.calls, "commit "+message)

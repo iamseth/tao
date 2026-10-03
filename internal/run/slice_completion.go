@@ -212,8 +212,18 @@ func (s SliceCompletionService) finishSliceCompletion(ctx context.Context, git g
 	if err := check(); err != nil {
 		return err
 	}
-	if err := git.Add(ctx, paths...); err != nil {
-		return fmt.Errorf("stage slice completion paths: %w", err)
+	// Staged-only entries need no call. Index-known worktree changes stage with
+	// force so deletions and edits beneath a newly ignored directory succeed;
+	// untracked entries keep plain staging so ignore rules still apply to them.
+	if tracked := commitcontract.UniquePaths(classification.TrackedStagePaths); len(tracked) > 0 {
+		if err := git.AddTracked(ctx, tracked...); err != nil {
+			return sliceStagingError(git.Root(), err)
+		}
+	}
+	if untracked := commitcontract.UniquePaths(classification.UntrackedStagePaths); len(untracked) > 0 {
+		if err := git.Add(ctx, untracked...); err != nil {
+			return sliceStagingError(git.Root(), err)
+		}
 	}
 	if err := checkFrozenVerificationWorktree(ctx, git, intent); err != nil {
 		return err
@@ -247,6 +257,13 @@ func (s SliceCompletionService) finishSliceCompletion(ctx context.Context, git g
 	}
 	outcome := plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionCommitted, CommitSHA: commitSHA}
 	return persistSliceCompletion(request, &outcome, request.Now)
+}
+
+// sliceStagingError is the refusal for a failed staging step. The intent
+// boundary stays recorded, so an identical rerun repeats the failure until the
+// worktree itself changes; Tao never retries, falls back, or records an event.
+func sliceStagingError(root string, err error) error {
+	return fmt.Errorf("stage slice completion paths: %w; the worktree under %s must change before rerunning tao slice-complete (inspect git status there; do not commit by hand)", err, root)
 }
 
 func expectedPlanCommitPaths(detail *plan.PlanDetail, additionallyCompleted ...string) commitcontract.ExpectedPaths {

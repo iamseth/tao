@@ -20,6 +20,17 @@ type StatusClassification struct {
 	AmbiguousLines []string
 	// StartingDirtyPaths are candidates selected by the optional predicate.
 	StartingDirtyPaths []string
+	// StagedOnlyPaths are candidates whose change is already fully in the
+	// index (worktree column space), so staging them again is unnecessary and
+	// may fail for git-rm deletions.
+	StagedOnlyPaths []string
+	// TrackedStagePaths are index-known candidates with worktree changes; they
+	// may be staged with forced tracked staging because ignore rules never
+	// apply to index-known paths.
+	TrackedStagePaths []string
+	// UntrackedStagePaths are untracked candidates that must use plain staging
+	// so ignored files are never force-added.
+	UntrackedStagePaths []string
 }
 
 // ClassifyStatus parses porcelain status once for commit and cleanliness checks.
@@ -49,8 +60,39 @@ func ClassifyStatus(status string, isStartingDirty func(string) bool) StatusClas
 			classification.StartingDirtyPaths = append(classification.StartingDirtyPaths, path)
 		}
 		classification.CommitCandidates = append(classification.CommitCandidates, path)
+		switch bucket := stagingBucket(line); bucket {
+		case stagingBucketStagedOnly:
+			classification.StagedOnlyPaths = append(classification.StagedOnlyPaths, path)
+		case stagingBucketTracked:
+			classification.TrackedStagePaths = append(classification.TrackedStagePaths, path)
+		case stagingBucketUntracked:
+			classification.UntrackedStagePaths = append(classification.UntrackedStagePaths, path)
+		}
 	}
 	return classification
+}
+
+type stagingBucketKind int
+
+const (
+	stagingBucketStagedOnly stagingBucketKind = iota + 1
+	stagingBucketTracked
+	stagingBucketUntracked
+)
+
+// stagingBucket reads the two porcelain status columns of an unambiguous line.
+// Lines that reach here are at least four bytes because PorcelainPath already
+// rejected shorter ones.
+func stagingBucket(line string) stagingBucketKind {
+	index, worktree := line[0], line[1]
+	switch {
+	case index == '?' && worktree == '?':
+		return stagingBucketUntracked
+	case worktree == ' ':
+		return stagingBucketStagedOnly
+	default:
+		return stagingBucketTracked
+	}
 }
 
 // StartingDirtyPredicate returns a normalized path-membership predicate.

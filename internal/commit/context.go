@@ -50,6 +50,14 @@ type StandaloneContext struct {
 	AllowedDiffTruncated bool           `json:"allowed_diff_truncated"`
 	RecentHistory        string         `json:"recent_history"`
 	ExclusionSources     []string       `json:"exclusion_sources,omitempty"`
+
+	// TrackedStagePaths and UntrackedStagePaths are the allowed paths that
+	// finalization must stage with forced tracked staging or plain staging.
+	// They derive from the same status read as AllowedPaths, are never
+	// serialized, and never enter Fingerprint. Allowed paths in neither list
+	// are already fully staged.
+	TrackedStagePaths   []string `json:"-"`
+	UntrackedStagePaths []string `json:"-"`
 }
 
 // RepoExclusions contains repository-local paths discovered from AGENTS.md.
@@ -133,6 +141,8 @@ func BuildStandaloneContext(ctx context.Context, git ContextGit, repoRoot string
 	paths = slices.DeleteFunc(paths, func(path string) bool { return strings.HasPrefix(path, `"`) })
 	untracked := untrackedPaths(status)
 	staged := standaloneStagedPaths(status, classification.TaoStagedPaths)
+	trackedStage := pathSet(classification.TrackedStagePaths)
+	untrackedStage := pathSet(classification.UntrackedStagePaths)
 	result := StandaloneContext{Head: head, AllowedPaths: []string{}, RejectedPaths: []RejectedPath{}, ExclusionSources: exclusions.Sources}
 	ambiguousLines := append([]string(nil), classification.AmbiguousLines...)
 	ambiguousLines = append(ambiguousLines, standaloneAmbiguousStatusLines(status)...)
@@ -165,6 +175,12 @@ func BuildStandaloneContext(ctx context.Context, git ContextGit, repoRoot string
 			continue
 		}
 		result.AllowedPaths = append(result.AllowedPaths, path)
+		if trackedStage[path] {
+			result.TrackedStagePaths = append(result.TrackedStagePaths, path)
+		}
+		if untrackedStage[path] {
+			result.UntrackedStagePaths = append(result.UntrackedStagePaths, path)
+		}
 		writeIdentity(identity, "path", path)
 		writeIdentity(identity, "diff", diff)
 		if allowed.Len() > 0 && allowed.Len() < contextDiffLimit {
@@ -242,6 +258,14 @@ func standalonePathDiff(ctx context.Context, git ContextGit, repoRoot, path stri
 		diff.WriteByte('\n')
 	}
 	return diff.String(), "", nil
+}
+
+func pathSet(paths []string) map[string]bool {
+	set := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		set[NormalizePath(path)] = true
+	}
+	return set
 }
 
 func untrackedPaths(status string) map[string]bool {

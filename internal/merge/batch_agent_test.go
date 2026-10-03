@@ -119,13 +119,23 @@ type batchPreparedCommitTestGit struct {
 	headErr      error
 	commitCalled bool
 	created      bool
+	stageCalls   []string
 }
 
 func (g *batchPreparedCommitTestGit) Add(ctx context.Context, paths ...string) error {
+	g.stageCalls = append(g.stageCalls, "add "+strings.Join(paths, " "))
 	if g.skipAdd {
 		return nil
 	}
 	return g.GitClient.Add(ctx, paths...)
+}
+
+func (g *batchPreparedCommitTestGit) AddTracked(ctx context.Context, paths ...string) error {
+	g.stageCalls = append(g.stageCalls, "add-tracked "+strings.Join(paths, " "))
+	if g.skipAdd {
+		return nil
+	}
+	return g.GitClient.AddTracked(ctx, paths...)
 }
 
 func (g *batchPreparedCommitTestGit) Commit(ctx context.Context, message string) error {
@@ -379,6 +389,137 @@ func TestBatchAgentStagesResolutionAlongsideStagedDeletion(t *testing.T) {
 	if status := strings.TrimSpace(realGitOutput(t, integrationRoot, "status", "--porcelain")); status != "" {
 		t.Fatalf("integration worktree left dirty after commit:\n%s", status)
 	}
+}
+
+func TestBatchAgentStagesTrackedChangeUnderNewlyIgnoredDirectory(t *testing.T) {
+	t.Parallel()
+	fixture := newRealGitWorktree(t)
+	cacheDir := filepath.Join(fixture.repoRoot, "pkg", "cache")
+	if err := os.MkdirAll(cacheDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, "data.txt"), []byte("cached\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runRealGit(t, fixture.repoRoot, "add", "pkg/cache/data.txt")
+	runRealGit(t, fixture.repoRoot, "commit", "-m", "add cache data")
+	runRealGit(t, fixture.worktreePath, "checkout", "--detach", fixture.defaultBranch)
+	runRealGit(t, fixture.worktreePath, "checkout", "-B", fixture.planBranch)
+	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "README.md"), []byte("source\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runRealGit(t, fixture.worktreePath, "add", "README.md")
+	runRealGit(t, fixture.worktreePath, "commit", "-m", "source")
+	sourceHead := strings.TrimSpace(realGitOutput(t, fixture.worktreePath, "rev-parse", "HEAD"))
+	if err := os.WriteFile(filepath.Join(fixture.repoRoot, "README.md"), []byte("default\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runRealGit(t, fixture.repoRoot, "add", "README.md")
+	runRealGit(t, fixture.repoRoot, "commit", "-m", "default")
+	defaultHead := strings.TrimSpace(realGitOutput(t, fixture.repoRoot, "rev-parse", "HEAD"))
+	integrationRoot := filepath.Join(filepath.Dir(fixture.repoRoot), "integration")
+	runRealGit(t, fixture.repoRoot, "worktree", "add", "-b", "tao/integration/test", integrationRoot, defaultHead)
+
+	state := batchAgentDeferredState(fixture, sourceHead, defaultHead)
+	agent := batchSessionAgentFunc(func(_ context.Context, request BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
+		root := request.IntegrationRoot
+		for name, content := range map[string]string{
+			"README.md":             "combined\n",
+			".gitignore":            "pkg/cache/\n",
+			"pkg/cache/data.txt":    "cached and resolved\n",
+			"pkg/cache/scratch.txt": "ignored sibling\n",
+		} {
+			if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(name)), []byte(content), 0o600); err != nil {
+				return BatchAgentSessionResult{}, err
+			}
+		}
+		return BatchAgentSessionResult{Output: batchResolutionJSON("resolved README and cache data")}, nil
+	})
+	got, err := (BatchAgentResolver{Store: &recordingBatchTransitionStore{}, Service: NewService(fixture.repoRoot, nil), Agent: agent}).Resolve(context.Background(), state, integrationRoot, BatchResolveOptions{})
+	if err != nil {
+		t.Fatalf("resolution under a newly ignored directory failed: %v", err)
+	}
+	if len(got.Resolved) != 1 || got.State.Integrations[0].Status != batchIntegrationApplied {
+		t.Fatalf("unexpected resolution result: %#v", got)
+	}
+	resolution := latestBatchResolution(&got.State.Integrations[0])
+	if resolution == nil || !slices.Equal(resolution.ChangedPaths, []string{".gitignore", "README.md", "pkg/cache/data.txt"}) {
+		t.Fatalf("durable intent recorded the wrong edit set: %+v", resolution)
+	}
+	committed := realGitOutput(t, integrationRoot, "show", "--name-status", "--format=", "HEAD")
+	for _, want := range []string{"A\t.gitignore", "M\tREADME.md", "M\tpkg/cache/data.txt"} {
+		if !strings.Contains(committed, want) {
+			t.Fatalf("resolved commit lacks %q:\n%s", want, committed)
+		}
+	}
+	if strings.Contains(committed, "scratch.txt") {
+		t.Fatalf("ignored untracked sibling was force-added:\n%s", committed)
+	}
+	if status := strings.TrimSpace(realGitOutput(t, integrationRoot, "status", "--porcelain")); status != "" {
+		t.Fatalf("integration worktree left dirty after commit:\n%s", status)
+	}
+}
+
+func TestFinishResolvedCandidateStagesByPorcelainBucket(t *testing.T) {
+	t.Parallel()
+	t.Run("fingerprinted intent splits tracked and untracked staging", func(t *testing.T) {
+		t.Parallel()
+		fixture, sourceHead, parent, root := batchAgentConflictFixture(t)
+		state := batchAgentDeferredState(fixture, sourceHead, parent)
+		if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("combined\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "NOTES.md"), []byte("new\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		paths := []string{"NOTES.md", "README.md"}
+		fingerprint, err := resolvedCandidateContentFingerprint(root, paths)
+		if err != nil {
+			t.Fatal(err)
+		}
+		message := testBatchCommitMessage("plan-a", sourceHead)
+		state.Candidates[0].CommitMessage = message
+		state.Integrations[0].Status = batchIntegrationApplying
+		state.Integrations[0].CommitMessage = message
+		state.Integrations[0].Resolutions = []BatchResolution{{CommitMessage: message, ChangedPaths: paths, ContentFingerprint: fingerprint}}
+		client, err := NewService(fixture.repoRoot, nil).gitClientForRoot(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		git := &batchPreparedCommitTestGit{GitClient: client}
+		resolver := BatchAgentResolver{Store: &recordingBatchTransitionStore{}, Service: NewService(fixture.repoRoot, nil)}
+		if _, _, _, err := resolver.finishResolvedCandidate(context.Background(), state, git, "plan-a", "true"); err != nil {
+			t.Fatal(err)
+		}
+		if want := []string{"add-tracked README.md", "add NOTES.md"}; !slices.Equal(git.stageCalls, want) {
+			t.Fatalf("stage calls = %q, want %q", git.stageCalls, want)
+		}
+	})
+	t.Run("legacy fingerprint-less intent keeps plain add of dot", func(t *testing.T) {
+		t.Parallel()
+		fixture, sourceHead, parent, root := batchAgentConflictFixture(t)
+		state := batchAgentDeferredState(fixture, sourceHead, parent)
+		if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("combined\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		message := testBatchCommitMessage("plan-a", sourceHead)
+		state.Candidates[0].CommitMessage = message
+		state.Integrations[0].Status = batchIntegrationApplying
+		state.Integrations[0].CommitMessage = message
+		state.Integrations[0].Resolutions = []BatchResolution{{CommitMessage: message}}
+		client, err := NewService(fixture.repoRoot, nil).gitClientForRoot(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		git := &batchPreparedCommitTestGit{GitClient: client}
+		resolver := BatchAgentResolver{Store: &recordingBatchTransitionStore{}, Service: NewService(fixture.repoRoot, nil)}
+		if _, _, _, err := resolver.finishResolvedCandidate(context.Background(), state, git, "plan-a", "true"); err != nil {
+			t.Fatal(err)
+		}
+		if want := []string{"add ."}; !slices.Equal(git.stageCalls, want) {
+			t.Fatalf("legacy stage calls = %q, want %q", git.stageCalls, want)
+		}
+	})
 }
 
 func TestBatchAgentSessionFailuresStopWithoutAnotherResolveCall(t *testing.T) {
@@ -1167,6 +1308,12 @@ func TestParseConcretePorcelainChangesDecodesQuotedPaths(t *testing.T) {
 	if want := []string{"nested/file.txt", "quoted\tname.txt"}; !slices.Equal(got.markerScanPaths, want) {
 		t.Fatalf("marker scan paths = %q, want %q", got.markerScanPaths, want)
 	}
+	if want := []string{"deleted.txt", "quoted\tname.txt"}; !slices.Equal(got.trackedStagePaths, want) {
+		t.Fatalf("tracked stage paths = %q, want %q", got.trackedStagePaths, want)
+	}
+	if want := []string{"nested/file.txt"}; !slices.Equal(got.untrackedStagePaths, want) {
+		t.Fatalf("untracked stage paths = %q, want %q", got.untrackedStagePaths, want)
+	}
 }
 
 func TestParsePorcelainV1ZPreservesConcreteUntrackedAndRenamePaths(t *testing.T) {
@@ -1181,6 +1328,37 @@ func TestParsePorcelainV1ZPreservesConcreteUntrackedAndRenamePaths(t *testing.T)
 	}
 	if want := []string{"new dir/deeper/marker\nfile.txt", "renamed name.txt"}; !slices.Equal(got.markerScanPaths, want) {
 		t.Fatalf("marker scan paths = %q, want %q", got.markerScanPaths, want)
+	}
+	// Staged-only entries (the rename and the staged deletion) are already in
+	// the index and must not be passed back to git add at all.
+	if got.trackedStagePaths != nil {
+		t.Fatalf("staged-only entries produced tracked stage paths %q", got.trackedStagePaths)
+	}
+	if want := []string{"new dir/deeper/marker\nfile.txt"}; !slices.Equal(got.untrackedStagePaths, want) {
+		t.Fatalf("untracked stage paths = %q, want %q", got.untrackedStagePaths, want)
+	}
+}
+
+func TestRecordPorcelainChangeSplitsStagingByBucket(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		code      string
+		tracked   bool
+		untracked bool
+	}{
+		{code: "D "}, {code: "A "}, {code: "M "}, {code: "R "}, {code: "T "},
+		{code: " M", tracked: true}, {code: "MM", tracked: true}, {code: " D", tracked: true},
+		{code: "AM", tracked: true}, {code: "UU", tracked: true}, {code: " T", tracked: true},
+		{code: "??", untracked: true},
+	} {
+		var changes porcelainChanges
+		recordPorcelainChange(&changes, tc.code, "target.txt", "")
+		if (len(changes.trackedStagePaths) == 1) != tc.tracked || (len(changes.untrackedStagePaths) == 1) != tc.untracked {
+			t.Fatalf("code %q: tracked=%q untracked=%q; want tracked=%t untracked=%t", tc.code, changes.trackedStagePaths, changes.untrackedStagePaths, tc.tracked, tc.untracked)
+		}
+		if !slices.Equal(changes.changedPaths, []string{"target.txt"}) {
+			t.Fatalf("code %q: changed paths = %q", tc.code, changes.changedPaths)
+		}
 	}
 }
 

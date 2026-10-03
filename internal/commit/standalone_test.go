@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -83,13 +86,22 @@ func TestFinalizeStandaloneProposalRefusesDriftBeforeStaging(t *testing.T) {
 
 type standaloneGitStub struct {
 	contextGitStub
-	addCalls     int
-	restoreCalls int
-	commitCalls  int
+	addCalls        int
+	addPaths        [][]string
+	addTrackedCalls int
+	addTrackedPaths [][]string
+	restoreCalls    int
+	commitCalls     int
 }
 
-func (g *standaloneGitStub) Add(context.Context, ...string) error {
+func (g *standaloneGitStub) Add(_ context.Context, paths ...string) error {
 	g.addCalls++
+	g.addPaths = append(g.addPaths, slices.Clone(paths))
+	return nil
+}
+func (g *standaloneGitStub) AddTracked(_ context.Context, paths ...string) error {
+	g.addTrackedCalls++
+	g.addTrackedPaths = append(g.addTrackedPaths, slices.Clone(paths))
 	return nil
 }
 func (g *standaloneGitStub) RestoreStaged(context.Context, ...string) error {
@@ -374,4 +386,99 @@ func runStandaloneGit(t *testing.T, root string, args ...string) string {
 		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, output)
 	}
 	return string(output)
+}
+
+func TestFinalizeStandaloneStagesByPorcelainBucket(t *testing.T) {
+	tests := []struct {
+		name        string
+		status      string
+		diffs       map[string]string
+		wantAdd     [][]string
+		wantTracked [][]string
+	}{
+		{name: "git rm deletion needs no staging", status: "D  gone.go\n", diffs: map[string]string{"gone.go": "-gone\n"}},
+		{name: "tracked change uses forced tracked staging", status: " M edited.go\n", diffs: map[string]string{"edited.go": "+edit\n"}, wantTracked: [][]string{{"edited.go"}}},
+		{name: "untracked path uses plain add", status: "?? fresh.go\n", diffs: map[string]string{}, wantAdd: [][]string{{"fresh.go"}}},
+		{
+			name:        "mixed buckets stage in two calls",
+			status:      "D  gone.go\n D removed.go\n?? fresh.go\n",
+			diffs:       map[string]string{"gone.go": "-gone\n", "removed.go": "-removed\n"},
+			wantAdd:     [][]string{{"fresh.go"}},
+			wantTracked: [][]string{{"removed.go"}},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			if strings.Contains(test.status, "?? fresh.go") {
+				writeStandaloneFile(t, root, "fresh.go", "package fresh\n")
+			}
+			git := &standaloneGitStub{contextGitStub: contextGitStub{head: "head-a", status: test.status, diffs: test.diffs}}
+			preflight, err := BuildStandaloneContext(context.Background(), git, root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = FinalizeStandaloneProposal(context.Background(), git, root, StandaloneProposal{
+				ContextFingerprint: preflight.Fingerprint,
+				Proposal:           Proposal{Type: "fix", Scope: "commit", Summary: "stage by porcelain bucket", What: "Stage tracked and untracked paths separately.", Why: "Deletions and newly ignored tracked paths must stage."},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(git.addPaths, test.wantAdd) {
+				t.Errorf("Add calls = %v, want %v", git.addPaths, test.wantAdd)
+			}
+			if !reflect.DeepEqual(git.addTrackedPaths, test.wantTracked) {
+				t.Errorf("AddTracked calls = %v, want %v", git.addTrackedPaths, test.wantTracked)
+			}
+			if git.commitCalls != 1 {
+				t.Errorf("commit calls = %d, want 1", git.commitCalls)
+			}
+		})
+	}
+}
+
+func TestStandaloneContextStagingBucketsStayOutOfJSONAndFingerprint(t *testing.T) {
+	root := t.TempDir()
+	writeStandaloneFile(t, root, "fresh.go", "package fresh\n")
+	git := &standaloneGitStub{contextGitStub: contextGitStub{
+		head: "head-a", status: "D  gone.go\n M edited.go\n?? fresh.go\n",
+		diffs: map[string]string{"gone.go": "-gone\n", "edited.go": "+edit\n"},
+	}}
+	got, err := BuildStandaloneContext(context.Background(), git, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"edited.go"}; !slices.Equal(got.TrackedStagePaths, want) {
+		t.Errorf("TrackedStagePaths = %q, want %q", got.TrackedStagePaths, want)
+	}
+	if want := []string{"fresh.go"}; !slices.Equal(got.UntrackedStagePaths, want) {
+		t.Errorf("UntrackedStagePaths = %q, want %q", got.UntrackedStagePaths, want)
+	}
+	encoded, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatal(err)
+	}
+	wantKeys := []string{"allowed_diff", "allowed_diff_truncated", "allowed_paths", "context_fingerprint", "head", "recent_history", "rejected_paths"}
+	keys := slices.Sorted(maps.Keys(fields))
+	if !slices.Equal(keys, wantKeys) {
+		t.Fatalf("serialized context keys = %q, want %q", keys, wantKeys)
+	}
+	stripped := got
+	stripped.TrackedStagePaths = nil
+	stripped.UntrackedStagePaths = nil
+	strippedEncoded, err := json.Marshal(stripped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != string(strippedEncoded) {
+		t.Fatalf("staging buckets changed serialized context:\n%s\n%s", encoded, strippedEncoded)
+	}
+	if got.Fingerprint != stripped.Fingerprint || got.Fingerprint == "" {
+		t.Fatalf("fingerprint changed with staging buckets: %q vs %q", got.Fingerprint, stripped.Fingerprint)
+	}
 }

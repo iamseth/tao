@@ -925,7 +925,9 @@ another direct driver from racing that recovery:
   dirt as a resumed automatic run.
 - **After `commit_intent`:** do not rerun implementation or create a commit by
   hand. Retry `tao slice-complete` with the original inputs so its deterministic
-  transaction can recover or settle the exact commit.
+  transaction can recover or settle the exact commit. If the replay fails while
+  staging, the error names the worktree that must change before the replay
+  can succeed; Tao does not retry or fall back.
 - **Changed or unsafe boundary:** a different root, branch, or HEAD, an active
   Git operation, conflicts, or ambiguous status is a refusal. Inspect the named
   paths and restore the recorded boundary before rerunning Tao.

@@ -36,6 +36,7 @@ type StandaloneProposal struct {
 type StandaloneGit interface {
 	ContextGit
 	Add(context.Context, ...string) error
+	AddTracked(context.Context, ...string) error
 	RestoreStaged(context.Context, ...string) error
 	HasStagedChanges(context.Context) (bool, error)
 	Commit(context.Context, string) error
@@ -228,8 +229,15 @@ func finalizeStandalone(ctx context.Context, git StandaloneGit, repoRoot, expect
 	if len(live.AllowedPaths) == 0 {
 		return StandaloneResult{}, ErrNoAllowedChanges
 	}
-	if err := git.Add(ctx, live.AllowedPaths...); err != nil {
-		return StandaloneResult{}, fmt.Errorf("stage standalone commit paths: %w", err)
+	if len(live.TrackedStagePaths) > 0 {
+		if err := git.AddTracked(ctx, live.TrackedStagePaths...); err != nil {
+			return StandaloneResult{}, fmt.Errorf("stage standalone commit paths: %w", err)
+		}
+	}
+	if len(live.UntrackedStagePaths) > 0 {
+		if err := git.Add(ctx, live.UntrackedStagePaths...); err != nil {
+			return StandaloneResult{}, fmt.Errorf("stage standalone commit paths: %w", err)
+		}
 	}
 	committed, err := CommitPrepared(ctx, git, message)
 	result := StandaloneResult{Result: committed}

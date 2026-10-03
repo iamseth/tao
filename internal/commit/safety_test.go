@@ -109,3 +109,60 @@ func TestExpectedPathsRemainAdvisory(t *testing.T) {
 		t.Fatalf("advisory unexpected path became unsafe: %v", err)
 	}
 }
+
+func TestClassifyStatusSplitsStagingBuckets(t *testing.T) {
+	tests := []struct {
+		name       string
+		status     string
+		candidates []string
+		stagedOnly []string
+		tracked    []string
+		untracked  []string
+		taoStaged  []string
+	}{
+		{name: "git rm deletion", status: "D  gone.go", candidates: []string{"gone.go"}, stagedOnly: []string{"gone.go"}},
+		{name: "worktree deletion", status: " D gone.go", candidates: []string{"gone.go"}, tracked: []string{"gone.go"}},
+		{name: "worktree modification", status: " M edited.go", candidates: []string{"edited.go"}, tracked: []string{"edited.go"}},
+		{name: "staged and modified", status: "MM edited.go", candidates: []string{"edited.go"}, tracked: []string{"edited.go"}},
+		{name: "staged addition", status: "A  new.go", candidates: []string{"new.go"}, stagedOnly: []string{"new.go"}},
+		{name: "staged addition modified", status: "AM new.go", candidates: []string{"new.go"}, tracked: []string{"new.go"}},
+		{name: "type change", status: "T  link.go", candidates: []string{"link.go"}, stagedOnly: []string{"link.go"}},
+		{name: "untracked", status: "?? fresh.go", candidates: []string{"fresh.go"}, untracked: []string{"fresh.go"}},
+		{name: "collapsed untracked directory", status: "?? dir/", candidates: []string{"dir"}, untracked: []string{"dir"}},
+		{
+			name:       "deleted then recreated untracked",
+			status:     "D  swap.go\n?? swap.go",
+			candidates: []string{"swap.go", "swap.go"},
+			stagedOnly: []string{"swap.go"},
+			untracked:  []string{"swap.go"},
+		},
+		{
+			name:      "tao metadata lines",
+			status:    "M  .tao/state.json\n D .tao/slices.json\n?? .tao/local.json",
+			taoStaged: []string{".tao/state.json"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			classification := ClassifyStatus(test.status, nil)
+			if !slices.Equal(classification.CommitCandidates, test.candidates) {
+				t.Errorf("CommitCandidates = %q, want %q", classification.CommitCandidates, test.candidates)
+			}
+			if !slices.Equal(classification.StagedOnlyPaths, test.stagedOnly) {
+				t.Errorf("StagedOnlyPaths = %q, want %q", classification.StagedOnlyPaths, test.stagedOnly)
+			}
+			if !slices.Equal(classification.TrackedStagePaths, test.tracked) {
+				t.Errorf("TrackedStagePaths = %q, want %q", classification.TrackedStagePaths, test.tracked)
+			}
+			if !slices.Equal(classification.UntrackedStagePaths, test.untracked) {
+				t.Errorf("UntrackedStagePaths = %q, want %q", classification.UntrackedStagePaths, test.untracked)
+			}
+			if !slices.Equal(classification.TaoStagedPaths, test.taoStaged) {
+				t.Errorf("TaoStagedPaths = %q, want %q", classification.TaoStagedPaths, test.taoStaged)
+			}
+			if len(classification.AmbiguousLines) != 0 {
+				t.Errorf("AmbiguousLines = %q, want none", classification.AmbiguousLines)
+			}
+		})
+	}
+}

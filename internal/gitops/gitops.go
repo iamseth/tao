@@ -568,6 +568,16 @@ func (c Client) Add(ctx context.Context, paths ...string) error {
 	return c.run(ctx, args...)
 }
 
+// AddTracked stages exact index-known paths with git add -f so tracked changes
+// and worktree deletions beneath a newly ignored directory stage without the
+// ignored-path refusal. Ignore rules never apply to index-known paths, so force
+// is admissible only there: callers must never pass untracked paths,
+// directories, or ".".
+func (c Client) AddTracked(ctx context.Context, paths ...string) error {
+	args := append([]string{"add", "-f", "--"}, paths...)
+	return c.run(ctx, args...)
+}
+
 // RestoreStaged unstages paths.
 func (c Client) RestoreStaged(ctx context.Context, paths ...string) error {
 	args := append([]string{"restore", "--staged", "--"}, paths...)

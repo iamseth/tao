@@ -963,3 +963,47 @@ func writeRepoFile(t *testing.T, root string, path string, contents string) {
 func key(args ...string) string {
 	return strings.Join(args, "\x00")
 }
+
+func TestAddTrackedStagesIndexKnownPathsUnderNewlyIgnoredDirectory(t *testing.T) {
+	root := t.TempDir()
+	runGitCommand(t, root, "init", "-b", "main")
+	disableGitFixtureMaintenance(t, root)
+	runGitCommand(t, root, "config", "user.name", "Test")
+	runGitCommand(t, root, "config", "user.email", "test@example.com")
+	if err := os.MkdirAll(filepath.Join(root, "pkg", "cache"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	writeRepoFile(t, root, "pkg/cache/modified.txt", "before\n")
+	writeRepoFile(t, root, "pkg/cache/deleted.txt", "delete me\n")
+	runGitCommand(t, root, "add", ".")
+	runGitCommand(t, root, "commit", "-m", "base")
+
+	writeRepoFile(t, root, ".gitignore", "pkg/cache/\n")
+	writeRepoFile(t, root, "pkg/cache/modified.txt", "after\n")
+	if err := os.Remove(filepath.Join(root, "pkg", "cache", "deleted.txt")); err != nil {
+		t.Fatal(err)
+	}
+	writeRepoFile(t, root, "pkg/cache/untracked.txt", "never staged\n")
+
+	client := NewClient(root, nil)
+	ctx := context.Background()
+	if err := client.Add(ctx, "pkg/cache/modified.txt"); err == nil {
+		t.Fatal("plain Add of a tracked path under a newly ignored directory unexpectedly succeeded")
+	}
+	if err := client.AddTracked(ctx, "pkg/cache/modified.txt", "pkg/cache/deleted.txt"); err != nil {
+		t.Fatalf("AddTracked failed: %v", err)
+	}
+	staged := gitOutput(t, root, "diff", "--cached", "--name-status")
+	for _, want := range []string{"M\tpkg/cache/modified.txt", "D\tpkg/cache/deleted.txt"} {
+		if !strings.Contains(staged, want) {
+			t.Errorf("staged changes missing %q:\n%s", want, staged)
+		}
+	}
+	if strings.Contains(staged, "untracked.txt") {
+		t.Fatalf("ignored untracked sibling was staged:\n%s", staged)
+	}
+	status := gitOutput(t, root, "status", "--porcelain", "--ignored")
+	if !strings.Contains(status, "!! pkg/cache/untracked.txt") {
+		t.Fatalf("ignored untracked sibling should remain ignored and unstaged:\n%s", status)
+	}
+}

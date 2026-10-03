@@ -483,7 +483,7 @@ func (r GuardedSingleConflictResolver) SettleResolved(ctx context.Context, reque
 	if err := singleResolutionValidationError(validateAgentEditsAtMarkerSizes(ctx, r.Git.Root(), changes.changedPaths, markerPaths, originalMarkerSizes)); err != nil {
 		return settlement, r.settlementReject(ctx, request.Intent, boundary, err)
 	}
-	if err := r.Git.Add(ctx, changes.stagePaths...); err != nil {
+	if err := stageResolutionChanges(ctx, r.Git, changes); err != nil {
 		return settlement, r.settlementReject(ctx, request.Intent, boundary, fmt.Errorf("stage exact resolution edits: %w", err))
 	}
 	staged, err := concretePorcelainChanges(ctx, r.Git)

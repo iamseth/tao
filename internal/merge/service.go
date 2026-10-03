@@ -76,6 +76,9 @@ type GitClient interface {
 	HasStagedChanges(ctx context.Context) (bool, error)
 	CleanUntracked(ctx context.Context) error
 	Add(ctx context.Context, paths ...string) error
+	// AddTracked force-stages exact index-known paths; callers must never pass
+	// untracked paths, directories, or ".".
+	AddTracked(ctx context.Context, paths ...string) error
 	Commit(ctx context.Context, message string) error
 	CommitWithoutHooks(ctx context.Context, message string) error
 	UpdateRefCAS(ctx context.Context, ref, newSHA, oldSHA string) error

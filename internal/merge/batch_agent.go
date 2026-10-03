@@ -481,16 +481,20 @@ func (r BatchAgentResolver) finishResolvedCandidate(ctx context.Context, state B
 		return state, false, false, fmt.Errorf("resolved candidate %s commit proposal is invalid: %w", planID, err)
 	}
 
-	var changed, stagePaths []string
+	var changed []string
+	var stage func(context.Context) error
 	if resolution.ContentFingerprint != "" {
 		changes, err := concretePorcelainChanges(ctx, git)
 		if err != nil {
 			return state, false, false, fmt.Errorf("%w for %s: inspect edit set: %w", errResolvedCandidateContentDrift, planID, err)
 		}
 		// The drift check and fingerprint cover every changed path, including
-		// staged deletions. Staging must use the narrower set: a staged deletion
-		// is already gone from the index and worktree, so git add rejects it.
-		changed, stagePaths = changes.changedPaths, changes.stagePaths
+		// staged deletions. Staging must use the narrower buckets: a staged
+		// deletion is already gone from the index and worktree, so git add
+		// rejects it, and tracked changes under a newly ignored directory stage
+		// only through the forced tracked path.
+		changed = changes.changedPaths
+		stage = func(ctx context.Context) error { return stageResolutionChanges(ctx, git, changes) }
 		if !slices.Equal(changed, resolution.ChangedPaths) {
 			return state, false, false, fmt.Errorf("%w for %s: edit set changed", errResolvedCandidateContentDrift, planID)
 		}
@@ -509,7 +513,7 @@ func (r BatchAgentResolver) finishResolvedCandidate(ctx context.Context, state B
 			return state, false, false, fmt.Errorf("inspect agent edits for %s: %w", planID, err)
 		}
 		changed = porcelainPaths(status)
-		stagePaths = []string{"."}
+		stage = func(ctx context.Context) error { return git.Add(ctx, ".") }
 	}
 	markerScanPaths := presentMarkerScanPaths(git.Root(), integration.ConflictFiles)
 	validation := validateAgentEdits(ctx, git.Root(), changed, markerScanPaths)
@@ -519,7 +523,7 @@ func (r BatchAgentResolver) finishResolvedCandidate(ctx context.Context, state B
 	case agentEditIssueNoChanges, agentEditIssueConflictMarkers, agentEditIssueUnscannablePaths:
 		return state, false, false, fmt.Errorf("agent left unresolved conflicts for %s", planID)
 	}
-	if err := git.Add(ctx, stagePaths...); err != nil {
+	if err := stage(ctx); err != nil {
 		return state, false, false, fmt.Errorf("stage agent resolution: %w", err)
 	}
 	status, err := git.StatusPorcelain(ctx)
@@ -700,11 +704,32 @@ func porcelainPaths(status string) []string {
 }
 
 type porcelainChanges struct {
-	changedPaths    []string
-	stagePaths      []string
-	markerScanPaths []string
-	unmergedPaths   []string
-	unmerged        bool
+	changedPaths []string
+	// trackedStagePaths are index-known entries with worktree changes; they
+	// stage with AddTracked so ignore rules cannot refuse them.
+	trackedStagePaths []string
+	// untrackedStagePaths are "??" entries; they stage with plain Add so an
+	// ignored file is never force-added.
+	untrackedStagePaths []string
+	markerScanPaths     []string
+	unmergedPaths       []string
+	unmerged            bool
+}
+
+// stageResolutionChanges stages exactly the paths the same porcelain parse
+// listed, by bucket, skipping empty buckets. Staged-only entries need nothing.
+func stageResolutionChanges(ctx context.Context, git GitClient, changes porcelainChanges) error {
+	if len(changes.trackedStagePaths) > 0 {
+		if err := git.AddTracked(ctx, changes.trackedStagePaths...); err != nil {
+			return err
+		}
+	}
+	if len(changes.untrackedStagePaths) > 0 {
+		if err := git.Add(ctx, changes.untrackedStagePaths...); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type porcelainV1ZClient interface {
@@ -829,12 +854,17 @@ func validatePorcelainPath(path string) (string, error) {
 
 func recordPorcelainChange(changes *porcelainChanges, code, target, source string) {
 	changes.changedPaths = append(changes.changedPaths, target)
-	// A staged deletion is already absent from the index, so passing its missing
-	// path back to git add is an unmatched pathspec. Rename source endpoints are
-	// staged through their target; worktree and conflict deletions still need the
-	// target so git add -A records them.
-	if code != "D " {
-		changes.stagePaths = append(changes.stagePaths, target)
+	// Staged-only entries (worktree column blank, including staged deletions
+	// and renames) are already in the index; passing a staged deletion back to
+	// git add is an unmatched pathspec. Untracked entries stage plainly so
+	// ignore rules still apply; every other entry is index-known and stages
+	// forced so a newly ignored directory cannot refuse its worktree change or
+	// deletion.
+	switch {
+	case code == "??":
+		changes.untrackedStagePaths = append(changes.untrackedStagePaths, target)
+	case code[1] != ' ':
+		changes.trackedStagePaths = append(changes.trackedStagePaths, target)
 	}
 	if unmergedStatusCode(code) {
 		changes.unmerged = true
@@ -855,8 +885,10 @@ func porcelainWorktreePathPresent(code string) bool {
 func (c *porcelainChanges) normalize() {
 	sort.Strings(c.changedPaths)
 	c.changedPaths = slices.Compact(c.changedPaths)
-	sort.Strings(c.stagePaths)
-	c.stagePaths = slices.Compact(c.stagePaths)
+	sort.Strings(c.trackedStagePaths)
+	c.trackedStagePaths = slices.Compact(c.trackedStagePaths)
+	sort.Strings(c.untrackedStagePaths)
+	c.untrackedStagePaths = slices.Compact(c.untrackedStagePaths)
 	sort.Strings(c.markerScanPaths)
 	c.markerScanPaths = slices.Compact(c.markerScanPaths)
 	sort.Strings(c.unmergedPaths)

@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/iamseth/tao/internal/commandrunner"
 	commitcontract "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/plantest"
@@ -835,4 +837,262 @@ func sliceCompletionRecord(t *testing.T, root string, policy CommitPolicy, store
 		t.Fatal(err)
 	}
 	return detail, record
+}
+
+// isolateSliceStagingGitConfig keeps the developer's global ignore and system
+// configuration from masking the porcelain states these tests construct.
+func isolateSliceStagingGitConfig(t *testing.T) {
+	t.Helper()
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+}
+
+func writeSliceStagingFile(t *testing.T, root string, name string, content string) {
+	t.Helper()
+	path := filepath.Join(root, name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// sliceStagingFixture commits tracked baseline files on the verified worktree
+// and rebuilds the durable record at the new execution_start head.
+func sliceStagingFixture(t *testing.T, tracked map[string]string) (SliceCompletionRequest, string) {
+	t.Helper()
+	isolateSliceStagingGitConfig(t)
+	fixture := verifiedCompletionFixture(t, CommitPolicySlice, "true")
+	detail := fixture.Record.Detail()
+	root := detail.Slices.Slices[0].ExecutionRoot
+	for name, content := range tracked {
+		writeSliceStagingFile(t, root, name, content)
+		runCommitTestGitCommand(t, root, "add", "--", name)
+	}
+	runCommitTestGitCommand(t, root, "commit", "--allow-empty", "-m", "tracked baseline")
+	detail.Slices.Slices[0].ExecutionStart.Head = strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
+	detail.State.Workspace.HeadSHA = detail.Slices.Slices[0].ExecutionStart.Head
+	detail.Dir = t.TempDir()
+	record, err := plan.NewPlanRecord(detail.Dir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := record.PersistArtifacts(); err != nil {
+		t.Fatal(err)
+	}
+	fixture.Record = record
+	fixture.Notes = "staged by porcelain bucket"
+	fixture.CommitProposal = sliceCompletionProposal()
+	fixture.Now = time.Now().UTC()
+	return fixture, root
+}
+
+func sliceStagingCommittedPaths(t *testing.T, root string) string {
+	t.Helper()
+	return strings.Join(strings.Fields(runCommitTestGitOutput(t, root, "show", "--name-only", "--format=", "HEAD")), ",")
+}
+
+func assertSliceStagingCommitted(t *testing.T, fixture SliceCompletionRequest, root string, originalHead string, wantPaths string) {
+	t.Helper()
+	head := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
+	if head == originalHead {
+		t.Fatalf("completion did not advance HEAD from %s", originalHead)
+	}
+	if parent := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", head+"^")); parent != originalHead {
+		t.Fatalf("completion parent = %s, want execution_start HEAD %s", parent, originalHead)
+	}
+	if got := sliceStagingCommittedPaths(t, root); got != wantPaths {
+		t.Fatalf("committed paths = %q, want %q", got, wantPaths)
+	}
+	reloaded := reloadVerifiedCompletion(t, fixture).Detail()
+	completion := reloaded.Slices.Slices[0].Completion
+	if completion == nil || completion.Outcome != plan.SliceCompletionCommitted || completion.CommitSHA != head {
+		t.Fatalf("completion outcome = %#v, want committed %s", completion, head)
+	}
+	if got := countPlanEvents(reloaded.Events, plan.EventTypeSliceCompleted); got != 1 {
+		t.Fatalf("completion events = %d", got)
+	}
+}
+
+func TestSliceCompletionCommitsGitRmDeletionWithTrackedModification(t *testing.T) {
+	fixture, root := sliceStagingFixture(t, map[string]string{"pkg/removed.go": "package pkg\n"})
+	originalHead := fixture.Record.Detail().Slices.Slices[0].ExecutionStart.Head
+	runCommitTestGitCommand(t, root, "rm", "--quiet", "--", "pkg/removed.go")
+	writeSliceStagingFile(t, root, "README.md", "unrelated modification\n")
+	status := runCommitTestGitOutput(t, root, "status", "--short")
+	for _, want := range []string{"D  pkg/removed.go", " M README.md"} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("status missing %q:\n%s", want, status)
+		}
+	}
+
+	if err := (SliceCompletionService{}).Complete(context.Background(), fixture); err != nil {
+		t.Fatal(err)
+	}
+	assertSliceStagingCommitted(t, fixture, root, originalHead, "README.md,pkg/removed.go")
+	if diff := runCommitTestGitOutput(t, root, "show", "--name-status", "--format=", "HEAD"); !strings.Contains(diff, "D\tpkg/removed.go") {
+		t.Fatalf("commit does not record the deletion:\n%s", diff)
+	}
+	if status := runCommitTestGitOutput(t, root, "status", "--short"); status != "" {
+		t.Fatalf("final worktree is dirty:\n%s", status)
+	}
+}
+
+func TestSliceCompletionStagesTrackedChangesUnderNewlyIgnoredDirectory(t *testing.T) {
+	fixture, root := sliceStagingFixture(t, map[string]string{
+		".gitignore":          "binary.dat\n",
+		"pkg/cache/kept.go":   "package cache\n",
+		"pkg/cache/gone.go":   "package cache\n",
+		"pkg/cache/README.md": "cache\n",
+	})
+	originalHead := fixture.Record.Detail().Slices.Slices[0].ExecutionStart.Head
+	writeSliceStagingFile(t, root, ".gitignore", "binary.dat\npkg/cache/\n")
+	writeSliceStagingFile(t, root, "pkg/cache/kept.go", "package cache // modified\n")
+	if err := os.Remove(filepath.Join(root, "pkg/cache/gone.go")); err != nil {
+		t.Fatal(err)
+	}
+	writeSliceStagingFile(t, root, "pkg/cache/sibling.tmp", "ignored sibling\n")
+	status := runCommitTestGitOutput(t, root, "status", "--short")
+	for _, want := range []string{" M .gitignore", " M pkg/cache/kept.go", " D pkg/cache/gone.go"} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("status missing %q:\n%s", want, status)
+		}
+	}
+	if strings.Contains(status, "sibling.tmp") {
+		t.Fatalf("ignored sibling listed in status:\n%s", status)
+	}
+
+	if err := (SliceCompletionService{}).Complete(context.Background(), fixture); err != nil {
+		t.Fatal(err)
+	}
+	assertSliceStagingCommitted(t, fixture, root, originalHead, ".gitignore,pkg/cache/gone.go,pkg/cache/kept.go")
+	if tracked := runCommitTestGitOutput(t, root, "ls-files", "--", "pkg/cache"); strings.Contains(tracked, "sibling.tmp") {
+		t.Fatalf("ignored untracked sibling was force-added:\n%s", tracked)
+	}
+}
+
+func TestSliceCompletionReplaysPartiallyStagedFailedAttemptAtSameIntent(t *testing.T) {
+	fixture, root := sliceStagingFixture(t, map[string]string{"pkg/cache/kept.go": "package cache\n"})
+	originalHead := fixture.Record.Detail().Slices.Slices[0].ExecutionStart.Head
+	writeSliceStagingFile(t, root, "pkg/cache/kept.go", "package cache // modified\n")
+	writeSliceStagingFile(t, root, "pkg/cache/new.go", "package cache\n")
+
+	failingStage := SliceCompletionService{CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
+		if name == "git" && len(args) >= 4 && args[2] == "add" && args[3] != "-f" {
+			return errors.New("simulated untracked staging failure")
+		}
+		return commandrunner.DefaultLocal(ctx, cwd, name, args, stdout, stderr)
+	}}
+	err := failingStage.Complete(context.Background(), fixture)
+	if err == nil || !strings.Contains(err.Error(), "stage slice completion paths") {
+		t.Fatalf("first attempt error = %v, want staging failure", err)
+	}
+	if staged := strings.TrimSpace(runCommitTestGitOutput(t, root, "diff", "--cached", "--name-only")); staged != "pkg/cache/kept.go" {
+		t.Fatalf("partially staged paths = %q, want only the tracked change", staged)
+	}
+	if head := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD")); head != originalHead {
+		t.Fatalf("failed attempt moved HEAD to %s", head)
+	}
+	afterFailure := reloadVerifiedCompletion(t, fixture).Detail()
+	intent := afterFailure.Slices.Slices[0].CommitIntent
+	if intent == nil || intent.StartingHead != originalHead {
+		t.Fatalf("intent after failed attempt = %#v, want recorded at %s", intent, originalHead)
+	}
+	if afterFailure.Slices.Slices[0].Completion != nil {
+		t.Fatalf("failed attempt recorded completion %#v", afterFailure.Slices.Slices[0].Completion)
+	}
+	if got := countPlanEvents(afterFailure.Events, plan.EventTypeSliceCompleted); got != 0 {
+		t.Fatalf("failed attempt recorded %d completion events", got)
+	}
+
+	replay := fixture
+	replay.Record = reloadVerifiedCompletion(t, fixture)
+	if err := (SliceCompletionService{}).Complete(context.Background(), replay); err != nil {
+		t.Fatal(err)
+	}
+	assertSliceStagingCommitted(t, fixture, root, originalHead, "pkg/cache/kept.go,pkg/cache/new.go")
+	settled := reloadVerifiedCompletion(t, fixture).Detail().Slices.Slices[0].CommitIntent
+	if settled == nil || settled.Hash != intent.Hash || settled.Message != intent.Message || !settled.CreatedAt.Equal(intent.CreatedAt) {
+		t.Fatalf("replay intent = %#v, want the original %#v", settled, intent)
+	}
+}
+
+func TestSliceCompletionStagesCollapsedUntrackedDirectory(t *testing.T) {
+	fixture, root := sliceStagingFixture(t, nil)
+	originalHead := fixture.Record.Detail().Slices.Slices[0].ExecutionStart.Head
+	writeSliceStagingFile(t, root, "pkg/cache/a.go", "package cache\n")
+	writeSliceStagingFile(t, root, "pkg/cache/b.go", "package cache\n")
+	if status := strings.TrimSpace(runCommitTestGitOutput(t, root, "status", "--short")); status != "?? pkg/" {
+		t.Fatalf("status = %q, want one collapsed untracked directory", status)
+	}
+
+	if err := (SliceCompletionService{}).Complete(context.Background(), fixture); err != nil {
+		t.Fatal(err)
+	}
+	assertSliceStagingCommitted(t, fixture, root, originalHead, "pkg/cache/a.go,pkg/cache/b.go")
+}
+
+func TestSliceCompletionReaddsWorktreeCopyOfStagedDeletion(t *testing.T) {
+	fixture, root := sliceStagingFixture(t, map[string]string{"pkg/cache/kept.go": "package cache\n", "pkg/cache/other.go": "package cache\n"})
+	originalHead := fixture.Record.Detail().Slices.Slices[0].ExecutionStart.Head
+	runCommitTestGitCommand(t, root, "rm", "--quiet", "--", "pkg/cache/kept.go")
+	writeSliceStagingFile(t, root, "pkg/cache/kept.go", "package cache // recreated\n")
+	status := runCommitTestGitOutput(t, root, "status", "--short")
+	for _, want := range []string{"D  pkg/cache/kept.go", "?? pkg/cache/kept.go"} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("status missing %q:\n%s", want, status)
+		}
+	}
+
+	if err := (SliceCompletionService{}).Complete(context.Background(), fixture); err != nil {
+		t.Fatal(err)
+	}
+	assertSliceStagingCommitted(t, fixture, root, originalHead, "pkg/cache/kept.go")
+	if diff := runCommitTestGitOutput(t, root, "show", "--name-status", "--format=", "HEAD"); !strings.Contains(diff, "M\tpkg/cache/kept.go") {
+		t.Fatalf("commit does not record the worktree copy as a modification:\n%s", diff)
+	}
+	if content := runCommitTestGitOutput(t, root, "show", "HEAD:pkg/cache/kept.go"); !strings.Contains(content, "recreated") {
+		t.Fatalf("committed content = %q, want the worktree copy", content)
+	}
+}
+
+func TestSliceCompletionStagingFailureNamesExecutionRootAndMustChangeGuidance(t *testing.T) {
+	fixture, root := sliceStagingFixture(t, map[string]string{"pkg/cache/kept.go": "package cache\n"})
+	writeSliceStagingFile(t, root, "pkg/cache/kept.go", "package cache // modified\n")
+	headBefore := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
+
+	cause := errors.New("simulated staging failure")
+	service := SliceCompletionService{CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
+		if name == "git" && len(args) >= 3 && args[2] == "add" {
+			return cause
+		}
+		return commandrunner.DefaultLocal(ctx, cwd, name, args, stdout, stderr)
+	}}
+	err := service.Complete(context.Background(), fixture)
+	if err == nil {
+		t.Fatal("staging failure did not refuse completion")
+	}
+	for _, want := range []string{
+		"stage slice completion paths: ",
+		"the worktree under " + root + " must change before rerunning tao slice-complete",
+		"inspect git status there; do not commit by hand",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %q, want %q", err, want)
+		}
+	}
+	if !errors.Is(err, cause) {
+		t.Fatalf("error = %v does not wrap the staging cause", err)
+	}
+	if head := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD")); head != headBefore {
+		t.Fatalf("staging failure moved HEAD to %s", head)
+	}
+	reloaded := reloadVerifiedCompletion(t, fixture).Detail()
+	if reloaded.Slices.Slices[0].Completion != nil {
+		t.Fatalf("staging failure recorded completion %#v", reloaded.Slices.Slices[0].Completion)
+	}
+	if got := countPlanEvents(reloaded.Events, plan.EventTypeSliceCompleted); got != 0 {
+		t.Fatalf("staging failure recorded %d completion events", got)
+	}
 }
