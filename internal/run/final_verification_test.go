@@ -20,6 +20,12 @@ import (
 func TestVerifyCompletedBranchCache(t *testing.T) {
 	shared := t.TempDir()
 	t.Setenv("GOLANGCI_LINT_CACHE", shared)
+	// GNU make 4.x prints Entering/Leaving directory lines whenever it is a
+	// sub-make, and running tests through `make test` makes the fixture gate
+	// one. Clear the recursion variables so the asserted output stays exact.
+	for _, name := range []string{"MAKELEVEL", "MAKEFLAGS", "MFLAGS"} {
+		t.Setenv(name, "")
+	}
 	for _, mode := range []string{"passed", "setup failure", "skipped"} {
 		t.Run(mode, func(t *testing.T) {
 			repo := initSliceCompletionRepo(t)
