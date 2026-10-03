@@ -54,6 +54,12 @@ Verification command contract:
 - When no build or test command applies, use the narrowest deterministic fallback, such as `grep -q`, `test -f`, or `git diff --stat`.
 - Keep `manual_checks` additive; every slice still needs a deterministic command.
 
+Command hygiene for declared verification commands:
+
+- Use single commands or `&&` chains (including `cd DIR &&` context changes). Do not use `||` fallbacks, redirects, semicolon-separated commands, backticks, or command substitution. These restrictions concern shell syntax, not literal characters in quoted arguments.
+- For zero-match assertions, use `! grep -q` only over known readable search inputs so negated search errors cannot masquerade as success; do not use `grep -c` or `rg -c` as zero-match assertions.
+- For several checks, prefer a small test or repository script over complex shell composition.
+
 ## Advisory coverage check
 
 Before validation, for each plan, inventory every item in `plan.decision.success_criteria` and every durable constraint in `planning-brief.md`'s Constraints section. Preserve each item's meaning; do not omit inconvenient items.

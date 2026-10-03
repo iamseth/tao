@@ -158,6 +158,12 @@ Read these files when present and relevant:
 
 Choose verification commands from repository-owned sources before inventing commands. Prefer commands documented in guidance files, build files, package manifests, task runners, or CI configuration. Use the command exactly as documented unless narrowing it is clearly supported by that repository's conventions.
 
+Command hygiene for declared verification commands:
+
+- Use single commands or `&&` chains (including `cd DIR &&` context changes). Do not use `||` fallbacks, redirects, semicolon-separated commands, backticks, or command substitution. These restrictions concern shell syntax, not literal characters in quoted arguments.
+- For zero-match assertions, use `! grep -q` only over known readable search inputs so negated search errors cannot masquerade as success; do not use `grep -c` or `rg -c` as zero-match assertions.
+- For several checks, prefer a small test or repository script over complex shell composition.
+
 During planning, run a chosen verification command once when it can execute against the current checkout and does not depend on outputs that a future slice will create. Use that run to catch execution-context and command-setup mistakes before persisting the plan. If the command depends on future outputs, keep the producer contract explicit and defer execution rather than substituting another command.
 
 Tao's verification-command semantic analysis is conservative and advisory only. Do not claim Tao understands unsupported shell, build-tool, package-manager, or test-runner semantics, and do not turn analyzer findings into blocking input contracts. Only malformed plan structure and explicit `required_inputs` filesystem facts determine input readiness.
