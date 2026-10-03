@@ -1207,8 +1207,10 @@ for phases, readiness checks, and rearm predicates.
 
 `--force` does not bypass resolver validation or independent review; `--no-verify`
 skips only command verification. Use `tao doctor` to check local resolver readiness
-without a model request; remote credential validity remains unproven. Linux
-confinement requires external `bwrap` at `/usr/bin/bwrap` or `/bin/bwrap`.
+without a model request; remote credential validity remains unproven. Both merge
+preflight and `tao doctor` prove read-only Git runs inside the provider sandbox
+and fail closed naming the sandbox when it does not. Linux confinement requires
+external `bwrap` at `/usr/bin/bwrap` or `/bin/bwrap`.
 Reconcile findings or drift on the plan branch and refresh its source review;
 do not use `tao merge --all` to repair a failed single-plan transaction.
 

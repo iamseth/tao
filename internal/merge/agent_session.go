@@ -714,6 +714,10 @@ func singleMergeFilesystemConfinementCommandForProvider(policy singleMergeFilesy
 // launch spec and the attributed launch through their shared command constructor.
 var singleMergeConfinementExecutable = singleMergeFilesystemConfinementExecutable
 
+// singleMergeReadOnlyGitProbe is a package-private test-only seam; tests using a
+// stubbed fake confiner must also stub this probe.
+var singleMergeReadOnlyGitProbe = probeSingleMergeReadOnlyGit
+
 func singleMergeFilesystemConfinementExecutable() (string, error) {
 	switch runtime.GOOS {
 	case "darwin":
@@ -916,14 +920,27 @@ func ProbeSingleMergePiReadiness(ctx context.Context, providerExecutable string)
 		return fmt.Errorf("prepare Pi readiness worktree: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(integrationRoot) }()
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		return fmt.Errorf("resolve git for Pi readiness worktree: %w", err)
+	}
+	command := exec.CommandContext(ctx, gitPath, "init", "-q", "-b", "main") // #nosec G204,G702 -- PATH-resolved Git initializes only the disposable readiness repository.
+	command.Dir = integrationRoot
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("initialize Pi readiness worktree: %w", err)
+	}
 	protectedRoot, err := os.MkdirTemp("", "tao-doctor-pi-protected-*")
 	if err != nil {
 		return fmt.Errorf("prepare Pi readiness protected path: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(protectedRoot) }()
-	return probeSingleMergePiRPCReadiness(ctx, singleMergeFilesystemConfinement{
+	policy := singleMergeFilesystemConfinement{
 		protectedPaths: []string{protectedRoot}, integrationRoot: integrationRoot,
-	}, providerExecutable, "", "")
+	}
+	if err := singleMergeReadOnlyGitProbe(ctx, policy); err != nil {
+		return err
+	}
+	return probeSingleMergePiRPCReadiness(ctx, policy, providerExecutable, "", "")
 }
 
 // SingleMergeStartupCapabilityForError maps a bounded launch diagnostic to its
@@ -954,6 +971,21 @@ func probeSingleMergePiRPCReadiness(ctx context.Context, policy singleMergeFiles
 
 const singleMergeFilesystemProbeTimeout = 5 * time.Second
 
+// Probe Git itself because provider startup does not detect sandbox profile
+// regressions that deny Git's read-only startup (including opening /dev/null).
+func probeSingleMergeReadOnlyGit(ctx context.Context, policy singleMergeFilesystemConfinement) error {
+	probePolicy := policy
+	probePolicy.allowEdits = false
+	spec, err := (singleMergeLaunchSpecBuilder{lookPath: exec.LookPath}).build(probePolicy, policy.integrationRoot, "git", []string{"rev-parse", "--git-dir"})
+	if err == nil {
+		err = executeSingleMergeFilesystemProbe(ctx, spec, singleMergeFilesystemProbeTimeout, nil)
+	}
+	if err != nil {
+		return fmt.Errorf("read-only git inside the provider sandbox confinement failed: %w", err)
+	}
+	return nil
+}
+
 func probeSingleMergeFilesystemConfinement(ctx context.Context, policy singleMergeFilesystemConfinement, providerExecutable string) error {
 	return probeSingleMergeFilesystemConfinementWithTimeout(ctx, policy, providerExecutable, singleMergeFilesystemProbeTimeout)
 }
@@ -982,7 +1014,7 @@ func executeSingleMergeFilesystemProbe(ctx context.Context, spec *singleMergeLau
 	if observe != nil {
 		observe(probeCtx)
 	}
-	command := exec.CommandContext(probeCtx, spec.name, spec.args...) // #nosec G204,G702 -- Tao resolves the configured provider and runs only its fixed version probe through Tao's platform confiner.
+	command := exec.CommandContext(probeCtx, spec.name, spec.args...) // #nosec G204,G702 -- Tao resolves the configured provider and runs only a fixed read-only probe through Tao's platform confiner.
 	command.Dir = spec.cwd
 	var output singleMergeConfinementProbeOutput
 	command.Stdout = &output
@@ -1116,6 +1148,11 @@ func (s BatchAgentSession) confinementPolicy(ctx context.Context, request BatchA
 		providerExecutable, err := resolveSingleMergeProviderExecutable(s.providerLookPath, s.providerToolName)
 		if err != nil {
 			return nil, err
+		}
+		if s.confinementProbe == nil {
+			if err := singleMergeReadOnlyGitProbe(ctx, *policy); err != nil {
+				return nil, err
+			}
 		}
 		if s.confinementProbe != nil {
 			if err := s.confinementProbe(); err != nil {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -78,6 +79,234 @@ func TestMergeSessionDoesNotLoadModelEnvironment(t *testing.T) {
 	}
 	if _, err := session.Resolve(context.Background(), BatchAgentSessionRequest{Operation: BatchAgentOperationCandidateResolution}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSingleMergePreflightRunsReadOnlyGitProbeBeforeProviderProbes(t *testing.T) {
+	for _, provider := range []string{"pi", "claude"} {
+		t.Run(provider, func(t *testing.T) {
+			t.Setenv("TAO_AGENT", provider)
+			var models []string
+			if provider == "pi" {
+				installSingleMergeReadinessFixture(t, &models, "rejected")
+			} else {
+				fakeConfinementExecutable(t)
+			}
+			root, protected := singleMergeAgentTestBoundary(t)
+			wantRoot, err := filepath.EvalSymlinks(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stopped := errors.New("read-only git sandbox confinement failed")
+			calls, starts := 0, 0
+			stubReadOnlyGitProbe(t, func(_ context.Context, policy singleMergeFilesystemConfinement) error {
+				calls++
+				if policy.integrationRoot != wantRoot {
+					t.Fatalf("integration root = %q, want %q", policy.integrationRoot, wantRoot)
+				}
+				return stopped
+			})
+			session, err := NewSingleMergeAgentSession(SingleMergeAgentSessionConfig{
+				ProviderLookPath: testProviderLookPath,
+				ProcessStarter: func(context.Context, string, string, []string) (agent.Process, error) {
+					starts++
+					return nil, errors.New("unexpected provider launch")
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = session.Preflight(context.Background(), BatchAgentSessionRequest{
+				Operation: BatchAgentOperationSinglePlanResolution, IntegrationRoot: root, ProtectedGitObjectRoot: protected,
+			})
+			if !errors.Is(err, stopped) || calls != 1 || starts != 0 || len(models) != 0 {
+				t.Fatalf("error=%v git probes=%d provider starts=%d models=%v", err, calls, starts, models)
+			}
+			if capability := SingleMergeStartupCapabilityForError(err); capability != plan.SingleMergeStartupConfinement {
+				t.Fatalf("capability = %q", capability)
+			}
+		})
+	}
+}
+
+func TestSingleMergeReadOnlyGitProbePassesInsideShippedConfinement(t *testing.T) {
+	root, _ := singleMergeAgentTestBoundary(t)
+	readme := filepath.Join(root, "README")
+	if err := os.WriteFile(readme, []byte("unchanged\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	realGitOutput(t, root, "add", "README")
+	realGitOutput(t, root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "initial")
+	policy := singleMergeFilesystemConfinement{integrationRoot: root, protectedPaths: []string{filepath.Join(root, ".git")}, allowEdits: true}
+	if err := probeSingleMergeFilesystemConfinement(context.Background(), policy, "/usr/bin/true"); err != nil {
+		if runtime.GOOS == "linux" && os.Getenv("TAO_REQUIRE_CONFINEMENT_TESTS") == "1" {
+			t.Fatal(err)
+		}
+		t.Skipf("OS confinement unavailable: %v", err)
+	}
+	entries := func() []string {
+		t.Helper()
+		var names []string
+		err := filepath.WalkDir(filepath.Join(root, ".git"), func(path string, _ os.DirEntry, err error) error {
+			names = append(names, path)
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return names
+	}
+	before := entries()
+	runtimes, err := filepath.Glob("/tmp/tao-merge-agent-runtime-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := probeSingleMergeReadOnlyGit(context.Background(), policy); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(before, entries()) {
+		t.Fatal("protected Git entries changed")
+	}
+	contents, err := os.ReadFile(readme) // #nosec G304 -- Test-owned README under t.TempDir.
+	if err != nil || string(contents) != "unchanged\n" {
+		t.Fatalf("README changed: %q, %v", contents, err)
+	}
+	after, err := filepath.Glob("/tmp/tao-merge-agent-runtime-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range after {
+		if !slices.Contains(runtimes, path) {
+			t.Fatalf("probe runtime survived: %s", path)
+		}
+	}
+}
+
+func TestSingleMergeReadOnlyGitProbeFailsClosedUnderDenyAllSandbox(t *testing.T) {
+	confiner, err := singleMergeFilesystemConfinementExecutable()
+	if err != nil {
+		if runtime.GOOS == "linux" && os.Getenv("TAO_REQUIRE_CONFINEMENT_TESTS") == "1" {
+			t.Fatalf("OS confinement unavailable: %v", err)
+		}
+		t.Skipf("OS confinement unavailable: %v", err)
+	}
+	root, _ := singleMergeAgentTestBoundary(t)
+	if err := os.WriteFile(filepath.Join(root, "README"), []byte("unchanged\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	realGitOutput(t, root, "add", "README")
+	realGitOutput(t, root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "initial")
+	protected := filepath.Join(root, ".git")
+	policy := singleMergeFilesystemConfinement{integrationRoot: root, protectedPaths: []string{protected}, allowEdits: true}
+	snapshot := func() map[string]string {
+		t.Helper()
+		entries := make(map[string]string)
+		if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			entries[path] = info.Mode().String()
+			if entry.Type().IsRegular() {
+				contents, err := os.ReadFile(path) //nolint:gosec // snapshot reads only the test-owned repository.
+				if err != nil {
+					return err
+				}
+				entries[path] += string(contents)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return entries
+	}
+	before := snapshot()
+	// A failure after the swap must be attributable to the profile, not the host.
+	if err := probeSingleMergeReadOnlyGit(context.Background(), policy); err != nil {
+		t.Fatalf("positive control: %v", err)
+	}
+	var script string
+	switch runtime.GOOS {
+	case "darwin":
+		script = `#!/bin/sh
+while [ "$#" -gt 0 ]; do
+    arg=$1
+    shift
+    [ "$arg" = "--" ] && break
+done
+exec /usr/bin/sandbox-exec -p '(version 1)(allow default)(deny file-write*)' -- "$@"
+`
+	case "linux":
+		// Replace the device mount with an empty tmpfs, removing /dev/null.
+		t.Setenv("TAO_TEST_REAL_CONFINER", confiner)
+		script = `#!/bin/sh
+remaining=$#
+while [ "$remaining" -gt 0 ]; do
+    arg=$1
+    shift
+    remaining=$((remaining - 1))
+    if [ "$arg" = "--dev" ] && [ "$remaining" -gt 0 ] && [ "$1" = "/dev" ]; then
+        shift
+        remaining=$((remaining - 1))
+        set -- "$@" --tmpfs /dev
+    else
+        set -- "$@" "$arg"
+    fi
+done
+exec "$TAO_TEST_REAL_CONFINER" "$@"
+`
+	default:
+		t.Skipf("no deny-all fixture for %s", runtime.GOOS)
+	}
+	wrapper := filepath.Join(t.TempDir(), "deny-all-confiner")
+	if err := os.WriteFile(wrapper, []byte(script), 0o700); err != nil { //nolint:gosec // executable mode is required for the fixture confiner.
+		t.Fatal(err)
+	}
+	setConfinementExecutable(t, func() (string, error) { return wrapper, nil })
+	assertFailure := func(err error) {
+		t.Helper()
+		if err == nil || !strings.Contains(err.Error(), "sandbox") {
+			t.Fatalf("expected sandbox failure, got %v", err)
+		}
+		if runtime.GOOS == "darwin" && !strings.Contains(err.Error(), "/dev/null") {
+			t.Fatalf("missing git /dev/null diagnostic: %v", err)
+		}
+		// The executor appends captured output after the exit status. Require it
+		// without depending on platform-specific Git wording.
+		_, status, ok := strings.Cut(err.Error(), "exit status ")
+		_, diagnostic, hasDiagnostic := strings.Cut(status, ": ")
+		if !ok || !hasDiagnostic || strings.TrimSpace(diagnostic) == "" {
+			t.Fatalf("missing bounded git diagnostic: %v", err)
+		}
+		if capability := SingleMergeStartupCapabilityForError(err); capability != plan.SingleMergeStartupConfinement {
+			t.Fatalf("capability = %q", capability)
+		}
+		t.Logf("deny-all failure: %v", err)
+	}
+	assertFailure(probeSingleMergeReadOnlyGit(context.Background(), policy))
+	t.Setenv("TAO_AGENT", "claude")
+	starts := 0
+	session, err := NewSingleMergeAgentSession(SingleMergeAgentSessionConfig{
+		ProviderLookPath: func(string) (string, error) { return "/usr/bin/true", nil },
+		ProcessStarter: func(context.Context, string, string, []string) (agent.Process, error) {
+			starts++
+			return nil, errors.New("unexpected provider launch")
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFailure(session.Preflight(context.Background(), BatchAgentSessionRequest{
+		Operation: BatchAgentOperationSinglePlanResolution, IntegrationRoot: root, ProtectedGitObjectRoot: protected,
+	}))
+	if starts != 0 {
+		t.Fatalf("provider starts = %d, want zero", starts)
+	}
+	if !maps.Equal(before, snapshot()) {
+		t.Fatal("protected Git entries or worktree changed")
 	}
 }
 
@@ -177,6 +406,43 @@ func TestSingleMergeRejectedReviewerPreservesResolutionAuthority(t *testing.T) {
 	}
 }
 
+func TestProbeSingleMergePiReadinessRunsReadOnlyGitBeforeRPC(t *testing.T) {
+	fakeConfinementExecutable(t)
+	original := agent.DefaultProcessStarter
+	t.Cleanup(func() { agent.DefaultProcessStarter = original })
+	starts := 0
+	agent.DefaultProcessStarter = func(context.Context, string, string, []string) (agent.Process, error) {
+		starts++
+		return nil, errors.New("unexpected RPC process")
+	}
+	wantErr := errors.New("read-only git probe failed")
+	var roots []string
+	stubReadOnlyGitProbe(t, func(_ context.Context, policy singleMergeFilesystemConfinement) error {
+		roots = append(roots, policy.integrationRoot)
+		roots = append(roots, policy.protectedPaths...)
+		info, err := os.Stat(filepath.Join(policy.integrationRoot, ".git"))
+		if err != nil || !info.IsDir() {
+			t.Fatalf("probe integration root is not a git repository: info=%v err=%v", info, err)
+		}
+		return wantErr
+	})
+	err := ProbeSingleMergePiReadiness(context.Background(), "pi")
+	if err != wantErr { //nolint:errorlint // The probe error must be returned unchanged, not wrapped.
+		t.Errorf("readiness error = %v, want unchanged sentinel %v", err, wantErr)
+	}
+	if starts != 0 {
+		t.Errorf("started %d RPC processes before Git readiness", starts)
+	}
+	if len(roots) != 2 {
+		t.Fatalf("probe roots = %v, want integration and protected roots", roots)
+	}
+	for _, root := range roots {
+		if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("temporary root %s was not removed: %v", root, err)
+		}
+	}
+}
+
 // Exercise the production RPC readiness path without launching a provider or confiner.
 func installSingleMergeReadinessFixture(t *testing.T, models *[]string, rejected string) {
 	t.Helper()
@@ -228,6 +494,15 @@ func successfulConfinementProbe() error                { return nil }
 func fakeConfinementExecutable(t *testing.T) {
 	t.Helper()
 	setConfinementExecutable(t, func() (string, error) { return "/usr/bin/fake-confiner", nil })
+	stubReadOnlyGitProbe(t, func(context.Context, singleMergeFilesystemConfinement) error { return nil })
+}
+
+// Tests using this package-level seam must not call t.Parallel().
+func stubReadOnlyGitProbe(t *testing.T, probe func(context.Context, singleMergeFilesystemConfinement) error) {
+	t.Helper()
+	original := singleMergeReadOnlyGitProbe
+	singleMergeReadOnlyGitProbe = probe
+	t.Cleanup(func() { singleMergeReadOnlyGitProbe = original })
 }
 
 // Tests using setConfinementExecutable must not call t.Parallel().
@@ -764,8 +1039,10 @@ func TestSingleMergePiRPCProjectsConfigAndResourcesIntoEphemeralRuntime(t *testi
 	t.Setenv("TAO_TEST_HOST_PI_DIR", hostAgentRoot)
 	t.Setenv("TAO_TEST_HOST_PI_SESSION_DIR", hostSessionRoot)
 	provider := filepath.Join(t.TempDir(), "pi")
+	// The canary defeats 2>/dev/null masking of device-write denial.
 	const script = `#!/bin/sh
 set -eu
+: >/dev/null || exit 48
 if [ "${1:-}" = "--version" ]; then
   printf 'pi fixture version\n'
   exit 0
@@ -1217,7 +1494,9 @@ func TestSingleMergeProcessSandboxDeniesHostWritesByDefault(t *testing.T) {
 		}
 	}
 
+	// The canary defeats 2>/dev/null masking of device-write denial.
 	const resolverScript = `set -u
+: >/dev/null || exit 22
 printf allowed >"$1/allowed.txt" || exit 11
 printf runtime >"$TMPDIR/scratch" || exit 12
 if printf overwritten >"$2/config" 2>/dev/null; then exit 13; fi
@@ -1266,7 +1545,9 @@ if [ "$6" = linux ] && ln "$4/README.md" "$1/external-hard-link" 2>/dev/null; th
 		}
 	}
 
+	// The canary defeats 2>/dev/null masking of device-write denial.
 	const reviewerScript = `set -u
+: >/dev/null || exit 25
 if printf forbidden >"$1/reviewer-edit" 2>/dev/null; then exit 21; fi
 if printf overwritten >"$2/README.md" 2>/dev/null; then exit 22; fi
 if printf overwritten >"$3/state.json" 2>/dev/null; then exit 23; fi
@@ -1785,7 +2066,12 @@ func TestMergeTelemetryDoesNotRecordUninvokedSessions(t *testing.T) {
 
 func singleMergeAgentTestBoundary(t *testing.T) (string, string) {
 	t.Helper()
-	return t.TempDir(), t.TempDir()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git unavailable: %v", err)
+	}
+	root := t.TempDir()
+	realGitOutput(t, root, "init", "-q", "-b", "main")
+	return root, t.TempDir()
 }
 
 func mergeProposalContext() commitcontract.MergeProposalContext {
