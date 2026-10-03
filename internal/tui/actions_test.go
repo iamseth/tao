@@ -619,6 +619,58 @@ func newTestActions(t *testing.T, launcher *recordingActionLauncher, readLock fu
 	return actions
 }
 
+func TestActionsLaunchStderrPath(t *testing.T) {
+	for _, dir := range []string{"/data/plans/plan-a", "", "   "} {
+		for _, action := range []string{"run", "approve", "merge", "merge-all"} {
+			t.Run(action+"/"+dir, func(t *testing.T) {
+				launcher := &recordingActionLauncher{}
+				actions := newTestActions(t, launcher, nil, nil)
+				row := testActionRow()
+				row.PlanDir = dir
+				switch action {
+				case "run":
+					actions.RunPlan(context.Background(), row)
+				case "approve":
+					row.ApprovalSliceID = "001"
+					actions.ApproveSlice(context.Background(), row)
+				case "merge":
+					row.Status = plan.StatusReviewed
+					actions.MergePlan(context.Background(), row)
+				case "merge-all":
+					actions.MergeAll(context.Background(), row)
+				}
+				want := ""
+				if strings.TrimSpace(dir) != "" && action != "merge-all" {
+					want = plan.UILaunchLogPath(dir)
+				}
+				if len(launcher.calls) != 1 || launcher.calls[0].StderrPath != want {
+					t.Fatalf("requests = %+v, want stderr %q", launcher.calls, want)
+				}
+			})
+		}
+	}
+}
+
+func TestActionsFailedStartNamesLaunchLog(t *testing.T) {
+	row := testActionRow()
+	for _, immediate := range []bool{true, false} {
+		launcher := &recordingActionLauncher{}
+		now := time.Now()
+		actions := newTestActions(t, launcher, nil, func() time.Time { return now })
+		if immediate {
+			actions.recordFailure(row, errors.New("launch failed"))
+		} else {
+			actions.RunPlan(context.Background(), row)
+			now = now.Add(time.Minute)
+			actions.Reconcile(monitor.Snapshot{Rows: []monitor.Row{row}})
+		}
+		message := actions.messageForRow(row)
+		if !strings.Contains(message, plan.UILaunchLogPath(row.PlanDir)) || !strings.Contains(message, "inspect `tao log "+row.PlanID+"`") {
+			t.Fatalf("failed-start message = %q", message)
+		}
+	}
+}
+
 func testActionRow() monitor.Row {
 	return monitor.Row{
 		Kind:           monitor.RowKindPlan,

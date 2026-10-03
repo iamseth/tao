@@ -36,6 +36,7 @@ func TestPlanFormatDocumentsEmittedEventContract(t *testing.T) {
 		EventTypeVerificationCommandInvalid,
 		EventTypeRunContext,
 		EventTypeSessionTimeout,
+		EventTypeRunAborted,
 		EventTypeBudgetExceeded,
 		EventTypeReworkRound,
 		EventTypeReworkStopped,

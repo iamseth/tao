@@ -740,6 +740,18 @@ func detailAttentionLines(detail *plan.PlanDetail, row monitor.Row, inspection d
 			role theme.Role
 		}{text: text, role: theme.RoleDetailWarning})
 	}
+	if detail != nil {
+		if event := plan.LatestRunAbort(detail.Events); event != nil {
+			kind := event.AbortKind
+			if kind == "" {
+				kind = plan.RunAbortKindOther
+			}
+			items = append(items, struct {
+				text string
+				role theme.Role
+			}{text: singleLineDetail("last run exited (" + kind + "): " + event.Message), role: theme.RoleDetailWarning})
+		}
+	}
 	for _, warning := range append(append([]string(nil), row.Warnings...), row.RelationshipWarnings...) {
 		items = append(items, struct {
 			text string

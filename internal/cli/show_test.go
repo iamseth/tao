@@ -240,6 +240,35 @@ func TestRenderPlanDetailUsesLifecycleStatusProjection(t *testing.T) {
 	}
 }
 
+func TestRenderPlanDetailShowsCurrentRunAbort(t *testing.T) {
+	for _, kind := range []string{plan.RunAbortKindCanceled, ""} {
+		t.Run("kind="+kind, func(t *testing.T) {
+			now := time.Date(2026, 10, 3, 19, 0, 0, 0, time.UTC)
+			detail := &plan.PlanDetail{Events: []plan.Event{{Type: plan.EventTypeRunAborted, AbortKind: kind, Timestamp: now, Message: "driver stopped"}}}
+			wantKind := kind
+			if wantKind == "" {
+				wantKind = "other"
+			}
+			for _, superseded := range []bool{false, true} {
+				if superseded {
+					detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypeRunContext, Timestamp: now.Add(time.Second)})
+				}
+				var out bytes.Buffer
+				if err := (App{}).renderPlanDetail(&out, planview.Plan{Detail: detail, Now: now}); err != nil {
+					t.Fatal(err)
+				}
+				want := "Last run exited (" + wantKind + ") at 2026-10-03T19:00:00Z: driver stopped"
+				if !superseded && !strings.Contains(out.String(), want) {
+					t.Fatalf("missing %q:\n%s", want, out.String())
+				}
+				if superseded && strings.Contains(out.String(), "Last run exited") {
+					t.Fatalf("superseded exit shown:\n%s", out.String())
+				}
+			}
+		})
+	}
+}
+
 func TestRenderPlanDetailUsesHumanTimestamps(t *testing.T) {
 	now := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
 	started := now.Add(-2 * time.Hour)

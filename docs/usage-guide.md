@@ -255,6 +255,11 @@ The agent owns terminal input until exit; returning preserves filters and select
 Launching or exiting alone does not change the note; use `/tao-slice` to create
 its plan. Foreground planning ends with dashboard shutdown, unlike detached run,
 approval, and merge actions, which survive exit and still enforce normal gates.
+Detached run, approval, and single-merge actions write the child's stderr to the
+plan's `ui-launch.log` in its data-home plan directory (truncated each launch),
+so an early exit is inspectable.
+The plan detail **Overview** shows a last-run-exited line and the **Activity** tab
+shows the exit diagnostic while a run exit is the newest event.
 Check durable state: ordering, heartbeats, and `stalled?`/`crashed?` labels are
 advice or liveness hints, never approval, failure, or merge evidence.
 

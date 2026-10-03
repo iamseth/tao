@@ -154,8 +154,19 @@ func (a App) renderPlanDetailWithMerge(out io.Writer, loaded planview.Plan, thre
 		if err := writef(out, "Merge in progress: pid %d, phase %s\n", merging.PID, phase); err != nil {
 			return err
 		}
-	} else if err := renderNextAction(out, loaded.DisplayNextAction()); err != nil {
-		return err
+	} else {
+		if err := renderNextAction(out, loaded.DisplayNextAction()); err != nil {
+			return err
+		}
+		if event := plan.LatestRunAbort(detail.Events); event != nil {
+			kind := event.AbortKind
+			if kind == "" {
+				kind = plan.RunAbortKindOther
+			}
+			if err := writef(out, "Last run exited (%s) at %s: %s\n", kind, event.Timestamp.Format(time.RFC3339), event.Message); err != nil {
+				return err
+			}
+		}
 	}
 	if recovery := derived.FinalizationRecovery; recovery != nil {
 		if err := writef(out, "Finalization failure: %s (%s)\n", recovery.Phase, recovery.Category); err != nil {

@@ -50,6 +50,7 @@ const (
 	EventTypeVerificationClaimMismatch  = "verification_claim_mismatch"
 	EventTypeRunContext                 = "run_context"
 	EventTypeSessionTimeout             = "session_timeout"
+	EventTypeRunAborted                 = "run_aborted"
 	EventTypeBudgetExceeded             = "budget_exceeded"
 	EventTypeReworkRound                = "rework_round"
 	EventTypeReworkStopped              = "rework_stopped"
@@ -1030,6 +1031,7 @@ type Event struct {
 	Attempts              int                          `json:"attempts,omitempty"`
 	Fingerprint           string                       `json:"fingerprint,omitempty"`
 	Reason                string                       `json:"reason,omitempty"`
+	AbortKind             string                       `json:"abort_kind,omitempty"`
 	AmendedFields         []string                     `json:"amended_fields,omitempty"`
 	CommitPolicy          string                       `json:"commit_policy,omitempty"`
 	RunPacketProvided     bool                         `json:"run_packet_provided,omitempty"`

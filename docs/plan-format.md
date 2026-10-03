@@ -80,6 +80,7 @@ These files are Tao-owned operational state, not agent-authored plan artifacts o
 | File | Lifetime | Purpose |
 | --- | --- | --- |
 | `agent-run.log` | Created and appended by agent-backed runtime sessions | Captured session log read by `tao log`; it is diagnostic data, not lifecycle or recovery authority. |
+| `ui-launch.log` | Created and truncated by each detached dashboard action for that plan | Stderr of the detached `tao` child (run, approve, single merge); best-effort, local-only, diagnostic data, never lifecycle or recovery authority, never read by plan loaders. |
 | `prompts/` | Created by non-interactive agent sessions | One file per session with a header and raw rendered prompt; best-effort, local-only, never lifecycle or recovery authority, and never read by plan loaders. |
 | `.run.lock` | Present while a plan driver owns the plan; normally removed on release | Cross-process run ownership and contention metadata. |
 | `.mutation.lock` | Created by journal-capable persistence and retained | Stable-inode advisory lock shared by journal writers and recovering readers. |
@@ -529,6 +530,7 @@ Current well-known event types include:
 | `verification_claim_mismatch` | Reserved diagnostic comparison of an agent claim with a Tao-observed attempt; not completion authority. |
 | `run_context` | Pre-attempt run-packet and guardrail telemetry. |
 | `session_timeout` | Agent session exceeded its wall-clock timeout. |
+| `run_aborted` | Best-effort diagnostic that a `tao run` invocation exited with an error after acquiring the plan run lock; carries `abort_kind` (`control_checkout_leak`, `canceled`, or `other`), a bounded `message` (first error line, at most 512 runes), and optional `slice_id` and `head_sha`. Never lifecycle, recovery, or merge authority; not emitted for cannot-start refusals or lock contention. |
 | `budget_exceeded` | An opt-in hard slice output-token or cost cap was crossed; records the metric, threshold, and observed value. |
 | `rework_round` | Authoritative evidence that an automatic rework round was atomically reopened. |
 | `rework_stopped` | Authoritative evidence that automatic rework stopped at a persisted safety bound. |

@@ -331,6 +331,34 @@ func TestRenderDetailShowsSafeAbandonmentEvidence(t *testing.T) {
 	}
 }
 
+func TestRenderOverviewShowsCurrentRunAbort(t *testing.T) {
+	for _, kind := range []string{plan.RunAbortKindCanceled, ""} {
+		t.Run("kind="+kind, func(t *testing.T) {
+			detail := &plan.PlanDetail{Events: []plan.Event{{Type: plan.EventTypeRunAborted, AbortKind: kind, Message: "driver\nstopped\x00"}}}
+			wantKind := kind
+			if wantKind == "" {
+				wantKind = "other"
+			}
+			for _, superseded := range []bool{false, true} {
+				if superseded {
+					detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypeRunContext})
+				}
+				frame := RenderDetail(DetailModel{Plan: detail, ActiveTab: detailTabOverview, Width: 100, Height: 40})
+				want := "last run exited (" + wantKind + "): driver stopped"
+				if !superseded && !strings.Contains(frame, want) {
+					t.Fatalf("missing %q:\n%s", want, frame)
+				}
+				if strings.Contains(frame, "! ATTENTION") == superseded || strings.Contains(frame, "last run exited") == superseded {
+					t.Fatalf("incorrect exit attention, superseded=%t:\n%s", superseded, frame)
+				}
+				if strings.ContainsRune(frame, '\x00') {
+					t.Fatalf("unsanitized frame: %q", frame)
+				}
+			}
+		})
+	}
+}
+
 func TestRenderOverviewShowsOnlyMeaningfulAdvisoryInspectionState(t *testing.T) {
 	detail := &plan.PlanDetail{State: plan.State{Plan: plan.PlanState{ID: "plan-a", Title: "Plan A"}}}
 	tests := []struct {

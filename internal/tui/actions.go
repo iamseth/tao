@@ -19,6 +19,8 @@ type CommandRequest struct {
 	Executable string
 	Args       []string
 	Detached   bool
+	// StderrPath receives detached child stderr, truncated per launch; empty keeps the null device.
+	StderrPath string
 }
 
 // CommandLauncher is the process boundary used by dashboard actions.
@@ -106,7 +108,7 @@ func (a *Actions) RunPlan(ctx context.Context, row monitor.Row) {
 			return
 		}
 	}
-	if err := a.launch(ctx, row, args); err != nil {
+	if err := a.launch(ctx, row, args, true); err != nil {
 		a.recordFailure(row, err)
 		return
 	}
@@ -131,7 +133,7 @@ func (a *Actions) ApproveSlice(ctx context.Context, row monitor.Row) {
 		return
 	}
 	args := []string{"approve", "--slice", row.ApprovalSliceID, row.PlanID}
-	if err := a.launch(ctx, row, args); err != nil {
+	if err := a.launch(ctx, row, args, true); err != nil {
 		a.recordFailure(row, err)
 		return
 	}
@@ -152,7 +154,7 @@ func (a *Actions) MergePlan(ctx context.Context, row monitor.Row) {
 	if _, ok := a.MergePlanPrompt(row); !ok {
 		return
 	}
-	if err := a.launch(ctx, row, []string{"merge", row.PlanID}); err != nil {
+	if err := a.launch(ctx, row, []string{"merge", row.PlanID}, true); err != nil {
 		a.recordFailure(row, err)
 		return
 	}
@@ -172,7 +174,7 @@ func (a *Actions) MergeAll(ctx context.Context, row monitor.Row) {
 	if _, ok := a.MergeAllPrompt(row); !ok {
 		return
 	}
-	if err := a.launch(ctx, row, []string{"merge", "--all"}); err != nil {
+	if err := a.launch(ctx, row, []string{"merge", "--all"}, false); err != nil {
 		a.recordFailure(row, err)
 		return
 	}
@@ -213,7 +215,7 @@ func (a *Actions) Reconcile(snapshot monitor.Snapshot) {
 		}
 		a.feedback[key] = actionFeedback{kind: actionFailed, label: "failed to start", startedAt: feedback.startedAt}
 		a.messageKey = key
-		a.message = failedStartMessage(planID, nil)
+		a.message = failedStartMessage(planID, row.PlanDir, nil)
 	}
 }
 
@@ -247,12 +249,15 @@ func (a *Actions) statusMessage() string {
 	return a.message
 }
 
-func (a *Actions) launch(ctx context.Context, row monitor.Row, args []string) error {
+func (a *Actions) launch(ctx context.Context, row monitor.Row, args []string, logStderr bool) error {
 	request := CommandRequest{
 		CWD:        row.RepositoryRoot,
 		Executable: a.executable,
 		Args:       append([]string(nil), args...),
 		Detached:   true,
+	}
+	if logStderr && strings.TrimSpace(row.PlanDir) != "" {
+		request.StderrPath = plan.UILaunchLogPath(row.PlanDir)
 	}
 	return a.launcher(ctx, request)
 }
@@ -295,7 +300,7 @@ func (a *Actions) recordFailure(row monitor.Row, err error) {
 	key := actionRowKey(row)
 	a.feedback[key] = actionFeedback{kind: actionFailed, label: "failed to start", startedAt: a.now()}
 	a.messageKey = key
-	a.message = failedStartMessage(row.PlanID, err)
+	a.message = failedStartMessage(row.PlanID, row.PlanDir, err)
 }
 
 func verificationRecoveryArgs(row monitor.Row) ([]string, error) {
@@ -343,12 +348,15 @@ func planIDFromActionKey(key string) string {
 	return planID
 }
 
-func failedStartMessage(planID string, err error) string {
+func failedStartMessage(planID, planDir string, err error) string {
 	message := fmt.Sprintf("Failed to start %s", planID)
 	if err != nil {
 		message += ": " + err.Error()
 	} else {
 		message += ": no activity observed"
+	}
+	if strings.TrimSpace(planDir) != "" {
+		message += fmt.Sprintf("; stderr: %s", plan.UILaunchLogPath(planDir))
 	}
 	return message + fmt.Sprintf("; inspect `tao log %s`.", planID)
 }

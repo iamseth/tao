@@ -256,6 +256,13 @@ func startDetachedUICommand(request tui.CommandRequest) error {
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = nil
+	if request.StderrPath != "" {
+		file, err := os.OpenFile(request.StderrPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) // #nosec G304 G703 -- path is the Tao-owned per-plan launch log supplied by dashboard actions.
+		if err == nil {
+			cmd.Stderr = file
+			defer func() { _ = file.Close() }()
+		}
+	}
 	if err := cmd.Start(); err != nil {
 		return err
 	}

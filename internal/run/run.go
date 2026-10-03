@@ -299,7 +299,14 @@ func (s Service) WithPlanRunLock(ctx context.Context, request Request, operation
 	}
 	return trackRunHeader(ctx, s.dependencies.HeaderReporter, detail, headerConfig, startedAt, func(headerCtx context.Context) error {
 		return trackRunStatus(headerCtx, s.dependencies.StatusReporter, detail, startedAt, func(statusCtx context.Context) error {
-			return WithPlanRunLock(statusCtx, detail, startedAt, operation)
+			return WithPlanRunLock(statusCtx, detail, startedAt, func(ownedCtx context.Context) error {
+				err := operation(ownedCtx)
+				if err != nil {
+					// Diagnostic journaling is never lifecycle or recovery authority.
+					s.journalRunAbort(ownedCtx, detail, err)
+				}
+				return err
+			})
 		})
 	})
 }

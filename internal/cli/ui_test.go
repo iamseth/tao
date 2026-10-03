@@ -310,6 +310,13 @@ func (t *uiTerminalStub) Size() (term.Size, error) {
 func (t *uiTerminalStub) ResizeEvents(context.Context) <-chan struct{} { return t.resizes }
 
 func TestStartDetachedUICommandReapsChildAsynchronously(t *testing.T) {
+	for _, mode := range []string{"null", "log", "missing-directory"} {
+		t.Run(mode, func(t *testing.T) { testDetachedUICommand(t, mode) })
+	}
+}
+
+func testDetachedUICommand(t *testing.T, mode string) {
+	t.Helper()
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -317,6 +324,16 @@ func TestStartDetachedUICommandReapsChildAsynchronously(t *testing.T) {
 	dir := t.TempDir()
 	holdPath := filepath.Join(dir, "hold")
 	pidPath := filepath.Join(dir, "pid")
+	stderrPath := ""
+	switch mode {
+	case "log":
+		stderrPath = filepath.Join(dir, "ui-launch.log")
+		if err := os.WriteFile(stderrPath, []byte("old launch\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	case "missing-directory":
+		stderrPath = filepath.Join(dir, "missing", "ui-launch.log")
+	}
 	if err := os.WriteFile(holdPath, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -325,6 +342,7 @@ func TestStartDetachedUICommandReapsChildAsynchronously(t *testing.T) {
 	go func() {
 		started <- startDetachedUICommand(tui.CommandRequest{
 			Executable: executable,
+			StderrPath: stderrPath,
 			Args:       []string{"-test.run=^TestUIDetachedUICommandHelperProcess$", "--", "tao-ui-detached-helper", holdPath, pidPath},
 			CWD:        dir,
 		})
@@ -366,6 +384,22 @@ func TestStartDetachedUICommandReapsChildAsynchronously(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	if mode == "log" {
+		contents, err := os.ReadFile(stderrPath) //nolint:gosec // G304: stderrPath is rooted in the test-owned temporary directory.
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(contents) != "detached stderr marker\n" {
+			t.Fatalf("stderr = %q", contents)
+		}
+		info, err := os.Stat(stderrPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("log permissions = %v", info.Mode().Perm())
+		}
+	}
 }
 
 func TestUIDetachedUICommandHelperProcess(t *testing.T) {
@@ -383,6 +417,9 @@ func TestUIDetachedUICommandHelperProcess(t *testing.T) {
 		t.Fatalf("helper arguments = %q", os.Args)
 	}
 	holdPath, pidPath := os.Args[separator+2], os.Args[separator+3]
+	if _, err := os.Stderr.WriteString("detached stderr marker\n"); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil { //nolint:gosec // G703: parent test supplies paths rooted in t.TempDir.
 		t.Fatal(err)
 	}

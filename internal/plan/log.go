@@ -6,6 +6,12 @@ import (
 )
 
 const logFileName = "agent-run.log"
+const uiLaunchLogFileName = "ui-launch.log"
+
+// UILaunchLogPath returns the local diagnostic log for detached dashboard actions.
+func UILaunchLogPath(planDir string) string {
+	return filepath.Join(planDir, uiLaunchLogFileName)
+}
 
 func LogPath(planDir string) string {
 	return filepath.Join(planDir, logFileName)
