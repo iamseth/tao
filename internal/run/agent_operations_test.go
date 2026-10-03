@@ -17,7 +17,9 @@ import (
 	"github.com/iamseth/tao/internal/agent"
 	agentmetrics "github.com/iamseth/tao/internal/agent/metrics"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/promptcapture"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+	"github.com/iamseth/tao/prompts"
 )
 
 func TestAgentOperationModels(t *testing.T) {
@@ -912,6 +914,81 @@ func TestRunAgentSessionStateReadErrorSkipsSessionTimeoutEvent(t *testing.T) {
 	}
 	if appendCalls != 0 {
 		t.Fatalf("event append calls = %d, want 0", appendCalls)
+	}
+}
+
+func TestRunAgentSessionPromptCapture(t *testing.T) {
+	for _, blocked := range []bool{false, true} {
+		t.Run(fmt.Sprint(blocked), func(t *testing.T) {
+			var log bytes.Buffer
+			runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
+				return agent.SessionResult{Output: "output", FinalText: "final", Metrics: &agent.Metrics{OutputTokens: 12}}, nil
+			})
+			timestamp := time.Date(2026, 10, 3, 6, 0, 0, 0, time.UTC)
+			runner, dir, root := sessionEventTestRunner(t, runtime, plan.NewFileRepository(""), &log, timestamp)
+			if blocked {
+				if err := os.WriteFile(promptcapture.Dir(dir), []byte("blocked"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{PlanDir: dir, RepoRoot: root, Prompt: "rendered prompt", PromptTemplate: prompts.PromptRun, Metrics: &AgentSessionMetricsRequest{Role: plan.AgentRoleExecution, SliceID: "001-a"}})
+			if err != nil || got.Output != "output" || got.FinalText != "final" {
+				t.Fatalf("outcome = %+v, %v", got, err)
+			}
+			events := readAgentMetricEvents(t, dir)
+			if len(events) != 1 || events[0].Metrics == nil {
+				t.Fatalf("metrics = %+v", events)
+			}
+			metrics := events[0].Metrics
+			if metrics.OutputTokens != 12 || metrics.PromptHash != promptcapture.Hash("rendered prompt") || metrics.PromptTemplate != prompts.PromptRun {
+				t.Fatalf("metrics = %+v", metrics)
+			}
+			if blocked {
+				if !strings.Contains(log.String(), "tao prompt-capture warning:") {
+					t.Fatalf("missing diagnostic: %s", &log)
+				}
+				return
+			}
+			entries, err := promptcapture.List(promptcapture.Dir(dir))
+			if err != nil || len(entries) != 1 {
+				t.Fatalf("captures = %+v, %v", entries, err)
+			}
+			header, body, err := promptcapture.Read(entries[0].Path)
+			hash, versionErr := prompts.TemplateVersion(prompts.PromptRun)
+			if err != nil || versionErr != nil || body != "rendered prompt" || header.Role != "execution" || header.SHA256 != metrics.PromptHash || header.TemplateHash != hash || header.StartedAt != timestamp.Format(time.RFC3339) || !strings.Contains(entries[0].Name, "-001-a-") {
+				t.Fatalf("capture = %+v, %q, %v", entries[0], body, err)
+			}
+		})
+	}
+}
+
+func TestPullRequestSessionsCaptureDistinctPrompts(t *testing.T) {
+	runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
+		return agent.SessionResult{Output: "https://github.com/example/repo/pull/1", FinalText: "body"}, nil
+	})
+	runner, dir, root := sessionEventTestRunner(t, runtime, plan.NewFileRepository(""), io.Discard, time.Date(2026, 10, 3, 6, 0, 0, 0, time.UTC))
+	if _, err := createPullRequestWithAgentSession(context.Background(), runner, agentOperationOptions{}, PullRequestRun{PlanDir: dir, PlanID: "plan-a", RepoRoot: root}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := generatePullRequestBodyWithAgentSession(context.Background(), runner, agentOperationOptions{}, PullRequestBodyRun{PlanDir: dir, PlanID: "plan-a", RepoRoot: root}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := promptcapture.List(promptcapture.Dir(dir))
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("captures = %+v, %v", entries, err)
+	}
+	templates := map[string]bool{}
+	for _, entry := range entries {
+		templates[entry.Header.Template] = true
+		if entry.Header.Role != string(plan.AgentRolePullRequest) {
+			t.Fatalf("role = %s", entry.Header.Role)
+		}
+		if entry.Header.Template == "pr-body" && entry.Header.TemplateHash != promptcapture.Hash(pullRequestBodyPromptTemplate) {
+			t.Fatal("body template hash mismatch")
+		}
+	}
+	if !templates[prompts.PromptPR] || !templates["pr-body"] || entries[0].Header.StartedAt != entries[1].Header.StartedAt {
+		t.Fatalf("captures = %+v", entries)
 	}
 }
 

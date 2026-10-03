@@ -261,7 +261,7 @@ func (r GuardedSingleConflictResolver) ResolveConflict(ctx context.Context, requ
 	defer gitBoundary.cleanup()
 	agentRequest := BatchAgentSessionRequest{
 		Operation: BatchAgentOperationSinglePlanResolution, Attempt: 1,
-		IntegrationRoot: request.IntegrationRoot, Prompt: prompt, CandidatePlanID: request.Intent.PlanID,
+		IntegrationRoot: request.IntegrationRoot, Prompt: prompt, CandidatePlanID: request.Intent.PlanID, PromptTemplate: "merge-resolve",
 		ProtectedGitObjectRoot: gitBoundary.objects.root,
 		ProtectedGitWritePaths: gitBoundary.protectedGitWritePaths(),
 	}

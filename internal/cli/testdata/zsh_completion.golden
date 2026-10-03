@@ -123,8 +123,8 @@ _tao() {
       _arguments '--json[write JSON]' '--slug[allocate a plan directory with this slug]:value:'
       ;;
     lo|log)
-      _arguments '--batch[show active or named merge-batch transitions]' '-f[follow appended output]' '--follow[follow appended output]'
-      if _tao_at_positional 3 1 0 ',,'; then
+      _arguments '--batch[show active or named merge-batch transitions]' '-f[follow appended output]' '--follow[follow appended output]' '--prompt[print a captured prompt by 1-based index or exact file name]:value:' '--prompts[list local captured prompts]'
+      if _tao_at_positional 3 1 0 ',,' '--prompt'; then
         plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
         compadd -a plan_ids
       fi

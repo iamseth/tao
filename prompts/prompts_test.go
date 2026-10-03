@@ -56,6 +56,28 @@ func TestSlicingVerificationCommandHygiene(t *testing.T) {
 	}
 }
 
+func TestInternalTemplateVersions(t *testing.T) {
+	wantNames := []string{PromptPlan, PromptSlice, PromptNoteSlice, PromptNote, PromptRun, PromptCommit, PromptGrillMe, PromptImproveCodebaseArchitecture, PromptImproveDocumentation, PromptRepoHealth, PromptCatchMeUp, PromptTaoInsightsReview, PromptGroomNotes, PromptSteal, PromptPR, PromptReview}
+	for name, source := range map[string]string{
+		"merge-resolve":       MergeResolvePromptTemplate,
+		"merge-review":        MergeReviewPromptTemplate,
+		"single-merge-review": MergeReviewPromptTemplate,
+		"rework-triage":       ReworkTriagePromptTemplate,
+	} {
+		got, err := TemplateVersion(name)
+		want := fmt.Sprintf("%x", sha256.Sum256([]byte(source)))
+		if err != nil || got != want {
+			t.Errorf("TemplateVersion(%q)=%q, %v; want %q", name, got, err, want)
+		}
+		if _, err := Render(name, Data{}); err == nil {
+			t.Errorf("internal template %q is installable", name)
+		}
+	}
+	if !reflect.DeepEqual(PromptNames(), wantNames) {
+		t.Fatalf("PromptNames changed: %v", PromptNames())
+	}
+}
+
 func TestTemplateVersion(t *testing.T) {
 	first, err := TemplateVersion(PromptNoteSlice)
 	if err != nil {

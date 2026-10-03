@@ -4,17 +4,82 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/iamseth/tao/internal/agent"
 	agentmetrics "github.com/iamseth/tao/internal/agent/metrics"
+	"github.com/iamseth/tao/internal/promptcapture"
 )
 
 type runtimeFunc func(context.Context, agent.Session) (agent.SessionResult, error)
 
 func (f runtimeFunc) RunSession(ctx context.Context, session agent.Session) (agent.SessionResult, error) {
 	return f(ctx, session)
+}
+
+func TestRunnerPromptCapture(t *testing.T) {
+	for name, override := range map[string]bool{"default": false, "override": true} {
+		t.Run(name, func(t *testing.T) {
+			target := promptcapture.Target{Dir: filepath.Join(t.TempDir(), "prompts"), Role: "review", Template: "merge-review", TemplateHash: "template-hash"}
+			now := time.Date(2026, 10, 3, 6, 0, 0, 0, time.UTC)
+			model, effort := "base", "medium"
+			if override {
+				model, effort = "override", "high"
+			}
+			var path string
+			runner := New(Config{Model: "base", Effort: "medium", Now: func() time.Time { return now }, Descriptor: agent.Descriptor{Label: "fake"}, Runtime: runtimeFunc(func(_ context.Context, session agent.Session) (agent.SessionResult, error) {
+				entries, err := promptcapture.List(target.Dir)
+				if err != nil || len(entries) != 1 {
+					t.Fatalf("capture before invocation: %v, %v", entries, err)
+				}
+				path = entries[0].Path
+				h, body, err := promptcapture.Read(path)
+				if err != nil || body != session.Prompt || h.Role != target.Role || h.Template != target.Template || h.TemplateHash != target.TemplateHash || h.Agent != "fake" || h.Model != model || h.Effort != effort || h.StartedAt != now.Format(time.RFC3339) {
+					t.Fatalf("header=%+v body=%q err=%v", h, body, err)
+				}
+				return agent.SessionResult{Output: "done"}, nil
+			})})
+			request := Request{Prompt: "exact prompt\nrole: body", Capture: &target}
+			if override {
+				request.Model, request.Effort = model, effort
+			}
+			result, err := runner.Run(context.Background(), request)
+			h, _, readErr := promptcapture.Read(path)
+			if err != nil || readErr != nil || !result.Invoked || result.PromptHash != promptcapture.Hash(request.Prompt) || result.PromptHash != h.SHA256 || result.PromptTemplate != target.Template || result.PromptPath != path || result.PromptCaptureWarning != "" {
+				t.Fatalf("result=%+v err=%v read=%v", result, err, readErr)
+			}
+		})
+	}
+}
+
+func TestRunnerPromptCaptureFailureIsNonFatal(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, []byte("file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, providerErr := range []error{nil, errors.New("provider failed")} {
+		runner := New(Config{Runtime: runtimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
+			return agent.SessionResult{Output: "output", FinalText: "final", Metrics: &agent.Metrics{OutputTokens: 9}}, providerErr
+		})})
+		request := Request{Prompt: "prompt", CollectMetrics: true}
+		baseline, baseErr := runner.Run(context.Background(), request)
+		if baseline.PromptHash != promptcapture.Hash(request.Prompt) || baseline.PromptPath != "" || baseline.PromptTemplate != "" || baseline.PromptCaptureWarning != "" {
+			t.Fatalf("baseline=%+v", baseline)
+		}
+		request.Capture = &promptcapture.Target{Dir: filepath.Join(file, "prompts"), Template: "run"}
+		got, err := runner.Run(context.Background(), request)
+		if got.PromptCaptureWarning == "" || got.PromptTemplate != "run" {
+			t.Fatalf("result=%+v", got)
+		}
+		got.PromptCaptureWarning, got.PromptTemplate = "", ""
+		if !reflect.DeepEqual(got, baseline) || err != baseErr { //nolint:errorlint // Capture must preserve error identity.
+			t.Fatalf("capture changed result: %+v vs %+v; errors %v vs %v", got, baseline, err, baseErr)
+		}
+	}
 }
 
 func TestRunnerForwardsWarningPolicy(t *testing.T) {

@@ -211,10 +211,13 @@ tao merge --all --dry-run
 tao merge --all
 tao merge --all --auto-eject
 tao log --batch --follow # follow active batch transitions from another terminal
+tao log --prompts <plan> # list captured prompts for a plan
 ```
 
 Batch merge keeps the default branch unchanged until the combined result passes
 full verification and aggregate review.
+Non-interactive session prompts are captured locally on a best-effort basis;
+they may contain repository text and must stay local.
 
 `tao report --output PATH <plan>` writes a share-safe Markdown projection for
 coworkers with repository access; review it before sharing. See the

@@ -3,6 +3,7 @@ package commit
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -92,6 +93,13 @@ func validateMergeProposalContext(exact MergeProposalContext) error {
 	return nil
 }
 
+const mergeProposalPromptTemplate = "Generate a commit proposal for the exact single-plan squash context below. Do not modify files, Git refs, the index, or the worktree. Return exactly one JSON object and no markdown or commentary. The object must contain only the string fields type, scope, summary, what, and why. Use a supported scoped Conventional Commit type, a narrow lowercase scope, a lowercase imperative summary of at most 72 characters with no ending punctuation, and useful non-empty what/why text. Do not include verification output or any Tao-* field or trailer.\n\nExact context JSON:\n"
+
+// MergeProposalTemplateVersion identifies the fixed merge proposal instructions.
+func MergeProposalTemplateVersion() string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(mergeProposalPromptTemplate)))
+}
+
 func renderMergeProposalPrompt(exact MergeProposalContext) (string, error) {
 	payload := struct {
 		PlanID        string `json:"plan_id"`
@@ -106,7 +114,7 @@ func renderMergeProposalPrompt(exact MergeProposalContext) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("encode exact merge commit context: %w", err)
 	}
-	return "Generate a commit proposal for the exact single-plan squash context below. Do not modify files, Git refs, the index, or the worktree. Return exactly one JSON object and no markdown or commentary. The object must contain only the string fields type, scope, summary, what, and why. Use a supported scoped Conventional Commit type, a narrow lowercase scope, a lowercase imperative summary of at most 72 characters with no ending punctuation, and useful non-empty what/why text. Do not include verification output or any Tao-* field or trailer.\n\nExact context JSON:\n" + string(contextJSON), nil
+	return mergeProposalPromptTemplate + string(contextJSON), nil
 }
 
 func decodeGeneratedProposal(output string) (Proposal, error) {

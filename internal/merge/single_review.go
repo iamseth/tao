@@ -152,7 +152,7 @@ func (r GuardedSingleIntegrationReviewer) ReviewResolvedIntegration(ctx context.
 
 	result.Provider, err = r.Agent.Resolve(ctx, BatchAgentSessionRequest{
 		Operation: BatchAgentOperationSinglePlanReview, Attempt: 1,
-		IntegrationRoot: request.IntegrationRoot, Prompt: prompt, CandidatePlanID: request.Intent.PlanID,
+		IntegrationRoot: request.IntegrationRoot, Prompt: prompt, CandidatePlanID: request.Intent.PlanID, PromptTemplate: "single-merge-review",
 		ProtectedGitObjectRoot: gitBoundary.objects.root,
 		ProtectedGitWritePaths: gitBoundary.protectedGitWritePaths(),
 	})

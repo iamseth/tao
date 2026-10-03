@@ -25,6 +25,32 @@ import (
 	"github.com/iamseth/tao/internal/workspace"
 )
 
+func TestMergeAgentConfigPromptDirectories(t *testing.T) {
+	root := t.TempDir()
+	batches := filepath.Join(root, "merge-batches")
+	store := mergepkg.NewBatchStore(batches, filepath.Join(batches, "active.json"))
+	batch := newMergeBatchAgentConfig(App{}, root, nil, store, runtimeconfig.ModelSelection{}, io.Discard)
+	if batch.PromptDir == nil {
+		t.Fatal("batch prompt directory resolver is missing")
+	}
+	if got, want := batch.PromptDir(mergepkg.BatchAgentSessionRequest{BatchID: "batch-a"}), filepath.Join(batches, "batch-a", "prompts"); got != want {
+		t.Fatalf("batch prompt directory = %q, want %q", got, want)
+	}
+	if got := batch.PromptDir(mergepkg.BatchAgentSessionRequest{}); got != "" {
+		t.Fatalf("empty batch prompt directory = %q", got)
+	}
+	detail := &plan.PlanDetail{Dir: filepath.Join(root, "plan-a")}
+	single := newSingleMergeAgentConfig(App{}, detail, root, nil, nil, runtimeconfig.ModelSelection{})
+	if single.PromptDir == nil {
+		t.Fatal("single merge prompt directory resolver is missing")
+	}
+	for _, request := range []mergepkg.BatchAgentSessionRequest{{}, {BatchID: "ignored"}} {
+		if got, want := single.PromptDir(request), filepath.Join(detail.Dir, "prompts"); got != want {
+			t.Fatalf("single prompt directory = %q, want %q", got, want)
+		}
+	}
+}
+
 func TestMergeLogf(t *testing.T) {
 	if logf := (App{}).mergeLogf(); logf != nil {
 		t.Fatal("nil output should disable merge logging")

@@ -10,7 +10,31 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/promptcapture"
 )
+
+func TestReportIgnoresCapturedPrompts(t *testing.T) {
+	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+	for _, planningOnly := range []bool{false, true} {
+		render := func() string {
+			var out, errOut bytes.Buffer
+			args := []string{"report", "--output", "-", fixture.id}
+			if planningOnly {
+				args = append(args, "--planning-only")
+			}
+			if err := reportTestApp(fixture.root, &out, &errOut).Run(context.Background(), args); err != nil {
+				t.Fatal(err)
+			}
+			return out.String()
+		}
+		before := render()
+		writeLogPrompt(t, promptcapture.Dir(fixture.dir), "PROMPT-CAPTURE-SENTINEL-7f3a")
+		after := render()
+		if before != after || strings.Contains(after, "PROMPT-CAPTURE-SENTINEL-7f3a") || strings.Contains(after, "prompts/") {
+			t.Fatalf("report exposed capture: %s", after)
+		}
+	}
+}
 
 func TestReportRequiresOnePlanAndExplicitOutput(t *testing.T) {
 	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"slice-a"}, nil, "slice-a", plan.StatusPending)

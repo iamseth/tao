@@ -230,13 +230,24 @@ func Render(name string, data Data) (string, error) {
 }
 
 // TemplateVersion returns the lowercase SHA-256 digest of the embedded template
-// selected by the same name as Render, independent of rendering data.
+// selected by an installable or internal-only name, independent of rendering data.
 func TemplateVersion(name string) (string, error) {
-	prompt, ok := promptByName(name)
-	if !ok {
-		return "", fmt.Errorf("unknown prompt %q", name)
+	var source string
+	switch name {
+	case "merge-resolve":
+		source = MergeResolvePromptTemplate
+	case "merge-review", "single-merge-review":
+		source = MergeReviewPromptTemplate
+	case "rework-triage":
+		source = ReworkTriagePromptTemplate
+	default:
+		prompt, ok := promptByName(name)
+		if !ok {
+			return "", fmt.Errorf("unknown prompt %q", name)
+		}
+		source = prompt.template
 	}
-	return fmt.Sprintf("%x", sha256.Sum256([]byte(prompt.template))), nil
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(source))), nil
 }
 
 func renderTemplate(source string, data Data) (string, error) {

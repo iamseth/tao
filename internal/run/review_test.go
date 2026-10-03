@@ -552,6 +552,11 @@ func TestCreateReviewWithAgentSessionCorrectsTypedApprovalProposalOnce(t *testin
 	}
 	assertPlanTelemetryRequest(t, executor.requests[0], plan.AgentRoleReview)
 	correctionRequest := executor.requests[1]
+	for _, request := range executor.requests {
+		if request.PromptTemplate != "review" {
+			t.Fatalf("review template = %q", request.PromptTemplate)
+		}
+	}
 	assertPlanTelemetryRequest(t, correctionRequest, plan.AgentRoleReview)
 	for _, want := range []string{"correcting review proposal for plan plan-a", "COMMIT PROPOSAL CORRECTION mode", "exact `base123..head123` diff", "Do not include a verdict, summary, findings"} {
 		if !strings.Contains(correctionRequest.LogAction+"\n"+correctionRequest.Prompt, want) {

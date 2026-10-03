@@ -58,8 +58,7 @@ func renderPullRequestPrompt(data pullRequestPromptData) (string, error) {
 	return prompts.Render(prompts.PromptPR, prompts.Data{Arguments: arguments})
 }
 
-func renderPullRequestBodyPrompt(data pullRequestBodyPromptData) string {
-	return fmt.Sprintf(`Draft only the Markdown body for a GitHub pull request.
+const pullRequestBodyPromptTemplate = `Draft only the Markdown body for a GitHub pull request.
 
 Do not run commands. Do not push. Do not create or edit any pull request. Return only the Markdown body with no surrounding code fence.
 
@@ -68,5 +67,8 @@ Pull request title: %s
 Polish the deterministic draft below for a repository reviewer while preserving every fact. Keep exactly these level-two headings in this order: Problem, Fix, Tests, Deploy, Scope. Use only ## ATX syntax for level-two headings; do not add Setext headings. Keep Tests exactly as drafted, including legitimate repository paths that contain the word Tao; the draft omits Tao lifecycle verification commands, so do not reintroduce them. Keep Scope exactly as drafted: a complete collapsed Changed files details block containing the exact diff stat, including paths that happen to contain the word Tao. Do not include plan IDs, slice or lifecycle details, merge guidance, or Tao-specific prose in Problem, Fix, Tests, or Deploy. Do not add claims about tests, deployment, behavior, or files that are not present in the draft.
 
 %s
-`, data.Title, data.DraftBody)
+`
+
+func renderPullRequestBodyPrompt(data pullRequestBodyPromptData) string {
+	return fmt.Sprintf(pullRequestBodyPromptTemplate, data.Title, data.DraftBody)
 }

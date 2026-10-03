@@ -23,8 +23,10 @@ import (
 	"github.com/iamseth/tao/internal/commandrunner"
 	commitcontract "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/promptcapture"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/workspace"
+	"github.com/iamseth/tao/prompts"
 )
 
 // BatchAgentSessionConfig configures a merge-owned agent operation. Zero-value
@@ -48,6 +50,7 @@ type BatchAgentSessionConfig struct {
 	Observe         func(BatchAgentSessionRequest, BatchAgentSessionResult, error)
 	EventAppender   BatchAgentEventAppender
 	Now             func() time.Time
+	PromptDir       func(BatchAgentSessionRequest) string
 
 	// FramedLog sends raw records to Log instead of pre-rendered progress.
 	// Such writers own terminal presentation as well as transcript persistence.
@@ -84,6 +87,7 @@ type BatchAgentSessionRequest struct {
 	Attempt         int
 	IntegrationRoot string
 	Prompt          string
+	PromptTemplate  string
 	CandidatePlanID string
 
 	// ProtectedGitObjectRoot and ProtectedGitWritePaths are set only for
@@ -117,6 +121,7 @@ type BatchAgentSession struct {
 	observe            func(BatchAgentSessionRequest, BatchAgentSessionResult, error)
 	eventAppender      BatchAgentEventAppender
 	now                func() time.Time
+	promptDir          func(BatchAgentSessionRequest) string
 	providerToolName   string
 	providerLookPath   agent.LookPath
 	confinementProbe   func() error
@@ -236,7 +241,7 @@ func (s mergeProposalTextSession) GenerateText(ctx context.Context, repoRoot, pr
 	}
 	result, err := session.Resolve(ctx, BatchAgentSessionRequest{
 		BatchID: identity.BatchID, Operation: BatchAgentOperationProposalGeneration, Attempt: identity.Attempt,
-		IntegrationRoot: repoRoot, Prompt: prompt, CandidatePlanID: identity.CandidatePlanID,
+		IntegrationRoot: repoRoot, Prompt: prompt, CandidatePlanID: identity.CandidatePlanID, PromptTemplate: "merge-proposal",
 	})
 	return result.Output, err
 }
@@ -327,6 +332,7 @@ func newBatchAgentSession(config BatchAgentSessionConfig, confineFilesystem bool
 		Timeout:         timeout,
 		Progress:        progress,
 		CommandRunner:   config.CommandRunner,
+		Now:             config.Now,
 	})
 	clock := config.Now
 	if clock == nil {
@@ -335,7 +341,7 @@ func newBatchAgentSession(config BatchAgentSessionConfig, confineFilesystem bool
 	return BatchAgentSession{
 		runner: runner, run: runner.Run, confinesFilesystem: confineFilesystem, models: config.Models,
 		log: config.Log, framedLog: framedLog, controlRoot: config.ControlRoot, metrics: config.Metrics,
-		observe: config.Observe, eventAppender: config.EventAppender, now: clock,
+		observe: config.Observe, eventAppender: config.EventAppender, now: clock, promptDir: config.PromptDir,
 		providerToolName: descriptor.ToolName, providerLookPath: providerLookPath,
 		confinementProbe: config.ConfinementProbe,
 	}, nil
@@ -1211,11 +1217,32 @@ func (s BatchAgentSession) Resolve(ctx context.Context, request BatchAgentSessio
 	case BatchAgentOperationProposalGeneration:
 		role = runtimeconfig.ModelRoleDefault
 	}
+	var capture *promptcapture.Target
+	if s.promptDir != nil {
+		if dir := s.promptDir(request); dir != "" {
+			hash, _ := prompts.TemplateVersion(request.PromptTemplate)
+			if request.PromptTemplate == "merge-proposal" {
+				hash = commitcontract.MergeProposalTemplateVersion()
+			}
+			label := string(request.Operation)
+			if request.Attempt > 0 {
+				label += fmt.Sprintf("-attempt-%d", request.Attempt)
+			}
+			if request.CandidatePlanID != "" {
+				label += "-" + request.CandidatePlanID
+			}
+			capture = &promptcapture.Target{Dir: dir, Role: string(plan.AgentRoleMerge), Template: request.PromptTemplate, TemplateHash: hash, Label: label}
+		}
+	}
 	result, err := run(ctx, agentsession.Request{
+		Capture:  capture,
 		Model:    s.models.For(role),
 		Effort:   s.models.EffortFor(role),
 		RepoRoot: request.IntegrationRoot, ControlRoot: s.controlRoot, Prompt: request.Prompt, CollectMetrics: true, Log: s.framedLog,
 	})
+	if result.PromptCaptureWarning != "" {
+		s.writeLogDiagnostic("tao prompt-capture warning: " + result.PromptCaptureWarning)
+	}
 	summary := agentsession.Summarize(result, err)
 	if s.metrics != nil {
 		metrics := agent.Metrics{}

@@ -19,11 +19,57 @@ import (
 	"github.com/iamseth/tao/internal/configtypes"
 	"github.com/iamseth/tao/internal/forge"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/promptcapture"
 	reworkpkg "github.com/iamseth/tao/internal/rework"
 	runpkg "github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/taodata"
+	"github.com/iamseth/tao/prompts"
 )
+
+func TestClassifyReworkPRThreadsCapturesPrompt(t *testing.T) {
+	t.Setenv("TAO_AGENT", "claude")
+	root := t.TempDir()
+	planDir := t.TempDir()
+	var rendered string
+	snapshot := runtimeconfig.RuntimeEnv()
+	app := App{RuntimeEnv: &snapshot, Out: io.Discard, ProcessStarter: func(_ context.Context, _ string, _ string, _ []string) (runpkg.Process, error) {
+		proc := newFakeCLIClaudeProcess(t)
+		go func() {
+			defer proc.finish()
+			body, err := io.ReadAll(proc.stdinReader)
+			if err != nil {
+				return
+			}
+			rendered = string(body)
+			proc.writeEvent(`{"type":"result","result":"{\"classifications\":[{\"thread_node_id\":\"thread-a\",\"kind\":\"change\",\"rationale\":\"Requests a fix.\"}]}"}`)
+		}()
+		return proc, nil
+	}}
+	var observed agentsession.Result
+	got, err := classifyReworkPRThreads(context.Background(), app, root, planDir, []forge.ReviewThread{{NodeID: "thread-a"}}, func(result agentsession.Result, _ string, _ error) { observed = result })
+	if err != nil || len(got) != 1 {
+		t.Fatalf("classify = %+v, %v", got, err)
+	}
+	entries, err := promptcapture.List(promptcapture.Dir(planDir))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("captures = %+v, %v", entries, err)
+	}
+	header, body, err := promptcapture.Read(entries[0].Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	version, err := prompts.TemplateVersion("rework-triage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if header.Template != "rework-triage" || header.Role != string(plan.AgentRoleRework) || header.TemplateHash != version || body != rendered || body == "" {
+		t.Fatalf("unexpected capture: %+v; body matches = %t", header, body == rendered)
+	}
+	if observed.PromptHash != header.SHA256 || observed.PromptTemplate != header.Template || observed.PromptPath != entries[0].Path {
+		t.Fatalf("observer capture identity mismatch: %+v", observed)
+	}
+}
 
 func TestReworkCommandReopensChangesRequestedPlanWithGeneratedSlices(t *testing.T) {
 	root := t.TempDir()
@@ -795,7 +841,7 @@ func stubCLIReworkPRPipeline(t *testing.T, threads []forge.ReviewThread, classif
 		}
 		return forge.ReviewThreadReadResult{OwnerLogin: "owner", Threads: threads}, nil
 	}
-	classifyReworkPRThreads = func(_ context.Context, _ App, _ string, got []forge.ReviewThread, _ func(agentsession.Result, string, error)) ([]reworkpkg.PRThreadClassification, error) {
+	classifyReworkPRThreads = func(_ context.Context, _ App, _ string, _ string, got []forge.ReviewThread, _ func(agentsession.Result, string, error)) ([]reworkpkg.PRThreadClassification, error) {
 		if len(got) != len(threads) {
 			t.Fatalf("classified threads = %d, want %d", len(got), len(threads))
 		}

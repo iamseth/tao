@@ -208,6 +208,8 @@ type AgentMetrics struct {
 	ProviderID              string                   `json:"provider_id,omitempty"`
 	ModelID                 string                   `json:"model_id,omitempty"`
 	ReasoningEffort         string                   `json:"reasoning_effort,omitempty"`
+	PromptTemplate          string                   `json:"prompt_template,omitempty"`
+	PromptHash              string                   `json:"prompt_hash,omitempty"`
 	Status                  string                   `json:"status,omitempty"`
 	Result                  string                   `json:"result,omitempty"`
 	InputTokens             int64                    `json:"input_tokens,omitempty"`

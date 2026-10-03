@@ -641,6 +641,12 @@ above `LIVE OUTPUT`. Redirected output stays plain. Use `--no-run-header` or
 boolean defaults and diagnostics. Terminal scroll margins discard older visible
 lines from scrollback; the full `agent-run.log` remains in the plan directory.
 
+To inspect what Tao sent to a non-interactive agent session, use
+`tao log --prompts <plan>` to list locally captured prompts, then
+`tao log --prompt N <plan>` to print the prompt at the list's 1-based index.
+Capture is best-effort; these diagnostics are not lifecycle or recovery evidence
+and may contain repository text that must stay local.
+
 **Prefer `tao validate <plan-id>` before running** for whole-plan findings;
 `tao run` preflights only the selected slice.
 
@@ -1382,7 +1388,13 @@ and does not replay verification output.
 tao log --batch
 tao log --batch --follow
 tao log --batch <batch-id>
+tao log --batch --prompts
+tao log --batch --prompt N
 ```
+
+Use `--prompts` to list the batch's captured session prompts and `--prompt N`
+to print one by its 1-based index. As with transition logs, append a batch ID to
+inspect a previous batch. Prompt inspection does not support `--follow`.
 
 #### Batch flags
 

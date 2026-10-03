@@ -219,6 +219,7 @@ type AgentSessionRequest struct {
 	RepoRoot             string
 	LogAction            string
 	Prompt               string
+	PromptTemplate       string
 	CaptureOutput        bool
 	Metrics              *AgentSessionMetricsRequest
 	NoProgressToolLimit  int

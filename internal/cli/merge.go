@@ -12,6 +12,7 @@ import (
 	"github.com/iamseth/tao/internal/commandrunner"
 	mergepkg "github.com/iamseth/tao/internal/merge"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/promptcapture"
 	runpkg "github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/runtimeconfig"
@@ -372,6 +373,12 @@ func newMergeBatchAgentConfig(a App, controlRoot string, runner commandrunner.Ru
 		Models:         models,
 		ProcessStarter: a.ProcessStarter, Log: log, FramedLog: true, ControlRoot: controlRoot, CommandRunner: runner,
 		EventAppender: store, Now: a.Now,
+		PromptDir: func(request mergepkg.BatchAgentSessionRequest) string {
+			if store == nil || request.BatchID == "" {
+				return ""
+			}
+			return store.PromptDir(request.BatchID)
+		},
 	}
 }
 
@@ -604,6 +611,9 @@ func newSingleMergeAgentConfig(a App, detail *plan.PlanDetail, controlRoot strin
 		RuntimeEnv:     &snapshot,
 		Models:         models,
 		ProcessStarter: a.ProcessStarter, Log: a.Out, ControlRoot: controlRoot, CommandRunner: runner, Now: a.Now,
+		PromptDir: func(_ mergepkg.BatchAgentSessionRequest) string {
+			return promptcapture.Dir(detail.Dir)
+		},
 		Observe: func(request mergepkg.BatchAgentSessionRequest, result mergepkg.BatchAgentSessionResult, sessionErr error) {
 			request.CandidatePlanID = mergePlanID(detail)
 			event := mergepkg.SingleMergeAgentMetricsEvent(request, result, sessionErr, a.now())

@@ -131,7 +131,13 @@ func (a App) renderPlanDetailWithMerge(out io.Writer, loaded planview.Plan, thre
 	if err := writef(out, "Status: %s\n", statusText); err != nil {
 		return err
 	}
-	if abandonment := loaded.ShowPayload().Abandonment; abandonment != nil {
+	payload := loaded.ShowPayload()
+	if capture := payload.PromptCapture; capture != nil {
+		if err := writef(out, "Prompts: %d captured (tao log --prompts %s)\n", capture.Count, state.Plan.ID); err != nil {
+			return err
+		}
+	}
+	if abandonment := payload.Abandonment; abandonment != nil {
 		abandonedAt := "-"
 		if abandonment.AbandonedAt != nil {
 			abandonedAt = abandonment.AbandonedAt.Format(time.RFC3339)

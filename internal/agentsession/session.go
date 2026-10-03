@@ -8,10 +8,12 @@ import (
 	"github.com/iamseth/tao/internal/agent"
 	agentmetrics "github.com/iamseth/tao/internal/agent/metrics"
 	"github.com/iamseth/tao/internal/commandrunner"
+	"github.com/iamseth/tao/internal/promptcapture"
 )
 
 // Config describes the stable policy and dependencies for bounded sessions.
 type Config struct {
+	Now             func() time.Time
 	Model           string
 	Effort          string
 	Descriptor      agent.Descriptor
@@ -25,6 +27,7 @@ type Config struct {
 
 // Runner invokes exactly one provider session for each Run call.
 type Runner struct {
+	now            func() time.Time
 	model          string
 	effort         string
 	runtime        agent.Runtime
@@ -37,6 +40,9 @@ type Runner struct {
 
 // New constructs a bounded session runner from a provider descriptor.
 func New(config Config) Runner {
+	if config.Now == nil {
+		config.Now = time.Now
+	}
 	runtime := config.Runtime
 	if runtime == nil {
 		runtime = config.Descriptor.NewRuntime(config.Deps)
@@ -46,6 +52,7 @@ func New(config Config) Runner {
 		permissionMode = agent.PermissionModeBypassPermissions
 	}
 	return Runner{
+		now:            config.Now,
 		model:          config.Model,
 		effort:         config.Effort,
 		runtime:        agent.WithSessionTimeout(runtime),
@@ -60,6 +67,7 @@ func New(config Config) Runner {
 // Request describes one provider call. ControlRoot enables leak detection when
 // it differs from RepoRoot.
 type Request struct {
+	Capture *promptcapture.Target
 	Warning *agent.SessionWarning
 	// BindLifetime coordinates nested work using the actual provider deadline.
 	BindLifetime         func(context.Context) (context.Context, func() error, error)
@@ -78,6 +86,10 @@ type Request struct {
 // Result is the neutral provider result plus descriptor-driven telemetry
 // classification. Domain adapters decide whether and where to persist it.
 type Result struct {
+	PromptHash           string
+	PromptTemplate       string
+	PromptPath           string
+	PromptCaptureWarning string
 	// Invoked distinguishes a provider attempt from a pre-session guard failure.
 	Invoked               bool
 	Output                string
@@ -111,6 +123,17 @@ func (r Runner) Run(ctx context.Context, request Request) (Result, error) {
 	if effort == "" {
 		effort = r.effort
 	}
+	promptHash := promptcapture.Hash(request.Prompt)
+	var promptTemplate, promptPath, promptCaptureWarning string
+	if request.Capture != nil {
+		promptTemplate = request.Capture.Template
+		written, err := promptcapture.Write(*request.Capture, promptcapture.Meta{Agent: r.descriptor.Label, Model: model, Effort: effort, StartedAt: r.now()}, request.Prompt)
+		if err != nil {
+			promptCaptureWarning = err.Error()
+		} else {
+			promptPath = written.Path
+		}
+	}
 	invoked := false
 	run := func() (agent.SessionResult, error) {
 		invoked = true
@@ -143,6 +166,10 @@ func (r Runner) Run(ctx context.Context, request Request) (Result, error) {
 		warningMessage = r.descriptor.MetricsWarningPrefix + raw.MetricsWarning
 	}
 	return Result{
+		PromptHash:            promptHash,
+		PromptTemplate:        promptTemplate,
+		PromptPath:            promptPath,
+		PromptCaptureWarning:  promptCaptureWarning,
 		Invoked:               invoked,
 		Output:                raw.Output,
 		FinalText:             raw.FinalText,

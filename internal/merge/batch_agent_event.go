@@ -58,6 +58,8 @@ type BatchAgentMetrics struct {
 	SessionID               string                    `json:"session_id,omitempty"`
 	ProviderID              string                    `json:"provider_id,omitempty"`
 	ModelID                 string                    `json:"model_id,omitempty"`
+	PromptTemplate          string                    `json:"prompt_template,omitempty"`
+	PromptHash              string                    `json:"prompt_hash,omitempty"`
 	InputTokens             int64                     `json:"input_tokens,omitempty"`
 	OutputTokens            int64                     `json:"output_tokens,omitempty"`
 	ReasoningTokens         int64                     `json:"reasoning_tokens,omitempty"`
@@ -75,10 +77,14 @@ type BatchAgentMetrics struct {
 func newBatchAgentMetrics(result agentsession.Result) *BatchAgentMetrics {
 	value := result.Metrics
 	if value == nil {
-		return &BatchAgentMetrics{Availability: result.MetricsAvailability}
+		return &BatchAgentMetrics{
+			Availability:   result.MetricsAvailability,
+			PromptTemplate: result.PromptTemplate, PromptHash: result.PromptHash,
+		}
 	}
 	return &BatchAgentMetrics{
-		Availability:       result.MetricsAvailability,
+		Availability:   result.MetricsAvailability,
+		PromptTemplate: result.PromptTemplate, PromptHash: result.PromptHash,
 		InputTokensPresent: value.InputTokensPresent, OutputTokensPresent: value.OutputTokensPresent,
 		ReasoningTokensPresent: value.ReasoningTokensPresent, CacheReadTokensPresent: value.CacheReadTokensPresent,
 		CacheWriteTokensPresent: value.CacheWriteTokensPresent, TotalTokensPresent: value.TotalTokensPresent, CostPresent: value.CostPresent,

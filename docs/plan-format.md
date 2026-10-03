@@ -80,6 +80,7 @@ These files are Tao-owned operational state, not agent-authored plan artifacts o
 | File | Lifetime | Purpose |
 | --- | --- | --- |
 | `agent-run.log` | Created and appended by agent-backed runtime sessions | Captured session log read by `tao log`; it is diagnostic data, not lifecycle or recovery authority. |
+| `prompts/` | Created by non-interactive agent sessions | One file per session with a header and raw rendered prompt; best-effort, local-only, never lifecycle or recovery authority, and never read by plan loaders. |
 | `.run.lock` | Present while a plan driver owns the plan; normally removed on release | Cross-process run ownership and contention metadata. |
 | `.mutation.lock` | Created by journal-capable persistence and retained | Stable-inode advisory lock shared by journal writers and recovering readers. |
 | `.mutation.json` | Present only while a journaled mutation needs settlement | Tao-owned roll-forward intent; absent after successful settlement. |
@@ -592,7 +593,7 @@ A `finalization_failed` event includes `finalization_failure` with the same boun
 
 A `verification_command_invalid` event should include the original `command`, a concise `reason`, and, when a mechanically equivalent command is used successfully, `corrected_command`.
 
-An `agent_metrics` event includes the usual event fields plus a top-level `agent` and a `metrics` object. The metrics object records the agent name, session ID, provider and model IDs when available, token counts, cost, assistant message count, tool call count, and run result/status so failed attempts can still be represented in telemetry totals. The metrics object also records the reasoning-effort level Tao requested when one was set (`reasoning_effort`); it is omitted when unset, even if the runtime infers effort from a model suffix or its own defaults. Metrics are generic across built-in runtimes; consumers should not assume runtime-specific fields.
+An `agent_metrics` event includes the usual event fields plus a top-level `agent` and a `metrics` object. The metrics object records the agent name, session ID, provider and model IDs when available, token counts, cost, assistant message count, tool call count, and run result/status so failed attempts can still be represented in telemetry totals. The metrics object also records the reasoning-effort level Tao requested when one was set (`reasoning_effort`); it is omitted when unset, even if the runtime infers effort from a model suffix or its own defaults. The metrics object may also record `prompt_template` (template name) and `prompt_hash` (SHA-256 of the full rendered prompt), each omitted when unavailable. Sessions hash the prompt even without file capture; the template is omitted when no capture was requested. These fields are never lifecycle or recovery authority. Metrics are generic across built-in runtimes; consumers should not assume runtime-specific fields.
 
 The additive, optional metrics metadata is:
 
@@ -625,5 +626,7 @@ Metrics events are durable plan artifacts, but collection is best-effort. Resolv
 A `run_context` event includes the usual event fields plus `agent`, `run_packet_provided`, and `guardrail_warnings`. It should be emitted after selected-slice preflight and before invoking the agent.
 
 ## Local-Only Data
+
+Captured prompts may contain repository text and must stay local.
 
 Tao data-home contents and workspace-local `.tao/` metadata are always local-only. Never commit plan artifacts, notes, runtime operation files, or planning-session sidecars. A task may explicitly require Tao commands to update local plan state, but that does not make those files repository content.

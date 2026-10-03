@@ -208,7 +208,7 @@ func (r BatchAgentResolver) Resolve(ctx context.Context, state BatchState, integ
 
 			sessionResult, agentErr := r.Agent.Resolve(ctx, BatchAgentSessionRequest{
 				BatchID: state.ID, Operation: BatchAgentOperationCandidateResolution, Attempt: integration.Attempts,
-				IntegrationRoot: integrationRoot, Prompt: prompt, CandidatePlanID: candidate.PlanID,
+				IntegrationRoot: integrationRoot, Prompt: prompt, CandidatePlanID: candidate.PlanID, PromptTemplate: "merge-resolve",
 			})
 			output := sessionResult.Output
 			changes, statusErr := concretePorcelainChanges(ctx, git)

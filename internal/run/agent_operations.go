@@ -14,7 +14,9 @@ import (
 	"github.com/iamseth/tao/internal/agentsession"
 	"github.com/iamseth/tao/internal/agenttelemetry"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/promptcapture"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+	"github.com/iamseth/tao/prompts"
 )
 
 type agentOperationOptions struct {
@@ -115,6 +117,7 @@ func newAgentSessionRunner(config agentSessionRunnerConfig) agentSessionRunner {
 			SkipPermissions: config.skipPermissions,
 			Timeout:         config.sessionTimeout,
 			CommandRunner:   config.commandRunner,
+			Now:             config.now,
 		}),
 		agentLabel:       config.descriptor.Label,
 		logAppender:      config.logAppender,
@@ -173,7 +176,17 @@ func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSe
 			return startSliceCompletionLifetime(sessionCtx, request.PlanDir, request.Metrics.SliceID)
 		}
 	}
+	role, sliceID := plan.AgentRoleUnknown, ""
+	if request.Metrics != nil {
+		role, sliceID = request.Metrics.Role.Normalized(), request.Metrics.SliceID
+	}
+	hash, _ := prompts.TemplateVersion(request.PromptTemplate)
+	if request.PromptTemplate == "pr-body" {
+		hash = promptcapture.Hash(pullRequestBodyPromptTemplate)
+	}
+	target := promptcapture.Target{Dir: promptcapture.Dir(request.PlanDir), Role: string(role), Template: request.PromptTemplate, TemplateHash: hash, Label: sliceID}
 	result, runErr := r.session.Run(ctx, agentsession.Request{
+		Capture:      &target,
 		BindLifetime: bindLifetime,
 		Warning:      warning,
 		RepoRoot:     request.RepoRoot, ControlRoot: controlRoot, Prompt: request.Prompt, Model: request.Model, Effort: request.Effort,
@@ -181,6 +194,9 @@ func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSe
 		VerificationCommands: request.VerificationCommands, Log: log,
 	})
 
+	if result.PromptCaptureWarning != "" {
+		writeAgentLogDiagnostic(log, "tao prompt-capture warning: "+result.PromptCaptureWarning)
+	}
 	outcome := agentsession.Summarize(result, runErr)
 	if outcome.TimedOut && stateErr == nil && r.eventAppender != nil {
 		var timeoutErr *agent.SessionTimeoutError
@@ -306,7 +322,7 @@ func runSliceWithAgentSession(ctx context.Context, executor AgentSessionExecutor
 	if model == "" {
 		model = options.Models.For(runtimeconfig.ModelRoleRun)
 	}
-	_, err = executor.RunAgentSession(ctx, AgentSessionRequest{Model: model, Effort: options.Models.EffortFor(runtimeconfig.ModelRoleRun), PlanDir: run.PlanDir, RepoRoot: run.RepoRoot, LogAction: "running " + run.SliceID, Prompt: prompt, Metrics: &AgentSessionMetricsRequest{SliceID: run.SliceID, Role: role, EnforceSliceCaps: true}, NoProgressToolLimit: options.NoProgressToolLimit, VerificationCommands: run.VerificationCommands})
+	_, err = executor.RunAgentSession(ctx, AgentSessionRequest{Model: model, Effort: options.Models.EffortFor(runtimeconfig.ModelRoleRun), PlanDir: run.PlanDir, RepoRoot: run.RepoRoot, LogAction: "running " + run.SliceID, Prompt: prompt, PromptTemplate: prompts.PromptRun, Metrics: &AgentSessionMetricsRequest{SliceID: run.SliceID, Role: role, EnforceSliceCaps: true}, NoProgressToolLimit: options.NoProgressToolLimit, VerificationCommands: run.VerificationCommands})
 	return err
 }
 
@@ -315,7 +331,7 @@ func createPullRequestWithAgentSession(ctx context.Context, executor AgentSessio
 	if err != nil {
 		return plan.PullRequest{}, err
 	}
-	result, err := executor.RunAgentSession(ctx, AgentSessionRequest{Model: options.Models.For(runtimeconfig.ModelRoleDefault), Effort: options.Models.EffortFor(runtimeconfig.ModelRoleDefault), PlanDir: run.PlanDir, RepoRoot: run.RepoRoot, LogAction: "creating pull request for plan " + run.PlanID, Prompt: prompt, CaptureOutput: true, Metrics: &AgentSessionMetricsRequest{Role: plan.AgentRolePullRequest}})
+	result, err := executor.RunAgentSession(ctx, AgentSessionRequest{Model: options.Models.For(runtimeconfig.ModelRoleDefault), Effort: options.Models.EffortFor(runtimeconfig.ModelRoleDefault), PlanDir: run.PlanDir, RepoRoot: run.RepoRoot, LogAction: "creating pull request for plan " + run.PlanID, Prompt: prompt, PromptTemplate: prompts.PromptPR, CaptureOutput: true, Metrics: &AgentSessionMetricsRequest{Role: plan.AgentRolePullRequest}})
 	if err != nil {
 		return plan.PullRequest{}, err
 	}
@@ -332,7 +348,7 @@ func generatePullRequestBodyWithAgentSession(ctx context.Context, executor Agent
 		bodyCtx, cancel = context.WithTimeout(ctx, pullRequestBodyAgentTimeout)
 	}
 	defer cancel()
-	result, err := executor.RunAgentSession(bodyCtx, AgentSessionRequest{Model: options.Models.For(runtimeconfig.ModelRoleDefault), Effort: options.Models.EffortFor(runtimeconfig.ModelRoleDefault), PlanDir: run.PlanDir, RepoRoot: run.RepoRoot, LogAction: "drafting pull request body for plan " + run.PlanID, Prompt: prompt, CaptureOutput: true, Metrics: &AgentSessionMetricsRequest{Role: plan.AgentRolePullRequest}})
+	result, err := executor.RunAgentSession(bodyCtx, AgentSessionRequest{Model: options.Models.For(runtimeconfig.ModelRoleDefault), Effort: options.Models.EffortFor(runtimeconfig.ModelRoleDefault), PlanDir: run.PlanDir, RepoRoot: run.RepoRoot, LogAction: "drafting pull request body for plan " + run.PlanID, Prompt: prompt, PromptTemplate: "pr-body", CaptureOutput: true, Metrics: &AgentSessionMetricsRequest{Role: plan.AgentRolePullRequest}})
 	if err != nil {
 		return "", err
 	}

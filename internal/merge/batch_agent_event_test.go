@@ -32,7 +32,7 @@ func TestBatchAgentMetricsRoundTripPresence(t *testing.T) {
 	t.Parallel()
 	for _, availability := range []agentmetrics.Availability{"", agentmetrics.Reported, agentmetrics.Partial, agentmetrics.Unavailable} {
 		t.Run(string(availability), func(t *testing.T) {
-			result := agentsession.Result{MetricsAvailability: availability}
+			result := agentsession.Result{MetricsAvailability: availability, PromptTemplate: "merge-review", PromptHash: "abc123"}
 			if availability == agentmetrics.Reported || availability == agentmetrics.Partial {
 				result.Metrics = &agent.Metrics{
 					InputTokensPresent: true, OutputTokensPresent: true, ReasoningTokensPresent: true,
@@ -41,6 +41,9 @@ func TestBatchAgentMetricsRoundTripPresence(t *testing.T) {
 				}
 			}
 			want := newBatchAgentMetrics(result)
+			if want.PromptTemplate != result.PromptTemplate || want.PromptHash != result.PromptHash {
+				t.Fatalf("prompt identity lost: %+v", want)
+			}
 			data, err := json.Marshal(want)
 			if err != nil {
 				t.Fatal(err)
@@ -56,6 +59,23 @@ func TestBatchAgentMetricsRoundTripPresence(t *testing.T) {
 				t.Fatalf("zero presence lost: %#v", got)
 			}
 		})
+	}
+}
+
+func TestBatchAgentMetricsLegacyPromptIdentity(t *testing.T) {
+	var got BatchAgentMetrics
+	if err := json.Unmarshal([]byte(`{}`), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.PromptTemplate != "" || got.PromptHash != "" {
+		t.Fatalf("legacy prompt identity = %+v", got)
+	}
+	data, err := json.Marshal(newBatchAgentMetrics(agentsession.Result{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "{}" {
+		t.Fatalf("empty fields not omitted: %s", data)
 	}
 }
 

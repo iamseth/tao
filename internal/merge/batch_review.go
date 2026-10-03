@@ -184,7 +184,7 @@ func (r BatchAggregateReviewer) Review(ctx context.Context, state BatchState, in
 				}
 				reviewSession, reviewErr := r.Agent.Resolve(ctx, BatchAgentSessionRequest{
 					BatchID: state.ID, Operation: BatchAgentOperationAggregateReview, Attempt: reviewAttempt,
-					IntegrationRoot: integrationRoot, Prompt: prompt,
+					IntegrationRoot: integrationRoot, Prompt: prompt, PromptTemplate: "merge-review",
 				})
 				reviewOutput := reviewSession.Output
 				afterReviewStatus, statusErr := git.StatusPorcelain(ctx)
@@ -317,7 +317,7 @@ func (r BatchAggregateReviewer) Review(ctx context.Context, state BatchState, in
 		}
 		reworkSession, agentErr := r.Agent.Resolve(ctx, BatchAgentSessionRequest{
 			BatchID: state.ID, Operation: BatchAgentOperationAggregateRework, Attempt: state.Attempts.AggregateRework,
-			IntegrationRoot: integrationRoot, Prompt: reworkPrompt,
+			IntegrationRoot: integrationRoot, Prompt: reworkPrompt, PromptTemplate: "merge-resolve",
 		})
 		output = reworkSession.Output
 		changes, statusErr := concretePorcelainChanges(ctx, git)

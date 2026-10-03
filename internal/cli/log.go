@@ -8,23 +8,29 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/iamseth/tao/internal/agent/logrecord"
 	mergepkg "github.com/iamseth/tao/internal/merge"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/promptcapture"
 	"github.com/iamseth/tao/internal/taodata"
 )
 
 var logCommand = commandMetadata{
 	name:                  "log",
 	minPrefix:             "lo",
-	usageLines:            []string{"log (lo) [--follow] <plan-id-or-slug>", "log (lo) --batch [--follow] [batch-id]"},
+	usageLines:            []string{"log (lo) [--follow | --prompts | --prompt VALUE] <plan-id-or-slug>", "log (lo) --batch [--follow | --prompts | --prompt VALUE] [batch-id]"},
 	completionDescription: "Show or follow agent run log",
-	long:                  "Show the captured agent run log for a Tao plan, or use --batch to show transitions for the active or named merge batch. Pass --follow (or -f) to stream appended output.",
+	long:                  "Show the captured agent run log for a Tao plan, or use --batch to show transitions for the active or named merge batch. Pass --follow (or -f) to stream appended output. Use --prompts to list local captured prompts or --prompt VALUE to print a raw prompt by 1-based index or exact file name; neither supports --follow.",
 	examples: "  tao log my-plan\n" +
 		"  tao log --follow my-plan\n" +
 		"  tao log -f 20260628-1618-kubectl-style-help\n" +
-		"  tao log --batch --follow",
+		"  tao log --batch --follow\n" +
+		"  tao log --prompts my-plan\n" +
+		"  tao log --prompt 1 my-plan\n" +
+		"  tao log --batch --prompts",
 	registerFlags: registerLogFlags,
 	completion: completionContext{
 		positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs},
@@ -37,6 +43,8 @@ var logCommand = commandMetadata{
 
 func registerLogFlags(fs *flag.FlagSet) {
 	var follow bool
+	fs.Bool("prompts", false, "list local captured prompts")
+	fs.String("prompt", "", "print a captured prompt by 1-based index or exact file name")
 	fs.Bool("batch", false, "show active or named merge-batch transitions")
 	fs.BoolVar(&follow, "follow", false, "follow appended output")
 	fs.BoolVar(&follow, "f", false, "follow appended output")
@@ -51,23 +59,40 @@ func (a App) log(ctx context.Context, repo interface {
 	if err != nil {
 		return err
 	}
+	selector := fs.Lookup("prompt").Value.String()
+	promptSelected := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "prompt" {
+			promptSelected = true
+		}
+	})
+	prompts := flagBoolValue(fs, "prompts") || promptSelected
+	if promptSelected && selector == "" {
+		return errors.New("usage: --prompt requires an index or exact file name")
+	}
+	if prompts && flagBoolValue(fs, "follow") {
+		return errors.New("usage: --prompts and --prompt cannot be combined with --follow")
+	}
 	if flagBoolValue(fs, "batch") {
 		if len(positional) > 1 {
-			return errors.New("usage: tao log --batch [--follow] [batch-id]")
+			return errors.New("usage: tao log --batch [--follow | --prompts | --prompt VALUE] [batch-id]")
 		}
 		id := ""
 		if len(positional) == 1 {
 			id = positional[0]
 		}
-		return a.logBatch(ctx, id, flagBoolValue(fs, "follow"))
+		return a.logBatch(ctx, id, flagBoolValue(fs, "follow"), prompts, selector)
 	}
-	if err := requirePositionals(positional, 1, "usage: tao log [--follow] <plan-id-or-slug>"); err != nil {
+	if err := requirePositionals(positional, 1, "usage: tao log [--follow | --prompts | --prompt VALUE] <plan-id-or-slug>"); err != nil {
 		return err
 	}
 	id := positional[0]
 	detail, err := repo.GetPlan(ctx, id)
 	if err != nil {
 		return err
+	}
+	if prompts {
+		return renderCapturedPrompts(a.Out, promptcapture.Dir(detail.Dir), "plan", detail.State.Plan.ID, selector)
 	}
 	if flagBoolValue(fs, "follow") {
 		if err := followPlanLog(ctx, repo, detail.Dir, a.Out); err != nil {
@@ -88,7 +113,7 @@ func (a App) log(ctx context.Context, repo interface {
 	return renderPlanLog(a.Out, text)
 }
 
-func (a App) logBatch(ctx context.Context, id string, follow bool) error {
+func (a App) logBatch(ctx context.Context, id string, follow, prompts bool, selector string) error {
 	var registry mergeBatchRegistry
 	if a.Registry != nil {
 		var ok bool
@@ -115,8 +140,63 @@ func (a App) logBatch(ctx context.Context, id string, follow bool) error {
 	if id == "" {
 		return errors.New("no active merge batch; provide a batch-id to view a previous batch")
 	}
+	if prompts {
+		return renderCapturedPrompts(a.Out, store.PromptDir(id), "batch", id, selector)
+	}
 	if err := store.RenderTransitions(ctx, id, a.Out, follow); err != nil {
 		return fmt.Errorf("read merge batch %s transitions: %w", id, err)
+	}
+	return nil
+}
+
+func renderCapturedPrompts(out io.Writer, dir, kind, id, selector string) error {
+	if strings.ContainsAny(selector, `/\`) {
+		return errors.New("usage: --prompt requires an index or exact file name without path separators")
+	}
+	entries, err := promptcapture.List(dir)
+	if err != nil {
+		return fmt.Errorf("list captured prompts: %w", err)
+	}
+	if selector != "" {
+		var selected *promptcapture.Entry
+		if index, err := strconv.Atoi(selector); err == nil {
+			if index < 1 || index > len(entries) {
+				return fmt.Errorf("usage: prompt index %d is out of range (1-%d)", index, len(entries))
+			}
+			selected = &entries[index-1]
+		} else {
+			for i := range entries {
+				if entries[i].Name == selector {
+					selected = &entries[i]
+					break
+				}
+			}
+		}
+		if selected == nil {
+			return fmt.Errorf("usage: captured prompt %q not found", selector)
+		}
+		_, body, err := promptcapture.Read(selected.Path)
+		if err != nil {
+			return fmt.Errorf("read captured prompt: %w", err)
+		}
+		_, err = io.WriteString(out, body)
+		return err
+	}
+	if len(entries) == 0 {
+		return writef(out, "No captured prompts for %s %s\n", kind, id)
+	}
+	if err := writeln(out, "INDEX  STARTED_AT  ROLE  TEMPLATE  MODEL  BYTES  SHA256  FILE"); err != nil {
+		return err
+	}
+	for i, entry := range entries {
+		h := entry.Header
+		marker := ""
+		if h.Truncated {
+			marker = " (truncated)"
+		}
+		if err := writef(out, "%d  %s  %s  %s  %s  %d%s  %.12s  %s\n", i+1, h.StartedAt, h.Role, h.Template, h.Model, h.Bytes, marker, h.SHA256, entry.Name); err != nil {
+			return err
+		}
 	}
 	return nil
 }

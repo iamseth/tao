@@ -61,8 +61,12 @@ func TestProjectAvailabilityPresenceAndSafeFailure(t *testing.T) {
 			for _, runErr := range []error{nil, errors.New("private-provider-error"), &agent.SessionTimeoutError{Timeout: time.Minute}} {
 				got := Project(agentsession.Result{
 					AgentLabel: "pi", Metrics: tt.metrics, MetricsAvailability: tt.availability,
+					PromptTemplate: "run", PromptHash: "abc123", PromptPath: "private-path", PromptCaptureWarning: "private-capture-warning",
 					Output: "private-output", MetricsWarning: "private-warning", MetricsWarningMessage: "private-warning", MetricsMessage: "private-message",
 				}, "future-role", "high", runErr)
+				if got.PromptTemplate != "run" || got.PromptHash != "abc123" {
+					t.Fatalf("prompt identity lost: %+v", got)
+				}
 				if got.ReasoningEffort != "high" {
 					t.Fatalf("effort lost: %+v", got)
 				}
@@ -78,12 +82,15 @@ func TestProjectAvailabilityPresenceAndSafeFailure(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if strings.Contains(string(encoded), "private-") {
+				if strings.Contains(string(encoded), "private-") || strings.Contains(string(encoded), `"prompt":`) {
 					t.Fatalf("unsafe event: %s", encoded)
 				}
 				var decoded plan.Event
 				if err := json.Unmarshal(encoded, &decoded); err != nil {
 					t.Fatal(err)
+				}
+				if decoded.Metrics.PromptTemplate != "run" || decoded.Metrics.PromptHash != "abc123" {
+					t.Fatalf("event prompt identity lost: %s", encoded)
 				}
 				wantOutputPresence := tt.metrics != nil && (tt.metrics.OutputTokensPresent || tt.metrics.OutputTokens != 0)
 				if decoded.Metrics.OutputTokensPresent != wantOutputPresence || decoded.Metrics.CostPresent != got.CostPresent {

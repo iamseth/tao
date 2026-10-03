@@ -15,6 +15,7 @@ func Project(result agentsession.Result, role plan.AgentRole, effort string, run
 	metrics := plan.AgentMetrics{
 		Role: role.Normalized(), Availability: plan.AgentMetricsAvailability(result.MetricsAvailability).Normalized(),
 		Agent: result.AgentLabel, Status: plan.StatusCompleted, Result: plan.StatusCompleted, ReasoningEffort: effort,
+		PromptTemplate: result.PromptTemplate, PromptHash: result.PromptHash,
 	}
 	if m := result.Metrics; m != nil {
 		metrics.SessionID = m.SessionID
@@ -48,7 +49,7 @@ func Project(result agentsession.Result, role plan.AgentRole, effort string, run
 }
 
 // Event uses only explicit identities and projected facts; warnings, errors,
-// prompts and provider output are deliberately excluded. SliceID may be empty.
+// prompt text and provider output are deliberately excluded. SliceID may be empty.
 func Event(planID, sliceID string, timestamp time.Time, metrics plan.AgentMetrics) plan.Event {
 	return plan.Event{
 		Type: plan.EventTypeAgentMetrics, Timestamp: timestamp.UTC(),

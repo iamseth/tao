@@ -14,8 +14,86 @@ import (
 	"github.com/iamseth/tao/internal/agent/logrecord"
 	mergepkg "github.com/iamseth/tao/internal/merge"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/promptcapture"
 	"github.com/iamseth/tao/internal/taodata"
 )
+
+func writeLogPrompt(t *testing.T, dir, body string) promptcapture.Written {
+	t.Helper()
+	written, err := promptcapture.Write(promptcapture.Target{Dir: dir, Role: "implementation", Template: "run"}, promptcapture.Meta{Model: "test-model", StartedAt: time.Date(2026, 10, 3, 1, 2, 3, 0, time.UTC)}, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return written
+}
+
+func TestLogCapturedPrompts(t *testing.T) {
+	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+	var out bytes.Buffer
+	run := func(args ...string) error {
+		out.Reset()
+		return (App{Out: &out, Err: &out}).Run(context.Background(), append([]string{"--plans-dir", fixture.root, "log", fixture.id}, args...))
+	}
+	if err := run("--prompts"); err != nil || out.String() != "No captured prompts for plan "+fixture.id+"\n" {
+		t.Fatalf("empty: %q, %v", out.String(), err)
+	}
+	body := "role: body-key\n\nexact body without trailing newline"
+	first := writeLogPrompt(t, promptcapture.Dir(fixture.dir), body)
+	writeLogPrompt(t, promptcapture.Dir(fixture.dir), body)
+	if err := run("--prompts"); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"1", "2", "2026-10-03T01:02:03Z", "implementation", "run", "test-model", first.Hash[:12]} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("listing missing %q: %s", want, out.String())
+		}
+	}
+	for _, selector := range []string{"1", filepath.Base(first.Path)} {
+		if err := run("--prompt", selector); err != nil || out.String() != body {
+			t.Fatalf("read %q: %q, %v", selector, out.String(), err)
+		}
+	}
+	for _, args := range [][]string{{"--prompt", "0"}, {"--prompt", "3"}, {"--prompt", "../escape"}, {"--prompt", `..\escape`}, {"--prompts", "--follow"}, {"--prompt", "1", "-f"}} {
+		if err := run(args...); err == nil || !strings.Contains(err.Error(), "usage:") {
+			t.Fatalf("%v: %v", args, err)
+		}
+	}
+}
+
+func TestLogCapturedPromptTruncated(t *testing.T) {
+	dir := t.TempDir()
+	body := strings.Repeat("x", promptcapture.MaxPromptBytes+1)
+	written := writeLogPrompt(t, dir, body)
+	var out bytes.Buffer
+	if err := renderCapturedPrompts(&out, dir, "plan", "test", ""); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "524289 (truncated)") || !strings.Contains(out.String(), written.Hash[:12]) {
+		t.Fatalf("truncated listing: %s", out.String())
+	}
+	out.Reset()
+	if err := renderCapturedPrompts(&out, dir, "plan", "test", "1"); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != body[:promptcapture.MaxPromptBytes] {
+		t.Fatal("truncated body mismatch")
+	}
+}
+
+func TestLogBatchCapturedPrompts(t *testing.T) {
+	registry := logBatchRegistry{&fakeNoteRegistry{dir: t.TempDir(), current: taodata.Repo{ID: "repo"}}}
+	store := mergepkg.NewBatchStore(registry.MergeBatchesDir(registry.current), registry.ActiveMergeBatchPath(registry.current))
+	written := writeLogPrompt(t, store.PromptDir("batch-a"), "batch prompt")
+	var out bytes.Buffer
+	app := App{Out: &out, Err: &out, Registry: func() NoteRegistry { return registry }}
+	if err := app.log(context.Background(), fakeRepository{}, []string{"--batch", "batch-a", "--prompts"}); err != nil || !strings.Contains(out.String(), written.Hash[:12]) {
+		t.Fatalf("batch listing: %q, %v", out.String(), err)
+	}
+	out.Reset()
+	if err := app.log(context.Background(), fakeRepository{}, []string{"--batch", "batch-a", "--prompt", "1"}); err != nil || out.String() != "batch prompt" {
+		t.Fatalf("batch body: %q, %v", out.String(), err)
+	}
+}
 
 func TestLogRendersFramedAgentRunLog(t *testing.T) {
 	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
@@ -169,7 +247,7 @@ func TestLogBatchUsage(t *testing.T) {
 	if err := (App{Out: &out, Err: &out}).Run(context.Background(), []string{"log", "--help"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, usage := range []string{"log (lo) [--follow] <plan-id-or-slug>", "log (lo) --batch [--follow] [batch-id]"} {
+	for _, usage := range []string{"log (lo) [--follow | --prompts | --prompt VALUE] <plan-id-or-slug>", "log (lo) --batch [--follow | --prompts | --prompt VALUE] [batch-id]"} {
 		if !strings.Contains(out.String(), usage) {
 			t.Fatalf("help missing %q: %s", usage, out.String())
 		}

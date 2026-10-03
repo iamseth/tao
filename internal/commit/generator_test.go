@@ -2,10 +2,29 @@ package commit
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
+
+func TestMergeProposalTemplateVersion(t *testing.T) {
+	rendered, err := renderMergeProposalPrompt(testMergeProposalContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(rendered, mergeProposalPromptTemplate) {
+		t.Fatal("rendered prompt lost fixed instructions")
+	}
+	version := MergeProposalTemplateVersion()
+	if len(version) != 64 || strings.Trim(version, "0123456789abcdef") != "" {
+		t.Fatalf("version = %q", version)
+	}
+	if want := fmt.Sprintf("%x", sha256.Sum256([]byte(mergeProposalPromptTemplate))); version != want {
+		t.Fatalf("version = %s, want %s", version, want)
+	}
+}
 
 func TestGeneratorUsesExactContextAndValidatesProposal(t *testing.T) {
 	exact := testMergeProposalContext()

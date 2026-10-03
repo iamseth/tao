@@ -17,12 +17,40 @@ import (
 	mergepkg "github.com/iamseth/tao/internal/merge"
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/promptcapture"
 	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/taodata"
 	"github.com/iamseth/tao/internal/theme"
 	"github.com/iamseth/tao/internal/tui"
 	planview "github.com/iamseth/tao/internal/view"
 )
+
+func TestShowCapturedPromptPointer(t *testing.T) {
+	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+	for _, captured := range []bool{false, true} {
+		if captured {
+			writeLogPrompt(t, promptcapture.Dir(fixture.dir), "private prompt")
+		}
+		for _, structured := range []bool{false, true} {
+			var out bytes.Buffer
+			args := []string{"--plans-dir", fixture.root, "show", fixture.id}
+			want := "Prompts: 1 captured (tao log --prompts " + fixture.id + ")"
+			if structured {
+				args = append(args, "--json")
+				want = `"prompt_capture"`
+			}
+			if err := (App{Out: &out, Err: &out}).Run(context.Background(), args); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(out.String(), want) != captured {
+				t.Fatalf("captured=%t json=%t: %s", captured, structured, out.String())
+			}
+			if strings.Contains(out.String(), "private prompt") {
+				t.Fatal("show exposed prompt body")
+			}
+		}
+	}
+}
 
 func TestShowPrintsElapsedAndSliceRows(t *testing.T) {
 	started := time.Date(2026, 4, 27, 18, 0, 0, 0, time.UTC)

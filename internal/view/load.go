@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/promptcapture"
 	"github.com/iamseth/tao/internal/rework"
 )
 
@@ -26,19 +27,25 @@ type Plan struct {
 
 // ShowPayload is the stable, explicit projection used by structured plan
 // inspection. It deliberately excludes raw plan artifacts.
+type ShowPromptCapture struct {
+	Count int    `json:"count"`
+	Dir   string `json:"dir"`
+}
+
 type ShowPayload struct {
-	Schema       string                     `json:"schema"`
-	ID           string                     `json:"id"`
-	Title        string                     `json:"title"`
-	Status       string                     `json:"status"`
-	Repository   ShowRepository             `json:"repository"`
-	Progress     ShowProgress               `json:"progress"`
-	Rework       ShowRework                 `json:"rework"`
-	Telemetry    ShowTelemetry              `json:"telemetry"`
-	NextAction   plan.PlanNextAction        `json:"next_action"`
-	Finalization *plan.FinalizationRecovery `json:"finalization,omitempty"`
-	Abandonment  *ShowAbandonment           `json:"abandonment,omitempty"`
-	Warnings     []string                   `json:"warnings"`
+	PromptCapture *ShowPromptCapture         `json:"prompt_capture,omitempty"`
+	Schema        string                     `json:"schema"`
+	ID            string                     `json:"id"`
+	Title         string                     `json:"title"`
+	Status        string                     `json:"status"`
+	Repository    ShowRepository             `json:"repository"`
+	Progress      ShowProgress               `json:"progress"`
+	Rework        ShowRework                 `json:"rework"`
+	Telemetry     ShowTelemetry              `json:"telemetry"`
+	NextAction    plan.PlanNextAction        `json:"next_action"`
+	Finalization  *plan.FinalizationRecovery `json:"finalization,omitempty"`
+	Abandonment   *ShowAbandonment           `json:"abandonment,omitempty"`
+	Warnings      []string                   `json:"warnings"`
 }
 
 // ShowTelemetry exposes only recorded aggregates, never event or provider identity.
@@ -173,11 +180,19 @@ func (loaded Plan) ShowPayload() ShowPayload {
 	if plan.PlanLifecycleStatus(detail) == plan.StatusAbandoned {
 		abandonment = projectShowAbandonment(loaded.Derived.Abandonment)
 	}
+	var capture *ShowPromptCapture
+	if detail.Dir != "" {
+		dir := promptcapture.Dir(detail.Dir)
+		if entries, err := promptcapture.List(dir); err == nil && len(entries) > 0 {
+			capture = &ShowPromptCapture{Count: len(entries), Dir: dir}
+		}
+	}
 	return ShowPayload{
-		Schema: "tao.show.v1",
-		ID:     detail.State.Plan.ID,
-		Title:  detail.State.Plan.Title,
-		Status: plan.PlanLifecycleStatus(detail),
+		PromptCapture: capture,
+		Schema:        "tao.show.v1",
+		ID:            detail.State.Plan.ID,
+		Title:         detail.State.Plan.Title,
+		Status:        plan.PlanLifecycleStatus(detail),
 		Repository: ShowRepository{
 			Name:   detail.State.Repo.Name,
 			Branch: detail.State.Repo.Branch,

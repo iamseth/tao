@@ -42,6 +42,11 @@ func (s *BatchStore) TranscriptPath(id string) string {
 	return filepath.Join(s.batchesDir, id, "agent-transcript.log")
 }
 
+// PromptDir returns the local-only prompt capture directory for a batch.
+func (s *BatchStore) PromptDir(id string) string {
+	return filepath.Join(s.batchesDir, id, "prompts")
+}
+
 func (s *BatchStore) snapshotPath(id string) string {
 	return filepath.Join(s.batchesDir, id, "state.json")
 }

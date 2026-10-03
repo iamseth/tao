@@ -22,8 +22,94 @@ import (
 	"github.com/iamseth/tao/internal/agentsession"
 	commitcontract "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/promptcapture"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+	"github.com/iamseth/tao/prompts"
 )
+
+func TestMergeSessionPromptCapture(t *testing.T) {
+	for _, mode := range []string{"capture", "nil", "empty", "failure"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			store := NewBatchStore(filepath.Join(root, "batches"), filepath.Join(root, "active.json"))
+			dir := store.PromptDir("batch-a")
+			var resolver func(BatchAgentSessionRequest) string
+			if mode != "nil" {
+				resolver = func(request BatchAgentSessionRequest) string {
+					if request.BatchID != "batch-a" {
+						t.Fatalf("request = %#v", request)
+					}
+					if mode == "empty" {
+						return ""
+					}
+					return dir
+				}
+			}
+			if mode == "failure" {
+				if err := os.WriteFile(filepath.Join(root, "blocked"), []byte("file"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				dir = filepath.Join(root, "blocked", "prompts")
+			}
+			var got mergeFakeClaudeStart
+			var log bytes.Buffer
+			now := time.Date(2026, 10, 3, 1, 2, 3, 0, time.UTC)
+			session, err := NewBatchAgentSession(BatchAgentSessionConfig{
+				Agent: runtimeconfig.AgentClaude, PromptDir: resolver, EventAppender: store, Log: &log,
+				Now:            func() time.Time { return now },
+				ProcessStarter: mergeFakeProcessStarter(t, &got, `{"type":"result","result":"resolved"}`),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := session.Resolve(context.Background(), BatchAgentSessionRequest{
+				BatchID: "batch-a", Operation: BatchAgentOperationCandidateResolution, Attempt: 2,
+				CandidatePlanID: "plan-a", IntegrationRoot: root, Prompt: "exact rendered prompt", PromptTemplate: "merge-resolve",
+			})
+			if err != nil || result.Output != "resolved" {
+				t.Fatalf("result=%#v err=%v", result, err)
+			}
+			hash := promptcapture.Hash("exact rendered prompt")
+			if result.Provider.PromptHash != hash {
+				t.Fatalf("hash = %q", result.Provider.PromptHash)
+			}
+			events, err := os.ReadFile(store.agentEventsPath("batch-a"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(events), `"prompt_hash":"`+hash+`"`) {
+				t.Fatalf("events = %s", events)
+			}
+			if mode == "capture" {
+				entries, err := promptcapture.List(dir)
+				if err != nil || len(entries) != 1 {
+					t.Fatalf("entries=%v err=%v", entries, err)
+				}
+				templateHash, versionErr := prompts.TemplateVersion("merge-resolve")
+				if versionErr != nil {
+					t.Fatal(versionErr)
+				}
+				h, body, err := promptcapture.Read(entries[0].Path)
+				if err != nil || body != "exact rendered prompt" || h.Role != "merge" || h.Template != "merge-resolve" || h.TemplateHash != templateHash || h.SHA256 != hash || h.StartedAt != now.Format(time.RFC3339Nano) {
+					t.Fatalf("header=%#v body=%q err=%v", h, body, err)
+				}
+				if !strings.Contains(entries[0].Name, "candidate-resolution-attempt-2-plan-a") {
+					t.Fatalf("name = %s", entries[0].Name)
+				}
+			} else if result.Provider.PromptPath != "" {
+				t.Fatalf("unexpected capture: %s", result.Provider.PromptPath)
+			}
+			if mode == "nil" || mode == "empty" {
+				if _, err := os.Stat(dir); !os.IsNotExist(err) {
+					t.Fatalf("capture directory exists: %v", err)
+				}
+			}
+			if mode == "failure" && !strings.Contains(log.String(), "tao prompt-capture warning: ") {
+				t.Fatalf("log = %s", log.String())
+			}
+		})
+	}
+}
 
 func TestMergeSessionModels(t *testing.T) {
 	for _, tt := range []struct {
@@ -1919,6 +2005,7 @@ func TestMergeProposalGeneratorUsesOneConfiguredNeutralSession(t *testing.T) {
 
 func TestBatchMergeProposalGeneratorUsesTrustedTransactionIdentity(t *testing.T) {
 	t.Setenv("TAO_AGENT", "claude")
+	promptDir := t.TempDir()
 	var got mergeFakeClaudeStart
 	store := &recordingBatchAgentEvents{}
 	planEvents := 0
@@ -1926,6 +2013,7 @@ func TestBatchMergeProposalGeneratorUsesTrustedTransactionIdentity(t *testing.T)
 		RuntimeEnv:     mergeTestRuntimeEnv(),
 		ProcessStarter: mergeFakeProcessStarter(t, &got, `{"type":"result","result":"{\"type\":\"fix\",\"scope\":\"merge\",\"summary\":\"preserve batch identity\",\"what\":\"Generate an exact proposal.\",\"why\":\"Support legacy approvals.\"}"}`),
 		EventAppender:  store,
+		PromptDir:      func(BatchAgentSessionRequest) string { return promptDir },
 		Observe: func(request BatchAgentSessionRequest, result BatchAgentSessionResult, err error) {
 			if event := SingleMergeAgentMetricsEvent(request, result, err, time.Now()); event != nil {
 				planEvents++
@@ -1941,6 +2029,13 @@ func TestBatchMergeProposalGeneratorUsesTrustedTransactionIdentity(t *testing.T)
 	}
 	if planEvents != 0 {
 		t.Fatal("batch proposal leaked into plan channel")
+	}
+	entries, err := promptcapture.List(promptDir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("entries=%v err=%v", entries, err)
+	}
+	if h := entries[0].Header; h.Template != "merge-proposal" || h.TemplateHash != commitcontract.MergeProposalTemplateVersion() {
+		t.Fatalf("proposal header = %#v", h)
 	}
 	count := 0
 	for _, event := range store.events {

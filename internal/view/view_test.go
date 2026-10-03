@@ -14,12 +14,37 @@ import (
 
 	"github.com/iamseth/tao/internal/insights"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/promptcapture"
 )
 
 type insightsPlanLister []plan.PlanSummary
 
 func (l insightsPlanLister) ListPlans(context.Context, plan.PlanFilter) ([]plan.PlanSummary, error) {
 	return l, nil
+}
+
+func TestShowPayloadPromptCapture(t *testing.T) {
+	dir := t.TempDir()
+	loaded := Plan{Detail: &plan.PlanDetail{Dir: dir}}
+	for _, captured := range []bool{false, true} {
+		if captured {
+			_, err := promptcapture.Write(promptcapture.Target{Dir: promptcapture.Dir(dir)}, promptcapture.Meta{StartedAt: time.Now()}, "secret")
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		payload := loaded.ShowPayload()
+		data, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), `"prompt_capture"`) != captured {
+			t.Fatalf("captured=%t: %s", captured, data)
+		}
+		if captured && (payload.PromptCapture == nil || payload.PromptCapture.Count != 1 || payload.PromptCapture.Dir != promptcapture.Dir(dir)) {
+			t.Fatalf("capture: %+v", payload.PromptCapture)
+		}
+	}
 }
 
 func TestFormatUnchangedBlockerGuidance(t *testing.T) {

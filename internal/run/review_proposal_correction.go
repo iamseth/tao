@@ -9,6 +9,7 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/reviewcontract"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+	"github.com/iamseth/tao/prompts"
 )
 
 // Each caller retains its own durable consumption and failure-settlement
@@ -46,6 +47,7 @@ func correctReviewProposal(ctx context.Context, request AgentSessionRequest, rev
 	request.Model = strategy.models.For(runtimeconfig.ModelRoleReview)
 	request.Effort = strategy.models.EffortFor(runtimeconfig.ModelRoleReview)
 	request.Prompt = prompt
+	request.PromptTemplate = prompts.PromptReview
 	request.CaptureOutput = true
 	request.Metrics = &AgentSessionMetricsRequest{Role: plan.AgentRoleReview}
 	result, sessionErr := strategy.session.RunAgentSession(ctx, request)

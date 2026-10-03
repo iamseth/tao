@@ -7,6 +7,36 @@ import (
 	"testing"
 )
 
+func TestAgentMetricsPromptIdentity(t *testing.T) {
+	for _, input := range []string{`{"session_id":"legacy"}`, `{"session_id":"captured","prompt_template":"run","prompt_hash":"abc123"}`} {
+		var got AgentMetrics
+		if err := json.Unmarshal([]byte(input), &got); err != nil {
+			t.Fatal(err)
+		}
+		var original map[string]any
+		if err := json.Unmarshal([]byte(input), &original); err != nil {
+			t.Fatal(err)
+		}
+		if got.SessionID == "legacy" && (got.PromptTemplate != "" || got.PromptHash != "") {
+			t.Fatalf("legacy prompt identity = %+v", got)
+		}
+		if got.SessionID == "captured" && (got.PromptTemplate != "run" || got.PromptHash != "abc123") {
+			t.Fatalf("prompt identity lost: %+v", got)
+		}
+		data, err := json.Marshal(got)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var encoded map[string]any
+		if err := json.Unmarshal(data, &encoded); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(encoded, original) {
+			t.Fatalf("round trip = %s, want %s", data, input)
+		}
+	}
+}
+
 func TestAgentBudgetDefaults(t *testing.T) {
 	b := DefaultAgentBudget()
 	want := AgentBudgetThresholds{
