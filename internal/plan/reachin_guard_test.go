@@ -29,6 +29,9 @@ func TestNoPlanReviewReachInsOutsidePlanPackage(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
+			if d.Name() == ".tao" {
+				return fs.SkipDir
+			}
 			if path == internalRoot {
 				return nil
 			}

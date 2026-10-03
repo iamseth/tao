@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -281,13 +282,13 @@ func TestReworkFromPullRequestAllQuestionsProducesNoSlices(t *testing.T) {
 func TestReworkReviewAgentAdmissionBeforeMutation(t *testing.T) {
 	for _, fromPR := range []bool{false, true} {
 		for _, test := range []struct {
-			name, repository string
-			flags            []string
+			name, repository, want string
+			flags                  []string
 		}{
-			{"invalid flag", "", []string{"--run", "--review-agent=invalid"}},
-			{"empty flag", "", []string{"--run", "--review-agent="}},
-			{"requires run", "", []string{"--review-agent=claude"}},
-			{"invalid repository", "invalid", []string{"--run", "--review-agent=pi"}},
+			{"invalid flag", "", `--review-agent: unsupported agent "invalid" (want pi or claude)`, []string{"--run", "--review-agent=invalid"}},
+			{"empty flag", "", "--review-agent must be pi or claude", []string{"--run", "--review-agent="}},
+			{"requires run", "", "--review-agent requires --run", []string{"--review-agent=claude"}},
+			{"invalid repository", "invalid", "review_agent", []string{"--run", "--review-agent=pi"}},
 		} {
 			t.Run(fmt.Sprintf("%s/pr=%t", test.name, fromPR), func(t *testing.T) {
 				root := t.TempDir()
@@ -298,15 +299,19 @@ func TestReworkReviewAgentAdmissionBeforeMutation(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				repository := persistRepositorySettings(t, (taodata.Repo{ID: "admission-repo", Root: cwd}).WithReviewAgentDefault(test.repository))
+				repository := persistRepositorySettings(t, (taodata.Repo{ID: "admission-repo", Root: cliReworkPlanRepoRoot(t, dir)}).WithReviewAgentDefault(test.repository))
 				registry := &fakeNoteRegistry{current: repository, repos: []taodata.Repo{repository}}
 				app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry { return registry }}
 				args := append([]string{id}, test.flags...)
 				if fromPR {
 					args = append(args, "--from-pr")
 				}
-				if err := app.rework(context.Background(), plan.NewFileRepository(root), args); err == nil {
-					t.Fatal("accepted invalid selector")
+				err = app.rework(context.Background(), plan.NewFileRepository(root), args)
+				if _, statErr := os.Stat(filepath.Join(cwd, ".tao", "workspaces", id)); !os.IsNotExist(statErr) {
+					t.Fatalf("workspace leaked into package working directory: %v", statErr)
+				}
+				if err == nil || !strings.Contains(err.Error(), test.want) {
+					t.Fatalf("admission error = %v, want %q", err, test.want)
 				}
 				if after := readText(t, filepath.Join(dir, "state.json")); after != before {
 					t.Fatal("mutated state before admission")
@@ -541,14 +546,10 @@ func TestReworkRunRejectsRepositoryPolicyBeforeReopening(t *testing.T) {
 	dir := writeCLIReworkPlan(t, root, id, plan.StatusCompleted, reworkReview(plan.ReviewVerdictChangesRequested, []plan.ReviewFinding{{File: "file.go", Message: "fix this"}}))
 	before := readReworkArtifacts(t, dir)
 	negative := -1
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	repository := persistRepositorySettings(t, taodata.Repo{ID: "repo-a", Root: cwd, RunDefaults: &taodata.RepoRunDefaults{MaxReworkAttempts: &negative}})
+	repository := persistRepositorySettings(t, taodata.Repo{ID: "repo-a", Root: cliReworkPlanRepoRoot(t, dir), RunDefaults: &taodata.RepoRunDefaults{MaxReworkAttempts: &negative}})
 	registry := &fakeNoteRegistry{current: repository, repos: []taodata.Repo{repository}}
 	app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry { return registry }}
-	err = app.rework(context.Background(), plan.NewFileRepository(root), []string{"--run", id})
+	err := app.rework(context.Background(), plan.NewFileRepository(root), []string{"--run", id})
 	if err == nil || !strings.Contains(err.Error(), "max_rework_attempts") {
 		t.Fatalf("policy not rejected: %v", err)
 	}
@@ -592,16 +593,34 @@ func reworkReview(verdict string, findings []plan.ReviewFinding) *plan.PlanRevie
 	}
 }
 
+func TestWriteCLIReworkPlanUsesTemporaryRepoRoot(t *testing.T) {
+	dir := writeCLIReworkPlan(t, t.TempDir(), "temporary-root", plan.StatusCompleted, nil)
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cliReworkPlanRepoRoot(t, dir) == cwd {
+		t.Fatal("rework fixture uses package working directory as repository root")
+	}
+}
+
+func cliReworkPlanRepoRoot(t *testing.T, planDir string) string {
+	t.Helper()
+	data := readText(t, filepath.Join(planDir, "state.json"))
+	var state plan.State
+	if err := json.Unmarshal([]byte(data), &state); err != nil {
+		t.Fatal(err)
+	}
+	return state.Repo.Root
+}
+
 func writeCLIReworkPlan(t *testing.T, root string, planID string, status string, review *plan.PlanReview) string {
 	t.Helper()
 	planDir := filepath.Join(root, planID)
 	if err := os.MkdirAll(planDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	repoRoot, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
+	repoRoot := t.TempDir()
 	created := time.Date(2026, 6, 28, 11, 0, 0, 0, time.UTC)
 	completed := time.Date(2026, 6, 28, 11, 30, 0, 0, time.UTC)
 	pending := []string{}

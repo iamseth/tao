@@ -55,7 +55,7 @@ func TestRunInvokesPiUntilPlanCompletedAndLogsOutput(t *testing.T) {
 		}
 	})}
 
-	err := app.run(context.Background(), plan.NewFileRepository(fixture.root), []string{"--commit-policy", "none", "--no-review", fixture.id})
+	err := app.run(context.Background(), plan.NewFileRepository(fixture.root), []string{"--execution-mode", "current", "--commit-policy", "none", "--no-review", fixture.id})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -821,7 +821,7 @@ func TestRunAgentPiEnvRoutesSliceRunToPi(t *testing.T) {
 		fixture.write(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
 	})}
 
-	if err := app.run(context.Background(), plan.NewFileRepository(fixture.root), []string{"--commit-policy", "none", "--no-review", fixture.id}); err != nil {
+	if err := app.run(context.Background(), plan.NewFileRepository(fixture.root), []string{"--execution-mode", "current", "--commit-policy", "none", "--no-review", fixture.id}); err != nil {
 		t.Fatal(err)
 	}
 	if piCalls != 1 {
@@ -860,7 +860,7 @@ func TestRunAgentClaudeEnvRoutesSliceRunToClaude(t *testing.T) {
 		return proc, nil
 	}}
 
-	if err := app.run(context.Background(), plan.NewFileRepository(fixture.root), []string{"--commit-policy", "none", "--no-review", fixture.id}); err != nil {
+	if err := app.run(context.Background(), plan.NewFileRepository(fixture.root), []string{"--execution-mode", "current", "--commit-policy", "none", "--no-review", fixture.id}); err != nil {
 		t.Fatal(err)
 	}
 	if claudeCalls != 1 {

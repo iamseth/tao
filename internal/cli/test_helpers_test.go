@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +21,16 @@ import (
 var suiteTaoDataHome string
 
 func TestMain(m *testing.M) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cli test setup: working directory: %v\n", err)
+		os.Exit(1)
+	}
+	before, err := snapshotCLIWorkspaces(cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cli test setup: snapshot workspaces: %v\n", err)
+		os.Exit(1)
+	}
 	for _, key := range testTaoEnvKeys() {
 		_ = os.Unsetenv(key)
 	}
@@ -41,7 +52,101 @@ func TestMain(m *testing.M) {
 	if err := os.RemoveAll(dataHome); err != nil {
 		fmt.Fprintf(os.Stderr, "cli test cleanup: remove Tao data home: %v\n", err)
 	}
+	after, err := snapshotCLIWorkspaces(cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cli test cleanup: snapshot workspaces: %v\n", err)
+		if code == 0 {
+			code = 1
+		}
+	} else if paths := after.newPaths(cwd, before); len(paths) > 0 {
+		fmt.Fprintf(os.Stderr, "cli tests leaked new paths:\n%s\n", strings.Join(paths, "\n"))
+		if code == 0 {
+			code = 1
+		}
+	}
 	os.Exit(code)
+}
+
+type cliWorkspaceSnapshot struct {
+	taoExists bool
+	entries   []string
+}
+
+func snapshotCLIWorkspaces(root string) (cliWorkspaceSnapshot, error) {
+	var snapshot cliWorkspaceSnapshot
+	taoPath := filepath.Join(root, ".tao")
+	if _, err := os.Lstat(taoPath); err == nil {
+		snapshot.taoExists = true
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return snapshot, err
+	}
+	entries, err := os.ReadDir(filepath.Join(taoPath, "workspaces"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return snapshot, err
+	}
+	// os.ReadDir returns entries sorted by name, including non-directories.
+	for _, entry := range entries {
+		snapshot.entries = append(snapshot.entries, entry.Name())
+	}
+	return snapshot, nil
+}
+
+func (s cliWorkspaceSnapshot) newPaths(root string, before cliWorkspaceSnapshot) []string {
+	var paths []string
+	if s.taoExists && !before.taoExists {
+		paths = append(paths, filepath.Join(root, ".tao"))
+	}
+	for _, name := range s.entries {
+		if _, exists := slices.BinarySearch(before.entries, name); !exists {
+			paths = append(paths, filepath.Join(root, ".tao", "workspaces", name))
+		}
+	}
+	return paths
+}
+
+func TestCLIWorkspaceLeakSnapshot(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		before []string
+		after  []string
+		want   []string
+	}{
+		{name: "absent"},
+		{name: "new tao directory", after: []string{".tao"}, want: []string{".tao"}},
+		{name: "existing empty workspaces", before: []string{".tao/workspaces"}},
+		{name: "existing entries", before: []string{".tao/workspaces/old"}},
+		{name: "new entries sorted", before: []string{".tao/workspaces/old"}, after: []string{".tao/workspaces/z", ".tao/workspaces/a"}, want: []string{".tao/workspaces/a", ".tao/workspaces/z"}},
+		{name: "new tao and workspace", after: []string{".tao/workspaces/new"}, want: []string{".tao", ".tao/workspaces/new"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			create := func(paths []string) {
+				for _, path := range paths {
+					if err := os.MkdirAll(filepath.Join(root, path), 0o750); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			create(tc.before)
+			before, err := snapshotCLIWorkspaces(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			create(tc.after)
+			after, err := snapshotCLIWorkspaces(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := after.newPaths(root, before)
+			var want []string
+			for _, path := range tc.want {
+				want = append(want, filepath.Join(root, path))
+			}
+			if !slices.Equal(got, want) {
+				t.Fatalf("new paths = %v, want %v", got, want)
+			}
+		})
+	}
 }
 
 func TestCLIDataHomeIsSuiteOwned(t *testing.T) {
