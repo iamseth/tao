@@ -104,7 +104,9 @@ jobs:
 
   macos-test:
     name: Build and test on macOS
-    runs-on: macos-latest
+    # Keep OS-major upgrades intentional; the hosted image still receives updates.
+    runs-on: macos-26
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -114,8 +116,33 @@ jobs:
         with:
           go-version: "1.26.2"
 
+      - name: Report toolchain and runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          sw_vers
+          uname -m
+          go version
+          command -v git
+          git --version
+
       - name: Build
         run: make build
 
       - name: Test
-        run: make test
+        shell: bash
+        # Run every test, even when setup-go restores cached test results.
+        run: |
+          set -euo pipefail
+          make test GO_TEST_FLAGS="-count=1 -v" 2>&1 | tee "$RUNNER_TEMP/tao-macos-tests.log"
+
+      - name: Preserve failed test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-test-diagnostics
+          path: |
+            ${{ runner.temp }}/tao-macos-tests.log
+            coverage.out
+          if-no-files-found: ignore
+          retention-days: 7

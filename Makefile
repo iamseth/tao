@@ -1,6 +1,7 @@
 .PHONY: help build build-targets clean test update-golden coverage-html lint lint-darwin install release-check tui-preview verify verify-no-deps
 
 COVERAGE_FILE := coverage.out
+GO_TEST_FLAGS ?=
 TUI_PREVIEW_ARGS ?=
 # Cached analyzer results contain source paths, so isolate them per checkout/worktree.
 GOLANGCI_LINT_CACHE ?= $(HOME)/.cache/golangci-lint$(CURDIR)
@@ -40,7 +41,7 @@ clean:
 	@rm -rvf bin $(COVERAGE_FILE)
 
 test:
-	@go test -coverprofile=$(COVERAGE_FILE) ./...
+	@go test $(GO_TEST_FLAGS) -coverprofile=$(COVERAGE_FILE) ./...
 	@awk 'NR>1 { \
 		n=split($$1,p,"/"); pkg=p[1]; \
 		for(i=2;i<n;i++) pkg=pkg"/"p[i]; \

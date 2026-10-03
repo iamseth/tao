@@ -2166,6 +2166,7 @@ func singleMergeAgentTestBoundary(t *testing.T) (string, string) {
 	}
 	root := t.TempDir()
 	realGitOutput(t, root, "init", "-q", "-b", "main")
+	disableGitFixtureMaintenance(t, root)
 	return root, t.TempDir()
 }
 

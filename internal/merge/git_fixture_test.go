@@ -19,10 +19,12 @@ func TestRealGitFixtureDisablesAutomaticMaintenance(t *testing.T) {
 	integrationRoot := filepath.Join(t.TempDir(), "integration")
 	runRealGit(t, fixture.repoRoot, "worktree", "add", "-b", "tao/integration/maintenance", integrationRoot, fixture.defaultBranch)
 
+	agentRoot, _ := singleMergeAgentTestBoundary(t)
 	for name, root := range map[string]string{
 		"main":        fixture.repoRoot,
 		"plan":        fixture.worktreePath,
 		"integration": integrationRoot,
+		"agent":       agentRoot,
 	} {
 		t.Run(name, func(t *testing.T) {
 			for key, want := range map[string]string{"maintenance.auto": "false", "gc.auto": "0"} {
