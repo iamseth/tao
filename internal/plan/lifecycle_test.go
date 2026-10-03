@@ -2,12 +2,150 @@ package plan
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 )
+
+func scopeGateDetail() *PlanDetail {
+	return &PlanDetail{
+		State: State{Status: StatusInProgress, Plan: PlanState{ID: "plan", PendingSlices: []string{"r101-fix"}, CompletedSlices: []string{"001-original"}}},
+		Slices: SlicesFile{Slices: []Slice{
+			{ID: "001-original", Status: StatusCompleted, ExpectedFiles: []string{"internal/plan/derive.go"}},
+			{ID: "r101-fix", Status: StatusPending, ExpectedFiles: []string{"internal/plan/derive.go", "z.go", "a.go"}},
+		}},
+	}
+}
+
+func TestReworkScopeGate(t *testing.T) {
+	for _, tt := range []struct {
+		name                    string
+		modify                  func(*PlanDetail)
+		wantScope, wantApproval bool
+	}{
+		{name: "foreign paths", wantScope: true},
+		{name: "original slice", modify: func(d *PlanDetail) {
+			d.Slices.Slices[1].ID = "002-original"
+			d.State.Plan.PendingSlices = []string{"002-original"}
+		}},
+		{name: "inside union", modify: func(d *PlanDetail) { d.Slices.Slices[1].ExpectedFiles = []string{"internal/plan/derive.go"} }},
+		{name: "legacy empty scope", modify: func(d *PlanDetail) { d.Slices.Slices[0].ExpectedFiles = nil }},
+		{name: "trailing slash directory", modify: func(d *PlanDetail) {
+			d.Slices.Slices[0].ExpectedFiles = []string{"internal/"}
+			d.Slices.Slices[1].ExpectedFiles = []string{"internal/new/file.go"}
+		}},
+		{name: "extensionless directory", modify: func(d *PlanDetail) {
+			d.Slices.Slices[0].ExpectedFiles = []string{"internal"}
+			d.Slices.Slices[1].ExpectedFiles = []string{"internal/new/file.go"}
+		}},
+		{name: "amended scope", modify: func(d *PlanDetail) {
+			d.Slices.Slices[1].Amendments = []SliceAmendment{{Fields: []string{"tasks", "expected_files"}}}
+		}},
+		{name: "unrelated amendment", modify: func(d *PlanDetail) { d.Slices.Slices[1].Amendments = []SliceAmendment{{Fields: []string{"tasks"}}} }, wantScope: true},
+		{name: "approval precedence", modify: func(d *PlanDetail) { d.Slices.Slices[1].Approval = &Approval{Required: true} }, wantApproval: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := scopeGateDetail()
+			if tt.modify != nil {
+				tt.modify(d)
+			}
+			lifecycle := AnalyzeLifecycle(d)
+			scopeErr, scope := errors.AsType[*ReworkScopeDecisionError](lifecycle.RunnableError)
+			_, approval := errors.AsType[*ApprovalRequiredError](lifecycle.RunnableError)
+			if scope != tt.wantScope || approval != tt.wantApproval || lifecycle.Runnable != (!tt.wantScope && !tt.wantApproval) {
+				t.Fatalf("lifecycle = %+v", lifecycle)
+			}
+			if scope && (scopeErr.SliceID != "r101-fix" || !reflect.DeepEqual(scopeErr.Paths, []string{"a.go", "z.go"}) || scopeErr.Error() != "slice r101-fix requires a scope decision: review finding requires files outside the plan's declared scope: a.go, z.go") {
+				t.Fatalf("scope error = %+v", scopeErr)
+			}
+		})
+	}
+}
+
+func TestReworkScopeGateSiblingAuthority(t *testing.T) {
+	for _, status := range []string{StatusPending, StatusSkipped, StatusCompleted} {
+		t.Run(status, func(t *testing.T) {
+			d := scopeGateDetail()
+			d.Slices.Slices[0].ExpectedFiles = []string{"prompts/slice.md"}
+			d.Slices.Slices[1].ExpectedFiles = []string{"prompts/slice.md", "prompts/prompts_test.go"}
+			d.Slices.Slices = append(d.Slices.Slices, Slice{
+				ID: "r102-sibling", Status: status,
+				ExpectedFiles: []string{"prompts/slice.md", "prompts/prompts_test.go"},
+				Amendments:    []SliceAmendment{{Fields: []string{"tasks"}}},
+			})
+			// Each finding must be refused independently; neither a pending nor
+			// a historical unamended finding can authorize the other's paths.
+			ids := []string{"r101-fix"}
+			if status == StatusPending {
+				ids = append(ids, "r102-sibling")
+			}
+			for _, id := range ids {
+				d.State.Plan.PendingSlices = []string{id}
+				lifecycle := AnalyzeLifecycle(d)
+				scopeErr, ok := errors.AsType[*ReworkScopeDecisionError](lifecycle.RunnableError)
+				if lifecycle.Runnable || !ok || scopeErr.SliceID != id || !reflect.DeepEqual(scopeErr.Paths, []string{"prompts/prompts_test.go"}) {
+					t.Fatalf("%s lifecycle = %+v", id, lifecycle)
+				}
+			}
+			d.State.Plan.PendingSlices = []string{"r101-fix"}
+			_, err := markSliceAmendedWithChanges(d, newArtifactChangeSet(d), "r101-fix", SliceAmendmentRequest{
+				Reason: "accept regression test scope", AllowFiles: []string{"prompts/prompts_test.go"},
+			}, editTime())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if lifecycle := AnalyzeLifecycle(d); !lifecycle.Runnable {
+				t.Fatalf("amended lifecycle = %+v", lifecycle)
+			}
+			if status == StatusPending {
+				d.State.Plan.PendingSlices = []string{"r102-sibling"}
+				if lifecycle := AnalyzeLifecycle(d); !lifecycle.Runnable {
+					t.Fatalf("operator-declared sibling scope not recognized: %+v", lifecycle)
+				}
+			}
+		})
+	}
+}
+
+func TestReworkScopeGateLegacyUnamendedSiblings(t *testing.T) {
+	d := scopeGateDetail()
+	d.Slices.Slices[0].ExpectedFiles = nil
+	d.Slices.Slices = append(d.Slices.Slices, Slice{ID: "r102-sibling", Status: StatusPending, ExpectedFiles: []string{"unrelated.go"}})
+	if lifecycle := AnalyzeLifecycle(d); !lifecycle.Runnable {
+		t.Fatalf("legacy plan without operator-declared scope = %+v", lifecycle)
+	}
+}
+
+func TestSingleMergeEventRequiredFilesBounds(t *testing.T) {
+	paths := make([]string, 17)
+	for i := range paths {
+		paths[i] = strings.Repeat("界", 513)
+	}
+	resolution := &SingleMergeResolution{Review: &SingleMergeResolutionReview{Findings: []ReviewFinding{{RequiredFiles: paths}, {}}}}
+	got := projectSingleMergeResolutionEvent(resolution)
+	if !got.DiagnosticsTruncated || len(got.Review.Findings[0].RequiredFiles) != 16 {
+		t.Fatalf("projection = %#v", got)
+	}
+	for _, value := range got.Review.Findings[0].RequiredFiles {
+		if len([]rune(value)) > 512 {
+			t.Fatalf("unbounded path: %d runes", len([]rune(value)))
+		}
+	}
+	got.Review.Findings[0].RequiredFiles[0] = "changed"
+	if paths[0] != strings.Repeat("界", 513) {
+		t.Fatal("projection mutated source")
+	}
+	if got.Review.Findings[1].RequiredFiles != nil {
+		t.Fatal("absent paths changed")
+	}
+	clean := projectSingleMergeResolutionEvent(&SingleMergeResolution{Review: &SingleMergeResolutionReview{Findings: []ReviewFinding{{RequiredFiles: []string{"a.go"}}}}})
+	if clean.DiagnosticsTruncated || clean.Review.Findings[0].RequiredFiles[0] != "a.go" {
+		t.Fatalf("clean projection = %#v", clean)
+	}
+}
 
 func TestAutomaticReworkRoundModel(t *testing.T) {
 	for _, model := range []string{"", "provider/strong"} {

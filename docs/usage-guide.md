@@ -562,6 +562,7 @@ Manual commands are outside this bytecode guarantee too.
 | Durable condition | Action | Why this action |
 | --- | --- | --- |
 | An approval-gated pending slice is not approved | `tao approve [--slice ID] <plan-id>`, then `tao run <plan-id>` | Approval satisfies the gate; it is not blocker recovery. |
+| `tao show` reports `amend_scope` for rework outside declared scope | Accept with the shown `tao edit amend --allow-file` command, then `tao run <plan-id>`; reject with `tao edit remove <plan-id> <slice-id>` or `tao edit skip` | This pre-session runnable gate does not mark the plan blocked. Any `expected_files` amendment lifts it for that slice; rejection may be re-raised on review. |
 | The plan records an ordinary blocker and you have resolved its stated cause | `tao run --continue <plan-id>` | `--continue` explicitly clears blocker lifecycle state. Tao does not infer resolution. |
 | A blocker's fix is a contract change, such as a missing expected file, task, or manual check | `tao edit amend <plan-id> <slice-id> --reason-file FILE [--allow-file PATH] [--add-task TEXT] [--add-manual-check TEXT] [--goal-file FILE]`, then `tao run --continue <plan-id>` | The amendment is journaled with its reason and shown as Operator Amendments; it never changes slice status, clears the blocker note, or bypasses approval, so `--continue` still decides whether the blocker is resolved. |
 | A `plan_owned` blocker has an unchanged worktree | Fix the named paths in the plan worktree, then rerun `tao run --continue <plan-id>` | Tao refuses with `blocker unchanged since <timestamp>; fix required in <paths>` only when structured plan-owned evidence and the recorded head/worktree fingerprint still match. Changing the fingerprint lifts only this guard; prose-only blockers are unaffected. |
@@ -954,6 +955,18 @@ For blockers or final-verification failures rather than interrupted implementati
 use the durable-condition table above.
 
 ### Decide between automatic and manual rework
+
+Before launching a rework session (including PR-thread rework), Tao stops when
+any expected file overlaps none of the other slices' declared expected files.
+`tao show` reports `amend_scope` with the exact amendment command. To accept,
+run `tao edit amend <plan-id> <slice-id> --reason-file FILE --allow-file PATH`
+for the named paths (repeat `--allow-file` as needed), then `tao run <plan-id>`.
+Any recorded `expected_files` amendment lifts this gate for that slice, even
+for paths the amendment did not name; approval and other gates still apply.
+To reject, use `tao edit remove <plan-id> <slice-id>` or `tao edit skip` with
+its required reason. Re-review may raise the finding again and eventually stall
+automatic rework. Original slices and legacy plans whose other slices declare
+no expected files are not scope-gated.
 
 A `changes_requested` verdict continues the same plan; do not create a second
 plan for the fixes.

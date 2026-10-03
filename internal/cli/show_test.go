@@ -18,6 +18,7 @@ import (
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/promptcapture"
+	"github.com/iamseth/tao/internal/rework"
 	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/taodata"
 	"github.com/iamseth/tao/internal/theme"
@@ -428,6 +429,98 @@ func TestShowPrintsAgentBudgetWarnings(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected %q in output:\n%s", want, text)
 		}
+	}
+}
+
+func TestShowScopeDecisionAmendmentAcceptsGeneratedFiles(t *testing.T) {
+	original := plan.Slice{ID: "001-original", Status: plan.StatusCompleted, ExpectedFiles: []string{"original.go"}}
+	detail := &plan.PlanDetail{Slices: plan.SlicesFile{Slices: []plan.Slice{original}}}
+	generated := rework.GenerateSlices(detail, []plan.ReviewFinding{{File: "original.go", Severity: "major", Message: "needs regression coverage", RequiredFiles: []string{"foreign_test.go"}}}, 1)
+	if len(generated) != 1 {
+		t.Fatalf("generated slices = %+v", generated)
+	}
+	id := generated[0].ID
+	fixture := newRunPlanFixture(t, plan.StatusInProgress, []string{id}, []string{original.ID}, id, plan.StatusPending)
+	repo := plan.NewFileRepository(fixture.root)
+	loaded, err := repo.GetPlan(context.Background(), fixture.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded.Slices.Slices = append([]plan.Slice{original}, generated...)
+	payload, err := json.Marshal(loaded.Slices)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fixture.dir, "slices.json"), payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = repo.GetPlan(context.Background(), fixture.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := errors.AsType[*plan.ReworkScopeDecisionError](plan.AnalyzeLifecycle(loaded).RunnableError); !ok {
+		t.Fatalf("expected scope refusal: %+v", plan.AnalyzeLifecycle(loaded))
+	}
+	next := plan.DeriveNextAction(loaded)
+	if next.Primary.Kind != plan.PlanActionAmendScope {
+		t.Fatalf("next = %+v", next)
+	}
+	reasonFile := writeAmendInput(t, "reason.txt", "Accept required regression coverage")
+	command := strings.ReplaceAll(next.Primary.Command, "--reason-file FILE", "--reason-file "+reasonFile)
+	var out bytes.Buffer
+	app := App{Out: &out, Err: &out}
+	noOpArgs := []string{"--plans-dir", fixture.root, "edit", "amend", fixture.id, id, "--reason-file", reasonFile, "--allow-file", "original.go"}
+	if err := app.Run(context.Background(), noOpArgs); err == nil || !strings.Contains(err.Error(), "does not change slice") {
+		t.Fatalf("unrelated duplicate should remain a no-op: %v", err)
+	}
+	args := append([]string{"--plans-dir", fixture.root}, strings.Fields(command)[1:]...)
+	if err := app.Run(context.Background(), append([]string(nil), args...)); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = repo.GetPlan(context.Background(), fixture.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lifecycle := plan.AnalyzeLifecycle(loaded); !lifecycle.Runnable {
+		t.Fatalf("ordinary run refused: %v", lifecycle.RunnableError)
+	}
+	amended := sliceByID(loaded, id)
+	if len(amended.Amendments) != 1 || !reflect.DeepEqual(amended.Amendments[0].Fields, []string{"expected_files"}) {
+		t.Fatalf("amendments = %+v", amended.Amendments)
+	}
+	if !reflect.DeepEqual(amended.ExpectedFiles, generated[0].ExpectedFiles) {
+		t.Fatalf("expected files changed: %v", amended.ExpectedFiles)
+	}
+}
+
+func TestShowScopeDecisionNextAction(t *testing.T) {
+	detail := &plan.PlanDetail{
+		State: plan.State{Status: plan.StatusInProgress, Plan: plan.PlanState{ID: "plan-a", PendingSlices: []string{"r101-fix"}, CompletedSlices: []string{"001-original"}}},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{
+			{ID: "001-original", Status: plan.StatusCompleted, ExpectedFiles: []string{"original.go"}},
+			{ID: "r101-fix", Status: plan.StatusPending, ExpectedFiles: []string{"foreign.go"}},
+		}},
+	}
+	wantCommand := "tao edit amend plan-a r101-fix --reason-file FILE --allow-file foreign.go"
+	var out bytes.Buffer
+	next := plan.DeriveNextAction(detail)
+	if err := renderNextAction(&out, next); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Next:") || !strings.Contains(out.String(), wantCommand) {
+		t.Fatalf("rendered next = %q", out.String())
+	}
+	out.Reset()
+	app := App{Out: &out, Err: &out}
+	if err := app.show(context.Background(), fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}, []string{"plan-a", "--json"}); err != nil {
+		t.Fatal(err)
+	}
+	var payload planview.ShowPayload
+	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.NextAction.Primary.Kind != plan.PlanActionAmendScope || payload.NextAction.Primary.Command != wantCommand || !reflect.DeepEqual(payload.NextAction, next) {
+		t.Fatalf("JSON next = %+v", payload.NextAction)
 	}
 }
 

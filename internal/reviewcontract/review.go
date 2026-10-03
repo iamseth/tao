@@ -14,6 +14,7 @@ const (
 	maxFindings             = 50
 	maxFindingSeverityRunes = 64
 	maxFindingFileRunes     = 512
+	maxFindingRequiredFiles = 16
 	maxFindingTextRunes     = 4 * 1024
 )
 
@@ -232,6 +233,20 @@ func normalizeFindings(findings []plan.ReviewFinding) []plan.ReviewFinding {
 		finding.File = capString(strings.TrimSpace(finding.File), maxFindingFileRunes)
 		finding.Message = capString(strings.TrimSpace(finding.Message), maxFindingTextRunes)
 		finding.Suggestion = capString(strings.TrimSpace(finding.Suggestion), maxFindingTextRunes)
+		var requiredFiles []string
+		seen := make(map[string]bool)
+		for _, value := range finding.RequiredFiles {
+			value, safe := plan.NormalizeReviewFindingPath(capString(strings.TrimSpace(value), maxFindingFileRunes))
+			if !safe || seen[value] {
+				continue
+			}
+			seen[value] = true
+			requiredFiles = append(requiredFiles, value)
+			if len(requiredFiles) == maxFindingRequiredFiles {
+				break
+			}
+		}
+		finding.RequiredFiles = requiredFiles
 		normalized = append(normalized, finding)
 	}
 	return normalized

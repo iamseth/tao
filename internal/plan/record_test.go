@@ -11,6 +11,39 @@ import (
 	"time"
 )
 
+func TestSingleMergeReviewRequiredFilesValidation(t *testing.T) {
+	paths := make([]string, 17)
+	for i := range paths {
+		paths[i] = "a.go"
+	}
+	for _, test := range []struct {
+		name    string
+		paths   []string
+		invalid bool
+	}{
+		{"absent", nil, false},
+		{"at bounds", []string{strings.Repeat("界", 512)}, false},
+		{"at count", paths[:16], false},
+		{"over count", paths, true},
+		{"over runes", []string{strings.Repeat("界", 513)}, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			now := time.Now().UTC()
+			intent := SingleMergeCommitIntent{DefaultParent: strings.Repeat("a", 40)}
+			resolution := SingleMergeResolution{IntegrationHead: strings.Repeat("b", 40), CommittedAt: now}
+			resolution.Review = &SingleMergeResolutionReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictComment, Summary: "review", FindingsCount: 1, Findings: []ReviewFinding{{RequiredFiles: test.paths}}, Base: intent.DefaultParent, Head: resolution.IntegrationHead, Agent: "test", ReviewedAt: now}
+			err := validateSingleMergeResolutionReview(intent, resolution)
+			if test.invalid {
+				if err == nil || !strings.Contains(err.Error(), "finding 0") || !strings.Contains(err.Error(), "required_files") {
+					t.Fatalf("error = %v", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestPlanRecordClearSingleMergeIntentReplaysInterruptedJournalIdempotently(t *testing.T) {
 	for _, operation := range []string{"state", "remove"} {
 		t.Run(operation, func(t *testing.T) {

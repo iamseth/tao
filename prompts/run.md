@@ -86,6 +86,7 @@ Tao marks the selected slice in progress and appends `slice_started` before invo
 - Implement only the selected slice.
 - Follow the selected slice `goal`, `tasks`, and `expected_files` from the run packet or fallback artifacts if read.
 - Preserve the global constraints and invariants from the run packet or fallback artifacts if read.
+- An Operator Amendments entry in the run packet relaxes that slice's contract: an amended expected file is in scope for this slice even where `global_invariants` or `planning-brief.md` excluded it; rulings and verification rules are unchanged.
 - Do not invent new requirements.
 - Prefer minimal, reviewable changes.
 - Keep the repo in a working state.

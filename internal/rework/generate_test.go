@@ -208,6 +208,50 @@ func TestGenerateSlicesPlacesPrimaryBeforeAssociatedExpectedFiles(t *testing.T) 
 	}
 }
 
+func TestGenerateSlicesCarriesRequiredFiles(t *testing.T) {
+	detail := &plan.PlanDetail{
+		State: plan.State{Repo: plan.Repo{Root: repoFixture(t, nil)}},
+		Slices: plan.SlicesFile{Slices: []plan.Slice{
+			{
+				ID:            "001-original",
+				ExpectedFiles: []string{"prompts/slice.md", "prompts/note_slice.md"},
+				Verification:  plan.Verification{Commands: []string{"make check-prompts"}},
+			},
+			{
+				ID:            "002-tests",
+				ExpectedFiles: []string{"prompts/prompts_test.go", "prompts/other_test.go"},
+				Verification:  plan.Verification{Commands: []string{"go test ./prompts"}},
+			},
+		}},
+	}
+	for _, tt := range []struct {
+		name     string
+		required []string
+		want     []string
+	}{
+		{"required", []string{"prompts/prompts_test.go"}, []string{"prompts/slice.md", "prompts/prompts_test.go", "prompts/note_slice.md"}},
+		{"normalized and deduplicated", []string{"./prompts/prompts_test.go", "prompts/prompts_test.go", "prompts/slice.md", "prompts/note_slice.md", "", "../outside.go", "/outside.go", "prompts/*.go"}, []string{"prompts/slice.md", "prompts/prompts_test.go", "prompts/note_slice.md"}},
+		{"nil", nil, []string{"prompts/slice.md", "prompts/note_slice.md"}},
+		{"empty", []string{}, []string{"prompts/slice.md", "prompts/note_slice.md"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := GenerateSlices(detail, []plan.ReviewFinding{{File: "prompts/slice.md", RequiredFiles: tt.required}}, 1)
+			if len(got) != 1 {
+				t.Fatalf("GenerateSlices returned %d slices, want 1", len(got))
+			}
+			if !slices.Equal(got[0].ExpectedFiles, tt.want) {
+				t.Errorf("expected files = %#v, want %#v", got[0].ExpectedFiles, tt.want)
+			}
+			if !slices.Equal(got[0].Verification.Commands, []string{"make check-prompts"}) {
+				t.Errorf("verification commands = %#v, want primary-file commands only", got[0].Verification.Commands)
+			}
+			if got[0].Verification.Source != "overlapping original slice verification" {
+				t.Errorf("verification source = %q", got[0].Verification.Source)
+			}
+		})
+	}
+}
+
 func TestGenerateSlicesNormalizesAndSkipsUnsafeFindingPaths(t *testing.T) {
 	detail := &plan.PlanDetail{State: plan.State{Repo: plan.Repo{Root: repoFixture(t, map[string]string{
 		"go.mod": "module example.com/project\n",

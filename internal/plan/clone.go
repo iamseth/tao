@@ -154,7 +154,7 @@ func cloneSingleMergeResolutionReview(review *SingleMergeResolutionReview) *Sing
 		return nil
 	}
 	clone := *review
-	clone.Findings = append([]ReviewFinding{}, review.Findings...)
+	clone.Findings = cloneReviewFindings(review.Findings)
 	return &clone
 }
 
@@ -186,11 +186,24 @@ func cloneFinalizationFailure(failure *FinalizationFailure) *FinalizationFailure
 	return &clone
 }
 
+func cloneReviewFindings(findings []ReviewFinding) []ReviewFinding {
+	clone := append([]ReviewFinding{}, findings...)
+	for i := range clone {
+		if findings[i].RequiredFiles != nil {
+			clone[i].RequiredFiles = append([]string{}, findings[i].RequiredFiles...)
+		}
+	}
+	return clone
+}
+
 func clonePlanReview(review *PlanReview) *PlanReview {
 	if review == nil {
 		return nil
 	}
 	clone := *review
+	if review.Findings != nil {
+		clone.Findings = cloneReviewFindings(review.Findings)
+	}
 	if review.CommitMessage != nil {
 		message := *review.CommitMessage
 		clone.CommitMessage = &message

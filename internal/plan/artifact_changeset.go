@@ -197,7 +197,7 @@ func (c *artifactChangeSet) ReplacePlanReview(review PlanReview) error {
 }
 
 func normalizePlanReviewReplacement(review PlanReview) PlanReview {
-	review.Findings = append([]ReviewFinding{}, review.Findings...)
+	review.Findings = cloneReviewFindings(review.Findings)
 	if review.CommitMessage != nil {
 		message := *review.CommitMessage
 		review.CommitMessage = &message

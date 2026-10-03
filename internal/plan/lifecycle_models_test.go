@@ -470,6 +470,28 @@ func TestPlanDecisionCategoricalValues(t *testing.T) {
 	}
 }
 
+func TestReviewFindingCloneIsolation(t *testing.T) {
+	for _, mode := range []string{"plan", "single merge", "replacement"} {
+		t.Run(mode, func(t *testing.T) {
+			original := []ReviewFinding{{File: "a.go", RequiredFiles: []string{"a_test.go"}}}
+			var cloned []ReviewFinding
+			switch mode {
+			case "plan":
+				cloned = clonePlanReview(&PlanReview{Findings: original}).Findings
+			case "single merge":
+				cloned = cloneSingleMergeResolutionReview(&SingleMergeResolutionReview{Findings: original}).Findings
+			case "replacement":
+				cloned = normalizePlanReviewReplacement(PlanReview{Findings: original}).Findings
+			}
+			cloned[0].File = "changed.go"
+			cloned[0].RequiredFiles[0] = "changed_test.go"
+			if original[0].File != "a.go" || original[0].RequiredFiles[0] != "a_test.go" {
+				t.Fatalf("clone aliases original: %+v", original)
+			}
+		})
+	}
+}
+
 func TestPlanReviewFindingsJSON(t *testing.T) {
 	review := PlanReview{
 		Verdict:       ReviewVerdictChangesRequested,
@@ -477,7 +499,7 @@ func TestPlanReviewFindingsJSON(t *testing.T) {
 		FindingsCount: 1,
 		CommitMessage: &ReviewCommitMessage{Subject: "feat(review): persist approved commit proposals", Body: "What:\nPersist the proposal.\n\nWhy:\nReuse reviewed context."},
 		Findings: []ReviewFinding{
-			{Severity: "major", File: "internal/run/review.go", Line: 42, Message: "Fix this.", Suggestion: "Adjust the code."},
+			{Severity: "major", File: "internal/run/review.go", Line: 42, Message: "Fix this.", Suggestion: "Adjust the code.", RequiredFiles: []string{"internal/run/review_test.go"}},
 		},
 	}
 
@@ -493,7 +515,7 @@ func TestPlanReviewFindingsJSON(t *testing.T) {
 		t.Fatalf("findings count = %d, findings = %+v", got.FindingsCount, got.Findings)
 	}
 	want := review.Findings[0]
-	if len(got.Findings) != 1 || got.Findings[0] != want {
+	if len(got.Findings) != 1 || !reflect.DeepEqual(got.Findings[0], want) {
 		t.Fatalf("unexpected findings after JSON round trip: %+v", got.Findings)
 	}
 	if got.CommitMessage == nil || *got.CommitMessage != *review.CommitMessage {

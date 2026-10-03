@@ -415,6 +415,20 @@ func boundedSingleReviewFindings(findings []plan.ReviewFinding) []plan.ReviewFin
 		finding.File = strings.TrimSpace(boundRunes(strings.ReplaceAll(finding.File, "\r", ""), 512))
 		finding.Message = strings.TrimSpace(boundRunes(strings.ReplaceAll(finding.Message, "\r", ""), 4*1024))
 		finding.Suggestion = strings.TrimSpace(boundRunes(strings.ReplaceAll(finding.Suggestion, "\r", ""), 4*1024))
+		var requiredFiles []string
+		seen := make(map[string]bool)
+		for _, value := range finding.RequiredFiles {
+			value, safe := plan.NormalizeReviewFindingPath(boundRunes(strings.TrimSpace(value), 512))
+			if !safe || seen[value] {
+				continue
+			}
+			seen[value] = true
+			requiredFiles = append(requiredFiles, value)
+			if len(requiredFiles) == 16 {
+				break
+			}
+		}
+		finding.RequiredFiles = requiredFiles
 		if finding.Line < 0 {
 			finding.Line = 0
 		}

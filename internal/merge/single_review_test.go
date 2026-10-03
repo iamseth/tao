@@ -16,6 +16,28 @@ import (
 	"github.com/iamseth/tao/prompts"
 )
 
+func TestSingleReviewRequiredFilesBounds(t *testing.T) {
+	parsed, err := decodeSingleIntegrationReview("```tao-review-json\n" + `{"verdict":"comment","summary":"review","findings":[{"required_files":[" ./src/a.go ","src/a.go","../escape","/absolute","*.go",""]}]}` + "\n```")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := boundedSingleReviewFindings(parsed.Findings)
+	if len(got) != 1 || !slices.Equal(got[0].RequiredFiles, []string{"src/a.go"}) {
+		t.Fatalf("findings = %#v", got)
+	}
+	paths := []string{strings.Repeat("界", 513)}
+	for i := range 20 {
+		paths = append(paths, strings.Repeat("a", i+1))
+	}
+	got = boundedSingleReviewFindings([]plan.ReviewFinding{{RequiredFiles: paths}, {RequiredFiles: []string{"../escape"}}, {}})
+	if len(got[0].RequiredFiles) != 16 || got[0].RequiredFiles[0] != strings.Repeat("界", 512) || got[0].RequiredFiles[15] != paths[15] {
+		t.Fatalf("bounds = %#v", got[0])
+	}
+	if got[1].RequiredFiles != nil || got[2].RequiredFiles != nil {
+		t.Fatalf("empty paths not nil: %#v", got)
+	}
+}
+
 func TestSingleIntegrationReviewerApprovesExactResolvedHead(t *testing.T) {
 	fixture, request, store, git := preparedSingleReviewFixture(t)
 	calls := 0

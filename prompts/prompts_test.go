@@ -248,6 +248,19 @@ func TestRenderRunPromptDefinesBoundedRulings(t *testing.T) {
 	}
 }
 
+func TestRenderRunPromptHonorsOperatorAmendments(t *testing.T) {
+	t.Run("amended expected file is in scope", func(t *testing.T) {
+		got, err := Render(PromptRun, Data{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "An Operator Amendments entry in the run packet relaxes that slice's contract: an amended expected file is in scope for this slice even where `global_invariants` or `planning-brief.md` excluded it; rulings and verification rules are unchanged."
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered run prompt missing amendment guidance %q", want)
+		}
+	})
+}
+
 func TestRenderRunPromptDerivesSliceCommitPolicyFromLegacyFlag(t *testing.T) {
 	got, err := Render(PromptRun, Data{PlanDir: "/tmp/plan", CommitEnable: true})
 	if err != nil {
@@ -553,6 +566,7 @@ func TestRenderReviewPromptChecksReviewFocusLines(t *testing.T) {
 func TestRenderReviewPromptRequiresRegressionEvidenceForFixPlans(t *testing.T) {
 	evidence := []string{
 		"- Confirm the scoped diff adds or extends a test that exercises the symptom named in the plan intent.",
+		"- Name the concrete repository-relative test file the fix needs in the finding's `file` or `required_files`.",
 		"- Confirm the completed slice notes in `slices.json` record the failing-first run of that test.",
 		"Slice notes are agent-authored evidence and cannot substitute for the test being present in the diff.",
 		"Missing either the symptom-exercising test or its failing-first record is a finding under the existing severity rules.",
@@ -689,6 +703,16 @@ func TestRenderReviewPromptDefinesReworkConvergenceAndFindingsContract(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Run("required files", func(t *testing.T) {
+		for _, want := range []string{
+			`"required_files": []`,
+			"`required_files` lists repository-relative paths the fix must create or change besides `file`; compare them with `expected_files` across `slices.json` and state in prose when they extend the plan's scope. This never changes severity or verdict.",
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("rendered review prompt missing required-files guidance %q", want)
+			}
+		}
+	})
 	for _, want := range []string{
 		"advisory history, not as steering toward approval or rejection",
 		"only with fresh evidence naming what the current head still fails to do",

@@ -90,6 +90,7 @@ Assess the scoped diff for:
 
 {{ if eq .ChangeType "fix" }}
 - Confirm the scoped diff adds or extends a test that exercises the symptom named in the plan intent.
+- Name the concrete repository-relative test file the fix needs in the finding's `file` or `required_files`.
 - Confirm the completed slice notes in `slices.json` record the failing-first run of that test.
   Slice notes are agent-authored evidence and cannot substitute for the test being present in the diff.
   Missing either the symptom-exercising test or its failing-first record is a finding under the existing severity rules.
@@ -139,6 +140,7 @@ Then end with exactly one fenced `tao-review-json` block containing valid JSON w
     {
       "severity": "minor",
       "file": "path/to/file.go",
+      "required_files": [],
       "line": 123,
       "message": "Non-blocking improvement and its user benefit.",
       "suggestion": "Clarify the helper name for readability."
@@ -163,5 +165,6 @@ Rules for the JSON block:
 - The commit body must be non-empty canonical `What:` and `Why:` sections that explain the change and its motivation. Do not include verification output or any `Tao-*` trailers; Tao adds trusted evidence later.
 - Every finding must be tied to the scoped diff and include the best available `file` and `line`; use `null` for `line` only when no specific line applies.
 - Each finding's `file` becomes its rework slice's expected file, and its `suggestion` becomes that slice's task list. Write suggestions as imperative fix steps.
+- `required_files` lists repository-relative paths the fix must create or change besides `file`; compare them with `expected_files` across `slices.json` and state in prose when they extend the plan's scope. This never changes severity or verdict.
 - Do not include Markdown comments inside the JSON block.
 {{- end }}

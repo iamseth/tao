@@ -1469,6 +1469,7 @@ const (
 	maxSingleMergeResolutionIdentityBytes = 1024
 	maxSingleMergeFindingSeverityRunes    = 64
 	maxSingleMergeFindingFileRunes        = 512
+	maxSingleMergeFindingRequiredFiles    = 16
 	maxSingleMergeFindingTextRunes        = 4 * 1024
 )
 
@@ -1650,6 +1651,14 @@ func validateSingleMergeResolutionReview(intent SingleMergeCommitIntent, resolut
 		return fmt.Errorf("single-merge resolution review findings are incomplete or unbounded")
 	}
 	for i, finding := range review.Findings {
+		if len(finding.RequiredFiles) > maxSingleMergeFindingRequiredFiles {
+			return fmt.Errorf("single-merge resolution review finding %d required_files exceeds %d entries", i, maxSingleMergeFindingRequiredFiles)
+		}
+		for _, value := range finding.RequiredFiles {
+			if err := validateBoundedSingleMergeText(fmt.Sprintf("review finding %d required_files", i), value, maxSingleMergeFindingFileRunes, false); err != nil {
+				return err
+			}
+		}
 		if finding.Line < 0 {
 			return fmt.Errorf("single-merge resolution review finding %d has a negative line", i)
 		}

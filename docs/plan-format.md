@@ -123,6 +123,17 @@ Missing or malformed briefs are warning-only findings so existing plan directori
 
 ## State Lifecycle
 
+Rework slices are refused before a session when any `expected_files` entry
+matches no path in the union of every other slice's `expected_files`, regardless
+of status or rework round. Matching uses path overlap, including directory
+entries. Approval refusal takes precedence. A recorded amendment whose `fields`
+contains `expected_files` exempts that slice; original (round-0) slices and
+legacy plans with an empty other-slice union are not gated. This is a runnable
+error, not a lifecycle status or rework stop event. `amend_scope` is the
+progress-class next action: `tao edit amend PLAN SLICE --reason-file FILE`
+with one `--allow-file PATH` per sorted conflicting path. Its recovery
+alternative is `tao edit remove PLAN SLICE` to reject the scope expansion.
+
 Plan status values:
 
 | Status | Meaning |
@@ -162,6 +173,7 @@ Only a current `plan_merged` event in `events.jsonl` proves integration into the
 - `plan.last_run_commit_policy` records the effective commit policy (`slice` or `none`) from the latest run start. The historical value `plan` remains readable, but new run, prompt, and environment inputs reject it with migration guidance. Missing values and legacy `run_context` fallback remain supported.
 - `plan.last_run_starting_dirty` records the Git paths dirty at the latest run start; automatic `slice` starts store an empty list because they require a clean execution tree, while legacy and manual-policy records remain readable.
 - Optional `plan.final_verification` records the repository-wide pre-review gate with `command`, absolute `cwd`, `result`, optional `details`, optional `failure_kind`, optional `exit_code`, and `verified_at`. `failure_kind`, when present, is `code`, `tool_missing`, `timeout`, `cancelled`, or `invalid_command`; `exit_code` is the observed process exit code when one is available. Omitting either field remains valid for historical and new artifacts, and each fresh evidence write clears either field it omits rather than preserving stale failure classification. When no repository-owned command is detected, Tao still records `result: skipped` without failure fields rather than inventing a command. A current failed result bound to the exact completed workspace head is projected to consumers as `verification_failed`; this projection never changes the persisted `state.json` status.
+- `plan.review` findings may carry an optional `required_files` array of up to 16 safe repository-relative paths the fix must create or change besides `file`; it is untrusted reviewer data, ignored by the rework fingerprint, and absent on historical reviews.
 - Optional `plan.review.commit_message` is the untrusted proposal produced by the reviewer of the exact recorded `base..head` diff. It has `subject` and `body` strings; the subject is `<type>(<lowercase-scope>): <lowercase-imperative-summary>`, and the body has non-empty canonical `What:` and `Why:` sections. It must not contain `Tao-*` trailers. New `approve` reviews require a valid proposal; a missing, malformed, oversized, or reserved-trailer proposal downgrades the parsed result to bounded `comment` rather than persisting approval. `changes_requested` and `comment` reviews store `commit_message: null`, explicitly clearing a stale approved proposal. Historical reviews without this field remain readable. Pull-request finalization may replace an unusable historical approval proposal after one proposal-only correction, while preserving its exact review base/head and substantive findings.
 - Optional `plan.finalization_failure` records a bounded post-review failure. `phase` is `proposal_repair` with `review_base` and `review_head`, or `pull_request_finalization` with `branch` and `head_sha`; both forms also carry a machine `category`, UTC `failed_at`, and machine `recovery_action`. The two boundary shapes are mutually exclusive. This evidence drives recovery presentation but grants no authority: live Git plus current review, workspace, intent, and remote identity checks remain required. A matching successful review replacement, PR recording, merge, or reopen clears obsolete evidence; historical plans may omit it.
 - Optional `plan.merge_commit_intent` contains `message`, `plan_id`, `source_head`, `default_branch`, `default_parent`, `created_at`, and optional `resolution`. Historical intents remain exact recovery authority and are not reformatted.

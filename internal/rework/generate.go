@@ -359,7 +359,7 @@ func GenerateSlices(detail *plan.PlanDetail, findings []plan.ReviewFinding, roun
 			Goal:          sliceGoal(finding, file),
 			Context:       sliceContext(finding, file),
 			Tasks:         findingTasks(finding),
-			ExpectedFiles: reworkExpectedFiles(detail, file),
+			ExpectedFiles: reworkExpectedFiles(detail, file, finding.RequiredFiles),
 			Verification: plan.Verification{
 				Commands:     verification.commands,
 				Source:       verification.source,
@@ -471,8 +471,13 @@ func sliceTiming(detail *plan.PlanDetail) plan.SliceTiming {
 	return plan.SliceTiming{CreatedAt: detail.State.UpdatedAt, UpdatedAt: detail.State.UpdatedAt}
 }
 
-func reworkExpectedFiles(detail *plan.PlanDetail, file string) []string {
+func reworkExpectedFiles(detail *plan.PlanDetail, file string, requiredFiles []string) []string {
 	files := []string{file}
+	for _, required := range requiredFiles {
+		if normalized, ok := plan.NormalizeReviewFindingPath(required); ok {
+			files = appendUnique(files, normalized)
+		}
+	}
 	if detail == nil {
 		return files
 	}
@@ -611,36 +616,11 @@ func sliceExpectedFilesOverlap(expectedFiles []string, file string) bool {
 }
 
 func pathsOverlap(file string, expected string) bool {
-	cleanFile := normalizePlanPath(file)
-	cleanExpected := normalizePlanPath(expected)
-	if cleanFile == "" || cleanExpected == "" {
-		return false
-	}
-	if cleanFile == cleanExpected {
-		return true
-	}
-	if strings.HasSuffix(strings.TrimSpace(expected), "/") {
-		return strings.HasPrefix(cleanFile, cleanExpected+"/")
-	}
-	if path.Ext(cleanExpected) == "" && strings.HasPrefix(cleanFile, cleanExpected+"/") {
-		return true
-	}
-	return false
+	return plan.PathsOverlap(file, expected)
 }
 
 func normalizeReviewFindingFile(value string) (string, bool) {
-	value = strings.TrimSpace(strings.ReplaceAll(value, "\\", "/"))
-	for strings.HasPrefix(value, "./") {
-		value = strings.TrimPrefix(value, "./")
-	}
-	if value == "" || strings.HasPrefix(value, "/") || hasWindowsDrivePrefix(value) || hasParentPathSegment(value) || hasWildcardPathSegment(value) {
-		return "", false
-	}
-	clean := path.Clean(value)
-	if clean == "." || clean == "" || clean == "..." || strings.HasPrefix(clean, "../") || strings.HasSuffix(clean, "/...") || strings.Contains(clean, "/.../") {
-		return "", false
-	}
-	return clean, true
+	return plan.NormalizeReviewFindingPath(value)
 }
 
 func normalizePlanPath(value string) string {
@@ -655,18 +635,6 @@ func normalizePlanPath(value string) string {
 		return ""
 	}
 	return clean
-}
-
-func hasWindowsDrivePrefix(value string) bool {
-	return len(value) >= 2 && value[1] == ':' && unicode.IsLetter(rune(value[0]))
-}
-
-func hasParentPathSegment(value string) bool {
-	return slices.Contains(strings.Split(value, "/"), "..")
-}
-
-func hasWildcardPathSegment(value string) bool {
-	return strings.ContainsAny(value, "*?[]{}") || value == "..." || strings.HasPrefix(value, ".../") || strings.HasSuffix(value, "/...") || strings.Contains(value, "/.../")
 }
 
 func appendUnique(commands []string, values ...string) []string {

@@ -2,6 +2,9 @@ package plan
 
 import (
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -797,6 +800,66 @@ func TestReviewSupersededByReopenIgnoresFailedReviewEvents(t *testing.T) {
 	}
 	if ReviewSupersededByReopen(legacy) {
 		t.Fatal("legacy review event without payload keeps the historical reset")
+	}
+}
+
+func TestReworkScopeCommandShellRoundTrip(t *testing.T) {
+	values := []string{"plain.go", "scope notes.go", "it's.go", `double"quote.go`, "$(touch evaluated).go", "`touch evaluated`.go", "x; touch evaluated; #.go", "x & touch evaluated & #.go"}
+	for _, value := range values {
+		t.Run(value, func(t *testing.T) {
+			d := scopeGateDetail()
+			d.State.Plan.ID = "plan " + value
+			sliceID := "r101-" + value
+			path := "tests/" + value
+			if _, ok := NormalizeReviewFindingPath(path); !ok {
+				t.Fatalf("test path is not accepted: %q", path)
+			}
+			next := deriveNextAction(d, DerivedPlan{Capabilities: RunCapabilities{
+				NeedsScopeDecision: true, ScopeDecisionSliceID: sliceID, ScopeDecisionPaths: []string{path},
+			}})
+			for _, action := range []PlanAction{next.Primary, next.Alternatives[0]} {
+				dir := t.TempDir()
+				// #nosec G204 -- Deliberately exercise shell parsing of fixed test payloads in a temporary directory.
+				cmd := exec.Command("sh", "-c", "tao() { printf '%s\\000' \"$@\"; }; "+action.Command)
+				cmd.Dir = dir
+				output, err := cmd.CombinedOutput()
+				if err != nil {
+					t.Fatalf("shell round trip: %v: %s", err, output)
+				}
+				want := []string{"edit", "amend", d.State.Plan.ID, sliceID, "--reason-file", "FILE", "--allow-file", path}
+				if action.Kind != PlanActionAmendScope {
+					want = []string{"edit", "remove", d.State.Plan.ID, sliceID}
+				}
+				got := strings.Split(strings.TrimSuffix(string(output), "\x00"), "\x00")
+				if !reflect.DeepEqual(got, want) {
+					t.Errorf("arguments = %q, want %q", got, want)
+				}
+				if _, err := os.Stat(filepath.Join(dir, "evaluated")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("embedded shell expression executed: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestReworkScopeNextAction(t *testing.T) {
+	for _, blocked := range []bool{false, true} {
+		d := scopeGateDetail()
+		if blocked {
+			d.State.Status = StatusBlocked
+			d.Slices.Slices[1].Status = StatusBlocked
+		}
+		capabilities := AnalyzeRunCapabilities(d)
+		if capabilities.CanRun || capabilities.CanContinue || !capabilities.NeedsScopeDecision || capabilities.ScopeDecisionSliceID != "r101-fix" || !reflect.DeepEqual(capabilities.ScopeDecisionPaths, []string{"a.go", "z.go"}) {
+			t.Fatalf("capabilities = %+v", capabilities)
+		}
+		next := DeriveNextAction(d)
+		if next.Primary.Kind != PlanActionAmendScope || next.Primary.Class != PlanActionClassProgress || next.Primary.Command != "tao edit amend plan r101-fix --reason-file FILE --allow-file a.go --allow-file z.go" || !strings.Contains(next.Primary.Reason, "a.go, z.go") {
+			t.Fatalf("primary = %+v", next.Primary)
+		}
+		if len(next.Alternatives) != 1 || next.Alternatives[0].Class != PlanActionClassRecovery || next.Alternatives[0].Command != "tao edit remove plan r101-fix" || next.Alternatives[0].Reason != "reject the finding's scope expansion" {
+			t.Fatalf("alternatives = %+v", next.Alternatives)
+		}
 	}
 }
 

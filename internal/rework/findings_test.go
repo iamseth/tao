@@ -1,6 +1,7 @@
 package rework
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -13,7 +14,7 @@ func TestParseReviewFindingsUsesCanonicalLegacyProjection(t *testing.T) {
 
 	got := ParseReviewFindings(content)
 	want := plan.ReviewFinding{Severity: "major", File: "internal/rework/findings.go", Line: 0, Message: "fix it", Suggestion: "use the contract"}
-	if len(got) != 1 || got[0] != want {
+	if len(got) != 1 || !reflect.DeepEqual(got[0], want) {
 		t.Fatalf("legacy findings = %+v, want %+v", got, want)
 	}
 	if malformed := ParseReviewFindings("```tao-review-json\n{not-json}\n```"); malformed != nil {
@@ -82,6 +83,20 @@ func TestReworkFindingsFingerprintTracksFindingSetChanges(t *testing.T) {
 		Severity: "major", File: first.File, Line: 30, Message: "fix third defect", Suggestion: "third repair",
 	}}) {
 		t.Fatal("replacing a finding in the set did not change the rework fingerprint")
+	}
+}
+
+func TestRequiredFilesDoNotAffectFindingIdentity(t *testing.T) {
+	base := []plan.ReviewFinding{{Severity: "major", File: "a.go", Line: 10, Message: "fix defect", Suggestion: "add coverage"}}
+	for _, required := range [][]string{{"a_test.go"}, {"b.go", "c.go"}} {
+		changed := []plan.ReviewFinding{base[0]}
+		changed[0].RequiredFiles = required
+		if !reflect.DeepEqual(NormalizeFindings(base), NormalizeFindings(changed)) {
+			t.Fatal("required_files changed normalized findings")
+		}
+		if ReworkFindingsFingerprint(base) != ReworkFindingsFingerprint(changed) {
+			t.Fatal("required_files changed rework fingerprint")
+		}
 	}
 }
 

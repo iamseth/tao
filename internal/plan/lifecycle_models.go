@@ -493,11 +493,14 @@ type VerificationRepairBinding struct {
 
 // ReviewFinding records one structured issue from a persisted review.
 type ReviewFinding struct {
-	Severity   string `json:"severity,omitempty"`
-	File       string `json:"file,omitempty"`
-	Line       int    `json:"line,omitempty"`
-	Message    string `json:"message,omitempty"`
-	Suggestion string `json:"suggestion,omitempty"`
+	// RequiredFiles are untrusted reviewer-declared repository-relative paths
+	// the fix must create or change besides File.
+	RequiredFiles []string `json:"required_files,omitempty"`
+	Severity      string   `json:"severity,omitempty"`
+	File          string   `json:"file,omitempty"`
+	Line          int      `json:"line,omitempty"`
+	Message       string   `json:"message,omitempty"`
+	Suggestion    string   `json:"suggestion,omitempty"`
 }
 
 // ReviewCommitMessage records the untrusted commit proposal produced while
@@ -894,16 +897,19 @@ func (e *SliceCompletionPendingError) Error() string {
 }
 
 type RunCapabilities struct {
-	CanRun                 bool   `json:"can_run"`
-	DisabledReason         string `json:"disabled_reason,omitempty"`
-	NeedsApproval          bool   `json:"needs_approval,omitempty"`
-	ApprovalSliceID        string `json:"approval_slice_id,omitempty"`
-	ApprovalReason         string `json:"approval_reason,omitempty"`
-	CanContinue            bool   `json:"can_continue"`
-	ContinueDisabledReason string `json:"continue_disabled_reason,omitempty"`
-	Complete               bool   `json:"complete"`
-	Reviewed               bool   `json:"reviewed"`
-	Active                 bool   `json:"active"`
+	CanRun                 bool     `json:"can_run"`
+	DisabledReason         string   `json:"disabled_reason,omitempty"`
+	NeedsScopeDecision     bool     `json:"needs_scope_decision,omitempty"`
+	ScopeDecisionSliceID   string   `json:"scope_decision_slice_id,omitempty"`
+	ScopeDecisionPaths     []string `json:"scope_decision_paths,omitempty"`
+	NeedsApproval          bool     `json:"needs_approval,omitempty"`
+	ApprovalSliceID        string   `json:"approval_slice_id,omitempty"`
+	ApprovalReason         string   `json:"approval_reason,omitempty"`
+	CanContinue            bool     `json:"can_continue"`
+	ContinueDisabledReason string   `json:"continue_disabled_reason,omitempty"`
+	Complete               bool     `json:"complete"`
+	Reviewed               bool     `json:"reviewed"`
+	Active                 bool     `json:"active"`
 }
 
 // PlanActionKind identifies one read-only lifecycle recommendation. Commands
@@ -920,6 +926,7 @@ const (
 	PlanActionRebaseAndReview        PlanActionKind = "rebase_and_review"
 	PlanActionRestartRework          PlanActionKind = "restart_rework"
 	PlanActionApprove                PlanActionKind = "approve"
+	PlanActionAmendScope             PlanActionKind = "amend_scope"
 	PlanActionContinue               PlanActionKind = "continue"
 	PlanActionRestartBlocked         PlanActionKind = "restart_blocked"
 	PlanActionRestartMerge           PlanActionKind = "restart_merge"

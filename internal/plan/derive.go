@@ -102,6 +102,15 @@ func DeriveNextAction(detail *PlanDetail) PlanNextAction {
 	return derived.NextAction
 }
 
+// shellQuoteActionArg preserves simple display arguments and quotes everything
+// else for literal use in a POSIX shell, including untrusted review paths.
+func shellQuoteActionArg(value string) string {
+	if value != "" && strings.Trim(value, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./-") == "" {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
 func deriveNextAction(detail *PlanDetail, derived DerivedPlan) PlanNextAction {
 	id := strings.TrimSpace(detail.State.Plan.ID)
 	if id == "" {
@@ -286,6 +295,17 @@ func deriveNextAction(detail *PlanDetail, derived DerivedPlan) PlanNextAction {
 		}
 		return primary(PlanActionApprove, PlanActionClassProgress, cmd, reason)
 	}
+	if derived.Capabilities.NeedsScopeDecision {
+		sliceID := derived.Capabilities.ScopeDecisionSliceID
+		paths := derived.Capabilities.ScopeDecisionPaths
+		cmd := "tao edit amend " + shellQuoteActionArg(id) + " " + shellQuoteActionArg(sliceID) + " --reason-file FILE"
+		for _, path := range paths {
+			cmd += " --allow-file " + shellQuoteActionArg(path)
+		}
+		return primary(PlanActionAmendScope, PlanActionClassProgress, cmd,
+			"review finding requires files outside the plan's declared scope: "+strings.Join(paths, ", "),
+			PlanAction{Kind: PlanActionNone, Class: PlanActionClassRecovery, Command: "tao edit remove " + shellQuoteActionArg(id) + " " + shellQuoteActionArg(sliceID), Reason: "reject the finding's scope expansion"})
+	}
 	if derived.Capabilities.CanContinue && !derived.Capabilities.CanRun {
 		alternatives := []PlanAction{}
 		if slice := derived.CurrentSlice; slice != nil && slice.ExecutionStart != nil && slice.CommitIntent == nil && slice.Completion == nil {
@@ -358,6 +378,11 @@ func RunCapabilitiesFromLifecycle(lifecycle Lifecycle) RunCapabilities {
 	}
 	if lifecycle.RunnableError != nil {
 		capabilities.DisabledReason = lifecycle.RunnableError.Error()
+		if scopeErr, ok := errors.AsType[*ReworkScopeDecisionError](lifecycle.RunnableError); ok {
+			capabilities.NeedsScopeDecision = true
+			capabilities.ScopeDecisionSliceID = scopeErr.SliceID
+			capabilities.ScopeDecisionPaths = slices.Clone(scopeErr.Paths)
+		}
 		if approvalErr, ok := errors.AsType[*ApprovalRequiredError](lifecycle.RunnableError); ok {
 			capabilities.NeedsApproval = true
 			capabilities.ApprovalSliceID = approvalErr.SliceID
@@ -367,6 +392,13 @@ func RunCapabilitiesFromLifecycle(lifecycle Lifecycle) RunCapabilities {
 	capabilities.CanContinue = lifecycle.Continuable
 	if lifecycle.ContinueError != nil {
 		capabilities.ContinueDisabledReason = lifecycle.ContinueError.Error()
+		if !capabilities.NeedsScopeDecision {
+			if scopeErr, ok := errors.AsType[*ReworkScopeDecisionError](lifecycle.ContinueError); ok {
+				capabilities.NeedsScopeDecision = true
+				capabilities.ScopeDecisionSliceID = scopeErr.SliceID
+				capabilities.ScopeDecisionPaths = slices.Clone(scopeErr.Paths)
+			}
+		}
 		if !capabilities.NeedsApproval {
 			if approvalErr, ok := errors.AsType[*ApprovalRequiredError](lifecycle.ContinueError); ok {
 				capabilities.NeedsApproval = true

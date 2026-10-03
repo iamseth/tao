@@ -14,6 +14,46 @@ func fenced(payload string) string {
 	return "Review text.\n```tao-review-json\n" + payload + "\n```"
 }
 
+func TestRequiredFilesBounds(t *testing.T) {
+	for _, required := range []string{
+		``,
+		`,"required_files":[]`,
+		`,"required_files":["../escape","/absolute","*.go",""]`,
+		`,"required_files":[" ./src/a.go ","src\\a.go","../escape","/absolute","*.go", "` + strings.Repeat("界", 513) + `",` + strings.Repeat(`"b",`, 20) + `"c"]`,
+	} {
+		content := fenced(`{"verdict":"comment","summary":"review","findings":[{"message":"fix"` + required + `}]}`)
+		for name, findings := range map[string][]plan.ReviewFinding{
+			"review": Parse(content, CommitProposalOptional).Findings,
+			"legacy": ParseLegacyFindings(content),
+		} {
+			if len(findings) != 1 {
+				t.Fatalf("%s findings = %#v", name, findings)
+			}
+			got := findings[0].RequiredFiles
+			if !strings.Contains(required, "src") {
+				if got != nil {
+					t.Fatalf("%s required files = %#v, want nil", name, got)
+				}
+			} else if len(got) != 4 || got[0] != "src/a.go" || got[1] != strings.Repeat("界", 512) || got[2] != "b" || got[3] != "c" {
+				t.Fatalf("%s required files = %#v", name, got)
+			}
+		}
+	}
+	paths := make([]string, 20)
+	for i := range paths {
+		paths[i] = strings.Repeat("a", i+1)
+	}
+	payload, err := json.Marshal(map[string]any{"verdict": "comment", "summary": "review", "findings": []plan.ReviewFinding{{RequiredFiles: paths}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, got := range [][]plan.ReviewFinding{Parse(fenced(string(payload)), CommitProposalOptional).Findings, ParseLegacyFindings(fenced(string(payload)))} {
+		if len(got) != 1 || len(got[0].RequiredFiles) != 16 || got[0].RequiredFiles[15] != paths[15] {
+			t.Fatalf("cap not applied: %#v", got)
+		}
+	}
+}
+
 func TestParseMalformedOversizedAndMultipleBlocks(t *testing.T) {
 	valid := `{"verdict":"comment","summary":"structured","findings":[]}`
 	tests := []struct {

@@ -62,6 +62,18 @@ func projectSingleMergeResolutionEvent(resolution *SingleMergeResolution) *Singl
 		review.Findings = make([]ReviewFinding, limit)
 		for i := range limit {
 			review.Findings[i] = resolution.Review.Findings[i]
+			paths := resolution.Review.Findings[i].RequiredFiles
+			pathLimit := min(len(paths), maxSingleMergeFindingRequiredFiles)
+			review.Findings[i].RequiredFiles = append([]string(nil), paths[:pathLimit]...)
+			if pathLimit != len(paths) {
+				projection.DiagnosticsTruncated = true
+			}
+			for j, value := range review.Findings[i].RequiredFiles {
+				if utf8.RuneCountInString(value) > maxSingleMergeFindingFileRunes {
+					review.Findings[i].RequiredFiles[j] = string([]rune(value)[:maxSingleMergeFindingFileRunes])
+					projection.DiagnosticsTruncated = true
+				}
+			}
 			review.Findings[i].Message, truncated = boundSingleMergeEventText(review.Findings[i].Message, maxSingleMergeEventFindingTextBytes)
 			projection.DiagnosticsTruncated = projection.DiagnosticsTruncated || truncated
 			review.Findings[i].Suggestion, truncated = boundSingleMergeEventText(review.Findings[i].Suggestion, maxSingleMergeEventFindingTextBytes)
@@ -365,7 +377,7 @@ func runnableState(detail *PlanDetail, index detailIndex, complete bool, nextID 
 		state.Err = fmt.Errorf("plan %s has no pending slices", detail.State.Plan.ID)
 		return state
 	}
-	if err := executableSliceError(index, state.SliceID, state.Slice, false); err != nil {
+	if err := executableSliceError(detail, index, state.SliceID, state.Slice, false); err != nil {
 		state.Err = err
 		return state
 	}
@@ -393,7 +405,7 @@ func blockedContinueState(detail *PlanDetail, index detailIndex) lifecycleCheck 
 		state.Err = fmt.Errorf("plan %s is not blocked; continue is not meaningful", detail.State.Plan.ID)
 		return state
 	}
-	if err := executableSliceError(index, state.SliceID, state.Slice, true); err != nil {
+	if err := executableSliceError(detail, index, state.SliceID, state.Slice, true); err != nil {
 		state.Err = err
 		return state
 	}
@@ -424,7 +436,51 @@ func (e *ApprovalRequiredError) Error() string {
 	return fmt.Sprintf("slice %s requires approval: %s", e.SliceID, e.Reason)
 }
 
-func executableSliceError(index detailIndex, sliceID string, slice *Slice, allowBlocked bool) error {
+// ReworkScopeDecisionError requires an operator decision before expanded rework runs.
+type ReworkScopeDecisionError struct {
+	SliceID string
+	Paths   []string
+}
+
+func (e *ReworkScopeDecisionError) Error() string {
+	return fmt.Sprintf("slice %s requires a scope decision: review finding requires files outside the plan's declared scope: %s", e.SliceID, strings.Join(e.Paths, ", "))
+}
+
+func reworkScopeConflicts(detail *PlanDetail, slice *Slice) []string {
+	if ReworkRoundFromSliceID(slice.ID) == 0 {
+		return nil
+	}
+	if hasExpectedFilesAmendment(slice) {
+		return nil
+	}
+	var declared []string
+	for _, other := range detail.Slices.Slices {
+		// Reviewer-generated paths are not scope authority, even when their
+		// slice was skipped or completed. Only operator amendments admit them.
+		if other.ID != slice.ID && (ReworkRoundFromSliceID(other.ID) == 0 || hasExpectedFilesAmendment(&other)) {
+			declared = append(declared, other.ExpectedFiles...)
+		}
+	}
+	if len(declared) == 0 {
+		return nil
+	}
+	var conflicts []string
+	for _, path := range slice.ExpectedFiles {
+		if !slices.ContainsFunc(declared, func(expected string) bool { return PathsOverlap(path, expected) }) {
+			conflicts = append(conflicts, path)
+		}
+	}
+	slices.Sort(conflicts)
+	return conflicts
+}
+
+func hasExpectedFilesAmendment(slice *Slice) bool {
+	return slices.ContainsFunc(slice.Amendments, func(amendment SliceAmendment) bool {
+		return slices.Contains(amendment.Fields, "expected_files")
+	})
+}
+
+func executableSliceError(detail *PlanDetail, index detailIndex, sliceID string, slice *Slice, allowBlocked bool) error {
 	if slice == nil {
 		return fmt.Errorf("slice %s not found in slices.json", sliceID)
 	}
@@ -433,6 +489,9 @@ func executableSliceError(index detailIndex, sliceID string, slice *Slice, allow
 	}
 	if slice.Approval != nil && slice.Approval.Required && !slice.Approval.Approved {
 		return &ApprovalRequiredError{SliceID: slice.ID, Reason: slice.Approval.Reason}
+	}
+	if conflicts := reworkScopeConflicts(detail, slice); len(conflicts) > 0 {
+		return &ReworkScopeDecisionError{SliceID: slice.ID, Paths: conflicts}
 	}
 	if missing := missingDependencies(slice, index); len(missing) > 0 {
 		return fmt.Errorf("slice %s is blocked by incomplete dependencies: %s", slice.ID, strings.Join(missing, ", "))
@@ -1227,7 +1286,12 @@ func markSliceAmendedWithChanges(detail *PlanDetail, changes *artifactChangeSet,
 		fields = append(fields, "tasks")
 	}
 	expectedFiles, filesChanged := appendMissingStrings(slice.ExpectedFiles, normalized.AllowFiles)
-	if filesChanged {
+	// Generated rework already lists the review's required paths. Explicitly
+	// accepting a conflicting path changes operator authority, not the list.
+	acceptsScope := slices.ContainsFunc(reworkScopeConflicts(detail, slice), func(path string) bool {
+		return slices.Contains(normalized.AllowFiles, path)
+	})
+	if filesChanged || acceptsScope {
 		fields = append(fields, "expected_files")
 	}
 	manualChecks, checksChanged := appendMissingStrings(slice.Verification.ManualChecks, normalized.AddManualChecks)

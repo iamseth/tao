@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -450,7 +451,7 @@ func TestCreateReviewWithAgentSessionPersistsParsedReview(t *testing.T) {
 		t.Fatalf("unexpected review: %+v", review)
 	}
 	wantFinding := plan.ReviewFinding{Severity: "major", File: "internal/run/review.go", Line: 42, Message: "Fix this.", Suggestion: "Adjust the code."}
-	if len(review.Findings) != 1 || review.Findings[0] != wantFinding {
+	if len(review.Findings) != 1 || !reflect.DeepEqual(review.Findings[0], wantFinding) {
 		t.Fatalf("unexpected review findings: %+v", review.Findings)
 	}
 	if want := []string{"status", "rev-parse HEAD"}; fmt.Sprint(git.calls) != fmt.Sprint(want) {
@@ -494,7 +495,7 @@ func TestCreateReviewWithAgentSessionPersistsParsedReview(t *testing.T) {
 	if gotState.Plan.Review == nil || gotState.Plan.Review.Verdict != "changes_requested" || gotState.Plan.Review.FindingsCount != 1 || gotState.Plan.Review.Head != "head123" {
 		t.Fatalf("review metadata not persisted: %+v", gotState.Plan.Review)
 	}
-	if len(gotState.Plan.Review.Findings) != 1 || gotState.Plan.Review.Findings[0] != wantFinding {
+	if len(gotState.Plan.Review.Findings) != 1 || !reflect.DeepEqual(gotState.Plan.Review.Findings[0], wantFinding) {
 		t.Fatalf("review findings not persisted: %+v", gotState.Plan.Review.Findings)
 	}
 	if detail.State.Plan.Review == nil || detail.State.Plan.Review.Summary != "One finding should be fixed." {
@@ -511,7 +512,7 @@ func TestCreateReviewWithAgentSessionPersistsParsedReview(t *testing.T) {
 	if event.Type != plan.EventTypePlanReviewed || event.PlanID != "plan-a" || event.Agent != "pi" || event.Review == nil || event.Review.Summary != "One finding should be fixed." {
 		t.Fatalf("unexpected review event: %+v", event)
 	}
-	if len(event.Review.Findings) != 1 || event.Review.Findings[0] != wantFinding {
+	if len(event.Review.Findings) != 1 || !reflect.DeepEqual(event.Review.Findings[0], wantFinding) {
 		t.Fatalf("unexpected review event findings: %+v", event.Review.Findings)
 	}
 }
