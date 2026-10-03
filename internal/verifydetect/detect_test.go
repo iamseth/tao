@@ -44,6 +44,50 @@ func TestGoPackageDir(t *testing.T) {
 	}
 }
 
+func TestGoPackageDirDuplicateModules(t *testing.T) {
+	for _, tt := range []struct {
+		name, importPath, want string
+		modules                map[string]string
+		ok                     bool
+	}{
+		{
+			name: "fixture before root", importPath: "example.com/project/internal/x",
+			modules: map[string]string{"fixtures/go.mod": "example.com/project", "go.mod": "example.com/project"},
+		},
+		{
+			name: "fixture after root", importPath: "example.com/project",
+			modules: map[string]string{"go.mod": "example.com/project", "testdata/go.mod": "example.com/project"},
+		},
+		{
+			name: "duplicate most specific module", importPath: "example.com/project/sub/pkg",
+			modules: map[string]string{"go.mod": "example.com/project", "a/go.mod": "example.com/project/sub", "b/go.mod": "example.com/project/sub"},
+		},
+		{
+			name: "unique most specific after duplicates", importPath: "example.com/project/sub/pkg", want: "z/pkg", ok: true,
+			modules: map[string]string{"a/go.mod": "example.com/project", "b/go.mod": "example.com/project", "z/go.mod": "example.com/project/sub"},
+		},
+		{
+			name: "unique most specific before duplicates", importPath: "example.com/project/sub/pkg", want: "a/pkg", ok: true,
+			modules: map[string]string{"a/go.mod": "example.com/project/sub", "b/go.mod": "example.com/project", "z/go.mod": "example.com/project"},
+		},
+		{
+			name: "unrelated duplicates", importPath: "example.com/project/pkg", want: "pkg", ok: true,
+			modules: map[string]string{"go.mod": "example.com/project", "a/go.mod": "example.org/other", "b/go.mod": "example.org/other"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			files := fstest.MapFS{}
+			for name, module := range tt.modules {
+				files[name] = &fstest.MapFile{Data: []byte("module " + module + "\n")}
+			}
+			got, ok := (Detector{FS: files}).GoPackageDir(tt.importPath)
+			if got != tt.want || ok != tt.ok {
+				t.Fatalf("GoPackageDir(%q) = %q, %v; want %q, %v", tt.importPath, got, ok, tt.want, tt.ok)
+			}
+		})
+	}
+}
+
 func TestOpenRootUsesAccessibleDirectory(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/project\n"), 0o600); err != nil {

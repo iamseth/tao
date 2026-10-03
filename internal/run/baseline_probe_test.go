@@ -27,6 +27,7 @@ func TestBaselineProbe(t *testing.T) {
 	for _, tc := range []struct {
 		name, head, base string
 		ownership        string
+		duplicateModule  bool
 		baseErr          error
 		owned, baseline  bool
 		calls            int
@@ -44,6 +45,7 @@ func TestBaselineProbe(t *testing.T) {
 		{name: "deadline", head: output, base: output, baseErr: context.DeadlineExceeded, calls: 1},
 		{name: "no package or path", head: "--- FAIL: TestX (0.00s)\n"},
 		{name: "owned package", head: output, owned: true},
+		{name: "fixture module cannot hide owned package", head: output, owned: true, duplicateModule: true, base: output, baseErr: errors.New("exit 1")},
 		{name: "unmappable package", head: "FAIL\texample.org/foreign/pkg\n"},
 		{name: "cancelled", head: output, base: output, baseErr: context.Canceled, calls: 1},
 		{name: "outside diagnostic path", head: "internal/tui/base.go:2:3: broken\n", calls: 1},
@@ -51,7 +53,12 @@ func TestBaselineProbe(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := initSliceCompletionRepo(t)
-			for path, data := range map[string]string{"go.mod": "module github.com/iamseth/tao\n", "Makefile": "verify:\n\tfalse\n", "internal/tui/base.go": "package tui\n"} {
+			files := map[string]string{"go.mod": "module github.com/iamseth/tao\n", "Makefile": "verify:\n\tfalse\n", "internal/tui/base.go": "package tui\n"}
+			if tc.duplicateModule {
+				files["fixtures/go.mod"] = files["go.mod"]
+				files["fixtures/internal/tui/base.go"] = "package tui\n"
+			}
+			for path, data := range files {
 				full := filepath.Join(root, path)
 				if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
 					t.Fatal(err)

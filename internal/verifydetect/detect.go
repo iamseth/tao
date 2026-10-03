@@ -68,7 +68,8 @@ func (d Detector) GoModuleForPath(file string) (string, bool) {
 
 // GoPackageDir maps an import path to a repository-relative directory using the
 // most specific discovered module directive. It does not execute Go commands or
-// assert that the package directory exists.
+// assert that the package directory exists. Duplicate locations for the most
+// specific matching module are ambiguous and cannot be mapped.
 func (d Detector) GoPackageDir(importPath string) (string, bool) {
 	if !fs.ValidPath(importPath) || strings.ContainsAny(importPath, "\\\\ \t\r\n") {
 		return "", false
@@ -78,6 +79,7 @@ func (d Detector) GoPackageDir(importPath string) (string, bool) {
 		fileSystem = os.DirFS(".")
 	}
 	bestModule, result := "", ""
+	ambiguous := false
 	err := fs.WalkDir(fileSystem, ".", func(name string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -96,18 +98,23 @@ func (d Detector) GoPackageDir(importPath string) (string, bool) {
 			return err
 		}
 		module := goModulePath(string(content))
-		if module == "" || len(module) <= len(bestModule) {
+		if module == "" || len(module) < len(bestModule) {
 			return nil
 		}
 		if importPath != module && !strings.HasPrefix(importPath, module+"/") {
 			return nil
 		}
+		if module == bestModule {
+			ambiguous = true
+			return nil
+		}
 		bestModule = module
+		ambiguous = false
 		suffix := strings.TrimPrefix(strings.TrimPrefix(importPath, module), "/")
 		result = path.Join(path.Dir(name), suffix)
 		return nil
 	})
-	if err != nil || bestModule == "" {
+	if err != nil || bestModule == "" || ambiguous {
 		return "", false
 	}
 	return result, true
