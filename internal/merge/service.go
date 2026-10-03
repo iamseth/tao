@@ -1240,7 +1240,7 @@ func (s Service) detectExternalMerge(ctx context.Context, git GitClient, detail 
 					if !complete || head != planBranchTip {
 						continue
 					}
-					if review := plan.PersistedReview(detail); review != nil && strings.TrimSpace(review.Head) != "" && strings.TrimSpace(review.Head) != planBranchTip {
+					if review := plan.PersistedReview(detail); review == nil || strings.TrimSpace(review.Head) != planBranchTip {
 						continue
 					}
 					mergedDefaultSHA, err := captureMergedDefaultSHA(ctx, git, defaultBranch)

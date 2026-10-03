@@ -555,6 +555,8 @@ func TestMergeNoChangesCompletionRefusals(t *testing.T) {
 		{"missing", func(d *plan.PlanDetail, _ *fakeGitClient) { d.Slices.Slices[1].Completion = nil }},
 		{"different tip", func(d *plan.PlanDetail, _ *fakeGitClient) { d.Slices.Slices[1].Completion.CommitSHA = "other" }},
 		{"different review", func(d *plan.PlanDetail, _ *fakeGitClient) { d.State.Plan.Review.Head = "other" }},
+		{"empty review head", func(d *plan.PlanDetail, _ *fakeGitClient) { d.State.Plan.Review.Head = "" }},
+		{"whitespace review head", func(d *plan.PlanDetail, _ *fakeGitClient) { d.State.Plan.Review.Head = " \t\n" }},
 		{"deleted branch snapshot", func(_ *plan.PlanDetail, g *fakeGitClient) {
 			delete(g.revParse, "tao/plan-a")
 			delete(g.ancestors, "tao/plan-a..main")
