@@ -1244,6 +1244,13 @@ ancestry cannot distinguish their changes from unrelated work. For those plans o
 squashes/cherry-picks whose ancestry cannot prove integration, manually verify the
 intended changes landed before using `tao merge --record-only --force <plan>`.
 Cleanup retries for such non-ancestral branches also require `--force`.
+A plan whose every slice completed with `no_changes` at the live branch tip and
+whose tip remains ancestral to default can close without a commit or `--force`,
+with an approved review at that head. Through either `tao merge <plan>` or
+`tao merge --record-only <plan>`, Tao records `plan_merged` at the current default
+head and attempts safe cleanup. A squash producing no changes on a branch with
+commits is reported as nothing to integrate, not a conflict, and still requires
+manual verification plus `--record-only --force`.
 Rerunning an already-recorded merge retries cleanup; nothing left to clean is success.
 
 **Restarting a stale single-plan intent:** when `tao show` or a merge refusal

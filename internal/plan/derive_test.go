@@ -873,6 +873,53 @@ func TestApprovalRequiredErrorCarriesTypedFields(t *testing.T) {
 	}
 }
 
+func TestNoChangesCompletionHead(t *testing.T) {
+	fresh := func() *PlanDetail {
+		return &PlanDetail{Slices: SlicesFile{Slices: []Slice{
+			{CommitIntent: &SliceCommitIntent{Policy: "slice"}, Completion: &SliceCompletionOutcome{Outcome: SliceCompletionNoChanges, CommitSHA: " head123 "}},
+			{CommitIntent: &SliceCommitIntent{Policy: "slice"}, Completion: &SliceCompletionOutcome{Outcome: SliceCompletionNoChanges, CommitSHA: "head123"}},
+		}}}
+	}
+	tests := []struct {
+		name   string
+		change func(*PlanDetail) *PlanDetail
+		want   bool
+	}{
+		{name: "matching trimmed heads", want: true},
+		{name: "nil", change: func(d *PlanDetail) *PlanDetail { return nil }},
+		{name: "empty", change: func(d *PlanDetail) *PlanDetail { d.Slices.Slices = nil; return d }},
+		{name: "missing intent", change: func(d *PlanDetail) *PlanDetail { d.Slices.Slices[1].CommitIntent = nil; return d }},
+		{name: "none policy", change: func(d *PlanDetail) *PlanDetail { d.Slices.Slices[1].CommitIntent.Policy = "none"; return d }},
+		{name: "manual", change: func(d *PlanDetail) *PlanDetail {
+			d.Slices.Slices[1].Completion.Outcome = SliceCompletionManualUncommitted
+			return d
+		}},
+		{name: "committed", change: func(d *PlanDetail) *PlanDetail {
+			d.Slices.Slices[1].Completion.Outcome = SliceCompletionCommitted
+			return d
+		}},
+		{name: "missing completion", change: func(d *PlanDetail) *PlanDetail { d.Slices.Slices[1].Completion = nil; return d }},
+		{name: "empty head", change: func(d *PlanDetail) *PlanDetail { d.Slices.Slices[1].Completion.CommitSHA = " \t"; return d }},
+		{name: "different heads", change: func(d *PlanDetail) *PlanDetail { d.Slices.Slices[1].Completion.CommitSHA = "other"; return d }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			detail := fresh()
+			if tt.change != nil {
+				detail = tt.change(detail)
+			}
+			head, ok := NoChangesCompletionHead(detail)
+			wantHead := ""
+			if tt.want {
+				wantHead = "head123"
+			}
+			if ok != tt.want || head != wantHead {
+				t.Fatalf("got (%q, %t), want (%q, %t)", head, ok, wantHead, tt.want)
+			}
+		})
+	}
+}
+
 func TestSliceCompletionPending(t *testing.T) {
 	tests := []struct {
 		name       string

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -475,6 +476,107 @@ func TestMergeRecordOnlyForceRecordsWithoutAncestryProof(t *testing.T) {
 	event := events.requireSingle(t, plan.EventTypePlanMerged)
 	if event.MergedDefaultSHA != "squash456" || event.Branch != "tao/plan-a" {
 		t.Fatalf("expected forced record-only merge event, got %#v", event)
+	}
+}
+
+func noChangesMergeDetail(head string) *plan.PlanDetail {
+	detail := mergeVerifyDetail()
+	detail.State.Plan.Review.Head = head
+	detail.Slices.Slices = []plan.Slice{
+		{ID: "001", Status: plan.StatusCompleted, CommitIntent: &plan.SliceCommitIntent{Policy: "slice"}, Completion: &plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionNoChanges, CommitSHA: head}},
+		{ID: "002", Status: plan.StatusCompleted, CommitIntent: &plan.SliceCommitIntent{Policy: "slice"}, Completion: &plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionNoChanges, CommitSHA: head}},
+	}
+	return detail
+}
+
+func TestMergeNoChangesCompletion(t *testing.T) {
+	for _, recordOnly := range []bool{false, true} {
+		name := "merge"
+		if recordOnly {
+			name = "record-only"
+		}
+		t.Run(name, func(t *testing.T) {
+			reg := newFakeGitRegistry()
+			reg.seed(mergeVerifyRoot, &fakeGitClient{
+				defaultBranch: "main",
+				revParse:      map[string]string{"main": "newmain", "tao/plan-a": "base123"},
+				ancestors:     map[string]bool{"tao/plan-a..main": true, "base123..tao/plan-a": true, "tao/plan-a..base123": true},
+			})
+			git := reg.client(mergeVerifyRoot)
+			detail := noChangesMergeDetail("base123")
+			cleaner := successfulCleanup()
+			events := &fakeEventAppender{}
+			var logs []string
+			service := Service{Git: git, Cleaner: cleaner, Events: events, Logf: func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }}
+			if err := service.Merge(context.Background(), detail, Options{RecordOnly: recordOnly}); err != nil {
+				t.Fatal(err)
+			}
+			event := events.requireSingle(t, plan.EventTypePlanMerged)
+			if event.Branch != "tao/plan-a" || event.MergedDefaultSHA != "newmain" {
+				t.Fatalf("unexpected event: %#v", event)
+			}
+			if len(cleaner.cleaned) != 1 {
+				t.Fatalf("cleanup not invoked: %#v", cleaner.cleaned)
+			}
+			if !strings.Contains(strings.Join(logs, "\n"), "produced no changes") {
+				t.Fatalf("missing no-changes log: %v", logs)
+			}
+			if detail.State.Plan.MergeCommitIntent != nil {
+				t.Fatal("unexpected merge intent")
+			}
+			for _, state := range events.stateWrites {
+				if state.Plan.MergeCommitIntent != nil {
+					t.Fatal("persisted merge intent")
+				}
+			}
+			if events.count(plan.EventTypeMergeVerification) != 0 {
+				t.Fatal("unexpected merge verification")
+			}
+			for _, call := range git.calls {
+				if strings.HasPrefix(call, "merge-squash ") || strings.HasPrefix(call, "commit") {
+					t.Fatalf("unexpected integration: %v", git.calls)
+				}
+			}
+		})
+	}
+}
+
+func TestMergeNoChangesCompletionRefusals(t *testing.T) {
+	tests := []struct {
+		name   string
+		change func(*plan.PlanDetail, *fakeGitClient)
+	}{
+		{"committed", func(d *plan.PlanDetail, _ *fakeGitClient) {
+			d.Slices.Slices[1].Completion.Outcome = plan.SliceCompletionCommitted
+		}},
+		{"manual", func(d *plan.PlanDetail, _ *fakeGitClient) {
+			d.Slices.Slices[1].Completion.Outcome = plan.SliceCompletionManualUncommitted
+		}},
+		{"missing", func(d *plan.PlanDetail, _ *fakeGitClient) { d.Slices.Slices[1].Completion = nil }},
+		{"different tip", func(d *plan.PlanDetail, _ *fakeGitClient) { d.Slices.Slices[1].Completion.CommitSHA = "other" }},
+		{"different review", func(d *plan.PlanDetail, _ *fakeGitClient) { d.State.Plan.Review.Head = "other" }},
+		{"deleted branch snapshot", func(_ *plan.PlanDetail, g *fakeGitClient) {
+			delete(g.revParse, "tao/plan-a")
+			delete(g.ancestors, "tao/plan-a..main")
+			g.ancestors["base123..main"] = true
+			g.ancestors["base123..base123"] = true
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			detail := noChangesMergeDetail("base123")
+			git := &fakeGitClient{defaultBranch: "main", revParse: map[string]string{"main": "newmain", "tao/plan-a": "base123", "base123": "base123"}, ancestors: map[string]bool{"tao/plan-a..main": true, "base123..tao/plan-a": true, "tao/plan-a..base123": true}}
+			tt.change(detail, git)
+			events := &fakeEventAppender{}
+			cleaner := successfulCleanup()
+			err := (Service{Git: git, Cleaner: cleaner, Events: events}).Merge(context.Background(), detail, Options{RecordOnly: true})
+			if err == nil || !strings.Contains(err.Error(), "not already merged") {
+				t.Fatalf("expected record-only refusal, got %v", err)
+			}
+			if events.count(plan.EventTypePlanMerged) != 0 || len(cleaner.cleaned) != 0 {
+				t.Fatal("refusal recorded completion or cleaned up")
+			}
+		})
 	}
 }
 

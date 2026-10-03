@@ -136,7 +136,7 @@ Plan status values:
 
 There are two current completion paths:
 
-- The no-PR path records integration into the default branch and appends a current `plan_merged` event.
+- The no-PR path records integration into the default branch and appends a current `plan_merged` event. A plan whose slices all recorded `no_changes` at the live branch tip, with that tip ancestral to default and an approved review at that head, records `plan_merged` with the plan branch and the unchanged current default head without creating a commit.
 - The PR path requires a current review with status `completed` and verdict `approve`, plus recorded pull-request metadata whose head SHA exactly matches the review's same non-empty head. This is local workflow completion only: Tao does not query or assert the remote PR's merge, review, CI, open/closed, or draft state. Lifecycle readers apply this predicate too, so existing matching artifacts project `completed` without requiring a rewrite first.
 
 `tao abandon --reason TEXT PLAN` transitions any non-completed lifecycle state to `abandoned`. It trims and bounds the required reason, serializes through the ordinary per-plan run lock, reloads under that lock, and refuses unsettled automatic slice-completion, workspace-rebase, single-merge, or pull-request transactions. Repeating the command is idempotent: the first `plan_abandoned` event remains authoritative for reason and timestamp. Abandonment preserves slices, reviews, prior events, telemetry, Git and workspace evidence, branches, and worktrees; cleanup remains an explicit preview-first operation.

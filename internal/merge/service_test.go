@@ -2269,6 +2269,39 @@ func TestMergeRetainsDurableIntentWhenPlanMergedEventFails(t *testing.T) {
 	}
 }
 
+func TestMergeNoChangesCompletionRealGit(t *testing.T) {
+	t.Parallel()
+	fixture := newRealGitWorktree(t)
+	head := realGitOutput(t, fixture.repoRoot, "rev-parse", "main")
+	detail := noChangesMergeDetail(head)
+	detail.Dir = t.TempDir()
+	detail.State.Repo.Root = fixture.repoRoot
+	detail.State.Plan.Review.Base = head
+	service := NewService(fixture.repoRoot, nil)
+	service.Cleaner = newRealManagedCleaner(t, fixture)
+	events := &fakeEventAppender{}
+	service.Events = events
+	if err := service.Merge(context.Background(), detail, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	event := events.requireSingle(t, plan.EventTypePlanMerged)
+	if event.MergedDefaultSHA != head || event.Branch != fixture.planBranch {
+		t.Fatalf("unexpected completion: %#v", event)
+	}
+	if got := realGitOutput(t, fixture.repoRoot, "rev-parse", "main"); got != head {
+		t.Fatalf("default advanced: %s", got)
+	}
+	if detail.State.Plan.MergeCommitIntent != nil {
+		t.Fatal("unexpected merge intent")
+	}
+	for _, state := range events.stateWrites {
+		if state.Plan.MergeCommitIntent != nil {
+			t.Fatal("persisted merge intent")
+		}
+	}
+	assertRealCleanupRemoved(t, fixture)
+}
+
 func TestMergeDirtyInCleanupGapPreservesRecordedStateAndRetries(t *testing.T) {
 	t.Parallel()
 	fixture := newRealGitWorktree(t)

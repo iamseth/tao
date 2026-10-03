@@ -517,6 +517,12 @@ func TestMergeCommandRendersTypedFailures(t *testing.T) {
 			want: []string{"Merge refused: worktree is dirty (untracked files only)", "Status:", "?? tests/__pycache__/test_frontend.cpython-312.pyc", "every dirty entry is untracked", "deleted or added to .gitignore in the repository root", "tao merge plan-a", "pass --force only if you intentionally bypass the dirty-worktree gate"},
 		},
 		{
+			name: "nothing to integrate",
+			err:  &mergepkg.NoChangesToIntegrateError{PlanBranch: "tao/plan-a", DefaultBranch: "main", DefaultHead: "pre123", CleanupErrors: []error{errors.New("checkout warning")}},
+			is:   mergepkg.ErrNoChangesToIntegrate,
+			want: []string{"Nothing to integrate: squashing tao/plan-a onto main produced no changes", "main already contains this plan's content; Tao created no commit and restored main at pre123", "Rollback warnings:", "checkout warning", "tao merge --record-only --force plan-a", "this was not a merge conflict"},
+		},
+		{
 			name: "conflict",
 			err:  &mergepkg.MergeConflictError{Phase: "rebase", Files: []string{"internal/cli/merge.go", "README.md"}, Cause: errors.New("conflict")},
 			is:   mergepkg.ErrMergeConflict,
@@ -554,6 +560,9 @@ func TestMergeCommandRendersTypedFailures(t *testing.T) {
 				if !strings.Contains(out.String(), want) {
 					t.Fatalf("expected output to contain %q, got %q", want, out.String())
 				}
+			}
+			if errors.Is(tt.err, mergepkg.ErrNoChangesToIntegrate) && (strings.Contains(out.String(), "Merge conflict") || strings.Contains(out.String(), "resolve conflicts")) {
+				t.Fatalf("empty squash mislabeled: %q", out.String())
 			}
 		})
 	}
@@ -628,6 +637,27 @@ func TestRenderMergeAutomaticResolutionAndReviewFailuresAreActionable(t *testing
 				t.Fatalf("single-plan failure suggested batch workaround: %q", out.String())
 			}
 		})
+	}
+}
+
+func TestRenderMergeSuccessNoChanges(t *testing.T) {
+	detail := cliMergeDetail(t)
+	detail.Slices.Slices = []plan.Slice{{
+		CommitIntent: &plan.SliceCommitIntent{Policy: "slice"},
+		Completion:   &plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionNoChanges, CommitSHA: "source123"},
+	}}
+	detail.Events = []plan.Event{
+		{Type: plan.EventTypePlanMerged, MergedDefaultSHA: "old123"},
+		{Type: plan.EventTypePlanReopened},
+		{Type: plan.EventTypePlanMerged, MergedDefaultSHA: "earlier123"},
+		{Type: plan.EventTypePlanMerged, MergedDefaultSHA: "default456"},
+	}
+	var out bytes.Buffer
+	if err := renderMergeSuccess(&out, detail); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Merge completed: plan-a produced no changes; completion recorded at default456") || !strings.Contains(out.String(), "Cleanup completed:") || strings.Contains(out.String(), "merged into") {
+		t.Fatalf("no-changes success output = %q", out.String())
 	}
 }
 

@@ -153,9 +153,16 @@ func TestIntegrateSquashEmptyStagingRestoresDefaultWithoutCommit(t *testing.T) {
 	setSingleMergeIntent(t, detail, "source456", "pre123")
 
 	err := (Service{Git: git}).IntegrateSquash(context.Background(), detail)
-	var conflict *MergeConflictError
-	if !errors.Is(err, commitpkg.ErrNoStagedChanges) || !errors.As(err, &conflict) || conflict.Phase != "squash commit" {
-		t.Fatalf("expected empty-staging squash commit failure, got %v", err)
+	var empty *NoChangesToIntegrateError
+	if !errors.Is(err, ErrNoChangesToIntegrate) || !errors.Is(err, commitpkg.ErrNoStagedChanges) || errors.Is(err, ErrMergeConflict) || !errors.As(err, &empty) {
+		t.Fatalf("expected typed non-conflict empty squash, got %v", err)
+	}
+	if empty.PlanBranch != "tao/plan-a" || empty.DefaultBranch != "main" || empty.DefaultHead != "pre123" || len(empty.CleanupErrors) != 0 {
+		t.Fatalf("empty squash fields = %#v", empty)
+	}
+	wantSuffix := []string{"reset-hard pre123", "checkout main"}
+	if got := git.calls[len(git.calls)-len(wantSuffix):]; !reflect.DeepEqual(got, wantSuffix) {
+		t.Fatalf("rollback calls mismatch: %#v", git.calls)
 	}
 	for _, call := range git.calls {
 		if strings.HasPrefix(call, "commit ") {

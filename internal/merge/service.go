@@ -1039,6 +1039,7 @@ type externalMerge struct {
 	DefaultBranch    string
 	MergedDefaultSHA string
 	AncestryVerified bool
+	NoChanges        bool
 }
 
 func (s Service) tryRecordExternalMerge(ctx context.Context, git GitClient, detail *plan.PlanDetail, options Options) (bool, error) {
@@ -1066,9 +1067,12 @@ func (s Service) tryRecordExternalMerge(ctx context.Context, git GitClient, deta
 			return false, err
 		}
 	}
-	if merged.AncestryVerified {
+	switch {
+	case merged.NoChanges:
+		s.logf("Plan %s produced no changes; %s already contains its content at %s; recording completion.", detail.State.Plan.ID, merged.DefaultBranch, merged.MergedDefaultSHA)
+	case merged.AncestryVerified:
 		s.logf("Plan already merged into %s at %s via %s; recording completion.", merged.DefaultBranch, merged.MergedDefaultSHA, merged.Ref)
-	} else {
+	default:
 		s.logf("Recording external merge for %s at %s without ancestry proof (--force).", merged.DefaultBranch, merged.MergedDefaultSHA)
 	}
 	return true, s.recordMergeAndCleanup(ctx, detail, merged.Ref, merged.MergedDefaultSHA, options, "external merge recorded")
@@ -1227,6 +1231,24 @@ func (s Service) detectExternalMerge(ctx context.Context, git GitClient, detail 
 				return externalMerge{}, false, err
 			}
 			if !provesWork {
+				if ref == planBranch && planBranchTip != "" {
+					// tryRecordExternalMerge runs before CheckPreMergeGate, so this
+					// path relies on approval, clean worktrees, tip equality of every
+					// no_changes commit_sha, and the review-head match rather than
+					// the review-base/merge-base comparison.
+					head, complete := plan.NoChangesCompletionHead(detail)
+					if !complete || head != planBranchTip {
+						continue
+					}
+					if review := plan.PersistedReview(detail); review != nil && strings.TrimSpace(review.Head) != "" && strings.TrimSpace(review.Head) != planBranchTip {
+						continue
+					}
+					mergedDefaultSHA, err := captureMergedDefaultSHA(ctx, git, defaultBranch)
+					if err != nil {
+						return externalMerge{}, false, err
+					}
+					return externalMerge{Ref: planBranch, DefaultBranch: defaultBranch, MergedDefaultSHA: mergedDefaultSHA, AncestryVerified: true, NoChanges: true}, true, nil
+				}
 				continue
 			}
 			mergedDefaultSHA, err := captureMergedDefaultSHA(ctx, git, defaultBranch)

@@ -653,7 +653,20 @@ func renderMergeSuccess(out io.Writer, detail *plan.PlanDetail) error {
 			return err
 		}
 	}
-	if err := writef(out, "Merge completed: %s merged into %s\n", planID, defaultBranch); err != nil {
+	if _, ok := plan.NoChangesCompletionHead(detail); ok {
+		mergedHead := ""
+		for _, event := range detail.Events {
+			switch event.Type {
+			case plan.EventTypePlanMerged:
+				mergedHead = event.MergedDefaultSHA
+			case plan.EventTypePlanReopened:
+				mergedHead = ""
+			}
+		}
+		if err := writef(out, "Merge completed: %s produced no changes; completion recorded at %s\n", planID, emptyMergeField(mergedHead)); err != nil {
+			return err
+		}
+	} else if err := writef(out, "Merge completed: %s merged into %s\n", planID, defaultBranch); err != nil {
 		return err
 	}
 	if planBranch != "" {
@@ -694,6 +707,34 @@ func renderSingleMergeRestartResult(out io.Writer, result mergepkg.SingleMergeRe
 	return writef(out, "Next: %s.\n", strings.TrimSuffix(strings.TrimSpace(result.NextAction), "."))
 }
 
+func renderMergeNoChangesToIntegrate(out io.Writer, detail *plan.PlanDetail, planID string, err error) error {
+	empty := &mergepkg.NoChangesToIntegrateError{PlanBranch: mergePlanBranch(detail), DefaultBranch: mergeDefaultBranch(detail)}
+	var typed *mergepkg.NoChangesToIntegrateError
+	if errors.As(err, &typed) {
+		empty = typed
+	}
+	defaultBranch := emptyMergeField(empty.DefaultBranch)
+	if err := writef(out, "Nothing to integrate: squashing %s onto %s produced no changes\n", emptyMergeField(empty.PlanBranch), defaultBranch); err != nil {
+		return err
+	}
+	if err := writef(out, "%s already contains this plan's content; Tao created no commit and restored %s at %s\n", defaultBranch, defaultBranch, emptyMergeField(empty.DefaultHead)); err != nil {
+		return err
+	}
+	if len(empty.CleanupErrors) > 0 {
+		if err := writeln(out, "Rollback warnings:"); err != nil {
+			return err
+		}
+		for _, warning := range empty.CleanupErrors {
+			if warning != nil {
+				if err := writef(out, "- %v\n", warning); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return writef(out, "Next: verify the intended changes are present on %s, then run `tao merge --record-only --force %s`; this was not a merge conflict.\n", defaultBranch, emptyMergeField(planID))
+}
+
 func renderMergeFailure(out io.Writer, detail *plan.PlanDetail, err error) error {
 	planID := mergePlanID(detail)
 	switch {
@@ -713,6 +754,8 @@ func renderMergeFailure(out io.Writer, detail *plan.PlanDetail, err error) error
 		return renderMergeResolutionRejected(out, detail, planID, err)
 	case errors.Is(err, mergepkg.ErrSingleReviewNotApproved), errors.Is(err, mergepkg.ErrSingleReviewRejected):
 		return renderMergeIndependentReviewFailure(out, detail, err)
+	case errors.Is(err, mergepkg.ErrNoChangesToIntegrate):
+		return renderMergeNoChangesToIntegrate(out, detail, planID, err)
 	case errors.Is(err, mergepkg.ErrMergeConflict):
 		return renderMergeConflict(out, detail, planID, err)
 	case errors.Is(err, mergepkg.ErrVerifyFailed):

@@ -12,6 +12,32 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 )
 
+var ErrNoChangesToIntegrate = errors.New("nothing to integrate")
+
+type NoChangesToIntegrateError struct {
+	PlanBranch    string
+	DefaultBranch string
+	DefaultHead   string
+	Cause         error
+	CleanupErrors []error
+}
+
+func (e *NoChangesToIntegrateError) Error() string {
+	message := fmt.Sprintf("%s: squashing %s onto %s produced no changes", ErrNoChangesToIntegrate, e.PlanBranch, e.DefaultBranch)
+	for _, err := range e.CleanupErrors {
+		if err != nil {
+			message += "; cleanup failed: " + err.Error()
+		}
+	}
+	return message
+}
+
+func (e *NoChangesToIntegrateError) Unwrap() error { return e.Cause }
+
+func (e *NoChangesToIntegrateError) Is(target error) bool {
+	return target == ErrNoChangesToIntegrate
+}
+
 type MergeConflictError struct {
 	Phase         string
 	Files         []string
@@ -144,6 +170,10 @@ func (s Service) integrateSquash(ctx context.Context, detail *plan.PlanDetail, p
 		}
 		failure.phase = "squash commit"
 		failure.cause = err
+		if errors.Is(err, commitpkg.ErrNoStagedChanges) {
+			cleanupErrs := rollbackIntegrationFailure(ctx, git, git, failure)
+			return &NoChangesToIntegrateError{PlanBranch: planBranch, DefaultBranch: intent.DefaultBranch, DefaultHead: intent.DefaultParent, Cause: err, CleanupErrors: cleanupErrs}
+		}
 		return recoverIntegrationFailure(ctx, git, git, failure)
 	}
 	return nil
@@ -298,8 +328,13 @@ type integrationFailure struct {
 }
 
 func recoverIntegrationFailure(ctx context.Context, conflictGit GitClient, restoreGit GitClient, failure integrationFailure) error {
-	cleanupErrs := make([]error, 0)
 	files := collectConflictFiles(ctx, conflictGit)
+	cleanupErrs := rollbackIntegrationFailure(ctx, conflictGit, restoreGit, failure)
+	return &MergeConflictError{Phase: failure.phase, Files: files, Cause: failure.cause, CleanupErrors: cleanupErrs}
+}
+
+func rollbackIntegrationFailure(ctx context.Context, conflictGit GitClient, restoreGit GitClient, failure integrationFailure) []error {
+	cleanupErrs := make([]error, 0)
 	if failure.rebasing {
 		if err := conflictGit.RebaseAbort(ctx); err != nil {
 			cleanupErrs = append(cleanupErrs, fmt.Errorf("abort rebase: %w", err))
@@ -321,7 +356,7 @@ func recoverIntegrationFailure(ctx context.Context, conflictGit GitClient, resto
 	} else if err := restoreGit.Checkout(ctx, failure.defaultBranch); err != nil {
 		cleanupErrs = append(cleanupErrs, fmt.Errorf("re-checkout default branch %s: %w", failure.defaultBranch, err))
 	}
-	return &MergeConflictError{Phase: failure.phase, Files: files, Cause: failure.cause, CleanupErrors: cleanupErrs}
+	return cleanupErrs
 }
 
 // collectConflictFiles returns only the paths left unmerged by the failed

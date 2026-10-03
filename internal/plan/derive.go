@@ -724,6 +724,26 @@ func ProjectAbandonment(events []Event) *AbandonmentEvidence {
 	return nil
 }
 
+// NoChangesCompletionHead returns the shared head only when every slice has
+// Tao-owned no-changes completion evidence under the automatic slice policy.
+func NoChangesCompletionHead(detail *PlanDetail) (string, bool) {
+	if detail == nil || len(detail.Slices.Slices) == 0 {
+		return "", false
+	}
+	head := ""
+	for _, slice := range detail.Slices.Slices {
+		if slice.CommitIntent == nil || slice.CommitIntent.Policy != "slice" || slice.Completion == nil || slice.Completion.Outcome != SliceCompletionNoChanges {
+			return "", false
+		}
+		sha := strings.TrimSpace(slice.Completion.CommitSHA)
+		if sha == "" || (head != "" && sha != head) {
+			return "", false
+		}
+		head = sha
+	}
+	return head, true
+}
+
 // PlanIsMerged reports whether the plan is currently in its terminal merged
 // state: a plan_merged event exists and no later plan_reopened event supersedes
 // it. A plan reopened for rework after a merge is not merged again until it is
