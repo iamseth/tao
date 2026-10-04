@@ -145,6 +145,26 @@ func TestControlCheckoutChangeEvidence(t *testing.T) {
 	}
 }
 
+func TestChangedLeakPathsRetainsPersistentDirtyPaths(t *testing.T) {
+	for _, disappearance := range []bool{false, true} {
+		before := gitops.DirtyFingerprint{Paths: []string{"owned.go"}}
+		after := gitops.DirtyFingerprint{Paths: []string{"owned.go"}}
+		kind := "appeared"
+		if disappearance {
+			before.Paths = append(before.Paths, "unrelated.txt")
+			before.Untracked = []string{"unrelated.txt"}
+			kind = "disappeared"
+		} else {
+			after.Paths = append(after.Paths, "unrelated.txt")
+			after.Untracked = []string{"unrelated.txt"}
+		}
+		want := []ControlCheckoutPathChange{{"owned.go", true, "modified"}, {"unrelated.txt", false, kind}}
+		if got := changedLeakPaths(before, after); !reflect.DeepEqual(got, want) {
+			t.Fatalf("changes = %+v, want %+v", got, want)
+		}
+	}
+}
+
 func TestControlCheckoutLeakMessage(t *testing.T) {
 	legacy := ControlCheckoutLeakError{ControlRoot: "/control", Paths: []string{"a"}}
 	if !strings.Contains(legacy.Error(), "a (tracked, modified)") {

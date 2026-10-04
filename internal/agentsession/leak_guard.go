@@ -160,18 +160,17 @@ func changedLeakPaths(before, after gitops.DirtyFingerprint) []ControlCheckoutPa
 	afterUntracked := pathSet(after.Untracked)
 	var paths []ControlCheckoutPathChange
 	for path := range afterSet {
-		if !beforeSet[path] {
-			paths = append(paths, ControlCheckoutPathChange{path, !afterUntracked[path], "appeared"})
+		kind := "appeared"
+		if beforeSet[path] {
+			// The aggregate fingerprint cannot exclude changes to persistent
+			// dirty paths, even when other paths appear or disappear.
+			kind = "modified"
 		}
+		paths = append(paths, ControlCheckoutPathChange{path, !afterUntracked[path], kind})
 	}
 	for path := range beforeSet {
 		if !afterSet[path] {
 			paths = append(paths, ControlCheckoutPathChange{path, !beforeUntracked[path], "disappeared"})
-		}
-	}
-	if len(paths) == 0 {
-		for path := range afterSet {
-			paths = append(paths, ControlCheckoutPathChange{path, !afterUntracked[path], "modified"})
 		}
 	}
 	sort.Slice(paths, func(i, j int) bool { return paths[i].Path < paths[j].Path })

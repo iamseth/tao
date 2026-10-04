@@ -64,6 +64,9 @@ type Session struct {
 	// Grace is disabled when nil, Max is zero, or Active is nil. Grace never
 	// extends agent turns.
 	Grace *SessionGrace
+	// turnCutoff is decorator-owned. Built-in adapters suspend only the
+	// provider process, leaving already-running completion children alive.
+	turnCutoff <-chan struct{}
 	// WarningMessages is transient, decorator-owned delivery. Providers may
 	// ignore it; notices never extend the deadline or authorize completion.
 	WarningMessages <-chan string

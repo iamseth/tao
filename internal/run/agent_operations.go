@@ -15,6 +15,7 @@ import (
 	"github.com/iamseth/tao/internal/agentsession"
 	"github.com/iamseth/tao/internal/agenttelemetry"
 	"github.com/iamseth/tao/internal/commandrunner"
+	"github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/promptcapture"
@@ -289,6 +290,7 @@ func controlCheckoutAttribution(request AgentSessionRequest, base string) func(c
 		if err != nil {
 			return true
 		}
+		var expected []string
 		if request.Metrics != nil && request.Metrics.SliceID != "" {
 			detail, err := plan.NewFileRepository(filepath.Dir(request.PlanDir)).GetPlan(ctx, filepath.Base(request.PlanDir))
 			if err != nil {
@@ -297,7 +299,7 @@ func controlCheckoutAttribution(request AgentSessionRequest, base string) func(c
 			found := false
 			for _, slice := range detail.Slices.Slices {
 				if slice.ID == request.Metrics.SliceID {
-					paths = append(paths, slice.ExpectedFiles...)
+					expected = slice.ExpectedFiles
 					found = true
 					break
 				}
@@ -310,8 +312,21 @@ func controlCheckoutAttribution(request AgentSessionRequest, base string) func(c
 		for _, path := range paths {
 			owned[path] = true
 		}
+		expectedSet := commit.NewExpectedPaths(expected...)
+		isOwned := func(path string) bool {
+			// Git-derived paths stay literal, including names with glob syntax.
+			if owned[path] || expectedSet.Allows(path) {
+				return true
+			}
+			for _, declaration := range expected {
+				if !commit.HasPathGlobMeta(declaration) && plan.PathsOverlap(path, declaration) {
+					return true
+				}
+			}
+			return false
+		}
 		for _, path := range change.Paths {
-			if owned[path] {
+			if isOwned(path) {
 				return true
 			}
 		}
@@ -322,7 +337,7 @@ func controlCheckoutAttribution(request AgentSessionRequest, base string) func(c
 				return true
 			}
 			for _, path := range committedPaths {
-				if owned[path] {
+				if isOwned(path) {
 					return true
 				}
 			}

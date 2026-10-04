@@ -35,7 +35,7 @@ func (r piRuntime) RunSession(ctx context.Context, session Session) (SessionResu
 	if session.CollectMetrics {
 		mode = piagent.SessionInfoBestEffort
 	}
-	client := piagent.Client{ProcessStarter: r.starter, Log: providerLog(session)}
+	client := piagent.Client{ProcessStarter: process.LimitTurns(r.starter, session.turnCutoff), Log: providerLog(session)}
 	result, err := client.RunAgentSession(ctx, piagent.Request{
 		RepoRoot:             session.RepoRoot,
 		Prompt:               session.Prompt,
@@ -73,7 +73,7 @@ type claudeRuntime struct {
 }
 
 func (r claudeRuntime) RunSession(ctx context.Context, session Session) (SessionResult, error) {
-	client := claudeagent.Client{ProcessStarter: r.starter, Log: providerLog(session)}
+	client := claudeagent.Client{ProcessStarter: process.LimitTurns(r.starter, session.turnCutoff), Log: providerLog(session)}
 	result, err := client.RunAgentSession(ctx, claudeagent.Request{
 		RepoRoot:       session.RepoRoot,
 		Prompt:         session.Prompt,

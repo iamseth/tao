@@ -27,8 +27,20 @@ func TestAgentSessionControlCheckoutAttribution(t *testing.T) {
 		name                                                                               string
 		expected, owned, dirty, missingBase, invalidBase, missingSlice, headMoved, timeout bool
 		wantLeak                                                                           bool
+		declaration, changedPath, ownedPath                                                string
+		persistent, disappearance                                                          bool
 	}{
 		{name: "expected path", expected: true, wantLeak: true},
+		{name: "normalized expected", declaration: "./changed.txt", wantLeak: true},
+		{name: "expected directory", declaration: "internal/pkg/", changedPath: "internal/pkg/new.go", wantLeak: true},
+		{name: "expected directory committed", declaration: "internal/pkg/", changedPath: "internal/pkg/new.go", headMoved: true, wantLeak: true},
+		{name: "expected glob", declaration: "./internal/**/*.go", changedPath: "internal/pkg/new.go", wantLeak: true},
+		{name: "expected character glob", declaration: "internal/pkg/[ab]?.go", changedPath: "internal/pkg/a1.go", wantLeak: true},
+		{name: "directory boundary", declaration: "internal/pkg/", changedPath: "internal/pkg-other/new.go"},
+		{name: "glob boundary", declaration: "internal/*.go", changedPath: "internal/pkg/new.go"},
+		{name: "git path stays literal", owned: true, ownedPath: "*.txt"},
+		{name: "persistent owned with appearance", expected: true, persistent: true, wantLeak: true},
+		{name: "persistent owned with disappearance", expected: true, persistent: true, disappearance: true, wantLeak: true},
 		{name: "plan owned path", owned: true, wantLeak: true},
 		{name: "unrelated clean"},
 		{name: "unrelated timeout", timeout: true},
@@ -48,7 +60,14 @@ func TestAgentSessionControlCheckoutAttribution(t *testing.T) {
 				lifecycleGitRun(t, root, "config", "user.name", "Test")
 				lifecycleGitRun(t, root, "commit", "--allow-empty", "-m", "base")
 			}
+			changedPath := tc.changedPath
+			if changedPath == "" {
+				changedPath = "changed.txt"
+			}
 			write := func(root, name string) {
+				if err := os.MkdirAll(filepath.Dir(filepath.Join(root, name)), 0o700); err != nil {
+					t.Fatal(err)
+				}
 				if err := os.WriteFile(filepath.Join(root, name), []byte("changed"), 0o600); err != nil {
 					t.Fatal(err)
 				}
@@ -64,8 +83,23 @@ func TestAgentSessionControlCheckoutAttribution(t *testing.T) {
 			if tc.expected {
 				detail.Slices.Slices[0].ExpectedFiles = []string{"changed.txt"}
 			}
+			if tc.declaration != "" {
+				detail.Slices.Slices[0].ExpectedFiles = []string{tc.declaration}
+			}
+			if tc.persistent {
+				if err := os.WriteFile(filepath.Join(control, changedPath), []byte("before"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.disappearance {
+				write(control, "unrelated.txt")
+			}
 			if tc.owned {
-				write(execution, "changed.txt")
+				ownedPath := tc.ownedPath
+				if ownedPath == "" {
+					ownedPath = changedPath
+				}
+				write(execution, ownedPath)
 				lifecycleGitRun(t, execution, "add", ".")
 				lifecycleGitRun(t, execution, "commit", "-m", "owned")
 			}
@@ -86,7 +120,16 @@ func TestAgentSessionControlCheckoutAttribution(t *testing.T) {
 				logAppender: repository, eventAppender: repository, sessionLogWriter: &log,
 				descriptor: agent.Descriptor{Label: "test", NewRuntime: func(agent.RuntimeDeps) agent.Runtime {
 					return agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
-						write(control, "changed.txt")
+						write(control, changedPath)
+						if tc.persistent {
+							if tc.disappearance {
+								if err := os.Remove(filepath.Join(control, "unrelated.txt")); err != nil {
+									t.Fatal(err)
+								}
+							} else {
+								write(control, "unrelated.txt")
+							}
+						}
 						if tc.headMoved {
 							lifecycleGitRun(t, control, "add", ".")
 							lifecycleGitRun(t, control, "commit", "-m", "external")
@@ -143,7 +186,7 @@ func TestAgentSessionControlCheckoutAttribution(t *testing.T) {
 				if changed.HeadSHA != lifecycleGitOutput(t, control, "rev-parse", "HEAD") {
 					t.Fatalf("head=%q", changed.HeadSHA)
 				}
-			} else if !slices.Equal(changed.Paths, []string{"changed.txt"}) || changed.HeadSHA != "" {
+			} else if !slices.Equal(changed.Paths, []string{changedPath}) || changed.HeadSHA != "" {
 				t.Fatalf("event=%+v", changed)
 			}
 		})

@@ -42,6 +42,7 @@ type timeoutRuntime struct {
 func (r timeoutRuntime) RunSession(ctx context.Context, session Session) (SessionResult, error) {
 	start := time.Now()
 	session.WarningMessages = nil
+	session.turnCutoff = nil
 	timeoutCtx := ctx
 	if session.Timeout > 0 {
 		soft := start.Add(session.Timeout)
@@ -51,6 +52,13 @@ func (r timeoutRuntime) RunSession(ctx context.Context, session Session) (Sessio
 			hard = soft.Add(grace.Max)
 		} else {
 			grace = nil
+		}
+		// Providers stop executing at the soft deadline even while the
+		// independent managed-completion lifetime remains live.
+		var turnCutoff chan struct{}
+		if grace != nil {
+			turnCutoff = make(chan struct{})
+			session.turnCutoff = turnCutoff
 		}
 		deadlineCtx, cancelDeadline := context.WithDeadline(ctx, hard)
 		defer cancelDeadline()
@@ -78,6 +86,9 @@ func (r timeoutRuntime) RunSession(ctx context.Context, session Session) (Sessio
 			case <-probeCtx.Done():
 				return
 			case <-ticks:
+			}
+			if turnCutoff != nil {
+				close(turnCutoff)
 			}
 			for probeCtx.Err() == nil {
 				if grace == nil || !grace.Active() {
@@ -137,6 +148,11 @@ func (r timeoutRuntime) RunSession(ctx context.Context, session Session) (Sessio
 		defer func() { cancelWarning(); <-done }()
 	}
 	result, err := r.inner.RunSession(liveCtx, session)
+	select {
+	case <-session.turnCutoff:
+		return result, &SessionTimeoutError{Timeout: session.Timeout}
+	default:
+	}
 	if session.Timeout > 0 && errors.Is(context.Cause(timeoutCtx), context.DeadlineExceeded) {
 		return result, &SessionTimeoutError{Timeout: session.Timeout}
 	}
