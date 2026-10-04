@@ -140,7 +140,7 @@ An in-session `internal/run` test failure confirmed to result solely from inheri
 
 Keep test-first development and targeted diagnosis. Do not routinely run a duplicate full declared-gate sequence or manufacture a results file: call `tao slice-complete` below for authoritative verification. Tao executes every selected slice `verification.commands` entry in order before intent; `verification.steps` supplies cwd context only. Use `verification.source` to understand why gates were selected.
 
-Gates execute locally, not in a sandbox or with cryptographic attestation. Each command has a fixed ten-minute timeout within the unchanged remaining agent-session wall-clock budget; disabling the session timeout does not disable the command bound. Final repository verification is unchanged.
+Gates execute locally, not in a sandbox or with cryptographic attestation. Each command has a fixed ten-minute timeout. A live `tao slice-complete` started before the session deadline may continue for at most ten minutes per declared gate command past that deadline; this grants no extra agent turns or authority. Disabling the session timeout does not disable the command bound. Final repository verification is unchanged.
 
 If a declared verification command fails only in files listed under Plan-Owned Files in the run packet, treat the fix as in scope, make the minimal change, rerun the command, and continue; do not block for that reason.
 
@@ -173,6 +173,7 @@ Then call Tao to complete the slice:
 ```sh
 tao slice-complete --plan-dir "{{ .PlanDir }}" --slice-id "<selected slice id>" --notes-file "<notes file>"{{ if eq .CommitPolicy "slice" }} --commit-proposal-file "<commit proposal file>"{{ end }}
 ```
+Set the tool call's command timeout to at least ten minutes per declared gate command (or unlimited when the tool allows it) so the agent's own tool cap does not kill Tao-owned gates.
 {{ if eq .CommitPolicy "slice" -}}
 If Tao rejects proposal content before intent, repair the same temporary proposal file in this active implementation session and retry `tao slice-complete`. Do not start another agent or model session and do not use a deterministic fallback. A rejected attempt leaves all temporary inputs available for repair and must not authorize staging or a commit.
 {{ end }}

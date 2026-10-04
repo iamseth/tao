@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -371,5 +372,99 @@ func TestTimeoutRuntimeFastCallUnaffected(t *testing.T) {
 	}
 	if result != wantResult {
 		t.Fatalf("result = %#v, want %#v", result, wantResult)
+	}
+}
+
+func TestTimeoutRuntimeGrace(t *testing.T) {
+	for _, mode := range []string{"nil", "zero max", "nil probe", "inactive", "released", "hard bound", "fast", "disabled", "parent cancellation"} {
+		t.Run(mode, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				start := time.Now()
+				var active atomic.Bool
+				active.Store(mode != "inactive")
+				var probes atomic.Int32
+				grace := &SessionGrace{Max: 5 * time.Second, Active: func() bool { probes.Add(1); return active.Load() }}
+				timeout := 10 * time.Second
+				wantDeadline := 15 * time.Second
+				switch mode {
+				case "nil":
+					grace = nil
+					wantDeadline = timeout
+				case "zero max":
+					grace.Max = 0
+					wantDeadline = timeout
+				case "nil probe":
+					grace.Active = nil
+					wantDeadline = timeout
+				case "disabled":
+					timeout = 0
+				}
+				parent, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				runtime := timeoutRuntime{graceProbeInterval: time.Second, inner: fakeSlowRuntime{run: func(ctx context.Context, _ Session) (SessionResult, error) {
+					switch mode {
+					case "fast", "disabled":
+						return SessionResult{}, nil
+					case "parent cancellation":
+						cancel()
+					case "released":
+						time.Sleep(12 * time.Second)
+						synctest.Wait()
+						if ctx.Err() != nil {
+							t.Fatal("active grace cancelled early")
+						}
+						active.Store(false)
+					}
+					<-ctx.Done()
+					return SessionResult{Output: "partial"}, ctx.Err()
+				}}}
+				result, err := runtime.RunSession(parent, Session{Timeout: timeout, Grace: grace, BindLifetime: func(ctx context.Context) (context.Context, func() error, error) {
+					deadline, ok := ctx.Deadline()
+					if mode == "disabled" {
+						if ok {
+							t.Fatal("disabled timeout has deadline")
+						}
+					} else if !ok || !deadline.Equal(start.Add(wantDeadline)) {
+						t.Fatalf("deadline=%v want=%v", deadline, start.Add(wantDeadline))
+					}
+					return ctx, func() error { return nil }, nil
+				}})
+				switch mode {
+				case "fast", "disabled":
+					if err != nil {
+						t.Fatal(err)
+					}
+					time.Sleep(20 * time.Second)
+					synctest.Wait()
+					if probes.Load() != 0 {
+						t.Fatal("fast or disabled call probed grace")
+					}
+				case "parent cancellation":
+					if !errors.Is(err, context.Canceled) {
+						t.Fatalf("err=%v", err)
+					}
+				default:
+					var timeoutErr *SessionTimeoutError
+					if !errors.As(err, &timeoutErr) || timeoutErr.Timeout != timeout || !errors.Is(err, context.DeadlineExceeded) || result.Output != "partial" {
+						t.Fatalf("result=%+v err=%v", result, err)
+					}
+					elapsed := time.Since(start)
+					switch mode {
+					case "released":
+						if elapsed < 12*time.Second || elapsed > 13*time.Second {
+							t.Fatalf("elapsed=%v", elapsed)
+						}
+					case "hard bound":
+						if elapsed != 15*time.Second {
+							t.Fatalf("elapsed=%v", elapsed)
+						}
+					default:
+						if elapsed != timeout {
+							t.Fatalf("elapsed=%v", elapsed)
+						}
+					}
+				}
+			})
+		})
 	}
 }

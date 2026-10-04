@@ -146,6 +146,85 @@ func TestWrapUpPreservesCompletionDeadline(t *testing.T) {
 	}
 }
 
+func TestSliceCompletionLifetimeActive(t *testing.T) {
+	clearSliceCompletionOwnerEnv(t)
+	dir := t.TempDir()
+	if sliceCompletionActive(dir) {
+		t.Fatal("missing active file reported live")
+	}
+	direct, err := BindSliceCompletionLifetime(context.Background(), dir, "001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = direct.Close() }()
+	if sliceCompletionActive(dir) {
+		t.Fatal("unmanaged lifetime reported live")
+	}
+	if _, err := os.Stat(filepath.Join(dir, completionActiveName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unmanaged lifetime or probe created active file: %v", err)
+	}
+	_, closeOwner, err := startSliceCompletionLifetime(context.Background(), dir, "001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = closeOwner() }()
+	owner, err := readCompletionOwner(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(sliceCompletionOwnerEnv, owner.Token)
+	for range 2 {
+		first, err := BindSliceCompletionLifetime(context.Background(), dir, "001")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = first.Close() }()
+		if !sliceCompletionActive(dir) {
+			t.Fatal("bound lifetime not live")
+		}
+		second, err := BindSliceCompletionLifetime(context.Background(), dir, "001")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = second.Close() }()
+		if err := first.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if !sliceCompletionActive(dir) {
+			t.Fatal("closing first lifetime released second lock")
+		}
+		if err := second.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if sliceCompletionActive(dir) {
+			t.Fatal("closed lifetimes reported live")
+		}
+		if _, err := os.Stat(filepath.Join(dir, completionActiveName)); err != nil {
+			t.Fatalf("active inode removed: %v", err)
+		}
+	}
+}
+
+func TestSliceCompletionLifetimeActiveChildDeath(t *testing.T) {
+	clearSliceCompletionOwnerEnv(t)
+	dir := t.TempDir()
+	owner := startCompletionHelper(t, dir, "owner", "")
+	child := startCompletionHelper(t, dir, "active", owner.line(t))
+	if got := child.line(t); got != "bound" {
+		t.Fatal(got)
+	}
+	if !sliceCompletionActive(dir) {
+		t.Fatal("child not live")
+	}
+	if err := child.cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = child.cmd.Wait()
+	if sliceCompletionActive(dir) {
+		t.Fatal("killed child retained active lock")
+	}
+}
+
 func TestSliceCompletionLifetimeDirect(t *testing.T) {
 	clearSliceCompletionOwnerEnv(t)
 	guard, err := BindSliceCompletionLifetime(context.Background(), t.TempDir(), "001")
@@ -282,7 +361,15 @@ func TestCompletionLifetimeHelperProcess(t *testing.T) {
 				return
 			}
 		}
-	case "nested", "command-timeout":
+	case "active":
+		guard, err := BindSliceCompletionLifetime(context.Background(), dir, "001")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = guard.Close() }()
+		fmt.Println("bound")
+		_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+	case "nested", "command-timeout", "grace-command-timeout":
 		guard, err := BindSliceCompletionLifetime(context.Background(), dir, "001")
 		if err != nil {
 			t.Fatal(err)
@@ -293,7 +380,8 @@ func TestCompletionLifetimeHelperProcess(t *testing.T) {
 		command := `sh -c 'while :; do echo tick >> heartbeat; echo output; sleep 0.02; done' & wait`
 		request := SliceVerificationRequest{ExecutionRoot: dir, Verification: plan.Verification{Commands: []string{command}}}
 		var runs []plan.VerificationRun
-		if mode == "command-timeout" {
+		switch mode {
+		case "command-timeout":
 			if _, ok := guard.Context().Deadline(); ok {
 				t.Fatal("disabled session timeout acquired a deadline")
 			}
@@ -304,7 +392,14 @@ func TestCompletionLifetimeHelperProcess(t *testing.T) {
 			if !errors.Is(err, context.DeadlineExceeded) || guard.Check() != nil {
 				t.Fatalf("command cap lost or expired session: %v", err)
 			}
-		} else {
+		case "grace-command-timeout":
+			// Finish the command after the provider's soft timeout, releasing
+			// grace without waiting for the production ten-minute command cap.
+			runs, err = (SliceVerifier{}).verify(guard.Context(), request, 3*time.Second)
+			if !errors.Is(err, context.DeadlineExceeded) || guard.Check() != nil {
+				t.Fatalf("completion did not survive inside grace: %v", err)
+			}
+		default:
 			runs, err = (SliceVerifier{}).Verify(guard.Context(), request)
 			if guard.Check() == nil {
 				t.Fatal("orphan guard downgraded to standalone")
@@ -606,7 +701,11 @@ func completionFakeProvider(t *testing.T, dir, mode string) {
 		}
 		defer func() { _ = log.Close() }()
 		nested := exec.Command(os.Args[0], "-test.run=^TestCompletionLifetimeHelperProcess$") // #nosec G204,G702 -- current test executable.
-		nested.Env = append(os.Environ(), "TAO_TEST_COMPLETION_HELPER=nested")
+		nestedMode := "nested"
+		if outcome == "timeout" {
+			nestedMode = "grace-command-timeout"
+		}
+		nested.Env = append(os.Environ(), "TAO_TEST_COMPLETION_HELPER="+nestedMode)
 		nested.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		nested.Stdout, nested.Stderr = log, log
 		if err := nested.Start(); err != nil {

@@ -175,6 +175,13 @@ func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSe
 		controlRoot = state.Repo.Root
 		attribute = controlCheckoutAttribution(request, state.Repo.BaseCommit)
 	}
+	var grace *agent.SessionGrace
+	if implementation && r.sessionTimeout > 0 {
+		grace = &agent.SessionGrace{
+			Max:    sliceVerificationCommandTimeout * time.Duration(max(1, len(request.VerificationCommands))),
+			Active: func() bool { return sliceCompletionActive(request.PlanDir) },
+		}
+	}
 	var bindLifetime func(context.Context) (context.Context, func() error, error)
 	if implementation {
 		bindLifetime = func(sessionCtx context.Context) (context.Context, func() error, error) {
@@ -195,6 +202,7 @@ func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSe
 		Capture:                        &target,
 		BindLifetime:                   bindLifetime,
 		Warning:                        warning,
+		Grace:                          grace,
 		RepoRoot:                       request.RepoRoot, ControlRoot: controlRoot, Prompt: request.Prompt, Model: request.Model, Effort: request.Effort,
 		CollectMetrics: metricsRequested, NoProgressToolLimit: request.NoProgressToolLimit,
 		VerificationCommands: request.VerificationCommands, Log: log,

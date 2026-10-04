@@ -73,6 +73,7 @@ type Request struct {
 	Warning                        *agent.SessionWarning
 	// BindLifetime coordinates nested work using the actual provider deadline.
 	BindLifetime         func(context.Context) (context.Context, func() error, error)
+	Grace                *agent.SessionGrace
 	Model                string
 	Effort               string
 	RepoRoot             string
@@ -152,6 +153,7 @@ func (r Runner) Run(ctx context.Context, request Request) (Result, error) {
 			Timeout:              r.timeout,
 			Warning:              request.Warning,
 			BindLifetime:         request.BindLifetime,
+			Grace:                request.Grace,
 			Log:                  request.Log,
 			Progress:             progress,
 		})

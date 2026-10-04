@@ -28,6 +28,13 @@ const (
 	PermissionModeBypassPermissions PermissionMode = perm.PermissionModeBypassPermissions
 )
 
+// SessionGrace bounds how long a live Tao-owned completion may defer
+// cancellation past Timeout with Max. Active is a cheap liveness probe.
+type SessionGrace struct {
+	Max    time.Duration
+	Active func() bool
+}
+
 // SessionWarning requests one advisory notice at Percent (1–99) of the session
 // timeout. Nil, zero, and invalid policies do not schedule a notice.
 type SessionWarning struct {
@@ -54,6 +61,9 @@ type Session struct {
 	// means no timeout.
 	Timeout time.Duration
 	Warning *SessionWarning
+	// Grace is disabled when nil, Max is zero, or Active is nil. Grace never
+	// extends agent turns.
+	Grace *SessionGrace
 	// WarningMessages is transient, decorator-owned delivery. Providers may
 	// ignore it; notices never extend the deadline or authorize completion.
 	WarningMessages <-chan string

@@ -538,8 +538,9 @@ failures use `slice-blocked` with command/path evidence, not another repair sess
 After intent, preserve original inputs and recover without edits or rerunning gates.
 Tao owns the declared gates: no duplicate sequence or results file is required,
 and agent claims are advisory. Commands run locally, without sandboxing or attestation,
-with a ten-minute bound inside the remaining session budget even if session timeout
-is disabled. Tao reports failures and supported mechanical corrections; final
+with a fixed ten-minute bound even if session timeout is disabled.
+A managed `tao slice-complete` live at the session deadline gets at most ten minutes per declared gate command past it (minimum one-command allowance), without extending agent turns or granting authority; a slice completed in that window settles normally from durable state while `session_timeout` is still journaled best-effort.
+Tao reports failures and supported mechanical corrections; final
 repository verification is unchanged. See [observed verification](plan-format.md#observed-slice-verification).
 
 Tao-owned slice, final, and merge gates override inherited `GOLANGCI_LINT_CACHE`
@@ -734,8 +735,8 @@ authority, and approval still requires the validated exact-diff proposal.
 Approver identity prefers OS display name then login name; `TAO_APPROVED_BY` falls
 back ahead of `USER`/`USERNAME`, so status may not show the eventual approver.
 Run-path sessions default to a 20-minute wall-clock ceiling; `TAO_SESSION_TIMEOUT`
-accepts Go durations or `0` to disable it. Interactive planning is exempt; see
-[configuration](configuration.md) for runtime settings.
+accepts Go durations or `0` to disable it. Set the `tao slice-complete` tool call's command timeout to at least ten minutes per declared gate command (or unlimited when supported) so the tool cap does not cut short Tao-owned gates, including bounded completion grace for implementation/rework sessions; review, pull-request, and merge sessions get no grace.
+Interactive planning is exempt; see [configuration](configuration.md) for runtime settings.
 
 #### Session wrap-up and continuation
 

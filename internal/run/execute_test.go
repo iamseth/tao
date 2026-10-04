@@ -1,9 +1,13 @@
 package run
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +15,76 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 )
+
+func TestExecuteSessionTimeoutSettlesOnlyCompletedSlice(t *testing.T) {
+	for _, completed := range []bool{true, false} {
+		t.Run(map[bool]string{true: "completed", false: "incomplete"}[completed], func(t *testing.T) {
+			root := t.TempDir()
+			plansRoot := t.TempDir()
+			detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
+			detail.Dir = filepath.Join(plansRoot, "plan-a")
+			if err := os.MkdirAll(detail.Dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			detail.State.Repo.Root = root
+			detail.State.Workspace = &plan.Workspace{Strategy: plan.WorkspaceStrategyCurrent}
+			persistRunArtifacts(t, detail.Dir, detail)
+			repository := plan.NewFileRepository(plansRoot)
+			timeoutErr := &agent.SessionTimeoutError{Timeout: time.Minute}
+			calls := 0
+			var out bytes.Buffer
+			options := Options{
+				ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, MaxSlices: 1}},
+				RunDependencies: RunDependencies{
+					CommandRunner: runGitFake(&[]string{}, nil),
+					SliceExecutor: sliceExecutorFunc(func(ctx context.Context, run SliceRun) error {
+						calls++
+						if completed {
+							active, err := repository.GetPlan(ctx, "plan-a")
+							if err != nil {
+								return err
+							}
+							record, err := repository.PlanRecord(active)
+							if err != nil {
+								return err
+							}
+							if err := record.CompleteSlice(run.SliceID, "completed inside grace", nil, time.Now().UTC()); err != nil {
+								return err
+							}
+						}
+						return timeoutErr
+					}),
+				},
+			}
+			err := NewService(repository, &out, options).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: options.ResolvedRunOptions})
+			if completed {
+				if err != nil {
+					t.Fatalf("completed timeout: %v", err)
+				}
+				if !strings.Contains(out.String(), "Slice completed: 001-a") {
+					t.Fatalf("completed handoff missing: %s", &out)
+				}
+			} else if !errors.Is(err, timeoutErr) || !strings.Contains(err.Error(), "failed while running slice 001-a") {
+				t.Fatalf("error = %v, want provider timeout", err)
+			}
+			if calls != 1 {
+				t.Fatalf("handoffs = %d, want 1", calls)
+			}
+			reloaded, err := repository.GetPlan(context.Background(), "plan-a")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if plan.SliceCompleted(reloaded, "001-a") != completed {
+				t.Fatal("unexpected durable completion")
+			}
+			for _, event := range reloaded.Events {
+				if !completed && event.Type == plan.EventTypeSliceCompleted {
+					t.Fatal("unexpected completion event")
+				}
+			}
+		})
+	}
+}
 
 func TestExecuteRecordedReworkModel(t *testing.T) {
 	for _, selection := range []struct {

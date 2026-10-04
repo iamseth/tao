@@ -381,3 +381,19 @@ func TestRunnerPreservesPartialOutputWithSessionError(t *testing.T) {
 		t.Fatalf("result, error = %+v, %v", result, err)
 	}
 }
+
+func TestRunnerForwardsGracePolicy(t *testing.T) {
+	grace := &agent.SessionGrace{Max: time.Minute, Active: func() bool { return true }}
+	calls := 0
+	runner := New(Config{Timeout: time.Minute, Runtime: runtimeFunc(func(_ context.Context, session agent.Session) (agent.SessionResult, error) {
+		calls++
+		if session.Grace != grace {
+			t.Fatalf("grace=%+v", session.Grace)
+		}
+		return agent.SessionResult{Output: "done"}, nil
+	})})
+	result, err := runner.Run(context.Background(), Request{Grace: grace})
+	if err != nil || calls != 1 || result.Output != "done" {
+		t.Fatalf("result=%+v calls=%d err=%v", result, calls, err)
+	}
+}

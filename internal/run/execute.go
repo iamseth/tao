@@ -327,6 +327,15 @@ func (r SelectedSliceRunner) Run(ctx context.Context, detail *plan.PlanDetail, d
 		if budgetErr, ok := errors.AsType[*budgetExceededError](handoffErr); ok {
 			return nil, r.blockSliceForBudget(ctx, detail, slice.ID, logPath, handoffErr, budgetErr)
 		}
+		if errors.As(handoffErr, new(*agent.SessionTimeoutError)) {
+			reloaded, reloadErr := r.reload(ctx, detail)
+			if reloadErr != nil {
+				return nil, reloadErr
+			}
+			if plan.SliceCompleted(reloaded, slice.ID) {
+				return r.finishCompletedHandoff(ctx, reloaded, before, slice.ID, logPath, executionRoot)
+			}
+		}
 		if run.Resuming {
 			r.recordSliceResumeFailure(detail, slice.ID, run.ResumeAttempt, handoffErr)
 		}

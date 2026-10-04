@@ -639,7 +639,9 @@ func TestRunPathAgentSessionTimeoutIsClassified(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
-	err := executeDetailWithExecution(ctx, detail, nil, io.Discard, execution)
+	err := executeDetailWithExecution(ctx, detail, func(context.Context, *plan.PlanDetail) (*plan.PlanDetail, error) {
+		return detail, nil
+	}, io.Discard, execution)
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
@@ -1282,6 +1284,72 @@ func TestRunAgentSessionCapsExcludeAttributedNonExecutionHistory(t *testing.T) {
 	summary := plan.SummarizeAgentMetrics(plan.AgentMetricsEvents(readAgentMetricEvents(t, planDir)))
 	if summary.Totals.OutputTokens != 3040 {
 		t.Fatalf("plan totals changed: %+v", summary.Totals)
+	}
+}
+
+func TestImplementationCompletionGrace(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		role     plan.AgentRole
+		timeout  time.Duration
+		commands []string
+		want     time.Duration
+	}{
+		{"execution", plan.AgentRoleExecution, time.Hour, []string{"one", "two", "three"}, 30 * time.Minute},
+		{"rework", plan.AgentRoleRework, time.Hour, nil, 10 * time.Minute},
+		{"review", plan.AgentRoleReview, time.Hour, nil, 0},
+		{"pull request", plan.AgentRolePullRequest, time.Hour, nil, 0},
+		{"unbounded", plan.AgentRoleExecution, 0, nil, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			detail := runPathSessionDetail(t, root, plan.StatusPlanned, []string{"001-a"}, nil, plan.StatusPending)
+			calls := 0
+			runtime := agentRuntimeFunc(func(_ context.Context, session agent.Session) (agent.SessionResult, error) {
+				calls++
+				if tc.want == 0 {
+					if session.Grace != nil {
+						t.Fatal("unexpected grace")
+					}
+					return agent.SessionResult{}, nil
+				}
+				if session.Grace == nil || session.Grace.Max != tc.want || session.Grace.Active == nil {
+					t.Fatalf("grace = %+v, want %s", session.Grace, tc.want)
+				}
+				if session.Grace.Active() {
+					t.Fatal("active without managed completion")
+				}
+				owner, err := readCompletionOwner(detail.Dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv(sliceCompletionOwnerEnv, owner.Token)
+				guard, err := BindSliceCompletionLifetime(context.Background(), detail.Dir, "001-a")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() { _ = guard.Close() }()
+				if !session.Grace.Active() {
+					t.Fatal("managed completion is not active")
+				}
+				if err := guard.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if session.Grace.Active() {
+					t.Fatal("active after completion closed")
+				}
+				return agent.SessionResult{}, nil
+			})
+			runner := newAgentSessionRunner(agentSessionRunnerConfig{
+				runtimeEnv: runEnvSnapshot(nil), sessionTimeout: tc.timeout,
+				descriptor:  agent.Descriptor{Label: "fake", NewRuntime: func(agent.RuntimeDeps) agent.Runtime { return runtime }},
+				logAppender: plan.NewFileRepository(""),
+			})
+			_, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{PlanDir: detail.Dir, RepoRoot: root, VerificationCommands: tc.commands, Metrics: &AgentSessionMetricsRequest{Role: tc.role, SliceID: "001-a"}})
+			if err != nil || calls != 1 {
+				t.Fatalf("calls=%d err=%v", calls, err)
+			}
+		})
 	}
 }
 

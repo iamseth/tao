@@ -1,3 +1,6 @@
+// Completion lifetimes bind nested work to its driver. The active lock is
+// transient liveness coordination for session grace, never admission, lifecycle,
+// or recovery evidence.
 package run
 
 import (
@@ -23,6 +26,7 @@ import (
 // to commandrunner.SliceCompletionOwnerEnv, which strips it from spawned commands.
 const sliceCompletionOwnerEnv = "TAO_SLICE_COMPLETION_OWNER"
 const completionOwnerName = ".slice-completion-owner.json"
+const completionActiveName = ".slice-completion-active"
 const completionPollInterval = 25 * time.Millisecond
 
 // completionOwner is transient cancellation coordination, never admission,
@@ -39,10 +43,13 @@ type completionOwner struct {
 // Check must be called again immediately before mutation; Context cancels work
 // while it is running. Neither method grants ordinary durable admission.
 type SliceCompletionLifetime struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	dir    string
-	owner  *completionOwner
+	ctx       context.Context
+	cancel    context.CancelFunc
+	dir       string
+	owner     *completionOwner
+	active    *os.File
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func BindSliceCompletionLifetime(ctx context.Context, planDir, sliceID string) (*SliceCompletionLifetime, error) {
@@ -61,6 +68,17 @@ func BindSliceCompletionLifetime(ctx context.Context, planDir, sliceID string) (
 			cancel()
 			return nil, errors.New("slice completion managed invocation missing or replaced")
 		}
+		active, err := os.OpenFile(filepath.Join(dir, completionActiveName), os.O_RDWR|os.O_CREATE, 0o600) // #nosec G304,G703 -- private completion coordination inode.
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("open slice completion active lock: %w", err)
+		}
+		if err := syscall.Flock(int(active.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+			_ = active.Close()
+			cancel()
+			return nil, fmt.Errorf("lock slice completion active: %w", err)
+		}
+		g.active = active
 		g.owner = &owner
 		if !owner.Deadline.IsZero() {
 			deadlineCtx, deadlineCancel := context.WithDeadline(bound, owner.Deadline)
@@ -132,7 +150,35 @@ func (g *SliceCompletionLifetime) checkOwner() error {
 	return completionLeaseLive(g.dir, owner.Token)
 }
 
-func (g *SliceCompletionLifetime) Close() error { g.cancel(); return nil }
+func (g *SliceCompletionLifetime) Close() error {
+	g.closeOnce.Do(func() {
+		g.cancel()
+		if g.active != nil {
+			g.closeErr = errors.Join(syscall.Flock(int(g.active.Fd()), syscall.LOCK_UN), g.active.Close())
+		}
+	})
+	return g.closeErr
+}
+
+func sliceCompletionActive(planDir string) bool {
+	dir, err := completionDirectory(planDir)
+	if err != nil {
+		return false
+	}
+	file, err := os.OpenFile(filepath.Join(dir, completionActiveName), os.O_RDWR, 0) // #nosec G304,G703 -- private completion coordination inode; never create during probing.
+	if err != nil {
+		return false
+	}
+	defer func() { _ = file.Close() }()
+	err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+	if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+		return true
+	}
+	if err == nil {
+		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+	}
+	return false
+}
 
 func completionLeaseLive(dir, token string) error {
 	if !strings.HasPrefix(token, ".slice-session-") || filepath.Base(token) != token {
