@@ -75,7 +75,7 @@ func planFixEligible(row monitor.Row) (reason string, ok bool) {
 	if !actionableRow(row) {
 		return "Plan is not actionable.", false
 	}
-	if row.Liveness == monitor.LivenessLive || row.RunLockPresent {
+	if row.Liveness == monitor.LivenessLive || (row.RunLockPresent && row.RunLockProcessAlive) {
 		return "Plan has a live run; wait for it to exit.", false
 	}
 	if row.MergeInProgress {

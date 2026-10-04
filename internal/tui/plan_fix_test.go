@@ -18,7 +18,7 @@ type planFixFunc func(context.Context, monitor.Row) error
 func (f planFixFunc) Launch(ctx context.Context, row monitor.Row) error { return f(ctx, row) }
 
 func TestPlanFixGuardsAndFeedback(t *testing.T) {
-	for _, scenario := range []string{"blocked", "verification_failed", "attention", "detail", "shortcuts", "search", "confirm", "picker", "filter", "note", "slice", "changes", "settings", "empty", "wrong-key", "live", "locked", "merge", "not-stuck", "invalid", "unavailable", "failure"} {
+	for _, scenario := range []string{"blocked", "verification_failed", "attention", "detail", "shortcuts", "search", "confirm", "picker", "filter", "note", "slice", "changes", "settings", "empty", "wrong-key", "live", "locked", "crashed", "crashed-merge", "merge", "not-stuck", "invalid", "unavailable", "failure"} {
 		t.Run(scenario, func(t *testing.T) {
 			row := monitor.Row{PlanID: "plan", RepositoryRoot: "/repo", Status: plan.StatusBlocked}
 			state := loopState{page: PagePlans, size: term.Size{Width: 80, Height: 24}}
@@ -69,8 +69,20 @@ func TestPlanFixGuardsAndFeedback(t *testing.T) {
 				row.Liveness = monitor.LivenessLive
 				wantMessage = "Plan has a live run; wait for it to exit."
 			case "locked":
+				row.Liveness = monitor.LivenessStale
 				row.RunLockPresent = true
+				row.RunLockProcessAlive = true
 				wantMessage = "Plan has a live run; wait for it to exit."
+			case "crashed", "crashed-merge":
+				row.Status = plan.StatusInProgress
+				row.Liveness = monitor.LivenessStale
+				row.RunLockPresent = true
+				row.RunLockProcessAlive = false
+				row.AttentionReasons = []monitor.AttentionReason{monitor.AttentionRunCrashed}
+				if scenario == "crashed-merge" {
+					row.MergeInProgress = true
+					wantMessage = "Plan is in a merge batch."
+				}
 			case "merge":
 				row.MergeInProgress = true
 				wantMessage = "Plan is in a merge batch."
