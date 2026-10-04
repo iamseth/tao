@@ -50,8 +50,8 @@ A useful mental split:
   `/tao-groom-notes`, `/tao-steal`) are
   **read-only**. They never edit code or write Tao plan/note artifacts;
   `/tao-steal` only fetches and removes a temporary scouting snapshot.
-- **Build prompts** (`/tao-note`, `/tao-slice`, `/tao-run`, `/tao-commit`, `/tao-pr`) write
-  artifacts, code, or git state.
+- **Build prompts** (`/tao-note`, `/tao-slice`, `/tao-run`, `/tao-fix-plan`, `/tao-commit`,
+  `/tao-pr`) write artifacts, code, or git state.
 
 A PR workflow can reach Tao's local `completed` status once the approved review
 and durable PR metadata identify the same non-empty head. That is a completed
@@ -233,6 +233,8 @@ or History to open the selected plan's
 **Changes** detail tab, showing a live read-only delta against its review base.
 Use `w` to switch worktree/branch scope and `u` to force a refresh; missing
 worktrees fall back to branch scope.
+Press `x` on WIP or plan detail to launch `/tao-fix-plan` in the foreground for the
+selected stuck plan; live or merging plans are refused.
 **WIP** contains unfinished plans: **NOW** holds plans with immediate actions and
 **NEXT** holds planned work. Blocked, failed, and awaiting-review/merge plans stay
 in WIP. **History** contains completed and abandoned plans, newest activity first,
@@ -1091,6 +1093,22 @@ Direct `tao run` normally performs the Tao-review rework/run/review loop
 automatically. Use the standalone command when automatic rework is disabled or
 when you want to inspect the generated slices before running them; add `--run`
 to hand the reopened plan back to `tao run`.
+
+### `/tao-fix-plan <plan> [context]` — unstick a blocked or failed plan
+
+Use `/tao-fix-plan` when a plan is blocked, `verification_failed`, or
+`rework_stopped`, or when a run exits silently and you need to understand why.
+Supply the plan ID and optional context about what you observed.
+
+The agent diagnoses from `tao show` and durable evidence, then applies only
+sanctioned fixes, such as plan amendments or uncommitted workspace repairs.
+It never runs the plan, commits, rebases, merges, or pushes, and never edits plan
+artifacts directly. It asks before any Git reset, working-tree checkout reset,
+or stash. Diagnosis and edits do not authorize recovery or bypass gates.
+
+The session ends with one exact next command for you to run, not an automatic
+restart. Use the [recovery table above](#tao-run-and-tao-run--execute-slices)
+to choose recovery from the durable condition rather than the symptom.
 
 ### `/tao-commit` — conventional commit, optionally pushed
 

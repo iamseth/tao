@@ -26,6 +26,7 @@ const (
 	PromptSteal                       = "steal"
 	PromptPR                          = "pr"
 	PromptReview                      = "review"
+	PromptFixPlan                     = "fix-plan"
 )
 
 //go:embed run.md
@@ -75,6 +76,9 @@ var PRPromptTemplate string
 
 //go:embed review.md
 var ReviewPromptTemplate string
+
+//go:embed fix-plan.md
+var FixPlanPromptTemplate string
 
 //go:embed rework_triage.md
 var ReworkTriagePromptTemplate string
@@ -189,6 +193,7 @@ var agentCommandNames = map[string]string{
 	PromptSteal:                       "tao-steal",
 	PromptPR:                          "tao-pr",
 	PromptReview:                      "tao-review",
+	PromptFixPlan:                     "tao-fix-plan",
 }
 
 var promptRegistry = []promptDefinition{
@@ -208,6 +213,7 @@ var promptRegistry = []promptDefinition{
 	newTemplatedPrompt(PromptSteal, StealPromptTemplate),
 	newTemplatedPrompt(PromptPR, PRPromptTemplate),
 	newPrompt(PromptReview, ReviewPromptTemplate, renderReviewPrompt),
+	newTemplatedPrompt(PromptFixPlan, FixPlanPromptTemplate),
 }
 
 func newTemplatedPrompt(name string, template string) promptDefinition {

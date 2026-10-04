@@ -13,7 +13,28 @@ import (
 	"testing"
 )
 
-var unprefixedSlashCommand = regexp.MustCompile(`(^|[^[:alnum:]_-])/(plan|slice|note-slice|note|run|commit|grill-me|improve-codebase-architecture|improve-documentation|repo-health|steal|pr|review)([^[:alnum:]_-]|$)`)
+func TestFixPlanPromptContract(t *testing.T) {
+	text, err := Render("fix-plan", Data{Arguments: "my-plan"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"agent: build", "my-plan", "tao show", "tao edit amend", "tao run --continue", "tao run --reverify", "--repair-verification", "never run `tao run`", "ask the operator", "untrusted"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("fix-plan prompt missing %q", want)
+		}
+	}
+	never := strings.Index(text, "## Never do this")
+	diagnose := strings.Index(text, "## Diagnose first")
+	rebase := strings.Index(text, "git rebase")
+	if never < 0 || diagnose <= never || rebase <= never || rebase >= diagnose || strings.Contains(text[diagnose:], "git rebase") || strings.Contains(text, "git rebase main") {
+		t.Error("git rebase must appear only in the never-do list")
+	}
+	if len(strings.Split(text, "\n")) >= 220 {
+		t.Error("fix-plan prompt must stay under 220 lines")
+	}
+}
+
+var unprefixedSlashCommand = regexp.MustCompile(`(^|[^[:alnum:]_-])/(plan|slice|note-slice|note|run|commit|grill-me|improve-codebase-architecture|improve-documentation|repo-health|steal|pr|review|fix-plan)([^[:alnum:]_-]|$)`)
 
 func TestRunOperatorAmendmentGuidance(t *testing.T) {
 	data, err := os.ReadFile("run.md")
@@ -69,7 +90,7 @@ func TestSlicingVerificationCommandHygiene(t *testing.T) {
 }
 
 func TestInternalTemplateVersions(t *testing.T) {
-	wantNames := []string{PromptPlan, PromptSlice, PromptNoteSlice, PromptNote, PromptRun, PromptCommit, PromptGrillMe, PromptImproveCodebaseArchitecture, PromptImproveDocumentation, PromptRepoHealth, PromptCatchMeUp, PromptTaoInsightsReview, PromptGroomNotes, PromptSteal, PromptPR, PromptReview}
+	wantNames := []string{PromptPlan, PromptSlice, PromptNoteSlice, PromptNote, PromptRun, PromptCommit, PromptGrillMe, PromptImproveCodebaseArchitecture, PromptImproveDocumentation, PromptRepoHealth, PromptCatchMeUp, PromptTaoInsightsReview, PromptGroomNotes, PromptSteal, PromptPR, PromptReview, PromptFixPlan}
 	for name, source := range map[string]string{
 		"merge-resolve":       MergeResolvePromptTemplate,
 		"merge-review":        MergeReviewPromptTemplate,
@@ -1817,7 +1838,7 @@ func TestStealPromptContract(t *testing.T) {
 
 func TestPromptMetadata(t *testing.T) {
 	names := PromptNames()
-	wantNames := []string{PromptPlan, PromptSlice, PromptNoteSlice, PromptNote, PromptRun, PromptCommit, PromptGrillMe, PromptImproveCodebaseArchitecture, PromptImproveDocumentation, PromptRepoHealth, PromptCatchMeUp, PromptTaoInsightsReview, PromptGroomNotes, PromptSteal, PromptPR, PromptReview}
+	wantNames := []string{PromptPlan, PromptSlice, PromptNoteSlice, PromptNote, PromptRun, PromptCommit, PromptGrillMe, PromptImproveCodebaseArchitecture, PromptImproveDocumentation, PromptRepoHealth, PromptCatchMeUp, PromptTaoInsightsReview, PromptGroomNotes, PromptSteal, PromptPR, PromptReview, PromptFixPlan}
 	if !reflect.DeepEqual(names, wantNames) {
 		t.Fatalf("PromptNames() = %#v, want %#v", names, wantNames)
 	}
@@ -1825,7 +1846,7 @@ func TestPromptMetadata(t *testing.T) {
 	if len(definitions) != len(names) {
 		t.Fatalf("Definitions() length = %d, want %d", len(definitions), len(names))
 	}
-	wantCommands := []string{"tao-plan", "tao-slice", "tao-note-slice", "tao-note", "tao-run", "tao-commit", "tao-grill-me", "tao-improve-codebase-architecture", "tao-improve-documentation", "tao-repo-health", "tao-catch-me-up", "tao-insights-review", "tao-groom-notes", "tao-steal", "tao-pr", "tao-review"}
+	wantCommands := []string{"tao-plan", "tao-slice", "tao-note-slice", "tao-note", "tao-run", "tao-commit", "tao-grill-me", "tao-improve-codebase-architecture", "tao-improve-documentation", "tao-repo-health", "tao-catch-me-up", "tao-insights-review", "tao-groom-notes", "tao-steal", "tao-pr", "tao-review", "tao-fix-plan"}
 	for i, definition := range definitions {
 		if definition.Name != names[i] || definition.CommandName != wantCommands[i] || definition.Template == "" {
 			t.Fatalf("unexpected definition[%d]: %#v", i, definition)

@@ -99,6 +99,10 @@ tao doctor
 `tao doctor` provides diagnostic guidance rather than a guaranteed success
 check. Follow any actionable setup guidance.
 
+Build prompts (`/tao-note`, `/tao-slice`, `/tao-run`, `/tao-fix-plan`, `/tao-commit`,
+`/tao-pr`) write artifacts, code, or Git state; planning prompts are read-only.
+See the [usage guide](docs/usage-guide.md#choose-your-workflow) for the workflow split.
+
 ### Complete a first plan
 
 Change to the Git repository you want Tao to manage and register it:
@@ -181,7 +185,8 @@ commands also accept the short unambiguous prefixes shown by help.
 Open the terminal dashboard for **Notes**, **Plans** (including history),
 **Settings**, and **Debug**. It opens on Plans and supports common actions across
 registered repositories. Press `c` on Plans to open plan-detail **Changes**, a
-read-only view of the live review-base delta. Use `tao status` for diagnostics
+read-only view of the live review-base delta. Press `x` to open a stuck plan in a
+foreground fix agent. Use `tao status` for diagnostics
 and `tao config` for saved global/repository preferences:
 
 ```sh

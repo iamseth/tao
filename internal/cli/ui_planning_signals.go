@@ -6,6 +6,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/tui"
 )
@@ -88,6 +89,24 @@ func (s *uiPlanningSignals) setForeground(foreground bool) {
 		}
 	case <-s.done:
 	}
+}
+
+type scopedPlanFixLauncher struct {
+	signals  *uiPlanningSignals
+	launcher tui.PlanFixLauncher
+}
+
+func (l scopedPlanFixLauncher) Launch(ctx context.Context, row monitor.Row) error {
+	l.signals.setForeground(true)
+	defer l.signals.setForeground(false)
+	childCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := context.AfterFunc(l.signals.Context(), cancel)
+	defer stop()
+	if err := l.signals.Context().Err(); err != nil {
+		return err
+	}
+	return l.launcher.Launch(childCtx, row)
 }
 
 type scopedNotePlanningLauncher struct {

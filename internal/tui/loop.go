@@ -91,6 +91,7 @@ type App struct {
 	Notes                NoteSnapshotCollector
 	NoteEditor           NoteEditor
 	NotePlanningLauncher NotePlanningLauncher
+	PlanFixLauncher      PlanFixLauncher
 	NoteCreator          NoteCreator
 	NoteRepositories     NoteRepositoryLister
 	NoteActions          NoteActions
@@ -143,6 +144,7 @@ type loopState struct {
 	noteDetail       *note.CatalogNote
 	noteDetailOffset int
 	noteEditMessage  string
+	planFixFeedback  Actions
 	notePicker       *noteRepositoryPicker
 	now              func() time.Time
 	lastRootEscape   time.Time
@@ -257,6 +259,18 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 				continue
 			}
 			if handled, err := a.planSelectedNote(loopCtx, &state, result.key); err != nil {
+				return err
+			} else if handled {
+				if ctx.Err() != nil {
+					return nil
+				}
+				if err := a.writeFrame(state); err != nil {
+					return err
+				}
+				close(result.resume)
+				continue
+			}
+			if handled, err := a.fixSelectedPlan(loopCtx, &state, result.key); err != nil {
 				return err
 			} else if handled {
 				if ctx.Err() != nil {
@@ -592,6 +606,9 @@ func (a App) collectSettings(ctx context.Context) SettingsSnapshot {
 }
 
 func (a App) writeFrame(state loopState) error {
+	if a.Actions == nil {
+		a.Actions = &state.planFixFeedback
+	}
 	var frame bytes.Buffer
 	switch {
 	case state.notePicker != nil:

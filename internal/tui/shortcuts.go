@@ -60,6 +60,7 @@ func shortcutsForPage(page PageID) []shortcut {
 			shortcut{key: "a", action: "Approve selected slice"},
 			shortcut{key: "m", action: "Merge selected plan"},
 			shortcut{key: "M", action: "Merge all eligible plans"},
+			shortcut{key: "x", action: "Fix stuck plan in foreground agent"},
 		)
 	}
 	return append(common,
@@ -89,6 +90,7 @@ func planDetailShortcuts(tab detailTab) []shortcut {
 	}
 	return []shortcut{
 		{key: "r", action: "Run displayed plan"},
+		{key: "x", action: "Fix stuck plan in foreground agent"},
 		{key: "Tab / Shift+Tab", action: "Switch detail tabs"},
 		{key: "← / →", action: "Previous / next plan"},
 		{key: "↑ / ↓ / j / k / PgUp / PgDn", action: "Scroll/select line or page"},

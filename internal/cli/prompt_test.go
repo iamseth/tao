@@ -523,7 +523,7 @@ func TestInstallPromptsWritesAndChecksPiPrompts(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"install-prompts"}); err != nil {
 		t.Fatal(err)
 	}
-	promptNames := []string{"plan", "slice", "note-slice", "note", "run", "grill-me", "improve-codebase-architecture", "improve-documentation", "repo-health", "catch-me-up", "insights-review", "groom-notes", "steal", "pr"}
+	promptNames := []string{"plan", "slice", "note-slice", "note", "run", "grill-me", "improve-codebase-architecture", "improve-documentation", "repo-health", "catch-me-up", "insights-review", "groom-notes", "steal", "pr", "fix-plan"}
 	for _, name := range promptNames {
 		commandName := "tao-" + name
 		path := filepath.Join(root, commandName+".md")
@@ -788,7 +788,7 @@ func TestInstallPromptsAndDoctorUseSelectedPiAgent(t *testing.T) {
 	}
 
 	piRoot := filepath.Join(home, ".pi", "agent", "prompts")
-	for _, name := range []string{"plan", "slice", "note-slice", "note", "run", "grill-me", "improve-codebase-architecture", "improve-documentation", "repo-health", "catch-me-up", "insights-review", "groom-notes", "steal", "pr"} {
+	for _, name := range []string{"plan", "slice", "note-slice", "note", "run", "grill-me", "improve-codebase-architecture", "improve-documentation", "repo-health", "catch-me-up", "insights-review", "groom-notes", "steal", "pr", "fix-plan"} {
 		commandName := "tao-" + name
 		path := filepath.Join(piRoot, commandName+".md")
 		text := readText(t, path)
