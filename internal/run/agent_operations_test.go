@@ -22,6 +22,134 @@ import (
 	"github.com/iamseth/tao/prompts"
 )
 
+func TestAgentSessionControlCheckoutAttribution(t *testing.T) {
+	for _, tc := range []struct {
+		name                                                                               string
+		expected, owned, dirty, missingBase, invalidBase, missingSlice, headMoved, timeout bool
+		wantLeak                                                                           bool
+	}{
+		{name: "expected path", expected: true, wantLeak: true},
+		{name: "plan owned path", owned: true, wantLeak: true},
+		{name: "unrelated clean"},
+		{name: "unrelated timeout", timeout: true},
+		{name: "unrelated head move", headMoved: true},
+		{name: "expected path committed", expected: true, headMoved: true, wantLeak: true},
+		{name: "plan owned path committed", owned: true, headMoved: true, wantLeak: true},
+		{name: "dirty execution", dirty: true, wantLeak: true},
+		{name: "missing base", missingBase: true, wantLeak: true},
+		{name: "invalid base", invalidBase: true, wantLeak: true},
+		{name: "missing slice", missingSlice: true, wantLeak: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			control, execution := t.TempDir(), t.TempDir()
+			for _, root := range []string{control, execution} {
+				lifecycleGitRun(t, root, "init")
+				lifecycleGitRun(t, root, "config", "user.email", "test@example.com")
+				lifecycleGitRun(t, root, "config", "user.name", "Test")
+				lifecycleGitRun(t, root, "commit", "--allow-empty", "-m", "base")
+			}
+			write := func(root, name string) {
+				if err := os.WriteFile(filepath.Join(root, name), []byte("changed"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			detail := runPathSessionDetail(t, control, plan.StatusInProgress, []string{"001-a"}, nil, plan.StatusInProgress)
+			detail.State.Repo.BaseCommit = lifecycleGitOutput(t, execution, "rev-parse", "HEAD")
+			if tc.missingBase {
+				detail.State.Repo.BaseCommit = ""
+			}
+			if tc.invalidBase {
+				detail.State.Repo.BaseCommit = "missing-base"
+			}
+			if tc.expected {
+				detail.Slices.Slices[0].ExpectedFiles = []string{"changed.txt"}
+			}
+			if tc.owned {
+				write(execution, "changed.txt")
+				lifecycleGitRun(t, execution, "add", ".")
+				lifecycleGitRun(t, execution, "commit", "-m", "owned")
+			}
+			record, err := plan.NewPlanRecord(detail.Dir, detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := record.PersistArtifacts(); err != nil {
+				t.Fatal(err)
+			}
+			var sessionErr error
+			if tc.timeout {
+				sessionErr = &agent.SessionTimeoutError{Timeout: time.Second}
+			}
+			repository := plan.NewFileRepository(filepath.Dir(detail.Dir))
+			var log bytes.Buffer
+			runner := newAgentSessionRunner(agentSessionRunnerConfig{
+				logAppender: repository, eventAppender: repository, sessionLogWriter: &log,
+				descriptor: agent.Descriptor{Label: "test", NewRuntime: func(agent.RuntimeDeps) agent.Runtime {
+					return agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
+						write(control, "changed.txt")
+						if tc.headMoved {
+							lifecycleGitRun(t, control, "add", ".")
+							lifecycleGitRun(t, control, "commit", "-m", "external")
+						}
+						if tc.dirty {
+							write(execution, "other.txt")
+						}
+						return agent.SessionResult{Output: "output", FinalText: "final"}, sessionErr
+					})
+				}},
+			})
+			sliceID := "001-a"
+			if tc.missingSlice {
+				sliceID = "missing"
+			}
+			result, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{PlanDir: detail.Dir, RepoRoot: execution, Metrics: &AgentSessionMetricsRequest{SliceID: sliceID}})
+			var leak ControlCheckoutLeakError
+			if tc.wantLeak {
+				if !errors.As(err, &leak) {
+					t.Fatalf("error=%v, want leak", err)
+				}
+				if classifyRunAbort(err) != plan.RunAbortKindControlCheckoutLeak {
+					t.Fatalf("abort classification for %v", err)
+				}
+			} else if !errors.Is(err, sessionErr) {
+				t.Fatalf("error=%v, want %v", err, sessionErr)
+			}
+			if result.Output != "output" || result.FinalText != "final" {
+				t.Fatalf("result=%+v", result)
+			}
+			loaded, loadErr := repository.GetPlan(context.Background(), filepath.Base(detail.Dir))
+			if loadErr != nil {
+				t.Fatal(loadErr)
+			}
+			var changed *plan.Event
+			for i := range loaded.Events {
+				if loaded.Events[i].Type == "control_checkout_changed" {
+					changed = &loaded.Events[i]
+				}
+			}
+			if tc.wantLeak {
+				if changed != nil {
+					t.Fatalf("unexpected warning: %+v", changed)
+				}
+				return
+			}
+			if changed == nil {
+				t.Fatal("missing control_checkout_changed event")
+			}
+			if changed.PlanID != detail.State.Plan.ID || changed.SliceID != sliceID || changed.Agent != "test" || !strings.Contains(changed.Message, "possibly by another process") || !strings.Contains(log.String(), "tao leak-guard warning:") {
+				t.Fatalf("event=%+v log=%s", changed, log.String())
+			}
+			if tc.headMoved {
+				if changed.HeadSHA != lifecycleGitOutput(t, control, "rev-parse", "HEAD") {
+					t.Fatalf("head=%q", changed.HeadSHA)
+				}
+			} else if !slices.Equal(changed.Paths, []string{"changed.txt"}) || changed.HeadSHA != "" {
+				t.Fatalf("event=%+v", changed)
+			}
+		})
+	}
+}
+
 func TestAgentOperationModels(t *testing.T) {
 	const approval = "```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Approved.\",\"findings\":[]}\n```"
 	const correction = "```tao-review-proposal-json\n{\"commit_message\":{\"subject\":\"fix(review): preserve exact approval\",\"body\":\"What:\\nPreserve the exact approval.\\n\\nWhy:\\nAvoid unnecessary sessions.\"}}\n```"

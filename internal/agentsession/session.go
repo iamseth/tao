@@ -67,8 +67,10 @@ func New(config Config) Runner {
 // Request describes one provider call. ControlRoot enables leak detection when
 // it differs from RepoRoot.
 type Request struct {
-	Capture *promptcapture.Target
-	Warning *agent.SessionWarning
+	// Nil attribution fails closed; false preserves the provider outcome.
+	AttributeControlCheckoutChange func(context.Context, ControlCheckoutChange) bool
+	Capture                        *promptcapture.Target
+	Warning                        *agent.SessionWarning
 	// BindLifetime coordinates nested work using the actual provider deadline.
 	BindLifetime         func(context.Context) (context.Context, func() error, error)
 	Model                string
@@ -86,10 +88,11 @@ type Request struct {
 // Result is the neutral provider result plus descriptor-driven telemetry
 // classification. Domain adapters decide whether and where to persist it.
 type Result struct {
-	PromptHash           string
-	PromptTemplate       string
-	PromptPath           string
-	PromptCaptureWarning string
+	ControlCheckoutChange *ControlCheckoutChange
+	PromptHash            string
+	PromptTemplate        string
+	PromptPath            string
+	PromptCaptureWarning  string
 	// Invoked distinguishes a provider attempt from a pre-session guard failure.
 	Invoked               bool
 	Output                string
@@ -154,10 +157,21 @@ func (r Runner) Run(ctx context.Context, request Request) (Result, error) {
 		})
 	}
 
+	var change *ControlCheckoutChange
+	var attribute func(context.Context, ControlCheckoutChange) bool
+	if request.AttributeControlCheckoutChange != nil {
+		attribute = func(ctx context.Context, evidence ControlCheckoutChange) bool {
+			if request.AttributeControlCheckoutChange(ctx, evidence) {
+				return true
+			}
+			change = &evidence
+			return false
+		}
+	}
 	var raw agent.SessionResult
 	var err error
 	if request.ControlRoot != "" {
-		raw, err = guardControlCheckoutLeaks(ctx, r.commandRunner, request.ControlRoot, request.RepoRoot, run)
+		raw, err = guardControlCheckoutLeaks(ctx, r.commandRunner, request.ControlRoot, request.RepoRoot, run, attribute)
 	} else {
 		raw, err = run()
 	}
@@ -166,6 +180,7 @@ func (r Runner) Run(ctx context.Context, request Request) (Result, error) {
 		warningMessage = r.descriptor.MetricsWarningPrefix + raw.MetricsWarning
 	}
 	return Result{
+		ControlCheckoutChange: change,
 		PromptHash:            promptHash,
 		PromptTemplate:        promptTemplate,
 		PromptPath:            promptPath,

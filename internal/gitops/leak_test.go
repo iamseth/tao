@@ -2,6 +2,8 @@ package gitops
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"os"
 	"path/filepath"
@@ -22,11 +24,48 @@ func TestDirtyFingerprintCombinesStatusDiffAndPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fingerprint.Hash == "" {
-		t.Fatal("expected fingerprint hash")
+	h := sha256.New()
+	writeFingerprintField(h, "status", []byte(runner.outputs[key("-C", "/repo", "status", "--porcelain")]))
+	writeFingerprintField(h, "diff-head", []byte(runner.outputs[key("-C", "/repo", "diff", "HEAD")]))
+	writeFingerprintField(h, "index", []byte(runner.outputs[key("-C", "/repo", "ls-files", "--stage", "-z")]))
+	if fingerprint.Hash != hex.EncodeToString(h.Sum(nil)) {
+		t.Fatal("fingerprint hash algorithm changed")
+	}
+	if len(fingerprint.Untracked) != 0 {
+		t.Fatalf("untracked = %v", fingerprint.Untracked)
 	}
 	if got, want := strings.Join(fingerprint.Paths, ","), "dirty.go,new.txt"; got != want {
 		t.Fatalf("paths mismatch: got %q want %q", got, want)
+	}
+}
+
+func TestDirtyFingerprintUntrackedExcludesTrackedPaths(t *testing.T) {
+	root := t.TempDir()
+	runGitCommand(t, root, "init", "-b", "main")
+	disableGitFixtureMaintenance(t, root)
+	runGitCommand(t, root, "config", "user.name", "Tao Test")
+	runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
+	write := func(path, text string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(root, path), []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("tracked.txt", "base\n")
+	runGitCommand(t, root, "add", ".")
+	runGitCommand(t, root, "commit", "-m", "base")
+	write("tracked.txt", "dirty\n")
+	write("z.txt", "untracked\n")
+	write("a.txt", "untracked\n")
+	fingerprint, err := NewClient(root, nil).DirtyFingerprint(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(fingerprint.Untracked, ","); got != "a.txt,z.txt" {
+		t.Fatalf("untracked = %q", got)
+	}
+	if got := strings.Join(fingerprint.Paths, ","); got != "a.txt,tracked.txt,z.txt" {
+		t.Fatalf("paths = %q", got)
 	}
 }
 
@@ -173,6 +212,19 @@ func TestDirtyFingerprintIncludesUntrackedBytesAndMode(t *testing.T) {
 	original, err := client.DirtyFingerprint(context.Background())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got := strings.Join(original.Untracked, ","); got != "scratch.txt" {
+		t.Fatalf("untracked = %q", got)
+	}
+	h := sha256.New()
+	writeFingerprintField(h, "status", []byte("?? scratch.txt\n"))
+	writeFingerprintField(h, "diff-head", nil)
+	writeFingerprintField(h, "index", nil)
+	if err := client.writeUntrackedFingerprint(h, "scratch.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if original.Hash != hex.EncodeToString(h.Sum(nil)) {
+		t.Fatal("untracked hash algorithm changed")
 	}
 	if err := os.WriteFile(path, []byte("omega\n"), 0o600); err != nil {
 		t.Fatal(err)

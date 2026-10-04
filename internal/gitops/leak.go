@@ -15,8 +15,9 @@ import (
 
 // DirtyFingerprint is a content-aware digest of a checkout's uncommitted state.
 type DirtyFingerprint struct {
-	Hash  string
-	Paths []string
+	Hash      string
+	Paths     []string
+	Untracked []string
 }
 
 // DirtyFingerprint captures status, index identity, tracked content changes, and changed paths.
@@ -53,7 +54,7 @@ func (c Client) DirtyFingerprint(ctx context.Context) (DirtyFingerprint, error) 
 			return DirtyFingerprint{}, err
 		}
 	}
-	return DirtyFingerprint{Hash: hex.EncodeToString(h.Sum(nil)), Paths: paths}, nil
+	return DirtyFingerprint{Hash: hex.EncodeToString(h.Sum(nil)), Paths: paths, Untracked: untrackedPaths}, nil
 }
 
 func nulPaths(raw string) []string {

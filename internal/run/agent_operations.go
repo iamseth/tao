@@ -7,12 +7,15 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/agent/logrecord"
 	"github.com/iamseth/tao/internal/agentsession"
 	"github.com/iamseth/tao/internal/agenttelemetry"
+	"github.com/iamseth/tao/internal/commandrunner"
+	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/promptcapture"
 	"github.com/iamseth/tao/internal/runtimeconfig"
@@ -167,8 +170,10 @@ func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSe
 	}
 
 	controlRoot := ""
+	var attribute func(context.Context, agentsession.ControlCheckoutChange) bool
 	if stateErr == nil {
 		controlRoot = state.Repo.Root
+		attribute = controlCheckoutAttribution(request, state.Repo.BaseCommit)
 	}
 	var bindLifetime func(context.Context) (context.Context, func() error, error)
 	if implementation {
@@ -186,14 +191,34 @@ func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSe
 	}
 	target := promptcapture.Target{Dir: promptcapture.Dir(request.PlanDir), Role: string(role), Template: request.PromptTemplate, TemplateHash: hash, Label: sliceID}
 	result, runErr := r.session.Run(ctx, agentsession.Request{
-		Capture:      &target,
-		BindLifetime: bindLifetime,
-		Warning:      warning,
-		RepoRoot:     request.RepoRoot, ControlRoot: controlRoot, Prompt: request.Prompt, Model: request.Model, Effort: request.Effort,
+		AttributeControlCheckoutChange: attribute,
+		Capture:                        &target,
+		BindLifetime:                   bindLifetime,
+		Warning:                        warning,
+		RepoRoot:                       request.RepoRoot, ControlRoot: controlRoot, Prompt: request.Prompt, Model: request.Model, Effort: request.Effort,
 		CollectMetrics: metricsRequested, NoProgressToolLimit: request.NoProgressToolLimit,
 		VerificationCommands: request.VerificationCommands, Log: log,
 	})
 
+	if change := result.ControlCheckoutChange; change != nil {
+		message := (agentsession.ControlCheckoutLeakError{Change: *change}).Error()
+		writeAgentLogDiagnostic(log, "tao leak-guard warning: "+message)
+		if stateErr == nil && r.eventAppender != nil {
+			event := plan.Event{
+				Type: plan.EventTypeControlCheckoutChanged, Timestamp: now(r).UTC(),
+				PlanID: state.Plan.ID, SliceID: sliceID, Agent: result.AgentLabel,
+				// Match the 64-path bound used by blocker diagnostic events.
+				Paths:   append([]string(nil), change.Paths[:min(64, len(change.Paths))]...),
+				Message: message,
+			}
+			if change.HeadBefore != "" && change.HeadAfter != "" && change.HeadBefore != change.HeadAfter {
+				event.HeadSHA = change.HeadAfter
+			}
+			if appendErr := r.eventAppender.AppendEvent(request.PlanDir, event); appendErr != nil {
+				writeAgentLogDiagnostic(log, fmt.Sprintf("tao leak-guard warning: append control checkout changed event: %v", appendErr))
+			}
+		}
+	}
 	if result.PromptCaptureWarning != "" {
 		writeAgentLogDiagnostic(log, "tao prompt-capture warning: "+result.PromptCaptureWarning)
 	}
@@ -241,6 +266,62 @@ func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSe
 	}
 
 	return AgentSessionResult{Output: result.Output, FinalText: result.FinalText}, runErr
+}
+
+// Attribution is run policy, not proof of authorship. Only a fully computed,
+// disjoint ownership set and a clean execution checkout permit a warning.
+func controlCheckoutAttribution(request AgentSessionRequest, base string) func(context.Context, agentsession.ControlCheckoutChange) bool {
+	return func(ctx context.Context, change agentsession.ControlCheckoutChange) bool {
+		base = strings.TrimSpace(base)
+		if base == "" {
+			return true
+		}
+		git := gitops.NewClient(request.RepoRoot, commandrunner.DefaultLocal)
+		paths, err := git.ChangedFilesExact(ctx, base+"..HEAD")
+		if err != nil {
+			return true
+		}
+		if request.Metrics != nil && request.Metrics.SliceID != "" {
+			detail, err := plan.NewFileRepository(filepath.Dir(request.PlanDir)).GetPlan(ctx, filepath.Base(request.PlanDir))
+			if err != nil {
+				return true
+			}
+			found := false
+			for _, slice := range detail.Slices.Slices {
+				if slice.ID == request.Metrics.SliceID {
+					paths = append(paths, slice.ExpectedFiles...)
+					found = true
+					break
+				}
+			}
+			if !found {
+				return true
+			}
+		}
+		owned := make(map[string]bool, len(paths))
+		for _, path := range paths {
+			owned[path] = true
+		}
+		for _, path := range change.Paths {
+			if owned[path] {
+				return true
+			}
+		}
+		if change.HeadBefore != "" && change.HeadAfter != "" && change.HeadBefore != change.HeadAfter {
+			controlGit := gitops.NewClient(change.ControlRoot, commandrunner.DefaultLocal)
+			committedPaths, err := controlGit.ChangedFilesExact(ctx, change.HeadBefore+".."+change.HeadAfter)
+			if err != nil {
+				return true
+			}
+			for _, path := range committedPaths {
+				if owned[path] {
+					return true
+				}
+			}
+		}
+		status, err := git.StatusPorcelain(ctx)
+		return err != nil || status != ""
+	}
 }
 
 func (r agentSessionRunner) enforceSliceBudgetCaps(ctx context.Context, planDir, planID, sliceID string, log io.Writer) error {

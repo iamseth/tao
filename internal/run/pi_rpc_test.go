@@ -435,6 +435,9 @@ func piTransportGitRunner(t *testing.T, detail *plan.PlanDetail, root string, st
 			switch runGitKey(args) {
 			case "status --porcelain", "diff HEAD", "diff --name-only HEAD":
 				return nil
+			case "rev-parse HEAD":
+				_, err := io.WriteString(stdout, "control-head\n")
+				return err
 			}
 		}
 		return base(ctx, cwd, name, args, stdout, stderr)

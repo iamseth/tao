@@ -545,6 +545,7 @@ Current well-known event types include:
 | `run_context` | Pre-attempt run-packet and guardrail telemetry. |
 | `session_timeout` | Agent session exceeded its wall-clock timeout. |
 | `run_aborted` | Best-effort diagnostic that a `tao run` invocation exited with an error after acquiring the plan run lock; carries `abort_kind` (`control_checkout_leak`, `canceled`, or `other`), a bounded `message` (first error line, at most 512 runes), and optional `slice_id` and `head_sha`. Never lifecycle, recovery, or merge authority; not emitted for cannot-start refusals or lock contention. |
+| `control_checkout_changed` | Diagnostic that the control checkout changed during an agent session without touching plan-owned or slice-expected files while the execution worktree was clean; carries bounded `paths` (at most 64), optional `head_sha` when HEAD moved, and a neutral `message`. Never lifecycle, recovery, or merge authority; not read by plan loaders. |
 | `budget_exceeded` | An opt-in hard slice output-token or cost cap was crossed; records the metric, threshold, and observed value. |
 | `rework_round` | Authoritative evidence that an automatic rework round was atomically reopened. |
 | `rework_stopped` | Authoritative evidence that automatic rework stopped at a persisted safety bound. |

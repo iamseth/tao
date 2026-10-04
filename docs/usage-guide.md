@@ -1570,6 +1570,15 @@ unsettled lifecycle transaction that still needs recovery.
 
 ### Workspaces
 
+While any `tao run` is active on a repository, do not edit, `git stash`,
+`git checkout --`, or `tao merge` into the control checkout: the leak guard
+fingerprints it around every agent session. A change touching plan-owned or
+slice-expected files, or made while the execution worktree is dirty, aborts the
+run with a `run_aborted` (`control_checkout_leak`) event visible in `tao show`.
+An unrelated change with a clean execution worktree is journaled as a
+`control_checkout_changed` warning and the run continues. Use a separate
+detached worktree for experiments.
+
 Linked Git worktrees share the main checkout's registered repository identity,
 plans, notes, and repository defaults. Commands such as `tao list` and
 `tao show` find that shared data from a linked checkout or its subdirectories;

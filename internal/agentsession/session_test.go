@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -19,6 +20,43 @@ type runtimeFunc func(context.Context, agent.Session) (agent.SessionResult, erro
 
 func (f runtimeFunc) RunSession(ctx context.Context, session agent.Session) (agent.SessionResult, error) {
 	return f(ctx, session)
+}
+
+func TestRunnerControlCheckoutAttribution(t *testing.T) {
+	for _, attributed := range []bool{false, true} {
+		for _, sessionErr := range []error{nil, &agent.SessionTimeoutError{Timeout: time.Second}} {
+			t.Run(fmt.Sprintf("attributed=%v/error=%v", attributed, sessionErr), func(t *testing.T) {
+				root := t.TempDir()
+				runGit(t, root, "init")
+				runGit(t, root, "config", "user.email", "test@example.com")
+				runGit(t, root, "config", "user.name", "Test")
+				runGit(t, root, "commit", "--allow-empty", "-m", "base")
+				runner := New(Config{Runtime: runtimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
+					writeLeakFile(t, root, "other.txt", "changed")
+					return agent.SessionResult{Output: "output", FinalText: "final"}, sessionErr
+				})})
+				called := false
+				result, err := runner.Run(context.Background(), Request{ControlRoot: root, RepoRoot: t.TempDir(), AttributeControlCheckoutChange: func(_ context.Context, change ControlCheckoutChange) bool {
+					called = true
+					if !reflect.DeepEqual(change.Paths, []string{"other.txt"}) {
+						t.Fatalf("change = %+v", change)
+					}
+					return attributed
+				}})
+				if !called || result.Output != "output" || result.FinalText != "final" {
+					t.Fatalf("result = %+v, called=%v", result, called)
+				}
+				var leak ControlCheckoutLeakError
+				if attributed {
+					if !errors.As(err, &leak) || result.ControlCheckoutChange != nil {
+						t.Fatalf("result=%+v err=%v", result, err)
+					}
+				} else if !errors.Is(err, sessionErr) || result.ControlCheckoutChange == nil {
+					t.Fatalf("result=%+v err=%v, want %v", result, err, sessionErr)
+				}
+			})
+		}
+	}
 }
 
 func TestRunnerPromptCapture(t *testing.T) {

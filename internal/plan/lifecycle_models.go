@@ -51,6 +51,7 @@ const (
 	EventTypeRunContext                 = "run_context"
 	EventTypeSessionTimeout             = "session_timeout"
 	EventTypeRunAborted                 = "run_aborted"
+	EventTypeControlCheckoutChanged     = "control_checkout_changed"
 	EventTypeBudgetExceeded             = "budget_exceeded"
 	EventTypeReworkRound                = "rework_round"
 	EventTypeReworkStopped              = "rework_stopped"
