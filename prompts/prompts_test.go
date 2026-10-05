@@ -1066,6 +1066,23 @@ func TestSlicePromptsRequireContractConsumerOwnership(t *testing.T) {
 	}
 }
 
+func TestSlicePromptRequiresBehavioralSubprocessDoubleDiscovery(t *testing.T) {
+	for _, want := range []string{
+		"When adding, removing, or reordering a Git or subprocess invocation",
+		"search every package covered by the slice's verification commands",
+		"including all packages covered by recursive or multi-package commands",
+		"injected `CommandRunner` implementations and process fakes",
+		"including argument-key switches and recorded call sequences",
+		"symbol-only search is insufficient",
+		"require explicit update tasks in `tasks` and ownership in `expected_files` for doubles needing edits",
+		"or an explicit explanation that none are affected",
+	} {
+		if !strings.Contains(SlicePromptTemplate, want) {
+			t.Errorf("missing behavioral subprocess-double discovery guidance %q", want)
+		}
+	}
+}
+
 func TestPlanningPromptsRequireExistingSymbolOwnership(t *testing.T) {
 	for name, prompt := range map[string]string{"slice": SlicePromptTemplate, "note slice": NoteSlicePromptTemplate} {
 		for _, want := range []string{"compatibility shim", "renames, moves", "cannot carry methods"} {
