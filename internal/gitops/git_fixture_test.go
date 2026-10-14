@@ -1,16 +1,10 @@
 package gitops
 
 import (
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
-
-// Persist suppression in common repository config so linked worktrees inherit it.
-func disableGitFixtureMaintenance(t *testing.T, root string) {
-	t.Helper()
-	runGitCommand(t, root, "config", "--local", "maintenance.auto", "false")
-	runGitCommand(t, root, "config", "--local", "gc.auto", "0")
-}
 
 func assertGitFixtureConfig(t *testing.T, root, maintenance, gc string) {
 	t.Helper()
@@ -18,12 +12,8 @@ func assertGitFixtureConfig(t *testing.T, root, maintenance, gc string) {
 		{"maintenance.auto", maintenance},
 		{"gc.auto", gc},
 	} {
-		for _, scope := range [][]string{nil, {"--local"}} {
-			args := append([]string{"config"}, scope...)
-			args = append(args, "--get", setting.key)
-			if got := gitOutput(t, root, args...); got != setting.want {
-				t.Errorf("%s config %v = %q, want %q", root, args, got, setting.want)
-			}
+		if got := gitOutput(t, root, "config", "--get", setting.key); got != setting.want {
+			t.Errorf("%s config %s = %q, want %q", root, setting.key, got, setting.want)
 		}
 	}
 }
@@ -37,7 +27,6 @@ func TestGitFixtureExplicitDestinationConfig(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			launch := t.TempDir()
 			runGitCommand(t, launch, "init", "-b", "main")
-			disableGitFixtureMaintenance(t, launch)
 			// Distinct local values expose accidentally configuring the launch repo.
 			runGitCommand(t, launch, "config", "--local", "maintenance.auto", "true")
 			runGitCommand(t, launch, "config", "--local", "gc.auto", "123")
@@ -47,8 +36,13 @@ func TestGitFixtureExplicitDestinationConfig(t *testing.T) {
 				args = append(args, "--bare")
 			}
 			runGitCommand(t, launch, append(args, destination)...)
-			disableGitFixtureMaintenance(t, destination)
 			assertGitFixtureConfig(t, destination, "false", "0")
+			for _, key := range []string{"gc.auto", "maintenance.auto"} {
+				cmd := exec.Command("git", "-C", destination, "config", "--local", "--get", key) // #nosec G204 -- temporary fixture destination and fixed config keys; no shell.
+				if out, err := cmd.CombinedOutput(); err == nil || len(out) != 0 {
+					t.Fatalf("destination unexpectedly has local %s: %s (%v)", key, out, err)
+				}
+			}
 			assertGitFixtureConfig(t, launch, "true", "123")
 		})
 	}
@@ -60,4 +54,10 @@ func TestGitFixtureMaintenanceConfig(t *testing.T) {
 	linked := filepath.Join(t.TempDir(), "linked")
 	runGitCommand(t, root, "worktree", "add", "--detach", linked, "HEAD")
 	assertGitFixtureConfig(t, linked, "false", "0")
+	// Local overrides belong to the common repository, not the suite config.
+	runGitCommand(t, root, "config", "--local", "gc.auto", "123")
+	assertGitFixtureConfig(t, linked, "false", "123")
+	other := t.TempDir()
+	runGitCommand(t, other, "init")
+	assertGitFixtureConfig(t, other, "false", "0")
 }

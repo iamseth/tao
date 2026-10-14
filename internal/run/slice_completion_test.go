@@ -805,7 +805,6 @@ func initSliceCompletionRepo(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
 	runCommitTestGitCommand(t, root, "init")
-	disableRunGitMaintenance(t, root)
 	runCommitTestGitCommand(t, root, "config", "user.email", "tao@example.com")
 	runCommitTestGitCommand(t, root, "config", "user.name", "Tao Test")
 	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("base\n"), 0o600); err != nil {
@@ -843,7 +842,6 @@ func sliceCompletionRecord(t *testing.T, root string, policy CommitPolicy, store
 // configuration from masking the porcelain states these tests construct.
 func isolateSliceStagingGitConfig(t *testing.T) {
 	t.Helper()
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
 }
 

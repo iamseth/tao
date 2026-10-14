@@ -364,7 +364,6 @@ func TestServiceExecuteRefusesClaimedWorktreeAtControlCheckout(t *testing.T) {
 func TestServiceExecuteRefusesWorktreePathResolvingIntoControlCheckout(t *testing.T) {
 	controlRoot := t.TempDir()
 	runCommitTestGitCommand(t, controlRoot, "init")
-	disableRunGitMaintenance(t, controlRoot)
 
 	tests := []struct {
 		name       string

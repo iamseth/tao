@@ -16,20 +16,34 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/taodata"
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 var suiteTaoDataHome string
 
 func TestMain(m *testing.M) {
+	os.Exit(runCLISuite(m.Run))
+}
+
+// Returning through this boundary runs all cleanups before TestMain exits.
+func runCLISuite(run func() int) (code int) {
+	var cleanups []func() error
+	defer func() { code = cleanupCLISuite(code, cleanups) }()
+	cleanup, err := testenv.SetupGit()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cli test setup: Git environment: %v\n", err)
+		return 1
+	}
+	cleanups = append(cleanups, cleanup)
 	cwd, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cli test setup: working directory: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 	before, err := snapshotCLIWorkspaces(cwd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cli test setup: snapshot workspaces: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 	for _, key := range testTaoEnvKeys() {
 		_ = os.Unsetenv(key)
@@ -38,20 +52,24 @@ func TestMain(m *testing.M) {
 	dataHome, err := os.MkdirTemp("", "tao-cli-data-home-")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cli test setup: create Tao data home: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
+	cleanups = append(cleanups, func() error { return os.RemoveAll(dataHome) })
 	if err := os.Setenv("TAO_DATA_HOME", dataHome); err != nil {
-		_ = os.RemoveAll(dataHome)
 		fmt.Fprintf(os.Stderr, "cli test setup: set TAO_DATA_HOME: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 	suiteTaoDataHome = dataHome
 
-	installTestPiRPC()
-	code := m.Run()
-	if err := os.RemoveAll(dataHome); err != nil {
-		fmt.Fprintf(os.Stderr, "cli test cleanup: remove Tao data home: %v\n", err)
+	piCleanup, err := installTestPiRPC()
+	if piCleanup != nil {
+		cleanups = append(cleanups, piCleanup)
 	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cli test setup: install Pi: %v\n", err)
+		return 1
+	}
+	code = run()
 	after, err := snapshotCLIWorkspaces(cwd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cli test cleanup: snapshot workspaces: %v\n", err)
@@ -64,7 +82,19 @@ func TestMain(m *testing.M) {
 			code = 1
 		}
 	}
-	os.Exit(code)
+	return code
+}
+
+func cleanupCLISuite(code int, cleanups []func() error) int {
+	for i := len(cleanups) - 1; i >= 0; i-- {
+		if err := cleanups[i](); err != nil {
+			fmt.Fprintf(os.Stderr, "cli test cleanup: %v\n", err)
+			if code == 0 {
+				code = 1
+			}
+		}
+	}
+	return code
 }
 
 type cliWorkspaceSnapshot struct {
@@ -167,10 +197,20 @@ func TestCLIDataHomeIsSuiteOwned(t *testing.T) {
 	}
 }
 
-func installTestPiRPC() {
+func installTestPiRPC() (func() error, error) {
 	dir, err := os.MkdirTemp("", "tao-cli-pi-")
 	if err != nil {
-		return
+		return nil, err
+	}
+	oldPath, present := os.LookupEnv("PATH")
+	cleanup := func() error {
+		var err error
+		if present {
+			err = os.Setenv("PATH", oldPath)
+		} else {
+			err = os.Unsetenv("PATH")
+		}
+		return errors.Join(err, os.RemoveAll(dir))
 	}
 	path := filepath.Join(dir, "pi")
 	script := `#!/usr/bin/env python3
@@ -222,9 +262,9 @@ for line in sys.stdin:
         break
 `
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil { //nolint:gosec // G306: executable test stub needs exec bit
-		return
+		return cleanup, err
 	}
-	_ = os.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return cleanup, os.Setenv("PATH", dir+string(os.PathListSeparator)+oldPath)
 }
 
 type fakeRepository struct {

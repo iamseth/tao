@@ -74,7 +74,7 @@ func TestDeltaDiffStreams(t *testing.T) {
 func TestDeltaDiffLinkedWorktreeReadOnly(t *testing.T) {
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
-	disableGitFixtureMaintenance(t, root)
+
 	runGitCommand(t, root, "config", "user.name", "Test")
 	runGitCommand(t, root, "config", "user.email", "test@example.com")
 	write := func(root, path, text string) {

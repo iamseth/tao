@@ -1699,7 +1699,6 @@ func TestGitSessionBoundaryDetectsAndPreservesNestedGitControlDrift(t *testing.T
 		t.Fatal(err)
 	}
 	runRealGit(t, embeddedRoot, "init", "-b", "main")
-	disableGitFixtureMaintenance(t, embeddedRoot)
 	runRealGit(t, embeddedRoot, "config", "user.name", "Tao Test")
 	runRealGit(t, embeddedRoot, "config", "user.email", "tao@example.invalid")
 	if err := os.WriteFile(filepath.Join(embeddedRoot, "tracked.txt"), []byte("embedded contents\n"), 0o600); err != nil {
@@ -1752,7 +1751,6 @@ func TestGuardedSingleConflictResolverRejectsAndPreservesConcurrentNestedSubmodu
 					t.Fatal(err)
 				}
 				runRealGit(t, origin, "init", "-b", "main")
-				disableGitFixtureMaintenance(t, origin)
 				runRealGit(t, origin, "config", "user.name", "Tao Test")
 				runRealGit(t, origin, "config", "user.email", "tao@example.invalid")
 				if err := os.WriteFile(filepath.Join(origin, "child.txt"), []byte("submodule contents\n"), 0o600); err != nil {
@@ -1922,6 +1920,9 @@ const interruptedGitBoundaryReadyEnv = "TAO_TEST_INTERRUPTED_GIT_BOUNDARY_READY"
 
 func TestGitSessionBoundaryLeavesObjectModesUnchangedAfterInterruption(t *testing.T) {
 	if root := os.Getenv(interruptedGitBoundaryRootEnv); root != "" {
+		// The re-executed TestMain supplies fresh isolated config before the
+		// boundary snapshot; its temporary home lives under the parent's TMPDIR.
+		assertEffectiveGitSettings(t, root)
 		ready := os.Getenv(interruptedGitBoundaryReadyEnv)
 		boundary, err := snapshotGitSessionBoundary(context.Background(), root)
 		// Publish complete messages so the parent cannot observe an empty file

@@ -1130,7 +1130,6 @@ func TestConflictMarkersRemainIgnoresMarkerLikeSource(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	runRealGit(t, root, "init")
-	disableGitFixtureMaintenance(t, root)
 	source := "package scan\n\n" +
 		"var l = \"" + strings.Repeat("<", 7) + "\"\n" +
 		"var r = \"" + strings.Repeat(">", 7) + "\"\n" +
@@ -1210,7 +1209,6 @@ func TestValidateAgentEditsScansOnlyRequestedFiles(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	runRealGit(t, root, "init")
-	disableGitFixtureMaintenance(t, root)
 	if err := os.WriteFile(filepath.Join(root, "changed.txt"), []byte("safe edit\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1237,7 +1235,6 @@ func TestValidateAgentEditsRejectsOversizedAndCancelledMarkerScans(t *testing.T)
 	t.Parallel()
 	root := t.TempDir()
 	runRealGit(t, root, "init")
-	disableGitFixtureMaintenance(t, root)
 	oversized := filepath.Join(root, "oversized.txt")
 	file, err := os.Create(oversized) //nolint:gosec // test path is rooted in t.TempDir.
 	if err != nil {
@@ -1271,7 +1268,6 @@ func TestConflictMarkerPathsEnforcesAggregateByteLimit(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	runRealGit(t, root, "init")
-	disableGitFixtureMaintenance(t, root)
 	paths := make([]string, 0, maxConflictMarkerScanAggregateBytes/maxConflictMarkerScanFileBytes+1)
 	for i := 0; i < cap(paths); i++ {
 		path := fmt.Sprintf("large-%d.txt", i)

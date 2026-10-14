@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/gitops"
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func copyFixture(src, dst string) error {
@@ -85,6 +86,9 @@ func TestFetchDoesNotExecuteInheritedHelpers(t *testing.T) {
 	unmaterialized := filepath.Join(t.TempDir(), "unmaterialized")
 	localGit(t, fixture, "clone", "--quiet", "--no-checkout", "--", fixture, unmaterialized)
 	fixture = unmaterialized
+	// Clone does not copy local config; materialization below strips global config.
+	testenv.DisableGitMaintenance(t, fixture)
+	assertIsolatedFixtureMaintenance(t, fixture)
 	source, err := ValidateSourceURL("https://example.com/repo")
 	if err != nil {
 		t.Fatal(err)
@@ -356,15 +360,21 @@ func TestDefaultRunnerDisablesTemplates(t *testing.T) {
 	}
 }
 
-func TestDefaultRunner(t *testing.T) {
-	if os.Getenv("TAO_STEAL_TEST_RUNNER") == "1" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			os.Exit(1)
+// Query the effective config through the same sanitization used by checkout.
+func assertIsolatedFixtureMaintenance(t *testing.T, root string) {
+	t.Helper()
+	for key, want := range map[string]string{"gc.auto": "0", "maintenance.auto": "false"} {
+		var output, stderr strings.Builder
+		if err := defaultRunner(context.Background(), root, "git", []string{"config", "--get", key}, &output, &stderr); err != nil {
+			t.Fatalf("isolated %s: %v: %s", key, err, stderr.String())
 		}
-		fmt.Printf("%s|%s|%s", cwd, os.Getenv("GIT_TERMINAL_PROMPT"), os.Getenv("GIT_NO_LAZY_FETCH"))
-		os.Exit(0)
+		if got := strings.TrimSpace(output.String()); got != want {
+			t.Errorf("isolated %s = %q, want %q", key, got, want)
+		}
 	}
+}
+
+func TestDefaultRunner(t *testing.T) {
 	t.Setenv("TAO_STEAL_TEST_RUNNER", "1")
 	t.Setenv("GIT_TERMINAL_PROMPT", "1")
 	t.Setenv("GIT_NO_LAZY_FETCH", "0")

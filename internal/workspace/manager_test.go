@@ -189,7 +189,6 @@ func TestPrepareRejectsRemoteBranchCreatedAfterLastFetch(t *testing.T) {
 	repo := newTestRepo(t)
 	remote := t.TempDir()
 	runGit(t, remote, "init", "--bare")
-	disableGitMaintenance(t, remote)
 	assertGitMaintenanceDisabled(t, remote)
 	runGit(t, repo.path, "remote", "add", "origin", remote)
 	runGit(t, repo.path, "push", "--set-upstream", "origin", "master")

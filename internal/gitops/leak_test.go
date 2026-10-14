@@ -42,7 +42,7 @@ func TestDirtyFingerprintCombinesStatusDiffAndPaths(t *testing.T) {
 func TestDirtyFingerprintUntrackedExcludesTrackedPaths(t *testing.T) {
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
-	disableGitFixtureMaintenance(t, root)
+
 	runGitCommand(t, root, "config", "user.name", "Tao Test")
 	runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
 	write := func(path, text string) {
@@ -76,7 +76,6 @@ func TestDirtyFingerprintEnumeratesNestedUntrackedFiles(t *testing.T) {
 		t.Run(setting, func(t *testing.T) {
 			root := t.TempDir()
 			runGitCommand(t, root, "init", "-b", "main")
-			disableGitFixtureMaintenance(t, root)
 			runGitCommand(t, root, "config", "user.name", "Tao Test")
 			runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
 			writeRepoFile(t, root, "tracked.txt", "base\n")
@@ -155,7 +154,7 @@ func TestDirtyFingerprintChangesWhenOnlyStagedBlobChanges(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
-	disableGitFixtureMaintenance(t, root)
+
 	runGitCommand(t, root, "config", "user.name", "Tao Test")
 	runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
 	writeRepoFile(t, root, "tracked.txt", "base\n")

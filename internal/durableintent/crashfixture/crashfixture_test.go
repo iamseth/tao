@@ -7,6 +7,20 @@ import (
 	"testing"
 )
 
+func TestFixtureEffectiveGitSettings(t *testing.T) {
+	fixture := New(t)
+	for _, root := range []string{fixture.RepoRoot, fixture.SourceWorktree} {
+		for key, want := range map[string]string{
+			"gc.auto": "0", "maintenance.auto": "false",
+			"commit.gpgsign": "false", "init.defaultBranch": "main",
+		} {
+			if got := realGitOutput(t, root, "config", "--get", key); got != want {
+				t.Errorf("%s: %s = %q, want %q", root, key, got, want)
+			}
+		}
+	}
+}
+
 func TestCrashPointsExposeExpectedDefaultTargetGitState(t *testing.T) {
 	tests := []struct {
 		name           string

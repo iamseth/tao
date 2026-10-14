@@ -23,7 +23,6 @@ func newTestRepo(t *testing.T) testRepo {
 	configureHermeticGit(t)
 	dir := t.TempDir()
 	runGit(t, dir, "init", "-b", "master")
-	disableGitMaintenance(t, dir)
 	runGit(t, dir, "config", "user.name", "Tao Test")
 	runGit(t, dir, "config", "user.email", "tao@example.com")
 	runGit(t, dir, "config", "commit.gpgSign", "false")
@@ -38,8 +37,6 @@ func newTestRepo(t *testing.T) testRepo {
 
 func configureHermeticGit(t *testing.T) {
 	t.Helper()
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	t.Setenv("GIT_TERMINAL_PROMPT", "0")
 	t.Setenv("GIT_EDITOR", "true")
 	t.Setenv("GIT_SEQUENCE_EDITOR", "true")

@@ -169,9 +169,7 @@ func TestPullRequestRecoveryBoundarySeparatesStructuralWorkspaceFailuresFromInsp
 				root := t.TempDir()
 				worktree := t.TempDir()
 				runCommitTestGitCommand(t, root, "init")
-				disableRunGitMaintenance(t, root)
 				runCommitTestGitCommand(t, worktree, "init")
-				disableRunGitMaintenance(t, worktree)
 				return root, worktree
 			},
 			cleanup:      plan.WorkspaceCleanupStatusPending,

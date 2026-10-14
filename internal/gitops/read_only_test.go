@@ -56,7 +56,7 @@ func TestReadOnlyProbes(t *testing.T) {
 func TestListsLinkedWorktreeReadOnly(t *testing.T) {
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
-	disableGitFixtureMaintenance(t, root)
+
 	runGitCommand(t, root, "config", "user.name", "Test")
 	runGitCommand(t, root, "config", "user.email", "test@example.com")
 	for _, name := range []string{"changed", "identical"} {

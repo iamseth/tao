@@ -229,14 +229,30 @@ func TestWorktreeResolvesHEADBeforeRejectingBranchBase(t *testing.T) {
 
 func localDeltaGit(t *testing.T, root string) func(...string) string {
 	t.Helper()
-	return func(args ...string) string {
+	git := func(args ...string) string {
 		t.Helper()
 		cmd := exec.Command("git", append([]string{"-C", root}, args...)...) // #nosec G204 -- local test-owned Git fixture.
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com", "GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com")
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com", "GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("git %v: %v %s", args, err, out)
 		}
 		return strings.TrimSpace(string(out))
+	}
+	assertSharedGitConfig(t, git)
+	return git
+}
+
+func assertSharedGitConfig(t *testing.T, git func(...string) string) {
+	t.Helper()
+	for _, setting := range []struct{ key, value string }{
+		{"gc.auto", "0"},
+		{"maintenance.auto", "false"},
+		{"commit.gpgsign", "false"},
+		{"init.defaultBranch", "main"},
+	} {
+		if got := git("config", "--get", setting.key); got != setting.value {
+			t.Errorf("git config %s = %q, want %q", setting.key, got, setting.value)
+		}
 	}
 }

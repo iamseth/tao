@@ -11,8 +11,6 @@ import (
 )
 
 func TestProveRebaseReplayDoesNotRequireGlobalGitIdentity(t *testing.T) {
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	root, oldBase, _, oldHead := commitSeriesRepository(t)
 	runGitCommand(t, root, "checkout", "main")
 	writeCommitSeriesFile(t, root, "base-advance.txt", "new base\n")
@@ -64,7 +62,7 @@ func TestCommitSeriesProofSurvivesConflictFreeRebase(t *testing.T) {
 func TestCommitSeriesRebaseProofSurvivesConflictFreeUpstreamRename(t *testing.T) {
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
-	disableGitFixtureMaintenance(t, root)
+
 	runGitCommand(t, root, "config", "user.name", "Tao Test")
 	runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
 	writeCommitSeriesFile(t, root, "original.txt", "top\ntarget\nbottom\n")
@@ -138,7 +136,7 @@ func assertCommitSeriesProofSurvivesRebase(t *testing.T, fixture rebaseProofFixt
 	t.Helper()
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
-	disableGitFixtureMaintenance(t, root)
+
 	runGitCommand(t, root, "config", "user.name", "Tao Test")
 	runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
 	writeCommitSeriesFile(t, root, fixture.filename, fixture.baseContent)
@@ -172,7 +170,7 @@ func assertCommitSeriesProofSurvivesRebase(t *testing.T, fixture rebaseProofFixt
 func TestCommitSeriesProofRetainsFileIdentity(t *testing.T) {
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
-	disableGitFixtureMaintenance(t, root)
+
 	runGitCommand(t, root, "config", "user.name", "Tao Test")
 	runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
 	writeCommitSeriesFile(t, root, "left.txt", "top\ntarget\nbottom\n")
@@ -204,7 +202,7 @@ func TestCommitSeriesProofRetainsFileIdentity(t *testing.T) {
 func TestCommitSeriesProofDistinguishesDuplicateOccurrenceLocations(t *testing.T) {
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
-	disableGitFixtureMaintenance(t, root)
+
 	runGitCommand(t, root, "config", "user.name", "Tao Test")
 	runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
 	writeCommitSeriesFile(t, root, "duplicate.txt", "same\nbetween\nsame\n")
@@ -375,15 +373,13 @@ func TestCommitSeriesTextV5Fingerprint(t *testing.T) {
 // must come from the content delta rather than incidental commit metadata.
 func newBinaryProofRepository(t *testing.T) string {
 	t.Helper()
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	t.Setenv("GIT_AUTHOR_NAME", "Tao Test")
 	t.Setenv("GIT_AUTHOR_EMAIL", "tao@example.invalid")
 	t.Setenv("GIT_AUTHOR_DATE", "2026-08-06T00:00:00Z")
 	t.Setenv("GIT_COMMITTER_DATE", "2026-08-06T00:00:00Z")
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
-	disableGitFixtureMaintenance(t, root)
+
 	runGitCommand(t, root, "config", "user.name", "Tao Test")
 	runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
 	runGitCommand(t, root, "config", "core.filemode", "true")
@@ -724,7 +720,7 @@ func commitSeriesRepository(t *testing.T) (root, base, first, second string) {
 	t.Helper()
 	root = t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
-	disableGitFixtureMaintenance(t, root)
+
 	runGitCommand(t, root, "config", "user.name", "Tao Test")
 	runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
 	writeCommitSeriesFile(t, root, "base.txt", "base\n")

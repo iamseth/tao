@@ -18,7 +18,6 @@ import (
 func TestInspectSelectedTypedPlacement(t *testing.T) {
 	repoRoot := t.TempDir()
 	runRebaseRecoveryGit(t, repoRoot, "init", "-b", "main")
-	disableRunGitMaintenance(t, repoRoot)
 	runRebaseRecoveryGit(t, repoRoot, "config", "user.email", "tao@example.com")
 	runRebaseRecoveryGit(t, repoRoot, "config", "user.name", "Tao Test")
 	runRebaseRecoveryGit(t, repoRoot, "commit", "--allow-empty", "-m", "base")
@@ -51,7 +50,6 @@ func TestInspectSelectedTypedPlacement(t *testing.T) {
 func TestInspectSelectedAuthorizesOnlyCleanDescendantBlockedRestart(t *testing.T) {
 	repoRoot := t.TempDir()
 	runRebaseRecoveryGit(t, repoRoot, "init", "-b", "main")
-	disableRunGitMaintenance(t, repoRoot)
 	runRebaseRecoveryGit(t, repoRoot, "config", "user.email", "tao@example.com")
 	runRebaseRecoveryGit(t, repoRoot, "config", "user.name", "Tao Test")
 	if err := os.WriteFile(filepath.Join(repoRoot, "base.txt"), []byte("base\n"), 0o600); err != nil {
@@ -350,11 +348,9 @@ func TestInspectRecordedWorkspaceRecoversRebaseIntentForNonePolicy(t *testing.T)
 func newRebaseRecoveryRepo(t *testing.T, conflict bool) (repo, oldBase, oldHead, newBase string) {
 	t.Helper()
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	t.Setenv("GIT_TERMINAL_PROMPT", "0")
 	repo = t.TempDir()
 	runRebaseRecoveryGit(t, repo, "init", "-b", "master")
-	disableRunGitMaintenance(t, repo)
 	runRebaseRecoveryGit(t, repo, "config", "user.name", "Tao Test")
 	runRebaseRecoveryGit(t, repo, "config", "user.email", "tao@example.com")
 	writeRebaseRecoveryFile(t, repo, "shared.txt", "base\n")
@@ -386,12 +382,10 @@ func newRebaseRecoveryRepo(t *testing.T, conflict bool) (repo, oldBase, oldHead,
 func newLinkedRebaseRecoveryRepo(t *testing.T) (repoRoot, workspaceRoot, oldBase, oldHead, newBase string) {
 	t.Helper()
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	t.Setenv("GIT_TERMINAL_PROMPT", "0")
 	repoRoot = t.TempDir()
 	workspaceRoot = filepath.Join(t.TempDir(), "plan-a")
 	runRebaseRecoveryGit(t, repoRoot, "init", "-b", "master")
-	disableRunGitMaintenance(t, repoRoot)
 	runRebaseRecoveryGit(t, repoRoot, "config", "user.name", "Tao Test")
 	runRebaseRecoveryGit(t, repoRoot, "config", "user.email", "tao@example.com")
 	writeRebaseRecoveryFile(t, repoRoot, "shared.txt", "base\n")

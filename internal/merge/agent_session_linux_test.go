@@ -19,6 +19,9 @@ const singleMergePIDConfinementHelper = "TAO_TEST_SINGLE_MERGE_PID_CONFINEMENT_H
 
 func TestSingleMergeProcessSandboxHidesTaoParent(t *testing.T) {
 	if os.Getenv(singleMergePIDConfinementHelper) == "1" {
+		// TestMain must bootstrap successfully inside the private namespace,
+		// using the writable runtime TMPDIR without relaxing confinement.
+		assertEffectiveGitSettings(t, t.TempDir())
 		assertTaoParentIsOutsidePIDNamespace(t)
 		return
 	}

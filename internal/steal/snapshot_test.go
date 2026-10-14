@@ -10,13 +10,15 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func localGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...) // #nosec G204 -- fixed local Git commands and test-owned arguments.
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, out)
@@ -47,6 +49,7 @@ func snapshotFixture(t *testing.T) string {
 		t.Fatal(err)
 	}
 	localGit(t, repo, "init", "--initial-branch=main")
+	assertFixtureMaintenance(t, repo)
 	writeFixtureFile(t, repo, "VERSION", []byte("1.2.3\n"))
 	writeFixtureFile(t, repo, "binary.dat", []byte("text\x00bytes"))
 	writeFixtureFile(t, repo, "node_modules/pkg/index.js", []byte("do not execute"))
@@ -58,7 +61,27 @@ func snapshotFixture(t *testing.T) string {
 	localGit(t, repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "-c", "commit.gpgsign=false", "commit", "-m", "fixture")
 	clone := filepath.Join(parent, "snapshot")
 	localGit(t, parent, "clone", "--quiet", "--no-hardlinks", "--", repo, clone)
+	assertFixtureMaintenance(t, clone)
+	// Fetch/checkout tests copy this fixture and use the production runner,
+	// which intentionally discards the suite's global configuration.
+	testenv.DisableGitMaintenance(t, clone)
+	assertIsolatedFixtureMaintenance(t, clone)
 	return clone
+}
+
+func assertFixtureMaintenance(t *testing.T, root string) {
+	t.Helper()
+	for key, want := range map[string]string{"gc.auto": "0", "maintenance.auto": "false"} {
+		if got := localGit(t, root, "config", "--get", key); got != want {
+			t.Errorf("%s: %s = %q, want %q", root, key, got, want)
+		}
+	}
+}
+
+func TestBareFixtureMaintenance(t *testing.T) {
+	root := t.TempDir()
+	localGit(t, root, "init", "--bare")
+	assertFixtureMaintenance(t, root)
 }
 
 func TestHardenSnapshot(t *testing.T) {

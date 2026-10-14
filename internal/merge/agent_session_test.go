@@ -1679,8 +1679,6 @@ func TestSingleMergeProcessSandboxPermitsReadOnlyGitAndDeviceWrites(t *testing.T
 	}
 	for _, args := range [][]string{
 		{"init", "-q", "-b", "main"},
-		{"config", "--local", "maintenance.auto", "false"},
-		{"config", "--local", "gc.auto", "0"},
 		{"add", "README.md"},
 		{"-c", "user.name=Tao Test", "-c", "user.email=tao@example.com", "commit", "-q", "-m", "seed"},
 	} {
@@ -1702,6 +1700,11 @@ func TestSingleMergeProcessSandboxPermitsReadOnlyGitAndDeviceWrites(t *testing.T
 	const reviewerScript = `set -u
 cd "$1" || exit 31
 git --version >/dev/null || exit 32
+# The sandbox must retain read access to the shared global test config.
+[ "$(git config --get gc.auto)" = 0 ] || exit 40
+[ "$(git config --get maintenance.auto)" = false ] || exit 41
+[ "$(git config --get commit.gpgsign)" = false ] || exit 42
+[ "$(git config --get init.defaultBranch)" = main ] || exit 43
 [ "$(git rev-parse --git-dir)" = .git ] || exit 33
 git --no-pager diff --no-ext-diff --stat HEAD >/dev/null || exit 34
 git --no-pager log --oneline -1 HEAD >/dev/null || exit 35
@@ -2166,7 +2169,6 @@ func singleMergeAgentTestBoundary(t *testing.T) (string, string) {
 	}
 	root := t.TempDir()
 	realGitOutput(t, root, "init", "-q", "-b", "main")
-	disableGitFixtureMaintenance(t, root)
 	return root, t.TempDir()
 }
 
