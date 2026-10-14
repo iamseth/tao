@@ -22,7 +22,7 @@ type DirtyFingerprint struct {
 
 // DirtyFingerprint captures status, index identity, tracked content changes, and changed paths.
 func (c Client) DirtyFingerprint(ctx context.Context) (DirtyFingerprint, error) {
-	status, err := c.StatusPorcelain(ctx)
+	status, err := c.StatusPorcelainAllUntracked(ctx)
 	if err != nil {
 		return DirtyFingerprint{}, err
 	}

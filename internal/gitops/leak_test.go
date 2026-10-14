@@ -13,7 +13,7 @@ import (
 
 func TestDirtyFingerprintCombinesStatusDiffAndPaths(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string]string{
-		key("-C", "/repo", "status", "--porcelain"):                            " M dirty.go\n?? new.txt\n",
+		key("-C", "/repo", "status", "--porcelain", "--untracked-files=all"):   " M dirty.go\n?? new.txt\n",
 		key("-C", "/repo", "diff", "HEAD"):                                     "diff --git a/dirty.go b/dirty.go\n-old\n+new\n",
 		key("-C", "/repo", "ls-files", "--stage", "-z"):                        "100644 abcdef 0\tdirty.go\x00",
 		key("-C", "/repo", "diff", "--name-only", "HEAD"):                      "dirty.go\n",
@@ -25,7 +25,7 @@ func TestDirtyFingerprintCombinesStatusDiffAndPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := sha256.New()
-	writeFingerprintField(h, "status", []byte(runner.outputs[key("-C", "/repo", "status", "--porcelain")]))
+	writeFingerprintField(h, "status", []byte(runner.outputs[key("-C", "/repo", "status", "--porcelain", "--untracked-files=all")]))
 	writeFingerprintField(h, "diff-head", []byte(runner.outputs[key("-C", "/repo", "diff", "HEAD")]))
 	writeFingerprintField(h, "index", []byte(runner.outputs[key("-C", "/repo", "ls-files", "--stage", "-z")]))
 	if fingerprint.Hash != hex.EncodeToString(h.Sum(nil)) {
@@ -69,6 +69,44 @@ func TestDirtyFingerprintUntrackedExcludesTrackedPaths(t *testing.T) {
 	}
 }
 
+func TestDirtyFingerprintEnumeratesNestedUntrackedFiles(t *testing.T) {
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	for _, setting := range []string{"default", "normal", "no"} {
+		t.Run(setting, func(t *testing.T) {
+			root := t.TempDir()
+			runGitCommand(t, root, "init", "-b", "main")
+			disableGitFixtureMaintenance(t, root)
+			runGitCommand(t, root, "config", "user.name", "Tao Test")
+			runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
+			writeRepoFile(t, root, "tracked.txt", "base\n")
+			runGitCommand(t, root, "add", "tracked.txt")
+			runGitCommand(t, root, "commit", "-m", "base")
+			if setting != "default" {
+				runGitCommand(t, root, "config", "status.showUntrackedFiles", setting)
+			}
+			paths := []string{"internal/new/a.go", "internal/new/deep/b.go", "other/c.txt"}
+			for _, path := range paths {
+				if err := os.MkdirAll(filepath.Dir(filepath.Join(root, path)), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				writeRepoFile(t, root, path, "untracked\n")
+			}
+			fingerprint, err := NewClient(root, nil).DirtyFingerprint(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := strings.Join(paths, ",")
+			if got := strings.Join(fingerprint.Paths, ","); got != want {
+				t.Errorf("paths = %q, want %q", got, want)
+			}
+			if got := strings.Join(fingerprint.Untracked, ","); got != want {
+				t.Errorf("untracked = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestDirtyFingerprintChangesForTrackedContentOnlyEdit(t *testing.T) {
 	calls := 0
 	runner := func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
@@ -79,7 +117,7 @@ func TestDirtyFingerprintChangesForTrackedContentOnlyEdit(t *testing.T) {
 			t.Fatalf("unexpected command %q", name)
 		}
 		switch strings.Join(args, "\x00") {
-		case key("-C", "/repo", "status", "--porcelain"):
+		case key("-C", "/repo", "status", "--porcelain", "--untracked-files=all"):
 			_, _ = io.WriteString(stdout, " M dirty.go\n")
 		case key("-C", "/repo", "diff", "HEAD"):
 			calls++
@@ -196,7 +234,7 @@ func TestDirtyFingerprintIncludesUntrackedBytesAndMode(t *testing.T) {
 	}
 	runner := func(_ context.Context, _ string, _ string, args []string, stdout io.Writer, _ io.Writer) error {
 		switch strings.Join(args, "\x00") {
-		case key("-C", root, "status", "--porcelain"):
+		case key("-C", root, "status", "--porcelain", "--untracked-files=all"):
 			_, _ = io.WriteString(stdout, "?? scratch.txt\n")
 		case key("-C", root, "diff", "HEAD"), key("-C", root, "diff", "--name-only", "HEAD"):
 		case key("-C", root, "ls-files", "--stage", "-z"):

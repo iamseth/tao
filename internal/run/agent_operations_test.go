@@ -23,6 +23,8 @@ import (
 )
 
 func TestAgentSessionControlCheckoutAttribution(t *testing.T) {
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	for _, tc := range []struct {
 		name                                                                               string
 		expected, owned, dirty, missingBase, invalidBase, missingSlice, headMoved, timeout bool

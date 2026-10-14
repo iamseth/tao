@@ -225,7 +225,7 @@ type scriptedGitRunner struct {
 	Branch    string   // response for "branch --show-current" (default "feature")
 	Head      string   // response for "rev-parse HEAD" (default "head123")
 	Origin    string   // response for "symbolic-ref --quiet --short refs/remotes/origin/HEAD" (default "origin/main")
-	Statuses  []string // successive responses for "status --porcelain"
+	Statuses  []string // successive responses for porcelain status, plain or explicit-all
 	Diffs     []string // successive responses for "diff HEAD"
 	DiffNames []string // successive responses for "diff --name-only HEAD"
 
@@ -319,7 +319,7 @@ func (r *scriptedGitRunner) Run(ctx context.Context, cwd, name string, args []st
 		if r.Origin != "" {
 			_, _ = io.WriteString(stdout, r.Origin+"\n")
 		}
-	case "status --porcelain":
+	case "status --porcelain", "status --porcelain --untracked-files=all":
 		if r.statusIdx < len(r.Statuses) {
 			_, _ = io.WriteString(stdout, r.Statuses[r.statusIdx])
 			r.statusIdx++
@@ -439,7 +439,7 @@ func interruptedServiceGitRunner(t *testing.T, root string, calls *[]string, sta
 				t.Fatalf("HEAD cwd = %q, want immutable root %q", actualCWD, root)
 			}
 			_, _ = io.WriteString(stdout, head+"\n")
-		case "status --porcelain":
+		case "status --porcelain", "status --porcelain --untracked-files=all":
 			if actualCWD != root {
 				t.Fatalf("status cwd = %q, want immutable root %q", actualCWD, root)
 			}
