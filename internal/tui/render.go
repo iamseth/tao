@@ -31,6 +31,7 @@ type Model struct {
 	Height           int
 	Now              time.Time
 	Filter           Filter
+	Sorts            PageSorts
 	FilterMessage    string
 	Profile          theme.Profile
 	Theme            theme.Theme
@@ -102,7 +103,7 @@ func Render(model Model) string {
 	page := normalizePage(model.Page)
 	planRows := FilterPlanRows(model.Snapshot.Rows, model.SearchQuery)
 	noteSnapshot := FilterNoteSnapshot(model.NoteSnapshot, model.SearchQuery)
-	sections := BuildPageSections(planRows, model.Filter, page)
+	sections := BuildPageSections(planRows, model.Filter, page, model.Sorts.For(page))
 	if isPlanPage(page) || page == PageNotes {
 		model.Filter = filterForPage(model.Filter, page)
 	}
@@ -127,7 +128,7 @@ func Render(model Model) string {
 		}
 		summary = &frameSummary{primary: planCountLabel(visibleCount), attentionCount: attentionCount, extra: searchSummary}
 	case PageNotes:
-		items := visibleFilteredNotes(noteSnapshot, model.Filter)
+		items := visibleFilteredNotes(noteSnapshot, model.Filter, model.Sorts.For(PageNotes))
 		extra := searchSummary
 		if breakdown := noteRepositoryBreakdown(items); breakdown != "" {
 			if extra != "" {
@@ -177,27 +178,13 @@ func Render(model Model) string {
 	case visibleCount == 0:
 		lines = append(lines, "", "  No plans.")
 	default:
-		widths := measureTable(sections, model.Snapshot.CollectedAt, model.ActionLabels)
-		columns := planTableColumns(widths, model.Width)
-		paneWidth := planTablePaneWidth(model.Width, columns)
-		selected := 0
-		for _, section := range sections {
-			if len(section.Rows) == 0 {
-				continue
-			}
-			sectionWidth := dashboardSectionWidth(model, page, section.Title, 0)
-			lines = append(lines, "", sectionTitleRule(model.Palette(), planSectionRole(section.Kind), section.Title, sectionWidth), renderHeader(columns, paneWidth))
-			viewportSection := tableViewportSection{headingLines: []int{len(lines) - 2, len(lines) - 1}}
-			for _, row := range section.Rows {
-				if selected == model.Selected {
-					selectedLine = len(lines)
-				}
-				viewportSection.contentLines = append(viewportSection.contentLines, len(lines))
-				lines = append(lines, renderTableRow(row, section.Kind, model.Snapshot.CollectedAt, columns, paneWidth, selected == model.Selected, model.Palette(), model.ActionLabels[actionRowKey(row)]))
-				selected++
-			}
-			viewportMetadata.sections = append(viewportMetadata.sections, viewportSection)
+		body, selection, metadata := renderPlanTable(model, page, sections)
+		selectedLine = len(lines) + selection
+		if selection < 0 {
+			selectedLine = -1
 		}
+		viewportMetadata = metadata.offset(len(lines))
+		lines = append(lines, body...)
 	}
 	footerStart := len(lines)
 	if strings.TrimSpace(model.FilterMessage) != "" {
@@ -515,23 +502,38 @@ func renderHeader(columns []column, paneWidth int) string {
 	return "  " + joinRow(columns, headers, paneWidth)
 }
 
-func planSectionRole(kind SectionKind) theme.Role {
-	switch kind {
-	case SectionNow:
-		return theme.RolePlanNow
-	case SectionNext:
-		return theme.RolePlanNext
-	case SectionHistory:
-		return theme.RolePlanHistory
-	default:
-		return theme.RoleNeutral5
+func renderPlanTable(model Model, page PageID, sections []Section) ([]string, int, tableViewportMetadata) {
+	var lines []string
+	var metadata tableViewportMetadata
+	selectedLine := -1
+	widths := measureTable(sections, model.Snapshot.CollectedAt, model.ActionLabels)
+	columns := planTableColumns(widths, model.Width)
+	paneWidth := planTablePaneWidth(model.Width, columns)
+	selected := 0
+	for _, section := range sections {
+		if len(section.Rows) == 0 {
+			continue
+		}
+		sectionWidth := dashboardSectionWidth(model, page, section.Title, 0)
+		lines = append(lines, "", sectionTitleRule(model.Palette(), theme.RoleAccent, section.Title, sectionWidth), renderHeader(columns, paneWidth))
+		viewportSection := tableViewportSection{headingLines: []int{len(lines) - 2, len(lines) - 1}}
+		for _, row := range section.Rows {
+			if selected == model.Selected {
+				selectedLine = len(lines)
+			}
+			viewportSection.contentLines = append(viewportSection.contentLines, len(lines))
+			lines = append(lines, renderTableRow(row, page, model.Snapshot.CollectedAt, columns, paneWidth, selected == model.Selected, model.Palette(), model.ActionLabels[actionRowKey(row)]))
+			selected++
+		}
+		metadata.sections = append(metadata.sections, viewportSection)
 	}
+	return lines, selectedLine, metadata
 }
 
-func renderTableRow(row monitor.Row, section SectionKind, now time.Time, columns []column, paneWidth int, selected bool, palette theme.Palette, actionLabel string) string {
+func renderTableRow(row monitor.Row, page PageID, now time.Time, columns []column, paneWidth int, selected bool, palette theme.Palette, actionLabel string) string {
 	values := tableRowValues(row, now, actionLabel)
 	cellPalette := palette
-	if selected || section == SectionHistory {
+	if selected || page == PageHistory {
 		cellPalette.Profile = theme.ProfileNone
 	}
 	repositoryKey := strings.TrimSpace(row.RepositoryID)
@@ -568,16 +570,7 @@ func renderTableRow(row monitor.Row, section SectionKind, now time.Time, columns
 	if selected {
 		return palette.FillRowWithText(theme.RolePlanSelectionText, theme.RolePlanSelectionBackground, true, line)
 	}
-	switch section {
-	case SectionNow:
-		return palette.FillRow(theme.RolePlanNowBackground, line)
-	case SectionNext:
-		return palette.FillRow(theme.RolePlanNextBackground, line)
-	case SectionHistory:
-		return palette.FillRowWithText(theme.RolePlanHistoryText, theme.RolePlanHistoryBackground, false, line)
-	default:
-		return line
-	}
+	return line
 }
 
 func priorityCellLetters(priority *plan.Priority) (impact, risk, effort string) {

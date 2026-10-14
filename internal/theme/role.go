@@ -13,11 +13,8 @@ const (
 	RoleRepo
 	RoleRepoSelected
 	RoleInfo
-	RolePlanNow
 	RolePlanNext
 	RolePlanHistory
-	RolePlanNowBackground
-	RolePlanNextBackground
 	RolePlanHistoryBackground
 	RolePlanHistoryText
 	RolePlanSelectionBackground

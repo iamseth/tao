@@ -99,6 +99,7 @@ type App struct {
 	Debug                DebugSnapshotCollector
 	Settings             SettingsService
 	FilterStore          FilterStore // Nil means in-memory only.
+	SortStore            SortStore   // Nil means in-memory only.
 	Actions              *Actions
 	Details              DetailRepository
 	Inspector            DetailInspector
@@ -129,7 +130,9 @@ type loopState struct {
 	pageSelections   map[PageID]int
 	size             term.Size
 	filter           Filter
+	sorts            PageSorts
 	filterMenu       *filterMenu
+	sortMenu         *sortMenu
 	filterMessage    string
 	profile          theme.Profile
 	theme            theme.Theme
@@ -227,6 +230,20 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 			state.filter = filter
 		}
 	}
+	if a.SortStore != nil {
+		sorts, err := a.SortStore.Load(ctx)
+		if err != nil {
+			if state.filterMessage != "" {
+				state.filterMessage += "; "
+			}
+			state.filterMessage += "Load sorts: " + err.Error()
+		} else {
+			state.sorts = sorts
+		}
+	}
+	for _, page := range []PageID{PagePlans, PageHistory, PageNotes} {
+		state.sorts.Set(page, NormalizeSort(page, state.sorts.For(page)))
+	}
 	state.clampSelection()
 	if err := a.writeFrame(state); err != nil {
 		return err
@@ -246,6 +263,17 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 		case result := <-input:
 			if result.err != nil {
 				return fmt.Errorf("read terminal input: %w", result.err)
+			}
+			// List menus consume input before foreground launchers can act on it.
+			if state.sortMenu != nil || state.filterMenu != nil {
+				if a.handleKey(loopCtx, &state, result.key) {
+					return nil
+				}
+				if err := a.writeFrame(state); err != nil {
+					return err
+				}
+				close(result.resume)
+				continue
 			}
 			if handled, quit, err := a.handleNoteCreation(loopCtx, &state, result.key); err != nil {
 				return err
@@ -441,7 +469,7 @@ func (a App) collectNotes(ctx context.Context) (note.Snapshot, error) {
 }
 
 func (a App) editSelectedNote(ctx context.Context, state *loopState) (bool, error) {
-	if state.showShortcuts || state.searchActive || state.confirm != nil || state.detail != nil || state.notePicker != nil || state.filterMenu != nil {
+	if state.showShortcuts || state.searchActive || state.confirm != nil || state.detail != nil || state.notePicker != nil || state.filterMenu != nil || state.sortMenu != nil {
 		return false, nil
 	}
 	var item note.CatalogNote
@@ -657,6 +685,7 @@ func (a App) writeFrame(state loopState) error {
 			Height:           state.size.Height,
 			Now:              state.currentTime(),
 			Filter:           state.filter,
+			Sorts:            state.sorts,
 			FilterMessage:    state.filterMessage,
 			Profile:          state.profile,
 			Theme:            state.theme,
@@ -675,6 +704,11 @@ func (a App) writeFrame(state loopState) error {
 		if state.filterMenu != nil {
 			lines := strings.Split(strings.TrimPrefix(rendered, clearScreenSequence), "\n")
 			lines = overlayBox(lines, state.filterMenu.render(state.size, state.theme.Palette(state.profile)), state.size.Width, state.size.Height)
+			rendered = clearScreenSequence + strings.Join(lines, "\n")
+		}
+		if state.sortMenu != nil {
+			lines := strings.Split(strings.TrimPrefix(rendered, clearScreenSequence), "\n")
+			lines = overlayBox(lines, state.sortMenu.render(state.size, state.theme.Palette(state.profile)), state.size.Width, state.size.Height)
 			rendered = clearScreenSequence + strings.Join(lines, "\n")
 		}
 		frame.WriteString(rendered)
@@ -712,6 +746,24 @@ func readInput(ctx context.Context, input io.Reader, results chan<- inputResult)
 }
 
 func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent) bool {
+	if state.sortMenu != nil {
+		action, changed := state.sortMenu.handleKey(key, state.size)
+		if changed {
+			state.applySort(state.sortMenu.page, state.sortMenu.sort)
+			if a.SortStore != nil {
+				if err := a.SortStore.Save(ctx, state.sorts); err != nil {
+					state.filterMessage = "Save sorts: " + err.Error()
+				} else {
+					state.filterMessage = ""
+				}
+			}
+		}
+		if action == sortMenuClosed {
+			state.sortMenu = nil
+		}
+		state.interruptEscape()
+		return action == sortMenuQuit
+	}
 	if state.filterMenu != nil {
 		action, change := state.filterMenu.handleKey(key, state.size)
 		if action == filterMenuClosed || change.EnabledChanged || change.Cleared {
@@ -756,7 +808,7 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 		a.handleSettingsEditor(ctx, state, key)
 		return false
 	}
-	if state.detail == nil && state.noteDetail == nil && !state.searchActive && key.Key == term.KeyRune && key.Rune == 's' {
+	if state.detail == nil && state.noteDetail == nil && !state.searchActive && key.Key == term.KeyRune && key.Rune == 'S' {
 		state.page = PageSettings
 		state.selected = 0
 		state.settingsSnapshot = a.collectSettings(ctx)
@@ -1391,6 +1443,8 @@ func (s *loopState) handleKey(key term.KeyEvent) bool {
 			s.selected++
 			s.settingsOffset = 0
 		}
+	case (isPlanPage(s.activePage()) || s.activePage() == PageNotes) && key.Key == term.KeyRune && key.Rune == 's':
+		s.sortMenu = newSortMenu(s.activePage(), s.sorts.For(s.activePage()))
 	case (isPlanPage(s.activePage()) || s.activePage() == PageNotes) && key.Key == term.KeyRune && (key.Rune == 'f' || key.Rune == 'F'):
 		s.filterMenu = newPageFilterMenu(s.filter, s.snapshot, s.noteSnapshot, s.activePage())
 		s.listTopPending = false
@@ -1532,7 +1586,7 @@ func (s *loopState) restoreSettingsSelection(repositoryID string) {
 func (s loopState) visibleRows() []monitor.Row {
 	rows := FilterPlanRows(s.snapshot.Rows, s.searchQuery)
 	var visible []monitor.Row
-	for _, section := range BuildPageSections(rows, s.filter, s.planPage()) {
+	for _, section := range BuildPageSections(rows, s.filter, s.planPage(), s.sorts.For(s.planPage())) {
 		visible = append(visible, section.Rows...)
 	}
 	return visible
@@ -1561,7 +1615,7 @@ func (s loopState) noteSelection() int {
 
 func (s loopState) visibleNotes() []note.CatalogNote {
 	snapshot := FilterNoteSnapshot(s.noteSnapshot, s.searchQuery)
-	return visibleFilteredNotes(snapshot, s.filter)
+	return visibleFilteredNotes(snapshot, s.filter, s.sorts.For(PageNotes))
 }
 
 func (s loopState) noteAt(index int) (note.CatalogNote, bool) {
@@ -1624,6 +1678,15 @@ func (s *loopState) replaceNoteSnapshot(snapshot note.Snapshot) {
 	selected, preserve := s.noteAt(s.noteSelection())
 	s.noteSnapshot = snapshot
 	s.restoreNoteSelection(selected, preserve)
+}
+
+func (s *loopState) applySort(page PageID, sort Sort) {
+	defer s.preserveOtherPlanSelection()()
+	planSelected, preservePlan := s.planRowAt(s.planSelection())
+	noteSelected, preserveNote := s.noteAt(s.noteSelection())
+	s.sorts.Set(page, NormalizeSort(page, sort))
+	s.restorePlanSelection(planSelected, preservePlan)
+	s.restoreNoteSelection(noteSelected, preserveNote)
 }
 
 func (s *loopState) applyFilter(filter Filter) {
@@ -1813,6 +1876,7 @@ func (s loopState) debugPageMaxOffset() int {
 		SearchQuery:   s.searchQuery,
 		SearchActive:  s.searchActive,
 		Filter:        s.filter,
+		Sorts:         s.sorts,
 	})
 }
 
@@ -1830,6 +1894,7 @@ func (s loopState) settingsPageMaxOffset() int {
 		SearchQuery:      s.searchQuery,
 		SearchActive:     s.searchActive,
 		Filter:           s.filter,
+		Sorts:            s.sorts,
 	})
 }
 

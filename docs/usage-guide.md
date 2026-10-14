@@ -235,9 +235,10 @@ Use `w` to switch worktree/branch scope and `u` to force a refresh; missing
 worktrees fall back to branch scope.
 Press `x` on WIP or plan detail to launch `/tao-fix-plan` in the foreground for the
 selected stuck plan; live or merging plans are refused.
-**WIP** contains unfinished plans: **NOW** holds plans with immediate actions and
-**NEXT** holds planned work. Blocked, failed, and awaiting-review/merge plans stay
-in WIP. **History** contains completed and abandoned plans, newest activity first,
+**WIP** is a single table of unfinished plans ordered by urgency then planning
+priority by default. Blocked, failed, and awaiting-review/merge plans stay in WIP.
+**Backlog** is a single table of notes ordered by tier then recency by default.
+**History** is a single table of completed and abandoned plans, newest activity first by default,
 without a ten-plan limit; use search and paging to revisit older work. Completed
 plans have no default lookback limit; `--completed-window 24h` restricts them to
 the last day, while `--completed-window 0` omits them. Skipped
@@ -248,7 +249,12 @@ The separate **NEXT** action label recommends what to do, not permission to do i
 Filters and their enabled state persist in `<DataHome>/ui-filters.json` and
 combine with session-only search. Repository criteria are shared; WIP and History
 have independent status selections limited to their respective states. Turning
-filters off never changes which page a plan belongs to. See [configuration](configuration.md) for themes.
+filters off never changes which page a plan belongs to. Press `s` on WIP, Backlog,
+or History to open a per-page sort menu with column and direction choices.
+**Default** restores the built-in order. The sort choice persists per page in
+`<DataHome>/ui-filters.json` alongside filters, and the status bar shows a
+non-default sort. Press `S` on any page to open Settings.
+See [configuration](configuration.md) for themes.
 Batch merge uses the sole enabled repository filter, otherwise the selected plan's repository.
 
 Capture notes and launch note planning from **Backlog** (notes). `TAO_AGENT` selects Pi

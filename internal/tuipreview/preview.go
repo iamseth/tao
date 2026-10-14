@@ -570,7 +570,7 @@ func validateSelection(selection, count int, kind string) error {
 
 func visiblePlanCount(snapshot monitor.Snapshot, searchQuery string, page tui.PageID) int {
 	count := 0
-	for _, section := range tui.BuildPageSections(tui.FilterPlanRows(snapshot.Rows, searchQuery), tui.Filter{}, page) {
+	for _, section := range tui.BuildPageSections(tui.FilterPlanRows(snapshot.Rows, searchQuery), tui.Filter{}, page, tui.Sort{}) {
 		count += len(section.Rows)
 	}
 	return count

@@ -14,6 +14,17 @@ import (
 	"github.com/iamseth/tao/internal/term"
 )
 
+func TestPageSectionsAreSingleTables(t *testing.T) {
+	for page, title := range map[PageID]string{PagePlans: "WIP", PageHistory: "HISTORY"} {
+		for _, rows := range [][]monitor.Row{nil, {{PlanID: "active", Status: plan.StatusPlanned}, {PlanID: "done", Status: plan.StatusCompleted}}} {
+			sections := BuildPageSections(rows, Filter{}, page, Sort{})
+			if len(sections) != 1 || sections[0].Title != title {
+				t.Fatalf("%s sections = %+v, want one %s table", page, sections, title)
+			}
+		}
+	}
+}
+
 func TestHistoryMembershipAndOrdering(t *testing.T) {
 	now := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	rows := []monitor.Row{

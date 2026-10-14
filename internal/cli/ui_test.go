@@ -59,6 +59,42 @@ func TestUIFilterStoreRoundTrip(t *testing.T) {
 	}
 }
 
+func TestUISortStorePreservesFilters(t *testing.T) {
+	dataHome := filepath.Join(t.TempDir(), "missing")
+	t.Setenv("TAO_DATA_HOME", dataHome)
+	ctx := context.Background()
+	sorts := newUISortStore()
+	got, err := sorts.Load(ctx)
+	if err != nil || !got.Plans.IsDefault() || !got.History.IsDefault() || !got.Notes.IsDefault() {
+		t.Fatalf("missing sorts = %+v, %v", got, err)
+	}
+	if _, err := os.Stat(dataHome); !os.IsNotExist(err) {
+		t.Fatalf("load created data home: %v", err)
+	}
+	filters := newUIFilterStore()
+	wantFilter := tui.Filter{Enabled: true, Statuses: []string{"planned"}}
+	if err := filters.Save(ctx, wantFilter); err != nil {
+		t.Fatal(err)
+	}
+	want := tui.PageSorts{Plans: tui.Sort{Column: tui.SortPlan, Descending: true}, History: tui.Sort{Column: tui.SortAge}, Notes: tui.Sort{Column: tui.SortUpdated, Descending: true}}
+	if err := sorts.Save(ctx, want); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := filters.Load(ctx); err != nil || !reflect.DeepEqual(got, wantFilter) {
+		t.Fatalf("filters lost: %+v, %v", got, err)
+	}
+	wantFilter.Enabled = false
+	if err := filters.Save(ctx, wantFilter); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := sorts.Load(ctx); err != nil || got != want {
+		t.Fatalf("sorts lost: %+v, %v", got, err)
+	}
+	if got, err := filters.Load(ctx); err != nil || !reflect.DeepEqual(got, wantFilter) {
+		t.Fatalf("filters lost: %+v, %v", got, err)
+	}
+}
+
 func TestUICommandRegistrationAndHelp(t *testing.T) {
 	metadata := commandByName("ui")
 	if metadata == nil {

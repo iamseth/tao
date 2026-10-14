@@ -28,7 +28,7 @@ func TestRenderNotesRowsWarningsFocusAndSanitization(t *testing.T) {
 
 	frame := Render(Model{Page: PageNotes, NoteSnapshot: snapshot, Now: now, Filter: repositoryFilter("repo-a")})
 	body := strings.TrimPrefix(frame, clearScreenSequence)
-	for _, want := range []string{"repo alpha", "1 open note", "alpha 1", "UNTIERED", "REPO", "PREVIEW", "TAGS", "CREATED", "UPDATED", "alpha", "one, tag", "1w", "2h", "first line", "Warnings", "damaged store"} {
+	for _, want := range []string{"repo alpha", "1 open note", "alpha 1", "OPEN NOTES", "REPO", "PREVIEW", "TAGS", "CREATED", "UPDATED", "alpha", "one, tag", "1w", "2h", "first line", "Warnings", "damaged store"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("notes frame missing %q:\n%s", want, frame)
 		}
@@ -45,32 +45,35 @@ func TestRenderNotesRowsWarningsFocusAndSanitization(t *testing.T) {
 	}
 }
 
-func TestNoteTierBucketsUseAscendingPriorityAndOmitEmptyTiers(t *testing.T) {
+func TestNotesFlatTableUsesAscendingPriorityAndRecency(t *testing.T) {
+	now := time.Date(2026, time.September, 1, 12, 0, 0, 0, time.UTC)
 	items := visibleNotes(note.Snapshot{Notes: []note.CatalogNote{
 		{ID: "tier3", Tags: []string{"tier3"}},
 		{ID: "untiered", Tags: []string{"workflow"}},
 		{ID: "tier0", Tags: []string{"tier0"}},
-		{ID: "tier1-first", Tags: []string{"tier1"}},
-		{ID: "tier1-second", Tags: []string{"tier1"}},
+		{ID: "tier1-first", Tags: []string{"tier1"}, UpdatedAt: now.Add(-time.Hour)},
+		{ID: "tier1-second", Tags: []string{"tier1"}, UpdatedAt: now.Add(-2 * time.Hour)},
 		{ID: "lowest-declared-tier", Tags: []string{"tier4", "tier2"}},
 	}}, "")
-	buckets := noteTierBuckets(items)
-	wantTitles := []string{"TIER 0", "TIER 1", "TIER 2", "TIER 3", "UNTIERED"}
-	wantIDs := [][]string{{"tier0"}, {"tier1-first", "tier1-second"}, {"lowest-declared-tier"}, {"tier3"}, {"untiered"}}
-	if len(buckets) != len(wantTitles) {
-		t.Fatalf("bucket count = %d, want %d: %+v", len(buckets), len(wantTitles), buckets)
+	wantIDs := []string{"tier0", "tier1-first", "tier1-second", "lowest-declared-tier", "tier3", "untiered"}
+	for i := range items {
+		items[i].Text = items[i].ID
 	}
-	for index, bucket := range buckets {
-		if bucket.title != wantTitles[index] {
-			t.Errorf("bucket %d title = %q, want %q", index, bucket.title, wantTitles[index])
+	lines, selectedLine, metadata := renderNotesPage(note.Snapshot{Notes: items}, 5, now, Model{})
+	if len(metadata.sections) != 1 {
+		t.Fatalf("got %d sections, want one flat table", len(metadata.sections))
+	}
+	section := metadata.sections[0]
+	if len(section.headingLines) != 2 || len(section.contentLines) != len(wantIDs) {
+		t.Fatalf("unexpected flat table metadata: %+v", section)
+	}
+	for i, line := range section.contentLines {
+		if !strings.Contains(lines[line], wantIDs[i]) {
+			t.Errorf("row %d = %q, want %q", i, lines[line], wantIDs[i])
 		}
-		var gotIDs []string
-		for _, indexed := range bucket.items {
-			gotIDs = append(gotIDs, indexed.item.ID)
-		}
-		if fmt.Sprint(gotIDs) != fmt.Sprint(wantIDs[index]) {
-			t.Errorf("bucket %q IDs = %v, want %v", bucket.title, gotIDs, wantIDs[index])
-		}
+	}
+	if selectedLine != section.contentLines[5] {
+		t.Fatalf("selected line = %d, want last row", selectedLine)
 	}
 }
 
@@ -92,7 +95,7 @@ func TestBoundedNoteValueTruncatesByCells(t *testing.T) {
 	}
 }
 
-func TestRenderNotesSelectsRowInLaterTierBucket(t *testing.T) {
+func TestRenderNotesSelectsLaterRow(t *testing.T) {
 	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
 	items := []note.CatalogNote{
 		{RepositoryID: "repo", RepositoryName: "repo", ID: "today", Text: "today", UpdatedAt: now.Add(-time.Hour)},
@@ -100,9 +103,9 @@ func TestRenderNotesSelectsRowInLaterTierBucket(t *testing.T) {
 		{RepositoryID: "repo", RepositoryName: "repo", ID: "older", Text: "older", UpdatedAt: now.AddDate(0, 0, -10)},
 	}
 	frame := Render(Model{Page: PageNotes, NoteSnapshot: note.Snapshot{Notes: items}, Selected: 2, Now: now, Width: 70, Height: 8, Profile: theme.ProfileANSI16})
-	for _, want := range []string{"▌ UNTIERED ", theme.Bold + theme.Sequence(theme.Default().Palette(theme.ProfileANSI16).MustColor(theme.RoleSelectionBackground), true) + "  repo", "older"} {
+	for _, want := range []string{"▌ OPEN NOTES ", theme.Bold + theme.Sequence(theme.Default().Palette(theme.ProfileANSI16).MustColor(theme.RoleSelectionBackground), true) + "  repo", "older"} {
 		if !strings.Contains(frame, want) {
-			t.Fatalf("later-bucket selection missing %q:\n%s", want, frame)
+			t.Fatalf("later-row selection missing %q:\n%s", want, frame)
 		}
 	}
 }
@@ -236,7 +239,7 @@ func TestRenderNoteRowUsesSemanticPaintSelectionAndEmptyTagCell(t *testing.T) {
 	}
 }
 
-func TestNoteTierSectionsReplaceTierColumn(t *testing.T) {
+func TestNotesSingleHeadingWithoutTierColumn(t *testing.T) {
 	now := time.Date(2026, time.September, 1, 12, 0, 0, 0, time.UTC)
 	untagged := note.CatalogNote{RepositoryName: "repo", Text: "plain backlog item", Tags: []string{"workflow"}, CreatedAt: now.Add(-24 * time.Hour), UpdatedAt: now.Add(-time.Hour)}
 	tiered := note.CatalogNote{RepositoryName: "repo", Text: "tiered work", Tags: []string{"arch-2026-09", "tier1", "workflow"}, CreatedAt: now.Add(-7 * 24 * time.Hour), UpdatedAt: now.Add(-time.Hour)}
@@ -254,8 +257,11 @@ func TestNoteTierSectionsReplaceTierColumn(t *testing.T) {
 		t.Fatalf("tag cell should show all non-tier tags: %q", row)
 	}
 	frame := Render(Model{Page: PageNotes, NoteSnapshot: note.Snapshot{Notes: items}, Now: now, Width: 100, Height: 20})
-	if !strings.Contains(frame, "▌ TIER 1 ") || !strings.Contains(frame, "▌ UNTIERED ") {
-		t.Fatalf("note tiers did not render as sections:\n%s", frame)
+	if strings.Count(frame, "▌ OPEN NOTES ") != 1 || strings.Contains(frame, "▌ TIER") || strings.Contains(frame, "▌ UNTIERED") {
+		t.Fatalf("notes did not render as one flat table:\n%s", frame)
+	}
+	if strings.Index(frame, "tiered work") > strings.Index(frame, "plain backlog item") {
+		t.Fatalf("tiered note must precede untiered note:\n%s", frame)
 	}
 }
 

@@ -80,7 +80,7 @@ func TestPlainSearchUsesProductionRenderer(t *testing.T) {
 
 func TestPlainShortcutPopoverUsesProductionRenderer(t *testing.T) {
 	var output bytes.Buffer
-	err := execute(context.Background(), []string{"--plain", "--shortcuts", "--scenario", "mixed", "--view", "plans", "--size", "64x20"}, &bytes.Buffer{}, &output, &bytes.Buffer{})
+	err := execute(context.Background(), []string{"--plain", "--shortcuts", "--scenario", "mixed", "--view", "plans", "--size", "64x23"}, &bytes.Buffer{}, &output, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}

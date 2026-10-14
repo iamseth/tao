@@ -182,10 +182,11 @@ commands also accept the short unambiguous prefixes shown by help.
 
 ### Everyday command paths
 
-Open the terminal dashboard for **Notes**, **Plans** (including history),
-**Settings**, and **Debug**. It opens on Plans and supports common actions across
-registered repositories. Press `c` on Plans to open plan-detail **Changes**, a
-read-only view of the live review-base delta. Press `x` to open a stuck plan in a
+Open the terminal dashboard for **WIP**, **Backlog**, **History**,
+**Settings**, and **Debug**. It opens on WIP and supports common actions across
+registered repositories. Press `s` on the list pages to open the sort menu and
+`S` to open Settings. Press `c` on WIP or History to open plan-detail **Changes**,
+a read-only view of the live review-base delta. Press `x` to open a stuck plan in a
 foreground fix agent. Use `tao status` for diagnostics
 and `tao config` for saved global/repository preferences:
 

@@ -14,6 +14,31 @@ import (
 	"github.com/iamseth/tao/internal/theme"
 )
 
+func TestSortContextLabel(t *testing.T) {
+	for _, page := range []PageID{PagePlans, PageHistory, PageNotes} {
+		model := Model{Page: page}
+		baseline := renderGlobalContext(model)
+		for _, descending := range []bool{false, true} {
+			model.Sorts.Set(page, Sort{Column: SortRepo, Descending: descending})
+			arrow := "↑"
+			if descending {
+				arrow = "↓"
+			}
+			if got := renderGlobalContext(model); !strings.Contains(got, "all repos · sort REPO "+arrow) {
+				t.Fatal(got)
+			}
+		}
+		model.Sorts.Set(page, Sort{Column: SortDefault})
+		if got := renderGlobalContext(model); got != baseline {
+			t.Fatal("default changed context", got)
+		}
+		model.Sorts.Set(page, Sort{Column: "unknown"})
+		if got := renderGlobalContext(model); got != baseline {
+			t.Fatal("invalid sort changed context", got)
+		}
+	}
+}
+
 func TestFilterContextAndDebugLabels(t *testing.T) {
 	for _, tc := range []struct {
 		filter Filter
@@ -238,7 +263,7 @@ func TestRenderStressPlanRowsKeepCompleteResponsiveColumns(t *testing.T) {
 		}
 	}
 
-	widths := measureTable([]Section{{Kind: SectionNow, Rows: []monitor.Row{row}}}, now, nil)
+	widths := measureTable([]Section{{Title: "WIP", Rows: []monitor.Row{row}}}, now, nil)
 	for _, width := range []int{199, 120, 100, 80, 70} {
 		t.Run(fmt.Sprintf("%d", width), func(t *testing.T) {
 			columns := planTableColumns(widths, width)
@@ -304,8 +329,8 @@ func TestDashboardPagesRenderSharedSectionRules(t *testing.T) {
 		role theme.Role
 		want []string
 	}{
-		{page: PagePlans, role: theme.RolePlanNext, want: []string{"▌ NEXT ", "REPO", "NEXT", "PLAN", "SLICES", "AGE"}},
-		{page: PageNotes, role: theme.RoleAccent, want: []string{"▌ UNTIERED ", "REPO", "PREVIEW", "TAGS", "CREATED", "UPDATED"}},
+		{page: PagePlans, role: theme.RoleAccent, want: []string{"▌ WIP ", "REPO", "NEXT", "PLAN", "SLICES", "AGE"}},
+		{page: PageNotes, role: theme.RoleAccent, want: []string{"▌ OPEN NOTES ", "REPO", "PREVIEW", "TAGS", "CREATED", "UPDATED"}},
 		{page: PageSettings, role: theme.RoleSettingsSection, want: []string{"▌ EXECUTION · all default ", "Agent", "▌ REPOSITORY DEFAULTS ", "PR", "ROOT"}},
 		{page: PageDebug, role: theme.RoleDebugSection, want: []string{"▌ UI ", "▌ DOCTOR "}},
 	}
@@ -352,7 +377,7 @@ func TestNotesViewportKeepsSectionContextAndCountsOnlyHiddenNotes(t *testing.T) 
 	model.Selected = len(items) - 1
 
 	frame := Render(model)
-	for _, want := range []string{"▌ UNTIERED ", "REPO", "PREVIEW", "preview-29", "+ 15 more  ↓"} {
+	for _, want := range []string{"▌ OPEN NOTES ", "REPO", "PREVIEW", "preview-29", "+ 15 more  ↓"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("selected-last Notes viewport missing %q:\n%s", want, frame)
 		}
@@ -386,7 +411,7 @@ func TestNotesViewportUsesRoomForSelectedRow(t *testing.T) {
 	}
 
 	frame := Render(model)
-	for _, want := range []string{"▌ UNTIERED ", "full body first line full body second line", "+ 15 more  ↓"} {
+	for _, want := range []string{"▌ OPEN NOTES ", "full body first line full body second line", "+ 15 more  ↓"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("roomy constrained Notes viewport missing %q:\n%s", want, frame)
 		}
@@ -408,7 +433,7 @@ func TestNotesViewportKeepsWarningsVisibleWithManyNotes(t *testing.T) {
 	model.Selected = len(model.NoteSnapshot.Notes) - 1
 
 	frame := Render(model)
-	for _, want := range []string{"▌ UNTIERED ", "preview-29", "▌ Warnings ", "repo: catalog damaged", "+ 17 more  ↓"} {
+	for _, want := range []string{"▌ OPEN NOTES ", "preview-29", "▌ Warnings ", "repo: catalog damaged", "+ 17 more  ↓"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("constrained Notes viewport missing %q:\n%s", want, frame)
 		}

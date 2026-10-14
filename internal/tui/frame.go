@@ -119,6 +119,20 @@ func renderGlobalContext(model Model) string {
 
 func renderGlobalContextWidth(model Model, maxWidth int) string {
 	repository := filterLabel(model)
+	page := normalizePage(model.Page)
+	sort := NormalizeSort(page, model.Sorts.For(page))
+	if !sort.IsDefault() {
+		for _, option := range SortOptionsForPage(page) {
+			if option.Column == sort.Column {
+				direction := "↑"
+				if sort.Descending {
+					direction = "↓"
+				}
+				repository += " · sort " + option.Label + " " + direction
+				break
+			}
+		}
+	}
 	agent := rowlabel.DisplayValue(singleLineDetail(model.DebugSnapshot.SelectedAgent))
 	suffix := "  agent " + agent + "  "
 	if maxWidth > 0 {

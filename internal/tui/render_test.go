@@ -41,10 +41,10 @@ func TestPriorityColumn(t *testing.T) {
 	row.Overview.Priority = priority
 	columns := []column{{name: "I/R/E", width: 5}}
 	for _, test := range []struct {
-		section  SectionKind
+		page     PageID
 		selected bool
-	}{{SectionNext, true}, {SectionHistory, false}} {
-		got := renderTableRow(row, test.section, time.Time{}, columns, 5, test.selected, colored, "")
+	}{{PagePlans, true}, {PageHistory, false}} {
+		got := renderTableRow(row, test.page, time.Time{}, columns, 5, test.selected, colored, "")
 		if !strings.Contains(got, "H/L/S") || strings.Contains(got, colored.Paint(theme.RoleSuccess, "H")) {
 			t.Fatalf("selected/history priority must have no cell colors: %q", got)
 		}
@@ -97,19 +97,17 @@ func TestRenderGoldenColorModes(t *testing.T) {
 	}
 }
 
-func TestPlanSectionsUseDedicatedColors(t *testing.T) {
-	for kind, want := range map[SectionKind]theme.Role{
-		SectionNow:     theme.RolePlanNow,
-		SectionNext:    theme.RolePlanNext,
-		SectionHistory: theme.RolePlanHistory,
-	} {
-		if got := planSectionRole(kind); got != want {
-			t.Errorf("planSectionRole(%q) = %d, want %d", kind, got, want)
+func TestPlanSectionsUseAccent(t *testing.T) {
+	for page, title := range map[PageID]string{PagePlans: "WIP", PageHistory: "HISTORY"} {
+		model := Model{Page: page, Width: 80, Profile: theme.ProfileTrueColor, Snapshot: monitor.Snapshot{Rows: []monitor.Row{{Status: plan.StatusPlanned}, {Status: plan.StatusCompleted}}}}
+		want := sectionTitleRule(model.Palette(), theme.RoleAccent, title, dashboardSectionWidth(model, page, title, 0))
+		if !strings.Contains(Render(model), want) {
+			t.Fatalf("missing accent heading %q", want)
 		}
 	}
 }
 
-func TestPlanRowsUseSectionBackgroundsAndNeutralHistoryText(t *testing.T) {
+func TestPlanRowsHaveNoBackgroundAndUncoloredHistory(t *testing.T) {
 	model := Model{
 		Snapshot: monitor.Snapshot{Rows: []monitor.Row{
 			{RepositoryName: "alpha", PlanID: "now-row", Status: plan.StatusBlocked, AttentionReasons: []monitor.AttentionReason{monitor.AttentionBlocked}},
@@ -124,12 +122,7 @@ func TestPlanRowsUseSectionBackgroundsAndNeutralHistoryText(t *testing.T) {
 	model.Page = PageHistory
 	frame += Render(model)
 
-	backgrounds := map[string]theme.Role{
-		"now-row":     theme.RolePlanNowBackground,
-		"next-row":    theme.RolePlanNextBackground,
-		"history-row": theme.RolePlanHistoryBackground,
-	}
-	for planID, role := range backgrounds {
+	for _, planID := range []string{"now-row", "next-row", "history-row"} {
 		var rowLine string
 		for _, line := range renderedLines(frame) {
 			if strings.Contains(line, planID) {
@@ -137,14 +130,13 @@ func TestPlanRowsUseSectionBackgroundsAndNeutralHistoryText(t *testing.T) {
 				break
 			}
 		}
-		prefix := theme.Sequence(theme.Default().Palette(theme.ProfileTrueColor).MustColor(role), true)
-		if rowLine == "" || !strings.HasPrefix(rowLine, prefix) {
-			t.Errorf("%s row does not use background role %d: %q", planID, role, rowLine)
+		if rowLine == "" || strings.Contains(rowLine, "\x1b[48;") {
+			t.Errorf("%s row missing or has a background: %q", planID, rowLine)
 		}
 	}
 	for _, line := range renderedLines(frame) {
-		if strings.Contains(line, "history-row") && !strings.Contains(line, theme.Sequence(theme.Default().Palette(theme.ProfileTrueColor).MustColor(theme.RolePlanHistoryText), false)) {
-			t.Errorf("history row does not use dim neutral text: %q", line)
+		if strings.Contains(line, "history-row") && strings.Contains(line, "\x1b[") {
+			t.Errorf("history row has colored cells: %q", line)
 		}
 	}
 }
@@ -156,7 +148,7 @@ func TestRenderLiveAndKilledMerge(t *testing.T) {
 	render := func() string { return Render(Model{Snapshot: monitor.Snapshot{Rows: []monitor.Row{row}}, Width: 200}) }
 	t.Run("live", func(t *testing.T) {
 		got := render()
-		if !strings.Contains(got, "MERGING · merge: verifying") || !strings.Contains(got, "NOW") || strings.Contains(got, row.RecommendedAction.Reason) {
+		if !strings.Contains(got, "MERGING · merge: verifying") || !strings.Contains(got, "WIP") || strings.Contains(got, row.RecommendedAction.Reason) {
 			t.Fatalf("live merge frame:\n%s", got)
 		}
 	})
@@ -231,7 +223,7 @@ func TestRenderSectionsAndOperationalLabels(t *testing.T) {
 	}}
 
 	got := Render(Model{Snapshot: snapshot, Selected: 2})
-	ordered := []string{"NOW", "NEXT"}
+	ordered := []string{"WIP"}
 	previous := -1
 	for _, label := range ordered {
 		index := strings.Index(got, label)
@@ -411,7 +403,7 @@ func TestPlanColumnsVaryAcrossMixedAndStressScenarios(t *testing.T) {
 	}
 }
 
-func TestPlanColumnsAlignAcrossNowAndNext(t *testing.T) {
+func TestPlanColumnsUseOneHeader(t *testing.T) {
 	frame := Render(Model{
 		Snapshot: monitor.Snapshot{Rows: []monitor.Row{
 			{RepositoryName: "alpha", PlanID: "blocked", Status: plan.StatusBlocked, AttentionReasons: []monitor.AttentionReason{monitor.AttentionBlocked}},
@@ -427,15 +419,12 @@ func TestPlanColumnsAlignAcrossNowAndNext(t *testing.T) {
 			headers = append(headers, line)
 		}
 	}
-	if len(headers) != 2 {
-		t.Fatalf("plan header count = %d, want 2:\n%s", len(headers), frame)
+	if len(headers) != 1 {
+		t.Fatalf("plan header count = %d, want 1:\n%s", len(headers), frame)
 	}
 	for _, name := range []string{"REPO", "NEXT", "PLAN", "SLICES", "AGE"} {
-		wantOffset := strings.Index(headers[0], name)
-		for index, header := range headers[1:] {
-			if got := strings.Index(header, name); got != wantOffset {
-				t.Errorf("%s offset in section %d = %d, want %d:\n%s", name, index+1, got, wantOffset, frame)
-			}
+		if !strings.Contains(headers[0], name) {
+			t.Errorf("header missing %s: %s", name, headers[0])
 		}
 	}
 	for _, header := range headers {
@@ -532,7 +521,7 @@ func TestRenderOmitsEmptySectionsAndHistoryShowsDonePlans(t *testing.T) {
 		{PlanID: "done", Status: plan.StatusCompleted},
 		{PlanID: "abandoned", Status: plan.StatusAbandoned},
 	}}})
-	for _, want := range []string{"DONE", "done", "abandoned", "2 plans"} {
+	for _, want := range []string{"HISTORY", "done", "abandoned", "2 plans"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("terminal plans Render() missing %q: %q", want, got)
 		}
@@ -730,6 +719,28 @@ func TestRenderHeightViewportKeepsSelectionVisible(t *testing.T) {
 	}
 }
 
+func TestRenderBacklogViewportKeepsSelectionVisible(t *testing.T) {
+	items := make([]note.CatalogNote, 30)
+	for i := range items {
+		items[i] = note.CatalogNote{RepositoryName: "repo", ID: fmt.Sprintf("note-%02d", i), Text: fmt.Sprintf("preview-%02d", i), Tags: []string{"tier1"}}
+	}
+	for _, selected := range []int{0, 15, 29} {
+		got := Render(Model{Page: PageNotes, NoteSnapshot: note.Snapshot{Notes: items}, Selected: selected, Width: 80, Height: 12})
+		if len(renderedLines(got)) != 12 || strings.HasSuffix(got, "\n") {
+			t.Fatalf("invalid bounded frame:\n%s", got)
+		}
+		if !strings.Contains(got, fmt.Sprintf("preview-%02d", selected)) {
+			t.Fatalf("selected note %d not visible:\n%s", selected, got)
+		}
+		if strings.Count(got, "▌ OPEN NOTES ") != 1 || strings.Count(got, "PREVIEW") != 1 {
+			t.Fatalf("expected one sticky note heading and header:\n%s", got)
+		}
+		if selected == 29 && strings.Contains(got, "preview-00") {
+			t.Fatalf("viewport did not scroll:\n%s", got)
+		}
+	}
+}
+
 func TestRenderVerticalResizeReflowsAroundSelection(t *testing.T) {
 	rows := make([]monitor.Row, 10)
 	for index := range rows {
@@ -814,7 +825,7 @@ func TestRenderAbandonmentAsSafeHistoricalOutcome(t *testing.T) {
 		NextAction:       "FINALIZE PR",
 	}
 	got := Render(Model{Page: PageHistory, Snapshot: monitor.Snapshot{Rows: []monitor.Row{row}}, Width: 120})
-	for _, want := range []string{"DONE", "ABANDONED   old-plan"} {
+	for _, want := range []string{"HISTORY", "ABANDONED   old-plan"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("abandonment render missing %q:\n%s", want, got)
 		}
@@ -883,13 +894,13 @@ func TestRenderPlanTruncationCountsOnlyHiddenPlanRows(t *testing.T) {
 	}
 
 	got := Render(Model{Snapshot: monitor.Snapshot{Rows: rows}, Width: 70, Height: 20})
-	if !strings.Contains(got, "NOW") || !strings.Contains(got, "NEXT") {
-		t.Fatalf("constrained frame did not span plan sections:\n%s", got)
+	if !strings.Contains(got, "WIP") || !strings.Contains(got, "NEXT") {
+		t.Fatalf("constrained frame missing table heading:\n%s", got)
 	}
-	if visible := strings.Count(got, "\n  repo "); visible != 13 {
-		t.Fatalf("visible plan rows = %d, want 13:\n%s", visible, got)
+	if visible := strings.Count(got, "\n  repo "); visible != 15 {
+		t.Fatalf("visible plan rows = %d, want 15:\n%s", visible, got)
 	}
-	if !strings.Contains(got, "+ 23 more  ↓") {
+	if !strings.Contains(got, "+ 21 more  ↓") {
 		t.Fatalf("hidden plan count does not exclude section and preview lines:\n%s", got)
 	}
 	if strings.Contains(got, "+ 38 more  ↓") {
@@ -907,8 +918,20 @@ func TestRenderSelectedLastPlanKeepsSectionSkeleton(t *testing.T) {
 		}
 	}
 
-	got := Render(Model{Snapshot: monitor.Snapshot{Rows: rows}, Selected: 29, Width: 70, Height: 20})
-	for _, want := range []string{"NEXT", "REPO", "  repo   RUN     plan-29"} {
+	model := Model{Snapshot: monitor.Snapshot{Rows: rows}, Selected: 29, Width: 70, Height: 20}
+	sections := BuildPageSections(rows, Filter{}, PagePlans, Sort{})
+	body, selectedLine, metadata := renderPlanTable(model, PagePlans, sections)
+	if len(metadata.sections) != 1 || len(metadata.sections[0].contentLines) != 30 || len(metadata.sections[0].headingLines) != 2 {
+		t.Fatalf("expected one content section: %+v", metadata)
+	}
+	if selectedLine < 0 || !strings.Contains(body[selectedLine], "plan-29") {
+		t.Fatal("selected row metadata lost")
+	}
+	got := Render(model)
+	if strings.Count(got, "▌ WIP ") != 1 || strings.Contains(got, "plan-00") {
+		t.Fatalf("table did not scroll with one heading:\n%s", got)
+	}
+	for _, want := range []string{"WIP", "NEXT", "REPO", "  repo   RUN     plan-29"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("selected-last viewport missing %q:\n%s", want, got)
 		}
@@ -951,15 +974,15 @@ func TestRenderShortcutLegendAsBoundedPopover(t *testing.T) {
 	}{
 		{
 			page: PagePlans,
-			want: []string{"Keyboard shortcuts", "KEY", "ACTION", "gg / G", "Jump to top / bottom", "Shift+Tab", "r", "Run selected plan", "x", "Fix stuck plan in foreground a", "/", "Search plans and notes", "Backspace", "Go back / clear search", "? / Esc", "Close shortcuts"},
+			want: []string{"Keyboard shortcuts", "KEY", "ACTION", "Open sort menu", "Open settings", "gg / G", "Jump to top / bottom", "Shift+Tab", "r", "Run selected plan", "x", "Fix stuck plan in foreground a", "/", "Search plans and notes", "Backspace", "Go back / clear search", "? / Esc", "Close shortcuts"},
 		},
 		{
 			page:        PageNotes,
-			want:        []string{"Keyboard shortcuts", "PgUp / PgDn", "gg / G", "Jump to top / bottom", "Open selected item", "Create note", "Previous / next note", "Ctrl+G", "Edit selected note", "p", "Plan note in foreground agent", "c", "Copy selected note ID", "0 / 1 / 2 / 3", "Set selected note tier", "d / D", "Open filter menu", "/", "Search plans and notes", "Backspace", "Go back / clear search", "? / Esc"},
+			want:        []string{"Keyboard shortcuts", "PgUp / PgDn", "gg / G", "Jump to top / bottom", "Open selected item", "Create note", "Previous / next note", "Ctrl+G", "Edit selected note", "p", "Plan note in foreground agent", "c", "Copy selected note ID", "0 / 1 / 2 / 3", "Set selected note tier", "d / D", "Open filter menu", "Open sort menu", "Open settings", "/", "Search plans and notes", "Backspace", "Go back / clear search", "? / Esc"},
 			unavailable: "Run selected plan",
 		},
 	} {
-		frame := Render(Model{Page: test.page, ShowShortcuts: true, Width: 64, Height: 21, Profile: theme.ProfileTrueColor})
+		frame := Render(Model{Page: test.page, ShowShortcuts: true, Width: 64, Height: 23, Profile: theme.ProfileTrueColor})
 		for _, want := range test.want {
 			if !strings.Contains(frame, want) {
 				t.Fatalf("%s shortcut popover missing %q:\n%s", test.page, want, frame)
@@ -969,8 +992,8 @@ func TestRenderShortcutLegendAsBoundedPopover(t *testing.T) {
 			t.Fatalf("%s shortcut popover contains unavailable action %q:\n%s", test.page, test.unavailable, frame)
 		}
 		lines := renderedLines(frame)
-		if len(lines) != 21 {
-			t.Fatalf("%s shortcut popover lines = %d, want 21", test.page, len(lines))
+		if len(lines) != 23 {
+			t.Fatalf("%s shortcut popover lines = %d, want 23", test.page, len(lines))
 		}
 		for _, line := range lines {
 			if width := cells.Width(line); width > 64 {

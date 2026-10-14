@@ -38,21 +38,11 @@ type noteTableWidths struct {
 	updated    int
 }
 
-type indexedNote struct {
-	item  note.CatalogNote
-	index int
-}
-
-type noteTierBucket struct {
-	title string
-	items []indexedNote
-}
-
 func visibleNotes(snapshot note.Snapshot, focusRepositoryID string) []note.CatalogNote {
-	return visibleFilteredNotes(snapshot, repositoryFilter(focusRepositoryID))
+	return visibleFilteredNotes(snapshot, repositoryFilter(focusRepositoryID), Sort{})
 }
 
-func visibleFilteredNotes(snapshot note.Snapshot, filter Filter) []note.CatalogNote {
+func visibleFilteredNotes(snapshot note.Snapshot, filter Filter, ordering Sort) []note.CatalogNote {
 	visible := make([]note.CatalogNote, 0, len(snapshot.Notes))
 	for _, item := range snapshot.Notes {
 		if filter.MatchesNote(item) {
@@ -64,7 +54,7 @@ func visibleFilteredNotes(snapshot note.Snapshot, filter Filter) []note.CatalogN
 	sort.SliceStable(visible, func(i, j int) bool {
 		return noteTierRank(visible[i]) < noteTierRank(visible[j])
 	})
-	return visible
+	return SortNotes(visible, ordering)
 }
 
 // noteTierRank orders tiered notes ahead of untiered ones, lowest tier first.
@@ -95,7 +85,7 @@ func visibleNoteWarnings(snapshot note.Snapshot, filter Filter) []note.CatalogWa
 }
 
 func renderNotesPage(snapshot note.Snapshot, selected int, now time.Time, model Model) (lines []string, selectedLine int, metadata tableViewportMetadata) {
-	items := visibleFilteredNotes(snapshot, model.Filter)
+	items := visibleFilteredNotes(snapshot, model.Filter, model.Sorts.For(PageNotes))
 	warnings := visibleNoteWarnings(snapshot, model.Filter)
 	selectedLine = -1
 	if len(items) == 0 {
@@ -106,20 +96,18 @@ func renderNotesPage(snapshot note.Snapshot, selected int, now time.Time, model 
 		widths := measureNoteTable(items, now)
 		columns := noteTableColumns(widths, model.Width)
 		paneWidth := noteTablePaneWidth(model.Width, columns)
-		for _, bucket := range noteTierBuckets(items) {
-			sectionWidth := dashboardSectionWidth(model, PageNotes, bucket.title, 0)
-			lines = append(lines, "", sectionTitleRule(model.Palette(), theme.RoleAccent, bucket.title, sectionWidth), renderNoteHeader(columns, paneWidth))
-			section := tableViewportSection{headingLines: []int{len(lines) - 2, len(lines) - 1}}
-			for _, indexed := range bucket.items {
-				isSelected := indexed.index == selected
-				if isSelected {
-					selectedLine = len(lines)
-				}
-				section.contentLines = append(section.contentLines, len(lines))
-				lines = append(lines, renderNoteRow(indexed.item, now, columns, paneWidth, isSelected, model.Palette()))
+		sectionWidth := dashboardSectionWidth(model, PageNotes, "OPEN NOTES", 0)
+		lines = append(lines, "", sectionTitleRule(model.Palette(), theme.RoleAccent, "OPEN NOTES", sectionWidth), renderNoteHeader(columns, paneWidth))
+		section := tableViewportSection{headingLines: []int{len(lines) - 2, len(lines) - 1}}
+		for index, item := range items {
+			isSelected := index == selected
+			if isSelected {
+				selectedLine = len(lines)
 			}
-			metadata.sections = append(metadata.sections, section)
+			section.contentLines = append(section.contentLines, len(lines))
+			lines = append(lines, renderNoteRow(item, now, columns, paneWidth, isSelected, model.Palette()))
 		}
+		metadata.sections = append(metadata.sections, section)
 	}
 	if len(warnings) > 0 {
 		sectionWidth := dashboardSectionWidth(model, PageNotes, "Warnings", 0)
@@ -137,23 +125,6 @@ func renderNotesPage(snapshot note.Snapshot, selected int, now time.Time, model 
 		metadata.sections = append(metadata.sections, section)
 	}
 	return lines, selectedLine, metadata
-}
-
-func noteTierBuckets(items []note.CatalogNote) []noteTierBucket {
-	var buckets []noteTierBucket
-	for index, item := range items {
-		rank := noteTierRank(item)
-		title := "UNTIERED"
-		if rank != math.MaxInt {
-			title = fmt.Sprintf("TIER %d", rank)
-		}
-		if len(buckets) == 0 || buckets[len(buckets)-1].title != title {
-			buckets = append(buckets, noteTierBucket{title: title})
-		}
-		last := len(buckets) - 1
-		buckets[last].items = append(buckets[last].items, indexedNote{item: item, index: index})
-	}
-	return buckets
 }
 
 func noteRepositoryBreakdown(items []note.CatalogNote) string {
@@ -269,18 +240,10 @@ func renderNoteRow(item note.CatalogNote, now time.Time, columns []column, paneW
 }
 
 func noteValues(item note.CatalogNote, now time.Time) noteRowValues {
-	tags := make([]string, 0, len(item.Tags))
-	for _, tag := range item.Tags {
-		if !isNoteTierTag(tag) {
-			if tag = singleLineNoteValue(tag); tag != "" {
-				tags = append(tags, tag)
-			}
-		}
-	}
 	return noteRowValues{
 		repository: boundedNoteValue(item.RepositoryName, maxNoteRepositoryCells),
 		preview:    boundedNoteValue(item.Text, maxNotePreviewCells),
-		tags:       cells.TruncateEllipsis(strings.Join(tags, ", "), maxNoteTagsCells),
+		tags:       cells.TruncateEllipsis(noteSortTags(item), maxNoteTagsCells),
 		created:    noteRelativeAge(item.CreatedAt, now),
 		updated:    noteRelativeAge(item.UpdatedAt, now),
 	}

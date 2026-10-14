@@ -8,59 +8,21 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 )
 
-// SectionKind identifies one table-page plan group.
-type SectionKind string
-
-const (
-	SectionNow     SectionKind = "now"
-	SectionNext    SectionKind = "next"
-	SectionHistory SectionKind = "history"
-)
-
-// Section is one stable partition of monitor rows. Rows retain the collector's
-// urgency order within each section.
+// Section is a page's table of monitor rows.
 type Section struct {
-	Kind  SectionKind
 	Title string
 	Rows  []monitor.Row
 }
 
-// BuildSections groups monitor rows for the table page without re-sorting them.
-func BuildSections(rows []monitor.Row) []Section {
-	return BuildRepositorySections(rows, "")
-}
-
-// BuildRepositorySections groups rows after optionally restricting them to one
-// repository. Filtering never mutates or reorders the collector snapshot.
-func BuildRepositorySections(rows []monitor.Row, repositoryID string) []Section {
-	return BuildFilteredSections(rows, repositoryFilter(repositoryID))
-}
-
-// BuildFilteredSections filters before grouping without mutating the collector snapshot.
-func BuildFilteredSections(rows []monitor.Row, filter Filter) []Section {
-	sections := []Section{
-		{Kind: SectionNow, Title: "NOW"},
-		{Kind: SectionNext, Title: "NEXT"},
-		{Kind: SectionHistory, Title: "DONE"},
-	}
+// filterRows preserves order without mutating the collector snapshot.
+func filterRows(rows []monitor.Row, filter Filter) []monitor.Row {
+	filtered := make([]monitor.Row, 0, len(rows))
 	for _, row := range rows {
-		if !filter.MatchesRow(row) {
-			continue
-		}
-		kind := sectionKind(row)
-		for index := range sections {
-			if sections[index].Kind == kind {
-				sections[index].Rows = append(sections[index].Rows, row)
-				break
-			}
+		if filter.MatchesRow(row) {
+			filtered = append(filtered, row)
 		}
 	}
-	for index := range sections {
-		if sections[index].Kind == SectionNext {
-			orderNextRows(sections[index].Rows)
-		}
-	}
-	return sections
+	return filtered
 }
 
 func planNextAction(row monitor.Row) string {
@@ -106,21 +68,6 @@ func planNextActionDisplay(row monitor.Row) string {
 		return guidance + " — " + reason
 	}
 	return guidance
-}
-
-func sectionKind(row monitor.Row) SectionKind {
-	if row.Status == plan.StatusCompleted || row.Status == plan.StatusAbandoned {
-		return SectionHistory
-	}
-	if row.Status == plan.StatusInProgress || row.Status == plan.StatusBlocked || row.Status == plan.StatusReviewed {
-		return SectionNow
-	}
-	switch planNextAction(row) {
-	case "RUN", "CHECK", "WAIT", "SKIP":
-		return SectionNext
-	default:
-		return SectionNow
-	}
 }
 
 func hasVisibleRun(row monitor.Row) bool {

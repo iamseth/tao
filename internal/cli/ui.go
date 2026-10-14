@@ -153,6 +153,7 @@ func (a App) ui(ctx context.Context, args []string) error {
 		Debug:                newUIDebugCollector(a, executable),
 		Settings:             newUISettingsService(a),
 		FilterStore:          newUIFilterStore(),
+		SortStore:            newUISortStore(),
 		Actions:              actions,
 		Inspector:            newUIDetailInspector(a.uiCommandRunner()),
 		Changes:              newUIDetailChangesLoader(a.uiCommandRunner()),
@@ -203,12 +204,58 @@ func (s uiFilterStore) Save(ctx context.Context, filter tui.Filter) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return s.store.Save(uistate.Filters{
-		Version:      1,
-		Enabled:      filter.Enabled,
-		Repositories: filter.Repositories,
-		Statuses:     filter.Statuses,
-	})
+	current, err := s.store.Load()
+	if err != nil {
+		return err
+	}
+	current.Version = 1
+	current.Enabled = filter.Enabled
+	current.Repositories = filter.Repositories
+	current.Statuses = filter.Statuses
+	return s.store.Save(current)
+}
+
+type uiSortStore struct{ store uistate.Store }
+
+func newUISortStore() tui.SortStore {
+	return uiSortStore{store: uistate.Store{DataHome: taodata.DataHome()}}
+}
+
+func (s uiSortStore) Load(ctx context.Context) (tui.PageSorts, error) {
+	if err := ctx.Err(); err != nil {
+		return tui.PageSorts{}, err
+	}
+	current, err := s.store.Load()
+	if err != nil {
+		return tui.PageSorts{}, err
+	}
+	setting := func(value *uistate.SortSetting) tui.Sort {
+		if value == nil {
+			return tui.Sort{Column: tui.SortDefault}
+		}
+		return tui.Sort{Column: tui.SortColumn(value.Column), Descending: value.Descending}
+	}
+	sorts := current.Sort
+	if sorts == nil {
+		sorts = &uistate.Sorts{}
+	}
+	return tui.PageSorts{Plans: setting(sorts.Plans), History: setting(sorts.History), Notes: setting(sorts.Notes)}, nil
+}
+
+func (s uiSortStore) Save(ctx context.Context, sorts tui.PageSorts) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	current, err := s.store.Load()
+	if err != nil {
+		return err
+	}
+	setting := func(value tui.Sort) *uistate.SortSetting {
+		return &uistate.SortSetting{Column: string(value.Column), Descending: value.Descending}
+	}
+	current.Version = 1
+	current.Sort = &uistate.Sorts{Plans: setting(sorts.Plans), History: setting(sorts.History), Notes: setting(sorts.Notes)}
+	return s.store.Save(current)
 }
 
 func (a App) newUINoteCollector() (tui.NoteSnapshotCollector, error) {

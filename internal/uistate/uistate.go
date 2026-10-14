@@ -10,9 +10,21 @@ import (
 	"github.com/iamseth/tao/internal/atomicfile"
 )
 
-// Filters is the persisted dashboard filter configuration, independent of TUI state.
+type SortSetting struct {
+	Column     string `json:"column"`
+	Descending bool   `json:"descending"`
+}
+
+type Sorts struct {
+	Plans   *SortSetting `json:"plans,omitempty"`
+	History *SortSetting `json:"history,omitempty"`
+	Notes   *SortSetting `json:"notes,omitempty"`
+}
+
+// Filters is the persisted dashboard configuration, independent of TUI state.
 type Filters struct {
 	Version      int      `json:"version"`
+	Sort         *Sorts   `json:"sort,omitempty"`
 	Enabled      bool     `json:"enabled"`
 	Repositories []string `json:"repositories"`
 	Statuses     []string `json:"statuses"`

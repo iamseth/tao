@@ -235,6 +235,61 @@ func TestWIPChangesShortcut(t *testing.T) {
 	}
 }
 
+type fakeSortStore struct {
+	sorts PageSorts
+	err   error
+	loads int
+}
+
+func (s *fakeSortStore) Load(context.Context) (PageSorts, error) { s.loads++; return s.sorts, s.err }
+func (s *fakeSortStore) Save(context.Context, PageSorts) error   { return errors.New("unexpected save") }
+
+func TestRunLoadsSortBestEffort(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		sort     Sort
+		err      error
+		reversed bool
+	}{
+		{name: "sorted", sort: Sort{Column: SortPlan, Descending: true}, reversed: true},
+		{name: "unknown", sort: Sort{Column: "unknown", Descending: true}},
+		{name: "old file"},
+		{name: "corrupt", err: errors.New("invalid JSON")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeSortStore{sorts: PageSorts{Plans: tc.sort}, err: tc.err}
+			var output bytes.Buffer
+			app := App{
+				Input: strings.NewReader("q"), Output: &output,
+				Terminal: &fakeTerminal{size: term.Size{Width: 120, Height: 30}, resizes: make(chan struct{})},
+				Ticker:   &fakeTicker{channel: make(chan time.Time)},
+				Collector: &fakeCollector{snapshots: []monitor.Snapshot{{Rows: []monitor.Row{
+					{PlanID: "alpha-title", Status: "planned"},
+					{PlanID: "zulu-title", Status: "planned"},
+				}}}}, SortStore: store,
+			}
+			if err := app.Run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			text := output.String()
+			if store.loads != 1 {
+				t.Fatalf("loads = %d", store.loads)
+			}
+			if tc.err != nil {
+				if !strings.Contains(text, "Load sorts: invalid JSON") {
+					t.Fatalf("missing warning: %s", text)
+				}
+			} else if strings.Contains(text, "Load sorts:") {
+				t.Fatalf("unexpected warning: %s", text)
+			}
+			a, z := strings.Index(text, "alpha-title"), strings.Index(text, "zulu-title")
+			if a < 0 || z < 0 || (z < a) != tc.reversed {
+				t.Fatalf("wrong sort order: %s", text)
+			}
+		})
+	}
+}
+
 func TestRunLoadsFilterBestEffort(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -424,6 +479,26 @@ func TestMergeRepositoryRowRequiresSingleEnabledRepository(t *testing.T) {
 	}
 }
 
+func TestRunSortMenuConsumesForegroundKeys(t *testing.T) {
+	terminal := &fakeTerminal{size: term.Size{Width: 120, Height: 30}, resizes: make(chan struct{})}
+	ticker := &fakeTicker{channel: make(chan time.Time)}
+	var output bytes.Buffer
+	// On Backlog, n would start note creation outside the modal menu.
+	err := (App{Input: strings.NewReader("\x1b[ZsnpxS\x07q"), Output: &output,
+		Terminal: terminal, Ticker: ticker,
+		Collector: &fakeCollector{snapshots: []monitor.Snapshot{{}}},
+	}).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "Direction: ascending") {
+		t.Fatal("sort overlay missing")
+	}
+	if strings.Contains(output.String(), "Create note") {
+		t.Fatal("menu leaked foreground key")
+	}
+}
+
 func TestRunMovesSelectionAndRestoresTerminal(t *testing.T) {
 	terminal := &fakeTerminal{size: term.Size{Width: 120, Height: 30}, resizes: make(chan struct{})}
 	ticker := &fakeTicker{channel: make(chan time.Time)}
@@ -592,12 +667,12 @@ func TestRefreshPreservesSelectedPlanBeforeAction(t *testing.T) {
 			wantPlanID: "shared",
 		},
 		{
-			name: "section membership change",
+			name: "attention change preserves collector position",
 			initial: monitor.Snapshot{Rows: []monitor.Row{
 				{RepositoryID: "repo-target", RepositoryRoot: "/repos/target", PlanID: "target", Status: "planned"},
 				{RepositoryID: "repo-other", RepositoryRoot: "/repos/other", PlanID: "other", Status: "planned", AttentionReasons: []monitor.AttentionReason{monitor.AttentionBlocked}},
 			}},
-			selected: 1,
+			selected: 0,
 			refreshed: monitor.Snapshot{Rows: []monitor.Row{
 				{RepositoryID: "repo-target", RepositoryRoot: "/repos/target", PlanID: "target", Status: "planned", AttentionReasons: []monitor.AttentionReason{monitor.AttentionBlocked}},
 				{RepositoryID: "repo-other", RepositoryRoot: "/repos/other", PlanID: "other", Status: "planned"},
@@ -1476,8 +1551,8 @@ func TestPlanDetailRunAfterNavigationAndRefresh(t *testing.T) {
 	if state.detail.activeTab != detailTabActivity {
 		t.Fatal("run changed active tab")
 	}
-	// Refresh moved the blocked plan ahead of the planned row.
-	app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyArrowRight})
+	// Refresh retains collector order, so the first plan remains to the left.
+	app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyArrowLeft})
 	app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyRune, Rune: 'r'})
 	if len(launcher.calls) != 3 {
 		t.Fatalf("calls = %+v", launcher.calls)

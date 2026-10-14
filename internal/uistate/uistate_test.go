@@ -16,6 +16,7 @@ func TestStoreRoundTrip(t *testing.T) {
 		t.Fatalf("Path() = %q, want %q", got, want)
 	}
 	want := Filters{Version: 1, Enabled: true, Repositories: []string{"repo-b", "repo-a"}, Statuses: []string{"planned", "completed"}}
+	want.Sort = &Sorts{Plans: &SortSetting{Column: "plan", Descending: true}, History: &SortSetting{Column: "age"}, Notes: &SortSetting{Column: "updated", Descending: true}}
 	for _, enabled := range []bool{true, false} {
 		want.Enabled = enabled
 		if err := store.Save(want); err != nil {
@@ -58,6 +59,17 @@ func TestStoreIgnoresLegacyTags(t *testing.T) {
 	}
 	if _, exists := fields["tags"]; exists {
 		t.Fatalf("saved obsolete tags: %s", content)
+	}
+}
+
+func TestStoreUnknownSortColumn(t *testing.T) {
+	store := Store{DataHome: t.TempDir()}
+	if err := os.WriteFile(store.Path(), []byte(`{"version":1,"sort":{"plans":{"column":"future","descending":true}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Load()
+	if err != nil || got.Sort == nil || got.Sort.Plans == nil || *got.Sort.Plans != (SortSetting{Column: "future", Descending: true}) {
+		t.Fatalf("Load = %+v, %v", got, err)
 	}
 }
 

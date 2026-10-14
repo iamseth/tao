@@ -17,6 +17,7 @@ func shortcutsForPage(page PageID) []shortcut {
 		return []shortcut{
 			{key: "↑ / ↓ / j / k", action: "Select repository (scroll when none)"},
 			{key: "PgUp / PgDn / g / G", action: "Scroll global values and paths"},
+			{key: "S", action: "Open settings"},
 			{key: "e", action: "Edit repository settings"},
 			{key: "p", action: "Cycle pull-request default"},
 			{key: "Tab / Shift+Tab / ← / →", action: "Switch tabs"},
@@ -27,6 +28,7 @@ func shortcutsForPage(page PageID) []shortcut {
 	if normalizePage(page) == PageDebug {
 		return []shortcut{
 			{key: "↑ / ↓ / j / k / PgUp / PgDn", action: "Scroll diagnostics"},
+			{key: "S", action: "Open settings"},
 			{key: "g / G", action: "Jump to top / bottom"},
 			{key: "Tab / Shift+Tab / ← / →", action: "Switch tabs"},
 			{key: "q / Esc Esc", action: "Quit"},
@@ -39,6 +41,8 @@ func shortcutsForPage(page PageID) []shortcut {
 		{key: "Tab / Shift+Tab / ← / →", action: "Switch tabs"},
 		{key: "Enter", action: "Open selected item"},
 		{key: "f", action: "Open filter menu"},
+		{key: "s", action: "Open sort menu"},
+		{key: "S", action: "Open settings"},
 	}
 	if normalizePage(page) == PageNotes {
 		common = append(common,

@@ -18,7 +18,7 @@ func historyStatus(status string) bool {
 
 // BuildPageSections applies page membership independently of filters. Unknown
 // and invalid states stay in WIP so work needing attention remains visible.
-func BuildPageSections(rows []monitor.Row, filter Filter, page PageID) []Section {
+func BuildPageSections(rows []monitor.Row, filter Filter, page PageID, ordering Sort) []Section {
 	page = normalizePage(page)
 	filtered := make([]monitor.Row, 0, len(rows))
 	for _, row := range rows {
@@ -35,7 +35,12 @@ func BuildPageSections(rows []monitor.Row, filter Filter, page PageID) []Section
 			return right == nil || left.After(*right)
 		})
 	}
-	return BuildFilteredSections(filtered, filterForPage(filter, page))
+	title := "HISTORY"
+	if page != PageHistory {
+		title = "WIP"
+		orderPlannedRows(filtered)
+	}
+	return []Section{{Title: title, Rows: SortPlanRows(filterRows(filtered, filterForPage(filter, page)), ordering)}}
 }
 
 // The persisted status set holds both pages' selections. Projecting it keeps

@@ -134,7 +134,7 @@ func TestDiscoverFilterOptions(t *testing.T) {
 	}
 }
 
-func TestBuildFilteredSectionsPreservesGroupingAndAllHistory(t *testing.T) {
+func TestFilterRowsPreservesOrderAndAllHistory(t *testing.T) {
 	rows := []monitor.Row{
 		{RepositoryID: "a", PlanID: "now", Status: plan.StatusBlocked},
 		{RepositoryID: "b", PlanID: "next", Status: plan.StatusPlanned},
@@ -147,27 +147,16 @@ func TestBuildFilteredSectionsPreservesGroupingAndAllHistory(t *testing.T) {
 		)
 	}
 	before := slices.Clone(rows)
-	sections := BuildFilteredSections(rows, Filter{Enabled: true, Repositories: []string{"a", "b"}})
-	if len(sections) != 3 || sections[0].Kind != SectionNow || sections[1].Kind != SectionNext || sections[2].Kind != SectionHistory {
-		t.Fatalf("section ordering = %+v", sections)
+	filtered := filterRows(rows, Filter{Enabled: true, Repositories: []string{"a", "b"}})
+	if len(filtered) != 23 || filtered[0].PlanID != "now" || filtered[1].PlanID != "next" || filtered[2].Kind != monitor.RowKindRepositoryWarning {
+		t.Fatalf("filtered rows = %+v", filtered)
 	}
-	if len(sections[0].Rows) != 2 || sections[0].Rows[0].PlanID != "now" || sections[0].Rows[1].Kind != monitor.RowKindRepositoryWarning || len(sections[1].Rows) != 1 || sections[1].Rows[0].PlanID != "next" {
-		t.Fatalf("filtered groups = %+v", sections)
-	}
-	if len(sections[2].Rows) != 20 {
-		t.Fatalf("DONE count = %d", len(sections[2].Rows))
-	}
-	for i, row := range sections[2].Rows {
+	for i, row := range filtered[3:] {
 		if row.PlanID != fmt.Sprint(i) {
-			t.Fatalf("DONE row %d = %s", i, row.PlanID)
+			t.Fatalf("history row %d = %s", i, row.PlanID)
 		}
 	}
-	for _, repo := range []string{"", "a", "missing"} {
-		if !reflect.DeepEqual(BuildRepositorySections(rows, repo), BuildFilteredSections(rows, repositoryFilter(repo))) {
-			t.Fatalf("repository wrapper differs for %q", repo)
-		}
-	}
-	if !reflect.DeepEqual(BuildSections(rows), BuildFilteredSections(rows, Filter{})) || !reflect.DeepEqual(rows, before) {
+	if !reflect.DeepEqual(rows, filterRows(rows, Filter{})) || !reflect.DeepEqual(rows, before) {
 		t.Fatal("empty filter changed behavior or filtering mutated snapshot")
 	}
 }
@@ -182,7 +171,7 @@ func TestVisibleFilteredNotesPreservesTierOrderAndSnapshot(t *testing.T) {
 		{RepositoryID: "a", ID: "tier0", Tags: []string{"tier0"}},
 	}}
 	before := slices.Clone(snapshot.Notes)
-	items := visibleFilteredNotes(snapshot, Filter{Enabled: true, Repositories: []string{"a", "b"}})
+	items := visibleFilteredNotes(snapshot, Filter{Enabled: true, Repositories: []string{"a", "b"}}, Sort{})
 	var ids []string
 	for _, item := range items {
 		ids = append(ids, item.ID)
@@ -191,11 +180,11 @@ func TestVisibleFilteredNotesPreservesTierOrderAndSnapshot(t *testing.T) {
 		t.Fatalf("visible notes = %v", ids)
 	}
 	for _, repo := range []string{"", "a", "missing"} {
-		if !reflect.DeepEqual(visibleNotes(snapshot, repo), visibleFilteredNotes(snapshot, repositoryFilter(repo))) {
+		if !reflect.DeepEqual(visibleNotes(snapshot, repo), visibleFilteredNotes(snapshot, repositoryFilter(repo), Sort{})) {
 			t.Fatalf("repository wrapper differs for %q", repo)
 		}
 	}
-	if !reflect.DeepEqual(visibleNotes(snapshot, ""), visibleFilteredNotes(snapshot, Filter{})) || !reflect.DeepEqual(snapshot.Notes, before) {
+	if !reflect.DeepEqual(visibleNotes(snapshot, ""), visibleFilteredNotes(snapshot, Filter{}, Sort{})) || !reflect.DeepEqual(snapshot.Notes, before) {
 		t.Fatal("empty filter changed behavior or filtering mutated snapshot")
 	}
 }

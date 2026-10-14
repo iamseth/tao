@@ -157,12 +157,12 @@ func TestDebugPageScrollAndShortcuts(t *testing.T) {
 	}
 
 	frame := Render(Model{Page: PageDebug, DebugSnapshot: state.debugSnapshot, Width: 70, Height: 12, ShowShortcuts: true})
-	for _, want := range []string{"Keyboard shortcuts", "Scroll diagnostics", "Jump to top / bottom", "Switch tabs"} {
+	for _, want := range []string{"Keyboard shortcuts", "Scroll diagnostics", "Jump to top / bottom", "Switch tabs", "S", "Open settings"} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("debug shortcuts missing %q:\n%s", want, frame)
 		}
 	}
-	for _, unavailable := range []string{"Run selected plan", "Search plans and notes", "Open filter menu"} {
+	for _, unavailable := range []string{"Run selected plan", "Search plans and notes", "Open filter menu", "Open sort menu"} {
 		if strings.Contains(frame, unavailable) {
 			t.Fatalf("debug shortcuts contain unavailable action %q:\n%s", unavailable, frame)
 		}

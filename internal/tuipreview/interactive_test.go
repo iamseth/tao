@@ -58,7 +58,7 @@ func TestInteractiveSettingsEditing(t *testing.T) {
 	scenario, _ := Lookup(ScenarioMixed)
 	for _, accept := range []string{"y", "n"} {
 		var output bytes.Buffer
-		app := NewInteractiveApp(scenario, strings.NewReader("se\r\x1b[C\r"+accept+"\x1b\x1bq"), &output, previewTestTerminal{}, &previewTestTicker{})
+		app := NewInteractiveApp(scenario, strings.NewReader("Se\r\x1b[C\r"+accept+"\x1b\x1bq"), &output, previewTestTerminal{}, &previewTestTicker{})
 		before, err := app.Settings.Collect(context.Background())
 		if err != nil {
 			t.Fatal(err)
