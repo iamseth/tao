@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -335,8 +336,21 @@ func TestMergeServiceProposalUsesPlanObserver(t *testing.T) {
 // Exercise the real provider adapters without live providers or filesystem edits.
 func mergeMetricsStarter(t *testing.T, provider, outcome string, providerErr error, calls *int) runpkg.ProcessStarter {
 	t.Helper()
-	return func(ctx context.Context, _ string, name string, _ []string) (runpkg.Process, error) {
+	return func(ctx context.Context, _ string, name string, args []string) (runpkg.Process, error) {
 		(*calls)++
+		// Aggregate reviews project private scratch/cache paths before the provider.
+		if name == "/usr/bin/env" {
+			if len(args) < 4 {
+				t.Fatalf("incomplete aggregate-review launch: %v", args)
+			}
+			for i, key := range []string{"TMPDIR", "GOCACHE", "GOLANGCI_LINT_CACHE"} {
+				value, ok := strings.CutPrefix(args[i], key+"=")
+				if !ok || !filepath.IsAbs(value) {
+					t.Fatalf("invalid aggregate-review %s projection: %q", key, args[i])
+				}
+			}
+			name = args[3]
+		}
 		if name != provider {
 			t.Fatalf("provider=%s, want %s", name, provider)
 		}

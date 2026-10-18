@@ -3,6 +3,7 @@ package merge
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,7 @@ type fakeBatchSettlementWorkspace struct {
 	calls     []string
 	removeErr error
 	clearErr  error
+	onClear   func()
 }
 
 func (f *fakeBatchSettlementWorkspace) RemoveIntegration(_ context.Context, id string) error {
@@ -24,6 +26,9 @@ func (f *fakeBatchSettlementWorkspace) RemoveIntegration(_ context.Context, id s
 }
 
 func (f *fakeBatchSettlementWorkspace) ClearActive(id string) error {
+	if f.onClear != nil {
+		f.onClear()
+	}
 	f.calls = append(f.calls, "clear "+id)
 	return f.clearErr
 }
@@ -178,7 +183,7 @@ func TestBatchSettleBatchCleanupFailuresRetainRetryEvidence(t *testing.T) {
 		clearErr  error
 		wantCalls string
 	}{
-		{name: "integration cleanup", removeErr: errors.New("worktree busy"), wantCalls: "remove batch-settle"},
+		{name: "integration cleanup", removeErr: errors.New("/integration/scratch: worktree busy"), wantCalls: "remove batch-settle"},
 		{name: "active identity", clearErr: errors.New("identity busy"), wantCalls: "remove batch-settle,clear batch-settle"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -188,6 +193,15 @@ func TestBatchSettleBatchCleanupFailuresRetainRetryEvidence(t *testing.T) {
 			failed, err := settler.Settle(context.Background(), state)
 			if err == nil || failed.State.Status != BatchStatusCompleted {
 				t.Fatalf("expected completed settlement with retained finalization retry, state=%+v err=%v", failed.State, err)
+			}
+			if tt.removeErr != nil {
+				want := "batch batch-settle already landed at landed; integration cleanup failed: /integration/scratch: worktree busy; preserve and resolve local work, then retry tao merge --all"
+				if err.Error() != want || !errors.Is(err, tt.removeErr) {
+					t.Fatalf("cleanup diagnostic = %v, want %q with wrapped cause", err, want)
+				}
+				if failed.State.Finalization.IntegrationCleaned {
+					t.Fatal("failed cleanup marked clean")
+				}
 			}
 			events.requireSingle(t, plan.EventTypePlanMerged)
 			if got := strings.Join(batchWorkspace.calls, ","); got != tt.wantCalls {
@@ -239,6 +253,49 @@ func TestBatchSettleCleanupFailureRetriesWithoutDuplicateEvent(t *testing.T) {
 	events.requireSingle(t, plan.EventTypePlanMerged)
 	if len(cleaner.cleaned) != 2 {
 		t.Fatalf("completed rerun repeated cleanup: cleanup=%d", len(cleaner.cleaned))
+	}
+}
+
+func TestBatchSettleFinalizationPersistenceFailureRetainsActive(t *testing.T) {
+	t.Parallel()
+	for _, removalFails := range []bool{false, true} {
+		t.Run(fmt.Sprint(removalFails), func(t *testing.T) {
+			state, detail, service, _, events := batchSettleFixture()
+			state.Status = BatchStatusCompleted
+			state.Settlement = []BatchSettlement{{PlanID: "plan-a", MergeEvidenceRecorded: true, Completed: true}}
+			persistErr := errors.New("disk unavailable")
+			store := &recordingBatchTransitionStore{afterTransition: func(BatchState) error { return persistErr }}
+			owner := &fakeBatchSettlementWorkspace{}
+			if removalFails {
+				owner.removeErr = errors.New("/integration/local: dirty")
+			}
+			settler := BatchSettler{Store: store, Service: service, Repository: &batchLandResolver{details: map[string]*plan.PlanDetail{detail.Dir: detail}}, Workspace: owner}
+			_, err := settler.Settle(context.Background(), state)
+			if !errors.Is(err, persistErr) {
+				t.Fatalf("persistence cause lost: %v", err)
+			}
+			if removalFails && (!errors.Is(err, owner.removeErr) || !strings.Contains(err.Error(), "batch batch-settle already landed at landed; integration cleanup failed: /integration/local: dirty")) {
+				t.Fatalf("cleanup cause lost: %v", err)
+			}
+			if strings.Join(owner.calls, ",") != "remove batch-settle" {
+				t.Fatalf("active identity cleared before durable cleanup: %v", owner.calls)
+			}
+			store.afterTransition = nil
+			owner.removeErr = nil
+			owner.onClear = func() {
+				last := store.states[len(store.states)-1]
+				if last.Finalization == nil || !last.Finalization.IntegrationCleaned || last.Finalization.Error != "" {
+					t.Fatalf("active identity cleared before durable cleanup: %+v", last.Finalization)
+				}
+			}
+			// Retry from the last durable state, not the failed transition.
+			if _, err := settler.Settle(context.Background(), state); err != nil {
+				t.Fatal(err)
+			}
+			if events.count(plan.EventTypePlanMerged) != 0 {
+				t.Fatal("retry duplicated already-recorded plan merge evidence")
+			}
+		})
 	}
 }
 

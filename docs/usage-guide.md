@@ -1412,6 +1412,15 @@ preview that recovery and a fresh candidate snapshot with:
 tao merge --all --restart --dry-run
 ```
 
+An **already landed; integration cleanup failed** error names the batch, landed
+SHA, and offending path: integration succeeded, but safe cleanup did not. Preserve
+local work at the reported path and resolve the reported obstruction, then retry
+`tao merge --all`; do not unconditionally delete the directory. Tao retains the
+active batch identity until integration cleanup is durably recorded as complete,
+so the retry finishes that batch rather than starting another or landing again.
+Existing plan merge evidence is not duplicated. `tao cleanup` does not gain
+authority to remove the active batch.
+
 Restart is refused after landing and never removes source plans. Resolve
 reported source/default drift rather than deleting recovery files by hand.
 

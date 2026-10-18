@@ -24,6 +24,7 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/promptcapture"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+	"github.com/iamseth/tao/internal/workspace"
 	"github.com/iamseth/tao/prompts"
 )
 
@@ -2230,6 +2231,150 @@ type mergeFakeClaudeStart struct {
 	name   string
 	args   []string
 	prompt string
+}
+
+func TestAggregateReviewRuntimeCleanup(t *testing.T) {
+	for _, provider := range []string{"pi", "claude"} {
+		for _, exit := range []string{"success", "failure", "cancellation"} {
+			t.Run(provider+"/"+exit, func(t *testing.T) {
+				var root string
+				var waitErr error
+				if exit == "failure" {
+					waitErr = errors.New("provider failed")
+				}
+				child := newCleanupTestProcess(waitErr)
+				starter := aggregateReviewProcessStarter(func(_ context.Context, _ string, _ string, args []string) (agent.Process, error) {
+					root = filepath.Dir(strings.TrimPrefix(args[0], "TMPDIR="))
+					return child, nil
+				})
+				ctx, cancel := context.WithCancel(context.WithValue(context.Background(), aggregateReviewRuntimeContextKey{}, t.TempDir()))
+				defer cancel()
+				process, err := starter(ctx, "/unchanged", provider, []string{"original-argument"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if exit == "cancellation" {
+					cancel()
+					if err := process.Kill(); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					child.complete()
+				}
+				if err := process.Wait(); !errors.Is(err, waitErr) {
+					t.Fatalf("Wait = %v", err)
+				}
+				if _, err := os.Stat(root); !os.IsNotExist(err) {
+					t.Fatalf("runtime remains: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestAggregateReviewChildEnvironment(t *testing.T) {
+	integration := t.TempDir()
+	for _, key := range []string{"TMPDIR", "GOCACHE", "GOLANGCI_LINT_CACHE"} {
+		t.Setenv(key, integration)
+	}
+	t.Setenv("TAO_REVIEW_TEST_CREDENTIAL", "preserved")
+	ctx := context.WithValue(context.Background(), aggregateReviewRuntimeContextKey{}, integration)
+	process, err := aggregateReviewProcessStarter(agent.DefaultProcessStarter)(ctx, integration, "/bin/sh", []string{"-c", `printf '%s\n' "$TMPDIR" "$GOCACHE" "$GOLANGCI_LINT_CACHE" "$TAO_REVIEW_TEST_CREDENTIAL"; pwd -P`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = process.Stdin().Close()
+	output, err := io.ReadAll(process.Stdout())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	canonical, err := filepath.EvalSymlinks(integration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 5 || lines[3] != "preserved" || lines[4] != canonical {
+		t.Fatalf("child environment/cwd = %q", output)
+	}
+	for _, path := range lines[:3] {
+		if workspace.PathWithinRoot(integration, path) {
+			t.Fatalf("inherited hostile path %s", path)
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("runtime remains: %v", err)
+		}
+	}
+}
+
+func TestAggregateReviewRuntimeScopeAndCancelledLaunch(t *testing.T) {
+	calls := 0
+	starter := aggregateReviewProcessStarter(func(_ context.Context, cwd, name string, args []string) (agent.Process, error) {
+		calls++
+		if cwd != "cwd" || name != "pi" || !slices.Equal(args, []string{"--mode", "rpc"}) {
+			t.Fatalf("changed non-review launch: %s %s %v", cwd, name, args)
+		}
+		return nil, errors.New("stop")
+	})
+	_, _ = starter(context.Background(), "cwd", "pi", []string{"--mode", "rpc"})
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), aggregateReviewRuntimeContextKey{}, t.TempDir()))
+	cancel()
+	if _, err := starter(ctx, "cwd", "pi", nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled start = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("launches = %d", calls)
+	}
+}
+
+func TestAggregateReviewProjectsPrivateRuntimeAtLaunch(t *testing.T) {
+	root := t.TempDir()
+	for _, key := range []string{"TMPDIR", "GOCACHE", "GOLANGCI_LINT_CACHE"} {
+		t.Setenv(key, root)
+	}
+	for _, provider := range []runtimeconfig.AgentKind{runtimeconfig.AgentPi, runtimeconfig.AgentClaude} {
+		t.Run(string(provider), func(t *testing.T) {
+			var scratch string
+			launchErr := errors.New("launch failed")
+			session, err := NewBatchAgentSession(BatchAgentSessionConfig{
+				Agent: provider,
+				ProcessStarter: func(_ context.Context, cwd, name string, args []string) (agent.Process, error) {
+					if cwd != root || name != "/usr/bin/env" || len(args) < 4 {
+						t.Fatalf("review launch = %s %s %v", cwd, name, args)
+					}
+					for i, key := range []string{"TMPDIR", "GOCACHE", "GOLANGCI_LINT_CACHE"} {
+						path := strings.TrimPrefix(args[i], key+"=")
+						info, statErr := os.Stat(path)
+						if statErr != nil || !info.IsDir() || info.Mode().Perm() != 0o700 || workspace.PathWithinRoot(root, path) {
+							t.Fatalf("unsafe %s path %q: %v", key, path, statErr)
+						}
+						if os.Getenv(key) != root {
+							t.Fatalf("global %s changed", key)
+						}
+						if i == 0 {
+							scratch = filepath.Dir(path)
+						}
+					}
+					if args[3] != string(provider) {
+						t.Fatalf("provider = %v", args)
+					}
+					return nil, launchErr
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = session.Resolve(context.Background(), BatchAgentSessionRequest{Operation: BatchAgentOperationAggregateReview, IntegrationRoot: root, Prompt: "review"})
+			if err == nil {
+				t.Fatal("expected launch failure")
+			}
+			if _, err := os.Stat(scratch); !os.IsNotExist(err) {
+				t.Fatalf("runtime remains: %v", err)
+			}
+		})
+	}
 }
 
 func mergeFakeProcessStarter(t *testing.T, got *mergeFakeClaudeStart, events ...string) agent.ProcessStarter {

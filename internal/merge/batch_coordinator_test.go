@@ -976,17 +976,34 @@ func TestBatchCoordinatorRetriesSettlementWithoutLandingAgain(t *testing.T) {
 	state.Landing = &BatchLanding{IntegrationHead: "integrated", LandedDefaultSHA: "integrated"}
 	partial := state
 	partial.Settlement = []BatchSettlement{{PlanID: "plan-a", MergeEvidenceRecorded: true}}
-	settler := &coordinatorSettler{result: BatchSettleResult{State: partial}, err: errors.New("cleanup interrupted")}
+	partial.Status = BatchStatusCompleted
+	partial.Finalization = &BatchFinalization{Error: "/integration/local: dirty"}
+	diagnostic := "batch " + state.ID + " already landed at integrated; integration cleanup failed: /integration/local: dirty; preserve and resolve local work, then retry tao merge --all"
+	cleanupErr := errors.New(diagnostic)
+	settler := &coordinatorSettler{result: BatchSettleResult{State: partial}, err: cleanupErr}
 	lander := &coordinatorLander{}
 
 	result, err := NewBatchCoordinator(BatchCoordinatorSeams{
 		Store: &coordinatorStore{activeID: state.ID, loaded: state}, Workspace: &coordinatorWorkspace{}, Lander: lander, Settler: settler,
 	}).Run(context.Background(), BatchCoordinatorOptions{})
-	if err == nil || !strings.Contains(err.Error(), "cleanup interrupted") {
+	if err == nil || err.Error() != diagnostic || !errors.Is(err, cleanupErr) {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if lander.calls != 0 || settler.calls != 1 || len(result.State.Settlement) != 1 || !result.DefaultMoved {
 		t.Fatalf("settlement retry result=%+v land=%d settle=%d", result, lander.calls, settler.calls)
+	}
+	if result.State.Finalization.IntegrationCleaned {
+		t.Fatal("failed cleanup marked clean")
+	}
+	settler.err = nil
+	completed := partial
+	completed.Finalization = &BatchFinalization{IntegrationCleaned: true}
+	settler.result = BatchSettleResult{State: completed}
+	retried, err := NewBatchCoordinator(BatchCoordinatorSeams{
+		Store: &coordinatorStore{activeID: state.ID, loaded: result.State}, Workspace: &coordinatorWorkspace{}, Lander: lander, Settler: settler,
+	}).Run(context.Background(), BatchCoordinatorOptions{})
+	if err != nil || lander.calls != 0 || settler.calls != 2 || !retried.State.Finalization.IntegrationCleaned {
+		t.Fatalf("cleanup retry = %+v, err=%v land=%d settle=%d", retried, err, lander.calls, settler.calls)
 	}
 }
 

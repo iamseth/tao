@@ -166,6 +166,193 @@ func TestBatchWorkspaceCleanupPreservesNestedIgnoredEdits(t *testing.T) {
 	}
 }
 
+func TestBatchWorkspaceCleanupIgnoredScratch(t *testing.T) {
+	for _, dirty := range []bool{false, true} {
+		t.Run(map[bool]string{false: "clean", true: "dirty"}[dirty], func(t *testing.T) {
+			fixture := newRealGitWorktree(t)
+			state := batchWorkspaceState(t, fixture)
+			owner, err := NewBatchWorkspace(fixture.repoRoot, t.TempDir(), batchLocalSubmoduleRunner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			created, err := owner.Start(context.Background(), state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			scratch := filepath.Join(created.Path, ".tao", "scratch")
+			if err := os.MkdirAll(scratch, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			runRealGit(t, scratch, "init")
+			runRealGit(t, created.Path, "config", "core.excludesFile", filepath.Join(created.Path, ".tao", "ignore"))
+			if err := os.WriteFile(filepath.Join(created.Path, ".tao", "ignore"), []byte(".tao/\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if dirty {
+				if err := os.WriteFile(filepath.Join(scratch, "payload"), []byte("scratch"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := owner.RemoveIntegration(context.Background(), state.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(created.Path); !os.IsNotExist(err) {
+				t.Fatalf("integration remains: %v", err)
+			}
+		})
+	}
+}
+
+func TestBatchWorkspaceCleanupScratchLinkedWorktree(t *testing.T) {
+	for _, gitlink := range []string{"", "scratch", "linked", "external"} {
+		t.Run("gitlink="+gitlink, func(t *testing.T) {
+			fixture := newRealGitWorktree(t)
+			state := batchWorkspaceState(t, fixture)
+			owner, err := NewBatchWorkspace(fixture.repoRoot, t.TempDir(), batchLocalSubmoduleRunner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			created, err := owner.Start(context.Background(), state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			scratch := filepath.Join(created.Path, ".tao", "scratch")
+			if gitlink == "external" {
+				scratch = t.TempDir()
+			}
+			linked := filepath.Join(created.Path, ".tao", "linked")
+			if err := os.MkdirAll(scratch, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			runRealGit(t, scratch, "init")
+			runRealGit(t, scratch, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "scratch")
+			runRealGit(t, scratch, "worktree", "add", "--detach", linked)
+			if err := os.WriteFile(filepath.Join(linked, "change.go"), []byte("package scratch\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runRealGit(t, created.Path, "config", "core.excludesFile", filepath.Join(created.Path, ".tao", "ignore"))
+			if err := os.WriteFile(filepath.Join(created.Path, ".tao", "ignore"), []byte(".tao/\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if gitlink != "" && gitlink != "external" {
+				head := realGitOutput(t, scratch, "rev-parse", "HEAD")
+				runRealGit(t, created.Path, "update-index", "--add", "--cacheinfo", "160000,"+head+",.tao/"+gitlink)
+			}
+			err = owner.RemoveIntegration(context.Background(), state.ID)
+			if gitlink != "" {
+				if err == nil || !strings.Contains(err.Error(), "ambiguous module ownership") {
+					t.Fatalf("want module ownership refusal, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(created.Path); !os.IsNotExist(err) {
+				t.Fatalf("integration remains: %v", err)
+			}
+		})
+	}
+}
+
+func TestBatchWorkspaceCleanupModuleIdentity(t *testing.T) {
+	for _, scenario := range []string{"uninitialized", "removed identity files", "malformed gitfile", "foreign gitfile", "symlink", "dangling symlink", "unusual path"} {
+		t.Run(scenario, func(t *testing.T) {
+			fixture, _, _, _, _ := batchSubmoduleFixture(t)
+			state := batchWorkspaceState(t, fixture)
+			owner, err := NewBatchWorkspace(fixture.repoRoot, t.TempDir(), batchLocalSubmoduleRunner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			created, err := owner.Start(context.Background(), state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			module := filepath.Join(created.Path, "child")
+			wantPath := module
+			switch scenario {
+			case "uninitialized":
+				runRealGit(t, created.Path, "submodule", "deinit", "-f", "--all")
+			case "removed identity files":
+				runRealGit(t, created.Path, "rm", "--cached", "child")
+				if err := os.Remove(filepath.Join(created.Path, ".gitmodules")); err != nil {
+					t.Fatal(err)
+				}
+				runRealGit(t, created.Path, "commit", "-am", "remove module registration")
+				wantPath = filepath.Join(module, "nested")
+				if err := os.WriteFile(filepath.Join(wantPath, "README.md"), []byte("dirty"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "malformed gitfile", "foreign gitfile":
+				contents := "not a gitfile\n"
+				if scenario == "foreign gitfile" {
+					contents = "gitdir: " + filepath.Join(fixture.repoRoot, ".git") + "\n"
+				}
+				if err := os.WriteFile(filepath.Join(module, ".git"), []byte(contents), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "symlink", "dangling symlink":
+				if err := os.RemoveAll(module); err != nil {
+					t.Fatal(err)
+				}
+				target := t.TempDir()
+				if scenario == "dangling symlink" {
+					target = filepath.Join(target, "missing")
+				}
+				if err := os.Symlink(target, module); err != nil {
+					t.Fatal(err)
+				}
+			case "unusual path":
+				name := "module space\tline\nquote\""
+				runRealGit(t, created.Path, "mv", "child", name)
+				runRealGit(t, created.Path, "commit", "-am", "rename module")
+				module = filepath.Join(created.Path, name)
+				wantPath = module
+				if err := os.WriteFile(filepath.Join(module, "README.md"), []byte("dirty"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err = owner.checkSubmoduleCleanup(context.Background(), created.Path)
+			if scenario == "uninitialized" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), wantPath) {
+				t.Fatalf("error = %v, want refusal naming %q", err, wantPath)
+			}
+		})
+	}
+}
+
+func TestBatchWorkspaceCleanupDiscoveryFailures(t *testing.T) {
+	for _, command := range []string{"rev-parse", "ls-files", "ls-tree", "cancel"} {
+		t.Run(command, func(t *testing.T) {
+			fixture := newRealGitWorktree(t)
+			failure := errors.New("inspection unavailable")
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			runner := func(ctx context.Context, root, name string, args []string, stdout, stderr io.Writer) error {
+				if args[0] == command {
+					return failure
+				}
+				return batchLocalSubmoduleRunner(ctx, root, name, args, stdout, stderr)
+			}
+			owner, err := NewBatchWorkspace(fixture.repoRoot, t.TempDir(), runner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if command == "cancel" {
+				cancel()
+				failure = context.Canceled
+			}
+			err = owner.checkSubmoduleCleanup(ctx, fixture.worktreePath)
+			if !errors.Is(err, failure) || !strings.Contains(err.Error(), filepath.Base(fixture.worktreePath)) {
+				t.Fatalf("error = %v, want path and %v", err, failure)
+			}
+		})
+	}
+}
+
 func TestBatchWorkspaceCleanupRefusesNestedInspectionFailure(t *testing.T) {
 	fixture, _, _, _, _ := batchSubmoduleFixture(t)
 	state := batchWorkspaceState(t, fixture)

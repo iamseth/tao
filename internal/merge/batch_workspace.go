@@ -663,55 +663,189 @@ func (b *BatchWorkspace) RemoveIntegration(ctx context.Context, batchID string) 
 // Existing batch-owned cleanup may force removal, but that must not discard
 // local submodule edits (including ones hidden by submodule ignore settings).
 func (b *BatchWorkspace) checkSubmoduleCleanup(ctx context.Context, root string) error {
-	_, modulesErr := os.Lstat(filepath.Join(root, ".gitmodules"))
-	if modulesErr != nil && !errors.Is(modulesErr, os.ErrNotExist) {
-		return fmt.Errorf("inspect submodules before batch cleanup: %w", modulesErr)
-	}
-	isDirty := func(repo string) (bool, error) {
-		var status, stderr strings.Builder
-		if err := b.runner(ctx, repo, "git", []string{"status", "--porcelain", "--ignore-submodules=none", "--untracked-files=all"}, &status, &stderr); err != nil {
-			return false, fmt.Errorf("inspect repository %s before batch cleanup: %w: %s", repo, err, stderr.String())
+	run := func(repo string, args ...string) (string, error) {
+		if err := ctx.Err(); err != nil {
+			return "", fmt.Errorf("inspect repository %s before batch cleanup: %w", repo, err)
 		}
-		return strings.TrimSpace(status.String()) != "", nil
+		var out, stderr strings.Builder
+		if err := b.runner(ctx, repo, "git", args, &out, &stderr); err != nil {
+			return "", fmt.Errorf("inspect repository %s before batch cleanup: %w: %s", repo, err, stderr.String())
+		}
+		return out.String(), nil
 	}
-	dirty, err := isDirty(root)
+	root, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return err
 	}
-	hasModules := modulesErr == nil
-	// Parent status, even with --ignore-submodules=none, can hide changes
-	// under a child's nested ignore settings. Inspect each initialized repo
-	// independently, including checkouts left behind without .gitmodules.
-	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
+	gitDir, err := run(root, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return err
+	}
+	tree, err := os.OpenRoot(root)
+	if err != nil {
+		return fmt.Errorf("open integration tree %s: %w", root, err)
+	}
+	defer func() { _ = tree.Close() }()
+	moduleDir := filepath.Join(strings.TrimSuffix(gitDir, "\n"), "modules")
+	within := func(parent, path string) bool {
+		rel, err := filepath.Rel(parent, path)
+		return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+	}
+	// Gitlinks identify even uninitialized modules. Gitfiles retain identity
+	// when a module's gitlink or .gitmodules has been removed from the index.
+	modules := map[string]bool{}
+	// Defer scratch acceptance until recursive gitlink discovery has completed.
+	scratchWorktrees := map[string]string{}
+	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
 		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if entry.Name() != ".git" {
+		if entry.Name() != ".git" || filepath.Dir(path) == root {
+			if entry.Name() == ".git" && entry.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
-		if repo := filepath.Dir(path); repo != filepath.Clean(root) {
-			hasModules = true
-			nestedDirty, err := isDirty(repo)
-			if err != nil {
-				return err
-			}
-			dirty = dirty || nestedDirty
-		}
 		if entry.IsDir() {
-			return filepath.SkipDir
+			return filepath.SkipDir // standalone scratch repository, unless a gitlink identifies it
 		}
+		if !entry.Type().IsRegular() {
+			return fmt.Errorf("ambiguous module identity at %s", path)
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return fmt.Errorf("locate module identity %s: %w", path, err)
+		}
+		data, err := tree.ReadFile(rel)
+		if err != nil {
+			return err
+		}
+		target, ok := strings.CutPrefix(strings.TrimSuffix(string(data), "\n"), "gitdir: ")
+		if !ok || target == "" {
+			return fmt.Errorf("malformed module identity at %s", path)
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(path), target)
+		}
+		resolved, err := filepath.EvalSymlinks(target)
+		if err != nil || resolved != filepath.Clean(target) {
+			return fmt.Errorf("ambiguous module ownership at %s (gitdir %s)", path, target)
+		}
+		if !within(moduleDir, resolved) {
+			common := filepath.Dir(filepath.Dir(resolved))
+			if within(root, resolved) && filepath.Base(filepath.Dir(resolved)) == "worktrees" && filepath.Base(common) == ".git" {
+				commonRel, err := filepath.Rel(root, filepath.Join(resolved, "commondir"))
+				if err != nil {
+					return err
+				}
+				data, err := tree.ReadFile(commonRel)
+				if err == nil && filepath.Clean(filepath.Join(resolved, strings.TrimSuffix(string(data), "\n"))) == common {
+					scratchWorktrees[filepath.Dir(path)] = filepath.Dir(common)
+					return nil
+				}
+			}
+			return fmt.Errorf("ambiguous module ownership at %s (gitdir %s)", path, target)
+		}
+		modules[filepath.Dir(path)] = true
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("inspect nested repositories before batch cleanup: %w", err)
+		return fmt.Errorf("inspect nested repositories in %s before batch cleanup: %w", root, err)
 	}
-	if hasModules && dirty {
-		return fmt.Errorf("refusing batch cleanup of %s: submodule workspace has local changes; preserve or resolve them before retrying", root)
+	visited := map[string]bool{}
+	var inspect func(string) error
+	inspect = func(repo string) error {
+		if visited[repo] {
+			return nil
+		}
+		visited[repo] = true
+		for _, args := range [][]string{{"ls-files", "--stage", "-z"}, {"ls-tree", "-r", "-z", "HEAD"}} {
+			listing, err := run(repo, args...)
+			if err != nil {
+				return err
+			}
+			for record := range strings.SplitSeq(listing, "\x00") {
+				if !strings.HasPrefix(record, "160000 ") {
+					continue
+				}
+				_, name, ok := strings.Cut(record, "\t")
+				path := filepath.Join(repo, name)
+				if !ok || !within(repo, path) || !within(root, path) {
+					return fmt.Errorf("invalid module path %q in %s", name, repo)
+				}
+				modules[path] = true
+			}
+		}
+		paths := make([]string, 0, len(modules))
+		for path := range modules {
+			paths = append(paths, path)
+		}
+		slices.Sort(paths)
+		for _, path := range paths {
+			for scratch, owner := range scratchWorktrees {
+				if path == scratch || path == owner || within(path, scratch) || within(path, owner) {
+					return fmt.Errorf("ambiguous module ownership at %s", filepath.Join(scratch, ".git"))
+				}
+			}
+			if visited[path] {
+				continue
+			}
+			// Check every component before resolving: even a dangling symlink
+			// must not be mistaken for an uninitialized module.
+			rel, _ := filepath.Rel(root, path)
+			component := root
+			for _, part := range strings.Split(rel, string(filepath.Separator)) {
+				component = filepath.Join(component, part)
+				info, err := os.Lstat(component)
+				if errors.Is(err, os.ErrNotExist) {
+					break
+				}
+				if err != nil {
+					return fmt.Errorf("inspect module path %s: %w", component, err)
+				}
+				if info.Mode()&os.ModeSymlink != 0 {
+					return fmt.Errorf("unsafe module symlink at %s", component)
+				}
+			}
+			resolved, err := filepath.EvalSymlinks(path)
+			if errors.Is(err, os.ErrNotExist) {
+				continue // uninitialized module
+			}
+			if err != nil {
+				return fmt.Errorf("unsafe module path %s before batch cleanup: %w", path, err)
+			}
+			if resolved != path || !within(root, resolved) {
+				return fmt.Errorf("unsafe module path %s before batch cleanup", path)
+			}
+			if _, err := os.Lstat(filepath.Join(path, ".git")); errors.Is(err, os.ErrNotExist) {
+				continue
+			} else if err != nil {
+				return fmt.Errorf("inspect module %s: %w", path, err)
+			}
+			top, err := run(path, "rev-parse", "--show-toplevel")
+			if err != nil {
+				return err
+			}
+			if strings.TrimSuffix(top, "\n") != path {
+				return fmt.Errorf("ambiguous module worktree at %s", path)
+			}
+			if err := inspect(path); err != nil {
+				return err
+			}
+		}
+		status, err := run(repo, "status", "--porcelain", "--ignore-submodules=none", "--untracked-files=all")
+		if err != nil {
+			return err
+		}
+		if len(modules) > 0 && status != "" {
+			return fmt.Errorf("refusing batch cleanup of %s: submodule workspace has local changes; preserve or resolve them before retrying", repo)
+		}
+		return nil
 	}
-	return nil
+	return inspect(root)
 }
 
 // ClearActive completes a landed transaction without deleting its retained

@@ -319,6 +319,8 @@ func newBatchAgentSession(config BatchAgentSessionConfig, confineFilesystem bool
 	}
 	if confineFilesystem {
 		starter = singleMergeFilesystemConfiningProcessStarter(starter, providerLookPath)
+	} else {
+		starter = aggregateReviewProcessStarter(starter)
 	}
 	progress := config.Log
 	var framedLog io.Writer
@@ -345,6 +347,52 @@ func newBatchAgentSession(config BatchAgentSessionConfig, confineFilesystem bool
 		providerToolName: descriptor.ToolName, providerLookPath: providerLookPath,
 		confinementProbe: config.ConfinementProbe,
 	}, nil
+}
+
+type aggregateReviewRuntimeContextKey struct{}
+
+// aggregateReviewProcessStarter projects scratch locations, not a filesystem
+// sandbox. Inherit credentials/configuration unchanged and override only caches
+// and temporary storage in the child process, never the host environment.
+func aggregateReviewProcessStarter(next agent.ProcessStarter) agent.ProcessStarter {
+	return func(ctx context.Context, cwd, name string, args []string) (agent.Process, error) {
+		root, ok := ctx.Value(aggregateReviewRuntimeContextKey{}).(string)
+		if !ok {
+			return next(ctx, cwd, name, args)
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		// An empty provider skips the single-merge Pi configuration projection.
+		owned, err := newSingleMergeInvocationRuntime("")
+		if err != nil {
+			return nil, err
+		}
+		integration, err := canonicalConfinementDirectory(root, "integration worktree")
+		if err == nil {
+			var runtimeRoot string
+			runtimeRoot, err = canonicalConfinementDirectory(owned.root, "review runtime")
+			if err == nil && workspace.PathWithinRoot(integration, runtimeRoot) {
+				err = errors.New("review runtime overlaps integration worktree")
+			}
+		}
+		if err != nil {
+			_ = owned.cleanup()
+			return nil, err
+		}
+		projected := []string{
+			"TMPDIR=" + filepath.Join(owned.root, "tmp"),
+			"GOCACHE=" + filepath.Join(owned.root, "cache"),
+			"GOLANGCI_LINT_CACHE=" + filepath.Join(owned.root, "state"),
+			name,
+		}
+		process, err := next(ctx, cwd, "/usr/bin/env", append(projected, args...))
+		if err != nil {
+			_ = owned.cleanup()
+			return nil, err
+		}
+		return newConfinementCleanupProcess(process, owned), nil
+	}
 }
 
 type singleMergeFilesystemConfinementContextKey struct{}
@@ -1205,6 +1253,8 @@ func (s BatchAgentSession) Resolve(ctx context.Context, request BatchAgentSessio
 	}
 	if policy != nil {
 		ctx = context.WithValue(ctx, singleMergeFilesystemConfinementContextKey{}, *policy)
+	} else if request.Operation == BatchAgentOperationAggregateReview {
+		ctx = context.WithValue(ctx, aggregateReviewRuntimeContextKey{}, request.IntegrationRoot)
 	}
 	run := s.run
 	if run == nil {

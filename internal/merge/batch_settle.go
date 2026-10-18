@@ -190,7 +190,7 @@ func (s BatchSettler) Settle(ctx context.Context, state BatchState) (BatchSettle
 			if persistErr == nil {
 				state = persisted
 			}
-			return BatchSettleResult{State: state}, errors.Join(fmt.Errorf("clean batch integration namespace: %w", err), persistErr)
+			return BatchSettleResult{State: state}, errors.Join(fmt.Errorf("batch %s already landed at %s; integration cleanup failed: %w; preserve and resolve local work, then retry tao merge --all", state.ID, state.LandedSHA, err), persistErr)
 		}
 		state.Finalization.IntegrationCleaned = true
 		state.Finalization.Error = ""
