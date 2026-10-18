@@ -819,6 +819,95 @@ func TestRenderTemplatedPromptSubstitutesData(t *testing.T) {
 	}
 }
 
+// These assertions protect rendered instructions, not model compliance with them.
+func TestRenderedFixDiagnosisContract(t *testing.T) {
+	for _, topic := range []string{"fix a user-visible bug", "add export flow"} {
+		t.Run(topic, func(t *testing.T) {
+			got, err := Render(PromptPlan, Data{Arguments: topic})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{
+				topic,
+				"Only when the topic is a bug or the resolved `change_type` is `fix`",
+				"Do not impose this diagnosis work on non-fix topics",
+				"Under Important Decisions",
+				"end-user reproduction or its precise infeasibility reason",
+				"separate lines for the trigger, masking condition, and visible symptom",
+				"compare a proven working path with the failing path",
+				"earliest evidenced divergence",
+				"smallest distinguishing counterfactual",
+				"Under Risks",
+				"falsifying observation",
+				"distinguish evidence from hypothesis",
+				"Missing load-bearing evidence belongs in Open Questions",
+				"never fabricate masking conditions or proven paths",
+				"An infeasibility explanation alone does not verify a cause",
+				"Under Slice Guidance",
+				"failing-first regression test in the first implementation slice",
+				"Diagnosis and readiness are advisory only",
+				"never authorize execution or lifecycle transitions",
+				"Do not implement code.", "Do not edit files.", "Do not create Tao plan artifacts.",
+			} {
+				if !strings.Contains(got, want) {
+					t.Errorf("rendered plan prompt missing %q", want)
+				}
+			}
+			_, packet, ok := strings.Cut(got, "```markdown\n")
+			if !ok {
+				t.Fatal("missing packet template")
+			}
+			packet, _, _ = strings.Cut(packet, "\n```")
+			var headings, fields []string
+			for _, line := range strings.Split(packet, "\n") {
+				if strings.HasPrefix(line, "#") {
+					headings = append(headings, line)
+				}
+			}
+			wantHeadings := "# Planning Packet\n## User Goal\n## Constraints\n## Non-goals\n## Important Decisions\n## Expected Files/Packages\n## Validation Strategy\n## Risks\n## Open Questions\n## Source Note\n## Slice Guidance"
+			if strings.Join(headings, "\n") != wantHeadings {
+				t.Fatalf("packet headings changed: %v", headings)
+			}
+			_, source, _ := strings.Cut(packet, "## Source Note\n")
+			source, _, _ = strings.Cut(source, "## Slice Guidance")
+			for _, line := range strings.Split(source, "\n") {
+				if strings.HasPrefix(line, "- ") {
+					fields = append(fields, line)
+				}
+			}
+			wantFields := "- ID: `<canonical note ID>`\n- Repository: `<registered repository ID>`\n- Status: `<open or promoted>`\n- Planning Session: `<legacy planning-session ID, or None for an open note>`"
+			if strings.Join(fields, "\n") != wantFields {
+				t.Fatalf("Source Note fields changed: %v", fields)
+			}
+		})
+	}
+}
+
+func TestRenderedSliceFixDiagnosisReadiness(t *testing.T) {
+	got, err := Render(PromptSlice, Data{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"When the topic is a bug or the resolved `change_type` is `fix`",
+		"unverified cause requires `plan.decision.readiness` to be `needs_refinement`, not `ready`",
+		"An infeasibility explanation alone does not verify a cause",
+		"Missing load-bearing evidence stays in Open Questions",
+		"failing-first regression test in the first implementation slice",
+		"Do not impose this diagnosis work on non-fix topics",
+		"Diagnosis and readiness are advisory only",
+		"never authorize execution or lifecycle transitions",
+		"Stronger blocked or refusal rules still take precedence",
+		"unsupervised generation must refuse without artifacts when unresolved decisions prevent safe execution",
+		"Coverage and readiness remain advisory: do not add fields, validator errors, or execution authority",
+		"Do not implement code.", "Do not edit application files.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered slice prompt missing %q", want)
+		}
+	}
+}
+
 func TestPlanPromptDefinesStrictNoteSourceContract(t *testing.T) {
 	got, err := Render(PromptPlan, Data{Arguments: "note:abc123 keep the CLI small"})
 	if err != nil {

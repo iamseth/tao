@@ -57,6 +57,14 @@ Clarify these areas as needed:
 - Risks, rollback considerations, and validation strategy.
 - Open questions that must be answered before implementation.
 
+Only when the topic is a bug or the resolved `change_type` is `fix`, apply this diagnosis guidance within the existing packet sections. Do not impose this diagnosis work on non-fix topics.
+
+- Under Important Decisions, record the end-user reproduction or its precise infeasibility reason; use separate lines for the trigger, masking condition, and visible symptom; compare a proven working path with the failing path and identify the earliest evidenced divergence; state the smallest distinguishing counterfactual.
+- Under Risks, state the falsifying observation that would disprove the proposed cause and distinguish evidence from hypothesis. Missing load-bearing evidence belongs in Open Questions; never fabricate masking conditions or proven paths. An infeasibility explanation alone does not verify a cause.
+- Under Slice Guidance, carry the reproduction into a failing-first regression test in the first implementation slice; retain unresolved reproduction evidence as an explicit open question rather than claiming coverage.
+
+Diagnosis and readiness are advisory only and never authorize execution or lifecycle transitions. Keep planning read-only and use only the existing packet sections and fields.
+
 ## Final Response
 
 When planning is complete, respond only with this fixed Planning Packet format:

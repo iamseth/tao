@@ -208,6 +208,8 @@ Before validation, for each plan, inventory every item in `plan.decision.success
 - For each slice mapping to no success criterion or constraint, justify its necessity in its existing `context` field.
 - Recheck coverage after validation fixes change scope and before returning; finish all resulting fixes before successful validation and publication, and after publication that recheck is read-only.
 
+When the topic is a bug or the resolved `change_type` is `fix`, an unverified cause requires `plan.decision.readiness` to be `needs_refinement`, not `ready`. An infeasibility explanation alone does not verify a cause. Missing load-bearing evidence stays in Open Questions in the existing brief and `open_questions`; carry the reproduction into a failing-first regression test in the first implementation slice. Do not impose this diagnosis work on non-fix topics. Diagnosis and readiness are advisory only and never authorize execution or lifecycle transitions.
+
 Stronger blocked or refusal rules still take precedence; `needs_refinement` never overrides a requirement to refuse without artifacts. In particular, unsupervised generation must refuse without artifacts when unresolved decisions prevent safe execution.
 
 Keep the coverage map only in the final response, never in `planning-brief.md` or any other artifact. Coverage and readiness remain advisory: do not add fields, validator errors, or execution authority. Use only the existing fields and sections for scope adjustments, dispositions, and context justifications.
